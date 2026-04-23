@@ -44,6 +44,7 @@ var (
 	ChannelSelected = lipgloss.NewStyle().
 			Background(lipgloss.Color("#4A9EFF33")).
 			Foreground(lipgloss.Color("#FFFFFF")).
+			Bold(true).
 			Padding(0, 1)
 
 	ChannelNormal = lipgloss.NewStyle().
