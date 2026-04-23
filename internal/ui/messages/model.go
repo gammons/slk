@@ -1,4 +1,3 @@
-// internal/ui/messages/model.go
 package messages
 
 import (
@@ -28,6 +27,7 @@ type ReactionItem struct {
 type Model struct {
 	messages     []MessageItem
 	selected     int
+	offset       int // index of the first message visible in the viewport
 	channelName  string
 	channelTopic string
 }
@@ -51,12 +51,14 @@ func (m *Model) SetChannel(name, topic string) {
 
 func (m *Model) SetMessages(msgs []MessageItem) {
 	m.messages = msgs
-	if m.selected >= len(msgs) {
-		m.selected = len(msgs) - 1
-	}
-	if m.selected < 0 {
+	if len(msgs) == 0 {
 		m.selected = 0
+		m.offset = 0
+		return
 	}
+	// Start at the bottom (newest messages)
+	m.selected = len(msgs) - 1
+	m.offset = 0 // will be adjusted in View()
 }
 
 func (m *Model) AppendMessage(msg MessageItem) {
@@ -96,6 +98,7 @@ func (m *Model) MoveDown() {
 
 func (m *Model) GoToTop() {
 	m.selected = 0
+	m.offset = 0
 }
 
 func (m *Model) GoToBottom() {
@@ -104,7 +107,56 @@ func (m *Model) GoToBottom() {
 	}
 }
 
-func (m Model) View(height, width int) string {
+// renderMessage renders a single message entry and returns its string representation.
+func renderMessage(msg MessageItem, width int, isSelected bool) string {
+	// Username + timestamp
+	userStyle := styles.Username
+	if isSelected {
+		userStyle = userStyle.Underline(true)
+	}
+	line := userStyle.Render(msg.UserName) + "  " + styles.Timestamp.Render(msg.Timestamp)
+
+	// Message text
+	text := styles.MessageText.Width(width - 4).Render(msg.Text)
+
+	// Thread indicator
+	var threadLine string
+	if msg.ReplyCount > 0 {
+		threadLine = "\n" + styles.ThreadIndicator.Render(
+			fmt.Sprintf("[%d replies ->]", msg.ReplyCount))
+	}
+
+	// Reactions
+	var reactionLine string
+	if len(msg.Reactions) > 0 {
+		var parts []string
+		for _, r := range msg.Reactions {
+			parts = append(parts, fmt.Sprintf("%s %d", r.Emoji, r.Count))
+		}
+		reactionLine = "\n" + lipgloss.NewStyle().Foreground(styles.TextMuted).Render(
+			strings.Join(parts, "  "))
+	}
+
+	// Edited indicator
+	var editedMark string
+	if msg.IsEdited {
+		editedMark = " " + styles.Timestamp.Render("(edited)")
+	}
+
+	entry := line + editedMark + "\n" + text + threadLine + reactionLine
+
+	if isSelected {
+		entry = lipgloss.NewStyle().
+			Background(lipgloss.Color("#222233")).
+			Width(width-2).
+			Padding(0, 1).
+			Render(entry)
+	}
+
+	return entry
+}
+
+func (m *Model) View(height, width int) string {
 	// Header
 	header := styles.ChannelUnread.
 		Width(width).
@@ -123,58 +175,107 @@ func (m Model) View(height, width int) string {
 		msgAreaHeight = 1
 	}
 
-	var msgRows []string
-	for i, msg := range m.messages {
-		isSelected := i == m.selected
-
-		// Username + timestamp
-		userStyle := styles.Username
-		if isSelected {
-			userStyle = userStyle.Underline(true)
-		}
-		line := userStyle.Render(msg.UserName) + "  " + styles.Timestamp.Render(msg.Timestamp)
-
-		// Message text
-		text := styles.MessageText.Width(width - 4).Render(msg.Text)
-
-		// Thread indicator
-		var threadLine string
-		if msg.ReplyCount > 0 {
-			threadLine = "\n" + styles.ThreadIndicator.Render(
-				fmt.Sprintf("[%d replies ->]", msg.ReplyCount))
-		}
-
-		// Reactions
-		var reactionLine string
-		if len(msg.Reactions) > 0 {
-			var parts []string
-			for _, r := range msg.Reactions {
-				parts = append(parts, fmt.Sprintf("%s %d", r.Emoji, r.Count))
-			}
-			reactionLine = "\n" + lipgloss.NewStyle().Foreground(styles.TextMuted).Render(
-				strings.Join(parts, "  "))
-		}
-
-		// Edited indicator
-		var editedMark string
-		if msg.IsEdited {
-			editedMark = " " + styles.Timestamp.Render("(edited)")
-		}
-
-		entry := line + editedMark + "\n" + text + threadLine + reactionLine
-
-		if isSelected {
-			entry = lipgloss.NewStyle().
-				Background(lipgloss.Color("#222233")).
-				Width(width-2).
-				Padding(0, 1).
-				Render(entry)
-		}
-
-		msgRows = append(msgRows, entry)
+	if len(m.messages) == 0 {
+		empty := lipgloss.NewStyle().
+			Width(width).
+			Height(msgAreaHeight).
+			Foreground(styles.TextMuted).
+			Render("No messages yet")
+		return header + "\n" + separator + "\n" + empty
 	}
 
-	msgContent := strings.Join(msgRows, "\n\n")
+	// Pre-render all messages to know their heights
+	type renderedMsg struct {
+		content string
+		height  int
+	}
+	rendered := make([]renderedMsg, len(m.messages))
+	for i, msg := range m.messages {
+		content := renderMessage(msg, width, i == m.selected)
+		rendered[i] = renderedMsg{
+			content: content,
+			height:  lipgloss.Height(content),
+		}
+	}
+
+	// Adjust offset to keep the selected message visible.
+	// We build the viewport from offset downward, fitting as many messages as possible.
+	// If selected is before offset, move offset up.
+	// If selected would be below the viewport, move offset down.
+
+	// First, ensure offset is not past selected
+	if m.selected < m.offset {
+		m.offset = m.selected
+	}
+
+	// Then, check if selected is visible from offset.
+	// Walk from offset, accumulating height, to see if selected fits.
+	for {
+		usedHeight := 0
+		selectedVisible := false
+		for i := m.offset; i < len(rendered); i++ {
+			entryHeight := rendered[i].height
+			if i > m.offset {
+				entryHeight += 1 // +1 for blank line between messages
+			}
+			if usedHeight+entryHeight > msgAreaHeight && i > m.offset {
+				break
+			}
+			usedHeight += entryHeight
+			if i == m.selected {
+				selectedVisible = true
+				break
+			}
+		}
+		if selectedVisible {
+			break
+		}
+		// Selected is not visible -- move offset down
+		m.offset++
+		if m.offset > m.selected {
+			m.offset = m.selected
+			break
+		}
+	}
+
+	// Now render the visible window starting from offset
+	var visibleRows []string
+	usedHeight := 0
+	for i := m.offset; i < len(rendered); i++ {
+		entryHeight := rendered[i].height
+		gap := 0
+		if len(visibleRows) > 0 {
+			gap = 1 // blank line between messages
+		}
+		if usedHeight+entryHeight+gap > msgAreaHeight && len(visibleRows) > 0 {
+			break
+		}
+		if gap > 0 {
+			usedHeight += gap
+		}
+		usedHeight += entryHeight
+		visibleRows = append(visibleRows, rendered[i].content)
+	}
+
+	// Show scroll indicators
+	var scrollUp, scrollDown string
+	if m.offset > 0 {
+		scrollUp = lipgloss.NewStyle().Foreground(styles.TextMuted).Render(
+			fmt.Sprintf("  -- %d more above --", m.offset))
+		visibleRows = append([]string{scrollUp}, visibleRows...)
+	}
+	lastVisible := m.offset + len(visibleRows)
+	if scrollUp != "" {
+		lastVisible-- // don't count the scroll indicator
+	}
+	if lastVisible < len(m.messages) {
+		remaining := len(m.messages) - lastVisible
+		scrollDown = lipgloss.NewStyle().Foreground(styles.TextMuted).Render(
+			fmt.Sprintf("  -- %d more below --", remaining))
+		visibleRows = append(visibleRows, scrollDown)
+	}
+
+	msgContent := strings.Join(visibleRows, "\n")
 
 	return header + "\n" + separator + "\n" + lipgloss.NewStyle().
 		Width(width).
