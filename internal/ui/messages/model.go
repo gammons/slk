@@ -116,8 +116,8 @@ func renderMessage(msg MessageItem, width int, isSelected bool) string {
 	}
 	line := userStyle.Render(msg.UserName) + "  " + styles.Timestamp.Render(msg.Timestamp)
 
-	// Message text
-	text := styles.MessageText.Width(width - 4).Render(msg.Text)
+	// Message text with Slack markdown + emoji rendering
+	text := styles.MessageText.Width(width - 4).Render(RenderSlackMarkdown(msg.Text))
 
 	// Thread indicator
 	var threadLine string
