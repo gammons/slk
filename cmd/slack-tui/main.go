@@ -22,6 +22,15 @@ import (
 )
 
 func main() {
+	// Handle --add-workspace before anything else
+	if len(os.Args) > 1 && os.Args[1] == "--add-workspace" {
+		if err := addWorkspace(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -61,7 +70,15 @@ func run() error {
 	tokenStore := slackclient.NewTokenStore(tokenDir)
 	tokens, err := tokenStore.List()
 	if err != nil || len(tokens) == 0 {
-		return fmt.Errorf("no workspaces configured. Run with --add-workspace to authenticate")
+		// No workspaces configured -- launch onboarding automatically
+		if err := addWorkspace(); err != nil {
+			return err
+		}
+		// Reload tokens after onboarding
+		tokens, err = tokenStore.List()
+		if err != nil || len(tokens) == 0 {
+			return fmt.Errorf("no workspaces configured after onboarding")
+		}
 	}
 
 	// Initialize services
@@ -76,12 +93,19 @@ func run() error {
 	ctx := context.Background()
 	var wsItems []workspace.WorkspaceItem
 
+	// Track the active client for channel fetching
+	var activeClient *slackclient.Client
+	// User ID -> display name lookup
+	userNames := make(map[string]string)
+	tsFormat := cfg.Appearance.TimestampFormat
+
 	for _, token := range tokens {
-		client := slackclient.NewClient(token.AccessToken, "")
+		client := slackclient.NewClient(token.AccessToken, token.AppToken)
 		if err := client.Connect(ctx); err != nil {
 			log.Printf("Warning: failed to connect workspace %s: %v", token.TeamName, err)
 			continue
 		}
+		activeClient = client
 
 		wsMgr.AddWorkspace(client.TeamID(), token.TeamName, "")
 		wsItems = append(wsItems, workspace.WorkspaceItem{
@@ -89,6 +113,30 @@ func run() error {
 			Name:     token.TeamName,
 			Initials: workspace.WorkspaceInitials(token.TeamName),
 		})
+
+		// Fetch users first to resolve display names
+		users, err := client.GetUsers(ctx)
+		if err != nil {
+			log.Printf("Warning: failed to fetch users: %v", err)
+		} else {
+			for _, u := range users {
+				name := u.Profile.DisplayName
+				if name == "" {
+					name = u.RealName
+				}
+				if name == "" {
+					name = u.Name
+				}
+				userNames[u.ID] = name
+				db.UpsertUser(cache.User{
+					ID:          u.ID,
+					WorkspaceID: client.TeamID(),
+					Name:        u.Name,
+					DisplayName: name,
+					Presence:    "away",
+				})
+			}
+		}
 
 		// Fetch channels
 		channels, err := client.GetChannels(ctx)
@@ -119,7 +167,11 @@ func run() error {
 
 			displayName := ch.Name
 			if ch.IsIM {
-				displayName = ch.User // will be user ID, resolve later
+				if resolved, ok := userNames[ch.User]; ok {
+					displayName = resolved
+				} else {
+					displayName = ch.User
+				}
 			}
 
 			sidebarItems = append(sidebarItems, sidebar.ChannelItem{
@@ -134,34 +186,8 @@ func run() error {
 		// Load initial messages for first channel
 		if len(sidebarItems) > 0 {
 			firstCh := sidebarItems[0]
-			history, err := client.GetHistory(ctx, firstCh.ID, 50, "")
-			if err == nil {
-				var msgItems []messages.MessageItem
-				for _, m := range history {
-					db.UpsertMessage(cache.Message{
-						TS:          m.Timestamp,
-						ChannelID:   firstCh.ID,
-						WorkspaceID: client.TeamID(),
-						UserID:      m.User,
-						Text:        m.Text,
-						ThreadTS:    m.ThreadTimestamp,
-						ReplyCount:  m.ReplyCount,
-						CreatedAt:   time.Now().Unix(),
-					})
-
-					msgItems = append(msgItems, messages.MessageItem{
-						TS:         m.Timestamp,
-						UserName:   m.User, // will resolve to display name later
-						Text:       m.Text,
-						Timestamp:  formatTimestamp(m.Timestamp, cfg.Appearance.TimestampFormat),
-						ThreadTS:   m.ThreadTimestamp,
-						ReplyCount: m.ReplyCount,
-					})
-				}
-				// Reverse: Slack returns newest first
-				for i, j := 0, len(msgItems)-1; i < j; i, j = i+1, j-1 {
-					msgItems[i], msgItems[j] = msgItems[j], msgItems[i]
-				}
+			msgItems := fetchChannelMessages(client, firstCh.ID, db, userNames, tsFormat)
+			if len(msgItems) > 0 {
 				app.SetInitialChannel(firstCh.ID, firstCh.Name, msgItems)
 			}
 		}
@@ -169,10 +195,65 @@ func run() error {
 
 	app.SetWorkspaces(wsItems)
 
+	// Wire up the channel fetcher so switching channels loads messages
+	if activeClient != nil {
+		client := activeClient
+		app.SetChannelFetcher(func(channelID, channelName string) tea.Msg {
+			msgItems := fetchChannelMessages(client, channelID, db, userNames, tsFormat)
+			return ui.MessagesLoadedMsg{
+				ChannelID: channelID,
+				Messages:  msgItems,
+			}
+		})
+	}
+
 	// Run the TUI
 	p := tea.NewProgram(app, tea.WithAltScreen())
 	_, err = p.Run()
 	return err
+}
+
+func fetchChannelMessages(client *slackclient.Client, channelID string, db *cache.DB, userNames map[string]string, tsFormat string) []messages.MessageItem {
+	ctx := context.Background()
+	history, err := client.GetHistory(ctx, channelID, 50, "")
+	if err != nil {
+		return nil
+	}
+
+	var msgItems []messages.MessageItem
+	for _, m := range history {
+		db.UpsertMessage(cache.Message{
+			TS:          m.Timestamp,
+			ChannelID:   channelID,
+			WorkspaceID: client.TeamID(),
+			UserID:      m.User,
+			Text:        m.Text,
+			ThreadTS:    m.ThreadTimestamp,
+			ReplyCount:  m.ReplyCount,
+			CreatedAt:   time.Now().Unix(),
+		})
+
+		userName := m.User
+		if resolved, ok := userNames[m.User]; ok {
+			userName = resolved
+		}
+
+		msgItems = append(msgItems, messages.MessageItem{
+			TS:         m.Timestamp,
+			UserName:   userName,
+			Text:       m.Text,
+			Timestamp:  formatTimestamp(m.Timestamp, tsFormat),
+			ThreadTS:   m.ThreadTimestamp,
+			ReplyCount: m.ReplyCount,
+		})
+	}
+
+	// Reverse: Slack returns newest first
+	for i, j := 0, len(msgItems)-1; i < j; i, j = i+1, j-1 {
+		msgItems[i], msgItems[j] = msgItems[j], msgItems[i]
+	}
+
+	return msgItems
 }
 
 func formatTimestamp(ts, format string) string {

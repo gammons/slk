@@ -41,6 +41,10 @@ type (
 	}
 )
 
+// ChannelFetchFunc is called when the user selects a channel.
+// It should return a tea.Msg (typically MessagesLoadedMsg) with the channel's messages.
+type ChannelFetchFunc func(channelID, channelName string) tea.Msg
+
 type App struct {
 	// Sub-models
 	workspaceRail workspace.Model
@@ -60,6 +64,9 @@ type App struct {
 
 	// Current context
 	activeChannelID string
+
+	// Callbacks
+	channelFetcher ChannelFetchFunc
 }
 
 func NewApp() *App {
@@ -98,8 +105,17 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ChannelSelectedMsg:
 		a.activeChannelID = msg.ID
 		a.messagepane.SetChannel(msg.Name, "")
+		a.messagepane.SetMessages(nil) // clear while loading
 		a.compose.SetChannel(msg.Name)
 		a.statusbar.SetChannel(msg.Name)
+		// Fetch messages for the newly selected channel
+		if a.channelFetcher != nil {
+			fetcher := a.channelFetcher
+			chID, chName := msg.ID, msg.Name
+			cmds = append(cmds, func() tea.Msg {
+				return fetcher(chID, chName)
+			})
+		}
 
 	case MessagesLoadedMsg:
 		if msg.ChannelID == a.activeChannelID {
@@ -284,6 +300,11 @@ func (a *App) SetWorkspaces(items []workspace.WorkspaceItem) {
 
 func (a *App) SetChannels(items []sidebar.ChannelItem) {
 	a.sidebar.SetItems(items)
+}
+
+// SetChannelFetcher sets the callback used to load messages when a channel is selected.
+func (a *App) SetChannelFetcher(fn ChannelFetchFunc) {
+	a.channelFetcher = fn
 }
 
 // SetInitialChannel sets the active channel and its messages before the TUI starts.

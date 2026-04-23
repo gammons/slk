@@ -15,6 +15,7 @@ import (
 type Token struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
+	AppToken     string `json:"app_token"`
 	TeamID       string `json:"team_id"`
 	TeamName     string `json:"team_name"`
 }
