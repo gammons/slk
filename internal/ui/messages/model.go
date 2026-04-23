@@ -166,11 +166,14 @@ func (m *Model) View(height, width int) string {
 		header += "\n" + styles.Timestamp.Width(width).Render(m.channelTopic)
 	}
 
-	headerHeight := lipgloss.Height(header) + 1 // +1 for separator
 	separator := lipgloss.NewStyle().Width(width).Foreground(styles.Border).Render(strings.Repeat("-", width))
 
-	// Messages area
-	msgAreaHeight := height - headerHeight - 1
+	// Measure the chrome: header + "\n" + separator + "\n"
+	chrome := header + "\n" + separator + "\n"
+	chromeHeight := lipgloss.Height(chrome)
+
+	// Messages area gets the remaining height
+	msgAreaHeight := height - chromeHeight
 	if msgAreaHeight < 1 {
 		msgAreaHeight = 1
 	}

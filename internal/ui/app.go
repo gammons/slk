@@ -364,10 +364,14 @@ func (a *App) View() string {
 	}
 
 	// Message pane = messages + compose
-	composeHeight := 3
-	msgContentHeight := contentHeight - composeHeight
-	msgView := a.messagepane.View(msgContentHeight, msgWidth)
+	// Render compose first to measure its actual height, then give the rest to messages
 	composeView := a.compose.View(msgWidth, a.mode == ModeInsert)
+	composeHeight := lipgloss.Height(composeView)
+	msgContentHeight := contentHeight - composeHeight
+	if msgContentHeight < 3 {
+		msgContentHeight = 3
+	}
+	msgView := a.messagepane.View(msgContentHeight, msgWidth)
 	msgPanel := lipgloss.NewStyle().
 		MaxHeight(contentHeight).
 		Render(lipgloss.JoinVertical(lipgloss.Left, msgView, composeView))
