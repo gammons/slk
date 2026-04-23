@@ -335,36 +335,32 @@ func (a *App) View() string {
 		msgWidth = 10
 	}
 
-	// Render panels -- use MaxHeight to clip content to terminal size
-	rail := lipgloss.NewStyle().
-		MaxHeight(contentHeight).
-		Render(a.workspaceRail.View(contentHeight))
+	// Helper to force a panel to an exact height
+	exactHeight := func(s string, h int) string {
+		return lipgloss.NewStyle().Width(lipgloss.Width(s)).Height(h).MaxHeight(h).Render(s)
+	}
+
+	// Render workspace rail
+	rail := exactHeight(a.workspaceRail.View(contentHeight), contentHeight)
 
 	var panels []string
 	panels = append(panels, rail)
 
+	// Render sidebar
 	if a.sidebarVisible {
-		// Account for border taking 2 rows when focused
-		innerHeight := contentHeight
+		// Border adds 2 rows (top+bottom), so shrink inner content when bordered
+		borderSize := 0
 		if a.focusedPanel == PanelSidebar {
-			innerHeight = contentHeight - 2
+			borderSize = 2
 		}
-		sidebarView := a.sidebar.View(innerHeight, sidebarWidth)
+		sidebarView := a.sidebar.View(contentHeight-borderSize, sidebarWidth)
 		if a.focusedPanel == PanelSidebar {
-			sidebarView = styles.FocusedBorder.
-				Width(sidebarWidth).
-				MaxHeight(contentHeight).
-				Render(sidebarView)
-		} else {
-			sidebarView = lipgloss.NewStyle().
-				MaxHeight(contentHeight).
-				Render(sidebarView)
+			sidebarView = styles.FocusedBorder.Width(sidebarWidth).Render(sidebarView)
 		}
-		panels = append(panels, sidebarView)
+		panels = append(panels, exactHeight(sidebarView, contentHeight))
 	}
 
-	// Message pane = messages + compose
-	// Render compose first to measure its actual height, then give the rest to messages
+	// Render message pane: compose first (to measure), then messages get the rest
 	composeView := a.compose.View(msgWidth, a.mode == ModeInsert)
 	composeHeight := lipgloss.Height(composeView)
 	msgContentHeight := contentHeight - composeHeight
@@ -372,9 +368,10 @@ func (a *App) View() string {
 		msgContentHeight = 3
 	}
 	msgView := a.messagepane.View(msgContentHeight, msgWidth)
-	msgPanel := lipgloss.NewStyle().
-		MaxHeight(contentHeight).
-		Render(lipgloss.JoinVertical(lipgloss.Left, msgView, composeView))
+	msgPanel := exactHeight(
+		lipgloss.JoinVertical(lipgloss.Left, msgView, composeView),
+		contentHeight,
+	)
 	panels = append(panels, msgPanel)
 
 	content := lipgloss.JoinHorizontal(lipgloss.Top, panels...)

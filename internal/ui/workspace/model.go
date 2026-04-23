@@ -71,9 +71,16 @@ func (m Model) View(height int) string {
 
 	content := strings.Join(rows, "\n\n")
 
+	// Padding takes 2 rows (top+bottom), so reduce content area accordingly
+	innerHeight := height - 2
+	if innerHeight < 1 {
+		innerHeight = 1
+	}
+
 	rail := lipgloss.NewStyle().
 		Width(6).
-		Height(height).
+		Height(innerHeight).
+		MaxHeight(innerHeight).
 		Background(styles.SurfaceDark).
 		Padding(1, 0).
 		Align(lipgloss.Center).
