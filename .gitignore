@@ -1,0 +1,5 @@
+bin/
+*.db
+*.db-journal
+.superpowers/
+.env
