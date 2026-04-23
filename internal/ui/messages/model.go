@@ -179,5 +179,6 @@ func (m Model) View(height, width int) string {
 	return header + "\n" + separator + "\n" + lipgloss.NewStyle().
 		Width(width).
 		Height(msgAreaHeight).
+		MaxHeight(msgAreaHeight).
 		Render(msgContent)
 }

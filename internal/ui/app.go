@@ -331,17 +331,34 @@ func (a *App) View() string {
 		sidebarWidth = a.sidebar.Width()
 	}
 	msgWidth := a.width - railWidth - sidebarWidth
+	if msgWidth < 10 {
+		msgWidth = 10
+	}
 
-	// Render panels
-	rail := a.workspaceRail.View(contentHeight)
+	// Render panels -- use MaxHeight to clip content to terminal size
+	rail := lipgloss.NewStyle().
+		MaxHeight(contentHeight).
+		Render(a.workspaceRail.View(contentHeight))
 
 	var panels []string
 	panels = append(panels, rail)
 
 	if a.sidebarVisible {
-		sidebarView := a.sidebar.View(contentHeight, sidebarWidth)
+		// Account for border taking 2 rows when focused
+		innerHeight := contentHeight
 		if a.focusedPanel == PanelSidebar {
-			sidebarView = styles.FocusedBorder.Width(sidebarWidth).Render(sidebarView)
+			innerHeight = contentHeight - 2
+		}
+		sidebarView := a.sidebar.View(innerHeight, sidebarWidth)
+		if a.focusedPanel == PanelSidebar {
+			sidebarView = styles.FocusedBorder.
+				Width(sidebarWidth).
+				MaxHeight(contentHeight).
+				Render(sidebarView)
+		} else {
+			sidebarView = lipgloss.NewStyle().
+				MaxHeight(contentHeight).
+				Render(sidebarView)
 		}
 		panels = append(panels, sidebarView)
 	}
@@ -351,7 +368,9 @@ func (a *App) View() string {
 	msgContentHeight := contentHeight - composeHeight
 	msgView := a.messagepane.View(msgContentHeight, msgWidth)
 	composeView := a.compose.View(msgWidth, a.mode == ModeInsert)
-	msgPanel := lipgloss.JoinVertical(lipgloss.Left, msgView, composeView)
+	msgPanel := lipgloss.NewStyle().
+		MaxHeight(contentHeight).
+		Render(lipgloss.JoinVertical(lipgloss.Left, msgView, composeView))
 	panels = append(panels, msgPanel)
 
 	content := lipgloss.JoinHorizontal(lipgloss.Top, panels...)

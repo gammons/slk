@@ -178,6 +178,7 @@ func (m Model) View(height, width int) string {
 	return lipgloss.NewStyle().
 		Width(width).
 		Height(height).
+		MaxHeight(height).
 		Background(styles.Surface).
 		Render(content)
 }
