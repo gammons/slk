@@ -241,7 +241,10 @@ func (m *Model) View(height, width int) string {
 		}
 	}
 
-	// Now render the visible window starting from offset
+	// Now render the visible window starting from offset.
+	// Keep adding messages until we've filled or exceeded the area.
+	// MaxHeight on the container will clip any overflow, so a partially
+	// visible message at the bottom is fine (better than empty space).
 	var visibleRows []string
 	usedHeight := 0
 	for i := m.offset; i < len(rendered); i++ {
@@ -250,14 +253,15 @@ func (m *Model) View(height, width int) string {
 		if len(visibleRows) > 0 {
 			gap = 1 // blank line between messages
 		}
-		if usedHeight+entryHeight+gap > msgAreaHeight && len(visibleRows) > 0 {
-			break
-		}
 		if gap > 0 {
 			usedHeight += gap
 		}
 		usedHeight += entryHeight
 		visibleRows = append(visibleRows, rendered[i].content)
+		// Stop once we've filled past the viewport
+		if usedHeight >= msgAreaHeight {
+			break
+		}
 	}
 
 	// Show scroll indicators
