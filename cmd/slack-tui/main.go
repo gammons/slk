@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -65,7 +67,6 @@ func run() error {
 	// Initialize services
 	wsMgr := service.NewWorkspaceManager(db)
 	msgSvc := service.NewMessageService(db)
-	_ = cfg    // will use for animation settings etc.
 	_ = msgSvc // will wire for send/receive
 
 	// Create app
@@ -152,7 +153,7 @@ func run() error {
 						TS:         m.Timestamp,
 						UserName:   m.User, // will resolve to display name later
 						Text:       m.Text,
-						Timestamp:  formatTimestamp(m.Timestamp),
+						Timestamp:  formatTimestamp(m.Timestamp, cfg.Appearance.TimestampFormat),
 						ThreadTS:   m.ThreadTimestamp,
 						ReplyCount: m.ReplyCount,
 					})
@@ -161,6 +162,7 @@ func run() error {
 				for i, j := 0, len(msgItems)-1; i < j; i, j = i+1, j-1 {
 					msgItems[i], msgItems[j] = msgItems[j], msgItems[i]
 				}
+				app.SetInitialChannel(firstCh.ID, firstCh.Name, msgItems)
 			}
 		}
 	}
@@ -173,10 +175,18 @@ func run() error {
 	return err
 }
 
-func formatTimestamp(ts string) string {
-	// Simple timestamp formatting - parse Slack ts to readable time
-	// Slack ts is like "1700000001.000000"
-	return ts // placeholder - will format properly
+func formatTimestamp(ts, format string) string {
+	// Slack ts is like "1700000001.000000" -- split on "." and parse the seconds
+	parts := strings.SplitN(ts, ".", 2)
+	if len(parts) == 0 {
+		return ts
+	}
+	sec, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return ts
+	}
+	t := time.Unix(sec, 0)
+	return t.Format(format)
 }
 
 func xdgConfig() string {

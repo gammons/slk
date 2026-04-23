@@ -286,6 +286,15 @@ func (a *App) SetChannels(items []sidebar.ChannelItem) {
 	a.sidebar.SetItems(items)
 }
 
+// SetInitialChannel sets the active channel and its messages before the TUI starts.
+func (a *App) SetInitialChannel(channelID, channelName string, msgs []messages.MessageItem) {
+	a.activeChannelID = channelID
+	a.messagepane.SetChannel(channelName, "")
+	a.messagepane.SetMessages(msgs)
+	a.compose.SetChannel(channelName)
+	a.statusbar.SetChannel(channelName)
+}
+
 func (a *App) View() string {
 	if a.width == 0 || a.height == 0 {
 		return "Initializing..."

@@ -84,7 +84,7 @@ slack-tui/
 
 - [ ] **Step 1: Initialize Go module**
 
-Run: `go mod init github.com/yourusername/slack-tui`
+Run: `go mod init github.com/gammons/slack-tui`
 
 - [ ] **Step 2: Create Makefile**
 
@@ -1816,7 +1816,7 @@ package service
 import (
 	"testing"
 
-	"github.com/yourusername/slack-tui/internal/cache"
+	"github.com/gammons/slack-tui/internal/cache"
 )
 
 func TestWorkspaceManagerAddWorkspace(t *testing.T) {
@@ -1869,7 +1869,7 @@ package service
 import (
 	"sync"
 
-	"github.com/yourusername/slack-tui/internal/cache"
+	"github.com/gammons/slack-tui/internal/cache"
 )
 
 type WorkspaceInfo struct {
@@ -1976,7 +1976,7 @@ package service
 import (
 	"testing"
 
-	"github.com/yourusername/slack-tui/internal/cache"
+	"github.com/gammons/slack-tui/internal/cache"
 )
 
 func setupTestDB(t *testing.T) *cache.DB {
@@ -2031,7 +2031,7 @@ func TestMessageServiceCacheMessage(t *testing.T) {
 package service
 
 import (
-	"github.com/yourusername/slack-tui/internal/cache"
+	"github.com/gammons/slack-tui/internal/cache"
 )
 
 type MessageService struct {
@@ -2378,7 +2378,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/yourusername/slack-tui/internal/ui/styles"
+	"github.com/gammons/slack-tui/internal/ui/styles"
 )
 
 type WorkspaceItem struct {
@@ -2575,7 +2575,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/yourusername/slack-tui/internal/ui/styles"
+	"github.com/gammons/slack-tui/internal/ui/styles"
 )
 
 type ChannelItem struct {
@@ -2850,7 +2850,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/yourusername/slack-tui/internal/ui/styles"
+	"github.com/gammons/slack-tui/internal/ui/styles"
 )
 
 type MessageItem struct {
@@ -3087,7 +3087,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/yourusername/slack-tui/internal/ui/styles"
+	"github.com/gammons/slack-tui/internal/ui/styles"
 )
 
 type Model struct {
@@ -3182,7 +3182,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yourusername/slack-tui/internal/ui"
+	"github.com/gammons/slack-tui/internal/ui"
 )
 
 func TestStatusBarNormalMode(t *testing.T) {
@@ -3235,8 +3235,8 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/yourusername/slack-tui/internal/ui"
-	"github.com/yourusername/slack-tui/internal/ui/styles"
+	"github.com/gammons/slack-tui/internal/ui"
+	"github.com/gammons/slack-tui/internal/ui/styles"
 )
 
 type Model struct {
@@ -3354,8 +3354,8 @@ package ui
 import (
 	"testing"
 
-	"github.com/yourusername/slack-tui/internal/ui/sidebar"
-	"github.com/yourusername/slack-tui/internal/ui/workspace"
+	"github.com/gammons/slack-tui/internal/ui/sidebar"
+	"github.com/gammons/slack-tui/internal/ui/workspace"
 )
 
 func TestAppFocusCycle(t *testing.T) {
@@ -3428,12 +3428,12 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/yourusername/slack-tui/internal/ui/compose"
-	"github.com/yourusername/slack-tui/internal/ui/messages"
-	"github.com/yourusername/slack-tui/internal/ui/sidebar"
-	"github.com/yourusername/slack-tui/internal/ui/statusbar"
-	"github.com/yourusername/slack-tui/internal/ui/styles"
-	"github.com/yourusername/slack-tui/internal/ui/workspace"
+	"github.com/gammons/slack-tui/internal/ui/compose"
+	"github.com/gammons/slack-tui/internal/ui/messages"
+	"github.com/gammons/slack-tui/internal/ui/sidebar"
+	"github.com/gammons/slack-tui/internal/ui/statusbar"
+	"github.com/gammons/slack-tui/internal/ui/styles"
+	"github.com/gammons/slack-tui/internal/ui/workspace"
 )
 
 type Panel int
@@ -3791,14 +3791,14 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/yourusername/slack-tui/internal/cache"
-	"github.com/yourusername/slack-tui/internal/config"
-	"github.com/yourusername/slack-tui/internal/service"
-	slackclient "github.com/yourusername/slack-tui/internal/slack"
-	"github.com/yourusername/slack-tui/internal/ui"
-	"github.com/yourusername/slack-tui/internal/ui/messages"
-	"github.com/yourusername/slack-tui/internal/ui/sidebar"
-	"github.com/yourusername/slack-tui/internal/ui/workspace"
+	"github.com/gammons/slack-tui/internal/cache"
+	"github.com/gammons/slack-tui/internal/config"
+	"github.com/gammons/slack-tui/internal/service"
+	slackclient "github.com/gammons/slack-tui/internal/slack"
+	"github.com/gammons/slack-tui/internal/ui"
+	"github.com/gammons/slack-tui/internal/ui/messages"
+	"github.com/gammons/slack-tui/internal/ui/sidebar"
+	"github.com/gammons/slack-tui/internal/ui/workspace"
 )
 
 func main() {
