@@ -4,13 +4,16 @@ package statusbar
 import (
 	"strings"
 	"testing"
-
-	"github.com/gammons/slack-tui/internal/ui"
 )
+
+// testMode is a simple fmt.Stringer for testing without importing ui (avoids circular import).
+type testMode string
+
+func (m testMode) String() string { return string(m) }
 
 func TestStatusBarNormalMode(t *testing.T) {
 	m := New()
-	m.SetMode(ui.ModeNormal)
+	m.SetMode(testMode("NORMAL"))
 	m.SetChannel("general")
 	m.SetWorkspace("Acme Corp")
 
@@ -29,7 +32,7 @@ func TestStatusBarNormalMode(t *testing.T) {
 
 func TestStatusBarInsertMode(t *testing.T) {
 	m := New()
-	m.SetMode(ui.ModeInsert)
+	m.SetMode(testMode("INSERT"))
 	view := m.View(80)
 
 	if !strings.Contains(view, "INSERT") {

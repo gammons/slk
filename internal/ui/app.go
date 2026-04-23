@@ -1,0 +1,331 @@
+// internal/ui/app.go
+package ui
+
+import (
+	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/gammons/slack-tui/internal/ui/compose"
+	"github.com/gammons/slack-tui/internal/ui/messages"
+	"github.com/gammons/slack-tui/internal/ui/sidebar"
+	"github.com/gammons/slack-tui/internal/ui/statusbar"
+	"github.com/gammons/slack-tui/internal/ui/styles"
+	"github.com/gammons/slack-tui/internal/ui/workspace"
+)
+
+type Panel int
+
+const (
+	PanelWorkspace Panel = iota
+	PanelSidebar
+	PanelMessages
+	PanelThread
+)
+
+// Messages sent between components
+type (
+	ChannelSelectedMsg struct {
+		ID   string
+		Name string
+	}
+	MessagesLoadedMsg struct {
+		ChannelID string
+		Messages  []messages.MessageItem
+	}
+	NewMessageMsg struct {
+		Message messages.MessageItem
+	}
+	SendMessageMsg struct {
+		ChannelID string
+		Text      string
+	}
+)
+
+type App struct {
+	// Sub-models
+	workspaceRail workspace.Model
+	sidebar       sidebar.Model
+	messagepane   messages.Model
+	compose       compose.Model
+	statusbar     statusbar.Model
+
+	// State
+	mode           Mode
+	focusedPanel   Panel
+	sidebarVisible bool
+	threadVisible  bool
+	width          int
+	height         int
+	keys           KeyMap
+
+	// Current context
+	activeChannelID string
+}
+
+func NewApp() *App {
+	return &App{
+		workspaceRail:  workspace.New(nil, 0),
+		sidebar:        sidebar.New(nil),
+		messagepane:    messages.New(nil, ""),
+		compose:        compose.New(""),
+		statusbar:      statusbar.New(),
+		mode:           ModeNormal,
+		focusedPanel:   PanelSidebar,
+		sidebarVisible: true,
+		keys:           DefaultKeyMap(),
+	}
+}
+
+func (a *App) Init() tea.Cmd {
+	return nil
+}
+
+func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		a.width = msg.Width
+		a.height = msg.Height
+		return a, nil
+
+	case tea.KeyMsg:
+		cmd := a.handleKey(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+
+	case ChannelSelectedMsg:
+		a.activeChannelID = msg.ID
+		a.messagepane.SetChannel(msg.Name, "")
+		a.compose.SetChannel(msg.Name)
+		a.statusbar.SetChannel(msg.Name)
+
+	case MessagesLoadedMsg:
+		if msg.ChannelID == a.activeChannelID {
+			a.messagepane.SetMessages(msg.Messages)
+		}
+
+	case NewMessageMsg:
+		a.messagepane.AppendMessage(msg.Message)
+	}
+
+	return a, tea.Batch(cmds...)
+}
+
+func (a *App) handleKey(msg tea.KeyMsg) tea.Cmd {
+	// Always handle quit
+	if key.Matches(msg, a.keys.Quit) {
+		return tea.Quit
+	}
+
+	// Mode-specific handling
+	switch a.mode {
+	case ModeInsert:
+		return a.handleInsertMode(msg)
+	case ModeCommand:
+		return a.handleCommandMode(msg)
+	default:
+		return a.handleNormalMode(msg)
+	}
+}
+
+func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
+	switch {
+	case key.Matches(msg, a.keys.InsertMode):
+		a.SetMode(ModeInsert)
+		a.focusedPanel = PanelMessages
+		return a.compose.Focus()
+
+	case key.Matches(msg, a.keys.Escape):
+		a.SetMode(ModeNormal)
+		a.compose.Blur()
+
+	case key.Matches(msg, a.keys.Tab):
+		a.FocusNext()
+
+	case key.Matches(msg, a.keys.ShiftTab):
+		a.FocusPrev()
+
+	case key.Matches(msg, a.keys.ToggleSidebar):
+		a.ToggleSidebar()
+
+	case key.Matches(msg, a.keys.Down):
+		a.handleDown()
+
+	case key.Matches(msg, a.keys.Up):
+		a.handleUp()
+
+	case key.Matches(msg, a.keys.Left):
+		a.FocusPrev()
+
+	case key.Matches(msg, a.keys.Right):
+		a.FocusNext()
+
+	case key.Matches(msg, a.keys.Enter):
+		return a.handleEnter()
+
+	case key.Matches(msg, a.keys.Bottom):
+		a.handleGoToBottom()
+	}
+	return nil
+}
+
+func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
+	if key.Matches(msg, a.keys.Escape) {
+		a.SetMode(ModeNormal)
+		a.compose.Blur()
+		return nil
+	}
+
+	// Handle Enter in insert mode to send message
+	if msg.Type == tea.KeyEnter {
+		text := a.compose.Value()
+		if text != "" {
+			a.compose.Reset()
+			return func() tea.Msg {
+				return SendMessageMsg{
+					ChannelID: a.activeChannelID,
+					Text:      text,
+				}
+			}
+		}
+		return nil
+	}
+
+	// Forward to compose box
+	var cmd tea.Cmd
+	a.compose, cmd = a.compose.Update(msg)
+	return cmd
+}
+
+func (a *App) handleCommandMode(msg tea.KeyMsg) tea.Cmd {
+	if key.Matches(msg, a.keys.Escape) {
+		a.SetMode(ModeNormal)
+	}
+	return nil
+}
+
+func (a *App) handleDown() {
+	switch a.focusedPanel {
+	case PanelSidebar:
+		a.sidebar.MoveDown()
+	case PanelMessages:
+		a.messagepane.MoveDown()
+	}
+}
+
+func (a *App) handleUp() {
+	switch a.focusedPanel {
+	case PanelSidebar:
+		a.sidebar.MoveUp()
+	case PanelMessages:
+		a.messagepane.MoveUp()
+	}
+}
+
+func (a *App) handleGoToBottom() {
+	switch a.focusedPanel {
+	case PanelSidebar:
+		a.sidebar.GoToBottom()
+	case PanelMessages:
+		a.messagepane.GoToBottom()
+	}
+}
+
+func (a *App) handleEnter() tea.Cmd {
+	if a.focusedPanel == PanelSidebar {
+		item, ok := a.sidebar.SelectedItem()
+		if ok {
+			return func() tea.Msg {
+				return ChannelSelectedMsg{ID: item.ID, Name: item.Name}
+			}
+		}
+	}
+	return nil
+}
+
+func (a *App) SetMode(mode Mode) {
+	a.mode = mode
+	a.statusbar.SetMode(mode)
+}
+
+func (a *App) FocusNext() {
+	if a.sidebarVisible {
+		if a.focusedPanel == PanelSidebar {
+			a.focusedPanel = PanelMessages
+		} else {
+			a.focusedPanel = PanelSidebar
+		}
+	}
+}
+
+func (a *App) FocusPrev() {
+	if a.sidebarVisible {
+		if a.focusedPanel == PanelMessages {
+			a.focusedPanel = PanelSidebar
+		} else {
+			a.focusedPanel = PanelMessages
+		}
+	}
+}
+
+func (a *App) ToggleSidebar() {
+	a.sidebarVisible = !a.sidebarVisible
+	if !a.sidebarVisible && a.focusedPanel == PanelSidebar {
+		a.focusedPanel = PanelMessages
+	}
+}
+
+// Setters for external use (wiring services)
+func (a *App) SetWorkspaces(items []workspace.WorkspaceItem) {
+	a.workspaceRail.SetItems(items)
+}
+
+func (a *App) SetChannels(items []sidebar.ChannelItem) {
+	a.sidebar.SetItems(items)
+}
+
+func (a *App) View() string {
+	if a.width == 0 || a.height == 0 {
+		return "Initializing..."
+	}
+
+	statusHeight := 1
+	contentHeight := a.height - statusHeight
+
+	// Calculate widths
+	railWidth := a.workspaceRail.Width()
+	sidebarWidth := 0
+	if a.sidebarVisible {
+		sidebarWidth = a.sidebar.Width()
+	}
+	msgWidth := a.width - railWidth - sidebarWidth
+
+	// Render panels
+	rail := a.workspaceRail.View(contentHeight)
+
+	var panels []string
+	panels = append(panels, rail)
+
+	if a.sidebarVisible {
+		sidebarView := a.sidebar.View(contentHeight, sidebarWidth)
+		if a.focusedPanel == PanelSidebar {
+			sidebarView = styles.FocusedBorder.Width(sidebarWidth).Render(sidebarView)
+		}
+		panels = append(panels, sidebarView)
+	}
+
+	// Message pane = messages + compose
+	composeHeight := 3
+	msgContentHeight := contentHeight - composeHeight
+	msgView := a.messagepane.View(msgContentHeight, msgWidth)
+	composeView := a.compose.View(msgWidth, a.mode == ModeInsert)
+	msgPanel := lipgloss.JoinVertical(lipgloss.Left, msgView, composeView)
+	panels = append(panels, msgPanel)
+
+	content := lipgloss.JoinHorizontal(lipgloss.Top, panels...)
+	status := a.statusbar.View(a.width)
+
+	return lipgloss.JoinVertical(lipgloss.Left, content, status)
+}

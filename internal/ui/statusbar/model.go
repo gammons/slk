@@ -5,12 +5,11 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/gammons/slack-tui/internal/ui"
 	"github.com/gammons/slack-tui/internal/ui/styles"
 )
 
 type Model struct {
-	mode        ui.Mode
+	mode        string
 	channel     string
 	workspace   string
 	unreadCount int
@@ -19,13 +18,14 @@ type Model struct {
 
 func New() Model {
 	return Model{
-		mode:      ui.ModeNormal,
+		mode:      "NORMAL",
 		connected: true,
 	}
 }
 
-func (m *Model) SetMode(mode ui.Mode) {
-	m.mode = mode
+// SetMode accepts a fmt.Stringer (such as ui.Mode) to avoid circular imports.
+func (m *Model) SetMode(mode fmt.Stringer) {
+	m.mode = mode.String()
 }
 
 func (m *Model) SetChannel(name string) {
@@ -48,14 +48,14 @@ func (m Model) View(width int) string {
 	// Mode indicator
 	var modeStyle lipgloss.Style
 	switch m.mode {
-	case ui.ModeInsert:
+	case "INSERT":
 		modeStyle = styles.StatusModeInsert
-	case ui.ModeCommand:
+	case "COMMAND":
 		modeStyle = styles.StatusModeCommand
 	default:
 		modeStyle = styles.StatusMode
 	}
-	modeLabel := modeStyle.Render(fmt.Sprintf(" %s ", m.mode.String()))
+	modeLabel := modeStyle.Render(fmt.Sprintf(" %s ", m.mode))
 
 	// Channel info
 	channelInfo := styles.StatusBar.Render(fmt.Sprintf(" #%s ", m.channel))
