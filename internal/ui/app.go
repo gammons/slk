@@ -346,17 +346,14 @@ func (a *App) View() string {
 	var panels []string
 	panels = append(panels, rail)
 
-	// Render sidebar
+	// Render sidebar -- always show border, change color on focus
 	if a.sidebarVisible {
-		// Border adds 2 rows (top+bottom), so shrink inner content when bordered
-		borderSize := 0
+		borderStyle := styles.UnfocusedBorder.Width(sidebarWidth)
 		if a.focusedPanel == PanelSidebar {
-			borderSize = 2
+			borderStyle = styles.FocusedBorder.Width(sidebarWidth)
 		}
-		sidebarView := a.sidebar.View(contentHeight-borderSize, sidebarWidth)
-		if a.focusedPanel == PanelSidebar {
-			sidebarView = styles.FocusedBorder.Width(sidebarWidth).Render(sidebarView)
-		}
+		sidebarView := a.sidebar.View(contentHeight-2, sidebarWidth) // -2 for top+bottom border
+		sidebarView = borderStyle.Render(sidebarView)
 		panels = append(panels, exactHeight(sidebarView, contentHeight))
 	}
 
