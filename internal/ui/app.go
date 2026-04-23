@@ -357,16 +357,22 @@ func (a *App) View() string {
 		panels = append(panels, exactHeight(sidebarView, contentHeight))
 	}
 
-	// Render message pane: compose first (to measure), then messages get the rest
-	composeView := a.compose.View(msgWidth, a.mode == ModeInsert)
+	// Render message pane with border, same pattern as sidebar
+	msgBorderStyle := styles.UnfocusedBorder.Width(msgWidth)
+	if a.focusedPanel == PanelMessages {
+		msgBorderStyle = styles.FocusedBorder.Width(msgWidth)
+	}
+	composeView := a.compose.View(msgWidth-2, a.mode == ModeInsert) // -2 for left+right border
 	composeHeight := lipgloss.Height(composeView)
-	msgContentHeight := contentHeight - composeHeight
+	// -2 for top+bottom border, minus compose
+	msgContentHeight := contentHeight - 2 - composeHeight
 	if msgContentHeight < 3 {
 		msgContentHeight = 3
 	}
-	msgView := a.messagepane.View(msgContentHeight, msgWidth)
+	msgView := a.messagepane.View(msgContentHeight, msgWidth-2) // -2 for left+right border
+	msgInner := lipgloss.JoinVertical(lipgloss.Left, msgView, composeView)
 	msgPanel := exactHeight(
-		lipgloss.JoinVertical(lipgloss.Left, msgView, composeView),
+		msgBorderStyle.Render(msgInner),
 		contentHeight,
 	)
 	panels = append(panels, msgPanel)
