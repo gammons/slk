@@ -187,97 +187,65 @@ func (m *Model) View(height, width int) string {
 		return header + "\n" + separator + "\n" + empty
 	}
 
-	// Pre-render all messages to know their heights
-	type renderedMsg struct {
-		content string
-		height  int
-	}
-	rendered := make([]renderedMsg, len(m.messages))
+	// Pre-render all messages
+	rendered := make([]string, len(m.messages))
 	for i, msg := range m.messages {
-		content := renderMessage(msg, width, i == m.selected)
-		rendered[i] = renderedMsg{
-			content: content,
-			height:  lipgloss.Height(content),
-		}
+		rendered[i] = renderMessage(msg, width, i == m.selected)
 	}
 
 	// Adjust offset to keep the selected message visible.
-	// We build the viewport from offset downward, fitting as many messages as possible.
-	// If selected is before offset, move offset up.
-	// If selected would be below the viewport, move offset down.
+	// We measure actual joined content height rather than summing individual heights,
+	// since lipgloss rendering can produce different results when strings are joined.
 
 	// First, ensure offset is not past selected
 	if m.selected < m.offset {
 		m.offset = m.selected
 	}
 
-	// Then, check if selected is visible from offset.
-	// Walk from offset, accumulating height, to see if selected fits.
+	// Check if selected is visible from current offset by measuring actual content
 	for {
-		usedHeight := 0
-		selectedVisible := false
-		for i := m.offset; i < len(rendered); i++ {
-			entryHeight := rendered[i].height
-			if i > m.offset {
-				entryHeight += 1 // +1 for blank line between messages
-			}
-			if usedHeight+entryHeight > msgAreaHeight && i > m.offset {
-				break
-			}
-			usedHeight += entryHeight
-			if i == m.selected {
-				selectedVisible = true
-				break
-			}
-		}
-		if selectedVisible {
-			break
-		}
-		// Selected is not visible -- move offset down
-		m.offset++
 		if m.offset > m.selected {
 			m.offset = m.selected
 			break
 		}
+		// Build content from offset to selected and measure
+		testRows := rendered[m.offset : m.selected+1]
+		testContent := strings.Join(testRows, "\n")
+		if lipgloss.Height(testContent) <= msgAreaHeight {
+			break // selected is visible
+		}
+		m.offset++
 	}
 
-	// Now render the visible window starting from offset.
-	// Keep adding messages until we've filled or exceeded the area.
-	// MaxHeight on the container will clip any overflow, so a partially
-	// visible message at the bottom is fine (better than empty space).
+	// Render from offset, adding messages until we fill or exceed the area.
+	// Measure actual joined height each time to get accurate results.
 	var visibleRows []string
-	usedHeight := 0
 	for i := m.offset; i < len(rendered); i++ {
-		entryHeight := rendered[i].height
-		gap := 0
-		if len(visibleRows) > 0 {
-			gap = 1 // blank line between messages
+		candidate := append(visibleRows, rendered[i])
+		candidateHeight := lipgloss.Height(strings.Join(candidate, "\n"))
+		if candidateHeight > msgAreaHeight && len(visibleRows) > 0 {
+			// This message would overflow -- still add it so MaxHeight clips it
+			// rather than leaving empty space
+			visibleRows = append(visibleRows, rendered[i])
+			break
 		}
-		if gap > 0 {
-			usedHeight += gap
-		}
-		usedHeight += entryHeight
-		visibleRows = append(visibleRows, rendered[i].content)
-		// Stop once we've filled past the viewport
-		if usedHeight >= msgAreaHeight {
+		visibleRows = candidate
+		if candidateHeight >= msgAreaHeight {
 			break
 		}
 	}
 
 	// Show scroll indicators
-	var scrollUp, scrollDown string
+	visibleCount := len(visibleRows)
 	if m.offset > 0 {
-		scrollUp = lipgloss.NewStyle().Foreground(styles.TextMuted).Render(
+		scrollUp := lipgloss.NewStyle().Foreground(styles.TextMuted).Render(
 			fmt.Sprintf("  -- %d more above --", m.offset))
 		visibleRows = append([]string{scrollUp}, visibleRows...)
 	}
-	lastVisible := m.offset + len(visibleRows)
-	if scrollUp != "" {
-		lastVisible-- // don't count the scroll indicator
-	}
+	lastVisible := m.offset + visibleCount
 	if lastVisible < len(m.messages) {
 		remaining := len(m.messages) - lastVisible
-		scrollDown = lipgloss.NewStyle().Foreground(styles.TextMuted).Render(
+		scrollDown := lipgloss.NewStyle().Foreground(styles.TextMuted).Render(
 			fmt.Sprintf("  -- %d more below --", remaining))
 		visibleRows = append(visibleRows, scrollDown)
 	}
