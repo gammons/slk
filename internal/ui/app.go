@@ -37,7 +37,8 @@ type (
 		Messages  []messages.MessageItem
 	}
 	NewMessageMsg struct {
-		Message messages.MessageItem
+		ChannelID string
+		Message   messages.MessageItem
 	}
 	SendMessageMsg struct {
 		ChannelID string
@@ -148,7 +149,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case NewMessageMsg:
-		a.messagepane.AppendMessage(msg.Message)
+		if msg.ChannelID == a.activeChannelID {
+			a.messagepane.AppendMessage(msg.Message)
+		}
 
 	case SendMessageMsg:
 		if a.messageSender != nil {

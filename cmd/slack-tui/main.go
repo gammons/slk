@@ -418,6 +418,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS string
 		userName = resolved
 	}
 	h.program.Send(ui.NewMessageMsg{
+		ChannelID: channelID,
 		Message: messages.MessageItem{
 			TS:        ts,
 			UserID:    userID,
