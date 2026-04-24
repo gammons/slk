@@ -138,6 +138,12 @@ func (m *Model) View(height, width int) string {
 		item := m.items[idx]
 		isSelected := fi == m.selected
 
+		// Selection cursor
+		cursor := "  "
+		if isSelected {
+			cursor = lipgloss.NewStyle().Foreground(styles.Primary).Bold(true).Render("> ")
+		}
+
 		var prefix string
 		switch item.Type {
 		case "dm":
@@ -154,9 +160,9 @@ func (m *Model) View(height, width int) string {
 			prefix = "# "
 		}
 
-		// Truncate name to fit sidebar width (width - 4 for prefix and padding)
+		// Truncate name to fit sidebar width (account for cursor + prefix + padding)
 		name := item.Name
-		maxNameLen := width - 6 // account for prefix, padding, border
+		maxNameLen := width - 8 // account for cursor, prefix, padding, border
 		if maxNameLen < 5 {
 			maxNameLen = 5
 		}
@@ -164,7 +170,7 @@ func (m *Model) View(height, width int) string {
 			name = name[:maxNameLen-1] + "…"
 		}
 
-		label := prefix + name
+		label := cursor + prefix + name
 
 		if item.UnreadCount > 0 {
 			badge := styles.UnreadBadge.Render(fmt.Sprintf(" %d ", item.UnreadCount))

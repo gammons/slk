@@ -42,7 +42,7 @@ var (
 
 	// Channel sidebar
 	ChannelSelected = lipgloss.NewStyle().
-			Background(lipgloss.Color("#4A9EFF33")).
+			Background(lipgloss.Color("#2A2A4E")).
 			Foreground(lipgloss.Color("#FFFFFF")).
 			Bold(true).
 			Padding(0, 1)
