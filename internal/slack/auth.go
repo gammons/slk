@@ -11,13 +11,12 @@ import (
 	"strings"
 )
 
-// Token holds OAuth credentials for a single Slack workspace.
+// Token holds browser session credentials for a single Slack workspace.
 type Token struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	AppToken     string `json:"app_token"`
-	TeamID       string `json:"team_id"`
-	TeamName     string `json:"team_name"`
+	AccessToken string `json:"access_token"` // xoxc-... token
+	Cookie      string `json:"cookie"`       // d cookie value
+	TeamID      string `json:"team_id"`
+	TeamName    string `json:"team_name"`
 }
 
 // TokenStore persists Slack tokens as JSON files in a directory,
