@@ -146,6 +146,19 @@ func run() error {
 			}
 		}
 
+		// Fetch channel sections (undocumented API)
+		channelSectionMap := make(map[string]string) // channelID -> section name
+		sections, err := client.GetChannelSections(ctx)
+		if err != nil {
+			log.Printf("Note: channel sections unavailable: %v", err)
+		} else {
+			for _, sec := range sections {
+				for _, chID := range sec.ChannelIDs {
+					channelSectionMap[chID] = sec.Name
+				}
+			}
+		}
+
 		// Fetch channels
 		channels, err := client.GetChannels(ctx)
 		if err != nil {
@@ -182,10 +195,13 @@ func run() error {
 				}
 			}
 
+			section := channelSectionMap[ch.ID]
+
 			sidebarItems = append(sidebarItems, sidebar.ChannelItem{
-				ID:   ch.ID,
-				Name: displayName,
-				Type: chType,
+				ID:      ch.ID,
+				Name:    displayName,
+				Type:    chType,
+				Section: section,
 			})
 		}
 

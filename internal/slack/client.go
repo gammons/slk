@@ -2,8 +2,12 @@ package slackclient
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"net/url"
 
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/socketmode"
@@ -27,11 +31,12 @@ type SlackAPI interface {
 // Client wraps the slack-go library, providing Socket Mode connectivity
 // and a simplified Web API surface for the service layer.
 type Client struct {
-	api      *slack.Client
-	socket   *socketmode.Client
-	teamID   string
-	userID   string
-	appToken string
+	api       *slack.Client
+	socket    *socketmode.Client
+	teamID    string
+	userID    string
+	userToken string
+	appToken  string
 }
 
 // NewClient creates a new Slack client with the given user and app-level tokens.
@@ -47,9 +52,10 @@ func NewClient(userToken, appToken string) *Client {
 	)
 
 	return &Client{
-		api:      api,
-		socket:   socket,
-		appToken: appToken,
+		api:       api,
+		socket:    socket,
+		userToken: userToken,
+		appToken:  appToken,
 	}
 }
 
@@ -210,4 +216,48 @@ func (c *Client) AddReaction(ctx context.Context, channelID, ts, emoji string) e
 // RemoveReaction removes an emoji reaction from a message.
 func (c *Client) RemoveReaction(ctx context.Context, channelID, ts, emoji string) error {
 	return c.api.RemoveReaction(emoji, slack.ItemRef{Channel: channelID, Timestamp: ts})
+}
+
+// ChannelSection represents a user's sidebar section from the undocumented Slack API.
+type ChannelSection struct {
+	ID         string   `json:"channel_section_id"`
+	Name       string   `json:"name"`
+	ChannelIDs []string `json:"channel_ids_page"`
+	Type       string   `json:"type"`
+}
+
+// GetChannelSections calls the undocumented users.channelSections.list API
+// to retrieve the user's sidebar sections. This may break if Slack changes the API.
+func (c *Client) GetChannelSections(ctx context.Context) ([]ChannelSection, error) {
+	endpoint := "https://slack.com/api/users.channelSections.list"
+
+	form := url.Values{}
+	form.Set("token", c.userToken)
+
+	resp, err := http.PostForm(endpoint, form)
+	if err != nil {
+		return nil, fmt.Errorf("calling channelSections API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+
+	var result struct {
+		OK              bool             `json:"ok"`
+		Error           string           `json:"error"`
+		ChannelSections []ChannelSection `json:"channel_sections"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("parsing response: %w", err)
+	}
+
+	if !result.OK {
+		return nil, fmt.Errorf("API error: %s (response: %s)", result.Error, string(body))
+	}
+
+	return result.ChannelSections, nil
 }

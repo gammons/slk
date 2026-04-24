@@ -12,6 +12,7 @@ type ChannelItem struct {
 	ID          string
 	Name        string
 	Type        string // channel, dm, group_dm, private
+	Section     string // section name for grouping (e.g. "Engineering", "Starred")
 	UnreadCount int
 	IsStarred   bool
 	Presence    string // for DMs: active, away, dnd
@@ -114,9 +115,13 @@ func (m Model) View(height, width int) string {
 		return lipgloss.NewStyle().Width(width).Height(height).Render("No channels")
 	}
 
-	// Group channels and DMs
-	var channelRows []string
-	var dmRows []string
+	// Group filtered items by section, preserving section order of first occurrence.
+	type sectionGroup struct {
+		name string
+		rows []string
+	}
+	sectionOrder := []string{}
+	sectionMap := map[string]*sectionGroup{}
 
 	for fi, idx := range m.filtered {
 		item := m.items[idx]
@@ -152,25 +157,29 @@ func (m Model) View(height, width int) string {
 
 		row := style.Width(width - 2).Render(label)
 
-		if item.Type == "dm" || item.Type == "group_dm" {
-			dmRows = append(dmRows, row)
-		} else {
-			channelRows = append(channelRows, row)
+		// Determine section name
+		sectionName := item.Section
+		if sectionName == "" {
+			if item.Type == "dm" || item.Type == "group_dm" {
+				sectionName = "Direct Messages"
+			} else {
+				sectionName = "Channels"
+			}
 		}
+
+		if _, ok := sectionMap[sectionName]; !ok {
+			sectionMap[sectionName] = &sectionGroup{name: sectionName}
+			sectionOrder = append(sectionOrder, sectionName)
+		}
+		sectionMap[sectionName].rows = append(sectionMap[sectionName].rows, row)
 	}
 
 	var sections []string
-
-	if len(channelRows) > 0 {
-		header := styles.SectionHeader.Render("Channels")
+	for _, name := range sectionOrder {
+		group := sectionMap[name]
+		header := styles.SectionHeader.Render(group.name)
 		sections = append(sections, header)
-		sections = append(sections, channelRows...)
-	}
-
-	if len(dmRows) > 0 {
-		header := styles.SectionHeader.Render("Direct Messages")
-		sections = append(sections, header)
-		sections = append(sections, dmRows...)
+		sections = append(sections, group.rows...)
 	}
 
 	content := strings.Join(sections, "\n")
