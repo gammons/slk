@@ -64,7 +64,6 @@ var (
 	SectionHeader = lipgloss.NewStyle().
 			Foreground(TextMuted).
 			Bold(true).
-			MarginTop(1).
 			Padding(0, 1)
 
 	// Messages

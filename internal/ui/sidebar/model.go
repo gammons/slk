@@ -189,9 +189,14 @@ func (m *Model) View(height, width int) string {
 		})
 	}
 
-	// Flatten into a single row list with section headers
+	// Flatten into a single row list with section headers.
+	// Add a blank line between sections for visual separation.
 	var allRows []renderRow
-	for _, name := range sectionOrder {
+	for i, name := range sectionOrder {
+		if i > 0 {
+			// Blank line between sections
+			allRows = append(allRows, renderRow{content: "", filterIdx: -1})
+		}
 		group := sectionMap[name]
 		header := styles.SectionHeader.Render(group.name)
 		allRows = append(allRows, renderRow{content: header, filterIdx: -1})
