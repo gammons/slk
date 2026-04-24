@@ -5,12 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 
 	"github.com/slack-go/slack"
-	"github.com/slack-go/slack/socketmode"
 )
 
 // SlackAPI defines the subset of the Slack API we use.
@@ -28,35 +27,52 @@ type SlackAPI interface {
 	AuthTest() (*slack.AuthTestResponse, error)
 }
 
-// Client wraps the slack-go library, providing Socket Mode connectivity
+// Client wraps the slack-go library, providing RTM connectivity
 // and a simplified Web API surface for the service layer.
+// Uses browser cookie auth (xoxc token + d cookie).
 type Client struct {
-	api       *slack.Client
-	socket    *socketmode.Client
-	teamID    string
-	userID    string
-	userToken string
-	appToken  string
+	api    *slack.Client
+	rtm    *slack.RTM
+	teamID string
+	userID string
+	token  string
+	cookie string
 }
 
-// NewClient creates a new Slack client with the given user and app-level tokens.
-func NewClient(userToken, appToken string) *Client {
-	api := slack.New(
-		userToken,
-		slack.OptionAppLevelToken(appToken),
-	)
+// NewClient creates a new Slack client using browser cookie auth.
+// xoxcToken is the xoxc-... token from the browser.
+// dCookie is the value of the 'd' cookie from slack.com.
+func NewClient(xoxcToken, dCookie string) *Client {
+	httpClient := newCookieHTTPClient(dCookie)
 
-	socket := socketmode.New(
-		api,
-		socketmode.OptionLog(log.New(log.Writer(), "socketmode: ", log.Lshortfile|log.LstdFlags)),
+	api := slack.New(
+		xoxcToken,
+		slack.OptionHTTPClient(httpClient),
 	)
 
 	return &Client{
-		api:       api,
-		socket:    socket,
-		userToken: userToken,
-		appToken:  appToken,
+		api:    api,
+		token:  xoxcToken,
+		cookie: dCookie,
 	}
+}
+
+// newCookieHTTPClient creates an http.Client with the Slack 'd' cookie set.
+func newCookieHTTPClient(dCookie string) *http.Client {
+	jar, _ := cookiejar.New(nil)
+
+	slackURL, _ := url.Parse("https://slack.com")
+	jar.SetCookies(slackURL, []*http.Cookie{
+		{
+			Name:   "d",
+			Value:  dCookie,
+			Domain: ".slack.com",
+			Path:   "/",
+			Secure: true,
+		},
+	})
+
+	return &http.Client{Jar: jar}
 }
 
 // TeamID returns the authenticated workspace's team ID.
@@ -82,16 +98,25 @@ func (c *Client) Connect(ctx context.Context) error {
 	return nil
 }
 
-// RunSocketMode starts the Socket Mode event loop. Events are dispatched
-// to the provided handler. Blocks until the context is cancelled.
-func (c *Client) RunSocketMode(ctx context.Context, handler EventHandler) error {
+// StartRTM creates and starts the RTM connection.
+// Events are dispatched to the provided handler in a goroutine.
+// Call this after Connect.
+func (c *Client) StartRTM(handler EventHandler) {
+	c.rtm = c.api.NewRTM()
+	go c.rtm.ManageConnection()
 	go func() {
-		for evt := range c.socket.Events {
-			dispatcher := NewEventDispatcher(c.socket, handler)
-			dispatcher.HandleEvent(evt)
+		for msg := range c.rtm.IncomingEvents {
+			dispatchRTMEvent(msg, handler)
 		}
 	}()
-	return c.socket.RunContext(ctx)
+}
+
+// StopRTM disconnects the RTM connection.
+func (c *Client) StopRTM() error {
+	if c.rtm != nil {
+		return c.rtm.Disconnect()
+	}
+	return nil
 }
 
 // GetChannels retrieves all conversations (channels, DMs, group DMs) the
@@ -232,7 +257,7 @@ func (c *Client) GetChannelSections(ctx context.Context) ([]ChannelSection, erro
 	endpoint := "https://slack.com/api/users.channelSections.list"
 
 	form := url.Values{}
-	form.Set("token", c.userToken)
+	form.Set("token", c.token)
 
 	resp, err := http.PostForm(endpoint, form)
 	if err != nil {

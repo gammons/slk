@@ -5,7 +5,7 @@ import (
 )
 
 func TestNewClient(t *testing.T) {
-	client := NewClient("xoxp-test", "xapp-test")
+	client := NewClient("xoxc-test", "test-cookie-value")
 	if client == nil {
 		t.Fatal("expected non-nil client")
 	}
