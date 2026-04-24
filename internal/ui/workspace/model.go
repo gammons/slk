@@ -71,16 +71,14 @@ func (m Model) View(height int) string {
 
 	content := strings.Join(rows, "\n\n")
 
-	// Padding takes 2 rows (top+bottom), so reduce content area accordingly
-	innerHeight := height - 2
-	if innerHeight < 1 {
-		innerHeight = 1
-	}
-
+	// Height/MaxHeight in lipgloss include padding in the total,
+	// so use the full height directly. Padding(1,0) adds 1 row
+	// top + 1 row bottom inside that total, matching the visual
+	// offset of RoundedBorder() on adjacent panels.
 	rail := lipgloss.NewStyle().
 		Width(5).
-		Height(innerHeight).
-		MaxHeight(innerHeight).
+		Height(height).
+		MaxHeight(height).
 		Background(styles.SurfaceDark).
 		Padding(1, 0).
 		BorderStyle(lipgloss.Border{Right: "│"}).
