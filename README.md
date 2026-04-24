@@ -19,7 +19,7 @@ A terminal-based Slack client built in Go using [bubbletea](https://github.com/c
 ## Prerequisites
 
 - Go 1.22+
-- A Slack workspace with a configured Slack App (see Setup)
+- A Slack workspace (log in via browser to get auth tokens)
 
 ## Build
 
@@ -31,32 +31,23 @@ The binary is output to `bin/slack-tui`.
 
 ## Setup
 
-### 1. Create a Slack App
+### 1. Log Into Slack in Your Browser
 
-Visit https://api.slack.com/apps?new_app=1 and create a new app from scratch.
+Open [https://app.slack.com](https://app.slack.com) and log into your workspace.
 
-### 2. Configure the App
+### 2. Get Your Browser Tokens
 
-**Enable Socket Mode:**
-- Go to Socket Mode in the left sidebar, toggle it on
-- Create an app-level token with `connections:write` scope
+**Get the `d` cookie:**
+- Open DevTools (F12 or Cmd+Option+I)
+- Go to Application > Cookies > `https://app.slack.com`
+- Find the cookie named `d` and copy its value
 
-**Add OAuth Scopes** (OAuth & Permissions > User Token Scopes):
-- `channels:read`, `channels:history`
-- `groups:read`, `groups:history`
-- `im:read`, `im:history`, `im:write`
-- `mpim:read`, `mpim:history`, `mpim:write`
-- `chat:write`
-- `reactions:read`, `reactions:write`
-- `files:read`, `files:write`
-- `users:read`
-- `search:read`
-- `team:read`
-
-**Subscribe to Events** (Event Subscriptions > Subscribe to events on behalf of users):
-- `message.channels`, `message.groups`, `message.im`, `message.mpim`
-
-**Install the App** to your workspace.
+**Get the `xoxc` token:**
+- Go to the Console tab in DevTools and run:
+  ```javascript
+  JSON.parse(localStorage.localConfig_v2).teams[Object.keys(JSON.parse(localStorage.localConfig_v2).teams)[0]].token
+  ```
+- Copy the `xoxc-...` token
 
 ### 3. Add Workspace
 
@@ -64,7 +55,7 @@ Visit https://api.slack.com/apps?new_app=1 and create a new app from scratch.
 ./bin/slack-tui --add-workspace
 ```
 
-This launches an interactive onboarding that prompts for your App-Level Token (`xapp-...`) and User OAuth Token (`xoxp-...`).
+This launches an interactive onboarding that prompts for your `xoxc` token and `d` cookie.
 
 Alternatively, just run `./bin/slack-tui` -- it will launch onboarding automatically if no workspaces are configured.
 

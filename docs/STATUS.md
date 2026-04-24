@@ -12,6 +12,8 @@ Last updated: 2026-04-24
 - [x] OAuth token storage (JSON files, per-workspace)
 - [x] Interactive onboarding (`--add-workspace` with huh forms)
 - [x] Multi-workspace support in data layer (single workspace connected at runtime)
+- [x] Browser cookie auth (xoxc/xoxd) -- connect using browser session tokens, no Slack App needed
+- [x] RTM (Real-Time Messaging) client -- replaces Socket Mode for real-time connectivity
 
 ### UI
 - [x] Three-panel layout: workspace rail, channel sidebar, message pane
@@ -57,7 +59,6 @@ Last updated: 2026-04-24
 ## Not Yet Implemented
 
 ### High Priority (next iteration)
-- [ ] **Browser cookie auth (xoxc/xoxd)** -- allows any user to connect without admin permissions. Current Slack App flow requires workspace admin. RTM API via slack-go would replace Socket Mode.
 - [ ] **Real-time event handling** -- Socket Mode connection runs but events aren't wired to the UI yet. New messages from other users don't appear until channel is re-selected.
 - [ ] **Ctrl+t/Ctrl+p fuzzy channel finder** -- the floating overlay for quick channel switching
 - [ ] **Thread panel** -- side panel for viewing and replying to threads (spec'd in design, not built)
