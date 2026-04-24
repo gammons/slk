@@ -206,6 +206,29 @@ func run() error {
 			}
 		})
 
+		// Wire up message sending
+		app.SetMessageSender(func(channelID, text string) tea.Msg {
+			ctx := context.Background()
+			ts, err := client.SendMessage(ctx, channelID, text)
+			if err != nil {
+				log.Printf("Warning: failed to send message: %v", err)
+				return nil
+			}
+			userName := "you"
+			if resolved, ok := userNames[client.UserID()]; ok {
+				userName = resolved
+			}
+			return ui.MessageSentMsg{
+				ChannelID: channelID,
+				Message: messages.MessageItem{
+					TS:        ts,
+					UserName:  userName,
+					Text:      text,
+					Timestamp: formatTimestamp(ts, tsFormat),
+				},
+			}
+		})
+
 		// Wire up older messages fetcher for infinite scroll
 		app.SetOlderMessagesFetcher(func(channelID, oldestTS string) tea.Msg {
 			msgItems := fetchOlderMessages(client, channelID, oldestTS, db, userNames, tsFormat)

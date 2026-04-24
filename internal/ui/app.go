@@ -49,8 +49,16 @@ type (
 type ChannelFetchFunc func(channelID, channelName string) tea.Msg
 
 // OlderMessagesFetchFunc is called when the user scrolls to the top of a channel.
-// oldestTS is the timestamp of the oldest currently loaded message.
 type OlderMessagesFetchFunc func(channelID, oldestTS string) tea.Msg
+
+// MessageSendFunc is called when the user sends a message. Returns a tea.Msg with the result.
+type MessageSendFunc func(channelID, text string) tea.Msg
+
+// MessageSentMsg is returned after a message is successfully sent.
+type MessageSentMsg struct {
+	ChannelID string
+	Message   messages.MessageItem
+}
 
 type App struct {
 	// Sub-models
@@ -75,6 +83,7 @@ type App struct {
 	// Callbacks
 	channelFetcher       ChannelFetchFunc
 	olderMessagesFetcher OlderMessagesFetchFunc
+	messageSender        MessageSendFunc
 	fetchingOlder        bool
 }
 
@@ -140,6 +149,20 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case NewMessageMsg:
 		a.messagepane.AppendMessage(msg.Message)
+
+	case SendMessageMsg:
+		if a.messageSender != nil {
+			sender := a.messageSender
+			chID, text := msg.ChannelID, msg.Text
+			cmds = append(cmds, func() tea.Msg {
+				return sender(chID, text)
+			})
+		}
+
+	case MessageSentMsg:
+		if msg.ChannelID == a.activeChannelID {
+			a.messagepane.AppendMessage(msg.Message)
+		}
 	}
 
 	return a, tea.Batch(cmds...)
@@ -340,6 +363,11 @@ func (a *App) SetChannelFetcher(fn ChannelFetchFunc) {
 // SetOlderMessagesFetcher sets the callback used to load older messages when scrolling up.
 func (a *App) SetOlderMessagesFetcher(fn OlderMessagesFetchFunc) {
 	a.olderMessagesFetcher = fn
+}
+
+// SetMessageSender sets the callback used to send messages.
+func (a *App) SetMessageSender(fn MessageSendFunc) {
+	a.messageSender = fn
 }
 
 // SetInitialChannel sets the active channel and its messages before the TUI starts.
