@@ -105,7 +105,7 @@ func run() error {
 	avatarCache := avatar.NewCache(avatarDir)
 
 	for _, token := range tokens {
-		client := slackclient.NewClient(token.AccessToken, token.AppToken)
+		client := slackclient.NewClient(token.AccessToken, token.Cookie)
 		if err := client.Connect(ctx); err != nil {
 			log.Printf("Warning: failed to connect workspace %s: %v", token.TeamName, err)
 			continue
