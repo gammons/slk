@@ -206,6 +206,7 @@ func run() error {
 	}
 
 	app.SetWorkspaces(wsItems)
+	app.SetUserNames(userNames)
 
 	// Wire avatar rendering
 	app.SetAvatarFunc(func(userID string) string {

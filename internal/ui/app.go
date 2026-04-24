@@ -375,6 +375,11 @@ func (a *App) SetAvatarFunc(fn messages.AvatarFunc) {
 	a.messagepane.SetAvatarFunc(fn)
 }
 
+// SetUserNames passes the user ID -> display name map to the message pane for mention resolution.
+func (a *App) SetUserNames(names map[string]string) {
+	a.messagepane.SetUserNames(names)
+}
+
 // SetInitialChannel sets the active channel and its messages before the TUI starts.
 func (a *App) SetInitialChannel(channelID, channelName string, msgs []messages.MessageItem) {
 	a.activeChannelID = channelID

@@ -51,8 +51,9 @@ var (
 )
 
 // RenderSlackMarkdown converts Slack-flavored markdown and emoji shortcodes
-// into lipgloss-styled terminal output.
-func RenderSlackMarkdown(text string) string {
+// into lipgloss-styled terminal output. If userNames is provided, user mentions
+// like <@U1234> are resolved to display names.
+func RenderSlackMarkdown(text string, userNames map[string]string) string {
 	// Handle code blocks first (before other formatting to avoid conflicts)
 	text = codeBlockRe.ReplaceAllStringFunc(text, func(match string) string {
 		inner := codeBlockRe.FindStringSubmatch(match)[1]
@@ -69,7 +70,7 @@ func RenderSlackMarkdown(text string) string {
 			quoted = strings.TrimPrefix(quoted, "> ")
 			line = blockquoteStyle.Render(quoted)
 		} else {
-			line = renderInlineFormatting(line)
+			line = renderInlineFormatting(line, userNames)
 		}
 		result = append(result, line)
 	}
@@ -77,7 +78,7 @@ func RenderSlackMarkdown(text string) string {
 	return strings.Join(result, "\n")
 }
 
-func renderInlineFormatting(text string) string {
+func renderInlineFormatting(text string, userNames map[string]string) string {
 	// Inline code (before bold/italic to avoid conflicts inside code)
 	text = inlineCodeRe.ReplaceAllStringFunc(text, func(match string) string {
 		inner := inlineCodeRe.FindStringSubmatch(match)[1]
@@ -120,10 +121,16 @@ func renderInlineFormatting(text string) string {
 		return mentionStyle.Render("#" + name)
 	})
 
-	// User mentions: <@U1234> -> @U1234 (could resolve with user map later)
+	// User mentions: <@U1234> -> @DisplayName (or @U1234 if not resolved)
 	text = userMentionRe.ReplaceAllStringFunc(text, func(match string) string {
 		userID := userMentionRe.FindStringSubmatch(match)[1]
-		return mentionStyle.Render("@" + userID)
+		name := userID
+		if userNames != nil {
+			if resolved, ok := userNames[userID]; ok {
+				name = resolved
+			}
+		}
+		return mentionStyle.Render("@" + name)
 	})
 
 	// Emoji shortcodes: :red_circle: -> 🔴

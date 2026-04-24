@@ -53,7 +53,8 @@ type Model struct {
 	channelName  string
 	channelTopic string
 	loading      bool
-	avatarFn     AvatarFunc // optional: returns half-block avatar for a userID
+	avatarFn     AvatarFunc        // optional: returns half-block avatar for a userID
+	userNames    map[string]string // user ID -> display name for mention resolution
 
 	// Render cache -- invalidated when messages or width change
 	cache       []viewEntry
@@ -158,6 +159,12 @@ func (m *Model) SetAvatarFunc(fn AvatarFunc) {
 	m.avatarFn = fn
 }
 
+// SetUserNames sets the user ID -> display name map used to resolve @mentions.
+func (m *Model) SetUserNames(names map[string]string) {
+	m.userNames = names
+	m.cache = nil // invalidate cache so mentions re-render
+}
+
 func (m *Model) OldestTS() string {
 	if len(m.messages) == 0 {
 		return ""
@@ -190,7 +197,7 @@ func (m *Model) buildCache(width int) {
 		if m.avatarFn != nil {
 			avatarStr = m.avatarFn(msg.UserID)
 		}
-		rendered := renderMessagePlain(msg, width, avatarStr)
+		rendered := renderMessagePlain(msg, width, avatarStr, m.userNames)
 		m.cache = append(m.cache, viewEntry{
 			content: rendered,
 			height:  lipgloss.Height(rendered),
@@ -200,7 +207,7 @@ func (m *Model) buildCache(width int) {
 }
 
 // renderMessagePlain renders a message without selection highlight.
-func renderMessagePlain(msg MessageItem, width int, avatarStr string) string {
+func renderMessagePlain(msg MessageItem, width int, avatarStr string, userNames map[string]string) string {
 	line := styles.Username.Render(msg.UserName) + "  " + styles.Timestamp.Render(msg.Timestamp)
 
 	// If we have an avatar, reserve space on the left for it
@@ -212,7 +219,7 @@ func renderMessagePlain(msg MessageItem, width int, avatarStr string) string {
 		contentWidth = 20
 	}
 
-	text := styles.MessageText.Width(contentWidth).Render(RenderSlackMarkdown(msg.Text))
+	text := styles.MessageText.Width(contentWidth).Render(RenderSlackMarkdown(msg.Text, userNames))
 
 	var threadLine string
 	if msg.ReplyCount > 0 {
