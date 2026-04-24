@@ -264,9 +264,11 @@ func run() error {
 	// Start WebSocket for real-time events
 	if activeClient != nil {
 		handler := &rtmEventHandler{
-			program:   p,
-			userNames: userNames,
-			tsFormat:  tsFormat,
+			program:     p,
+			userNames:   userNames,
+			tsFormat:    tsFormat,
+			db:          db,
+			workspaceID: activeClient.TeamID(),
 		}
 		if err := activeClient.StartWebSocket(handler); err != nil {
 			log.Printf("Warning: failed to start WebSocket: %v", err)
@@ -405,14 +407,28 @@ func xdgCache() string {
 	return filepath.Join(home, ".cache", "slack-tui")
 }
 
-// rtmEventHandler bridges RTM events into bubbletea messages via p.Send().
+// rtmEventHandler bridges WebSocket events into bubbletea messages via p.Send()
+// and caches all incoming messages to the SQLite database.
 type rtmEventHandler struct {
-	program   *tea.Program
-	userNames map[string]string
-	tsFormat  string
+	program     *tea.Program
+	userNames   map[string]string
+	tsFormat    string
+	db          *cache.DB
+	workspaceID string
 }
 
 func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS string, edited bool) {
+	// Cache every message to SQLite, regardless of active channel
+	h.db.UpsertMessage(cache.Message{
+		TS:          ts,
+		ChannelID:   channelID,
+		WorkspaceID: h.workspaceID,
+		UserID:      userID,
+		Text:        text,
+		ThreadTS:    threadTS,
+		CreatedAt:   time.Now().Unix(),
+	})
+
 	userName := userID
 	if resolved, ok := h.userNames[userID]; ok {
 		userName = resolved
