@@ -370,6 +370,11 @@ func (a *App) SetMessageSender(fn MessageSendFunc) {
 	a.messageSender = fn
 }
 
+// SetAvatarFunc sets the function used to get rendered avatars for messages.
+func (a *App) SetAvatarFunc(fn messages.AvatarFunc) {
+	a.messagepane.SetAvatarFunc(fn)
+}
+
 // SetInitialChannel sets the active channel and its messages before the TUI starts.
 func (a *App) SetInitialChannel(channelID, channelName string, msgs []messages.MessageItem) {
 	a.activeChannelID = channelID

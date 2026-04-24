@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/gammons/slack-tui/internal/avatar"
 	"github.com/gammons/slack-tui/internal/cache"
 	"github.com/gammons/slack-tui/internal/config"
 	"github.com/gammons/slack-tui/internal/service"
@@ -99,6 +100,10 @@ func run() error {
 	userNames := make(map[string]string)
 	tsFormat := cfg.Appearance.TimestampFormat
 
+	// Initialize avatar cache
+	avatarDir := filepath.Join(cacheDir, "avatars")
+	avatarCache := avatar.NewCache(avatarDir)
+
 	for _, token := range tokens {
 		client := slackclient.NewClient(token.AccessToken, token.AppToken)
 		if err := client.Connect(ctx); err != nil {
@@ -133,8 +138,11 @@ func run() error {
 					WorkspaceID: client.TeamID(),
 					Name:        u.Name,
 					DisplayName: name,
+					AvatarURL:   u.Profile.Image32,
 					Presence:    "away",
 				})
+				// Preload avatar in background
+				avatarCache.Preload(u.ID, u.Profile.Image32)
 			}
 		}
 
@@ -195,6 +203,11 @@ func run() error {
 
 	app.SetWorkspaces(wsItems)
 
+	// Wire avatar rendering
+	app.SetAvatarFunc(func(userID string) string {
+		return avatarCache.Get(userID)
+	})
+
 	// Wire up the channel fetcher so switching channels loads messages
 	if activeClient != nil {
 		client := activeClient
@@ -222,6 +235,7 @@ func run() error {
 				ChannelID: channelID,
 				Message: messages.MessageItem{
 					TS:        ts,
+					UserID:    client.UserID(),
 					UserName:  userName,
 					Text:      text,
 					Timestamp: formatTimestamp(ts, tsFormat),
@@ -272,6 +286,7 @@ func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, 
 
 		msgItems = append(msgItems, messages.MessageItem{
 			TS:         m.Timestamp,
+			UserID:     m.User,
 			UserName:   userName,
 			Text:       m.Text,
 			Timestamp:  formatTimestamp(m.Timestamp, tsFormat),
@@ -315,6 +330,7 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 
 		msgItems = append(msgItems, messages.MessageItem{
 			TS:         m.Timestamp,
+			UserID:     m.User,
 			UserName:   userName,
 			Text:       m.Text,
 			Timestamp:  formatTimestamp(m.Timestamp, tsFormat),
