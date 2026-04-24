@@ -32,6 +32,10 @@ type (
 		ChannelID string
 		Messages  []messages.MessageItem
 	}
+	OlderMessagesLoadedMsg struct {
+		ChannelID string
+		Messages  []messages.MessageItem
+	}
 	NewMessageMsg struct {
 		Message messages.MessageItem
 	}
@@ -42,8 +46,11 @@ type (
 )
 
 // ChannelFetchFunc is called when the user selects a channel.
-// It should return a tea.Msg (typically MessagesLoadedMsg) with the channel's messages.
 type ChannelFetchFunc func(channelID, channelName string) tea.Msg
+
+// OlderMessagesFetchFunc is called when the user scrolls to the top of a channel.
+// oldestTS is the timestamp of the oldest currently loaded message.
+type OlderMessagesFetchFunc func(channelID, oldestTS string) tea.Msg
 
 type App struct {
 	// Sub-models
@@ -66,7 +73,9 @@ type App struct {
 	activeChannelID string
 
 	// Callbacks
-	channelFetcher ChannelFetchFunc
+	channelFetcher       ChannelFetchFunc
+	olderMessagesFetcher OlderMessagesFetchFunc
+	fetchingOlder        bool
 }
 
 func NewApp() *App {
@@ -122,6 +131,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.messagepane.SetMessages(msg.Messages)
 		}
 
+	case OlderMessagesLoadedMsg:
+		if msg.ChannelID == a.activeChannelID {
+			a.fetchingOlder = false
+			a.messagepane.SetLoading(false)
+			a.messagepane.PrependMessages(msg.Messages)
+		}
+
 	case NewMessageMsg:
 		a.messagepane.AppendMessage(msg.Message)
 	}
@@ -170,7 +186,9 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 		a.handleDown()
 
 	case key.Matches(msg, a.keys.Up):
-		a.handleUp()
+		if cmd := a.handleUp(); cmd != nil {
+			return cmd
+		}
 
 	case key.Matches(msg, a.keys.Left):
 		a.FocusPrev()
@@ -231,13 +249,25 @@ func (a *App) handleDown() {
 	}
 }
 
-func (a *App) handleUp() {
+func (a *App) handleUp() tea.Cmd {
 	switch a.focusedPanel {
 	case PanelSidebar:
 		a.sidebar.MoveUp()
 	case PanelMessages:
 		a.messagepane.MoveUp()
+		// If at top, fetch older messages
+		if a.messagepane.AtTop() && !a.fetchingOlder && a.olderMessagesFetcher != nil {
+			a.fetchingOlder = true
+			a.messagepane.SetLoading(true)
+			chID := a.activeChannelID
+			oldestTS := a.messagepane.OldestTS()
+			fetcher := a.olderMessagesFetcher
+			return func() tea.Msg {
+				return fetcher(chID, oldestTS)
+			}
+		}
 	}
+	return nil
 }
 
 func (a *App) handleGoToBottom() {
@@ -305,6 +335,11 @@ func (a *App) SetChannels(items []sidebar.ChannelItem) {
 // SetChannelFetcher sets the callback used to load messages when a channel is selected.
 func (a *App) SetChannelFetcher(fn ChannelFetchFunc) {
 	a.channelFetcher = fn
+}
+
+// SetOlderMessagesFetcher sets the callback used to load older messages when scrolling up.
+func (a *App) SetOlderMessagesFetcher(fn OlderMessagesFetchFunc) {
+	a.olderMessagesFetcher = fn
 }
 
 // SetInitialChannel sets the active channel and its messages before the TUI starts.

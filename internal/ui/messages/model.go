@@ -2,17 +2,25 @@ package messages
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gammons/slack-tui/internal/ui/styles"
 )
 
+var dateSeparatorStyle = lipgloss.NewStyle().
+	Foreground(styles.TextMuted).
+	Bold(true).
+	Align(lipgloss.Center)
+
 type MessageItem struct {
 	TS         string
 	UserName   string
 	Text       string
-	Timestamp  string
+	Timestamp  string // formatted display time (e.g. "3:04 PM")
+	DateStr    string // date string for grouping (e.g. "2026-04-23")
 	ThreadTS   string
 	ReplyCount int
 	Reactions  []ReactionItem
@@ -30,6 +38,7 @@ type Model struct {
 	offset       int // index of the first message visible in the viewport
 	channelName  string
 	channelTopic string
+	loading      bool // true while fetching older messages
 }
 
 func New(msgs []MessageItem, channelName string) Model {
@@ -105,6 +114,35 @@ func (m *Model) GoToBottom() {
 	if len(m.messages) > 0 {
 		m.selected = len(m.messages) - 1
 	}
+}
+
+// AtTop returns true if the selected message is the first one.
+func (m *Model) AtTop() bool {
+	return m.selected == 0 && len(m.messages) > 0
+}
+
+// PrependMessages adds older messages to the beginning of the list.
+// Adjusts selected index and offset to maintain the user's current position.
+func (m *Model) PrependMessages(msgs []MessageItem) {
+	if len(msgs) == 0 {
+		return
+	}
+	count := len(msgs)
+	m.messages = append(msgs, m.messages...)
+	m.selected += count
+	m.offset += count
+}
+
+func (m *Model) SetLoading(loading bool) {
+	m.loading = loading
+}
+
+// OldestTS returns the timestamp of the oldest message, or empty string if none.
+func (m *Model) OldestTS() string {
+	if len(m.messages) == 0 {
+		return ""
+	}
+	return m.messages[0].TS
 }
 
 // renderMessage renders a single message entry and returns its string representation.
@@ -187,46 +225,71 @@ func (m *Model) View(height, width int) string {
 		return header + "\n" + separator + "\n" + empty
 	}
 
-	// Pre-render all messages
-	rendered := make([]string, len(m.messages))
+	// Pre-render all messages, inserting day separators between different dates.
+	// Each entry in `rendered` maps to a message index (or -1 for separators).
+	type renderEntry struct {
+		content string
+		msgIdx  int // -1 for date separators
+	}
+	var entries []renderEntry
+	var lastDate string
 	for i, msg := range m.messages {
-		rendered[i] = renderMessage(msg, width, i == m.selected)
+		msgDate := dateFromTS(msg.TS)
+		if msgDate != "" && msgDate != lastDate {
+			label := formatDateSeparator(msgDate)
+			sep := dateSeparatorStyle.Width(width).Render(
+				"── " + label + " ──")
+			entries = append(entries, renderEntry{content: sep, msgIdx: -1})
+			lastDate = msgDate
+		}
+		entries = append(entries, renderEntry{
+			content: renderMessage(msg, width, i == m.selected),
+			msgIdx:  i,
+		})
 	}
 
-	// Adjust offset to keep the selected message visible.
-	// We measure actual joined content height rather than summing individual heights,
-	// since lipgloss rendering can produce different results when strings are joined.
+	// Map selected message index to entries index
+	selectedEntry := 0
+	for i, e := range entries {
+		if e.msgIdx == m.selected {
+			selectedEntry = i
+			break
+		}
+	}
 
-	// First, ensure offset is not past selected
-	if m.selected < m.offset {
-		m.offset = m.selected
+	// Ensure offset refers to entries (not messages). We need a separate offset for entries.
+	// Clamp offset
+	if m.offset < 0 {
+		m.offset = 0
+	}
+	if m.offset > selectedEntry {
+		m.offset = selectedEntry
 	}
 
 	// Check if selected is visible from current offset by measuring actual content
 	for {
-		if m.offset > m.selected {
-			m.offset = m.selected
+		if m.offset > selectedEntry {
+			m.offset = selectedEntry
 			break
 		}
-		// Build content from offset to selected and measure
-		testRows := rendered[m.offset : m.selected+1]
+		var testRows []string
+		for i := m.offset; i <= selectedEntry && i < len(entries); i++ {
+			testRows = append(testRows, entries[i].content)
+		}
 		testContent := strings.Join(testRows, "\n")
 		if lipgloss.Height(testContent) <= msgAreaHeight {
-			break // selected is visible
+			break
 		}
 		m.offset++
 	}
 
-	// Render from offset, adding messages until we fill or exceed the area.
-	// Measure actual joined height each time to get accurate results.
+	// Render from offset, adding entries until we fill or exceed the area.
 	var visibleRows []string
-	for i := m.offset; i < len(rendered); i++ {
-		candidate := append(visibleRows, rendered[i])
+	for i := m.offset; i < len(entries); i++ {
+		candidate := append(visibleRows, entries[i].content)
 		candidateHeight := lipgloss.Height(strings.Join(candidate, "\n"))
 		if candidateHeight > msgAreaHeight && len(visibleRows) > 0 {
-			// This message would overflow -- still add it so MaxHeight clips it
-			// rather than leaving empty space
-			visibleRows = append(visibleRows, rendered[i])
+			visibleRows = append(visibleRows, entries[i].content)
 			break
 		}
 		visibleRows = candidate
@@ -235,16 +298,28 @@ func (m *Model) View(height, width int) string {
 		}
 	}
 
-	// Show scroll indicators
+	// Show scroll/loading indicators
 	visibleCount := len(visibleRows)
 	if m.offset > 0 {
-		scrollUp := lipgloss.NewStyle().Foreground(styles.TextMuted).Render(
-			fmt.Sprintf("  -- %d more above --", m.offset))
+		indicator := fmt.Sprintf("  -- %d more above --", m.offset)
+		if m.loading {
+			indicator = "  Loading older messages..."
+		}
+		scrollUp := lipgloss.NewStyle().Foreground(styles.TextMuted).Render(indicator)
 		visibleRows = append([]string{scrollUp}, visibleRows...)
+	} else if m.loading {
+		loadingRow := lipgloss.NewStyle().Foreground(styles.TextMuted).Render("  Loading older messages...")
+		visibleRows = append([]string{loadingRow}, visibleRows...)
 	}
-	lastVisible := m.offset + visibleCount
-	if lastVisible < len(m.messages) {
-		remaining := len(m.messages) - lastVisible
+	lastVisibleEntry := m.offset + visibleCount
+	// Count remaining messages (not separators) below the viewport
+	remaining := 0
+	for i := lastVisibleEntry; i < len(entries); i++ {
+		if entries[i].msgIdx >= 0 {
+			remaining++
+		}
+	}
+	if remaining > 0 {
 		scrollDown := lipgloss.NewStyle().Foreground(styles.TextMuted).Render(
 			fmt.Sprintf("  -- %d more below --", remaining))
 		visibleRows = append(visibleRows, scrollDown)
@@ -257,4 +332,40 @@ func (m *Model) View(height, width int) string {
 		Height(msgAreaHeight).
 		MaxHeight(msgAreaHeight).
 		Render(msgContent)
+}
+
+// dateFromTS extracts a "2006-01-02" date string from a Slack timestamp like "1700000001.000000".
+func dateFromTS(ts string) string {
+	parts := strings.SplitN(ts, ".", 2)
+	if len(parts) == 0 {
+		return ""
+	}
+	sec, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return ""
+	}
+	return time.Unix(sec, 0).Format("2006-01-02")
+}
+
+// formatDateSeparator turns "2006-01-02" into a human-readable label like
+// "Today", "Yesterday", or "Monday, January 2, 2006".
+func formatDateSeparator(dateStr string) string {
+	d, err := time.Parse("2006-01-02", dateStr)
+	if err != nil {
+		return dateStr
+	}
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	diff := today.Sub(d).Hours() / 24
+
+	switch {
+	case diff < 1:
+		return "Today"
+	case diff < 2:
+		return "Yesterday"
+	case diff < 7:
+		return d.Format("Monday")
+	default:
+		return d.Format("Monday, January 2, 2006")
+	}
 }

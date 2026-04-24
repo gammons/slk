@@ -119,6 +119,7 @@ func (c *Client) GetChannels(ctx context.Context) ([]slack.Channel, error) {
 }
 
 // GetHistory retrieves message history for a channel.
+// If oldest is set, returns messages newer than that timestamp.
 func (c *Client) GetHistory(ctx context.Context, channelID string, limit int, oldest string) ([]slack.Message, error) {
 	params := &slack.GetConversationHistoryParameters{
 		ChannelID: channelID,
@@ -131,6 +132,22 @@ func (c *Client) GetHistory(ctx context.Context, channelID string, limit int, ol
 	resp, err := c.api.GetConversationHistory(params)
 	if err != nil {
 		return nil, fmt.Errorf("getting history: %w", err)
+	}
+
+	return resp.Messages, nil
+}
+
+// GetOlderHistory retrieves messages older than the given timestamp.
+func (c *Client) GetOlderHistory(ctx context.Context, channelID string, limit int, latest string) ([]slack.Message, error) {
+	params := &slack.GetConversationHistoryParameters{
+		ChannelID: channelID,
+		Limit:     limit,
+		Latest:    latest,
+	}
+
+	resp, err := c.api.GetConversationHistory(params)
+	if err != nil {
+		return nil, fmt.Errorf("getting older history: %w", err)
 	}
 
 	return resp.Messages, nil

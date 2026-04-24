@@ -205,12 +205,64 @@ func run() error {
 				Messages:  msgItems,
 			}
 		})
+
+		// Wire up older messages fetcher for infinite scroll
+		app.SetOlderMessagesFetcher(func(channelID, oldestTS string) tea.Msg {
+			msgItems := fetchOlderMessages(client, channelID, oldestTS, db, userNames, tsFormat)
+			return ui.OlderMessagesLoadedMsg{
+				ChannelID: channelID,
+				Messages:  msgItems,
+			}
+		})
 	}
 
 	// Run the TUI
 	p := tea.NewProgram(app, tea.WithAltScreen())
 	_, err = p.Run()
 	return err
+}
+
+func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, db *cache.DB, userNames map[string]string, tsFormat string) []messages.MessageItem {
+	ctx := context.Background()
+	history, err := client.GetOlderHistory(ctx, channelID, 50, latestTS)
+	if err != nil {
+		return nil
+	}
+
+	var msgItems []messages.MessageItem
+	for _, m := range history {
+		db.UpsertMessage(cache.Message{
+			TS:          m.Timestamp,
+			ChannelID:   channelID,
+			WorkspaceID: client.TeamID(),
+			UserID:      m.User,
+			Text:        m.Text,
+			ThreadTS:    m.ThreadTimestamp,
+			ReplyCount:  m.ReplyCount,
+			CreatedAt:   time.Now().Unix(),
+		})
+
+		userName := m.User
+		if resolved, ok := userNames[m.User]; ok {
+			userName = resolved
+		}
+
+		msgItems = append(msgItems, messages.MessageItem{
+			TS:         m.Timestamp,
+			UserName:   userName,
+			Text:       m.Text,
+			Timestamp:  formatTimestamp(m.Timestamp, tsFormat),
+			ThreadTS:   m.ThreadTimestamp,
+			ReplyCount: m.ReplyCount,
+		})
+	}
+
+	// Reverse: Slack returns newest first
+	for i, j := 0, len(msgItems)-1; i < j; i, j = i+1, j-1 {
+		msgItems[i], msgItems[j] = msgItems[j], msgItems[i]
+	}
+
+	return msgItems
 }
 
 func fetchChannelMessages(client *slackclient.Client, channelID string, db *cache.DB, userNames map[string]string, tsFormat string) []messages.MessageItem {
