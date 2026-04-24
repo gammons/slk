@@ -146,13 +146,25 @@ func (m *Model) View(height, width int) string {
 			} else {
 				prefix = styles.PresenceAway.Render("○ ")
 			}
+		case "group_dm":
+			prefix = styles.PresenceAway.Render("● ")
 		case "private":
-			prefix = "🔒"
+			prefix = lipgloss.NewStyle().Foreground(styles.Warning).Render("◆ ")
 		default:
 			prefix = "# "
 		}
 
-		label := prefix + item.Name
+		// Truncate name to fit sidebar width (width - 4 for prefix and padding)
+		name := item.Name
+		maxNameLen := width - 6 // account for prefix, padding, border
+		if maxNameLen < 5 {
+			maxNameLen = 5
+		}
+		if len(name) > maxNameLen {
+			name = name[:maxNameLen-1] + "…"
+		}
+
+		label := prefix + name
 
 		if item.UnreadCount > 0 {
 			badge := styles.UnreadBadge.Render(fmt.Sprintf(" %d ", item.UnreadCount))
@@ -212,26 +224,45 @@ func (m *Model) View(height, width int) string {
 		}
 	}
 
-	// Adjust offset to keep selected row visible
+	// Adjust offset to keep selected row visible.
+	// Use actual measured heights since some rows may wrap.
 	if m.offset > selectedRow {
 		m.offset = selectedRow
-	}
-	if selectedRow >= m.offset+height {
-		m.offset = selectedRow - height + 1
 	}
 	if m.offset < 0 {
 		m.offset = 0
 	}
 
-	// Render visible window
-	end := m.offset + height
-	if end > len(allRows) {
-		end = len(allRows)
+	// Ensure selected row is visible by measuring actual content
+	for {
+		if m.offset > selectedRow {
+			m.offset = selectedRow
+			break
+		}
+		var testLines []string
+		for i := m.offset; i <= selectedRow && i < len(allRows); i++ {
+			testLines = append(testLines, allRows[i].content)
+		}
+		if lipgloss.Height(strings.Join(testLines, "\n")) <= height {
+			break
+		}
+		m.offset++
 	}
 
+	// Render from offset until we fill the viewport
 	var visibleLines []string
-	for i := m.offset; i < end; i++ {
-		visibleLines = append(visibleLines, allRows[i].content)
+	for i := m.offset; i < len(allRows); i++ {
+		candidate := make([]string, len(visibleLines), len(visibleLines)+1)
+		copy(candidate, visibleLines)
+		candidate = append(candidate, allRows[i].content)
+		h := lipgloss.Height(strings.Join(candidate, "\n"))
+		if h > height && len(visibleLines) > 0 {
+			break
+		}
+		visibleLines = candidate
+		if h >= height {
+			break
+		}
 	}
 
 	content := strings.Join(visibleLines, "\n")
