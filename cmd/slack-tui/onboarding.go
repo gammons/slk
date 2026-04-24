@@ -31,10 +31,6 @@ func addWorkspace() error {
 		Bold(true).
 		Foreground(lipgloss.Color("#50C878"))
 
-	urlStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#4A9EFF")).
-		Underline(true)
-
 	successStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("#50C878")).
@@ -50,62 +46,54 @@ func addWorkspace() error {
 	// Welcome
 	fmt.Println()
 	fmt.Println(titleStyle.Render("slack-tui -- Add Workspace"))
-	fmt.Println(subtitleStyle.Render("Connect a Slack workspace to your terminal client."))
+	fmt.Println(subtitleStyle.Render("Connect a Slack workspace using your browser session."))
 	fmt.Println()
 
-	// Step 1: Create Slack App
-	fmt.Println(stepStyle.Render("Step 1: Create a Slack App"))
+	// Step 1: Instructions
+	fmt.Println(stepStyle.Render("Step 1: Get your browser tokens"))
 	fmt.Println()
-	fmt.Println("  " + urlStyle.Render("https://api.slack.com/apps?new_app=1"))
-	fmt.Println()
-	fmt.Println(dimStyle.Render("  a. Select 'From scratch', name it (e.g. 'slack-tui'), pick your workspace"))
-	fmt.Println(dimStyle.Render("  b. Enable Socket Mode (left sidebar) -- create an app token with connections:write"))
-	fmt.Println(dimStyle.Render("  c. OAuth & Permissions -- add these User Token Scopes:"))
-	fmt.Println(dimStyle.Render("     channels:read, channels:history, groups:read, groups:history,"))
-	fmt.Println(dimStyle.Render("     im:read, im:history, im:write, mpim:read, mpim:history, mpim:write,"))
-	fmt.Println(dimStyle.Render("     chat:write, reactions:read, reactions:write, files:read, files:write,"))
-	fmt.Println(dimStyle.Render("     users:read, search:read, team:read"))
-	fmt.Println(dimStyle.Render("  d. Install the app to your workspace"))
-	fmt.Println(dimStyle.Render("  e. Event Subscriptions -- subscribe to user events:"))
-	fmt.Println(dimStyle.Render("     message.channels, message.groups, message.im, message.mpim"))
+	fmt.Println(dimStyle.Render("  a. Open Slack in your browser and log into your workspace"))
+	fmt.Println(dimStyle.Render("  b. Open DevTools (F12 or Cmd+Option+I)"))
+	fmt.Println(dimStyle.Render("  c. Go to Application > Cookies > https://app.slack.com"))
+	fmt.Println(dimStyle.Render("     Find the cookie named 'd' and copy its value"))
+	fmt.Println(dimStyle.Render("  d. Go to the Console tab and run:"))
+	fmt.Println(dimStyle.Render("     JSON.parse(localStorage.localConfig_v2).teams[Object.keys(JSON.parse(localStorage.localConfig_v2).teams)[0]].token"))
+	fmt.Println(dimStyle.Render("     Copy the xoxc-... token"))
 	fmt.Println()
 
 	// Step 2: Enter tokens via huh form
 	fmt.Println(stepStyle.Render("Step 2: Enter your tokens"))
 	fmt.Println()
 
-	var appToken, userToken string
+	var xoxcToken, dCookie string
 
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
-				Title("App-Level Token").
-				Description("Found at: Basic Information > App-Level Tokens").
-				Placeholder("xapp-...").
-				Value(&appToken).
+				Title("Token (xoxc)").
+				Description("The xoxc-... token from your browser console").
+				Placeholder("xoxc-...").
+				Value(&xoxcToken).
 				Validate(func(s string) error {
 					s = strings.TrimSpace(s)
 					if s == "" {
 						return fmt.Errorf("token is required")
 					}
-					if !strings.HasPrefix(s, "xapp-") {
-						return fmt.Errorf("must start with xapp-")
+					if !strings.HasPrefix(s, "xoxc-") {
+						return fmt.Errorf("must start with xoxc-")
 					}
 					return nil
 				}),
 
 			huh.NewInput().
-				Title("User OAuth Token").
-				Description("Found at: OAuth & Permissions > User OAuth Token").
-				Placeholder("xoxp-...").
-				Value(&userToken).
+				Title("Cookie (d)").
+				Description("The 'd' cookie value from Application > Cookies").
+				Placeholder("xoxd-...").
+				Value(&dCookie).
 				Validate(func(s string) error {
 					s = strings.TrimSpace(s)
 					if s == "" {
-						return fmt.Errorf("token is required")
-					}
-					if !strings.HasPrefix(s, "xoxp-") {
-						return fmt.Errorf("must start with xoxp-")
+						return fmt.Errorf("cookie is required")
 					}
 					return nil
 				}),
@@ -117,8 +105,8 @@ func addWorkspace() error {
 		return fmt.Errorf("form cancelled")
 	}
 
-	appToken = strings.TrimSpace(appToken)
-	userToken = strings.TrimSpace(userToken)
+	xoxcToken = strings.TrimSpace(xoxcToken)
+	dCookie = strings.TrimSpace(dCookie)
 
 	// Step 3: Validate tokens with spinner
 	fmt.Println()
@@ -130,7 +118,7 @@ func addWorkspace() error {
 	spinErr := spinner.New().
 		Title("Connecting to Slack...").
 		Action(func() {
-			client = slackclient.NewClient(userToken, appToken)
+			client = slackclient.NewClient(xoxcToken, dCookie)
 			connectErr = client.Connect(context.Background())
 		}).
 		Run()
@@ -141,6 +129,9 @@ func addWorkspace() error {
 
 	if connectErr != nil {
 		fmt.Println(errorStyle.Render("  Authentication failed: " + connectErr.Error()))
+		fmt.Println()
+		fmt.Println(dimStyle.Render("  Make sure you're logged into Slack in your browser"))
+		fmt.Println(dimStyle.Render("  and that you copied the correct token and cookie values."))
 		return fmt.Errorf("authentication failed: %w", connectErr)
 	}
 
@@ -174,8 +165,8 @@ func addWorkspace() error {
 
 	// Save
 	token := slackclient.Token{
-		AccessToken: userToken,
-		AppToken:    appToken,
+		AccessToken: xoxcToken,
+		Cookie:      dCookie,
 		TeamID:      teamID,
 		TeamName:    wsName,
 	}
