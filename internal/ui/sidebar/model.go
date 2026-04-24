@@ -21,6 +21,7 @@ type ChannelItem struct {
 type Model struct {
 	items    []ChannelItem
 	selected int
+	offset   int // scroll offset (index into rendered rows)
 	filter   string
 	filtered []int // indices into items that match filter
 }
@@ -37,6 +38,7 @@ func (m *Model) SetItems(items []ChannelItem) {
 	if m.selected >= len(m.filtered) {
 		m.selected = 0
 	}
+	m.offset = 0
 }
 
 func (m *Model) SelectedID() string {
@@ -69,6 +71,7 @@ func (m *Model) MoveUp() {
 
 func (m *Model) GoToTop() {
 	m.selected = 0
+	m.offset = 0
 }
 
 func (m *Model) GoToBottom() {
@@ -80,6 +83,7 @@ func (m *Model) GoToBottom() {
 func (m *Model) SetFilter(filter string) {
 	m.filter = filter
 	m.selected = 0
+	m.offset = 0
 	m.rebuildFilter()
 }
 
@@ -110,15 +114,22 @@ func (m *Model) rebuildFilter() {
 	}
 }
 
-func (m Model) View(height, width int) string {
+// renderRow describes a single rendered row in the sidebar.
+type renderRow struct {
+	content   string
+	filterIdx int // index into m.filtered, or -1 for section headers
+}
+
+func (m *Model) View(height, width int) string {
 	if len(m.items) == 0 {
 		return lipgloss.NewStyle().Width(width).Height(height).Render("No channels")
 	}
 
-	// Group filtered items by section, preserving section order of first occurrence.
+	// Build all rows: section headers + channel items
+	// Track which row corresponds to which filtered index for selection tracking.
 	type sectionGroup struct {
 		name string
-		rows []string
+		rows []renderRow
 	}
 	sectionOrder := []string{}
 	sectionMap := map[string]*sectionGroup{}
@@ -131,10 +142,12 @@ func (m Model) View(height, width int) string {
 		switch item.Type {
 		case "dm":
 			if item.Presence == "active" {
-				prefix = styles.PresenceOnline.Render("* ")
+				prefix = styles.PresenceOnline.Render("● ")
 			} else {
-				prefix = styles.PresenceAway.Render("o ")
+				prefix = styles.PresenceAway.Render("○ ")
 			}
+		case "private":
+			prefix = "🔒"
 		default:
 			prefix = "# "
 		}
@@ -157,7 +170,6 @@ func (m Model) View(height, width int) string {
 
 		row := style.Width(width - 2).Render(label)
 
-		// Determine section name
 		sectionName := item.Section
 		if sectionName == "" {
 			if item.Type == "dm" || item.Type == "group_dm" {
@@ -171,18 +183,53 @@ func (m Model) View(height, width int) string {
 			sectionMap[sectionName] = &sectionGroup{name: sectionName}
 			sectionOrder = append(sectionOrder, sectionName)
 		}
-		sectionMap[sectionName].rows = append(sectionMap[sectionName].rows, row)
+		sectionMap[sectionName].rows = append(sectionMap[sectionName].rows, renderRow{
+			content:   row,
+			filterIdx: fi,
+		})
 	}
 
-	var sections []string
+	// Flatten into a single row list with section headers
+	var allRows []renderRow
 	for _, name := range sectionOrder {
 		group := sectionMap[name]
 		header := styles.SectionHeader.Render(group.name)
-		sections = append(sections, header)
-		sections = append(sections, group.rows...)
+		allRows = append(allRows, renderRow{content: header, filterIdx: -1})
+		allRows = append(allRows, group.rows...)
 	}
 
-	content := strings.Join(sections, "\n")
+	// Find the row index of the selected item
+	selectedRow := 0
+	for i, r := range allRows {
+		if r.filterIdx == m.selected {
+			selectedRow = i
+			break
+		}
+	}
+
+	// Adjust offset to keep selected row visible
+	if m.offset > selectedRow {
+		m.offset = selectedRow
+	}
+	if selectedRow >= m.offset+height {
+		m.offset = selectedRow - height + 1
+	}
+	if m.offset < 0 {
+		m.offset = 0
+	}
+
+	// Render visible window
+	end := m.offset + height
+	if end > len(allRows) {
+		end = len(allRows)
+	}
+
+	var visibleLines []string
+	for i := m.offset; i < end; i++ {
+		visibleLines = append(visibleLines, allRows[i].content)
+	}
+
+	content := strings.Join(visibleLines, "\n")
 
 	return lipgloss.NewStyle().
 		Width(width).
