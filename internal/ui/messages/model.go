@@ -361,31 +361,44 @@ func (m *Model) View(height, width int) string {
 
 	// Build visible rows from offset. Measure actual joined height to determine
 	// when we've filled the viewport (cached individual heights don't sum accurately).
-	var visibleRows []string
-	var visibleCount int
-	for i := m.offset; i < len(entries); i++ {
-		entryContent := entries[i].content
+	buildViewport := func(startOffset int) ([]string, int) {
+		var rows []string
+		var count int
+		for i := startOffset; i < len(entries); i++ {
+			entryContent := entries[i].content
+			if entries[i].msgIdx == m.selected {
+				entryContent = applySelection(entryContent, width)
+			}
 
-		// Apply selection highlight to the selected message
-		if entries[i].msgIdx == m.selected {
-			entryContent = applySelection(entryContent, width)
+			candidate := make([]string, len(rows), len(rows)+1)
+			copy(candidate, rows)
+			candidate = append(candidate, entryContent)
+			actualHeight := lipgloss.Height(strings.Join(candidate, "\n"))
+
+			if actualHeight > msgAreaHeight && len(rows) > 0 {
+				rows = append(rows, entryContent)
+				count++
+				break
+			}
+			rows = candidate
+			count++
+			if actualHeight >= msgAreaHeight {
+				break
+			}
 		}
+		return rows, count
+	}
 
-		candidate := make([]string, len(visibleRows), len(visibleRows)+1)
-		copy(candidate, visibleRows)
-		candidate = append(candidate, entryContent)
-		actualHeight := lipgloss.Height(strings.Join(candidate, "\n"))
+	visibleRows, visibleCount := buildViewport(m.offset)
 
-		if actualHeight > msgAreaHeight && len(visibleRows) > 0 {
-			// Would overflow -- add it anyway so MaxHeight clips (no empty space)
-			visibleRows = append(visibleRows, entryContent)
-			visibleCount++
-			break
-		}
-		visibleRows = candidate
-		visibleCount++
-		if actualHeight >= msgAreaHeight {
-			break
+	// If viewport isn't full and we can pull in earlier entries, do so.
+	// This handles the case where cached heights overcounted and offset is too high.
+	if m.offset > 0 {
+		currentHeight := lipgloss.Height(strings.Join(visibleRows, "\n"))
+		for currentHeight < msgAreaHeight && m.offset > 0 {
+			m.offset--
+			visibleRows, visibleCount = buildViewport(m.offset)
+			currentHeight = lipgloss.Height(strings.Join(visibleRows, "\n"))
 		}
 	}
 
