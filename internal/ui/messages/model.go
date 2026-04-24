@@ -15,6 +15,9 @@ var dateSeparatorStyle = lipgloss.NewStyle().
 	Bold(true).
 	Align(lipgloss.Center)
 
+var selectedBg = lipgloss.NewStyle().
+	Background(lipgloss.Color("#222233"))
+
 type MessageItem struct {
 	TS         string
 	UserName   string
@@ -32,13 +35,25 @@ type ReactionItem struct {
 	Count int
 }
 
+// viewEntry is a pre-rendered row in the message list (message or date separator).
+type viewEntry struct {
+	content string // rendered content (without selection highlight)
+	height  int    // number of terminal lines
+	msgIdx  int    // index into messages, or -1 for separator
+}
+
 type Model struct {
 	messages     []MessageItem
 	selected     int
-	offset       int // index of the first message visible in the viewport
+	offset       int // index into entries[] of first visible entry
 	channelName  string
 	channelTopic string
-	loading      bool // true while fetching older messages
+	loading      bool
+
+	// Render cache -- invalidated when messages or width change
+	cache       []viewEntry
+	cacheWidth  int
+	cacheMsgLen int
 }
 
 func New(msgs []MessageItem, channelName string) Model {
@@ -60,19 +75,19 @@ func (m *Model) SetChannel(name, topic string) {
 
 func (m *Model) SetMessages(msgs []MessageItem) {
 	m.messages = msgs
+	m.cache = nil // invalidate cache
 	if len(msgs) == 0 {
 		m.selected = 0
 		m.offset = 0
 		return
 	}
-	// Start at the bottom (newest messages)
 	m.selected = len(msgs) - 1
-	m.offset = 0 // will be adjusted in View()
+	m.offset = 0
 }
 
 func (m *Model) AppendMessage(msg MessageItem) {
 	m.messages = append(m.messages, msg)
-	// Auto-scroll to bottom if we were at the bottom
+	m.cache = nil // invalidate cache
 	if m.selected == len(m.messages)-2 || len(m.messages) == 1 {
 		m.selected = len(m.messages) - 1
 	}
@@ -116,13 +131,10 @@ func (m *Model) GoToBottom() {
 	}
 }
 
-// AtTop returns true if the selected message is the first one.
 func (m *Model) AtTop() bool {
 	return m.selected == 0 && len(m.messages) > 0
 }
 
-// PrependMessages adds older messages to the beginning of the list.
-// Adjusts selected index and offset to maintain the user's current position.
 func (m *Model) PrependMessages(msgs []MessageItem) {
 	if len(msgs) == 0 {
 		return
@@ -130,14 +142,13 @@ func (m *Model) PrependMessages(msgs []MessageItem) {
 	count := len(msgs)
 	m.messages = append(msgs, m.messages...)
 	m.selected += count
-	m.offset += count
+	m.cache = nil // invalidate cache
 }
 
 func (m *Model) SetLoading(loading bool) {
 	m.loading = loading
 }
 
-// OldestTS returns the timestamp of the oldest message, or empty string if none.
 func (m *Model) OldestTS() string {
 	if len(m.messages) == 0 {
 		return ""
@@ -145,26 +156,48 @@ func (m *Model) OldestTS() string {
 	return m.messages[0].TS
 }
 
-// renderMessage renders a single message entry and returns its string representation.
-func renderMessage(msg MessageItem, width int, isSelected bool) string {
-	// Username + timestamp
-	userStyle := styles.Username
-	if isSelected {
-		userStyle = userStyle.Underline(true)
-	}
-	line := userStyle.Render(msg.UserName) + "  " + styles.Timestamp.Render(msg.Timestamp)
+// buildCache pre-renders all messages and day separators.
+// Messages are rendered WITHOUT selection highlight (that's applied in View).
+func (m *Model) buildCache(width int) {
+	m.cache = nil
+	m.cacheWidth = width
+	m.cacheMsgLen = len(m.messages)
 
-	// Message text with Slack markdown + emoji rendering
+	var lastDate string
+	for i, msg := range m.messages {
+		msgDate := dateFromTS(msg.TS)
+		if msgDate != "" && msgDate != lastDate {
+			label := formatDateSeparator(msgDate)
+			sep := dateSeparatorStyle.Width(width).Render("── " + label + " ──")
+			m.cache = append(m.cache, viewEntry{
+				content: sep,
+				height:  lipgloss.Height(sep),
+				msgIdx:  -1,
+			})
+			lastDate = msgDate
+		}
+
+		rendered := renderMessagePlain(msg, width)
+		m.cache = append(m.cache, viewEntry{
+			content: rendered,
+			height:  lipgloss.Height(rendered),
+			msgIdx:  i,
+		})
+	}
+}
+
+// renderMessagePlain renders a message without selection highlight.
+func renderMessagePlain(msg MessageItem, width int) string {
+	line := styles.Username.Render(msg.UserName) + "  " + styles.Timestamp.Render(msg.Timestamp)
+
 	text := styles.MessageText.Width(width - 4).Render(RenderSlackMarkdown(msg.Text))
 
-	// Thread indicator
 	var threadLine string
 	if msg.ReplyCount > 0 {
 		threadLine = "\n" + styles.ThreadIndicator.Render(
 			fmt.Sprintf("[%d replies ->]", msg.ReplyCount))
 	}
 
-	// Reactions
 	var reactionLine string
 	if len(msg.Reactions) > 0 {
 		var parts []string
@@ -175,23 +208,18 @@ func renderMessage(msg MessageItem, width int, isSelected bool) string {
 			strings.Join(parts, "  "))
 	}
 
-	// Edited indicator
 	var editedMark string
 	if msg.IsEdited {
 		editedMark = " " + styles.Timestamp.Render("(edited)")
 	}
 
-	entry := line + editedMark + "\n" + text + threadLine + reactionLine
+	return line + editedMark + "\n" + text + threadLine + reactionLine
+}
 
-	if isSelected {
-		entry = lipgloss.NewStyle().
-			Background(lipgloss.Color("#222233")).
-			Width(width-2).
-			Padding(0, 1).
-			Render(entry)
-	}
-
-	return entry
+// applySelection wraps a rendered message with selection highlight.
+func applySelection(content string, width int) string {
+	// Re-render the username line with underline
+	return selectedBg.Width(width-2).Padding(0, 1).Render(content)
 }
 
 func (m *Model) View(height, width int) string {
@@ -206,11 +234,9 @@ func (m *Model) View(height, width int) string {
 
 	separator := lipgloss.NewStyle().Width(width).Foreground(styles.Border).Render(strings.Repeat("-", width))
 
-	// Measure the chrome: header + "\n" + separator + "\n"
 	chrome := header + "\n" + separator + "\n"
 	chromeHeight := lipgloss.Height(chrome)
 
-	// Messages area gets the remaining height
 	msgAreaHeight := height - chromeHeight
 	if msgAreaHeight < 1 {
 		msgAreaHeight = 1
@@ -225,30 +251,14 @@ func (m *Model) View(height, width int) string {
 		return header + "\n" + separator + "\n" + empty
 	}
 
-	// Pre-render all messages, inserting day separators between different dates.
-	// Each entry in `rendered` maps to a message index (or -1 for separators).
-	type renderEntry struct {
-		content string
-		msgIdx  int // -1 for date separators
-	}
-	var entries []renderEntry
-	var lastDate string
-	for i, msg := range m.messages {
-		msgDate := dateFromTS(msg.TS)
-		if msgDate != "" && msgDate != lastDate {
-			label := formatDateSeparator(msgDate)
-			sep := dateSeparatorStyle.Width(width).Render(
-				"── " + label + " ──")
-			entries = append(entries, renderEntry{content: sep, msgIdx: -1})
-			lastDate = msgDate
-		}
-		entries = append(entries, renderEntry{
-			content: renderMessage(msg, width, i == m.selected),
-			msgIdx:  i,
-		})
+	// Rebuild cache if messages or width changed
+	if m.cache == nil || m.cacheWidth != width || m.cacheMsgLen != len(m.messages) {
+		m.buildCache(width)
 	}
 
-	// Map selected message index to entries index
+	entries := m.cache
+
+	// Find the entry index for the selected message
 	selectedEntry := 0
 	for i, e := range entries {
 		if e.msgIdx == m.selected {
@@ -257,7 +267,6 @@ func (m *Model) View(height, width int) string {
 		}
 	}
 
-	// Ensure offset refers to entries (not messages). We need a separate offset for entries.
 	// Clamp offset
 	if m.offset < 0 {
 		m.offset = 0
@@ -266,40 +275,60 @@ func (m *Model) View(height, width int) string {
 		m.offset = selectedEntry
 	}
 
-	// Check if selected is visible from current offset by measuring actual content
+	// Adjust offset so selected entry is visible.
+	// Use cached heights (fast integer arithmetic, no string joins).
 	for {
 		if m.offset > selectedEntry {
 			m.offset = selectedEntry
 			break
 		}
-		var testRows []string
+		h := 0
 		for i := m.offset; i <= selectedEntry && i < len(entries); i++ {
-			testRows = append(testRows, entries[i].content)
+			if i > m.offset {
+				h++ // gap between entries
+			}
+			h += entries[i].height
 		}
-		testContent := strings.Join(testRows, "\n")
-		if lipgloss.Height(testContent) <= msgAreaHeight {
+		if h <= msgAreaHeight {
 			break
 		}
 		m.offset++
 	}
 
-	// Render from offset, adding entries until we fill or exceed the area.
+	// Build visible rows from offset, using cached heights to know when to stop.
+	usedHeight := 0
 	var visibleRows []string
+	var visibleCount int
 	for i := m.offset; i < len(entries); i++ {
-		candidate := append(visibleRows, entries[i].content)
-		candidateHeight := lipgloss.Height(strings.Join(candidate, "\n"))
-		if candidateHeight > msgAreaHeight && len(visibleRows) > 0 {
-			visibleRows = append(visibleRows, entries[i].content)
+		gap := 0
+		if len(visibleRows) > 0 {
+			gap = 1
+		}
+
+		entryContent := entries[i].content
+		entryHeight := entries[i].height
+
+		// Apply selection highlight to the selected message
+		if entries[i].msgIdx == m.selected {
+			entryContent = applySelection(entryContent, width)
+			entryHeight = lipgloss.Height(entryContent)
+		}
+
+		if usedHeight+gap+entryHeight > msgAreaHeight && len(visibleRows) > 0 {
+			// Would overflow -- add it anyway so MaxHeight clips (no empty space)
+			visibleRows = append(visibleRows, entryContent)
+			visibleCount++
 			break
 		}
-		visibleRows = candidate
-		if candidateHeight >= msgAreaHeight {
+		usedHeight += gap + entryHeight
+		visibleRows = append(visibleRows, entryContent)
+		visibleCount++
+		if usedHeight >= msgAreaHeight {
 			break
 		}
 	}
 
-	// Show scroll/loading indicators
-	visibleCount := len(visibleRows)
+	// Scroll/loading indicators
 	if m.offset > 0 {
 		indicator := fmt.Sprintf("  -- %d more above --", m.offset)
 		if m.loading {
@@ -311,8 +340,8 @@ func (m *Model) View(height, width int) string {
 		loadingRow := lipgloss.NewStyle().Foreground(styles.TextMuted).Render("  Loading older messages...")
 		visibleRows = append([]string{loadingRow}, visibleRows...)
 	}
+
 	lastVisibleEntry := m.offset + visibleCount
-	// Count remaining messages (not separators) below the viewport
 	remaining := 0
 	for i := lastVisibleEntry; i < len(entries); i++ {
 		if entries[i].msgIdx >= 0 {
@@ -334,7 +363,6 @@ func (m *Model) View(height, width int) string {
 		Render(msgContent)
 }
 
-// dateFromTS extracts a "2006-01-02" date string from a Slack timestamp like "1700000001.000000".
 func dateFromTS(ts string) string {
 	parts := strings.SplitN(ts, ".", 2)
 	if len(parts) == 0 {
@@ -347,8 +375,6 @@ func dateFromTS(ts string) string {
 	return time.Unix(sec, 0).Format("2006-01-02")
 }
 
-// formatDateSeparator turns "2006-01-02" into a human-readable label like
-// "Today", "Yesterday", or "Monday, January 2, 2006".
 func formatDateSeparator(dateStr string) string {
 	d, err := time.Parse("2006-01-02", dateStr)
 	if err != nil {
