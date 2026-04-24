@@ -3,16 +3,27 @@ package config
 import (
 	"errors"
 	"os"
+	"path/filepath"
+	"sort"
 
 	toml "github.com/pelletier/go-toml/v2"
 )
 
 type Config struct {
-	General       General       `toml:"general"`
-	Appearance    Appearance    `toml:"appearance"`
-	Animations    Animations    `toml:"animations"`
-	Notifications Notifications `toml:"notifications"`
-	Cache         CacheConfig   `toml:"cache"`
+	General       General               `toml:"general"`
+	Appearance    Appearance            `toml:"appearance"`
+	Animations    Animations            `toml:"animations"`
+	Notifications Notifications         `toml:"notifications"`
+	Cache         CacheConfig           `toml:"cache"`
+	Sections      map[string]SectionDef `toml:"sections"`
+}
+
+// SectionDef defines a sidebar section with channel name patterns.
+// Channels matching any pattern are placed in this section.
+// Patterns support simple glob matching (* for any characters).
+type SectionDef struct {
+	Channels []string `toml:"channels"`
+	Order    int      `toml:"order"` // lower = higher in sidebar
 }
 
 type General struct {
@@ -87,4 +98,31 @@ func Load(path string) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// MatchSection returns the section name for a given channel name,
+// or empty string if no section matches.
+func (c Config) MatchSection(channelName string) string {
+	// Build ordered list of sections
+	type entry struct {
+		name     string
+		order    int
+		patterns []string
+	}
+	var entries []entry
+	for name, def := range c.Sections {
+		entries = append(entries, entry{name: name, order: def.Order, patterns: def.Channels})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].order < entries[j].order
+	})
+
+	for _, e := range entries {
+		for _, pattern := range e.patterns {
+			if matched, _ := filepath.Match(pattern, channelName); matched {
+				return e.name
+			}
+		}
+	}
+	return ""
 }
