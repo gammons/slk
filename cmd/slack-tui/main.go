@@ -260,6 +260,18 @@ func run() error {
 
 	// Run the TUI
 	p := tea.NewProgram(app, tea.WithAltScreen())
+
+	// Start RTM for real-time events
+	if activeClient != nil {
+		handler := &rtmEventHandler{
+			program:   p,
+			userNames: userNames,
+			tsFormat:  tsFormat,
+		}
+		activeClient.StartRTM(handler)
+		defer activeClient.StopRTM()
+	}
+
 	_, err = p.Run()
 	return err
 }
@@ -388,4 +400,49 @@ func xdgCache() string {
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".cache", "slack-tui")
+}
+
+// rtmEventHandler bridges RTM events into bubbletea messages via p.Send().
+type rtmEventHandler struct {
+	program   *tea.Program
+	userNames map[string]string
+	tsFormat  string
+}
+
+func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS string, edited bool) {
+	userName := userID
+	if resolved, ok := h.userNames[userID]; ok {
+		userName = resolved
+	}
+	h.program.Send(ui.NewMessageMsg{
+		Message: messages.MessageItem{
+			TS:        ts,
+			UserID:    userID,
+			UserName:  userName,
+			Text:      text,
+			Timestamp: formatTimestamp(ts, h.tsFormat),
+			ThreadTS:  threadTS,
+			IsEdited:  edited,
+		},
+	})
+}
+
+func (h *rtmEventHandler) OnMessageDeleted(channelID, ts string) {
+	// TODO: implement message deletion in UI
+}
+
+func (h *rtmEventHandler) OnReactionAdded(channelID, ts, userID, emoji string) {
+	// TODO: implement reaction updates in UI
+}
+
+func (h *rtmEventHandler) OnReactionRemoved(channelID, ts, userID, emoji string) {
+	// TODO: implement reaction updates in UI
+}
+
+func (h *rtmEventHandler) OnPresenceChange(userID, presence string) {
+	// TODO: implement presence indicators in UI
+}
+
+func (h *rtmEventHandler) OnUserTyping(channelID, userID string) {
+	// TODO: implement typing indicators in UI
 }
