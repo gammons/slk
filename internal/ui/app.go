@@ -392,13 +392,16 @@ func (a *App) View() string {
 	statusHeight := 1
 	contentHeight := a.height - statusHeight
 
-	// Calculate widths
+	// Calculate widths, accounting for borders (2 cols each for left+right)
 	railWidth := a.workspaceRail.Width()
 	sidebarWidth := 0
+	sidebarBorder := 0
 	if a.sidebarVisible {
 		sidebarWidth = a.sidebar.Width()
+		sidebarBorder = 2 // left + right border
 	}
-	msgWidth := a.width - railWidth - sidebarWidth
+	msgBorder := 2 // left + right border for message pane
+	msgWidth := a.width - railWidth - sidebarWidth - sidebarBorder - msgBorder
 	if msgWidth < 10 {
 		msgWidth = 10
 	}

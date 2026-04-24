@@ -78,11 +78,14 @@ func (m Model) View(height int) string {
 	}
 
 	rail := lipgloss.NewStyle().
-		Width(6).
+		Width(5).
 		Height(innerHeight).
 		MaxHeight(innerHeight).
 		Background(styles.SurfaceDark).
 		Padding(1, 0).
+		BorderStyle(lipgloss.Border{Right: "│"}).
+		BorderRight(true).
+		BorderForeground(styles.Border).
 		Align(lipgloss.Center).
 		Render(content)
 
@@ -90,7 +93,7 @@ func (m Model) View(height int) string {
 }
 
 func (m Model) Width() int {
-	return 6
+	return 7 // 5 content + 1 border + 1 padding
 }
 
 func WorkspaceInitials(name string) string {
