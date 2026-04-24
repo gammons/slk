@@ -295,35 +295,32 @@ func (m *Model) View(height, width int) string {
 		m.offset++
 	}
 
-	// Build visible rows from offset, using cached heights to know when to stop.
-	usedHeight := 0
+	// Build visible rows from offset. Measure actual joined height to determine
+	// when we've filled the viewport (cached individual heights don't sum accurately).
 	var visibleRows []string
 	var visibleCount int
 	for i := m.offset; i < len(entries); i++ {
-		gap := 0
-		if len(visibleRows) > 0 {
-			gap = 1
-		}
-
 		entryContent := entries[i].content
-		entryHeight := entries[i].height
 
 		// Apply selection highlight to the selected message
 		if entries[i].msgIdx == m.selected {
 			entryContent = applySelection(entryContent, width)
-			entryHeight = lipgloss.Height(entryContent)
 		}
 
-		if usedHeight+gap+entryHeight > msgAreaHeight && len(visibleRows) > 0 {
+		candidate := make([]string, len(visibleRows), len(visibleRows)+1)
+		copy(candidate, visibleRows)
+		candidate = append(candidate, entryContent)
+		actualHeight := lipgloss.Height(strings.Join(candidate, "\n"))
+
+		if actualHeight > msgAreaHeight && len(visibleRows) > 0 {
 			// Would overflow -- add it anyway so MaxHeight clips (no empty space)
 			visibleRows = append(visibleRows, entryContent)
 			visibleCount++
 			break
 		}
-		usedHeight += gap + entryHeight
-		visibleRows = append(visibleRows, entryContent)
+		visibleRows = candidate
 		visibleCount++
-		if usedHeight >= msgAreaHeight {
+		if actualHeight >= msgAreaHeight {
 			break
 		}
 	}
