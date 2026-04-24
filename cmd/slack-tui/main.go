@@ -261,15 +261,18 @@ func run() error {
 	// Run the TUI
 	p := tea.NewProgram(app, tea.WithAltScreen())
 
-	// Start RTM for real-time events
+	// Start WebSocket for real-time events
 	if activeClient != nil {
 		handler := &rtmEventHandler{
 			program:   p,
 			userNames: userNames,
 			tsFormat:  tsFormat,
 		}
-		activeClient.StartRTM(handler)
-		defer activeClient.StopRTM()
+		if err := activeClient.StartWebSocket(handler); err != nil {
+			log.Printf("Warning: failed to start WebSocket: %v", err)
+		} else {
+			defer activeClient.StopWebSocket()
+		}
 	}
 
 	_, err = p.Run()

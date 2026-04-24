@@ -2,8 +2,6 @@ package slackclient
 
 import (
 	"testing"
-
-	"github.com/slack-go/slack"
 )
 
 type mockEventHandler struct {
@@ -36,8 +34,6 @@ func (m *mockEventHandler) OnUserTyping(channelID, userID string) {
 
 func TestEventHandlerInterface(t *testing.T) {
 	handler := &mockEventHandler{}
-
-	// Verify the interface is satisfied
 	var _ EventHandler = handler
 
 	handler.OnMessage("C1", "U1", "123.456", "hello", "", false)
@@ -46,22 +42,11 @@ func TestEventHandlerInterface(t *testing.T) {
 	}
 }
 
-func TestDispatchRTMMessageEvent(t *testing.T) {
+func TestDispatchWebSocketMessageEvent(t *testing.T) {
 	handler := &mockEventHandler{}
 
-	evt := slack.RTMEvent{
-		Type: "message",
-		Data: &slack.MessageEvent{
-			Msg: slack.Msg{
-				Channel:   "C1",
-				User:      "U1",
-				Text:      "hello world",
-				Timestamp: "123.456",
-			},
-		},
-	}
-
-	dispatchRTMEvent(evt, handler)
+	data := []byte(`{"type":"message","channel":"C1","user":"U1","text":"hello world","ts":"123.456"}`)
+	dispatchWebSocketEvent(data, handler)
 
 	if len(handler.messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(handler.messages))
@@ -71,22 +56,25 @@ func TestDispatchRTMMessageEvent(t *testing.T) {
 	}
 }
 
-func TestDispatchRTMReactionAddedEvent(t *testing.T) {
+func TestDispatchWebSocketBotMessageEvent(t *testing.T) {
 	handler := &mockEventHandler{}
 
-	evt := slack.RTMEvent{
-		Type: "reaction_added",
-		Data: &slack.ReactionAddedEvent{
-			User:     "U1",
-			Reaction: "thumbsup",
-			Item: slack.ReactionItem{
-				Channel:   "C1",
-				Timestamp: "123.456",
-			},
-		},
-	}
+	data := []byte(`{"type":"message","subtype":"bot_message","channel":"C1","text":"bot says hi","ts":"123.456","bot_id":"B123"}`)
+	dispatchWebSocketEvent(data, handler)
 
-	dispatchRTMEvent(evt, handler)
+	if len(handler.messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(handler.messages))
+	}
+	if handler.messages[0] != "bot says hi" {
+		t.Errorf("expected 'bot says hi', got %q", handler.messages[0])
+	}
+}
+
+func TestDispatchWebSocketReactionAddedEvent(t *testing.T) {
+	handler := &mockEventHandler{}
+
+	data := []byte(`{"type":"reaction_added","user":"U1","reaction":"thumbsup","item":{"channel":"C1","ts":"123.456"}}`)
+	dispatchWebSocketEvent(data, handler)
 
 	if len(handler.reactions) != 1 {
 		t.Fatalf("expected 1 reaction, got %d", len(handler.reactions))
@@ -96,18 +84,11 @@ func TestDispatchRTMReactionAddedEvent(t *testing.T) {
 	}
 }
 
-func TestDispatchRTMPresenceChangeEvent(t *testing.T) {
+func TestDispatchWebSocketPresenceChangeEvent(t *testing.T) {
 	handler := &mockEventHandler{}
 
-	evt := slack.RTMEvent{
-		Type: "presence_change",
-		Data: &slack.PresenceChangeEvent{
-			User:     "U1",
-			Presence: "active",
-		},
-	}
-
-	dispatchRTMEvent(evt, handler)
+	data := []byte(`{"type":"presence_change","user":"U1","presence":"active"}`)
+	dispatchWebSocketEvent(data, handler)
 
 	if len(handler.presenceChanges) != 1 {
 		t.Fatalf("expected 1 presence change, got %d", len(handler.presenceChanges))
@@ -117,26 +98,44 @@ func TestDispatchRTMPresenceChangeEvent(t *testing.T) {
 	}
 }
 
-func TestDispatchRTMMessageDeletedEvent(t *testing.T) {
+func TestDispatchWebSocketMessageDeletedEvent(t *testing.T) {
 	handler := &mockEventHandler{}
 
-	evt := slack.RTMEvent{
-		Type: "message",
-		Data: &slack.MessageEvent{
-			Msg: slack.Msg{
-				Channel:          "C1",
-				SubType:          "message_deleted",
-				DeletedTimestamp: "123.456",
-			},
-		},
-	}
-
-	dispatchRTMEvent(evt, handler)
+	data := []byte(`{"type":"message","subtype":"message_deleted","channel":"C1","deleted_ts":"123.456"}`)
+	dispatchWebSocketEvent(data, handler)
 
 	if len(handler.deletedMessages) != 1 {
 		t.Fatalf("expected 1 deleted message, got %d", len(handler.deletedMessages))
 	}
 	if handler.deletedMessages[0] != "123.456" {
 		t.Errorf("expected '123.456', got %q", handler.deletedMessages[0])
+	}
+}
+
+func TestDispatchWebSocketMessageChangedEvent(t *testing.T) {
+	handler := &mockEventHandler{}
+
+	data := []byte(`{"type":"message","subtype":"message_changed","channel":"C1","message":{"user":"U1","text":"edited text","ts":"123.456"},"previous_message":{"text":"original"}}`)
+	dispatchWebSocketEvent(data, handler)
+
+	if len(handler.messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(handler.messages))
+	}
+	if handler.messages[0] != "edited text" {
+		t.Errorf("expected 'edited text', got %q", handler.messages[0])
+	}
+}
+
+func TestDispatchWebSocketUserTypingEvent(t *testing.T) {
+	handler := &mockEventHandler{}
+
+	data := []byte(`{"type":"user_typing","channel":"C1","user":"U1"}`)
+	dispatchWebSocketEvent(data, handler)
+
+	if len(handler.typingEvents) != 1 {
+		t.Fatalf("expected 1 typing event, got %d", len(handler.typingEvents))
+	}
+	if handler.typingEvents[0] != "C1:U1" {
+		t.Errorf("expected 'C1:U1', got %q", handler.typingEvents[0])
 	}
 }

@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 
+	"github.com/gorilla/websocket"
 	"github.com/slack-go/slack"
 )
 
@@ -32,7 +34,7 @@ type SlackAPI interface {
 // Uses browser cookie auth (xoxc token + d cookie).
 type Client struct {
 	api    *slack.Client
-	rtm    *slack.RTM
+	wsConn *websocket.Conn
 	teamID string
 	userID string
 	token  string
@@ -57,8 +59,8 @@ func NewClient(xoxcToken, dCookie string) *Client {
 	}
 }
 
-// newCookieHTTPClient creates an http.Client with the Slack 'd' cookie set.
-func newCookieHTTPClient(dCookie string) *http.Client {
+// newCookieJar creates a cookie jar with the Slack 'd' cookie set.
+func newCookieJar(dCookie string) http.CookieJar {
 	jar, _ := cookiejar.New(nil)
 
 	slackURL, _ := url.Parse("https://slack.com")
@@ -72,7 +74,12 @@ func newCookieHTTPClient(dCookie string) *http.Client {
 		},
 	})
 
-	return &http.Client{Jar: jar}
+	return jar
+}
+
+// newCookieHTTPClient creates an http.Client with the Slack 'd' cookie set.
+func newCookieHTTPClient(dCookie string) *http.Client {
+	return &http.Client{Jar: newCookieJar(dCookie)}
 }
 
 // TeamID returns the authenticated workspace's team ID.
@@ -98,23 +105,50 @@ func (c *Client) Connect(ctx context.Context) error {
 	return nil
 }
 
-// StartRTM creates and starts the RTM connection.
+// StartWebSocket connects to Slack's internal WebSocket using the xoxc token
+// and d cookie, matching the protocol used by the browser client.
 // Events are dispatched to the provided handler in a goroutine.
 // Call this after Connect.
-func (c *Client) StartRTM(handler EventHandler) {
-	c.rtm = c.api.NewRTM()
-	go c.rtm.ManageConnection()
+func (c *Client) StartWebSocket(handler EventHandler) error {
+	wsURL := fmt.Sprintf(
+		"wss://wss-primary.slack.com/?token=%s&sync_desync=1&slack_client=desktop&start_args=%%3Fagent%%3Dclient%%26connect_only%%3Dtrue%%26ms_latest%%3Dtrue&no_query_on_subscribe=1&flannel=3&lazy_channels=1&gateway_server=%s-1&batch_presence_aware=1",
+		url.QueryEscape(c.token),
+		c.teamID,
+	)
+
+	jar := newCookieJar(c.cookie)
+	dialer := &websocket.Dialer{Jar: jar}
+
+	headers := http.Header{}
+	headers.Add("Origin", "https://app.slack.com")
+
+	conn, _, err := dialer.Dial(wsURL, headers)
+	if err != nil {
+		return fmt.Errorf("websocket connect failed: %w", err)
+	}
+	c.wsConn = conn
+
 	go func() {
-		for msg := range c.rtm.IncomingEvents {
-			dispatchRTMEvent(msg, handler)
+		for {
+			_, message, err := conn.ReadMessage()
+			if err != nil {
+				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+					return
+				}
+				log.Printf("WebSocket read error: %v", err)
+				return
+			}
+			dispatchWebSocketEvent(message, handler)
 		}
 	}()
+
+	return nil
 }
 
-// StopRTM disconnects the RTM connection.
-func (c *Client) StopRTM() error {
-	if c.rtm != nil {
-		return c.rtm.Disconnect()
+// StopWebSocket disconnects the WebSocket connection.
+func (c *Client) StopWebSocket() error {
+	if c.wsConn != nil {
+		return c.wsConn.Close()
 	}
 	return nil
 }
