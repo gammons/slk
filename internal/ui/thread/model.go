@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/reflow/padding"
 	"github.com/muesli/reflow/wordwrap"
@@ -26,6 +27,7 @@ type Model struct {
 	focused   bool
 	avatarFn  messages.AvatarFunc
 	userNames map[string]string
+	vp        viewport.Model
 }
 
 // New creates an empty thread panel.
@@ -184,62 +186,43 @@ func (m *Model) View(height, width int) string {
 		return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(result)
 	}
 
-	// Render replies with viewport scrolling
-	var visibleRows []string
-	usedHeight := 0
+	// Pre-render all replies, tracking line offsets
+	var allRows []string
+	selectedStartLine := 0
+	selectedEndLine := 0
+	currentLine := 0
 
-	// Build visible replies anchored from selected, going upward
-	type renderedEntry struct {
-		content string
-		height  int
-	}
-
-	var entries []renderedEntry
 	for i, reply := range m.replies {
 		content := renderThreadMessage(reply, width, m.userNames)
 		if i == m.selected {
+			selectedStartLine = currentLine
 			content = applySelection(content, width)
 		}
-		entries = append(entries, renderedEntry{
-			content: content,
-			height:  lipgloss.Height(content),
-		})
-	}
-
-	// Start from selected and go upward to fill viewport
-	var showIndices []int
-	showIndices = append(showIndices, m.selected)
-	usedHeight = entries[m.selected].height
-
-	for i := m.selected - 1; i >= 0; i-- {
-		if usedHeight+entries[i].height > replyAreaHeight {
-			break
+		h := lipgloss.Height(content)
+		if i == m.selected {
+			selectedEndLine = currentLine + h
 		}
-		showIndices = append([]int{i}, showIndices...)
-		usedHeight += entries[i].height
+		allRows = append(allRows, content)
+		currentLine += h
 	}
 
-	// Fill remaining space below selected
-	for i := m.selected + 1; i < len(entries); i++ {
-		if usedHeight+entries[i].height > replyAreaHeight {
-			break
-		}
-		showIndices = append(showIndices, i)
-		usedHeight += entries[i].height
+	fullContent := strings.Join(allRows, "\n")
+
+	// Configure viewport
+	m.vp.Width = width
+	m.vp.Height = replyAreaHeight
+	m.vp.KeyMap = viewport.KeyMap{}
+	m.vp.SetContent(fullContent)
+
+	// Scroll to keep selected item visible
+	if selectedEndLine > m.vp.YOffset+m.vp.Height {
+		m.vp.SetYOffset(selectedEndLine - m.vp.Height)
+	}
+	if selectedStartLine < m.vp.YOffset {
+		m.vp.SetYOffset(selectedStartLine)
 	}
 
-	for _, idx := range showIndices {
-		visibleRows = append(visibleRows, entries[idx].content)
-	}
-
-	replyContent := strings.Join(visibleRows, "\n")
-
-	result := chrome + "\n" + lipgloss.NewStyle().
-		Width(width).
-		Height(replyAreaHeight).
-		MaxHeight(replyAreaHeight).
-		Render(replyContent)
-
+	result := chrome + "\n" + m.vp.View()
 	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(result)
 }
 
