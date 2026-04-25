@@ -346,6 +346,8 @@ func (a *App) handleDown() {
 		a.sidebar.MoveDown()
 	case PanelMessages:
 		a.messagepane.MoveDown()
+	case PanelThread:
+		a.threadPanel.MoveDown()
 	}
 }
 
@@ -366,6 +368,8 @@ func (a *App) handleUp() tea.Cmd {
 				return fetcher(chID, oldestTS)
 			}
 		}
+	case PanelThread:
+		a.threadPanel.MoveUp()
 	}
 	return nil
 }
@@ -376,6 +380,8 @@ func (a *App) handleGoToBottom() {
 		a.sidebar.GoToBottom()
 	case PanelMessages:
 		a.messagepane.GoToBottom()
+	case PanelThread:
+		a.threadPanel.GoToBottom()
 	}
 }
 
@@ -397,22 +403,52 @@ func (a *App) SetMode(mode Mode) {
 }
 
 func (a *App) FocusNext() {
-	if a.sidebarVisible {
-		if a.focusedPanel == PanelSidebar {
-			a.focusedPanel = PanelMessages
+	if !a.sidebarVisible {
+		if a.threadVisible {
+			if a.focusedPanel == PanelMessages {
+				a.focusedPanel = PanelThread
+			} else {
+				a.focusedPanel = PanelMessages
+			}
+		}
+		return
+	}
+	switch a.focusedPanel {
+	case PanelSidebar:
+		a.focusedPanel = PanelMessages
+	case PanelMessages:
+		if a.threadVisible {
+			a.focusedPanel = PanelThread
 		} else {
 			a.focusedPanel = PanelSidebar
 		}
+	case PanelThread:
+		a.focusedPanel = PanelSidebar
 	}
 }
 
 func (a *App) FocusPrev() {
-	if a.sidebarVisible {
-		if a.focusedPanel == PanelMessages {
-			a.focusedPanel = PanelSidebar
+	if !a.sidebarVisible {
+		if a.threadVisible {
+			if a.focusedPanel == PanelThread {
+				a.focusedPanel = PanelMessages
+			} else {
+				a.focusedPanel = PanelThread
+			}
+		}
+		return
+	}
+	switch a.focusedPanel {
+	case PanelSidebar:
+		if a.threadVisible {
+			a.focusedPanel = PanelThread
 		} else {
 			a.focusedPanel = PanelMessages
 		}
+	case PanelMessages:
+		a.focusedPanel = PanelSidebar
+	case PanelThread:
+		a.focusedPanel = PanelMessages
 	}
 }
 
