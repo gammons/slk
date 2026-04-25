@@ -443,8 +443,8 @@ func (a *App) View() string {
 	}
 	composeView := a.compose.View(msgWidth-2, a.mode == ModeInsert) // -2 for left+right border
 	composeHeight := lipgloss.Height(composeView)
-	// -2 for top+bottom border, -1 for separator between messages and compose, minus compose
-	msgContentHeight := contentHeight - 2 - 1 - composeHeight
+	// -2 for top+bottom border, minus compose
+	msgContentHeight := contentHeight - 2 - composeHeight
 	if msgContentHeight < 3 {
 		msgContentHeight = 3
 	}

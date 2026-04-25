@@ -310,7 +310,7 @@ func (m *Model) View(height, width int) string {
 
 	separator := lipgloss.NewStyle().Width(width).Foreground(styles.Border).Render(strings.Repeat("-", width))
 
-	chrome := header + "\n" + separator + "\n"
+	chrome := header + "\n" + separator
 	chromeHeight := lipgloss.Height(chrome)
 
 	msgAreaHeight := height - chromeHeight
