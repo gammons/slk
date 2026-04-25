@@ -350,6 +350,13 @@ func (m *Model) View(height, width int) string {
 	// Start with the selected entry, then add entries above until the viewport is full.
 	// This guarantees the selected (newest) message is always visible.
 
+	// Reserve 1 row for "more above" indicator if there are entries before selectedEntry
+	scrollIndicatorHeight := 0
+	if selectedEntry > 0 {
+		scrollIndicatorHeight = 1
+	}
+	availableHeight := msgAreaHeight - scrollIndicatorHeight
+
 	// First, build the list of entries to show, bottom-up from selectedEntry
 	var bottomUpEntries []int
 	bottomUpEntries = append(bottomUpEntries, selectedEntry)
@@ -378,7 +385,7 @@ func (m *Model) View(height, width int) string {
 		}
 		testHeight := lipgloss.Height(strings.Join(testRows, "\n"))
 
-		if testHeight > msgAreaHeight {
+		if testHeight > availableHeight {
 			break
 		}
 		bottomUpEntries = append([]int{i}, bottomUpEntries...)
@@ -407,7 +414,7 @@ func (m *Model) View(height, width int) string {
 		}
 		candidate := append(append([]string{}, visibleRows...), entryContent)
 		testHeight := lipgloss.Height(strings.Join(candidate, "\n"))
-		if testHeight > msgAreaHeight {
+		if testHeight > availableHeight {
 			break
 		}
 		visibleRows = append(visibleRows, entryContent)
