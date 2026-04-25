@@ -157,6 +157,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case ChannelSelectedMsg:
+		// Close thread panel when switching channels
+		a.CloseThread()
 		a.activeChannelID = msg.ID
 		a.messagepane.SetChannel(msg.Name, "")
 		a.messagepane.SetMessages(nil) // clear while loading
@@ -185,7 +187,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case NewMessageMsg:
 		if msg.ChannelID == a.activeChannelID {
-			a.messagepane.AppendMessage(msg.Message)
+			// Route thread replies to the thread panel if it matches the open thread
+			if a.threadVisible && msg.Message.ThreadTS == a.threadPanel.ThreadTS() {
+				a.threadPanel.AddReply(msg.Message)
+			}
+			// Always add to main pane if it's a top-level message (no ThreadTS or is the parent)
+			if msg.Message.ThreadTS == "" || msg.Message.ThreadTS == msg.Message.TS {
+				a.messagepane.AppendMessage(msg.Message)
+			}
 		}
 
 	case SendMessageMsg:
@@ -200,6 +209,25 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case MessageSentMsg:
 		if msg.ChannelID == a.activeChannelID {
 			a.messagepane.AppendMessage(msg.Message)
+		}
+
+	case ThreadRepliesLoadedMsg:
+		if a.threadVisible && msg.ThreadTS == a.threadPanel.ThreadTS() {
+			a.threadPanel.SetThread(a.threadPanel.ParentMsg(), msg.Replies, a.threadPanel.ChannelID(), msg.ThreadTS)
+		}
+
+	case SendThreadReplyMsg:
+		if a.threadReplySender != nil {
+			sender := a.threadReplySender
+			chID, ts, text := msg.ChannelID, msg.ThreadTS, msg.Text
+			cmds = append(cmds, func() tea.Msg {
+				return sender(chID, ts, text)
+			})
+		}
+
+	case ThreadReplySentMsg:
+		if a.threadVisible && msg.ThreadTS == a.threadPanel.ThreadTS() {
+			a.threadPanel.AddReply(msg.Message)
 		}
 	}
 
@@ -229,6 +257,9 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 	switch {
 	case key.Matches(msg, a.keys.InsertMode):
 		a.SetMode(ModeInsert)
+		if a.focusedPanel == PanelThread {
+			return a.threadCompose.Focus()
+		}
 		a.focusedPanel = PanelMessages
 		return a.compose.Focus()
 
@@ -244,6 +275,9 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 
 	case key.Matches(msg, a.keys.ToggleSidebar):
 		a.ToggleSidebar()
+
+	case key.Matches(msg, a.keys.ToggleThread):
+		a.ToggleThread()
 
 	case key.Matches(msg, a.keys.Down):
 		a.handleDown()
@@ -276,10 +310,35 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 	if key.Matches(msg, a.keys.Escape) {
 		a.SetMode(ModeNormal)
 		a.compose.Blur()
+		a.threadCompose.Blur()
 		return nil
 	}
 
-	// Handle Enter in insert mode to send message
+	// Determine which compose box is active based on focused panel
+	if a.focusedPanel == PanelThread && a.threadVisible {
+		// Thread reply compose
+		if msg.Type == tea.KeyEnter {
+			text := a.threadCompose.Value()
+			if text != "" {
+				a.threadCompose.Reset()
+				threadTS := a.threadPanel.ThreadTS()
+				channelID := a.threadPanel.ChannelID()
+				return func() tea.Msg {
+					return SendThreadReplyMsg{
+						ChannelID: channelID,
+						ThreadTS:  threadTS,
+						Text:      text,
+					}
+				}
+			}
+			return nil
+		}
+		var cmd tea.Cmd
+		a.threadCompose, cmd = a.threadCompose.Update(msg)
+		return cmd
+	}
+
+	// Channel message compose (existing behavior)
 	if msg.Type == tea.KeyEnter {
 		text := a.compose.Value()
 		if text != "" {
@@ -394,6 +453,32 @@ func (a *App) handleEnter() tea.Cmd {
 			}
 		}
 	}
+
+	if a.focusedPanel == PanelMessages {
+		msg, ok := a.messagepane.SelectedMessage()
+		if ok {
+			// Use the message's own TS as the thread parent.
+			// If it's already a thread reply, use its ThreadTS instead.
+			threadTS := msg.TS
+			if msg.ThreadTS != "" && msg.ThreadTS != msg.TS {
+				threadTS = msg.ThreadTS
+			}
+			a.threadVisible = true
+			a.focusedPanel = PanelThread
+			a.threadPanel.SetThread(msg, nil, a.activeChannelID, threadTS)
+			a.threadCompose.SetChannel("thread")
+
+			if a.threadFetcher != nil {
+				fetcher := a.threadFetcher
+				chID := a.activeChannelID
+				ts := threadTS
+				return func() tea.Msg {
+					return fetcher(chID, ts)
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -455,6 +540,22 @@ func (a *App) FocusPrev() {
 func (a *App) ToggleSidebar() {
 	a.sidebarVisible = !a.sidebarVisible
 	if !a.sidebarVisible && a.focusedPanel == PanelSidebar {
+		a.focusedPanel = PanelMessages
+	}
+}
+
+func (a *App) ToggleThread() {
+	if a.threadVisible {
+		a.CloseThread()
+	}
+	// Don't open on toggle if no thread is loaded -- use Enter for that
+}
+
+func (a *App) CloseThread() {
+	a.threadVisible = false
+	a.threadPanel.Clear()
+	a.threadCompose.Blur()
+	if a.focusedPanel == PanelThread {
 		a.focusedPanel = PanelMessages
 	}
 }
@@ -534,8 +635,32 @@ func (a *App) View() string {
 		sidebarWidth = a.sidebar.Width()
 		sidebarBorder = 2 // left + right border
 	}
-	msgBorder := 2 // left + right border for message pane
-	msgWidth := a.width - railWidth - sidebarWidth - sidebarBorder - msgBorder
+
+	// Calculate the message area (everything right of sidebar)
+	msgAreaWidth := a.width - railWidth - sidebarWidth - sidebarBorder
+
+	// Determine thread and message pane widths
+	msgBorder := 2
+	threadWidth := 0
+	threadBorder := 0
+	if a.threadVisible {
+		threadBorder = 2
+		// 35% of message area for thread, but enforce minimums
+		threadWidth = msgAreaWidth * 35 / 100
+		msgPaneWidth := msgAreaWidth - threadWidth - msgBorder - threadBorder
+		// Enforce minimum widths
+		if msgPaneWidth < 40 || threadWidth < 30 {
+			// Too narrow -- auto-hide thread
+			a.threadVisible = false
+			threadWidth = 0
+			threadBorder = 0
+			if a.focusedPanel == PanelThread {
+				a.focusedPanel = PanelMessages
+			}
+		}
+	}
+
+	msgWidth := msgAreaWidth - msgBorder - threadWidth - threadBorder
 	if msgWidth < 10 {
 		msgWidth = 10
 	}
@@ -551,36 +676,56 @@ func (a *App) View() string {
 	var panels []string
 	panels = append(panels, rail)
 
-	// Render sidebar -- always show border, change color on focus
+	// Render sidebar
 	if a.sidebarVisible {
 		borderStyle := styles.UnfocusedBorder.Width(sidebarWidth)
 		if a.focusedPanel == PanelSidebar {
 			borderStyle = styles.FocusedBorder.Width(sidebarWidth)
 		}
-		sidebarView := a.sidebar.View(contentHeight-2, sidebarWidth) // -2 for top+bottom border
+		sidebarView := a.sidebar.View(contentHeight-2, sidebarWidth)
 		sidebarView = borderStyle.Render(sidebarView)
 		panels = append(panels, exactHeight(sidebarView, contentHeight))
 	}
 
-	// Render message pane with border, same pattern as sidebar
+	// Render message pane with border
 	msgBorderStyle := styles.UnfocusedBorder.Width(msgWidth)
 	if a.focusedPanel == PanelMessages {
 		msgBorderStyle = styles.FocusedBorder.Width(msgWidth)
 	}
-	composeView := a.compose.View(msgWidth-2, a.mode == ModeInsert) // -2 for left+right border
+	composeView := a.compose.View(msgWidth-2, a.mode == ModeInsert && a.focusedPanel != PanelThread)
 	composeHeight := lipgloss.Height(composeView)
-	// -2 for top+bottom border, minus compose
 	msgContentHeight := contentHeight - 2 - composeHeight
 	if msgContentHeight < 3 {
 		msgContentHeight = 3
 	}
-	msgView := a.messagepane.View(msgContentHeight, msgWidth-2) // -2 for left+right border
+	msgView := a.messagepane.View(msgContentHeight, msgWidth-2)
 	msgInner := lipgloss.JoinVertical(lipgloss.Left, msgView, composeView)
 	msgPanel := exactHeight(
 		msgBorderStyle.Render(msgInner),
 		contentHeight,
 	)
 	panels = append(panels, msgPanel)
+
+	// Render thread panel if visible
+	if a.threadVisible && threadWidth > 0 {
+		threadBorderStyle := styles.UnfocusedBorder.Width(threadWidth)
+		if a.focusedPanel == PanelThread {
+			threadBorderStyle = styles.FocusedBorder.Width(threadWidth)
+		}
+		threadComposeView := a.threadCompose.View(threadWidth-2, a.mode == ModeInsert && a.focusedPanel == PanelThread)
+		threadComposeHeight := lipgloss.Height(threadComposeView)
+		threadContentHeight := contentHeight - 2 - threadComposeHeight
+		if threadContentHeight < 3 {
+			threadContentHeight = 3
+		}
+		threadView := a.threadPanel.View(threadContentHeight, threadWidth-2)
+		threadInner := lipgloss.JoinVertical(lipgloss.Left, threadView, threadComposeView)
+		threadPanel := exactHeight(
+			threadBorderStyle.Render(threadInner),
+			contentHeight,
+		)
+		panels = append(panels, threadPanel)
+	}
 
 	content := lipgloss.JoinHorizontal(lipgloss.Top, panels...)
 	status := a.statusbar.View(a.width)
