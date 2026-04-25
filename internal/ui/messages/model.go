@@ -87,15 +87,20 @@ func (m *Model) SetMessages(msgs []MessageItem) {
 		m.offset = 0
 		return
 	}
+	// Start at the bottom -- newest messages visible
 	m.selected = len(msgs) - 1
-	m.offset = 0
+	// Set offset high so View() will anchor from the bottom
+	m.offset = len(msgs) // will be clamped in View()
 }
 
 func (m *Model) AppendMessage(msg MessageItem) {
+	wasAtBottom := m.selected >= len(m.messages)-1
 	m.messages = append(m.messages, msg)
 	m.cache = nil // invalidate cache
-	if m.selected == len(m.messages)-2 || len(m.messages) == 1 {
+	if wasAtBottom || len(m.messages) == 1 {
+		// Auto-scroll to the new message
 		m.selected = len(m.messages) - 1
+		m.offset = len(m.messages) // will be clamped in View()
 	}
 }
 
@@ -338,21 +343,31 @@ func (m *Model) View(height, width int) string {
 		}
 	}
 
-	// Clamp offset
+	// Clamp offset: ensure selected entry is visible, anchored from bottom.
 	if m.offset < 0 {
 		m.offset = 0
 	}
+
+	// If offset is beyond selectedEntry, anchor from bottom:
+	// walk backward from selectedEntry to find how many entries fit.
 	if m.offset > selectedEntry {
+		h := 0
 		m.offset = selectedEntry
+		for i := selectedEntry; i >= 0; i-- {
+			entryH := entries[i].height
+			if i < selectedEntry {
+				entryH++ // gap between entries
+			}
+			if h+entryH > msgAreaHeight {
+				break
+			}
+			h += entryH
+			m.offset = i
+		}
 	}
 
-	// Adjust offset so selected entry is visible.
-	// Use cached heights (fast integer arithmetic, no string joins).
+	// Adjust offset forward if selected entry is below the viewport.
 	for {
-		if m.offset > selectedEntry {
-			m.offset = selectedEntry
-			break
-		}
 		h := 0
 		for i := m.offset; i <= selectedEntry && i < len(entries); i++ {
 			if i > m.offset {
