@@ -195,7 +195,7 @@ func (m *Model) View(height, width int) string {
 	for i, reply := range m.replies {
 		content := renderThreadMessage(reply, width, m.userNames)
 		if i == m.selected {
-			content = selectedBg.Width(width-2).Padding(0, 1).Render(content)
+			content = applySelection(content, width)
 		}
 		entries = append(entries, renderedEntry{
 			content: content,
@@ -238,6 +238,17 @@ func (m *Model) View(height, width int) string {
 		Render(replyContent)
 
 	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(result)
+}
+
+// applySelection highlights a message by applying the selection background
+// to each line individually, ensuring full-width coverage.
+func applySelection(content string, width int) string {
+	lines := strings.Split(content, "\n")
+	bgStyle := selectedBg.Width(width)
+	for i, line := range lines {
+		lines[i] = bgStyle.Render(line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // renderThreadMessage renders a single message for the thread panel.
