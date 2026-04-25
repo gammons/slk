@@ -17,6 +17,7 @@ import (
 	"github.com/gammons/slack-tui/internal/service"
 	slackclient "github.com/gammons/slack-tui/internal/slack"
 	"github.com/gammons/slack-tui/internal/ui"
+	"github.com/gammons/slack-tui/internal/ui/channelfinder"
 	"github.com/gammons/slack-tui/internal/ui/messages"
 	"github.com/gammons/slack-tui/internal/ui/sidebar"
 	"github.com/gammons/slack-tui/internal/ui/workspace"
@@ -194,6 +195,18 @@ func run() error {
 		}
 
 		app.SetChannels(sidebarItems)
+
+		// Populate channel finder with all channels/DMs
+		var finderItems []channelfinder.Item
+		for _, ch := range sidebarItems {
+			finderItems = append(finderItems, channelfinder.Item{
+				ID:       ch.ID,
+				Name:     ch.Name,
+				Type:     ch.Type,
+				Presence: ch.Presence,
+			})
+		}
+		app.SetChannelFinderItems(finderItems)
 
 		// Load initial messages for first channel
 		if len(sidebarItems) > 0 {
