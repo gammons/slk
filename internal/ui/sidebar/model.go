@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gammons/slack-tui/internal/ui/styles"
+	"github.com/muesli/reflow/truncate"
 )
 
 type ChannelItem struct {
@@ -172,7 +173,7 @@ func (m *Model) View(height, width int) string {
 			maxNameLen = 5
 		}
 		if len(name) > maxNameLen {
-			name = name[:maxNameLen-1] + "…"
+			name = truncate.StringWithTail(name, uint(maxNameLen), "…")
 		}
 
 		label := cursor + prefix + name

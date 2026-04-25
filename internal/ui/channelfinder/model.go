@@ -5,6 +5,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gammons/slack-tui/internal/ui/styles"
+	"github.com/muesli/reflow/truncate"
 )
 
 // ChannelResult is returned when the user selects a channel.
@@ -218,8 +219,8 @@ func (m Model) renderBox(termWidth int) string {
 		prefix := channelPrefix(item)
 		line := prefix + " " + item.Name
 
-		if len(line) > innerWidth {
-			line = line[:innerWidth-1] + "…"
+		if lipgloss.Width(line) > innerWidth {
+			line = truncate.StringWithTail(line, uint(innerWidth), "…")
 		}
 
 		if i == m.selected {
