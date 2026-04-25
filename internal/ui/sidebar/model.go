@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gammons/slack-tui/internal/ui/styles"
 	"github.com/muesli/reflow/truncate"
@@ -22,7 +23,7 @@ type ChannelItem struct {
 type Model struct {
 	items    []ChannelItem
 	selected int
-	offset   int // scroll offset (index into rendered rows)
+	vp       viewport.Model
 	filter   string
 	filtered []int // indices into items that match filter
 }
@@ -39,7 +40,6 @@ func (m *Model) SetItems(items []ChannelItem) {
 	if m.selected >= len(m.filtered) {
 		m.selected = 0
 	}
-	m.offset = 0
 }
 
 func (m *Model) SelectedID() string {
@@ -72,7 +72,6 @@ func (m *Model) MoveUp() {
 
 func (m *Model) GoToTop() {
 	m.selected = 0
-	m.offset = 0
 }
 
 func (m *Model) GoToBottom() {
@@ -89,7 +88,6 @@ func (m *Model) Items() []ChannelItem {
 func (m *Model) SetFilter(filter string) {
 	m.filter = filter
 	m.selected = 0
-	m.offset = 0
 	m.rebuildFilter()
 }
 
@@ -227,64 +225,46 @@ func (m *Model) View(height, width int) string {
 		allRows = append(allRows, group.rows...)
 	}
 
-	// Find the row index of the selected item
-	selectedRow := 0
-	for i, r := range allRows {
+	// Build full content from all rows
+	var allLines []string
+	selectedStartLine := 0
+	selectedEndLine := 0
+	currentLine := 0
+
+	for _, r := range allRows {
 		if r.filterIdx == m.selected {
-			selectedRow = i
-			break
+			selectedStartLine = currentLine
 		}
+		h := lipgloss.Height(r.content)
+		if r.filterIdx == m.selected {
+			selectedEndLine = currentLine + h
+		}
+		allLines = append(allLines, r.content)
+		currentLine += h
 	}
 
-	// Adjust offset to keep selected row visible.
-	// Use actual measured heights since some rows may wrap.
-	if m.offset > selectedRow {
-		m.offset = selectedRow
-	}
-	if m.offset < 0 {
-		m.offset = 0
-	}
+	fullContent := strings.Join(allLines, "\n")
 
-	// Ensure selected row is visible by measuring actual content
-	for {
-		if m.offset > selectedRow {
-			m.offset = selectedRow
-			break
-		}
-		var testLines []string
-		for i := m.offset; i <= selectedRow && i < len(allRows); i++ {
-			testLines = append(testLines, allRows[i].content)
-		}
-		if lipgloss.Height(strings.Join(testLines, "\n")) <= height {
-			break
-		}
-		m.offset++
-	}
+	// Configure viewport
+	m.vp.Width = width
+	m.vp.Height = height
+	m.vp.KeyMap = viewport.KeyMap{}
+	m.vp.SetContent(fullContent)
 
-	// Render from offset until we fill the viewport
-	var visibleLines []string
-	for i := m.offset; i < len(allRows); i++ {
-		candidate := make([]string, len(visibleLines), len(visibleLines)+1)
-		copy(candidate, visibleLines)
-		candidate = append(candidate, allRows[i].content)
-		h := lipgloss.Height(strings.Join(candidate, "\n"))
-		if h > height && len(visibleLines) > 0 {
-			break
-		}
-		visibleLines = candidate
-		if h >= height {
-			break
-		}
+	// Scroll to keep selected row visible
+	if selectedEndLine > m.vp.YOffset+m.vp.Height {
+		m.vp.SetYOffset(selectedEndLine - m.vp.Height)
 	}
-
-	content := strings.Join(visibleLines, "\n")
+	if selectedStartLine < m.vp.YOffset {
+		m.vp.SetYOffset(selectedStartLine)
+	}
 
 	return lipgloss.NewStyle().
 		Width(width).
 		Height(height).
 		MaxHeight(height).
 		Background(styles.Surface).
-		Render(content)
+		Render(m.vp.View())
 }
 
 func (m Model) Width() int {
