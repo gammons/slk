@@ -2,11 +2,11 @@ package messages
 
 import (
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gammons/slack-tui/internal/ui/styles"
 	"github.com/muesli/reflow/padding"
@@ -52,7 +52,6 @@ type viewEntry struct {
 type Model struct {
 	messages     []MessageItem
 	selected     int
-	offset       int // index into entries[] of first visible entry
 	channelName  string
 	channelTopic string
 	loading      bool
@@ -63,6 +62,9 @@ type Model struct {
 	cache       []viewEntry
 	cacheWidth  int
 	cacheMsgLen int
+
+	// Viewport for scrolling
+	vp viewport.Model
 }
 
 func New(msgs []MessageItem, channelName string) Model {
@@ -87,15 +89,10 @@ func (m *Model) SetMessages(msgs []MessageItem) {
 	m.cache = nil // invalidate cache
 	if len(msgs) == 0 {
 		m.selected = 0
-		m.offset = 0
 		return
 	}
 	// Start at the bottom -- newest messages visible
 	m.selected = len(msgs) - 1
-	// Set offset high so View() will anchor from the bottom.
-	// Use MaxInt to guarantee it's beyond any cache entry index
-	// (cache includes date separators so it's larger than len(msgs)).
-	m.offset = math.MaxInt32
 }
 
 func (m *Model) AppendMessage(msg MessageItem) {
@@ -105,7 +102,6 @@ func (m *Model) AppendMessage(msg MessageItem) {
 	if wasAtBottom || len(m.messages) == 1 {
 		// Auto-scroll to the new message
 		m.selected = len(m.messages) - 1
-		m.offset = math.MaxInt32
 	}
 }
 
@@ -138,7 +134,6 @@ func (m *Model) MoveDown() {
 
 func (m *Model) GoToTop() {
 	m.selected = 0
-	m.offset = 0
 }
 
 func (m *Model) GoToBottom() {
@@ -344,124 +339,71 @@ func (m *Model) View(height, width int) string {
 
 	entries := m.cache
 
-	// Find the entry index for the selected message
-	selectedEntry := 0
-	for i, e := range entries {
+	// Build the full content string, tracking line offsets per entry
+	var allRows []string
+	selectedStartLine := 0
+	selectedEndLine := 0
+	currentLine := 0
+
+	for _, e := range entries {
+		content := e.content
 		if e.msgIdx == m.selected {
-			selectedEntry = i
-			break
+			selectedStartLine = currentLine
+			content = applySelection(content, width)
 		}
+		h := lipgloss.Height(content)
+		if e.msgIdx == m.selected {
+			selectedEndLine = currentLine + h
+		}
+		allRows = append(allRows, content)
+		currentLine += h
 	}
 
-	// Build viewport anchored from the selected entry.
-	// Start with the selected entry, then add entries above until the viewport is full.
-	// This guarantees the selected (newest) message is always visible.
+	fullContent := strings.Join(allRows, "\n")
 
-	// Reserve 1 row for "more above" indicator if there are entries before selectedEntry
-	scrollIndicatorHeight := 0
-	if selectedEntry > 0 {
-		scrollIndicatorHeight = 1
+	// Configure viewport
+	m.vp.Width = width
+	m.vp.Height = msgAreaHeight
+	m.vp.KeyMap = viewport.KeyMap{}
+	m.vp.SetContent(fullContent)
+
+	// Scroll to keep selected item visible
+	if selectedEndLine > m.vp.YOffset+m.vp.Height {
+		m.vp.SetYOffset(selectedEndLine - m.vp.Height)
 	}
-	availableHeight := msgAreaHeight - scrollIndicatorHeight
-
-	// First, build the list of entries to show, bottom-up from selectedEntry
-	var bottomUpEntries []int
-	bottomUpEntries = append(bottomUpEntries, selectedEntry)
-
-	// Measure height starting from selected entry
-	selectedContent := entries[selectedEntry].content
-	if entries[selectedEntry].msgIdx == m.selected {
-		selectedContent = applySelection(selectedContent, width)
-	}
-	usedHeight := lipgloss.Height(selectedContent)
-
-	// Add entries above until we fill the viewport
-	for i := selectedEntry - 1; i >= 0; i-- {
-		entryContent := entries[i].content
-		if entries[i].msgIdx == m.selected {
-			entryContent = applySelection(entryContent, width)
-		}
-
-		testRows := []string{entryContent}
-		for _, idx := range bottomUpEntries {
-			c := entries[idx].content
-			if entries[idx].msgIdx == m.selected {
-				c = applySelection(c, width)
-			}
-			testRows = append(testRows, c)
-		}
-		testHeight := lipgloss.Height(strings.Join(testRows, "\n"))
-
-		if testHeight > availableHeight {
-			break
-		}
-		bottomUpEntries = append([]int{i}, bottomUpEntries...)
-		usedHeight = testHeight
+	if selectedStartLine < m.vp.YOffset {
+		m.vp.SetYOffset(selectedStartLine)
 	}
 
-	m.offset = bottomUpEntries[0]
-
-	// Build visible rows in order
-	var visibleRows []string
-	visibleCount := 0
-	for _, idx := range bottomUpEntries {
-		entryContent := entries[idx].content
-		if entries[idx].msgIdx == m.selected {
-			entryContent = applySelection(entryContent, width)
-		}
-		visibleRows = append(visibleRows, entryContent)
-		visibleCount++
-	}
-
-	// If there's space below selectedEntry, add entries after it too
-	for i := selectedEntry + 1; i < len(entries); i++ {
-		entryContent := entries[i].content
-		if entries[i].msgIdx == m.selected {
-			entryContent = applySelection(entryContent, width)
-		}
-		candidate := append(append([]string{}, visibleRows...), entryContent)
-		testHeight := lipgloss.Height(strings.Join(candidate, "\n"))
-		if testHeight > availableHeight {
-			break
-		}
-		visibleRows = append(visibleRows, entryContent)
-		visibleCount++
-	}
-	_ = usedHeight
-
-	// Scroll/loading indicators
-	if m.offset > 0 {
-		indicator := fmt.Sprintf("  -- %d more above --", m.offset)
+	// Scroll indicators
+	var scrollUp, scrollDown string
+	if m.vp.YOffset > 0 {
+		indicator := "  -- more above --"
 		if m.loading {
 			indicator = "  Loading older messages..."
 		}
-		scrollUp := lipgloss.NewStyle().Foreground(styles.TextMuted).Render(indicator)
-		visibleRows = append([]string{scrollUp}, visibleRows...)
+		scrollUp = lipgloss.NewStyle().Foreground(styles.TextMuted).Render(indicator)
 	} else if m.loading {
-		loadingRow := lipgloss.NewStyle().Foreground(styles.TextMuted).Render("  Loading older messages...")
-		visibleRows = append([]string{loadingRow}, visibleRows...)
+		scrollUp = lipgloss.NewStyle().Foreground(styles.TextMuted).Render("  Loading older messages...")
 	}
 
-	lastVisibleEntry := m.offset + visibleCount
-	remaining := 0
-	for i := lastVisibleEntry; i < len(entries); i++ {
-		if entries[i].msgIdx >= 0 {
-			remaining++
-		}
-	}
-	if remaining > 0 {
-		scrollDown := lipgloss.NewStyle().Foreground(styles.TextMuted).Render(
-			fmt.Sprintf("  -- %d more below --", remaining))
-		visibleRows = append(visibleRows, scrollDown)
+	if m.vp.YOffset+m.vp.Height < m.vp.TotalLineCount() {
+		scrollDown = lipgloss.NewStyle().Foreground(styles.TextMuted).Render("  -- more below --")
 	}
 
-	msgContent := strings.Join(visibleRows, "\n")
+	vpView := m.vp.View()
+	if scrollUp != "" {
+		vpView = scrollUp + "\n" + vpView
+	}
+	if scrollDown != "" {
+		vpView = vpView + "\n" + scrollDown
+	}
 
 	return header + "\n" + separator + "\n" + lipgloss.NewStyle().
 		Width(width).
 		Height(msgAreaHeight).
 		MaxHeight(msgAreaHeight).
-		Render(msgContent)
+		Render(vpView)
 }
 
 func dateFromTS(ts string) string {
