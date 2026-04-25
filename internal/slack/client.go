@@ -20,7 +20,7 @@ type SlackAPI interface {
 	GetConversations(params *slack.GetConversationsParameters) ([]slack.Channel, string, error)
 	GetConversationHistory(params *slack.GetConversationHistoryParameters) (*slack.GetConversationHistoryResponse, error)
 	GetConversationReplies(params *slack.GetConversationRepliesParameters) ([]slack.Message, bool, string, error)
-	GetUsersContext(ctx context.Context) ([]slack.User, error)
+	GetUsersContext(ctx context.Context, options ...slack.GetUsersOption) ([]slack.User, error)
 	PostMessage(channelID string, options ...slack.MsgOption) (string, string, error)
 	UpdateMessage(channelID, timestamp string, options ...slack.MsgOption) (string, string, string, error)
 	DeleteMessage(channelID, timestamp string) (string, string, error)
@@ -33,7 +33,7 @@ type SlackAPI interface {
 // and a simplified Web API surface for the service layer.
 // Uses browser cookie auth (xoxc token + d cookie).
 type Client struct {
-	api    *slack.Client
+	api    SlackAPI
 	wsConn *websocket.Conn
 	teamID string
 	userID string
@@ -247,6 +247,31 @@ func (c *Client) SendReply(ctx context.Context, channelID, threadTS, text string
 		return "", fmt.Errorf("sending reply: %w", err)
 	}
 	return ts, nil
+}
+
+// GetReplies retrieves all replies in a thread.
+// The first message in the returned slice is the parent message.
+func (c *Client) GetReplies(ctx context.Context, channelID, threadTS string) ([]slack.Message, error) {
+	var allMessages []slack.Message
+	cursor := ""
+
+	for {
+		msgs, hasMore, nextCursor, err := c.api.GetConversationReplies(&slack.GetConversationRepliesParameters{
+			ChannelID: channelID,
+			Timestamp: threadTS,
+			Cursor:    cursor,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("getting thread replies: %w", err)
+		}
+		allMessages = append(allMessages, msgs...)
+		if !hasMore || nextCursor == "" {
+			break
+		}
+		cursor = nextCursor
+	}
+
+	return allMessages, nil
 }
 
 // EditMessage updates an existing message's text.
