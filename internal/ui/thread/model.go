@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/padding"
 	"github.com/muesli/reflow/wordwrap"
 
 	"github.com/gammons/slack-tui/internal/ui/messages"
@@ -242,20 +243,14 @@ func (m *Model) View(height, width int) string {
 	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(result)
 }
 
-// applySelection highlights a message by applying the selection background
-// to each line individually, padding each to the full width with spaces
-// so the background extends edge-to-edge.
+// applySelection highlights a message by padding each line to full width
+// and applying the selection background color.
 func applySelection(content string, width int) string {
-	lines := strings.Split(content, "\n")
+	padded := padding.String(content, uint(width))
+	lines := strings.Split(padded, "\n")
 	bg := selectedBg
 	for i, line := range lines {
-		// lipgloss.Width measures visible width, ignoring ANSI escape codes
-		visWidth := lipgloss.Width(line)
-		pad := width - visWidth
-		if pad < 0 {
-			pad = 0
-		}
-		lines[i] = bg.Render(line + strings.Repeat(" ", pad))
+		lines[i] = bg.Render(line)
 	}
 	return strings.Join(lines, "\n")
 }

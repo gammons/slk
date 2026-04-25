@@ -9,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gammons/slack-tui/internal/ui/styles"
+	"github.com/muesli/reflow/padding"
 	"github.com/muesli/reflow/wordwrap"
 )
 
@@ -298,8 +299,13 @@ func placeAvatarBeside(avatar, content string) string {
 
 // applySelection wraps a rendered message with selection highlight.
 func applySelection(content string, width int) string {
-	// Re-render the username line with underline
-	return selectedBg.Width(width-2).Padding(0, 1).Render(content)
+	padded := padding.String(content, uint(width))
+	lines := strings.Split(padded, "\n")
+	bg := selectedBg
+	for i, line := range lines {
+		lines[i] = bg.Render(line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m *Model) View(height, width int) string {
