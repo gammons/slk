@@ -27,6 +27,7 @@ Last updated: 2026-04-25
 - [x] Status bar showing current mode, channel, workspace
 - [x] Bordered panels with focus highlighting (blue = focused, gray = unfocused)
 - [x] Lipgloss styling throughout with dark theme
+- [x] Ctrl+t/Ctrl+p fuzzy channel finder overlay
 
 ### Messages
 - [x] Fetch and display channel messages
@@ -60,7 +61,6 @@ Last updated: 2026-04-25
 ## Not Yet Implemented
 
 ### High Priority (next iteration)
-- [ ] **Ctrl+t/Ctrl+p fuzzy channel finder** -- floating overlay for quick channel switching
 - [ ] **Thread panel** -- side panel for viewing and replying to threads (spec'd in design, not built)
 
 ### Medium Priority
