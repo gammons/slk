@@ -2,6 +2,7 @@ package messages
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -89,8 +90,10 @@ func (m *Model) SetMessages(msgs []MessageItem) {
 	}
 	// Start at the bottom -- newest messages visible
 	m.selected = len(msgs) - 1
-	// Set offset high so View() will anchor from the bottom
-	m.offset = len(msgs) // will be clamped in View()
+	// Set offset high so View() will anchor from the bottom.
+	// Use MaxInt to guarantee it's beyond any cache entry index
+	// (cache includes date separators so it's larger than len(msgs)).
+	m.offset = math.MaxInt32
 }
 
 func (m *Model) AppendMessage(msg MessageItem) {
@@ -100,7 +103,7 @@ func (m *Model) AppendMessage(msg MessageItem) {
 	if wasAtBottom || len(m.messages) == 1 {
 		// Auto-scroll to the new message
 		m.selected = len(m.messages) - 1
-		m.offset = len(m.messages) // will be clamped in View()
+		m.offset = math.MaxInt32
 	}
 }
 
