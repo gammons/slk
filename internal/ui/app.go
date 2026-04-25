@@ -45,6 +45,25 @@ type (
 		ChannelID string
 		Text      string
 	}
+	ThreadOpenedMsg struct {
+		ChannelID string
+		ThreadTS  string
+		ParentMsg messages.MessageItem
+	}
+	ThreadRepliesLoadedMsg struct {
+		ThreadTS string
+		Replies  []messages.MessageItem
+	}
+	SendThreadReplyMsg struct {
+		ChannelID string
+		ThreadTS  string
+		Text      string
+	}
+	ThreadReplySentMsg struct {
+		ChannelID string
+		ThreadTS  string
+		Message   messages.MessageItem
+	}
 )
 
 // ChannelFetchFunc is called when the user selects a channel.
@@ -61,6 +80,12 @@ type MessageSentMsg struct {
 	ChannelID string
 	Message   messages.MessageItem
 }
+
+// ThreadFetchFunc is called when the user opens a thread.
+type ThreadFetchFunc func(channelID, threadTS string) tea.Msg
+
+// ThreadReplySendFunc is called when the user sends a thread reply.
+type ThreadReplySendFunc func(channelID, threadTS, text string) tea.Msg
 
 type App struct {
 	// Sub-models
