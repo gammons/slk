@@ -2,6 +2,7 @@ package slackclient
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/slack-go/slack"
@@ -18,7 +19,10 @@ func TestNewClient(t *testing.T) {
 }
 
 // mockSlackAPI implements SlackAPI for testing.
-type mockSlackAPI struct{}
+// Function fields allow tests to override default behavior.
+type mockSlackAPI struct {
+	getConversationRepliesFn func(params *slack.GetConversationRepliesParameters) ([]slack.Message, bool, string, error)
+}
 
 func (m *mockSlackAPI) GetConversations(params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
 	return nil, "", nil
@@ -29,6 +33,9 @@ func (m *mockSlackAPI) GetConversationHistory(params *slack.GetConversationHisto
 }
 
 func (m *mockSlackAPI) GetConversationReplies(params *slack.GetConversationRepliesParameters) ([]slack.Message, bool, string, error) {
+	if m.getConversationRepliesFn != nil {
+		return m.getConversationRepliesFn(params)
+	}
 	return []slack.Message{
 		{Msg: slack.Msg{Timestamp: "1700000001.000000", Text: "parent msg", User: "U1"}},
 		{Msg: slack.Msg{Timestamp: "1700000002.000000", Text: "reply 1", User: "U2"}},
@@ -79,5 +86,74 @@ func TestGetReplies(t *testing.T) {
 	}
 	if msgs[1].Text != "reply 1" {
 		t.Errorf("expected reply 1, got %s", msgs[1].Text)
+	}
+}
+
+func TestGetReplies_Pagination(t *testing.T) {
+	callCount := 0
+	mock := &mockSlackAPI{
+		getConversationRepliesFn: func(params *slack.GetConversationRepliesParameters) ([]slack.Message, bool, string, error) {
+			callCount++
+			switch callCount {
+			case 1:
+				if params.Cursor != "" {
+					t.Errorf("expected empty cursor on first call, got %q", params.Cursor)
+				}
+				return []slack.Message{
+					{Msg: slack.Msg{Timestamp: "1700000001.000000", Text: "parent msg", User: "U1"}},
+					{Msg: slack.Msg{Timestamp: "1700000002.000000", Text: "reply 1", User: "U2"}},
+				}, true, "cursor_page2", nil
+			case 2:
+				if params.Cursor != "cursor_page2" {
+					t.Errorf("expected cursor_page2 on second call, got %q", params.Cursor)
+				}
+				return []slack.Message{
+					{Msg: slack.Msg{Timestamp: "1700000003.000000", Text: "reply 2", User: "U3"}},
+				}, false, "", nil
+			default:
+				t.Fatalf("unexpected call #%d to GetConversationReplies", callCount)
+				return nil, false, "", nil
+			}
+		},
+	}
+	client := &Client{api: mock}
+
+	msgs, err := client.GetReplies(context.Background(), "C123", "1700000001.000000")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if callCount != 2 {
+		t.Fatalf("expected 2 API calls, got %d", callCount)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages across 2 pages, got %d", len(msgs))
+	}
+	expectedTexts := []string{"parent msg", "reply 1", "reply 2"}
+	for i, want := range expectedTexts {
+		if msgs[i].Text != want {
+			t.Errorf("msgs[%d].Text = %q, want %q", i, msgs[i].Text, want)
+		}
+	}
+}
+
+func TestGetReplies_Error(t *testing.T) {
+	apiErr := errors.New("slack API unavailable")
+	mock := &mockSlackAPI{
+		getConversationRepliesFn: func(params *slack.GetConversationRepliesParameters) ([]slack.Message, bool, string, error) {
+			return nil, false, "", apiErr
+		},
+	}
+	client := &Client{api: mock}
+
+	_, err := client.GetReplies(context.Background(), "C123", "1700000001.000000")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, apiErr) {
+		t.Errorf("expected wrapped apiErr, got: %v", err)
+	}
+	expectedMsg := "getting thread replies: slack API unavailable"
+	if err.Error() != expectedMsg {
+		t.Errorf("error message = %q, want %q", err.Error(), expectedMsg)
 	}
 }
