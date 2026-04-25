@@ -507,8 +507,9 @@ func (a *App) View() string {
 
 	screen := lipgloss.JoinVertical(lipgloss.Left, content, status)
 
+	// Render channel finder overlay on top of existing layout
 	if a.channelFinder.IsVisible() {
-		screen = a.channelFinder.View(a.width, a.height)
+		screen = a.channelFinder.ViewOverlay(a.width, a.height, screen)
 	}
 
 	return screen

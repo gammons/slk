@@ -132,8 +132,64 @@ func (m *Model) filter() {
 	m.filtered = append(prefixMatches, substringMatches...)
 }
 
-// View renders the overlay. termWidth and termHeight are the terminal dimensions.
-func (m Model) View(termWidth, termHeight int) string {
+// View renders just the overlay box.
+func (m Model) View(termWidth int) string {
+	return m.renderBox(termWidth)
+}
+
+// ViewOverlay renders the overlay composited on top of the given background.
+// Replaces entire background lines where the overlay box appears.
+func (m Model) ViewOverlay(termWidth, termHeight int, background string) string {
+	if !m.visible {
+		return background
+	}
+
+	box := m.renderBox(termWidth)
+	if box == "" {
+		return background
+	}
+
+	boxLines := strings.Split(box, "\n")
+	bgLines := strings.Split(background, "\n")
+
+	// Ensure bgLines has enough lines
+	for len(bgLines) < termHeight {
+		bgLines = append(bgLines, "")
+	}
+
+	// Center the box vertically
+	boxHeight := len(boxLines)
+	startRow := (termHeight - boxHeight) / 2
+	if startRow < 0 {
+		startRow = 0
+	}
+
+	// Replace entire background lines with centered box lines
+	boxWidth := lipgloss.Width(box)
+	pad := (termWidth - boxWidth) / 2
+	if pad < 0 {
+		pad = 0
+	}
+	leftPad := strings.Repeat(" ", pad)
+
+	for i, boxLine := range boxLines {
+		row := startRow + i
+		if row >= len(bgLines) {
+			break
+		}
+		// Pad the box line to fill the full width
+		rightPadLen := termWidth - pad - lipgloss.Width(boxLine)
+		rightPad := ""
+		if rightPadLen > 0 {
+			rightPad = strings.Repeat(" ", rightPadLen)
+		}
+		bgLines[row] = leftPad + boxLine + rightPad
+	}
+
+	return strings.Join(bgLines[:termHeight], "\n")
+}
+
+func (m Model) renderBox(termWidth int) string {
 	if !m.visible {
 		return ""
 	}
@@ -155,13 +211,17 @@ func (m Model) View(termWidth, termHeight int) string {
 		Render("Switch Channel")
 
 	// Query input
-	queryDisplay := m.query
-	if queryDisplay == "" {
-		queryDisplay = lipgloss.NewStyle().Foreground(styles.TextMuted).Render("Type to filter...")
+	var input string
+	if m.query == "" {
+		placeholder := lipgloss.NewStyle().Foreground(styles.TextMuted).Render("Type to filter...")
+		input = lipgloss.NewStyle().
+			Foreground(styles.TextPrimary).
+			Render("> █ " + placeholder)
+	} else {
+		input = lipgloss.NewStyle().
+			Foreground(styles.TextPrimary).
+			Render("> " + m.query + "█")
 	}
-	input := lipgloss.NewStyle().
-		Foreground(styles.TextPrimary).
-		Render("> " + queryDisplay + "█")
 
 	// Results (max 10)
 	maxVisible := 10
@@ -224,19 +284,12 @@ func (m Model) View(termWidth, termHeight int) string {
 	content := title + "\n" + input + "\n\n" + strings.Join(resultRows, "\n")
 
 	// Wrap in a bordered box
-	overlay := lipgloss.NewStyle().
+	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(styles.Primary).
 		Padding(1, 1).
 		Width(overlayWidth).
 		Render(content)
-
-	// Center the overlay on screen
-	return lipgloss.Place(termWidth, termHeight,
-		lipgloss.Center, lipgloss.Center,
-		overlay,
-		lipgloss.WithWhitespaceChars(" "),
-	)
 }
 
 // channelPrefix returns the display prefix for a channel type.
