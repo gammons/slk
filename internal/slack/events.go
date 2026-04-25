@@ -2,7 +2,6 @@ package slackclient
 
 import (
 	"encoding/json"
-	"log"
 )
 
 // EventHandler processes real-time events from Slack.
@@ -124,7 +123,7 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 		handler.OnUserTyping(evt.Channel, evt.User)
 
 	case "hello":
-		log.Printf("WebSocket connected to Slack")
+		// Successfully connected
 
 	case "reconnect_url":
 		// Could store for reconnection; ignoring for now
