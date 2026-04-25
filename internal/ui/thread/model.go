@@ -177,7 +177,8 @@ func (m *Model) View(height, width int) string {
 			Height(replyAreaHeight).
 			Foreground(styles.TextMuted).
 			Render("No replies yet")
-		return chrome + "\n" + empty
+		result := chrome + "\n" + empty
+		return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(result)
 	}
 
 	// Render replies with viewport scrolling
@@ -194,7 +195,7 @@ func (m *Model) View(height, width int) string {
 	for i, reply := range m.replies {
 		content := renderThreadMessage(reply, width, m.userNames)
 		if i == m.selected {
-			content = selectedBg.Width(width).Render(content)
+			content = selectedBg.Width(width-2).Padding(0, 1).Render(content)
 		}
 		entries = append(entries, renderedEntry{
 			content: content,
@@ -230,11 +231,13 @@ func (m *Model) View(height, width int) string {
 
 	replyContent := strings.Join(visibleRows, "\n")
 
-	return chrome + "\n" + lipgloss.NewStyle().
+	result := chrome + "\n" + lipgloss.NewStyle().
 		Width(width).
 		Height(replyAreaHeight).
 		MaxHeight(replyAreaHeight).
 		Render(replyContent)
+
+	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(result)
 }
 
 // renderThreadMessage renders a single message for the thread panel.

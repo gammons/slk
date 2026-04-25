@@ -207,9 +207,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case MessageSentMsg:
-		if msg.ChannelID == a.activeChannelID {
-			a.messagepane.AppendMessage(msg.Message)
-		}
+		// Message will arrive via RTM WebSocket event (NewMessageMsg).
+		// Don't append here to avoid doubling.
 
 	case ThreadRepliesLoadedMsg:
 		if a.threadVisible && msg.ThreadTS == a.threadPanel.ThreadTS() {
@@ -226,9 +225,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case ThreadReplySentMsg:
-		if a.threadVisible && msg.ThreadTS == a.threadPanel.ThreadTS() {
-			a.threadPanel.AddReply(msg.Message)
-		}
+		// Reply will arrive via RTM WebSocket event (NewMessageMsg).
+		// Don't append here to avoid doubling.
 	}
 
 	return a, tea.Batch(cmds...)
@@ -266,6 +264,9 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, a.keys.Escape):
 		a.SetMode(ModeNormal)
 		a.compose.Blur()
+		if a.threadVisible {
+			a.CloseThread()
+		}
 
 	case key.Matches(msg, a.keys.Tab):
 		a.FocusNext()
