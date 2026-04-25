@@ -95,31 +95,32 @@ slack-tui/
 │   ├── cache/               # SQLite cache (6 tables, full CRUD)
 │   ├── config/              # TOML config with defaults
 │   ├── service/             # WorkspaceManager, MessageService
-│   ├── slack/               # Slack API client, token storage, event handling
+│   ├── slack/               # Slack API client, token storage, WebSocket events
 │   └── ui/
 │       ├── app.go           # Root bubbletea model, layout, focus management
-│       ├── mode.go          # Vim mode enum
+│       ├── mode.go          # Vim mode enum (NORMAL, INSERT, COMMAND, FIND)
 │       ├── keys.go          # Key binding definitions
 │       ├── styles/          # Lipgloss style definitions
 │       ├── workspace/       # Workspace rail component
 │       ├── sidebar/         # Channel sidebar with sections + scrolling
 │       ├── messages/        # Message pane with viewport + markdown rendering
+│       ├── channelfinder/   # Ctrl+t/Ctrl+p fuzzy channel finder overlay
 │       ├── compose/         # Message input box
 │       └── statusbar/       # Bottom status bar
 ├── docs/
 │   ├── STATUS.md            # This file
 │   └── superpowers/
-│       ├── specs/           # Design specification
-│       └── plans/           # Implementation plan
+│       ├── specs/           # Design specifications
+│       └── plans/           # Implementation plans
 ├── Makefile
 └── go.mod
 ```
 
 ## Stats
 
-- 22 source files, 17 test files
-- ~4,700 lines of Go
-- 10 packages, all tests passing
+- 25 source files, 19 test files
+- ~5,500 lines of Go
+- 12 packages, all tests passing
 - Single binary, no runtime dependencies beyond the terminal
 
 ## Key Design Decisions
@@ -127,5 +128,6 @@ slack-tui/
 1. **Service-oriented layers** -- UI, Service, Client, Data layers with clear interfaces
 2. **SQLite as cache, not source of truth** -- Slack API is authoritative, SQLite enables fast startup
 3. **Render caching** -- messages rendered once, cached until content changes
-4. **Actual height measurement** -- lipgloss height summing is unreliable; viewport uses `lipgloss.Height(strings.Join(...))` on actual content
-5. **Config-based channel sections** -- undocumented Slack API for sections requires xoxc tokens; config-based approach is reliable and user-controllable
+4. **Bottom-up viewport** -- message pane builds viewport from selected entry upward, guaranteeing newest messages are always visible
+5. **Direct WebSocket** -- connects to Slack's internal browser WebSocket protocol (not RTM or Socket Mode) for real-time events with xoxc tokens
+6. **Config-based channel sections** -- undocumented Slack API for sections requires xoxc tokens; config-based approach is reliable and user-controllable
