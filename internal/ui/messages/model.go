@@ -346,86 +346,74 @@ func (m *Model) View(height, width int) string {
 		}
 	}
 
-	// Clamp offset: ensure selected entry is visible, anchored from bottom.
-	if m.offset < 0 {
-		m.offset = 0
-	}
+	// Build viewport anchored from the selected entry.
+	// Start with the selected entry, then add entries above until the viewport is full.
+	// This guarantees the selected (newest) message is always visible.
 
-	// If offset is beyond selectedEntry, anchor from bottom:
-	// walk backward from selectedEntry to find how many entries fit.
-	if m.offset > selectedEntry {
-		h := 0
-		m.offset = selectedEntry
-		for i := selectedEntry; i >= 0; i-- {
-			entryH := entries[i].height
-			if i < selectedEntry {
-				entryH++ // gap between entries
-			}
-			if h+entryH > msgAreaHeight {
-				break
-			}
-			h += entryH
-			m.offset = i
-		}
-	}
+	// First, build the list of entries to show, bottom-up from selectedEntry
+	var bottomUpEntries []int
+	bottomUpEntries = append(bottomUpEntries, selectedEntry)
 
-	// Adjust offset forward if selected entry is below the viewport.
-	for {
-		h := 0
-		for i := m.offset; i <= selectedEntry && i < len(entries); i++ {
-			if i > m.offset {
-				h++ // gap between entries
-			}
-			h += entries[i].height
+	// Measure height starting from selected entry
+	selectedContent := entries[selectedEntry].content
+	if entries[selectedEntry].msgIdx == m.selected {
+		selectedContent = applySelection(selectedContent, width)
+	}
+	usedHeight := lipgloss.Height(selectedContent)
+
+	// Add entries above until we fill the viewport
+	for i := selectedEntry - 1; i >= 0; i-- {
+		entryContent := entries[i].content
+		if entries[i].msgIdx == m.selected {
+			entryContent = applySelection(entryContent, width)
 		}
-		if h <= msgAreaHeight {
+
+		testRows := []string{entryContent}
+		for _, idx := range bottomUpEntries {
+			c := entries[idx].content
+			if entries[idx].msgIdx == m.selected {
+				c = applySelection(c, width)
+			}
+			testRows = append(testRows, c)
+		}
+		testHeight := lipgloss.Height(strings.Join(testRows, "\n"))
+
+		if testHeight > msgAreaHeight {
 			break
 		}
-		m.offset++
+		bottomUpEntries = append([]int{i}, bottomUpEntries...)
+		usedHeight = testHeight
 	}
 
-	// Build visible rows from offset. Measure actual joined height to determine
-	// when we've filled the viewport (cached individual heights don't sum accurately).
-	buildViewport := func(startOffset int) ([]string, int) {
-		var rows []string
-		var count int
-		for i := startOffset; i < len(entries); i++ {
-			entryContent := entries[i].content
-			if entries[i].msgIdx == m.selected {
-				entryContent = applySelection(entryContent, width)
-			}
+	m.offset = bottomUpEntries[0]
 
-			candidate := make([]string, len(rows), len(rows)+1)
-			copy(candidate, rows)
-			candidate = append(candidate, entryContent)
-			actualHeight := lipgloss.Height(strings.Join(candidate, "\n"))
-
-			if actualHeight > msgAreaHeight && len(rows) > 0 {
-				rows = append(rows, entryContent)
-				count++
-				break
-			}
-			rows = candidate
-			count++
-			if actualHeight >= msgAreaHeight {
-				break
-			}
+	// Build visible rows in order
+	var visibleRows []string
+	visibleCount := 0
+	for _, idx := range bottomUpEntries {
+		entryContent := entries[idx].content
+		if entries[idx].msgIdx == m.selected {
+			entryContent = applySelection(entryContent, width)
 		}
-		return rows, count
+		visibleRows = append(visibleRows, entryContent)
+		visibleCount++
 	}
 
-	visibleRows, visibleCount := buildViewport(m.offset)
-
-	// If viewport isn't full and we can pull in earlier entries, do so.
-	// This handles the case where cached heights overcounted and offset is too high.
-	if m.offset > 0 {
-		currentHeight := lipgloss.Height(strings.Join(visibleRows, "\n"))
-		for currentHeight < msgAreaHeight && m.offset > 0 {
-			m.offset--
-			visibleRows, visibleCount = buildViewport(m.offset)
-			currentHeight = lipgloss.Height(strings.Join(visibleRows, "\n"))
+	// If there's space below selectedEntry, add entries after it too
+	for i := selectedEntry + 1; i < len(entries); i++ {
+		entryContent := entries[i].content
+		if entries[i].msgIdx == m.selected {
+			entryContent = applySelection(entryContent, width)
 		}
+		candidate := append(append([]string{}, visibleRows...), entryContent)
+		testHeight := lipgloss.Height(strings.Join(candidate, "\n"))
+		if testHeight > msgAreaHeight {
+			break
+		}
+		visibleRows = append(visibleRows, entryContent)
+		visibleCount++
 	}
+	_ = usedHeight
 
 	// Scroll/loading indicators
 	if m.offset > 0 {
