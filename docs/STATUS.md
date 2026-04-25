@@ -1,6 +1,6 @@
 # slack-tui Implementation Status
 
-Last updated: 2026-04-24
+Last updated: 2026-04-25
 
 ## What's Working
 
@@ -8,12 +8,12 @@ Last updated: 2026-04-24
 - [x] Project scaffolding (Go modules, Makefile, build)
 - [x] TOML configuration with defaults and XDG paths
 - [x] SQLite cache layer (messages, channels, users, workspaces)
-- [x] Slack API client (Socket Mode + Web API via slack-go)
+- [x] Slack API client (Web API via slack-go)
 - [x] OAuth token storage (JSON files, per-workspace)
 - [x] Interactive onboarding (`--add-workspace` with huh forms)
 - [x] Multi-workspace support in data layer (single workspace connected at runtime)
 - [x] Browser cookie auth (xoxc/xoxd) -- connect using browser session tokens, no Slack App needed
-- [x] RTM (Real-Time Messaging) client -- replaces Socket Mode for real-time connectivity
+- [x] Real-time WebSocket events -- direct connection using Slack's browser protocol (not RTM or Socket Mode)
 
 ### UI
 - [x] Three-panel layout: workspace rail, channel sidebar, message pane
@@ -36,10 +36,11 @@ Last updated: 2026-04-24
 - [x] Slack markdown rendering (bold, italic, strikethrough, code, code blocks, blockquotes)
 - [x] Emoji shortcode rendering (:emoji: -> actual emoji)
 - [x] Link rendering (Slack's `<url|label>` format)
-- [x] User and channel mention rendering
+- [x] User and channel mention rendering (resolved to display names)
 - [x] Thread reply count indicators
 - [x] Edited message indicators
 - [x] Message sending via Slack API
+- [x] Real-time incoming messages via WebSocket (auto-scroll, cached to SQLite)
 - [x] Render cache for scroll performance
 
 ### Users & Avatars
@@ -59,8 +60,7 @@ Last updated: 2026-04-24
 ## Not Yet Implemented
 
 ### High Priority (next iteration)
-- [ ] **Real-time event handling** -- Socket Mode connection runs but events aren't wired to the UI yet. New messages from other users don't appear until channel is re-selected.
-- [ ] **Ctrl+t/Ctrl+p fuzzy channel finder** -- the floating overlay for quick channel switching
+- [ ] **Ctrl+t/Ctrl+p fuzzy channel finder** -- floating overlay for quick channel switching
 - [ ] **Thread panel** -- side panel for viewing and replying to threads (spec'd in design, not built)
 
 ### Medium Priority
