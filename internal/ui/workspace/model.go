@@ -81,9 +81,6 @@ func (m Model) View(height int) string {
 		MaxHeight(height).
 		Background(styles.SurfaceDark).
 		Padding(1, 0).
-		BorderStyle(lipgloss.Border{Right: "│"}).
-		BorderRight(true).
-		BorderForeground(styles.Border).
 		Align(lipgloss.Center).
 		Render(content)
 
@@ -91,7 +88,7 @@ func (m Model) View(height int) string {
 }
 
 func (m Model) Width() int {
-	return 7 // 5 content + 1 border + 1 padding
+	return 5 // 5 content, no border
 }
 
 func WorkspaceInitials(name string) string {
