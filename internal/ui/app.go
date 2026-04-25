@@ -5,6 +5,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/gammons/slack-tui/internal/ui/channelfinder"
 	"github.com/gammons/slack-tui/internal/ui/compose"
 	"github.com/gammons/slack-tui/internal/ui/messages"
 	"github.com/gammons/slack-tui/internal/ui/sidebar"
@@ -68,6 +69,7 @@ type App struct {
 	messagepane   messages.Model
 	compose       compose.Model
 	statusbar     statusbar.Model
+	channelFinder channelfinder.Model
 
 	// State
 	mode           Mode
@@ -95,6 +97,7 @@ func NewApp() *App {
 		messagepane:    messages.New(nil, ""),
 		compose:        compose.New(""),
 		statusbar:      statusbar.New(),
+		channelFinder:  channelfinder.New(),
 		mode:           ModeNormal,
 		focusedPanel:   PanelSidebar,
 		sidebarVisible: true,
@@ -183,6 +186,8 @@ func (a *App) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return a.handleInsertMode(msg)
 	case ModeCommand:
 		return a.handleCommandMode(msg)
+	case ModeChannelFinder:
+		return a.handleChannelFinderMode(msg)
 	default:
 		return a.handleNormalMode(msg)
 	}
@@ -227,6 +232,10 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 
 	case key.Matches(msg, a.keys.Bottom):
 		a.handleGoToBottom()
+
+	case key.Matches(msg, a.keys.FuzzyFinder) || key.Matches(msg, a.keys.FuzzyFinderAlt):
+		a.channelFinder.Open()
+		a.SetMode(ModeChannelFinder)
 	}
 	return nil
 }
@@ -263,6 +272,39 @@ func (a *App) handleCommandMode(msg tea.KeyMsg) tea.Cmd {
 	if key.Matches(msg, a.keys.Escape) {
 		a.SetMode(ModeNormal)
 	}
+	return nil
+}
+
+func (a *App) handleChannelFinderMode(msg tea.KeyMsg) tea.Cmd {
+	// Map tea.KeyMsg to string for the finder
+	keyStr := msg.String()
+	if msg.Type == tea.KeyEnter {
+		keyStr = "enter"
+	} else if msg.Type == tea.KeyEsc {
+		keyStr = "esc"
+	} else if msg.Type == tea.KeyUp {
+		keyStr = "up"
+	} else if msg.Type == tea.KeyDown {
+		keyStr = "down"
+	} else if msg.Type == tea.KeyBackspace {
+		keyStr = "backspace"
+	}
+
+	result := a.channelFinder.HandleKey(keyStr)
+	if result != nil {
+		a.channelFinder.Close()
+		a.SetMode(ModeNormal)
+		a.sidebar.SelectByID(result.ID)
+		return func() tea.Msg {
+			return ChannelSelectedMsg{ID: result.ID, Name: result.Name}
+		}
+	}
+
+	// Check if finder closed itself (Esc)
+	if !a.channelFinder.IsVisible() {
+		a.SetMode(ModeNormal)
+	}
+
 	return nil
 }
 
@@ -373,6 +415,10 @@ func (a *App) SetMessageSender(fn MessageSendFunc) {
 	a.messageSender = fn
 }
 
+func (a *App) SetChannelFinderItems(items []channelfinder.Item) {
+	a.channelFinder.SetItems(items)
+}
+
 // SetAvatarFunc sets the function used to get rendered avatars for messages.
 func (a *App) SetAvatarFunc(fn messages.AvatarFunc) {
 	a.messagepane.SetAvatarFunc(fn)
@@ -459,5 +505,11 @@ func (a *App) View() string {
 	content := lipgloss.JoinHorizontal(lipgloss.Top, panels...)
 	status := a.statusbar.View(a.width)
 
-	return lipgloss.JoinVertical(lipgloss.Left, content, status)
+	screen := lipgloss.JoinVertical(lipgloss.Left, content, status)
+
+	if a.channelFinder.IsVisible() {
+		screen = a.channelFinder.View(a.width, a.height)
+	}
+
+	return screen
 }
