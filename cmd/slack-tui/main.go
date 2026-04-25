@@ -269,6 +269,41 @@ func run() error {
 				Messages:  msgItems,
 			}
 		})
+
+		// Wire up thread fetcher
+		app.SetThreadFetcher(func(channelID, threadTS string) tea.Msg {
+			replies := fetchThreadReplies(client, channelID, threadTS, db, userNames, tsFormat)
+			return ui.ThreadRepliesLoadedMsg{
+				ThreadTS: threadTS,
+				Replies:  replies,
+			}
+		})
+
+		// Wire up thread reply sender
+		app.SetThreadReplySender(func(channelID, threadTS, text string) tea.Msg {
+			ctx := context.Background()
+			ts, err := client.SendReply(ctx, channelID, threadTS, text)
+			if err != nil {
+				log.Printf("Warning: failed to send thread reply: %v", err)
+				return nil
+			}
+			userName := "you"
+			if resolved, ok := userNames[client.UserID()]; ok {
+				userName = resolved
+			}
+			return ui.ThreadReplySentMsg{
+				ChannelID: channelID,
+				ThreadTS:  threadTS,
+				Message: messages.MessageItem{
+					TS:        ts,
+					UserID:    client.UserID(),
+					UserName:  userName,
+					Text:      text,
+					Timestamp: formatTimestamp(ts, tsFormat),
+					ThreadTS:  threadTS,
+				},
+			}
+		})
 	}
 
 	// Run the TUI
@@ -380,6 +415,50 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 	}
 
 	return msgItems
+}
+
+func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, db *cache.DB, userNames map[string]string, tsFormat string) []messages.MessageItem {
+	ctx := context.Background()
+	history, err := client.GetReplies(ctx, channelID, threadTS)
+	if err != nil {
+		log.Printf("Warning: failed to fetch thread replies: %v", err)
+		return nil
+	}
+
+	var msgItems []messages.MessageItem
+	for _, m := range history {
+		db.UpsertMessage(cache.Message{
+			TS:          m.Timestamp,
+			ChannelID:   channelID,
+			WorkspaceID: client.TeamID(),
+			UserID:      m.User,
+			Text:        m.Text,
+			ThreadTS:    m.ThreadTimestamp,
+			ReplyCount:  m.ReplyCount,
+			CreatedAt:   time.Now().Unix(),
+		})
+
+		userName := m.User
+		if resolved, ok := userNames[m.User]; ok {
+			userName = resolved
+		}
+
+		msgItems = append(msgItems, messages.MessageItem{
+			TS:         m.Timestamp,
+			UserID:     m.User,
+			UserName:   userName,
+			Text:       m.Text,
+			Timestamp:  formatTimestamp(m.Timestamp, tsFormat),
+			ThreadTS:   m.ThreadTimestamp,
+			ReplyCount: m.ReplyCount,
+		})
+	}
+
+	// First message from GetConversationReplies is the parent -- skip it for the replies list
+	if len(msgItems) > 1 {
+		return msgItems[1:]
+	}
+	return nil
 }
 
 func formatTimestamp(ts, format string) string {
