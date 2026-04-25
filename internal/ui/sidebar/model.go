@@ -80,6 +80,11 @@ func (m *Model) GoToBottom() {
 	}
 }
 
+// Items returns all channel items.
+func (m *Model) Items() []ChannelItem {
+	return m.items
+}
+
 func (m *Model) SetFilter(filter string) {
 	m.filter = filter
 	m.selected = 0

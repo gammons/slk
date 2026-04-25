@@ -8,6 +8,7 @@ const (
 	ModeInsert
 	ModeCommand
 	ModeSearch
+	ModeChannelFinder
 )
 
 func (m Mode) String() string {
@@ -20,6 +21,8 @@ func (m Mode) String() string {
 		return "COMMAND"
 	case ModeSearch:
 		return "SEARCH"
+	case ModeChannelFinder:
+		return "FIND"
 	default:
 		return "UNKNOWN"
 	}
