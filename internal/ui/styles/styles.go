@@ -124,6 +124,12 @@ var (
 			BorderForeground(Primary).
 			Padding(0, 1)
 
+	ComposeInsert = lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(Primary).
+			Background(lipgloss.Color("#111128")).
+			Padding(0, 1)
+
 	// Presence indicators
 	PresenceOnline = lipgloss.NewStyle().Foreground(Accent)
 	PresenceAway   = lipgloss.NewStyle().Foreground(TextMuted)

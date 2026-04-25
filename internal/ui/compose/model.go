@@ -61,7 +61,7 @@ func (m Model) View(width int, focused bool) string {
 
 	var style lipgloss.Style
 	if focused {
-		style = styles.ComposeFocused.Width(width - 2)
+		style = styles.ComposeInsert.Width(width - 2)
 	} else {
 		style = styles.ComposeBox.Width(width - 2)
 	}

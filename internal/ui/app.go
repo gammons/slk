@@ -682,7 +682,7 @@ func (a *App) View() string {
 	// Render sidebar
 	if a.sidebarVisible {
 		borderStyle := styles.UnfocusedBorder.Width(sidebarWidth)
-		if a.focusedPanel == PanelSidebar {
+		if a.focusedPanel == PanelSidebar && a.mode != ModeInsert {
 			borderStyle = styles.FocusedBorder.Width(sidebarWidth)
 		}
 		sidebarView := a.sidebar.View(contentHeight-2, sidebarWidth)
@@ -692,7 +692,7 @@ func (a *App) View() string {
 
 	// Render message pane with border
 	msgBorderStyle := styles.UnfocusedBorder.Width(msgWidth)
-	if a.focusedPanel == PanelMessages {
+	if a.focusedPanel == PanelMessages && a.mode != ModeInsert {
 		msgBorderStyle = styles.FocusedBorder.Width(msgWidth)
 	}
 	composeView := a.compose.View(msgWidth-2, a.mode == ModeInsert && a.focusedPanel != PanelThread)
@@ -712,7 +712,7 @@ func (a *App) View() string {
 	// Render thread panel if visible
 	if a.threadVisible && threadWidth > 0 {
 		threadBorderStyle := styles.UnfocusedBorder.Width(threadWidth)
-		if a.focusedPanel == PanelThread {
+		if a.focusedPanel == PanelThread && a.mode != ModeInsert {
 			threadBorderStyle = styles.FocusedBorder.Width(threadWidth)
 		}
 		threadComposeView := a.threadCompose.View(threadWidth-2, a.mode == ModeInsert && a.focusedPanel == PanelThread)
