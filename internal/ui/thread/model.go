@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
 	"github.com/gammons/slack-tui/internal/ui/messages"
 	"github.com/gammons/slack-tui/internal/ui/styles"
 )
@@ -241,12 +242,19 @@ func (m *Model) View(height, width int) string {
 }
 
 // applySelection highlights a message by applying the selection background
-// to each line individually, ensuring full-width coverage.
+// to each line individually, padding each to the full width with spaces
+// so the background extends edge-to-edge.
 func applySelection(content string, width int) string {
 	lines := strings.Split(content, "\n")
-	bgStyle := selectedBg.Width(width)
+	bg := selectedBg
 	for i, line := range lines {
-		lines[i] = bgStyle.Render(line)
+		// lipgloss.Width measures visible width, ignoring ANSI escape codes
+		visWidth := lipgloss.Width(line)
+		pad := width - visWidth
+		if pad < 0 {
+			pad = 0
+		}
+		lines[i] = bg.Render(line + strings.Repeat(" ", pad))
 	}
 	return strings.Join(lines, "\n")
 }
