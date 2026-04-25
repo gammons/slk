@@ -464,6 +464,7 @@ func (a *App) handleEnter() tea.Cmd {
 				threadTS = msg.ThreadTS
 			}
 			a.threadVisible = true
+			a.statusbar.SetInThread(true)
 			a.focusedPanel = PanelThread
 			a.threadPanel.SetThread(msg, nil, a.activeChannelID, threadTS)
 			a.threadCompose.SetChannel("thread")
@@ -553,6 +554,7 @@ func (a *App) ToggleThread() {
 
 func (a *App) CloseThread() {
 	a.threadVisible = false
+	a.statusbar.SetInThread(false)
 	a.threadPanel.Clear()
 	a.threadCompose.Blur()
 	if a.focusedPanel == PanelThread {

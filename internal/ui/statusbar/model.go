@@ -14,6 +14,7 @@ type Model struct {
 	workspace   string
 	unreadCount int
 	connected   bool
+	inThread    bool
 }
 
 func New() Model {
@@ -44,6 +45,10 @@ func (m *Model) SetConnected(connected bool) {
 	m.connected = connected
 }
 
+func (m *Model) SetInThread(inThread bool) {
+	m.inThread = inThread
+}
+
 func (m Model) View(width int) string {
 	// Mode indicator
 	var modeStyle lipgloss.Style
@@ -58,7 +63,11 @@ func (m Model) View(width int) string {
 	modeLabel := modeStyle.Render(fmt.Sprintf(" %s ", m.mode))
 
 	// Channel info
-	channelInfo := styles.StatusBar.Render(fmt.Sprintf(" #%s ", m.channel))
+	channelLabel := fmt.Sprintf(" #%s ", m.channel)
+	if m.inThread {
+		channelLabel = fmt.Sprintf(" #%s > Thread ", m.channel)
+	}
+	channelInfo := styles.StatusBar.Render(channelLabel)
 
 	// Workspace
 	wsInfo := styles.StatusBar.Render(fmt.Sprintf(" %s ", m.workspace))
