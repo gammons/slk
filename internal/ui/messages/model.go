@@ -9,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gammons/slack-tui/internal/ui/styles"
+	"github.com/muesli/reflow/wordwrap"
 )
 
 var dateSeparatorStyle = lipgloss.NewStyle().
@@ -227,7 +228,7 @@ func renderMessagePlain(msg MessageItem, width int, avatarStr string, userNames 
 		contentWidth = 20
 	}
 
-	text := styles.MessageText.Width(contentWidth).Render(RenderSlackMarkdown(msg.Text, userNames))
+	text := styles.MessageText.Render(wordwrap.String(RenderSlackMarkdown(msg.Text, userNames), contentWidth))
 
 	var threadLine string
 	if msg.ReplyCount > 0 {
@@ -308,7 +309,7 @@ func (m *Model) View(height, width int) string {
 		Render(fmt.Sprintf("# %s", m.channelName))
 
 	if m.channelTopic != "" {
-		header += "\n" + styles.Timestamp.Width(width).Render(m.channelTopic)
+		header += "\n" + styles.Timestamp.Render(wordwrap.String(m.channelTopic, width))
 	}
 
 	separator := lipgloss.NewStyle().Width(width).Foreground(styles.Border).Render(strings.Repeat("-", width))

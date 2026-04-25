@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/wordwrap"
 
 	"github.com/gammons/slack-tui/internal/ui/messages"
 	"github.com/gammons/slack-tui/internal/ui/styles"
@@ -268,7 +269,7 @@ func renderThreadMessage(msg messages.MessageItem, width int, userNames map[stri
 		contentWidth = 20
 	}
 
-	text := styles.MessageText.Width(contentWidth).Render(messages.RenderSlackMarkdown(msg.Text, userNames))
+	text := styles.MessageText.Render(wordwrap.String(messages.RenderSlackMarkdown(msg.Text, userNames), contentWidth))
 
 	return line + "\n" + text
 }
