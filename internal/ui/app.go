@@ -11,6 +11,7 @@ import (
 	"github.com/gammons/slack-tui/internal/ui/sidebar"
 	"github.com/gammons/slack-tui/internal/ui/statusbar"
 	"github.com/gammons/slack-tui/internal/ui/styles"
+	"github.com/gammons/slack-tui/internal/ui/thread"
 	"github.com/gammons/slack-tui/internal/ui/workspace"
 )
 
@@ -95,6 +96,8 @@ type App struct {
 	compose       compose.Model
 	statusbar     statusbar.Model
 	channelFinder channelfinder.Model
+	threadPanel   *thread.Model
+	threadCompose compose.Model
 
 	// State
 	mode           Mode
@@ -112,6 +115,8 @@ type App struct {
 	channelFetcher       ChannelFetchFunc
 	olderMessagesFetcher OlderMessagesFetchFunc
 	messageSender        MessageSendFunc
+	threadFetcher        ThreadFetchFunc
+	threadReplySender    ThreadReplySendFunc
 	fetchingOlder        bool
 }
 
@@ -123,6 +128,8 @@ func NewApp() *App {
 		compose:        compose.New(""),
 		statusbar:      statusbar.New(),
 		channelFinder:  channelfinder.New(),
+		threadPanel:    thread.New(),
+		threadCompose:  compose.New("thread"),
 		mode:           ModeNormal,
 		focusedPanel:   PanelSidebar,
 		sidebarVisible: true,
@@ -440,6 +447,16 @@ func (a *App) SetMessageSender(fn MessageSendFunc) {
 	a.messageSender = fn
 }
 
+// SetThreadFetcher sets the callback used to load thread replies.
+func (a *App) SetThreadFetcher(fn ThreadFetchFunc) {
+	a.threadFetcher = fn
+}
+
+// SetThreadReplySender sets the callback used to send thread replies.
+func (a *App) SetThreadReplySender(fn ThreadReplySendFunc) {
+	a.threadReplySender = fn
+}
+
 func (a *App) SetChannelFinderItems(items []channelfinder.Item) {
 	a.channelFinder.SetItems(items)
 }
@@ -447,11 +464,13 @@ func (a *App) SetChannelFinderItems(items []channelfinder.Item) {
 // SetAvatarFunc sets the function used to get rendered avatars for messages.
 func (a *App) SetAvatarFunc(fn messages.AvatarFunc) {
 	a.messagepane.SetAvatarFunc(fn)
+	a.threadPanel.SetAvatarFunc(fn)
 }
 
 // SetUserNames passes the user ID -> display name map to the message pane for mention resolution.
 func (a *App) SetUserNames(names map[string]string) {
 	a.messagepane.SetUserNames(names)
+	a.threadPanel.SetUserNames(names)
 }
 
 // SetInitialChannel sets the active channel and its messages before the TUI starts.
