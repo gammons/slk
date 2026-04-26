@@ -102,6 +102,7 @@ func run() error {
 	var activeClient *slackclient.Client
 	// User ID -> display name lookup
 	userNames := make(map[string]string)
+	lastReadMap := make(map[string]string)
 	tsFormat := cfg.Appearance.TimestampFormat
 
 	// Initialize avatar cache
@@ -204,7 +205,13 @@ func run() error {
 		} else {
 			unreadMap := make(map[string]int)
 			for _, u := range unreadCounts {
-				unreadMap[u.ChannelID] = u.Count
+				if u.HasUnread {
+					unreadMap[u.ChannelID] = u.Count
+				}
+				if u.LastRead != "" {
+					lastReadMap[u.ChannelID] = u.LastRead
+					_ = db.UpdateLastReadTS(u.ChannelID, u.LastRead)
+				}
 			}
 			for i := range sidebarItems {
 				if count, ok := unreadMap[sidebarItems[i].ID]; ok {
@@ -236,6 +243,8 @@ func run() error {
 			}
 		}
 	}
+
+	_ = lastReadMap // used by channel fetcher in future work
 
 	app.SetWorkspaces(wsItems)
 	app.SetUserNames(userNames)

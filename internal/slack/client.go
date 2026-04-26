@@ -251,6 +251,7 @@ type UnreadInfo struct {
 	ChannelID string
 	Count     int
 	HasUnread bool
+	LastRead  string // Slack message timestamp
 }
 
 // GetUnreadCounts fetches unread counts for all channels using Slack's
@@ -283,15 +284,18 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, error) {
 			HasUnreads         bool   `json:"has_unreads"`
 			MentionCount       int    `json:"mention_count"`
 			UnreadCountDisplay int    `json:"unread_count_display,omitempty"`
+			LastRead           string `json:"last_read"`
 		} `json:"channels"`
 		Mpims []struct {
 			ID           string `json:"id"`
 			HasUnreads   bool   `json:"has_unreads"`
 			MentionCount int    `json:"mention_count"`
+			LastRead     string `json:"last_read"`
 		} `json:"mpims"`
 		Ims []struct {
 			ID         string `json:"id"`
 			HasUnreads bool   `json:"has_unreads"`
+			LastRead   string `json:"last_read"`
 		} `json:"ims"`
 	}
 
@@ -305,35 +309,40 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, error) {
 
 	var unreads []UnreadInfo
 	for _, ch := range result.Channels {
-		if ch.HasUnreads {
-			count := ch.MentionCount
-			if count == 0 {
-				count = 1 // has unreads but no mention count
-			}
-			unreads = append(unreads, UnreadInfo{
-				ChannelID: ch.ID,
-				Count:     count,
-				HasUnread: true,
-			})
+		info := UnreadInfo{
+			ChannelID: ch.ID,
+			LastRead:  ch.LastRead,
+			HasUnread: ch.HasUnreads,
 		}
+		if ch.HasUnreads {
+			info.Count = ch.MentionCount
+			if info.Count == 0 {
+				info.Count = 1 // has unreads but no mention count
+			}
+		}
+		unreads = append(unreads, info)
 	}
 	for _, ch := range result.Mpims {
-		if ch.HasUnreads {
-			unreads = append(unreads, UnreadInfo{
-				ChannelID: ch.ID,
-				Count:     max(ch.MentionCount, 1),
-				HasUnread: true,
-			})
+		info := UnreadInfo{
+			ChannelID: ch.ID,
+			LastRead:  ch.LastRead,
+			HasUnread: ch.HasUnreads,
 		}
+		if ch.HasUnreads {
+			info.Count = max(ch.MentionCount, 1)
+		}
+		unreads = append(unreads, info)
 	}
 	for _, ch := range result.Ims {
-		if ch.HasUnreads {
-			unreads = append(unreads, UnreadInfo{
-				ChannelID: ch.ID,
-				Count:     1,
-				HasUnread: true,
-			})
+		info := UnreadInfo{
+			ChannelID: ch.ID,
+			LastRead:  ch.LastRead,
+			HasUnread: ch.HasUnreads,
 		}
+		if ch.HasUnreads {
+			info.Count = 1
+		}
+		unreads = append(unreads, info)
 	}
 
 	return unreads, nil

@@ -93,6 +93,31 @@ func (db *DB) UpdateUnreadCount(channelID string, count int) error {
 	return nil
 }
 
+// UpdateLastReadTS sets the last read timestamp for a channel.
+func (db *DB) UpdateLastReadTS(channelID, ts string) error {
+	_, err := db.conn.Exec(
+		`UPDATE channels SET last_read_ts = ? WHERE id = ?`,
+		ts, channelID,
+	)
+	if err != nil {
+		return fmt.Errorf("updating last_read_ts: %w", err)
+	}
+	return nil
+}
+
+// GetLastReadTS returns the last read timestamp for a channel.
+func (db *DB) GetLastReadTS(channelID string) (string, error) {
+	var ts string
+	err := db.conn.QueryRow(
+		`SELECT last_read_ts FROM channels WHERE id = ?`,
+		channelID,
+	).Scan(&ts)
+	if err != nil {
+		return "", err
+	}
+	return ts, nil
+}
+
 func boolToInt(b bool) int {
 	if b {
 		return 1
