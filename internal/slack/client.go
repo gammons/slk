@@ -35,6 +35,7 @@ type SlackAPI interface {
 type Client struct {
 	api    SlackAPI
 	wsConn *websocket.Conn
+	wsDone chan struct{}
 	teamID string
 	userID string
 	token  string
@@ -94,6 +95,11 @@ func (c *Client) UserID() string {
 	return c.userID
 }
 
+// WsDone returns a channel that is closed when the WebSocket read loop exits.
+func (c *Client) WsDone() <-chan struct{} {
+	return c.wsDone
+}
+
 // Connect authenticates with Slack and populates the team/user IDs.
 func (c *Client) Connect(ctx context.Context) error {
 	resp, err := c.api.AuthTest()
@@ -127,8 +133,10 @@ func (c *Client) StartWebSocket(handler EventHandler) error {
 		return fmt.Errorf("websocket connect failed: %w", err)
 	}
 	c.wsConn = conn
+	c.wsDone = make(chan struct{})
 
 	go func() {
+		defer close(c.wsDone)
 		defer handler.OnDisconnect()
 		for {
 			_, message, err := conn.ReadMessage()
