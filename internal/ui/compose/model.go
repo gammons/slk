@@ -20,7 +20,7 @@ func New(channelName string) Model {
 	ta.MaxHeight = 5
 	ta.SetHeight(1)
 	ta.ShowLineNumbers = false
-	ta.Prompt = "> "
+	ta.Prompt = ""
 	ta.SetWidth(40)
 
 	// Override default textarea styles to remove background colors
@@ -87,7 +87,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 }
 
 func (m Model) View(width int, focused bool) string {
-	m.input.SetWidth(width - 4) // account for padding/border
+	m.input.SetWidth(width - 3) // account for left border + padding
 
 	var style = styles.ComposeBox.Width(width - 2)
 	if focused {

@@ -113,21 +113,28 @@ var (
 				Bold(true).
 				Padding(0, 1)
 
-	// Compose box
+	// Compose box -- thick left border, like opencode's input style
+	thickLeftBorder = lipgloss.Border{
+		Left: "▌",
+	}
+
 	ComposeBox = lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
+			BorderStyle(thickLeftBorder).
+			BorderLeft(true).
 			BorderForeground(Border).
-			Padding(0, 1)
+			PaddingLeft(1)
 
 	ComposeFocused = lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
+			BorderStyle(thickLeftBorder).
+			BorderLeft(true).
 			BorderForeground(Primary).
-			Padding(0, 1)
+			PaddingLeft(1)
 
 	ComposeInsert = lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
+			BorderStyle(thickLeftBorder).
+			BorderLeft(true).
 			BorderForeground(Primary).
-			Padding(0, 1)
+			PaddingLeft(1)
 
 	// Presence indicators
 	PresenceOnline = lipgloss.NewStyle().Foreground(Accent)
