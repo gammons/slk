@@ -10,6 +10,7 @@ import (
 	"github.com/gammons/slack-tui/internal/ui/channelfinder"
 	"github.com/gammons/slack-tui/internal/ui/compose"
 	"github.com/gammons/slack-tui/internal/ui/messages"
+	"github.com/gammons/slack-tui/internal/ui/reactionpicker"
 	"github.com/gammons/slack-tui/internal/ui/sidebar"
 	"github.com/gammons/slack-tui/internal/ui/statusbar"
 	"github.com/gammons/slack-tui/internal/ui/styles"
@@ -70,6 +71,21 @@ type (
 	ConnectionStateMsg struct {
 		State int // 0=connecting, 1=connected, 2=disconnected
 	}
+	ReactionAddedMsg struct {
+		ChannelID string
+		MessageTS string
+		UserID    string
+		Emoji     string
+	}
+	ReactionRemovedMsg struct {
+		ChannelID string
+		MessageTS string
+		UserID    string
+		Emoji     string
+	}
+	ReactionSentMsg struct {
+		Err error
+	}
 )
 
 // ChannelFetchFunc is called when the user selects a channel.
@@ -92,6 +108,11 @@ type ThreadFetchFunc func(channelID, threadTS string) tea.Msg
 
 // ThreadReplySendFunc is called when the user sends a thread reply.
 type ThreadReplySendFunc func(channelID, threadTS, text string) tea.Msg
+
+type ReactionAddFunc func(channelID, messageTS, emoji string) error
+type ReactionRemoveFunc func(channelID, messageTS, emoji string) error
+type FrecentLoadFunc func(limit int) []reactionpicker.EmojiEntry
+type FrecentRecordFunc func(emoji string)
 
 type App struct {
 	// Sub-models
@@ -123,6 +144,14 @@ type App struct {
 	threadFetcher        ThreadFetchFunc
 	threadReplySender    ThreadReplySendFunc
 	fetchingOlder        bool
+
+	// Reaction picker
+	reactionPicker   *reactionpicker.Model
+	reactionAddFn    ReactionAddFunc
+	reactionRemoveFn ReactionRemoveFunc
+	frecentLoadFn    FrecentLoadFunc
+	frecentRecordFn  FrecentRecordFunc
+	currentUserID    string
 }
 
 func NewApp() *App {
@@ -135,6 +164,7 @@ func NewApp() *App {
 		channelFinder:  channelfinder.New(),
 		threadPanel:    thread.New(),
 		threadCompose:  compose.New("thread"),
+		reactionPicker: reactionpicker.New(),
 		mode:           ModeNormal,
 		focusedPanel:   PanelSidebar,
 		sidebarVisible: true,
@@ -253,6 +283,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ConnectionStateMsg:
 		a.statusbar.SetConnectionState(statusbar.ConnectionState(msg.State))
+
+	case ReactionAddedMsg:
+		a.updateReactionOnMessage(msg.ChannelID, msg.MessageTS, msg.Emoji, msg.UserID, false)
+
+	case ReactionRemovedMsg:
+		a.updateReactionOnMessage(msg.ChannelID, msg.MessageTS, msg.Emoji, msg.UserID, true)
+
+	case ReactionSentMsg:
+		// API call completed. If err, optimistic update stays (could add status bar error later).
 	}
 
 	return a, tea.Batch(cmds...)
@@ -272,12 +311,22 @@ func (a *App) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return a.handleCommandMode(msg)
 	case ModeChannelFinder:
 		return a.handleChannelFinderMode(msg)
+	case ModeReactionPicker:
+		return a.handleReactionPickerMode(msg)
 	default:
 		return a.handleNormalMode(msg)
 	}
 }
 
 func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
+	// Reaction-nav sub-state (intercept before normal keys)
+	if a.focusedPanel == PanelMessages && a.messagepane.ReactionNavActive() {
+		return a.handleReactionNav(msg)
+	}
+	if a.focusedPanel == PanelThread && a.threadPanel.ReactionNavActive() {
+		return a.handleThreadReactionNav(msg)
+	}
+
 	switch {
 	case key.Matches(msg, a.keys.InsertMode):
 		a.SetMode(ModeInsert)
@@ -329,6 +378,20 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, a.keys.FuzzyFinder) || key.Matches(msg, a.keys.FuzzyFinderAlt):
 		a.channelFinder.Open()
 		a.SetMode(ModeChannelFinder)
+
+	case key.Matches(msg, a.keys.Reaction):
+		if a.focusedPanel == PanelMessages {
+			return a.openPickerFromMessage()
+		} else if a.focusedPanel == PanelThread {
+			return a.openPickerFromThread()
+		}
+
+	case key.Matches(msg, a.keys.ReactionNav):
+		if a.focusedPanel == PanelMessages {
+			a.messagepane.EnterReactionNav()
+		} else if a.focusedPanel == PanelThread {
+			a.threadPanel.EnterReactionNav()
+		}
 	}
 	return nil
 }
@@ -441,6 +504,220 @@ func (a *App) handleChannelFinderMode(msg tea.KeyMsg) tea.Cmd {
 		a.SetMode(ModeNormal)
 	}
 
+	return nil
+}
+
+func (a *App) handleReactionPickerMode(msg tea.KeyMsg) tea.Cmd {
+	keyStr := msg.String()
+
+	switch msg.Type {
+	case tea.KeyEsc:
+		keyStr = "esc"
+	case tea.KeyEnter:
+		keyStr = "enter"
+	case tea.KeyUp:
+		keyStr = "up"
+	case tea.KeyDown:
+		keyStr = "down"
+	case tea.KeyBackspace:
+		keyStr = "backspace"
+	}
+
+	// Capture values before HandleKey (which may call Close and reset them)
+	channelID := a.reactionPicker.ChannelID()
+	messageTS := a.reactionPicker.MessageTS()
+
+	result := a.reactionPicker.HandleKey(keyStr)
+
+	if !a.reactionPicker.IsVisible() {
+		// Esc was pressed
+		a.SetMode(ModeNormal)
+		return nil
+	}
+
+	if result != nil {
+		emojiName := result.Emoji
+
+		a.reactionPicker.Close()
+		a.SetMode(ModeNormal)
+
+		// Record frecent usage on add (not remove)
+		if !result.Remove && a.frecentRecordFn != nil {
+			a.frecentRecordFn(emojiName)
+		}
+
+		// Optimistic update
+		a.updateReactionOnMessage(channelID, messageTS, emojiName, a.currentUserID, result.Remove)
+
+		// Fire API call
+		if result.Remove {
+			if a.reactionRemoveFn != nil {
+				return func() tea.Msg {
+					err := a.reactionRemoveFn(channelID, messageTS, emojiName)
+					return ReactionSentMsg{Err: err}
+				}
+			}
+		} else {
+			if a.reactionAddFn != nil {
+				return func() tea.Msg {
+					err := a.reactionAddFn(channelID, messageTS, emojiName)
+					return ReactionSentMsg{Err: err}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func (a *App) updateReactionOnMessage(channelID, messageTS, emojiName, userID string, remove bool) {
+	a.messagepane.UpdateReaction(messageTS, emojiName, userID, remove)
+	a.threadPanel.UpdateReaction(messageTS, emojiName, userID, remove)
+}
+
+func (a *App) handleReactionNav(msg tea.KeyMsg) tea.Cmd {
+	switch {
+	case key.Matches(msg, a.keys.Left):
+		a.messagepane.ReactionNavLeft()
+	case key.Matches(msg, a.keys.Right):
+		a.messagepane.ReactionNavRight()
+	case key.Matches(msg, a.keys.Enter):
+		emojiName, isPlus := a.messagepane.SelectedReaction()
+		if isPlus {
+			return a.openPickerFromMessage()
+		}
+		return a.toggleReactionOnSelectedMessage(emojiName)
+	case key.Matches(msg, a.keys.Reaction):
+		return a.openPickerFromMessage()
+	case key.Matches(msg, a.keys.Escape):
+		a.messagepane.ExitReactionNav()
+	}
+	return nil
+}
+
+func (a *App) handleThreadReactionNav(msg tea.KeyMsg) tea.Cmd {
+	switch {
+	case key.Matches(msg, a.keys.Left):
+		a.threadPanel.ReactionNavLeft()
+	case key.Matches(msg, a.keys.Right):
+		a.threadPanel.ReactionNavRight()
+	case key.Matches(msg, a.keys.Enter):
+		emojiName, isPlus := a.threadPanel.SelectedReaction()
+		if isPlus {
+			return a.openPickerFromThread()
+		}
+		return a.toggleReactionOnSelectedThread(emojiName)
+	case key.Matches(msg, a.keys.Reaction):
+		return a.openPickerFromThread()
+	case key.Matches(msg, a.keys.Escape):
+		a.threadPanel.ExitReactionNav()
+	}
+	return nil
+}
+
+func (a *App) openPickerFromMessage() tea.Cmd {
+	msg, ok := a.messagepane.SelectedMessage()
+	if !ok {
+		return nil
+	}
+	var existing []string
+	for _, r := range msg.Reactions {
+		if r.HasReacted {
+			existing = append(existing, r.Emoji)
+		}
+	}
+	a.messagepane.ExitReactionNav()
+	if a.frecentLoadFn != nil {
+		a.reactionPicker.SetFrecentEmoji(a.frecentLoadFn(10))
+	}
+	a.reactionPicker.Open(a.activeChannelID, msg.TS, existing)
+	a.SetMode(ModeReactionPicker)
+	return nil
+}
+
+func (a *App) openPickerFromThread() tea.Cmd {
+	reply := a.threadPanel.SelectedReply()
+	if reply == nil {
+		return nil
+	}
+	var existing []string
+	for _, r := range reply.Reactions {
+		if r.HasReacted {
+			existing = append(existing, r.Emoji)
+		}
+	}
+	a.threadPanel.ExitReactionNav()
+	if a.frecentLoadFn != nil {
+		a.reactionPicker.SetFrecentEmoji(a.frecentLoadFn(10))
+	}
+	a.reactionPicker.Open(a.threadPanel.ChannelID(), reply.TS, existing)
+	a.SetMode(ModeReactionPicker)
+	return nil
+}
+
+func (a *App) toggleReactionOnSelectedMessage(emojiName string) tea.Cmd {
+	msg, ok := a.messagepane.SelectedMessage()
+	if !ok {
+		return nil
+	}
+	remove := false
+	for _, r := range msg.Reactions {
+		if r.Emoji == emojiName && r.HasReacted {
+			remove = true
+			break
+		}
+	}
+	a.updateReactionOnMessage(a.activeChannelID, msg.TS, emojiName, a.currentUserID, remove)
+	channelID := a.activeChannelID
+	ts := msg.TS
+	if remove {
+		if a.reactionRemoveFn != nil {
+			return func() tea.Msg {
+				err := a.reactionRemoveFn(channelID, ts, emojiName)
+				return ReactionSentMsg{Err: err}
+			}
+		}
+	} else {
+		if a.reactionAddFn != nil {
+			return func() tea.Msg {
+				err := a.reactionAddFn(channelID, ts, emojiName)
+				return ReactionSentMsg{Err: err}
+			}
+		}
+	}
+	return nil
+}
+
+func (a *App) toggleReactionOnSelectedThread(emojiName string) tea.Cmd {
+	reply := a.threadPanel.SelectedReply()
+	if reply == nil {
+		return nil
+	}
+	remove := false
+	for _, r := range reply.Reactions {
+		if r.Emoji == emojiName && r.HasReacted {
+			remove = true
+			break
+		}
+	}
+	channelID := a.threadPanel.ChannelID()
+	a.updateReactionOnMessage(channelID, reply.TS, emojiName, a.currentUserID, remove)
+	ts := reply.TS
+	if remove {
+		if a.reactionRemoveFn != nil {
+			return func() tea.Msg {
+				err := a.reactionRemoveFn(channelID, ts, emojiName)
+				return ReactionSentMsg{Err: err}
+			}
+		}
+	} else {
+		if a.reactionAddFn != nil {
+			return func() tea.Msg {
+				err := a.reactionAddFn(channelID, ts, emojiName)
+				return ReactionSentMsg{Err: err}
+			}
+		}
+	}
 	return nil
 }
 
@@ -666,6 +943,20 @@ func (a *App) SetInitialChannel(channelID, channelName string, msgs []messages.M
 	a.statusbar.SetChannel(channelName)
 }
 
+func (a *App) SetReactionSender(add ReactionAddFunc, remove ReactionRemoveFunc) {
+	a.reactionAddFn = add
+	a.reactionRemoveFn = remove
+}
+
+func (a *App) SetCurrentUserID(userID string) {
+	a.currentUserID = userID
+}
+
+func (a *App) SetFrecentFuncs(load FrecentLoadFunc, record FrecentRecordFunc) {
+	a.frecentLoadFn = load
+	a.frecentRecordFn = record
+}
+
 func (a *App) View() string {
 	if a.width == 0 || a.height == 0 {
 		return "Initializing..."
@@ -782,6 +1073,10 @@ func (a *App) View() string {
 	// Render channel finder overlay on top of existing layout
 	if a.channelFinder.IsVisible() {
 		screen = a.channelFinder.ViewOverlay(a.width, a.height, screen)
+	}
+
+	if a.reactionPicker.IsVisible() {
+		screen = a.reactionPicker.ViewOverlay(a.width, a.height, screen)
 	}
 
 	return screen
