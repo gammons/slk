@@ -179,7 +179,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gammons/slack-tui/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/messages"
 )
 
 func TestSetThread(t *testing.T) {
@@ -311,8 +311,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/gammons/slack-tui/internal/ui/messages"
-	"github.com/gammons/slack-tui/internal/ui/styles"
+	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 var (
@@ -579,7 +579,7 @@ git commit -m "feat: add thread panel UI component"
 Add import for the thread package in the imports:
 
 ```go
-"github.com/gammons/slack-tui/internal/ui/thread"
+"github.com/gammons/slk/internal/ui/thread"
 ```
 
 Add to the App struct (after `channelFinder channelfinder.Model`):
@@ -1158,7 +1158,7 @@ git commit -m "feat: render thread panel in View with 65/35 width split"
 ### Task 9: Wire Thread Fetcher and Reply Sender in main.go
 
 **Files:**
-- Modify: `cmd/slack-tui/main.go`
+- Modify: `cmd/slk/main.go`
 
 - [ ] **Step 1: Add fetchThreadReplies function**
 
@@ -1253,13 +1253,13 @@ In the `if activeClient != nil` block, after `SetOlderMessagesFetcher`, add:
 
 - [ ] **Step 3: Verify it compiles**
 
-Run: `go build ./cmd/slack-tui/`
+Run: `go build ./cmd/slk/`
 Expected: Success
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add cmd/slack-tui/main.go
+git add cmd/slk/main.go
 git commit -m "feat: wire thread fetcher and reply sender in main.go"
 ```
 
@@ -1318,7 +1318,7 @@ In `app.go`, wherever `a.threadVisible` is set to `true`, also call `a.statusbar
 
 - [ ] **Step 4: Verify it compiles**
 
-Run: `go build ./cmd/slack-tui/`
+Run: `go build ./cmd/slk/`
 Expected: Success
 
 - [ ] **Step 5: Commit**
@@ -1342,7 +1342,7 @@ Expected: All PASS
 - [ ] **Step 2: Run the build**
 
 Run: `make build`
-Expected: Binary produced at `bin/slack-tui`
+Expected: Binary produced at `bin/slk`
 
 - [ ] **Step 3: Run vet and check for issues**
 

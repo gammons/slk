@@ -6,8 +6,9 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	emoji "github.com/kyokomi/emoji/v2"
+	"github.com/muesli/reflow/truncate"
 
-	"github.com/gammons/slack-tui/internal/ui/styles"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 // EmojiEntry represents an emoji with its name and Unicode character.
@@ -191,44 +192,76 @@ func (m *Model) HandleKey(keyStr string) *ReactionResult {
 
 // View renders the picker box content.
 func (m *Model) View(termWidth int) string {
-	boxWidth := termWidth * 30 / 100
-	if boxWidth < 35 {
-		boxWidth = 35
-	}
-	if boxWidth > 50 {
-		boxWidth = 50
-	}
-	innerWidth := boxWidth - 4
+	return m.renderBox(termWidth)
+}
 
-	var b strings.Builder
+// ViewOverlay composites the picker on top of the background.
+func (m *Model) ViewOverlay(termWidth, termHeight int, background string) string {
+	if !m.visible {
+		return background
+	}
 
+	box := m.renderBox(termWidth)
+	if box == "" {
+		return background
+	}
+
+	placed := lipgloss.Place(termWidth, termHeight,
+		lipgloss.Center, lipgloss.Center,
+		box,
+		lipgloss.WithWhitespaceBackground(lipgloss.Color("#0F0F1A")),
+	)
+
+	// Clamp to exactly termHeight lines to prevent terminal scrolling.
+	// Emoji with unpredictable terminal widths can cause lipgloss to wrap
+	// lines, producing output taller than expected.
+	lines := strings.Split(placed, "\n")
+	if len(lines) > termHeight {
+		lines = lines[:termHeight]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *Model) renderBox(termWidth int) string {
+	if !m.visible {
+		return ""
+	}
+
+	overlayWidth := termWidth * 30 / 100
+	if overlayWidth < 35 {
+		overlayWidth = 35
+	}
+	if overlayWidth > 50 {
+		overlayWidth = 50
+	}
+	innerWidth := overlayWidth - 4 // border + padding
+
+	// Title
 	title := lipgloss.NewStyle().
 		Foreground(styles.Primary).
 		Bold(true).
 		Render("Add Reaction")
-	b.WriteString(title)
-	b.WriteString("\n")
 
-	cursor := "|"
-	queryDisplay := m.query + cursor
-	inputStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#888888")).
+	// Query input with blue left border
+	var inputText string
+	if m.query == "" {
+		placeholder := lipgloss.NewStyle().Foreground(styles.TextMuted).Render("Type to filter...")
+		inputText = "█ " + placeholder
+	} else {
+		inputText = m.query + "█"
+	}
+	input := lipgloss.NewStyle().
+		BorderStyle(lipgloss.Border{Left: "▌"}).
 		BorderLeft(true).
-		BorderStyle(lipgloss.ThickBorder()).
 		BorderForeground(styles.Primary).
-		PaddingLeft(1)
-	b.WriteString(inputStyle.Render(queryDisplay))
-	b.WriteString("\n")
+		PaddingLeft(1).
+		Foreground(styles.TextPrimary).
+		Render(inputText)
 
-	sep := lipgloss.NewStyle().
-		Foreground(styles.Border).
-		Render(strings.Repeat("\u2500", innerWidth))
-	b.WriteString(sep)
-	b.WriteString("\n")
-
+	// Results (max 10)
 	list := m.displayedList()
 	maxVisible := 10
-	if len(list) < maxVisible {
+	if maxVisible > len(list) {
 		maxVisible = len(list)
 	}
 
@@ -245,64 +278,65 @@ func (m *Model) View(termWidth int) string {
 		}
 	}
 
+	var resultRows []string
+	for i := start; i < end; i++ {
+		entry := list[i]
+		// Display Unicode emoji only for single-codepoint characters.
+		// Multi-codepoint emoji (skin tones, ZWJ sequences, flags) have
+		// terminal widths that disagree with go-runewidth, breaking borders.
+		// runewidth.StringWidth() is unreliable for these — it returns 2
+		// for skin tone variants that render as 4 cells. Rune count is
+		// the reliable signal: 1 rune = predictable width, 2+ = problematic.
+		var line string
+		if len([]rune(entry.Unicode)) == 1 {
+			line = entry.Unicode + " " + entry.Name
+		} else {
+			line = ":" + entry.Name + ":"
+		}
+
+		if m.isExistingReaction(entry.Name) {
+			line += " ✓"
+		}
+
+		if lipgloss.Width(line) > innerWidth-1 {
+			line = truncate.StringWithTail(line, uint(innerWidth-1), "…")
+		}
+
+		if i == m.selected {
+			indicator := lipgloss.NewStyle().Foreground(styles.Accent).Render("▌")
+			row := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#FFFFFF")).
+				Bold(true).
+				Width(innerWidth - 1).
+				MaxWidth(innerWidth - 1).
+				Render(line)
+			resultRows = append(resultRows, indicator+row)
+		} else {
+			row := lipgloss.NewStyle().
+				Foreground(styles.TextPrimary).
+				Width(innerWidth - 1).
+				MaxWidth(innerWidth - 1).
+				Render(line)
+			resultRows = append(resultRows, " "+row)
+		}
+	}
+
 	if len(list) == 0 && m.query != "" {
 		noResults := lipgloss.NewStyle().
 			Foreground(styles.TextMuted).
+			Italic(true).
 			Render("No matching emoji")
-		b.WriteString(noResults)
+		resultRows = append(resultRows, noResults)
 	}
 
-	for i := start; i < end; i++ {
-		entry := list[i]
-		prefix := "  "
-		if i == m.selected {
-			prefix = lipgloss.NewStyle().
-				Foreground(styles.Accent).
-				Render("\u258c ")
-		}
+	// Compose content
+	content := title + "\n" + input + "\n\n" + strings.Join(resultRows, "\n")
 
-		emojiDisplay := entry.Unicode + " " + entry.Name
-
-		suffix := ""
-		if m.isExistingReaction(entry.Name) {
-			suffix = lipgloss.NewStyle().
-				Foreground(styles.Accent).
-				Render(" \u2713")
-		}
-
-		line := prefix + emojiDisplay + suffix
-		b.WriteString(line)
-		if i < end-1 {
-			b.WriteString("\n")
-		}
-	}
-
-	return b.String()
-}
-
-// ViewOverlay composites the picker on top of the background.
-func (m *Model) ViewOverlay(termWidth, termHeight int, background string) string {
-	boxWidth := termWidth * 30 / 100
-	if boxWidth < 35 {
-		boxWidth = 35
-	}
-	if boxWidth > 50 {
-		boxWidth = 50
-	}
-
-	content := m.View(termWidth)
-
-	box := lipgloss.NewStyle().
+	// Wrap in bordered box
+	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(styles.Primary).
 		Padding(1, 1).
-		Width(boxWidth).
+		Width(overlayWidth).
 		Render(content)
-
-	return lipgloss.Place(
-		termWidth, termHeight,
-		lipgloss.Center, lipgloss.Center,
-		box,
-		lipgloss.WithWhitespaceBackground(lipgloss.Color("#0F0F1A")),
-	)
 }

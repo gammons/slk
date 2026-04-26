@@ -4,7 +4,7 @@ Date: 2026-04-26
 
 ## Overview
 
-Add emoji reaction support to slack-tui: a search-first reaction picker overlay, quick-toggle navigation on existing reactions, pill-style reaction display, and full real-time reaction sync. The picker follows the channel finder's overlay pattern -- a compact, keyboard-driven list with fuzzy search and frecent emoji at the top.
+Add emoji reaction support to slk: a search-first reaction picker overlay, quick-toggle navigation on existing reactions, pill-style reaction display, and full real-time reaction sync. The picker follows the channel finder's overlay pattern -- a compact, keyboard-driven list with fuzzy search and frecent emoji at the top.
 
 This feature spans six areas: picker overlay UI, quick-toggle mode, pill-style rendering, data wiring (cache + API population), real-time WebSocket updates, and app integration.
 
@@ -377,8 +377,8 @@ Rendered after the channel finder check (both should never be visible simultaneo
 | Pill rendering | `messages.Model` + `thread.Model` | Respective `model.go` files |
 | Cache CRUD | Cache layer | `internal/cache/reactions.go` |
 | Frecent tracking | Cache layer | `internal/cache/frecent.go` |
-| API callbacks | Wired in `main.go` | `cmd/slack-tui/main.go` |
-| Real-time events | RTM handler | `cmd/slack-tui/main.go` |
+| API callbacks | Wired in `main.go` | `cmd/slk/main.go` |
+| Real-time events | RTM handler | `cmd/slk/main.go` |
 | Message types | App | `internal/ui/app.go` |
 
 ## Existing Infrastructure

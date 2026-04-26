@@ -7,15 +7,15 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/gammons/slack-tui/internal/ui/channelfinder"
-	"github.com/gammons/slack-tui/internal/ui/compose"
-	"github.com/gammons/slack-tui/internal/ui/messages"
-	"github.com/gammons/slack-tui/internal/ui/reactionpicker"
-	"github.com/gammons/slack-tui/internal/ui/sidebar"
-	"github.com/gammons/slack-tui/internal/ui/statusbar"
-	"github.com/gammons/slack-tui/internal/ui/styles"
-	"github.com/gammons/slack-tui/internal/ui/thread"
-	"github.com/gammons/slack-tui/internal/ui/workspace"
+	"github.com/gammons/slk/internal/ui/channelfinder"
+	"github.com/gammons/slk/internal/ui/compose"
+	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/reactionpicker"
+	"github.com/gammons/slk/internal/ui/sidebar"
+	"github.com/gammons/slk/internal/ui/statusbar"
+	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/gammons/slk/internal/ui/thread"
+	"github.com/gammons/slk/internal/ui/workspace"
 )
 
 type Panel int
@@ -285,10 +285,17 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.statusbar.SetConnectionState(statusbar.ConnectionState(msg.State))
 
 	case ReactionAddedMsg:
-		a.updateReactionOnMessage(msg.ChannelID, msg.MessageTS, msg.Emoji, msg.UserID, false)
+		// Skip WebSocket echo of our own optimistic updates.
+		// When we add/remove a reaction, we update the UI immediately.
+		// The WebSocket echo arrives later with our own userID — ignore it.
+		if msg.UserID != a.currentUserID {
+			a.updateReactionOnMessage(msg.ChannelID, msg.MessageTS, msg.Emoji, msg.UserID, false)
+		}
 
 	case ReactionRemovedMsg:
-		a.updateReactionOnMessage(msg.ChannelID, msg.MessageTS, msg.Emoji, msg.UserID, true)
+		if msg.UserID != a.currentUserID {
+			a.updateReactionOnMessage(msg.ChannelID, msg.MessageTS, msg.Emoji, msg.UserID, true)
+		}
 
 	case ReactionSentMsg:
 		// API call completed. If err, optimistic update stays (could add status bar error later).

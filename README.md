@@ -1,4 +1,4 @@
-# slack-tui
+# slk
 
 A terminal-based Slack client built in Go using [bubbletea](https://github.com/charmbracelet/bubbletea) and [lipgloss](https://github.com/charmbracelet/lipgloss). Designed as a keyboard-driven daily-driver replacement for the official Slack desktop client.
 
@@ -27,7 +27,7 @@ A terminal-based Slack client built in Go using [bubbletea](https://github.com/c
 make build
 ```
 
-The binary is output to `bin/slack-tui`.
+The binary is output to `bin/slk`.
 
 ## Setup
 
@@ -52,12 +52,12 @@ Open [https://app.slack.com](https://app.slack.com) and log into your workspace.
 ### 3. Add Workspace
 
 ```bash
-./bin/slack-tui --add-workspace
+./bin/slk --add-workspace
 ```
 
 This launches an interactive onboarding that prompts for your `xoxc` token and `d` cookie.
 
-Alternatively, just run `./bin/slack-tui` -- it will launch onboarding automatically if no workspaces are configured.
+Alternatively, just run `./bin/slk` -- it will launch onboarding automatically if no workspaces are configured.
 
 ## Usage
 
@@ -78,7 +78,7 @@ Alternatively, just run `./bin/slack-tui` -- it will launch onboarding automatic
 
 ### Configuration
 
-Config file: `~/.config/slack-tui/config.toml`
+Config file: `~/.config/slk/config.toml`
 
 ```toml
 [general]
@@ -120,9 +120,9 @@ Follows the XDG Base Directory specification:
 
 | Path | Contents |
 |------|----------|
-| `~/.config/slack-tui/` | Configuration (config.toml) |
-| `~/.local/share/slack-tui/` | Data (SQLite cache, tokens) |
-| `~/.cache/slack-tui/` | Cache (avatars, images) |
+| `~/.config/slk/` | Configuration (config.toml) |
+| `~/.local/share/slk/` | Data (SQLite cache, tokens) |
+| `~/.cache/slk/` | Cache (avatars, images) |
 
 ## Architecture
 
@@ -135,7 +135,7 @@ Client Layer             -- Slack API wrapper (Socket Mode + Web API)
 Data Layer               -- SQLite cache, TOML config
 ```
 
-See [design spec](docs/superpowers/specs/2026-04-23-slack-tui-design.md) for full architecture details.
+See [design spec](docs/superpowers/specs/2026-04-23-slk-design.md) for full architecture details.
 
 ## License
 

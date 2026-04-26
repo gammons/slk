@@ -1,4 +1,4 @@
-# slack-tui MVP Implementation Plan
+# slk MVP Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,15 +8,15 @@
 
 **Tech Stack:** Go 1.22+, bubbletea, lipgloss, bubbles, slack-go, modernc.org/sqlite, go-toml/v2
 
-**Spec:** `docs/superpowers/specs/2026-04-23-slack-tui-design.md`
+**Spec:** `docs/superpowers/specs/2026-04-23-slk-design.md`
 
 ---
 
 ## File Structure
 
 ```
-slack-tui/
-├── cmd/slack-tui/
+slk/
+├── cmd/slk/
 │   └── main.go                     # Entry point, wires dependencies
 ├── internal/
 │   ├── config/
@@ -80,22 +80,22 @@ slack-tui/
 - Create: `go.mod`
 - Create: `Makefile`
 - Create: `.gitignore`
-- Create: `cmd/slack-tui/main.go`
+- Create: `cmd/slk/main.go`
 
 - [ ] **Step 1: Initialize Go module**
 
-Run: `go mod init github.com/gammons/slack-tui`
+Run: `go mod init github.com/gammons/slk`
 
 - [ ] **Step 2: Create Makefile**
 
 ```makefile
 .PHONY: build test lint run clean
 
-BINARY=slack-tui
+BINARY=slk
 BUILD_DIR=bin
 
 build:
-	go build -o $(BUILD_DIR)/$(BINARY) ./cmd/slack-tui
+	go build -o $(BUILD_DIR)/$(BINARY) ./cmd/slk
 
 test:
 	go test ./... -v -race
@@ -123,7 +123,7 @@ bin/
 - [ ] **Step 4: Create stub main.go**
 
 ```go
-// cmd/slack-tui/main.go
+// cmd/slk/main.go
 package main
 
 import (
@@ -132,7 +132,7 @@ import (
 )
 
 func main() {
-	fmt.Println("slack-tui starting...")
+	fmt.Println("slk starting...")
 	os.Exit(0)
 }
 ```
@@ -140,7 +140,7 @@ func main() {
 - [ ] **Step 5: Verify it builds**
 
 Run: `make build`
-Expected: Binary created at `bin/slack-tui` with no errors.
+Expected: Binary created at `bin/slk` with no errors.
 
 - [ ] **Step 6: Install core dependencies**
 
@@ -1816,7 +1816,7 @@ package service
 import (
 	"testing"
 
-	"github.com/gammons/slack-tui/internal/cache"
+	"github.com/gammons/slk/internal/cache"
 )
 
 func TestWorkspaceManagerAddWorkspace(t *testing.T) {
@@ -1869,7 +1869,7 @@ package service
 import (
 	"sync"
 
-	"github.com/gammons/slack-tui/internal/cache"
+	"github.com/gammons/slk/internal/cache"
 )
 
 type WorkspaceInfo struct {
@@ -1976,7 +1976,7 @@ package service
 import (
 	"testing"
 
-	"github.com/gammons/slack-tui/internal/cache"
+	"github.com/gammons/slk/internal/cache"
 )
 
 func setupTestDB(t *testing.T) *cache.DB {
@@ -2031,7 +2031,7 @@ func TestMessageServiceCacheMessage(t *testing.T) {
 package service
 
 import (
-	"github.com/gammons/slack-tui/internal/cache"
+	"github.com/gammons/slk/internal/cache"
 )
 
 type MessageService struct {
@@ -2378,7 +2378,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/gammons/slack-tui/internal/ui/styles"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 type WorkspaceItem struct {
@@ -2575,7 +2575,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/gammons/slack-tui/internal/ui/styles"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 type ChannelItem struct {
@@ -2850,7 +2850,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/gammons/slack-tui/internal/ui/styles"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 type MessageItem struct {
@@ -3087,7 +3087,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/gammons/slack-tui/internal/ui/styles"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 type Model struct {
@@ -3182,7 +3182,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gammons/slack-tui/internal/ui"
+	"github.com/gammons/slk/internal/ui"
 )
 
 func TestStatusBarNormalMode(t *testing.T) {
@@ -3235,8 +3235,8 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/gammons/slack-tui/internal/ui"
-	"github.com/gammons/slack-tui/internal/ui/styles"
+	"github.com/gammons/slk/internal/ui"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 type Model struct {
@@ -3354,8 +3354,8 @@ package ui
 import (
 	"testing"
 
-	"github.com/gammons/slack-tui/internal/ui/sidebar"
-	"github.com/gammons/slack-tui/internal/ui/workspace"
+	"github.com/gammons/slk/internal/ui/sidebar"
+	"github.com/gammons/slk/internal/ui/workspace"
 )
 
 func TestAppFocusCycle(t *testing.T) {
@@ -3428,12 +3428,12 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/gammons/slack-tui/internal/ui/compose"
-	"github.com/gammons/slack-tui/internal/ui/messages"
-	"github.com/gammons/slack-tui/internal/ui/sidebar"
-	"github.com/gammons/slack-tui/internal/ui/statusbar"
-	"github.com/gammons/slack-tui/internal/ui/styles"
-	"github.com/gammons/slack-tui/internal/ui/workspace"
+	"github.com/gammons/slk/internal/ui/compose"
+	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/sidebar"
+	"github.com/gammons/slk/internal/ui/statusbar"
+	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/gammons/slk/internal/ui/workspace"
 )
 
 type Panel int
@@ -3772,14 +3772,14 @@ git commit -m "feat: add root app model with layout and vim mode switching"
 ## Task 13: Integration - Wire Everything Together
 
 **Files:**
-- Modify: `cmd/slack-tui/main.go`
+- Modify: `cmd/slk/main.go`
 
 - [ ] **Step 1: Implement main.go with dependency wiring**
 
 This wires the config, cache, services, and UI together. For the MVP, we use a simplified startup that loads tokens from the store and connects to Slack.
 
 ```go
-// cmd/slack-tui/main.go
+// cmd/slk/main.go
 package main
 
 import (
@@ -3791,14 +3791,14 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gammons/slack-tui/internal/cache"
-	"github.com/gammons/slack-tui/internal/config"
-	"github.com/gammons/slack-tui/internal/service"
-	slackclient "github.com/gammons/slack-tui/internal/slack"
-	"github.com/gammons/slack-tui/internal/ui"
-	"github.com/gammons/slack-tui/internal/ui/messages"
-	"github.com/gammons/slack-tui/internal/ui/sidebar"
-	"github.com/gammons/slack-tui/internal/ui/workspace"
+	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/service"
+	slackclient "github.com/gammons/slk/internal/slack"
+	"github.com/gammons/slk/internal/ui"
+	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/sidebar"
+	"github.com/gammons/slk/internal/ui/workspace"
 )
 
 func main() {
@@ -3964,26 +3964,26 @@ func formatTimestamp(ts string) string {
 
 func xdgConfig() string {
 	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
-		return filepath.Join(dir, "slack-tui")
+		return filepath.Join(dir, "slk")
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "slack-tui")
+	return filepath.Join(home, ".config", "slk")
 }
 
 func xdgData() string {
 	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
-		return filepath.Join(dir, "slack-tui")
+		return filepath.Join(dir, "slk")
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "share", "slack-tui")
+	return filepath.Join(home, ".local", "share", "slk")
 }
 
 func xdgCache() string {
 	if dir := os.Getenv("XDG_CACHE_HOME"); dir != "" {
-		return filepath.Join(dir, "slack-tui")
+		return filepath.Join(dir, "slk")
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".cache", "slack-tui")
+	return filepath.Join(home, ".cache", "slk")
 }
 ```
 
@@ -4000,13 +4000,13 @@ Expected: All tests across all packages PASS.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add cmd/slack-tui/main.go
+git add cmd/slk/main.go
 git commit -m "feat: wire up main with config, cache, slack client, and UI"
 ```
 
 - [ ] **Step 5: Run the binary to verify startup behavior**
 
-Run: `./bin/slack-tui`
+Run: `./bin/slk`
 Expected: Should show an error message about no workspaces configured (since no tokens exist yet). This confirms the startup flow works correctly.
 
 - [ ] **Step 6: Final commit with any fixes from the integration test**

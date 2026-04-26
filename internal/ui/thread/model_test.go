@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gammons/slack-tui/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/messages"
 )
 
 func TestSetThread(t *testing.T) {

@@ -1,4 +1,4 @@
-module github.com/gammons/slack-tui
+module github.com/gammons/slk
 
 go 1.26.1
 

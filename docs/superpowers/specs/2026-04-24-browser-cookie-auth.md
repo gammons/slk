@@ -14,7 +14,7 @@ Replace the Slack App auth (xoxp + xapp tokens, Socket Mode) with browser cookie
 2. User opens browser devtools, copies two values:
    - The `xoxc-*` token (visible in localStorage, network requests, or the browser console)
    - The `d` cookie value (from Application > Cookies > `d` on `.slack.com`)
-3. User runs `slack-tui --add-workspace` and pastes these two values
+3. User runs `slk --add-workspace` and pastes these two values
 4. The TUI creates a `slack.Client` using the xoxc token and a custom `http.Client` that attaches the `d` cookie to every request via `slack.OptionHTTPClient()`
 5. Real-time events use RTM (WebSocket) instead of Socket Mode
 
@@ -41,7 +41,7 @@ type Token struct {
 }
 ```
 
-Storage format remains JSON files at `~/.local/share/slack-tui/tokens/{teamID}.json` with `0600` permissions.
+Storage format remains JSON files at `~/.local/share/slk/tokens/{teamID}.json` with `0600` permissions.
 
 ### Client Creation
 
@@ -125,8 +125,8 @@ xoxc tokens and d cookies expire when the user logs out of the browser or when S
 - `internal/slack/auth.go` -- Update `Token` struct (remove `AppToken`/`RefreshToken`, add `Cookie`)
 - `internal/slack/client.go` -- Replace Socket Mode with RTM, add cookie jar HTTP client
 - `internal/slack/events.go` -- Replace Socket Mode event dispatcher with RTM event loop
-- `cmd/slack-tui/onboarding.go` -- Update prompts for xoxc token and d cookie
-- `cmd/slack-tui/main.go` -- Update client wiring to pass cookie instead of app token
+- `cmd/slk/onboarding.go` -- Update prompts for xoxc token and d cookie
+- `cmd/slk/main.go` -- Update client wiring to pass cookie instead of app token
 - `internal/slack/auth_test.go` -- Update for new Token struct
 - `internal/slack/client_test.go` -- Update for new constructor
 - `internal/slack/events_test.go` -- Update for RTM events

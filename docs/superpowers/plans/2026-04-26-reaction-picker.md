@@ -33,7 +33,7 @@
 | `internal/ui/keys.go` | Add `ReactionNav` key binding |
 | `internal/ui/app.go` | Picker integration, mode handler, reaction message types, callbacks |
 | `internal/ui/styles/styles.go` | Reaction pill styles |
-| `cmd/slack-tui/main.go` | Populate reactions from API, wire RTM handlers, wire callbacks |
+| `cmd/slk/main.go` | Populate reactions from API, wire RTM handlers, wire callbacks |
 
 ---
 
@@ -1022,7 +1022,7 @@ import (
 	emoji "github.com/kyokomi/emoji/v2"
 	"github.com/charmbracelet/lipgloss"
 
-	"slack-tui/internal/ui/styles"
+	"slk/internal/ui/styles"
 )
 
 // EmojiEntry represents an emoji with its name and Unicode character.
@@ -1413,7 +1413,7 @@ git commit -m "feat: add ModeReactionPicker and ReactionNav key binding"
 In `internal/ui/app.go`, add the import for the reactionpicker package:
 
 ```go
-	"slack-tui/internal/ui/reactionpicker"
+	"slk/internal/ui/reactionpicker"
 ```
 
 Add the new message types after the existing ones (e.g., after `ConnectionStateMsg`):
@@ -1800,11 +1800,11 @@ git commit -m "feat: wire reaction picker into app with mode handling and reacti
 ### Task 8: Populate Reactions from API and Wire RTM Events
 
 **Files:**
-- Modify: `cmd/slack-tui/main.go`
+- Modify: `cmd/slk/main.go`
 
 - [ ] **Step 1: Populate reactions when fetching channel messages**
 
-In `cmd/slack-tui/main.go`, find the `fetchChannelMessages` function. In the loop where `slack.Message` is converted to `messages.MessageItem`, populate the `Reactions` field.
+In `cmd/slk/main.go`, find the `fetchChannelMessages` function. In the loop where `slack.Message` is converted to `messages.MessageItem`, populate the `Reactions` field.
 
 Find the message conversion block (approximately line 418 where `MessageItem` is constructed) and add reactions conversion after the existing fields:
 
@@ -1995,7 +1995,7 @@ Expected: All tests pass
 - [ ] **Step 7: Commit**
 
 ```bash
-git add cmd/slack-tui/main.go internal/ui/app.go
+git add cmd/slk/main.go internal/ui/app.go
 git commit -m "feat: wire reaction data flow - API population, RTM events, callbacks"
 ```
 
@@ -2023,7 +2023,7 @@ Expected: No issues
 
 - [ ] **Step 4: Test manually**
 
-Run: `./bin/slack-tui`
+Run: `./bin/slk`
 Verify:
 1. Messages with reactions show pill-style display
 2. Press `r` on a message to open the reaction picker

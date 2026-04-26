@@ -15,7 +15,7 @@
 ## File Structure
 
 ```
-slack-tui/
+slk/
 ├── internal/ui/
 │   ├── channelfinder/
 │   │   └── model.go          # New: fuzzy finder component
@@ -145,7 +145,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/gammons/slack-tui/internal/ui/styles"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 // ChannelResult is returned when the user selects a channel.
@@ -422,7 +422,7 @@ git commit -m "feat: add channel finder overlay component"
 
 Add the import:
 ```go
-"github.com/gammons/slack-tui/internal/ui/channelfinder"
+"github.com/gammons/slk/internal/ui/channelfinder"
 ```
 
 Add to the App struct:
@@ -536,7 +536,7 @@ with:
 
 - [ ] **Step 7: Verify it compiles**
 
-Run: `go build ./cmd/slack-tui/`
+Run: `go build ./cmd/slk/`
 Expected: Compiles with no errors.
 
 - [ ] **Step 8: Commit**
@@ -551,13 +551,13 @@ git commit -m "feat: integrate channel finder overlay into app"
 ## Task 5: Wire Finder Items from main.go
 
 **Files:**
-- Modify: `cmd/slack-tui/main.go`
+- Modify: `cmd/slk/main.go`
 
 - [ ] **Step 1: Add import and populate finder items**
 
 Add the import:
 ```go
-"github.com/gammons/slack-tui/internal/ui/channelfinder"
+"github.com/gammons/slk/internal/ui/channelfinder"
 ```
 
 After the line `app.SetUserNames(userNames)`, add:
@@ -591,7 +591,7 @@ Expected: All tests pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add cmd/slack-tui/main.go
+git add cmd/slk/main.go
 git commit -m "feat: wire channel finder items from main.go"
 ```
 

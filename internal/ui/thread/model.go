@@ -9,8 +9,8 @@ import (
 	emoji "github.com/kyokomi/emoji/v2"
 	"github.com/muesli/reflow/wordwrap"
 
-	"github.com/gammons/slack-tui/internal/ui/messages"
-	"github.com/gammons/slack-tui/internal/ui/styles"
+	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 var thickLeftBorder = lipgloss.Border{Left: "▌"}

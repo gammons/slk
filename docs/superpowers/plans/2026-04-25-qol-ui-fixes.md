@@ -188,7 +188,7 @@ Replace with:
 
 - [ ] **Step 4: Verify it compiles and tests pass**
 
-Run: `go build ./cmd/slack-tui/ && go test ./internal/ui/... -v`
+Run: `go build ./cmd/slk/ && go test ./internal/ui/... -v`
 Expected: All pass
 
 - [ ] **Step 5: Commit**
@@ -217,7 +217,7 @@ package compose
 import (
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gammons/slack-tui/internal/ui/styles"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 type Model struct {
@@ -313,7 +313,7 @@ With:
 
 - [ ] **Step 3: Verify it compiles and tests pass**
 
-Run: `go build ./cmd/slack-tui/ && go test ./internal/ui/... -v`
+Run: `go build ./cmd/slk/ && go test ./internal/ui/... -v`
 Expected: All pass
 
 - [ ] **Step 4: Commit**
@@ -331,7 +331,7 @@ git commit -m "feat: multi-line compose with textarea, Shift+Enter for newline"
 - Modify: `internal/ui/statusbar/model.go`
 - Modify: `internal/slack/events.go`
 - Modify: `internal/slack/client.go`
-- Modify: `cmd/slack-tui/main.go`
+- Modify: `cmd/slk/main.go`
 
 - [ ] **Step 1: Add ConnectionState enum and update statusbar**
 
@@ -454,7 +454,7 @@ In `internal/slack/client.go`, update the WebSocket goroutine (inside `StartWebS
 
 - [ ] **Step 4: Wire connection callbacks in main.go**
 
-In `cmd/slack-tui/main.go`, add `OnConnect` and `OnDisconnect` methods to `rtmEventHandler`:
+In `cmd/slk/main.go`, add `OnConnect` and `OnDisconnect` methods to `rtmEventHandler`:
 
 ```go
 func (h *rtmEventHandler) OnConnect() {
@@ -511,13 +511,13 @@ In `internal/ui/statusbar/statusbar_test.go`, any test that references `SetConne
 
 - [ ] **Step 7: Verify it compiles and all tests pass**
 
-Run: `go build ./cmd/slack-tui/ && go test ./... -v`
+Run: `go build ./cmd/slk/ && go test ./... -v`
 Expected: All pass
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add internal/ui/statusbar/model.go internal/slack/events.go internal/slack/client.go cmd/slack-tui/main.go internal/ui/app.go
+git add internal/ui/statusbar/model.go internal/slack/events.go internal/slack/client.go cmd/slk/main.go internal/ui/app.go
 git commit -m "feat: three-state connection status indicator with colored dots"
 ```
 
@@ -538,4 +538,4 @@ Expected: No issues
 - [ ] **Step 3: Build**
 
 Run: `make build`
-Expected: Binary at `bin/slack-tui`
+Expected: Binary at `bin/slk`

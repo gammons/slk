@@ -1,4 +1,4 @@
-# slack-tui Implementation Status
+# slk Implementation Status
 
 Last updated: 2026-04-26
 
@@ -7,7 +7,7 @@ Last updated: 2026-04-26
 ### Core
 - [x] Project scaffolding (Go modules, Makefile, build)
 - [x] TOML configuration with defaults and XDG paths
-- [x] SQLite cache layer (messages, channels, users, workspaces)
+- [x] SQLite cache layer (messages, channels, users, workspaces, reactions, frecent emoji)
 - [x] Slack API client (Web API via slack-go)
 - [x] OAuth token storage (JSON files, per-workspace)
 - [x] Interactive onboarding (`--add-workspace` with huh forms)
@@ -71,9 +71,10 @@ Last updated: 2026-04-26
 - [x] Reaction picker overlay (press `r` -- search-first with frecent emoji)
 - [x] Quick-toggle reaction nav (press `R` -- h/l to navigate, Enter to toggle)
 - [x] Pill-style reaction display (green = your reaction, gray = others)
-- [x] Real-time reaction sync via WebSocket
+- [x] Real-time reaction sync via WebSocket (deduped against optimistic updates)
 - [x] Frecent emoji tracking (most-used emoji shown first)
 - [x] Optimistic UI updates
+- [x] Safe emoji rendering (single-codepoint Unicode displayed, multi-codepoint falls back to :name:)
 
 ### Channels
 - [x] Public channels (# prefix)
@@ -109,8 +110,8 @@ Last updated: 2026-04-26
 ## Architecture Overview
 
 ```
-slack-tui/
-├── cmd/slack-tui/
+slk/
+├── cmd/slk/
 │   ├── main.go              # Entry point, dependency wiring
 │   └── onboarding.go        # --add-workspace interactive setup
 ├── internal/
@@ -121,7 +122,7 @@ slack-tui/
 │   ├── slack/               # Slack API client, token storage, WebSocket events
 │   └── ui/
 │       ├── app.go           # Root bubbletea model, layout, focus management
-│       ├── mode.go          # Vim mode enum (NORMAL, INSERT, COMMAND, FIND)
+│       ├── mode.go          # Vim mode enum (NORMAL, INSERT, COMMAND, FIND, REACT)
 │       ├── keys.go          # Key binding definitions
 │       ├── styles/          # Lipgloss style definitions
 │       ├── workspace/       # Workspace rail component
@@ -129,6 +130,7 @@ slack-tui/
 │       ├── messages/        # Message pane with viewport + markdown rendering
 │       ├── thread/          # Thread panel with viewport + reply compose
 │       ├── channelfinder/   # Ctrl+t/Ctrl+p fuzzy channel finder overlay
+│       ├── reactionpicker/  # Reaction picker overlay with emoji search
 │       ├── compose/         # Multi-line message input (textarea)
 │       └── statusbar/       # Bottom status bar with connection state
 ├── docs/
@@ -143,8 +145,8 @@ slack-tui/
 ## Stats
 
 - 29 source files, 22 test files
-- ~8,100 lines of Go
-- 14 packages, all tests passing
+- ~8,150 lines of Go
+- 13 test packages, all tests passing
 - Single binary, no runtime dependencies beyond the terminal
 
 ## Key Design Decisions

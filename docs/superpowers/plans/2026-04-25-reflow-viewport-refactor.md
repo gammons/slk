@@ -578,7 +578,7 @@ Expected: No issues
 - [ ] **Step 3: Build the binary**
 
 Run: `make build`
-Expected: Binary at `bin/slack-tui`
+Expected: Binary at `bin/slk`
 
 - [ ] **Step 4: Run go mod tidy to clean up**
 

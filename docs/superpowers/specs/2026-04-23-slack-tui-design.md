@@ -1,4 +1,4 @@
-# slack-tui Design Specification
+# slk Design Specification
 
 A terminal-based Slack client built in Go using bubbletea and lipgloss, designed as a personal daily-driver replacement for the official Slack desktop client.
 
@@ -93,8 +93,8 @@ Service-oriented layered architecture with four distinct layers:
 ### Module Structure
 
 ```
-slack-tui/
-  cmd/slack-tui/       # main entry point
+slk/
+  cmd/slk/       # main entry point
   internal/
     ui/                # bubbletea models & views
       app.go           # root model, layout orchestration
@@ -360,7 +360,7 @@ Slack does not have a delta sync API. The sync strategy accounts for gaps when t
 
 ### Configuration (TOML)
 
-Stored at `~/.config/slack-tui/config.toml`:
+Stored at `~/.config/slk/config.toml`:
 
 ```toml
 [general]
@@ -421,7 +421,7 @@ On startup, detect terminal capabilities:
 - Caption below shows filename and dimensions.
 - `Enter` on a focused image opens it full-size in the system default viewer.
 - `yy` on a focused image copies the Slack URL to clipboard.
-- Images are downloaded and cached locally in `~/.cache/slack-tui/images/`. Cache evicted by LRU when exceeding configured size.
+- Images are downloaded and cached locally in `~/.cache/slk/images/`. Cache evicted by LRU when exceeding configured size.
 
 ### File Handling (Non-Image)
 
@@ -581,6 +581,6 @@ Fast channel/DM switcher overlay:
 ## Build
 
 - Go 1.22+
-- `go build ./cmd/slack-tui`
+- `go build ./cmd/slk`
 - Single binary, no runtime dependencies beyond the terminal
 - Makefile with targets: `build`, `test`, `lint`, `run`

@@ -8,7 +8,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/gammons/slack-tui/internal/ui/styles"
+	"github.com/gammons/slk/internal/ui/styles"
 	emoji "github.com/kyokomi/emoji/v2"
 	"github.com/muesli/reflow/wordwrap"
 )

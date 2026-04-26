@@ -1,10 +1,10 @@
 .PHONY: build test lint run clean
 
-BINARY=slack-tui
+BINARY=slk
 BUILD_DIR=bin
 
 build:
-	go build -o $(BUILD_DIR)/$(BINARY) ./cmd/slack-tui
+	go build -o $(BUILD_DIR)/$(BINARY) ./cmd/slk
 
 test:
 	go test ./... -v -race

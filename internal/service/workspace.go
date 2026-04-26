@@ -3,7 +3,7 @@ package service
 import (
 	"sync"
 
-	"github.com/gammons/slack-tui/internal/cache"
+	"github.com/gammons/slk/internal/cache"
 )
 
 type WorkspaceInfo struct {

@@ -3,7 +3,7 @@ package service
 import (
 	"testing"
 
-	"github.com/gammons/slack-tui/internal/cache"
+	"github.com/gammons/slk/internal/cache"
 )
 
 func setupTestDB(t *testing.T) *cache.DB {

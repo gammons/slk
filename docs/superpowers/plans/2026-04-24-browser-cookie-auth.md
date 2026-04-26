@@ -17,7 +17,7 @@
 Files being modified (no new files):
 
 ```
-slack-tui/
+slk/
 ├── internal/slack/
 │   ├── auth.go          # Token struct: remove AppToken/RefreshToken, add Cookie
 │   ├── auth_test.go     # Update test tokens to use xoxc + cookie
@@ -25,7 +25,7 @@ slack-tui/
 │   ├── client_test.go   # Update NewClient test for new signature
 │   ├── events.go        # Replace Socket Mode dispatcher with RTM event loop
 │   └── events_test.go   # Update mock/test for RTM events
-├── cmd/slack-tui/
+├── cmd/slk/
 │   ├── onboarding.go    # Prompt for xoxc token + d cookie instead of xapp/xoxp
 │   └── main.go          # Update client wiring: pass cookie, start RTM
 └── go.mod               # Remove socketmode dependency (go mod tidy)
@@ -716,11 +716,11 @@ git commit -m "refactor: replace Socket Mode event dispatcher with RTM event loo
 ## Task 4: Update Onboarding Flow
 
 **Files:**
-- Modify: `cmd/slack-tui/onboarding.go`
+- Modify: `cmd/slk/onboarding.go`
 
 - [ ] **Step 1: Rewrite onboarding.go**
 
-Replace the entire `cmd/slack-tui/onboarding.go` with:
+Replace the entire `cmd/slk/onboarding.go` with:
 
 ```go
 package main
@@ -734,7 +734,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/huh/spinner"
 	"github.com/charmbracelet/lipgloss"
-	slackclient "github.com/gammons/slack-tui/internal/slack"
+	slackclient "github.com/gammons/slk/internal/slack"
 )
 
 func addWorkspace() error {
@@ -770,7 +770,7 @@ func addWorkspace() error {
 
 	// Welcome
 	fmt.Println()
-	fmt.Println(titleStyle.Render("slack-tui -- Add Workspace"))
+	fmt.Println(titleStyle.Render("slk -- Add Workspace"))
 	fmt.Println(subtitleStyle.Render("Connect a Slack workspace using your browser session."))
 	fmt.Println()
 
@@ -903,7 +903,7 @@ func addWorkspace() error {
 	fmt.Println()
 	fmt.Println(successStyle.Render(fmt.Sprintf("  Workspace '%s' added successfully!", wsName)))
 	fmt.Println()
-	fmt.Println(dimStyle.Render("  Run ") + lipgloss.NewStyle().Bold(true).Render("slack-tui") + dimStyle.Render(" to start."))
+	fmt.Println(dimStyle.Render("  Run ") + lipgloss.NewStyle().Bold(true).Render("slk") + dimStyle.Render(" to start."))
 	fmt.Println()
 
 	return nil
@@ -912,13 +912,13 @@ func addWorkspace() error {
 
 - [ ] **Step 2: Verify it compiles**
 
-Run: `go build ./cmd/slack-tui/`
+Run: `go build ./cmd/slk/`
 Expected: Compiles with no errors.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add cmd/slack-tui/onboarding.go
+git add cmd/slk/onboarding.go
 git commit -m "refactor: update onboarding to prompt for xoxc token and d cookie"
 ```
 
@@ -927,11 +927,11 @@ git commit -m "refactor: update onboarding to prompt for xoxc token and d cookie
 ## Task 5: Update main.go Wiring
 
 **Files:**
-- Modify: `cmd/slack-tui/main.go`
+- Modify: `cmd/slk/main.go`
 
 - [ ] **Step 1: Update client creation in main.go**
 
-In `cmd/slack-tui/main.go`, find the line inside the `for _, token := range tokens` loop:
+In `cmd/slk/main.go`, find the line inside the `for _, token := range tokens` loop:
 
 ```go
 		client := slackclient.NewClient(token.AccessToken, token.AppToken)
@@ -949,13 +949,13 @@ Search `main.go` for any reference to `RunSocketMode`. Currently there is none i
 
 - [ ] **Step 3: Verify the full build compiles**
 
-Run: `go build ./cmd/slack-tui/`
+Run: `go build ./cmd/slk/`
 Expected: Compiles with no errors.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add cmd/slack-tui/main.go
+git add cmd/slk/main.go
 git commit -m "refactor: update main.go to pass cookie to client constructor"
 ```
 
@@ -979,7 +979,7 @@ Expected: All tests PASS.
 - [ ] **Step 3: Verify build**
 
 Run: `make build`
-Expected: Binary builds successfully at `bin/slack-tui`.
+Expected: Binary builds successfully at `bin/slk`.
 
 - [ ] **Step 4: Commit**
 
@@ -1039,12 +1039,12 @@ Open [https://app.slack.com](https://app.slack.com) and log into your workspace.
 ### 3. Add Workspace
 
 ```bash
-./bin/slack-tui --add-workspace
+./bin/slk --add-workspace
 ```
 
 This launches an interactive onboarding that prompts for your `xoxc` token and `d` cookie.
 
-Alternatively, just run `./bin/slack-tui` -- it will launch onboarding automatically if no workspaces are configured.
+Alternatively, just run `./bin/slk` -- it will launch onboarding automatically if no workspaces are configured.
 ```
 
 Also remove the "Prerequisites" section's reference to "A Slack workspace with a configured Slack App" and replace with:

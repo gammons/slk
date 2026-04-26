@@ -85,7 +85,7 @@ Four independent UI improvements: better insert mode indication, multi-line comp
 - Add `OnConnect()` and `OnDisconnect()` methods to the `EventHandler` interface
 - In `client.go`, call `OnConnect()` when the `"hello"` WebSocket message is received (currently ignored)
 - In `client.go`, call `OnDisconnect()` when the WebSocket read loop exits (on error or clean close)
-- In `cmd/slack-tui/main.go`, wire the new callbacks to update `statusbar.SetConnectionState()`
+- In `cmd/slk/main.go`, wire the new callbacks to update `statusbar.SetConnectionState()`
 - Set initial state to `StateConnecting` before WebSocket connection starts
 
 ## Out of Scope

@@ -1,7 +1,7 @@
 package service
 
 import (
-	"github.com/gammons/slack-tui/internal/cache"
+	"github.com/gammons/slk/internal/cache"
 )
 
 type MessageService struct {
