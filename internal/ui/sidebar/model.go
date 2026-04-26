@@ -149,7 +149,7 @@ func (m *Model) View(height, width int) string {
 
 		// Unread dot indicator
 		unreadDot := " "
-		if item.UnreadCount > 0 && !isSelected {
+		if item.UnreadCount > 0 {
 			unreadDot = lipgloss.NewStyle().Foreground(styles.Primary).Render("●")
 		}
 
