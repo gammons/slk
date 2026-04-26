@@ -19,7 +19,7 @@ var (
 
 	// Panel styles
 	FocusedBorder = lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
+			BorderStyle(lipgloss.ThickBorder()).
 			BorderForeground(Primary)
 
 	UnfocusedBorder = lipgloss.NewStyle().
