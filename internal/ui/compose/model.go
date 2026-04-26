@@ -23,12 +23,18 @@ func New(channelName string) Model {
 	ta.Prompt = ""
 	ta.SetWidth(40)
 
-	// Override default textarea styles to remove background colors
-	// that clash with our dark theme
-	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-	ta.FocusedStyle.EndOfBuffer = lipgloss.NewStyle()
-	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
-	ta.BlurredStyle.EndOfBuffer = lipgloss.NewStyle()
+	// Override textarea styles to use our dark background consistently
+	bg := lipgloss.NewStyle().Background(styles.SurfaceDark)
+	ta.FocusedStyle.Base = bg
+	ta.FocusedStyle.Text = bg
+	ta.FocusedStyle.CursorLine = bg
+	ta.FocusedStyle.EndOfBuffer = bg
+	ta.FocusedStyle.Prompt = bg
+	ta.BlurredStyle.Base = bg
+	ta.BlurredStyle.Text = bg
+	ta.BlurredStyle.CursorLine = bg
+	ta.BlurredStyle.EndOfBuffer = bg
+	ta.BlurredStyle.Prompt = bg
 
 	return Model{
 		input:       ta,
