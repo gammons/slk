@@ -288,12 +288,23 @@ func placeAvatarBeside(avatar, content string) string {
 	return strings.Join(result, "\n")
 }
 
-// applySelection marks a message as selected with a thick left border.
+var thickLeftBorder = lipgloss.Border{Left: "▌"}
+
+// applyLeftBorder adds an invisible left border to keep alignment consistent.
+func applyLeftBorder(content string) string {
+	return lipgloss.NewStyle().
+		BorderStyle(thickLeftBorder).
+		BorderLeft(true).
+		BorderForeground(styles.Background).
+		Render(content)
+}
+
+// applySelection marks a message as selected with a green left border.
 func applySelection(content string, width int) string {
 	return lipgloss.NewStyle().
-		BorderStyle(lipgloss.Border{Left: "▌"}).
+		BorderStyle(thickLeftBorder).
 		BorderLeft(true).
-		BorderForeground(styles.Primary).
+		BorderForeground(styles.Accent).
 		Render(content)
 }
 
@@ -344,6 +355,8 @@ func (m *Model) View(height, width int) string {
 		if e.msgIdx == m.selected {
 			selectedStartLine = currentLine
 			content = applySelection(content, width)
+		} else {
+			content = applyLeftBorder(content)
 		}
 		h := lipgloss.Height(content)
 		if e.msgIdx == m.selected {
