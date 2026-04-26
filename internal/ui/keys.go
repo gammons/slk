@@ -23,6 +23,7 @@ type KeyMap struct {
 	Bottom         key.Binding
 	Quit           key.Binding
 	Reaction       key.Binding
+	ReactionNav    key.Binding
 	Edit           key.Binding
 	Yank           key.Binding
 }
@@ -48,6 +49,7 @@ func DefaultKeyMap() KeyMap {
 		Bottom:         key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
 		Quit:           key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 		Reaction:       key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "add reaction")),
+		ReactionNav:    key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "navigate reactions")),
 		Edit:           key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit message")),
 		Yank:           key.NewBinding(key.WithKeys("y"), key.WithHelp("yy", "yank")),
 	}

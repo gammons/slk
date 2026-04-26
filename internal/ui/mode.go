@@ -9,6 +9,7 @@ const (
 	ModeCommand
 	ModeSearch
 	ModeChannelFinder
+	ModeReactionPicker
 )
 
 func (m Mode) String() string {
@@ -23,6 +24,8 @@ func (m Mode) String() string {
 		return "SEARCH"
 	case ModeChannelFinder:
 		return "FIND"
+	case ModeReactionPicker:
+		return "REACT"
 	default:
 		return "UNKNOWN"
 	}
