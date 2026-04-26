@@ -126,77 +126,46 @@ func run() error {
 		})
 	}
 
-	// Connect all workspaces in parallel
-	type wsResult struct {
-		ctx  *WorkspaceContext
-		err  error
-		name string
+	// Set up loading overlay with workspace names
+	var wsNames []string
+	for _, t := range tokens {
+		wsNames = append(wsNames, t.TeamName)
 	}
-
-	workspaces := make(map[string]*WorkspaceContext)
-	resultCh := make(chan wsResult, len(tokens))
-
-	for _, token := range tokens {
-		go func(tok slackclient.Token) {
-			wctx, err := connectWorkspace(ctx, tok, db, cfg, avatarCache)
-			resultCh <- wsResult{ctx: wctx, err: err, name: tok.TeamName}
-		}(token)
-	}
-
-	// Wait for all workspaces to connect (with timeout)
-	var activeTeamID string
-	timeout := time.After(15 * time.Second)
-	remaining := len(tokens)
-
-	for remaining > 0 {
-		select {
-		case result := <-resultCh:
-			remaining--
-			if result.err != nil {
-				log.Printf("Warning: failed to connect workspace %s: %v", result.name, result.err)
-				continue
-			}
-			wctx := result.ctx
-			workspaces[wctx.TeamID] = wctx
-			wsMgr.AddWorkspace(wctx.TeamID, wctx.TeamName, "")
-			if activeTeamID == "" {
-				activeTeamID = wctx.TeamID
-			}
-		case <-timeout:
-			log.Printf("Warning: timed out waiting for workspaces to connect")
-			remaining = 0
-		}
-	}
-
-	if activeTeamID == "" {
-		return fmt.Errorf("no workspaces connected")
-	}
-
-	active := workspaces[activeTeamID]
-
-	// Set up the active workspace's channels, finder, and initial messages
-	app.SetChannels(active.Channels)
-	app.SetChannelFinderItems(active.FinderItems)
+	app.SetLoadingWorkspaces(wsNames)
 	app.SetWorkspaces(wsItems)
-	app.SetUserNames(active.UserNames)
-
-	// Load initial messages for first channel
-	if len(active.Channels) > 0 {
-		firstCh := active.Channels[0]
-		msgItems := fetchChannelMessages(active.Client, firstCh.ID, db, active.UserNames, tsFormat)
-		if len(msgItems) > 0 {
-			app.SetInitialChannel(firstCh.ID, firstCh.Name, msgItems)
-			app.SetInitialLastReadTS(active.LastReadMap[firstCh.ID])
-		}
-	}
 
 	// Wire avatar rendering
 	app.SetAvatarFunc(func(userID string) string {
 		return avatarCache.Get(userID)
 	})
 
+	// Wire up frecent emoji functions (not workspace-specific)
+	app.SetFrecentFuncs(
+		func(limit int) []reactionpicker.EmojiEntry {
+			names, err := db.GetFrecentEmoji(limit)
+			if err != nil {
+				return nil
+			}
+			codeMap := emoji.CodeMap()
+			var entries []reactionpicker.EmojiEntry
+			for _, name := range names {
+				unicode := codeMap[":"+name+":"]
+				entries = append(entries, reactionpicker.EmojiEntry{
+					Name:    name,
+					Unicode: unicode,
+				})
+			}
+			return entries
+		},
+		func(emojiName string) {
+			_ = db.RecordEmojiUse(emojiName)
+		},
+	)
+
 	// Declare p before wiring callbacks so closures can capture it
 	var p *tea.Program
+	workspaces := make(map[string]*WorkspaceContext)
+	var activeTeamID string
 
 	// wireCallbacks sets all App callbacks to use the given workspace context.
 	// Called on initial setup and again when the user switches workspaces.
@@ -306,32 +275,6 @@ func run() error {
 		app.SetCurrentUserID(client.UserID())
 	}
 
-	// Wire callbacks for the active workspace
-	wireCallbacks(active)
-
-	// Wire up frecent emoji functions (not workspace-specific)
-	app.SetFrecentFuncs(
-		func(limit int) []reactionpicker.EmojiEntry {
-			names, err := db.GetFrecentEmoji(limit)
-			if err != nil {
-				return nil
-			}
-			codeMap := emoji.CodeMap()
-			var entries []reactionpicker.EmojiEntry
-			for _, name := range names {
-				unicode := codeMap[":"+name+":"]
-				entries = append(entries, reactionpicker.EmojiEntry{
-					Name:    name,
-					Unicode: unicode,
-				})
-			}
-			return entries
-		},
-		func(emojiName string) {
-			_ = db.RecordEmojiUse(emojiName)
-		},
-	)
-
 	// Wire workspace switcher
 	app.SetWorkspaceSwitcher(func(teamID string) tea.Msg {
 		wctx, ok := workspaces[teamID]
@@ -355,27 +298,63 @@ func run() error {
 		}
 	})
 
-	// Run the TUI
+	// Start the TUI immediately (shows loading overlay)
 	p = tea.NewProgram(app, tea.WithAltScreen())
 
-	// Start WebSocket for ALL workspaces
-	for _, wctx := range workspaces {
-		teamID := wctx.TeamID // capture for closure
-		handler := &rtmEventHandler{
-			program:     p,
-			userNames:   wctx.UserNames,
-			tsFormat:    tsFormat,
-			db:          db,
-			workspaceID: teamID,
-			isActive:    func() bool { return teamID == activeTeamID },
-		}
-		wctx.RTMHandler = handler
-		wctx.ConnMgr = slackclient.NewConnectionManager(wctx.Client, handler)
-		go wctx.ConnMgr.Run(ctx)
-		defer wctx.ConnMgr.Stop()
+	// Launch workspace connections in background goroutines
+	// Results are sent to the TUI via p.Send()
+	for _, token := range tokens {
+		go func(tok slackclient.Token) {
+			wctx, err := connectWorkspace(ctx, tok, db, cfg, avatarCache)
+			if err != nil {
+				log.Printf("Warning: failed to connect workspace %s: %v", tok.TeamName, err)
+				p.Send(ui.WorkspaceFailedMsg{TeamName: tok.TeamName})
+				return
+			}
+
+			workspaces[wctx.TeamID] = wctx
+			wsMgr.AddWorkspace(wctx.TeamID, wctx.TeamName, "")
+
+			// Wire callbacks for the first workspace that connects
+			if activeTeamID == "" {
+				activeTeamID = wctx.TeamID
+				wireCallbacks(wctx)
+			}
+
+			// Start WebSocket for this workspace
+			teamID := wctx.TeamID
+			handler := &rtmEventHandler{
+				program:     p,
+				userNames:   wctx.UserNames,
+				tsFormat:    tsFormat,
+				db:          db,
+				workspaceID: teamID,
+				isActive:    func() bool { return teamID == activeTeamID },
+			}
+			wctx.RTMHandler = handler
+			wctx.ConnMgr = slackclient.NewConnectionManager(wctx.Client, handler)
+			go wctx.ConnMgr.Run(ctx)
+
+			p.Send(ui.WorkspaceReadyMsg{
+				TeamID:      wctx.TeamID,
+				TeamName:    wctx.TeamName,
+				Channels:    wctx.Channels,
+				FinderItems: wctx.FinderItems,
+				UserNames:   wctx.UserNames,
+				UserID:      wctx.UserID,
+			})
+		}(token)
 	}
 
 	_, err = p.Run()
+
+	// Clean up connection managers
+	for _, wctx := range workspaces {
+		if wctx.ConnMgr != nil {
+			wctx.ConnMgr.Stop()
+		}
+	}
+
 	return err
 }
 

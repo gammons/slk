@@ -3,6 +3,7 @@ package ui
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -103,7 +104,25 @@ type (
 		TeamID    string
 		ChannelID string
 	}
+	WorkspaceReadyMsg struct {
+		TeamID      string
+		TeamName    string
+		Channels    []sidebar.ChannelItem
+		FinderItems []channelfinder.Item
+		UserNames   map[string]string
+		UserID      string
+	}
+	WorkspaceFailedMsg struct {
+		TeamName string
+	}
+	SpinnerTickMsg    struct{}
+	LoadingTimeoutMsg struct{}
 )
+
+type loadingEntry struct {
+	TeamName string
+	Status   string // "connecting", "ready", "failed"
+}
 
 // SwitchWorkspaceFunc is called to switch the active workspace.
 type SwitchWorkspaceFunc func(teamID string) tea.Msg
@@ -177,6 +196,11 @@ type App struct {
 	// Workspace switching
 	workspaceSwitcher SwitchWorkspaceFunc
 	workspaceItems    []workspace.WorkspaceItem // cached for lookup
+
+	// Loading overlay
+	loading       bool
+	loadingStates []loadingEntry
+	spinnerFrame  int
 }
 
 func NewApp() *App {
@@ -199,6 +223,16 @@ func NewApp() *App {
 }
 
 func (a *App) Init() tea.Cmd {
+	if a.loading {
+		return tea.Batch(
+			tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+				return SpinnerTickMsg{}
+			}),
+			tea.Tick(15*time.Second, func(time.Time) tea.Msg {
+				return LoadingTimeoutMsg{}
+			}),
+		)
+	}
 	return nil
 }
 
@@ -352,6 +386,45 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case WorkspaceUnreadMsg:
 		a.workspaceRail.SetUnread(msg.TeamID, true)
+
+	case SpinnerTickMsg:
+		if a.loading {
+			a.spinnerFrame = (a.spinnerFrame + 1) % 10
+			return a, tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+				return SpinnerTickMsg{}
+			})
+		}
+
+	case LoadingTimeoutMsg:
+		if a.loading {
+			for i := range a.loadingStates {
+				if a.loadingStates[i].Status == "connecting" {
+					a.loadingStates[i].Status = "failed"
+				}
+			}
+			a.loading = false
+		}
+
+	case WorkspaceReadyMsg:
+		a.MarkWorkspaceReady(msg.TeamName)
+		// If this is the first workspace, set it up as active
+		if a.activeChannelID == "" {
+			a.sidebar.SetItems(msg.Channels)
+			a.channelFinder.SetItems(msg.FinderItems)
+			a.messagepane.SetUserNames(msg.UserNames)
+			a.threadPanel.SetUserNames(msg.UserNames)
+			a.currentUserID = msg.UserID
+			a.workspaceRail.SelectByID(msg.TeamID)
+			if len(msg.Channels) > 0 {
+				first := msg.Channels[0]
+				cmds = append(cmds, func() tea.Msg {
+					return ChannelSelectedMsg{ID: first.ID, Name: first.Name}
+				})
+			}
+		}
+
+	case WorkspaceFailedMsg:
+		a.MarkWorkspaceFailed(msg.TeamName)
 	}
 
 	return a, tea.Batch(cmds...)
@@ -361,6 +434,10 @@ func (a *App) handleKey(msg tea.KeyMsg) tea.Cmd {
 	// Always handle quit
 	if key.Matches(msg, a.keys.Quit) {
 		return tea.Quit
+	}
+
+	if a.loading {
+		return nil
 	}
 
 	// Mode-specific handling
@@ -998,6 +1075,79 @@ func (a *App) CloseThread() {
 	}
 }
 
+// Loading overlay methods
+
+func (a *App) SetLoadingWorkspaces(names []string) {
+	a.loading = true
+	a.loadingStates = nil
+	for _, name := range names {
+		a.loadingStates = append(a.loadingStates, loadingEntry{
+			TeamName: name,
+			Status:   "connecting",
+		})
+	}
+}
+
+func (a *App) MarkWorkspaceReady(teamName string) {
+	for i := range a.loadingStates {
+		if a.loadingStates[i].TeamName == teamName {
+			a.loadingStates[i].Status = "ready"
+			break
+		}
+	}
+	a.checkLoadingDone()
+}
+
+func (a *App) MarkWorkspaceFailed(teamName string) {
+	for i := range a.loadingStates {
+		if a.loadingStates[i].TeamName == teamName {
+			a.loadingStates[i].Status = "failed"
+			break
+		}
+	}
+	a.checkLoadingDone()
+}
+
+func (a *App) checkLoadingDone() {
+	for _, e := range a.loadingStates {
+		if e.Status == "connecting" {
+			return
+		}
+	}
+	a.loading = false
+}
+
+var spinnerChars = []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+
+func (a *App) renderLoadingOverlay(width, height int) string {
+	var rows []string
+	spinner := string(spinnerChars[a.spinnerFrame])
+
+	for _, entry := range a.loadingStates {
+		switch entry.Status {
+		case "ready":
+			rows = append(rows, lipgloss.NewStyle().Foreground(styles.Accent).Render("✓")+" "+entry.TeamName)
+		case "failed":
+			rows = append(rows, lipgloss.NewStyle().Foreground(styles.Error).Render("✗")+" "+entry.TeamName+" (failed)")
+		default:
+			rows = append(rows, lipgloss.NewStyle().Foreground(styles.Primary).Render(spinner)+" Connecting to "+entry.TeamName+"...")
+		}
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left, rows...)
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(styles.Primary).
+		Padding(1, 2).
+		Render(content)
+
+	return lipgloss.Place(width, height,
+		lipgloss.Center, lipgloss.Center,
+		box,
+		lipgloss.WithWhitespaceBackground(lipgloss.Color("#0F0F1A")),
+	)
+}
+
 // SetInitialLastReadTS sets the last read timestamp for the initial channel load.
 func (a *App) SetInitialLastReadTS(ts string) {
 	a.messagepane.SetLastReadTS(ts)
@@ -1218,6 +1368,10 @@ func (a *App) View() string {
 
 	if a.workspaceFinder.IsVisible() {
 		screen = a.workspaceFinder.ViewOverlay(a.width, a.height, screen)
+	}
+
+	if a.loading {
+		screen = a.renderLoadingOverlay(a.width, a.height)
 	}
 
 	return screen
