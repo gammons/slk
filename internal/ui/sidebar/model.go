@@ -1,7 +1,6 @@
 package sidebar
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -175,11 +174,6 @@ func (m *Model) View(height, width int) string {
 		}
 
 		label := cursor + prefix + name
-
-		if item.UnreadCount > 0 {
-			badge := styles.UnreadBadge.Render(fmt.Sprintf(" %d ", item.UnreadCount))
-			label += " " + badge
-		}
 
 		var style lipgloss.Style
 		if isSelected {
