@@ -113,5 +113,12 @@ func (m Model) View(width int, focused bool) string {
 		return style.Render(placeholder)
 	}
 
-	return style.Render(m.input.View())
+	// Wrap textarea output with full-width dark background.
+	// The textarea's internal styles use Inline(true) which only covers text,
+	// not the full line width. This wrapper ensures consistent background.
+	content := lipgloss.NewStyle().
+		Background(styles.SurfaceDark).
+		Width(innerWidth).
+		Render(m.input.View())
+	return style.Render(content)
 }
