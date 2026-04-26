@@ -240,11 +240,10 @@ func run() error {
 			msgItems := fetchChannelMessages(client, firstCh.ID, db, userNames, tsFormat)
 			if len(msgItems) > 0 {
 				app.SetInitialChannel(firstCh.ID, firstCh.Name, msgItems)
+				app.SetInitialLastReadTS(lastReadMap[firstCh.ID])
 			}
 		}
 	}
-
-	_ = lastReadMap // used by channel fetcher in future work
 
 	app.SetWorkspaces(wsItems)
 	app.SetUserNames(userNames)
@@ -254,14 +253,34 @@ func run() error {
 		return avatarCache.Get(userID)
 	})
 
+	// Declare p before wiring callbacks so closures can capture it
+	var p *tea.Program
+
 	// Wire up the channel fetcher so switching channels loads messages
 	if activeClient != nil {
 		client := activeClient
 		app.SetChannelFetcher(func(channelID, channelName string) tea.Msg {
 			msgItems := fetchChannelMessages(client, channelID, db, userNames, tsFormat)
+
+			lastReadTS := lastReadMap[channelID]
+
+			// Mark channel as read up to the latest message
+			if len(msgItems) > 0 {
+				latestTS := msgItems[len(msgItems)-1].TS
+				go func() {
+					_ = client.MarkChannel(ctx, channelID, latestTS)
+					_ = db.UpdateLastReadTS(channelID, latestTS)
+					lastReadMap[channelID] = latestTS
+					if p != nil {
+						p.Send(ui.ChannelMarkedReadMsg{ChannelID: channelID})
+					}
+				}()
+			}
+
 			return ui.MessagesLoadedMsg{
-				ChannelID: channelID,
-				Messages:  msgItems,
+				ChannelID:  channelID,
+				Messages:   msgItems,
+				LastReadTS: lastReadTS,
 			}
 		})
 
@@ -371,7 +390,7 @@ func run() error {
 	}
 
 	// Run the TUI
-	p := tea.NewProgram(app, tea.WithAltScreen())
+	p = tea.NewProgram(app, tea.WithAltScreen())
 
 	// Start WebSocket for real-time events
 	if activeClient != nil {

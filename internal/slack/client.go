@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"strings"
 
 	"github.com/gorilla/websocket"
 	"github.com/slack-go/slack"
@@ -411,6 +412,30 @@ func (c *Client) AddReaction(ctx context.Context, channelID, ts, emoji string) e
 // RemoveReaction removes an emoji reaction from a message.
 func (c *Client) RemoveReaction(ctx context.Context, channelID, ts, emoji string) error {
 	return c.api.RemoveReaction(emoji, slack.ItemRef{Channel: channelID, Timestamp: ts})
+}
+
+// MarkChannel marks a channel as read up to the given timestamp.
+func (c *Client) MarkChannel(ctx context.Context, channelID, ts string) error {
+	data := url.Values{
+		"channel": {channelID},
+		"ts":      {ts},
+	}
+
+	req, err := http.NewRequest("POST", "https://slack.com/api/conversations.mark",
+		strings.NewReader(data.Encode()))
+	if err != nil {
+		return fmt.Errorf("creating mark request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	httpClient := newCookieHTTPClient(c.cookie)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("marking channel: %w", err)
+	}
+	defer resp.Body.Close()
+	return nil
 }
 
 // ChannelSection represents a user's sidebar section from the undocumented Slack API.

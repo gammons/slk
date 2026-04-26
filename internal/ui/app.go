@@ -34,8 +34,9 @@ type (
 		Name string
 	}
 	MessagesLoadedMsg struct {
-		ChannelID string
-		Messages  []messages.MessageItem
+		ChannelID  string
+		Messages   []messages.MessageItem
+		LastReadTS string
 	}
 	OlderMessagesLoadedMsg struct {
 		ChannelID string
@@ -231,6 +232,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MessagesLoadedMsg:
 		if msg.ChannelID == a.activeChannelID {
+			a.messagepane.SetLastReadTS(msg.LastReadTS)
 			a.messagepane.SetMessages(msg.Messages)
 		}
 
@@ -895,6 +897,11 @@ func (a *App) CloseThread() {
 	if a.focusedPanel == PanelThread {
 		a.focusedPanel = PanelMessages
 	}
+}
+
+// SetInitialLastReadTS sets the last read timestamp for the initial channel load.
+func (a *App) SetInitialLastReadTS(ts string) {
+	a.messagepane.SetLastReadTS(ts)
 }
 
 // Setters for external use (wiring services)
