@@ -98,15 +98,19 @@ func (m Model) View(width int, focused bool) string {
 	innerWidth := width - 5 // account for left border + left/right padding
 	m.input.SetWidth(innerWidth)
 
-	// Ensure the textarea Base style fills the full inner width
-	// so the background color covers the entire compose area
-	bg := lipgloss.NewStyle().Background(styles.SurfaceDark).Width(innerWidth)
-	m.input.FocusedStyle.Base = bg
-	m.input.BlurredStyle.Base = bg
-
 	var style = styles.ComposeBox.Width(width - 2)
 	if focused {
 		style = styles.ComposeInsert.Width(width - 2)
+	}
+
+	// If empty and unfocused, render placeholder manually with correct background
+	if m.input.Value() == "" && !focused {
+		placeholder := lipgloss.NewStyle().
+			Foreground(styles.TextMuted).
+			Background(styles.SurfaceDark).
+			Width(innerWidth).
+			Render(m.input.Placeholder)
+		return style.Render(placeholder)
 	}
 
 	return style.Render(m.input.View())
