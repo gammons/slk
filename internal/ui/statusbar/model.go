@@ -110,7 +110,7 @@ func (m Model) View(width int) string {
 		}
 		rightContent += p
 	}
-	rightContent += " " // trailing padding
+	rightContent += "  " // trailing padding (extra space for unicode width variance)
 
 	// Fill the bar to full width
 	gap := width - lipgloss.Width(left) - lipgloss.Width(rightContent)

@@ -122,19 +122,22 @@ var (
 			BorderStyle(thickLeftBorder).
 			BorderLeft(true).
 			BorderForeground(Border).
-			PaddingLeft(1)
+			Background(SurfaceDark).
+			Padding(1, 1, 1, 1)
 
 	ComposeFocused = lipgloss.NewStyle().
 			BorderStyle(thickLeftBorder).
 			BorderLeft(true).
 			BorderForeground(Primary).
-			PaddingLeft(1)
+			Background(SurfaceDark).
+			Padding(1, 1, 1, 1)
 
 	ComposeInsert = lipgloss.NewStyle().
 			BorderStyle(thickLeftBorder).
 			BorderLeft(true).
 			BorderForeground(Primary).
-			PaddingLeft(1)
+			Background(SurfaceDark).
+			Padding(1, 1, 1, 1)
 
 	// Presence indicators
 	PresenceOnline = lipgloss.NewStyle().Foreground(Accent)

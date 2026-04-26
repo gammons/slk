@@ -87,7 +87,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 }
 
 func (m Model) View(width int, focused bool) string {
-	m.input.SetWidth(width - 3) // account for left border + padding
+	m.input.SetWidth(width - 5) // account for left border + left/right padding
 
 	var style = styles.ComposeBox.Width(width - 2)
 	if focused {
