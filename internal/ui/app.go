@@ -449,6 +449,22 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 		} else if a.focusedPanel == PanelThread {
 			a.threadPanel.EnterReactionNav()
 		}
+
+	default:
+		// Number keys 1-9 switch workspaces
+		keyStr := msg.String()
+		if len(keyStr) == 1 && keyStr[0] >= '1' && keyStr[0] <= '9' {
+			idx := int(keyStr[0] - '1') // 0-indexed
+			if idx < len(a.workspaceItems) && a.workspaceSwitcher != nil {
+				if a.workspaceItems[idx].ID != a.workspaceRail.SelectedID() {
+					switcher := a.workspaceSwitcher
+					teamID := a.workspaceItems[idx].ID
+					return func() tea.Msg {
+						return switcher(teamID)
+					}
+				}
+			}
+		}
 	}
 	return nil
 }
