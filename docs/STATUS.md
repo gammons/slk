@@ -1,6 +1,6 @@
 # slack-tui Implementation Status
 
-Last updated: 2026-04-25
+Last updated: 2026-04-26
 
 ## What's Working
 
@@ -21,13 +21,18 @@ Last updated: 2026-04-25
 - [x] j/k navigation in channel list and messages
 - [x] h/l and Tab to switch focus between panels
 - [x] Ctrl+b to toggle sidebar
-- [x] Channel sidebar with sections, scrolling, and selection cursor
-- [x] Message pane with viewport scrolling (keeps selected message visible)
-- [x] Message compose box with INSERT mode
-- [x] Status bar showing current mode, channel, workspace
-- [x] Bordered panels with focus highlighting (blue = focused, gray = unfocused)
+- [x] Channel sidebar with sections, scrolling, and green left-border selection
+- [x] Message pane with viewport scrolling (bubbles/viewport)
+- [x] Multi-line message compose (bubbles/textarea, Shift+Enter for newline)
+- [x] Compose box with thick left border and dark background
+- [x] Status bar showing current mode, channel, workspace, connection state
+- [x] Three-state connection indicator (green Connected / yellow Connecting / red Disconnected)
+- [x] Thick border on focused panel, rounded border on unfocused
+- [x] Insert mode indicated by compose box highlight only (panel borders stay gray)
 - [x] Lipgloss styling throughout with dark theme
-- [x] Ctrl+t/Ctrl+p fuzzy channel finder overlay
+- [x] Ctrl+t/Ctrl+p fuzzy channel finder overlay with blue input border
+- [x] Green left-border selection indicator (messages, threads, channels, channel finder)
+- [x] Workspace rail -- borderless dark background strip
 
 ### Messages
 - [x] Fetch and display channel messages
@@ -43,6 +48,19 @@ Last updated: 2026-04-25
 - [x] Message sending via Slack API
 - [x] Real-time incoming messages via WebSocket (auto-scroll, cached to SQLite)
 - [x] Render cache for scroll performance
+- [x] ANSI-aware text wrapping (muesli/reflow/wordwrap)
+- [x] ANSI-safe string truncation (muesli/reflow/truncate)
+- [x] Spacing between messages (margin below each)
+
+### Threads
+- [x] Thread panel -- side panel (35% width) for viewing and replying to threads
+- [x] Enter on message opens thread, Escape closes
+- [x] Ctrl+] toggles thread panel
+- [x] Thread replies with green left-border selection
+- [x] Thread reply compose with Shift+Enter for newlines
+- [x] Real-time thread reply routing via WebSocket
+- [x] Thread reply sending via Slack API
+- [x] Channel switch closes thread panel
 
 ### Users & Avatars
 - [x] User display name resolution (Profile.DisplayName > RealName > Name)
@@ -57,11 +75,10 @@ Last updated: 2026-04-25
 - [x] Config-based channel sections with glob pattern matching
 - [x] Channel name truncation for long names
 - [x] Sidebar scrolling with selected item always visible
+- [x] Unread channel indicators (blue dot + bold text)
+- [x] Unread counts fetched via Slack's client.counts API
 
 ## Not Yet Implemented
-
-### High Priority (next iteration)
-- [ ] **Thread panel** -- side panel for viewing and replying to threads (spec'd in design, not built)
 
 ### Medium Priority
 - [ ] Reaction picker (press `r` to add emoji reaction)
@@ -77,7 +94,6 @@ Last updated: 2026-04-25
 ### Low Priority
 - [ ] Multi-workspace switching at runtime (workspace rail click)
 - [ ] Typing indicators
-- [ ] Unread count badges on channels
 - [ ] Quiet hours for notifications
 - [ ] Custom keybinding overrides in config
 - [ ] Message link previews / unfurling
@@ -104,9 +120,10 @@ slack-tui/
 │       ├── workspace/       # Workspace rail component
 │       ├── sidebar/         # Channel sidebar with sections + scrolling
 │       ├── messages/        # Message pane with viewport + markdown rendering
+│       ├── thread/          # Thread panel with viewport + reply compose
 │       ├── channelfinder/   # Ctrl+t/Ctrl+p fuzzy channel finder overlay
-│       ├── compose/         # Message input box
-│       └── statusbar/       # Bottom status bar
+│       ├── compose/         # Multi-line message input (textarea)
+│       └── statusbar/       # Bottom status bar with connection state
 ├── docs/
 │   ├── STATUS.md            # This file
 │   └── superpowers/
@@ -118,9 +135,9 @@ slack-tui/
 
 ## Stats
 
-- 25 source files, 19 test files
-- ~5,500 lines of Go
-- 12 packages, all tests passing
+- 26 source files, 19 test files
+- ~6,600 lines of Go
+- 13 packages, all tests passing
 - Single binary, no runtime dependencies beyond the terminal
 
 ## Key Design Decisions
@@ -128,6 +145,9 @@ slack-tui/
 1. **Service-oriented layers** -- UI, Service, Client, Data layers with clear interfaces
 2. **SQLite as cache, not source of truth** -- Slack API is authoritative, SQLite enables fast startup
 3. **Render caching** -- messages rendered once, cached until content changes
-4. **Bottom-up viewport** -- message pane builds viewport from selected entry upward, guaranteeing newest messages are always visible
+4. **bubbles/viewport scrolling** -- all scrollable panels use bubbles/viewport with item-level selection
 5. **Direct WebSocket** -- connects to Slack's internal browser WebSocket protocol (not RTM or Socket Mode) for real-time events with xoxc tokens
 6. **Config-based channel sections** -- undocumented Slack API for sections requires xoxc tokens; config-based approach is reliable and user-controllable
+7. **muesli/reflow** -- ANSI-aware text wrapping, padding, and truncation for correct rendering with styled text
+8. **Green left-border selection** -- consistent `▌` indicator across messages, threads, channels, and channel finder
+9. **Thick left-border compose** -- compose boxes use `▌` border with dark background, matching opencode's input style
