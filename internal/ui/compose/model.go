@@ -95,7 +95,14 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 }
 
 func (m Model) View(width int, focused bool) string {
-	m.input.SetWidth(width - 5) // account for left border + left/right padding
+	innerWidth := width - 5 // account for left border + left/right padding
+	m.input.SetWidth(innerWidth)
+
+	// Ensure the textarea Base style fills the full inner width
+	// so the background color covers the entire compose area
+	bg := lipgloss.NewStyle().Background(styles.SurfaceDark).Width(innerWidth)
+	m.input.FocusedStyle.Base = bg
+	m.input.BlurredStyle.Base = bg
 
 	var style = styles.ComposeBox.Width(width - 2)
 	if focused {
