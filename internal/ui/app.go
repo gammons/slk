@@ -65,6 +65,9 @@ type (
 		ThreadTS  string
 		Message   messages.MessageItem
 	}
+	ConnectionStateMsg struct {
+		State int // 0=connecting, 1=connected, 2=disconnected
+	}
 )
 
 // ChannelFetchFunc is called when the user selects a channel.
@@ -227,6 +230,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ThreadReplySentMsg:
 		// Reply will arrive via RTM WebSocket event (NewMessageMsg).
 		// Don't append here to avoid doubling.
+
+	case ConnectionStateMsg:
+		a.statusbar.SetConnectionState(statusbar.ConnectionState(msg.State))
 	}
 
 	return a, tea.Batch(cmds...)

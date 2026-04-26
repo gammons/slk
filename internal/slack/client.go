@@ -129,6 +129,7 @@ func (c *Client) StartWebSocket(handler EventHandler) error {
 	c.wsConn = conn
 
 	go func() {
+		defer handler.OnDisconnect()
 		for {
 			_, message, err := conn.ReadMessage()
 			if err != nil {

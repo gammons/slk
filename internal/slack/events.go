@@ -12,6 +12,8 @@ type EventHandler interface {
 	OnReactionRemoved(channelID, ts, userID, emoji string)
 	OnPresenceChange(userID, presence string)
 	OnUserTyping(channelID, userID string)
+	OnConnect()
+	OnDisconnect()
 }
 
 // wsEvent is the minimal structure for identifying a WebSocket event type.
@@ -123,7 +125,7 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 		handler.OnUserTyping(evt.Channel, evt.User)
 
 	case "hello":
-		// Successfully connected
+		handler.OnConnect()
 
 	case "reconnect_url":
 		// Could store for reconnection; ignoring for now

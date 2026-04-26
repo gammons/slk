@@ -20,6 +20,7 @@ import (
 	"github.com/gammons/slack-tui/internal/ui/channelfinder"
 	"github.com/gammons/slack-tui/internal/ui/messages"
 	"github.com/gammons/slack-tui/internal/ui/sidebar"
+	"github.com/gammons/slack-tui/internal/ui/statusbar"
 	"github.com/gammons/slack-tui/internal/ui/workspace"
 )
 
@@ -557,4 +558,12 @@ func (h *rtmEventHandler) OnPresenceChange(userID, presence string) {
 
 func (h *rtmEventHandler) OnUserTyping(channelID, userID string) {
 	// TODO: implement typing indicators in UI
+}
+
+func (h *rtmEventHandler) OnConnect() {
+	h.program.Send(ui.ConnectionStateMsg{State: int(statusbar.StateConnected)})
+}
+
+func (h *rtmEventHandler) OnDisconnect() {
+	h.program.Send(ui.ConnectionStateMsg{State: int(statusbar.StateDisconnected)})
 }

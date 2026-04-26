@@ -31,6 +31,8 @@ func (m *mockEventHandler) OnPresenceChange(userID, presence string) {
 func (m *mockEventHandler) OnUserTyping(channelID, userID string) {
 	m.typingEvents = append(m.typingEvents, channelID+":"+userID)
 }
+func (m *mockEventHandler) OnConnect()    {}
+func (m *mockEventHandler) OnDisconnect() {}
 
 func TestEventHandlerInterface(t *testing.T) {
 	handler := &mockEventHandler{}

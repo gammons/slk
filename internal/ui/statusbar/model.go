@@ -8,19 +8,28 @@ import (
 	"github.com/gammons/slack-tui/internal/ui/styles"
 )
 
+// ConnectionState represents the WebSocket connection status.
+type ConnectionState int
+
+const (
+	StateConnecting ConnectionState = iota
+	StateConnected
+	StateDisconnected
+)
+
 type Model struct {
 	mode        string
 	channel     string
 	workspace   string
 	unreadCount int
-	connected   bool
+	connState   ConnectionState
 	inThread    bool
 }
 
 func New() Model {
 	return Model{
 		mode:      "NORMAL",
-		connected: true,
+		connState: StateConnecting,
 	}
 }
 
@@ -41,8 +50,8 @@ func (m *Model) SetUnreadCount(count int) {
 	m.unreadCount = count
 }
 
-func (m *Model) SetConnected(connected bool) {
-	m.connected = connected
+func (m *Model) SetConnectionState(state ConnectionState) {
+	m.connState = state
 }
 
 func (m *Model) SetInThread(inThread bool) {
@@ -80,11 +89,16 @@ func (m Model) View(width int) string {
 			styles.UnreadBadge.Render(fmt.Sprintf(" %d unread ", m.unreadCount)))
 	}
 
-	if m.connected {
-		rightParts = append(rightParts, styles.PresenceOnline.Render("*"))
-	} else {
-		disconnectedStyle := lipgloss.NewStyle().Foreground(styles.Error)
-		rightParts = append(rightParts, disconnectedStyle.Render("DISCONNECTED"))
+	switch m.connState {
+	case StateConnected:
+		rightParts = append(rightParts,
+			lipgloss.NewStyle().Foreground(styles.Accent).Render("● Connected"))
+	case StateConnecting:
+		rightParts = append(rightParts,
+			lipgloss.NewStyle().Foreground(styles.Warning).Render("● Connecting"))
+	case StateDisconnected:
+		rightParts = append(rightParts,
+			lipgloss.NewStyle().Foreground(styles.Error).Render("● Disconnected"))
 	}
 
 	left := lipgloss.JoinHorizontal(lipgloss.Center, modeLabel, channelInfo, wsInfo)
