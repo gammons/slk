@@ -2,7 +2,6 @@ package slackclient
 
 import (
 	"context"
-	"log"
 	"time"
 )
 
@@ -37,11 +36,8 @@ func (cm *ConnectionManager) Run(ctx context.Context) {
 		default:
 		}
 
-		log.Printf("WebSocket: connecting...")
-
 		err := cm.client.StartWebSocket(cm.handler)
 		if err != nil {
-			log.Printf("WebSocket: connection failed: %v", err)
 			cm.handler.OnDisconnect()
 			select {
 			case <-ctx.Done():
@@ -61,7 +57,7 @@ func (cm *ConnectionManager) Run(ctx context.Context) {
 			cm.client.StopWebSocket()
 			return
 		case <-cm.client.WsDone():
-			log.Printf("WebSocket: disconnected, will reconnect...")
+			// Disconnected — will reconnect after backoff
 		}
 
 		// Brief pause before reconnect
