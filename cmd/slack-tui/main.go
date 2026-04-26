@@ -188,10 +188,11 @@ func run() error {
 			section := cfg.MatchSection(ch.Name)
 
 			sidebarItems = append(sidebarItems, sidebar.ChannelItem{
-				ID:      ch.ID,
-				Name:    displayName,
-				Type:    chType,
-				Section: section,
+				ID:          ch.ID,
+				Name:        displayName,
+				Type:        chType,
+				Section:     section,
+				UnreadCount: ch.UnreadCountDisplay,
 			})
 		}
 
