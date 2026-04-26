@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/gammons/slack-tui/internal/ui/styles"
 )
 
@@ -23,6 +24,13 @@ func New(channelName string) Model {
 	ta.ShowLineNumbers = false
 	ta.Prompt = "> "
 	ta.SetWidth(40)
+
+	// Override default textarea styles to remove background colors
+	// that clash with our dark theme
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	ta.FocusedStyle.EndOfBuffer = lipgloss.NewStyle()
+	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
+	ta.BlurredStyle.EndOfBuffer = lipgloss.NewStyle()
 
 	return Model{
 		input:       ta,
