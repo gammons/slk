@@ -6,15 +6,13 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/reflow/padding"
 	"github.com/muesli/reflow/wordwrap"
 
 	"github.com/gammons/slack-tui/internal/ui/messages"
 	"github.com/gammons/slack-tui/internal/ui/styles"
 )
 
-var selectedBg = lipgloss.NewStyle().
-	Background(lipgloss.Color("#222233"))
+var thickLeftBorder = lipgloss.Border{Left: "▌"}
 
 // Model represents the thread panel UI component.
 // It displays a parent message and its replies with cursor navigation.
@@ -197,6 +195,8 @@ func (m *Model) View(height, width int) string {
 		if i == m.selected {
 			selectedStartLine = currentLine
 			content = applySelection(content, width)
+		} else {
+			content = applyLeftBorder(content)
 		}
 		h := lipgloss.Height(content)
 		if i == m.selected {
@@ -226,16 +226,24 @@ func (m *Model) View(height, width int) string {
 	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(result)
 }
 
-// applySelection highlights a message by padding each line to full width
-// and applying the selection background color.
+// applyLeftBorder adds an invisible left border to keep alignment consistent.
+func applyLeftBorder(content string) string {
+	return lipgloss.NewStyle().
+		BorderStyle(thickLeftBorder).
+		BorderLeft(true).
+		BorderForeground(styles.Background).
+		MarginBottom(1).
+		Render(content)
+}
+
+// applySelection marks a reply as selected with a green left border.
 func applySelection(content string, width int) string {
-	padded := padding.String(content, uint(width))
-	lines := strings.Split(padded, "\n")
-	bg := selectedBg
-	for i, line := range lines {
-		lines[i] = bg.Render(line)
-	}
-	return strings.Join(lines, "\n")
+	return lipgloss.NewStyle().
+		BorderStyle(thickLeftBorder).
+		BorderLeft(true).
+		BorderForeground(styles.Accent).
+		MarginBottom(1).
+		Render(content)
 }
 
 // renderThreadMessage renders a single message for the thread panel.
