@@ -70,25 +70,25 @@ func TestNavigation(t *testing.T) {
 	}
 	m.SetThread(parent, replies, "C123", "1700000001.000000")
 
-	// Should start at bottom (newest reply)
-	if m.selected != 2 {
-		t.Errorf("expected selected=2, got %d", m.selected)
-	}
-
-	m.MoveUp()
-	if m.selected != 1 {
-		t.Errorf("expected selected=1, got %d", m.selected)
-	}
-
-	m.MoveUp()
-	m.MoveUp() // should not go below 0
+	// Should start at top (oldest reply)
 	if m.selected != 0 {
 		t.Errorf("expected selected=0, got %d", m.selected)
 	}
 
-	m.GoToBottom()
+	m.MoveDown()
+	if m.selected != 1 {
+		t.Errorf("expected selected=1, got %d", m.selected)
+	}
+
+	m.MoveDown()
+	m.MoveDown() // should not go past end
 	if m.selected != 2 {
-		t.Errorf("expected selected=2 after GoToBottom, got %d", m.selected)
+		t.Errorf("expected selected=2, got %d", m.selected)
+	}
+
+	m.GoToTop()
+	if m.selected != 0 {
+		t.Errorf("expected selected=0 after GoToTop, got %d", m.selected)
 	}
 }
 

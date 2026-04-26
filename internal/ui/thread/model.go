@@ -43,11 +43,7 @@ func (m *Model) SetThread(parent messages.MessageItem, replies []messages.Messag
 	m.replies = replies
 	m.channelID = channelID
 	m.threadTS = threadTS
-	if len(replies) > 0 {
-		m.selected = len(replies) - 1
-	} else {
-		m.selected = 0
-	}
+	m.selected = 0
 }
 
 // AddReply appends a reply to the thread. If the cursor was at the bottom,
