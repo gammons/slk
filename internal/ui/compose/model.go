@@ -2,8 +2,6 @@
 package compose
 
 import (
-	"strings"
-
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -67,8 +65,8 @@ func (m *Model) Reset() {
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
-	// Auto-grow height based on content line count
-	lines := strings.Count(m.input.Value(), "\n") + 1
+	// Auto-grow height based on the textarea's actual line count
+	lines := m.input.LineCount()
 	if lines < 1 {
 		lines = 1
 	}
