@@ -387,13 +387,7 @@ func (m *Model) View(height, width int) string {
 
 	// Scroll indicators
 	var scrollUp, scrollDown string
-	if m.vp.YOffset > 0 {
-		indicator := "  -- more above --"
-		if m.loading {
-			indicator = "  Loading older messages..."
-		}
-		scrollUp = lipgloss.NewStyle().Foreground(styles.TextMuted).Render(indicator)
-	} else if m.loading {
+	if m.loading {
 		scrollUp = lipgloss.NewStyle().Foreground(styles.TextMuted).Render("  Loading older messages...")
 	}
 
