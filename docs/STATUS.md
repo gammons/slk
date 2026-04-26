@@ -67,6 +67,14 @@ Last updated: 2026-04-26
 - [x] DM channels show user names instead of IDs
 - [x] Half-block pixel art avatars (downloaded, cached, rendered as Unicode art)
 
+### Reactions
+- [x] Reaction picker overlay (press `r` -- search-first with frecent emoji)
+- [x] Quick-toggle reaction nav (press `R` -- h/l to navigate, Enter to toggle)
+- [x] Pill-style reaction display (green = your reaction, gray = others)
+- [x] Real-time reaction sync via WebSocket
+- [x] Frecent emoji tracking (most-used emoji shown first)
+- [x] Optimistic UI updates
+
 ### Channels
 - [x] Public channels (# prefix)
 - [x] Private channels (◆ prefix)
@@ -81,7 +89,6 @@ Last updated: 2026-04-26
 ## Not Yet Implemented
 
 ### Medium Priority
-- [ ] Reaction picker (press `r` to add emoji reaction)
 - [ ] Message editing (`e` on own message)
 - [ ] Message deletion (`dd` on own message)
 - [ ] Search (`:search <query>` or `Ctrl+/`)
@@ -135,9 +142,9 @@ slack-tui/
 
 ## Stats
 
-- 26 source files, 19 test files
-- ~6,600 lines of Go
-- 13 packages, all tests passing
+- 29 source files, 22 test files
+- ~8,100 lines of Go
+- 14 packages, all tests passing
 - Single binary, no runtime dependencies beyond the terminal
 
 ## Key Design Decisions
