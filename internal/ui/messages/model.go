@@ -128,6 +128,10 @@ func (m *Model) MoveDown() {
 	}
 }
 
+func (m *Model) IsAtBottom() bool {
+	return m.selected >= len(m.messages)-1
+}
+
 func (m *Model) GoToTop() {
 	m.selected = 0
 }

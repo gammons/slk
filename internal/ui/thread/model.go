@@ -125,6 +125,10 @@ func (m *Model) MoveDown() {
 	}
 }
 
+func (m *Model) IsAtBottom() bool {
+	return m.selected >= len(m.replies)-1
+}
+
 // GoToTop moves the selection to the first reply.
 func (m *Model) GoToTop() {
 	m.selected = 0
