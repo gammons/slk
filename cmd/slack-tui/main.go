@@ -19,9 +19,11 @@ import (
 	"github.com/gammons/slack-tui/internal/ui"
 	"github.com/gammons/slack-tui/internal/ui/channelfinder"
 	"github.com/gammons/slack-tui/internal/ui/messages"
+	"github.com/gammons/slack-tui/internal/ui/reactionpicker"
 	"github.com/gammons/slack-tui/internal/ui/sidebar"
 	"github.com/gammons/slack-tui/internal/ui/statusbar"
 	"github.com/gammons/slack-tui/internal/ui/workspace"
+	emoji "github.com/kyokomi/emoji/v2"
 )
 
 func main() {
@@ -321,6 +323,42 @@ func run() error {
 				},
 			}
 		})
+
+		// Wire up reaction sending
+		app.SetReactionSender(
+			func(channelID, messageTS, emojiName string) error {
+				return client.AddReaction(ctx, channelID, messageTS, emojiName)
+			},
+			func(channelID, messageTS, emojiName string) error {
+				return client.RemoveReaction(ctx, channelID, messageTS, emojiName)
+			},
+		)
+
+		// Wire up frecent emoji functions
+		app.SetFrecentFuncs(
+			func(limit int) []reactionpicker.EmojiEntry {
+				names, err := db.GetFrecentEmoji(limit)
+				if err != nil {
+					return nil
+				}
+				codeMap := emoji.CodeMap()
+				var entries []reactionpicker.EmojiEntry
+				for _, name := range names {
+					unicode := codeMap[":"+name+":"]
+					entries = append(entries, reactionpicker.EmojiEntry{
+						Name:    name,
+						Unicode: unicode,
+					})
+				}
+				return entries
+			},
+			func(emojiName string) {
+				_ = db.RecordEmojiUse(emojiName)
+			},
+		)
+
+		// Set current user ID for reaction ownership detection
+		app.SetCurrentUserID(client.UserID())
 	}
 
 	// Run the TUI
@@ -371,6 +409,24 @@ func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, 
 			userName = resolved
 		}
 
+		// Convert reactions
+		var reactions []messages.ReactionItem
+		for _, r := range m.Reactions {
+			hasReacted := false
+			for _, uid := range r.Users {
+				if uid == client.UserID() {
+					hasReacted = true
+					break
+				}
+			}
+			reactions = append(reactions, messages.ReactionItem{
+				Emoji:      r.Name,
+				Count:      r.Count,
+				HasReacted: hasReacted,
+			})
+			_ = db.UpsertReaction(m.Timestamp, channelID, r.Name, r.Users, r.Count)
+		}
+
 		msgItems = append(msgItems, messages.MessageItem{
 			TS:         m.Timestamp,
 			UserID:     m.User,
@@ -379,6 +435,7 @@ func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, 
 			Timestamp:  formatTimestamp(m.Timestamp, tsFormat),
 			ThreadTS:   m.ThreadTimestamp,
 			ReplyCount: m.ReplyCount,
+			Reactions:  reactions,
 		})
 	}
 
@@ -415,6 +472,24 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 			userName = resolved
 		}
 
+		// Convert reactions
+		var reactions []messages.ReactionItem
+		for _, r := range m.Reactions {
+			hasReacted := false
+			for _, uid := range r.Users {
+				if uid == client.UserID() {
+					hasReacted = true
+					break
+				}
+			}
+			reactions = append(reactions, messages.ReactionItem{
+				Emoji:      r.Name,
+				Count:      r.Count,
+				HasReacted: hasReacted,
+			})
+			_ = db.UpsertReaction(m.Timestamp, channelID, r.Name, r.Users, r.Count)
+		}
+
 		msgItems = append(msgItems, messages.MessageItem{
 			TS:         m.Timestamp,
 			UserID:     m.User,
@@ -423,6 +498,7 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 			Timestamp:  formatTimestamp(m.Timestamp, tsFormat),
 			ThreadTS:   m.ThreadTimestamp,
 			ReplyCount: m.ReplyCount,
+			Reactions:  reactions,
 		})
 	}
 
@@ -460,6 +536,24 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 			userName = resolved
 		}
 
+		// Convert reactions
+		var reactions []messages.ReactionItem
+		for _, r := range m.Reactions {
+			hasReacted := false
+			for _, uid := range r.Users {
+				if uid == client.UserID() {
+					hasReacted = true
+					break
+				}
+			}
+			reactions = append(reactions, messages.ReactionItem{
+				Emoji:      r.Name,
+				Count:      r.Count,
+				HasReacted: hasReacted,
+			})
+			_ = db.UpsertReaction(m.Timestamp, channelID, r.Name, r.Users, r.Count)
+		}
+
 		msgItems = append(msgItems, messages.MessageItem{
 			TS:         m.Timestamp,
 			UserID:     m.User,
@@ -468,6 +562,7 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 			Timestamp:  formatTimestamp(m.Timestamp, tsFormat),
 			ThreadTS:   m.ThreadTimestamp,
 			ReplyCount: m.ReplyCount,
+			Reactions:  reactions,
 		})
 	}
 
@@ -560,12 +655,60 @@ func (h *rtmEventHandler) OnMessageDeleted(channelID, ts string) {
 	// TODO: implement message deletion in UI
 }
 
-func (h *rtmEventHandler) OnReactionAdded(channelID, ts, userID, emoji string) {
-	// TODO: implement reaction updates in UI
+func (h *rtmEventHandler) OnReactionAdded(channelID, ts, userID, emojiName string) {
+	// Update cache
+	rows, err := h.db.GetReactions(ts, channelID)
+	if err == nil {
+		found := false
+		for _, r := range rows {
+			if r.Emoji == emojiName {
+				userIDs := append(r.UserIDs, userID)
+				_ = h.db.UpsertReaction(ts, channelID, emojiName, userIDs, r.Count+1)
+				found = true
+				break
+			}
+		}
+		if !found {
+			_ = h.db.UpsertReaction(ts, channelID, emojiName, []string{userID}, 1)
+		}
+	}
+
+	h.program.Send(ui.ReactionAddedMsg{
+		ChannelID: channelID,
+		MessageTS: ts,
+		UserID:    userID,
+		Emoji:     emojiName,
+	})
 }
 
-func (h *rtmEventHandler) OnReactionRemoved(channelID, ts, userID, emoji string) {
-	// TODO: implement reaction updates in UI
+func (h *rtmEventHandler) OnReactionRemoved(channelID, ts, userID, emojiName string) {
+	// Update cache
+	rows, err := h.db.GetReactions(ts, channelID)
+	if err == nil {
+		for _, r := range rows {
+			if r.Emoji == emojiName {
+				var newUserIDs []string
+				for _, uid := range r.UserIDs {
+					if uid != userID {
+						newUserIDs = append(newUserIDs, uid)
+					}
+				}
+				if len(newUserIDs) == 0 {
+					_ = h.db.DeleteReaction(ts, channelID, emojiName)
+				} else {
+					_ = h.db.UpsertReaction(ts, channelID, emojiName, newUserIDs, r.Count-1)
+				}
+				break
+			}
+		}
+	}
+
+	h.program.Send(ui.ReactionRemovedMsg{
+		ChannelID: channelID,
+		MessageTS: ts,
+		UserID:    userID,
+		Emoji:     emojiName,
+	})
 }
 
 func (h *rtmEventHandler) OnPresenceChange(userID, presence string) {
