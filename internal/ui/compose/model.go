@@ -35,6 +35,8 @@ func New(channelName string) Model {
 	ta.BlurredStyle.CursorLine = bg
 	ta.BlurredStyle.EndOfBuffer = bg
 	ta.BlurredStyle.Prompt = bg
+	ta.FocusedStyle.Placeholder = bg.Foreground(styles.TextMuted)
+	ta.BlurredStyle.Placeholder = bg.Foreground(styles.TextMuted)
 
 	return Model{
 		input:       ta,
