@@ -17,9 +17,6 @@ var dateSeparatorStyle = lipgloss.NewStyle().
 	Bold(true).
 	Align(lipgloss.Center)
 
-var selectedBg = lipgloss.NewStyle().
-	Background(lipgloss.Color("#222233"))
-
 type MessageItem struct {
 	TS         string
 	UserName   string
@@ -291,16 +288,13 @@ func placeAvatarBeside(avatar, content string) string {
 	return strings.Join(result, "\n")
 }
 
-// applySelection wraps a rendered message with selection highlight.
-// Each line is rendered individually at full width to ensure the background
-// covers the entire line, even when ANSI escape codes affect width measurement.
+// applySelection marks a message as selected with a thick left border.
 func applySelection(content string, width int) string {
-	bg := selectedBg.Width(width)
-	lines := strings.Split(content, "\n")
-	for i, line := range lines {
-		lines[i] = bg.Render(line)
-	}
-	return strings.Join(lines, "\n")
+	return lipgloss.NewStyle().
+		BorderStyle(lipgloss.Border{Left: "▌"}).
+		BorderLeft(true).
+		BorderForeground(styles.Primary).
+		Render(content)
 }
 
 func (m *Model) View(height, width int) string {
