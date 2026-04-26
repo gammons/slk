@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gammons/slack-tui/internal/ui/styles"
+	emoji "github.com/kyokomi/emoji/v2"
 	"github.com/muesli/reflow/wordwrap"
 )
 
@@ -34,8 +35,9 @@ type MessageItem struct {
 type AvatarFunc func(userID string) string
 
 type ReactionItem struct {
-	Emoji string
-	Count int
+	Emoji      string // emoji name without colons, e.g. "thumbsup"
+	Count      int
+	HasReacted bool // whether the current user has reacted with this emoji
 }
 
 // viewEntry is a pre-rendered row in the message list (message or date separator).
@@ -61,6 +63,9 @@ type Model struct {
 
 	// Viewport for scrolling
 	vp viewport.Model
+
+	reactionNavActive bool
+	reactionNavIndex  int
 }
 
 func New(msgs []MessageItem, channelName string) Model {
@@ -117,12 +122,18 @@ func (m *Model) SelectedMessage() (MessageItem, bool) {
 }
 
 func (m *Model) MoveUp() {
+	if m.reactionNavActive {
+		m.ExitReactionNav()
+	}
 	if m.selected > 0 {
 		m.selected--
 	}
 }
 
 func (m *Model) MoveDown() {
+	if m.reactionNavActive {
+		m.ExitReactionNav()
+	}
 	if m.selected < len(m.messages)-1 {
 		m.selected++
 	}
@@ -154,6 +165,112 @@ func (m *Model) PrependMessages(msgs []MessageItem) {
 	m.messages = append(msgs, m.messages...)
 	m.selected += count
 	m.cache = nil // invalidate cache
+}
+
+func (m *Model) EnterReactionNav() {
+	if msg, ok := m.SelectedMessage(); ok && len(msg.Reactions) > 0 {
+		m.reactionNavActive = true
+		m.reactionNavIndex = 0
+		m.cache = nil
+	}
+}
+
+func (m *Model) ExitReactionNav() {
+	m.reactionNavActive = false
+	m.reactionNavIndex = 0
+	m.cache = nil
+}
+
+func (m *Model) ReactionNavActive() bool {
+	return m.reactionNavActive
+}
+
+func (m *Model) ReactionNavLeft() {
+	msg, ok := m.SelectedMessage()
+	if !ok {
+		return
+	}
+	total := len(msg.Reactions) + 1 // +1 for [+] pill
+	m.reactionNavIndex = (m.reactionNavIndex - 1 + total) % total
+	m.cache = nil
+}
+
+func (m *Model) ReactionNavRight() {
+	msg, ok := m.SelectedMessage()
+	if !ok {
+		return
+	}
+	total := len(msg.Reactions) + 1
+	m.reactionNavIndex = (m.reactionNavIndex + 1) % total
+	m.cache = nil
+}
+
+func (m *Model) SelectedReaction() (emoji string, isPlus bool) {
+	msg, ok := m.SelectedMessage()
+	if !ok {
+		return "", false
+	}
+	if m.reactionNavIndex >= len(msg.Reactions) {
+		return "", true
+	}
+	return msg.Reactions[m.reactionNavIndex].Emoji, false
+}
+
+func (m *Model) ClampReactionNav() {
+	msg, ok := m.SelectedMessage()
+	if !ok || len(msg.Reactions) == 0 {
+		m.ExitReactionNav()
+		return
+	}
+	total := len(msg.Reactions) + 1
+	if m.reactionNavIndex >= total {
+		m.reactionNavIndex = total - 1
+	}
+	m.cache = nil
+}
+
+func (m *Model) UpdateReaction(messageTS, emojiName, userID string, remove bool) {
+	for i, msg := range m.messages {
+		if msg.TS == messageTS {
+			if remove {
+				for j, r := range msg.Reactions {
+					if r.Emoji == emojiName {
+						r.Count--
+						if r.Count <= 0 {
+							m.messages[i].Reactions = append(msg.Reactions[:j], msg.Reactions[j+1:]...)
+						} else {
+							r.HasReacted = false
+							m.messages[i].Reactions[j] = r
+						}
+						break
+					}
+				}
+			} else {
+				found := false
+				for j, r := range msg.Reactions {
+					if r.Emoji == emojiName {
+						r.Count++
+						r.HasReacted = true
+						m.messages[i].Reactions[j] = r
+						found = true
+						break
+					}
+				}
+				if !found {
+					m.messages[i].Reactions = append(m.messages[i].Reactions, ReactionItem{
+						Emoji:      emojiName,
+						Count:      1,
+						HasReacted: true,
+					})
+				}
+			}
+			m.cache = nil
+			if m.reactionNavActive {
+				m.ClampReactionNav()
+			}
+			return
+		}
+	}
 }
 
 func (m *Model) SetLoading(loading bool) {
@@ -202,7 +319,7 @@ func (m *Model) buildCache(width int) {
 		if m.avatarFn != nil {
 			avatarStr = m.avatarFn(msg.UserID)
 		}
-		rendered := renderMessagePlain(msg, width, avatarStr, m.userNames)
+		rendered := m.renderMessagePlain(msg, width, avatarStr, m.userNames, i == m.selected)
 		m.cache = append(m.cache, viewEntry{
 			content: rendered,
 			height:  lipgloss.Height(rendered),
@@ -212,7 +329,7 @@ func (m *Model) buildCache(width int) {
 }
 
 // renderMessagePlain renders a message without selection highlight.
-func renderMessagePlain(msg MessageItem, width int, avatarStr string, userNames map[string]string) string {
+func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string, userNames map[string]string, isSelected bool) string {
 	line := styles.Username.Render(msg.UserName) + "  " + styles.Timestamp.Render(msg.Timestamp)
 
 	// If we have an avatar, reserve space on the left for it
@@ -234,12 +351,28 @@ func renderMessagePlain(msg MessageItem, width int, avatarStr string, userNames 
 
 	var reactionLine string
 	if len(msg.Reactions) > 0 {
-		var parts []string
-		for _, r := range msg.Reactions {
-			parts = append(parts, fmt.Sprintf("%s %d", r.Emoji, r.Count))
+		var pills []string
+		for i, r := range msg.Reactions {
+			emojiStr := emoji.Sprint(":" + r.Emoji + ":")
+			pillText := fmt.Sprintf("%s%d", emojiStr, r.Count)
+			var style lipgloss.Style
+			if isSelected && m.reactionNavActive && i == m.reactionNavIndex {
+				style = styles.ReactionPillSelected
+			} else if r.HasReacted {
+				style = styles.ReactionPillOwn
+			} else {
+				style = styles.ReactionPillOther
+			}
+			pills = append(pills, style.Render(pillText))
 		}
-		reactionLine = "\n" + lipgloss.NewStyle().Foreground(styles.TextMuted).Render(
-			strings.Join(parts, "  "))
+		if isSelected && m.reactionNavActive {
+			plusStyle := styles.ReactionPillPlus
+			if m.reactionNavIndex >= len(msg.Reactions) {
+				plusStyle = styles.ReactionPillSelected
+			}
+			pills = append(pills, plusStyle.Render("+"))
+		}
+		reactionLine = "\n" + strings.Join(pills, " ")
 	}
 
 	var editedMark string

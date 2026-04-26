@@ -137,4 +137,25 @@ var (
 	// Presence indicators
 	PresenceOnline = lipgloss.NewStyle().Foreground(Accent)
 	PresenceAway   = lipgloss.NewStyle().Foreground(TextMuted)
+
+	// Reaction pill styles
+	ReactionPillOwn = lipgloss.NewStyle().
+			Background(lipgloss.Color("#1a2e1a")).
+			Foreground(lipgloss.Color("#50C878")).
+			Padding(0, 1)
+
+	ReactionPillOther = lipgloss.NewStyle().
+				Background(lipgloss.Color("#1a1a2e")).
+				Foreground(lipgloss.Color("#888888")).
+				Padding(0, 1)
+
+	ReactionPillSelected = lipgloss.NewStyle().
+				Background(lipgloss.Color("#252540")).
+				Foreground(lipgloss.Color("#4A9EFF")).
+				Padding(0, 1)
+
+	ReactionPillPlus = lipgloss.NewStyle().
+				Background(lipgloss.Color("#1a1a2e")).
+				Foreground(lipgloss.Color("#4A9EFF")).
+				Padding(0, 1)
 )
