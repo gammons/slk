@@ -133,6 +133,7 @@ func run() error {
 	}
 	app.SetLoadingWorkspaces(wsNames)
 	app.SetWorkspaces(wsItems)
+	app.SetTypingEnabled(cfg.Animations.TypingIndicators)
 
 	// Wire avatar rendering
 	app.SetAvatarFunc(func(userID string) string {
@@ -175,7 +176,7 @@ func run() error {
 		lastReadMap := wctx.LastReadMap
 
 		app.SetChannelFetcher(func(channelID, channelName string) tea.Msg {
-			msgItems := fetchChannelMessages(client, channelID, db, userNames, tsFormat)
+			msgItems := fetchChannelMessages(client, channelID, db, userNames, tsFormat, avatarCache)
 
 			lastReadTS := lastReadMap[channelID]
 
@@ -223,7 +224,7 @@ func run() error {
 		})
 
 		app.SetOlderMessagesFetcher(func(channelID, oldestTS string) tea.Msg {
-			msgItems := fetchOlderMessages(client, channelID, oldestTS, db, userNames, tsFormat)
+			msgItems := fetchOlderMessages(client, channelID, oldestTS, db, userNames, tsFormat, avatarCache)
 			return ui.OlderMessagesLoadedMsg{
 				ChannelID: channelID,
 				Messages:  msgItems,
@@ -231,7 +232,7 @@ func run() error {
 		})
 
 		app.SetThreadFetcher(func(channelID, threadTS string) tea.Msg {
-			replies := fetchThreadReplies(client, channelID, threadTS, db, userNames, tsFormat)
+			replies := fetchThreadReplies(client, channelID, threadTS, db, userNames, tsFormat, avatarCache)
 			return ui.ThreadRepliesLoadedMsg{
 				ThreadTS: threadTS,
 				Replies:  replies,
@@ -273,6 +274,10 @@ func run() error {
 		)
 
 		app.SetCurrentUserID(client.UserID())
+
+		app.SetTypingSender(func(channelID string) {
+			_ = client.SendTyping(channelID)
+		})
 	}
 
 	// Wire workspace switcher
@@ -307,7 +312,6 @@ func run() error {
 		go func(tok slackclient.Token) {
 			wctx, err := connectWorkspace(ctx, tok, db, cfg, avatarCache)
 			if err != nil {
-				log.Printf("Warning: failed to connect workspace %s: %v", tok.TeamName, err)
 				p.Send(ui.WorkspaceFailedMsg{TeamName: tok.TeamName})
 				return
 			}
@@ -484,7 +488,52 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	return wctx, nil
 }
 
-func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, db *cache.DB, userNames map[string]string, tsFormat string) []messages.MessageItem {
+// resolveUser ensures we have the display name and avatar for a user.
+// If the user is unknown, fetches their profile from Slack on demand.
+func resolveUser(client *slackclient.Client, userID string, userNames map[string]string, db *cache.DB, avatarCache *avatar.Cache) string {
+	if name, ok := userNames[userID]; ok {
+		// Check if avatar is also cached
+		if avatarCache.Get(userID) == "" {
+			// Have name but no avatar — try to fetch profile for avatar URL
+			if u, err := client.GetUserProfile(userID); err == nil {
+				avatarCache.Preload(userID, u.Profile.Image32)
+				db.UpsertUser(cache.User{
+					ID:          userID,
+					WorkspaceID: client.TeamID(),
+					Name:        u.Name,
+					DisplayName: name,
+					AvatarURL:   u.Profile.Image32,
+					Presence:    "away",
+				})
+			}
+		}
+		return name
+	}
+	// Unknown user — fetch profile
+	if u, err := client.GetUserProfile(userID); err == nil {
+		name := u.Profile.DisplayName
+		if name == "" {
+			name = u.RealName
+		}
+		if name == "" {
+			name = u.Name
+		}
+		userNames[userID] = name
+		avatarCache.Preload(userID, u.Profile.Image32)
+		db.UpsertUser(cache.User{
+			ID:          userID,
+			WorkspaceID: client.TeamID(),
+			Name:        u.Name,
+			DisplayName: name,
+			AvatarURL:   u.Profile.Image32,
+			Presence:    "away",
+		})
+		return name
+	}
+	return userID
+}
+
+func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, db *cache.DB, userNames map[string]string, tsFormat string, avatarCache *avatar.Cache) []messages.MessageItem {
 	ctx := context.Background()
 	history, err := client.GetOlderHistory(ctx, channelID, 50, latestTS)
 	if err != nil {
@@ -504,10 +553,7 @@ func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, 
 			CreatedAt:   time.Now().Unix(),
 		})
 
-		userName := m.User
-		if resolved, ok := userNames[m.User]; ok {
-			userName = resolved
-		}
+		userName := resolveUser(client, m.User, userNames, db, avatarCache)
 
 		// Convert reactions
 		var reactions []messages.ReactionItem
@@ -547,7 +593,7 @@ func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, 
 	return msgItems
 }
 
-func fetchChannelMessages(client *slackclient.Client, channelID string, db *cache.DB, userNames map[string]string, tsFormat string) []messages.MessageItem {
+func fetchChannelMessages(client *slackclient.Client, channelID string, db *cache.DB, userNames map[string]string, tsFormat string, avatarCache *avatar.Cache) []messages.MessageItem {
 	ctx := context.Background()
 	history, err := client.GetHistory(ctx, channelID, 50, "")
 	if err != nil {
@@ -567,10 +613,7 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 			CreatedAt:   time.Now().Unix(),
 		})
 
-		userName := m.User
-		if resolved, ok := userNames[m.User]; ok {
-			userName = resolved
-		}
+		userName := resolveUser(client, m.User, userNames, db, avatarCache)
 
 		// Convert reactions
 		var reactions []messages.ReactionItem
@@ -610,7 +653,7 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 	return msgItems
 }
 
-func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, db *cache.DB, userNames map[string]string, tsFormat string) []messages.MessageItem {
+func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, db *cache.DB, userNames map[string]string, tsFormat string, avatarCache *avatar.Cache) []messages.MessageItem {
 	ctx := context.Background()
 	history, err := client.GetReplies(ctx, channelID, threadTS)
 	if err != nil {
@@ -631,10 +674,7 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 			CreatedAt:   time.Now().Unix(),
 		})
 
-		userName := m.User
-		if resolved, ok := userNames[m.User]; ok {
-			userName = resolved
-		}
+		userName := resolveUser(client, m.User, userNames, db, avatarCache)
 
 		// Convert reactions
 		var reactions []messages.ReactionItem
@@ -835,7 +875,14 @@ func (h *rtmEventHandler) OnPresenceChange(userID, presence string) {
 }
 
 func (h *rtmEventHandler) OnUserTyping(channelID, userID string) {
-	// TODO: implement typing indicators in UI
+	if h.program == nil {
+		return
+	}
+	h.program.Send(ui.UserTypingMsg{
+		ChannelID:   channelID,
+		UserID:      userID,
+		WorkspaceID: h.workspaceID,
+	})
 }
 
 func (h *rtmEventHandler) OnConnect() {

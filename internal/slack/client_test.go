@@ -3,6 +3,7 @@ package slackclient
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/slack-go/slack"
@@ -28,6 +29,10 @@ func (m *mockSlackAPI) GetConversations(params *slack.GetConversationsParameters
 	return nil, "", nil
 }
 
+func (m *mockSlackAPI) GetConversationsForUser(params *slack.GetConversationsForUserParameters) ([]slack.Channel, string, error) {
+	return nil, "", nil
+}
+
 func (m *mockSlackAPI) GetConversationHistory(params *slack.GetConversationHistoryParameters) (*slack.GetConversationHistoryResponse, error) {
 	return nil, nil
 }
@@ -40,6 +45,10 @@ func (m *mockSlackAPI) GetConversationReplies(params *slack.GetConversationRepli
 		{Msg: slack.Msg{Timestamp: "1700000001.000000", Text: "parent msg", User: "U1"}},
 		{Msg: slack.Msg{Timestamp: "1700000002.000000", Text: "reply 1", User: "U2"}},
 	}, false, "", nil
+}
+
+func (m *mockSlackAPI) GetUserInfo(user string) (*slack.User, error) {
+	return nil, fmt.Errorf("user not found")
 }
 
 func (m *mockSlackAPI) GetUsersContext(ctx context.Context, options ...slack.GetUsersOption) ([]slack.User, error) {
@@ -68,6 +77,14 @@ func (m *mockSlackAPI) RemoveReaction(name string, item slack.ItemRef) error {
 
 func (m *mockSlackAPI) AuthTest() (*slack.AuthTestResponse, error) {
 	return nil, nil
+}
+
+func TestSendTypingReturnsErrorWhenNotConnected(t *testing.T) {
+	c := &Client{}
+	err := c.SendTyping("C123")
+	if err == nil {
+		t.Error("expected error when wsConn is nil")
+	}
 }
 
 func TestGetReplies(t *testing.T) {

@@ -283,6 +283,14 @@ func (m *Model) SetAvatarFunc(fn AvatarFunc) {
 	m.avatarFn = fn
 }
 
+// ResolveUserName returns the display name for a user ID, or empty string if unknown.
+func (m *Model) ResolveUserName(userID string) string {
+	if m.userNames == nil {
+		return ""
+	}
+	return m.userNames[userID]
+}
+
 // SetUserNames sets the user ID -> display name map used to resolve @mentions.
 func (m *Model) SetUserNames(names map[string]string) {
 	m.userNames = names
@@ -489,11 +497,15 @@ func (m *Model) View(height, width int) string {
 	}
 
 	if len(m.messages) == 0 {
+		text := "No messages yet"
+		if m.loading {
+			text = "Loading messages..."
+		}
 		empty := lipgloss.NewStyle().
 			Width(width).
 			Height(msgAreaHeight).
 			Foreground(styles.TextMuted).
-			Render("No messages yet")
+			Render(text)
 		return header + "\n" + separator + "\n" + empty
 	}
 

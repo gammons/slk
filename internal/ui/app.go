@@ -118,6 +118,12 @@ type (
 	}
 	SpinnerTickMsg    struct{}
 	LoadingTimeoutMsg struct{}
+	UserTypingMsg     struct {
+		ChannelID   string
+		UserID      string
+		WorkspaceID string
+	}
+	TypingExpiredMsg struct{}
 )
 
 type loadingEntry struct {
@@ -153,6 +159,9 @@ type ReactionAddFunc func(channelID, messageTS, emoji string) error
 type ReactionRemoveFunc func(channelID, messageTS, emoji string) error
 type FrecentLoadFunc func(limit int) []reactionpicker.EmojiEntry
 type FrecentRecordFunc func(emoji string)
+
+// TypingSendFunc is called to broadcast a typing indicator.
+type TypingSendFunc func(channelID string)
 
 type App struct {
 	// Sub-models
@@ -198,6 +207,15 @@ type App struct {
 	workspaceSwitcher SwitchWorkspaceFunc
 	workspaceItems    []workspace.WorkspaceItem // cached for lookup
 
+	// Typing indicators
+	typingUsers    map[string]map[string]time.Time // channelID -> userID -> expiresAt
+	typingTickerOn bool
+	typingEnabled  bool
+
+	// Outbound typing
+	typingSendFn   TypingSendFunc
+	lastTypingSent time.Time
+
 	// Loading overlay
 	loading       bool
 	loadingStates []loadingEntry
@@ -220,6 +238,7 @@ func NewApp() *App {
 		focusedPanel:    PanelSidebar,
 		sidebarVisible:  true,
 		keys:            DefaultKeyMap(),
+		typingUsers:     make(map[string]map[string]time.Time),
 	}
 }
 
@@ -274,6 +293,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Close thread panel when switching channels
 		a.CloseThread()
 		a.activeChannelID = msg.ID
+		a.lastTypingSent = time.Time{} // reset typing throttle for new channel
 		a.messagepane.SetChannel(msg.Name, "")
 		a.messagepane.SetLoading(true)
 		a.messagepane.SetMessages(nil) // clear while loading
@@ -426,6 +446,29 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case WorkspaceFailedMsg:
 		a.MarkWorkspaceFailed(msg.TeamName)
+
+	case UserTypingMsg:
+		if !a.typingEnabled {
+			return a, nil
+		}
+		a.addTypingUser(msg.ChannelID, msg.UserID)
+		if !a.typingTickerOn {
+			a.typingTickerOn = true
+			cmds = append(cmds, tea.Tick(time.Second, func(time.Time) tea.Msg {
+				return TypingExpiredMsg{}
+			}))
+		}
+
+	case TypingExpiredMsg:
+		a.expireTypingUsers()
+		// Continue ticking if there are still active typers
+		hasTypers := len(a.typingUsers) > 0
+		a.typingTickerOn = hasTypers
+		if hasTypers {
+			cmds = append(cmds, tea.Tick(time.Second, func(time.Time) tea.Msg {
+				return TypingExpiredMsg{}
+			}))
+		}
 	}
 
 	return a, tea.Batch(cmds...)
@@ -610,6 +653,7 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 		}
 		var cmd tea.Cmd
 		a.threadCompose, cmd = a.threadCompose.Update(msg)
+		a.maybeSendTyping()
 		return cmd
 	}
 
@@ -643,6 +687,7 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 
 	var cmd tea.Cmd
 	a.compose, cmd = a.compose.Update(msg)
+	a.maybeSendTyping()
 	return cmd
 }
 
@@ -1283,6 +1328,127 @@ func (a *App) SetWorkspaceSwitcher(fn SwitchWorkspaceFunc) {
 	a.workspaceSwitcher = fn
 }
 
+// SetTypingEnabled controls whether typing indicators are shown and sent.
+func (a *App) SetTypingEnabled(enabled bool) {
+	a.typingEnabled = enabled
+}
+
+// SetTypingSender sets the callback for sending typing indicators.
+func (a *App) SetTypingSender(fn TypingSendFunc) {
+	a.typingSendFn = fn
+}
+
+// shouldSendTyping returns true if enough time has passed since the last typing send.
+func (a *App) shouldSendTyping() bool {
+	if !a.typingEnabled {
+		return false
+	}
+	return time.Since(a.lastTypingSent) >= 3*time.Second
+}
+
+// maybeSendTyping sends a typing indicator if the throttle allows it.
+func (a *App) maybeSendTyping() {
+	if a.typingSendFn == nil || !a.shouldSendTyping() {
+		return
+	}
+	a.lastTypingSent = time.Now()
+	channelID := a.activeChannelID
+	if a.focusedPanel == PanelThread && a.threadVisible {
+		channelID = a.threadPanel.ChannelID()
+	}
+	go a.typingSendFn(channelID)
+}
+
+// addTypingUser records that a user is typing in a channel.
+func (a *App) addTypingUser(channelID, userID string) {
+	if a.typingUsers[channelID] == nil {
+		a.typingUsers[channelID] = make(map[string]time.Time)
+	}
+	a.typingUsers[channelID][userID] = time.Now().Add(5 * time.Second)
+}
+
+// expireTypingUsers removes expired typing entries.
+func (a *App) expireTypingUsers() {
+	now := time.Now()
+	for ch, users := range a.typingUsers {
+		for uid, expires := range users {
+			if now.After(expires) {
+				delete(users, uid)
+			}
+		}
+		if len(users) == 0 {
+			delete(a.typingUsers, ch)
+		}
+	}
+}
+
+// getTypingUsers returns user IDs currently typing in the given channel.
+func (a *App) getTypingUsers(channelID string) []string {
+	users := a.typingUsers[channelID]
+	if len(users) == 0 {
+		return nil
+	}
+	now := time.Now()
+	var result []string
+	for uid, expires := range users {
+		if now.Before(expires) {
+			result = append(result, uid)
+		}
+	}
+	return result
+}
+
+// getTypingUsersFiltered returns typing user IDs excluding the current user.
+func (a *App) getTypingUsersFiltered(channelID string) []string {
+	all := a.getTypingUsers(channelID)
+	var filtered []string
+	for _, uid := range all {
+		if uid != a.currentUserID {
+			filtered = append(filtered, uid)
+		}
+	}
+	return filtered
+}
+
+// renderTypingLine returns the styled typing indicator for the current channel,
+// or an empty string if no one is typing.
+func (a *App) renderTypingLine() string {
+	if !a.typingEnabled {
+		return ""
+	}
+	userIDs := a.getTypingUsersFiltered(a.activeChannelID)
+	if len(userIDs) == 0 {
+		return ""
+	}
+
+	// Resolve user IDs to display names
+	names := make([]string, 0, len(userIDs))
+	for _, uid := range userIDs {
+		name := a.messagepane.ResolveUserName(uid)
+		if name == "" {
+			name = uid
+		}
+		names = append(names, name)
+	}
+
+	text := a.typingIndicatorText(names)
+	return styles.TypingIndicator.Render(text)
+}
+
+// typingIndicatorText formats the typing indicator string from display names.
+func (a *App) typingIndicatorText(names []string) string {
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return names[0] + " is typing..."
+	case 2:
+		return names[0] + " and " + names[1] + " are typing..."
+	default:
+		return "Several people are typing..."
+	}
+}
+
 func (a *App) View() string {
 	if a.width == 0 || a.height == 0 {
 		return "Initializing..."
@@ -1363,12 +1529,22 @@ func (a *App) View() string {
 		composeView = mentionView + "\n" + composeView
 	}
 	composeHeight := lipgloss.Height(composeView)
-	msgContentHeight := contentHeight - 2 - composeHeight
+	typingLine := a.renderTypingLine()
+	typingHeight := 0
+	if typingLine != "" {
+		typingHeight = 1
+	}
+	msgContentHeight := contentHeight - 2 - composeHeight - typingHeight
 	if msgContentHeight < 3 {
 		msgContentHeight = 3
 	}
 	msgView := a.messagepane.View(msgContentHeight, msgWidth-2)
-	msgInner := lipgloss.JoinVertical(lipgloss.Left, msgView, composeView)
+	var msgInner string
+	if typingLine != "" {
+		msgInner = lipgloss.JoinVertical(lipgloss.Left, msgView, typingLine, composeView)
+	} else {
+		msgInner = lipgloss.JoinVertical(lipgloss.Left, msgView, composeView)
+	}
 	msgPanel := exactHeight(
 		msgBorderStyle.Render(msgInner),
 		contentHeight,

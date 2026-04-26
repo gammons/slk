@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/slack-go/slack"
@@ -19,9 +20,11 @@ import (
 // This interface enables mocking in tests.
 type SlackAPI interface {
 	GetConversations(params *slack.GetConversationsParameters) ([]slack.Channel, string, error)
+	GetConversationsForUser(params *slack.GetConversationsForUserParameters) ([]slack.Channel, string, error)
 	GetConversationHistory(params *slack.GetConversationHistoryParameters) (*slack.GetConversationHistoryResponse, error)
 	GetConversationReplies(params *slack.GetConversationRepliesParameters) ([]slack.Message, bool, string, error)
 	GetUsersContext(ctx context.Context, options ...slack.GetUsersOption) ([]slack.User, error)
+	GetUserInfo(user string) (*slack.User, error)
 	PostMessage(channelID string, options ...slack.MsgOption) (string, string, error)
 	UpdateMessage(channelID, timestamp string, options ...slack.MsgOption) (string, string, string, error)
 	DeleteMessage(channelID, timestamp string) (string, string, error)
@@ -36,6 +39,7 @@ type SlackAPI interface {
 type Client struct {
 	api    SlackAPI
 	wsConn *websocket.Conn
+	wsMu   sync.Mutex
 	wsDone chan struct{}
 	teamID string
 	userID string
@@ -136,6 +140,23 @@ func (c *Client) StartWebSocket(handler EventHandler) error {
 	c.wsConn = conn
 	c.wsDone = make(chan struct{})
 
+	// Detect dead connections: set a read deadline that resets on every
+	// incoming message or pong. Slack sends pings ~every 30s, so a 60s
+	// deadline gives plenty of margin. Without this, ReadMessage blocks
+	// forever on a silently-dropped TCP connection (e.g., wifi disconnect).
+	const wsTimeout = 60 * time.Second
+	conn.SetReadDeadline(time.Now().Add(wsTimeout))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(wsTimeout))
+		return nil
+	})
+	conn.SetPingHandler(func(msg string) error {
+		conn.SetReadDeadline(time.Now().Add(wsTimeout))
+		c.wsMu.Lock()
+		defer c.wsMu.Unlock()
+		return conn.WriteControl(websocket.PongMessage, []byte(msg), time.Now().Add(10*time.Second))
+	})
+
 	go func() {
 		defer close(c.wsDone)
 		defer handler.OnDisconnect()
@@ -145,9 +166,11 @@ func (c *Client) StartWebSocket(handler EventHandler) error {
 				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 					return
 				}
-				log.Printf("WebSocket read error: %v", err)
+				// Read error (timeout, connection closed, etc.) — exit loop
 				return
 			}
+			// Reset deadline on every successful read
+			conn.SetReadDeadline(time.Now().Add(wsTimeout))
 			dispatchWebSocketEvent(message, handler)
 		}
 	}()
@@ -163,23 +186,51 @@ func (c *Client) StopWebSocket() error {
 	return nil
 }
 
-// GetChannels retrieves all conversations (channels, DMs, group DMs) the
-// authenticated user has access to, paginating automatically.
+// SendTyping sends a typing indicator to the given channel via WebSocket.
+func (c *Client) SendTyping(channelID string) error {
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	if c.wsConn == nil {
+		return fmt.Errorf("websocket not connected")
+	}
+	msg := map[string]string{
+		"type":    "typing",
+		"channel": channelID,
+	}
+	return c.wsConn.WriteJSON(msg)
+}
+
+// GetChannels retrieves conversations the user is a member of (channels, DMs,
+// group DMs), paginating automatically. Uses users.conversations which returns
+// only joined channels — much faster than conversations.list for large workspaces.
 func (c *Client) GetChannels(ctx context.Context) ([]slack.Channel, error) {
 	var allChannels []slack.Channel
 	cursor := ""
 
 	for {
-		params := &slack.GetConversationsParameters{
+		params := &slack.GetConversationsForUserParameters{
 			Types:           []string{"public_channel", "private_channel", "mpim", "im"},
 			Limit:           200,
 			Cursor:          cursor,
 			ExcludeArchived: true,
 		}
 
-		channels, nextCursor, err := c.api.GetConversations(params)
+		channels, nextCursor, err := c.api.GetConversationsForUser(params)
 		if err != nil {
-			return nil, fmt.Errorf("getting conversations: %w", err)
+			// Handle rate limits gracefully
+			if rlErr, ok := err.(*slack.RateLimitedError); ok {
+				wait := rlErr.RetryAfter
+				if wait == 0 {
+					wait = 30 * time.Second
+				}
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(wait):
+				}
+				continue // retry same page
+			}
+			return nil, fmt.Errorf("getting user conversations: %w", err)
 		}
 
 		allChannels = append(allChannels, channels...)
@@ -191,6 +242,15 @@ func (c *Client) GetChannels(ctx context.Context) ([]slack.Channel, error) {
 	}
 
 	return allChannels, nil
+}
+
+// GetUserProfile fetches a single user's profile by ID.
+func (c *Client) GetUserProfile(userID string) (*slack.User, error) {
+	user, err := c.api.GetUserInfo(userID)
+	if err != nil {
+		return nil, fmt.Errorf("getting user info: %w", err)
+	}
+	return user, nil
 }
 
 // GetHistory retrieves message history for a channel.

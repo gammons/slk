@@ -164,4 +164,10 @@ var (
 				Foreground(Error).
 				Bold(true).
 				Align(lipgloss.Center)
+
+	// Typing indicator
+	TypingIndicator = lipgloss.NewStyle().
+			Foreground(TextMuted).
+			Italic(true).
+			PaddingLeft(2)
 )

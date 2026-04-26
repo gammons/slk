@@ -57,6 +57,7 @@ Last updated: 2026-04-26
 - [x] Spacing between messages (margin below each)
 - [x] New message landmark (red "── new ──" separator marking unread boundary)
 - [x] Mark-as-read synced to Slack via conversations.mark API on channel entry
+- [x] Typing indicators (show who's typing, broadcast your own typing)
 
 ### Threads
 - [x] Thread panel -- side panel (35% width) for viewing and replying to threads
@@ -107,7 +108,7 @@ Last updated: 2026-04-26
 - [ ] Theme support (light mode, custom colors)
 
 ### Low Priority
-- [ ] Typing indicators
+
 - [ ] Quiet hours for notifications
 - [ ] Custom keybinding overrides in config
 - [ ] Message link previews / unfurling
