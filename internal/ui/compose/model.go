@@ -125,11 +125,63 @@ func (m *Model) SetWidth(width int) {
 }
 
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	keyMsg, isKey := msg.(tea.KeyMsg)
+
+	// If mention picker is active, intercept keys
+	if m.mentionActive && isKey {
+		return m.handleMentionKey(keyMsg)
+	}
+
+	// Normal textarea update
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
-	// Auto-grow: adjust height to match visual line count (including wraps).
-	// LineCount() only counts logical lines (\n). We also need to account
-	// for soft wraps when a line exceeds the textarea width.
+
+	// Check if @ was just typed at a word boundary
+	if isKey && keyMsg.Type == tea.KeyRunes && len(keyMsg.Runes) == 1 && keyMsg.Runes[0] == '@' {
+		val := m.input.Value()
+		cursorAbsPos := m.cursorPosition()
+		// The @ is at cursorAbsPos-1 (just typed)
+		atPos := cursorAbsPos - 1
+		if atPos >= 0 && atPos < len(val) && val[atPos] == '@' {
+			if atPos == 0 || val[atPos-1] == ' ' || val[atPos-1] == '\n' {
+				m.mentionActive = true
+				m.mentionStartCol = cursorAbsPos // cursor is after the @
+				m.mentionPicker.Open()
+			}
+		}
+	}
+
+	m.autoGrow()
+	return m, cmd
+}
+
+// cursorPosition computes the absolute byte offset of the cursor within
+// the textarea's Value() string, using Line() (logical line number) and
+// LineInfo() (column offset within the logical line, in rune space).
+func (m Model) cursorPosition() int {
+	val := m.input.Value()
+	lines := strings.Split(val, "\n")
+	pos := 0
+	curLine := m.input.Line()
+	for i := 0; i < curLine && i < len(lines); i++ {
+		pos += len(lines[i]) + 1 // +1 for \n
+	}
+	// Get the rune offset within the current line
+	li := m.input.LineInfo()
+	col := li.StartColumn + li.ColumnOffset
+	// Convert rune offset to byte offset within this line
+	if curLine < len(lines) {
+		runes := []rune(lines[curLine])
+		if col > len(runes) {
+			col = len(runes)
+		}
+		pos += len(string(runes[:col]))
+	}
+	return pos
+}
+
+// autoGrow adjusts the textarea height to match the visual line count.
+func (m *Model) autoGrow() {
 	lines := m.visualLineCount()
 	if lines < 1 {
 		lines = 1
@@ -140,11 +192,98 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	if m.input.Height() != lines {
 		m.input.SetHeight(lines)
 		// Force viewport recalculation by re-setting the value.
-		// This resets cursor to end of text, which is fine for a compose box.
 		val := m.input.Value()
 		m.input.SetValue(val)
 	}
-	return m, cmd
+}
+
+// handleMentionKey processes key events when the mention picker is active.
+func (m Model) handleMentionKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	switch {
+	case msg.Type == tea.KeyUp || msg.Type == tea.KeyCtrlP:
+		m.mentionPicker.MoveUp()
+		return m, nil
+
+	case msg.Type == tea.KeyDown || msg.Type == tea.KeyCtrlN:
+		m.mentionPicker.MoveDown()
+		return m, nil
+
+	case msg.Type == tea.KeyEnter || msg.Type == tea.KeyTab:
+		result := m.mentionPicker.Select()
+		if result != nil {
+			m.insertMention(result)
+		}
+		m.mentionActive = false
+		m.mentionPicker.Close()
+		return m, nil
+
+	case msg.Type == tea.KeyEscape:
+		m.mentionActive = false
+		m.mentionPicker.Close()
+		return m, nil
+
+	case msg.Type == tea.KeyBackspace:
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		pos := m.cursorPosition()
+		if pos < m.mentionStartCol {
+			m.mentionActive = false
+			m.mentionPicker.Close()
+		} else {
+			m.updateMentionQuery()
+		}
+		m.autoGrow()
+		return m, cmd
+
+	case msg.Type == tea.KeyRunes:
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		m.updateMentionQuery()
+		m.autoGrow()
+		return m, cmd
+
+	default:
+		m.mentionActive = false
+		m.mentionPicker.Close()
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		m.autoGrow()
+		return m, cmd
+	}
+}
+
+// updateMentionQuery extracts the text between the @ trigger and the cursor
+// and updates the mention picker's filter query.
+func (m *Model) updateMentionQuery() {
+	val := m.input.Value()
+	pos := m.cursorPosition()
+	if pos > len(val) {
+		pos = len(val)
+	}
+	if m.mentionStartCol > pos {
+		m.mentionActive = false
+		m.mentionPicker.Close()
+		return
+	}
+	query := val[m.mentionStartCol:pos]
+	m.mentionPicker.SetQuery(query)
+}
+
+// insertMention replaces the @query text with the selected mention.
+func (m *Model) insertMention(result *mentionpicker.MentionResult) {
+	val := m.input.Value()
+	pos := m.cursorPosition()
+	atPos := m.mentionStartCol - 1
+	if atPos < 0 {
+		atPos = 0
+	}
+	before := val[:atPos]
+	after := ""
+	if pos < len(val) {
+		after = val[pos:]
+	}
+	newText := before + "@" + result.DisplayName + " " + after
+	m.input.SetValue(newText)
 }
 
 // SetUsers provides the list of workspace users for mention autocomplete.

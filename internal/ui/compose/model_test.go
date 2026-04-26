@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
 )
 
@@ -107,5 +108,250 @@ func TestIsAtWordBoundary(t *testing.T) {
 		if result != tt.expected {
 			t.Errorf("isAtWordBoundary(%q, %d) = %v, want %v", tt.text, tt.col, result, tt.expected)
 		}
+	}
+}
+
+func TestCursorPosition(t *testing.T) {
+	m := New("general")
+	m.SetWidth(80)
+	m.Focus()
+
+	// Empty text => cursor at 0
+	if pos := m.cursorPosition(); pos != 0 {
+		t.Errorf("expected cursor at 0 for empty text, got %d", pos)
+	}
+
+	// Set value "hello" => cursor at end = 5
+	m.SetValue("hello")
+	if pos := m.cursorPosition(); pos != 5 {
+		t.Errorf("expected cursor at 5 after SetValue(\"hello\"), got %d", pos)
+	}
+}
+
+func TestAutoGrow(t *testing.T) {
+	m := New("general")
+	m.SetWidth(80)
+	m.Focus()
+
+	// Height should be 1 initially
+	if m.input.Height() != 1 {
+		t.Errorf("expected initial height 1, got %d", m.input.Height())
+	}
+
+	// Set multiline value and call autoGrow
+	m.SetValue("line1\nline2\nline3")
+	m.autoGrow()
+	if m.input.Height() < 3 {
+		t.Errorf("expected height >= 3 after multiline text, got %d", m.input.Height())
+	}
+}
+
+func TestMentionTriggersOnAtWordBoundary(t *testing.T) {
+	m := New("general")
+	m.SetUsers([]mentionpicker.User{
+		{ID: "U1", DisplayName: "Alice", Username: "alice"},
+	})
+	m.SetWidth(80)
+	m.Focus()
+
+	// Type @ at start of text (position 0 = word boundary)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
+
+	if !m.IsMentionActive() {
+		t.Error("expected mention picker to be active after typing @ at word boundary")
+	}
+}
+
+func TestMentionDoesNotTriggerMidWord(t *testing.T) {
+	m := New("general")
+	m.SetUsers([]mentionpicker.User{
+		{ID: "U1", DisplayName: "Alice", Username: "alice"},
+	})
+	m.SetWidth(80)
+	m.Focus()
+
+	// Type "email" first
+	for _, r := range "email" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	// Then type @ mid-word
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
+
+	if m.IsMentionActive() {
+		t.Error("expected mention picker NOT to be active after typing @ mid-word")
+	}
+}
+
+func TestMentionSelectInsertDisplayName(t *testing.T) {
+	m := New("general")
+	m.SetUsers([]mentionpicker.User{
+		{ID: "U1", DisplayName: "Alice", Username: "alice"},
+	})
+	m.SetWidth(80)
+	m.Focus()
+
+	// Type "@" to trigger
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
+
+	if !m.IsMentionActive() {
+		t.Fatal("expected mention picker to be active")
+	}
+
+	// Press Enter to select first filtered result
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.IsMentionActive() {
+		t.Error("expected mention picker to close after selection")
+	}
+
+	// The value should contain an @ mention
+	val := m.Value()
+	if !strings.Contains(val, "@") {
+		t.Errorf("expected value to contain @mention, got %q", val)
+	}
+}
+
+func TestMentionEscDismisses(t *testing.T) {
+	m := New("general")
+	m.SetUsers([]mentionpicker.User{
+		{ID: "U1", DisplayName: "Alice", Username: "alice"},
+	})
+	m.SetWidth(80)
+	m.Focus()
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
+	if !m.IsMentionActive() {
+		t.Fatal("expected mention picker to be active")
+	}
+
+	// Press Escape to dismiss
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEscape})
+
+	if m.IsMentionActive() {
+		t.Error("expected mention picker to close after Escape")
+	}
+
+	if !strings.Contains(m.Value(), "@") {
+		t.Error("expected @ to remain in text after dismiss")
+	}
+}
+
+func TestMentionQueryFilters(t *testing.T) {
+	m := New("general")
+	m.SetUsers([]mentionpicker.User{
+		{ID: "U1", DisplayName: "Alice", Username: "alice"},
+		{ID: "U2", DisplayName: "Bob", Username: "bob"},
+	})
+	m.SetWidth(80)
+	m.Focus()
+
+	// Type "@a" to trigger and filter
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
+	if !m.IsMentionActive() {
+		t.Fatal("expected mention picker to be active")
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+
+	// The picker should have filtered results - query should be "a"
+	if q := m.mentionPicker.Query(); q != "a" {
+		t.Errorf("expected query 'a', got %q", q)
+	}
+}
+
+func TestMentionNavigateUpDown(t *testing.T) {
+	m := New("general")
+	m.SetUsers([]mentionpicker.User{
+		{ID: "U1", DisplayName: "Alice", Username: "alice"},
+		{ID: "U2", DisplayName: "Bob", Username: "bob"},
+	})
+	m.SetWidth(80)
+	m.Focus()
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
+	if !m.IsMentionActive() {
+		t.Fatal("expected mention picker to be active")
+	}
+
+	// Initially selected = 0
+	if m.mentionPicker.Selected() != 0 {
+		t.Errorf("expected initial selection 0, got %d", m.mentionPicker.Selected())
+	}
+
+	// Move down
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if m.mentionPicker.Selected() != 1 {
+		t.Errorf("expected selection 1 after down, got %d", m.mentionPicker.Selected())
+	}
+
+	// Move up
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.mentionPicker.Selected() != 0 {
+		t.Errorf("expected selection 0 after up, got %d", m.mentionPicker.Selected())
+	}
+}
+
+func TestMentionBackspaceCancelsMention(t *testing.T) {
+	m := New("general")
+	m.SetUsers([]mentionpicker.User{
+		{ID: "U1", DisplayName: "Alice", Username: "alice"},
+	})
+	m.SetWidth(80)
+	m.Focus()
+
+	// Type "@" to trigger
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
+	if !m.IsMentionActive() {
+		t.Fatal("expected mention picker to be active")
+	}
+
+	// Backspace should delete the @ and cancel mention
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+
+	if m.IsMentionActive() {
+		t.Error("expected mention picker to close after backspacing past @")
+	}
+}
+
+func TestMentionAfterSpace(t *testing.T) {
+	m := New("general")
+	m.SetUsers([]mentionpicker.User{
+		{ID: "U1", DisplayName: "Alice", Username: "alice"},
+	})
+	m.SetWidth(80)
+	m.Focus()
+
+	// Type "hello " then "@"
+	for _, r := range "hello " {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
+
+	if !m.IsMentionActive() {
+		t.Error("expected mention picker to be active after typing @ after space")
+	}
+}
+
+func TestCloseMention(t *testing.T) {
+	m := New("general")
+	m.SetUsers([]mentionpicker.User{
+		{ID: "U1", DisplayName: "Alice", Username: "alice"},
+	})
+	m.SetWidth(80)
+	m.Focus()
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
+	if !m.IsMentionActive() {
+		t.Fatal("expected mention picker to be active")
+	}
+
+	m.CloseMention()
+	if m.IsMentionActive() {
+		t.Error("expected mention picker to close after CloseMention")
+	}
+
+	if !strings.Contains(m.Value(), "@") {
+		t.Error("expected @ to remain in text after dismiss")
 	}
 }
