@@ -2,6 +2,8 @@
 package compose
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gammons/slack-tui/internal/ui/styles"
@@ -51,11 +53,21 @@ func (m *Model) SetValue(s string) {
 
 func (m *Model) Reset() {
 	m.input.Reset()
+	m.input.SetHeight(1)
 }
 
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
+	// Auto-grow height based on content line count
+	lines := strings.Count(m.input.Value(), "\n") + 1
+	if lines < 1 {
+		lines = 1
+	}
+	if lines > m.input.MaxHeight {
+		lines = m.input.MaxHeight
+	}
+	m.input.SetHeight(lines)
 	return m, cmd
 }
 

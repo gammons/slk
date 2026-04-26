@@ -2,6 +2,9 @@
 package ui
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -146,6 +149,23 @@ func (a *App) Init() tea.Cmd {
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+
+	// Handle Shift+Enter from terminals using CSI u mode.
+	// bubbletea v1.x reports unknown CSI sequences as an unexported type.
+	// We detect it via fmt.Stringer before the type switch.
+	if a.mode == ModeInsert {
+		if s, ok := msg.(fmt.Stringer); ok {
+			if str := s.String(); len(str) > 4 && str[0] == '?' && strings.Contains(str, "13;2") {
+				enterMsg := tea.KeyMsg{Type: tea.KeyEnter}
+				if a.focusedPanel == PanelThread && a.threadVisible {
+					a.threadCompose, _ = a.threadCompose.Update(enterMsg)
+				} else {
+					a.compose, _ = a.compose.Update(enterMsg)
+				}
+				return a, nil
+			}
+		}
+	}
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
