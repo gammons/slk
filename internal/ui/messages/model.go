@@ -296,6 +296,7 @@ func applyLeftBorder(content string) string {
 		BorderStyle(thickLeftBorder).
 		BorderLeft(true).
 		BorderForeground(styles.Background).
+		MarginBottom(1).
 		Render(content)
 }
 
@@ -305,6 +306,7 @@ func applySelection(content string, width int) string {
 		BorderStyle(thickLeftBorder).
 		BorderLeft(true).
 		BorderForeground(styles.Accent).
+		MarginBottom(1).
 		Render(content)
 }
 
