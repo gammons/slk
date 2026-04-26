@@ -318,7 +318,7 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 	// Determine which compose box is active based on focused panel
 	if a.focusedPanel == PanelThread && a.threadVisible {
 		// Thread reply compose
-		if msg.Type == tea.KeyEnter {
+		if msg.Type == tea.KeyEnter && !msg.Alt {
 			text := a.threadCompose.Value()
 			if text != "" {
 				a.threadCompose.Reset()
@@ -340,7 +340,7 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	// Channel message compose (existing behavior)
-	if msg.Type == tea.KeyEnter {
+	if msg.Type == tea.KeyEnter && !msg.Alt {
 		text := a.compose.Value()
 		if text != "" {
 			a.compose.Reset()

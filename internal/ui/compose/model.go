@@ -2,25 +2,27 @@
 package compose
 
 import (
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/gammons/slack-tui/internal/ui/styles"
 )
 
 type Model struct {
-	input       textinput.Model
+	input       textarea.Model
 	channelName string
 }
 
 func New(channelName string) Model {
-	ti := textinput.New()
-	ti.Placeholder = "Message #" + channelName + "... (i to insert)"
-	ti.CharLimit = 40000 // Slack's message limit
-	ti.Width = 40
+	ta := textarea.New()
+	ta.Placeholder = "Message #" + channelName + "... (i to insert)"
+	ta.CharLimit = 40000
+	ta.MaxHeight = 5
+	ta.ShowLineNumbers = false
+	ta.Prompt = "> "
+	ta.SetWidth(40)
 
 	return Model{
-		input:       ti,
+		input:       ta,
 		channelName: channelName,
 	}
 }
@@ -47,7 +49,7 @@ func (m *Model) SetValue(s string) {
 }
 
 func (m *Model) Reset() {
-	m.input.SetValue("")
+	m.input.Reset()
 }
 
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
@@ -57,13 +59,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 }
 
 func (m Model) View(width int, focused bool) string {
-	m.input.Width = width - 4 // account for padding/border
+	m.input.SetWidth(width - 4) // account for padding/border
 
-	var style lipgloss.Style
+	var style = styles.ComposeBox.Width(width - 2)
 	if focused {
 		style = styles.ComposeInsert.Width(width - 2)
-	} else {
-		style = styles.ComposeBox.Width(width - 2)
 	}
 
 	return style.Render(m.input.View())
