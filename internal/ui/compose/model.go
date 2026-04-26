@@ -103,8 +103,10 @@ func (m Model) View(width int, focused bool) string {
 		style = styles.ComposeInsert.Width(width - 2)
 	}
 
-	// If empty and unfocused, render placeholder manually with correct background
-	if m.input.Value() == "" && !focused {
+	// If empty, render placeholder manually with correct background.
+	// The textarea's internal placeholder uses Inline(true) styles which
+	// don't fill the full line width with the background color.
+	if m.input.Value() == "" {
 		placeholder := lipgloss.NewStyle().
 			Foreground(styles.TextMuted).
 			Background(styles.SurfaceDark).
