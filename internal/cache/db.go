@@ -113,6 +113,12 @@ func (db *DB) migrate() error {
 		thumbnail_path TEXT NOT NULL DEFAULT ''
 	);
 
+	CREATE TABLE IF NOT EXISTS frecent_emoji (
+		emoji TEXT PRIMARY KEY,
+		use_count INTEGER NOT NULL DEFAULT 0,
+		last_used INTEGER NOT NULL DEFAULT 0
+	);
+
 	CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id, ts);
 	CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_ts, channel_id);
 	CREATE INDEX IF NOT EXISTS idx_channels_workspace ON channels(workspace_id);
