@@ -375,8 +375,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.compose.Blur()
 		a.sidebar.SetItems(msg.Channels)
 		a.channelFinder.SetItems(msg.FinderItems)
-		a.messagepane.SetUserNames(msg.UserNames)
-		a.threadPanel.SetUserNames(msg.UserNames)
+		a.SetUserNames(msg.UserNames)
 		a.currentUserID = msg.UserID
 		a.workspaceRail.SelectByID(msg.TeamID)
 		// Load first channel
@@ -414,8 +413,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.activeChannelID == "" {
 			a.sidebar.SetItems(msg.Channels)
 			a.channelFinder.SetItems(msg.FinderItems)
-			a.messagepane.SetUserNames(msg.UserNames)
-			a.threadPanel.SetUserNames(msg.UserNames)
+			a.SetUserNames(msg.UserNames)
 			a.currentUserID = msg.UserID
 			a.workspaceRail.SelectByID(msg.TeamID)
 			if len(msg.Channels) > 0 {
