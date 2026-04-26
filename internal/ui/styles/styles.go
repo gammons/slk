@@ -123,6 +123,7 @@ var (
 			BorderLeft(true).
 			BorderForeground(Border).
 			Background(SurfaceDark).
+			MarginTop(1).
 			Padding(1, 1, 1, 1)
 
 	ComposeFocused = lipgloss.NewStyle().
@@ -130,6 +131,7 @@ var (
 			BorderLeft(true).
 			BorderForeground(Primary).
 			Background(SurfaceDark).
+			MarginTop(1).
 			Padding(1, 1, 1, 1)
 
 	ComposeInsert = lipgloss.NewStyle().
@@ -137,6 +139,7 @@ var (
 			BorderLeft(true).
 			BorderForeground(Primary).
 			Background(SurfaceDark).
+			MarginTop(1).
 			Padding(1, 1, 1, 1)
 
 	// Presence indicators
