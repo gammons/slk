@@ -224,19 +224,19 @@ func (m Model) renderBox(termWidth int) string {
 		}
 
 		if i == m.selected {
+			indicator := lipgloss.NewStyle().Foreground(styles.Primary).Render("▌")
 			row := lipgloss.NewStyle().
-				Background(lipgloss.Color("#2A2A4E")).
 				Foreground(lipgloss.Color("#FFFFFF")).
 				Bold(true).
-				Width(innerWidth).
+				Width(innerWidth - 1).
 				Render(line)
-			resultRows = append(resultRows, row)
+			resultRows = append(resultRows, indicator+row)
 		} else {
 			row := lipgloss.NewStyle().
 				Foreground(styles.TextPrimary).
-				Width(innerWidth).
+				Width(innerWidth - 1).
 				Render(line)
-			resultRows = append(resultRows, row)
+			resultRows = append(resultRows, " "+row)
 		}
 	}
 
