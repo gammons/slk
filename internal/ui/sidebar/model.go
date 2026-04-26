@@ -263,7 +263,6 @@ func (m *Model) View(height, width int) string {
 		Width(width).
 		Height(height).
 		MaxHeight(height).
-		Background(styles.Surface).
 		Render(m.vp.View())
 }
 

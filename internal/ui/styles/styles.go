@@ -53,12 +53,10 @@ var (
 
 	ChannelNormal = lipgloss.NewStyle().
 			Foreground(TextPrimary).
-			Background(Surface).
 			Padding(0, 1)
 
 	ChannelUnread = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FFFFFF")).
-			Background(Surface).
 			Bold(true).
 			Padding(0, 1)
 
@@ -69,7 +67,6 @@ var (
 
 	SectionHeader = lipgloss.NewStyle().
 			Foreground(TextMuted).
-			Background(Surface).
 			Bold(true).
 			Padding(0, 1)
 
