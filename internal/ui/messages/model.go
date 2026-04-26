@@ -357,7 +357,8 @@ func (m *Model) View(height, width int) string {
 		if e.msgIdx == m.selected {
 			selectedStartLine = currentLine
 			content = applySelection(content, width)
-		} else {
+		} else if e.msgIdx >= 0 {
+			// Apply border to messages only, not day separators
 			content = applyLeftBorder(content)
 		}
 		h := lipgloss.Height(content)
