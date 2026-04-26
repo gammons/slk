@@ -90,7 +90,22 @@ type (
 	ChannelMarkedReadMsg struct {
 		ChannelID string
 	}
+	WorkspaceSwitchedMsg struct {
+		TeamID      string
+		TeamName    string
+		Channels    []sidebar.ChannelItem
+		FinderItems []channelfinder.Item
+		UserNames   map[string]string
+		UserID      string
+	}
+	WorkspaceUnreadMsg struct {
+		TeamID    string
+		ChannelID string
+	}
 )
+
+// SwitchWorkspaceFunc is called to switch the active workspace.
+type SwitchWorkspaceFunc func(teamID string) tea.Msg
 
 // ChannelFetchFunc is called when the user selects a channel.
 type ChannelFetchFunc func(channelID, channelName string) tea.Msg
@@ -156,6 +171,10 @@ type App struct {
 	frecentLoadFn    FrecentLoadFunc
 	frecentRecordFn  FrecentRecordFunc
 	currentUserID    string
+
+	// Workspace switching
+	workspaceSwitcher SwitchWorkspaceFunc
+	workspaceItems    []workspace.WorkspaceItem // cached for lookup
 }
 
 func NewApp() *App {
@@ -307,6 +326,29 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ChannelMarkedReadMsg:
 		a.sidebar.ClearUnread(msg.ChannelID)
+
+	case WorkspaceSwitchedMsg:
+		a.CloseThread()
+		a.compose.Reset()
+		a.messagepane.SetMessages(nil)
+		a.SetMode(ModeNormal)
+		a.compose.Blur()
+		a.sidebar.SetItems(msg.Channels)
+		a.channelFinder.SetItems(msg.FinderItems)
+		a.messagepane.SetUserNames(msg.UserNames)
+		a.threadPanel.SetUserNames(msg.UserNames)
+		a.currentUserID = msg.UserID
+		a.workspaceRail.SelectByID(msg.TeamID)
+		// Load first channel
+		if len(msg.Channels) > 0 {
+			first := msg.Channels[0]
+			cmds = append(cmds, func() tea.Msg {
+				return ChannelSelectedMsg{ID: first.ID, Name: first.Name}
+			})
+		}
+
+	case WorkspaceUnreadMsg:
+		a.workspaceRail.SetUnread(msg.TeamID, true)
 	}
 
 	return a, tea.Batch(cmds...)
@@ -907,6 +949,7 @@ func (a *App) SetInitialLastReadTS(ts string) {
 // Setters for external use (wiring services)
 func (a *App) SetWorkspaces(items []workspace.WorkspaceItem) {
 	a.workspaceRail.SetItems(items)
+	a.workspaceItems = items
 }
 
 func (a *App) SetChannels(items []sidebar.ChannelItem) {
@@ -975,6 +1018,11 @@ func (a *App) SetCurrentUserID(userID string) {
 func (a *App) SetFrecentFuncs(load FrecentLoadFunc, record FrecentRecordFunc) {
 	a.frecentLoadFn = load
 	a.frecentRecordFn = record
+}
+
+// SetWorkspaceSwitcher sets the callback used to switch workspaces.
+func (a *App) SetWorkspaceSwitcher(fn SwitchWorkspaceFunc) {
+	a.workspaceSwitcher = fn
 }
 
 func (a *App) View() string {

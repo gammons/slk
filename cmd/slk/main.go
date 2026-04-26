@@ -26,6 +26,20 @@ import (
 	emoji "github.com/kyokomi/emoji/v2"
 )
 
+// WorkspaceContext holds all state for a single connected workspace.
+type WorkspaceContext struct {
+	Client      *slackclient.Client
+	ConnMgr     *slackclient.ConnectionManager
+	RTMHandler  *rtmEventHandler
+	UserNames   map[string]string
+	LastReadMap map[string]string
+	Channels    []sidebar.ChannelItem
+	FinderItems []channelfinder.Item
+	TeamID      string
+	TeamName    string
+	UserID      string
+}
+
 func main() {
 	// Handle --add-workspace before anything else
 	if len(os.Args) > 1 && os.Args[1] == "--add-workspace" {
@@ -96,157 +110,85 @@ func run() error {
 
 	// Connect to workspaces
 	ctx := context.Background()
-	var wsItems []workspace.WorkspaceItem
-
-	// Track the active client for channel fetching
-	var activeClient *slackclient.Client
-	// User ID -> display name lookup
-	userNames := make(map[string]string)
-	lastReadMap := make(map[string]string)
 	tsFormat := cfg.Appearance.TimestampFormat
 
 	// Initialize avatar cache
 	avatarDir := filepath.Join(cacheDir, "avatars")
 	avatarCache := avatar.NewCache(avatarDir)
 
+	// Build workspace rail items for all tokens
+	var wsItems []workspace.WorkspaceItem
 	for _, token := range tokens {
-		client := slackclient.NewClient(token.AccessToken, token.Cookie)
-		if err := client.Connect(ctx); err != nil {
-			log.Printf("Warning: failed to connect workspace %s: %v", token.TeamName, err)
-			continue
-		}
-		activeClient = client
-
-		wsMgr.AddWorkspace(client.TeamID(), token.TeamName, "")
 		wsItems = append(wsItems, workspace.WorkspaceItem{
-			ID:       client.TeamID(),
+			ID:       token.TeamID,
 			Name:     token.TeamName,
 			Initials: workspace.WorkspaceInitials(token.TeamName),
 		})
+	}
 
-		// Fetch users first to resolve display names
-		users, err := client.GetUsers(ctx)
-		if err != nil {
-			log.Printf("Warning: failed to fetch users: %v", err)
-		} else {
-			for _, u := range users {
-				name := u.Profile.DisplayName
-				if name == "" {
-					name = u.RealName
-				}
-				if name == "" {
-					name = u.Name
-				}
-				userNames[u.ID] = name
-				db.UpsertUser(cache.User{
-					ID:          u.ID,
-					WorkspaceID: client.TeamID(),
-					Name:        u.Name,
-					DisplayName: name,
-					AvatarURL:   u.Profile.Image32,
-					Presence:    "away",
-				})
-				// Preload avatar in background
-				avatarCache.Preload(u.ID, u.Profile.Image32)
+	// Connect all workspaces in parallel
+	type wsResult struct {
+		ctx  *WorkspaceContext
+		err  error
+		name string
+	}
+
+	workspaces := make(map[string]*WorkspaceContext)
+	resultCh := make(chan wsResult, len(tokens))
+
+	for _, token := range tokens {
+		go func(tok slackclient.Token) {
+			wctx, err := connectWorkspace(ctx, tok, db, cfg, avatarCache)
+			resultCh <- wsResult{ctx: wctx, err: err, name: tok.TeamName}
+		}(token)
+	}
+
+	// Wait for all workspaces to connect (with timeout)
+	var activeTeamID string
+	timeout := time.After(15 * time.Second)
+	remaining := len(tokens)
+
+	for remaining > 0 {
+		select {
+		case result := <-resultCh:
+			remaining--
+			if result.err != nil {
+				log.Printf("Warning: failed to connect workspace %s: %v", result.name, result.err)
+				continue
 			}
-		}
-
-		// Fetch channels
-		channels, err := client.GetChannels(ctx)
-		if err != nil {
-			log.Printf("Warning: failed to fetch channels: %v", err)
-			continue
-		}
-
-		var sidebarItems []sidebar.ChannelItem
-		for _, ch := range channels {
-			chType := "channel"
-			if ch.IsIM {
-				chType = "dm"
-			} else if ch.IsMpIM {
-				chType = "group_dm"
-			} else if ch.IsPrivate {
-				chType = "private"
+			wctx := result.ctx
+			workspaces[wctx.TeamID] = wctx
+			wsMgr.AddWorkspace(wctx.TeamID, wctx.TeamName, "")
+			if activeTeamID == "" {
+				activeTeamID = wctx.TeamID
 			}
-
-			db.UpsertChannel(cache.Channel{
-				ID:          ch.ID,
-				WorkspaceID: client.TeamID(),
-				Name:        ch.Name,
-				Type:        chType,
-				Topic:       ch.Topic.Value,
-				IsMember:    ch.IsMember,
-			})
-
-			displayName := ch.Name
-			if ch.IsIM {
-				if resolved, ok := userNames[ch.User]; ok {
-					displayName = resolved
-				} else {
-					displayName = ch.User
-				}
-			}
-
-			// Match channel to a config-defined section
-			section := cfg.MatchSection(ch.Name)
-
-			sidebarItems = append(sidebarItems, sidebar.ChannelItem{
-				ID:      ch.ID,
-				Name:    displayName,
-				Type:    chType,
-				Section: section,
-			})
-		}
-
-		// Fetch unread counts from Slack's client.counts API
-		unreadCounts, err := client.GetUnreadCounts()
-		if err != nil {
-			log.Printf("Warning: failed to fetch unread counts: %v", err)
-		} else {
-			unreadMap := make(map[string]int)
-			for _, u := range unreadCounts {
-				if u.HasUnread {
-					unreadMap[u.ChannelID] = u.Count
-				}
-				if u.LastRead != "" {
-					lastReadMap[u.ChannelID] = u.LastRead
-					_ = db.UpdateLastReadTS(u.ChannelID, u.LastRead)
-				}
-			}
-			for i := range sidebarItems {
-				if count, ok := unreadMap[sidebarItems[i].ID]; ok {
-					sidebarItems[i].UnreadCount = count
-				}
-			}
-		}
-
-		app.SetChannels(sidebarItems)
-
-		// Populate channel finder with all channels/DMs
-		var finderItems []channelfinder.Item
-		for _, ch := range sidebarItems {
-			finderItems = append(finderItems, channelfinder.Item{
-				ID:       ch.ID,
-				Name:     ch.Name,
-				Type:     ch.Type,
-				Presence: ch.Presence,
-			})
-		}
-		app.SetChannelFinderItems(finderItems)
-
-		// Load initial messages for first channel
-		if len(sidebarItems) > 0 {
-			firstCh := sidebarItems[0]
-			msgItems := fetchChannelMessages(client, firstCh.ID, db, userNames, tsFormat)
-			if len(msgItems) > 0 {
-				app.SetInitialChannel(firstCh.ID, firstCh.Name, msgItems)
-				app.SetInitialLastReadTS(lastReadMap[firstCh.ID])
-			}
+		case <-timeout:
+			log.Printf("Warning: timed out waiting for workspaces to connect")
+			remaining = 0
 		}
 	}
 
+	if activeTeamID == "" {
+		return fmt.Errorf("no workspaces connected")
+	}
+
+	active := workspaces[activeTeamID]
+
+	// Set up the active workspace's channels, finder, and initial messages
+	app.SetChannels(active.Channels)
+	app.SetChannelFinderItems(active.FinderItems)
 	app.SetWorkspaces(wsItems)
-	app.SetUserNames(userNames)
+	app.SetUserNames(active.UserNames)
+
+	// Load initial messages for first channel
+	if len(active.Channels) > 0 {
+		firstCh := active.Channels[0]
+		msgItems := fetchChannelMessages(active.Client, firstCh.ID, db, active.UserNames, tsFormat)
+		if len(msgItems) > 0 {
+			app.SetInitialChannel(firstCh.ID, firstCh.Name, msgItems)
+			app.SetInitialLastReadTS(active.LastReadMap[firstCh.ID])
+		}
+	}
 
 	// Wire avatar rendering
 	app.SetAvatarFunc(func(userID string) string {
@@ -256,9 +198,13 @@ func run() error {
 	// Declare p before wiring callbacks so closures can capture it
 	var p *tea.Program
 
-	// Wire up the channel fetcher so switching channels loads messages
-	if activeClient != nil {
-		client := activeClient
+	// wireCallbacks sets all App callbacks to use the given workspace context.
+	// Called on initial setup and again when the user switches workspaces.
+	wireCallbacks := func(wctx *WorkspaceContext) {
+		client := wctx.Client
+		userNames := wctx.UserNames
+		lastReadMap := wctx.LastReadMap
+
 		app.SetChannelFetcher(func(channelID, channelName string) tea.Msg {
 			msgItems := fetchChannelMessages(client, channelID, db, userNames, tsFormat)
 
@@ -284,7 +230,6 @@ func run() error {
 			}
 		})
 
-		// Wire up message sending
 		app.SetMessageSender(func(channelID, text string) tea.Msg {
 			ctx := context.Background()
 			ts, err := client.SendMessage(ctx, channelID, text)
@@ -308,7 +253,6 @@ func run() error {
 			}
 		})
 
-		// Wire up older messages fetcher for infinite scroll
 		app.SetOlderMessagesFetcher(func(channelID, oldestTS string) tea.Msg {
 			msgItems := fetchOlderMessages(client, channelID, oldestTS, db, userNames, tsFormat)
 			return ui.OlderMessagesLoadedMsg{
@@ -317,7 +261,6 @@ func run() error {
 			}
 		})
 
-		// Wire up thread fetcher
 		app.SetThreadFetcher(func(channelID, threadTS string) tea.Msg {
 			replies := fetchThreadReplies(client, channelID, threadTS, db, userNames, tsFormat)
 			return ui.ThreadRepliesLoadedMsg{
@@ -326,7 +269,6 @@ func run() error {
 			}
 		})
 
-		// Wire up thread reply sender
 		app.SetThreadReplySender(func(channelID, threadTS, text string) tea.Msg {
 			ctx := context.Background()
 			ts, err := client.SendReply(ctx, channelID, threadTS, text)
@@ -352,7 +294,6 @@ func run() error {
 			}
 		})
 
-		// Wire up reaction sending
 		app.SetReactionSender(
 			func(channelID, messageTS, emojiName string) error {
 				return client.AddReaction(ctx, channelID, messageTS, emojiName)
@@ -362,52 +303,206 @@ func run() error {
 			},
 		)
 
-		// Wire up frecent emoji functions
-		app.SetFrecentFuncs(
-			func(limit int) []reactionpicker.EmojiEntry {
-				names, err := db.GetFrecentEmoji(limit)
-				if err != nil {
-					return nil
-				}
-				codeMap := emoji.CodeMap()
-				var entries []reactionpicker.EmojiEntry
-				for _, name := range names {
-					unicode := codeMap[":"+name+":"]
-					entries = append(entries, reactionpicker.EmojiEntry{
-						Name:    name,
-						Unicode: unicode,
-					})
-				}
-				return entries
-			},
-			func(emojiName string) {
-				_ = db.RecordEmojiUse(emojiName)
-			},
-		)
-
-		// Set current user ID for reaction ownership detection
 		app.SetCurrentUserID(client.UserID())
 	}
+
+	// Wire callbacks for the active workspace
+	wireCallbacks(active)
+
+	// Wire up frecent emoji functions (not workspace-specific)
+	app.SetFrecentFuncs(
+		func(limit int) []reactionpicker.EmojiEntry {
+			names, err := db.GetFrecentEmoji(limit)
+			if err != nil {
+				return nil
+			}
+			codeMap := emoji.CodeMap()
+			var entries []reactionpicker.EmojiEntry
+			for _, name := range names {
+				unicode := codeMap[":"+name+":"]
+				entries = append(entries, reactionpicker.EmojiEntry{
+					Name:    name,
+					Unicode: unicode,
+				})
+			}
+			return entries
+		},
+		func(emojiName string) {
+			_ = db.RecordEmojiUse(emojiName)
+		},
+	)
+
+	// Wire workspace switcher
+	app.SetWorkspaceSwitcher(func(teamID string) tea.Msg {
+		wctx, ok := workspaces[teamID]
+		if !ok {
+			return nil
+		}
+
+		// Update active pointer
+		activeTeamID = teamID
+
+		// Re-wire all callbacks to the new workspace's client
+		wireCallbacks(wctx)
+
+		return ui.WorkspaceSwitchedMsg{
+			TeamID:      wctx.TeamID,
+			TeamName:    wctx.TeamName,
+			Channels:    wctx.Channels,
+			FinderItems: wctx.FinderItems,
+			UserNames:   wctx.UserNames,
+			UserID:      wctx.UserID,
+		}
+	})
 
 	// Run the TUI
 	p = tea.NewProgram(app, tea.WithAltScreen())
 
-	// Start WebSocket for real-time events
-	if activeClient != nil {
+	// Start WebSocket for ALL workspaces
+	for _, wctx := range workspaces {
+		teamID := wctx.TeamID // capture for closure
 		handler := &rtmEventHandler{
 			program:     p,
-			userNames:   userNames,
+			userNames:   wctx.UserNames,
 			tsFormat:    tsFormat,
 			db:          db,
-			workspaceID: activeClient.TeamID(),
+			workspaceID: teamID,
+			isActive:    func() bool { return teamID == activeTeamID },
 		}
-		connMgr := slackclient.NewConnectionManager(activeClient, handler)
-		go connMgr.Run(ctx)
-		defer connMgr.Stop()
+		wctx.RTMHandler = handler
+		wctx.ConnMgr = slackclient.NewConnectionManager(wctx.Client, handler)
+		go wctx.ConnMgr.Run(ctx)
+		defer wctx.ConnMgr.Stop()
 	}
 
 	_, err = p.Run()
 	return err
+}
+
+func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB, cfg config.Config, avatarCache *avatar.Cache) (*WorkspaceContext, error) {
+	client := slackclient.NewClient(token.AccessToken, token.Cookie)
+	if err := client.Connect(ctx); err != nil {
+		return nil, fmt.Errorf("connecting %s: %w", token.TeamName, err)
+	}
+
+	wctx := &WorkspaceContext{
+		Client:      client,
+		TeamID:      client.TeamID(),
+		TeamName:    token.TeamName,
+		UserID:      client.UserID(),
+		UserNames:   make(map[string]string),
+		LastReadMap: make(map[string]string),
+	}
+
+	// Seed user names from cache (fast, local)
+	cachedUsers, _ := db.ListUsers(client.TeamID())
+	for _, u := range cachedUsers {
+		name := u.DisplayName
+		if name == "" {
+			name = u.Name
+		}
+		wctx.UserNames[u.ID] = name
+	}
+
+	// Background user fetch
+	go func() {
+		users, err := client.GetUsers(ctx)
+		if err != nil {
+			return
+		}
+		for _, u := range users {
+			name := u.Profile.DisplayName
+			if name == "" {
+				name = u.RealName
+			}
+			if name == "" {
+				name = u.Name
+			}
+			wctx.UserNames[u.ID] = name
+			db.UpsertUser(cache.User{
+				ID:          u.ID,
+				WorkspaceID: client.TeamID(),
+				Name:        u.Name,
+				DisplayName: name,
+				AvatarURL:   u.Profile.Image32,
+				Presence:    "away",
+			})
+			avatarCache.Preload(u.ID, u.Profile.Image32)
+		}
+	}()
+
+	// Fetch channels
+	channels, err := client.GetChannels(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("fetching channels for %s: %w", token.TeamName, err)
+	}
+
+	for _, ch := range channels {
+		chType := "channel"
+		if ch.IsIM {
+			chType = "dm"
+		} else if ch.IsMpIM {
+			chType = "group_dm"
+		} else if ch.IsPrivate {
+			chType = "private"
+		}
+
+		db.UpsertChannel(cache.Channel{
+			ID:          ch.ID,
+			WorkspaceID: client.TeamID(),
+			Name:        ch.Name,
+			Type:        chType,
+			Topic:       ch.Topic.Value,
+			IsMember:    ch.IsMember,
+		})
+
+		displayName := ch.Name
+		if ch.IsIM {
+			if resolved, ok := wctx.UserNames[ch.User]; ok {
+				displayName = resolved
+			} else {
+				displayName = ch.User
+			}
+		}
+
+		section := cfg.MatchSection(ch.Name)
+		wctx.Channels = append(wctx.Channels, sidebar.ChannelItem{
+			ID:      ch.ID,
+			Name:    displayName,
+			Type:    chType,
+			Section: section,
+		})
+	}
+
+	// Fetch unread counts
+	unreadCounts, _ := client.GetUnreadCounts()
+	unreadMap := make(map[string]int)
+	for _, u := range unreadCounts {
+		if u.HasUnread {
+			unreadMap[u.ChannelID] = u.Count
+		}
+		if u.LastRead != "" {
+			wctx.LastReadMap[u.ChannelID] = u.LastRead
+			_ = db.UpdateLastReadTS(u.ChannelID, u.LastRead)
+		}
+	}
+	for i := range wctx.Channels {
+		if count, ok := unreadMap[wctx.Channels[i].ID]; ok {
+			wctx.Channels[i].UnreadCount = count
+		}
+	}
+
+	// Build finder items
+	for _, ch := range wctx.Channels {
+		wctx.FinderItems = append(wctx.FinderItems, channelfinder.Item{
+			ID:       ch.ID,
+			Name:     ch.Name,
+			Type:     ch.Type,
+			Presence: ch.Presence,
+		})
+	}
+
+	return wctx, nil
 }
 
 func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, db *cache.DB, userNames map[string]string, tsFormat string) []messages.MessageItem {
@@ -646,10 +741,11 @@ type rtmEventHandler struct {
 	db          *cache.DB
 	workspaceID string
 	connected   bool
+	isActive    func() bool
 }
 
 func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS string, edited bool) {
-	// Cache every message to SQLite, regardless of active channel
+	// Cache every message to SQLite, regardless of active workspace
 	h.db.UpsertMessage(cache.Message{
 		TS:          ts,
 		ChannelID:   channelID,
@@ -659,6 +755,15 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS string
 		ThreadTS:    threadTS,
 		CreatedAt:   time.Now().Unix(),
 	})
+
+	if h.isActive != nil && !h.isActive() {
+		// Inactive workspace — just notify about unread
+		h.program.Send(ui.WorkspaceUnreadMsg{
+			TeamID:    h.workspaceID,
+			ChannelID: channelID,
+		})
+		return
+	}
 
 	userName := userID
 	if resolved, ok := h.userNames[userID]; ok {
@@ -683,7 +788,7 @@ func (h *rtmEventHandler) OnMessageDeleted(channelID, ts string) {
 }
 
 func (h *rtmEventHandler) OnReactionAdded(channelID, ts, userID, emojiName string) {
-	// Update cache
+	// Update cache regardless of active state
 	rows, err := h.db.GetReactions(ts, channelID)
 	if err == nil {
 		found := false
@@ -700,6 +805,10 @@ func (h *rtmEventHandler) OnReactionAdded(channelID, ts, userID, emojiName strin
 		}
 	}
 
+	if h.isActive != nil && !h.isActive() {
+		return
+	}
+
 	h.program.Send(ui.ReactionAddedMsg{
 		ChannelID: channelID,
 		MessageTS: ts,
@@ -709,7 +818,7 @@ func (h *rtmEventHandler) OnReactionAdded(channelID, ts, userID, emojiName strin
 }
 
 func (h *rtmEventHandler) OnReactionRemoved(channelID, ts, userID, emojiName string) {
-	// Update cache
+	// Update cache regardless of active state
 	rows, err := h.db.GetReactions(ts, channelID)
 	if err == nil {
 		for _, r := range rows {
@@ -730,6 +839,10 @@ func (h *rtmEventHandler) OnReactionRemoved(channelID, ts, userID, emojiName str
 		}
 	}
 
+	if h.isActive != nil && !h.isActive() {
+		return
+	}
+
 	h.program.Send(ui.ReactionRemovedMsg{
 		ChannelID: channelID,
 		MessageTS: ts,
@@ -747,9 +860,6 @@ func (h *rtmEventHandler) OnUserTyping(channelID, userID string) {
 }
 
 func (h *rtmEventHandler) OnConnect() {
-	if h.connected {
-		log.Printf("WebSocket: reconnected")
-	}
 	h.connected = true
 	h.program.Send(ui.ConnectionStateMsg{State: int(statusbar.StateConnected)})
 }

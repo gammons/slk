@@ -48,6 +48,24 @@ func (m *Model) SetItems(items []WorkspaceItem) {
 	}
 }
 
+func (m *Model) SelectByID(teamID string) {
+	for i, item := range m.items {
+		if item.ID == teamID {
+			m.selected = i
+			return
+		}
+	}
+}
+
+func (m *Model) SetUnread(teamID string, hasUnread bool) {
+	for i := range m.items {
+		if m.items[i].ID == teamID {
+			m.items[i].HasUnread = hasUnread
+			return
+		}
+	}
+}
+
 func (m Model) View(height int) string {
 	if len(m.items) == 0 {
 		return ""
