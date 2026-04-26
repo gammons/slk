@@ -98,6 +98,16 @@ func (m *Model) VisibleItems() []ChannelItem {
 	return result
 }
 
+// ClearUnread sets the unread count to 0 for the given channel.
+func (m *Model) ClearUnread(channelID string) {
+	for i := range m.items {
+		if m.items[i].ID == channelID {
+			m.items[i].UnreadCount = 0
+			return
+		}
+	}
+}
+
 func (m *Model) SelectByID(id string) {
 	for i, idx := range m.filtered {
 		if m.items[idx].ID == id {

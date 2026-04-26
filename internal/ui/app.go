@@ -86,6 +86,9 @@ type (
 	ReactionSentMsg struct {
 		Err error
 	}
+	ChannelMarkedReadMsg struct {
+		ChannelID string
+	}
 )
 
 // ChannelFetchFunc is called when the user selects a channel.
@@ -299,6 +302,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ReactionSentMsg:
 		// API call completed. If err, optimistic update stays (could add status bar error later).
+
+	case ChannelMarkedReadMsg:
+		a.sidebar.ClearUnread(msg.ChannelID)
 	}
 
 	return a, tea.Batch(cmds...)
@@ -1037,6 +1043,7 @@ func (a *App) View() string {
 	if a.focusedPanel == PanelMessages && a.mode != ModeInsert {
 		msgBorderStyle = styles.FocusedBorder.Width(msgWidth)
 	}
+	a.compose.SetWidth(msgWidth - 2)
 	composeView := a.compose.View(msgWidth-2, a.mode == ModeInsert && a.focusedPanel != PanelThread)
 	composeHeight := lipgloss.Height(composeView)
 	msgContentHeight := contentHeight - 2 - composeHeight
@@ -1057,6 +1064,7 @@ func (a *App) View() string {
 		if a.focusedPanel == PanelThread && a.mode != ModeInsert {
 			threadBorderStyle = styles.FocusedBorder.Width(threadWidth)
 		}
+		a.threadCompose.SetWidth(threadWidth - 2)
 		threadComposeView := a.threadCompose.View(threadWidth-2, a.mode == ModeInsert && a.focusedPanel == PanelThread)
 		threadComposeHeight := lipgloss.Height(threadComposeView)
 		threadContentHeight := contentHeight - 2 - threadComposeHeight
