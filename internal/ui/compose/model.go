@@ -65,7 +65,9 @@ func (m *Model) Reset() {
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
-	// Auto-grow height based on the textarea's actual line count
+	// Auto-grow height based on the textarea's actual line count.
+	// We must set height and then re-run Update with a nil msg so the
+	// textarea's repositionView() recalculates scroll for the new height.
 	lines := m.input.LineCount()
 	if lines < 1 {
 		lines = 1
@@ -73,7 +75,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	if lines > m.input.MaxHeight {
 		lines = m.input.MaxHeight
 	}
-	m.input.SetHeight(lines)
+	if m.input.Height() != lines {
+		m.input.SetHeight(lines)
+		// Trigger viewport reposition with the new height
+		m.input, _ = m.input.Update(nil)
+	}
 	return m, cmd
 }
 
