@@ -10,6 +10,7 @@ const (
 	ModeSearch
 	ModeChannelFinder
 	ModeReactionPicker
+	ModeWorkspaceFinder
 )
 
 func (m Mode) String() string {
@@ -26,6 +27,8 @@ func (m Mode) String() string {
 		return "FIND"
 	case ModeReactionPicker:
 		return "REACT"
+	case ModeWorkspaceFinder:
+		return "WORKSPACE"
 	default:
 		return "UNKNOWN"
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/gammons/slk/internal/ui/thread"
 	"github.com/gammons/slk/internal/ui/workspace"
+	"github.com/gammons/slk/internal/ui/workspacefinder"
 )
 
 type Panel int
@@ -135,14 +136,15 @@ type FrecentRecordFunc func(emoji string)
 
 type App struct {
 	// Sub-models
-	workspaceRail workspace.Model
-	sidebar       sidebar.Model
-	messagepane   messages.Model
-	compose       compose.Model
-	statusbar     statusbar.Model
-	channelFinder channelfinder.Model
-	threadPanel   *thread.Model
-	threadCompose compose.Model
+	workspaceRail   workspace.Model
+	sidebar         sidebar.Model
+	messagepane     messages.Model
+	compose         compose.Model
+	statusbar       statusbar.Model
+	channelFinder   channelfinder.Model
+	workspaceFinder workspacefinder.Model
+	threadPanel     *thread.Model
+	threadCompose   compose.Model
 
 	// State
 	mode           Mode
@@ -179,19 +181,20 @@ type App struct {
 
 func NewApp() *App {
 	return &App{
-		workspaceRail:  workspace.New(nil, 0),
-		sidebar:        sidebar.New(nil),
-		messagepane:    messages.New(nil, ""),
-		compose:        compose.New(""),
-		statusbar:      statusbar.New(),
-		channelFinder:  channelfinder.New(),
-		threadPanel:    thread.New(),
-		threadCompose:  compose.New("thread"),
-		reactionPicker: reactionpicker.New(),
-		mode:           ModeNormal,
-		focusedPanel:   PanelSidebar,
-		sidebarVisible: true,
-		keys:           DefaultKeyMap(),
+		workspaceRail:   workspace.New(nil, 0),
+		sidebar:         sidebar.New(nil),
+		messagepane:     messages.New(nil, ""),
+		compose:         compose.New(""),
+		statusbar:       statusbar.New(),
+		channelFinder:   channelfinder.New(),
+		workspaceFinder: workspacefinder.New(),
+		threadPanel:     thread.New(),
+		threadCompose:   compose.New("thread"),
+		reactionPicker:  reactionpicker.New(),
+		mode:            ModeNormal,
+		focusedPanel:    PanelSidebar,
+		sidebarVisible:  true,
+		keys:            DefaultKeyMap(),
 	}
 }
 
@@ -370,6 +373,8 @@ func (a *App) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return a.handleChannelFinderMode(msg)
 	case ModeReactionPicker:
 		return a.handleReactionPickerMode(msg)
+	case ModeWorkspaceFinder:
+		return a.handleWorkspaceFinderMode(msg)
 	default:
 		return a.handleNormalMode(msg)
 	}
@@ -431,6 +436,10 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 
 	case key.Matches(msg, a.keys.Bottom):
 		a.handleGoToBottom()
+
+	case key.Matches(msg, a.keys.WorkspaceFinder):
+		a.workspaceFinder.Open()
+		a.SetMode(ModeWorkspaceFinder)
 
 	case key.Matches(msg, a.keys.FuzzyFinder) || key.Matches(msg, a.keys.FuzzyFinderAlt):
 		a.channelFinder.Open()
@@ -577,6 +586,38 @@ func (a *App) handleChannelFinderMode(msg tea.KeyMsg) tea.Cmd {
 		a.SetMode(ModeNormal)
 	}
 
+	return nil
+}
+
+func (a *App) handleWorkspaceFinderMode(msg tea.KeyMsg) tea.Cmd {
+	keyStr := msg.String()
+	if msg.Type == tea.KeyEnter {
+		keyStr = "enter"
+	} else if msg.Type == tea.KeyEsc {
+		keyStr = "esc"
+	} else if msg.Type == tea.KeyUp {
+		keyStr = "up"
+	} else if msg.Type == tea.KeyDown {
+		keyStr = "down"
+	} else if msg.Type == tea.KeyBackspace {
+		keyStr = "backspace"
+	}
+
+	result := a.workspaceFinder.HandleKey(keyStr)
+	if result != nil {
+		a.workspaceFinder.Close()
+		a.SetMode(ModeNormal)
+		if a.workspaceSwitcher != nil && result.ID != a.workspaceRail.SelectedID() {
+			switcher := a.workspaceSwitcher
+			teamID := result.ID
+			return func() tea.Msg {
+				return switcher(teamID)
+			}
+		}
+	}
+	if !a.workspaceFinder.IsVisible() {
+		a.SetMode(ModeNormal)
+	}
 	return nil
 }
 
@@ -966,6 +1007,16 @@ func (a *App) SetInitialLastReadTS(ts string) {
 func (a *App) SetWorkspaces(items []workspace.WorkspaceItem) {
 	a.workspaceRail.SetItems(items)
 	a.workspaceItems = items
+	// Update workspace finder items
+	var finderItems []workspacefinder.Item
+	for _, ws := range items {
+		finderItems = append(finderItems, workspacefinder.Item{
+			ID:       ws.ID,
+			Name:     ws.Name,
+			Initials: ws.Initials,
+		})
+	}
+	a.workspaceFinder.SetItems(finderItems)
 }
 
 func (a *App) SetChannels(items []sidebar.ChannelItem) {
@@ -1163,6 +1214,10 @@ func (a *App) View() string {
 
 	if a.reactionPicker.IsVisible() {
 		screen = a.reactionPicker.ViewOverlay(a.width, a.height, screen)
+	}
+
+	if a.workspaceFinder.IsVisible() {
+		screen = a.workspaceFinder.ViewOverlay(a.width, a.height, screen)
 	}
 
 	return screen
