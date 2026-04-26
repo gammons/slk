@@ -188,12 +188,27 @@ func run() error {
 			section := cfg.MatchSection(ch.Name)
 
 			sidebarItems = append(sidebarItems, sidebar.ChannelItem{
-				ID:          ch.ID,
-				Name:        displayName,
-				Type:        chType,
-				Section:     section,
-				UnreadCount: ch.UnreadCountDisplay,
+				ID:      ch.ID,
+				Name:    displayName,
+				Type:    chType,
+				Section: section,
 			})
+		}
+
+		// Fetch unread counts from Slack's client.counts API
+		unreadCounts, err := client.GetUnreadCounts()
+		if err != nil {
+			log.Printf("Warning: failed to fetch unread counts: %v", err)
+		} else {
+			unreadMap := make(map[string]int)
+			for _, u := range unreadCounts {
+				unreadMap[u.ChannelID] = u.Count
+			}
+			for i := range sidebarItems {
+				if count, ok := unreadMap[sidebarItems[i].ID]; ok {
+					sidebarItems[i].UnreadCount = count
+				}
+			}
 		}
 
 		app.SetChannels(sidebarItems)

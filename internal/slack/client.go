@@ -238,6 +238,99 @@ func (c *Client) SendMessage(ctx context.Context, channelID, text string) (strin
 	return ts, nil
 }
 
+// UnreadInfo holds the unread state for a single channel.
+type UnreadInfo struct {
+	ChannelID string
+	Count     int
+	HasUnread bool
+}
+
+// GetUnreadCounts fetches unread counts for all channels using Slack's
+// internal client.counts API (available with xoxc browser tokens).
+func (c *Client) GetUnreadCounts() ([]UnreadInfo, error) {
+	reqURL := "https://slack.com/api/client.counts"
+	req, err := http.NewRequest("POST", reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	httpClient := newCookieHTTPClient(c.cookie)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching unread counts: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+
+	var result struct {
+		OK       bool `json:"ok"`
+		Channels []struct {
+			ID                 string `json:"id"`
+			HasUnreads         bool   `json:"has_unreads"`
+			MentionCount       int    `json:"mention_count"`
+			UnreadCountDisplay int    `json:"unread_count_display,omitempty"`
+		} `json:"channels"`
+		Mpims []struct {
+			ID           string `json:"id"`
+			HasUnreads   bool   `json:"has_unreads"`
+			MentionCount int    `json:"mention_count"`
+		} `json:"mpims"`
+		Ims []struct {
+			ID         string `json:"id"`
+			HasUnreads bool   `json:"has_unreads"`
+		} `json:"ims"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("parsing response: %w", err)
+	}
+
+	if !result.OK {
+		return nil, fmt.Errorf("client.counts API returned ok=false")
+	}
+
+	var unreads []UnreadInfo
+	for _, ch := range result.Channels {
+		if ch.HasUnreads {
+			count := ch.MentionCount
+			if count == 0 {
+				count = 1 // has unreads but no mention count
+			}
+			unreads = append(unreads, UnreadInfo{
+				ChannelID: ch.ID,
+				Count:     count,
+				HasUnread: true,
+			})
+		}
+	}
+	for _, ch := range result.Mpims {
+		if ch.HasUnreads {
+			unreads = append(unreads, UnreadInfo{
+				ChannelID: ch.ID,
+				Count:     max(ch.MentionCount, 1),
+				HasUnread: true,
+			})
+		}
+	}
+	for _, ch := range result.Ims {
+		if ch.HasUnreads {
+			unreads = append(unreads, UnreadInfo{
+				ChannelID: ch.ID,
+				Count:     1,
+				HasUnread: true,
+			})
+		}
+	}
+
+	return unreads, nil
+}
+
 // SendReply posts a threaded reply to the specified message.
 func (c *Client) SendReply(ctx context.Context, channelID, threadTS, text string) (string, error) {
 	_, ts, err := c.api.PostMessage(channelID,
