@@ -332,6 +332,40 @@ func TestMentionAfterSpace(t *testing.T) {
 	}
 }
 
+func TestTranslateLongestNameFirst(t *testing.T) {
+	m := New("general")
+	m.SetUsers([]mentionpicker.User{
+		{ID: "U1", DisplayName: "Al", Username: "al"},
+		{ID: "U2", DisplayName: "Alice", Username: "alice"},
+	})
+
+	// "Alice" should match before "Al" to avoid "@Alice" -> "<@U1>ice"
+	result := m.TranslateMentionsForSend("hey @Alice")
+	if result != "hey <@U2>" {
+		t.Errorf("expected 'hey <@U2>', got %q", result)
+	}
+}
+
+func TestTranslateMultipleMentionsSameUser(t *testing.T) {
+	m := New("general")
+	m.SetUsers([]mentionpicker.User{
+		{ID: "U1", DisplayName: "Alice", Username: "alice"},
+	})
+
+	result := m.TranslateMentionsForSend("@Alice said @Alice should")
+	if result != "<@U1> said <@U1> should" {
+		t.Errorf("expected '<@U1> said <@U1> should', got %q", result)
+	}
+}
+
+func TestMentionPickerViewWhenNotActive(t *testing.T) {
+	m := New("general")
+	view := m.MentionPickerView(80)
+	if view != "" {
+		t.Error("expected empty view when mention not active")
+	}
+}
+
 func TestCloseMention(t *testing.T) {
 	m := New("general")
 	m.SetUsers([]mentionpicker.User{

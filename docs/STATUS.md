@@ -11,9 +11,12 @@ Last updated: 2026-04-26
 - [x] Slack API client (Web API via slack-go)
 - [x] OAuth token storage (JSON files, per-workspace)
 - [x] Interactive onboarding (`--add-workspace` with huh forms)
-- [x] Multi-workspace support in data layer (single workspace connected at runtime)
+- [x] Multi-workspace runtime switching (1-9 number keys + Ctrl+w picker)
+- [x] All workspaces maintain live WebSocket connections with real-time unread badges
+- [x] Parallel workspace connection at startup with loading overlay
 - [x] Browser cookie auth (xoxc/xoxd) -- connect using browser session tokens, no Slack App needed
 - [x] Real-time WebSocket events -- direct connection using Slack's browser protocol (not RTM or Socket Mode)
+- [x] Automatic WebSocket reconnection with exponential backoff (1s-30s)
 
 ### UI
 - [x] Three-panel layout: workspace rail, channel sidebar, message pane
@@ -46,11 +49,14 @@ Last updated: 2026-04-26
 - [x] Thread reply count indicators
 - [x] Edited message indicators
 - [x] Message sending via Slack API
+- [x] @mention autocomplete in compose (inline picker, translates to <@UserID> on send)
 - [x] Real-time incoming messages via WebSocket (auto-scroll, cached to SQLite)
 - [x] Render cache for scroll performance
 - [x] ANSI-aware text wrapping (muesli/reflow/wordwrap)
 - [x] ANSI-safe string truncation (muesli/reflow/truncate)
 - [x] Spacing between messages (margin below each)
+- [x] New message landmark (red "── new ──" separator marking unread boundary)
+- [x] Mark-as-read synced to Slack via conversations.mark API on channel entry
 
 ### Threads
 - [x] Thread panel -- side panel (35% width) for viewing and replying to threads
@@ -98,9 +104,9 @@ Last updated: 2026-04-26
 - [ ] User presence tracking (online/away/DND updates)
 - [ ] Inline image rendering (Kitty graphics > Sixel > fallback)
 - [ ] OSC 52 clipboard integration (yank message text)
+- [ ] Theme support (light mode, custom colors)
 
 ### Low Priority
-- [ ] Multi-workspace switching at runtime (workspace rail click)
 - [ ] Typing indicators
 - [ ] Quiet hours for notifications
 - [ ] Custom keybinding overrides in config
@@ -131,6 +137,7 @@ slk/
 │       ├── thread/          # Thread panel with viewport + reply compose
 │       ├── channelfinder/   # Ctrl+t/Ctrl+p fuzzy channel finder overlay
 │       ├── reactionpicker/  # Reaction picker overlay with emoji search
+│       ├── workspacefinder/ # Ctrl+w workspace picker overlay
 │       ├── compose/         # Multi-line message input (textarea)
 │       └── statusbar/       # Bottom status bar with connection state
 ├── docs/
@@ -144,9 +151,9 @@ slk/
 
 ## Stats
 
-- 29 source files, 22 test files
-- ~8,150 lines of Go
-- 13 test packages, all tests passing
+- 31 source files, 24 test files
+- ~9,300 lines of Go
+- 14 test packages, all tests passing
 - Single binary, no runtime dependencies beyond the terminal
 
 ## Key Design Decisions
