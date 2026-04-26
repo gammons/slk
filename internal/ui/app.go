@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/compose"
+	"github.com/gammons/slk/internal/ui/mentionpicker"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/reactionpicker"
 	"github.com/gammons/slk/internal/ui/sidebar"
@@ -274,6 +275,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.CloseThread()
 		a.activeChannelID = msg.ID
 		a.messagepane.SetChannel(msg.Name, "")
+		a.messagepane.SetLoading(true)
 		a.messagepane.SetMessages(nil) // clear while loading
 		a.compose.SetChannel(msg.Name)
 		a.statusbar.SetChannel(msg.Name)
@@ -288,6 +290,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MessagesLoadedMsg:
 		if msg.ChannelID == a.activeChannelID {
+			a.messagepane.SetLoading(false)
 			a.messagepane.SetLastReadTS(msg.LastReadTS)
 			a.messagepane.SetMessages(msg.Messages)
 		}
@@ -557,23 +560,35 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 
 func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 	if key.Matches(msg, a.keys.Escape) {
+		// If mention picker is active, close it instead of exiting insert mode
+		if a.focusedPanel == PanelThread && a.threadVisible && a.threadCompose.IsMentionActive() {
+			a.threadCompose.CloseMention()
+			return nil
+		}
+		if a.focusedPanel != PanelThread && a.compose.IsMentionActive() {
+			a.compose.CloseMention()
+			return nil
+		}
 		a.SetMode(ModeNormal)
 		a.compose.Blur()
 		a.threadCompose.Blur()
 		return nil
 	}
 
-	// Enter sends the message.
-	// Ctrl+J inserts a newline (LF byte 0x0A is always distinguishable from
-	// Enter/CR byte 0x0D, unlike Shift+Enter which most terminals can't detect).
 	isSend := msg.Type == tea.KeyEnter
 	isNewline := msg.Type == tea.KeyCtrlJ
 
 	// Determine which compose box is active based on focused panel
 	if a.focusedPanel == PanelThread && a.threadVisible {
+		// If mention picker is active, forward all keys to compose (including Enter)
+		if a.threadCompose.IsMentionActive() {
+			var cmd tea.Cmd
+			a.threadCompose, cmd = a.threadCompose.Update(msg)
+			return cmd
+		}
+
 		// Thread reply compose
 		if isNewline {
-			// Insert newline by passing a plain Enter to the textarea
 			var cmd tea.Cmd
 			a.threadCompose, cmd = a.threadCompose.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			return cmd
@@ -581,6 +596,7 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 		if isSend {
 			text := a.threadCompose.Value()
 			if text != "" {
+				text = a.threadCompose.TranslateMentionsForSend(text)
 				a.threadCompose.Reset()
 				threadTS := a.threadPanel.ThreadTS()
 				channelID := a.threadPanel.ChannelID()
@@ -600,8 +616,14 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	// Channel message compose
+	// If mention picker is active, forward all keys to compose (including Enter)
+	if a.compose.IsMentionActive() {
+		var cmd tea.Cmd
+		a.compose, cmd = a.compose.Update(msg)
+		return cmd
+	}
+
 	if isNewline {
-		// Insert newline by passing a plain Enter to the textarea
 		var cmd tea.Cmd
 		a.compose, cmd = a.compose.Update(tea.KeyMsg{Type: tea.KeyEnter})
 		return cmd
@@ -609,6 +631,7 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 	if isSend {
 		text := a.compose.Value()
 		if text != "" {
+			text = a.compose.TranslateMentionsForSend(text)
 			a.compose.Reset()
 			return func() tea.Msg {
 				return SendMessageMsg{
@@ -620,7 +643,6 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
-	// Forward other keys to compose box
 	var cmd tea.Cmd
 	a.compose, cmd = a.compose.Update(msg)
 	return cmd
@@ -1109,6 +1131,15 @@ func (a *App) MarkWorkspaceFailed(teamName string) {
 }
 
 func (a *App) checkLoadingDone() {
+	// Dismiss loading as soon as at least one workspace is ready.
+	// Other workspaces continue connecting in the background.
+	for _, e := range a.loadingStates {
+		if e.Status == "ready" {
+			a.loading = false
+			return
+		}
+	}
+	// If none ready, check if all are failed/done
 	for _, e := range a.loadingStates {
 		if e.Status == "connecting" {
 			return
@@ -1212,6 +1243,18 @@ func (a *App) SetAvatarFunc(fn messages.AvatarFunc) {
 func (a *App) SetUserNames(names map[string]string) {
 	a.messagepane.SetUserNames(names)
 	a.threadPanel.SetUserNames(names)
+
+	// Build user list for mention picker
+	users := make([]mentionpicker.User, 0, len(names))
+	for id, displayName := range names {
+		users = append(users, mentionpicker.User{
+			ID:          id,
+			DisplayName: displayName,
+			Username:    "",
+		})
+	}
+	a.compose.SetUsers(users)
+	a.threadCompose.SetUsers(users)
 }
 
 // SetInitialChannel sets the active channel and its messages before the TUI starts.
@@ -1317,6 +1360,10 @@ func (a *App) View() string {
 	}
 	a.compose.SetWidth(msgWidth - 2)
 	composeView := a.compose.View(msgWidth-2, a.mode == ModeInsert && a.focusedPanel != PanelThread)
+	mentionView := a.compose.MentionPickerView(msgWidth - 2)
+	if mentionView != "" {
+		composeView = mentionView + "\n" + composeView
+	}
 	composeHeight := lipgloss.Height(composeView)
 	msgContentHeight := contentHeight - 2 - composeHeight
 	if msgContentHeight < 3 {
@@ -1338,6 +1385,10 @@ func (a *App) View() string {
 		}
 		a.threadCompose.SetWidth(threadWidth - 2)
 		threadComposeView := a.threadCompose.View(threadWidth-2, a.mode == ModeInsert && a.focusedPanel == PanelThread)
+		threadMentionView := a.threadCompose.MentionPickerView(threadWidth - 2)
+		if threadMentionView != "" {
+			threadComposeView = threadMentionView + "\n" + threadComposeView
+		}
 		threadComposeHeight := lipgloss.Height(threadComposeView)
 		threadContentHeight := contentHeight - 2 - threadComposeHeight
 		if threadContentHeight < 3 {
