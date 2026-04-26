@@ -104,9 +104,13 @@ func (m Model) View(width int) string {
 	left := lipgloss.JoinHorizontal(lipgloss.Center, modeLabel, channelInfo, wsInfo)
 
 	rightContent := ""
-	for _, p := range rightParts {
-		rightContent += p + " "
+	for i, p := range rightParts {
+		if i > 0 {
+			rightContent += " "
+		}
+		rightContent += p
 	}
+	rightContent += " " // trailing padding
 
 	// Fill the bar to full width
 	gap := width - lipgloss.Width(left) - lipgloss.Width(rightContent)

@@ -17,6 +17,7 @@ func New(channelName string) Model {
 	ta.Placeholder = "Message #" + channelName + "... (i to insert)"
 	ta.CharLimit = 40000
 	ta.MaxHeight = 5
+	ta.SetHeight(1)
 	ta.ShowLineNumbers = false
 	ta.Prompt = "> "
 	ta.SetWidth(40)
