@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gammons/slack-tui/internal/ui/styles"
-	"github.com/muesli/reflow/padding"
 	"github.com/muesli/reflow/wordwrap"
 )
 
@@ -293,12 +292,18 @@ func placeAvatarBeside(avatar, content string) string {
 }
 
 // applySelection wraps a rendered message with selection highlight.
+// Pads each line to full width with spaces before applying background,
+// ensuring the highlight extends edge-to-edge.
 func applySelection(content string, width int) string {
-	padded := padding.String(content, uint(width))
-	lines := strings.Split(padded, "\n")
+	lines := strings.Split(content, "\n")
 	bg := selectedBg
 	for i, line := range lines {
-		lines[i] = bg.Render(line)
+		visWidth := lipgloss.Width(line)
+		pad := width - visWidth
+		if pad < 0 {
+			pad = 0
+		}
+		lines[i] = bg.Render(line + strings.Repeat(" ", pad))
 	}
 	return strings.Join(lines, "\n")
 }
