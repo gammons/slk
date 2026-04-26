@@ -321,15 +321,22 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
-	// Check if this is a plain Enter (send) vs modified Enter (newline).
-	// Plain Enter sends the message. Any modified Enter (alt+enter, ctrl+j, etc.)
-	// falls through to the textarea which inserts a newline.
-	isPlainEnter := msg.Type == tea.KeyEnter && !msg.Alt
+	// Enter sends the message.
+	// Ctrl+J inserts a newline (LF byte 0x0A is always distinguishable from
+	// Enter/CR byte 0x0D, unlike Shift+Enter which most terminals can't detect).
+	isSend := msg.Type == tea.KeyEnter
+	isNewline := msg.Type == tea.KeyCtrlJ
 
 	// Determine which compose box is active based on focused panel
 	if a.focusedPanel == PanelThread && a.threadVisible {
 		// Thread reply compose
-		if isPlainEnter {
+		if isNewline {
+			// Insert newline by passing a plain Enter to the textarea
+			var cmd tea.Cmd
+			a.threadCompose, cmd = a.threadCompose.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			return cmd
+		}
+		if isSend {
 			text := a.threadCompose.Value()
 			if text != "" {
 				a.threadCompose.Reset()
@@ -351,7 +358,13 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	// Channel message compose
-	if isPlainEnter {
+	if isNewline {
+		// Insert newline by passing a plain Enter to the textarea
+		var cmd tea.Cmd
+		a.compose, cmd = a.compose.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		return cmd
+	}
+	if isSend {
 		text := a.compose.Value()
 		if text != "" {
 			a.compose.Reset()
@@ -365,7 +378,7 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
-	// Forward to compose box (includes modified Enter for newlines)
+	// Forward other keys to compose box
 	var cmd tea.Cmd
 	a.compose, cmd = a.compose.Update(msg)
 	return cmd
