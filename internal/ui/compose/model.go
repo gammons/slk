@@ -65,9 +65,10 @@ func (m *Model) Reset() {
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
-	// Auto-grow height based on the textarea's actual line count.
-	// We must set height and then re-run Update with a nil msg so the
-	// textarea's repositionView() recalculates scroll for the new height.
+	// Auto-grow: adjust height to match line count.
+	// After SetHeight, we must force a full viewport recalculation because
+	// SetHeight doesn't reset the scroll offset. We do this by re-setting
+	// the value (which rebuilds the viewport content and repositions).
 	lines := m.input.LineCount()
 	if lines < 1 {
 		lines = 1
@@ -77,8 +78,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	}
 	if m.input.Height() != lines {
 		m.input.SetHeight(lines)
-		// Trigger viewport reposition with the new height
-		m.input, _ = m.input.Update(nil)
+		// Force viewport recalculation by re-setting the value.
+		// This resets cursor to end of text, which is fine for a compose box.
+		val := m.input.Value()
+		m.input.SetValue(val)
 	}
 	return m, cmd
 }
