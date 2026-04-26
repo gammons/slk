@@ -158,4 +158,10 @@ var (
 				Background(lipgloss.Color("#1a1a2e")).
 				Foreground(lipgloss.Color("#4A9EFF")).
 				Padding(0, 1)
+
+	// New message landmark
+	NewMessageSeparator = lipgloss.NewStyle().
+				Foreground(Error).
+				Bold(true).
+				Align(lipgloss.Center)
 )

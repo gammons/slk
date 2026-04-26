@@ -66,6 +66,8 @@ type Model struct {
 
 	reactionNavActive bool
 	reactionNavIndex  int
+
+	lastReadTS string
 }
 
 func New(msgs []MessageItem, channelName string) Model {
@@ -287,6 +289,13 @@ func (m *Model) SetUserNames(names map[string]string) {
 	m.cache = nil // invalidate cache so mentions re-render
 }
 
+// SetLastReadTS sets the timestamp of the last read message.
+// Messages with TS > lastReadTS are considered unread.
+func (m *Model) SetLastReadTS(ts string) {
+	m.lastReadTS = ts
+	m.cache = nil // invalidate render cache
+}
+
 func (m *Model) OldestTS() string {
 	if len(m.messages) == 0 {
 		return ""
@@ -302,6 +311,7 @@ func (m *Model) buildCache(width int) {
 	m.cacheMsgLen = len(m.messages)
 
 	var lastDate string
+	newMsgLandmarkInserted := false
 	for i, msg := range m.messages {
 		msgDate := dateFromTS(msg.TS)
 		if msgDate != "" && msgDate != lastDate {
@@ -313,6 +323,17 @@ func (m *Model) buildCache(width int) {
 				msgIdx:  -1,
 			})
 			lastDate = msgDate
+		}
+
+		// New message landmark: insert before the first unread message
+		if m.lastReadTS != "" && !newMsgLandmarkInserted && msg.TS > m.lastReadTS {
+			label := styles.NewMessageSeparator.Width(width).Render("── new ──")
+			m.cache = append(m.cache, viewEntry{
+				content: label,
+				height:  lipgloss.Height(label),
+				msgIdx:  -1,
+			})
+			newMsgLandmarkInserted = true
 		}
 
 		avatarStr := ""
