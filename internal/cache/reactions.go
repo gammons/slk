@@ -24,7 +24,10 @@ func (db *DB) UpsertReaction(messageTS, channelID, emoji string, userIDs []strin
 		DO UPDATE SET user_ids = excluded.user_ids, count = excluded.count`,
 		messageTS, channelID, emoji, string(userIDsJSON), count,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("upserting reaction: %w", err)
+	}
+	return nil
 }
 
 func (db *DB) GetReactions(messageTS, channelID string) ([]ReactionRow, error) {
@@ -35,7 +38,7 @@ func (db *DB) GetReactions(messageTS, channelID string) ([]ReactionRow, error) {
 		messageTS, channelID,
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("querying reactions: %w", err)
 	}
 	defer rows.Close()
 
@@ -44,7 +47,7 @@ func (db *DB) GetReactions(messageTS, channelID string) ([]ReactionRow, error) {
 		var r ReactionRow
 		var userIDsJSON string
 		if err := rows.Scan(&r.Emoji, &userIDsJSON, &r.Count); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scanning reaction row: %w", err)
 		}
 		if err := json.Unmarshal([]byte(userIDsJSON), &r.UserIDs); err != nil {
 			return nil, fmt.Errorf("unmarshal user_ids: %w", err)
@@ -60,5 +63,8 @@ func (db *DB) DeleteReaction(messageTS, channelID, emoji string) error {
 		WHERE message_ts = ? AND channel_id = ? AND emoji = ?`,
 		messageTS, channelID, emoji,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("deleting reaction: %w", err)
+	}
+	return nil
 }

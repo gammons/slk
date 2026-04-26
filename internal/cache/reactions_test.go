@@ -4,17 +4,8 @@ import (
 	"testing"
 )
 
-func setupTestDB(t *testing.T) *DB {
-	t.Helper()
-	db, err := New(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return db
-}
-
 func TestUpsertAndGetReactions(t *testing.T) {
-	db := setupTestDB(t)
+	db := setupDBWithWorkspace(t)
 	defer db.Close()
 
 	err := db.UpsertReaction("1234.5678", "C123", "thumbsup", []string{"U001", "U002"}, 2)
@@ -41,7 +32,7 @@ func TestUpsertAndGetReactions(t *testing.T) {
 }
 
 func TestUpsertReactionUpdatesExisting(t *testing.T) {
-	db := setupTestDB(t)
+	db := setupDBWithWorkspace(t)
 	defer db.Close()
 
 	err := db.UpsertReaction("1234.5678", "C123", "thumbsup", []string{"U001"}, 1)
@@ -67,7 +58,7 @@ func TestUpsertReactionUpdatesExisting(t *testing.T) {
 }
 
 func TestDeleteReaction(t *testing.T) {
-	db := setupTestDB(t)
+	db := setupDBWithWorkspace(t)
 	defer db.Close()
 
 	err := db.UpsertReaction("1234.5678", "C123", "thumbsup", []string{"U001"}, 1)
@@ -90,7 +81,7 @@ func TestDeleteReaction(t *testing.T) {
 }
 
 func TestGetReactionsEmpty(t *testing.T) {
-	db := setupTestDB(t)
+	db := setupDBWithWorkspace(t)
 	defer db.Close()
 
 	rows, err := db.GetReactions("nonexistent", "C123")
@@ -103,12 +94,18 @@ func TestGetReactionsEmpty(t *testing.T) {
 }
 
 func TestMultipleReactionsOnMessage(t *testing.T) {
-	db := setupTestDB(t)
+	db := setupDBWithWorkspace(t)
 	defer db.Close()
 
-	_ = db.UpsertReaction("1234.5678", "C123", "thumbsup", []string{"U001"}, 1)
-	_ = db.UpsertReaction("1234.5678", "C123", "rocket", []string{"U002", "U003"}, 2)
-	_ = db.UpsertReaction("1234.5678", "C123", "heart", []string{"U001"}, 1)
+	if err := db.UpsertReaction("1234.5678", "C123", "thumbsup", []string{"U001"}, 1); err != nil {
+		t.Fatalf("UpsertReaction thumbsup: %v", err)
+	}
+	if err := db.UpsertReaction("1234.5678", "C123", "rocket", []string{"U002", "U003"}, 2); err != nil {
+		t.Fatalf("UpsertReaction rocket: %v", err)
+	}
+	if err := db.UpsertReaction("1234.5678", "C123", "heart", []string{"U001"}, 1); err != nil {
+		t.Fatalf("UpsertReaction heart: %v", err)
+	}
 
 	rows, err := db.GetReactions("1234.5678", "C123")
 	if err != nil {
