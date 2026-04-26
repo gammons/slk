@@ -141,10 +141,10 @@ func (m *Model) View(height, width int) string {
 		item := m.items[idx]
 		isSelected := fi == m.selected
 
-		// Selection cursor
-		cursor := "  "
+		// Selection indicator -- green left border for selected, space for others
+		cursor := " "
 		if isSelected {
-			cursor = lipgloss.NewStyle().Foreground(styles.Primary).Bold(true).Render("> ")
+			cursor = lipgloss.NewStyle().Foreground(styles.Accent).Render("▌")
 		}
 
 		var prefix string

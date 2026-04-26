@@ -42,14 +42,9 @@ var (
 
 	// Channel sidebar
 	ChannelSelected = lipgloss.NewStyle().
-			Background(lipgloss.Color("#2A2A4E")).
 			Foreground(lipgloss.Color("#FFFFFF")).
 			Bold(true).
 			Padding(0, 1)
-
-	// ChannelSelectedBg is the background color for selected channels
-	// (exported separately so sidebar cursor can use it)
-	ChannelSelectedBg = lipgloss.Color("#2A2A4E")
 
 	ChannelNormal = lipgloss.NewStyle().
 			Foreground(TextPrimary).

@@ -225,7 +225,7 @@ func (m Model) renderBox(termWidth int) string {
 
 		if i == m.selected {
 			row := lipgloss.NewStyle().
-				Background(styles.ChannelSelectedBg).
+				Background(lipgloss.Color("#2A2A4E")).
 				Foreground(lipgloss.Color("#FFFFFF")).
 				Bold(true).
 				Width(innerWidth).
