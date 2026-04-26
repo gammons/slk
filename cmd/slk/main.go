@@ -373,11 +373,9 @@ func run() error {
 			db:          db,
 			workspaceID: activeClient.TeamID(),
 		}
-		if err := activeClient.StartWebSocket(handler); err != nil {
-			log.Printf("Warning: failed to start WebSocket: %v", err)
-		} else {
-			defer activeClient.StopWebSocket()
-		}
+		connMgr := slackclient.NewConnectionManager(activeClient, handler)
+		go connMgr.Run(ctx)
+		defer connMgr.Stop()
 	}
 
 	_, err = p.Run()
@@ -619,6 +617,7 @@ type rtmEventHandler struct {
 	tsFormat    string
 	db          *cache.DB
 	workspaceID string
+	connected   bool
 }
 
 func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS string, edited bool) {
@@ -720,6 +719,10 @@ func (h *rtmEventHandler) OnUserTyping(channelID, userID string) {
 }
 
 func (h *rtmEventHandler) OnConnect() {
+	if h.connected {
+		log.Printf("WebSocket: reconnected")
+	}
+	h.connected = true
 	h.program.Send(ui.ConnectionStateMsg{State: int(statusbar.StateConnected)})
 }
 
