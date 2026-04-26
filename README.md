@@ -45,9 +45,9 @@ Open [https://app.slack.com](https://app.slack.com) and log into your workspace.
 **Get the `xoxc` token:**
 - Go to the Console tab in DevTools and run:
   ```javascript
-  JSON.parse(localStorage.localConfig_v2).teams[Object.keys(JSON.parse(localStorage.localConfig_v2).teams)[0]].token
+  Object.entries(JSON.parse(localStorage.localConfig_v2).teams).forEach(([id,t]) => console.log(t.name, t.token))
   ```
-- Copy the `xoxc-...` token
+- This prints the name and token for each workspace. Copy the `xoxc-...` token for the workspace you want to add.
 
 ### 3. Add Workspace
 

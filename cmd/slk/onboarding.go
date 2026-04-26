@@ -57,8 +57,9 @@ func addWorkspace() error {
 	fmt.Println(dimStyle.Render("  c. Go to Application > Cookies > https://app.slack.com"))
 	fmt.Println(dimStyle.Render("     Find the cookie named 'd' and copy its value"))
 	fmt.Println(dimStyle.Render("  d. Go to the Console tab and run:"))
-	fmt.Println(dimStyle.Render("     JSON.parse(localStorage.localConfig_v2).teams[Object.keys(JSON.parse(localStorage.localConfig_v2).teams)[0]].token"))
-	fmt.Println(dimStyle.Render("     Copy the xoxc-... token"))
+	fmt.Println(dimStyle.Render("     Object.entries(JSON.parse(localStorage.localConfig_v2).teams).forEach(([id,t]) => console.log(t.name, t.token))"))
+	fmt.Println(dimStyle.Render("     This prints the name and xoxc token for each workspace."))
+	fmt.Println(dimStyle.Render("     Copy the xoxc-... token for the workspace you want to add."))
 	fmt.Println()
 
 	// Step 2: Enter tokens via huh form
@@ -69,6 +70,19 @@ func addWorkspace() error {
 
 	form := huh.NewForm(
 		huh.NewGroup(
+			huh.NewInput().
+				Title("Cookie (d)").
+				Description("The 'd' cookie value from Application > Cookies").
+				Placeholder("xoxd-...").
+				Value(&dCookie).
+				Validate(func(s string) error {
+					s = strings.TrimSpace(s)
+					if s == "" {
+						return fmt.Errorf("cookie is required")
+					}
+					return nil
+				}),
+
 			huh.NewInput().
 				Title("Token (xoxc)").
 				Description("The xoxc-... token from your browser console").
@@ -81,19 +95,6 @@ func addWorkspace() error {
 					}
 					if !strings.HasPrefix(s, "xoxc-") {
 						return fmt.Errorf("must start with xoxc-")
-					}
-					return nil
-				}),
-
-			huh.NewInput().
-				Title("Cookie (d)").
-				Description("The 'd' cookie value from Application > Cookies").
-				Placeholder("xoxd-...").
-				Value(&dCookie).
-				Validate(func(s string) error {
-					s = strings.TrimSpace(s)
-					if s == "" {
-						return fmt.Errorf("cookie is required")
 					}
 					return nil
 				}),
