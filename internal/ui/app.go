@@ -307,9 +307,7 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 		a.ToggleThread()
 
 	case key.Matches(msg, a.keys.Down):
-		if cmd := a.handleDown(); cmd != nil {
-			return cmd
-		}
+		a.handleDown()
 
 	case key.Matches(msg, a.keys.Up):
 		if cmd := a.handleUp(); cmd != nil {
@@ -446,25 +444,15 @@ func (a *App) handleChannelFinderMode(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-func (a *App) handleDown() tea.Cmd {
+func (a *App) handleDown() {
 	switch a.focusedPanel {
 	case PanelSidebar:
 		a.sidebar.MoveDown()
 	case PanelMessages:
-		if a.messagepane.IsAtBottom() {
-			a.SetMode(ModeInsert)
-			a.focusedPanel = PanelMessages
-			return a.compose.Focus()
-		}
 		a.messagepane.MoveDown()
 	case PanelThread:
-		if a.threadPanel.IsAtBottom() {
-			a.SetMode(ModeInsert)
-			return a.threadCompose.Focus()
-		}
 		a.threadPanel.MoveDown()
 	}
-	return nil
 }
 
 func (a *App) handleUp() tea.Cmd {
