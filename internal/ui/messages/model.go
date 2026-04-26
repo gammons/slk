@@ -292,8 +292,15 @@ func placeAvatarBeside(avatar, content string) string {
 }
 
 // applySelection wraps a rendered message with selection highlight.
+// Each line is rendered individually at full width to ensure the background
+// covers the entire line, even when ANSI escape codes affect width measurement.
 func applySelection(content string, width int) string {
-	return selectedBg.Width(width).Render(content)
+	bg := selectedBg.Width(width)
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		lines[i] = bg.Render(line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m *Model) View(height, width int) string {
