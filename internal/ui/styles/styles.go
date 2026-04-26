@@ -51,8 +51,7 @@ var (
 			Padding(0, 1)
 
 	ChannelUnread = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FFFFFF")).
-			Bold(true).
+			Foreground(TextPrimary).
 			Padding(0, 1)
 
 	UnreadBadge = lipgloss.NewStyle().

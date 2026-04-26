@@ -147,6 +147,12 @@ func (m *Model) View(height, width int) string {
 			cursor = lipgloss.NewStyle().Foreground(styles.Accent).Render("▌")
 		}
 
+		// Unread dot indicator
+		unreadDot := " "
+		if item.UnreadCount > 0 && !isSelected {
+			unreadDot = lipgloss.NewStyle().Foreground(styles.Primary).Render("●")
+		}
+
 		var prefix string
 		switch item.Type {
 		case "dm":
@@ -173,7 +179,7 @@ func (m *Model) View(height, width int) string {
 			name = truncate.StringWithTail(name, uint(maxNameLen), "…")
 		}
 
-		label := cursor + prefix + name
+		label := cursor + prefix + name + " " + unreadDot
 
 		var style lipgloss.Style
 		if isSelected {
