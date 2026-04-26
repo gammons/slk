@@ -50,10 +50,12 @@ func (m *Model) SetChannel(name string) {
 }
 
 func (m *Model) Focus() tea.Cmd {
+	m.input.Placeholder = "" // hide placeholder when focused
 	return m.input.Focus()
 }
 
 func (m *Model) Blur() {
+	m.input.Placeholder = "Message #" + m.channelName + "... (i to insert)"
 	m.input.Blur()
 }
 
@@ -103,10 +105,9 @@ func (m Model) View(width int, focused bool) string {
 		style = styles.ComposeInsert.Width(width - 2)
 	}
 
-	// If empty, render placeholder manually with correct background.
-	// The textarea's internal placeholder uses Inline(true) styles which
-	// don't fill the full line width with the background color.
-	if m.input.Value() == "" {
+	// If empty and unfocused, render placeholder manually with correct background.
+	// When focused, show an empty compose box with cursor (no placeholder).
+	if m.input.Value() == "" && !focused {
 		placeholder := lipgloss.NewStyle().
 			Foreground(styles.TextMuted).
 			Background(styles.SurfaceDark).
