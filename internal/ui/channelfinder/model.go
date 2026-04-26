@@ -178,18 +178,21 @@ func (m Model) renderBox(termWidth int) string {
 		Foreground(styles.Primary).
 		Render("Switch Channel")
 
-	// Query input
-	var input string
+	// Query input with blue left border
+	var inputText string
 	if m.query == "" {
 		placeholder := lipgloss.NewStyle().Foreground(styles.TextMuted).Render("Type to filter...")
-		input = lipgloss.NewStyle().
-			Foreground(styles.TextPrimary).
-			Render("> █ " + placeholder)
+		inputText = "█ " + placeholder
 	} else {
-		input = lipgloss.NewStyle().
-			Foreground(styles.TextPrimary).
-			Render("> " + m.query + "█")
+		inputText = m.query + "█"
 	}
+	input := lipgloss.NewStyle().
+		BorderStyle(lipgloss.Border{Left: "▌"}).
+		BorderLeft(true).
+		BorderForeground(styles.Primary).
+		PaddingLeft(1).
+		Foreground(styles.TextPrimary).
+		Render(inputText)
 
 	// Results (max 10)
 	maxVisible := 10
@@ -224,7 +227,7 @@ func (m Model) renderBox(termWidth int) string {
 		}
 
 		if i == m.selected {
-			indicator := lipgloss.NewStyle().Foreground(styles.Primary).Render("▌")
+			indicator := lipgloss.NewStyle().Foreground(styles.Accent).Render("▌")
 			row := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#FFFFFF")).
 				Bold(true).
