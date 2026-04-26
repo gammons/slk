@@ -91,23 +91,22 @@ func TestIsMentionActive(t *testing.T) {
 	}
 }
 
-func TestIsAtWordBoundary(t *testing.T) {
-	tests := []struct {
-		text     string
-		col      int
-		expected bool
-	}{
-		{"@", 0, true},
-		{"hello @", 6, true},
-		{"hello\n@", 0, true},
-		{"email@", 5, false},
-		{"a@", 1, false},
+func TestTranslateDoesNotCorruptSimilarNames(t *testing.T) {
+	m := New("general")
+	m.SetUsers([]mentionpicker.User{
+		{ID: "U1", DisplayName: "heretic", Username: "heretic"},
+	})
+
+	// @heretic should NOT be corrupted by @here special mention
+	result := m.TranslateMentionsForSend("hey @heretic check this")
+	if result != "hey <@U1> check this" {
+		t.Errorf("expected 'hey <@U1> check this', got %q", result)
 	}
-	for _, tt := range tests {
-		result := isAtWordBoundary(tt.text, tt.col)
-		if result != tt.expected {
-			t.Errorf("isAtWordBoundary(%q, %d) = %v, want %v", tt.text, tt.col, result, tt.expected)
-		}
+
+	// @here should still work
+	result = m.TranslateMentionsForSend("@here look")
+	if result != "<!here> look" {
+		t.Errorf("expected '<!here> look', got %q", result)
 	}
 }
 

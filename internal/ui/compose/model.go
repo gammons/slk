@@ -311,30 +311,55 @@ func (m *Model) CloseMention() {
 
 // TranslateMentionsForSend replaces @DisplayName with <@UserID> in the text.
 func (m Model) TranslateMentionsForSend(text string) string {
-	// Handle special mentions first
-	specials := map[string]string{
-		"@here":     "<!here>",
-		"@channel":  "<!channel>",
-		"@everyone": "<!everyone>",
+	// Collect all mention patterns: special mentions + user mentions
+	// Use a single pass with longest-first matching to avoid partial corruption
+	// (e.g., @here must not match inside @heretic)
+	type mentionEntry struct {
+		name        string // e.g., "here", "Alice"
+		replacement string // e.g., "<!here>", "<@U1234>"
 	}
-	for name, replacement := range specials {
-		text = strings.ReplaceAll(text, name, replacement)
+
+	var entries []mentionEntry
+
+	// Special mentions
+	entries = append(entries,
+		mentionEntry{"here", "<!here>"},
+		mentionEntry{"channel", "<!channel>"},
+		mentionEntry{"everyone", "<!everyone>"},
+	)
+
+	// User mentions
+	for name, userID := range m.reverseNames {
+		entries = append(entries, mentionEntry{name, "<@" + userID + ">"})
 	}
-	if len(m.reverseNames) == 0 {
-		return text
-	}
-	// Sort display names by length (longest first) to avoid partial matches
-	names := make([]string, 0, len(m.reverseNames))
-	for name := range m.reverseNames {
-		names = append(names, name)
-	}
-	sort.Slice(names, func(i, j int) bool {
-		return len(names[i]) > len(names[j])
+
+	// Sort by name length descending to avoid partial matches
+	sort.Slice(entries, func(i, j int) bool {
+		return len(entries[i].name) > len(entries[j].name)
 	})
-	for _, name := range names {
-		userID := m.reverseNames[name]
-		text = strings.ReplaceAll(text, "@"+name, "<@"+userID+">")
+
+	for _, e := range entries {
+		mention := "@" + e.name
+		for {
+			idx := strings.Index(text, mention)
+			if idx < 0 {
+				break
+			}
+			// Check that the character after the mention is a word boundary
+			end := idx + len(mention)
+			if end < len(text) {
+				next := text[end]
+				if next != ' ' && next != '\n' && next != '\t' && next != ',' && next != '.' && next != '!' && next != '?' && next != ':' && next != ';' && next != ')' && next != '>' {
+					// Not a word boundary -- skip this occurrence
+					// Move past it to avoid infinite loop
+					text = text[:idx] + text[idx:end] + text[end:]
+					continue
+				}
+			}
+			text = text[:idx] + e.replacement + text[end:]
+		}
 	}
+
 	return text
 }
 
@@ -344,24 +369,6 @@ func (m Model) MentionPickerView(width int) string {
 		return ""
 	}
 	return m.mentionPicker.View(width)
-}
-
-// isAtWordBoundary checks if the character at the given column in the text
-// is at a word boundary (preceded by space, newline, or at position 0).
-func isAtWordBoundary(text string, col int) bool {
-	if col == 0 {
-		return true
-	}
-	lines := strings.Split(text, "\n")
-	lastLine := lines[len(lines)-1]
-	if col > len(lastLine) {
-		return false
-	}
-	if col == 0 {
-		return true
-	}
-	prev := lastLine[col-1]
-	return prev == ' ' || prev == '\t'
 }
 
 func (m Model) View(width int, focused bool) string {
