@@ -99,7 +99,7 @@ func addWorkspace() error {
 					return nil
 				}),
 		),
-	).WithTheme(huh.ThemeDracula())
+	).WithTheme(huh.ThemeFunc(huh.ThemeDracula))
 
 	err := form.Run()
 	if err != nil {
@@ -153,7 +153,7 @@ func addWorkspace() error {
 				Placeholder(teamID).
 				Value(&wsName),
 		),
-	).WithTheme(huh.ThemeDracula())
+	).WithTheme(huh.ThemeFunc(huh.ThemeDracula))
 
 	if err := nameForm.Run(); err != nil {
 		wsName = teamID

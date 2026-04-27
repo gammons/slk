@@ -256,16 +256,16 @@ func (m *Model) View(height, width int) string {
 	fullContent := strings.Join(allLines, "\n")
 
 	// Configure viewport
-	m.vp.Width = width
-	m.vp.Height = height
+	m.vp.SetWidth(width)
+	m.vp.SetHeight(height)
 	m.vp.KeyMap = viewport.KeyMap{}
 	m.vp.SetContent(fullContent)
 
 	// Scroll to keep selected row visible
-	if selectedEndLine > m.vp.YOffset+m.vp.Height {
-		m.vp.SetYOffset(selectedEndLine - m.vp.Height)
+	if selectedEndLine > m.vp.YOffset()+m.vp.Height() {
+		m.vp.SetYOffset(selectedEndLine - m.vp.Height())
 	}
-	if selectedStartLine < m.vp.YOffset {
+	if selectedStartLine < m.vp.YOffset() {
 		m.vp.SetYOffset(selectedStartLine)
 	}
 

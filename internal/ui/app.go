@@ -274,7 +274,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if a.mode == ModeInsert {
 		if s, ok := msg.(fmt.Stringer); ok {
 			if s.String() == "?CSI[49 51 59 50 117]?" {
-				enterMsg := tea.KeyMsg{Type: tea.KeyEnter}
+				enterMsg := tea.KeyPressMsg{Code: tea.KeyEnter}
 				if a.focusedPanel == PanelThread && a.threadVisible {
 					a.threadCompose, _ = a.threadCompose.Update(enterMsg)
 				} else {
@@ -634,8 +634,8 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
-	isSend := msg.Type == tea.KeyEnter
-	isNewline := msg.Type == tea.KeyCtrlJ
+	isSend := msg.Key().Code == tea.KeyEnter
+	isNewline := msg.Key().Code == 'j' && msg.Key().Mod == tea.ModCtrl
 
 	// Determine which compose box is active based on focused panel
 	if a.focusedPanel == PanelThread && a.threadVisible {
@@ -649,7 +649,7 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 		// Thread reply compose
 		if isNewline {
 			var cmd tea.Cmd
-			a.threadCompose, cmd = a.threadCompose.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			a.threadCompose, cmd = a.threadCompose.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 			return cmd
 		}
 		if isSend {
@@ -685,7 +685,7 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 
 	if isNewline {
 		var cmd tea.Cmd
-		a.compose, cmd = a.compose.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		a.compose, cmd = a.compose.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 		return cmd
 	}
 	if isSend {
@@ -719,15 +719,16 @@ func (a *App) handleCommandMode(msg tea.KeyMsg) tea.Cmd {
 func (a *App) handleChannelFinderMode(msg tea.KeyMsg) tea.Cmd {
 	// Map tea.KeyMsg to string for the finder
 	keyStr := msg.String()
-	if msg.Type == tea.KeyEnter {
+	switch msg.Key().Code {
+	case tea.KeyEnter:
 		keyStr = "enter"
-	} else if msg.Type == tea.KeyEsc {
+	case tea.KeyEscape:
 		keyStr = "esc"
-	} else if msg.Type == tea.KeyUp {
+	case tea.KeyUp:
 		keyStr = "up"
-	} else if msg.Type == tea.KeyDown {
+	case tea.KeyDown:
 		keyStr = "down"
-	} else if msg.Type == tea.KeyBackspace {
+	case tea.KeyBackspace:
 		keyStr = "backspace"
 	}
 
@@ -751,15 +752,16 @@ func (a *App) handleChannelFinderMode(msg tea.KeyMsg) tea.Cmd {
 
 func (a *App) handleWorkspaceFinderMode(msg tea.KeyMsg) tea.Cmd {
 	keyStr := msg.String()
-	if msg.Type == tea.KeyEnter {
+	switch msg.Key().Code {
+	case tea.KeyEnter:
 		keyStr = "enter"
-	} else if msg.Type == tea.KeyEsc {
+	case tea.KeyEscape:
 		keyStr = "esc"
-	} else if msg.Type == tea.KeyUp {
+	case tea.KeyUp:
 		keyStr = "up"
-	} else if msg.Type == tea.KeyDown {
+	case tea.KeyDown:
 		keyStr = "down"
-	} else if msg.Type == tea.KeyBackspace {
+	case tea.KeyBackspace:
 		keyStr = "backspace"
 	}
 
@@ -783,15 +785,16 @@ func (a *App) handleWorkspaceFinderMode(msg tea.KeyMsg) tea.Cmd {
 
 func (a *App) handleThemeSwitcherMode(msg tea.KeyMsg) tea.Cmd {
 	keyStr := msg.String()
-	if msg.Type == tea.KeyEnter {
+	switch msg.Key().Code {
+	case tea.KeyEnter:
 		keyStr = "enter"
-	} else if msg.Type == tea.KeyEsc {
+	case tea.KeyEscape:
 		keyStr = "esc"
-	} else if msg.Type == tea.KeyUp {
+	case tea.KeyUp:
 		keyStr = "up"
-	} else if msg.Type == tea.KeyDown {
+	case tea.KeyDown:
 		keyStr = "down"
-	} else if msg.Type == tea.KeyBackspace {
+	case tea.KeyBackspace:
 		keyStr = "backspace"
 	}
 
@@ -816,8 +819,8 @@ func (a *App) handleThemeSwitcherMode(msg tea.KeyMsg) tea.Cmd {
 func (a *App) handleReactionPickerMode(msg tea.KeyMsg) tea.Cmd {
 	keyStr := msg.String()
 
-	switch msg.Type {
-	case tea.KeyEsc:
+	switch msg.Key().Code {
+	case tea.KeyEscape:
 		keyStr = "esc"
 	case tea.KeyEnter:
 		keyStr = "enter"
@@ -1268,7 +1271,7 @@ func (a *App) renderLoadingOverlay(width, height int) string {
 	return lipgloss.Place(width, height,
 		lipgloss.Center, lipgloss.Center,
 		box,
-		lipgloss.WithWhitespaceBackground(lipgloss.Color("#0F0F1A")),
+		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(lipgloss.Color("#0F0F1A"))),
 	)
 }
 
@@ -1519,9 +1522,11 @@ func (a *App) typingIndicatorText(names []string) string {
 	}
 }
 
-func (a *App) View() string {
+func (a *App) View() tea.View {
 	if a.width == 0 || a.height == 0 {
-		return "Initializing..."
+		v := tea.NewView("Initializing...")
+		v.AltScreen = true
+		return v
 	}
 
 	statusHeight := 1
@@ -1676,9 +1681,12 @@ func (a *App) View() string {
 	// Fill any uncolored cells with the theme background color.
 	// This acts as a "background layer" for light themes where the
 	// terminal's default dark background would otherwise show through.
-	return lipgloss.Place(a.width, a.height,
+	finalScreen := lipgloss.Place(a.width, a.height,
 		lipgloss.Left, lipgloss.Top,
 		screen,
-		lipgloss.WithWhitespaceBackground(styles.Background),
+		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(styles.Background)),
 	)
+	v := tea.NewView(finalScreen)
+	v.AltScreen = true
+	return v
 }

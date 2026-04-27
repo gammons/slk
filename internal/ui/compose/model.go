@@ -39,18 +39,20 @@ func New(channelName string) Model {
 
 	// Override textarea styles to use our dark background consistently
 	bg := lipgloss.NewStyle().Background(styles.SurfaceDark)
-	ta.FocusedStyle.Base = bg
-	ta.FocusedStyle.Text = bg
-	ta.FocusedStyle.CursorLine = bg
-	ta.FocusedStyle.EndOfBuffer = bg
-	ta.FocusedStyle.Prompt = bg
-	ta.BlurredStyle.Base = bg
-	ta.BlurredStyle.Text = bg
-	ta.BlurredStyle.CursorLine = bg
-	ta.BlurredStyle.EndOfBuffer = bg
-	ta.BlurredStyle.Prompt = bg
-	ta.FocusedStyle.Placeholder = bg.Foreground(styles.TextMuted)
-	ta.BlurredStyle.Placeholder = bg.Foreground(styles.TextMuted)
+	s := ta.Styles()
+	s.Focused.Base = bg
+	s.Focused.Text = bg
+	s.Focused.CursorLine = bg
+	s.Focused.EndOfBuffer = bg
+	s.Focused.Prompt = bg
+	s.Blurred.Base = bg
+	s.Blurred.Text = bg
+	s.Blurred.CursorLine = bg
+	s.Blurred.EndOfBuffer = bg
+	s.Blurred.Prompt = bg
+	s.Focused.Placeholder = bg.Foreground(styles.TextMuted)
+	s.Blurred.Placeholder = bg.Foreground(styles.TextMuted)
+	ta.SetStyles(s)
 
 	return Model{
 		input:       ta,
@@ -137,7 +139,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	m.input, cmd = m.input.Update(msg)
 
 	// Check if @ was just typed at a word boundary
-	if isKey && keyMsg.Type == tea.KeyRunes && len(keyMsg.Runes) == 1 && keyMsg.Runes[0] == '@' {
+	if isKey && keyMsg.Key().Text == "@" {
 		val := m.input.Value()
 		cursorAbsPos := m.cursorPosition()
 		// The @ is at cursorAbsPos-1 (just typed)
@@ -199,16 +201,17 @@ func (m *Model) autoGrow() {
 
 // handleMentionKey processes key events when the mention picker is active.
 func (m Model) handleMentionKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	k := msg.Key()
 	switch {
-	case msg.Type == tea.KeyUp || msg.Type == tea.KeyCtrlP:
+	case k.Code == tea.KeyUp || (k.Code == 'p' && k.Mod == tea.ModCtrl):
 		m.mentionPicker.MoveUp()
 		return m, nil
 
-	case msg.Type == tea.KeyDown || msg.Type == tea.KeyCtrlN:
+	case k.Code == tea.KeyDown || (k.Code == 'n' && k.Mod == tea.ModCtrl):
 		m.mentionPicker.MoveDown()
 		return m, nil
 
-	case msg.Type == tea.KeyEnter || msg.Type == tea.KeyTab:
+	case k.Code == tea.KeyEnter || k.Code == tea.KeyTab:
 		result := m.mentionPicker.Select()
 		if result != nil {
 			m.insertMention(result)
@@ -217,12 +220,12 @@ func (m Model) handleMentionKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.mentionPicker.Close()
 		return m, nil
 
-	case msg.Type == tea.KeyEscape:
+	case k.Code == tea.KeyEscape:
 		m.mentionActive = false
 		m.mentionPicker.Close()
 		return m, nil
 
-	case msg.Type == tea.KeyBackspace:
+	case k.Code == tea.KeyBackspace:
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		pos := m.cursorPosition()
@@ -235,7 +238,7 @@ func (m Model) handleMentionKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.autoGrow()
 		return m, cmd
 
-	case msg.Type == tea.KeyRunes:
+	case len(k.Text) > 0:
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		m.updateMentionQuery()

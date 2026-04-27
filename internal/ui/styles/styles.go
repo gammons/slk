@@ -2,23 +2,25 @@
 package styles
 
 import (
+	"image/color"
+
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/config"
 )
 
 var (
 	// Colors
-	Primary     = lipgloss.Color("#4A9EFF")
-	Secondary   = lipgloss.Color("#666666")
-	Accent      = lipgloss.Color("#50C878")
-	Warning     = lipgloss.Color("#E0A030")
-	Error       = lipgloss.Color("#E04040")
-	Background  = lipgloss.Color("#1A1A2E")
-	Surface     = lipgloss.Color("#16162B")
-	SurfaceDark = lipgloss.Color("#0F0F23")
-	TextPrimary = lipgloss.Color("#E0E0E0")
-	TextMuted   = lipgloss.Color("#888888")
-	Border      = lipgloss.Color("#333333")
+	Primary     color.Color = lipgloss.Color("#4A9EFF")
+	Secondary   color.Color = lipgloss.Color("#666666")
+	Accent      color.Color = lipgloss.Color("#50C878")
+	Warning     color.Color = lipgloss.Color("#E0A030")
+	Error       color.Color = lipgloss.Color("#E04040")
+	Background  color.Color = lipgloss.Color("#1A1A2E")
+	Surface     color.Color = lipgloss.Color("#16162B")
+	SurfaceDark color.Color = lipgloss.Color("#0F0F23")
+	TextPrimary color.Color = lipgloss.Color("#E0E0E0")
+	TextMuted   color.Color = lipgloss.Color("#888888")
+	Border      color.Color = lipgloss.Color("#333333")
 
 	// Panel styles
 	FocusedBorder = lipgloss.NewStyle().

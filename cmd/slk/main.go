@@ -340,7 +340,7 @@ func run() error {
 	})
 
 	// Start the TUI immediately (shows loading overlay)
-	p = tea.NewProgram(app, tea.WithAltScreen())
+	p = tea.NewProgram(app)
 
 	// Launch workspace connections in background goroutines
 	// Results are sent to the TUI via p.Send()

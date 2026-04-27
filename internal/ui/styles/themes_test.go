@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/config"
 )
 
@@ -52,8 +53,8 @@ border = "#555555"
 
 	// Verify it can be applied
 	Apply("my custom", config.Theme{})
-	if Primary != "#AABBCC" {
-		t.Errorf("expected custom primary #AABBCC, got %s", string(Primary))
+	if !colorEqual(Primary, lipgloss.Color("#AABBCC")) {
+		t.Errorf("expected custom primary #AABBCC")
 	}
 
 	// Clean up custom themes for other tests

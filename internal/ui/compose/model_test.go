@@ -154,7 +154,7 @@ func TestMentionTriggersOnAtWordBoundary(t *testing.T) {
 	m.Focus()
 
 	// Type @ at start of text (position 0 = word boundary)
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
+	m, _ = m.Update(tea.KeyPressMsg{Code: '@', Text: "@"})
 
 	if !m.IsMentionActive() {
 		t.Error("expected mention picker to be active after typing @ at word boundary")
@@ -171,11 +171,11 @@ func TestMentionDoesNotTriggerMidWord(t *testing.T) {
 
 	// Type "email" first
 	for _, r := range "email" {
-		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 
 	// Then type @ mid-word
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
+	m, _ = m.Update(tea.KeyPressMsg{Code: '@', Text: "@"})
 
 	if m.IsMentionActive() {
 		t.Error("expected mention picker NOT to be active after typing @ mid-word")
@@ -191,14 +191,14 @@ func TestMentionSelectInsertDisplayName(t *testing.T) {
 	m.Focus()
 
 	// Type "@" to trigger
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
+	m, _ = m.Update(tea.KeyPressMsg{Code: '@', Text: "@"})
 
 	if !m.IsMentionActive() {
 		t.Fatal("expected mention picker to be active")
 	}
 
 	// Press Enter to select first filtered result
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	if m.IsMentionActive() {
 		t.Error("expected mention picker to close after selection")
@@ -219,13 +219,13 @@ func TestMentionEscDismisses(t *testing.T) {
 	m.SetWidth(80)
 	m.Focus()
 
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
+	m, _ = m.Update(tea.KeyPressMsg{Code: '@', Text: "@"})
 	if !m.IsMentionActive() {
 		t.Fatal("expected mention picker to be active")
 	}
 
 	// Press Escape to dismiss
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEscape})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	if m.IsMentionActive() {
 		t.Error("expected mention picker to close after Escape")
@@ -246,12 +246,12 @@ func TestMentionQueryFilters(t *testing.T) {
 	m.Focus()
 
 	// Type "@a" to trigger and filter
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
+	m, _ = m.Update(tea.KeyPressMsg{Code: '@', Text: "@"})
 	if !m.IsMentionActive() {
 		t.Fatal("expected mention picker to be active")
 	}
 
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 
 	// The picker should have filtered results - query should be "a"
 	if q := m.mentionPicker.Query(); q != "a" {
@@ -268,7 +268,7 @@ func TestMentionNavigateUpDown(t *testing.T) {
 	m.SetWidth(80)
 	m.Focus()
 
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
+	m, _ = m.Update(tea.KeyPressMsg{Code: '@', Text: "@"})
 	if !m.IsMentionActive() {
 		t.Fatal("expected mention picker to be active")
 	}
@@ -279,13 +279,13 @@ func TestMentionNavigateUpDown(t *testing.T) {
 	}
 
 	// Move down
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	if m.mentionPicker.Selected() != 1 {
 		t.Errorf("expected selection 1 after down, got %d", m.mentionPicker.Selected())
 	}
 
 	// Move up
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	if m.mentionPicker.Selected() != 0 {
 		t.Errorf("expected selection 0 after up, got %d", m.mentionPicker.Selected())
 	}
@@ -300,13 +300,13 @@ func TestMentionBackspaceCancelsMention(t *testing.T) {
 	m.Focus()
 
 	// Type "@" to trigger
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
+	m, _ = m.Update(tea.KeyPressMsg{Code: '@', Text: "@"})
 	if !m.IsMentionActive() {
 		t.Fatal("expected mention picker to be active")
 	}
 
 	// Backspace should delete the @ and cancel mention
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
 
 	if m.IsMentionActive() {
 		t.Error("expected mention picker to close after backspacing past @")
@@ -323,9 +323,9 @@ func TestMentionAfterSpace(t *testing.T) {
 
 	// Type "hello " then "@"
 	for _, r := range "hello " {
-		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
+	m, _ = m.Update(tea.KeyPressMsg{Code: '@', Text: "@"})
 
 	if !m.IsMentionActive() {
 		t.Error("expected mention picker to be active after typing @ after space")
@@ -374,7 +374,7 @@ func TestCloseMention(t *testing.T) {
 	m.SetWidth(80)
 	m.Focus()
 
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
+	m, _ = m.Update(tea.KeyPressMsg{Code: '@', Text: "@"})
 	if !m.IsMentionActive() {
 		t.Fatal("expected mention picker to be active")
 	}
