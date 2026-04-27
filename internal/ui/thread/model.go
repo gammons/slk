@@ -360,7 +360,6 @@ func (m *Model) View(height, width int) string {
 	// Check if view-level cache (bordered content) can be reused
 	if !m.viewCacheValid || m.viewSelected != m.selected || m.viewWidth != width || m.viewHeight != replyAreaHeight {
 		// Pre-compute border styles for this frame (avoids NewStyle per reply)
-		borderFill := lipgloss.NewStyle().Background(styles.Background)
 		borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Background).BorderBackground(styles.Background)
 		borderSelect := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Accent).BorderBackground(styles.Background)
 
@@ -373,11 +372,11 @@ func (m *Model) View(height, width int) string {
 			content := cached
 			if i == m.selected {
 				startLine = currentLine
-				filled := borderFill.Width(width - 1).Render(content)
-				content = borderSelect.Render(filled)
+				content = messages.ClampLineWidths(content, width-1)
+				content = borderSelect.Render(content)
 			} else {
-				filled := borderFill.Width(width - 1).Render(content)
-				content = borderInvis.Render(filled)
+				content = messages.ClampLineWidths(content, width-1)
+				content = borderInvis.Render(content)
 			}
 			h := lipgloss.Height(content)
 			if i == m.selected {
