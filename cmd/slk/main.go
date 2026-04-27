@@ -144,6 +144,33 @@ func run() error {
 	app.SetWorkspaces(wsItems)
 	app.SetTypingEnabled(cfg.Animations.TypingIndicators)
 
+	// Wire theme switcher
+	app.SetThemeItems(styles.ThemeNames())
+	app.SetThemeOverrides(cfg.Theme)
+	app.SetThemeSaver(func(name string) {
+		cfg.Appearance.Theme = name
+		// Write updated theme to config file
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			return
+		}
+		// Simple string replacement for theme field
+		lines := strings.Split(string(data), "\n")
+		found := false
+		for i, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "theme") && strings.Contains(trimmed, "=") {
+				lines[i] = "theme = \"" + name + "\""
+				found = true
+				break
+			}
+		}
+		if !found {
+			lines = append(lines, "", "[appearance]", "theme = \""+name+"\"")
+		}
+		os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
+	})
+
 	// Wire avatar rendering
 	app.SetAvatarFunc(func(userID string) string {
 		return avatarCache.Get(userID)
