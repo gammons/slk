@@ -38,7 +38,7 @@ var (
 			Align(lipgloss.Center)
 
 	WorkspaceInactive = lipgloss.NewStyle().
-				Background(lipgloss.Color("#444444")).
+				Background(Surface).
 				Foreground(TextPrimary).
 				Padding(0, 1).
 				Align(lipgloss.Center)
@@ -162,6 +162,12 @@ var (
 				Foreground(lipgloss.Color("#4A9EFF")).
 				Padding(0, 1)
 
+	// Day separator
+	DateSeparator = lipgloss.NewStyle().
+			Foreground(TextMuted).
+			Bold(true).
+			Align(lipgloss.Center)
+
 	// New message landmark
 	NewMessageSeparator = lipgloss.NewStyle().
 				Foreground(Error).
@@ -228,33 +234,39 @@ func Apply(themeName string, overrides config.Theme) {
 
 func buildStyles() {
 	FocusedBorder = lipgloss.NewStyle().
-		BorderStyle(lipgloss.ThickBorder()).BorderForeground(Primary)
+		BorderStyle(lipgloss.ThickBorder()).BorderForeground(Primary).
+		Background(Background)
 	UnfocusedBorder = lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).BorderForeground(Border)
+		BorderStyle(lipgloss.RoundedBorder()).BorderForeground(Border).
+		Background(Background)
 	WorkspaceActive = lipgloss.NewStyle().
 		Background(Primary).Foreground(lipgloss.Color("#FFFFFF")).
 		Bold(true).Padding(0, 1).Align(lipgloss.Center)
 	WorkspaceInactive = lipgloss.NewStyle().
-		Background(lipgloss.Color("#444444")).Foreground(TextPrimary).
+		Background(Surface).Foreground(TextPrimary).
 		Padding(0, 1).Align(lipgloss.Center)
 	ChannelSelected = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FFFFFF")).Bold(true).Padding(0, 1)
+		Foreground(lipgloss.Color("#FFFFFF")).Bold(true).Padding(0, 1).
+		Background(Background)
 	ChannelNormal = lipgloss.NewStyle().
-		Foreground(TextPrimary).Padding(0, 1)
+		Foreground(TextPrimary).Padding(0, 1).
+		Background(Background)
 	ChannelUnread = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FFFFFF")).Bold(true).Padding(0, 1)
+		Foreground(lipgloss.Color("#FFFFFF")).Bold(true).Padding(0, 1).
+		Background(Background)
 	UnreadBadge = lipgloss.NewStyle().
 		Background(Error).Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1)
 	SectionHeader = lipgloss.NewStyle().
-		Foreground(TextMuted).Bold(true).Padding(0, 1)
+		Foreground(TextMuted).Bold(true).Padding(0, 1).
+		Background(Background)
 	Username = lipgloss.NewStyle().
-		Foreground(Primary).Bold(true)
+		Foreground(Primary).Bold(true).Background(Background)
 	Timestamp = lipgloss.NewStyle().
-		Foreground(TextMuted).Italic(true)
+		Foreground(TextMuted).Italic(true).Background(Background)
 	MessageText = lipgloss.NewStyle().
-		Foreground(TextPrimary)
+		Foreground(TextPrimary).Background(Background)
 	ThreadIndicator = lipgloss.NewStyle().
-		Foreground(Primary).Italic(true)
+		Foreground(Primary).Italic(true).Background(Background)
 	StatusBar = lipgloss.NewStyle().
 		Background(SurfaceDark).Foreground(TextPrimary).Padding(0, 1)
 	StatusMode = lipgloss.NewStyle().
@@ -272,18 +284,20 @@ func buildStyles() {
 	ComposeInsert = lipgloss.NewStyle().
 		BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(Primary).
 		Background(SurfaceDark).MarginTop(1).Padding(1, 1, 1, 1)
-	PresenceOnline = lipgloss.NewStyle().Foreground(Accent)
-	PresenceAway = lipgloss.NewStyle().Foreground(TextMuted)
+	PresenceOnline = lipgloss.NewStyle().Foreground(Accent).Background(Background)
+	PresenceAway = lipgloss.NewStyle().Foreground(TextMuted).Background(Background)
 	ReactionPillOwn = lipgloss.NewStyle().
-		Background(lipgloss.Color("#1a2e1a")).Foreground(Accent).Padding(0, 1)
+		Background(Surface).Foreground(Accent).Padding(0, 1)
 	ReactionPillOther = lipgloss.NewStyle().
-		Background(lipgloss.Color("#1a1a2e")).Foreground(TextMuted).Padding(0, 1)
+		Background(Surface).Foreground(TextMuted).Padding(0, 1)
 	ReactionPillSelected = lipgloss.NewStyle().
-		Background(lipgloss.Color("#252540")).Foreground(Primary).Padding(0, 1)
+		Background(Surface).Foreground(Primary).Padding(0, 1)
 	ReactionPillPlus = lipgloss.NewStyle().
-		Background(lipgloss.Color("#1a1a2e")).Foreground(Primary).Padding(0, 1)
+		Background(Surface).Foreground(Primary).Padding(0, 1)
+	DateSeparator = lipgloss.NewStyle().
+		Foreground(TextMuted).Bold(true).Align(lipgloss.Center).Background(Background)
 	NewMessageSeparator = lipgloss.NewStyle().
-		Foreground(Error).Bold(true).Align(lipgloss.Center)
+		Foreground(Error).Bold(true).Align(lipgloss.Center).Background(Background)
 	TypingIndicator = lipgloss.NewStyle().
-		Foreground(TextMuted).Italic(true).PaddingLeft(2)
+		Foreground(TextMuted).Italic(true).PaddingLeft(2).Background(Background)
 }

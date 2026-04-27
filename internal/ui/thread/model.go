@@ -322,7 +322,7 @@ func (m *Model) View(height, width int) string {
 			selectedStartLine = currentLine
 			content = applySelection(content, width)
 		} else {
-			content = applyLeftBorder(content)
+			content = applyLeftBorder(content, width)
 		}
 		h := lipgloss.Height(content)
 		if i == m.selected {
@@ -353,23 +353,29 @@ func (m *Model) View(height, width int) string {
 }
 
 // applyLeftBorder adds an invisible left border to keep alignment consistent.
-func applyLeftBorder(content string) string {
+func applyLeftBorder(content string, width int) string {
+	filled := lipgloss.NewStyle().
+		Width(width - 1).
+		Background(styles.Background).
+		Render(content)
 	return lipgloss.NewStyle().
 		BorderStyle(thickLeftBorder).
 		BorderLeft(true).
 		BorderForeground(styles.Background).
-		MarginBottom(1).
-		Render(content)
+		Render(filled)
 }
 
 // applySelection marks a reply as selected with a green left border.
 func applySelection(content string, width int) string {
+	filled := lipgloss.NewStyle().
+		Width(width - 1).
+		Background(styles.Background).
+		Render(content)
 	return lipgloss.NewStyle().
 		BorderStyle(thickLeftBorder).
 		BorderLeft(true).
 		BorderForeground(styles.Accent).
-		MarginBottom(1).
-		Render(content)
+		Render(filled)
 }
 
 // renderThreadMessage renders a single message for the thread panel.

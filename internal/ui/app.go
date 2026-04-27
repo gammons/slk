@@ -1567,7 +1567,7 @@ func (a *App) View() string {
 
 	// Helper to force a panel to an exact height
 	exactHeight := func(s string, h int) string {
-		return lipgloss.NewStyle().Width(lipgloss.Width(s)).Height(h).MaxHeight(h).Render(s)
+		return lipgloss.NewStyle().Width(lipgloss.Width(s)).Height(h).MaxHeight(h).Background(styles.Background).Render(s)
 	}
 
 	// Render workspace rail
@@ -1673,5 +1673,12 @@ func (a *App) View() string {
 		screen = a.renderLoadingOverlay(a.width, a.height)
 	}
 
-	return screen
+	// Fill any uncolored cells with the theme background color.
+	// This acts as a "background layer" for light themes where the
+	// terminal's default dark background would otherwise show through.
+	return lipgloss.Place(a.width, a.height,
+		lipgloss.Left, lipgloss.Top,
+		screen,
+		lipgloss.WithWhitespaceBackground(styles.Background),
+	)
 }

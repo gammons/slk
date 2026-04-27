@@ -13,11 +13,6 @@ import (
 	"github.com/muesli/reflow/wordwrap"
 )
 
-var dateSeparatorStyle = lipgloss.NewStyle().
-	Foreground(styles.TextMuted).
-	Bold(true).
-	Align(lipgloss.Center)
-
 type MessageItem struct {
 	TS         string
 	UserName   string
@@ -335,7 +330,15 @@ func (m *Model) buildCache(width int) {
 		msgDate := dateFromTS(msg.TS)
 		if msgDate != "" && msgDate != lastDate {
 			label := formatDateSeparator(msgDate)
-			sep := dateSeparatorStyle.Width(width).Render("── " + label + " ──")
+			sepStr := "── " + label + " ──"
+			padTotal := width - lipgloss.Width(sepStr)
+			if padTotal < 0 {
+				padTotal = 0
+			}
+			padLeft := padTotal / 2
+			padRight := padTotal - padLeft
+			sep := lipgloss.NewStyle().Background(styles.Background).Foreground(styles.TextMuted).Bold(true).
+				Render(strings.Repeat(" ", padLeft) + sepStr + strings.Repeat(" ", padRight))
 			m.cache = append(m.cache, viewEntry{
 				content: sep,
 				height:  lipgloss.Height(sep),
@@ -346,7 +349,15 @@ func (m *Model) buildCache(width int) {
 
 		// New message landmark: insert before the first unread message
 		if m.lastReadTS != "" && !newMsgLandmarkInserted && msg.TS > m.lastReadTS {
-			label := styles.NewMessageSeparator.Width(width).Render("── new ──")
+			newStr := "── new ──"
+			newPadTotal := width - lipgloss.Width(newStr)
+			if newPadTotal < 0 {
+				newPadTotal = 0
+			}
+			newPadLeft := newPadTotal / 2
+			newPadRight := newPadTotal - newPadLeft
+			label := lipgloss.NewStyle().Background(styles.Background).Foreground(styles.Error).Bold(true).
+				Render(strings.Repeat(" ", newPadLeft) + newStr + strings.Repeat(" ", newPadRight))
 			m.cache = append(m.cache, viewEntry{
 				content: label,
 				height:  lipgloss.Height(label),
@@ -449,10 +460,10 @@ func placeAvatarBeside(avatar, content string) string {
 		var left, right string
 
 		if i < len(avatarLines) {
-			left = avatarLines[i] + " "
+			left = avatarLines[i] + lipgloss.NewStyle().Background(styles.Background).Render(" ")
 		} else {
 			// Empty space where avatar was (maintain alignment)
-			left = strings.Repeat(" ", avatarWidth)
+			left = lipgloss.NewStyle().Background(styles.Background).Width(avatarWidth).Render("")
 		}
 
 		if i < len(contentLines) {
@@ -468,23 +479,38 @@ func placeAvatarBeside(avatar, content string) string {
 var thickLeftBorder = lipgloss.Border{Left: "▌"}
 
 // applyLeftBorder adds an invisible left border to keep alignment consistent.
-func applyLeftBorder(content string) string {
+func applyLeftBorder(content string, width int) string {
+	// Fill content to full width with background first,
+	// then apply the border on top.
+	filled := lipgloss.NewStyle().
+		Width(width - 1).
+		Background(styles.Background).
+		Render(content)
 	return lipgloss.NewStyle().
 		BorderStyle(thickLeftBorder).
 		BorderLeft(true).
 		BorderForeground(styles.Background).
-		MarginBottom(1).
-		Render(content)
+		Render(filled)
 }
 
 // applySelection marks a message as selected with a green left border.
 func applySelection(content string, width int) string {
+	filled := lipgloss.NewStyle().
+		Width(width - 1).
+		Background(styles.Background).
+		Render(content)
 	return lipgloss.NewStyle().
 		BorderStyle(thickLeftBorder).
 		BorderLeft(true).
 		BorderForeground(styles.Accent).
-		MarginBottom(1).
-		Render(content)
+		Render(filled)
+}
+
+// spacer returns a full-width empty line with the theme background.
+func spacer(width int) string {
+	return lipgloss.NewStyle().
+		Background(styles.Background).
+		Render(strings.Repeat(" ", width))
 }
 
 func (m *Model) View(height, width int) string {
@@ -497,7 +523,7 @@ func (m *Model) View(height, width int) string {
 		header += "\n" + styles.Timestamp.Render(wordwrap.String(m.channelTopic, width))
 	}
 
-	separator := lipgloss.NewStyle().Width(width).Foreground(styles.Border).Render(strings.Repeat("-", width))
+	separator := lipgloss.NewStyle().Width(width).Foreground(styles.Border).Background(styles.Background).Render(strings.Repeat("-", width))
 
 	chrome := header + "\n" + separator
 	chromeHeight := lipgloss.Height(chrome)
@@ -516,6 +542,7 @@ func (m *Model) View(height, width int) string {
 			Width(width).
 			Height(msgAreaHeight).
 			Foreground(styles.TextMuted).
+			Background(styles.Background).
 			Render(text)
 		return header + "\n" + separator + "\n" + empty
 	}
@@ -533,18 +560,23 @@ func (m *Model) View(height, width int) string {
 	selectedEndLine := 0
 	currentLine := 0
 
-	for _, e := range entries {
+	for i, e := range entries {
 		content := e.content
 		if e.msgIdx == m.selected {
 			selectedStartLine = currentLine
 			content = applySelection(content, width)
 		} else if e.msgIdx >= 0 {
 			// Apply border to messages only, not day separators
-			content = applyLeftBorder(content)
+			content = applyLeftBorder(content, width)
 		}
 		h := lipgloss.Height(content)
 		if e.msgIdx == m.selected {
 			selectedEndLine = currentLine + h
+		}
+		// Add a spacer after messages (not after last entry or separators)
+		if e.msgIdx >= 0 && i < len(entries)-1 {
+			content += "\n" + spacer(width)
+			h++
 		}
 		allRows = append(allRows, content)
 		currentLine += h
@@ -569,11 +601,11 @@ func (m *Model) View(height, width int) string {
 	// Scroll indicators
 	var scrollUp, scrollDown string
 	if m.loading {
-		scrollUp = lipgloss.NewStyle().Foreground(styles.TextMuted).Render("  Loading older messages...")
+		scrollUp = lipgloss.NewStyle().Foreground(styles.TextMuted).Background(styles.Background).Render("  Loading older messages...")
 	}
 
 	if m.vp.YOffset+m.vp.Height < m.vp.TotalLineCount() {
-		scrollDown = lipgloss.NewStyle().Foreground(styles.TextMuted).Render("  -- more below --")
+		scrollDown = lipgloss.NewStyle().Foreground(styles.TextMuted).Background(styles.Background).Render("  -- more below --")
 	}
 
 	vpView := m.vp.View()
@@ -588,6 +620,7 @@ func (m *Model) View(height, width int) string {
 		Width(width).
 		Height(msgAreaHeight).
 		MaxHeight(msgAreaHeight).
+		Background(styles.Background).
 		Render(vpView)
 }
 
