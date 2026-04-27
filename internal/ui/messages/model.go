@@ -8,11 +8,9 @@ import (
 
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
-	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/ui/styles"
 	emoji "github.com/kyokomi/emoji/v2"
 	"github.com/muesli/reflow/wordwrap"
-	"github.com/rivo/uniseg"
 )
 
 type MessageItem struct {
@@ -444,10 +442,9 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 			}
 			pills = append(pills, plusStyle.Render("+"))
 		}
-		// Join pills with wrapping. Use uniseg.StringWidth for accurate
-		// emoji width measurement (go-runewidth miscounts variation
-		// selector emoji like ❤️, ☘️, 🖊️). Strip ANSI codes before
-		// measuring since uniseg doesn't handle them.
+		// Join pills with wrapping. lipgloss.Width() uses clipperhouse/displaywidth
+		// in v2, which correctly handles VS16 variation selector emoji.
+		// This matches the width engine used for border rendering.
 		bgSpace := lipgloss.NewStyle().Background(styles.Background).Render(" ")
 		var reactionLines []string
 		currentLine := ""
@@ -457,9 +454,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 				candidate += bgSpace
 			}
 			candidate += pill
-			// Measure using uniseg on ANSI-stripped text for accuracy
-			stripped := xansi.Strip(candidate)
-			if uniseg.StringWidth(stripped) > contentWidth && currentLine != "" {
+			if lipgloss.Width(candidate) > contentWidth && currentLine != "" {
 				reactionLines = append(reactionLines, currentLine)
 				currentLine = pill
 			} else {

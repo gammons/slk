@@ -8,7 +8,6 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/mattn/go-runewidth"
 
 	"github.com/gammons/slk/internal/ui/mentionpicker"
 	"github.com/gammons/slk/internal/ui/styles"
@@ -121,7 +120,7 @@ func (m Model) visualLineCount() int {
 	}
 	total := 0
 	for _, line := range strings.Split(val, "\n") {
-		lineWidth := runewidth.StringWidth(line)
+		lineWidth := lipgloss.Width(line)
 		if lineWidth == 0 {
 			total++
 		} else {
