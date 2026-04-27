@@ -27,6 +27,7 @@ type KeyMap struct {
 	Edit            key.Binding
 	Yank            key.Binding
 	WorkspaceFinder key.Binding
+	ThemeSwitcher   key.Binding
 }
 
 func DefaultKeyMap() KeyMap {
@@ -54,5 +55,6 @@ func DefaultKeyMap() KeyMap {
 		Edit:            key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit message")),
 		Yank:            key.NewBinding(key.WithKeys("y"), key.WithHelp("yy", "yank")),
 		WorkspaceFinder: key.NewBinding(key.WithKeys("ctrl+w"), key.WithHelp("ctrl+w", "switch workspace")),
+		ThemeSwitcher:   key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "switch theme")),
 	}
 }

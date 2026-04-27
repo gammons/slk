@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
@@ -16,6 +17,7 @@ import (
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/statusbar"
 	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/gammons/slk/internal/ui/themeswitcher"
 	"github.com/gammons/slk/internal/ui/thread"
 	"github.com/gammons/slk/internal/ui/workspace"
 	"github.com/gammons/slk/internal/ui/workspacefinder"
@@ -172,6 +174,7 @@ type App struct {
 	statusbar       statusbar.Model
 	channelFinder   channelfinder.Model
 	workspaceFinder workspacefinder.Model
+	themeSwitcher   themeswitcher.Model
 	threadPanel     *thread.Model
 	threadCompose   compose.Model
 
@@ -207,6 +210,10 @@ type App struct {
 	workspaceSwitcher SwitchWorkspaceFunc
 	workspaceItems    []workspace.WorkspaceItem // cached for lookup
 
+	// Theme switching
+	themeSaveFn    func(name string)
+	themeOverrides config.Theme
+
 	// Typing indicators
 	typingUsers    map[string]map[string]time.Time // channelID -> userID -> expiresAt
 	typingTickerOn bool
@@ -231,6 +238,7 @@ func NewApp() *App {
 		statusbar:       statusbar.New(),
 		channelFinder:   channelfinder.New(),
 		workspaceFinder: workspacefinder.New(),
+		themeSwitcher:   themeswitcher.New(),
 		threadPanel:     thread.New(),
 		threadCompose:   compose.New("thread"),
 		reactionPicker:  reactionpicker.New(),
@@ -500,6 +508,8 @@ func (a *App) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return a.handleReactionPickerMode(msg)
 	case ModeWorkspaceFinder:
 		return a.handleWorkspaceFinderMode(msg)
+	case ModeThemeSwitcher:
+		return a.handleThemeSwitcherMode(msg)
 	default:
 		return a.handleNormalMode(msg)
 	}
@@ -565,6 +575,10 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, a.keys.WorkspaceFinder):
 		a.workspaceFinder.Open()
 		a.SetMode(ModeWorkspaceFinder)
+
+	case key.Matches(msg, a.keys.ThemeSwitcher):
+		a.themeSwitcher.Open()
+		a.SetMode(ModeThemeSwitcher)
 
 	case key.Matches(msg, a.keys.FuzzyFinder) || key.Matches(msg, a.keys.FuzzyFinderAlt):
 		a.channelFinder.Open()
@@ -762,6 +776,38 @@ func (a *App) handleWorkspaceFinderMode(msg tea.KeyMsg) tea.Cmd {
 		}
 	}
 	if !a.workspaceFinder.IsVisible() {
+		a.SetMode(ModeNormal)
+	}
+	return nil
+}
+
+func (a *App) handleThemeSwitcherMode(msg tea.KeyMsg) tea.Cmd {
+	keyStr := msg.String()
+	if msg.Type == tea.KeyEnter {
+		keyStr = "enter"
+	} else if msg.Type == tea.KeyEsc {
+		keyStr = "esc"
+	} else if msg.Type == tea.KeyUp {
+		keyStr = "up"
+	} else if msg.Type == tea.KeyDown {
+		keyStr = "down"
+	} else if msg.Type == tea.KeyBackspace {
+		keyStr = "backspace"
+	}
+
+	result := a.themeSwitcher.HandleKey(keyStr)
+	if result != nil {
+		a.themeSwitcher.Close()
+		a.SetMode(ModeNormal)
+		// Apply theme immediately
+		styles.Apply(result.Name, a.themeOverrides)
+		// Save selection
+		if a.themeSaveFn != nil {
+			go a.themeSaveFn(result.Name)
+		}
+		return nil
+	}
+	if !a.themeSwitcher.IsVisible() {
 		a.SetMode(ModeNormal)
 	}
 	return nil
@@ -1337,6 +1383,21 @@ func (a *App) SetWorkspaceSwitcher(fn SwitchWorkspaceFunc) {
 	a.workspaceSwitcher = fn
 }
 
+// SetThemeItems sets the available themes for the switcher.
+func (a *App) SetThemeItems(names []string) {
+	a.themeSwitcher.SetItems(names)
+}
+
+// SetThemeSaver sets the callback for saving the theme selection.
+func (a *App) SetThemeSaver(fn func(name string)) {
+	a.themeSaveFn = fn
+}
+
+// SetThemeOverrides stores the config theme overrides for applying on switch.
+func (a *App) SetThemeOverrides(overrides config.Theme) {
+	a.themeOverrides = overrides
+}
+
 // SetTypingEnabled controls whether typing indicators are shown and sent.
 func (a *App) SetTypingEnabled(enabled bool) {
 	a.typingEnabled = enabled
@@ -1602,6 +1663,10 @@ func (a *App) View() string {
 
 	if a.workspaceFinder.IsVisible() {
 		screen = a.workspaceFinder.ViewOverlay(a.width, a.height, screen)
+	}
+
+	if a.themeSwitcher.IsVisible() {
+		screen = a.themeSwitcher.ViewOverlay(a.width, a.height, screen)
 	}
 
 	if a.loading {
