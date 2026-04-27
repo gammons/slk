@@ -448,21 +448,27 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 			}
 			pills = append(pills, plusStyle.Render("+"))
 		}
-		// Join pills with wrapping to fit within contentWidth.
 		bgSpace := lipgloss.NewStyle().Background(styles.Background).Render(" ")
 		var reactionLines []string
 		currentLine := ""
+		pillsOnLine := 0
 		for i, pill := range pills {
 			candidate := currentLine
 			if i > 0 {
 				candidate += bgSpace
 			}
 			candidate += pill
-			if lipgloss.Width(candidate) > contentWidth && currentLine != "" {
+			safeWidth := contentWidth - pillsOnLine - 1
+			if safeWidth < contentWidth/2 {
+				safeWidth = contentWidth / 2
+			}
+			if lipgloss.Width(candidate) > safeWidth && currentLine != "" {
 				reactionLines = append(reactionLines, currentLine)
 				currentLine = pill
+				pillsOnLine = 1
 			} else {
 				currentLine = candidate
+				pillsOnLine++
 			}
 		}
 		if currentLine != "" {

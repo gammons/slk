@@ -442,30 +442,38 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 			}
 			pills = append(pills, plusStyle.Render("+"))
 		}
-		// Join pills with wrapping to fit within contentWidth.
-		// Use lipgloss.Width on the accumulated line for accurate measurement
-		// (accounts for double-width emoji characters).
+		// Join pills with wrapping. Use a conservative width limit to
+		// account for emoji characters that render as 2 terminal cells
+		// but may be counted as 1 by lipgloss.Width. Each resolved emoji
+		// pill can add ~1 extra phantom cell, so we subtract the number
+		// of pills already on the line as a safety margin.
 		bgSpace := lipgloss.NewStyle().Background(styles.Background).Render(" ")
 		var reactionLines []string
 		currentLine := ""
+		pillsOnLine := 0
 		for i, pill := range pills {
 			candidate := currentLine
 			if i > 0 {
 				candidate += bgSpace
 			}
 			candidate += pill
-			if lipgloss.Width(candidate) > contentWidth && currentLine != "" {
+			// Safety margin: 1 extra cell per pill for emoji width miscounting
+			safeWidth := contentWidth - pillsOnLine - 1
+			if safeWidth < contentWidth/2 {
+				safeWidth = contentWidth / 2
+			}
+			if lipgloss.Width(candidate) > safeWidth && currentLine != "" {
 				reactionLines = append(reactionLines, currentLine)
 				currentLine = pill
+				pillsOnLine = 1
 			} else {
 				currentLine = candidate
+				pillsOnLine++
 			}
 		}
 		if currentLine != "" {
 			reactionLines = append(reactionLines, currentLine)
 		}
-		// Hard-clamp each line to contentWidth as a safety net
-		// (lipgloss.Width may miscount some emoji/ANSI combinations)
 		reactionLine = "\n" + strings.Join(reactionLines, "\n")
 	}
 
