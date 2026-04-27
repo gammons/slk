@@ -377,7 +377,7 @@ func (m *Model) buildCache(width int) {
 
 // renderMessagePlain renders a message without selection highlight.
 func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string, userNames map[string]string, isSelected bool) string {
-	line := styles.Username.Render(msg.UserName) + "  " + styles.Timestamp.Render(msg.Timestamp)
+	line := styles.Username.Render(msg.UserName) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.Timestamp)
 
 	// If we have an avatar, reserve space on the left for it
 	contentWidth := width - 4
@@ -419,7 +419,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 			}
 			pills = append(pills, plusStyle.Render("+"))
 		}
-		reactionLine = "\n" + strings.Join(pills, " ")
+		reactionLine = "\n" + strings.Join(pills, lipgloss.NewStyle().Background(styles.Background).Render(" "))
 	}
 
 	var editedMark string

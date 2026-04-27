@@ -50,7 +50,7 @@ var (
 	// Channel sidebar
 	ChannelSelected = lipgloss.NewStyle().
 			Background(Background).
-			Foreground(lipgloss.Color("#FFFFFF")).
+			Foreground(TextPrimary).
 			Bold(true).
 			Padding(0, 1)
 
@@ -61,7 +61,7 @@ var (
 
 	ChannelUnread = lipgloss.NewStyle().
 			Background(Background).
-			Foreground(lipgloss.Color("#FFFFFF")).
+			Foreground(TextPrimary).
 			Bold(true).
 			Padding(0, 1)
 
@@ -259,11 +259,11 @@ func buildStyles() {
 		Background(Surface).Foreground(TextPrimary).
 		Padding(0, 1).Align(lipgloss.Center)
 	ChannelSelected = lipgloss.NewStyle().
-		Background(Background).Foreground(lipgloss.Color("#FFFFFF")).Bold(true).Padding(0, 1)
+		Background(Background).Foreground(TextPrimary).Bold(true).Padding(0, 1)
 	ChannelNormal = lipgloss.NewStyle().
 		Background(Background).Foreground(TextPrimary).Padding(0, 1)
 	ChannelUnread = lipgloss.NewStyle().
-		Background(Background).Foreground(lipgloss.Color("#FFFFFF")).Bold(true).Padding(0, 1)
+		Background(Background).Foreground(TextPrimary).Bold(true).Padding(0, 1)
 	UnreadBadge = lipgloss.NewStyle().
 		Background(Error).Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1)
 	SectionHeader = lipgloss.NewStyle().

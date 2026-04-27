@@ -380,7 +380,7 @@ func applySelection(content string, width int) string {
 
 // renderThreadMessage renders a single message for the thread panel.
 func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNames map[string]string, isSelected bool) string {
-	line := styles.Username.Render(msg.UserName) + "  " + styles.Timestamp.Render(msg.Timestamp)
+	line := styles.Username.Render(msg.UserName) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.Timestamp)
 
 	contentWidth := width - 4
 	if contentWidth < 20 {
@@ -412,7 +412,7 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 			}
 			pills = append(pills, plusStyle.Render("+"))
 		}
-		reactionLine = "\n" + strings.Join(pills, " ")
+		reactionLine = "\n" + strings.Join(pills, lipgloss.NewStyle().Background(styles.Background).Render(" "))
 	}
 
 	return line + "\n" + text + reactionLine
