@@ -1323,6 +1323,11 @@ func (a *App) SetFrecentFuncs(load FrecentLoadFunc, record FrecentRecordFunc) {
 	a.frecentRecordFn = record
 }
 
+// ActiveChannelID returns the ID of the currently viewed channel.
+func (a *App) ActiveChannelID() string {
+	return a.activeChannelID
+}
+
 // SetWorkspaceSwitcher sets the callback used to switch workspaces.
 func (a *App) SetWorkspaceSwitcher(fn SwitchWorkspaceFunc) {
 	a.workspaceSwitcher = fn

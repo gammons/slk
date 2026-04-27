@@ -14,6 +14,7 @@ import (
 	"github.com/gammons/slk/internal/avatar"
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/notify"
 	"github.com/gammons/slk/internal/service"
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/ui"
@@ -68,6 +69,8 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
+
+	notifier := notify.New(cfg.Notifications.Enabled)
 
 	// Initialize cache database
 	dbPath := filepath.Join(dataDir, "cache.db")
@@ -325,15 +328,30 @@ func run() error {
 				wireCallbacks(wctx)
 			}
 
+			// Build channel lookup maps for notifications
+			channelNames := make(map[string]string, len(wctx.Channels))
+			channelTypes := make(map[string]string, len(wctx.Channels))
+			for _, ch := range wctx.Channels {
+				channelNames[ch.ID] = ch.Name
+				channelTypes[ch.ID] = ch.Type
+			}
+
 			// Start WebSocket for this workspace
 			teamID := wctx.TeamID
 			handler := &rtmEventHandler{
-				program:     p,
-				userNames:   wctx.UserNames,
-				tsFormat:    tsFormat,
-				db:          db,
-				workspaceID: teamID,
-				isActive:    func() bool { return teamID == activeTeamID },
+				program:         p,
+				userNames:       wctx.UserNames,
+				tsFormat:        tsFormat,
+				db:              db,
+				workspaceID:     teamID,
+				isActive:        func() bool { return teamID == activeTeamID },
+				notifier:        notifier,
+				notifyCfg:       cfg.Notifications,
+				currentUserID:   wctx.UserID,
+				channelNames:    channelNames,
+				channelTypes:    channelTypes,
+				workspaceName:   wctx.TeamName,
+				activeChannelID: func() string { return app.ActiveChannelID() },
 			}
 			wctx.RTMHandler = handler
 			wctx.ConnMgr = slackclient.NewConnectionManager(wctx.Client, handler)
@@ -761,6 +779,15 @@ type rtmEventHandler struct {
 	workspaceID string
 	connected   bool
 	isActive    func() bool
+
+	// Notifications
+	notifier        *notify.Notifier
+	notifyCfg       config.Notifications
+	currentUserID   string
+	channelNames    map[string]string
+	channelTypes    map[string]string
+	workspaceName   string
+	activeChannelID func() string
 }
 
 func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS string, edited bool) {
@@ -774,6 +801,39 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS string
 		ThreadTS:    threadTS,
 		CreatedAt:   time.Now().Unix(),
 	})
+
+	// Check if this message should trigger a desktop notification.
+	// Do this before the active workspace check so inactive workspaces
+	// can still trigger notifications.
+	if h.notifier != nil && h.notifyCfg.Enabled {
+		isActiveWS := h.isActive != nil && h.isActive()
+		activeChID := ""
+		if h.activeChannelID != nil {
+			activeChID = h.activeChannelID()
+		}
+		ctx := notify.NotifyContext{
+			CurrentUserID:   h.currentUserID,
+			ActiveChannelID: activeChID,
+			IsActiveWS:      isActiveWS,
+			OnMention:       h.notifyCfg.OnMention,
+			OnDM:            h.notifyCfg.OnDM,
+			OnKeyword:       h.notifyCfg.OnKeyword,
+		}
+		chType := h.channelTypes[channelID]
+		if notify.ShouldNotify(ctx, channelID, userID, text, chType) {
+			senderName := userID
+			if resolved, ok := h.userNames[userID]; ok {
+				senderName = resolved
+			}
+			chName := h.channelNames[channelID]
+			title := h.workspaceName + ": #" + chName
+			if chType == "dm" || chType == "group_dm" {
+				title = h.workspaceName + ": " + senderName
+			}
+			body := senderName + ": " + notify.StripSlackMarkup(text)
+			go h.notifier.Notify(title, body)
+		}
+	}
 
 	if h.isActive != nil && !h.isActive() {
 		// Inactive workspace — just notify about unread
