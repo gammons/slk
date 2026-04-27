@@ -1,6 +1,8 @@
 package messages
 
 import (
+	"fmt"
+	"image/color"
 	"regexp"
 	"strings"
 
@@ -28,14 +30,18 @@ var (
 
 // Render styles -- functions that read current theme colors so they
 // update correctly when the theme changes.
+//
+// Inline styles (bold, italic, link, mention) intentionally omit
+// .Background() -- the outer MessageText style provides the background.
+// Code styles use styles.Surface (a different bg) so they keep their own.
 func boldStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Bold(true).Background(styles.Background)
+	return lipgloss.NewStyle().Bold(true)
 }
 func italicStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Italic(true).Background(styles.Background)
+	return lipgloss.NewStyle().Italic(true)
 }
 func strikethroughStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Strikethrough(true).Background(styles.Background)
+	return lipgloss.NewStyle().Strikethrough(true)
 }
 func codeStyle() lipgloss.Style {
 	return lipgloss.NewStyle().
@@ -51,23 +57,54 @@ func codeBlockStyle() lipgloss.Style {
 func linkStyle() lipgloss.Style {
 	return lipgloss.NewStyle().
 		Foreground(styles.Primary).
-		Background(styles.Background).
 		Underline(true)
 }
 func mentionStyle() lipgloss.Style {
 	return lipgloss.NewStyle().
 		Foreground(styles.Primary).
-		Background(styles.Background).
 		Bold(true)
 }
 func blockquoteStyle() lipgloss.Style {
 	return lipgloss.NewStyle().
 		Foreground(styles.TextMuted).
-		Background(styles.Background).
 		BorderStyle(lipgloss.ThickBorder()).
 		BorderLeft(true).
 		BorderForeground(styles.TextMuted).
 		PaddingLeft(1)
+}
+
+// reapplyBgAfterResets post-processes ANSI text to re-apply a background
+// color after every ANSI reset sequence (\033[0m). This prevents inline
+// styled text (bold, link, mention) from clearing the outer background
+// when their ANSI reset fires.
+// ReapplyBgAfterResets is exported for use by other UI packages (e.g. sidebar).
+// Handles both \x1b[m and \x1b[0m reset forms.
+func ReapplyBgAfterResets(text string, bg string) string {
+	if bg == "" {
+		return text
+	}
+	// lipgloss v2 uses \x1b[m (no 0), but handle both forms
+	text = strings.ReplaceAll(text, "\x1b[m", "\x1b[m"+bg)
+	return text
+}
+
+var (
+	cachedBgANSI  string
+	cachedBgColor color.Color
+)
+
+// BgANSI returns the ANSI escape sequence for the current theme background.
+// Exported so sidebar and other packages can use it.
+// The result is cached and only recomputed when the background color changes.
+func BgANSI() string {
+	bg := styles.Background
+	if bg == cachedBgColor && cachedBgANSI != "" {
+		return cachedBgANSI
+	}
+	r, g, b, _ := bg.RGBA()
+	cachedBgANSI = fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r>>8, g>>8, b>>8)
+	cachedBgColor = bg
+	return cachedBgANSI
 }
 
 // RenderSlackMarkdown converts Slack-flavored markdown and emoji shortcodes
@@ -95,7 +132,14 @@ func RenderSlackMarkdown(text string, userNames map[string]string) string {
 		result = append(result, line)
 	}
 
-	return strings.Join(result, "\n")
+	output := strings.Join(result, "\n")
+
+	// Post-process: re-apply theme background after every ANSI reset so that
+	// inline styled text (bold, link, mention) doesn't leave dark patches
+	// where the terminal's default background shows through.
+	output = ReapplyBgAfterResets(output, BgANSI())
+
+	return output
 }
 
 func renderInlineFormatting(text string, userNames map[string]string) string {

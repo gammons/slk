@@ -474,41 +474,6 @@ func placeAvatarBeside(avatar, content string) string {
 
 var thickLeftBorder = lipgloss.Border{Left: "▌"}
 
-// applyLeftBorder adds an invisible left border to keep alignment consistent.
-func applyLeftBorder(content string, width int) string {
-	// Fill content to full width first, then apply the border on top.
-	filled := lipgloss.NewStyle().
-		Width(width - 1).
-		Background(styles.Background).
-		Render(content)
-	return lipgloss.NewStyle().
-		BorderStyle(thickLeftBorder).
-		BorderLeft(true).
-		BorderForeground(styles.Background).
-		Render(filled)
-}
-
-// applySelection marks a message as selected with a green left border.
-func applySelection(content string, width int) string {
-	filled := lipgloss.NewStyle().
-		Width(width - 1).
-		Background(styles.Background).
-		Render(content)
-	return lipgloss.NewStyle().
-		BorderStyle(thickLeftBorder).
-		BorderLeft(true).
-		BorderForeground(styles.Accent).
-		Render(filled)
-}
-
-// spacer returns a full-width empty line.
-func spacer(width int) string {
-	return lipgloss.NewStyle().
-		Background(styles.Background).
-		Width(width).
-		Render("")
-}
-
 func (m *Model) View(height, width int) string {
 	// Header
 	header := styles.ChannelUnread.
@@ -550,6 +515,12 @@ func (m *Model) View(height, width int) string {
 
 	entries := m.cache
 
+	// Pre-compute border styles for this frame (avoids NewStyle per message)
+	borderFill := lipgloss.NewStyle().Background(styles.Background)
+	borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Background)
+	borderSelect := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Accent)
+	spacerBg := lipgloss.NewStyle().Background(styles.Background)
+
 	// Build the full content string, tracking line offsets per entry
 	var allRows []string
 	selectedStartLine := 0
@@ -560,10 +531,12 @@ func (m *Model) View(height, width int) string {
 		content := e.content
 		if e.msgIdx == m.selected {
 			selectedStartLine = currentLine
-			content = applySelection(content, width)
+			filled := borderFill.Width(width - 1).Render(content)
+			content = borderSelect.Render(filled)
 		} else if e.msgIdx >= 0 {
 			// Apply border to messages only, not day separators
-			content = applyLeftBorder(content, width)
+			filled := borderFill.Width(width - 1).Render(content)
+			content = borderInvis.Render(filled)
 		}
 		h := lipgloss.Height(content)
 		if e.msgIdx == m.selected {
@@ -571,7 +544,7 @@ func (m *Model) View(height, width int) string {
 		}
 		// Add a spacer after messages (not after last entry or separators)
 		if e.msgIdx >= 0 && i < len(entries)-1 {
-			content += "\n" + spacer(width)
+			content += "\n" + spacerBg.Width(width).Render("")
 			h++
 		}
 		allRows = append(allRows, content)

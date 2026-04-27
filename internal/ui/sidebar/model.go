@@ -5,6 +5,7 @@ import (
 
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
+	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/muesli/reflow/truncate"
 )
@@ -147,6 +148,8 @@ func (m *Model) View(height, width int) string {
 	sectionOrder := []string{}
 	sectionMap := map[string]*sectionGroup{}
 
+	bgAnsi := messages.BgANSI() // compute once outside loop
+
 	for fi, idx := range m.filtered {
 		item := m.items[idx]
 		isSelected := fi == m.selected
@@ -154,13 +157,13 @@ func (m *Model) View(height, width int) string {
 		// Selection indicator -- green left border for selected, space for others
 		cursor := " "
 		if isSelected {
-			cursor = lipgloss.NewStyle().Background(styles.Background).Foreground(styles.Accent).Render("▌")
+			cursor = lipgloss.NewStyle().Foreground(styles.Accent).Render("▌")
 		}
 
 		// Unread dot indicator
 		unreadDot := " "
 		if item.UnreadCount > 0 {
-			unreadDot = lipgloss.NewStyle().Background(styles.Background).Foreground(styles.Primary).Render("●")
+			unreadDot = lipgloss.NewStyle().Foreground(styles.Primary).Render("●")
 		}
 
 		var prefix string
@@ -174,7 +177,7 @@ func (m *Model) View(height, width int) string {
 		case "group_dm":
 			prefix = styles.PresenceAway.Render("● ")
 		case "private":
-			prefix = lipgloss.NewStyle().Background(styles.Background).Foreground(styles.Warning).Render("◆ ")
+			prefix = lipgloss.NewStyle().Foreground(styles.Warning).Render("◆ ")
 		default:
 			prefix = "# "
 		}
@@ -190,6 +193,10 @@ func (m *Model) View(height, width int) string {
 		}
 
 		label := cursor + prefix + name + " " + unreadDot
+		// Re-apply theme background after ANSI resets from inline styled
+		// glyphs (cursor, prefix, unread dot) so the outer channel style's
+		// background isn't interrupted.
+		label = messages.ReapplyBgAfterResets(label, bgAnsi)
 
 		var style lipgloss.Style
 		if isSelected {
