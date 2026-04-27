@@ -526,12 +526,19 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		}
 
 		section := cfg.MatchSection(ch.Name)
-		wctx.Channels = append(wctx.Channels, sidebar.ChannelItem{
+		item := sidebar.ChannelItem{
 			ID:      ch.ID,
 			Name:    displayName,
 			Type:    chType,
 			Section: section,
-		})
+		}
+		if ch.IsIM {
+			item.DMUserID = ch.User
+			if cachedUser, err := db.GetUser(ch.User); err == nil && cachedUser.Presence != "" {
+				item.Presence = cachedUser.Presence
+			}
+		}
+		wctx.Channels = append(wctx.Channels, item)
 	}
 
 	// Fetch unread counts
@@ -990,7 +997,14 @@ func (h *rtmEventHandler) OnReactionRemoved(channelID, ts, userID, emojiName str
 }
 
 func (h *rtmEventHandler) OnPresenceChange(userID, presence string) {
-	// TODO: implement presence indicators in UI
+	_ = h.db.UpdatePresence(userID, presence)
+	if h.program == nil {
+		return
+	}
+	h.program.Send(ui.PresenceChangeMsg{
+		UserID:   userID,
+		Presence: presence,
+	})
 }
 
 func (h *rtmEventHandler) OnUserTyping(channelID, userID string) {

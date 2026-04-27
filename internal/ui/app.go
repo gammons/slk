@@ -130,6 +130,10 @@ type (
 		WorkspaceID string
 	}
 	TypingExpiredMsg struct{}
+	PresenceChangeMsg struct {
+		UserID   string
+		Presence string
+	}
 )
 
 type loadingEntry struct {
@@ -484,6 +488,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return TypingExpiredMsg{}
 			}))
 		}
+
+	case PresenceChangeMsg:
+		a.sidebar.UpdatePresenceByUser(msg.UserID, msg.Presence)
 
 	case TypingExpiredMsg:
 		a.expireTypingUsers()

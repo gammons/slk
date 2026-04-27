@@ -18,6 +18,7 @@ type ChannelItem struct {
 	UnreadCount int
 	IsStarred   bool
 	Presence    string // for DMs: active, away, dnd
+	DMUserID    string // for DMs: the user ID of the other party
 }
 
 type Model struct {
@@ -104,6 +105,16 @@ func (m *Model) ClearUnread(channelID string) {
 	for i := range m.items {
 		if m.items[i].ID == channelID {
 			m.items[i].UnreadCount = 0
+			return
+		}
+	}
+}
+
+// UpdatePresenceByUser updates the presence for any DM item whose DMUserID matches.
+func (m *Model) UpdatePresenceByUser(userID, presence string) {
+	for i := range m.items {
+		if m.items[i].DMUserID == userID {
+			m.items[i].Presence = presence
 			return
 		}
 	}
