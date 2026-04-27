@@ -1611,6 +1611,10 @@ func (a *App) View() tea.View {
 	if mentionView != "" {
 		composeView = mentionView + "\n" + composeView
 	}
+	// Add a background-colored spacer line above the compose box
+	// (replaces MarginTop which produced unstyled/black margin cells)
+	composeSpacer := lipgloss.NewStyle().Background(styles.Background).Width(msgWidth - 2).Render("")
+	composeView = composeSpacer + "\n" + composeView
 	composeHeight := lipgloss.Height(composeView)
 	typingLine := a.renderTypingLine()
 	typingHeight := 0
@@ -1646,6 +1650,8 @@ func (a *App) View() tea.View {
 		if threadMentionView != "" {
 			threadComposeView = threadMentionView + "\n" + threadComposeView
 		}
+		threadComposeSpacer := lipgloss.NewStyle().Background(styles.Background).Width(threadWidth - 2).Render("")
+		threadComposeView = threadComposeSpacer + "\n" + threadComposeView
 		threadComposeHeight := lipgloss.Height(threadComposeView)
 		threadContentHeight := contentHeight - 2 - threadComposeHeight
 		if threadContentHeight < 3 {
