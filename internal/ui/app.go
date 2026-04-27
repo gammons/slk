@@ -1632,6 +1632,9 @@ func (a *App) View() tea.View {
 	} else {
 		msgInner = lipgloss.JoinVertical(lipgloss.Left, msgView, composeView)
 	}
+	// Re-apply theme background after ANSI resets so the border style's
+	// right-side padding gets the correct background instead of terminal default.
+	msgInner = messages.ReapplyBgAfterResets(msgInner, messages.BgANSI())
 	msgPanel := exactSize(
 		msgBorderStyle.Render(msgInner),
 		msgWidth+msgBorder, contentHeight,
@@ -1659,6 +1662,7 @@ func (a *App) View() tea.View {
 		}
 		threadView := a.threadPanel.View(threadContentHeight, threadWidth-2)
 		threadInner := lipgloss.JoinVertical(lipgloss.Left, threadView, threadComposeView)
+		threadInner = messages.ReapplyBgAfterResets(threadInner, messages.BgANSI())
 		threadPanel := exactSize(
 			threadBorderStyle.Render(threadInner),
 			threadWidth+threadBorder, contentHeight,
