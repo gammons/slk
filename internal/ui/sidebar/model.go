@@ -194,12 +194,14 @@ func (m *Model) View(height, width int) string {
 		}
 
 		// Truncate name to fit sidebar width.
-		// Measure the actual display width of non-name parts to handle
-		// ambiguous-width Unicode chars (●, ▌, ◆, ○) that may render as
-		// 2 columns in some terminals. Add 1 extra column of safety margin.
+		// Unicode chars like ● (U+25CF), ○, ◆, ▌ have East Asian Width
+		// "Ambiguous" — terminals may render them as 2 columns wide, but
+		// lipgloss.Width() reports them as 1. We can't trust lipgloss
+		// measurements for these chars, so use a conservative fixed budget:
+		//   cursor(2) + prefix(3) + name + space(1) + dot(2) = name + 8
+		// This assumes worst-case 2-col rendering for every ambiguous char.
 		name := item.Name
-		fixedWidth := lipgloss.Width(cursor) + lipgloss.Width(prefix) + 1 + lipgloss.Width(unreadDot) + 1 // +1 for space, +1 for safety
-		maxNameLen := (width - 2) - fixedWidth
+		maxNameLen := (width - 2) - 8
 		if maxNameLen < 5 {
 			maxNameLen = 5
 		}
