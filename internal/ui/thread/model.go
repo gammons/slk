@@ -7,6 +7,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
 	emoji "github.com/kyokomi/emoji/v2"
+	"github.com/muesli/reflow/truncate"
 	"github.com/muesli/reflow/wordwrap"
 
 	"github.com/gammons/slk/internal/ui/messages"
@@ -360,7 +361,7 @@ func (m *Model) View(height, width int) string {
 	// Check if view-level cache (bordered content) can be reused
 	if !m.viewCacheValid || m.viewSelected != m.selected || m.viewWidth != width || m.viewHeight != replyAreaHeight {
 		// Pre-compute border styles for this frame (avoids NewStyle per reply)
-		borderFill := lipgloss.NewStyle().Background(styles.Background)
+		borderFill := lipgloss.NewStyle().Background(styles.Background).MaxWidth(width - 1)
 		borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Background).BorderBackground(styles.Background)
 		borderSelect := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Accent).BorderBackground(styles.Background)
 
@@ -467,6 +468,11 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 		}
 		if currentLine != "" {
 			reactionLines = append(reactionLines, currentLine)
+		}
+		for i, rl := range reactionLines {
+			if lipgloss.Width(rl) > contentWidth {
+				reactionLines[i] = truncate.String(rl, uint(contentWidth))
+			}
 		}
 		reactionLine = "\n" + strings.Join(reactionLines, "\n")
 	}

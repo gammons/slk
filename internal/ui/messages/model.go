@@ -10,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/ui/styles"
 	emoji "github.com/kyokomi/emoji/v2"
+	"github.com/muesli/reflow/truncate"
 	"github.com/muesli/reflow/wordwrap"
 )
 
@@ -464,6 +465,13 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		if currentLine != "" {
 			reactionLines = append(reactionLines, currentLine)
 		}
+		// Hard-clamp each line to contentWidth as a safety net
+		// (lipgloss.Width may miscount some emoji/ANSI combinations)
+		for i, rl := range reactionLines {
+			if lipgloss.Width(rl) > contentWidth {
+				reactionLines[i] = truncate.String(rl, uint(contentWidth))
+			}
+		}
 		reactionLine = "\n" + strings.Join(reactionLines, "\n")
 	}
 
@@ -563,7 +571,7 @@ func (m *Model) View(height, width int) string {
 	// Check if the view-level cache (bordered content) can be reused
 	if !m.viewCacheValid || m.viewSelected != m.selected || m.viewWidth != width || m.viewHeight != msgAreaHeight {
 		// Pre-compute border styles for this frame (avoids NewStyle per message)
-		borderFill := lipgloss.NewStyle().Background(styles.Background)
+		borderFill := lipgloss.NewStyle().Background(styles.Background).MaxWidth(width - 1)
 		borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Background).BorderBackground(styles.Background)
 		borderSelect := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Accent).BorderBackground(styles.Background)
 		spacerBg := lipgloss.NewStyle().Background(styles.Background)
