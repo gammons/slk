@@ -1605,9 +1605,9 @@ func (a *App) View() tea.View {
 	if a.focusedPanel == PanelMessages && a.mode != ModeInsert {
 		msgBorderStyle = styles.FocusedBorder.Width(msgWidth)
 	}
-	a.compose.SetWidth(msgWidth - 2)
-	composeView := a.compose.View(msgWidth-2, a.mode == ModeInsert && a.focusedPanel != PanelThread)
-	mentionView := a.compose.MentionPickerView(msgWidth - 2)
+	a.compose.SetWidth(msgWidth)
+	composeView := a.compose.View(msgWidth, a.mode == ModeInsert && a.focusedPanel != PanelThread)
+	mentionView := a.compose.MentionPickerView(msgWidth)
 	if mentionView != "" {
 		composeView = mentionView + "\n" + composeView
 	}
@@ -1643,9 +1643,9 @@ func (a *App) View() tea.View {
 		if a.focusedPanel == PanelThread && a.mode != ModeInsert {
 			threadBorderStyle = styles.FocusedBorder.Width(threadWidth)
 		}
-		a.threadCompose.SetWidth(threadWidth - 2)
-		threadComposeView := a.threadCompose.View(threadWidth-2, a.mode == ModeInsert && a.focusedPanel == PanelThread)
-		threadMentionView := a.threadCompose.MentionPickerView(threadWidth - 2)
+		a.threadCompose.SetWidth(threadWidth)
+		threadComposeView := a.threadCompose.View(threadWidth, a.mode == ModeInsert && a.focusedPanel == PanelThread)
+		threadMentionView := a.threadCompose.MentionPickerView(threadWidth)
 		if threadMentionView != "" {
 			threadComposeView = threadMentionView + "\n" + threadComposeView
 		}

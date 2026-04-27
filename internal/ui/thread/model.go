@@ -448,7 +448,32 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 			}
 			pills = append(pills, plusStyle.Render("+"))
 		}
-		reactionLine = "\n" + strings.Join(pills, lipgloss.NewStyle().Background(styles.Background).Render(" "))
+		// Join pills with wrapping to fit within contentWidth.
+		bgSpace := lipgloss.NewStyle().Background(styles.Background).Render(" ")
+		var reactionLines []string
+		currentLine := ""
+		currentLineWidth := 0
+		for i, pill := range pills {
+			pillWidth := lipgloss.Width(pill)
+			sep := bgSpace
+			sepWidth := 1
+			if i == 0 {
+				sep = ""
+				sepWidth = 0
+			}
+			if currentLineWidth+sepWidth+pillWidth > contentWidth && currentLine != "" {
+				reactionLines = append(reactionLines, currentLine)
+				currentLine = pill
+				currentLineWidth = pillWidth
+			} else {
+				currentLine += sep + pill
+				currentLineWidth += sepWidth + pillWidth
+			}
+		}
+		if currentLine != "" {
+			reactionLines = append(reactionLines, currentLine)
+		}
+		reactionLine = "\n" + strings.Join(reactionLines, "\n")
 	}
 
 	return line + "\n" + text + reactionLine
