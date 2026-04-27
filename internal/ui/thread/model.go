@@ -7,7 +7,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
 	emoji "github.com/kyokomi/emoji/v2"
-	"github.com/muesli/reflow/wordwrap"
+
 
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/styles"
@@ -423,7 +423,7 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 		contentWidth = 20
 	}
 
-	text := styles.MessageText.Render(wordwrap.String(messages.RenderSlackMarkdown(msg.Text, userNames), contentWidth))
+	text := styles.MessageText.Render(messages.WordWrap(messages.RenderSlackMarkdown(msg.Text, userNames), contentWidth))
 
 	var reactionLine string
 	if len(msg.Reactions) > 0 {

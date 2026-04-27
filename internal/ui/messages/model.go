@@ -10,7 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/ui/styles"
 	emoji "github.com/kyokomi/emoji/v2"
-	"github.com/muesli/reflow/wordwrap"
+
 )
 
 type MessageItem struct {
@@ -411,7 +411,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		contentWidth = 20
 	}
 
-	text := styles.MessageText.Render(wordwrap.String(RenderSlackMarkdown(msg.Text, userNames), contentWidth))
+	text := styles.MessageText.Render(WordWrap(RenderSlackMarkdown(msg.Text, userNames), contentWidth))
 
 	var threadLine string
 	if msg.ReplyCount > 0 {
@@ -528,7 +528,7 @@ func (m *Model) View(height, width int) string {
 		Render(fmt.Sprintf("# %s", m.channelName))
 
 	if m.channelTopic != "" {
-		header += "\n" + styles.Timestamp.Render(wordwrap.String(m.channelTopic, width))
+		header += "\n" + styles.Timestamp.Render(WordWrap(m.channelTopic, width))
 	}
 
 	separator := lipgloss.NewStyle().Width(width).Foreground(styles.Border).Background(styles.Background).Render(strings.Repeat("-", width))

@@ -77,6 +77,52 @@ func blockquoteStyle() lipgloss.Style {
 // color after every ANSI reset sequence (\033[0m). This prevents inline
 // styled text (bold, link, mention) from clearing the outer background
 // when their ANSI reset fires.
+// WordWrap wraps text to the given width using lipgloss.Width() for
+// measurement. This is critical because muesli/reflow/wordwrap uses
+// go-runewidth internally, which miscounts VS16 variation selector emoji.
+// lipgloss v2 uses clipperhouse/displaywidth which handles these correctly.
+func WordWrap(s string, limit int) string {
+	if limit <= 0 {
+		return s
+	}
+	var result strings.Builder
+	for i, line := range strings.Split(s, "\n") {
+		if i > 0 {
+			result.WriteByte('\n')
+		}
+		wrapLine(&result, line, limit)
+	}
+	return result.String()
+}
+
+// wrapLine wraps a single line at word boundaries using lipgloss.Width.
+func wrapLine(buf *strings.Builder, line string, limit int) {
+	words := strings.Fields(line)
+	if len(words) == 0 {
+		return
+	}
+
+	currentWidth := 0
+	for i, word := range words {
+		wordWidth := lipgloss.Width(word)
+		if i == 0 {
+			buf.WriteString(word)
+			currentWidth = wordWidth
+			continue
+		}
+		// +1 for the space before the word
+		if currentWidth+1+wordWidth > limit {
+			buf.WriteByte('\n')
+			buf.WriteString(word)
+			currentWidth = wordWidth
+		} else {
+			buf.WriteByte(' ')
+			buf.WriteString(word)
+			currentWidth += 1 + wordWidth
+		}
+	}
+}
+
 // ReapplyBgAfterResets is exported for use by other UI packages (e.g. sidebar).
 // Handles both \x1b[m and \x1b[0m reset forms.
 func ReapplyBgAfterResets(text string, bg string) string {

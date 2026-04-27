@@ -2,11 +2,13 @@
 
 ## Summary
 
-A systematic investigation of the four width-measurement libraries in the dependency chain reveals that **go-runewidth is the only library with significant VS16 bugs**. The spec document's claim that "lipgloss uses go-runewidth internally" was true for lipgloss v1 but is incorrect for lipgloss v2 (v2.0.3), which uses `clipperhouse/displaywidth` — a library that handles VS16 correctly.
+A systematic investigation of the four width-measurement libraries in the dependency chain reveals bugs in **all three** width libraries: `go-runewidth` (worst), `clipperhouse/displaywidth` (moderate), and `rivo/uniseg` (minor). The spec document's claim that "lipgloss uses go-runewidth internally" was true for lipgloss v1 but is incorrect for lipgloss v2 (v2.0.3), which uses `clipperhouse/displaywidth`.
+
+A full audit of all 3,092 unique emoji in the `kyokomi/emoji` codemap found **216 emoji where displaywidth returns width 1** — many of which terminals render as width 2. This breaks TUI layout when these emoji appear in reaction pills or message content.
 
 ## Libraries in the Dependency Chain
 
-### 1. `clipperhouse/displaywidth` v0.11.0 — Correct
+### 1. `clipperhouse/displaywidth` v0.11.0 — Has Bugs (The Primary Fix Target)
 
 This is the **actual** width engine behind `lipgloss.Width()` in v2. The call chain is:
 
@@ -21,7 +23,7 @@ lipgloss.Width(str)
             → lookup(s) via trie + isVS16() check
 ```
 
-displaywidth handles VS16 correctly via explicit byte-level detection:
+displaywidth handles **simple** VS16 cases correctly via explicit byte-level detection:
 
 ```go
 // width.go lines 174-183
@@ -33,7 +35,9 @@ if prop != _Wide && sz > 0 && len(s) >= sz+3 {
 }
 ```
 
-It uses grapheme cluster segmentation (UAX#29 via `clipperhouse/uax29`), checks if the bytes immediately following the first rune are VS16 (`0xEF 0xB8 0x8F`), and forces width 2 when found. Comprehensive test suite including TR51 conformance tests.
+However, this VS16 check **only examines the 3 bytes immediately after the first rune** (`s[sz:sz+3]`). In complex emoji sequences where VS16 appears later in the grapheme cluster, it is missed entirely. Additionally, there is no handling for skin-tone emoji modifiers on text-default bases.
+
+See "Bugs in displaywidth" section below for full analysis.
 
 ### 2. `rivo/uniseg` v0.4.7 — Mostly Correct
 
@@ -188,7 +192,141 @@ For flags (Regional Indicator pairs like 🇺🇸), the issue is different: each
 
 uniseg's VS16 handling only applies when `firstProp == prExtendedPictographic`. Digits (0-9) and `#`/`*` have grapheme property `prAny`, not `prExtendedPictographic`, so VS16 does not trigger the width override. The keycap combining mark (U+20E3) then adds 0 (as `prExtend`), resulting in width 1 instead of 2.
 
+## Bugs in `clipperhouse/displaywidth` (The Primary Fix Target)
+
+A full audit of all 3,092 unique emoji in the `kyokomi/emoji` v2.2.13 codemap found **216 emoji where displaywidth returns width 1**. These fall into three distinct bug categories:
+
+### Bug A: Non-Adjacent VS16 Missed (~30 emoji)
+
+**Root cause:** `graphemeWidth()` checks for VS16 only at byte position `s[sz:sz+3]` (immediately after the first rune). In complex ZWJ+skin-tone sequences, VS16 appears many bytes later and is missed.
+
+**Example:** `⛹🏻‍♂️` (person bouncing ball, light skin, male)
+
+```
+Codepoints: U+26F9  U+1F3FB  U+200D  U+2642  U+FE0F
+UTF-8 bytes: E2 9B B9  F0 9F 8F BB  E2 80 8D  E2 99 82  EF B8 8F
+             ^^^^^^^^  ^^^^^^^^^^^                        ^^^^^^^^^
+             1st rune  displaywidth               VS16 at byte 13
+             (3 bytes) checks here                (NOT at byte 3)
+                       s[3:6] = F0 9F 8F
+                       Not VS16 → width stays 1
+```
+
+displaywidth returns **1**. Terminals render as **2**. The VS16 is present but at byte 13, not byte 3.
+
+**Affected emoji (all 5 skin tones × 6 bases = 30):**
+- `⛹🏻‍♂️` / `⛹🏻‍♀️` — bouncing ball + skin + gender
+- `🕵🏻‍♂️` / `🕵🏻‍♀️` — detective + skin + gender
+- `🏌🏻‍♂️` / `🏌🏻‍♀️` — golfing + skin + gender
+- `🏋🏻‍♂️` / `🏋🏻‍♀️` — lifting weights + skin + gender
+
+### Bug B: Skin-Tone Modifier on Text-Default Base (~60 emoji)
+
+**Root cause:** When a skin-tone modifier (U+1F3FB–U+1F3FF) follows a text-default `Extended_Pictographic` base, the cluster should be width 2 (it renders as a single emoji glyph in all terminals). But displaywidth has no skin-tone-modifier detection — it only checks for VS16.
+
+**Example:** `🕵🏻` (detective, light skin)
+
+```
+Codepoints: U+1F575  U+1F3FB
+            ^^^^^^^^ ^^^^^^^^
+            detective skin tone
+            text-default (width 1)
+            No VS16 in sequence → displaywidth returns 1
+```
+
+**Affected emoji (5 skin tones × ~12 text-default bases ≈ 60):**
+- `🕵🏻`–`🕵🏿` (detective)
+- `🖐🏻`–`🖐🏿` (hand splayed)
+- `☝🏻`–`☝🏿` (point up)
+- `✌🏻`–`✌🏿` (victory hand)
+- `✍🏻`–`✍🏿` (writing hand)
+- `🕴🏻`–`🕴🏿` (levitating)
+- `⛹🏻`–`⛹🏿` (bouncing ball, no gender)
+- `🏌🏻`–`🏌🏿` (golfing, no gender)
+- `🏋🏻`–`🏋🏿` (lifting weights, no gender)
+
+### Bug C: Text-Default Emoji Without VS16 in Kyokomi (~70 emoji)
+
+**Root cause:** The `kyokomi/emoji` library stores some emoji WITHOUT VS16 (Variation Selector 16). These are technically text-presentation (width 1 per Unicode UAX #11), but **modern terminals render `Extended_Pictographic` characters as width 2** even without VS16.
+
+This is a two-part problem:
+1. kyokomi maps some shortcodes to the text-default form (no VS16)
+2. displaywidth correctly returns 1 per Unicode spec, but this disagrees with terminal rendering
+
+**Example:** `:red_heart:` → `❤` (U+2764, no VS16) vs `:heart:` → `❤️` (U+2764 + U+FE0F)
+
+| Shortcode | Unicode | VS16? | displaywidth | Terminal |
+|-----------|---------|:---:|:---:|:---:|
+| `:heart:` | ❤️ (U+2764 U+FE0F) | Yes | 2 | 2 |
+| `:red_heart:` | ❤ (U+2764) | No | 1 | 2 |
+| `:pen_ballpoint:` | 🖊 (U+1F58A) | No | 1 | 2 |
+| `:dove:` | 🕊 (U+1F54A) | No | 1 | 2 |
+| `:beach:` | 🏖 (U+1F3D6) | No | 1 | 2 |
+| `:tools:` | 🛠 (U+1F6E0) | No | 1 | 2 |
+| `:dagger:` | 🗡 (U+1F5E1) | No | 1 | 2 |
+| `:key2:` | 🗝 (U+1F5DD) | No | 1 | 2 |
+| `:desktop:` | 🖥 (U+1F5A5) | No | 1 | 2 |
+
+**Common text-default bases affected** (single-codepoint, no VS16 from kyokomi):
+- Misc symbols: ❤ ☺ ✌ ☀ ☁ ✂ ❄ ⚠ ☘ ✏ ☎ ♥ ♣ ♦ ♠ ☮ ☢ ☣ ♻ ♨
+- Objects: 🖊 🖋 🖌 🖍 🖥 🖱 🗡 🗝 🛠 🛢 🛥 🛳 🛰 🛎 🛋
+- Places: 🏖 🏗 🏘 🏚 🏝 🏞 🏔 🏍 🏎
+- Weather: 🌤 🌥 🌦 🌧 🌨 🌩 🌪 🌬
+- Controls: ▶ ◀ ⏭ ⏮ ⏯ ⏸ ⏹ ⏺ ⏏
+- People: 🕵 🕴 🏌 🏋 ⛹ 🖐 ☝ ✍
+
+### Bug Scope Summary
+
+| Bug | Count | displaywidth | Terminal | Root Cause |
+|-----|:---:|:---:|:---:|------------|
+| A: Non-adjacent VS16 | ~30 | 1 | 2 | VS16 check only at `s[sz:sz+3]` |
+| B: Skin-tone on text-default | ~60 | 1 | 2 | No skin-tone modifier detection |
+| C: No VS16 from kyokomi | ~70 | 1 | 2 | kyokomi omits VS16; displaywidth correct per spec but wrong for terminals |
+| Arrows/misc (legitimate) | ~16 | 1 | 1 | Correct |
+| Standalone skin tones | 5 | 2 | 0* | displaywidth says 2, uniseg says 0 (these are modifiers, rarely standalone) |
+
+\* Standalone skin tone modifiers are rarely used in practice.
+
+### Proposed Fix for displaywidth
+
+**Fix location:** `width.go`, the `graphemeWidth()` function.
+
+**Approach:** Three changes to the width determination logic:
+
+1. **Scan entire cluster for VS16** instead of only checking `s[sz:sz+3]`:
+   ```go
+   // Instead of checking only s[sz:sz+3], scan remaining bytes for VS16
+   if prop != _Wide && sz > 0 {
+       for i := sz; i+2 < len(s); i++ {
+           if s[i] == 0xEF && s[i+1] == 0xB8 && s[i+2] == 0x8F {
+               prop = _Wide
+               break
+           }
+       }
+   }
+   ```
+
+2. **Detect skin-tone modifier sequences:** If the cluster contains a skin-tone modifier (U+1F3FB–U+1F3FF, UTF-8: `F0 9F 8F BB`–`F0 9F 8F BF`) after the base rune, promote to width 2:
+   ```go
+   if prop != _Wide && sz > 0 && len(s) >= sz+4 {
+       b := s[sz : sz+4]
+       if b[0] == 0xF0 && b[1] == 0x9F && b[2] == 0x8F && b[3] >= 0xBB && b[3] <= 0xBF {
+           prop = _Wide
+       }
+   }
+   ```
+
+3. **For Bug C:** This is debatable. The strictest fix adds an `Extended_Pictographic` property to the trie and returns width 2 for EP characters even without VS16. This matches terminal behavior but diverges from Unicode UAX #11. An alternative is to fix the kyokomi codemap to always include VS16.
+
 ## Fix Candidates
+
+### displaywidth — Highest Priority (Fixes Bugs A + B, Optionally C)
+
+**Bug:** ZWJ+skin-tone sequences, skin-tone on text-default base, and (optionally) text-default emoji without VS16.
+
+**Fix location:** `width.go:graphemeWidth()`.
+
+**Impact:** displaywidth is the width engine for lipgloss v2, which is used by the entire Charm ecosystem (bubbletea, bubbles, huh). Fixing it improves width measurement for all downstream consumers.
 
 ### go-runewidth — Highest Impact
 
@@ -220,10 +358,22 @@ The original investigation spec (`2026-04-27-emoji-width-investigation.md`) cont
 2. **"There is no way to override the width calculation"** — In v2, the default `GraphemeWidth` mode already uses displaywidth, which is correct. The `WcWidth` mode (go-runewidth) is opt-in.
 3. **Spec table shows go-runewidth returning 2 for ⭐ and ✅** — These ARE correct (they are in the doublewidth table with `Emoji_Presentation=Yes`). The issue is specifically with text-default emoji that need VS16 to trigger emoji presentation.
 
-## Test Script
+## Test Scripts
 
-The comparison test program is at `/tmp/emoji_width_test/main.go`. It tests all 4 libraries against 40+ emoji including VS16 variants, complex sequences, already-wide emoji, and text-default emoji. Run with:
-
+### Width comparison test
+Tests all 4 libraries against 40+ emoji including VS16 variants, complex sequences, already-wide emoji, and text-default emoji:
 ```bash
 cd /tmp/emoji_width_test && go run main.go
+```
+
+### Full kyokomi codemap audit
+Audits all 3,092 unique emoji in the kyokomi codemap, finding all disagreements between libraries and all emoji where displaywidth returns 1:
+```bash
+cd /tmp/emoji_width_test && go run audit.go
+```
+
+### VS16 positional trace
+Traces through specific emoji to show exactly where VS16 bytes appear relative to the first rune, proving the displaywidth detection bug:
+```bash
+cd /tmp/emoji_width_test && go run trace.go
 ```
