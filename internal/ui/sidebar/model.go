@@ -194,14 +194,16 @@ func (m *Model) View(height, width int) string {
 		}
 
 		// Truncate name to fit sidebar width.
-		// Layout: cursor(1) + prefix(2) + name + " "(1) + unreadDot(1) = 5 fixed chars
-		// Rendered with style.Width(width-2), so available = width - 2 - 5 = width - 7
+		// Measure the actual display width of non-name parts to handle
+		// ambiguous-width Unicode chars (●, ▌, ◆, ○) that may render as
+		// 2 columns in some terminals. Add 1 extra column of safety margin.
 		name := item.Name
-		maxNameLen := width - 7
+		fixedWidth := lipgloss.Width(cursor) + lipgloss.Width(prefix) + 1 + lipgloss.Width(unreadDot) + 1 // +1 for space, +1 for safety
+		maxNameLen := (width - 2) - fixedWidth
 		if maxNameLen < 5 {
 			maxNameLen = 5
 		}
-		if len(name) > maxNameLen {
+		if lipgloss.Width(name) > maxNameLen {
 			name = truncate.StringWithTail(name, uint(maxNameLen), "…")
 		}
 
