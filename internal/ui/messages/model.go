@@ -443,26 +443,22 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 			pills = append(pills, plusStyle.Render("+"))
 		}
 		// Join pills with wrapping to fit within contentWidth.
-		// Build lines of pills that fit, wrapping to new lines as needed.
+		// Use lipgloss.Width on the accumulated line for accurate measurement
+		// (accounts for double-width emoji characters).
 		bgSpace := lipgloss.NewStyle().Background(styles.Background).Render(" ")
 		var reactionLines []string
 		currentLine := ""
-		currentLineWidth := 0
 		for i, pill := range pills {
-			pillWidth := lipgloss.Width(pill)
-			sep := bgSpace
-			sepWidth := 1
-			if i == 0 {
-				sep = ""
-				sepWidth = 0
+			candidate := currentLine
+			if i > 0 {
+				candidate += bgSpace
 			}
-			if currentLineWidth+sepWidth+pillWidth > contentWidth && currentLine != "" {
+			candidate += pill
+			if lipgloss.Width(candidate) > contentWidth && currentLine != "" {
 				reactionLines = append(reactionLines, currentLine)
 				currentLine = pill
-				currentLineWidth = pillWidth
 			} else {
-				currentLine += sep + pill
-				currentLineWidth += sepWidth + pillWidth
+				currentLine = candidate
 			}
 		}
 		if currentLine != "" {
