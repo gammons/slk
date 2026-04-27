@@ -58,6 +58,7 @@ Last updated: 2026-04-26
 - [x] New message landmark (red "── new ──" separator marking unread boundary)
 - [x] Mark-as-read synced to Slack via conversations.mark API on channel entry
 - [x] Typing indicators (show who's typing, broadcast your own typing)
+- [x] Desktop notifications (mentions, DMs, keywords via beeep)
 
 ### Threads
 - [x] Thread panel -- side panel (35% width) for viewing and replying to threads
@@ -101,7 +102,6 @@ Last updated: 2026-04-26
 - [ ] Message deletion (`dd` on own message)
 - [ ] Search (`:search <query>` or `Ctrl+/`)
 - [ ] File uploads and downloads
-- [ ] Desktop notifications (OS-level via notify-send/osascript)
 - [ ] User presence tracking (online/away/DND updates)
 - [ ] Inline image rendering (Kitty graphics > Sixel > fallback)
 - [ ] OSC 52 clipboard integration (yank message text)
