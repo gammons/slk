@@ -10,7 +10,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/ui/styles"
 	emoji "github.com/kyokomi/emoji/v2"
-	"github.com/muesli/reflow/truncate"
 	"github.com/muesli/reflow/wordwrap"
 )
 
@@ -467,12 +466,11 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		}
 		// Hard-clamp each line to contentWidth as a safety net
 		// (lipgloss.Width may miscount some emoji/ANSI combinations)
-		for i, rl := range reactionLines {
-			if lipgloss.Width(rl) > contentWidth {
-				reactionLines[i] = truncate.String(rl, uint(contentWidth))
-			}
-		}
-		reactionLine = "\n" + strings.Join(reactionLines, "\n")
+		// Hard-clip the entire reaction block to contentWidth.
+		// lipgloss.Width can miscount ANSI+emoji combinations, so
+		// MaxWidth provides a reliable hard limit.
+		reactionContent := strings.Join(reactionLines, "\n")
+		reactionLine = "\n" + lipgloss.NewStyle().MaxWidth(contentWidth).Render(reactionContent)
 	}
 
 	var editedMark string

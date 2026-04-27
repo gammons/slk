@@ -7,7 +7,6 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
 	emoji "github.com/kyokomi/emoji/v2"
-	"github.com/muesli/reflow/truncate"
 	"github.com/muesli/reflow/wordwrap"
 
 	"github.com/gammons/slk/internal/ui/messages"
@@ -469,12 +468,8 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 		if currentLine != "" {
 			reactionLines = append(reactionLines, currentLine)
 		}
-		for i, rl := range reactionLines {
-			if lipgloss.Width(rl) > contentWidth {
-				reactionLines[i] = truncate.String(rl, uint(contentWidth))
-			}
-		}
-		reactionLine = "\n" + strings.Join(reactionLines, "\n")
+		reactionContent := strings.Join(reactionLines, "\n")
+		reactionLine = "\n" + lipgloss.NewStyle().MaxWidth(contentWidth).Render(reactionContent)
 	}
 
 	return line + "\n" + text + reactionLine
