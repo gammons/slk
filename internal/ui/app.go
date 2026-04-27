@@ -1689,13 +1689,15 @@ func (a *App) View() tea.View {
 	}
 
 	// Fill any uncolored cells with the theme background color.
-	// This acts as a "background layer" for light themes where the
-	// terminal's default dark background would otherwise show through.
-	finalScreen := lipgloss.Place(a.width, a.height,
-		lipgloss.Left, lipgloss.Top,
-		screen,
-		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(styles.Background)),
-	)
+	// Use a full-screen wrapper that forces exact dimensions and fills
+	// all padding with the theme background. This catches any width gaps
+	// between panels and height gaps below content.
+	finalScreen := lipgloss.NewStyle().
+		Width(a.width).
+		Height(a.height).
+		MaxHeight(a.height).
+		Background(styles.Background).
+		Render(screen)
 	v := tea.NewView(finalScreen)
 	v.AltScreen = true
 	return v
