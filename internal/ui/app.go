@@ -1605,9 +1605,9 @@ func (a *App) View() tea.View {
 	if a.focusedPanel == PanelMessages && a.mode != ModeInsert {
 		msgBorderStyle = styles.FocusedBorder.Width(msgWidth)
 	}
-	a.compose.SetWidth(msgWidth)
-	composeView := a.compose.View(msgWidth, a.mode == ModeInsert && a.focusedPanel != PanelThread)
-	mentionView := a.compose.MentionPickerView(msgWidth)
+	a.compose.SetWidth(msgWidth - 2)
+	composeView := a.compose.View(msgWidth-2, a.mode == ModeInsert && a.focusedPanel != PanelThread)
+	mentionView := a.compose.MentionPickerView(msgWidth - 2)
 	if mentionView != "" {
 		composeView = mentionView + "\n" + composeView
 	}
@@ -1628,9 +1628,6 @@ func (a *App) View() tea.View {
 	} else {
 		msgInner = lipgloss.JoinVertical(lipgloss.Left, msgView, composeView)
 	}
-	// Ensure inner content fills the full panel content width so
-	// JoinVertical padding doesn't create unstyled gaps.
-	msgInner = lipgloss.NewStyle().Width(msgWidth).Background(styles.Background).Render(msgInner)
 	msgPanel := exactSize(
 		msgBorderStyle.Render(msgInner),
 		msgWidth+msgBorder, contentHeight,
@@ -1643,9 +1640,9 @@ func (a *App) View() tea.View {
 		if a.focusedPanel == PanelThread && a.mode != ModeInsert {
 			threadBorderStyle = styles.FocusedBorder.Width(threadWidth)
 		}
-		a.threadCompose.SetWidth(threadWidth)
-		threadComposeView := a.threadCompose.View(threadWidth, a.mode == ModeInsert && a.focusedPanel == PanelThread)
-		threadMentionView := a.threadCompose.MentionPickerView(threadWidth)
+		a.threadCompose.SetWidth(threadWidth - 2)
+		threadComposeView := a.threadCompose.View(threadWidth-2, a.mode == ModeInsert && a.focusedPanel == PanelThread)
+		threadMentionView := a.threadCompose.MentionPickerView(threadWidth - 2)
 		if threadMentionView != "" {
 			threadComposeView = threadMentionView + "\n" + threadComposeView
 		}
@@ -1656,7 +1653,6 @@ func (a *App) View() tea.View {
 		}
 		threadView := a.threadPanel.View(threadContentHeight, threadWidth-2)
 		threadInner := lipgloss.JoinVertical(lipgloss.Left, threadView, threadComposeView)
-		threadInner = lipgloss.NewStyle().Width(threadWidth).Background(styles.Background).Render(threadInner)
 		threadPanel := exactSize(
 			threadBorderStyle.Render(threadInner),
 			threadWidth+threadBorder, contentHeight,
