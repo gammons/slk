@@ -1,7 +1,10 @@
 // internal/ui/styles/styles.go
 package styles
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
+	"github.com/gammons/slk/internal/config"
+)
 
 var (
 	// Colors
@@ -171,3 +174,116 @@ var (
 			Italic(true).
 			PaddingLeft(2)
 )
+
+// Apply sets the color palette from a named theme with optional overrides,
+// then rebuilds all composed styles.
+func Apply(themeName string, overrides config.Theme) {
+	colors := lookupTheme(themeName)
+
+	Primary = lipgloss.Color(colors.Primary)
+	Secondary = lipgloss.Color("#666666")
+	Accent = lipgloss.Color(colors.Accent)
+	Warning = lipgloss.Color(colors.Warning)
+	Error = lipgloss.Color(colors.Error)
+	Background = lipgloss.Color(colors.Background)
+	Surface = lipgloss.Color(colors.Surface)
+	SurfaceDark = lipgloss.Color(colors.SurfaceDark)
+	TextPrimary = lipgloss.Color(colors.Text)
+	TextMuted = lipgloss.Color(colors.TextMuted)
+	Border = lipgloss.Color(colors.Border)
+
+	if overrides.Primary != "" {
+		Primary = lipgloss.Color(overrides.Primary)
+	}
+	if overrides.Accent != "" {
+		Accent = lipgloss.Color(overrides.Accent)
+	}
+	if overrides.Warning != "" {
+		Warning = lipgloss.Color(overrides.Warning)
+	}
+	if overrides.Error != "" {
+		Error = lipgloss.Color(overrides.Error)
+	}
+	if overrides.Background != "" {
+		Background = lipgloss.Color(overrides.Background)
+	}
+	if overrides.Surface != "" {
+		Surface = lipgloss.Color(overrides.Surface)
+	}
+	if overrides.SurfaceDark != "" {
+		SurfaceDark = lipgloss.Color(overrides.SurfaceDark)
+	}
+	if overrides.Text != "" {
+		TextPrimary = lipgloss.Color(overrides.Text)
+	}
+	if overrides.TextMuted != "" {
+		TextMuted = lipgloss.Color(overrides.TextMuted)
+	}
+	if overrides.Border != "" {
+		Border = lipgloss.Color(overrides.Border)
+	}
+
+	buildStyles()
+}
+
+func buildStyles() {
+	FocusedBorder = lipgloss.NewStyle().
+		BorderStyle(lipgloss.ThickBorder()).BorderForeground(Primary)
+	UnfocusedBorder = lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).BorderForeground(Border)
+	WorkspaceActive = lipgloss.NewStyle().
+		Background(Primary).Foreground(lipgloss.Color("#FFFFFF")).
+		Bold(true).Padding(0, 1).Align(lipgloss.Center)
+	WorkspaceInactive = lipgloss.NewStyle().
+		Background(lipgloss.Color("#444444")).Foreground(TextPrimary).
+		Padding(0, 1).Align(lipgloss.Center)
+	ChannelSelected = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FFFFFF")).Bold(true).Padding(0, 1)
+	ChannelNormal = lipgloss.NewStyle().
+		Foreground(TextPrimary).Padding(0, 1)
+	ChannelUnread = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FFFFFF")).Bold(true).Padding(0, 1)
+	UnreadBadge = lipgloss.NewStyle().
+		Background(Error).Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1)
+	SectionHeader = lipgloss.NewStyle().
+		Foreground(TextMuted).Bold(true).Padding(0, 1)
+	Username = lipgloss.NewStyle().
+		Foreground(Primary).Bold(true)
+	Timestamp = lipgloss.NewStyle().
+		Foreground(TextMuted).Italic(true)
+	MessageText = lipgloss.NewStyle().
+		Foreground(TextPrimary)
+	ThreadIndicator = lipgloss.NewStyle().
+		Foreground(Primary).Italic(true)
+	StatusBar = lipgloss.NewStyle().
+		Background(SurfaceDark).Foreground(TextPrimary).Padding(0, 1)
+	StatusMode = lipgloss.NewStyle().
+		Background(Primary).Foreground(lipgloss.Color("#FFFFFF")).Bold(true).Padding(0, 1)
+	StatusModeInsert = lipgloss.NewStyle().
+		Background(Accent).Foreground(lipgloss.Color("#FFFFFF")).Bold(true).Padding(0, 1)
+	StatusModeCommand = lipgloss.NewStyle().
+		Background(Warning).Foreground(lipgloss.Color("#000000")).Bold(true).Padding(0, 1)
+	ComposeBox = lipgloss.NewStyle().
+		BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(Border).
+		Background(SurfaceDark).MarginTop(1).Padding(1, 1, 1, 1)
+	ComposeFocused = lipgloss.NewStyle().
+		BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(Primary).
+		Background(SurfaceDark).MarginTop(1).Padding(1, 1, 1, 1)
+	ComposeInsert = lipgloss.NewStyle().
+		BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(Primary).
+		Background(SurfaceDark).MarginTop(1).Padding(1, 1, 1, 1)
+	PresenceOnline = lipgloss.NewStyle().Foreground(Accent)
+	PresenceAway = lipgloss.NewStyle().Foreground(TextMuted)
+	ReactionPillOwn = lipgloss.NewStyle().
+		Background(lipgloss.Color("#1a2e1a")).Foreground(Accent).Padding(0, 1)
+	ReactionPillOther = lipgloss.NewStyle().
+		Background(lipgloss.Color("#1a1a2e")).Foreground(TextMuted).Padding(0, 1)
+	ReactionPillSelected = lipgloss.NewStyle().
+		Background(lipgloss.Color("#252540")).Foreground(Primary).Padding(0, 1)
+	ReactionPillPlus = lipgloss.NewStyle().
+		Background(lipgloss.Color("#1a1a2e")).Foreground(Primary).Padding(0, 1)
+	NewMessageSeparator = lipgloss.NewStyle().
+		Foreground(Error).Bold(true).Align(lipgloss.Center)
+	TypingIndicator = lipgloss.NewStyle().
+		Foreground(TextMuted).Italic(true).PaddingLeft(2)
+}
