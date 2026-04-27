@@ -4,7 +4,7 @@ package statusbar
 import (
 	"fmt"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
