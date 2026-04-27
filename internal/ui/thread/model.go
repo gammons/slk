@@ -29,11 +29,32 @@ type Model struct {
 	vp                viewport.Model
 	reactionNavActive bool
 	reactionNavIndex  int
+
+	// Render cache -- pre-rendered reply strings (without borders)
+	cache         []string
+	cacheWidth    int
+	cacheReplyLen int
+
+	// View-level cache -- bordered content ready for viewport
+	viewContent       string
+	viewSelected      int
+	viewWidth         int
+	viewHeight        int
+	viewCacheValid    bool
+	selectedStartLine int
+	selectedEndLine   int
 }
 
 // New creates an empty thread panel.
 func New() *Model {
 	return &Model{}
+}
+
+// InvalidateCache forces the render cache to be rebuilt on next View().
+// Call this after theme changes or style updates.
+func (m *Model) InvalidateCache() {
+	m.cache = nil
+	m.viewCacheValid = false
 }
 
 // SetThread populates the thread panel with a parent message and replies.
@@ -44,6 +65,7 @@ func (m *Model) SetThread(parent messages.MessageItem, replies []messages.Messag
 	m.channelID = channelID
 	m.threadTS = threadTS
 	m.selected = 0
+	m.InvalidateCache()
 }
 
 // AddReply appends a reply to the thread. If the cursor was at the bottom,
@@ -51,6 +73,7 @@ func (m *Model) SetThread(parent messages.MessageItem, replies []messages.Messag
 func (m *Model) AddReply(msg messages.MessageItem) {
 	wasAtBottom := len(m.replies) == 0 || m.selected >= len(m.replies)-1
 	m.replies = append(m.replies, msg)
+	m.InvalidateCache()
 	if wasAtBottom {
 		m.selected = len(m.replies) - 1
 	}
@@ -63,6 +86,7 @@ func (m *Model) Clear() {
 	m.channelID = ""
 	m.threadTS = ""
 	m.selected = 0
+	m.InvalidateCache()
 }
 
 // ThreadTS returns the thread timestamp.
@@ -108,6 +132,7 @@ func (m *Model) SetAvatarFunc(fn messages.AvatarFunc) {
 // SetUserNames sets the user ID -> display name map for mention resolution.
 func (m *Model) SetUserNames(names map[string]string) {
 	m.userNames = names
+	m.InvalidateCache()
 }
 
 // SelectedReply returns the currently selected reply, or nil if none.
@@ -159,6 +184,7 @@ func (m *Model) EnterReactionNav() {
 	if reply := m.SelectedReply(); reply != nil && len(reply.Reactions) > 0 {
 		m.reactionNavActive = true
 		m.reactionNavIndex = 0
+		m.InvalidateCache()
 	}
 }
 
@@ -166,6 +192,7 @@ func (m *Model) EnterReactionNav() {
 func (m *Model) ExitReactionNav() {
 	m.reactionNavActive = false
 	m.reactionNavIndex = 0
+	m.InvalidateCache()
 }
 
 // ReactionNavActive returns whether reaction navigation is active.
@@ -181,6 +208,7 @@ func (m *Model) ReactionNavLeft() {
 	}
 	total := len(reply.Reactions) + 1
 	m.reactionNavIndex = (m.reactionNavIndex - 1 + total) % total
+	m.InvalidateCache()
 }
 
 // ReactionNavRight moves the reaction cursor right with wrapping.
@@ -191,6 +219,7 @@ func (m *Model) ReactionNavRight() {
 	}
 	total := len(reply.Reactions) + 1
 	m.reactionNavIndex = (m.reactionNavIndex + 1) % total
+	m.InvalidateCache()
 }
 
 // SelectedReaction returns the currently highlighted reaction emoji name,
@@ -217,6 +246,7 @@ func (m *Model) ClampReactionNav() {
 	if m.reactionNavIndex >= total {
 		m.reactionNavIndex = total - 1
 	}
+	m.InvalidateCache()
 }
 
 // UpdateReaction updates the reaction state for a specific message in the thread.
@@ -255,6 +285,7 @@ func (m *Model) UpdateReaction(messageTS, emojiName, userID string, remove bool)
 					})
 				}
 			}
+			m.InvalidateCache()
 			if m.reactionNavActive {
 				m.ClampReactionNav()
 			}
@@ -310,49 +341,68 @@ func (m *Model) View(height, width int) string {
 		return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(result)
 	}
 
-	// Pre-compute border styles for this frame (avoids NewStyle per reply)
-	borderFill := lipgloss.NewStyle().Background(styles.Background)
-	borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Background)
-	borderSelect := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Accent)
-
-	// Pre-render all replies, tracking line offsets
-	var allRows []string
-	selectedStartLine := 0
-	selectedEndLine := 0
-	currentLine := 0
-
-	for i, reply := range m.replies {
-		content := m.renderThreadMessage(reply, width, m.userNames, i == m.selected)
-		if i == m.selected {
-			selectedStartLine = currentLine
-			filled := borderFill.Width(width - 1).Render(content)
-			content = borderSelect.Render(filled)
-		} else {
-			filled := borderFill.Width(width - 1).Render(content)
-			content = borderInvis.Render(filled)
+	// Rebuild render cache if replies or width changed
+	if m.cache == nil || m.cacheWidth != width || m.cacheReplyLen != len(m.replies) {
+		m.cache = make([]string, len(m.replies))
+		for i, reply := range m.replies {
+			m.cache[i] = m.renderThreadMessage(reply, width, m.userNames, i == m.selected)
 		}
-		h := lipgloss.Height(content)
-		if i == m.selected {
-			selectedEndLine = currentLine + h
-		}
-		allRows = append(allRows, content)
-		currentLine += h
+		m.cacheWidth = width
+		m.cacheReplyLen = len(m.replies)
+		m.viewCacheValid = false
 	}
 
-	fullContent := strings.Join(allRows, "\n")
+	// Check if view-level cache (bordered content) can be reused
+	if !m.viewCacheValid || m.viewSelected != m.selected || m.viewWidth != width || m.viewHeight != replyAreaHeight {
+		// Pre-compute border styles for this frame (avoids NewStyle per reply)
+		borderFill := lipgloss.NewStyle().Background(styles.Background)
+		borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Background)
+		borderSelect := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Accent)
+
+		var allRows []string
+		startLine := 0
+		endLine := 0
+		currentLine := 0
+
+		for i, cached := range m.cache {
+			content := cached
+			if i == m.selected {
+				startLine = currentLine
+				filled := borderFill.Width(width - 1).Render(content)
+				content = borderSelect.Render(filled)
+			} else {
+				filled := borderFill.Width(width - 1).Render(content)
+				content = borderInvis.Render(filled)
+			}
+			h := lipgloss.Height(content)
+			if i == m.selected {
+				endLine = currentLine + h
+			}
+			allRows = append(allRows, content)
+			currentLine += h
+		}
+
+		m.viewContent = strings.Join(allRows, "\n")
+		m.viewSelected = m.selected
+		m.viewWidth = width
+		m.viewHeight = replyAreaHeight
+		m.selectedStartLine = startLine
+		m.selectedEndLine = endLine
+		m.viewCacheValid = true
+	}
 
 	// Configure viewport
 	m.vp.SetWidth(width)
 	m.vp.SetHeight(replyAreaHeight)
 	m.vp.KeyMap = viewport.KeyMap{}
-	m.vp.SetContent(fullContent)
+	m.vp.SetContent(m.viewContent)
 
 	// Scroll to keep selected item visible
-	if selectedEndLine > m.vp.YOffset()+m.vp.Height() {
-		m.vp.SetYOffset(selectedEndLine - m.vp.Height())
+	if m.selectedEndLine > m.vp.YOffset()+m.vp.Height() {
+		m.vp.SetYOffset(m.selectedEndLine - m.vp.Height())
 	}
-	if selectedStartLine < m.vp.YOffset() {
-		m.vp.SetYOffset(selectedStartLine)
+	if m.selectedStartLine < m.vp.YOffset() {
+		m.vp.SetYOffset(m.selectedStartLine)
 	}
 
 	result := chrome + "\n" + m.vp.View()
