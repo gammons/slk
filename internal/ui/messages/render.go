@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	emojiutil "github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/kyokomi/emoji/v2"
 )
@@ -244,7 +245,10 @@ func renderInlineFormatting(text string, userNames map[string]string) string {
 	})
 
 	// Emoji shortcodes: :red_circle: -> 🔴
-	text = emoji.Sprint(text)
+	// Strip VS16 from text-default characters so width measurement
+	// matches terminal rendering (many terminals render these as 1-wide
+	// regardless of VS16).
+	text = emojiutil.StripTextDefaultVS16(emoji.Sprint(text))
 
 	return text
 }

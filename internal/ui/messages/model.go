@@ -8,6 +8,7 @@ import (
 
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
+	emojiutil "github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/styles"
 	emoji "github.com/kyokomi/emoji/v2"
 
@@ -423,7 +424,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 	if len(msg.Reactions) > 0 {
 		var pills []string
 		for i, r := range msg.Reactions {
-			emojiStr := emoji.Sprint(":" + r.Emoji + ":")
+			emojiStr := emojiutil.NormalizeEmojiPresentation(emoji.Sprint(":" + r.Emoji + ":"))
 			pillText := fmt.Sprintf("%s%d", emojiStr, r.Count)
 			var style lipgloss.Style
 			if isSelected && m.reactionNavActive && i == m.reactionNavIndex {
