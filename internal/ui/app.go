@@ -1576,13 +1576,15 @@ func (a *App) View() tea.View {
 		msgWidth = 10
 	}
 
-	// Helper to force a panel to an exact height
-	exactHeight := func(s string, h int) string {
-		return lipgloss.NewStyle().Width(lipgloss.Width(s)).Height(h).MaxHeight(h).Background(styles.Background).Render(s)
+	// Helper to force a panel to an exact width and height.
+	// Uses an explicit width parameter instead of lipgloss.Width(s)
+	// to avoid ANSI miscounting in complex rendered content.
+	exactSize := func(s string, w, h int) string {
+		return lipgloss.NewStyle().Width(w).Height(h).MaxHeight(h).Background(styles.Background).Render(s)
 	}
 
 	// Render workspace rail
-	rail := exactHeight(a.workspaceRail.View(contentHeight), contentHeight)
+	rail := exactSize(a.workspaceRail.View(contentHeight), railWidth, contentHeight)
 
 	var panels []string
 	panels = append(panels, rail)
@@ -1595,7 +1597,7 @@ func (a *App) View() tea.View {
 		}
 		sidebarView := a.sidebar.View(contentHeight-2, sidebarWidth)
 		sidebarView = borderStyle.Render(sidebarView)
-		panels = append(panels, exactHeight(sidebarView, contentHeight))
+		panels = append(panels, exactSize(sidebarView, sidebarWidth+sidebarBorder, contentHeight))
 	}
 
 	// Render message pane with border
@@ -1629,9 +1631,9 @@ func (a *App) View() tea.View {
 	// Ensure inner content fills the full panel content width so
 	// JoinVertical padding doesn't create unstyled gaps.
 	msgInner = lipgloss.NewStyle().Width(msgWidth).Background(styles.Background).Render(msgInner)
-	msgPanel := exactHeight(
+	msgPanel := exactSize(
 		msgBorderStyle.Render(msgInner),
-		contentHeight,
+		msgWidth+msgBorder, contentHeight,
 	)
 	panels = append(panels, msgPanel)
 
@@ -1655,9 +1657,9 @@ func (a *App) View() tea.View {
 		threadView := a.threadPanel.View(threadContentHeight, threadWidth-2)
 		threadInner := lipgloss.JoinVertical(lipgloss.Left, threadView, threadComposeView)
 		threadInner = lipgloss.NewStyle().Width(threadWidth).Background(styles.Background).Render(threadInner)
-		threadPanel := exactHeight(
+		threadPanel := exactSize(
 			threadBorderStyle.Render(threadInner),
-			contentHeight,
+			threadWidth+threadBorder, contentHeight,
 		)
 		panels = append(panels, threadPanel)
 	}
