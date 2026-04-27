@@ -1,22 +1,26 @@
 package styles
 
 import (
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+
+	toml "github.com/pelletier/go-toml/v2"
 )
 
 // ThemeColors holds the 10 semantic colors for a theme.
 type ThemeColors struct {
-	Primary     string
-	Accent      string
-	Warning     string
-	Error       string
-	Background  string
-	Surface     string
-	SurfaceDark string
-	Text        string
-	TextMuted   string
-	Border      string
+	Primary     string `toml:"primary"`
+	Accent      string `toml:"accent"`
+	Warning     string `toml:"warning"`
+	Error       string `toml:"error"`
+	Background  string `toml:"background"`
+	Surface     string `toml:"surface"`
+	SurfaceDark string `toml:"surface_dark"`
+	Text        string `toml:"text"`
+	TextMuted   string `toml:"text_muted"`
+	Border      string `toml:"border"`
 }
 
 // builtinThemes maps lowercase theme names to their display name and colors.
@@ -129,4 +133,68 @@ func lookupTheme(name string) ThemeColors {
 		return t.Colors
 	}
 	return builtinThemes["dark"].Colors
+}
+
+// customThemeFile is the TOML structure for a custom theme file.
+type customThemeFile struct {
+	Name   string      `toml:"name"`
+	Colors ThemeColors `toml:"colors"`
+}
+
+// LoadCustomThemes scans a directory for .toml theme files and registers them.
+func LoadCustomThemes(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return // directory doesn't exist or can't be read — silently skip
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".toml") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var tf customThemeFile
+		if err := toml.Unmarshal(data, &tf); err != nil {
+			continue
+		}
+		if tf.Name == "" {
+			continue
+		}
+		// Fill missing colors from dark defaults
+		dark := builtinThemes["dark"].Colors
+		if tf.Colors.Primary == "" {
+			tf.Colors.Primary = dark.Primary
+		}
+		if tf.Colors.Accent == "" {
+			tf.Colors.Accent = dark.Accent
+		}
+		if tf.Colors.Warning == "" {
+			tf.Colors.Warning = dark.Warning
+		}
+		if tf.Colors.Error == "" {
+			tf.Colors.Error = dark.Error
+		}
+		if tf.Colors.Background == "" {
+			tf.Colors.Background = dark.Background
+		}
+		if tf.Colors.Surface == "" {
+			tf.Colors.Surface = dark.Surface
+		}
+		if tf.Colors.SurfaceDark == "" {
+			tf.Colors.SurfaceDark = dark.SurfaceDark
+		}
+		if tf.Colors.Text == "" {
+			tf.Colors.Text = dark.Text
+		}
+		if tf.Colors.TextMuted == "" {
+			tf.Colors.TextMuted = dark.TextMuted
+		}
+		if tf.Colors.Border == "" {
+			tf.Colors.Border = dark.Border
+		}
+		RegisterCustomTheme(tf.Name, tf.Colors)
+	}
 }
