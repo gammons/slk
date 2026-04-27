@@ -804,6 +804,8 @@ func (a *App) handleThemeSwitcherMode(msg tea.KeyMsg) tea.Cmd {
 		a.SetMode(ModeNormal)
 		// Apply theme immediately
 		styles.Apply(result.Name, a.themeOverrides)
+		// Invalidate render caches so they rebuild with new theme colors
+		a.messagepane.InvalidateCache()
 		// Save selection
 		if a.themeSaveFn != nil {
 			go a.themeSaveFn(result.Name)

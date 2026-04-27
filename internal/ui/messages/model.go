@@ -77,6 +77,12 @@ func New(msgs []MessageItem, channelName string) Model {
 	}
 }
 
+// InvalidateCache forces the render cache to be rebuilt on next View().
+// Call this after theme changes or style updates.
+func (m *Model) InvalidateCache() {
+	m.cache = nil
+}
+
 func (m *Model) SetChannel(name, topic string) {
 	m.channelName = name
 	m.channelTopic = topic
