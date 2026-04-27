@@ -78,6 +78,32 @@ message_retention_days = 7
 	}
 }
 
+func TestThemeParsing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	data := []byte(`
+[theme]
+primary = "#FF0000"
+accent = "#00FF00"
+`)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Theme.Primary != "#FF0000" {
+		t.Errorf("expected primary #FF0000, got %q", cfg.Theme.Primary)
+	}
+	if cfg.Theme.Accent != "#00FF00" {
+		t.Errorf("expected accent #00FF00, got %q", cfg.Theme.Accent)
+	}
+	if cfg.Theme.Background != "" {
+		t.Errorf("expected empty background, got %q", cfg.Theme.Background)
+	}
+}
+
 func TestLoadConfigMissingFile(t *testing.T) {
 	cfg, err := Load("/nonexistent/path/config.toml")
 	if err != nil {

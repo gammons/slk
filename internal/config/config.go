@@ -16,6 +16,7 @@ type Config struct {
 	Notifications Notifications         `toml:"notifications"`
 	Cache         CacheConfig           `toml:"cache"`
 	Sections      map[string]SectionDef `toml:"sections"`
+	Theme         Theme                 `toml:"theme"`
 }
 
 // SectionDef defines a sidebar section with channel name patterns.
@@ -55,6 +56,19 @@ type Notifications struct {
 type CacheConfig struct {
 	MessageRetentionDays int `toml:"message_retention_days"`
 	MaxDBSizeMB          int `toml:"max_db_size_mb"`
+}
+
+type Theme struct {
+	Primary     string `toml:"primary"`
+	Accent      string `toml:"accent"`
+	Warning     string `toml:"warning"`
+	Error       string `toml:"error"`
+	Background  string `toml:"background"`
+	Surface     string `toml:"surface"`
+	SurfaceDark string `toml:"surface_dark"`
+	Text        string `toml:"text"`
+	TextMuted   string `toml:"text_muted"`
+	Border      string `toml:"border"`
 }
 
 func Default() Config {
