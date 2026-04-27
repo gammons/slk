@@ -23,6 +23,7 @@ import (
 	"github.com/gammons/slk/internal/ui/reactionpicker"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/statusbar"
+	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/gammons/slk/internal/ui/workspace"
 	emoji "github.com/kyokomi/emoji/v2"
 )
@@ -69,6 +70,11 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
+
+	// Load custom themes and apply the active theme
+	themesDir := filepath.Join(configDir, "themes")
+	styles.LoadCustomThemes(themesDir)
+	styles.Apply(cfg.Appearance.Theme, cfg.Theme)
 
 	notifier := notify.New(cfg.Notifications.Enabled)
 
