@@ -1626,6 +1626,9 @@ func (a *App) View() tea.View {
 	} else {
 		msgInner = lipgloss.JoinVertical(lipgloss.Left, msgView, composeView)
 	}
+	// Ensure inner content fills the full panel content width so
+	// JoinVertical padding doesn't create unstyled gaps.
+	msgInner = lipgloss.NewStyle().Width(msgWidth).Background(styles.Background).Render(msgInner)
 	msgPanel := exactHeight(
 		msgBorderStyle.Render(msgInner),
 		contentHeight,
@@ -1651,6 +1654,7 @@ func (a *App) View() tea.View {
 		}
 		threadView := a.threadPanel.View(threadContentHeight, threadWidth-2)
 		threadInner := lipgloss.JoinVertical(lipgloss.Left, threadView, threadComposeView)
+		threadInner = lipgloss.NewStyle().Width(threadWidth).Background(styles.Background).Render(threadInner)
 		threadPanel := exactHeight(
 			threadBorderStyle.Render(threadInner),
 			contentHeight,
