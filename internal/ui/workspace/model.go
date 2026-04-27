@@ -80,10 +80,11 @@ func (m Model) View(height int) string {
 			style = styles.WorkspaceInactive
 		}
 
-		label := style.Render(item.Initials)
+		initials := item.Initials
 		if item.HasUnread && i != m.selected {
-			label += "\n" + styles.PresenceOnline.Render("*")
+			initials = initials + styles.PresenceOnline.Render("●")
 		}
+		label := style.Render(initials)
 		rows = append(rows, label)
 	}
 
@@ -94,7 +95,7 @@ func (m Model) View(height int) string {
 	// top + 1 row bottom inside that total, matching the visual
 	// offset of RoundedBorder() on adjacent panels.
 	rail := lipgloss.NewStyle().
-		Width(5).
+		Width(6).
 		Height(height).
 		MaxHeight(height).
 		Background(styles.SurfaceDark).
@@ -106,7 +107,7 @@ func (m Model) View(height int) string {
 }
 
 func (m Model) Width() int {
-	return 5 // 5 content, no border
+	return 6 // 6 content, no border
 }
 
 func WorkspaceInitials(name string) string {
