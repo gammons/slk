@@ -1,134 +1,147 @@
-# Customizable Themes Design
+# Customizable Themes Design (Revised)
 
 Date: 2026-04-26
 
 ## Overview
 
-Allow users to customize the app's color scheme via a `[theme]` section in `config.toml`. Users override semantic colors (primary, accent, background, etc.) and all styles automatically adapt. Ships with dark (default) and light presets.
+Full theme system with 12 built-in themes, user-created custom themes loaded from a directory, and a live theme switcher overlay (Ctrl+y). Users can also override individual colors on top of any theme via `[theme]` in config.toml.
 
 ## Existing Infrastructure
 
 - **Styles:** `internal/ui/styles/styles.go` defines ~11 color vars and ~25 composed lipgloss styles as package-level `var` declarations. All components reference these vars directly.
-- **Config:** `internal/config/config.go` has `[appearance]` section with `theme = "dark"` field that is currently unused.
+- **Config:** `internal/config/config.go` has `[appearance]` section with `theme = "dark"` field (currently unused). `Theme` struct with 10 color fields already added (Task 1 complete).
+- **Overlay pattern:** `channelfinder`, `workspacefinder` overlays provide the template: `Model` struct with `Open()`, `Close()`, `IsVisible()`, `HandleKey()`, `ViewOverlay()` methods.
 - **Config path:** `~/.config/slk/config.toml`
 
-## Theme Config
+## Theme Definition
 
-A `[theme]` section in `config.toml` with optional hex color overrides. Any color not specified falls back to the active preset (dark or light).
+A theme is a named set of 10 semantic colors:
+
+| Color | Purpose |
+|-------|---------|
+| `primary` | Focused borders, usernames, links, active elements |
+| `accent` | Selection indicator, online presence, success states |
+| `warning` | Command mode badge |
+| `error` | Error states, unread badges, new message separator |
+| `background` | Main panel backgrounds |
+| `surface` | Slightly elevated surface |
+| `surface_dark` | Status bar, compose box backgrounds |
+| `text` | Primary text |
+| `text_muted` | Timestamps, section headers, muted text |
+| `border` | Unfocused panel borders, compose borders |
+
+## Built-in Themes (12)
+
+Embedded in the binary as Go maps. Each maps the 10 color keys to hex values.
+
+1. **Dark** (current default)
+2. **Light**
+3. **Dracula**
+4. **Solarized Dark**
+5. **Solarized Light**
+6. **Gruvbox Dark**
+7. **Gruvbox Light**
+8. **Nord**
+9. **Tokyo Night**
+10. **Catppuccin Mocha**
+11. **One Dark**
+12. **Rosé Pine**
+
+## Custom Themes
+
+Users place `.toml` files in `~/.config/slk/themes/`. Each file defines one theme:
+
+```toml
+name = "My Custom Theme"
+
+[colors]
+primary = "#BD93F9"
+accent = "#50FA7B"
+warning = "#FFB86C"
+error = "#FF5555"
+background = "#282A36"
+surface = "#343746"
+surface_dark = "#21222C"
+text = "#F8F8F2"
+text_muted = "#6272A4"
+border = "#44475A"
+```
+
+The `name` field is required. All 10 colors should be specified (missing colors fall back to the dark theme defaults). At startup, the app scans `~/.config/slk/themes/` and loads all `.toml` files. Custom themes with the same name as a built-in override the built-in.
+
+## Config
 
 ```toml
 [appearance]
-theme = "dark"  # "dark" (default) or "light"
+theme = "dark"  # name of active theme (case-insensitive match)
 
+# Optional per-color overrides applied on top of the active theme
 [theme]
-primary = "#4A9EFF"
-accent = "#50C878"
-warning = "#E0A030"
-error = "#E04040"
-background = "#1A1A2E"
-surface = "#16162B"
-surface_dark = "#0F0F23"
-text = "#E0E0E0"
-text_muted = "#888888"
-border = "#333333"
+primary = "#FF0000"
 ```
 
-All fields are optional strings. Empty string or missing field means "use preset default."
-
-## Config Struct
-
-Add to `internal/config/config.go`:
-
-```go
-type Theme struct {
-    Primary     string `toml:"primary"`
-    Accent      string `toml:"accent"`
-    Warning     string `toml:"warning"`
-    Error       string `toml:"error"`
-    Background  string `toml:"background"`
-    Surface     string `toml:"surface"`
-    SurfaceDark string `toml:"surface_dark"`
-    Text        string `toml:"text"`
-    TextMuted   string `toml:"text_muted"`
-    Border      string `toml:"border"`
-}
-```
-
-Add `Theme Theme` field to the `Config` struct. No defaults needed -- zero-value (empty strings) means "use preset."
-
-## Built-in Presets
-
-### Dark (default)
-
-The current hardcoded colors:
-
-| Color | Hex |
-|-------|-----|
-| Primary | `#4A9EFF` |
-| Accent | `#50C878` |
-| Warning | `#E0A030` |
-| Error | `#E04040` |
-| Background | `#1A1A2E` |
-| Surface | `#16162B` |
-| SurfaceDark | `#0F0F23` |
-| Text | `#E0E0E0` |
-| TextMuted | `#888888` |
-| Border | `#333333` |
-
-### Light
-
-| Color | Hex |
-|-------|-----|
-| Primary | `#0366D6` |
-| Accent | `#28A745` |
-| Warning | `#D9840D` |
-| Error | `#CB2431` |
-| Background | `#FFFFFF` |
-| Surface | `#F6F8FA` |
-| SurfaceDark | `#EAEEF2` |
-| Text | `#24292E` |
-| TextMuted | `#6A737D` |
-| Border | `#D1D5DA` |
+The `[theme]` section provides inline color overrides applied after the named theme is loaded. This lets users tweak a theme without creating a full custom file.
 
 ## Apply Function
 
-Add `Apply(preset string, overrides config.Theme)` to `internal/ui/styles/styles.go`. This function:
+`styles.Apply(themeName string, overrides config.Theme)` in the styles package:
 
-1. Selects a base color palette from the preset name (`"dark"` or `"light"`)
-2. Applies any non-empty overrides from the `Theme` struct on top
-3. Overwrites the package-level color vars (`Primary`, `Accent`, etc.)
-4. Rebuilds all composed styles (`FocusedBorder`, `Username`, `StatusBar`, etc.) from the updated colors
+1. Looks up the theme by name (built-in map first, then custom themes)
+2. Falls back to "dark" if not found
+3. Sets all 10 package-level color vars
+4. Applies any non-empty overrides from the `config.Theme` struct
+5. Calls `buildStyles()` to rebuild all ~25 composed lipgloss styles
 
-This must be called before any UI rendering. Styles that use inline hex colors (e.g., `lipgloss.Color("#FFFFFF")` for white text in status mode badges) are not affected by theming -- they remain fixed. This is acceptable since they are contrast colors tied to specific backgrounds.
+Called at startup and whenever the user switches themes via the overlay.
 
-## Integration
+## Theme Switcher Overlay
 
-In `cmd/slk/main.go`, after `config.Load()`:
+A filterable overlay triggered by `Ctrl+y`, following the same pattern as the workspace finder:
 
-```go
-styles.Apply(cfg.Appearance.Theme, cfg.Theme)
-```
+- **Model:** `internal/ui/themeswitcher/model.go` with `Open()`, `Close()`, `IsVisible()`, `HandleKey() *ThemeResult`, `ViewOverlay()`
+- **Items:** List of theme names (built-in + custom), filterable by typing
+- **Selection:** Green left-border indicator, j/k or up/down navigation
+- **Apply on select:** When the user presses Enter, the selected theme name is returned as a `ThemeResult`. The app handles it by calling `styles.Apply()` and saving the selection to config.
+- **Escape:** Closes without changing
+- **Live:** Theme applies immediately on selection, no restart needed
 
-This runs before `NewApp()` or any bubbletea rendering, so all components pick up the themed colors from the package-level vars.
+### App Integration
 
-## Files to Modify
+- New `ModeThemeSwitcher` mode (or reuse overlay pattern without a dedicated mode)
+- `Ctrl+y` opens the overlay
+- `ThemeSelectedMsg{Name string}` bubbletea message dispatched on selection
+- `App.Update` handles it: calls `styles.Apply(name, cfg.Theme)`, updates `cfg.Appearance.Theme`, saves config
 
-| File | Changes |
+### Saving Theme Selection
+
+When the user selects a theme, update `cfg.Appearance.Theme` and write the config back. Use the existing TOML library to marshal and write to the config path. Only update the `[appearance]` section's `theme` field.
+
+## Files
+
+| File | Purpose |
 |------|---------|
-| `internal/config/config.go` | Add `Theme` struct, add `Theme Theme` to `Config` |
-| `internal/ui/styles/styles.go` | Add `Apply(preset string, overrides config.Theme)`, add light preset colors, refactor style construction into a `buildStyles()` helper called by both init and Apply |
-| `cmd/slk/main.go` | Call `styles.Apply(cfg.Appearance.Theme, cfg.Theme)` after config load |
+| `internal/ui/styles/themes.go` | Built-in theme color maps, `LoadCustomThemes(dir string)`, theme registry |
+| `internal/ui/styles/styles.go` | Existing styles + `Apply()` + `buildStyles()` |
+| `internal/ui/styles/styles_test.go` | Tests for Apply, theme loading, overrides |
+| `internal/config/config.go` | Theme struct (done), add `SaveTheme(path, name string)` |
+| `internal/ui/themeswitcher/model.go` | Theme switcher overlay component |
+| `internal/ui/themeswitcher/model_test.go` | Tests for the overlay |
+| `internal/ui/app.go` | Ctrl+y binding, ThemeSelectedMsg, overlay rendering |
+| `internal/ui/keys.go` | Add ThemeSwitcher keybinding |
+| `cmd/slk/main.go` | Startup: load custom themes, apply theme; wire theme save callback |
 
 ## Testing
 
-- Test that `Apply("dark", Theme{})` produces the default dark colors
-- Test that `Apply("light", Theme{})` produces light colors
-- Test that `Apply("dark", Theme{Primary: "#FF0000"})` overrides only Primary, keeps other dark defaults
-- Test that unknown preset name falls back to dark
-- Config tests for TOML parsing of the `[theme]` section
+- Apply with each built-in theme name produces correct colors
+- Apply with unknown name falls back to dark
+- Apply with overrides merges correctly
+- Custom theme loading from directory
+- Custom theme overrides built-in with same name
+- Theme switcher: open/close, filter, select
+- Config save after theme switch
 
 ## Out of Scope
 
-- Runtime theme switching (themes are applied at startup only)
 - Individual style property overrides (bold, italic, padding)
-- Theme file sharing/importing from separate files
+- Theme editor/creator UI
+- Animated theme transitions
