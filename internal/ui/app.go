@@ -1572,7 +1572,7 @@ func (a *App) View() tea.View {
 
 	// Helper to force a panel to an exact height
 	exactHeight := func(s string, h int) string {
-		return lipgloss.NewStyle().Width(lipgloss.Width(s)).Height(h).MaxHeight(h).Render(s)
+		return lipgloss.NewStyle().Width(lipgloss.Width(s)).Height(h).MaxHeight(h).Background(styles.Background).Render(s)
 	}
 
 	// Render workspace rail
