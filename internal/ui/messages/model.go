@@ -8,9 +8,11 @@ import (
 
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
+	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/ui/styles"
 	emoji "github.com/kyokomi/emoji/v2"
 	"github.com/muesli/reflow/wordwrap"
+	"github.com/rivo/uniseg"
 )
 
 type MessageItem struct {
@@ -442,33 +444,26 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 			}
 			pills = append(pills, plusStyle.Render("+"))
 		}
-		// Join pills with wrapping. Use a conservative width limit to
-		// account for emoji characters that render as 2 terminal cells
-		// but may be counted as 1 by lipgloss.Width. Each resolved emoji
-		// pill can add ~1 extra phantom cell, so we subtract the number
-		// of pills already on the line as a safety margin.
+		// Join pills with wrapping. Use uniseg.StringWidth for accurate
+		// emoji width measurement (go-runewidth miscounts variation
+		// selector emoji like ❤️, ☘️, 🖊️). Strip ANSI codes before
+		// measuring since uniseg doesn't handle them.
 		bgSpace := lipgloss.NewStyle().Background(styles.Background).Render(" ")
 		var reactionLines []string
 		currentLine := ""
-		pillsOnLine := 0
 		for i, pill := range pills {
 			candidate := currentLine
 			if i > 0 {
 				candidate += bgSpace
 			}
 			candidate += pill
-			// Safety margin: 1 extra cell per pill for emoji width miscounting
-			safeWidth := contentWidth - pillsOnLine - 1
-			if safeWidth < contentWidth/2 {
-				safeWidth = contentWidth / 2
-			}
-			if lipgloss.Width(candidate) > safeWidth && currentLine != "" {
+			// Measure using uniseg on ANSI-stripped text for accuracy
+			stripped := xansi.Strip(candidate)
+			if uniseg.StringWidth(stripped) > contentWidth && currentLine != "" {
 				reactionLines = append(reactionLines, currentLine)
 				currentLine = pill
-				pillsOnLine = 1
 			} else {
 				currentLine = candidate
-				pillsOnLine++
 			}
 		}
 		if currentLine != "" {

@@ -6,8 +6,10 @@ import (
 
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
+	xansi "github.com/charmbracelet/x/ansi"
 	emoji "github.com/kyokomi/emoji/v2"
 	"github.com/muesli/reflow/wordwrap"
+	"github.com/rivo/uniseg"
 
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/styles"
@@ -451,24 +453,18 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 		bgSpace := lipgloss.NewStyle().Background(styles.Background).Render(" ")
 		var reactionLines []string
 		currentLine := ""
-		pillsOnLine := 0
 		for i, pill := range pills {
 			candidate := currentLine
 			if i > 0 {
 				candidate += bgSpace
 			}
 			candidate += pill
-			safeWidth := contentWidth - pillsOnLine - 1
-			if safeWidth < contentWidth/2 {
-				safeWidth = contentWidth / 2
-			}
-			if lipgloss.Width(candidate) > safeWidth && currentLine != "" {
+			stripped := xansi.Strip(candidate)
+			if uniseg.StringWidth(stripped) > contentWidth && currentLine != "" {
 				reactionLines = append(reactionLines, currentLine)
 				currentLine = pill
-				pillsOnLine = 1
 			} else {
 				currentLine = candidate
-				pillsOnLine++
 			}
 		}
 		if currentLine != "" {
