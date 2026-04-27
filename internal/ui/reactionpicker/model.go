@@ -8,6 +8,7 @@ import (
 	emoji "github.com/kyokomi/emoji/v2"
 	"github.com/muesli/reflow/truncate"
 
+	"github.com/gammons/slk/internal/ui/overlay"
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
@@ -206,16 +207,11 @@ func (m *Model) ViewOverlay(termWidth, termHeight int, background string) string
 		return background
 	}
 
-	placed := lipgloss.Place(termWidth, termHeight,
-		lipgloss.Center, lipgloss.Center,
-		box,
-		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(styles.SurfaceDark)),
-	)
-
+	result := overlay.DimmedOverlay(termWidth, termHeight, background, box, 0.5)
 	// Clamp to exactly termHeight lines to prevent terminal scrolling.
 	// Emoji with unpredictable terminal widths can cause lipgloss to wrap
 	// lines, producing output taller than expected.
-	lines := strings.Split(placed, "\n")
+	lines := strings.Split(result, "\n")
 	if len(lines) > termHeight {
 		lines = lines[:termHeight]
 	}

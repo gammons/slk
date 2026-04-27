@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/gammons/slk/internal/ui/overlay"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/muesli/reflow/truncate"
 )
@@ -131,11 +132,7 @@ func (m Model) ViewOverlay(termWidth, termHeight int, background string) string 
 		return background
 	}
 
-	return lipgloss.Place(termWidth, termHeight,
-		lipgloss.Center, lipgloss.Center,
-		box,
-		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(styles.SurfaceDark)),
-	)
+	return overlay.DimmedOverlay(termWidth, termHeight, background, box, 0.5)
 }
 
 func (m Model) renderBox(termWidth int) string {
