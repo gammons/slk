@@ -395,11 +395,14 @@ func (m Model) MentionPickerView(width int) string {
 }
 
 func (m Model) View(width int, focused bool) string {
-	innerWidth := width - 5 // account for left border + left/right padding
+	// ComposeBox has BorderLeft(1) + Padding(1,1,1,1) = 3 chars overhead.
+	// lipgloss Width includes padding but excludes border.
+	// Total rendered = Width + border = (width-1) + 1 = width.
+	innerWidth := width - 3 // content area: width - border(1) - padding(2)
 
-	var style = styles.ComposeBox.Width(width - 2)
+	var style = styles.ComposeBox.Width(width - 1)
 	if focused {
-		style = styles.ComposeInsert.Width(width - 2)
+		style = styles.ComposeInsert.Width(width - 1)
 	}
 
 	// If empty and unfocused, render placeholder manually with correct background.
