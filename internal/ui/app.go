@@ -1671,7 +1671,12 @@ func (a *App) View() tea.View {
 	}
 
 	content := lipgloss.JoinHorizontal(lipgloss.Top, panels...)
-	status := a.statusbar.View(a.width)
+	statusWidth := a.width - railWidth
+	railSpacer := lipgloss.NewStyle().
+		Width(railWidth).
+		Background(styles.SurfaceDark).
+		Render("")
+	status := lipgloss.JoinHorizontal(lipgloss.Center, railSpacer, a.statusbar.View(statusWidth))
 
 	screen := lipgloss.JoinVertical(lipgloss.Left, content, status)
 
