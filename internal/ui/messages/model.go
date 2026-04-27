@@ -529,25 +529,7 @@ func placeAvatarBeside(avatar, content string) string {
 
 var thickLeftBorder = lipgloss.Border{Left: "▌"}
 
-// ClampLineWidths ensures every line in a multi-line string is exactly
-// targetWidth visual columns. Lines wider than targetWidth are truncated
-// (ANSI-aware); lines narrower are padded with spaces + background.
-func ClampLineWidths(s string, targetWidth int) string {
-	lines := strings.Split(s, "\n")
-	bg := BgANSI()
-	for i, line := range lines {
-		w := lipgloss.Width(line)
-		if w > targetWidth {
-			// Truncate using lipgloss -- it's ANSI-aware
-			lines[i] = lipgloss.NewStyle().Width(targetWidth).MaxWidth(targetWidth).Render(line)
-		} else if w < targetWidth {
-			// Pad with background-colored spaces
-			pad := strings.Repeat(" ", targetWidth-w)
-			lines[i] = line + bg + pad + "\x1b[m"
-		}
-	}
-	return strings.Join(lines, "\n")
-}
+
 
 func (m *Model) View(height, width int) string {
 	// Header
@@ -593,6 +575,7 @@ func (m *Model) View(height, width int) string {
 	// Check if the view-level cache (bordered content) can be reused
 	if !m.viewCacheValid || m.viewSelected != m.selected || m.viewWidth != width || m.viewHeight != msgAreaHeight {
 		// Pre-compute border styles for this frame (avoids NewStyle per message)
+		borderFill := lipgloss.NewStyle().Background(styles.Background)
 		borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Background).BorderBackground(styles.Background)
 		borderSelect := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Accent).BorderBackground(styles.Background)
 		spacerBg := lipgloss.NewStyle().Background(styles.Background)
@@ -607,13 +590,11 @@ func (m *Model) View(height, width int) string {
 			content := e.content
 			if e.msgIdx == m.selected {
 				startLine = currentLine
-				// Clamp every line to exact width before border, preventing
-				// emoji width miscounting from breaking the border
-				content = ClampLineWidths(content, width-1)
-				content = borderSelect.Render(content)
+				filled := borderFill.Width(width - 1).Render(content)
+				content = borderSelect.Render(filled)
 			} else if e.msgIdx >= 0 {
-				content = ClampLineWidths(content, width-1)
-				content = borderInvis.Render(content)
+				filled := borderFill.Width(width - 1).Render(content)
+				content = borderInvis.Render(filled)
 			}
 			h := lipgloss.Height(content)
 			if e.msgIdx == m.selected {
