@@ -182,9 +182,11 @@ func (m *Model) View(height, width int) string {
 			prefix = "# "
 		}
 
-		// Truncate name to fit sidebar width (account for cursor + prefix + padding)
+		// Truncate name to fit sidebar width.
+		// Layout: cursor(1) + prefix(2) + name + " "(1) + unreadDot(1) = 5 fixed chars
+		// Rendered with style.Width(width-2), so available = width - 2 - 5 = width - 7
 		name := item.Name
-		maxNameLen := width - 8 // account for cursor, prefix, padding, border
+		maxNameLen := width - 7
 		if maxNameLen < 5 {
 			maxNameLen = 5
 		}
@@ -285,5 +287,5 @@ func (m *Model) View(height, width int) string {
 }
 
 func (m Model) Width() int {
-	return 25
+	return 30
 }
