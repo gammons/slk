@@ -152,7 +152,7 @@ func (m Model) ViewOverlay(termWidth, termHeight int, background string) string 
 	return lipgloss.Place(termWidth, termHeight,
 		lipgloss.Center, lipgloss.Center,
 		box,
-		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(lipgloss.Color("#0F0F1A"))),
+		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(styles.SurfaceDark)),
 	)
 }
 

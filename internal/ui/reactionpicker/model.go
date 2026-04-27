@@ -209,7 +209,7 @@ func (m *Model) ViewOverlay(termWidth, termHeight int, background string) string
 	placed := lipgloss.Place(termWidth, termHeight,
 		lipgloss.Center, lipgloss.Center,
 		box,
-		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(lipgloss.Color("#0F0F1A"))),
+		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(styles.SurfaceDark)),
 	)
 
 	// Clamp to exactly termHeight lines to prevent terminal scrolling.
