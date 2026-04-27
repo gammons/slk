@@ -466,11 +466,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		}
 		// Hard-clamp each line to contentWidth as a safety net
 		// (lipgloss.Width may miscount some emoji/ANSI combinations)
-		// Hard-clip the entire reaction block to contentWidth.
-		// lipgloss.Width can miscount ANSI+emoji combinations, so
-		// MaxWidth provides a reliable hard limit.
-		reactionContent := strings.Join(reactionLines, "\n")
-		reactionLine = "\n" + lipgloss.NewStyle().MaxWidth(contentWidth).Render(reactionContent)
+		reactionLine = "\n" + strings.Join(reactionLines, "\n")
 	}
 
 	var editedMark string
@@ -569,7 +565,7 @@ func (m *Model) View(height, width int) string {
 	// Check if the view-level cache (bordered content) can be reused
 	if !m.viewCacheValid || m.viewSelected != m.selected || m.viewWidth != width || m.viewHeight != msgAreaHeight {
 		// Pre-compute border styles for this frame (avoids NewStyle per message)
-		borderFill := lipgloss.NewStyle().Background(styles.Background).MaxWidth(width - 1)
+		borderFill := lipgloss.NewStyle().Background(styles.Background)
 		borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Background).BorderBackground(styles.Background)
 		borderSelect := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Accent).BorderBackground(styles.Background)
 		spacerBg := lipgloss.NewStyle().Background(styles.Background)

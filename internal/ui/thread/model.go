@@ -360,7 +360,7 @@ func (m *Model) View(height, width int) string {
 	// Check if view-level cache (bordered content) can be reused
 	if !m.viewCacheValid || m.viewSelected != m.selected || m.viewWidth != width || m.viewHeight != replyAreaHeight {
 		// Pre-compute border styles for this frame (avoids NewStyle per reply)
-		borderFill := lipgloss.NewStyle().Background(styles.Background).MaxWidth(width - 1)
+		borderFill := lipgloss.NewStyle().Background(styles.Background)
 		borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Background).BorderBackground(styles.Background)
 		borderSelect := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Accent).BorderBackground(styles.Background)
 
@@ -468,8 +468,7 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 		if currentLine != "" {
 			reactionLines = append(reactionLines, currentLine)
 		}
-		reactionContent := strings.Join(reactionLines, "\n")
-		reactionLine = "\n" + lipgloss.NewStyle().MaxWidth(contentWidth).Render(reactionContent)
+		reactionLine = "\n" + strings.Join(reactionLines, "\n")
 	}
 
 	return line + "\n" + text + reactionLine
