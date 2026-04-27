@@ -95,6 +95,10 @@ type (
 	ChannelMarkedReadMsg struct {
 		ChannelID string
 	}
+	DMNameResolvedMsg struct {
+		ChannelID   string
+		DisplayName string
+	}
 	WorkspaceSwitchedMsg struct {
 		TeamID      string
 		TeamName    string
@@ -398,6 +402,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ChannelMarkedReadMsg:
 		a.sidebar.ClearUnread(msg.ChannelID)
+
+	case DMNameResolvedMsg:
+		items := a.sidebar.Items()
+		for i := range items {
+			if items[i].ID == msg.ChannelID {
+				items[i].Name = msg.DisplayName
+				break
+			}
+		}
+		a.sidebar.SetItems(items)
 
 	case WorkspaceSwitchedMsg:
 		a.CloseThread()

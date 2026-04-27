@@ -28,6 +28,12 @@ import (
 	emoji "github.com/kyokomi/emoji/v2"
 )
 
+// UnresolvedDM tracks a DM channel whose user name wasn't in the initial user list.
+type UnresolvedDM struct {
+	ChannelID string
+	UserID    string
+}
+
 // WorkspaceContext holds all state for a single connected workspace.
 type WorkspaceContext struct {
 	Client      *slackclient.Client
@@ -37,9 +43,10 @@ type WorkspaceContext struct {
 	LastReadMap map[string]string
 	Channels    []sidebar.ChannelItem
 	FinderItems []channelfinder.Item
-	TeamID      string
-	TeamName    string
-	UserID      string
+	TeamID        string
+	TeamName      string
+	UserID        string
+	UnresolvedDMs []UnresolvedDM
 }
 
 func main() {
@@ -398,6 +405,21 @@ func run() error {
 				UserNames:   wctx.UserNames,
 				UserID:      wctx.UserID,
 			})
+
+			// Resolve unknown DM user names in background
+			if len(wctx.UnresolvedDMs) > 0 {
+				go func() {
+					for _, dm := range wctx.UnresolvedDMs {
+						resolved := resolveUser(wctx.Client, dm.UserID, wctx.UserNames, db, avatarCache)
+						if resolved != dm.UserID {
+							p.Send(ui.DMNameResolvedMsg{
+								ChannelID:   dm.ChannelID,
+								DisplayName: resolved,
+							})
+						}
+					}
+				}()
+			}
 		}(token)
 	}
 
@@ -496,6 +518,10 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 				displayName = resolved
 			} else {
 				displayName = ch.User
+				wctx.UnresolvedDMs = append(wctx.UnresolvedDMs, UnresolvedDM{
+					ChannelID: ch.ID,
+					UserID:    ch.User,
+				})
 			}
 		}
 
