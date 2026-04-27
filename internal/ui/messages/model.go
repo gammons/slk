@@ -518,6 +518,28 @@ func placeAvatarBeside(avatar, content string) string {
 	return strings.Join(result, "\n")
 }
 
+// ClickAt handles a mouse click at the given y-coordinate (relative to message pane content top).
+// Selects the message at that position.
+func (m *Model) ClickAt(y int) {
+	absoluteY := y + m.vp.YOffset()
+
+	// Walk through cached view entries to find which message is at this line
+	currentLine := 0
+	for _, entry := range m.cache {
+		if entry.msgIdx < 0 {
+			// Date separator or "new messages" line — skip
+			currentLine += entry.height
+			continue
+		}
+		if absoluteY >= currentLine && absoluteY < currentLine+entry.height {
+			m.selected = entry.msgIdx
+			m.viewCacheValid = false // force re-render with new selection
+			return
+		}
+		currentLine += entry.height
+	}
+}
+
 var thickLeftBorder = lipgloss.Border{Left: "▌"}
 
 

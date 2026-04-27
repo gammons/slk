@@ -294,6 +294,30 @@ func (m *Model) UpdateReaction(messageTS, emojiName, userID string, remove bool)
 	}
 }
 
+// ClickAt handles a mouse click at the given y-coordinate (relative to thread reply area top).
+// Selects the reply at that position.
+func (m *Model) ClickAt(y int) {
+	if len(m.replies) == 0 || len(m.cache) == 0 {
+		return
+	}
+
+	absoluteY := y + m.vp.YOffset()
+
+	currentLine := 0
+	for i, cached := range m.cache {
+		h := lipgloss.Height(cached)
+		if h == 0 {
+			h = 1
+		}
+		if absoluteY >= currentLine && absoluteY < currentLine+h {
+			m.selected = i
+			m.viewCacheValid = false
+			return
+		}
+		currentLine += h
+	}
+}
+
 // View renders the thread panel content without a border.
 // The parent App is responsible for adding the border.
 func (m *Model) View(height, width int) string {

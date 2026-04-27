@@ -297,6 +297,51 @@ func (m *Model) View(height, width int) string {
 		Render(m.vp.View())
 }
 
+// ClickAt handles a mouse click at the given y-coordinate (relative to sidebar content top).
+// Selects the item at that position. Returns the item and true if a selectable item was clicked.
+func (m *Model) ClickAt(y int) (ChannelItem, bool) {
+	absoluteY := y + m.vp.YOffset()
+
+	// Rebuild the section structure (same logic as View) to map y to filterIdx.
+	// Each channel item = 1 line, each section header = 1 line, blank line between sections.
+	sectionOrder := []string{}
+	sectionMap := map[string][]int{} // section name -> list of filter indices
+
+	for fi, idx := range m.filtered {
+		item := m.items[idx]
+		sectionName := item.Section
+		if sectionName == "" {
+			if item.Type == "dm" || item.Type == "group_dm" {
+				sectionName = "Direct Messages"
+			} else {
+				sectionName = "Channels"
+			}
+		}
+		if _, ok := sectionMap[sectionName]; !ok {
+			sectionOrder = append(sectionOrder, sectionName)
+		}
+		sectionMap[sectionName] = append(sectionMap[sectionName], fi)
+	}
+
+	currentLine := 0
+	for i, name := range sectionOrder {
+		if i > 0 {
+			currentLine++ // blank line between sections
+		}
+		currentLine++ // section header line
+
+		for _, fi := range sectionMap[name] {
+			if currentLine == absoluteY {
+				m.selected = fi
+				idx := m.filtered[fi]
+				return m.items[idx], true
+			}
+			currentLine++
+		}
+	}
+	return ChannelItem{}, false
+}
+
 func (m Model) Width() int {
 	return 30
 }

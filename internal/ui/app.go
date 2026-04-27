@@ -195,6 +195,12 @@ type App struct {
 	height         int
 	keys           KeyMap
 
+	// Cached layout widths for mouse hit-testing
+	layoutRailWidth    int
+	layoutSidebarEnd   int // railWidth + sidebarWidth + sidebarBorder
+	layoutMsgEnd       int // layoutSidebarEnd + msgWidth + msgBorder
+	layoutThreadEnd    int // layoutMsgEnd + threadWidth + threadBorder
+
 	// Current context
 	activeChannelID string
 
@@ -303,6 +309,46 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := a.handleKey(msg)
 		if cmd != nil {
 			cmds = append(cmds, cmd)
+		}
+
+	case tea.MouseClickMsg:
+		if a.loading {
+			break
+		}
+		if msg.Button != tea.MouseLeft {
+			break
+		}
+		x := msg.X
+		statusHeight := 1
+		if msg.Y >= a.height-statusHeight {
+			break // click on status bar, ignore
+		}
+
+		// Determine which panel was clicked
+		if x < a.layoutRailWidth {
+			// Workspace rail — ignore for now
+		} else if a.sidebarVisible && x < a.layoutSidebarEnd {
+			a.focusedPanel = PanelSidebar
+			sidebarY := msg.Y - 1 // account for top border
+			if sidebarY >= 0 {
+				if item, ok := a.sidebar.ClickAt(sidebarY); ok {
+					return a, func() tea.Msg {
+						return ChannelSelectedMsg{ID: item.ID, Name: item.Name}
+					}
+				}
+			}
+		} else if x < a.layoutMsgEnd {
+			a.focusedPanel = PanelMessages
+			msgY := msg.Y - 1 // account for top border
+			if msgY >= 0 {
+				a.messagepane.ClickAt(msgY)
+			}
+		} else if a.threadVisible && x < a.layoutThreadEnd {
+			a.focusedPanel = PanelThread
+			threadY := msg.Y - 1
+			if threadY >= 0 {
+				a.threadPanel.ClickAt(threadY)
+			}
 		}
 
 	case ChannelSelectedMsg:
@@ -1597,6 +1643,16 @@ func (a *App) View() tea.View {
 		msgWidth = 10
 	}
 
+	// Store layout widths for mouse hit-testing in Update()
+	a.layoutRailWidth = railWidth
+	a.layoutSidebarEnd = railWidth + sidebarWidth + sidebarBorder
+	a.layoutMsgEnd = a.layoutSidebarEnd + msgWidth + msgBorder
+	if a.threadVisible && threadWidth > 0 {
+		a.layoutThreadEnd = a.layoutMsgEnd + threadWidth + threadBorder
+	} else {
+		a.layoutThreadEnd = a.layoutMsgEnd
+	}
+
 	// Helper to force a panel to an exact width and height.
 	// Uses an explicit width parameter instead of lipgloss.Width(s)
 	// to avoid ANSI miscounting in complex rendered content.
@@ -1734,5 +1790,6 @@ func (a *App) View() tea.View {
 		Render(screen)
 	v := tea.NewView(finalScreen)
 	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
