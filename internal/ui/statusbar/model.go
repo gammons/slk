@@ -92,13 +92,13 @@ func (m Model) View(width int) string {
 	switch m.connState {
 	case StateConnected:
 		rightParts = append(rightParts,
-			lipgloss.NewStyle().Foreground(styles.Accent).Background(styles.SurfaceDark).Render("● Connected"))
+			lipgloss.NewStyle().Foreground(styles.Accent).Render("● Connected"))
 	case StateConnecting:
 		rightParts = append(rightParts,
-			lipgloss.NewStyle().Foreground(styles.Warning).Background(styles.SurfaceDark).Render("● Connecting"))
+			lipgloss.NewStyle().Foreground(styles.Warning).Render("● Connecting"))
 	case StateDisconnected:
 		rightParts = append(rightParts,
-			lipgloss.NewStyle().Foreground(styles.Error).Background(styles.SurfaceDark).Render("● Disconnected"))
+			lipgloss.NewStyle().Foreground(styles.Error).Render("● Disconnected"))
 	}
 
 	left := lipgloss.JoinHorizontal(lipgloss.Center, modeLabel, channelInfo, wsInfo)

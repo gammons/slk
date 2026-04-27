@@ -356,7 +356,6 @@ func (m *Model) View(height, width int) string {
 func applyLeftBorder(content string, width int) string {
 	filled := lipgloss.NewStyle().
 		Width(width - 1).
-		Background(styles.Background).
 		Render(content)
 	return lipgloss.NewStyle().
 		BorderStyle(thickLeftBorder).
@@ -369,7 +368,6 @@ func applyLeftBorder(content string, width int) string {
 func applySelection(content string, width int) string {
 	filled := lipgloss.NewStyle().
 		Width(width - 1).
-		Background(styles.Background).
 		Render(content)
 	return lipgloss.NewStyle().
 		BorderStyle(thickLeftBorder).

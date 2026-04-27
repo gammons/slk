@@ -154,13 +154,13 @@ func (m *Model) View(height, width int) string {
 		// Selection indicator -- green left border for selected, space for others
 		cursor := " "
 		if isSelected {
-			cursor = lipgloss.NewStyle().Foreground(styles.Accent).Background(styles.Background).Render("▌")
+			cursor = lipgloss.NewStyle().Foreground(styles.Accent).Render("▌")
 		}
 
 		// Unread dot indicator
 		unreadDot := " "
 		if item.UnreadCount > 0 {
-			unreadDot = lipgloss.NewStyle().Foreground(styles.Primary).Background(styles.Background).Render("●")
+			unreadDot = lipgloss.NewStyle().Foreground(styles.Primary).Render("●")
 		}
 
 		var prefix string
@@ -174,7 +174,7 @@ func (m *Model) View(height, width int) string {
 		case "group_dm":
 			prefix = styles.PresenceAway.Render("● ")
 		case "private":
-			prefix = lipgloss.NewStyle().Foreground(styles.Warning).Background(styles.Background).Render("◆ ")
+			prefix = lipgloss.NewStyle().Foreground(styles.Warning).Render("◆ ")
 		default:
 			prefix = "# "
 		}
@@ -273,7 +273,6 @@ func (m *Model) View(height, width int) string {
 		Width(width).
 		Height(height).
 		MaxHeight(height).
-		Background(styles.Background).
 		Render(m.vp.View())
 }
 

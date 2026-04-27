@@ -1271,7 +1271,7 @@ func (a *App) renderLoadingOverlay(width, height int) string {
 	return lipgloss.Place(width, height,
 		lipgloss.Center, lipgloss.Center,
 		box,
-		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(lipgloss.Color("#0F0F1A"))),
+		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(styles.SurfaceDark)),
 	)
 }
 
@@ -1572,7 +1572,7 @@ func (a *App) View() tea.View {
 
 	// Helper to force a panel to an exact height
 	exactHeight := func(s string, h int) string {
-		return lipgloss.NewStyle().Width(lipgloss.Width(s)).Height(h).MaxHeight(h).Background(styles.Background).Render(s)
+		return lipgloss.NewStyle().Width(lipgloss.Width(s)).Height(h).MaxHeight(h).Render(s)
 	}
 
 	// Render workspace rail

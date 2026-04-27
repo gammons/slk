@@ -331,14 +331,9 @@ func (m *Model) buildCache(width int) {
 		if msgDate != "" && msgDate != lastDate {
 			label := formatDateSeparator(msgDate)
 			sepStr := "── " + label + " ──"
-			padTotal := width - lipgloss.Width(sepStr)
-			if padTotal < 0 {
-				padTotal = 0
-			}
-			padLeft := padTotal / 2
-			padRight := padTotal - padLeft
-			sep := lipgloss.NewStyle().Background(styles.Background).Foreground(styles.TextMuted).Bold(true).
-				Render(strings.Repeat(" ", padLeft) + sepStr + strings.Repeat(" ", padRight))
+			sep := lipgloss.NewStyle().Foreground(styles.TextMuted).Bold(true).
+				Width(width).Align(lipgloss.Center).
+				Render(sepStr)
 			m.cache = append(m.cache, viewEntry{
 				content: sep,
 				height:  lipgloss.Height(sep),
@@ -350,14 +345,9 @@ func (m *Model) buildCache(width int) {
 		// New message landmark: insert before the first unread message
 		if m.lastReadTS != "" && !newMsgLandmarkInserted && msg.TS > m.lastReadTS {
 			newStr := "── new ──"
-			newPadTotal := width - lipgloss.Width(newStr)
-			if newPadTotal < 0 {
-				newPadTotal = 0
-			}
-			newPadLeft := newPadTotal / 2
-			newPadRight := newPadTotal - newPadLeft
-			label := lipgloss.NewStyle().Background(styles.Background).Foreground(styles.Error).Bold(true).
-				Render(strings.Repeat(" ", newPadLeft) + newStr + strings.Repeat(" ", newPadRight))
+			label := lipgloss.NewStyle().Foreground(styles.Error).Bold(true).
+				Width(width).Align(lipgloss.Center).
+				Render(newStr)
 			m.cache = append(m.cache, viewEntry{
 				content: label,
 				height:  lipgloss.Height(label),
@@ -460,10 +450,10 @@ func placeAvatarBeside(avatar, content string) string {
 		var left, right string
 
 		if i < len(avatarLines) {
-			left = avatarLines[i] + lipgloss.NewStyle().Background(styles.Background).Render(" ")
+			left = avatarLines[i] + " "
 		} else {
 			// Empty space where avatar was (maintain alignment)
-			left = lipgloss.NewStyle().Background(styles.Background).Width(avatarWidth).Render("")
+			left = lipgloss.NewStyle().Width(avatarWidth).Render("")
 		}
 
 		if i < len(contentLines) {
@@ -480,11 +470,9 @@ var thickLeftBorder = lipgloss.Border{Left: "▌"}
 
 // applyLeftBorder adds an invisible left border to keep alignment consistent.
 func applyLeftBorder(content string, width int) string {
-	// Fill content to full width with background first,
-	// then apply the border on top.
+	// Fill content to full width first, then apply the border on top.
 	filled := lipgloss.NewStyle().
 		Width(width - 1).
-		Background(styles.Background).
 		Render(content)
 	return lipgloss.NewStyle().
 		BorderStyle(thickLeftBorder).
@@ -497,7 +485,6 @@ func applyLeftBorder(content string, width int) string {
 func applySelection(content string, width int) string {
 	filled := lipgloss.NewStyle().
 		Width(width - 1).
-		Background(styles.Background).
 		Render(content)
 	return lipgloss.NewStyle().
 		BorderStyle(thickLeftBorder).
@@ -506,11 +493,11 @@ func applySelection(content string, width int) string {
 		Render(filled)
 }
 
-// spacer returns a full-width empty line with the theme background.
+// spacer returns a full-width empty line.
 func spacer(width int) string {
 	return lipgloss.NewStyle().
-		Background(styles.Background).
-		Render(strings.Repeat(" ", width))
+		Width(width).
+		Render("")
 }
 
 func (m *Model) View(height, width int) string {
@@ -523,7 +510,7 @@ func (m *Model) View(height, width int) string {
 		header += "\n" + styles.Timestamp.Render(wordwrap.String(m.channelTopic, width))
 	}
 
-	separator := lipgloss.NewStyle().Width(width).Foreground(styles.Border).Background(styles.Background).Render(strings.Repeat("-", width))
+	separator := lipgloss.NewStyle().Width(width).Foreground(styles.Border).Render(strings.Repeat("-", width))
 
 	chrome := header + "\n" + separator
 	chromeHeight := lipgloss.Height(chrome)
@@ -542,7 +529,6 @@ func (m *Model) View(height, width int) string {
 			Width(width).
 			Height(msgAreaHeight).
 			Foreground(styles.TextMuted).
-			Background(styles.Background).
 			Render(text)
 		return header + "\n" + separator + "\n" + empty
 	}
@@ -601,11 +587,11 @@ func (m *Model) View(height, width int) string {
 	// Scroll indicators
 	var scrollUp, scrollDown string
 	if m.loading {
-		scrollUp = lipgloss.NewStyle().Foreground(styles.TextMuted).Background(styles.Background).Render("  Loading older messages...")
+		scrollUp = lipgloss.NewStyle().Foreground(styles.TextMuted).Render("  Loading older messages...")
 	}
 
 	if m.vp.YOffset()+m.vp.Height() < m.vp.TotalLineCount() {
-		scrollDown = lipgloss.NewStyle().Foreground(styles.TextMuted).Background(styles.Background).Render("  -- more below --")
+		scrollDown = lipgloss.NewStyle().Foreground(styles.TextMuted).Render("  -- more below --")
 	}
 
 	vpView := m.vp.View()
@@ -620,7 +606,6 @@ func (m *Model) View(height, width int) string {
 		Width(width).
 		Height(msgAreaHeight).
 		MaxHeight(msgAreaHeight).
-		Background(styles.Background).
 		Render(vpView)
 }
 
