@@ -38,7 +38,7 @@ func New(channelName string) Model {
 	ta.SetWidth(40)
 
 	// Override textarea styles to use our dark background consistently
-	bg := lipgloss.NewStyle().Background(styles.SurfaceDark)
+	bg := lipgloss.NewStyle().Background(styles.SurfaceDark).Foreground(styles.TextPrimary)
 	s := ta.Styles()
 	s.Focused.Base = bg
 	s.Focused.Text = bg
@@ -63,7 +63,7 @@ func New(channelName string) Model {
 // RefreshStyles re-applies textarea styles from current theme colors.
 // Call after theme changes.
 func (m *Model) RefreshStyles() {
-	bg := lipgloss.NewStyle().Background(styles.SurfaceDark)
+	bg := lipgloss.NewStyle().Background(styles.SurfaceDark).Foreground(styles.TextPrimary)
 	s := m.input.Styles()
 	s.Focused.Base = bg
 	s.Focused.Text = bg
@@ -418,6 +418,7 @@ func (m Model) View(width int, focused bool) string {
 	// not the full line width. This wrapper ensures consistent background.
 	content := lipgloss.NewStyle().
 		Background(styles.SurfaceDark).
+		Foreground(styles.TextPrimary).
 		Width(innerWidth).
 		Render(m.input.View())
 	return style.Render(content)

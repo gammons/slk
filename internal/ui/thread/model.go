@@ -301,6 +301,7 @@ func (m *Model) View(height, width int) string {
 		return lipgloss.NewStyle().
 			Width(width).
 			Height(height).
+			Background(styles.Background).
 			Foreground(styles.TextMuted).
 			Render("No thread selected")
 	}
@@ -311,12 +312,15 @@ func (m *Model) View(height, width int) string {
 		replyLabel = "reply"
 	}
 	header := lipgloss.NewStyle().
+		Width(width).
+		Background(styles.Background).
 		Foreground(styles.TextPrimary).
 		Bold(true).
 		Render(fmt.Sprintf("Thread  %d %s", len(m.replies), replyLabel))
 
 	separator := lipgloss.NewStyle().
 		Width(width).
+		Background(styles.Background).
 		Foreground(styles.Border).
 		Render(strings.Repeat("-", width))
 
@@ -335,10 +339,11 @@ func (m *Model) View(height, width int) string {
 		empty := lipgloss.NewStyle().
 			Width(width).
 			Height(replyAreaHeight).
+			Background(styles.Background).
 			Foreground(styles.TextMuted).
 			Render("No replies yet")
 		result := chrome + "\n" + empty
-		return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(result)
+		return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Background(styles.Background).Render(result)
 	}
 
 	// Rebuild render cache if replies or width changed
@@ -406,7 +411,7 @@ func (m *Model) View(height, width int) string {
 	}
 
 	result := chrome + "\n" + m.vp.View()
-	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(result)
+	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Background(styles.Background).Render(result)
 }
 
 // renderThreadMessage renders a single message for the thread panel.
