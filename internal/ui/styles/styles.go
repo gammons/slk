@@ -26,11 +26,13 @@ var (
 	FocusedBorder = lipgloss.NewStyle().
 			BorderStyle(lipgloss.ThickBorder()).
 			BorderForeground(Primary).
+			BorderBackground(Background).
 			Background(Background)
 
 	UnfocusedBorder = lipgloss.NewStyle().
 			BorderStyle(lipgloss.RoundedBorder()).
 			BorderForeground(Border).
+			BorderBackground(Background).
 			Background(Background)
 
 	// Workspace rail
@@ -129,6 +131,7 @@ var (
 			BorderStyle(thickLeftBorder).
 			BorderLeft(true).
 			BorderForeground(Border).
+			BorderBackground(SurfaceDark).
 			Background(SurfaceDark).
 			MarginTop(1).
 			Padding(1, 1, 1, 1)
@@ -137,6 +140,7 @@ var (
 			BorderStyle(thickLeftBorder).
 			BorderLeft(true).
 			BorderForeground(Primary).
+			BorderBackground(SurfaceDark).
 			Background(SurfaceDark).
 			MarginTop(1).
 			Padding(1, 1, 1, 1)
@@ -145,6 +149,7 @@ var (
 			BorderStyle(thickLeftBorder).
 			BorderLeft(true).
 			BorderForeground(Primary).
+			BorderBackground(SurfaceDark).
 			Background(SurfaceDark).
 			MarginTop(1).
 			Padding(1, 1, 1, 1)
@@ -249,9 +254,9 @@ func Apply(themeName string, overrides config.Theme) {
 
 func buildStyles() {
 	FocusedBorder = lipgloss.NewStyle().
-		BorderStyle(lipgloss.ThickBorder()).BorderForeground(Primary).Background(Background)
+		BorderStyle(lipgloss.ThickBorder()).BorderForeground(Primary).BorderBackground(Background).Background(Background)
 	UnfocusedBorder = lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).BorderForeground(Border).Background(Background)
+		BorderStyle(lipgloss.RoundedBorder()).BorderForeground(Border).BorderBackground(Background).Background(Background)
 	WorkspaceActive = lipgloss.NewStyle().
 		Background(Primary).Foreground(lipgloss.Color("#FFFFFF")).
 		Bold(true).Padding(0, 1).Align(lipgloss.Center)
@@ -285,13 +290,13 @@ func buildStyles() {
 	StatusModeCommand = lipgloss.NewStyle().
 		Background(Warning).Foreground(lipgloss.Color("#000000")).Bold(true).Padding(0, 1)
 	ComposeBox = lipgloss.NewStyle().
-		BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(Border).
+		BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(Border).BorderBackground(SurfaceDark).
 		Background(SurfaceDark).MarginTop(1).Padding(1, 1, 1, 1)
 	ComposeFocused = lipgloss.NewStyle().
-		BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(Primary).
+		BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(Primary).BorderBackground(SurfaceDark).
 		Background(SurfaceDark).MarginTop(1).Padding(1, 1, 1, 1)
 	ComposeInsert = lipgloss.NewStyle().
-		BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(Primary).
+		BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(Primary).BorderBackground(SurfaceDark).
 		Background(SurfaceDark).MarginTop(1).Padding(1, 1, 1, 1)
 	PresenceOnline = lipgloss.NewStyle().Background(Background).Foreground(Accent)
 	PresenceAway = lipgloss.NewStyle().Background(Background).Foreground(TextMuted)

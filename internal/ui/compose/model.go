@@ -60,6 +60,26 @@ func New(channelName string) Model {
 	}
 }
 
+// RefreshStyles re-applies textarea styles from current theme colors.
+// Call after theme changes.
+func (m *Model) RefreshStyles() {
+	bg := lipgloss.NewStyle().Background(styles.SurfaceDark)
+	s := m.input.Styles()
+	s.Focused.Base = bg
+	s.Focused.Text = bg
+	s.Focused.CursorLine = bg
+	s.Focused.EndOfBuffer = bg
+	s.Focused.Prompt = bg
+	s.Blurred.Base = bg
+	s.Blurred.Text = bg
+	s.Blurred.CursorLine = bg
+	s.Blurred.EndOfBuffer = bg
+	s.Blurred.Prompt = bg
+	s.Focused.Placeholder = bg.Foreground(styles.TextMuted)
+	s.Blurred.Placeholder = bg.Foreground(styles.TextMuted)
+	m.input.SetStyles(s)
+}
+
 func (m *Model) SetChannel(name string) {
 	m.channelName = name
 	m.input.Placeholder = "Message #" + name + "... (i to insert)"

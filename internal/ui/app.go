@@ -807,6 +807,9 @@ func (a *App) handleThemeSwitcherMode(msg tea.KeyMsg) tea.Cmd {
 		// Invalidate render caches so they rebuild with new theme colors
 		a.messagepane.InvalidateCache()
 		a.threadPanel.InvalidateCache()
+		// Refresh compose textarea styles for new theme
+		a.compose.RefreshStyles()
+		a.threadCompose.RefreshStyles()
 		// Save selection
 		if a.themeSaveFn != nil {
 			go a.themeSaveFn(result.Name)
