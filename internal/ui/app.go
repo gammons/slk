@@ -332,6 +332,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Message.ThreadTS == "" || msg.Message.ThreadTS == msg.Message.TS {
 				a.messagepane.AppendMessage(msg.Message)
 			}
+			// Update reply count on parent message when a thread reply arrives
+			if msg.Message.ThreadTS != "" && msg.Message.ThreadTS != msg.Message.TS {
+				a.messagepane.IncrementReplyCount(msg.Message.ThreadTS)
+			}
 		}
 
 	case SendMessageMsg:

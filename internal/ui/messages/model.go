@@ -231,6 +231,17 @@ func (m *Model) ClampReactionNav() {
 	m.cache = nil
 }
 
+// IncrementReplyCount finds a message by TS and increments its ReplyCount.
+func (m *Model) IncrementReplyCount(parentTS string) {
+	for i, msg := range m.messages {
+		if msg.TS == parentTS {
+			m.messages[i].ReplyCount++
+			m.cache = nil
+			return
+		}
+	}
+}
+
 func (m *Model) UpdateReaction(messageTS, emojiName, userID string, remove bool) {
 	for i, msg := range m.messages {
 		if msg.TS == messageTS {
