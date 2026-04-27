@@ -74,6 +74,7 @@ Alternatively, just run `./bin/slk` -- it will launch onboarding automatically i
 | `Esc` | Insert/Command | Return to normal mode |
 | `Ctrl+b` | Any | Toggle sidebar |
 | `gg` / `G` | Normal | Jump to top/bottom |
+| `Ctrl+y` | Normal | Switch theme |
 | `Ctrl+c` | Any | Quit |
 
 ### Configuration
@@ -112,7 +113,36 @@ order = 1
 [sections.Engineering]
 channels = ["eng-*", "deploys", "bugs"]
 order = 2
+
+# Custom theme colors (override active theme)
+[theme]
+primary = "#4A9EFF"
+accent = "#50C878"
+background = "#1A1A2E"
+text = "#E0E0E0"
 ```
+
+### Custom Themes
+
+Place `.toml` theme files in `~/.config/slk/themes/`:
+
+```toml
+name = "My Theme"
+
+[colors]
+primary = "#BD93F9"
+accent = "#50FA7B"
+warning = "#FFB86C"
+error = "#FF5555"
+background = "#282A36"
+surface = "#343746"
+surface_dark = "#21222C"
+text = "#F8F8F2"
+text_muted = "#6272A4"
+border = "#44475A"
+```
+
+Built-in themes: Dark, Light, Dracula, Solarized Dark, Solarized Light, Gruvbox Dark, Gruvbox Light, Nord, Tokyo Night, Catppuccin Mocha, One Dark, Rosé Pine.
 
 ### Data Storage
 

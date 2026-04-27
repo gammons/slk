@@ -36,6 +36,7 @@ Last updated: 2026-04-26
 - [x] Ctrl+t/Ctrl+p fuzzy channel finder overlay with blue input border
 - [x] Green left-border selection indicator (messages, threads, channels, channel finder)
 - [x] Workspace rail -- borderless dark background strip
+- [x] Customizable themes (12 built-in themes, custom theme files, Ctrl+y theme switcher)
 
 ### Messages
 - [x] Fetch and display channel messages
@@ -105,14 +106,11 @@ Last updated: 2026-04-26
 - [ ] User presence tracking (online/away/DND updates)
 - [ ] Inline image rendering (Kitty graphics > Sixel > fallback)
 - [ ] OSC 52 clipboard integration (yank message text)
-- [ ] Theme support (light mode, custom colors)
-
 ### Low Priority
 
 - [ ] Quiet hours for notifications
 - [ ] Custom keybinding overrides in config
 - [ ] Message link previews / unfurling
-- [ ] Custom themes (light mode, custom colors)
 
 ## Architecture Overview
 
