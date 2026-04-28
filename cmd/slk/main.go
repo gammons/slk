@@ -413,6 +413,10 @@ func run() error {
 			},
 		)
 
+		app.SetPermalinkFetcher(func(ctx context.Context, channelID, ts string) (string, error) {
+			return client.GetPermalink(ctx, channelID, ts)
+		})
+
 		app.SetCurrentUserID(client.UserID())
 
 		app.SetTypingSender(func(channelID string) {
