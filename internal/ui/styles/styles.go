@@ -22,6 +22,13 @@ var (
 	TextMuted   color.Color = lipgloss.Color("#888888")
 	Border      color.Color = lipgloss.Color("#333333")
 
+	// Sidebar/rail colors (default to Background/Text/TextMuted/SurfaceDark
+	// for backwards compatibility with themes that don't set them).
+	SidebarBackground color.Color = lipgloss.Color("#1A1A2E")
+	SidebarText       color.Color = lipgloss.Color("#E0E0E0")
+	SidebarTextMuted  color.Color = lipgloss.Color("#888888")
+	RailBackground    color.Color = lipgloss.Color("#0F0F23")
+
 	// Panel styles
 	FocusedBorder = lipgloss.NewStyle().
 			BorderStyle(lipgloss.ThickBorder()).
@@ -154,9 +161,13 @@ var (
 			Foreground(TextPrimary).
 			Padding(1, 1, 1, 1)
 
-	// Presence indicators
-	PresenceOnline = lipgloss.NewStyle().Background(Background).Foreground(Accent)
-	PresenceAway   = lipgloss.NewStyle().Background(Background).Foreground(TextMuted)
+	// Presence indicators. Foreground only — the background is inherited
+	// from the surrounding context (sidebar row, workspace tile, etc.) so
+	// the same style works on both the sidebar (SidebarBackground) and the
+	// workspace rail (RailBackground) without painting a contrasting square
+	// around the dot when those colors differ from the message-pane bg.
+	PresenceOnline = lipgloss.NewStyle().Foreground(Accent)
+	PresenceAway   = lipgloss.NewStyle().Foreground(TextMuted)
 
 	// Reaction pill styles
 	ReactionPillOwn = lipgloss.NewStyle().
@@ -249,6 +260,31 @@ func Apply(themeName string, overrides config.Theme) {
 		Border = lipgloss.Color(overrides.Border)
 	}
 
+	// Sidebar/rail colors fall back to their message-pane equivalents when
+	// unset on the theme, so existing themes render exactly as before. We
+	// compute these AFTER overrides so a user override of Background also
+	// updates SidebarBackground (when not explicitly set on the theme).
+	if colors.SidebarBackground != "" {
+		SidebarBackground = lipgloss.Color(colors.SidebarBackground)
+	} else {
+		SidebarBackground = Background
+	}
+	if colors.SidebarText != "" {
+		SidebarText = lipgloss.Color(colors.SidebarText)
+	} else {
+		SidebarText = TextPrimary
+	}
+	if colors.SidebarTextMuted != "" {
+		SidebarTextMuted = lipgloss.Color(colors.SidebarTextMuted)
+	} else {
+		SidebarTextMuted = TextMuted
+	}
+	if colors.RailBackground != "" {
+		RailBackground = lipgloss.Color(colors.RailBackground)
+	} else {
+		RailBackground = SurfaceDark
+	}
+
 	buildStyles()
 }
 
@@ -261,18 +297,18 @@ func buildStyles() {
 		Background(Primary).Foreground(lipgloss.Color("#FFFFFF")).
 		Bold(true).Padding(0, 1).Align(lipgloss.Center)
 	WorkspaceInactive = lipgloss.NewStyle().
-		Background(Surface).Foreground(TextPrimary).
+		Background(RailBackground).Foreground(SidebarText).
 		Padding(0, 1).Align(lipgloss.Center)
 	ChannelSelected = lipgloss.NewStyle().
-		Background(Background).Foreground(TextPrimary).Bold(true).Padding(0, 1)
+		Background(SidebarBackground).Foreground(SidebarText).Bold(true).Padding(0, 1)
 	ChannelNormal = lipgloss.NewStyle().
-		Background(Background).Foreground(TextPrimary).Padding(0, 1)
+		Background(SidebarBackground).Foreground(SidebarText).Padding(0, 1)
 	ChannelUnread = lipgloss.NewStyle().
-		Background(Background).Foreground(TextPrimary).Bold(true).Padding(0, 1)
+		Background(SidebarBackground).Foreground(SidebarText).Bold(true).Padding(0, 1)
 	UnreadBadge = lipgloss.NewStyle().
 		Background(Error).Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1)
 	SectionHeader = lipgloss.NewStyle().
-		Background(Background).Foreground(TextMuted).Bold(true).Padding(0, 1)
+		Background(SidebarBackground).Foreground(SidebarTextMuted).Bold(true).Padding(0, 1)
 	Username = lipgloss.NewStyle().
 		Background(Background).Foreground(Primary).Bold(true)
 	Timestamp = lipgloss.NewStyle().
@@ -298,8 +334,8 @@ func buildStyles() {
 	ComposeInsert = lipgloss.NewStyle().
 		BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(Primary).BorderBackground(SurfaceDark).
 		Background(SurfaceDark).Foreground(TextPrimary).Padding(1, 1, 1, 1)
-	PresenceOnline = lipgloss.NewStyle().Background(Background).Foreground(Accent)
-	PresenceAway = lipgloss.NewStyle().Background(Background).Foreground(TextMuted)
+	PresenceOnline = lipgloss.NewStyle().Foreground(Accent)
+	PresenceAway = lipgloss.NewStyle().Foreground(TextMuted)
 	ReactionPillOwn = lipgloss.NewStyle().
 		Background(Surface).Foreground(Accent).Padding(0, 1)
 	ReactionPillOther = lipgloss.NewStyle().

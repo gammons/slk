@@ -680,13 +680,21 @@ func (m *Model) View(height, width int) string {
 	// name / topic change. This avoids per-keypress strings.Repeat + lipgloss
 	// renders that don't depend on the selection.
 	if !m.chromeCacheValid || m.chromeWidth != width || m.chromeChannel != m.channelName || m.chromeTopic != m.channelTopic {
-		header := styles.ChannelUnread.
+		// Channel title sits in the message pane, so it uses the message-pane
+		// background (not the sidebar's). Bold + TextPrimary on Background
+		// matches the surrounding messages, and the separator below acts as
+		// a bottom border between the title and the message list.
+		headerStyle := lipgloss.NewStyle().
 			Width(width).
-			Render(fmt.Sprintf("# %s", m.channelName))
+			Background(styles.Background).
+			Foreground(styles.TextPrimary).
+			Bold(true).
+			Padding(0, 1)
+		header := headerStyle.Render(fmt.Sprintf("# %s", m.channelName))
 		if m.channelTopic != "" {
 			header += "\n" + styles.Timestamp.Render(WordWrap(m.channelTopic, width))
 		}
-		separator := lipgloss.NewStyle().Width(width).Foreground(styles.Border).Background(styles.Background).Render(strings.Repeat("-", width))
+		separator := lipgloss.NewStyle().Width(width).Foreground(styles.Border).Background(styles.Background).Render(strings.Repeat("─", width))
 		m.chromeCache = header + "\n" + separator
 		m.chromeHeight = lipgloss.Height(m.chromeCache)
 		m.chromeWidth = width

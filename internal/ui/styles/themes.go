@@ -9,18 +9,27 @@ import (
 	toml "github.com/pelletier/go-toml/v2"
 )
 
-// ThemeColors holds the 10 semantic colors for a theme.
+// ThemeColors holds the semantic colors for a theme.
+//
+// The four "Sidebar*" / "RailBackground" colors are optional; when empty
+// they fall back to a sensible default in Apply (see styles.go), so existing
+// themes don't need to specify them. They allow themes like "Slack Default"
+// to have a dark sidebar/rail combined with a light message pane.
 type ThemeColors struct {
-	Primary     string `toml:"primary"`
-	Accent      string `toml:"accent"`
-	Warning     string `toml:"warning"`
-	Error       string `toml:"error"`
-	Background  string `toml:"background"`
-	Surface     string `toml:"surface"`
-	SurfaceDark string `toml:"surface_dark"`
-	Text        string `toml:"text"`
-	TextMuted   string `toml:"text_muted"`
-	Border      string `toml:"border"`
+	Primary          string `toml:"primary"`
+	Accent           string `toml:"accent"`
+	Warning          string `toml:"warning"`
+	Error            string `toml:"error"`
+	Background       string `toml:"background"`
+	Surface          string `toml:"surface"`
+	SurfaceDark      string `toml:"surface_dark"`
+	Text             string `toml:"text"`
+	TextMuted        string `toml:"text_muted"`
+	Border           string `toml:"border"`
+	SidebarBackground string `toml:"sidebar_background"`
+	SidebarText      string `toml:"sidebar_text"`
+	SidebarTextMuted string `toml:"sidebar_text_muted"`
+	RailBackground   string `toml:"rail_background"`
 }
 
 // builtinThemes maps lowercase theme names to their display name and colors.
@@ -87,6 +96,56 @@ var builtinThemes = map[string]struct {
 		Primary: "#C4A7E7", Accent: "#9CCFD8", Warning: "#F6C177", Error: "#EB6F92",
 		Background: "#191724", Surface: "#1F1D2E", SurfaceDark: "#16141F",
 		Text: "#E0DEF4", TextMuted: "#6E6A86", Border: "#26233A",
+	}},
+	"rosé pine moon": {"Rosé Pine Moon", ThemeColors{
+		Primary: "#C4A7E7", Accent: "#9CCFD8", Warning: "#F6C177", Error: "#EB6F92",
+		Background: "#232136", Surface: "#2A273F", SurfaceDark: "#1A1825",
+		Text: "#E0DEF4", TextMuted: "#6E6A86", Border: "#393552",
+	}},
+	"slack default": {"Slack Default", ThemeColors{
+		// Slack's iconic look: white message pane with dark sidebar and a
+		// slightly darker workspace rail. Slack-blue links, Slack-green
+		// accent. Sidebar/rail colors come from a real Slack screenshot.
+		Primary: "#1264A3", Accent: "#007A5A", Warning: "#ECB22E", Error: "#E01E5A",
+		Background: "#FFFFFF", Surface: "#F8F8F8", SurfaceDark: "#F0F0F0",
+		Text: "#1D1C1D", TextMuted: "#616061", Border: "#DDDDDD",
+		SidebarBackground: "#434243", SidebarText: "#D1D2D3", SidebarTextMuted: "#9A9B9E",
+		RailBackground: "#2E2C2E",
+	}},
+	"monokai": {"Monokai", ThemeColors{
+		Primary: "#66D9EF", Accent: "#A6E22E", Warning: "#E6DB74", Error: "#F92672",
+		Background: "#272822", Surface: "#3E3D32", SurfaceDark: "#1E1F1C",
+		Text: "#F8F8F2", TextMuted: "#75715E", Border: "#49483E",
+	}},
+	"github dark": {"GitHub Dark", ThemeColors{
+		Primary: "#58A6FF", Accent: "#3FB950", Warning: "#D29922", Error: "#F85149",
+		Background: "#0D1117", Surface: "#161B22", SurfaceDark: "#010409",
+		Text: "#C9D1D9", TextMuted: "#8B949E", Border: "#30363D",
+	}},
+	"ayu mirage": {"Ayu Mirage", ThemeColors{
+		Primary: "#73D0FF", Accent: "#BAE67E", Warning: "#FFD580", Error: "#F28779",
+		Background: "#1F2430", Surface: "#232834", SurfaceDark: "#191E2A",
+		Text: "#CBCCC6", TextMuted: "#707A8C", Border: "#33415E",
+	}},
+	"everforest dark": {"Everforest Dark", ThemeColors{
+		Primary: "#7FBBB3", Accent: "#A7C080", Warning: "#DBBC7F", Error: "#E67E80",
+		Background: "#2D353B", Surface: "#343F44", SurfaceDark: "#232A2E",
+		Text: "#D3C6AA", TextMuted: "#859289", Border: "#3D484D",
+	}},
+	"kanagawa": {"Kanagawa", ThemeColors{
+		Primary: "#7FB4CA", Accent: "#98BB6C", Warning: "#E6C384", Error: "#E46876",
+		Background: "#1F1F28", Surface: "#2A2A37", SurfaceDark: "#16161D",
+		Text: "#DCD7BA", TextMuted: "#727169", Border: "#363646",
+	}},
+	"material ocean": {"Material Ocean", ThemeColors{
+		Primary: "#82AAFF", Accent: "#C3E88D", Warning: "#FFCB6B", Error: "#FF5370",
+		Background: "#0F111A", Surface: "#1A1C25", SurfaceDark: "#090B10",
+		Text: "#A6ACCD", TextMuted: "#4B526D", Border: "#1F2233",
+	}},
+	"synthwave": {"Synthwave", ThemeColors{
+		Primary: "#36F9F6", Accent: "#72F1B8", Warning: "#FEDE5D", Error: "#FF6E96",
+		Background: "#241B2F", Surface: "#2D2139", SurfaceDark: "#1A1226",
+		Text: "#F8F8F2", TextMuted: "#848BBD", Border: "#495495",
 	}},
 }
 

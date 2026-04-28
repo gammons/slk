@@ -204,7 +204,7 @@ func (m *Model) buildCache(width int) {
 	m.cacheValid = true
 	m.cacheWidth = width
 	m.cacheRows = m.cacheRows[:0]
-	m.cacheFiller = lipgloss.NewStyle().Width(width).Background(styles.Background).Render("")
+	m.cacheFiller = lipgloss.NewStyle().Width(width).Background(styles.SidebarBackground).Render("")
 
 	// Build all rows: section headers + channel items.
 	type sectionGroup struct {
@@ -214,7 +214,9 @@ func (m *Model) buildCache(width int) {
 	var sectionOrder []string
 	sectionMap := map[string]*sectionGroup{}
 
-	bgAnsi := messages.BgANSI() // compute once outside loop
+	// Combine sidebar bg + fg so styled glyphs (private/DM prefixes, cursor,
+	// unread dots) restore both colors after their ANSI reset.
+	bgAnsi := messages.SidebarBgANSI() + messages.SidebarFgANSI() // compute once outside loop
 
 	// Style objects allocated once per cache build.
 	cursorStyle := lipgloss.NewStyle().Foreground(styles.Accent)

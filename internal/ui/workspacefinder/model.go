@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/overlay"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/muesli/reflow/truncate"
@@ -167,16 +168,21 @@ func (m Model) renderBox(termWidth int) string {
 	}
 	innerWidth := overlayWidth - 4 // border + padding
 
+	// All inner spans share the modal bg so the dimmed app behind the
+	// overlay doesn't bleed through where individual styled fragments end.
+	bg := styles.Background
+
 	// Title
 	title := lipgloss.NewStyle().
 		Bold(true).
+		Background(bg).
 		Foreground(styles.Primary).
 		Render("Switch Workspace")
 
 	// Query input with blue left border
 	var inputText string
 	if m.query == "" {
-		placeholder := lipgloss.NewStyle().Foreground(styles.TextMuted).Render("Type to filter...")
+		placeholder := lipgloss.NewStyle().Background(bg).Foreground(styles.TextMuted).Render("Type to filter...")
 		inputText = "\u2588 " + placeholder
 	} else {
 		inputText = m.query + "\u2588"
@@ -185,14 +191,17 @@ func (m Model) renderBox(termWidth int) string {
 		BorderStyle(lipgloss.Border{Left: "\u258c"}).
 		BorderLeft(true).
 		BorderForeground(styles.Primary).
+		BorderBackground(bg).
 		PaddingLeft(1).
+		Background(bg).
 		Foreground(styles.TextPrimary).
 		Render(inputText)
 
 	// Results (max 10)
 	maxVisible := 10
-	if maxVisible > len(m.filtered) {
-		maxVisible = len(m.filtered)
+	total := len(m.filtered)
+	if maxVisible > total {
+		maxVisible = total
 	}
 
 	// Adjust scroll window for results
@@ -201,13 +210,44 @@ func (m Model) renderBox(termWidth int) string {
 		startIdx = m.selected - maxVisible + 1
 	}
 	endIdx := startIdx + maxVisible
-	if endIdx > len(m.filtered) {
-		endIdx = len(m.filtered)
+	if endIdx > total {
+		endIdx = total
 		startIdx = endIdx - maxVisible
 		if startIdx < 0 {
 			startIdx = 0
 		}
 	}
+
+	// Scrollbar gutter on the right when the list overflows. Same pattern
+	// as channelfinder/themeswitcher: proportional thumb in Primary on a
+	// Border-colored track.
+	showScrollbar := total > maxVisible
+	rowWidth := innerWidth - 1
+	if !showScrollbar {
+		rowWidth = innerWidth
+	}
+
+	var thumbStart, thumbEnd int
+	if showScrollbar {
+		thumbHeight := maxVisible * maxVisible / total
+		if thumbHeight < 1 {
+			thumbHeight = 1
+		}
+		denom := total - maxVisible
+		if denom < 1 {
+			denom = 1
+		}
+		thumbStart = startIdx * (maxVisible - thumbHeight) / denom
+		if thumbStart < 0 {
+			thumbStart = 0
+		}
+		if thumbStart > maxVisible-thumbHeight {
+			thumbStart = maxVisible - thumbHeight
+		}
+		thumbEnd = thumbStart + thumbHeight
+	}
+	thumbStyle := lipgloss.NewStyle().Background(bg).Foreground(styles.Primary)
+	trackStyle := lipgloss.NewStyle().Background(bg).Foreground(styles.Border)
 
 	var resultRows []string
 	for i := startIdx; i < endIdx; i++ {
@@ -217,29 +257,43 @@ func (m Model) renderBox(termWidth int) string {
 		prefix := workspacePrefix(item)
 		line := prefix + " " + item.Name
 
-		if lipgloss.Width(line) > innerWidth {
-			line = truncate.StringWithTail(line, uint(innerWidth), "\u2026")
+		if lipgloss.Width(line) > rowWidth {
+			line = truncate.StringWithTail(line, uint(rowWidth), "\u2026")
 		}
 
+		var row string
 		if i == m.selected {
-			indicator := lipgloss.NewStyle().Foreground(styles.Accent).Render("\u258c")
-			row := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#FFFFFF")).
+			indicator := lipgloss.NewStyle().Background(bg).Foreground(styles.Accent).Render("\u258c")
+			label := lipgloss.NewStyle().
+				Background(bg).
+				Foreground(styles.Primary).
 				Bold(true).
-				Width(innerWidth - 1).
+				Width(rowWidth - 1).
 				Render(line)
-			resultRows = append(resultRows, indicator+row)
+			row = indicator + label
 		} else {
-			row := lipgloss.NewStyle().
+			label := lipgloss.NewStyle().
+				Background(bg).
 				Foreground(styles.TextPrimary).
-				Width(innerWidth - 1).
+				Width(rowWidth - 1).
 				Render(line)
-			resultRows = append(resultRows, " "+row)
+			row = " " + label
 		}
+
+		if showScrollbar {
+			rel := i - startIdx
+			if rel >= thumbStart && rel < thumbEnd {
+				row += thumbStyle.Render("\u2588")
+			} else {
+				row += trackStyle.Render("\u2502")
+			}
+		}
+		resultRows = append(resultRows, row)
 	}
 
 	if len(m.filtered) == 0 && m.query != "" {
 		noResults := lipgloss.NewStyle().
+			Background(bg).
 			Foreground(styles.TextMuted).
 			Italic(true).
 			Render("No matching workspaces")
@@ -249,10 +303,17 @@ func (m Model) renderBox(termWidth int) string {
 	// Compose the overlay content
 	content := title + "\n" + input + "\n\n" + strings.Join(resultRows, "\n")
 
+	// Re-paint modal bg+fg after every ANSI reset (see channelfinder for
+	// rationale) so trailing/unstyled cells don't leak the dimmed app
+	// behind the overlay.
+	content = messages.ReapplyBgAfterResets(content, messages.BgANSI()+messages.FgANSI())
+
 	// Wrap in a bordered box
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(styles.Primary).
+		BorderBackground(bg).
+		Background(bg).
 		Padding(1, 1).
 		Width(overlayWidth).
 		Render(content)

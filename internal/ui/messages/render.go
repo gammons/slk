@@ -38,15 +38,22 @@ var (
 //
 // Inline styles (bold, italic, link, mention) intentionally omit
 // .Background() -- the outer MessageText style provides the background.
+// They DO set Foreground(TextPrimary) explicitly: lipgloss emits an
+// ANSI reset (\x1b[m) at the end of each styled span which clears the
+// surrounding foreground, so without an explicit fg the styled text
+// would render in the terminal's default foreground (often light gray)
+// instead of the theme's text color. This is especially visible on
+// light-background themes (e.g. Slack Default) with italic system
+// messages like "has joined the channel".
 // Code styles use styles.Surface (a different bg) so they keep their own.
 func boldStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Bold(true)
+	return lipgloss.NewStyle().Bold(true).Foreground(styles.TextPrimary)
 }
 func italicStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Italic(true)
+	return lipgloss.NewStyle().Italic(true).Foreground(styles.TextPrimary)
 }
 func strikethroughStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Strikethrough(true)
+	return lipgloss.NewStyle().Strikethrough(true).Foreground(styles.TextPrimary)
 }
 func codeStyle() lipgloss.Style {
 	return lipgloss.NewStyle().
@@ -173,19 +180,45 @@ func wrapLine(buf *strings.Builder, line string, limit int) {
 
 // ReapplyBgAfterResets is exported for use by other UI packages (e.g. sidebar).
 // Handles both \x1b[m and \x1b[0m reset forms.
-func ReapplyBgAfterResets(text string, bg string) string {
-	if bg == "" {
+//
+// The `style` argument is one or more ANSI escape sequences (commonly a bg
+// color, or a bg+fg pair) that will be re-emitted after every reset so that
+// inline styled spans don't leak the terminal's defaults through. Callers
+// that only need to restore the background can pass just BgANSI(); callers
+// that also need to restore the foreground (so plain text following a styled
+// span — e.g. the body after a <@user> mention — keeps the theme text color)
+// should pass BgANSI()+FgANSI().
+func ReapplyBgAfterResets(text string, style string) string {
+	if style == "" {
 		return text
 	}
 	// lipgloss v2 uses \x1b[m (no 0), but handle both forms
-	text = strings.ReplaceAll(text, "\x1b[m", "\x1b[m"+bg)
+	text = strings.ReplaceAll(text, "\x1b[m", "\x1b[m"+style)
 	return text
 }
 
 var (
-	cachedBgANSI  string
-	cachedBgColor color.Color
+	cachedBgANSI         string
+	cachedBgColor        color.Color
+	cachedSidebarBgANSI  string
+	cachedSidebarBgColor color.Color
+	cachedFgANSI         string
+	cachedFgColor        color.Color
+	cachedSidebarFgANSI  string
+	cachedSidebarFgColor color.Color
 )
+
+// bgANSIFor returns the ANSI 24-bit background-color escape for c.
+func bgANSIFor(c color.Color) string {
+	r, g, b, _ := c.RGBA()
+	return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r>>8, g>>8, b>>8)
+}
+
+// fgANSIFor returns the ANSI 24-bit foreground-color escape for c.
+func fgANSIFor(c color.Color) string {
+	r, g, b, _ := c.RGBA()
+	return fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r>>8, g>>8, b>>8)
+}
 
 // BgANSI returns the ANSI escape sequence for the current theme background.
 // Exported so sidebar and other packages can use it.
@@ -195,10 +228,51 @@ func BgANSI() string {
 	if bg == cachedBgColor && cachedBgANSI != "" {
 		return cachedBgANSI
 	}
-	r, g, b, _ := bg.RGBA()
-	cachedBgANSI = fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r>>8, g>>8, b>>8)
+	cachedBgANSI = bgANSIFor(bg)
 	cachedBgColor = bg
 	return cachedBgANSI
+}
+
+// SidebarBgANSI returns the ANSI escape sequence for the current theme's
+// sidebar background. The sidebar uses this instead of BgANSI so that
+// inline-styled glyphs (private/DM prefixes, cursor, unread dots) re-apply
+// the correct sidebar color after their ANSI reset, rather than leaking
+// the message-pane background through (most visible on themes like
+// Slack Default where the sidebar bg differs from the message bg).
+func SidebarBgANSI() string {
+	bg := styles.SidebarBackground
+	if bg == cachedSidebarBgColor && cachedSidebarBgANSI != "" {
+		return cachedSidebarBgANSI
+	}
+	cachedSidebarBgANSI = bgANSIFor(bg)
+	cachedSidebarBgColor = bg
+	return cachedSidebarBgANSI
+}
+
+// FgANSI returns the ANSI escape for the current theme's primary text
+// foreground. Combine with BgANSI when re-applying styles after resets so
+// plain text following an inline-styled span (e.g. text after a mention or
+// an italic system phrase like "has joined the channel") keeps the theme's
+// text color instead of falling back to the terminal default.
+func FgANSI() string {
+	fg := styles.TextPrimary
+	if fg == cachedFgColor && cachedFgANSI != "" {
+		return cachedFgANSI
+	}
+	cachedFgANSI = fgANSIFor(fg)
+	cachedFgColor = fg
+	return cachedFgANSI
+}
+
+// SidebarFgANSI is like FgANSI but for the sidebar's primary text color.
+func SidebarFgANSI() string {
+	fg := styles.SidebarText
+	if fg == cachedSidebarFgColor && cachedSidebarFgANSI != "" {
+		return cachedSidebarFgANSI
+	}
+	cachedSidebarFgANSI = fgANSIFor(fg)
+	cachedSidebarFgColor = fg
+	return cachedSidebarFgANSI
 }
 
 // RenderSlackMarkdown converts Slack-flavored markdown and emoji shortcodes
@@ -228,10 +302,13 @@ func RenderSlackMarkdown(text string, userNames map[string]string) string {
 
 	output := strings.Join(result, "\n")
 
-	// Post-process: re-apply theme background after every ANSI reset so that
-	// inline styled text (bold, link, mention) doesn't leave dark patches
-	// where the terminal's default background shows through.
-	output = ReapplyBgAfterResets(output, BgANSI())
+	// Post-process: re-apply theme background AND foreground after every
+	// ANSI reset so that inline styled text (bold, link, mention) doesn't
+	// leave dark patches (where the terminal's default bg shows through)
+	// or revert plain text following the styled span to the terminal's
+	// default fg (most noticeable on light-bg themes like Slack Default,
+	// where text after a mention would otherwise render in a light gray).
+	output = ReapplyBgAfterResets(output, BgANSI()+FgANSI())
 
 	return output
 }

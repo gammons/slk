@@ -3,6 +3,7 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"log"
 	"time"
 
@@ -1860,28 +1861,46 @@ func (a *App) View() tea.View {
 		a.layoutThreadEnd = a.layoutMsgEnd
 	}
 
-	// Helper to force a panel to an exact width and height.
-	// Uses an explicit width parameter instead of lipgloss.Width(s)
-	// to avoid ANSI miscounting in complex rendered content.
+	// Helper to force a panel to an exact width and height with a given
+	// background color. Uses an explicit width parameter instead of
+	// lipgloss.Width(s) to avoid ANSI miscounting in complex rendered content.
+	exactSizeBg := func(s string, w, h int, bg color.Color) string {
+		return lipgloss.NewStyle().Width(w).Height(h).MaxHeight(h).Background(bg).Render(s)
+	}
 	exactSize := func(s string, w, h int) string {
-		return lipgloss.NewStyle().Width(w).Height(h).MaxHeight(h).Background(styles.Background).Render(s)
+		return exactSizeBg(s, w, h, styles.Background)
 	}
 
-	// Render workspace rail
-	rail := exactSize(a.workspaceRail.View(contentHeight), railWidth, contentHeight)
+	// Render workspace rail (uses rail background so empty cells around
+	// the workspace tiles match the rail color, not the message pane).
+	rail := exactSizeBg(a.workspaceRail.View(contentHeight), railWidth, contentHeight, styles.RailBackground)
 
 	var panels []string
 	panels = append(panels, rail)
 
-	// Render sidebar
+	// Render sidebar. Sidebar uses SidebarBackground so themes with a
+	// distinct dark sidebar (e.g. Slack Default) render correctly: both the
+	// rounded border's own background and the right-padding fill match the
+	// sidebar's panel color rather than the message pane's.
 	if a.sidebarVisible {
-		borderStyle := styles.UnfocusedBorder.Width(sidebarWidth)
+		sidebarBorderBase := lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(styles.Border).
+			BorderBackground(styles.SidebarBackground).
+			Background(styles.SidebarBackground).
+			Width(sidebarWidth)
+		borderStyle := sidebarBorderBase
 		if a.focusedPanel == PanelSidebar && a.mode != ModeInsert {
-			borderStyle = styles.FocusedBorder.Width(sidebarWidth)
+			borderStyle = lipgloss.NewStyle().
+				BorderStyle(lipgloss.ThickBorder()).
+				BorderForeground(styles.Primary).
+				BorderBackground(styles.SidebarBackground).
+				Background(styles.SidebarBackground).
+				Width(sidebarWidth)
 		}
 		sidebarView := a.sidebar.View(contentHeight-2, sidebarWidth)
 		sidebarView = borderStyle.Render(sidebarView)
-		panels = append(panels, exactSize(sidebarView, sidebarWidth+sidebarBorder, contentHeight))
+		panels = append(panels, exactSizeBg(sidebarView, sidebarWidth+sidebarBorder, contentHeight, styles.SidebarBackground))
 		a.layoutSidebarHeight = contentHeight - 2
 	}
 
@@ -1961,7 +1980,7 @@ func (a *App) View() tea.View {
 	statusWidth := a.width - railWidth
 	railSpacer := lipgloss.NewStyle().
 		Width(railWidth).
-		Background(styles.SurfaceDark).
+		Background(styles.RailBackground).
 		Render("")
 	status := lipgloss.JoinHorizontal(lipgloss.Center, railSpacer, a.statusbar.View(statusWidth))
 

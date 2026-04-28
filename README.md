@@ -212,6 +212,14 @@ surface_dark = "#21222C"
 text         = "#F8F8F2"
 text_muted   = "#6272A4"
 border       = "#44475A"
+
+# Optional sidebar/rail overrides — lets you have a darker sidebar with a
+# lighter message pane (Slack's default look). Fall back to
+# background/text/text_muted/surface_dark when omitted.
+sidebar_background = "#19171D"
+sidebar_text       = "#D1D2D3"
+sidebar_text_muted = "#9A9B9E"
+rail_background    = "#19171D"
 ```
 
 ### Data paths (XDG)

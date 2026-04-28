@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/overlay"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/muesli/reflow/truncate"
@@ -218,16 +219,21 @@ func (m Model) renderBox(termWidth int) string {
 	}
 	innerWidth := overlayWidth - 4 // border + padding
 
+	// All inner spans share the modal bg so the dimmed app behind the
+	// overlay doesn't bleed through where individual styled fragments end.
+	bg := styles.Background
+
 	// Title
 	title := lipgloss.NewStyle().
 		Bold(true).
+		Background(bg).
 		Foreground(styles.Primary).
 		Render("Switch Channel")
 
 	// Query input with blue left border
 	var inputText string
 	if m.query == "" {
-		placeholder := lipgloss.NewStyle().Foreground(styles.TextMuted).Render("Type to filter...")
+		placeholder := lipgloss.NewStyle().Background(bg).Foreground(styles.TextMuted).Render("Type to filter...")
 		inputText = "█ " + placeholder
 	} else {
 		inputText = m.query + "█"
@@ -236,14 +242,17 @@ func (m Model) renderBox(termWidth int) string {
 		BorderStyle(lipgloss.Border{Left: "▌"}).
 		BorderLeft(true).
 		BorderForeground(styles.Primary).
+		BorderBackground(bg).
 		PaddingLeft(1).
+		Background(bg).
 		Foreground(styles.TextPrimary).
 		Render(inputText)
 
 	// Results (max 10)
 	maxVisible := 10
-	if maxVisible > len(m.filtered) {
-		maxVisible = len(m.filtered)
+	total := len(m.filtered)
+	if maxVisible > total {
+		maxVisible = total
 	}
 
 	// Adjust scroll window for results
@@ -252,13 +261,45 @@ func (m Model) renderBox(termWidth int) string {
 		startIdx = m.selected - maxVisible + 1
 	}
 	endIdx := startIdx + maxVisible
-	if endIdx > len(m.filtered) {
-		endIdx = len(m.filtered)
+	if endIdx > total {
+		endIdx = total
 		startIdx = endIdx - maxVisible
 		if startIdx < 0 {
 			startIdx = 0
 		}
 	}
+
+	// Scrollbar: shown only when the list overflows the visible window. We
+	// reserve one column on the right; the row content shrinks by 1 to make
+	// room. Thumb size and position are proportional so users see at a
+	// glance how much more content is above/below the visible window.
+	showScrollbar := total > maxVisible
+	contentWidth := innerWidth - 1 // 1 col indicator/space prefix
+	if showScrollbar {
+		contentWidth-- // 1 col for the scrollbar gutter
+	}
+
+	var thumbStart, thumbEnd int
+	if showScrollbar {
+		thumbHeight := maxVisible * maxVisible / total
+		if thumbHeight < 1 {
+			thumbHeight = 1
+		}
+		denom := total - maxVisible
+		if denom < 1 {
+			denom = 1
+		}
+		thumbStart = startIdx * (maxVisible - thumbHeight) / denom
+		if thumbStart < 0 {
+			thumbStart = 0
+		}
+		if thumbStart > maxVisible-thumbHeight {
+			thumbStart = maxVisible - thumbHeight
+		}
+		thumbEnd = thumbStart + thumbHeight
+	}
+	thumbStyle := lipgloss.NewStyle().Background(bg).Foreground(styles.Primary)
+	trackStyle := lipgloss.NewStyle().Background(bg).Foreground(styles.Border)
 
 	var resultRows []string
 	for i := startIdx; i < endIdx; i++ {
@@ -274,38 +315,50 @@ func (m Model) renderBox(termWidth int) string {
 		var prefix, name string
 		if item.Joined {
 			prefix = channelPrefix(item)
-			nameStyle := lipgloss.NewStyle().Foreground(styles.TextPrimary)
+			nameStyle := lipgloss.NewStyle().Background(bg).Foreground(styles.TextPrimary)
 			if isSelected {
-				nameStyle = nameStyle.Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
+				nameStyle = nameStyle.Background(bg).Foreground(styles.Primary).Bold(true)
 			}
 			name = nameStyle.Render(item.Name)
 		} else {
 			// Non-joined: dim grey for everything, including the prefix.
-			dim := lipgloss.NewStyle().Foreground(nonJoinedColor)
+			dim := lipgloss.NewStyle().Background(bg).Foreground(nonJoinedColor)
 			prefix = dim.Render("#")
 			name = dim.Render(item.Name)
 		}
 
 		line := prefix + " " + name
 		// Truncate to fit (truncate.StringWithTail is ANSI-aware).
-		if lipgloss.Width(line) > innerWidth-1 {
-			line = truncate.StringWithTail(line, uint(innerWidth-1), "…")
+		if lipgloss.Width(line) > contentWidth {
+			line = truncate.StringWithTail(line, uint(contentWidth), "…")
 		}
 		// Right-pad with spaces to fill the row.
-		if pad := innerWidth - 1 - lipgloss.Width(line); pad > 0 {
+		if pad := contentWidth - lipgloss.Width(line); pad > 0 {
 			line += strings.Repeat(" ", pad)
 		}
 
+		var row string
 		if isSelected {
-			indicator := lipgloss.NewStyle().Foreground(styles.Accent).Render("▌")
-			resultRows = append(resultRows, indicator+line)
+			indicator := lipgloss.NewStyle().Background(bg).Foreground(styles.Accent).Render("▌")
+			row = indicator + line
 		} else {
-			resultRows = append(resultRows, " "+line)
+			row = " " + line
 		}
+
+		if showScrollbar {
+			rel := i - startIdx
+			if rel >= thumbStart && rel < thumbEnd {
+				row += thumbStyle.Render("\u2588") // █ thumb
+			} else {
+				row += trackStyle.Render("\u2502") // │ track
+			}
+		}
+		resultRows = append(resultRows, row)
 	}
 
 	if len(m.filtered) == 0 && m.query != "" {
 		noResults := lipgloss.NewStyle().
+			Background(bg).
 			Foreground(styles.TextMuted).
 			Italic(true).
 			Render("No matching channels")
@@ -315,10 +368,19 @@ func (m Model) renderBox(termWidth int) string {
 	// Compose the overlay content
 	content := title + "\n" + input + "\n\n" + strings.Join(resultRows, "\n")
 
+	// Re-paint modal bg+fg after every ANSI reset emitted by inner styled
+	// spans (channelPrefix glyphs, name fragments, etc.). Without this,
+	// trailing spaces and adjacent unstyled cells inherit the dimmed app
+	// behind the overlay, producing visible "highlight boxes" behind
+	// the styled text on the row.
+	content = messages.ReapplyBgAfterResets(content, messages.BgANSI()+messages.FgANSI())
+
 	// Wrap in a bordered box
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(styles.Primary).
+		BorderBackground(bg).
+		Background(bg).
 		Padding(1, 1).
 		Width(overlayWidth).
 		Render(content)

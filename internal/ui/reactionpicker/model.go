@@ -8,6 +8,7 @@ import (
 	emoji "github.com/kyokomi/emoji/v2"
 	"github.com/muesli/reflow/truncate"
 
+	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/overlay"
 	"github.com/gammons/slk/internal/ui/styles"
 )
@@ -232,8 +233,13 @@ func (m *Model) renderBox(termWidth int) string {
 	}
 	innerWidth := overlayWidth - 4 // border + padding
 
+	// All inner spans share the modal bg so the dimmed app behind the
+	// overlay doesn't bleed through where individual styled fragments end.
+	bg := styles.Background
+
 	// Title
 	title := lipgloss.NewStyle().
+		Background(bg).
 		Foreground(styles.Primary).
 		Bold(true).
 		Render("Add Reaction")
@@ -241,7 +247,7 @@ func (m *Model) renderBox(termWidth int) string {
 	// Query input with blue left border
 	var inputText string
 	if m.query == "" {
-		placeholder := lipgloss.NewStyle().Foreground(styles.TextMuted).Render("Type to filter...")
+		placeholder := lipgloss.NewStyle().Background(bg).Foreground(styles.TextMuted).Render("Type to filter...")
 		inputText = "█ " + placeholder
 	} else {
 		inputText = m.query + "█"
@@ -250,15 +256,18 @@ func (m *Model) renderBox(termWidth int) string {
 		BorderStyle(lipgloss.Border{Left: "▌"}).
 		BorderLeft(true).
 		BorderForeground(styles.Primary).
+		BorderBackground(bg).
 		PaddingLeft(1).
+		Background(bg).
 		Foreground(styles.TextPrimary).
 		Render(inputText)
 
 	// Results (max 10)
 	list := m.displayedList()
 	maxVisible := 10
-	if maxVisible > len(list) {
-		maxVisible = len(list)
+	total := len(list)
+	if maxVisible > total {
+		maxVisible = total
 	}
 
 	start := 0
@@ -266,13 +275,43 @@ func (m *Model) renderBox(termWidth int) string {
 		start = m.selected - maxVisible + 1
 	}
 	end := start + maxVisible
-	if end > len(list) {
-		end = len(list)
+	if end > total {
+		end = total
 		start = end - maxVisible
 		if start < 0 {
 			start = 0
 		}
 	}
+
+	// Scrollbar gutter on the right when the list overflows. Same pattern
+	// as channelfinder/themeswitcher/workspacefinder.
+	showScrollbar := total > maxVisible
+	rowWidth := innerWidth - 1
+	if !showScrollbar {
+		rowWidth = innerWidth
+	}
+
+	var thumbStart, thumbEnd int
+	if showScrollbar {
+		thumbHeight := maxVisible * maxVisible / total
+		if thumbHeight < 1 {
+			thumbHeight = 1
+		}
+		denom := total - maxVisible
+		if denom < 1 {
+			denom = 1
+		}
+		thumbStart = start * (maxVisible - thumbHeight) / denom
+		if thumbStart < 0 {
+			thumbStart = 0
+		}
+		if thumbStart > maxVisible-thumbHeight {
+			thumbStart = maxVisible - thumbHeight
+		}
+		thumbEnd = thumbStart + thumbHeight
+	}
+	thumbStyle := lipgloss.NewStyle().Background(bg).Foreground(styles.Primary)
+	trackStyle := lipgloss.NewStyle().Background(bg).Foreground(styles.Border)
 
 	var resultRows []string
 	for i := start; i < end; i++ {
@@ -294,31 +333,45 @@ func (m *Model) renderBox(termWidth int) string {
 			line += " ✓"
 		}
 
-		if lipgloss.Width(line) > innerWidth-1 {
-			line = truncate.StringWithTail(line, uint(innerWidth-1), "…")
+		if lipgloss.Width(line) > rowWidth {
+			line = truncate.StringWithTail(line, uint(rowWidth), "…")
 		}
 
+		var row string
 		if i == m.selected {
-			indicator := lipgloss.NewStyle().Foreground(styles.Accent).Render("▌")
-			row := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#FFFFFF")).
+			indicator := lipgloss.NewStyle().Background(bg).Foreground(styles.Accent).Render("▌")
+			label := lipgloss.NewStyle().
+				Background(bg).
+				Foreground(styles.Primary).
 				Bold(true).
-				Width(innerWidth - 1).
-				MaxWidth(innerWidth - 1).
+				Width(rowWidth - 1).
+				MaxWidth(rowWidth - 1).
 				Render(line)
-			resultRows = append(resultRows, indicator+row)
+			row = indicator + label
 		} else {
-			row := lipgloss.NewStyle().
+			label := lipgloss.NewStyle().
+				Background(bg).
 				Foreground(styles.TextPrimary).
-				Width(innerWidth - 1).
-				MaxWidth(innerWidth - 1).
+				Width(rowWidth - 1).
+				MaxWidth(rowWidth - 1).
 				Render(line)
-			resultRows = append(resultRows, " "+row)
+			row = " " + label
 		}
+
+		if showScrollbar {
+			rel := i - start
+			if rel >= thumbStart && rel < thumbEnd {
+				row += thumbStyle.Render("\u2588")
+			} else {
+				row += trackStyle.Render("\u2502")
+			}
+		}
+		resultRows = append(resultRows, row)
 	}
 
 	if len(list) == 0 && m.query != "" {
 		noResults := lipgloss.NewStyle().
+			Background(bg).
 			Foreground(styles.TextMuted).
 			Italic(true).
 			Render("No matching emoji")
@@ -328,10 +381,15 @@ func (m *Model) renderBox(termWidth int) string {
 	// Compose content
 	content := title + "\n" + input + "\n\n" + strings.Join(resultRows, "\n")
 
+	// Re-paint modal bg+fg after every ANSI reset (see channelfinder).
+	content = messages.ReapplyBgAfterResets(content, messages.BgANSI()+messages.FgANSI())
+
 	// Wrap in bordered box
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(styles.Primary).
+		BorderBackground(bg).
+		Background(bg).
 		Padding(1, 1).
 		Width(overlayWidth).
 		Render(content)

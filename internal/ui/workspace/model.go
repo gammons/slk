@@ -98,7 +98,7 @@ func (m Model) View(height int) string {
 		Width(6).
 		Height(height).
 		MaxHeight(height).
-		Background(styles.SurfaceDark).
+		Background(styles.RailBackground).
 		Padding(1, 0).
 		Align(lipgloss.Center).
 		Render(content)
