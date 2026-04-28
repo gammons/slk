@@ -3,7 +3,6 @@ package sidebar
 import (
 	"strings"
 
-	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/styles"
@@ -24,9 +23,24 @@ type ChannelItem struct {
 type Model struct {
 	items    []ChannelItem
 	selected int
-	vp       viewport.Model
+	yOffset  int // own scroll state -- replaces bubbles/viewport
 	filter   string
 	filtered []int // indices into items that match filter
+
+	// Render cache. cacheRows holds the pre-rendered (normal / selected) string
+	// variants for every visible row including section headers and inter-section
+	// blanks. Each row is exactly one rendered line, so we can build the visible
+	// window by slicing this slice -- no string parsing, no width measurement.
+	cacheRows   []renderRow
+	cacheValid  bool
+	cacheWidth  int
+	cacheFiller string // pre-rendered empty row for vertical padding
+}
+
+// InvalidateCache forces the render cache to be rebuilt on next View().
+// Call this after theme changes.
+func (m *Model) InvalidateCache() {
+	m.cacheValid = false
 }
 
 func New(items []ChannelItem) Model {
@@ -41,6 +55,7 @@ func (m *Model) SetItems(items []ChannelItem) {
 	if m.selected >= len(m.filtered) {
 		m.selected = 0
 	}
+	m.cacheValid = false
 }
 
 func (m *Model) SelectedID() string {
@@ -90,6 +105,7 @@ func (m *Model) SetFilter(filter string) {
 	m.filter = filter
 	m.selected = 0
 	m.rebuildFilter()
+	m.cacheValid = false
 }
 
 func (m *Model) VisibleItems() []ChannelItem {
@@ -104,7 +120,10 @@ func (m *Model) VisibleItems() []ChannelItem {
 func (m *Model) ClearUnread(channelID string) {
 	for i := range m.items {
 		if m.items[i].ID == channelID {
-			m.items[i].UnreadCount = 0
+			if m.items[i].UnreadCount != 0 {
+				m.items[i].UnreadCount = 0
+				m.cacheValid = false
+			}
 			return
 		}
 	}
@@ -114,7 +133,10 @@ func (m *Model) ClearUnread(channelID string) {
 func (m *Model) UpdatePresenceByUser(userID, presence string) {
 	for i := range m.items {
 		if m.items[i].DMUserID == userID {
-			m.items[i].Presence = presence
+			if m.items[i].Presence != presence {
+				m.items[i].Presence = presence
+				m.cacheValid = false
+			}
 			return
 		}
 	}
@@ -140,55 +162,68 @@ func (m *Model) rebuildFilter() {
 }
 
 // renderRow describes a single rendered row in the sidebar.
+//
+// For channel rows we pre-render BOTH the selected and unselected variants in
+// buildCache so that selection movement (j/k) needs no lipgloss work in View().
+// For section headers and inter-section blanks the two variants are identical.
 type renderRow struct {
-	content   string
-	filterIdx int // index into m.filtered, or -1 for section headers
+	normal    string // rendered as a non-selected row
+	selected  string // rendered with the selection cursor + selected style
+	height    int    // rendered terminal height (always 1 for headers/blanks)
+	filterIdx int    // index into m.filtered, or -1 for headers/blanks
 }
 
-func (m *Model) View(height, width int) string {
-	if len(m.items) == 0 {
-		return lipgloss.NewStyle().Width(width).Height(height).Render("No channels")
-	}
+// buildCache rebuilds m.cacheRows for the given width. Expensive; runs only
+// when items, filter, width, or theme change.
+func (m *Model) buildCache(width int) {
+	m.cacheValid = true
+	m.cacheWidth = width
+	m.cacheRows = m.cacheRows[:0]
+	m.cacheFiller = lipgloss.NewStyle().Width(width).Background(styles.Background).Render("")
 
-	// Build all rows: section headers + channel items
-	// Track which row corresponds to which filtered index for selection tracking.
+	// Build all rows: section headers + channel items.
 	type sectionGroup struct {
 		name string
 		rows []renderRow
 	}
-	sectionOrder := []string{}
+	var sectionOrder []string
 	sectionMap := map[string]*sectionGroup{}
 
 	bgAnsi := messages.BgANSI() // compute once outside loop
 
+	// Style objects allocated once per cache build.
+	cursorStyle := lipgloss.NewStyle().Foreground(styles.Accent)
+	dotStyle := lipgloss.NewStyle().Foreground(styles.Primary)
+	privateStyle := lipgloss.NewStyle().Foreground(styles.Warning)
+
+	cursorSelected := cursorStyle.Render("▌")
+	unreadDotStr := dotStyle.Render("●")
+	privatePrefix := privateStyle.Render("◆ ")
+	dmActivePrefix := styles.PresenceOnline.Render("● ")
+	dmAwayPrefix := styles.PresenceAway.Render("○ ")
+	groupDMPrefix := styles.PresenceAway.Render("● ")
+
 	for fi, idx := range m.filtered {
 		item := m.items[idx]
-		isSelected := fi == m.selected
 
-		// Selection indicator -- green left border for selected, space for others
-		cursor := " "
-		if isSelected {
-			cursor = lipgloss.NewStyle().Foreground(styles.Accent).Render("▌")
-		}
-
-		// Unread dot indicator
+		// Unread dot indicator (same regardless of selection state).
 		unreadDot := " "
 		if item.UnreadCount > 0 {
-			unreadDot = lipgloss.NewStyle().Foreground(styles.Primary).Render("●")
+			unreadDot = unreadDotStr
 		}
 
 		var prefix string
 		switch item.Type {
 		case "dm":
 			if item.Presence == "active" {
-				prefix = styles.PresenceOnline.Render("● ")
+				prefix = dmActivePrefix
 			} else {
-				prefix = styles.PresenceAway.Render("○ ")
+				prefix = dmAwayPrefix
 			}
 		case "group_dm":
-			prefix = styles.PresenceAway.Render("● ")
+			prefix = groupDMPrefix
 		case "private":
-			prefix = lipgloss.NewStyle().Foreground(styles.Warning).Render("◆ ")
+			prefix = privatePrefix
 		default:
 			prefix = "# "
 		}
@@ -209,22 +244,26 @@ func (m *Model) View(height, width int) string {
 			name = truncate.StringWithTail(name, uint(maxNameLen), "…")
 		}
 
-		label := cursor + prefix + name + " " + unreadDot
+		// Two label variants: selected (with cursor glyph) and normal (with space).
+		labelNormal := " " + prefix + name + " " + unreadDot
+		labelSelected := cursorSelected + prefix + name + " " + unreadDot
+
 		// Re-apply theme background after ANSI resets from inline styled
 		// glyphs (cursor, prefix, unread dot) so the outer channel style's
 		// background isn't interrupted.
-		label = messages.ReapplyBgAfterResets(label, bgAnsi)
+		labelNormal = messages.ReapplyBgAfterResets(labelNormal, bgAnsi)
+		labelSelected = messages.ReapplyBgAfterResets(labelSelected, bgAnsi)
 
-		var style lipgloss.Style
-		if isSelected {
-			style = styles.ChannelSelected
-		} else if item.UnreadCount > 0 {
-			style = styles.ChannelUnread
+		// Pick base style for non-selected state.
+		var baseStyle lipgloss.Style
+		if item.UnreadCount > 0 {
+			baseStyle = styles.ChannelUnread
 		} else {
-			style = styles.ChannelNormal
+			baseStyle = styles.ChannelNormal
 		}
 
-		row := style.Width(width - 2).Render(label)
+		rowNormal := baseStyle.Width(width - 2).Render(labelNormal)
+		rowSelected := styles.ChannelSelected.Width(width - 2).Render(labelSelected)
 
 		sectionName := item.Section
 		if sectionName == "" {
@@ -240,71 +279,100 @@ func (m *Model) View(height, width int) string {
 			sectionOrder = append(sectionOrder, sectionName)
 		}
 		sectionMap[sectionName].rows = append(sectionMap[sectionName].rows, renderRow{
-			content:   row,
+			normal:    rowNormal,
+			selected:  rowSelected,
+			height:    1, // every channel row is exactly one line
 			filterIdx: fi,
 		})
 	}
 
 	// Flatten into a single row list with section headers.
 	// Add a blank line between sections for visual separation.
-	var allRows []renderRow
 	for i, name := range sectionOrder {
 		if i > 0 {
-			// Blank line between sections
-			allRows = append(allRows, renderRow{content: "", filterIdx: -1})
+			m.cacheRows = append(m.cacheRows, renderRow{height: 1, filterIdx: -1})
 		}
 		group := sectionMap[name]
 		header := styles.SectionHeader.Render(group.name)
-		allRows = append(allRows, renderRow{content: header, filterIdx: -1})
-		allRows = append(allRows, group.rows...)
+		m.cacheRows = append(m.cacheRows, renderRow{
+			normal:    header,
+			selected:  header,
+			height:    1,
+			filterIdx: -1,
+		})
+		m.cacheRows = append(m.cacheRows, group.rows...)
+	}
+}
+
+func (m *Model) View(height, width int) string {
+	if len(m.items) == 0 {
+		return lipgloss.NewStyle().Width(width).Height(height).Render("No channels")
 	}
 
-	// Build full content from all rows
-	var allLines []string
-	selectedStartLine := 0
-	selectedEndLine := 0
-	currentLine := 0
+	if !m.cacheValid || m.cacheWidth != width {
+		m.buildCache(width)
+	}
 
-	for _, r := range allRows {
+	// Each cacheRow is exactly one rendered line, so the line index of a row
+	// is just its slice index. Find the selected row's line.
+	selectedLine := -1
+	for i, r := range m.cacheRows {
 		if r.filterIdx == m.selected {
-			selectedStartLine = currentLine
+			selectedLine = i
+			break
 		}
-		h := lipgloss.Height(r.content)
+	}
+
+	// Adjust yOffset to keep the selected row visible.
+	if selectedLine >= 0 {
+		if selectedLine >= m.yOffset+height {
+			m.yOffset = selectedLine - height + 1
+		}
+		if selectedLine < m.yOffset {
+			m.yOffset = selectedLine
+		}
+	}
+	if m.yOffset < 0 {
+		m.yOffset = 0
+	}
+	maxOffset := len(m.cacheRows) - height
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.yOffset > maxOffset {
+		m.yOffset = maxOffset
+	}
+
+	// Build visible window by slicing cacheRows. No lipgloss work per frame.
+	end := m.yOffset + height
+	if end > len(m.cacheRows) {
+		end = len(m.cacheRows)
+	}
+
+	visible := make([]string, 0, height)
+	for i := m.yOffset; i < end; i++ {
+		r := m.cacheRows[i]
 		if r.filterIdx == m.selected {
-			selectedEndLine = currentLine + h
+			visible = append(visible, r.selected)
+		} else if r.normal == "" {
+			// Inter-section blank row -- emit a width-sized themed blank so
+			// the panel background remains continuous.
+			visible = append(visible, m.cacheFiller)
+		} else {
+			visible = append(visible, r.normal)
 		}
-		allLines = append(allLines, r.content)
-		currentLine += h
+	}
+	for len(visible) < height {
+		visible = append(visible, m.cacheFiller)
 	}
 
-	fullContent := strings.Join(allLines, "\n")
-
-	// Configure viewport
-	m.vp.SetWidth(width)
-	m.vp.SetHeight(height)
-	m.vp.KeyMap = viewport.KeyMap{}
-	m.vp.SetContent(fullContent)
-
-	// Scroll to keep selected row visible
-	if selectedEndLine > m.vp.YOffset()+m.vp.Height() {
-		m.vp.SetYOffset(selectedEndLine - m.vp.Height())
-	}
-	if selectedStartLine < m.vp.YOffset() {
-		m.vp.SetYOffset(selectedStartLine)
-	}
-
-	return lipgloss.NewStyle().
-		Width(width).
-		Height(height).
-		MaxHeight(height).
-		Background(styles.Background).
-		Render(m.vp.View())
+	return strings.Join(visible, "\n")
 }
 
 // ClickAt handles a mouse click at the given y-coordinate (relative to sidebar content top).
 // Selects the item at that position. Returns the item and true if a selectable item was clicked.
 func (m *Model) ClickAt(y int) (ChannelItem, bool) {
-	absoluteY := y + m.vp.YOffset()
+	absoluteY := y + m.yOffset
 
 	// Rebuild the section structure (same logic as View) to map y to filterIdx.
 	// Each channel item = 1 line, each section header = 1 line, blank line between sections.

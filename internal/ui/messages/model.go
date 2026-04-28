@@ -6,12 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
 	emojiutil "github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/styles"
 	emoji "github.com/kyokomi/emoji/v2"
-
 )
 
 type MessageItem struct {
@@ -37,10 +35,21 @@ type ReactionItem struct {
 }
 
 // viewEntry is a pre-rendered row in the message list (message or date separator).
+//
+// For messages we pre-render BOTH the selected and unselected bordered variants
+// during buildCache so that selection movement (j/k) is a near-O(1) operation
+// in View(): no lipgloss calls per keypress, just string concatenation.
+//
+// For separators (msgIdx == -1) only `content` is populated.
 type viewEntry struct {
-	content string // rendered content (without selection highlight)
-	height  int    // number of terminal lines
-	msgIdx  int    // index into messages, or -1 for separator
+	// linesNormal / linesSelected hold the entry's rendered lines pre-split on
+	// "\n" so View() can append them directly into the visible window without
+	// any string scanning, splitting, or width measurement at render time.
+	// For separator entries (msgIdx == -1) the two slices are identical.
+	linesNormal   []string
+	linesSelected []string
+	height        int // == len(linesNormal); cached for scroll math
+	msgIdx        int // index into messages, or -1 for separator
 }
 
 type Model struct {
@@ -52,22 +61,41 @@ type Model struct {
 	avatarFn     AvatarFunc        // optional: returns half-block avatar for a userID
 	userNames    map[string]string // user ID -> display name for mention resolution
 
-	// Render cache -- invalidated when messages or width change
+	// Render cache -- invalidated when messages or width change.
+	// Each entry holds pre-bordered variants so selection movement does not
+	// re-invoke lipgloss per keypress.
 	cache       []viewEntry
 	cacheWidth  int
 	cacheMsgLen int
+	cacheSpacer       string // pre-rendered blank spacer line (1 row, full width, themed background)
+	cacheLoadingHint  string // pre-rendered "Loading older messages..." line
+	cacheMoreBelow    string // pre-rendered "-- more below --" line
 
-	// View-level cache -- bordered content ready for viewport
-	viewContent       string // the full bordered+joined string
-	viewSelected      int    // selected index when viewContent was built
-	viewWidth         int    // width when viewContent was built
-	viewHeight        int    // height when viewContent was built
-	viewCacheValid    bool   // whether viewContent is current
-	selectedStartLine int    // line offset of selected item (cached)
-	selectedEndLine   int    // end line of selected item (cached)
+	// Chrome cache: header line + separator. Depends on width, channelName, and
+	// channelTopic only -- never on selection or scroll position.
+	chromeCache       string
+	chromeHeight      int
+	chromeWidth       int
+	chromeChannel     string
+	chromeTopic       string
+	chromeCacheValid  bool
 
-	// Viewport for scrolling
-	vp viewport.Model
+	// Cumulative line offsets, computed in buildCache (only when content
+	// changes). entryOffsets[i] is the line index where entry i starts in the
+	// flattened content; totalLines is the total line count.
+	entryOffsets []int
+	totalLines   int
+
+	// Custom scroll state -- replaces bubbles/viewport for the scrolling case
+	// where we already know our content's line count and width. The bubbles
+	// viewport calls ansi.StringWidth on every line of content per SetContent
+	// (~55% of CPU on j/k); we skip that entirely.
+	yOffset int
+
+	// Tracks the start / end line of the currently-selected entry so View()
+	// can adjust yOffset to keep it on screen.
+	selectedStartLine int
+	selectedEndLine   int
 
 	reactionNavActive bool
 	reactionNavIndex  int
@@ -91,10 +119,14 @@ func New(msgs []MessageItem, channelName string) Model {
 // Call this after theme changes or style updates.
 func (m *Model) InvalidateCache() {
 	m.cache = nil
-	m.viewCacheValid = false
+
+	m.chromeCacheValid = false
 }
 
 func (m *Model) SetChannel(name, topic string) {
+	if m.channelName != name || m.channelTopic != topic {
+		m.chromeCacheValid = false
+	}
 	m.channelName = name
 	m.channelTopic = topic
 }
@@ -102,7 +134,7 @@ func (m *Model) SetChannel(name, topic string) {
 func (m *Model) SetMessages(msgs []MessageItem) {
 	m.messages = msgs
 	m.cache = nil // invalidate cache
-	m.viewCacheValid = false
+
 	if len(msgs) == 0 {
 		m.selected = 0
 		return
@@ -115,7 +147,7 @@ func (m *Model) AppendMessage(msg MessageItem) {
 	wasAtBottom := m.selected >= len(m.messages)-1
 	m.messages = append(m.messages, msg)
 	m.cache = nil // invalidate cache
-	m.viewCacheValid = false
+
 	if wasAtBottom || len(m.messages) == 1 {
 		// Auto-scroll to the new message
 		m.selected = len(m.messages) - 1
@@ -181,7 +213,7 @@ func (m *Model) PrependMessages(msgs []MessageItem) {
 	m.messages = append(msgs, m.messages...)
 	m.selected += count
 	m.cache = nil // invalidate cache
-	m.viewCacheValid = false
+
 }
 
 func (m *Model) EnterReactionNav() {
@@ -189,7 +221,7 @@ func (m *Model) EnterReactionNav() {
 		m.reactionNavActive = true
 		m.reactionNavIndex = 0
 		m.cache = nil
-		m.viewCacheValid = false
+
 	}
 }
 
@@ -197,7 +229,7 @@ func (m *Model) ExitReactionNav() {
 	m.reactionNavActive = false
 	m.reactionNavIndex = 0
 	m.cache = nil
-	m.viewCacheValid = false
+
 }
 
 func (m *Model) ReactionNavActive() bool {
@@ -212,7 +244,7 @@ func (m *Model) ReactionNavLeft() {
 	total := len(msg.Reactions) + 1 // +1 for [+] pill
 	m.reactionNavIndex = (m.reactionNavIndex - 1 + total) % total
 	m.cache = nil
-	m.viewCacheValid = false
+
 }
 
 func (m *Model) ReactionNavRight() {
@@ -223,7 +255,7 @@ func (m *Model) ReactionNavRight() {
 	total := len(msg.Reactions) + 1
 	m.reactionNavIndex = (m.reactionNavIndex + 1) % total
 	m.cache = nil
-	m.viewCacheValid = false
+
 }
 
 func (m *Model) SelectedReaction() (emoji string, isPlus bool) {
@@ -248,7 +280,7 @@ func (m *Model) ClampReactionNav() {
 		m.reactionNavIndex = total - 1
 	}
 	m.cache = nil
-	m.viewCacheValid = false
+
 }
 
 // IncrementReplyCount finds a message by TS and increments its ReplyCount.
@@ -257,7 +289,7 @@ func (m *Model) IncrementReplyCount(parentTS string) {
 		if msg.TS == parentTS {
 			m.messages[i].ReplyCount++
 			m.cache = nil
-			m.viewCacheValid = false
+
 			return
 		}
 	}
@@ -299,7 +331,7 @@ func (m *Model) UpdateReaction(messageTS, emojiName, userID string, remove bool)
 				}
 			}
 			m.cache = nil
-			m.viewCacheValid = false
+
 			if m.reactionNavActive {
 				m.ClampReactionNav()
 			}
@@ -328,7 +360,7 @@ func (m *Model) ResolveUserName(userID string) string {
 func (m *Model) SetUserNames(names map[string]string) {
 	m.userNames = names
 	m.cache = nil // invalidate cache so mentions re-render
-	m.viewCacheValid = false
+
 }
 
 // SetLastReadTS sets the timestamp of the last read message.
@@ -336,7 +368,7 @@ func (m *Model) SetUserNames(names map[string]string) {
 func (m *Model) SetLastReadTS(ts string) {
 	m.lastReadTS = ts
 	m.cache = nil // invalidate render cache
-	m.viewCacheValid = false
+
 }
 
 func (m *Model) OldestTS() string {
@@ -346,13 +378,39 @@ func (m *Model) OldestTS() string {
 	return m.messages[0].TS
 }
 
-// buildCache pre-renders all messages and day separators.
-// Messages are rendered WITHOUT selection highlight (that's applied in View).
+// buildCache pre-renders all messages and day separators, splitting each
+// rendered string on "\n" so View() can flatten everything into the visible
+// window with zero string-scanning per frame. Runs only on width / message-set
+// / theme / reaction changes -- never on simple j/k navigation.
 func (m *Model) buildCache(width int) {
-	m.cache = nil
-	m.viewCacheValid = false
+	m.cache = m.cache[:0]
 	m.cacheWidth = width
 	m.cacheMsgLen = len(m.messages)
+
+	// Pre-build the border styles once for the whole cache build.
+	borderFill := lipgloss.NewStyle().Background(styles.Background)
+	borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Background).BorderBackground(styles.Background)
+	borderSelect := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Accent).BorderBackground(styles.Background)
+	spacerBg := lipgloss.NewStyle().Background(styles.Background)
+	m.cacheSpacer = spacerBg.Width(width).Render("")
+	hintStyle := lipgloss.NewStyle().Background(styles.Background).Foreground(styles.TextMuted)
+	m.cacheLoadingHint = hintStyle.Render("  Loading older messages...")
+	m.cacheMoreBelow = hintStyle.Render("  -- more below --")
+	spacerLines := []string{m.cacheSpacer}
+
+	if cap(m.cache) < len(m.messages)+8 {
+		m.cache = make([]viewEntry, 0, len(m.messages)+8)
+	}
+
+	appendSeparator := func(rendered string) {
+		lines := strings.Split(rendered, "\n")
+		m.cache = append(m.cache, viewEntry{
+			linesNormal:   lines,
+			linesSelected: lines,
+			height:        len(lines),
+			msgIdx:        -1,
+		})
+	}
 
 	var lastDate string
 	newMsgLandmarkInserted := false
@@ -364,11 +422,7 @@ func (m *Model) buildCache(width int) {
 			sep := lipgloss.NewStyle().Background(styles.Background).Foreground(styles.TextMuted).Bold(true).
 				Width(width).Align(lipgloss.Center).
 				Render(sepStr)
-			m.cache = append(m.cache, viewEntry{
-				content: sep,
-				height:  lipgloss.Height(sep),
-				msgIdx:  -1,
-			})
+			appendSeparator(sep)
 			lastDate = msgDate
 		}
 
@@ -378,11 +432,7 @@ func (m *Model) buildCache(width int) {
 			label := lipgloss.NewStyle().Background(styles.Background).Foreground(styles.Error).Bold(true).
 				Width(width).Align(lipgloss.Center).
 				Render(newStr)
-			m.cache = append(m.cache, viewEntry{
-				content: label,
-				height:  lipgloss.Height(label),
-				msgIdx:  -1,
-			})
+			appendSeparator(label)
 			newMsgLandmarkInserted = true
 		}
 
@@ -391,12 +441,38 @@ func (m *Model) buildCache(width int) {
 			avatarStr = m.avatarFn(msg.UserID)
 		}
 		rendered := m.renderMessagePlain(msg, width, avatarStr, m.userNames, i == m.selected)
+		filled := borderFill.Width(width - 1).Render(rendered)
+		normal := borderInvis.Render(filled)
+		selected := borderSelect.Render(filled)
+
+		linesN := strings.Split(normal, "\n")
+		linesS := strings.Split(selected, "\n")
+		// Append a trailing spacer line after every message except the last.
+		// Both variants share the same spacer (it has no border styling).
+		if i < len(m.messages)-1 {
+			linesN = append(linesN, spacerLines...)
+			linesS = append(linesS, spacerLines...)
+		}
 		m.cache = append(m.cache, viewEntry{
-			content: rendered,
-			height:  lipgloss.Height(rendered),
-			msgIdx:  i,
+			linesNormal:   linesN,
+			linesSelected: linesS,
+			height:        len(linesN),
+			msgIdx:        i,
 		})
 	}
+
+	// Compute cumulative line offsets for fast yOffset math in View().
+	if cap(m.entryOffsets) < len(m.cache) {
+		m.entryOffsets = make([]int, len(m.cache))
+	} else {
+		m.entryOffsets = m.entryOffsets[:len(m.cache)]
+	}
+	off := 0
+	for i, e := range m.cache {
+		m.entryOffsets[i] = off
+		off += e.height
+	}
+	m.totalLines = off
 }
 
 // renderMessagePlain renders a message without selection highlight.
@@ -521,7 +597,7 @@ func placeAvatarBeside(avatar, content string) string {
 // ClickAt handles a mouse click at the given y-coordinate (relative to message pane content top).
 // Selects the message at that position.
 func (m *Model) ClickAt(y int) {
-	absoluteY := y + m.vp.YOffset()
+	absoluteY := y + m.yOffset
 
 	// Walk through cached view entries to find which message is at this line
 	currentLine := 0
@@ -533,7 +609,6 @@ func (m *Model) ClickAt(y int) {
 		}
 		if absoluteY >= currentLine && absoluteY < currentLine+entry.height {
 			m.selected = entry.msgIdx
-			m.viewCacheValid = false // force re-render with new selection
 			return
 		}
 		currentLine += entry.height
@@ -545,19 +620,26 @@ var thickLeftBorder = lipgloss.Border{Left: "▌"}
 
 
 func (m *Model) View(height, width int) string {
-	// Header
-	header := styles.ChannelUnread.
-		Width(width).
-		Render(fmt.Sprintf("# %s", m.channelName))
-
-	if m.channelTopic != "" {
-		header += "\n" + styles.Timestamp.Render(WordWrap(m.channelTopic, width))
+	// Chrome (header + separator) is cached; only rebuilt on width / channel
+	// name / topic change. This avoids per-keypress strings.Repeat + lipgloss
+	// renders that don't depend on the selection.
+	if !m.chromeCacheValid || m.chromeWidth != width || m.chromeChannel != m.channelName || m.chromeTopic != m.channelTopic {
+		header := styles.ChannelUnread.
+			Width(width).
+			Render(fmt.Sprintf("# %s", m.channelName))
+		if m.channelTopic != "" {
+			header += "\n" + styles.Timestamp.Render(WordWrap(m.channelTopic, width))
+		}
+		separator := lipgloss.NewStyle().Width(width).Foreground(styles.Border).Background(styles.Background).Render(strings.Repeat("-", width))
+		m.chromeCache = header + "\n" + separator
+		m.chromeHeight = lipgloss.Height(m.chromeCache)
+		m.chromeWidth = width
+		m.chromeChannel = m.channelName
+		m.chromeTopic = m.channelTopic
+		m.chromeCacheValid = true
 	}
-
-	separator := lipgloss.NewStyle().Width(width).Foreground(styles.Border).Background(styles.Background).Render(strings.Repeat("-", width))
-
-	chrome := header + "\n" + separator
-	chromeHeight := lipgloss.Height(chrome)
+	chrome := m.chromeCache
+	chromeHeight := m.chromeHeight
 
 	msgAreaHeight := height - chromeHeight
 	if msgAreaHeight < 1 {
@@ -575,7 +657,7 @@ func (m *Model) View(height, width int) string {
 			Foreground(styles.TextMuted).
 			Background(styles.Background).
 			Render(text)
-		return header + "\n" + separator + "\n" + empty
+		return chrome + "\n" + empty
 	}
 
 	// Rebuild cache if messages or width changed
@@ -585,90 +667,90 @@ func (m *Model) View(height, width int) string {
 
 	entries := m.cache
 
-	// Check if the view-level cache (bordered content) can be reused
-	if !m.viewCacheValid || m.viewSelected != m.selected || m.viewWidth != width || m.viewHeight != msgAreaHeight {
-		// Pre-compute border styles for this frame (avoids NewStyle per message)
-		borderFill := lipgloss.NewStyle().Background(styles.Background)
-		borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Background).BorderBackground(styles.Background)
-		borderSelect := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Accent).BorderBackground(styles.Background)
-		spacerBg := lipgloss.NewStyle().Background(styles.Background)
-
-		// Build the full content string, tracking line offsets per entry
-		var allRows []string
-		startLine := 0
-		endLine := 0
-		currentLine := 0
-
-		for i, e := range entries {
-			content := e.content
-			if e.msgIdx == m.selected {
-				startLine = currentLine
-				filled := borderFill.Width(width - 1).Render(content)
-				content = borderSelect.Render(filled)
-			} else if e.msgIdx >= 0 {
-				filled := borderFill.Width(width - 1).Render(content)
-				content = borderInvis.Render(filled)
+	// Locate selected entry's line range. O(N) scan over entryOffsets; cheap.
+	m.selectedStartLine = 0
+	m.selectedEndLine = 0
+	for i, e := range entries {
+		if e.msgIdx == m.selected {
+			m.selectedStartLine = m.entryOffsets[i]
+			m.selectedEndLine = m.selectedStartLine + e.height
+			// The trailing spacer is part of e.height; subtract it from the
+			// scroll-to-keep-visible target so we don't push the spacer into
+			// view above the selection.
+			if i < len(entries)-1 && e.msgIdx >= 0 {
+				m.selectedEndLine--
 			}
-			h := lipgloss.Height(content)
-			if e.msgIdx == m.selected {
-				endLine = currentLine + h
-			}
-			// Add a spacer after messages (not after last entry or separators)
-			if e.msgIdx >= 0 && i < len(entries)-1 {
-				content += "\n" + spacerBg.Width(width).Render("")
-				h++
-			}
-			allRows = append(allRows, content)
-			currentLine += h
+			break
 		}
-
-		m.viewContent = strings.Join(allRows, "\n")
-		m.viewSelected = m.selected
-		m.viewWidth = width
-		m.viewHeight = msgAreaHeight
-		m.selectedStartLine = startLine
-		m.selectedEndLine = endLine
-		m.viewCacheValid = true
 	}
 
-	// Configure viewport
-	m.vp.SetWidth(width)
-	m.vp.SetHeight(msgAreaHeight)
-	m.vp.KeyMap = viewport.KeyMap{}
-	m.vp.SetContent(m.viewContent)
-
-	// Scroll to keep selected item visible
-	if m.selectedEndLine > m.vp.YOffset()+m.vp.Height() {
-		m.vp.SetYOffset(m.selectedEndLine - m.vp.Height())
+	// Adjust yOffset to keep selection visible.
+	if m.selectedEndLine > m.yOffset+msgAreaHeight {
+		m.yOffset = m.selectedEndLine - msgAreaHeight
 	}
-	if m.selectedStartLine < m.vp.YOffset() {
-		m.vp.SetYOffset(m.selectedStartLine)
+	if m.selectedStartLine < m.yOffset {
+		m.yOffset = m.selectedStartLine
 	}
-
-	// Scroll indicators
-	var scrollUp, scrollDown string
-	if m.loading {
-		scrollUp = lipgloss.NewStyle().Background(styles.Background).Foreground(styles.TextMuted).Render("  Loading older messages...")
+	if m.yOffset < 0 {
+		m.yOffset = 0
+	}
+	maxOffset := m.totalLines - msgAreaHeight
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.yOffset > maxOffset {
+		m.yOffset = maxOffset
 	}
 
-	if m.vp.YOffset()+m.vp.Height() < m.vp.TotalLineCount() {
-		scrollDown = lipgloss.NewStyle().Background(styles.Background).Foreground(styles.TextMuted).Render("  -- more below --")
+	// Build the visible window directly from per-entry pre-split line slices.
+	// No lipgloss, no uniseg, no width measurement.
+	visible := make([]string, 0, msgAreaHeight)
+	want := msgAreaHeight
+	for i, e := range entries {
+		if want == 0 {
+			break
+		}
+		entryStart := m.entryOffsets[i]
+		entryEnd := entryStart + e.height
+		if entryEnd <= m.yOffset {
+			continue
+		}
+		if entryStart >= m.yOffset+msgAreaHeight {
+			break
+		}
+		var lines []string
+		if e.msgIdx == m.selected {
+			lines = e.linesSelected
+		} else {
+			lines = e.linesNormal
+		}
+		// Slice the portion of this entry that falls within [yOffset, yOffset+height).
+		from := 0
+		if entryStart < m.yOffset {
+			from = m.yOffset - entryStart
+		}
+		to := len(lines)
+		if entryEnd > m.yOffset+msgAreaHeight {
+			to = len(lines) - (entryEnd - (m.yOffset + msgAreaHeight))
+		}
+		visible = append(visible, lines[from:to]...)
+		want = msgAreaHeight - len(visible)
 	}
 
-	vpView := m.vp.View()
-	if scrollUp != "" {
-		vpView = scrollUp + "\n" + vpView
-	}
-	if scrollDown != "" {
-		vpView = vpView + "\n" + scrollDown
+	// Pad vertically with the themed spacer if content is shorter than the pane.
+	for len(visible) < msgAreaHeight {
+		visible = append(visible, m.cacheSpacer)
 	}
 
-	return header + "\n" + separator + "\n" + lipgloss.NewStyle().
-		Width(width).
-		Height(msgAreaHeight).
-		MaxHeight(msgAreaHeight).
-		Background(styles.Background).
-		Render(vpView)
+	// Scroll indicators replace the first / last line when applicable.
+	if m.loading && len(visible) > 0 {
+		visible[0] = m.cacheLoadingHint
+	}
+	if m.yOffset+msgAreaHeight < m.totalLines && len(visible) > 0 {
+		visible[len(visible)-1] = m.cacheMoreBelow
+	}
+
+	return chrome + "\n" + strings.Join(visible, "\n")
 }
 
 func dateFromTS(ts string) string {
