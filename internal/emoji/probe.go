@@ -52,10 +52,95 @@ func parseDSRResponse(b []byte) (int, error) {
 	return col, nil
 }
 
+// bufferedTermReader runs a single goroutine that reads bytes from an
+// underlying io.Reader (typically raw-mode stdin) and pushes them to a
+// buffered channel. Probe code consumes bytes from the channel with a
+// deadline.
+//
+// This architecture solves a subtle bug in serial DSR probing: when a
+// probe times out, the prior probe's delayed response can arrive after
+// the next probe is already issued. With a per-call goroutine reading
+// directly from stdin, the next probe's reader would consume the prior
+// probe's bytes and attribute the wrong width to the wrong emoji,
+// cascading errors through the cache.
+//
+// With a single long-lived reader feeding a channel, each probe can
+// explicitly Drain() any leftover bytes from the prior timed-out probe
+// before issuing its own query.
+type bufferedTermReader struct {
+	bytes chan byte
+	done  chan struct{}
+}
+
+func newBufferedTermReader(r io.Reader) *bufferedTermReader {
+	b := &bufferedTermReader{
+		// Buffer enough for ~10 typical DSR responses (~6 bytes each)
+		bytes: make(chan byte, 64),
+		done:  make(chan struct{}),
+	}
+	go func() {
+		one := make([]byte, 1)
+		for {
+			n, err := r.Read(one)
+			if n > 0 {
+				select {
+				case b.bytes <- one[0]:
+				case <-b.done:
+					return
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return b
+}
+
+// Close signals the reader goroutine to exit. The goroutine may still
+// be blocked in r.Read on a real terminal; this just unblocks any
+// pending channel send. The leaked read on stdin is unavoidable without
+// fd-level cancellation.
+func (b *bufferedTermReader) Close() {
+	close(b.done)
+}
+
+// Drain consumes any bytes currently in the buffer without blocking.
+// It uses a tiny per-byte deadline; if no byte arrives within that
+// window, the buffer is considered empty.
+func (b *bufferedTermReader) Drain() {
+	const drainTimeout = 5 * time.Millisecond
+	const maxDrain = 256
+	for i := 0; i < maxDrain; i++ {
+		select {
+		case <-b.bytes:
+			// consumed and discarded
+		case <-time.After(drainTimeout):
+			return
+		}
+	}
+}
+
+// ReadByte returns the next byte from the buffer or errProbeTimeout if
+// none arrives before the deadline.
+func (b *bufferedTermReader) ReadByte(deadline time.Time) (byte, error) {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return 0, errProbeTimeout
+	}
+	select {
+	case c := <-b.bytes:
+		return c, nil
+	case <-time.After(remaining):
+		return 0, errProbeTimeout
+	}
+}
+
 // probeOne renders a single emoji and queries the terminal for cursor
 // position to determine the rendered width.
 //
-// The caller is responsible for putting the terminal in raw mode.
+// The caller is responsible for putting the terminal in raw mode and
+// for draining the buffer between calls (probeAll handles this).
 //
 // Procedure:
 //  1. Write \r to move cursor to column 1
@@ -65,24 +150,39 @@ func parseDSRResponse(b []byte) (int, error) {
 //  5. Parse column from response
 //  6. Width = column - 1 (cursor was at column 1 before emoji)
 //  7. Write \r\x1b[K to clear the line for the next probe
-func probeOne(out io.Writer, in io.Reader, emoji string, timeout time.Duration) (int, error) {
-	// Move to column 1, render emoji, query position
+func probeOne(out io.Writer, in *bufferedTermReader, emoji string, timeout time.Duration) (int, error) {
+	// Drain any pending bytes from a previously timed-out probe.
+	in.Drain()
+
+	// Move to column 1, render emoji, query position.
 	if _, err := fmt.Fprint(out, "\r", emoji, "\x1b[6n"); err != nil {
 		return 0, err
 	}
 
-	// Read the DSR response. We read byte-by-byte until we see 'R' or hit timeout.
-	resp, err := readDSRResponse(in, timeout)
-	if err != nil {
-		// Always clear the line even on error
-		fmt.Fprint(out, "\r\x1b[K")
-		return 0, err
+	// Read the DSR response, byte-by-byte, until 'R' or timeout.
+	deadline := time.Now().Add(timeout)
+	var buf []byte
+	for {
+		c, err := in.ReadByte(deadline)
+		if err != nil {
+			fmt.Fprint(out, "\r\x1b[K")
+			return 0, err
+		}
+		buf = append(buf, c)
+		if c == 'R' {
+			break
+		}
+		// Defensive: don't read forever even if 'R' never comes.
+		if len(buf) > 32 {
+			fmt.Fprint(out, "\r\x1b[K")
+			return 0, errors.New("DSR response too long")
+		}
 	}
 
-	// Clear line for next probe
+	// Clear line for next probe.
 	fmt.Fprint(out, "\r\x1b[K")
 
-	col, perr := parseDSRResponse(resp)
+	col, perr := parseDSRResponse(buf)
 	if perr != nil {
 		return 0, perr
 	}
@@ -91,68 +191,6 @@ func probeOne(out io.Writer, in io.Reader, emoji string, timeout time.Duration) 
 		return 0, fmt.Errorf("implausible width: %d", width)
 	}
 	return width, nil
-}
-
-// readDSRResponse reads bytes from r until 'R' is seen or timeout elapses.
-//
-// Concurrency model: each iteration spawns a single-shot reader goroutine
-// that reads exactly one byte. On the success path (byte arrives before
-// the deadline), the goroutine sends its result and exits — no leaked
-// goroutines. On timeout, the inner goroutine is still blocked in
-// r.Read; we use a per-iteration done channel to ensure it can exit
-// cleanly when its byte eventually arrives instead of writing to a
-// stale results channel. Each goroutine owns its own one-byte buffer,
-// so a leaked goroutine cannot race with subsequent reads.
-//
-// Real-terminal caveat: with a raw-mode os.Stdin (no read deadline),
-// a leaked goroutine from a timed-out probe will still consume the
-// next byte that arrives — which may be a delayed DSR response from
-// the prior query. Callers that probe repeatedly should consider
-// draining stdin before the next probe.
-func readDSRResponse(r io.Reader, timeout time.Duration) ([]byte, error) {
-	type readResult struct {
-		b   byte
-		err error
-	}
-
-	deadline := time.Now().Add(timeout)
-	var buf []byte
-
-	for time.Now().Before(deadline) {
-		done := make(chan struct{})
-		results := make(chan readResult, 1)
-		go func() {
-			one := make([]byte, 1)
-			n, err := r.Read(one)
-			res := readResult{err: err}
-			if n > 0 {
-				res.b = one[0]
-				res.err = nil
-			}
-			select {
-			case results <- res:
-			case <-done:
-			}
-		}()
-
-		remaining := time.Until(deadline)
-		select {
-		case res := <-results:
-			if res.err != nil {
-				close(done)
-				return buf, res.err
-			}
-			buf = append(buf, res.b)
-			close(done)
-			if res.b == 'R' {
-				return buf, nil
-			}
-		case <-time.After(remaining):
-			close(done)
-			return buf, errProbeTimeout
-		}
-	}
-	return buf, errProbeTimeout
 }
 
 // probeAll iterates over the kyokomi codemap and probes the rendered
@@ -166,11 +204,14 @@ func readDSRResponse(r io.Reader, timeout time.Duration) ([]byte, error) {
 // The codemap must use kyokomi's format: ":name:" → unicode-with-trailing-space.
 // We trim the trailing ReplacePadding space before probing.
 func probeAll(out io.Writer, in io.Reader, codemap map[string]string, perProbeTimeout time.Duration) (map[string]int, error) {
+	br := newBufferedTermReader(in)
+	defer br.Close()
+
 	result := make(map[string]int, len(codemap))
 	seen := make(map[string]bool)
 
 	// Sanity check: probe a known-1-wide ASCII char first.
-	w, err := probeOne(out, in, "a", perProbeTimeout)
+	w, err := probeOne(out, br, "a", perProbeTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("sanity probe failed: %w", err)
 	}
@@ -189,7 +230,7 @@ func probeAll(out io.Writer, in io.Reader, codemap map[string]string, perProbeTi
 		}
 		seen[emoji] = true
 
-		width, err := probeOne(out, in, emoji, perProbeTimeout)
+		width, err := probeOne(out, br, emoji, perProbeTimeout)
 		if err != nil {
 			// Skip this emoji; it'll fall back to lipgloss.Width.
 			continue

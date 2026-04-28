@@ -122,9 +122,11 @@ func TestProbeOne(t *testing.T) {
 		"❤": 1,
 	}
 	ft := newFakeTerminal(widths)
+	br := newBufferedTermReader(ft)
+	defer br.Close()
 
 	for emoji, want := range widths {
-		got, err := probeOne(ft, ft, emoji, 200*time.Millisecond)
+		got, err := probeOne(ft, br, emoji, 200*time.Millisecond)
 		if err != nil {
 			t.Errorf("probeOne(%q) error: %v", emoji, err)
 			continue
@@ -138,8 +140,10 @@ func TestProbeOne(t *testing.T) {
 func TestProbeOneTimeout(t *testing.T) {
 	ft := newFakeTerminal(nil)
 	ft.timeout = true
+	br := newBufferedTermReader(ft)
+	defer br.Close()
 
-	_, err := probeOne(ft, ft, "👍", 50*time.Millisecond)
+	_, err := probeOne(ft, br, "👍", 50*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
 	}
@@ -196,5 +200,110 @@ func TestProbeAllContinuesAfterUnknown(t *testing.T) {
 	}
 	if _, ok := result["a"]; !ok {
 		t.Error("expected 'a' in result; loop did not continue past unknown emoji")
+	}
+}
+
+// delayedFakeTerminal extends fakeTerminal: for the specified emoji,
+// the DSR response is delayed by `delay` instead of returned immediately.
+// This simulates the real-terminal scenario where a probe times out but
+// the response arrives shortly after, during the next probe.
+type delayedFakeTerminal struct {
+	*fakeTerminal
+	delayedEmoji string
+	delay        time.Duration
+}
+
+func newDelayedFakeTerminal(widths map[string]int, delayedEmoji string, delay time.Duration) *delayedFakeTerminal {
+	return &delayedFakeTerminal{
+		fakeTerminal: newFakeTerminal(widths),
+		delayedEmoji: delayedEmoji,
+		delay:        delay,
+	}
+}
+
+func (f *delayedFakeTerminal) Write(p []byte) (int, error) {
+	f.mu.Lock()
+	f.in.Write(p)
+	s := string(p)
+
+	if !strings.Contains(s, "\x1b[6n") {
+		f.mu.Unlock()
+		return len(p), nil
+	}
+
+	buf := f.in.String()
+	lastCR := strings.LastIndex(buf[:strings.LastIndex(buf, "\x1b[6n")], "\r")
+	if lastCR >= 0 {
+		f.current = buf[lastCR+1 : strings.LastIndex(buf, "\x1b[6n")]
+	}
+	emoji := f.current
+	col, ok := f.respCol[emoji]
+	if !ok {
+		col = 1
+	}
+	delayed := emoji == f.delayedEmoji
+	f.mu.Unlock()
+
+	if delayed {
+		// Spawn a goroutine to write the response after the delay.
+		go func() {
+			time.Sleep(f.delay)
+			f.mu.Lock()
+			fmt.Fprintf(f.out, "\x1b[1;%dR", 1+col)
+			f.mu.Unlock()
+		}()
+	} else {
+		f.mu.Lock()
+		fmt.Fprintf(f.out, "\x1b[1;%dR", 1+col)
+		f.mu.Unlock()
+	}
+	return len(p), nil
+}
+
+// TestProbeAllNoCascadeAfterTimeout reproduces the bug where a delayed
+// DSR response from a timed-out probe corrupted subsequent probes by
+// being read as if it were the response to the next emoji.
+//
+// Without the fix (per-call goroutine reading directly from stdin), the
+// delayed response for "delayed_em" arrives during the next probe and
+// gets attributed to "after_em", giving "after_em" the wrong width.
+//
+// With the fix (single reader goroutine + Drain before each probe), the
+// stale bytes are consumed by Drain before "after_em" reads its own
+// response, so widths stay correctly attributed.
+func TestProbeAllNoCascadeAfterTimeout(t *testing.T) {
+	codemap := map[string]string{
+		":sanity:":  "a",
+		":delayed:": "X", // X represents the slow-to-respond emoji
+		":after:":   "Y", // Y is probed right after the timeout
+		":done:":    "Z",
+	}
+	widths := map[string]int{
+		"a": 1, // sanity probe
+		"X": 2, // delayed emoji's true width
+		"Y": 1, // after emoji's true width — easy to distinguish from X
+		"Z": 1,
+	}
+
+	// Delay X's response by 150ms — longer than the 50ms timeout, so X
+	// times out, but the response arrives in time to corrupt Y.
+	ft := newDelayedFakeTerminal(widths, "X", 150*time.Millisecond)
+
+	result, err := probeAll(ft, ft, codemap, 50*time.Millisecond)
+	if err != nil {
+		t.Fatalf("probeAll: %v", err)
+	}
+
+	// The delayed emoji "X" should be missing (timed out) or have its
+	// own width; either way, "Y" must NOT have been measured as 2 (X's
+	// width). With the bug, "Y" gets attributed X's width.
+	yWidth, ok := result["Y"]
+	if ok && yWidth == 2 {
+		t.Errorf("Y width attributed to X's delayed response: got %d, want 1 (X's stale response leaked)", yWidth)
+	}
+
+	// Sanity: 'a' must be 1 (otherwise the probe itself is broken).
+	if w := result["a"]; w != 1 {
+		t.Errorf("sanity probe corrupt: a=%d, want 1", w)
 	}
 }
