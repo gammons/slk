@@ -79,6 +79,10 @@ func (m *mockSlackAPI) AuthTest() (*slack.AuthTestResponse, error) {
 	return nil, nil
 }
 
+func (m *mockSlackAPI) JoinConversation(channelID string) (*slack.Channel, string, []string, error) {
+	return &slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: channelID}}}, "", nil, nil
+}
+
 func TestSendTypingReturnsErrorWhenNotConnected(t *testing.T) {
 	c := &Client{}
 	err := c.SendTyping("C123")

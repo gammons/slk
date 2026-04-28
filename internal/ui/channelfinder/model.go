@@ -9,10 +9,17 @@ import (
 	"github.com/muesli/reflow/truncate"
 )
 
+// nonJoinedColor is a hard-coded dim grey used for channels the user is not a
+// member of, so the dim treatment is unmistakable across all themes and does
+// not rely on terminal Faint support (which many emulators render weakly or
+// not at all).
+var nonJoinedColor = lipgloss.Color("#5a5a5a")
+
 // ChannelResult is returned when the user selects a channel.
 type ChannelResult struct {
-	ID   string
-	Name string
+	ID     string
+	Name   string
+	Joined bool // false => caller should join the channel before opening it
 }
 
 // Item represents a searchable channel/DM entry.
@@ -21,6 +28,7 @@ type Item struct {
 	Name     string
 	Type     string // channel, dm, group_dm, private
 	Presence string // for DMs: active, away
+	Joined   bool   // true if the user is already a member; false for browseable public channels
 }
 
 // Model is the fuzzy channel finder overlay.
@@ -40,6 +48,47 @@ func New() Model {
 // SetItems updates the searchable channel list.
 func (m *Model) SetItems(items []Item) {
 	m.items = items
+}
+
+// MarkJoined flips the Joined bit on a channel that the user just joined,
+// so it stops rendering as dimmed and the next Enter on it skips the join
+// step.
+func (m *Model) MarkJoined(channelID string) {
+	for i := range m.items {
+		if m.items[i].ID == channelID {
+			m.items[i].Joined = true
+			return
+		}
+	}
+}
+
+// SetBrowseable replaces the non-joined channel entries in the finder.
+// Joined items (added via SetItems) are preserved; previous non-joined items
+// are dropped and replaced with the new set. Items whose IDs already appear
+// among the joined entries are skipped to avoid duplicates.
+func (m *Model) SetBrowseable(browseable []Item) {
+	// Drop existing non-joined items and build an ID set of joined items.
+	joined := m.items[:0]
+	have := make(map[string]struct{}, len(m.items))
+	for _, it := range m.items {
+		if it.Joined {
+			joined = append(joined, it)
+			have[it.ID] = struct{}{}
+		}
+	}
+	m.items = joined
+	for _, it := range browseable {
+		if _, dup := have[it.ID]; dup {
+			continue
+		}
+		it.Joined = false
+		m.items = append(m.items, it)
+	}
+	// Re-filter against current query so the new items appear immediately if
+	// the overlay is open.
+	if m.visible {
+		m.filter()
+	}
 }
 
 // Open shows the overlay and resets state.
@@ -68,8 +117,9 @@ func (m *Model) HandleKey(keyStr string) *ChannelResult {
 		if len(m.filtered) > 0 {
 			idx := m.filtered[m.selected]
 			return &ChannelResult{
-				ID:   m.items[idx].ID,
-				Name: m.items[idx].Name,
+				ID:     m.items[idx].ID,
+				Name:   m.items[idx].Name,
+				Joined: m.items[idx].Joined,
 			}
 		}
 		return nil
@@ -215,27 +265,42 @@ func (m Model) renderBox(termWidth int) string {
 		idx := m.filtered[i]
 		item := m.items[idx]
 
-		prefix := channelPrefix(item)
-		line := prefix + " " + item.Name
+		isSelected := i == m.selected
 
-		if lipgloss.Width(line) > innerWidth {
-			line = truncate.StringWithTail(line, uint(innerWidth), "…")
+		// Render prefix and name as SEPARATE styled fragments. If we built a
+		// single string and ran one outer style over it, the prefix's own
+		// ANSI reset (\x1b[0m) would drop the outer foreground / faint
+		// attributes for everything after it, defeating the dim treatment.
+		var prefix, name string
+		if item.Joined {
+			prefix = channelPrefix(item)
+			nameStyle := lipgloss.NewStyle().Foreground(styles.TextPrimary)
+			if isSelected {
+				nameStyle = nameStyle.Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
+			}
+			name = nameStyle.Render(item.Name)
+		} else {
+			// Non-joined: dim grey for everything, including the prefix.
+			dim := lipgloss.NewStyle().Foreground(nonJoinedColor)
+			prefix = dim.Render("#")
+			name = dim.Render(item.Name)
 		}
 
-		if i == m.selected {
+		line := prefix + " " + name
+		// Truncate to fit (truncate.StringWithTail is ANSI-aware).
+		if lipgloss.Width(line) > innerWidth-1 {
+			line = truncate.StringWithTail(line, uint(innerWidth-1), "…")
+		}
+		// Right-pad with spaces to fill the row.
+		if pad := innerWidth - 1 - lipgloss.Width(line); pad > 0 {
+			line += strings.Repeat(" ", pad)
+		}
+
+		if isSelected {
 			indicator := lipgloss.NewStyle().Foreground(styles.Accent).Render("▌")
-			row := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#FFFFFF")).
-				Bold(true).
-				Width(innerWidth - 1).
-				Render(line)
-			resultRows = append(resultRows, indicator+row)
+			resultRows = append(resultRows, indicator+line)
 		} else {
-			row := lipgloss.NewStyle().
-				Foreground(styles.TextPrimary).
-				Width(innerWidth - 1).
-				Render(line)
-			resultRows = append(resultRows, " "+row)
+			resultRows = append(resultRows, " "+line)
 		}
 	}
 

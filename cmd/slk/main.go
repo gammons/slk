@@ -42,7 +42,10 @@ type WorkspaceContext struct {
 	UserNames   map[string]string
 	LastReadMap map[string]string
 	Channels    []sidebar.ChannelItem
-	FinderItems []channelfinder.Item
+	// FinderItems is the merged list shown in the Ctrl+T finder. Initially
+	// contains only joined channels; the BrowseableChannelsLoadedMsg pipeline
+	// extends it with non-joined public channels in the background.
+	FinderItems   []channelfinder.Item
 	TeamID        string
 	TeamName      string
 	UserID        string
@@ -321,6 +324,14 @@ func run() error {
 		app.SetTypingSender(func(channelID string) {
 			_ = client.SendTyping(channelID)
 		})
+
+		app.SetChannelJoiner(func(channelID, channelName string) tea.Msg {
+			ctx := context.Background()
+			if err := client.JoinChannel(ctx, channelID); err != nil {
+				return ui.ChannelJoinFailedMsg{ID: channelID, Name: channelName, Err: err}
+			}
+			return ui.ChannelJoinedMsg{ID: channelID, Name: channelName}
+		})
 	}
 
 	// Wire workspace switcher
@@ -405,6 +416,11 @@ func run() error {
 				UserNames:   wctx.UserNames,
 				UserID:      wctx.UserID,
 			})
+
+			// Background fetch of all public channels so the finder can show
+			// channels the user is not yet a member of. Slow on big workspaces;
+			// must not block initial workspace readiness.
+			go fetchBrowseableChannels(ctx, wctx, p)
 
 			// Resolve unknown DM user names in background
 			if len(wctx.UnresolvedDMs) > 0 {
@@ -559,17 +575,65 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		}
 	}
 
-	// Build finder items
+	// Build finder items. The user is a member of every channel returned by
+	// GetChannels (it's backed by users.conversations), so Joined=true here.
+	// A separate background fetch surfaces non-joined public channels for
+	// browsing -- see startBrowseableChannelsFetch in main.go.
 	for _, ch := range wctx.Channels {
 		wctx.FinderItems = append(wctx.FinderItems, channelfinder.Item{
 			ID:       ch.ID,
 			Name:     ch.Name,
 			Type:     ch.Type,
 			Presence: ch.Presence,
+			Joined:   true,
 		})
 	}
 
 	return wctx, nil
+}
+
+// fetchBrowseableChannels fetches every public channel in the workspace and
+// sends a BrowseableChannelsLoadedMsg to the TUI with the entries the user
+// has NOT joined. Joined entries are skipped to avoid duplicates with the
+// existing finder list. Runs in a background goroutine; failures are logged
+// but otherwise ignored (the finder simply continues to show only joined
+// channels).
+func fetchBrowseableChannels(ctx context.Context, wctx *WorkspaceContext, p *tea.Program) {
+	channels, err := wctx.Client.GetAllPublicChannels(ctx)
+	if err != nil {
+		log.Printf("warning: fetching browseable channels for %s: %v", wctx.TeamName, err)
+		return
+	}
+
+	// Build set of joined IDs so we can skip them.
+	joined := make(map[string]struct{}, len(wctx.Channels))
+	for _, ch := range wctx.Channels {
+		joined[ch.ID] = struct{}{}
+	}
+
+	browseable := make([]channelfinder.Item, 0, len(channels))
+	for _, ch := range channels {
+		if _, ok := joined[ch.ID]; ok {
+			continue
+		}
+		browseable = append(browseable, channelfinder.Item{
+			ID:     ch.ID,
+			Name:   ch.Name,
+			Type:   "channel",
+			Joined: false,
+		})
+	}
+
+	// Persist on the workspace context so future workspace switches preserve
+	// the merged list.
+	wctx.FinderItems = append(wctx.FinderItems, browseable...)
+
+	if p != nil {
+		p.Send(ui.BrowseableChannelsLoadedMsg{
+			TeamID: wctx.TeamID,
+			Items:  browseable,
+		})
+	}
 }
 
 // resolveUser ensures we have the display name and avatar for a user.

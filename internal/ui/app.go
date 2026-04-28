@@ -3,6 +3,7 @@ package ui
 
 import (
 	"fmt"
+	"log"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -122,6 +123,14 @@ type (
 	WorkspaceFailedMsg struct {
 		TeamName string
 	}
+	// BrowseableChannelsLoadedMsg is sent after the background fetch of all
+	// public channels (including ones the user has not joined) completes.
+	// The Items have Joined=false; the App merges them into the channel
+	// finder for the matching workspace.
+	BrowseableChannelsLoadedMsg struct {
+		TeamID string
+		Items  []channelfinder.Item
+	}
 	SpinnerTickMsg    struct{}
 	LoadingTimeoutMsg struct{}
 	UserTypingMsg     struct {
@@ -173,6 +182,26 @@ type FrecentRecordFunc func(emoji string)
 // TypingSendFunc is called to broadcast a typing indicator.
 type TypingSendFunc func(channelID string)
 
+// JoinChannelFunc is called to join a public channel by ID. Returns a tea.Msg
+// describing the result (typically ChannelJoinedMsg or ChannelJoinFailedMsg).
+type JoinChannelFunc func(channelID, channelName string) tea.Msg
+
+// ChannelJoinedMsg is sent after the user successfully joins a channel from
+// the channel finder. The App responds by adding the channel to the sidebar
+// (so it appears in the user's regular channel list), marking it as joined in
+// the finder, and switching to it.
+type ChannelJoinedMsg struct {
+	ID   string
+	Name string
+}
+
+// ChannelJoinFailedMsg is sent when the join API call fails.
+type ChannelJoinFailedMsg struct {
+	ID   string
+	Name string
+	Err  error
+}
+
 type App struct {
 	// Sub-models
 	workspaceRail   workspace.Model
@@ -203,6 +232,7 @@ type App struct {
 
 	// Current context
 	activeChannelID string
+	activeTeamID    string // workspace whose data is currently loaded into the side panels
 
 	// Callbacks
 	channelFetcher       ChannelFetchFunc
@@ -210,6 +240,7 @@ type App struct {
 	messageSender        MessageSendFunc
 	threadFetcher        ThreadFetchFunc
 	threadReplySender    ThreadReplySendFunc
+	channelJoiner        JoinChannelFunc
 	fetchingOlder        bool
 
 	// Reaction picker
@@ -473,6 +504,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.channelFinder.SetItems(msg.FinderItems)
 		a.SetUserNames(msg.UserNames)
 		a.currentUserID = msg.UserID
+		a.activeTeamID = msg.TeamID
 		a.workspaceRail.SelectByID(msg.TeamID)
 		// Load first channel
 		if len(msg.Channels) > 0 {
@@ -511,6 +543,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.channelFinder.SetItems(msg.FinderItems)
 			a.SetUserNames(msg.UserNames)
 			a.currentUserID = msg.UserID
+			a.activeTeamID = msg.TeamID
 			a.workspaceRail.SelectByID(msg.TeamID)
 			if len(msg.Channels) > 0 {
 				first := msg.Channels[0]
@@ -518,6 +551,46 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return ChannelSelectedMsg{ID: first.ID, Name: first.Name}
 				})
 			}
+		}
+
+	case ChannelJoinedMsg:
+		// Add the newly-joined channel to the sidebar (so it shows up in the
+		// regular list) and mark it joined in the finder. Then dispatch a
+		// ChannelSelectedMsg to open it.
+		newItem := sidebar.ChannelItem{
+			ID:   msg.ID,
+			Name: msg.Name,
+			Type: "channel",
+		}
+		items := a.sidebar.Items()
+		// Avoid double-add if a presence/list event raced ahead.
+		alreadyInSidebar := false
+		for _, it := range items {
+			if it.ID == msg.ID {
+				alreadyInSidebar = true
+				break
+			}
+		}
+		if !alreadyInSidebar {
+			items = append(items, newItem)
+			a.sidebar.SetItems(items)
+		}
+		a.channelFinder.MarkJoined(msg.ID)
+		a.sidebar.SelectByID(msg.ID)
+		cmds = append(cmds, func() tea.Msg {
+			return ChannelSelectedMsg{ID: msg.ID, Name: msg.Name}
+		})
+
+	case ChannelJoinFailedMsg:
+		// Nothing fancy yet -- could surface a status-bar toast in future.
+		log.Printf("warning: failed to join channel %s: %v", msg.Name, msg.Err)
+
+	case BrowseableChannelsLoadedMsg:
+		// Only apply to the channel finder if this matches the workspace
+		// whose items are currently loaded. Per-workspace browseable items
+		// are kept in main.go's WorkspaceContext for any future switch.
+		if msg.TeamID == a.activeTeamID {
+			a.channelFinder.SetBrowseable(msg.Items)
 		}
 
 	case WorkspaceFailedMsg:
@@ -803,9 +876,21 @@ func (a *App) handleChannelFinderMode(msg tea.KeyMsg) tea.Cmd {
 	if result != nil {
 		a.channelFinder.Close()
 		a.SetMode(ModeNormal)
-		a.sidebar.SelectByID(result.ID)
-		return func() tea.Msg {
-			return ChannelSelectedMsg{ID: result.ID, Name: result.Name}
+		// Already-joined: switch immediately. Not joined: kick off a join
+		// command; ChannelJoinedMsg will fold the channel into the sidebar
+		// and switch to it.
+		if result.Joined {
+			a.sidebar.SelectByID(result.ID)
+			return func() tea.Msg {
+				return ChannelSelectedMsg{ID: result.ID, Name: result.Name}
+			}
+		}
+		if a.channelJoiner != nil {
+			joiner := a.channelJoiner
+			id, name := result.ID, result.Name
+			return func() tea.Msg {
+				return joiner(id, name)
+			}
 		}
 	}
 
@@ -1483,6 +1568,11 @@ func (a *App) SetTypingEnabled(enabled bool) {
 // SetTypingSender sets the callback for sending typing indicators.
 func (a *App) SetTypingSender(fn TypingSendFunc) {
 	a.typingSendFn = fn
+}
+
+// SetChannelJoiner sets the callback for joining a channel via the Slack API.
+func (a *App) SetChannelJoiner(fn JoinChannelFunc) {
+	a.channelJoiner = fn
 }
 
 // shouldSendTyping returns true if enough time has passed since the last typing send.
