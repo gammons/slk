@@ -513,3 +513,17 @@ func sliceColumns(p plainLine, from, to int) string {
 	}
 	return p.Text[p.Bytes[from]:p.Bytes[to]]
 }
+
+// PlainLine is the exported alias of plainLine for sibling UI packages
+// (e.g. thread) that maintain their own render caches and need to do
+// the same column→byte plain-text mirror lookups for selection.
+type PlainLine = plainLine
+
+// PlainLines is the exported form of plainLines.
+func PlainLines(s string) []PlainLine { return plainLines(s) }
+
+// DisplayWidthOfPlain is the exported form of displayWidthOfPlain.
+func DisplayWidthOfPlain(p PlainLine) int { return displayWidthOfPlain(p) }
+
+// SliceColumns is the exported form of sliceColumns.
+func SliceColumns(p PlainLine, from, to int) string { return sliceColumns(p, from, to) }

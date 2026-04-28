@@ -6,14 +6,30 @@ import (
 
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	emojiutil "github.com/gammons/slk/internal/emoji"
 	emoji "github.com/kyokomi/emoji/v2"
 
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/selection"
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
 var thickLeftBorder = lipgloss.Border{Left: "▌"}
+
+// viewEntry is a pre-rendered reply, matching the shape used by
+// internal/ui/messages.viewEntry: linesNormal is the bordered styled
+// content split on "\n"; linesPlain is the column-aligned mirror of
+// the UNBORDERED content; contentColOffset is the column where content
+// begins inside the BORDERED viewContent (= 1 for replies, which carry
+// the thick left border applied during the viewContent build step).
+type viewEntry struct {
+	linesNormal      []string
+	linesPlain       []messages.PlainLine
+	height           int
+	replyIdx         int
+	contentColOffset int
+}
 
 // Model represents the thread panel UI component.
 // It displays a parent message and its replies with cursor navigation.
@@ -30,10 +46,20 @@ type Model struct {
 	reactionNavActive bool
 	reactionNavIndex  int
 
-	// Render cache -- pre-rendered reply strings (without borders)
-	cache         []string
+	// Render cache -- pre-rendered reply entries (unbordered content
+	// captured per reply; borders are applied later when assembling
+	// viewContent).
+	cache         []viewEntry
 	cacheWidth    int
 	cacheReplyLen int
+
+	// entryOffsets / totalLines mirror the FULLY BORDERED viewContent:
+	// entryOffsets[i] is the absolute line index inside viewContent where
+	// reply i starts. Inter-reply separators occupy a single line that is
+	// NOT inside any entry's [start, start+height) range; selection
+	// overlay/extraction skips them naturally.
+	entryOffsets []int
+	totalLines   int
 
 	// View-level cache -- bordered content ready for viewport
 	viewContent       string
@@ -43,6 +69,16 @@ type Model struct {
 	viewCacheValid    bool
 	selectedStartLine int
 	selectedEndLine   int
+
+	// Mouse selection state. selRange is the user's drag selection.
+	// replyIDToIdx maps reply TS -> entry index in m.cache for O(1)
+	// anchor resolution; rebuilt on every cache build. lastViewHeight is
+	// captured during View() so ScrollHintForDrag knows the reply-area
+	// bounds without needing the App to plumb them through.
+	selRange       selection.Range
+	hasSelection   bool
+	replyIDToIdx   map[string]int
+	lastViewHeight int
 
 	// version increments on every state change that could alter View() output.
 	version int64
@@ -70,6 +106,7 @@ func (m *Model) InvalidateCache() {
 // SetThread populates the thread panel with a parent message and replies.
 // The cursor starts at the bottom (newest reply).
 func (m *Model) SetThread(parent messages.MessageItem, replies []messages.MessageItem, channelID, threadTS string) {
+	m.ClearSelection()
 	m.parent = parent
 	m.replies = replies
 	m.channelID = channelID
@@ -91,6 +128,7 @@ func (m *Model) AddReply(msg messages.MessageItem) {
 
 // Clear resets all thread state.
 func (m *Model) Clear() {
+	m.ClearSelection()
 	m.parent = messages.MessageItem{}
 	m.replies = nil
 	m.channelID = ""
@@ -341,21 +379,298 @@ func (m *Model) ClickAt(y int) {
 	absoluteY := y + m.vp.YOffset()
 
 	currentLine := 0
-	for i, cached := range m.cache {
-		h := lipgloss.Height(cached)
+	for _, e := range m.cache {
+		h := e.height
 		if h == 0 {
 			h = 1
 		}
 		if absoluteY >= currentLine && absoluteY < currentLine+h {
-			if m.selected != i {
-				m.selected = i
+			if m.selected != e.replyIdx {
+				m.selected = e.replyIdx
 				m.viewCacheValid = false
 				m.dirty()
 			}
 			return
 		}
 		currentLine += h
+		// Inter-reply separators occupy 1 line in the bordered viewContent
+		// but are NOT inside any cache entry. Skip a line between entries
+		// so click coordinates stay in sync with viewContent.
+		currentLine++
 	}
+}
+
+// BeginSelectionAt anchors a new selection at the given pane-local
+// coordinates (relative to the reply area's top-left). The selection
+// becomes Active. Out-of-range inputs that don't land on any cache
+// entry are silently no-ops.
+func (m *Model) BeginSelectionAt(viewportY, x int) {
+	abs := m.absoluteLineAt(viewportY)
+	a, ok := m.anchorAt(abs, x)
+	if !ok {
+		return
+	}
+	m.selRange = selection.Range{Start: a, End: a, Active: true}
+	m.hasSelection = true
+	m.dirty()
+}
+
+// ExtendSelectionAt updates the End anchor of the active selection.
+// No-op if BeginSelectionAt was never called or the coordinates fall
+// on a non-entry row (inter-reply separator).
+func (m *Model) ExtendSelectionAt(viewportY, x int) {
+	if !m.hasSelection {
+		return
+	}
+	abs := m.absoluteLineAt(viewportY)
+	a, ok := m.anchorAt(abs, x)
+	if !ok {
+		return
+	}
+	m.selRange.End = a
+	m.dirty()
+}
+
+// EndSelection finalizes the drag, returning the plain-text contents
+// of the selection. Returns ok=false when the selection is empty
+// (a click without drag).
+func (m *Model) EndSelection() (string, bool) {
+	if !m.hasSelection {
+		return "", false
+	}
+	m.selRange.Active = false
+	if m.selRange.IsEmpty() {
+		m.hasSelection = false
+		m.selRange = selection.Range{}
+		m.dirty()
+		return "", false
+	}
+	text := m.SelectionText()
+	m.dirty()
+	if text == "" {
+		return "", false
+	}
+	return text, true
+}
+
+// ClearSelection removes the current selection, if any.
+func (m *Model) ClearSelection() {
+	if !m.hasSelection {
+		return
+	}
+	m.hasSelection = false
+	m.selRange = selection.Range{}
+	m.dirty()
+}
+
+// HasSelection reports whether a selection is currently active or
+// pinned-on-screen post-drag.
+func (m *Model) HasSelection() bool { return m.hasSelection }
+
+// ScrollHintForDrag returns -1 if the cursor is within 1 row of the top
+// edge of the reply area, +1 if within 1 row of the bottom, else 0.
+// Used by the App layer to schedule auto-scroll ticks during a drag.
+func (m *Model) ScrollHintForDrag(viewportY int) int {
+	h := m.lastViewHeight
+	if h <= 0 {
+		return 0
+	}
+	if viewportY <= 0 {
+		return -1
+	}
+	if viewportY >= h-1 {
+		return +1
+	}
+	return 0
+}
+
+// absoluteLineAt converts a viewport-local y coordinate to an absolute
+// line index inside m.viewContent (the bordered content the viewport
+// scrolls through). Out-of-range inputs clamp to [0, totalLines-1].
+func (m *Model) absoluteLineAt(viewportY int) int {
+	abs := viewportY + m.vp.YOffset()
+	if abs < 0 {
+		abs = 0
+	}
+	if m.totalLines > 0 && abs >= m.totalLines {
+		abs = m.totalLines - 1
+	}
+	return abs
+}
+
+// anchorAt converts an absolute line + display column into an Anchor.
+// `col` is the mouse's display column (relative to the reply area's
+// content). We subtract contentColOffset to get the plain column, then
+// clamp to plain-line width. Returns ok=false when no entry covers the
+// line (inter-reply separator) or when the cache is empty.
+func (m *Model) anchorAt(absLine, col int) (selection.Anchor, bool) {
+	for i, e := range m.cache {
+		start := m.entryOffsets[i]
+		end := start + e.height
+		if absLine < start || absLine >= end {
+			continue
+		}
+		j := absLine - start
+		plainCol := col - e.contentColOffset
+		if plainCol < 0 {
+			plainCol = 0
+		}
+		if j < len(e.linesPlain) {
+			if w := messages.DisplayWidthOfPlain(e.linesPlain[j]); plainCol > w {
+				plainCol = w
+			}
+		}
+		var msgID string
+		if e.replyIdx >= 0 && e.replyIdx < len(m.replies) {
+			msgID = m.replies[e.replyIdx].TS
+		}
+		return selection.Anchor{MessageID: msgID, Line: j, Col: plainCol}, true
+	}
+	return selection.Anchor{}, false
+}
+
+// resolveAnchor returns the absolute line + plain col for an Anchor.
+// Returns ok=false when the reply is no longer present.
+func (m *Model) resolveAnchor(a selection.Anchor) (absLine, col int, ok bool) {
+	if a.MessageID == "" {
+		return 0, 0, false
+	}
+	idx, found := m.replyIDToIdx[a.MessageID]
+	if !found || idx >= len(m.cache) {
+		return 0, 0, false
+	}
+	e := m.cache[idx]
+	if a.Line < 0 || a.Line >= e.height {
+		return 0, 0, false
+	}
+	return m.entryOffsets[idx] + a.Line, a.Col, true
+}
+
+// SelectionText extracts the plain-text contents of the current
+// selection. Trailing whitespace is trimmed per line; a final trailing
+// newline is removed. Multi-rune grapheme clusters are preserved
+// intact.
+func (m *Model) SelectionText() string {
+	if !m.hasSelection || m.selRange.IsEmpty() {
+		return ""
+	}
+	loA, hiA := m.selRange.Normalize()
+	loLine, loCol, ok1 := m.resolveAnchor(loA)
+	hiLine, hiCol, ok2 := m.resolveAnchor(hiA)
+	if !ok1 || !ok2 {
+		return ""
+	}
+	if loLine > hiLine || (loLine == hiLine && loCol >= hiCol) {
+		return ""
+	}
+	var b strings.Builder
+	for i, e := range m.cache {
+		entryStart := m.entryOffsets[i]
+		entryEnd := entryStart + e.height
+		if entryEnd <= loLine {
+			continue
+		}
+		if entryStart > hiLine {
+			break
+		}
+		for j, plain := range e.linesPlain {
+			absLine := entryStart + j
+			if absLine < loLine {
+				continue
+			}
+			if absLine > hiLine {
+				break
+			}
+			from := 0
+			to := messages.DisplayWidthOfPlain(plain)
+			if absLine == loLine {
+				from = loCol
+			}
+			if absLine == hiLine {
+				to = hiCol
+			}
+			seg := messages.SliceColumns(plain, from, to)
+			seg = strings.TrimRight(seg, " ")
+			b.WriteString(seg)
+			if absLine != hiLine {
+				b.WriteByte('\n')
+			}
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// applySelectionOverlay returns viewContent with selection-style
+// applied to the visible columns of the active selection range.
+// Operates on the FULLY-BORDERED viewContent because the viewport
+// will slice and render it. Plain columns from linesPlain map to
+// display columns by adding the entry's contentColOffset (= 1 for
+// reply rows, since the thick left border occupies display column 0).
+//
+// Inter-reply separator lines are NOT inside any cache entry's
+// [start, end) range, so they are skipped naturally.
+func (m *Model) applySelectionOverlay(content string) string {
+	loA, hiA := m.selRange.Normalize()
+	loLine, loCol, ok1 := m.resolveAnchor(loA)
+	hiLine, hiCol, ok2 := m.resolveAnchor(hiA)
+	if !ok1 || !ok2 || loLine > hiLine || (loLine == hiLine && loCol >= hiCol) {
+		return content
+	}
+	selStyle := styles.SelectionStyle()
+	lines := strings.Split(content, "\n")
+	for absLine := loLine; absLine <= hiLine && absLine < len(lines); absLine++ {
+		entryIdx := -1
+		for i := range m.cache {
+			start := m.entryOffsets[i]
+			if absLine >= start && absLine < start+m.cache[i].height {
+				entryIdx = i
+				break
+			}
+		}
+		if entryIdx < 0 {
+			continue // separator line between replies
+		}
+		e := m.cache[entryIdx]
+		j := absLine - m.entryOffsets[entryIdx]
+		if j < 0 || j >= len(e.linesPlain) {
+			continue
+		}
+		plain := e.linesPlain[j]
+		styled := lines[absLine]
+
+		from := 0
+		to := messages.DisplayWidthOfPlain(plain)
+		if absLine == loLine {
+			from = loCol
+		}
+		if absLine == hiLine {
+			to = hiCol
+		}
+		if from < 0 {
+			from = 0
+		}
+		if to > messages.DisplayWidthOfPlain(plain) {
+			to = messages.DisplayWidthOfPlain(plain)
+		}
+		if from >= to {
+			continue
+		}
+		dispFrom := from + e.contentColOffset
+		dispTo := to + e.contentColOffset
+
+		styledWidth := ansi.StringWidth(styled)
+		if dispFrom >= styledWidth {
+			continue
+		}
+		if dispTo > styledWidth {
+			dispTo = styledWidth
+		}
+		prefix := ansi.Cut(styled, 0, dispFrom)
+		suffix := ansi.Cut(styled, dispTo, styledWidth)
+		seg := messages.SliceColumns(plain, from, to)
+		lines[absLine] = prefix + selStyle.Render(seg) + suffix
+	}
+	return strings.Join(lines, "\n")
 }
 
 // View renders the thread panel content without a border.
@@ -401,6 +716,7 @@ func (m *Model) View(height, width int) string {
 	if replyAreaHeight < 1 {
 		replyAreaHeight = 1
 	}
+	m.lastViewHeight = replyAreaHeight
 
 	if len(m.replies) == 0 {
 		empty := lipgloss.NewStyle().
@@ -415,9 +731,24 @@ func (m *Model) View(height, width int) string {
 
 	// Rebuild render cache if replies or width changed
 	if m.cache == nil || m.cacheWidth != width || m.cacheReplyLen != len(m.replies) {
-		m.cache = make([]string, len(m.replies))
+		m.cache = make([]viewEntry, 0, len(m.replies))
+		if m.replyIDToIdx == nil {
+			m.replyIDToIdx = make(map[string]int, len(m.replies))
+		} else {
+			for k := range m.replyIDToIdx {
+				delete(m.replyIDToIdx, k)
+			}
+		}
 		for i, reply := range m.replies {
-			m.cache[i] = m.renderThreadMessage(reply, width, m.userNames, i == m.selected)
+			rendered := m.renderThreadMessage(reply, width, m.userNames, i == m.selected)
+			m.cache = append(m.cache, viewEntry{
+				linesNormal:      strings.Split(rendered, "\n"),
+				linesPlain:       messages.PlainLines(rendered),
+				height:           lipgloss.Height(rendered),
+				replyIdx:         i,
+				contentColOffset: 1, // border applied during viewContent build
+			})
+			m.replyIDToIdx[reply.TS] = i
 		}
 		m.cacheWidth = width
 		m.cacheReplyLen = len(m.replies)
@@ -445,8 +776,14 @@ func (m *Model) View(height, width int) string {
 		endLine := 0
 		currentLine := 0
 
-		for i, cached := range m.cache {
-			content := cached
+		// entryOffsets / totalLines mirror the BORDERED viewContent. Each
+		// reply takes lipgloss.Height(borderedReply) lines (== e.height,
+		// since the thick left border is purely horizontal padding), plus
+		// 1 line per inter-reply separator.
+		m.entryOffsets = m.entryOffsets[:0]
+
+		for i, e := range m.cache {
+			content := strings.Join(e.linesNormal, "\n")
 			if i == m.selected {
 				startLine = currentLine
 				filled := borderFill.Width(width - 1).Render(content)
@@ -456,12 +793,16 @@ func (m *Model) View(height, width int) string {
 				content = borderInvis.Render(filled)
 			}
 			h := lipgloss.Height(content)
+			m.entryOffsets = append(m.entryOffsets, currentLine)
 			if i == m.selected {
 				endLine = currentLine + h
 			}
 			allRows = append(allRows, content)
 			currentLine += h
-			// Separator between replies (not after the last).
+			// Separator between replies (not after the last). Separator
+			// lines are NOT inside any cache entry — selection overlay /
+			// extraction skip them naturally because no entry covers
+			// them.
 			if i < len(m.cache)-1 {
 				allRows = append(allRows, replySeparator)
 				currentLine++
@@ -474,6 +815,7 @@ func (m *Model) View(height, width int) string {
 		m.viewHeight = replyAreaHeight
 		m.selectedStartLine = startLine
 		m.selectedEndLine = endLine
+		m.totalLines = currentLine
 		m.viewCacheValid = true
 	}
 
@@ -489,6 +831,13 @@ func (m *Model) View(height, width int) string {
 	}
 	if m.selectedStartLine < m.vp.YOffset() {
 		m.vp.SetYOffset(m.selectedStartLine)
+	}
+
+	// Overlay the active selection on top of viewContent. Done after
+	// scroll-snapping so YOffset is settled, then re-apply the overlayed
+	// content to the viewport for the final View() render.
+	if m.hasSelection {
+		m.vp.SetContent(m.applySelectionOverlay(m.viewContent))
 	}
 
 	result := chrome + "\n" + m.vp.View()
