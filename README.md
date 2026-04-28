@@ -1,92 +1,164 @@
 # slk
 
-A terminal-based Slack client built in Go using [bubbletea](https://github.com/charmbracelet/bubbletea) and [lipgloss](https://github.com/charmbracelet/lipgloss). Designed as a keyboard-driven daily-driver replacement for the official Slack desktop client.
+> **A blazingly fast Slack TUI.**
+> Keyboard-driven, beautifully themed, and under 20MB. One static binary. No Electron required.
+
+`slk` is a daily-driver replacement for the official Slack desktop client, built in Go with [bubbletea](https://github.com/charmbracelet/bubbletea) and [lipgloss](https://github.com/charmbracelet/lipgloss). It connects with your normal browser session — no Slack App, no admin scopes, no OAuth dance — and stays out of your way.
+
+## Why slk?
+
+- **Fast.** Cold start in milliseconds. Render-cached messages. SQLite-backed scrollback. Real-time over WebSocket.
+- **Tiny.** A single ~19MB static binary. No node_modules, no Chromium, no 800MB RAM tax.
+- **Keyboard-first.** Vim-style modal editing. `j/k`, `h/l`, `i`, `Esc` — exactly what your fingers expect.
+- **Pretty.** 12 built-in themes, lipgloss-styled panels, half-block pixel-art avatars, emoji shortcodes, day separators, and pill-style reactions.
+- **Multi-workspace.** All your workspaces stay connected in parallel. `1`–`9` to jump between them, with live unread badges in the rail.
+- **Yours.** TOML config, custom themes, custom channel sections via glob, XDG-compliant paths.
 
 ## Features
 
-- **Three-panel layout** -- workspace rail, channel sidebar, message pane
-- **Vim-inspired navigation** -- `j/k` to scroll, `h/l` to switch panels, `i` for insert mode, `Esc` to return to normal mode
-- **Slack markdown rendering** -- bold, italic, strikethrough, code blocks, links, mentions
-- **Emoji shortcodes** -- `:rocket:` renders as the actual emoji
-- **Half-block pixel art avatars** -- tiny user avatars rendered next to messages using Unicode half-block characters
-- **Day separators** -- messages grouped by date (Today, Yesterday, Monday, etc.)
-- **Infinite scroll** -- scroll up to load older message history
-- **Message sending** -- compose and send messages in insert mode
-- **Channel sections** -- organize channels into custom groups via config
-- **Private channel indicators** -- visual distinction between public, private, and DM channels
-- **Configurable** -- TOML config for appearance, animations, notifications, keybindings, and channel sections
+### Messaging
+- Real-time messages, edits, deletes, reactions, and typing indicators over WebSocket
+- Slack markdown rendering (bold, italic, strikethrough, code, blockquotes, links, mentions)
+- Emoji shortcodes (`:rocket:` → 🚀)
+- Day separators (Today, Yesterday, Monday, full date)
+- Infinite scroll backfill into SQLite cache
+- New-message landmark (red `── new ──` line at the unread boundary)
+- Mark-as-read synced to Slack on channel entry
+- Edited / threaded message indicators
+- ANSI-aware wrapping and truncation (no broken color codes mid-line)
 
-## Prerequisites
+### Compose
+- Multi-line input, `Shift+Enter` for newlines
+- Inline `@mention` autocomplete (resolves to `<@UserID>` on send)
+- Special mentions: `@here`, `@channel`, `@everyone`
 
+### Threads
+- Side panel (35% width), opened with `Enter`, toggled with `Ctrl+]`
+- Live thread reply routing, real-time updates
+- Auto-closes on channel switch or narrow terminals
+
+### Reactions
+- Search-first picker overlay (`r`) with frecent emoji
+- Quick-toggle nav across existing pills (`R`, then `h/l/Enter`)
+- Pill-style display (green = yours, gray = others)
+- Optimistic UI, deduped against the WebSocket echo
+
+### Channels & Workspaces
+- Three-panel layout: workspace rail, channel sidebar, message pane
+- Public (`#`), private (`◆`), DM (`●`/`○` for presence), and group DM channels
+- Custom channel sections via glob patterns in config
+- Unread dots and counts (via Slack's `client.counts` API)
+- Fuzzy channel finder (`Ctrl+t` / `Ctrl+p`)
+- Workspace picker (`Ctrl+w`) and direct jump (`1`–`9`)
+- All workspaces stay connected in parallel for live unread badges
+
+### Notifications
+- OS-level desktop notifications via [beeep](https://github.com/gen2brain/beeep)
+- Triggers on DMs, mentions, and configurable keywords
+- Suppressed when you're focused on the relevant channel
+
+### Connectivity
+- Browser-cookie auth (`xoxc` + `d`) — works as any user, no Slack App required
+- Direct connection to Slack's internal browser WebSocket protocol
+- Auto-reconnect with exponential backoff (1s → 30s)
+- Three-state connection indicator in the status bar
+
+### Customization
+- 12 built-in themes: Dark, Light, Dracula, Solarized (Dark/Light), Gruvbox (Dark/Light), Nord, Tokyo Night, Catppuccin Mocha, One Dark, Rosé Pine
+- Drop-in custom themes (`~/.config/slk/themes/*.toml`)
+- Live theme switcher (`Ctrl+y`)
+- TOML config for appearance, animations, notifications, and channel sections
+
+## Tradeoffs & Non-Goals
+
+slk is intentionally not a 1:1 port of the desktop client. Some Slack features are deferred or out of scope:
+
+**On the roadmap:**
+- Message editing (`e`) and deletion (`dd`)
+- Slack-side search (`Ctrl+/` / `:search`)
+- File uploads and downloads
+- Inline image rendering (Kitty graphics → Sixel → fallback)
+- OSC 52 clipboard yank (`yy`)
+- Presence change events (online/away/DND)
+- Quiet hours and per-channel mute
+- Custom keybinding overrides
+
+**Not planned:**
+- Huddles, Slack Connect, Workflow Builder
+- Bot/app management, slash commands, custom emoji management
+- Animated reactions, link unfurls, in-app toasts
+
+**Auth caveat:** browser-cookie auth means tokens expire when you log out of the browser or Slack rotates them. Re-run `--add-workspace` and you're back in business.
+
+## Install
+
+### Prerequisites
 - Go 1.22+
-- A Slack workspace (log in via browser to get auth tokens)
+- A Slack workspace you can log into in a browser
 
-## Build
-
+### Build from source
 ```bash
 make build
 ```
-
-The binary is output to `bin/slk`.
+The binary is written to `bin/slk`.
 
 ## Setup
 
-### 1. Log Into Slack in Your Browser
+### 1. Log into Slack in your browser
+Open [https://app.slack.com](https://app.slack.com) and sign into your workspace. Open the browser version of your slack workspace.
 
-Open [https://app.slack.com](https://app.slack.com) and log into your workspace.
+### 2. Grab your browser tokens
 
-### 2. Get Your Browser Tokens
+**The `d` cookie:**
+- DevTools (F12 / Cmd+Option+I) → Application → Cookies → `https://app.slack.com`
+- Copy the value of the cookie named `d`
 
-**Get the `d` cookie:**
-- Open DevTools (F12 or Cmd+Option+I)
-- Go to Application > Cookies > `https://app.slack.com`
-- Find the cookie named `d` and copy its value
+**The `xoxc` token:** in the DevTools Console, run:
+```javascript
+Object.entries(JSON.parse(localStorage.localConfig_v2).teams).forEach(([id,t]) => console.log(t.name, t.token))
+```
+Copy the `xoxc-…` token for the workspace you want.
 
-**Get the `xoxc` token:**
-- Go to the Console tab in DevTools and run:
-  ```javascript
-  Object.entries(JSON.parse(localStorage.localConfig_v2).teams).forEach(([id,t]) => console.log(t.name, t.token))
-  ```
-- This prints the name and token for each workspace. Copy the `xoxc-...` token for the workspace you want to add.
-
-### 3. Add Workspace
-
+### 3. Add the workspace
 ```bash
 ./bin/slk --add-workspace
 ```
+Or just run `./bin/slk` — onboarding launches automatically when no workspaces are configured.
 
-This launches an interactive onboarding that prompts for your `xoxc` token and `d` cookie.
-
-Alternatively, just run `./bin/slk` -- it will launch onboarding automatically if no workspaces are configured.
-
-## Usage
-
-### Key Bindings
+## Keybindings
 
 | Key | Mode | Action |
-|-----|------|--------|
-| `j` / `k` | Normal | Move up/down in channel list or messages |
+|---|---|---|
+| `j` / `k` | Normal | Move down/up in channel list or messages |
 | `h` / `l` | Normal | Switch focus between panels |
-| `Tab` / `Shift+Tab` | Normal | Cycle focus between panels |
+| `Tab` / `Shift+Tab` | Normal | Cycle focus |
 | `Enter` | Normal (sidebar) | Open selected channel |
-| `i` | Normal | Enter insert mode (compose message) |
+| `Enter` | Normal (message) | Open thread |
+| `i` | Normal | Enter insert mode |
+| `Esc` | Insert / Command | Return to normal mode |
 | `Enter` | Insert | Send message |
-| `Esc` | Insert/Command | Return to normal mode |
+| `Shift+Enter` | Insert | Newline |
+| `gg` / `G` | Normal | Jump to top / bottom |
 | `Ctrl+b` | Any | Toggle sidebar |
-| `gg` / `G` | Normal | Jump to top/bottom |
-| `Ctrl+y` | Normal | Switch theme |
+| `Ctrl+]` | Any | Toggle thread panel |
+| `Ctrl+t` / `Ctrl+p` | Any | Fuzzy channel finder |
+| `Ctrl+w` | Any | Workspace picker |
+| `1`–`9` | Normal | Jump to workspace N |
+| `r` | Normal (message) | Open reaction picker |
+| `R` | Normal (message) | Quick-toggle existing reactions |
+| `Ctrl+y` | Any | Switch theme |
 | `Ctrl+c` | Any | Quit |
 
-### Configuration
+## Configuration
 
-Config file: `~/.config/slk/config.toml`
+Config lives at `~/.config/slk/config.toml`:
 
 ```toml
 [general]
 default_workspace = "myteam"
 
 [appearance]
-theme = "dark"
+theme = "dracula"
 timestamp_format = "3:04 PM"
 
 [animations]
@@ -99,13 +171,13 @@ enabled = true
 on_mention = true
 on_dm = true
 on_keyword = ["deploy", "incident"]
-quiet_hours = "22:00-08:00"
+quiet_hours = "22:00-08:00"   # planned
 
 [cache]
 message_retention_days = 30
 max_db_size_mb = 500
 
-# Custom channel sections
+# Custom channel sections (glob patterns)
 [sections.Alerts]
 channels = ["alerts", "ops", "*-alerts"]
 order = 1
@@ -114,7 +186,7 @@ order = 1
 channels = ["eng-*", "deploys", "bugs"]
 order = 2
 
-# Custom theme colors (override active theme)
+# Inline color overrides on top of the active theme
 [theme]
 primary = "#4A9EFF"
 accent = "#50C878"
@@ -122,51 +194,52 @@ background = "#1A1A2E"
 text = "#E0E0E0"
 ```
 
-### Custom Themes
+### Custom themes
 
-Place `.toml` theme files in `~/.config/slk/themes/`:
+Drop `.toml` files into `~/.config/slk/themes/`:
 
 ```toml
 name = "My Theme"
 
 [colors]
-primary = "#BD93F9"
-accent = "#50FA7B"
-warning = "#FFB86C"
-error = "#FF5555"
-background = "#282A36"
-surface = "#343746"
+primary      = "#BD93F9"
+accent       = "#50FA7B"
+warning      = "#FFB86C"
+error        = "#FF5555"
+background   = "#282A36"
+surface      = "#343746"
 surface_dark = "#21222C"
-text = "#F8F8F2"
-text_muted = "#6272A4"
-border = "#44475A"
+text         = "#F8F8F2"
+text_muted   = "#6272A4"
+border       = "#44475A"
 ```
 
-Built-in themes: Dark, Light, Dracula, Solarized Dark, Solarized Light, Gruvbox Dark, Gruvbox Light, Nord, Tokyo Night, Catppuccin Mocha, One Dark, Rosé Pine.
-
-### Data Storage
-
-Follows the XDG Base Directory specification:
+### Data paths (XDG)
 
 | Path | Contents |
-|------|----------|
-| `~/.config/slk/` | Configuration (config.toml) |
-| `~/.local/share/slk/` | Data (SQLite cache, tokens) |
-| `~/.cache/slk/` | Cache (avatars, images) |
+|---|---|
+| `~/.config/slk/` | Configuration, custom themes |
+| `~/.local/share/slk/` | SQLite cache, tokens |
+| `~/.cache/slk/` | Avatars, image cache |
 
 ## Architecture
 
-Service-oriented layered architecture:
+Service-oriented, four layers:
 
 ```
-UI Layer (bubbletea)     -- workspace rail, sidebar, messages, compose, status bar
-Service Layer            -- WorkspaceManager, MessageService
-Client Layer             -- Slack API wrapper (Socket Mode + Web API)
-Data Layer               -- SQLite cache, TOML config
+UI Layer (bubbletea)   workspace rail · sidebar · messages · thread · compose · status bar
+Service Layer          WorkspaceManager · MessageService · ConnectionManager
+Client Layer           Slack Web API + browser-protocol WebSocket
+Data Layer             SQLite cache · TOML config · token storage
 ```
 
-See [design spec](docs/superpowers/specs/2026-04-23-slk-design.md) for full architecture details.
+- ~9,300 lines of Go across 31 source files and 24 test files
+- SQLite is a cache, not the source of truth — Slack remains authoritative
+- Render cache + bubbles/viewport for snappy scrolling
+- muesli/reflow everywhere for ANSI-correct wrapping and truncation
+
+See [`docs/superpowers/specs/`](docs/superpowers/specs/) for design specs and [`docs/STATUS.md`](docs/STATUS.md) for the live implementation status.
 
 ## License
 
-TBD
+[MIT](LICENSE) © Grant Ammons
