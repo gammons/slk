@@ -130,3 +130,64 @@ func TestApp_CopiedMsgShowsToastAndSchedulesClear(t *testing.T) {
 		t.Fatalf("status bar still showing toast after CopiedClearMsg")
 	}
 }
+
+func TestApp_DragNearTopEdgeSchedulesAutoScroll(t *testing.T) {
+	a := newTestAppWithMessages(t)
+	pressX := a.layoutSidebarEnd + 2
+	// Press in the middle of the pane.
+	_, _ = a.Update(tea.MouseClickMsg{X: pressX, Y: 5, Button: tea.MouseLeft})
+	// Move to row 1 (which is pane-local y=0 — the top edge).
+	_, cmd := a.Update(tea.MouseMotionMsg{X: pressX, Y: 1, Button: tea.MouseLeft})
+	if cmd == nil {
+		t.Fatal("expected an auto-scroll tick command on edge motion")
+	}
+	// The cmd should produce an autoScrollTickMsg.
+	msgs := drainBatch(cmd)
+	var sawTick bool
+	for _, m := range msgs {
+		if _, ok := m.(autoScrollTickMsg); ok {
+			sawTick = true
+		}
+	}
+	if !sawTick {
+		t.Fatalf("expected autoScrollTickMsg in batched output; got %v", msgs)
+	}
+}
+
+func TestApp_AutoScrollTickRefreshesWhileEdgeHeld(t *testing.T) {
+	a := newTestAppWithMessages(t)
+	pressX := a.layoutSidebarEnd + 2
+	_, _ = a.Update(tea.MouseClickMsg{X: pressX, Y: 5, Button: tea.MouseLeft})
+	_, _ = a.Update(tea.MouseMotionMsg{X: pressX, Y: 1, Button: tea.MouseLeft})
+	// First tick fires; while still at the top edge we expect another one.
+	_, cmd := a.Update(autoScrollTickMsg{})
+	if cmd == nil {
+		t.Fatal("expected another tick while edge is still active")
+	}
+	msgs := drainBatch(cmd)
+	var sawTick bool
+	for _, m := range msgs {
+		if _, ok := m.(autoScrollTickMsg); ok {
+			sawTick = true
+		}
+	}
+	if !sawTick {
+		t.Fatal("expected autoScrollTickMsg in continuation")
+	}
+}
+
+func TestApp_AutoScrollStopsWhenCursorLeavesEdge(t *testing.T) {
+	a := newTestAppWithMessages(t)
+	pressX := a.layoutSidebarEnd + 2
+	_, _ = a.Update(tea.MouseClickMsg{X: pressX, Y: 5, Button: tea.MouseLeft})
+	_, _ = a.Update(tea.MouseMotionMsg{X: pressX, Y: 1, Button: tea.MouseLeft})
+	// Move back to the middle.
+	_, _ = a.Update(tea.MouseMotionMsg{X: pressX, Y: 10, Button: tea.MouseLeft})
+	// A tick now finds no edge → should NOT schedule another tick.
+	_, cmd := a.Update(autoScrollTickMsg{})
+	for _, m := range drainBatch(cmd) {
+		if _, ok := m.(autoScrollTickMsg); ok {
+			t.Fatal("auto-scroll must stop when cursor leaves the edge")
+		}
+	}
+}

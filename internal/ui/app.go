@@ -178,6 +178,13 @@ type dragState struct {
 	autoScrollActive bool
 }
 
+// autoScrollTickMsg is dispatched by tea.Tick while a drag is held near
+// the top or bottom edge of a pane. Each tick scrolls the pane one line
+// in the indicated direction, extends the selection to the new lastY,
+// and (if still at an edge) schedules the next tick. The loop self-
+// terminates when the cursor leaves the edge or the drag ends.
+type autoScrollTickMsg struct{}
+
 // panelCache stores the fully-wrapped (border + exactSize) output of a panel
 // keyed on a tuple of inputs that affect its rendering. A cache hit returns
 // the previous frame's string verbatim; a miss recomputes and stores.
@@ -555,6 +562,63 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case PanelThread:
 			a.threadPanel.ExtendSelectionAt(py, px)
 		}
+		// If the cursor is at the top/bottom edge of the originating pane,
+		// schedule an auto-scroll tick. The autoScrollActive gate ensures
+		// only one tick is in-flight at a time -- otherwise every motion
+		// event would queue another timer.
+		var hint int
+		switch a.drag.panel {
+		case PanelMessages:
+			hint = a.messagepane.ScrollHintForDrag(py)
+		case PanelThread:
+			hint = a.threadPanel.ScrollHintForDrag(py)
+		}
+		if hint != 0 && !a.drag.autoScrollActive {
+			a.drag.autoScrollActive = true
+			cmds = append(cmds, tea.Tick(50*time.Millisecond, func(time.Time) tea.Msg {
+				return autoScrollTickMsg{}
+			}))
+		}
+
+	case autoScrollTickMsg:
+		// If the drag ended (release clears a.drag), self-terminate.
+		if a.drag.panel != PanelMessages && a.drag.panel != PanelThread {
+			a.drag.autoScrollActive = false
+			break
+		}
+		var hint int
+		switch a.drag.panel {
+		case PanelMessages:
+			hint = a.messagepane.ScrollHintForDrag(a.drag.lastY)
+		case PanelThread:
+			hint = a.threadPanel.ScrollHintForDrag(a.drag.lastY)
+		}
+		if hint == 0 {
+			// Cursor left the edge -- stop ticking. Re-entering the edge
+			// in a future motion event will re-arm the loop.
+			a.drag.autoScrollActive = false
+			break
+		}
+		switch a.drag.panel {
+		case PanelMessages:
+			if hint < 0 {
+				a.messagepane.ScrollUp(1)
+			} else {
+				a.messagepane.ScrollDown(1)
+			}
+			a.messagepane.ExtendSelectionAt(a.drag.lastY, a.drag.lastX)
+		case PanelThread:
+			if hint < 0 {
+				a.threadPanel.ScrollUp(1)
+			} else {
+				a.threadPanel.ScrollDown(1)
+			}
+			a.threadPanel.ExtendSelectionAt(a.drag.lastY, a.drag.lastX)
+		}
+		// Schedule the next tick. autoScrollActive remains true.
+		cmds = append(cmds, tea.Tick(50*time.Millisecond, func(time.Time) tea.Msg {
+			return autoScrollTickMsg{}
+		}))
 
 	case tea.MouseReleaseMsg:
 		if a.drag.panel != PanelMessages && a.drag.panel != PanelThread {
