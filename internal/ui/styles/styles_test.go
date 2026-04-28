@@ -85,3 +85,57 @@ func TestThemeNames(t *testing.T) {
 		}
 	}
 }
+
+func TestApply_DefaultsSelectionColors(t *testing.T) {
+	Apply("dracula", config.Theme{})
+	if SelectionBackground == nil {
+		t.Fatal("SelectionBackground must be non-nil after Apply (use sensible default when theme omits it)")
+	}
+	if SelectionForeground == nil {
+		t.Fatal("SelectionForeground must be non-nil after Apply (use sensible default when theme omits it)")
+	}
+	rendered := SelectionStyle().Render("hello")
+	if rendered == "" {
+		t.Fatal("SelectionStyle().Render returned empty string")
+	}
+}
+
+func TestApply_CustomSelectionFromTheme(t *testing.T) {
+	RegisterCustomTheme("seltest", ThemeColors{
+		Primary: "#000000", Accent: "#000000", Warning: "#000000",
+		Error: "#000000", Background: "#000000", Surface: "#000000",
+		SurfaceDark: "#000000", Text: "#FFFFFF", TextMuted: "#888888",
+		Border:              "#222222",
+		SelectionBackground: "#FF00FF",
+		SelectionForeground: "#00FF00",
+	})
+	Apply("seltest", config.Theme{})
+	r, g, b, _ := SelectionBackground.RGBA()
+	if r>>8 != 0xFF || g>>8 != 0x00 || b>>8 != 0xFF {
+		t.Fatalf("custom SelectionBackground not applied: got %02x%02x%02x", r>>8, g>>8, b>>8)
+	}
+	r, g, b, _ = SelectionForeground.RGBA()
+	if r>>8 != 0x00 || g>>8 != 0xFF || b>>8 != 0x00 {
+		t.Fatalf("custom SelectionForeground not applied: got %02x%02x%02x", r>>8, g>>8, b>>8)
+	}
+}
+
+func TestApply_ResetsSelectionColorsBetweenThemes(t *testing.T) {
+	// First apply seltest (registered above or re-register here for isolation).
+	RegisterCustomTheme("seltest2", ThemeColors{
+		Primary: "#111111", Accent: "#222222", Warning: "#333333",
+		Error: "#444444", Background: "#555555", Surface: "#666666",
+		SurfaceDark: "#777777", Text: "#888888", TextMuted: "#999999",
+		Border:              "#AAAAAA",
+		SelectionBackground: "#ABCDEF",
+		SelectionForeground: "#FEDCBA",
+	})
+	Apply("seltest2", config.Theme{})
+	// Now apply a theme that does NOT specify selection colors.
+	Apply("dracula", config.Theme{})
+	// SelectionBackground should not still be #ABCDEF.
+	r, g, b, _ := SelectionBackground.RGBA()
+	if r>>8 == 0xAB && g>>8 == 0xCD && b>>8 == 0xEF {
+		t.Fatal("SelectionBackground leaked from previous theme; must reset to default when new theme omits it")
+	}
+}

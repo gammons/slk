@@ -11,25 +11,30 @@ import (
 
 // ThemeColors holds the semantic colors for a theme.
 //
-// The four "Sidebar*" / "RailBackground" colors are optional; when empty
-// they fall back to a sensible default in Apply (see styles.go), so existing
-// themes don't need to specify them. They allow themes like "Slack Default"
-// to have a dark sidebar/rail combined with a light message pane.
+// The "Sidebar*" / "RailBackground" and "Selection*" colors are optional;
+// when empty they fall back to a sensible default in Apply (see styles.go),
+// so existing themes don't need to specify them. The sidebar/rail fields
+// allow themes like "Slack Default" to have a dark sidebar/rail combined
+// with a light message pane; the selection fields let a theme customize the
+// highlight used for selected message text (defaults: Primary background,
+// Background foreground).
 type ThemeColors struct {
-	Primary          string `toml:"primary"`
-	Accent           string `toml:"accent"`
-	Warning          string `toml:"warning"`
-	Error            string `toml:"error"`
-	Background       string `toml:"background"`
-	Surface          string `toml:"surface"`
-	SurfaceDark      string `toml:"surface_dark"`
-	Text             string `toml:"text"`
-	TextMuted        string `toml:"text_muted"`
-	Border           string `toml:"border"`
-	SidebarBackground string `toml:"sidebar_background"`
-	SidebarText      string `toml:"sidebar_text"`
-	SidebarTextMuted string `toml:"sidebar_text_muted"`
-	RailBackground   string `toml:"rail_background"`
+	Primary             string `toml:"primary"`
+	Accent              string `toml:"accent"`
+	Warning             string `toml:"warning"`
+	Error               string `toml:"error"`
+	Background          string `toml:"background"`
+	Surface             string `toml:"surface"`
+	SurfaceDark         string `toml:"surface_dark"`
+	Text                string `toml:"text"`
+	TextMuted           string `toml:"text_muted"`
+	Border              string `toml:"border"`
+	SidebarBackground   string `toml:"sidebar_background"`
+	SidebarText         string `toml:"sidebar_text"`
+	SidebarTextMuted    string `toml:"sidebar_text_muted"`
+	RailBackground      string `toml:"rail_background"`
+	SelectionBackground string `toml:"selection_background"`
+	SelectionForeground string `toml:"selection_foreground"`
 }
 
 // builtinThemes maps lowercase theme names to their display name and colors.
