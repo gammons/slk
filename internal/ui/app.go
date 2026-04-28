@@ -620,6 +620,29 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return autoScrollTickMsg{}
 		}))
 
+	case tea.PasteMsg:
+		// Bracketed-paste from the terminal. Forward the paste to the
+		// active compose when in insert mode. In other modes paste is
+		// ignored — there's no reasonable destination (the messages /
+		// thread panes are read-only, and the various finders use
+		// per-keystroke filtering rather than a paste-friendly buffer).
+		if a.mode != ModeInsert {
+			break
+		}
+		if a.focusedPanel == PanelThread && a.threadVisible {
+			var cmd tea.Cmd
+			a.threadCompose, cmd = a.threadCompose.Update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		} else {
+			var cmd tea.Cmd
+			a.compose, cmd = a.compose.Update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+
 	case tea.MouseReleaseMsg:
 		if a.drag.panel != PanelMessages && a.drag.panel != PanelThread {
 			break
