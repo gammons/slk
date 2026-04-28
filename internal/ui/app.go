@@ -2,7 +2,6 @@
 package ui
 
 import (
-	"fmt"
 	"image/color"
 	"log"
 	"time"
@@ -393,24 +392,6 @@ func (a *App) Init() tea.Cmd {
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
-
-	// Handle Shift+Enter from terminals using CSI u mode.
-	// Shift+Enter sends ESC[13;2u which bubbletea reports as unknownCSISequenceMsg.
-	// That type is unexported, so we detect it via fmt.Stringer.
-	// Its String() returns "?CSI[49 51 59 50 117]?" for the bytes "13;2u".
-	if a.mode == ModeInsert {
-		if s, ok := msg.(fmt.Stringer); ok {
-			if s.String() == "?CSI[49 51 59 50 117]?" {
-				enterMsg := tea.KeyPressMsg{Code: tea.KeyEnter}
-				if a.focusedPanel == PanelThread && a.threadVisible {
-					a.threadCompose, _ = a.threadCompose.Update(enterMsg)
-				} else {
-					a.compose, _ = a.compose.Update(enterMsg)
-				}
-				return a, nil
-			}
-		}
-	}
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -930,8 +911,13 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
-	isSend := msg.Key().Code == tea.KeyEnter
-	isNewline := msg.Key().Code == 'j' && msg.Key().Mod == tea.ModCtrl
+	code := msg.Key().Code
+	mod := msg.Key().Mod
+	// Plain Enter sends; Shift+Enter (and Ctrl+J as a fallback for terminals
+	// that don't disambiguate modifiers) inserts a newline.
+	isSend := code == tea.KeyEnter && !mod.Contains(tea.ModShift)
+	isNewline := (code == tea.KeyEnter && mod.Contains(tea.ModShift)) ||
+		(code == 'j' && mod == tea.ModCtrl)
 
 	// Determine which compose box is active based on focused panel
 	if a.focusedPanel == PanelThread && a.threadVisible {

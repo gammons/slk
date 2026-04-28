@@ -2,8 +2,11 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestAppFocusCycle(t *testing.T) {
@@ -209,5 +212,55 @@ func TestTypingThrottle(t *testing.T) {
 	app.lastTypingSent = time.Now().Add(-4 * time.Second)
 	if !app.shouldSendTyping() {
 		t.Error("expected typing send to be allowed after 3s")
+	}
+}
+
+func TestHandleInsertMode_ShiftEnterInsertsNewline(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	app.compose.Focus()
+	app.compose.SetValue("hello")
+
+	cmd := app.handleInsertMode(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+
+	if cmd != nil {
+		// Anything non-nil here likely means a SendMessageMsg was queued.
+		if msg := cmd(); msg != nil {
+			if _, ok := msg.(SendMessageMsg); ok {
+				t.Fatalf("Shift+Enter should not send the message")
+			}
+		}
+	}
+	val := app.compose.Value()
+	if val == "" {
+		t.Fatalf("compose value was reset; expected newline inserted, got empty")
+	}
+	if !strings.Contains(val, "\n") {
+		t.Fatalf("expected newline in compose value, got %q", val)
+	}
+	if !strings.HasPrefix(val, "hello") {
+		t.Fatalf("expected original text preserved, got %q", val)
+	}
+}
+
+func TestHandleInsertMode_PlainEnterSends(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	app.compose.SetValue("hello")
+
+	cmd := app.handleInsertMode(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("plain Enter with text should return a send cmd")
+	}
+	msg := cmd()
+	if _, ok := msg.(SendMessageMsg); !ok {
+		t.Fatalf("expected SendMessageMsg, got %T", msg)
+	}
+	if app.compose.Value() != "" {
+		t.Fatalf("expected compose to be reset after send, got %q", app.compose.Value())
 	}
 }
