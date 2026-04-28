@@ -54,6 +54,33 @@ func TestWidthMixedContent(t *testing.T) {
 	}
 }
 
+func TestWidthStripsANSI(t *testing.T) {
+	resetWidthMap()
+	setWidthMap(map[string]int{
+		"👍": 2,
+	})
+
+	// Lipgloss-style ANSI-wrapped pill: red foreground + reset.
+	// Visible content is "👍5" → emoji (2) + "5" (1) = 3.
+	styled := "\x1b[31m👍5\x1b[0m"
+	if got := Width(styled); got != 3 {
+		t.Errorf("Width(%q) = %d, want 3 (ANSI must be stripped)", styled, got)
+	}
+
+	// True pill string with background+foreground+padding.
+	// Visible content " 👍 5 " = space + emoji(2) + space + "5" + space = 6.
+	pill := "\x1b[38;2;100;100;100m\x1b[48;2;26;46;26m 👍 5 \x1b[0m"
+	if got := Width(pill); got != 6 {
+		t.Errorf("Width(pill) = %d, want 6 (ANSI must be stripped)", got)
+	}
+
+	// Empty cache + ANSI: should fall through to lipgloss.Width on stripped content.
+	resetWidthMap()
+	if got := Width("\x1b[31mhello\x1b[0m"); got != 5 {
+		t.Errorf("Width(ansi 'hello') = %d, want 5", got)
+	}
+}
+
 func TestIsCalibrated(t *testing.T) {
 	resetWidthMap()
 	if IsCalibrated() {

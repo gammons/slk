@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/rivo/uniseg"
 )
 
@@ -16,13 +17,21 @@ var (
 
 // Width returns the rendered cell width of s.
 //
-// For grapheme clusters present in the probed cache, returns the cached
-// width. For pure ASCII or content with no emoji, delegates directly to
-// lipgloss.Width(). For mixed content, segments by grapheme cluster and
-// sums per-cluster widths (cache hit or lipgloss fallback per cluster).
+// ANSI escape sequences are stripped before measurement (matching
+// lipgloss.Width's behavior). For grapheme clusters present in the
+// probed cache, returns the cached width. For pure ASCII or content
+// with no emoji, delegates directly to lipgloss.Width(). For mixed
+// content, segments by grapheme cluster and sums per-cluster widths
+// (cache hit or lipgloss fallback per cluster).
 func Width(s string) int {
-	if !containsNonASCII(s) {
-		return lipgloss.Width(s)
+	// Strip ANSI escape sequences first. Without this, uniseg would
+	// segment ESC bytes and parameter bytes as individual graphemes,
+	// each measuring as width 1 — wildly inflating the result for any
+	// styled string from lipgloss.
+	stripped := ansi.Strip(s)
+
+	if !containsNonASCII(stripped) {
+		return lipgloss.Width(stripped)
 	}
 
 	widthMu.RLock()
@@ -30,12 +39,12 @@ func Width(s string) int {
 	widthMu.RUnlock()
 
 	if len(cached) == 0 {
-		return lipgloss.Width(s)
+		return lipgloss.Width(stripped)
 	}
 
 	// Segment by grapheme cluster, look up each.
 	total := 0
-	gr := uniseg.NewGraphemes(s)
+	gr := uniseg.NewGraphemes(stripped)
 	for gr.Next() {
 		cluster := gr.Str()
 		if w, ok := cached[cluster]; ok {
