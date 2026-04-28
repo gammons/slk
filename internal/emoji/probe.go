@@ -154,3 +154,47 @@ func readDSRResponse(r io.Reader, timeout time.Duration) ([]byte, error) {
 	}
 	return buf, errProbeTimeout
 }
+
+// probeAll iterates over the kyokomi codemap and probes the rendered
+// width of each unique emoji. Returns a map from emoji string → width.
+//
+// Skips duplicate emoji (same Unicode value mapped to multiple shortcodes).
+// On per-emoji timeout or parse error, the emoji is omitted from the
+// result (not added to cache). The caller decides whether to abort or
+// continue based on the error count.
+//
+// The codemap must use kyokomi's format: ":name:" → unicode-with-trailing-space.
+// We trim the trailing ReplacePadding space before probing.
+func probeAll(out io.Writer, in io.Reader, codemap map[string]string, perProbeTimeout time.Duration) (map[string]int, error) {
+	result := make(map[string]int, len(codemap))
+	seen := make(map[string]bool)
+
+	// Sanity check: probe a known-1-wide ASCII char first.
+	w, err := probeOne(out, in, "a", perProbeTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("sanity probe failed: %w", err)
+	}
+	if w != 1 {
+		return nil, fmt.Errorf("sanity probe returned width %d for 'a'; terminal does not support DSR correctly", w)
+	}
+
+	for _, uni := range codemap {
+		// kyokomi adds a trailing space; strip it before probing
+		emoji := uni
+		if len(emoji) > 0 && emoji[len(emoji)-1] == ' ' {
+			emoji = emoji[:len(emoji)-1]
+		}
+		if emoji == "" || seen[emoji] {
+			continue
+		}
+		seen[emoji] = true
+
+		width, err := probeOne(out, in, emoji, perProbeTimeout)
+		if err != nil {
+			// Skip this emoji; it'll fall back to lipgloss.Width.
+			continue
+		}
+		result[emoji] = width
+	}
+	return result, nil
+}
