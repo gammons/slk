@@ -16,20 +16,20 @@ import (
 // themes don't need to specify them. They allow themes like "Slack Default"
 // to have a dark sidebar/rail combined with a light message pane.
 type ThemeColors struct {
-	Primary          string `toml:"primary"`
-	Accent           string `toml:"accent"`
-	Warning          string `toml:"warning"`
-	Error            string `toml:"error"`
-	Background       string `toml:"background"`
-	Surface          string `toml:"surface"`
-	SurfaceDark      string `toml:"surface_dark"`
-	Text             string `toml:"text"`
-	TextMuted        string `toml:"text_muted"`
-	Border           string `toml:"border"`
+	Primary           string `toml:"primary"`
+	Accent            string `toml:"accent"`
+	Warning           string `toml:"warning"`
+	Error             string `toml:"error"`
+	Background        string `toml:"background"`
+	Surface           string `toml:"surface"`
+	SurfaceDark       string `toml:"surface_dark"`
+	Text              string `toml:"text"`
+	TextMuted         string `toml:"text_muted"`
+	Border            string `toml:"border"`
 	SidebarBackground string `toml:"sidebar_background"`
-	SidebarText      string `toml:"sidebar_text"`
-	SidebarTextMuted string `toml:"sidebar_text_muted"`
-	RailBackground   string `toml:"rail_background"`
+	SidebarText       string `toml:"sidebar_text"`
+	SidebarTextMuted  string `toml:"sidebar_text_muted"`
+	RailBackground    string `toml:"rail_background"`
 }
 
 // builtinThemes maps lowercase theme names to their display name and colors.
