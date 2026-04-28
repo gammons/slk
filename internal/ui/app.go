@@ -332,7 +332,7 @@ type App struct {
 	workspaceItems    []workspace.WorkspaceItem // cached for lookup
 
 	// Theme switching
-	themeSaveFn    func(name string)
+	themeSaveFn    func(name string, scope themeswitcher.ThemeScope)
 	themeOverrides config.Theme
 
 	// Typing indicators
@@ -843,8 +843,15 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 		a.SetMode(ModeWorkspaceFinder)
 
 	case key.Matches(msg, a.keys.ThemeSwitcher):
-		a.themeSwitcher.Open()
+		// Per-workspace scope. Header text shows the current workspace name.
+		header := "Theme for " + a.activeTeamName()
+		a.themeSwitcher.OpenWithScope(themeswitcher.ScopeWorkspace, header)
 		a.SetMode(ModeThemeSwitcher)
+		return nil
+	case key.Matches(msg, a.keys.ThemeSwitcherGlobal):
+		a.themeSwitcher.OpenWithScope(themeswitcher.ScopeGlobal, "Default theme for new workspaces")
+		a.SetMode(ModeThemeSwitcher)
+		return nil
 
 	case key.Matches(msg, a.keys.FuzzyFinder) || key.Matches(msg, a.keys.FuzzyFinderAlt):
 		a.channelFinder.Open()
@@ -1107,7 +1114,7 @@ func (a *App) handleThemeSwitcherMode(msg tea.KeyMsg) tea.Cmd {
 		a.threadCompose.RefreshStyles()
 		// Save selection
 		if a.themeSaveFn != nil {
-			go a.themeSaveFn(result.Name)
+			go a.themeSaveFn(result.Name, result.Scope)
 		}
 		return nil
 	}
@@ -1756,8 +1763,28 @@ func (a *App) SetThemeItems(names []string) {
 	a.themeSwitcher.SetItems(names)
 }
 
-// SetThemeSaver sets the callback for saving the theme selection.
-func (a *App) SetThemeSaver(fn func(name string)) {
+// activeTeamName returns the human-readable name of the active workspace,
+// falling back to the team ID if no name is known. Used as a label in the
+// theme picker header.
+func (a *App) activeTeamName() string {
+	for _, w := range a.workspaceItems {
+		if w.ID == a.activeTeamID {
+			if w.Name != "" {
+				return w.Name
+			}
+			return w.ID
+		}
+	}
+	if a.activeTeamID != "" {
+		return a.activeTeamID
+	}
+	return "this workspace"
+}
+
+// SetThemeSaver sets the callback for saving the theme selection. The
+// callback receives the chosen theme name and the scope (workspace vs.
+// global) so the implementation can route to the correct save target.
+func (a *App) SetThemeSaver(fn func(name string, scope themeswitcher.ThemeScope)) {
 	a.themeSaveFn = fn
 }
 

@@ -25,6 +25,7 @@ import (
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/statusbar"
 	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/gammons/slk/internal/ui/themeswitcher"
 	"github.com/gammons/slk/internal/ui/workspace"
 	emoji "github.com/kyokomi/emoji/v2"
 	"github.com/slack-go/slack"
@@ -232,7 +233,8 @@ func run() error {
 	// Wire theme switcher
 	app.SetThemeItems(styles.ThemeNames())
 	app.SetThemeOverrides(cfg.Theme)
-	app.SetThemeSaver(func(name string) {
+	app.SetThemeSaver(func(name string, scope themeswitcher.ThemeScope) {
+		_ = scope // TODO(task-7): route by scope (workspace vs. global)
 		cfg.Appearance.Theme = name
 		// Write updated theme to config file
 		data, err := os.ReadFile(configPath)
