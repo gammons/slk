@@ -160,6 +160,9 @@ func run() error {
 	// Load custom themes and apply the active theme
 	themesDir := filepath.Join(configDir, "themes")
 	styles.LoadCustomThemes(themesDir)
+	// At startup we apply the global default; per-workspace themes are
+	// applied later when the workspace switcher fires for the initial
+	// active workspace.
 	styles.Apply(cfg.Appearance.Theme, cfg.Theme)
 
 	notifier := notify.New(cfg.Notifications.Enabled)
@@ -233,30 +236,6 @@ func run() error {
 	// Wire theme switcher
 	app.SetThemeItems(styles.ThemeNames())
 	app.SetThemeOverrides(cfg.Theme)
-	app.SetThemeSaver(func(name string, scope themeswitcher.ThemeScope) {
-		_ = scope // TODO(task-7): route by scope (workspace vs. global)
-		cfg.Appearance.Theme = name
-		// Write updated theme to config file
-		data, err := os.ReadFile(configPath)
-		if err != nil {
-			return
-		}
-		// Simple string replacement for theme field
-		lines := strings.Split(string(data), "\n")
-		found := false
-		for i, line := range lines {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, "theme") && strings.Contains(trimmed, "=") {
-				lines[i] = "theme = \"" + name + "\""
-				found = true
-				break
-			}
-		}
-		if !found {
-			lines = append(lines, "", "[appearance]", "theme = \""+name+"\"")
-		}
-		os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
-	})
 
 	// Wire avatar rendering
 	app.SetAvatarFunc(func(userID string) string {
@@ -290,6 +269,37 @@ func run() error {
 	var p *tea.Program
 	workspaces := make(map[string]*WorkspaceContext)
 	var activeTeamID string
+
+	// Wire theme switcher: dispatch to the appropriate saver based on scope.
+	app.SetThemeSaver(func(name string, scope themeswitcher.ThemeScope) {
+		switch scope {
+		case themeswitcher.ScopeWorkspace:
+			if activeTeamID == "" {
+				return // shouldn't happen, but guard against it
+			}
+			// Find the team name for the comment.
+			teamName := activeTeamID
+			if wctx, ok := workspaces[activeTeamID]; ok && wctx.TeamName != "" {
+				teamName = wctx.TeamName
+			}
+			// Update in-memory config.
+			if cfg.Workspaces == nil {
+				cfg.Workspaces = make(map[string]config.WorkspaceSettings)
+			}
+			ws := cfg.Workspaces[activeTeamID]
+			ws.Theme = name
+			cfg.Workspaces[activeTeamID] = ws
+			// Persist.
+			if err := saveWorkspaceTheme(configPath, activeTeamID, teamName, name); err != nil {
+				log.Printf("save workspace theme: %v", err)
+			}
+		case themeswitcher.ScopeGlobal:
+			cfg.Appearance.Theme = name
+			if err := saveGlobalTheme(configPath, name); err != nil {
+				log.Printf("save global theme: %v", err)
+			}
+		}
+	})
 
 	// wireCallbacks sets all App callbacks to use the given workspace context.
 	// Called on initial setup and again when the user switches workspaces.
@@ -420,6 +430,9 @@ func run() error {
 
 		// Update active pointer
 		activeTeamID = teamID
+
+		// Apply this workspace's theme (or fall back to global / dark).
+		styles.Apply(cfg.ResolveTheme(teamID), cfg.Theme)
 
 		// Re-wire all callbacks to the new workspace's client
 		wireCallbacks(wctx)
