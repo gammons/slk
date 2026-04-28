@@ -8,6 +8,7 @@ require (
 	charm.land/huh/v2 v2.0.3
 	charm.land/lipgloss/v2 v2.0.3
 	github.com/charmbracelet/x/ansi v0.11.7
+	github.com/clipperhouse/displaywidth v0.11.0
 	github.com/gen2brain/beeep v0.11.2
 	github.com/gorilla/websocket v1.5.3
 	github.com/kyokomi/emoji/v2 v2.2.13
@@ -31,7 +32,6 @@ require (
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
-	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/esiqveland/notify v0.13.3 // indirect
@@ -59,4 +59,4 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-replace github.com/clipperhouse/displaywidth => /home/grant/local_code/displaywidth
+replace github.com/clipperhouse/displaywidth => github.com/gammons/displaywidth v0.11.1-0.20260428124126-4f10f3979a7e
