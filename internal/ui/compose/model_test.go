@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
 )
 
@@ -386,5 +387,195 @@ func TestCloseMention(t *testing.T) {
 
 	if !strings.Contains(m.Value(), "@") {
 		t.Error("expected @ to remain in text after dismiss")
+	}
+}
+
+func sampleEmojiEntries() []emoji.EmojiEntry {
+	return []emoji.EmojiEntry{
+		{Name: "rock", Display: "🪨"},
+		{Name: "rocket", Display: "🚀"},
+		{Name: "rose", Display: "🌹"},
+		{Name: "tada", Display: "🎉"},
+	}
+}
+
+// typeChars feeds each rune in s through the compose Update loop as a
+// character key press. This mirrors how the textarea receives input from
+// bubbletea in real usage.
+func typeChars(t *testing.T, m Model, s string) Model {
+	t.Helper()
+	for _, r := range s {
+		m, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	return m
+}
+
+func TestEmojiTrigger_OpensAfterColonAndTwoChars(t *testing.T) {
+	m := New("general")
+	m.SetEmojiEntries(sampleEmojiEntries())
+	_ = m.Focus()
+
+	m = typeChars(t, m, ":")
+	if m.IsEmojiActive() {
+		t.Fatal("picker should NOT open with just ':'")
+	}
+	m = typeChars(t, m, "r")
+	if m.IsEmojiActive() {
+		t.Fatal("picker should NOT open with ':r' (1 char)")
+	}
+	m = typeChars(t, m, "o")
+	if !m.IsEmojiActive() {
+		t.Fatal("picker should open with ':ro'")
+	}
+}
+
+func TestEmojiTrigger_RequiresWordBoundary(t *testing.T) {
+	m := New("general")
+	m.SetEmojiEntries(sampleEmojiEntries())
+	_ = m.Focus()
+
+	m = typeChars(t, m, "foo:ro")
+	if m.IsEmojiActive() {
+		t.Errorf("picker should not open mid-word: value=%q", m.Value())
+	}
+}
+
+func TestEmojiTrigger_OpensAfterSpace(t *testing.T) {
+	m := New("general")
+	m.SetEmojiEntries(sampleEmojiEntries())
+	_ = m.Focus()
+
+	m = typeChars(t, m, "hi :ro")
+	if !m.IsEmojiActive() {
+		t.Error("picker should open after whitespace")
+	}
+}
+
+func TestEmojiTrigger_ClosesOnSpace(t *testing.T) {
+	m := New("general")
+	m.SetEmojiEntries(sampleEmojiEntries())
+	_ = m.Focus()
+
+	m = typeChars(t, m, ":ro")
+	if !m.IsEmojiActive() {
+		t.Fatal("precondition: picker open")
+	}
+	m = typeChars(t, m, " ")
+	if m.IsEmojiActive() {
+		t.Error("picker should close on space")
+	}
+}
+
+func TestEmojiTrigger_ClosesOnSecondColon(t *testing.T) {
+	m := New("general")
+	m.SetEmojiEntries(sampleEmojiEntries())
+	_ = m.Focus()
+
+	m = typeChars(t, m, ":ro")
+	if !m.IsEmojiActive() {
+		t.Fatal("precondition: picker open")
+	}
+	m = typeChars(t, m, ":")
+	if m.IsEmojiActive() {
+		t.Error("picker should close on closing ':'")
+	}
+}
+
+func TestEmojiTrigger_ClosesOnEscape(t *testing.T) {
+	m := New("general")
+	m.SetEmojiEntries(sampleEmojiEntries())
+	_ = m.Focus()
+
+	m = typeChars(t, m, ":ro")
+	if !m.IsEmojiActive() {
+		t.Fatal("precondition: picker open")
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.IsEmojiActive() {
+		t.Error("picker should close on escape")
+	}
+}
+
+func TestEmojiTrigger_BackspacePastTriggerCloses(t *testing.T) {
+	m := New("general")
+	m.SetEmojiEntries(sampleEmojiEntries())
+	_ = m.Focus()
+
+	m = typeChars(t, m, ":ro")
+	if !m.IsEmojiActive() {
+		t.Fatal("precondition: picker open")
+	}
+	// Backspace 3 times: deletes 'o', 'r', then ':' (cursor crosses trigger).
+	for i := 0; i < 3; i++ {
+		m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	}
+	if m.IsEmojiActive() {
+		t.Error("picker should close once cursor crosses the trigger ':'")
+	}
+}
+
+func TestEmojiAccept_ReplacesQueryWithFullShortcode(t *testing.T) {
+	m := New("general")
+	m.SetEmojiEntries(sampleEmojiEntries())
+	_ = m.Focus()
+
+	m = typeChars(t, m, ":ro")
+	if !m.IsEmojiActive() {
+		t.Fatal("precondition: picker open")
+	}
+	// First filtered match for "ro" against sampleEmojiEntries is :rock:
+	// (alphabetical), then :rocket:, then :rose:. Press Enter to accept the default.
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if m.IsEmojiActive() {
+		t.Error("picker should be closed after accept")
+	}
+	if got := m.Value(); got != ":rock:" {
+		t.Errorf("expected value=:rock:, got %q", got)
+	}
+}
+
+func TestEmojiAccept_PreservesSurroundingText(t *testing.T) {
+	m := New("general")
+	m.SetEmojiEntries(sampleEmojiEntries())
+	_ = m.Focus()
+
+	m = typeChars(t, m, "hi :ros")
+	if !m.IsEmojiActive() {
+		t.Fatal("precondition: picker open")
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := m.Value(); got != "hi :rose:" {
+		t.Errorf("expected 'hi :rose:', got %q", got)
+	}
+}
+
+func TestEmojiKeyPath_BumpsVersion(t *testing.T) {
+	m := New("general")
+	m.SetEmojiEntries(sampleEmojiEntries())
+	_ = m.Focus()
+	m = typeChars(t, m, ":ro")
+	if !m.IsEmojiActive() {
+		t.Fatal("precondition: picker open")
+	}
+	v0 := m.Version()
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.Version() == v0 {
+		t.Errorf("expected version to bump on emoji-picker navigation, got same %d", m.Version())
+	}
+}
+
+func TestEmojiAndMentionPickersAreMutuallyExclusive(t *testing.T) {
+	m := New("general")
+	m.SetEmojiEntries(sampleEmojiEntries())
+	m.SetUsers([]mentionpicker.User{{ID: "U1", DisplayName: "Alice", Username: "alice"}})
+	_ = m.Focus()
+
+	m = typeChars(t, m, "@a")
+	if !m.IsMentionActive() {
+		t.Fatal("precondition: mention picker open")
+	}
+	if m.IsEmojiActive() {
+		t.Error("emoji picker should not be active when mention is")
 	}
 }

@@ -9,6 +9,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/gammons/slk/internal/emoji"
+	"github.com/gammons/slk/internal/ui/emojipicker"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
 	"github.com/gammons/slk/internal/ui/styles"
 )
@@ -24,6 +26,14 @@ type Model struct {
 	mentionStartCol int // cursor column where @ was typed
 	users           []mentionpicker.User
 	reverseNames    map[string]string // displayName -> userID
+
+	// Emoji picker state. emojiStartCol is the byte offset of the FIRST
+	// CHARACTER AFTER the trigger ':' within input.Value() (mirrors
+	// mentionStartCol semantics; the trigger ':' itself sits at
+	// emojiStartCol-1).
+	emojiPicker   emojipicker.Model
+	emojiActive   bool
+	emojiStartCol int
 
 	// version increments on every Update / state mutation. Used by App's
 	// panel-cache layer so the wrapped compose panel only re-renders when
@@ -122,6 +132,10 @@ func (m *Model) SetValue(s string) {
 func (m *Model) Reset() {
 	m.input.Reset()
 	m.input.SetHeight(1)
+	m.mentionActive = false
+	m.mentionPicker.Close()
+	m.emojiActive = false
+	m.emojiPicker.Close()
 	m.dirty()
 }
 
@@ -167,9 +181,17 @@ func (m *Model) SetWidth(width int) {
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	keyMsg, isKey := msg.(tea.KeyMsg)
 
-	// If mention picker is active, intercept keys
+	// If emoji picker is active, intercept keys (takes precedence over mention).
+	if m.emojiActive && isKey {
+		m2, cmd := m.handleEmojiKey(keyMsg)
+		m2.dirty()
+		return m2, cmd
+	}
+	// If mention picker is active, intercept keys.
 	if m.mentionActive && isKey {
-		return m.handleMentionKey(keyMsg)
+		m2, cmd := m.handleMentionKey(keyMsg)
+		m2.dirty()
+		return m2, cmd
 	}
 
 	// Normal textarea update
@@ -190,6 +212,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			}
 		}
 	}
+
+	// Emoji trigger: ':' at word boundary, plus 2 query chars before the
+	// popup opens. We re-check on every keystroke (cheap) so the popup
+	// appears the moment the threshold is hit.
+	m.maybeOpenEmojiPicker()
 
 	m.autoGrow()
 	// Conservative: bump version on every Update. The textarea's internal
@@ -414,6 +441,184 @@ func (m Model) MentionPickerView(width int) string {
 		return ""
 	}
 	return m.mentionPicker.View(width)
+}
+
+// SetEmojiEntries provides the searchable emoji list (built-ins + workspace
+// customs). Safe to call any time, including while the picker is visible.
+func (m *Model) SetEmojiEntries(entries []emoji.EmojiEntry) {
+	m.emojiPicker.SetEntries(entries)
+	m.dirty()
+}
+
+// IsEmojiActive returns whether the emoji picker is currently showing.
+func (m Model) IsEmojiActive() bool { return m.emojiActive }
+
+// CloseEmoji dismisses the emoji picker without selecting.
+func (m *Model) CloseEmoji() {
+	m.emojiActive = false
+	m.emojiPicker.Close()
+	m.dirty()
+}
+
+// EmojiPickerView returns the rendered emoji picker dropdown, or "" if not active.
+func (m Model) EmojiPickerView(width int) string {
+	if !m.emojiActive {
+		return ""
+	}
+	return m.emojiPicker.View(width)
+}
+
+// emojiQueryChar reports whether r is a valid character inside an emoji
+// shortcode query (the run of chars after ':' the user is currently typing).
+// Mirrors the character set kyokomi recognizes in shortcodes.
+func emojiQueryChar(r byte) bool {
+	switch {
+	case r >= 'a' && r <= 'z':
+		return true
+	case r >= 'A' && r <= 'Z':
+		return true
+	case r >= '0' && r <= '9':
+		return true
+	case r == '_' || r == '+' || r == '-':
+		return true
+	}
+	return false
+}
+
+// maybeOpenEmojiPicker scans backward from the cursor to find an emoji
+// trigger of the form `:xy` (at start-of-line or after whitespace, with
+// at least 2 valid query characters and no closing ':' yet). Opens the
+// picker if the threshold is met; updates the query if already open.
+func (m *Model) maybeOpenEmojiPicker() {
+	val := m.input.Value()
+	pos := m.cursorPosition()
+	if pos > len(val) {
+		pos = len(val)
+	}
+
+	// Walk backward from the cursor over query chars to find the trigger ':'.
+	i := pos
+	for i > 0 && emojiQueryChar(val[i-1]) {
+		i--
+	}
+	// Now val[i:pos] is the candidate query. We need val[i-1] == ':' and
+	// either i-1 == 0 or val[i-2] is whitespace.
+	if i == 0 || val[i-1] != ':' {
+		// No trigger; if we had one open, close it (cursor moved off).
+		if m.emojiActive {
+			m.emojiActive = false
+			m.emojiPicker.Close()
+		}
+		return
+	}
+	if i-1 != 0 {
+		prev := val[i-2]
+		if prev != ' ' && prev != '\t' && prev != '\n' {
+			if m.emojiActive {
+				m.emojiActive = false
+				m.emojiPicker.Close()
+			}
+			return
+		}
+	}
+	query := val[i:pos]
+	if len(query) < 2 {
+		// Below threshold; close if open.
+		if m.emojiActive {
+			m.emojiActive = false
+			m.emojiPicker.Close()
+		}
+		return
+	}
+
+	if !m.emojiActive {
+		m.emojiActive = true
+		m.emojiStartCol = i // first char AFTER the trigger ':'
+		m.emojiPicker.Open(query)
+	} else {
+		m.emojiPicker.SetQuery(query)
+	}
+}
+
+// handleEmojiKey processes key events when the emoji picker is active.
+// Mirrors handleMentionKey.
+func (m Model) handleEmojiKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	k := msg.Key()
+	switch {
+	case k.Code == tea.KeyUp || (k.Code == 'p' && k.Mod == tea.ModCtrl):
+		m.emojiPicker.MoveUp()
+		return m, nil
+
+	case k.Code == tea.KeyDown || (k.Code == 'n' && k.Mod == tea.ModCtrl):
+		m.emojiPicker.MoveDown()
+		return m, nil
+
+	case k.Code == tea.KeyEnter || k.Code == tea.KeyTab:
+		if entry, ok := m.emojiPicker.SelectedEntry(); ok {
+			m.insertEmoji(entry.Name)
+		}
+		m.emojiActive = false
+		m.emojiPicker.Close()
+		m.autoGrow()
+		return m, nil
+
+	case k.Code == tea.KeyEscape:
+		m.emojiActive = false
+		m.emojiPicker.Close()
+		return m, nil
+
+	case k.Code == tea.KeyBackspace:
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		m.maybeOpenEmojiPicker()
+		m.autoGrow()
+		return m, cmd
+
+	case len(k.Text) > 0:
+		// If the user types a non-query char (space, ':', punctuation), let
+		// the textarea record it, then close the picker.
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		// A single rune in k.Text — check the first byte for ASCII set.
+		ch := k.Text[0]
+		if !emojiQueryChar(ch) {
+			m.emojiActive = false
+			m.emojiPicker.Close()
+		} else {
+			m.maybeOpenEmojiPicker()
+		}
+		m.autoGrow()
+		return m, cmd
+
+	default:
+		m.emojiActive = false
+		m.emojiPicker.Close()
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		m.autoGrow()
+		return m, cmd
+	}
+}
+
+// insertEmoji replaces the in-progress :query (the bytes from the trigger
+// ':' through the cursor) with `:name:`.
+func (m *Model) insertEmoji(name string) {
+	val := m.input.Value()
+	pos := m.cursorPosition()
+	colonPos := m.emojiStartCol - 1 // byte offset of the trigger ':'
+	if colonPos < 0 {
+		colonPos = 0
+	}
+	if pos > len(val) {
+		pos = len(val)
+	}
+	before := val[:colonPos]
+	after := ""
+	if pos < len(val) {
+		after = val[pos:]
+	}
+	newText := before + ":" + name + ":" + after
+	m.input.SetValue(newText)
 }
 
 func (m Model) View(width int, focused bool) string {
