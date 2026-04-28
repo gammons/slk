@@ -403,6 +403,15 @@ func (m *Model) View(height, width int) string {
 		borderFill := lipgloss.NewStyle().Background(styles.Background)
 		borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Background).BorderBackground(styles.Background)
 		borderSelect := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Accent).BorderBackground(styles.Background)
+		// Visible separator drawn between replies. Uses the panel border color
+		// over the themed background so it reads as a divider but doesn't
+		// fight with the panel's outer border. Falls through full content
+		// width.
+		separatorStyle := lipgloss.NewStyle().
+			Width(width).
+			Background(styles.Background).
+			Foreground(styles.Border)
+		replySeparator := separatorStyle.Render(strings.Repeat("─", width))
 
 		var allRows []string
 		startLine := 0
@@ -425,6 +434,11 @@ func (m *Model) View(height, width int) string {
 			}
 			allRows = append(allRows, content)
 			currentLine += h
+			// Separator between replies (not after the last).
+			if i < len(m.cache)-1 {
+				allRows = append(allRows, replySeparator)
+				currentLine++
+			}
 		}
 
 		m.viewContent = strings.Join(allRows, "\n")
