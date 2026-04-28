@@ -94,28 +94,34 @@ slk is intentionally not a 1:1 port of the desktop client. Some Slack features a
 
 Grab a prebuilt binary from the [latest release](https://github.com/gammons/slk/releases/latest), or use one of the methods below.
 
+The shell snippets resolve the latest version automatically:
+
+```bash
+VERSION=$(curl -fsSL https://api.github.com/repos/gammons/slk/releases/latest | grep -oE '"tag_name": *"v[^"]+"' | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sed 's/^v//')
+```
+
 ### Linux
 
 **Debian / Ubuntu:**
 ```bash
-curl -sSLO https://github.com/gammons/slk/releases/latest/download/slk_0.1.0_linux_amd64.deb
-sudo dpkg -i slk_0.1.0_linux_amd64.deb
+curl -fsSLO "https://github.com/gammons/slk/releases/latest/download/slk_${VERSION}_linux_amd64.deb"
+sudo dpkg -i "slk_${VERSION}_linux_amd64.deb"
 ```
 
 **Fedora / RHEL:**
 ```bash
-sudo rpm -i https://github.com/gammons/slk/releases/latest/download/slk_0.1.0_linux_amd64.rpm
+sudo rpm -i "https://github.com/gammons/slk/releases/latest/download/slk_${VERSION}_linux_amd64.rpm"
 ```
 
 **Alpine:**
 ```bash
-curl -sSLO https://github.com/gammons/slk/releases/latest/download/slk_0.1.0_linux_amd64.apk
-sudo apk add --allow-untrusted slk_0.1.0_linux_amd64.apk
+curl -fsSLO "https://github.com/gammons/slk/releases/latest/download/slk_${VERSION}_linux_amd64.apk"
+sudo apk add --allow-untrusted "slk_${VERSION}_linux_amd64.apk"
 ```
 
-**Tarball (any distro, amd64 or arm64):**
+**Tarball (any distro, swap `x86_64` for `arm64` on ARM):**
 ```bash
-curl -sSL https://github.com/gammons/slk/releases/latest/download/slk_0.1.0_linux_x86_64.tar.gz | tar xz
+curl -fsSL "https://github.com/gammons/slk/releases/latest/download/slk_${VERSION}_linux_x86_64.tar.gz" | tar xz
 sudo mv slk /usr/local/bin/
 ```
 
@@ -123,16 +129,16 @@ sudo mv slk /usr/local/bin/
 
 ```bash
 # Apple Silicon
-curl -sSL https://github.com/gammons/slk/releases/latest/download/slk_0.1.0_darwin_arm64.tar.gz | tar xz
+curl -fsSL "https://github.com/gammons/slk/releases/latest/download/slk_${VERSION}_darwin_arm64.tar.gz" | tar xz
 # Intel
-curl -sSL https://github.com/gammons/slk/releases/latest/download/slk_0.1.0_darwin_x86_64.tar.gz | tar xz
+curl -fsSL "https://github.com/gammons/slk/releases/latest/download/slk_${VERSION}_darwin_x86_64.tar.gz" | tar xz
 
 sudo mv slk /usr/local/bin/
 ```
 
 ### Windows
 
-Download [`slk_0.1.0_windows_x86_64.zip`](https://github.com/gammons/slk/releases/latest), extract `slk.exe`, and add it to your `PATH`.
+Download the `windows_x86_64.zip` from the [latest release](https://github.com/gammons/slk/releases/latest), extract `slk.exe`, and add it to your `PATH`.
 
 ### Go
 
@@ -153,7 +159,7 @@ make build       # binary at bin/slk
 ### Verify your download
 
 ```bash
-curl -sSLO https://github.com/gammons/slk/releases/latest/download/checksums.txt
+curl -fsSLO https://github.com/gammons/slk/releases/latest/download/checksums.txt
 sha256sum -c checksums.txt --ignore-missing
 ```
 
