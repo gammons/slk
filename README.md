@@ -211,6 +211,7 @@ Or just run `./bin/slk`. Onboarding launches automatically when no workspaces ar
 | `1`–`9` | Normal | Jump to workspace N |
 | `r` | Normal (message) | Open reaction picker |
 | `R` | Normal (message) | Quick-toggle existing reactions |
+| `Y` / `C` | Normal (message) | Copy message permalink |
 | `Ctrl+y` | Any | Switch theme |
 | `Ctrl+c` | Any | Quit |
 
