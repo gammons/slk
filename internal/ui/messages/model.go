@@ -635,7 +635,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 
 	var attachmentLines string
 	if rendered := RenderAttachments(msg.Attachments); rendered != "" {
-		attachmentLines = "\n" + rendered
+		attachmentLines = "\n" + WordWrap(rendered, contentWidth)
 	}
 
 	msgContent := line + editedMark + "\n" + text + attachmentLines + threadLine + reactionLine

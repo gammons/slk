@@ -394,7 +394,10 @@ func (m *Model) View(height, width int) string {
 	chrome := header + "\n" + separator + "\n" + parentContent + "\n" + separator
 	chromeHeight := lipgloss.Height(chrome)
 
-	replyAreaHeight := height - chromeHeight - 1 // -1 for the newline joining
+	// chromeHeight already counts every visual row of `chrome`; joining with
+	// a single "\n" between chrome and the viewport produces exactly
+	// chromeHeight+vp.Height() lines total. No extra row is consumed.
+	replyAreaHeight := height - chromeHeight
 	if replyAreaHeight < 1 {
 		replyAreaHeight = 1
 	}
@@ -550,7 +553,7 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 
 	var attachmentLines string
 	if rendered := messages.RenderAttachments(msg.Attachments); rendered != "" {
-		attachmentLines = "\n" + rendered
+		attachmentLines = "\n" + messages.WordWrap(rendered, contentWidth)
 	}
 
 	return line + "\n" + text + attachmentLines + reactionLine

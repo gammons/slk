@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/kyokomi/emoji/v2"
 )
@@ -85,12 +86,20 @@ func blockquoteStyle() lipgloss.Style {
 }
 
 // RenderAttachments returns a styled string with one line per attachment,
-// each prefixed with a [Image] or [File] marker, the filename, and the URL.
-// The whole line is wrapped in an OSC 8 hyperlink escape so it's clickable
-// in modern terminals. Returns "" if there are no attachments.
+// each prefixed with a [Image] or [File] marker followed by the URL. The
+// whole line is wrapped in an OSC 8 hyperlink escape so it's clickable in
+// modern terminals. Returns "" if there are no attachments.
+//
+// Filenames are intentionally omitted: most Slack file names are noisy
+// (e.g. UUID-style image names) and including them in addition to the
+// already-long URL pushed message lines past the panel width.
 //
 // Output format per attachment:
-//   [Image] screenshot.png  https://files.slack.com/...
+//   [Image] https://files.slack.com/...
+//
+// Callers must pass the result through WordWrap before composing it into
+// a width-bounded layout, since file URLs frequently exceed the panel
+// content width.
 func RenderAttachments(attachments []Attachment) string {
 	if len(attachments) == 0 {
 		return ""
@@ -106,9 +115,7 @@ func RenderAttachments(attachments []Attachment) string {
 		}
 		styledMarker := markerStyle.Render(marker)
 		styledURL := urlStyle.Render(a.URL)
-		// Wrap the visible body (marker + name + URL) in OSC 8 so the
-		// terminal makes the entire line clickable / openable.
-		body := styledMarker + " " + a.Name + "  " + styledURL
+		body := styledMarker + " " + styledURL
 		lines = append(lines, osc8Hyperlink(a.URL, body))
 	}
 	return strings.Join(lines, "\n")
@@ -150,6 +157,11 @@ func WordWrap(s string, limit int) string {
 }
 
 // wrapLine wraps a single line at word boundaries using lipgloss.Width.
+// Words wider than limit are hard-broken via ansi.Hardwrap so no output line
+// exceeds the limit. Leaving an overlong line intact would cause the
+// terminal to soft-wrap it on its own, which lipgloss height arithmetic
+// can't see and which would push downstream layout (e.g. the thread
+// compose box) over content above it.
 func wrapLine(buf *strings.Builder, line string, limit int) {
 	words := strings.Fields(line)
 	if len(words) == 0 {
@@ -157,18 +169,36 @@ func wrapLine(buf *strings.Builder, line string, limit int) {
 	}
 
 	currentWidth := 0
+	writeWord := func(w string) {
+		// w may itself be wider than limit; hard-break by display columns.
+		// ansi.Hardwrap is ANSI-aware and grapheme-aware.
+		wWidth := lipgloss.Width(w)
+		if wWidth <= limit {
+			buf.WriteString(w)
+			currentWidth = wWidth
+			return
+		}
+		wrapped := ansi.Hardwrap(w, limit, false)
+		buf.WriteString(wrapped)
+		// Track width of the trailing segment so a following word can
+		// share its line if it fits.
+		if nl := strings.LastIndexByte(wrapped, '\n'); nl >= 0 {
+			currentWidth = lipgloss.Width(wrapped[nl+1:])
+		} else {
+			currentWidth = lipgloss.Width(wrapped)
+		}
+	}
+
 	for i, word := range words {
 		wordWidth := lipgloss.Width(word)
 		if i == 0 {
-			buf.WriteString(word)
-			currentWidth = wordWidth
+			writeWord(word)
 			continue
 		}
 		// +1 for the space before the word
 		if currentWidth+1+wordWidth > limit {
 			buf.WriteByte('\n')
-			buf.WriteString(word)
-			currentWidth = wordWidth
+			writeWord(word)
 		} else {
 			buf.WriteByte(' ')
 			buf.WriteString(word)
