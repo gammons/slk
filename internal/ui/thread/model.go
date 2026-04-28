@@ -524,5 +524,10 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 		reactionLine = "\n" + strings.Join(reactionLines, "\n")
 	}
 
-	return line + "\n" + text + reactionLine
+	var attachmentLines string
+	if rendered := messages.RenderAttachments(msg.Attachments); rendered != "" {
+		attachmentLines = "\n" + rendered
+	}
+
+	return line + "\n" + text + attachmentLines + reactionLine
 }

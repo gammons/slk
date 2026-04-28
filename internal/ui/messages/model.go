@@ -13,16 +13,26 @@ import (
 )
 
 type MessageItem struct {
-	TS         string
-	UserName   string
-	UserID     string
-	Text       string
-	Timestamp  string // formatted display time (e.g. "3:04 PM")
-	DateStr    string // date string for grouping (e.g. "2026-04-23")
-	ThreadTS   string
-	ReplyCount int
-	Reactions  []ReactionItem
-	IsEdited   bool
+	TS          string
+	UserName    string
+	UserID      string
+	Text        string
+	Timestamp   string // formatted display time (e.g. "3:04 PM")
+	DateStr     string // date string for grouping (e.g. "2026-04-23")
+	ThreadTS    string
+	ReplyCount  int
+	Reactions   []ReactionItem
+	Attachments []Attachment
+	IsEdited    bool
+}
+
+// Attachment represents a file or image attached to a message.
+// Kind is "image" for image/* mimetypes, "file" otherwise.
+// URL is the user-facing permalink (preferred) or fallback to url_private.
+type Attachment struct {
+	Kind string // "image" or "file"
+	Name string // display filename / title
+	URL  string // permalink (preferred) or url_private
 }
 
 // AvatarFunc returns the rendered half-block avatar for a user ID, or empty string.
@@ -590,7 +600,12 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		editedMark = " " + styles.Timestamp.Render("(edited)")
 	}
 
-	msgContent := line + editedMark + "\n" + text + threadLine + reactionLine
+	var attachmentLines string
+	if rendered := RenderAttachments(msg.Attachments); rendered != "" {
+		attachmentLines = "\n" + rendered
+	}
+
+	msgContent := line + editedMark + "\n" + text + attachmentLines + threadLine + reactionLine
 
 	// Place avatar next to message content
 	if avatarStr != "" {

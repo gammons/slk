@@ -26,6 +26,7 @@ import (
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/gammons/slk/internal/ui/workspace"
 	emoji "github.com/kyokomi/emoji/v2"
+	"github.com/slack-go/slack"
 )
 
 // UnresolvedDM tracks a DM channel whose user name wasn't in the initial user list.
@@ -636,6 +637,64 @@ func fetchBrowseableChannels(ctx context.Context, wctx *WorkspaceContext, p *tea
 	}
 }
 
+// extractAttachments converts slack-go File entries into the UI's
+// Attachment representation.
+//
+// URL preference depends on the kind:
+//   - For images we use an unauthenticated thumbnail URL (files.slack.com/...)
+//     when available so the link opens the picture directly in a browser
+//     instead of bouncing through Slack's auth flow / launching the desktop
+//     client. We pick a reasonably large thumbnail (1024 -> 720 -> 480 ->
+//     360 -> 160 -> 80 -> 64) and fall back to PermalinkPublic, Permalink,
+//     and finally URLPrivate.
+//   - For non-images (PDFs, etc.) we use Permalink, since those files are
+//     intentionally gated by Slack auth and opening the workspace UI is the
+//     correct flow.
+//
+// Title is used for the display name when present (Slack lets users set a
+// title separate from the original filename); otherwise we fall back to
+// the filename. Image mimetypes get the "image" kind so the renderer can
+// show [Image]; everything else gets "file" -> [File].
+func extractAttachments(files []slack.File) []messages.Attachment {
+	if len(files) == 0 {
+		return nil
+	}
+	out := make([]messages.Attachment, 0, len(files))
+	for _, f := range files {
+		kind := "file"
+		if strings.HasPrefix(f.Mimetype, "image/") {
+			kind = "image"
+		}
+		name := f.Title
+		if name == "" {
+			name = f.Name
+		}
+		out = append(out, messages.Attachment{Kind: kind, Name: name, URL: pickAttachmentURL(f, kind)})
+	}
+	return out
+}
+
+// pickAttachmentURL chooses the best URL for a slack.File based on its kind.
+// See extractAttachments for the rationale.
+func pickAttachmentURL(f slack.File, kind string) string {
+	if kind == "image" {
+		// Try thumbnails from largest to smallest -- these are direct image
+		// bytes hosted at files.slack.com and openable without auth.
+		for _, u := range []string{f.Thumb1024, f.Thumb720, f.Thumb480, f.Thumb360, f.Thumb160, f.Thumb80, f.Thumb64} {
+			if u != "" {
+				return u
+			}
+		}
+		if f.PermalinkPublic != "" {
+			return f.PermalinkPublic
+		}
+	}
+	if f.Permalink != "" {
+		return f.Permalink
+	}
+	return f.URLPrivate
+}
+
 // resolveUser ensures we have the display name and avatar for a user.
 // If the user is unknown, fetches their profile from Slack on demand.
 func resolveUser(client *slackclient.Client, userID string, userNames map[string]string, db *cache.DB, avatarCache *avatar.Cache) string {
@@ -722,14 +781,15 @@ func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, 
 		}
 
 		msgItems = append(msgItems, messages.MessageItem{
-			TS:         m.Timestamp,
-			UserID:     m.User,
-			UserName:   userName,
-			Text:       m.Text,
-			Timestamp:  formatTimestamp(m.Timestamp, tsFormat),
-			ThreadTS:   m.ThreadTimestamp,
-			ReplyCount: m.ReplyCount,
-			Reactions:  reactions,
+			TS:          m.Timestamp,
+			UserID:      m.User,
+			UserName:    userName,
+			Text:        m.Text,
+			Timestamp:   formatTimestamp(m.Timestamp, tsFormat),
+			ThreadTS:    m.ThreadTimestamp,
+			ReplyCount:  m.ReplyCount,
+			Reactions:   reactions,
+			Attachments: extractAttachments(m.Files),
 		})
 	}
 
@@ -782,14 +842,15 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 		}
 
 		msgItems = append(msgItems, messages.MessageItem{
-			TS:         m.Timestamp,
-			UserID:     m.User,
-			UserName:   userName,
-			Text:       m.Text,
-			Timestamp:  formatTimestamp(m.Timestamp, tsFormat),
-			ThreadTS:   m.ThreadTimestamp,
-			ReplyCount: m.ReplyCount,
-			Reactions:  reactions,
+			TS:          m.Timestamp,
+			UserID:      m.User,
+			UserName:    userName,
+			Text:        m.Text,
+			Timestamp:   formatTimestamp(m.Timestamp, tsFormat),
+			ThreadTS:    m.ThreadTimestamp,
+			ReplyCount:  m.ReplyCount,
+			Reactions:   reactions,
+			Attachments: extractAttachments(m.Files),
 		})
 	}
 
@@ -843,14 +904,15 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 		}
 
 		msgItems = append(msgItems, messages.MessageItem{
-			TS:         m.Timestamp,
-			UserID:     m.User,
-			UserName:   userName,
-			Text:       m.Text,
-			Timestamp:  formatTimestamp(m.Timestamp, tsFormat),
-			ThreadTS:   m.ThreadTimestamp,
-			ReplyCount: m.ReplyCount,
-			Reactions:  reactions,
+			TS:          m.Timestamp,
+			UserID:      m.User,
+			UserName:    userName,
+			Text:        m.Text,
+			Timestamp:   formatTimestamp(m.Timestamp, tsFormat),
+			ThreadTS:    m.ThreadTimestamp,
+			ReplyCount:  m.ReplyCount,
+			Reactions:   reactions,
+			Attachments: extractAttachments(m.Files),
 		})
 	}
 

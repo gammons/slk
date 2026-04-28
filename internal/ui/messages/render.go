@@ -20,8 +20,12 @@ var (
 	inlineCodeRe    = regexp.MustCompile("`([^`\n]+)`")
 	codeBlockRe     = regexp.MustCompile("(?s)```(.+?)```")
 
-	// Slack link patterns: <url|label> or <url>
-	linkWithLabelRe = regexp.MustCompile(`<([^|>]+)\|([^>]+)>`)
+	// Slack link patterns: <url|label> or <url>.
+	// linkWithLabelRe requires https?:// so it does NOT match channel
+	// mentions <#CHANNEL_ID|name>, group mentions <!subteam^...|@team>,
+	// or other Slack-internal angle-bracket forms. Those are handled by
+	// dedicated regexes below.
+	linkWithLabelRe = regexp.MustCompile(`<(https?://[^|>]+)\|([^>]+)>`)
 	linkBareRe      = regexp.MustCompile(`<(https?://[^>]+)>`)
 
 	// Slack user/channel mentions: <@U1234> <#C1234|channel-name>
@@ -72,6 +76,49 @@ func blockquoteStyle() lipgloss.Style {
 		BorderLeft(true).
 		BorderForeground(styles.TextMuted).
 		PaddingLeft(1)
+}
+
+// RenderAttachments returns a styled string with one line per attachment,
+// each prefixed with a [Image] or [File] marker, the filename, and the URL.
+// The whole line is wrapped in an OSC 8 hyperlink escape so it's clickable
+// in modern terminals. Returns "" if there are no attachments.
+//
+// Output format per attachment:
+//   [Image] screenshot.png  https://files.slack.com/...
+func RenderAttachments(attachments []Attachment) string {
+	if len(attachments) == 0 {
+		return ""
+	}
+	markerStyle := lipgloss.NewStyle().Foreground(styles.TextMuted).Bold(true)
+	urlStyle := linkStyle()
+
+	lines := make([]string, 0, len(attachments))
+	for _, a := range attachments {
+		marker := "[File]"
+		if a.Kind == "image" {
+			marker = "[Image]"
+		}
+		styledMarker := markerStyle.Render(marker)
+		styledURL := urlStyle.Render(a.URL)
+		// Wrap the visible body (marker + name + URL) in OSC 8 so the
+		// terminal makes the entire line clickable / openable.
+		body := styledMarker + " " + a.Name + "  " + styledURL
+		lines = append(lines, osc8Hyperlink(a.URL, body))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// osc8Hyperlink wraps the rendered label in an OSC 8 hyperlink escape so
+// terminals that support it (alacritty >=0.11, kitty, iterm2, wezterm, foot,
+// recent gnome-terminal) make `label` clickable. Terminals without OSC 8
+// support display only the label (they ignore the escape sequence).
+//
+// The format is: ESC ] 8 ;; URL ESC \ LABEL ESC ] 8 ;; ESC \
+//
+// We use the BEL terminator (\x07) instead of ESC \ for compatibility with
+// some terminals that mishandle the latter; both are valid per the spec.
+func osc8Hyperlink(url, label string) string {
+	return "\x1b]8;;" + url + "\x1b\\" + label + "\x1b]8;;\x1b\\"
 }
 
 // reapplyBgAfterResets post-processes ANSI text to re-apply a background
@@ -214,16 +261,20 @@ func renderInlineFormatting(text string, userNames map[string]string) string {
 		return strikethroughStyle().Render(inner)
 	})
 
-	// Links with labels: <url|label> -> label (styled)
+	// Links with labels: <url|label> -> "label (url)"; the label is wrapped
+	// in an OSC 8 hyperlink escape so it's clickable in modern terminals,
+	// and the raw URL is shown after the label so it's also visible to
+	// terminals without OSC 8 support and copy-paste-friendly.
 	text = linkWithLabelRe.ReplaceAllStringFunc(text, func(match string) string {
 		parts := linkWithLabelRe.FindStringSubmatch(match)
-		return linkStyle().Render(parts[2])
+		url, label := parts[1], parts[2]
+		return osc8Hyperlink(url, linkStyle().Render(label)) + " (" + url + ")"
 	})
 
-	// Bare links: <url> -> url (styled)
+	// Bare links: <url> -> url, wrapped in OSC 8 so it's clickable.
 	text = linkBareRe.ReplaceAllStringFunc(text, func(match string) string {
 		url := linkBareRe.FindStringSubmatch(match)[1]
-		return linkStyle().Render(url)
+		return osc8Hyperlink(url, linkStyle().Render(url))
 	})
 
 	// Channel mentions: <#C1234|channel-name> -> #channel-name
