@@ -1,3 +1,5 @@
+// Package emoji provides utilities for measuring emoji display width
+// based on probed terminal behavior, with caching across sessions.
 package emoji
 
 import (

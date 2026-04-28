@@ -551,7 +551,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 	if len(msg.Reactions) > 0 {
 		var pills []string
 		for i, r := range msg.Reactions {
-			emojiStr := emojiutil.NormalizeEmojiPresentation(emoji.Sprint(":" + r.Emoji + ":"))
+			emojiStr := emoji.Sprint(":" + r.Emoji + ":")
 			pillText := fmt.Sprintf("%s%d", emojiStr, r.Count)
 			var style lipgloss.Style
 			if isSelected && m.reactionNavActive && i == m.reactionNavIndex {
