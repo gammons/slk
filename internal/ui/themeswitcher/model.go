@@ -10,18 +10,30 @@ import (
 	"github.com/muesli/reflow/truncate"
 )
 
+// ThemeScope identifies whether a theme selection should be saved to
+// the active workspace or to the global default.
+type ThemeScope int
+
+const (
+	ScopeGlobal ThemeScope = iota
+	ScopeWorkspace
+)
+
 // ThemeResult is returned when the user selects a theme.
 type ThemeResult struct {
-	Name string
+	Name  string
+	Scope ThemeScope
 }
 
 // Model is the theme switcher overlay.
 type Model struct {
-	items    []string // theme display names
-	filtered []int    // indices into items matching query
-	query    string
-	selected int // index into filtered
-	visible  bool
+	items      []string // theme display names
+	filtered   []int    // indices into items matching query
+	query      string
+	selected   int // index into filtered
+	visible    bool
+	scope      ThemeScope
+	headerText string
 }
 
 // New creates a new theme switcher.
@@ -34,13 +46,29 @@ func (m *Model) SetItems(items []string) {
 	m.items = items
 }
 
-// Open shows the overlay and resets state.
+// Open shows the overlay and resets state. Defaults to ScopeGlobal with no
+// custom header text. Use OpenWithScope to set a scope and header.
 func (m *Model) Open() {
+	m.OpenWithScope(ScopeGlobal, "")
+}
+
+// OpenWithScope shows the overlay scoped to either the active workspace or
+// the global default. headerText, if non-empty, replaces the default
+// "Switch Theme" title in the rendered overlay.
+func (m *Model) OpenWithScope(scope ThemeScope, headerText string) {
 	m.visible = true
 	m.query = ""
 	m.selected = 0
+	m.scope = scope
+	m.headerText = headerText
 	m.filter()
 }
+
+// Scope returns the scope the picker was last opened with.
+func (m Model) Scope() ThemeScope { return m.scope }
+
+// HeaderText returns the header text the picker was last opened with.
+func (m Model) HeaderText() string { return m.headerText }
 
 // Close hides the overlay.
 func (m *Model) Close() {
@@ -59,7 +87,7 @@ func (m *Model) HandleKey(keyStr string) *ThemeResult {
 	case "enter":
 		if len(m.filtered) > 0 {
 			idx := m.filtered[m.selected]
-			return &ThemeResult{Name: m.items[idx]}
+			return &ThemeResult{Name: m.items[idx], Scope: m.scope}
 		}
 		return nil
 
@@ -154,11 +182,15 @@ func (m Model) renderBox(termWidth int) string {
 	// behind the overlay doesn't bleed through individual styled spans.
 	bg := styles.Background
 
+	titleText := "Switch Theme"
+	if m.headerText != "" {
+		titleText = m.headerText
+	}
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Background(bg).
 		Foreground(styles.Primary).
-		Render("Switch Theme")
+		Render(titleText)
 
 	var inputText string
 	if m.query == "" {
