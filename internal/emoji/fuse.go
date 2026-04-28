@@ -8,7 +8,10 @@
 
 package emoji
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // StripSkinTone removes any Slack-style or kyokomi-style skin-tone
 // modifier suffix from a reaction shortcode name, returning the bare
@@ -48,4 +51,37 @@ func StripSkinTone(name string) string {
 	}
 
 	return name
+}
+
+// shortcodePattern matches a :emoji_shortcode: token in arbitrary text.
+// Shortcodes are alphanumerics, underscores, hyphens, plus signs, and
+// colons (the inner colon supports the Slack "+1::skin-tone-N" form).
+var shortcodePattern = regexp.MustCompile(`:[A-Za-z0-9_+:-]+:`)
+
+// StripSkinToneFromText scans body text for emoji shortcodes and removes
+// the skin-tone modifier portion of any it finds. The bare shortcode is
+// preserved so kyokomi can still expand it to a Unicode emoji.
+//
+// Example:
+//
+//	in:  "I love :point_down_tone1: this thing!"
+//	out: "I love :point_down: this thing!"
+//
+//	in:  ":+1::skin-tone-2: looks good"
+//	out: ":+1: looks good"
+//
+// Use this on raw message text BEFORE calling emoji.Sprint(). It avoids
+// the alignment issues caused by skin-tone modifier codepoints rendering
+// inconsistently across terminals.
+func StripSkinToneFromText(text string) string {
+	return shortcodePattern.ReplaceAllStringFunc(text, func(match string) string {
+		// match includes the surrounding colons; strip them, run through
+		// StripSkinTone, then re-add.
+		inner := match[1 : len(match)-1]
+		stripped := StripSkinTone(inner)
+		if stripped == inner {
+			return match
+		}
+		return ":" + stripped + ":"
+	})
 }

@@ -8,6 +8,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	emojiutil "github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/kyokomi/emoji/v2"
 )
@@ -402,7 +403,9 @@ func renderInlineFormatting(text string, userNames map[string]string) string {
 	})
 
 	// Emoji shortcodes: :red_circle: -> 🔴
-	text = emoji.Sprint(text)
+	// Strip skin-tone modifier suffixes from shortcodes first; toned
+	// emoji render inconsistently across terminals and break alignment.
+	text = emoji.Sprint(emojiutil.StripSkinToneFromText(text))
 
 	return text
 }
