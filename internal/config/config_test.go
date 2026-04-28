@@ -114,3 +114,61 @@ func TestLoadConfigMissingFile(t *testing.T) {
 		t.Errorf("expected default theme 'dark', got %q", cfg.Appearance.Theme)
 	}
 }
+
+func TestResolveThemeWorkspaceWins(t *testing.T) {
+	c := Config{
+		Appearance: Appearance{Theme: "dark"},
+		Workspaces: map[string]WorkspaceSettings{
+			"T01": {Theme: "dracula"},
+		},
+	}
+	if got := c.ResolveTheme("T01"); got != "dracula" {
+		t.Errorf("ResolveTheme(T01) = %q, want dracula", got)
+	}
+}
+
+func TestResolveThemeWorkspaceMissing(t *testing.T) {
+	c := Config{
+		Appearance: Appearance{Theme: "tokyo night"},
+		Workspaces: map[string]WorkspaceSettings{
+			"T01": {Theme: "dracula"},
+		},
+	}
+	if got := c.ResolveTheme("T99"); got != "tokyo night" {
+		t.Errorf("ResolveTheme(T99) = %q, want tokyo night (global)", got)
+	}
+}
+
+func TestResolveThemeWorkspaceEmpty(t *testing.T) {
+	// Workspace exists in map but has empty Theme.
+	c := Config{
+		Appearance: Appearance{Theme: "tokyo night"},
+		Workspaces: map[string]WorkspaceSettings{
+			"T01": {Theme: ""},
+		},
+	}
+	if got := c.ResolveTheme("T01"); got != "tokyo night" {
+		t.Errorf("ResolveTheme empty ws theme = %q, want tokyo night", got)
+	}
+}
+
+func TestResolveThemeNoGlobal(t *testing.T) {
+	c := Config{
+		Appearance: Appearance{Theme: ""},
+		Workspaces: map[string]WorkspaceSettings{},
+	}
+	if got := c.ResolveTheme("T01"); got != "dark" {
+		t.Errorf("ResolveTheme no global = %q, want dark", got)
+	}
+}
+
+func TestResolveThemeNilWorkspaces(t *testing.T) {
+	// A config loaded from a file that has no [workspaces] section
+	// will have a nil Workspaces map. ResolveTheme must not panic.
+	c := Config{
+		Appearance: Appearance{Theme: "nord"},
+	}
+	if got := c.ResolveTheme("T01"); got != "nord" {
+		t.Errorf("ResolveTheme nil workspaces = %q, want nord", got)
+	}
+}

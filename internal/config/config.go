@@ -10,13 +10,14 @@ import (
 )
 
 type Config struct {
-	General       General               `toml:"general"`
-	Appearance    Appearance            `toml:"appearance"`
-	Animations    Animations            `toml:"animations"`
-	Notifications Notifications         `toml:"notifications"`
-	Cache         CacheConfig           `toml:"cache"`
-	Sections      map[string]SectionDef `toml:"sections"`
-	Theme         Theme                 `toml:"theme"`
+	General       General                      `toml:"general"`
+	Appearance    Appearance                   `toml:"appearance"`
+	Animations    Animations                   `toml:"animations"`
+	Notifications Notifications                `toml:"notifications"`
+	Cache         CacheConfig                  `toml:"cache"`
+	Sections      map[string]SectionDef        `toml:"sections"`
+	Theme         Theme                        `toml:"theme"`
+	Workspaces    map[string]WorkspaceSettings `toml:"workspaces"`
 }
 
 // SectionDef defines a sidebar section with channel name patterns.
@@ -56,6 +57,13 @@ type Notifications struct {
 type CacheConfig struct {
 	MessageRetentionDays int `toml:"message_retention_days"`
 	MaxDBSizeMB          int `toml:"max_db_size_mb"`
+}
+
+// WorkspaceSettings holds per-workspace user preferences. Currently
+// only Theme is configurable; future per-workspace settings (notification
+// rules, default channel, etc.) belong here.
+type WorkspaceSettings struct {
+	Theme string `toml:"theme"`
 }
 
 type Theme struct {
@@ -139,4 +147,17 @@ func (c Config) MatchSection(channelName string) string {
 		}
 	}
 	return ""
+}
+
+// ResolveTheme returns the theme name to use for the given workspace,
+// falling back to the global Appearance.Theme when no per-workspace theme
+// is set, and to "dark" when no global theme is set either.
+func (c Config) ResolveTheme(teamID string) string {
+	if ws, ok := c.Workspaces[teamID]; ok && ws.Theme != "" {
+		return ws.Theme
+	}
+	if c.Appearance.Theme != "" {
+		return c.Appearance.Theme
+	}
+	return "dark"
 }
