@@ -32,6 +32,7 @@
 - Multi-line input, `Shift+Enter` for newlines
 - Inline `@mention` autocomplete (resolves to `<@UserID>` on send)
 - Special mentions: `@here`, `@channel`, `@everyone`
+- Bracketed paste — paste multi-line text from the system clipboard without it being interpreted as keystrokes
 
 ### Threads
 - Side panel (35% width), opened with `Enter`, toggled with `Ctrl+]`
