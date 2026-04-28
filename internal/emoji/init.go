@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/clipperhouse/displaywidth"
 	emojilib "github.com/kyokomi/emoji/v2"
 	"golang.org/x/term"
 )
@@ -108,6 +109,7 @@ func initWithIO(opts InitOptions, out io.Writer, in io.Reader) (bool, bool, erro
 		if c, err := LoadCache(cachePath); err == nil {
 			if c.Version == CacheVersion && c.CodemapHash == wantHash {
 				setWidthMap(c.Widths)
+				displaywidth.SetExternalWidths(c.Widths)
 				return true, false, nil
 			}
 		}
@@ -128,6 +130,7 @@ func initWithIO(opts InitOptions, out io.Writer, in io.Reader) (bool, bool, erro
 	}
 
 	setWidthMap(widths)
+	displaywidth.SetExternalWidths(widths)
 
 	// Write cache (best effort; failure is silently ignored — the probe
 	// will simply re-run on next launch).
