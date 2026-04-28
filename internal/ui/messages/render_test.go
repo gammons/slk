@@ -230,6 +230,65 @@ func TestBlockquoteEntityDecoding(t *testing.T) {
 	}
 }
 
+// TestThreadBroadcastLabel asserts that a message with subtype
+// "thread_broadcast" (a thread reply that the author also posted to
+// the main channel) renders a "replied to a thread" label above the
+// username row, and that a regular message does not.
+func TestThreadBroadcastLabel(t *testing.T) {
+	const labelText = "replied to a thread"
+
+	t.Run("broadcast renders label", func(t *testing.T) {
+		m := New([]MessageItem{{
+			TS:        "1.0",
+			UserName:  "alice",
+			Text:      "hello channel",
+			Timestamp: "3:04 PM",
+			ThreadTS:  "0.5",
+			Subtype:   "thread_broadcast",
+		}}, "general")
+		out := ansi.Strip(m.View(20, 60))
+		if !strings.Contains(out, labelText) {
+			t.Errorf("expected %q in output for thread_broadcast, got:\n%s", labelText, out)
+		}
+		// Label must appear BEFORE the username row.
+		labelIdx := strings.Index(out, labelText)
+		nameIdx := strings.Index(out, "alice")
+		if labelIdx < 0 || nameIdx < 0 || labelIdx >= nameIdx {
+			t.Errorf("expected label %q to appear before username, label@%d name@%d", labelText, labelIdx, nameIdx)
+		}
+	})
+
+	t.Run("regular message does not render label", func(t *testing.T) {
+		m := New([]MessageItem{{
+			TS:        "1.0",
+			UserName:  "alice",
+			Text:      "hello channel",
+			Timestamp: "3:04 PM",
+		}}, "general")
+		out := ansi.Strip(m.View(20, 60))
+		if strings.Contains(out, labelText) {
+			t.Errorf("regular message should not contain %q, got:\n%s", labelText, out)
+		}
+	})
+
+	t.Run("plain thread reply (non-broadcast) does not render label", func(t *testing.T) {
+		// A thread reply with ThreadTS set but no broadcast subtype
+		// should not get the label. This case shouldn't appear in the
+		// main channel feed at all, but if it does we don't mislabel it.
+		m := New([]MessageItem{{
+			TS:        "1.0",
+			UserName:  "alice",
+			Text:      "hello",
+			Timestamp: "3:04 PM",
+			ThreadTS:  "0.5",
+		}}, "general")
+		out := ansi.Strip(m.View(20, 60))
+		if strings.Contains(out, labelText) {
+			t.Errorf("plain thread reply should not contain %q, got:\n%s", labelText, out)
+		}
+	})
+}
+
 // TestEscapedAngleBracketsNotMistakenForMention asserts that escaped
 // angle brackets (user-typed text) don't get re-interpreted as Slack
 // markup after decoding.

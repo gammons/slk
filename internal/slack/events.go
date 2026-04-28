@@ -6,7 +6,11 @@ import (
 
 // EventHandler processes real-time events from Slack.
 type EventHandler interface {
-	OnMessage(channelID, userID, ts, text, threadTS string, edited bool)
+	// OnMessage delivers a new or edited message. subtype mirrors
+	// Slack's `subtype` field; "" for normal messages, "bot_message"
+	// for bot posts, "thread_broadcast" for thread replies that the
+	// author also sent to the main channel.
+	OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool)
 	OnMessageDeleted(channelID, ts string)
 	OnReactionAdded(channelID, ts, userID, emoji string)
 	OnReactionRemoved(channelID, ts, userID, emoji string)
@@ -84,13 +88,15 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			return
 		}
 		switch msg.SubType {
-		case "":
-			handler.OnMessage(msg.Channel, msg.User, msg.TS, msg.Text, msg.ThreadTS, false)
-		case "bot_message":
-			handler.OnMessage(msg.Channel, msg.User, msg.TS, msg.Text, msg.ThreadTS, false)
+		case "", "bot_message", "thread_broadcast":
+			// thread_broadcast is a thread reply that the author also
+			// posted to the main channel; render it like a regular
+			// message but with the subtype preserved so the UI can
+			// label it.
+			handler.OnMessage(msg.Channel, msg.User, msg.TS, msg.Text, msg.ThreadTS, msg.SubType, false)
 		case "message_changed":
 			if msg.Message != nil {
-				handler.OnMessage(msg.Channel, msg.Message.User, msg.Message.TS, msg.Message.Text, msg.Message.ThreadTS, true)
+				handler.OnMessage(msg.Channel, msg.Message.User, msg.Message.TS, msg.Message.Text, msg.Message.ThreadTS, "", true)
 			}
 		case "message_deleted":
 			handler.OnMessageDeleted(msg.Channel, msg.DeletedTS)

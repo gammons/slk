@@ -881,6 +881,7 @@ func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, 
 			Text:        m.Text,
 			ThreadTS:    m.ThreadTimestamp,
 			ReplyCount:  m.ReplyCount,
+			Subtype:     m.SubType,
 			CreatedAt:   time.Now().Unix(),
 		})
 
@@ -912,6 +913,7 @@ func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, 
 			Timestamp:   formatTimestamp(m.Timestamp, tsFormat),
 			ThreadTS:    m.ThreadTimestamp,
 			ReplyCount:  m.ReplyCount,
+			Subtype:     m.SubType,
 			Reactions:   reactions,
 			Attachments: extractAttachments(m.Files),
 		})
@@ -942,6 +944,7 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 			Text:        m.Text,
 			ThreadTS:    m.ThreadTimestamp,
 			ReplyCount:  m.ReplyCount,
+			Subtype:     m.SubType,
 			CreatedAt:   time.Now().Unix(),
 		})
 
@@ -973,6 +976,7 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 			Timestamp:   formatTimestamp(m.Timestamp, tsFormat),
 			ThreadTS:    m.ThreadTimestamp,
 			ReplyCount:  m.ReplyCount,
+			Subtype:     m.SubType,
 			Reactions:   reactions,
 			Attachments: extractAttachments(m.Files),
 		})
@@ -1004,6 +1008,7 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 			Text:        m.Text,
 			ThreadTS:    m.ThreadTimestamp,
 			ReplyCount:  m.ReplyCount,
+			Subtype:     m.SubType,
 			CreatedAt:   time.Now().Unix(),
 		})
 
@@ -1035,6 +1040,7 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 			Timestamp:   formatTimestamp(m.Timestamp, tsFormat),
 			ThreadTS:    m.ThreadTimestamp,
 			ReplyCount:  m.ReplyCount,
+			Subtype:     m.SubType,
 			Reactions:   reactions,
 			Attachments: extractAttachments(m.Files),
 		})
@@ -1106,7 +1112,7 @@ type rtmEventHandler struct {
 	activeChannelID func() string
 }
 
-func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS string, edited bool) {
+func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool) {
 	// Cache every message to SQLite, regardless of active workspace
 	h.db.UpsertMessage(cache.Message{
 		TS:          ts,
@@ -1115,6 +1121,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS string
 		UserID:      userID,
 		Text:        text,
 		ThreadTS:    threadTS,
+		Subtype:     subtype,
 		CreatedAt:   time.Now().Unix(),
 	})
 
@@ -1173,6 +1180,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS string
 			Text:      text,
 			Timestamp: formatTimestamp(ts, h.tsFormat),
 			ThreadTS:  threadTS,
+			Subtype:   subtype,
 			IsEdited:  edited,
 		},
 	})

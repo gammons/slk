@@ -6,14 +6,16 @@ import (
 
 type mockEventHandler struct {
 	messages        []string
+	subtypes        []string
 	deletedMessages []string
 	reactions       []string
 	presenceChanges []string
 	typingEvents    []string
 }
 
-func (m *mockEventHandler) OnMessage(channelID, userID, ts, text, threadTS string, edited bool) {
+func (m *mockEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool) {
 	m.messages = append(m.messages, text)
+	m.subtypes = append(m.subtypes, subtype)
 }
 
 func (m *mockEventHandler) OnMessageDeleted(channelID, ts string) {
@@ -38,7 +40,7 @@ func TestEventHandlerInterface(t *testing.T) {
 	handler := &mockEventHandler{}
 	var _ EventHandler = handler
 
-	handler.OnMessage("C1", "U1", "123.456", "hello", "", false)
+	handler.OnMessage("C1", "U1", "123.456", "hello", "", "", false)
 	if len(handler.messages) != 1 || handler.messages[0] != "hello" {
 		t.Error("expected message to be recorded")
 	}
@@ -125,6 +127,27 @@ func TestDispatchWebSocketMessageChangedEvent(t *testing.T) {
 	}
 	if handler.messages[0] != "edited text" {
 		t.Errorf("expected 'edited text', got %q", handler.messages[0])
+	}
+}
+
+// TestDispatchWebSocketThreadBroadcastEvent asserts that a
+// thread_broadcast subtype is forwarded as a regular OnMessage call
+// with the subtype preserved so the UI can render the
+// "replied to a thread" label.
+func TestDispatchWebSocketThreadBroadcastEvent(t *testing.T) {
+	handler := &mockEventHandler{}
+
+	data := []byte(`{"type":"message","subtype":"thread_broadcast","channel":"C1","user":"U1","text":"broadcast","ts":"200.0","thread_ts":"100.0"}`)
+	dispatchWebSocketEvent(data, handler)
+
+	if len(handler.messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(handler.messages))
+	}
+	if handler.messages[0] != "broadcast" {
+		t.Errorf("expected 'broadcast', got %q", handler.messages[0])
+	}
+	if handler.subtypes[0] != "thread_broadcast" {
+		t.Errorf("expected subtype 'thread_broadcast', got %q", handler.subtypes[0])
 	}
 }
 

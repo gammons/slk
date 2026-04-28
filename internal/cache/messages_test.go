@@ -60,6 +60,68 @@ func TestGetMessagesWithCursor(t *testing.T) {
 	}
 }
 
+// TestSubtypeRoundTrip verifies that the Subtype field is persisted
+// through UpsertMessage and read back via GetMessages, and that
+// thread_broadcast messages appear in the main channel feed even
+// though their thread_ts is non-empty.
+func TestSubtypeRoundTrip(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	defer db.Close()
+	db.UpsertChannel(Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel", IsMember: true})
+
+	// Top-level message
+	if err := db.UpsertMessage(Message{
+		TS: "1700000001.000000", ChannelID: "C1", WorkspaceID: "T1",
+		UserID: "U1", Text: "top",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Plain thread reply (should NOT appear in main feed)
+	if err := db.UpsertMessage(Message{
+		TS: "1700000002.000000", ChannelID: "C1", WorkspaceID: "T1",
+		UserID: "U2", Text: "thread reply", ThreadTS: "1700000001.000000",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Thread broadcast (SHOULD appear in main feed with subtype set)
+	if err := db.UpsertMessage(Message{
+		TS: "1700000003.000000", ChannelID: "C1", WorkspaceID: "T1",
+		UserID: "U2", Text: "broadcast",
+		ThreadTS: "1700000001.000000", Subtype: "thread_broadcast",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := db.GetMessages("C1", 10, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var foundTop, foundBroadcast bool
+	for _, m := range got {
+		switch m.Text {
+		case "top":
+			foundTop = true
+			if m.Subtype != "" {
+				t.Errorf("top message Subtype=%q, want empty", m.Subtype)
+			}
+		case "broadcast":
+			foundBroadcast = true
+			if m.Subtype != "thread_broadcast" {
+				t.Errorf("broadcast Subtype=%q, want thread_broadcast", m.Subtype)
+			}
+		case "thread reply":
+			t.Errorf("plain thread reply should not appear in main feed")
+		}
+	}
+	if !foundTop {
+		t.Error("expected top-level message in main feed")
+	}
+	if !foundBroadcast {
+		t.Error("expected thread_broadcast in main feed")
+	}
+}
+
 func TestGetThreadReplies(t *testing.T) {
 	db := setupDBWithWorkspace(t)
 	defer db.Close()

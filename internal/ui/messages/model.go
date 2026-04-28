@@ -27,6 +27,10 @@ type MessageItem struct {
 	Reactions   []ReactionItem
 	Attachments []Attachment
 	IsEdited    bool
+	// Subtype mirrors Slack's `subtype` field on a message event.
+	// Currently we only act on "thread_broadcast" (a thread reply that
+	// was also sent to the channel) so we can render a label above it.
+	Subtype string
 }
 
 // Attachment represents a file or image attached to a message.
@@ -691,7 +695,18 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		attachmentLines = "\n" + WordWrap(rendered, contentWidth)
 	}
 
-	msgContent := line + editedMark + "\n" + text + attachmentLines + threadLine + reactionLine
+	// Thread broadcast label: a thread reply that the author also
+	// posted to the main channel (Slack's "Also send to channel"
+	// option). Slack delivers these with subtype=thread_broadcast and
+	// they appear in the main channel feed alongside top-level
+	// messages. Mirror Slack desktop's small muted label above the
+	// username row.
+	var broadcastLabel string
+	if msg.Subtype == "thread_broadcast" {
+		broadcastLabel = styles.Timestamp.Render("\u21b3 replied to a thread") + "\n"
+	}
+
+	msgContent := broadcastLabel + line + editedMark + "\n" + text + attachmentLines + threadLine + reactionLine
 
 	// Place avatar next to message content
 	if avatarStr != "" {

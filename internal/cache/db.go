@@ -89,6 +89,7 @@ func (db *DB) migrate() error {
 		is_deleted INTEGER NOT NULL DEFAULT 0,
 		raw_json TEXT NOT NULL DEFAULT '',
 		created_at INTEGER NOT NULL DEFAULT 0,
+		subtype TEXT NOT NULL DEFAULT '',
 		PRIMARY KEY (ts, channel_id)
 	);
 
@@ -125,6 +126,46 @@ func (db *DB) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_users_workspace ON users(workspace_id);
 	`
 
-	_, err := db.conn.Exec(schema)
-	return err
+	if _, err := db.conn.Exec(schema); err != nil {
+		return err
+	}
+
+	// Idempotent column-level migrations for existing databases.
+	// SQLite's ADD COLUMN has no IF NOT EXISTS, so we probe first.
+	if err := db.addColumnIfMissing("messages", "subtype",
+		"ALTER TABLE messages ADD COLUMN subtype TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// addColumnIfMissing runs the given DDL only if the column isn't
+// already present on the table. Used for additive schema migrations on
+// pre-existing databases.
+func (db *DB) addColumnIfMissing(table, column, ddl string) error {
+	rows, err := db.conn.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return fmt.Errorf("inspecting %s columns: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("scanning %s columns: %w", table, err)
+		}
+		if name == column {
+			return nil // already present
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if _, err := db.conn.Exec(ddl); err != nil {
+		return fmt.Errorf("adding %s.%s: %w", table, column, err)
+	}
+	return nil
 }
