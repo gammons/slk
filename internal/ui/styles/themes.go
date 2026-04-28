@@ -147,6 +147,74 @@ var builtinThemes = map[string]struct {
 		Background: "#241B2F", Surface: "#2D2139", SurfaceDark: "#1A1226",
 		Text: "#F8F8F2", TextMuted: "#848BBD", Border: "#495495",
 	}},
+	"catppuccin latte": {"Catppuccin Latte", ThemeColors{
+		Primary: "#1E66F5", Accent: "#40A02B", Warning: "#DF8E1D", Error: "#D20F39",
+		Background: "#EFF1F5", Surface: "#E6E9EF", SurfaceDark: "#DCE0E8",
+		Text: "#4C4F69", TextMuted: "#6C6F85", Border: "#BCC0CC",
+		SidebarBackground: "#1E1E2E", SidebarText: "#CDD6F4", SidebarTextMuted: "#9399B2",
+		RailBackground: "#181825",
+	}},
+	"github light": {"GitHub Light", ThemeColors{
+		Primary: "#0969DA", Accent: "#1A7F37", Warning: "#9A6700", Error: "#CF222E",
+		Background: "#FFFFFF", Surface: "#F6F8FA", SurfaceDark: "#EAEEF2",
+		Text: "#1F2328", TextMuted: "#656D76", Border: "#D0D7DE",
+		SidebarBackground: "#24292F", SidebarText: "#F6F8FA", SidebarTextMuted: "#8C959F",
+		RailBackground: "#1B1F23",
+	}},
+	"tokyo night light": {"Tokyo Night Light", ThemeColors{
+		Primary: "#34548A", Accent: "#485E30", Warning: "#8F5E15", Error: "#8C4351",
+		Background: "#D5D6DB", Surface: "#CBCCD1", SurfaceDark: "#C4C8DA",
+		Text: "#343B58", TextMuted: "#6172B0", Border: "#9699A8",
+		SidebarBackground: "#1A1B26", SidebarText: "#A9B1D6", SidebarTextMuted: "#565F89",
+		RailBackground: "#16161E",
+	}},
+	"atom one light": {"Atom One Light", ThemeColors{
+		Primary: "#4078F2", Accent: "#50A14F", Warning: "#C18401", Error: "#E45649",
+		Background: "#FAFAFA", Surface: "#F0F0F0", SurfaceDark: "#E5E5E6",
+		Text: "#383A42", TextMuted: "#A0A1A7", Border: "#D3D3D3",
+		SidebarBackground: "#282C34", SidebarText: "#ABB2BF", SidebarTextMuted: "#5C6370",
+		RailBackground: "#21252B",
+	}},
+	"catppuccin frappé": {"Catppuccin Frappé", ThemeColors{
+		Primary: "#8CAAEE", Accent: "#A6D189", Warning: "#E5C890", Error: "#E78284",
+		Background: "#303446", Surface: "#414559", SurfaceDark: "#292C3C",
+		Text: "#C6D0F5", TextMuted: "#838BA7", Border: "#51576D",
+	}},
+	"catppuccin macchiato": {"Catppuccin Macchiato", ThemeColors{
+		Primary: "#8AADF4", Accent: "#A6DA95", Warning: "#EED49F", Error: "#ED8796",
+		Background: "#24273A", Surface: "#363A4F", SurfaceDark: "#1E2030",
+		Text: "#CAD3F5", TextMuted: "#6E738D", Border: "#494D64",
+	}},
+	"tokyo night storm": {"Tokyo Night Storm", ThemeColors{
+		Primary: "#7AA2F7", Accent: "#9ECE6A", Warning: "#E0AF68", Error: "#F7768E",
+		Background: "#24283B", Surface: "#2F334D", SurfaceDark: "#1F2335",
+		Text: "#C0CAF5", TextMuted: "#565F89", Border: "#3B4261",
+	}},
+	"cobalt2": {"Cobalt2", ThemeColors{
+		Primary: "#FFC600", Accent: "#3AD900", Warning: "#FF9D00", Error: "#FF628C",
+		Background: "#193549", Surface: "#1F4662", SurfaceDark: "#15232D",
+		Text: "#E1EFFF", TextMuted: "#6E96B5", Border: "#0D3A58",
+	}},
+	"iceberg": {"Iceberg", ThemeColors{
+		Primary: "#84A0C6", Accent: "#B4BE82", Warning: "#E2A478", Error: "#E27878",
+		Background: "#161821", Surface: "#1E2132", SurfaceDark: "#0F1117",
+		Text: "#C6C8D1", TextMuted: "#6B7089", Border: "#2E313F",
+	}},
+	"oceanic next": {"Oceanic Next", ThemeColors{
+		Primary: "#6699CC", Accent: "#99C794", Warning: "#FAC863", Error: "#EC5F67",
+		Background: "#1B2B34", Surface: "#343D46", SurfaceDark: "#16232B",
+		Text: "#CDD3DE", TextMuted: "#65737E", Border: "#4F5B66",
+	}},
+	"cyberpunk neon": {"Cyberpunk Neon", ThemeColors{
+		Primary: "#0ABDC6", Accent: "#00FF9C", Warning: "#FCEE0C", Error: "#EA00D9",
+		Background: "#000B1E", Surface: "#0D1B2A", SurfaceDark: "#000814",
+		Text: "#D7D7D7", TextMuted: "#7E7E8E", Border: "#133E7C",
+	}},
+	"material palenight": {"Material Palenight", ThemeColors{
+		Primary: "#82AAFF", Accent: "#C3E88D", Warning: "#FFCB6B", Error: "#FF5370",
+		Background: "#292D3E", Surface: "#34324A", SurfaceDark: "#1F1F2E",
+		Text: "#A6ACCD", TextMuted: "#676E95", Border: "#3A3F58",
+	}},
 }
 
 // customThemes stores themes loaded from the user's themes directory.

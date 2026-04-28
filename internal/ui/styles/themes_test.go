@@ -69,3 +69,77 @@ func TestLoadCustomThemesMissingDir(t *testing.T) {
 	// Should not panic on non-existent directory
 	LoadCustomThemes("/tmp/nonexistent-theme-dir-12345")
 }
+
+func TestNewBuiltinThemesRegistered(t *testing.T) {
+	newThemes := []string{
+		"Catppuccin Latte",
+		"GitHub Light",
+		"Tokyo Night Light",
+		"Atom One Light",
+		"Catppuccin Frappé",
+		"Catppuccin Macchiato",
+		"Tokyo Night Storm",
+		"Cobalt2",
+		"Iceberg",
+		"Oceanic Next",
+		"Cyberpunk Neon",
+		"Material Palenight",
+	}
+
+	names := ThemeNames()
+	have := make(map[string]bool, len(names))
+	for _, n := range names {
+		have[n] = true
+	}
+
+	for _, want := range newThemes {
+		if !have[want] {
+			t.Errorf("new built-in theme %q not registered (ThemeNames: %v)", want, names)
+		}
+	}
+}
+
+func TestNewThemesHaveRequiredColors(t *testing.T) {
+	newThemes := []string{
+		"catppuccin latte",
+		"github light",
+		"tokyo night light",
+		"atom one light",
+		"catppuccin frappé",
+		"catppuccin macchiato",
+		"tokyo night storm",
+		"cobalt2",
+		"iceberg",
+		"oceanic next",
+		"cyberpunk neon",
+		"material palenight",
+	}
+	for _, key := range newThemes {
+		c := lookupTheme(key)
+		if c.Primary == "" || c.Accent == "" || c.Warning == "" || c.Error == "" ||
+			c.Background == "" || c.Surface == "" || c.SurfaceDark == "" ||
+			c.Text == "" || c.TextMuted == "" || c.Border == "" {
+			t.Errorf("theme %q is missing one or more required color fields: %+v", key, c)
+		}
+	}
+}
+
+func TestLightThemesHaveDarkSidebars(t *testing.T) {
+	// Light themes should set SidebarBackground/etc explicitly so the
+	// sidebar/rail aren't washed out against the light message pane.
+	lightThemes := []string{
+		"catppuccin latte",
+		"github light",
+		"tokyo night light",
+		"atom one light",
+	}
+	for _, key := range lightThemes {
+		c := lookupTheme(key)
+		if c.SidebarBackground == "" {
+			t.Errorf("light theme %q must set SidebarBackground", key)
+		}
+		if c.RailBackground == "" {
+			t.Errorf("light theme %q must set RailBackground", key)
+		}
+	}
+}
