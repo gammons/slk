@@ -220,6 +220,26 @@ var builtinThemes = map[string]struct {
 		Background: "#292D3E", Surface: "#34324A", SurfaceDark: "#1F1F2E",
 		Text: "#A6ACCD", TextMuted: "#676E95", Border: "#3A3F58",
 	}},
+	// Hot Dog Stand — a tribute to the legendary Windows 3.1 color scheme
+	// of the same name. Bright yellow background, red accents, black text.
+	// It was widely panned at the time and is now a beloved relic. Use at
+	// your own peril.
+	"hot dog stand": {"Hot Dog Stand", ThemeColors{
+		Primary:           "#FF0000", // pure red, the iconic accent
+		Accent:            "#000000", // black, for absolute maximum contrast
+		Warning:           "#FF8000", // mustard
+		Error:             "#800000", // dark red
+		Background:        "#FFFF00", // BRIGHT YELLOW — the iconic background
+		Surface:           "#FFFF80", // pale yellow
+		SurfaceDark:       "#FFCC00", // amber
+		Text:              "#000000", // black on yellow
+		TextMuted:         "#7F6F00", // muddy olive
+		Border:            "#FF0000", // red borders everywhere
+		SidebarBackground: "#FF0000", // red sidebar — Windows 3.1 active title bar
+		SidebarText:       "#FFFF00", // yellow text on red
+		SidebarTextMuted:  "#FFCC00",
+		RailBackground:    "#800000", // dark red rail
+	}},
 }
 
 // customThemes stores themes loaded from the user's themes directory.
