@@ -3,6 +3,8 @@
 > **A blazingly fast Slack TUI.**
 > Keyboard-driven, beautifully themed, and under 20MB. One static binary. No Electron required.
 
+![slk screenshot](docs/assets/screenshot.png)
+
 `slk` is a daily-driver replacement for the official Slack desktop client, built in Go with [bubbletea](https://github.com/charmbracelet/bubbletea) and [lipgloss](https://github.com/charmbracelet/lipgloss). It connects with your normal browser session — no Slack App, no admin scopes, no OAuth dance — and stays out of your way.
 
 ## Why slk?
