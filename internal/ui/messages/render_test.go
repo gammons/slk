@@ -192,3 +192,56 @@ func TestWordWrapHardBreaksOverlongTokens(t *testing.T) {
 		})
 	}
 }
+
+// TestHTMLEntityDecoding asserts that Slack's HTML-escaped entities
+// (&amp;, &lt;, &gt;) in message text are decoded back to literal
+// characters per https://api.slack.com/reference/surfaces/formatting#escaping.
+func TestHTMLEntityDecoding(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"ampersand", "Hide &amp; Seek", "Hide & Seek"},
+		{"less-than", "1 &lt; 2", "1 < 2"},
+		{"greater-than", "2 &gt; 1", "2 > 1"},
+		{"all three", "a &amp; b &lt; c &gt; d", "a & b < c > d"},
+		{"mixed with bold", "*Hide &amp; Seek*", "Hide & Seek"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := RenderSlackMarkdown(tc.in, nil)
+			plain := ansi.Strip(out)
+			if !strings.Contains(plain, tc.want) {
+				t.Errorf("expected %q in plain output, got %q", tc.want, plain)
+			}
+		})
+	}
+}
+
+// TestBlockquoteEntityDecoding ensures entities inside blockquotes
+// are also decoded.
+func TestBlockquoteEntityDecoding(t *testing.T) {
+	in := "&gt; Hide &amp; Seek"
+	out := RenderSlackMarkdown(in, nil)
+	plain := ansi.Strip(out)
+	if !strings.Contains(plain, "Hide & Seek") {
+		t.Errorf("expected %q in plain output, got %q", "Hide & Seek", plain)
+	}
+}
+
+// TestEscapedAngleBracketsNotMistakenForMention asserts that escaped
+// angle brackets (user-typed text) don't get re-interpreted as Slack
+// markup after decoding.
+func TestEscapedAngleBracketsNotMistakenForMention(t *testing.T) {
+	// User typed literal "<@U123>" -- Slack escapes it.
+	in := "&lt;@U123&gt;"
+	out := RenderSlackMarkdown(in, map[string]string{"U123": "alice"})
+	plain := ansi.Strip(out)
+	if strings.Contains(plain, "@alice") {
+		t.Errorf("escaped mention should not resolve, got %q", plain)
+	}
+	if !strings.Contains(plain, "<@U123>") {
+		t.Errorf("expected literal %q, got %q", "<@U123>", plain)
+	}
+}

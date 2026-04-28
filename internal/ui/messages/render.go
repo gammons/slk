@@ -33,6 +33,18 @@ var (
 	// Slack user/channel mentions: <@U1234> <#C1234|channel-name>
 	userMentionRe    = regexp.MustCompile(`<@([A-Z0-9]+)>`)
 	channelMentionRe = regexp.MustCompile(`<#[A-Z0-9]+\|([^>]+)>`)
+
+	// Slack escapes &, <, > in user-typed text per
+	// https://api.slack.com/reference/surfaces/formatting#escaping.
+	// We decode AFTER all markup regexes (which consume legitimate
+	// <...> markers) so escaped user input doesn't get reinterpreted
+	// as Slack markup. Using a NewReplacer rather than html.UnescapeString
+	// to avoid decoding entities Slack does not produce.
+	slackEntityDecoder = strings.NewReplacer(
+		"&lt;", "<",
+		"&gt;", ">",
+		"&amp;", "&",
+	)
 )
 
 // Render styles -- functions that read current theme colors so they
@@ -324,9 +336,14 @@ func RenderSlackMarkdown(text string, userNames map[string]string) string {
 		if strings.HasPrefix(line, "&gt; ") || strings.HasPrefix(line, "> ") {
 			quoted := strings.TrimPrefix(line, "&gt; ")
 			quoted = strings.TrimPrefix(quoted, "> ")
+			quoted = slackEntityDecoder.Replace(quoted)
 			line = blockquoteStyle().Render(quoted)
 		} else {
 			line = renderInlineFormatting(line, userNames)
+			// Decode Slack-escaped entities after markup regexes have
+			// consumed legitimate <...> markers, so escaped user input
+			// (e.g. literal "<@U1>") doesn't become a fake mention.
+			line = slackEntityDecoder.Replace(line)
 		}
 		result = append(result, line)
 	}
