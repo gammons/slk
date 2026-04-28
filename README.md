@@ -5,15 +5,15 @@
 
 ![slk screenshot](docs/assets/screenshot.png)
 
-`slk` is a daily-driver replacement for the official Slack desktop client, built in Go with [bubbletea](https://github.com/charmbracelet/bubbletea) and [lipgloss](https://github.com/charmbracelet/lipgloss). It connects with your normal browser session — no Slack App, no admin scopes, no OAuth dance — and stays out of your way.
+`slk` is a daily-driver replacement for the official Slack desktop client, built in Go with [bubbletea](https://github.com/charmbracelet/bubbletea) and [lipgloss](https://github.com/charmbracelet/lipgloss). 
 
 ## Why slk?
 
 - **Fast.** Cold start in milliseconds. Render-cached messages. SQLite-backed scrollback. Real-time over WebSocket.
-- **Tiny.** ~19 MB on disk. ~60 MB RSS for a live multi-workspace session — vs. 500 MB–1.5 GB for the official client. No node_modules, no Chromium, no 800 MB RAM tax.
-- **Keyboard-first.** Vim-style modal editing. `j/k`, `h/l`, `i`, `Esc` — exactly what your fingers expect.
+- **Tiny.** ~19 MB on disk. ~60 MB RSS for a live multi-workspace session vs. 500 MB–1.5 GB for the official client. No node_modules, no Chromium, no 1Gb RAM tax.
+- **Keyboard-first.** Vim-style modal editing. `j/k`, `h/l`, `i`, `Esc`
 - **Pretty.** 12 built-in themes, lipgloss-styled panels, half-block pixel-art avatars, emoji shortcodes, day separators, and pill-style reactions.
-- **Multi-workspace.** All your workspaces stay connected in parallel. `1`–`9` to jump between them, with live unread badges in the rail.
+- **Multi-workspace.** All your workspaces stay connected in parallel. `1`–`9` to instantly jump between them, with live unread badges in the rail.
 - **Yours.** TOML config, custom themes, custom channel sections via glob, XDG-compliant paths.
 
 ## Features
@@ -66,7 +66,7 @@
 - Three-state connection indicator in the status bar
 
 ### Customization
-- 12 built-in themes: Dark, Light, Dracula, Solarized (Dark/Light), Gruvbox (Dark/Light), Nord, Tokyo Night, Catppuccin Mocha, One Dark, Rosé Pine
+- 12 built-in modern-looking themes
 - Drop-in custom themes (`~/.config/slk/themes/*.toml`)
 - Live theme switcher (`Ctrl+y`)
 - TOML config for appearance, animations, notifications, and channel sections
@@ -186,7 +186,7 @@ Copy the `xoxc-…` token for the workspace you want.
 ```bash
 ./bin/slk --add-workspace
 ```
-Or just run `./bin/slk` — onboarding launches automatically when no workspaces are configured.
+Or just run `./bin/slk`. Onboarding launches automatically when no workspaces are configured.
 
 ## Keybindings
 
