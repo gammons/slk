@@ -20,10 +20,18 @@ func newTestModel(width int) *Model {
 	return &m
 }
 
+// firstContentY returns the smallest pane-local viewportY that lands on
+// message content (past the chrome — channel header + separator). The
+// selection model treats viewportY in App.panelAt's coordinate system: 0
+// is just below the panel border, so values 0..chromeHeight-1 are inside
+// the chrome and ignored. Tests use this helper rather than hard-coding
+// the chrome height because the chrome may grow (e.g. topic) in future.
+func firstContentY(m *Model) int { return m.chromeHeight }
+
 func TestSelection_BeginExtendEndCopiesText(t *testing.T) {
 	m := newTestModel(60)
-	m.BeginSelectionAt(0, 0)
-	m.ExtendSelectionAt(20, 60) // drag down + right, well past content
+	m.BeginSelectionAt(firstContentY(m), 0)
+	m.ExtendSelectionAt(firstContentY(m)+20, 60) // drag down + right, well past content
 	text, ok := m.EndSelection()
 	if !ok {
 		t.Fatalf("EndSelection returned ok=false")
@@ -41,7 +49,7 @@ func TestSelection_BeginExtendEndCopiesText(t *testing.T) {
 
 func TestSelection_ClickWithoutDragReturnsEmpty(t *testing.T) {
 	m := newTestModel(60)
-	m.BeginSelectionAt(0, 5)
+	m.BeginSelectionAt(firstContentY(m), 5)
 	_, ok := m.EndSelection()
 	if ok {
 		t.Fatal("zero-length selection must return ok=false")
@@ -61,8 +69,8 @@ func TestSelection_ExtendWithoutBeginIsNoop(t *testing.T) {
 
 func TestSelection_ClearRemovesSelection(t *testing.T) {
 	m := newTestModel(60)
-	m.BeginSelectionAt(0, 0)
-	m.ExtendSelectionAt(0, 10)
+	m.BeginSelectionAt(firstContentY(m), 0)
+	m.ExtendSelectionAt(firstContentY(m), 10)
 	_, _ = m.EndSelection()
 	m.ClearSelection()
 	if m.HasSelection() {
@@ -72,18 +80,26 @@ func TestSelection_ClearRemovesSelection(t *testing.T) {
 
 func TestSelection_ScrollHintForDrag(t *testing.T) {
 	m := newTestModel(60)
-	// View() set lastViewHeight to 40 (msgAreaHeight = height - chrome).
-	// Top edge:
+	// View() set lastViewHeight to msgAreaHeight = height - chromeHeight.
+	// ScrollHintForDrag receives a pane-local viewportY (App.panelAt
+	// space): the top content row is at firstContentY(m), the bottom at
+	// firstContentY(m) + lastViewHeight - 1.
+	h := m.lastViewHeight
+	// A row inside the chrome should be treated as "above the top edge"
+	// so an upward drag continues to auto-scroll toward older messages.
 	if got := m.ScrollHintForDrag(0); got != -1 {
+		t.Errorf("chrome row: want -1 (treated as above top edge) got %d", got)
+	}
+	// First content row is the top edge.
+	if got := m.ScrollHintForDrag(firstContentY(m)); got != -1 {
 		t.Errorf("top edge: want -1 got %d", got)
 	}
-	// Middle:
-	if got := m.ScrollHintForDrag(20); got != 0 {
+	// Middle of the content area.
+	if got := m.ScrollHintForDrag(firstContentY(m) + h/2); got != 0 {
 		t.Errorf("middle: want 0 got %d", got)
 	}
-	// Bottom edge: viewportY >= lastViewHeight - 1.
-	bottom := m.lastViewHeight - 1
-	if got := m.ScrollHintForDrag(bottom); got != +1 {
+	// Bottom edge: pane-local Y == firstContentY + lastViewHeight - 1.
+	if got := m.ScrollHintForDrag(firstContentY(m) + h - 1); got != +1 {
 		t.Errorf("bottom edge: want +1 got %d", got)
 	}
 }
@@ -97,8 +113,8 @@ func TestSelection_ScrollHintForDragZeroHeight(t *testing.T) {
 
 func TestSelection_SurvivesAppendMessage(t *testing.T) {
 	m := newTestModel(60)
-	m.BeginSelectionAt(0, 0)
-	m.ExtendSelectionAt(2, 10)
+	m.BeginSelectionAt(firstContentY(m), 0)
+	m.ExtendSelectionAt(firstContentY(m)+2, 10)
 	textBefore, ok := m.EndSelection()
 	if !ok || textBefore == "" {
 		t.Fatal("precondition: EndSelection must succeed")
@@ -115,8 +131,8 @@ func TestSelection_SurvivesAppendMessage(t *testing.T) {
 
 func TestSelection_SetMessagesClearsSelection(t *testing.T) {
 	m := newTestModel(60)
-	m.BeginSelectionAt(0, 0)
-	m.ExtendSelectionAt(0, 5)
+	m.BeginSelectionAt(firstContentY(m), 0)
+	m.ExtendSelectionAt(firstContentY(m), 5)
 	if !m.HasSelection() {
 		t.Fatal("precondition: must have selection")
 	}
@@ -128,8 +144,8 @@ func TestSelection_SetMessagesClearsSelection(t *testing.T) {
 
 func TestSelection_PrependMessagesDoesNotClear(t *testing.T) {
 	m := newTestModel(60)
-	m.BeginSelectionAt(0, 0)
-	m.ExtendSelectionAt(0, 5)
+	m.BeginSelectionAt(firstContentY(m), 0)
+	m.ExtendSelectionAt(firstContentY(m), 5)
 	m.PrependMessages([]MessageItem{
 		{TS: "0.5", UserName: "x", UserID: "U9", Text: "older", Timestamp: "12:59 PM"},
 	})
@@ -141,8 +157,8 @@ func TestSelection_PrependMessagesDoesNotClear(t *testing.T) {
 
 func TestSelection_NoBorderCharsInClipboard(t *testing.T) {
 	m := newTestModel(60)
-	m.BeginSelectionAt(0, 0)
-	m.ExtendSelectionAt(20, 60)
+	m.BeginSelectionAt(firstContentY(m), 0)
+	m.ExtendSelectionAt(firstContentY(m)+20, 60)
 	text, ok := m.EndSelection()
 	if !ok {
 		t.Fatalf("EndSelection ok=false")
@@ -155,12 +171,13 @@ func TestSelection_NoBorderCharsInClipboard(t *testing.T) {
 }
 
 func TestSelection_SeparatorClickSnapsToMessage(t *testing.T) {
-	// Date separator is at line 0 of the cache for newTestModel.
-	// Click on the separator and a single column further; the resulting
-	// anchor must be on a real message (non-empty MessageID).
+	// Date separator is at line 0 of the cache for newTestModel — i.e.
+	// the FIRST content row inside the message area, sitting at pane-local
+	// y == firstContentY(m). Click on it and a single column further; the
+	// resulting anchor must be on a real message (non-empty MessageID).
 	m := newTestModel(60)
-	m.BeginSelectionAt(0, 5)
-	m.ExtendSelectionAt(0, 6)
+	m.BeginSelectionAt(firstContentY(m), 5)
+	m.ExtendSelectionAt(firstContentY(m), 6)
 	// EndSelection might return ok=false (single-col drag may collapse),
 	// but HasSelection at the begin point must be true and the stored
 	// selRange's Start must reference a real message.
@@ -186,12 +203,13 @@ func TestSelection_DeletedMessageCollapsesToEmpty(t *testing.T) {
 
 func TestSelection_ViewIncludesHighlight(t *testing.T) {
 	m := newTestModel(60)
-	// Begin and extend on the FIRST message's content (avoid the date
-	// separator at line 0 — clicking there snaps to msg1.line0 already
-	// but to be unambiguous, click below it).
-	// Cache layout: [date_separator, msg1+spacer, msg2]. msg1 starts at line 1.
-	m.BeginSelectionAt(1, 5)
-	m.ExtendSelectionAt(1, 15)
+	// Begin and extend on the FIRST message's content (one row past the
+	// date separator). Cache layout (within the message area):
+	// [date_separator, msg1+spacer, msg2] — so msg1 starts at content
+	// line 1, which is pane-local y = firstContentY(m) + 1.
+	y := firstContentY(m) + 1
+	m.BeginSelectionAt(y, 5)
+	m.ExtendSelectionAt(y, 15)
 	out := m.View(40, 60)
 	m.ClearSelection()
 	out2 := m.View(40, 60)
@@ -203,10 +221,11 @@ func TestSelection_ViewIncludesHighlight(t *testing.T) {
 func TestSelection_HighlightDoesNotCorruptScrollIndicators(t *testing.T) {
 	m := newTestModel(60)
 	m.SetLoading(true) // forces visible[0] to be the loading hint
-	// Begin a selection at viewportY=0 (the row that will hold the hint)
-	// extending down so the selection definitely covers row 0.
-	m.BeginSelectionAt(0, 0)
-	m.ExtendSelectionAt(5, 60)
+	// Begin a selection at the FIRST content row (the row that will hold
+	// the hint), extending down so the selection definitely covers that
+	// row in the rendered output.
+	m.BeginSelectionAt(firstContentY(m), 0)
+	m.ExtendSelectionAt(firstContentY(m)+5, 60)
 	out := m.View(40, 60)
 	// The loading hint string must appear unchanged in the output.
 	if !strings.Contains(out, "Loading older messages...") {
@@ -249,8 +268,9 @@ func TestSelection_HighlightDoesNotCorruptMoreBelowIndicator(t *testing.T) {
 	m.GoToTop()
 	_ = m.View(15, 60) // ensure cache + yOffset reflect top position with "more below"
 	// Selection covers a wide vertical range to overlap the bottom row.
-	m.BeginSelectionAt(0, 0)
-	m.ExtendSelectionAt(20, 60)
+	mp := &m
+	m.BeginSelectionAt(firstContentY(mp), 0)
+	m.ExtendSelectionAt(firstContentY(mp)+20, 60)
 	out := m.View(15, 60)
 	if !strings.Contains(out, "-- more below --") {
 		t.Fatalf("expected more-below indicator in output; got %q", out)
@@ -285,8 +305,10 @@ func TestSelection_HighlightSurvivesScroll(t *testing.T) {
 	}
 	m := New(msgs, "general")
 	_ = m.View(20, 60)
-	m.BeginSelectionAt(2, 0)
-	m.ExtendSelectionAt(2, 20)
+	mp := &m
+	y := firstContentY(mp) + 2
+	m.BeginSelectionAt(y, 0)
+	m.ExtendSelectionAt(y, 20)
 	withSel := m.View(20, 60)
 	m.ScrollUp(5)
 	withSelScrolled := m.View(20, 60)
@@ -297,5 +319,41 @@ func TestSelection_HighlightSurvivesScroll(t *testing.T) {
 	// And both should still have the selection (HasSelection true).
 	if !m.HasSelection() {
 		t.Fatal("HasSelection should remain true across scroll")
+	}
+}
+
+// TestSelection_ChromeRowsAreNotSelectable pins the off-by-chrome bug
+// fix: a click on the chrome (channel header / separator at the top of
+// the message pane) must NOT anchor a selection. The pane-local y
+// values 0..chromeHeight-1 are inside the chrome.
+func TestSelection_ChromeRowsAreNotSelectable(t *testing.T) {
+	m := newTestModel(60)
+	if m.chromeHeight < 1 {
+		t.Fatalf("test precondition: expected non-zero chromeHeight; got %d", m.chromeHeight)
+	}
+	m.BeginSelectionAt(0, 5)
+	if m.HasSelection() {
+		t.Fatal("BeginSelectionAt on chrome must not anchor a selection")
+	}
+}
+
+// TestSelection_FirstContentRowAnchorsAtFirstMessage pins the other
+// half of the off-by-chrome fix: pane-local y == firstContentY(m) is
+// the FIRST message-content row (the date separator), which the drag
+// snaps forward onto msg 1.0 = "alice  hello world". A drag spanning
+// the next row (so the end anchor lands on real message content)
+// must produce text containing the first message.
+func TestSelection_FirstContentRowAnchorsAtFirstMessage(t *testing.T) {
+	m := newTestModel(60)
+	m.BeginSelectionAt(firstContentY(m), 0)
+	// Drag down two content rows to land squarely inside msg 1's body.
+	m.ExtendSelectionAt(firstContentY(m)+2, 30)
+	text, ok := m.EndSelection()
+	if !ok || text == "" {
+		t.Fatalf("first-content-row drag should produce text; got ok=%v text=%q", ok, text)
+	}
+	// The text should come from the FIRST message — alice's "hello world".
+	if !strings.Contains(text, "alice") && !strings.Contains(text, "hello") {
+		t.Fatalf("expected first-message content; got %q", text)
 	}
 }

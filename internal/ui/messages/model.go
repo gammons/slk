@@ -731,10 +731,17 @@ func placeAvatarBeside(avatar, content string) string {
 	return strings.Join(result, "\n")
 }
 
-// ClickAt handles a mouse click at the given y-coordinate (relative to message pane content top).
-// Selects the message at that position.
+// ClickAt handles a mouse click at the given y-coordinate (the pane-local
+// y returned by App.panelAt, which is measured from the panel's top border —
+// so y=0..chromeHeight-1 is the channel header / separator chrome and
+// y=chromeHeight onward is message content). Selects the message at that
+// position; clicks in the chrome are ignored.
 func (m *Model) ClickAt(y int) {
-	absoluteY := y + m.yOffset
+	contentY := y - m.chromeHeight
+	if contentY < 0 {
+		return // click on chrome (header / separator) — ignore
+	}
+	absoluteY := contentY + m.yOffset
 
 	// Walk through cached view entries to find which message is at this line
 	currentLine := 0
@@ -757,11 +764,20 @@ func (m *Model) ClickAt(y int) {
 
 var thickLeftBorder = lipgloss.Border{Left: "▌"}
 
-// absoluteLineAt returns the global line index in the flattened cache
-// for a viewport-local y coordinate (0 == top of message area). Clamps
-// to [0, totalLines-1] for out-of-range inputs.
+// absoluteLineAt returns the global line index in the flattened cache for a
+// pane-local y coordinate. The incoming viewportY is what App.panelAt
+// returns: zero at the top of the panel's content area (just below the
+// panel border), so rows 0..chromeHeight-1 are the channel header /
+// separator chrome and chromeHeight onward is message content. We strip the
+// chrome offset before mapping into cache lines, and clamp negative
+// (in-chrome) values to the first content line. The result is clamped to
+// [0, totalLines-1] for out-of-range inputs.
 func (m *Model) absoluteLineAt(viewportY int) int {
-	abs := viewportY + m.yOffset
+	contentY := viewportY - m.chromeHeight
+	if contentY < 0 {
+		contentY = 0
+	}
+	abs := contentY + m.yOffset
 	if abs < 0 {
 		abs = 0
 	}
@@ -875,10 +891,15 @@ func (m *Model) resolveAnchor(a selection.Anchor) (absLine, col int, ok bool) {
 
 // BeginSelectionAt anchors a new selection at the given pane-local
 // coordinates. The selection becomes Active. Coordinates are clamped to
-// the rendered area; out-of-range inputs are silently no-ops. If the
-// click lands on a separator entry, the anchor snaps to the nearest
-// real message.
+// the rendered area; out-of-range inputs are silently no-ops. Clicks on
+// the chrome (channel header / separator at pane-local y < chromeHeight)
+// are ignored — there's no message content there to anchor on. If the
+// click lands on a separator entry inside the message area, the anchor
+// snaps to the nearest real message.
 func (m *Model) BeginSelectionAt(viewportY, x int) {
+	if viewportY < m.chromeHeight {
+		return
+	}
 	abs := m.absoluteLineAt(viewportY)
 	a, ok := m.anchorAt(abs, x)
 	if !ok {
@@ -953,17 +974,22 @@ func (m *Model) HasSelection() bool {
 }
 
 // ScrollHintForDrag returns -1 if the cursor is within 1 row of the top
-// edge of the message pane, +1 if within 1 row of the bottom, else 0.
-// Used by the App layer to schedule auto-scroll ticks during a drag.
+// edge of the message-content area, +1 if within 1 row of the bottom, else 0.
+// The incoming viewportY is pane-local (0 == top of panel content, just
+// below the border); we offset by m.chromeHeight so "top edge" is measured
+// against the message content, not the channel header. A cursor sitting on
+// the chrome (or above) is treated the same as the top content row, so an
+// upward drag continues to auto-scroll toward older messages.
 func (m *Model) ScrollHintForDrag(viewportY int) int {
 	h := m.lastViewHeight
 	if h <= 0 {
 		return 0
 	}
-	if viewportY <= 0 {
+	contentY := viewportY - m.chromeHeight
+	if contentY <= 0 {
 		return -1
 	}
-	if viewportY >= h-1 {
+	if contentY >= h-1 {
 		return +1
 	}
 	return 0

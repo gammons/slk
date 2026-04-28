@@ -58,7 +58,10 @@ func looksLikeSetClipboardMsg(m tea.Msg) (string, bool) {
 func TestApp_DragInMessagesEmitsClipboardAndToast(t *testing.T) {
 	a := newTestAppWithMessages(t)
 	pressX := a.layoutSidebarEnd + 2
-	pressY := 2
+	// Terminal Y = 4 → panelAt subtracts the 1-row panel border to give
+	// pane-local y=3, which is past the chrome (header + separator =
+	// chromeHeight=2). Anything < 3 lands on the chrome and is a no-op.
+	pressY := 4
 	// Press
 	_, _ = a.Update(tea.MouseClickMsg{X: pressX, Y: pressY, Button: tea.MouseLeft})
 	// Motion
@@ -98,7 +101,8 @@ func TestApp_DragInMessagesEmitsClipboardAndToast(t *testing.T) {
 func TestApp_PlainClickDoesNotCopy(t *testing.T) {
 	a := newTestAppWithMessages(t)
 	pressX := a.layoutSidebarEnd + 2
-	pressY := 2
+	// Terminal Y past the chrome (panel border + 2-row chrome).
+	pressY := 4
 	_, _ = a.Update(tea.MouseClickMsg{X: pressX, Y: pressY, Button: tea.MouseLeft})
 	_, cmd := a.Update(tea.MouseReleaseMsg{X: pressX, Y: pressY, Button: tea.MouseLeft})
 	for _, m := range drainBatch(cmd) {
@@ -195,8 +199,8 @@ func TestApp_AutoScrollStopsWhenCursorLeavesEdge(t *testing.T) {
 func TestApp_FocusNextClearsSelection(t *testing.T) {
 	a := newTestAppWithMessages(t)
 	pressX := a.layoutSidebarEnd + 2
-	_, _ = a.Update(tea.MouseClickMsg{X: pressX, Y: 2, Button: tea.MouseLeft})
-	_, _ = a.Update(tea.MouseMotionMsg{X: pressX + 5, Y: 2, Button: tea.MouseLeft})
+	_, _ = a.Update(tea.MouseClickMsg{X: pressX, Y: 4, Button: tea.MouseLeft})
+	_, _ = a.Update(tea.MouseMotionMsg{X: pressX + 5, Y: 4, Button: tea.MouseLeft})
 	if !a.messagepane.HasSelection() {
 		t.Fatal("precondition: should have selection")
 	}
@@ -209,8 +213,8 @@ func TestApp_FocusNextClearsSelection(t *testing.T) {
 func TestApp_SetModeInsertClearsSelection(t *testing.T) {
 	a := newTestAppWithMessages(t)
 	pressX := a.layoutSidebarEnd + 2
-	_, _ = a.Update(tea.MouseClickMsg{X: pressX, Y: 2, Button: tea.MouseLeft})
-	_, _ = a.Update(tea.MouseMotionMsg{X: pressX + 5, Y: 2, Button: tea.MouseLeft})
+	_, _ = a.Update(tea.MouseClickMsg{X: pressX, Y: 4, Button: tea.MouseLeft})
+	_, _ = a.Update(tea.MouseMotionMsg{X: pressX + 5, Y: 4, Button: tea.MouseLeft})
 	if !a.messagepane.HasSelection() {
 		t.Fatal("precondition: should have selection")
 	}
@@ -223,8 +227,8 @@ func TestApp_SetModeInsertClearsSelection(t *testing.T) {
 func TestApp_ToggleSidebarClearsSelection(t *testing.T) {
 	a := newTestAppWithMessages(t)
 	pressX := a.layoutSidebarEnd + 2
-	_, _ = a.Update(tea.MouseClickMsg{X: pressX, Y: 2, Button: tea.MouseLeft})
-	_, _ = a.Update(tea.MouseMotionMsg{X: pressX + 5, Y: 2, Button: tea.MouseLeft})
+	_, _ = a.Update(tea.MouseClickMsg{X: pressX, Y: 4, Button: tea.MouseLeft})
+	_, _ = a.Update(tea.MouseMotionMsg{X: pressX + 5, Y: 4, Button: tea.MouseLeft})
 	a.ToggleSidebar()
 	if a.messagepane.HasSelection() {
 		t.Fatal("ToggleSidebar must clear selection")

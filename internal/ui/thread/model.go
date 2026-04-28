@@ -79,6 +79,12 @@ type Model struct {
 	hasSelection   bool
 	replyIDToIdx   map[string]int
 	lastViewHeight int
+	// chromeHeight is the number of visual rows occupied by the thread's
+	// chrome (header + separator + parent message + separator) at the top
+	// of View()'s output. It's stored so click / drag handlers can offset
+	// pane-local y coordinates into the reply-content coordinate space the
+	// rest of the model operates in.
+	chromeHeight int
 
 	// version increments on every state change that could alter View() output.
 	version int64
@@ -369,14 +375,20 @@ func (m *Model) UpdateReaction(messageTS, emojiName, userID string, remove bool)
 	}
 }
 
-// ClickAt handles a mouse click at the given y-coordinate (relative to thread reply area top).
-// Selects the reply at that position.
+// ClickAt handles a mouse click at the given y-coordinate (the pane-local
+// y returned by App.panelAt — measured from the panel's top border, so
+// y=0..chromeHeight-1 sits inside the chrome (header / separator / parent
+// message / separator) and y=chromeHeight onward is reply content). Clicks
+// in the chrome are ignored.
 func (m *Model) ClickAt(y int) {
 	if len(m.replies) == 0 || len(m.cache) == 0 {
 		return
 	}
-
-	absoluteY := y + m.vp.YOffset()
+	contentY := y - m.chromeHeight
+	if contentY < 0 {
+		return // click on chrome — ignore
+	}
+	absoluteY := contentY + m.vp.YOffset()
 
 	currentLine := 0
 	for _, e := range m.cache {
@@ -401,10 +413,16 @@ func (m *Model) ClickAt(y int) {
 }
 
 // BeginSelectionAt anchors a new selection at the given pane-local
-// coordinates (relative to the reply area's top-left). The selection
+// coordinates (App.panelAt's coordinate system: 0 == panel content top,
+// just below the border). Clicks on the chrome (header / separator /
+// parent message / separator at pane-local y < chromeHeight) are
+// ignored — there's no reply content there to anchor on. The selection
 // becomes Active. Out-of-range inputs that don't land on any cache
 // entry are silently no-ops.
 func (m *Model) BeginSelectionAt(viewportY, x int) {
+	if viewportY < m.chromeHeight {
+		return
+	}
 	abs := m.absoluteLineAt(viewportY)
 	a, ok := m.anchorAt(abs, x)
 	if !ok {
@@ -468,27 +486,43 @@ func (m *Model) ClearSelection() {
 func (m *Model) HasSelection() bool { return m.hasSelection }
 
 // ScrollHintForDrag returns -1 if the cursor is within 1 row of the top
-// edge of the reply area, +1 if within 1 row of the bottom, else 0.
-// Used by the App layer to schedule auto-scroll ticks during a drag.
+// edge of the reply-content area, +1 if within 1 row of the bottom, else 0.
+// The incoming viewportY is pane-local (0 == top of panel content, just
+// below the border); we offset by m.chromeHeight so "top edge" is measured
+// against the reply content, not the chrome (header / separator / parent
+// message / separator). A cursor sitting on the chrome is treated the same
+// as the top content row, so an upward drag keeps auto-scrolling toward
+// older replies.
 func (m *Model) ScrollHintForDrag(viewportY int) int {
 	h := m.lastViewHeight
 	if h <= 0 {
 		return 0
 	}
-	if viewportY <= 0 {
+	contentY := viewportY - m.chromeHeight
+	if contentY <= 0 {
 		return -1
 	}
-	if viewportY >= h-1 {
+	if contentY >= h-1 {
 		return +1
 	}
 	return 0
 }
 
-// absoluteLineAt converts a viewport-local y coordinate to an absolute
-// line index inside m.viewContent (the bordered content the viewport
-// scrolls through). Out-of-range inputs clamp to [0, totalLines-1].
+// absoluteLineAt converts a pane-local y coordinate to an absolute line
+// index inside m.viewContent (the bordered content the viewport scrolls
+// through). The incoming viewportY is what App.panelAt returns: zero at
+// the panel's content top (just below the border), so rows
+// 0..chromeHeight-1 are the thread chrome (header / separator / parent /
+// separator) and chromeHeight onward is reply content. We strip the chrome
+// offset before mapping into viewContent lines, clamping negative
+// (in-chrome) values to the first content line. The result is clamped to
+// [0, totalLines-1] for out-of-range inputs.
 func (m *Model) absoluteLineAt(viewportY int) int {
-	abs := viewportY + m.vp.YOffset()
+	contentY := viewportY - m.chromeHeight
+	if contentY < 0 {
+		contentY = 0
+	}
+	abs := contentY + m.vp.YOffset()
 	if abs < 0 {
 		abs = 0
 	}
@@ -708,6 +742,7 @@ func (m *Model) View(height, width int) string {
 
 	chrome := header + "\n" + separator + "\n" + parentContent + "\n" + separator
 	chromeHeight := lipgloss.Height(chrome)
+	m.chromeHeight = chromeHeight
 
 	// chromeHeight already counts every visual row of `chrome`; joining with
 	// a single "\n" between chrome and the viewport produces exactly
