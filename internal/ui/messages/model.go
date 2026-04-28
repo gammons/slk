@@ -8,6 +8,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	emojiutil "github.com/gammons/slk/internal/emoji"
+	"github.com/gammons/slk/internal/ui/selection"
 	"github.com/gammons/slk/internal/ui/styles"
 	emoji "github.com/kyokomi/emoji/v2"
 )
@@ -64,9 +65,16 @@ type viewEntry struct {
 	// For separator entries (msgIdx == -1) the two slices are identical.
 	linesNormal   []string
 	linesSelected []string
-	linesPlain    []plainLine // column-aligned mirror of linesNormal
-	height        int         // == len(linesNormal); cached for scroll math
-	msgIdx        int         // index into messages, or -1 for separator
+	linesPlain    []plainLine // column-aligned mirror of CONTENT (sans border)
+	// contentColOffset is the number of display columns at the START of each
+	// linesNormal[i] that belong to chrome (e.g. the thick left border ▌ on
+	// message entries) and should be skipped when mapping mouse columns to
+	// columns in linesPlain. Plain lines DO NOT include these chrome columns,
+	// so a mouse column of N maps to a plain column of N - contentColOffset.
+	// Default 0 (separators have no border); message entries set 1.
+	contentColOffset int
+	height           int // == len(linesNormal); cached for scroll math
+	msgIdx           int // index into messages, or -1 for separator
 }
 
 type Model struct {
@@ -132,6 +140,16 @@ type Model struct {
 	// exactSize + ReapplyBgAfterResets) keyed on this counter, so on compose
 	// keystrokes (where version is unchanged) we reuse the previous wrap.
 	version int64
+
+	// Mouse selection state. selRange is the user's drag selection.
+	// messageIDToEntryIdx maps Slack TS -> entry index in m.cache for
+	// O(1) anchor resolution; rebuilt on every buildCache. lastViewHeight
+	// is captured during View() so ScrollHintForDrag knows the pane
+	// bounds without needing the App to plumb them through.
+	selRange            selection.Range
+	hasSelection        bool
+	messageIDToEntryIdx map[string]int
+	lastViewHeight      int
 }
 
 // Version returns a counter that increments every time the View() output
@@ -172,6 +190,7 @@ func (m *Model) SetChannel(name, topic string) {
 
 func (m *Model) SetMessages(msgs []MessageItem) {
 	m.messages = msgs
+	m.ClearSelection()
 	m.cache = nil // invalidate cache
 	// Force the next View() to re-snap yOffset to the new selection -- without
 	// this, switching to a channel that happens to have the same selected
@@ -478,6 +497,14 @@ func (m *Model) buildCache(width int) {
 	m.cacheWidth = width
 	m.cacheMsgLen = len(m.messages)
 
+	if m.messageIDToEntryIdx == nil {
+		m.messageIDToEntryIdx = make(map[string]int, len(m.messages))
+	} else {
+		for k := range m.messageIDToEntryIdx {
+			delete(m.messageIDToEntryIdx, k)
+		}
+	}
+
 	// Pre-build the border styles once for the whole cache build.
 	borderFill := lipgloss.NewStyle().Background(styles.Background)
 	borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Background).BorderBackground(styles.Background)
@@ -539,7 +566,11 @@ func (m *Model) buildCache(width int) {
 
 		linesN := strings.Split(normal, "\n")
 		linesS := strings.Split(selected, "\n")
-		linesP := plainLines(normal)
+		// linesPlain mirrors the UNBORDERED content (filled) so that the
+		// thick left-border column is NOT present in plain text and never
+		// bleeds into clipboard output via SelectionText. The mouse-column
+		// to plain-column mapping happens in anchorAt via contentColOffset.
+		linesP := plainLines(filled)
 		// Append a trailing spacer line after every message except the last.
 		// Both variants share the same spacer (it has no border styling).
 		// The plain mirror of the spacer is the empty string -- selection
@@ -550,12 +581,14 @@ func (m *Model) buildCache(width int) {
 			linesS = append(linesS, spacerLines...)
 			linesP = append(linesP, plainLine{Text: "", Bytes: []int{0}})
 		}
+		m.messageIDToEntryIdx[msg.TS] = len(m.cache)
 		m.cache = append(m.cache, viewEntry{
-			linesNormal:   linesN,
-			linesSelected: linesS,
-			linesPlain:    linesP,
-			height:        len(linesN),
-			msgIdx:        i,
+			linesNormal:      linesN,
+			linesSelected:    linesS,
+			linesPlain:       linesP,
+			contentColOffset: 1, // thick left border ▌ occupies column 0 of linesNormal
+			height:           len(linesN),
+			msgIdx:           i,
 		})
 	}
 
@@ -723,7 +756,272 @@ func (m *Model) ClickAt(y int) {
 
 var thickLeftBorder = lipgloss.Border{Left: "▌"}
 
+// absoluteLineAt returns the global line index in the flattened cache
+// for a viewport-local y coordinate (0 == top of message area). Clamps
+// to [0, totalLines-1] for out-of-range inputs.
+func (m *Model) absoluteLineAt(viewportY int) int {
+	abs := viewportY + m.yOffset
+	if abs < 0 {
+		abs = 0
+	}
+	if m.totalLines > 0 && abs >= m.totalLines {
+		abs = m.totalLines - 1
+	}
+	return abs
+}
 
+// anchorAt converts an absolute line index + display column into an
+// Anchor. Returns ok=false when no entry covers the line (empty cache).
+// Anchors on separator entries (msgIdx < 0) carry MessageID == "" so
+// downstream code can recognize them as line boundaries.
+//
+// The incoming col is a MOUSE column (relative to linesNormal[i]). The
+// stored Anchor.Col is a PLAIN column (relative to linesPlain[i]); the
+// two differ by the entry's contentColOffset (e.g. the thick left
+// border on message entries occupies one mouse column but no plain
+// column). Mouse columns falling inside the chrome (col < offset) clamp
+// to plain col 0.
+func (m *Model) anchorAt(absLine, col int) (selection.Anchor, bool) {
+	for i, e := range m.cache {
+		start := m.entryOffsets[i]
+		end := start + e.height
+		if absLine < start || absLine >= end {
+			continue
+		}
+		lineIdx := absLine - start
+		// Translate mouse column -> plain column.
+		plainCol := col - e.contentColOffset
+		if plainCol < 0 {
+			plainCol = 0
+		}
+		// Clamp plainCol to the plain-line's width so we never anchor
+		// past the end of visible content.
+		if lineIdx < len(e.linesPlain) {
+			if w := displayWidthOfPlain(e.linesPlain[lineIdx]); plainCol > w {
+				plainCol = w
+			}
+		}
+		var msgID string
+		if e.msgIdx >= 0 && e.msgIdx < len(m.messages) {
+			msgID = m.messages[e.msgIdx].TS
+		}
+		return selection.Anchor{MessageID: msgID, Line: lineIdx, Col: plainCol}, true
+	}
+	return selection.Anchor{}, false
+}
+
+// snapToMessageAnchor takes an Anchor that may sit on a separator entry
+// (MessageID == "") and returns an equivalent Anchor pointing at a real
+// message. Snaps forward to the next message's first line; if none
+// exists forward, snaps backward to the previous message's last content
+// line. Returns ok=false when no real-message entry exists in the cache.
+// Real-message anchors pass through unchanged.
+func (m *Model) snapToMessageAnchor(a selection.Anchor, absLine int) (selection.Anchor, bool) {
+	if a.MessageID != "" {
+		return a, true
+	}
+	// Find the entry covering absLine, then walk forward looking for a
+	// real message; if none, walk backward.
+	startEntry := -1
+	for i, e := range m.cache {
+		s := m.entryOffsets[i]
+		if absLine >= s && absLine < s+e.height {
+			startEntry = i
+			break
+		}
+	}
+	if startEntry < 0 {
+		return selection.Anchor{}, false
+	}
+	for i := startEntry + 1; i < len(m.cache); i++ {
+		e := m.cache[i]
+		if e.msgIdx >= 0 && e.msgIdx < len(m.messages) {
+			return selection.Anchor{MessageID: m.messages[e.msgIdx].TS, Line: 0, Col: 0}, true
+		}
+	}
+	for i := startEntry - 1; i >= 0; i-- {
+		e := m.cache[i]
+		if e.msgIdx >= 0 && e.msgIdx < len(m.messages) {
+			lastLine := e.height - 1
+			col := 0
+			if lastLine < len(e.linesPlain) {
+				col = displayWidthOfPlain(e.linesPlain[lastLine])
+			}
+			return selection.Anchor{MessageID: m.messages[e.msgIdx].TS, Line: lastLine, Col: col}, true
+		}
+	}
+	return selection.Anchor{}, false
+}
+
+// resolveAnchor returns the absolute line + col for an Anchor, using the
+// current cache. Returns ok=false when the message is no longer present
+// (deleted, or cache rebuilt for a different channel) or when MessageID
+// is empty (separator anchors don't survive cache rebuilds).
+func (m *Model) resolveAnchor(a selection.Anchor) (absLine, col int, ok bool) {
+	if a.MessageID == "" {
+		return 0, 0, false
+	}
+	idx, found := m.messageIDToEntryIdx[a.MessageID]
+	if !found || idx >= len(m.cache) {
+		return 0, 0, false
+	}
+	e := m.cache[idx]
+	if a.Line < 0 || a.Line >= e.height {
+		return 0, 0, false
+	}
+	return m.entryOffsets[idx] + a.Line, a.Col, true
+}
+
+// BeginSelectionAt anchors a new selection at the given pane-local
+// coordinates. The selection becomes Active. Coordinates are clamped to
+// the rendered area; out-of-range inputs are silently no-ops. If the
+// click lands on a separator entry, the anchor snaps to the nearest
+// real message.
+func (m *Model) BeginSelectionAt(viewportY, x int) {
+	abs := m.absoluteLineAt(viewportY)
+	a, ok := m.anchorAt(abs, x)
+	if !ok {
+		return
+	}
+	a, ok = m.snapToMessageAnchor(a, abs)
+	if !ok {
+		return
+	}
+	m.selRange = selection.Range{Start: a, End: a, Active: true}
+	m.hasSelection = true
+	m.dirty()
+}
+
+// ExtendSelectionAt updates the End anchor of the active selection.
+// No-op if BeginSelectionAt was never called. Separator anchors snap
+// to the nearest real message.
+func (m *Model) ExtendSelectionAt(viewportY, x int) {
+	if !m.hasSelection {
+		return
+	}
+	abs := m.absoluteLineAt(viewportY)
+	a, ok := m.anchorAt(abs, x)
+	if !ok {
+		return
+	}
+	a, ok = m.snapToMessageAnchor(a, abs)
+	if !ok {
+		return
+	}
+	m.selRange.End = a
+	m.dirty()
+}
+
+// EndSelection finalizes the drag, returning the plain-text contents of
+// the selection. Returns ok=false when the selection is empty (a click
+// without drag). The selection itself remains visible until ClearSelection
+// is called or a new drag begins.
+func (m *Model) EndSelection() (string, bool) {
+	if !m.hasSelection {
+		return "", false
+	}
+	m.selRange.Active = false
+	if m.selRange.IsEmpty() {
+		m.hasSelection = false
+		m.selRange = selection.Range{}
+		m.dirty()
+		return "", false
+	}
+	text := m.SelectionText()
+	m.dirty()
+	if text == "" {
+		return "", false
+	}
+	return text, true
+}
+
+// ClearSelection removes the current selection, if any.
+func (m *Model) ClearSelection() {
+	if !m.hasSelection {
+		return
+	}
+	m.hasSelection = false
+	m.selRange = selection.Range{}
+	m.dirty()
+}
+
+// HasSelection reports whether a selection is currently active or
+// pinned-on-screen post-drag.
+func (m *Model) HasSelection() bool {
+	return m.hasSelection
+}
+
+// ScrollHintForDrag returns -1 if the cursor is within 1 row of the top
+// edge of the message pane, +1 if within 1 row of the bottom, else 0.
+// Used by the App layer to schedule auto-scroll ticks during a drag.
+func (m *Model) ScrollHintForDrag(viewportY int) int {
+	h := m.lastViewHeight
+	if h <= 0 {
+		return 0
+	}
+	if viewportY <= 0 {
+		return -1
+	}
+	if viewportY >= h-1 {
+		return +1
+	}
+	return 0
+}
+
+// SelectionText extracts the plain-text contents of the current
+// selection. Trailing whitespace is trimmed per line; a final trailing
+// newline is removed. Multi-rune grapheme clusters (ZWJ, skin-tone
+// modifiers, ❤️+VS16) are preserved intact.
+func (m *Model) SelectionText() string {
+	if !m.hasSelection || m.selRange.IsEmpty() {
+		return ""
+	}
+	loA, hiA := m.selRange.Normalize()
+	loLine, loCol, ok1 := m.resolveAnchor(loA)
+	hiLine, hiCol, ok2 := m.resolveAnchor(hiA)
+	if !ok1 || !ok2 {
+		return ""
+	}
+	if loLine > hiLine || (loLine == hiLine && loCol >= hiCol) {
+		return ""
+	}
+
+	var b strings.Builder
+	for i, e := range m.cache {
+		entryStart := m.entryOffsets[i]
+		entryEnd := entryStart + e.height
+		if entryEnd <= loLine {
+			continue
+		}
+		if entryStart > hiLine {
+			break
+		}
+		for j, plain := range e.linesPlain {
+			absLine := entryStart + j
+			if absLine < loLine {
+				continue
+			}
+			if absLine > hiLine {
+				break
+			}
+			from := 0
+			to := displayWidthOfPlain(plain)
+			if absLine == loLine {
+				from = loCol
+			}
+			if absLine == hiLine {
+				to = hiCol
+			}
+			seg := sliceColumns(plain, from, to)
+			seg = strings.TrimRight(seg, " ")
+			b.WriteString(seg)
+			if absLine != hiLine {
+				b.WriteByte('\n')
+			}
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
 
 func (m *Model) View(height, width int) string {
 	// Chrome (header + separator) is cached; only rebuilt on width / channel
@@ -759,6 +1057,7 @@ func (m *Model) View(height, width int) string {
 	if msgAreaHeight < 1 {
 		msgAreaHeight = 1
 	}
+	m.lastViewHeight = msgAreaHeight
 
 	if len(m.messages) == 0 {
 		text := "No messages yet"
