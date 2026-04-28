@@ -78,27 +78,23 @@ func main() {
 
 	probedNow := false
 	probeStart := time.Now()
-	if !skipProbe {
-		// Check whether we'll need to probe (so we can print the message first).
-		// We do a dry-run cache check by looking for the cache file.
-		terminalKey := emojiwidth.IdentifyTerminal()
-		cachePath := emojiwidth.CachePath(terminalKey)
-		if _, err := os.Stat(cachePath); err != nil || forceProbe {
-			fmt.Fprintln(os.Stderr, "Calibrating emoji widths for your terminal (one-time, ~1 second)...")
-			probedNow = true
-		}
-	}
-
-	if err := emojiwidth.Init(emojiwidth.InitOptions{
+	probeOpts := emojiwidth.InitOptions{
 		SkipProbe:  skipProbe,
 		ForceProbe: forceProbe,
-	}); err != nil {
+	}
+	if emojiwidth.WillProbe(probeOpts) {
+		fmt.Fprintln(os.Stderr, "Calibrating emoji widths for your terminal (one-time, ~1 second)...")
+		probedNow = true
+	}
+
+	if err := emojiwidth.Init(probeOpts); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: emoji width calibration failed: %v\n", err)
 		fmt.Fprintln(os.Stderr, "Falling back to library defaults; some emoji may render with incorrect width.")
 	}
 
 	if probedNow && emojiwidth.IsCalibrated() {
-		fmt.Fprintf(os.Stderr, "Done in %dms.\n", time.Since(probeStart).Milliseconds())
+		cachePath := emojiwidth.CachePath(emojiwidth.IdentifyTerminal())
+		fmt.Fprintf(os.Stderr, "Done in %dms. Cached to %s\n", time.Since(probeStart).Milliseconds(), cachePath)
 	}
 
 	if forceProbe {

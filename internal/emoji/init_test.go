@@ -92,6 +92,71 @@ func TestInitWithStaleCache(t *testing.T) {
 	}
 }
 
+func TestWillProbe(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", dir)
+	t.Setenv("TERM_PROGRAM", "test_will_probe")
+	t.Setenv("TERM_PROGRAM_VERSION", "1.0")
+
+	codemap := map[string]string{":a:": "a "}
+	opts := InitOptions{Codemap: codemap}
+
+	// No cache → true
+	if !WillProbe(opts) {
+		t.Error("expected WillProbe=true with no cache")
+	}
+
+	// SkipProbe → false
+	if WillProbe(InitOptions{Codemap: codemap, SkipProbe: true}) {
+		t.Error("expected WillProbe=false with SkipProbe=true")
+	}
+
+	// ForceProbe → true even with valid cache
+	cachePath := CachePath("test_will_probe_1.0")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	c := &Cache{
+		Version:     CacheVersion,
+		Terminal:    "test_will_probe_1.0",
+		ProbedAt:    "2026-04-27T16:00:00Z",
+		CodemapHash: codemapHash(codemap),
+		Widths:      map[string]int{"a": 1},
+	}
+	if err := SaveCache(cachePath, c); err != nil {
+		t.Fatal(err)
+	}
+
+	// Valid cache → false
+	if WillProbe(opts) {
+		t.Error("expected WillProbe=false with valid cache")
+	}
+
+	// ForceProbe → true even though cache is valid
+	if !WillProbe(InitOptions{Codemap: codemap, ForceProbe: true}) {
+		t.Error("expected WillProbe=true with ForceProbe")
+	}
+
+	// Stale codemap hash → true
+	c.CodemapHash = "stale-hash"
+	if err := SaveCache(cachePath, c); err != nil {
+		t.Fatal(err)
+	}
+	if !WillProbe(opts) {
+		t.Error("expected WillProbe=true with stale codemap hash")
+	}
+
+	// Stale version → true
+	c.CodemapHash = codemapHash(codemap) // restore valid hash
+	c.Version = 999
+	if err := SaveCache(cachePath, c); err != nil {
+		t.Fatal(err)
+	}
+	if !WillProbe(opts) {
+		t.Error("expected WillProbe=true with stale Version")
+	}
+}
+
 func TestInitSkipProbe(t *testing.T) {
 	resetWidthMap()
 	dir := t.TempDir()

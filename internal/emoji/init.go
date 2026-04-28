@@ -31,6 +31,41 @@ type InitOptions struct {
 	ForceProbe bool
 }
 
+// WillProbe reports whether Init(opts) would attempt to run a fresh probe.
+// Returns true if no valid cache exists (or ForceProbe is set) and SkipProbe
+// is not set. Useful for callers that want to print a progress message
+// before invoking Init.
+//
+// This function performs the same cache validation as Init but does not
+// install any width map or run the probe.
+func WillProbe(opts InitOptions) bool {
+	if opts.SkipProbe {
+		return false
+	}
+	if opts.ForceProbe {
+		return true
+	}
+
+	codemap := opts.Codemap
+	if codemap == nil {
+		codemap = emojilib.CodeMap()
+	}
+
+	terminalKey := IdentifyTerminal()
+	cachePath := CachePath(terminalKey)
+	c, err := LoadCache(cachePath)
+	if err != nil {
+		return true // cache missing or unreadable
+	}
+	if c.Version != CacheVersion {
+		return true // stale schema
+	}
+	if c.CodemapHash != codemapHash(codemap) {
+		return true // stale codemap
+	}
+	return false
+}
+
 // Init loads the cache or runs a fresh probe. Must be called once at
 // startup, before bubbletea begins. After this returns, Width() is safe
 // to call from anywhere.
