@@ -275,11 +275,14 @@ func TestSelection_HighlightDoesNotCorruptMoreBelowIndicator(t *testing.T) {
 	if !strings.Contains(out, "-- more below --") {
 		t.Fatalf("expected more-below indicator in output; got %q", out)
 	}
-	// The last message-area line must equal cacheMoreBelow byte-for-byte.
+	// The last message-area line must START with cacheMoreBelow byte-for-byte.
+	// (A scrollbar gutter glyph may legitimately follow when the content
+	// overflows the visible height, but the cached indicator prefix must
+	// be present untouched — otherwise the selection overlay corrupted it.)
 	lines := strings.Split(out, "\n")
 	lastRow := lines[len(lines)-1]
-	if lastRow != m.cacheMoreBelow {
-		t.Fatalf("more-below row corrupted by selection overlay\nwant: %q\ngot:  %q",
+	if !strings.HasPrefix(lastRow, m.cacheMoreBelow) {
+		t.Fatalf("more-below row corrupted by selection overlay\nwant prefix: %q\ngot:        %q",
 			m.cacheMoreBelow, lastRow)
 	}
 }

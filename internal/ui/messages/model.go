@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	emojiutil "github.com/gammons/slk/internal/emoji"
+	"github.com/gammons/slk/internal/ui/scrollbar"
 	"github.com/gammons/slk/internal/ui/selection"
 	"github.com/gammons/slk/internal/ui/styles"
 	emoji "github.com/kyokomi/emoji/v2"
@@ -1212,6 +1213,12 @@ func (m *Model) View(height, width int) string {
 	if m.hasSelection {
 		visible = m.applySelectionOverlay(visible, overrodeFirst, overrodeLast)
 	}
+
+	// Overlay a 1-col scrollbar on the right of the message area when content
+	// exceeds the visible height. Chrome (header + separator) is left alone
+	// since it does not scroll.
+	visible = scrollbar.Overlay(visible, width, m.totalLines, m.yOffset, msgAreaHeight,
+		styles.Background, styles.Border, styles.Primary)
 
 	return chrome + "\n" + strings.Join(visible, "\n")
 }
