@@ -458,8 +458,24 @@ func run() error {
 				FinderItems: wctx.FinderItems,
 				UserNames:   wctx.UserNames,
 				UserID:      wctx.UserID,
-				CustomEmoji: wctx.CustomEmoji,
+				CustomEmoji: wctx.CustomEmoji, // empty at this point; filled by the goroutine below
 			})
+
+			// Fetch workspace custom emojis in the background. When done,
+			// send a follow-up so the active compose can refresh its
+			// emoji picker entries. Best-effort: failure leaves the picker
+			// using built-ins only.
+			go func(teamID string) {
+				emojis, err := wctx.Client.ListCustomEmoji(ctx)
+				if err != nil {
+					return
+				}
+				wctx.CustomEmoji = emojis
+				p.Send(ui.CustomEmojisLoadedMsg{
+					TeamID:      teamID,
+					CustomEmoji: emojis,
+				})
+			}(wctx.TeamID)
 
 			// Background fetch of all public channels so the finder can show
 			// channels the user is not yet a member of. Slow on big workspaces;
@@ -546,16 +562,6 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 			})
 			avatarCache.Preload(u.ID, u.Profile.Image32)
 		}
-	}()
-
-	// Background custom-emoji fetch. Best-effort: failure leaves the picker
-	// using built-ins only.
-	go func() {
-		emojis, err := client.ListCustomEmoji(ctx)
-		if err != nil {
-			return
-		}
-		wctx.CustomEmoji = emojis
 	}()
 
 	// Fetch channels

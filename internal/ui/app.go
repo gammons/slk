@@ -124,6 +124,15 @@ type (
 		UserID      string
 		CustomEmoji map[string]string
 	}
+	// CustomEmojisLoadedMsg is sent when a workspace's custom emoji list
+	// finishes loading in the background, after WorkspaceReadyMsg has
+	// already fired with whatever the goroutine had written so far. App
+	// refreshes the active compose's emoji entry list if this matches the
+	// active workspace.
+	CustomEmojisLoadedMsg struct {
+		TeamID      string
+		CustomEmoji map[string]string
+	}
 	WorkspaceFailedMsg struct {
 		TeamName string
 	}
@@ -670,6 +679,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return ChannelSelectedMsg{ID: first.ID, Name: first.Name}
 				})
 			}
+		}
+
+	case CustomEmojisLoadedMsg:
+		if msg.TeamID == a.activeTeamID {
+			a.SetCustomEmoji(msg.CustomEmoji)
 		}
 
 	case ChannelJoinedMsg:
