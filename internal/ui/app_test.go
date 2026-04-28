@@ -2,11 +2,15 @@
 package ui
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/statusbar"
 )
 
 func TestAppFocusCycle(t *testing.T) {
@@ -263,4 +267,158 @@ func TestHandleInsertMode_PlainEnterSends(t *testing.T) {
 	if app.compose.Value() != "" {
 		t.Fatalf("expected compose to be reset after send, got %q", app.compose.Value())
 	}
+}
+
+func TestCopyPermalink_FromMessagesPane(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C123"
+	app.focusedPanel = PanelMessages
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1700000001.000200", UserName: "alice", Text: "hi"},
+	})
+
+	var gotCh, gotTS string
+	app.SetPermalinkFetcher(func(ctx context.Context, channelID, ts string) (string, error) {
+		gotCh = channelID
+		gotTS = ts
+		return "https://example.slack.com/archives/C123/p1700000001000200", nil
+	})
+
+	cmd := app.handleNormalMode(tea.KeyPressMsg{Code: 'C', Text: "C"})
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd from C key")
+	}
+	msg := cmd()
+	// cmd returns a tea.BatchMsg containing tea.SetClipboard cmd + permalink-copied msg.
+	// Easiest assertion: drain the batch and look for our marker types.
+	found := drainForPermalinkCopied(t, msg)
+	if !found {
+		t.Fatalf("expected statusbar.PermalinkCopiedMsg in batch, got %#v", msg)
+	}
+	if gotCh != "C123" {
+		t.Errorf("channel = %q, want C123", gotCh)
+	}
+	if gotTS != "1700000001.000200" {
+		t.Errorf("ts = %q, want 1700000001.000200", gotTS)
+	}
+}
+
+func TestCopyPermalink_FromThreadPane(t *testing.T) {
+	app := NewApp()
+	parent := messages.MessageItem{TS: "1700000000.000100"}
+	replies := []messages.MessageItem{
+		{TS: "1700000000.000100", UserName: "alice", Text: "parent"},
+		{TS: "1700000050.000400", UserName: "bob", Text: "reply"},
+	}
+	app.threadPanel.SetThread(parent, replies, "C999", "1700000000.000100")
+	app.threadVisible = true
+	app.focusedPanel = PanelThread
+	// SetThread initializes selection to 0; advance to the second reply.
+	for i := 0; i < len(replies); i++ {
+		sel := app.threadPanel.SelectedReply()
+		if sel != nil && sel.TS == "1700000050.000400" {
+			break
+		}
+		app.threadPanel.MoveDown()
+	}
+	if sel := app.threadPanel.SelectedReply(); sel == nil || sel.TS != "1700000050.000400" {
+		t.Fatalf("could not select reply ts=1700000050.000400; got %+v", sel)
+	}
+
+	var gotCh, gotTS string
+	app.SetPermalinkFetcher(func(ctx context.Context, channelID, ts string) (string, error) {
+		gotCh = channelID
+		gotTS = ts
+		return "https://example.slack.com/archives/C999/p1700000050000400?thread_ts=1700000000.000100&cid=C999", nil
+	})
+
+	cmd := app.handleNormalMode(tea.KeyPressMsg{Code: 'C', Text: "C"})
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd from C key")
+	}
+	if !drainForPermalinkCopied(t, cmd()) {
+		t.Fatal("expected PermalinkCopiedMsg")
+	}
+	if gotCh != "C999" {
+		t.Errorf("channel = %q, want C999", gotCh)
+	}
+	if gotTS != "1700000050.000400" {
+		t.Errorf("ts = %q, want reply ts 1700000050.000400", gotTS)
+	}
+}
+
+func TestCopyPermalink_NothingSelectedNoop(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C123"
+	app.focusedPanel = PanelMessages
+	// No messages set.
+	app.SetPermalinkFetcher(func(ctx context.Context, channelID, ts string) (string, error) {
+		t.Fatal("fetcher must not be called when nothing is selected")
+		return "", nil
+	})
+	cmd := app.handleNormalMode(tea.KeyPressMsg{Code: 'C', Text: "C"})
+	if cmd != nil {
+		// cmd may be non-nil but must not invoke the fetcher; drain it.
+		_ = cmd()
+	}
+}
+
+func TestCopyPermalink_FetcherErrorEmitsFailedMsg(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C123"
+	app.focusedPanel = PanelMessages
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", UserName: "alice", Text: "hi"},
+	})
+	app.SetPermalinkFetcher(func(ctx context.Context, channelID, ts string) (string, error) {
+		return "", errors.New("boom")
+	})
+
+	cmd := app.handleNormalMode(tea.KeyPressMsg{Code: 'C', Text: "C"})
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd")
+	}
+	msg := cmd()
+	if _, ok := msg.(statusbar.PermalinkCopyFailedMsg); !ok {
+		t.Fatalf("expected PermalinkCopyFailedMsg, got %T", msg)
+	}
+}
+
+func TestApp_PermalinkCopiedMsgShowsToast(t *testing.T) {
+	a := NewApp()
+	_, cmd := a.Update(statusbar.PermalinkCopiedMsg{})
+	if !strings.Contains(a.statusbar.View(80), "Copied permalink") {
+		t.Fatalf("expected 'Copied permalink' toast; got %q", a.statusbar.View(80))
+	}
+	if cmd == nil {
+		t.Fatal("expected a clear-tick cmd")
+	}
+}
+
+func TestApp_PermalinkCopyFailedMsgShowsToast(t *testing.T) {
+	a := NewApp()
+	a.Update(statusbar.PermalinkCopyFailedMsg{})
+	if !strings.Contains(a.statusbar.View(80), "Failed to copy link") {
+		t.Fatalf("expected 'Failed to copy link' toast; got %q", a.statusbar.View(80))
+	}
+}
+
+// drainForPermalinkCopied walks tea.BatchMsg / tea.Cmd structures looking for
+// a statusbar.PermalinkCopiedMsg.
+func drainForPermalinkCopied(t *testing.T, msg tea.Msg) bool {
+	t.Helper()
+	switch v := msg.(type) {
+	case statusbar.PermalinkCopiedMsg:
+		return true
+	case tea.BatchMsg:
+		for _, c := range v {
+			if c == nil {
+				continue
+			}
+			if drainForPermalinkCopied(t, c()) {
+				return true
+			}
+		}
+	}
+	return false
 }

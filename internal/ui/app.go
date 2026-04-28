@@ -675,6 +675,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case statusbar.CopiedClearMsg:
 		a.statusbar.ClearCopied()
 
+	case statusbar.PermalinkCopiedMsg:
+		a.statusbar.SetToast("Copied permalink")
+		cmds = append(cmds, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+			return statusbar.CopiedClearMsg{}
+		}))
+
+	case statusbar.PermalinkCopyFailedMsg:
+		a.statusbar.SetToast("Failed to copy link")
+		cmds = append(cmds, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+			return statusbar.CopiedClearMsg{}
+		}))
+
 	case ChannelSelectedMsg:
 		// Close thread panel when switching channels
 		a.CloseThread()
@@ -1069,6 +1081,9 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 		} else if a.focusedPanel == PanelThread {
 			a.threadPanel.EnterReactionNav()
 		}
+
+	case key.Matches(msg, a.keys.CopyPermalink):
+		return a.copyPermalinkOfSelected()
 
 	default:
 		// Number keys 1-9 switch workspaces
@@ -1535,6 +1550,51 @@ func (a *App) toggleReactionOnSelectedThread(emojiName string) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// copyPermalinkOfSelected resolves the currently-selected message or thread
+// reply, calls the permalink fetcher, and returns a tea.Cmd that writes the
+// URL to the clipboard and emits a status-bar toast.
+func (a *App) copyPermalinkOfSelected() tea.Cmd {
+	if a.permalinkFetchFn == nil {
+		return nil
+	}
+	var channelID, ts string
+	switch a.focusedPanel {
+	case PanelMessages:
+		msg, ok := a.messagepane.SelectedMessage()
+		if !ok {
+			return nil
+		}
+		channelID = a.activeChannelID
+		ts = msg.TS
+	case PanelThread:
+		reply := a.threadPanel.SelectedReply()
+		if reply == nil {
+			return nil
+		}
+		channelID = a.threadPanel.ChannelID()
+		ts = reply.TS
+	default:
+		return nil
+	}
+	if channelID == "" || ts == "" {
+		return nil
+	}
+	fetch := a.permalinkFetchFn
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		url, err := fetch(ctx, channelID, ts)
+		if err != nil {
+			log.Printf("copy permalink: %v", err)
+			return statusbar.PermalinkCopyFailedMsg{}
+		}
+		return tea.BatchMsg{
+			tea.SetClipboard(url),
+			func() tea.Msg { return statusbar.PermalinkCopiedMsg{} },
+		}
+	}
 }
 
 func (a *App) handleDown() {
