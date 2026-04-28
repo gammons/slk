@@ -570,9 +570,9 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 			}
 			pills = append(pills, plusStyle.Render("+"))
 		}
-		// Join pills with wrapping. lipgloss.Width() uses clipperhouse/displaywidth
-		// in v2, which correctly handles VS16 variation selector emoji.
-		// This matches the width engine used for border rendering.
+		// Join pills with wrapping. emojiutil.Width() consults the
+		// terminal-probed width cache so wrapping decisions match what
+		// the user's terminal will actually render.
 		bgSpace := lipgloss.NewStyle().Background(styles.Background).Render(" ")
 		var reactionLines []string
 		currentLine := ""
