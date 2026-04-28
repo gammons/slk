@@ -511,7 +511,7 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 				candidate += bgSpace
 			}
 			candidate += pill
-			if lipgloss.Width(candidate) > contentWidth && currentLine != "" {
+			if emojiutil.Width(candidate) > contentWidth && currentLine != "" {
 				reactionLines = append(reactionLines, currentLine)
 				currentLine = pill
 			} else {
