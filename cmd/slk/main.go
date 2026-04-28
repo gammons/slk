@@ -14,6 +14,7 @@ import (
 	"github.com/gammons/slk/internal/avatar"
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
+	emojiwidth "github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/notify"
 	"github.com/gammons/slk/internal/service"
 	slackclient "github.com/gammons/slk/internal/slack"
@@ -61,6 +62,49 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	}
+
+	// Emoji width probing: parse flags and call Init before bubbletea starts.
+	skipProbe := false
+	forceProbe := false
+	for _, arg := range os.Args[1:] {
+		switch arg {
+		case "--no-emoji-probe":
+			skipProbe = true
+		case "--probe-emoji":
+			forceProbe = true
+		}
+	}
+
+	probedNow := false
+	probeStart := time.Now()
+	if !skipProbe {
+		// Check whether we'll need to probe (so we can print the message first).
+		// We do a dry-run cache check by looking for the cache file.
+		terminalKey := emojiwidth.IdentifyTerminal()
+		cachePath := emojiwidth.CachePath(terminalKey)
+		if _, err := os.Stat(cachePath); err != nil || forceProbe {
+			fmt.Fprintln(os.Stderr, "Calibrating emoji widths for your terminal (one-time, ~1 second)...")
+			probedNow = true
+		}
+	}
+
+	if err := emojiwidth.Init(emojiwidth.InitOptions{
+		SkipProbe:  skipProbe,
+		ForceProbe: forceProbe,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: emoji width calibration failed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "Falling back to library defaults; some emoji may render with incorrect width.")
+	}
+
+	if probedNow && emojiwidth.IsCalibrated() {
+		fmt.Fprintf(os.Stderr, "Done in %dms.\n", time.Since(probeStart).Milliseconds())
+	}
+
+	if forceProbe {
+		// --probe-emoji is a diagnostic flag: probe and exit.
+		fmt.Fprintln(os.Stderr, "Probe complete. Exiting.")
+		os.Exit(0)
 	}
 
 	if err := run(); err != nil {
