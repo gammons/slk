@@ -151,6 +151,54 @@ type loadingEntry struct {
 	Status   string // "connecting", "ready", "failed"
 }
 
+// panelCache stores the fully-wrapped (border + exactSize) output of a panel
+// keyed on a tuple of inputs that affect its rendering. A cache hit returns
+// the previous frame's string verbatim; a miss recomputes and stores.
+//
+// layoutKey is a free-form int64 callers can use to encode focus state,
+// mode, theme version, and layout-toggle bits as a single comparable value.
+type panelCache struct {
+	output       string
+	panelVersion int64
+	width        int
+	height       int
+	layoutKey    int64
+	valid        bool
+}
+
+func (c *panelCache) hit(panelVersion int64, width, height int, layoutKey int64) bool {
+	return c.valid &&
+		c.panelVersion == panelVersion &&
+		c.width == width &&
+		c.height == height &&
+		c.layoutKey == layoutKey
+}
+
+func (c *panelCache) store(out string, panelVersion int64, width, height int, layoutKey int64) {
+	c.output = out
+	c.panelVersion = panelVersion
+	c.width = width
+	c.height = height
+	c.layoutKey = layoutKey
+	c.valid = true
+}
+
+func boolToInt(b bool) int64 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// mixVersions combines two monotonic int64 counters into one. Used when a
+// panel cache must invalidate on either of two underlying versions changing.
+// The mix isn't a hash -- it's just any function that yields a unique value
+// per (a, b) pair within practical ranges, which (a*small_prime ^ b) does for
+// counters that increment by 1 over a session.
+func mixVersions(a, b int64) int64 {
+	return a*1_000_003 ^ b
+}
+
 // SwitchWorkspaceFunc is called to switch the active workspace.
 type SwitchWorkspaceFunc func(teamID string) tea.Msg
 
@@ -234,6 +282,18 @@ type App struct {
 	layoutMsgHeight     int
 	layoutSidebarHeight int
 	layoutThreadHeight  int
+
+	// Per-panel render caches. Each panel exposes Version() that increments
+	// on any state change that could alter its View() output. The App caches
+	// the FULLY-WRAPPED panel output (panel.View + border + exactSize) keyed
+	// on (panelVersion, width, height, layoutKey). On compose keystrokes,
+	// only compose's version changes so all the other panels' wrapped
+	// outputs are reused -- saving the bulk of the per-keystroke render cost.
+	panelCacheRail     panelCache
+	panelCacheSidebar  panelCache
+	panelCacheMsgPanel panelCache
+	panelCacheThread   panelCache
+	panelCacheStatus   panelCache
 
 	// Current context
 	activeChannelID string
@@ -1871,9 +1931,16 @@ func (a *App) View() tea.View {
 		return exactSizeBg(s, w, h, styles.Background)
 	}
 
+	themeVer := styles.Version()
+
 	// Render workspace rail (uses rail background so empty cells around
 	// the workspace tiles match the rail color, not the message pane).
-	rail := exactSizeBg(a.workspaceRail.View(contentHeight), railWidth, contentHeight, styles.RailBackground)
+	railLayoutKey := themeVer
+	if c := &a.panelCacheRail; !c.hit(a.workspaceRail.Version(), railWidth, contentHeight, railLayoutKey) {
+		out := exactSizeBg(a.workspaceRail.View(contentHeight), railWidth, contentHeight, styles.RailBackground)
+		c.store(out, a.workspaceRail.Version(), railWidth, contentHeight, railLayoutKey)
+	}
+	rail := a.panelCacheRail.output
 
 	var panels []string
 	panels = append(panels, rail)
@@ -1883,106 +1950,142 @@ func (a *App) View() tea.View {
 	// rounded border's own background and the right-padding fill match the
 	// sidebar's panel color rather than the message pane's.
 	if a.sidebarVisible {
-		sidebarBorderBase := lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(styles.Border).
-			BorderBackground(styles.SidebarBackground).
-			Background(styles.SidebarBackground).
-			Width(sidebarWidth)
-		borderStyle := sidebarBorderBase
-		if a.focusedPanel == PanelSidebar && a.mode != ModeInsert {
-			borderStyle = lipgloss.NewStyle().
-				BorderStyle(lipgloss.ThickBorder()).
-				BorderForeground(styles.Primary).
+		sbFocused := a.focusedPanel == PanelSidebar && a.mode != ModeInsert
+		sbLayoutKey := themeVer<<1 | boolToInt(sbFocused)
+		if c := &a.panelCacheSidebar; !c.hit(a.sidebar.Version(), sidebarWidth, contentHeight, sbLayoutKey) {
+			borderStyle := lipgloss.NewStyle().
+				BorderStyle(lipgloss.RoundedBorder()).
+				BorderForeground(styles.Border).
 				BorderBackground(styles.SidebarBackground).
 				Background(styles.SidebarBackground).
 				Width(sidebarWidth)
+			if sbFocused {
+				borderStyle = lipgloss.NewStyle().
+					BorderStyle(lipgloss.ThickBorder()).
+					BorderForeground(styles.Primary).
+					BorderBackground(styles.SidebarBackground).
+					Background(styles.SidebarBackground).
+					Width(sidebarWidth)
+			}
+			sidebarView := a.sidebar.View(contentHeight-2, sidebarWidth)
+			sidebarView = borderStyle.Render(sidebarView)
+			out := exactSizeBg(sidebarView, sidebarWidth+sidebarBorder, contentHeight, styles.SidebarBackground)
+			c.store(out, a.sidebar.Version(), sidebarWidth, contentHeight, sbLayoutKey)
 		}
-		sidebarView := a.sidebar.View(contentHeight-2, sidebarWidth)
-		sidebarView = borderStyle.Render(sidebarView)
-		panels = append(panels, exactSizeBg(sidebarView, sidebarWidth+sidebarBorder, contentHeight, styles.SidebarBackground))
+		panels = append(panels, a.panelCacheSidebar.output)
 		a.layoutSidebarHeight = contentHeight - 2
 	}
 
-	// Render message pane with border
-	msgBorderStyle := styles.UnfocusedBorder.Width(msgWidth)
-	if a.focusedPanel == PanelMessages && a.mode != ModeInsert {
-		msgBorderStyle = styles.FocusedBorder.Width(msgWidth)
-	}
+	// Render message pane with border. The message pane bundles three
+	// things that change at very different rates: the messages panel
+	// itself, the typing-indicator line, and the compose box. We compose
+	// a single int64 panelVersion that mixes their individual versions so
+	// the cache invalidates whenever any of them changes.
+	msgFocused := a.focusedPanel == PanelMessages && a.mode != ModeInsert
+	composeFocused := a.mode == ModeInsert && a.focusedPanel != PanelThread
+	typingActive := len(a.typingUsers) > 0
+	msgLayoutKey := themeVer<<3 |
+		boolToInt(msgFocused)<<2 |
+		boolToInt(composeFocused)<<1 |
+		boolToInt(typingActive)
+	msgPanelVersion := mixVersions(a.messagepane.Version(), a.compose.Version())
 	a.compose.SetWidth(msgWidth - 2)
-	composeView := a.compose.View(msgWidth-2, a.mode == ModeInsert && a.focusedPanel != PanelThread)
-	mentionView := a.compose.MentionPickerView(msgWidth - 2)
-	if mentionView != "" {
-		composeView = mentionView + "\n" + composeView
-	}
-	// Add a background-colored spacer line above the compose box
-	// (replaces MarginTop which produced unstyled/black margin cells)
-	composeSpacer := lipgloss.NewStyle().Background(styles.Background).Width(msgWidth - 2).Render("")
-	composeView = composeSpacer + "\n" + composeView
-	composeHeight := lipgloss.Height(composeView)
-	typingLine := a.renderTypingLine()
-	typingHeight := 0
-	if typingLine != "" {
-		typingHeight = 1
-	}
-	msgContentHeight := contentHeight - 2 - composeHeight - typingHeight
-	a.layoutMsgHeight = msgContentHeight
-	if msgContentHeight < 3 {
-		msgContentHeight = 3
-	}
-	msgView := a.messagepane.View(msgContentHeight, msgWidth-2)
-	var msgInner string
-	if typingLine != "" {
-		msgInner = lipgloss.JoinVertical(lipgloss.Left, msgView, typingLine, composeView)
-	} else {
-		msgInner = lipgloss.JoinVertical(lipgloss.Left, msgView, composeView)
-	}
-	// Re-apply theme background after ANSI resets so the border style's
-	// right-side padding gets the correct background instead of terminal default.
-	msgInner = messages.ReapplyBgAfterResets(msgInner, messages.BgANSI())
-	msgPanel := exactSize(
-		msgBorderStyle.Render(msgInner),
-		msgWidth+msgBorder, contentHeight,
-	)
-	panels = append(panels, msgPanel)
-
-	// Render thread panel if visible
-	if a.threadVisible && threadWidth > 0 {
-		threadBorderStyle := styles.UnfocusedBorder.Width(threadWidth)
-		if a.focusedPanel == PanelThread && a.mode != ModeInsert {
-			threadBorderStyle = styles.FocusedBorder.Width(threadWidth)
+	if c := &a.panelCacheMsgPanel; !c.hit(msgPanelVersion, msgWidth, contentHeight, msgLayoutKey) {
+		msgBorderStyle := styles.UnfocusedBorder.Width(msgWidth)
+		if msgFocused {
+			msgBorderStyle = styles.FocusedBorder.Width(msgWidth)
 		}
-		a.threadCompose.SetWidth(threadWidth - 2)
-		threadComposeView := a.threadCompose.View(threadWidth-2, a.mode == ModeInsert && a.focusedPanel == PanelThread)
-		threadMentionView := a.threadCompose.MentionPickerView(threadWidth - 2)
-		if threadMentionView != "" {
-			threadComposeView = threadMentionView + "\n" + threadComposeView
+		composeView := a.compose.View(msgWidth-2, composeFocused)
+		mentionView := a.compose.MentionPickerView(msgWidth - 2)
+		if mentionView != "" {
+			composeView = mentionView + "\n" + composeView
 		}
-		threadComposeSpacer := lipgloss.NewStyle().Background(styles.Background).Width(threadWidth - 2).Render("")
-		threadComposeView = threadComposeSpacer + "\n" + threadComposeView
-		threadComposeHeight := lipgloss.Height(threadComposeView)
-		threadContentHeight := contentHeight - 2 - threadComposeHeight
-		a.layoutThreadHeight = threadContentHeight
-		if threadContentHeight < 3 {
-			threadContentHeight = 3
+		// Add a background-colored spacer line above the compose box
+		// (replaces MarginTop which produced unstyled/black margin cells)
+		composeSpacer := lipgloss.NewStyle().Background(styles.Background).Width(msgWidth - 2).Render("")
+		composeView = composeSpacer + "\n" + composeView
+		composeHeight := lipgloss.Height(composeView)
+		typingLine := a.renderTypingLine()
+		typingHeight := 0
+		if typingLine != "" {
+			typingHeight = 1
 		}
-		threadView := a.threadPanel.View(threadContentHeight, threadWidth-2)
-		threadInner := lipgloss.JoinVertical(lipgloss.Left, threadView, threadComposeView)
-		threadInner = messages.ReapplyBgAfterResets(threadInner, messages.BgANSI())
-		threadPanel := exactSize(
-			threadBorderStyle.Render(threadInner),
-			threadWidth+threadBorder, contentHeight,
+		msgContentHeight := contentHeight - 2 - composeHeight - typingHeight
+		a.layoutMsgHeight = msgContentHeight
+		if msgContentHeight < 3 {
+			msgContentHeight = 3
+		}
+		msgView := a.messagepane.View(msgContentHeight, msgWidth-2)
+		var msgInner string
+		if typingLine != "" {
+			msgInner = lipgloss.JoinVertical(lipgloss.Left, msgView, typingLine, composeView)
+		} else {
+			msgInner = lipgloss.JoinVertical(lipgloss.Left, msgView, composeView)
+		}
+		// Re-apply theme background after ANSI resets so the border style's
+		// right-side padding gets the correct background instead of terminal default.
+		msgInner = messages.ReapplyBgAfterResets(msgInner, messages.BgANSI())
+		out := exactSize(
+			msgBorderStyle.Render(msgInner),
+			msgWidth+msgBorder, contentHeight,
 		)
-		panels = append(panels, threadPanel)
+		c.store(out, msgPanelVersion, msgWidth, contentHeight, msgLayoutKey)
+	}
+	panels = append(panels, a.panelCacheMsgPanel.output)
+
+	// Render thread panel if visible. Same caching pattern as the message
+	// panel: panelVersion mixes the thread reply panel and the thread
+	// compose box.
+	if a.threadVisible && threadWidth > 0 {
+		threadFocused := a.focusedPanel == PanelThread && a.mode != ModeInsert
+		threadComposeFocused := a.mode == ModeInsert && a.focusedPanel == PanelThread
+		threadLayoutKey := themeVer<<2 | boolToInt(threadFocused)<<1 | boolToInt(threadComposeFocused)
+		threadPanelVersion := mixVersions(a.threadPanel.Version(), a.threadCompose.Version())
+		a.threadCompose.SetWidth(threadWidth - 2)
+		if c := &a.panelCacheThread; !c.hit(threadPanelVersion, threadWidth, contentHeight, threadLayoutKey) {
+			threadBorderStyle := styles.UnfocusedBorder.Width(threadWidth)
+			if threadFocused {
+				threadBorderStyle = styles.FocusedBorder.Width(threadWidth)
+			}
+			threadComposeView := a.threadCompose.View(threadWidth-2, threadComposeFocused)
+			threadMentionView := a.threadCompose.MentionPickerView(threadWidth - 2)
+			if threadMentionView != "" {
+				threadComposeView = threadMentionView + "\n" + threadComposeView
+			}
+			threadComposeSpacer := lipgloss.NewStyle().Background(styles.Background).Width(threadWidth - 2).Render("")
+			threadComposeView = threadComposeSpacer + "\n" + threadComposeView
+			threadComposeHeight := lipgloss.Height(threadComposeView)
+			threadContentHeight := contentHeight - 2 - threadComposeHeight
+			a.layoutThreadHeight = threadContentHeight
+			if threadContentHeight < 3 {
+				threadContentHeight = 3
+			}
+			threadView := a.threadPanel.View(threadContentHeight, threadWidth-2)
+			threadInner := lipgloss.JoinVertical(lipgloss.Left, threadView, threadComposeView)
+			threadInner = messages.ReapplyBgAfterResets(threadInner, messages.BgANSI())
+			out := exactSize(
+				threadBorderStyle.Render(threadInner),
+				threadWidth+threadBorder, contentHeight,
+			)
+			c.store(out, threadPanelVersion, threadWidth, contentHeight, threadLayoutKey)
+		}
+		panels = append(panels, a.panelCacheThread.output)
 	}
 
 	content := lipgloss.JoinHorizontal(lipgloss.Top, panels...)
 	statusWidth := a.width - railWidth
-	railSpacer := lipgloss.NewStyle().
-		Width(railWidth).
-		Background(styles.RailBackground).
-		Render("")
-	status := lipgloss.JoinHorizontal(lipgloss.Center, railSpacer, a.statusbar.View(statusWidth))
+
+	// Cache the status row (rail-spacer + statusbar). It depends only on
+	// statusbar.Version, statusWidth, and theme.
+	if c := &a.panelCacheStatus; !c.hit(a.statusbar.Version(), statusWidth, 1, themeVer) {
+		railSpacer := lipgloss.NewStyle().
+			Width(railWidth).
+			Background(styles.RailBackground).
+			Render("")
+		out := lipgloss.JoinHorizontal(lipgloss.Center, railSpacer, a.statusbar.View(statusWidth))
+		c.store(out, a.statusbar.Version(), statusWidth, 1, themeVer)
+	}
+	status := a.panelCacheStatus.output
 
 	screen := lipgloss.JoinVertical(lipgloss.Left, content, status)
 
@@ -2007,16 +2110,28 @@ func (a *App) View() tea.View {
 		screen = a.renderLoadingOverlay(a.width, a.height)
 	}
 
-	// Fill any uncolored cells with the theme background color.
-	// Use a full-screen wrapper that forces exact dimensions and fills
-	// all padding with the theme background. This catches any width gaps
-	// between panels and height gaps below content.
-	finalScreen := lipgloss.NewStyle().
-		Width(a.width).
-		Height(a.height).
-		MaxHeight(a.height).
-		Background(styles.Background).
-		Render(screen)
+	// All panels are wrapped in exactSize / exactSizeBg before joining, so
+	// `screen` is already exactly (a.width, a.height) with every cell themed.
+	// We skip the previously-mandatory full-screen lipgloss wrapper -- it
+	// walked every cell of the entire ANSI output (~3.4 ms / frame, the
+	// single largest cost in the prior profile) just to apply background
+	// padding that's already there. If an overlay is active we still need
+	// the wrapper because overlay compositors don't always produce exact-
+	// sized output; conservatively re-wrap in that case.
+	finalScreen := screen
+	overlayActive := a.channelFinder.IsVisible() ||
+		a.reactionPicker.IsVisible() ||
+		a.workspaceFinder.IsVisible() ||
+		a.themeSwitcher.IsVisible() ||
+		a.loading
+	if overlayActive {
+		finalScreen = lipgloss.NewStyle().
+			Width(a.width).
+			Height(a.height).
+			MaxHeight(a.height).
+			Background(styles.Background).
+			Render(screen)
+	}
 	v := tea.NewView(finalScreen)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion

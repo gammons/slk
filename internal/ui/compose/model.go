@@ -24,7 +24,18 @@ type Model struct {
 	mentionStartCol int // cursor column where @ was typed
 	users           []mentionpicker.User
 	reverseNames    map[string]string // displayName -> userID
+
+	// version increments on every Update / state mutation. Used by App's
+	// panel-cache layer so the wrapped compose panel only re-renders when
+	// the compose has actually changed.
+	version int64
 }
+
+// Version returns the render version. Increments on Update and any state
+// mutation that alters View() output.
+func (m *Model) Version() int64 { return m.version }
+
+func (m *Model) dirty() { m.version++ }
 
 func New(channelName string) Model {
 	ta := textarea.New()
@@ -80,18 +91,23 @@ func (m *Model) RefreshStyles() {
 }
 
 func (m *Model) SetChannel(name string) {
-	m.channelName = name
-	m.input.Placeholder = "Message #" + name + "... (i to insert)"
+	if m.channelName != name {
+		m.channelName = name
+		m.input.Placeholder = "Message #" + name + "... (i to insert)"
+		m.dirty()
+	}
 }
 
 func (m *Model) Focus() tea.Cmd {
 	m.input.Placeholder = "" // hide placeholder when focused
+	m.dirty()
 	return m.input.Focus()
 }
 
 func (m *Model) Blur() {
 	m.input.Placeholder = "Message #" + m.channelName + "... (i to insert)"
 	m.input.Blur()
+	m.dirty()
 }
 
 func (m *Model) Value() string {
@@ -100,11 +116,13 @@ func (m *Model) Value() string {
 
 func (m *Model) SetValue(s string) {
 	m.input.SetValue(s)
+	m.dirty()
 }
 
 func (m *Model) Reset() {
 	m.input.Reset()
 	m.input.SetHeight(1)
+	m.dirty()
 }
 
 // visualLineCount returns the number of visual lines the text occupies,
@@ -142,6 +160,7 @@ func (m *Model) SetWidth(width int) {
 	if m.width != width {
 		m.width = width
 		m.input.SetWidth(innerWidth)
+		m.dirty()
 	}
 }
 
@@ -173,6 +192,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	}
 
 	m.autoGrow()
+	// Conservative: bump version on every Update. The textarea's internal
+	// state (cursor blink, content) almost always changes per call, so a
+	// per-call bump is correct and cheaper than introspecting.
+	m.dirty()
 	return m, cmd
 }
 

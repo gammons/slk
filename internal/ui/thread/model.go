@@ -43,6 +43,9 @@ type Model struct {
 	viewCacheValid    bool
 	selectedStartLine int
 	selectedEndLine   int
+
+	// version increments on every state change that could alter View() output.
+	version int64
 }
 
 // New creates an empty thread panel.
@@ -50,11 +53,18 @@ func New() *Model {
 	return &Model{}
 }
 
+// Version returns a counter that increments any time the View() output could
+// change. Used by App's panel-output cache.
+func (m *Model) Version() int64 { return m.version }
+
+func (m *Model) dirty() { m.version++ }
+
 // InvalidateCache forces the render cache to be rebuilt on next View().
 // Call this after theme changes or style updates.
 func (m *Model) InvalidateCache() {
 	m.cache = nil
 	m.viewCacheValid = false
+	m.dirty()
 }
 
 // SetThread populates the thread panel with a parent message and replies.
@@ -116,7 +126,10 @@ func (m *Model) ParentMsg() messages.MessageItem {
 
 // SetFocused sets whether the thread panel has focus.
 func (m *Model) SetFocused(focused bool) {
-	m.focused = focused
+	if m.focused != focused {
+		m.focused = focused
+		m.dirty()
+	}
 }
 
 // Focused returns whether the thread panel has focus.
@@ -149,6 +162,7 @@ func (m *Model) SelectedReply() *messages.MessageItem {
 func (m *Model) ScrollUp(n int) {
 	if n > 0 {
 		m.vp.ScrollUp(n)
+		m.dirty()
 	}
 }
 
@@ -157,6 +171,7 @@ func (m *Model) ScrollUp(n int) {
 func (m *Model) ScrollDown(n int) {
 	if n > 0 {
 		m.vp.ScrollDown(n)
+		m.dirty()
 	}
 }
 
@@ -166,6 +181,7 @@ func (m *Model) MoveUp() {
 	}
 	if m.selected > 0 {
 		m.selected--
+		m.dirty()
 	}
 }
 
@@ -176,6 +192,7 @@ func (m *Model) MoveDown() {
 	}
 	if m.selected < len(m.replies)-1 {
 		m.selected++
+		m.dirty()
 	}
 }
 
@@ -185,13 +202,17 @@ func (m *Model) IsAtBottom() bool {
 
 // GoToTop moves the selection to the first reply.
 func (m *Model) GoToTop() {
-	m.selected = 0
+	if m.selected != 0 {
+		m.selected = 0
+		m.dirty()
+	}
 }
 
 // GoToBottom moves the selection to the last reply.
 func (m *Model) GoToBottom() {
-	if len(m.replies) > 0 {
+	if len(m.replies) > 0 && m.selected != len(m.replies)-1 {
 		m.selected = len(m.replies) - 1
+		m.dirty()
 	}
 }
 
@@ -326,8 +347,11 @@ func (m *Model) ClickAt(y int) {
 			h = 1
 		}
 		if absoluteY >= currentLine && absoluteY < currentLine+h {
-			m.selected = i
-			m.viewCacheValid = false
+			if m.selected != i {
+				m.selected = i
+				m.viewCacheValid = false
+				m.dirty()
+			}
 			return
 		}
 		currentLine += h

@@ -115,6 +115,12 @@ type Model struct {
 	snappedSelection int
 	hasSnapped       bool
 
+	// version increments on every state change that could alter the rendered
+	// View() output. The App layer caches the WRAPPED panel output (border +
+	// exactSize) keyed on version + layout, so on compose keystrokes (where
+	// version is unchanged) we reuse the previous frame's wrapped string.
+	version int64
+
 	// Render cache. cacheRows holds the pre-rendered (normal / selected) string
 	// variants for every visible row including section headers and inter-section
 	// blanks. Each row is exactly one rendered line, so we can build the visible
@@ -129,7 +135,16 @@ type Model struct {
 // Call this after theme changes.
 func (m *Model) InvalidateCache() {
 	m.cacheValid = false
+	m.version++
 }
+
+// Version returns a counter that increments any time the View() output could
+// change. Callers can compare against a previously-seen version to know
+// whether to recompute downstream layout / wrapping.
+func (m *Model) Version() int64 { return m.version }
+
+// dirty bumps the version. Called from every state-mutating method.
+func (m *Model) dirty() { m.version++ }
 
 func New(items []ChannelItem) Model {
 	m := Model{items: items}
@@ -144,6 +159,7 @@ func (m *Model) SetItems(items []ChannelItem) {
 		m.selected = 0
 	}
 	m.cacheValid = false
+	m.dirty()
 }
 
 func (m *Model) SelectedID() string {
@@ -165,12 +181,14 @@ func (m *Model) SelectedItem() (ChannelItem, bool) {
 func (m *Model) MoveDown() {
 	if m.selected < len(m.filtered)-1 {
 		m.selected++
+		m.dirty()
 	}
 }
 
 func (m *Model) MoveUp() {
 	if m.selected > 0 {
 		m.selected--
+		m.dirty()
 	}
 }
 
@@ -183,6 +201,7 @@ func (m *Model) ScrollUp(n int) {
 	if m.yOffset < 0 {
 		m.yOffset = 0
 	}
+	m.dirty()
 }
 
 // ScrollDown moves the viewport down by n rows. The next View() clamps to the
@@ -190,16 +209,19 @@ func (m *Model) ScrollUp(n int) {
 func (m *Model) ScrollDown(n int) {
 	if n > 0 {
 		m.yOffset += n
+		m.dirty()
 	}
 }
 
 func (m *Model) GoToTop() {
 	m.selected = 0
+	m.dirty()
 }
 
 func (m *Model) GoToBottom() {
 	if len(m.filtered) > 0 {
 		m.selected = len(m.filtered) - 1
+		m.dirty()
 	}
 }
 
@@ -213,6 +235,7 @@ func (m *Model) SetFilter(filter string) {
 	m.selected = 0
 	m.rebuildFilter()
 	m.cacheValid = false
+	m.dirty()
 }
 
 func (m *Model) VisibleItems() []ChannelItem {
@@ -230,6 +253,7 @@ func (m *Model) ClearUnread(channelID string) {
 			if m.items[i].UnreadCount != 0 {
 				m.items[i].UnreadCount = 0
 				m.cacheValid = false
+				m.dirty()
 			}
 			return
 		}
@@ -243,6 +267,7 @@ func (m *Model) UpdatePresenceByUser(userID, presence string) {
 			if m.items[i].Presence != presence {
 				m.items[i].Presence = presence
 				m.cacheValid = false
+				m.dirty()
 			}
 			return
 		}
@@ -252,7 +277,10 @@ func (m *Model) UpdatePresenceByUser(userID, presence string) {
 func (m *Model) SelectByID(id string) {
 	for i, idx := range m.filtered {
 		if m.items[idx].ID == id {
-			m.selected = i
+			if m.selected != i {
+				m.selected = i
+				m.dirty()
+			}
 			return
 		}
 	}
@@ -515,7 +543,10 @@ func (m *Model) ClickAt(y int) (ChannelItem, bool) {
 
 		for _, fi := range sectionMap[name] {
 			if currentLine == absoluteY {
-				m.selected = fi
+				if m.selected != fi {
+					m.selected = fi
+					m.dirty()
+				}
 				idx := m.filtered[fi]
 				return m.items[idx], true
 			}

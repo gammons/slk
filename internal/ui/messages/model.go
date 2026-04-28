@@ -119,7 +119,20 @@ type Model struct {
 	reactionNavIndex  int
 
 	lastReadTS string
+
+	// version increments on every state change that could alter rendered
+	// View() output. The App layer caches the WRAPPED panel output (border +
+	// exactSize + ReapplyBgAfterResets) keyed on this counter, so on compose
+	// keystrokes (where version is unchanged) we reuse the previous wrap.
+	version int64
 }
+
+// Version returns a counter that increments every time the View() output
+// could change.
+func (m *Model) Version() int64 { return m.version }
+
+// dirty bumps the render-version counter.
+func (m *Model) dirty() { m.version++ }
 
 func New(msgs []MessageItem, channelName string) Model {
 	selected := 0
@@ -137,13 +150,14 @@ func New(msgs []MessageItem, channelName string) Model {
 // Call this after theme changes or style updates.
 func (m *Model) InvalidateCache() {
 	m.cache = nil
-
 	m.chromeCacheValid = false
+	m.dirty()
 }
 
 func (m *Model) SetChannel(name, topic string) {
 	if m.channelName != name || m.channelTopic != topic {
 		m.chromeCacheValid = false
+		m.dirty()
 	}
 	m.channelName = name
 	m.channelTopic = topic
@@ -156,6 +170,7 @@ func (m *Model) SetMessages(msgs []MessageItem) {
 	// this, switching to a channel that happens to have the same selected
 	// index as the previous channel would leave yOffset at its old value.
 	m.hasSnapped = false
+	m.dirty()
 
 	if len(msgs) == 0 {
 		m.selected = 0
@@ -169,6 +184,7 @@ func (m *Model) AppendMessage(msg MessageItem) {
 	wasAtBottom := m.selected >= len(m.messages)-1
 	m.messages = append(m.messages, msg)
 	m.cache = nil // invalidate cache
+	m.dirty()
 
 	if wasAtBottom || len(m.messages) == 1 {
 		// Auto-scroll to the new message
@@ -197,6 +213,7 @@ func (m *Model) MoveUp() {
 	}
 	if m.selected > 0 {
 		m.selected--
+		m.dirty()
 	}
 }
 
@@ -215,6 +232,7 @@ func (m *Model) ScrollUp(n int) {
 	// alone on the next render.
 	m.snappedSelection = m.selected
 	m.hasSnapped = true
+	m.dirty()
 }
 
 // ScrollDown moves the viewport down by n lines without changing the selected
@@ -227,6 +245,7 @@ func (m *Model) ScrollDown(n int) {
 	m.yOffset += n
 	m.snappedSelection = m.selected
 	m.hasSnapped = true
+	m.dirty()
 }
 
 func (m *Model) MoveDown() {
@@ -235,6 +254,7 @@ func (m *Model) MoveDown() {
 	}
 	if m.selected < len(m.messages)-1 {
 		m.selected++
+		m.dirty()
 	}
 }
 
@@ -243,12 +263,16 @@ func (m *Model) IsAtBottom() bool {
 }
 
 func (m *Model) GoToTop() {
-	m.selected = 0
+	if m.selected != 0 {
+		m.selected = 0
+		m.dirty()
+	}
 }
 
 func (m *Model) GoToBottom() {
-	if len(m.messages) > 0 {
+	if len(m.messages) > 0 && m.selected != len(m.messages)-1 {
 		m.selected = len(m.messages) - 1
+		m.dirty()
 	}
 }
 
@@ -264,7 +288,7 @@ func (m *Model) PrependMessages(msgs []MessageItem) {
 	m.messages = append(msgs, m.messages...)
 	m.selected += count
 	m.cache = nil // invalidate cache
-
+	m.dirty()
 }
 
 func (m *Model) EnterReactionNav() {
@@ -272,15 +296,18 @@ func (m *Model) EnterReactionNav() {
 		m.reactionNavActive = true
 		m.reactionNavIndex = 0
 		m.cache = nil
-
+		m.dirty()
 	}
 }
 
 func (m *Model) ExitReactionNav() {
+	if !m.reactionNavActive && m.reactionNavIndex == 0 {
+		return
+	}
 	m.reactionNavActive = false
 	m.reactionNavIndex = 0
 	m.cache = nil
-
+	m.dirty()
 }
 
 func (m *Model) ReactionNavActive() bool {
@@ -295,7 +322,7 @@ func (m *Model) ReactionNavLeft() {
 	total := len(msg.Reactions) + 1 // +1 for [+] pill
 	m.reactionNavIndex = (m.reactionNavIndex - 1 + total) % total
 	m.cache = nil
-
+	m.dirty()
 }
 
 func (m *Model) ReactionNavRight() {
@@ -306,7 +333,7 @@ func (m *Model) ReactionNavRight() {
 	total := len(msg.Reactions) + 1
 	m.reactionNavIndex = (m.reactionNavIndex + 1) % total
 	m.cache = nil
-
+	m.dirty()
 }
 
 func (m *Model) SelectedReaction() (emoji string, isPlus bool) {
@@ -331,7 +358,7 @@ func (m *Model) ClampReactionNav() {
 		m.reactionNavIndex = total - 1
 	}
 	m.cache = nil
-
+	m.dirty()
 }
 
 // IncrementReplyCount finds a message by TS and increments its ReplyCount.
@@ -340,7 +367,7 @@ func (m *Model) IncrementReplyCount(parentTS string) {
 		if msg.TS == parentTS {
 			m.messages[i].ReplyCount++
 			m.cache = nil
-
+			m.dirty()
 			return
 		}
 	}
@@ -382,7 +409,7 @@ func (m *Model) UpdateReaction(messageTS, emojiName, userID string, remove bool)
 				}
 			}
 			m.cache = nil
-
+			m.dirty()
 			if m.reactionNavActive {
 				m.ClampReactionNav()
 			}
@@ -392,7 +419,10 @@ func (m *Model) UpdateReaction(messageTS, emojiName, userID string, remove bool)
 }
 
 func (m *Model) SetLoading(loading bool) {
-	m.loading = loading
+	if m.loading != loading {
+		m.loading = loading
+		m.dirty()
+	}
 }
 
 func (m *Model) SetAvatarFunc(fn AvatarFunc) {
@@ -411,15 +441,18 @@ func (m *Model) ResolveUserName(userID string) string {
 func (m *Model) SetUserNames(names map[string]string) {
 	m.userNames = names
 	m.cache = nil // invalidate cache so mentions re-render
-
+	m.dirty()
 }
 
 // SetLastReadTS sets the timestamp of the last read message.
 // Messages with TS > lastReadTS are considered unread.
 func (m *Model) SetLastReadTS(ts string) {
+	if m.lastReadTS == ts {
+		return
+	}
 	m.lastReadTS = ts
 	m.cache = nil // invalidate render cache
-
+	m.dirty()
 }
 
 func (m *Model) OldestTS() string {
@@ -664,7 +697,10 @@ func (m *Model) ClickAt(y int) {
 			continue
 		}
 		if absoluteY >= currentLine && absoluteY < currentLine+entry.height {
-			m.selected = entry.msgIdx
+			if m.selected != entry.msgIdx {
+				m.selected = entry.msgIdx
+				m.dirty()
+			}
 			return
 		}
 		currentLine += entry.height

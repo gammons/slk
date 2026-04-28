@@ -18,7 +18,14 @@ type WorkspaceItem struct {
 type Model struct {
 	items    []WorkspaceItem
 	selected int
+	version  int64
 }
+
+// Version returns a counter that increments any time the View() output could
+// change.
+func (m *Model) Version() int64 { return m.version }
+
+func (m *Model) dirty() { m.version++ }
 
 func New(items []WorkspaceItem, selected int) Model {
 	return Model{items: items, selected: selected}
@@ -36,8 +43,9 @@ func (m *Model) SelectedIndex() int {
 }
 
 func (m *Model) Select(idx int) {
-	if idx >= 0 && idx < len(m.items) {
+	if idx >= 0 && idx < len(m.items) && m.selected != idx {
 		m.selected = idx
+		m.dirty()
 	}
 }
 
@@ -46,12 +54,16 @@ func (m *Model) SetItems(items []WorkspaceItem) {
 	if m.selected >= len(items) {
 		m.selected = 0
 	}
+	m.dirty()
 }
 
 func (m *Model) SelectByID(teamID string) {
 	for i, item := range m.items {
 		if item.ID == teamID {
-			m.selected = i
+			if m.selected != i {
+				m.selected = i
+				m.dirty()
+			}
 			return
 		}
 	}
@@ -60,7 +72,10 @@ func (m *Model) SelectByID(teamID string) {
 func (m *Model) SetUnread(teamID string, hasUnread bool) {
 	for i := range m.items {
 		if m.items[i].ID == teamID {
-			m.items[i].HasUnread = hasUnread
+			if m.items[i].HasUnread != hasUnread {
+				m.items[i].HasUnread = hasUnread
+				m.dirty()
+			}
 			return
 		}
 	}

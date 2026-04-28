@@ -212,9 +212,17 @@ var (
 			PaddingLeft(2)
 )
 
+// version is bumped on every Apply() call. UI consumers use it to invalidate
+// any caches that depend on theme colors / styles.
+var version int64
+
+// Version returns the current theme version, incremented on every Apply call.
+func Version() int64 { return version }
+
 // Apply sets the color palette from a named theme with optional overrides,
 // then rebuilds all composed styles.
 func Apply(themeName string, overrides config.Theme) {
+	version++
 	colors := lookupTheme(themeName)
 
 	Primary = lipgloss.Color(colors.Primary)

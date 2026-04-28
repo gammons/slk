@@ -24,7 +24,14 @@ type Model struct {
 	unreadCount int
 	connState   ConnectionState
 	inThread    bool
+	version     int64
 }
+
+// Version returns a counter that increments any time the View() output could
+// change.
+func (m *Model) Version() int64 { return m.version }
+
+func (m *Model) dirty() { m.version++ }
 
 func New() Model {
 	return Model{
@@ -35,27 +42,46 @@ func New() Model {
 
 // SetMode accepts a fmt.Stringer (such as ui.Mode) to avoid circular imports.
 func (m *Model) SetMode(mode fmt.Stringer) {
-	m.mode = mode.String()
+	s := mode.String()
+	if m.mode != s {
+		m.mode = s
+		m.dirty()
+	}
 }
 
 func (m *Model) SetChannel(name string) {
-	m.channel = name
+	if m.channel != name {
+		m.channel = name
+		m.dirty()
+	}
 }
 
 func (m *Model) SetWorkspace(name string) {
-	m.workspace = name
+	if m.workspace != name {
+		m.workspace = name
+		m.dirty()
+	}
 }
 
 func (m *Model) SetUnreadCount(count int) {
-	m.unreadCount = count
+	if m.unreadCount != count {
+		m.unreadCount = count
+		m.dirty()
+	}
 }
 
 func (m *Model) SetConnectionState(state ConnectionState) {
-	m.connState = state
+	if m.connState != state {
+		m.connState = state
+		m.dirty()
+	}
 }
 
 func (m *Model) SetInThread(inThread bool) {
-	m.inThread = inThread
+	if m.inThread != inThread {
+		m.inThread = inThread
+		m.dirty()
+	}
 }
 
 func (m Model) View(width int) string {
