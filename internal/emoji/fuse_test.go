@@ -2,81 +2,50 @@ package emoji
 
 import "testing"
 
-func TestFuseModifierSequences(t *testing.T) {
+func TestStripSkinTone(t *testing.T) {
 	tests := []struct {
 		name string
 		in   string
 		want string
 	}{
-		// Empty/short — pass through.
+		// Slack-style suffix.
+		{"slack +1 tone 2", "+1::skin-tone-2", "+1"},
+		{"slack thumbsup tone 5", "thumbsup::skin-tone-5", "thumbsup"},
+		{"slack wave tone 3", "wave::skin-tone-3", "wave"},
+
+		// kyokomi-style suffix.
+		{"kyokomi thumbsup_tone1", "thumbsup_tone1", "thumbsup"},
+		{"kyokomi wave_tone3", "wave_tone3", "wave"},
+		{"kyokomi clap_tone5", "clap_tone5", "clap"},
+
+		// No skin-tone suffix — passthrough.
+		{"plain thumbsup", "thumbsup", "thumbsup"},
+		{"plain +1", "+1", "+1"},
+		{"plain wave", "wave", "wave"},
+		{"plain heart", "heart", "heart"},
 		{"empty", "", ""},
-		{"short", "ab", "ab"},
 
-		// kyokomi output for :+1::skin-tone-2: — fuse the space.
-		{
-			name: "thumbs up + skin tone 1",
-			in:   "\U0001F44D \U0001F3FB", // 👍 🏻
-			want: "\U0001F44D\U0001F3FB",   // 👍🏻
-		},
-		{
-			name: "wave + skin tone 5",
-			in:   "\U0001F44B \U0001F3FF", // 👋 🏿
-			want: "\U0001F44B\U0001F3FF",   // 👋🏿
-		},
+		// Custom emoji names that happen to look similar — must not strip.
+		{"custom_emoji_named_tone6", "anything_tone6", "anything_tone6"},   // tone6 doesn't match 1-5
+		{"custom my_tonemate", "my_tonemate", "my_tonemate"},                // doesn't match _toneN pattern exactly
+		{"name with skin-tone in middle", "skin-tone-thing", "skin-tone-thing"}, // no "::" prefix
 
-		// Trailing kyokomi padding preserved.
-		{
-			name: "thumbs up + skin tone + trailing space",
-			in:   "\U0001F44D \U0001F3FB ", // 👍 🏻 (trailing space)
-			want: "\U0001F44D\U0001F3FB ",   // 👍🏻 (trailing space kept)
-		},
+		// Edge: very short names.
+		{"single char", "a", "a"},
+		{"five chars", "abcde", "abcde"},
 
-		// Already fused — no change.
-		{
-			name: "already fused",
-			in:   "\U0001F44D\U0001F3FB",
-			want: "\U0001F44D\U0001F3FB",
-		},
+		// Slack-style as exact prefix-only is unusual; still pass through.
+		{"slack form alone", "::skin-tone-2", ""}, // base becomes empty
 
-		// Space not after an emoji — preserve.
-		{
-			name: "space then modifier alone",
-			in:   " \U0001F3FB",
-			want: " \U0001F3FB",
-		},
-		{
-			name: "ASCII char then space then modifier",
-			in:   "a \U0001F3FB",
-			want: "a \U0001F3FB",
-		},
-
-		// Pill pattern: emoji + space + modifier + space + count.
-		{
-			name: "pill with count",
-			in:   "\U0001F44D \U0001F3FB 1",
-			want: "\U0001F44D\U0001F3FB 1",
-		},
-
-		// Multiple modifier sequences in one string.
-		{
-			name: "two pills",
-			in:   "\U0001F44D \U0001F3FB 1 \U0001F44B \U0001F3FF 2",
-			want: "\U0001F44D\U0001F3FB 1 \U0001F44B\U0001F3FF 2",
-		},
-
-		// Plain text — no change.
-		{
-			name: "plain text",
-			in:   "hello world",
-			want: "hello world",
-		},
+		// Slack form first overrides if both somehow present.
+		{"both forms", "thumbsup_tone1::skin-tone-2", "thumbsup_tone1"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := FuseModifierSequences(tt.in)
+			got := StripSkinTone(tt.in)
 			if got != tt.want {
-				t.Errorf("FuseModifierSequences(%q) = %q, want %q", tt.in, got, tt.want)
+				t.Errorf("StripSkinTone(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
 	}
