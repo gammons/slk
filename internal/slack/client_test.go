@@ -24,6 +24,7 @@ func TestNewClient(t *testing.T) {
 type mockSlackAPI struct {
 	getConversationRepliesFn func(params *slack.GetConversationRepliesParameters) ([]slack.Message, bool, string, error)
 	getEmojiFn               func() (map[string]string, error)
+	getPermalinkContextFn    func(ctx context.Context, params *slack.PermalinkParameters) (string, error)
 }
 
 func (m *mockSlackAPI) GetConversations(params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
@@ -89,6 +90,13 @@ func (m *mockSlackAPI) AuthTest() (*slack.AuthTestResponse, error) {
 
 func (m *mockSlackAPI) JoinConversation(channelID string) (*slack.Channel, string, []string, error) {
 	return &slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: channelID}}}, "", nil, nil
+}
+
+func (m *mockSlackAPI) GetPermalinkContext(ctx context.Context, params *slack.PermalinkParameters) (string, error) {
+	if m.getPermalinkContextFn != nil {
+		return m.getPermalinkContextFn(ctx, params)
+	}
+	return "", nil
 }
 
 func TestSendTypingReturnsErrorWhenNotConnected(t *testing.T) {
@@ -228,5 +236,47 @@ func TestListCustomEmoji_Error(t *testing.T) {
 	}
 	if !errors.Is(err, apiErr) {
 		t.Errorf("expected wrapped apiErr, got: %v", err)
+	}
+}
+
+func TestGetPermalink(t *testing.T) {
+	wantURL := "https://example.slack.com/archives/C123/p1700000001000200"
+	var gotChannel, gotTS string
+	mock := &mockSlackAPI{
+		getPermalinkContextFn: func(ctx context.Context, params *slack.PermalinkParameters) (string, error) {
+			gotChannel = params.Channel
+			gotTS = params.Ts
+			return wantURL, nil
+		},
+	}
+	client := &Client{api: mock}
+
+	url, err := client.GetPermalink(context.Background(), "C123", "1700000001.000200")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if url != wantURL {
+		t.Errorf("url = %q, want %q", url, wantURL)
+	}
+	if gotChannel != "C123" {
+		t.Errorf("channel = %q, want %q", gotChannel, "C123")
+	}
+	if gotTS != "1700000001.000200" {
+		t.Errorf("ts = %q, want %q", gotTS, "1700000001.000200")
+	}
+}
+
+func TestGetPermalinkPropagatesError(t *testing.T) {
+	wantErr := errors.New("boom")
+	mock := &mockSlackAPI{
+		getPermalinkContextFn: func(ctx context.Context, params *slack.PermalinkParameters) (string, error) {
+			return "", wantErr
+		},
+	}
+	client := &Client{api: mock}
+
+	_, err := client.GetPermalink(context.Background(), "C123", "1.0")
+	if !errors.Is(err, wantErr) {
+		t.Errorf("err = %v, want wraps %v", err, wantErr)
 	}
 }

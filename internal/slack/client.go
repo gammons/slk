@@ -31,6 +31,7 @@ type SlackAPI interface {
 	DeleteMessage(channelID, timestamp string) (string, string, error)
 	AddReaction(name string, item slack.ItemRef) error
 	RemoveReaction(name string, item slack.ItemRef) error
+	GetPermalinkContext(ctx context.Context, params *slack.PermalinkParameters) (string, error)
 	AuthTest() (*slack.AuthTestResponse, error)
 	JoinConversation(channelID string) (*slack.Channel, string, []string, error)
 }
@@ -553,6 +554,20 @@ func (c *Client) AddReaction(ctx context.Context, channelID, ts, emoji string) e
 // RemoveReaction removes an emoji reaction from a message.
 func (c *Client) RemoveReaction(ctx context.Context, channelID, ts, emoji string) error {
 	return c.api.RemoveReaction(emoji, slack.ItemRef{Channel: channelID, Timestamp: ts})
+}
+
+// GetPermalink returns the Slack permalink for a message. For a thread reply,
+// pass the reply's ts; Slack returns a thread-aware URL with thread_ts and cid
+// query parameters.
+func (c *Client) GetPermalink(ctx context.Context, channelID, ts string) (string, error) {
+	url, err := c.api.GetPermalinkContext(ctx, &slack.PermalinkParameters{
+		Channel: channelID,
+		Ts:      ts,
+	})
+	if err != nil {
+		return "", fmt.Errorf("getting permalink: %w", err)
+	}
+	return url, nil
 }
 
 // MarkChannel marks a channel as read up to the given timestamp.
