@@ -186,9 +186,6 @@ type dragState struct {
 // terminates when the cursor leaves the edge or the drag ends.
 type autoScrollTickMsg struct{}
 
-// yankTimeoutMsg clears a pending y prefix after a short window.
-type yankTimeoutMsg struct{}
-
 // panelCache stores the fully-wrapped (border + exactSize) output of a panel
 // keyed on a tuple of inputs that affect its rendering. A cache hit returns
 // the previous frame's string verbatim; a miss recomputes and stores.
@@ -360,7 +357,6 @@ type App struct {
 
 	// Permalink copying
 	permalinkFetchFn PermalinkFetchFunc
-	pendingYank      bool // true after a single 'y' in normal mode, until the next key or timeout
 
 	// Workspace switching
 	workspaceSwitcher SwitchWorkspaceFunc
@@ -691,9 +687,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return statusbar.CopiedClearMsg{}
 		}))
 
-	case yankTimeoutMsg:
-		a.pendingYank = false
-
 	case ChannelSelectedMsg:
 		// Close thread panel when switching channels
 		a.CloseThread()
@@ -996,11 +989,6 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 		return a.handleThreadReactionNav(msg)
 	}
 
-	// Any non-y key clears a pending yank prefix.
-	if a.pendingYank && !key.Matches(msg, a.keys.Yank) {
-		a.pendingYank = false
-	}
-
 	switch {
 	case key.Matches(msg, a.keys.InsertMode):
 		a.SetMode(ModeInsert)
@@ -1096,16 +1084,6 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 
 	case key.Matches(msg, a.keys.CopyPermalink):
 		return a.copyPermalinkOfSelected()
-
-	case key.Matches(msg, a.keys.Yank):
-		if a.pendingYank {
-			a.pendingYank = false
-			return a.copyPermalinkOfSelected()
-		}
-		a.pendingYank = true
-		return tea.Tick(1*time.Second, func(time.Time) tea.Msg {
-			return yankTimeoutMsg{}
-		})
 
 	default:
 		// Number keys 1-9 switch workspaces

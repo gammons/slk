@@ -423,73 +423,34 @@ func drainForPermalinkCopied(t *testing.T, msg tea.Msg) bool {
 	return false
 }
 
-func TestYY_TriggersCopyPermalink(t *testing.T) {
+func TestCopyPermalink_ShiftYTriggersCopy(t *testing.T) {
 	app := NewApp()
 	app.activeChannelID = "C123"
 	app.focusedPanel = PanelMessages
 	app.messagepane.SetMessages([]messages.MessageItem{
-		{TS: "1.0", UserName: "alice", Text: "hi"},
+		{TS: "1700000001.000200", UserName: "alice", Text: "hi"},
 	})
+
 	called := 0
+	var gotCh, gotTS string
 	app.SetPermalinkFetcher(func(ctx context.Context, channelID, ts string) (string, error) {
 		called++
+		gotCh = channelID
+		gotTS = ts
 		return "https://example.slack.com/x", nil
 	})
 
-	// First y: arms the prefix, returns no command (or a timeout-tick).
-	cmd1 := app.handleNormalMode(tea.KeyPressMsg{Code: 'y', Text: "y"})
-	_ = cmd1
-	if called != 0 {
-		t.Fatalf("first y must not call fetcher; called=%d", called)
+	cmd := app.handleNormalMode(tea.KeyPressMsg{Code: 'Y', Text: "Y"})
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd from Y key")
 	}
-	if !app.pendingYank {
-		t.Fatal("expected pendingYank=true after first y")
+	if !drainForPermalinkCopied(t, cmd()) {
+		t.Fatal("expected PermalinkCopiedMsg in batch")
 	}
-
-	// Second y: triggers copy.
-	cmd2 := app.handleNormalMode(tea.KeyPressMsg{Code: 'y', Text: "y"})
-	if cmd2 == nil {
-		t.Fatal("expected non-nil cmd from second y")
-	}
-	_ = cmd2()
 	if called != 1 {
 		t.Fatalf("expected fetcher called once, got %d", called)
 	}
-	if app.pendingYank {
-		t.Fatal("pendingYank must be cleared after second y")
-	}
-}
-
-func TestYY_AnyOtherKeyClearsPrefix(t *testing.T) {
-	app := NewApp()
-	app.activeChannelID = "C123"
-	app.focusedPanel = PanelMessages
-	app.messagepane.SetMessages([]messages.MessageItem{
-		{TS: "1.0", UserName: "alice", Text: "hi"},
-	})
-	app.SetPermalinkFetcher(func(ctx context.Context, channelID, ts string) (string, error) {
-		t.Fatal("fetcher must not be called when prefix was broken")
-		return "", nil
-	})
-
-	// y, then j (down) — prefix should clear.
-	app.handleNormalMode(tea.KeyPressMsg{Code: 'y', Text: "y"})
-	app.handleNormalMode(tea.KeyPressMsg{Code: 'j', Text: "j"})
-	if app.pendingYank {
-		t.Fatal("pendingYank must clear after non-y key")
-	}
-	// Now a single y should re-arm but not trigger.
-	app.handleNormalMode(tea.KeyPressMsg{Code: 'y', Text: "y"})
-	if !app.pendingYank {
-		t.Fatal("expected pendingYank=true after fresh y")
-	}
-}
-
-func TestYY_TimeoutMsgClearsPrefix(t *testing.T) {
-	app := NewApp()
-	app.pendingYank = true
-	app.Update(yankTimeoutMsg{})
-	if app.pendingYank {
-		t.Fatal("yankTimeoutMsg must clear pendingYank")
+	if gotCh != "C123" || gotTS != "1700000001.000200" {
+		t.Errorf("fetcher got (%q, %q); want (\"C123\", \"1700000001.000200\")", gotCh, gotTS)
 	}
 }
