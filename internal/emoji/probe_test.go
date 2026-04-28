@@ -1,7 +1,14 @@
 package emoji
 
 import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestParseDSRResponse(t *testing.T) {
@@ -34,5 +41,109 @@ func TestParseDSRResponse(t *testing.T) {
 				t.Errorf("parseDSRResponse(%q) col = %d, want %d", tt.input, col, tt.wantCol)
 			}
 		})
+	}
+}
+
+// fakeTerminal simulates a terminal that responds to CSI 6n queries
+// with a configurable column number.
+type fakeTerminal struct {
+	mu      sync.Mutex
+	out     *bytes.Buffer  // stdin from probe's perspective (we read from this)
+	in      *bytes.Buffer  // stdout from probe's perspective (we write to this)
+	respCol map[string]int // emoji string → column to report after rendering
+	current string         // current emoji being measured
+	timeout bool           // if true, never respond to DSR
+}
+
+func newFakeTerminal(widths map[string]int) *fakeTerminal {
+	return &fakeTerminal{
+		out:     &bytes.Buffer{},
+		in:      &bytes.Buffer{},
+		respCol: widths,
+	}
+}
+
+// Write captures probe output. When CSI 6n is seen, queue a response.
+func (f *fakeTerminal) Write(p []byte) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.in.Write(p)
+	s := string(p)
+	// Detect emoji by capturing what's written between \r and CSI 6n
+	if strings.Contains(s, "\x1b[6n") {
+		// Find the most recent \r in our buffer; everything between it and \x1b[6n is the emoji
+		buf := f.in.String()
+		lastCR := strings.LastIndex(buf[:strings.LastIndex(buf, "\x1b[6n")], "\r")
+		if lastCR >= 0 {
+			f.current = buf[lastCR+1 : strings.LastIndex(buf, "\x1b[6n")]
+		}
+		if f.timeout {
+			return len(p), nil
+		}
+		col, ok := f.respCol[f.current]
+		if !ok {
+			col = 1 // unknown emoji → no advance
+		}
+		// Column = 1 + width (we start at column 1, render emoji, cursor is at 1+width)
+		fmt.Fprintf(f.out, "\x1b[1;%dR", 1+col)
+	}
+	return len(p), nil
+}
+
+func (f *fakeTerminal) Read(p []byte) (int, error) {
+	if f.timeout {
+		// Block briefly so the probe's deadline triggers
+		time.Sleep(500 * time.Millisecond)
+		return 0, io.EOF
+	}
+	// Spin briefly until data is available, since Write may happen
+	// concurrently (probe writes, then reads).
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		f.mu.Lock()
+		if f.out.Len() > 0 {
+			n, err := f.out.Read(p)
+			f.mu.Unlock()
+			return n, err
+		}
+		f.mu.Unlock()
+		if time.Now().After(deadline) {
+			return 0, io.EOF
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestProbeOne(t *testing.T) {
+	widths := map[string]int{
+		"a": 1,
+		"中": 2,
+		"👍": 2,
+		"❤": 1,
+	}
+	ft := newFakeTerminal(widths)
+
+	for emoji, want := range widths {
+		got, err := probeOne(ft, ft, emoji, 200*time.Millisecond)
+		if err != nil {
+			t.Errorf("probeOne(%q) error: %v", emoji, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("probeOne(%q) = %d, want %d", emoji, got, want)
+		}
+	}
+}
+
+func TestProbeOneTimeout(t *testing.T) {
+	ft := newFakeTerminal(nil)
+	ft.timeout = true
+
+	_, err := probeOne(ft, ft, "👍", 50*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+	if !errors.Is(err, errProbeTimeout) {
+		t.Errorf("expected errProbeTimeout, got %v", err)
 	}
 }
