@@ -161,6 +161,13 @@ func (m *Model) HandleKey(keyStr string) *ChannelResult {
 }
 
 // filter rebuilds the filtered list based on the current query.
+//
+// Matching is tiered, best-first:
+//  1. Prefix matches  (e.g. "eng" matches "engineering")
+//  2. Substring matches (e.g. "tomo" matches "ext-automote")
+//  3. Subsequence matches (e.g. "csp" matches "cs-product-triage" because
+//     c, s, p appear in order). Subsequence matches are further sorted so
+//     that tighter matches with more word-boundary hits rank higher.
 func (m *Model) filter() {
 	m.filtered = nil
 	q := strings.ToLower(m.query)
@@ -172,17 +179,95 @@ func (m *Model) filter() {
 		return
 	}
 
-	// Prefix matches first, then substring matches
+	type scored struct {
+		idx   int
+		score int // higher is better
+	}
+
 	var prefixMatches, substringMatches []int
+	var subsequenceMatches []scored
 	for i, item := range m.items {
 		name := strings.ToLower(item.Name)
-		if strings.HasPrefix(name, q) {
+		switch {
+		case strings.HasPrefix(name, q):
 			prefixMatches = append(prefixMatches, i)
-		} else if strings.Contains(name, q) {
+		case strings.Contains(name, q):
 			substringMatches = append(substringMatches, i)
+		default:
+			if score, ok := subsequenceScore(name, q); ok {
+				subsequenceMatches = append(subsequenceMatches, scored{i, score})
+			}
 		}
 	}
-	m.filtered = append(prefixMatches, substringMatches...)
+
+	// Stable sort subsequence matches by descending score so the tightest /
+	// most word-boundary-aligned matches come first.
+	for i := 1; i < len(subsequenceMatches); i++ {
+		for j := i; j > 0 && subsequenceMatches[j-1].score < subsequenceMatches[j].score; j-- {
+			subsequenceMatches[j-1], subsequenceMatches[j] = subsequenceMatches[j], subsequenceMatches[j-1]
+		}
+	}
+
+	m.filtered = append(m.filtered, prefixMatches...)
+	m.filtered = append(m.filtered, substringMatches...)
+	for _, s := range subsequenceMatches {
+		m.filtered = append(m.filtered, s.idx)
+	}
+}
+
+// subsequenceScore returns a score and true if every rune of q appears in
+// name in order. The score rewards:
+//   - matches that hit word boundaries (start of name, or after a separator
+//     like '-', '_', '.', ' ', or '/')
+//   - tighter matches (smaller span between first and last matched rune)
+//
+// Both name and q are expected to already be lowercased.
+func subsequenceScore(name, q string) (int, bool) {
+	if q == "" {
+		return 0, true
+	}
+
+	score := 0
+	qi := 0
+	qrunes := []rune(q)
+	first, last := -1, -1
+	prevWasSep := true // start of string counts as a word boundary
+	for i, r := range name {
+		if qi >= len(qrunes) {
+			break
+		}
+		if r == qrunes[qi] {
+			if first < 0 {
+				first = i
+			}
+			last = i
+			score += 10
+			if prevWasSep {
+				score += 25 // word-boundary bonus
+			}
+			qi++
+		}
+		prevWasSep = isSeparator(r)
+	}
+	if qi < len(qrunes) {
+		return 0, false
+	}
+	// Tightness bonus: the closer first and last are, the better. Cap so a
+	// pathological long name can't dominate.
+	span := last - first + 1
+	if span > 0 {
+		// Up to ~50 points for a perfectly tight match (span == len(q)).
+		score += 50 * len(qrunes) / span
+	}
+	return score, true
+}
+
+func isSeparator(r rune) bool {
+	switch r {
+	case '-', '_', '.', ' ', '/', ':':
+		return true
+	}
+	return false
 }
 
 // View renders just the overlay box.

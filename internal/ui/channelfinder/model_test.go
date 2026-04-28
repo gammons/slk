@@ -35,11 +35,15 @@ func TestFilterSubstring(t *testing.T) {
 	m.HandleKey("n")
 	m.HandleKey("g")
 
-	if len(m.filtered) != 1 {
-		t.Errorf("expected 1 match for 'eng', got %d", len(m.filtered))
+	// "engineering" is a substring (in fact prefix) match; other items like
+	// "marketing" may also subsequence-match 'e','n','g' -- but the
+	// substring/prefix hit must come first.
+	if len(m.filtered) == 0 {
+		t.Fatal("expected at least 1 match for 'eng'")
 	}
-	if m.filtered[0] != 1 {
-		t.Errorf("expected match at index 1 (engineering), got %d", m.filtered[0])
+	if m.items[m.filtered[0]].Name != "engineering" {
+		t.Errorf("expected first match to be 'engineering', got %q",
+			m.items[m.filtered[0]].Name)
 	}
 }
 
@@ -52,8 +56,14 @@ func TestFilterCaseInsensitive(t *testing.T) {
 	m.HandleKey("l")
 	m.HandleKey("i")
 
-	if len(m.filtered) != 1 {
-		t.Errorf("expected 1 match for 'Ali', got %d", len(m.filtered))
+	// "Alice" is a (case-insensitive) prefix match. Other names may also
+	// subsequence-match a,l,i -- but the prefix hit must rank first.
+	if len(m.filtered) == 0 {
+		t.Fatal("expected at least 1 match for 'Ali'")
+	}
+	if m.items[m.filtered[0]].Name != "Alice" {
+		t.Errorf("expected first match to be 'Alice', got %q",
+			m.items[m.filtered[0]].Name)
 	}
 }
 
@@ -256,6 +266,80 @@ func TestNonJoinedVisuallyDistinct(t *testing.T) {
 		if !strings.Contains(notView, "channel-name") {
 			t.Errorf("non-joined view missing channel name: %q", notView)
 		}
+	}
+}
+
+// TestFilterSubsequence verifies the fuzzy subsequence tier: characters
+// appearing in order anywhere in the channel name match, even across word
+// separators. This is what makes "csp" find "cs-product-triage".
+func TestFilterSubsequence(t *testing.T) {
+	m := New()
+	m.SetItems([]Item{
+		{ID: "C1", Name: "general", Type: "channel"},
+		{ID: "C2", Name: "cs-product-triage", Type: "channel"},
+		{ID: "C3", Name: "random", Type: "channel"},
+	})
+	m.Open()
+
+	m.HandleKey("c")
+	m.HandleKey("s")
+	m.HandleKey("p")
+
+	if len(m.filtered) == 0 {
+		t.Fatal("expected at least 1 match for 'csp'")
+	}
+	idx := m.filtered[0]
+	if m.items[idx].Name != "cs-product-triage" {
+		t.Errorf("expected first match to be 'cs-product-triage', got %q", m.items[idx].Name)
+	}
+}
+
+// TestFilterRanksPrefixOverSubsequence ensures a substring/prefix hit still
+// outranks a subsequence-only hit, so familiar searches don't regress.
+func TestFilterRanksPrefixOverSubsequence(t *testing.T) {
+	m := New()
+	m.SetItems([]Item{
+		// Subsequence match for "eng": 'e' at 0, 'n' at 4, 'g' at 6.
+		{ID: "C1", Name: "ext-engage", Type: "channel"},
+		// Prefix match.
+		{ID: "C2", Name: "engineering", Type: "channel"},
+	})
+	m.Open()
+
+	m.HandleKey("e")
+	m.HandleKey("n")
+	m.HandleKey("g")
+
+	if len(m.filtered) < 1 {
+		t.Fatal("expected matches for 'eng'")
+	}
+	if m.items[m.filtered[0]].Name != "engineering" {
+		t.Errorf("expected prefix match 'engineering' first, got %q",
+			m.items[m.filtered[0]].Name)
+	}
+}
+
+// TestFilterSubsequenceWordBoundaryRanking verifies that subsequence matches
+// hitting word boundaries rank above ones that don't.
+func TestFilterSubsequenceWordBoundaryRanking(t *testing.T) {
+	m := New()
+	m.SetItems([]Item{
+		// 'a' and 'b' both mid-word -- no boundary bonus.
+		{ID: "C1", Name: "xxaxxbxxyyy", Type: "channel"},
+		// 'a' at start, 'b' at start of second word -- two boundary hits.
+		{ID: "C2", Name: "alpha-beta", Type: "channel"},
+	})
+	m.Open()
+
+	m.HandleKey("a")
+	m.HandleKey("b")
+
+	if len(m.filtered) < 2 {
+		t.Fatalf("expected 2 subsequence matches, got %d", len(m.filtered))
+	}
+	if m.items[m.filtered[0]].Name != "alpha-beta" {
+		t.Errorf("expected 'alpha-beta' to outrank 'xxabxx-yyy', got %q first",
+			m.items[m.filtered[0]].Name)
 	}
 }
 
