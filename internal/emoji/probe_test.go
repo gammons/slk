@@ -178,18 +178,23 @@ func TestProbeAll(t *testing.T) {
 	}
 }
 
-func TestProbeAllSkipsTimeouts(t *testing.T) {
+// TestProbeAllContinuesAfterUnknown verifies that probeAll does not abort
+// when an emoji isn't present in the fake terminal's width map. The fake
+// returns column=1 (width 0) for unknown emoji, so "中" is recorded with
+// width 0 rather than skipped — but importantly the loop continues and
+// "a" still ends up in the result. The actual timeout-skip behavior is
+// covered by TestProbeOneTimeout (errProbeTimeout sentinel).
+func TestProbeAllContinuesAfterUnknown(t *testing.T) {
 	codemap := map[string]string{
 		":a:":  "a",
 		":cn:": "中",
 	}
-	// "a" succeeds, "中" times out
 	ft := newFakeTerminal(map[string]int{"a": 1})
-	// Custom: middle of probe, set timeout=true after first response
-	// For simplicity: this test just verifies missing entries are skipped, not timeout reaction
-	result, _ := probeAll(ft, ft, codemap, 100*time.Millisecond)
-	// "a" should be present; "中" may or may not be depending on fake's response for unknown
+	result, err := probeAll(ft, ft, codemap, 100*time.Millisecond)
+	if err != nil {
+		t.Fatalf("probeAll: %v", err)
+	}
 	if _, ok := result["a"]; !ok {
-		t.Error("expected 'a' in result")
+		t.Error("expected 'a' in result; loop did not continue past unknown emoji")
 	}
 }
