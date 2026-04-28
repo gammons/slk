@@ -583,11 +583,18 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		}
 
 		section := cfg.MatchSection(ch.Name)
+		var sectionOrder int
+		if section != "" {
+			if def, ok := cfg.Sections[section]; ok {
+				sectionOrder = def.Order
+			}
+		}
 		item := sidebar.ChannelItem{
-			ID:      ch.ID,
-			Name:    displayName,
-			Type:    chType,
-			Section: section,
+			ID:           ch.ID,
+			Name:         displayName,
+			Type:         chType,
+			Section:      section,
+			SectionOrder: sectionOrder,
 		}
 		if ch.IsIM {
 			item.DMUserID = ch.User

@@ -1,6 +1,7 @@
 package sidebar
 
 import (
+	"sort"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -9,15 +10,96 @@ import (
 	"github.com/muesli/reflow/truncate"
 )
 
+// Default section names used when an item has no custom Section assigned.
+// These always sort after any user-defined custom sections.
+const (
+	defaultChannelsSection = "Channels"
+	defaultDMSection       = "Direct Messages"
+)
+
 type ChannelItem struct {
-	ID          string
-	Name        string
-	Type        string // channel, dm, group_dm, private
-	Section     string // section name for grouping (e.g. "Engineering", "Starred")
-	UnreadCount int
-	IsStarred   bool
-	Presence    string // for DMs: active, away, dnd
-	DMUserID    string // for DMs: the user ID of the other party
+	ID            string
+	Name          string
+	Type          string // channel, dm, group_dm, private
+	Section       string // section name for grouping (e.g. "Engineering", "Starred")
+	SectionOrder  int    // sort order from config; lower = higher in sidebar (custom sections only)
+	UnreadCount   int
+	IsStarred     bool
+	Presence      string // for DMs: active, away, dnd
+	DMUserID      string // for DMs: the user ID of the other party
+}
+
+// sectionFor returns the section name an item belongs to, applying default
+// fallback rules for items that have no explicit Section set.
+func sectionFor(item ChannelItem) string {
+	if item.Section != "" {
+		return item.Section
+	}
+	if item.Type == "dm" || item.Type == "group_dm" {
+		return defaultDMSection
+	}
+	return defaultChannelsSection
+}
+
+// orderedSections returns the section names in display order given the
+// currently filtered items. Custom (user-defined) sections come first,
+// sorted by SectionOrder ascending then by first-appearance for ties.
+// The two built-in fallback sections ("Channels", "Direct Messages") are
+// always appended at the end in that order, so DMs are always last.
+func orderedSections(items []ChannelItem, filtered []int) []string {
+	type customInfo struct {
+		name      string
+		order     int
+		firstSeen int
+	}
+	var customs []customInfo
+	customSeen := map[string]int{} // name -> index into customs
+	hasChannels := false
+	hasDMs := false
+
+	for pos, idx := range filtered {
+		item := items[idx]
+		name := sectionFor(item)
+		switch {
+		case item.Section != "":
+			if existing, ok := customSeen[name]; ok {
+				// Prefer the smallest SectionOrder seen across items in this section.
+				if item.SectionOrder < customs[existing].order {
+					customs[existing].order = item.SectionOrder
+				}
+				continue
+			}
+			customSeen[name] = len(customs)
+			customs = append(customs, customInfo{
+				name:      name,
+				order:     item.SectionOrder,
+				firstSeen: pos,
+			})
+		case name == defaultDMSection:
+			hasDMs = true
+		default:
+			hasChannels = true
+		}
+	}
+
+	sort.SliceStable(customs, func(i, j int) bool {
+		if customs[i].order != customs[j].order {
+			return customs[i].order < customs[j].order
+		}
+		return customs[i].firstSeen < customs[j].firstSeen
+	})
+
+	out := make([]string, 0, len(customs)+2)
+	for _, c := range customs {
+		out = append(out, c.name)
+	}
+	if hasChannels {
+		out = append(out, defaultChannelsSection)
+	}
+	if hasDMs {
+		out = append(out, defaultDMSection)
+	}
+	return out
 }
 
 type Model struct {
@@ -184,6 +266,23 @@ func (m *Model) rebuildFilter() {
 			m.filtered = append(m.filtered, i)
 		}
 	}
+
+	// Sort filtered indices to match the visual section display order so that
+	// j/k navigation traverses items in the same order they're rendered.
+	// Within a section, preserve the original (Slack-provided) item order.
+	sectionOrder := orderedSections(m.items, m.filtered)
+	rank := make(map[string]int, len(sectionOrder))
+	for i, name := range sectionOrder {
+		rank[name] = i
+	}
+	sort.SliceStable(m.filtered, func(a, b int) bool {
+		ra := rank[sectionFor(m.items[m.filtered[a]])]
+		rb := rank[sectionFor(m.items[m.filtered[b]])]
+		if ra != rb {
+			return ra < rb
+		}
+		return m.filtered[a] < m.filtered[b]
+	})
 }
 
 // renderRow describes a single rendered row in the sidebar.
@@ -211,8 +310,11 @@ func (m *Model) buildCache(width int) {
 		name string
 		rows []renderRow
 	}
-	var sectionOrder []string
+	sectionOrder := orderedSections(m.items, m.filtered)
 	sectionMap := map[string]*sectionGroup{}
+	for _, name := range sectionOrder {
+		sectionMap[name] = &sectionGroup{name: name}
+	}
 
 	// Combine sidebar bg + fg so styled glyphs (private/DM prefixes, cursor,
 	// unread dots) restore both colors after their ANSI reset.
@@ -292,19 +394,7 @@ func (m *Model) buildCache(width int) {
 		rowNormal := baseStyle.Width(width - 2).Render(labelNormal)
 		rowSelected := styles.ChannelSelected.Width(width - 2).Render(labelSelected)
 
-		sectionName := item.Section
-		if sectionName == "" {
-			if item.Type == "dm" || item.Type == "group_dm" {
-				sectionName = "Direct Messages"
-			} else {
-				sectionName = "Channels"
-			}
-		}
-
-		if _, ok := sectionMap[sectionName]; !ok {
-			sectionMap[sectionName] = &sectionGroup{name: sectionName}
-			sectionOrder = append(sectionOrder, sectionName)
-		}
+		sectionName := sectionFor(item)
 		sectionMap[sectionName].rows = append(sectionMap[sectionName].rows, renderRow{
 			normal:    rowNormal,
 			selected:  rowSelected,
@@ -407,22 +497,12 @@ func (m *Model) ClickAt(y int) (ChannelItem, bool) {
 
 	// Rebuild the section structure (same logic as View) to map y to filterIdx.
 	// Each channel item = 1 line, each section header = 1 line, blank line between sections.
-	sectionOrder := []string{}
+	sectionOrder := orderedSections(m.items, m.filtered)
 	sectionMap := map[string][]int{} // section name -> list of filter indices
 
 	for fi, idx := range m.filtered {
 		item := m.items[idx]
-		sectionName := item.Section
-		if sectionName == "" {
-			if item.Type == "dm" || item.Type == "group_dm" {
-				sectionName = "Direct Messages"
-			} else {
-				sectionName = "Channels"
-			}
-		}
-		if _, ok := sectionMap[sectionName]; !ok {
-			sectionOrder = append(sectionOrder, sectionName)
-		}
+		sectionName := sectionFor(item)
 		sectionMap[sectionName] = append(sectionMap[sectionName], fi)
 	}
 
