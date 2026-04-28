@@ -79,6 +79,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "--list-workspaces":
+			if err := listWorkspaces(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
 		}
 	}
 
@@ -131,10 +137,11 @@ func printHelp() {
 	fmt.Printf(`slk %s -- a blazingly fast Slack TUI
 
 Usage:
-  slk                  Launch the TUI
-  slk --add-workspace  Add a Slack workspace (interactive)
-  slk --version        Print version and exit
-  slk --help           Show this help
+  slk                    Launch the TUI
+  slk --add-workspace    Add a Slack workspace (interactive)
+  slk --list-workspaces  List configured workspaces (TeamID, Name)
+  slk --version          Print version and exit
+  slk --help             Show this help
 
 Config:  ~/.config/slk/config.toml
 Data:    ~/.local/share/slk/
@@ -1264,4 +1271,36 @@ func (h *rtmEventHandler) OnConnect() {
 
 func (h *rtmEventHandler) OnDisconnect() {
 	h.program.Send(ui.ConnectionStateMsg{State: int(statusbar.StateDisconnected)})
+}
+
+// listWorkspaces prints the configured workspaces with their TeamID and
+// Name, one per line. Useful for users who want to hand-edit per-workspace
+// settings in config.toml.
+func listWorkspaces() error {
+	tokenDir := filepath.Join(xdgData(), "tokens")
+	store := slackclient.NewTokenStore(tokenDir)
+	tokens, err := store.List()
+	if err != nil {
+		return fmt.Errorf("list tokens: %w", err)
+	}
+	if len(tokens) == 0 {
+		fmt.Println("No workspaces configured. Run 'slk --add-workspace' first.")
+		return nil
+	}
+	// Compute column widths for tidy output.
+	idW, nameW := len("TEAM ID"), len("NAME")
+	for _, t := range tokens {
+		if len(t.TeamID) > idW {
+			idW = len(t.TeamID)
+		}
+		if len(t.TeamName) > nameW {
+			nameW = len(t.TeamName)
+		}
+	}
+	fmt.Printf("%-*s  %s\n", idW, "TEAM ID", "NAME")
+	fmt.Printf("%s  %s\n", strings.Repeat("-", idW), strings.Repeat("-", nameW))
+	for _, t := range tokens {
+		fmt.Printf("%-*s  %s\n", idW, t.TeamID, t.TeamName)
+	}
+	return nil
 }
