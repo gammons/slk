@@ -126,3 +126,83 @@ func TestSaveWorkspaceThemeMultipleWorkspaces(t *testing.T) {
 		t.Errorf("expected both themes, got:\n%s", got)
 	}
 }
+
+func TestSaveGlobalThemeIgnoresWorkspaceSection(t *testing.T) {
+	// If [workspaces.X] appears BEFORE [appearance], saveGlobalTheme must
+	// not clobber the workspace's theme line.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	initial := `# ACME
+[workspaces.T01]
+theme = "dracula"
+
+[appearance]
+theme = "dark"
+`
+	if err := os.WriteFile(path, []byte(initial), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := saveGlobalTheme(path, "tokyo night"); err != nil {
+		t.Fatalf("saveGlobalTheme: %v", err)
+	}
+
+	data, _ := os.ReadFile(path)
+	got := string(data)
+	if !strings.Contains(got, `theme = "tokyo night"`) {
+		t.Errorf("expected global theme updated, got:\n%s", got)
+	}
+	// Workspace theme must still be "dracula".
+	if !strings.Contains(got, `theme = "dracula"`) {
+		t.Errorf("workspace theme was clobbered, got:\n%s", got)
+	}
+}
+
+func TestSaveThemeEscapesQuotes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte("[appearance]\ntheme = \"dark\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Theme with embedded quote (pathological but should not corrupt TOML).
+	if err := saveGlobalTheme(path, `bad"name`); err != nil {
+		t.Fatalf("saveGlobalTheme: %v", err)
+	}
+
+	data, _ := os.ReadFile(path)
+	got := string(data)
+	// Embedded " must be escaped as \"
+	if !strings.Contains(got, `theme = "bad\"name"`) {
+		t.Errorf("expected escaped quote, got:\n%s", got)
+	}
+}
+
+func TestSaveWorkspaceThemeSanitizesTeamName(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte("[appearance]\ntheme = \"dark\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Team name with newline + control character.
+	badName := "ACME\nCorp\x07"
+	if err := saveWorkspaceTheme(path, "T01", badName, "dracula"); err != nil {
+		t.Fatalf("saveWorkspaceTheme: %v", err)
+	}
+
+	data, _ := os.ReadFile(path)
+	got := string(data)
+	// Comment must be a single line.
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, "#") {
+			if strings.Contains(line, "\n") || strings.Contains(line, "\r") {
+				t.Errorf("comment line still contains newline: %q", line)
+			}
+		}
+	}
+	// The sanitized name should still be recognizable.
+	if !strings.Contains(got, "ACME") {
+		t.Errorf("expected sanitized comment to still contain ACME, got:\n%s", got)
+	}
+}

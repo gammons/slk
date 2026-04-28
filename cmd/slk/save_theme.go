@@ -6,6 +6,51 @@ import (
 	"strings"
 )
 
+// tomlString returns s as a properly escaped TOML basic string,
+// including the surrounding quotes. Backslashes and double quotes
+// are escaped; control characters become their TOML escape forms.
+func tomlString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case '"':
+			b.WriteString(`\"`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			if r < 0x20 {
+				fmt.Fprintf(&b, `\u%04X`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+// sanitizeComment turns arbitrary text into a single-line comment-safe
+// string by replacing CR/LF and ASCII control characters with spaces.
+// The leading "# " is added by the caller.
+func sanitizeComment(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r == '\r' || r == '\n' || r < 0x20 {
+			b.WriteRune(' ')
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
 // saveGlobalTheme rewrites the [appearance] theme line in config.toml.
 // If the file has no theme line, it appends a new [appearance] section.
 // Existing comments and ordering are preserved (textual rewrite, not
@@ -17,22 +62,27 @@ func saveGlobalTheme(configPath, themeName string) error {
 	}
 	lines := strings.Split(string(data), "\n")
 
-	// Look for the first top-level `theme = ...` line. We can't
-	// distinguish [appearance] theme from [theme.colors] context here, but
-	// the existing implementation has the same limitation and it has been
-	// adequate. The Workspaces section is always written below the
-	// [appearance] block by saveWorkspaceTheme, so the first theme line
-	// will be the [appearance] one in practice.
+	// Track current section. Match a "theme = ..." line ONLY when we're
+	// currently inside the [appearance] section. This avoids clobbering
+	// per-workspace [workspaces.X] theme lines.
+	inAppearance := false
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			inAppearance = trimmed == "[appearance]"
+			continue
+		}
+		if !inAppearance {
+			continue
+		}
 		if strings.HasPrefix(trimmed, "theme") && strings.Contains(trimmed, "=") &&
 			!strings.HasPrefix(trimmed, "theme.") {
-			lines[i] = `theme = "` + themeName + `"`
+			lines[i] = "theme = " + tomlString(themeName)
 			return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
 		}
 	}
-	// No theme line found — append a new [appearance] section.
-	lines = append(lines, "", "[appearance]", `theme = "`+themeName+`"`)
+	// No [appearance] theme line found — append a new section.
+	lines = append(lines, "", "[appearance]", "theme = "+tomlString(themeName))
 	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
 }
 
@@ -73,7 +123,7 @@ func saveWorkspaceTheme(configPath, teamID, teamName, themeName string) error {
 		for j := sectionStart + 1; j < end; j++ {
 			t := strings.TrimSpace(lines[j])
 			if strings.HasPrefix(t, "theme") && strings.Contains(t, "=") {
-				lines[j] = `theme = "` + themeName + `"`
+				lines[j] = "theme = " + tomlString(themeName)
 				updated = true
 				break
 			}
@@ -82,7 +132,7 @@ func saveWorkspaceTheme(configPath, teamID, teamName, themeName string) error {
 			// Insert theme line right after the header.
 			newLines := make([]string, 0, len(lines)+1)
 			newLines = append(newLines, lines[:sectionStart+1]...)
-			newLines = append(newLines, `theme = "`+themeName+`"`)
+			newLines = append(newLines, "theme = "+tomlString(themeName))
 			newLines = append(newLines, lines[sectionStart+1:]...)
 			lines = newLines
 		}
@@ -94,10 +144,11 @@ func saveWorkspaceTheme(configPath, teamID, teamName, themeName string) error {
 	if len(lines) > 0 && lines[len(lines)-1] != "" {
 		lines = append(lines, "")
 	}
-	commentLine := "# " + teamName
-	if teamName == "" {
-		commentLine = "# " + teamID
+	safeName := sanitizeComment(teamName)
+	if safeName == "" {
+		safeName = teamID
 	}
-	lines = append(lines, commentLine, header, `theme = "`+themeName+`"`)
+	commentLine := "# " + safeName
+	lines = append(lines, commentLine, header, "theme = "+tomlString(themeName))
 	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
 }
