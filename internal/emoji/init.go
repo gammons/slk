@@ -80,7 +80,8 @@ func initWithIO(opts InitOptions, out io.Writer, in io.Reader) (bool, bool, erro
 
 	setWidthMap(widths)
 
-	// Write cache (best effort; failure is logged but not fatal).
+	// Write cache (best effort; failure is silently ignored — the probe
+	// will simply re-run on next launch).
 	c := &Cache{
 		Version:     CacheVersion,
 		Terminal:    terminalKey,
