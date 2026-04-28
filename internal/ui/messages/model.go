@@ -92,6 +92,14 @@ type Model struct {
 	// (~55% of CPU on j/k); we skip that entirely.
 	yOffset int
 
+	// snappedSelection tracks the last selection index that View() snapped
+	// yOffset to. While snappedSelection == selected, View() leaves yOffset
+	// alone -- this allows the mouse wheel (or programmatic ScrollUp/Down)
+	// to scroll freely without the next render yanking the viewport back to
+	// the selected message.
+	snappedSelection int
+	hasSnapped       bool
+
 	// Tracks the start / end line of the currently-selected entry so View()
 	// can adjust yOffset to keep it on screen.
 	selectedStartLine int
@@ -134,6 +142,10 @@ func (m *Model) SetChannel(name, topic string) {
 func (m *Model) SetMessages(msgs []MessageItem) {
 	m.messages = msgs
 	m.cache = nil // invalidate cache
+	// Force the next View() to re-snap yOffset to the new selection -- without
+	// this, switching to a channel that happens to have the same selected
+	// index as the previous channel would leave yOffset at its old value.
+	m.hasSnapped = false
 
 	if len(msgs) == 0 {
 		m.selected = 0
@@ -176,6 +188,35 @@ func (m *Model) MoveUp() {
 	if m.selected > 0 {
 		m.selected--
 	}
+}
+
+// ScrollUp moves the viewport up by n lines without changing the selected
+// message. The selection may scroll off-screen; pressing j/k will snap the
+// viewport back to keep the (new) selection visible.
+func (m *Model) ScrollUp(n int) {
+	if n <= 0 {
+		return
+	}
+	m.yOffset -= n
+	if m.yOffset < 0 {
+		m.yOffset = 0
+	}
+	// Mark the current selection as already snapped so View() leaves yOffset
+	// alone on the next render.
+	m.snappedSelection = m.selected
+	m.hasSnapped = true
+}
+
+// ScrollDown moves the viewport down by n lines without changing the selected
+// message. View() clamps yOffset to the maximum allowed for the current
+// content height.
+func (m *Model) ScrollDown(n int) {
+	if n <= 0 {
+		return
+	}
+	m.yOffset += n
+	m.snappedSelection = m.selected
+	m.hasSnapped = true
 }
 
 func (m *Model) MoveDown() {
@@ -684,12 +725,19 @@ func (m *Model) View(height, width int) string {
 		}
 	}
 
-	// Adjust yOffset to keep selection visible.
-	if m.selectedEndLine > m.yOffset+msgAreaHeight {
-		m.yOffset = m.selectedEndLine - msgAreaHeight
-	}
-	if m.selectedStartLine < m.yOffset {
-		m.yOffset = m.selectedStartLine
+	// Adjust yOffset to keep selection visible -- but only when the selection
+	// has actually changed since the last snap. This lets the mouse wheel
+	// (or programmatic ScrollUp/Down) move the viewport away from the
+	// selected message without the next render yanking it back.
+	if !m.hasSnapped || m.snappedSelection != m.selected {
+		if m.selectedEndLine > m.yOffset+msgAreaHeight {
+			m.yOffset = m.selectedEndLine - msgAreaHeight
+		}
+		if m.selectedStartLine < m.yOffset {
+			m.yOffset = m.selectedStartLine
+		}
+		m.snappedSelection = m.selected
+		m.hasSnapped = true
 	}
 	if m.yOffset < 0 {
 		m.yOffset = 0

@@ -53,3 +53,41 @@ func TestMessagePaneAppend(t *testing.T) {
 		t.Errorf("expected 1 message, got %d", len(m.Messages()))
 	}
 }
+
+// TestScrollPreservedAcrossRenders asserts that mouse-wheel-style scrolling
+// (ScrollUp / ScrollDown) is not undone by the next View() call. Without the
+// snap-decoupling logic, every render would pull yOffset back to the line
+// containing the selected message.
+func TestScrollPreservedAcrossRenders(t *testing.T) {
+	msgs := make([]MessageItem, 60)
+	for i := range msgs {
+		msgs[i] = MessageItem{
+			TS:        "1.0",
+			UserName:  "alice",
+			Text:      "msg body",
+			Timestamp: "10:00 AM",
+		}
+	}
+	m := New(msgs, "general")
+	// Render once so selection is snapped to bottom, then scroll up.
+	_ = m.View(20, 80)
+	startOffset := m.yOffset
+	m.ScrollUp(10)
+	scrolled := m.yOffset
+	if scrolled >= startOffset {
+		t.Fatalf("ScrollUp did not decrease yOffset: before=%d after=%d", startOffset, scrolled)
+	}
+
+	// Render again WITHOUT changing selection. yOffset must NOT snap back.
+	_ = m.View(20, 80)
+	if m.yOffset != scrolled {
+		t.Errorf("yOffset snapped back after render: want %d, got %d", scrolled, m.yOffset)
+	}
+
+	// Now move selection -- yOffset should re-snap to keep selection visible.
+	m.MoveUp()
+	_ = m.View(20, 80)
+	if m.yOffset == scrolled {
+		t.Error("expected yOffset to re-snap after selection change, but it did not")
+	}
+}

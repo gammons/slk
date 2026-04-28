@@ -229,6 +229,10 @@ type App struct {
 	layoutSidebarEnd   int // railWidth + sidebarWidth + sidebarBorder
 	layoutMsgEnd       int // layoutSidebarEnd + msgWidth + msgBorder
 	layoutThreadEnd    int // layoutMsgEnd + threadWidth + threadBorder
+	// Cached pane content heights, used for page-up/down distance calculations.
+	layoutMsgHeight     int
+	layoutSidebarHeight int
+	layoutThreadHeight  int
 
 	// Current context
 	activeChannelID string
@@ -340,6 +344,50 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := a.handleKey(msg)
 		if cmd != nil {
 			cmds = append(cmds, cmd)
+		}
+
+	case tea.MouseWheelMsg:
+		if a.loading {
+			break
+		}
+		// Translate the wheel direction into a scroll delta. Three lines per
+		// wheel notch matches typical terminal-emulator behavior.
+		const wheelLines = 3
+		dir := 0
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			dir = -wheelLines
+		case tea.MouseWheelDown:
+			dir = wheelLines
+		default:
+			break
+		}
+		if dir == 0 {
+			break
+		}
+		x := msg.X
+		switch {
+		case x < a.layoutRailWidth:
+			// Workspace rail: nothing scrollable yet.
+		case a.sidebarVisible && x < a.layoutSidebarEnd:
+			if dir < 0 {
+				a.sidebar.ScrollUp(-dir)
+			} else {
+				a.sidebar.ScrollDown(dir)
+			}
+		case x < a.layoutMsgEnd:
+			if dir < 0 {
+				a.messagepane.ScrollUp(-dir)
+			} else {
+				a.messagepane.ScrollDown(dir)
+			}
+		case a.threadVisible && x < a.layoutThreadEnd:
+			// Thread panel: scroll if it exposes the methods.
+			if dir < 0 {
+				a.threadPanel.ScrollUp(-dir)
+			} else {
+				a.threadPanel.ScrollDown(dir)
+			}
 		}
 
 	case tea.MouseClickMsg:
@@ -711,6 +759,18 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 
 	case key.Matches(msg, a.keys.Bottom):
 		a.handleGoToBottom()
+
+	case key.Matches(msg, a.keys.PageUp):
+		a.scrollFocusedPanel(-a.pageSize())
+
+	case key.Matches(msg, a.keys.PageDown):
+		a.scrollFocusedPanel(a.pageSize())
+
+	case key.Matches(msg, a.keys.HalfPageUp):
+		a.scrollFocusedPanel(-a.halfPageSize())
+
+	case key.Matches(msg, a.keys.HalfPageDown):
+		a.scrollFocusedPanel(a.halfPageSize())
 
 	case key.Matches(msg, a.keys.WorkspaceFinder):
 		a.workspaceFinder.Open()
@@ -1231,6 +1291,62 @@ func (a *App) handleGoToBottom() {
 		a.messagepane.GoToBottom()
 	case PanelThread:
 		a.threadPanel.GoToBottom()
+	}
+}
+
+// pageSize returns the number of lines to scroll for a full-page jump in the
+// currently-focused panel. Falls back to a sensible default if the layout
+// hasn't been measured yet (i.e. before the first render).
+func (a *App) pageSize() int {
+	var h int
+	switch a.focusedPanel {
+	case PanelSidebar:
+		h = a.layoutSidebarHeight
+	case PanelMessages:
+		h = a.layoutMsgHeight
+	case PanelThread:
+		h = a.layoutThreadHeight
+	}
+	if h < 4 {
+		h = 4
+	}
+	// Leave one line of context across the page boundary (vim-style).
+	return h - 1
+}
+
+// halfPageSize returns the half-page scroll distance for ctrl+u / ctrl+d.
+func (a *App) halfPageSize() int {
+	n := a.pageSize() / 2
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// scrollFocusedPanel scrolls the focused panel by delta lines (negative = up).
+func (a *App) scrollFocusedPanel(delta int) {
+	if delta == 0 {
+		return
+	}
+	switch a.focusedPanel {
+	case PanelSidebar:
+		if delta < 0 {
+			a.sidebar.ScrollUp(-delta)
+		} else {
+			a.sidebar.ScrollDown(delta)
+		}
+	case PanelMessages:
+		if delta < 0 {
+			a.messagepane.ScrollUp(-delta)
+		} else {
+			a.messagepane.ScrollDown(delta)
+		}
+	case PanelThread:
+		if delta < 0 {
+			a.threadPanel.ScrollUp(-delta)
+		} else {
+			a.threadPanel.ScrollDown(delta)
+		}
 	}
 }
 
@@ -1766,6 +1882,7 @@ func (a *App) View() tea.View {
 		sidebarView := a.sidebar.View(contentHeight-2, sidebarWidth)
 		sidebarView = borderStyle.Render(sidebarView)
 		panels = append(panels, exactSize(sidebarView, sidebarWidth+sidebarBorder, contentHeight))
+		a.layoutSidebarHeight = contentHeight - 2
 	}
 
 	// Render message pane with border
@@ -1790,6 +1907,7 @@ func (a *App) View() tea.View {
 		typingHeight = 1
 	}
 	msgContentHeight := contentHeight - 2 - composeHeight - typingHeight
+	a.layoutMsgHeight = msgContentHeight
 	if msgContentHeight < 3 {
 		msgContentHeight = 3
 	}
@@ -1825,6 +1943,7 @@ func (a *App) View() tea.View {
 		threadComposeView = threadComposeSpacer + "\n" + threadComposeView
 		threadComposeHeight := lipgloss.Height(threadComposeView)
 		threadContentHeight := contentHeight - 2 - threadComposeHeight
+		a.layoutThreadHeight = threadContentHeight
 		if threadContentHeight < 3 {
 			threadContentHeight = 3
 		}

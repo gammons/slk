@@ -27,6 +27,12 @@ type Model struct {
 	filter   string
 	filtered []int // indices into items that match filter
 
+	// snappedSelection lets View() avoid snapping yOffset back to the selected
+	// row on every render. While snappedSelection == selected, mouse-wheel /
+	// programmatic scrolls (ScrollUp/ScrollDown) are preserved.
+	snappedSelection int
+	hasSnapped       bool
+
 	// Render cache. cacheRows holds the pre-rendered (normal / selected) string
 	// variants for every visible row including section headers and inter-section
 	// blanks. Each row is exactly one rendered line, so we can build the visible
@@ -83,6 +89,25 @@ func (m *Model) MoveDown() {
 func (m *Model) MoveUp() {
 	if m.selected > 0 {
 		m.selected--
+	}
+}
+
+// ScrollUp moves the viewport up by n rows without changing the selection.
+func (m *Model) ScrollUp(n int) {
+	if n <= 0 {
+		return
+	}
+	m.yOffset -= n
+	if m.yOffset < 0 {
+		m.yOffset = 0
+	}
+}
+
+// ScrollDown moves the viewport down by n rows. The next View() clamps to the
+// max valid offset for the current content height.
+func (m *Model) ScrollDown(n int) {
+	if n > 0 {
+		m.yOffset += n
 	}
 }
 
@@ -323,14 +348,18 @@ func (m *Model) View(height, width int) string {
 		}
 	}
 
-	// Adjust yOffset to keep the selected row visible.
-	if selectedLine >= 0 {
+	// Snap yOffset to keep the selected row visible only when the selection
+	// has actually changed since the last snap. This preserves mouse-wheel /
+	// programmatic scroll positions across renders.
+	if selectedLine >= 0 && (!m.hasSnapped || m.snappedSelection != m.selected) {
 		if selectedLine >= m.yOffset+height {
 			m.yOffset = selectedLine - height + 1
 		}
 		if selectedLine < m.yOffset {
 			m.yOffset = selectedLine
 		}
+		m.snappedSelection = m.selected
+		m.hasSnapped = true
 	}
 	if m.yOffset < 0 {
 		m.yOffset = 0

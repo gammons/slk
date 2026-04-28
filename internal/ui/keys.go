@@ -21,6 +21,10 @@ type KeyMap struct {
 	FuzzyFinderAlt  key.Binding
 	Top             key.Binding
 	Bottom          key.Binding
+	PageUp          key.Binding
+	PageDown        key.Binding
+	HalfPageUp      key.Binding
+	HalfPageDown    key.Binding
 	Quit            key.Binding
 	Reaction        key.Binding
 	ReactionNav     key.Binding
@@ -49,6 +53,10 @@ func DefaultKeyMap() KeyMap {
 		FuzzyFinderAlt:  key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "fuzzy find")),
 		Top:             key.NewBinding(key.WithKeys("g"), key.WithHelp("gg", "top")),
 		Bottom:          key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
+		PageUp:          key.NewBinding(key.WithKeys("pgup"), key.WithHelp("PgUp", "page up")),
+		PageDown:        key.NewBinding(key.WithKeys("pgdown"), key.WithHelp("PgDn", "page down")),
+		HalfPageUp:      key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("ctrl+u", "half page up")),
+		HalfPageDown:    key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("ctrl+d", "half page down")),
 		Quit:            key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 		Reaction:        key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "add reaction")),
 		ReactionNav:     key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "navigate reactions")),

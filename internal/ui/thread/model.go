@@ -144,6 +144,22 @@ func (m *Model) SelectedReply() *messages.MessageItem {
 }
 
 // MoveUp moves the selection cursor up one reply.
+// ScrollUp scrolls the thread viewport up by n lines without changing the
+// selected reply.
+func (m *Model) ScrollUp(n int) {
+	if n > 0 {
+		m.vp.ScrollUp(n)
+	}
+}
+
+// ScrollDown scrolls the thread viewport down by n lines without changing the
+// selected reply.
+func (m *Model) ScrollDown(n int) {
+	if n > 0 {
+		m.vp.ScrollDown(n)
+	}
+}
+
 func (m *Model) MoveUp() {
 	if m.reactionNavActive {
 		m.ExitReactionNav()
