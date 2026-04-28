@@ -30,6 +30,13 @@ import (
 	"github.com/slack-go/slack"
 )
 
+// Build-time version info, injected via -ldflags by GoReleaser.
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 // UnresolvedDM tracks a DM channel whose user name wasn't in the initial user list.
 type UnresolvedDM struct {
 	ChannelID string
@@ -56,13 +63,22 @@ type WorkspaceContext struct {
 }
 
 func main() {
-	// Handle --add-workspace before anything else
-	if len(os.Args) > 1 && os.Args[1] == "--add-workspace" {
-		if err := addWorkspace(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
+	// Handle simple flags before anything else
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "--version", "-v", "version":
+			fmt.Printf("slk %s (commit %s, built %s)\n", version, commit, date)
+			return
+		case "--help", "-h", "help":
+			printHelp()
+			return
+		case "--add-workspace":
+			if err := addWorkspace(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		}
-		return
 	}
 
 	// Emoji width probing: parse flags and call Init before bubbletea starts.
@@ -108,6 +124,23 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func printHelp() {
+	fmt.Printf(`slk %s -- a blazingly fast Slack TUI
+
+Usage:
+  slk                  Launch the TUI
+  slk --add-workspace  Add a Slack workspace (interactive)
+  slk --version        Print version and exit
+  slk --help           Show this help
+
+Config:  ~/.config/slk/config.toml
+Data:    ~/.local/share/slk/
+Cache:   ~/.cache/slk/
+
+Docs:    https://github.com/gammons/slk
+`, version)
 }
 
 func run() error {

@@ -1,0 +1,161 @@
+# GoReleaser config for slk
+# Docs: https://goreleaser.com
+version: 2
+
+project_name: slk
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: slk
+    main: ./cmd/slk
+    binary: slk
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      # Windows on arm64 is rare and not worth the matrix slot for a TUI
+      - goos: windows
+        goarch: arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: slk
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  groups:
+    - title: Features
+      regexp: "^.*feat[(\\w)]*:+.*$"
+      order: 0
+    - title: Bug fixes
+      regexp: "^.*fix[(\\w)]*:+.*$"
+      order: 1
+    - title: Performance
+      regexp: "^.*perf[(\\w)]*:+.*$"
+      order: 2
+    - title: Other
+      order: 999
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "Merge pull request"
+      - "Merge branch"
+
+nfpms:
+  - id: slk
+    package_name: slk
+    vendor: Grant Ammons
+    homepage: https://github.com/gammons/slk
+    maintainer: Grant Ammons <grant@grant.dev>
+    description: |-
+      A blazingly fast Slack TUI.
+      Keyboard-driven, beautifully themed terminal client for Slack.
+    license: MIT
+    formats:
+      - deb
+      - rpm
+      - apk
+    bindir: /usr/bin
+    section: net
+    contents:
+      - src: ./LICENSE
+        dst: /usr/share/doc/slk/LICENSE
+      - src: ./README.md
+        dst: /usr/share/doc/slk/README.md
+
+release:
+  github:
+    owner: gammons
+    name: slk
+  draft: false
+  prerelease: auto
+  mode: replace
+  header: |
+    ## slk {{ .Tag }}
+
+    A blazingly fast Slack TUI. Keyboard-driven, beautifully themed, under 20MB.
+  footer: |
+    ---
+    **Install**
+
+    - **Linux/macOS:** download the appropriate `.tar.gz`, extract, and place `slk` in your `$PATH`
+    - **Debian/Ubuntu:** `sudo dpkg -i slk_*.deb`
+    - **Fedora/RHEL:** `sudo rpm -i slk_*.rpm`
+    - **Alpine:** `sudo apk add --allow-untrusted slk_*.apk`
+    - **Windows:** download the `.zip`, extract `slk.exe`, add to `PATH`
+    - **Go:** `go install github.com/gammons/slk/cmd/slk@{{ .Tag }}`
+
+    Verify downloads with `checksums.txt`.
+
+# Homebrew tap -- enable after creating the `gammons/homebrew-tap` repo
+# and adding a HOMEBREW_TAP_GITHUB_TOKEN secret (PAT with `repo` scope).
+#
+# brews:
+#   - name: slk
+#     repository:
+#       owner: gammons
+#       name: homebrew-tap
+#       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+#     directory: Formula
+#     homepage: https://github.com/gammons/slk
+#     description: A blazingly fast Slack TUI
+#     license: MIT
+#     test: |
+#       system "#{bin}/slk", "--version"
+#     install: |
+#       bin.install "slk"
+
+# AUR -- enable after creating an SSH key for AUR and adding AUR_KEY secret.
+# Publishes a `slk-bin` package built from prebuilt linux_amd64 archives.
+#
+# aurs:
+#   - name: slk-bin
+#     homepage: https://github.com/gammons/slk
+#     description: A blazingly fast Slack TUI
+#     maintainers:
+#       - "Grant Ammons <grant@grant.dev>"
+#     license: MIT
+#     private_key: "{{ .Env.AUR_KEY }}"
+#     git_url: "ssh://aur@aur.archlinux.org/slk-bin.git"
+#     package: |-
+#       install -Dm755 "./slk" "${pkgdir}/usr/bin/slk"
+#       install -Dm644 "./LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+#       install -Dm644 "./README.md" "${pkgdir}/usr/share/doc/${pkgname}/README.md"

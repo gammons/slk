@@ -1,4 +1,5 @@
 bin/
+dist/
 *.db
 *.db-journal
 .superpowers/
