@@ -23,6 +23,7 @@ func TestNewClient(t *testing.T) {
 // Function fields allow tests to override default behavior.
 type mockSlackAPI struct {
 	getConversationRepliesFn func(params *slack.GetConversationRepliesParameters) ([]slack.Message, bool, string, error)
+	getEmojiFn               func() (map[string]string, error)
 }
 
 func (m *mockSlackAPI) GetConversations(params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
@@ -52,6 +53,13 @@ func (m *mockSlackAPI) GetUserInfo(user string) (*slack.User, error) {
 }
 
 func (m *mockSlackAPI) GetUsersContext(ctx context.Context, options ...slack.GetUsersOption) ([]slack.User, error) {
+	return nil, nil
+}
+
+func (m *mockSlackAPI) GetEmoji() (map[string]string, error) {
+	if m.getEmojiFn != nil {
+		return m.getEmojiFn()
+	}
 	return nil, nil
 }
 
@@ -176,5 +184,49 @@ func TestGetReplies_Error(t *testing.T) {
 	expectedMsg := "getting thread replies: slack API unavailable"
 	if err.Error() != expectedMsg {
 		t.Errorf("error message = %q, want %q", err.Error(), expectedMsg)
+	}
+}
+
+func TestListCustomEmoji(t *testing.T) {
+	mock := &mockSlackAPI{
+		getEmojiFn: func() (map[string]string, error) {
+			return map[string]string{
+				"partyparrot":  "https://emoji.slack-edge.com/T1/partyparrot/abc.gif",
+				"thumbsup_alt": "alias:thumbsup",
+			}, nil
+		},
+	}
+	client := &Client{api: mock}
+
+	got, err := client.ListCustomEmoji(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 emojis, got %d", len(got))
+	}
+	if got["partyparrot"] != "https://emoji.slack-edge.com/T1/partyparrot/abc.gif" {
+		t.Errorf("partyparrot URL wrong: %q", got["partyparrot"])
+	}
+	if got["thumbsup_alt"] != "alias:thumbsup" {
+		t.Errorf("thumbsup_alt alias wrong: %q", got["thumbsup_alt"])
+	}
+}
+
+func TestListCustomEmoji_Error(t *testing.T) {
+	apiErr := errors.New("slack API unavailable")
+	mock := &mockSlackAPI{
+		getEmojiFn: func() (map[string]string, error) {
+			return nil, apiErr
+		},
+	}
+	client := &Client{api: mock}
+
+	_, err := client.ListCustomEmoji(context.Background())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, apiErr) {
+		t.Errorf("expected wrapped apiErr, got: %v", err)
 	}
 }

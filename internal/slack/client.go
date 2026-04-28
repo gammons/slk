@@ -25,6 +25,7 @@ type SlackAPI interface {
 	GetConversationReplies(params *slack.GetConversationRepliesParameters) ([]slack.Message, bool, string, error)
 	GetUsersContext(ctx context.Context, options ...slack.GetUsersOption) ([]slack.User, error)
 	GetUserInfo(user string) (*slack.User, error)
+	GetEmoji() (map[string]string, error)
 	PostMessage(channelID string, options ...slack.MsgOption) (string, string, error)
 	UpdateMessage(channelID, timestamp string, options ...slack.MsgOption) (string, string, string, error)
 	DeleteMessage(channelID, timestamp string) (string, string, error)
@@ -361,6 +362,20 @@ func (c *Client) GetUsers(ctx context.Context) ([]slack.User, error) {
 		return nil, fmt.Errorf("getting users: %w", err)
 	}
 	return users, nil
+}
+
+// ListCustomEmoji fetches the workspace's custom emoji list via Slack's
+// emoji.list API. Returns a map of emoji name -> URL or "alias:targetname".
+// The map is empty if the workspace has no custom emojis.
+func (c *Client) ListCustomEmoji(ctx context.Context) (map[string]string, error) {
+	emojis, err := c.api.GetEmoji()
+	if err != nil {
+		return nil, fmt.Errorf("listing custom emoji: %w", err)
+	}
+	if emojis == nil {
+		emojis = map[string]string{}
+	}
+	return emojis, nil
 }
 
 // SendMessage posts a new message to the specified channel.
