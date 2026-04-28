@@ -52,6 +52,7 @@ type WorkspaceContext struct {
 	TeamName      string
 	UserID        string
 	UnresolvedDMs []UnresolvedDM
+	CustomEmoji   map[string]string // emoji name -> URL or "alias:target"
 }
 
 func main() {
@@ -395,6 +396,7 @@ func run() error {
 			FinderItems: wctx.FinderItems,
 			UserNames:   wctx.UserNames,
 			UserID:      wctx.UserID,
+			CustomEmoji: wctx.CustomEmoji,
 		}
 	})
 
@@ -456,6 +458,7 @@ func run() error {
 				FinderItems: wctx.FinderItems,
 				UserNames:   wctx.UserNames,
 				UserID:      wctx.UserID,
+				CustomEmoji: wctx.CustomEmoji,
 			})
 
 			// Background fetch of all public channels so the finder can show
@@ -505,6 +508,7 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		UserID:      client.UserID(),
 		UserNames:   make(map[string]string),
 		LastReadMap: make(map[string]string),
+		CustomEmoji: make(map[string]string),
 	}
 
 	// Seed user names from cache (fast, local)
@@ -542,6 +546,16 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 			})
 			avatarCache.Preload(u.ID, u.Profile.Image32)
 		}
+	}()
+
+	// Background custom-emoji fetch. Best-effort: failure leaves the picker
+	// using built-ins only.
+	go func() {
+		emojis, err := client.ListCustomEmoji(ctx)
+		if err != nil {
+			return
+		}
+		wctx.CustomEmoji = emojis
 	}()
 
 	// Fetch channels
