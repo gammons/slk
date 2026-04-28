@@ -4,3 +4,4 @@ dist/
 *.db-journal
 .superpowers/
 .env
+.worktrees/
