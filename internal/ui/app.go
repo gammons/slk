@@ -104,6 +104,7 @@ type (
 	WorkspaceSwitchedMsg struct {
 		TeamID      string
 		TeamName    string
+		Theme       string // resolved theme name (per-workspace or global default)
 		Channels    []sidebar.ChannelItem
 		FinderItems []channelfinder.Item
 		UserNames   map[string]string
@@ -792,6 +793,17 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.SetCustomEmoji(msg.CustomEmoji)
 		a.currentUserID = msg.UserID
 		a.activeTeamID = msg.TeamID
+		// Apply per-workspace theme. Must run on Update goroutine so the
+		// component cache invalidations and compose-style refreshes below
+		// take effect on the next render.
+		if msg.Theme != "" {
+			styles.Apply(msg.Theme, a.themeOverrides)
+			a.messagepane.InvalidateCache()
+			a.threadPanel.InvalidateCache()
+			a.sidebar.InvalidateCache()
+			a.compose.RefreshStyles()
+			a.threadCompose.RefreshStyles()
+		}
 		a.workspaceRail.SelectByID(msg.TeamID)
 		// Load first channel
 		if len(msg.Channels) > 0 {
@@ -1293,7 +1305,7 @@ func (a *App) handleThemeSwitcherMode(msg tea.KeyMsg) tea.Cmd {
 		a.threadCompose.RefreshStyles()
 		// Save selection
 		if a.themeSaveFn != nil {
-			go a.themeSaveFn(result.Name, result.Scope)
+			a.themeSaveFn(result.Name, result.Scope)
 		}
 		return nil
 	}

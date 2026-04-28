@@ -431,15 +431,13 @@ func run() error {
 		// Update active pointer
 		activeTeamID = teamID
 
-		// Apply this workspace's theme (or fall back to global / dark).
-		styles.Apply(cfg.ResolveTheme(teamID), cfg.Theme)
-
 		// Re-wire all callbacks to the new workspace's client
 		wireCallbacks(wctx)
 
 		return ui.WorkspaceSwitchedMsg{
 			TeamID:      wctx.TeamID,
 			TeamName:    wctx.TeamName,
+			Theme:       cfg.ResolveTheme(teamID),
 			Channels:    wctx.Channels,
 			FinderItems: wctx.FinderItems,
 			UserNames:   wctx.UserNames,
