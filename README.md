@@ -92,15 +92,70 @@ slk is intentionally not a 1:1 port of the desktop client. Some Slack features a
 
 ## Install
 
-### Prerequisites
-- Go 1.22+
-- A Slack workspace you can log into in a browser
+Grab a prebuilt binary from the [latest release](https://github.com/gammons/slk/releases/latest), or use one of the methods below.
+
+### Linux
+
+**Debian / Ubuntu:**
+```bash
+curl -sSLO https://github.com/gammons/slk/releases/latest/download/slk_0.1.0_linux_amd64.deb
+sudo dpkg -i slk_0.1.0_linux_amd64.deb
+```
+
+**Fedora / RHEL:**
+```bash
+sudo rpm -i https://github.com/gammons/slk/releases/latest/download/slk_0.1.0_linux_amd64.rpm
+```
+
+**Alpine:**
+```bash
+curl -sSLO https://github.com/gammons/slk/releases/latest/download/slk_0.1.0_linux_amd64.apk
+sudo apk add --allow-untrusted slk_0.1.0_linux_amd64.apk
+```
+
+**Tarball (any distro, amd64 or arm64):**
+```bash
+curl -sSL https://github.com/gammons/slk/releases/latest/download/slk_0.1.0_linux_x86_64.tar.gz | tar xz
+sudo mv slk /usr/local/bin/
+```
+
+### macOS
+
+```bash
+# Apple Silicon
+curl -sSL https://github.com/gammons/slk/releases/latest/download/slk_0.1.0_darwin_arm64.tar.gz | tar xz
+# Intel
+curl -sSL https://github.com/gammons/slk/releases/latest/download/slk_0.1.0_darwin_x86_64.tar.gz | tar xz
+
+sudo mv slk /usr/local/bin/
+```
+
+### Windows
+
+Download [`slk_0.1.0_windows_x86_64.zip`](https://github.com/gammons/slk/releases/latest), extract `slk.exe`, and add it to your `PATH`.
+
+### Go
+
+```bash
+go install github.com/gammons/slk/cmd/slk@latest
+```
 
 ### Build from source
+
+Requires Go 1.22+.
+
 ```bash
-make build
+git clone https://github.com/gammons/slk.git
+cd slk
+make build       # binary at bin/slk
 ```
-The binary is written to `bin/slk`.
+
+### Verify your download
+
+```bash
+curl -sSLO https://github.com/gammons/slk/releases/latest/download/checksums.txt
+sha256sum -c checksums.txt --ignore-missing
+```
 
 ## Setup
 
