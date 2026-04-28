@@ -2,6 +2,7 @@
 package ui
 
 import (
+	"context"
 	"image/color"
 	"log"
 	"time"
@@ -259,6 +260,10 @@ type ThreadReplySendFunc func(channelID, threadTS, text string) tea.Msg
 
 type ReactionAddFunc func(channelID, messageTS, emoji string) error
 type ReactionRemoveFunc func(channelID, messageTS, emoji string) error
+
+// PermalinkFetchFunc is called to fetch the Slack permalink for a message.
+// For thread replies, pass the reply's ts; Slack returns a thread-aware URL.
+type PermalinkFetchFunc func(ctx context.Context, channelID, ts string) (string, error)
 type FrecentLoadFunc func(limit int) []reactionpicker.EmojiEntry
 type FrecentRecordFunc func(emoji string)
 
@@ -349,6 +354,9 @@ type App struct {
 	frecentLoadFn    FrecentLoadFunc
 	frecentRecordFn  FrecentRecordFunc
 	currentUserID    string
+
+	// Permalink copying
+	permalinkFetchFn PermalinkFetchFunc
 
 	// Workspace switching
 	workspaceSwitcher SwitchWorkspaceFunc
@@ -1969,6 +1977,12 @@ func (a *App) SetInitialChannel(channelID, channelName string, msgs []messages.M
 func (a *App) SetReactionSender(add ReactionAddFunc, remove ReactionRemoveFunc) {
 	a.reactionAddFn = add
 	a.reactionRemoveFn = remove
+}
+
+// SetPermalinkFetcher sets the callback used to look up message permalinks
+// for the copy-permalink action.
+func (a *App) SetPermalinkFetcher(fn PermalinkFetchFunc) {
+	a.permalinkFetchFn = fn
 }
 
 func (a *App) SetCurrentUserID(userID string) {
