@@ -82,8 +82,13 @@ func LoadCache(path string) (*Cache, error) {
 	return &c, nil
 }
 
-// codemapHash produces a stable hex hash of a name→unicode emoji map.
-// The hash is order-independent so it's stable across Go map iteration.
+// codemapHash produces a stable hex hash of the inputs that affect the
+// probe set: the kyokomi codemap plus our curated extras list. The hash
+// is order-independent for the codemap (stable across Go map iteration)
+// and includes the extras in their declared order.
+//
+// When either input changes, the hash changes, invalidating the cache
+// so a fresh probe runs and picks up the new entries.
 func codemapHash(m map[string]string) string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -96,6 +101,12 @@ func codemapHash(m map[string]string) string {
 		h.Write([]byte(k))
 		h.Write([]byte{0})
 		h.Write([]byte(m[k]))
+		h.Write([]byte{0})
+	}
+	// Include the extras list so changes to it invalidate stale caches.
+	h.Write([]byte("extras\x00"))
+	for _, e := range extraProbeChars {
+		h.Write([]byte(e))
 		h.Write([]byte{0})
 	}
 	return hex.EncodeToString(h.Sum(nil))

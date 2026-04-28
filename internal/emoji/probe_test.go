@@ -170,9 +170,10 @@ func TestProbeAll(t *testing.T) {
 		t.Fatalf("probeAll: %v", err)
 	}
 
-	if len(result) != 3 {
-		t.Errorf("expected 3 entries, got %d", len(result))
-	}
+	// probeAll also probes extraProbeChars. The fake terminal returns
+	// width 0 (col=1) for unknown emoji so those entries appear in the
+	// result with width 0 — that's fine. We just need the codemap
+	// entries to be present with correct widths.
 	for _, emoji := range []string{"a", "中", "👍"} {
 		if got, ok := result[emoji]; !ok {
 			t.Errorf("missing entry for %q", emoji)

@@ -237,5 +237,21 @@ func probeAll(out io.Writer, in io.Reader, codemap map[string]string, perProbeTi
 		}
 		result[emoji] = width
 	}
+
+	// Also probe a curated list of extra characters that aren't in the
+	// kyokomi codemap but are commonly used as reactions or appear in
+	// message text (stars, hearts, arrows, misc symbols).
+	for _, emoji := range extraProbeChars {
+		if seen[emoji] {
+			continue
+		}
+		seen[emoji] = true
+		width, err := probeOne(out, br, emoji, perProbeTimeout)
+		if err != nil {
+			continue
+		}
+		result[emoji] = width
+	}
+
 	return result, nil
 }
