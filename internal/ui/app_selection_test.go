@@ -191,3 +191,42 @@ func TestApp_AutoScrollStopsWhenCursorLeavesEdge(t *testing.T) {
 		}
 	}
 }
+
+func TestApp_FocusNextClearsSelection(t *testing.T) {
+	a := newTestAppWithMessages(t)
+	pressX := a.layoutSidebarEnd + 2
+	_, _ = a.Update(tea.MouseClickMsg{X: pressX, Y: 2, Button: tea.MouseLeft})
+	_, _ = a.Update(tea.MouseMotionMsg{X: pressX + 5, Y: 2, Button: tea.MouseLeft})
+	if !a.messagepane.HasSelection() {
+		t.Fatal("precondition: should have selection")
+	}
+	a.FocusNext()
+	if a.messagepane.HasSelection() {
+		t.Fatal("FocusNext must clear selection")
+	}
+}
+
+func TestApp_SetModeInsertClearsSelection(t *testing.T) {
+	a := newTestAppWithMessages(t)
+	pressX := a.layoutSidebarEnd + 2
+	_, _ = a.Update(tea.MouseClickMsg{X: pressX, Y: 2, Button: tea.MouseLeft})
+	_, _ = a.Update(tea.MouseMotionMsg{X: pressX + 5, Y: 2, Button: tea.MouseLeft})
+	if !a.messagepane.HasSelection() {
+		t.Fatal("precondition: should have selection")
+	}
+	a.SetMode(ModeInsert)
+	if a.messagepane.HasSelection() {
+		t.Fatal("entering insert mode must clear selection")
+	}
+}
+
+func TestApp_ToggleSidebarClearsSelection(t *testing.T) {
+	a := newTestAppWithMessages(t)
+	pressX := a.layoutSidebarEnd + 2
+	_, _ = a.Update(tea.MouseClickMsg{X: pressX, Y: 2, Button: tea.MouseLeft})
+	_, _ = a.Update(tea.MouseMotionMsg{X: pressX + 5, Y: 2, Button: tea.MouseLeft})
+	a.ToggleSidebar()
+	if a.messagepane.HasSelection() {
+		t.Fatal("ToggleSidebar must clear selection")
+	}
+}

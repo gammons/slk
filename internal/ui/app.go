@@ -665,6 +665,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ChannelSelectedMsg:
 		// Close thread panel when switching channels
 		a.CloseThread()
+		a.clearSelections()
 		a.activeChannelID = msg.ID
 		a.lastTypingSent = time.Time{} // reset typing throttle for new channel
 		a.messagepane.SetChannel(msg.Name, "")
@@ -776,6 +777,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case WorkspaceSwitchedMsg:
 		a.CloseThread()
+		a.clearSelections()
 		a.compose.Reset()
 		a.messagepane.SetMessages(nil)
 		a.SetMode(ModeNormal)
@@ -1664,11 +1666,24 @@ func (a *App) handleEnter() tea.Cmd {
 }
 
 func (a *App) SetMode(mode Mode) {
+	if mode == ModeInsert {
+		a.clearSelections()
+	}
 	a.mode = mode
 	a.statusbar.SetMode(mode)
 }
 
+// clearSelections drops any active mouse selection from both message
+// and thread panes. Called from any handler that changes focus, mode,
+// or visible content in a way that makes the existing selection
+// nonsensical (workspace switch, mode change, focus cycle, etc.).
+func (a *App) clearSelections() {
+	a.messagepane.ClearSelection()
+	a.threadPanel.ClearSelection()
+}
+
 func (a *App) FocusNext() {
+	a.clearSelections()
 	if !a.sidebarVisible {
 		if a.threadVisible {
 			if a.focusedPanel == PanelMessages {
@@ -1694,6 +1709,7 @@ func (a *App) FocusNext() {
 }
 
 func (a *App) FocusPrev() {
+	a.clearSelections()
 	if !a.sidebarVisible {
 		if a.threadVisible {
 			if a.focusedPanel == PanelThread {
@@ -1719,6 +1735,7 @@ func (a *App) FocusPrev() {
 }
 
 func (a *App) ToggleSidebar() {
+	a.clearSelections()
 	a.sidebarVisible = !a.sidebarVisible
 	if !a.sidebarVisible && a.focusedPanel == PanelSidebar {
 		a.focusedPanel = PanelMessages
@@ -1726,6 +1743,7 @@ func (a *App) ToggleSidebar() {
 }
 
 func (a *App) ToggleThread() {
+	a.clearSelections()
 	if a.threadVisible {
 		a.CloseThread()
 	}
@@ -1733,6 +1751,7 @@ func (a *App) ToggleThread() {
 }
 
 func (a *App) CloseThread() {
+	a.clearSelections()
 	a.threadVisible = false
 	a.statusbar.SetInThread(false)
 	a.threadPanel.Clear()
