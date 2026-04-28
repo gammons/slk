@@ -10,7 +10,7 @@
 ## Why slk?
 
 - **Fast.** Cold start in milliseconds. Render-cached messages. SQLite-backed scrollback. Real-time over WebSocket.
-- **Tiny.** A single ~19MB static binary. No node_modules, no Chromium, no 800MB RAM tax.
+- **Tiny.** ~19 MB on disk. ~60 MB RSS for a live multi-workspace session — vs. 500 MB–1.5 GB for the official client. No node_modules, no Chromium, no 800 MB RAM tax.
 - **Keyboard-first.** Vim-style modal editing. `j/k`, `h/l`, `i`, `Esc` — exactly what your fingers expect.
 - **Pretty.** 12 built-in themes, lipgloss-styled panels, half-block pixel-art avatars, emoji shortcodes, day separators, and pill-style reactions.
 - **Multi-workspace.** All your workspaces stay connected in parallel. `1`–`9` to jump between them, with live unread badges in the rail.
