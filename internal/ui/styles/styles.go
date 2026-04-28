@@ -29,6 +29,12 @@ var (
 	SidebarTextMuted  color.Color = lipgloss.Color("#888888")
 	RailBackground    color.Color = lipgloss.Color("#0F0F23")
 
+	// Selection highlight. Apply() either copies the theme's values or
+	// derives a sensible default (Primary as bg, Background as fg) so
+	// SelectionStyle() always produces visible highlight on any theme.
+	SelectionBackground color.Color
+	SelectionForeground color.Color
+
 	// Panel styles
 	FocusedBorder = lipgloss.NewStyle().
 			BorderStyle(lipgloss.ThickBorder()).
@@ -293,6 +299,21 @@ func Apply(themeName string, overrides config.Theme) {
 		RailBackground = SurfaceDark
 	}
 
+	if colors.SelectionBackground != "" {
+		SelectionBackground = lipgloss.Color(colors.SelectionBackground)
+	} else {
+		// Default: Primary as the highlight bg gives readable contrast on
+		// every built-in theme.
+		SelectionBackground = Primary
+	}
+	if colors.SelectionForeground != "" {
+		SelectionForeground = lipgloss.Color(colors.SelectionForeground)
+	} else {
+		// Default: theme background — paired with Primary bg this produces
+		// the inverse of the theme's normal text rendering.
+		SelectionForeground = Background
+	}
+
 	buildStyles()
 }
 
@@ -358,4 +379,14 @@ func buildStyles() {
 		Background(Background).Foreground(Error).Bold(true).Align(lipgloss.Center)
 	TypingIndicator = lipgloss.NewStyle().
 		Background(Background).Foreground(TextMuted).Italic(true).PaddingLeft(2)
+}
+
+// SelectionStyle returns the lipgloss style used to highlight selected
+// message text. Apply() always populates SelectionBackground and
+// SelectionForeground (deriving sensible defaults when a theme omits
+// them), so callers can use this without further nil-checking.
+func SelectionStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Background(SelectionBackground).
+		Foreground(SelectionForeground)
 }

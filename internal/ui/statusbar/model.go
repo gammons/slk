@@ -24,6 +24,7 @@ type Model struct {
 	unreadCount int
 	connState   ConnectionState
 	inThread    bool
+	copiedChars int // 0 == no toast; >0 == "Copied N chars"
 	version     int64
 }
 
@@ -84,6 +85,27 @@ func (m *Model) SetInThread(inThread bool) {
 	}
 }
 
+// ShowCopied displays a "Copied N chars" toast on the right side of the
+// status bar. Callers are responsible for clearing it (typically via a
+// tea.Tick that delivers CopiedClearMsg).
+func (m *Model) ShowCopied(n int) {
+	if n <= 0 {
+		return
+	}
+	if m.copiedChars != n {
+		m.copiedChars = n
+		m.dirty()
+	}
+}
+
+// ClearCopied removes the copy toast.
+func (m *Model) ClearCopied() {
+	if m.copiedChars != 0 {
+		m.copiedChars = 0
+		m.dirty()
+	}
+}
+
 func (m Model) View(width int) string {
 	// Mode indicator
 	var modeStyle lipgloss.Style
@@ -113,6 +135,15 @@ func (m Model) View(width int) string {
 	if m.unreadCount > 0 {
 		rightParts = append(rightParts,
 			styles.UnreadBadge.Render(fmt.Sprintf(" %d unread ", m.unreadCount)))
+	}
+
+	if m.copiedChars > 0 {
+		rightParts = append(rightParts,
+			lipgloss.NewStyle().
+				Foreground(styles.Accent).
+				Background(styles.SurfaceDark).
+				Bold(true).
+				Render(fmt.Sprintf("Copied %d chars", m.copiedChars)))
 	}
 
 	switch m.connState {
@@ -147,3 +178,13 @@ func (m Model) View(width int) string {
 
 	return lipgloss.JoinHorizontal(lipgloss.Center, left, filler, rightContent)
 }
+
+// CopiedMsg is delivered when the messages or thread pane copies a
+// selection to the clipboard. App handles it by calling ShowCopied and
+// scheduling a ClearCopied after a short delay.
+type CopiedMsg struct {
+	N int
+}
+
+// CopiedClearMsg is the follow-up tick that clears the toast.
+type CopiedClearMsg struct{}

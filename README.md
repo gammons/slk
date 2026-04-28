@@ -28,11 +28,13 @@
 - Mark-as-read synced to Slack on channel entry
 - Edited / threaded message indicators
 - ANSI-aware wrapping and truncation (no broken color codes mid-line)
+- Drag-to-copy: drag the mouse across messages to highlight them; release to copy plain text to the system clipboard via OSC 52
 
 ### Compose
 - Multi-line input, `Shift+Enter` for newlines
 - Inline `@mention` autocomplete (resolves to `<@UserID>` on send)
 - Special mentions: `@here`, `@channel`, `@everyone`
+- Bracketed paste — paste multi-line text from the system clipboard without it being interpreted as keystrokes
 
 ### Threads
 - Side panel (35% width), opened with `Enter`, toggled with `Ctrl+]`
@@ -310,6 +312,22 @@ Data Layer             SQLite cache · TOML config · token storage
 - muesli/reflow everywhere for ANSI-correct wrapping and truncation
 
 See [`docs/superpowers/specs/`](docs/superpowers/specs/) for design specs and [`docs/STATUS.md`](docs/STATUS.md) for the live implementation status.
+
+## Clipboard / OSC 52 caveats
+
+slk writes the system clipboard via the OSC 52 escape. Most modern
+terminal emulators (alacritty, kitty, wezterm, foot, iterm2, recent
+gnome-terminal) accept these writes by default. A few need explicit
+opt-in:
+
+- **tmux:** `set -g set-clipboard on` in your tmux config.
+- **screen:** has no working OSC 52 path; consider switching to tmux.
+- **kitty (older versions):** `clipboard_control write-clipboard` in
+  `kitty.conf`.
+
+If `Copied N chars` shows in the status bar but nothing lands in your
+clipboard, your terminal is silently dropping the OSC 52 write. There
+is no reliable round-trip to detect this from inside slk.
 
 ## License
 
