@@ -94,3 +94,45 @@ func TestModel_ClearCopiedIsIdempotent(t *testing.T) {
 		t.Fatal("ClearCopied with no toast must not bump version")
 	}
 }
+
+func TestModel_SetToastShowsArbitraryString(t *testing.T) {
+	m := New()
+	m.SetToast("Copied permalink")
+	out := m.View(80)
+	if !strings.Contains(out, "Copied permalink") {
+		t.Fatalf("expected toast string in view; got %q", out)
+	}
+}
+
+func TestModel_SetToastEmptyClears(t *testing.T) {
+	m := New()
+	m.SetToast("hello")
+	m.SetToast("")
+	out := m.View(80)
+	if strings.Contains(out, "hello") {
+		t.Fatalf("expected toast cleared after SetToast(\"\"); got %q", out)
+	}
+}
+
+func TestModel_SetToastBumpsVersionOnChange(t *testing.T) {
+	m := New()
+	v0 := m.Version()
+	m.SetToast("a")
+	if m.Version() == v0 {
+		t.Fatal("SetToast must bump Version() on change")
+	}
+	v1 := m.Version()
+	m.SetToast("a")
+	if m.Version() != v1 {
+		t.Fatal("SetToast with same value must be a no-op")
+	}
+}
+
+func TestModel_ShowCopiedStillRendersCopiedNChars(t *testing.T) {
+	// Backwards-compat: existing CopiedMsg path.
+	m := New()
+	m.ShowCopied(13)
+	if !strings.Contains(m.View(80), "Copied 13 chars") {
+		t.Fatalf("expected legacy 'Copied N chars' toast; got %q", m.View(80))
+	}
+}

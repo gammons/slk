@@ -24,7 +24,7 @@ type Model struct {
 	unreadCount int
 	connState   ConnectionState
 	inThread    bool
-	copiedChars int // 0 == no toast; >0 == "Copied N chars"
+	toast       string // "" == no toast; otherwise rendered verbatim in the right slot
 	version     int64
 }
 
@@ -85,25 +85,28 @@ func (m *Model) SetInThread(inThread bool) {
 	}
 }
 
-// ShowCopied displays a "Copied N chars" toast on the right side of the
-// status bar. Callers are responsible for clearing it (typically via a
+// SetToast displays an arbitrary string in the right-side toast slot. Pass ""
+// to clear. Callers are responsible for clearing the toast (typically via a
 // tea.Tick that delivers CopiedClearMsg).
-func (m *Model) ShowCopied(n int) {
-	if n <= 0 {
-		return
-	}
-	if m.copiedChars != n {
-		m.copiedChars = n
+func (m *Model) SetToast(s string) {
+	if m.toast != s {
+		m.toast = s
 		m.dirty()
 	}
 }
 
-// ClearCopied removes the copy toast.
-func (m *Model) ClearCopied() {
-	if m.copiedChars != 0 {
-		m.copiedChars = 0
-		m.dirty()
+// ShowCopied is a backwards-compatible shim that sets the toast to
+// "Copied N chars". Pass 0 for a no-op.
+func (m *Model) ShowCopied(n int) {
+	if n <= 0 {
+		return
 	}
+	m.SetToast(fmt.Sprintf("Copied %d chars", n))
+}
+
+// ClearCopied removes any toast.
+func (m *Model) ClearCopied() {
+	m.SetToast("")
 }
 
 func (m Model) View(width int) string {
@@ -137,13 +140,13 @@ func (m Model) View(width int) string {
 			styles.UnreadBadge.Render(fmt.Sprintf(" %d unread ", m.unreadCount)))
 	}
 
-	if m.copiedChars > 0 {
+	if m.toast != "" {
 		rightParts = append(rightParts,
 			lipgloss.NewStyle().
 				Foreground(styles.Accent).
 				Background(styles.SurfaceDark).
 				Bold(true).
-				Render(fmt.Sprintf("Copied %d chars", m.copiedChars)))
+				Render(m.toast))
 	}
 
 	switch m.connState {
@@ -188,3 +191,13 @@ type CopiedMsg struct {
 
 // CopiedClearMsg is the follow-up tick that clears the toast.
 type CopiedClearMsg struct{}
+
+// PermalinkCopiedMsg is delivered when a message permalink has been copied to
+// the clipboard. App handles it by setting the toast to "Copied permalink"
+// and scheduling a CopiedClearMsg.
+type PermalinkCopiedMsg struct{}
+
+// PermalinkCopyFailedMsg is delivered when fetching the permalink fails.
+// App handles it by setting the toast to "Failed to copy link" and
+// scheduling a CopiedClearMsg.
+type PermalinkCopyFailedMsg struct{}
