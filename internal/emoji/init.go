@@ -7,6 +7,7 @@ import (
 	"time"
 
 	emojilib "github.com/kyokomi/emoji/v2"
+	"golang.org/x/term"
 )
 
 // InitOptions configures the Init function.
@@ -37,6 +38,19 @@ type InitOptions struct {
 // On any error, Width() falls back to lipgloss.Width(). The error is
 // returned for logging but does not prevent the app from running.
 func Init(opts InitOptions) error {
+	// If we'll need to probe, put the terminal in raw mode for the duration.
+	// We don't know whether the probe is needed without consulting the cache,
+	// but raw mode is harmless if no probe runs (we'll restore on return).
+	if !opts.SkipProbe {
+		fd := int(os.Stdin.Fd())
+		if term.IsTerminal(fd) {
+			st, err := term.MakeRaw(fd)
+			if err == nil {
+				defer term.Restore(fd, st)
+			}
+		}
+	}
+
 	_, _, err := initWithIO(opts, os.Stdout, os.Stdin)
 	return err
 }

@@ -16,6 +16,7 @@ require (
 	github.com/rivo/uniseg v0.4.7
 	github.com/slack-go/slack v0.23.0
 	golang.org/x/image v0.39.0
+	golang.org/x/term v0.42.0
 	modernc.org/sqlite v1.49.1
 )
 
