@@ -10,6 +10,11 @@ import (
 
 var errProbeTimeout = errors.New("probe timed out waiting for DSR response")
 
+// maxPlausibleEmojiWidth bounds rendered widths we accept from the
+// terminal. Real emoji never exceed 2 cells; we allow 4 as a generous
+// margin for terminal quirks.
+const maxPlausibleEmojiWidth = 4
+
 // parseDSRResponse parses a Device Status Report response of the form
 // "\x1b[<row>;<col>R" and returns the column number (1-indexed).
 // Returns an error if the response is malformed or column is < 1.
@@ -39,7 +44,7 @@ func parseDSRResponse(b []byte) (int, error) {
 	colStr := string(b[semi+1 : len(b)-1])
 	col, err := strconv.Atoi(colStr)
 	if err != nil {
-		return 0, errors.New("invalid column: " + err.Error())
+		return 0, fmt.Errorf("invalid column: %w", err)
 	}
 	if col < 1 {
 		return 0, errors.New("column must be >= 1")
@@ -82,43 +87,68 @@ func probeOne(out io.Writer, in io.Reader, emoji string, timeout time.Duration) 
 		return 0, perr
 	}
 	width := col - 1
-	if width < 0 || width > 4 {
-		return 0, errors.New("implausible width: " + strconv.Itoa(width))
+	if width < 0 || width > maxPlausibleEmojiWidth {
+		return 0, fmt.Errorf("implausible width: %d", width)
 	}
 	return width, nil
 }
 
 // readDSRResponse reads bytes from r until 'R' is seen or timeout elapses.
+//
+// Concurrency model: each iteration spawns a single-shot reader goroutine
+// that reads exactly one byte. On the success path (byte arrives before
+// the deadline), the goroutine sends its result and exits — no leaked
+// goroutines. On timeout, the inner goroutine is still blocked in
+// r.Read; we use a per-iteration done channel to ensure it can exit
+// cleanly when its byte eventually arrives instead of writing to a
+// stale results channel. Each goroutine owns its own one-byte buffer,
+// so a leaked goroutine cannot race with subsequent reads.
+//
+// Real-terminal caveat: with a raw-mode os.Stdin (no read deadline),
+// a leaked goroutine from a timed-out probe will still consume the
+// next byte that arrives — which may be a delayed DSR response from
+// the prior query. Callers that probe repeatedly should consider
+// draining stdin before the next probe.
 func readDSRResponse(r io.Reader, timeout time.Duration) ([]byte, error) {
+	type readResult struct {
+		b   byte
+		err error
+	}
+
 	deadline := time.Now().Add(timeout)
 	var buf []byte
-	one := make([]byte, 1)
 
 	for time.Now().Before(deadline) {
-		// Use a goroutine + channel for non-blocking-ish read
-		readCh := make(chan struct {
-			n   int
-			err error
-		}, 1)
+		done := make(chan struct{})
+		results := make(chan readResult, 1)
 		go func() {
+			one := make([]byte, 1)
 			n, err := r.Read(one)
-			readCh <- struct {
-				n   int
-				err error
-			}{n, err}
+			res := readResult{err: err}
+			if n > 0 {
+				res.b = one[0]
+				res.err = nil
+			}
+			select {
+			case results <- res:
+			case <-done:
+			}
 		}()
 
 		remaining := time.Until(deadline)
 		select {
-		case res := <-readCh:
-			if res.err != nil && res.n == 0 {
+		case res := <-results:
+			if res.err != nil {
+				close(done)
 				return buf, res.err
 			}
-			buf = append(buf, one[0])
-			if one[0] == 'R' {
+			buf = append(buf, res.b)
+			close(done)
+			if res.b == 'R' {
 				return buf, nil
 			}
 		case <-time.After(remaining):
+			close(done)
 			return buf, errProbeTimeout
 		}
 	}
