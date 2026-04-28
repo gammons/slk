@@ -54,6 +54,12 @@ func IsCalibrated() bool {
 }
 
 // setWidthMap installs a new width map. Used by Init() and tests.
+//
+// IMPORTANT: The caller must not mutate m after passing it here. Width()
+// uses a snapshot pattern (acquire RLock, copy map header, release lock,
+// then dereference) which is only safe when installed maps are treated
+// as immutable. Replace the map by calling setWidthMap again with a new
+// instance rather than mutating the existing map.
 func setWidthMap(m map[string]int) {
 	widthMu.Lock()
 	defer widthMu.Unlock()
