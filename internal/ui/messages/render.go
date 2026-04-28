@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/kyokomi/emoji/v2"
+	"github.com/rivo/uniseg"
 )
 
 var (
@@ -405,4 +406,110 @@ func renderInlineFormatting(text string, userNames map[string]string) string {
 	text = emoji.Sprint(text)
 
 	return text
+}
+
+// plainLine pairs an ANSI-stripped line with a column→byte index. Bytes
+// has length `displayWidth + 1`; for each visible column c in
+// [0, displayWidth), Bytes[c] is the byte offset in Text where the
+// grapheme cluster occupying column c starts. Bytes[displayWidth] is
+// always len(Text) — a sentinel for clean slicing.
+//
+// Slicing columns [from, to) is `Text[Bytes[from]:Bytes[to]]`. This
+// preserves multi-rune clusters (ZWJ sequences, skin-tone modifiers,
+// variation selectors) intact so clipboard text reads as written.
+//
+// Wide clusters (W>1) span multiple columns whose Bytes entries point
+// at the SAME starting byte offset. Slicing into the middle of a wide
+// cluster simply slices to the end of the cluster's columns; the
+// resulting bytes never split a cluster.
+//
+// Zero-width clusters (combining marks, ZWJ joiners as standalone
+// clusters) are appended to Text but do not consume a column. Their
+// bytes attach to whatever column comes next (or to the column before
+// when they trail a base cluster, since the next Bytes[] entry already
+// points past them).
+type plainLine struct {
+	Text  string
+	Bytes []int
+}
+
+// plainLines returns column-aligned plain mirrors of each line in s.
+// See `plainLine` for the shape and slicing contract.
+//
+// Width measurement uses uniseg.Graphemes.Width() — the same model
+// (wcwidth-style cell counting) that drives the rest of the messages
+// pipeline. Custom emoji whose actual terminal width disagrees with
+// uniseg's reported width may be off by one column; that's acceptable
+// for selection: the worst case is a one-cell drift between the
+// visible highlight and the underlying text, never a crash.
+func plainLines(s string) []plainLine {
+	stripped := ansi.Strip(s)
+	rawLines := strings.Split(stripped, "\n")
+	out := make([]plainLine, len(rawLines))
+	for i, line := range rawLines {
+		out[i] = buildPlainLine(line)
+	}
+	return out
+}
+
+// buildPlainLine walks the grapheme clusters of `line` and constructs
+// the (Text, Bytes) pair. Text is line itself (already ANSI-stripped);
+// we only need to compute the column→byte map.
+func buildPlainLine(line string) plainLine {
+	if line == "" {
+		return plainLine{Text: "", Bytes: []int{0}}
+	}
+	g := uniseg.NewGraphemes(line)
+	bytesMap := make([]int, 0, len(line))
+	byteOffset := 0
+	for g.Next() {
+		cluster := g.Str()
+		w := g.Width()
+		if w <= 0 {
+			// Zero-width cluster: bytes go into Text but no column is
+			// produced. The byte offset advances; the next W>0 cluster
+			// will record its starting byte at the post-advanced offset
+			// (so leading combining marks attach to the next column,
+			// and trailing combining marks attach to the previous one
+			// because the next Bytes[] entry already points past them).
+			byteOffset += len(cluster)
+			continue
+		}
+		// Wide cluster spans w columns, all pointing at the same byte
+		// offset (the start of this cluster).
+		for k := 0; k < w; k++ {
+			bytesMap = append(bytesMap, byteOffset)
+		}
+		byteOffset += len(cluster)
+	}
+	// Final sentinel: byte offset just past everything in `line`.
+	bytesMap = append(bytesMap, len(line))
+	return plainLine{Text: line, Bytes: bytesMap}
+}
+
+// displayWidthOfPlain returns the display column count of a plainLine.
+func displayWidthOfPlain(p plainLine) int {
+	if len(p.Bytes) == 0 {
+		return 0
+	}
+	return len(p.Bytes) - 1
+}
+
+// sliceColumns returns the substring covering display columns [from, to)
+// of a plainLine. Out-of-range arguments are clamped. Slicing into the
+// middle of a wide cluster includes the entire cluster (because the
+// columns share a byte offset); this is by design — clipboard text
+// reads as written.
+func sliceColumns(p plainLine, from, to int) string {
+	width := displayWidthOfPlain(p)
+	if from < 0 {
+		from = 0
+	}
+	if to > width {
+		to = width
+	}
+	if from >= to {
+		return ""
+	}
+	return p.Text[p.Bytes[from]:p.Bytes[to]]
 }

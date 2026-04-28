@@ -51,6 +51,12 @@ type ReactionItem struct {
 // in View(): no lipgloss calls per keypress, just string concatenation.
 //
 // For separators (msgIdx == -1) only `content` is populated.
+//
+// linesPlain is a column-aligned, ANSI-stripped mirror of linesNormal used
+// by the selection layer to extract clipboard text and check column
+// membership. Each entry pairs the line's plain text with a column→byte
+// index (preserving multi-rune grapheme clusters intact); see plainLine
+// and sliceColumns in render.go for the slicing contract.
 type viewEntry struct {
 	// linesNormal / linesSelected hold the entry's rendered lines pre-split on
 	// "\n" so View() can append them directly into the visible window without
@@ -58,8 +64,9 @@ type viewEntry struct {
 	// For separator entries (msgIdx == -1) the two slices are identical.
 	linesNormal   []string
 	linesSelected []string
-	height        int // == len(linesNormal); cached for scroll math
-	msgIdx        int // index into messages, or -1 for separator
+	linesPlain    []plainLine // column-aligned mirror of linesNormal
+	height        int         // == len(linesNormal); cached for scroll math
+	msgIdx        int         // index into messages, or -1 for separator
 }
 
 type Model struct {
@@ -491,6 +498,7 @@ func (m *Model) buildCache(width int) {
 		m.cache = append(m.cache, viewEntry{
 			linesNormal:   lines,
 			linesSelected: lines,
+			linesPlain:    plainLines(rendered),
 			height:        len(lines),
 			msgIdx:        -1,
 		})
@@ -531,15 +539,21 @@ func (m *Model) buildCache(width int) {
 
 		linesN := strings.Split(normal, "\n")
 		linesS := strings.Split(selected, "\n")
+		linesP := plainLines(normal)
 		// Append a trailing spacer line after every message except the last.
 		// Both variants share the same spacer (it has no border styling).
+		// The plain mirror of the spacer is the empty string -- selection
+		// extraction trims trailing whitespace, and no real content lives
+		// in the spacer row.
 		if i < len(m.messages)-1 {
 			linesN = append(linesN, spacerLines...)
 			linesS = append(linesS, spacerLines...)
+			linesP = append(linesP, plainLine{Text: "", Bytes: []int{0}})
 		}
 		m.cache = append(m.cache, viewEntry{
 			linesNormal:   linesN,
 			linesSelected: linesS,
+			linesPlain:    linesP,
 			height:        len(linesN),
 			msgIdx:        i,
 		})
