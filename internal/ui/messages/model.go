@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	emojiutil "github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/selection"
 	"github.com/gammons/slk/internal/ui/styles"
@@ -1163,14 +1164,119 @@ func (m *Model) View(height, width int) string {
 	}
 
 	// Scroll indicators replace the first / last line when applicable.
+	// Track which rows were overridden so the selection overlay knows to
+	// leave them alone -- otherwise the overlay would re-compose the
+	// indicator line using the underlying message's plain text and
+	// corrupt the indicator.
+	overrodeFirst := false
+	overrodeLast := false
 	if m.loading && len(visible) > 0 {
 		visible[0] = m.cacheLoadingHint
+		overrodeFirst = true
 	}
 	if m.yOffset+msgAreaHeight < m.totalLines && len(visible) > 0 {
 		visible[len(visible)-1] = m.cacheMoreBelow
+		overrodeLast = true
+	}
+
+	if m.hasSelection {
+		visible = m.applySelectionOverlay(visible, overrodeFirst, overrodeLast)
 	}
 
 	return chrome + "\n" + strings.Join(visible, "\n")
+}
+
+// applySelectionOverlay re-composes lines that intersect the active
+// selection range. linesNormal supplies the original styled prefix and
+// suffix; the selected interior is rendered through styles.SelectionStyle
+// over the plain-text segment so the highlight is uniform.
+//
+// visible is mutated in place when possible. The selection's plain
+// columns are translated to display columns by adding the entry's
+// contentColOffset.
+//
+// skipFirst / skipLast tell the overlay to leave row 0 / row N-1 alone
+// when those rows have been replaced with scroll indicators (loading
+// hint, "more below"). Without this guard the overlay would re-compose
+// the indicator line from the underlying entry's plain text, corrupting
+// the indicator.
+func (m *Model) applySelectionOverlay(visible []string, skipFirst, skipLast bool) []string {
+	loA, hiA := m.selRange.Normalize()
+	loLine, loCol, ok1 := m.resolveAnchor(loA)
+	hiLine, hiCol, ok2 := m.resolveAnchor(hiA)
+	if !ok1 || !ok2 {
+		return visible
+	}
+	if loLine > hiLine || (loLine == hiLine && loCol >= hiCol) {
+		return visible
+	}
+
+	selStyle := styles.SelectionStyle()
+
+	for row := 0; row < len(visible); row++ {
+		if (row == 0 && skipFirst) || (row == len(visible)-1 && skipLast) {
+			continue
+		}
+		absLine := m.yOffset + row
+		if absLine < loLine || absLine > hiLine {
+			continue
+		}
+		// Find the entry covering this absolute line.
+		entryIdx := -1
+		for i := range m.cache {
+			start := m.entryOffsets[i]
+			if absLine >= start && absLine < start+m.cache[i].height {
+				entryIdx = i
+				break
+			}
+		}
+		if entryIdx < 0 {
+			continue
+		}
+		e := m.cache[entryIdx]
+		j := absLine - m.entryOffsets[entryIdx]
+		if j < 0 || j >= len(e.linesPlain) {
+			continue
+		}
+		plain := e.linesPlain[j]
+		styled := visible[row]
+
+		// from / to are PLAIN columns. They become display columns by
+		// adding contentColOffset.
+		from := 0
+		to := displayWidthOfPlain(plain)
+		if absLine == loLine {
+			from = loCol
+		}
+		if absLine == hiLine {
+			to = hiCol
+		}
+		if from < 0 {
+			from = 0
+		}
+		if to > displayWidthOfPlain(plain) {
+			to = displayWidthOfPlain(plain)
+		}
+		if from >= to {
+			continue
+		}
+		// Translate to display columns.
+		dispFrom := from + e.contentColOffset
+		dispTo := to + e.contentColOffset
+
+		styledWidth := ansi.StringWidth(styled)
+		if dispFrom >= styledWidth {
+			continue
+		}
+		if dispTo > styledWidth {
+			dispTo = styledWidth
+		}
+		prefix := ansi.Cut(styled, 0, dispFrom)
+		suffix := ansi.Cut(styled, dispTo, styledWidth)
+		seg := sliceColumns(plain, from, to)
+		visible[row] = prefix + selStyle.Render(seg) + suffix
+	}
+	return visible
 }
 
 func dateFromTS(ts string) string {

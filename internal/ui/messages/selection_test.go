@@ -1,6 +1,7 @@
 package messages
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -180,5 +181,121 @@ func TestSelection_DeletedMessageCollapsesToEmpty(t *testing.T) {
 	// SetMessages drops a message.
 	if _, _, ok := m.resolveAnchor(selection.Anchor{MessageID: "nonexistent.0"}); ok {
 		t.Fatal("resolveAnchor must return ok=false for unknown MessageID")
+	}
+}
+
+func TestSelection_ViewIncludesHighlight(t *testing.T) {
+	m := newTestModel(60)
+	// Begin and extend on the FIRST message's content (avoid the date
+	// separator at line 0 — clicking there snaps to msg1.line0 already
+	// but to be unambiguous, click below it).
+	// Cache layout: [date_separator, msg1+spacer, msg2]. msg1 starts at line 1.
+	m.BeginSelectionAt(1, 5)
+	m.ExtendSelectionAt(1, 15)
+	out := m.View(40, 60)
+	m.ClearSelection()
+	out2 := m.View(40, 60)
+	if out == out2 {
+		t.Fatal("View output unchanged with active selection — highlight not applied")
+	}
+}
+
+func TestSelection_HighlightDoesNotCorruptScrollIndicators(t *testing.T) {
+	m := newTestModel(60)
+	m.SetLoading(true) // forces visible[0] to be the loading hint
+	// Begin a selection at viewportY=0 (the row that will hold the hint)
+	// extending down so the selection definitely covers row 0.
+	m.BeginSelectionAt(0, 0)
+	m.ExtendSelectionAt(5, 60)
+	out := m.View(40, 60)
+	// The loading hint string must appear unchanged in the output.
+	if !strings.Contains(out, "Loading older messages...") {
+		t.Fatalf("expected loading hint string verbatim in output; got %q", out)
+	}
+	// And specifically: the FIRST line of the message-area portion of
+	// the output must equal the cached loading hint exactly. We can
+	// derive that line from `out` by splitting on "\n" and finding the
+	// row at chrome height.
+	lines := strings.Split(out, "\n")
+	// Chrome is the channel header + separator; for newTestModel(60)
+	// that's lines[0] (header) + lines[1] (separator). visible[0] is
+	// at lines[2].
+	if len(lines) < 3 {
+		t.Fatalf("expected at least 3 output lines; got %d", len(lines))
+	}
+	hintRow := lines[2]
+	if hintRow != m.cacheLoadingHint {
+		t.Fatalf("loading hint row corrupted by selection overlay\nwant: %q\ngot:  %q",
+			m.cacheLoadingHint, hintRow)
+	}
+}
+
+func TestSelection_HighlightDoesNotCorruptMoreBelowIndicator(t *testing.T) {
+	// Build a tall model so View pagination triggers the "more below"
+	// indicator. Move selection to top so we can scroll up and pin a
+	// "more below" at the visible end.
+	msgs := make([]MessageItem, 30)
+	for i := range msgs {
+		msgs[i] = MessageItem{
+			TS:        fmt.Sprintf("%d.0", i+1),
+			UserName:  "u",
+			UserID:    "U1",
+			Text:      fmt.Sprintf("message %d", i),
+			Timestamp: "1:00 PM",
+		}
+	}
+	m := New(msgs, "general")
+	_ = m.View(15, 60)
+	m.GoToTop()
+	_ = m.View(15, 60) // ensure cache + yOffset reflect top position with "more below"
+	// Selection covers a wide vertical range to overlap the bottom row.
+	m.BeginSelectionAt(0, 0)
+	m.ExtendSelectionAt(20, 60)
+	out := m.View(15, 60)
+	if !strings.Contains(out, "-- more below --") {
+		t.Fatalf("expected more-below indicator in output; got %q", out)
+	}
+	// The last message-area line must equal cacheMoreBelow byte-for-byte.
+	lines := strings.Split(out, "\n")
+	lastRow := lines[len(lines)-1]
+	if lastRow != m.cacheMoreBelow {
+		t.Fatalf("more-below row corrupted by selection overlay\nwant: %q\ngot:  %q",
+			m.cacheMoreBelow, lastRow)
+	}
+}
+
+func TestSelection_HighlightSurvivesScroll(t *testing.T) {
+	// Build a model with enough messages that the cache exceeds the
+	// pane height; verify that a selection set on row 1 still produces
+	// a different View() output after the viewport scrolls.
+	//
+	// NOTE: New() snaps the initial selection to the LAST message, and
+	// the first View() snaps yOffset to maxOffset (bottom). ScrollDown
+	// from there is a no-op (clamped). We use ScrollUp so visible
+	// content actually changes.
+	msgs := make([]MessageItem, 30)
+	for i := range msgs {
+		msgs[i] = MessageItem{
+			TS:        fmt.Sprintf("%d.0", i+1),
+			UserName:  "u",
+			UserID:    "U1",
+			Text:      fmt.Sprintf("message %d", i),
+			Timestamp: "1:00 PM",
+		}
+	}
+	m := New(msgs, "general")
+	_ = m.View(20, 60)
+	m.BeginSelectionAt(2, 0)
+	m.ExtendSelectionAt(2, 20)
+	withSel := m.View(20, 60)
+	m.ScrollUp(5)
+	withSelScrolled := m.View(20, 60)
+	// They should differ (different visible content).
+	if withSel == withSelScrolled {
+		t.Fatal("scroll did not change View output")
+	}
+	// And both should still have the selection (HasSelection true).
+	if !m.HasSelection() {
+		t.Fatal("HasSelection should remain true across scroll")
 	}
 }
