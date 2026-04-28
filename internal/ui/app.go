@@ -163,6 +163,21 @@ type loadingEntry struct {
 	Status   string // "connecting", "ready", "failed"
 }
 
+// dragState captures an in-progress mouse drag for text selection. The
+// FSM lives in App.Update: MouseClickMsg seeds it, MouseMotionMsg
+// extends, MouseReleaseMsg finalizes (or clears it on a plain click).
+//
+// autoScrollActive is reserved for Task 9 (edge auto-scroll) and is
+// declared here so that future task can wire it in without re-touching
+// this struct definition.
+type dragState struct {
+	panel            Panel // PanelMessages or PanelThread; PanelWorkspace == idle
+	pressX, pressY   int
+	lastX, lastY     int
+	moved            bool
+	autoScrollActive bool
+}
+
 // panelCache stores the fully-wrapped (border + exactSize) output of a panel
 // keyed on a tuple of inputs that affect its rendering. A cache hit returns
 // the previous frame's string verbatim; a miss recomputes and stores.
@@ -349,6 +364,10 @@ type App struct {
 	loading       bool
 	loadingStates []loadingEntry
 	spinnerFrame  int
+
+	// Mouse drag selection FSM (set by MouseClickMsg, advanced by
+	// MouseMotionMsg, drained by MouseReleaseMsg).
+	drag dragState
 }
 
 func NewApp() *App {
@@ -496,17 +515,88 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		} else if x < a.layoutMsgEnd {
 			a.focusedPanel = PanelMessages
-			msgY := msg.Y - 1 // account for top border
-			if msgY >= 0 {
-				a.messagepane.ClickAt(msgY)
+			panel, px, py, ok := a.panelAt(msg.X, msg.Y)
+			if ok && panel == PanelMessages && py >= 0 {
+				a.drag = dragState{panel: PanelMessages, pressX: px, pressY: py, lastX: px, lastY: py}
+				a.messagepane.BeginSelectionAt(py, px)
+				a.messagepane.ClickAt(py)
 			}
 		} else if a.threadVisible && x < a.layoutThreadEnd {
 			a.focusedPanel = PanelThread
-			threadY := msg.Y - 1
-			if threadY >= 0 {
-				a.threadPanel.ClickAt(threadY)
+			panel, px, py, ok := a.panelAt(msg.X, msg.Y)
+			if ok && panel == PanelThread && py >= 0 {
+				a.drag = dragState{panel: PanelThread, pressX: px, pressY: py, lastX: px, lastY: py}
+				a.threadPanel.BeginSelectionAt(py, px)
+				a.threadPanel.ClickAt(py)
 			}
 		}
+
+	case tea.MouseMotionMsg:
+		if a.loading {
+			break
+		}
+		if msg.Button != tea.MouseLeft {
+			break
+		}
+		if a.drag.panel != PanelMessages && a.drag.panel != PanelThread {
+			break
+		}
+		panel, px, py, _ := a.panelAt(msg.X, msg.Y)
+		// Clamp to the originating pane: if the cursor leaves the pane,
+		// pin extension at the last known coordinates inside it.
+		if panel != a.drag.panel {
+			px, py = a.drag.lastX, a.drag.lastY
+		}
+		a.drag.lastX, a.drag.lastY = px, py
+		a.drag.moved = true
+		switch a.drag.panel {
+		case PanelMessages:
+			a.messagepane.ExtendSelectionAt(py, px)
+		case PanelThread:
+			a.threadPanel.ExtendSelectionAt(py, px)
+		}
+
+	case tea.MouseReleaseMsg:
+		if a.drag.panel != PanelMessages && a.drag.panel != PanelThread {
+			break
+		}
+		moved := a.drag.moved
+		panel := a.drag.panel
+		a.drag = dragState{}
+		if !moved {
+			// Plain click — drop any previous pinned selection.
+			switch panel {
+			case PanelMessages:
+				a.messagepane.ClearSelection()
+			case PanelThread:
+				a.threadPanel.ClearSelection()
+			}
+			break
+		}
+		var (
+			text string
+			ok   bool
+		)
+		switch panel {
+		case PanelMessages:
+			text, ok = a.messagepane.EndSelection()
+		case PanelThread:
+			text, ok = a.threadPanel.EndSelection()
+		}
+		if ok && text != "" {
+			n := len([]rune(text))
+			cmds = append(cmds, tea.SetClipboard(text))
+			cmds = append(cmds, func() tea.Msg { return statusbar.CopiedMsg{N: n} })
+		}
+
+	case statusbar.CopiedMsg:
+		a.statusbar.ShowCopied(msg.N)
+		cmds = append(cmds, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+			return statusbar.CopiedClearMsg{}
+		}))
+
+	case statusbar.CopiedClearMsg:
+		a.statusbar.ClearCopied()
 
 	case ChannelSelectedMsg:
 		// Close thread panel when switching channels
@@ -1417,6 +1507,30 @@ func (a *App) halfPageSize() int {
 		n = 1
 	}
 	return n
+}
+
+// panelAt classifies the (x, y) coordinate into the panel under the
+// cursor and returns pane-local content coordinates (after subtracting
+// layout offsets and the 1-row top border). ok=false means the cursor
+// is outside the messages/thread panes (status bar, sidebar, rail —
+// drag selection is not supported there).
+func (a *App) panelAt(x, y int) (panel Panel, paneX, paneY int, ok bool) {
+	if y >= a.height-1 {
+		return PanelWorkspace, 0, 0, false // status bar
+	}
+	switch {
+	case x < a.layoutRailWidth:
+		return PanelWorkspace, 0, 0, false
+	case a.sidebarVisible && x < a.layoutSidebarEnd:
+		return PanelSidebar, 0, 0, false
+	case x < a.layoutMsgEnd:
+		// Messages pane content: subtract the message-pane left edge
+		// (after sidebar) and account for the panel's top border (1 row).
+		return PanelMessages, x - a.layoutSidebarEnd - 1, y - 1, true
+	case a.threadVisible && x < a.layoutThreadEnd:
+		return PanelThread, x - a.layoutMsgEnd - 1, y - 1, true
+	}
+	return PanelWorkspace, 0, 0, false
 }
 
 // scrollFocusedPanel scrolls the focused panel by delta lines (negative = up).
