@@ -530,8 +530,8 @@ func TestEmojiAccept_ReplacesQueryWithFullShortcode(t *testing.T) {
 	if m.IsEmojiActive() {
 		t.Error("picker should be closed after accept")
 	}
-	if got := m.Value(); got != ":rock:" {
-		t.Errorf("expected value=:rock:, got %q", got)
+	if got := m.Value(); got != ":rock: " {
+		t.Errorf("expected value=':rock: ', got %q", got)
 	}
 }
 
@@ -545,8 +545,24 @@ func TestEmojiAccept_PreservesSurroundingText(t *testing.T) {
 		t.Fatal("precondition: picker open")
 	}
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if got := m.Value(); got != "hi :rose:" {
-		t.Errorf("expected 'hi :rose:', got %q", got)
+	if got := m.Value(); got != "hi :rose: " {
+		t.Errorf("expected 'hi :rose: ', got %q", got)
+	}
+}
+
+func TestEmojiAccept_AppendsTrailingSpace(t *testing.T) {
+	m := New("general")
+	m.SetEmojiEntries(sampleEmojiEntries())
+	_ = m.Focus()
+
+	m = typeChars(t, m, ":ros")
+	if !m.IsEmojiActive() {
+		t.Fatal("precondition: picker open")
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	// User should be able to keep typing without manually adding a space.
+	if got := m.Value(); got != ":rose: " {
+		t.Errorf("expected trailing space after shortcode, got %q", got)
 	}
 }
 

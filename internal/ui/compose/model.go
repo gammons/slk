@@ -601,7 +601,8 @@ func (m Model) handleEmojiKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 }
 
 // insertEmoji replaces the in-progress :query (the bytes from the trigger
-// ':' through the cursor) with `:name:`.
+// ':' through the cursor) with `:name: ` (note the trailing space, so the
+// user can continue typing without manually inserting one).
 func (m *Model) insertEmoji(name string) {
 	val := m.input.Value()
 	pos := m.cursorPosition()
@@ -617,7 +618,7 @@ func (m *Model) insertEmoji(name string) {
 	if pos < len(val) {
 		after = val[pos:]
 	}
-	newText := before + ":" + name + ":" + after
+	newText := before + ":" + name + ": " + after
 	m.input.SetValue(newText)
 }
 
