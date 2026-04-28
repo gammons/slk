@@ -49,3 +49,48 @@ func TestStatusBarUnreadCount(t *testing.T) {
 		t.Error("expected unread count in status bar")
 	}
 }
+
+func TestModel_CopiedToastShowsAndClears(t *testing.T) {
+	m := New()
+	m.SetChannel("general")
+	m.ShowCopied(42)
+	out := m.View(80)
+	if !strings.Contains(out, "Copied 42 chars") {
+		t.Fatalf("expected toast in status bar; got %q", out)
+	}
+	m.ClearCopied()
+	out = m.View(80)
+	if strings.Contains(out, "Copied") {
+		t.Fatalf("expected toast cleared; got %q", out)
+	}
+}
+
+func TestModel_ShowCopiedBumpsVersion(t *testing.T) {
+	m := New()
+	v0 := m.Version()
+	m.ShowCopied(1)
+	if m.Version() == v0 {
+		t.Fatal("ShowCopied must bump Version()")
+	}
+}
+
+func TestModel_ShowCopiedZeroIsNoop(t *testing.T) {
+	m := New()
+	v0 := m.Version()
+	m.ShowCopied(0)
+	if m.Version() != v0 {
+		t.Fatal("ShowCopied(0) must be a no-op (no version bump)")
+	}
+	if strings.Contains(m.View(80), "Copied") {
+		t.Fatal("ShowCopied(0) must not display toast")
+	}
+}
+
+func TestModel_ClearCopiedIsIdempotent(t *testing.T) {
+	m := New()
+	v0 := m.Version()
+	m.ClearCopied()
+	if m.Version() != v0 {
+		t.Fatal("ClearCopied with no toast must not bump version")
+	}
+}
