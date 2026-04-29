@@ -66,6 +66,13 @@
 - OS-level desktop notifications via [beeep](https://github.com/gen2brain/beeep)
 - Triggers on DMs, mentions, and configurable keywords
 - Suppressed when you're focused on the relevant channel
+- Suppressed entirely while you're in DND/snooze
+
+### Status & DND
+- Set self presence (Active / Away) and DND/snooze from `Ctrl+S`
+- Standard snooze durations (20m / 1h / 2h / 4h / 8h / 24h / until tomorrow morning) plus custom minutes
+- Live status segment in the status bar with snooze countdown
+- Reflects external state changes — set from the official Slack client or via your own API scripts — in real time over the WebSocket
 
 ### Connectivity
 - Browser-cookie auth (`xoxc` + `d`) — works as any user, no Slack App required
@@ -89,7 +96,6 @@ slk is intentionally not a 1:1 port of the desktop client. Some Slack features a
 - File uploads and downloads
 - Inline image rendering (Kitty graphics → Sixel → fallback)
 - OSC 52 clipboard yank (`yy`)
-- Presence change events (online/away/DND)
 - Quiet hours and per-channel mute
 - Custom keybinding overrides
 
@@ -220,6 +226,7 @@ Or just run `./bin/slk`. Onboarding launches automatically when no workspaces ar
 | `R` | Normal (message) | Quick-toggle existing reactions |
 | `Y` / `C` | Normal (message) | Copy message permalink |
 | `Ctrl+y` | Any | Switch theme |
+| `Ctrl+s` | Any | Set status (Active / Away / DND snooze) |
 | `Ctrl+c` | Any | Quit |
 
 ## Configuration

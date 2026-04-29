@@ -106,7 +106,7 @@ Last updated: 2026-04-28
 - [ ] Message deletion (`dd` on own message)
 - [ ] Search (`:search <query>` or `Ctrl+/`)
 - [ ] File uploads and downloads
-- [ ] User presence tracking (online/away/DND updates)
+- [x] Self presence and DND/snooze controls (Ctrl+S menu, live status bar segment, notification suppression)
 - [ ] Inline image rendering (Kitty graphics > Sixel > fallback)
 - [ ] OSC 52 clipboard integration (yank message text)
 ### Low Priority
