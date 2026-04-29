@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/statusbar"
 )
 
@@ -689,5 +690,67 @@ func TestApp_NewMessageWithoutThreadTSDoesNotTriggerDirty(t *testing.T) {
 		t.Error("top-level message should not trigger threads-list fetch")
 	case <-time.After(50 * time.Millisecond):
 		// good
+	}
+}
+
+func TestApp_WorkspaceReadyTriggersThreadsListFetch(t *testing.T) {
+	app := NewApp()
+	fetched := make(chan string, 1)
+	app.SetThreadsListFetcher(func(teamID string) tea.Msg {
+		fetched <- teamID
+		return ThreadsListLoadedMsg{TeamID: teamID, Summaries: nil}
+	})
+
+	_, cmd := app.Update(WorkspaceReadyMsg{
+		TeamID:   "T1",
+		TeamName: "Test",
+		Channels: nil,
+	})
+	for _, m := range drainBatch(cmd) {
+		_ = m
+	}
+	select {
+	case team := <-fetched:
+		if team != "T1" {
+			t.Errorf("fetcher called with team=%q, want T1", team)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("WorkspaceReadyMsg did not trigger threads-list fetch")
+	}
+}
+
+func TestApp_WorkspaceSwitchedTriggersThreadsListFetchAndSelectsThreadsRow(t *testing.T) {
+	app := NewApp()
+	// Move sidebar selection off the Threads row first to verify the reset.
+	app.sidebar.SetItems([]sidebar.ChannelItem{{ID: "C1", Name: "general", Type: "channel"}})
+	app.sidebar.MoveDown()
+	if app.sidebar.IsThreadsSelected() {
+		t.Fatal("precondition: should be off Threads row")
+	}
+
+	fetched := make(chan string, 1)
+	app.SetThreadsListFetcher(func(teamID string) tea.Msg {
+		fetched <- teamID
+		return ThreadsListLoadedMsg{TeamID: teamID, Summaries: nil}
+	})
+
+	_, cmd := app.Update(WorkspaceSwitchedMsg{
+		TeamID:   "T2",
+		TeamName: "Other",
+		Channels: nil,
+	})
+	if !app.sidebar.IsThreadsSelected() {
+		t.Errorf("WorkspaceSwitchedMsg should reset sidebar to Threads row")
+	}
+	for _, m := range drainBatch(cmd) {
+		_ = m
+	}
+	select {
+	case team := <-fetched:
+		if team != "T2" {
+			t.Errorf("fetcher called with team=%q, want T2", team)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("WorkspaceSwitchedMsg did not trigger threads-list fetch")
 	}
 }

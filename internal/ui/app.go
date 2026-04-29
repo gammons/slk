@@ -916,7 +916,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case WorkspaceSwitchedMsg:
 		// Always land in ViewChannels and drop any per-workspace
 		// threads-view state so stale summaries / unread badges from the
-		// previous workspace can't leak in.
+		// previous workspace can't leak in. Reset sidebar selection back
+		// to the synthetic Threads row for a "fresh" feel on each
+		// workspace switch.
+		a.sidebar.SelectThreadsRow()
 		a.view = ViewChannels
 		a.threadsView.SetSummaries(nil)
 		a.sidebar.SetThreadsUnreadCount(0)
@@ -952,6 +955,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, func() tea.Msg {
 				return ChannelSelectedMsg{ID: first.ID, Name: first.Name}
 			})
+		}
+		// Kick off an initial threads-list fetch so the sidebar Threads
+		// row badge populates before the user opens the view.
+		if a.threadsListFetcher != nil {
+			fetcher := a.threadsListFetcher
+			team := msg.TeamID
+			cmds = append(cmds, func() tea.Msg { return fetcher(team) })
 		}
 
 	case WorkspaceUnreadMsg:
@@ -999,6 +1009,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return ChannelSelectedMsg{ID: first.ID, Name: first.Name}
 				})
 			}
+		}
+		// Kick off an initial threads-list fetch so the sidebar Threads
+		// row badge populates before the user opens the view.
+		if a.threadsListFetcher != nil {
+			fetcher := a.threadsListFetcher
+			team := msg.TeamID
+			cmds = append(cmds, func() tea.Msg { return fetcher(team) })
 		}
 
 	case CustomEmojisLoadedMsg:
