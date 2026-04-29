@@ -811,6 +811,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.messagepane.IncrementReplyCount(msg.Message.ThreadTS)
 			}
 		}
+		// A thread reply (regardless of channel) may have changed the
+		// involved-threads list — schedule a debounced re-query so a burst
+		// of replies coalesces into a single fetch.
+		if msg.Message.ThreadTS != "" {
+			if c := a.scheduleThreadsDirty(); c != nil {
+				cmds = append(cmds, c)
+			}
+		}
 
 	case SendMessageMsg:
 		if a.messageSender != nil {
@@ -2041,6 +2049,26 @@ func (a *App) openSelectedThreadCmd() tea.Cmd {
 		return func() tea.Msg { return fetcher(chID, threadTS) }
 	}
 	return nil
+}
+
+// scheduleThreadsDirty returns a tea.Cmd that fires a ThreadsListDirtyMsg
+// after the configured debounce interval. Used to coalesce bursts of thread
+// replies (each delivered as its own NewMessageMsg) into a single re-query
+// of the involved-threads list. Returns nil when no workspace is active —
+// without an activeTeamID the dirty handler would just drop the message
+// anyway.
+func (a *App) scheduleThreadsDirty() tea.Cmd {
+	if a.activeTeamID == "" {
+		return nil
+	}
+	team := a.activeTeamID
+	d := a.threadsDirtyDebounce
+	if d == 0 {
+		d = 150 * time.Millisecond
+	}
+	return tea.Tick(d, func(time.Time) tea.Msg {
+		return ThreadsListDirtyMsg{TeamID: team}
+	})
 }
 
 // userNameFor returns the display name for a Slack user ID, falling back

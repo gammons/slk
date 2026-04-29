@@ -583,3 +583,111 @@ func TestApp_WorkspaceSwitchResetsView(t *testing.T) {
 		t.Errorf("sidebar threads-unread should be cleared on workspace switch")
 	}
 }
+
+func TestApp_NewThreadReplyTriggersDirtyMsg(t *testing.T) {
+	app := NewApp()
+	app.SetCurrentUserID("USELF")
+	app.activeTeamID = "T1"
+	// Tiny debounce so the test runs fast.
+	app.threadsDirtyDebounce = 5 * time.Millisecond
+
+	fetched := make(chan string, 4)
+	app.SetThreadsListFetcher(func(teamID string) tea.Msg {
+		fetched <- teamID
+		return ThreadsListLoadedMsg{TeamID: teamID, Summaries: nil}
+	})
+
+	// Activate threads view; drain the resulting initial fetch so it
+	// doesn't pollute the dirty-trigger assertion below.
+	_, initCmd := app.Update(ThreadsViewActivatedMsg{})
+	for _, m := range drainBatch(initCmd) {
+		if m != nil {
+			app.Update(m)
+		}
+	}
+	select {
+	case <-fetched:
+	case <-time.After(time.Second):
+		t.Fatal("initial threads-list fetch did not fire")
+	}
+	// Drain any extra incidental fetches from openSelectedThreadCmd etc.
+	for len(fetched) > 0 {
+		<-fetched
+	}
+
+	// A thread reply event should schedule a debounced dirty msg → fetch.
+	_, cmd := app.Update(NewMessageMsg{
+		ChannelID: "C1",
+		Message: messages.MessageItem{
+			TS:       "2.0",
+			UserID:   "U2",
+			Text:     "reply",
+			ThreadTS: "1.0",
+		},
+	})
+	if cmd == nil {
+		t.Fatal("NewMessageMsg with ThreadTS expected to return a cmd")
+	}
+	// Drive every leaf message produced by the cmd graph back into the app.
+	// tea.Tick blocks for the duration before returning a TickMsg-shaped
+	// value (here, ThreadsListDirtyMsg). drainBatch will block on it, which
+	// is fine because we set the debounce to 5ms.
+	for _, m := range drainBatch(cmd) {
+		if m != nil {
+			_, follow := app.Update(m)
+			for _, fm := range drainBatch(follow) {
+				if fm != nil {
+					app.Update(fm)
+				}
+			}
+		}
+	}
+
+	select {
+	case team := <-fetched:
+		if team != "T1" {
+			t.Errorf("re-fetch teamID = %q, want T1", team)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected re-fetch after thread reply, did not happen")
+	}
+}
+
+func TestApp_NewMessageWithoutThreadTSDoesNotTriggerDirty(t *testing.T) {
+	app := NewApp()
+	app.activeTeamID = "T1"
+	app.threadsDirtyDebounce = 5 * time.Millisecond
+
+	fetched := make(chan struct{}, 4)
+	app.SetThreadsListFetcher(func(teamID string) tea.Msg {
+		fetched <- struct{}{}
+		return ThreadsListLoadedMsg{TeamID: teamID, Summaries: nil}
+	})
+
+	// Top-level message (no ThreadTS) should NOT schedule any dirty fetch.
+	_, cmd := app.Update(NewMessageMsg{
+		ChannelID: "C1",
+		Message: messages.MessageItem{
+			TS:     "1.0",
+			UserID: "U1",
+			Text:   "hello",
+		},
+	})
+	for _, m := range drainBatch(cmd) {
+		if m != nil {
+			_, follow := app.Update(m)
+			for _, fm := range drainBatch(follow) {
+				if fm != nil {
+					app.Update(fm)
+				}
+			}
+		}
+	}
+
+	select {
+	case <-fetched:
+		t.Error("top-level message should not trigger threads-list fetch")
+	case <-time.After(50 * time.Millisecond):
+		// good
+	}
+}
