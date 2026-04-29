@@ -1736,3 +1736,34 @@ func TestUploadResultMsg_FailureKeepsAttachments(t *testing.T) {
 		t.Errorf("expected caption preserved, got %q", app.compose.Value())
 	}
 }
+
+func TestEscDuringUpload_RefusedWithToast(t *testing.T) {
+	app := NewApp()
+	app.SetMode(ModeInsert)
+	app.compose.SetUploading(true)
+	app.focusedPanel = PanelMessages
+
+	cmd := app.handleInsertMode(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd (toast)")
+	}
+	// Mode should still be Insert (Esc was refused).
+	if app.mode != ModeInsert {
+		t.Errorf("expected ModeInsert preserved during upload, got %v", app.mode)
+	}
+}
+
+func TestChannelSwitchDuringUpload_Refused(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.compose.SetUploading(true)
+
+	app.Update(ChannelSelectedMsg{ID: "C2"})
+
+	if app.activeChannelID != "C1" {
+		t.Errorf("expected activeChannelID preserved during upload, got %q", app.activeChannelID)
+	}
+	if !app.compose.Uploading() {
+		t.Error("expected upload still in flight")
+	}
+}

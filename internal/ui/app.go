@@ -988,6 +988,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, a.uploadToastCmd("Sent", 2*time.Second))
 
 	case ChannelSelectedMsg:
+		if a.compose.Uploading() || a.threadCompose.Uploading() {
+			cmds = append(cmds, a.uploadToastCmd("Upload in progress", 2*time.Second))
+			break
+		}
 		a.cancelEdit()
 		// Picking a channel always exits the Threads view.
 		a.view = ViewChannels
@@ -1259,6 +1263,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sidebar.SetItems(items)
 
 	case WorkspaceSwitchedMsg:
+		if a.compose.Uploading() || a.threadCompose.Uploading() {
+			cmds = append(cmds, a.uploadToastCmd("Upload in progress", 2*time.Second))
+			break
+		}
 		a.cancelEdit()
 		// Always land in ViewChannels and drop any per-workspace
 		// threads-view state so stale summaries / unread badges from the
@@ -1704,6 +1712,9 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
+	if (a.compose.Uploading() || a.threadCompose.Uploading()) && key.Matches(msg, a.keys.Escape) {
+		return a.uploadToastCmd("Upload in progress", 2*time.Second)
+	}
 	if a.editing.active && key.Matches(msg, a.keys.Escape) {
 		// If a picker is active in the relevant compose, close it
 		// instead of cancelling the edit.
