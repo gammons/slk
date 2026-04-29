@@ -287,6 +287,51 @@ type MessageSentMsg struct {
 	Message   messages.MessageItem
 }
 
+// EditMessageMsg is emitted when the user submits an edit. App.Update
+// invokes the configured messageEditor and converts the result to
+// MessageEditedMsg.
+type EditMessageMsg struct {
+	ChannelID string
+	TS        string
+	NewText   string
+}
+
+// DeleteMessageMsg is emitted when the user confirms a delete.
+type DeleteMessageMsg struct {
+	ChannelID string
+	TS        string
+}
+
+// MessageEditedMsg carries the result of the chat.update API call.
+type MessageEditedMsg struct {
+	ChannelID string
+	TS        string
+	Err       error
+}
+
+// MessageDeletedMsg carries the result of the chat.delete API call.
+type MessageDeletedMsg struct {
+	ChannelID string
+	TS        string
+	Err       error
+}
+
+// WSMessageDeletedMsg is dispatched by the RTM event handler when a
+// message_deleted event arrives. App.Update handles it by removing the
+// message from both panes and the cache.
+type WSMessageDeletedMsg struct {
+	ChannelID string
+	TS        string
+}
+
+// MessageEditFunc performs the chat.update API call. Returns a tea.Msg
+// (typically MessageEditedMsg) describing the result.
+type MessageEditFunc func(channelID, ts, newText string) tea.Msg
+
+// MessageDeleteFunc performs the chat.delete API call. Returns a tea.Msg
+// (typically MessageDeletedMsg) describing the result.
+type MessageDeleteFunc func(channelID, ts string) tea.Msg
+
 // ThreadFetchFunc is called when the user opens a thread.
 type ThreadFetchFunc func(channelID, threadTS string) tea.Msg
 
@@ -383,6 +428,8 @@ type App struct {
 	channelFetcher       ChannelFetchFunc
 	olderMessagesFetcher OlderMessagesFetchFunc
 	messageSender        MessageSendFunc
+	messageEditor        MessageEditFunc
+	messageDeleter       MessageDeleteFunc
 	threadFetcher        ThreadFetchFunc
 	threadReplySender    ThreadReplySendFunc
 	channelJoiner        JoinChannelFunc
@@ -2242,6 +2289,16 @@ func (a *App) SetOlderMessagesFetcher(fn OlderMessagesFetchFunc) {
 // SetMessageSender sets the callback used to send messages.
 func (a *App) SetMessageSender(fn MessageSendFunc) {
 	a.messageSender = fn
+}
+
+// SetMessageEditor wires the chat.update callback used by edit submit.
+func (a *App) SetMessageEditor(fn MessageEditFunc) {
+	a.messageEditor = fn
+}
+
+// SetMessageDeleter wires the chat.delete callback used by delete confirm.
+func (a *App) SetMessageDeleter(fn MessageDeleteFunc) {
+	a.messageDeleter = fn
 }
 
 // SetThreadFetcher sets the callback used to load thread replies.
