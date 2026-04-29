@@ -864,3 +864,58 @@ func TestHandleConfirmMode_ConfirmReturnsCmd(t *testing.T) {
 		t.Error("prompt should be closed after confirm")
 	}
 }
+
+func TestNewMessageMsg_EditedUpdatesInPlace(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", UserName: "alice", Text: "original"},
+	})
+
+	app.Update(NewMessageMsg{
+		ChannelID: "C1",
+		Message: messages.MessageItem{
+			TS:       "1.0",
+			UserName: "alice",
+			Text:     "edited",
+			IsEdited: true,
+		},
+	})
+
+	// Access internal slice directly (same package).
+	msgs := app.messagepane.Messages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message after edit (in-place update, not append), got %d: %+v", len(msgs), msgs)
+	}
+	if msgs[0].Text != "edited" {
+		t.Errorf("expected text 'edited', got %q", msgs[0].Text)
+	}
+	if !msgs[0].IsEdited {
+		t.Error("expected IsEdited=true")
+	}
+}
+
+func TestNewMessageMsg_NotEditedStillAppends(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", Text: "first"},
+	})
+
+	app.Update(NewMessageMsg{
+		ChannelID: "C1",
+		Message: messages.MessageItem{
+			TS:   "2.0",
+			Text: "second",
+			// IsEdited NOT set — this is a fresh message.
+		},
+	})
+
+	msgs := app.messagepane.Messages()
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages after append, got %d", len(msgs))
+	}
+	if msgs[1].TS != "2.0" {
+		t.Errorf("expected new message TS=2.0, got %q", msgs[1].TS)
+	}
+}

@@ -858,6 +858,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case NewMessageMsg:
+		if msg.Message.IsEdited {
+			// Edit echo: update existing message in place rather than appending.
+			a.messagepane.UpdateMessageInPlace(msg.Message.TS, msg.Message.Text)
+			a.threadPanel.UpdateMessageInPlace(msg.Message.TS, msg.Message.Text)
+			a.threadPanel.UpdateParentInPlace(msg.Message.TS, msg.Message.Text)
+			break
+		}
 		if msg.ChannelID == a.activeChannelID {
 			// Route thread replies to the thread panel if it matches the open thread
 			if a.threadVisible && msg.Message.ThreadTS == a.threadPanel.ThreadTS() {
