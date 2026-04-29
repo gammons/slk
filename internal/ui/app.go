@@ -390,6 +390,16 @@ type App struct {
 	// sub-component's API.
 	userNames map[string]string
 
+	// Last (channelID, threadTS) auto-opened from the threads view.
+	// openSelectedThreadCmd compares against these to dedup repeat calls
+	// (j/k keystrokes and ThreadsListLoadedMsg refreshes both fire
+	// openSelectedThreadCmd; without dedup we'd hammer the Slack API and
+	// clobber the right thread panel mid-read). Cleared whenever the
+	// user leaves the threads view (ChannelSelectedMsg, CloseThread,
+	// workspace switch).
+	lastOpenedChannelID string
+	lastOpenedThreadTS  string
+
 	// Reaction picker
 	reactionPicker   *reactionpicker.Model
 	reactionAddFn    ReactionAddFunc
@@ -563,6 +573,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return a, func() tea.Msg {
 						return ChannelSelectedMsg{ID: item.ID, Name: item.Name}
 					}
+				}
+				// ClickAt returns ok=false for the synthetic Threads
+				// row; if the click landed there (sidebar updates its
+				// own selection state), activate the threads view.
+				if a.sidebar.IsThreadsSelected() {
+					return a, func() tea.Msg { return ThreadsViewActivatedMsg{} }
 				}
 			}
 		} else if x < a.layoutMsgEnd {
@@ -745,6 +761,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ChannelSelectedMsg:
 		// Picking a channel always exits the Threads view.
 		a.view = ViewChannels
+		a.lastOpenedChannelID = ""
+		a.lastOpenedThreadTS = ""
 		// Close thread panel when switching channels
 		a.CloseThread()
 		a.clearSelections()
@@ -888,6 +906,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sidebar.SetItems(items)
 
 	case WorkspaceSwitchedMsg:
+		// Always land in ViewChannels and drop any per-workspace
+		// threads-view state so stale summaries / unread badges from the
+		// previous workspace can't leak in.
+		a.view = ViewChannels
+		a.threadsView.SetSummaries(nil)
+		a.sidebar.SetThreadsUnreadCount(0)
+		a.lastOpenedChannelID = ""
+		a.lastOpenedThreadTS = ""
 		a.CloseThread()
 		a.clearSelections()
 		a.compose.Reset()
@@ -942,6 +968,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case WorkspaceReadyMsg:
+		// Same per-workspace cleanup as WorkspaceSwitchedMsg: ensure the
+		// threads view starts empty and we land in ViewChannels.
+		a.view = ViewChannels
+		a.threadsView.SetSummaries(nil)
+		a.sidebar.SetThreadsUnreadCount(0)
+		a.lastOpenedChannelID = ""
+		a.lastOpenedThreadTS = ""
 		a.MarkWorkspaceReady(msg.TeamName)
 		// If this is the first workspace, set it up as active
 		if a.activeChannelID == "" {
@@ -1968,20 +2001,29 @@ func (a *App) CloseThread() {
 	a.statusbar.SetInThread(false)
 	a.threadPanel.Clear()
 	a.threadCompose.Blur()
+	// Drop dedup state so a future activation re-opens this thread.
+	a.lastOpenedChannelID = ""
+	a.lastOpenedThreadTS = ""
 	if a.focusedPanel == PanelThread {
 		a.focusedPanel = PanelMessages
 	}
 }
 
 // openSelectedThreadCmd opens the right thread panel on whichever row is
-// currently highlighted in the threads view. No-op if the list is empty
-// or no thread fetcher is wired (the panel is still shown so the user
-// sees the parent message even before replies load).
+// currently highlighted in the threads view. No-op if the list is empty,
+// no thread fetcher is wired, OR the selected thread is already the one
+// open in the right panel (dedup: avoids hammering the Slack API and
+// clobbering an in-progress read on every j/k press or list reload).
 func (a *App) openSelectedThreadCmd() tea.Cmd {
 	sum, ok := a.threadsView.SelectedSummary()
 	if !ok {
 		return nil
 	}
+	if sum.ChannelID == a.lastOpenedChannelID && sum.ThreadTS == a.lastOpenedThreadTS {
+		return nil
+	}
+	a.lastOpenedChannelID = sum.ChannelID
+	a.lastOpenedThreadTS = sum.ThreadTS
 	a.threadVisible = true
 	a.statusbar.SetInThread(true)
 	parent := messages.MessageItem{

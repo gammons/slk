@@ -502,3 +502,84 @@ func TestApp_ThreadsListLoadedIgnoredForOtherWorkspace(t *testing.T) {
 		t.Errorf("threads from a different team should not update the active sidebar; got %d", app.sidebar.ThreadsUnreadCount())
 	}
 }
+
+func TestApp_HandleEnterOnThreadsRowActivatesView(t *testing.T) {
+	app := NewApp()
+	app.activeTeamID = "T1"
+	// Sidebar default-selects the Threads row.
+	if !app.sidebar.IsThreadsSelected() {
+		t.Fatalf("precondition: sidebar should default-select Threads row")
+	}
+	cmd := app.handleEnter()
+	if cmd == nil {
+		t.Fatal("expected a tea.Cmd, got nil")
+	}
+	msg := cmd()
+	if _, ok := msg.(ThreadsViewActivatedMsg); !ok {
+		t.Errorf("expected ThreadsViewActivatedMsg, got %T", msg)
+	}
+}
+
+func TestApp_OpenSelectedThreadDedups(t *testing.T) {
+	app := NewApp()
+	app.activeTeamID = "T1"
+	fetched := 0
+	app.SetThreadFetcher(func(channelID, threadTS string) tea.Msg {
+		fetched++
+		return ThreadRepliesLoadedMsg{ThreadTS: threadTS, Replies: nil}
+	})
+	summaries := []cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "1.0"},
+		{ChannelID: "C1", ThreadTS: "2.0"},
+	}
+	app.Update(ThreadsListLoadedMsg{TeamID: "T1", Summaries: summaries})
+	app.view = ViewThreads
+
+	// First call should fetch.
+	cmd := app.openSelectedThreadCmd()
+	if cmd == nil {
+		t.Fatal("first call returned nil")
+	}
+	cmd()
+	if fetched != 1 {
+		t.Errorf("first call fetched=%d, want 1", fetched)
+	}
+
+	// Second call without selection change should NOT fetch.
+	cmd = app.openSelectedThreadCmd()
+	if cmd != nil {
+		t.Errorf("second call should be a no-op, got cmd=%v", cmd)
+	}
+
+	// After moving selection, fetch should fire again.
+	app.threadsView.MoveDown()
+	cmd = app.openSelectedThreadCmd()
+	if cmd == nil {
+		t.Fatal("after MoveDown, expected fetch")
+	}
+	cmd()
+	if fetched != 2 {
+		t.Errorf("after MoveDown fetched=%d, want 2", fetched)
+	}
+}
+
+func TestApp_WorkspaceSwitchResetsView(t *testing.T) {
+	app := NewApp()
+	app.view = ViewThreads
+	app.activeTeamID = "T1"
+	// Stash some summaries to confirm they're cleared.
+	app.threadsView.SetSummaries([]cache.ThreadSummary{{ChannelID: "C1", ThreadTS: "1.0", Unread: true}})
+	app.sidebar.SetThreadsUnreadCount(1)
+
+	app.Update(WorkspaceSwitchedMsg{TeamID: "T2", TeamName: "Other", Channels: nil})
+
+	if app.view != ViewChannels {
+		t.Errorf("after workspace switch view = %v, want ViewChannels", app.view)
+	}
+	if app.threadsView.UnreadCount() != 0 {
+		t.Errorf("threadsView should be cleared on workspace switch")
+	}
+	if app.sidebar.ThreadsUnreadCount() != 0 {
+		t.Errorf("sidebar threads-unread should be cleared on workspace switch")
+	}
+}
