@@ -257,7 +257,7 @@ Or just run `./bin/slk`. Onboarding launches automatically when no workspaces ar
 | `Ctrl+s` | Any | Set status (Active / Away / DND snooze) |
 | `q` | Normal | Quit (with confirmation) |
 | `Q` | Normal | Quit immediately |
-| `Ctrl+c` | Any | Quit |
+| `Ctrl+c` | Any | Quit (with confirmation) |
 
 ## Configuration
 

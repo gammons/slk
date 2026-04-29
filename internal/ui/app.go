@@ -1541,9 +1541,17 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (a *App) handleKey(msg tea.KeyMsg) tea.Cmd {
-	// Always handle quit
+	// Ctrl+C is intercepted globally and routed through the same
+	// confirm prompt as lowercase `q`, so an accidental Ctrl+C while
+	// reading or typing doesn't yank the whole app out from under the
+	// user. `Q` (capital) remains the no-prompt force-quit, and an
+	// already-open quit prompt isn't reopened (Enter confirms, Esc
+	// cancels via the existing confirm-mode handler).
 	if key.Matches(msg, a.keys.Quit) {
-		return tea.Quit
+		if a.mode != ModeConfirm {
+			a.openQuitConfirm()
+		}
+		return nil
 	}
 
 	if a.loading {
@@ -1717,12 +1725,7 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 		return tea.Quit
 
 	case key.Matches(msg, a.keys.QuitConfirm):
-		a.confirmPrompt.Open(
-			"Quit slk?",
-			"All workspace connections will close.",
-			func() tea.Msg { return tea.Quit() },
-		)
-		a.SetMode(ModeConfirm)
+		a.openQuitConfirm()
 		return nil
 
 	default:
@@ -2582,6 +2585,18 @@ func (a *App) scrollFocusedPanel(delta int) {
 			}
 		}
 	}
+}
+
+// openQuitConfirm raises the centered "Quit slk?" overlay. Called from
+// both lowercase `q` and Ctrl+C (the latter intercepted globally so an
+// accidental Ctrl+C in any mode never silently kills the app).
+func (a *App) openQuitConfirm() {
+	a.confirmPrompt.Open(
+		"Quit slk?",
+		"All workspace connections will close.",
+		func() tea.Msg { return tea.Quit() },
+	)
+	a.SetMode(ModeConfirm)
 }
 
 func (a *App) handleEnter() tea.Cmd {

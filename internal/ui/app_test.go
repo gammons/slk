@@ -1967,6 +1967,39 @@ func TestNormalMode_CapitalQ_QuitsImmediately(t *testing.T) {
 	}
 }
 
+func TestHandleKey_CtrlC_OpensConfirmPromptInsteadOfQuitting(t *testing.T) {
+	app := NewApp()
+	cmd := app.handleKey(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd != nil {
+		if _, ok := cmd().(tea.QuitMsg); ok {
+			t.Fatal("Ctrl+C should not quit immediately; expected confirm prompt")
+		}
+	}
+	if !app.confirmPrompt.IsVisible() {
+		t.Fatal("Ctrl+C should open the confirm prompt")
+	}
+	if app.mode != ModeConfirm {
+		t.Errorf("expected mode=ModeConfirm, got %v", app.mode)
+	}
+}
+
+func TestHandleKey_CtrlC_DoesNotReopenWhilePromptVisible(t *testing.T) {
+	app := NewApp()
+	app.handleKey(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if !app.confirmPrompt.IsVisible() {
+		t.Fatal("precondition: prompt should be visible")
+	}
+	// A second Ctrl+C while the quit prompt is up should fall through
+	// to handleConfirmMode (where Enter confirms and Esc cancels) and
+	// must not reopen the prompt or change state in a way that breaks
+	// it.
+	cmd := app.handleKey(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	_ = cmd
+	if !app.confirmPrompt.IsVisible() {
+		t.Error("second Ctrl+C should leave the prompt up; not auto-cancel")
+	}
+}
+
 func TestNormalMode_LowercaseQ_OpensConfirmPrompt(t *testing.T) {
 	app := NewApp()
 	cmd := app.handleNormalMode(tea.KeyPressMsg{Code: 'q', Text: "q"})
