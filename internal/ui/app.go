@@ -960,6 +960,33 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return statusbar.CopiedClearMsg{}
 		}))
 
+	case UploadAttachmentsMsg:
+		// Reserved: this Msg is dispatched directly to the uploader via
+		// submitWithAttachments. If something else emits it, we treat
+		// it as a re-dispatch via the configured uploader.
+		if a.uploader != nil {
+			cmds = append(cmds, a.uploader(msg.ChannelID, msg.ThreadTS, msg.Caption, msg.Attachments))
+		}
+
+	case UploadProgressMsg:
+		a.statusbar.SetToast(fmt.Sprintf("Uploading %d/%d…", msg.Done, msg.Total))
+
+	case UploadResultMsg:
+		a.compose.SetUploading(false)
+		a.threadCompose.SetUploading(false)
+		if msg.Err != nil {
+			cmds = append(cmds, a.uploadToastCmd(
+				"Upload failed: "+truncateReason(msg.Err.Error(), 40),
+				3*time.Second,
+			))
+			break
+		}
+		a.compose.ClearAttachments()
+		a.threadCompose.ClearAttachments()
+		a.compose.Reset()
+		a.threadCompose.Reset()
+		cmds = append(cmds, a.uploadToastCmd("Sent", 2*time.Second))
+
 	case ChannelSelectedMsg:
 		a.cancelEdit()
 		// Picking a channel always exits the Threads view.
@@ -1757,6 +1784,9 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 			return cmd
 		}
 		if isSend {
+			if len(a.threadCompose.Attachments()) > 0 {
+				return a.submitWithAttachments(&a.threadCompose)
+			}
 			if a.editing.active && a.editing.panel == PanelThread {
 				return a.submitEdit(a.threadCompose.Value(), a.threadCompose.TranslateMentionsForSend(a.threadCompose.Value()))
 			}
@@ -1796,6 +1826,9 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 		return cmd
 	}
 	if isSend {
+		if len(a.compose.Attachments()) > 0 {
+			return a.submitWithAttachments(&a.compose)
+		}
 		if a.editing.active && a.editing.panel == PanelMessages {
 			return a.submitEdit(a.compose.Value(), a.compose.TranslateMentionsForSend(a.compose.Value()))
 		}
@@ -3613,6 +3646,42 @@ func (a *App) selectedMessageContext() (channelID, ts, text, userID string, pane
 }
 
 const maxAttachmentSize = 10 * 1024 * 1024 // 10 MB cap
+
+// submitWithAttachments dispatches the pending attachments + caption
+// on the given compose to the configured uploader. It refuses if an
+// edit is in progress (chat.update doesn't support file attachments)
+// or if there's no active channel / no uploader configured. On
+// dispatch, the compose's uploading flag is set so the UI can show
+// progress; the actual UploadResultMsg arm in Update clears it.
+func (a *App) submitWithAttachments(c *compose.Model) tea.Cmd {
+	if a.editing.active {
+		return a.uploadToastCmd("Cannot attach files to an edit (send a new message)", 3*time.Second)
+	}
+	attachments := c.Attachments()
+	if len(attachments) == 0 {
+		return nil
+	}
+	caption := strings.TrimSpace(c.Value())
+
+	var channelID, threadTS string
+	if c == &a.threadCompose {
+		channelID = a.threadPanel.ChannelID()
+		threadTS = a.threadPanel.ThreadTS()
+	} else {
+		channelID = a.activeChannelID
+		threadTS = ""
+	}
+	if channelID == "" || a.uploader == nil {
+		return a.uploadToastCmd("Cannot upload: no active channel", 2*time.Second)
+	}
+
+	c.SetUploading(true)
+	cmds := []tea.Cmd{
+		a.uploader(channelID, threadTS, caption, attachments),
+		a.uploadToastCmd(fmt.Sprintf("Uploading 0/%d…", len(attachments)), 30*time.Second),
+	}
+	return tea.Batch(cmds...)
+}
 
 // smartPaste inspects the OS clipboard and dispatches:
 //  1. PNG image bytes → attach as image with auto-generated filename.

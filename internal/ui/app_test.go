@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"golang.design/x/clipboard"
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/statusbar"
@@ -1647,5 +1648,91 @@ func TestSmartPaste_ThreadPane_AttachesToThreadCompose(t *testing.T) {
 	}
 	if len(app.compose.Attachments()) != 0 {
 		t.Errorf("expected no attachment on channel compose, got %d", len(app.compose.Attachments()))
+	}
+}
+
+func TestSubmitWithAttachments_EmitsUploadAttachmentsMsg(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	app.compose.AddAttachment(compose.PendingAttachment{
+		Filename: "a.png", Bytes: []byte("png"), Size: 3,
+	})
+	app.compose.SetValue("look")
+	// Set a no-op uploader so the cmd doesn't error out — we just want to
+	// observe state changes (uploading flag, that an attempt was made).
+	app.SetUploader(func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd {
+		return func() tea.Msg { return UploadResultMsg{Err: nil} }
+	})
+
+	cmd := app.submitWithAttachments(&app.compose)
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd")
+	}
+	if !app.compose.Uploading() {
+		t.Error("expected compose.Uploading() == true after submit")
+	}
+}
+
+func TestSubmitWithAttachments_RefusesDuringEdit(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.compose.AddAttachment(compose.PendingAttachment{Filename: "a.png", Size: 1})
+	app.editing.active = true
+	app.editing.channelID = "C1"
+	app.editing.ts = "1.0"
+	app.editing.panel = PanelMessages
+	app.SetUploader(func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd {
+		return func() tea.Msg { return UploadResultMsg{Err: nil} }
+	})
+
+	_ = app.submitWithAttachments(&app.compose)
+
+	if app.compose.Uploading() {
+		t.Error("expected no upload kicked off during edit mode")
+	}
+	// Attachment should still be there for the user to remove.
+	if len(app.compose.Attachments()) != 1 {
+		t.Errorf("expected attachments preserved, got %d", len(app.compose.Attachments()))
+	}
+}
+
+func TestUploadResultMsg_SuccessClearsAttachmentsAndCompose(t *testing.T) {
+	app := NewApp()
+	app.compose.AddAttachment(compose.PendingAttachment{Filename: "a.png", Size: 1})
+	app.compose.SetValue("caption")
+	app.compose.SetUploading(true)
+
+	app.Update(UploadResultMsg{Err: nil})
+
+	if app.compose.Uploading() {
+		t.Error("expected Uploading=false after success")
+	}
+	if len(app.compose.Attachments()) != 0 {
+		t.Errorf("expected attachments cleared, got %d", len(app.compose.Attachments()))
+	}
+	if app.compose.Value() != "" {
+		t.Errorf("expected text reset, got %q", app.compose.Value())
+	}
+}
+
+func TestUploadResultMsg_FailureKeepsAttachments(t *testing.T) {
+	app := NewApp()
+	app.compose.AddAttachment(compose.PendingAttachment{Filename: "a.png", Size: 1})
+	app.compose.SetValue("caption")
+	app.compose.SetUploading(true)
+
+	app.Update(UploadResultMsg{Err: errors.New("network failure")})
+
+	if app.compose.Uploading() {
+		t.Error("expected Uploading=false after failure")
+	}
+	if len(app.compose.Attachments()) != 1 {
+		t.Errorf("expected attachments preserved on failure, got %d", len(app.compose.Attachments()))
+	}
+	if app.compose.Value() != "caption" {
+		t.Errorf("expected caption preserved, got %q", app.compose.Value())
 	}
 }
