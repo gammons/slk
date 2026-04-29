@@ -69,9 +69,13 @@ var (
 			Bold(true).
 			Padding(0, 1)
 
+	// ChannelNormal is the style for read channels in the sidebar. We use
+	// the muted sidebar text color so that unread channels (which use the
+	// full SidebarText) visibly pop against the read ones — bold alone is
+	// not enough contrast on many terminals.
 	ChannelNormal = lipgloss.NewStyle().
 			Background(Background).
-			Foreground(TextPrimary).
+			Foreground(TextMuted).
 			Padding(0, 1)
 
 	ChannelUnread = lipgloss.NewStyle().
@@ -331,7 +335,7 @@ func buildStyles() {
 	ChannelSelected = lipgloss.NewStyle().
 		Background(SidebarBackground).Foreground(SidebarText).Bold(true).Padding(0, 1)
 	ChannelNormal = lipgloss.NewStyle().
-		Background(SidebarBackground).Foreground(SidebarText).Padding(0, 1)
+		Background(SidebarBackground).Foreground(SidebarTextMuted).Padding(0, 1)
 	ChannelUnread = lipgloss.NewStyle().
 		Background(SidebarBackground).Foreground(SidebarText).Bold(true).Padding(0, 1)
 	UnreadBadge = lipgloss.NewStyle().
