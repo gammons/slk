@@ -1270,3 +1270,61 @@ func TestBeginDeleteOfSelected_ThreadPane_OpensPrompt(t *testing.T) {
 		t.Errorf("expected ModeConfirm, got %v", app.mode)
 	}
 }
+
+func TestWSMessageDeletedMsg_CancelsEditIfMessageBeingEdited(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.SetCurrentUserID("U_ME")
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", UserID: "U_ME", Text: "my message"},
+	})
+	app.focusedPanel = PanelMessages
+	app.beginEditOfSelected()
+	if !app.editing.active {
+		t.Fatal("setup: edit should be active")
+	}
+
+	// Another client deletes the message we're editing.
+	app.Update(WSMessageDeletedMsg{ChannelID: "C1", TS: "1.0"})
+
+	if app.editing.active {
+		t.Error("edit should be cancelled when the edited message is WS-deleted")
+	}
+}
+
+func TestWSMessageDeletedMsg_IgnoresOtherChannel(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", Text: "in C1"},
+	})
+
+	// A delete for a TS in a DIFFERENT channel should not touch our pane.
+	app.Update(WSMessageDeletedMsg{ChannelID: "C_OTHER", TS: "1.0"})
+
+	if len(app.messagepane.Messages()) != 1 {
+		t.Errorf("messages pane should be unchanged for delete in another channel, got %d", len(app.messagepane.Messages()))
+	}
+}
+
+func TestNewMessageMsg_EditedIgnoresOtherChannel(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", Text: "in C1"},
+	})
+
+	app.Update(NewMessageMsg{
+		ChannelID: "C_OTHER",
+		Message: messages.MessageItem{
+			TS:       "1.0", // coincidentally same TS
+			Text:     "edit from other channel",
+			IsEdited: true,
+		},
+	})
+
+	msgs := app.messagepane.Messages()
+	if len(msgs) != 1 || msgs[0].Text != "in C1" {
+		t.Errorf("messages pane should not be touched by edit in another channel; got %+v", msgs)
+	}
+}

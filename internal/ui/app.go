@@ -907,10 +907,17 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case NewMessageMsg:
 		if msg.Message.IsEdited {
-			// Edit echo: update existing message in place rather than appending.
-			a.messagepane.UpdateMessageInPlace(msg.Message.TS, msg.Message.Text)
-			a.threadPanel.UpdateMessageInPlace(msg.Message.TS, msg.Message.Text)
-			a.threadPanel.UpdateParentInPlace(msg.Message.TS, msg.Message.Text)
+			// Edit echo: update existing message in place rather than
+			// appending. Gate on the active channel for the main pane
+			// and on the thread panel's channel for the thread cache —
+			// avoids touching panes showing a different channel.
+			if msg.ChannelID == a.activeChannelID {
+				a.messagepane.UpdateMessageInPlace(msg.Message.TS, msg.Message.Text)
+			}
+			if msg.ChannelID == a.threadPanel.ChannelID() {
+				a.threadPanel.UpdateMessageInPlace(msg.Message.TS, msg.Message.Text)
+				a.threadPanel.UpdateParentInPlace(msg.Message.TS, msg.Message.Text)
+			}
 			break
 		}
 		if msg.ChannelID == a.activeChannelID {
@@ -1041,12 +1048,23 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.statusbar.SetConnectionState(statusbar.ConnectionState(msg.State))
 
 	case WSMessageDeletedMsg:
-		a.messagepane.RemoveMessageByTS(msg.TS)
-		a.threadPanel.RemoveMessageByTS(msg.TS)
+		if msg.ChannelID == a.activeChannelID {
+			a.messagepane.RemoveMessageByTS(msg.TS)
+		}
+		if msg.ChannelID == a.threadPanel.ChannelID() {
+			a.threadPanel.RemoveMessageByTS(msg.TS)
+		}
+		// If the deleted message is the one currently being edited,
+		// cancel the edit (the message is gone — submitting would fail).
+		if a.editing.active && a.editing.ts == msg.TS && a.editing.channelID == msg.ChannelID {
+			a.cancelEdit()
+		}
 		// If the deleted message was the open thread's parent, close
 		// the thread panel — Slack deletes the entire thread when the
-		// parent is deleted.
-		if a.threadVisible && a.threadPanel.ThreadTS() == msg.TS {
+		// parent is deleted. Cancel any in-flight edit first so we
+		// don't leave the user in insert mode with a hidden compose.
+		if a.threadVisible && a.threadPanel.ThreadTS() == msg.TS && msg.ChannelID == a.threadPanel.ChannelID() {
+			a.cancelEdit()
 			a.CloseThread()
 		}
 
