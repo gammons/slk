@@ -80,6 +80,15 @@ type WorkspaceContext struct {
 }
 
 func main() {
+	// Debug log to file when SLK_DEBUG is set; otherwise log goes to
+	// stderr (which is invisible under altscreen).
+	if os.Getenv("SLK_DEBUG") != "" {
+		f, err := os.OpenFile("/tmp/slk-debug.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			log.SetOutput(f)
+			log.Printf("=== slk debug session started ===")
+		}
+	}
 	// Handle simple flags before anything else
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -192,13 +201,28 @@ func run() error {
 
 	notifier := notify.New(cfg.Notifications.Enabled)
 
-	// Initialize the OS clipboard for Ctrl+V paste-to-upload. On
-	// headless Linux or environments without X11/XWayland, this fails
-	// gracefully — Ctrl+V smart-paste then becomes a no-op.
+	// Initialize the OS clipboard for paste-to-upload.
+	//
+	// Wayland sessions: golang.design/x/clipboard is X11-only and does
+	// not see images placed on the clipboard by Wayland-native apps
+	// (even with XWayland), so we shell out to `wl-paste` instead.
+	// Requires the `wl-clipboard` package.
+	//
+	// Otherwise (X11 / macOS / Windows) use the native library.
 	clipboardOK := true
-	if err := clipboard.Init(); err != nil {
-		log.Printf("Warning: clipboard init failed (%v); Ctrl+V image paste disabled", err)
-		clipboardOK = false
+	useWaylandClipboard := false
+	if ui.IsWayland() {
+		if ui.HasWlPaste() {
+			useWaylandClipboard = true
+		} else {
+			log.Printf("Warning: WAYLAND_DISPLAY set but wl-paste not on PATH; install wl-clipboard for paste-to-upload. Ctrl+V image paste disabled.")
+			clipboardOK = false
+		}
+	} else {
+		if err := clipboard.Init(); err != nil {
+			log.Printf("Warning: clipboard init failed (%v); Ctrl+V image paste disabled", err)
+			clipboardOK = false
+		}
 	}
 
 	// Initialize cache database
@@ -240,6 +264,9 @@ func run() error {
 	// Create app
 	app := ui.NewApp()
 	app.SetClipboardAvailable(clipboardOK)
+	if useWaylandClipboard {
+		app.SetClipboardReader(ui.WaylandClipboardReader())
+	}
 
 	// Connect to workspaces
 	ctx := context.Background()
@@ -1321,7 +1348,7 @@ type rtmEventHandler struct {
 	wsCtx *WorkspaceContext
 }
 
-func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool) {
+func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool, files []slack.File) {
 	// Cache every message to SQLite, regardless of active workspace
 	h.db.UpsertMessage(cache.Message{
 		TS:          ts,
@@ -1384,14 +1411,15 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	h.program.Send(ui.NewMessageMsg{
 		ChannelID: channelID,
 		Message: messages.MessageItem{
-			TS:        ts,
-			UserID:    userID,
-			UserName:  userName,
-			Text:      text,
-			Timestamp: formatTimestamp(ts, h.tsFormat),
-			ThreadTS:  threadTS,
-			Subtype:   subtype,
-			IsEdited:  edited,
+			TS:          ts,
+			UserID:      userID,
+			UserName:    userName,
+			Text:        text,
+			Timestamp:   formatTimestamp(ts, h.tsFormat),
+			ThreadTS:    threadTS,
+			Subtype:     subtype,
+			IsEdited:    edited,
+			Attachments: extractAttachments(files),
 		},
 	})
 }
