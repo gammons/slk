@@ -369,17 +369,6 @@ type WSMessageDeletedMsg struct {
 	TS        string
 }
 
-// UploadAttachmentsMsg is emitted when the user submits a compose
-// with pending attachments. App.Update invokes the configured
-// uploader and converts the result into UploadProgressMsg /
-// UploadResultMsg.
-type UploadAttachmentsMsg struct {
-	ChannelID   string
-	ThreadTS    string
-	Caption     string
-	Attachments []compose.PendingAttachment
-}
-
 // UploadProgressMsg is dispatched out-of-band by the uploader as
 // each file completes. App updates the status-bar toast.
 type UploadProgressMsg struct {
@@ -959,14 +948,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
 			return statusbar.CopiedClearMsg{}
 		}))
-
-	case UploadAttachmentsMsg:
-		// Reserved: this Msg is dispatched directly to the uploader via
-		// submitWithAttachments. If something else emits it, we treat
-		// it as a re-dispatch via the configured uploader.
-		if a.uploader != nil {
-			cmds = append(cmds, a.uploader(msg.ChannelID, msg.ThreadTS, msg.Caption, msg.Attachments))
-		}
 
 	case UploadProgressMsg:
 		a.statusbar.SetToast(fmt.Sprintf("Uploading %d/%d…", msg.Done, msg.Total))

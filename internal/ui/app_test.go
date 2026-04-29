@@ -1651,7 +1651,7 @@ func TestSmartPaste_ThreadPane_AttachesToThreadCompose(t *testing.T) {
 	}
 }
 
-func TestSubmitWithAttachments_EmitsUploadAttachmentsMsg(t *testing.T) {
+func TestSubmitWithAttachments_InvokesUploaderAndSetsUploading(t *testing.T) {
 	app := NewApp()
 	app.activeChannelID = "C1"
 	app.focusedPanel = PanelMessages

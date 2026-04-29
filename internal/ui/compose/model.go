@@ -240,6 +240,8 @@ func (m *Model) Reset() {
 	m.mentionPicker.Close()
 	m.emojiActive = false
 	m.emojiPicker.Close()
+	m.pending = nil
+	m.uploading = false
 	m.dirty()
 }
 

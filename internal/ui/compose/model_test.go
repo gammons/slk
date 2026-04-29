@@ -825,3 +825,22 @@ func TestUpdate_BackspaceWhileUploading_DoesNotRemove(t *testing.T) {
 		t.Errorf("expected attachment to remain while uploading, got %d", len(m2.Attachments()))
 	}
 }
+
+func TestReset_ClearsPendingAttachmentsAndUploadingFlag(t *testing.T) {
+	m := New("general")
+	m.AddAttachment(PendingAttachment{Filename: "a.png", Size: 1})
+	m.SetUploading(true)
+	m.SetValue("draft")
+
+	m.Reset()
+
+	if len(m.Attachments()) != 0 {
+		t.Errorf("expected attachments cleared, got %d", len(m.Attachments()))
+	}
+	if m.Uploading() {
+		t.Error("expected Uploading=false after Reset")
+	}
+	if m.Value() != "" {
+		t.Errorf("expected value cleared, got %q", m.Value())
+	}
+}
