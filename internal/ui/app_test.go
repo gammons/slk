@@ -1950,3 +1950,36 @@ func TestHandleInsertMode_Up_OnSecondLine_ForwardsToTextarea(t *testing.T) {
 		t.Error("expected cursor moved to first line via standard Up")
 	}
 }
+
+// --- quit bindings: q (confirm) / Q (immediate) ---
+
+func TestNormalMode_CapitalQ_QuitsImmediately(t *testing.T) {
+	app := NewApp()
+	cmd := app.handleNormalMode(tea.KeyPressMsg{Code: 'Q', Text: "Q"})
+	if cmd == nil {
+		t.Fatal("expected Q to return a non-nil cmd")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Errorf("expected tea.QuitMsg, got %T", cmd())
+	}
+	if app.confirmPrompt.IsVisible() {
+		t.Error("Q should not raise the confirm prompt")
+	}
+}
+
+func TestNormalMode_LowercaseQ_OpensConfirmPrompt(t *testing.T) {
+	app := NewApp()
+	cmd := app.handleNormalMode(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	if cmd != nil {
+		// Opening the prompt should not itself emit a quit cmd.
+		if _, ok := cmd().(tea.QuitMsg); ok {
+			t.Fatal("lowercase q should NOT quit immediately; expected confirm prompt")
+		}
+	}
+	if !app.confirmPrompt.IsVisible() {
+		t.Fatal("lowercase q should open the confirm prompt")
+	}
+	if app.mode != ModeConfirm {
+		t.Errorf("expected mode=ModeConfirm, got %v", app.mode)
+	}
+}

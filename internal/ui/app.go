@@ -1713,6 +1713,18 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, a.keys.Delete):
 		return a.beginDeleteOfSelected()
 
+	case key.Matches(msg, a.keys.QuitForce):
+		return tea.Quit
+
+	case key.Matches(msg, a.keys.QuitConfirm):
+		a.confirmPrompt.Open(
+			"Quit slk?",
+			"All workspace connections will close.",
+			func() tea.Msg { return tea.Quit() },
+		)
+		a.SetMode(ModeConfirm)
+		return nil
+
 	default:
 		// Number keys 1-9 switch workspaces
 		keyStr := msg.String()

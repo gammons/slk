@@ -255,6 +255,8 @@ Or just run `./bin/slk`. Onboarding launches automatically when no workspaces ar
 | `Y` / `C` | Normal (message) | Copy message permalink |
 | `Ctrl+y` | Any | Switch theme |
 | `Ctrl+s` | Any | Set status (Active / Away / DND snooze) |
+| `q` | Normal | Quit (with confirmation) |
+| `Q` | Normal | Quit immediately |
 | `Ctrl+c` | Any | Quit |
 
 ## Configuration
