@@ -224,14 +224,22 @@ func (m Model) View(width int) string {
 
 	left := lipgloss.JoinHorizontal(lipgloss.Center, modeLabel, channelInfo, wsInfo)
 
+	// Render separators and trailing padding with the SurfaceDark background so
+	// the right-side pills read as one continuous bar even when the terminal's
+	// default background differs from the theme's surface_dark color (e.g. a
+	// dark terminal running a light slk theme, which previously left a stray
+	// dark cell between segments).
+	sep := lipgloss.NewStyle().Background(styles.SurfaceDark).Render(" ")
+	trailing := lipgloss.NewStyle().Background(styles.SurfaceDark).Render("  ")
+
 	rightContent := ""
 	for i, p := range rightParts {
 		if i > 0 {
-			rightContent += " "
+			rightContent += sep
 		}
 		rightContent += p
 	}
-	rightContent += "  " // trailing padding (extra space for unicode width variance)
+	rightContent += trailing // trailing padding (extra space for unicode width variance)
 
 	// Fill the bar to full width
 	gap := width - lipgloss.Width(left) - lipgloss.Width(rightContent)
