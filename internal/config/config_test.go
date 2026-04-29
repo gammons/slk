@@ -9,8 +9,8 @@ import (
 func TestDefaultConfig(t *testing.T) {
 	cfg := Default()
 
-	if cfg.Appearance.Theme != "dark" {
-		t.Errorf("expected default theme 'dark', got %q", cfg.Appearance.Theme)
+	if cfg.Appearance.Theme != "nord" {
+		t.Errorf("expected default theme 'nord', got %q", cfg.Appearance.Theme)
 	}
 	if cfg.Appearance.TimestampFormat != "3:04 PM" {
 		t.Errorf("expected default timestamp format '3:04 PM', got %q", cfg.Appearance.TimestampFormat)
@@ -110,8 +110,8 @@ func TestLoadConfigMissingFile(t *testing.T) {
 		t.Fatal("expected no error for missing file, got:", err)
 	}
 	// Should return defaults
-	if cfg.Appearance.Theme != "dark" {
-		t.Errorf("expected default theme 'dark', got %q", cfg.Appearance.Theme)
+	if cfg.Appearance.Theme != "nord" {
+		t.Errorf("expected default theme 'nord', got %q", cfg.Appearance.Theme)
 	}
 }
 
@@ -157,8 +157,8 @@ func TestResolveThemeNoGlobal(t *testing.T) {
 		Appearance: Appearance{Theme: ""},
 		Workspaces: map[string]WorkspaceSettings{},
 	}
-	if got := c.ResolveTheme("T01"); got != "dark" {
-		t.Errorf("ResolveTheme no global = %q, want dark", got)
+	if got := c.ResolveTheme("T01"); got != "nord" {
+		t.Errorf("ResolveTheme no global = %q, want nord", got)
 	}
 }
 

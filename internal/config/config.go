@@ -94,7 +94,7 @@ type Theme struct {
 func Default() Config {
 	return Config{
 		Appearance: Appearance{
-			Theme:           "dark",
+			Theme:           "nord",
 			TimestampFormat: "3:04 PM",
 		},
 		Animations: Animations{
@@ -166,7 +166,7 @@ func (c Config) MatchSection(channelName string) string {
 
 // ResolveTheme returns the theme name to use for the given workspace,
 // falling back to the global Appearance.Theme when no per-workspace theme
-// is set, and to "dark" when no global theme is set either.
+// is set, and to "nord" when no global theme is set either.
 func (c Config) ResolveTheme(teamID string) string {
 	if ws, ok := c.Workspaces[teamID]; ok && ws.Theme != "" {
 		return ws.Theme
@@ -174,5 +174,5 @@ func (c Config) ResolveTheme(teamID string) string {
 	if c.Appearance.Theme != "" {
 		return c.Appearance.Theme
 	}
-	return "dark"
+	return "nord"
 }
