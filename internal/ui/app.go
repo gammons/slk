@@ -3294,13 +3294,20 @@ func (a *App) View() tea.View {
 		}
 
 		// Cached top region: messages + top edge + side edges.
+		// NOTE: lipgloss/v2 quirk -- calling .BorderBottom(false) on a
+		// style that has BorderStyle() set disables ALL borders unless
+		// the other three sides are explicitly enabled with
+		// .BorderTop(true).BorderLeft(true).BorderRight(true). Without
+		// these, the entire panel renders without any border at all.
 		topPanelVersion := a.messagepane.Version()
 		topLayoutKey := msgLayoutKey | int64(composeHeight)<<16
 		topHeight := msgContentHeight + 1 // +1 for top border edge
 		if c := &a.panelCacheMsgTop; !c.hit(topPanelVersion, msgWidth, topHeight, topLayoutKey) {
-			topBorderStyle := styles.UnfocusedBorder.Width(msgWidth).BorderBottom(false)
+			topBorderStyle := styles.UnfocusedBorder.Width(msgWidth).
+				BorderTop(true).BorderLeft(true).BorderRight(true).BorderBottom(false)
 			if msgFocused {
-				topBorderStyle = styles.FocusedBorder.Width(msgWidth).BorderBottom(false)
+				topBorderStyle = styles.FocusedBorder.Width(msgWidth).
+					BorderTop(true).BorderLeft(true).BorderRight(true).BorderBottom(false)
 			}
 			msgView := a.messagepane.View(msgContentHeight, msgWidth-2)
 			msgView = messages.ReapplyBgAfterResets(msgView, messages.BgANSI())
@@ -3313,9 +3320,13 @@ func (a *App) View() tea.View {
 		topBordered := a.panelCacheMsgTop.output
 
 		// Fresh bottom region: typing line + compose, with bottom edge.
-		bottomBorderStyle := styles.UnfocusedBorder.Width(msgWidth).BorderTop(false)
+		// Same lipgloss/v2 quirk applies -- explicit BorderBottom/Left/Right(true)
+		// required alongside BorderTop(false), or no border renders.
+		bottomBorderStyle := styles.UnfocusedBorder.Width(msgWidth).
+			BorderTop(false).BorderLeft(true).BorderRight(true).BorderBottom(true)
 		if msgFocused {
-			bottomBorderStyle = styles.FocusedBorder.Width(msgWidth).BorderTop(false)
+			bottomBorderStyle = styles.FocusedBorder.Width(msgWidth).
+				BorderTop(false).BorderLeft(true).BorderRight(true).BorderBottom(true)
 		}
 		bottomInner := lipgloss.JoinVertical(lipgloss.Left, typingLine, composeView)
 		bottomInner = messages.ReapplyBgAfterResets(bottomInner, messages.BgANSI())
@@ -3358,9 +3369,12 @@ func (a *App) View() tea.View {
 		threadTopLayoutKey := threadLayoutKey | int64(threadComposeHeight)<<16
 		threadTopHeight := threadContentHeight + 1 // +1 top border edge
 		if c := &a.panelCacheThread; !c.hit(threadTopVersion, threadWidth, threadTopHeight, threadTopLayoutKey) {
-			topBorderStyle := styles.UnfocusedBorder.Width(threadWidth).BorderBottom(false)
+			// See lipgloss/v2 quirk note on the message-pane top region.
+			topBorderStyle := styles.UnfocusedBorder.Width(threadWidth).
+				BorderTop(true).BorderLeft(true).BorderRight(true).BorderBottom(false)
 			if threadFocused {
-				topBorderStyle = styles.FocusedBorder.Width(threadWidth).BorderBottom(false)
+				topBorderStyle = styles.FocusedBorder.Width(threadWidth).
+					BorderTop(true).BorderLeft(true).BorderRight(true).BorderBottom(false)
 			}
 			threadView := a.threadPanel.View(threadContentHeight, threadWidth-2)
 			threadView = messages.ReapplyBgAfterResets(threadView, messages.BgANSI())
@@ -3373,9 +3387,11 @@ func (a *App) View() tea.View {
 		threadTopBordered := a.panelCacheThread.output
 
 		// Fresh bottom region.
-		bottomBorderStyle := styles.UnfocusedBorder.Width(threadWidth).BorderTop(false)
+		bottomBorderStyle := styles.UnfocusedBorder.Width(threadWidth).
+			BorderTop(false).BorderLeft(true).BorderRight(true).BorderBottom(true)
 		if threadFocused {
-			bottomBorderStyle = styles.FocusedBorder.Width(threadWidth).BorderTop(false)
+			bottomBorderStyle = styles.FocusedBorder.Width(threadWidth).
+				BorderTop(false).BorderLeft(true).BorderRight(true).BorderBottom(true)
 		}
 		threadBottomInner := messages.ReapplyBgAfterResets(threadComposeView, messages.BgANSI())
 		threadBottomBordered := exactSize(
