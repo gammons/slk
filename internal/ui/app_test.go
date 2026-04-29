@@ -13,6 +13,7 @@ import (
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/statusbar"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 func TestAppFocusCycle(t *testing.T) {
@@ -828,5 +829,119 @@ func TestApp_WorkspaceSwitchedTriggersThreadsListFetchAndSelectsThreadsRow(t *te
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("WorkspaceSwitchedMsg did not trigger threads-list fetch")
+	}
+}
+
+func TestApp_ThreadReplySentOptimisticallyAddsToThreadPanel(t *testing.T) {
+	app := NewApp()
+	app.SetCurrentUserID("USELF")
+	app.activeChannelID = "C1"
+	parent := messages.MessageItem{TS: "1700000000.000100"}
+	app.threadPanel.SetThread(parent, nil, "C1", "1700000000.000100")
+	app.threadVisible = true
+
+	app.Update(ThreadReplySentMsg{
+		ChannelID: "C1",
+		ThreadTS:  "1700000000.000100",
+		Message: messages.MessageItem{
+			TS:       "1700000050.000400",
+			UserID:   "USELF",
+			UserName: "you",
+			Text:     "my reply",
+			ThreadTS: "1700000000.000100",
+		},
+	})
+
+	if got := app.threadPanel.ReplyCount(); got != 1 {
+		t.Fatalf("expected 1 reply added optimistically, got %d", got)
+	}
+	if !app.isSelfSent("1700000050.000400") {
+		t.Errorf("expected TS to be recorded as self-sent for echo dedup")
+	}
+}
+
+func TestApp_NewMessageEchoOfSelfSentIsSkipped(t *testing.T) {
+	app := NewApp()
+	app.SetCurrentUserID("USELF")
+	app.activeChannelID = "C1"
+	parent := messages.MessageItem{TS: "1700000000.000100"}
+	app.threadPanel.SetThread(parent, nil, "C1", "1700000000.000100")
+	app.threadVisible = true
+
+	// Optimistic add via the HTTP-response path.
+	app.Update(ThreadReplySentMsg{
+		ChannelID: "C1",
+		ThreadTS:  "1700000000.000100",
+		Message: messages.MessageItem{
+			TS: "1700000050.000400", UserID: "USELF", Text: "hi",
+			ThreadTS: "1700000000.000100",
+		},
+	})
+	if app.threadPanel.ReplyCount() != 1 {
+		t.Fatalf("setup: expected 1 reply after optimistic add, got %d", app.threadPanel.ReplyCount())
+	}
+
+	// WS echo for the same TS must be ignored, not double-appended.
+	app.Update(NewMessageMsg{
+		ChannelID: "C1",
+		Message: messages.MessageItem{
+			TS: "1700000050.000400", UserID: "USELF", Text: "hi",
+			ThreadTS: "1700000000.000100",
+		},
+	})
+	if got := app.threadPanel.ReplyCount(); got != 1 {
+		t.Errorf("WS echo of self-sent reply double-added; want 1 reply, got %d", got)
+	}
+
+	// A different TS (e.g. someone else's reply) should still be added.
+	app.Update(NewMessageMsg{
+		ChannelID: "C1",
+		Message: messages.MessageItem{
+			TS: "1700000060.000500", UserID: "U2", Text: "yo",
+			ThreadTS: "1700000000.000100",
+		},
+	})
+	if got := app.threadPanel.ReplyCount(); got != 2 {
+		t.Errorf("non-self reply not appended; want 2 replies, got %d", got)
+	}
+}
+
+func TestApp_MessageSentOptimisticallyAppendsToMessagepane(t *testing.T) {
+	app := NewApp()
+	app.SetCurrentUserID("USELF")
+	app.activeChannelID = "C1"
+
+	beforeVer := app.messagepane.Version()
+	app.Update(MessageSentMsg{
+		ChannelID: "C1",
+		Message: messages.MessageItem{
+			TS: "1700000999.000001", UserID: "USELF", Text: "hello",
+		},
+	})
+	if app.messagepane.Version() == beforeVer {
+		t.Errorf("expected messagepane version to advance after optimistic append")
+	}
+	if !app.isSelfSent("1700000999.000001") {
+		t.Errorf("expected TS to be recorded for echo dedup")
+	}
+}
+
+func TestApp_WorkspaceReadyAppliesPerWorkspaceTheme(t *testing.T) {
+	app := NewApp()
+	// Theme application should fire when a per-workspace theme is set
+	// for the initial active workspace. The test only asserts that the
+	// version counter advances, since the actual theme name lookup lives
+	// in styles.Apply.
+	beforeVer := styles.Version()
+
+	app.Update(WorkspaceReadyMsg{
+		TeamID:   "T1",
+		TeamName: "team",
+		Theme:    "dracula",
+	})
+
+	afterVer := styles.Version()
+	if afterVer == beforeVer {
+		t.Errorf("expected styles.Version() to advance after WorkspaceReadyMsg with non-empty Theme")
 	}
 }

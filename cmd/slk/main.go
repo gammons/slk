@@ -179,9 +179,11 @@ func run() error {
 	// Load custom themes and apply the active theme
 	themesDir := filepath.Join(configDir, "themes")
 	styles.LoadCustomThemes(themesDir)
-	// At startup we apply the global default; per-workspace themes are
-	// applied later when the workspace switcher fires for the initial
-	// active workspace.
+	// At startup we apply the global default. The per-workspace theme
+	// for the initial active workspace is then re-applied via
+	// WorkspaceReadyMsg.Theme once that workspace finishes connecting,
+	// which avoids a flash of the wrong theme without needing to know
+	// the active TeamID up front (workspaces connect in goroutines).
 	styles.Apply(cfg.Appearance.Theme, cfg.Theme)
 
 	notifier := notify.New(cfg.Notifications.Enabled)
@@ -575,6 +577,7 @@ func run() error {
 			p.Send(ui.WorkspaceReadyMsg{
 				TeamID:      wctx.TeamID,
 				TeamName:    wctx.TeamName,
+				Theme:       cfg.ResolveTheme(wctx.TeamID),
 				Channels:    wctx.Channels,
 				FinderItems: wctx.FinderItems,
 				UserNames:   wctx.UserNames,

@@ -156,6 +156,7 @@ type (
 	WorkspaceReadyMsg struct {
 		TeamID      string
 		TeamName    string
+		Theme       string // resolved theme name (per-workspace or global default)
 		Channels    []sidebar.ChannelItem
 		FinderItems []channelfinder.Item
 		UserNames   map[string]string
@@ -396,8 +397,9 @@ type App struct {
 	// outputs are reused -- saving the bulk of the per-keystroke render cost.
 	panelCacheRail     panelCache
 	panelCacheSidebar  panelCache
-	panelCacheMsgPanel panelCache
-	panelCacheThread   panelCache
+	panelCacheMsgPanel panelCache // used by the threads-list view (no compose)
+	panelCacheMsgTop   panelCache // bordered messages region (channel view); compose+typing rendered fresh below
+	panelCacheThread   panelCache // used by the thread side panel's bordered top region
 	panelCacheStatus   panelCache
 
 	// Current context
@@ -465,6 +467,16 @@ type App struct {
 	typingSendFn   TypingSendFunc
 	lastTypingSent time.Time
 
+	// Self-sent message TS dedup. When the user posts a message or thread
+	// reply, the chat.postMessage HTTP response (MessageSentMsg /
+	// ThreadReplySentMsg) is used for an optimistic UI update. The Slack
+	// WebSocket may also deliver an echo of the same TS later -- or, in
+	// the case of self-posted thread replies on the internal flannel
+	// protocol, may not deliver one at all. Recording our own TSes lets
+	// us skip the echo if it arrives, while not relying on it for
+	// correctness.
+	selfSentTSes map[string]time.Time // TS -> when recorded
+
 	// Loading overlay
 	loading       bool
 	loadingStates []loadingEntry
@@ -496,6 +508,7 @@ func NewApp() *App {
 		view:                 ViewChannels,
 		keys:                 DefaultKeyMap(),
 		typingUsers:          make(map[string]map[string]time.Time),
+		selfSentTSes:         make(map[string]time.Time),
 		threadsDirtyDebounce: 150 * time.Millisecond,
 		userNames:            map[string]string{},
 		statusByTeam:         map[string]workspaceStatus{},
@@ -841,6 +854,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case NewMessageMsg:
+		// Skip the WS echo of our own optimistic add. The corresponding
+		// MessageSentMsg / ThreadReplySentMsg already updated the UI and
+		// scheduled side effects; redoing them here would double-render.
+		if a.isSelfSent(msg.Message.TS) {
+			break
+		}
 		if msg.ChannelID == a.activeChannelID {
 			// Route thread replies to the thread panel if it matches the open thread
 			if a.threadVisible && msg.Message.ThreadTS == a.threadPanel.ThreadTS() {
@@ -874,8 +893,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case MessageSentMsg:
-		// Message will arrive via RTM WebSocket event (NewMessageMsg).
-		// Don't append here to avoid doubling.
+		// Optimistic add using the chat.postMessage HTTP response. The
+		// matching WS echo (if it arrives) is filtered in NewMessageMsg
+		// via isSelfSent so we don't double-render.
+		if msg.Message.TS != "" {
+			a.recordSelfSent(msg.Message.TS)
+			if msg.ChannelID == a.activeChannelID {
+				a.messagepane.AppendMessage(msg.Message)
+			}
+		}
 
 	case ThreadRepliesLoadedMsg:
 		if a.threadVisible && msg.ThreadTS == a.threadPanel.ThreadTS() {
@@ -922,8 +948,27 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case ThreadReplySentMsg:
-		// Reply will arrive via RTM WebSocket event (NewMessageMsg).
-		// Don't append here to avoid doubling.
+		// Optimistic add using the chat.postMessage HTTP response. The
+		// internal Slack flannel WebSocket does not always echo
+		// self-posted thread replies as a plain "message" event the
+		// dispatcher recognizes, so relying on the echo alone meant the
+		// user's own thread reply wouldn't appear until the next time
+		// they reopened the app (whereupon GetReplies would pull it via
+		// HTTP). Optimistically applying all the side effects here makes
+		// the panel update immediately. If the echo does arrive it is
+		// filtered out via isSelfSent in NewMessageMsg.
+		if msg.Message.TS != "" {
+			a.recordSelfSent(msg.Message.TS)
+			if msg.ChannelID == a.activeChannelID {
+				if a.threadVisible && msg.ThreadTS == a.threadPanel.ThreadTS() {
+					a.threadPanel.AddReply(msg.Message)
+				}
+				a.messagepane.IncrementReplyCount(msg.ThreadTS)
+			}
+			if c := a.scheduleThreadsDirty(); c != nil {
+				cmds = append(cmds, c)
+			}
+		}
 
 	case ConnectionStateMsg:
 		a.statusbar.SetConnectionState(statusbar.ConnectionState(msg.State))
@@ -1046,6 +1091,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.sidebar.SetThreadsUnreadCount(0)
 			a.lastOpenedChannelID = ""
 			a.lastOpenedThreadTS = ""
+			// Apply the resolved theme for the initial active workspace.
+			// Without this, per-workspace themes silently revert to the
+			// global default on startup until the user manually switches
+			// workspaces.
+			if msg.Theme != "" {
+				styles.Apply(msg.Theme, a.themeOverrides)
+				a.messagepane.InvalidateCache()
+				a.threadPanel.InvalidateCache()
+				a.sidebar.InvalidateCache()
+				a.compose.RefreshStyles()
+				a.threadCompose.RefreshStyles()
+			}
 			a.sidebar.SetItems(msg.Channels)
 			a.channelFinder.SetItems(msg.FinderItems)
 			a.SetUserNames(msg.UserNames)
@@ -2643,6 +2700,37 @@ func (a *App) maybeSendTyping() {
 	go a.typingSendFn(channelID)
 }
 
+// recordSelfSent marks a message TS as one the user just posted from this
+// session, so the WS echo (if any) can be skipped to avoid double-rendering.
+// Old entries are GC'd opportunistically; even if they leak, they're tiny
+// and only checked when echoes arrive.
+func (a *App) recordSelfSent(ts string) {
+	if ts == "" {
+		return
+	}
+	a.selfSentTSes[ts] = time.Now()
+	// Opportunistic cleanup: drop entries older than 5 minutes. WS echoes
+	// arrive within seconds; anything older is stale.
+	if len(a.selfSentTSes) > 64 {
+		cutoff := time.Now().Add(-5 * time.Minute)
+		for k, v := range a.selfSentTSes {
+			if v.Before(cutoff) {
+				delete(a.selfSentTSes, k)
+			}
+		}
+	}
+}
+
+// isSelfSent reports whether ts matches a message we recently posted from
+// this session.
+func (a *App) isSelfSent(ts string) bool {
+	if ts == "" {
+		return false
+	}
+	_, ok := a.selfSentTSes[ts]
+	return ok
+}
+
 // addTypingUser records that a user is typing in a channel.
 func (a *App) addTypingUser(channelID, userID string) {
 	if a.typingUsers[channelID] == nil {
@@ -2846,37 +2934,41 @@ func (a *App) View() tea.View {
 		a.layoutSidebarHeight = contentHeight - 2
 	}
 
-	// Render message pane with border. The message pane bundles three
-	// things that change at very different rates: the messages panel
-	// itself, the typing-indicator line, and the compose box. We compose
-	// a single int64 panelVersion that mixes their individual versions so
-	// the cache invalidates whenever any of them changes.
+	// Render message pane with border.
+	//
+	// PERF: The naive single-cache approach (key = mix(messagepane.Version,
+	// compose.Version)) was the dominant per-keystroke cost at large
+	// terminal sizes. Compose dirty()s on every keystroke, which would
+	// invalidate the entire bordered+exact-sized panel string and force
+	// 5-7 full O(height x width) ansi-aware rescans (JoinVertical x2,
+	// ReapplyBgAfterResets, border.Render x3, exactSize x2) over the
+	// messages region that hadn't actually changed.
+	//
+	// Split rendering: cache the bordered messages region (top edge +
+	// sides only, no bottom edge) keyed only on messagepane.Version --
+	// independent of compose. Render the typing line + compose box with
+	// the matching bottom-edge border fresh each frame. Stack them; the
+	// border glyphs line up because BorderBottom(false) on top + sides
+	// +  BorderTop(false) on bottom + sides yields a continuous panel.
 	msgFocused := a.focusedPanel == PanelMessages && a.mode != ModeInsert
 	composeFocused := a.mode == ModeInsert && a.focusedPanel != PanelThread
-	typingActive := len(a.typingUsers) > 0
 	// Mix the view-mode bit into the layout key so a Channels<->Threads
 	// switch invalidates the cached output (the cache is otherwise
 	// indistinguishable across views at the same focus/mode/theme).
-	msgLayoutKey := themeVer<<4 |
-		boolToInt(a.view == ViewThreads)<<3 |
-		boolToInt(msgFocused)<<2 |
-		boolToInt(composeFocused)<<1 |
-		boolToInt(typingActive)
-	var msgPanelVersion int64
-	if a.view == ViewThreads {
-		msgPanelVersion = mixVersions(a.threadsView.Version(), 0)
-	} else {
-		msgPanelVersion = mixVersions(a.messagepane.Version(), a.compose.Version())
-	}
+	msgLayoutKey := themeVer<<3 |
+		boolToInt(a.view == ViewThreads)<<2 |
+		boolToInt(msgFocused)<<1
 	a.compose.SetWidth(msgWidth - 2)
-	if c := &a.panelCacheMsgPanel; !c.hit(msgPanelVersion, msgWidth, contentHeight, msgLayoutKey) {
-		msgBorderStyle := styles.UnfocusedBorder.Width(msgWidth)
-		if msgFocused {
-			msgBorderStyle = styles.FocusedBorder.Width(msgWidth)
-		}
-		if a.view == ViewThreads {
-			// Threads view: replace the entire inner content with the
-			// threads list. No compose, no typing line.
+	if a.view == ViewThreads {
+		// Threads view: no compose, no typing line. The whole bordered
+		// panel is content-stable per threadsView.Version, so we keep
+		// the old single-cache path here.
+		tvVersion := a.threadsView.Version()
+		if c := &a.panelCacheMsgPanel; !c.hit(tvVersion, msgWidth, contentHeight, msgLayoutKey) {
+			msgBorderStyle := styles.UnfocusedBorder.Width(msgWidth)
+			if msgFocused {
+				msgBorderStyle = styles.FocusedBorder.Width(msgWidth)
+			}
 			a.threadsView.SetUserNames(a.userNames)
 			a.threadsView.SetSelfUserID(a.currentUserID)
 			msgContentHeight := contentHeight - 2
@@ -2890,89 +2982,137 @@ func (a *App) View() tea.View {
 				msgBorderStyle.Render(tvView),
 				msgWidth+msgBorder, contentHeight,
 			)
-			c.store(out, msgPanelVersion, msgWidth, contentHeight, msgLayoutKey)
-		} else {
-			composeView := a.compose.View(msgWidth-2, composeFocused)
-			// Inline pickers stack above the compose box. Both should never be
-			// visible simultaneously (mutually exclusive in compose.Update);
-			// emoji wins if somehow both are.
-			if pickerView := a.compose.EmojiPickerView(msgWidth - 2); pickerView != "" {
-				composeView = pickerView + "\n" + composeView
-			} else if mentionView := a.compose.MentionPickerView(msgWidth - 2); mentionView != "" {
-				composeView = mentionView + "\n" + composeView
-			}
-			// Add a background-colored spacer line above the compose box
-			// (replaces MarginTop which produced unstyled/black margin cells)
-			composeSpacer := lipgloss.NewStyle().Background(styles.Background).Width(msgWidth - 2).Render("")
-			composeView = composeSpacer + "\n" + composeView
-			composeHeight := lipgloss.Height(composeView)
-			typingLine := a.renderTypingLine()
-			typingHeight := 0
-			if typingLine != "" {
-				typingHeight = 1
-			}
-			msgContentHeight := contentHeight - 2 - composeHeight - typingHeight
-			a.layoutMsgHeight = msgContentHeight
-			if msgContentHeight < 3 {
-				msgContentHeight = 3
+			c.store(out, tvVersion, msgWidth, contentHeight, msgLayoutKey)
+		}
+		panels = append(panels, a.panelCacheMsgPanel.output)
+	} else {
+		// Channel view: split into cached top region + fresh bottom region.
+		composeView := a.compose.View(msgWidth-2, composeFocused)
+		// Inline pickers stack above the compose box. Both should never be
+		// visible simultaneously (mutually exclusive in compose.Update);
+		// emoji wins if somehow both are.
+		if pickerView := a.compose.EmojiPickerView(msgWidth - 2); pickerView != "" {
+			composeView = pickerView + "\n" + composeView
+		} else if mentionView := a.compose.MentionPickerView(msgWidth - 2); mentionView != "" {
+			composeView = mentionView + "\n" + composeView
+		}
+		// Add a background-colored spacer line above the compose box
+		// (replaces MarginTop which produced unstyled/black margin cells)
+		composeSpacer := lipgloss.NewStyle().Background(styles.Background).Width(msgWidth - 2).Render("")
+		composeView = composeSpacer + "\n" + composeView
+		composeHeight := lipgloss.Height(composeView)
+		// Always reserve one row above the compose box for the typing
+		// indicator. When nobody is typing we render a blank
+		// background-colored spacer in that row so the messages-pane
+		// height stays constant -- otherwise a transient typing line
+		// would shrink the messages area by one row, producing a
+		// spurious "more below" indicator and a visible scroll jump.
+		typingLine := a.renderTypingLine()
+		if typingLine == "" {
+			typingLine = lipgloss.NewStyle().
+				Background(styles.Background).
+				Width(msgWidth - 2).
+				Render("")
+		}
+		typingHeight := 1
+		bottomHeight := composeHeight + typingHeight
+		msgContentHeight := contentHeight - 2 - bottomHeight
+		a.layoutMsgHeight = msgContentHeight
+		if msgContentHeight < 3 {
+			msgContentHeight = 3
+		}
+
+		// Cached top region: messages + top edge + side edges.
+		topPanelVersion := a.messagepane.Version()
+		topLayoutKey := msgLayoutKey | int64(composeHeight)<<16
+		topHeight := msgContentHeight + 1 // +1 for top border edge
+		if c := &a.panelCacheMsgTop; !c.hit(topPanelVersion, msgWidth, topHeight, topLayoutKey) {
+			topBorderStyle := styles.UnfocusedBorder.Width(msgWidth).BorderBottom(false)
+			if msgFocused {
+				topBorderStyle = styles.FocusedBorder.Width(msgWidth).BorderBottom(false)
 			}
 			msgView := a.messagepane.View(msgContentHeight, msgWidth-2)
-			var msgInner string
-			if typingLine != "" {
-				msgInner = lipgloss.JoinVertical(lipgloss.Left, msgView, typingLine, composeView)
-			} else {
-				msgInner = lipgloss.JoinVertical(lipgloss.Left, msgView, composeView)
-			}
-			// Re-apply theme background after ANSI resets so the border style's
-			// right-side padding gets the correct background instead of terminal default.
-			msgInner = messages.ReapplyBgAfterResets(msgInner, messages.BgANSI())
+			msgView = messages.ReapplyBgAfterResets(msgView, messages.BgANSI())
 			out := exactSize(
-				msgBorderStyle.Render(msgInner),
-				msgWidth+msgBorder, contentHeight,
+				topBorderStyle.Render(msgView),
+				msgWidth+msgBorder, topHeight,
 			)
-			c.store(out, msgPanelVersion, msgWidth, contentHeight, msgLayoutKey)
+			c.store(out, topPanelVersion, msgWidth, topHeight, topLayoutKey)
 		}
-	}
-	panels = append(panels, a.panelCacheMsgPanel.output)
+		topBordered := a.panelCacheMsgTop.output
 
-	// Render thread panel if visible. Same caching pattern as the message
-	// panel: panelVersion mixes the thread reply panel and the thread
-	// compose box.
+		// Fresh bottom region: typing line + compose, with bottom edge.
+		bottomBorderStyle := styles.UnfocusedBorder.Width(msgWidth).BorderTop(false)
+		if msgFocused {
+			bottomBorderStyle = styles.FocusedBorder.Width(msgWidth).BorderTop(false)
+		}
+		bottomInner := lipgloss.JoinVertical(lipgloss.Left, typingLine, composeView)
+		bottomInner = messages.ReapplyBgAfterResets(bottomInner, messages.BgANSI())
+		bottomBordered := exactSize(
+			bottomBorderStyle.Render(bottomInner),
+			msgWidth+msgBorder, bottomHeight+1, // +1 for bottom border edge
+		)
+
+		panels = append(panels, topBordered+"\n"+bottomBordered)
+	}
+
+	// Render thread side panel if visible. Same split-render pattern as
+	// the message panel: bordered top region (replies + sides + top edge)
+	// is cached on threadPanel.Version; bottom region (compose + sides +
+	// bottom edge) is rendered fresh each frame so threadCompose
+	// keystrokes don't invalidate the (much larger) replies render.
 	if a.threadVisible && threadWidth > 0 {
 		threadFocused := a.focusedPanel == PanelThread && a.mode != ModeInsert
 		threadComposeFocused := a.mode == ModeInsert && a.focusedPanel == PanelThread
 		threadLayoutKey := themeVer<<2 | boolToInt(threadFocused)<<1 | boolToInt(threadComposeFocused)
-		threadPanelVersion := mixVersions(a.threadPanel.Version(), a.threadCompose.Version())
 		a.threadCompose.SetWidth(threadWidth - 2)
-		if c := &a.panelCacheThread; !c.hit(threadPanelVersion, threadWidth, contentHeight, threadLayoutKey) {
-			threadBorderStyle := styles.UnfocusedBorder.Width(threadWidth)
+
+		threadComposeView := a.threadCompose.View(threadWidth-2, threadComposeFocused)
+		if pickerView := a.threadCompose.EmojiPickerView(threadWidth - 2); pickerView != "" {
+			threadComposeView = pickerView + "\n" + threadComposeView
+		} else if mentionView := a.threadCompose.MentionPickerView(threadWidth - 2); mentionView != "" {
+			threadComposeView = mentionView + "\n" + threadComposeView
+		}
+		threadComposeSpacer := lipgloss.NewStyle().Background(styles.Background).Width(threadWidth - 2).Render("")
+		threadComposeView = threadComposeSpacer + "\n" + threadComposeView
+		threadComposeHeight := lipgloss.Height(threadComposeView)
+		threadContentHeight := contentHeight - 2 - threadComposeHeight
+		a.layoutThreadHeight = threadContentHeight
+		if threadContentHeight < 3 {
+			threadContentHeight = 3
+		}
+
+		// Cached top region.
+		threadTopVersion := a.threadPanel.Version()
+		threadTopLayoutKey := threadLayoutKey | int64(threadComposeHeight)<<16
+		threadTopHeight := threadContentHeight + 1 // +1 top border edge
+		if c := &a.panelCacheThread; !c.hit(threadTopVersion, threadWidth, threadTopHeight, threadTopLayoutKey) {
+			topBorderStyle := styles.UnfocusedBorder.Width(threadWidth).BorderBottom(false)
 			if threadFocused {
-				threadBorderStyle = styles.FocusedBorder.Width(threadWidth)
-			}
-			threadComposeView := a.threadCompose.View(threadWidth-2, threadComposeFocused)
-			if pickerView := a.threadCompose.EmojiPickerView(threadWidth - 2); pickerView != "" {
-				threadComposeView = pickerView + "\n" + threadComposeView
-			} else if mentionView := a.threadCompose.MentionPickerView(threadWidth - 2); mentionView != "" {
-				threadComposeView = mentionView + "\n" + threadComposeView
-			}
-			threadComposeSpacer := lipgloss.NewStyle().Background(styles.Background).Width(threadWidth - 2).Render("")
-			threadComposeView = threadComposeSpacer + "\n" + threadComposeView
-			threadComposeHeight := lipgloss.Height(threadComposeView)
-			threadContentHeight := contentHeight - 2 - threadComposeHeight
-			a.layoutThreadHeight = threadContentHeight
-			if threadContentHeight < 3 {
-				threadContentHeight = 3
+				topBorderStyle = styles.FocusedBorder.Width(threadWidth).BorderBottom(false)
 			}
 			threadView := a.threadPanel.View(threadContentHeight, threadWidth-2)
-			threadInner := lipgloss.JoinVertical(lipgloss.Left, threadView, threadComposeView)
-			threadInner = messages.ReapplyBgAfterResets(threadInner, messages.BgANSI())
+			threadView = messages.ReapplyBgAfterResets(threadView, messages.BgANSI())
 			out := exactSize(
-				threadBorderStyle.Render(threadInner),
-				threadWidth+threadBorder, contentHeight,
+				topBorderStyle.Render(threadView),
+				threadWidth+threadBorder, threadTopHeight,
 			)
-			c.store(out, threadPanelVersion, threadWidth, contentHeight, threadLayoutKey)
+			c.store(out, threadTopVersion, threadWidth, threadTopHeight, threadTopLayoutKey)
 		}
-		panels = append(panels, a.panelCacheThread.output)
+		threadTopBordered := a.panelCacheThread.output
+
+		// Fresh bottom region.
+		bottomBorderStyle := styles.UnfocusedBorder.Width(threadWidth).BorderTop(false)
+		if threadFocused {
+			bottomBorderStyle = styles.FocusedBorder.Width(threadWidth).BorderTop(false)
+		}
+		threadBottomInner := messages.ReapplyBgAfterResets(threadComposeView, messages.BgANSI())
+		threadBottomBordered := exactSize(
+			bottomBorderStyle.Render(threadBottomInner),
+			threadWidth+threadBorder, threadComposeHeight+1, // +1 bottom border edge
+		)
+
+		panels = append(panels, threadTopBordered+"\n"+threadBottomBordered)
 	}
 
 	content := lipgloss.JoinHorizontal(lipgloss.Top, panels...)
