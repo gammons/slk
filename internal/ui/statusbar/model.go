@@ -224,3 +224,16 @@ type PermalinkCopiedMsg struct{}
 // App handles it by setting the toast to "Failed to copy link" and
 // scheduling a CopiedClearMsg.
 type PermalinkCopyFailedMsg struct{}
+
+// EditFailedMsg is delivered when chat.update fails. App handles by
+// showing the toast and scheduling a CopiedClearMsg.
+type EditFailedMsg struct{ Reason string }
+
+// DeleteFailedMsg is delivered when chat.delete fails.
+type DeleteFailedMsg struct{ Reason string }
+
+// EditNotOwnMsg is delivered when E was pressed on a non-owned message.
+type EditNotOwnMsg struct{}
+
+// DeleteNotOwnMsg is delivered when D was pressed on a non-owned message.
+type DeleteNotOwnMsg struct{}

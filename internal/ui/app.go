@@ -814,6 +814,30 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return statusbar.CopiedClearMsg{}
 		}))
 
+	case statusbar.EditFailedMsg:
+		a.statusbar.SetToast("Edit failed: " + truncateReason(msg.Reason, 40))
+		cmds = append(cmds, tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+			return statusbar.CopiedClearMsg{}
+		}))
+
+	case statusbar.DeleteFailedMsg:
+		a.statusbar.SetToast("Delete failed: " + truncateReason(msg.Reason, 40))
+		cmds = append(cmds, tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+			return statusbar.CopiedClearMsg{}
+		}))
+
+	case statusbar.EditNotOwnMsg:
+		a.statusbar.SetToast("Can only edit your own messages")
+		cmds = append(cmds, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+			return statusbar.CopiedClearMsg{}
+		}))
+
+	case statusbar.DeleteNotOwnMsg:
+		a.statusbar.SetToast("Can only delete your own messages")
+		cmds = append(cmds, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+			return statusbar.CopiedClearMsg{}
+		}))
+
 	case ChannelSelectedMsg:
 		// Picking a channel always exits the Threads view.
 		a.view = ViewChannels
@@ -900,6 +924,40 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case MessageSentMsg:
 		// Message will arrive via RTM WebSocket event (NewMessageMsg).
 		// Don't append here to avoid doubling.
+
+	case EditMessageMsg:
+		if a.messageEditor != nil {
+			editor := a.messageEditor
+			chID, ts, text := msg.ChannelID, msg.TS, msg.NewText
+			cmds = append(cmds, func() tea.Msg {
+				return editor(chID, ts, text)
+			})
+		}
+
+	case MessageEditedMsg:
+		// Always exit edit mode regardless of success/error.
+		a.cancelEdit()
+		if msg.Err != nil {
+			cmds = append(cmds, func() tea.Msg {
+				return statusbar.EditFailedMsg{Reason: msg.Err.Error()}
+			})
+		}
+
+	case DeleteMessageMsg:
+		if a.messageDeleter != nil {
+			deleter := a.messageDeleter
+			chID, ts := msg.ChannelID, msg.TS
+			cmds = append(cmds, func() tea.Msg {
+				return deleter(chID, ts)
+			})
+		}
+
+	case MessageDeletedMsg:
+		if msg.Err != nil {
+			cmds = append(cmds, func() tea.Msg {
+				return statusbar.DeleteFailedMsg{Reason: msg.Err.Error()}
+			})
+		}
 
 	case ThreadRepliesLoadedMsg:
 		if a.threadVisible && msg.ThreadTS == a.threadPanel.ThreadTS() {
@@ -2912,4 +2970,21 @@ func (a *App) View() tea.View {
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	return v
+}
+
+// cancelEdit is a stub here. Full implementation lands in Task 14.
+// MessageEditedMsg's handler calls it to ensure edit state is cleared
+// after a successful or failed edit; until Task 14 wires it up the
+// editing state struct doesn't exist yet, so this is a no-op.
+func (a *App) cancelEdit() {
+	// Implementation completed in Task 14.
+}
+
+// truncateReason returns s truncated to max characters with an ellipsis.
+// Used for status-bar error toasts.
+func truncateReason(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
