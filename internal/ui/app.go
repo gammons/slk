@@ -1140,7 +1140,12 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 	switch {
 	case key.Matches(msg, a.keys.InsertMode):
 		a.SetMode(ModeInsert)
-		if a.focusedPanel == PanelThread {
+		// In the Threads view there is no main compose box — the only
+		// way to type is into the right-side thread panel's compose.
+		// Force focus there even when the threads list itself was the
+		// focused panel.
+		if a.focusedPanel == PanelThread || (a.view == ViewThreads && a.threadVisible) {
+			a.focusedPanel = PanelThread
 			return a.threadCompose.Focus()
 		}
 		a.focusedPanel = PanelMessages

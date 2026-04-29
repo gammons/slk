@@ -724,6 +724,33 @@ func TestApp_WorkspaceReadyTriggersThreadsListFetch(t *testing.T) {
 // state. Only the first WorkspaceReadyMsg (when activeChannelID == "")
 // performs the initial setup; subsequent ones must leave summaries, the
 // unread badge, and the current view untouched.
+// In the threads view there is no main compose box; pressing `i` must
+// focus the right-side thread panel's compose, not the (hidden) main
+// compose. Regression test for the focus bug where pressing `i` while
+// browsing the threads list would silently no-op.
+func TestApp_InsertInThreadsViewFocusesThreadCompose(t *testing.T) {
+	app := NewApp()
+	app.activeTeamID = "T1"
+	// Simulate having activated the threads view with one summary, so
+	// the right thread panel is open.
+	app.threadsView.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "1.0", ParentText: "hi"},
+	})
+	app.view = ViewThreads
+	app.threadVisible = true
+	app.focusedPanel = PanelMessages // typical state when browsing the list
+
+	cmd := app.handleNormalMode(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	_ = cmd
+
+	if app.mode != ModeInsert {
+		t.Errorf("after pressing 'i' mode = %v, want ModeInsert", app.mode)
+	}
+	if app.focusedPanel != PanelThread {
+		t.Errorf("after pressing 'i' in threads view focusedPanel = %v, want PanelThread", app.focusedPanel)
+	}
+}
+
 func TestApp_BackgroundWorkspaceReadyDoesNotClobberActiveState(t *testing.T) {
 	app := NewApp()
 	app.SetThreadsListFetcher(func(teamID string) tea.Msg {
