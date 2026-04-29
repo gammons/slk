@@ -36,6 +36,10 @@ type SlackAPI interface {
 	JoinConversation(channelID string) (*slack.Channel, string, []string, error)
 	SetUserPresenceContext(ctx context.Context, presence string) error
 	GetUserPresenceContext(ctx context.Context, user string) (*slack.UserPresence, error)
+	SetSnoozeContext(ctx context.Context, minutes int) (*slack.DNDStatus, error)
+	EndSnoozeContext(ctx context.Context) (*slack.DNDStatus, error)
+	EndDNDContext(ctx context.Context) error
+	GetDNDInfoContext(ctx context.Context, user *string, options ...slack.ParamOption) (*slack.DNDStatus, error)
 }
 
 // Client wraps the slack-go library, providing RTM connectivity
@@ -577,6 +581,42 @@ func (c *Client) GetUserPresence(ctx context.Context, userID string) (*slack.Use
 		return nil, fmt.Errorf("getting presence: %w", err)
 	}
 	return p, nil
+}
+
+// SetSnooze enables Do-Not-Disturb for `minutes` minutes.
+func (c *Client) SetSnooze(ctx context.Context, minutes int) (*slack.DNDStatus, error) {
+	st, err := c.api.SetSnoozeContext(ctx, minutes)
+	if err != nil {
+		return nil, fmt.Errorf("setting snooze: %w", err)
+	}
+	return st, nil
+}
+
+// EndSnooze ends the current snooze window. Does NOT end admin-scheduled DND.
+func (c *Client) EndSnooze(ctx context.Context) (*slack.DNDStatus, error) {
+	st, err := c.api.EndSnoozeContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("ending snooze: %w", err)
+	}
+	return st, nil
+}
+
+// EndDND ends the user's current scheduled DND session.
+func (c *Client) EndDND(ctx context.Context) error {
+	if err := c.api.EndDNDContext(ctx); err != nil {
+		return fmt.Errorf("ending DND: %w", err)
+	}
+	return nil
+}
+
+// GetDNDInfo fetches DND/snooze status for a user.
+func (c *Client) GetDNDInfo(ctx context.Context, userID string) (*slack.DNDStatus, error) {
+	u := userID
+	st, err := c.api.GetDNDInfoContext(ctx, &u)
+	if err != nil {
+		return nil, fmt.Errorf("getting DND info: %w", err)
+	}
+	return st, nil
 }
 
 // GetPermalink returns the Slack permalink for a message. For a thread reply,

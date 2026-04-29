@@ -28,6 +28,10 @@ type mockSlackAPI struct {
 	getPermalinkContextFn    func(ctx context.Context, params *slack.PermalinkParameters) (string, error)
 	setUserPresenceContextFn func(ctx context.Context, presence string) error
 	getUserPresenceContextFn func(ctx context.Context, user string) (*slack.UserPresence, error)
+	setSnoozeContextFn       func(ctx context.Context, minutes int) (*slack.DNDStatus, error)
+	endSnoozeContextFn       func(ctx context.Context) (*slack.DNDStatus, error)
+	endDNDContextFn          func(ctx context.Context) error
+	getDNDInfoContextFn      func(ctx context.Context, user *string, options ...slack.ParamOption) (*slack.DNDStatus, error)
 }
 
 func (m *mockSlackAPI) GetConversations(params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
@@ -116,6 +120,34 @@ func (m *mockSlackAPI) GetUserPresenceContext(ctx context.Context, user string) 
 	return &slack.UserPresence{}, nil
 }
 
+func (m *mockSlackAPI) SetSnoozeContext(ctx context.Context, minutes int) (*slack.DNDStatus, error) {
+	if m.setSnoozeContextFn != nil {
+		return m.setSnoozeContextFn(ctx, minutes)
+	}
+	return &slack.DNDStatus{}, nil
+}
+
+func (m *mockSlackAPI) EndSnoozeContext(ctx context.Context) (*slack.DNDStatus, error) {
+	if m.endSnoozeContextFn != nil {
+		return m.endSnoozeContextFn(ctx)
+	}
+	return &slack.DNDStatus{}, nil
+}
+
+func (m *mockSlackAPI) EndDNDContext(ctx context.Context) error {
+	if m.endDNDContextFn != nil {
+		return m.endDNDContextFn(ctx)
+	}
+	return nil
+}
+
+func (m *mockSlackAPI) GetDNDInfoContext(ctx context.Context, user *string, options ...slack.ParamOption) (*slack.DNDStatus, error) {
+	if m.getDNDInfoContextFn != nil {
+		return m.getDNDInfoContextFn(ctx, user, options...)
+	}
+	return &slack.DNDStatus{}, nil
+}
+
 func TestClient_SetUserPresence(t *testing.T) {
 	var calls int
 	var gotPresence string
@@ -196,6 +228,171 @@ func TestClient_GetUserPresence_Error(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "getting presence") {
 		t.Errorf("expected 'getting presence' prefix, got %q", err.Error())
+	}
+}
+
+func TestClient_SetSnooze(t *testing.T) {
+	var gotMinutes int
+	wantStatus := &slack.DNDStatus{
+		SnoozeInfo: slack.SnoozeInfo{SnoozeEnabled: true, SnoozeEndTime: 1700000000},
+	}
+	mock := &mockSlackAPI{
+		setSnoozeContextFn: func(ctx context.Context, minutes int) (*slack.DNDStatus, error) {
+			gotMinutes = minutes
+			return wantStatus, nil
+		},
+	}
+	c := &Client{api: mock}
+	got, err := c.SetSnooze(context.Background(), 60)
+	if err != nil {
+		t.Fatalf("SetSnooze: %v", err)
+	}
+	if !got.SnoozeEnabled {
+		t.Error("expected snooze enabled")
+	}
+	if gotMinutes != 60 {
+		t.Errorf("expected 60 minutes, got %d", gotMinutes)
+	}
+}
+
+func TestClient_SetSnooze_Error(t *testing.T) {
+	wantErr := errors.New("api boom")
+	mock := &mockSlackAPI{
+		setSnoozeContextFn: func(ctx context.Context, minutes int) (*slack.DNDStatus, error) {
+			return nil, wantErr
+		},
+	}
+	c := &Client{api: mock}
+	_, err := c.SetSnooze(context.Background(), 60)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Errorf("expected wrapped wantErr, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "setting snooze") {
+		t.Errorf("expected 'setting snooze' prefix, got %q", err.Error())
+	}
+}
+
+func TestClient_EndSnooze(t *testing.T) {
+	calls := 0
+	mock := &mockSlackAPI{
+		endSnoozeContextFn: func(ctx context.Context) (*slack.DNDStatus, error) {
+			calls++
+			return &slack.DNDStatus{}, nil
+		},
+	}
+	c := &Client{api: mock}
+	if _, err := c.EndSnooze(context.Background()); err != nil {
+		t.Fatalf("EndSnooze: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("expected 1 EndSnooze call, got %d", calls)
+	}
+}
+
+func TestClient_EndSnooze_Error(t *testing.T) {
+	wantErr := errors.New("api boom")
+	mock := &mockSlackAPI{
+		endSnoozeContextFn: func(ctx context.Context) (*slack.DNDStatus, error) {
+			return nil, wantErr
+		},
+	}
+	c := &Client{api: mock}
+	_, err := c.EndSnooze(context.Background())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Errorf("expected wrapped wantErr, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "ending snooze") {
+		t.Errorf("expected 'ending snooze' prefix, got %q", err.Error())
+	}
+}
+
+func TestClient_EndDND(t *testing.T) {
+	calls := 0
+	mock := &mockSlackAPI{
+		endDNDContextFn: func(ctx context.Context) error {
+			calls++
+			return nil
+		},
+	}
+	c := &Client{api: mock}
+	if err := c.EndDND(context.Background()); err != nil {
+		t.Fatalf("EndDND: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("expected 1 EndDND call, got %d", calls)
+	}
+}
+
+func TestClient_EndDND_Error(t *testing.T) {
+	wantErr := errors.New("api boom")
+	mock := &mockSlackAPI{
+		endDNDContextFn: func(ctx context.Context) error {
+			return wantErr
+		},
+	}
+	c := &Client{api: mock}
+	err := c.EndDND(context.Background())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Errorf("expected wrapped wantErr, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "ending DND") {
+		t.Errorf("expected 'ending DND' prefix, got %q", err.Error())
+	}
+}
+
+func TestClient_GetDNDInfo(t *testing.T) {
+	var gotUser string
+	wantStatus := &slack.DNDStatus{
+		Enabled:    true,
+		SnoozeInfo: slack.SnoozeInfo{SnoozeEnabled: true, SnoozeEndTime: 1700000000},
+	}
+	mock := &mockSlackAPI{
+		getDNDInfoContextFn: func(ctx context.Context, user *string, options ...slack.ParamOption) (*slack.DNDStatus, error) {
+			if user != nil {
+				gotUser = *user
+			}
+			return wantStatus, nil
+		},
+	}
+	c := &Client{api: mock}
+	got, err := c.GetDNDInfo(context.Background(), "U1")
+	if err != nil {
+		t.Fatalf("GetDNDInfo: %v", err)
+	}
+	if !got.SnoozeEnabled || got.SnoozeEndTime != 1700000000 {
+		t.Errorf("unexpected DND status: %+v", got)
+	}
+	if gotUser != "U1" {
+		t.Errorf("expected user 'U1', got %q", gotUser)
+	}
+}
+
+func TestClient_GetDNDInfo_Error(t *testing.T) {
+	wantErr := errors.New("api boom")
+	mock := &mockSlackAPI{
+		getDNDInfoContextFn: func(ctx context.Context, user *string, options ...slack.ParamOption) (*slack.DNDStatus, error) {
+			return nil, wantErr
+		},
+	}
+	c := &Client{api: mock}
+	_, err := c.GetDNDInfo(context.Background(), "U1")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Errorf("expected wrapped wantErr, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "getting DND info") {
+		t.Errorf("expected 'getting DND info' prefix, got %q", err.Error())
 	}
 }
 
