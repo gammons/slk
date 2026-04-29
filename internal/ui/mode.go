@@ -14,6 +14,7 @@ const (
 	ModeThemeSwitcher
 	ModePresenceMenu
 	ModePresenceCustomSnooze
+	ModeConfirm
 )
 
 func (m Mode) String() string {
@@ -38,6 +39,8 @@ func (m Mode) String() string {
 		return "STATUS"
 	case ModePresenceCustomSnooze:
 		return "STATUS-INPUT"
+	case ModeConfirm:
+		return "CONFIRM"
 	default:
 		return "UNKNOWN"
 	}

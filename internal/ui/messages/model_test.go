@@ -155,3 +155,93 @@ func TestScrollPreservedAcrossRenders(t *testing.T) {
 		t.Error("expected yOffset to re-snap after selection change, but it did not")
 	}
 }
+
+func TestUpdateMessageInPlace_Found(t *testing.T) {
+	msgs := []MessageItem{
+		{TS: "1.0", UserName: "alice", Text: "old"},
+		{TS: "2.0", UserName: "bob", Text: "hello"},
+	}
+	m := New(msgs, "general")
+	got := m.UpdateMessageInPlace("2.0", "hello edited")
+	if !got {
+		t.Fatalf("expected UpdateMessageInPlace to return true for existing TS")
+	}
+	all := m.messages
+	if all[1].Text != "hello edited" {
+		t.Errorf("text not updated: %q", all[1].Text)
+	}
+	if !all[1].IsEdited {
+		t.Error("IsEdited not set")
+	}
+	if all[0].Text != "old" {
+		t.Error("other messages should be untouched")
+	}
+}
+
+func TestUpdateMessageInPlace_NotFound(t *testing.T) {
+	m := New([]MessageItem{{TS: "1.0", Text: "a"}}, "general")
+	got := m.UpdateMessageInPlace("does-not-exist", "x")
+	if got {
+		t.Error("expected false when TS missing")
+	}
+}
+
+func TestRemoveMessageByTS_Middle(t *testing.T) {
+	m := New([]MessageItem{
+		{TS: "1.0", Text: "a"},
+		{TS: "2.0", Text: "b"},
+		{TS: "3.0", Text: "c"},
+	}, "general")
+	// Selection starts at bottom (index 2 = "c").
+	got := m.RemoveMessageByTS("2.0")
+	if !got {
+		t.Fatal("expected true")
+	}
+	all := m.messages
+	if len(all) != 2 || all[0].TS != "1.0" || all[1].TS != "3.0" {
+		t.Errorf("unexpected messages after remove: %+v", all)
+	}
+	// Removed index 1 was <= selected (2) → selected decrements to 1.
+	if m.SelectedIndex() != 1 {
+		t.Errorf("expected selected=1 after removing earlier message, got %d", m.SelectedIndex())
+	}
+}
+
+func TestRemoveMessageByTS_RemovesSelected(t *testing.T) {
+	m := New([]MessageItem{
+		{TS: "1.0", Text: "a"},
+		{TS: "2.0", Text: "b"},
+		{TS: "3.0", Text: "c"},
+	}, "general")
+	// Selection starts at index 2; remove TS "3.0" (the selected one).
+	got := m.RemoveMessageByTS("3.0")
+	if !got {
+		t.Fatal("expected true")
+	}
+	if m.SelectedIndex() != 1 {
+		t.Errorf("expected selected clamped to 1, got %d", m.SelectedIndex())
+	}
+}
+
+func TestRemoveMessageByTS_NotFound(t *testing.T) {
+	m := New([]MessageItem{{TS: "1.0", Text: "a"}}, "general")
+	if m.RemoveMessageByTS("nope") {
+		t.Error("expected false when TS missing")
+	}
+	if len(m.messages) != 1 {
+		t.Error("messages should be unchanged when TS missing")
+	}
+}
+
+func TestRemoveMessageByTS_LastBecomesEmpty(t *testing.T) {
+	m := New([]MessageItem{{TS: "1.0", Text: "a"}}, "general")
+	if !m.RemoveMessageByTS("1.0") {
+		t.Fatal("expected true")
+	}
+	if len(m.messages) != 0 {
+		t.Error("expected empty after removing last")
+	}
+	if _, ok := m.SelectedMessage(); ok {
+		t.Error("SelectedMessage should be (_, false) when empty")
+	}
+}

@@ -29,6 +29,7 @@ type KeyMap struct {
 	Reaction            key.Binding
 	ReactionNav         key.Binding
 	Edit                key.Binding
+	Delete              key.Binding
 	CopyPermalink       key.Binding
 	WorkspaceFinder     key.Binding
 	ThemeSwitcher       key.Binding
@@ -62,7 +63,8 @@ func DefaultKeyMap() KeyMap {
 		Quit:                key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 		Reaction:            key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "add reaction")),
 		ReactionNav:         key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "navigate reactions")),
-		Edit:                key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit message")),
+		Edit:                key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "edit message")),
+		Delete:              key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete message")),
 		CopyPermalink:       key.NewBinding(key.WithKeys("Y", "C"), key.WithHelp("Y/C", "copy permalink")),
 		WorkspaceFinder:     key.NewBinding(key.WithKeys("ctrl+w"), key.WithHelp("ctrl+w", "switch workspace")),
 		ThemeSwitcher:       key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "switch theme (per workspace)")),

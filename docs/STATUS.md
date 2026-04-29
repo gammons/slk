@@ -50,6 +50,10 @@ Last updated: 2026-04-28
 - [x] Thread reply count indicators
 - [x] Edited message indicators
 - [x] Message sending via Slack API
+- [x] Message editing (`E` on own message; reuses compose with stash/restore draft)
+- [x] Message deletion (`D` on own message; centered confirmation overlay)
+- [x] In-place update on `message_changed` echoes (no duplicate row on edit)
+- [x] Live removal on `message_deleted` echoes from any client
 - [x] @mention autocomplete in compose (inline picker, translates to <@UserID> on send)
 - [x] Real-time incoming messages via WebSocket (auto-scroll, cached to SQLite)
 - [x] Render cache for scroll performance
@@ -102,8 +106,6 @@ Last updated: 2026-04-28
 ## Not Yet Implemented
 
 ### Medium Priority
-- [ ] Message editing (`e` on own message)
-- [ ] Message deletion (`dd` on own message)
 - [ ] Search (`:search <query>` or `Ctrl+/`)
 - [ ] File uploads and downloads
 - [x] Self presence and DND/snooze controls (Ctrl+S menu, live status bar segment, notification suppression)
