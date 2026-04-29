@@ -20,6 +20,8 @@
 
 ### Messaging
 - Real-time messages, edits, deletes, reactions, and typing indicators over WebSocket
+- Edit your own messages (`E`) — reuses the compose box with stash/restore for any in-progress draft
+- Delete your own messages (`D`) — centered confirmation overlay with message preview
 - Slack markdown rendering (bold, italic, strikethrough, code, blockquotes, links, mentions)
 - Emoji shortcodes (`:rocket:` → 🚀)
 - Day separators (Today, Yesterday, Monday, full date)
@@ -84,7 +86,6 @@
 slk is intentionally not a 1:1 port of the desktop client. Some Slack features are deferred or out of scope:
 
 **On the roadmap:**
-- Message editing (`e`) and deletion (`dd`)
 - Slack-side search (`Ctrl+/` / `:search`)
 - File uploads and downloads
 - Inline image rendering (Kitty graphics → Sixel → fallback)
@@ -218,6 +219,8 @@ Or just run `./bin/slk`. Onboarding launches automatically when no workspaces ar
 | `1`–`9` | Normal | Jump to workspace N |
 | `r` | Normal (message) | Open reaction picker |
 | `R` | Normal (message) | Quick-toggle existing reactions |
+| `E` | Normal (message) | Edit your own message |
+| `D` | Normal (message) | Delete your own message (with confirmation) |
 | `Y` / `C` | Normal (message) | Copy message permalink |
 | `Ctrl+y` | Any | Switch theme |
 | `Ctrl+c` | Any | Quit |
