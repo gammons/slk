@@ -1,7 +1,9 @@
 package slackclient
 
 import (
+	"fmt"
 	"testing"
+	"time"
 )
 
 type dndChangeRecord struct {
@@ -190,23 +192,28 @@ func TestDispatchWebSocketManualPresenceChangeEvent(t *testing.T) {
 	}
 }
 
-func TestDispatchWebSocketDNDUpdatedEvent(t *testing.T) {
+func TestDispatchWebSocketDNDUpdatedEvent_ActiveSnooze(t *testing.T) {
+	// Snooze is currently active (end is 1h in the future). User is in DND.
+	end := time.Now().Add(time.Hour).Unix()
 	handler := &mockEventHandler{}
-	data := []byte(`{"type":"dnd_updated","dnd_status":{"dnd_enabled":true,"snooze_enabled":true,"snooze_endtime":1700000000,"next_dnd_start_ts":0,"next_dnd_end_ts":0}}`)
+	data := []byte(fmt.Sprintf(
+		`{"type":"dnd_updated","dnd_status":{"dnd_enabled":true,"snooze_enabled":true,"snooze_endtime":%d,"next_dnd_start_ts":0,"next_dnd_end_ts":0}}`,
+		end))
 	dispatchWebSocketEvent(data, handler)
 	if len(handler.dndChanges) != 1 {
 		t.Fatalf("expected 1 dnd change, got %d", len(handler.dndChanges))
 	}
 	got := handler.dndChanges[0]
 	if !got.enabled {
-		t.Error("expected enabled=true")
+		t.Error("expected enabled=true (snooze active)")
 	}
-	if got.endUnix != 1700000000 {
-		t.Errorf("expected endUnix=1700000000, got %d", got.endUnix)
+	if got.endUnix != end {
+		t.Errorf("expected endUnix=%d (snooze_endtime), got %d", end, got.endUnix)
 	}
 }
 
-func TestDispatchWebSocketDNDUpdatedUserEvent(t *testing.T) {
+func TestDispatchWebSocketDNDUpdatedUserEvent_NoDND(t *testing.T) {
+	// Neither snooze nor schedule active.
 	handler := &mockEventHandler{}
 	data := []byte(`{"type":"dnd_updated_user","dnd_status":{"dnd_enabled":false,"snooze_enabled":false,"next_dnd_start_ts":0,"next_dnd_end_ts":0}}`)
 	dispatchWebSocketEvent(data, handler)
@@ -222,13 +229,57 @@ func TestDispatchWebSocketDNDUpdatedUserEvent(t *testing.T) {
 	}
 }
 
-func TestDispatchWebSocketDNDUpdatedEvent_NextDNDEndFallback(t *testing.T) {
-	// When snooze is not enabled but admin DND has next_dnd_end_ts in the
-	// future, that's the relevant end timestamp.
+func TestDispatchWebSocketDNDUpdatedEvent_InScheduledWindow(t *testing.T) {
+	// User is currently inside the scheduled DND window.
+	now := time.Now().Unix()
+	start := now - 600           // 10 min ago
+	end := now + 3600             // 1h from now
 	handler := &mockEventHandler{}
-	data := []byte(`{"type":"dnd_updated","dnd_status":{"dnd_enabled":true,"snooze_enabled":false,"snooze_endtime":0,"next_dnd_start_ts":1699000000,"next_dnd_end_ts":1700000000}}`)
+	data := []byte(fmt.Sprintf(
+		`{"type":"dnd_updated","dnd_status":{"dnd_enabled":true,"snooze_enabled":false,"snooze_endtime":0,"next_dnd_start_ts":%d,"next_dnd_end_ts":%d}}`,
+		start, end))
 	dispatchWebSocketEvent(data, handler)
-	if got := handler.dndChanges[0].endUnix; got != 1700000000 {
-		t.Errorf("expected endUnix=1700000000 (next_dnd_end_ts), got %d", got)
+	got := handler.dndChanges[0]
+	if !got.enabled {
+		t.Error("expected enabled=true (inside scheduled window)")
+	}
+	if got.endUnix != end {
+		t.Errorf("expected endUnix=%d (next_dnd_end_ts), got %d", end, got.endUnix)
+	}
+}
+
+func TestDispatchWebSocketDNDUpdatedEvent_BetweenSchedules(t *testing.T) {
+	// User has a DND schedule configured, but the current time is BEFORE
+	// the next scheduled window starts. dnd_enabled=true is just "schedule
+	// exists" — must NOT be interpreted as "currently in DND".
+	now := time.Now().Unix()
+	start := now + 3600  // 1h from now
+	end := now + 7200    // 2h from now
+	handler := &mockEventHandler{}
+	data := []byte(fmt.Sprintf(
+		`{"type":"dnd_updated","dnd_status":{"dnd_enabled":true,"snooze_enabled":false,"snooze_endtime":0,"next_dnd_start_ts":%d,"next_dnd_end_ts":%d}}`,
+		start, end))
+	dispatchWebSocketEvent(data, handler)
+	got := handler.dndChanges[0]
+	if got.enabled {
+		t.Errorf("expected enabled=false (between scheduled windows), got enabled=true endUnix=%d", got.endUnix)
+	}
+	if got.endUnix != 0 {
+		t.Errorf("expected endUnix=0 when not in DND, got %d", got.endUnix)
+	}
+}
+
+func TestDispatchWebSocketDNDUpdatedEvent_ExpiredSnooze(t *testing.T) {
+	// snooze_enabled=true but snooze_endtime is in the past — Slack hasn't
+	// updated yet. Must NOT be reported as in DND.
+	end := time.Now().Add(-time.Hour).Unix()
+	handler := &mockEventHandler{}
+	data := []byte(fmt.Sprintf(
+		`{"type":"dnd_updated","dnd_status":{"dnd_enabled":true,"snooze_enabled":true,"snooze_endtime":%d,"next_dnd_start_ts":0,"next_dnd_end_ts":0}}`,
+		end))
+	dispatchWebSocketEvent(data, handler)
+	got := handler.dndChanges[0]
+	if got.enabled {
+		t.Errorf("expected enabled=false (expired snooze), got enabled=true endUnix=%d", got.endUnix)
 	}
 }

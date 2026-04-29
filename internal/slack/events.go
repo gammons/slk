@@ -2,6 +2,7 @@ package slackclient
 
 import (
 	"encoding/json"
+	"time"
 )
 
 // EventHandler processes real-time events from Slack.
@@ -160,8 +161,8 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 		if err := json.Unmarshal(data, &evt); err != nil {
 			return
 		}
-		end := pickDNDEnd(evt.DNDStatus)
-		handler.OnDNDChange(evt.DNDStatus.Enabled, end)
+		isDND, end := computeDNDState(evt.DNDStatus, time.Now().Unix())
+		handler.OnDNDChange(isDND, end)
 
 	case "user_typing":
 		var evt wsTypingEvent
@@ -181,16 +182,27 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 	}
 }
 
-// pickDNDEnd unifies snooze and admin-DND end timestamps. Slack delivers
-// either snooze_endtime (when the user has a manual snooze) or
-// next_dnd_end_ts (when an admin DND schedule is active). Returns 0 when
-// neither is in the future.
-func pickDNDEnd(s wsDNDStatusInner) int64 {
-	if s.SnoozeEnabled && s.SnoozeEndTime > 0 {
-		return s.SnoozeEndTime
+// computeDNDState evaluates whether the user is currently in DND from
+// Slack's dnd_status payload, and returns the relevant end timestamp.
+//
+// Slack reports dnd_enabled=true whenever a notification schedule is
+// configured for the user, regardless of whether the current time is
+// inside the next scheduled window. The actual "currently in DND" state
+// is therefore derived from:
+//
+//   - manual snooze: SnoozeEnabled && SnoozeEndTime > now
+//   - active scheduled window: Enabled && NextDNDStartTS <= now < NextDNDEndTS
+//
+// When neither holds, the user is between sessions (or has no DND set)
+// and computeDNDState returns (false, 0).
+//
+// `now` is supplied as a parameter to keep the function pure for tests.
+func computeDNDState(s wsDNDStatusInner, now int64) (bool, int64) {
+	if s.SnoozeEnabled && s.SnoozeEndTime > now {
+		return true, s.SnoozeEndTime
 	}
-	if s.NextDNDEndTS > 0 {
-		return s.NextDNDEndTS
+	if s.Enabled && s.NextDNDStartTS > 0 && s.NextDNDStartTS <= now && now < s.NextDNDEndTS {
+		return true, s.NextDNDEndTS
 	}
-	return 0
+	return false, 0
 }

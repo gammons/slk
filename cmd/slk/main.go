@@ -341,7 +341,20 @@ func run() error {
 			case presencemenu.ActionSnooze:
 				_, err = wctx.Client.SetSnooze(ctx, snoozeMinutes)
 			case presencemenu.ActionEndDND:
-				_, err = wctx.Client.EndSnooze(ctx)
+				// End any active manual snooze AND any active scheduled
+				// DND session. Either may be a no-op depending on the
+				// source of the current DND state; calling both ensures
+				// we exit any form of DND the user can dismiss
+				// client-side. Slack's dnd.endDnd ends the current DND
+				// session for the rest of the day; the user's DND
+				// schedule (if any) re-engages on its next window.
+				_, snoozeErr := wctx.Client.EndSnooze(ctx)
+				dndErr := wctx.Client.EndDND(ctx)
+				if dndErr != nil {
+					err = dndErr
+				} else {
+					err = snoozeErr
+				}
 			}
 			if err != nil && p != nil {
 				p.Send(ui.ToastMsg{Text: "Status change failed: " + err.Error()})
@@ -1175,19 +1188,31 @@ func bootstrapPresenceAndDND(ctx context.Context, wctx *WorkspaceContext, progra
 		wctx.Presence = p.Presence
 	}
 
-	// Initial DND fetch
+	// Initial DND fetch.
+	//
+	// Slack's dnd_enabled flag means "the user has a DND schedule
+	// configured", NOT "currently in DND". The user is currently in DND
+	// only when (a) a manual snooze is active, or (b) the current time
+	// falls inside the next scheduled window. The same rule lives in
+	// internal/slack/events.go's computeDNDState for the WS event path.
 	if st, err := wctx.Client.GetDNDInfo(ctx, wctx.UserID); err == nil && st != nil {
-		// Mirror the same end-timestamp picking logic used in events.go.
+		now := time.Now().Unix()
+		var isDND bool
 		var endUnix int64
 		switch {
-		case st.SnoozeEnabled && st.SnoozeEndTime > 0:
+		case st.SnoozeEnabled && int64(st.SnoozeEndTime) > now:
+			isDND = true
 			endUnix = int64(st.SnoozeEndTime)
-		case st.NextEndTimestamp > 0:
+		case st.Enabled && int64(st.NextStartTimestamp) > 0 &&
+			int64(st.NextStartTimestamp) <= now && now < int64(st.NextEndTimestamp):
+			isDND = true
 			endUnix = int64(st.NextEndTimestamp)
 		}
-		wctx.DNDEnabled = st.Enabled || st.SnoozeEnabled
+		wctx.DNDEnabled = isDND
 		if endUnix > 0 {
 			wctx.DNDEndTS = time.Unix(endUnix, 0)
+		} else {
+			wctx.DNDEndTS = time.Time{}
 		}
 	}
 
