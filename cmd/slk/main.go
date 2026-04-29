@@ -1216,7 +1216,14 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 }
 
 func (h *rtmEventHandler) OnMessageDeleted(channelID, ts string) {
-	// TODO: implement message deletion in UI
+	if err := h.db.DeleteMessage(channelID, ts); err != nil {
+		log.Printf("Warning: failed to soft-delete cached message %s/%s: %v", channelID, ts, err)
+	}
+	if h.isActive != nil && !h.isActive() {
+		// Inactive workspace — nothing to update in the UI.
+		return
+	}
+	h.program.Send(ui.WSMessageDeletedMsg{ChannelID: channelID, TS: ts})
 }
 
 func (h *rtmEventHandler) OnReactionAdded(channelID, ts, userID, emojiName string) {
