@@ -1155,3 +1155,118 @@ func TestSubmitEdit_ThreadPanel_EmitsEditMessageMsg(t *testing.T) {
 		t.Errorf("unexpected edit msg: %+v", em)
 	}
 }
+
+func TestBeginDeleteOfSelected_NotOwned_ToastsAndNoOps(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.SetCurrentUserID("U_ME")
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", UserID: "U_OTHER", Text: "not mine"},
+	})
+	app.focusedPanel = PanelMessages
+
+	cmd := app.beginDeleteOfSelected()
+	if cmd == nil {
+		t.Fatal("expected toast cmd")
+	}
+	res := cmd()
+	if _, ok := res.(statusbar.DeleteNotOwnMsg); !ok {
+		t.Errorf("expected DeleteNotOwnMsg, got %T", res)
+	}
+	if app.confirmPrompt.IsVisible() {
+		t.Error("confirm prompt should not be visible for non-owned message")
+	}
+}
+
+func TestBeginDeleteOfSelected_Own_OpensPrompt(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.SetCurrentUserID("U_ME")
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", UserID: "U_ME", Text: "hi"},
+	})
+	app.focusedPanel = PanelMessages
+
+	cmd := app.beginDeleteOfSelected()
+	if cmd != nil {
+		t.Errorf("expected nil cmd (prompt opens directly), got non-nil")
+	}
+	if !app.confirmPrompt.IsVisible() {
+		t.Error("expected confirm prompt to be visible")
+	}
+	if app.mode != ModeConfirm {
+		t.Errorf("expected ModeConfirm, got %v", app.mode)
+	}
+}
+
+func TestBeginDeleteOfSelected_ConfirmEmitsDeleteMessageMsg(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.SetCurrentUserID("U_ME")
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", UserID: "U_ME", Text: "hi"},
+	})
+	app.focusedPanel = PanelMessages
+	app.beginDeleteOfSelected()
+
+	// Press 'y' to confirm.
+	cmd := app.handleConfirmMode(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd from confirm")
+	}
+	res := cmd()
+	dm, ok := res.(DeleteMessageMsg)
+	if !ok {
+		t.Fatalf("expected DeleteMessageMsg, got %T", res)
+	}
+	if dm.ChannelID != "C1" || dm.TS != "1.0" {
+		t.Errorf("unexpected delete msg: %+v", dm)
+	}
+	if app.confirmPrompt.IsVisible() {
+		t.Error("prompt should be closed after confirm")
+	}
+	if app.mode != ModeNormal {
+		t.Errorf("expected ModeNormal after confirm, got %v", app.mode)
+	}
+}
+
+func TestBeginDeleteOfSelected_CancelDoesNotEmit(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.SetCurrentUserID("U_ME")
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", UserID: "U_ME", Text: "hi"},
+	})
+	app.focusedPanel = PanelMessages
+	app.beginDeleteOfSelected()
+
+	cmd := app.handleConfirmMode(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	if cmd != nil {
+		t.Errorf("expected nil cmd on cancel, got non-nil")
+	}
+	if app.confirmPrompt.IsVisible() {
+		t.Error("prompt should be closed after cancel")
+	}
+}
+
+func TestBeginDeleteOfSelected_ThreadPane_OpensPrompt(t *testing.T) {
+	app := NewApp()
+	app.SetCurrentUserID("U_ME")
+	parent := messages.MessageItem{TS: "P1", UserID: "U_OTHER", Text: "parent"}
+	app.threadPanel.SetThread(parent, []messages.MessageItem{
+		{TS: "R1", UserID: "U_ME", Text: "my reply"},
+	}, "C1", "P1")
+	app.threadVisible = true
+	app.focusedPanel = PanelThread
+
+	cmd := app.beginDeleteOfSelected()
+	if cmd != nil {
+		t.Errorf("expected nil cmd (prompt opens directly), got non-nil")
+	}
+	if !app.confirmPrompt.IsVisible() {
+		t.Error("expected confirm prompt visible for thread pane delete")
+	}
+	if app.mode != ModeConfirm {
+		t.Errorf("expected ModeConfirm, got %v", app.mode)
+	}
+}

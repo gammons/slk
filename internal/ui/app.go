@@ -1417,6 +1417,9 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, a.keys.Edit):
 		return a.beginEditOfSelected()
 
+	case key.Matches(msg, a.keys.Delete):
+		return a.beginDeleteOfSelected()
+
 	default:
 		// Number keys 1-9 switch workspaces
 		keyStr := msg.String()
@@ -3066,39 +3069,35 @@ func (a *App) isOwnMessage(m messages.MessageItem) bool {
 	return a.currentUserID != "" && m.UserID == a.currentUserID
 }
 
+// selectedMessageContext returns the channel ID, message TS, text, owner
+// user ID, and panel of the currently-selected message in the focused
+// pane. Returns ok=false if nothing is selected or the focused panel is
+// not a message-bearing pane.
+func (a *App) selectedMessageContext() (channelID, ts, text, userID string, panel Panel, ok bool) {
+	switch a.focusedPanel {
+	case PanelMessages:
+		msg, sel := a.messagepane.SelectedMessage()
+		if !sel {
+			return "", "", "", "", 0, false
+		}
+		return a.activeChannelID, msg.TS, msg.Text, msg.UserID, PanelMessages, true
+	case PanelThread:
+		reply := a.threadPanel.SelectedReply()
+		if reply == nil {
+			return "", "", "", "", 0, false
+		}
+		return a.threadPanel.ChannelID(), reply.TS, reply.Text, reply.UserID, PanelThread, true
+	default:
+		return "", "", "", "", 0, false
+	}
+}
+
 // beginEditOfSelected starts editing the currently-selected message
 // in the focused pane. Returns a no-op + status toast if not owned;
 // returns nil if no message is selected.
 func (a *App) beginEditOfSelected() tea.Cmd {
-	var (
-		channelID string
-		ts        string
-		text      string
-		userID    string
-		panel     Panel
-	)
-	switch a.focusedPanel {
-	case PanelMessages:
-		msg, ok := a.messagepane.SelectedMessage()
-		if !ok {
-			return nil
-		}
-		channelID = a.activeChannelID
-		ts = msg.TS
-		text = msg.Text
-		userID = msg.UserID
-		panel = PanelMessages
-	case PanelThread:
-		reply := a.threadPanel.SelectedReply()
-		if reply == nil {
-			return nil
-		}
-		channelID = a.threadPanel.ChannelID()
-		ts = reply.TS
-		text = reply.Text
-		userID = reply.UserID
-		panel = PanelThread
-	default:
+	channelID, ts, text, userID, panel, ok := a.selectedMessageContext()
+	if !ok {
 		return nil
 	}
 	// Build a synthetic MessageItem just for the ownership check;
@@ -3135,6 +3134,38 @@ func (a *App) beginEditOfSelected() tea.Cmd {
 		return a.threadCompose.Focus()
 	}
 	return a.compose.Focus()
+}
+
+// beginDeleteOfSelected opens the confirmation prompt for deleting the
+// currently-selected message in the focused pane. Returns a no-op +
+// status toast if not owned, or nil if no message is selected.
+func (a *App) beginDeleteOfSelected() tea.Cmd {
+	channelID, ts, text, userID, _, ok := a.selectedMessageContext()
+	if !ok {
+		return nil
+	}
+	if !a.isOwnMessage(messages.MessageItem{UserID: userID}) {
+		return func() tea.Msg { return statusbar.DeleteNotOwnMsg{} }
+	}
+	if channelID == "" || ts == "" {
+		return nil
+	}
+
+	preview := strings.ReplaceAll(text, "\n", " ")
+	const maxPreview = 80
+	if runes := []rune(preview); len(runes) > maxPreview {
+		preview = string(runes[:maxPreview]) + "…"
+	}
+
+	a.confirmPrompt.Open(
+		"Delete message?",
+		preview,
+		func() tea.Msg {
+			return DeleteMessageMsg{ChannelID: channelID, TS: ts}
+		},
+	)
+	a.SetMode(ModeConfirm)
+	return nil
 }
 
 // submitEdit emits an EditMessageMsg if the edit text is non-empty.
