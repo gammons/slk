@@ -5,6 +5,7 @@ import (
 	"context"
 	"image/color"
 	"log"
+	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -37,6 +38,19 @@ const (
 	PanelMessages
 	PanelThread
 )
+
+// editState tracks an in-progress message edit. When active, the
+// channel or thread compose box is repurposed: its existing draft is
+// stashed, the message text seeded, and Enter submits an
+// EditMessageMsg instead of sending. Cancellation (Esc, channel
+// switch, panel switch, etc.) restores the stashed draft.
+type editState struct {
+	active       bool
+	channelID    string
+	ts           string
+	panel        Panel // PanelMessages or PanelThread
+	stashedDraft string
+}
 
 // View identifies which "page" the message pane is displaying. The default
 // is ViewChannels (a channel's message history); ViewThreads swaps the
@@ -463,6 +477,9 @@ type App struct {
 	frecentRecordFn  FrecentRecordFunc
 	currentUserID    string
 
+	// editing tracks in-progress message edit state. See editState.
+	editing editState
+
 	// Permalink copying
 	permalinkFetchFn PermalinkFetchFunc
 
@@ -820,6 +837,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return statusbar.CopiedClearMsg{}
 		}))
 
+	case editEmptyToastMsg:
+		a.statusbar.SetToast("Edit must have text (use D to delete)")
+		cmds = append(cmds, tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+			return statusbar.CopiedClearMsg{}
+		}))
+
 	case statusbar.DeleteFailedMsg:
 		a.statusbar.SetToast("Delete failed: " + truncateReason(msg.Reason, 40))
 		cmds = append(cmds, tea.Tick(3*time.Second, func(time.Time) tea.Msg {
@@ -839,6 +862,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}))
 
 	case ChannelSelectedMsg:
+		a.cancelEdit()
 		// Picking a channel always exits the Threads view.
 		a.view = ViewChannels
 		a.lastOpenedChannelID = ""
@@ -935,8 +959,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case MessageEditedMsg:
-		// Always exit edit mode regardless of success/error.
-		a.cancelEdit()
+		// Only exit edit mode if this result matches the edit that's
+		// currently in flight. A stale result from a previously
+		// cancelled or replaced edit must not clobber the current one.
+		if a.editing.active &&
+			a.editing.channelID == msg.ChannelID &&
+			a.editing.ts == msg.TS {
+			a.cancelEdit()
+		}
 		if msg.Err != nil {
 			cmds = append(cmds, func() tea.Msg {
 				return statusbar.EditFailedMsg{Reason: msg.Err.Error()}
@@ -1050,6 +1080,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sidebar.SetItems(items)
 
 	case WorkspaceSwitchedMsg:
+		a.cancelEdit()
 		// Always land in ViewChannels and drop any per-workspace
 		// threads-view state so stale summaries / unread badges from the
 		// previous workspace can't leak in. Reset sidebar selection back
@@ -1292,6 +1323,7 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 		return a.compose.Focus()
 
 	case key.Matches(msg, a.keys.Escape):
+		a.cancelEdit()
 		a.SetMode(ModeNormal)
 		a.compose.Blur()
 		if a.threadVisible {
@@ -1382,6 +1414,9 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, a.keys.CopyPermalink):
 		return a.copyPermalinkOfSelected()
 
+	case key.Matches(msg, a.keys.Edit):
+		return a.beginEditOfSelected()
+
 	default:
 		// Number keys 1-9 switch workspaces
 		keyStr := msg.String()
@@ -1402,6 +1437,31 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
+	if a.editing.active && key.Matches(msg, a.keys.Escape) {
+		// If a picker is active in the relevant compose, close it
+		// instead of cancelling the edit.
+		if a.editing.panel == PanelThread {
+			if a.threadCompose.IsEmojiActive() {
+				a.threadCompose.CloseEmoji()
+				return nil
+			}
+			if a.threadCompose.IsMentionActive() {
+				a.threadCompose.CloseMention()
+				return nil
+			}
+		} else {
+			if a.compose.IsEmojiActive() {
+				a.compose.CloseEmoji()
+				return nil
+			}
+			if a.compose.IsMentionActive() {
+				a.compose.CloseMention()
+				return nil
+			}
+		}
+		a.cancelEdit()
+		return nil
+	}
 	if key.Matches(msg, a.keys.Escape) {
 		// If a picker is active, close it instead of exiting insert mode.
 		if a.focusedPanel == PanelThread && a.threadVisible {
@@ -1453,6 +1513,9 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 			return cmd
 		}
 		if isSend {
+			if a.editing.active && a.editing.panel == PanelThread {
+				return a.submitEdit(a.threadCompose.Value(), a.threadCompose.TranslateMentionsForSend(a.threadCompose.Value()))
+			}
 			text := a.threadCompose.Value()
 			if text != "" {
 				text = a.threadCompose.TranslateMentionsForSend(text)
@@ -1489,6 +1552,9 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 		return cmd
 	}
 	if isSend {
+		if a.editing.active && a.editing.panel == PanelMessages {
+			return a.submitEdit(a.compose.Value(), a.compose.TranslateMentionsForSend(a.compose.Value()))
+		}
 		text := a.compose.Value()
 		if text != "" {
 			text = a.compose.TranslateMentionsForSend(text)
@@ -2117,6 +2183,7 @@ func (a *App) clearSelections() {
 }
 
 func (a *App) FocusNext() {
+	a.cancelEdit()
 	a.clearSelections()
 	if !a.sidebarVisible {
 		if a.threadVisible {
@@ -2143,6 +2210,7 @@ func (a *App) FocusNext() {
 }
 
 func (a *App) FocusPrev() {
+	a.cancelEdit()
 	a.clearSelections()
 	if !a.sidebarVisible {
 		if a.threadVisible {
@@ -2972,13 +3040,125 @@ func (a *App) View() tea.View {
 	return v
 }
 
-// cancelEdit is a stub here. Full implementation lands in Task 14.
-// MessageEditedMsg's handler calls it to ensure edit state is cleared
-// after a successful or failed edit; until Task 14 wires it up the
-// editing state struct doesn't exist yet, so this is a no-op.
+// cancelEdit exits edit mode, restoring the stashed draft to its
+// source compose. Safe to call when no edit is active (no-op).
 func (a *App) cancelEdit() {
-	// Implementation completed in Task 14.
+	if !a.editing.active {
+		return
+	}
+	switch a.editing.panel {
+	case PanelMessages:
+		a.compose.SetValue(a.editing.stashedDraft)
+		a.compose.SetPlaceholderOverride("")
+	case PanelThread:
+		a.threadCompose.SetValue(a.editing.stashedDraft)
+		a.threadCompose.SetPlaceholderOverride("")
+	}
+	a.editing = editState{}
+	a.SetMode(ModeNormal)
+	a.compose.Blur()
+	a.threadCompose.Blur()
 }
+
+// isOwnMessage returns whether the given message is owned by the
+// current user. Bot/system messages and unauthenticated states fail.
+func (a *App) isOwnMessage(m messages.MessageItem) bool {
+	return a.currentUserID != "" && m.UserID == a.currentUserID
+}
+
+// beginEditOfSelected starts editing the currently-selected message
+// in the focused pane. Returns a no-op + status toast if not owned;
+// returns nil if no message is selected.
+func (a *App) beginEditOfSelected() tea.Cmd {
+	var (
+		channelID string
+		ts        string
+		text      string
+		userID    string
+		panel     Panel
+	)
+	switch a.focusedPanel {
+	case PanelMessages:
+		msg, ok := a.messagepane.SelectedMessage()
+		if !ok {
+			return nil
+		}
+		channelID = a.activeChannelID
+		ts = msg.TS
+		text = msg.Text
+		userID = msg.UserID
+		panel = PanelMessages
+	case PanelThread:
+		reply := a.threadPanel.SelectedReply()
+		if reply == nil {
+			return nil
+		}
+		channelID = a.threadPanel.ChannelID()
+		ts = reply.TS
+		text = reply.Text
+		userID = reply.UserID
+		panel = PanelThread
+	default:
+		return nil
+	}
+	// Build a synthetic MessageItem just for the ownership check;
+	// avoids fetching the full struct twice.
+	if !a.isOwnMessage(messages.MessageItem{UserID: userID}) {
+		return func() tea.Msg { return statusbar.EditNotOwnMsg{} }
+	}
+	if channelID == "" || ts == "" {
+		return nil
+	}
+
+	var stashed string
+	switch panel {
+	case PanelMessages:
+		stashed = a.compose.Value()
+		a.compose.SetValue(text)
+		a.compose.SetPlaceholderOverride("Editing message — Enter to save, Esc to cancel")
+	case PanelThread:
+		stashed = a.threadCompose.Value()
+		a.threadCompose.SetValue(text)
+		a.threadCompose.SetPlaceholderOverride("Editing message — Enter to save, Esc to cancel")
+	}
+
+	a.editing = editState{
+		active:       true,
+		channelID:    channelID,
+		ts:           ts,
+		panel:        panel,
+		stashedDraft: stashed,
+	}
+	a.SetMode(ModeInsert)
+	a.focusedPanel = panel
+	if panel == PanelThread {
+		return a.threadCompose.Focus()
+	}
+	return a.compose.Focus()
+}
+
+// submitEdit emits an EditMessageMsg if the edit text is non-empty.
+// Empty text refuses with an inline toast and keeps edit mode open.
+func (a *App) submitEdit(rawValue, translated string) tea.Cmd {
+	if strings.TrimSpace(rawValue) == "" {
+		return func() tea.Msg {
+			return editEmptyToastMsg{}
+		}
+	}
+	chID := a.editing.channelID
+	ts := a.editing.ts
+	return func() tea.Msg {
+		return EditMessageMsg{
+			ChannelID: chID,
+			TS:        ts,
+			NewText:   translated,
+		}
+	}
+}
+
+// editEmptyToastMsg is delivered when the user tries to submit an
+// edit with empty text.
+type editEmptyToastMsg struct{}
 
 // truncateReason returns s truncated to max characters with an ellipsis.
 // Used for status-bar error toasts.

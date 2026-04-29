@@ -952,3 +952,206 @@ func TestWSMessageDeletedMsg_ClosesThreadIfParentDeleted(t *testing.T) {
 		t.Error("thread panel should be closed after parent deletion")
 	}
 }
+
+func TestBeginEditOfSelected_NotOwned_ToastsAndNoOps(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.SetCurrentUserID("U_ME")
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", UserID: "U_OTHER", Text: "not mine"},
+	})
+	app.focusedPanel = PanelMessages
+
+	cmd := app.beginEditOfSelected()
+	if cmd == nil {
+		t.Fatal("expected toast cmd")
+	}
+	res := cmd()
+	if _, ok := res.(statusbar.EditNotOwnMsg); !ok {
+		t.Errorf("expected EditNotOwnMsg, got %T", res)
+	}
+	if app.editing.active {
+		t.Error("editing state should not be active for non-owned message")
+	}
+}
+
+func TestBeginEditOfSelected_Own_EntersEditMode(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.SetCurrentUserID("U_ME")
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", UserID: "U_ME", Text: "my message"},
+	})
+	app.focusedPanel = PanelMessages
+
+	app.beginEditOfSelected()
+
+	if !app.editing.active {
+		t.Fatal("expected editing.active=true")
+	}
+	if app.editing.ts != "1.0" {
+		t.Errorf("expected editing.ts=1.0, got %q", app.editing.ts)
+	}
+	if app.compose.Value() != "my message" {
+		t.Errorf("expected compose seeded with message text, got %q", app.compose.Value())
+	}
+	if app.mode != ModeInsert {
+		t.Errorf("expected ModeInsert, got %v", app.mode)
+	}
+}
+
+func TestBeginEditOfSelected_StashesAndRestoresDraft(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.SetCurrentUserID("U_ME")
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", UserID: "U_ME", Text: "my message"},
+	})
+	app.focusedPanel = PanelMessages
+
+	// Pre-existing draft.
+	app.compose.SetValue("draft in progress")
+
+	app.beginEditOfSelected()
+	if app.compose.Value() != "my message" {
+		t.Fatal("compose should be seeded with the message text during edit")
+	}
+
+	// Cancel — draft should restore.
+	app.cancelEdit()
+	if app.compose.Value() != "draft in progress" {
+		t.Errorf("expected draft restored, got %q", app.compose.Value())
+	}
+	if app.editing.active {
+		t.Error("editing should be inactive after cancel")
+	}
+}
+
+func TestSubmitEdit_EmptyText_ReturnsEmptyToast(t *testing.T) {
+	app := NewApp()
+	app.editing.active = true
+	app.editing.channelID = "C1"
+	app.editing.ts = "1.0"
+	app.editing.panel = PanelMessages
+
+	cmd := app.submitEdit("   ", "   ")
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd")
+	}
+	res := cmd()
+	if _, ok := res.(editEmptyToastMsg); !ok {
+		t.Errorf("expected editEmptyToastMsg, got %T", res)
+	}
+}
+
+func TestSubmitEdit_NonEmptyText_EmitsEditMessageMsg(t *testing.T) {
+	app := NewApp()
+	app.editing.active = true
+	app.editing.channelID = "C1"
+	app.editing.ts = "1.0"
+	app.editing.panel = PanelMessages
+
+	cmd := app.submitEdit("hello", "hello")
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd")
+	}
+	res := cmd()
+	em, ok := res.(EditMessageMsg)
+	if !ok {
+		t.Fatalf("expected EditMessageMsg, got %T", res)
+	}
+	if em.ChannelID != "C1" || em.TS != "1.0" || em.NewText != "hello" {
+		t.Errorf("unexpected edit msg: %+v", em)
+	}
+}
+
+func TestMessageEditedMsg_ExitsEditMode(t *testing.T) {
+	app := NewApp()
+	app.editing.active = true
+	app.editing.channelID = "C1"
+	app.editing.ts = "1.0"
+	app.editing.panel = PanelMessages
+
+	app.Update(MessageEditedMsg{ChannelID: "C1", TS: "1.0", Err: nil})
+
+	if app.editing.active {
+		t.Error("expected editing.active=false after success")
+	}
+}
+
+func TestChannelSwitchCancelsEdit(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.SetCurrentUserID("U_ME")
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", UserID: "U_ME", Text: "my msg"},
+	})
+	app.focusedPanel = PanelMessages
+	app.compose.SetValue("draft")
+	app.beginEditOfSelected()
+	if !app.editing.active {
+		t.Fatal("setup: edit should be active")
+	}
+	app.Update(ChannelSelectedMsg{ID: "C2"})
+	if app.editing.active {
+		t.Error("channel switch should cancel edit")
+	}
+}
+
+func TestSubmitEdit_EmptyText_KeepsEditModeOpen(t *testing.T) {
+	app := NewApp()
+	app.editing.active = true
+	app.editing.channelID = "C1"
+	app.editing.ts = "1.0"
+	app.editing.panel = PanelMessages
+
+	cmd := app.submitEdit("   ", "   ")
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd")
+	}
+	_ = cmd()
+	// Empty submit must NOT exit edit mode.
+	if !app.editing.active {
+		t.Error("editing.active should remain true after empty-text submit")
+	}
+}
+
+func TestMessageEditedMsg_StaleResultDoesNotClobberCurrentEdit(t *testing.T) {
+	app := NewApp()
+	// A different edit is currently in progress.
+	app.editing.active = true
+	app.editing.channelID = "C1"
+	app.editing.ts = "2.0"
+	app.editing.panel = PanelMessages
+
+	// Stale result for a DIFFERENT TS arrives.
+	app.Update(MessageEditedMsg{ChannelID: "C1", TS: "1.0", Err: nil})
+
+	if !app.editing.active {
+		t.Error("current edit should not be cancelled by stale result for different TS")
+	}
+	if app.editing.ts != "2.0" {
+		t.Errorf("current edit ts should be untouched, got %q", app.editing.ts)
+	}
+}
+
+func TestSubmitEdit_ThreadPanel_EmitsEditMessageMsg(t *testing.T) {
+	app := NewApp()
+	app.editing.active = true
+	app.editing.channelID = "C1"
+	app.editing.ts = "R1"
+	app.editing.panel = PanelThread
+
+	cmd := app.submitEdit("hello thread", "hello thread")
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd")
+	}
+	res := cmd()
+	em, ok := res.(EditMessageMsg)
+	if !ok {
+		t.Fatalf("expected EditMessageMsg, got %T", res)
+	}
+	if em.ChannelID != "C1" || em.TS != "R1" || em.NewText != "hello thread" {
+		t.Errorf("unexpected edit msg: %+v", em)
+	}
+}
