@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/ui/messages"
@@ -28,6 +29,10 @@ type ChannelItem struct {
 	IsStarred     bool
 	Presence      string // for DMs: active, away, dnd
 	DMUserID      string // for DMs: the user ID of the other party
+	// LastReadTS is the Slack-format timestamp of the user's last
+	// read marker for this channel ("1700000001.000000"). Used by
+	// the staleness filter; empty means "never read" or "no signal".
+	LastReadTS string
 }
 
 // sectionFor returns the section name an item belongs to, applying default
@@ -110,6 +115,16 @@ type Model struct {
 	filter   string
 	filtered []int // indices into items that match filter
 
+	// Staleness filter: items whose LastReadTS is older than
+	// staleThreshold are dropped from `filtered` (i.e. hidden from the
+	// rendered sidebar). 0 disables the feature. activeID names the
+	// channel currently displayed in the message pane and is always
+	// exempt from staleness so the user doesn't lose track of it. nowFn
+	// is injectable for deterministic tests; defaults to time.Now.
+	staleThreshold time.Duration
+	activeID       string
+	nowFn          func() time.Time
+
 	// snappedSelection lets View() avoid snapping yOffset back to the selected
 	// row on every render. While snappedSelection == selected, mouse-wheel /
 	// programmatic scrolls (ScrollUp/ScrollDown) are preserved.
@@ -151,6 +166,51 @@ type Model struct {
 func (m *Model) InvalidateCache() {
 	m.cacheValid = false
 	m.version++
+}
+
+// now returns the current time, using the injected clock if set so
+// tests can produce deterministic staleness results.
+func (m *Model) now() time.Time {
+	if m.nowFn != nil {
+		return m.nowFn()
+	}
+	return time.Now()
+}
+
+// SetNowFunc injects a clock for tests. Pass nil to revert to time.Now.
+func (m *Model) SetNowFunc(fn func() time.Time) {
+	m.nowFn = fn
+	m.rebuildFilter()
+	m.cacheValid = false
+	m.dirty()
+}
+
+// SetStaleThreshold sets the maximum age for a channel's LastReadTS
+// before the channel is auto-hidden from the sidebar. Pass 0 (or
+// negative) to disable. Re-runs the filter immediately so the change
+// is reflected on the next View().
+func (m *Model) SetStaleThreshold(d time.Duration) {
+	if m.staleThreshold == d {
+		return
+	}
+	m.staleThreshold = d
+	m.rebuildFilter()
+	m.cacheValid = false
+	m.dirty()
+}
+
+// SetActiveChannelID names the channel currently shown in the message
+// pane. The active channel is always exempt from staleness hiding so
+// the user can never have the visible chat disappear from the sidebar
+// while they're reading it.
+func (m *Model) SetActiveChannelID(id string) {
+	if m.activeID == id {
+		return
+	}
+	m.activeID = id
+	m.rebuildFilter()
+	m.cacheValid = false
+	m.dirty()
 }
 
 // Version returns a counter that increments any time the View() output could
@@ -370,10 +430,18 @@ func (m *Model) SelectByID(id string) {
 func (m *Model) rebuildFilter() {
 	m.filtered = nil
 	lower := strings.ToLower(m.filter)
+	now := m.now()
 	for i, item := range m.items {
-		if m.filter == "" || strings.Contains(strings.ToLower(item.Name), lower) {
-			m.filtered = append(m.filtered, i)
+		if m.filter != "" && !strings.Contains(strings.ToLower(item.Name), lower) {
+			continue
 		}
+		// Staleness filter: drop items the user hasn't read in a long
+		// time, with the active channel always exempt so it can't
+		// disappear out from under them.
+		if item.ID != m.activeID && IsStale(item, m.staleThreshold, now) {
+			continue
+		}
+		m.filtered = append(m.filtered, i)
 	}
 
 	// Sort filtered indices to match the visual section display order so that
