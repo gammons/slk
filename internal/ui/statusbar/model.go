@@ -283,3 +283,9 @@ type PermalinkCopiedMsg struct{}
 // App handles it by setting the toast to "Failed to copy link" and
 // scheduling a CopiedClearMsg.
 type PermalinkCopyFailedMsg struct{}
+
+// DNDTickMsg is delivered once a minute while DND is active so the
+// status bar can refresh its countdown segment. The App schedules the
+// tick on each StatusChangeMsg and reschedules from the tick handler
+// while DND remains active.
+type DNDTickMsg struct{}
