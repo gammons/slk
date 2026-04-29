@@ -9,7 +9,9 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/statusbar"
 )
 
@@ -452,5 +454,379 @@ func TestCopyPermalink_ShiftYTriggersCopy(t *testing.T) {
 	}
 	if gotCh != "C123" || gotTS != "1700000001.000200" {
 		t.Errorf("fetcher got (%q, %q); want (\"C123\", \"1700000001.000200\")", gotCh, gotTS)
+	}
+}
+
+func TestApp_ThreadsViewActivation(t *testing.T) {
+	app := NewApp()
+	app.SetCurrentUserID("USELF")
+	app.activeTeamID = "T1"
+	app.SetUserNames(map[string]string{"U1": "alice"})
+
+	// Default: ViewChannels.
+	if app.view != ViewChannels {
+		t.Fatalf("default view = %v, want ViewChannels", app.view)
+	}
+
+	// Activating threads view via the message.
+	_, _ = app.Update(ThreadsViewActivatedMsg{})
+	if app.view != ViewThreads {
+		t.Fatalf("after activation view = %v, want ViewThreads", app.view)
+	}
+
+	// Switching to a channel returns to ViewChannels.
+	_, _ = app.Update(ChannelSelectedMsg{ID: "C1", Name: "general"})
+	if app.view != ViewChannels {
+		t.Errorf("after ChannelSelectedMsg view = %v, want ViewChannels", app.view)
+	}
+}
+
+func TestApp_ThreadsListLoadedUpdatesUnreadBadge(t *testing.T) {
+	app := NewApp()
+	app.activeTeamID = "T1"
+	summaries := []cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "1.0", Unread: true},
+		{ChannelID: "C2", ThreadTS: "2.0", Unread: false},
+	}
+	_, _ = app.Update(ThreadsListLoadedMsg{TeamID: "T1", Summaries: summaries})
+	if app.sidebar.ThreadsUnreadCount() != 1 {
+		t.Errorf("ThreadsUnreadCount = %d, want 1", app.sidebar.ThreadsUnreadCount())
+	}
+}
+
+func TestApp_ThreadsListLoadedIgnoredForOtherWorkspace(t *testing.T) {
+	app := NewApp()
+	app.activeTeamID = "T1"
+	summaries := []cache.ThreadSummary{{ChannelID: "C1", ThreadTS: "1.0", Unread: true}}
+	_, _ = app.Update(ThreadsListLoadedMsg{TeamID: "T2", Summaries: summaries})
+	if app.sidebar.ThreadsUnreadCount() != 0 {
+		t.Errorf("threads from a different team should not update the active sidebar; got %d", app.sidebar.ThreadsUnreadCount())
+	}
+}
+
+func TestApp_HandleEnterOnThreadsRowActivatesView(t *testing.T) {
+	app := NewApp()
+	app.activeTeamID = "T1"
+	// Sidebar default-selects the Threads row.
+	if !app.sidebar.IsThreadsSelected() {
+		t.Fatalf("precondition: sidebar should default-select Threads row")
+	}
+	cmd := app.handleEnter()
+	if cmd == nil {
+		t.Fatal("expected a tea.Cmd, got nil")
+	}
+	msg := cmd()
+	if _, ok := msg.(ThreadsViewActivatedMsg); !ok {
+		t.Errorf("expected ThreadsViewActivatedMsg, got %T", msg)
+	}
+}
+
+func TestApp_OpenSelectedThreadDedups(t *testing.T) {
+	app := NewApp()
+	app.activeTeamID = "T1"
+	fetched := 0
+	app.SetThreadFetcher(func(channelID, threadTS string) tea.Msg {
+		fetched++
+		return ThreadRepliesLoadedMsg{ThreadTS: threadTS, Replies: nil}
+	})
+	summaries := []cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "1.0"},
+		{ChannelID: "C1", ThreadTS: "2.0"},
+	}
+	app.Update(ThreadsListLoadedMsg{TeamID: "T1", Summaries: summaries})
+	app.view = ViewThreads
+
+	// First call should fetch.
+	cmd := app.openSelectedThreadCmd()
+	if cmd == nil {
+		t.Fatal("first call returned nil")
+	}
+	cmd()
+	if fetched != 1 {
+		t.Errorf("first call fetched=%d, want 1", fetched)
+	}
+
+	// Second call without selection change should NOT fetch.
+	cmd = app.openSelectedThreadCmd()
+	if cmd != nil {
+		t.Errorf("second call should be a no-op, got cmd=%v", cmd)
+	}
+
+	// After moving selection, fetch should fire again.
+	app.threadsView.MoveDown()
+	cmd = app.openSelectedThreadCmd()
+	if cmd == nil {
+		t.Fatal("after MoveDown, expected fetch")
+	}
+	cmd()
+	if fetched != 2 {
+		t.Errorf("after MoveDown fetched=%d, want 2", fetched)
+	}
+}
+
+func TestApp_WorkspaceSwitchResetsView(t *testing.T) {
+	app := NewApp()
+	app.view = ViewThreads
+	app.activeTeamID = "T1"
+	// Stash some summaries to confirm they're cleared.
+	app.threadsView.SetSummaries([]cache.ThreadSummary{{ChannelID: "C1", ThreadTS: "1.0", Unread: true}})
+	app.sidebar.SetThreadsUnreadCount(1)
+
+	app.Update(WorkspaceSwitchedMsg{TeamID: "T2", TeamName: "Other", Channels: nil})
+
+	if app.view != ViewChannels {
+		t.Errorf("after workspace switch view = %v, want ViewChannels", app.view)
+	}
+	if app.threadsView.UnreadCount() != 0 {
+		t.Errorf("threadsView should be cleared on workspace switch")
+	}
+	if app.sidebar.ThreadsUnreadCount() != 0 {
+		t.Errorf("sidebar threads-unread should be cleared on workspace switch")
+	}
+}
+
+func TestApp_NewThreadReplyTriggersDirtyMsg(t *testing.T) {
+	app := NewApp()
+	app.SetCurrentUserID("USELF")
+	app.activeTeamID = "T1"
+	// Tiny debounce so the test runs fast.
+	app.threadsDirtyDebounce = 5 * time.Millisecond
+
+	fetched := make(chan string, 4)
+	app.SetThreadsListFetcher(func(teamID string) tea.Msg {
+		fetched <- teamID
+		return ThreadsListLoadedMsg{TeamID: teamID, Summaries: nil}
+	})
+
+	// Activate threads view; drain the resulting initial fetch so it
+	// doesn't pollute the dirty-trigger assertion below.
+	_, initCmd := app.Update(ThreadsViewActivatedMsg{})
+	for _, m := range drainBatch(initCmd) {
+		if m != nil {
+			app.Update(m)
+		}
+	}
+	select {
+	case <-fetched:
+	case <-time.After(time.Second):
+		t.Fatal("initial threads-list fetch did not fire")
+	}
+	// Drain any extra incidental fetches from openSelectedThreadCmd etc.
+	for len(fetched) > 0 {
+		<-fetched
+	}
+
+	// A thread reply event should schedule a debounced dirty msg → fetch.
+	_, cmd := app.Update(NewMessageMsg{
+		ChannelID: "C1",
+		Message: messages.MessageItem{
+			TS:       "2.0",
+			UserID:   "U2",
+			Text:     "reply",
+			ThreadTS: "1.0",
+		},
+	})
+	if cmd == nil {
+		t.Fatal("NewMessageMsg with ThreadTS expected to return a cmd")
+	}
+	// Drive every leaf message produced by the cmd graph back into the app.
+	// tea.Tick blocks for the duration before returning a TickMsg-shaped
+	// value (here, ThreadsListDirtyMsg). drainBatch will block on it, which
+	// is fine because we set the debounce to 5ms.
+	for _, m := range drainBatch(cmd) {
+		if m != nil {
+			_, follow := app.Update(m)
+			for _, fm := range drainBatch(follow) {
+				if fm != nil {
+					app.Update(fm)
+				}
+			}
+		}
+	}
+
+	select {
+	case team := <-fetched:
+		if team != "T1" {
+			t.Errorf("re-fetch teamID = %q, want T1", team)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected re-fetch after thread reply, did not happen")
+	}
+}
+
+func TestApp_NewMessageWithoutThreadTSDoesNotTriggerDirty(t *testing.T) {
+	app := NewApp()
+	app.activeTeamID = "T1"
+	app.threadsDirtyDebounce = 5 * time.Millisecond
+
+	fetched := make(chan struct{}, 4)
+	app.SetThreadsListFetcher(func(teamID string) tea.Msg {
+		fetched <- struct{}{}
+		return ThreadsListLoadedMsg{TeamID: teamID, Summaries: nil}
+	})
+
+	// Top-level message (no ThreadTS) should NOT schedule any dirty fetch.
+	_, cmd := app.Update(NewMessageMsg{
+		ChannelID: "C1",
+		Message: messages.MessageItem{
+			TS:     "1.0",
+			UserID: "U1",
+			Text:   "hello",
+		},
+	})
+	for _, m := range drainBatch(cmd) {
+		if m != nil {
+			_, follow := app.Update(m)
+			for _, fm := range drainBatch(follow) {
+				if fm != nil {
+					app.Update(fm)
+				}
+			}
+		}
+	}
+
+	select {
+	case <-fetched:
+		t.Error("top-level message should not trigger threads-list fetch")
+	case <-time.After(50 * time.Millisecond):
+		// good
+	}
+}
+
+func TestApp_WorkspaceReadyTriggersThreadsListFetch(t *testing.T) {
+	app := NewApp()
+	fetched := make(chan string, 1)
+	app.SetThreadsListFetcher(func(teamID string) tea.Msg {
+		fetched <- teamID
+		return ThreadsListLoadedMsg{TeamID: teamID, Summaries: nil}
+	})
+
+	_, cmd := app.Update(WorkspaceReadyMsg{
+		TeamID:   "T1",
+		TeamName: "Test",
+		Channels: nil,
+	})
+	for _, m := range drainBatch(cmd) {
+		_ = m
+	}
+	select {
+	case team := <-fetched:
+		if team != "T1" {
+			t.Errorf("fetcher called with team=%q, want T1", team)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("WorkspaceReadyMsg did not trigger threads-list fetch")
+	}
+}
+
+// A background workspace becoming ready (after a different workspace is
+// already active) must not clobber the active workspace's threads-view
+// state. Only the first WorkspaceReadyMsg (when activeChannelID == "")
+// performs the initial setup; subsequent ones must leave summaries, the
+// unread badge, and the current view untouched.
+// In the threads view there is no main compose box; pressing `i` must
+// focus the right-side thread panel's compose, not the (hidden) main
+// compose. Regression test for the focus bug where pressing `i` while
+// browsing the threads list would silently no-op.
+func TestApp_InsertInThreadsViewFocusesThreadCompose(t *testing.T) {
+	app := NewApp()
+	app.activeTeamID = "T1"
+	// Simulate having activated the threads view with one summary, so
+	// the right thread panel is open.
+	app.threadsView.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "1.0", ParentText: "hi"},
+	})
+	app.view = ViewThreads
+	app.threadVisible = true
+	app.focusedPanel = PanelMessages // typical state when browsing the list
+
+	cmd := app.handleNormalMode(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	_ = cmd
+
+	if app.mode != ModeInsert {
+		t.Errorf("after pressing 'i' mode = %v, want ModeInsert", app.mode)
+	}
+	if app.focusedPanel != PanelThread {
+		t.Errorf("after pressing 'i' in threads view focusedPanel = %v, want PanelThread", app.focusedPanel)
+	}
+}
+
+func TestApp_BackgroundWorkspaceReadyDoesNotClobberActiveState(t *testing.T) {
+	app := NewApp()
+	app.SetThreadsListFetcher(func(teamID string) tea.Msg {
+		return ThreadsListLoadedMsg{TeamID: teamID, Summaries: nil}
+	})
+
+	// Make T1 the active workspace by sending the first WorkspaceReadyMsg.
+	app.Update(WorkspaceReadyMsg{
+		TeamID:   "T1",
+		TeamName: "First",
+		Channels: []sidebar.ChannelItem{{ID: "C1", Name: "general", Type: "channel"}},
+	})
+	app.activeTeamID = "T1"
+	app.activeChannelID = "C1"
+
+	// Simulate user state in the active workspace.
+	app.view = ViewThreads
+	app.threadsView.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "1.0", Unread: true},
+	})
+	app.sidebar.SetThreadsUnreadCount(1)
+
+	// Now a background workspace T2 finishes loading.
+	app.Update(WorkspaceReadyMsg{
+		TeamID:   "T2",
+		TeamName: "Second",
+		Channels: []sidebar.ChannelItem{{ID: "C9", Name: "other", Type: "channel"}},
+	})
+
+	// All three pieces of active-workspace state must be preserved.
+	if app.view != ViewThreads {
+		t.Errorf("background ready clobbered view: got %v, want ViewThreads", app.view)
+	}
+	if app.threadsView.UnreadCount() != 1 {
+		t.Errorf("background ready clobbered threadsView summaries: UnreadCount=%d, want 1", app.threadsView.UnreadCount())
+	}
+	if app.sidebar.ThreadsUnreadCount() != 1 {
+		t.Errorf("background ready clobbered sidebar badge: got %d, want 1", app.sidebar.ThreadsUnreadCount())
+	}
+	if app.activeTeamID != "T1" {
+		t.Errorf("background ready clobbered activeTeamID: got %q, want T1", app.activeTeamID)
+	}
+}
+
+func TestApp_WorkspaceSwitchedTriggersThreadsListFetchAndSelectsThreadsRow(t *testing.T) {
+	app := NewApp()
+	// Move sidebar selection off the Threads row first to verify the reset.
+	app.sidebar.SetItems([]sidebar.ChannelItem{{ID: "C1", Name: "general", Type: "channel"}})
+	app.sidebar.MoveDown()
+	if app.sidebar.IsThreadsSelected() {
+		t.Fatal("precondition: should be off Threads row")
+	}
+
+	fetched := make(chan string, 1)
+	app.SetThreadsListFetcher(func(teamID string) tea.Msg {
+		fetched <- teamID
+		return ThreadsListLoadedMsg{TeamID: teamID, Summaries: nil}
+	})
+
+	_, cmd := app.Update(WorkspaceSwitchedMsg{
+		TeamID:   "T2",
+		TeamName: "Other",
+		Channels: nil,
+	})
+	if !app.sidebar.IsThreadsSelected() {
+		t.Errorf("WorkspaceSwitchedMsg should reset sidebar to Threads row")
+	}
+	for _, m := range drainBatch(cmd) {
+		_ = m
+	}
+	select {
+	case team := <-fetched:
+		if team != "T2" {
+			t.Errorf("fetcher called with team=%q, want T2", team)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("WorkspaceSwitchedMsg did not trigger threads-list fetch")
 	}
 }

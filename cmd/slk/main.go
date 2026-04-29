@@ -379,6 +379,15 @@ func run() error {
 			}
 		})
 
+		app.SetThreadsListFetcher(func(teamID string) tea.Msg {
+			summaries, err := db.ListInvolvedThreads(teamID, client.UserID())
+			if err != nil {
+				log.Printf("Warning: ListInvolvedThreads(%s): %v", teamID, err)
+				return ui.ThreadsListLoadedMsg{TeamID: teamID, Summaries: nil}
+			}
+			return ui.ThreadsListLoadedMsg{TeamID: teamID, Summaries: summaries}
+		})
+
 		app.SetThreadReplySender(func(channelID, threadTS, text string) tea.Msg {
 			ctx := context.Background()
 			ts, err := client.SendReply(ctx, channelID, threadTS, text)

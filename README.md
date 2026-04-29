@@ -40,6 +40,12 @@
 - Side panel (35% width), opened with `Enter`, toggled with `Ctrl+]`
 - Live thread reply routing, real-time updates
 - Auto-closes on channel switch or narrow terminals
+- **Threads view** (`⚑ Threads` at top of sidebar): scrollable list of every
+  thread you authored, replied to, or were @-mentioned in for the active
+  workspace. Unread first, then newest activity. Selecting a thread opens
+  it in the side panel; the list re-ranks live as new replies arrive.
+  v1 is computed from the local SQLite cache, so threads from channels
+  you have not yet opened in slk will not appear until they are seen.
 
 ### Reactions
 - Search-first picker overlay (`r`) with frecent emoji

@@ -1,6 +1,7 @@
 package sidebar
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -129,6 +130,20 @@ type Model struct {
 	cacheValid  bool
 	cacheWidth  int
 	cacheFiller string // pre-rendered empty row for vertical padding
+
+	// Synthetic "Threads" row state. The Threads row is rendered at the very
+	// top of the sidebar (above all sections). It is selectable via j/k like a
+	// channel, but it is NOT a channel — when threadsSelected is true,
+	// SelectedItem/SelectedID return zero / empty and the App layer should
+	// activate the threads view instead of opening a channel.
+	//
+	// threadsSelected is intentionally NOT modified by SetItems: callers that
+	// want a fresh default selection on a major context change (e.g. workspace
+	// switch) must explicitly call SelectThreadsRow() after SetItems. This
+	// keeps routine refreshes (e.g. presence updates that re-call SetItems)
+	// from clobbering the user's current selection.
+	threadsUnread   int
+	threadsSelected bool
 }
 
 // InvalidateCache forces the render cache to be rebuilt on next View().
@@ -148,10 +163,47 @@ func (m *Model) dirty() { m.version++ }
 
 func New(items []ChannelItem) Model {
 	m := Model{items: items}
+	// Default selection is the synthetic Threads row at the top of the sidebar.
+	m.threadsSelected = true
 	m.rebuildFilter()
 	return m
 }
 
+// IsThreadsSelected reports whether the synthetic "Threads" row is currently
+// the selected entry in the sidebar.
+func (m *Model) IsThreadsSelected() bool { return m.threadsSelected }
+
+// SelectThreadsRow explicitly moves selection to the synthetic Threads row.
+func (m *Model) SelectThreadsRow() {
+	if !m.threadsSelected {
+		m.threadsSelected = true
+		m.dirty()
+	}
+}
+
+// SetThreadsUnreadCount updates the badge count shown next to the Threads row.
+// Invalidates the render cache when the count changes.
+func (m *Model) SetThreadsUnreadCount(n int) {
+	if n < 0 {
+		n = 0
+	}
+	if m.threadsUnread != n {
+		m.threadsUnread = n
+		m.cacheValid = false
+		m.dirty()
+	}
+}
+
+// ThreadsUnreadCount returns the current Threads-row unread badge count.
+func (m *Model) ThreadsUnreadCount() int { return m.threadsUnread }
+
+// SetItems replaces the sidebar's channel list. It clamps m.selected to the
+// new filtered range but does NOT touch threadsSelected: SetItems is called on
+// every routine refresh (presence updates, unread changes, channel-list
+// resync, etc.) and clobbering selection on those refreshes would be wrong.
+// Callers that want to reset selection to the default Threads row on a major
+// context change (e.g. workspace switch) should explicitly call
+// SelectThreadsRow() after SetItems.
 func (m *Model) SetItems(items []ChannelItem) {
 	m.items = items
 	m.rebuildFilter()
@@ -163,6 +215,9 @@ func (m *Model) SetItems(items []ChannelItem) {
 }
 
 func (m *Model) SelectedID() string {
+	if m.threadsSelected {
+		return ""
+	}
 	if len(m.filtered) == 0 {
 		return ""
 	}
@@ -171,6 +226,9 @@ func (m *Model) SelectedID() string {
 }
 
 func (m *Model) SelectedItem() (ChannelItem, bool) {
+	if m.threadsSelected {
+		return ChannelItem{}, false
+	}
 	if len(m.filtered) == 0 {
 		return ChannelItem{}, false
 	}
@@ -179,6 +237,15 @@ func (m *Model) SelectedItem() (ChannelItem, bool) {
 }
 
 func (m *Model) MoveDown() {
+	// From the synthetic Threads row, MoveDown lands on the first channel.
+	if m.threadsSelected {
+		if len(m.filtered) > 0 {
+			m.threadsSelected = false
+			m.selected = 0
+			m.dirty()
+		}
+		return
+	}
 	if m.selected < len(m.filtered)-1 {
 		m.selected++
 		m.dirty()
@@ -186,6 +253,16 @@ func (m *Model) MoveDown() {
 }
 
 func (m *Model) MoveUp() {
+	// Already on the Threads row -- no-op.
+	if m.threadsSelected {
+		return
+	}
+	// From the first channel, MoveUp returns to the synthetic Threads row.
+	if m.selected == 0 {
+		m.threadsSelected = true
+		m.dirty()
+		return
+	}
 	if m.selected > 0 {
 		m.selected--
 		m.dirty()
@@ -214,12 +291,15 @@ func (m *Model) ScrollDown(n int) {
 }
 
 func (m *Model) GoToTop() {
+	// Top of the sidebar is the synthetic Threads row.
+	m.threadsSelected = true
 	m.selected = 0
 	m.dirty()
 }
 
 func (m *Model) GoToBottom() {
 	if len(m.filtered) > 0 {
+		m.threadsSelected = false
 		m.selected = len(m.filtered) - 1
 		m.dirty()
 	}
@@ -277,8 +357,9 @@ func (m *Model) UpdatePresenceByUser(userID, presence string) {
 func (m *Model) SelectByID(id string) {
 	for i, idx := range m.filtered {
 		if m.items[idx].ID == id {
-			if m.selected != i {
+			if m.selected != i || m.threadsSelected {
 				m.selected = i
+				m.threadsSelected = false
 				m.dirty()
 			}
 			return
@@ -323,6 +404,7 @@ type renderRow struct {
 	selected  string // rendered with the selection cursor + selected style
 	height    int    // rendered terminal height (always 1 for headers/blanks)
 	filterIdx int    // index into m.filtered, or -1 for headers/blanks
+	isThreads bool   // true for the synthetic "Threads" row at the top
 }
 
 // buildCache rebuilds m.cacheRows for the given width. Expensive; runs only
@@ -359,6 +441,34 @@ func (m *Model) buildCache(width int) {
 	dmActivePrefix := styles.PresenceOnline.Render("● ")
 	dmAwayPrefix := styles.PresenceAway.Render("○ ")
 	groupDMPrefix := styles.PresenceAway.Render("● ")
+
+	// Synthetic "Threads" row, always rendered at the very top of the sidebar
+	// (before any section). Selectable like a channel; the App layer activates
+	// the threads view when IsThreadsSelected() is true.
+	threadsLabel := " ⚑ Threads"
+	threadsCursor := cursorSelected + "⚑ Threads"
+	if m.threadsUnread > 0 {
+		// Render "•N" as a single styled span so the dot glyph and the digits
+		// stay adjacent in the output (no ANSI reset splits them). Tests rely
+		// on the literal substring "•N" being searchable in View() output.
+		badge := " " + dotStyle.Render("•"+fmt.Sprintf("%d", m.threadsUnread))
+		threadsLabel += badge
+		threadsCursor += badge
+	}
+	threadsLabel = messages.ReapplyBgAfterResets(threadsLabel, bgAnsi)
+	threadsCursor = messages.ReapplyBgAfterResets(threadsCursor, bgAnsi)
+	threadsNormal := styles.ChannelNormal.Width(width - 2).Render(threadsLabel)
+	threadsSelectedRow := styles.ChannelSelected.Width(width - 2).Render(threadsCursor)
+	m.cacheRows = append(m.cacheRows, renderRow{
+		normal:    threadsNormal,
+		selected:  threadsSelectedRow,
+		height:    1,
+		filterIdx: -1,
+		isThreads: true,
+	})
+	// Blank separator between the Threads row and the first section (or below
+	// the Threads row when there are no channels at all).
+	m.cacheRows = append(m.cacheRows, renderRow{height: 1, filterIdx: -1})
 
 	for fi, idx := range m.filtered {
 		item := m.items[idx]
@@ -431,6 +541,19 @@ func (m *Model) buildCache(width int) {
 		})
 	}
 
+	// When there are no channel items at all, render a single muted
+	// "No channels" placeholder below the Threads row + separator so the
+	// Threads row remains globally visible even on an empty workspace.
+	if len(m.items) == 0 {
+		placeholder := styles.SectionHeader.Render("No channels")
+		m.cacheRows = append(m.cacheRows, renderRow{
+			normal:    placeholder,
+			selected:  placeholder,
+			height:    1,
+			filterIdx: -1,
+		})
+	}
+
 	// Flatten into a single row list with section headers.
 	// Add a blank line between sections for visual separation.
 	for i, name := range sectionOrder {
@@ -450,19 +573,24 @@ func (m *Model) buildCache(width int) {
 }
 
 func (m *Model) View(height, width int) string {
-	if len(m.items) == 0 {
-		return lipgloss.NewStyle().Width(width).Height(height).Render("No channels")
-	}
-
+	// Note: we no longer early-return on len(m.items)==0. The synthetic
+	// Threads row is globally present (even on an empty workspace), so we
+	// always go through buildCache, which handles the empty-items case by
+	// emitting a muted "No channels" placeholder below the Threads row.
 	if !m.cacheValid || m.cacheWidth != width {
 		m.buildCache(width)
 	}
 
 	// Each cacheRow is exactly one rendered line, so the line index of a row
-	// is just its slice index. Find the selected row's line.
+	// is just its slice index. Find the selected row's line. The synthetic
+	// Threads row is identified via r.isThreads when threadsSelected is set.
 	selectedLine := -1
 	for i, r := range m.cacheRows {
-		if r.filterIdx == m.selected {
+		if m.threadsSelected && r.isThreads {
+			selectedLine = i
+			break
+		}
+		if !m.threadsSelected && r.filterIdx == m.selected {
 			selectedLine = i
 			break
 		}
@@ -470,15 +598,21 @@ func (m *Model) View(height, width int) string {
 
 	// Snap yOffset to keep the selected row visible only when the selection
 	// has actually changed since the last snap. This preserves mouse-wheel /
-	// programmatic scroll positions across renders.
-	if selectedLine >= 0 && (!m.hasSnapped || m.snappedSelection != m.selected) {
+	// programmatic scroll positions across renders. We use a sentinel of -1
+	// to represent "currently on the synthetic Threads row" so the snapped
+	// state is distinct from any real channel index.
+	currentSelection := m.selected
+	if m.threadsSelected {
+		currentSelection = -1
+	}
+	if selectedLine >= 0 && (!m.hasSnapped || m.snappedSelection != currentSelection) {
 		if selectedLine >= m.yOffset+height {
 			m.yOffset = selectedLine - height + 1
 		}
 		if selectedLine < m.yOffset {
 			m.yOffset = selectedLine
 		}
-		m.snappedSelection = m.selected
+		m.snappedSelection = currentSelection
 		m.hasSnapped = true
 	}
 	if m.yOffset < 0 {
@@ -501,13 +635,20 @@ func (m *Model) View(height, width int) string {
 	visible := make([]string, 0, height)
 	for i := m.yOffset; i < end; i++ {
 		r := m.cacheRows[i]
-		if r.filterIdx == m.selected {
+		switch {
+		case r.isThreads:
+			if m.threadsSelected {
+				visible = append(visible, r.selected)
+			} else {
+				visible = append(visible, r.normal)
+			}
+		case !m.threadsSelected && r.filterIdx == m.selected:
 			visible = append(visible, r.selected)
-		} else if r.normal == "" {
+		case r.normal == "":
 			// Inter-section blank row -- emit a width-sized themed blank so
 			// the panel background remains continuous.
 			visible = append(visible, m.cacheFiller)
-		} else {
+		default:
 			visible = append(visible, r.normal)
 		}
 	}
@@ -523,6 +664,25 @@ func (m *Model) View(height, width int) string {
 func (m *Model) ClickAt(y int) (ChannelItem, bool) {
 	absoluteY := y + m.yOffset
 
+	// y=0 is the synthetic Threads row; y=1 is the blank separator before the
+	// first section. A click on y=0 selects/keeps the Threads row.
+	if absoluteY == 0 {
+		if !m.threadsSelected {
+			m.threadsSelected = true
+			m.dirty()
+		}
+		// Caller (App) consults IsThreadsSelected -- no ChannelItem to return.
+		return ChannelItem{}, false
+	}
+	// Explicit no-op for the Threads-row separator at y=1. Inter-section
+	// blank rows further down are also no-ops, but via fall-through: the
+	// per-section loop below never matches a blank row's y, so the function
+	// just returns (ChannelItem{}, false) at the end. This explicit branch
+	// just makes the parity for the Threads separator obvious.
+	if absoluteY == 1 {
+		return ChannelItem{}, false
+	}
+
 	// Rebuild the section structure (same logic as View) to map y to filterIdx.
 	// Each channel item = 1 line, each section header = 1 line, blank line between sections.
 	sectionOrder := orderedSections(m.items, m.filtered)
@@ -534,7 +694,8 @@ func (m *Model) ClickAt(y int) (ChannelItem, bool) {
 		sectionMap[sectionName] = append(sectionMap[sectionName], fi)
 	}
 
-	currentLine := 0
+	// Skip the Threads row + its trailing blank separator (2 lines).
+	currentLine := 2
 	for i, name := range sectionOrder {
 		if i > 0 {
 			currentLine++ // blank line between sections
@@ -543,8 +704,9 @@ func (m *Model) ClickAt(y int) (ChannelItem, bool) {
 
 		for _, fi := range sectionMap[name] {
 			if currentLine == absoluteY {
-				if m.selected != fi {
+				if m.selected != fi || m.threadsSelected {
 					m.selected = fi
+					m.threadsSelected = false
 					m.dirty()
 				}
 				idx := m.filtered[fi]
