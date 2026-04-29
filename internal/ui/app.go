@@ -986,16 +986,17 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case WorkspaceReadyMsg:
-		// Same per-workspace cleanup as WorkspaceSwitchedMsg: ensure the
-		// threads view starts empty and we land in ViewChannels.
-		a.view = ViewChannels
-		a.threadsView.SetSummaries(nil)
-		a.sidebar.SetThreadsUnreadCount(0)
-		a.lastOpenedChannelID = ""
-		a.lastOpenedThreadTS = ""
 		a.MarkWorkspaceReady(msg.TeamName)
-		// If this is the first workspace, set it up as active
+		// If this is the first workspace, set it up as active. Threads-view
+		// state reset only happens here — background workspaces becoming
+		// ready must NOT clobber the active workspace's loaded summaries,
+		// unread badge, or current view.
 		if a.activeChannelID == "" {
+			a.view = ViewChannels
+			a.threadsView.SetSummaries(nil)
+			a.sidebar.SetThreadsUnreadCount(0)
+			a.lastOpenedChannelID = ""
+			a.lastOpenedThreadTS = ""
 			a.sidebar.SetItems(msg.Channels)
 			a.channelFinder.SetItems(msg.FinderItems)
 			a.SetUserNames(msg.UserNames)
@@ -1010,8 +1011,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				})
 			}
 		}
-		// Kick off an initial threads-list fetch so the sidebar Threads
-		// row badge populates before the user opens the view.
+		// Initial threads-list fetch fires for every workspace as it
+		// becomes ready; the result is gated by ThreadsListLoadedMsg's
+		// TeamID == activeTeamID check, so background fetches are
+		// dropped without affecting the active sidebar.
 		if a.threadsListFetcher != nil {
 			fetcher := a.threadsListFetcher
 			team := msg.TeamID

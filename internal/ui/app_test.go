@@ -719,6 +719,55 @@ func TestApp_WorkspaceReadyTriggersThreadsListFetch(t *testing.T) {
 	}
 }
 
+// A background workspace becoming ready (after a different workspace is
+// already active) must not clobber the active workspace's threads-view
+// state. Only the first WorkspaceReadyMsg (when activeChannelID == "")
+// performs the initial setup; subsequent ones must leave summaries, the
+// unread badge, and the current view untouched.
+func TestApp_BackgroundWorkspaceReadyDoesNotClobberActiveState(t *testing.T) {
+	app := NewApp()
+	app.SetThreadsListFetcher(func(teamID string) tea.Msg {
+		return ThreadsListLoadedMsg{TeamID: teamID, Summaries: nil}
+	})
+
+	// Make T1 the active workspace by sending the first WorkspaceReadyMsg.
+	app.Update(WorkspaceReadyMsg{
+		TeamID:   "T1",
+		TeamName: "First",
+		Channels: []sidebar.ChannelItem{{ID: "C1", Name: "general", Type: "channel"}},
+	})
+	app.activeTeamID = "T1"
+	app.activeChannelID = "C1"
+
+	// Simulate user state in the active workspace.
+	app.view = ViewThreads
+	app.threadsView.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "1.0", Unread: true},
+	})
+	app.sidebar.SetThreadsUnreadCount(1)
+
+	// Now a background workspace T2 finishes loading.
+	app.Update(WorkspaceReadyMsg{
+		TeamID:   "T2",
+		TeamName: "Second",
+		Channels: []sidebar.ChannelItem{{ID: "C9", Name: "other", Type: "channel"}},
+	})
+
+	// All three pieces of active-workspace state must be preserved.
+	if app.view != ViewThreads {
+		t.Errorf("background ready clobbered view: got %v, want ViewThreads", app.view)
+	}
+	if app.threadsView.UnreadCount() != 1 {
+		t.Errorf("background ready clobbered threadsView summaries: UnreadCount=%d, want 1", app.threadsView.UnreadCount())
+	}
+	if app.sidebar.ThreadsUnreadCount() != 1 {
+		t.Errorf("background ready clobbered sidebar badge: got %d, want 1", app.sidebar.ThreadsUnreadCount())
+	}
+	if app.activeTeamID != "T1" {
+		t.Errorf("background ready clobbered activeTeamID: got %q, want T1", app.activeTeamID)
+	}
+}
+
 func TestApp_WorkspaceSwitchedTriggersThreadsListFetchAndSelectsThreadsRow(t *testing.T) {
 	app := NewApp()
 	// Move sidebar selection off the Threads row first to verify the reset.
