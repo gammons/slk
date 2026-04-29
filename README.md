@@ -235,6 +235,10 @@ Or just run `./bin/slk`. Onboarding launches automatically when no workspaces ar
 | `Enter` | Insert | Send message |
 | `Shift+Enter` | Insert | Newline |
 | `Ctrl+V` | Insert | Smart paste — image / file path / text |
+| `Ctrl+U` | Insert | Clear compose (text + pending attachments) |
+| `Ctrl+U` / `Ctrl+D` | Normal | Half-page up / down |
+| `Up` | Insert | Previous line; on the first line, jump to start of message |
+| `Down` | Insert | Next line; on the last line, jump to end of message |
 | `gg` / `G` | Normal | Jump to top / bottom |
 | `Ctrl+b` | Any | Toggle sidebar |
 | `Ctrl+]` | Any | Toggle thread panel |
