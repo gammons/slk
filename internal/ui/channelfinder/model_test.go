@@ -84,6 +84,70 @@ func TestFilterPrefixFirst(t *testing.T) {
 	}
 }
 
+func TestFilterDMRanksAboveGroupDM(t *testing.T) {
+	// Searching for an individual person should put their 1:1 DM ahead of
+	// any group DM whose participant list contains the same name. Both
+	// kinds of items can match the same query as substrings; without a
+	// type-aware tiebreak the group_dm wins simply by appearing first in
+	// m.items.
+	items := []Item{
+		{ID: "G1", Name: "alice, bob, carol", Type: "group_dm"},
+		{ID: "G2", Name: "alice, dave", Type: "group_dm"},
+		{ID: "D1", Name: "alice", Type: "dm", Presence: "active"},
+	}
+	m := New()
+	m.SetItems(items)
+	m.Open()
+
+	for _, r := range "ali" {
+		m.HandleKey(string(r))
+	}
+
+	if len(m.filtered) == 0 {
+		t.Fatal("expected matches for 'ali'")
+	}
+	first := m.items[m.filtered[0]]
+	if first.Type != "dm" {
+		t.Errorf("expected first match to be the individual DM, got %q (type=%s)", first.Name, first.Type)
+	}
+	// And the last of the matching items should be a group_dm.
+	last := m.items[m.filtered[len(m.filtered)-1]]
+	if last.Type != "group_dm" {
+		t.Errorf("expected last match to be a group_dm, got %q (type=%s)", last.Name, last.Type)
+	}
+}
+
+func TestFilterGroupDMRanksLastAcrossTiers(t *testing.T) {
+	// A group_dm with a *prefix* match should still rank below a regular
+	// channel/dm with a *substring* match? No — prefix tier still wins
+	// over substring tier (that's the whole point of tiering). But within
+	// the same tier, group_dm ranks last. Verify both invariants.
+	items := []Item{
+		{ID: "G1", Name: "alice, bob", Type: "group_dm"}, // prefix match for "ali"
+		{ID: "C1", Name: "talia-team", Type: "channel"},  // substring match for "ali"
+		{ID: "D1", Name: "alice", Type: "dm"},            // prefix match for "ali"
+	}
+	m := New()
+	m.SetItems(items)
+	m.Open()
+	for _, r := range "ali" {
+		m.HandleKey(string(r))
+	}
+
+	if len(m.filtered) != 3 {
+		t.Fatalf("expected 3 matches, got %d", len(m.filtered))
+	}
+	// Tier 1 (prefix): D1 (dm) before G1 (group_dm).
+	// Tier 2 (substring): C1.
+	got := []string{m.items[m.filtered[0]].ID, m.items[m.filtered[1]].ID, m.items[m.filtered[2]].ID}
+	want := []string{"D1", "G1", "C1"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("position %d: got %s, want %s (full order=%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
 func TestSelectChannel(t *testing.T) {
 	m := New()
 	m.SetItems(testItems())

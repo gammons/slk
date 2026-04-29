@@ -202,10 +202,27 @@ func (m *Model) filter() {
 		}
 	}
 
-	// Stable sort subsequence matches by descending score so the tightest /
-	// most word-boundary-aligned matches come first.
+	// Within each tier, partition by type rank: individuals (1:1 DMs)
+	// always come first, group DMs always come last, and channels sit
+	// in between. Searching for a person's name commonly matches both
+	// their DM and any group DM containing them; without this tiebreak
+	// the group DMs win solely because of their position in m.items.
+	m.sortByTypeRankInPlace(prefixMatches)
+	m.sortByTypeRankInPlace(substringMatches)
+
+	// Stable sort subsequence matches by (typeRank asc, score desc) so
+	// the tightest / most word-boundary-aligned matches come first
+	// within each type-rank bucket.
 	for i := 1; i < len(subsequenceMatches); i++ {
-		for j := i; j > 0 && subsequenceMatches[j-1].score < subsequenceMatches[j].score; j-- {
+		for j := i; j > 0; j-- {
+			ai := m.typeRank(subsequenceMatches[j-1].idx)
+			bi := m.typeRank(subsequenceMatches[j].idx)
+			if ai < bi {
+				break
+			}
+			if ai == bi && subsequenceMatches[j-1].score >= subsequenceMatches[j].score {
+				break
+			}
 			subsequenceMatches[j-1], subsequenceMatches[j] = subsequenceMatches[j], subsequenceMatches[j-1]
 		}
 	}
@@ -214,6 +231,29 @@ func (m *Model) filter() {
 	m.filtered = append(m.filtered, substringMatches...)
 	for _, s := range subsequenceMatches {
 		m.filtered = append(m.filtered, s.idx)
+	}
+}
+
+// typeRank returns a sort key for an item: lower comes first. 1:1 DMs
+// rank ahead of channels; group DMs rank last.
+func (m *Model) typeRank(idx int) int {
+	switch m.items[idx].Type {
+	case "dm":
+		return 0
+	case "group_dm":
+		return 2
+	default:
+		return 1
+	}
+}
+
+// sortByTypeRankInPlace stably reorders idxs so items with a smaller
+// typeRank come first while preserving original order within each rank.
+func (m *Model) sortByTypeRankInPlace(idxs []int) {
+	for i := 1; i < len(idxs); i++ {
+		for j := i; j > 0 && m.typeRank(idxs[j-1]) > m.typeRank(idxs[j]); j-- {
+			idxs[j-1], idxs[j] = idxs[j], idxs[j-1]
+		}
 	}
 }
 
