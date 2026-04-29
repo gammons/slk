@@ -19,6 +19,15 @@ import (
 	"github.com/muesli/reflow/truncate"
 )
 
+// cardStride is the number of lines a single rendered thread card occupies
+// in the flat line list, including the trailing blank separator. The very
+// last card has no trailing separator, so the last card occupies
+// cardContentLines lines instead.
+const (
+	cardContentLines = 3 // header + preview + footer
+	cardStride       = cardContentLines + 1
+)
+
 // Local styles (kept package-private so we don't pollute the shared styles
 // package for one panel). Built from the shared color tokens so theme
 // changes still propagate via styles.Apply().
@@ -39,6 +48,14 @@ type Model struct {
 	selected int
 	yOffset  int
 	focused  bool
+
+	// snappedSelection lets View() avoid snapping yOffset back to the
+	// selected row on every render. While snappedSelection == selected,
+	// programmatic scrolls (ScrollUp/ScrollDown) are preserved. The flag
+	// is reset by ScrollUp/ScrollDown so the next selection move re-snaps,
+	// matching the sidebar's behavior (sidebar/model.go:471-483).
+	snappedSelection int
+	hasSnapped       bool
 
 	version int64
 }
@@ -111,6 +128,7 @@ func (m *Model) SetSummaries(s []cache.ThreadSummary) {
 	}
 	m.selected = newSel
 	m.clampSelection()
+	m.hasSnapped = false // force re-snap on next render
 	m.dirty()
 }
 
@@ -183,6 +201,8 @@ func (m *Model) GoToBottom() {
 }
 
 // ScrollUp moves the viewport up n lines without changing the selection.
+// Resetting hasSnapped lets the next selection move re-snap to keep the
+// selection visible (sidebar uses the same convention).
 func (m *Model) ScrollUp(n int) {
 	if n <= 0 {
 		return
@@ -191,16 +211,19 @@ func (m *Model) ScrollUp(n int) {
 	if m.yOffset < 0 {
 		m.yOffset = 0
 	}
+	m.hasSnapped = false
 	m.dirty()
 }
 
 // ScrollDown moves the viewport down n lines without changing the
 // selection. View() clamps yOffset against the actual content height.
+// Resetting hasSnapped lets the next selection move re-snap.
 func (m *Model) ScrollDown(n int) {
 	if n <= 0 {
 		return
 	}
 	m.yOffset += n
+	m.hasSnapped = false
 	m.dirty()
 }
 
@@ -227,8 +250,9 @@ func (m *Model) clampSelection() {
 }
 
 // View renders the threads list to a string of `height` lines, each
-// `width` columns wide.
-func (m *Model) View(width, height int) string {
+// `width` columns wide. Argument order matches sidebar.View and
+// thread.View (height first).
+func (m *Model) View(height, width int) string {
 	if width < 1 {
 		width = 1
 	}
@@ -241,10 +265,20 @@ func (m *Model) View(width, height int) string {
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, empty)
 	}
 
-	// Build the full content as a flat slice of lines, then window into it.
+	// Build the full content as a flat slice of lines.
 	lines := m.renderRows(width)
 
-	// Clamp yOffset.
+	// Snap-to-selected: when the selection moves, adjust yOffset so the
+	// selected card is fully visible. Skipped when the selection hasn't
+	// changed since the last snap so manual scrolls (ScrollUp/Down) are
+	// preserved across renders.
+	if !m.hasSnapped || m.snappedSelection != m.selected {
+		m.snapToSelected(height, len(lines))
+		m.snappedSelection = m.selected
+		m.hasSnapped = true
+	}
+
+	// Clamp yOffset against actual content height.
 	maxOffset := len(lines) - height
 	if maxOffset < 0 {
 		maxOffset = 0
@@ -262,9 +296,10 @@ func (m *Model) View(width, height int) string {
 	}
 	visible := lines[m.yOffset:end]
 
-	// Pad to `height` so the panel always fills its allotted vertical space.
+	// Pad to `height` so the panel always fills its allotted vertical
+	// space. Filler is width-padded so column count stays uniform.
 	if pad := height - len(visible); pad > 0 {
-		filler := lipgloss.NewStyle().Width(width).Render("")
+		filler := blankLine(width)
 		out := make([]string, 0, height)
 		out = append(out, visible...)
 		for i := 0; i < pad; i++ {
@@ -275,26 +310,69 @@ func (m *Model) View(width, height int) string {
 	return strings.Join(visible, "\n")
 }
 
+// snapToSelected adjusts yOffset so the entire selected card (3 content
+// lines) is inside the viewport. The selected card occupies absolute lines
+// [start, start+cardContentLines) inside the flat line list. If the card
+// is taller than `height`, prefer pinning its top edge to the viewport top.
+func (m *Model) snapToSelected(height, totalLines int) {
+	start := m.selected * cardStride
+	end := start + cardContentLines
+
+	if end > m.yOffset+height {
+		m.yOffset = end - height
+	}
+	if start < m.yOffset {
+		m.yOffset = start
+	}
+	if m.yOffset < 0 {
+		m.yOffset = 0
+	}
+	maxOffset := totalLines - height
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.yOffset > maxOffset {
+		m.yOffset = maxOffset
+	}
+}
+
 // renderRows builds the full (un-windowed) line list for the current
-// summaries, with one blank separator between cards.
+// summaries, with one width-padded blank separator between cards. All
+// emitted lines are exactly `width` columns wide.
 func (m *Model) renderRows(width int) []string {
+	separator := blankLine(width)
 	var lines []string
 	for i, s := range m.summaries {
 		if i > 0 {
-			lines = append(lines, "")
+			lines = append(lines, separator)
 		}
 		lines = append(lines, m.renderCard(s, width, i == m.selected)...)
 	}
 	return lines
 }
 
+// blankLine returns an exactly `width`-column-wide empty line, used both
+// for inter-card separators and bottom padding when the content is shorter
+// than the viewport.
+func blankLine(width int) string {
+	return lipgloss.NewStyle().Width(width).Render("")
+}
+
 // renderCard returns the 3 lines of a single thread row: header, preview,
-// footer. The selected row uses styles.ChannelSelected (bold); non-selected
-// rows use styles.MessageText.
+// footer. Each line is rendered through a width-bounded style so the final
+// output is exactly `width` columns wide regardless of the inner content.
+// The selected row uses styles.ChannelSelected (bold + padding); non-
+// selected rows use styles.MessageText.
 func (m *Model) renderCard(s cache.ThreadSummary, width int, selected bool) []string {
 	rowStyle := styles.MessageText
 	if selected {
 		rowStyle = styles.ChannelSelected
+	}
+	// Reserve space for the row style's horizontal frame (padding/border).
+	// ChannelSelected has Padding(0, 1); MessageText has none.
+	contentWidth := width - rowStyle.GetHorizontalFrameSize()
+	if contentWidth < 1 {
+		contentWidth = 1
 	}
 
 	// Header: <glyph><channel> · <author> · <relTime>  [• if unread]
@@ -305,39 +383,41 @@ func (m *Model) renderCard(s cache.ThreadSummary, width int, selected bool) []st
 	if s.Unread {
 		header += "  " + unreadDotStyle().Render("•")
 	}
-	header = truncateLine(header, width)
+	header = clipToWidth(header, contentWidth)
 
-	// Preview: "  > <parent text>"; falls back to "(parent not loaded)" when
-	// we have no parent message at all in the cache yet.
+	// Preview: "  > <parent text>"; falls back to "(parent not loaded)"
+	// when both ParentText and ParentUserID are empty (cache hasn't seen
+	// the parent yet).
 	var previewBody string
 	if s.ParentText == "" && s.ParentUserID == "" {
 		previewBody = mutedStyle().Render("(parent not loaded)")
 	} else {
 		preview := messages.RenderSlackMarkdown(s.ParentText, m.userNames)
 		preview = strings.ReplaceAll(preview, "\n", " ")
-		maxWidth := width - 4
-		if maxWidth < 0 {
-			maxWidth = 0
+		previewMax := contentWidth - 4
+		if previewMax < 0 {
+			previewMax = 0
 		}
-		previewBody = truncate.StringWithTail(preview, uint(maxWidth), "…")
+		previewBody = truncate.StringWithTail(preview, uint(previewMax), "…")
 	}
-	previewLine := "  > " + previewBody
-	previewLine = truncateLine(previewLine, width)
+	previewLine := clipToWidth("  > "+previewBody, contentWidth)
 
-	// Footer: "  N replies · last by <user> <relTime>" (muted).
+	// Footer: "  N replies · last by <user> <relTime>". Rendered through
+	// the muted style with .Width(width) so it fills the row even though
+	// the row style itself doesn't apply.
 	replyWord := "replies"
 	if s.ReplyCount == 1 {
 		replyWord = "reply"
 	}
 	lastBy := m.resolveUser(s.LastReplyBy)
 	footerText := "  " + strconv.Itoa(s.ReplyCount) + " " + replyWord + " · last by " + lastBy + " " + formatRelTime(s.LastReplyTS)
-	footer := mutedStyle().Render(truncateLine(footerText, width))
+	footerText = clipToWidth(footerText, width) // muted style has no padding
 
-	return []string{
-		rowStyle.Render(header),
-		rowStyle.Render(previewLine),
-		footer,
-	}
+	headerLine := rowStyle.Width(width).Render(header)
+	previewOut := rowStyle.Width(width).Render(previewLine)
+	footerOut := mutedStyle().Width(width).Render(footerText)
+
+	return []string{headerLine, previewOut, footerOut}
 }
 
 // channelGlyph returns the leading glyph for a channel row, matching the
@@ -397,10 +477,12 @@ func formatRelTime(ts string) string {
 	}
 }
 
-// truncateLine clips an already-rendered string to `width` display columns
-// using a trailing ellipsis. lipgloss.Width measures display columns
-// correctly even with embedded ANSI escapes from styled segments.
-func truncateLine(s string, width int) string {
+// clipToWidth truncates an already-styled string to at most `width` display
+// columns (using a trailing ellipsis), but does NOT pad short strings.
+// Padding is left to the caller's width-bounded style.Render so background
+// fills correctly. lipgloss.Width measures display columns even with
+// embedded ANSI escapes.
+func clipToWidth(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
