@@ -50,8 +50,10 @@ func sectionFor(item ChannelItem) string {
 // orderedSections returns the section names in display order given the
 // currently filtered items. Custom (user-defined) sections come first,
 // sorted by SectionOrder ascending then by first-appearance for ties.
-// The two built-in fallback sections ("Channels", "Direct Messages") are
-// always appended at the end in that order, so DMs are always last.
+// The two built-in fallback sections are appended at the end in this
+// order: "Direct Messages" first (people you talk to one-on-one matter
+// more than the firehose) then "Channels". Anything the user pinned to
+// a custom section still wins the top spots.
 func orderedSections(items []ChannelItem, filtered []int) []string {
 	type customInfo struct {
 		name      string
@@ -99,11 +101,11 @@ func orderedSections(items []ChannelItem, filtered []int) []string {
 	for _, c := range customs {
 		out = append(out, c.name)
 	}
-	if hasChannels {
-		out = append(out, defaultChannelsSection)
-	}
 	if hasDMs {
 		out = append(out, defaultDMSection)
+	}
+	if hasChannels {
+		out = append(out, defaultChannelsSection)
 	}
 	return out
 }

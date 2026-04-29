@@ -22,7 +22,7 @@ func TestRenderedSelectionMatchesNavigation(t *testing.T) {
 	// Step off the synthetic Threads row so the cursor lands on the first channel.
 	m.MoveDown()
 
-	expectedOrder := []string{"alerts", "ops", "deploys", "general", "alice", "bob"}
+	expectedOrder := []string{"alerts", "ops", "deploys", "alice", "bob", "general"}
 	for i, name := range expectedOrder {
 		view := m.View(40, 40)
 		lines := strings.Split(view, "\n")
@@ -45,7 +45,7 @@ func TestRenderedSelectionMatchesNavigation(t *testing.T) {
 func TestNavigationFollowsSectionOrder(t *testing.T) {
 	// Items in Slack-response order: a default channel, then two custom-section
 	// channels, then a DM. Expected display order: custom section first, then
-	// "Channels", then "Direct Messages".
+	// "Direct Messages", then "Channels".
 	items := []ChannelItem{
 		{ID: "C1", Name: "general", Type: "channel"},
 		{ID: "C2", Name: "alerts", Type: "channel", Section: "Alerts", SectionOrder: 1},
@@ -56,7 +56,7 @@ func TestNavigationFollowsSectionOrder(t *testing.T) {
 	// Step off the synthetic Threads row so navigation begins on the first channel.
 	m.MoveDown()
 
-	want := []string{"C2", "C3", "C1", "D1"}
+	want := []string{"C2", "C3", "D1", "C1"}
 	for i, id := range want {
 		if got := m.SelectedID(); got != id {
 			t.Fatalf("step %d: got selected %q, want %q", i, got, id)
@@ -84,7 +84,7 @@ func TestOrderedSectionsCustomFirstDMsLast(t *testing.T) {
 	}
 	filtered := []int{0, 1, 2, 3}
 	got := orderedSections(items, filtered)
-	want := []string{"Engineering", "Alerts", "Channels", "Direct Messages"}
+	want := []string{"Engineering", "Alerts", "Direct Messages", "Channels"}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
