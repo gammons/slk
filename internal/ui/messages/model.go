@@ -430,6 +430,47 @@ func (m *Model) IncrementReplyCount(parentTS string) {
 	}
 }
 
+// UpdateMessageInPlace finds a message by TS, replaces its text, and
+// marks it as edited. Returns true if the message was found.
+// Invalidates the render cache.
+func (m *Model) UpdateMessageInPlace(ts, newText string) bool {
+	for i, msg := range m.messages {
+		if msg.TS == ts {
+			m.messages[i].Text = newText
+			m.messages[i].IsEdited = true
+			m.cache = nil
+			m.dirty()
+			return true
+		}
+	}
+	return false
+}
+
+// RemoveMessageByTS removes a message with the given TS, adjusting the
+// selected index so it remains valid. Returns true if the message was
+// found and removed. Invalidates the render cache.
+func (m *Model) RemoveMessageByTS(ts string) bool {
+	for i, msg := range m.messages {
+		if msg.TS == ts {
+			m.messages = append(m.messages[:i], m.messages[i+1:]...)
+			if i <= m.selected && m.selected > 0 {
+				m.selected--
+			}
+			if m.selected >= len(m.messages) {
+				if len(m.messages) == 0 {
+					m.selected = 0
+				} else {
+					m.selected = len(m.messages) - 1
+				}
+			}
+			m.cache = nil
+			m.dirty()
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Model) UpdateReaction(messageTS, emojiName, userID string, remove bool) {
 	for i, msg := range m.messages {
 		if msg.TS == messageTS {
