@@ -738,3 +738,37 @@ func TestSetUploading(t *testing.T) {
 		t.Error("expected !Uploading() after SetUploading(false)")
 	}
 }
+
+func TestComposeView_NoAttachments_NoChipRow(t *testing.T) {
+	m := New("general")
+	view := m.View(60, false)
+	// No attachments → no 📎 glyph anywhere.
+	if strings.Contains(view, "📎") {
+		t.Errorf("did not expect chip glyph in view without attachments: %q", view)
+	}
+}
+
+func TestComposeView_WithAttachment_RendersChip(t *testing.T) {
+	m := New("general")
+	m.AddAttachment(PendingAttachment{Filename: "screenshot.png", Size: 12345})
+	view := m.View(60, false)
+	if !strings.Contains(view, "📎") {
+		t.Errorf("expected chip glyph in view: %q", view)
+	}
+	if !strings.Contains(view, "screenshot.png") {
+		t.Errorf("expected filename in chip: %q", view)
+	}
+}
+
+func TestComposeView_MultipleAttachments_AllChipsRender(t *testing.T) {
+	m := New("general")
+	m.AddAttachment(PendingAttachment{Filename: "a.png", Size: 1024})
+	m.AddAttachment(PendingAttachment{Filename: "b.pdf", Size: 2048})
+	view := m.View(80, false)
+	if !strings.Contains(view, "a.png") {
+		t.Errorf("expected a.png in view")
+	}
+	if !strings.Contains(view, "b.pdf") {
+		t.Errorf("expected b.pdf in view")
+	}
+}

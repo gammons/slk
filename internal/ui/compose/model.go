@@ -2,6 +2,7 @@
 package compose
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -725,7 +726,62 @@ func (m *Model) insertEmoji(name string) {
 	m.input.SetValue(newText)
 }
 
+// formatChipSize formats a byte count as "12 KB", "3.4 MB", or "<1 KB".
+func formatChipSize(size int64) string {
+	const kb = 1024
+	const mb = 1024 * kb
+	switch {
+	case size >= mb:
+		return fmt.Sprintf("%.1f MB", float64(size)/float64(mb))
+	case size >= kb:
+		return fmt.Sprintf("%d KB", size/kb)
+	default:
+		return "<1 KB"
+	}
+}
+
+// renderChips returns the rendered chip row for current pending
+// attachments, or "" if there are none. Width is the available
+// horizontal space; chip-row content is constrained via MaxWidth so
+// long chip rows wrap rather than extending past the compose box.
+//
+// While uploading, chips render in muted color so the user can see
+// they're in flight.
+func (m Model) renderChips(width int) string {
+	if len(m.pending) == 0 {
+		return ""
+	}
+	bg := styles.SurfaceDark
+	fg := styles.TextPrimary
+	if m.uploading {
+		fg = styles.TextMuted
+	}
+
+	chipStyle := lipgloss.NewStyle().
+		Background(bg).
+		Foreground(fg).
+		Padding(0, 1).
+		MarginRight(1)
+
+	const maxNameLen = 32
+	var rendered []string
+	for _, p := range m.pending {
+		name := p.Filename
+		runes := []rune(name)
+		if len(runes) > maxNameLen {
+			name = string(runes[:maxNameLen-1]) + "…"
+		}
+		label := fmt.Sprintf("📎 %s %s", name, formatChipSize(p.Size))
+		rendered = append(rendered, chipStyle.Render(label))
+	}
+
+	row := lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
+	return lipgloss.NewStyle().MaxWidth(width).Render(row)
+}
+
 func (m Model) View(width int, focused bool) string {
+	chips := m.renderChips(width)
+
 	// ComposeBox has BorderLeft(1) + Padding(1,1,1,1) = 3 chars overhead.
 	// lipgloss Width includes padding but excludes border.
 	// Total rendered = Width + border = (width-1) + 1 = width.
@@ -736,6 +792,7 @@ func (m Model) View(width int, focused bool) string {
 		style = styles.ComposeInsert.Width(width - 1)
 	}
 
+	var box string
 	// If empty and unfocused, render placeholder manually with correct background.
 	// When focused, show an empty compose box with cursor (no placeholder).
 	if m.input.Value() == "" && !focused {
@@ -744,16 +801,21 @@ func (m Model) View(width int, focused bool) string {
 			Background(styles.SurfaceDark).
 			Width(innerWidth).
 			Render(m.input.Placeholder)
-		return style.Render(placeholder)
+		box = style.Render(placeholder)
+	} else {
+		// Wrap textarea output with full-width dark background.
+		// The textarea's internal styles use Inline(true) which only covers text,
+		// not the full line width. This wrapper ensures consistent background.
+		content := lipgloss.NewStyle().
+			Background(styles.SurfaceDark).
+			Foreground(styles.TextPrimary).
+			Width(innerWidth).
+			Render(m.input.View())
+		box = style.Render(content)
 	}
 
-	// Wrap textarea output with full-width dark background.
-	// The textarea's internal styles use Inline(true) which only covers text,
-	// not the full line width. This wrapper ensures consistent background.
-	content := lipgloss.NewStyle().
-		Background(styles.SurfaceDark).
-		Foreground(styles.TextPrimary).
-		Width(innerWidth).
-		Render(m.input.View())
-	return style.Render(content)
+	if chips == "" {
+		return box
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, chips, box)
 }
