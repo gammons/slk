@@ -3,6 +3,7 @@ package statusbar
 
 import (
 	"fmt"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/ui/styles"
@@ -25,7 +26,10 @@ type Model struct {
 	unreadCount int
 	connState   ConnectionState
 	inThread    bool
-	toast       string // "" == no toast; otherwise rendered verbatim in the right slot
+	toast       string    // "" == no toast; otherwise rendered verbatim in the right slot
+	presence    string    // "active", "away", or "" (unknown — segment hidden)
+	dndEnabled  bool
+	dndEndTS    time.Time // zero if not in DND
 	version     int64
 }
 
@@ -100,6 +104,19 @@ func (m *Model) SetConnectionState(state ConnectionState) {
 	}
 }
 
+// SetStatus updates the self-presence and DND segment. presence is one of
+// "active", "away", or "" (segment hidden). dndEnabled with a zero or
+// future dndEndTS toggles the DND glyph and countdown.
+func (m *Model) SetStatus(presence string, dndEnabled bool, dndEndTS time.Time) {
+	if m.presence == presence && m.dndEnabled == dndEnabled && m.dndEndTS.Equal(dndEndTS) {
+		return
+	}
+	m.presence = presence
+	m.dndEnabled = dndEnabled
+	m.dndEndTS = dndEndTS
+	m.dirty()
+}
+
 func (m *Model) SetInThread(inThread bool) {
 	if m.inThread != inThread {
 		m.inThread = inThread
@@ -172,6 +189,27 @@ func (m Model) View(width int) string {
 				Render(m.toast))
 	}
 
+	// Presence + DND segment (hidden when presence is "" and not in DND)
+	if m.dndEnabled {
+		rightParts = append(rightParts,
+			lipgloss.NewStyle().
+				Foreground(styles.Warning).
+				Background(styles.SurfaceDark).
+				Render(formatDND(m.dndEndTS)))
+	} else if m.presence == "active" {
+		rightParts = append(rightParts,
+			lipgloss.NewStyle().
+				Foreground(styles.Accent).
+				Background(styles.SurfaceDark).
+				Render("● Active"))
+	} else if m.presence == "away" {
+		rightParts = append(rightParts,
+			lipgloss.NewStyle().
+				Foreground(styles.TextMuted).
+				Background(styles.SurfaceDark).
+				Render("○ Away"))
+	}
+
 	switch m.connState {
 	case StateConnected:
 		rightParts = append(rightParts,
@@ -203,6 +241,27 @@ func (m Model) View(width int) string {
 	filler := styles.StatusBar.Render(fmt.Sprintf("%*s", gap, ""))
 
 	return lipgloss.JoinHorizontal(lipgloss.Center, left, filler, rightContent)
+}
+
+// formatDND renders the DND segment with an optional countdown to the
+// snooze end. Zero endTS or past endTS produces a bare "🌙 DND".
+func formatDND(endTS time.Time) string {
+	if endTS.IsZero() {
+		return "🌙 DND"
+	}
+	d := time.Until(endTS)
+	if d <= 0 {
+		return "🌙 DND"
+	}
+	if d < time.Minute {
+		return "🌙 DND <1m"
+	}
+	hours := int(d / time.Hour)
+	minutes := int(d % time.Hour / time.Minute)
+	if hours > 0 {
+		return fmt.Sprintf("🌙 DND %dh %dm", hours, minutes)
+	}
+	return fmt.Sprintf("🌙 DND %dm", minutes)
 }
 
 // CopiedMsg is delivered when the messages or thread pane copies a

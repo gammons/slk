@@ -4,6 +4,7 @@ package statusbar
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // testMode is a simple fmt.Stringer for testing without importing ui (avoids circular import).
@@ -135,4 +136,84 @@ func TestModel_ShowCopiedStillRendersCopiedNChars(t *testing.T) {
 	if !strings.Contains(m.View(80), "Copied 13 chars") {
 		t.Fatalf("expected legacy 'Copied N chars' toast; got %q", m.View(80))
 	}
+}
+
+func TestStatusBar_PresenceSegmentActive(t *testing.T) {
+	m := New()
+	m.SetStatus("active", false, time.Time{})
+	out := stripANSI(m.View(120))
+	if !strings.Contains(out, "● Active") {
+		t.Errorf("expected '● Active', got: %q", out)
+	}
+}
+
+func TestStatusBar_PresenceSegmentAway(t *testing.T) {
+	m := New()
+	m.SetStatus("away", false, time.Time{})
+	out := stripANSI(m.View(120))
+	if !strings.Contains(out, "○ Away") {
+		t.Errorf("expected '○ Away', got: %q", out)
+	}
+}
+
+func TestStatusBar_DNDSegmentWithCountdown(t *testing.T) {
+	m := New()
+	end := time.Now().Add(83 * time.Minute) // 1h 23m
+	m.SetStatus("active", true, end)
+	out := stripANSI(m.View(120))
+	if !strings.Contains(out, "🌙 DND") {
+		t.Errorf("expected '🌙 DND' prefix, got: %q", out)
+	}
+	if !strings.Contains(out, "1h 23m") && !strings.Contains(out, "1h 22m") {
+		t.Errorf("expected ~1h 23m countdown, got: %q", out)
+	}
+}
+
+func TestStatusBar_DNDLessThanOneMinute(t *testing.T) {
+	m := New()
+	end := time.Now().Add(20 * time.Second)
+	m.SetStatus("active", true, end)
+	out := stripANSI(m.View(120))
+	if !strings.Contains(out, "<1m") {
+		t.Errorf("expected '<1m', got: %q", out)
+	}
+}
+
+func TestStatusBar_DNDNoEndTimestamp(t *testing.T) {
+	m := New()
+	m.SetStatus("active", true, time.Time{})
+	out := stripANSI(m.View(120))
+	if !strings.Contains(out, "🌙 DND") {
+		t.Errorf("expected '🌙 DND', got: %q", out)
+	}
+}
+
+func TestStatusBar_PresenceUnknown_NoSegment(t *testing.T) {
+	m := New()
+	// Default state — no SetStatus call. Status segment should not appear.
+	out := stripANSI(m.View(120))
+	if strings.Contains(out, "Active") || strings.Contains(out, "Away") || strings.Contains(out, "DND") {
+		t.Errorf("expected no presence/DND segment when unset, got: %q", out)
+	}
+}
+
+// stripANSI removes ANSI escape sequences for substring assertions.
+func stripANSI(s string) string {
+	var b strings.Builder
+	inEsc := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == 0x1b {
+			inEsc = true
+			continue
+		}
+		if inEsc {
+			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+				inEsc = false
+			}
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }
