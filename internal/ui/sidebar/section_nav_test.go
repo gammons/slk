@@ -19,10 +19,26 @@ func TestRenderedSelectionMatchesNavigation(t *testing.T) {
 		{ID: "D2", Name: "bob", Type: "dm"},
 	}
 	m := New(items)
-	// Step off the synthetic Threads row so the cursor lands on the first channel.
+	// Expand all sections so every channel row is rendered. The
+	// default-collapsed "Channels" section would otherwise hide
+	// "general" from the rendered output.
+	m.ToggleCollapse("Channels")
+	// Step off the synthetic Threads row.
 	m.MoveDown()
 
-	expectedOrder := []string{"alerts", "ops", "deploys", "alice", "bob", "general"}
+	// Expected nav stops include section headers; the test asserts the
+	// cursor lands on a line containing each name in order. Headers
+	// share names with the visible section titles ("Engineering",
+	// "Alerts", "Direct Messages", "Channels") so we list them too.
+	// Custom sections are ordered by SectionOrder ascending, so Alerts
+	// (order=1) precedes Engineering (order=2). Then DMs, then the
+	// catch-all Channels section.
+	expectedOrder := []string{
+		"Alerts", "alerts", "ops",
+		"Engineering", "deploys",
+		"Direct Messages", "alice", "bob",
+		"Channels", "general",
+	}
 	for i, name := range expectedOrder {
 		view := m.View(40, 40)
 		lines := strings.Split(view, "\n")
@@ -53,25 +69,38 @@ func TestNavigationFollowsSectionOrder(t *testing.T) {
 		{ID: "D1", Name: "alice", Type: "dm"},
 	}
 	m := New(items)
-	// Step off the synthetic Threads row so navigation begins on the first channel.
-	m.MoveDown()
+	// Expand the Channels section so its rows participate in nav.
+	m.ToggleCollapse("Channels")
 
+	// Walk through every channel ID, advancing j past section headers
+	// as needed. Selection-by-channel-ID order: C2, C3 (Alerts), D1
+	// (Direct Messages), C1 (Channels).
 	want := []string{"C2", "C3", "D1", "C1"}
-	for i, id := range want {
-		if got := m.SelectedID(); got != id {
-			t.Fatalf("step %d: got selected %q, want %q", i, got, id)
-		}
-		if i < len(want)-1 {
+	stepDownToID := func(t *testing.T, want string) {
+		t.Helper()
+		for i := 0; i < 50; i++ {
 			m.MoveDown()
+			if m.SelectedID() == want {
+				return
+			}
 		}
+		t.Fatalf("never reached id %q (current=%q)", want, m.SelectedID())
 	}
-
-	// And back up.
-	for i := len(want) - 2; i >= 0; i-- {
-		m.MoveUp()
-		if got := m.SelectedID(); got != want[i] {
-			t.Fatalf("up step %d: got %q, want %q", i, got, want[i])
+	stepUpToID := func(t *testing.T, want string) {
+		t.Helper()
+		for i := 0; i < 50; i++ {
+			m.MoveUp()
+			if m.SelectedID() == want {
+				return
+			}
 		}
+		t.Fatalf("never reached id %q on the way up (current=%q)", want, m.SelectedID())
+	}
+	for _, id := range want {
+		stepDownToID(t, id)
+	}
+	for i := len(want) - 2; i >= 0; i-- {
+		stepUpToID(t, want[i])
 	}
 }
 

@@ -110,12 +110,45 @@ func orderedSections(items []ChannelItem, filtered []int) []string {
 	return out
 }
 
+// navKind identifies the type of stop the cursor is sitting on. The
+// sidebar is a flat list of stops (threads row, section headers, and
+// channel rows), and the cursor is just an index into that list.
+type navKind int
+
+const (
+	navThreads navKind = iota
+	navHeader
+	navChannel
+)
+
+// navItem is one selectable stop in the sidebar. Inter-section blank
+// rows are NOT navItems — only things the user can land on with j/k.
+type navItem struct {
+	kind   navKind
+	header string // section name when kind == navHeader
+	fi     int    // index into m.filtered when kind == navChannel
+}
+
 type Model struct {
 	items    []ChannelItem
-	selected int
 	yOffset  int // own scroll state -- replaces bubbles/viewport
 	filter   string
 	filtered []int // indices into items that match filter
+
+	// Flat list of navigable stops in display order: threads row,
+	// section headers, and channel rows belonging to expanded sections.
+	// cursor indexes into nav and is the single source of truth for what
+	// is currently selected. nav is rebuilt by rebuildNav() any time
+	// items, filter, or collapse state changes.
+	nav    []navItem
+	cursor int
+
+	// collapsed maps section name -> true when the section is collapsed.
+	// Children of collapsed sections are excluded from nav and from the
+	// rendered output; the section header still renders with a glyph
+	// indicating collapse state and an aggregate unread badge when any
+	// child has unreads.
+	collapsed map[string]bool
 
 	// Staleness filter: items whose LastReadTS is older than
 	// staleThreshold are dropped from `filtered` (i.e. hidden from the
@@ -127,9 +160,10 @@ type Model struct {
 	activeID       string
 	nowFn          func() time.Time
 
-	// snappedSelection lets View() avoid snapping yOffset back to the selected
-	// row on every render. While snappedSelection == selected, mouse-wheel /
-	// programmatic scrolls (ScrollUp/ScrollDown) are preserved.
+	// snappedSelection lets View() avoid snapping yOffset back to the
+	// selected row on every render. While snappedSelection == cursor,
+	// mouse-wheel / programmatic scrolls (ScrollUp/ScrollDown) are
+	// preserved.
 	snappedSelection int
 	hasSnapped       bool
 
@@ -148,19 +182,12 @@ type Model struct {
 	cacheWidth  int
 	cacheFiller string // pre-rendered empty row for vertical padding
 
-	// Synthetic "Threads" row state. The Threads row is rendered at the very
-	// top of the sidebar (above all sections). It is selectable via j/k like a
-	// channel, but it is NOT a channel — when threadsSelected is true,
-	// SelectedItem/SelectedID return zero / empty and the App layer should
-	// activate the threads view instead of opening a channel.
-	//
-	// threadsSelected is intentionally NOT modified by SetItems: callers that
-	// want a fresh default selection on a major context change (e.g. workspace
-	// switch) must explicitly call SelectThreadsRow() after SetItems. This
-	// keeps routine refreshes (e.g. presence updates that re-call SetItems)
-	// from clobbering the user's current selection.
-	threadsUnread   int
-	threadsSelected bool
+	// Synthetic "Threads" row state. The Threads row is rendered at the
+	// very top of the sidebar and is the first entry in nav. It is
+	// selectable via j/k like a channel, but it is NOT a channel — when
+	// the cursor sits on it, SelectedItem/SelectedID return zero / empty
+	// and the App layer activates the threads view instead.
+	threadsUnread int
 }
 
 // InvalidateCache forces the render cache to be rebuilt on next View().
@@ -183,6 +210,7 @@ func (m *Model) now() time.Time {
 func (m *Model) SetNowFunc(fn func() time.Time) {
 	m.nowFn = fn
 	m.rebuildFilter()
+	m.rebuildNavPreserveCursor()
 	m.cacheValid = false
 	m.dirty()
 }
@@ -197,6 +225,7 @@ func (m *Model) SetStaleThreshold(d time.Duration) {
 	}
 	m.staleThreshold = d
 	m.rebuildFilter()
+	m.rebuildNavPreserveCursor()
 	m.cacheValid = false
 	m.dirty()
 }
@@ -211,6 +240,7 @@ func (m *Model) SetActiveChannelID(id string) {
 	}
 	m.activeID = id
 	m.rebuildFilter()
+	m.rebuildNavPreserveCursor()
 	m.cacheValid = false
 	m.dirty()
 }
@@ -225,22 +255,89 @@ func (m *Model) dirty() { m.version++ }
 
 func New(items []ChannelItem) Model {
 	m := Model{items: items}
-	// Default selection is the synthetic Threads row at the top of the sidebar.
-	m.threadsSelected = true
+	// Default collapse state: the firehose "Channels" section starts
+	// collapsed so the sidebar opens on a tidy view of pinned sections
+	// + DMs. Custom sections and DMs default to expanded. Users toggle
+	// individual sections with Enter/Space on the header.
+	m.collapsed = map[string]bool{
+		defaultChannelsSection: true,
+	}
 	m.rebuildFilter()
+	m.rebuildNav()
+	// Default selection is the synthetic Threads row at the top.
+	m.cursor = 0
 	return m
 }
 
-// IsThreadsSelected reports whether the synthetic "Threads" row is currently
-// the selected entry in the sidebar.
-func (m *Model) IsThreadsSelected() bool { return m.threadsSelected }
-
-// SelectThreadsRow explicitly moves selection to the synthetic Threads row.
-func (m *Model) SelectThreadsRow() {
-	if !m.threadsSelected {
-		m.threadsSelected = true
-		m.dirty()
+// IsThreadsSelected reports whether the synthetic "Threads" row is the
+// selected entry.
+func (m *Model) IsThreadsSelected() bool {
+	if m.cursor < 0 || m.cursor >= len(m.nav) {
+		return false
 	}
+	return m.nav[m.cursor].kind == navThreads
+}
+
+// SelectThreadsRow moves the cursor to the synthetic Threads row.
+func (m *Model) SelectThreadsRow() {
+	for i, n := range m.nav {
+		if n.kind == navThreads {
+			if m.cursor != i {
+				m.cursor = i
+				m.dirty()
+			}
+			return
+		}
+	}
+}
+
+// IsSectionHeaderSelected reports whether the cursor is on a section
+// header. When ok is true, name is the section name (e.g. "Channels",
+// "Direct Messages", or a custom section name).
+func (m *Model) IsSectionHeaderSelected() (name string, ok bool) {
+	if m.cursor < 0 || m.cursor >= len(m.nav) {
+		return "", false
+	}
+	n := m.nav[m.cursor]
+	if n.kind != navHeader {
+		return "", false
+	}
+	return n.header, true
+}
+
+// IsCollapsed reports whether the named section is currently collapsed.
+func (m *Model) IsCollapsed(section string) bool {
+	if m.collapsed == nil {
+		return false
+	}
+	return m.collapsed[section]
+}
+
+// ToggleCollapse flips the collapsed state of the named section. The
+// cursor stays on the section's header (if it was already there) so a
+// subsequent toggle just expands again.
+func (m *Model) ToggleCollapse(section string) {
+	if m.collapsed == nil {
+		m.collapsed = map[string]bool{}
+	}
+	m.collapsed[section] = !m.collapsed[section]
+	// Rebuild nav since the set of selectable rows changed. Preserve
+	// the cursor's logical target (header / threads / channel ID) so
+	// the user keeps their place.
+	m.rebuildNavPreserveCursor()
+	m.cacheValid = false
+	m.dirty()
+}
+
+// ToggleCollapseSelected toggles the section currently under the cursor.
+// No-op if the cursor isn't on a section header.
+func (m *Model) ToggleCollapseSelected() bool {
+	name, ok := m.IsSectionHeaderSelected()
+	if !ok {
+		return false
+	}
+	m.ToggleCollapse(name)
+	return true
 }
 
 // SetThreadsUnreadCount updates the badge count shown next to the Threads row.
@@ -259,74 +356,59 @@ func (m *Model) SetThreadsUnreadCount(n int) {
 // ThreadsUnreadCount returns the current Threads-row unread badge count.
 func (m *Model) ThreadsUnreadCount() int { return m.threadsUnread }
 
-// SetItems replaces the sidebar's channel list. It clamps m.selected to the
-// new filtered range but does NOT touch threadsSelected: SetItems is called on
-// every routine refresh (presence updates, unread changes, channel-list
-// resync, etc.) and clobbering selection on those refreshes would be wrong.
-// Callers that want to reset selection to the default Threads row on a major
+// SetItems replaces the sidebar's channel list. It does NOT reset the
+// cursor to the Threads row — SetItems is called on every routine
+// refresh (presence updates, unread changes, channel-list resync, etc.)
+// and clobbering selection on those refreshes would be wrong. Callers
+// that want to reset selection to the default Threads row on a major
 // context change (e.g. workspace switch) should explicitly call
 // SelectThreadsRow() after SetItems.
 func (m *Model) SetItems(items []ChannelItem) {
 	m.items = items
 	m.rebuildFilter()
-	if m.selected >= len(m.filtered) {
-		m.selected = 0
-	}
+	m.rebuildNavPreserveCursor()
 	m.cacheValid = false
 	m.dirty()
 }
 
 func (m *Model) SelectedID() string {
-	if m.threadsSelected {
+	if m.cursor < 0 || m.cursor >= len(m.nav) {
 		return ""
 	}
-	if len(m.filtered) == 0 {
+	n := m.nav[m.cursor]
+	if n.kind != navChannel {
 		return ""
 	}
-	idx := m.filtered[m.selected]
-	return m.items[idx].ID
+	if n.fi < 0 || n.fi >= len(m.filtered) {
+		return ""
+	}
+	return m.items[m.filtered[n.fi]].ID
 }
 
 func (m *Model) SelectedItem() (ChannelItem, bool) {
-	if m.threadsSelected {
+	if m.cursor < 0 || m.cursor >= len(m.nav) {
 		return ChannelItem{}, false
 	}
-	if len(m.filtered) == 0 {
+	n := m.nav[m.cursor]
+	if n.kind != navChannel {
 		return ChannelItem{}, false
 	}
-	idx := m.filtered[m.selected]
-	return m.items[idx], true
+	if n.fi < 0 || n.fi >= len(m.filtered) {
+		return ChannelItem{}, false
+	}
+	return m.items[m.filtered[n.fi]], true
 }
 
 func (m *Model) MoveDown() {
-	// From the synthetic Threads row, MoveDown lands on the first channel.
-	if m.threadsSelected {
-		if len(m.filtered) > 0 {
-			m.threadsSelected = false
-			m.selected = 0
-			m.dirty()
-		}
-		return
-	}
-	if m.selected < len(m.filtered)-1 {
-		m.selected++
+	if m.cursor+1 < len(m.nav) {
+		m.cursor++
 		m.dirty()
 	}
 }
 
 func (m *Model) MoveUp() {
-	// Already on the Threads row -- no-op.
-	if m.threadsSelected {
-		return
-	}
-	// From the first channel, MoveUp returns to the synthetic Threads row.
-	if m.selected == 0 {
-		m.threadsSelected = true
-		m.dirty()
-		return
-	}
-	if m.selected > 0 {
-		m.selected--
+	if m.cursor > 0 {
+		m.cursor--
 		m.dirty()
 	}
 }
@@ -353,16 +435,15 @@ func (m *Model) ScrollDown(n int) {
 }
 
 func (m *Model) GoToTop() {
-	// Top of the sidebar is the synthetic Threads row.
-	m.threadsSelected = true
-	m.selected = 0
-	m.dirty()
+	if m.cursor != 0 && len(m.nav) > 0 {
+		m.cursor = 0
+		m.dirty()
+	}
 }
 
 func (m *Model) GoToBottom() {
-	if len(m.filtered) > 0 {
-		m.threadsSelected = false
-		m.selected = len(m.filtered) - 1
+	if last := len(m.nav) - 1; last >= 0 && m.cursor != last {
+		m.cursor = last
 		m.dirty()
 	}
 }
@@ -374,8 +455,11 @@ func (m *Model) Items() []ChannelItem {
 
 func (m *Model) SetFilter(filter string) {
 	m.filter = filter
-	m.selected = 0
 	m.rebuildFilter()
+	m.rebuildNav()
+	// Filter changes reset the cursor to the top so j/k starts from a
+	// sensible place after a typed search.
+	m.cursor = 0
 	m.cacheValid = false
 	m.dirty()
 }
@@ -398,6 +482,7 @@ func (m *Model) MarkUnread(channelID string) {
 		if m.items[i].ID == channelID {
 			m.items[i].UnreadCount++
 			m.rebuildFilter()
+			m.rebuildNavPreserveCursor()
 			m.cacheValid = false
 			m.dirty()
 			return
@@ -434,15 +519,43 @@ func (m *Model) UpdatePresenceByUser(userID, presence string) {
 }
 
 func (m *Model) SelectByID(id string) {
-	for i, idx := range m.filtered {
-		if m.items[idx].ID == id {
-			if m.selected != i || m.threadsSelected {
-				m.selected = i
-				m.threadsSelected = false
+	// Fast path: the channel is already in nav (its section is expanded).
+	for i, n := range m.nav {
+		if n.kind != navChannel {
+			continue
+		}
+		if m.items[m.filtered[n.fi]].ID == id {
+			if m.cursor != i {
+				m.cursor = i
 				m.dirty()
 			}
 			return
 		}
+	}
+	// Slow path: the channel is in m.filtered but its section is
+	// collapsed and was therefore omitted from nav. Expand the section
+	// (so the channel becomes navigable) and re-select.
+	for fi, idx := range m.filtered {
+		if m.items[idx].ID != id {
+			continue
+		}
+		section := sectionFor(m.items[idx])
+		if m.collapsed != nil && m.collapsed[section] {
+			m.collapsed[section] = false
+			m.rebuildNav()
+			m.cacheValid = false
+		}
+		// Now find the channel in the freshly-rebuilt nav.
+		for i, n := range m.nav {
+			if n.kind == navChannel && n.fi == fi {
+				if m.cursor != i {
+					m.cursor = i
+					m.dirty()
+				}
+				return
+			}
+		}
+		return
 	}
 }
 
@@ -481,37 +594,156 @@ func (m *Model) rebuildFilter() {
 	})
 }
 
+// cursorKey captures what the cursor is logically pointing at, in a
+// form that survives a rebuild of m.nav. After rebuildNav() we look the
+// key up in the new nav and re-set the cursor so the user keeps their
+// place across collapse toggles, item refreshes, etc.
+type cursorKey struct {
+	kind   navKind
+	header string // for navHeader
+	id     string // channel ID for navChannel
+}
+
+func (m *Model) currentCursorKey() (cursorKey, bool) {
+	if m.cursor < 0 || m.cursor >= len(m.nav) {
+		return cursorKey{}, false
+	}
+	n := m.nav[m.cursor]
+	switch n.kind {
+	case navThreads:
+		return cursorKey{kind: navThreads}, true
+	case navHeader:
+		return cursorKey{kind: navHeader, header: n.header}, true
+	case navChannel:
+		if n.fi < 0 || n.fi >= len(m.filtered) {
+			return cursorKey{}, false
+		}
+		return cursorKey{kind: navChannel, id: m.items[m.filtered[n.fi]].ID}, true
+	}
+	return cursorKey{}, false
+}
+
+// rebuildNav rebuilds m.nav from the current items, filter, and
+// collapse state. m.cursor is left unchanged; callers that want to
+// preserve the user's selection across rebuilds should use
+// rebuildNavPreserveCursor instead.
+func (m *Model) rebuildNav() {
+	sectionOrder := orderedSections(m.items, m.filtered)
+
+	// Bucket filter indices by section in display order.
+	bucket := map[string][]int{}
+	for fi, idx := range m.filtered {
+		bucket[sectionFor(m.items[idx])] = append(bucket[sectionFor(m.items[idx])], fi)
+	}
+
+	nav := make([]navItem, 0, 1+len(sectionOrder))
+	nav = append(nav, navItem{kind: navThreads})
+	for _, name := range sectionOrder {
+		nav = append(nav, navItem{kind: navHeader, header: name})
+		if m.IsCollapsed(name) {
+			continue
+		}
+		for _, fi := range bucket[name] {
+			nav = append(nav, navItem{kind: navChannel, fi: fi})
+		}
+	}
+	m.nav = nav
+	if m.cursor < 0 || m.cursor >= len(m.nav) {
+		m.cursor = 0
+	}
+}
+
+// rebuildNavPreserveCursor rebuilds m.nav and tries to keep the cursor
+// pointing at the same logical target (Threads / a section header / a
+// specific channel). Falls back to the Threads row when the previous
+// target no longer exists.
+func (m *Model) rebuildNavPreserveCursor() {
+	key, hadKey := m.currentCursorKey()
+	m.rebuildNav()
+	if !hadKey {
+		return
+	}
+	for i, n := range m.nav {
+		switch {
+		case key.kind == navThreads && n.kind == navThreads:
+			m.cursor = i
+			return
+		case key.kind == navHeader && n.kind == navHeader && n.header == key.header:
+			m.cursor = i
+			return
+		case key.kind == navChannel && n.kind == navChannel:
+			if n.fi >= 0 && n.fi < len(m.filtered) && m.items[m.filtered[n.fi]].ID == key.id {
+				m.cursor = i
+				return
+			}
+		}
+	}
+	// Previous target gone (e.g. the channel was filtered out, or its
+	// section now collapsed). Fall back to the Threads row.
+	m.cursor = 0
+}
+
+// aggregateUnreadForSection returns the sum of UnreadCount across every
+// item in the named section that is currently in m.filtered. Used to
+// render an aggregate badge on collapsed section headers.
+func (m *Model) aggregateUnreadForSection(section string) int {
+	total := 0
+	for _, idx := range m.filtered {
+		if sectionFor(m.items[idx]) != section {
+			continue
+		}
+		total += m.items[idx].UnreadCount
+	}
+	return total
+}
+
 // renderRow describes a single rendered row in the sidebar.
 //
-// For channel rows we pre-render BOTH the selected and unselected variants in
-// buildCache so that selection movement (j/k) needs no lipgloss work in View().
-// For section headers and inter-section blanks the two variants are identical.
+// For navigable rows (Threads, section headers, channel items) we
+// pre-render BOTH the selected and unselected variants in buildCache
+// so that selection movement (j/k) needs no lipgloss work in View().
+// For inter-section blank rows the two variants are identical.
+//
+// navIdx links the row back to its entry in m.nav so View() can find
+// the selected row in O(1) using the cursor. -1 means "not navigable"
+// (blank separators, the optional 'No channels' placeholder).
 type renderRow struct {
-	normal    string // rendered as a non-selected row
-	selected  string // rendered with the selection cursor + selected style
-	height    int    // rendered terminal height (always 1 for headers/blanks)
-	filterIdx int    // index into m.filtered, or -1 for headers/blanks
-	isThreads bool   // true for the synthetic "Threads" row at the top
+	normal   string // rendered as a non-selected row
+	selected string // rendered with the selection cursor + selected style
+	height   int    // rendered terminal height (always 1 for headers/blanks)
+	navIdx   int    // index into m.nav, or -1
 }
 
 // buildCache rebuilds m.cacheRows for the given width. Expensive; runs only
 // when items, filter, width, or theme change.
+//
+// Each entry in m.nav corresponds to exactly one renderRow with
+// row.navIdx == nav index. View() uses this to find the selected line
+// and to substitute the "selected" variant in O(1).
 func (m *Model) buildCache(width int) {
 	m.cacheValid = true
 	m.cacheWidth = width
 	m.cacheRows = m.cacheRows[:0]
 	m.cacheFiller = lipgloss.NewStyle().Width(width).Background(styles.SidebarBackground).Render("")
 
-	// Build all rows: section headers + channel items.
-	type sectionGroup struct {
-		name string
-		rows []renderRow
+	// Reverse-index nav by section name and by filter idx so we can map
+	// each rendered row back to its nav index. Headers are uniquely
+	// keyed by section name; channels by their filter idx.
+	headerNavIdx := map[string]int{}
+	channelNavIdx := map[int]int{} // filter idx -> nav idx
+	threadsIdx := -1
+	for i, n := range m.nav {
+		switch n.kind {
+		case navThreads:
+			threadsIdx = i
+		case navHeader:
+			headerNavIdx[n.header] = i
+		case navChannel:
+			channelNavIdx[n.fi] = i
+		}
 	}
+
 	sectionOrder := orderedSections(m.items, m.filtered)
-	sectionMap := map[string]*sectionGroup{}
-	for _, name := range sectionOrder {
-		sectionMap[name] = &sectionGroup{name: name}
-	}
 
 	// Combine sidebar bg + fg so styled glyphs (private/DM prefixes, cursor,
 	// unread dots) restore both colors after their ANSI reset.
@@ -547,18 +779,34 @@ func (m *Model) buildCache(width int) {
 	threadsNormal := styles.ChannelNormal.Width(width - 2).Render(threadsLabel)
 	threadsSelectedRow := styles.ChannelSelected.Width(width - 2).Render(threadsCursor)
 	m.cacheRows = append(m.cacheRows, renderRow{
-		normal:    threadsNormal,
-		selected:  threadsSelectedRow,
-		height:    1,
-		filterIdx: -1,
-		isThreads: true,
+		normal:   threadsNormal,
+		selected: threadsSelectedRow,
+		height:   1,
+		navIdx:   threadsIdx,
 	})
 	// Blank separator between the Threads row and the first section (or below
 	// the Threads row when there are no channels at all).
-	m.cacheRows = append(m.cacheRows, renderRow{height: 1, filterIdx: -1})
+	m.cacheRows = append(m.cacheRows, renderRow{height: 1, navIdx: -1})
+
+	// Pre-build the per-section channel rows so we can flatten with
+	// section headers below. Channels in a collapsed section are still
+	// pre-rendered? No — they're not in nav, so we skip them entirely
+	// here to avoid wasted work.
+	type sectionGroup struct {
+		name string
+		rows []renderRow
+	}
+	sectionMap := map[string]*sectionGroup{}
+	for _, name := range sectionOrder {
+		sectionMap[name] = &sectionGroup{name: name}
+	}
 
 	for fi, idx := range m.filtered {
 		item := m.items[idx]
+		sectionName := sectionFor(item)
+		if m.IsCollapsed(sectionName) {
+			continue
+		}
 
 		// Unread dot indicator (same regardless of selection state).
 		unreadDot := " "
@@ -619,12 +867,15 @@ func (m *Model) buildCache(width int) {
 		rowNormal := baseStyle.Width(width - 2).Render(labelNormal)
 		rowSelected := styles.ChannelSelected.Width(width - 2).Render(labelSelected)
 
-		sectionName := sectionFor(item)
+		ni, ok := channelNavIdx[fi]
+		if !ok {
+			ni = -1
+		}
 		sectionMap[sectionName].rows = append(sectionMap[sectionName].rows, renderRow{
-			normal:    rowNormal,
-			selected:  rowSelected,
-			height:    1, // every channel row is exactly one line
-			filterIdx: fi,
+			normal:   rowNormal,
+			selected: rowSelected,
+			height:   1, // every channel row is exactly one line
+			navIdx:   ni,
 		})
 	}
 
@@ -634,10 +885,10 @@ func (m *Model) buildCache(width int) {
 	if len(m.items) == 0 {
 		placeholder := styles.SectionHeader.Render("No channels")
 		m.cacheRows = append(m.cacheRows, renderRow{
-			normal:    placeholder,
-			selected:  placeholder,
-			height:    1,
-			filterIdx: -1,
+			normal:   placeholder,
+			selected: placeholder,
+			height:   1,
+			navIdx:   -1,
 		})
 	}
 
@@ -645,18 +896,47 @@ func (m *Model) buildCache(width int) {
 	// Add a blank line between sections for visual separation.
 	for i, name := range sectionOrder {
 		if i > 0 {
-			m.cacheRows = append(m.cacheRows, renderRow{height: 1, filterIdx: -1})
+			m.cacheRows = append(m.cacheRows, renderRow{height: 1, navIdx: -1})
 		}
 		group := sectionMap[name]
-		header := styles.SectionHeader.Render(group.name)
+		headerLabel, headerLabelSelected := m.renderSectionHeaderLabel(name, cursorSelected, dotStyle, bgAnsi)
+		ni, ok := headerNavIdx[name]
+		if !ok {
+			ni = -1
+		}
 		m.cacheRows = append(m.cacheRows, renderRow{
-			normal:    header,
-			selected:  header,
-			height:    1,
-			filterIdx: -1,
+			normal:   styles.SectionHeader.Width(width - 2).Render(headerLabel),
+			selected: styles.SectionHeader.Width(width - 2).Render(headerLabelSelected),
+			height:   1,
+			navIdx:   ni,
 		})
 		m.cacheRows = append(m.cacheRows, group.rows...)
 	}
+}
+
+// renderSectionHeaderLabel returns the (normal, selected) label
+// strings for a section header. Headers show a triangle indicating
+// expand/collapse state and, when collapsed, an aggregate unread badge
+// summing UnreadCount across every visible item in the section.
+func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.Style, bgAnsi string) (string, string) {
+	glyph := "▾" // expanded
+	if m.IsCollapsed(name) {
+		glyph = "▸"
+	}
+	label := " " + glyph + " " + name
+	if m.IsCollapsed(name) {
+		if n := m.aggregateUnreadForSection(name); n > 0 {
+			label += " " + dotStyle.Render("•"+fmt.Sprintf("%d", n))
+		}
+	}
+	selected := cursor + glyph + " " + name
+	if m.IsCollapsed(name) {
+		if n := m.aggregateUnreadForSection(name); n > 0 {
+			selected += " " + dotStyle.Render("•"+fmt.Sprintf("%d", n))
+		}
+	}
+	return messages.ReapplyBgAfterResets(label, bgAnsi),
+		messages.ReapplyBgAfterResets(selected, bgAnsi)
 }
 
 func (m *Model) View(height, width int) string {
@@ -668,38 +948,28 @@ func (m *Model) View(height, width int) string {
 		m.buildCache(width)
 	}
 
-	// Each cacheRow is exactly one rendered line, so the line index of a row
-	// is just its slice index. Find the selected row's line. The synthetic
-	// Threads row is identified via r.isThreads when threadsSelected is set.
+	// Each cacheRow is exactly one rendered line, so the line index of a
+	// row is just its slice index. Find the selected row by matching the
+	// cursor's nav index against renderRow.navIdx.
 	selectedLine := -1
 	for i, r := range m.cacheRows {
-		if m.threadsSelected && r.isThreads {
-			selectedLine = i
-			break
-		}
-		if !m.threadsSelected && r.filterIdx == m.selected {
+		if r.navIdx == m.cursor {
 			selectedLine = i
 			break
 		}
 	}
 
-	// Snap yOffset to keep the selected row visible only when the selection
-	// has actually changed since the last snap. This preserves mouse-wheel /
-	// programmatic scroll positions across renders. We use a sentinel of -1
-	// to represent "currently on the synthetic Threads row" so the snapped
-	// state is distinct from any real channel index.
-	currentSelection := m.selected
-	if m.threadsSelected {
-		currentSelection = -1
-	}
-	if selectedLine >= 0 && (!m.hasSnapped || m.snappedSelection != currentSelection) {
+	// Snap yOffset to keep the selected row visible only when the
+	// cursor has actually changed since the last snap. This preserves
+	// mouse-wheel / programmatic scroll positions across renders.
+	if selectedLine >= 0 && (!m.hasSnapped || m.snappedSelection != m.cursor) {
 		if selectedLine >= m.yOffset+height {
 			m.yOffset = selectedLine - height + 1
 		}
 		if selectedLine < m.yOffset {
 			m.yOffset = selectedLine
 		}
-		m.snappedSelection = currentSelection
+		m.snappedSelection = m.cursor
 		m.hasSnapped = true
 	}
 	if m.yOffset < 0 {
@@ -723,13 +993,7 @@ func (m *Model) View(height, width int) string {
 	for i := m.yOffset; i < end; i++ {
 		r := m.cacheRows[i]
 		switch {
-		case r.isThreads:
-			if m.threadsSelected {
-				visible = append(visible, r.selected)
-			} else {
-				visible = append(visible, r.normal)
-			}
-		case !m.threadsSelected && r.filterIdx == m.selected:
+		case r.navIdx >= 0 && r.navIdx == m.cursor:
 			visible = append(visible, r.selected)
 		case r.normal == "":
 			// Inter-section blank row -- emit a width-sized themed blank so
@@ -746,63 +1010,36 @@ func (m *Model) View(height, width int) string {
 	return strings.Join(visible, "\n")
 }
 
-// ClickAt handles a mouse click at the given y-coordinate (relative to sidebar content top).
-// Selects the item at that position. Returns the item and true if a selectable item was clicked.
+// ClickAt handles a mouse click at the given y-coordinate (relative to
+// sidebar content top). Updates the cursor to whatever sits at that
+// position. Returns the channel item and true ONLY when the click
+// landed on a channel row; section-header / threads-row / blank clicks
+// return (zero, false). Callers consult IsThreadsSelected /
+// IsSectionHeaderSelected after this call when ok == false.
 func (m *Model) ClickAt(y int) (ChannelItem, bool) {
 	absoluteY := y + m.yOffset
-
-	// y=0 is the synthetic Threads row; y=1 is the blank separator before the
-	// first section. A click on y=0 selects/keeps the Threads row.
-	if absoluteY == 0 {
-		if !m.threadsSelected {
-			m.threadsSelected = true
-			m.dirty()
-		}
-		// Caller (App) consults IsThreadsSelected -- no ChannelItem to return.
+	if absoluteY < 0 || absoluteY >= len(m.cacheRows) {
 		return ChannelItem{}, false
 	}
-	// Explicit no-op for the Threads-row separator at y=1. Inter-section
-	// blank rows further down are also no-ops, but via fall-through: the
-	// per-section loop below never matches a blank row's y, so the function
-	// just returns (ChannelItem{}, false) at the end. This explicit branch
-	// just makes the parity for the Threads separator obvious.
-	if absoluteY == 1 {
+	r := m.cacheRows[absoluteY]
+	if r.navIdx < 0 || r.navIdx >= len(m.nav) {
+		// Inter-section blank or "No channels" placeholder.
 		return ChannelItem{}, false
 	}
-
-	// Rebuild the section structure (same logic as View) to map y to filterIdx.
-	// Each channel item = 1 line, each section header = 1 line, blank line between sections.
-	sectionOrder := orderedSections(m.items, m.filtered)
-	sectionMap := map[string][]int{} // section name -> list of filter indices
-
-	for fi, idx := range m.filtered {
-		item := m.items[idx]
-		sectionName := sectionFor(item)
-		sectionMap[sectionName] = append(sectionMap[sectionName], fi)
+	if m.cursor != r.navIdx {
+		m.cursor = r.navIdx
+		m.dirty()
 	}
-
-	// Skip the Threads row + its trailing blank separator (2 lines).
-	currentLine := 2
-	for i, name := range sectionOrder {
-		if i > 0 {
-			currentLine++ // blank line between sections
-		}
-		currentLine++ // section header line
-
-		for _, fi := range sectionMap[name] {
-			if currentLine == absoluteY {
-				if m.selected != fi || m.threadsSelected {
-					m.selected = fi
-					m.threadsSelected = false
-					m.dirty()
-				}
-				idx := m.filtered[fi]
-				return m.items[idx], true
-			}
-			currentLine++
-		}
+	n := m.nav[r.navIdx]
+	if n.kind != navChannel {
+		// Threads row or section header — nothing to return; caller
+		// inspects IsThreadsSelected / IsSectionHeaderSelected.
+		return ChannelItem{}, false
 	}
-	return ChannelItem{}, false
+	if n.fi < 0 || n.fi >= len(m.filtered) {
+		return ChannelItem{}, false
+	}
+	return m.items[m.filtered[n.fi]], true
 }
 
 func (m Model) Width() int {

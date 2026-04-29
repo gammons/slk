@@ -13,6 +13,9 @@ func TestSidebarView(t *testing.T) {
 	}
 
 	m := New(channels)
+	// The Channels section starts collapsed by default; expand it so
+	// the per-channel rows show up in the rendered view.
+	m.ToggleCollapse("Channels")
 	view := m.View(20, 25) // height=20, width=25
 
 	if !strings.Contains(view, "general") {
@@ -31,27 +34,34 @@ func TestSidebarNavigation(t *testing.T) {
 	}
 
 	m := New(channels)
-	// Default selection is now the synthetic Threads row; step off it to
-	// reach the first channel.
+	// Expand the Channels section so j/k can reach the channel rows.
+	m.ToggleCollapse("Channels")
+
+	// Nav order: Threads → "Channels" header → C1 → C2 → C3.
+	m.MoveDown() // onto the "Channels" section header
+	if name, ok := m.IsSectionHeaderSelected(); !ok || name != "Channels" {
+		t.Errorf("expected Channels header selected, got name=%q ok=%v", name, ok)
+	}
+
 	m.MoveDown()
 	if m.SelectedID() != "C1" {
-		t.Error("expected C1 selected after stepping off the Threads row")
+		t.Errorf("expected C1, got %q", m.SelectedID())
 	}
 
 	m.MoveDown()
 	if m.SelectedID() != "C2" {
-		t.Error("expected C2 after move down")
+		t.Errorf("expected C2 after move down, got %q", m.SelectedID())
 	}
 
 	m.MoveDown()
-	m.MoveDown() // should stop at bottom
+	m.MoveDown() // should stop at bottom (C3)
 	if m.SelectedID() != "C3" {
-		t.Error("expected C3 at bottom")
+		t.Errorf("expected C3 at bottom, got %q", m.SelectedID())
 	}
 
 	m.MoveUp()
 	if m.SelectedID() != "C2" {
-		t.Error("expected C2 after move up")
+		t.Errorf("expected C2 after move up, got %q", m.SelectedID())
 	}
 }
 
@@ -70,7 +80,9 @@ func TestThreadsItem_MoveDownLeavesIt(t *testing.T) {
 		{ID: "C1", Name: "general", Type: "channel"},
 		{ID: "C2", Name: "design", Type: "channel"},
 	})
-	m.MoveDown()
+	m.ToggleCollapse("Channels")
+	m.MoveDown() // header
+	m.MoveDown() // first channel
 	if m.IsThreadsSelected() {
 		t.Errorf("MoveDown should leave the Threads entry")
 	}
@@ -84,11 +96,14 @@ func TestThreadsItem_MoveUpReturnsToIt(t *testing.T) {
 	m := New([]ChannelItem{
 		{ID: "C1", Name: "general", Type: "channel"},
 	})
-	m.MoveDown()
+	m.ToggleCollapse("Channels")
+	m.MoveDown() // header
+	m.MoveDown() // C1
 	if m.IsThreadsSelected() {
 		t.Fatalf("precondition: should be on a channel")
 	}
-	m.MoveUp()
+	m.MoveUp() // back to header
+	m.MoveUp() // back to Threads
 	if !m.IsThreadsSelected() {
 		t.Errorf("MoveUp from first channel should land on Threads entry")
 	}
@@ -219,6 +234,9 @@ func TestMarkUnread_UnknownChannelIsNoop(t *testing.T) {
 
 func TestMarkUnread_RendersDotAndBold(t *testing.T) {
 	m := New([]ChannelItem{{ID: "C1", Name: "general", Type: "channel", UnreadCount: 0}})
+	// Expand Channels so the channel row itself is rendered (otherwise
+	// the unread bump only changes the aggregate badge on the header).
+	m.ToggleCollapse("Channels")
 	before := m.View(10, 30)
 	// Find the line for "general" before bumping.
 	var beforeLine string

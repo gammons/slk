@@ -1637,6 +1637,17 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, a.keys.Enter):
 		return a.handleEnter()
 
+	case key.Matches(msg, a.keys.ToggleSection):
+		// Space on a sidebar section header toggles its collapsed
+		// state; elsewhere it falls through to whatever the focused
+		// panel does with a literal space (typically nothing in
+		// normal mode).
+		if a.focusedPanel == PanelSidebar {
+			if a.sidebar.ToggleCollapseSelected() {
+				return nil
+			}
+		}
+
 	case key.Matches(msg, a.keys.Bottom):
 		if cmd := a.handleGoToBottom(); cmd != nil {
 			return cmd
@@ -1782,6 +1793,27 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 	isPaste := code == 'v' && mod == tea.ModCtrl
 	if isPaste {
 		return a.smartPaste()
+	}
+
+	// Insert-mode shortcuts that operate on the active compose:
+	//   Ctrl+U  → clear compose (text + attachments + uploading flag)
+	//   Up      → if cursor on first line, jump to start of textarea
+	//   Down    → if cursor on last line,  jump to end of textarea
+	target := &a.compose
+	if a.focusedPanel == PanelThread && a.threadVisible {
+		target = &a.threadCompose
+	}
+	if code == 'u' && mod == tea.ModCtrl {
+		target.Reset()
+		return nil
+	}
+	if code == tea.KeyUp && mod == 0 && target.CursorAtFirstLine() {
+		target.MoveCursorToStart()
+		return nil
+	}
+	if code == tea.KeyDown && mod == 0 && target.CursorAtLastLine() {
+		target.MoveCursorToEnd()
+		return nil
 	}
 	// Plain Enter sends; Shift+Enter (and Ctrl+J as a fallback for terminals
 	// that don't disambiguate modifiers) inserts a newline.
@@ -2544,6 +2576,13 @@ func (a *App) handleEnter() tea.Cmd {
 	if a.focusedPanel == PanelSidebar {
 		if a.sidebar.IsThreadsSelected() {
 			return func() tea.Msg { return ThreadsViewActivatedMsg{} }
+		}
+		// A section header? Toggle its collapse state and stay in
+		// place. Section headers are also navigable via j/k so the
+		// user can expand/collapse the firehose Channels section
+		// (collapsed by default) without leaving the keyboard.
+		if a.sidebar.ToggleCollapseSelected() {
+			return nil
 		}
 		item, ok := a.sidebar.SelectedItem()
 		if ok {
