@@ -1127,6 +1127,51 @@ func xdgCache() string {
 	return filepath.Join(home, ".cache", "slk")
 }
 
+// bootstrapPresenceAndDND fetches the user's current presence and DND
+// state from Slack, populates the WorkspaceContext, and sends an initial
+// StatusChangeMsg. Also subscribes to presence_change events for the
+// self user so external state changes arrive over the WS.
+func bootstrapPresenceAndDND(ctx context.Context, wctx *WorkspaceContext, program *tea.Program) {
+	if wctx == nil || wctx.Client == nil {
+		return
+	}
+
+	// Subscribe so future presence_change events for our own user arrive.
+	// Failure is non-fatal — manual_presence_change and dnd_updated work
+	// without an explicit subscription.
+	_ = wctx.Client.SubscribePresence([]string{wctx.UserID})
+
+	// Initial presence fetch
+	if p, err := wctx.Client.GetUserPresence(ctx, wctx.UserID); err == nil && p != nil {
+		wctx.Presence = p.Presence
+	}
+
+	// Initial DND fetch
+	if st, err := wctx.Client.GetDNDInfo(ctx, wctx.UserID); err == nil && st != nil {
+		// Mirror the same end-timestamp picking logic used in events.go.
+		var endUnix int64
+		switch {
+		case st.SnoozeEnabled && st.SnoozeEndTime > 0:
+			endUnix = int64(st.SnoozeEndTime)
+		case st.NextEndTimestamp > 0:
+			endUnix = int64(st.NextEndTimestamp)
+		}
+		wctx.DNDEnabled = st.Enabled || st.SnoozeEnabled
+		if endUnix > 0 {
+			wctx.DNDEndTS = time.Unix(endUnix, 0)
+		}
+	}
+
+	if program != nil {
+		program.Send(ui.StatusChangeMsg{
+			TeamID:     wctx.TeamID,
+			Presence:   wctx.Presence,
+			DNDEnabled: wctx.DNDEnabled,
+			DNDEndTS:   wctx.DNDEndTS,
+		})
+	}
+}
+
 // rtmEventHandler bridges WebSocket events into bubbletea messages via p.Send()
 // and caches all incoming messages to the SQLite database.
 type rtmEventHandler struct {
@@ -1318,6 +1363,9 @@ func (h *rtmEventHandler) OnUserTyping(channelID, userID string) {
 func (h *rtmEventHandler) OnConnect() {
 	h.connected = true
 	h.program.Send(ui.ConnectionStateMsg{State: int(statusbar.StateConnected)})
+	if h.wsCtx != nil {
+		go bootstrapPresenceAndDND(context.Background(), h.wsCtx, h.program)
+	}
 }
 
 func (h *rtmEventHandler) OnDisconnect() {
