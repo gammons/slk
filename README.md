@@ -59,9 +59,11 @@
 ### Channels & Workspaces
 - Three-panel layout: workspace rail, channel sidebar, message pane
 - Public (`#`), private (`◆`), DM (`●`/`○` for presence), and group DM channels
+- Sidebar order: pinned custom sections first, then Direct Messages, then the catch-all Channels list
+- Collapsible sections — `Enter`/`Space` on a section header toggles it. The default Channels section starts collapsed (`▸ Channels •3` shows aggregate unreads); pinned sections and DMs start expanded
+- Live unread indicators: bold + blue dot for unread channels, muted text for read ones, aggregate dot+count on collapsed section headers
 - Custom channel sections via glob patterns in config
-- Unread dots and counts (via Slack's `client.counts` API)
-- Fuzzy channel finder (`Ctrl+t` / `Ctrl+p`)
+- Fuzzy channel finder (`Ctrl+t` / `Ctrl+p`) — auto-expands a collapsed section when you open a channel inside it; ranks 1:1 DMs above group DMs when searching by person name
 - Workspace picker (`Ctrl+w`) and direct jump (`1`–`9`)
 - All workspaces stay connected in parallel for live unread badges
 
@@ -228,7 +230,8 @@ Or just run `./bin/slk`. Onboarding launches automatically when no workspaces ar
 | `j` / `k` | Normal | Move down/up in channel list or messages |
 | `h` / `l` | Normal | Switch focus between panels |
 | `Tab` / `Shift+Tab` | Normal | Cycle focus |
-| `Enter` | Normal (sidebar) | Open selected channel |
+| `Enter` | Normal (sidebar) | Open selected channel, or toggle a section header |
+| `Space` | Normal (sidebar) | Toggle the selected section header (collapse/expand) |
 | `Enter` | Normal (message) | Open thread |
 | `i` | Normal | Enter insert mode |
 | `Esc` | Insert / Command | Return to normal mode |
