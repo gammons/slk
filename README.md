@@ -37,6 +37,7 @@
 - Inline `@mention` autocomplete (resolves to `<@UserID>` on send)
 - Special mentions: `@here`, `@channel`, `@everyone`
 - Bracketed paste — paste multi-line text from the system clipboard without it being interpreted as keystrokes
+- Smart paste (`Ctrl+V`) — pastes a clipboard image as an attachment, or a copied file path as an attached file, or falls through to text. Multiple attachments + caption send together via Slack's V2 file-upload API.
 
 ### Threads
 - Side panel (35% width), opened with `Enter`, toggled with `Ctrl+]`
@@ -168,6 +169,14 @@ go install github.com/gammons/slk/cmd/slk@latest
 
 Requires Go 1.22+.
 
+On Linux, the clipboard library used for `Ctrl+V` paste-to-upload requires X11 development headers at build time:
+
+- Debian/Ubuntu: `sudo apt-get install -y libx11-dev`
+- Fedora/RHEL: `sudo dnf install -y libX11-devel`
+- Arch: included in `xorg-server`
+
+At runtime, an X11 display is required (XWayland is fine on Wayland-only sessions and is the default on most Wayland desktops). On headless Linux, slk runs but `Ctrl+V` smart-paste is disabled.
+
 ```bash
 git clone https://github.com/gammons/slk.git
 cd slk
@@ -217,6 +226,7 @@ Or just run `./bin/slk`. Onboarding launches automatically when no workspaces ar
 | `Esc` | Insert / Command | Return to normal mode |
 | `Enter` | Insert | Send message |
 | `Shift+Enter` | Insert | Newline |
+| `Ctrl+V` | Insert | Smart paste — image / file path / text |
 | `gg` / `G` | Normal | Jump to top / bottom |
 | `Ctrl+b` | Any | Toggle sidebar |
 | `Ctrl+]` | Any | Toggle thread panel |
