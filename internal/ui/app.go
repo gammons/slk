@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image/color"
 	"log"
+	"mime"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"golang.design/x/clipboard"
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/emoji"
@@ -446,6 +448,14 @@ type ChannelJoinFailedMsg struct {
 	Err  error
 }
 
+// clipboardReader abstracts clipboard.Read so tests can inject fake
+// clipboard contents. Production code uses the real clipboard.Read.
+type clipboardReader func(format clipboard.Format) []byte
+
+// defaultClipboardReader is the real clipboard read function. It's
+// overridable per-App via SetClipboardReader for tests.
+var defaultClipboardReader clipboardReader = clipboard.Read
+
 type App struct {
 	// Sub-models
 	workspaceRail   workspace.Model
@@ -509,6 +519,10 @@ type App struct {
 	// clipboardAvailable is set at startup based on the result of
 	// clipboard.Init(). When false, Ctrl+V smart-paste is a no-op.
 	clipboardAvailable bool
+
+	// clipboardRead is the function used by smartPaste to read OS
+	// clipboard contents. Tests inject fakes via SetClipboardReader.
+	clipboardRead clipboardReader
 
 	threadFetcher        ThreadFetchFunc
 	threadReplySender    ThreadReplySendFunc
@@ -617,6 +631,7 @@ func NewApp() *App {
 		threadsDirtyDebounce: 150 * time.Millisecond,
 		userNames:            map[string]string{},
 		statusByTeam:         map[string]workspaceStatus{},
+		clipboardRead:        defaultClipboardReader,
 	}
 	// Seed the picker with built-in emojis so the autocomplete works even
 	// before the first workspace finishes loading customs.
@@ -1716,6 +1731,10 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 
 	code := msg.Key().Code
 	mod := msg.Key().Mod
+	isPaste := code == 'v' && mod == tea.ModCtrl
+	if isPaste {
+		return a.smartPaste()
+	}
 	// Plain Enter sends; Shift+Enter (and Ctrl+J as a fallback for terminals
 	// that don't disambiguate modifiers) inserts a newline.
 	isSend := code == tea.KeyEnter && !mod.Contains(tea.ModShift)
@@ -2822,6 +2841,17 @@ func (a *App) SetClipboardAvailable(ok bool) {
 	a.clipboardAvailable = ok
 }
 
+// SetClipboardReader replaces the clipboard read function. Used by
+// tests to inject canned clipboard contents. Pass nil to restore
+// the default real clipboard reader.
+func (a *App) SetClipboardReader(fn clipboardReader) {
+	if fn == nil {
+		a.clipboardRead = defaultClipboardReader
+		return
+	}
+	a.clipboardRead = fn
+}
+
 // SetThreadFetcher sets the callback used to load thread replies.
 func (a *App) SetThreadFetcher(fn ThreadFetchFunc) {
 	a.threadFetcher = fn
@@ -3580,6 +3610,79 @@ func (a *App) selectedMessageContext() (channelID, ts, text, userID string, pane
 	default:
 		return "", "", "", "", 0, false
 	}
+}
+
+const maxAttachmentSize = 10 * 1024 * 1024 // 10 MB cap
+
+// smartPaste inspects the OS clipboard and dispatches:
+//  1. PNG image bytes → attach as image with auto-generated filename.
+//  2. Single-line file-path text → attach by path.
+//  3. Anything else → insert text into the active compose.
+//
+// Returns a tea.Cmd that emits the appropriate status-bar toast.
+// No-op if clipboard.Init() failed at startup.
+func (a *App) smartPaste() tea.Cmd {
+	if !a.clipboardAvailable {
+		return nil
+	}
+
+	// Resolve the active compose pointer.
+	target := &a.compose
+	if a.focusedPanel == PanelThread && a.threadVisible {
+		target = &a.threadCompose
+	}
+
+	// 1. Image bytes.
+	if imgBytes := a.clipboardRead(clipboard.FmtImage); len(imgBytes) > 0 {
+		if int64(len(imgBytes)) > maxAttachmentSize {
+			return a.uploadToastCmd(
+				fmt.Sprintf("Image too large (%s > 10 MB limit)", humanSize(int64(len(imgBytes)))),
+				3*time.Second,
+			)
+		}
+		filename := "slk-paste-" + time.Now().Format("2006-01-02-15-04-05") + ".png"
+		target.AddAttachment(compose.PendingAttachment{
+			Filename: filename,
+			Bytes:    imgBytes,
+			Mime:     "image/png",
+			Size:     int64(len(imgBytes)),
+		})
+		return a.uploadToastCmd(
+			fmt.Sprintf("Attached: %s (%s)", filename, humanSize(int64(len(imgBytes)))),
+			2*time.Second,
+		)
+	}
+
+	// 2. File-path text.
+	textBytes := a.clipboardRead(clipboard.FmtText)
+	if path, ok := resolveFilePath(string(textBytes)); ok {
+		info, err := os.Stat(path)
+		if err == nil && info.Mode().IsRegular() {
+			if info.Size() > maxAttachmentSize {
+				return a.uploadToastCmd("File too large (>10 MB limit)", 3*time.Second)
+			}
+			if info.Size() == 0 {
+				return a.uploadToastCmd("Empty file", 2*time.Second)
+			}
+			filename := filepath.Base(path)
+			target.AddAttachment(compose.PendingAttachment{
+				Filename: filename,
+				Path:     path,
+				Mime:     mime.TypeByExtension(filepath.Ext(path)),
+				Size:     info.Size(),
+			})
+			return a.uploadToastCmd(
+				fmt.Sprintf("Attached: %s (%s)", filename, humanSize(info.Size())),
+				2*time.Second,
+			)
+		}
+	}
+
+	// 3. Text fallback — paste verbatim into the active compose.
+	if len(textBytes) > 0 {
+		target.SetValue(target.Value() + string(textBytes))
+	}
+	return nil
 }
 
 // beginEditOfSelected starts editing the currently-selected message

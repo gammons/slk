@@ -5,11 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"golang.design/x/clipboard"
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/sidebar"
@@ -1505,5 +1508,144 @@ func TestNewMessageMsg_EditedIgnoresOtherChannel(t *testing.T) {
 	msgs := app.messagepane.Messages()
 	if len(msgs) != 1 || msgs[0].Text != "in C1" {
 		t.Errorf("messages pane should not be touched by edit in another channel; got %+v", msgs)
+	}
+}
+
+// fakeClipboard returns a clipboardReader that returns canned bytes
+// for FmtImage and FmtText.
+func fakeClipboard(image, text []byte) clipboardReader {
+	return func(f clipboard.Format) []byte {
+		switch f {
+		case clipboard.FmtImage:
+			return image
+		case clipboard.FmtText:
+			return text
+		}
+		return nil
+	}
+}
+
+func TestSmartPaste_ImagePresent_AttachesToCompose(t *testing.T) {
+	app := NewApp()
+	app.SetClipboardAvailable(true)
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	pngBytes := []byte("\x89PNG\r\n\x1a\nfake")
+	app.SetClipboardReader(fakeClipboard(pngBytes, nil))
+
+	app.smartPaste()
+
+	atts := app.compose.Attachments()
+	if len(atts) != 1 {
+		t.Fatalf("expected 1 attachment, got %d", len(atts))
+	}
+	if atts[0].Mime != "image/png" {
+		t.Errorf("expected image/png, got %q", atts[0].Mime)
+	}
+	if !strings.HasPrefix(atts[0].Filename, "slk-paste-") || !strings.HasSuffix(atts[0].Filename, ".png") {
+		t.Errorf("unexpected filename: %q", atts[0].Filename)
+	}
+	if atts[0].Size != int64(len(pngBytes)) {
+		t.Errorf("expected size %d, got %d", len(pngBytes), atts[0].Size)
+	}
+}
+
+func TestSmartPaste_ImageTooLarge_Refuses(t *testing.T) {
+	app := NewApp()
+	app.SetClipboardAvailable(true)
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	huge := make([]byte, 11*1024*1024)
+	app.SetClipboardReader(fakeClipboard(huge, nil))
+
+	app.smartPaste()
+
+	if len(app.compose.Attachments()) != 0 {
+		t.Errorf("expected no attachment for oversized image, got %d", len(app.compose.Attachments()))
+	}
+}
+
+func TestSmartPaste_FilePathPresent_AttachesByPath(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "doc.pdf")
+	if err := os.WriteFile(path, []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp()
+	app.SetClipboardAvailable(true)
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	app.SetClipboardReader(fakeClipboard(nil, []byte(path)))
+
+	app.smartPaste()
+
+	atts := app.compose.Attachments()
+	if len(atts) != 1 {
+		t.Fatalf("expected 1 attachment, got %d", len(atts))
+	}
+	if atts[0].Path != path {
+		t.Errorf("expected Path=%q, got %q", path, atts[0].Path)
+	}
+	if atts[0].Filename != "doc.pdf" {
+		t.Errorf("expected filename doc.pdf, got %q", atts[0].Filename)
+	}
+}
+
+func TestSmartPaste_NoImage_NoValidPath_FallsThroughToText(t *testing.T) {
+	app := NewApp()
+	app.SetClipboardAvailable(true)
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	app.SetClipboardReader(fakeClipboard(nil, []byte("just some text")))
+
+	app.smartPaste()
+
+	if len(app.compose.Attachments()) != 0 {
+		t.Errorf("expected no attachment, got %d", len(app.compose.Attachments()))
+	}
+	// Text was inserted into compose.
+	if !strings.Contains(app.compose.Value(), "just some text") {
+		t.Errorf("expected text to be inserted, got %q", app.compose.Value())
+	}
+}
+
+func TestSmartPaste_ClipboardUnavailable_NoOp(t *testing.T) {
+	app := NewApp()
+	app.SetClipboardAvailable(false)
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	pngBytes := []byte("\x89PNGfake")
+	app.SetClipboardReader(fakeClipboard(pngBytes, nil))
+
+	app.smartPaste()
+
+	if len(app.compose.Attachments()) != 0 {
+		t.Error("expected no-op when clipboard unavailable")
+	}
+}
+
+func TestSmartPaste_ThreadPane_AttachesToThreadCompose(t *testing.T) {
+	app := NewApp()
+	app.SetClipboardAvailable(true)
+	app.activeChannelID = "C1"
+	app.threadPanel.SetThread(messages.MessageItem{TS: "P1"}, nil, "C1", "P1")
+	app.threadVisible = true
+	app.focusedPanel = PanelThread
+	app.SetMode(ModeInsert)
+	app.SetClipboardReader(fakeClipboard([]byte("\x89PNG"), nil))
+
+	app.smartPaste()
+
+	if len(app.threadCompose.Attachments()) != 1 {
+		t.Errorf("expected attachment on threadCompose, got %d", len(app.threadCompose.Attachments()))
+	}
+	if len(app.compose.Attachments()) != 0 {
+		t.Errorf("expected no attachment on channel compose, got %d", len(app.compose.Attachments()))
 	}
 }
