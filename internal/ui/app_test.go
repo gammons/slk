@@ -1767,3 +1767,100 @@ func TestChannelSwitchDuringUpload_Refused(t *testing.T) {
 		t.Error("expected upload still in flight")
 	}
 }
+
+// --- bracketed-paste smart-paste tests (PasteMsg path) ---
+
+func TestPasteMsg_ImagePresent_AttachesToCompose(t *testing.T) {
+	app := NewApp()
+	app.SetClipboardAvailable(true)
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	pngBytes := []byte("\x89PNG\r\n\x1a\nfake")
+	app.SetClipboardReader(fakeClipboard(pngBytes, nil))
+
+	// Bracketed paste typically delivers some text representation;
+	// what it carries doesn't matter once an image is detected on
+	// the OS clipboard.
+	app.Update(tea.PasteMsg{Content: "irrelevant text payload"})
+
+	atts := app.compose.Attachments()
+	if len(atts) != 1 {
+		t.Fatalf("expected 1 attachment via PasteMsg, got %d", len(atts))
+	}
+	if atts[0].Mime != "image/png" {
+		t.Errorf("expected image/png, got %q", atts[0].Mime)
+	}
+	// The bracketed-paste text payload must NOT have been forwarded
+	// to the textarea when an image was attached.
+	if app.compose.Value() != "" {
+		t.Errorf("expected textarea empty (image consumed PasteMsg), got %q", app.compose.Value())
+	}
+}
+
+func TestPasteMsg_FilePathInPayload_AttachesByPath(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "doc.pdf")
+	if err := os.WriteFile(path, []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp()
+	app.SetClipboardAvailable(true)
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	// No image on clipboard; bracketed paste delivers the path as text.
+	app.SetClipboardReader(fakeClipboard(nil, nil))
+
+	app.Update(tea.PasteMsg{Content: path})
+
+	atts := app.compose.Attachments()
+	if len(atts) != 1 {
+		t.Fatalf("expected 1 attachment via path PasteMsg, got %d", len(atts))
+	}
+	if atts[0].Path != path {
+		t.Errorf("expected Path=%q, got %q", path, atts[0].Path)
+	}
+}
+
+func TestPasteMsg_PlainText_FallsThroughToTextarea(t *testing.T) {
+	app := NewApp()
+	app.SetClipboardAvailable(true)
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	// In insert mode the compose is focused; mirror that for the test
+	// (textarea ignores input when blurred).
+	_ = app.compose.Focus()
+	// No image, no valid path — bracketed text should land in textarea.
+	app.SetClipboardReader(fakeClipboard(nil, nil))
+
+	app.Update(tea.PasteMsg{Content: "hello world"})
+
+	if len(app.compose.Attachments()) != 0 {
+		t.Errorf("expected no attachment for plain-text paste, got %d", len(app.compose.Attachments()))
+	}
+	// Plain-text bracketed paste is forwarded to the textarea via its
+	// own Update path — it should now contain the pasted text.
+	if !strings.Contains(app.compose.Value(), "hello world") {
+		t.Errorf("expected pasted text in compose, got %q", app.compose.Value())
+	}
+}
+
+func TestPasteMsg_ClipboardUnavailable_FallsThroughToTextarea(t *testing.T) {
+	app := NewApp()
+	app.SetClipboardAvailable(false) // headless / clipboard.Init failed
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	_ = app.compose.Focus()
+
+	app.Update(tea.PasteMsg{Content: "hello"})
+
+	if len(app.compose.Attachments()) != 0 {
+		t.Errorf("expected no attachment when clipboard unavailable, got %d", len(app.compose.Attachments()))
+	}
+	if !strings.Contains(app.compose.Value(), "hello") {
+		t.Errorf("expected pasted text in compose, got %q", app.compose.Value())
+	}
+}

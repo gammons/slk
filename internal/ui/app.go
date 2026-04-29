@@ -843,13 +843,27 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}))
 
 	case tea.PasteMsg:
-		// Bracketed-paste from the terminal. Forward the paste to the
-		// active compose when in insert mode. In other modes paste is
-		// ignored — there's no reasonable destination (the messages /
-		// thread panes are read-only, and the various finders use
-		// per-keystroke filtering rather than a paste-friendly buffer).
+		// Bracketed-paste from the terminal. First check the OS
+		// clipboard for an image (terminals can't deliver image bytes
+		// via bracketed paste — only the text representation — so the
+		// image data is still sitting in the clipboard waiting for us
+		// to read directly). Also test the bracketed text as a file
+		// path. If neither matches, fall through to forwarding the
+		// paste verbatim into the active compose's textarea.
 		if a.mode != ModeInsert {
 			break
+		}
+		if a.clipboardAvailable {
+			target := &a.compose
+			if a.focusedPanel == PanelThread && a.threadVisible {
+				target = &a.threadCompose
+			}
+			if consumed, cmd := a.tryAttachFromClipboard(target, msg.Content); consumed {
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				break
+			}
 		}
 		if a.focusedPanel == PanelThread && a.threadVisible {
 			var cmd tea.Cmd
@@ -3693,10 +3707,33 @@ func (a *App) smartPaste() tea.Cmd {
 		target = &a.threadCompose
 	}
 
-	// 1. Image bytes.
+	textBytes := a.clipboardRead(clipboard.FmtText)
+	if consumed, cmd := a.tryAttachFromClipboard(target, string(textBytes)); consumed {
+		return cmd
+	}
+
+	// Text fallback — paste verbatim into the active compose.
+	if len(textBytes) > 0 {
+		target.SetValue(target.Value() + string(textBytes))
+	}
+	return nil
+}
+
+// tryAttachFromClipboard inspects the OS clipboard for an image and the
+// supplied text for a file-path reference, attaching the first match
+// to the given compose. Returns consumed=true if an attachment (or an
+// explicit refusal toast) was produced; false if neither image nor
+// path applied — in which case the caller should fall through to its
+// own text-paste behavior.
+//
+// pathCandidate is the text source to test against resolveFilePath.
+// For keystroke smart-paste this is the OS clipboard's text; for
+// bracketed-paste this is the PasteMsg's payload.
+func (a *App) tryAttachFromClipboard(target *compose.Model, pathCandidate string) (bool, tea.Cmd) {
+	// 1. Image bytes from the OS clipboard.
 	if imgBytes := a.clipboardRead(clipboard.FmtImage); len(imgBytes) > 0 {
 		if int64(len(imgBytes)) > maxAttachmentSize {
-			return a.uploadToastCmd(
+			return true, a.uploadToastCmd(
 				fmt.Sprintf("Image too large (%s > 10 MB limit)", humanSize(int64(len(imgBytes)))),
 				3*time.Second,
 			)
@@ -3708,22 +3745,21 @@ func (a *App) smartPaste() tea.Cmd {
 			Mime:     "image/png",
 			Size:     int64(len(imgBytes)),
 		})
-		return a.uploadToastCmd(
+		return true, a.uploadToastCmd(
 			fmt.Sprintf("Attached: %s (%s)", filename, humanSize(int64(len(imgBytes)))),
 			2*time.Second,
 		)
 	}
 
 	// 2. File-path text.
-	textBytes := a.clipboardRead(clipboard.FmtText)
-	if path, ok := resolveFilePath(string(textBytes)); ok {
+	if path, ok := resolveFilePath(pathCandidate); ok {
 		info, err := os.Stat(path)
 		if err == nil && info.Mode().IsRegular() {
 			if info.Size() > maxAttachmentSize {
-				return a.uploadToastCmd("File too large (>10 MB limit)", 3*time.Second)
+				return true, a.uploadToastCmd("File too large (>10 MB limit)", 3*time.Second)
 			}
 			if info.Size() == 0 {
-				return a.uploadToastCmd("Empty file", 2*time.Second)
+				return true, a.uploadToastCmd("Empty file", 2*time.Second)
 			}
 			filename := filepath.Base(path)
 			target.AddAttachment(compose.PendingAttachment{
@@ -3732,18 +3768,14 @@ func (a *App) smartPaste() tea.Cmd {
 				Mime:     mime.TypeByExtension(filepath.Ext(path)),
 				Size:     info.Size(),
 			})
-			return a.uploadToastCmd(
+			return true, a.uploadToastCmd(
 				fmt.Sprintf("Attached: %s (%s)", filename, humanSize(info.Size())),
 				2*time.Second,
 			)
 		}
 	}
 
-	// 3. Text fallback — paste verbatim into the active compose.
-	if len(textBytes) > 0 {
-		target.SetValue(target.Value() + string(textBytes))
-	}
-	return nil
+	return false, nil
 }
 
 // beginEditOfSelected starts editing the currently-selected message
