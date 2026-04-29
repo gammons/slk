@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/channelfinder"
@@ -22,6 +23,7 @@ import (
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/gammons/slk/internal/ui/themeswitcher"
 	"github.com/gammons/slk/internal/ui/thread"
+	"github.com/gammons/slk/internal/ui/threadsview"
 	"github.com/gammons/slk/internal/ui/workspace"
 	"github.com/gammons/slk/internal/ui/workspacefinder"
 )
@@ -33,6 +35,16 @@ const (
 	PanelSidebar
 	PanelMessages
 	PanelThread
+)
+
+// View identifies which "page" the message pane is displaying. The default
+// is ViewChannels (a channel's message history); ViewThreads swaps the
+// pane's contents for the involved-threads list.
+type View int
+
+const (
+	ViewChannels View = iota
+	ViewThreads
 )
 
 // Messages sent between components
@@ -76,6 +88,23 @@ type (
 		ChannelID string
 		ThreadTS  string
 		Message   messages.MessageItem
+	}
+	// ThreadsViewActivatedMsg is dispatched when the user picks the
+	// synthetic Threads sidebar row. The App switches the message pane to
+	// the threads-list view and (re)fetches the involved-threads list.
+	ThreadsViewActivatedMsg struct{}
+	// ThreadsListLoadedMsg carries a freshly loaded list of involved-thread
+	// summaries for the named workspace. The App ignores it if it doesn't
+	// match the active team.
+	ThreadsListLoadedMsg struct {
+		TeamID    string
+		Summaries []cache.ThreadSummary
+	}
+	// ThreadsListDirtyMsg is dispatched when something that could affect
+	// the involved-threads list has changed (new message, mention, etc.)
+	// and the list should be refetched. Ignored if not the active team.
+	ThreadsListDirtyMsg struct {
+		TeamID string
 	}
 	ConnectionStateMsg struct {
 		State int // 0=connecting, 1=connected, 2=disconnected
@@ -258,6 +287,10 @@ type ThreadFetchFunc func(channelID, threadTS string) tea.Msg
 // ThreadReplySendFunc is called when the user sends a thread reply.
 type ThreadReplySendFunc func(channelID, threadTS, text string) tea.Msg
 
+// ThreadsListFetchFunc loads the involved-threads list for a workspace.
+// Returns the resulting tea.Msg (typically ThreadsListLoadedMsg).
+type ThreadsListFetchFunc func(teamID string) tea.Msg
+
 type ReactionAddFunc func(channelID, messageTS, emoji string) error
 type ReactionRemoveFunc func(channelID, messageTS, emoji string) error
 
@@ -302,12 +335,14 @@ type App struct {
 	themeSwitcher   themeswitcher.Model
 	threadPanel     *thread.Model
 	threadCompose   compose.Model
+	threadsView     threadsview.Model
 
 	// State
 	mode           Mode
 	focusedPanel   Panel
 	sidebarVisible bool
 	threadVisible  bool
+	view           View
 	width          int
 	height         int
 	keys           KeyMap
@@ -345,7 +380,15 @@ type App struct {
 	threadFetcher        ThreadFetchFunc
 	threadReplySender    ThreadReplySendFunc
 	channelJoiner        JoinChannelFunc
+	threadsListFetcher   ThreadsListFetchFunc
+	threadsDirtyDebounce time.Duration
 	fetchingOlder        bool
+
+	// Cached user-id -> display-name map (mirror of what SetUserNames
+	// last received). Used by openSelectedThreadCmd to populate the
+	// thread panel parent's UserName without round-tripping through any
+	// sub-component's API.
+	userNames map[string]string
 
 	// Reaction picker
 	reactionPicker   *reactionpicker.Model
@@ -387,22 +430,26 @@ type App struct {
 
 func NewApp() *App {
 	app := &App{
-		workspaceRail:   workspace.New(nil, 0),
-		sidebar:         sidebar.New(nil),
-		messagepane:     messages.New(nil, ""),
-		compose:         compose.New(""),
-		statusbar:       statusbar.New(),
-		channelFinder:   channelfinder.New(),
-		workspaceFinder: workspacefinder.New(),
-		themeSwitcher:   themeswitcher.New(),
-		threadPanel:     thread.New(),
-		threadCompose:   compose.New("thread"),
-		reactionPicker:  reactionpicker.New(),
-		mode:            ModeNormal,
-		focusedPanel:    PanelSidebar,
-		sidebarVisible:  true,
-		keys:            DefaultKeyMap(),
-		typingUsers:     make(map[string]map[string]time.Time),
+		workspaceRail:        workspace.New(nil, 0),
+		sidebar:              sidebar.New(nil),
+		messagepane:          messages.New(nil, ""),
+		compose:              compose.New(""),
+		statusbar:            statusbar.New(),
+		channelFinder:        channelfinder.New(),
+		workspaceFinder:      workspacefinder.New(),
+		themeSwitcher:        themeswitcher.New(),
+		threadPanel:          thread.New(),
+		threadCompose:        compose.New("thread"),
+		threadsView:          threadsview.New(nil, ""),
+		reactionPicker:       reactionpicker.New(),
+		mode:                 ModeNormal,
+		focusedPanel:         PanelSidebar,
+		sidebarVisible:       true,
+		view:                 ViewChannels,
+		keys:                 DefaultKeyMap(),
+		typingUsers:          make(map[string]map[string]time.Time),
+		threadsDirtyDebounce: 150 * time.Millisecond,
+		userNames:            map[string]string{},
 	}
 	// Seed the picker with built-in emojis so the autocomplete works even
 	// before the first workspace finishes loading customs.
@@ -470,10 +517,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.sidebar.ScrollDown(dir)
 			}
 		case x < a.layoutMsgEnd:
-			if dir < 0 {
-				a.messagepane.ScrollUp(-dir)
+			if a.view == ViewThreads {
+				if dir < 0 {
+					a.threadsView.ScrollUp(-dir)
+				} else {
+					a.threadsView.ScrollDown(dir)
+				}
 			} else {
-				a.messagepane.ScrollDown(dir)
+				if dir < 0 {
+					a.messagepane.ScrollUp(-dir)
+				} else {
+					a.messagepane.ScrollDown(dir)
+				}
 			}
 		case a.threadVisible && x < a.layoutThreadEnd:
 			// Thread panel: scroll if it exposes the methods.
@@ -688,6 +743,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}))
 
 	case ChannelSelectedMsg:
+		// Picking a channel always exits the Threads view.
+		a.view = ViewChannels
 		// Close thread panel when switching channels
 		a.CloseThread()
 		a.clearSelections()
@@ -753,6 +810,36 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ThreadRepliesLoadedMsg:
 		if a.threadVisible && msg.ThreadTS == a.threadPanel.ThreadTS() {
 			a.threadPanel.SetThread(a.threadPanel.ParentMsg(), msg.Replies, a.threadPanel.ChannelID(), msg.ThreadTS)
+		}
+
+	case ThreadsViewActivatedMsg:
+		a.view = ViewThreads
+		a.focusedPanel = PanelMessages
+		if a.threadsListFetcher != nil && a.activeTeamID != "" {
+			fetcher := a.threadsListFetcher
+			team := a.activeTeamID
+			cmds = append(cmds, func() tea.Msg { return fetcher(team) })
+		}
+		if cmd := a.openSelectedThreadCmd(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+
+	case ThreadsListLoadedMsg:
+		if msg.TeamID == a.activeTeamID {
+			a.threadsView.SetSummaries(msg.Summaries)
+			a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
+			if a.view == ViewThreads {
+				if cmd := a.openSelectedThreadCmd(); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+			}
+		}
+
+	case ThreadsListDirtyMsg:
+		if msg.TeamID == a.activeTeamID && a.threadsListFetcher != nil {
+			fetcher := a.threadsListFetcher
+			team := a.activeTeamID
+			cmds = append(cmds, func() tea.Msg { return fetcher(team) })
 		}
 
 	case SendThreadReplyMsg:
@@ -1018,7 +1105,9 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 		a.ToggleThread()
 
 	case key.Matches(msg, a.keys.Down):
-		a.handleDown()
+		if cmd := a.handleDown(); cmd != nil {
+			return cmd
+		}
 
 	case key.Matches(msg, a.keys.Up):
 		if cmd := a.handleUp(); cmd != nil {
@@ -1035,7 +1124,9 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 		return a.handleEnter()
 
 	case key.Matches(msg, a.keys.Bottom):
-		a.handleGoToBottom()
+		if cmd := a.handleGoToBottom(); cmd != nil {
+			return cmd
+		}
 
 	case key.Matches(msg, a.keys.PageUp):
 		a.scrollFocusedPanel(-a.pageSize())
@@ -1597,15 +1688,20 @@ func (a *App) copyPermalinkOfSelected() tea.Cmd {
 	}
 }
 
-func (a *App) handleDown() {
+func (a *App) handleDown() tea.Cmd {
 	switch a.focusedPanel {
 	case PanelSidebar:
 		a.sidebar.MoveDown()
 	case PanelMessages:
+		if a.view == ViewThreads {
+			a.threadsView.MoveDown()
+			return a.openSelectedThreadCmd()
+		}
 		a.messagepane.MoveDown()
 	case PanelThread:
 		a.threadPanel.MoveDown()
 	}
+	return nil
 }
 
 func (a *App) handleUp() tea.Cmd {
@@ -1613,6 +1709,10 @@ func (a *App) handleUp() tea.Cmd {
 	case PanelSidebar:
 		a.sidebar.MoveUp()
 	case PanelMessages:
+		if a.view == ViewThreads {
+			a.threadsView.MoveUp()
+			return a.openSelectedThreadCmd()
+		}
 		a.messagepane.MoveUp()
 		// If at top, fetch older messages
 		if a.messagepane.AtTop() && !a.fetchingOlder && a.olderMessagesFetcher != nil {
@@ -1631,15 +1731,20 @@ func (a *App) handleUp() tea.Cmd {
 	return nil
 }
 
-func (a *App) handleGoToBottom() {
+func (a *App) handleGoToBottom() tea.Cmd {
 	switch a.focusedPanel {
 	case PanelSidebar:
 		a.sidebar.GoToBottom()
 	case PanelMessages:
+		if a.view == ViewThreads {
+			a.threadsView.GoToBottom()
+			return a.openSelectedThreadCmd()
+		}
 		a.messagepane.GoToBottom()
 	case PanelThread:
 		a.threadPanel.GoToBottom()
 	}
+	return nil
 }
 
 // pageSize returns the number of lines to scroll for a full-page jump in the
@@ -1708,10 +1813,18 @@ func (a *App) scrollFocusedPanel(delta int) {
 			a.sidebar.ScrollDown(delta)
 		}
 	case PanelMessages:
-		if delta < 0 {
-			a.messagepane.ScrollUp(-delta)
+		if a.view == ViewThreads {
+			if delta < 0 {
+				a.threadsView.ScrollUp(-delta)
+			} else {
+				a.threadsView.ScrollDown(delta)
+			}
 		} else {
-			a.messagepane.ScrollDown(delta)
+			if delta < 0 {
+				a.messagepane.ScrollUp(-delta)
+			} else {
+				a.messagepane.ScrollDown(delta)
+			}
 		}
 	case PanelThread:
 		if delta < 0 {
@@ -1724,6 +1837,9 @@ func (a *App) scrollFocusedPanel(delta int) {
 
 func (a *App) handleEnter() tea.Cmd {
 	if a.focusedPanel == PanelSidebar {
+		if a.sidebar.IsThreadsSelected() {
+			return func() tea.Msg { return ThreadsViewActivatedMsg{} }
+		}
 		item, ok := a.sidebar.SelectedItem()
 		if ok {
 			return func() tea.Msg {
@@ -1855,6 +1971,47 @@ func (a *App) CloseThread() {
 	if a.focusedPanel == PanelThread {
 		a.focusedPanel = PanelMessages
 	}
+}
+
+// openSelectedThreadCmd opens the right thread panel on whichever row is
+// currently highlighted in the threads view. No-op if the list is empty
+// or no thread fetcher is wired (the panel is still shown so the user
+// sees the parent message even before replies load).
+func (a *App) openSelectedThreadCmd() tea.Cmd {
+	sum, ok := a.threadsView.SelectedSummary()
+	if !ok {
+		return nil
+	}
+	a.threadVisible = true
+	a.statusbar.SetInThread(true)
+	parent := messages.MessageItem{
+		TS:       sum.ParentTS,
+		UserID:   sum.ParentUserID,
+		UserName: a.userNameFor(sum.ParentUserID),
+		Text:     sum.ParentText,
+		ThreadTS: sum.ThreadTS,
+	}
+	a.threadPanel.SetThread(parent, nil, sum.ChannelID, sum.ThreadTS)
+	a.threadCompose.SetChannel("thread")
+	if a.threadFetcher != nil {
+		fetcher := a.threadFetcher
+		chID, threadTS := sum.ChannelID, sum.ThreadTS
+		return func() tea.Msg { return fetcher(chID, threadTS) }
+	}
+	return nil
+}
+
+// userNameFor returns the display name for a Slack user ID, falling back
+// to the raw ID when the names map has no entry. Returns empty string for
+// an empty userID.
+func (a *App) userNameFor(userID string) string {
+	if userID == "" {
+		return ""
+	}
+	if n, ok := a.userNames[userID]; ok && n != "" {
+		return n
+	}
+	return userID
 }
 
 // Loading overlay methods
@@ -1989,6 +2146,12 @@ func (a *App) SetThreadReplySender(fn ThreadReplySendFunc) {
 	a.threadReplySender = fn
 }
 
+// SetThreadsListFetcher wires the function that loads the involved-threads
+// list for a workspace. Called by main.go.
+func (a *App) SetThreadsListFetcher(f ThreadsListFetchFunc) {
+	a.threadsListFetcher = f
+}
+
 func (a *App) SetChannelFinderItems(items []channelfinder.Item) {
 	a.channelFinder.SetItems(items)
 }
@@ -2001,6 +2164,8 @@ func (a *App) SetAvatarFunc(fn messages.AvatarFunc) {
 
 // SetUserNames passes the user ID -> display name map to the message pane for mention resolution.
 func (a *App) SetUserNames(names map[string]string) {
+	a.userNames = names
+	a.threadsView.SetUserNames(names)
 	a.messagepane.SetUserNames(names)
 	a.threadPanel.SetUserNames(names)
 
@@ -2047,6 +2212,7 @@ func (a *App) SetPermalinkFetcher(fn PermalinkFetchFunc) {
 
 func (a *App) SetCurrentUserID(userID string) {
 	a.currentUserID = userID
+	a.threadsView.SetSelfUserID(userID)
 }
 
 func (a *App) SetFrecentFuncs(load FrecentLoadFunc, record FrecentRecordFunc) {
@@ -2346,56 +2512,84 @@ func (a *App) View() tea.View {
 	msgFocused := a.focusedPanel == PanelMessages && a.mode != ModeInsert
 	composeFocused := a.mode == ModeInsert && a.focusedPanel != PanelThread
 	typingActive := len(a.typingUsers) > 0
-	msgLayoutKey := themeVer<<3 |
+	// Mix the view-mode bit into the layout key so a Channels<->Threads
+	// switch invalidates the cached output (the cache is otherwise
+	// indistinguishable across views at the same focus/mode/theme).
+	msgLayoutKey := themeVer<<4 |
+		boolToInt(a.view == ViewThreads)<<3 |
 		boolToInt(msgFocused)<<2 |
 		boolToInt(composeFocused)<<1 |
 		boolToInt(typingActive)
-	msgPanelVersion := mixVersions(a.messagepane.Version(), a.compose.Version())
+	var msgPanelVersion int64
+	if a.view == ViewThreads {
+		msgPanelVersion = mixVersions(a.threadsView.Version(), 0)
+	} else {
+		msgPanelVersion = mixVersions(a.messagepane.Version(), a.compose.Version())
+	}
 	a.compose.SetWidth(msgWidth - 2)
 	if c := &a.panelCacheMsgPanel; !c.hit(msgPanelVersion, msgWidth, contentHeight, msgLayoutKey) {
 		msgBorderStyle := styles.UnfocusedBorder.Width(msgWidth)
 		if msgFocused {
 			msgBorderStyle = styles.FocusedBorder.Width(msgWidth)
 		}
-		composeView := a.compose.View(msgWidth-2, composeFocused)
-		// Inline pickers stack above the compose box. Both should never be
-		// visible simultaneously (mutually exclusive in compose.Update);
-		// emoji wins if somehow both are.
-		if pickerView := a.compose.EmojiPickerView(msgWidth - 2); pickerView != "" {
-			composeView = pickerView + "\n" + composeView
-		} else if mentionView := a.compose.MentionPickerView(msgWidth - 2); mentionView != "" {
-			composeView = mentionView + "\n" + composeView
-		}
-		// Add a background-colored spacer line above the compose box
-		// (replaces MarginTop which produced unstyled/black margin cells)
-		composeSpacer := lipgloss.NewStyle().Background(styles.Background).Width(msgWidth - 2).Render("")
-		composeView = composeSpacer + "\n" + composeView
-		composeHeight := lipgloss.Height(composeView)
-		typingLine := a.renderTypingLine()
-		typingHeight := 0
-		if typingLine != "" {
-			typingHeight = 1
-		}
-		msgContentHeight := contentHeight - 2 - composeHeight - typingHeight
-		a.layoutMsgHeight = msgContentHeight
-		if msgContentHeight < 3 {
-			msgContentHeight = 3
-		}
-		msgView := a.messagepane.View(msgContentHeight, msgWidth-2)
-		var msgInner string
-		if typingLine != "" {
-			msgInner = lipgloss.JoinVertical(lipgloss.Left, msgView, typingLine, composeView)
+		if a.view == ViewThreads {
+			// Threads view: replace the entire inner content with the
+			// threads list. No compose, no typing line.
+			a.threadsView.SetUserNames(a.userNames)
+			a.threadsView.SetSelfUserID(a.currentUserID)
+			msgContentHeight := contentHeight - 2
+			a.layoutMsgHeight = msgContentHeight
+			if msgContentHeight < 3 {
+				msgContentHeight = 3
+			}
+			tvView := a.threadsView.View(msgContentHeight, msgWidth-2)
+			tvView = messages.ReapplyBgAfterResets(tvView, messages.BgANSI())
+			out := exactSize(
+				msgBorderStyle.Render(tvView),
+				msgWidth+msgBorder, contentHeight,
+			)
+			c.store(out, msgPanelVersion, msgWidth, contentHeight, msgLayoutKey)
 		} else {
-			msgInner = lipgloss.JoinVertical(lipgloss.Left, msgView, composeView)
+			composeView := a.compose.View(msgWidth-2, composeFocused)
+			// Inline pickers stack above the compose box. Both should never be
+			// visible simultaneously (mutually exclusive in compose.Update);
+			// emoji wins if somehow both are.
+			if pickerView := a.compose.EmojiPickerView(msgWidth - 2); pickerView != "" {
+				composeView = pickerView + "\n" + composeView
+			} else if mentionView := a.compose.MentionPickerView(msgWidth - 2); mentionView != "" {
+				composeView = mentionView + "\n" + composeView
+			}
+			// Add a background-colored spacer line above the compose box
+			// (replaces MarginTop which produced unstyled/black margin cells)
+			composeSpacer := lipgloss.NewStyle().Background(styles.Background).Width(msgWidth - 2).Render("")
+			composeView = composeSpacer + "\n" + composeView
+			composeHeight := lipgloss.Height(composeView)
+			typingLine := a.renderTypingLine()
+			typingHeight := 0
+			if typingLine != "" {
+				typingHeight = 1
+			}
+			msgContentHeight := contentHeight - 2 - composeHeight - typingHeight
+			a.layoutMsgHeight = msgContentHeight
+			if msgContentHeight < 3 {
+				msgContentHeight = 3
+			}
+			msgView := a.messagepane.View(msgContentHeight, msgWidth-2)
+			var msgInner string
+			if typingLine != "" {
+				msgInner = lipgloss.JoinVertical(lipgloss.Left, msgView, typingLine, composeView)
+			} else {
+				msgInner = lipgloss.JoinVertical(lipgloss.Left, msgView, composeView)
+			}
+			// Re-apply theme background after ANSI resets so the border style's
+			// right-side padding gets the correct background instead of terminal default.
+			msgInner = messages.ReapplyBgAfterResets(msgInner, messages.BgANSI())
+			out := exactSize(
+				msgBorderStyle.Render(msgInner),
+				msgWidth+msgBorder, contentHeight,
+			)
+			c.store(out, msgPanelVersion, msgWidth, contentHeight, msgLayoutKey)
 		}
-		// Re-apply theme background after ANSI resets so the border style's
-		// right-side padding gets the correct background instead of terminal default.
-		msgInner = messages.ReapplyBgAfterResets(msgInner, messages.BgANSI())
-		out := exactSize(
-			msgBorderStyle.Render(msgInner),
-			msgWidth+msgBorder, contentHeight,
-		)
-		c.store(out, msgPanelVersion, msgWidth, contentHeight, msgLayoutKey)
 	}
 	panels = append(panels, a.panelCacheMsgPanel.output)
 

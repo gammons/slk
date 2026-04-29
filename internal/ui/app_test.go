@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/statusbar"
 )
@@ -452,5 +453,52 @@ func TestCopyPermalink_ShiftYTriggersCopy(t *testing.T) {
 	}
 	if gotCh != "C123" || gotTS != "1700000001.000200" {
 		t.Errorf("fetcher got (%q, %q); want (\"C123\", \"1700000001.000200\")", gotCh, gotTS)
+	}
+}
+
+func TestApp_ThreadsViewActivation(t *testing.T) {
+	app := NewApp()
+	app.SetCurrentUserID("USELF")
+	app.activeTeamID = "T1"
+	app.SetUserNames(map[string]string{"U1": "alice"})
+
+	// Default: ViewChannels.
+	if app.view != ViewChannels {
+		t.Fatalf("default view = %v, want ViewChannels", app.view)
+	}
+
+	// Activating threads view via the message.
+	_, _ = app.Update(ThreadsViewActivatedMsg{})
+	if app.view != ViewThreads {
+		t.Fatalf("after activation view = %v, want ViewThreads", app.view)
+	}
+
+	// Switching to a channel returns to ViewChannels.
+	_, _ = app.Update(ChannelSelectedMsg{ID: "C1", Name: "general"})
+	if app.view != ViewChannels {
+		t.Errorf("after ChannelSelectedMsg view = %v, want ViewChannels", app.view)
+	}
+}
+
+func TestApp_ThreadsListLoadedUpdatesUnreadBadge(t *testing.T) {
+	app := NewApp()
+	app.activeTeamID = "T1"
+	summaries := []cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "1.0", Unread: true},
+		{ChannelID: "C2", ThreadTS: "2.0", Unread: false},
+	}
+	_, _ = app.Update(ThreadsListLoadedMsg{TeamID: "T1", Summaries: summaries})
+	if app.sidebar.ThreadsUnreadCount() != 1 {
+		t.Errorf("ThreadsUnreadCount = %d, want 1", app.sidebar.ThreadsUnreadCount())
+	}
+}
+
+func TestApp_ThreadsListLoadedIgnoredForOtherWorkspace(t *testing.T) {
+	app := NewApp()
+	app.activeTeamID = "T1"
+	summaries := []cache.ThreadSummary{{ChannelID: "C1", ThreadTS: "1.0", Unread: true}}
+	_, _ = app.Update(ThreadsListLoadedMsg{TeamID: "T2", Summaries: summaries})
+	if app.sidebar.ThreadsUnreadCount() != 0 {
+		t.Errorf("threads from a different team should not update the active sidebar; got %d", app.sidebar.ThreadsUnreadCount())
 	}
 }
