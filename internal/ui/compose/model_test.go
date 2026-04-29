@@ -844,3 +844,34 @@ func TestReset_ClearsPendingAttachmentsAndUploadingFlag(t *testing.T) {
 		t.Errorf("expected value cleared, got %q", m.Value())
 	}
 }
+
+func TestCursorPosition_SingleLine(t *testing.T) {
+	m := New("general")
+	m.SetValue("hello world")
+	// SetValue places cursor at end of input.
+	if !m.CursorAtFirstLine() {
+		t.Error("expected single-line value to be on first line")
+	}
+	if !m.CursorAtLastLine() {
+		t.Error("expected single-line value to be on last line")
+	}
+}
+
+func TestMoveCursorToStart_Then_BackToEnd(t *testing.T) {
+	m := New("general")
+	m.SetValue("line1\nline2\nline3")
+	// After SetValue, cursor is at end of last line.
+	if !m.CursorAtLastLine() {
+		t.Fatal("setup: expected cursor on last line after SetValue")
+	}
+
+	m.MoveCursorToStart()
+	if !m.CursorAtFirstLine() {
+		t.Errorf("expected cursor on first line after MoveCursorToStart")
+	}
+
+	m.MoveCursorToEnd()
+	if !m.CursorAtLastLine() {
+		t.Errorf("expected cursor on last line after MoveCursorToEnd")
+	}
+}

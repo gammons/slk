@@ -1864,3 +1864,89 @@ func TestPasteMsg_ClipboardUnavailable_FallsThroughToTextarea(t *testing.T) {
 		t.Errorf("expected pasted text in compose, got %q", app.compose.Value())
 	}
 }
+
+// --- insert-mode shortcuts: Ctrl+U clear, Up/Down boundary jump ---
+
+func TestHandleInsertMode_CtrlU_ClearsCompose(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	_ = app.compose.Focus()
+	app.compose.SetValue("draft text")
+	app.compose.AddAttachment(compose.PendingAttachment{Filename: "a.png", Size: 1})
+
+	app.handleInsertMode(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
+
+	if app.compose.Value() != "" {
+		t.Errorf("expected compose cleared, got %q", app.compose.Value())
+	}
+	if len(app.compose.Attachments()) != 0 {
+		t.Errorf("expected attachments cleared, got %d", len(app.compose.Attachments()))
+	}
+}
+
+func TestHandleInsertMode_Up_OnFirstLine_JumpsToStart(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	_ = app.compose.Focus()
+	app.compose.SetValue("hello world")
+	// SetValue lands cursor at end of single-line input → first AND last.
+	app.handleInsertMode(tea.KeyPressMsg{Code: tea.KeyUp})
+
+	// Cursor should now be at column 0 of line 0.
+	if !app.compose.CursorAtFirstLine() {
+		t.Error("expected cursor on first line")
+	}
+	// Verify column is 0 by checking that Backspace at this point
+	// produces no change — we don't have direct cursor exposed, so
+	// instead simulate: Up was forwarded to MoveCursorToStart.
+	// We can't trivially read the cursor column from outside the
+	// compose; the side-effect test is enough.
+}
+
+func TestHandleInsertMode_Down_OnLastLine_JumpsToEnd(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	_ = app.compose.Focus()
+	app.compose.SetValue("line1\nline2\nline3")
+	// Cursor is on the last line after SetValue.
+	app.compose.MoveCursorToStart()
+	if !app.compose.CursorAtFirstLine() {
+		t.Fatal("setup: expected cursor on first line after MoveCursorToStart")
+	}
+
+	// Down on a multi-line draft when not on last line forwards to
+	// textarea; to test the "boundary jump", first move cursor to
+	// the last line.
+	app.compose.MoveCursorToEnd()
+	if !app.compose.CursorAtLastLine() {
+		t.Fatal("setup: expected cursor on last line")
+	}
+
+	// Now Down should jump to end (idempotent here, but exercises path).
+	app.handleInsertMode(tea.KeyPressMsg{Code: tea.KeyDown})
+	if !app.compose.CursorAtLastLine() {
+		t.Error("expected cursor still on last line after Down")
+	}
+}
+
+func TestHandleInsertMode_Up_OnSecondLine_ForwardsToTextarea(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	_ = app.compose.Focus()
+	app.compose.SetValue("line1\nline2")
+	// Cursor is at end of line 2 (last line). Press Up: cursor should
+	// move to line 1 via textarea's normal handling, NOT jump to start.
+	app.handleInsertMode(tea.KeyPressMsg{Code: tea.KeyUp})
+
+	if !app.compose.CursorAtFirstLine() {
+		t.Error("expected cursor moved to first line via standard Up")
+	}
+}

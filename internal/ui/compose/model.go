@@ -233,6 +233,37 @@ func (m *Model) SetUploading(on bool) {
 // Uploading reports whether an upload is currently in flight.
 func (m *Model) Uploading() bool { return m.uploading }
 
+// CursorAtFirstLine reports whether the textarea cursor is on the
+// first (topmost) line.
+func (m *Model) CursorAtFirstLine() bool {
+	return m.input.Line() == 0
+}
+
+// CursorAtLastLine reports whether the textarea cursor is on the
+// last (bottom-most) line.
+func (m *Model) CursorAtLastLine() bool {
+	return m.input.Line() >= m.input.LineCount()-1
+}
+
+// MoveCursorToStart positions the cursor at column 0 of the first
+// line.
+func (m *Model) MoveCursorToStart() {
+	for m.input.Line() > 0 {
+		m.input.CursorUp()
+	}
+	m.input.CursorStart()
+	m.dirty()
+}
+
+// MoveCursorToEnd positions the cursor at the end of the last line.
+func (m *Model) MoveCursorToEnd() {
+	for m.input.Line() < m.input.LineCount()-1 {
+		m.input.CursorDown()
+	}
+	m.input.CursorEnd()
+	m.dirty()
+}
+
 func (m *Model) Reset() {
 	m.input.Reset()
 	m.input.SetHeight(1)
@@ -382,10 +413,13 @@ func (m *Model) autoGrow() {
 		lines = m.input.MaxHeight
 	}
 	if m.input.Height() != lines {
+		// SetHeight alone is sufficient for the modern textarea
+		// library to reflow its viewport. Earlier versions required
+		// a follow-up SetValue to force a recalculation, but that
+		// resets the cursor (a real bug for any keystroke that moves
+		// the cursor while also triggering a height change — e.g.,
+		// Up arrow on a multi-line draft).
 		m.input.SetHeight(lines)
-		// Force viewport recalculation by re-setting the value.
-		val := m.input.Value()
-		m.input.SetValue(val)
 	}
 }
 
