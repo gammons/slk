@@ -236,13 +236,13 @@ func TestSelection_HighlightDoesNotCorruptScrollIndicators(t *testing.T) {
 	// derive that line from `out` by splitting on "\n" and finding the
 	// row at chrome height.
 	lines := strings.Split(out, "\n")
-	// Chrome is the channel header + separator; for newTestModel(60)
-	// that's lines[0] (header) + lines[1] (separator). visible[0] is
-	// at lines[2].
-	if len(lines) < 3 {
-		t.Fatalf("expected at least 3 output lines; got %d", len(lines))
+	// Chrome is the channel header (no separator -- intentionally
+	// removed so the panel border alone provides the visual boundary).
+	// Loading hint is the first line after the chrome.
+	if len(lines) < m.chromeHeight+1 {
+		t.Fatalf("expected at least %d output lines; got %d", m.chromeHeight+1, len(lines))
 	}
-	hintRow := lines[2]
+	hintRow := lines[m.chromeHeight]
 	if hintRow != m.cacheLoadingHint {
 		t.Fatalf("loading hint row corrupted by selection overlay\nwant: %q\ngot:  %q",
 			m.cacheLoadingHint, hintRow)

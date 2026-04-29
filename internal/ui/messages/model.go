@@ -103,7 +103,7 @@ type Model struct {
 	cacheLoadingHint  string // pre-rendered "Loading older messages..." line
 	cacheMoreBelow    string // pre-rendered "-- more below --" line
 
-	// Chrome cache: header line + separator. Depends on width, channelName, and
+	// Chrome cache: header line(s). Depends on width, channelName, and
 	// channelTopic only -- never on selection or scroll position.
 	chromeCache       string
 	chromeHeight      int
@@ -1177,10 +1177,15 @@ func (m *Model) View(height, width int) string {
 	// name / topic change. This avoids per-keypress strings.Repeat + lipgloss
 	// renders that don't depend on the selection.
 	if !m.chromeCacheValid || m.chromeWidth != width || m.chromeChannel != m.channelName || m.chromeTopic != m.channelTopic || m.chromeChannelType != m.channelType {
-		// Channel title sits in the message pane, so it uses the message-pane
-		// background (not the sidebar's). Bold + TextPrimary on Background
-		// matches the surrounding messages, and the separator below acts as
-		// a bottom border between the title and the message list.
+		// Channel title sits in the message pane, immediately inside the
+		// panel's top border. Bold + TextPrimary on Background matches
+		// the surrounding messages. The panel border itself provides
+		// visual separation from the sidebar -- we deliberately do NOT
+		// emit a horizontal separator below the title here, because that
+		// produced a "border above the channel name and another border-
+		// looking line below it" effect that visually separated the
+		// header from the messages and made the title look like it sat
+		// outside the panel.
 		headerStyle := lipgloss.NewStyle().
 			Width(width).
 			Background(styles.Background).
@@ -1191,8 +1196,7 @@ func (m *Model) View(height, width int) string {
 		if m.channelTopic != "" {
 			header += "\n" + styles.Timestamp.Render(WordWrap(m.channelTopic, width))
 		}
-		separator := lipgloss.NewStyle().Width(width).Foreground(styles.Border).Background(styles.Background).Render(strings.Repeat("─", width))
-		m.chromeCache = header + "\n" + separator
+		m.chromeCache = header
 		m.chromeHeight = lipgloss.Height(m.chromeCache)
 		m.chromeWidth = width
 		m.chromeChannel = m.channelName

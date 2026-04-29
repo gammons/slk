@@ -3,6 +3,7 @@ package statusbar
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"charm.land/lipgloss/v2"
@@ -241,14 +242,21 @@ func (m Model) View(width int) string {
 	}
 	rightContent += trailing // trailing padding (extra space for unicode width variance)
 
-	// Fill the bar to full width
-	gap := width - lipgloss.Width(left) - lipgloss.Width(rightContent)
+	// Right-align so the rightmost segment ends at column (width-1),
+	// matching the inner right edge of the message-pane / thread-pane
+	// compose box (which ends 1 column before the screen edge -- the
+	// rightmost panel's right border occupies that last column on
+	// content rows above). Without this gap, the connection indicator
+	// overhangs visually past the compose box.
+	const rightGutter = 1
+	gap := width - rightGutter - lipgloss.Width(left) - lipgloss.Width(rightContent)
 	if gap < 0 {
 		gap = 0
 	}
 	filler := styles.StatusBar.Render(fmt.Sprintf("%*s", gap, ""))
+	rightPad := styles.StatusBar.Render(strings.Repeat(" ", rightGutter))
 
-	return lipgloss.JoinHorizontal(lipgloss.Center, left, filler, rightContent)
+	return lipgloss.JoinHorizontal(lipgloss.Center, left, filler, rightContent, rightPad)
 }
 
 // formatDND renders the DND segment with an optional countdown to the
