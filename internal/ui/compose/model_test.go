@@ -772,3 +772,56 @@ func TestComposeView_MultipleAttachments_AllChipsRender(t *testing.T) {
 		t.Errorf("expected b.pdf in view")
 	}
 }
+
+func TestUpdate_BackspaceAtColZeroEmpty_RemovesLastAttachment(t *testing.T) {
+	m := New("general")
+	m.AddAttachment(PendingAttachment{Filename: "a.png", Size: 1})
+	m.AddAttachment(PendingAttachment{Filename: "b.png", Size: 2})
+
+	// Cursor starts at (0, 0) and value is empty.
+	m2, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	got := m2.Attachments()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 attachment after backspace, got %d", len(got))
+	}
+	if got[0].Filename != "a.png" {
+		t.Errorf("expected a.png to remain, got %q", got[0].Filename)
+	}
+}
+
+func TestUpdate_BackspaceWithText_DoesNotRemoveAttachment(t *testing.T) {
+	m := New("general")
+	m.AddAttachment(PendingAttachment{Filename: "a.png", Size: 1})
+	m.SetValue("hello")
+
+	m2, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if len(m2.Attachments()) != 1 {
+		t.Errorf("expected attachment to remain when text present, got %d", len(m2.Attachments()))
+	}
+}
+
+func TestUpdate_BackspaceNoAttachments_PassesThrough(t *testing.T) {
+	m := New("general")
+	m.SetValue("hello")
+
+	// Default cursor placement after SetValue is at the end. Backspace
+	// should reduce the text, not touch attachments (there are none).
+	m2, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if len(m2.Attachments()) != 0 {
+		t.Errorf("expected no attachments, got %d", len(m2.Attachments()))
+	}
+	// We don't strictly assert the textarea reduced; the textarea library's
+	// behavior is its own concern. The point of this test is that no
+	// attachment-removal occurred when there were no attachments.
+}
+
+func TestUpdate_BackspaceWhileUploading_DoesNotRemove(t *testing.T) {
+	m := New("general")
+	m.AddAttachment(PendingAttachment{Filename: "a.png", Size: 1})
+	m.SetUploading(true)
+
+	m2, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if len(m2.Attachments()) != 1 {
+		t.Errorf("expected attachment to remain while uploading, got %d", len(m2.Attachments()))
+	}
+}

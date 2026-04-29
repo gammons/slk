@@ -285,6 +285,21 @@ func (m *Model) SetWidth(width int) {
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	keyMsg, isKey := msg.(tea.KeyMsg)
 
+	// Backspace at column 0 of an empty textarea removes the last
+	// pending attachment instead of forwarding to the textarea.
+	// Skipped while uploading or while a picker is active (those
+	// have their own Backspace semantics).
+	if isKey && !m.uploading && !m.emojiActive && !m.mentionActive &&
+		len(m.pending) > 0 &&
+		keyMsg.Key().Code == tea.KeyBackspace &&
+		m.input.Value() == "" &&
+		m.input.Line() == 0 &&
+		m.input.Column() == 0 {
+		m.RemoveLastAttachment()
+		m.dirty()
+		return m, nil
+	}
+
 	// If emoji picker is active, intercept keys (takes precedence over mention).
 	if m.emojiActive && isKey {
 		m2, cmd := m.handleEmojiKey(keyMsg)
