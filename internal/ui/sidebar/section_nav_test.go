@@ -19,6 +19,8 @@ func TestRenderedSelectionMatchesNavigation(t *testing.T) {
 		{ID: "D2", Name: "bob", Type: "dm"},
 	}
 	m := New(items)
+	// Step off the synthetic Threads row so the cursor lands on the first channel.
+	m.MoveDown()
 
 	expectedOrder := []string{"alerts", "ops", "deploys", "general", "alice", "bob"}
 	for i, name := range expectedOrder {
@@ -51,6 +53,8 @@ func TestNavigationFollowsSectionOrder(t *testing.T) {
 		{ID: "D1", Name: "alice", Type: "dm"},
 	}
 	m := New(items)
+	// Step off the synthetic Threads row so navigation begins on the first channel.
+	m.MoveDown()
 
 	want := []string{"C2", "C3", "C1", "D1"}
 	for i, id := range want {

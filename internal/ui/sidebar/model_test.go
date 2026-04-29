@@ -31,8 +31,11 @@ func TestSidebarNavigation(t *testing.T) {
 	}
 
 	m := New(channels)
+	// Default selection is now the synthetic Threads row; step off it to
+	// reach the first channel.
+	m.MoveDown()
 	if m.SelectedID() != "C1" {
-		t.Error("expected C1 selected initially")
+		t.Error("expected C1 selected after stepping off the Threads row")
 	}
 
 	m.MoveDown()
@@ -49,6 +52,75 @@ func TestSidebarNavigation(t *testing.T) {
 	m.MoveUp()
 	if m.SelectedID() != "C2" {
 		t.Error("expected C2 after move up")
+	}
+}
+
+func TestThreadsItem_DefaultSelected(t *testing.T) {
+	m := New([]ChannelItem{
+		{ID: "C1", Name: "general", Type: "channel"},
+		{ID: "C2", Name: "design", Type: "channel"},
+	})
+	if !m.IsThreadsSelected() {
+		t.Errorf("expected Threads entry to be selected by default (top of list)")
+	}
+}
+
+func TestThreadsItem_MoveDownLeavesIt(t *testing.T) {
+	m := New([]ChannelItem{
+		{ID: "C1", Name: "general", Type: "channel"},
+		{ID: "C2", Name: "design", Type: "channel"},
+	})
+	m.MoveDown()
+	if m.IsThreadsSelected() {
+		t.Errorf("MoveDown should leave the Threads entry")
+	}
+	item, ok := m.SelectedItem()
+	if !ok || item.ID != "C1" {
+		t.Errorf("first channel should be selected, got %+v ok=%v", item, ok)
+	}
+}
+
+func TestThreadsItem_MoveUpReturnsToIt(t *testing.T) {
+	m := New([]ChannelItem{
+		{ID: "C1", Name: "general", Type: "channel"},
+	})
+	m.MoveDown()
+	if m.IsThreadsSelected() {
+		t.Fatalf("precondition: should be on a channel")
+	}
+	m.MoveUp()
+	if !m.IsThreadsSelected() {
+		t.Errorf("MoveUp from first channel should land on Threads entry")
+	}
+}
+
+func TestThreadsItem_UnreadBadgeRenders(t *testing.T) {
+	m := New([]ChannelItem{{ID: "C1", Name: "general", Type: "channel"}})
+	m.SetThreadsUnreadCount(3)
+	out := m.View(10, 30)
+	if !strings.Contains(out, "Threads") {
+		t.Errorf("View should contain 'Threads': %q", out)
+	}
+	if !strings.Contains(out, "3") {
+		t.Errorf("View should contain unread count '3': %q", out)
+	}
+}
+
+func TestThreadsItem_SelectedItemFalseWhenOnThreadsRow(t *testing.T) {
+	m := New([]ChannelItem{{ID: "C1", Name: "general", Type: "channel"}})
+	if _, ok := m.SelectedItem(); ok {
+		t.Errorf("SelectedItem should return ok=false when Threads row is selected")
+	}
+}
+
+func TestThreadsItem_SelectByIDClearsThreadsSelection(t *testing.T) {
+	m := New([]ChannelItem{{ID: "C1", Name: "general", Type: "channel"}})
+	if !m.IsThreadsSelected() {
+		t.Fatal("precondition")
+	}
+	m.SelectByID("C1")
+	if m.IsThreadsSelected() {
+		t.Errorf("SelectByID should clear Threads selection")
 	}
 }
 
