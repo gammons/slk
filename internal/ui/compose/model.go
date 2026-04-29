@@ -15,6 +15,18 @@ import (
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
+// PendingAttachment is a file (or in-memory image) waiting to be
+// uploaded with the next send. Bytes and Path are mutually exclusive:
+// Bytes is set for clipboard-pasted images; Path is set for
+// file-path-pasted files (read at upload time, not at attach time).
+type PendingAttachment struct {
+	Filename string
+	Bytes    []byte // non-nil for clipboard images
+	Path     string // non-empty for file-path attachments
+	Mime     string
+	Size     int64
+}
+
 type Model struct {
 	input       textarea.Model
 	channelName string
@@ -39,6 +51,15 @@ type Model struct {
 	// "Message #channel..." placeholder. Used by edit mode to display
 	// "Editing message — Enter to save, Esc to cancel".
 	placeholderOverride string
+
+	// pending lists attachments queued for the next send. Cleared on
+	// successful submit; preserved on failure for retry.
+	pending []PendingAttachment
+
+	// uploading is true while attachments are mid-upload. Causes the
+	// chip row to render in muted style and the Update() to refuse
+	// Esc / Backspace-clear.
+	uploading bool
 
 	// version increments on every Update / state mutation. Used by App's
 	// panel-cache layer so the wrapped compose panel only re-renders when
@@ -160,6 +181,56 @@ func (m *Model) SetValue(s string) {
 	m.input.SetValue(s)
 	m.dirty()
 }
+
+// AddAttachment appends a pending attachment. Newest is last.
+func (m *Model) AddAttachment(a PendingAttachment) {
+	m.pending = append(m.pending, a)
+	m.dirty()
+}
+
+// RemoveLastAttachment removes the most-recently-added pending
+// attachment and returns it. Returns ok=false if pending is empty.
+func (m *Model) RemoveLastAttachment() (PendingAttachment, bool) {
+	if len(m.pending) == 0 {
+		return PendingAttachment{}, false
+	}
+	last := m.pending[len(m.pending)-1]
+	m.pending = m.pending[:len(m.pending)-1]
+	m.dirty()
+	return last, true
+}
+
+// Attachments returns a copy of the current pending attachments.
+func (m *Model) Attachments() []PendingAttachment {
+	if len(m.pending) == 0 {
+		return nil
+	}
+	out := make([]PendingAttachment, len(m.pending))
+	copy(out, m.pending)
+	return out
+}
+
+// ClearAttachments removes all pending attachments.
+func (m *Model) ClearAttachments() {
+	if len(m.pending) == 0 {
+		return
+	}
+	m.pending = nil
+	m.dirty()
+}
+
+// SetUploading sets the uploading flag, which causes the chip row to
+// render in muted style and certain inputs to be ignored.
+func (m *Model) SetUploading(on bool) {
+	if m.uploading == on {
+		return
+	}
+	m.uploading = on
+	m.dirty()
+}
+
+// Uploading reports whether an upload is currently in flight.
+func (m *Model) Uploading() bool { return m.uploading }
 
 func (m *Model) Reset() {
 	m.input.Reset()

@@ -662,3 +662,79 @@ func TestSetPlaceholderOverride_SurvivesReset(t *testing.T) {
 		t.Error("Reset should still clear the value")
 	}
 }
+
+func TestAddAttachment_AppendsToPending(t *testing.T) {
+	m := New("general")
+	att := PendingAttachment{Filename: "a.png", Bytes: []byte("x"), Mime: "image/png", Size: 1}
+	m.AddAttachment(att)
+
+	got := m.Attachments()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 attachment, got %d", len(got))
+	}
+	if got[0].Filename != "a.png" {
+		t.Errorf("expected filename a.png, got %q", got[0].Filename)
+	}
+}
+
+func TestAttachments_ReturnsCopy(t *testing.T) {
+	m := New("general")
+	m.AddAttachment(PendingAttachment{Filename: "a.png", Bytes: []byte("x"), Size: 1})
+	got := m.Attachments()
+	got[0].Filename = "MUTATED"
+
+	again := m.Attachments()
+	if again[0].Filename != "a.png" {
+		t.Errorf("Attachments() must return a copy; got mutation: %q", again[0].Filename)
+	}
+}
+
+func TestRemoveLastAttachment(t *testing.T) {
+	m := New("general")
+	m.AddAttachment(PendingAttachment{Filename: "a.png", Size: 1})
+	m.AddAttachment(PendingAttachment{Filename: "b.png", Size: 2})
+
+	removed, ok := m.RemoveLastAttachment()
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if removed.Filename != "b.png" {
+		t.Errorf("expected to remove b.png, got %q", removed.Filename)
+	}
+	if len(m.Attachments()) != 1 {
+		t.Errorf("expected 1 remaining, got %d", len(m.Attachments()))
+	}
+}
+
+func TestRemoveLastAttachment_Empty(t *testing.T) {
+	m := New("general")
+	_, ok := m.RemoveLastAttachment()
+	if ok {
+		t.Error("expected ok=false on empty pending")
+	}
+}
+
+func TestClearAttachments(t *testing.T) {
+	m := New("general")
+	m.AddAttachment(PendingAttachment{Filename: "a.png", Size: 1})
+	m.AddAttachment(PendingAttachment{Filename: "b.png", Size: 2})
+	m.ClearAttachments()
+	if len(m.Attachments()) != 0 {
+		t.Errorf("expected empty after Clear, got %d", len(m.Attachments()))
+	}
+}
+
+func TestSetUploading(t *testing.T) {
+	m := New("general")
+	if m.Uploading() {
+		t.Error("expected !Uploading() initially")
+	}
+	m.SetUploading(true)
+	if !m.Uploading() {
+		t.Error("expected Uploading() after SetUploading(true)")
+	}
+	m.SetUploading(false)
+	if m.Uploading() {
+		t.Error("expected !Uploading() after SetUploading(false)")
+	}
+}
