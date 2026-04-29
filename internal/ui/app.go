@@ -192,6 +192,16 @@ type (
 		UserID   string
 		Presence string
 	}
+	// StatusChangeMsg is sent when the authenticated user's own presence
+	// or DND state changes for any workspace. The App routes it to the
+	// status bar only when TeamID matches the active workspace; otherwise
+	// it just updates the App's per-workspace status cache.
+	StatusChangeMsg struct {
+		TeamID     string
+		Presence   string // "active" or "away"; "" means unknown/unchanged
+		DNDEnabled bool
+		DNDEndTS   time.Time
+	}
 )
 
 type loadingEntry struct {

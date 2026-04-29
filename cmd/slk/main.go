@@ -66,6 +66,12 @@ type WorkspaceContext struct {
 	UserID        string
 	UnresolvedDMs []UnresolvedDM
 	CustomEmoji   map[string]string // emoji name -> URL or "alias:target"
+	// Self presence and DND state for this workspace. Populated on connect
+	// and updated by manual_presence_change / dnd_updated WS events plus
+	// optimistic writes from the presence menu.
+	Presence   string    // "active" or "away"; "" until first fetch
+	DNDEnabled bool      // true if either snooze or admin-DND is active
+	DNDEndTS   time.Time // unified end timestamp; zero if not in DND
 }
 
 func main() {
