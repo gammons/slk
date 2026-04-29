@@ -158,6 +158,9 @@ type Model struct {
 	hasSelection        bool
 	messageIDToEntryIdx map[string]int
 	lastViewHeight      int
+	// countedReplies tracks reply TSes already counted into a parent's
+	// ReplyCount, so optimistic + WS-echo paths don't double-increment.
+	countedReplies map[string]map[string]struct{}
 }
 
 // Version returns a counter that increments every time the View() output
@@ -239,6 +242,21 @@ func (m *Model) SetMessages(msgs []MessageItem) {
 }
 
 func (m *Model) AppendMessage(msg MessageItem) {
+	// Idempotent on TS. Self-sent messages take an optimistic path
+	// (MessageSentMsg from the chat.postMessage HTTP response) AND
+	// arrive again as a WebSocket echo (NewMessageMsg). The order of
+	// those two events isn't deterministic -- the WS echo can arrive
+	// before the HTTP response returns -- so a TS-keyed dedup map at the
+	// caller can race. Dedup here, at the model boundary, defends
+	// against duplicates regardless of arrival order.
+	if msg.TS != "" {
+		// Scan from the back: dupes, when they happen, are recent.
+		for i := len(m.messages) - 1; i >= 0; i-- {
+			if m.messages[i].TS == msg.TS {
+				return
+			}
+		}
+	}
 	m.messages = append(m.messages, msg)
 	m.cache = nil // invalidate cache
 	m.dirty()
@@ -419,7 +437,25 @@ func (m *Model) ClampReactionNav() {
 }
 
 // IncrementReplyCount finds a message by TS and increments its ReplyCount.
-func (m *Model) IncrementReplyCount(parentTS string) {
+// Idempotent on (parentTS, replyTS): the optimistic ThreadReplySentMsg path
+// and the WS echo NewMessageMsg path can both fire for the same reply --
+// pass the reply's own TS to dedup. An empty replyTS skips dedup (legacy
+// callers that don't yet pass it).
+func (m *Model) IncrementReplyCount(parentTS, replyTS string) {
+	if replyTS != "" {
+		if m.countedReplies == nil {
+			m.countedReplies = make(map[string]map[string]struct{})
+		}
+		set := m.countedReplies[parentTS]
+		if set == nil {
+			set = make(map[string]struct{})
+			m.countedReplies[parentTS] = set
+		}
+		if _, dup := set[replyTS]; dup {
+			return
+		}
+		set[replyTS] = struct{}{}
+	}
 	for i, msg := range m.messages {
 		if msg.TS == parentTS {
 			m.messages[i].ReplyCount++

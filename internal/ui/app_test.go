@@ -4,6 +4,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -943,5 +944,68 @@ func TestApp_WorkspaceReadyAppliesPerWorkspaceTheme(t *testing.T) {
 	afterVer := styles.Version()
 	if afterVer == beforeVer {
 		t.Errorf("expected styles.Version() to advance after WorkspaceReadyMsg with non-empty Theme")
+	}
+}
+
+// Defends Bug A: a duplicate of the same TS (e.g. WS echo arriving before
+// the optimistic-add path can record the TS) must not produce two messages
+// in the pane.
+func TestApp_DuplicateMessageEventDoesNotDoubleAppend(t *testing.T) {
+	app := NewApp()
+	app.SetCurrentUserID("USELF")
+	app.activeChannelID = "C1"
+
+	// Simulate the race: WS echo arrives FIRST, before MessageSentMsg.
+	app.Update(NewMessageMsg{
+		ChannelID: "C1",
+		Message: messages.MessageItem{
+			TS: "1700000999.000001", UserID: "USELF", Text: "hello",
+		},
+	})
+	verAfterEcho := app.messagepane.Version()
+	// Then the HTTP-response optimistic path fires.
+	app.Update(MessageSentMsg{
+		ChannelID: "C1",
+		Message: messages.MessageItem{
+			TS: "1700000999.000001", UserID: "USELF", Text: "hello",
+		},
+	})
+	if app.messagepane.Version() != verAfterEcho {
+		t.Errorf("MessageSentMsg arriving after WS echo should not re-append; messagepane version advanced")
+	}
+	// And the model itself contains exactly one message.
+	if got := len(app.messagepane.Messages()); got != 1 {
+		t.Errorf("expected 1 message in pane, got %d (duplicate)", got)
+	}
+}
+
+// Defends Bug B: ctrl+u / ctrl+d must move the selection, not just the
+// viewport. Otherwise a subsequent j/k snaps back to the original spot.
+func TestApp_HalfPageScrollAdvancesSelection(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	// Populate messages so half-page has somewhere to go.
+	var items []messages.MessageItem
+	for i := 0; i < 50; i++ {
+		items = append(items, messages.MessageItem{
+			TS:   fmt.Sprintf("17000000%02d.0001", i),
+			Text: fmt.Sprintf("msg %d", i),
+		})
+	}
+	app.messagepane.SetMessages(items)
+	// Provide a sane layout height so halfPageSize() returns > 1.
+	app.layoutMsgHeight = 20
+
+	startIdx := app.messagepane.SelectedIndex()
+	app.scrollFocusedPanel(-app.halfPageSize()) // ctrl+u
+	upIdx := app.messagepane.SelectedIndex()
+	if upIdx >= startIdx {
+		t.Errorf("ctrl+u should decrease selection; start=%d after=%d", startIdx, upIdx)
+	}
+	app.scrollFocusedPanel(app.halfPageSize()) // ctrl+d
+	downIdx := app.messagepane.SelectedIndex()
+	if downIdx <= upIdx {
+		t.Errorf("ctrl+d should increase selection; before=%d after=%d", upIdx, downIdx)
 	}
 }

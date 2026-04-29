@@ -871,7 +871,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// Update reply count on parent message when a thread reply arrives
 			if msg.Message.ThreadTS != "" && msg.Message.ThreadTS != msg.Message.TS {
-				a.messagepane.IncrementReplyCount(msg.Message.ThreadTS)
+				a.messagepane.IncrementReplyCount(msg.Message.ThreadTS, msg.Message.TS)
 			}
 		}
 		// A thread reply (regardless of channel) may have changed the
@@ -963,7 +963,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if a.threadVisible && msg.ThreadTS == a.threadPanel.ThreadTS() {
 					a.threadPanel.AddReply(msg.Message)
 				}
-				a.messagepane.IncrementReplyCount(msg.ThreadTS)
+				a.messagepane.IncrementReplyCount(msg.ThreadTS, msg.Message.TS)
 			}
 			if c := a.scheduleThreadsDirty(); c != nil {
 				cmds = append(cmds, c)
@@ -2136,36 +2136,62 @@ func (a *App) panelAt(x, y int) (panel Panel, paneX, paneY int, ok bool) {
 }
 
 // scrollFocusedPanel scrolls the focused panel by delta lines (negative = up).
+// Half-page scrolls (ctrl+u / ctrl+d) advance the SELECTION as well as the
+// viewport: previously they moved only the viewport, leaving `selected`
+// behind, so the next j/k snapped the viewport back to where the user
+// started -- effectively undoing the page jump. Moving by N selection
+// steps fixes that and also exercises sidebar's threads-row transition
+// logic naturally.
 func (a *App) scrollFocusedPanel(delta int) {
 	if delta == 0 {
 		return
 	}
+	steps := delta
+	if steps < 0 {
+		steps = -steps
+	}
 	switch a.focusedPanel {
 	case PanelSidebar:
 		if delta < 0 {
-			a.sidebar.ScrollUp(-delta)
+			for i := 0; i < steps; i++ {
+				a.sidebar.MoveUp()
+			}
 		} else {
-			a.sidebar.ScrollDown(delta)
+			for i := 0; i < steps; i++ {
+				a.sidebar.MoveDown()
+			}
 		}
 	case PanelMessages:
 		if a.view == ViewThreads {
 			if delta < 0 {
-				a.threadsView.ScrollUp(-delta)
+				for i := 0; i < steps; i++ {
+					a.threadsView.MoveUp()
+				}
 			} else {
-				a.threadsView.ScrollDown(delta)
+				for i := 0; i < steps; i++ {
+					a.threadsView.MoveDown()
+				}
 			}
 		} else {
 			if delta < 0 {
-				a.messagepane.ScrollUp(-delta)
+				for i := 0; i < steps; i++ {
+					a.messagepane.MoveUp()
+				}
 			} else {
-				a.messagepane.ScrollDown(delta)
+				for i := 0; i < steps; i++ {
+					a.messagepane.MoveDown()
+				}
 			}
 		}
 	case PanelThread:
 		if delta < 0 {
-			a.threadPanel.ScrollUp(-delta)
+			for i := 0; i < steps; i++ {
+				a.threadPanel.MoveUp()
+			}
 		} else {
-			a.threadPanel.ScrollDown(delta)
+			for i := 0; i < steps; i++ {
+				a.threadPanel.MoveDown()
+			}
 		}
 	}
 }

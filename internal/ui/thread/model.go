@@ -125,6 +125,17 @@ func (m *Model) SetThread(parent messages.MessageItem, replies []messages.Messag
 // We always advance `selected` to the new last index so the incoming
 // reply is visible regardless of where the user had scrolled.
 func (m *Model) AddReply(msg messages.MessageItem) {
+	// Idempotent on TS -- same race-defense rationale as
+	// messages.Model.AppendMessage: optimistic add (HTTP response) and
+	// WS echo can arrive in either order, and a caller-side dedup map
+	// can lose the race if the echo lands first.
+	if msg.TS != "" {
+		for i := len(m.replies) - 1; i >= 0; i-- {
+			if m.replies[i].TS == msg.TS {
+				return
+			}
+		}
+	}
 	m.replies = append(m.replies, msg)
 	m.InvalidateCache()
 	m.selected = len(m.replies) - 1
