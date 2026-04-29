@@ -524,6 +524,7 @@ func run() error {
 				channelTypes:    channelTypes,
 				workspaceName:   wctx.TeamName,
 				activeChannelID: func() string { return app.ActiveChannelID() },
+				wsCtx:           wctx,
 			}
 			wctx.RTMHandler = handler
 			wctx.ConnMgr = slackclient.NewConnectionManager(wctx.Client, handler)
@@ -1145,6 +1146,9 @@ type rtmEventHandler struct {
 	channelTypes    map[string]string
 	workspaceName   string
 	activeChannelID func() string
+
+	// Back-reference for self-presence/DND state mutation.
+	wsCtx *WorkspaceContext
 }
 
 func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool) {
@@ -1321,10 +1325,41 @@ func (h *rtmEventHandler) OnDisconnect() {
 }
 
 func (h *rtmEventHandler) OnSelfPresenceChange(presence string) {
-	// implemented in Task 6
+	if h.wsCtx == nil {
+		return
+	}
+	// Slack uses "active"/"away" in events; store verbatim.
+	h.wsCtx.Presence = presence
+	if h.program == nil {
+		return
+	}
+	h.program.Send(ui.StatusChangeMsg{
+		TeamID:     h.workspaceID,
+		Presence:   presence,
+		DNDEnabled: h.wsCtx.DNDEnabled,
+		DNDEndTS:   h.wsCtx.DNDEndTS,
+	})
 }
+
 func (h *rtmEventHandler) OnDNDChange(enabled bool, endUnix int64) {
-	// implemented in Task 6
+	if h.wsCtx == nil {
+		return
+	}
+	h.wsCtx.DNDEnabled = enabled
+	if endUnix > 0 {
+		h.wsCtx.DNDEndTS = time.Unix(endUnix, 0)
+	} else {
+		h.wsCtx.DNDEndTS = time.Time{}
+	}
+	if h.program == nil {
+		return
+	}
+	h.program.Send(ui.StatusChangeMsg{
+		TeamID:     h.workspaceID,
+		Presence:   h.wsCtx.Presence,
+		DNDEnabled: h.wsCtx.DNDEnabled,
+		DNDEndTS:   h.wsCtx.DNDEndTS,
+	})
 }
 
 // listWorkspaces prints the configured workspaces with their TeamID and
