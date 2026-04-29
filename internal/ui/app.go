@@ -774,6 +774,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.clearSelections()
 		a.activeChannelID = msg.ID
 		a.lastTypingSent = time.Time{} // reset typing throttle for new channel
+		// Tell the sidebar which channel is active so the staleness
+		// filter never hides it out from under the user.
+		a.sidebar.SetActiveChannelID(msg.ID)
 		a.messagepane.SetChannel(msg.Name, "")
 		a.messagepane.SetChannelType(msg.Type)
 		a.messagepane.SetLoading(true)
@@ -2373,6 +2376,13 @@ func (a *App) SetThemeOverrides(overrides config.Theme) {
 // SetTypingEnabled controls whether typing indicators are shown and sent.
 func (a *App) SetTypingEnabled(enabled bool) {
 	a.typingEnabled = enabled
+}
+
+// SetSidebarStaleThreshold configures auto-hiding of inactive
+// channels in the sidebar. d is the maximum age (since LastReadTS)
+// before a channel is hidden; pass 0 to disable.
+func (a *App) SetSidebarStaleThreshold(d time.Duration) {
+	a.sidebar.SetStaleThreshold(d)
 }
 
 // SetTypingSender sets the callback for sending typing indicators.

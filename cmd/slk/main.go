@@ -244,6 +244,7 @@ func run() error {
 	app.SetLoadingWorkspaces(wsNames)
 	app.SetWorkspaces(wsItems)
 	app.SetTypingEnabled(cfg.Animations.TypingIndicators)
+	app.SetSidebarStaleThreshold(time.Duration(cfg.Sidebar.HideInactiveAfterDays) * 24 * time.Hour)
 
 	// Wire theme switcher
 	app.SetThemeItems(styles.ThemeNames())
@@ -722,6 +723,9 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	for i := range wctx.Channels {
 		if count, ok := unreadMap[wctx.Channels[i].ID]; ok {
 			wctx.Channels[i].UnreadCount = count
+		}
+		if lr, ok := wctx.LastReadMap[wctx.Channels[i].ID]; ok {
+			wctx.Channels[i].LastReadTS = lr
 		}
 	}
 

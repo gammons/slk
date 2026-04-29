@@ -15,6 +15,7 @@ type Config struct {
 	Animations    Animations                   `toml:"animations"`
 	Notifications Notifications                `toml:"notifications"`
 	Cache         CacheConfig                  `toml:"cache"`
+	Sidebar       Sidebar                      `toml:"sidebar"`
 	Sections      map[string]SectionDef        `toml:"sections"`
 	Theme         Theme                        `toml:"theme"`
 	Workspaces    map[string]WorkspaceSettings `toml:"workspaces"`
@@ -59,6 +60,17 @@ type CacheConfig struct {
 	MaxDBSizeMB          int `toml:"max_db_size_mb"`
 }
 
+// Sidebar holds preferences governing what appears in the channel
+// sidebar.
+type Sidebar struct {
+	// HideInactiveAfterDays auto-hides channels (of any type) whose
+	// last_read_ts is older than this many days. Set to 0 to disable.
+	// Channels matching a custom [sections.*] glob, channels with
+	// unread messages, and the currently-selected channel are never
+	// hidden regardless of this setting.
+	HideInactiveAfterDays int `toml:"hide_inactive_after_days"`
+}
+
 // WorkspaceSettings holds per-workspace user preferences. Currently
 // only Theme is configurable; future per-workspace settings (notification
 // rules, default channel, etc.) belong here.
@@ -100,6 +112,9 @@ func Default() Config {
 		Cache: CacheConfig{
 			MessageRetentionDays: 30,
 			MaxDBSizeMB:          500,
+		},
+		Sidebar: Sidebar{
+			HideInactiveAfterDays: 30,
 		},
 	}
 }
