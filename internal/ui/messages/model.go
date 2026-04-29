@@ -213,15 +213,14 @@ func (m *Model) SetMessages(msgs []MessageItem) {
 }
 
 func (m *Model) AppendMessage(msg MessageItem) {
-	wasAtBottom := m.selected >= len(m.messages)-1
 	m.messages = append(m.messages, msg)
 	m.cache = nil // invalidate cache
 	m.dirty()
 
-	if wasAtBottom || len(m.messages) == 1 {
-		// Auto-scroll to the new message
-		m.selected = len(m.messages) - 1
-	}
+	// Always scroll to the newest message. Advancing `selected` to the
+	// last index forces View() to re-snap yOffset to the bottom on the
+	// next render (because snappedSelection != selected).
+	m.selected = len(m.messages) - 1
 }
 
 func (m *Model) Messages() []MessageItem {

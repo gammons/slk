@@ -60,6 +60,34 @@ func TestAddReply(t *testing.T) {
 	}
 }
 
+// TestAddReply_AlwaysScrollsToBottom asserts that an incoming thread
+// reply scrolls the thread panel to the bottom even when the user has
+// scrolled up.
+func TestAddReply_AlwaysScrollsToBottom(t *testing.T) {
+	m := New()
+	parent := messages.MessageItem{TS: "1700000001.000000", UserName: "alice", Text: "hi"}
+	replies := []messages.MessageItem{
+		{TS: "1700000002.000000", UserName: "bob", Text: "r1"},
+		{TS: "1700000003.000000", UserName: "carol", Text: "r2"},
+		{TS: "1700000004.000000", UserName: "dave", Text: "r3"},
+	}
+	m.SetThread(parent, replies, "C123", "1700000001.000000")
+
+	// Move selection up so we're explicitly NOT at the bottom.
+	m.MoveUp()
+	m.MoveUp()
+	if m.selected == m.ReplyCount()-1 {
+		t.Fatalf("test setup: expected selection above bottom, got %d", m.selected)
+	}
+
+	m.AddReply(messages.MessageItem{TS: "1700000005.000000", UserName: "eve", Text: "r4"})
+
+	wantIdx := m.ReplyCount() - 1
+	if m.selected != wantIdx {
+		t.Errorf("AddReply should scroll to bottom: selected=%d want=%d", m.selected, wantIdx)
+	}
+}
+
 func TestNavigation(t *testing.T) {
 	m := New()
 	parent := messages.MessageItem{TS: "1700000001.000000", UserName: "alice", Text: "hi"}

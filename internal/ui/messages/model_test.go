@@ -54,6 +54,40 @@ func TestMessagePaneAppend(t *testing.T) {
 	}
 }
 
+// TestAppendMessage_AlwaysScrollsToBottom asserts that an incoming
+// message scrolls the view to the bottom even when the user has
+// scrolled up (selection is not at the last index). This matches
+// chat-client expectations: new messages should always be visible.
+func TestAppendMessage_AlwaysScrollsToBottom(t *testing.T) {
+	msgs := make([]MessageItem, 5)
+	for i := range msgs {
+		msgs[i] = MessageItem{
+			TS:        "1.0",
+			UserName:  "alice",
+			Text:      "old",
+			Timestamp: "10:00 AM",
+		}
+	}
+	m := New(msgs, "general")
+
+	// Move selection up so we're explicitly NOT at the bottom.
+	m.MoveUp()
+	m.MoveUp()
+	if m.SelectedIndex() == len(msgs)-1 {
+		t.Fatalf("test setup: expected selection above bottom, got %d", m.SelectedIndex())
+	}
+
+	m.AppendMessage(MessageItem{TS: "2.0", UserName: "bob", Text: "incoming", Timestamp: "10:01 AM"})
+
+	wantIdx := len(m.Messages()) - 1
+	if got := m.SelectedIndex(); got != wantIdx {
+		t.Errorf("AppendMessage should scroll to bottom: SelectedIndex=%d want=%d", got, wantIdx)
+	}
+	if !m.IsAtBottom() {
+		t.Error("AppendMessage should leave model IsAtBottom() == true")
+	}
+}
+
 // TestScrollPreservedAcrossRenders asserts that mouse-wheel-style scrolling
 // (ScrollUp / ScrollDown) is not undone by the next View() call. Without the
 // snap-decoupling logic, every render would pull yOffset back to the line

@@ -121,15 +121,13 @@ func (m *Model) SetThread(parent messages.MessageItem, replies []messages.Messag
 	m.InvalidateCache()
 }
 
-// AddReply appends a reply to the thread. If the cursor was at the bottom,
-// it auto-scrolls to the new reply.
+// AddReply appends a reply to the thread and scrolls to the bottom.
+// We always advance `selected` to the new last index so the incoming
+// reply is visible regardless of where the user had scrolled.
 func (m *Model) AddReply(msg messages.MessageItem) {
-	wasAtBottom := len(m.replies) == 0 || m.selected >= len(m.replies)-1
 	m.replies = append(m.replies, msg)
 	m.InvalidateCache()
-	if wasAtBottom {
-		m.selected = len(m.replies) - 1
-	}
+	m.selected = len(m.replies) - 1
 }
 
 // Clear resets all thread state.
