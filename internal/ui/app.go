@@ -952,6 +952,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ConnectionStateMsg:
 		a.statusbar.SetConnectionState(statusbar.ConnectionState(msg.State))
 
+	case WSMessageDeletedMsg:
+		a.messagepane.RemoveMessageByTS(msg.TS)
+		a.threadPanel.RemoveMessageByTS(msg.TS)
+		// If the deleted message was the open thread's parent, close
+		// the thread panel — Slack deletes the entire thread when the
+		// parent is deleted.
+		if a.threadVisible && a.threadPanel.ThreadTS() == msg.TS {
+			a.CloseThread()
+		}
+
 	case ReactionAddedMsg:
 		// Skip WebSocket echo of our own optimistic updates.
 		// When we add/remove a reaction, we update the UI immediately.

@@ -919,3 +919,36 @@ func TestNewMessageMsg_NotEditedStillAppends(t *testing.T) {
 		t.Errorf("expected new message TS=2.0, got %q", msgs[1].TS)
 	}
 }
+
+func TestWSMessageDeletedMsg_RemovesFromMessagePane(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", Text: "a"},
+		{TS: "2.0", Text: "b"},
+	})
+
+	app.Update(WSMessageDeletedMsg{ChannelID: "C1", TS: "2.0"})
+
+	msgs := app.messagepane.Messages()
+	if len(msgs) != 1 || msgs[0].TS != "1.0" {
+		t.Errorf("expected only TS 1.0 to remain, got %+v", msgs)
+	}
+}
+
+func TestWSMessageDeletedMsg_ClosesThreadIfParentDeleted(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	parent := messages.MessageItem{TS: "P1", Text: "parent"}
+	app.messagepane.SetMessages([]messages.MessageItem{parent})
+	app.threadPanel.SetThread(parent, []messages.MessageItem{
+		{TS: "R1", Text: "reply"},
+	}, "C1", "P1")
+	app.threadVisible = true
+
+	app.Update(WSMessageDeletedMsg{ChannelID: "C1", TS: "P1"})
+
+	if app.threadVisible {
+		t.Error("thread panel should be closed after parent deletion")
+	}
+}
