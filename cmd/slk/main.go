@@ -1225,6 +1225,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 			OnMention:       h.notifyCfg.OnMention,
 			OnDM:            h.notifyCfg.OnDM,
 			OnKeyword:       h.notifyCfg.OnKeyword,
+			IsDND:           h.wsCtx != nil && h.wsCtx.DNDEnabled && (h.wsCtx.DNDEndTS.IsZero() || time.Now().Before(h.wsCtx.DNDEndTS)),
 		}
 		chType := h.channelTypes[channelID]
 		if notify.ShouldNotify(ctx, channelID, userID, text, chType) {

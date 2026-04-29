@@ -35,12 +35,18 @@ type NotifyContext struct {
 	OnMention       bool
 	OnDM            bool
 	OnKeyword       []string
+	IsDND           bool // when true, ShouldNotify always returns false
 }
 
 // ShouldNotify returns true if a message should trigger a desktop notification.
 func ShouldNotify(ctx NotifyContext, channelID, userID, text, channelType string) bool {
 	// Never notify for own messages
 	if userID == ctx.CurrentUserID {
+		return false
+	}
+
+	// Suppress entirely while DND/snoozed.
+	if ctx.IsDND {
 		return false
 	}
 
