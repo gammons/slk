@@ -209,6 +209,24 @@ func (c *Client) SendTyping(channelID string) error {
 	return c.wsConn.WriteJSON(msg)
 }
 
+// SubscribePresence asks Slack to deliver presence_change events for the
+// given user IDs. Sent over the existing WebSocket connection. Slack only
+// emits presence_change for users you've explicitly subscribed to (the
+// authenticated user is typically auto-subscribed at connect, but the
+// explicit subscription is reliable across servers).
+func (c *Client) SubscribePresence(userIDs []string) error {
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	if c.wsConn == nil {
+		return fmt.Errorf("websocket not connected")
+	}
+	msg := map[string]interface{}{
+		"type": "presence_sub",
+		"ids":  userIDs,
+	}
+	return c.wsConn.WriteJSON(msg)
+}
+
 // GetChannels retrieves conversations the user is a member of (channels, DMs,
 // group DMs), paginating automatically. Uses users.conversations which returns
 // only joined channels — much faster than conversations.list for large workspaces.
