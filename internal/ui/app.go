@@ -15,6 +15,7 @@ import (
 	"github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/compose"
+	"github.com/gammons/slk/internal/ui/confirmprompt"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/reactionpicker"
@@ -455,6 +456,7 @@ type App struct {
 
 	// Reaction picker
 	reactionPicker   *reactionpicker.Model
+	confirmPrompt    *confirmprompt.Model
 	reactionAddFn    ReactionAddFunc
 	reactionRemoveFn ReactionRemoveFunc
 	frecentLoadFn    FrecentLoadFunc
@@ -505,6 +507,7 @@ func NewApp() *App {
 		threadCompose:        compose.New("thread"),
 		threadsView:          threadsview.New(nil, ""),
 		reactionPicker:       reactionpicker.New(),
+		confirmPrompt:        confirmprompt.New(),
 		mode:                 ModeNormal,
 		focusedPanel:         PanelSidebar,
 		sidebarVisible:       true,
@@ -1179,6 +1182,8 @@ func (a *App) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return a.handleChannelFinderMode(msg)
 	case ModeReactionPicker:
 		return a.handleReactionPickerMode(msg)
+	case ModeConfirm:
+		return a.handleConfirmMode(msg)
 	case ModeWorkspaceFinder:
 		return a.handleWorkspaceFinderMode(msg)
 	case ModeThemeSwitcher:
@@ -1616,6 +1621,22 @@ func (a *App) handleReactionPickerMode(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	return nil
+}
+
+func (a *App) handleConfirmMode(msg tea.KeyMsg) tea.Cmd {
+	keyStr := msg.String()
+	switch msg.Key().Code {
+	case tea.KeyEscape:
+		keyStr = "esc"
+	case tea.KeyEnter:
+		keyStr = "enter"
+	}
+
+	res := a.confirmPrompt.HandleKey(keyStr)
+	if !a.confirmPrompt.IsVisible() {
+		a.SetMode(ModeNormal)
+	}
+	return res.Cmd
 }
 
 func (a *App) updateReactionOnMessage(channelID, messageTS, emojiName, userID string, remove bool) {
@@ -2831,6 +2852,10 @@ func (a *App) View() tea.View {
 		screen = a.reactionPicker.ViewOverlay(a.width, a.height, screen)
 	}
 
+	if a.confirmPrompt.IsVisible() {
+		screen = a.confirmPrompt.ViewOverlay(a.width, a.height, screen)
+	}
+
 	if a.workspaceFinder.IsVisible() {
 		screen = a.workspaceFinder.ViewOverlay(a.width, a.height, screen)
 	}
@@ -2854,6 +2879,7 @@ func (a *App) View() tea.View {
 	finalScreen := screen
 	overlayActive := a.channelFinder.IsVisible() ||
 		a.reactionPicker.IsVisible() ||
+		a.confirmPrompt.IsVisible() ||
 		a.workspaceFinder.IsVisible() ||
 		a.themeSwitcher.IsVisible() ||
 		a.loading

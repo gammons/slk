@@ -830,3 +830,37 @@ func TestApp_WorkspaceSwitchedTriggersThreadsListFetchAndSelectsThreadsRow(t *te
 		t.Fatal("WorkspaceSwitchedMsg did not trigger threads-list fetch")
 	}
 }
+
+func TestHandleConfirmMode_RoutesAndClosesOnCancel(t *testing.T) {
+	app := NewApp()
+	app.confirmPrompt.Open("Title", "Body", func() tea.Msg { return nil })
+	app.SetMode(ModeConfirm)
+
+	// Press 'n' to cancel.
+	cmd := app.handleConfirmMode(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	if cmd != nil {
+		t.Errorf("expected nil cmd on cancel, got non-nil")
+	}
+	if app.confirmPrompt.IsVisible() {
+		t.Error("prompt should be closed after cancel")
+	}
+}
+
+func TestHandleConfirmMode_ConfirmReturnsCmd(t *testing.T) {
+	app := NewApp()
+	type marker struct{}
+	app.confirmPrompt.Open("Title", "Body", func() tea.Msg { return marker{} })
+	app.SetMode(ModeConfirm)
+
+	cmd := app.handleConfirmMode(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd on confirm")
+	}
+	res := cmd()
+	if _, ok := res.(marker); !ok {
+		t.Errorf("expected marker msg from confirm cmd, got %T", res)
+	}
+	if app.confirmPrompt.IsVisible() {
+		t.Error("prompt should be closed after confirm")
+	}
+}
