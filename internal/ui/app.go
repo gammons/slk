@@ -1067,6 +1067,21 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Message.ThreadTS != "" && msg.Message.ThreadTS != msg.Message.TS {
 				a.messagepane.IncrementReplyCount(msg.Message.ThreadTS, msg.Message.TS)
 			}
+		} else {
+			// Message arrived for a channel the user isn't currently
+			// viewing — bump its unread count so the sidebar shows
+			// the dot + bold indicator. Active-channel messages are
+			// auto-marked-read elsewhere (MarkChannel on entry), so
+			// no sidebar update is needed there.
+			//
+			// Skip plain thread replies: a reply inside a thread does
+			// not mark the parent channel as unread on Slack — only
+			// top-level messages and thread_broadcasts do. The
+			// Threads view tracks its own unread state separately.
+			isThreadReply := msg.Message.ThreadTS != "" && msg.Message.ThreadTS != msg.Message.TS
+			if !isThreadReply || msg.Message.Subtype == "thread_broadcast" {
+				a.sidebar.MarkUnread(msg.ChannelID)
+			}
 		}
 		// A thread reply (regardless of channel) may have changed the
 		// involved-threads list — schedule a debounced re-query so a burst

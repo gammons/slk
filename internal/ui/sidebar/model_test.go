@@ -180,6 +180,68 @@ func TestThreadsItem_SelectByIDClearsThreadsSelection(t *testing.T) {
 	}
 }
 
+func TestMarkUnread_IncrementsCount(t *testing.T) {
+	m := New([]ChannelItem{
+		{ID: "C1", Name: "general", Type: "channel", UnreadCount: 0},
+		{ID: "C2", Name: "random", Type: "channel", UnreadCount: 2},
+	})
+	m.MarkUnread("C1")
+	if got := m.Items()[0].UnreadCount; got != 1 {
+		t.Errorf("MarkUnread should bump UnreadCount from 0 to 1, got %d", got)
+	}
+	m.MarkUnread("C2")
+	if got := m.Items()[1].UnreadCount; got != 3 {
+		t.Errorf("MarkUnread should bump existing count from 2 to 3, got %d", got)
+	}
+}
+
+func TestMarkUnread_BumpsVersionAndInvalidatesCache(t *testing.T) {
+	m := New([]ChannelItem{{ID: "C1", Name: "general", Type: "channel"}})
+	// Prime the cache.
+	_ = m.View(10, 30)
+	v1 := m.Version()
+	m.MarkUnread("C1")
+	v2 := m.Version()
+	if v2 == v1 {
+		t.Errorf("MarkUnread should bump version, got %d -> %d", v1, v2)
+	}
+}
+
+func TestMarkUnread_UnknownChannelIsNoop(t *testing.T) {
+	m := New([]ChannelItem{{ID: "C1", Name: "general", Type: "channel"}})
+	v1 := m.Version()
+	m.MarkUnread("C-does-not-exist")
+	v2 := m.Version()
+	if v1 != v2 {
+		t.Errorf("MarkUnread on unknown channel should not bump version, got %d -> %d", v1, v2)
+	}
+}
+
+func TestMarkUnread_RendersDotAndBold(t *testing.T) {
+	m := New([]ChannelItem{{ID: "C1", Name: "general", Type: "channel", UnreadCount: 0}})
+	before := m.View(10, 30)
+	// Find the line for "general" before bumping.
+	var beforeLine string
+	for _, line := range strings.Split(before, "\n") {
+		if strings.Contains(line, "general") {
+			beforeLine = line
+			break
+		}
+	}
+	m.MarkUnread("C1")
+	after := m.View(10, 30)
+	var afterLine string
+	for _, line := range strings.Split(after, "\n") {
+		if strings.Contains(line, "general") {
+			afterLine = line
+			break
+		}
+	}
+	if beforeLine == afterLine {
+		t.Errorf("expected sidebar render to change after MarkUnread; before=%q after=%q", beforeLine, afterLine)
+	}
+}
+
 func TestSidebarFilter(t *testing.T) {
 	channels := []ChannelItem{
 		{ID: "C1", Name: "general", Type: "channel"},

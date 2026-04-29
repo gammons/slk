@@ -386,6 +386,23 @@ func (m *Model) VisibleItems() []ChannelItem {
 	return result
 }
 
+// MarkUnread increments the unread count for the given channel by 1.
+// No-op if the channel is not in the sidebar's items. Re-runs the filter
+// so a previously stale-hidden channel becomes visible again as soon as
+// its UnreadCount becomes non-zero (the staleness filter exempts items
+// with UnreadCount > 0).
+func (m *Model) MarkUnread(channelID string) {
+	for i := range m.items {
+		if m.items[i].ID == channelID {
+			m.items[i].UnreadCount++
+			m.rebuildFilter()
+			m.cacheValid = false
+			m.dirty()
+			return
+		}
+	}
+}
+
 // ClearUnread sets the unread count to 0 for the given channel.
 func (m *Model) ClearUnread(channelID string) {
 	for i := range m.items {
