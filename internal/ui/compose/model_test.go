@@ -662,3 +662,185 @@ func TestSetPlaceholderOverride_SurvivesReset(t *testing.T) {
 		t.Error("Reset should still clear the value")
 	}
 }
+
+func TestAddAttachment_AppendsToPending(t *testing.T) {
+	m := New("general")
+	att := PendingAttachment{Filename: "a.png", Bytes: []byte("x"), Mime: "image/png", Size: 1}
+	m.AddAttachment(att)
+
+	got := m.Attachments()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 attachment, got %d", len(got))
+	}
+	if got[0].Filename != "a.png" {
+		t.Errorf("expected filename a.png, got %q", got[0].Filename)
+	}
+}
+
+func TestAttachments_ReturnsCopy(t *testing.T) {
+	m := New("general")
+	m.AddAttachment(PendingAttachment{Filename: "a.png", Bytes: []byte("x"), Size: 1})
+	got := m.Attachments()
+	got[0].Filename = "MUTATED"
+
+	again := m.Attachments()
+	if again[0].Filename != "a.png" {
+		t.Errorf("Attachments() must return a copy; got mutation: %q", again[0].Filename)
+	}
+}
+
+func TestRemoveLastAttachment(t *testing.T) {
+	m := New("general")
+	m.AddAttachment(PendingAttachment{Filename: "a.png", Size: 1})
+	m.AddAttachment(PendingAttachment{Filename: "b.png", Size: 2})
+
+	removed, ok := m.RemoveLastAttachment()
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if removed.Filename != "b.png" {
+		t.Errorf("expected to remove b.png, got %q", removed.Filename)
+	}
+	if len(m.Attachments()) != 1 {
+		t.Errorf("expected 1 remaining, got %d", len(m.Attachments()))
+	}
+}
+
+func TestRemoveLastAttachment_Empty(t *testing.T) {
+	m := New("general")
+	_, ok := m.RemoveLastAttachment()
+	if ok {
+		t.Error("expected ok=false on empty pending")
+	}
+}
+
+func TestClearAttachments(t *testing.T) {
+	m := New("general")
+	m.AddAttachment(PendingAttachment{Filename: "a.png", Size: 1})
+	m.AddAttachment(PendingAttachment{Filename: "b.png", Size: 2})
+	m.ClearAttachments()
+	if len(m.Attachments()) != 0 {
+		t.Errorf("expected empty after Clear, got %d", len(m.Attachments()))
+	}
+}
+
+func TestSetUploading(t *testing.T) {
+	m := New("general")
+	if m.Uploading() {
+		t.Error("expected !Uploading() initially")
+	}
+	m.SetUploading(true)
+	if !m.Uploading() {
+		t.Error("expected Uploading() after SetUploading(true)")
+	}
+	m.SetUploading(false)
+	if m.Uploading() {
+		t.Error("expected !Uploading() after SetUploading(false)")
+	}
+}
+
+func TestComposeView_NoAttachments_NoChipRow(t *testing.T) {
+	m := New("general")
+	view := m.View(60, false)
+	// No attachments → no 📎 glyph anywhere.
+	if strings.Contains(view, "📎") {
+		t.Errorf("did not expect chip glyph in view without attachments: %q", view)
+	}
+}
+
+func TestComposeView_WithAttachment_RendersChip(t *testing.T) {
+	m := New("general")
+	m.AddAttachment(PendingAttachment{Filename: "screenshot.png", Size: 12345})
+	view := m.View(60, false)
+	if !strings.Contains(view, "📎") {
+		t.Errorf("expected chip glyph in view: %q", view)
+	}
+	if !strings.Contains(view, "screenshot.png") {
+		t.Errorf("expected filename in chip: %q", view)
+	}
+}
+
+func TestComposeView_MultipleAttachments_AllChipsRender(t *testing.T) {
+	m := New("general")
+	m.AddAttachment(PendingAttachment{Filename: "a.png", Size: 1024})
+	m.AddAttachment(PendingAttachment{Filename: "b.pdf", Size: 2048})
+	view := m.View(80, false)
+	if !strings.Contains(view, "a.png") {
+		t.Errorf("expected a.png in view")
+	}
+	if !strings.Contains(view, "b.pdf") {
+		t.Errorf("expected b.pdf in view")
+	}
+}
+
+func TestUpdate_BackspaceAtColZeroEmpty_RemovesLastAttachment(t *testing.T) {
+	m := New("general")
+	m.AddAttachment(PendingAttachment{Filename: "a.png", Size: 1})
+	m.AddAttachment(PendingAttachment{Filename: "b.png", Size: 2})
+
+	// Cursor starts at (0, 0) and value is empty.
+	m2, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	got := m2.Attachments()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 attachment after backspace, got %d", len(got))
+	}
+	if got[0].Filename != "a.png" {
+		t.Errorf("expected a.png to remain, got %q", got[0].Filename)
+	}
+}
+
+func TestUpdate_BackspaceWithText_DoesNotRemoveAttachment(t *testing.T) {
+	m := New("general")
+	m.AddAttachment(PendingAttachment{Filename: "a.png", Size: 1})
+	m.SetValue("hello")
+
+	m2, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if len(m2.Attachments()) != 1 {
+		t.Errorf("expected attachment to remain when text present, got %d", len(m2.Attachments()))
+	}
+}
+
+func TestUpdate_BackspaceNoAttachments_PassesThrough(t *testing.T) {
+	m := New("general")
+	m.SetValue("hello")
+
+	// Default cursor placement after SetValue is at the end. Backspace
+	// should reduce the text, not touch attachments (there are none).
+	m2, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if len(m2.Attachments()) != 0 {
+		t.Errorf("expected no attachments, got %d", len(m2.Attachments()))
+	}
+	// We don't strictly assert the textarea reduced; the textarea library's
+	// behavior is its own concern. The point of this test is that no
+	// attachment-removal occurred when there were no attachments.
+}
+
+func TestUpdate_BackspaceWhileUploading_DoesNotRemove(t *testing.T) {
+	m := New("general")
+	m.AddAttachment(PendingAttachment{Filename: "a.png", Size: 1})
+	m.SetUploading(true)
+
+	m2, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if len(m2.Attachments()) != 1 {
+		t.Errorf("expected attachment to remain while uploading, got %d", len(m2.Attachments()))
+	}
+}
+
+func TestReset_ClearsPendingAttachmentsAndUploadingFlag(t *testing.T) {
+	m := New("general")
+	m.AddAttachment(PendingAttachment{Filename: "a.png", Size: 1})
+	m.SetUploading(true)
+	m.SetValue("draft")
+
+	m.Reset()
+
+	if len(m.Attachments()) != 0 {
+		t.Errorf("expected attachments cleared, got %d", len(m.Attachments()))
+	}
+	if m.Uploading() {
+		t.Error("expected Uploading=false after Reset")
+	}
+	if m.Value() != "" {
+		t.Errorf("expected value cleared, got %q", m.Value())
+	}
+}

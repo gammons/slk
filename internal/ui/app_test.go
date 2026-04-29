@@ -5,12 +5,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"golang.design/x/clipboard"
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/statusbar"
@@ -1505,5 +1509,358 @@ func TestNewMessageMsg_EditedIgnoresOtherChannel(t *testing.T) {
 	msgs := app.messagepane.Messages()
 	if len(msgs) != 1 || msgs[0].Text != "in C1" {
 		t.Errorf("messages pane should not be touched by edit in another channel; got %+v", msgs)
+	}
+}
+
+// fakeClipboard returns a clipboardReader that returns canned bytes
+// for FmtImage and FmtText.
+func fakeClipboard(image, text []byte) clipboardReader {
+	return func(f clipboard.Format) []byte {
+		switch f {
+		case clipboard.FmtImage:
+			return image
+		case clipboard.FmtText:
+			return text
+		}
+		return nil
+	}
+}
+
+func TestSmartPaste_ImagePresent_AttachesToCompose(t *testing.T) {
+	app := NewApp()
+	app.SetClipboardAvailable(true)
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	pngBytes := []byte("\x89PNG\r\n\x1a\nfake")
+	app.SetClipboardReader(fakeClipboard(pngBytes, nil))
+
+	app.smartPaste()
+
+	atts := app.compose.Attachments()
+	if len(atts) != 1 {
+		t.Fatalf("expected 1 attachment, got %d", len(atts))
+	}
+	if atts[0].Mime != "image/png" {
+		t.Errorf("expected image/png, got %q", atts[0].Mime)
+	}
+	if !strings.HasPrefix(atts[0].Filename, "slk-paste-") || !strings.HasSuffix(atts[0].Filename, ".png") {
+		t.Errorf("unexpected filename: %q", atts[0].Filename)
+	}
+	if atts[0].Size != int64(len(pngBytes)) {
+		t.Errorf("expected size %d, got %d", len(pngBytes), atts[0].Size)
+	}
+}
+
+func TestSmartPaste_ImageTooLarge_Refuses(t *testing.T) {
+	app := NewApp()
+	app.SetClipboardAvailable(true)
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	huge := make([]byte, 11*1024*1024)
+	app.SetClipboardReader(fakeClipboard(huge, nil))
+
+	app.smartPaste()
+
+	if len(app.compose.Attachments()) != 0 {
+		t.Errorf("expected no attachment for oversized image, got %d", len(app.compose.Attachments()))
+	}
+}
+
+func TestSmartPaste_FilePathPresent_AttachesByPath(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "doc.pdf")
+	if err := os.WriteFile(path, []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp()
+	app.SetClipboardAvailable(true)
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	app.SetClipboardReader(fakeClipboard(nil, []byte(path)))
+
+	app.smartPaste()
+
+	atts := app.compose.Attachments()
+	if len(atts) != 1 {
+		t.Fatalf("expected 1 attachment, got %d", len(atts))
+	}
+	if atts[0].Path != path {
+		t.Errorf("expected Path=%q, got %q", path, atts[0].Path)
+	}
+	if atts[0].Filename != "doc.pdf" {
+		t.Errorf("expected filename doc.pdf, got %q", atts[0].Filename)
+	}
+}
+
+func TestSmartPaste_NoImage_NoValidPath_FallsThroughToText(t *testing.T) {
+	app := NewApp()
+	app.SetClipboardAvailable(true)
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	app.SetClipboardReader(fakeClipboard(nil, []byte("just some text")))
+
+	app.smartPaste()
+
+	if len(app.compose.Attachments()) != 0 {
+		t.Errorf("expected no attachment, got %d", len(app.compose.Attachments()))
+	}
+	// Text was inserted into compose.
+	if !strings.Contains(app.compose.Value(), "just some text") {
+		t.Errorf("expected text to be inserted, got %q", app.compose.Value())
+	}
+}
+
+func TestSmartPaste_ClipboardUnavailable_NoOp(t *testing.T) {
+	app := NewApp()
+	app.SetClipboardAvailable(false)
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	pngBytes := []byte("\x89PNGfake")
+	app.SetClipboardReader(fakeClipboard(pngBytes, nil))
+
+	app.smartPaste()
+
+	if len(app.compose.Attachments()) != 0 {
+		t.Error("expected no-op when clipboard unavailable")
+	}
+}
+
+func TestSmartPaste_ThreadPane_AttachesToThreadCompose(t *testing.T) {
+	app := NewApp()
+	app.SetClipboardAvailable(true)
+	app.activeChannelID = "C1"
+	app.threadPanel.SetThread(messages.MessageItem{TS: "P1"}, nil, "C1", "P1")
+	app.threadVisible = true
+	app.focusedPanel = PanelThread
+	app.SetMode(ModeInsert)
+	app.SetClipboardReader(fakeClipboard([]byte("\x89PNG"), nil))
+
+	app.smartPaste()
+
+	if len(app.threadCompose.Attachments()) != 1 {
+		t.Errorf("expected attachment on threadCompose, got %d", len(app.threadCompose.Attachments()))
+	}
+	if len(app.compose.Attachments()) != 0 {
+		t.Errorf("expected no attachment on channel compose, got %d", len(app.compose.Attachments()))
+	}
+}
+
+func TestSubmitWithAttachments_InvokesUploaderAndSetsUploading(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	app.compose.AddAttachment(compose.PendingAttachment{
+		Filename: "a.png", Bytes: []byte("png"), Size: 3,
+	})
+	app.compose.SetValue("look")
+	// Set a no-op uploader so the cmd doesn't error out — we just want to
+	// observe state changes (uploading flag, that an attempt was made).
+	app.SetUploader(func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd {
+		return func() tea.Msg { return UploadResultMsg{Err: nil} }
+	})
+
+	cmd := app.submitWithAttachments(&app.compose)
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd")
+	}
+	if !app.compose.Uploading() {
+		t.Error("expected compose.Uploading() == true after submit")
+	}
+}
+
+func TestSubmitWithAttachments_RefusesDuringEdit(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.compose.AddAttachment(compose.PendingAttachment{Filename: "a.png", Size: 1})
+	app.editing.active = true
+	app.editing.channelID = "C1"
+	app.editing.ts = "1.0"
+	app.editing.panel = PanelMessages
+	app.SetUploader(func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd {
+		return func() tea.Msg { return UploadResultMsg{Err: nil} }
+	})
+
+	_ = app.submitWithAttachments(&app.compose)
+
+	if app.compose.Uploading() {
+		t.Error("expected no upload kicked off during edit mode")
+	}
+	// Attachment should still be there for the user to remove.
+	if len(app.compose.Attachments()) != 1 {
+		t.Errorf("expected attachments preserved, got %d", len(app.compose.Attachments()))
+	}
+}
+
+func TestUploadResultMsg_SuccessClearsAttachmentsAndCompose(t *testing.T) {
+	app := NewApp()
+	app.compose.AddAttachment(compose.PendingAttachment{Filename: "a.png", Size: 1})
+	app.compose.SetValue("caption")
+	app.compose.SetUploading(true)
+
+	app.Update(UploadResultMsg{Err: nil})
+
+	if app.compose.Uploading() {
+		t.Error("expected Uploading=false after success")
+	}
+	if len(app.compose.Attachments()) != 0 {
+		t.Errorf("expected attachments cleared, got %d", len(app.compose.Attachments()))
+	}
+	if app.compose.Value() != "" {
+		t.Errorf("expected text reset, got %q", app.compose.Value())
+	}
+}
+
+func TestUploadResultMsg_FailureKeepsAttachments(t *testing.T) {
+	app := NewApp()
+	app.compose.AddAttachment(compose.PendingAttachment{Filename: "a.png", Size: 1})
+	app.compose.SetValue("caption")
+	app.compose.SetUploading(true)
+
+	app.Update(UploadResultMsg{Err: errors.New("network failure")})
+
+	if app.compose.Uploading() {
+		t.Error("expected Uploading=false after failure")
+	}
+	if len(app.compose.Attachments()) != 1 {
+		t.Errorf("expected attachments preserved on failure, got %d", len(app.compose.Attachments()))
+	}
+	if app.compose.Value() != "caption" {
+		t.Errorf("expected caption preserved, got %q", app.compose.Value())
+	}
+}
+
+func TestEscDuringUpload_RefusedWithToast(t *testing.T) {
+	app := NewApp()
+	app.SetMode(ModeInsert)
+	app.compose.SetUploading(true)
+	app.focusedPanel = PanelMessages
+
+	cmd := app.handleInsertMode(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd (toast)")
+	}
+	// Mode should still be Insert (Esc was refused).
+	if app.mode != ModeInsert {
+		t.Errorf("expected ModeInsert preserved during upload, got %v", app.mode)
+	}
+}
+
+func TestChannelSwitchDuringUpload_Refused(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.compose.SetUploading(true)
+
+	app.Update(ChannelSelectedMsg{ID: "C2"})
+
+	if app.activeChannelID != "C1" {
+		t.Errorf("expected activeChannelID preserved during upload, got %q", app.activeChannelID)
+	}
+	if !app.compose.Uploading() {
+		t.Error("expected upload still in flight")
+	}
+}
+
+// --- bracketed-paste smart-paste tests (PasteMsg path) ---
+
+func TestPasteMsg_ImagePresent_AttachesToCompose(t *testing.T) {
+	app := NewApp()
+	app.SetClipboardAvailable(true)
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	pngBytes := []byte("\x89PNG\r\n\x1a\nfake")
+	app.SetClipboardReader(fakeClipboard(pngBytes, nil))
+
+	// Bracketed paste typically delivers some text representation;
+	// what it carries doesn't matter once an image is detected on
+	// the OS clipboard.
+	app.Update(tea.PasteMsg{Content: "irrelevant text payload"})
+
+	atts := app.compose.Attachments()
+	if len(atts) != 1 {
+		t.Fatalf("expected 1 attachment via PasteMsg, got %d", len(atts))
+	}
+	if atts[0].Mime != "image/png" {
+		t.Errorf("expected image/png, got %q", atts[0].Mime)
+	}
+	// The bracketed-paste text payload must NOT have been forwarded
+	// to the textarea when an image was attached.
+	if app.compose.Value() != "" {
+		t.Errorf("expected textarea empty (image consumed PasteMsg), got %q", app.compose.Value())
+	}
+}
+
+func TestPasteMsg_FilePathInPayload_AttachesByPath(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "doc.pdf")
+	if err := os.WriteFile(path, []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp()
+	app.SetClipboardAvailable(true)
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	// No image on clipboard; bracketed paste delivers the path as text.
+	app.SetClipboardReader(fakeClipboard(nil, nil))
+
+	app.Update(tea.PasteMsg{Content: path})
+
+	atts := app.compose.Attachments()
+	if len(atts) != 1 {
+		t.Fatalf("expected 1 attachment via path PasteMsg, got %d", len(atts))
+	}
+	if atts[0].Path != path {
+		t.Errorf("expected Path=%q, got %q", path, atts[0].Path)
+	}
+}
+
+func TestPasteMsg_PlainText_FallsThroughToTextarea(t *testing.T) {
+	app := NewApp()
+	app.SetClipboardAvailable(true)
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	// In insert mode the compose is focused; mirror that for the test
+	// (textarea ignores input when blurred).
+	_ = app.compose.Focus()
+	// No image, no valid path — bracketed text should land in textarea.
+	app.SetClipboardReader(fakeClipboard(nil, nil))
+
+	app.Update(tea.PasteMsg{Content: "hello world"})
+
+	if len(app.compose.Attachments()) != 0 {
+		t.Errorf("expected no attachment for plain-text paste, got %d", len(app.compose.Attachments()))
+	}
+	// Plain-text bracketed paste is forwarded to the textarea via its
+	// own Update path — it should now contain the pasted text.
+	if !strings.Contains(app.compose.Value(), "hello world") {
+		t.Errorf("expected pasted text in compose, got %q", app.compose.Value())
+	}
+}
+
+func TestPasteMsg_ClipboardUnavailable_FallsThroughToTextarea(t *testing.T) {
+	app := NewApp()
+	app.SetClipboardAvailable(false) // headless / clipboard.Init failed
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	_ = app.compose.Focus()
+
+	app.Update(tea.PasteMsg{Content: "hello"})
+
+	if len(app.compose.Attachments()) != 0 {
+		t.Errorf("expected no attachment when clipboard unavailable, got %d", len(app.compose.Attachments()))
+	}
+	if !strings.Contains(app.compose.Value(), "hello") {
+		t.Errorf("expected pasted text in compose, got %q", app.compose.Value())
 	}
 }

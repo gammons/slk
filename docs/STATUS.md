@@ -52,6 +52,7 @@ Last updated: 2026-04-28
 - [x] Message sending via Slack API
 - [x] Message editing (`E` on own message; reuses compose with stash/restore draft)
 - [x] Message deletion (`D` on own message; centered confirmation overlay)
+- [x] Paste-to-upload via `Ctrl+V` in insert mode (clipboard image, file path, or text fallback) using Slack's V2 file-upload API; multiple attachments + caption send together; status-bar progress + error toasts
 - [x] In-place update on `message_changed` echoes (no duplicate row on edit)
 - [x] Live removal on `message_deleted` echoes from any client
 - [x] @mention autocomplete in compose (inline picker, translates to <@UserID> on send)
@@ -107,7 +108,7 @@ Last updated: 2026-04-28
 
 ### Medium Priority
 - [ ] Search (`:search <query>` or `Ctrl+/`)
-- [ ] File uploads and downloads
+- [ ] File downloads (browser-style "save attachment" command; uploads via Ctrl+V paste are implemented)
 - [x] Self presence and DND/snooze controls (Ctrl+S menu, live status bar segment, notification suppression)
 - [ ] Inline image rendering (Kitty graphics > Sixel > fallback)
 - [ ] OSC 52 clipboard integration (yank message text)

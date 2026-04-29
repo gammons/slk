@@ -3,6 +3,8 @@ package slackclient
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/slack-go/slack"
 )
 
 // EventHandler processes real-time events from Slack.
@@ -10,8 +12,9 @@ type EventHandler interface {
 	// OnMessage delivers a new or edited message. subtype mirrors
 	// Slack's `subtype` field; "" for normal messages, "bot_message"
 	// for bot posts, "thread_broadcast" for thread replies that the
-	// author also sent to the main channel.
-	OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool)
+	// author also sent to the main channel. files carries any file
+	// attachments on the message (empty for plain text messages).
+	OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool, files []slack.File)
 	OnMessageDeleted(channelID, ts string)
 	OnReactionAdded(channelID, ts, userID, emoji string)
 	OnReactionRemoved(channelID, ts, userID, emoji string)
@@ -31,24 +34,26 @@ type wsEvent struct {
 
 // wsMessageEvent represents a message event from the WebSocket.
 type wsMessageEvent struct {
-	Type            string    `json:"type"`
-	SubType         string    `json:"subtype"`
-	Channel         string    `json:"channel"`
-	User            string    `json:"user"`
-	Text            string    `json:"text"`
-	TS              string    `json:"ts"`
-	ThreadTS        string    `json:"thread_ts"`
-	DeletedTS       string    `json:"deleted_ts"`
-	Message         *wsSubMsg `json:"message"`          // for message_changed
-	PreviousMessage *wsSubMsg `json:"previous_message"` // for message_changed
+	Type            string       `json:"type"`
+	SubType         string       `json:"subtype"`
+	Channel         string       `json:"channel"`
+	User            string       `json:"user"`
+	Text            string       `json:"text"`
+	TS              string       `json:"ts"`
+	ThreadTS        string       `json:"thread_ts"`
+	DeletedTS       string       `json:"deleted_ts"`
+	Files           []slack.File `json:"files"`
+	Message         *wsSubMsg    `json:"message"`          // for message_changed
+	PreviousMessage *wsSubMsg    `json:"previous_message"` // for message_changed
 }
 
 // wsSubMsg is the inner message for message_changed events.
 type wsSubMsg struct {
-	User     string `json:"user"`
-	Text     string `json:"text"`
-	TS       string `json:"ts"`
-	ThreadTS string `json:"thread_ts"`
+	User     string       `json:"user"`
+	Text     string       `json:"text"`
+	TS       string       `json:"ts"`
+	ThreadTS string       `json:"thread_ts"`
+	Files    []slack.File `json:"files"`
 }
 
 // wsReactionEvent represents a reaction_added or reaction_removed event.
@@ -114,15 +119,17 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			return
 		}
 		switch msg.SubType {
-		case "", "bot_message", "thread_broadcast":
+		case "", "bot_message", "thread_broadcast", "file_share":
 			// thread_broadcast is a thread reply that the author also
 			// posted to the main channel; render it like a regular
 			// message but with the subtype preserved so the UI can
-			// label it.
-			handler.OnMessage(msg.Channel, msg.User, msg.TS, msg.Text, msg.ThreadTS, msg.SubType, false)
+			// label it. file_share is a regular message that has one
+			// or more files attached (Slack's V2 upload flow uses
+			// this subtype).
+			handler.OnMessage(msg.Channel, msg.User, msg.TS, msg.Text, msg.ThreadTS, msg.SubType, false, msg.Files)
 		case "message_changed":
 			if msg.Message != nil {
-				handler.OnMessage(msg.Channel, msg.Message.User, msg.Message.TS, msg.Message.Text, msg.Message.ThreadTS, "", true)
+				handler.OnMessage(msg.Channel, msg.Message.User, msg.Message.TS, msg.Message.Text, msg.Message.ThreadTS, "", true, msg.Message.Files)
 			}
 		case "message_deleted":
 			handler.OnMessageDeleted(msg.Channel, msg.DeletedTS)

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -21,6 +23,7 @@ import (
 	"github.com/gammons/slk/internal/slackfmt"
 	"github.com/gammons/slk/internal/ui"
 	"github.com/gammons/slk/internal/ui/channelfinder"
+	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/presencemenu"
 	"github.com/gammons/slk/internal/ui/reactionpicker"
@@ -31,6 +34,7 @@ import (
 	"github.com/gammons/slk/internal/ui/workspace"
 	emoji "github.com/kyokomi/emoji/v2"
 	"github.com/slack-go/slack"
+	"golang.design/x/clipboard"
 )
 
 // Build-time version info, injected via -ldflags by GoReleaser.
@@ -76,6 +80,15 @@ type WorkspaceContext struct {
 }
 
 func main() {
+	// Debug log to file when SLK_DEBUG is set; otherwise log goes to
+	// stderr (which is invisible under altscreen).
+	if os.Getenv("SLK_DEBUG") != "" {
+		f, err := os.OpenFile("/tmp/slk-debug.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			log.SetOutput(f)
+			log.Printf("=== slk debug session started ===")
+		}
+	}
 	// Handle simple flags before anything else
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -188,6 +201,30 @@ func run() error {
 
 	notifier := notify.New(cfg.Notifications.Enabled)
 
+	// Initialize the OS clipboard for paste-to-upload.
+	//
+	// Wayland sessions: golang.design/x/clipboard is X11-only and does
+	// not see images placed on the clipboard by Wayland-native apps
+	// (even with XWayland), so we shell out to `wl-paste` instead.
+	// Requires the `wl-clipboard` package.
+	//
+	// Otherwise (X11 / macOS / Windows) use the native library.
+	clipboardOK := true
+	useWaylandClipboard := false
+	if ui.IsWayland() {
+		if ui.HasWlPaste() {
+			useWaylandClipboard = true
+		} else {
+			log.Printf("Warning: WAYLAND_DISPLAY set but wl-paste not on PATH; install wl-clipboard for paste-to-upload. Ctrl+V image paste disabled.")
+			clipboardOK = false
+		}
+	} else {
+		if err := clipboard.Init(); err != nil {
+			log.Printf("Warning: clipboard init failed (%v); Ctrl+V image paste disabled", err)
+			clipboardOK = false
+		}
+	}
+
 	// Initialize cache database
 	dbPath := filepath.Join(dataDir, "cache.db")
 	if err := os.MkdirAll(dataDir, 0700); err != nil {
@@ -226,6 +263,10 @@ func run() error {
 
 	// Create app
 	app := ui.NewApp()
+	app.SetClipboardAvailable(clipboardOK)
+	if useWaylandClipboard {
+		app.SetClipboardReader(ui.WaylandClipboardReader())
+	}
 
 	// Connect to workspaces
 	ctx := context.Background()
@@ -437,6 +478,40 @@ func run() error {
 				log.Printf("Warning: failed to delete message %s/%s: %v", channelID, ts, err)
 			}
 			return ui.MessageDeletedMsg{ChannelID: channelID, TS: ts, Err: err}
+		})
+
+		app.SetUploader(func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd {
+			return func() tea.Msg {
+				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+				defer cancel()
+
+				for i, att := range attachments {
+					p.Send(ui.UploadProgressMsg{Done: i, Total: len(attachments)})
+
+					var reader io.Reader
+					if att.Bytes != nil {
+						reader = bytes.NewReader(att.Bytes)
+					} else {
+						f, err := os.Open(att.Path)
+						if err != nil {
+							return ui.UploadResultMsg{Err: fmt.Errorf("opening %s: %w", att.Filename, err)}
+						}
+						defer f.Close()
+						reader = f
+					}
+
+					currentCaption := ""
+					if i == len(attachments)-1 {
+						currentCaption = caption
+					}
+
+					if _, err := client.UploadFile(ctx, channelID, threadTS, att.Filename, reader, att.Size, currentCaption); err != nil {
+						return ui.UploadResultMsg{Err: fmt.Errorf("uploading %s (%d/%d): %w", att.Filename, i+1, len(attachments), err)}
+					}
+				}
+				p.Send(ui.UploadProgressMsg{Done: len(attachments), Total: len(attachments)})
+				return ui.UploadResultMsg{Err: nil}
+			}
 		})
 
 		app.SetOlderMessagesFetcher(func(channelID, oldestTS string) tea.Msg {
@@ -1273,7 +1348,7 @@ type rtmEventHandler struct {
 	wsCtx *WorkspaceContext
 }
 
-func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool) {
+func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool, files []slack.File) {
 	// Cache every message to SQLite, regardless of active workspace
 	h.db.UpsertMessage(cache.Message{
 		TS:          ts,
@@ -1336,14 +1411,15 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	h.program.Send(ui.NewMessageMsg{
 		ChannelID: channelID,
 		Message: messages.MessageItem{
-			TS:        ts,
-			UserID:    userID,
-			UserName:  userName,
-			Text:      text,
-			Timestamp: formatTimestamp(ts, h.tsFormat),
-			ThreadTS:  threadTS,
-			Subtype:   subtype,
-			IsEdited:  edited,
+			TS:          ts,
+			UserID:      userID,
+			UserName:    userName,
+			Text:        text,
+			Timestamp:   formatTimestamp(ts, h.tsFormat),
+			ThreadTS:    threadTS,
+			Subtype:     subtype,
+			IsEdited:    edited,
+			Attachments: extractAttachments(files),
 		},
 	})
 }

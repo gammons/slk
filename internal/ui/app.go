@@ -3,8 +3,12 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"image/color"
 	"log"
+	"mime"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +16,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"golang.design/x/clipboard"
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/emoji"
@@ -364,6 +369,24 @@ type WSMessageDeletedMsg struct {
 	TS        string
 }
 
+// UploadProgressMsg is dispatched out-of-band by the uploader as
+// each file completes. App updates the status-bar toast.
+type UploadProgressMsg struct {
+	Done  int
+	Total int
+}
+
+// UploadResultMsg carries the final result of an upload batch.
+type UploadResultMsg struct {
+	Err error
+}
+
+// UploadFunc performs an upload of one or more files to a channel
+// (with optional thread). It returns a tea.Cmd whose terminal
+// message is UploadResultMsg; intermediate UploadProgressMsg events
+// are dispatched out-of-band via program.Send.
+type UploadFunc func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd
+
 // MessageEditFunc performs the chat.update API call. Returns a tea.Msg
 // (typically MessageEditedMsg) describing the result.
 type MessageEditFunc func(channelID, ts, newText string) tea.Msg
@@ -413,6 +436,14 @@ type ChannelJoinFailedMsg struct {
 	Name string
 	Err  error
 }
+
+// clipboardReader abstracts clipboard.Read so tests can inject fake
+// clipboard contents. Production code uses the real clipboard.Read.
+type clipboardReader func(format clipboard.Format) []byte
+
+// defaultClipboardReader is the real clipboard read function. It's
+// overridable per-App via SetClipboardReader for tests.
+var defaultClipboardReader clipboardReader = clipboard.Read
 
 type App struct {
 	// Sub-models
@@ -472,6 +503,16 @@ type App struct {
 	messageSender        MessageSendFunc
 	messageEditor        MessageEditFunc
 	messageDeleter       MessageDeleteFunc
+	uploader             UploadFunc
+
+	// clipboardAvailable is set at startup based on the result of
+	// clipboard.Init(). When false, Ctrl+V smart-paste is a no-op.
+	clipboardAvailable bool
+
+	// clipboardRead is the function used by smartPaste to read OS
+	// clipboard contents. Tests inject fakes via SetClipboardReader.
+	clipboardRead clipboardReader
+
 	threadFetcher        ThreadFetchFunc
 	threadReplySender    ThreadReplySendFunc
 	channelJoiner        JoinChannelFunc
@@ -579,6 +620,7 @@ func NewApp() *App {
 		threadsDirtyDebounce: 150 * time.Millisecond,
 		userNames:            map[string]string{},
 		statusByTeam:         map[string]workspaceStatus{},
+		clipboardRead:        defaultClipboardReader,
 	}
 	// Seed the picker with built-in emojis so the autocomplete works even
 	// before the first workspace finishes loading customs.
@@ -801,13 +843,27 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}))
 
 	case tea.PasteMsg:
-		// Bracketed-paste from the terminal. Forward the paste to the
-		// active compose when in insert mode. In other modes paste is
-		// ignored — there's no reasonable destination (the messages /
-		// thread panes are read-only, and the various finders use
-		// per-keystroke filtering rather than a paste-friendly buffer).
+		// Bracketed-paste from the terminal. First check the OS
+		// clipboard for an image (terminals can't deliver image bytes
+		// via bracketed paste — only the text representation — so the
+		// image data is still sitting in the clipboard waiting for us
+		// to read directly). Also test the bracketed text as a file
+		// path. If neither matches, fall through to forwarding the
+		// paste verbatim into the active compose's textarea.
 		if a.mode != ModeInsert {
 			break
+		}
+		if a.clipboardAvailable {
+			target := &a.compose
+			if a.focusedPanel == PanelThread && a.threadVisible {
+				target = &a.threadCompose
+			}
+			if consumed, cmd := a.tryAttachFromClipboard(target, msg.Content); consumed {
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				break
+			}
 		}
 		if a.focusedPanel == PanelThread && a.threadVisible {
 			var cmd tea.Cmd
@@ -907,7 +963,30 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return statusbar.CopiedClearMsg{}
 		}))
 
+	case UploadProgressMsg:
+		a.statusbar.SetToast(fmt.Sprintf("Uploading %d/%d…", msg.Done, msg.Total))
+
+	case UploadResultMsg:
+		a.compose.SetUploading(false)
+		a.threadCompose.SetUploading(false)
+		if msg.Err != nil {
+			cmds = append(cmds, a.uploadToastCmd(
+				"Upload failed: "+truncateReason(msg.Err.Error(), 40),
+				3*time.Second,
+			))
+			break
+		}
+		a.compose.ClearAttachments()
+		a.threadCompose.ClearAttachments()
+		a.compose.Reset()
+		a.threadCompose.Reset()
+		cmds = append(cmds, a.uploadToastCmd("Sent", 2*time.Second))
+
 	case ChannelSelectedMsg:
+		if a.compose.Uploading() || a.threadCompose.Uploading() {
+			cmds = append(cmds, a.uploadToastCmd("Upload in progress", 2*time.Second))
+			break
+		}
 		a.cancelEdit()
 		// Picking a channel always exits the Threads view.
 		a.view = ViewChannels
@@ -1179,6 +1258,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sidebar.SetItems(items)
 
 	case WorkspaceSwitchedMsg:
+		if a.compose.Uploading() || a.threadCompose.Uploading() {
+			cmds = append(cmds, a.uploadToastCmd("Upload in progress", 2*time.Second))
+			break
+		}
 		a.cancelEdit()
 		// Always land in ViewChannels and drop any per-workspace
 		// threads-view state so stale summaries / unread badges from the
@@ -1624,6 +1707,9 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
+	if (a.compose.Uploading() || a.threadCompose.Uploading()) && key.Matches(msg, a.keys.Escape) {
+		return a.uploadToastCmd("Upload in progress", 2*time.Second)
+	}
 	if a.editing.active && key.Matches(msg, a.keys.Escape) {
 		// If a picker is active in the relevant compose, close it
 		// instead of cancelling the edit.
@@ -1678,6 +1764,10 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 
 	code := msg.Key().Code
 	mod := msg.Key().Mod
+	isPaste := code == 'v' && mod == tea.ModCtrl
+	if isPaste {
+		return a.smartPaste()
+	}
 	// Plain Enter sends; Shift+Enter (and Ctrl+J as a fallback for terminals
 	// that don't disambiguate modifiers) inserts a newline.
 	isSend := code == tea.KeyEnter && !mod.Contains(tea.ModShift)
@@ -1700,6 +1790,9 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 			return cmd
 		}
 		if isSend {
+			if len(a.threadCompose.Attachments()) > 0 {
+				return a.submitWithAttachments(&a.threadCompose)
+			}
 			if a.editing.active && a.editing.panel == PanelThread {
 				return a.submitEdit(a.threadCompose.Value(), a.threadCompose.TranslateMentionsForSend(a.threadCompose.Value()))
 			}
@@ -1739,6 +1832,9 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 		return cmd
 	}
 	if isSend {
+		if len(a.compose.Attachments()) > 0 {
+			return a.submitWithAttachments(&a.compose)
+		}
 		if a.editing.active && a.editing.panel == PanelMessages {
 			return a.submitEdit(a.compose.Value(), a.compose.TranslateMentionsForSend(a.compose.Value()))
 		}
@@ -2771,6 +2867,30 @@ func (a *App) SetMessageDeleter(fn MessageDeleteFunc) {
 	a.messageDeleter = fn
 }
 
+// SetUploader wires the upload callback used by Ctrl+V smart-paste
+// when the user submits with attachments.
+func (a *App) SetUploader(fn UploadFunc) {
+	a.uploader = fn
+}
+
+// SetClipboardAvailable signals whether the OS clipboard library
+// initialized successfully. When false, the smart-paste code path
+// is short-circuited.
+func (a *App) SetClipboardAvailable(ok bool) {
+	a.clipboardAvailable = ok
+}
+
+// SetClipboardReader replaces the clipboard read function. Used by
+// tests to inject canned clipboard contents. Pass nil to restore
+// the default real clipboard reader.
+func (a *App) SetClipboardReader(fn clipboardReader) {
+	if fn == nil {
+		a.clipboardRead = defaultClipboardReader
+		return
+	}
+	a.clipboardRead = fn
+}
+
 // SetThreadFetcher sets the callback used to load thread replies.
 func (a *App) SetThreadFetcher(fn ThreadFetchFunc) {
 	a.threadFetcher = fn
@@ -3531,6 +3651,133 @@ func (a *App) selectedMessageContext() (channelID, ts, text, userID string, pane
 	}
 }
 
+const maxAttachmentSize = 10 * 1024 * 1024 // 10 MB cap
+
+// submitWithAttachments dispatches the pending attachments + caption
+// on the given compose to the configured uploader. It refuses if an
+// edit is in progress (chat.update doesn't support file attachments)
+// or if there's no active channel / no uploader configured. On
+// dispatch, the compose's uploading flag is set so the UI can show
+// progress; the actual UploadResultMsg arm in Update clears it.
+func (a *App) submitWithAttachments(c *compose.Model) tea.Cmd {
+	if a.editing.active {
+		return a.uploadToastCmd("Cannot attach files to an edit (send a new message)", 3*time.Second)
+	}
+	attachments := c.Attachments()
+	if len(attachments) == 0 {
+		return nil
+	}
+	caption := strings.TrimSpace(c.Value())
+
+	var channelID, threadTS string
+	if c == &a.threadCompose {
+		channelID = a.threadPanel.ChannelID()
+		threadTS = a.threadPanel.ThreadTS()
+	} else {
+		channelID = a.activeChannelID
+		threadTS = ""
+	}
+	if channelID == "" || a.uploader == nil {
+		return a.uploadToastCmd("Cannot upload: no active channel", 2*time.Second)
+	}
+
+	c.SetUploading(true)
+	cmds := []tea.Cmd{
+		a.uploader(channelID, threadTS, caption, attachments),
+		a.uploadToastCmd(fmt.Sprintf("Uploading 0/%d…", len(attachments)), 30*time.Second),
+	}
+	return tea.Batch(cmds...)
+}
+
+// smartPaste inspects the OS clipboard and dispatches:
+//  1. PNG image bytes → attach as image with auto-generated filename.
+//  2. Single-line file-path text → attach by path.
+//  3. Anything else → insert text into the active compose.
+//
+// Returns a tea.Cmd that emits the appropriate status-bar toast.
+// No-op if clipboard.Init() failed at startup.
+func (a *App) smartPaste() tea.Cmd {
+	if !a.clipboardAvailable {
+		return nil
+	}
+
+	// Resolve the active compose pointer.
+	target := &a.compose
+	if a.focusedPanel == PanelThread && a.threadVisible {
+		target = &a.threadCompose
+	}
+
+	textBytes := a.clipboardRead(clipboard.FmtText)
+	if consumed, cmd := a.tryAttachFromClipboard(target, string(textBytes)); consumed {
+		return cmd
+	}
+
+	// Text fallback — paste verbatim into the active compose.
+	if len(textBytes) > 0 {
+		target.SetValue(target.Value() + string(textBytes))
+	}
+	return nil
+}
+
+// tryAttachFromClipboard inspects the OS clipboard for an image and the
+// supplied text for a file-path reference, attaching the first match
+// to the given compose. Returns consumed=true if an attachment (or an
+// explicit refusal toast) was produced; false if neither image nor
+// path applied — in which case the caller should fall through to its
+// own text-paste behavior.
+//
+// pathCandidate is the text source to test against resolveFilePath.
+// For keystroke smart-paste this is the OS clipboard's text; for
+// bracketed-paste this is the PasteMsg's payload.
+func (a *App) tryAttachFromClipboard(target *compose.Model, pathCandidate string) (bool, tea.Cmd) {
+	// 1. Image bytes from the OS clipboard.
+	if imgBytes := a.clipboardRead(clipboard.FmtImage); len(imgBytes) > 0 {
+		if int64(len(imgBytes)) > maxAttachmentSize {
+			return true, a.uploadToastCmd(
+				fmt.Sprintf("Image too large (%s > 10 MB limit)", humanSize(int64(len(imgBytes)))),
+				3*time.Second,
+			)
+		}
+		filename := "slk-paste-" + time.Now().Format("2006-01-02-15-04-05") + ".png"
+		target.AddAttachment(compose.PendingAttachment{
+			Filename: filename,
+			Bytes:    imgBytes,
+			Mime:     "image/png",
+			Size:     int64(len(imgBytes)),
+		})
+		return true, a.uploadToastCmd(
+			fmt.Sprintf("Attached: %s (%s)", filename, humanSize(int64(len(imgBytes)))),
+			2*time.Second,
+		)
+	}
+
+	// 2. File-path text.
+	if path, ok := resolveFilePath(pathCandidate); ok {
+		info, err := os.Stat(path)
+		if err == nil && info.Mode().IsRegular() {
+			if info.Size() > maxAttachmentSize {
+				return true, a.uploadToastCmd("File too large (>10 MB limit)", 3*time.Second)
+			}
+			if info.Size() == 0 {
+				return true, a.uploadToastCmd("Empty file", 2*time.Second)
+			}
+			filename := filepath.Base(path)
+			target.AddAttachment(compose.PendingAttachment{
+				Filename: filename,
+				Path:     path,
+				Mime:     mime.TypeByExtension(filepath.Ext(path)),
+				Size:     info.Size(),
+			})
+			return true, a.uploadToastCmd(
+				fmt.Sprintf("Attached: %s (%s)", filename, humanSize(info.Size())),
+				2*time.Second,
+			)
+		}
+	}
+
+	return false, nil
+}
+
 // beginEditOfSelected starts editing the currently-selected message
 // in the focused pane. Returns a no-op + status toast if not owned;
 // returns nil if no message is selected.
@@ -3637,4 +3884,56 @@ func truncateReason(s string, max int) string {
 		return s
 	}
 	return s[:max] + "…"
+}
+
+// humanSize formats a byte count as "12 KB", "3.4 MB", or "<1 KB".
+func humanSize(size int64) string {
+	const kb = 1024
+	const mb = 1024 * kb
+	switch {
+	case size >= mb:
+		return fmt.Sprintf("%.1f MB", float64(size)/float64(mb))
+	case size >= kb:
+		return fmt.Sprintf("%d KB", size/kb)
+	default:
+		return "<1 KB"
+	}
+}
+
+// resolveFilePath inspects clipboard text and returns a cleaned,
+// absolute file path if it looks like a single-line existing-file
+// reference. Returns ok=false on multi-line input, oversized input,
+// non-absolute and non-./-relative paths, or paths that don't
+// expand. The caller is responsible for the os.Stat / IsRegular
+// check and the size check.
+func resolveFilePath(text string) (string, bool) {
+	s := strings.TrimSpace(text)
+	if s == "" || strings.ContainsAny(s, "\n\r") || len(s) > 4096 {
+		return "", false
+	}
+	if strings.HasPrefix(s, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", false
+		}
+		s = filepath.Join(home, s[2:])
+	}
+	if !filepath.IsAbs(s) && !strings.HasPrefix(s, "./") {
+		return "", false
+	}
+	return filepath.Clean(s), true
+}
+
+// uploadToastCmd builds a tea.Cmd that sets the status bar to the
+// given message and schedules a CopiedClearMsg after dur.
+func (a *App) uploadToastCmd(text string, dur time.Duration) tea.Cmd {
+	return tea.Batch(
+		func() tea.Msg {
+			a.statusbar.SetToast(text)
+			return nil
+		},
+		tea.Tick(dur, func(time.Time) tea.Msg {
+			return statusbar.CopiedClearMsg{}
+		}),
+	)
 }

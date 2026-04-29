@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/slack-go/slack"
 )
 
 type dndChangeRecord struct {
@@ -22,7 +24,7 @@ type mockEventHandler struct {
 	dndChanges          []dndChangeRecord
 }
 
-func (m *mockEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool) {
+func (m *mockEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool, files []slack.File) {
 	m.messages = append(m.messages, text)
 	m.subtypes = append(m.subtypes, subtype)
 }
@@ -55,7 +57,7 @@ func TestEventHandlerInterface(t *testing.T) {
 	handler := &mockEventHandler{}
 	var _ EventHandler = handler
 
-	handler.OnMessage("C1", "U1", "123.456", "hello", "", "", false)
+	handler.OnMessage("C1", "U1", "123.456", "hello", "", "", false, nil)
 	if len(handler.messages) != 1 || handler.messages[0] != "hello" {
 		t.Error("expected message to be recorded")
 	}

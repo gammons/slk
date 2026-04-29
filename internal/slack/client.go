@@ -40,6 +40,7 @@ type SlackAPI interface {
 	EndSnoozeContext(ctx context.Context) (*slack.DNDStatus, error)
 	EndDNDContext(ctx context.Context) error
 	GetDNDInfoContext(ctx context.Context, user *string, options ...slack.ParamOption) (*slack.DNDStatus, error)
+	UploadFileContext(ctx context.Context, params slack.UploadFileParameters) (*slack.FileSummary, error)
 }
 
 // Client wraps the slack-go library, providing RTM connectivity
@@ -411,6 +412,46 @@ func (c *Client) SendMessage(ctx context.Context, channelID, text string) (strin
 		return "", fmt.Errorf("sending message: %w", err)
 	}
 	return ts, nil
+}
+
+// UploadFile uploads a single file to a channel (and optional thread)
+// using Slack's V2 external-upload flow. The slack-go library's
+// UploadFileContext (named for the underlying file.upload.v2 API)
+// handles the three internal steps:
+// getUploadURLExternal -> PUT -> completeUploadExternal.
+//
+// caption, when non-empty, is attached as the file's initial_comment.
+// For multi-file batches the caller should set caption on the LAST
+// file only (Slack groups files completed in one share into one
+// message; sequential single-file uploads can't be grouped).
+//
+// size is int64 (matching os.FileInfo.Size()) and is narrowed to int
+// for slack-go. Callers must enforce a reasonable upper bound; this
+// wrapper does not.
+func (c *Client) UploadFile(
+	ctx context.Context,
+	channelID, threadTS, filename string,
+	r io.Reader,
+	size int64,
+	caption string,
+) (*slack.FileSummary, error) {
+	params := slack.UploadFileParameters{
+		Filename: filename,
+		Reader:   r,
+		FileSize: int(size),
+		Channel:  channelID,
+	}
+	if threadTS != "" {
+		params.ThreadTimestamp = threadTS
+	}
+	if caption != "" {
+		params.InitialComment = caption
+	}
+	f, err := c.api.UploadFileContext(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("uploading file %q: %w", filename, err)
+	}
+	return f, nil
 }
 
 // UnreadInfo holds the unread state for a single channel.
