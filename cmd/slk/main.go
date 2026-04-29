@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -21,6 +23,7 @@ import (
 	"github.com/gammons/slk/internal/slackfmt"
 	"github.com/gammons/slk/internal/ui"
 	"github.com/gammons/slk/internal/ui/channelfinder"
+	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/presencemenu"
 	"github.com/gammons/slk/internal/ui/reactionpicker"
@@ -31,6 +34,7 @@ import (
 	"github.com/gammons/slk/internal/ui/workspace"
 	emoji "github.com/kyokomi/emoji/v2"
 	"github.com/slack-go/slack"
+	"golang.design/x/clipboard"
 )
 
 // Build-time version info, injected via -ldflags by GoReleaser.
@@ -188,6 +192,15 @@ func run() error {
 
 	notifier := notify.New(cfg.Notifications.Enabled)
 
+	// Initialize the OS clipboard for Ctrl+V paste-to-upload. On
+	// headless Linux or environments without X11/XWayland, this fails
+	// gracefully — Ctrl+V smart-paste then becomes a no-op.
+	clipboardOK := true
+	if err := clipboard.Init(); err != nil {
+		log.Printf("Warning: clipboard init failed (%v); Ctrl+V image paste disabled", err)
+		clipboardOK = false
+	}
+
 	// Initialize cache database
 	dbPath := filepath.Join(dataDir, "cache.db")
 	if err := os.MkdirAll(dataDir, 0700); err != nil {
@@ -226,6 +239,7 @@ func run() error {
 
 	// Create app
 	app := ui.NewApp()
+	app.SetClipboardAvailable(clipboardOK)
 
 	// Connect to workspaces
 	ctx := context.Background()
@@ -437,6 +451,40 @@ func run() error {
 				log.Printf("Warning: failed to delete message %s/%s: %v", channelID, ts, err)
 			}
 			return ui.MessageDeletedMsg{ChannelID: channelID, TS: ts, Err: err}
+		})
+
+		app.SetUploader(func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd {
+			return func() tea.Msg {
+				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+				defer cancel()
+
+				for i, att := range attachments {
+					p.Send(ui.UploadProgressMsg{Done: i, Total: len(attachments)})
+
+					var reader io.Reader
+					if att.Bytes != nil {
+						reader = bytes.NewReader(att.Bytes)
+					} else {
+						f, err := os.Open(att.Path)
+						if err != nil {
+							return ui.UploadResultMsg{Err: fmt.Errorf("opening %s: %w", att.Filename, err)}
+						}
+						defer f.Close()
+						reader = f
+					}
+
+					currentCaption := ""
+					if i == len(attachments)-1 {
+						currentCaption = caption
+					}
+
+					if _, err := client.UploadFile(ctx, channelID, threadTS, att.Filename, reader, att.Size, currentCaption); err != nil {
+						return ui.UploadResultMsg{Err: fmt.Errorf("uploading %s (%d/%d): %w", att.Filename, i+1, len(attachments), err)}
+					}
+				}
+				p.Send(ui.UploadProgressMsg{Done: len(attachments), Total: len(attachments)})
+				return ui.UploadResultMsg{Err: nil}
+			}
 		})
 
 		app.SetOlderMessagesFetcher(func(channelID, oldestTS string) tea.Msg {
