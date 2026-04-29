@@ -369,6 +369,26 @@ func run() error {
 			}
 		})
 
+		app.SetMessageEditor(func(channelID, ts, text string) tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			err := client.EditMessage(ctx, channelID, ts, text)
+			if err != nil {
+				log.Printf("Warning: failed to edit message %s/%s: %v", channelID, ts, err)
+			}
+			return ui.MessageEditedMsg{ChannelID: channelID, TS: ts, Err: err}
+		})
+
+		app.SetMessageDeleter(func(channelID, ts string) tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			err := client.RemoveMessage(ctx, channelID, ts)
+			if err != nil {
+				log.Printf("Warning: failed to delete message %s/%s: %v", channelID, ts, err)
+			}
+			return ui.MessageDeletedMsg{ChannelID: channelID, TS: ts, Err: err}
+		})
+
 		app.SetOlderMessagesFetcher(func(channelID, oldestTS string) tea.Msg {
 			msgItems := fetchOlderMessages(client, channelID, oldestTS, db, userNames, tsFormat, avatarCache)
 			return ui.OlderMessagesLoadedMsg{
