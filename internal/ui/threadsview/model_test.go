@@ -192,6 +192,39 @@ func TestView_SnapsToSelectedOnOverflow(t *testing.T) {
 	}
 }
 
+// Selected rows must render with the green left-border (▌ in Accent),
+// matching the messages/thread-panel selection convention. Non-selected
+// rows reserve the same column with a background-colored (invisible)
+// border for layout consistency.
+func TestView_SelectedRowHasGreenLeftBorder(t *testing.T) {
+	m := New(map[string]string{}, "USELF")
+	m.SetSummaries(sampleSummaries())
+	out := m.View(40, 60)
+
+	// Find the line containing the first card's channel name. That line's
+	// first column should be the ▌ glyph styled in Accent.
+	var line string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "general") {
+			line = l
+			break
+		}
+	}
+	if line == "" {
+		t.Fatalf("no line containing 'general' in output:\n%s", out)
+	}
+	if !strings.Contains(line, "▌") {
+		t.Errorf("selected row should contain the ▌ left-border glyph; got %q", line)
+	}
+	// The green color is encoded as an ANSI escape in the rendered string.
+	// styles.Accent's color contains the substring "C8" (default #50C878);
+	// custom themes may differ, so just assert the glyph and the presence
+	// of an ANSI color escape preceding it.
+	if !strings.Contains(line, "\x1b[") {
+		t.Errorf("expected ANSI escape (color) on selected row border; got %q", line)
+	}
+}
+
 // All rendered lines (including blank separator lines) must be exactly
 // `width` columns wide so the panel composes cleanly with borders.
 func TestView_AllLinesUniformWidth(t *testing.T) {

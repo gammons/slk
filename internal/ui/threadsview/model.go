@@ -39,6 +39,30 @@ func unreadDotStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(styles.Error).Bold(true)
 }
 
+// thickLeftBorder mirrors the messages package convention: a 1-column-wide
+// left border using "▌". Selected rows render with Accent (green) foreground;
+// non-selected rows render with the panel background so the column is
+// reserved (keeps content alignment uniform) but invisible.
+var thickLeftBorder = lipgloss.Border{Left: "▌"}
+
+func borderInvisStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		BorderStyle(thickLeftBorder).BorderLeft(true).
+		BorderForeground(styles.Background).
+		BorderBackground(styles.Background)
+}
+
+func borderSelectStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		BorderStyle(thickLeftBorder).BorderLeft(true).
+		BorderForeground(styles.Accent).
+		BorderBackground(styles.Background)
+}
+
+func borderFillStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(styles.Background)
+}
+
 // Model holds the threads-list state.
 type Model struct {
 	summaries  []cache.ThreadSummary
@@ -359,18 +383,13 @@ func blankLine(width int) string {
 }
 
 // renderCard returns the 3 lines of a single thread row: header, preview,
-// footer. Each line is rendered through a width-bounded style so the final
-// output is exactly `width` columns wide regardless of the inner content.
-// The selected row uses styles.ChannelSelected (bold + padding); non-
-// selected rows use styles.MessageText.
+// footer. Selection is indicated by a green left border (▌) — the same
+// mechanism used for messages and thread replies. Non-selected rows
+// reserve the same 1-column gutter with a background-colored (invisible)
+// border so column alignment is uniform.
 func (m *Model) renderCard(s cache.ThreadSummary, width int, selected bool) []string {
-	rowStyle := styles.MessageText
-	if selected {
-		rowStyle = styles.ChannelSelected
-	}
-	// Reserve space for the row style's horizontal frame (padding/border).
-	// ChannelSelected has Padding(0, 1); MessageText has none.
-	contentWidth := width - rowStyle.GetHorizontalFrameSize()
+	// The left border occupies 1 column; content fills the remainder.
+	contentWidth := width - 1
 	if contentWidth < 1 {
 		contentWidth = 1
 	}
@@ -402,22 +421,29 @@ func (m *Model) renderCard(s cache.ThreadSummary, width int, selected bool) []st
 	}
 	previewLine := clipToWidth("  > "+previewBody, contentWidth)
 
-	// Footer: "  N replies · last by <user> <relTime>". Rendered through
-	// the muted style with .Width(width) so it fills the row even though
-	// the row style itself doesn't apply.
+	// Footer: "  N replies · last by <user> <relTime>".
 	replyWord := "replies"
 	if s.ReplyCount == 1 {
 		replyWord = "reply"
 	}
 	lastBy := m.resolveUser(s.LastReplyBy)
 	footerText := "  " + strconv.Itoa(s.ReplyCount) + " " + replyWord + " · last by " + lastBy + " " + formatRelTime(s.LastReplyTS)
-	footerText = clipToWidth(footerText, width) // muted style has no padding
+	footerText = clipToWidth(footerText, contentWidth)
 
-	headerLine := rowStyle.Width(width).Render(header)
-	previewOut := rowStyle.Width(width).Render(previewLine)
-	footerOut := mutedStyle().Width(width).Render(footerText)
+	// Pick border color (green when selected, bg-colored when not) and
+	// fill content to contentWidth so the border-rendered output is
+	// exactly `width` columns wide. Same pattern used by messages.Model.
+	borderStyle := borderInvisStyle()
+	if selected {
+		borderStyle = borderSelectStyle()
+	}
+	fill := borderFillStyle().Width(contentWidth)
 
-	return []string{headerLine, previewOut, footerOut}
+	headerOut := borderStyle.Render(fill.Render(header))
+	previewOut := borderStyle.Render(fill.Render(previewLine))
+	footerOut := borderStyle.Render(fill.Foreground(styles.TextMuted).Render(footerText))
+
+	return []string{headerOut, previewOut, footerOut}
 }
 
 // channelGlyph returns the leading glyph for a channel row, matching the
