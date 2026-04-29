@@ -12,6 +12,8 @@ const (
 	ModeReactionPicker
 	ModeWorkspaceFinder
 	ModeThemeSwitcher
+	ModePresenceMenu
+	ModePresenceCustomSnooze
 )
 
 func (m Mode) String() string {
@@ -32,6 +34,10 @@ func (m Mode) String() string {
 		return "WORKSPACE"
 	case ModeThemeSwitcher:
 		return "THEME"
+	case ModePresenceMenu:
+		return "STATUS"
+	case ModePresenceCustomSnooze:
+		return "STATUS-INPUT"
 	default:
 		return "UNKNOWN"
 	}

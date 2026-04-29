@@ -33,6 +33,7 @@ type KeyMap struct {
 	WorkspaceFinder     key.Binding
 	ThemeSwitcher       key.Binding
 	ThemeSwitcherGlobal key.Binding
+	PresenceMenu        key.Binding
 }
 
 func DefaultKeyMap() KeyMap {
@@ -66,5 +67,6 @@ func DefaultKeyMap() KeyMap {
 		WorkspaceFinder:     key.NewBinding(key.WithKeys("ctrl+w"), key.WithHelp("ctrl+w", "switch workspace")),
 		ThemeSwitcher:       key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "switch theme (per workspace)")),
 		ThemeSwitcherGlobal: key.NewBinding(key.WithKeys("ctrl+shift+y"), key.WithHelp("ctrl+shift+y", "set default theme")),
+		PresenceMenu:        key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "set status")),
 	}
 }

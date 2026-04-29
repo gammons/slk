@@ -5,6 +5,7 @@ import (
 	"context"
 	"image/color"
 	"log"
+	"strconv"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -17,6 +18,7 @@ import (
 	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/presencemenu"
 	"github.com/gammons/slk/internal/ui/reactionpicker"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/statusbar"
@@ -202,11 +204,23 @@ type (
 		DNDEnabled bool
 		DNDEndTS   time.Time
 	}
+	// ToastMsg sets a transient string in the status bar's toast slot. Used
+	// for short error notices (e.g. failed status change). Auto-clears after
+	// 3 seconds via a CopiedClearMsg tick scheduled by the App.
+	ToastMsg struct{ Text string }
 )
 
 type loadingEntry struct {
 	TeamName string
 	Status   string // "connecting", "ready", "failed"
+}
+
+// workspaceStatus caches the latest StatusChangeMsg per team so the
+// status bar can refresh on workspace switch without round-tripping.
+type workspaceStatus struct {
+	Presence   string
+	DNDEnabled bool
+	DNDEndTS   time.Time
 }
 
 // dragState captures an in-progress mouse drag for text selection. The
@@ -349,6 +363,7 @@ type App struct {
 	channelFinder   channelfinder.Model
 	workspaceFinder workspacefinder.Model
 	themeSwitcher   themeswitcher.Model
+	presenceMenu    presencemenu.Model
 	threadPanel     *thread.Model
 	threadCompose   compose.Model
 	threadsView     threadsview.Model
@@ -435,6 +450,12 @@ type App struct {
 	themeSaveFn    func(name string, scope themeswitcher.ThemeScope)
 	themeOverrides config.Theme
 
+	// Presence / DND status
+	presenceCustomBuf string                                              // numeric input buffer for custom snooze
+	statusByTeam      map[string]workspaceStatus                          // last known status per workspace
+	setStatusFn       func(action presencemenu.Action, snoozeMinutes int) // callback for API call
+	dndTickerOn       bool                                                // guards against parallel DNDTickMsg chains
+
 	// Typing indicators
 	typingUsers    map[string]map[string]time.Time // channelID -> userID -> expiresAt
 	typingTickerOn bool
@@ -464,6 +485,7 @@ func NewApp() *App {
 		channelFinder:        channelfinder.New(),
 		workspaceFinder:      workspacefinder.New(),
 		themeSwitcher:        themeswitcher.New(),
+		presenceMenu:         presencemenu.New(),
 		threadPanel:          thread.New(),
 		threadCompose:        compose.New("thread"),
 		threadsView:          threadsview.New(nil, ""),
@@ -476,6 +498,7 @@ func NewApp() *App {
 		typingUsers:          make(map[string]map[string]time.Time),
 		threadsDirtyDebounce: 150 * time.Millisecond,
 		userNames:            map[string]string{},
+		statusByTeam:         map[string]workspaceStatus{},
 	}
 	// Seed the picker with built-in emojis so the autocomplete works even
 	// before the first workspace finishes loading customs.
@@ -958,6 +981,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.SetCustomEmoji(msg.CustomEmoji)
 		a.currentUserID = msg.UserID
 		a.activeTeamID = msg.TeamID
+		if st, ok := a.statusByTeam[a.activeTeamID]; ok {
+			a.statusbar.SetStatus(st.Presence, st.DNDEnabled, st.DNDEndTS)
+		} else {
+			a.statusbar.SetStatus("", false, time.Time{})
+		}
 		// Apply per-workspace theme. Must run on Update goroutine so the
 		// component cache invalidations and compose-style refreshes below
 		// take effect on the next render.
@@ -1024,6 +1052,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.SetCustomEmoji(msg.CustomEmoji)
 			a.currentUserID = msg.UserID
 			a.activeTeamID = msg.TeamID
+			if st, ok := a.statusByTeam[a.activeTeamID]; ok {
+				a.statusbar.SetStatus(st.Presence, st.DNDEnabled, st.DNDEndTS)
+			} else {
+				a.statusbar.SetStatus("", false, time.Time{})
+			}
 			a.workspaceRail.SelectByID(msg.TeamID)
 			if len(msg.Channels) > 0 {
 				first := msg.Channels[0]
@@ -1107,6 +1140,59 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PresenceChangeMsg:
 		a.sidebar.UpdatePresenceByUser(msg.UserID, msg.Presence)
 
+	case StatusChangeMsg:
+		st := workspaceStatus{
+			Presence:   msg.Presence,
+			DNDEnabled: msg.DNDEnabled,
+			DNDEndTS:   msg.DNDEndTS,
+		}
+		a.statusByTeam[msg.TeamID] = st
+		if msg.TeamID == a.activeTeamID {
+			a.statusbar.SetStatus(st.Presence, st.DNDEnabled, st.DNDEndTS)
+			// Start the once-a-minute countdown tick if DND is active.
+			// Guard with dndTickerOn (mirroring typingTickerOn) so repeated
+			// StatusChangeMsgs don't accumulate parallel tick chains.
+			if st.DNDEnabled && !st.DNDEndTS.IsZero() && time.Now().Before(st.DNDEndTS) && !a.dndTickerOn {
+				a.dndTickerOn = true
+				cmds = append(cmds, tea.Tick(time.Minute, func(time.Time) tea.Msg {
+					return statusbar.DNDTickMsg{}
+				}))
+			}
+		}
+
+	case statusbar.DNDTickMsg:
+		st, ok := a.statusByTeam[a.activeTeamID]
+		if !ok {
+			a.dndTickerOn = false
+			break
+		}
+		if st.DNDEnabled && !st.DNDEndTS.IsZero() && !time.Now().Before(st.DNDEndTS) {
+			// DND expired locally — flip the flag so the segment falls back to presence.
+			st.DNDEnabled = false
+			st.DNDEndTS = time.Time{}
+			a.statusByTeam[a.activeTeamID] = st
+			a.statusbar.SetStatus(st.Presence, false, time.Time{})
+			a.dndTickerOn = false
+			break
+		}
+		a.statusbar.SetStatus(st.Presence, st.DNDEnabled, st.DNDEndTS)
+		if st.DNDEnabled && !st.DNDEndTS.IsZero() {
+			// still in DND — reschedule the tick (dndTickerOn stays true)
+			cmds = append(cmds, tea.Tick(time.Minute, func(time.Time) tea.Msg {
+				return statusbar.DNDTickMsg{}
+			}))
+		} else {
+			// Active workspace no longer in DND (e.g. user switched away
+			// from a DND'd workspace). Stop the chain.
+			a.dndTickerOn = false
+		}
+
+	case ToastMsg:
+		a.statusbar.SetToast(msg.Text)
+		cmds = append(cmds, tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+			return statusbar.CopiedClearMsg{}
+		}))
+
 	case TypingExpiredMsg:
 		a.expireTypingUsers()
 		// Continue ticking if there are still active typers
@@ -1146,6 +1232,10 @@ func (a *App) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return a.handleWorkspaceFinderMode(msg)
 	case ModeThemeSwitcher:
 		return a.handleThemeSwitcherMode(msg)
+	case ModePresenceMenu:
+		return a.handlePresenceMenuMode(msg)
+	case ModePresenceCustomSnooze:
+		return a.handlePresenceCustomSnoozeMode(msg)
 	default:
 		return a.handleNormalMode(msg)
 	}
@@ -1243,6 +1333,12 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 		a.themeSwitcher.OpenWithScope(themeswitcher.ScopeGlobal, "Default theme for new workspaces")
 		a.SetMode(ModeThemeSwitcher)
 		return nil
+
+	case key.Matches(msg, a.keys.PresenceMenu):
+		header := a.workspaceNameForActive()
+		pres, dndEnabled, dndEnd := a.activeWorkspaceStatus()
+		a.presenceMenu.OpenWith(header, pres, dndEnabled, dndEnd)
+		a.SetMode(ModePresenceMenu)
 
 	case key.Matches(msg, a.keys.FuzzyFinder) || key.Matches(msg, a.keys.FuzzyFinderAlt):
 		a.channelFinder.Open()
@@ -1514,6 +1610,99 @@ func (a *App) handleThemeSwitcherMode(msg tea.KeyMsg) tea.Cmd {
 	}
 	if !a.themeSwitcher.IsVisible() {
 		a.SetMode(ModeNormal)
+	}
+	return nil
+}
+
+func (a *App) handlePresenceMenuMode(msg tea.KeyMsg) tea.Cmd {
+	keyStr := msg.String()
+	switch msg.Key().Code {
+	case tea.KeyEnter:
+		keyStr = "enter"
+	case tea.KeyEscape:
+		keyStr = "esc"
+	case tea.KeyUp:
+		keyStr = "up"
+	case tea.KeyDown:
+		keyStr = "down"
+	case tea.KeyBackspace:
+		keyStr = "backspace"
+	}
+
+	result := a.presenceMenu.HandleKey(keyStr)
+	if result != nil {
+		a.presenceMenu.Close()
+		// Custom snooze opens a sub-mode instead of firing immediately.
+		if result.Action == presencemenu.ActionCustomSnooze {
+			a.presenceCustomBuf = ""
+			a.SetMode(ModePresenceCustomSnooze)
+			return nil
+		}
+		a.SetMode(ModeNormal)
+		// Optimistic UI: update local state + status bar before the API
+		// call returns. The WS echo will reaffirm it.
+		a.applyOptimisticStatus(result.Action, result.SnoozeMinutes)
+		if a.setStatusFn != nil {
+			a.setStatusFn(result.Action, result.SnoozeMinutes)
+		}
+		return nil
+	}
+	if !a.presenceMenu.IsVisible() {
+		a.SetMode(ModeNormal)
+	}
+	return nil
+}
+
+// applyOptimisticStatus updates the App's status cache and status bar
+// based on the picked action, before the API round-trip completes.
+func (a *App) applyOptimisticStatus(action presencemenu.Action, snoozeMinutes int) {
+	st := a.statusByTeam[a.activeTeamID]
+	switch action {
+	case presencemenu.ActionSetActive:
+		st.Presence = "active"
+	case presencemenu.ActionSetAway:
+		st.Presence = "away"
+	case presencemenu.ActionSnooze:
+		st.DNDEnabled = true
+		st.DNDEndTS = time.Now().Add(time.Duration(snoozeMinutes) * time.Minute)
+	case presencemenu.ActionEndDND:
+		st.DNDEnabled = false
+		st.DNDEndTS = time.Time{}
+	}
+	a.statusByTeam[a.activeTeamID] = st
+	a.statusbar.SetStatus(st.Presence, st.DNDEnabled, st.DNDEndTS)
+}
+
+func (a *App) handlePresenceCustomSnoozeMode(msg tea.KeyMsg) tea.Cmd {
+	switch msg.Key().Code {
+	case tea.KeyEscape:
+		a.presenceCustomBuf = ""
+		a.SetMode(ModeNormal)
+		return nil
+	case tea.KeyEnter:
+		mins, err := strconv.Atoi(a.presenceCustomBuf)
+		a.presenceCustomBuf = ""
+		a.SetMode(ModeNormal)
+		if err != nil || mins <= 0 {
+			a.statusbar.SetToast("Invalid snooze duration")
+			return tea.Tick(2*time.Second, func(time.Time) tea.Msg { return statusbar.CopiedClearMsg{} })
+		}
+		a.applyOptimisticStatus(presencemenu.ActionSnooze, mins)
+		if a.setStatusFn != nil {
+			a.setStatusFn(presencemenu.ActionSnooze, mins)
+		}
+		return nil
+	case tea.KeyBackspace:
+		if len(a.presenceCustomBuf) > 0 {
+			a.presenceCustomBuf = a.presenceCustomBuf[:len(a.presenceCustomBuf)-1]
+		}
+		return nil
+	}
+	r := msg.String()
+	if len(r) == 1 && r[0] >= '0' && r[0] <= '9' {
+		if len(a.presenceCustomBuf) < 6 {
+			a.presenceCustomBuf += r
+		}
 	}
 	return nil
 }
@@ -2371,11 +2560,39 @@ func (a *App) activeTeamName() string {
 	return "this workspace"
 }
 
+// workspaceNameForActive returns the display name of the active workspace
+// (empty string if none). Used as the presence menu header.
+func (a *App) workspaceNameForActive() string {
+	for _, ws := range a.workspaceItems {
+		if ws.ID == a.activeTeamID {
+			return ws.Name
+		}
+	}
+	return ""
+}
+
+// activeWorkspaceStatus returns the cached presence/DND state for the
+// active workspace (zero values if none cached yet).
+func (a *App) activeWorkspaceStatus() (string, bool, time.Time) {
+	st, ok := a.statusByTeam[a.activeTeamID]
+	if !ok {
+		return "", false, time.Time{}
+	}
+	return st.Presence, st.DNDEnabled, st.DNDEndTS
+}
+
 // SetThemeSaver sets the callback for saving the theme selection. The
 // callback receives the chosen theme name and the scope (workspace vs.
 // global) so the implementation can route to the correct save target.
 func (a *App) SetThemeSaver(fn func(name string, scope themeswitcher.ThemeScope)) {
 	a.themeSaveFn = fn
+}
+
+// SetStatusSetter registers a callback the App invokes when the user picks
+// a status action from the presence menu. The callback runs the appropriate
+// Slack API call (typically asynchronously) for the active workspace.
+func (a *App) SetStatusSetter(fn func(action presencemenu.Action, snoozeMinutes int)) {
+	a.setStatusFn = fn
 }
 
 // SetThemeOverrides stores the config theme overrides for applying on switch.
@@ -2792,6 +3009,13 @@ func (a *App) View() tea.View {
 		screen = a.themeSwitcher.ViewOverlay(a.width, a.height, screen)
 	}
 
+	if a.presenceMenu.IsVisible() {
+		screen = a.presenceMenu.ViewOverlay(a.width, a.height, screen)
+	}
+	if a.mode == ModePresenceCustomSnooze {
+		screen = presencemenu.CustomSnoozeView(a.width, a.height, screen, a.presenceCustomBuf)
+	}
+
 	if a.loading {
 		screen = a.renderLoadingOverlay(a.width, a.height)
 	}
@@ -2809,6 +3033,8 @@ func (a *App) View() tea.View {
 		a.reactionPicker.IsVisible() ||
 		a.workspaceFinder.IsVisible() ||
 		a.themeSwitcher.IsVisible() ||
+		a.presenceMenu.IsVisible() ||
+		a.mode == ModePresenceCustomSnooze ||
 		a.loading
 	if overlayActive {
 		finalScreen = lipgloss.NewStyle().

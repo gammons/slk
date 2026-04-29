@@ -22,6 +22,7 @@ import (
 	"github.com/gammons/slk/internal/ui"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/presencemenu"
 	"github.com/gammons/slk/internal/ui/reactionpicker"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/statusbar"
@@ -318,6 +319,34 @@ func run() error {
 				log.Printf("save global theme: %v", err)
 			}
 		}
+	})
+
+	// Wire presence/DND status setter. Captured workspaces map and
+	// activeTeamID by reference so the closure always targets the
+	// currently-active workspace context.
+	app.SetStatusSetter(func(action presencemenu.Action, snoozeMinutes int) {
+		wctx := workspaces[activeTeamID]
+		if wctx == nil || wctx.Client == nil {
+			return
+		}
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			var err error
+			switch action {
+			case presencemenu.ActionSetActive:
+				err = wctx.Client.SetUserPresence(ctx, "auto")
+			case presencemenu.ActionSetAway:
+				err = wctx.Client.SetUserPresence(ctx, "away")
+			case presencemenu.ActionSnooze:
+				_, err = wctx.Client.SetSnooze(ctx, snoozeMinutes)
+			case presencemenu.ActionEndDND:
+				_, err = wctx.Client.EndSnooze(ctx)
+			}
+			if err != nil && p != nil {
+				p.Send(ui.ToastMsg{Text: "Status change failed: " + err.Error()})
+			}
+		}()
 	})
 
 	// wireCallbacks sets all App callbacks to use the given workspace context.
