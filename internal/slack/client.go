@@ -34,6 +34,8 @@ type SlackAPI interface {
 	GetPermalinkContext(ctx context.Context, params *slack.PermalinkParameters) (string, error)
 	AuthTest() (*slack.AuthTestResponse, error)
 	JoinConversation(channelID string) (*slack.Channel, string, []string, error)
+	SetUserPresenceContext(ctx context.Context, presence string) error
+	GetUserPresenceContext(ctx context.Context, user string) (*slack.UserPresence, error)
 }
 
 // Client wraps the slack-go library, providing RTM connectivity
@@ -554,6 +556,27 @@ func (c *Client) AddReaction(ctx context.Context, channelID, ts, emoji string) e
 // RemoveReaction removes an emoji reaction from a message.
 func (c *Client) RemoveReaction(ctx context.Context, channelID, ts, emoji string) error {
 	return c.api.RemoveReaction(emoji, slack.ItemRef{Channel: channelID, Timestamp: ts})
+}
+
+// SetUserPresence sets the authenticated user's presence. Accepts "auto"
+// (let Slack determine activity) or "away" (force away). Note the write
+// vocabulary differs from the read side — GetUserPresence and the
+// presence_change WebSocket event return "active" or "away".
+func (c *Client) SetUserPresence(ctx context.Context, presence string) error {
+	if err := c.api.SetUserPresenceContext(ctx, presence); err != nil {
+		return fmt.Errorf("setting presence: %w", err)
+	}
+	return nil
+}
+
+// GetUserPresence fetches a user's current presence ("active" or "away").
+// Pass the authenticated user's ID to read your own state.
+func (c *Client) GetUserPresence(ctx context.Context, userID string) (*slack.UserPresence, error) {
+	p, err := c.api.GetUserPresenceContext(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("getting presence: %w", err)
+	}
+	return p, nil
 }
 
 // GetPermalink returns the Slack permalink for a message. For a thread reply,

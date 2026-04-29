@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/slack-go/slack"
@@ -25,6 +26,8 @@ type mockSlackAPI struct {
 	getConversationRepliesFn func(params *slack.GetConversationRepliesParameters) ([]slack.Message, bool, string, error)
 	getEmojiFn               func() (map[string]string, error)
 	getPermalinkContextFn    func(ctx context.Context, params *slack.PermalinkParameters) (string, error)
+	setUserPresenceContextFn func(ctx context.Context, presence string) error
+	getUserPresenceContextFn func(ctx context.Context, user string) (*slack.UserPresence, error)
 }
 
 func (m *mockSlackAPI) GetConversations(params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
@@ -97,6 +100,103 @@ func (m *mockSlackAPI) GetPermalinkContext(ctx context.Context, params *slack.Pe
 		return m.getPermalinkContextFn(ctx, params)
 	}
 	return "", nil
+}
+
+func (m *mockSlackAPI) SetUserPresenceContext(ctx context.Context, presence string) error {
+	if m.setUserPresenceContextFn != nil {
+		return m.setUserPresenceContextFn(ctx, presence)
+	}
+	return nil
+}
+
+func (m *mockSlackAPI) GetUserPresenceContext(ctx context.Context, user string) (*slack.UserPresence, error) {
+	if m.getUserPresenceContextFn != nil {
+		return m.getUserPresenceContextFn(ctx, user)
+	}
+	return &slack.UserPresence{}, nil
+}
+
+func TestClient_SetUserPresence(t *testing.T) {
+	var calls int
+	var gotPresence string
+	mock := &mockSlackAPI{
+		setUserPresenceContextFn: func(ctx context.Context, presence string) error {
+			calls++
+			gotPresence = presence
+			return nil
+		},
+	}
+	c := &Client{api: mock}
+	if err := c.SetUserPresence(context.Background(), "away"); err != nil {
+		t.Fatalf("SetUserPresence: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("expected 1 SetUserPresence call, got %d", calls)
+	}
+	if gotPresence != "away" {
+		t.Errorf("expected presence 'away', got %q", gotPresence)
+	}
+}
+
+func TestClient_SetUserPresence_Error(t *testing.T) {
+	wantErr := errors.New("api boom")
+	mock := &mockSlackAPI{
+		setUserPresenceContextFn: func(ctx context.Context, presence string) error {
+			return wantErr
+		},
+	}
+	c := &Client{api: mock}
+	err := c.SetUserPresence(context.Background(), "away")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Errorf("expected wrapped wantErr, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "setting presence") {
+		t.Errorf("expected 'setting presence' prefix, got %q", err.Error())
+	}
+}
+
+func TestClient_GetUserPresence(t *testing.T) {
+	var gotUser string
+	mock := &mockSlackAPI{
+		getUserPresenceContextFn: func(ctx context.Context, user string) (*slack.UserPresence, error) {
+			gotUser = user
+			return &slack.UserPresence{Presence: "active"}, nil
+		},
+	}
+	c := &Client{api: mock}
+	got, err := c.GetUserPresence(context.Background(), "U1")
+	if err != nil {
+		t.Fatalf("GetUserPresence: %v", err)
+	}
+	if got.Presence != "active" {
+		t.Errorf("expected 'active', got %q", got.Presence)
+	}
+	if gotUser != "U1" {
+		t.Errorf("expected user 'U1', got %q", gotUser)
+	}
+}
+
+func TestClient_GetUserPresence_Error(t *testing.T) {
+	wantErr := errors.New("api boom")
+	mock := &mockSlackAPI{
+		getUserPresenceContextFn: func(ctx context.Context, user string) (*slack.UserPresence, error) {
+			return nil, wantErr
+		},
+	}
+	c := &Client{api: mock}
+	_, err := c.GetUserPresence(context.Background(), "U1")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Errorf("expected wrapped wantErr, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "getting presence") {
+		t.Errorf("expected 'getting presence' prefix, got %q", err.Error())
+	}
 }
 
 func TestSendTypingReturnsErrorWhenNotConnected(t *testing.T) {
