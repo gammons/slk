@@ -1,6 +1,6 @@
 # slk Implementation Status
 
-Last updated: 2026-04-26
+Last updated: 2026-04-28
 
 ## What's Working
 
@@ -70,6 +70,9 @@ Last updated: 2026-04-26
 - [x] Real-time thread reply routing via WebSocket
 - [x] Thread reply sending via Slack API
 - [x] Channel switch closes thread panel
+- [x] Threads view (top-of-sidebar `⚑ Threads` entry): list of threads the
+  user authored, replied to, or was @-mentioned in for the active workspace,
+  unread first, live re-rank on new replies (cache-based v1)
 
 ### Users & Avatars
 - [x] User display name resolution (Profile.DisplayName > RealName > Name)
