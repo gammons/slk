@@ -3,8 +3,11 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"image/color"
 	"log"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -364,6 +367,35 @@ type WSMessageDeletedMsg struct {
 	TS        string
 }
 
+// UploadAttachmentsMsg is emitted when the user submits a compose
+// with pending attachments. App.Update invokes the configured
+// uploader and converts the result into UploadProgressMsg /
+// UploadResultMsg.
+type UploadAttachmentsMsg struct {
+	ChannelID   string
+	ThreadTS    string
+	Caption     string
+	Attachments []compose.PendingAttachment
+}
+
+// UploadProgressMsg is dispatched out-of-band by the uploader as
+// each file completes. App updates the status-bar toast.
+type UploadProgressMsg struct {
+	Done  int
+	Total int
+}
+
+// UploadResultMsg carries the final result of an upload batch.
+type UploadResultMsg struct {
+	Err error
+}
+
+// UploadFunc performs an upload of one or more files to a channel
+// (with optional thread). It returns a tea.Cmd whose terminal
+// message is UploadResultMsg; intermediate UploadProgressMsg events
+// are dispatched out-of-band via program.Send.
+type UploadFunc func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd
+
 // MessageEditFunc performs the chat.update API call. Returns a tea.Msg
 // (typically MessageEditedMsg) describing the result.
 type MessageEditFunc func(channelID, ts, newText string) tea.Msg
@@ -472,6 +504,12 @@ type App struct {
 	messageSender        MessageSendFunc
 	messageEditor        MessageEditFunc
 	messageDeleter       MessageDeleteFunc
+	uploader             UploadFunc
+
+	// clipboardAvailable is set at startup based on the result of
+	// clipboard.Init(). When false, Ctrl+V smart-paste is a no-op.
+	clipboardAvailable bool
+
 	threadFetcher        ThreadFetchFunc
 	threadReplySender    ThreadReplySendFunc
 	channelJoiner        JoinChannelFunc
@@ -2771,6 +2809,19 @@ func (a *App) SetMessageDeleter(fn MessageDeleteFunc) {
 	a.messageDeleter = fn
 }
 
+// SetUploader wires the upload callback used by Ctrl+V smart-paste
+// when the user submits with attachments.
+func (a *App) SetUploader(fn UploadFunc) {
+	a.uploader = fn
+}
+
+// SetClipboardAvailable signals whether the OS clipboard library
+// initialized successfully. When false, the smart-paste code path
+// is short-circuited.
+func (a *App) SetClipboardAvailable(ok bool) {
+	a.clipboardAvailable = ok
+}
+
 // SetThreadFetcher sets the callback used to load thread replies.
 func (a *App) SetThreadFetcher(fn ThreadFetchFunc) {
 	a.threadFetcher = fn
@@ -3637,4 +3688,56 @@ func truncateReason(s string, max int) string {
 		return s
 	}
 	return s[:max] + "…"
+}
+
+// humanSize formats a byte count as "12 KB", "3.4 MB", or "<1 KB".
+func humanSize(size int64) string {
+	const kb = 1024
+	const mb = 1024 * kb
+	switch {
+	case size >= mb:
+		return fmt.Sprintf("%.1f MB", float64(size)/float64(mb))
+	case size >= kb:
+		return fmt.Sprintf("%d KB", size/kb)
+	default:
+		return "<1 KB"
+	}
+}
+
+// resolveFilePath inspects clipboard text and returns a cleaned,
+// absolute file path if it looks like a single-line existing-file
+// reference. Returns ok=false on multi-line input, oversized input,
+// non-absolute and non-./-relative paths, or paths that don't
+// expand. The caller is responsible for the os.Stat / IsRegular
+// check and the size check.
+func resolveFilePath(text string) (string, bool) {
+	s := strings.TrimSpace(text)
+	if s == "" || strings.ContainsAny(s, "\n\r") || len(s) > 4096 {
+		return "", false
+	}
+	if strings.HasPrefix(s, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", false
+		}
+		s = filepath.Join(home, s[2:])
+	}
+	if !filepath.IsAbs(s) && !strings.HasPrefix(s, "./") {
+		return "", false
+	}
+	return filepath.Clean(s), true
+}
+
+// uploadToastCmd builds a tea.Cmd that sets the status bar to the
+// given message and schedules a CopiedClearMsg after dur.
+func (a *App) uploadToastCmd(text string, dur time.Duration) tea.Cmd {
+	return tea.Batch(
+		func() tea.Msg {
+			a.statusbar.SetToast(text)
+			return nil
+		},
+		tea.Tick(dur, func(time.Time) tea.Msg {
+			return statusbar.CopiedClearMsg{}
+		}),
+	)
 }
