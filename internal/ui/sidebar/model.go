@@ -136,6 +136,12 @@ type Model struct {
 	// channel, but it is NOT a channel — when threadsSelected is true,
 	// SelectedItem/SelectedID return zero / empty and the App layer should
 	// activate the threads view instead of opening a channel.
+	//
+	// threadsSelected is intentionally NOT modified by SetItems: callers that
+	// want a fresh default selection on a major context change (e.g. workspace
+	// switch) must explicitly call SelectThreadsRow() after SetItems. This
+	// keeps routine refreshes (e.g. presence updates that re-call SetItems)
+	// from clobbering the user's current selection.
 	threadsUnread   int
 	threadsSelected bool
 }
@@ -191,6 +197,13 @@ func (m *Model) SetThreadsUnreadCount(n int) {
 // ThreadsUnreadCount returns the current Threads-row unread badge count.
 func (m *Model) ThreadsUnreadCount() int { return m.threadsUnread }
 
+// SetItems replaces the sidebar's channel list. It clamps m.selected to the
+// new filtered range but does NOT touch threadsSelected: SetItems is called on
+// every routine refresh (presence updates, unread changes, channel-list
+// resync, etc.) and clobbering selection on those refreshes would be wrong.
+// Callers that want to reset selection to the default Threads row on a major
+// context change (e.g. workspace switch) should explicitly call
+// SelectThreadsRow() after SetItems.
 func (m *Model) SetItems(items []ChannelItem) {
 	m.items = items
 	m.rebuildFilter()
@@ -435,14 +448,15 @@ func (m *Model) buildCache(width int) {
 	threadsLabel := " ⚑ Threads"
 	threadsCursor := cursorSelected + "⚑ Threads"
 	if m.threadsUnread > 0 {
-		badge := " " + dotStyle.Render("•") + fmt.Sprintf("%d", m.threadsUnread)
+		// Render "•N" as a single styled span so the dot glyph and the digits
+		// stay adjacent in the output (no ANSI reset splits them). Tests rely
+		// on the literal substring "•N" being searchable in View() output.
+		badge := " " + dotStyle.Render("•"+fmt.Sprintf("%d", m.threadsUnread))
 		threadsLabel += badge
 		threadsCursor += badge
-		threadsLabel = messages.ReapplyBgAfterResets(threadsLabel, bgAnsi)
-		threadsCursor = messages.ReapplyBgAfterResets(threadsCursor, bgAnsi)
-	} else {
-		threadsCursor = messages.ReapplyBgAfterResets(threadsCursor, bgAnsi)
 	}
+	threadsLabel = messages.ReapplyBgAfterResets(threadsLabel, bgAnsi)
+	threadsCursor = messages.ReapplyBgAfterResets(threadsCursor, bgAnsi)
 	threadsNormal := styles.ChannelNormal.Width(width - 2).Render(threadsLabel)
 	threadsSelectedRow := styles.ChannelSelected.Width(width - 2).Render(threadsCursor)
 	m.cacheRows = append(m.cacheRows, renderRow{
@@ -452,7 +466,8 @@ func (m *Model) buildCache(width int) {
 		filterIdx: -1,
 		isThreads: true,
 	})
-	// Blank separator between the Threads row and the first section.
+	// Blank separator between the Threads row and the first section (or below
+	// the Threads row when there are no channels at all).
 	m.cacheRows = append(m.cacheRows, renderRow{height: 1, filterIdx: -1})
 
 	for fi, idx := range m.filtered {
@@ -526,6 +541,19 @@ func (m *Model) buildCache(width int) {
 		})
 	}
 
+	// When there are no channel items at all, render a single muted
+	// "No channels" placeholder below the Threads row + separator so the
+	// Threads row remains globally visible even on an empty workspace.
+	if len(m.items) == 0 {
+		placeholder := styles.SectionHeader.Render("No channels")
+		m.cacheRows = append(m.cacheRows, renderRow{
+			normal:    placeholder,
+			selected:  placeholder,
+			height:    1,
+			filterIdx: -1,
+		})
+	}
+
 	// Flatten into a single row list with section headers.
 	// Add a blank line between sections for visual separation.
 	for i, name := range sectionOrder {
@@ -545,10 +573,10 @@ func (m *Model) buildCache(width int) {
 }
 
 func (m *Model) View(height, width int) string {
-	if len(m.items) == 0 {
-		return lipgloss.NewStyle().Width(width).Height(height).Render("No channels")
-	}
-
+	// Note: we no longer early-return on len(m.items)==0. The synthetic
+	// Threads row is globally present (even on an empty workspace), so we
+	// always go through buildCache, which handles the empty-items case by
+	// emitting a muted "No channels" placeholder below the Threads row.
 	if !m.cacheValid || m.cacheWidth != width {
 		m.buildCache(width)
 	}
@@ -636,8 +664,8 @@ func (m *Model) View(height, width int) string {
 func (m *Model) ClickAt(y int) (ChannelItem, bool) {
 	absoluteY := y + m.yOffset
 
-	// y=0 is the synthetic Threads row, y=1 is the blank separator before the
-	// first section. Anything in those two lines selects/keeps the Threads row.
+	// y=0 is the synthetic Threads row; y=1 is the blank separator before the
+	// first section. A click on y=0 selects/keeps the Threads row.
 	if absoluteY == 0 {
 		if !m.threadsSelected {
 			m.threadsSelected = true
@@ -646,6 +674,11 @@ func (m *Model) ClickAt(y int) (ChannelItem, bool) {
 		// Caller (App) consults IsThreadsSelected -- no ChannelItem to return.
 		return ChannelItem{}, false
 	}
+	// Explicit no-op for the Threads-row separator at y=1. Inter-section
+	// blank rows further down are also no-ops, but via fall-through: the
+	// per-section loop below never matches a blank row's y, so the function
+	// just returns (ChannelItem{}, false) at the end. This explicit branch
+	// just makes the parity for the Threads separator obvious.
 	if absoluteY == 1 {
 		return ChannelItem{}, false
 	}

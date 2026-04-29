@@ -101,8 +101,64 @@ func TestThreadsItem_UnreadBadgeRenders(t *testing.T) {
 	if !strings.Contains(out, "Threads") {
 		t.Errorf("View should contain 'Threads': %q", out)
 	}
-	if !strings.Contains(out, "3") {
-		t.Errorf("View should contain unread count '3': %q", out)
+	// Find the line containing "Threads" and assert the badge glyph and count
+	// appear together as the literal substring "•3".
+	var threadsLine string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "Threads") {
+			threadsLine = line
+			break
+		}
+	}
+	if threadsLine == "" {
+		t.Fatalf("no line containing 'Threads' in view: %q", out)
+	}
+	if !strings.Contains(threadsLine, "•3") {
+		t.Errorf("Threads line should contain badge '•3', got %q", threadsLine)
+	}
+}
+
+func TestThreadsItem_VisibleWhenNoChannels(t *testing.T) {
+	m := New(nil)
+	out := m.View(10, 30)
+	if !strings.Contains(out, "Threads") {
+		t.Errorf("View should contain 'Threads' even when there are no channels: %q", out)
+	}
+	if !m.IsThreadsSelected() {
+		t.Errorf("Threads row should still be selected when there are no channels")
+	}
+}
+
+func TestSetThreadsUnreadCount_NegativeClampsToZero(t *testing.T) {
+	m := New([]ChannelItem{{ID: "C1", Name: "general", Type: "channel"}})
+	m.SetThreadsUnreadCount(-5)
+	if got := m.ThreadsUnreadCount(); got != 0 {
+		t.Errorf("negative count should clamp to 0, got %d", got)
+	}
+}
+
+func TestSetThreadsUnreadCount_NoChangeNoVersionBump(t *testing.T) {
+	m := New([]ChannelItem{{ID: "C1", Name: "general", Type: "channel"}})
+	m.SetThreadsUnreadCount(3)
+	v1 := m.Version()
+	m.SetThreadsUnreadCount(3) // identical -- no state change
+	v2 := m.Version()
+	if v1 != v2 {
+		t.Errorf("identical SetThreadsUnreadCount should not bump version, got %d -> %d", v1, v2)
+	}
+}
+
+func TestSetThreadsUnreadCount_ZeroRemovesBadge(t *testing.T) {
+	m := New([]ChannelItem{{ID: "C1", Name: "general", Type: "channel"}})
+	m.SetThreadsUnreadCount(3)
+	out := m.View(10, 30)
+	if !strings.Contains(out, "•3") {
+		t.Fatalf("precondition: badge '•3' should be present, got %q", out)
+	}
+	m.SetThreadsUnreadCount(0)
+	out = m.View(10, 30)
+	if strings.Contains(out, "•") {
+		t.Errorf("badge glyph '•' should be gone after setting count to 0, got %q", out)
 	}
 }
 
