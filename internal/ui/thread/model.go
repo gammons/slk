@@ -166,6 +166,55 @@ func (m *Model) ParentMsg() messages.MessageItem {
 	return m.parent
 }
 
+// UpdateMessageInPlace finds a reply by TS and replaces its text,
+// marking it edited. Returns true if found.
+func (m *Model) UpdateMessageInPlace(ts, newText string) bool {
+	for i, r := range m.replies {
+		if r.TS == ts {
+			m.replies[i].Text = newText
+			m.replies[i].IsEdited = true
+			m.InvalidateCache()
+			return true
+		}
+	}
+	return false
+}
+
+// RemoveMessageByTS removes a reply by TS, adjusting the selected
+// index so it remains valid. Returns true if found.
+func (m *Model) RemoveMessageByTS(ts string) bool {
+	for i, r := range m.replies {
+		if r.TS == ts {
+			m.replies = append(m.replies[:i], m.replies[i+1:]...)
+			if i <= m.selected && m.selected > 0 {
+				m.selected--
+			}
+			if m.selected >= len(m.replies) {
+				if len(m.replies) == 0 {
+					m.selected = 0
+				} else {
+					m.selected = len(m.replies) - 1
+				}
+			}
+			m.InvalidateCache()
+			return true
+		}
+	}
+	return false
+}
+
+// UpdateParentInPlace updates the thread parent's text and marks it
+// edited if its TS matches. Returns true if updated.
+func (m *Model) UpdateParentInPlace(ts, newText string) bool {
+	if m.parent.TS != ts {
+		return false
+	}
+	m.parent.Text = newText
+	m.parent.IsEdited = true
+	m.InvalidateCache()
+	return true
+}
+
 // SetFocused sets whether the thread panel has focus.
 func (m *Model) SetFocused(focused bool) {
 	if m.focused != focused {
