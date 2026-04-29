@@ -18,6 +18,8 @@ type EventHandler interface {
 	OnUserTyping(channelID, userID string)
 	OnConnect()
 	OnDisconnect()
+	OnSelfPresenceChange(presence string)
+	OnDNDChange(enabled bool, endUnix int64)
 }
 
 // wsEvent is the minimal structure for identifying a WebSocket event type.
@@ -73,6 +75,29 @@ type wsTypingEvent struct {
 	User    string `json:"user"`
 }
 
+// wsManualPresenceEvent represents a manual_presence_change event,
+// emitted when the authenticated user's own presence flips.
+type wsManualPresenceEvent struct {
+	Type     string `json:"type"`
+	Presence string `json:"presence"`
+}
+
+// wsDNDStatusInner mirrors the dnd_status payload Slack ships with
+// dnd_updated and dnd_updated_user events.
+type wsDNDStatusInner struct {
+	Enabled        bool  `json:"dnd_enabled"`
+	SnoozeEnabled  bool  `json:"snooze_enabled"`
+	SnoozeEndTime  int64 `json:"snooze_endtime"`
+	NextDNDStartTS int64 `json:"next_dnd_start_ts"`
+	NextDNDEndTS   int64 `json:"next_dnd_end_ts"`
+}
+
+// wsDNDUpdatedEvent represents a dnd_updated or dnd_updated_user event.
+type wsDNDUpdatedEvent struct {
+	Type      string           `json:"type"`
+	DNDStatus wsDNDStatusInner `json:"dnd_status"`
+}
+
 // dispatchWebSocketEvent parses a raw JSON WebSocket message and routes it
 // to the appropriate EventHandler method.
 func dispatchWebSocketEvent(data []byte, handler EventHandler) {
@@ -123,6 +148,21 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 		}
 		handler.OnPresenceChange(evt.User, evt.Presence)
 
+	case "manual_presence_change":
+		var evt wsManualPresenceEvent
+		if err := json.Unmarshal(data, &evt); err != nil {
+			return
+		}
+		handler.OnSelfPresenceChange(evt.Presence)
+
+	case "dnd_updated", "dnd_updated_user":
+		var evt wsDNDUpdatedEvent
+		if err := json.Unmarshal(data, &evt); err != nil {
+			return
+		}
+		end := pickDNDEnd(evt.DNDStatus)
+		handler.OnDNDChange(evt.DNDStatus.Enabled, end)
+
 	case "user_typing":
 		var evt wsTypingEvent
 		if err := json.Unmarshal(data, &evt); err != nil {
@@ -139,4 +179,18 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 	default:
 		// Ignore other event types
 	}
+}
+
+// pickDNDEnd unifies snooze and admin-DND end timestamps. Slack delivers
+// either snooze_endtime (when the user has a manual snooze) or
+// next_dnd_end_ts (when an admin DND schedule is active). Returns 0 when
+// neither is in the future.
+func pickDNDEnd(s wsDNDStatusInner) int64 {
+	if s.SnoozeEnabled && s.SnoozeEndTime > 0 {
+		return s.SnoozeEndTime
+	}
+	if s.NextDNDEndTS > 0 {
+		return s.NextDNDEndTS
+	}
+	return 0
 }

@@ -4,13 +4,20 @@ import (
 	"testing"
 )
 
+type dndChangeRecord struct {
+	enabled bool
+	endUnix int64
+}
+
 type mockEventHandler struct {
-	messages        []string
-	subtypes        []string
-	deletedMessages []string
-	reactions       []string
-	presenceChanges []string
-	typingEvents    []string
+	messages            []string
+	subtypes            []string
+	deletedMessages     []string
+	reactions           []string
+	presenceChanges     []string
+	typingEvents        []string
+	selfPresenceChanges []string
+	dndChanges          []dndChangeRecord
 }
 
 func (m *mockEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool) {
@@ -35,6 +42,12 @@ func (m *mockEventHandler) OnUserTyping(channelID, userID string) {
 }
 func (m *mockEventHandler) OnConnect()    {}
 func (m *mockEventHandler) OnDisconnect() {}
+func (m *mockEventHandler) OnSelfPresenceChange(presence string) {
+	m.selfPresenceChanges = append(m.selfPresenceChanges, presence)
+}
+func (m *mockEventHandler) OnDNDChange(enabled bool, endUnix int64) {
+	m.dndChanges = append(m.dndChanges, dndChangeRecord{enabled, endUnix})
+}
 
 func TestEventHandlerInterface(t *testing.T) {
 	handler := &mockEventHandler{}
@@ -162,5 +175,60 @@ func TestDispatchWebSocketUserTypingEvent(t *testing.T) {
 	}
 	if handler.typingEvents[0] != "C1:U1" {
 		t.Errorf("expected 'C1:U1', got %q", handler.typingEvents[0])
+	}
+}
+
+func TestDispatchWebSocketManualPresenceChangeEvent(t *testing.T) {
+	handler := &mockEventHandler{}
+	data := []byte(`{"type":"manual_presence_change","presence":"away"}`)
+	dispatchWebSocketEvent(data, handler)
+	if len(handler.selfPresenceChanges) != 1 {
+		t.Fatalf("expected 1 self presence change, got %d", len(handler.selfPresenceChanges))
+	}
+	if handler.selfPresenceChanges[0] != "away" {
+		t.Errorf("expected 'away', got %q", handler.selfPresenceChanges[0])
+	}
+}
+
+func TestDispatchWebSocketDNDUpdatedEvent(t *testing.T) {
+	handler := &mockEventHandler{}
+	data := []byte(`{"type":"dnd_updated","dnd_status":{"dnd_enabled":true,"snooze_enabled":true,"snooze_endtime":1700000000,"next_dnd_start_ts":0,"next_dnd_end_ts":0}}`)
+	dispatchWebSocketEvent(data, handler)
+	if len(handler.dndChanges) != 1 {
+		t.Fatalf("expected 1 dnd change, got %d", len(handler.dndChanges))
+	}
+	got := handler.dndChanges[0]
+	if !got.enabled {
+		t.Error("expected enabled=true")
+	}
+	if got.endUnix != 1700000000 {
+		t.Errorf("expected endUnix=1700000000, got %d", got.endUnix)
+	}
+}
+
+func TestDispatchWebSocketDNDUpdatedUserEvent(t *testing.T) {
+	handler := &mockEventHandler{}
+	data := []byte(`{"type":"dnd_updated_user","dnd_status":{"dnd_enabled":false,"snooze_enabled":false,"next_dnd_start_ts":0,"next_dnd_end_ts":0}}`)
+	dispatchWebSocketEvent(data, handler)
+	if len(handler.dndChanges) != 1 {
+		t.Fatalf("expected 1 dnd change, got %d", len(handler.dndChanges))
+	}
+	got := handler.dndChanges[0]
+	if got.enabled {
+		t.Error("expected enabled=false")
+	}
+	if got.endUnix != 0 {
+		t.Errorf("expected endUnix=0, got %d", got.endUnix)
+	}
+}
+
+func TestDispatchWebSocketDNDUpdatedEvent_NextDNDEndFallback(t *testing.T) {
+	// When snooze is not enabled but admin DND has next_dnd_end_ts in the
+	// future, that's the relevant end timestamp.
+	handler := &mockEventHandler{}
+	data := []byte(`{"type":"dnd_updated","dnd_status":{"dnd_enabled":true,"snooze_enabled":false,"snooze_endtime":0,"next_dnd_start_ts":1699000000,"next_dnd_end_ts":1700000000}}`)
+	dispatchWebSocketEvent(data, handler)
+	if got := handler.dndChanges[0].endUnix; got != 1700000000 {
+		t.Errorf("expected endUnix=1700000000 (next_dnd_end_ts), got %d", got)
 	}
 }

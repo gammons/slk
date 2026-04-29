@@ -1314,6 +1314,13 @@ func (h *rtmEventHandler) OnDisconnect() {
 	h.program.Send(ui.ConnectionStateMsg{State: int(statusbar.StateDisconnected)})
 }
 
+func (h *rtmEventHandler) OnSelfPresenceChange(presence string) {
+	// implemented in Task 6
+}
+func (h *rtmEventHandler) OnDNDChange(enabled bool, endUnix int64) {
+	// implemented in Task 6
+}
+
 // listWorkspaces prints the configured workspaces with their TeamID and
 // Name, one per line. Useful for users who want to hand-edit per-workspace
 // settings in config.toml.
