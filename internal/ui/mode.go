@@ -12,6 +12,7 @@ const (
 	ModeReactionPicker
 	ModeWorkspaceFinder
 	ModeThemeSwitcher
+	ModeConfirm
 )
 
 func (m Mode) String() string {
@@ -32,6 +33,8 @@ func (m Mode) String() string {
 		return "WORKSPACE"
 	case ModeThemeSwitcher:
 		return "THEME"
+	case ModeConfirm:
+		return "CONFIRM"
 	default:
 		return "UNKNOWN"
 	}
