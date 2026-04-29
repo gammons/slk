@@ -20,7 +20,8 @@ var nonJoinedColor = lipgloss.Color("#5a5a5a")
 type ChannelResult struct {
 	ID     string
 	Name   string
-	Joined bool // false => caller should join the channel before opening it
+	Type   string // channel, dm, group_dm, private
+	Joined bool   // false => caller should join the channel before opening it
 }
 
 // Item represents a searchable channel/DM entry.
@@ -120,6 +121,7 @@ func (m *Model) HandleKey(keyStr string) *ChannelResult {
 			return &ChannelResult{
 				ID:     m.items[idx].ID,
 				Name:   m.items[idx].Name,
+				Type:   m.items[idx].Type,
 				Joined: m.items[idx].Joined,
 			}
 		}

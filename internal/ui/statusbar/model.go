@@ -20,6 +20,7 @@ const (
 type Model struct {
 	mode        string
 	channel     string
+	channelType string // "channel" | "private" | "dm" | "group_dm"; drives glyph
 	workspace   string
 	unreadCount int
 	connState   ConnectionState
@@ -54,6 +55,27 @@ func (m *Model) SetChannel(name string) {
 	if m.channel != name {
 		m.channel = name
 		m.dirty()
+	}
+}
+
+// SetChannelType updates the channel type used to pick a glyph in the
+// status bar (# for public, \u25c6 for private, \u25cf for dm/group_dm).
+func (m *Model) SetChannelType(chType string) {
+	if m.channelType != chType {
+		m.channelType = chType
+		m.dirty()
+	}
+}
+
+// channelGlyph returns the prefix glyph for the active channel type.
+func (m Model) channelGlyph() string {
+	switch m.channelType {
+	case "private":
+		return "\u25c6"
+	case "dm", "group_dm":
+		return "\u25cf"
+	default:
+		return "#"
 	}
 }
 
@@ -123,9 +145,10 @@ func (m Model) View(width int) string {
 	modeLabel := modeStyle.Render(fmt.Sprintf(" %s ", m.mode))
 
 	// Channel info
-	channelLabel := fmt.Sprintf(" #%s ", m.channel)
+	glyph := m.channelGlyph()
+	channelLabel := fmt.Sprintf(" %s%s ", glyph, m.channel)
 	if m.inThread {
-		channelLabel = fmt.Sprintf(" #%s > Thread ", m.channel)
+		channelLabel = fmt.Sprintf(" %s%s > Thread ", glyph, m.channel)
 	}
 	channelInfo := styles.StatusBar.Render(channelLabel)
 

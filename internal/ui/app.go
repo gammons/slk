@@ -52,6 +52,12 @@ type (
 	ChannelSelectedMsg struct {
 		ID   string
 		Name string
+		// Type is the channel type ("channel", "private", "dm",
+		// "group_dm"); used to render a type-aware glyph in the
+		// message-pane header and status bar. May be empty when
+		// callers don't yet know the type \u2014 the UI then falls
+		// back to a default `#` glyph.
+		Type string
 	}
 	MessagesLoadedMsg struct {
 		ChannelID  string
@@ -571,7 +577,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if sidebarY >= 0 {
 				if item, ok := a.sidebar.ClickAt(sidebarY); ok {
 					return a, func() tea.Msg {
-						return ChannelSelectedMsg{ID: item.ID, Name: item.Name}
+						return ChannelSelectedMsg{ID: item.ID, Name: item.Name, Type: item.Type}
 					}
 				}
 				// ClickAt returns ok=false for the synthetic Threads
@@ -769,10 +775,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.activeChannelID = msg.ID
 		a.lastTypingSent = time.Time{} // reset typing throttle for new channel
 		a.messagepane.SetChannel(msg.Name, "")
+		a.messagepane.SetChannelType(msg.Type)
 		a.messagepane.SetLoading(true)
 		a.messagepane.SetMessages(nil) // clear while loading
 		a.compose.SetChannel(msg.Name)
 		a.statusbar.SetChannel(msg.Name)
+		a.statusbar.SetChannelType(msg.Type)
 		// Fetch messages for the newly selected channel
 		if a.channelFetcher != nil {
 			fetcher := a.channelFetcher
@@ -953,7 +961,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(msg.Channels) > 0 {
 			first := msg.Channels[0]
 			cmds = append(cmds, func() tea.Msg {
-				return ChannelSelectedMsg{ID: first.ID, Name: first.Name}
+				return ChannelSelectedMsg{ID: first.ID, Name: first.Name, Type: first.Type}
 			})
 		}
 		// Kick off an initial threads-list fetch so the sidebar Threads
@@ -1007,7 +1015,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(msg.Channels) > 0 {
 				first := msg.Channels[0]
 				cmds = append(cmds, func() tea.Msg {
-					return ChannelSelectedMsg{ID: first.ID, Name: first.Name}
+					return ChannelSelectedMsg{ID: first.ID, Name: first.Name, Type: first.Type}
 				})
 			}
 		}
@@ -1051,7 +1059,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.channelFinder.MarkJoined(msg.ID)
 		a.sidebar.SelectByID(msg.ID)
 		cmds = append(cmds, func() tea.Msg {
-			return ChannelSelectedMsg{ID: msg.ID, Name: msg.Name}
+			// ChannelJoinedMsg only fires for public channels via the
+			// channel finder; type is always "channel".
+			return ChannelSelectedMsg{ID: msg.ID, Name: msg.Name, Type: "channel"}
 		})
 
 	case ChannelJoinFailedMsg:
@@ -1402,7 +1412,7 @@ func (a *App) handleChannelFinderMode(msg tea.KeyMsg) tea.Cmd {
 		if result.Joined {
 			a.sidebar.SelectByID(result.ID)
 			return func() tea.Msg {
-				return ChannelSelectedMsg{ID: result.ID, Name: result.Name}
+				return ChannelSelectedMsg{ID: result.ID, Name: result.Name, Type: result.Type}
 			}
 		}
 		if a.channelJoiner != nil {
@@ -1909,7 +1919,7 @@ func (a *App) handleEnter() tea.Cmd {
 		item, ok := a.sidebar.SelectedItem()
 		if ok {
 			return func() tea.Msg {
-				return ChannelSelectedMsg{ID: item.ID, Name: item.Name}
+				return ChannelSelectedMsg{ID: item.ID, Name: item.Name, Type: item.Type}
 			}
 		}
 	}

@@ -54,6 +54,36 @@ func TestMessagePaneAppend(t *testing.T) {
 	}
 }
 
+// TestHeaderGlyph_ByChannelType asserts that the message-pane header
+// uses a type-aware glyph: # for public channels (default), \u25c6
+// for private, \u25cf for dm/group_dm. The channel name itself
+// follows the glyph verbatim.
+func TestHeaderGlyph_ByChannelType(t *testing.T) {
+	cases := []struct {
+		chType   string
+		wantGlyph string
+	}{
+		{"channel", "#"},
+		{"", "#"}, // unspecified defaults to #
+		{"private", "\u25c6"},
+		{"dm", "\u25cf"},
+		{"group_dm", "\u25cf"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.chType, func(t *testing.T) {
+			m := New(nil, "general")
+			m.SetChannel("Grant, Myles, Ray", "")
+			m.SetChannelType(tc.chType)
+			out := m.View(20, 60)
+			// View output is ANSI-styled; just look for the glyph + space + name.
+			want := tc.wantGlyph + " Grant, Myles, Ray"
+			if !strings.Contains(out, want) {
+				t.Errorf("type=%q: expected %q in header, got:\n%s", tc.chType, want, out)
+			}
+		})
+	}
+}
+
 // TestAppendMessage_AlwaysScrollsToBottom asserts that an incoming
 // message scrolls the view to the bottom even when the user has
 // scrolled up (selection is not at the last index). This matches

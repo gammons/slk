@@ -88,6 +88,7 @@ type Model struct {
 	selected     int
 	channelName  string
 	channelTopic string
+	channelType  string // "channel", "private", "dm", "group_dm" -- drives header glyph
 	loading      bool
 	avatarFn     AvatarFunc        // optional: returns half-block avatar for a userID
 	userNames    map[string]string // user ID -> display name for mention resolution
@@ -109,6 +110,7 @@ type Model struct {
 	chromeWidth       int
 	chromeChannel     string
 	chromeTopic       string
+	chromeChannelType string
 	chromeCacheValid  bool
 
 	// Cumulative line offsets, computed in buildCache (only when content
@@ -192,6 +194,30 @@ func (m *Model) SetChannel(name, topic string) {
 	}
 	m.channelName = name
 	m.channelTopic = topic
+}
+
+// SetChannelType sets the channel type used to pick the header glyph
+// (# for public, \u25c6 for private, \u25cf for dm/group_dm).
+// Pass an empty string or "channel" for the default `#` prefix.
+func (m *Model) SetChannelType(chType string) {
+	if m.channelType != chType {
+		m.chromeCacheValid = false
+		m.dirty()
+	}
+	m.channelType = chType
+}
+
+// channelGlyph returns the prefix glyph to render before the channel
+// name in the header. Mirrors the sidebar's type-to-glyph mapping.
+func channelGlyph(chType string) string {
+	switch chType {
+	case "private":
+		return "\u25c6" // ◆
+	case "dm", "group_dm":
+		return "\u25cf" // ●
+	default:
+		return "#"
+	}
 }
 
 func (m *Model) SetMessages(msgs []MessageItem) {
@@ -1073,7 +1099,7 @@ func (m *Model) View(height, width int) string {
 	// Chrome (header + separator) is cached; only rebuilt on width / channel
 	// name / topic change. This avoids per-keypress strings.Repeat + lipgloss
 	// renders that don't depend on the selection.
-	if !m.chromeCacheValid || m.chromeWidth != width || m.chromeChannel != m.channelName || m.chromeTopic != m.channelTopic {
+	if !m.chromeCacheValid || m.chromeWidth != width || m.chromeChannel != m.channelName || m.chromeTopic != m.channelTopic || m.chromeChannelType != m.channelType {
 		// Channel title sits in the message pane, so it uses the message-pane
 		// background (not the sidebar's). Bold + TextPrimary on Background
 		// matches the surrounding messages, and the separator below acts as
@@ -1084,7 +1110,7 @@ func (m *Model) View(height, width int) string {
 			Foreground(styles.TextPrimary).
 			Bold(true).
 			Padding(0, 1)
-		header := headerStyle.Render(fmt.Sprintf("# %s", m.channelName))
+		header := headerStyle.Render(fmt.Sprintf("%s %s", channelGlyph(m.channelType), m.channelName))
 		if m.channelTopic != "" {
 			header += "\n" + styles.Timestamp.Render(WordWrap(m.channelTopic, width))
 		}
@@ -1094,6 +1120,7 @@ func (m *Model) View(height, width int) string {
 		m.chromeWidth = width
 		m.chromeChannel = m.channelName
 		m.chromeTopic = m.channelTopic
+		m.chromeChannelType = m.channelType
 		m.chromeCacheValid = true
 	}
 	chrome := m.chromeCache

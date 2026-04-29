@@ -18,6 +18,7 @@ import (
 	"github.com/gammons/slk/internal/notify"
 	"github.com/gammons/slk/internal/service"
 	slackclient "github.com/gammons/slk/internal/slack"
+	"github.com/gammons/slk/internal/slackfmt"
 	"github.com/gammons/slk/internal/ui"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/messages"
@@ -50,7 +51,11 @@ type WorkspaceContext struct {
 	ConnMgr     *slackclient.ConnectionManager
 	RTMHandler  *rtmEventHandler
 	UserNames   map[string]string
-	LastReadMap map[string]string
+	// UserNamesByHandle maps a user's handle (the Slack `name` field
+	// without an `@`) to a display name. Used to resolve participant
+	// handles in mpdm channel names like `mpdm-grant--myles--ray-1`.
+	UserNamesByHandle map[string]string
+	LastReadMap       map[string]string
 	Channels    []sidebar.ChannelItem
 	// FinderItems is the merged list shown in the Ctrl+T finder. Initially
 	// contains only joined channels; the BrowseableChannelsLoadedMsg pipeline
@@ -588,8 +593,9 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		TeamID:      client.TeamID(),
 		TeamName:    token.TeamName,
 		UserID:      client.UserID(),
-		UserNames:   make(map[string]string),
-		LastReadMap: make(map[string]string),
+		UserNames:         make(map[string]string),
+		UserNamesByHandle: make(map[string]string),
+		LastReadMap:       make(map[string]string),
 		CustomEmoji: make(map[string]string),
 	}
 
@@ -601,6 +607,9 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 			name = u.Name
 		}
 		wctx.UserNames[u.ID] = name
+		if u.Name != "" {
+			wctx.UserNamesByHandle[u.Name] = name
+		}
 	}
 
 	// Background user fetch
@@ -618,6 +627,9 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 				name = u.Name
 			}
 			wctx.UserNames[u.ID] = name
+			if u.Name != "" {
+				wctx.UserNamesByHandle[u.Name] = name
+			}
 			db.UpsertUser(cache.User{
 				ID:          u.ID,
 				WorkspaceID: client.TeamID(),
@@ -666,6 +678,10 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 					UserID:    ch.User,
 				})
 			}
+		} else if ch.IsMpIM {
+			displayName = slackfmt.FormatMPDMName(ch.Name, func(h string) string {
+				return wctx.UserNamesByHandle[h]
+			})
 		}
 
 		section := cfg.MatchSection(ch.Name)
