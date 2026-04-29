@@ -35,6 +35,11 @@ type Model struct {
 	emojiActive   bool
 	emojiStartCol int
 
+	// placeholderOverride, when non-empty, replaces the default
+	// "Message #channel..." placeholder. Used by edit mode to display
+	// "Editing message — Enter to save, Esc to cancel".
+	placeholderOverride string
+
 	// version increments on every Update / state mutation. Used by App's
 	// panel-cache layer so the wrapped compose panel only re-renders when
 	// the compose has actually changed.
@@ -46,6 +51,19 @@ type Model struct {
 func (m *Model) Version() int64 { return m.version }
 
 func (m *Model) dirty() { m.version++ }
+
+// defaultPlaceholder returns the default channel-aware placeholder text.
+func (m *Model) defaultPlaceholder() string {
+	return "Message #" + m.channelName + "... (i to insert)"
+}
+
+// effectivePlaceholder returns the override if set, else the default.
+func (m *Model) effectivePlaceholder() string {
+	if m.placeholderOverride != "" {
+		return m.placeholderOverride
+	}
+	return m.defaultPlaceholder()
+}
 
 func New(channelName string) Model {
 	ta := textarea.New()
@@ -103,9 +121,23 @@ func (m *Model) RefreshStyles() {
 func (m *Model) SetChannel(name string) {
 	if m.channelName != name {
 		m.channelName = name
-		m.input.Placeholder = "Message #" + name + "... (i to insert)"
+		if m.placeholderOverride == "" {
+			m.input.Placeholder = m.defaultPlaceholder()
+		}
 		m.dirty()
 	}
+}
+
+// SetPlaceholderOverride sets a custom placeholder string. Pass "" to
+// clear the override and restore the default channel-aware placeholder.
+//
+// The override persists across Blur, SetChannel, and Reset, and is
+// hidden while the textarea is focused. Callers entering an "edit
+// mode" should set the override on entry and clear it on exit.
+func (m *Model) SetPlaceholderOverride(text string) {
+	m.placeholderOverride = text
+	m.input.Placeholder = m.effectivePlaceholder()
+	m.dirty()
 }
 
 func (m *Model) Focus() tea.Cmd {
@@ -115,7 +147,7 @@ func (m *Model) Focus() tea.Cmd {
 }
 
 func (m *Model) Blur() {
-	m.input.Placeholder = "Message #" + m.channelName + "... (i to insert)"
+	m.input.Placeholder = m.effectivePlaceholder()
 	m.input.Blur()
 	m.dirty()
 }

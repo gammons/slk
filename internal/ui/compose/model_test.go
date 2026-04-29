@@ -595,3 +595,70 @@ func TestEmojiAndMentionPickersAreMutuallyExclusive(t *testing.T) {
 		t.Error("emoji picker should not be active when mention is")
 	}
 }
+
+func TestSetPlaceholderOverride(t *testing.T) {
+	m := New("general")
+
+	// Apply override; Blur (which would normally restore the default) must
+	// keep the override active.
+	m.SetPlaceholderOverride("Editing message")
+	m.Blur()
+	got := m.View(40, false)
+	if !strings.Contains(got, "Editing message") {
+		t.Errorf("expected override placeholder in view, got: %q", got)
+	}
+	if strings.Contains(got, "Message #general") {
+		t.Errorf("default placeholder should not appear while override active: %q", got)
+	}
+
+	// Clearing the override restores the default.
+	m.SetPlaceholderOverride("")
+	m.Blur()
+	got2 := m.View(40, false)
+	if !strings.Contains(got2, "Message #general") {
+		t.Errorf("expected default placeholder after clearing override, got: %q", got2)
+	}
+}
+
+func TestSetPlaceholderOverride_SetChannelDoesNotOverwrite(t *testing.T) {
+	m := New("old")
+	m.SetPlaceholderOverride("Editing message")
+	m.SetChannel("new")
+	m.Blur()
+	got := m.View(40, false)
+	if !strings.Contains(got, "Editing message") {
+		t.Errorf("override should survive SetChannel: %q", got)
+	}
+}
+
+func TestSetPlaceholderOverride_HiddenWhileFocused(t *testing.T) {
+	m := New("general")
+	m.SetPlaceholderOverride("Editing message")
+	m.Focus()
+	got := m.View(40, true)
+	// While focused, no placeholder text should be visible.
+	if strings.Contains(got, "Editing message") {
+		t.Errorf("override should be hidden while focused: %q", got)
+	}
+	// On Blur, the override should be restored.
+	m.Blur()
+	got2 := m.View(40, false)
+	if !strings.Contains(got2, "Editing message") {
+		t.Errorf("override should be restored after Blur: %q", got2)
+	}
+}
+
+func TestSetPlaceholderOverride_SurvivesReset(t *testing.T) {
+	m := New("general")
+	m.SetPlaceholderOverride("Editing message")
+	m.SetValue("some draft")
+	m.Reset()
+	m.Blur()
+	got := m.View(40, false)
+	if !strings.Contains(got, "Editing message") {
+		t.Errorf("override should survive Reset (caller controls clearing): %q", got)
+	}
+	if m.Value() != "" {
+		t.Error("Reset should still clear the value")
+	}
+}
