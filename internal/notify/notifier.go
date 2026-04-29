@@ -73,19 +73,31 @@ func ShouldNotify(ctx NotifyContext, channelID, userID, text, channelType string
 }
 
 var (
-	userMentionRe    = regexp.MustCompile(`<@[A-Z0-9]+>`)
+	userMentionRe    = regexp.MustCompile(`<@([A-Z0-9]+)>`)
 	channelMentionRe = regexp.MustCompile(`<#[A-Z0-9]+\|([^>]+)>`)
+	subteamMentionRe = regexp.MustCompile(`<!subteam\^[A-Z0-9]+\|([^>]+)>`)
+	broadcastRe      = regexp.MustCompile(`<!(here|channel|everyone)>`)
 	linkWithLabelRe  = regexp.MustCompile(`<(https?://[^|>]+)\|([^>]+)>`)
 	linkBareRe       = regexp.MustCompile(`<(https?://[^>]+)>`)
 )
 
-// StripSlackMarkup converts Slack-formatted text to plain text.
-// Truncates to 100 characters with "..." suffix.
-func StripSlackMarkup(text string) string {
+// StripSlackMarkup converts Slack-formatted text to plain text suitable for
+// OS notification bodies. User mentions are resolved against userNames; if
+// a user ID is missing from the map (or the map is nil) the raw user ID is
+// used as a fallback. Output is truncated to 100 characters with "..." suffix.
+func StripSlackMarkup(text string, userNames map[string]string) string {
 	text = channelMentionRe.ReplaceAllString(text, "#$1")
 	text = linkWithLabelRe.ReplaceAllString(text, "$2")
 	text = linkBareRe.ReplaceAllString(text, "$1")
-	text = userMentionRe.ReplaceAllString(text, "@someone")
+	text = subteamMentionRe.ReplaceAllString(text, "$1")
+	text = broadcastRe.ReplaceAllString(text, "@$1")
+	text = userMentionRe.ReplaceAllStringFunc(text, func(match string) string {
+		userID := userMentionRe.FindStringSubmatch(match)[1]
+		if name, ok := userNames[userID]; ok {
+			return "@" + name
+		}
+		return "@" + userID
+	})
 	text = strings.ReplaceAll(text, "*", "")
 	text = strings.ReplaceAll(text, "_", "")
 	text = strings.ReplaceAll(text, "~", "")

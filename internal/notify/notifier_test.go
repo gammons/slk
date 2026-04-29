@@ -114,24 +114,45 @@ func TestShouldNotify_InactiveWorkspace_NotSuppressed(t *testing.T) {
 }
 
 func TestStripSlackMarkup(t *testing.T) {
+	userNames := map[string]string{
+		"U123": "Alice",
+		"U456": "Bob",
+	}
 	tests := []struct {
+		name     string
 		input    string
 		expected string
 	}{
-		{"hello world", "hello world"},
-		{"hey <@U123>", "hey @someone"},
-		{"see <#C123|general>", "see #general"},
-		{"visit <https://example.com|Example>", "visit Example"},
-		{"visit <https://example.com>", "visit https://example.com"},
-		{"*bold* and _italic_ and ~strike~", "bold and italic and strike"},
-		{"`code`", "code"},
-		{"", ""},
+		{"plain text", "hello world", "hello world"},
+		{"known user mention", "hey <@U123>", "hey @Alice"},
+		{"unknown user mention falls back to ID", "hey <@U999>", "hey @U999"},
+		{"multiple user mentions", "<@U123> and <@U456>", "@Alice and @Bob"},
+		{"channel mention", "see <#C123|general>", "see #general"},
+		{"link with label", "visit <https://example.com|Example>", "visit Example"},
+		{"bare link", "visit <https://example.com>", "visit https://example.com"},
+		{"broadcast here", "<!here> heads up", "@here heads up"},
+		{"broadcast channel", "<!channel> heads up", "@channel heads up"},
+		{"broadcast everyone", "<!everyone> heads up", "@everyone heads up"},
+		{"subteam mention", "ping <!subteam^S123|@platform> please", "ping @platform please"},
+		{"markup chars stripped", "*bold* and _italic_ and ~strike~", "bold and italic and strike"},
+		{"code", "`code`", "code"},
+		{"empty", "", ""},
 	}
 	for _, tt := range tests {
-		result := StripSlackMarkup(tt.input)
-		if result != tt.expected {
-			t.Errorf("StripSlackMarkup(%q) = %q, want %q", tt.input, result, tt.expected)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			result := StripSlackMarkup(tt.input, userNames)
+			if result != tt.expected {
+				t.Errorf("StripSlackMarkup(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestStripSlackMarkup_NilUserNames(t *testing.T) {
+	// Nil map should not panic; mentions fall back to user ID.
+	result := StripSlackMarkup("hi <@U123>", nil)
+	if result != "hi @U123" {
+		t.Errorf("got %q, want %q", result, "hi @U123")
 	}
 }
 
@@ -140,7 +161,7 @@ func TestStripSlackMarkup_Truncation(t *testing.T) {
 	for i := 0; i < 120; i++ {
 		long += "a"
 	}
-	result := StripSlackMarkup(long)
+	result := StripSlackMarkup(long, nil)
 	if len(result) > 103 {
 		t.Errorf("expected truncation, got length %d", len(result))
 	}

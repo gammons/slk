@@ -1162,7 +1162,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 			if chType == "dm" || chType == "group_dm" {
 				title = h.workspaceName + ": " + senderName
 			}
-			body := senderName + ": " + notify.StripSlackMarkup(text)
+			body := senderName + ": " + notify.StripSlackMarkup(text, h.userNames)
 			go h.notifier.Notify(title, body)
 		}
 	}
