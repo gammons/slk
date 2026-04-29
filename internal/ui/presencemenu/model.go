@@ -80,18 +80,23 @@ func (m Model) hasEndDNDItem() bool {
 }
 
 // buildItems composes the menu rows based on current state.
+//
+// Labels are plain ASCII (no leading emoji glyphs) so that lipgloss's
+// width measurement and the terminal's actual cell width agree. Mixed
+// emoji width — particularly the moon — caused the modal's right
+// border to not draw correctly in some terminals.
 func buildItems(presence string, dndActive bool) []item {
 	rows := []item{
-		{label: "● Active", action: ActionSetActive, current: presence == "active" && !dndActive},
-		{label: "○ Away", action: ActionSetAway, current: presence == "away" && !dndActive},
-		{label: "🌙 Snooze for 20 minutes", action: ActionSnooze, minutes: 20},
-		{label: "🌙 Snooze for 1 hour", action: ActionSnooze, minutes: 60},
-		{label: "🌙 Snooze for 2 hours", action: ActionSnooze, minutes: 120},
-		{label: "🌙 Snooze for 4 hours", action: ActionSnooze, minutes: 240},
-		{label: "🌙 Snooze for 8 hours", action: ActionSnooze, minutes: 480},
-		{label: "🌙 Snooze for 24 hours", action: ActionSnooze, minutes: 1440},
-		{label: "🌙 Snooze until tomorrow morning", action: ActionSnooze, minutes: minutesUntilTomorrowMorning(time.Now())},
-		{label: "🌙 Snooze custom…", action: ActionCustomSnooze},
+		{label: "Active", action: ActionSetActive, current: presence == "active" && !dndActive},
+		{label: "Away", action: ActionSetAway, current: presence == "away" && !dndActive},
+		{label: "Snooze for 20 minutes", action: ActionSnooze, minutes: 20},
+		{label: "Snooze for 1 hour", action: ActionSnooze, minutes: 60},
+		{label: "Snooze for 2 hours", action: ActionSnooze, minutes: 120},
+		{label: "Snooze for 4 hours", action: ActionSnooze, minutes: 240},
+		{label: "Snooze for 8 hours", action: ActionSnooze, minutes: 480},
+		{label: "Snooze for 24 hours", action: ActionSnooze, minutes: 1440},
+		{label: "Snooze until tomorrow morning", action: ActionSnooze, minutes: minutesUntilTomorrowMorning(time.Now())},
+		{label: "Snooze custom...", action: ActionCustomSnooze},
 	}
 	if dndActive {
 		rows = append(rows, item{label: "End snooze / DND", action: ActionEndDND})
