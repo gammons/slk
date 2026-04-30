@@ -7,6 +7,7 @@ package image
 import (
 	"image"
 	"io"
+	"os"
 )
 
 // Protocol enumerates the rendering protocols this package can emit.
@@ -99,6 +100,15 @@ var (
 func KittyRendererInstance() *KittyRenderer {
 	return kittyRendererInstance
 }
+
+// KittyOutput is the writer that receives kitty graphics-protocol APC
+// upload escapes. In production it's os.Stdout (bubbletea's terminal);
+// tests override it to capture and assert. We use a side-channel writer
+// rather than embedding the bytes in View()'s return string because
+// lipgloss / bubbletea v2 mangle APC sequences embedded in line content.
+//
+// Set once at startup if a non-default writer is needed.
+var KittyOutput io.Writer = os.Stdout
 
 // SixelSentinel is a private-use codepoint reserved for slk to mark a row
 // in viewEntry.Lines that should trigger a sixel byte stream emission

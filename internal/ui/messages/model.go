@@ -7,7 +7,6 @@ import (
 	"image"
 	"io"
 	"log"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -2001,7 +2000,7 @@ func (m *Model) View(height, width int) string {
 		log.Printf("[image-debug] kitty flush writing %d bytes directly to terminal; first 80 bytes: %q",
 			kittyFlushBuf.Len(),
 			truncForLog(kittyFlushBuf.String(), 80))
-		_, _ = kittyOutput.Write(kittyFlushBuf.Bytes())
+		_, _ = imgpkg.KittyOutput.Write(kittyFlushBuf.Bytes())
 	}
 
 	// Pad vertically with the themed spacer if content is shorter than the pane.
@@ -2037,14 +2036,6 @@ func (m *Model) View(height, width int) string {
 
 	return chrome + "\n" + strings.Join(visible, "\n")
 }
-
-// kittyOutput is the writer that receives kitty graphics-protocol APC
-// upload escapes. In production it's os.Stdout (bubbletea's terminal);
-// tests override it to capture and assert. We use a side-channel writer
-// rather than embedding the bytes in View()'s return string because
-// lipgloss / bubbletea v2 are known to mangle APC sequences inside line
-// content.
-var kittyOutput io.Writer = os.Stdout
 
 // truncForLog clamps a string to maxBytes for safe logging.
 func truncForLog(s string, maxBytes int) string {

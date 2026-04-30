@@ -467,12 +467,12 @@ func TestView_SixelPartialVisibility_UsesFallback(t *testing.T) {
 func TestView_KittyEmitsUploadEscape(t *testing.T) {
 	m := setupImageMessageModel(t, imgpkg.ProtoKitty)
 	// Capture the kitty side-channel output. The upload escape is
-	// written directly to kittyOutput (not embedded in View()'s
+	// written directly to imgpkg.KittyOutput (not embedded in View()'s
 	// return string) because bubbletea/lipgloss strip APC sequences.
-	saved := kittyOutput
-	defer func() { kittyOutput = saved }()
+	saved := imgpkg.KittyOutput
+	defer func() { imgpkg.KittyOutput = saved }()
 	var buf bytes.Buffer
-	kittyOutput = &buf
+	imgpkg.KittyOutput = &buf
 
 	_ = m.View(60, 80)
 	if !strings.Contains(buf.String(), "\x1b_G") {

@@ -75,6 +75,15 @@ func (p *Preview) View(width, height int, proto Protocol) string {
 
 	render := RenderImage(proto, p.img, target)
 
+	// For kitty: write the upload APC escape directly to the terminal
+	// side channel before the placeholder cells go into the View string.
+	// Embedding the upload in the returned string would have it mangled
+	// by lipgloss/bubbletea (same reason the messages-pane goes around
+	// the frame buffer).
+	if render.OnFlush != nil {
+		_ = render.OnFlush(KittyOutput)
+	}
+
 	caption := fmt.Sprintf("%s  •  %dx%d", p.name, srcW, srcH)
 	captionStyle := lipgloss.NewStyle().Faint(true).Width(width)
 
