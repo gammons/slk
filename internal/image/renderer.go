@@ -88,6 +88,14 @@ func RenderImage(proto Protocol, img image.Image, target image.Point) Render {
 // Singleton renderers — concrete instances appear in kitty.go / sixel.go.
 // Until those exist, fall back to half-block so this file builds in isolation.
 var (
-	sixelRenderer Renderer = HalfBlockRenderer{}
-	kittyRenderer Renderer = HalfBlockRenderer{}
+	registry                       = NewRegistry()
+	kittyRendererInstance          = NewKittyRenderer(registry)
+	kittyRenderer         Renderer = kittyRendererInstance
+	sixelRenderer         Renderer = HalfBlockRenderer{} // overwritten in Phase 4
 )
+
+// KittyRendererInstance returns the package-level KittyRenderer so callers
+// (e.g. the messages-pane integration) can SetSource on stable keys.
+func KittyRendererInstance() *KittyRenderer {
+	return kittyRendererInstance
+}
