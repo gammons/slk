@@ -466,9 +466,17 @@ func TestView_SixelPartialVisibility_UsesFallback(t *testing.T) {
 // guarantees this happens exactly once per image per frame.
 func TestView_KittyEmitsUploadEscape(t *testing.T) {
 	m := setupImageMessageModel(t, imgpkg.ProtoKitty)
-	out := m.View(60, 80)
-	if !strings.Contains(out, "\x1b_G") {
-		t.Errorf("expected View() output to contain a kitty graphics escape (\\x1b_G) for the visible image's upload")
+	// Capture the kitty side-channel output. The upload escape is
+	// written directly to kittyOutput (not embedded in View()'s
+	// return string) because bubbletea/lipgloss strip APC sequences.
+	saved := kittyOutput
+	defer func() { kittyOutput = saved }()
+	var buf bytes.Buffer
+	kittyOutput = &buf
+
+	_ = m.View(60, 80)
+	if !strings.Contains(buf.String(), "\x1b_G") {
+		t.Errorf("expected kitty side-channel to receive a graphics escape (\\x1b_G) for the visible image's upload; got %d bytes without it", buf.Len())
 	}
 }
 
