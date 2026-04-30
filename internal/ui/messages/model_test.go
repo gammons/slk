@@ -2,8 +2,14 @@
 package messages
 
 import (
+	"bytes"
+	stdimage "image"
+	imgcolor "image/color"
+	imgpng "image/png"
 	"strings"
 	"testing"
+
+	imgpkg "github.com/gammons/slk/internal/image"
 )
 
 func TestMessagePaneView(t *testing.T) {
@@ -243,5 +249,122 @@ func TestRemoveMessageByTS_LastBecomesEmpty(t *testing.T) {
 	}
 	if _, ok := m.SelectedMessage(); ok {
 		t.Error("SelectedMessage should be (_, false) when empty")
+	}
+}
+
+// makeTestPNG synthesizes a w×h RGBA PNG. Used as fixture bytes
+// for the inline-image cache so tests don't need network access.
+func makeTestPNG(w, h int) []byte {
+	src := stdimage.NewRGBA(stdimage.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			src.Set(x, y, imgcolor.RGBA{R: uint8(x), G: uint8(y), B: 128, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := imgpng.Encode(&buf, src); err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
+}
+
+// TestImageReady_DoesNotChangeMessageHeight is the headline behavioral
+// guarantee of the inline-image pipeline: the user's scroll position
+// must not jump when an image transitions from the loading placeholder
+// to the rendered bytes. The placeholder block reserves exactly the
+// same number of rows as the eventual image, so the cached viewEntry
+// height for the message must be identical across the two renders.
+//
+// The test injects the image bytes directly into the on-disk cache (no
+// HTTP), then simulates the goroutine completion via HandleImageReady
+// (which is what App.Update wires to ImageReadyMsg in Phase 5.6).
+func TestImageReady_DoesNotChangeMessageHeight(t *testing.T) {
+	cache, err := imgpkg.NewCache(t.TempDir(), 10)
+	if err != nil {
+		t.Fatalf("NewCache: %v", err)
+	}
+	fetcher := imgpkg.NewFetcher(cache, nil)
+
+	const channel = "C123"
+	const ts = "1700000000.000100"
+	const fileID = "F0123ABCD"
+
+	msg := MessageItem{
+		TS:        ts,
+		UserID:    "U1",
+		UserName:  "alice",
+		Text:      "look at this",
+		Timestamp: "10:30 AM",
+		Attachments: []Attachment{{
+			Kind:   "image",
+			Name:   "screenshot.png",
+			URL:    "https://example.com/perma",
+			FileID: fileID,
+			Mime:   "image/png",
+			Thumbs: []ThumbSpec{{URL: "https://example.com/720.png", W: 720, H: 720}},
+		}},
+	}
+
+	m := New([]MessageItem{msg}, channel)
+	m.SetImageContext(ImageContext{
+		Protocol:   imgpkg.ProtoHalfBlock,
+		Fetcher:    fetcher,
+		CellPixels: stdimage.Pt(8, 16),
+		MaxRows:    20,
+		// SendMsg deliberately nil: we drive the "image arrived"
+		// transition synchronously via HandleImageReady below
+		// rather than relying on the prefetcher goroutine.
+		SendMsg: nil,
+	})
+
+	const width = 80
+	const height = 30
+
+	// First render: cache is empty → placeholder is emitted at the
+	// reserved size. (A fetch goroutine is spawned but its result
+	// races with the second render; we don't depend on it.)
+	_ = m.View(height, width)
+
+	heightBefore := -1
+	for _, e := range m.cache {
+		if e.msgIdx == 0 {
+			heightBefore = e.height
+			break
+		}
+	}
+	if heightBefore < 0 {
+		t.Fatal("could not find message entry in cache after first render")
+	}
+
+	// Inject the image bytes directly. Key format from
+	// renderAttachmentBlock is "<FileID>-<suffix>" where suffix is
+	// max(thumb.W, thumb.H) of the picked thumb. PickThumb chooses
+	// the smallest thumb satisfying the pixel target; for a single
+	// 720×720 thumb that's always the one picked, with suffix "720".
+	pngBytes := makeTestPNG(720, 720)
+	if _, err := cache.Put(fileID+"-720", "png", pngBytes); err != nil {
+		t.Fatalf("cache.Put: %v", err)
+	}
+
+	// Simulate the prefetcher goroutine completion. This is what
+	// App.Update calls when ImageReadyMsg lands.
+	m.HandleImageReady(channel, ts)
+
+	// Second render: bytes are now cached → real image render.
+	_ = m.View(height, width)
+
+	heightAfter := -1
+	for _, e := range m.cache {
+		if e.msgIdx == 0 {
+			heightAfter = e.height
+			break
+		}
+	}
+	if heightAfter < 0 {
+		t.Fatal("could not find message entry in cache after second render")
+	}
+
+	if heightAfter != heightBefore {
+		t.Errorf("message height changed across image load: before=%d after=%d (placeholder must reserve exactly the rendered image's height)", heightBefore, heightAfter)
 	}
 }
