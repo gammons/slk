@@ -157,3 +157,100 @@ func TestRenderSectionFieldsCollapseAtNarrowWidth(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderSectionWithButtonAccessory(t *testing.T) {
+	ctx := Context{
+		RenderText: func(s string, _ map[string]string) string { return s },
+		WrapText:   func(s string, _ int) string { return s },
+	}
+	r := Render([]Block{SectionBlock{
+		Text:      "Ready to deploy?",
+		Accessory: LabelAccessory{Kind: "button", Label: "Deploy"},
+	}}, ctx, 80)
+	all := ansi.Strip(strings.Join(r.Lines, "\n"))
+	if !strings.Contains(all, "Ready to deploy?") {
+		t.Errorf("missing body: %q", all)
+	}
+	if !strings.Contains(all, "[ Deploy ]") {
+		t.Errorf("missing button label: %q", all)
+	}
+	// Side-by-side at width 80: body and button on at least one
+	// shared row.
+	foundShared := false
+	for _, line := range r.Lines {
+		plain := ansi.Strip(line)
+		if strings.Contains(plain, "Ready") && strings.Contains(plain, "Deploy") {
+			foundShared = true
+			break
+		}
+	}
+	if !foundShared {
+		t.Error("expected body and button on at least one shared row at width 80")
+	}
+	if !r.Interactive {
+		t.Error("Interactive should be true after rendering a button accessory")
+	}
+}
+
+func TestRenderSectionWithSelectAccessory(t *testing.T) {
+	ctx := Context{
+		RenderText: func(s string, _ map[string]string) string { return s },
+		WrapText:   func(s string, _ int) string { return s },
+	}
+	r := Render([]Block{SectionBlock{
+		Text:      "Pick env:",
+		Accessory: LabelAccessory{Kind: "static_select", Label: "production"},
+	}}, ctx, 80)
+	all := ansi.Strip(strings.Join(r.Lines, "\n"))
+	if !strings.Contains(all, "production ▾") {
+		t.Errorf("expected 'production ▾' in output, got %q", all)
+	}
+}
+
+func TestRenderSectionWithOverflowAccessory(t *testing.T) {
+	ctx := Context{
+		RenderText: func(s string, _ map[string]string) string { return s },
+		WrapText:   func(s string, _ int) string { return s },
+	}
+	r := Render([]Block{SectionBlock{
+		Text:      "Options",
+		Accessory: LabelAccessory{Kind: "overflow"},
+	}}, ctx, 80)
+	all := ansi.Strip(strings.Join(r.Lines, "\n"))
+	if !strings.Contains(all, "⋯") {
+		t.Errorf("expected '⋯' for overflow, got %q", all)
+	}
+}
+
+func TestRenderSectionWithDatepickerAccessory(t *testing.T) {
+	ctx := Context{
+		RenderText: func(s string, _ map[string]string) string { return s },
+		WrapText:   func(s string, _ int) string { return s },
+	}
+	r := Render([]Block{SectionBlock{
+		Text:      "Pick date",
+		Accessory: LabelAccessory{Kind: "datepicker", Label: "2026-04-30"},
+	}}, ctx, 80)
+	all := ansi.Strip(strings.Join(r.Lines, "\n"))
+	if !strings.Contains(all, "📅") || !strings.Contains(all, "2026-04-30") {
+		t.Errorf("expected date glyph and value, got %q", all)
+	}
+}
+
+func TestRenderSectionAccessoryStacksAtNarrowWidth(t *testing.T) {
+	ctx := Context{
+		RenderText: func(s string, _ map[string]string) string { return s },
+		WrapText:   func(s string, _ int) string { return s },
+	}
+	r := Render([]Block{SectionBlock{
+		Text:      "Body",
+		Accessory: LabelAccessory{Kind: "button", Label: "X"},
+	}}, ctx, 30) // < narrowBreakpoint
+	// Body and button must NOT share a row.
+	for _, line := range r.Lines {
+		plain := ansi.Strip(line)
+		if strings.Contains(plain, "Body") && strings.Contains(plain, "X") {
+			t.Errorf("at narrow width, body and accessory should stack: %q", plain)
+		}
+	}
+}

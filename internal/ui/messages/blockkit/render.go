@@ -56,13 +56,88 @@ func appendBlock(out *RenderResult, b Block, ctx Context, width int) {
 }
 
 func appendSection(out *RenderResult, s SectionBlock, ctx Context, width int) {
-	// Body text first (no accessory handling yet — Task 7 adds it).
-	if s.Text != "" {
-		out.Lines = append(out.Lines, renderTextLines(s.Text, ctx, width)...)
+	bodyW := width
+	var accessoryLines []string
+	var accessoryW int
+	if la, ok := s.Accessory.(LabelAccessory); ok {
+		label := renderControlLabel(la.Kind, la.Label)
+		accessoryW = lipgloss.Width(label)
+		accessoryLines = []string{label}
+		out.Interactive = true
+		if width >= narrowBreakpoint {
+			candidate := width - accessoryW - 2 // 2 col gutter
+			if candidate < 10 {
+				// Accessory too wide; fall through to stacked below.
+				accessoryW = 0
+			} else {
+				bodyW = candidate
+			}
+		} else {
+			// Narrow: stack regardless.
+			accessoryW = 0
+		}
 	}
-	// Then fields grid.
+
+	// Body text.
+	var bodyLines []string
+	if s.Text != "" {
+		bodyLines = renderTextLines(s.Text, ctx, bodyW)
+	}
+
+	if accessoryW > 0 && width >= narrowBreakpoint {
+		// Side-by-side. joinSideBySide pads accessory column to height
+		// of body (or vice-versa).
+		out.Lines = append(out.Lines, joinSideBySide(bodyLines, accessoryLines, bodyW, 2)...)
+	} else {
+		out.Lines = append(out.Lines, bodyLines...)
+		if len(accessoryLines) > 0 {
+			out.Lines = append(out.Lines, accessoryLines...)
+		}
+	}
+
 	if len(s.Fields) > 0 {
 		out.Lines = append(out.Lines, renderFieldsGrid(s.Fields, ctx, width)...)
+	}
+}
+
+// renderControlLabel produces a muted, non-interactive label for a
+// section accessory or actions element. The shape depends on the
+// element kind. Used by both Task 7 (accessories) and Task 9
+// (actions block elements).
+func renderControlLabel(kind, label string) string {
+	switch kind {
+	case "button", "workflow_button":
+		text := label
+		if text == "" {
+			text = "Button"
+		}
+		return controlStyle().Render("[ " + text + " ]")
+	case "static_select", "multi_select":
+		text := label
+		if text == "" {
+			text = "Select"
+		}
+		return controlStyle().Render(text + " ▾")
+	case "overflow":
+		return controlStyle().Render("⋯")
+	case "datepicker":
+		text := label
+		if text == "" {
+			text = "Pick date"
+		}
+		return controlStyle().Render("📅 " + text)
+	case "timepicker":
+		text := label
+		if text == "" {
+			text = "Pick time"
+		}
+		return controlStyle().Render("🕒 " + text)
+	case "radio_buttons":
+		return controlStyle().Render("◯ Options")
+	case "checkboxes":
+		return controlStyle().Render("☐ Options")
+	default:
+		return controlStyle().Render("[ control ]")
 	}
 }
 
