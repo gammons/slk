@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -158,4 +159,33 @@ func (f *Fetcher) Bytes(key string) ([]byte, error) {
 		return nil, fmt.Errorf("not cached: %s", key)
 	}
 	return os.ReadFile(path)
+}
+
+// ThumbSpec is one Slack thumbnail variant.
+type ThumbSpec struct {
+	URL string
+	W   int
+	H   int
+}
+
+// PickThumb selects the smallest thumb whose dimensions are >= target on
+// both axes. Falls back to the largest available if none satisfy.
+// suffix is a short string usable in cache keys (e.g. "720").
+func PickThumb(thumbs []ThumbSpec, target image.Point) (url, suffix string) {
+	if len(thumbs) == 0 {
+		return "", ""
+	}
+	// Sort ascending by max(W, H).
+	sorted := make([]ThumbSpec, len(thumbs))
+	copy(sorted, thumbs)
+	sort.Slice(sorted, func(i, j int) bool {
+		return max(sorted[i].W, sorted[i].H) < max(sorted[j].W, sorted[j].H)
+	})
+	for _, t := range sorted {
+		if t.W >= target.X && t.H >= target.Y {
+			return t.URL, fmt.Sprintf("%d", max(t.W, t.H))
+		}
+	}
+	last := sorted[len(sorted)-1]
+	return last.URL, fmt.Sprintf("%d", max(last.W, last.H))
 }
