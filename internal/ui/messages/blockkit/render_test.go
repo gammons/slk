@@ -254,3 +254,49 @@ func TestRenderSectionAccessoryStacksAtNarrowWidth(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderContextBlockTextOnly(t *testing.T) {
+	ctx := Context{
+		RenderText: func(s string, _ map[string]string) string { return s },
+		WrapText:   func(s string, _ int) string { return s },
+	}
+	r := Render([]Block{ContextBlock{
+		Elements: []ContextElement{
+			{Text: "Posted by"},
+			{Text: "@gammons"},
+			{Text: "·"},
+			{Text: "2 min ago"},
+		},
+	}}, ctx, 80)
+	if r.Height < 1 {
+		t.Fatalf("Height = %d", r.Height)
+	}
+	plain := ansi.Strip(r.Lines[0])
+	for _, want := range []string{"Posted by", "@gammons", "2 min ago"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("missing %q in %q", want, plain)
+		}
+	}
+}
+
+func TestRenderContextBlockWithImageElementsRendersAltText(t *testing.T) {
+	// Phase 2: image elements render as bracketed alt text. Phase 3
+	// will swap in actual inline images.
+	ctx := Context{
+		RenderText: func(s string, _ map[string]string) string { return s },
+		WrapText:   func(s string, _ int) string { return s },
+	}
+	r := Render([]Block{ContextBlock{
+		Elements: []ContextElement{
+			{ImageURL: "https://example.com/icon.png", AltText: "icon"},
+			{Text: "by gammons"},
+		},
+	}}, ctx, 80)
+	plain := ansi.Strip(strings.Join(r.Lines, "\n"))
+	if !strings.Contains(plain, "[icon]") {
+		t.Errorf("expected '[icon]' (Phase 2 alt-text fallback), got %q", plain)
+	}
+	if !strings.Contains(plain, "by gammons") {
+		t.Errorf("missing text element: %q", plain)
+	}
+}

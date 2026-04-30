@@ -45,6 +45,8 @@ func appendBlock(out *RenderResult, b Block, ctx Context, width int) {
 		out.Lines = append(out.Lines, renderHeader(v.Text, width))
 	case SectionBlock:
 		appendSection(out, v, ctx, width)
+	case ContextBlock:
+		appendContext(out, v, ctx, width)
 	case UnknownBlock:
 		out.Lines = append(out.Lines, renderUnsupported(v.Type, width))
 	default:
@@ -97,6 +99,36 @@ func appendSection(out *RenderResult, s SectionBlock, ctx Context, width int) {
 
 	if len(s.Fields) > 0 {
 		out.Lines = append(out.Lines, renderFieldsGrid(s.Fields, ctx, width)...)
+	}
+}
+
+func appendContext(out *RenderResult, c ContextBlock, ctx Context, width int) {
+	if len(c.Elements) == 0 {
+		return
+	}
+	var parts []string
+	for _, e := range c.Elements {
+		switch {
+		case e.ImageURL != "":
+			alt := e.AltText
+			if alt == "" {
+				alt = "image"
+			}
+			parts = append(parts, "["+alt+"]")
+		case e.Text != "":
+			rendered := e.Text
+			if ctx.RenderText != nil {
+				rendered = ctx.RenderText(e.Text, ctx.UserNames)
+			}
+			parts = append(parts, rendered)
+		}
+	}
+	combined := strings.Join(parts, " ")
+	if ctx.WrapText != nil {
+		combined = ctx.WrapText(combined, width)
+	}
+	for _, line := range strings.Split(combined, "\n") {
+		out.Lines = append(out.Lines, mutedStyle().Render(line))
 	}
 }
 
