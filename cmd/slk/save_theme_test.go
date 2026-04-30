@@ -238,3 +238,35 @@ func TestSaveWorkspaceThemeSanitizesTeamName(t *testing.T) {
 		t.Errorf("expected sanitized comment to still contain ACME, got:\n%s", got)
 	}
 }
+
+func TestSaveWorkspaceThemeDoesNotClobberDottedThemeKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	initial := `# ACME Corp
+[workspaces.work]
+team_id = "T01ABCDEF"
+theme.background = "#000000"
+theme = "dracula"
+`
+	if err := os.WriteFile(path, []byte(initial), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := saveWorkspaceTheme(path, "work", "T01ABCDEF", "ACME Corp", "tokyo night"); err != nil {
+		t.Fatalf("saveWorkspaceTheme: %v", err)
+	}
+
+	got, _ := os.ReadFile(path)
+	s := string(got)
+	if !strings.Contains(s, `theme = "tokyo night"`) {
+		t.Errorf("expected theme updated, got:\n%s", s)
+	}
+	if !strings.Contains(s, `theme.background = "#000000"`) {
+		t.Errorf("dotted theme.background line was clobbered:\n%s", s)
+	}
+	// Make sure we didn't end up with two `theme = ` lines.
+	count := strings.Count(s, "theme = ")
+	if count != 1 {
+		t.Errorf("expected exactly one `theme = ` line, found %d:\n%s", count, s)
+	}
+}

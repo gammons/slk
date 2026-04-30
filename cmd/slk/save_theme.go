@@ -122,7 +122,8 @@ func saveWorkspaceTheme(configPath, tomlKey, teamID, teamName, themeName string)
 		updated := false
 		for j := sectionStart + 1; j < end; j++ {
 			t := strings.TrimSpace(lines[j])
-			if strings.HasPrefix(t, "theme") && strings.Contains(t, "=") {
+			if strings.HasPrefix(t, "theme") && strings.Contains(t, "=") &&
+				!strings.HasPrefix(t, "theme.") {
 				lines[j] = "theme = " + tomlString(themeName)
 				updated = true
 				break
