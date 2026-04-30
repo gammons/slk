@@ -91,7 +91,7 @@ var (
 	registry                       = NewRegistry()
 	kittyRendererInstance          = NewKittyRenderer(registry)
 	kittyRenderer         Renderer = kittyRendererInstance
-	sixelRenderer         Renderer = HalfBlockRenderer{} // overwritten in Phase 4
+	sixelRenderer         Renderer = NewSixelRenderer()
 )
 
 // KittyRendererInstance returns the package-level KittyRenderer so callers
