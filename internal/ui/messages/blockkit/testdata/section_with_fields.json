@@ -1,0 +1,9 @@
+{
+  "blocks": [
+    { "type": "section", "text": { "type": "mrkdwn", "text": "Build complete" }, "fields": [
+      { "type": "mrkdwn", "text": "*Branch*\nmain" },
+      { "type": "mrkdwn", "text": "*Commit*\n`abc1234`" },
+      { "type": "mrkdwn", "text": "*Duration*\n4m 12s" }
+    ]}
+  ]
+}

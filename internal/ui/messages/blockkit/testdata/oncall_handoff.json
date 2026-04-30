@@ -1,0 +1,13 @@
+{
+  "blocks": [
+    { "type": "header", "text": { "type": "plain_text", "text": "Weekly on-call handoff" } },
+    { "type": "section", "fields": [
+      { "type": "mrkdwn", "text": "*Outgoing*\nalice" },
+      { "type": "mrkdwn", "text": "*Incoming*\nbob" }
+    ]},
+    { "type": "divider" },
+    { "type": "context", "elements": [
+      { "type": "mrkdwn", "text": "Rotation rotates Mondays at 9am UTC" }
+    ]}
+  ]
+}

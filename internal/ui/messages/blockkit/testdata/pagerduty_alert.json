@@ -1,0 +1,16 @@
+{
+  "attachments": [{
+    "color": "danger",
+    "title": "Service down: checkout-svc",
+    "title_link": "https://status.example.com/incidents/123",
+    "text": "p99 latency > SLO for 3m",
+    "fields": [
+      {"title": "Service", "value": "checkout-svc", "short": true},
+      {"title": "Severity", "value": "SEV-2", "short": true},
+      {"title": "Region", "value": "us-east-1", "short": true},
+      {"title": "Status", "value": "firing", "short": true}
+    ],
+    "footer": "Datadog",
+    "ts": "1700000000"
+  }]
+}
