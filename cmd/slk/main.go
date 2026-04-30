@@ -36,6 +36,7 @@ import (
 	emoji "github.com/kyokomi/emoji/v2"
 	"github.com/slack-go/slack"
 	"golang.design/x/clipboard"
+	"golang.org/x/term"
 )
 
 // Build-time version info, injected via -ldflags by GoReleaser.
@@ -274,9 +275,8 @@ func run() error {
 	tsFormat := cfg.Appearance.TimestampFormat
 
 	// Initialize shared image cache (used for avatars and inline images).
-	// 200MB cap is hardcoded for now; Phase 5.1 wires config.MaxImageCacheMB.
 	imagesDir := filepath.Join(cacheDir, "images")
-	imageCache, err := imgpkg.NewCache(imagesDir, 200)
+	imageCache, err := imgpkg.NewCache(imagesDir, cfg.Cache.MaxImageCacheMB)
 	if err != nil {
 		log.Fatalf("image cache: %v", err)
 	}
@@ -291,6 +291,34 @@ func run() error {
 	}
 
 	avatarCache := avatar.NewCache(imageFetcher)
+
+	// Detect image rendering protocol.
+	proto := imgpkg.Detect(imgpkg.CaptureEnv(), cfg.Appearance.ImageProtocol)
+
+	// Optional: run kitty version probe if detected as kitty AND stdin is a TTY.
+	// Must happen BEFORE bubbletea takes over the terminal.
+	if proto == imgpkg.ProtoKitty && term.IsTerminal(int(os.Stdin.Fd())) {
+		state, err := term.MakeRaw(int(os.Stdin.Fd()))
+		if err == nil {
+			ok := imgpkg.ProbeKittyGraphics(os.Stdout, os.Stdin, 200*time.Millisecond)
+			_ = term.Restore(int(os.Stdin.Fd()), state)
+			if !ok {
+				log.Println("kitty probe failed, downgrading to halfblock")
+				proto = imgpkg.ProtoHalfBlock
+			}
+		}
+	}
+	log.Printf("image protocol: %s", proto)
+
+	// Cell pixel metrics for sizing decisions.
+	pxW, pxH := imgpkg.CellPixels(int(os.Stdout.Fd()))
+	log.Printf("cell pixels: %dx%d", pxW, pxH)
+
+	// Suppress unused-warnings until Task 5.5 wires these into the messages model.
+	_ = proto
+	_ = pxW
+	_ = pxH
+	_ = imgpkg.KittyRendererInstance() // ensure compile-time linkage
 
 	// Build workspace rail items for all tokens
 	var wsItems []workspace.WorkspaceItem
