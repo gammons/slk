@@ -317,9 +317,9 @@ func run() error {
 		log.Printf("migrated %d avatars to %s", n, imagesDir)
 	}
 
-	avatarCache := avatar.NewCache(imageFetcher)
-
-	// Detect image rendering protocol.
+	// Detect image rendering protocol BEFORE constructing the avatar
+	// cache so the cache can pick the right rendering path (kitty
+	// graphics for sharp pixels, halfblock otherwise).
 	proto := imgpkg.Detect(imgpkg.CaptureEnv(), cfg.Appearance.ImageProtocol)
 
 	// Optional: run kitty version probe if detected as kitty AND stdin is a TTY.
@@ -340,6 +340,11 @@ func run() error {
 		}
 	}
 	log.Printf("image protocol: %s", proto)
+
+	// Avatars use kitty graphics when available (sharper). Sixel and
+	// half-block terminals fall back to half-block — re-emitting sixel
+	// per visible avatar per redraw would dominate the bandwidth budget.
+	avatarCache := avatar.NewCache(imageFetcher, imgpkg.KittyRendererInstance(), proto == imgpkg.ProtoKitty)
 
 	// Cell pixel metrics for sizing decisions.
 	pxW, pxH := imgpkg.CellPixels(int(os.Stdout.Fd()))

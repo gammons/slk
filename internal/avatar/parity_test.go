@@ -40,7 +40,10 @@ func TestRender_ParityGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	fetcher := imgpkg.NewFetcher(cache, http.DefaultClient)
-	c := NewCache(fetcher)
+	// Halfblock path explicitly: parity test verifies this rendering
+	// stays byte-identical to the original pre-kitty pipeline. Kitty
+	// avatars are tested separately.
+	c := NewCache(fetcher, nil, false)
 	c.PreloadSync("U_GOLDEN", srv.URL)
 	got := c.Get("U_GOLDEN")
 	if got == "" {
