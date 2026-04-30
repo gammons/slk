@@ -115,6 +115,69 @@ func TestLoadConfigMissingFile(t *testing.T) {
 	}
 }
 
+func TestConfig_ImageDefaults(t *testing.T) {
+	// Loading a missing/empty config file should yield image-related defaults.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Appearance.ImageProtocol != "auto" {
+		t.Errorf("expected default image_protocol 'auto', got %q", cfg.Appearance.ImageProtocol)
+	}
+	if cfg.Appearance.MaxImageRows != 20 {
+		t.Errorf("expected default max_image_rows 20, got %d", cfg.Appearance.MaxImageRows)
+	}
+	if cfg.Cache.MaxImageCacheMB != 200 {
+		t.Errorf("expected default max_image_cache_mb 200, got %d", cfg.Cache.MaxImageCacheMB)
+	}
+
+	// Default() directly should also yield these values.
+	d := Default()
+	if d.Appearance.ImageProtocol != "auto" {
+		t.Errorf("Default() image_protocol = %q, want 'auto'", d.Appearance.ImageProtocol)
+	}
+	if d.Appearance.MaxImageRows != 20 {
+		t.Errorf("Default() max_image_rows = %d, want 20", d.Appearance.MaxImageRows)
+	}
+	if d.Cache.MaxImageCacheMB != 200 {
+		t.Errorf("Default() max_image_cache_mb = %d, want 200", d.Cache.MaxImageCacheMB)
+	}
+}
+
+func TestConfig_ImageOverrides(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	data := []byte(`
+[appearance]
+image_protocol = "halfblock"
+max_image_rows = 10
+
+[cache]
+max_image_cache_mb = 50
+`)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Appearance.ImageProtocol != "halfblock" {
+		t.Errorf("expected image_protocol 'halfblock', got %q", cfg.Appearance.ImageProtocol)
+	}
+	if cfg.Appearance.MaxImageRows != 10 {
+		t.Errorf("expected max_image_rows 10, got %d", cfg.Appearance.MaxImageRows)
+	}
+	if cfg.Cache.MaxImageCacheMB != 50 {
+		t.Errorf("expected max_image_cache_mb 50, got %d", cfg.Cache.MaxImageCacheMB)
+	}
+}
+
 func TestResolveThemeWorkspaceWins(t *testing.T) {
 	c := Config{
 		Appearance: Appearance{Theme: "dark"},

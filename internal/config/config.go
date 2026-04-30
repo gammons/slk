@@ -37,6 +37,11 @@ type Appearance struct {
 	Theme           string `toml:"theme"`
 	TimestampFormat string `toml:"timestamp_format"`
 	ShowAvatars     bool   `toml:"show_avatars"`
+	// ImageProtocol controls how inline images are rendered.
+	// One of: "auto", "kitty", "sixel", "halfblock", "off".
+	ImageProtocol string `toml:"image_protocol"`
+	// MaxImageRows caps the height of inline images in terminal rows.
+	MaxImageRows int `toml:"max_image_rows"`
 }
 
 type Animations struct {
@@ -58,6 +63,8 @@ type Notifications struct {
 type CacheConfig struct {
 	MessageRetentionDays int `toml:"message_retention_days"`
 	MaxDBSizeMB          int `toml:"max_db_size_mb"`
+	// MaxImageCacheMB caps the on-disk/in-memory image cache size in MB.
+	MaxImageCacheMB int64 `toml:"max_image_cache_mb"`
 }
 
 // Sidebar holds preferences governing what appears in the channel
@@ -96,6 +103,8 @@ func Default() Config {
 		Appearance: Appearance{
 			Theme:           "nord",
 			TimestampFormat: "3:04 PM",
+			ImageProtocol:   "auto",
+			MaxImageRows:    20,
 		},
 		Animations: Animations{
 			Enabled:          true,
@@ -112,6 +121,7 @@ func Default() Config {
 		Cache: CacheConfig{
 			MessageRetentionDays: 30,
 			MaxDBSizeMB:          500,
+			MaxImageCacheMB:      200,
 		},
 		Sidebar: Sidebar{
 			HideInactiveAfterDays: 30,
