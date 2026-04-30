@@ -1984,6 +1984,9 @@ func (m *Model) View(height, width int) string {
 	// cursor, so prepending them inside a row is safe regardless of
 	// downstream wrapping.
 	if kittyFlushBuf.Len() > 0 && len(visible) > 0 {
+		log.Printf("[image-debug] kitty flush prepending %d bytes to visible[0]; first 80 bytes: %q",
+			kittyFlushBuf.Len(),
+			truncForLog(kittyFlushBuf.String(), 80))
 		visible[0] = kittyFlushBuf.String() + visible[0]
 	}
 
@@ -2019,6 +2022,14 @@ func (m *Model) View(height, width int) string {
 		styles.Background, styles.Border, styles.Primary)
 
 	return chrome + "\n" + strings.Join(visible, "\n")
+}
+
+// truncForLog clamps a string to maxBytes for safe logging.
+func truncForLog(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	return s[:maxBytes] + "...(truncated)"
 }
 
 // applySelectionOverlay re-composes lines that intersect the active
