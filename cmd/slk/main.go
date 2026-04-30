@@ -985,8 +985,33 @@ func extractAttachments(files []slack.File) []messages.Attachment {
 		if name == "" {
 			name = f.Name
 		}
-		out = append(out, messages.Attachment{Kind: kind, Name: name, URL: pickAttachmentURL(f, kind)})
+		att := messages.Attachment{Kind: kind, Name: name, URL: pickAttachmentURL(f, kind)}
+		if kind == "image" {
+			att.FileID = f.ID
+			att.Mime = f.Mimetype
+			att.Thumbs = collectThumbs(f)
+		}
+		out = append(out, att)
 	}
+	return out
+}
+
+// collectThumbs builds a slice of ThumbSpec from a slack.File's thumb_*
+// fields. Tiers with an empty URL or non-positive dimensions are skipped.
+// The slice is ordered smallest-to-largest, matching the order Slack
+// returns them in the file metadata.
+func collectThumbs(f slack.File) []messages.ThumbSpec {
+	var out []messages.ThumbSpec
+	add := func(url string, w, h int) {
+		if url != "" && w > 0 && h > 0 {
+			out = append(out, messages.ThumbSpec{URL: url, W: w, H: h})
+		}
+	}
+	add(f.Thumb360, f.Thumb360W, f.Thumb360H)
+	add(f.Thumb480, f.Thumb480W, f.Thumb480H)
+	add(f.Thumb720, f.Thumb720W, f.Thumb720H)
+	add(f.Thumb960, f.Thumb960W, f.Thumb960H)
+	add(f.Thumb1024, f.Thumb1024W, f.Thumb1024H)
 	return out
 }
 
