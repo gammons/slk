@@ -31,8 +31,11 @@ func TestKitty_UploadEscapeFormat(t *testing.T) {
 	if !strings.HasSuffix(s, "\x1b\\") {
 		t.Errorf("expected \\e\\ suffix")
 	}
-	if !strings.Contains(s, "a=t") {
-		t.Error("missing a=t (transmit)")
+	if !strings.Contains(s, "a=T") {
+		t.Error("missing a=T (transmit-and-display, required for unicode-placeholder virtual placement)")
+	}
+	if !strings.Contains(s, "c=10") || !strings.Contains(s, "r=5") {
+		t.Error("missing c=<cols>,r=<rows> for virtual placement footprint")
 	}
 	if !strings.Contains(s, "f=100") {
 		t.Error("missing f=100 (PNG)")

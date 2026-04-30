@@ -10,6 +10,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"golang.org/x/image/draw"
 )
@@ -116,10 +117,19 @@ func (k *KittyRenderer) RenderKey(key string, target image.Point) Render {
 			payload := base64.StdEncoding.EncodeToString(pngBuf.Bytes())
 			imgID := id
 			payloadLen := len(payload)
+			cellsCols := target.X
+			cellsRows := target.Y
+			// fired guards against re-emission. viewEntry.flushes captures
+			// this closure; without the guard, every frame re-uploads the
+			// image (which is benign per protocol but wastes bandwidth).
+			var fired atomic.Bool
 			r.OnFlush = func(w io.Writer) error {
+				if !fired.CompareAndSwap(false, true) {
+					return nil
+				}
 				log.Printf("[image-debug] kitty OnFlush: emitting upload escape id=%d payload_b64_len=%d cells=%dx%d",
-					imgID, payloadLen, target.X, target.Y)
-				return emitKittyUpload(w, imgID, payload)
+					imgID, payloadLen, cellsCols, cellsRows)
+				return emitKittyUpload(w, imgID, payload, cellsCols, cellsRows)
 			}
 			log.Printf("[image-debug] kitty RenderKey: fresh id=%d cells=%dx%d (OnFlush set)", id, target.X, target.Y)
 		} else {
@@ -131,9 +141,20 @@ func (k *KittyRenderer) RenderKey(key string, target image.Point) Render {
 	return r
 }
 
-// emitKittyUpload writes the kitty transmit-and-display escape, chunking the
-// base64 payload into 4096-byte segments per protocol requirement.
-func emitKittyUpload(w io.Writer, id uint32, payload string) error {
+// emitKittyUpload writes the kitty graphics protocol APC sequence to
+// transmit a PNG image and create a virtual placement of size cols×rows
+// for unicode-placeholder rendering.
+//
+// The first chunk uses `a=T` ("transmit AND display") with `U=1`
+// (unicode-placeholder mode), `c=<cols>` and `r=<rows>` to define the
+// virtual placement's cell footprint. `q=2` suppresses kitty's reply.
+// Continuation chunks omit those keys and only carry `m=<more>`.
+//
+// Per kitty protocol, payloads larger than 4096 base64 bytes must be
+// chunked. The final chunk has m=0 to mark the end.
+//
+// Reference: https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders
+func emitKittyUpload(w io.Writer, id uint32, payload string, cols, rows int) error {
 	const chunk = 4096
 	for i := 0; i < len(payload); i += chunk {
 		end := i + chunk
@@ -144,7 +165,7 @@ func emitKittyUpload(w io.Writer, id uint32, payload string) error {
 		}
 		var hdr string
 		if i == 0 {
-			hdr = fmt.Sprintf("a=t,f=100,t=d,i=%d,U=1,q=2,m=%d", id, more)
+			hdr = fmt.Sprintf("a=T,f=100,t=d,i=%d,U=1,c=%d,r=%d,q=2,m=%d", id, cols, rows, more)
 		} else {
 			hdr = fmt.Sprintf("m=%d", more)
 		}
