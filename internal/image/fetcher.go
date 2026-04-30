@@ -59,6 +59,15 @@ type Fetcher struct {
 	sf    singleflight.Group
 	sem   chan struct{} // bounded concurrency for cross-key fetches
 
+	// decoded caches the result of Cached() per (key, target) so
+	// repeated calls don't re-decode the on-disk PNG and re-bilinear
+	// downscale on every cache rebuild. Without this, a burst of
+	// ImageReadyMsg events (e.g., older-history load completing for
+	// 25 attachments) triggers N cache rebuilds × N decodes each
+	// = N² synchronous decode work on the UI thread, making the app
+	// appear hung for many seconds.
+	decoded sync.Map // string("<key>|<wxh>") -> image.Image
+
 	// auth state. authsByTeam holds an entry per registered workspace;
 	// fallbacks is the same set as a slice (ordered) for sequential
 	// retry on Slack Connect URLs. learnedAuths caches the foreign-team
@@ -417,11 +426,23 @@ func (f *Fetcher) Bytes(key string) ([]byte, error) {
 // axes, the returned image is downscaled to those pixel dimensions; pass
 // image.Point{} (zero) to skip downscale.
 //
+// Decoded results are memoized per (key, target) so repeated calls
+// don't re-decode the on-disk PNG and re-bilinear downscale on every
+// hit. The memo is invalidated when the cache file is evicted (via
+// Cache.Delete or LRU eviction); a future cache rebuild that finds
+// the file gone falls back through the disk path and re-populates.
+//
 // If a file is found but fails to decode (e.g., a stale auth-failure HTML
 // response was persisted under an image extension), the entry is evicted
 // from the cache and the caller is told it's not present, so a subsequent
 // Fetch re-downloads.
 func (f *Fetcher) Cached(key string, target image.Point) (image.Image, bool) {
+	memoKey := decodedMemoKey(key, target)
+	if v, ok := f.decoded.Load(memoKey); ok {
+		if img, ok := v.(image.Image); ok {
+			return img, true
+		}
+	}
 	path, ok := f.cache.Get(key)
 	if !ok {
 		return nil, false
@@ -435,12 +456,18 @@ func (f *Fetcher) Cached(key string, target image.Point) (image.Image, bool) {
 	if err != nil {
 		file.Close()
 		f.cache.Delete(key)
+		f.decoded.Delete(memoKey)
 		return nil, false
 	}
 	if target.X > 0 && target.Y > 0 {
 		img = downscale(img, target)
 	}
+	f.decoded.Store(memoKey, img)
 	return img, true
+}
+
+func decodedMemoKey(key string, target image.Point) string {
+	return fmt.Sprintf("%s|%dx%d", key, target.X, target.Y)
 }
 
 // ThumbSpec is one Slack thumbnail variant.

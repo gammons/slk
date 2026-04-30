@@ -97,11 +97,6 @@ func (k *KittyRenderer) RenderKey(key string, target image.Point) Render {
 
 	id, fresh := k.registry.Lookup(key, target)
 
-	pxW := target.X * 8
-	pxH := target.Y * 16
-	resized := image.NewRGBA(image.Rect(0, 0, pxW, pxH))
-	draw.BiLinear.Scale(resized, resized.Bounds(), src, src.Bounds(), draw.Over, nil)
-
 	lines := buildPlaceholderLines(id, target)
 
 	r := Render{
@@ -111,6 +106,13 @@ func (k *KittyRenderer) RenderKey(key string, target image.Point) Render {
 		ID:       id,
 	}
 	if fresh {
+		// Only resize+encode when the image is actually being uploaded.
+		// On repeat calls (fresh=false) the registered ID is reused;
+		// no need to re-do the bilinear downscale or PNG encode.
+		pxW := target.X * 8
+		pxH := target.Y * 16
+		resized := image.NewRGBA(image.Rect(0, 0, pxW, pxH))
+		draw.BiLinear.Scale(resized, resized.Bounds(), src, src.Bounds(), draw.Over, nil)
 		var pngBuf bytes.Buffer
 		if err := imgpng.Encode(&pngBuf, resized); err == nil {
 			payload := base64.StdEncoding.EncodeToString(pngBuf.Bytes())

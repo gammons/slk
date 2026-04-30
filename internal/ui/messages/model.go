@@ -349,11 +349,8 @@ type Model struct {
 // are cleared (old behavior).
 func (m *Model) HandleImageReady(channel, ts, key string) {
 	if channel != m.channelName {
-		log.Printf("[image-debug] HandleImageReady: channel mismatch (msg=%s vs active=%s) for key=%s; dropped",
-			channel, m.channelName, key)
 		return
 	}
-	log.Printf("[image-debug] HandleImageReady: channel=%s key=%s; cache invalidated", channel, key)
 	m.cache = nil
 	if key == "" {
 		m.fetchingImages = nil
@@ -634,17 +631,6 @@ func (m *Model) PrependMessages(msgs []MessageItem) {
 		return
 	}
 	count := len(msgs)
-	imageCount := 0
-	for _, msg := range msgs {
-		for _, att := range msg.Attachments {
-			if att.Kind == "image" {
-				imageCount++
-				log.Printf("[image-debug] PrependMessages: ts=%s file_id=%s name=%q thumbs=%d mime=%s",
-					msg.TS, att.FileID, att.Name, len(att.Thumbs), att.Mime)
-			}
-		}
-	}
-	log.Printf("[image-debug] PrependMessages: %d msgs, %d image attachments", count, imageCount)
 	m.messages = append(msgs, m.messages...)
 	m.selected += count
 	m.cache = nil // invalidate cache
@@ -1332,23 +1318,17 @@ func (m *Model) renderAttachmentBlock(att Attachment, ts string, availWidth, bas
 	// stable cache key, so there's nothing the inline pipeline can do
 	// with it. Fall back to the single-line link form.
 	if att.FileID == "" {
-		log.Printf("[image-debug] renderAttachmentBlock: file_id empty for ts=%s name=%q (older history with stripped metadata?)",
-			ts, att.Name)
 		return []string{renderSingleAttachment(att)}, nil, nil, 1, entryHit{}
 	}
 
 	target := computeImageTarget(att, ctx, availWidth)
 	if target.X <= 0 || target.Y <= 0 {
-		log.Printf("[image-debug] renderAttachmentBlock: zero target for file_id=%s ts=%s availWidth=%d cellPx=%v thumbs=%d",
-			att.FileID, ts, availWidth, ctx.CellPixels, len(att.Thumbs))
 		return []string{renderSingleAttachment(att)}, nil, nil, 1, entryHit{}
 	}
 
 	pixelTarget := image.Pt(target.X*ctx.CellPixels.X, target.Y*ctx.CellPixels.Y)
 	url, suffix := imgpkg.PickThumb(toImgThumbs(att.Thumbs), pixelTarget)
 	if url == "" {
-		log.Printf("[image-debug] renderAttachmentBlock: PickThumb returned empty url for file_id=%s ts=%s thumbs=%d",
-			att.FileID, ts, len(att.Thumbs))
 		return []string{renderSingleAttachment(att)}, nil, nil, 1, entryHit{}
 	}
 	key := att.FileID + "-" + suffix
@@ -1381,17 +1361,11 @@ func (m *Model) renderAttachmentBlock(att Attachment, ts string, availWidth, bas
 		// clears on SetChannel so the user can retry by switching
 		// channels.
 		if _, failed := m.failedImages[key]; failed {
-			log.Printf("[image-debug] renderAttachmentBlock: key=%s previously failed, showing placeholder",
-				key)
 			return buildPlaceholder(att.Name, target), nil, nil, target.Y, hit
 		}
 		if _, inFlight := m.fetchingImages[key]; inFlight {
-			log.Printf("[image-debug] renderAttachmentBlock: key=%s already in-flight, showing placeholder",
-				key)
 			return buildPlaceholder(att.Name, target), nil, nil, target.Y, hit
 		}
-		log.Printf("[image-debug] renderAttachmentBlock: spawning fetch key=%s url=%s target=%dx%d cells=%dx%d",
-			key, url, pixelTarget.X, pixelTarget.Y, target.X, target.Y)
 		m.fetchingImages[key] = struct{}{}
 		channel := m.channelName
 		go func() {
@@ -1406,7 +1380,6 @@ func (m *Model) renderAttachmentBlock(att Attachment, ts string, availWidth, bas
 			// set, causing fetch stampedes that locked up the UI on
 			// channels with many failing-to-auth Slack Connect images).
 			if ctx.SendMsg == nil {
-				log.Printf("[image-debug] fetch goroutine: SendMsg nil for key=%s; result dropped", key)
 				return
 			}
 			if err != nil {
@@ -1414,7 +1387,6 @@ func (m *Model) renderAttachmentBlock(att Attachment, ts string, availWidth, bas
 				ctx.SendMsg(ImageFailedMsg{Key: key})
 				return
 			}
-			log.Printf("[image-debug] fetch goroutine: success key=%s; dispatching ImageReadyMsg", key)
 			ctx.SendMsg(ImageReadyMsg{Channel: channel, TS: ts, Key: key})
 		}()
 		return buildPlaceholder(att.Name, target), nil, nil, target.Y, hit
@@ -1482,12 +1454,20 @@ func computeImageTarget(att Attachment, ctx ImageContext, availWidth int) image.
 	// cols = rows * aspect / cellRatio  (cells are taller than wide,
 	// so cellRatio < 1 inflates cols to compensate).
 	cols := int(float64(rows) * aspect / cellRatio)
+	if cols < 1 {
+		// Extreme tall/skinny aspect ratios (e.g., 100×9000 px scrolling
+		// screenshots) underflow cols to zero. Clamp to 1 col and let
+		// the renderer downscale the source to fit. Without this clamp
+		// the attachment falls through to the "[Image] <url>" text
+		// fallback, which the user perceives as a missing image.
+		cols = 1
+	}
 	if cols > maxCols {
 		cols = maxCols
 		rows = int(float64(cols) * cellRatio / aspect)
 	}
-	if rows < 1 || cols < 1 {
-		return image.Point{}
+	if rows < 1 {
+		rows = 1
 	}
 	return image.Pt(cols, rows)
 }
