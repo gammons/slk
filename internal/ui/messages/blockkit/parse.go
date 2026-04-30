@@ -154,3 +154,42 @@ func textOf(t *slack.TextBlockObject) string {
 	}
 	return t.Text
 }
+
+// ParseAttachments converts slack-go Attachment slice to our
+// LegacyAttachment slice. Returns nil for empty input.
+func ParseAttachments(in []slack.Attachment) []LegacyAttachment {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]LegacyAttachment, 0, len(in))
+	for _, a := range in {
+		out = append(out, parseAttachment(a))
+	}
+	return out
+}
+
+func parseAttachment(a slack.Attachment) LegacyAttachment {
+	la := LegacyAttachment{
+		Color:      a.Color,
+		Pretext:    a.Pretext,
+		Title:      a.Title,
+		TitleLink:  a.TitleLink,
+		Text:       a.Text,
+		ImageURL:   a.ImageURL,
+		ThumbURL:   a.ThumbURL,
+		Footer:     a.Footer,
+		FooterIcon: a.FooterIcon,
+	}
+	for _, f := range a.Fields {
+		la.Fields = append(la.Fields, LegacyField{
+			Title: f.Title, Value: f.Value, Short: f.Short,
+		})
+	}
+	if a.Ts != "" {
+		// json.Number; safe to parse as int64.
+		if n, err := a.Ts.Int64(); err == nil {
+			la.TS = n
+		}
+	}
+	return la
+}

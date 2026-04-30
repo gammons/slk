@@ -200,3 +200,86 @@ func TestParseRichTextBecomesUnknownToFallThroughToText(t *testing.T) {
 		t.Errorf("got %T, want UnknownBlock for rich_text", got[0])
 	}
 }
+
+func TestParseAttachmentsEmptyReturnsNil(t *testing.T) {
+	got := ParseAttachments(nil)
+	if got != nil {
+		t.Errorf("got %v, want nil", got)
+	}
+}
+
+func TestParseAttachmentBasicFields(t *testing.T) {
+	in := []slack.Attachment{{
+		Color:     "danger",
+		Pretext:   "Heads up:",
+		Title:     "Service down",
+		TitleLink: "https://status.example.com",
+		Text:      "checkout-svc returning 5xx",
+		Footer:    "Datadog",
+	}}
+	got := ParseAttachments(in)
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	a := got[0]
+	if a.Color != "danger" {
+		t.Errorf("Color = %q", a.Color)
+	}
+	if a.Pretext != "Heads up:" {
+		t.Errorf("Pretext = %q", a.Pretext)
+	}
+	if a.Title != "Service down" {
+		t.Errorf("Title = %q", a.Title)
+	}
+	if a.TitleLink != "https://status.example.com" {
+		t.Errorf("TitleLink = %q", a.TitleLink)
+	}
+	if a.Text != "checkout-svc returning 5xx" {
+		t.Errorf("Text = %q", a.Text)
+	}
+	if a.Footer != "Datadog" {
+		t.Errorf("Footer = %q", a.Footer)
+	}
+}
+
+func TestParseAttachmentFields(t *testing.T) {
+	in := []slack.Attachment{{
+		Fields: []slack.AttachmentField{
+			{Title: "Service", Value: "checkout-svc", Short: true},
+			{Title: "Region", Value: "us-east-1", Short: true},
+			{Title: "Notes", Value: "long form note", Short: false},
+		},
+	}}
+	a := ParseAttachments(in)[0]
+	if len(a.Fields) != 3 {
+		t.Fatalf("Fields len = %d", len(a.Fields))
+	}
+	if a.Fields[0].Title != "Service" || a.Fields[0].Value != "checkout-svc" || !a.Fields[0].Short {
+		t.Errorf("Fields[0] = %+v", a.Fields[0])
+	}
+	if a.Fields[2].Short {
+		t.Errorf("Fields[2] should not be Short")
+	}
+}
+
+func TestParseAttachmentTimestampParsesUnixSeconds(t *testing.T) {
+	in := []slack.Attachment{{Ts: "1700000000"}}
+	a := ParseAttachments(in)[0]
+	if a.TS != 1700000000 {
+		t.Errorf("TS = %d, want 1700000000", a.TS)
+	}
+}
+
+func TestParseAttachmentImageAndThumb(t *testing.T) {
+	in := []slack.Attachment{{
+		ImageURL: "https://example.com/img.png",
+		ThumbURL: "https://example.com/thumb.png",
+	}}
+	a := ParseAttachments(in)[0]
+	if a.ImageURL != "https://example.com/img.png" {
+		t.Errorf("ImageURL = %q", a.ImageURL)
+	}
+	if a.ThumbURL != "https://example.com/thumb.png" {
+		t.Errorf("ThumbURL = %q", a.ThumbURL)
+	}
+}
