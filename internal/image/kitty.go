@@ -177,9 +177,18 @@ func emitKittyUpload(w io.Writer, id uint32, payload string, cols, rows int) err
 }
 
 func buildPlaceholderLines(id uint32, cells image.Point) []string {
-	r := byte(id & 0xFF)
+	// Per kitty spec: image ID is encoded in the foreground color as a
+	// 24-bit number. In truecolor SGR \e[38;2;R;G;Bm the natural
+	// interpretation is (R << 16) | (G << 8) | B, so R = byte 2 (high),
+	// G = byte 1, B = byte 0 (low). Verified against the spec's worked
+	// example: ID 42 in 256-color mode is \e[38;5;42m, which means the
+	// truecolor equivalent is \e[38;2;0;0;42m (low byte → B), NOT
+	// \e[38;2;42;0;0m. The high byte (byte 3) of a >24-bit ID would
+	// require the optional third diacritic; we don't need that since
+	// our IDs are well under 2^24.
+	r := byte((id >> 16) & 0xFF)
 	g := byte((id >> 8) & 0xFF)
-	b := byte((id >> 16) & 0xFF)
+	b := byte(id & 0xFF)
 	sgr := fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r, g, b)
 	reset := "\x1b[39m"
 
