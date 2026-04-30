@@ -47,6 +47,8 @@ func appendBlock(out *RenderResult, b Block, ctx Context, width int) {
 		appendSection(out, v, ctx, width)
 	case ContextBlock:
 		appendContext(out, v, ctx, width)
+	case ActionsBlock:
+		appendActions(out, v, width)
 	case UnknownBlock:
 		out.Lines = append(out.Lines, renderUnsupported(v.Type, width))
 	default:
@@ -130,6 +132,45 @@ func appendContext(out *RenderResult, c ContextBlock, ctx Context, width int) {
 	for _, line := range strings.Split(combined, "\n") {
 		out.Lines = append(out.Lines, mutedStyle().Render(line))
 	}
+}
+
+func appendActions(out *RenderResult, a ActionsBlock, width int) {
+	if len(a.Elements) == 0 {
+		return
+	}
+	out.Interactive = true
+
+	const gapW = 2
+	gap := strings.Repeat(" ", gapW)
+
+	var rows []string
+	current := ""
+	currentW := 0
+	for _, el := range a.Elements {
+		label := renderControlLabel(el.Kind, el.Label)
+		labelW := lipgloss.Width(label)
+		var candidateW int
+		var candidate string
+		if current == "" {
+			candidate = label
+			candidateW = labelW
+		} else {
+			candidate = current + gap + label
+			candidateW = currentW + gapW + labelW
+		}
+		if candidateW > width && current != "" {
+			rows = append(rows, current)
+			current = label
+			currentW = labelW
+		} else {
+			current = candidate
+			currentW = candidateW
+		}
+	}
+	if current != "" {
+		rows = append(rows, current)
+	}
+	out.Lines = append(out.Lines, rows...)
 }
 
 // renderControlLabel produces a muted, non-interactive label for a

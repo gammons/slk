@@ -300,3 +300,54 @@ func TestRenderContextBlockWithImageElementsRendersAltText(t *testing.T) {
 		t.Errorf("missing text element: %q", plain)
 	}
 }
+
+func TestRenderActionsBlockSetsInteractive(t *testing.T) {
+	r := Render([]Block{ActionsBlock{
+		Elements: []ActionElement{
+			{Kind: "button", Label: "Approve"},
+			{Kind: "button", Label: "Deny"},
+		},
+	}}, Context{}, 80)
+	if !r.Interactive {
+		t.Error("Interactive should be true after rendering actions")
+	}
+	plain := ansi.Strip(strings.Join(r.Lines, "\n"))
+	if !strings.Contains(plain, "[ Approve ]") || !strings.Contains(plain, "[ Deny ]") {
+		t.Errorf("got %q", plain)
+	}
+}
+
+func TestRenderActionsBlockWrapsAtWidth(t *testing.T) {
+	// Three buttons of "[ Long Button Name ]" (~20 cols each) at
+	// width 30 must wrap.
+	r := Render([]Block{ActionsBlock{
+		Elements: []ActionElement{
+			{Kind: "button", Label: "Long Button Name"},
+			{Kind: "button", Label: "Long Button Name"},
+			{Kind: "button", Label: "Long Button Name"},
+		},
+	}}, Context{}, 30)
+	if r.Height < 2 {
+		t.Errorf("Height = %d, want >= 2 (wrapped)", r.Height)
+	}
+}
+
+func TestRenderActionsBlockMixedKinds(t *testing.T) {
+	r := Render([]Block{ActionsBlock{
+		Elements: []ActionElement{
+			{Kind: "button", Label: "Go"},
+			{Kind: "static_select", Label: "env"},
+			{Kind: "datepicker", Label: "2026-01-01"},
+		},
+	}}, Context{}, 80)
+	plain := ansi.Strip(strings.Join(r.Lines, "\n"))
+	if !strings.Contains(plain, "[ Go ]") {
+		t.Errorf("missing button: %q", plain)
+	}
+	if !strings.Contains(plain, "env ▾") {
+		t.Errorf("missing select: %q", plain)
+	}
+	if !strings.Contains(plain, "📅") {
+		t.Errorf("missing datepicker: %q", plain)
+	}
+}
