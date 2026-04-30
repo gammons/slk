@@ -84,14 +84,19 @@ type WorkspaceContext struct {
 }
 
 func main() {
-	// Debug log to file when SLK_DEBUG is set; otherwise log goes to
-	// stderr (which is invisible under altscreen).
+	// Debug log to file when SLK_DEBUG is set; otherwise discard so
+	// log lines don't bleed into the user's terminal under altscreen
+	// (some terminals show stderr writes overlaid on the rendered UI;
+	// even if they don't, stderr can show up after slk exits and
+	// pollute the parent shell).
 	if os.Getenv("SLK_DEBUG") != "" {
 		f, err := os.OpenFile("/tmp/slk-debug.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err == nil {
 			log.SetOutput(f)
 			log.Printf("=== slk debug session started ===")
 		}
+	} else {
+		log.SetOutput(io.Discard)
 	}
 	// Handle simple flags before anything else
 	if len(os.Args) > 1 {
