@@ -94,6 +94,8 @@ func main() {
 		switch os.Args[1] {
 		case "--version", "-v", "version":
 			fmt.Printf("slk %s (commit %s, built %s)\n", version, commit, date)
+			fmt.Println("Unofficial Slack client. Not affiliated with Slack Technologies, LLC.")
+			fmt.Println("Uses Slack's internal browser protocol; may violate Slack's TOS. Use at your own risk.")
 			return
 		case "--help", "-h", "help":
 			printHelp()
