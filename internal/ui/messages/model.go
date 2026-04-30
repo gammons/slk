@@ -40,6 +40,22 @@ type Attachment struct {
 	Kind string // "image" or "file"
 	Name string // display filename / title
 	URL  string // permalink (preferred) or url_private
+
+	// Populated only for Kind == "image":
+	FileID string      // Slack file ID for cache key
+	Mime   string      // e.g. "image/png"
+	Thumbs []ThumbSpec // sorted ascending; empty for non-image
+}
+
+// ThumbSpec is one Slack thumbnail variant.
+//
+// This is intentionally distinct from image.ThumbSpec in the internal/image
+// package to avoid coupling the messages UI package to the image package's
+// internal type. A converter helper bridges the two where needed.
+type ThumbSpec struct {
+	URL string
+	W   int
+	H   int
 }
 
 // AvatarFunc returns the rendered half-block avatar for a user ID, or empty string.
