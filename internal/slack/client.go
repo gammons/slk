@@ -146,10 +146,12 @@ func (t *fileAuthTransport) RoundTrip(req *http.Request) (*http.Response, error)
 				}
 				req = clone
 			} else {
-				log.Printf("[image-debug] file auth: no auth for team %q on URL %s", teamID, req.URL.String())
+				log.Printf("file auth: no token registered for team %q (URL %s); fetch will likely fail with 403/HTML",
+					teamID, req.URL.String())
 			}
 		} else {
-			log.Printf("[image-debug] file auth: could not parse team ID from URL %s", req.URL.String())
+			log.Printf("file auth: could not parse team ID from URL %s; passing through unauthenticated",
+				req.URL.String())
 		}
 	}
 	return t.base.RoundTrip(req)
