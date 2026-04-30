@@ -98,6 +98,16 @@ func newCookieHTTPClient(dCookie string) *http.Client {
 	return &http.Client{Jar: newCookieJar(dCookie)}
 }
 
+// NewCookieHTTPClient returns an http.Client that authenticates against
+// files.slack.com (and other *.slack.com endpoints) using the given 'd'
+// cookie value. Used by the inline-image fetcher to download file thumbnails,
+// which require browser-session auth.
+//
+// The returned client has no timeout; callers that need one should wrap it.
+func NewCookieHTTPClient(dCookie string) *http.Client {
+	return newCookieHTTPClient(dCookie)
+}
+
 // TeamID returns the authenticated workspace's team ID.
 // Empty before Connect is called.
 func (c *Client) TeamID() string {

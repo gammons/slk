@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"io"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -1233,7 +1234,11 @@ func (m *Model) renderAttachmentBlock(att Attachment, ts string, availWidth, bas
 			// Note: the goroutine doesn't take any lock here. The
 			// in-flight set is cleared by HandleImageReady (which
 			// also nils the cache); see the ImageReadyMsg handler.
-			if err == nil && ctx.SendMsg != nil {
+			if err != nil {
+				log.Printf("image fetch failed: key=%s url=%s err=%v", key, url, err)
+				return
+			}
+			if ctx.SendMsg != nil {
 				ctx.SendMsg(ImageReadyMsg{Channel: channel, TS: ts})
 			}
 		}()
