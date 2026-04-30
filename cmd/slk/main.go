@@ -7,6 +7,7 @@ import (
 	"image"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -285,19 +286,28 @@ func run() error {
 	}
 	// Slack file thumbnails on files.slack.com require BOTH an
 	// `Authorization: Bearer <xoxc-token>` header and the workspace's
-	// 'd' cookie. The d cookie alone returns Slack's web login page
-	// (HTML); the Bearer token alone returns 403. Both are
-	// per-workspace: each token file carries its own xoxc + cookie.
-	// The URL embeds the team ID, so we build a team -> auth map and
-	// route via a custom RoundTripper.
-	authsByTeam := make(map[string]slackclient.TeamAuth, len(tokens))
+	// 'd' cookie. The d cookie alone returns Slack's web login page;
+	// the Bearer alone returns 403. Both are per-workspace, since each
+	// token file carries its own xoxc + cookie. The URL embeds the
+	// team ID, so the fetcher attaches the matching team's auth.
+	//
+	// Slack Connect / shared channels add a wrinkle: those files are
+	// hosted on a partner workspace's team ID that we don't have a
+	// token for. The fetcher tries each registered team's auth in
+	// order until one succeeds, then caches that mapping so subsequent
+	// fetches for the same foreign team go directly to the right auth.
+	auths := make([]imgpkg.TeamAuth, 0, len(tokens))
 	for _, t := range tokens {
-		authsByTeam[t.TeamID] = slackclient.TeamAuth{Token: t.AccessToken, DCookie: t.Cookie}
+		auths = append(auths, imgpkg.TeamAuth{
+			TeamID:  t.TeamID,
+			Token:   t.AccessToken,
+			DCookie: t.Cookie,
+		})
 		log.Printf("image fetcher: registered team %q (%s) for file auth", t.TeamName, t.TeamID)
 	}
-	imageHTTPClient := slackclient.NewFileAuthHTTPClient(authsByTeam)
-	imageHTTPClient.Timeout = 10 * time.Second
+	imageHTTPClient := &http.Client{Timeout: 10 * time.Second}
 	imageFetcher := imgpkg.NewFetcher(imageCache, imageHTTPClient)
+	imageFetcher.SetAuths(auths)
 
 	// Migrate old avatar cache (one-time, idempotent).
 	oldAvatarDir := filepath.Join(cacheDir, "avatars")

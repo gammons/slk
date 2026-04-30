@@ -8,11 +8,13 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/image/draw"
@@ -33,15 +35,37 @@ type FetchResult struct {
 	Mime   string
 }
 
+// TeamAuth pairs a Slack workspace's xoxc token with its 'd' cookie.
+// Both are required to authenticate fetches on files.slack.com.
+type TeamAuth struct {
+	TeamID  string
+	Token   string // xoxc-...
+	DCookie string
+}
+
 // Fetcher downloads images, stores raw bytes in Cache, decodes, and
 // downscales. Concurrent fetches for the same Key are deduplicated;
 // across-key concurrency is bounded by a semaphore so a channel full
 // of images doesn't trigger Slack's CDN rate limiter (HTTP 429).
+//
+// For files.slack.com URLs the fetcher attaches per-team auth (xoxc
+// Bearer + 'd' cookie). When the URL's team isn't in our token map
+// (Slack Connect / shared channels), the fetcher tries each registered
+// team's auth in order until one succeeds, then caches the result so
+// subsequent fetches for that foreign team skip the search.
 type Fetcher struct {
 	cache *Cache
 	http  *http.Client
 	sf    singleflight.Group
 	sem   chan struct{} // bounded concurrency for cross-key fetches
+
+	// auth state. authsByTeam holds an entry per registered workspace;
+	// fallbacks is the same set as a slice (ordered) for sequential
+	// retry on Slack Connect URLs. learnedAuths caches the foreign-team
+	// -> auth mapping after a successful retry.
+	authsByTeam   map[string]TeamAuth
+	fallbacks     []TeamAuth
+	learnedAuths  sync.Map // string -> TeamAuth
 }
 
 // fetchConcurrencyLimit caps the number of in-flight HTTP fetches.
@@ -51,17 +75,50 @@ type Fetcher struct {
 // rate limit even when a busy channel has 20+ image attachments visible.
 const fetchConcurrencyLimit = 4
 
+// rateLimitMaxRetries / rateLimitInitialBackoff / rateLimitMaxBackoff
+// govern automatic retry on HTTP 429 from files.slack.com. Slack's
+// rate-limit window is short (a few seconds); exponential backoff
+// recovers without user intervention. Cap at 3 attempts so a stuck
+// 429 doesn't block forever.
+const (
+	rateLimitMaxRetries     = 3
+	rateLimitInitialBackoff = 500 * time.Millisecond
+	rateLimitMaxBackoff     = 4 * time.Second
+)
+
 // NewFetcher constructs a Fetcher. If client is nil, a default with a
-// 10-second timeout is used.
+// 10-second timeout is used. Auth is empty until SetAuths is called.
 func NewFetcher(cache *Cache, client *http.Client) *Fetcher {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
 	return &Fetcher{
-		cache: cache,
-		http:  client,
-		sem:   make(chan struct{}, fetchConcurrencyLimit),
+		cache:       cache,
+		http:        client,
+		sem:         make(chan struct{}, fetchConcurrencyLimit),
+		authsByTeam: map[string]TeamAuth{},
 	}
+}
+
+// SetAuths configures the per-workspace credentials used to
+// authenticate files.slack.com fetches. Each TeamAuth must have a
+// non-empty TeamID. The slice's order determines the order in which
+// fallback auths are tried for foreign-team URLs (Slack Connect).
+// Safe to call once at startup; not safe to mutate the input slice
+// afterward.
+func (f *Fetcher) SetAuths(auths []TeamAuth) {
+	byTeam := make(map[string]TeamAuth, len(auths))
+	fallbacks := make([]TeamAuth, 0, len(auths))
+	for _, a := range auths {
+		if a.TeamID == "" || a.Token == "" {
+			continue
+		}
+		byTeam[a.TeamID] = a
+		fallbacks = append(fallbacks, a)
+	}
+	f.authsByTeam = byTeam
+	f.fallbacks = fallbacks
+	f.learnedAuths = sync.Map{} // reset learned mappings on reconfig
 }
 
 // Fetch returns the decoded image, downloading and caching if needed.
@@ -89,32 +146,11 @@ func (f *Fetcher) Fetch(ctx context.Context, req FetchRequest) (FetchResult, err
 func (f *Fetcher) fetchInner(ctx context.Context, req FetchRequest) (FetchResult, error) {
 	path, hit := f.cache.Get(req.Key)
 	if !hit {
-		// Download.
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, req.URL, nil)
+		body, ct, err := f.download(ctx, req.URL)
 		if err != nil {
 			return FetchResult{}, err
 		}
-		httpReq.Header.Set("User-Agent", "slk/inline-image-fetcher")
-		resp, err := f.http.Do(httpReq)
-		if err != nil {
-			return FetchResult{}, fmt.Errorf("fetch %s: %w", req.URL, err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != 200 {
-			return FetchResult{}, fmt.Errorf("fetch %s: HTTP %d", req.URL, resp.StatusCode)
-		}
-		// Reject non-image content types up-front. Slack returns its login
-		// page (text/html) when auth fails on files.slack.com; persisting
-		// that with an image extension would poison the cache.
-		ct := strings.ToLower(resp.Header.Get("Content-Type"))
-		if !strings.HasPrefix(ct, "image/") {
-			return FetchResult{}, fmt.Errorf("fetch %s: non-image Content-Type %q (auth failure?)", req.URL, ct)
-		}
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return FetchResult{}, err
-		}
-		ext := extFromMime(resp.Header.Get("Content-Type"), req.URL)
+		ext := extFromMime(ct, req.URL)
 		path, err = f.cache.Put(req.Key, ext, body)
 		if err != nil {
 			return FetchResult{}, err
@@ -144,6 +180,183 @@ func (f *Fetcher) fetchInner(ctx context.Context, req FetchRequest) (FetchResult
 
 	mime := mimeFromExt(filepath.Ext(path))
 	return FetchResult{Img: img, Source: path, Mime: mime}, nil
+}
+
+// download fetches url and returns its body bytes + Content-Type.
+//
+// For files.slack.com URLs the fetcher attaches per-team auth. If the
+// URL's team isn't in our token map (Slack Connect), each registered
+// team's auth is tried in order; the winning auth is cached for that
+// foreign team. Auth failures are detected by either a 401/403 status
+// or a 200 with a text/html body (Slack's login page).
+//
+// HTTP 429 responses are retried with exponential backoff up to
+// rateLimitMaxRetries times before giving up.
+func (f *Fetcher) download(ctx context.Context, url string) (body []byte, contentType string, err error) {
+	authsToTry := f.authsForURL(url)
+	// Always try at least one attempt; if we have no auths it's still
+	// fine to fetch unauthenticated URLs (avatars on slack-edge.com).
+	if len(authsToTry) == 0 {
+		authsToTry = []TeamAuth{{}}
+	}
+
+	teamID := teamIDFromFilesURL(url)
+	var lastErr error
+	for _, auth := range authsToTry {
+		body, ct, status, err := f.tryDownloadWithBackoff(ctx, url, auth)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if status == http.StatusOK && strings.HasPrefix(strings.ToLower(ct), "image/") {
+			// Success. Remember which auth worked for foreign-team URLs.
+			if teamID != "" {
+				if _, known := f.authsByTeam[teamID]; !known && auth.TeamID != "" {
+					f.learnedAuths.Store(teamID, auth)
+					log.Printf("file auth: learned team %q is reachable via team %q's auth", teamID, auth.TeamID)
+				}
+			}
+			return body, ct, nil
+		}
+		// Auth failure (HTML response or 401/403) — try next auth.
+		lastErr = fmt.Errorf("fetch %s: HTTP %d ct=%q (auth failure?)", url, status, ct)
+		log.Printf("file auth: attempt with team %q failed for %s (status=%d ct=%q); trying next",
+			auth.TeamID, url, status, ct)
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("fetch %s: no auth succeeded", url)
+	}
+	return nil, "", lastErr
+}
+
+// authsForURL returns the ordered list of auths to try for url.
+//
+// For non-Slack URLs (avatars on gravatar / slack-edge), returns an
+// empty list so the request goes out unauthenticated.
+//
+// For files.slack.com URLs:
+//   - If the URL's team is in our token map, return that auth alone.
+//   - If we've previously learned an auth for this foreign team, return
+//     that auth alone.
+//   - Otherwise return the full ordered fallback list (Slack Connect:
+//     try every workspace until one succeeds).
+func (f *Fetcher) authsForURL(url string) []TeamAuth {
+	teamID := teamIDFromFilesURL(url)
+	if teamID == "" {
+		return nil
+	}
+	if a, ok := f.authsByTeam[teamID]; ok {
+		return []TeamAuth{a}
+	}
+	if v, ok := f.learnedAuths.Load(teamID); ok {
+		if a, ok := v.(TeamAuth); ok {
+			return []TeamAuth{a}
+		}
+	}
+	return f.fallbacks
+}
+
+// tryDownloadWithBackoff issues one logical fetch with rate-limit
+// retry. Returns (body, content-type, status, err). On HTTP 429 the
+// request is retried with exponential backoff up to rateLimitMaxRetries
+// times. On any other terminal status (success or non-429 failure) it
+// returns immediately.
+func (f *Fetcher) tryDownloadWithBackoff(ctx context.Context, url string, auth TeamAuth) ([]byte, string, int, error) {
+	backoff := rateLimitInitialBackoff
+	for attempt := 0; attempt <= rateLimitMaxRetries; attempt++ {
+		body, ct, status, err := f.tryDownload(ctx, url, auth)
+		if status != http.StatusTooManyRequests {
+			return body, ct, status, err
+		}
+		if attempt == rateLimitMaxRetries {
+			return body, ct, status, fmt.Errorf("fetch %s: HTTP 429 after %d retries", url, attempt+1)
+		}
+		log.Printf("file auth: HTTP 429 for %s (attempt %d/%d); backing off %s",
+			url, attempt+1, rateLimitMaxRetries+1, backoff)
+		select {
+		case <-ctx.Done():
+			return nil, "", 0, ctx.Err()
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+		if backoff > rateLimitMaxBackoff {
+			backoff = rateLimitMaxBackoff
+		}
+	}
+	return nil, "", 0, fmt.Errorf("fetch %s: unreachable", url)
+}
+
+// tryDownload issues a single HTTP GET with the given auth attached
+// (if non-empty). Returns (body, content-type, status-code, err).
+// Body is nil for non-200 responses; caller decides whether to treat
+// them as terminal or retry.
+func (f *Fetcher) tryDownload(ctx context.Context, url string, auth TeamAuth) ([]byte, string, int, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, "", 0, err
+	}
+	httpReq.Header.Set("User-Agent", "slk/inline-image-fetcher")
+	if auth.Token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+auth.Token)
+	}
+	if auth.DCookie != "" {
+		// Inline cookie header: a shared cookie jar can hold only one
+		// 'd' value at a time but workspaces may have different ones.
+		httpReq.Header.Set("Cookie", "d="+auth.DCookie)
+	}
+	resp, err := f.http.Do(httpReq)
+	if err != nil {
+		return nil, "", 0, fmt.Errorf("fetch %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	ct := resp.Header.Get("Content-Type")
+	if resp.StatusCode != http.StatusOK {
+		// Drain body for connection reuse, but we don't return it.
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, ct, resp.StatusCode, nil
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, ct, resp.StatusCode, err
+	}
+	return body, ct, resp.StatusCode, nil
+}
+
+// teamIDFromFilesURL extracts the team ID embedded in a Slack file URL.
+// Returns "" for URLs that aren't on files.slack.com or don't match a
+// recognized path pattern.
+func teamIDFromFilesURL(rawURL string) string {
+	// Cheap host check before fully parsing.
+	if !strings.Contains(rawURL, "files.slack.com") {
+		return ""
+	}
+	// Find the path portion. We don't need full url.Parse for this.
+	i := strings.Index(rawURL, "files.slack.com")
+	if i < 0 {
+		return ""
+	}
+	rest := rawURL[i+len("files.slack.com"):]
+	// Strip any query string for cleanliness.
+	if q := strings.IndexByte(rest, '?'); q >= 0 {
+		rest = rest[:q]
+	}
+	for _, prefix := range []string{"/files-tmb/", "/files-pri/", "/files/"} {
+		if !strings.HasPrefix(rest, prefix) {
+			continue
+		}
+		seg := rest[len(prefix):]
+		if j := strings.IndexByte(seg, '/'); j >= 0 {
+			seg = seg[:j]
+		}
+		if prefix == "/files/" {
+			return seg
+		}
+		if j := strings.IndexByte(seg, '-'); j >= 0 {
+			return seg[:j]
+		}
+		return seg
+	}
+	return ""
 }
 
 // downscale fits img within target preserving the renderer's expectation;
