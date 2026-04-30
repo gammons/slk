@@ -149,7 +149,7 @@ func main() {
 		ForceProbe: forceProbe,
 	}
 	if emojiwidth.WillProbe(probeOpts) {
-		fmt.Fprintln(os.Stderr, "Calibrating emoji widths for your terminal (one-time, ~1 second)...")
+		fmt.Fprintln(os.Stderr, "Calibrating emoji widths for your terminal (one-time, ~30 seconds)...")
 		probedNow = true
 	}
 
