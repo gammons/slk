@@ -17,6 +17,7 @@ import (
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
 	emojiwidth "github.com/gammons/slk/internal/emoji"
+	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/notify"
 	"github.com/gammons/slk/internal/service"
 	slackclient "github.com/gammons/slk/internal/slack"
@@ -272,9 +273,24 @@ func run() error {
 	ctx := context.Background()
 	tsFormat := cfg.Appearance.TimestampFormat
 
-	// Initialize avatar cache
-	avatarDir := filepath.Join(cacheDir, "avatars")
-	avatarCache := avatar.NewCache(avatarDir)
+	// Initialize shared image cache (used for avatars and inline images).
+	// 200MB cap is hardcoded for now; Phase 5.1 wires config.MaxImageCacheMB.
+	imagesDir := filepath.Join(cacheDir, "images")
+	imageCache, err := imgpkg.NewCache(imagesDir, 200)
+	if err != nil {
+		log.Fatalf("image cache: %v", err)
+	}
+	imageFetcher := imgpkg.NewFetcher(imageCache, nil)
+
+	// Migrate old avatar cache (one-time, idempotent).
+	oldAvatarDir := filepath.Join(cacheDir, "avatars")
+	if n, err := imgpkg.MigrateAvatars(oldAvatarDir, imagesDir); err != nil {
+		log.Printf("avatar migration: %v", err)
+	} else if n > 0 {
+		log.Printf("migrated %d avatars to %s", n, imagesDir)
+	}
+
+	avatarCache := avatar.NewCache(imageFetcher)
 
 	// Build workspace rail items for all tokens
 	var wsItems []workspace.WorkspaceItem
