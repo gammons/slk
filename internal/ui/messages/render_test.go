@@ -8,10 +8,12 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// TestLabeledLinkShowsURLAndOSC8 asserts that a Slack-style labeled link
-// (<URL|label>) renders the URL alongside the label and emits an OSC 8
-// hyperlink escape so the label is clickable in modern terminals.
-func TestLabeledLinkShowsURLAndOSC8(t *testing.T) {
+// TestLabeledLinkShowsLabelAndOSC8 asserts that a Slack-style labeled link
+// (<URL|label>) renders just the label and emits an OSC 8 hyperlink escape
+// so the label is clickable in modern terminals. The raw URL is intentionally
+// NOT included in the plain output — terminals supply clickability via OSC 8
+// or their own URL auto-detection, and the duplicated URL was visual noise.
+func TestLabeledLinkShowsLabelAndOSC8(t *testing.T) {
 	in := "see <https://example.com/doc|the document> for details"
 	out := RenderSlackMarkdown(in, nil, nil)
 	plain := ansi.Strip(out)
@@ -19,8 +21,8 @@ func TestLabeledLinkShowsURLAndOSC8(t *testing.T) {
 	if !strings.Contains(plain, "the document") {
 		t.Errorf("expected label %q in plain output, got %q", "the document", plain)
 	}
-	if !strings.Contains(plain, "https://example.com/doc") {
-		t.Errorf("expected URL in plain output for copy/paste, got %q", plain)
+	if strings.Contains(plain, "https://example.com/doc") {
+		t.Errorf("did not expect raw URL in plain output, got %q", plain)
 	}
 	// OSC 8 hyperlink: \x1b]8;;URL\x1b\\LABEL\x1b]8;;\x1b\\
 	if !strings.Contains(out, "\x1b]8;;https://example.com/doc") {

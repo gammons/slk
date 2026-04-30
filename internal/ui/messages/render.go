@@ -403,14 +403,15 @@ func renderInlineFormatting(text string, userNames map[string]string, channelNam
 		return strikethroughStyle().Render(inner)
 	})
 
-	// Links with labels: <url|label> -> "label (url)"; the label is wrapped
-	// in an OSC 8 hyperlink escape so it's clickable in modern terminals,
-	// and the raw URL is shown after the label so it's also visible to
-	// terminals without OSC 8 support and copy-paste-friendly.
+	// Links with labels: <url|label> -> just the label, wrapped in an OSC 8
+	// hyperlink escape so it's clickable in modern terminals. We don't
+	// append the raw URL: every terminal slk targets supports OSC 8 (or its
+	// own URL auto-detection / shift-click), and the trailing "(url)"
+	// duplicated noise on every labeled link.
 	text = linkWithLabelRe.ReplaceAllStringFunc(text, func(match string) string {
 		parts := linkWithLabelRe.FindStringSubmatch(match)
 		url, label := parts[1], parts[2]
-		return osc8Hyperlink(url, linkStyle().Render(label)) + " (" + url + ")"
+		return osc8Hyperlink(url, linkStyle().Render(label))
 	})
 
 	// Bare links: <url> -> url, wrapped in OSC 8 so it's clickable.
