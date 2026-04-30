@@ -113,18 +113,44 @@ func (m *Model) Version() int64 { return m.version }
 
 func (m *Model) dirty() { m.version++ }
 
-// SetUserNames replaces the user id -> display name map.
+// SetUserNames replaces the user id -> display name map. No-op (no version
+// bump) when the new map has the same length and the same key/value pairs as
+// the current one — required so the App-level panel cache (app.go:4068-4093)
+// can hit on idle re-renders.
 func (m *Model) SetUserNames(names map[string]string) {
 	if names == nil {
 		names = map[string]string{}
+	}
+	if userNamesEqual(m.userNames, names) {
+		return
 	}
 	m.userNames = names
 	m.dirty()
 }
 
+// userNamesEqual reports whether two id->name maps have identical contents.
+// Used to make SetUserNames idempotent so the panel cache can hit.
+func userNamesEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, va := range a {
+		if vb, ok := b[k]; !ok || vb != va {
+			return false
+		}
+	}
+	return true
+}
+
 // SetChannelNames sets the channel ID -> name map used to resolve bare
-// <#CHANNELID> mentions in thread parent previews.
+// <#CHANNELID> mentions. No-op when the new map matches the current one.
 func (m *Model) SetChannelNames(names map[string]string) {
+	if names == nil {
+		names = map[string]string{}
+	}
+	if userNamesEqual(m.channelNames, names) {
+		return
+	}
 	m.channelNames = names
 	m.dirty()
 }

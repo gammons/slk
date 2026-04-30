@@ -4069,14 +4069,21 @@ func (a *App) View() tea.View {
 		// Threads view: no compose, no typing line. The whole bordered
 		// panel is content-stable per threadsView.Version, so we keep
 		// the old single-cache path here.
+		// Push the current id->name maps into the threadsview model BEFORE
+		// snapshotting its version. SetUserNames/SetChannelNames are
+		// equality-checked (threadsview/model.go), so identical maps are no-
+		// ops. Reading Version() after these calls means the panel-cache key
+		// reflects the post-Set state — fixes a regression where the cache
+		// stored output under a stale version and never hit on subsequent
+		// renders.
+		a.threadsView.SetUserNames(a.userNames)
+		a.threadsView.SetSelfUserID(a.currentUserID)
 		tvVersion := a.threadsView.Version()
 		if c := &a.panelCacheMsgPanel; !c.hit(tvVersion, msgWidth, contentHeight, msgLayoutKey) {
 			msgBorderStyle := styles.UnfocusedBorder.Width(msgWidth)
 			if msgFocused {
 				msgBorderStyle = styles.FocusedBorder.Width(msgWidth)
 			}
-			a.threadsView.SetUserNames(a.userNames)
-			a.threadsView.SetSelfUserID(a.currentUserID)
 			msgContentHeight := contentHeight - 2
 			a.layoutMsgHeight = msgContentHeight
 			if msgContentHeight < 3 {

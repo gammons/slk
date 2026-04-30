@@ -241,3 +241,36 @@ func TestView_AllLinesUniformWidth(t *testing.T) {
 		}
 	}
 }
+
+func TestSetUserNames_IdempotentDoesNotBumpVersion(t *testing.T) {
+	m := New(map[string]string{}, "USELF")
+	names := map[string]string{"U1": "alice", "U2": "bob"}
+	m.SetUserNames(names)
+	v0 := m.Version()
+	m.SetUserNames(names) // same map -> should be a no-op
+	if v1 := m.Version(); v1 != v0 {
+		t.Errorf("SetUserNames(same map) bumped Version: v0=%d v1=%d", v0, v1)
+	}
+	// A genuinely different map MUST still bump.
+	m.SetUserNames(map[string]string{"U1": "alice", "U2": "carol"})
+	if v2 := m.Version(); v2 == v0 {
+		t.Errorf("SetUserNames(different map) did NOT bump Version: v0=%d v2=%d", v0, v2)
+	}
+}
+
+// TestVersion_StableAcrossIdenticalSetCalls is the regression guard for the
+// app.go:4068-4093 cache-key bug: pushing the same userNames + selfUserID
+// repeatedly must NOT bump Version, otherwise the panel cache can never hit.
+func TestVersion_StableAcrossIdenticalSetCalls(t *testing.T) {
+	names := map[string]string{"U1": "alice", "U2": "bob"}
+	m := New(names, "U1")
+	m.SetSummaries(sampleSummaries())
+	v0 := m.Version()
+	for i := 0; i < 5; i++ {
+		m.SetUserNames(names)
+		m.SetSelfUserID("U1")
+	}
+	if v1 := m.Version(); v1 != v0 {
+		t.Errorf("Version drifted across identical Set calls: v0=%d v1=%d", v0, v1)
+	}
+}
