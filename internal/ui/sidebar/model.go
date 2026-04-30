@@ -206,6 +206,28 @@ type Model struct {
 	// the cursor sits on it, SelectedItem/SelectedID return zero / empty
 	// and the App layer activates the threads view instead.
 	threadsUnread int
+
+	// focused tracks whether this panel currently has user focus. When
+	// false, the cursor "▌" glyph dims from Accent to TextMuted (via
+	// styles.SelectionBorderColor) so the unfocused selection doesn't
+	// compete visually with the focused panel. Set by SetFocused() from
+	// the App layer.
+	focused bool
+}
+
+// SetFocused records whether the sidebar currently holds user focus and
+// invalidates the render cache so the cursor glyph re-renders with the
+// appropriate color (Accent when focused, TextMuted when not). The cursor
+// color is baked into cacheRows during buildCache, so a focus change
+// requires a full rebuild — but only when the value actually flips, to
+// avoid spurious cache invalidations on every render.
+func (m *Model) SetFocused(focused bool) {
+	if m.focused == focused {
+		return
+	}
+	m.focused = focused
+	m.cacheValid = false
+	m.dirty()
 }
 
 // InvalidateCache forces the render cache to be rebuilt on next View().
@@ -791,7 +813,7 @@ func (m *Model) buildCache(width int) {
 	bgAnsi := messages.SidebarBgANSI() + messages.SidebarFgANSI() // compute once outside loop
 
 	// Style objects allocated once per cache build.
-	cursorStyle := lipgloss.NewStyle().Foreground(styles.Accent)
+	cursorStyle := lipgloss.NewStyle().Foreground(styles.SelectionBorderColor(m.focused))
 	activeBorderStyle := lipgloss.NewStyle().Foreground(styles.Warning)
 	dotStyle := lipgloss.NewStyle().Foreground(styles.Primary)
 	privateStyle := lipgloss.NewStyle().Foreground(styles.Warning)

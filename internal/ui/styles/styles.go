@@ -321,6 +321,19 @@ func Apply(themeName string, overrides config.Theme) {
 	buildStyles()
 }
 
+// SelectionBorderColor returns the foreground color used for the cursor /
+// selected-row marker (the thick left "▌") in the sidebar, messages pane,
+// and thread panel. When the panel has focus we use the bright Accent
+// color; when it doesn't we dim to TextMuted so the cursor is still visible
+// (so the user can see where they were when they switch back) but no longer
+// competes with the focused panel for attention.
+func SelectionBorderColor(focused bool) color.Color {
+	if focused {
+		return Accent
+	}
+	return TextMuted
+}
+
 func buildStyles() {
 	FocusedBorder = lipgloss.NewStyle().
 		BorderStyle(lipgloss.ThickBorder()).BorderForeground(Primary).BorderBackground(Background).Background(Background)

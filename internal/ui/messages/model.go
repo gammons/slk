@@ -343,6 +343,28 @@ type Model struct {
 	// consumed by the app-level mouse handler via HitTest. See Phase 7
 	// (click-to-preview) for the consumer.
 	lastHits []hitRect
+
+	// focused tracks whether this panel currently has user focus. When
+	// false, the selected-message "▌" border dims from Accent to
+	// TextMuted (via styles.SelectionBorderColor) so the unfocused
+	// selection doesn't compete visually with the focused panel. The
+	// color is baked into viewEntry.linesSelected during buildCache, so
+	// SetFocused must invalidate the cache.
+	focused bool
+}
+
+// SetFocused records whether the messages pane currently holds user focus
+// and invalidates the render cache so the selected-message border re-renders
+// with the appropriate color (Accent when focused, TextMuted when not). The
+// cache is dropped only when the value actually flips, to avoid spurious
+// rebuilds on every render.
+func (m *Model) SetFocused(focused bool) {
+	if m.focused == focused {
+		return
+	}
+	m.focused = focused
+	m.cache = nil
+	m.dirty()
 }
 
 // HandleImageReady is invoked by the host (App.Update) when an
@@ -974,7 +996,7 @@ func (m *Model) buildCache(width int) {
 	// Pre-build the border styles once for the whole cache build.
 	borderFill := lipgloss.NewStyle().Background(styles.Background)
 	borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Background).BorderBackground(styles.Background)
-	borderSelect := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Accent).BorderBackground(styles.Background)
+	borderSelect := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.SelectionBorderColor(m.focused)).BorderBackground(styles.Background)
 	spacerBg := lipgloss.NewStyle().Background(styles.Background)
 	m.cacheSpacer = spacerBg.Width(width).Render("")
 	hintStyle := lipgloss.NewStyle().Background(styles.Background).Foreground(styles.TextMuted)

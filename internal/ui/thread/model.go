@@ -269,10 +269,14 @@ func (m *Model) UpdateParentInPlace(ts, newText string) bool {
 	return true
 }
 
-// SetFocused sets whether the thread panel has focus.
+// SetFocused sets whether the thread panel has focus. When the value flips
+// the view-level cache is invalidated so the selected reply's "▌" border
+// re-renders with the appropriate color (Accent when focused, TextMuted when
+// not — see styles.SelectionBorderColor).
 func (m *Model) SetFocused(focused bool) {
 	if m.focused != focused {
 		m.focused = focused
+		m.viewCacheValid = false
 		m.dirty()
 	}
 }
@@ -903,7 +907,7 @@ func (m *Model) View(height, width int) string {
 		// Pre-compute border styles for this frame (avoids NewStyle per reply)
 		borderFill := lipgloss.NewStyle().Background(styles.Background)
 		borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Background).BorderBackground(styles.Background)
-		borderSelect := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Accent).BorderBackground(styles.Background)
+		borderSelect := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.SelectionBorderColor(m.focused)).BorderBackground(styles.Background)
 		// Visible separator drawn between replies. Uses the panel border color
 		// over the themed background so it reads as a divider but doesn't
 		// fight with the panel's outer border. Falls through full content

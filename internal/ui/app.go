@@ -3995,6 +3995,11 @@ func (a *App) View() tea.View {
 	// sidebar's panel color rather than the message pane's.
 	if a.sidebarVisible {
 		sbFocused := a.focusedPanel == PanelSidebar && a.mode != ModeInsert
+		// Push focus into the sidebar so the cursor "▌" glyph dims when
+		// the panel is unfocused. This must happen BEFORE the panelCache
+		// hit-check below, since SetFocused bumps the panel's Version on
+		// a flip and the cache key includes that version.
+		a.sidebar.SetFocused(sbFocused)
 		sbLayoutKey := themeVer<<1 | boolToInt(sbFocused)
 		if c := &a.panelCacheSidebar; !c.hit(a.sidebar.Version(), sidebarWidth, contentHeight, sbLayoutKey) {
 			borderStyle := lipgloss.NewStyle().
@@ -4045,6 +4050,10 @@ func (a *App) View() tea.View {
 	// border glyphs line up because BorderBottom(false) on top + sides
 	// +  BorderTop(false) on bottom + sides yields a continuous panel.
 	msgFocused := a.focusedPanel == PanelMessages && a.mode != ModeInsert
+	// Push focus into the messages pane so the selected-message "▌"
+	// border dims when unfocused. Must happen before the panelCache
+	// hit-check (the cache key includes Version, which SetFocused bumps).
+	a.messagepane.SetFocused(msgFocused)
 	composeFocused := a.mode == ModeInsert && a.focusedPanel != PanelThread
 	// Mix the view-mode bit into the layout key so a Channels<->Threads
 	// switch invalidates the cached output (the cache is otherwise
@@ -4173,6 +4182,11 @@ func (a *App) View() tea.View {
 	// keystrokes don't invalidate the (much larger) replies render.
 	if a.threadVisible && threadWidth > 0 && !previewActive {
 		threadFocused := a.focusedPanel == PanelThread && a.mode != ModeInsert
+		// Push focus into the thread panel so the selected-reply "▌"
+		// border dims when unfocused. Must happen before the panelCache
+		// hit-check (the cache key includes Version, which SetFocused
+		// bumps via dirty()).
+		a.threadPanel.SetFocused(threadFocused)
 		threadComposeFocused := a.mode == ModeInsert && a.focusedPanel == PanelThread
 		threadLayoutKey := themeVer<<2 | boolToInt(threadFocused)<<1 | boolToInt(threadComposeFocused)
 		a.threadCompose.SetWidth(threadWidth - 2)
