@@ -93,3 +93,36 @@ func TestRenderMessagePlainPreservesPlainTextRendering(t *testing.T) {
 		t.Errorf("plain text body missing: %q", plain)
 	}
 }
+
+func TestRenderMessagePlainAppendsHintWhenInteractive(t *testing.T) {
+	msg := MessageItem{
+		TS:        "1700000000.000000",
+		UserName:  "deploy-bot",
+		Timestamp: "1:23 PM",
+		Blocks: []blockkit.Block{
+			blockkit.SectionBlock{Text: "Deploy?"},
+			blockkit.ActionsBlock{Elements: []blockkit.ActionElement{
+				{Kind: "button", Label: "Approve"},
+			}},
+		},
+	}
+	plain := renderedFor(t, msg, 100)
+	if !strings.Contains(plain, "↗ open in Slack to interact") {
+		t.Errorf("expected hint line, got %q", plain)
+	}
+}
+
+func TestRenderMessagePlainOmitsHintWhenNotInteractive(t *testing.T) {
+	msg := MessageItem{
+		TS:        "1700000000.000000",
+		UserName:  "github",
+		Timestamp: "1:23 PM",
+		Blocks: []blockkit.Block{
+			blockkit.SectionBlock{Text: "PR merged"},
+		},
+	}
+	plain := renderedFor(t, msg, 100)
+	if strings.Contains(plain, "↗ open in Slack to interact") {
+		t.Errorf("hint should not appear for non-interactive message: %q", plain)
+	}
+}

@@ -1269,8 +1269,11 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		_ = res.Hits
 		bkInteractive = bkInteractive || res.Interactive
 	}
+	if bkInteractive {
+		hint := styles.Timestamp.Render("↗ open in Slack to interact")
+		bkLines = append(bkLines, hint)
+	}
 	preAttachmentRows += len(bkLines)
-	_ = bkInteractive // consumed by Task 15
 
 	bkBlock := ""
 	if len(bkLines) > 0 {
