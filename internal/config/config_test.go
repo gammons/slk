@@ -119,7 +119,7 @@ func TestResolveThemeWorkspaceWins(t *testing.T) {
 	c := Config{
 		Appearance: Appearance{Theme: "dark"},
 		Workspaces: map[string]Workspace{
-			"T01": {Theme: "dracula"},
+			"T01": {TeamID: "T01", Theme: "dracula"},
 		},
 	}
 	if got := c.ResolveTheme("T01"); got != "dracula" {
@@ -131,7 +131,7 @@ func TestResolveThemeWorkspaceMissing(t *testing.T) {
 	c := Config{
 		Appearance: Appearance{Theme: "tokyo night"},
 		Workspaces: map[string]Workspace{
-			"T01": {Theme: "dracula"},
+			"T01": {TeamID: "T01", Theme: "dracula"},
 		},
 	}
 	if got := c.ResolveTheme("T99"); got != "tokyo night" {
@@ -144,7 +144,7 @@ func TestResolveThemeWorkspaceEmpty(t *testing.T) {
 	c := Config{
 		Appearance: Appearance{Theme: "tokyo night"},
 		Workspaces: map[string]Workspace{
-			"T01": {Theme: ""},
+			"T01": {TeamID: "T01", Theme: ""},
 		},
 	}
 	if got := c.ResolveTheme("T01"); got != "tokyo night" {
@@ -293,5 +293,84 @@ team_id = "not-a-real-id"
 	}
 	if _, err := Load(path); err == nil {
 		t.Fatal("expected error for slug-keyed block with malformed team_id")
+	}
+}
+
+func TestMatchSectionWorkspaceOverride(t *testing.T) {
+	c := Config{
+		Sections: map[string]SectionDef{
+			"GlobalEng": {Channels: []string{"eng-*"}, Order: 1},
+		},
+		Workspaces: map[string]Workspace{
+			"work": {
+				TeamID: "T01",
+				Sections: map[string]SectionDef{
+					"WorkAlerts": {Channels: []string{"alerts"}, Order: 1},
+				},
+			},
+		},
+	}
+	// In the "work" workspace, eng-foo should NOT match GlobalEng
+	// because the per-workspace sections fully replace global.
+	if got := c.MatchSection("T01", "eng-foo"); got != "" {
+		t.Errorf(`MatchSection("T01", "eng-foo") = %q, want "" (override hides global)`, got)
+	}
+	// "alerts" matches the workspace's own section.
+	if got := c.MatchSection("T01", "alerts"); got != "WorkAlerts" {
+		t.Errorf(`MatchSection("T01", "alerts") = %q, want "WorkAlerts"`, got)
+	}
+}
+
+func TestMatchSectionWorkspaceFallsBackToGlobal(t *testing.T) {
+	c := Config{
+		Sections: map[string]SectionDef{
+			"GlobalEng": {Channels: []string{"eng-*"}, Order: 1},
+		},
+		Workspaces: map[string]Workspace{
+			"side": {TeamID: "T02"}, // no per-workspace sections
+		},
+	}
+	if got := c.MatchSection("T02", "eng-foo"); got != "GlobalEng" {
+		t.Errorf("expected fallback to global, got %q", got)
+	}
+}
+
+func TestMatchSectionUnknownTeamID(t *testing.T) {
+	c := Config{
+		Sections: map[string]SectionDef{
+			"GlobalEng": {Channels: []string{"eng-*"}, Order: 1},
+		},
+	}
+	if got := c.MatchSection("Tnope", "eng-foo"); got != "GlobalEng" {
+		t.Errorf("expected global match for unknown teamID, got %q", got)
+	}
+}
+
+func TestMatchSectionEmptyTeamID(t *testing.T) {
+	c := Config{
+		Sections: map[string]SectionDef{
+			"GlobalEng": {Channels: []string{"eng-*"}, Order: 1},
+		},
+	}
+	if got := c.MatchSection("", "eng-foo"); got != "GlobalEng" {
+		t.Errorf("expected global match for empty teamID, got %q", got)
+	}
+}
+
+func TestWorkspaceByTeamID(t *testing.T) {
+	c := Config{
+		Workspaces: map[string]Workspace{
+			"work":   {TeamID: "T01", Theme: "dracula"},
+			"T02LEG": {TeamID: "T02LEG", Theme: "nord"},
+		},
+	}
+	if ws, ok := c.WorkspaceByTeamID("T01"); !ok || ws.Theme != "dracula" {
+		t.Errorf("WorkspaceByTeamID(T01) = %+v, %v", ws, ok)
+	}
+	if ws, ok := c.WorkspaceByTeamID("T02LEG"); !ok || ws.Theme != "nord" {
+		t.Errorf("WorkspaceByTeamID(T02LEG) = %+v, %v", ws, ok)
+	}
+	if _, ok := c.WorkspaceByTeamID("nope"); ok {
+		t.Error("expected WorkspaceByTeamID(nope) to be not found")
 	}
 }
