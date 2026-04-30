@@ -265,7 +265,7 @@ Config lives at `~/.config/slk/config.toml`:
 
 ```toml
 [general]
-default_workspace = "myteam"
+default_workspace = "work"   # the slug, not the team ID
 
 [appearance]
 theme = "dracula"
@@ -287,14 +287,30 @@ quiet_hours = "22:00-08:00"   # planned
 message_retention_days = 30
 max_db_size_mb = 500
 
-# Custom channel sections (glob patterns)
+# Global channel sections (used as a fallback for workspaces that
+# don't define their own).
 [sections.Alerts]
 channels = ["alerts", "ops", "*-alerts"]
 order = 1
 
-[sections.Engineering]
-channels = ["eng-*", "deploys", "bugs"]
+# Per-workspace settings: keyed by a slug you choose at --add-workspace
+# time. team_id ties the slug to the underlying Slack workspace.
+[workspaces.work]
+team_id = "T01ABCDEF"
+theme   = "dracula"          # overrides [appearance].theme
+
+[workspaces.work.sections.Alerts]
+channels = ["alerts", "*-alerts"]
+order = 1
+
+[workspaces.work.sections.Engineering]
+channels = ["eng-*", "deploys"]
 order = 2
+
+# A second workspace with no per-workspace sections — falls back to
+# the global [sections.*] above.
+[workspaces.side]
+team_id = "T02XYZ"
 
 # Inline color overrides on top of the active theme
 [theme]
@@ -303,6 +319,13 @@ accent = "#50C878"
 background = "#1A1A2E"
 text = "#E0E0E0"
 ```
+
+Per-workspace `[workspaces.<slug>.sections.*]` blocks fully replace the
+global `[sections.*]` for that workspace. Workspaces that define no
+sections of their own fall back to the global table.
+
+Legacy configs that key the block by raw team ID
+(`[workspaces.T01ABCDEF]`) keep working unchanged.
 
 ### Custom themes
 
