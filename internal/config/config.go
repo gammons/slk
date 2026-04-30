@@ -42,6 +42,10 @@ type Appearance struct {
 	ImageProtocol string `toml:"image_protocol"`
 	// MaxImageRows caps the height of inline images in terminal rows.
 	MaxImageRows int `toml:"max_image_rows"`
+	// MaxImageCols caps the width of inline images in terminal columns.
+	// If 0 or unset, defaults to 60. The image is also bounded by the
+	// available message-pane width when narrower.
+	MaxImageCols int `toml:"max_image_cols"`
 }
 
 type Animations struct {
@@ -105,6 +109,7 @@ func Default() Config {
 			TimestampFormat: "3:04 PM",
 			ImageProtocol:   "auto",
 			MaxImageRows:    20,
+			MaxImageCols:    60,
 		},
 		Animations: Animations{
 			Enabled:          true,

@@ -177,8 +177,14 @@ type ImageContext struct {
 	Fetcher     *imgpkg.Fetcher
 	KittyRender *imgpkg.KittyRenderer
 	CellPixels  image.Point
-	MaxRows     int
-	SendMsg     func(tea.Msg)
+	// MaxRows caps the height of an inline image in terminal rows.
+	MaxRows int
+	// MaxCols caps the width of an inline image in terminal columns.
+	// The image is also bounded by the available message-pane width
+	// when narrower. 0 disables the column cap (width-only bounded by
+	// the message pane).
+	MaxCols int
+	SendMsg func(tea.Msg)
 }
 
 // ImageReadyMsg is dispatched by the prefetcher when an image attachment
@@ -1279,9 +1285,10 @@ func (m *Model) renderAttachmentBlock(att Attachment, ts string, availWidth, bas
 }
 
 // computeImageTarget chooses (cols, rows) for an inline image render.
-// rows is capped at ctx.MaxRows; cols fits the available width and
-// preserves aspect ratio. Returns image.Point{} when the attachment
-// has no usable thumbnail or the cell metrics are zero.
+// rows is capped at ctx.MaxRows; cols is capped at min(availWidth,
+// ctx.MaxCols). Aspect ratio is always preserved. Returns image.Point{}
+// when the attachment has no usable thumbnail or the cell metrics are
+// zero.
 func computeImageTarget(att Attachment, ctx ImageContext, availWidth int) image.Point {
 	if len(att.Thumbs) == 0 || ctx.CellPixels.X <= 0 || ctx.CellPixels.Y <= 0 {
 		return image.Point{}
@@ -1297,11 +1304,17 @@ func computeImageTarget(att Attachment, ctx ImageContext, availWidth int) image.
 	if rows <= 0 {
 		rows = 20
 	}
+	// Width cap is the smaller of the user's MaxCols and the available
+	// message-pane width. MaxCols == 0 disables the user cap.
+	maxCols := availWidth
+	if ctx.MaxCols > 0 && ctx.MaxCols < maxCols {
+		maxCols = ctx.MaxCols
+	}
 	// cols = rows * aspect / cellRatio  (cells are taller than wide,
 	// so cellRatio < 1 inflates cols to compensate).
 	cols := int(float64(rows) * aspect / cellRatio)
-	if cols > availWidth {
-		cols = availWidth
+	if cols > maxCols {
+		cols = maxCols
 		rows = int(float64(cols) * cellRatio / aspect)
 	}
 	if rows < 1 || cols < 1 {

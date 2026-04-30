@@ -342,6 +342,7 @@ func run() error {
 			KittyRender: imgpkg.KittyRendererInstance(),
 			CellPixels:  image.Pt(pxW, pxH),
 			MaxRows:     cfg.Appearance.MaxImageRows,
+			MaxCols:     cfg.Appearance.MaxImageCols,
 			SendMsg:     send,
 		}
 	}
