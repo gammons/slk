@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -129,7 +130,11 @@ func (t *fileAuthTransport) RoundTrip(req *http.Request) (*http.Response, error)
 				clone := req.Clone(req.Context())
 				clone.Header.Set("Authorization", "Bearer "+tok)
 				req = clone
+			} else {
+				log.Printf("[image-debug] file auth: no token for team %q on URL %s", teamID, req.URL.String())
 			}
+		} else {
+			log.Printf("[image-debug] file auth: could not parse team ID from URL %s", req.URL.String())
 		}
 	}
 	return t.base.RoundTrip(req)

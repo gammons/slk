@@ -289,6 +289,7 @@ func run() error {
 	tokensByTeam := make(map[string]string, len(tokens))
 	for _, t := range tokens {
 		tokensByTeam[t.TeamID] = t.AccessToken
+		log.Printf("image fetcher: registered team %q (%s) for file auth", t.TeamName, t.TeamID)
 	}
 	imageHTTPClient := slackclient.NewFileAuthHTTPClient(tokensByTeam, tokens[0].Cookie)
 	imageHTTPClient.Timeout = 10 * time.Second
