@@ -1532,7 +1532,7 @@ type rtmEventHandler struct {
 	wsCtx *WorkspaceContext
 }
 
-func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool, files []slack.File) {
+func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment) {
 	// Cache every message to SQLite, regardless of active workspace
 	h.db.UpsertMessage(cache.Message{
 		TS:          ts,
@@ -1595,15 +1595,17 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	h.program.Send(ui.NewMessageMsg{
 		ChannelID: channelID,
 		Message: messages.MessageItem{
-			TS:          ts,
-			UserID:      userID,
-			UserName:    userName,
-			Text:        text,
-			Timestamp:   formatTimestamp(ts, h.tsFormat),
-			ThreadTS:    threadTS,
-			Subtype:     subtype,
-			IsEdited:    edited,
-			Attachments: extractAttachments(files),
+			TS:                ts,
+			UserID:            userID,
+			UserName:          userName,
+			Text:              text,
+			Timestamp:         formatTimestamp(ts, h.tsFormat),
+			ThreadTS:          threadTS,
+			Subtype:           subtype,
+			IsEdited:          edited,
+			Attachments:       extractAttachments(files),
+			Blocks:            extractBlocks(blocks),
+			LegacyAttachments: extractLegacyAttachments(attachments),
 		},
 	})
 }

@@ -22,11 +22,15 @@ type mockEventHandler struct {
 	typingEvents        []string
 	selfPresenceChanges []string
 	dndChanges          []dndChangeRecord
+	lastBlocks          slack.Blocks
+	lastAttachments     []slack.Attachment
 }
 
-func (m *mockEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool, files []slack.File) {
+func (m *mockEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment) {
 	m.messages = append(m.messages, text)
 	m.subtypes = append(m.subtypes, subtype)
+	m.lastBlocks = blocks
+	m.lastAttachments = attachments
 }
 
 func (m *mockEventHandler) OnMessageDeleted(channelID, ts string) {
@@ -57,7 +61,7 @@ func TestEventHandlerInterface(t *testing.T) {
 	handler := &mockEventHandler{}
 	var _ EventHandler = handler
 
-	handler.OnMessage("C1", "U1", "123.456", "hello", "", "", false, nil)
+	handler.OnMessage("C1", "U1", "123.456", "hello", "", "", false, nil, slack.Blocks{}, nil)
 	if len(handler.messages) != 1 || handler.messages[0] != "hello" {
 		t.Error("expected message to be recorded")
 	}
@@ -268,6 +272,34 @@ func TestDispatchWebSocketDNDUpdatedEvent_BetweenSchedules(t *testing.T) {
 	}
 	if got.endUnix != 0 {
 		t.Errorf("expected endUnix=0 when not in DND, got %d", got.endUnix)
+	}
+}
+
+func TestDispatchMessageForwardsBlocks(t *testing.T) {
+	handler := &mockEventHandler{}
+	payload := []byte(`{
+		"type": "message",
+		"channel": "C1",
+		"user": "U1",
+		"ts": "1700000000.000000",
+		"text": "hi",
+		"blocks": [
+			{ "type": "section", "text": {"type": "mrkdwn", "text": "*hello*"} }
+		],
+		"attachments": [
+			{ "color": "good", "title": "T" }
+		]
+	}`)
+	dispatchWebSocketEvent(payload, handler)
+
+	if len(handler.lastBlocks.BlockSet) != 1 {
+		t.Errorf("expected 1 block forwarded; got %d", len(handler.lastBlocks.BlockSet))
+	}
+	if len(handler.lastAttachments) != 1 {
+		t.Errorf("expected 1 attachment forwarded; got %d", len(handler.lastAttachments))
+	}
+	if handler.lastAttachments[0].Color != "good" {
+		t.Errorf("attachment Color = %q, want \"good\"", handler.lastAttachments[0].Color)
 	}
 }
 
