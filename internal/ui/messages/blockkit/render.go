@@ -6,6 +6,9 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+
+	imgpkg "github.com/gammons/slk/internal/image"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 // narrowBreakpoint is the width below which renderers collapse
@@ -49,6 +52,8 @@ func appendBlock(out *RenderResult, b Block, ctx Context, width int) {
 		appendContext(out, v, ctx, width)
 	case ActionsBlock:
 		appendActions(out, v, width)
+	case ImageBlock:
+		appendImageBlock(out, v, ctx, width)
 	case UnknownBlock:
 		out.Lines = append(out.Lines, renderUnsupported(v.Type, width))
 	default:
@@ -171,6 +176,59 @@ func appendActions(out *RenderResult, a ActionsBlock, width int) {
 		rows = append(rows, current)
 	}
 	out.Lines = append(out.Lines, rows...)
+}
+
+// appendImageBlock renders a Slack image block: an optional bold
+// title line followed by either an inline image (kitty/sixel/half-
+// block) or, when image rendering is unavailable, a single OSC-8
+// hyperlinked "[image] <url>" fallback line.
+func appendImageBlock(out *RenderResult, b ImageBlock, ctx Context, width int) {
+	// Title (if any) renders as a small bold line above the image.
+	if b.Title != "" {
+		titleStyle := lipgloss.NewStyle().Bold(true).
+			Foreground(styles.Primary).
+			Background(styles.Background)
+		title := b.Title
+		if lipgloss.Width(title) > width {
+			title = truncateToWidth(title, width)
+		}
+		out.Lines = append(out.Lines, titleStyle.Render(title))
+	}
+
+	// If we can't render images at all, emit the fallback link.
+	if ctx.Fetcher == nil || ctx.Protocol == imgpkg.ProtoOff {
+		out.Lines = append(out.Lines, renderImageFallback(b.URL))
+		return
+	}
+
+	// Compute target cell dims. Without a thumb ladder we use the
+	// declared image_width/image_height when present, falling back
+	// to a reasonable default aspect.
+	target := computeBlockImageTarget(b, ctx, width)
+	if target.X <= 0 || target.Y <= 0 {
+		out.Lines = append(out.Lines, renderImageFallback(b.URL))
+		return
+	}
+
+	rowStart := len(out.Lines)
+	lines, flushes, sxlMap, hit, ok := fetchOrPlaceholder(b.URL, target, ctx, rowStart)
+	if !ok {
+		out.Lines = append(out.Lines, renderImageFallback(b.URL))
+		return
+	}
+	out.Lines = append(out.Lines, lines...)
+	out.Flushes = append(out.Flushes, flushes...)
+	if sxlMap != nil {
+		if out.SixelRows == nil {
+			out.SixelRows = map[int]SixelEntry{}
+		}
+		for k, v := range sxlMap {
+			out.SixelRows[k] = v
+		}
+	}
+	if hit.RowEnd > hit.RowStart {
+		out.Hits = append(out.Hits, hit)
+	}
 }
 
 // renderControlLabel produces a muted, non-interactive label for a

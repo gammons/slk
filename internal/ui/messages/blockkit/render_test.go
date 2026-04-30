@@ -351,3 +351,29 @@ func TestRenderActionsBlockMixedKinds(t *testing.T) {
 		t.Errorf("missing datepicker: %q", plain)
 	}
 }
+
+func TestRenderImageBlockNoFetcherFallsBackToTextLink(t *testing.T) {
+	r := Render([]Block{ImageBlock{
+		URL:   "https://example.com/chart.png",
+		Title: "Q3 chart",
+		Alt:   "chart",
+	}}, Context{}, 80)
+	plain := ansi.Strip(strings.Join(r.Lines, "\n"))
+	if !strings.Contains(plain, "https://example.com/chart.png") {
+		t.Errorf("expected URL in fallback, got %q", plain)
+	}
+	if !strings.Contains(plain, "[image]") {
+		t.Errorf("expected '[image]' marker in fallback, got %q", plain)
+	}
+}
+
+func TestRenderImageBlockShowsTitleAboveFallback(t *testing.T) {
+	r := Render([]Block{ImageBlock{
+		URL:   "https://example.com/x.png",
+		Title: "Q3 Metrics",
+	}}, Context{}, 80)
+	plain := ansi.Strip(strings.Join(r.Lines, "\n"))
+	if !strings.Contains(plain, "Q3 Metrics") {
+		t.Errorf("expected title %q in %q", "Q3 Metrics", plain)
+	}
+}
