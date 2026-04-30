@@ -269,9 +269,11 @@ Or just run `./bin/slk`. Onboarding launches automatically when no workspaces ar
 | `E` | Normal (message) | Edit your own message |
 | `D` | Normal (message) | Delete your own message (with confirmation) |
 | `Y` / `C` | Normal (message) | Copy message permalink |
-| `O` | Normal (message) | Open full-screen image preview |
+| `O` / `v` | Normal (message) | Open full-screen image preview |
 | `Esc` / `q` | Preview | Close preview |
 | `Enter` | Preview | Open in system image viewer |
+| `h` / `←` | Preview | Previous image (when message has multiple) |
+| `l` / `→` | Preview | Next image (when message has multiple) |
 | Click | Any (on image) | Open full-screen preview |
 | `Ctrl+y` | Any | Switch theme |
 | `Ctrl+s` | Any | Set status (Active / Away / DND snooze) |

@@ -14,27 +14,48 @@ type PreviewInput struct {
 	FileID string      // Slack file ID, used for cache key
 	Img    image.Image // the decoded image to render
 	Path   string      // on-disk path; used for system-viewer launch on Enter
+	// SiblingCount and SiblingIndex describe how this image relates to
+	// other image attachments on the same message. When SiblingCount > 1
+	// the caption shows "(i/N)" and h/l/arrow keys can cycle. Both
+	// default to (1, 0) for single-image preview.
+	SiblingCount int
+	SiblingIndex int
 }
 
 // Preview is a stateful full-screen image overlay sub-component. It is
 // rendered by the App when non-nil; otherwise the messages+thread region
 // is rendered normally.
 type Preview struct {
-	open bool
-	name string
-	fid  string
-	img  image.Image
-	path string
+	open      bool
+	name      string
+	fid       string
+	img       image.Image
+	path      string
+	sibCount  int
+	sibIndex  int
 }
 
 // NewPreview returns an open preview for the given image.
 func NewPreview(in PreviewInput) Preview {
+	count := in.SiblingCount
+	if count < 1 {
+		count = 1
+	}
+	idx := in.SiblingIndex
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= count {
+		idx = count - 1
+	}
 	return Preview{
-		open: true,
-		name: in.Name,
-		fid:  in.FileID,
-		img:  in.Img,
-		path: in.Path,
+		open:     true,
+		name:     in.Name,
+		fid:      in.FileID,
+		img:      in.Img,
+		path:     in.Path,
+		sibCount: count,
+		sibIndex: idx,
 	}
 }
 
@@ -51,6 +72,29 @@ func (p Preview) Path() string { return p.path }
 
 // FileID returns the Slack file ID associated with this preview.
 func (p Preview) FileID() string { return p.fid }
+
+// SiblingCount returns the total number of image attachments on the
+// message this preview was opened from. Always >= 1.
+func (p Preview) SiblingCount() int { return p.sibCount }
+
+// SiblingIndex returns the 0-based index of the currently shown image
+// among its siblings. 0 <= idx < SiblingCount().
+func (p Preview) SiblingIndex() int { return p.sibIndex }
+
+// SwapImage replaces the currently shown image (used when cycling via
+// h/l). The sibling index is updated to the new position.
+func (p *Preview) SwapImage(in PreviewInput) {
+	p.name = in.Name
+	p.fid = in.FileID
+	p.img = in.Img
+	p.path = in.Path
+	if in.SiblingCount > 0 {
+		p.sibCount = in.SiblingCount
+	}
+	if in.SiblingIndex >= 0 && in.SiblingIndex < p.sibCount {
+		p.sibIndex = in.SiblingIndex
+	}
+}
 
 // View renders the preview into a string of size width × height. proto is
 // the active rendering protocol (kitty / sixel / halfblock). Reserves
@@ -85,6 +129,9 @@ func (p *Preview) View(width, height int, proto Protocol) string {
 	}
 
 	caption := fmt.Sprintf("%s  •  %dx%d", p.name, srcW, srcH)
+	if p.sibCount > 1 {
+		caption = fmt.Sprintf("%s  •  %dx%d  •  (%d/%d)", p.name, srcW, srcH, p.sibIndex+1, p.sibCount)
+	}
 	captionStyle := lipgloss.NewStyle().Faint(true).Width(width)
 
 	var b strings.Builder
@@ -112,7 +159,11 @@ func (p *Preview) View(width, height int, proto Protocol) string {
 		b.WriteByte('\n')
 	}
 
-	hint := lipgloss.NewStyle().Faint(true).Render("Esc/q close  •  Enter open in system viewer")
+	hintText := "Esc/q close  •  Enter open in system viewer"
+	if p.sibCount > 1 {
+		hintText = "h/\u2190 prev  •  l/\u2192 next  •  " + hintText
+	}
+	hint := lipgloss.NewStyle().Faint(true).Render(hintText)
 	b.WriteString(hint)
 	return b.String()
 }
