@@ -1566,10 +1566,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.cancelEdit()
 		// Always land in ViewChannels and drop any per-workspace
 		// threads-view state so stale summaries / unread badges from the
-		// previous workspace can't leak in. Reset sidebar selection back
-		// to the synthetic Threads row for a "fresh" feel on each
-		// workspace switch.
-		a.sidebar.SelectThreadsRow()
+		// previous workspace can't leak in. The sidebar cursor is moved
+		// to the restored channel below (after SetChannels); only fall
+		// back to the Threads row when the new workspace has no channels
+		// at all.
 		a.view = ViewChannels
 		a.sidebar.SetThreadsActive(false)
 		a.threadsView.SetSummaries(nil)
@@ -1607,7 +1607,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.workspaceRail.SelectByID(msg.TeamID)
 		// Restore the last-viewed channel for this workspace if we have
 		// one and it still exists; otherwise fall back to the first
-		// channel in the sidebar.
+		// channel in the sidebar. Move the sidebar cursor to that
+		// channel as well so the highlight matches the messages pane.
 		if len(msg.Channels) > 0 {
 			target := msg.Channels[0]
 			if savedID, ok := a.lastChannelByTeam[msg.TeamID]; ok && savedID != "" {
@@ -1618,9 +1619,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
+			a.sidebar.SelectByID(target.ID)
 			cmds = append(cmds, func() tea.Msg {
 				return ChannelSelectedMsg{ID: target.ID, Name: target.Name, Type: target.Type}
 			})
+		} else {
+			a.sidebar.SelectThreadsRow()
 		}
 		// Kick off an initial threads-list fetch so the sidebar Threads
 		// row badge populates before the user opens the view.
