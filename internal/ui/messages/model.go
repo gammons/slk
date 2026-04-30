@@ -190,6 +190,17 @@ type ImageReadyMsg struct {
 	TS      string
 }
 
+// OpenImagePreviewMsg requests opening the full-screen preview overlay
+// for a specific message attachment. Dispatched by the messages model
+// on click (Phase 7.4) or `O` keybind (Phase 7.3). The App's Update
+// handler fetches the largest available thumb and constructs an
+// image.Preview to render over the messages+thread region.
+type OpenImagePreviewMsg struct {
+	Channel string
+	TS      string
+	AttIdx  int
+}
+
 type Model struct {
 	messages     []MessageItem
 	selected     int

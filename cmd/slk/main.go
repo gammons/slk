@@ -335,6 +335,8 @@ func run() error {
 		}
 	}
 	app.SetImageContext(buildImgCtx(nil))
+	app.SetImageFetcher(imageFetcher)
+	app.SetImageProtocol(proto)
 
 	// Build workspace rail items for all tokens
 	var wsItems []workspace.WorkspaceItem

@@ -177,6 +177,13 @@ func (m *Model) ParentMsg() messages.MessageItem {
 	return m.parent
 }
 
+// Replies returns the slice of currently-loaded thread replies. Used by
+// the App for cross-pane lookups (e.g. resolving an attachment for the
+// preview overlay when the click landed inside the thread panel).
+func (m *Model) Replies() []messages.MessageItem {
+	return m.replies
+}
+
 // UpdateMessageInPlace finds a reply by TS and replaces its text,
 // marking it edited. Returns true if found.
 func (m *Model) UpdateMessageInPlace(ts, newText string) bool {

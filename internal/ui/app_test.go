@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"golang.design/x/clipboard"
 	"github.com/gammons/slk/internal/cache"
+	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/sidebar"
@@ -2014,5 +2015,96 @@ func TestNormalMode_LowercaseQ_OpensConfirmPrompt(t *testing.T) {
 	}
 	if app.mode != ModeConfirm {
 		t.Errorf("expected mode=ModeConfirm, got %v", app.mode)
+	}
+}
+
+// TestPreviewOverlay_EscClosesAndNils verifies that pressing Esc while
+// the preview overlay is open dismisses it via the early-return route
+// in App.Update, regardless of the focused panel or current mode.
+func TestPreviewOverlay_EscClosesAndNils(t *testing.T) {
+	app := NewApp()
+	// Inject a preview directly to bypass the fetcher path. A nil image
+	// is acceptable for this test since we never call View(); the close
+	// path doesn't touch the renderer.
+	p := imgpkg.NewPreview(imgpkg.PreviewInput{Name: "x.png"})
+	app.previewOverlay = &p
+
+	_, _ = app.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if app.previewOverlay != nil {
+		t.Fatal("Esc should clear previewOverlay")
+	}
+}
+
+// TestPreviewOverlay_QClosesAndNils mirrors the Esc test for the `q`
+// keybind. Both keys must dismiss the overlay without triggering the
+// quit-confirm prompt that lowercase q normally opens.
+func TestPreviewOverlay_QClosesAndNils(t *testing.T) {
+	app := NewApp()
+	p := imgpkg.NewPreview(imgpkg.PreviewInput{Name: "x.png"})
+	app.previewOverlay = &p
+
+	_, _ = app.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	if app.previewOverlay != nil {
+		t.Fatal("q should clear previewOverlay")
+	}
+	if app.confirmPrompt.IsVisible() {
+		t.Fatal("q must NOT open the quit-confirm prompt while overlay is active")
+	}
+}
+
+// TestPreviewOverlay_EnterClosesAndReturnsCmd asserts that Enter both
+// dismisses the overlay and returns a non-nil tea.Cmd (the system
+// viewer launcher). The cmd itself spawns a process so we don't run it
+// in tests; we just verify it's wired.
+func TestPreviewOverlay_EnterClosesAndReturnsCmd(t *testing.T) {
+	app := NewApp()
+	p := imgpkg.NewPreview(imgpkg.PreviewInput{Name: "x.png", Path: "/tmp/x.png"})
+	app.previewOverlay = &p
+
+	_, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if app.previewOverlay != nil {
+		t.Fatal("Enter should clear previewOverlay")
+	}
+	if cmd == nil {
+		t.Fatal("Enter with a non-empty Path should return a launcher cmd")
+	}
+}
+
+// TestPreviewOverlay_OtherKeysSwallowed checks that arbitrary keys do
+// not propagate to the focused panel while the overlay is open. We
+// approximate this by sending `j` (which would normally move the
+// sidebar selection) and verifying no observable state change.
+func TestPreviewOverlay_OtherKeysSwallowed(t *testing.T) {
+	app := NewApp()
+	app.sidebar.SetItems([]sidebar.ChannelItem{
+		{ID: "C1", Name: "a"},
+		{ID: "C2", Name: "b"},
+	})
+	beforeIdx := -1
+	if it, ok := app.sidebar.SelectedItem(); ok {
+		if it.ID == "C1" {
+			beforeIdx = 0
+		} else if it.ID == "C2" {
+			beforeIdx = 1
+		}
+	}
+
+	p := imgpkg.NewPreview(imgpkg.PreviewInput{Name: "x.png"})
+	app.previewOverlay = &p
+
+	_, _ = app.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	if app.previewOverlay == nil {
+		t.Fatal("j must NOT close the preview overlay")
+	}
+	afterIdx := -1
+	if it, ok := app.sidebar.SelectedItem(); ok {
+		if it.ID == "C1" {
+			afterIdx = 0
+		} else if it.ID == "C2" {
+			afterIdx = 1
+		}
+	}
+	if afterIdx != beforeIdx {
+		t.Errorf("j should be swallowed while overlay is open; sidebar selection changed (%d -> %d)", beforeIdx, afterIdx)
 	}
 }
