@@ -655,6 +655,22 @@ type previewErrorMsg struct {
 	Err error
 }
 
+// previewSpinnerTickMsg drives the loading-state spinner animation.
+// While the preview overlay is open and in its loading state, the
+// Update arm advances the spinner frame and re-schedules another tick;
+// when the image lands (or the overlay closes), the chain stops.
+type previewSpinnerTickMsg struct{}
+
+// previewSpinnerTickInterval is the redraw cadence for the loading
+// spinner. 100ms feels alive without being a CPU hog.
+const previewSpinnerTickInterval = 100 * time.Millisecond
+
+func previewSpinnerTickCmd() tea.Cmd {
+	return tea.Tick(previewSpinnerTickInterval, func(time.Time) tea.Msg {
+		return previewSpinnerTickMsg{}
+	})
+}
+
 func NewApp() *App {
 	app := &App{
 		workspaceRail:        workspace.New(nil, 0),
@@ -1178,11 +1194,26 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.messagepane.HandleImageFailed(msg.Key)
 
 	case messages.OpenImagePreviewMsg:
+		// Open the overlay IMMEDIATELY in a loading state so the user
+		// gets visual feedback that their click / O / v registered.
+		// The actual image fetch happens asynchronously; previewLoadedMsg
+		// swaps the bytes in when ready. Without this fast path the UI
+		// felt hung on slow-fetching previews (Slack Connect channels
+		// where multi-auth retry can take seconds).
 		if cmd := a.openImagePreviewCmd(msg.Channel, msg.TS, msg.AttIdx); cmd != nil {
 			a.previewChannel = msg.Channel
 			a.previewTS = msg.TS
 			a.previewAttIdx = msg.AttIdx
-			cmds = append(cmds, cmd)
+			name, sibCount, sibIndex := a.previewMetaForOpen(msg.Channel, msg.TS, msg.AttIdx)
+			loading := imgpkg.NewLoadingPreview(name, sibCount, sibIndex)
+			a.previewOverlay = &loading
+			cmds = append(cmds, cmd, previewSpinnerTickCmd())
+		}
+
+	case previewSpinnerTickMsg:
+		if a.previewOverlay != nil && !a.previewOverlay.IsClosed() && a.previewOverlay.IsLoading() {
+			a.previewOverlay.AdvanceLoadingFrame()
+			cmds = append(cmds, previewSpinnerTickCmd())
 		}
 
 	case previewLoadedMsg:
@@ -1194,28 +1225,37 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			SiblingCount: msg.SiblingCount,
 			SiblingIndex: msg.SiblingIndex,
 		}
-		if msg.isCycle && a.previewOverlay != nil && !a.previewOverlay.IsClosed() {
-			// In-place swap so the overlay stays open. Update the
-			// remembered attIdx so a subsequent cycle key starts from
-			// the new position. The fileID -> attIdx mapping requires
-			// a lookup against the source message; do that here so the
-			// preview package stays UI-agnostic.
+		if a.previewOverlay != nil && !a.previewOverlay.IsClosed() {
+			// Swap bytes into the existing overlay (whether it's the
+			// initial loading shell or an already-displayed image
+			// being cycled). This preserves the overlay layout and
+			// keeps cycling state coherent.
 			a.previewOverlay.SwapImage(input)
-			if msgItem, ok := a.findMessageInActiveChannel(a.previewChannel, a.previewTS); ok {
-				for i, att := range msgItem.Attachments {
-					if att.FileID == msg.FileID {
-						a.previewAttIdx = i
-						break
+			if msg.isCycle {
+				// Cycling case: update the remembered attIdx so a
+				// subsequent cycle key starts from the new position.
+				if msgItem, ok := a.findMessageInActiveChannel(a.previewChannel, a.previewTS); ok {
+					for i, att := range msgItem.Attachments {
+						if att.FileID == msg.FileID {
+							a.previewAttIdx = i
+							break
+						}
 					}
 				}
 			}
 		} else {
-			p := imgpkg.NewPreview(input)
-			a.previewOverlay = &p
+			// User dismissed the overlay before bytes arrived; drop on
+			// the floor.
 		}
 
 	case previewErrorMsg:
 		log.Printf("preview fetch error: %v", msg.Err)
+		// Dismiss the loading overlay so the user isn't left staring at
+		// a permanent spinner.
+		if a.previewOverlay != nil && a.previewOverlay.IsLoading() {
+			a.previewOverlay.Close()
+			a.previewOverlay = nil
+		}
 
 	case NewMessageMsg:
 		if msg.Message.IsEdited {
@@ -3376,6 +3416,37 @@ func (a *App) previewFetchCmd(channel, ts string, attIdx int, cycle bool) tea.Cm
 			isCycle:      cycle,
 		}
 	}
+}
+
+// previewMetaForOpen returns the (name, sibCount, sibIndex) needed to
+// construct a loading-state Preview for the given (channel, ts, attIdx).
+// Used to open the overlay synchronously, before the fetch completes,
+// so the user sees immediate feedback.
+//
+// Returns ("", 1, 0) defaults for any miss; callers won't display the
+// loading overlay in that case anyway because openImagePreviewCmd
+// returns nil.
+func (a *App) previewMetaForOpen(channel, ts string, attIdx int) (name string, sibCount, sibIndex int) {
+	sibCount = 1
+	msgItem, ok := a.findMessageInActiveChannel(channel, ts)
+	if !ok {
+		return "", 1, 0
+	}
+	if attIdx < 0 || attIdx >= len(msgItem.Attachments) {
+		return "", 1, 0
+	}
+	imageIdxs := imageAttachmentIndices(msgItem.Attachments)
+	sibCount = len(imageIdxs)
+	if sibCount == 0 {
+		sibCount = 1
+	}
+	for i, idx := range imageIdxs {
+		if idx == attIdx {
+			sibIndex = i
+			break
+		}
+	}
+	return msgItem.Attachments[attIdx].Name, sibCount, sibIndex
 }
 
 // imageAttachmentIndices returns the indices into atts of attachments

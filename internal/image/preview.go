@@ -25,29 +25,28 @@ type PreviewInput struct {
 // Preview is a stateful full-screen image overlay sub-component. It is
 // rendered by the App when non-nil; otherwise the messages+thread region
 // is rendered normally.
+//
+// A Preview can be open in either of two states:
+//   - loading: opened immediately when the user requests a preview, so
+//     they get visual feedback that the action registered. The View
+//     shows a centered "Loading <filename>..." spinner. When the fetch
+//     completes, the host calls SwapImage to swap in the decoded image.
+//   - displaying: the image is decoded and being rendered.
 type Preview struct {
-	open      bool
-	name      string
-	fid       string
-	img       image.Image
-	path      string
-	sibCount  int
-	sibIndex  int
+	open         bool
+	name         string
+	fid          string
+	img          image.Image
+	path         string
+	sibCount     int
+	sibIndex     int
+	loading      bool
+	loadingFrame int
 }
 
-// NewPreview returns an open preview for the given image.
+// NewPreview returns an open preview displaying the given image.
 func NewPreview(in PreviewInput) Preview {
-	count := in.SiblingCount
-	if count < 1 {
-		count = 1
-	}
-	idx := in.SiblingIndex
-	if idx < 0 {
-		idx = 0
-	}
-	if idx >= count {
-		idx = count - 1
-	}
+	count, idx := normalizeSiblings(in.SiblingCount, in.SiblingIndex)
 	return Preview{
 		open:     true,
 		name:     in.Name,
@@ -58,6 +57,41 @@ func NewPreview(in PreviewInput) Preview {
 		sibIndex: idx,
 	}
 }
+
+// NewLoadingPreview returns an open preview in the loading state. The
+// image fetch happens asynchronously; the host calls SwapImage on the
+// resulting Preview once the bytes are decoded.
+func NewLoadingPreview(name string, sibCount, sibIndex int) Preview {
+	count, idx := normalizeSiblings(sibCount, sibIndex)
+	return Preview{
+		open:     true,
+		name:     name,
+		sibCount: count,
+		sibIndex: idx,
+		loading:  true,
+	}
+}
+
+func normalizeSiblings(count, idx int) (int, int) {
+	if count < 1 {
+		count = 1
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= count {
+		idx = count - 1
+	}
+	return count, idx
+}
+
+// IsLoading reports whether the preview is currently waiting for image
+// bytes to land.
+func (p Preview) IsLoading() bool { return p.loading }
+
+// AdvanceLoadingFrame steps the spinner used in the loading state. Call
+// from a tea.Tick handler while IsLoading() is true.
+func (p *Preview) AdvanceLoadingFrame() { p.loadingFrame++ }
 
 // IsClosed reports whether the preview is currently dismissed.
 // Zero-value Preview is closed.
@@ -82,7 +116,9 @@ func (p Preview) SiblingCount() int { return p.sibCount }
 func (p Preview) SiblingIndex() int { return p.sibIndex }
 
 // SwapImage replaces the currently shown image (used when cycling via
-// h/l). The sibling index is updated to the new position.
+// h/l, or when the initial fetch finishes for a loading preview). The
+// sibling index is updated to the new position; the loading flag is
+// cleared.
 func (p *Preview) SwapImage(in PreviewInput) {
 	p.name = in.Name
 	p.fid = in.FileID
@@ -94,15 +130,29 @@ func (p *Preview) SwapImage(in PreviewInput) {
 	if in.SiblingIndex >= 0 && in.SiblingIndex < p.sibCount {
 		p.sibIndex = in.SiblingIndex
 	}
+	p.loading = false
 }
+
+// previewSpinnerFrames is the small set of braille glyphs used to
+// animate the loading state. Cycled via AdvanceLoadingFrame.
+var previewSpinnerFrames = []rune{'⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'}
 
 // View renders the preview into a string of size width × height. proto is
 // the active rendering protocol (kitty / sixel / halfblock). Reserves
 // 1 row top for the caption, 1 row bottom for the hint, and centers the
 // image (aspect-preserved) in the remaining area.
+//
+// While loading, the image area shows a centered spinner + filename
+// instead of an image. Caption and hint render the same way.
 func (p *Preview) View(width, height int, proto Protocol) string {
-	if !p.open || width <= 0 || height <= 0 || p.img == nil {
+	if !p.open || width <= 0 || height <= 0 {
 		return ""
+	}
+	if p.img == nil && !p.loading {
+		return ""
+	}
+	if p.loading {
+		return p.viewLoading(width, height)
 	}
 
 	imgRows := height - 2
@@ -165,6 +215,61 @@ func (p *Preview) View(width, height int, proto Protocol) string {
 	}
 	hint := lipgloss.NewStyle().Faint(true).Render(hintText)
 	b.WriteString(hint)
+	return b.String()
+}
+
+// viewLoading renders the preview's loading state: spinner + filename
+// centered in the image region, plus the standard caption and hint
+// rows. Same overall layout as the normal View so the overlay doesn't
+// shift when the image arrives.
+func (p *Preview) viewLoading(width, height int) string {
+	caption := p.name
+	if p.sibCount > 1 {
+		caption = fmt.Sprintf("%s  •  (%d/%d)", p.name, p.sibIndex+1, p.sibCount)
+	}
+	captionStyle := lipgloss.NewStyle().Faint(true).Width(width)
+
+	imgRows := height - 2
+	if imgRows < 1 {
+		return captionStyle.Render(caption)
+	}
+
+	frame := previewSpinnerFrames[p.loadingFrame%len(previewSpinnerFrames)]
+	loadingMsg := fmt.Sprintf("%s  Loading %s...", string(frame), p.name)
+	if w := lipgloss.Width(loadingMsg); w > width {
+		loadingMsg = fmt.Sprintf("%s  Loading...", string(frame))
+	}
+	loadingStyle := lipgloss.NewStyle().Faint(true)
+	rendered := loadingStyle.Render(loadingMsg)
+	rwidth := lipgloss.Width(rendered)
+	leftPad := (width - rwidth) / 2
+	if leftPad < 0 {
+		leftPad = 0
+	}
+	rightPad := width - rwidth - leftPad
+	if rightPad < 0 {
+		rightPad = 0
+	}
+	loadingLine := strings.Repeat(" ", leftPad) + rendered + strings.Repeat(" ", rightPad)
+
+	mid := imgRows / 2
+
+	var b strings.Builder
+	b.WriteString(captionStyle.Render(caption))
+	b.WriteByte('\n')
+	for i := 0; i < imgRows; i++ {
+		if i == mid {
+			b.WriteString(loadingLine)
+		} else {
+			b.WriteString(strings.Repeat(" ", width))
+		}
+		b.WriteByte('\n')
+	}
+	hintText := "Esc/q close"
+	if p.sibCount > 1 {
+		hintText = "h/\u2190 prev  •  l/\u2192 next  •  " + hintText
+	}
+	b.WriteString(lipgloss.NewStyle().Faint(true).Render(hintText))
 	return b.String()
 }
 
