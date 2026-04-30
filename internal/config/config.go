@@ -138,6 +138,12 @@ func Load(path string) (Config, error) {
 		return cfg, err
 	}
 
+	resolved, err := resolveWorkspaceKeys(cfg.Workspaces)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.Workspaces = resolved
+
 	return cfg, nil
 }
 

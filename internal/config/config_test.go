@@ -172,3 +172,126 @@ func TestResolveThemeNilWorkspaces(t *testing.T) {
 		t.Errorf("ResolveTheme nil workspaces = %q, want nord", got)
 	}
 }
+
+func TestLoadWorkspacesLegacyTeamIDKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	data := []byte(`
+[workspaces.T01ABCDEF]
+theme = "dracula"
+`)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	ws, ok := cfg.Workspaces["T01ABCDEF"]
+	if !ok {
+		t.Fatalf("expected workspace key T01ABCDEF, got %v", cfg.Workspaces)
+	}
+	if ws.TeamID != "T01ABCDEF" {
+		t.Errorf("TeamID = %q, want T01ABCDEF (synthesized from key)", ws.TeamID)
+	}
+}
+
+func TestLoadWorkspacesSlugKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	data := []byte(`
+[workspaces.work]
+team_id = "T01ABCDEF"
+theme = "dracula"
+`)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	ws, ok := cfg.Workspaces["work"]
+	if !ok {
+		t.Fatalf("expected workspace key 'work', got %v", cfg.Workspaces)
+	}
+	if ws.TeamID != "T01ABCDEF" {
+		t.Errorf("TeamID = %q, want T01ABCDEF", ws.TeamID)
+	}
+}
+
+func TestLoadWorkspacesMissingTeamIDOnSlugKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	data := []byte(`
+[workspaces.work]
+theme = "dracula"
+`)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for non-team-ID slug key with no team_id field")
+	}
+}
+
+func TestLoadWorkspacesDuplicateTeamID(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	data := []byte(`
+[workspaces.work]
+team_id = "T01ABCDEF"
+
+[workspaces.also-work]
+team_id = "T01ABCDEF"
+`)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for duplicate team_id across slugs")
+	}
+}
+
+func TestLoadWorkspacesMixedKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	data := []byte(`
+[workspaces.work]
+team_id = "T01ABCDEF"
+theme = "dracula"
+
+[workspaces.T02LEGACY]
+theme = "tokyo night"
+`)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Workspaces["work"].TeamID != "T01ABCDEF" {
+		t.Errorf("slug-keyed TeamID = %q", cfg.Workspaces["work"].TeamID)
+	}
+	if cfg.Workspaces["T02LEGACY"].TeamID != "T02LEGACY" {
+		t.Errorf("legacy-keyed TeamID = %q", cfg.Workspaces["T02LEGACY"].TeamID)
+	}
+}
+
+func TestLoadWorkspacesSlugKeyBadTeamID(t *testing.T) {
+	// A slug-keyed block whose team_id field doesn't look like a
+	// real Slack team ID should fail loudly rather than silently.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	data := []byte(`
+[workspaces.work]
+team_id = "not-a-real-id"
+`)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for slug-keyed block with malformed team_id")
+	}
+}
