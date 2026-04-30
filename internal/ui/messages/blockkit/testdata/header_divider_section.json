@@ -1,0 +1,7 @@
+{
+  "blocks": [
+    { "type": "header", "text": { "type": "plain_text", "text": "Top header" } },
+    { "type": "divider" },
+    { "type": "section", "text": { "type": "mrkdwn", "text": "Body text after divider." } }
+  ]
+}

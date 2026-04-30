@@ -1,0 +1,9 @@
+{
+  "blocks": [
+    { "type": "header", "text": { "type": "plain_text", "text": "Pull Request opened" } },
+    { "type": "section", "text": { "type": "mrkdwn", "text": "*<https://github.com/x/y/pull/42|#42 Fix retry logic>* by @gammons" } },
+    { "type": "context", "elements": [
+      { "type": "mrkdwn", "text": "x/y · 3 files changed" }
+    ]}
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "blocks": [
+    { "type": "section", "text": { "type": "mrkdwn", "text": "*Deploy v2.3.1 to prod?*\nLast deploy: 2h ago" } },
+    { "type": "actions", "elements": [
+      { "type": "button", "text": { "type": "plain_text", "text": "Approve" }, "action_id": "a1" },
+      { "type": "button", "text": { "type": "plain_text", "text": "Deny" }, "action_id": "a2" }
+    ]}
+  ]
+}
