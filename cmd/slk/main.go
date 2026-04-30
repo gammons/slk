@@ -164,7 +164,7 @@ func printHelp() {
 Usage:
   slk                    Launch the TUI
   slk --add-workspace    Add a Slack workspace (interactive)
-  slk --list-workspaces  List configured workspaces (TeamID, Name)
+  slk --list-workspaces  List configured workspaces (TeamID, Slug, Name)
   slk --version          Print version and exit
   slk --help             Show this help
 
