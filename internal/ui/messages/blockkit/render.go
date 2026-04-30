@@ -32,12 +32,6 @@ func Render(blocks []Block, ctx Context, width int) RenderResult {
 	return out
 }
 
-// RenderLegacy produces a RenderResult for a slice of legacy
-// attachments. Same width contract as Render. Phase 4 fills it in.
-func RenderLegacy(atts []LegacyAttachment, ctx Context, width int) RenderResult {
-	return RenderResult{}
-}
-
 // appendBlock dispatches one block to its renderer and appends the
 // result onto out. Per-block renderers MUST produce lines that each
 // consume <= width display columns.
