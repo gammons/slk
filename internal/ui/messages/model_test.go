@@ -368,3 +368,106 @@ func TestImageReady_DoesNotChangeMessageHeight(t *testing.T) {
 		t.Errorf("message height changed across image load: before=%d after=%d (placeholder must reserve exactly the rendered image's height)", heightBefore, heightAfter)
 	}
 }
+
+// setupImageMessageModel builds a Model with a single image-bearing
+// message whose bytes are pre-staged in the on-disk cache. Returns the
+// model configured with the given protocol; the image is fully cached so
+// the first View() will take the rendered (not placeholder) path.
+func setupImageMessageModel(t *testing.T, protocol imgpkg.Protocol) *Model {
+	t.Helper()
+	cache, err := imgpkg.NewCache(t.TempDir(), 10)
+	if err != nil {
+		t.Fatalf("NewCache: %v", err)
+	}
+	fetcher := imgpkg.NewFetcher(cache, nil)
+	const fileID = "F0123ABCD"
+	pngBytes := makeTestPNG(720, 720)
+	if _, err := cache.Put(fileID+"-720", "png", pngBytes); err != nil {
+		t.Fatalf("cache.Put: %v", err)
+	}
+	msg := MessageItem{
+		TS:        "1700000000.000100",
+		UserID:    "U1",
+		UserName:  "alice",
+		Text:      "look at this",
+		Timestamp: "10:30 AM",
+		Attachments: []Attachment{{
+			Kind:   "image",
+			Name:   "screenshot.png",
+			URL:    "https://example.com/perma",
+			FileID: fileID,
+			Mime:   "image/png",
+			Thumbs: []ThumbSpec{{URL: "https://example.com/720.png", W: 720, H: 720}},
+		}},
+	}
+	m := New([]MessageItem{msg}, "C123")
+	ctx := ImageContext{
+		Protocol:   protocol,
+		Fetcher:    fetcher,
+		CellPixels: stdimage.Pt(8, 16),
+		MaxRows:    20,
+	}
+	if protocol == imgpkg.ProtoKitty {
+		ctx.KittyRender = imgpkg.NewKittyRenderer(imgpkg.NewRegistry())
+	}
+	m.SetImageContext(ctx)
+	return &m
+}
+
+// TestView_SixelFullVisibility_EmitsBytes asserts that when a sixel-
+// rendered image fits entirely within the visible viewport, the View
+// output contains the actual sixel byte stream (the OnFlush bytes
+// captured into sixelRows during buildCache), not just the sentinel
+// placeholder line. The sixel byte stream begins with the DCS escape
+// "\x1bP" (ESC P) per the DEC standard.
+func TestView_SixelFullVisibility_EmitsBytes(t *testing.T) {
+	m := setupImageMessageModel(t, imgpkg.ProtoSixel)
+	// A tall viewport ensures the entire image (~20 rows + chrome + body)
+	// fits without clipping.
+	out := m.View(60, 80)
+	if !strings.Contains(out, "\x1bP") {
+		t.Errorf("expected View() output to contain a sixel DCS escape (\\x1bP) when the image is fully visible; got %d bytes without it", len(out))
+	}
+}
+
+// TestView_SixelPartialVisibility_UsesFallback asserts that when the
+// sixel image straddles the bottom edge of the viewport (some rows
+// clipped), View() does NOT emit the sixel byte stream — it must
+// substitute the per-row halfblock fallback for the visible rows of
+// the image. Sixel terminals can't render a partial image; emitting
+// the bytes anyway would push pixels below the pane.
+func TestView_SixelPartialVisibility_UsesFallback(t *testing.T) {
+	m := setupImageMessageModel(t, imgpkg.ProtoSixel)
+	// First, render with enough room to know how tall the entry is and
+	// where the image starts. Then choose a viewport height that cuts
+	// the image in the middle.
+	_ = m.View(60, 80)
+	var entryHeight int
+	for _, e := range m.cache {
+		if e.msgIdx == 0 {
+			entryHeight = e.height
+			break
+		}
+	}
+	if entryHeight == 0 {
+		t.Fatal("could not measure entry height")
+	}
+	// Halve the height so the image is clipped at the bottom.
+	clipped := m.View(entryHeight/2+m.chromeHeight, 80)
+	if strings.Contains(clipped, "\x1bP") {
+		t.Errorf("expected View() output to OMIT the sixel DCS escape under partial visibility; bytes leaked anyway")
+	}
+}
+
+// TestView_KittyEmitsUploadEscape asserts that when a kitty-rendered
+// image is in the visible window, View() emits the kitty
+// transmit-and-display escape (begins with "\x1b_G") via the captured
+// per-frame flushes. The kitty registry's first-render-of-id contract
+// guarantees this happens exactly once per image per frame.
+func TestView_KittyEmitsUploadEscape(t *testing.T) {
+	m := setupImageMessageModel(t, imgpkg.ProtoKitty)
+	out := m.View(60, 80)
+	if !strings.Contains(out, "\x1b_G") {
+		t.Errorf("expected View() output to contain a kitty graphics escape (\\x1b_G) for the visible image's upload")
+	}
+}

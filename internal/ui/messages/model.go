@@ -1629,8 +1629,36 @@ func (m *Model) View(height, width int) string {
 
 	// Build the visible window directly from per-entry pre-split line slices.
 	// No lipgloss, no uniseg, no width measurement.
+	//
+	// Per-frame image side effects:
+	//   * Kitty image uploads (entry.flushes) are collected from every
+	//     visible entry and rendered into a single byte stream that is
+	//     prepended to the first visible line. Repeat invocations of an
+	//     upload escape for the same image ID are benign (the terminal
+	//     discards them); the kitty registry inside the renderer also
+	//     dedupes at first-render-of-id, so most frames have nothing to
+	//     emit at all.
+	//   * Sixel images (entry.sixelRows) are emitted INLINE as bytes
+	//     appended to the first row of the image's sentinel placeholder
+	//     — but only when the image's full vertical extent fits in the
+	//     visible window. Under partial visibility (image clipped at the
+	//     top or bottom edge), the per-row halfblock fallback substitutes
+	//     for the visible rows so users always see something. Acknowledged
+	//     tradeoff: visible flicker as a sixel image scrolls past an edge,
+	//     in exchange for correctness under arbitrary scroll positions.
 	visible := make([]string, 0, msgAreaHeight)
 	want := msgAreaHeight
+	var kittyFlushBuf bytes.Buffer
+	// sixelEmissions records, per visible-window row, the action to take
+	// for sixel images intersecting that row. Populated below as we walk
+	// entries; consumed AFTER the visible slice is fully built so partial
+	// visibility decisions know the slice's final extent.
+	type sixelAction struct {
+		appendBytes []byte // append after visible[row] (full-visibility start row)
+		fallback    string // replace visible[row] with this (partial-visibility row)
+	}
+	var sixelActions map[int]sixelAction
+
 	for i, e := range entries {
 		if want == 0 {
 			break
@@ -1658,8 +1686,70 @@ func (m *Model) View(height, width int) string {
 		if entryEnd > m.yOffset+msgAreaHeight {
 			to = len(lines) - (entryEnd - (m.yOffset + msgAreaHeight))
 		}
+		// Visible-window row index where this entry's first emitted line lands.
+		windowRowBase := len(visible)
 		visible = append(visible, lines[from:to]...)
 		want = msgAreaHeight - len(visible)
+
+		// Collect kitty per-image upload escapes for this entry.
+		for _, fl := range e.flushes {
+			if fl != nil {
+				_ = fl(&kittyFlushBuf)
+			}
+		}
+
+		// Schedule sixel emissions for any image whose start row falls
+		// inside this entry. Keys in sixelRows are the image's first row
+		// within the entry's linesNormal.
+		for startRowInEntry, sx := range e.sixelRows {
+			absStart := entryStart + startRowInEntry
+			absEnd := absStart + sx.height
+			fullyVisible := absStart >= m.yOffset && absEnd <= m.yOffset+msgAreaHeight
+			if sixelActions == nil {
+				sixelActions = make(map[int]sixelAction)
+			}
+			if fullyVisible {
+				windowRow := windowRowBase + (startRowInEntry - from)
+				if windowRow >= 0 && windowRow < len(visible) {
+					sixelActions[windowRow] = sixelAction{appendBytes: sx.bytes}
+				}
+				continue
+			}
+			// Partial visibility: walk every row of the image, emitting
+			// fallback for rows that ARE in the visible window.
+			for k := 0; k < sx.height; k++ {
+				abs := absStart + k
+				if abs < m.yOffset || abs >= m.yOffset+msgAreaHeight {
+					continue
+				}
+				windowRow := abs - m.yOffset
+				if windowRow >= 0 && windowRow < len(visible) && k < len(sx.fallback) {
+					sixelActions[windowRow] = sixelAction{fallback: sx.fallback[k]}
+				}
+			}
+		}
+	}
+
+	// Apply sixel substitutions / appends. Done after the slice is built
+	// so we know its final length and can safely mutate by index.
+	for row, act := range sixelActions {
+		if row < 0 || row >= len(visible) {
+			continue
+		}
+		if act.fallback != "" {
+			visible[row] = act.fallback
+		}
+		if len(act.appendBytes) > 0 {
+			visible[row] = visible[row] + string(act.appendBytes)
+		}
+	}
+
+	// Prepend kitty upload escapes to the first visible line. Kitty
+	// transmit-and-display escapes are zero-width and don't move the
+	// cursor, so prepending them inside a row is safe regardless of
+	// downstream wrapping.
+	if kittyFlushBuf.Len() > 0 && len(visible) > 0 {
+		visible[0] = kittyFlushBuf.String() + visible[0]
 	}
 
 	// Pad vertically with the themed spacer if content is shorter than the pane.
