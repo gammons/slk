@@ -377,3 +377,36 @@ func TestRenderImageBlockShowsTitleAboveFallback(t *testing.T) {
 		t.Errorf("expected title %q in %q", "Q3 Metrics", plain)
 	}
 }
+
+func TestRenderSectionImageAccessoryNoFetcherFallback(t *testing.T) {
+	ctx := Context{
+		RenderText: func(s string, _ map[string]string) string { return s },
+		WrapText:   func(s string, _ int) string { return s },
+	}
+	r := Render([]Block{SectionBlock{
+		Text:      "Service status",
+		Accessory: ImageAccessory{URL: "https://example.com/logo.png", AltText: "logo"},
+	}}, ctx, 80)
+	plain := ansi.Strip(strings.Join(r.Lines, "\n"))
+	if !strings.Contains(plain, "Service status") {
+		t.Errorf("missing body: %q", plain)
+	}
+	if !strings.Contains(plain, "[image: logo]") {
+		t.Errorf("expected '[image: logo]' fallback, got %q", plain)
+	}
+}
+
+func TestRenderSectionImageAccessoryEmptyAltUsesGenericLabel(t *testing.T) {
+	ctx := Context{
+		RenderText: func(s string, _ map[string]string) string { return s },
+		WrapText:   func(s string, _ int) string { return s },
+	}
+	r := Render([]Block{SectionBlock{
+		Text:      "Body",
+		Accessory: ImageAccessory{URL: "https://example.com/x.png"},
+	}}, ctx, 80)
+	plain := ansi.Strip(strings.Join(r.Lines, "\n"))
+	if !strings.Contains(plain, "[image: image]") && !strings.Contains(plain, "[image]") {
+		t.Errorf("expected fallback with default alt, got %q", plain)
+	}
+}

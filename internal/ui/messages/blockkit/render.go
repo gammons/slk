@@ -3,6 +3,7 @@
 package blockkit
 
 import (
+	"image"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -68,22 +69,54 @@ func appendSection(out *RenderResult, s SectionBlock, ctx Context, width int) {
 	bodyW := width
 	var accessoryLines []string
 	var accessoryW int
-	if la, ok := s.Accessory.(LabelAccessory); ok {
-		label := renderControlLabel(la.Kind, la.Label)
+	var accessoryHit *HitRect // populated for image accessories
+
+	switch acc := s.Accessory.(type) {
+	case LabelAccessory:
+		label := renderControlLabel(acc.Kind, acc.Label)
 		accessoryW = lipgloss.Width(label)
 		accessoryLines = []string{label}
 		out.Interactive = true
-		if width >= narrowBreakpoint {
-			candidate := width - accessoryW - 2 // 2 col gutter
-			if candidate < 10 {
-				// Accessory too wide; fall through to stacked below.
-				accessoryW = 0
-			} else {
-				bodyW = candidate
-			}
+	case ImageAccessory:
+		const accRows, accCols = 4, 8
+		if ctx.Fetcher == nil || ctx.Protocol == imgpkg.ProtoOff {
+			label := mutedStyle().Render("[image: " + fallbackAlt(acc.AltText) + "]")
+			accessoryW = lipgloss.Width(label)
+			accessoryLines = []string{label}
 		} else {
-			// Narrow: stack regardless.
-			accessoryW = 0
+			target := image.Pt(accCols, accRows)
+			lines, flushes, sxl, hit, ok := fetchOrPlaceholder(acc.URL, target, ctx, 0)
+			if ok {
+				accessoryLines = lines
+				accessoryW = accCols
+				out.Flushes = append(out.Flushes, flushes...)
+				if sxl != nil {
+					if out.SixelRows == nil {
+						out.SixelRows = map[int]SixelEntry{}
+					}
+					for k, v := range sxl {
+						out.SixelRows[k] = v
+					}
+				}
+				h := hit // copy
+				accessoryHit = &h
+			} else {
+				label := mutedStyle().Render("[image: " + fallbackAlt(acc.AltText) + "]")
+				accessoryW = lipgloss.Width(label)
+				accessoryLines = []string{label}
+			}
+		}
+	}
+
+	// Width-budget logic: at narrow widths or when accessory is too
+	// wide for side-by-side, stack the accessory below the body.
+	sideBySide := accessoryW > 0 && width >= narrowBreakpoint
+	if sideBySide {
+		candidate := width - accessoryW - 2
+		if candidate < 10 {
+			sideBySide = false
+		} else {
+			bodyW = candidate
 		}
 	}
 
@@ -93,9 +126,8 @@ func appendSection(out *RenderResult, s SectionBlock, ctx Context, width int) {
 		bodyLines = renderTextLines(s.Text, ctx, bodyW)
 	}
 
-	if accessoryW > 0 && width >= narrowBreakpoint {
-		// Side-by-side. joinSideBySide pads accessory column to height
-		// of body (or vice-versa).
+	startRow := len(out.Lines)
+	if sideBySide {
 		out.Lines = append(out.Lines, joinSideBySide(bodyLines, accessoryLines, bodyW, 2)...)
 	} else {
 		out.Lines = append(out.Lines, bodyLines...)
@@ -104,9 +136,34 @@ func appendSection(out *RenderResult, s SectionBlock, ctx Context, width int) {
 		}
 	}
 
+	// Adjust accessory hit rect to absolute coordinates within out.Lines.
+	if accessoryHit != nil {
+		if sideBySide {
+			accessoryHit.RowStart = startRow
+			accessoryHit.RowEnd = startRow + len(accessoryLines)
+			accessoryHit.ColStart = bodyW + 2
+			accessoryHit.ColEnd = bodyW + 2 + accessoryW
+		} else {
+			// Stacked: accessory rows live below the body rows.
+			accessoryHit.RowStart = startRow + len(bodyLines)
+			accessoryHit.RowEnd = accessoryHit.RowStart + len(accessoryLines)
+			accessoryHit.ColStart = 0
+			accessoryHit.ColEnd = accessoryW
+		}
+		out.Hits = append(out.Hits, *accessoryHit)
+	}
+
 	if len(s.Fields) > 0 {
 		out.Lines = append(out.Lines, renderFieldsGrid(s.Fields, ctx, width)...)
 	}
+}
+
+// fallbackAlt returns alt or "image" if alt is empty.
+func fallbackAlt(alt string) string {
+	if alt == "" {
+		return "image"
+	}
+	return alt
 }
 
 func appendContext(out *RenderResult, c ContextBlock, ctx Context, width int) {
