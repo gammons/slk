@@ -131,7 +131,14 @@ func (m *Model) SetThread(parent messages.MessageItem, replies []messages.Messag
 	m.replies = replies
 	m.channelID = channelID
 	m.threadTS = threadTS
-	m.selected = 0
+	// Per the doc comment, the cursor starts at the bottom (newest reply)
+	// so a long thread opens scrolled to the latest activity rather than
+	// jammed up at the parent message.
+	if len(replies) > 0 {
+		m.selected = len(replies) - 1
+	} else {
+		m.selected = 0
+	}
 	m.InvalidateCache()
 }
 

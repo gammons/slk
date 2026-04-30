@@ -98,9 +98,15 @@ func TestNavigation(t *testing.T) {
 	}
 	m.SetThread(parent, replies, "C123", "1700000001.000000")
 
-	// Should start at top (oldest reply)
+	// Should start at the bottom (newest reply) per SetThread's contract,
+	// so opening a long thread lands the user on the latest activity.
+	if m.selected != 2 {
+		t.Errorf("expected selected=2 (bottom), got %d", m.selected)
+	}
+
+	m.GoToTop()
 	if m.selected != 0 {
-		t.Errorf("expected selected=0, got %d", m.selected)
+		t.Errorf("expected selected=0 after GoToTop, got %d", m.selected)
 	}
 
 	m.MoveDown()
@@ -112,11 +118,6 @@ func TestNavigation(t *testing.T) {
 	m.MoveDown() // should not go past end
 	if m.selected != 2 {
 		t.Errorf("expected selected=2, got %d", m.selected)
-	}
-
-	m.GoToTop()
-	if m.selected != 0 {
-		t.Errorf("expected selected=0 after GoToTop, got %d", m.selected)
 	}
 }
 

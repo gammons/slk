@@ -720,6 +720,19 @@ func (m *Model) RemoveMessageByTS(ts string) bool {
 }
 
 func (m *Model) UpdateReaction(messageTS, emojiName, userID string, remove bool) {
+	// Capture pre-mutation viewport state so we can preserve "anchored at
+	// bottom" across the reaction's height change. Without this, adding
+	// the first reaction to the last visible message grows totalLines by
+	// 1 while yOffset stays put -- the bottom message gets pushed below
+	// the fold and a "-- more below --" hint replaces it. We want the
+	// reaction to push content *up* (yOffset++) instead, keeping the
+	// reacted-to message anchored to the bottom of the pane.
+	wasAnchoredAtBottom := false
+	oldTotalLines := m.totalLines
+	if m.cache != nil && m.lastViewHeight > 0 && m.totalLines > 0 {
+		wasAnchoredAtBottom = m.yOffset+m.lastViewHeight >= m.totalLines
+	}
+
 	for i, msg := range m.messages {
 		if msg.TS == messageTS {
 			if remove {
@@ -758,6 +771,25 @@ func (m *Model) UpdateReaction(messageTS, emojiName, userID string, remove bool)
 			m.dirty()
 			if m.reactionNavActive {
 				m.ClampReactionNav()
+			}
+			// Re-anchor the viewport bottom if it was at the bottom before.
+			// We need the new totalLines, which only buildCache computes;
+			// rebuild now (cheap, and the next View() would do it anyway).
+			if wasAnchoredAtBottom && m.cacheWidth > 0 {
+				m.buildCache(m.cacheWidth)
+				if delta := m.totalLines - oldTotalLines; delta > 0 {
+					m.yOffset += delta
+					if maxOffset := m.totalLines - m.lastViewHeight; m.yOffset > maxOffset {
+						m.yOffset = maxOffset
+					}
+					if m.yOffset < 0 {
+						m.yOffset = 0
+					}
+					// Mark snapped so View() doesn't re-snap to the
+					// (unchanged) selection and undo our adjustment.
+					m.snappedSelection = m.selected
+					m.hasSnapped = true
+				}
 			}
 			return
 		}

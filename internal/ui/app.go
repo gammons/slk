@@ -1321,10 +1321,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// filtered out via isSelfSent in NewMessageMsg.
 		if msg.Message.TS != "" {
 			a.recordSelfSent(msg.Message.TS)
+			// Update the thread panel whenever the visible thread matches,
+			// regardless of activeChannelID. When a thread is opened from
+			// the threads view, activeChannelID is not switched to the
+			// thread's channel, so gating on it here meant the user's own
+			// reply was sent to Slack but never appended locally -- they
+			// had to leave and re-enter the thread to see it.
+			if a.threadVisible && msg.ThreadTS == a.threadPanel.ThreadTS() && msg.ChannelID == a.threadPanel.ChannelID() {
+				a.threadPanel.AddReply(msg.Message)
+			}
 			if msg.ChannelID == a.activeChannelID {
-				if a.threadVisible && msg.ThreadTS == a.threadPanel.ThreadTS() {
-					a.threadPanel.AddReply(msg.Message)
-				}
 				a.messagepane.IncrementReplyCount(msg.ThreadTS, msg.Message.TS)
 			}
 			if c := a.scheduleThreadsDirty(); c != nil {

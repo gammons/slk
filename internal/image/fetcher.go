@@ -34,12 +34,22 @@ type FetchResult struct {
 }
 
 // Fetcher downloads images, stores raw bytes in Cache, decodes, and
-// downscales. Concurrent fetches for the same Key are deduplicated.
+// downscales. Concurrent fetches for the same Key are deduplicated;
+// across-key concurrency is bounded by a semaphore so a channel full
+// of images doesn't trigger Slack's CDN rate limiter (HTTP 429).
 type Fetcher struct {
 	cache *Cache
 	http  *http.Client
 	sf    singleflight.Group
+	sem   chan struct{} // bounded concurrency for cross-key fetches
 }
+
+// fetchConcurrencyLimit caps the number of in-flight HTTP fetches.
+// Slack's files.slack.com CDN rate-limits aggressive scraping (HTTP 429).
+// 4 is the empirical sweet spot: large enough to keep the messages-pane
+// responsive on a fresh channel switch, small enough to stay under the
+// rate limit even when a busy channel has 20+ image attachments visible.
+const fetchConcurrencyLimit = 4
 
 // NewFetcher constructs a Fetcher. If client is nil, a default with a
 // 10-second timeout is used.
@@ -47,12 +57,27 @@ func NewFetcher(cache *Cache, client *http.Client) *Fetcher {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
-	return &Fetcher{cache: cache, http: client}
+	return &Fetcher{
+		cache: cache,
+		http:  client,
+		sem:   make(chan struct{}, fetchConcurrencyLimit),
+	}
 }
 
 // Fetch returns the decoded image, downloading and caching if needed.
+// Cross-key concurrency is bounded; if the limit is full, additional
+// callers wait until a slot frees up or ctx is canceled.
 func (f *Fetcher) Fetch(ctx context.Context, req FetchRequest) (FetchResult, error) {
 	v, err, _ := f.sf.Do(req.Key, func() (any, error) {
+		// Cache-only path doesn't need an HTTP slot; check first.
+		if _, hit := f.cache.Get(req.Key); !hit {
+			select {
+			case f.sem <- struct{}{}:
+				defer func() { <-f.sem }()
+			case <-ctx.Done():
+				return FetchResult{}, ctx.Err()
+			}
+		}
 		return f.fetchInner(ctx, req)
 	})
 	if err != nil {

@@ -118,8 +118,17 @@ func NewCookieHTTPClient(dCookie string) *http.Client {
 // cookie are attached. Both are needed: Slack's d cookie is per
 // browser session and can differ between workspaces if they were
 // added at different times.
+//
+// Slack Connect / shared channels pose a wrinkle: a file may be hosted
+// in a workspace the user is NOT a member of. In that case the URL's
+// team ID won't be in our token map. We fall back to the first
+// registered team's auth — Slack honors the user's shared-channel
+// membership and returns the file. This mirrors the browser's
+// behavior (one d cookie + one xoxc gets you all your accessible
+// files, regardless of which workspace hosts them).
 type fileAuthTransport struct {
 	authsByTeam map[string]teamAuth // teamID -> (xoxc, dcookie)
+	fallback    teamAuth            // used when the URL's team isn't in the map (Slack Connect)
 	base        http.RoundTripper
 }
 
@@ -132,25 +141,26 @@ type teamAuth struct {
 func (t *fileAuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.URL.Host == "files.slack.com" {
 		teamID := parseTeamIDFromFilesURL(req.URL.Path)
-		if teamID != "" {
-			if a, ok := t.authsByTeam[teamID]; ok && a.token != "" {
-				// Clone the request to avoid mutating the caller's copy.
-				clone := req.Clone(req.Context())
-				clone.Header.Set("Authorization", "Bearer "+a.token)
-				if a.dCookie != "" {
-					// Set the cookie inline rather than relying on a
-					// shared cookie jar — the jar can only hold ONE
-					// 'd' cookie at a time, but per-team values may
-					// differ across workspaces.
-					clone.Header.Set("Cookie", "d="+a.dCookie)
-				}
-				req = clone
-			} else {
-				log.Printf("file auth: no token registered for team %q (URL %s); fetch will likely fail with 403/HTML",
-					teamID, req.URL.String())
+		auth, ok := t.authsByTeam[teamID]
+		if !ok || auth.token == "" {
+			// Slack Connect / shared channel: file lives in a team the
+			// user isn't directly a member of. Try the fallback auth
+			// (any registered workspace) — the user's shared-channel
+			// membership generally authorizes the fetch.
+			auth = t.fallback
+		}
+		if auth.token != "" {
+			clone := req.Clone(req.Context())
+			clone.Header.Set("Authorization", "Bearer "+auth.token)
+			if auth.dCookie != "" {
+				// Set the cookie inline rather than via a shared
+				// cookie jar — the jar holds only ONE 'd' cookie,
+				// but per-team values may differ.
+				clone.Header.Set("Cookie", "d="+auth.dCookie)
 			}
+			req = clone
 		} else {
-			log.Printf("file auth: could not parse team ID from URL %s; passing through unauthenticated",
+			log.Printf("file auth: no auth available for URL %s; passing through unauthenticated",
 				req.URL.String())
 		}
 	}
@@ -211,10 +221,19 @@ type TeamAuth struct {
 // it on the returned client.
 func NewFileAuthHTTPClient(authsByTeam map[string]TeamAuth) *http.Client {
 	internal := make(map[string]teamAuth, len(authsByTeam))
+	var fallback teamAuth
 	for k, v := range authsByTeam {
 		internal[k] = teamAuth{token: v.Token, dCookie: v.DCookie}
+		if fallback.token == "" {
+			// First registered team is the Slack-Connect fallback.
+			fallback = teamAuth{token: v.Token, dCookie: v.DCookie}
+		}
 	}
-	rt := &fileAuthTransport{authsByTeam: internal, base: http.DefaultTransport}
+	rt := &fileAuthTransport{
+		authsByTeam: internal,
+		fallback:    fallback,
+		base:        http.DefaultTransport,
+	}
 	return &http.Client{Transport: rt}
 }
 
