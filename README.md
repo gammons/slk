@@ -110,6 +110,8 @@ slk is intentionally not a 1:1 port of the desktop client. Some Slack features a
 
 **Auth caveat:** browser-cookie auth means tokens expire when you log out of the browser or Slack rotates them. Re-run `--add-workspace` and you're back in business.
 
+**Unofficial / TOS caveat:** slk talks to Slack via the same internal browser protocol the official web client uses. This is unofficial and not sanctioned by Slack — using it may violate Slack's [API](https://slack.com/terms-of-service/api) and [user](https://slack.com/terms-of-service/user) Terms of Service, and Slack may break the protocol or invalidate tokens at any time. Use at your own risk on workspaces where that's acceptable to you and your admins.
+
 ## Install
 
 Grab a prebuilt binary from the [latest release](https://github.com/gammons/slk/releases/latest), or use one of the methods below.
@@ -396,6 +398,10 @@ opt-in:
 If `Copied N chars` shows in the status bar but nothing lands in your
 clipboard, your terminal is silently dropping the OSC 52 write. There
 is no reliable round-trip to detect this from inside slk.
+
+## Disclaimer
+
+`slk` is an independent, unofficial project. It is not affiliated with, endorsed by, or sponsored by Slack Technologies, LLC or Salesforce, Inc. "Slack" is a trademark of Slack Technologies, LLC; it is used here only to describe the service this client interoperates with.
 
 ## License
 
