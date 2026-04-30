@@ -340,20 +340,31 @@ func run() error {
 			if activeTeamID == "" {
 				return // shouldn't happen, but guard against it
 			}
-			// Find the team name for the comment.
 			teamName := activeTeamID
 			if wctx, ok := workspaces[activeTeamID]; ok && wctx.TeamName != "" {
 				teamName = wctx.TeamName
+			}
+			// Find the existing TOML key for this workspace, if any.
+			// If no block exists yet we use the team ID as the key
+			// (legacy default); a future --add-workspace may have
+			// already written a slug-keyed block.
+			tomlKey := activeTeamID
+			for k, w := range cfg.Workspaces {
+				if w.TeamID == activeTeamID {
+					tomlKey = k
+					break
+				}
 			}
 			// Update in-memory config.
 			if cfg.Workspaces == nil {
 				cfg.Workspaces = make(map[string]config.Workspace)
 			}
-			ws := cfg.Workspaces[activeTeamID]
+			ws := cfg.Workspaces[tomlKey]
+			ws.TeamID = activeTeamID
 			ws.Theme = name
-			cfg.Workspaces[activeTeamID] = ws
+			cfg.Workspaces[tomlKey] = ws
 			// Persist.
-			if err := saveWorkspaceTheme(configPath, activeTeamID, teamName, name); err != nil {
+			if err := saveWorkspaceTheme(configPath, tomlKey, activeTeamID, teamName, name); err != nil {
 				log.Printf("save workspace theme: %v", err)
 			}
 		case themeswitcher.ScopeGlobal:

@@ -49,7 +49,7 @@ func TestSaveWorkspaceThemeNewSection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := saveWorkspaceTheme(path, "T01ABCDEF", "ACME Corp", "dracula"); err != nil {
+	if err := saveWorkspaceTheme(path, "T01ABCDEF", "T01ABCDEF", "ACME Corp", "dracula"); err != nil {
 		t.Fatalf("saveWorkspaceTheme: %v", err)
 	}
 
@@ -84,22 +84,54 @@ theme = "dracula"
 		t.Fatal(err)
 	}
 
-	if err := saveWorkspaceTheme(path, "T01ABCDEF", "ACME Corp", "tokyo night"); err != nil {
+	if err := saveWorkspaceTheme(path, "T01ABCDEF", "T01ABCDEF", "ACME Corp", "tokyo night"); err != nil {
 		t.Fatalf("saveWorkspaceTheme: %v", err)
 	}
 
-	data, _ := os.ReadFile(path)
-	got := string(data)
-	if !strings.Contains(got, `theme = "tokyo night"`) {
+	got, _ := os.ReadFile(path)
+	if !strings.Contains(string(got), `theme = "tokyo night"`) {
 		t.Errorf("expected updated theme, got:\n%s", got)
 	}
-	// The old "dracula" should be gone.
-	if strings.Contains(got, `theme = "dracula"`) {
+	if strings.Contains(string(got), `theme = "dracula"`) {
 		t.Errorf("old theme still present:\n%s", got)
 	}
-	// Comment should remain.
-	if !strings.Contains(got, "# ACME Corp") {
+	if !strings.Contains(string(got), "# ACME Corp") {
 		t.Errorf("comment was lost:\n%s", got)
+	}
+}
+
+func TestSaveWorkspaceThemeUpdatesExistingSlugBlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	initial := `[appearance]
+theme = "dark"
+
+# ACME Corp
+[workspaces.work]
+team_id = "T01ABCDEF"
+theme = "dracula"
+`
+	if err := os.WriteFile(path, []byte(initial), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// tomlKey = "work" (the slug); teamID is the underlying ID.
+	if err := saveWorkspaceTheme(path, "work", "T01ABCDEF", "ACME Corp", "tokyo night"); err != nil {
+		t.Fatalf("saveWorkspaceTheme: %v", err)
+	}
+
+	got, _ := os.ReadFile(path)
+	s := string(got)
+	if !strings.Contains(s, `theme = "tokyo night"`) {
+		t.Errorf("expected slug block updated, got:\n%s", s)
+	}
+	// team_id line must still be present and unchanged.
+	if !strings.Contains(s, `team_id = "T01ABCDEF"`) {
+		t.Errorf("team_id line was clobbered, got:\n%s", s)
+	}
+	// Header should still be the slug.
+	if !strings.Contains(s, "[workspaces.work]") {
+		t.Errorf("slug header was lost, got:\n%s", s)
 	}
 }
 
@@ -110,10 +142,10 @@ func TestSaveWorkspaceThemeMultipleWorkspaces(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := saveWorkspaceTheme(path, "T01", "ACME", "dracula"); err != nil {
+	if err := saveWorkspaceTheme(path, "T01", "T01", "ACME", "dracula"); err != nil {
 		t.Fatal(err)
 	}
-	if err := saveWorkspaceTheme(path, "T02", "Personal", "tokyo night"); err != nil {
+	if err := saveWorkspaceTheme(path, "T02", "T02", "Personal", "tokyo night"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -187,7 +219,7 @@ func TestSaveWorkspaceThemeSanitizesTeamName(t *testing.T) {
 
 	// Team name with newline + control character.
 	badName := "ACME\nCorp\x07"
-	if err := saveWorkspaceTheme(path, "T01", badName, "dracula"); err != nil {
+	if err := saveWorkspaceTheme(path, "T01", "T01", badName, "dracula"); err != nil {
 		t.Fatalf("saveWorkspaceTheme: %v", err)
 	}
 

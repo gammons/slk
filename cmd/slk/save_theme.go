@@ -86,20 +86,22 @@ func saveGlobalTheme(configPath, themeName string) error {
 	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
 }
 
-// saveWorkspaceTheme rewrites or appends a [workspaces.<TeamID>] theme
-// entry. If the section already exists the theme line is updated in
-// place; otherwise a new section is appended at the end of the file
-// preceded by a "# <name>" comment for human readability.
-func saveWorkspaceTheme(configPath, teamID, teamName, themeName string) error {
+// saveWorkspaceTheme rewrites or appends a [workspaces.<tomlKey>]
+// theme entry. tomlKey is the literal TOML key in the config — for
+// slug-keyed blocks that's the slug, for legacy blocks it's the team
+// ID. teamID is the underlying Slack team ID; when we are creating a
+// brand-new slug-keyed block, teamID is written as the team_id =
+// "..." line (currently we only create legacy-keyed blocks here, but
+// slug callers update an existing block).
+func saveWorkspaceTheme(configPath, tomlKey, teamID, teamName, themeName string) error {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return err
 	}
 	lines := strings.Split(string(data), "\n")
 
-	header := fmt.Sprintf("[workspaces.%s]", teamID)
+	header := fmt.Sprintf("[workspaces.%s]", tomlKey)
 
-	// Find the section header.
 	sectionStart := -1
 	for i, line := range lines {
 		if strings.TrimSpace(line) == header {
@@ -109,8 +111,6 @@ func saveWorkspaceTheme(configPath, teamID, teamName, themeName string) error {
 	}
 
 	if sectionStart >= 0 {
-		// Find the next blank line or section header — that's the end of
-		// our section. Update the theme line within.
 		end := len(lines)
 		for j := sectionStart + 1; j < len(lines); j++ {
 			t := strings.TrimSpace(lines[j])
@@ -129,7 +129,6 @@ func saveWorkspaceTheme(configPath, teamID, teamName, themeName string) error {
 			}
 		}
 		if !updated {
-			// Insert theme line right after the header.
 			newLines := make([]string, 0, len(lines)+1)
 			newLines = append(newLines, lines[:sectionStart+1]...)
 			newLines = append(newLines, "theme = "+tomlString(themeName))
@@ -139,8 +138,9 @@ func saveWorkspaceTheme(configPath, teamID, teamName, themeName string) error {
 		return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
 	}
 
-	// No existing section — append at end.
-	// Ensure the file ends with a blank line before our new section.
+	// No existing section — append at end. We only get here when no
+	// block exists for either the slug or the team ID, which means we
+	// fall back to a legacy-keyed [workspaces.<teamID>] block.
 	if len(lines) > 0 && lines[len(lines)-1] != "" {
 		lines = append(lines, "")
 	}
@@ -149,6 +149,7 @@ func saveWorkspaceTheme(configPath, teamID, teamName, themeName string) error {
 		safeName = teamID
 	}
 	commentLine := "# " + safeName
-	lines = append(lines, commentLine, header, "theme = "+tomlString(themeName))
+	legacyHeader := fmt.Sprintf("[workspaces.%s]", teamID)
+	lines = append(lines, commentLine, legacyHeader, "theme = "+tomlString(themeName))
 	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
 }
