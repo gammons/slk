@@ -7,7 +7,6 @@ import (
 	"image"
 	imgpng "image/png"
 	"io"
-	"log"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -116,7 +115,6 @@ func (k *KittyRenderer) RenderKey(key string, target image.Point) Render {
 		if err := imgpng.Encode(&pngBuf, resized); err == nil {
 			payload := base64.StdEncoding.EncodeToString(pngBuf.Bytes())
 			imgID := id
-			payloadLen := len(payload)
 			cellsCols := target.X
 			cellsRows := target.Y
 			// fired guards against re-emission. viewEntry.flushes captures
@@ -127,16 +125,9 @@ func (k *KittyRenderer) RenderKey(key string, target image.Point) Render {
 				if !fired.CompareAndSwap(false, true) {
 					return nil
 				}
-				log.Printf("[image-debug] kitty OnFlush: emitting upload escape id=%d payload_b64_len=%d cells=%dx%d",
-					imgID, payloadLen, cellsCols, cellsRows)
 				return emitKittyUpload(w, imgID, payload, cellsCols, cellsRows)
 			}
-			log.Printf("[image-debug] kitty RenderKey: fresh id=%d cells=%dx%d (OnFlush set)", id, target.X, target.Y)
-		} else {
-			log.Printf("[image-debug] kitty RenderKey: PNG encode failed: %v", err)
 		}
-	} else {
-		log.Printf("[image-debug] kitty RenderKey: cached id=%d cells=%dx%d (no OnFlush)", id, target.X, target.Y)
 	}
 	return r
 }

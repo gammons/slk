@@ -2010,9 +2010,6 @@ func (m *Model) View(height, width int) string {
 	// before returning the View string so the upload reaches the
 	// terminal before the placeholder cells in the bubbletea frame.
 	if kittyFlushBuf.Len() > 0 {
-		log.Printf("[image-debug] kitty flush writing %d bytes directly to terminal; first 80 bytes: %q",
-			kittyFlushBuf.Len(),
-			truncForLog(kittyFlushBuf.String(), 80))
 		_, _ = imgpkg.KittyOutput.Write(kittyFlushBuf.Bytes())
 	}
 
@@ -2048,14 +2045,6 @@ func (m *Model) View(height, width int) string {
 		styles.Background, styles.Border, styles.Primary)
 
 	return chrome + "\n" + strings.Join(visible, "\n")
-}
-
-// truncForLog clamps a string to maxBytes for safe logging.
-func truncForLog(s string, maxBytes int) string {
-	if len(s) <= maxBytes {
-		return s
-	}
-	return s[:maxBytes] + "...(truncated)"
 }
 
 // applySelectionOverlay re-composes lines that intersect the active
