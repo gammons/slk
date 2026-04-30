@@ -616,15 +616,29 @@ type App struct {
 	// messages+thread region; key handling routes through it while
 	// non-nil.
 	previewOverlay *imgpkg.Preview
+	// previewSource records (channel, ts, attIdx) of the currently
+	// displayed image so h/l/arrow cycling can locate sibling
+	// attachments. Zero values when no preview is open.
+	previewChannel string
+	previewTS      string
+	previewAttIdx  int
 }
 
 // previewLoadedMsg is dispatched after a preview thumb has been fetched.
-// The receiver constructs an imgpkg.Preview and stores it on the App.
+// The receiver constructs (or, when isCycle is set, swaps the image of)
+// an imgpkg.Preview and stores it on the App.
 type previewLoadedMsg struct {
-	Name   string
-	FileID string
-	Img    image.Image
-	Path   string
+	Name         string
+	FileID       string
+	Img          image.Image
+	Path         string
+	SiblingCount int
+	SiblingIndex int
+	// isCycle distinguishes a cycle (h/l/arrow) from a fresh open. On
+	// cycle we mutate the existing overlay rather than constructing a
+	// new one so transient state (e.g. position within wrap-around)
+	// stays coherent.
+	isCycle bool
 }
 
 // previewErrorMsg is dispatched if the preview fetch fails. The error
@@ -686,10 +700,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	// While the full-screen image preview overlay is open, route close
-	// keys directly: Esc/q dismiss it; Enter dismisses and launches the
-	// OS-native image viewer. All other keys are swallowed so navigation
-	// in the messages pane doesn't leak through. Resize / mouse / async
-	// messages still flow normally so the rest of the UI keeps ticking.
+	// and cycle keys directly:
+	//   - Esc/q: dismiss
+	//   - Enter: dismiss + launch OS image viewer
+	//   - h or left arrow: previous sibling image (wraps)
+	//   - l or right arrow: next sibling image (wraps)
+	// All other keys are swallowed so navigation in the messages pane
+	// doesn't leak through. Resize / mouse / async messages still flow
+	// normally so the rest of the UI keeps ticking — including the
+	// previewLoadedMsg arm that swaps the cycled image into place.
 	if a.previewOverlay != nil && !a.previewOverlay.IsClosed() {
 		if km, ok := msg.(tea.KeyMsg); ok {
 			switch km.String() {
@@ -702,6 +721,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.previewOverlay.Close()
 				a.previewOverlay = nil
 				return a, openInSystemViewerCmd(path)
+			case "h", "left":
+				if a.previewOverlay.SiblingCount() > 1 {
+					return a, a.cycleImagePreviewCmd(a.previewChannel, a.previewTS, a.previewAttIdx, -1)
+				}
+				return a, nil
+			case "l", "right":
+				if a.previewOverlay.SiblingCount() > 1 {
+					return a, a.cycleImagePreviewCmd(a.previewChannel, a.previewTS, a.previewAttIdx, +1)
+				}
+				return a, nil
 			}
 			return a, nil
 		}
@@ -1127,17 +1156,40 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case messages.OpenImagePreviewMsg:
 		if cmd := a.openImagePreviewCmd(msg.Channel, msg.TS, msg.AttIdx); cmd != nil {
+			a.previewChannel = msg.Channel
+			a.previewTS = msg.TS
+			a.previewAttIdx = msg.AttIdx
 			cmds = append(cmds, cmd)
 		}
 
 	case previewLoadedMsg:
-		p := imgpkg.NewPreview(imgpkg.PreviewInput{
-			Name:   msg.Name,
-			FileID: msg.FileID,
-			Img:    msg.Img,
-			Path:   msg.Path,
-		})
-		a.previewOverlay = &p
+		input := imgpkg.PreviewInput{
+			Name:         msg.Name,
+			FileID:       msg.FileID,
+			Img:          msg.Img,
+			Path:         msg.Path,
+			SiblingCount: msg.SiblingCount,
+			SiblingIndex: msg.SiblingIndex,
+		}
+		if msg.isCycle && a.previewOverlay != nil && !a.previewOverlay.IsClosed() {
+			// In-place swap so the overlay stays open. Update the
+			// remembered attIdx so a subsequent cycle key starts from
+			// the new position. The fileID -> attIdx mapping requires
+			// a lookup against the source message; do that here so the
+			// preview package stays UI-agnostic.
+			a.previewOverlay.SwapImage(input)
+			if msgItem, ok := a.findMessageInActiveChannel(a.previewChannel, a.previewTS); ok {
+				for i, att := range msgItem.Attachments {
+					if att.FileID == msg.FileID {
+						a.previewAttIdx = i
+						break
+					}
+				}
+			}
+		} else {
+			p := imgpkg.NewPreview(input)
+			a.previewOverlay = &p
+		}
 
 	case previewErrorMsg:
 		log.Printf("preview fetch error: %v", msg.Err)
@@ -3181,6 +3233,47 @@ func (a *App) SetImageProtocol(p imgpkg.Protocol) {
 // that makes the open a no-op (no fetcher, attachment missing, no
 // thumbs, mismatched channel, etc.).
 func (a *App) openImagePreviewCmd(channel, ts string, attIdx int) tea.Cmd {
+	return a.previewFetchCmd(channel, ts, attIdx, false)
+}
+
+// cycleImagePreviewCmd loads a sibling image (delta = -1 for prev,
+// +1 for next; wraps around) into the existing preview overlay. The
+// resulting previewLoadedMsg has isCycle = true so the Update arm
+// swaps the image rather than constructing a new overlay. No-op when
+// the active preview has only one sibling.
+func (a *App) cycleImagePreviewCmd(channel, ts string, currentIdx, delta int) tea.Cmd {
+	if a.imageFetcher == nil {
+		return nil
+	}
+	msgItem, ok := a.findMessageInActiveChannel(channel, ts)
+	if !ok {
+		return nil
+	}
+	imageIdxs := imageAttachmentIndices(msgItem.Attachments)
+	if len(imageIdxs) <= 1 {
+		return nil
+	}
+	// Find currentIdx's position within the image-only list and step.
+	pos := -1
+	for i, idx := range imageIdxs {
+		if idx == currentIdx {
+			pos = i
+			break
+		}
+	}
+	if pos < 0 {
+		// currentIdx isn't an image attachment? Treat as start.
+		pos = 0
+	}
+	pos = (pos + delta + len(imageIdxs)) % len(imageIdxs)
+	nextAttIdx := imageIdxs[pos]
+	return a.previewFetchCmd(channel, ts, nextAttIdx, true)
+}
+
+// previewFetchCmd is the shared helper for opening / cycling. cycle
+// determines whether the resulting previewLoadedMsg is treated as a
+// fresh open or an in-place image swap.
+func (a *App) previewFetchCmd(channel, ts string, attIdx int, cycle bool) tea.Cmd {
 	if a.imageFetcher == nil {
 		return nil
 	}
@@ -3207,6 +3300,18 @@ func (a *App) openImagePreviewCmd(channel, ts string, attIdx int) tea.Cmd {
 		return nil
 	}
 
+	// Compute sibling-count / sibling-index over IMAGE attachments only,
+	// so the (i/N) caption ignores non-image siblings (e.g. PDFs).
+	imageIdxs := imageAttachmentIndices(msgItem.Attachments)
+	sibCount := len(imageIdxs)
+	sibIndex := 0
+	for i, idx := range imageIdxs {
+		if idx == attIdx {
+			sibIndex = i
+			break
+		}
+	}
+
 	fetcher := a.imageFetcher
 	name := att.Name
 	fileID := att.FileID
@@ -3222,12 +3327,27 @@ func (a *App) openImagePreviewCmd(channel, ts string, attIdx int) tea.Cmd {
 			return previewErrorMsg{Err: err}
 		}
 		return previewLoadedMsg{
-			Name:   name,
-			FileID: fileID,
-			Img:    res.Img,
-			Path:   res.Source,
+			Name:         name,
+			FileID:       fileID,
+			Img:          res.Img,
+			Path:         res.Source,
+			SiblingCount: sibCount,
+			SiblingIndex: sibIndex,
+			isCycle:      cycle,
 		}
 	}
+}
+
+// imageAttachmentIndices returns the indices into atts of attachments
+// with Kind == "image" and a non-empty FileID. Order preserved.
+func imageAttachmentIndices(atts []messages.Attachment) []int {
+	out := make([]int, 0, len(atts))
+	for i, a := range atts {
+		if a.Kind == "image" && a.FileID != "" {
+			out = append(out, i)
+		}
+	}
+	return out
 }
 
 // findMessageInActiveChannel returns the MessageItem with the matching TS
