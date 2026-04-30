@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -160,6 +161,22 @@ func (c Config) WorkspaceByTeamID(teamID string) (Workspace, bool) {
 		}
 	}
 	return Workspace{}, false
+}
+
+// TeamIDForDefaultWorkspace resolves general.default_workspace to a
+// team ID. The configured value can be either a slug ([workspaces.<slug>])
+// or a legacy team-ID-shaped key. Returns ("", nil) if default_workspace
+// is unset, and an error if it is set but does not match any
+// configured workspace.
+func (c Config) TeamIDForDefaultWorkspace() (string, error) {
+	key := c.General.DefaultWorkspace
+	if key == "" {
+		return "", nil
+	}
+	if ws, ok := c.Workspaces[key]; ok {
+		return ws.TeamID, nil
+	}
+	return "", fmt.Errorf("default_workspace %q not found in [workspaces.*]", key)
 }
 
 // MatchSection returns the section name for a given channel name in

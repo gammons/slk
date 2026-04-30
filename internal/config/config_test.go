@@ -374,3 +374,56 @@ func TestWorkspaceByTeamID(t *testing.T) {
 		t.Error("expected WorkspaceByTeamID(nope) to be not found")
 	}
 }
+
+func TestTeamIDForDefaultWorkspaceSlug(t *testing.T) {
+	c := Config{
+		General: General{DefaultWorkspace: "work"},
+		Workspaces: map[string]Workspace{
+			"work": {TeamID: "T01ABCDEF"},
+		},
+	}
+	got, err := c.TeamIDForDefaultWorkspace()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "T01ABCDEF" {
+		t.Errorf("got %q, want T01ABCDEF", got)
+	}
+}
+
+func TestTeamIDForDefaultWorkspaceLegacyKey(t *testing.T) {
+	c := Config{
+		General: General{DefaultWorkspace: "T01ABCDEF"},
+		Workspaces: map[string]Workspace{
+			"T01ABCDEF": {TeamID: "T01ABCDEF"},
+		},
+	}
+	got, err := c.TeamIDForDefaultWorkspace()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "T01ABCDEF" {
+		t.Errorf("got %q, want T01ABCDEF", got)
+	}
+}
+
+func TestTeamIDForDefaultWorkspaceEmpty(t *testing.T) {
+	c := Config{} // unset
+	got, err := c.TeamIDForDefaultWorkspace()
+	if err != nil {
+		t.Fatalf("unexpected error for unset default: %v", err)
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty string", got)
+	}
+}
+
+func TestTeamIDForDefaultWorkspaceUnknownSlug(t *testing.T) {
+	c := Config{
+		General:    General{DefaultWorkspace: "ghost"},
+		Workspaces: map[string]Workspace{"work": {TeamID: "T01"}},
+	}
+	if _, err := c.TeamIDForDefaultWorkspace(); err == nil {
+		t.Fatal("expected error for unknown slug")
+	}
+}

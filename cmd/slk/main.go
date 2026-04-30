@@ -628,6 +628,28 @@ func run() error {
 		}
 	})
 
+	// Resolve general.default_workspace if set. We honor it only if
+	// the matching token is actually configured; otherwise fall back
+	// to "first workspace to connect wins" with a warning.
+	defaultTeamID, err := cfg.TeamIDForDefaultWorkspace()
+	if err != nil {
+		log.Printf("Warning: %v; ignoring default_workspace setting", err)
+		defaultTeamID = ""
+	}
+	if defaultTeamID != "" {
+		found := false
+		for _, t := range tokens {
+			if t.TeamID == defaultTeamID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			log.Printf("Warning: default_workspace resolves to team %q but no token is configured for it; ignoring", defaultTeamID)
+			defaultTeamID = ""
+		}
+	}
+
 	// Start the TUI immediately (shows loading overlay)
 	p = tea.NewProgram(app)
 
@@ -644,8 +666,17 @@ func run() error {
 			workspaces[wctx.TeamID] = wctx
 			wsMgr.AddWorkspace(wctx.TeamID, wctx.TeamName, "")
 
-			// Wire callbacks for the first workspace that connects
-			if activeTeamID == "" {
+			// Decide whether this workspace becomes the active one.
+			// If default_workspace resolved to a team ID, only that
+			// workspace claims active. Otherwise the first to connect
+			// claims it.
+			claimActive := false
+			if defaultTeamID != "" {
+				claimActive = wctx.TeamID == defaultTeamID
+			} else {
+				claimActive = activeTeamID == ""
+			}
+			if claimActive {
 				activeTeamID = wctx.TeamID
 				wireCallbacks(wctx)
 			}
