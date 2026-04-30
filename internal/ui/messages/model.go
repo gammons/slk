@@ -1,14 +1,20 @@
 package messages
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"image"
+	"io"
 	"strconv"
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	emojiutil "github.com/gammons/slk/internal/emoji"
+	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/scrollbar"
 	"github.com/gammons/slk/internal/ui/selection"
 	"github.com/gammons/slk/internal/ui/styles"
@@ -97,6 +103,53 @@ type viewEntry struct {
 	contentColOffset int
 	height           int // == len(linesNormal); cached for scroll math
 	msgIdx           int // index into messages, or -1 for separator
+
+	// flushes are per-frame side effects (kitty image uploads). Phase 6
+	// invokes these from Model.View() once-per-frame, deduplicated by
+	// image ID via the package-level kitty registry. nil for entries
+	// with no inline image attachments.
+	flushes []func(io.Writer) error
+
+	// sixelRows maps absolute row index within linesNormal to the sixel
+	// byte stream for an image whose top-left cell sits on that row.
+	// Phase 6 emits the bytes via the active output writer only when the
+	// image's full vertical extent is on-screen; otherwise it substitutes
+	// the entry's halfblock fallback. nil for entries with no sixel
+	// attachments.
+	sixelRows map[int]sixelEntry
+}
+
+// sixelEntry holds the pre-computed sixel bytes for one inline image,
+// plus the halfblock fallback used when the image is only partially
+// visible (Phase 6 cannot emit a half-image with sixel).
+type sixelEntry struct {
+	bytes    []byte
+	fallback []string // halfblock-equivalent text for partial-visibility frames
+	height   int      // image height in rows
+}
+
+// ImageContext holds the dependencies the messages model needs for image
+// rendering. Configured at startup via Model.SetImageContext. SendMsg is
+// optional; when nil, image fetches still complete but no re-render is
+// triggered when bytes arrive (set by Task 5.6 once the tea.Program is
+// available).
+type ImageContext struct {
+	Protocol    imgpkg.Protocol
+	Fetcher     *imgpkg.Fetcher
+	KittyRender *imgpkg.KittyRenderer
+	CellPixels  image.Point
+	MaxRows     int
+	SendMsg     func(tea.Msg)
+}
+
+// ImageReadyMsg is dispatched by the prefetcher when an image attachment
+// has finished downloading and decoding into the cache. The model
+// invalidates the cache for the affected message and re-renders. The
+// full Update() handler is wired in Task 5.6; this type is declared
+// here so the prefetcher can compile and dispatch.
+type ImageReadyMsg struct {
+	Channel string
+	TS      string
 }
 
 type Model struct {
@@ -177,6 +230,12 @@ type Model struct {
 	// countedReplies tracks reply TSes already counted into a parent's
 	// ReplyCount, so optimistic + WS-echo paths don't double-increment.
 	countedReplies map[string]map[string]struct{}
+
+	// imgCtx is the inline-image rendering context: protocol, fetcher,
+	// cell metrics, and tea.Program send-fn. Zero-valued ImageContext is
+	// equivalent to ProtoOff (no inline rendering, attachments fall back
+	// to the legacy single-line OSC 8 hyperlink form).
+	imgCtx ImageContext
 }
 
 // Version returns a counter that increments every time the View() output
@@ -594,6 +653,17 @@ func (m *Model) SetUserNames(names map[string]string) {
 	m.dirty()
 }
 
+// SetImageContext configures the inline-image rendering pipeline. Should
+// be called once at startup, before the first View(). Subsequent calls
+// invalidate the render cache. A zero-valued ImageContext (or one with
+// Protocol == ProtoOff) disables inline rendering and falls back to the
+// legacy single-line "[Image] <url>" form.
+func (m *Model) SetImageContext(ctx ImageContext) {
+	m.imgCtx = ctx
+	m.cache = nil
+	m.dirty()
+}
+
 // SetLastReadTS sets the timestamp of the last read message.
 // Messages with TS > lastReadTS are considered unread.
 func (m *Model) SetLastReadTS(ts string) {
@@ -683,7 +753,7 @@ func (m *Model) buildCache(width int) {
 		if m.avatarFn != nil {
 			avatarStr = m.avatarFn(msg.UserID)
 		}
-		rendered := m.renderMessagePlain(msg, width, avatarStr, m.userNames, i == m.selected)
+		rendered, attachFlushes, attachSixel := m.renderMessagePlain(msg, width, avatarStr, m.userNames, i == m.selected)
 		filled := borderFill.Width(width - 1).Render(rendered)
 		normal := borderInvis.Render(filled)
 		selected := borderSelect.Render(filled)
@@ -713,6 +783,8 @@ func (m *Model) buildCache(width int) {
 			contentColOffset: 1, // thick left border ▌ occupies column 0 of linesNormal
 			height:           len(linesN),
 			msgIdx:           i,
+			flushes:          attachFlushes,
+			sixelRows:        attachSixel,
 		})
 	}
 
@@ -731,7 +803,15 @@ func (m *Model) buildCache(width int) {
 }
 
 // renderMessagePlain renders a message without selection highlight.
-func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string, userNames map[string]string, isSelected bool) string {
+//
+// Returns the message content (multi-line string), per-frame flushes
+// (kitty image upload callbacks), and a row-keyed map of sixel bytes.
+// Row indices in sixelRows are relative to the returned content (after
+// avatar placement) — they remain valid through buildCache's border
+// wrap because the border adds columns, not rows.
+func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string, userNames map[string]string, isSelected bool) (
+	content string, flushes []func(io.Writer) error, sixelRows map[int]sixelEntry,
+) {
 	line := styles.Username.Render(msg.UserName) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.Timestamp)
 
 	// If we have an avatar, reserve space on the left for it
@@ -808,31 +888,62 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		editedMark = " " + styles.Timestamp.Render("(edited)")
 	}
 
-	var attachmentLines string
-	if rendered := RenderAttachments(msg.Attachments); rendered != "" {
-		attachmentLines = "\n" + WordWrap(rendered, contentWidth)
-	}
-
-	// Thread broadcast label: a thread reply that the author also
-	// posted to the main channel (Slack's "Also send to channel"
-	// option). Slack delivers these with subtype=thread_broadcast and
-	// they appear in the main channel feed alongside top-level
-	// messages. Mirror Slack desktop's small muted label above the
-	// username row.
+	// Pre-attachment row count, so attachment rows can compute their
+	// absolute row index (used as the sixelRows key).
+	//
+	//   row 0: broadcastLabel (only when subtype=thread_broadcast)
+	//   row 0|1: username line + editedMark
+	//   row N: wrapped body text (lipgloss.Height of styled `text`)
+	//
+	// Attachments begin immediately after the body text.
 	var broadcastLabel string
+	preAttachmentRows := 0
 	if msg.Subtype == "thread_broadcast" {
 		broadcastLabel = styles.Timestamp.Render("\u21b3 replied to a thread") + "\n"
+		preAttachmentRows++ // the broadcast label occupies its own row
+	}
+	preAttachmentRows++                       // username + ts row
+	preAttachmentRows += lipgloss.Height(text) // wrapped body text
+
+	var attachLineSlices [][]string
+	var allFlushes []func(io.Writer) error
+	allSixel := map[int]sixelEntry{}
+	if len(msg.Attachments) > 0 {
+		rowCursor := preAttachmentRows
+		for _, att := range msg.Attachments {
+			lines, fls, sxl, h := m.renderAttachmentBlock(att, msg.TS, contentWidth, rowCursor)
+			attachLineSlices = append(attachLineSlices, lines)
+			allFlushes = append(allFlushes, fls...)
+			for k, v := range sxl {
+				allSixel[k] = v
+			}
+			rowCursor += h
+		}
+	}
+	var attachmentLines string
+	if len(attachLineSlices) > 0 {
+		flat := make([]string, 0)
+		for _, ls := range attachLineSlices {
+			flat = append(flat, ls...)
+		}
+		attachmentLines = "\n" + strings.Join(flat, "\n")
 	}
 
 	msgContent := broadcastLabel + line + editedMark + "\n" + text + attachmentLines + threadLine + reactionLine
 
-	// Place avatar next to message content
+	// Place avatar next to message content (avatar is side-by-side, no
+	// extra rows; row indices for sixelRows remain valid).
 	if avatarStr != "" {
-		return placeAvatarBeside(avatarStr, msgContent)
+		msgContent = placeAvatarBeside(avatarStr, msgContent)
 	}
 
-	return msgContent
+	if len(allSixel) == 0 {
+		allSixel = nil
+	}
+	return msgContent, allFlushes, allSixel
 }
+
+
 
 // placeAvatarBeside renders the avatar to the left of the message content.
 // The avatar is 4 cols wide, 2 rows tall. Message content flows to the right.
@@ -867,6 +978,182 @@ func placeAvatarBeside(avatar, content string) string {
 	}
 
 	return strings.Join(result, "\n")
+}
+
+// renderAttachmentBlock returns the rendered rows + per-frame flushes +
+// sixel sentinel rows for one attachment. baseRow is the absolute row
+// index where this attachment's first row will land within the
+// containing message's rendered output (used as the key for sixelRows).
+//
+// Behavior matrix:
+//   - Non-image attachment, ProtoOff, missing fetcher, or missing thumbs:
+//     fall back to the legacy single-line "[Image|File] <url>" form.
+//   - Image with bytes already in the on-disk cache: render via the active
+//     protocol's renderer (kitty stable-key path, halfblock inline, or
+//     sixel sentinel + bytes).
+//   - Image not yet cached: emit a reserved-height placeholder block of
+//     theme-surface-colored spaces with a centered loading indicator,
+//     and kick off an async prefetch via go func.
+func (m *Model) renderAttachmentBlock(att Attachment, ts string, availWidth, baseRow int) (
+	lines []string, flushes []func(io.Writer) error, sixelRows map[int]sixelEntry, height int,
+) {
+	ctx := m.imgCtx
+	if att.Kind != "image" || ctx.Protocol == imgpkg.ProtoOff || ctx.Fetcher == nil {
+		return []string{renderSingleAttachment(att)}, nil, nil, 1
+	}
+
+	target := computeImageTarget(att, ctx, availWidth)
+	if target.X <= 0 || target.Y <= 0 {
+		return []string{renderSingleAttachment(att)}, nil, nil, 1
+	}
+
+	pixelTarget := image.Pt(target.X*ctx.CellPixels.X, target.Y*ctx.CellPixels.Y)
+	url, suffix := imgpkg.PickThumb(toImgThumbs(att.Thumbs), pixelTarget)
+	if url == "" {
+		return []string{renderSingleAttachment(att)}, nil, nil, 1
+	}
+	key := att.FileID + "-" + suffix
+
+	img, cached := ctx.Fetcher.Cached(key, pixelTarget)
+	if !cached {
+		// Reserved-height placeholder; kick off async prefetch. The
+		// fetcher is concurrency-safe (singleflight dedupes), so it's
+		// fine for multiple visible messages to fire prefetches for
+		// the same key in parallel.
+		channel := m.channelName
+		go func() {
+			_, err := ctx.Fetcher.Fetch(context.Background(), imgpkg.FetchRequest{
+				Key: key, URL: url, Target: pixelTarget,
+			})
+			if err == nil && ctx.SendMsg != nil {
+				ctx.SendMsg(ImageReadyMsg{Channel: channel, TS: ts})
+			}
+		}()
+		return buildPlaceholder(att.Name, target), nil, nil, target.Y
+	}
+
+	// Decode is cheap once cached. Render via the active protocol.
+	if ctx.Protocol == imgpkg.ProtoKitty && ctx.KittyRender != nil {
+		ckey := "F-" + att.FileID
+		ctx.KittyRender.SetSource(ckey, img)
+		out := ctx.KittyRender.RenderKey(ckey, target)
+		var fl []func(io.Writer) error
+		if out.OnFlush != nil {
+			fl = []func(io.Writer) error{out.OnFlush}
+		}
+		return out.Lines, fl, nil, target.Y
+	}
+
+	out := imgpkg.RenderImage(ctx.Protocol, img, target)
+	var fl []func(io.Writer) error
+	var sxlMap map[int]sixelEntry
+	if ctx.Protocol == imgpkg.ProtoSixel {
+		// Sixel: capture the bytes once into sixelRows. Phase 6 will
+		// emit them inline at frame time. Don't surface OnFlush here
+		// because the bytes are already baked into the sentinel row.
+		if out.OnFlush != nil {
+			var bb bytes.Buffer
+			if err := out.OnFlush(&bb); err == nil {
+				sxlMap = map[int]sixelEntry{
+					baseRow: {bytes: bb.Bytes(), fallback: out.Fallback, height: target.Y},
+				}
+			}
+		}
+	} else if out.OnFlush != nil {
+		fl = []func(io.Writer) error{out.OnFlush}
+	}
+	return out.Lines, fl, sxlMap, target.Y
+}
+
+// computeImageTarget chooses (cols, rows) for an inline image render.
+// rows is capped at ctx.MaxRows; cols fits the available width and
+// preserves aspect ratio. Returns image.Point{} when the attachment
+// has no usable thumbnail or the cell metrics are zero.
+func computeImageTarget(att Attachment, ctx ImageContext, availWidth int) image.Point {
+	if len(att.Thumbs) == 0 || ctx.CellPixels.X <= 0 || ctx.CellPixels.Y <= 0 {
+		return image.Point{}
+	}
+	largest := att.Thumbs[len(att.Thumbs)-1]
+	if largest.W <= 0 || largest.H <= 0 {
+		return image.Point{}
+	}
+	aspect := float64(largest.W) / float64(largest.H)
+	cellRatio := float64(ctx.CellPixels.X) / float64(ctx.CellPixels.Y)
+
+	rows := ctx.MaxRows
+	if rows <= 0 {
+		rows = 20
+	}
+	// cols = rows * aspect / cellRatio  (cells are taller than wide,
+	// so cellRatio < 1 inflates cols to compensate).
+	cols := int(float64(rows) * aspect / cellRatio)
+	if cols > availWidth {
+		cols = availWidth
+		rows = int(float64(cols) * cellRatio / aspect)
+	}
+	if rows < 1 || cols < 1 {
+		return image.Point{}
+	}
+	return image.Pt(cols, rows)
+}
+
+// toImgThumbs converts the messages-package ThumbSpec slice to the
+// image-package's. The two types are intentionally distinct (see
+// model.go ThumbSpec doc) so the messages UI doesn't depend on the
+// image package's internal type.
+func toImgThumbs(ts []ThumbSpec) []imgpkg.ThumbSpec {
+	out := make([]imgpkg.ThumbSpec, len(ts))
+	for i, t := range ts {
+		out[i] = imgpkg.ThumbSpec{URL: t.URL, W: t.W, H: t.H}
+	}
+	return out
+}
+
+// buildPlaceholder produces a target.Y-row block with theme-surface
+// background and a centered "⏳ Loading <name>..." indicator on the
+// middle row. Used while the image bytes are being fetched.
+func buildPlaceholder(name string, target image.Point) []string {
+	bg := lipgloss.NewStyle().Background(styles.SurfaceDark)
+	pad := strings.Repeat(" ", target.X)
+	emptyRow := bg.Render(pad)
+
+	lines := make([]string, target.Y)
+	for i := range lines {
+		lines[i] = emptyRow
+	}
+
+	label := "⏳ Loading " + name + "..."
+	labelW := lipgloss.Width(label)
+	if labelW > target.X {
+		// Truncate to fit. Use rune-safe slicing via a runes round-trip
+		// — image labels are user-controlled file names and can contain
+		// multi-byte UTF-8.
+		if target.X > 1 {
+			runes := []rune(label)
+			// Conservatively trim to target.X-1 runes plus an ellipsis;
+			// some runes are wide so the result may still be slightly
+			// over, in which case we re-trim.
+			for len(runes) > 0 {
+				candidate := string(runes[:len(runes)-1]) + "…"
+				if lipgloss.Width(candidate) <= target.X {
+					label = candidate
+					labelW = lipgloss.Width(label)
+					break
+				}
+				runes = runes[:len(runes)-1]
+			}
+			if labelW > target.X {
+				return lines
+			}
+		} else {
+			return lines
+		}
+	}
+	leftPad := (target.X - labelW) / 2
+	rightPad := target.X - labelW - leftPad
+	mid := target.Y / 2
+	lines[mid] = bg.Render(strings.Repeat(" ", leftPad)) + bg.Render(label) + bg.Render(strings.Repeat(" ", rightPad))
+	return lines
 }
 
 // ClickAt handles a mouse click at the given y-coordinate (the pane-local

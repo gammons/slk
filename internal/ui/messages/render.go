@@ -118,21 +118,27 @@ func RenderAttachments(attachments []Attachment) string {
 	if len(attachments) == 0 {
 		return ""
 	}
-	markerStyle := lipgloss.NewStyle().Foreground(styles.TextMuted).Bold(true)
-	urlStyle := linkStyle()
-
 	lines := make([]string, 0, len(attachments))
 	for _, a := range attachments {
-		marker := "[File]"
-		if a.Kind == "image" {
-			marker = "[Image]"
-		}
-		styledMarker := markerStyle.Render(marker)
-		styledURL := urlStyle.Render(a.URL)
-		body := styledMarker + " " + styledURL
-		lines = append(lines, osc8Hyperlink(a.URL, body))
+		lines = append(lines, renderSingleAttachment(a))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// renderSingleAttachment formats one attachment as the legacy single-line
+// "[Image] <url>" or "[File] <url>" form, wrapped in an OSC 8 hyperlink.
+// The messages-pane image-rendering pipeline uses this when no inline
+// renderer is available (ProtoOff, missing thumbs) and the thread pane
+// uses it via RenderAttachments for all attachments.
+func renderSingleAttachment(a Attachment) string {
+	markerStyle := lipgloss.NewStyle().Foreground(styles.TextMuted).Bold(true)
+	urlStyle := linkStyle()
+	marker := "[File]"
+	if a.Kind == "image" {
+		marker = "[Image]"
+	}
+	body := markerStyle.Render(marker) + " " + urlStyle.Render(a.URL)
+	return osc8Hyperlink(a.URL, body)
 }
 
 // osc8Hyperlink wraps the rendered label in an OSC 8 hyperlink escape so

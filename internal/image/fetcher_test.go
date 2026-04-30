@@ -103,6 +103,66 @@ func TestFetcher_SingleFlightDedupes(t *testing.T) {
 	}
 }
 
+func TestFetcher_CachedReturnsFalseWhenMissing(t *testing.T) {
+	cache, _ := NewCache(t.TempDir(), 10)
+	f := NewFetcher(cache, http.DefaultClient)
+
+	if _, ok := f.Cached("never-stored", image.Pt(10, 10)); ok {
+		t.Errorf("expected Cached to return false for unknown key")
+	}
+}
+
+func TestFetcher_CachedReturnsImageWhenPresent(t *testing.T) {
+	pngBytes := tinyPNG(t, 60, 40, imgcolor.RGBA{255, 0, 0, 255})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(pngBytes)
+	}))
+	defer srv.Close()
+
+	cache, _ := NewCache(t.TempDir(), 10)
+	f := NewFetcher(cache, http.DefaultClient)
+
+	// Prime the cache via Fetch.
+	if _, err := f.Fetch(context.Background(), FetchRequest{
+		Key: "primed", URL: srv.URL, Target: image.Pt(0, 0),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	img, ok := f.Cached("primed", image.Pt(20, 20))
+	if !ok {
+		t.Fatalf("expected Cached to return true after Fetch")
+	}
+	if img == nil {
+		t.Fatalf("expected non-nil image")
+	}
+	if img.Bounds().Dx() != 20 || img.Bounds().Dy() != 20 {
+		t.Errorf("expected 20x20 downscale, got %v", img.Bounds())
+	}
+}
+
+func TestFetcher_CachedNeverStartsDownload(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(tinyPNG(t, 10, 10, imgcolor.RGBA{0, 255, 0, 255}))
+	}))
+	defer srv.Close()
+
+	cache, _ := NewCache(t.TempDir(), 10)
+	f := NewFetcher(cache, http.DefaultClient)
+
+	if _, ok := f.Cached("never", image.Pt(10, 10)); ok {
+		t.Errorf("expected ok=false")
+	}
+	if hits != 0 {
+		t.Errorf("Cached should not start a download; got %d hits", hits)
+	}
+}
+
 func TestFetcher_HTTPErrorPropagates(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

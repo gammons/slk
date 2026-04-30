@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"image"
 	"io"
 	"log"
 	"os"
@@ -318,11 +319,18 @@ func run() error {
 	pxW, pxH := imgpkg.CellPixels(int(os.Stdout.Fd()))
 	log.Printf("cell pixels: %dx%d", pxW, pxH)
 
-	// Suppress unused-warnings until Task 5.5 wires these into the messages model.
-	_ = proto
-	_ = pxW
-	_ = pxH
-	_ = imgpkg.KittyRendererInstance() // ensure compile-time linkage
+	// Wire the inline-image pipeline into the messages pane. SendMsg
+	// stays nil here; Task 5.6 will populate it once the tea.Program is
+	// constructed (we need `p` for p.Send, but this block runs before
+	// `tea.NewProgram(app)`).
+	app.SetImageContext(messages.ImageContext{
+		Protocol:    proto,
+		Fetcher:     imageFetcher,
+		KittyRender: imgpkg.KittyRendererInstance(),
+		CellPixels:  image.Pt(pxW, pxH),
+		MaxRows:     cfg.Appearance.MaxImageRows,
+		SendMsg:     nil, // populated in Task 5.6
+	})
 
 	// Build workspace rail items for all tokens
 	var wsItems []workspace.WorkspaceItem

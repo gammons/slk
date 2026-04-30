@@ -161,6 +161,30 @@ func (f *Fetcher) Bytes(key string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
+// Cached returns the decoded image and true if it's already in the on-disk
+// cache. Never starts a network download. When target is positive on both
+// axes, the returned image is downscaled to those pixel dimensions; pass
+// image.Point{} (zero) to skip downscale.
+func (f *Fetcher) Cached(key string, target image.Point) (image.Image, bool) {
+	path, ok := f.cache.Get(key)
+	if !ok {
+		return nil, false
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, false
+	}
+	defer file.Close()
+	img, _, err := image.Decode(file)
+	if err != nil {
+		return nil, false
+	}
+	if target.X > 0 && target.Y > 0 {
+		img = downscale(img, target)
+	}
+	return img, true
+}
+
 // ThumbSpec is one Slack thumbnail variant.
 type ThumbSpec struct {
 	URL string

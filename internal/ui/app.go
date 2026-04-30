@@ -2998,6 +2998,13 @@ func (a *App) SetAvatarFunc(fn messages.AvatarFunc) {
 	a.threadPanel.SetAvatarFunc(fn)
 }
 
+// SetImageContext configures the inline-image rendering pipeline on the
+// messages pane. Should be called once at startup, before the first
+// View(). Pass a zero-valued ImageContext to disable inline rendering.
+func (a *App) SetImageContext(ctx messages.ImageContext) {
+	a.messagepane.SetImageContext(ctx)
+}
+
 // SetUserNames passes the user ID -> display name map to the message pane for mention resolution.
 func (a *App) SetUserNames(names map[string]string) {
 	a.userNames = names
