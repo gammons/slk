@@ -99,3 +99,10 @@ var (
 func KittyRendererInstance() *KittyRenderer {
 	return kittyRendererInstance
 }
+
+// SixelSentinel is a private-use codepoint reserved for slk to mark a row
+// in viewEntry.Lines that should trigger a sixel byte stream emission
+// during messages-pane rendering. The character is U+E0001 (LANGUAGE TAG),
+// chosen because no terminal renders it with a glyph; it is effectively
+// zero-width and ignored by selection/copy.
+const SixelSentinel = '\U000E0001'
