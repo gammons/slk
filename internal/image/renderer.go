@@ -68,3 +68,26 @@ type Render struct {
 type Renderer interface {
 	Render(img image.Image, target image.Point) Render
 }
+
+// RenderImage encodes img at target cells using the given protocol's renderer.
+// Returns a zero Render if proto == ProtoOff.
+func RenderImage(proto Protocol, img image.Image, target image.Point) Render {
+	switch proto {
+	case ProtoOff:
+		return Render{Cells: target}
+	case ProtoHalfBlock:
+		return HalfBlockRenderer{}.Render(img, target)
+	case ProtoSixel:
+		return sixelRenderer.Render(img, target)
+	case ProtoKitty:
+		return kittyRenderer.Render(img, target)
+	}
+	return Render{}
+}
+
+// Singleton renderers — concrete instances appear in kitty.go / sixel.go.
+// Until those exist, fall back to half-block so this file builds in isolation.
+var (
+	sixelRenderer Renderer = HalfBlockRenderer{}
+	kittyRenderer Renderer = HalfBlockRenderer{}
+)
