@@ -1,15 +1,20 @@
 // Package blockkit attachments.go: renders Slack legacy
 // `attachments` payloads. Each attachment is drawn as a card with
 // optional pretext above, then a colored vertical stripe (█) on
-// the left margin with title/text/footer to its right.
+// the left margin with title/text/fields/image_url/footer to its
+// right.
 //
-// Fields, image_url, and thumb_url are deferred to Task 13.
+// thumb_url is deferred to a future task: rendering a small image
+// to the right of Text requires joinSideBySide against the text
+// column with width-aware truncation, which has not been wired up.
 package blockkit
 
 import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+
+	imgpkg "github.com/gammons/slk/internal/image"
 )
 
 // stripeGlyph is the leading character on every line inside the
@@ -71,6 +76,45 @@ func appendLegacyAttachment(out *RenderResult, a LegacyAttachment, ctx Context, 
 	if a.Text != "" {
 		body = append(body, renderTextLines(a.Text, ctx, contentW)...)
 	}
+	// Fields grid (Task 13).
+	if len(a.Fields) > 0 {
+		body = append(body, renderLegacyFields(a.Fields, ctx, contentW)...)
+	}
+	// Inline image (Task 13). Uses the same fetcher path as image
+	// blocks; falls back to a single OSC-8 link line when no fetcher
+	// is configured or the protocol is off.
+	// TODO(blockkit): render thumb_url alongside text via joinSideBySide.
+	var imageHitInBody *HitRect
+	if a.ImageURL != "" {
+		if ctx.Fetcher == nil || ctx.Protocol == imgpkg.ProtoOff {
+			body = append(body, renderImageFallback(a.ImageURL))
+		} else {
+			target := computeBlockImageTarget(ImageBlock{URL: a.ImageURL}, ctx, contentW)
+			if target.X > 0 && target.Y > 0 {
+				rowStartInBody := len(body)
+				lines, flushes, sxl, hit, ok := fetchOrPlaceholder(a.ImageURL, target, ctx, rowStartInBody)
+				if ok {
+					body = append(body, lines...)
+					out.Flushes = append(out.Flushes, flushes...)
+					if sxl != nil {
+						if out.SixelRows == nil {
+							out.SixelRows = map[int]SixelEntry{}
+						}
+						for k, v := range sxl {
+							out.SixelRows[k] = v
+						}
+					}
+					h := hit
+					imageHitInBody = &h
+				} else {
+					body = append(body, renderImageFallback(a.ImageURL))
+				}
+			} else {
+				body = append(body, renderImageFallback(a.ImageURL))
+			}
+		}
+	}
+	// Footer.
 	if a.Footer != "" || a.TS != 0 {
 		footer := a.Footer
 		if a.TS != 0 {
@@ -89,7 +133,60 @@ func appendLegacyAttachment(out *RenderResult, a LegacyAttachment, ctx Context, 
 
 	// Prefix every body line with the colored stripe + 1 col space.
 	stripe := stripeStyle.Render(stripeGlyph) + " "
+	startRow := len(out.Lines)
 	for _, line := range body {
 		out.Lines = append(out.Lines, stripe+line)
 	}
+
+	// Adjust the image hit so its rows are absolute within out.Lines
+	// and its cols account for the stripe-prefix offset.
+	if imageHitInBody != nil {
+		imageHitInBody.RowStart += startRow
+		imageHitInBody.RowEnd += startRow
+		imageHitInBody.ColStart += stripeCol
+		imageHitInBody.ColEnd += stripeCol
+		out.Hits = append(out.Hits, *imageHitInBody)
+	}
+}
+
+// renderLegacyFields lays out attachment fields. Two consecutive
+// Short==true fields share a row; non-short fields take their own.
+func renderLegacyFields(fields []LegacyField, ctx Context, width int) []string {
+	var out []string
+	i := 0
+	for i < len(fields) {
+		f := fields[i]
+		if f.Short && i+1 < len(fields) && fields[i+1].Short {
+			gutter := 2
+			colW := (width - gutter) / 2
+			if colW < 1 {
+				colW = 1
+			}
+			left := renderLegacyField(f, ctx, colW)
+			right := renderLegacyField(fields[i+1], ctx, colW)
+			out = append(out, joinSideBySide(left, right, colW, gutter)...)
+			i += 2
+			continue
+		}
+		out = append(out, renderLegacyField(f, ctx, width)...)
+		i++
+	}
+	return out
+}
+
+// renderLegacyField renders a single attachment field's title +
+// value to a list of lines bounded by width.
+func renderLegacyField(f LegacyField, ctx Context, width int) []string {
+	var out []string
+	if f.Title != "" {
+		title := fieldLabelStyle().Render(f.Title)
+		if lipgloss.Width(title) > width {
+			title = truncateToWidth(title, width)
+		}
+		out = append(out, title)
+	}
+	if f.Value != "" {
+		out = append(out, renderTextLines(f.Value, ctx, width)...)
+	}
+	return out
 }
