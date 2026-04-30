@@ -1803,6 +1803,22 @@ func (m *Model) View(height, width int) string {
 	if msgAreaHeight < 1 {
 		msgAreaHeight = 1
 	}
+	// If the available height shrank since the last render (e.g. the
+	// compose box grew an extra row to fit a soft-wrapped line) and the
+	// viewport was anchored at the bottom, advance yOffset by the delta
+	// so the bottom of the content stays pinned. Without this, the
+	// last message would be pushed below the fold and the
+	// "-- more below --" hint would replace it on the next render.
+	if m.lastViewHeight > 0 && msgAreaHeight < m.lastViewHeight && m.totalLines > 0 &&
+		m.yOffset+m.lastViewHeight >= m.totalLines {
+		delta := m.lastViewHeight - msgAreaHeight
+		m.yOffset += delta
+		// Mark "snapped" so the selection-snap branch below doesn't undo
+		// the adjustment if selection is unchanged. The post-snap clamp
+		// at the end of View() still bounds yOffset to maxOffset.
+		m.snappedSelection = m.selected
+		m.hasSnapped = true
+	}
 	m.lastViewHeight = msgAreaHeight
 
 	if len(m.messages) == 0 {

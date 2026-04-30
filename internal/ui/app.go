@@ -562,6 +562,14 @@ type App struct {
 	// Workspace switching
 	workspaceSwitcher SwitchWorkspaceFunc
 	workspaceItems    []workspace.WorkspaceItem // cached for lookup
+	// lastChannelByTeam remembers the active channel ID per workspace so
+	// that switching back to a workspace returns to the same channel the
+	// user was last viewing there. Saved at the start of every workspace
+	// switch (the workspace being left), consulted when applying the
+	// switch (the workspace being entered). Falls back to the first
+	// channel in the sidebar when there is no saved entry or the saved
+	// channel is no longer in the list.
+	lastChannelByTeam map[string]string
 
 	// Theme switching
 	themeSaveFn    func(name string, scope themeswitcher.ThemeScope)
@@ -659,6 +667,7 @@ func NewApp() *App {
 		threadsDirtyDebounce: 150 * time.Millisecond,
 		userNames:            map[string]string{},
 		statusByTeam:         map[string]workspaceStatus{},
+		lastChannelByTeam:    map[string]string{},
 		clipboardRead:        defaultClipboardReader,
 	}
 	// Seed the picker with built-in emojis so the autocomplete works even
@@ -1396,6 +1405,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, a.uploadToastCmd("Upload in progress", 2*time.Second))
 			break
 		}
+		// Remember which channel we were on in the workspace we're
+		// leaving so that switching back lands the user on the same
+		// channel rather than always snapping to the sidebar's first
+		// entry.
+		if a.activeTeamID != "" && a.activeChannelID != "" && a.activeTeamID != msg.TeamID {
+			a.lastChannelByTeam[a.activeTeamID] = a.activeChannelID
+		}
 		a.cancelEdit()
 		// Always land in ViewChannels and drop any per-workspace
 		// threads-view state so stale summaries / unread badges from the
@@ -1438,11 +1454,21 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.threadCompose.RefreshStyles()
 		}
 		a.workspaceRail.SelectByID(msg.TeamID)
-		// Load first channel
+		// Restore the last-viewed channel for this workspace if we have
+		// one and it still exists; otherwise fall back to the first
+		// channel in the sidebar.
 		if len(msg.Channels) > 0 {
-			first := msg.Channels[0]
+			target := msg.Channels[0]
+			if savedID, ok := a.lastChannelByTeam[msg.TeamID]; ok && savedID != "" {
+				for _, ch := range msg.Channels {
+					if ch.ID == savedID {
+						target = ch
+						break
+					}
+				}
+			}
 			cmds = append(cmds, func() tea.Msg {
-				return ChannelSelectedMsg{ID: first.ID, Name: first.Name, Type: first.Type}
+				return ChannelSelectedMsg{ID: target.ID, Name: target.Name, Type: target.Type}
 			})
 		}
 		// Kick off an initial threads-list fetch so the sidebar Threads

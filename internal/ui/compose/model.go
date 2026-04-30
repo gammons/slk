@@ -92,6 +92,16 @@ func New(channelName string) Model {
 	ta.Placeholder = "Message #" + channelName + "... (i to insert)"
 	ta.CharLimit = 40000
 	ta.MaxHeight = 5
+	// DynamicHeight delegates height-tracking to the textarea itself,
+	// which calls recalculateHeight() after every input mutation
+	// (insert / delete / paste / SetValue). Without it, the textarea
+	// keeps its initial height of 1 forever and a soft-wrapped long
+	// line is invisibly scrolled inside a single-row viewport. Our
+	// autoGrow() also adjusts height, but only fires from compose's
+	// Update path; SetValue (used by emoji/mention insertion) bypassed
+	// it and could leave the textarea visually stuck at 1 row.
+	ta.DynamicHeight = true
+	ta.MinHeight = 1
 	ta.SetHeight(1)
 	ta.ShowLineNumbers = false
 	ta.Prompt = ""
