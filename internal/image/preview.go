@@ -117,17 +117,32 @@ func (p *Preview) View(width, height int, proto Protocol) string {
 	return b.String()
 }
 
-// fitInto returns the largest (cols, rows) that preserve aspect ratio
-// inside (maxCols, maxRows), accounting for the typical 2:1 cell aspect
-// (cells are roughly twice as tall as wide).
+// fitInto returns the largest (cols, rows) that preserve the source
+// image's pixel aspect ratio when rendered into terminal cells.
+//
+// Terminal cells are roughly twice as tall as wide (typical font metric:
+// 8×16 px). A square pixel image therefore covers twice as many columns
+// as rows: e.g. a 100×100 image in 8×16 cells fills 12.5 cols × 6.25 rows.
+// The cell aspect ratio in cell units is thus:
+//
+//	cols/rows = (srcW/srcH) × (cellH/cellW) = (srcW/srcH) × cellAspect
+//
+// Given maxCols and maxRows we pick the larger axis-fit that respects
+// this ratio.
 func fitInto(srcW, srcH, maxCols, maxRows int) image.Point {
-	const cellAspect = 2.0
-	srcAspect := float64(srcW) / float64(srcH) / cellAspect
+	const cellAspect = 2.0 // cellH / cellW
+	cellRatio := float64(srcW) / float64(srcH) * cellAspect
+
+	// Try filling width; compute the height that preserves ratio.
 	w := maxCols
-	h := int(float64(w) / srcAspect)
+	h := int(float64(w) / cellRatio)
 	if h > maxRows {
+		// Height-bound; fill rows instead.
 		h = maxRows
-		w = int(float64(h) * srcAspect)
+		w = int(float64(h) * cellRatio)
+	}
+	if w > maxCols {
+		w = maxCols
 	}
 	if w < 1 {
 		w = 1
