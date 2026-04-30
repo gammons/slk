@@ -12,7 +12,7 @@
 - **Fast.** Cold start in milliseconds. Render-cached messages. SQLite-backed scrollback. Real-time over WebSocket.
 - **Tiny.** ~19 MB on disk. ~60 MB RSS for a live multi-workspace session vs. 500 MB–1.5 GB for the official client. No node_modules, no Chromium, no 1Gb RAM tax.
 - **Keyboard-first.** Vim-style modal editing. `j/k`, `h/l`, `i`, `Esc`
-- **Pretty.** 12 built-in themes, lipgloss-styled panels, half-block pixel-art avatars, emoji shortcodes, day separators, and pill-style reactions.
+- **Pretty.** 12 built-in themes, lipgloss-styled panels, true-pixel avatars on kitty (half-block fallback elsewhere), emoji shortcodes, day separators, and pill-style reactions.
 - **Multi-workspace.** All your workspaces stay connected in parallel. `1`–`9` to instantly jump between them, with live unread badges in the rail.
 - **Yours.** TOML config, custom themes, custom channel sections via glob, XDG-compliant paths.
 
@@ -41,6 +41,7 @@
 
 ### Images
 - Inline image attachments render automatically in the messages pane: kitty graphics protocol on capable terminals (kitty, ghostty, recent WezTerm), sixel on foot/mlterm, half-block (`▀`) fallback everywhere else
+- User avatars use the same kitty graphics path on capable terminals for sharper pixels; sixel and other terminals fall back to half-block
 - Click any inline image (or press `O` on the selected message) for a full-screen in-app preview
 - `Enter` from the preview launches the OS image viewer
 - Lazy-loaded: images download only as they scroll into view
