@@ -471,3 +471,76 @@ func TestView_KittyEmitsUploadEscape(t *testing.T) {
 		t.Errorf("expected View() output to contain a kitty graphics escape (\\x1b_G) for the visible image's upload")
 	}
 }
+
+// TestHitTest_OnImageRegion asserts that View() captures a click-
+// detection hit rect for each inline image attachment and that the
+// public HitTest method returns the correct (msgIdx, attIdx, fileID)
+// triple for coordinates inside the rect — and ok=false elsewhere.
+//
+// We pre-stage the image bytes via setupImageMessageModel so the
+// FIRST View() takes the rendered (non-placeholder) path. The
+// expected fileID is the same fixture ID setupImageMessageModel
+// hard-codes ("F0123ABCD").
+func TestHitTest_OnImageRegion(t *testing.T) {
+	m := setupImageMessageModel(t, imgpkg.ProtoHalfBlock)
+
+	// Drive a render to populate m.lastHits.
+	_ = m.View(60, 80)
+
+	if len(m.lastHits) == 0 {
+		t.Fatal("expected at least one hit rect after View() with a cached image attachment")
+	}
+
+	h := m.lastHits[0]
+
+	// Sanity: the rect must be non-empty in both dimensions.
+	if h.rowEnd <= h.rowStart || h.colEnd <= h.colStart {
+		t.Fatalf("hit rect is degenerate: rows=[%d,%d) cols=[%d,%d)", h.rowStart, h.rowEnd, h.colStart, h.colEnd)
+	}
+
+	// Hit-test the center of the image footprint. We expect the
+	// fixture's fileID and (msgIdx=0, attIdx=0) since the test
+	// model has exactly one message with exactly one attachment.
+	rowMid := (h.rowStart + h.rowEnd) / 2
+	colMid := (h.colStart + h.colEnd) / 2
+	msgIdx, attIdx, fileID, ok := m.HitTest(rowMid, colMid)
+	if !ok {
+		t.Fatalf("HitTest(%d,%d) returned ok=false for a coordinate inside the recorded hit rect", rowMid, colMid)
+	}
+	if fileID != "F0123ABCD" {
+		t.Errorf("HitTest fileID got %q want %q", fileID, "F0123ABCD")
+	}
+	if msgIdx != 0 || attIdx != 0 {
+		t.Errorf("HitTest got (msgIdx=%d, attIdx=%d), want (0, 0)", msgIdx, attIdx)
+	}
+
+	// A coordinate to the LEFT of the image (column 0 — landing on
+	// the thick left border) must not register as a hit: the border
+	// is chrome, not part of the image footprint.
+	if _, _, _, ok := m.HitTest(rowMid, 0); ok {
+		t.Error("HitTest(_, 0) should not hit (column 0 is the thick-left-border)")
+	}
+
+	// A coordinate ABOVE the image (row 0 — username/timestamp row,
+	// which precedes the image inside the message body) must not
+	// register either.
+	if _, _, _, ok := m.HitTest(0, colMid); ok {
+		t.Error("HitTest(0, _) should not hit (row 0 is above the image footprint)")
+	}
+
+	// A coordinate just past the right edge must not register.
+	if _, _, _, ok := m.HitTest(rowMid, h.colEnd); ok {
+		t.Errorf("HitTest at colEnd=%d (exclusive boundary) should not hit", h.colEnd)
+	}
+}
+
+// TestHitTest_NoHitsBeforeView guards against the trivial bug of a
+// stale hit slice surviving across a model with no rendered images.
+// A fresh Model that has never been View()'d must return ok=false
+// for any coordinate.
+func TestHitTest_NoHitsBeforeView(t *testing.T) {
+	m := New(nil, "C123")
+	if _, _, _, ok := m.HitTest(0, 0); ok {
+		t.Error("HitTest on a never-rendered Model should return ok=false")
+	}
+}

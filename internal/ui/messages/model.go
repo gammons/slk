@@ -117,6 +117,44 @@ type viewEntry struct {
 	// the entry's halfblock fallback. nil for entries with no sixel
 	// attachments.
 	sixelRows map[int]sixelEntry
+
+	// imageHits records the column extents of inline image attachments
+	// rendered in this entry, keyed by row-start within linesNormal.
+	// View() translates these to viewport-absolute coordinates and
+	// appends to Model.lastHits per frame so the app-level mouse handler
+	// can route clicks to the click-to-preview overlay (Phase 7).
+	imageHits []entryHit
+}
+
+// entryHit is one inline-image hit-rect, expressed in coordinates
+// relative to a single viewEntry's linesNormal. rowStart/rowEnd are
+// row indices into linesNormal; colStart/colEnd are display columns
+// within those lines (i.e., they ALREADY include the avatar gutter and
+// the thick-left-border column added by buildCache, so they map
+// directly to mouse columns at View() time after viewport translation).
+type entryHit struct {
+	rowStartInEntry int
+	rowEndInEntry   int // exclusive
+	colStart        int
+	colEnd          int // exclusive
+	fileID          string
+	attIdx          int // index into MessageItem.Attachments
+}
+
+// hitRect is one clickable image footprint in the messages pane,
+// expressed in viewport-absolute coordinates. rowStart/rowEnd are
+// rows within the message-content area (0 = first row below the
+// channel-header chrome). colStart/colEnd are display columns within
+// the messages pane. msgIdx and attIdx identify the message and
+// attachment so the mouse handler can construct an OpenImagePreviewMsg.
+type hitRect struct {
+	rowStart int
+	rowEnd   int // exclusive
+	colStart int
+	colEnd   int // exclusive
+	fileID   string
+	msgIdx   int
+	attIdx   int
 }
 
 // sixelEntry holds the pre-computed sixel bytes for one inline image,
@@ -246,6 +284,14 @@ type Model struct {
 	// (Model is single-threaded from bubbletea's perspective). Goroutines
 	// never write to this map directly.
 	fetchingImages map[string]struct{}
+
+	// lastHits holds the inline-image hit rects captured during the most
+	// recent View() call, in viewport-absolute coordinates relative to
+	// the message-content area (excludes the channel-header chrome).
+	// Cleared (length 0, capacity preserved) at the start of each View;
+	// consumed by the app-level mouse handler via HitTest. See Phase 7
+	// (click-to-preview) for the consumer.
+	lastHits []hitRect
 }
 
 // HandleImageReady is invoked by the host (App.Update) when an
@@ -782,7 +828,7 @@ func (m *Model) buildCache(width int) {
 		if m.avatarFn != nil {
 			avatarStr = m.avatarFn(msg.UserID)
 		}
-		rendered, attachFlushes, attachSixel := m.renderMessagePlain(msg, width, avatarStr, m.userNames, i == m.selected)
+		rendered, attachFlushes, attachSixel, attachHits := m.renderMessagePlain(msg, width, avatarStr, m.userNames, i == m.selected)
 		filled := borderFill.Width(width - 1).Render(rendered)
 		normal := borderInvis.Render(filled)
 		selected := borderSelect.Render(filled)
@@ -814,6 +860,7 @@ func (m *Model) buildCache(width int) {
 			msgIdx:           i,
 			flushes:          attachFlushes,
 			sixelRows:        attachSixel,
+			imageHits:        attachHits,
 		})
 	}
 
@@ -834,12 +881,18 @@ func (m *Model) buildCache(width int) {
 // renderMessagePlain renders a message without selection highlight.
 //
 // Returns the message content (multi-line string), per-frame flushes
-// (kitty image upload callbacks), and a row-keyed map of sixel bytes.
-// Row indices in sixelRows are relative to the returned content (after
-// avatar placement) — they remain valid through buildCache's border
-// wrap because the border adds columns, not rows.
+// (kitty image upload callbacks), a row-keyed map of sixel bytes, and
+// the per-image hit rects for the rendered attachments. Row indices in
+// sixelRows AND in the returned hits are relative to linesNormal AFTER
+// the surrounding buildCache wraps (avatar+border) are applied — the
+// avatar gutter adds columns but no rows, and the border adds 1 column
+// (col 0) but no rows, so row indices computed pre-wrap stay valid.
+// Column extents in the returned hits are absolute display columns
+// within linesNormal, including the border (col 0) and the avatar
+// gutter (5 cols when an avatar is present), so View() can translate
+// directly to pane-local mouse columns.
 func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string, userNames map[string]string, isSelected bool) (
-	content string, flushes []func(io.Writer) error, sixelRows map[int]sixelEntry,
+	content string, flushes []func(io.Writer) error, sixelRows map[int]sixelEntry, hits []entryHit,
 ) {
 	line := styles.Username.Render(msg.UserName) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.Timestamp)
 
@@ -934,17 +987,43 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 	preAttachmentRows++                       // username + ts row
 	preAttachmentRows += lipgloss.Height(text) // wrapped body text
 
+	// contentColBase is the display column at which message content
+	// begins inside the cached entry's linesNormal. buildCache wraps
+	// the rendered content with a thick-left-border (▌, 1 col) at
+	// column 0; placeAvatarBeside (when an avatar is present) prepends
+	// 4 cols of avatar + 1 col of spacing in front of every content
+	// row. So the in-content column 0 lands at:
+	//
+	//   col 1 + 5 = 6   when an avatar is present
+	//   col 1           when no avatar
+	//
+	// We compute it here (before calling renderAttachmentBlock) and
+	// pass it down so the per-image hit rects come back in absolute
+	// linesNormal columns, ready for direct viewport translation in
+	// View() without any further offset arithmetic.
+	contentColBase := 1
+	if avatarStr != "" {
+		contentColBase += 5
+	}
+
 	var attachLineSlices [][]string
 	var allFlushes []func(io.Writer) error
 	allSixel := map[int]sixelEntry{}
 	if len(msg.Attachments) > 0 {
 		rowCursor := preAttachmentRows
-		for _, att := range msg.Attachments {
-			lines, fls, sxl, h := m.renderAttachmentBlock(att, msg.TS, contentWidth, rowCursor)
+		for attIdx, att := range msg.Attachments {
+			lines, fls, sxl, h, hit := m.renderAttachmentBlock(att, msg.TS, contentWidth, rowCursor, attIdx, contentColBase)
 			attachLineSlices = append(attachLineSlices, lines)
 			allFlushes = append(allFlushes, fls...)
 			for k, v := range sxl {
 				allSixel[k] = v
+			}
+			// Only record hits for actual image-block renders (the
+			// fallback-to-link path returns a zero entryHit, which we
+			// skip — clicking a single-line "[Image] <url>" doesn't
+			// open the preview overlay; that's a hyperlink.).
+			if hit.rowEndInEntry > hit.rowStartInEntry {
+				hits = append(hits, hit)
 			}
 			rowCursor += h
 		}
@@ -969,7 +1048,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 	if len(allSixel) == 0 {
 		allSixel = nil
 	}
-	return msgContent, allFlushes, allSixel
+	return msgContent, allFlushes, allSixel, hits
 }
 
 
@@ -1010,44 +1089,70 @@ func placeAvatarBeside(avatar, content string) string {
 }
 
 // renderAttachmentBlock returns the rendered rows + per-frame flushes +
-// sixel sentinel rows for one attachment. baseRow is the absolute row
-// index where this attachment's first row will land within the
-// containing message's rendered output (used as the key for sixelRows).
+// sixel sentinel rows + the image-hit footprint (for click-to-preview)
+// for one attachment. baseRow is the absolute row index where this
+// attachment's first row will land within the containing message's
+// rendered output (used as the key for sixelRows AND as the row-base
+// for the returned hit rect). attIdx is the index of this attachment
+// within its parent MessageItem.Attachments slice; preserved on the
+// returned hit so the mouse handler can identify which attachment was
+// clicked when a message has multiple. contentColBase is the display
+// column at which the message-content area begins within the entry's
+// rendered linesNormal — i.e., the offset added by the avatar gutter
+// (when present) plus the thick-left-border (1 col, added by
+// buildCache). The returned entryHit's colStart/colEnd are absolute
+// columns within linesNormal so View() can translate them directly.
 //
 // Behavior matrix:
 //   - Non-image attachment, ProtoOff, missing fetcher, or missing thumbs:
 //     fall back to the legacy single-line "[Image|File] <url>" form.
+//     No hit rect (hit.rowEndInEntry == hit.rowStartInEntry).
 //   - Image with bytes already in the on-disk cache: render via the active
 //     protocol's renderer (kitty stable-key path, halfblock inline, or
-//     sixel sentinel + bytes).
+//     sixel sentinel + bytes). Hit rect spans the full image extent.
 //   - Image not yet cached: emit a reserved-height placeholder block of
 //     theme-surface-colored spaces with a centered loading indicator,
-//     and kick off an async prefetch via go func.
-func (m *Model) renderAttachmentBlock(att Attachment, ts string, availWidth, baseRow int) (
-	lines []string, flushes []func(io.Writer) error, sixelRows map[int]sixelEntry, height int,
+//     and kick off an async prefetch via go func. The placeholder is
+//     ALSO clickable — clicking it before the bytes arrive is a no-op
+//     for the preview overlay (Phase 7's open handler guards), but it
+//     gives the user immediate feedback that the row is interactive.
+func (m *Model) renderAttachmentBlock(att Attachment, ts string, availWidth, baseRow, attIdx, contentColBase int) (
+	lines []string, flushes []func(io.Writer) error, sixelRows map[int]sixelEntry, height int, hit entryHit,
 ) {
 	ctx := m.imgCtx
 	if att.Kind != "image" || ctx.Protocol == imgpkg.ProtoOff || ctx.Fetcher == nil {
-		return []string{renderSingleAttachment(att)}, nil, nil, 1
+		return []string{renderSingleAttachment(att)}, nil, nil, 1, entryHit{}
 	}
 	// Defensive: an image attachment without a FileID can't form a
 	// stable cache key, so there's nothing the inline pipeline can do
 	// with it. Fall back to the single-line link form.
 	if att.FileID == "" {
-		return []string{renderSingleAttachment(att)}, nil, nil, 1
+		return []string{renderSingleAttachment(att)}, nil, nil, 1, entryHit{}
 	}
 
 	target := computeImageTarget(att, ctx, availWidth)
 	if target.X <= 0 || target.Y <= 0 {
-		return []string{renderSingleAttachment(att)}, nil, nil, 1
+		return []string{renderSingleAttachment(att)}, nil, nil, 1, entryHit{}
 	}
 
 	pixelTarget := image.Pt(target.X*ctx.CellPixels.X, target.Y*ctx.CellPixels.Y)
 	url, suffix := imgpkg.PickThumb(toImgThumbs(att.Thumbs), pixelTarget)
 	if url == "" {
-		return []string{renderSingleAttachment(att)}, nil, nil, 1
+		return []string{renderSingleAttachment(att)}, nil, nil, 1, entryHit{}
 	}
 	key := att.FileID + "-" + suffix
+
+	// The hit rect spans the image's reserved cell extent (target.X cells
+	// wide × target.Y rows tall), starting at baseRow within the entry's
+	// linesNormal and at contentColBase within each of those lines.
+	hit = entryHit{
+		rowStartInEntry: baseRow,
+		rowEndInEntry:   baseRow + target.Y,
+		colStart:        contentColBase,
+		colEnd:          contentColBase + target.X,
+		fileID:          att.FileID,
+		attIdx:          attIdx,
+	}
 
 	img, cached := ctx.Fetcher.Cached(key, pixelTarget)
 	if !cached {
@@ -1062,7 +1167,7 @@ func (m *Model) renderAttachmentBlock(att Attachment, ts string, availWidth, bas
 			m.fetchingImages = make(map[string]struct{})
 		}
 		if _, inFlight := m.fetchingImages[key]; inFlight {
-			return buildPlaceholder(att.Name, target), nil, nil, target.Y
+			return buildPlaceholder(att.Name, target), nil, nil, target.Y, hit
 		}
 		m.fetchingImages[key] = struct{}{}
 		channel := m.channelName
@@ -1077,7 +1182,7 @@ func (m *Model) renderAttachmentBlock(att Attachment, ts string, availWidth, bas
 				ctx.SendMsg(ImageReadyMsg{Channel: channel, TS: ts})
 			}
 		}()
-		return buildPlaceholder(att.Name, target), nil, nil, target.Y
+		return buildPlaceholder(att.Name, target), nil, nil, target.Y, hit
 	}
 
 	// Decode is cheap once cached. Render via the active protocol.
@@ -1089,7 +1194,7 @@ func (m *Model) renderAttachmentBlock(att Attachment, ts string, availWidth, bas
 		if out.OnFlush != nil {
 			fl = []func(io.Writer) error{out.OnFlush}
 		}
-		return out.Lines, fl, nil, target.Y
+		return out.Lines, fl, nil, target.Y, hit
 	}
 
 	out := imgpkg.RenderImage(ctx.Protocol, img, target)
@@ -1110,7 +1215,7 @@ func (m *Model) renderAttachmentBlock(att Attachment, ts string, availWidth, bas
 	} else if out.OnFlush != nil {
 		fl = []func(io.Writer) error{out.OnFlush}
 	}
-	return out.Lines, fl, sxlMap, target.Y
+	return out.Lines, fl, sxlMap, target.Y, hit
 }
 
 // computeImageTarget chooses (cols, rows) for an inline image render.
@@ -1233,6 +1338,37 @@ func (m *Model) ClickAt(y int) {
 		}
 		currentLine += entry.height
 	}
+}
+
+// HitTest returns the message index, attachment index, and Slack file
+// ID of an inline image rendered at (row, col) within the messages-pane
+// content area, or ok=false when no image footprint covers that cell.
+//
+// Coordinate frame: row=0 is the FIRST row of message content (i.e.,
+// just below the channel-header chrome); col=0 is the leftmost column
+// of the messages pane. The app-level mouse handler is responsible for
+// subtracting the panel border (handled by panelAt) AND the chrome
+// height before calling HitTest, mirroring the convention used by
+// ClickAt and BeginSelectionAt. Out-of-range coordinates always return
+// ok=false; the method does no scrolling, mutation, or side effects.
+//
+// Hits are populated from the most recent View() call. Callers must
+// invoke View at least once between cache invalidations and a HitTest
+// query, which is the natural order in a tea.Program: View runs every
+// frame, then a click event arrives.
+//
+// In Phase 7 the returned (msgIdx, attIdx, fileID) tuple is wrapped in
+// an OpenImagePreviewMsg and dispatched from the app-level mouse
+// handler. Clicking a placeholder (image still loading) is a valid hit
+// — the open handler guards against "no bytes yet" and is a no-op for
+// the preview overlay in that case.
+func (m *Model) HitTest(row, col int) (msgIdx, attIdx int, fileID string, ok bool) {
+	for _, h := range m.lastHits {
+		if row >= h.rowStart && row < h.rowEnd && col >= h.colStart && col < h.colEnd {
+			return h.msgIdx, h.attIdx, h.fileID, true
+		}
+	}
+	return 0, 0, "", false
 }
 
 var thickLeftBorder = lipgloss.Border{Left: "▌"}
@@ -1646,6 +1782,11 @@ func (m *Model) View(height, width int) string {
 	//     for the visible rows so users always see something. Acknowledged
 	//     tradeoff: visible flicker as a sixel image scrolls past an edge,
 	//     in exchange for correctness under arbitrary scroll positions.
+	// Reset the per-frame hit-rect slice. Capacity is preserved so the
+	// common case (a few visible images at most) reuses the underlying
+	// array without reallocation.
+	m.lastHits = m.lastHits[:0]
+
 	visible := make([]string, 0, msgAreaHeight)
 	want := msgAreaHeight
 	var kittyFlushBuf bytes.Buffer
@@ -1696,6 +1837,40 @@ func (m *Model) View(height, width int) string {
 			if fl != nil {
 				_ = fl(&kittyFlushBuf)
 			}
+		}
+
+		// Translate this entry's per-image hit rects into viewport-
+		// absolute coordinates and record them for HitTest. Rows
+		// outside the visible window are clipped; an image that
+		// straddles the top/bottom edge yields a hit rect for only
+		// its visible rows. Coordinate frame: rowStart/rowEnd are
+		// rows within the message-content area (chrome rows are NOT
+		// included here; the app-level mouse handler subtracts
+		// chromeHeight before calling HitTest, mirroring the
+		// convention already used by ClickAt and BeginSelectionAt).
+		for _, h := range e.imageHits {
+			absStart := entryStart + h.rowStartInEntry
+			absEnd := entryStart + h.rowEndInEntry
+			if absEnd <= m.yOffset || absStart >= m.yOffset+msgAreaHeight {
+				continue
+			}
+			clipStart := absStart - m.yOffset
+			if clipStart < 0 {
+				clipStart = 0
+			}
+			clipEnd := absEnd - m.yOffset
+			if clipEnd > msgAreaHeight {
+				clipEnd = msgAreaHeight
+			}
+			m.lastHits = append(m.lastHits, hitRect{
+				rowStart: clipStart,
+				rowEnd:   clipEnd,
+				colStart: h.colStart,
+				colEnd:   h.colEnd,
+				fileID:   h.fileID,
+				msgIdx:   e.msgIdx,
+				attIdx:   h.attIdx,
+			})
 		}
 
 		// Schedule sixel emissions for any image whose start row falls
