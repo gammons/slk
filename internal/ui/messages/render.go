@@ -31,8 +31,16 @@ var (
 	linkBareRe      = regexp.MustCompile(`<(https?://[^>]+)>`)
 
 	// Slack user/channel mentions: <@U1234> <#C1234|channel-name>
-	userMentionRe    = regexp.MustCompile(`<@([A-Z0-9]+)>`)
-	channelMentionRe = regexp.MustCompile(`<#[A-Z0-9]+\|([^>]+)>`)
+	userMentionRe = regexp.MustCompile(`<@([A-Z0-9]+)>`)
+	// channelMentionRe matches both wire forms Slack accepts:
+	//   <#CHANNELID>          — bare ID (sometimes emitted by other clients,
+	//                           and what we used to emit ourselves)
+	//   <#CHANNELID|name>     — ID with embedded display name
+	// Group 1 is the ID; group 2 (optional) is the embedded name. When
+	// group 2 is empty we fall back to the channelNames map and finally
+	// to "channel" so the user sees something readable rather than the
+	// raw <#CID> token.
+	channelMentionRe = regexp.MustCompile(`<#([A-Z0-9]+)(?:\|([^>]+))?>`)
 
 	// Slack escapes &, <, > in user-typed text per
 	// https://api.slack.com/reference/surfaces/formatting#escaping.
@@ -326,8 +334,11 @@ func SidebarFgANSI() string {
 
 // RenderSlackMarkdown converts Slack-flavored markdown and emoji shortcodes
 // into lipgloss-styled terminal output. If userNames is provided, user mentions
-// like <@U1234> are resolved to display names.
-func RenderSlackMarkdown(text string, userNames map[string]string) string {
+// like <@U1234> are resolved to display names. If channelNames is provided,
+// bare <#C1234> channel mentions (without an embedded name) are resolved
+// to #channel-name; mentions that already carry the embedded |name form
+// don't need the map.
+func RenderSlackMarkdown(text string, userNames map[string]string, channelNames map[string]string) string {
 	// Handle code blocks first (before other formatting to avoid conflicts)
 	text = codeBlockRe.ReplaceAllStringFunc(text, func(match string) string {
 		inner := codeBlockRe.FindStringSubmatch(match)[1]
@@ -345,7 +356,7 @@ func RenderSlackMarkdown(text string, userNames map[string]string) string {
 			quoted = slackEntityDecoder.Replace(quoted)
 			line = blockquoteStyle().Render(quoted)
 		} else {
-			line = renderInlineFormatting(line, userNames)
+			line = renderInlineFormatting(line, userNames, channelNames)
 			// Decode Slack-escaped entities after markup regexes have
 			// consumed legitimate <...> markers, so escaped user input
 			// (e.g. literal "<@U1>") doesn't become a fake mention.
@@ -367,7 +378,7 @@ func RenderSlackMarkdown(text string, userNames map[string]string) string {
 	return output
 }
 
-func renderInlineFormatting(text string, userNames map[string]string) string {
+func renderInlineFormatting(text string, userNames map[string]string, channelNames map[string]string) string {
 	// Inline code (before bold/italic to avoid conflicts inside code)
 	text = inlineCodeRe.ReplaceAllStringFunc(text, func(match string) string {
 		inner := inlineCodeRe.FindStringSubmatch(match)[1]
@@ -408,9 +419,25 @@ func renderInlineFormatting(text string, userNames map[string]string) string {
 		return osc8Hyperlink(url, linkStyle().Render(url))
 	})
 
-	// Channel mentions: <#C1234|channel-name> -> #channel-name
+	// Channel mentions: <#C1234|channel-name> -> #channel-name, or
+	// <#C1234> -> #resolved-name (via channelNames map). When the
+	// channel can't be resolved we render "#unknown" so the user sees
+	// something readable rather than the raw <#CID> token.
 	text = channelMentionRe.ReplaceAllStringFunc(text, func(match string) string {
-		name := channelMentionRe.FindStringSubmatch(match)[1]
+		groups := channelMentionRe.FindStringSubmatch(match)
+		channelID := groups[1]
+		name := ""
+		if len(groups) > 2 {
+			name = groups[2]
+		}
+		if name == "" && channelNames != nil {
+			if resolved, ok := channelNames[channelID]; ok {
+				name = resolved
+			}
+		}
+		if name == "" {
+			name = "unknown"
+		}
 		return mentionStyle().Render("#" + name)
 	})
 

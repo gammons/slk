@@ -74,7 +74,8 @@ func borderFillStyle() lipgloss.Style {
 // Model holds the threads-list state.
 type Model struct {
 	summaries  []cache.ThreadSummary
-	userNames  map[string]string
+	userNames    map[string]string
+	channelNames map[string]string
 	selfUserID string
 
 	selected int
@@ -118,6 +119,13 @@ func (m *Model) SetUserNames(names map[string]string) {
 		names = map[string]string{}
 	}
 	m.userNames = names
+	m.dirty()
+}
+
+// SetChannelNames sets the channel ID -> name map used to resolve bare
+// <#CHANNELID> mentions in thread parent previews.
+func (m *Model) SetChannelNames(names map[string]string) {
+	m.channelNames = names
 	m.dirty()
 }
 
@@ -440,7 +448,7 @@ func (m *Model) renderCard(s cache.ThreadSummary, width int, selected bool) []st
 	if s.ParentText == "" && s.ParentUserID == "" {
 		previewBody = mutedStyle().Render("(parent not loaded)")
 	} else {
-		preview := messages.RenderSlackMarkdown(s.ParentText, m.userNames)
+		preview := messages.RenderSlackMarkdown(s.ParentText, m.userNames, m.channelNames)
 		preview = strings.ReplaceAll(preview, "\n", " ")
 		previewMax := contentWidth - 4
 		if previewMax < 0 {

@@ -13,7 +13,7 @@ import (
 // hyperlink escape so the label is clickable in modern terminals.
 func TestLabeledLinkShowsURLAndOSC8(t *testing.T) {
 	in := "see <https://example.com/doc|the document> for details"
-	out := RenderSlackMarkdown(in, nil)
+	out := RenderSlackMarkdown(in, nil, nil)
 	plain := ansi.Strip(out)
 
 	if !strings.Contains(plain, "the document") {
@@ -32,7 +32,7 @@ func TestLabeledLinkShowsURLAndOSC8(t *testing.T) {
 // hyperlink escape so it's clickable.
 func TestBareLinkOSC8(t *testing.T) {
 	in := "go to <https://example.com>"
-	out := RenderSlackMarkdown(in, nil)
+	out := RenderSlackMarkdown(in, nil, nil)
 	plain := ansi.Strip(out)
 
 	if !strings.Contains(plain, "https://example.com") {
@@ -49,7 +49,7 @@ func TestBareLinkOSC8(t *testing.T) {
 // https?:// so channel mentions fall through to channelMentionRe.
 func TestChannelMentionStillRendersWithHash(t *testing.T) {
 	in := "see <#C123|general>"
-	out := ansi.Strip(RenderSlackMarkdown(in, nil))
+	out := ansi.Strip(RenderSlackMarkdown(in, nil, nil))
 
 	if !strings.Contains(out, "#general") {
 		t.Errorf("expected '#general' in output (channel mention should keep #), got %q", out)
@@ -60,9 +60,35 @@ func TestChannelMentionStillRendersWithHash(t *testing.T) {
 // userNames map and retain their @ prefix.
 func TestUserMentionResolvesAndKeepsAt(t *testing.T) {
 	in := "hi <@U99>"
-	out := ansi.Strip(RenderSlackMarkdown(in, map[string]string{"U99": "alice"}))
+	out := ansi.Strip(RenderSlackMarkdown(in, map[string]string{"U99": "alice"}, nil))
 	if !strings.Contains(out, "@alice") {
 		t.Errorf("expected '@alice' in output, got %q", out)
+	}
+}
+
+// TestBareChannelMentionResolvesViaMap confirms the inbound rendering
+// path for the <#CHANNELID> form (no embedded |name) -- this is what
+// other Slack clients (and our own older send path) emit, and it
+// previously rendered as the raw <#CID> token.
+func TestBareChannelMentionResolvesViaMap(t *testing.T) {
+	in := "see <#C123>"
+	out := ansi.Strip(RenderSlackMarkdown(in, nil, map[string]string{"C123": "general"}))
+	if !strings.Contains(out, "#general") {
+		t.Errorf("expected '#general' in output, got %q", out)
+	}
+	if strings.Contains(out, "C123") {
+		t.Errorf("expected raw channel ID to be replaced, got %q", out)
+	}
+}
+
+// TestBareChannelMentionUnresolvedFallsBack confirms the renderer
+// emits a readable "#unknown" placeholder rather than leaking the raw
+// <#CID> token when the channel isn't in the resolution map.
+func TestBareChannelMentionUnresolvedFallsBack(t *testing.T) {
+	in := "see <#C999>"
+	out := ansi.Strip(RenderSlackMarkdown(in, nil, nil))
+	if strings.Contains(out, "<#C999>") {
+		t.Errorf("expected raw <#CID> token to be replaced, got %q", out)
 	}
 }
 
@@ -72,7 +98,7 @@ func TestUserMentionResolvesAndKeepsAt(t *testing.T) {
 func TestNonHTTPBracketedSurvives(t *testing.T) {
 	// Should not panic, should not render as a link. We only assert it doesn't
 	// crash and the output is non-empty.
-	out := RenderSlackMarkdown("ping <!subteam^S123|@team> please", nil)
+	out := RenderSlackMarkdown("ping <!subteam^S123|@team> please", nil, nil)
 	if out == "" {
 		t.Error("expected non-empty output")
 	}
@@ -153,7 +179,7 @@ func TestRenderAttachmentsWrappedFitsLimit(t *testing.T) {
 func TestWordWrapBareURLEachLineFitsLimit(t *testing.T) {
 	const limit = 50
 	in := "see <https://userevidence.slack.com/files/U05AZM7KJ1H/F0ATTEVCLUC/specright_roi_-_final_data_-_704193> please"
-	rendered := RenderSlackMarkdown(in, nil)
+	rendered := RenderSlackMarkdown(in, nil, nil)
 	got := WordWrap(rendered, limit)
 	for i, line := range strings.Split(got, "\n") {
 		if w := lipgloss.Width(line); w > limit {
@@ -210,7 +236,7 @@ func TestHTMLEntityDecoding(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			out := RenderSlackMarkdown(tc.in, nil)
+			out := RenderSlackMarkdown(tc.in, nil, nil)
 			plain := ansi.Strip(out)
 			if !strings.Contains(plain, tc.want) {
 				t.Errorf("expected %q in plain output, got %q", tc.want, plain)
@@ -223,7 +249,7 @@ func TestHTMLEntityDecoding(t *testing.T) {
 // are also decoded.
 func TestBlockquoteEntityDecoding(t *testing.T) {
 	in := "&gt; Hide &amp; Seek"
-	out := RenderSlackMarkdown(in, nil)
+	out := RenderSlackMarkdown(in, nil, nil)
 	plain := ansi.Strip(out)
 	if !strings.Contains(plain, "Hide & Seek") {
 		t.Errorf("expected %q in plain output, got %q", "Hide & Seek", plain)
@@ -295,7 +321,7 @@ func TestThreadBroadcastLabel(t *testing.T) {
 func TestEscapedAngleBracketsNotMistakenForMention(t *testing.T) {
 	// User typed literal "<@U123>" -- Slack escapes it.
 	in := "&lt;@U123&gt;"
-	out := RenderSlackMarkdown(in, map[string]string{"U123": "alice"})
+	out := RenderSlackMarkdown(in, map[string]string{"U123": "alice"}, nil)
 	plain := ansi.Strip(out)
 	if strings.Contains(plain, "@alice") {
 		t.Errorf("escaped mention should not resolve, got %q", plain)

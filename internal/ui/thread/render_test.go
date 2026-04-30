@@ -26,7 +26,7 @@ func TestRenderThreadMessageAttachmentLinesFit(t *testing.T) {
 			{Kind: "file", Name: "specright_roi_-_final_data_-_704193", URL: "https://userevidence.slack.com/files/U05AZM7KJ1H/F0ATTEVCLUC/specright_roi_-_final_data_-_704193"},
 		},
 	}
-	got := m.renderThreadMessage(msg, width, nil, false)
+	got := m.renderThreadMessage(msg, width, nil, nil, false)
 	for i, line := range strings.Split(got, "\n") {
 		if w := lipgloss.Width(line); w > width {
 			t.Errorf("line %d width=%d exceeds width=%d: %q", i, w, width, line)

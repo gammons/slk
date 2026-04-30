@@ -231,6 +231,7 @@ type Model struct {
 	loading      bool
 	avatarFn     AvatarFunc        // optional: returns half-block avatar for a userID
 	userNames    map[string]string // user ID -> display name for mention resolution
+	channelNames map[string]string // channel ID -> name for bare <#CID> resolution
 
 	// Render cache -- invalidated when messages or width change.
 	// Each entry holds pre-bordered variants so selection movement does not
@@ -919,6 +920,15 @@ func (m *Model) SetUserNames(names map[string]string) {
 	m.dirty()
 }
 
+// SetChannelNames sets the channel ID -> name map used to resolve bare
+// <#CHANNELID> mentions (Slack-side messages from clients that emit
+// channel mentions without the embedded |name).
+func (m *Model) SetChannelNames(names map[string]string) {
+	m.channelNames = names
+	m.cache = nil
+	m.dirty()
+}
+
 // SetImageContext configures the inline-image rendering pipeline. Should
 // be called once at startup, before the first View(). Subsequent calls
 // invalidate the render cache. A zero-valued ImageContext (or one with
@@ -1019,7 +1029,7 @@ func (m *Model) buildCache(width int) {
 		if m.avatarFn != nil {
 			avatarStr = m.avatarFn(msg.UserID)
 		}
-		rendered, attachFlushes, attachSixel, attachHits := m.renderMessagePlain(msg, width, avatarStr, m.userNames, i == m.selected)
+		rendered, attachFlushes, attachSixel, attachHits := m.renderMessagePlain(msg, width, avatarStr, m.userNames, m.channelNames, i == m.selected)
 		filled := borderFill.Width(width - 1).Render(rendered)
 		normal := borderInvis.Render(filled)
 		selected := borderSelect.Render(filled)
@@ -1082,7 +1092,7 @@ func (m *Model) buildCache(width int) {
 // within linesNormal, including the border (col 0) and the avatar
 // gutter (5 cols when an avatar is present), so View() can translate
 // directly to pane-local mouse columns.
-func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string, userNames map[string]string, isSelected bool) (
+func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string, userNames map[string]string, channelNames map[string]string, isSelected bool) (
 	content string, flushes []func(io.Writer) error, sixelRows map[int]sixelEntry, hits []entryHit,
 ) {
 	line := styles.Username.Render(msg.UserName) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.Timestamp)
@@ -1096,7 +1106,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		contentWidth = 20
 	}
 
-	text := styles.MessageText.Render(WordWrap(RenderSlackMarkdown(msg.Text, userNames), contentWidth))
+	text := styles.MessageText.Render(WordWrap(RenderSlackMarkdown(msg.Text, userNames, channelNames), contentWidth))
 
 	var threadLine string
 	if msg.ReplyCount > 0 {
