@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -96,6 +97,125 @@ func newCookieJar(dCookie string) http.CookieJar {
 // newCookieHTTPClient creates an http.Client with the Slack 'd' cookie set.
 func newCookieHTTPClient(dCookie string) *http.Client {
 	return &http.Client{Jar: newCookieJar(dCookie)}
+}
+
+// NewCookieHTTPClient returns an http.Client that authenticates against
+// files.slack.com (and other *.slack.com endpoints) using the given 'd'
+// cookie value. Used by the inline-image fetcher to download file thumbnails,
+// which require browser-session auth.
+//
+// The returned client has no timeout; callers that need one should wrap it.
+func NewCookieHTTPClient(dCookie string) *http.Client {
+	return newCookieHTTPClient(dCookie)
+}
+
+// fileAuthTransport is an http.RoundTripper that authenticates
+// files.slack.com requests on a per-team basis. The team ID is parsed
+// from the URL path (Slack file URLs embed it as the first segment
+// after `/files-tmb/` or `/files-pri/`, e.g.
+// `https://files.slack.com/files-tmb/T04T4TH8W-F0123ABCD-.../foo_360.png`),
+// and the matching team's xoxc token (Authorization: Bearer) and 'd'
+// cookie are attached. Both are needed: Slack's d cookie is per
+// browser session and can differ between workspaces if they were
+// added at different times.
+type fileAuthTransport struct {
+	authsByTeam map[string]teamAuth // teamID -> (xoxc, dcookie)
+	base        http.RoundTripper
+}
+
+type teamAuth struct {
+	token   string // xoxc-...
+	dCookie string
+}
+
+// RoundTrip implements http.RoundTripper.
+func (t *fileAuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Host == "files.slack.com" {
+		teamID := parseTeamIDFromFilesURL(req.URL.Path)
+		if teamID != "" {
+			if a, ok := t.authsByTeam[teamID]; ok && a.token != "" {
+				// Clone the request to avoid mutating the caller's copy.
+				clone := req.Clone(req.Context())
+				clone.Header.Set("Authorization", "Bearer "+a.token)
+				if a.dCookie != "" {
+					// Set the cookie inline rather than relying on a
+					// shared cookie jar — the jar can only hold ONE
+					// 'd' cookie at a time, but per-team values may
+					// differ across workspaces.
+					clone.Header.Set("Cookie", "d="+a.dCookie)
+				}
+				req = clone
+			} else {
+				log.Printf("file auth: no token registered for team %q (URL %s); fetch will likely fail with 403/HTML",
+					teamID, req.URL.String())
+			}
+		} else {
+			log.Printf("file auth: could not parse team ID from URL %s; passing through unauthenticated",
+				req.URL.String())
+		}
+	}
+	return t.base.RoundTrip(req)
+}
+
+// parseTeamIDFromFilesURL returns the team ID embedded in a Slack file URL
+// path, or "" if the path doesn't match a recognized pattern.
+//
+// Recognized patterns:
+//
+//	/files-tmb/<TEAM>-<FILE>-<HASH>/...
+//	/files-pri/<TEAM>-<FILE>/...
+//	/files/<TEAM>/<FILE>/...
+func parseTeamIDFromFilesURL(path string) string {
+	// Strip leading slash, split on slashes, look at the segment after the
+	// /files*/ prefix.
+	for _, prefix := range []string{"/files-tmb/", "/files-pri/", "/files/"} {
+		if !strings.HasPrefix(path, prefix) {
+			continue
+		}
+		rest := path[len(prefix):]
+		// Take the first path segment.
+		if i := strings.IndexByte(rest, '/'); i >= 0 {
+			rest = rest[:i]
+		}
+		// Within that segment, the team ID is the first dash-separated piece
+		// (for files-tmb/files-pri it's TEAM-FILE-HASH; for /files/ it IS the segment).
+		if prefix == "/files/" {
+			return rest
+		}
+		if i := strings.IndexByte(rest, '-'); i >= 0 {
+			return rest[:i]
+		}
+		return rest
+	}
+	return ""
+}
+
+// TeamAuth pairs a workspace's xoxc token with its 'd' cookie. Used
+// by NewFileAuthHTTPClient to authenticate per-team file fetches.
+type TeamAuth struct {
+	Token   string // xoxc-...
+	DCookie string // value of the 'd' cookie
+}
+
+// NewFileAuthHTTPClient returns an http.Client that authenticates Slack
+// file thumbnail / private-download URLs on a per-team basis. The team
+// ID is parsed from the URL path; the matching team's xoxc token is
+// attached as `Authorization: Bearer` and the 'd' cookie as a `Cookie`
+// header. Other URLs pass through unchanged.
+//
+// authsByTeam maps team ID (e.g. "T04T4TH8W") to that workspace's
+// auth pair. Both fields are required for files.slack.com to accept
+// the request.
+//
+// The returned client has no timeout; callers that need one should set
+// it on the returned client.
+func NewFileAuthHTTPClient(authsByTeam map[string]TeamAuth) *http.Client {
+	internal := make(map[string]teamAuth, len(authsByTeam))
+	for k, v := range authsByTeam {
+		internal[k] = teamAuth{token: v.Token, dCookie: v.DCookie}
+	}
+	rt := &fileAuthTransport{authsByTeam: internal, base: http.DefaultTransport}
+	return &http.Client{Transport: rt}
 }
 
 // TeamID returns the authenticated workspace's team ID.

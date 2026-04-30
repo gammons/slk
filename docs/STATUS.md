@@ -57,6 +57,7 @@ Last updated: 2026-04-28
 - [x] Live removal on `message_deleted` echoes from any client
 - [x] @mention autocomplete in compose (inline picker, translates to <@UserID> on send)
 - [x] Real-time incoming messages via WebSocket (auto-scroll, cached to SQLite)
+- [x] Inline image rendering (kitty graphics > sixel > half-block fallback; `O` / click for full-screen preview, lazy-loaded with LRU disk cache)
 - [x] Render cache for scroll performance
 - [x] ANSI-aware text wrapping (muesli/reflow/wordwrap)
 - [x] ANSI-safe string truncation (muesli/reflow/truncate)
@@ -110,7 +111,6 @@ Last updated: 2026-04-28
 - [ ] Search (`:search <query>` or `Ctrl+/`)
 - [ ] File downloads (browser-style "save attachment" command; uploads via Ctrl+V paste are implemented)
 - [x] Self presence and DND/snooze controls (Ctrl+S menu, live status bar segment, notification suppression)
-- [ ] Inline image rendering (Kitty graphics > Sixel > fallback)
 - [ ] OSC 52 clipboard integration (yank message text)
 ### Low Priority
 

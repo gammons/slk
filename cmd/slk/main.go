@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"image"
 	"io"
 	"log"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
 	emojiwidth "github.com/gammons/slk/internal/emoji"
+	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/notify"
 	"github.com/gammons/slk/internal/service"
 	slackclient "github.com/gammons/slk/internal/slack"
@@ -35,6 +37,7 @@ import (
 	emoji "github.com/kyokomi/emoji/v2"
 	"github.com/slack-go/slack"
 	"golang.design/x/clipboard"
+	"golang.org/x/term"
 )
 
 // Build-time version info, injected via -ldflags by GoReleaser.
@@ -274,9 +277,83 @@ func run() error {
 	ctx := context.Background()
 	tsFormat := cfg.Appearance.TimestampFormat
 
-	// Initialize avatar cache
-	avatarDir := filepath.Join(cacheDir, "avatars")
-	avatarCache := avatar.NewCache(avatarDir)
+	// Initialize shared image cache (used for avatars and inline images).
+	imagesDir := filepath.Join(cacheDir, "images")
+	imageCache, err := imgpkg.NewCache(imagesDir, cfg.Cache.MaxImageCacheMB)
+	if err != nil {
+		log.Fatalf("image cache: %v", err)
+	}
+	// Slack file thumbnails on files.slack.com require BOTH an
+	// `Authorization: Bearer <xoxc-token>` header and the workspace's
+	// 'd' cookie. The d cookie alone returns Slack's web login page
+	// (HTML); the Bearer token alone returns 403. Both are
+	// per-workspace: each token file carries its own xoxc + cookie.
+	// The URL embeds the team ID, so we build a team -> auth map and
+	// route via a custom RoundTripper.
+	authsByTeam := make(map[string]slackclient.TeamAuth, len(tokens))
+	for _, t := range tokens {
+		authsByTeam[t.TeamID] = slackclient.TeamAuth{Token: t.AccessToken, DCookie: t.Cookie}
+		log.Printf("image fetcher: registered team %q (%s) for file auth", t.TeamName, t.TeamID)
+	}
+	imageHTTPClient := slackclient.NewFileAuthHTTPClient(authsByTeam)
+	imageHTTPClient.Timeout = 10 * time.Second
+	imageFetcher := imgpkg.NewFetcher(imageCache, imageHTTPClient)
+
+	// Migrate old avatar cache (one-time, idempotent).
+	oldAvatarDir := filepath.Join(cacheDir, "avatars")
+	if n, err := imgpkg.MigrateAvatars(oldAvatarDir, imagesDir); err != nil {
+		log.Printf("avatar migration: %v", err)
+	} else if n > 0 {
+		log.Printf("migrated %d avatars to %s", n, imagesDir)
+	}
+
+	avatarCache := avatar.NewCache(imageFetcher)
+
+	// Detect image rendering protocol.
+	proto := imgpkg.Detect(imgpkg.CaptureEnv(), cfg.Appearance.ImageProtocol)
+
+	// Optional: run kitty version probe if detected as kitty AND stdin is a TTY.
+	// Must happen BEFORE bubbletea takes over the terminal.
+	if proto == imgpkg.ProtoKitty && term.IsTerminal(int(os.Stdin.Fd())) {
+		state, err := term.MakeRaw(int(os.Stdin.Fd()))
+		if err != nil {
+			log.Printf("kitty probe skipped: cannot enter raw mode: %v", err)
+		} else {
+			ok := imgpkg.ProbeKittyGraphics(os.Stdout, os.Stdin, 200*time.Millisecond)
+			if rerr := term.Restore(int(os.Stdin.Fd()), state); rerr != nil {
+				log.Printf("term restore after kitty probe: %v", rerr)
+			}
+			if !ok {
+				log.Println("kitty probe failed, downgrading to halfblock")
+				proto = imgpkg.ProtoHalfBlock
+			}
+		}
+	}
+	log.Printf("image protocol: %s", proto)
+
+	// Cell pixel metrics for sizing decisions.
+	pxW, pxH := imgpkg.CellPixels(int(os.Stdout.Fd()))
+	log.Printf("cell pixels: %dx%d", pxW, pxH)
+
+	// Wire the inline-image pipeline into the messages pane. SendMsg
+	// stays nil here because tea.NewProgram has not run yet; we re-call
+	// SetImageContext after `p` is constructed to populate it (see
+	// below). Both calls share buildImgCtx so the only difference is
+	// the SendMsg callback.
+	buildImgCtx := func(send func(tea.Msg)) messages.ImageContext {
+		return messages.ImageContext{
+			Protocol:    proto,
+			Fetcher:     imageFetcher,
+			KittyRender: imgpkg.KittyRendererInstance(),
+			CellPixels:  image.Pt(pxW, pxH),
+			MaxRows:     cfg.Appearance.MaxImageRows,
+			MaxCols:     cfg.Appearance.MaxImageCols,
+			SendMsg:     send,
+		}
+	}
+	app.SetImageContext(buildImgCtx(nil))
+	app.SetImageFetcher(imageFetcher)
+	app.SetImageProtocol(proto)
 
 	// Build workspace rail items for all tokens
 	var wsItems []workspace.WorkspaceItem
@@ -659,6 +736,13 @@ func run() error {
 	// Start the TUI immediately (shows loading overlay)
 	p = tea.NewProgram(app)
 
+	// Now that `p` exists, re-install the ImageContext with a real
+	// SendMsg callback so the prefetcher can dispatch ImageReadyMsg
+	// back into the program loop. This must happen before any
+	// rendering kicks off prefetches whose completions would otherwise
+	// be dropped on the floor.
+	app.SetImageContext(buildImgCtx(p.Send))
+
 	// Launch workspace connections in background goroutines
 	// Results are sent to the TUI via p.Send()
 	for _, token := range tokens {
@@ -1015,8 +1099,33 @@ func extractAttachments(files []slack.File) []messages.Attachment {
 		if name == "" {
 			name = f.Name
 		}
-		out = append(out, messages.Attachment{Kind: kind, Name: name, URL: pickAttachmentURL(f, kind)})
+		att := messages.Attachment{Kind: kind, Name: name, URL: pickAttachmentURL(f, kind)}
+		if kind == "image" {
+			att.FileID = f.ID
+			att.Mime = f.Mimetype
+			att.Thumbs = collectThumbs(f)
+		}
+		out = append(out, att)
 	}
+	return out
+}
+
+// collectThumbs builds a slice of ThumbSpec from a slack.File's thumb_*
+// fields. Tiers with an empty URL or non-positive dimensions are skipped.
+// The slice is ordered smallest-to-largest, matching the order Slack
+// returns them in the file metadata.
+func collectThumbs(f slack.File) []messages.ThumbSpec {
+	var out []messages.ThumbSpec
+	add := func(url string, w, h int) {
+		if url != "" && w > 0 && h > 0 {
+			out = append(out, messages.ThumbSpec{URL: url, W: w, H: h})
+		}
+	}
+	add(f.Thumb360, f.Thumb360W, f.Thumb360H)
+	add(f.Thumb480, f.Thumb480W, f.Thumb480H)
+	add(f.Thumb720, f.Thumb720W, f.Thumb720H)
+	add(f.Thumb960, f.Thumb960W, f.Thumb960H)
+	add(f.Thumb1024, f.Thumb1024W, f.Thumb1024H)
 	return out
 }
 

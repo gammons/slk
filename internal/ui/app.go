@@ -4,11 +4,14 @@ package ui
 import (
 	"context"
 	"fmt"
+	"image"
 	"image/color"
 	"log"
 	"mime"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +23,7 @@ import (
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/emoji"
+	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/confirmprompt"
@@ -596,6 +600,37 @@ type App struct {
 	// Mouse drag selection FSM (set by MouseClickMsg, advanced by
 	// MouseMotionMsg, drained by MouseReleaseMsg).
 	drag dragState
+
+	// imageFetcher is the inline-image fetcher shared with the messages
+	// pane; the App uses it to load the larger thumb when the user
+	// opens the full-screen preview overlay. Wired via SetImageFetcher
+	// from main.go, after Detect / cache construction.
+	imageFetcher *imgpkg.Fetcher
+
+	// imgProtocol is the active terminal image protocol detected at
+	// startup. Used to render the full-screen preview overlay.
+	imgProtocol imgpkg.Protocol
+
+	// previewOverlay holds the full-screen image preview state. nil when
+	// no preview is open. View() composes its output over the
+	// messages+thread region; key handling routes through it while
+	// non-nil.
+	previewOverlay *imgpkg.Preview
+}
+
+// previewLoadedMsg is dispatched after a preview thumb has been fetched.
+// The receiver constructs an imgpkg.Preview and stores it on the App.
+type previewLoadedMsg struct {
+	Name   string
+	FileID string
+	Img    image.Image
+	Path   string
+}
+
+// previewErrorMsg is dispatched if the preview fetch fails. The error
+// is logged; the overlay is not opened.
+type previewErrorMsg struct {
+	Err error
 }
 
 func NewApp() *App {
@@ -649,6 +684,28 @@ func (a *App) Init() tea.Cmd {
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+
+	// While the full-screen image preview overlay is open, route close
+	// keys directly: Esc/q dismiss it; Enter dismisses and launches the
+	// OS-native image viewer. All other keys are swallowed so navigation
+	// in the messages pane doesn't leak through. Resize / mouse / async
+	// messages still flow normally so the rest of the UI keeps ticking.
+	if a.previewOverlay != nil && !a.previewOverlay.IsClosed() {
+		if km, ok := msg.(tea.KeyMsg); ok {
+			switch km.String() {
+			case "esc", "q":
+				a.previewOverlay.Close()
+				a.previewOverlay = nil
+				return a, nil
+			case "enter":
+				path := a.previewOverlay.Path()
+				a.previewOverlay.Close()
+				a.previewOverlay = nil
+				return a, openInSystemViewerCmd(path)
+			}
+			return a, nil
+		}
+	}
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -750,6 +807,31 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.focusedPanel = PanelMessages
 			panel, px, py, ok := a.panelAt(msg.X, msg.Y)
 			if ok && panel == PanelMessages && py >= 0 {
+				// Hit-test inline images first: a click that lands
+				// inside an image's footprint opens the full-screen
+				// preview instead of beginning a drag-to-copy
+				// selection. lastHits is keyed in pane-local
+				// content coordinates (chrome already stripped),
+				// so subtract chromeHeight here, mirroring the
+				// convention used by ClickAt / BeginSelectionAt.
+				contentY := py - a.messagepane.ChromeHeight()
+				if contentY >= 0 {
+					if hitMsgIdx, attIdx, fileID, hit := a.messagepane.HitTest(contentY, px); hit && fileID != "" {
+						msgs := a.messagepane.Messages()
+						if hitMsgIdx >= 0 && hitMsgIdx < len(msgs) {
+							ch := a.activeChannelID
+							messageTS := msgs[hitMsgIdx].TS
+							idx := attIdx
+							return a, func() tea.Msg {
+								return messages.OpenImagePreviewMsg{
+									Channel: ch,
+									TS:      messageTS,
+									AttIdx:  idx,
+								}
+							}
+						}
+					}
+				}
 				a.drag = dragState{panel: PanelMessages, pressX: px, pressY: py, lastX: px, lastY: py}
 				a.messagepane.BeginSelectionAt(py, px)
 				a.messagepane.ClickAt(py)
@@ -1034,6 +1116,31 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.messagepane.SetLoading(false)
 			a.messagepane.PrependMessages(msg.Messages)
 		}
+
+	case messages.ImageReadyMsg:
+		// Image attachment finished downloading; invalidate the
+		// messages pane's render cache for the affected channel so the
+		// next View() picks up the cached bytes inline. The model
+		// itself filters by active channel name (no-op when the user
+		// has switched away).
+		a.messagepane.HandleImageReady(msg.Channel, msg.TS)
+
+	case messages.OpenImagePreviewMsg:
+		if cmd := a.openImagePreviewCmd(msg.Channel, msg.TS, msg.AttIdx); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+
+	case previewLoadedMsg:
+		p := imgpkg.NewPreview(imgpkg.PreviewInput{
+			Name:   msg.Name,
+			FileID: msg.FileID,
+			Img:    msg.Img,
+			Path:   msg.Path,
+		})
+		a.previewOverlay = &p
+
+	case previewErrorMsg:
+		log.Printf("preview fetch error: %v", msg.Err)
 
 	case NewMessageMsg:
 		if msg.Message.IsEdited {
@@ -1728,6 +1835,9 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 
 	case key.Matches(msg, a.keys.Delete):
 		return a.beginDeleteOfSelected()
+
+	case key.Matches(msg, a.keys.OpenPreview):
+		return a.openImagePreviewOfSelected()
 
 	case key.Matches(msg, a.keys.QuitForce):
 		return tea.Quit
@@ -3037,6 +3147,134 @@ func (a *App) SetAvatarFunc(fn messages.AvatarFunc) {
 	a.threadPanel.SetAvatarFunc(fn)
 }
 
+// SetImageContext configures the inline-image rendering pipeline on the
+// messages pane. Should be called once at startup, before the first
+// View(). Pass a zero-valued ImageContext to disable inline rendering.
+func (a *App) SetImageContext(ctx messages.ImageContext) {
+	a.messagepane.SetImageContext(ctx)
+}
+
+// SetImageFetcher records the image fetcher so the preview overlay can
+// fetch large thumbs on demand. Called once at startup from main.go.
+func (a *App) SetImageFetcher(f *imgpkg.Fetcher) {
+	a.imageFetcher = f
+}
+
+// SetImageProtocol records the active terminal image protocol detected
+// at startup so the preview overlay can render itself with the right
+// renderer (kitty / sixel / halfblock / off).
+func (a *App) SetImageProtocol(p imgpkg.Protocol) {
+	a.imgProtocol = p
+}
+
+// openImagePreviewCmd looks up the (channel, ts, attIdx) attachment in
+// the active messages pane, picks the largest available thumb, and
+// returns a tea.Cmd that asynchronously fetches it; on completion the
+// cmd dispatches a previewLoadedMsg (or previewErrorMsg) which Update
+// turns into an open Preview overlay. Returns nil for any condition
+// that makes the open a no-op (no fetcher, attachment missing, no
+// thumbs, mismatched channel, etc.).
+func (a *App) openImagePreviewCmd(channel, ts string, attIdx int) tea.Cmd {
+	if a.imageFetcher == nil {
+		return nil
+	}
+	msgItem, ok := a.findMessageInActiveChannel(channel, ts)
+	if !ok {
+		return nil
+	}
+	if attIdx < 0 || attIdx >= len(msgItem.Attachments) {
+		return nil
+	}
+	att := msgItem.Attachments[attIdx]
+	if att.FileID == "" || len(att.Thumbs) == 0 {
+		return nil
+	}
+
+	// Pick the largest available thumb for preview quality.
+	var largest messages.ThumbSpec
+	for _, t := range att.Thumbs {
+		if max(t.W, t.H) > max(largest.W, largest.H) {
+			largest = t
+		}
+	}
+	if largest.URL == "" {
+		return nil
+	}
+
+	fetcher := a.imageFetcher
+	name := att.Name
+	fileID := att.FileID
+	url := largest.URL
+	target := image.Pt(largest.W, largest.H)
+	return func() tea.Msg {
+		res, err := fetcher.Fetch(context.Background(), imgpkg.FetchRequest{
+			Key:    fileID + "-preview",
+			URL:    url,
+			Target: target,
+		})
+		if err != nil {
+			return previewErrorMsg{Err: err}
+		}
+		return previewLoadedMsg{
+			Name:   name,
+			FileID: fileID,
+			Img:    res.Img,
+			Path:   res.Source,
+		}
+	}
+}
+
+// findMessageInActiveChannel returns the MessageItem with the matching TS
+// in the messages pane (channel) or thread panel, gated on the supplied
+// channel ID matching either pane's active channel. Returns ok=false if
+// nothing matches. Used by the preview-open path to resolve the
+// attachment metadata for a click / `O` keystroke.
+func (a *App) findMessageInActiveChannel(channel, ts string) (messages.MessageItem, bool) {
+	if channel == a.activeChannelID {
+		for _, m := range a.messagepane.Messages() {
+			if m.TS == ts {
+				return m, true
+			}
+		}
+	}
+	if a.threadVisible && channel == a.threadPanel.ChannelID() {
+		if parent := a.threadPanel.ParentMsg(); parent.TS == ts {
+			return parent, true
+		}
+		for _, r := range a.threadPanel.Replies() {
+			if r.TS == ts {
+				return r, true
+			}
+		}
+	}
+	return messages.MessageItem{}, false
+}
+
+// openInSystemViewerCmd asynchronously launches the OS-native image
+// viewer for path. Uses xdg-open on Linux, open on macOS, and
+// rundll32 on Windows. Errors are logged and otherwise silent — the
+// overlay is already closed by the time this runs.
+func openInSystemViewerCmd(path string) tea.Cmd {
+	return func() tea.Msg {
+		if path == "" {
+			return nil
+		}
+		var cmd *exec.Cmd
+		switch runtime.GOOS {
+		case "darwin":
+			cmd = exec.Command("open", path)
+		case "windows":
+			cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", path)
+		default:
+			cmd = exec.Command("xdg-open", path)
+		}
+		if err := cmd.Start(); err != nil {
+			log.Printf("system viewer launch failed: %v", err)
+		}
+		return nil
+	}
+}
+
 // SetUserNames passes the user ID -> display name map to the message pane for mention resolution.
 func (a *App) SetUserNames(names map[string]string) {
 	a.userNames = names
@@ -3445,6 +3683,14 @@ func (a *App) View() tea.View {
 		a.layoutSidebarHeight = contentHeight - 2
 	}
 
+	// If the full-screen image preview is open, render a single panel
+	// covering the combined messages + thread region instead of the
+	// usual two-pane layout. The sidebar, rail, and status bar still
+	// render normally so the user can see context. The flag below
+	// guards the messages-pane and thread-pane render blocks and is
+	// also checked to substitute a single preview panel after them.
+	previewActive := a.previewOverlay != nil && !a.previewOverlay.IsClosed()
+
 	// Render message pane with border.
 	//
 	// PERF: The naive single-cache approach (key = mix(messagepane.Version,
@@ -3470,7 +3716,10 @@ func (a *App) View() tea.View {
 		boolToInt(a.view == ViewThreads)<<2 |
 		boolToInt(msgFocused)<<1
 	a.compose.SetWidth(msgWidth - 2)
-	if a.view == ViewThreads {
+	if previewActive {
+		// Skip the messages pane render entirely; we'll emit the
+		// preview panel after the thread block.
+	} else if a.view == ViewThreads {
 		// Threads view: no compose, no typing line. The whole bordered
 		// panel is content-stable per threadsView.Version, so we keep
 		// the old single-cache path here.
@@ -3583,7 +3832,7 @@ func (a *App) View() tea.View {
 	// is cached on threadPanel.Version; bottom region (compose + sides +
 	// bottom edge) is rendered fresh each frame so threadCompose
 	// keystrokes don't invalidate the (much larger) replies render.
-	if a.threadVisible && threadWidth > 0 {
+	if a.threadVisible && threadWidth > 0 && !previewActive {
 		threadFocused := a.focusedPanel == PanelThread && a.mode != ModeInsert
 		threadComposeFocused := a.mode == ModeInsert && a.focusedPanel == PanelThread
 		threadLayoutKey := themeVer<<2 | boolToInt(threadFocused)<<1 | boolToInt(threadComposeFocused)
@@ -3640,6 +3889,20 @@ func (a *App) View() tea.View {
 		)
 
 		panels = append(panels, threadTopBordered+"\n"+threadBottomBordered)
+	}
+
+	// Substitute the preview panel for the messages+thread region.
+	// Both branches above were skipped when previewActive was true, so
+	// the panels slice currently has rail (+sidebar) and we now append
+	// a single overlay panel that spans the combined width.
+	if previewActive {
+		overlayW := msgWidth + msgBorder
+		if a.threadVisible && threadWidth > 0 {
+			overlayW += threadWidth + threadBorder
+		}
+		overlayContent := a.previewOverlay.View(overlayW, contentHeight, a.imgProtocol)
+		overlayPanel := exactSize(overlayContent, overlayW, contentHeight)
+		panels = append(panels, overlayPanel)
 	}
 
 	content := lipgloss.JoinHorizontal(lipgloss.Top, panels...)
@@ -3971,6 +4234,36 @@ func (a *App) beginDeleteOfSelected() tea.Cmd {
 		},
 	)
 	a.SetMode(ModeConfirm)
+	return nil
+}
+
+// openImagePreviewOfSelected dispatches OpenImagePreviewMsg for the
+// first image attachment on the currently-selected message in the
+// focused pane (messages or thread). Returns nil if no message is
+// selected or the selected message has no image attachment.
+func (a *App) openImagePreviewOfSelected() tea.Cmd {
+	channelID, ts, _, _, _, ok := a.selectedMessageContext()
+	if !ok {
+		return nil
+	}
+	msgItem, found := a.findMessageInActiveChannel(channelID, ts)
+	if !found {
+		return nil
+	}
+	for i, att := range msgItem.Attachments {
+		if att.Kind == "image" && att.FileID != "" {
+			channel := channelID
+			messageTS := ts
+			idx := i
+			return func() tea.Msg {
+				return messages.OpenImagePreviewMsg{
+					Channel: channel,
+					TS:      messageTS,
+					AttIdx:  idx,
+				}
+			}
+		}
+	}
 	return nil
 }
 

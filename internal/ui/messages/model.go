@@ -1,14 +1,21 @@
 package messages
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"image"
+	"io"
+	"log"
 	"strconv"
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	emojiutil "github.com/gammons/slk/internal/emoji"
+	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/scrollbar"
 	"github.com/gammons/slk/internal/ui/selection"
 	"github.com/gammons/slk/internal/ui/styles"
@@ -40,6 +47,22 @@ type Attachment struct {
 	Kind string // "image" or "file"
 	Name string // display filename / title
 	URL  string // permalink (preferred) or url_private
+
+	// Populated only for Kind == "image":
+	FileID string      // Slack file ID for cache key
+	Mime   string      // e.g. "image/png"
+	Thumbs []ThumbSpec // sorted ascending; empty for non-image
+}
+
+// ThumbSpec is one Slack thumbnail variant.
+//
+// This is intentionally distinct from image.ThumbSpec in the internal/image
+// package to avoid coupling the messages UI package to the image package's
+// internal type. A converter helper bridges the two where needed.
+type ThumbSpec struct {
+	URL string
+	W   int
+	H   int
 }
 
 // AvatarFunc returns the rendered half-block avatar for a user ID, or empty string.
@@ -81,6 +104,108 @@ type viewEntry struct {
 	contentColOffset int
 	height           int // == len(linesNormal); cached for scroll math
 	msgIdx           int // index into messages, or -1 for separator
+
+	// flushes are per-frame side effects (kitty image uploads). Phase 6
+	// invokes these from Model.View() once-per-frame, deduplicated by
+	// image ID via the package-level kitty registry. nil for entries
+	// with no inline image attachments.
+	flushes []func(io.Writer) error
+
+	// sixelRows maps absolute row index within linesNormal to the sixel
+	// byte stream for an image whose top-left cell sits on that row.
+	// Phase 6 emits the bytes via the active output writer only when the
+	// image's full vertical extent is on-screen; otherwise it substitutes
+	// the entry's halfblock fallback. nil for entries with no sixel
+	// attachments.
+	sixelRows map[int]sixelEntry
+
+	// imageHits records the column extents of inline image attachments
+	// rendered in this entry, keyed by row-start within linesNormal.
+	// View() translates these to viewport-absolute coordinates and
+	// appends to Model.lastHits per frame so the app-level mouse handler
+	// can route clicks to the click-to-preview overlay (Phase 7).
+	imageHits []entryHit
+}
+
+// entryHit is one inline-image hit-rect, expressed in coordinates
+// relative to a single viewEntry's linesNormal. rowStart/rowEnd are
+// row indices into linesNormal; colStart/colEnd are display columns
+// within those lines (i.e., they ALREADY include the avatar gutter and
+// the thick-left-border column added by buildCache, so they map
+// directly to mouse columns at View() time after viewport translation).
+type entryHit struct {
+	rowStartInEntry int
+	rowEndInEntry   int // exclusive
+	colStart        int
+	colEnd          int // exclusive
+	fileID          string
+	attIdx          int // index into MessageItem.Attachments
+}
+
+// hitRect is one clickable image footprint in the messages pane,
+// expressed in viewport-absolute coordinates. rowStart/rowEnd are
+// rows within the message-content area (0 = first row below the
+// channel-header chrome). colStart/colEnd are display columns within
+// the messages pane. msgIdx and attIdx identify the message and
+// attachment so the mouse handler can construct an OpenImagePreviewMsg.
+type hitRect struct {
+	rowStart int
+	rowEnd   int // exclusive
+	colStart int
+	colEnd   int // exclusive
+	fileID   string
+	msgIdx   int
+	attIdx   int
+}
+
+// sixelEntry holds the pre-computed sixel bytes for one inline image,
+// plus the halfblock fallback used when the image is only partially
+// visible (Phase 6 cannot emit a half-image with sixel).
+type sixelEntry struct {
+	bytes    []byte
+	fallback []string // halfblock-equivalent text for partial-visibility frames
+	height   int      // image height in rows
+}
+
+// ImageContext holds the dependencies the messages model needs for image
+// rendering. Configured at startup via Model.SetImageContext. SendMsg is
+// optional; when nil, image fetches still complete but no re-render is
+// triggered when bytes arrive (set by Task 5.6 once the tea.Program is
+// available).
+type ImageContext struct {
+	Protocol    imgpkg.Protocol
+	Fetcher     *imgpkg.Fetcher
+	KittyRender *imgpkg.KittyRenderer
+	CellPixels  image.Point
+	// MaxRows caps the height of an inline image in terminal rows.
+	MaxRows int
+	// MaxCols caps the width of an inline image in terminal columns.
+	// The image is also bounded by the available message-pane width
+	// when narrower. 0 disables the column cap (width-only bounded by
+	// the message pane).
+	MaxCols int
+	SendMsg func(tea.Msg)
+}
+
+// ImageReadyMsg is dispatched by the prefetcher when an image attachment
+// has finished downloading and decoding into the cache. The model
+// invalidates the cache for the affected message and re-renders. The
+// full Update() handler is wired in Task 5.6; this type is declared
+// here so the prefetcher can compile and dispatch.
+type ImageReadyMsg struct {
+	Channel string
+	TS      string
+}
+
+// OpenImagePreviewMsg requests opening the full-screen preview overlay
+// for a specific message attachment. Dispatched by the messages model
+// on click (Phase 7.4) or `O` keybind (Phase 7.3). The App's Update
+// handler fetches the largest available thumb and constructs an
+// image.Preview to render over the messages+thread region.
+type OpenImagePreviewMsg struct {
+	Channel string
+	TS      string
+	AttIdx  int
 }
 
 type Model struct {
@@ -161,6 +286,49 @@ type Model struct {
 	// countedReplies tracks reply TSes already counted into a parent's
 	// ReplyCount, so optimistic + WS-echo paths don't double-increment.
 	countedReplies map[string]map[string]struct{}
+
+	// imgCtx is the inline-image rendering context: protocol, fetcher,
+	// cell metrics, and tea.Program send-fn. Zero-valued ImageContext is
+	// equivalent to ProtoOff (no inline rendering, attachments fall back
+	// to the legacy single-line OSC 8 hyperlink form).
+	imgCtx ImageContext
+
+	// fetchingImages tracks the set of cache keys for which a placeholder
+	// path has already spawned a fetch goroutine. Prevents per-frame
+	// goroutine pile-up during scroll/resize when an image is in flight.
+	// Cleared when ImageReadyMsg lands (the cache will then have the bytes).
+	//
+	// Concurrency: only mutated from Update-driven render paths
+	// (Model is single-threaded from bubbletea's perspective). Goroutines
+	// never write to this map directly.
+	fetchingImages map[string]struct{}
+
+	// lastHits holds the inline-image hit rects captured during the most
+	// recent View() call, in viewport-absolute coordinates relative to
+	// the message-content area (excludes the channel-header chrome).
+	// Cleared (length 0, capacity preserved) at the start of each View;
+	// consumed by the app-level mouse handler via HitTest. See Phase 7
+	// (click-to-preview) for the consumer.
+	lastHits []hitRect
+}
+
+// HandleImageReady is invoked by the host (App.Update) when an
+// ImageReadyMsg lands. It invalidates the render cache for the affected
+// channel and drops the in-flight fetch set so the next View() picks up
+// the newly cached bytes. Messages for a non-active channel are ignored
+// (the cache is per-channel — switching channels rebuilds it).
+func (m *Model) HandleImageReady(channel, ts string) {
+	if channel != m.channelName {
+		return
+	}
+	m.cache = nil
+	// Clearing the entire map is correct: when the cache is invalidated,
+	// the next render re-checks Cached(key) for each image. Cached
+	// images take the fast path; still-uncached ones may re-spawn (but
+	// singleflight dedupes the actual HTTP work, and the in-flight set
+	// then prevents future per-frame spawns again).
+	m.fetchingImages = nil
+	m.dirty()
 }
 
 // Version returns a counter that increments every time the View() output
@@ -280,6 +448,50 @@ func (m *Model) SelectedMessage() (MessageItem, bool) {
 		return MessageItem{}, false
 	}
 	return m.messages[m.selected], true
+}
+
+// ChromeHeight returns the number of rows at the top of the messages
+// pane consumed by the channel header / separator chrome. Set during
+// View() (so callers must invoke View at least once for a meaningful
+// value). The app-level mouse handler subtracts this from a pane-local
+// y coordinate before calling HitTest, mirroring the convention used
+// internally by ClickAt and BeginSelectionAt.
+func (m *Model) ChromeHeight() int {
+	return m.chromeHeight
+}
+
+// HitRect is a public, immutable snapshot of one inline-image hit
+// rect, used exclusively by tests in other packages (the app-level
+// mouse-click integration test) that need to query the post-View()
+// hit cache without exporting the unexported hitRect type itself.
+// Coordinates use the same frame as HitTest's input: rows are within
+// the messages-pane content area (chrome already subtracted); cols
+// are display columns within the messages pane.
+type HitRect struct {
+	RowStart, RowEnd int // RowEnd exclusive
+	ColStart, ColEnd int // ColEnd exclusive
+	FileID           string
+	MsgIdx, AttIdx   int
+}
+
+// LastHitsForTest returns the inline-image hit rects captured during
+// the most recent View() call. Test-only entry point; production code
+// must use HitTest. Returns a freshly-allocated slice so callers
+// cannot mutate the internal cache.
+func (m *Model) LastHitsForTest() []HitRect {
+	out := make([]HitRect, 0, len(m.lastHits))
+	for _, h := range m.lastHits {
+		out = append(out, HitRect{
+			RowStart: h.rowStart,
+			RowEnd:   h.rowEnd,
+			ColStart: h.colStart,
+			ColEnd:   h.colEnd,
+			FileID:   h.fileID,
+			MsgIdx:   h.msgIdx,
+			AttIdx:   h.attIdx,
+		})
+	}
+	return out
 }
 
 func (m *Model) MoveUp() {
@@ -578,6 +790,17 @@ func (m *Model) SetUserNames(names map[string]string) {
 	m.dirty()
 }
 
+// SetImageContext configures the inline-image rendering pipeline. Should
+// be called once at startup, before the first View(). Subsequent calls
+// invalidate the render cache. A zero-valued ImageContext (or one with
+// Protocol == ProtoOff) disables inline rendering and falls back to the
+// legacy single-line "[Image] <url>" form.
+func (m *Model) SetImageContext(ctx ImageContext) {
+	m.imgCtx = ctx
+	m.cache = nil
+	m.dirty()
+}
+
 // SetLastReadTS sets the timestamp of the last read message.
 // Messages with TS > lastReadTS are considered unread.
 func (m *Model) SetLastReadTS(ts string) {
@@ -667,7 +890,7 @@ func (m *Model) buildCache(width int) {
 		if m.avatarFn != nil {
 			avatarStr = m.avatarFn(msg.UserID)
 		}
-		rendered := m.renderMessagePlain(msg, width, avatarStr, m.userNames, i == m.selected)
+		rendered, attachFlushes, attachSixel, attachHits := m.renderMessagePlain(msg, width, avatarStr, m.userNames, i == m.selected)
 		filled := borderFill.Width(width - 1).Render(rendered)
 		normal := borderInvis.Render(filled)
 		selected := borderSelect.Render(filled)
@@ -697,6 +920,9 @@ func (m *Model) buildCache(width int) {
 			contentColOffset: 1, // thick left border ▌ occupies column 0 of linesNormal
 			height:           len(linesN),
 			msgIdx:           i,
+			flushes:          attachFlushes,
+			sixelRows:        attachSixel,
+			imageHits:        attachHits,
 		})
 	}
 
@@ -715,7 +941,21 @@ func (m *Model) buildCache(width int) {
 }
 
 // renderMessagePlain renders a message without selection highlight.
-func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string, userNames map[string]string, isSelected bool) string {
+//
+// Returns the message content (multi-line string), per-frame flushes
+// (kitty image upload callbacks), a row-keyed map of sixel bytes, and
+// the per-image hit rects for the rendered attachments. Row indices in
+// sixelRows AND in the returned hits are relative to linesNormal AFTER
+// the surrounding buildCache wraps (avatar+border) are applied — the
+// avatar gutter adds columns but no rows, and the border adds 1 column
+// (col 0) but no rows, so row indices computed pre-wrap stay valid.
+// Column extents in the returned hits are absolute display columns
+// within linesNormal, including the border (col 0) and the avatar
+// gutter (5 cols when an avatar is present), so View() can translate
+// directly to pane-local mouse columns.
+func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string, userNames map[string]string, isSelected bool) (
+	content string, flushes []func(io.Writer) error, sixelRows map[int]sixelEntry, hits []entryHit,
+) {
 	line := styles.Username.Render(msg.UserName) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.Timestamp)
 
 	// If we have an avatar, reserve space on the left for it
@@ -792,31 +1032,88 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		editedMark = " " + styles.Timestamp.Render("(edited)")
 	}
 
-	var attachmentLines string
-	if rendered := RenderAttachments(msg.Attachments); rendered != "" {
-		attachmentLines = "\n" + WordWrap(rendered, contentWidth)
-	}
-
-	// Thread broadcast label: a thread reply that the author also
-	// posted to the main channel (Slack's "Also send to channel"
-	// option). Slack delivers these with subtype=thread_broadcast and
-	// they appear in the main channel feed alongside top-level
-	// messages. Mirror Slack desktop's small muted label above the
-	// username row.
+	// Pre-attachment row count, so attachment rows can compute their
+	// absolute row index (used as the sixelRows key).
+	//
+	//   row 0: broadcastLabel (only when subtype=thread_broadcast)
+	//   row 0|1: username line + editedMark
+	//   row N: wrapped body text (lipgloss.Height of styled `text`)
+	//
+	// Attachments begin immediately after the body text.
 	var broadcastLabel string
+	preAttachmentRows := 0
 	if msg.Subtype == "thread_broadcast" {
 		broadcastLabel = styles.Timestamp.Render("\u21b3 replied to a thread") + "\n"
+		preAttachmentRows++ // the broadcast label occupies its own row
+	}
+	preAttachmentRows++                       // username + ts row
+	preAttachmentRows += lipgloss.Height(text) // wrapped body text
+
+	// contentColBase is the display column at which message content
+	// begins inside the cached entry's linesNormal. buildCache wraps
+	// the rendered content with a thick-left-border (▌, 1 col) at
+	// column 0; placeAvatarBeside (when an avatar is present) prepends
+	// 4 cols of avatar + 1 col of spacing in front of every content
+	// row. So the in-content column 0 lands at:
+	//
+	//   col 1 + 5 = 6   when an avatar is present
+	//   col 1           when no avatar
+	//
+	// We compute it here (before calling renderAttachmentBlock) and
+	// pass it down so the per-image hit rects come back in absolute
+	// linesNormal columns, ready for direct viewport translation in
+	// View() without any further offset arithmetic.
+	contentColBase := 1
+	if avatarStr != "" {
+		contentColBase += 5
+	}
+
+	var attachLineSlices [][]string
+	var allFlushes []func(io.Writer) error
+	allSixel := map[int]sixelEntry{}
+	if len(msg.Attachments) > 0 {
+		rowCursor := preAttachmentRows
+		for attIdx, att := range msg.Attachments {
+			lines, fls, sxl, h, hit := m.renderAttachmentBlock(att, msg.TS, contentWidth, rowCursor, attIdx, contentColBase)
+			attachLineSlices = append(attachLineSlices, lines)
+			allFlushes = append(allFlushes, fls...)
+			for k, v := range sxl {
+				allSixel[k] = v
+			}
+			// Only record hits for actual image-block renders (the
+			// fallback-to-link path returns a zero entryHit, which we
+			// skip — clicking a single-line "[Image] <url>" doesn't
+			// open the preview overlay; that's a hyperlink.).
+			if hit.rowEndInEntry > hit.rowStartInEntry {
+				hits = append(hits, hit)
+			}
+			rowCursor += h
+		}
+	}
+	var attachmentLines string
+	if len(attachLineSlices) > 0 {
+		flat := make([]string, 0)
+		for _, ls := range attachLineSlices {
+			flat = append(flat, ls...)
+		}
+		attachmentLines = "\n" + strings.Join(flat, "\n")
 	}
 
 	msgContent := broadcastLabel + line + editedMark + "\n" + text + attachmentLines + threadLine + reactionLine
 
-	// Place avatar next to message content
+	// Place avatar next to message content (avatar is side-by-side, no
+	// extra rows; row indices for sixelRows remain valid).
 	if avatarStr != "" {
-		return placeAvatarBeside(avatarStr, msgContent)
+		msgContent = placeAvatarBeside(avatarStr, msgContent)
 	}
 
-	return msgContent
+	if len(allSixel) == 0 {
+		allSixel = nil
+	}
+	return msgContent, allFlushes, allSixel, hits
 }
+
+
 
 // placeAvatarBeside renders the avatar to the left of the message content.
 // The avatar is 4 cols wide, 2 rows tall. Message content flows to the right.
@@ -853,6 +1150,238 @@ func placeAvatarBeside(avatar, content string) string {
 	return strings.Join(result, "\n")
 }
 
+// renderAttachmentBlock returns the rendered rows + per-frame flushes +
+// sixel sentinel rows + the image-hit footprint (for click-to-preview)
+// for one attachment. baseRow is the absolute row index where this
+// attachment's first row will land within the containing message's
+// rendered output (used as the key for sixelRows AND as the row-base
+// for the returned hit rect). attIdx is the index of this attachment
+// within its parent MessageItem.Attachments slice; preserved on the
+// returned hit so the mouse handler can identify which attachment was
+// clicked when a message has multiple. contentColBase is the display
+// column at which the message-content area begins within the entry's
+// rendered linesNormal — i.e., the offset added by the avatar gutter
+// (when present) plus the thick-left-border (1 col, added by
+// buildCache). The returned entryHit's colStart/colEnd are absolute
+// columns within linesNormal so View() can translate them directly.
+//
+// Behavior matrix:
+//   - Non-image attachment, ProtoOff, missing fetcher, or missing thumbs:
+//     fall back to the legacy single-line "[Image|File] <url>" form.
+//     No hit rect (hit.rowEndInEntry == hit.rowStartInEntry).
+//   - Image with bytes already in the on-disk cache: render via the active
+//     protocol's renderer (kitty stable-key path, halfblock inline, or
+//     sixel sentinel + bytes). Hit rect spans the full image extent.
+//   - Image not yet cached: emit a reserved-height placeholder block of
+//     theme-surface-colored spaces with a centered loading indicator,
+//     and kick off an async prefetch via go func. The placeholder is
+//     ALSO clickable — clicking it before the bytes arrive is a no-op
+//     for the preview overlay (Phase 7's open handler guards), but it
+//     gives the user immediate feedback that the row is interactive.
+func (m *Model) renderAttachmentBlock(att Attachment, ts string, availWidth, baseRow, attIdx, contentColBase int) (
+	lines []string, flushes []func(io.Writer) error, sixelRows map[int]sixelEntry, height int, hit entryHit,
+) {
+	ctx := m.imgCtx
+	if att.Kind != "image" || ctx.Protocol == imgpkg.ProtoOff || ctx.Fetcher == nil {
+		return []string{renderSingleAttachment(att)}, nil, nil, 1, entryHit{}
+	}
+	// Defensive: an image attachment without a FileID can't form a
+	// stable cache key, so there's nothing the inline pipeline can do
+	// with it. Fall back to the single-line link form.
+	if att.FileID == "" {
+		return []string{renderSingleAttachment(att)}, nil, nil, 1, entryHit{}
+	}
+
+	target := computeImageTarget(att, ctx, availWidth)
+	if target.X <= 0 || target.Y <= 0 {
+		return []string{renderSingleAttachment(att)}, nil, nil, 1, entryHit{}
+	}
+
+	pixelTarget := image.Pt(target.X*ctx.CellPixels.X, target.Y*ctx.CellPixels.Y)
+	url, suffix := imgpkg.PickThumb(toImgThumbs(att.Thumbs), pixelTarget)
+	if url == "" {
+		return []string{renderSingleAttachment(att)}, nil, nil, 1, entryHit{}
+	}
+	key := att.FileID + "-" + suffix
+
+	// The hit rect spans the image's reserved cell extent (target.X cells
+	// wide × target.Y rows tall), starting at baseRow within the entry's
+	// linesNormal and at contentColBase within each of those lines.
+	hit = entryHit{
+		rowStartInEntry: baseRow,
+		rowEndInEntry:   baseRow + target.Y,
+		colStart:        contentColBase,
+		colEnd:          contentColBase + target.X,
+		fileID:          att.FileID,
+		attIdx:          attIdx,
+	}
+
+	img, cached := ctx.Fetcher.Cached(key, pixelTarget)
+	if !cached {
+		// Reserved-height placeholder; kick off async prefetch. The
+		// fetcher is concurrency-safe (singleflight dedupes), so it's
+		// fine for multiple visible messages to fire prefetches for
+		// the same key in parallel — but each goroutine still
+		// independently fires ImageReadyMsg, which can pile up under
+		// scroll/resize churn. Gate spawn on an in-flight set so each
+		// (key) only has one goroutine in flight at a time.
+		if m.fetchingImages == nil {
+			m.fetchingImages = make(map[string]struct{})
+		}
+		if _, inFlight := m.fetchingImages[key]; inFlight {
+			return buildPlaceholder(att.Name, target), nil, nil, target.Y, hit
+		}
+		m.fetchingImages[key] = struct{}{}
+		channel := m.channelName
+		go func() {
+			_, err := ctx.Fetcher.Fetch(context.Background(), imgpkg.FetchRequest{
+				Key: key, URL: url, Target: pixelTarget,
+			})
+			// Note: the goroutine doesn't take any lock here. The
+			// in-flight set is cleared by HandleImageReady (which
+			// also nils the cache); see the ImageReadyMsg handler.
+			if err != nil {
+				log.Printf("image fetch failed: key=%s url=%s err=%v", key, url, err)
+				return
+			}
+			if ctx.SendMsg != nil {
+				ctx.SendMsg(ImageReadyMsg{Channel: channel, TS: ts})
+			}
+		}()
+		return buildPlaceholder(att.Name, target), nil, nil, target.Y, hit
+	}
+
+	// Decode is cheap once cached. Render via the active protocol.
+	if ctx.Protocol == imgpkg.ProtoKitty && ctx.KittyRender != nil {
+		ckey := "F-" + att.FileID
+		ctx.KittyRender.SetSource(ckey, img)
+		out := ctx.KittyRender.RenderKey(ckey, target)
+		var fl []func(io.Writer) error
+		if out.OnFlush != nil {
+			fl = []func(io.Writer) error{out.OnFlush}
+		}
+		return out.Lines, fl, nil, target.Y, hit
+	}
+
+	out := imgpkg.RenderImage(ctx.Protocol, img, target)
+	var fl []func(io.Writer) error
+	var sxlMap map[int]sixelEntry
+	if ctx.Protocol == imgpkg.ProtoSixel {
+		// Sixel: capture the bytes once into sixelRows. Phase 6 will
+		// emit them inline at frame time. Don't surface OnFlush here
+		// because the bytes are already baked into the sentinel row.
+		if out.OnFlush != nil {
+			var bb bytes.Buffer
+			if err := out.OnFlush(&bb); err == nil {
+				sxlMap = map[int]sixelEntry{
+					baseRow: {bytes: bb.Bytes(), fallback: out.Fallback, height: target.Y},
+				}
+			}
+		}
+	} else if out.OnFlush != nil {
+		fl = []func(io.Writer) error{out.OnFlush}
+	}
+	return out.Lines, fl, sxlMap, target.Y, hit
+}
+
+// computeImageTarget chooses (cols, rows) for an inline image render.
+// rows is capped at ctx.MaxRows; cols is capped at min(availWidth,
+// ctx.MaxCols). Aspect ratio is always preserved. Returns image.Point{}
+// when the attachment has no usable thumbnail or the cell metrics are
+// zero.
+func computeImageTarget(att Attachment, ctx ImageContext, availWidth int) image.Point {
+	if len(att.Thumbs) == 0 || ctx.CellPixels.X <= 0 || ctx.CellPixels.Y <= 0 {
+		return image.Point{}
+	}
+	largest := att.Thumbs[len(att.Thumbs)-1]
+	if largest.W <= 0 || largest.H <= 0 {
+		return image.Point{}
+	}
+	aspect := float64(largest.W) / float64(largest.H)
+	cellRatio := float64(ctx.CellPixels.X) / float64(ctx.CellPixels.Y)
+
+	rows := ctx.MaxRows
+	if rows <= 0 {
+		rows = 20
+	}
+	// Width cap is the smaller of the user's MaxCols and the available
+	// message-pane width. MaxCols == 0 disables the user cap.
+	maxCols := availWidth
+	if ctx.MaxCols > 0 && ctx.MaxCols < maxCols {
+		maxCols = ctx.MaxCols
+	}
+	// cols = rows * aspect / cellRatio  (cells are taller than wide,
+	// so cellRatio < 1 inflates cols to compensate).
+	cols := int(float64(rows) * aspect / cellRatio)
+	if cols > maxCols {
+		cols = maxCols
+		rows = int(float64(cols) * cellRatio / aspect)
+	}
+	if rows < 1 || cols < 1 {
+		return image.Point{}
+	}
+	return image.Pt(cols, rows)
+}
+
+// toImgThumbs converts the messages-package ThumbSpec slice to the
+// image-package's. The two types are intentionally distinct (see
+// model.go ThumbSpec doc) so the messages UI doesn't depend on the
+// image package's internal type.
+func toImgThumbs(ts []ThumbSpec) []imgpkg.ThumbSpec {
+	out := make([]imgpkg.ThumbSpec, len(ts))
+	for i, t := range ts {
+		out[i] = imgpkg.ThumbSpec{URL: t.URL, W: t.W, H: t.H}
+	}
+	return out
+}
+
+// buildPlaceholder produces a target.Y-row block with theme-surface
+// background and a centered "⏳ Loading <name>..." indicator on the
+// middle row. Used while the image bytes are being fetched.
+func buildPlaceholder(name string, target image.Point) []string {
+	bg := lipgloss.NewStyle().Background(styles.SurfaceDark)
+	pad := strings.Repeat(" ", target.X)
+	emptyRow := bg.Render(pad)
+
+	lines := make([]string, target.Y)
+	for i := range lines {
+		lines[i] = emptyRow
+	}
+
+	label := "⏳ Loading " + name + "..."
+	labelW := lipgloss.Width(label)
+	if labelW > target.X {
+		// Truncate to fit. Use rune-safe slicing via a runes round-trip
+		// — image labels are user-controlled file names and can contain
+		// multi-byte UTF-8.
+		if target.X > 1 {
+			runes := []rune(label)
+			// Conservatively trim to target.X-1 runes plus an ellipsis;
+			// some runes are wide so the result may still be slightly
+			// over, in which case we re-trim.
+			for len(runes) > 0 {
+				candidate := string(runes[:len(runes)-1]) + "…"
+				if lipgloss.Width(candidate) <= target.X {
+					label = candidate
+					labelW = lipgloss.Width(label)
+					break
+				}
+				runes = runes[:len(runes)-1]
+			}
+			if labelW > target.X {
+				return lines
+			}
+		} else {
+			return lines
+		}
+	}
+	leftPad := (target.X - labelW) / 2
+	rightPad := target.X - labelW - leftPad
+	mid := target.Y / 2
+	lines[mid] = bg.Render(strings.Repeat(" ", leftPad)) + bg.Render(label) + bg.Render(strings.Repeat(" ", rightPad))
+	return lines
+}
+
 // ClickAt handles a mouse click at the given y-coordinate (the pane-local
 // y returned by App.panelAt, which is measured from the panel's top border —
 // so y=0..chromeHeight-1 is the channel header / separator chrome and
@@ -882,6 +1411,37 @@ func (m *Model) ClickAt(y int) {
 		}
 		currentLine += entry.height
 	}
+}
+
+// HitTest returns the message index, attachment index, and Slack file
+// ID of an inline image rendered at (row, col) within the messages-pane
+// content area, or ok=false when no image footprint covers that cell.
+//
+// Coordinate frame: row=0 is the FIRST row of message content (i.e.,
+// just below the channel-header chrome); col=0 is the leftmost column
+// of the messages pane. The app-level mouse handler is responsible for
+// subtracting the panel border (handled by panelAt) AND the chrome
+// height before calling HitTest, mirroring the convention used by
+// ClickAt and BeginSelectionAt. Out-of-range coordinates always return
+// ok=false; the method does no scrolling, mutation, or side effects.
+//
+// Hits are populated from the most recent View() call. Callers must
+// invoke View at least once between cache invalidations and a HitTest
+// query, which is the natural order in a tea.Program: View runs every
+// frame, then a click event arrives.
+//
+// In Phase 7 the returned (msgIdx, attIdx, fileID) tuple is wrapped in
+// an OpenImagePreviewMsg and dispatched from the app-level mouse
+// handler. Clicking a placeholder (image still loading) is a valid hit
+// — the open handler guards against "no bytes yet" and is a no-op for
+// the preview overlay in that case.
+func (m *Model) HitTest(row, col int) (msgIdx, attIdx int, fileID string, ok bool) {
+	for _, h := range m.lastHits {
+		if row >= h.rowStart && row < h.rowEnd && col >= h.colStart && col < h.colEnd {
+			return h.msgIdx, h.attIdx, h.fileID, true
+		}
+	}
+	return 0, 0, "", false
 }
 
 var thickLeftBorder = lipgloss.Border{Left: "▌"}
@@ -1278,8 +1838,53 @@ func (m *Model) View(height, width int) string {
 
 	// Build the visible window directly from per-entry pre-split line slices.
 	// No lipgloss, no uniseg, no width measurement.
+	//
+	// Per-frame image side effects:
+	//   * Kitty image uploads (entry.flushes) are collected from every
+	//     visible entry and rendered into a single byte stream that is
+	//     prepended to the first visible line. Repeat invocations of an
+	//     upload escape for the same image ID are benign (the terminal
+	//     discards them); the kitty registry inside the renderer also
+	//     dedupes at first-render-of-id, so most frames have nothing to
+	//     emit at all.
+	//   * Sixel images (entry.sixelRows) are emitted INLINE as bytes
+	//     appended to the first row of the image's sentinel placeholder
+	//     — but only when the image's full vertical extent fits in the
+	//     visible window. Under partial visibility (image clipped at the
+	//     top or bottom edge), the per-row halfblock fallback substitutes
+	//     for the visible rows so users always see something. Acknowledged
+	//     tradeoff: visible flicker as a sixel image scrolls past an edge,
+	//     in exchange for correctness under arbitrary scroll positions.
+	// Reset the per-frame hit-rect slice. Capacity is preserved so the
+	// common case (a few visible images at most) reuses the underlying
+	// array without reallocation.
+	m.lastHits = m.lastHits[:0]
+
 	visible := make([]string, 0, msgAreaHeight)
 	want := msgAreaHeight
+	// kittyFlushBuf collects the APC upload bytes for any kitty images
+	// that need uploading this frame. Per spec, the upload escape and
+	// placeholder cells must reach the terminal in the same byte stream
+	// for kitty to associate the placement with the image. We write
+	// these bytes DIRECTLY to os.Stdout rather than embedding them in
+	// the View() return string — lipgloss / bubbletea v2's renderer is
+	// known to mangle APC sequences embedded in line content. Writing
+	// to os.Stdout from this goroutine (bubbletea's Update goroutine)
+	// is race-free wrt bubbletea's own writes, and the upload bytes
+	// land in stdout BEFORE bubbletea's frame buffer is flushed for
+	// this redraw — kitty parses APC sequences out of the stream
+	// regardless of position.
+	var kittyFlushBuf bytes.Buffer
+	// sixelEmissions records, per visible-window row, the action to take
+	// for sixel images intersecting that row. Populated below as we walk
+	// entries; consumed AFTER the visible slice is fully built so partial
+	// visibility decisions know the slice's final extent.
+	type sixelAction struct {
+		appendBytes []byte // append after visible[row] (full-visibility start row)
+		fallback    string // replace visible[row] with this (partial-visibility row)
+	}
+	var sixelActions map[int]sixelAction
+
 	for i, e := range entries {
 		if want == 0 {
 			break
@@ -1307,8 +1912,105 @@ func (m *Model) View(height, width int) string {
 		if entryEnd > m.yOffset+msgAreaHeight {
 			to = len(lines) - (entryEnd - (m.yOffset + msgAreaHeight))
 		}
+		// Visible-window row index where this entry's first emitted line lands.
+		windowRowBase := len(visible)
 		visible = append(visible, lines[from:to]...)
 		want = msgAreaHeight - len(visible)
+
+		// Collect kitty per-image upload escapes for this entry.
+		for _, fl := range e.flushes {
+			if fl != nil {
+				_ = fl(&kittyFlushBuf)
+			}
+		}
+
+		// Translate this entry's per-image hit rects into viewport-
+		// absolute coordinates and record them for HitTest. Rows
+		// outside the visible window are clipped; an image that
+		// straddles the top/bottom edge yields a hit rect for only
+		// its visible rows. Coordinate frame: rowStart/rowEnd are
+		// rows within the message-content area (chrome rows are NOT
+		// included here; the app-level mouse handler subtracts
+		// chromeHeight before calling HitTest, mirroring the
+		// convention already used by ClickAt and BeginSelectionAt).
+		for _, h := range e.imageHits {
+			absStart := entryStart + h.rowStartInEntry
+			absEnd := entryStart + h.rowEndInEntry
+			if absEnd <= m.yOffset || absStart >= m.yOffset+msgAreaHeight {
+				continue
+			}
+			clipStart := absStart - m.yOffset
+			if clipStart < 0 {
+				clipStart = 0
+			}
+			clipEnd := absEnd - m.yOffset
+			if clipEnd > msgAreaHeight {
+				clipEnd = msgAreaHeight
+			}
+			m.lastHits = append(m.lastHits, hitRect{
+				rowStart: clipStart,
+				rowEnd:   clipEnd,
+				colStart: h.colStart,
+				colEnd:   h.colEnd,
+				fileID:   h.fileID,
+				msgIdx:   e.msgIdx,
+				attIdx:   h.attIdx,
+			})
+		}
+
+		// Schedule sixel emissions for any image whose start row falls
+		// inside this entry. Keys in sixelRows are the image's first row
+		// within the entry's linesNormal.
+		for startRowInEntry, sx := range e.sixelRows {
+			absStart := entryStart + startRowInEntry
+			absEnd := absStart + sx.height
+			fullyVisible := absStart >= m.yOffset && absEnd <= m.yOffset+msgAreaHeight
+			if sixelActions == nil {
+				sixelActions = make(map[int]sixelAction)
+			}
+			if fullyVisible {
+				windowRow := windowRowBase + (startRowInEntry - from)
+				if windowRow >= 0 && windowRow < len(visible) {
+					sixelActions[windowRow] = sixelAction{appendBytes: sx.bytes}
+				}
+				continue
+			}
+			// Partial visibility: walk every row of the image, emitting
+			// fallback for rows that ARE in the visible window.
+			for k := 0; k < sx.height; k++ {
+				abs := absStart + k
+				if abs < m.yOffset || abs >= m.yOffset+msgAreaHeight {
+					continue
+				}
+				windowRow := abs - m.yOffset
+				if windowRow >= 0 && windowRow < len(visible) && k < len(sx.fallback) {
+					sixelActions[windowRow] = sixelAction{fallback: sx.fallback[k]}
+				}
+			}
+		}
+	}
+
+	// Apply sixel substitutions / appends. Done after the slice is built
+	// so we know its final length and can safely mutate by index.
+	for row, act := range sixelActions {
+		if row < 0 || row >= len(visible) {
+			continue
+		}
+		if act.fallback != "" {
+			visible[row] = act.fallback
+		}
+		if len(act.appendBytes) > 0 {
+			visible[row] = visible[row] + string(act.appendBytes)
+		}
+	}
+
+	// Write kitty upload escapes DIRECTLY to the terminal output,
+	// bypassing bubbletea's frame buffer entirely. See the
+	// kittyFlushBuf declaration above for rationale. We do this
+	// before returning the View string so the upload reaches the
+	// terminal before the placeholder cells in the bubbletea frame.
+	if kittyFlushBuf.Len() > 0 {
+		_, _ = imgpkg.KittyOutput.Write(kittyFlushBuf.Bytes())
 	}
 
 	// Pad vertically with the themed spacer if content is shorter than the pane.
