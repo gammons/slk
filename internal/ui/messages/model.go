@@ -236,6 +236,35 @@ type Model struct {
 	// equivalent to ProtoOff (no inline rendering, attachments fall back
 	// to the legacy single-line OSC 8 hyperlink form).
 	imgCtx ImageContext
+
+	// fetchingImages tracks the set of cache keys for which a placeholder
+	// path has already spawned a fetch goroutine. Prevents per-frame
+	// goroutine pile-up during scroll/resize when an image is in flight.
+	// Cleared when ImageReadyMsg lands (the cache will then have the bytes).
+	//
+	// Concurrency: only mutated from Update-driven render paths
+	// (Model is single-threaded from bubbletea's perspective). Goroutines
+	// never write to this map directly.
+	fetchingImages map[string]struct{}
+}
+
+// HandleImageReady is invoked by the host (App.Update) when an
+// ImageReadyMsg lands. It invalidates the render cache for the affected
+// channel and drops the in-flight fetch set so the next View() picks up
+// the newly cached bytes. Messages for a non-active channel are ignored
+// (the cache is per-channel — switching channels rebuilds it).
+func (m *Model) HandleImageReady(channel, ts string) {
+	if channel != m.channelName {
+		return
+	}
+	m.cache = nil
+	// Clearing the entire map is correct: when the cache is invalidated,
+	// the next render re-checks Cached(key) for each image. Cached
+	// images take the fast path; still-uncached ones may re-spawn (but
+	// singleflight dedupes the actual HTTP work, and the in-flight set
+	// then prevents future per-frame spawns again).
+	m.fetchingImages = nil
+	m.dirty()
 }
 
 // Version returns a counter that increments every time the View() output
@@ -1001,6 +1030,12 @@ func (m *Model) renderAttachmentBlock(att Attachment, ts string, availWidth, bas
 	if att.Kind != "image" || ctx.Protocol == imgpkg.ProtoOff || ctx.Fetcher == nil {
 		return []string{renderSingleAttachment(att)}, nil, nil, 1
 	}
+	// Defensive: an image attachment without a FileID can't form a
+	// stable cache key, so there's nothing the inline pipeline can do
+	// with it. Fall back to the single-line link form.
+	if att.FileID == "" {
+		return []string{renderSingleAttachment(att)}, nil, nil, 1
+	}
 
 	target := computeImageTarget(att, ctx, availWidth)
 	if target.X <= 0 || target.Y <= 0 {
@@ -1019,12 +1054,25 @@ func (m *Model) renderAttachmentBlock(att Attachment, ts string, availWidth, bas
 		// Reserved-height placeholder; kick off async prefetch. The
 		// fetcher is concurrency-safe (singleflight dedupes), so it's
 		// fine for multiple visible messages to fire prefetches for
-		// the same key in parallel.
+		// the same key in parallel — but each goroutine still
+		// independently fires ImageReadyMsg, which can pile up under
+		// scroll/resize churn. Gate spawn on an in-flight set so each
+		// (key) only has one goroutine in flight at a time.
+		if m.fetchingImages == nil {
+			m.fetchingImages = make(map[string]struct{})
+		}
+		if _, inFlight := m.fetchingImages[key]; inFlight {
+			return buildPlaceholder(att.Name, target), nil, nil, target.Y
+		}
+		m.fetchingImages[key] = struct{}{}
 		channel := m.channelName
 		go func() {
 			_, err := ctx.Fetcher.Fetch(context.Background(), imgpkg.FetchRequest{
 				Key: key, URL: url, Target: pixelTarget,
 			})
+			// Note: the goroutine doesn't take any lock here. The
+			// in-flight set is cleared by HandleImageReady (which
+			// also nils the cache); see the ImageReadyMsg handler.
 			if err == nil && ctx.SendMsg != nil {
 				ctx.SendMsg(ImageReadyMsg{Channel: channel, TS: ts})
 			}

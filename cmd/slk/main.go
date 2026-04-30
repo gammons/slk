@@ -320,17 +320,21 @@ func run() error {
 	log.Printf("cell pixels: %dx%d", pxW, pxH)
 
 	// Wire the inline-image pipeline into the messages pane. SendMsg
-	// stays nil here; Task 5.6 will populate it once the tea.Program is
-	// constructed (we need `p` for p.Send, but this block runs before
-	// `tea.NewProgram(app)`).
-	app.SetImageContext(messages.ImageContext{
-		Protocol:    proto,
-		Fetcher:     imageFetcher,
-		KittyRender: imgpkg.KittyRendererInstance(),
-		CellPixels:  image.Pt(pxW, pxH),
-		MaxRows:     cfg.Appearance.MaxImageRows,
-		SendMsg:     nil, // populated in Task 5.6
-	})
+	// stays nil here because tea.NewProgram has not run yet; we re-call
+	// SetImageContext after `p` is constructed to populate it (see
+	// below). Both calls share buildImgCtx so the only difference is
+	// the SendMsg callback.
+	buildImgCtx := func(send func(tea.Msg)) messages.ImageContext {
+		return messages.ImageContext{
+			Protocol:    proto,
+			Fetcher:     imageFetcher,
+			KittyRender: imgpkg.KittyRendererInstance(),
+			CellPixels:  image.Pt(pxW, pxH),
+			MaxRows:     cfg.Appearance.MaxImageRows,
+			SendMsg:     send,
+		}
+	}
+	app.SetImageContext(buildImgCtx(nil))
 
 	// Build workspace rail items for all tokens
 	var wsItems []workspace.WorkspaceItem
@@ -675,6 +679,13 @@ func run() error {
 
 	// Start the TUI immediately (shows loading overlay)
 	p = tea.NewProgram(app)
+
+	// Now that `p` exists, re-install the ImageContext with a real
+	// SendMsg callback so the prefetcher can dispatch ImageReadyMsg
+	// back into the program loop. This must happen before any
+	// rendering kicks off prefetches whose completions would otherwise
+	// be dropped on the floor.
+	app.SetImageContext(buildImgCtx(p.Send))
 
 	// Launch workspace connections in background goroutines
 	// Results are sent to the TUI via p.Send()

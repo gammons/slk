@@ -1030,6 +1030,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.messagepane.PrependMessages(msg.Messages)
 		}
 
+	case messages.ImageReadyMsg:
+		// Image attachment finished downloading; invalidate the
+		// messages pane's render cache for the affected channel so the
+		// next View() picks up the cached bytes inline. The model
+		// itself filters by active channel name (no-op when the user
+		// has switched away).
+		a.messagepane.HandleImageReady(msg.Channel, msg.TS)
+
 	case NewMessageMsg:
 		if msg.Message.IsEdited {
 			// Edit echo: update existing message in place rather than
