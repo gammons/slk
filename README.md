@@ -37,7 +37,7 @@
 - Inline `@mention` autocomplete (resolves to `<@UserID>` on send)
 - Special mentions: `@here`, `@channel`, `@everyone`
 - Bracketed paste — paste multi-line text from the system clipboard without it being interpreted as keystrokes
-- Smart paste (`Ctrl+V`) — pastes a clipboard image as an attachment, or a copied file path as an attached file, or falls through to text. Multiple attachments + caption send together via Slack's V2 file-upload API.
+- Smart paste (`Ctrl+V`) — pastes a clipboard image as an attachment, or a copied file path as an attached file, or falls through to text. Multiple attachments + caption send together via Slack's V2 file-upload API. Note: use `Ctrl+V` (not your terminal's `Ctrl+Shift+V` paste shortcut) — terminal-initiated paste only delivers text, never image bytes.
 
 ### Images
 - Inline image attachments render automatically in the messages pane: kitty graphics protocol on capable terminals (kitty, ghostty, recent WezTerm), sixel on foot/mlterm, half-block (`▀`) fallback everywhere else
@@ -254,7 +254,7 @@ Or just run `./bin/slk`. Onboarding launches automatically when no workspaces ar
 | `Esc` | Insert / Command | Return to normal mode |
 | `Enter` | Insert | Send message |
 | `Shift+Enter` | Insert | Newline |
-| `Ctrl+V` | Insert | Smart paste — image / file path / text |
+| `Ctrl+V` | Insert | Smart paste — image / file path / text (use `Ctrl+V`, not the terminal's `Ctrl+Shift+V`) |
 | `Ctrl+U` | Insert | Clear compose (text + pending attachments) |
 | `Ctrl+U` / `Ctrl+D` | Normal | Half-page up / down |
 | `Up` | Insert | Previous line; on the first line, jump to start of message |
