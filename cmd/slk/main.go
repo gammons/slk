@@ -1594,20 +1594,33 @@ func listWorkspaces() error {
 		fmt.Println("No workspaces configured. Run 'slk --add-workspace' first.")
 		return nil
 	}
-	// Compute column widths for tidy output.
-	idW, nameW := len("TEAM ID"), len("NAME")
+	configPath := filepath.Join(xdgConfig(), "config.toml")
+	cfg, _ := config.Load(configPath) // best-effort
+
+	slugByTeamID := make(map[string]string, len(cfg.Workspaces))
+	for k, w := range cfg.Workspaces {
+		slugByTeamID[w.TeamID] = k
+	}
+
+	idW, slugW, nameW := len("TEAM ID"), len("SLUG"), len("NAME")
 	for _, t := range tokens {
 		if len(t.TeamID) > idW {
 			idW = len(t.TeamID)
+		}
+		if s := slugByTeamID[t.TeamID]; len(s) > slugW {
+			slugW = len(s)
 		}
 		if len(t.TeamName) > nameW {
 			nameW = len(t.TeamName)
 		}
 	}
-	fmt.Printf("%-*s  %s\n", idW, "TEAM ID", "NAME")
-	fmt.Printf("%s  %s\n", strings.Repeat("-", idW), strings.Repeat("-", nameW))
+	fmt.Printf("%-*s  %-*s  %s\n", idW, "TEAM ID", slugW, "SLUG", "NAME")
+	fmt.Printf("%s  %s  %s\n",
+		strings.Repeat("-", idW),
+		strings.Repeat("-", slugW),
+		strings.Repeat("-", nameW))
 	for _, t := range tokens {
-		fmt.Printf("%-*s  %s\n", idW, t.TeamID, t.TeamName)
+		fmt.Printf("%-*s  %-*s  %s\n", idW, t.TeamID, slugW, slugByTeamID[t.TeamID], t.TeamName)
 	}
 	return nil
 }
