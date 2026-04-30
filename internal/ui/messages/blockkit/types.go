@@ -218,4 +218,14 @@ type Context struct {
 	// invalidation.
 	MessageTS string
 	Channel   string
+	// RenderText converts Slack-flavored mrkdwn (with mentions/links/
+	// emoji shortcodes) to ANSI-styled text. The host wires this to
+	// internal/ui/messages.RenderSlackMarkdown. May be nil; when nil,
+	// raw text passes through unchanged.
+	RenderText func(s string, userNames map[string]string) string
+
+	// WrapText word-wraps an ANSI-styled string to the given display
+	// width. The host wires this to internal/ui/messages.WordWrap.
+	// When nil, text passes through unchanged.
+	WrapText func(s string, width int) string
 }

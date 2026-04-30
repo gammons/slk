@@ -81,3 +81,79 @@ func TestRenderMultipleBlocksConcatInOrder(t *testing.T) {
 		t.Errorf("Lines[2] = %q", ansi.Strip(r.Lines[2]))
 	}
 }
+
+func TestRenderSectionTextOnly(t *testing.T) {
+	ctx := Context{
+		RenderText: func(s string, _ map[string]string) string { return s },
+		WrapText:   func(s string, _ int) string { return s },
+	}
+	r := Render([]Block{SectionBlock{Text: "Hello world"}}, ctx, 40)
+	if r.Height < 1 {
+		t.Fatalf("Height = %d, want >= 1", r.Height)
+	}
+	if !strings.Contains(ansi.Strip(strings.Join(r.Lines, "\n")), "Hello world") {
+		t.Errorf("rendered = %q", ansi.Strip(strings.Join(r.Lines, "\n")))
+	}
+}
+
+func TestRenderSectionUsesRenderTextCallback(t *testing.T) {
+	called := false
+	ctx := Context{
+		RenderText: func(s string, _ map[string]string) string {
+			called = true
+			return "[rendered]" + s
+		},
+		WrapText: func(s string, _ int) string { return s },
+	}
+	Render([]Block{SectionBlock{Text: "x"}}, ctx, 40)
+	if !called {
+		t.Error("RenderText callback was not invoked")
+	}
+}
+
+func TestRenderSectionFieldsTwoColumnGrid(t *testing.T) {
+	ctx := Context{
+		RenderText: func(s string, _ map[string]string) string { return s },
+		WrapText:   func(s string, _ int) string { return s },
+	}
+	r := Render([]Block{SectionBlock{
+		Fields: []string{
+			"Service\nweb",
+			"Region\nus-east-1",
+			"Status\nfiring",
+		},
+	}}, ctx, 80)
+	all := ansi.Strip(strings.Join(r.Lines, "\n"))
+	for _, want := range []string{"Service", "web", "Region", "us-east-1", "Status", "firing"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("rendered missing %q: %q", want, all)
+		}
+	}
+	// 3 fields with 2-col grid → 2 rows: row 1 has Service+Region,
+	// row 2 has Status (single field on a 2-col row).
+	if r.Height < 2 {
+		t.Errorf("Height = %d, want >= 2 (two grid rows)", r.Height)
+	}
+}
+
+func TestRenderSectionFieldsCollapseAtNarrowWidth(t *testing.T) {
+	ctx := Context{
+		RenderText: func(s string, _ map[string]string) string { return s },
+		WrapText:   func(s string, _ int) string { return s },
+	}
+	r := Render([]Block{SectionBlock{
+		Fields: []string{"A\n1", "B\n2"},
+	}}, ctx, 30) // < narrowBreakpoint
+	// Expected: stacked single-column. Strong assertion: no rendered
+	// line contains BOTH "A" and "B".
+	all := ansi.Strip(strings.Join(r.Lines, "\n"))
+	if !strings.Contains(all, "A") || !strings.Contains(all, "B") {
+		t.Errorf("missing field titles: %q", all)
+	}
+	for _, line := range r.Lines {
+		plain := ansi.Strip(line)
+		if strings.Contains(plain, "A") && strings.Contains(plain, "B") {
+			t.Errorf("at narrow width, fields should be stacked but found both on one line: %q", plain)
+		}
+	}
+}
