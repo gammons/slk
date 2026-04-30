@@ -410,6 +410,12 @@ type MessageDeleteFunc func(channelID, ts string) tea.Msg
 // ThreadFetchFunc is called when the user opens a thread.
 type ThreadFetchFunc func(channelID, threadTS string) tea.Msg
 
+// ThreadMarkFunc is called to mark a thread as read on Slack's servers
+// (subscriptions.thread.mark). channelID is the parent channel, threadTS
+// is the parent message ts, and ts is the latest reply ts the user has now
+// seen. Implementations should be best-effort and non-blocking.
+type ThreadMarkFunc func(channelID, threadTS, ts string)
+
 // ThreadReplySendFunc is called when the user sends a thread reply.
 type ThreadReplySendFunc func(channelID, threadTS, text string) tea.Msg
 
@@ -526,6 +532,7 @@ type App struct {
 	clipboardRead clipboardReader
 
 	threadFetcher        ThreadFetchFunc
+	threadMarker         ThreadMarkFunc
 	threadReplySender    ThreadReplySendFunc
 	channelJoiner        JoinChannelFunc
 	threadsListFetcher   ThreadsListFetchFunc
@@ -1389,7 +1396,34 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ThreadRepliesLoadedMsg:
 		if a.threadVisible && msg.ThreadTS == a.threadPanel.ThreadTS() {
-			a.threadPanel.SetThread(a.threadPanel.ParentMsg(), msg.Replies, a.threadPanel.ChannelID(), msg.ThreadTS)
+			channelID := a.threadPanel.ChannelID()
+			a.threadPanel.SetThread(a.threadPanel.ParentMsg(), msg.Replies, channelID, msg.ThreadTS)
+
+			// Mark the thread as read now that the user has actually
+			// seen the replies. Server-side: fire-and-forget against
+			// Slack's subscriptions.thread.mark with the latest reply
+			// ts (or the parent ts when the thread has no replies).
+			// Local-side: clear the Unread flag in the threads-list view
+			// and refresh the sidebar's threads-row badge so the UI
+			// reflects the change immediately, regardless of which path
+			// (messages pane or threads view) opened the thread.
+			latestTS := msg.ThreadTS
+			if n := len(msg.Replies); n > 0 {
+				if t := msg.Replies[n-1].TS; t != "" {
+					latestTS = t
+				}
+			}
+			if a.threadMarker != nil && channelID != "" && msg.ThreadTS != "" {
+				marker := a.threadMarker
+				chID, threadTS, ts := channelID, msg.ThreadTS, latestTS
+				cmds = append(cmds, func() tea.Msg {
+					marker(chID, threadTS, ts)
+					return nil
+				})
+			}
+			if a.threadsView.MarkByThreadTSRead(channelID, msg.ThreadTS) {
+				a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
+			}
 		}
 
 	case ThreadsViewActivatedMsg:
@@ -3309,6 +3343,14 @@ func (a *App) SetClipboardReader(fn clipboardReader) {
 // SetThreadFetcher sets the callback used to load thread replies.
 func (a *App) SetThreadFetcher(fn ThreadFetchFunc) {
 	a.threadFetcher = fn
+}
+
+// SetThreadMarker wires the callback that marks a thread as read on Slack's
+// servers. Fired automatically when a thread's replies finish loading after
+// the user opens the thread (from either the messages pane or the threads
+// view). Optional — when nil, only the local UI mark runs.
+func (a *App) SetThreadMarker(fn ThreadMarkFunc) {
+	a.threadMarker = fn
 }
 
 // SetChannelLastReadFetcher wires a callback that returns the parent

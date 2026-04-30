@@ -650,6 +650,16 @@ func run() error {
 			}
 		})
 
+		app.SetThreadMarker(func(channelID, threadTS, ts string) {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				if err := client.MarkThread(ctx, channelID, threadTS, ts); err != nil {
+					log.Printf("Warning: MarkThread(%s, %s): %v", channelID, threadTS, err)
+				}
+			}()
+		})
+
 		app.SetThreadsListFetcher(func(teamID string) tea.Msg {
 			summaries, err := db.ListInvolvedThreads(teamID, client.UserID())
 			if err != nil {

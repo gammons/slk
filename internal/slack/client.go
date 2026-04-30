@@ -716,6 +716,43 @@ func (c *Client) MarkChannel(ctx context.Context, channelID, ts string) error {
 	return nil
 }
 
+// MarkThread marks a thread as read up to the given timestamp using Slack's
+// undocumented subscriptions.thread.mark endpoint (the same call the official
+// web client makes when you view a thread). channelID is the parent channel,
+// threadTS is the parent message ts, and ts is the latest reply ts the user
+// has now seen (use threadTS itself when there are no replies). Best-effort:
+// the endpoint is undocumented and may break if Slack changes its API.
+func (c *Client) MarkThread(ctx context.Context, channelID, threadTS, ts string) error {
+	if channelID == "" || threadTS == "" {
+		return nil
+	}
+	if ts == "" {
+		ts = threadTS
+	}
+	data := url.Values{
+		"channel":   {channelID},
+		"thread_ts": {threadTS},
+		"ts":        {ts},
+		"read":      {"1"},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://slack.com/api/subscriptions.thread.mark",
+		strings.NewReader(data.Encode()))
+	if err != nil {
+		return fmt.Errorf("creating thread mark request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	httpClient := newCookieHTTPClient(c.cookie)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("marking thread: %w", err)
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
 // ChannelSection represents a user's sidebar section from the undocumented Slack API.
 type ChannelSection struct {
 	ID         string   `json:"channel_section_id"`
