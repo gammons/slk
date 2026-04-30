@@ -443,6 +443,50 @@ func (m *Model) SelectedMessage() (MessageItem, bool) {
 	return m.messages[m.selected], true
 }
 
+// ChromeHeight returns the number of rows at the top of the messages
+// pane consumed by the channel header / separator chrome. Set during
+// View() (so callers must invoke View at least once for a meaningful
+// value). The app-level mouse handler subtracts this from a pane-local
+// y coordinate before calling HitTest, mirroring the convention used
+// internally by ClickAt and BeginSelectionAt.
+func (m *Model) ChromeHeight() int {
+	return m.chromeHeight
+}
+
+// HitRect is a public, immutable snapshot of one inline-image hit
+// rect, used exclusively by tests in other packages (the app-level
+// mouse-click integration test) that need to query the post-View()
+// hit cache without exporting the unexported hitRect type itself.
+// Coordinates use the same frame as HitTest's input: rows are within
+// the messages-pane content area (chrome already subtracted); cols
+// are display columns within the messages pane.
+type HitRect struct {
+	RowStart, RowEnd int // RowEnd exclusive
+	ColStart, ColEnd int // ColEnd exclusive
+	FileID           string
+	MsgIdx, AttIdx   int
+}
+
+// LastHitsForTest returns the inline-image hit rects captured during
+// the most recent View() call. Test-only entry point; production code
+// must use HitTest. Returns a freshly-allocated slice so callers
+// cannot mutate the internal cache.
+func (m *Model) LastHitsForTest() []HitRect {
+	out := make([]HitRect, 0, len(m.lastHits))
+	for _, h := range m.lastHits {
+		out = append(out, HitRect{
+			RowStart: h.rowStart,
+			RowEnd:   h.rowEnd,
+			ColStart: h.colStart,
+			ColEnd:   h.colEnd,
+			FileID:   h.fileID,
+			MsgIdx:   h.msgIdx,
+			AttIdx:   h.attIdx,
+		})
+	}
+	return out
+}
+
 func (m *Model) MoveUp() {
 	if m.reactionNavActive {
 		m.ExitReactionNav()

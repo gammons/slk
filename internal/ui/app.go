@@ -803,6 +803,31 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.focusedPanel = PanelMessages
 			panel, px, py, ok := a.panelAt(msg.X, msg.Y)
 			if ok && panel == PanelMessages && py >= 0 {
+				// Hit-test inline images first: a click that lands
+				// inside an image's footprint opens the full-screen
+				// preview instead of beginning a drag-to-copy
+				// selection. lastHits is keyed in pane-local
+				// content coordinates (chrome already stripped),
+				// so subtract chromeHeight here, mirroring the
+				// convention used by ClickAt / BeginSelectionAt.
+				contentY := py - a.messagepane.ChromeHeight()
+				if contentY >= 0 {
+					if hitMsgIdx, attIdx, fileID, hit := a.messagepane.HitTest(contentY, px); hit && fileID != "" {
+						msgs := a.messagepane.Messages()
+						if hitMsgIdx >= 0 && hitMsgIdx < len(msgs) {
+							ch := a.activeChannelID
+							messageTS := msgs[hitMsgIdx].TS
+							idx := attIdx
+							return a, func() tea.Msg {
+								return messages.OpenImagePreviewMsg{
+									Channel: ch,
+									TS:      messageTS,
+									AttIdx:  idx,
+								}
+							}
+						}
+					}
+				}
 				a.drag = dragState{panel: PanelMessages, pressX: px, pressY: py, lastX: px, lastY: py}
 				a.messagepane.BeginSelectionAt(py, px)
 				a.messagepane.ClickAt(py)
@@ -1802,6 +1827,9 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 
 	case key.Matches(msg, a.keys.Delete):
 		return a.beginDeleteOfSelected()
+
+	case key.Matches(msg, a.keys.OpenPreview):
+		return a.openImagePreviewOfSelected()
 
 	case key.Matches(msg, a.keys.QuitForce):
 		return tea.Quit
@@ -4167,6 +4195,36 @@ func (a *App) beginDeleteOfSelected() tea.Cmd {
 		},
 	)
 	a.SetMode(ModeConfirm)
+	return nil
+}
+
+// openImagePreviewOfSelected dispatches OpenImagePreviewMsg for the
+// first image attachment on the currently-selected message in the
+// focused pane (messages or thread). Returns nil if no message is
+// selected or the selected message has no image attachment.
+func (a *App) openImagePreviewOfSelected() tea.Cmd {
+	channelID, ts, _, _, _, ok := a.selectedMessageContext()
+	if !ok {
+		return nil
+	}
+	msgItem, found := a.findMessageInActiveChannel(channelID, ts)
+	if !found {
+		return nil
+	}
+	for i, att := range msgItem.Attachments {
+		if att.Kind == "image" && att.FileID != "" {
+			channel := channelID
+			messageTS := ts
+			idx := i
+			return func() tea.Msg {
+				return messages.OpenImagePreviewMsg{
+					Channel: channel,
+					TS:      messageTS,
+					AttIdx:  idx,
+				}
+			}
+		}
+	}
 	return nil
 }
 
