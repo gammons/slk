@@ -78,6 +78,13 @@ func (f *Fetcher) fetchInner(ctx context.Context, req FetchRequest) (FetchResult
 		if resp.StatusCode != 200 {
 			return FetchResult{}, fmt.Errorf("fetch %s: HTTP %d", req.URL, resp.StatusCode)
 		}
+		// Reject non-image content types up-front. Slack returns its login
+		// page (text/html) when auth fails on files.slack.com; persisting
+		// that with an image extension would poison the cache.
+		ct := strings.ToLower(resp.Header.Get("Content-Type"))
+		if !strings.HasPrefix(ct, "image/") {
+			return FetchResult{}, fmt.Errorf("fetch %s: non-image Content-Type %q (auth failure?)", req.URL, ct)
+		}
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return FetchResult{}, err
@@ -97,7 +104,13 @@ func (f *Fetcher) fetchInner(ctx context.Context, req FetchRequest) (FetchResult
 
 	img, _, err := image.Decode(file)
 	if err != nil {
-		return FetchResult{}, fmt.Errorf("decode %s: %w", path, err)
+		// Cache poisoning recovery: a previously persisted file isn't
+		// decodable as an image (e.g., an HTML auth-failure response from
+		// before this auth path was wired up). Evict so the next Fetch
+		// re-downloads with the now-correct credentials.
+		file.Close()
+		f.cache.Delete(req.Key)
+		return FetchResult{}, fmt.Errorf("decode %s: %w (cache evicted)", path, err)
 	}
 
 	if req.Target.X > 0 && req.Target.Y > 0 {
@@ -165,6 +178,11 @@ func (f *Fetcher) Bytes(key string) ([]byte, error) {
 // cache. Never starts a network download. When target is positive on both
 // axes, the returned image is downscaled to those pixel dimensions; pass
 // image.Point{} (zero) to skip downscale.
+//
+// If a file is found but fails to decode (e.g., a stale auth-failure HTML
+// response was persisted under an image extension), the entry is evicted
+// from the cache and the caller is told it's not present, so a subsequent
+// Fetch re-downloads.
 func (f *Fetcher) Cached(key string, target image.Point) (image.Image, bool) {
 	path, ok := f.cache.Get(key)
 	if !ok {
@@ -177,6 +195,8 @@ func (f *Fetcher) Cached(key string, target image.Point) (image.Image, bool) {
 	defer file.Close()
 	img, _, err := image.Decode(file)
 	if err != nil {
+		file.Close()
+		f.cache.Delete(key)
 		return nil, false
 	}
 	if target.X > 0 && target.Y > 0 {

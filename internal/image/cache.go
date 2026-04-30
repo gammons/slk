@@ -159,6 +159,27 @@ func (c *Cache) evictLocked() {
 	}
 }
 
+// Delete removes the entry for key from the cache (in-memory index, LRU
+// list, and on-disk file). Safe to call when the key is not present;
+// returns true if an entry was actually removed.
+//
+// Used by the fetcher to evict cache entries whose contents fail to decode
+// (e.g., when an auth-failure response was previously persisted as if it
+// were image bytes), so the next Fetch re-downloads.
+func (c *Cache) Delete(key string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	it, ok := c.items[key]
+	if !ok {
+		return false
+	}
+	c.lru.Remove(it.elem)
+	delete(c.items, key)
+	c.total -= it.size
+	_ = os.Remove(it.path)
+	return true
+}
+
 // Stats returns current totals (for logging).
 func (c *Cache) Stats() (entries int, totalBytes int64) {
 	c.mu.Lock()

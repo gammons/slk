@@ -281,13 +281,16 @@ func run() error {
 	if err != nil {
 		log.Fatalf("image cache: %v", err)
 	}
-	// Slack file thumbnails on files.slack.com require the 'd' cookie for
-	// auth. Avatars on slack-edge.com / gravatar are unauthenticated and
-	// don't need the cookie, but routing them through the same client is
-	// harmless. The 'd' cookie is per-browser-session and typically spans
-	// all workspaces the user is signed into in that browser, so the
-	// first token's cookie is sufficient for all teams.
-	imageHTTPClient := slackclient.NewCookieHTTPClient(tokens[0].Cookie)
+	// Slack file thumbnails on files.slack.com require an
+	// `Authorization: Bearer <xoxc-token>` header — the 'd' cookie alone
+	// returns Slack's web login page (HTML) instead of the image bytes.
+	// The xoxc token is per-workspace; the URL embeds the team ID, so we
+	// build a team-ID -> token map and route via a custom RoundTripper.
+	tokensByTeam := make(map[string]string, len(tokens))
+	for _, t := range tokens {
+		tokensByTeam[t.TeamID] = t.AccessToken
+	}
+	imageHTTPClient := slackclient.NewFileAuthHTTPClient(tokensByTeam, tokens[0].Cookie)
 	imageHTTPClient.Timeout = 10 * time.Second
 	imageFetcher := imgpkg.NewFetcher(imageCache, imageHTTPClient)
 
