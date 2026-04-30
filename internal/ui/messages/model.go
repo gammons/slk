@@ -1065,6 +1065,34 @@ func (m *Model) buildCache(width int) {
 	m.totalLines = off
 }
 
+// blockkitContext bundles the blockkit-package dependencies sourced
+// from the model's image context, theme, and per-message identity.
+// Wired here rather than in the constructor so it picks up runtime
+// changes to imgCtx (e.g., when image_protocol is reconfigured).
+func (m *Model) blockkitContext(msg MessageItem, userNames map[string]string) blockkit.Context {
+	send := m.imgCtx.SendMsg
+	return blockkit.Context{
+		Protocol:    m.imgCtx.Protocol,
+		Fetcher:     m.imgCtx.Fetcher,
+		KittyRender: m.imgCtx.KittyRender,
+		CellPixels:  m.imgCtx.CellPixels,
+		MaxRows:     m.imgCtx.MaxRows,
+		MaxCols:     m.imgCtx.MaxCols,
+		UserNames:   userNames,
+		MessageTS:   msg.TS,
+		Channel:     m.channelName,
+		RenderText:  RenderSlackMarkdown,
+		WrapText:    WordWrap,
+		SendMsg: func(v any) {
+			// tea.Msg is interface{}, so any non-nil v satisfies the inner
+			// send signature. The nil-guard is the only meaningful check.
+			if send != nil {
+				send(v)
+			}
+		},
+	}
+}
+
 // renderMessagePlain renders a message without selection highlight.
 //
 // Returns the message content (multi-line string), per-frame flushes
@@ -1200,6 +1228,55 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 	var attachLineSlices [][]string
 	var allFlushes []func(io.Writer) error
 	allSixel := map[int]sixelEntry{}
+
+	// Block Kit blocks render between the body text and file attachments.
+	bkCtx := m.blockkitContext(msg, userNames)
+	var bkLines []string
+	bkInteractive := false
+	if len(msg.Blocks) > 0 {
+		startInBk := len(bkLines)
+		res := blockkit.Render(msg.Blocks, bkCtx, contentWidth)
+		bkLines = append(bkLines, res.Lines...)
+		allFlushes = append(allFlushes, res.Flushes...)
+		rowOffset := preAttachmentRows + startInBk
+		for k, v := range res.SixelRows {
+			allSixel[rowOffset+k] = sixelEntry{bytes: v.Bytes, fallback: v.Fallback, height: v.Height}
+		}
+		// Note: res.Hits is intentionally NOT appended to `hits` in
+		// v1. App-level click routing (app.go) currently uses entryHit
+		// to look up file attachments by attIdx; routing for "BK-"
+		// (Block Kit URL-keyed) hits is deferred. Recording them here
+		// without routing would mis-route clicks to msg.Attachments[0].
+		// See Phase 7 of the plan for the future wiring.
+		_ = res.Hits
+		bkInteractive = bkInteractive || res.Interactive
+	}
+	if len(msg.LegacyAttachments) > 0 {
+		startInBk := len(bkLines)
+		res := blockkit.RenderLegacy(msg.LegacyAttachments, bkCtx, contentWidth)
+		bkLines = append(bkLines, res.Lines...)
+		allFlushes = append(allFlushes, res.Flushes...)
+		rowOffset := preAttachmentRows + startInBk
+		for k, v := range res.SixelRows {
+			allSixel[rowOffset+k] = sixelEntry{bytes: v.Bytes, fallback: v.Fallback, height: v.Height}
+		}
+		// Note: res.Hits is intentionally NOT appended to `hits` in
+		// v1. App-level click routing (app.go) currently uses entryHit
+		// to look up file attachments by attIdx; routing for "BK-"
+		// (Block Kit URL-keyed) hits is deferred. Recording them here
+		// without routing would mis-route clicks to msg.Attachments[0].
+		// See Phase 7 of the plan for the future wiring.
+		_ = res.Hits
+		bkInteractive = bkInteractive || res.Interactive
+	}
+	preAttachmentRows += len(bkLines)
+	_ = bkInteractive // consumed by Task 15
+
+	bkBlock := ""
+	if len(bkLines) > 0 {
+		bkBlock = "\n" + strings.Join(bkLines, "\n")
+	}
+
 	if len(msg.Attachments) > 0 {
 		rowCursor := preAttachmentRows
 		for attIdx, att := range msg.Attachments {
@@ -1228,7 +1305,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		attachmentLines = "\n" + strings.Join(flat, "\n")
 	}
 
-	msgContent := broadcastLabel + line + editedMark + "\n" + text + attachmentLines + threadLine + reactionLine
+	msgContent := broadcastLabel + line + editedMark + "\n" + text + bkBlock + attachmentLines + threadLine + reactionLine
 
 	// Place avatar next to message content (avatar is side-by-side, no
 	// extra rows; row indices for sixelRows remain valid).
