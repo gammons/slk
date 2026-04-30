@@ -28,6 +28,7 @@ import (
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/presencemenu"
 	"github.com/gammons/slk/internal/ui/reactionpicker"
 	"github.com/gammons/slk/internal/ui/sidebar"
@@ -1120,6 +1121,18 @@ func extractAttachments(files []slack.File) []messages.Attachment {
 	return out
 }
 
+// extractBlocks converts a slack.Blocks value to our typed block
+// slice for storage on a MessageItem. Empty input returns nil.
+func extractBlocks(b slack.Blocks) []blockkit.Block {
+	return blockkit.Parse(b)
+}
+
+// extractLegacyAttachments converts slack-go Attachment slice into
+// our LegacyAttachment type. Empty input returns nil.
+func extractLegacyAttachments(a []slack.Attachment) []blockkit.LegacyAttachment {
+	return blockkit.ParseAttachments(a)
+}
+
 // collectThumbs builds a slice of ThumbSpec from a slack.File's thumb_*
 // fields. Tiers with an empty URL or non-positive dimensions are skipped.
 // The slice is ordered smallest-to-largest, matching the order Slack
@@ -1247,16 +1260,18 @@ func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, 
 		}
 
 		msgItems = append(msgItems, messages.MessageItem{
-			TS:          m.Timestamp,
-			UserID:      m.User,
-			UserName:    userName,
-			Text:        m.Text,
-			Timestamp:   formatTimestamp(m.Timestamp, tsFormat),
-			ThreadTS:    m.ThreadTimestamp,
-			ReplyCount:  m.ReplyCount,
-			Subtype:     m.SubType,
-			Reactions:   reactions,
-			Attachments: extractAttachments(m.Files),
+			TS:                m.Timestamp,
+			UserID:            m.User,
+			UserName:          userName,
+			Text:              m.Text,
+			Timestamp:         formatTimestamp(m.Timestamp, tsFormat),
+			ThreadTS:          m.ThreadTimestamp,
+			ReplyCount:        m.ReplyCount,
+			Subtype:           m.SubType,
+			Reactions:         reactions,
+			Attachments:       extractAttachments(m.Files),
+			Blocks:            extractBlocks(m.Blocks),
+			LegacyAttachments: extractLegacyAttachments(m.Attachments),
 		})
 	}
 
@@ -1310,16 +1325,18 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 		}
 
 		msgItems = append(msgItems, messages.MessageItem{
-			TS:          m.Timestamp,
-			UserID:      m.User,
-			UserName:    userName,
-			Text:        m.Text,
-			Timestamp:   formatTimestamp(m.Timestamp, tsFormat),
-			ThreadTS:    m.ThreadTimestamp,
-			ReplyCount:  m.ReplyCount,
-			Subtype:     m.SubType,
-			Reactions:   reactions,
-			Attachments: extractAttachments(m.Files),
+			TS:                m.Timestamp,
+			UserID:            m.User,
+			UserName:          userName,
+			Text:              m.Text,
+			Timestamp:         formatTimestamp(m.Timestamp, tsFormat),
+			ThreadTS:          m.ThreadTimestamp,
+			ReplyCount:        m.ReplyCount,
+			Subtype:           m.SubType,
+			Reactions:         reactions,
+			Attachments:       extractAttachments(m.Files),
+			Blocks:            extractBlocks(m.Blocks),
+			LegacyAttachments: extractLegacyAttachments(m.Attachments),
 		})
 	}
 
@@ -1374,16 +1391,18 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 		}
 
 		msgItems = append(msgItems, messages.MessageItem{
-			TS:          m.Timestamp,
-			UserID:      m.User,
-			UserName:    userName,
-			Text:        m.Text,
-			Timestamp:   formatTimestamp(m.Timestamp, tsFormat),
-			ThreadTS:    m.ThreadTimestamp,
-			ReplyCount:  m.ReplyCount,
-			Subtype:     m.SubType,
-			Reactions:   reactions,
-			Attachments: extractAttachments(m.Files),
+			TS:                m.Timestamp,
+			UserID:            m.User,
+			UserName:          userName,
+			Text:              m.Text,
+			Timestamp:         formatTimestamp(m.Timestamp, tsFormat),
+			ThreadTS:          m.ThreadTimestamp,
+			ReplyCount:        m.ReplyCount,
+			Subtype:           m.SubType,
+			Reactions:         reactions,
+			Attachments:       extractAttachments(m.Files),
+			Blocks:            extractBlocks(m.Blocks),
+			LegacyAttachments: extractLegacyAttachments(m.Attachments),
 		})
 	}
 

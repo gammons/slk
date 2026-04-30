@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	emojiutil "github.com/gammons/slk/internal/emoji"
 	imgpkg "github.com/gammons/slk/internal/image"
+	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/scrollbar"
 	"github.com/gammons/slk/internal/ui/selection"
 	"github.com/gammons/slk/internal/ui/styles"
@@ -38,6 +39,15 @@ type MessageItem struct {
 	// Currently we only act on "thread_broadcast" (a thread reply that
 	// was also sent to the channel) so we can render a label above it.
 	Subtype string
+
+	// Blocks holds parsed Slack Block Kit blocks. Rendered between
+	// the body Text and the file Attachments by Phase 5.
+	Blocks []blockkit.Block
+
+	// LegacyAttachments holds parsed entries from the legacy
+	// `attachments` field (color stripe + title + fields style bot
+	// cards). Rendered after Blocks.
+	LegacyAttachments []blockkit.LegacyAttachment
 }
 
 // Attachment represents a file or image attached to a message.
