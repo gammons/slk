@@ -1,16 +1,14 @@
 package image
 
-import (
-	"strconv"
-
-	"golang.org/x/sys/unix"
-)
+import "strconv"
 
 // CellPixels returns the (width, height) of a terminal cell in pixels.
 // It honors $COLORTERM_CELL_WIDTH/$COLORTERM_CELL_HEIGHT, then attempts
-// TIOCGWINSZ on the given fd, then falls back to (8, 16).
+// TIOCGWINSZ on the given fd (unix only), then falls back to (8, 16).
 //
 // fd is typically int(os.Stdout.Fd()). Pass -1 to skip the ioctl path.
+// On Windows the ioctl path is unavailable; only the env override and
+// fallback apply.
 func CellPixels(fd int) (pxW, pxH int) {
 	if w, ok := atoi(getenv("COLORTERM_CELL_WIDTH")); ok {
 		if h, ok := atoi(getenv("COLORTERM_CELL_HEIGHT")); ok {
@@ -18,10 +16,8 @@ func CellPixels(fd int) (pxW, pxH int) {
 		}
 	}
 	if fd >= 0 {
-		if ws, err := unix.IoctlGetWinsize(fd, unix.TIOCGWINSZ); err == nil {
-			if ws.Xpixel > 0 && ws.Ypixel > 0 && ws.Col > 0 && ws.Row > 0 {
-				return int(ws.Xpixel) / int(ws.Col), int(ws.Ypixel) / int(ws.Row)
-			}
+		if w, h, ok := winsizePixels(fd); ok {
+			return w, h
 		}
 	}
 	return 8, 16
