@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/gammons/slk/internal/emoji"
+	"github.com/gammons/slk/internal/ui/channelpicker"
 	"github.com/gammons/slk/internal/ui/emojipicker"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
 	"github.com/gammons/slk/internal/ui/styles"
@@ -39,6 +40,18 @@ type Model struct {
 	mentionStartCol int // cursor column where @ was typed
 	users           []mentionpicker.User
 	reverseNames    map[string]string // displayName -> userID
+
+	// Channel picker state. Mirrors the mention picker exactly:
+	// channelStartCol is the byte offset of the FIRST CHARACTER AFTER
+	// the trigger '#' within input.Value() (the '#' itself sits at
+	// channelStartCol-1). channels is the available channel set;
+	// reverseChannels maps channel-name -> channel-ID for outbound
+	// translation in TranslateMentionsForSend.
+	channelPicker   channelpicker.Model
+	channelActive   bool
+	channelStartCol int
+	channels        []channelpicker.Channel
+	reverseChannels map[string]string // channel name -> channel ID
 
 	// Emoji picker state. emojiStartCol is the byte offset of the FIRST
 	// CHARACTER AFTER the trigger ':' within input.Value() (mirrors
@@ -279,6 +292,8 @@ func (m *Model) Reset() {
 	m.input.SetHeight(1)
 	m.mentionActive = false
 	m.mentionPicker.Close()
+	m.channelActive = false
+	m.channelPicker.Close()
 	m.emojiActive = false
 	m.emojiPicker.Close()
 	m.pending = nil
@@ -332,7 +347,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	// pending attachment instead of forwarding to the textarea.
 	// Skipped while uploading or while a picker is active (those
 	// have their own Backspace semantics).
-	if isKey && !m.uploading && !m.emojiActive && !m.mentionActive &&
+	if isKey && !m.uploading && !m.emojiActive && !m.mentionActive && !m.channelActive &&
 		len(m.pending) > 0 &&
 		keyMsg.Key().Code == tea.KeyBackspace &&
 		m.input.Value() == "" &&
@@ -355,6 +370,16 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m2.dirty()
 		return m2, cmd
 	}
+	// If channel picker is active, intercept keys. Mirrors the mention
+	// picker exactly, including precedence: emoji > mention > channel.
+	// In practice the three are mutually exclusive (each requires its
+	// own trigger char and word boundary) but the precedence still
+	// matters for the empty-trigger edge case.
+	if m.channelActive && isKey {
+		m2, cmd := m.handleChannelKey(keyMsg)
+		m2.dirty()
+		return m2, cmd
+	}
 
 	// Normal textarea update
 	var cmd tea.Cmd
@@ -371,6 +396,24 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				m.mentionActive = true
 				m.mentionStartCol = cursorAbsPos // cursor is after the @
 				m.mentionPicker.Open()
+			}
+		}
+	}
+
+	// Channel trigger: '#' at a word boundary, mirroring the @ logic
+	// above. Sharing identical word-boundary semantics keeps "after a
+	// space, newline, or at start-of-text" as the only place a # opens
+	// the picker -- so URLs, anchors mid-word ("issue#42"), and so on
+	// don't accidentally fire the popup.
+	if isKey && keyMsg.Key().Text == "#" {
+		val := m.input.Value()
+		cursorAbsPos := m.cursorPosition()
+		hashPos := cursorAbsPos - 1
+		if hashPos >= 0 && hashPos < len(val) && val[hashPos] == '#' {
+			if hashPos == 0 || val[hashPos-1] == ' ' || val[hashPos-1] == '\n' {
+				m.channelActive = true
+				m.channelStartCol = cursorAbsPos // cursor is after the #
+				m.channelPicker.Open()
 			}
 		}
 	}
@@ -523,6 +566,133 @@ func (m *Model) insertMention(result *mentionpicker.MentionResult) {
 	m.input.SetValue(newText)
 }
 
+// handleChannelKey processes key events when the channel picker is active.
+// Mirrors handleMentionKey one-to-one; kept as a separate method so the
+// two pickers can diverge later (e.g. a different completion glyph)
+// without entangling their state machines.
+func (m Model) handleChannelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	k := msg.Key()
+	switch {
+	case k.Code == tea.KeyUp || (k.Code == 'p' && k.Mod == tea.ModCtrl):
+		m.channelPicker.MoveUp()
+		return m, nil
+
+	case k.Code == tea.KeyDown || (k.Code == 'n' && k.Mod == tea.ModCtrl):
+		m.channelPicker.MoveDown()
+		return m, nil
+
+	case k.Code == tea.KeyEnter || k.Code == tea.KeyTab:
+		result := m.channelPicker.Select()
+		if result != nil {
+			m.insertChannel(result)
+		}
+		m.channelActive = false
+		m.channelPicker.Close()
+		return m, nil
+
+	case k.Code == tea.KeyEscape:
+		m.channelActive = false
+		m.channelPicker.Close()
+		return m, nil
+
+	case k.Code == tea.KeyBackspace:
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		pos := m.cursorPosition()
+		if pos < m.channelStartCol {
+			m.channelActive = false
+			m.channelPicker.Close()
+		} else {
+			m.updateChannelQuery()
+		}
+		m.autoGrow()
+		return m, cmd
+
+	case len(k.Text) > 0:
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		m.updateChannelQuery()
+		m.autoGrow()
+		return m, cmd
+
+	default:
+		m.channelActive = false
+		m.channelPicker.Close()
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		m.autoGrow()
+		return m, cmd
+	}
+}
+
+// updateChannelQuery extracts the text between the # trigger and the
+// cursor and updates the channel picker's filter query.
+func (m *Model) updateChannelQuery() {
+	val := m.input.Value()
+	pos := m.cursorPosition()
+	if pos > len(val) {
+		pos = len(val)
+	}
+	if m.channelStartCol > pos {
+		m.channelActive = false
+		m.channelPicker.Close()
+		return
+	}
+	query := val[m.channelStartCol:pos]
+	m.channelPicker.SetQuery(query)
+}
+
+// insertChannel replaces the #query text with the selected channel name
+// (preserving the visible "#name" form). The actual <#CHANNELID> wire
+// translation happens at send time in TranslateMentionsForSend so the
+// user sees a readable draft.
+func (m *Model) insertChannel(result *channelpicker.ChannelResult) {
+	val := m.input.Value()
+	pos := m.cursorPosition()
+	hashPos := m.channelStartCol - 1
+	if hashPos < 0 {
+		hashPos = 0
+	}
+	before := val[:hashPos]
+	after := ""
+	if pos < len(val) {
+		after = val[pos:]
+	}
+	newText := before + "#" + result.Name + " " + after
+	m.input.SetValue(newText)
+}
+
+// SetChannels provides the list of workspace channels for # autocomplete.
+// Mirrors SetUsers: stores the list, pushes it into the picker, and
+// builds the reverse map used by TranslateMentionsForSend.
+func (m *Model) SetChannels(channels []channelpicker.Channel) {
+	m.channels = channels
+	m.channelPicker.SetChannels(channels)
+	m.reverseChannels = make(map[string]string)
+	for _, c := range channels {
+		if c.Name != "" {
+			m.reverseChannels[c.Name] = c.ID
+		}
+	}
+}
+
+// IsChannelActive returns whether the channel picker is currently showing.
+func (m Model) IsChannelActive() bool { return m.channelActive }
+
+// CloseChannel dismisses the channel picker without selecting.
+func (m *Model) CloseChannel() {
+	m.channelActive = false
+	m.channelPicker.Close()
+}
+
+// ChannelPickerView returns the rendered channel picker dropdown, or "" if not active.
+func (m Model) ChannelPickerView(width int) string {
+	if !m.channelActive {
+		return ""
+	}
+	return m.channelPicker.View(width)
+}
+
 // SetUsers provides the list of workspace users for mention autocomplete.
 func (m *Model) SetUsers(users []mentionpicker.User) {
 	m.users = users
@@ -546,54 +716,76 @@ func (m *Model) CloseMention() {
 	m.mentionPicker.Close()
 }
 
-// TranslateMentionsForSend replaces @DisplayName with <@UserID> in the text.
+// TranslateMentionsForSend replaces @DisplayName with <@UserID> and
+// #channel-name with <#CHANNELID> in the text. Both kinds of mention
+// share one translation pass because they share the same word-boundary
+// and longest-first sorting concerns -- e.g., a longer channel name
+// must be tried before a shorter one with the same prefix, and a user
+// named "here" (if such a thing existed) must not match inside @heretic.
 func (m Model) TranslateMentionsForSend(text string) string {
-	// Collect all mention patterns: special mentions + user mentions
-	// Use a single pass with longest-first matching to avoid partial corruption
-	// (e.g., @here must not match inside @heretic)
-	type mentionEntry struct {
-		name        string // e.g., "here", "Alice"
-		replacement string // e.g., "<!here>", "<@U1234>"
+	// trigger is the leading character ('@' for users/specials, '#' for
+	// channels); name is what follows; replacement is the wire form.
+	type entry struct {
+		trigger     byte
+		name        string
+		replacement string
 	}
 
-	var entries []mentionEntry
+	var entries []entry
 
-	// Special mentions
+	// Special @ mentions
 	entries = append(entries,
-		mentionEntry{"here", "<!here>"},
-		mentionEntry{"channel", "<!channel>"},
-		mentionEntry{"everyone", "<!everyone>"},
+		entry{'@', "here", "<!here>"},
+		entry{'@', "channel", "<!channel>"},
+		entry{'@', "everyone", "<!everyone>"},
 	)
 
 	// User mentions
 	for name, userID := range m.reverseNames {
-		entries = append(entries, mentionEntry{name, "<@" + userID + ">"})
+		entries = append(entries, entry{'@', name, "<@" + userID + ">"})
 	}
 
-	// Sort by name length descending to avoid partial matches
+	// Channel mentions. We emit <#CHANNELID|name> rather than the
+	// shorter <#CHANNELID> because the messages-pane renderer uses
+	// the regex `<#[A-Z0-9]+\|([^>]+)>` to recover the display name --
+	// without the embedded name, the user's own optimistically-added
+	// message would render as the raw "<#CID>" until the next reload.
+	// Slack accepts both forms on the wire and normalizes echoes
+	// to the |name form anyway.
+	for name, channelID := range m.reverseChannels {
+		entries = append(entries, entry{'#', name, "<#" + channelID + "|" + name + ">"})
+	}
+
+	// Sort by name length descending. This lives across both trigger
+	// kinds because the substring-corruption concern is per-trigger:
+	// the loop below builds the search needle as trigger+name, so a
+	// longer @name still won't collide with a shorter #name even when
+	// they share the same suffix.
 	sort.Slice(entries, func(i, j int) bool {
 		return len(entries[i].name) > len(entries[j].name)
 	})
 
 	for _, e := range entries {
-		mention := "@" + e.name
+		mention := string(e.trigger) + e.name
+		searchFrom := 0
 		for {
-			idx := strings.Index(text, mention)
-			if idx < 0 {
+			rel := strings.Index(text[searchFrom:], mention)
+			if rel < 0 {
 				break
 			}
-			// Check that the character after the mention is a word boundary
+			idx := searchFrom + rel
 			end := idx + len(mention)
+			// Require a word boundary after the mention so #general
+			// doesn't match inside #general-help, etc.
 			if end < len(text) {
 				next := text[end]
 				if next != ' ' && next != '\n' && next != '\t' && next != ',' && next != '.' && next != '!' && next != '?' && next != ':' && next != ';' && next != ')' && next != '>' {
-					// Not a word boundary -- skip this occurrence
-					// Move past it to avoid infinite loop
-					text = text[:idx] + text[idx:end] + text[end:]
+					searchFrom = end
 					continue
 				}
 			}
 			text = text[:idx] + e.replacement + text[end:]
+			searchFrom = idx + len(e.replacement)
 		}
 	}
 

@@ -25,6 +25,7 @@ import (
 	"github.com/gammons/slk/internal/emoji"
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/channelfinder"
+	"github.com/gammons/slk/internal/ui/channelpicker"
 	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/confirmprompt"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
@@ -1504,7 +1505,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 		}
-		a.sidebar.SetItems(items)
+		a.SetChannels(items)
 
 	case WorkspaceSwitchedMsg:
 		if a.compose.Uploading() || a.threadCompose.Uploading() {
@@ -1537,7 +1538,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.messagepane.SetMessages(nil)
 		a.SetMode(ModeNormal)
 		a.compose.Blur()
-		a.sidebar.SetItems(msg.Channels)
+		a.SetChannels(msg.Channels)
 		a.channelFinder.SetItems(msg.FinderItems)
 		a.SetUserNames(msg.UserNames)
 		a.SetCustomEmoji(msg.CustomEmoji)
@@ -1631,7 +1632,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.compose.RefreshStyles()
 				a.threadCompose.RefreshStyles()
 			}
-			a.sidebar.SetItems(msg.Channels)
+			a.SetChannels(msg.Channels)
 			a.channelFinder.SetItems(msg.FinderItems)
 			a.SetUserNames(msg.UserNames)
 			a.SetCustomEmoji(msg.CustomEmoji)
@@ -1685,7 +1686,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if !alreadyInSidebar {
 			items = append(items, newItem)
-			a.sidebar.SetItems(items)
+			a.SetChannels(items)
 		}
 		a.channelFinder.MarkJoined(msg.ID)
 		a.sidebar.SelectByID(msg.ID)
@@ -2019,6 +2020,10 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 				a.threadCompose.CloseMention()
 				return nil
 			}
+			if a.threadCompose.IsChannelActive() {
+				a.threadCompose.CloseChannel()
+				return nil
+			}
 		} else {
 			if a.compose.IsEmojiActive() {
 				a.compose.CloseEmoji()
@@ -2026,6 +2031,10 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 			}
 			if a.compose.IsMentionActive() {
 				a.compose.CloseMention()
+				return nil
+			}
+			if a.compose.IsChannelActive() {
+				a.compose.CloseChannel()
 				return nil
 			}
 		}
@@ -2043,6 +2052,10 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 				a.threadCompose.CloseMention()
 				return nil
 			}
+			if a.threadCompose.IsChannelActive() {
+				a.threadCompose.CloseChannel()
+				return nil
+			}
 		} else {
 			if a.compose.IsEmojiActive() {
 				a.compose.CloseEmoji()
@@ -2050,6 +2063,10 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 			}
 			if a.compose.IsMentionActive() {
 				a.compose.CloseMention()
+				return nil
+			}
+			if a.compose.IsChannelActive() {
+				a.compose.CloseChannel()
 				return nil
 			}
 		}
@@ -2095,7 +2112,7 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 	// Determine which compose box is active based on focused panel
 	if a.focusedPanel == PanelThread && a.threadVisible {
 		// If a picker is active, forward all keys to compose (including Enter).
-		if a.threadCompose.IsEmojiActive() || a.threadCompose.IsMentionActive() {
+		if a.threadCompose.IsEmojiActive() || a.threadCompose.IsMentionActive() || a.threadCompose.IsChannelActive() {
 			var cmd tea.Cmd
 			a.threadCompose, cmd = a.threadCompose.Update(msg)
 			return cmd
@@ -2138,7 +2155,7 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 
 	// Channel message compose
 	// If a picker is active, forward all keys to compose (including Enter).
-	if a.compose.IsEmojiActive() || a.compose.IsMentionActive() {
+	if a.compose.IsEmojiActive() || a.compose.IsMentionActive() || a.compose.IsChannelActive() {
 		var cmd tea.Cmd
 		a.compose, cmd = a.compose.Update(msg)
 		return cmd
@@ -3199,8 +3216,35 @@ func (a *App) SetWorkspaces(items []workspace.WorkspaceItem) {
 	a.workspaceFinder.SetItems(finderItems)
 }
 
+// SetChannels updates the sidebar's channel list, pushes the same set
+// into both compose boxes for #-channel autocomplete, and seeds the
+// renderers' channel-id -> name map so inbound <#CHANNELID> mentions
+// resolve to the user-facing name. Centralizing these updates ensures
+// the picker's channel set, the sidebar, and the renderer's resolution
+// map never drift from each other (e.g., after a workspace switch, a
+// channel join, or a display-name resolution for a DM).
 func (a *App) SetChannels(items []sidebar.ChannelItem) {
 	a.sidebar.SetItems(items)
+	picks := make([]channelpicker.Channel, 0, len(items))
+	names := make(map[string]string, len(items))
+	for _, ch := range items {
+		// Skip entries with empty names (defensive -- they'd never
+		// match a typed query and would clutter the empty-query view).
+		if ch.Name == "" {
+			continue
+		}
+		picks = append(picks, channelpicker.Channel{
+			ID:   ch.ID,
+			Name: ch.Name,
+			Type: ch.Type,
+		})
+		names[ch.ID] = ch.Name
+	}
+	a.compose.SetChannels(picks)
+	a.threadCompose.SetChannels(picks)
+	a.messagepane.SetChannelNames(names)
+	a.threadPanel.SetChannelNames(names)
+	a.threadsView.SetChannelNames(names)
 }
 
 // SetChannelFetcher sets the callback used to load messages when a channel is selected.
@@ -3992,6 +4036,8 @@ func (a *App) View() tea.View {
 			composeView = pickerView + "\n" + composeView
 		} else if mentionView := a.compose.MentionPickerView(msgWidth - 2); mentionView != "" {
 			composeView = mentionView + "\n" + composeView
+		} else if channelView := a.compose.ChannelPickerView(msgWidth - 2); channelView != "" {
+			composeView = channelView + "\n" + composeView
 		}
 		// Add a background-colored spacer line above the compose box
 		// (replaces MarginTop which produced unstyled/black margin cells)
@@ -4080,6 +4126,8 @@ func (a *App) View() tea.View {
 			threadComposeView = pickerView + "\n" + threadComposeView
 		} else if mentionView := a.threadCompose.MentionPickerView(threadWidth - 2); mentionView != "" {
 			threadComposeView = mentionView + "\n" + threadComposeView
+		} else if channelView := a.threadCompose.ChannelPickerView(threadWidth - 2); channelView != "" {
+			threadComposeView = channelView + "\n" + threadComposeView
 		}
 		threadComposeSpacer := lipgloss.NewStyle().Background(styles.Background).Width(threadWidth - 2).Render("")
 		threadComposeView = threadComposeSpacer + "\n" + threadComposeView

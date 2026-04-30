@@ -42,6 +42,7 @@ type Model struct {
 	focused           bool
 	avatarFn          messages.AvatarFunc
 	userNames         map[string]string
+	channelNames      map[string]string
 	vp                viewport.Model
 	reactionNavActive bool
 	reactionNavIndex  int
@@ -289,6 +290,13 @@ func (m *Model) SetAvatarFunc(fn messages.AvatarFunc) {
 // SetUserNames sets the user ID -> display name map for mention resolution.
 func (m *Model) SetUserNames(names map[string]string) {
 	m.userNames = names
+	m.InvalidateCache()
+}
+
+// SetChannelNames sets the channel ID -> name map used to resolve bare
+// <#CHANNELID> mentions in thread replies.
+func (m *Model) SetChannelNames(names map[string]string) {
+	m.channelNames = names
 	m.InvalidateCache()
 }
 
@@ -838,7 +846,7 @@ func (m *Model) View(height, width int) string {
 		Render(strings.Repeat("-", width))
 
 	// Parent message
-	parentContent := m.renderThreadMessage(m.parent, width, m.userNames, false)
+	parentContent := m.renderThreadMessage(m.parent, width, m.userNames, m.channelNames, false)
 
 	chrome := header + "\n" + separator + "\n" + parentContent + "\n" + separator
 	chromeHeight := lipgloss.Height(chrome)
@@ -875,7 +883,7 @@ func (m *Model) View(height, width int) string {
 			}
 		}
 		for i, reply := range m.replies {
-			rendered := m.renderThreadMessage(reply, width, m.userNames, i == m.selected)
+			rendered := m.renderThreadMessage(reply, width, m.userNames, m.channelNames, i == m.selected)
 			m.cache = append(m.cache, viewEntry{
 				linesNormal:      strings.Split(rendered, "\n"),
 				linesPlain:       messages.PlainLines(rendered),
@@ -1004,7 +1012,7 @@ func (m *Model) View(height, width int) string {
 }
 
 // renderThreadMessage renders a single message for the thread panel.
-func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNames map[string]string, isSelected bool) string {
+func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNames map[string]string, channelNames map[string]string, isSelected bool) string {
 	line := styles.Username.Render(msg.UserName) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.Timestamp)
 
 	contentWidth := width - 4
@@ -1012,7 +1020,7 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 		contentWidth = 20
 	}
 
-	text := styles.MessageText.Render(messages.WordWrap(messages.RenderSlackMarkdown(msg.Text, userNames), contentWidth))
+	text := styles.MessageText.Render(messages.WordWrap(messages.RenderSlackMarkdown(msg.Text, userNames, channelNames), contentWidth))
 
 	var reactionLine string
 	if len(msg.Reactions) > 0 {
