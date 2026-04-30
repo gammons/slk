@@ -281,17 +281,19 @@ func run() error {
 	if err != nil {
 		log.Fatalf("image cache: %v", err)
 	}
-	// Slack file thumbnails on files.slack.com require an
-	// `Authorization: Bearer <xoxc-token>` header — the 'd' cookie alone
-	// returns Slack's web login page (HTML) instead of the image bytes.
-	// The xoxc token is per-workspace; the URL embeds the team ID, so we
-	// build a team-ID -> token map and route via a custom RoundTripper.
-	tokensByTeam := make(map[string]string, len(tokens))
+	// Slack file thumbnails on files.slack.com require BOTH an
+	// `Authorization: Bearer <xoxc-token>` header and the workspace's
+	// 'd' cookie. The d cookie alone returns Slack's web login page
+	// (HTML); the Bearer token alone returns 403. Both are
+	// per-workspace: each token file carries its own xoxc + cookie.
+	// The URL embeds the team ID, so we build a team -> auth map and
+	// route via a custom RoundTripper.
+	authsByTeam := make(map[string]slackclient.TeamAuth, len(tokens))
 	for _, t := range tokens {
-		tokensByTeam[t.TeamID] = t.AccessToken
+		authsByTeam[t.TeamID] = slackclient.TeamAuth{Token: t.AccessToken, DCookie: t.Cookie}
 		log.Printf("image fetcher: registered team %q (%s) for file auth", t.TeamName, t.TeamID)
 	}
-	imageHTTPClient := slackclient.NewFileAuthHTTPClient(tokensByTeam, tokens[0].Cookie)
+	imageHTTPClient := slackclient.NewFileAuthHTTPClient(authsByTeam)
 	imageHTTPClient.Timeout = 10 * time.Second
 	imageFetcher := imgpkg.NewFetcher(imageCache, imageHTTPClient)
 

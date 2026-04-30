@@ -109,15 +109,23 @@ func NewCookieHTTPClient(dCookie string) *http.Client {
 	return newCookieHTTPClient(dCookie)
 }
 
-// fileAuthTransport is an http.RoundTripper that adds an
-// `Authorization: Bearer <xoxc-token>` header to requests for
-// files.slack.com URLs, selecting the correct token by parsing the
-// team ID from the URL path. Slack file URLs embed the team ID as the
-// first segment after `/files-tmb/` or `/files-pri/`, e.g.
-// `https://files.slack.com/files-tmb/T04T4TH8W-F0123ABCD-.../foo_360.png`.
+// fileAuthTransport is an http.RoundTripper that authenticates
+// files.slack.com requests on a per-team basis. The team ID is parsed
+// from the URL path (Slack file URLs embed it as the first segment
+// after `/files-tmb/` or `/files-pri/`, e.g.
+// `https://files.slack.com/files-tmb/T04T4TH8W-F0123ABCD-.../foo_360.png`),
+// and the matching team's xoxc token (Authorization: Bearer) and 'd'
+// cookie are attached. Both are needed: Slack's d cookie is per
+// browser session and can differ between workspaces if they were
+// added at different times.
 type fileAuthTransport struct {
-	tokensByTeam map[string]string // teamID -> xoxc token
-	base         http.RoundTripper
+	authsByTeam map[string]teamAuth // teamID -> (xoxc, dcookie)
+	base        http.RoundTripper
+}
+
+type teamAuth struct {
+	token   string // xoxc-...
+	dCookie string
 }
 
 // RoundTrip implements http.RoundTripper.
@@ -125,13 +133,20 @@ func (t *fileAuthTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	if req.URL.Host == "files.slack.com" {
 		teamID := parseTeamIDFromFilesURL(req.URL.Path)
 		if teamID != "" {
-			if tok, ok := t.tokensByTeam[teamID]; ok && tok != "" {
+			if a, ok := t.authsByTeam[teamID]; ok && a.token != "" {
 				// Clone the request to avoid mutating the caller's copy.
 				clone := req.Clone(req.Context())
-				clone.Header.Set("Authorization", "Bearer "+tok)
+				clone.Header.Set("Authorization", "Bearer "+a.token)
+				if a.dCookie != "" {
+					// Set the cookie inline rather than relying on a
+					// shared cookie jar — the jar can only hold ONE
+					// 'd' cookie at a time, but per-team values may
+					// differ across workspaces.
+					clone.Header.Set("Cookie", "d="+a.dCookie)
+				}
 				req = clone
 			} else {
-				log.Printf("[image-debug] file auth: no token for team %q on URL %s", teamID, req.URL.String())
+				log.Printf("[image-debug] file auth: no auth for team %q on URL %s", teamID, req.URL.String())
 			}
 		} else {
 			log.Printf("[image-debug] file auth: could not parse team ID from URL %s", req.URL.String())
@@ -173,22 +188,32 @@ func parseTeamIDFromFilesURL(path string) string {
 	return ""
 }
 
+// TeamAuth pairs a workspace's xoxc token with its 'd' cookie. Used
+// by NewFileAuthHTTPClient to authenticate per-team file fetches.
+type TeamAuth struct {
+	Token   string // xoxc-...
+	DCookie string // value of the 'd' cookie
+}
+
 // NewFileAuthHTTPClient returns an http.Client that authenticates Slack
-// file thumbnail / private-download URLs by setting an
-// Authorization: Bearer header keyed on the team ID embedded in the URL.
-// Other URLs pass through unchanged.
+// file thumbnail / private-download URLs on a per-team basis. The team
+// ID is parsed from the URL path; the matching team's xoxc token is
+// attached as `Authorization: Bearer` and the 'd' cookie as a `Cookie`
+// header. Other URLs pass through unchanged.
 //
-// tokensByTeam maps team ID (e.g. "T04T4TH8W") to that workspace's
-// xoxc token. The 'd' cookie is also attached as a fallback for
-// endpoints that accept it.
+// authsByTeam maps team ID (e.g. "T04T4TH8W") to that workspace's
+// auth pair. Both fields are required for files.slack.com to accept
+// the request.
 //
 // The returned client has no timeout; callers that need one should set
 // it on the returned client.
-func NewFileAuthHTTPClient(tokensByTeam map[string]string, anyDCookie string) *http.Client {
-	base := http.DefaultTransport
-	rt := &fileAuthTransport{tokensByTeam: tokensByTeam, base: base}
-	jar := newCookieJar(anyDCookie)
-	return &http.Client{Transport: rt, Jar: jar}
+func NewFileAuthHTTPClient(authsByTeam map[string]TeamAuth) *http.Client {
+	internal := make(map[string]teamAuth, len(authsByTeam))
+	for k, v := range authsByTeam {
+		internal[k] = teamAuth{token: v.Token, dCookie: v.DCookie}
+	}
+	rt := &fileAuthTransport{authsByTeam: internal, base: http.DefaultTransport}
+	return &http.Client{Transport: rt}
 }
 
 // TeamID returns the authenticated workspace's team ID.
