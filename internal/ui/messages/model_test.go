@@ -348,7 +348,7 @@ func TestImageReady_DoesNotChangeMessageHeight(t *testing.T) {
 
 	// Simulate the prefetcher goroutine completion. This is what
 	// App.Update calls when ImageReadyMsg lands.
-	m.HandleImageReady(channel, ts)
+	m.HandleImageReady(channel, ts, "")
 
 	// Second render: bytes are now cached → real image render.
 	_ = m.View(height, width)

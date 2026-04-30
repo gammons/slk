@@ -1120,6 +1120,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Close thread panel when switching channels
 		a.CloseThread()
 		a.clearSelections()
+		// Move focus to the messages pane so the user can immediately
+		// j/k through messages, react, open threads, etc. without first
+		// having to Tab/h-l out of the sidebar after picking a channel.
+		a.focusedPanel = PanelMessages
 		a.activeChannelID = msg.ID
 		a.lastTypingSent = time.Time{} // reset typing throttle for new channel
 		// Tell the sidebar which channel is active so the staleness
@@ -1158,10 +1162,20 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case messages.ImageReadyMsg:
 		// Image attachment finished downloading; invalidate the
 		// messages pane's render cache for the affected channel so the
-		// next View() picks up the cached bytes inline. The model
-		// itself filters by active channel name (no-op when the user
-		// has switched away).
-		a.messagepane.HandleImageReady(msg.Channel, msg.TS)
+		// next View() picks up the cached bytes inline. Only the
+		// specific key's in-flight bit is cleared so sibling images
+		// that are still mid-fetch don't trigger fresh respawns. The
+		// model itself filters by active channel name (no-op when the
+		// user has switched away).
+		a.messagepane.HandleImageReady(msg.Channel, msg.TS, msg.Key)
+
+	case messages.ImageFailedMsg:
+		// Image attachment fetch hit a permanent failure (all auths
+		// exhausted, or some other terminal error). Clear the in-flight
+		// bit so a future cache invalidation doesn't keep retrying;
+		// don't trigger a re-render — the placeholder is already on
+		// screen and we have no new bytes to show.
+		a.messagepane.HandleImageFailed(msg.Key)
 
 	case messages.OpenImagePreviewMsg:
 		if cmd := a.openImagePreviewCmd(msg.Channel, msg.TS, msg.AttIdx); cmd != nil {

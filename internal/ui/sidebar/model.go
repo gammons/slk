@@ -785,6 +785,14 @@ func (m *Model) buildCache(width int) {
 	activeBorder := activeBorderStyle.Render("▌")
 	unreadDotStr := dotStyle.Render("●")
 	privatePrefix := privateStyle.Render("◆ ")
+	// Read private channels use a *plain* "◆ " glyph (no inline ANSI
+	// styling) so the prefix inherits the surrounding row style the
+	// same way the public-channel "# " does. Inline-styled prefixes
+	// emit an ANSI reset; ReapplyBgAfterResets then re-injects the
+	// brighter SidebarFgANSI for everything after the reset, which
+	// overrides ChannelNormal's TextMuted foreground and made read
+	// private rows appear lighter than read public rows.
+	privatePrefixMuted := "◆ "
 	dmActivePrefix := styles.PresenceOnline.Render("● ")
 	dmAwayPrefix := styles.PresenceAway.Render("○ ")
 	groupDMPrefix := styles.PresenceAway.Render("● ")
@@ -859,7 +867,11 @@ func (m *Model) buildCache(width int) {
 		case "group_dm":
 			prefix = groupDMPrefix
 		case "private":
-			prefix = privatePrefix
+			if item.UnreadCount > 0 {
+				prefix = privatePrefix
+			} else {
+				prefix = privatePrefixMuted
+			}
 		default:
 			prefix = "# "
 		}

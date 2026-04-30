@@ -189,12 +189,26 @@ type ImageContext struct {
 
 // ImageReadyMsg is dispatched by the prefetcher when an image attachment
 // has finished downloading and decoding into the cache. The model
-// invalidates the cache for the affected message and re-renders. The
-// full Update() handler is wired in Task 5.6; this type is declared
-// here so the prefetcher can compile and dispatch.
+// invalidates the cache for the affected message and re-renders.
+// Key is the cache key whose fetch just succeeded; the model uses it
+// to clear ONLY that entry from its in-flight tracking set, avoiding
+// the fetch-stampede that occurs if every successful arrival cleared
+// the whole set (which would re-spawn fetches for every still-failing
+// sibling image, each one re-running the slow multi-auth retry path).
 type ImageReadyMsg struct {
 	Channel string
 	TS      string
+	Key     string
+}
+
+// ImageFailedMsg is dispatched by the prefetcher when all auth attempts
+// for an image have failed. Carries the cache key only; the model uses
+// it to clear the in-flight bit for that key so a future cache
+// invalidation doesn't try the same image again. It does NOT trigger a
+// re-render (the placeholder is already on screen and the bytes still
+// aren't available).
+type ImageFailedMsg struct {
+	Key string
 }
 
 // OpenImagePreviewMsg requests opening the full-screen preview overlay
@@ -296,12 +310,20 @@ type Model struct {
 	// fetchingImages tracks the set of cache keys for which a placeholder
 	// path has already spawned a fetch goroutine. Prevents per-frame
 	// goroutine pile-up during scroll/resize when an image is in flight.
-	// Cleared when ImageReadyMsg lands (the cache will then have the bytes).
+	// Cleared per-key when the corresponding ImageReadyMsg or
+	// ImageFailedMsg lands.
 	//
 	// Concurrency: only mutated from Update-driven render paths
 	// (Model is single-threaded from bubbletea's perspective). Goroutines
 	// never write to this map directly.
 	fetchingImages map[string]struct{}
+
+	// failedImages remembers cache keys whose fetch hit a permanent
+	// failure (e.g. all auths exhausted on a Slack Connect channel the
+	// user isn't actually a member of). renderAttachmentBlock skips
+	// re-spawning fetches for these keys until the channel is switched.
+	// Cleared by SetChannel.
+	failedImages map[string]struct{}
 
 	// lastHits holds the inline-image hit rects captured during the most
 	// recent View() call, in viewport-absolute coordinates relative to
@@ -314,21 +336,50 @@ type Model struct {
 
 // HandleImageReady is invoked by the host (App.Update) when an
 // ImageReadyMsg lands. It invalidates the render cache for the affected
-// channel and drops the in-flight fetch set so the next View() picks up
-// the newly cached bytes. Messages for a non-active channel are ignored
-// (the cache is per-channel — switching channels rebuilds it).
-func (m *Model) HandleImageReady(channel, ts string) {
+// channel and clears ONLY the specified key from the in-flight fetch
+// set so the next View() picks up the newly cached bytes for this
+// image while leaving sibling images' in-flight bits intact (avoids
+// fetch stampedes — see ImageReadyMsg's doc comment).
+//
+// Messages for a non-active channel are ignored (the cache is
+// per-channel; switching channels rebuilds it).
+//
+// key may be empty for legacy callers; in that case all in-flight bits
+// are cleared (old behavior).
+func (m *Model) HandleImageReady(channel, ts, key string) {
 	if channel != m.channelName {
 		return
 	}
 	m.cache = nil
-	// Clearing the entire map is correct: when the cache is invalidated,
-	// the next render re-checks Cached(key) for each image. Cached
-	// images take the fast path; still-uncached ones may re-spawn (but
-	// singleflight dedupes the actual HTTP work, and the in-flight set
-	// then prevents future per-frame spawns again).
-	m.fetchingImages = nil
+	if key == "" {
+		m.fetchingImages = nil
+	} else if m.fetchingImages != nil {
+		delete(m.fetchingImages, key)
+	}
 	m.dirty()
+}
+
+// HandleImageFailed clears the in-flight bit for a specific key and
+// records the key as permanently failed. renderAttachmentBlock checks
+// failedImages before spawning a fetch, so a permanently-failed image
+// (e.g. all auths exhausted on a Slack Connect channel the user isn't
+// actually a member of) won't be re-fetched on every cache
+// invalidation. The failure record is cleared on channel switch so
+// the user can retry by switching away and back.
+//
+// Does NOT invalidate the render cache: the placeholder is already on
+// screen and we have no new bytes to show.
+func (m *Model) HandleImageFailed(key string) {
+	if key == "" {
+		return
+	}
+	if m.fetchingImages != nil {
+		delete(m.fetchingImages, key)
+	}
+	if m.failedImages == nil {
+		m.failedImages = make(map[string]struct{})
+	}
+	m.failedImages[key] = struct{}{}
 }
 
 // Version returns a counter that increments every time the View() output
@@ -362,6 +413,13 @@ func (m *Model) SetChannel(name, topic string) {
 	if m.channelName != name || m.channelTopic != topic {
 		m.chromeCacheValid = false
 		m.dirty()
+		// Different channel = different attachment set; clear the
+		// permanently-failed-image record so the user can retry by
+		// re-entering this channel later.
+		if m.channelName != name {
+			m.failedImages = nil
+			m.fetchingImages = nil
+		}
 	}
 	m.channelName = name
 	m.channelTopic = topic
@@ -668,11 +726,36 @@ func (m *Model) IncrementReplyCount(parentTS, replyTS string) {
 		}
 		set[replyTS] = struct{}{}
 	}
+	// Same bottom-anchor preservation as UpdateReaction: if the increment
+	// is going to add a "[N replies ->]" line under a message that's
+	// currently at the bottom of the visible window, advance yOffset by
+	// the height delta so the message stays pinned to the bottom instead
+	// of being pushed under the fold.
+	wasAnchoredAtBottom := false
+	oldTotalLines := m.totalLines
+	if m.cache != nil && m.lastViewHeight > 0 && m.totalLines > 0 {
+		wasAnchoredAtBottom = m.yOffset+m.lastViewHeight >= m.totalLines
+	}
+
 	for i, msg := range m.messages {
 		if msg.TS == parentTS {
 			m.messages[i].ReplyCount++
 			m.cache = nil
 			m.dirty()
+			if wasAnchoredAtBottom && m.cacheWidth > 0 {
+				m.buildCache(m.cacheWidth)
+				if delta := m.totalLines - oldTotalLines; delta > 0 {
+					m.yOffset += delta
+					if maxOffset := m.totalLines - m.lastViewHeight; m.yOffset > maxOffset {
+						m.yOffset = maxOffset
+					}
+					if m.yOffset < 0 {
+						m.yOffset = 0
+					}
+					m.snappedSelection = m.selected
+					m.hasSnapped = true
+				}
+			}
 			return
 		}
 	}
@@ -1003,8 +1086,12 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 
 	var threadLine string
 	if msg.ReplyCount > 0 {
+		word := "replies"
+		if msg.ReplyCount == 1 {
+			word = "reply"
+		}
 		threadLine = "\n" + styles.ThreadIndicator.Render(
-			fmt.Sprintf("[%d replies ->]", msg.ReplyCount))
+			fmt.Sprintf("[%d %s ->]", msg.ReplyCount, word))
 	}
 
 	var reactionLine string
@@ -1260,6 +1347,12 @@ func (m *Model) renderAttachmentBlock(att Attachment, ts string, availWidth, bas
 		if m.fetchingImages == nil {
 			m.fetchingImages = make(map[string]struct{})
 		}
+		// Skip re-spawn for previously-failed keys. The failure set
+		// clears on SetChannel so the user can retry by switching
+		// channels.
+		if _, failed := m.failedImages[key]; failed {
+			return buildPlaceholder(att.Name, target), nil, nil, target.Y, hit
+		}
 		if _, inFlight := m.fetchingImages[key]; inFlight {
 			return buildPlaceholder(att.Name, target), nil, nil, target.Y, hit
 		}
@@ -1269,16 +1362,22 @@ func (m *Model) renderAttachmentBlock(att Attachment, ts string, availWidth, bas
 			_, err := ctx.Fetcher.Fetch(context.Background(), imgpkg.FetchRequest{
 				Key: key, URL: url, Target: pixelTarget,
 			})
-			// Note: the goroutine doesn't take any lock here. The
-			// in-flight set is cleared by HandleImageReady (which
-			// also nils the cache); see the ImageReadyMsg handler.
-			if err != nil {
-				log.Printf("image fetch failed: key=%s url=%s err=%v", key, url, err)
+			// On either success or failure, dispatch a message so the
+			// model can clear THIS key's in-flight bit. Without that,
+			// failed fetches leave a permanent "fetching" placeholder
+			// AND get re-attempted on every successful sibling's
+			// arrival (sibling success used to nil the entire in-flight
+			// set, causing fetch stampedes that locked up the UI on
+			// channels with many failing-to-auth Slack Connect images).
+			if ctx.SendMsg == nil {
 				return
 			}
-			if ctx.SendMsg != nil {
-				ctx.SendMsg(ImageReadyMsg{Channel: channel, TS: ts})
+			if err != nil {
+				log.Printf("image fetch failed: key=%s url=%s err=%v", key, url, err)
+				ctx.SendMsg(ImageFailedMsg{Key: key})
+				return
 			}
+			ctx.SendMsg(ImageReadyMsg{Channel: channel, TS: ts, Key: key})
 		}()
 		return buildPlaceholder(att.Name, target), nil, nil, target.Y, hit
 	}
