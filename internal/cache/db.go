@@ -59,6 +59,7 @@ func (db *DB) migrate() error {
 		display_name TEXT NOT NULL DEFAULT '',
 		avatar_url TEXT NOT NULL DEFAULT '',
 		presence TEXT NOT NULL DEFAULT 'away',
+		is_bot INTEGER NOT NULL DEFAULT 0,
 		updated_at INTEGER NOT NULL DEFAULT 0,
 		FOREIGN KEY (workspace_id) REFERENCES workspaces(id)
 	);
@@ -134,6 +135,10 @@ func (db *DB) migrate() error {
 	// SQLite's ADD COLUMN has no IF NOT EXISTS, so we probe first.
 	if err := db.addColumnIfMissing("messages", "subtype",
 		"ALTER TABLE messages ADD COLUMN subtype TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := db.addColumnIfMissing("users", "is_bot",
+		"ALTER TABLE users ADD COLUMN is_bot INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
 

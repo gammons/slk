@@ -64,6 +64,12 @@ type WorkspaceContext struct {
 	// without an `@`) to a display name. Used to resolve participant
 	// handles in mpdm channel names like `mpdm-grant--myles--ray-1`.
 	UserNamesByHandle map[string]string
+	// BotUserIDs is the set of user IDs known to be Slack apps or bots.
+	// Populated from the local cache on startup and refreshed by the
+	// background users.list fetch and any on-demand resolveUser calls.
+	// Used during channel construction to bucket app DMs into a separate
+	// "Apps" sidebar section.
+	BotUserIDs        map[string]bool
 	LastReadMap       map[string]string
 	Channels    []sidebar.ChannelItem
 	// FinderItems is the merged list shown in the Ctrl+T finder. Initially
@@ -856,15 +862,19 @@ func run() error {
 			// Resolve unknown DM user names in background
 			if len(wctx.UnresolvedDMs) > 0 {
 				go func() {
-					for _, dm := range wctx.UnresolvedDMs {
-						resolved := resolveUser(wctx.Client, dm.UserID, wctx.UserNames, db, avatarCache)
-						if resolved != dm.UserID {
-							p.Send(ui.DMNameResolvedMsg{
-								ChannelID:   dm.ChannelID,
-								DisplayName: resolved,
-							})
-						}
+				for _, dm := range wctx.UnresolvedDMs {
+					resolved, isBot := resolveUser(wctx.Client, dm.UserID, wctx.UserNames, db, avatarCache)
+					if isBot {
+						wctx.BotUserIDs[dm.UserID] = true
 					}
+					if resolved != dm.UserID {
+						p.Send(ui.DMNameResolvedMsg{
+							ChannelID:   dm.ChannelID,
+							DisplayName: resolved,
+							IsBot:       isBot,
+						})
+					}
+				}
 				}()
 			}
 		}(token)
@@ -895,11 +905,14 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		UserID:      client.UserID(),
 		UserNames:         make(map[string]string),
 		UserNamesByHandle: make(map[string]string),
+		BotUserIDs:        make(map[string]bool),
 		LastReadMap:       make(map[string]string),
 		CustomEmoji: make(map[string]string),
 	}
 
-	// Seed user names from cache (fast, local)
+	// Seed user names + bot flags from cache (fast, local). The bot
+	// flag is what lets channel construction below classify app DMs
+	// into "app" vs "dm" without waiting for the network fetch.
 	cachedUsers, _ := db.ListUsers(client.TeamID())
 	for _, u := range cachedUsers {
 		name := u.DisplayName
@@ -909,6 +922,9 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		wctx.UserNames[u.ID] = name
 		if u.Name != "" {
 			wctx.UserNamesByHandle[u.Name] = name
+		}
+		if u.IsBot {
+			wctx.BotUserIDs[u.ID] = true
 		}
 	}
 
@@ -930,6 +946,10 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 			if u.Name != "" {
 				wctx.UserNamesByHandle[u.Name] = name
 			}
+			isBot := u.IsBot || u.IsAppUser
+			if isBot {
+				wctx.BotUserIDs[u.ID] = true
+			}
 			db.UpsertUser(cache.User{
 				ID:          u.ID,
 				WorkspaceID: client.TeamID(),
@@ -937,6 +957,7 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 				DisplayName: name,
 				AvatarURL:   u.Profile.Image32,
 				Presence:    "away",
+				IsBot:       isBot,
 			})
 			avatarCache.Preload(u.ID, u.Profile.Image32)
 		}
@@ -951,7 +972,16 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	for _, ch := range channels {
 		chType := "channel"
 		if ch.IsIM {
-			chType = "dm"
+			// Slack returns the same `is_im=true` for human DMs and app
+			// DMs; the only differentiator is the peer user's IsBot/
+			// IsAppUser flag, which we look up via the cache-seeded
+			// BotUserIDs set. Unknown peers default to "dm" and are
+			// reclassified later by the resolveUser path below.
+			if wctx.BotUserIDs[ch.User] {
+				chType = "app"
+			} else {
+				chType = "dm"
+			}
 		} else if ch.IsMpIM {
 			chType = "group_dm"
 		} else if ch.IsPrivate {
@@ -1172,12 +1202,20 @@ func pickAttachmentURL(f slack.File, kind string) string {
 
 // resolveUser ensures we have the display name and avatar for a user.
 // If the user is unknown, fetches their profile from Slack on demand.
-func resolveUser(client *slackclient.Client, userID string, userNames map[string]string, db *cache.DB, avatarCache *avatar.Cache) string {
+// Returns the resolved display name (or the userID as a fallback) and a
+// boolean indicating whether the user is a Slack app or bot. The bool
+// is best-effort: if the user was already in the userNames cache and
+// the avatar lookup hasn't fired, we don't have a fresh IsBot signal
+// and return false. Callers that care (the unresolved-DM goroutine)
+// only invoke resolveUser for users not yet in the cache, so the
+// fast-path miss is irrelevant for them.
+func resolveUser(client *slackclient.Client, userID string, userNames map[string]string, db *cache.DB, avatarCache *avatar.Cache) (string, bool) {
 	if name, ok := userNames[userID]; ok {
 		// Check if avatar is also cached
 		if avatarCache.Get(userID) == "" {
 			// Have name but no avatar — try to fetch profile for avatar URL
 			if u, err := client.GetUserProfile(userID); err == nil {
+				isBot := u.IsBot || u.IsAppUser
 				avatarCache.Preload(userID, u.Profile.Image32)
 				db.UpsertUser(cache.User{
 					ID:          userID,
@@ -1186,10 +1224,12 @@ func resolveUser(client *slackclient.Client, userID string, userNames map[string
 					DisplayName: name,
 					AvatarURL:   u.Profile.Image32,
 					Presence:    "away",
+					IsBot:       isBot,
 				})
+				return name, isBot
 			}
 		}
-		return name
+		return name, false
 	}
 	// Unknown user — fetch profile
 	if u, err := client.GetUserProfile(userID); err == nil {
@@ -1200,6 +1240,7 @@ func resolveUser(client *slackclient.Client, userID string, userNames map[string
 		if name == "" {
 			name = u.Name
 		}
+		isBot := u.IsBot || u.IsAppUser
 		userNames[userID] = name
 		avatarCache.Preload(userID, u.Profile.Image32)
 		db.UpsertUser(cache.User{
@@ -1209,10 +1250,11 @@ func resolveUser(client *slackclient.Client, userID string, userNames map[string
 			DisplayName: name,
 			AvatarURL:   u.Profile.Image32,
 			Presence:    "away",
+			IsBot:       isBot,
 		})
-		return name
+		return name, isBot
 	}
-	return userID
+	return userID, false
 }
 
 func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, db *cache.DB, userNames map[string]string, tsFormat string, avatarCache *avatar.Cache) []messages.MessageItem {
@@ -1236,7 +1278,7 @@ func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, 
 			CreatedAt:   time.Now().Unix(),
 		})
 
-		userName := resolveUser(client, m.User, userNames, db, avatarCache)
+		userName, _ := resolveUser(client, m.User, userNames, db, avatarCache)
 
 		// Convert reactions
 		var reactions []messages.ReactionItem
@@ -1299,7 +1341,7 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 			CreatedAt:   time.Now().Unix(),
 		})
 
-		userName := resolveUser(client, m.User, userNames, db, avatarCache)
+		userName, _ := resolveUser(client, m.User, userNames, db, avatarCache)
 
 		// Convert reactions
 		var reactions []messages.ReactionItem
@@ -1363,7 +1405,7 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 			CreatedAt:   time.Now().Unix(),
 		})
 
-		userName := resolveUser(client, m.User, userNames, db, avatarCache)
+		userName, _ := resolveUser(client, m.User, userNames, db, avatarCache)
 
 		// Convert reactions
 		var reactions []messages.ReactionItem

@@ -163,6 +163,13 @@ type (
 	DMNameResolvedMsg struct {
 		ChannelID   string
 		DisplayName string
+		// IsBot is true when the resolved peer is a Slack app or bot.
+		// On first run (before the background users.list fetch has
+		// landed), bot DMs are initially classified as Type="dm" and
+		// the resolveUser path discovers the IsBot flag asynchronously
+		// via users.info. The App handler flips Type to "app" when
+		// this lands so the row hops into the Apps section live.
+		IsBot bool
 	}
 	WorkspaceSwitchedMsg struct {
 		TeamID      string
@@ -1502,6 +1509,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for i := range items {
 			if items[i].ID == msg.ChannelID {
 				items[i].Name = msg.DisplayName
+				if msg.IsBot && items[i].Type == "dm" {
+					items[i].Type = "app"
+				}
 				break
 			}
 		}

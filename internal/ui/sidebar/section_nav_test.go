@@ -123,3 +123,42 @@ func TestOrderedSectionsCustomFirstDMsLast(t *testing.T) {
 		}
 	}
 }
+
+func TestOrderedSectionsAppsBetweenDMsAndChannels(t *testing.T) {
+	items := []ChannelItem{
+		{ID: "C1", Name: "general", Type: "channel"},
+		{ID: "D1", Name: "bob", Type: "dm"},
+		{ID: "A1", Name: "github", Type: "app"},
+		{ID: "A2", Name: "pagerduty", Type: "app"},
+	}
+	filtered := []int{0, 1, 2, 3}
+	got := orderedSections(items, filtered)
+	want := []string{"Direct Messages", "Apps", "Channels"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("position %d: got %q, want %q (full: %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestOrderedSectionsAppsOnlyOmitsOthers(t *testing.T) {
+	// Apps section should appear even when there are no human DMs and
+	// no public channels (e.g. a workspace where the user only talks
+	// to bots).
+	items := []ChannelItem{
+		{ID: "A1", Name: "github", Type: "app"},
+	}
+	got := orderedSections(items, []int{0})
+	if len(got) != 1 || got[0] != "Apps" {
+		t.Fatalf("expected just [Apps], got %v", got)
+	}
+}
+
+func TestSectionForApp(t *testing.T) {
+	if got := sectionFor(ChannelItem{Type: "app"}); got != "Apps" {
+		t.Errorf("expected Type=app -> Apps section, got %q", got)
+	}
+}

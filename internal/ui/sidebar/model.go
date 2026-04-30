@@ -17,12 +17,16 @@ import (
 const (
 	defaultChannelsSection = "Channels"
 	defaultDMSection       = "Direct Messages"
+	// defaultAppsSection groups DMs whose peer is a Slack app or bot,
+	// matching the behavior of the official Slack desktop client. Falls
+	// between "Direct Messages" (humans) and "Channels" (firehose).
+	defaultAppsSection = "Apps"
 )
 
 type ChannelItem struct {
 	ID            string
 	Name          string
-	Type          string // channel, dm, group_dm, private
+	Type          string // channel, dm, group_dm, private, app
 	Section       string // section name for grouping (e.g. "Engineering", "Starred")
 	SectionOrder  int    // sort order from config; lower = higher in sidebar (custom sections only)
 	UnreadCount   int
@@ -41,6 +45,9 @@ func sectionFor(item ChannelItem) string {
 	if item.Section != "" {
 		return item.Section
 	}
+	if item.Type == "app" {
+		return defaultAppsSection
+	}
 	if item.Type == "dm" || item.Type == "group_dm" {
 		return defaultDMSection
 	}
@@ -50,10 +57,10 @@ func sectionFor(item ChannelItem) string {
 // orderedSections returns the section names in display order given the
 // currently filtered items. Custom (user-defined) sections come first,
 // sorted by SectionOrder ascending then by first-appearance for ties.
-// The two built-in fallback sections are appended at the end in this
-// order: "Direct Messages" first (people you talk to one-on-one matter
-// more than the firehose) then "Channels". Anything the user pinned to
-// a custom section still wins the top spots.
+// The three built-in fallback sections are appended at the end in this
+// order: "Direct Messages" (humans you talk to one-on-one), "Apps"
+// (Slack apps and bots), then "Channels" (the firehose). Anything the
+// user pinned to a custom section still wins the top spots.
 func orderedSections(items []ChannelItem, filtered []int) []string {
 	type customInfo struct {
 		name      string
@@ -64,6 +71,7 @@ func orderedSections(items []ChannelItem, filtered []int) []string {
 	customSeen := map[string]int{} // name -> index into customs
 	hasChannels := false
 	hasDMs := false
+	hasApps := false
 
 	for pos, idx := range filtered {
 		item := items[idx]
@@ -85,6 +93,8 @@ func orderedSections(items []ChannelItem, filtered []int) []string {
 			})
 		case name == defaultDMSection:
 			hasDMs = true
+		case name == defaultAppsSection:
+			hasApps = true
 		default:
 			hasChannels = true
 		}
@@ -97,12 +107,15 @@ func orderedSections(items []ChannelItem, filtered []int) []string {
 		return customs[i].firstSeen < customs[j].firstSeen
 	})
 
-	out := make([]string, 0, len(customs)+2)
+	out := make([]string, 0, len(customs)+3)
 	for _, c := range customs {
 		out = append(out, c.name)
 	}
 	if hasDMs {
 		out = append(out, defaultDMSection)
+	}
+	if hasApps {
+		out = append(out, defaultAppsSection)
 	}
 	if hasChannels {
 		out = append(out, defaultChannelsSection)
@@ -272,12 +285,14 @@ func (m *Model) dirty() { m.version++ }
 
 func New(items []ChannelItem) Model {
 	m := Model{items: items}
-	// Default collapse state: the firehose "Channels" section starts
-	// collapsed so the sidebar opens on a tidy view of pinned sections
-	// + DMs. Custom sections and DMs default to expanded. Users toggle
-	// individual sections with Enter/Space on the header.
+	// Default collapse state: the firehose "Channels" section and the
+	// "Apps" section start collapsed so the sidebar opens on a tidy
+	// view of pinned sections + human DMs. Custom sections and DMs
+	// default to expanded. Users toggle individual sections with
+	// Enter/Space on the header.
 	m.collapsed = map[string]bool{
 		defaultChannelsSection: true,
+		defaultAppsSection:     true,
 	}
 	m.rebuildFilter()
 	m.rebuildNav()
@@ -795,6 +810,16 @@ func (m *Model) buildCache(width int) {
 	privatePrefixMuted := "◆ "
 	dmActivePrefix := styles.PresenceOnline.Render("● ")
 	dmAwayPrefix := styles.PresenceAway.Render("○ ")
+	// Apps use a filled square glyph to visually distinguish them from
+	// human DMs (which use a circle). No presence concept for apps --
+	// they're always "available". Two variants mirror the private-channel
+	// treatment: a styled (warning-colored) glyph for unread rows that
+	// pop, and a plain glyph for read rows so they inherit
+	// ChannelNormal's muted foreground without the SidebarFgANSI
+	// reset-and-reinject bumping the row text brighter than read
+	// public/dm rows.
+	appPrefix := lipgloss.NewStyle().Foreground(styles.Warning).Render("▣ ")
+	appPrefixMuted := "▣ "
 	groupDMPrefix := styles.PresenceAway.Render("● ")
 
 	// Synthetic "Threads" row, always rendered at the very top of the sidebar
@@ -871,6 +896,12 @@ func (m *Model) buildCache(width int) {
 				prefix = privatePrefix
 			} else {
 				prefix = privatePrefixMuted
+			}
+		case "app":
+			if item.UnreadCount > 0 {
+				prefix = appPrefix
+			} else {
+				prefix = appPrefixMuted
 			}
 		default:
 			prefix = "# "
