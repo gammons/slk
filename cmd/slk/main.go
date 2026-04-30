@@ -299,9 +299,13 @@ func run() error {
 	// Must happen BEFORE bubbletea takes over the terminal.
 	if proto == imgpkg.ProtoKitty && term.IsTerminal(int(os.Stdin.Fd())) {
 		state, err := term.MakeRaw(int(os.Stdin.Fd()))
-		if err == nil {
+		if err != nil {
+			log.Printf("kitty probe skipped: cannot enter raw mode: %v", err)
+		} else {
 			ok := imgpkg.ProbeKittyGraphics(os.Stdout, os.Stdin, 200*time.Millisecond)
-			_ = term.Restore(int(os.Stdin.Fd()), state)
+			if rerr := term.Restore(int(os.Stdin.Fd()), state); rerr != nil {
+				log.Printf("term restore after kitty probe: %v", rerr)
+			}
 			if !ok {
 				log.Println("kitty probe failed, downgrading to halfblock")
 				proto = imgpkg.ProtoHalfBlock
