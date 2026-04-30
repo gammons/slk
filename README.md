@@ -39,6 +39,15 @@
 - Bracketed paste — paste multi-line text from the system clipboard without it being interpreted as keystrokes
 - Smart paste (`Ctrl+V`) — pastes a clipboard image as an attachment, or a copied file path as an attached file, or falls through to text. Multiple attachments + caption send together via Slack's V2 file-upload API.
 
+### Images
+- Inline image attachments render automatically in the messages pane: kitty graphics protocol on capable terminals (kitty, ghostty, recent WezTerm), sixel on foot/mlterm, half-block (`▀`) fallback everywhere else
+- Click any inline image (or press `O` on the selected message) for a full-screen in-app preview
+- `Enter` from the preview launches the OS image viewer
+- Lazy-loaded: images download only as they scroll into view
+- LRU cache at `~/.cache/slk/images/` (default 200 MB cap)
+- Inside tmux, slk falls back to half-block to avoid pixel-protocol pass-through pitfalls
+- Configurable via `[appearance] image_protocol` (`auto` / `kitty` / `sixel` / `halfblock` / `off`) and `max_image_rows`
+
 ### Threads
 - Side panel (35% width), opened with `Enter`, toggled with `Ctrl+]`
 - Live thread reply routing, real-time updates
@@ -98,7 +107,6 @@ slk is intentionally not a 1:1 port of the desktop client. Some Slack features a
 **On the roadmap:**
 - Slack-side search (`Ctrl+/` / `:search`)
 - File uploads and downloads
-- Inline image rendering (Kitty graphics → Sixel → fallback)
 - OSC 52 clipboard yank (`yy`)
 - Quiet hours and per-channel mute
 - Custom keybinding overrides
@@ -107,6 +115,12 @@ slk is intentionally not a 1:1 port of the desktop client. Some Slack features a
 - Huddles, Slack Connect, Workflow Builder
 - Bot/app management, slash commands, custom emoji management
 - Animated reactions, link unfurls, in-app toasts
+
+**Image rendering caveats:**
+- iTerm2 ≥ 3.5 implements kitty graphics but does not support unicode placeholders, so it falls back to half-block.
+- Animated GIFs render as a static first frame.
+- Threads side panel renders attachments as text (`[Image] <url>`); inline rendering there is on the roadmap.
+- Link unfurl image previews are not yet rendered inline.
 
 **Auth caveat:** browser-cookie auth means tokens expire when you log out of the browser or Slack rotates them. Re-run `--add-workspace` and you're back in business.
 
@@ -253,6 +267,10 @@ Or just run `./bin/slk`. Onboarding launches automatically when no workspaces ar
 | `E` | Normal (message) | Edit your own message |
 | `D` | Normal (message) | Delete your own message (with confirmation) |
 | `Y` / `C` | Normal (message) | Copy message permalink |
+| `O` | Normal (message) | Open full-screen image preview |
+| `Esc` / `q` | Preview | Close preview |
+| `Enter` | Preview | Open in system image viewer |
+| Click | Any (on image) | Open full-screen preview |
 | `Ctrl+y` | Any | Switch theme |
 | `Ctrl+s` | Any | Set status (Active / Away / DND snooze) |
 | `q` | Normal | Quit (with confirmation) |
@@ -270,6 +288,8 @@ default_workspace = "myteam"
 [appearance]
 theme = "dracula"
 timestamp_format = "3:04 PM"
+image_protocol = "auto"   # auto | kitty | sixel | halfblock | off
+max_image_rows = 20       # cap inline image height in terminal rows
 
 [animations]
 enabled = true
@@ -286,6 +306,7 @@ quiet_hours = "22:00-08:00"   # planned
 [cache]
 message_retention_days = 30
 max_db_size_mb = 500
+max_image_cache_mb = 200
 
 # Custom channel sections (glob patterns)
 [sections.Alerts]
