@@ -52,16 +52,46 @@ func TestRenderHeaderTruncatesIfTooWide(t *testing.T) {
 }
 
 func TestRenderUnknownBlockShowsTypePlaceholder(t *testing.T) {
-	r := Render([]Block{UnknownBlock{Type: "rich_text"}}, Context{}, 80)
+	// Use "video" rather than "rich_text" — rich_text is a known
+	// fall-through type that the renderer silently skips so it
+	// doesn't add a placeholder next to the body text on every
+	// user-typed message. See TestRenderRichTextProducesNoOutput.
+	r := Render([]Block{UnknownBlock{Type: "video"}}, Context{}, 80)
 	if r.Height != 1 {
 		t.Fatalf("Height = %d", r.Height)
 	}
 	plain := ansi.Strip(r.Lines[0])
-	if !strings.Contains(plain, "rich_text") {
+	if !strings.Contains(plain, "video") {
 		t.Errorf("plain = %q, want it to mention type", plain)
 	}
 	if !strings.Contains(plain, "[unsupported block:") {
 		t.Errorf("plain = %q, want '[unsupported block:' marker", plain)
+	}
+}
+
+func TestRenderRichTextProducesNoOutput(t *testing.T) {
+	// rich_text is intentionally not walked (the host renders the
+	// Message.Text field instead). The block must produce zero
+	// lines so it doesn't add a "[unsupported block: rich_text]"
+	// marker next to the body text on every user-typed message.
+	r := Render([]Block{UnknownBlock{Type: "rich_text"}}, Context{}, 80)
+	if r.Height != 0 {
+		t.Errorf("Height = %d, want 0", r.Height)
+	}
+	if len(r.Lines) != 0 {
+		t.Errorf("Lines = %v, want empty", r.Lines)
+	}
+}
+
+func TestRenderUnknownBlockOtherThanRichTextStillShowsPlaceholder(t *testing.T) {
+	// Sanity: the unsupported marker should still appear for
+	// genuinely unrecognized block types.
+	r := Render([]Block{UnknownBlock{Type: "video"}}, Context{}, 80)
+	if r.Height != 1 {
+		t.Errorf("Height = %d, want 1 for unknown 'video' block", r.Height)
+	}
+	if len(r.Lines) == 0 || !strings.Contains(ansi.Strip(r.Lines[0]), "[unsupported block: video]") {
+		t.Errorf("expected '[unsupported block: video]' marker, got %v", r.Lines)
 	}
 }
 
