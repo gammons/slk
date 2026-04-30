@@ -18,7 +18,7 @@ type Config struct {
 	Sidebar       Sidebar                      `toml:"sidebar"`
 	Sections      map[string]SectionDef        `toml:"sections"`
 	Theme         Theme                        `toml:"theme"`
-	Workspaces    map[string]WorkspaceSettings `toml:"workspaces"`
+	Workspaces    map[string]Workspace         `toml:"workspaces"`
 }
 
 // SectionDef defines a sidebar section with channel name patterns.
@@ -71,11 +71,15 @@ type Sidebar struct {
 	HideInactiveAfterDays int `toml:"hide_inactive_after_days"`
 }
 
-// WorkspaceSettings holds per-workspace user preferences. Currently
-// only Theme is configurable; future per-workspace settings (notification
-// rules, default channel, etc.) belong here.
-type WorkspaceSettings struct {
-	Theme string `toml:"theme"`
+// Workspace holds per-workspace user preferences. The TOML key for
+// the surrounding map can be either a user-chosen slug (with TeamID
+// set explicitly via team_id) or — for backward compatibility —
+// a raw Slack team ID (with TeamID left empty; Load fills it in
+// from the key).
+type Workspace struct {
+	TeamID   string                `toml:"team_id"`
+	Theme    string                `toml:"theme"`
+	Sections map[string]SectionDef `toml:"sections"`
 }
 
 type Theme struct {

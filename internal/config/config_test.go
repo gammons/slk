@@ -118,7 +118,7 @@ func TestLoadConfigMissingFile(t *testing.T) {
 func TestResolveThemeWorkspaceWins(t *testing.T) {
 	c := Config{
 		Appearance: Appearance{Theme: "dark"},
-		Workspaces: map[string]WorkspaceSettings{
+		Workspaces: map[string]Workspace{
 			"T01": {Theme: "dracula"},
 		},
 	}
@@ -130,7 +130,7 @@ func TestResolveThemeWorkspaceWins(t *testing.T) {
 func TestResolveThemeWorkspaceMissing(t *testing.T) {
 	c := Config{
 		Appearance: Appearance{Theme: "tokyo night"},
-		Workspaces: map[string]WorkspaceSettings{
+		Workspaces: map[string]Workspace{
 			"T01": {Theme: "dracula"},
 		},
 	}
@@ -143,7 +143,7 @@ func TestResolveThemeWorkspaceEmpty(t *testing.T) {
 	// Workspace exists in map but has empty Theme.
 	c := Config{
 		Appearance: Appearance{Theme: "tokyo night"},
-		Workspaces: map[string]WorkspaceSettings{
+		Workspaces: map[string]Workspace{
 			"T01": {Theme: ""},
 		},
 	}
@@ -155,7 +155,7 @@ func TestResolveThemeWorkspaceEmpty(t *testing.T) {
 func TestResolveThemeNoGlobal(t *testing.T) {
 	c := Config{
 		Appearance: Appearance{Theme: ""},
-		Workspaces: map[string]WorkspaceSettings{},
+		Workspaces: map[string]Workspace{},
 	}
 	if got := c.ResolveTheme("T01"); got != "nord" {
 		t.Errorf("ResolveTheme no global = %q, want nord", got)

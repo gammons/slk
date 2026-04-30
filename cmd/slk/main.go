@@ -347,7 +347,7 @@ func run() error {
 			}
 			// Update in-memory config.
 			if cfg.Workspaces == nil {
-				cfg.Workspaces = make(map[string]config.WorkspaceSettings)
+				cfg.Workspaces = make(map[string]config.Workspace)
 			}
 			ws := cfg.Workspaces[activeTeamID]
 			ws.Theme = name
