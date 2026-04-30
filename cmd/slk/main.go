@@ -164,7 +164,7 @@ func printHelp() {
 Usage:
   slk                    Launch the TUI
   slk --add-workspace    Add a Slack workspace (interactive)
-  slk --list-workspaces  List configured workspaces (TeamID, Name)
+  slk --list-workspaces  List configured workspaces (TeamID, Slug, Name)
   slk --version          Print version and exit
   slk --help             Show this help
 
@@ -340,20 +340,31 @@ func run() error {
 			if activeTeamID == "" {
 				return // shouldn't happen, but guard against it
 			}
-			// Find the team name for the comment.
 			teamName := activeTeamID
 			if wctx, ok := workspaces[activeTeamID]; ok && wctx.TeamName != "" {
 				teamName = wctx.TeamName
 			}
+			// Find the existing TOML key for this workspace, if any.
+			// If no block exists yet we use the team ID as the key
+			// (legacy default); a future --add-workspace may have
+			// already written a slug-keyed block.
+			tomlKey := activeTeamID
+			for k, w := range cfg.Workspaces {
+				if w.TeamID == activeTeamID {
+					tomlKey = k
+					break
+				}
+			}
 			// Update in-memory config.
 			if cfg.Workspaces == nil {
-				cfg.Workspaces = make(map[string]config.WorkspaceSettings)
+				cfg.Workspaces = make(map[string]config.Workspace)
 			}
-			ws := cfg.Workspaces[activeTeamID]
+			ws := cfg.Workspaces[tomlKey]
+			ws.TeamID = activeTeamID
 			ws.Theme = name
-			cfg.Workspaces[activeTeamID] = ws
+			cfg.Workspaces[tomlKey] = ws
 			// Persist.
-			if err := saveWorkspaceTheme(configPath, activeTeamID, teamName, name); err != nil {
+			if err := saveWorkspaceTheme(configPath, tomlKey, activeTeamID, teamName, name); err != nil {
 				log.Printf("save workspace theme: %v", err)
 			}
 		case themeswitcher.ScopeGlobal:
@@ -621,6 +632,28 @@ func run() error {
 		}
 	})
 
+	// Resolve general.default_workspace if set. We honor it only if
+	// the matching token is actually configured; otherwise fall back
+	// to "first workspace to connect wins" with a warning.
+	defaultTeamID, err := cfg.TeamIDForDefaultWorkspace()
+	if err != nil {
+		log.Printf("Warning: %v; ignoring default_workspace setting", err)
+		defaultTeamID = ""
+	}
+	if defaultTeamID != "" {
+		found := false
+		for _, t := range tokens {
+			if t.TeamID == defaultTeamID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			log.Printf("Warning: default_workspace resolves to team %q but no token is configured for it; ignoring", defaultTeamID)
+			defaultTeamID = ""
+		}
+	}
+
 	// Start the TUI immediately (shows loading overlay)
 	p = tea.NewProgram(app)
 
@@ -637,8 +670,17 @@ func run() error {
 			workspaces[wctx.TeamID] = wctx
 			wsMgr.AddWorkspace(wctx.TeamID, wctx.TeamName, "")
 
-			// Wire callbacks for the first workspace that connects
-			if activeTeamID == "" {
+			// Decide whether this workspace becomes the active one.
+			// If default_workspace resolved to a team ID, only that
+			// workspace claims active. Otherwise the first to connect
+			// claims it.
+			claimActive := false
+			if defaultTeamID != "" {
+				claimActive = wctx.TeamID == defaultTeamID
+			} else {
+				claimActive = activeTeamID == ""
+			}
+			if claimActive {
 				activeTeamID = wctx.TeamID
 				wireCallbacks(wctx)
 			}
@@ -836,12 +878,10 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 			})
 		}
 
-		section := cfg.MatchSection(ch.Name)
+		section := cfg.MatchSection(client.TeamID(), ch.Name)
 		var sectionOrder int
 		if section != "" {
-			if def, ok := cfg.Sections[section]; ok {
-				sectionOrder = def.Order
-			}
+			sectionOrder = cfg.SectionOrder(client.TeamID(), section)
 		}
 		item := sidebar.ChannelItem{
 			ID:           ch.ID,
@@ -1589,20 +1629,33 @@ func listWorkspaces() error {
 		fmt.Println("No workspaces configured. Run 'slk --add-workspace' first.")
 		return nil
 	}
-	// Compute column widths for tidy output.
-	idW, nameW := len("TEAM ID"), len("NAME")
+	configPath := filepath.Join(xdgConfig(), "config.toml")
+	cfg, _ := config.Load(configPath) // best-effort
+
+	slugByTeamID := make(map[string]string, len(cfg.Workspaces))
+	for k, w := range cfg.Workspaces {
+		slugByTeamID[w.TeamID] = k
+	}
+
+	idW, slugW, nameW := len("TEAM ID"), len("SLUG"), len("NAME")
 	for _, t := range tokens {
 		if len(t.TeamID) > idW {
 			idW = len(t.TeamID)
+		}
+		if s := slugByTeamID[t.TeamID]; len(s) > slugW {
+			slugW = len(s)
 		}
 		if len(t.TeamName) > nameW {
 			nameW = len(t.TeamName)
 		}
 	}
-	fmt.Printf("%-*s  %s\n", idW, "TEAM ID", "NAME")
-	fmt.Printf("%s  %s\n", strings.Repeat("-", idW), strings.Repeat("-", nameW))
+	fmt.Printf("%-*s  %-*s  %s\n", idW, "TEAM ID", slugW, "SLUG", "NAME")
+	fmt.Printf("%s  %s  %s\n",
+		strings.Repeat("-", idW),
+		strings.Repeat("-", slugW),
+		strings.Repeat("-", nameW))
 	for _, t := range tokens {
-		fmt.Printf("%-*s  %s\n", idW, t.TeamID, t.TeamName)
+		fmt.Printf("%-*s  %-*s  %s\n", idW, t.TeamID, slugW, slugByTeamID[t.TeamID], t.TeamName)
 	}
 	return nil
 }

@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,7 +19,7 @@ type Config struct {
 	Sidebar       Sidebar                      `toml:"sidebar"`
 	Sections      map[string]SectionDef        `toml:"sections"`
 	Theme         Theme                        `toml:"theme"`
-	Workspaces    map[string]WorkspaceSettings `toml:"workspaces"`
+	Workspaces    map[string]Workspace         `toml:"workspaces"`
 }
 
 // SectionDef defines a sidebar section with channel name patterns.
@@ -71,11 +72,15 @@ type Sidebar struct {
 	HideInactiveAfterDays int `toml:"hide_inactive_after_days"`
 }
 
-// WorkspaceSettings holds per-workspace user preferences. Currently
-// only Theme is configurable; future per-workspace settings (notification
-// rules, default channel, etc.) belong here.
-type WorkspaceSettings struct {
-	Theme string `toml:"theme"`
+// Workspace holds per-workspace user preferences. The TOML key for
+// the surrounding map can be either a user-chosen slug (with TeamID
+// set explicitly via team_id) or — for backward compatibility —
+// a raw Slack team ID (with TeamID left empty; Load fills it in
+// from the key).
+type Workspace struct {
+	TeamID   string                `toml:"team_id"`
+	Theme    string                `toml:"theme"`
+	Sections map[string]SectionDef `toml:"sections"`
 }
 
 type Theme struct {
@@ -134,26 +139,88 @@ func Load(path string) (Config, error) {
 		return cfg, err
 	}
 
+	resolved, err := resolveWorkspaceKeys(cfg.Workspaces)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.Workspaces = resolved
+
 	return cfg, nil
 }
 
-// MatchSection returns the section name for a given channel name,
-// or empty string if no section matches.
-func (c Config) MatchSection(channelName string) string {
-	// Build ordered list of sections
+// WorkspaceByTeamID returns the configured Workspace for the given
+// team ID, scanning c.Workspaces (which is keyed by either slug or
+// legacy team ID). Returns false if no workspace matches.
+func (c Config) WorkspaceByTeamID(teamID string) (Workspace, bool) {
+	if teamID == "" {
+		return Workspace{}, false
+	}
+	for _, ws := range c.Workspaces {
+		if ws.TeamID == teamID {
+			return ws, true
+		}
+	}
+	return Workspace{}, false
+}
+
+// TeamIDForDefaultWorkspace resolves general.default_workspace to a
+// team ID. The configured value can be either a slug ([workspaces.<slug>])
+// or a legacy team-ID-shaped key. Returns ("", nil) if default_workspace
+// is unset, and an error if it is set but does not match any
+// configured workspace.
+func (c Config) TeamIDForDefaultWorkspace() (string, error) {
+	key := c.General.DefaultWorkspace
+	if key == "" {
+		return "", nil
+	}
+	if ws, ok := c.Workspaces[key]; ok {
+		return ws.TeamID, nil
+	}
+	return "", fmt.Errorf("default_workspace %q not found in [workspaces.*]", key)
+}
+
+// MatchSection returns the section name for a given channel name in
+// the context of the given workspace. If the workspace has its own
+// non-empty Sections map, that fully replaces the global Sections;
+// otherwise the global Sections apply. Returns "" if no pattern
+// matches.
+func (c Config) MatchSection(teamID, channelName string) string {
+	sections := c.Sections
+	if ws, ok := c.WorkspaceByTeamID(teamID); ok && len(ws.Sections) > 0 {
+		sections = ws.Sections
+	}
+	return matchSectionIn(sections, channelName)
+}
+
+// SectionOrder returns the Order field for the named section,
+// resolved through the same workspace-vs-global precedence as
+// MatchSection. Returns 0 if the section is not defined.
+func (c Config) SectionOrder(teamID, sectionName string) int {
+	sections := c.Sections
+	if ws, ok := c.WorkspaceByTeamID(teamID); ok && len(ws.Sections) > 0 {
+		sections = ws.Sections
+	}
+	if def, ok := sections[sectionName]; ok {
+		return def.Order
+	}
+	return 0
+}
+
+// matchSectionIn walks sections in Order-ascending order and returns
+// the first section name whose patterns match channelName.
+func matchSectionIn(sections map[string]SectionDef, channelName string) string {
 	type entry struct {
 		name     string
 		order    int
 		patterns []string
 	}
 	var entries []entry
-	for name, def := range c.Sections {
+	for name, def := range sections {
 		entries = append(entries, entry{name: name, order: def.Order, patterns: def.Channels})
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].order < entries[j].order
 	})
-
 	for _, e := range entries {
 		for _, pattern := range e.patterns {
 			if matched, _ := filepath.Match(pattern, channelName); matched {
@@ -168,7 +235,7 @@ func (c Config) MatchSection(channelName string) string {
 // falling back to the global Appearance.Theme when no per-workspace theme
 // is set, and to "nord" when no global theme is set either.
 func (c Config) ResolveTheme(teamID string) string {
-	if ws, ok := c.Workspaces[teamID]; ok && ws.Theme != "" {
+	if ws, ok := c.WorkspaceByTeamID(teamID); ok && ws.Theme != "" {
 		return ws.Theme
 	}
 	if c.Appearance.Theme != "" {

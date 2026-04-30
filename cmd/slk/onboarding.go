@@ -9,6 +9,7 @@ import (
 	"charm.land/huh/v2"
 	"charm.land/huh/v2/spinner"
 	"charm.land/lipgloss/v2"
+	"github.com/gammons/slk/internal/config"
 	slackclient "github.com/gammons/slk/internal/slack"
 )
 
@@ -174,6 +175,50 @@ func addWorkspace() error {
 
 	if err := tokenStore.Save(token); err != nil {
 		return fmt.Errorf("saving token: %w", err)
+	}
+
+	// Pick a slug for the new workspace and append a [workspaces.<slug>]
+	// block to config.toml so the user can extend per-workspace settings
+	// (sections, theme, etc.) later by hand.
+	configPath := filepath.Join(xdgConfig(), "config.toml")
+	defaultSlug := uniqueSlug(config.Slugify(wsName), existingSlugs(configPath))
+
+	var slug string
+	slugForm := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Workspace slug").
+				Description("Short identifier used in config.toml (e.g. [workspaces.<slug>])").
+				Placeholder(defaultSlug).
+				Value(&slug).
+				Validate(func(s string) error {
+					s = strings.TrimSpace(s)
+					if s == "" {
+						return nil // empty -> placeholder default
+					}
+					if config.Slugify(s) != s {
+						return fmt.Errorf("must be lowercase letters, digits, and hyphens")
+					}
+					if existingSlugs(configPath)[s] {
+						return fmt.Errorf("slug %q is already used", s)
+					}
+					return nil
+				}),
+		),
+	).WithTheme(huh.ThemeFunc(huh.ThemeDracula))
+
+	if err := slugForm.Run(); err != nil {
+		slug = defaultSlug
+	}
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		slug = defaultSlug
+	}
+
+	if err := appendWorkspaceConfigBlock(configPath, slug, teamID, wsName); err != nil {
+		// Don't fail the whole onboarding: the token saved, the user
+		// can hand-edit config later. Just warn.
+		fmt.Println(errorStyle.Render("  Note: could not write config.toml: " + err.Error()))
 	}
 
 	fmt.Println()
