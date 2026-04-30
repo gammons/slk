@@ -86,6 +86,14 @@ type Model struct {
 	// rest of the model operates in.
 	chromeHeight int
 
+	// unreadBoundaryTS is the Slack timestamp the user has already read up
+	// to in this thread. Replies whose TS > unreadBoundaryTS are considered
+	// new; a "── new ──" landmark is inserted between the last read reply
+	// and the first new one. Empty string disables the landmark. Set via
+	// SetUnreadBoundary, typically with the parent channel's last_read_ts
+	// at the moment the thread is opened.
+	unreadBoundaryTS string
+
 	// version increments on every state change that could alter View() output.
 	version int64
 }
@@ -110,8 +118,14 @@ func (m *Model) InvalidateCache() {
 }
 
 // SetThread populates the thread panel with a parent message and replies.
-// The cursor starts at the bottom (newest reply).
+// The cursor starts at the bottom (newest reply). When the channel/thread
+// identity changes (i.e. the user is opening a different thread, not just
+// receiving a refresh of the current one), the unread boundary is cleared
+// so a fresh boundary can be set by the caller via SetUnreadBoundary.
 func (m *Model) SetThread(parent messages.MessageItem, replies []messages.MessageItem, channelID, threadTS string) {
+	if channelID != m.channelID || threadTS != m.threadTS {
+		m.unreadBoundaryTS = ""
+	}
 	m.ClearSelection()
 	m.parent = parent
 	m.replies = replies
@@ -119,6 +133,20 @@ func (m *Model) SetThread(parent messages.MessageItem, replies []messages.Messag
 	m.threadTS = threadTS
 	m.selected = 0
 	m.InvalidateCache()
+}
+
+// SetUnreadBoundary sets the timestamp the user has already read up to in
+// this thread. A "── new ──" landmark is rendered between the last reply
+// with TS <= boundary and the first reply with TS > boundary. Pass "" to
+// clear the boundary. Typically called by the App right after SetThread,
+// using the parent channel's last_read_ts as the boundary.
+func (m *Model) SetUnreadBoundary(ts string) {
+	if m.unreadBoundaryTS == ts {
+		return
+	}
+	m.unreadBoundaryTS = ts
+	m.viewCacheValid = false
+	m.dirty()
 }
 
 // AddReply appends a reply to the thread and scrolls to the bottom.
@@ -864,6 +892,20 @@ func (m *Model) View(height, width int) string {
 			Foreground(styles.Border)
 		replySeparator := separatorStyle.Render(strings.Repeat("─", width))
 
+		// "── new ──" landmark inserted just before the first reply with
+		// TS > unreadBoundaryTS. Mirrors the channel pane's new-message
+		// line (messages/model.go:642-664). The landmark line is NOT
+		// inside any cache entry, matching the inter-reply separator
+		// convention so selection overlay / extraction skip it naturally.
+		landmarkStyle := lipgloss.NewStyle().
+			Width(width).
+			Background(styles.Background).
+			Foreground(styles.Error).
+			Bold(true).
+			Align(lipgloss.Center)
+		newLandmark := landmarkStyle.Render("── new ──")
+		landmarkInserted := false
+
 		var allRows []string
 		startLine := 0
 		endLine := 0
@@ -876,6 +918,16 @@ func (m *Model) View(height, width int) string {
 		m.entryOffsets = m.entryOffsets[:0]
 
 		for i, e := range m.cache {
+			// Insert the new-reply landmark before the first reply whose
+			// TS exceeds the unread boundary. We check this BEFORE
+			// recording the entry offset so the landmark sits above
+			// reply i.
+			if !landmarkInserted && m.unreadBoundaryTS != "" && i < len(m.replies) && m.replies[i].TS > m.unreadBoundaryTS {
+				allRows = append(allRows, newLandmark)
+				currentLine++
+				landmarkInserted = true
+			}
+
 			content := strings.Join(e.linesNormal, "\n")
 			if i == m.selected {
 				startLine = currentLine

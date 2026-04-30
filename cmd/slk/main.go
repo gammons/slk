@@ -412,6 +412,10 @@ func run() error {
 		userNames := wctx.UserNames
 		lastReadMap := wctx.LastReadMap
 
+		app.SetChannelLastReadFetcher(func(channelID string) string {
+			return lastReadMap[channelID]
+		})
+
 		app.SetChannelFetcher(func(channelID, channelName string) tea.Msg {
 			msgItems := fetchChannelMessages(client, channelID, db, userNames, tsFormat, avatarCache)
 

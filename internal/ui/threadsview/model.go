@@ -36,7 +36,15 @@ func mutedStyle() lipgloss.Style {
 }
 
 func unreadDotStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(styles.Error).Bold(true)
+	return lipgloss.NewStyle().Foreground(styles.Primary).Bold(true)
+}
+
+// channelNameStyle themes the channel name in a thread card so it remains
+// readable on light themes (where the default foreground is dark on a dark
+// Background panel). Uses the theme's primary/link color, mirroring the
+// sidebar's "channel link" convention.
+func channelNameStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(styles.Primary).Bold(true)
 }
 
 // thickLeftBorder mirrors the messages package convention: a 1-column-wide
@@ -251,6 +259,27 @@ func (m *Model) ScrollDown(n int) {
 	m.dirty()
 }
 
+// MarkSelectedRead clears the local Unread flag on the currently selected
+// summary, if any. Returns true when a flag was actually flipped (so callers
+// can refresh dependent state, e.g. the sidebar's threads-row badge). This
+// is a presentation-only update: it does not touch Slack server state and
+// does not advance the parent channel's last_read_ts. The next refresh
+// from cache.ListInvolvedThreads may re-set the flag if its heuristic
+// (LastReplyTS > channel.last_read_ts) still considers the thread unread,
+// but in practice the user opening the parent channel will eventually
+// resolve that.
+func (m *Model) MarkSelectedRead() bool {
+	if m.selected < 0 || m.selected >= len(m.summaries) {
+		return false
+	}
+	if !m.summaries[m.selected].Unread {
+		return false
+	}
+	m.summaries[m.selected].Unread = false
+	m.dirty()
+	return true
+}
+
 // UnreadCount returns the number of summaries currently flagged as unread.
 func (m *Model) UnreadCount() int {
 	n := 0
@@ -398,9 +427,9 @@ func (m *Model) renderCard(s cache.ThreadSummary, width int, selected bool) []st
 	glyph := channelGlyph(s.ChannelType)
 	author := m.resolveUser(s.ParentUserID)
 	relTime := formatRelTime(s.ParentTS)
-	header := glyph + s.ChannelName + "  " + mutedStyle().Render("·") + "  " + author + "  " + mutedStyle().Render("· "+relTime)
+	header := glyph + channelNameStyle().Render(s.ChannelName) + "  " + mutedStyle().Render("·") + "  " + author + "  " + mutedStyle().Render("· "+relTime)
 	if s.Unread {
-		header += "  " + unreadDotStyle().Render("•")
+		header += "  " + unreadDotStyle().Render("●")
 	}
 	header = clipToWidth(header, contentWidth)
 

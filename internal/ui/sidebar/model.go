@@ -158,7 +158,12 @@ type Model struct {
 	// is injectable for deterministic tests; defaults to time.Now.
 	staleThreshold time.Duration
 	activeID       string
-	nowFn          func() time.Time
+	// threadsActive reports that the Threads view is the currently
+	// displayed view in the message pane. When true (and the cursor
+	// is on a different row), the synthetic Threads row renders with
+	// the same orange "active" indicator used for active channels.
+	threadsActive bool
+	nowFn         func() time.Time
 
 	// snappedSelection lets View() avoid snapping yOffset back to the
 	// selected row on every render. While snappedSelection == cursor,
@@ -242,6 +247,18 @@ func (m *Model) SetActiveChannelID(id string) {
 	m.rebuildFilter()
 	m.rebuildNavPreserveCursor()
 	m.cacheValid = false
+	m.dirty()
+}
+
+// SetThreadsActive marks the synthetic "Threads" row as the active
+// destination in the message pane. When true (and cursor is elsewhere),
+// the Threads row renders with the orange active indicator. Mirrors
+// SetActiveChannelID for normal channels.
+func (m *Model) SetThreadsActive(active bool) {
+	if m.threadsActive == active {
+		return
+	}
+	m.threadsActive = active
 	m.dirty()
 }
 
@@ -710,8 +727,17 @@ func (m *Model) aggregateUnreadForSection(section string) int {
 type renderRow struct {
 	normal   string // rendered as a non-selected row
 	selected string // rendered with the selection cursor + selected style
+	active   string // rendered with the orange "currently-entered" indicator; empty when not applicable
 	height   int    // rendered terminal height (always 1 for headers/blanks)
 	navIdx   int    // index into m.nav, or -1
+	// channelID is set on channel rows and used by View() to swap in the
+	// `active` variant when the row matches m.activeID. Empty for headers,
+	// blanks, and the Threads row.
+	channelID string
+	// isThreadsRow flags the synthetic Threads row so View() can swap in
+	// the `active` variant whenever m.threadsActive is true (mirroring
+	// the channelID-based check used for channels).
+	isThreadsRow bool
 }
 
 // buildCache rebuilds m.cacheRows for the given width. Expensive; runs only
@@ -751,10 +777,12 @@ func (m *Model) buildCache(width int) {
 
 	// Style objects allocated once per cache build.
 	cursorStyle := lipgloss.NewStyle().Foreground(styles.Accent)
+	activeBorderStyle := lipgloss.NewStyle().Foreground(styles.Warning)
 	dotStyle := lipgloss.NewStyle().Foreground(styles.Primary)
 	privateStyle := lipgloss.NewStyle().Foreground(styles.Warning)
 
 	cursorSelected := cursorStyle.Render("▌")
+	activeBorder := activeBorderStyle.Render("▌")
 	unreadDotStr := dotStyle.Render("●")
 	privatePrefix := privateStyle.Render("◆ ")
 	dmActivePrefix := styles.PresenceOnline.Render("● ")
@@ -766,6 +794,7 @@ func (m *Model) buildCache(width int) {
 	// the threads view when IsThreadsSelected() is true.
 	threadsLabel := " ⚑ Threads"
 	threadsCursor := cursorSelected + "⚑ Threads"
+	threadsActiveLabel := activeBorder + "⚑ Threads"
 	if m.threadsUnread > 0 {
 		// Render "•N" as a single styled span so the dot glyph and the digits
 		// stay adjacent in the output (no ANSI reset splits them). Tests rely
@@ -773,16 +802,21 @@ func (m *Model) buildCache(width int) {
 		badge := " " + dotStyle.Render("•"+fmt.Sprintf("%d", m.threadsUnread))
 		threadsLabel += badge
 		threadsCursor += badge
+		threadsActiveLabel += badge
 	}
 	threadsLabel = messages.ReapplyBgAfterResets(threadsLabel, bgAnsi)
 	threadsCursor = messages.ReapplyBgAfterResets(threadsCursor, bgAnsi)
+	threadsActiveLabel = messages.ReapplyBgAfterResets(threadsActiveLabel, bgAnsi)
 	threadsNormal := styles.ChannelNormal.Width(width - 2).Render(threadsLabel)
 	threadsSelectedRow := styles.ChannelSelected.Width(width - 2).Render(threadsCursor)
+	threadsActiveRow := styles.ChannelSelected.Width(width - 2).Render(threadsActiveLabel)
 	m.cacheRows = append(m.cacheRows, renderRow{
-		normal:   threadsNormal,
-		selected: threadsSelectedRow,
-		height:   1,
-		navIdx:   threadsIdx,
+		normal:       threadsNormal,
+		selected:     threadsSelectedRow,
+		active:       threadsActiveRow,
+		height:       1,
+		navIdx:       threadsIdx,
+		isThreadsRow: true,
 	})
 	// Blank separator between the Threads row and the first section (or below
 	// the Threads row when there are no channels at all).
@@ -846,15 +880,21 @@ func (m *Model) buildCache(width int) {
 			name = truncate.StringWithTail(name, uint(maxNameLen), "…")
 		}
 
-		// Two label variants: selected (with cursor glyph) and normal (with space).
+		// Three label variants: selected (cursor, green ▌), active
+		// (entered/open channel, orange ▌), and normal (just a space).
+		// View() picks: selected if cursor is on this row, else active
+		// if this row's channelID matches activeID, else normal. The
+		// cursor takes precedence so j/k feedback stays unambiguous.
 		labelNormal := " " + prefix + name + " " + unreadDot
 		labelSelected := cursorSelected + prefix + name + " " + unreadDot
+		labelActive := activeBorder + prefix + name + " " + unreadDot
 
 		// Re-apply theme background after ANSI resets from inline styled
 		// glyphs (cursor, prefix, unread dot) so the outer channel style's
 		// background isn't interrupted.
 		labelNormal = messages.ReapplyBgAfterResets(labelNormal, bgAnsi)
 		labelSelected = messages.ReapplyBgAfterResets(labelSelected, bgAnsi)
+		labelActive = messages.ReapplyBgAfterResets(labelActive, bgAnsi)
 
 		// Pick base style for non-selected state.
 		var baseStyle lipgloss.Style
@@ -866,16 +906,22 @@ func (m *Model) buildCache(width int) {
 
 		rowNormal := baseStyle.Width(width - 2).Render(labelNormal)
 		rowSelected := styles.ChannelSelected.Width(width - 2).Render(labelSelected)
+		// Active uses the same bright/bold treatment as Selected so the
+		// entered channel reads as "current" even when its unread count
+		// is zero (which is the common case after MarkChannel runs).
+		rowActive := styles.ChannelSelected.Width(width - 2).Render(labelActive)
 
 		ni, ok := channelNavIdx[fi]
 		if !ok {
 			ni = -1
 		}
 		sectionMap[sectionName].rows = append(sectionMap[sectionName].rows, renderRow{
-			normal:   rowNormal,
-			selected: rowSelected,
-			height:   1, // every channel row is exactly one line
-			navIdx:   ni,
+			normal:    rowNormal,
+			selected:  rowSelected,
+			active:    rowActive,
+			height:    1, // every channel row is exactly one line
+			navIdx:    ni,
+			channelID: item.ID,
 		})
 	}
 
@@ -995,6 +1041,15 @@ func (m *Model) View(height, width int) string {
 		switch {
 		case r.navIdx >= 0 && r.navIdx == m.cursor:
 			visible = append(visible, r.selected)
+		case r.channelID != "" && r.channelID == m.activeID && r.active != "":
+			// This row is the channel the user is currently viewing in
+			// the message pane (but the cursor is elsewhere). Show the
+			// orange ▌ "active" indicator so they know where they are.
+			visible = append(visible, r.active)
+		case r.isThreadsRow && m.threadsActive && r.active != "":
+			// Threads view is the currently displayed view; mark the
+			// Threads row as active with the same orange indicator.
+			visible = append(visible, r.active)
 		case r.normal == "":
 			// Inter-section blank row -- emit a width-sized themed blank so
 			// the panel background remains continuous.

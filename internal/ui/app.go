@@ -517,6 +517,10 @@ type App struct {
 	threadReplySender    ThreadReplySendFunc
 	channelJoiner        JoinChannelFunc
 	threadsListFetcher   ThreadsListFetchFunc
+	// channelLastReadFetcher returns the parent channel's last_read_ts
+	// so the thread panel can render a "── new ──" boundary. Optional —
+	// when nil, the thread panel renders without an unread boundary.
+	channelLastReadFetcher func(channelID string) string
 	threadsDirtyDebounce time.Duration
 	fetchingOlder        bool
 
@@ -990,6 +994,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.cancelEdit()
 		// Picking a channel always exits the Threads view.
 		a.view = ViewChannels
+		a.sidebar.SetThreadsActive(false)
 		a.lastOpenedChannelID = ""
 		a.lastOpenedThreadTS = ""
 		// Close thread panel when switching channels
@@ -1159,6 +1164,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ThreadsViewActivatedMsg:
 		a.view = ViewThreads
+		a.sidebar.SetThreadsActive(true)
 		a.focusedPanel = PanelMessages
 		if a.threadsListFetcher != nil && a.activeTeamID != "" {
 			fetcher := a.threadsListFetcher
@@ -1285,6 +1291,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// workspace switch.
 		a.sidebar.SelectThreadsRow()
 		a.view = ViewChannels
+		a.sidebar.SetThreadsActive(false)
 		a.threadsView.SetSummaries(nil)
 		a.sidebar.SetThreadsUnreadCount(0)
 		a.lastOpenedChannelID = ""
@@ -1362,6 +1369,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// unread badge, or current view.
 		if a.activeChannelID == "" {
 			a.view = ViewChannels
+			a.sidebar.SetThreadsActive(false)
 			a.threadsView.SetSummaries(nil)
 			a.sidebar.SetThreadsUnreadCount(0)
 			a.lastOpenedChannelID = ""
@@ -2633,6 +2641,7 @@ func (a *App) handleEnter() tea.Cmd {
 			a.focusedPanel = PanelThread
 			a.threadPanel.SetThread(msg, nil, a.activeChannelID, threadTS)
 			a.threadCompose.SetChannel("thread")
+			a.applyThreadUnreadBoundary(a.activeChannelID)
 
 			if a.threadFetcher != nil {
 				fetcher := a.threadFetcher
@@ -2775,12 +2784,35 @@ func (a *App) openSelectedThreadCmd() tea.Cmd {
 	}
 	a.threadPanel.SetThread(parent, nil, sum.ChannelID, sum.ThreadTS)
 	a.threadCompose.SetChannel("thread")
+	// Snapshot the parent channel's last_read_ts BEFORE the local mark-
+	// read flips below, so the "── new ──" landmark in the thread panel
+	// reflects what the user had actually seen prior to opening this
+	// thread.
+	a.applyThreadUnreadBoundary(sum.ChannelID)
+	// Local mark-as-read for the threads list: opening a thread should
+	// clear its unread flag in the threads-view list and the sidebar
+	// badge. This is presentation-only — it does not call Slack's
+	// conversations.mark or advance the parent channel's last_read_ts.
+	if a.threadsView.MarkSelectedRead() {
+		a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
+	}
 	if a.threadFetcher != nil {
 		fetcher := a.threadFetcher
 		chID, threadTS := sum.ChannelID, sum.ThreadTS
 		return func() tea.Msg { return fetcher(chID, threadTS) }
 	}
 	return nil
+}
+
+// applyThreadUnreadBoundary tells the thread panel where the unread
+// boundary is for `channelID` so it can render a "── new ──" landmark
+// before the first reply the user hasn't seen. No-op when no last-read
+// fetcher is wired (e.g. in tests).
+func (a *App) applyThreadUnreadBoundary(channelID string) {
+	if a.channelLastReadFetcher == nil || channelID == "" {
+		return
+	}
+	a.threadPanel.SetUnreadBoundary(a.channelLastReadFetcher(channelID))
 }
 
 // scheduleThreadsDirty returns a tea.Cmd that fires a ThreadsListDirtyMsg
@@ -2975,6 +3007,13 @@ func (a *App) SetClipboardReader(fn clipboardReader) {
 // SetThreadFetcher sets the callback used to load thread replies.
 func (a *App) SetThreadFetcher(fn ThreadFetchFunc) {
 	a.threadFetcher = fn
+}
+
+// SetChannelLastReadFetcher wires a callback that returns the parent
+// channel's last_read_ts so the thread panel can show the user where
+// the unread boundary sits when they open a thread. Optional.
+func (a *App) SetChannelLastReadFetcher(fn func(channelID string) string) {
+	a.channelLastReadFetcher = fn
 }
 
 // SetThreadReplySender sets the callback used to send thread replies.
