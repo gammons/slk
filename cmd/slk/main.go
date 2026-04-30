@@ -70,6 +70,14 @@ type WorkspaceContext struct {
 	// Used during channel construction to bucket app DMs into a separate
 	// "Apps" sidebar section.
 	BotUserIDs        map[string]bool
+	// ThreadsHasUnreads is the workspace-wide threads-have-any-unread
+	// signal returned by client.counts on startup. The local SQLite
+	// heuristic for per-thread unread state can produce false positives
+	// (the parent channel's last_read_ts is older than a thread reply
+	// the user already read in another Slack client). When Slack tells
+	// us the workspace has zero unread threads, we trust that and
+	// suppress the heuristic-derived flags entirely.
+	ThreadsHasUnreads bool
 	LastReadMap       map[string]string
 	Channels    []sidebar.ChannelItem
 	// FinderItems is the merged list shown in the Ctrl+T finder. Initially
@@ -666,6 +674,20 @@ func run() error {
 				log.Printf("Warning: ListInvolvedThreads(%s): %v", teamID, err)
 				return ui.ThreadsListLoadedMsg{TeamID: teamID, Summaries: nil}
 			}
+			// If Slack reports zero workspace-wide unread threads,
+			// suppress the local heuristic's Unread flags. Without
+			// this, threads whose parent channel's last_read_ts is
+			// older than the latest reply -- but that the user has
+			// already read in another Slack client -- show as unread
+			// every launch until the user opens the parent channel
+			// itself. We respect the server signal as authoritative
+			// for the "no unreads" case; we can't disambiguate which
+			// threads are unread when the server says some are.
+			if !wctx.ThreadsHasUnreads {
+				for i := range summaries {
+					summaries[i].Unread = false
+				}
+			}
 			return ui.ThreadsListLoadedMsg{TeamID: teamID, Summaries: summaries}
 		})
 
@@ -1046,7 +1068,8 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	}
 
 	// Fetch unread counts
-	unreadCounts, _ := client.GetUnreadCounts()
+	unreadCounts, threadsAgg, _ := client.GetUnreadCounts()
+	wctx.ThreadsHasUnreads = threadsAgg.HasUnreads
 	unreadMap := make(map[string]int)
 	for _, u := range unreadCounts {
 		if u.HasUnread {

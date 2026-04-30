@@ -462,13 +462,31 @@ type UnreadInfo struct {
 	LastRead  string // Slack message timestamp
 }
 
+// ThreadsAggregate captures Slack's server-side notion of whether the
+// user has any unread thread activity at all, plus the mention/unread
+// counts. The local SQLite cache has no per-thread read state, so the
+// threads-list "Unread" flag is computed by a heuristic that can
+// produce false positives (e.g., a thread reply was read in another
+// Slack client but the parent channel's last_read_ts predates it).
+// HasUnreads from this struct is the authoritative signal that lets us
+// suppress those false positives on startup.
+type ThreadsAggregate struct {
+	HasUnreads   bool
+	UnreadCount  int
+	MentionCount int
+}
+
 // GetUnreadCounts fetches unread counts for all channels using Slack's
 // internal client.counts API (available with xoxc browser tokens).
-func (c *Client) GetUnreadCounts() ([]UnreadInfo, error) {
+// Also returns the threads aggregate (HasUnreads / counts) for the
+// workspace; the threads block in client.counts is the only place
+// Slack tells us whether per-thread unreads exist without us having to
+// hit subscriptions.thread.* directly.
+func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
 	reqURL := "https://slack.com/api/client.counts"
 	req, err := http.NewRequest("POST", reqURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
+		return nil, ThreadsAggregate{}, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -476,13 +494,13 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, error) {
 	httpClient := newCookieHTTPClient(c.cookie)
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetching unread counts: %w", err)
+		return nil, ThreadsAggregate{}, fmt.Errorf("fetching unread counts: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("reading response: %w", err)
+		return nil, ThreadsAggregate{}, fmt.Errorf("reading response: %w", err)
 	}
 
 	var result struct {
@@ -505,14 +523,24 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, error) {
 			HasUnreads bool   `json:"has_unreads"`
 			LastRead   string `json:"last_read"`
 		} `json:"ims"`
+		// Threads is the workspace-wide thread-subscription rollup.
+		// Slack returns this top-level when the user has subscribed
+		// threads (i.e., authored, replied to, or @-mentioned in any
+		// thread). HasUnreads here is the authoritative "do I have any
+		// unread thread activity?" signal.
+		Threads struct {
+			HasUnreads   bool `json:"has_unreads"`
+			UnreadCount  int  `json:"unread_count"`
+			MentionCount int  `json:"mention_count"`
+		} `json:"threads"`
 	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("parsing response: %w", err)
+		return nil, ThreadsAggregate{}, fmt.Errorf("parsing response: %w", err)
 	}
 
 	if !result.OK {
-		return nil, fmt.Errorf("client.counts API returned ok=false")
+		return nil, ThreadsAggregate{}, fmt.Errorf("client.counts API returned ok=false")
 	}
 
 	var unreads []UnreadInfo
@@ -553,7 +581,12 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, error) {
 		unreads = append(unreads, info)
 	}
 
-	return unreads, nil
+	threads := ThreadsAggregate{
+		HasUnreads:   result.Threads.HasUnreads,
+		UnreadCount:  result.Threads.UnreadCount,
+		MentionCount: result.Threads.MentionCount,
+	}
+	return unreads, threads, nil
 }
 
 // SendReply posts a threaded reply to the specified message.
