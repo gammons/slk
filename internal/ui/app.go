@@ -1173,6 +1173,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return statusbar.CopiedClearMsg{}
 		}))
 
+	case statusbar.MarkedUnreadMsg:
+		a.statusbar.SetToast("Marked unread")
+		cmds = append(cmds, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+			return statusbar.CopiedClearMsg{}
+		}))
+
+	case statusbar.MarkUnreadFailedMsg:
+		a.statusbar.SetToast("Mark unread failed: " + truncateReason(msg.Reason, 40))
+		cmds = append(cmds, tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+			return statusbar.CopiedClearMsg{}
+		}))
+
 	case statusbar.EditFailedMsg:
 		a.statusbar.SetToast("Edit failed: " + truncateReason(msg.Reason, 40))
 		cmds = append(cmds, tea.Tick(3*time.Second, func(time.Time) tea.Msg {
