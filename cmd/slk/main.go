@@ -1880,6 +1880,10 @@ func (h *rtmEventHandler) OnThreadMarked(channelID, threadTS, ts string, read bo
 	})
 }
 
+// OnConversationOpened is wired in Task 5; this stub satisfies the
+// EventHandler interface so the package compiles.
+func (h *rtmEventHandler) OnConversationOpened(ch slack.Channel) {}
+
 // listWorkspaces prints the configured workspaces with their TeamID and
 // Name, one per line. Useful for users who want to hand-edit per-workspace
 // settings in config.toml.

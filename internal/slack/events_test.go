@@ -27,6 +27,9 @@ type mockEventHandler struct {
 
 	channelMarks []channelMarkRecord
 	threadMarks  []threadMarkRecord
+
+	lastConversationOpenedID string
+	lastConversationOpenedCh slack.Channel
 }
 
 type channelMarkRecord struct {
@@ -77,6 +80,11 @@ func (m *mockEventHandler) OnChannelMarked(channelID, ts string, unreadCount int
 
 func (m *mockEventHandler) OnThreadMarked(channelID, threadTS, ts string, read bool) {
 	m.threadMarks = append(m.threadMarks, threadMarkRecord{channelID, threadTS, ts, read})
+}
+
+func (m *mockEventHandler) OnConversationOpened(ch slack.Channel) {
+	m.lastConversationOpenedID = ch.ID
+	m.lastConversationOpenedCh = ch
 }
 
 func TestEventHandlerInterface(t *testing.T) {
@@ -437,5 +445,50 @@ func TestDispatch_ThreadMarked_MalformedJSON_NoCall(t *testing.T) {
 
 	if len(handler.threadMarks) != 0 {
 		t.Errorf("expected 0 calls on malformed JSON, got %d", len(handler.threadMarks))
+	}
+}
+
+func TestDispatch_MPIMOpen(t *testing.T) {
+	h := &mockEventHandler{}
+	payload := []byte(`{"type":"mpim_open","channel":{"id":"G1","is_mpim":true,"name":"mpdm-alice--bob-1"}}`)
+	dispatchWebSocketEvent(payload, h)
+	if h.lastConversationOpenedID != "G1" {
+		t.Errorf("OnConversationOpened not called or wrong ID; got %q", h.lastConversationOpenedID)
+	}
+}
+
+func TestDispatch_IMCreated(t *testing.T) {
+	h := &mockEventHandler{}
+	payload := []byte(`{"type":"im_created","channel":{"id":"D1","is_im":true,"user":"U1"}}`)
+	dispatchWebSocketEvent(payload, h)
+	if h.lastConversationOpenedID != "D1" {
+		t.Errorf("OnConversationOpened not called or wrong ID; got %q", h.lastConversationOpenedID)
+	}
+}
+
+func TestDispatch_IMOpen(t *testing.T) {
+	h := &mockEventHandler{}
+	payload := []byte(`{"type":"im_open","channel":{"id":"D2","is_im":true,"user":"U2"}}`)
+	dispatchWebSocketEvent(payload, h)
+	if h.lastConversationOpenedID != "D2" {
+		t.Errorf("OnConversationOpened not called or wrong ID; got %q", h.lastConversationOpenedID)
+	}
+}
+
+func TestDispatch_GroupJoined(t *testing.T) {
+	h := &mockEventHandler{}
+	payload := []byte(`{"type":"group_joined","channel":{"id":"G2","is_group":true,"name":"private-room"}}`)
+	dispatchWebSocketEvent(payload, h)
+	if h.lastConversationOpenedID != "G2" {
+		t.Errorf("OnConversationOpened not called or wrong ID; got %q", h.lastConversationOpenedID)
+	}
+}
+
+func TestDispatch_ChannelJoined(t *testing.T) {
+	h := &mockEventHandler{}
+	payload := []byte(`{"type":"channel_joined","channel":{"id":"C1","is_channel":true,"name":"general"}}`)
+	dispatchWebSocketEvent(payload, h)
+	if h.lastConversationOpenedID != "C1" {
+		t.Errorf("OnConversationOpened not called or wrong ID; got %q", h.lastConversationOpenedID)
 	}
 }
