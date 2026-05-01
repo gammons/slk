@@ -96,3 +96,43 @@ func TestOnConversationOpened_DedupesByID(t *testing.T) {
 		t.Errorf("len(FinderItems) = %d, want 1 (dedupe must not double-add)", len(wctx.FinderItems))
 	}
 }
+
+// TestOnConversationOpened_InactiveWorkspace_PersistsContext verifies that
+// when the workspace is inactive, the handler still mutates wsCtx.Channels
+// (so a workspace switch later picks up the new conversation) and does not
+// panic. The program-send half of the gate is verified by code inspection
+// of the isActive check; injecting a fake tea.Program for end-to-end
+// assertion would require widening the rtmEventHandler abstraction
+// beyond the scope of this task.
+func TestOnConversationOpened_InactiveWorkspace_PersistsContext(t *testing.T) {
+	wctx := &WorkspaceContext{
+		BotUserIDs:        map[string]bool{},
+		UserNames:         map[string]string{},
+		UserNamesByHandle: map[string]string{},
+	}
+	h := &rtmEventHandler{
+		wsCtx:        wctx,
+		workspaceID:  "T1",
+		cfg:          config.Config{},
+		channelNames: map[string]string{},
+		channelTypes: map[string]string{},
+		isActive:     func() bool { return false },
+		// program left nil; isActive=false should not be reached as a
+		// panic path even when program is non-nil because the gate
+		// returns before Send.
+	}
+	ch := slack.Channel{
+		GroupConversation: slack.GroupConversation{
+			Conversation: slack.Conversation{ID: "G1", IsMpIM: true},
+			Name:         "mpdm-alice--bob-1",
+		},
+	}
+	h.OnConversationOpened(ch)
+
+	if len(wctx.Channels) != 1 || wctx.Channels[0].ID != "G1" {
+		t.Errorf("inactive workspace context not updated: %+v", wctx.Channels)
+	}
+	if h.channelTypes["G1"] != "group_dm" {
+		t.Errorf("channelTypes not mirrored on inactive workspace: %q", h.channelTypes["G1"])
+	}
+}

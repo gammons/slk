@@ -1939,6 +1939,11 @@ func (h *rtmEventHandler) OnConversationOpened(ch slack.Channel) {
 	if h.program == nil {
 		return
 	}
+	if h.isActive != nil && !h.isActive() {
+		// Persistence above already updated wctx.Channels; defer the
+		// UI message until the user switches into this workspace.
+		return
+	}
 	h.program.Send(ui.ConversationOpenedMsg{
 		TeamID: h.workspaceID,
 		Item:   item,
