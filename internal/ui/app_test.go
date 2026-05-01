@@ -2529,3 +2529,57 @@ func TestThreadMarkedRemoteMsg_ReadClearsRow(t *testing.T) {
 		}
 	}
 }
+
+func TestConversationOpenedMsg_SidebarReceivesItemAndUnread(t *testing.T) {
+	app := NewApp()
+	app.activeTeamID = "T1"
+	app.sidebar.SetItems([]sidebar.ChannelItem{{ID: "C1", Name: "general", Type: "channel"}})
+
+	// Simulate Slack pushing an mpim_open for a previously-unknown mpdm.
+	app.Update(ConversationOpenedMsg{
+		TeamID: "T1",
+		Item: sidebar.ChannelItem{
+			ID:   "G1",
+			Name: "alice, bob",
+			Type: "group_dm",
+		},
+	})
+
+	// Then a message arrives for that mpdm while the user is elsewhere.
+	app.Update(NewMessageMsg{
+		ChannelID: "G1",
+		Message:   messages.MessageItem{TS: "1700000001.000000", UserID: "U2", Text: "hi"},
+	})
+
+	// The sidebar should now show G1 with UnreadCount > 0.
+	found := false
+	for _, it := range app.sidebar.AllItems() {
+		if it.ID == "G1" {
+			found = true
+			if it.UnreadCount < 1 {
+				t.Errorf("G1 UnreadCount = %d, want >= 1", it.UnreadCount)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("G1 not in sidebar after ConversationOpenedMsg")
+	}
+}
+
+func TestConversationOpenedMsg_InactiveWorkspaceIgnored(t *testing.T) {
+	app := NewApp()
+	app.activeTeamID = "T1"
+	app.sidebar.SetItems([]sidebar.ChannelItem{{ID: "C1", Name: "general", Type: "channel"}})
+
+	// Event for a different workspace must NOT mutate the active sidebar.
+	app.Update(ConversationOpenedMsg{
+		TeamID: "T2",
+		Item:   sidebar.ChannelItem{ID: "G1", Name: "alice, bob", Type: "group_dm"},
+	})
+
+	for _, it := range app.sidebar.AllItems() {
+		if it.ID == "G1" {
+			t.Errorf("G1 unexpectedly added to active sidebar from inactive-workspace event")
+		}
+	}
+}
