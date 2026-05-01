@@ -34,6 +34,7 @@ type KeyMap struct {
 	Delete              key.Binding
 	CopyPermalink       key.Binding
 	OpenPreview         key.Binding
+	MarkUnread          key.Binding
 	WorkspaceFinder     key.Binding
 	ThemeSwitcher       key.Binding
 	ThemeSwitcherGlobal key.Binding
@@ -73,6 +74,7 @@ func DefaultKeyMap() KeyMap {
 		Delete:              key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete message")),
 		CopyPermalink:       key.NewBinding(key.WithKeys("Y", "C"), key.WithHelp("Y/C", "copy permalink")),
 		OpenPreview:         key.NewBinding(key.WithKeys("O", "v"), key.WithHelp("O/v", "open image preview")),
+		MarkUnread:          key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "mark unread")),
 		WorkspaceFinder:     key.NewBinding(key.WithKeys("ctrl+w"), key.WithHelp("ctrl+w", "switch workspace")),
 		ThemeSwitcher:       key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "switch theme (per workspace)")),
 		ThemeSwitcherGlobal: key.NewBinding(key.WithKeys("ctrl+shift+y"), key.WithHelp("ctrl+shift+y", "set default theme")),
