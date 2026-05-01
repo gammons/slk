@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -2239,5 +2240,129 @@ func TestMarkUnreadOfSelected_ThreadPane_OldestReply_BoundaryIsParentTS(t *testi
 	mu := res.(MarkUnreadMsg)
 	if mu.BoundaryTS != "P1" {
 		t.Errorf("expected boundary=P1 (parent ts) for oldest reply, got %q", mu.BoundaryTS)
+	}
+}
+
+// cmdContainsMsgType returns true if cmd (or any sub-cmd in a batch)
+// returns a value of the same dynamic type as want when invoked.
+func cmdContainsMsgType(cmd tea.Cmd, want any) bool {
+	if cmd == nil {
+		return false
+	}
+	res := cmd()
+	if res == nil {
+		return false
+	}
+	if reflect.TypeOf(res) == reflect.TypeOf(want) {
+		return true
+	}
+	if batch, ok := res.(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			if cmdContainsMsgType(sub, want) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestMessageMarkedUnreadMsg_ChannelLevel_UpdatesPaneSidebarAndToasts(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.sidebar.SetItems([]sidebar.ChannelItem{
+		{ID: "C1", Name: "general", Section: "Channels"},
+	})
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", UserID: "U1", Text: "first"},
+		{TS: "2.0", UserID: "U1", Text: "second"},
+		{TS: "3.0", UserID: "U1", Text: "third"},
+	})
+
+	_, cmd := app.Update(MessageMarkedUnreadMsg{
+		ChannelID:   "C1",
+		ThreadTS:    "",
+		BoundaryTS:  "1.0",
+		UnreadCount: 2,
+		Err:         nil,
+	})
+
+	// Toast should be queued via tea.Cmd.
+	if cmd == nil {
+		t.Fatal("expected toast cmd")
+	}
+	if !cmdContainsMsgType(cmd, statusbar.MarkedUnreadMsg{}) {
+		t.Errorf("expected MarkedUnreadMsg in cmd output")
+	}
+
+	// Messages-pane boundary moved.
+	if got := app.messagepane.LastReadTS(); got != "1.0" {
+		t.Errorf("expected messagepane lastReadTS=1.0, got %q", got)
+	}
+
+	// Sidebar count was set.
+	for _, it := range app.sidebar.Items() {
+		if it.ID == "C1" && it.UnreadCount != 2 {
+			t.Errorf("expected sidebar UnreadCount=2, got %d", it.UnreadCount)
+		}
+	}
+}
+
+func TestMessageMarkedUnreadMsg_ThreadLevel_UpdatesThreadPaneAndThreadsView(t *testing.T) {
+	app := NewApp()
+	parent := messages.MessageItem{TS: "P1", UserID: "U1", Text: "parent"}
+	app.threadPanel.SetThread(parent, []messages.MessageItem{
+		{TS: "R1", UserID: "U1", Text: "r1"},
+		{TS: "R2", UserID: "U1", Text: "r2"},
+	}, "C1", "P1")
+	app.threadVisible = true
+	app.threadsView.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "P1", Unread: false},
+	})
+
+	_, cmd := app.Update(MessageMarkedUnreadMsg{
+		ChannelID:  "C1",
+		ThreadTS:   "P1",
+		BoundaryTS: "R1",
+		Err:        nil,
+	})
+
+	if cmd == nil || !cmdContainsMsgType(cmd, statusbar.MarkedUnreadMsg{}) {
+		t.Errorf("expected MarkedUnreadMsg toast cmd")
+	}
+
+	// Thread pane unread boundary moved.
+	if got := app.threadPanel.UnreadBoundaryTS(); got != "R1" {
+		t.Errorf("expected thread unreadBoundary=R1, got %q", got)
+	}
+
+	// Threads-view row was flipped to unread.
+	for _, s := range app.threadsView.Summaries() {
+		if s.ThreadTS == "P1" && !s.Unread {
+			t.Errorf("expected thread-view row P1 to be Unread=true")
+		}
+	}
+}
+
+func TestMessageMarkedUnreadMsg_Error_ToastsFailureNoStateChange(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", UserID: "U1", Text: "first"},
+		{TS: "2.0", UserID: "U1", Text: "second"},
+	})
+	prevLastRead := app.messagepane.LastReadTS()
+
+	_, cmd := app.Update(MessageMarkedUnreadMsg{
+		ChannelID:  "C1",
+		BoundaryTS: "0",
+		Err:        errors.New("boom"),
+	})
+
+	if cmd == nil {
+		t.Fatal("expected failure toast cmd")
+	}
+	// No state change.
+	if app.messagepane.LastReadTS() != prevLastRead {
+		t.Error("messagepane lastReadTS should be unchanged on error")
 	}
 }

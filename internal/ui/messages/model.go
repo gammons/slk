@@ -981,6 +981,12 @@ func (m *Model) SetLastReadTS(ts string) {
 	m.dirty()
 }
 
+// LastReadTS returns the current "last read" boundary timestamp. Used by
+// tests; production code reads the field via SetLastReadTS-driven render.
+func (m *Model) LastReadTS() string {
+	return m.lastReadTS
+}
+
 func (m *Model) OldestTS() string {
 	if len(m.messages) == 0 {
 		return ""

@@ -1465,6 +1465,22 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}
 
+	case MessageMarkedUnreadMsg:
+		if msg.Err != nil {
+			cmds = append(cmds, func() tea.Msg {
+				return statusbar.MarkUnreadFailedMsg{Reason: msg.Err.Error()}
+			})
+			break
+		}
+		if msg.ThreadTS == "" {
+			a.applyChannelMark(msg.ChannelID, msg.BoundaryTS, msg.UnreadCount)
+		} else {
+			a.applyThreadMark(msg.ChannelID, msg.ThreadTS, msg.BoundaryTS, false)
+		}
+		cmds = append(cmds, func() tea.Msg {
+			return statusbar.MarkedUnreadMsg{}
+		})
+
 	case threadFetchDebounceMsg:
 		// Drop stale debounce ticks: a later j/k has scheduled a fresh
 		// fetch and bumped the generation past this one.
@@ -4696,6 +4712,46 @@ func (a *App) beginEditOfSelected() tea.Cmd {
 		return a.threadCompose.Focus()
 	}
 	return a.compose.Focus()
+}
+
+// applyChannelMark updates local state for a channel-level read-state
+// change (used by both the local mark-unread press and the inbound
+// channel_marked WS event). channelID is the channel; ts is the new
+// last_read watermark; unreadCount is the canonical unread count to
+// show in the sidebar badge.
+//
+// Idempotent: calling twice with the same values is a no-op past the
+// first one (the underlying setters short-circuit on equality).
+func (a *App) applyChannelMark(channelID, ts string, unreadCount int) {
+	if channelID == a.activeChannelID {
+		a.messagepane.SetLastReadTS(ts)
+	}
+	a.sidebar.SetUnreadCount(channelID, unreadCount)
+}
+
+// applyThreadMark updates local state for a thread-level read-state
+// change. read=false means the thread is now unread (move boundary +
+// flip threads-view row); read=true means the thread is now read
+// (clear boundary + clear threads-view row).
+func (a *App) applyThreadMark(channelID, threadTS, ts string, read bool) {
+	if a.threadVisible &&
+		a.threadPanel.ChannelID() == channelID &&
+		a.threadPanel.ThreadTS() == threadTS {
+		if read {
+			a.threadPanel.SetUnreadBoundary("")
+		} else {
+			a.threadPanel.SetUnreadBoundary(ts)
+		}
+	}
+	if read {
+		if a.threadsView.MarkByThreadTSRead(channelID, threadTS) {
+			a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
+		}
+	} else {
+		if a.threadsView.MarkByThreadTSUnread(channelID, threadTS) {
+			a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
+		}
+	}
 }
 
 // beginDeleteOfSelected opens the confirmation prompt for deleting the

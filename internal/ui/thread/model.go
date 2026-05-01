@@ -181,6 +181,11 @@ func (m *Model) SetUnreadBoundary(ts string) {
 	m.dirty()
 }
 
+// UnreadBoundaryTS returns the current unread-boundary ts. Used by tests.
+func (m *Model) UnreadBoundaryTS() string {
+	return m.unreadBoundaryTS
+}
+
 // AddReply appends a reply to the thread and scrolls to the bottom.
 // We always advance `selected` to the new last index so the incoming
 // reply is visible regardless of where the user had scrolled.
