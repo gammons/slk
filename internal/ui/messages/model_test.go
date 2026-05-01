@@ -552,3 +552,94 @@ func TestHitTest_NoHitsBeforeView(t *testing.T) {
 		t.Error("HitTest on a never-rendered Model should return ok=false")
 	}
 }
+
+// TestModel_HandleImageReady_PerEntryInvalidation asserts that when
+// an ImageReadyMsg lands for a single message, the model invalidates
+// only that message's cached row -- sibling entries must survive
+// untouched. This is the perf invariant that prevents N back-to-back
+// full-cache walks when N images arrive in a burst (channel switch
+// into unseen history; scroll-up to a region with many attachments).
+//
+// Today's HandleImageReady sets m.cache = nil and forces buildCache
+// to walk every message in the channel on the next View(). The test
+// captures a sibling entry's rendered lines BEFORE the call and
+// asserts they are still present (and identical) AFTER.
+func TestModel_HandleImageReady_PerEntryInvalidation(t *testing.T) {
+	const channel = "C-perf"
+	msgs := []MessageItem{
+		{TS: "1700000001.000000", UserID: "U1", UserName: "alice", Text: "first", Timestamp: "10:30 AM"},
+		{TS: "1700000002.000000", UserID: "U2", UserName: "bob", Text: "second (target)", Timestamp: "10:31 AM"},
+		{TS: "1700000003.000000", UserID: "U3", UserName: "carol", Text: "third", Timestamp: "10:32 AM"},
+	}
+	m := New(msgs, channel)
+
+	// Drive a render to populate the cache.
+	_ = m.View(20, 60)
+	if m.cache == nil {
+		t.Fatal("expected cache populated after View()")
+	}
+
+	// Snapshot the sibling entries (indices for the first and third
+	// messages) so we can compare them after the invalidation.
+	firstIdx, ok := m.messageIDToEntryIdx["1700000001.000000"]
+	if !ok {
+		t.Fatal("could not find first message entry index")
+	}
+	thirdIdx, ok := m.messageIDToEntryIdx["1700000003.000000"]
+	if !ok {
+		t.Fatal("could not find third message entry index")
+	}
+	firstBefore := append([]string(nil), m.cache[firstIdx].linesNormal...)
+	thirdBefore := append([]string(nil), m.cache[thirdIdx].linesNormal...)
+	firstHeightBefore := m.cache[firstIdx].height
+	thirdHeightBefore := m.cache[thirdIdx].height
+
+	// Simulate an image arriving for the SECOND message only. The
+	// non-empty key is what the prefetcher dispatches in production
+	// (legacy "" key still nils the whole cache for safety; this
+	// test exercises the fast path).
+	m.HandleImageReady(channel, "1700000002.000000", "F222-720")
+
+	if m.cache == nil {
+		t.Fatal("HandleImageReady with non-empty key should not nil the entire cache; sibling rebuilds defeat the perf optimization")
+	}
+
+	// Drive a second render so any pending partial rebuild lands.
+	// Sibling entries must be present and identical after the render.
+	_ = m.View(20, 60)
+
+	firstIdxAfter, ok := m.messageIDToEntryIdx["1700000001.000000"]
+	if !ok {
+		t.Fatal("first message entry missing from index after HandleImageReady")
+	}
+	thirdIdxAfter, ok := m.messageIDToEntryIdx["1700000003.000000"]
+	if !ok {
+		t.Fatal("third message entry missing from index after HandleImageReady")
+	}
+
+	if got := m.cache[firstIdxAfter].height; got != firstHeightBefore {
+		t.Errorf("sibling (first) entry height changed: before=%d after=%d", firstHeightBefore, got)
+	}
+	if got := m.cache[thirdIdxAfter].height; got != thirdHeightBefore {
+		t.Errorf("sibling (third) entry height changed: before=%d after=%d", thirdHeightBefore, got)
+	}
+
+	if !equalLines(firstBefore, m.cache[firstIdxAfter].linesNormal) {
+		t.Errorf("sibling (first) entry linesNormal changed across HandleImageReady -- sibling was rebuilt unnecessarily")
+	}
+	if !equalLines(thirdBefore, m.cache[thirdIdxAfter].linesNormal) {
+		t.Errorf("sibling (third) entry linesNormal changed across HandleImageReady -- sibling was rebuilt unnecessarily")
+	}
+}
+
+func equalLines(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

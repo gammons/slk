@@ -329,6 +329,17 @@ type Model struct {
 	// never write to this map directly.
 	fetchingImages map[string]struct{}
 
+	// staleEntries is the set of message TSes whose render-cache slot
+	// must be rebuilt before the next View() commit, while sibling
+	// slots are reused verbatim. Populated by HandleImageReady when an
+	// inline image's bytes arrive: instead of nilling the entire cache
+	// (which forces buildCache to walk every message in the channel),
+	// we mark the affected TS and let the View()-time guard dispatch a
+	// targeted partial rebuild via partialRebuild. Cleared at the end
+	// of partialRebuild and by full buildCache invocations. nil is
+	// equivalent to "nothing stale".
+	staleEntries map[string]struct{}
+
 	// failedImages remembers cache keys whose fetch hit a permanent
 	// failure (e.g. all auths exhausted on a Slack Connect channel the
 	// user isn't actually a member of). renderAttachmentBlock skips
@@ -368,26 +379,51 @@ func (m *Model) SetFocused(focused bool) {
 }
 
 // HandleImageReady is invoked by the host (App.Update) when an
-// ImageReadyMsg lands. It invalidates the render cache for the affected
-// channel and clears ONLY the specified key from the in-flight fetch
-// set so the next View() picks up the newly cached bytes for this
-// image while leaving sibling images' in-flight bits intact (avoids
+// ImageReadyMsg lands. It marks the affected message's render-cache
+// entry as stale (so the next View() rebuilds only that slot, not the
+// whole channel) and clears ONLY the specified key from the in-flight
+// fetch set so other in-flight images keep their dedup bit (avoids
 // fetch stampedes — see ImageReadyMsg's doc comment).
+//
+// This per-entry invalidation is the perf invariant for image bursts:
+// when a channel switch or scroll-up surfaces N attachments
+// back-to-back, the prior whole-cache nil forced N full walks across
+// every message in the loaded history on the bubbletea Update
+// goroutine. Now N arrivals trigger N pointed rebuilds of one entry
+// each, with siblings reused verbatim.
 //
 // Messages for a non-active channel are ignored (the cache is
 // per-channel; switching channels rebuilds it).
 //
-// key may be empty for legacy callers; in that case all in-flight bits
-// are cleared (old behavior).
+// key may be empty for legacy callers; in that case the entire cache
+// is invalidated (old behavior) for safety, since we don't know which
+// entry to mark stale.
 func (m *Model) HandleImageReady(channel, ts, key string) {
 	if channel != m.channelName {
 		return
 	}
-	m.cache = nil
 	if key == "" {
+		// Legacy path: no per-key bookkeeping available, so we fall
+		// back to the wholesale invalidation that the new fast path
+		// is meant to avoid. Used by tests that drive transitions
+		// synchronously without a real fetch key.
+		m.cache = nil
 		m.fetchingImages = nil
-	} else if m.fetchingImages != nil {
+		m.dirty()
+		return
+	}
+	if m.fetchingImages != nil {
 		delete(m.fetchingImages, key)
+	}
+	if ts != "" && m.cache != nil {
+		if m.staleEntries == nil {
+			m.staleEntries = make(map[string]struct{})
+		}
+		m.staleEntries[ts] = struct{}{}
+	} else {
+		// No TS to target (or no cache to mutate): fall back to a
+		// full rebuild on the next View().
+		m.cache = nil
 	}
 	m.dirty()
 }
@@ -984,14 +1020,126 @@ func (m *Model) OldestTS() string {
 	return m.messages[0].TS
 }
 
+// cacheStyles bundles the lipgloss styles and pre-rendered strings that
+// buildCache and partialRebuild share. Computing them once per
+// (width, theme) avoids re-allocating identical lipgloss styles per
+// message during the per-message render loop.
+type cacheStyles struct {
+	borderFill   lipgloss.Style
+	borderInvis  lipgloss.Style
+	borderSelect lipgloss.Style
+	spacerLines  []string
+}
+
+// buildCacheStyles materializes the shared styles for a given width.
+// Also writes m.cacheSpacer / m.cacheLoadingHint / m.cacheMoreBelow as
+// a side effect so View()'s per-frame chrome rendering can reuse the
+// same allocations. partialRebuild reuses the existing m.cacheSpacer
+// (since width hasn't changed) and only needs the border styles.
+func (m *Model) buildCacheStyles(width int) cacheStyles {
+	borderFill := lipgloss.NewStyle().Background(styles.Background)
+	borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Background).BorderBackground(styles.Background)
+	borderSelect := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.SelectionBorderColor(m.focused)).BorderBackground(styles.Background)
+	spacerBg := lipgloss.NewStyle().Background(styles.Background)
+	m.cacheSpacer = spacerBg.Width(width).Render("")
+	hintStyle := lipgloss.NewStyle().Background(styles.Background).Foreground(styles.TextMuted)
+	m.cacheLoadingHint = hintStyle.Render("  Loading older messages...")
+	m.cacheMoreBelow = hintStyle.Render("  -- more below --")
+	return cacheStyles{
+		borderFill:   borderFill,
+		borderInvis:  borderInvis,
+		borderSelect: borderSelect,
+		spacerLines:  []string{m.cacheSpacer},
+	}
+}
+
+// renderMessageEntry builds a single viewEntry for m.messages[i] using
+// the shared cacheStyles. The returned entry is fully populated with
+// both the unselected and selected pre-bordered line slices, the
+// plain-text mirror, the per-frame image flushes, and the per-image
+// hit rects -- i.e. it is a drop-in replacement for the slot at the
+// caller's chosen cache index. The trailing spacer line is appended
+// when i is not the last message, matching the layout invariant
+// established in the full buildCache path.
+//
+// Pulled out of buildCache so partialRebuild can re-render a single
+// stale slot (when an image lands for one message) without walking
+// every other message in the channel. Runs zero string-scanning over
+// sibling messages' content -- the perf win this method exists for.
+func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles) viewEntry {
+	msg := m.messages[i]
+	avatarStr := ""
+	if m.avatarFn != nil {
+		avatarStr = m.avatarFn(msg.UserID)
+	}
+	rendered, attachFlushes, attachSixel, attachHits := m.renderMessagePlain(msg, width, avatarStr, m.userNames, m.channelNames, i == m.selected)
+	filled := cs.borderFill.Width(width - 1).Render(rendered)
+	normal := cs.borderInvis.Render(filled)
+	selected := cs.borderSelect.Render(filled)
+
+	linesN := strings.Split(normal, "\n")
+	linesS := strings.Split(selected, "\n")
+	// linesPlain mirrors the UNBORDERED content (filled) so that the
+	// thick left-border column is NOT present in plain text and never
+	// bleeds into clipboard output via SelectionText. The mouse-column
+	// to plain-column mapping happens in anchorAt via contentColOffset.
+	linesP := plainLines(filled)
+	// Append a trailing spacer line after every message except the last.
+	// Both variants share the same spacer (it has no border styling).
+	// The plain mirror of the spacer is the empty string -- selection
+	// extraction trims trailing whitespace, and no real content lives
+	// in the spacer row.
+	if i < len(m.messages)-1 {
+		linesN = append(linesN, cs.spacerLines...)
+		linesS = append(linesS, cs.spacerLines...)
+		linesP = append(linesP, plainLine{Text: "", Bytes: []int{0}})
+	}
+	return viewEntry{
+		linesNormal:      linesN,
+		linesSelected:    linesS,
+		linesPlain:       linesP,
+		contentColOffset: 1, // thick left border ▌ occupies column 0 of linesNormal
+		height:           len(linesN),
+		msgIdx:           i,
+		flushes:          attachFlushes,
+		sixelRows:        attachSixel,
+		imageHits:        attachHits,
+	}
+}
+
+// recomputeEntryOffsets walks m.cache and rewrites m.entryOffsets +
+// m.totalLines from the cached per-entry heights. Cheap (O(N) integer
+// adds with no rendering work), called by both buildCache (full) and
+// partialRebuild (after a stale slot is replaced -- height may have
+// changed when a placeholder was swapped for the real image).
+func (m *Model) recomputeEntryOffsets() {
+	if cap(m.entryOffsets) < len(m.cache) {
+		m.entryOffsets = make([]int, len(m.cache))
+	} else {
+		m.entryOffsets = m.entryOffsets[:len(m.cache)]
+	}
+	off := 0
+	for i, e := range m.cache {
+		m.entryOffsets[i] = off
+		off += e.height
+	}
+	m.totalLines = off
+}
+
 // buildCache pre-renders all messages and day separators, splitting each
 // rendered string on "\n" so View() can flatten everything into the visible
 // window with zero string-scanning per frame. Runs only on width / message-set
-// / theme / reaction changes -- never on simple j/k navigation.
+// / theme / reaction changes -- never on simple j/k navigation, and never
+// on a single-image arrival (HandleImageReady marks one TS stale and the
+// View()-time guard dispatches to partialRebuild instead).
 func (m *Model) buildCache(width int) {
 	m.cache = m.cache[:0]
 	m.cacheWidth = width
 	m.cacheMsgLen = len(m.messages)
+	// A full rebuild supersedes any pending per-entry invalidations.
+	for k := range m.staleEntries {
+		delete(m.staleEntries, k)
+	}
 
 	if m.messageIDToEntryIdx == nil {
 		m.messageIDToEntryIdx = make(map[string]int, len(m.messages))
@@ -1001,16 +1149,7 @@ func (m *Model) buildCache(width int) {
 		}
 	}
 
-	// Pre-build the border styles once for the whole cache build.
-	borderFill := lipgloss.NewStyle().Background(styles.Background)
-	borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Background).BorderBackground(styles.Background)
-	borderSelect := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.SelectionBorderColor(m.focused)).BorderBackground(styles.Background)
-	spacerBg := lipgloss.NewStyle().Background(styles.Background)
-	m.cacheSpacer = spacerBg.Width(width).Render("")
-	hintStyle := lipgloss.NewStyle().Background(styles.Background).Foreground(styles.TextMuted)
-	m.cacheLoadingHint = hintStyle.Render("  Loading older messages...")
-	m.cacheMoreBelow = hintStyle.Render("  -- more below --")
-	spacerLines := []string{m.cacheSpacer}
+	cs := m.buildCacheStyles(width)
 
 	if cap(m.cache) < len(m.messages)+8 {
 		m.cache = make([]viewEntry, 0, len(m.messages)+8)
@@ -1051,58 +1190,59 @@ func (m *Model) buildCache(width int) {
 			newMsgLandmarkInserted = true
 		}
 
-		avatarStr := ""
-		if m.avatarFn != nil {
-			avatarStr = m.avatarFn(msg.UserID)
-		}
-		rendered, attachFlushes, attachSixel, attachHits := m.renderMessagePlain(msg, width, avatarStr, m.userNames, m.channelNames, i == m.selected)
-		filled := borderFill.Width(width - 1).Render(rendered)
-		normal := borderInvis.Render(filled)
-		selected := borderSelect.Render(filled)
-
-		linesN := strings.Split(normal, "\n")
-		linesS := strings.Split(selected, "\n")
-		// linesPlain mirrors the UNBORDERED content (filled) so that the
-		// thick left-border column is NOT present in plain text and never
-		// bleeds into clipboard output via SelectionText. The mouse-column
-		// to plain-column mapping happens in anchorAt via contentColOffset.
-		linesP := plainLines(filled)
-		// Append a trailing spacer line after every message except the last.
-		// Both variants share the same spacer (it has no border styling).
-		// The plain mirror of the spacer is the empty string -- selection
-		// extraction trims trailing whitespace, and no real content lives
-		// in the spacer row.
-		if i < len(m.messages)-1 {
-			linesN = append(linesN, spacerLines...)
-			linesS = append(linesS, spacerLines...)
-			linesP = append(linesP, plainLine{Text: "", Bytes: []int{0}})
-		}
 		m.messageIDToEntryIdx[msg.TS] = len(m.cache)
-		m.cache = append(m.cache, viewEntry{
-			linesNormal:      linesN,
-			linesSelected:    linesS,
-			linesPlain:       linesP,
-			contentColOffset: 1, // thick left border ▌ occupies column 0 of linesNormal
-			height:           len(linesN),
-			msgIdx:           i,
-			flushes:          attachFlushes,
-			sixelRows:        attachSixel,
-			imageHits:        attachHits,
-		})
+		m.cache = append(m.cache, m.renderMessageEntry(i, width, cs))
 	}
 
-	// Compute cumulative line offsets for fast yOffset math in View().
-	if cap(m.entryOffsets) < len(m.cache) {
-		m.entryOffsets = make([]int, len(m.cache))
-	} else {
-		m.entryOffsets = m.entryOffsets[:len(m.cache)]
+	m.recomputeEntryOffsets()
+}
+
+// partialRebuild re-renders only the cache slots whose source-message
+// TSes are in m.staleEntries, leaving sibling slots (other messages
+// AND date / "── new ──" separators) intact. Called by View() when an
+// ImageReadyMsg has marked one or more entries stale but neither the
+// pane width nor the message-set length has changed since the last
+// full buildCache.
+//
+// Critical perf invariant: this function MUST NOT call
+// renderMessagePlain for any message that isn't in m.staleEntries.
+// The whole point of per-entry invalidation is to skip the per-message
+// lipgloss / wordwrap / blockkit work for siblings during an image
+// burst.
+//
+// Preconditions enforced by the caller (the View()-time guard):
+//   - m.cache != nil and m.cacheWidth == width and m.cacheMsgLen == len(m.messages)
+//   - len(m.staleEntries) > 0
+//
+// Postcondition: m.staleEntries is empty.
+func (m *Model) partialRebuild(width int) {
+	cs := m.buildCacheStyles(width)
+	for ts := range m.staleEntries {
+		idx, ok := m.messageIDToEntryIdx[ts]
+		if !ok {
+			// Entry has gone away (message removed since the
+			// invalidation was queued); silently drop.
+			continue
+		}
+		if idx < 0 || idx >= len(m.cache) {
+			continue
+		}
+		// Sanity: the slot must still belong to a message (msgIdx >= 0).
+		// Separators are not addressable by TS and must never appear here.
+		old := m.cache[idx]
+		if old.msgIdx < 0 || old.msgIdx >= len(m.messages) {
+			continue
+		}
+		m.cache[idx] = m.renderMessageEntry(old.msgIdx, width, cs)
 	}
-	off := 0
-	for i, e := range m.cache {
-		m.entryOffsets[i] = off
-		off += e.height
+	for k := range m.staleEntries {
+		delete(m.staleEntries, k)
 	}
-	m.totalLines = off
+	// Heights may have changed (e.g. placeholder swapped for a real
+	// image of the same reserved height -- equal in practice but we
+	// don't rely on it), so reset the cumulative offsets from the
+	// cached per-entry heights. No render work happens here.
+	m.recomputeEntryOffsets()
 }
 
 // blockkitContext bundles the blockkit-package dependencies sourced
@@ -2101,9 +2241,16 @@ func (m *Model) View(height, width int) string {
 		return chrome + "\n" + empty
 	}
 
-	// Rebuild cache if messages or width changed
-	if m.cache == nil || m.cacheWidth != width || m.cacheMsgLen != len(m.messages) {
+	// Rebuild cache if messages or width changed. If only individual
+	// message TSes have been marked stale (e.g. by HandleImageReady
+	// landing one image at a time), take the targeted partial-rebuild
+	// path that re-renders only those slots and reuses every other
+	// entry verbatim -- the perf invariant for image bursts.
+	switch {
+	case m.cache == nil || m.cacheWidth != width || m.cacheMsgLen != len(m.messages):
 		m.buildCache(width)
+	case len(m.staleEntries) > 0:
+		m.partialRebuild(width)
 	}
 
 	entries := m.cache
