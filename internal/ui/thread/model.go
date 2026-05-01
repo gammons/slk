@@ -75,6 +75,25 @@ type Model struct {
 	selectedStartLine int
 	selectedEndLine   int
 
+	// chromeCache holds the rendered "header + separator + parent message +
+	// separator" prefix that View() prepends to viewContent. Rebuilt only
+	// when its inputs (width, replyCount, parent identity, parent text,
+	// userNames, channelNames) change. On a plain j/k it is reused as-is.
+	chromeCache      string
+	chromeCacheValid bool
+	chromeWidth      int
+	chromeReplyCount int
+	chromeParentTS   string
+	chromeParentText string
+	chromeUserNamesV uint64 // version of the userNames map at build time
+	chromeChannelNV  uint64 // version of the channelNames map at build time
+
+	// userNamesV / channelNamesV are bumped every time SetUserNames /
+	// SetChannelNames replaces the map. Used by chromeCache (and any other
+	// cache that depends on these maps) to detect changes without hashing.
+	userNamesV    uint64
+	channelNamesV uint64
+
 	// Mouse selection state. selRange is the user's drag selection.
 	// replyIDToIdx maps reply TS -> entry index in m.cache for O(1)
 	// anchor resolution; rebuilt on every cache build. lastViewHeight is
@@ -119,6 +138,7 @@ func (m *Model) dirty() { m.version++ }
 func (m *Model) InvalidateCache() {
 	m.cache = nil
 	m.viewCacheValid = false
+	m.chromeCacheValid = false
 	m.dirty()
 }
 
@@ -296,15 +316,20 @@ func (m *Model) SetAvatarFunc(fn messages.AvatarFunc) {
 }
 
 // SetUserNames sets the user ID -> display name map for mention resolution.
+// Bumps userNamesV unconditionally so chromeCache (and any other cache
+// keyed by this version counter) sees the change via a simple `!=` check.
 func (m *Model) SetUserNames(names map[string]string) {
 	m.userNames = names
+	m.userNamesV++
 	m.InvalidateCache()
 }
 
 // SetChannelNames sets the channel ID -> name map used to resolve bare
-// <#CHANNELID> mentions in thread replies.
+// <#CHANNELID> mentions in thread replies. Bumps channelNamesV
+// unconditionally; see SetUserNames for the rationale.
 func (m *Model) SetChannelNames(names map[string]string) {
 	m.channelNames = names
+	m.channelNamesV++
 	m.InvalidateCache()
 }
 
@@ -835,30 +860,51 @@ func (m *Model) View(height, width int) string {
 			Render("No thread selected")
 	}
 
-	// Header
-	replyLabel := "replies"
-	if len(m.replies) == 1 {
-		replyLabel = "reply"
+	// Chrome: header + separator + parent message + separator. Cached
+	// because the parent's full markdown pipeline (RenderSlackMarkdown +
+	// WordWrap + reactions + attachments) is expensive and identical
+	// frame-to-frame on a plain j/k. Mirrors internal/ui/messages's
+	// chromeCache. Invalidated by InvalidateCache() (which is called by
+	// SetThread, AddReply, UpdateMessageInPlace, UpdateParentInPlace,
+	// SetUserNames, SetChannelNames, etc.) and by any width change.
+	chromeReplyCount := len(m.replies)
+	parentTS := m.parent.TS
+	parentText := m.parent.Text
+	if !m.chromeCacheValid ||
+		m.chromeWidth != width ||
+		m.chromeReplyCount != chromeReplyCount ||
+		m.chromeParentTS != parentTS ||
+		m.chromeParentText != parentText ||
+		m.chromeUserNamesV != m.userNamesV ||
+		m.chromeChannelNV != m.channelNamesV {
+		replyLabel := "replies"
+		if chromeReplyCount == 1 {
+			replyLabel = "reply"
+		}
+		header := lipgloss.NewStyle().
+			Width(width).
+			Background(styles.Background).
+			Foreground(styles.TextPrimary).
+			Bold(true).
+			Render(fmt.Sprintf("Thread  %d %s", chromeReplyCount, replyLabel))
+		separator := lipgloss.NewStyle().
+			Width(width).
+			Background(styles.Background).
+			Foreground(styles.Border).
+			Render(strings.Repeat("-", width))
+		parentContent := m.renderThreadMessage(m.parent, width, m.userNames, m.channelNames, false)
+		m.chromeCache = header + "\n" + separator + "\n" + parentContent + "\n" + separator
+		m.chromeHeight = lipgloss.Height(m.chromeCache)
+		m.chromeCacheValid = true
+		m.chromeWidth = width
+		m.chromeReplyCount = chromeReplyCount
+		m.chromeParentTS = parentTS
+		m.chromeParentText = parentText
+		m.chromeUserNamesV = m.userNamesV
+		m.chromeChannelNV = m.channelNamesV
 	}
-	header := lipgloss.NewStyle().
-		Width(width).
-		Background(styles.Background).
-		Foreground(styles.TextPrimary).
-		Bold(true).
-		Render(fmt.Sprintf("Thread  %d %s", len(m.replies), replyLabel))
-
-	separator := lipgloss.NewStyle().
-		Width(width).
-		Background(styles.Background).
-		Foreground(styles.Border).
-		Render(strings.Repeat("-", width))
-
-	// Parent message
-	parentContent := m.renderThreadMessage(m.parent, width, m.userNames, m.channelNames, false)
-
-	chrome := header + "\n" + separator + "\n" + parentContent + "\n" + separator
-	chromeHeight := lipgloss.Height(chrome)
-	m.chromeHeight = chromeHeight
+	chrome := m.chromeCache
+	chromeHeight := m.chromeHeight
 
 	// chromeHeight already counts every visual row of `chrome`; joining with
 	// a single "\n" between chrome and the viewport produces exactly
