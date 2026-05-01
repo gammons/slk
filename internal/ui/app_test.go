@@ -2341,6 +2341,11 @@ func TestMessageMarkedUnreadMsg_ThreadLevel_UpdatesThreadPaneAndThreadsView(t *t
 			t.Errorf("expected thread-view row P1 to be Unread=true")
 		}
 	}
+
+	// Sidebar threads-row badge reflects the new unread count.
+	if got := app.sidebar.ThreadsUnreadCount(); got != 1 {
+		t.Errorf("expected sidebar.ThreadsUnreadCount=1 after thread mark-unread, got %d", got)
+	}
 }
 
 func TestMessageMarkedUnreadMsg_Error_ToastsFailureNoStateChange(t *testing.T) {
@@ -2361,10 +2366,48 @@ func TestMessageMarkedUnreadMsg_Error_ToastsFailureNoStateChange(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected failure toast cmd")
 	}
+
+	// Toast is the failure variant carrying the error message, not the
+	// success variant.
+	if cmdContainsMsgType(cmd, statusbar.MarkedUnreadMsg{}) {
+		t.Error("expected no MarkedUnreadMsg success toast on error")
+	}
+	if !cmdContainsMsgType(cmd, statusbar.MarkUnreadFailedMsg{}) {
+		t.Error("expected MarkUnreadFailedMsg toast on error")
+	}
+	// And the Reason matches the error.
+	if reason := extractMarkUnreadFailedReason(cmd); reason != "boom" {
+		t.Errorf("expected toast Reason=%q, got %q", "boom", reason)
+	}
+
 	// No state change.
 	if app.messagepane.LastReadTS() != prevLastRead {
 		t.Error("messagepane lastReadTS should be unchanged on error")
 	}
+}
+
+// extractMarkUnreadFailedReason runs cmd (recursing into BatchMsg) and
+// returns the Reason field of the first MarkUnreadFailedMsg it finds, or
+// "" if none.
+func extractMarkUnreadFailedReason(cmd tea.Cmd) string {
+	if cmd == nil {
+		return ""
+	}
+	res := cmd()
+	if res == nil {
+		return ""
+	}
+	if m, ok := res.(statusbar.MarkUnreadFailedMsg); ok {
+		return m.Reason
+	}
+	if batch, ok := res.(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			if r := extractMarkUnreadFailedReason(sub); r != "" {
+				return r
+			}
+		}
+	}
+	return ""
 }
 
 func TestChannelMarkedRemoteMsg_UpdatesPaneAndSidebarSilently(t *testing.T) {
