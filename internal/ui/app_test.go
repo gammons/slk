@@ -2366,3 +2366,101 @@ func TestMessageMarkedUnreadMsg_Error_ToastsFailureNoStateChange(t *testing.T) {
 		t.Error("messagepane lastReadTS should be unchanged on error")
 	}
 }
+
+func TestChannelMarkedRemoteMsg_UpdatesPaneAndSidebarSilently(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.sidebar.SetItems([]sidebar.ChannelItem{
+		{ID: "C1", Name: "general", Section: "Channels"},
+	})
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", UserID: "U1", Text: "first"},
+		{TS: "2.0", UserID: "U1", Text: "second"},
+	})
+
+	_, cmd := app.Update(ChannelMarkedRemoteMsg{
+		ChannelID:   "C1",
+		TS:          "1.0",
+		UnreadCount: 1,
+	})
+
+	// No toast on remote events.
+	if cmd != nil && cmdContainsMsgType(cmd, statusbar.MarkedUnreadMsg{}) {
+		t.Error("expected no MarkedUnreadMsg toast on remote event")
+	}
+
+	if got := app.messagepane.LastReadTS(); got != "1.0" {
+		t.Errorf("messagepane lastReadTS: got %q", got)
+	}
+	for _, it := range app.sidebar.Items() {
+		if it.ID == "C1" && it.UnreadCount != 1 {
+			t.Errorf("sidebar UnreadCount: got %d", it.UnreadCount)
+		}
+	}
+}
+
+func TestChannelMarkedRemoteMsg_InactiveChannel_OnlyUpdatesSidebar(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C_OTHER"
+	app.sidebar.SetItems([]sidebar.ChannelItem{
+		{ID: "C1", Name: "general", Section: "Channels"},
+		{ID: "C_OTHER", Name: "elsewhere", Section: "Channels"},
+	})
+	prevLastRead := app.messagepane.LastReadTS()
+
+	_, _ = app.Update(ChannelMarkedRemoteMsg{
+		ChannelID: "C1", TS: "1.0", UnreadCount: 3,
+	})
+
+	// messages pane (showing C_OTHER) is untouched.
+	if app.messagepane.LastReadTS() != prevLastRead {
+		t.Error("messagepane should be untouched when remote event is for non-active channel")
+	}
+	// Sidebar still updated.
+	for _, it := range app.sidebar.Items() {
+		if it.ID == "C1" && it.UnreadCount != 3 {
+			t.Errorf("expected C1 sidebar UnreadCount=3, got %d", it.UnreadCount)
+		}
+	}
+}
+
+func TestThreadMarkedRemoteMsg_UnreadFlipsRow(t *testing.T) {
+	app := NewApp()
+	app.threadsView.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "P1", Unread: false},
+	})
+
+	_, cmd := app.Update(ThreadMarkedRemoteMsg{
+		ChannelID: "C1",
+		ThreadTS:  "P1",
+		TS:        "R5",
+		Read:      false,
+	})
+
+	if cmd != nil && cmdContainsMsgType(cmd, statusbar.MarkedUnreadMsg{}) {
+		t.Error("expected no toast on remote thread event")
+	}
+
+	for _, s := range app.threadsView.Summaries() {
+		if s.ThreadTS == "P1" && !s.Unread {
+			t.Errorf("expected P1 to be Unread=true after remote thread_marked")
+		}
+	}
+}
+
+func TestThreadMarkedRemoteMsg_ReadClearsRow(t *testing.T) {
+	app := NewApp()
+	app.threadsView.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "P1", Unread: true},
+	})
+
+	_, _ = app.Update(ThreadMarkedRemoteMsg{
+		ChannelID: "C1", ThreadTS: "P1", TS: "R5", Read: true,
+	})
+
+	for _, s := range app.threadsView.Summaries() {
+		if s.ThreadTS == "P1" && s.Unread {
+			t.Errorf("expected P1 Unread=false after remote thread_marked read=true")
+		}
+	}
+}

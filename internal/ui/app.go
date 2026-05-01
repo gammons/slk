@@ -419,6 +419,29 @@ type MessageMarkedUnreadMsg struct {
 	Err         error
 }
 
+// ChannelMarkedRemoteMsg is dispatched by the WS event handler when
+// Slack pushes a channel_marked / im_marked / group_marked / mpim_marked
+// event (read state changed in another client, or via this client's own
+// mark echoing back). The handler has already persisted the new
+// last_read_ts to SQLite + the in-memory LastReadMap; the App's
+// Update arm only updates the UI. No toast.
+type ChannelMarkedRemoteMsg struct {
+	ChannelID   string
+	TS          string
+	UnreadCount int
+}
+
+// ThreadMarkedRemoteMsg is dispatched by the WS event handler when
+// Slack pushes a thread_marked event. Read=true means the thread is
+// now read (clear local boundary + threads-view row); Read=false means
+// it's unread.
+type ThreadMarkedRemoteMsg struct {
+	ChannelID string
+	ThreadTS  string
+	TS        string
+	Read      bool
+}
+
 // WSMessageDeletedMsg is dispatched by the RTM event handler when a
 // message_deleted event arrives. App.Update handles it by removing the
 // message from both panes and the cache.
@@ -1480,6 +1503,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, func() tea.Msg {
 			return statusbar.MarkedUnreadMsg{}
 		})
+
+	case ChannelMarkedRemoteMsg:
+		a.applyChannelMark(msg.ChannelID, msg.TS, msg.UnreadCount)
+
+	case ThreadMarkedRemoteMsg:
+		a.applyThreadMark(msg.ChannelID, msg.ThreadTS, msg.TS, msg.Read)
 
 	case threadFetchDebounceMsg:
 		// Drop stale debounce ticks: a later j/k has scheduled a fresh
