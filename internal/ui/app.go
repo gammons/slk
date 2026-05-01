@@ -4069,13 +4069,18 @@ func (a *App) View() tea.View {
 		// Threads view: no compose, no typing line. The whole bordered
 		// panel is content-stable per threadsView.Version, so we keep
 		// the old single-cache path here.
-		// Push the current id->name maps into the threadsview model BEFORE
-		// snapshotting its version. SetUserNames/SetChannelNames are
-		// equality-checked (threadsview/model.go), so identical maps are no-
-		// ops. Reading Version() after these calls means the panel-cache key
-		// reflects the post-Set state — fixes a regression where the cache
-		// stored output under a stale version and never hit on subsequent
-		// renders.
+		// Push the current user-name map and self-user id into the
+		// threadsview model BEFORE snapshotting its version. SetUserNames
+		// and SetSelfUserID are equality-checked (threadsview/model.go), so
+		// identical input is a no-op. Reading Version() after these calls
+		// means the panel-cache key reflects the post-Set state — fixes a
+		// regression where the cache stored output under a stale version
+		// and never hit on subsequent renders.
+		//
+		// Note: channel names are *not* pushed here. They're fanned out
+		// from SetChannels (app.go:3295) when the channel list changes,
+		// which is rare relative to render frequency, so we keep that
+		// allocation off this hot path.
 		a.threadsView.SetUserNames(a.userNames)
 		a.threadsView.SetSelfUserID(a.currentUserID)
 		tvVersion := a.threadsView.Version()

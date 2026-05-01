@@ -121,16 +121,22 @@ func (m *Model) SetUserNames(names map[string]string) {
 	if names == nil {
 		names = map[string]string{}
 	}
-	if userNamesEqual(m.userNames, names) {
+	if stringMapsEqual(m.userNames, names) {
 		return
 	}
 	m.userNames = names
 	m.dirty()
 }
 
-// userNamesEqual reports whether two id->name maps have identical contents.
-// Used to make SetUserNames idempotent so the panel cache can hit.
-func userNamesEqual(a, b map[string]string) bool {
+// stringMapsEqual reports whether two map[string]string have identical
+// contents. Used by SetUserNames and SetChannelNames to short-circuit Set*
+// calls with unchanged input so the App-level panel cache can hit on idle
+// re-renders.
+//
+// Hand-rolled (rather than reflect.DeepEqual) because this runs on the render
+// hot path — every threadsview render checks it. Please don't "simplify" this
+// to reflect.DeepEqual without re-benchmarking.
+func stringMapsEqual(a, b map[string]string) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -148,7 +154,7 @@ func (m *Model) SetChannelNames(names map[string]string) {
 	if names == nil {
 		names = map[string]string{}
 	}
-	if userNamesEqual(m.channelNames, names) {
+	if stringMapsEqual(m.channelNames, names) {
 		return
 	}
 	m.channelNames = names
