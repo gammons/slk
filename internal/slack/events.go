@@ -24,6 +24,18 @@ type EventHandler interface {
 	OnDisconnect()
 	OnSelfPresenceChange(presence string)
 	OnDNDChange(enabled bool, endUnix int64)
+
+	// OnChannelMarked is delivered when Slack pushes a channel_marked /
+	// im_marked / group_marked / mpim_marked event (read state changed
+	// in another client, or via slk's own MarkChannel/MarkChannelUnread
+	// echoing back). ts is the new last_read watermark; unreadCount is
+	// the canonical workspace-side unread count for the channel (use to
+	// drive the sidebar badge).
+	OnChannelMarked(channelID, ts string, unreadCount int)
+	// OnThreadMarked is delivered when Slack pushes a thread_marked
+	// event. read indicates whether the thread is now read (true) or
+	// unread (false). ts is the new boundary within the thread.
+	OnThreadMarked(channelID, threadTS, ts string, read bool)
 }
 
 // wsEvent is the minimal structure for identifying a WebSocket event type.

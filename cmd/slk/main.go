@@ -1849,6 +1849,14 @@ func (h *rtmEventHandler) OnDNDChange(enabled bool, endUnix int64) {
 	})
 }
 
+func (h *rtmEventHandler) OnChannelMarked(channelID, ts string, unreadCount int) {
+	// Real body wired in Task 17; this stub satisfies the interface so the package builds.
+}
+
+func (h *rtmEventHandler) OnThreadMarked(channelID, threadTS, ts string, read bool) {
+	// Real body wired in Task 17; this stub satisfies the interface so the package builds.
+}
+
 // listWorkspaces prints the configured workspaces with their TeamID and
 // Name, one per line. Useful for users who want to hand-edit per-workspace
 // settings in config.toml.

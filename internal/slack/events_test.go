@@ -24,6 +24,20 @@ type mockEventHandler struct {
 	dndChanges          []dndChangeRecord
 	lastBlocks          slack.Blocks
 	lastAttachments     []slack.Attachment
+
+	channelMarks []channelMarkRecord
+	threadMarks  []threadMarkRecord
+}
+
+type channelMarkRecord struct {
+	channelID   string
+	ts          string
+	unreadCount int
+}
+
+type threadMarkRecord struct {
+	channelID, threadTS, ts string
+	read                    bool
 }
 
 func (m *mockEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment) {
@@ -55,6 +69,14 @@ func (m *mockEventHandler) OnSelfPresenceChange(presence string) {
 }
 func (m *mockEventHandler) OnDNDChange(enabled bool, endUnix int64) {
 	m.dndChanges = append(m.dndChanges, dndChangeRecord{enabled, endUnix})
+}
+
+func (m *mockEventHandler) OnChannelMarked(channelID, ts string, unreadCount int) {
+	m.channelMarks = append(m.channelMarks, channelMarkRecord{channelID, ts, unreadCount})
+}
+
+func (m *mockEventHandler) OnThreadMarked(channelID, threadTS, ts string, read bool) {
+	m.threadMarks = append(m.threadMarks, threadMarkRecord{channelID, threadTS, ts, read})
 }
 
 func TestEventHandlerInterface(t *testing.T) {
