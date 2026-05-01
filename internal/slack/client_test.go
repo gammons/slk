@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -23,6 +25,7 @@ func TestNewClient(t *testing.T) {
 // mockSlackAPI implements SlackAPI for testing.
 // Function fields allow tests to override default behavior.
 type mockSlackAPI struct {
+	authTestFn               func() (*slack.AuthTestResponse, error)
 	getConversationRepliesFn func(params *slack.GetConversationRepliesParameters) ([]slack.Message, bool, string, error)
 	getEmojiFn               func() (map[string]string, error)
 	getPermalinkContextFn    func(ctx context.Context, params *slack.PermalinkParameters) (string, error)
@@ -93,6 +96,9 @@ func (m *mockSlackAPI) RemoveReaction(name string, item slack.ItemRef) error {
 }
 
 func (m *mockSlackAPI) AuthTest() (*slack.AuthTestResponse, error) {
+	if m.authTestFn != nil {
+		return m.authTestFn()
+	}
 	return nil, nil
 }
 
@@ -670,5 +676,223 @@ func TestSubscribePresenceReturnsErrorWhenNotConnected(t *testing.T) {
 	err := c.SubscribePresence([]string{"U1", "U2"})
 	if err == nil {
 		t.Error("expected error when websocket not connected")
+	}
+}
+
+// deriveAPIBaseURL turns the team URL returned by auth.test (e.g.
+// "https://hackclub.enterprise.slack.com/") into the API base URL we send
+// requests to ("https://hackclub.enterprise.slack.com/api/"). Empty or
+// malformed input falls back to the canonical "https://slack.com/api/".
+func TestDeriveAPIBaseURL(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "enterprise grid URL",
+			in:   "https://hackclub.enterprise.slack.com/",
+			want: "https://hackclub.enterprise.slack.com/api/",
+		},
+		{
+			name: "standard workspace URL",
+			in:   "https://myteam.slack.com/",
+			want: "https://myteam.slack.com/api/",
+		},
+		{
+			name: "URL without trailing slash",
+			in:   "https://myteam.slack.com",
+			want: "https://myteam.slack.com/api/",
+		},
+		{
+			name: "empty string falls back",
+			in:   "",
+			want: "https://slack.com/api/",
+		},
+		{
+			name: "non-slack host falls back",
+			in:   "https://evil.example.com/",
+			want: "https://slack.com/api/",
+		},
+		{
+			name: "garbage input falls back",
+			in:   "not a url",
+			want: "https://slack.com/api/",
+		},
+		{
+			name: "missing scheme falls back",
+			in:   "myteam.slack.com",
+			want: "https://slack.com/api/",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := deriveAPIBaseURL(tc.in)
+			if got != tc.want {
+				t.Errorf("deriveAPIBaseURL(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestConnect_DiscoversEnterpriseAPIBaseURL(t *testing.T) {
+	mock := &mockSlackAPI{
+		authTestFn: func() (*slack.AuthTestResponse, error) {
+			return &slack.AuthTestResponse{
+				URL:    "https://hackclub.enterprise.slack.com/",
+				TeamID: "T1",
+				UserID: "U1",
+			}, nil
+		},
+	}
+	c := &Client{api: mock}
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	want := "https://hackclub.enterprise.slack.com/api/"
+	if c.apiBaseURL != want {
+		t.Errorf("apiBaseURL = %q, want %q", c.apiBaseURL, want)
+	}
+	if c.teamID != "T1" {
+		t.Errorf("teamID = %q, want %q", c.teamID, "T1")
+	}
+}
+
+func TestConnect_DiscoversStandardWorkspaceAPIBaseURL(t *testing.T) {
+	mock := &mockSlackAPI{
+		authTestFn: func() (*slack.AuthTestResponse, error) {
+			return &slack.AuthTestResponse{
+				URL:    "https://myteam.slack.com/",
+				TeamID: "T1",
+				UserID: "U1",
+			}, nil
+		},
+	}
+	c := &Client{api: mock}
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	want := "https://myteam.slack.com/api/"
+	if c.apiBaseURL != want {
+		t.Errorf("apiBaseURL = %q, want %q", c.apiBaseURL, want)
+	}
+}
+
+func TestConnect_FallsBackWhenAuthTestURLIsEmpty(t *testing.T) {
+	mock := &mockSlackAPI{
+		authTestFn: func() (*slack.AuthTestResponse, error) {
+			return &slack.AuthTestResponse{
+				URL:    "",
+				TeamID: "T1",
+				UserID: "U1",
+			}, nil
+		},
+	}
+	c := &Client{api: mock}
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	want := "https://slack.com/api/"
+	if c.apiBaseURL != want {
+		t.Errorf("apiBaseURL = %q, want %q", c.apiBaseURL, want)
+	}
+}
+
+// MarkChannel must POST to the workspace-specific API host so it works on
+// enterprise grid workspaces, not just to slack.com.
+func TestMarkChannel_UsesAPIBaseURL(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := &Client{
+		token:      "xoxc-test",
+		cookie:     "d-cookie",
+		apiBaseURL: srv.URL + "/api/",
+	}
+	if err := c.MarkChannel(context.Background(), "C1", "1700000000.000100"); err != nil {
+		t.Fatalf("MarkChannel: %v", err)
+	}
+	if gotPath != "/api/conversations.mark" {
+		t.Errorf("path = %q, want %q", gotPath, "/api/conversations.mark")
+	}
+}
+
+func TestMarkThread_UsesAPIBaseURL(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := &Client{
+		token:      "xoxc-test",
+		cookie:     "d-cookie",
+		apiBaseURL: srv.URL + "/api/",
+	}
+	if err := c.MarkThread(context.Background(), "C1", "1700000000.000100", "1700000001.000200"); err != nil {
+		t.Fatalf("MarkThread: %v", err)
+	}
+	if gotPath != "/api/subscriptions.thread.mark" {
+		t.Errorf("path = %q, want %q", gotPath, "/api/subscriptions.thread.mark")
+	}
+}
+
+func TestGetUnreadCounts_UsesAPIBaseURL(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		// Minimal valid response so the parser stays happy.
+		_, _ = w.Write([]byte(`{"ok":true,"channels":[],"mpims":[],"ims":[],"threads":{"has_unreads":false}}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{
+		token:      "xoxc-test",
+		cookie:     "d-cookie",
+		apiBaseURL: srv.URL + "/api/",
+	}
+	if _, _, err := c.GetUnreadCounts(); err != nil {
+		t.Fatalf("GetUnreadCounts: %v", err)
+	}
+	if gotPath != "/api/client.counts" {
+		t.Errorf("path = %q, want %q", gotPath, "/api/client.counts")
+	}
+}
+
+func TestGetChannelSections_UsesAPIBaseURL(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"channel_sections":[]}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{
+		token:      "xoxc-test",
+		cookie:     "d-cookie",
+		apiBaseURL: srv.URL + "/api/",
+	}
+	if _, err := c.GetChannelSections(context.Background()); err != nil {
+		t.Fatalf("GetChannelSections: %v", err)
+	}
+	if gotPath != "/api/users.channelSections.list" {
+		t.Errorf("path = %q, want %q", gotPath, "/api/users.channelSections.list")
+	}
+}
+
+// NewClient must give the resulting Client a non-empty apiBaseURL so that
+// methods called before Connect() (or in tests that bypass Connect) still
+// produce well-formed URLs. The default is the canonical slack.com host.
+func TestNewClient_HasDefaultAPIBaseURL(t *testing.T) {
+	c := NewClient("xoxc-test", "d-cookie")
+	if c.apiBaseURL != "https://slack.com/api/" {
+		t.Errorf("apiBaseURL = %q, want %q", c.apiBaseURL, "https://slack.com/api/")
 	}
 }

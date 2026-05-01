@@ -43,6 +43,12 @@ type SlackAPI interface {
 	UploadFileContext(ctx context.Context, params slack.UploadFileParameters) (*slack.FileSummary, error)
 }
 
+// defaultAPIBaseURL is the canonical Slack Web API root used as a fallback
+// before Connect() has run, when auth.test returns no usable URL, or when a
+// caller never goes through NewClient (e.g., tests). It mirrors slack-go's
+// internal default (slack.APIURL).
+const defaultAPIBaseURL = "https://slack.com/api/"
+
 // Client wraps the slack-go library, providing RTM connectivity
 // and a simplified Web API surface for the service layer.
 // Uses browser cookie auth (xoxc token + d cookie).
@@ -55,6 +61,22 @@ type Client struct {
 	userID string
 	token  string
 	cookie string
+
+	// apiBaseURL is the workspace-specific Web API root, e.g.
+	// "https://slack.com/api/" for non-grid workspaces or
+	// "https://hackclub.enterprise.slack.com/api/" for enterprise grids.
+	// Always ends in "/" so it can be concatenated with method names.
+	// Discovered from auth.test's URL field on Connect; defaults to
+	// defaultAPIBaseURL until then.
+	apiBaseURL string
+
+	// httpClient is the cookie-bearing HTTP client used by both the
+	// inner slack-go client and the four hand-rolled endpoint calls.
+	// Stored so Connect() can rebuild the slack-go client with the
+	// discovered apiBaseURL via slack.OptionAPIURL. Nil for clients
+	// constructed directly in tests (e.g., &Client{api: mock}); in
+	// that case Connect() leaves the existing api field alone.
+	httpClient *http.Client
 }
 
 // NewClient creates a new Slack client using browser cookie auth.
@@ -69,9 +91,11 @@ func NewClient(xoxcToken, dCookie string) *Client {
 	)
 
 	return &Client{
-		api:    api,
-		token:  xoxcToken,
-		cookie: dCookie,
+		api:        api,
+		token:      xoxcToken,
+		cookie:     dCookie,
+		apiBaseURL: defaultAPIBaseURL,
+		httpClient: httpClient,
 	}
 }
 
@@ -115,7 +139,20 @@ func (c *Client) WsDone() <-chan struct{} {
 	return c.wsDone
 }
 
-// Connect authenticates with Slack and populates the team/user IDs.
+// Connect authenticates with Slack, populates the team/user IDs, and
+// discovers the workspace-specific API base URL from auth.test's response.
+//
+// On enterprise grid workspaces, every API request must hit the
+// grid-prefixed host (e.g. "https://hackclub.enterprise.slack.com/api/...")
+// rather than the canonical "https://slack.com/api/..." — otherwise the
+// requests are routed to a different team or fail outright. The official
+// browser client learns the right host the same way: the URL field on
+// auth.test's response carries it.
+//
+// If we own the inner slack-go client (NewClient set httpClient), rebuild
+// it with the discovered API URL via slack.OptionAPIURL so subsequent
+// slack-go calls also target the workspace host. If a test injected a
+// mock api directly, leave it alone.
 func (c *Client) Connect(ctx context.Context) error {
 	resp, err := c.api.AuthTest()
 	if err != nil {
@@ -123,7 +160,40 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 	c.teamID = resp.TeamID
 	c.userID = resp.UserID
+	c.apiBaseURL = deriveAPIBaseURL(resp.URL)
+
+	if c.httpClient != nil {
+		c.api = slack.New(
+			c.token,
+			slack.OptionHTTPClient(c.httpClient),
+			slack.OptionAPIURL(c.apiBaseURL),
+		)
+	}
+
 	return nil
+}
+
+// deriveAPIBaseURL turns the team URL returned by auth.test (e.g.
+// "https://hackclub.enterprise.slack.com/") into the API base URL slk
+// should use for subsequent requests ("https://hackclub.enterprise.slack.com/api/").
+//
+// We only trust hosts under .slack.com — anything else (empty input, garbage,
+// a non-Slack host) falls back to the canonical defaultAPIBaseURL. This
+// keeps a malformed auth.test response from accidentally routing tokens to
+// an unintended host.
+func deriveAPIBaseURL(authTestURL string) string {
+	if authTestURL == "" {
+		return defaultAPIBaseURL
+	}
+	u, err := url.Parse(authTestURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return defaultAPIBaseURL
+	}
+	host := u.Host
+	if host != "slack.com" && !strings.HasSuffix(host, ".slack.com") {
+		return defaultAPIBaseURL
+	}
+	return "https://" + host + "/api/"
 }
 
 // StartWebSocket connects to Slack's internal WebSocket using the xoxc token
@@ -483,7 +553,7 @@ type ThreadsAggregate struct {
 // Slack tells us whether per-thread unreads exist without us having to
 // hit subscriptions.thread.* directly.
 func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
-	reqURL := "https://slack.com/api/client.counts"
+	reqURL := c.apiBaseURL + "client.counts"
 	req, err := http.NewRequest("POST", reqURL, nil)
 	if err != nil {
 		return nil, ThreadsAggregate{}, fmt.Errorf("creating request: %w", err)
@@ -732,7 +802,7 @@ func (c *Client) MarkChannel(ctx context.Context, channelID, ts string) error {
 		"ts":      {ts},
 	}
 
-	req, err := http.NewRequest("POST", "https://slack.com/api/conversations.mark",
+	req, err := http.NewRequest("POST", c.apiBaseURL+"conversations.mark",
 		strings.NewReader(data.Encode()))
 	if err != nil {
 		return fmt.Errorf("creating mark request: %w", err)
@@ -769,7 +839,7 @@ func (c *Client) MarkThread(ctx context.Context, channelID, threadTS, ts string)
 		"read":      {"1"},
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://slack.com/api/subscriptions.thread.mark",
+	req, err := http.NewRequestWithContext(ctx, "POST", c.apiBaseURL+"subscriptions.thread.mark",
 		strings.NewReader(data.Encode()))
 	if err != nil {
 		return fmt.Errorf("creating thread mark request: %w", err)
@@ -797,7 +867,7 @@ type ChannelSection struct {
 // GetChannelSections calls the undocumented users.channelSections.list API
 // to retrieve the user's sidebar sections. This may break if Slack changes the API.
 func (c *Client) GetChannelSections(ctx context.Context) ([]ChannelSection, error) {
-	endpoint := "https://slack.com/api/users.channelSections.list"
+	endpoint := c.apiBaseURL + "users.channelSections.list"
 
 	form := url.Values{}
 	form.Set("token", c.token)
