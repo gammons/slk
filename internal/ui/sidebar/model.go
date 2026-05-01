@@ -425,6 +425,52 @@ func (m *Model) SetItems(items []ChannelItem) {
 	m.dirty()
 }
 
+// UpsertItem inserts a new ChannelItem keyed by ID, or updates an existing
+// item in place if the ID is already present. On update, all fields EXCEPT
+// UnreadCount and LastReadTS are overwritten from the supplied item; those
+// two are preserved because Slack's mpim_open / im_created / group_joined
+// payloads do not carry unread state, so clobbering would erase live
+// indicators we want to keep visible.
+//
+// Re-runs the staleness filter so a freshly-added item (or one whose
+// staleness state may have changed) is reflected in the visible list
+// immediately.
+func (m *Model) UpsertItem(item ChannelItem) {
+	for i := range m.items {
+		if m.items[i].ID == item.ID {
+			// Preserve unread/last-read; overwrite descriptive fields.
+			preservedUnread := m.items[i].UnreadCount
+			preservedLastRead := m.items[i].LastReadTS
+			m.items[i] = item
+			m.items[i].UnreadCount = preservedUnread
+			m.items[i].LastReadTS = preservedLastRead
+			m.rebuildFilter()
+			m.rebuildNavPreserveCursor()
+			m.cacheValid = false
+			m.dirty()
+			return
+		}
+	}
+	m.items = append(m.items, item)
+	m.rebuildFilter()
+	m.rebuildNavPreserveCursor()
+	m.cacheValid = false
+	m.dirty()
+}
+
+// AllItems returns a copy of the full unfiltered item slice, including
+// items currently hidden by the staleness filter. Use this when you need
+// to inspect every conversation the model knows about (e.g. tests, or
+// upsert paths that key off ID); use VisibleItems for what's actually
+// rendered. The returned slice is a defensive copy — mutations do not
+// affect the model. Items() (uncopied) is the cheaper read-only choice
+// on hot production paths.
+func (m *Model) AllItems() []ChannelItem {
+	out := make([]ChannelItem, len(m.items))
+	copy(out, m.items)
+	return out
+}
+
 func (m *Model) SelectedID() string {
 	if m.cursor < 0 || m.cursor >= len(m.nav) {
 		return ""

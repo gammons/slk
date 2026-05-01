@@ -333,3 +333,62 @@ func TestSetUnreadCount_UnknownChannel_NoOp(t *testing.T) {
 		}
 	}
 }
+
+func TestUpsertItem_AddsNewChannel(t *testing.T) {
+	m := New(nil)
+	m.SetItems([]ChannelItem{{ID: "C1", Name: "general", Type: "channel"}})
+
+	m.UpsertItem(ChannelItem{ID: "G1", Name: "alice, bob", Type: "group_dm"})
+
+	items := m.AllItems()
+	if len(items) != 2 {
+		t.Fatalf("len(items) = %d, want 2", len(items))
+	}
+	found := false
+	for _, it := range items {
+		if it.ID == "G1" && it.Type == "group_dm" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("G1 not present after upsert: %+v", items)
+	}
+}
+
+func TestUpsertItem_UpdatesExistingChannel(t *testing.T) {
+	m := New(nil)
+	m.SetItems([]ChannelItem{{ID: "G1", Name: "old name", Type: "group_dm", UnreadCount: 3}})
+
+	m.UpsertItem(ChannelItem{ID: "G1", Name: "new name", Type: "group_dm"})
+
+	items := m.AllItems()
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+	if items[0].Name != "new name" {
+		t.Errorf("Name = %q, want %q", items[0].Name, "new name")
+	}
+	// UnreadCount must be preserved on update — Slack's mpim_open does
+	// not carry unread state, and clobbering a live count to 0 would
+	// erase the indicator we're trying to fix.
+	if items[0].UnreadCount != 3 {
+		t.Errorf("UnreadCount = %d, want 3 (preserved)", items[0].UnreadCount)
+	}
+}
+
+func TestUpsertItem_ThenMarkUnread(t *testing.T) {
+	m := New(nil)
+	m.SetItems([]ChannelItem{{ID: "C1", Name: "general", Type: "channel"}})
+	// Simulate the bug scenario: a new mpdm shows up via mpim_open,
+	// then a message arrives. MarkUnread must successfully bump the
+	// count on the freshly-upserted item.
+	m.UpsertItem(ChannelItem{ID: "G1", Name: "alice, bob", Type: "group_dm"})
+	m.MarkUnread("G1")
+
+	items := m.AllItems()
+	for _, it := range items {
+		if it.ID == "G1" && it.UnreadCount != 1 {
+			t.Errorf("G1 UnreadCount = %d, want 1", it.UnreadCount)
+		}
+	}
+}
