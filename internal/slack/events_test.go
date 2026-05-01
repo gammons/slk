@@ -339,3 +339,63 @@ func TestDispatchWebSocketDNDUpdatedEvent_ExpiredSnooze(t *testing.T) {
 		t.Errorf("expected enabled=false (expired snooze), got enabled=true endUnix=%d", got.endUnix)
 	}
 }
+
+func TestDispatch_ChannelMarked_CallsHandler(t *testing.T) {
+	handler := &mockEventHandler{}
+	data := []byte(`{"type":"channel_marked","channel":"C123","ts":"1700000000.000100","unread_count_display":3}`)
+	dispatchWebSocketEvent(data, handler)
+
+	if len(handler.channelMarks) != 1 {
+		t.Fatalf("expected 1 channelMark, got %d", len(handler.channelMarks))
+	}
+	got := handler.channelMarks[0]
+	if got.channelID != "C123" || got.ts != "1700000000.000100" || got.unreadCount != 3 {
+		t.Errorf("unexpected: %+v", got)
+	}
+}
+
+func TestDispatch_IMMarked_CallsHandler(t *testing.T) {
+	handler := &mockEventHandler{}
+	data := []byte(`{"type":"im_marked","channel":"D1","ts":"1.0","unread_count_display":1}`)
+	dispatchWebSocketEvent(data, handler)
+
+	if len(handler.channelMarks) != 1 {
+		t.Fatalf("expected 1 channelMark, got %d", len(handler.channelMarks))
+	}
+	if handler.channelMarks[0].channelID != "D1" {
+		t.Errorf("channel: %q", handler.channelMarks[0].channelID)
+	}
+}
+
+func TestDispatch_GroupMarked_CallsHandler(t *testing.T) {
+	handler := &mockEventHandler{}
+	data := []byte(`{"type":"group_marked","channel":"G1","ts":"1.0","unread_count_display":0}`)
+	dispatchWebSocketEvent(data, handler)
+
+	if len(handler.channelMarks) != 1 {
+		t.Fatalf("expected 1 channelMark, got %d", len(handler.channelMarks))
+	}
+	if handler.channelMarks[0].unreadCount != 0 {
+		t.Errorf("unreadCount: %d", handler.channelMarks[0].unreadCount)
+	}
+}
+
+func TestDispatch_MPIMMarked_CallsHandler(t *testing.T) {
+	handler := &mockEventHandler{}
+	data := []byte(`{"type":"mpim_marked","channel":"G2","ts":"1.0","unread_count_display":2}`)
+	dispatchWebSocketEvent(data, handler)
+
+	if len(handler.channelMarks) != 1 {
+		t.Fatalf("expected 1 channelMark, got %d", len(handler.channelMarks))
+	}
+}
+
+func TestDispatch_ChannelMarked_MalformedJSON_NoCall(t *testing.T) {
+	handler := &mockEventHandler{}
+	data := []byte(`{"type":"channel_marked","channel":`) // truncated
+	dispatchWebSocketEvent(data, handler)
+
+	if len(handler.channelMarks) != 0 {
+		t.Errorf("expected 0 calls on malformed JSON, got %d", len(handler.channelMarks))
+	}
+}

@@ -120,6 +120,16 @@ type wsDNDUpdatedEvent struct {
 	DNDStatus wsDNDStatusInner `json:"dnd_status"`
 }
 
+// wsChannelMarkedEvent represents a channel_marked / im_marked /
+// group_marked / mpim_marked event. Slack uses the same payload
+// shape across all four — the type field disambiguates.
+type wsChannelMarkedEvent struct {
+	Type               string `json:"type"`
+	Channel            string `json:"channel"`
+	TS                 string `json:"ts"`
+	UnreadCountDisplay int    `json:"unread_count_display"`
+}
+
 // dispatchWebSocketEvent parses a raw JSON WebSocket message and routes it
 // to the appropriate EventHandler method.
 func dispatchWebSocketEvent(data []byte, handler EventHandler) {
@@ -186,6 +196,13 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 		}
 		isDND, end := computeDNDState(evt.DNDStatus, time.Now().Unix())
 		handler.OnDNDChange(isDND, end)
+
+	case "channel_marked", "im_marked", "group_marked", "mpim_marked":
+		var evt wsChannelMarkedEvent
+		if err := json.Unmarshal(data, &evt); err != nil {
+			return
+		}
+		handler.OnChannelMarked(evt.Channel, evt.TS, evt.UnreadCountDisplay)
 
 	case "user_typing":
 		var evt wsTypingEvent
