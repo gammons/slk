@@ -267,6 +267,8 @@ Copy the `xoxc-…` token for the workspace you want.
 ```
 Or just run `./bin/slk`. Onboarding launches automatically when no workspaces are configured.
 
+To remove a workspace later, run `./bin/slk --remove-workspace` for an interactive picker. This deletes the saved token from `~/.local/share/slk/tokens/`; your `config.toml` and SQLite cache are left untouched.
+
 ## Keybindings
 
 | Key | Mode | Action |

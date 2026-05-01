@@ -130,6 +130,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "--remove-workspace":
+			if err := removeWorkspace(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "--list-workspaces":
 			if err := listWorkspaces(); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -189,8 +195,9 @@ func printHelp() {
 
 Usage:
   slk                    Launch the TUI
-  slk --add-workspace    Add a Slack workspace (interactive)
-  slk --list-workspaces  List configured workspaces (TeamID, Slug, Name)
+  slk --add-workspace     Add a Slack workspace (interactive)
+  slk --remove-workspace  Remove a configured workspace (interactive)
+  slk --list-workspaces   List configured workspaces (TeamID, Slug, Name)
   slk --version          Print version and exit
   slk --help             Show this help
 
