@@ -284,3 +284,52 @@ func TestSidebarFilter(t *testing.T) {
 		t.Errorf("expected 3 items after clear filter, got %d", len(visible))
 	}
 }
+
+func TestSetUnreadCount_SetsExactValue(t *testing.T) {
+	m := New([]ChannelItem{
+		{ID: "C1", Name: "general", Section: "Channels"},
+	})
+
+	m.SetUnreadCount("C1", 7)
+
+	for _, it := range m.Items() {
+		if it.ID == "C1" {
+			if it.UnreadCount != 7 {
+				t.Errorf("expected UnreadCount=7, got %d", it.UnreadCount)
+			}
+			return
+		}
+	}
+	t.Fatal("C1 not found in items")
+}
+
+func TestSetUnreadCount_Zero_ClearsBadge(t *testing.T) {
+	m := New([]ChannelItem{{ID: "C1", Name: "general", Section: "Channels"}})
+	m.MarkUnread("C1")
+	m.MarkUnread("C1")
+	// preconditions: count is 2.
+
+	m.SetUnreadCount("C1", 0)
+
+	for _, it := range m.Items() {
+		if it.ID == "C1" {
+			if it.UnreadCount != 0 {
+				t.Errorf("expected UnreadCount=0, got %d", it.UnreadCount)
+			}
+			return
+		}
+	}
+}
+
+func TestSetUnreadCount_UnknownChannel_NoOp(t *testing.T) {
+	m := New([]ChannelItem{{ID: "C1", Name: "general", Section: "Channels"}})
+
+	// Should not panic, should not affect existing items.
+	m.SetUnreadCount("CDOESNOTEXIST", 5)
+
+	for _, it := range m.Items() {
+		if it.ID == "C1" && it.UnreadCount != 0 {
+			t.Errorf("untouched item changed: %d", it.UnreadCount)
+		}
+	}
+}

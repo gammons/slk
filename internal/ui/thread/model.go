@@ -181,6 +181,11 @@ func (m *Model) SetUnreadBoundary(ts string) {
 	m.dirty()
 }
 
+// UnreadBoundaryTS returns the current unread-boundary ts. Used by tests.
+func (m *Model) UnreadBoundaryTS() string {
+	return m.unreadBoundaryTS
+}
+
 // AddReply appends a reply to the thread and scrolls to the bottom.
 // We always advance `selected` to the new last index so the incoming
 // reply is visible regardless of where the user had scrolled.
@@ -339,6 +344,19 @@ func (m *Model) SelectedReply() *messages.MessageItem {
 		return nil
 	}
 	return &m.replies[m.selected]
+}
+
+// SelectByIndex moves the selection cursor to i (an index into Replies()).
+// No-op if i is out of range. Used by tests that need a deterministic
+// selection state.
+func (m *Model) SelectByIndex(i int) {
+	if i < 0 || i >= len(m.replies) {
+		return
+	}
+	if m.selected != i {
+		m.selected = i
+		m.InvalidateCache()
+	}
 }
 
 // MoveUp moves the selection cursor up one reply.

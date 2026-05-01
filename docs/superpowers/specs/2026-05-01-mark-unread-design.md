@@ -322,16 +322,25 @@ type ThreadMarkedRemoteMsg struct {
 
 App's `Update` arms for these messages:
 
-- `ChannelMarkedRemoteMsg`: persist `db.UpdateLastReadTS`, update
-  `LastReadMap`, update `sidebar.SetUnreadCount(channelID, unreadCount)`,
-  and if this is the currently active channel, also update
-  `messagepane.SetLastReadTS(ts)`. **No toast** — silent reconciliation.
+- `ChannelMarkedRemoteMsg`: update
+  `sidebar.SetUnreadCount(channelID, unreadCount)`, and if this is the
+  currently active channel, also update `messagepane.SetLastReadTS(ts)`.
+  **No toast** — silent reconciliation.
 - `ThreadMarkedRemoteMsg`: if this is the currently open thread, call
   `threadPanel.SetUnreadBoundary(ts)`. Always call
   `threadsview.MarkByThreadTSRead(threadTS, ts == "")` (any non-empty
   `ts` from a remote thread_marked is interpreted as "thread is now
   unread"; an empty/missing `ts` means "thread is now read"). The next
   threads-view fetch will re-rank from cache. **No toast**.
+
+> **Implementation note:** SQLite + `LastReadMap` persistence happens in
+> the `rtmEventHandler.OnChannelMarked` body (i.e. at the network-edge),
+> not in the App's `Update` arm. The cache must stay authoritative even
+> when the receiving workspace isn't currently active (e.g. background
+> workspace), and the WS handler runs regardless of active state. Doing
+> persistence there means the App-side arm is pure UI and can be
+> short-circuited when the workspace isn't visible. See
+> `cmd/slk/main.go:OnChannelMarked` for the live code.
 
 The local-press code path and the remote-event code path are factored
 into shared App methods (e.g. `applyChannelMark(channelID, ts string,

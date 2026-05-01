@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -812,6 +814,7 @@ func TestMarkChannel_UsesAPIBaseURL(t *testing.T) {
 		token:      "xoxc-test",
 		cookie:     "d-cookie",
 		apiBaseURL: srv.URL + "/api/",
+		httpClient: srv.Client(),
 	}
 	if err := c.MarkChannel(context.Background(), "C1", "1700000000.000100"); err != nil {
 		t.Fatalf("MarkChannel: %v", err)
@@ -833,6 +836,7 @@ func TestMarkThread_UsesAPIBaseURL(t *testing.T) {
 		token:      "xoxc-test",
 		cookie:     "d-cookie",
 		apiBaseURL: srv.URL + "/api/",
+		httpClient: srv.Client(),
 	}
 	if err := c.MarkThread(context.Background(), "C1", "1700000000.000100", "1700000001.000200"); err != nil {
 		t.Fatalf("MarkThread: %v", err)
@@ -894,5 +898,200 @@ func TestNewClient_HasDefaultAPIBaseURL(t *testing.T) {
 	c := NewClient("xoxc-test", "d-cookie")
 	if c.apiBaseURL != "https://slack.com/api/" {
 		t.Errorf("apiBaseURL = %q, want %q", c.apiBaseURL, "https://slack.com/api/")
+	}
+}
+
+// newTestClient returns a *Client wired to point at the given test server.
+// Internal helpers like markChannel use c.httpClient (set here) and
+// c.apiBaseURL (which defaults to https://slack.com/api/ in production).
+// We deliberately reuse the existing apiBaseURL field rather than introducing
+// a parallel markBaseURL so that mark endpoints continue to honor enterprise
+// grid host discovery (see TestMarkChannel_UsesAPIBaseURL).
+func newTestClient(server *httptest.Server) *Client {
+	return &Client{
+		token:      "xoxc-test",
+		cookie:     "test-cookie",
+		httpClient: server.Client(),
+		apiBaseURL: server.URL + "/api/",
+	}
+}
+
+func TestMarkChannel_PostsCorrectForm(t *testing.T) {
+	var gotPath, gotAuth, gotContentType, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotContentType = r.Header.Get("Content-Type")
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	if err := c.MarkChannel(context.Background(), "C123", "1700000000.000100"); err != nil {
+		t.Fatalf("MarkChannel: %v", err)
+	}
+
+	if !strings.HasSuffix(gotPath, "/conversations.mark") {
+		t.Errorf("path: got %q, want suffix /conversations.mark", gotPath)
+	}
+	if gotAuth != "Bearer xoxc-test" {
+		t.Errorf("auth: got %q", gotAuth)
+	}
+	if gotContentType != "application/x-www-form-urlencoded" {
+		t.Errorf("content-type: got %q", gotContentType)
+	}
+	form, _ := url.ParseQuery(gotBody)
+	if form.Get("channel") != "C123" {
+		t.Errorf("channel: got %q", form.Get("channel"))
+	}
+	if form.Get("ts") != "1700000000.000100" {
+		t.Errorf("ts: got %q", form.Get("ts"))
+	}
+}
+
+func TestMarkThread_PostsReadOne(t *testing.T) {
+	var gotPath, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	if err := c.MarkThread(context.Background(), "C1", "P1", "R5"); err != nil {
+		t.Fatalf("MarkThread: %v", err)
+	}
+
+	if !strings.HasSuffix(gotPath, "/subscriptions.thread.mark") {
+		t.Errorf("path: got %q", gotPath)
+	}
+	form, _ := url.ParseQuery(gotBody)
+	if form.Get("channel") != "C1" || form.Get("thread_ts") != "P1" || form.Get("ts") != "R5" {
+		t.Errorf("form: %v", form)
+	}
+	if form.Get("read") != "1" {
+		t.Errorf("expected read=1, got %q", form.Get("read"))
+	}
+}
+
+func TestMarkThread_EmptyArgs_NoOp(t *testing.T) {
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	if err := c.MarkThread(context.Background(), "", "P1", "R5"); err != nil {
+		t.Errorf("expected nil err on empty channelID, got %v", err)
+	}
+	if err := c.MarkThread(context.Background(), "C1", "", "R5"); err != nil {
+		t.Errorf("expected nil err on empty threadTS, got %v", err)
+	}
+	if called {
+		t.Error("expected no HTTP call when args are empty")
+	}
+}
+
+func TestMarkChannelUnread_PostsCorrectForm(t *testing.T) {
+	var gotPath, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	if err := c.MarkChannelUnread(context.Background(), "C123", "1700000000.000050"); err != nil {
+		t.Fatalf("MarkChannelUnread: %v", err)
+	}
+
+	if !strings.HasSuffix(gotPath, "/conversations.mark") {
+		t.Errorf("path: got %q", gotPath)
+	}
+	form, _ := url.ParseQuery(gotBody)
+	if form.Get("channel") != "C123" {
+		t.Errorf("channel: got %q", form.Get("channel"))
+	}
+	if form.Get("ts") != "1700000000.000050" {
+		t.Errorf("ts: got %q", form.Get("ts"))
+	}
+}
+
+func TestMarkChannelUnread_EmptyTSSendsZero(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	if err := c.MarkChannelUnread(context.Background(), "C1", ""); err != nil {
+		t.Fatalf("MarkChannelUnread: %v", err)
+	}
+
+	form, _ := url.ParseQuery(gotBody)
+	if form.Get("ts") != "0" {
+		t.Errorf("expected ts=0 for empty input, got %q", form.Get("ts"))
+	}
+}
+
+func TestMarkThreadUnread_PostsReadZero(t *testing.T) {
+	var gotPath, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	if err := c.MarkThreadUnread(context.Background(), "C1", "P1", "R5"); err != nil {
+		t.Fatalf("MarkThreadUnread: %v", err)
+	}
+
+	if !strings.HasSuffix(gotPath, "/subscriptions.thread.mark") {
+		t.Errorf("path: got %q", gotPath)
+	}
+	form, _ := url.ParseQuery(gotBody)
+	if form.Get("channel") != "C1" || form.Get("thread_ts") != "P1" || form.Get("ts") != "R5" {
+		t.Errorf("form: %v", form)
+	}
+	if form.Get("read") != "0" {
+		t.Errorf("expected read=0, got %q", form.Get("read"))
+	}
+}
+
+func TestMarkThreadUnread_EmptyArgs_NoOp(t *testing.T) {
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	if err := c.MarkThreadUnread(context.Background(), "", "P1", "R5"); err != nil {
+		t.Errorf("expected nil err, got %v", err)
+	}
+	if err := c.MarkThreadUnread(context.Background(), "C1", "", "R5"); err != nil {
+		t.Errorf("expected nil err, got %v", err)
+	}
+	if called {
+		t.Error("expected no HTTP call when args empty")
 	}
 }

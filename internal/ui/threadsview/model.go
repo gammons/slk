@@ -342,6 +342,35 @@ func (m *Model) MarkByThreadTSRead(channelID, threadTS string) bool {
 	return false
 }
 
+// MarkByThreadTSUnread sets the local Unread flag on the summary matching
+// (channelID, threadTS) to true. Returns true when a flag was actually
+// flipped (i.e., the row existed and was previously read). Like
+// MarkByThreadTSRead this is presentation-only: it does not touch Slack
+// server state. Used by the U-key mark-unread flow and by the inbound
+// thread_marked WS handler.
+//
+// Note: the threads-view's underlying heuristic
+// (LastReplyTS > channel.last_read_ts AND LastReplyBy != self) may
+// re-clear this flag on the next refresh from cache.ListInvolvedThreads
+// if the heuristic considers the thread read. This is the documented
+// v1 limitation; a per-thread last_read_ts column is future work.
+func (m *Model) MarkByThreadTSUnread(channelID, threadTS string) bool {
+	if channelID == "" || threadTS == "" {
+		return false
+	}
+	for i := range m.summaries {
+		if m.summaries[i].ChannelID == channelID && m.summaries[i].ThreadTS == threadTS {
+			if m.summaries[i].Unread {
+				return false
+			}
+			m.summaries[i].Unread = true
+			m.dirty()
+			return true
+		}
+	}
+	return false
+}
+
 // UnreadCount returns the number of summaries currently flagged as unread.
 func (m *Model) UnreadCount() int {
 	n := 0

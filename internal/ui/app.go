@@ -390,6 +390,58 @@ type MessageDeletedMsg struct {
 	Err       error
 }
 
+// MarkUnreadMsg requests the App to mark the given message as unread.
+// ThreadTS is "" for channel-level mark-unread; non-empty for thread-level
+// (in which case ChannelID is the parent channel and BoundaryTS is the
+// boundary within the thread). BoundaryTS is the ts that should become
+// the new last_read watermark — i.e., the ts of the message immediately
+// before the user's selection. UnreadCount is computed by the dispatcher
+// from the loaded buffer at press time and is forwarded to the sidebar
+// for an exact badge value (0 for thread-level, since the sidebar only
+// tracks channel-level unreads).
+type MarkUnreadMsg struct {
+	ChannelID   string
+	ThreadTS    string
+	BoundaryTS  string
+	UnreadCount int
+}
+
+// MessageMarkedUnreadMsg carries the result of a MarkUnreadFunc call.
+// On success Err is nil and the App's Update arm applies the local
+// state changes (move the unread boundary, update the sidebar badge,
+// flip the threads-view row, emit a toast). On error Err is populated
+// and the toast goes to the failure path; no local state mutates.
+type MessageMarkedUnreadMsg struct {
+	ChannelID   string
+	ThreadTS    string
+	BoundaryTS  string
+	UnreadCount int
+	Err         error
+}
+
+// ChannelMarkedRemoteMsg is dispatched by the WS event handler when
+// Slack pushes a channel_marked / im_marked / group_marked / mpim_marked
+// event (read state changed in another client, or via this client's own
+// mark echoing back). The handler has already persisted the new
+// last_read_ts to SQLite + the in-memory LastReadMap; the App's
+// Update arm only updates the UI. No toast.
+type ChannelMarkedRemoteMsg struct {
+	ChannelID   string
+	TS          string
+	UnreadCount int
+}
+
+// ThreadMarkedRemoteMsg is dispatched by the WS event handler when
+// Slack pushes a thread_marked event. Read=true means the thread is
+// now read (clear local boundary + threads-view row); Read=false means
+// it's unread.
+type ThreadMarkedRemoteMsg struct {
+	ChannelID string
+	ThreadTS  string
+	TS        string
+	Read      bool
+}
+
 // WSMessageDeletedMsg is dispatched by the RTM event handler when a
 // message_deleted event arrives. App.Update handles it by removing the
 // message from both panes and the cache.
@@ -423,6 +475,13 @@ type MessageEditFunc func(channelID, ts, newText string) tea.Msg
 // MessageDeleteFunc performs the chat.delete API call. Returns a tea.Msg
 // (typically MessageDeletedMsg) describing the result.
 type MessageDeleteFunc func(channelID, ts string) tea.Msg
+
+// MarkUnreadFunc performs the conversations.mark or
+// subscriptions.thread.mark HTTP call (with the rolled-back ts /
+// read=0 form), updates SQLite + in-memory caches if the call
+// succeeded, and returns a tea.Msg (typically MessageMarkedUnreadMsg)
+// describing the result. ThreadTS == "" means channel-level.
+type MarkUnreadFunc func(channelID, threadTS, boundaryTS string, unreadCount int) tea.Msg
 
 // ThreadFetchFunc is called when the user opens a thread.
 type ThreadFetchFunc func(channelID, threadTS string) tea.Msg
@@ -538,6 +597,7 @@ type App struct {
 	messageSender        MessageSendFunc
 	messageEditor        MessageEditFunc
 	messageDeleter       MessageDeleteFunc
+	messageMarkUnreader  MarkUnreadFunc
 	uploader             UploadFunc
 
 	// clipboardAvailable is set at startup based on the result of
@@ -1113,6 +1173,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return statusbar.CopiedClearMsg{}
 		}))
 
+	case statusbar.MarkedUnreadMsg:
+		a.statusbar.SetToast("Marked unread")
+		cmds = append(cmds, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+			return statusbar.CopiedClearMsg{}
+		}))
+
+	case statusbar.MarkUnreadFailedMsg:
+		a.statusbar.SetToast("Mark unread failed: " + truncateReason(msg.Reason, 40))
+		cmds = append(cmds, tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+			return statusbar.CopiedClearMsg{}
+		}))
+
 	case statusbar.EditFailedMsg:
 		a.statusbar.SetToast("Edit failed: " + truncateReason(msg.Reason, 40))
 		cmds = append(cmds, tea.Tick(3*time.Second, func(time.Time) tea.Msg {
@@ -1412,12 +1484,43 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}
 
+	case MarkUnreadMsg:
+		if a.messageMarkUnreader != nil {
+			marker := a.messageMarkUnreader
+			chID, threadTS, ts, n := msg.ChannelID, msg.ThreadTS, msg.BoundaryTS, msg.UnreadCount
+			cmds = append(cmds, func() tea.Msg {
+				return marker(chID, threadTS, ts, n)
+			})
+		}
+
 	case MessageDeletedMsg:
 		if msg.Err != nil {
 			cmds = append(cmds, func() tea.Msg {
 				return statusbar.DeleteFailedMsg{Reason: msg.Err.Error()}
 			})
 		}
+
+	case MessageMarkedUnreadMsg:
+		if msg.Err != nil {
+			cmds = append(cmds, func() tea.Msg {
+				return statusbar.MarkUnreadFailedMsg{Reason: msg.Err.Error()}
+			})
+			break
+		}
+		if msg.ThreadTS == "" {
+			a.applyChannelMark(msg.ChannelID, msg.BoundaryTS, msg.UnreadCount)
+		} else {
+			a.applyThreadMark(msg.ChannelID, msg.ThreadTS, msg.BoundaryTS, false)
+		}
+		cmds = append(cmds, func() tea.Msg {
+			return statusbar.MarkedUnreadMsg{}
+		})
+
+	case ChannelMarkedRemoteMsg:
+		a.applyChannelMark(msg.ChannelID, msg.TS, msg.UnreadCount)
+
+	case ThreadMarkedRemoteMsg:
+		a.applyThreadMark(msg.ChannelID, msg.ThreadTS, msg.TS, msg.Read)
 
 	case threadFetchDebounceMsg:
 		// Drop stale debounce ticks: a later j/k has scheduled a fresh
@@ -2073,6 +2176,9 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 
 	case key.Matches(msg, a.keys.OpenPreview):
 		return a.openImagePreviewOfSelected()
+
+	case key.Matches(msg, a.keys.MarkUnread):
+		return a.markUnreadOfSelected()
 
 	case key.Matches(msg, a.keys.QuitForce):
 		return tea.Quit
@@ -3388,6 +3494,15 @@ func (a *App) SetMessageDeleter(fn MessageDeleteFunc) {
 	a.messageDeleter = fn
 }
 
+// SetMessageMarkUnreader wires the conversations.mark / subscriptions.thread.mark
+// callback used by the U key. Implementations should perform the HTTP call
+// best-effort, persist the new last_read_ts to SQLite for channel-level
+// marks (no-op for thread-level until per-thread state lands), update the
+// in-memory LastReadMap, and return MessageMarkedUnreadMsg.
+func (a *App) SetMessageMarkUnreader(fn MarkUnreadFunc) {
+	a.messageMarkUnreader = fn
+}
+
 // SetUploader wires the upload callback used by Ctrl+V smart-paste
 // when the user submits with attachments.
 func (a *App) SetUploader(fn UploadFunc) {
@@ -4655,6 +4770,46 @@ func (a *App) beginEditOfSelected() tea.Cmd {
 	return a.compose.Focus()
 }
 
+// applyChannelMark updates local state for a channel-level read-state
+// change (used by both the local mark-unread press and the inbound
+// channel_marked WS event). channelID is the channel; ts is the new
+// last_read watermark; unreadCount is the canonical unread count to
+// show in the sidebar badge.
+//
+// Idempotent: calling twice with the same values is a no-op past the
+// first one (the underlying setters short-circuit on equality).
+func (a *App) applyChannelMark(channelID, ts string, unreadCount int) {
+	if channelID == a.activeChannelID {
+		a.messagepane.SetLastReadTS(ts)
+	}
+	a.sidebar.SetUnreadCount(channelID, unreadCount)
+}
+
+// applyThreadMark updates local state for a thread-level read-state
+// change. read=false means the thread is now unread (move boundary +
+// flip threads-view row); read=true means the thread is now read
+// (clear boundary + clear threads-view row).
+func (a *App) applyThreadMark(channelID, threadTS, ts string, read bool) {
+	if a.threadVisible &&
+		a.threadPanel.ChannelID() == channelID &&
+		a.threadPanel.ThreadTS() == threadTS {
+		if read {
+			a.threadPanel.SetUnreadBoundary("")
+		} else {
+			a.threadPanel.SetUnreadBoundary(ts)
+		}
+	}
+	if read {
+		if a.threadsView.MarkByThreadTSRead(channelID, threadTS) {
+			a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
+		}
+	} else {
+		if a.threadsView.MarkByThreadTSUnread(channelID, threadTS) {
+			a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
+		}
+	}
+}
+
 // beginDeleteOfSelected opens the confirmation prompt for deleting the
 // currently-selected message in the focused pane. Returns a no-op +
 // status toast if not owned, or nil if no message is selected.
@@ -4684,6 +4839,87 @@ func (a *App) beginDeleteOfSelected() tea.Cmd {
 		},
 	)
 	a.SetMode(ModeConfirm)
+	return nil
+}
+
+// markUnreadOfSelected rolls the read watermark backward to the message
+// immediately before the currently-selected message in the focused
+// pane. Channel pane → emits MarkUnreadMsg with ThreadTS="". Thread
+// pane → emits MarkUnreadMsg with ThreadTS=parent ts. Returns nil
+// when nothing is selected (silent no-op, matches Edit/Delete).
+//
+// Boundary semantics:
+//   - Channel pane, selection is i-th of N loaded messages →
+//     BoundaryTS = messages[i-1].TS (or "0" if i == 0)
+//     UnreadCount = N - i
+//   - Thread pane, selection is i-th of N replies →
+//     BoundaryTS = replies[i-1].TS (or threadTS if i == 0)
+//     UnreadCount = 0 (sidebar isn't updated for thread-level)
+func (a *App) markUnreadOfSelected() tea.Cmd {
+	channelID, ts, _, _, panel, ok := a.selectedMessageContext()
+	if !ok || channelID == "" || ts == "" {
+		return nil
+	}
+
+	switch panel {
+	case PanelMessages:
+		msgs := a.messagepane.Messages()
+		idx := -1
+		for i := range msgs {
+			if msgs[i].TS == ts {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return nil
+		}
+		boundary := "0"
+		if idx > 0 {
+			boundary = msgs[idx-1].TS
+		}
+		unreadCount := len(msgs) - idx
+		chID := channelID
+		bTS := boundary
+		n := unreadCount
+		return func() tea.Msg {
+			return MarkUnreadMsg{
+				ChannelID:   chID,
+				ThreadTS:    "",
+				BoundaryTS:  bTS,
+				UnreadCount: n,
+			}
+		}
+
+	case PanelThread:
+		threadTS := a.threadPanel.ThreadTS()
+		replies := a.threadPanel.Replies()
+		idx := -1
+		for i := range replies {
+			if replies[i].TS == ts {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return nil
+		}
+		boundary := threadTS
+		if idx > 0 {
+			boundary = replies[idx-1].TS
+		}
+		chID := channelID
+		tTS := threadTS
+		bTS := boundary
+		return func() tea.Msg {
+			return MarkUnreadMsg{
+				ChannelID:   chID,
+				ThreadTS:    tTS,
+				BoundaryTS:  bTS,
+				UnreadCount: 0,
+			}
+		}
+	}
 	return nil
 }
 

@@ -627,6 +627,41 @@ func run() error {
 			return ui.MessageDeletedMsg{ChannelID: channelID, TS: ts, Err: err}
 		})
 
+		app.SetMessageMarkUnreader(func(channelID, threadTS, boundaryTS string, unreadCount int) tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			var err error
+			if threadTS == "" {
+				err = client.MarkChannelUnread(ctx, channelID, boundaryTS)
+				if err == nil {
+					if dbErr := db.UpdateLastReadTS(channelID, boundaryTS); dbErr != nil {
+						log.Printf("Warning: failed to update last_read_ts %s/%s: %v", channelID, boundaryTS, dbErr)
+					}
+					lastReadMap[channelID] = boundaryTS
+				} else {
+					log.Printf("Warning: failed to mark channel %s as unread (boundary %s): %v", channelID, boundaryTS, err)
+				}
+			} else {
+				err = client.MarkThreadUnread(ctx, channelID, threadTS, boundaryTS)
+				if err != nil {
+					log.Printf("Warning: failed to mark thread %s/%s as unread (boundary %s): %v", channelID, threadTS, boundaryTS, err)
+				}
+				// No SQLite write for thread-level — the schema has no
+				// per-thread last_read_ts column in v1. The UI updates
+				// via applyThreadMark; on next refresh
+				// cache.ListInvolvedThreads will reconcile from the
+				// channel's last_read_ts heuristic.
+			}
+			return ui.MessageMarkedUnreadMsg{
+				ChannelID:   channelID,
+				ThreadTS:    threadTS,
+				BoundaryTS:  boundaryTS,
+				UnreadCount: unreadCount,
+				Err:         err,
+			}
+		})
+
 		app.SetUploader(func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd {
 			return func() tea.Msg {
 				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -1857,6 +1892,46 @@ func (h *rtmEventHandler) OnDNDChange(enabled bool, endUnix int64) {
 		Presence:   h.wsCtx.Presence,
 		DNDEnabled: h.wsCtx.DNDEnabled,
 		DNDEndTS:   h.wsCtx.DNDEndTS,
+	})
+}
+
+func (h *rtmEventHandler) OnChannelMarked(channelID, ts string, unreadCount int) {
+	// Persist regardless of active workspace so the cache stays
+	// authoritative across workspace switches.
+	if err := h.db.UpdateLastReadTS(channelID, ts); err != nil {
+		log.Printf("Warning: failed to update last_read_ts on channel_marked %s/%s: %v", channelID, ts, err)
+	}
+	if h.wsCtx != nil && h.wsCtx.LastReadMap != nil {
+		h.wsCtx.LastReadMap[channelID] = ts
+	}
+	if h.isActive != nil && !h.isActive() {
+		// Inactive workspace: nothing to draw, but the persistence
+		// above already updated state for when the user switches in.
+		return
+	}
+	if h.program == nil {
+		return
+	}
+	h.program.Send(ui.ChannelMarkedRemoteMsg{
+		ChannelID:   channelID,
+		TS:          ts,
+		UnreadCount: unreadCount,
+	})
+}
+
+func (h *rtmEventHandler) OnThreadMarked(channelID, threadTS, ts string, read bool) {
+	if h.isActive != nil && !h.isActive() {
+		// Inactive workspace: skip (no per-thread persistence in v1).
+		return
+	}
+	if h.program == nil {
+		return
+	}
+	h.program.Send(ui.ThreadMarkedRemoteMsg{
+		ChannelID: channelID,
+		ThreadTS:  threadTS,
+		TS:        ts,
+		Read:      read,
 	})
 }
 

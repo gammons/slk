@@ -24,6 +24,18 @@ type EventHandler interface {
 	OnDisconnect()
 	OnSelfPresenceChange(presence string)
 	OnDNDChange(enabled bool, endUnix int64)
+
+	// OnChannelMarked is delivered when Slack pushes a channel_marked /
+	// im_marked / group_marked / mpim_marked event (read state changed
+	// in another client, or via slk's own MarkChannel/MarkChannelUnread
+	// echoing back). ts is the new last_read watermark; unreadCount is
+	// the canonical workspace-side unread count for the channel (use to
+	// drive the sidebar badge).
+	OnChannelMarked(channelID, ts string, unreadCount int)
+	// OnThreadMarked is delivered when Slack pushes a thread_marked
+	// event. read indicates whether the thread is now read (true) or
+	// unread (false). ts is the new boundary within the thread.
+	OnThreadMarked(channelID, threadTS, ts string, read bool)
 }
 
 // wsEvent is the minimal structure for identifying a WebSocket event type.
@@ -108,6 +120,31 @@ type wsDNDUpdatedEvent struct {
 	DNDStatus wsDNDStatusInner `json:"dnd_status"`
 }
 
+// wsChannelMarkedEvent represents a channel_marked / im_marked /
+// group_marked / mpim_marked event. Slack uses the same payload
+// shape across all four — the type field disambiguates.
+type wsChannelMarkedEvent struct {
+	Type               string `json:"type"`
+	Channel            string `json:"channel"`
+	TS                 string `json:"ts"`
+	UnreadCountDisplay int    `json:"unread_count_display"`
+}
+
+// wsThreadMarkedEvent represents a thread_marked event from Slack's
+// browser-protocol WebSocket. The subscription block carries the
+// channel/thread/last-read-ts and an `active` flag (true means the
+// thread is now unread / subscribed for unread updates; false means
+// the thread is now read).
+type wsThreadMarkedEvent struct {
+	Type         string `json:"type"`
+	Subscription struct {
+		Channel  string `json:"channel"`
+		ThreadTS string `json:"thread_ts"`
+		LastRead string `json:"last_read"`
+		Active   bool   `json:"active"`
+	} `json:"subscription"`
+}
+
 // dispatchWebSocketEvent parses a raw JSON WebSocket message and routes it
 // to the appropriate EventHandler method.
 func dispatchWebSocketEvent(data []byte, handler EventHandler) {
@@ -174,6 +211,23 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 		}
 		isDND, end := computeDNDState(evt.DNDStatus, time.Now().Unix())
 		handler.OnDNDChange(isDND, end)
+
+	case "channel_marked", "im_marked", "group_marked", "mpim_marked":
+		var evt wsChannelMarkedEvent
+		if err := json.Unmarshal(data, &evt); err != nil {
+			return
+		}
+		handler.OnChannelMarked(evt.Channel, evt.TS, evt.UnreadCountDisplay)
+
+	case "thread_marked":
+		var evt wsThreadMarkedEvent
+		if err := json.Unmarshal(data, &evt); err != nil {
+			return
+		}
+		// active=true means subscribed-for-unread, i.e. the thread is
+		// now unread. Invert for the read flag we hand to the handler.
+		read := !evt.Subscription.Active
+		handler.OnThreadMarked(evt.Subscription.Channel, evt.Subscription.ThreadTS, evt.Subscription.LastRead, read)
 
 	case "user_typing":
 		var evt wsTypingEvent

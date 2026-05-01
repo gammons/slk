@@ -24,6 +24,20 @@ type mockEventHandler struct {
 	dndChanges          []dndChangeRecord
 	lastBlocks          slack.Blocks
 	lastAttachments     []slack.Attachment
+
+	channelMarks []channelMarkRecord
+	threadMarks  []threadMarkRecord
+}
+
+type channelMarkRecord struct {
+	channelID   string
+	ts          string
+	unreadCount int
+}
+
+type threadMarkRecord struct {
+	channelID, threadTS, ts string
+	read                    bool
 }
 
 func (m *mockEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment) {
@@ -55,6 +69,14 @@ func (m *mockEventHandler) OnSelfPresenceChange(presence string) {
 }
 func (m *mockEventHandler) OnDNDChange(enabled bool, endUnix int64) {
 	m.dndChanges = append(m.dndChanges, dndChangeRecord{enabled, endUnix})
+}
+
+func (m *mockEventHandler) OnChannelMarked(channelID, ts string, unreadCount int) {
+	m.channelMarks = append(m.channelMarks, channelMarkRecord{channelID, ts, unreadCount})
+}
+
+func (m *mockEventHandler) OnThreadMarked(channelID, threadTS, ts string, read bool) {
+	m.threadMarks = append(m.threadMarks, threadMarkRecord{channelID, threadTS, ts, read})
 }
 
 func TestEventHandlerInterface(t *testing.T) {
@@ -315,5 +337,105 @@ func TestDispatchWebSocketDNDUpdatedEvent_ExpiredSnooze(t *testing.T) {
 	got := handler.dndChanges[0]
 	if got.enabled {
 		t.Errorf("expected enabled=false (expired snooze), got enabled=true endUnix=%d", got.endUnix)
+	}
+}
+
+func TestDispatch_ChannelMarked_CallsHandler(t *testing.T) {
+	handler := &mockEventHandler{}
+	data := []byte(`{"type":"channel_marked","channel":"C123","ts":"1700000000.000100","unread_count_display":3}`)
+	dispatchWebSocketEvent(data, handler)
+
+	if len(handler.channelMarks) != 1 {
+		t.Fatalf("expected 1 channelMark, got %d", len(handler.channelMarks))
+	}
+	got := handler.channelMarks[0]
+	if got.channelID != "C123" || got.ts != "1700000000.000100" || got.unreadCount != 3 {
+		t.Errorf("unexpected: %+v", got)
+	}
+}
+
+func TestDispatch_IMMarked_CallsHandler(t *testing.T) {
+	handler := &mockEventHandler{}
+	data := []byte(`{"type":"im_marked","channel":"D1","ts":"1.0","unread_count_display":1}`)
+	dispatchWebSocketEvent(data, handler)
+
+	if len(handler.channelMarks) != 1 {
+		t.Fatalf("expected 1 channelMark, got %d", len(handler.channelMarks))
+	}
+	if handler.channelMarks[0].channelID != "D1" {
+		t.Errorf("channel: %q", handler.channelMarks[0].channelID)
+	}
+}
+
+func TestDispatch_GroupMarked_CallsHandler(t *testing.T) {
+	handler := &mockEventHandler{}
+	data := []byte(`{"type":"group_marked","channel":"G1","ts":"1.0","unread_count_display":0}`)
+	dispatchWebSocketEvent(data, handler)
+
+	if len(handler.channelMarks) != 1 {
+		t.Fatalf("expected 1 channelMark, got %d", len(handler.channelMarks))
+	}
+	if handler.channelMarks[0].unreadCount != 0 {
+		t.Errorf("unreadCount: %d", handler.channelMarks[0].unreadCount)
+	}
+}
+
+func TestDispatch_MPIMMarked_CallsHandler(t *testing.T) {
+	handler := &mockEventHandler{}
+	data := []byte(`{"type":"mpim_marked","channel":"G2","ts":"1.0","unread_count_display":2}`)
+	dispatchWebSocketEvent(data, handler)
+
+	if len(handler.channelMarks) != 1 {
+		t.Fatalf("expected 1 channelMark, got %d", len(handler.channelMarks))
+	}
+}
+
+func TestDispatch_ChannelMarked_MalformedJSON_NoCall(t *testing.T) {
+	handler := &mockEventHandler{}
+	data := []byte(`{"type":"channel_marked","channel":`) // truncated
+	dispatchWebSocketEvent(data, handler)
+
+	if len(handler.channelMarks) != 0 {
+		t.Errorf("expected 0 calls on malformed JSON, got %d", len(handler.channelMarks))
+	}
+}
+
+func TestDispatch_ThreadMarked_Unread_CallsHandler(t *testing.T) {
+	handler := &mockEventHandler{}
+	data := []byte(`{"type":"thread_marked","subscription":{"channel":"C1","thread_ts":"1700000000.000100","last_read":"1700000000.000200","active":true}}`)
+	dispatchWebSocketEvent(data, handler)
+
+	if len(handler.threadMarks) != 1 {
+		t.Fatalf("expected 1 threadMark, got %d", len(handler.threadMarks))
+	}
+	got := handler.threadMarks[0]
+	if got.channelID != "C1" || got.threadTS != "1700000000.000100" || got.ts != "1700000000.000200" {
+		t.Errorf("unexpected: %+v", got)
+	}
+	if got.read {
+		t.Error("expected read=false (active=true means unread)")
+	}
+}
+
+func TestDispatch_ThreadMarked_Read_CallsHandler(t *testing.T) {
+	handler := &mockEventHandler{}
+	data := []byte(`{"type":"thread_marked","subscription":{"channel":"C1","thread_ts":"P1","last_read":"R5","active":false}}`)
+	dispatchWebSocketEvent(data, handler)
+
+	if len(handler.threadMarks) != 1 {
+		t.Fatalf("expected 1 threadMark, got %d", len(handler.threadMarks))
+	}
+	if !handler.threadMarks[0].read {
+		t.Error("expected read=true (active=false means read)")
+	}
+}
+
+func TestDispatch_ThreadMarked_MalformedJSON_NoCall(t *testing.T) {
+	handler := &mockEventHandler{}
+	data := []byte(`{"type":"thread_marked","subscription":{`)
+	dispatchWebSocketEvent(data, handler)
+
+	if len(handler.threadMarks) != 0 {
+		t.Errorf("expected 0 calls on malformed JSON, got %d", len(handler.threadMarks))
 	}
 }

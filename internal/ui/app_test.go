@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -2130,5 +2131,401 @@ func TestPreviewOverlay_OtherKeysSwallowed(t *testing.T) {
 	}
 	if afterIdx != beforeIdx {
 		t.Errorf("j should be swallowed while overlay is open; sidebar selection changed (%d -> %d)", beforeIdx, afterIdx)
+	}
+}
+
+func TestMarkUnreadOfSelected_NoSelection_NoOp(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	// no messages loaded → no selection
+
+	cmd := app.markUnreadOfSelected()
+	if cmd != nil {
+		t.Errorf("expected nil cmd when nothing selected, got non-nil")
+	}
+}
+
+func TestMarkUnreadOfSelected_ChannelPane_EmitsMarkUnreadMsg(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.SetCurrentUserID("U_ME")
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", UserID: "U_OTHER", Text: "first"},
+		{TS: "2.0", UserID: "U_OTHER", Text: "second"},
+		{TS: "3.0", UserID: "U_ME", Text: "third (selected)"},
+		{TS: "4.0", UserID: "U_OTHER", Text: "fourth"},
+		{TS: "5.0", UserID: "U_OTHER", Text: "fifth"},
+	})
+	app.focusedPanel = PanelMessages
+	// SetMessages selects the last message; force selection to index 2.
+	app.messagepane.SelectByIndex(2)
+
+	cmd := app.markUnreadOfSelected()
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd")
+	}
+	res := cmd()
+	mu, ok := res.(MarkUnreadMsg)
+	if !ok {
+		t.Fatalf("expected MarkUnreadMsg, got %T", res)
+	}
+	if mu.ChannelID != "C1" {
+		t.Errorf("ChannelID: got %q", mu.ChannelID)
+	}
+	if mu.ThreadTS != "" {
+		t.Errorf("ThreadTS: expected empty for channel-pane mark, got %q", mu.ThreadTS)
+	}
+	if mu.BoundaryTS != "2.0" {
+		t.Errorf("BoundaryTS: expected '2.0' (msg before selected), got %q", mu.BoundaryTS)
+	}
+	if mu.UnreadCount != 3 {
+		t.Errorf("UnreadCount: expected 3 (selected + 2 newer), got %d", mu.UnreadCount)
+	}
+}
+
+func TestMarkUnreadOfSelected_OldestMessage_BoundaryIsZero(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", UserID: "U_OTHER", Text: "first (selected)"},
+		{TS: "2.0", UserID: "U_OTHER", Text: "second"},
+	})
+	app.focusedPanel = PanelMessages
+	app.messagepane.SelectByIndex(0)
+
+	cmd := app.markUnreadOfSelected()
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd")
+	}
+	res := cmd()
+	mu := res.(MarkUnreadMsg)
+	if mu.BoundaryTS != "0" {
+		t.Errorf("expected BoundaryTS='0' for oldest-message case, got %q", mu.BoundaryTS)
+	}
+	if mu.UnreadCount != 2 {
+		t.Errorf("UnreadCount: expected 2, got %d", mu.UnreadCount)
+	}
+}
+
+func TestMarkUnreadOfSelected_ThreadPane_EmitsThreadMarkUnread(t *testing.T) {
+	app := NewApp()
+	app.SetCurrentUserID("U_ME")
+	parent := messages.MessageItem{TS: "P1", UserID: "U_OTHER", Text: "parent"}
+	app.threadPanel.SetThread(parent, []messages.MessageItem{
+		{TS: "R1", UserID: "U_OTHER", Text: "first reply"},
+		{TS: "R2", UserID: "U_OTHER", Text: "second reply (selected)"},
+		{TS: "R3", UserID: "U_OTHER", Text: "third reply"},
+	}, "C1", "P1")
+	app.threadVisible = true
+	app.focusedPanel = PanelThread
+	app.threadPanel.SelectByIndex(1)
+
+	cmd := app.markUnreadOfSelected()
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd")
+	}
+	res := cmd()
+	mu, ok := res.(MarkUnreadMsg)
+	if !ok {
+		t.Fatalf("expected MarkUnreadMsg, got %T", res)
+	}
+	if mu.ChannelID != "C1" || mu.ThreadTS != "P1" {
+		t.Errorf("got channel=%q thread=%q", mu.ChannelID, mu.ThreadTS)
+	}
+	if mu.BoundaryTS != "R1" {
+		t.Errorf("BoundaryTS: expected 'R1', got %q", mu.BoundaryTS)
+	}
+	if mu.UnreadCount != 0 {
+		t.Errorf("UnreadCount: expected 0 for thread-level, got %d", mu.UnreadCount)
+	}
+}
+
+func TestMarkUnreadOfSelected_ThreadPane_OldestReply_BoundaryIsParentTS(t *testing.T) {
+	// Selecting the oldest reply → boundary is the parent ts (so the
+	// whole thread, but not the parent message itself, becomes unread).
+	app := NewApp()
+	parent := messages.MessageItem{TS: "P1", UserID: "U_OTHER", Text: "parent"}
+	app.threadPanel.SetThread(parent, []messages.MessageItem{
+		{TS: "R1", UserID: "U_OTHER", Text: "first (selected)"},
+		{TS: "R2", UserID: "U_OTHER", Text: "second"},
+	}, "C1", "P1")
+	app.threadVisible = true
+	app.focusedPanel = PanelThread
+	app.threadPanel.SelectByIndex(0)
+
+	cmd := app.markUnreadOfSelected()
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd")
+	}
+	res := cmd()
+	mu := res.(MarkUnreadMsg)
+	if mu.BoundaryTS != "P1" {
+		t.Errorf("expected boundary=P1 (parent ts) for oldest reply, got %q", mu.BoundaryTS)
+	}
+}
+
+// cmdContainsMsgType returns true if cmd (or any sub-cmd in a batch)
+// returns a value of the same dynamic type as want when invoked.
+func cmdContainsMsgType(cmd tea.Cmd, want any) bool {
+	if cmd == nil {
+		return false
+	}
+	res := cmd()
+	if res == nil {
+		return false
+	}
+	if reflect.TypeOf(res) == reflect.TypeOf(want) {
+		return true
+	}
+	if batch, ok := res.(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			if cmdContainsMsgType(sub, want) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestMessageMarkedUnreadMsg_ChannelLevel_UpdatesPaneSidebarAndToasts(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.sidebar.SetItems([]sidebar.ChannelItem{
+		{ID: "C1", Name: "general", Section: "Channels"},
+	})
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", UserID: "U1", Text: "first"},
+		{TS: "2.0", UserID: "U1", Text: "second"},
+		{TS: "3.0", UserID: "U1", Text: "third"},
+	})
+
+	_, cmd := app.Update(MessageMarkedUnreadMsg{
+		ChannelID:   "C1",
+		ThreadTS:    "",
+		BoundaryTS:  "1.0",
+		UnreadCount: 2,
+		Err:         nil,
+	})
+
+	// Toast should be queued via tea.Cmd.
+	if cmd == nil {
+		t.Fatal("expected toast cmd")
+	}
+	if !cmdContainsMsgType(cmd, statusbar.MarkedUnreadMsg{}) {
+		t.Errorf("expected MarkedUnreadMsg in cmd output")
+	}
+
+	// Messages-pane boundary moved.
+	if got := app.messagepane.LastReadTS(); got != "1.0" {
+		t.Errorf("expected messagepane lastReadTS=1.0, got %q", got)
+	}
+
+	// Sidebar count was set.
+	for _, it := range app.sidebar.Items() {
+		if it.ID == "C1" && it.UnreadCount != 2 {
+			t.Errorf("expected sidebar UnreadCount=2, got %d", it.UnreadCount)
+		}
+	}
+}
+
+func TestMessageMarkedUnreadMsg_ThreadLevel_UpdatesThreadPaneAndThreadsView(t *testing.T) {
+	app := NewApp()
+	parent := messages.MessageItem{TS: "P1", UserID: "U1", Text: "parent"}
+	app.threadPanel.SetThread(parent, []messages.MessageItem{
+		{TS: "R1", UserID: "U1", Text: "r1"},
+		{TS: "R2", UserID: "U1", Text: "r2"},
+	}, "C1", "P1")
+	app.threadVisible = true
+	app.threadsView.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "P1", Unread: false},
+	})
+
+	_, cmd := app.Update(MessageMarkedUnreadMsg{
+		ChannelID:  "C1",
+		ThreadTS:   "P1",
+		BoundaryTS: "R1",
+		Err:        nil,
+	})
+
+	if cmd == nil || !cmdContainsMsgType(cmd, statusbar.MarkedUnreadMsg{}) {
+		t.Errorf("expected MarkedUnreadMsg toast cmd")
+	}
+
+	// Thread pane unread boundary moved.
+	if got := app.threadPanel.UnreadBoundaryTS(); got != "R1" {
+		t.Errorf("expected thread unreadBoundary=R1, got %q", got)
+	}
+
+	// Threads-view row was flipped to unread.
+	for _, s := range app.threadsView.Summaries() {
+		if s.ThreadTS == "P1" && !s.Unread {
+			t.Errorf("expected thread-view row P1 to be Unread=true")
+		}
+	}
+
+	// Sidebar threads-row badge reflects the new unread count.
+	if got := app.sidebar.ThreadsUnreadCount(); got != 1 {
+		t.Errorf("expected sidebar.ThreadsUnreadCount=1 after thread mark-unread, got %d", got)
+	}
+}
+
+func TestMessageMarkedUnreadMsg_Error_ToastsFailureNoStateChange(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", UserID: "U1", Text: "first"},
+		{TS: "2.0", UserID: "U1", Text: "second"},
+	})
+	prevLastRead := app.messagepane.LastReadTS()
+
+	_, cmd := app.Update(MessageMarkedUnreadMsg{
+		ChannelID:  "C1",
+		BoundaryTS: "0",
+		Err:        errors.New("boom"),
+	})
+
+	if cmd == nil {
+		t.Fatal("expected failure toast cmd")
+	}
+
+	// Toast is the failure variant carrying the error message, not the
+	// success variant.
+	if cmdContainsMsgType(cmd, statusbar.MarkedUnreadMsg{}) {
+		t.Error("expected no MarkedUnreadMsg success toast on error")
+	}
+	if !cmdContainsMsgType(cmd, statusbar.MarkUnreadFailedMsg{}) {
+		t.Error("expected MarkUnreadFailedMsg toast on error")
+	}
+	// And the Reason matches the error.
+	if reason := extractMarkUnreadFailedReason(cmd); reason != "boom" {
+		t.Errorf("expected toast Reason=%q, got %q", "boom", reason)
+	}
+
+	// No state change.
+	if app.messagepane.LastReadTS() != prevLastRead {
+		t.Error("messagepane lastReadTS should be unchanged on error")
+	}
+}
+
+// extractMarkUnreadFailedReason runs cmd (recursing into BatchMsg) and
+// returns the Reason field of the first MarkUnreadFailedMsg it finds, or
+// "" if none.
+func extractMarkUnreadFailedReason(cmd tea.Cmd) string {
+	if cmd == nil {
+		return ""
+	}
+	res := cmd()
+	if res == nil {
+		return ""
+	}
+	if m, ok := res.(statusbar.MarkUnreadFailedMsg); ok {
+		return m.Reason
+	}
+	if batch, ok := res.(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			if r := extractMarkUnreadFailedReason(sub); r != "" {
+				return r
+			}
+		}
+	}
+	return ""
+}
+
+func TestChannelMarkedRemoteMsg_UpdatesPaneAndSidebarSilently(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.sidebar.SetItems([]sidebar.ChannelItem{
+		{ID: "C1", Name: "general", Section: "Channels"},
+	})
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", UserID: "U1", Text: "first"},
+		{TS: "2.0", UserID: "U1", Text: "second"},
+	})
+
+	_, cmd := app.Update(ChannelMarkedRemoteMsg{
+		ChannelID:   "C1",
+		TS:          "1.0",
+		UnreadCount: 1,
+	})
+
+	// No toast on remote events.
+	if cmd != nil && cmdContainsMsgType(cmd, statusbar.MarkedUnreadMsg{}) {
+		t.Error("expected no MarkedUnreadMsg toast on remote event")
+	}
+
+	if got := app.messagepane.LastReadTS(); got != "1.0" {
+		t.Errorf("messagepane lastReadTS: got %q", got)
+	}
+	for _, it := range app.sidebar.Items() {
+		if it.ID == "C1" && it.UnreadCount != 1 {
+			t.Errorf("sidebar UnreadCount: got %d", it.UnreadCount)
+		}
+	}
+}
+
+func TestChannelMarkedRemoteMsg_InactiveChannel_OnlyUpdatesSidebar(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C_OTHER"
+	app.sidebar.SetItems([]sidebar.ChannelItem{
+		{ID: "C1", Name: "general", Section: "Channels"},
+		{ID: "C_OTHER", Name: "elsewhere", Section: "Channels"},
+	})
+	prevLastRead := app.messagepane.LastReadTS()
+
+	_, _ = app.Update(ChannelMarkedRemoteMsg{
+		ChannelID: "C1", TS: "1.0", UnreadCount: 3,
+	})
+
+	// messages pane (showing C_OTHER) is untouched.
+	if app.messagepane.LastReadTS() != prevLastRead {
+		t.Error("messagepane should be untouched when remote event is for non-active channel")
+	}
+	// Sidebar still updated.
+	for _, it := range app.sidebar.Items() {
+		if it.ID == "C1" && it.UnreadCount != 3 {
+			t.Errorf("expected C1 sidebar UnreadCount=3, got %d", it.UnreadCount)
+		}
+	}
+}
+
+func TestThreadMarkedRemoteMsg_UnreadFlipsRow(t *testing.T) {
+	app := NewApp()
+	app.threadsView.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "P1", Unread: false},
+	})
+
+	_, cmd := app.Update(ThreadMarkedRemoteMsg{
+		ChannelID: "C1",
+		ThreadTS:  "P1",
+		TS:        "R5",
+		Read:      false,
+	})
+
+	if cmd != nil && cmdContainsMsgType(cmd, statusbar.MarkedUnreadMsg{}) {
+		t.Error("expected no toast on remote thread event")
+	}
+
+	for _, s := range app.threadsView.Summaries() {
+		if s.ThreadTS == "P1" && !s.Unread {
+			t.Errorf("expected P1 to be Unread=true after remote thread_marked")
+		}
+	}
+}
+
+func TestThreadMarkedRemoteMsg_ReadClearsRow(t *testing.T) {
+	app := NewApp()
+	app.threadsView.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "P1", Unread: true},
+	})
+
+	_, _ = app.Update(ThreadMarkedRemoteMsg{
+		ChannelID: "C1", ThreadTS: "P1", TS: "R5", Read: true,
+	})
+
+	for _, s := range app.threadsView.Summaries() {
+		if s.ThreadTS == "P1" && s.Unread {
+			t.Errorf("expected P1 Unread=false after remote thread_marked read=true")
+		}
 	}
 }
