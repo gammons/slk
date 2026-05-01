@@ -541,6 +541,18 @@ func (m *Model) SelectedMessage() (MessageItem, bool) {
 	return m.messages[m.selected], true
 }
 
+// SelectByIndex moves the selection cursor to i. No-op if i is out of
+// range. Used by tests that need a deterministic selection state.
+func (m *Model) SelectByIndex(i int) {
+	if i < 0 || i >= len(m.messages) {
+		return
+	}
+	if m.selected != i {
+		m.selected = i
+		m.dirty()
+	}
+}
+
 // ChromeHeight returns the number of rows at the top of the messages
 // pane consumed by the channel header / separator chrome. Set during
 // View() (so callers must invoke View at least once for a meaningful

@@ -2110,3 +2110,134 @@ func TestPreviewOverlay_OtherKeysSwallowed(t *testing.T) {
 		t.Errorf("j should be swallowed while overlay is open; sidebar selection changed (%d -> %d)", beforeIdx, afterIdx)
 	}
 }
+
+func TestMarkUnreadOfSelected_NoSelection_NoOp(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	// no messages loaded → no selection
+
+	cmd := app.markUnreadOfSelected()
+	if cmd != nil {
+		t.Errorf("expected nil cmd when nothing selected, got non-nil")
+	}
+}
+
+func TestMarkUnreadOfSelected_ChannelPane_EmitsMarkUnreadMsg(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.SetCurrentUserID("U_ME")
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", UserID: "U_OTHER", Text: "first"},
+		{TS: "2.0", UserID: "U_OTHER", Text: "second"},
+		{TS: "3.0", UserID: "U_ME", Text: "third (selected)"},
+		{TS: "4.0", UserID: "U_OTHER", Text: "fourth"},
+		{TS: "5.0", UserID: "U_OTHER", Text: "fifth"},
+	})
+	app.focusedPanel = PanelMessages
+	// SetMessages selects the last message; force selection to index 2.
+	app.messagepane.SelectByIndex(2)
+
+	cmd := app.markUnreadOfSelected()
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd")
+	}
+	res := cmd()
+	mu, ok := res.(MarkUnreadMsg)
+	if !ok {
+		t.Fatalf("expected MarkUnreadMsg, got %T", res)
+	}
+	if mu.ChannelID != "C1" {
+		t.Errorf("ChannelID: got %q", mu.ChannelID)
+	}
+	if mu.ThreadTS != "" {
+		t.Errorf("ThreadTS: expected empty for channel-pane mark, got %q", mu.ThreadTS)
+	}
+	if mu.BoundaryTS != "2.0" {
+		t.Errorf("BoundaryTS: expected '2.0' (msg before selected), got %q", mu.BoundaryTS)
+	}
+	if mu.UnreadCount != 3 {
+		t.Errorf("UnreadCount: expected 3 (selected + 2 newer), got %d", mu.UnreadCount)
+	}
+}
+
+func TestMarkUnreadOfSelected_OldestMessage_BoundaryIsZero(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", UserID: "U_OTHER", Text: "first (selected)"},
+		{TS: "2.0", UserID: "U_OTHER", Text: "second"},
+	})
+	app.focusedPanel = PanelMessages
+	app.messagepane.SelectByIndex(0)
+
+	cmd := app.markUnreadOfSelected()
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd")
+	}
+	res := cmd()
+	mu := res.(MarkUnreadMsg)
+	if mu.BoundaryTS != "0" {
+		t.Errorf("expected BoundaryTS='0' for oldest-message case, got %q", mu.BoundaryTS)
+	}
+	if mu.UnreadCount != 2 {
+		t.Errorf("UnreadCount: expected 2, got %d", mu.UnreadCount)
+	}
+}
+
+func TestMarkUnreadOfSelected_ThreadPane_EmitsThreadMarkUnread(t *testing.T) {
+	app := NewApp()
+	app.SetCurrentUserID("U_ME")
+	parent := messages.MessageItem{TS: "P1", UserID: "U_OTHER", Text: "parent"}
+	app.threadPanel.SetThread(parent, []messages.MessageItem{
+		{TS: "R1", UserID: "U_OTHER", Text: "first reply"},
+		{TS: "R2", UserID: "U_OTHER", Text: "second reply (selected)"},
+		{TS: "R3", UserID: "U_OTHER", Text: "third reply"},
+	}, "C1", "P1")
+	app.threadVisible = true
+	app.focusedPanel = PanelThread
+	app.threadPanel.SelectByIndex(1)
+
+	cmd := app.markUnreadOfSelected()
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd")
+	}
+	res := cmd()
+	mu, ok := res.(MarkUnreadMsg)
+	if !ok {
+		t.Fatalf("expected MarkUnreadMsg, got %T", res)
+	}
+	if mu.ChannelID != "C1" || mu.ThreadTS != "P1" {
+		t.Errorf("got channel=%q thread=%q", mu.ChannelID, mu.ThreadTS)
+	}
+	if mu.BoundaryTS != "R1" {
+		t.Errorf("BoundaryTS: expected 'R1', got %q", mu.BoundaryTS)
+	}
+	if mu.UnreadCount != 0 {
+		t.Errorf("UnreadCount: expected 0 for thread-level, got %d", mu.UnreadCount)
+	}
+}
+
+func TestMarkUnreadOfSelected_ThreadPane_OldestReply_BoundaryIsParentTS(t *testing.T) {
+	// Selecting the oldest reply → boundary is the parent ts (so the
+	// whole thread, but not the parent message itself, becomes unread).
+	app := NewApp()
+	parent := messages.MessageItem{TS: "P1", UserID: "U_OTHER", Text: "parent"}
+	app.threadPanel.SetThread(parent, []messages.MessageItem{
+		{TS: "R1", UserID: "U_OTHER", Text: "first (selected)"},
+		{TS: "R2", UserID: "U_OTHER", Text: "second"},
+	}, "C1", "P1")
+	app.threadVisible = true
+	app.focusedPanel = PanelThread
+	app.threadPanel.SelectByIndex(0)
+
+	cmd := app.markUnreadOfSelected()
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd")
+	}
+	res := cmd()
+	mu := res.(MarkUnreadMsg)
+	if mu.BoundaryTS != "P1" {
+		t.Errorf("expected boundary=P1 (parent ts) for oldest reply, got %q", mu.BoundaryTS)
+	}
+}

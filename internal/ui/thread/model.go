@@ -341,6 +341,19 @@ func (m *Model) SelectedReply() *messages.MessageItem {
 	return &m.replies[m.selected]
 }
 
+// SelectByIndex moves the selection cursor to i (an index into Replies()).
+// No-op if i is out of range. Used by tests that need a deterministic
+// selection state.
+func (m *Model) SelectByIndex(i int) {
+	if i < 0 || i >= len(m.replies) {
+		return
+	}
+	if m.selected != i {
+		m.selected = i
+		m.InvalidateCache()
+	}
+}
+
 // MoveUp moves the selection cursor up one reply.
 // ScrollUp scrolls the thread viewport up by n lines without changing the
 // selected reply.

@@ -2120,6 +2120,9 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, a.keys.OpenPreview):
 		return a.openImagePreviewOfSelected()
 
+	case key.Matches(msg, a.keys.MarkUnread):
+		return a.markUnreadOfSelected()
+
 	case key.Matches(msg, a.keys.QuitForce):
 		return tea.Quit
 
@@ -4724,6 +4727,87 @@ func (a *App) beginDeleteOfSelected() tea.Cmd {
 		},
 	)
 	a.SetMode(ModeConfirm)
+	return nil
+}
+
+// markUnreadOfSelected rolls the read watermark backward to the message
+// immediately before the currently-selected message in the focused
+// pane. Channel pane → emits MarkUnreadMsg with ThreadTS="". Thread
+// pane → emits MarkUnreadMsg with ThreadTS=parent ts. Returns nil
+// when nothing is selected (silent no-op, matches Edit/Delete).
+//
+// Boundary semantics:
+//   - Channel pane, selection is i-th of N loaded messages →
+//     BoundaryTS = messages[i-1].TS (or "0" if i == 0)
+//     UnreadCount = N - i
+//   - Thread pane, selection is i-th of N replies →
+//     BoundaryTS = replies[i-1].TS (or threadTS if i == 0)
+//     UnreadCount = 0 (sidebar isn't updated for thread-level)
+func (a *App) markUnreadOfSelected() tea.Cmd {
+	channelID, ts, _, _, panel, ok := a.selectedMessageContext()
+	if !ok || channelID == "" || ts == "" {
+		return nil
+	}
+
+	switch panel {
+	case PanelMessages:
+		msgs := a.messagepane.Messages()
+		idx := -1
+		for i := range msgs {
+			if msgs[i].TS == ts {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return nil
+		}
+		boundary := "0"
+		if idx > 0 {
+			boundary = msgs[idx-1].TS
+		}
+		unreadCount := len(msgs) - idx
+		chID := channelID
+		bTS := boundary
+		n := unreadCount
+		return func() tea.Msg {
+			return MarkUnreadMsg{
+				ChannelID:   chID,
+				ThreadTS:    "",
+				BoundaryTS:  bTS,
+				UnreadCount: n,
+			}
+		}
+
+	case PanelThread:
+		threadTS := a.threadPanel.ThreadTS()
+		replies := a.threadPanel.Replies()
+		idx := -1
+		for i := range replies {
+			if replies[i].TS == ts {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return nil
+		}
+		boundary := threadTS
+		if idx > 0 {
+			boundary = replies[idx-1].TS
+		}
+		chID := channelID
+		tTS := threadTS
+		bTS := boundary
+		return func() tea.Msg {
+			return MarkUnreadMsg{
+				ChannelID:   chID,
+				ThreadTS:    tTS,
+				BoundaryTS:  bTS,
+				UnreadCount: 0,
+			}
+		}
+	}
 	return nil
 }
 
