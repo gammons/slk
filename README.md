@@ -352,6 +352,7 @@ order = 1
 # time. team_id ties the slug to the underlying Slack workspace.
 [workspaces.work]
 team_id = "T01ABCDEF"
+order   = 1                  # rail position; 1-based, used by 1-9 keys
 theme   = "dracula"          # overrides [appearance].theme
 
 [workspaces.work.sections.Alerts]
@@ -366,6 +367,7 @@ order = 2
 # the global [sections.*] above.
 [workspaces.side]
 team_id = "T02XYZ"
+order   = 2
 
 # Inline color overrides on top of the active theme
 [theme]
@@ -378,6 +380,16 @@ text = "#E0E0E0"
 Per-workspace `[workspaces.<slug>.sections.*]` blocks fully replace the
 global `[sections.*]` for that workspace. Workspaces that define no
 sections of their own fall back to the global table.
+
+The `order` field controls workspace position in the rail and the
+mapping for the `1`–`9` digit keys. Positive values sort ascending
+(lowest first); workspaces without an `order` (or with `order = 0`)
+sort after explicitly ordered ones, alphabetically by slug. Tokens
+on disk that have no `[workspaces.<slug>]` block at all sort last,
+alphabetically by team ID. The order is stable across runs.
+Previously the rail order depended on which workspace's WebSocket
+connected first; it is now deterministic regardless of network
+timing, even without an explicit `order` set.
 
 Legacy configs that key the block by raw team ID
 (`[workspaces.T01ABCDEF]`) keep working unchanged.

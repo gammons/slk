@@ -397,20 +397,31 @@ func run() error {
 	app.SetImageFetcher(imageFetcher)
 	app.SetImageProtocol(proto)
 
-	// Build workspace rail items for all tokens
+	// Apply user-configured workspace ordering to tokens before
+	// building the rail. The rail and digit-key (1-9) mapping both
+	// follow this order, so a stable sort here is what makes
+	// `1` always go to the same workspace across runs.
+	//
+	// `tokens` remains the authoritative slice for order-insensitive
+	// operations (image-auth registration, default_workspace lookup);
+	// `orderedTokens` is only for user-facing iteration order.
+	orderedTokens := config.OrderTokens(tokens, cfg)
+
+	// Build workspace rail items for all tokens, in configured order.
 	var wsItems []workspace.WorkspaceItem
-	for _, token := range tokens {
+	for _, ot := range orderedTokens {
 		wsItems = append(wsItems, workspace.WorkspaceItem{
-			ID:       token.TeamID,
-			Name:     token.TeamName,
-			Initials: workspace.WorkspaceInitials(token.TeamName),
+			ID:       ot.Token.TeamID,
+			Name:     ot.Token.TeamName,
+			Initials: workspace.WorkspaceInitials(ot.Token.TeamName),
 		})
 	}
 
-	// Set up loading overlay with workspace names
+	// Set up loading overlay with workspace names, in the same order
+	// so the loading list visually matches the rail.
 	var wsNames []string
-	for _, t := range tokens {
-		wsNames = append(wsNames, t.TeamName)
+	for _, ot := range orderedTokens {
+		wsNames = append(wsNames, ot.Token.TeamName)
 	}
 	app.SetLoadingWorkspaces(wsNames)
 	app.SetWorkspaces(wsItems)
@@ -811,7 +822,7 @@ func run() error {
 
 	// Launch workspace connections in background goroutines
 	// Results are sent to the TUI via p.Send()
-	for _, token := range tokens {
+	for _, ot := range orderedTokens {
 		go func(tok slackclient.Token) {
 			wctx, err := connectWorkspace(ctx, tok, db, cfg, avatarCache)
 			if err != nil {
@@ -917,7 +928,7 @@ func run() error {
 				}
 				}()
 			}
-		}(token)
+		}(ot.Token)
 	}
 
 	_, err = p.Run()
@@ -1866,21 +1877,20 @@ func listWorkspaces() error {
 	configPath := filepath.Join(xdgConfig(), "config.toml")
 	cfg, _ := config.Load(configPath) // best-effort
 
-	slugByTeamID := make(map[string]string, len(cfg.Workspaces))
-	for k, w := range cfg.Workspaces {
-		slugByTeamID[w.TeamID] = k
-	}
+	// Print in the same order the rail would use, so the digit-key
+	// mapping is obvious from the output.
+	orderedTokens := config.OrderTokens(tokens, cfg)
 
 	idW, slugW, nameW := len("TEAM ID"), len("SLUG"), len("NAME")
-	for _, t := range tokens {
-		if len(t.TeamID) > idW {
-			idW = len(t.TeamID)
+	for _, ot := range orderedTokens {
+		if len(ot.Token.TeamID) > idW {
+			idW = len(ot.Token.TeamID)
 		}
-		if s := slugByTeamID[t.TeamID]; len(s) > slugW {
-			slugW = len(s)
+		if len(ot.Slug) > slugW {
+			slugW = len(ot.Slug)
 		}
-		if len(t.TeamName) > nameW {
-			nameW = len(t.TeamName)
+		if len(ot.Token.TeamName) > nameW {
+			nameW = len(ot.Token.TeamName)
 		}
 	}
 	fmt.Printf("%-*s  %-*s  %s\n", idW, "TEAM ID", slugW, "SLUG", "NAME")
@@ -1888,8 +1898,8 @@ func listWorkspaces() error {
 		strings.Repeat("-", idW),
 		strings.Repeat("-", slugW),
 		strings.Repeat("-", nameW))
-	for _, t := range tokens {
-		fmt.Printf("%-*s  %-*s  %s\n", idW, t.TeamID, slugW, slugByTeamID[t.TeamID], t.TeamName)
+	for _, ot := range orderedTokens {
+		fmt.Printf("%-*s  %-*s  %s\n", idW, ot.Token.TeamID, slugW, ot.Slug, ot.Token.TeamName)
 	}
 	return nil
 }

@@ -490,3 +490,36 @@ func TestTeamIDForDefaultWorkspaceUnknownSlug(t *testing.T) {
 		t.Fatal("expected error for unknown slug")
 	}
 }
+
+func TestLoadWorkspaceOrder(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	contents := `
+[workspaces.work]
+team_id = "T01ABCDEF"
+order = 1
+
+[workspaces.side]
+team_id = "T02XYZABC"
+order = 2
+
+[workspaces.oss]
+team_id = "T03QQQRRR"
+`
+	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Workspaces["work"].Order; got != 1 {
+		t.Errorf("work order = %d, want 1", got)
+	}
+	if got := cfg.Workspaces["side"].Order; got != 2 {
+		t.Errorf("side order = %d, want 2", got)
+	}
+	if got := cfg.Workspaces["oss"].Order; got != 0 {
+		t.Errorf("oss order (unset) = %d, want 0", got)
+	}
+}
