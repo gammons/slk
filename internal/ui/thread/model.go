@@ -79,14 +79,14 @@ type Model struct {
 	// separator" prefix that View() prepends to viewContent. Rebuilt only
 	// when its inputs (width, replyCount, parent identity, parent text,
 	// userNames, channelNames) change. On a plain j/k it is reused as-is.
-	chromeCache      string
-	chromeCacheValid bool
-	chromeWidth      int
-	chromeReplyCount int
-	chromeParentTS   string
-	chromeParentText string
-	chromeUserNamesV uint64 // version of the userNames map at build time
-	chromeChannelNV  uint64 // version of the channelNames map at build time
+	chromeCache         string
+	chromeCacheValid    bool
+	chromeWidth         int
+	chromeReplyCount    int
+	chromeParentTS      string
+	chromeParentText    string
+	chromeUserNamesV    uint64 // version of the userNames map at build time
+	chromeChannelNamesV uint64 // version of the channelNames map at build time
 
 	// userNamesV / channelNamesV are bumped every time SetUserNames /
 	// SetChannelNames replaces the map. Used by chromeCache (and any other
@@ -864,9 +864,20 @@ func (m *Model) View(height, width int) string {
 	// because the parent's full markdown pipeline (RenderSlackMarkdown +
 	// WordWrap + reactions + attachments) is expensive and identical
 	// frame-to-frame on a plain j/k. Mirrors internal/ui/messages's
-	// chromeCache. Invalidated by InvalidateCache() (which is called by
-	// SetThread, AddReply, UpdateMessageInPlace, UpdateParentInPlace,
-	// SetUserNames, SetChannelNames, etc.) and by any width change.
+	// chromeCache.
+	//
+	// Invariant: any mutation of m.parent.TS, m.parent.Text, m.userNames
+	// (which bumps userNamesV), m.channelNames (which bumps channelNamesV),
+	// or len(m.replies) MUST be paired with InvalidateCache() or a bump of
+	// the relevant version counter — otherwise the chrome will go stale.
+	// Today SetThread, AddReply, UpdateMessageInPlace, UpdateParentInPlace,
+	// SetUserNames, and SetChannelNames all honor this. If you add a new
+	// visual element to the chrome (e.g. parent reactions, parent edited
+	// marker, attachments rendered above the separator), either add its
+	// state to the predicate below or invalidate on its mutation path.
+	// Adding to the predicate is preferred when the state changes
+	// infrequently — chrome is rebuilt rarely, so the comparison cost is
+	// negligible and invalidation discipline is easier to get wrong.
 	chromeReplyCount := len(m.replies)
 	parentTS := m.parent.TS
 	parentText := m.parent.Text
@@ -876,7 +887,7 @@ func (m *Model) View(height, width int) string {
 		m.chromeParentTS != parentTS ||
 		m.chromeParentText != parentText ||
 		m.chromeUserNamesV != m.userNamesV ||
-		m.chromeChannelNV != m.channelNamesV {
+		m.chromeChannelNamesV != m.channelNamesV {
 		replyLabel := "replies"
 		if chromeReplyCount == 1 {
 			replyLabel = "reply"
@@ -901,7 +912,7 @@ func (m *Model) View(height, width int) string {
 		m.chromeParentTS = parentTS
 		m.chromeParentText = parentText
 		m.chromeUserNamesV = m.userNamesV
-		m.chromeChannelNV = m.channelNamesV
+		m.chromeChannelNamesV = m.channelNamesV
 	}
 	chrome := m.chromeCache
 	chromeHeight := m.chromeHeight
