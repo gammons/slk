@@ -136,3 +136,67 @@ func TestOnConversationOpened_InactiveWorkspace_PersistsContext(t *testing.T) {
 		t.Errorf("channelTypes not mirrored on inactive workspace: %q", h.channelTypes["G1"])
 	}
 }
+
+func TestOnMessage_InactiveWorkspace_BumpsChannelUnreadCount(t *testing.T) {
+	wctx := &WorkspaceContext{
+		BotUserIDs: map[string]bool{},
+		UserNames:  map[string]string{},
+		Channels: []sidebar.ChannelItem{
+			{ID: "D1", Name: "alice", Type: "dm", UnreadCount: 0},
+			{ID: "C1", Name: "general", Type: "channel"},
+		},
+	}
+	h := &rtmEventHandler{
+		wsCtx:        wctx,
+		workspaceID:  "T1",
+		channelNames: map[string]string{"D1": "alice", "C1": "general"},
+		channelTypes: map[string]string{"D1": "dm", "C1": "channel"},
+		isActive:     func() bool { return false },
+		// db, program, notifier left nil — handler must guard.
+	}
+	h.OnMessage("D1", "U2", "1700000001.000000", "hi", "", "", false, nil, slack.Blocks{}, nil)
+
+	for _, ch := range wctx.Channels {
+		if ch.ID == "D1" && ch.UnreadCount != 1 {
+			t.Errorf("D1 UnreadCount = %d, want 1", ch.UnreadCount)
+		}
+	}
+}
+
+func TestOnMessage_InactiveWorkspace_ThreadReplyDoesNotBumpChannel(t *testing.T) {
+	wctx := &WorkspaceContext{
+		Channels: []sidebar.ChannelItem{{ID: "C1", Name: "general", Type: "channel"}},
+	}
+	h := &rtmEventHandler{
+		wsCtx:        wctx,
+		workspaceID:  "T1",
+		channelNames: map[string]string{"C1": "general"},
+		channelTypes: map[string]string{"C1": "channel"},
+		isActive:     func() bool { return false },
+	}
+	// thread_ts != ts and subtype != "thread_broadcast" → reply, must not bump.
+	h.OnMessage("C1", "U2", "1700000002.000000", "reply", "1700000001.000000", "", false, nil, slack.Blocks{}, nil)
+
+	if wctx.Channels[0].UnreadCount != 0 {
+		t.Errorf("thread reply bumped channel unread; got %d", wctx.Channels[0].UnreadCount)
+	}
+}
+
+func TestOnMessage_InactiveWorkspace_ThreadBroadcastBumpsChannel(t *testing.T) {
+	wctx := &WorkspaceContext{
+		Channels: []sidebar.ChannelItem{{ID: "C1", Name: "general", Type: "channel"}},
+	}
+	h := &rtmEventHandler{
+		wsCtx:        wctx,
+		workspaceID:  "T1",
+		channelNames: map[string]string{"C1": "general"},
+		channelTypes: map[string]string{"C1": "channel"},
+		isActive:     func() bool { return false },
+	}
+	// thread_broadcast bumps the channel even though it's a reply.
+	h.OnMessage("C1", "U2", "1700000002.000000", "broadcast", "1700000001.000000", "thread_broadcast", false, nil, slack.Blocks{}, nil)
+
+	if wctx.Channels[0].UnreadCount != 1 {
+		t.Errorf("thread_broadcast did not bump channel unread; got %d", wctx.Channels[0].UnreadCount)
+	}
+}

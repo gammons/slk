@@ -1621,17 +1621,21 @@ type rtmEventHandler struct {
 }
 
 func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment) {
-	// Cache every message to SQLite, regardless of active workspace
-	h.db.UpsertMessage(cache.Message{
-		TS:          ts,
-		ChannelID:   channelID,
-		WorkspaceID: h.workspaceID,
-		UserID:      userID,
-		Text:        text,
-		ThreadTS:    threadTS,
-		Subtype:     subtype,
-		CreatedAt:   time.Now().Unix(),
-	})
+	// Cache every message to SQLite, regardless of active workspace.
+	// Guard against nil db so handlers constructed in tests (without
+	// real persistence) don't panic.
+	if h.db != nil {
+		h.db.UpsertMessage(cache.Message{
+			TS:          ts,
+			ChannelID:   channelID,
+			WorkspaceID: h.workspaceID,
+			UserID:      userID,
+			Text:        text,
+			ThreadTS:    threadTS,
+			Subtype:     subtype,
+			CreatedAt:   time.Now().Unix(),
+		})
+	}
 
 	// Check if this message should trigger a desktop notification.
 	// Do this before the active workspace check so inactive workspaces
@@ -1668,11 +1672,32 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	}
 
 	if h.isActive != nil && !h.isActive() {
-		// Inactive workspace — just notify about unread
-		h.program.Send(ui.WorkspaceUnreadMsg{
-			TeamID:    h.workspaceID,
-			ChannelID: channelID,
-		})
+		// Inactive workspace — persist per-channel unread so a later
+		// workspace switch reflects the activity, then notify the rail.
+		//
+		// Skip thread replies that aren't broadcasts: per Slack's
+		// channel-unread semantics they don't mark the parent channel
+		// as unread (only top-level messages and thread_broadcast
+		// subtypes do). Mirrors the active-branch guard at
+		// internal/ui/app.go:1430-1431.
+		isThreadReply := threadTS != "" && threadTS != ts
+		isBroadcast := subtype == "thread_broadcast"
+		if !isThreadReply || isBroadcast {
+			if h.wsCtx != nil {
+				for i := range h.wsCtx.Channels {
+					if h.wsCtx.Channels[i].ID == channelID {
+						h.wsCtx.Channels[i].UnreadCount++
+						break
+					}
+				}
+			}
+		}
+		if h.program != nil {
+			h.program.Send(ui.WorkspaceUnreadMsg{
+				TeamID:    h.workspaceID,
+				ChannelID: channelID,
+			})
+		}
 		return
 	}
 
