@@ -625,16 +625,16 @@ func run() error {
 				err = client.MarkChannelUnread(ctx, channelID, boundaryTS)
 				if err == nil {
 					if dbErr := db.UpdateLastReadTS(channelID, boundaryTS); dbErr != nil {
-						log.Printf("Warning: UpdateLastReadTS(%s, %s): %v", channelID, boundaryTS, dbErr)
+						log.Printf("Warning: failed to update last_read_ts %s/%s: %v", channelID, boundaryTS, dbErr)
 					}
 					lastReadMap[channelID] = boundaryTS
 				} else {
-					log.Printf("Warning: MarkChannelUnread(%s, %s): %v", channelID, boundaryTS, err)
+					log.Printf("Warning: failed to mark channel %s as unread (boundary %s): %v", channelID, boundaryTS, err)
 				}
 			} else {
 				err = client.MarkThreadUnread(ctx, channelID, threadTS, boundaryTS)
 				if err != nil {
-					log.Printf("Warning: MarkThreadUnread(%s, %s, %s): %v", channelID, threadTS, boundaryTS, err)
+					log.Printf("Warning: failed to mark thread %s/%s as unread (boundary %s): %v", channelID, threadTS, boundaryTS, err)
 				}
 				// No SQLite write for thread-level — the schema has no
 				// per-thread last_read_ts column in v1. The UI updates
@@ -1888,7 +1888,7 @@ func (h *rtmEventHandler) OnChannelMarked(channelID, ts string, unreadCount int)
 	// Persist regardless of active workspace so the cache stays
 	// authoritative across workspace switches.
 	if err := h.db.UpdateLastReadTS(channelID, ts); err != nil {
-		log.Printf("Warning: UpdateLastReadTS on channel_marked: %v", err)
+		log.Printf("Warning: failed to update last_read_ts on channel_marked %s/%s: %v", channelID, ts, err)
 	}
 	if h.wsCtx != nil && h.wsCtx.LastReadMap != nil {
 		h.wsCtx.LastReadMap[channelID] = ts
