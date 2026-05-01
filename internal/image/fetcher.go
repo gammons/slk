@@ -187,6 +187,13 @@ func (f *Fetcher) fetchInner(ctx context.Context, req FetchRequest) (FetchResult
 		img = downscale(img, req.Target)
 	}
 
+	// Populate the render-time memo so the UI thread's Cached() call
+	// becomes a pure map lookup instead of os.Open + image.Decode +
+	// downscale. Critical for keeping the bubbletea Update goroutine
+	// responsive when many images arrive in a burst (channel switch
+	// or scroll-up into unseen history).
+	f.decoded.Store(decodedMemoKey(req.Key, req.Target), img)
+
 	mime := mimeFromExt(filepath.Ext(path))
 	return FetchResult{Img: img, Source: path, Mime: mime}, nil
 }
