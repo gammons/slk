@@ -795,14 +795,18 @@ func (c *Client) GetPermalink(ctx context.Context, channelID, ts string) (string
 	return url, nil
 }
 
-// MarkChannel marks a channel as read up to the given timestamp.
-func (c *Client) MarkChannel(ctx context.Context, channelID, ts string) error {
+// markChannel posts to conversations.mark with the given form values.
+// Used by both MarkChannel (read up to ts) and MarkChannelUnread (roll the
+// watermark backward to ts). Uses c.httpClient for the request so tests
+// can substitute an httptest.NewServer; production wiring (NewClient) sets
+// httpClient to a cookie-bearing client.
+func (c *Client) markChannel(ctx context.Context, channelID, ts string) error {
 	data := url.Values{
 		"channel": {channelID},
 		"ts":      {ts},
 	}
 
-	req, err := http.NewRequest("POST", c.apiBaseURL+"conversations.mark",
+	req, err := http.NewRequestWithContext(ctx, "POST", c.apiBaseURL+"conversations.mark",
 		strings.NewReader(data.Encode()))
 	if err != nil {
 		return fmt.Errorf("creating mark request: %w", err)
@@ -810,8 +814,7 @@ func (c *Client) MarkChannel(ctx context.Context, channelID, ts string) error {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Authorization", "Bearer "+c.token)
 
-	httpClient := newCookieHTTPClient(c.cookie)
-	resp, err := httpClient.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("marking channel: %w", err)
 	}
@@ -819,24 +822,26 @@ func (c *Client) MarkChannel(ctx context.Context, channelID, ts string) error {
 	return nil
 }
 
-// MarkThread marks a thread as read up to the given timestamp using Slack's
-// undocumented subscriptions.thread.mark endpoint (the same call the official
-// web client makes when you view a thread). channelID is the parent channel,
-// threadTS is the parent message ts, and ts is the latest reply ts the user
-// has now seen (use threadTS itself when there are no replies). Best-effort:
-// the endpoint is undocumented and may break if Slack changes its API.
-func (c *Client) MarkThread(ctx context.Context, channelID, threadTS, ts string) error {
+// markThread posts to subscriptions.thread.mark with the given args.
+// Used by both MarkThread (read=true => "1") and MarkThreadUnread
+// (read=false => "0"). channelID/threadTS empty is a no-op. ts defaults
+// to threadTS when empty (parent has no replies yet).
+func (c *Client) markThread(ctx context.Context, channelID, threadTS, ts string, read bool) error {
 	if channelID == "" || threadTS == "" {
 		return nil
 	}
 	if ts == "" {
 		ts = threadTS
 	}
+	readVal := "0"
+	if read {
+		readVal = "1"
+	}
 	data := url.Values{
 		"channel":   {channelID},
 		"thread_ts": {threadTS},
 		"ts":        {ts},
-		"read":      {"1"},
+		"read":      {readVal},
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.apiBaseURL+"subscriptions.thread.mark",
@@ -847,13 +852,27 @@ func (c *Client) MarkThread(ctx context.Context, channelID, threadTS, ts string)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Authorization", "Bearer "+c.token)
 
-	httpClient := newCookieHTTPClient(c.cookie)
-	resp, err := httpClient.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("marking thread: %w", err)
 	}
 	defer resp.Body.Close()
 	return nil
+}
+
+// MarkChannel marks a channel as read up to the given timestamp.
+func (c *Client) MarkChannel(ctx context.Context, channelID, ts string) error {
+	return c.markChannel(ctx, channelID, ts)
+}
+
+// MarkThread marks a thread as read up to the given timestamp using Slack's
+// undocumented subscriptions.thread.mark endpoint (the same call the official
+// web client makes when you view a thread). channelID is the parent channel,
+// threadTS is the parent message ts, and ts is the latest reply ts the user
+// has now seen (use threadTS itself when there are no replies). Best-effort:
+// the endpoint is undocumented and may break if Slack changes its API.
+func (c *Client) MarkThread(ctx context.Context, channelID, threadTS, ts string) error {
+	return c.markThread(ctx, channelID, threadTS, ts, true)
 }
 
 // ChannelSection represents a user's sidebar section from the undocumented Slack API.
