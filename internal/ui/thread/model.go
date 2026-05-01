@@ -17,14 +17,18 @@ import (
 
 var thickLeftBorder = lipgloss.Border{Left: "▌"}
 
-// viewEntry is a pre-rendered reply, matching the shape used by
-// internal/ui/messages.viewEntry: linesNormal is the bordered styled
-// content split on "\n"; linesPlain is the column-aligned mirror of
-// the UNBORDERED content; contentColOffset is the column where content
-// begins inside the BORDERED viewContent (= 1 for replies, which carry
-// the thick left border applied during the viewContent build step).
+// viewEntry is a pre-rendered reply. linesNormal/linesSelected hold the FULLY
+// BORDERED rendered content split on "\n" so View() can flatten directly into
+// the visible window without any per-frame string scanning, lipgloss render,
+// or width measurement. linesPlain mirrors the UNBORDERED content for
+// selection extraction. contentColOffset is 1 (the thick left border ▌ that
+// linesNormal/linesSelected include).
+//
+// This shape mirrors internal/ui/messages.viewEntry exactly; keeping them in
+// lockstep means scroll and selection logic can be kept in sync.
 type viewEntry struct {
 	linesNormal      []string
+	linesSelected    []string
 	linesPlain       []messages.PlainLine
 	height           int
 	replyIdx         int
@@ -878,7 +882,7 @@ func (m *Model) View(height, width int) string {
 
 	// Rebuild render cache if replies or width changed
 	if m.cache == nil || m.cacheWidth != width || m.cacheReplyLen != len(m.replies) {
-		m.cache = make([]viewEntry, 0, len(m.replies))
+		m.cache = m.cache[:0]
 		if m.replyIDToIdx == nil {
 			m.replyIDToIdx = make(map[string]int, len(m.replies))
 		} else {
@@ -886,14 +890,44 @@ func (m *Model) View(height, width int) string {
 				delete(m.replyIDToIdx, k)
 			}
 		}
+		// Pre-build border styles ONCE (don't allocate per reply). Mirrors
+		// internal/ui/messages/model.go:1051-1056: the thick left border ▌
+		// is now applied at cache-build time so View() can pick a slice
+		// (linesNormal vs linesSelected) instead of running lipgloss for
+		// every visible reply on every j/k.
+		borderFill := lipgloss.NewStyle().Background(styles.Background)
+		borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).
+			BorderForeground(styles.Background).BorderBackground(styles.Background)
+		borderSelect := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).
+			BorderForeground(styles.SelectionBorderColor(m.focused)).BorderBackground(styles.Background)
 		for i, reply := range m.replies {
+			// renderThreadMessage's last arg ("isSelected") drives reaction-
+			// nav pill highlighting (lines 1040, 1049): when reaction nav
+			// is active on the selected reply, the navigated pill / "+"
+			// button gets a distinct style. We MUST forward i==m.selected
+			// here (not a constant false) to preserve that UX. EnterReactionNav
+			// / ReactionNavLeft / ReactionNavRight all call InvalidateCache(),
+			// so the cache rebuilds whenever the highlighted index changes.
+			// This matches the messages-pane convention
+			// (internal/ui/messages/model.go:1050).
 			rendered := m.renderThreadMessage(reply, width, m.userNames, m.channelNames, i == m.selected)
+			filled := borderFill.Width(width - 1).Render(rendered)
+			normal := borderInvis.Render(filled)
+			selected := borderSelect.Render(filled)
+			linesN := strings.Split(normal, "\n")
+			linesS := strings.Split(selected, "\n")
 			m.cache = append(m.cache, viewEntry{
-				linesNormal:      strings.Split(rendered, "\n"),
-				linesPlain:       messages.PlainLines(rendered),
-				height:           lipgloss.Height(rendered),
+				linesNormal:   linesN,
+				linesSelected: linesS,
+				// linesPlain mirrors the UNBORDERED content (filled) so the
+				// thick left-border column is NOT present in plain text and
+				// never bleeds into clipboard output via SelectionText. The
+				// mouse-column to plain-column mapping uses contentColOffset.
+				// Same convention as internal/ui/messages/model.go:1057-1061.
+				linesPlain:       messages.PlainLines(filled),
+				height:           len(linesN),
 				replyIdx:         i,
-				contentColOffset: 1, // border applied during viewContent build
+				contentColOffset: 1,
 			})
 			m.replyIDToIdx[reply.TS] = i
 		}
@@ -904,10 +938,6 @@ func (m *Model) View(height, width int) string {
 
 	// Check if view-level cache (bordered content) can be reused
 	if !m.viewCacheValid || m.viewSelected != m.selected || m.viewWidth != width || m.viewHeight != replyAreaHeight {
-		// Pre-compute border styles for this frame (avoids NewStyle per reply)
-		borderFill := lipgloss.NewStyle().Background(styles.Background)
-		borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Background).BorderBackground(styles.Background)
-		borderSelect := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.SelectionBorderColor(m.focused)).BorderBackground(styles.Background)
 		// Visible separator drawn between replies. Uses the panel border color
 		// over the themed background so it reads as a divider but doesn't
 		// fight with the panel's outer border. Falls through full content
@@ -954,16 +984,18 @@ func (m *Model) View(height, width int) string {
 				landmarkInserted = true
 			}
 
-			content := strings.Join(e.linesNormal, "\n")
+			// linesNormal/linesSelected are pre-bordered at cache-build
+			// time (see buildCache above). View() just picks the slice for
+			// the cursor row vs everything else; no per-frame lipgloss work.
+			var lines []string
 			if i == m.selected {
 				startLine = currentLine
-				filled := borderFill.Width(width - 1).Render(content)
-				content = borderSelect.Render(filled)
+				lines = e.linesSelected
 			} else {
-				filled := borderFill.Width(width - 1).Render(content)
-				content = borderInvis.Render(filled)
+				lines = e.linesNormal
 			}
-			h := lipgloss.Height(content)
+			content := strings.Join(lines, "\n")
+			h := e.height
 			m.entryOffsets = append(m.entryOffsets, currentLine)
 			if i == m.selected {
 				endLine = currentLine + h
