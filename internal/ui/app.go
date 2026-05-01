@@ -2297,13 +2297,20 @@ func (a *App) handleInsertMode(msg tea.KeyMsg) tea.Cmd {
 		target.Reset()
 		return nil
 	}
-	if code == tea.KeyUp && mod == 0 && target.CursorAtFirstLine() {
-		target.MoveCursorToStart()
-		return nil
-	}
-	if code == tea.KeyDown && mod == 0 && target.CursorAtLastLine() {
-		target.MoveCursorToEnd()
-		return nil
+	// If a compose-overlay picker (emoji / @mention / #channel) is active,
+	// let it own Up/Down so users can navigate the suggestion list. Without
+	// this guard, the jump-to-start/end shortcuts below swallow the arrow
+	// keys before the picker ever sees them.
+	pickerActive := target.IsEmojiActive() || target.IsMentionActive() || target.IsChannelActive()
+	if !pickerActive {
+		if code == tea.KeyUp && mod == 0 && target.CursorAtFirstLine() {
+			target.MoveCursorToStart()
+			return nil
+		}
+		if code == tea.KeyDown && mod == 0 && target.CursorAtLastLine() {
+			target.MoveCursorToEnd()
+			return nil
+		}
 	}
 	// Plain Enter sends; Shift+Enter (and Ctrl+J as a fallback for terminals
 	// that don't disambiguate modifiers) inserts a newline.

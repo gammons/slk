@@ -887,7 +887,11 @@ func (m *Model) buildCache(width int) {
 	threadsLabel = messages.ReapplyBgAfterResets(threadsLabel, bgAnsi)
 	threadsCursor = messages.ReapplyBgAfterResets(threadsCursor, bgAnsi)
 	threadsActiveLabel = messages.ReapplyBgAfterResets(threadsActiveLabel, bgAnsi)
-	threadsNormal := styles.ChannelNormal.Width(width - 2).Render(threadsLabel)
+	threadsBaseStyle := styles.ChannelNormal
+	if m.threadsUnread > 0 {
+		threadsBaseStyle = styles.ChannelUnread
+	}
+	threadsNormal := threadsBaseStyle.Width(width - 2).Render(threadsLabel)
 	threadsSelectedRow := styles.ChannelSelected.Width(width - 2).Render(threadsCursor)
 	threadsActiveRow := styles.ChannelSelected.Width(width - 2).Render(threadsActiveLabel)
 	m.cacheRows = append(m.cacheRows, renderRow{
