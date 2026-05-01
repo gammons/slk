@@ -278,6 +278,23 @@ type dragState struct {
 // terminates when the cursor leaves the edge or the drag ends.
 type autoScrollTickMsg struct{}
 
+// threadFetchDebounceMsg is delivered after the user's threadsview selection
+// stops moving for openThreadDebounceDelay. Carries the (channelID, threadTS,
+// generation) the user had selected at scheduling time; if the App's current
+// pendingThreadFetchGen has advanced past `gen`, the message is dropped — a
+// later j/k has scheduled a fresh fetch.
+type threadFetchDebounceMsg struct {
+	channelID string
+	threadTS  string
+	gen       uint64
+}
+
+// openThreadDebounceDelay is how long openSelectedThreadCmd waits after a
+// j/k key event before firing the conversations.replies HTTP call. Held-key
+// bursts coalesce into a single fetch against whichever row the cursor
+// finally lands on.
+const openThreadDebounceDelay = 200 * time.Millisecond
+
 // panelCache stores the fully-wrapped (border + exactSize) output of a panel
 // keyed on a tuple of inputs that affect its rendering. A cache hit returns
 // the previous frame's string verbatim; a miss recomputes and stores.
@@ -558,6 +575,14 @@ type App struct {
 	// workspace switch).
 	lastOpenedChannelID string
 	lastOpenedThreadTS  string
+
+	// pendingThreadFetchGen is bumped by every debounced openSelectedThreadCmd
+	// call (j/k path). The threadFetchDebounceMsg handler only runs the network
+	// fetch when its `gen` matches; older ticks are dropped so a held j produces
+	// exactly one fetch (for the row the user finally lands on). Non-debounced
+	// callers (activation, list reload, G jump) do NOT bump this — bumping there
+	// would needlessly invalidate any in-flight debounced fetch about to land.
+	pendingThreadFetchGen uint64
 
 	// Reaction picker
 	reactionPicker   *reactionpicker.Model
@@ -1394,6 +1419,24 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}
 
+	case threadFetchDebounceMsg:
+		// Drop stale debounce ticks: a later j/k has scheduled a fresh
+		// fetch and bumped the generation past this one.
+		if msg.gen != a.pendingThreadFetchGen {
+			return a, nil
+		}
+		// Also drop if the user has navigated away (e.g. switched to a
+		// different thread or closed the threads view) since scheduling.
+		if msg.channelID != a.lastOpenedChannelID || msg.threadTS != a.lastOpenedThreadTS {
+			return a, nil
+		}
+		if a.threadFetcher == nil {
+			return a, nil
+		}
+		fetcher := a.threadFetcher
+		chID, threadTS := msg.channelID, msg.threadTS
+		return a, func() tea.Msg { return fetcher(chID, threadTS) }
+
 	case ThreadRepliesLoadedMsg:
 		if a.threadVisible && msg.ThreadTS == a.threadPanel.ThreadTS() {
 			channelID := a.threadPanel.ChannelID()
@@ -1435,7 +1478,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			team := a.activeTeamID
 			cmds = append(cmds, func() tea.Msg { return fetcher(team) })
 		}
-		if cmd := a.openSelectedThreadCmd(); cmd != nil {
+		// Activation is a single event — fire the fetch immediately so the
+		// right thread panel populates without artificial delay.
+		if cmd := a.openSelectedThreadCmd(false); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 
@@ -1444,7 +1489,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.threadsView.SetSummaries(msg.Summaries)
 			a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
 			if a.view == ViewThreads {
-				if cmd := a.openSelectedThreadCmd(); cmd != nil {
+				// List reload is a single event; if the dedup
+				// short-circuits no fetch happens anyway. Don't add
+				// 200ms latency here.
+				if cmd := a.openSelectedThreadCmd(false); cmd != nil {
 					cmds = append(cmds, cmd)
 				}
 			}
@@ -2742,7 +2790,9 @@ func (a *App) handleDown() tea.Cmd {
 	case PanelMessages:
 		if a.view == ViewThreads {
 			a.threadsView.MoveDown()
-			return a.openSelectedThreadCmd()
+			// j: held-key burst — debounce the network fetch so we
+			// don't fire one conversations.replies call per row.
+			return a.openSelectedThreadCmd(true)
 		}
 		a.messagepane.MoveDown()
 	case PanelThread:
@@ -2758,7 +2808,8 @@ func (a *App) handleUp() tea.Cmd {
 	case PanelMessages:
 		if a.view == ViewThreads {
 			a.threadsView.MoveUp()
-			return a.openSelectedThreadCmd()
+			// k: same debounce as j — see handleDown.
+			return a.openSelectedThreadCmd(true)
 		}
 		a.messagepane.MoveUp()
 		// If at top, fetch older messages
@@ -2785,7 +2836,8 @@ func (a *App) handleGoToBottom() tea.Cmd {
 	case PanelMessages:
 		if a.view == ViewThreads {
 			a.threadsView.GoToBottom()
-			return a.openSelectedThreadCmd()
+			// G is a one-shot jump — fire the fetch immediately.
+			return a.openSelectedThreadCmd(false)
 		}
 		a.messagepane.GoToBottom()
 	case PanelThread:
@@ -3071,12 +3123,21 @@ func (a *App) CloseThread() {
 	}
 }
 
-// openSelectedThreadCmd opens the right thread panel on whichever row is
-// currently highlighted in the threads view. No-op if the list is empty,
-// no thread fetcher is wired, OR the selected thread is already the one
-// open in the right panel (dedup: avoids hammering the Slack API and
-// clobbering an in-progress read on every j/k press or list reload).
-func (a *App) openSelectedThreadCmd() tea.Cmd {
+// openSelectedThreadCmd updates UI state for whichever row the threadsview
+// has highlighted (so the right thread panel shows the parent immediately),
+// then schedules the network fetch.
+//
+// When debounce is true (j/k key handlers), the fetch is delayed by
+// openThreadDebounceDelay and coalesced via pendingThreadFetchGen so a
+// held-j burst produces exactly one HTTP call. When debounce is false
+// (activation, list reload, G jump), the fetch fires immediately so
+// thread content lands without artificial latency.
+//
+// No-op if the list is empty, no thread fetcher is wired, OR the selected
+// thread is already the one open in the right panel (dedup: avoids
+// hammering the Slack API and clobbering an in-progress read on every j/k
+// press or list reload).
+func (a *App) openSelectedThreadCmd(debounce bool) tea.Cmd {
 	sum, ok := a.threadsView.SelectedSummary()
 	if !ok {
 		return nil
@@ -3109,12 +3170,19 @@ func (a *App) openSelectedThreadCmd() tea.Cmd {
 	if a.threadsView.MarkSelectedRead() {
 		a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
 	}
-	if a.threadFetcher != nil {
-		fetcher := a.threadFetcher
-		chID, threadTS := sum.ChannelID, sum.ThreadTS
+	if a.threadFetcher == nil {
+		return nil
+	}
+	fetcher := a.threadFetcher
+	chID, threadTS := sum.ChannelID, sum.ThreadTS
+	if !debounce {
 		return func() tea.Msg { return fetcher(chID, threadTS) }
 	}
-	return nil
+	a.pendingThreadFetchGen++
+	gen := a.pendingThreadFetchGen
+	return tea.Tick(openThreadDebounceDelay, func(time.Time) tea.Msg {
+		return threadFetchDebounceMsg{channelID: chID, threadTS: threadTS, gen: gen}
+	})
 }
 
 // applyThreadUnreadBoundary tells the thread panel where the unread

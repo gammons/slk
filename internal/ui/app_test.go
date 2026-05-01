@@ -543,8 +543,10 @@ func TestApp_OpenSelectedThreadDedups(t *testing.T) {
 	app.Update(ThreadsListLoadedMsg{TeamID: "T1", Summaries: summaries})
 	app.view = ViewThreads
 
-	// First call should fetch.
-	cmd := app.openSelectedThreadCmd()
+	// First call should fetch. Use the immediate path (debounce=false) so
+	// the test directly exercises the dedup semantics without the
+	// debounce-tick indirection.
+	cmd := app.openSelectedThreadCmd(false)
 	if cmd == nil {
 		t.Fatal("first call returned nil")
 	}
@@ -554,14 +556,14 @@ func TestApp_OpenSelectedThreadDedups(t *testing.T) {
 	}
 
 	// Second call without selection change should NOT fetch.
-	cmd = app.openSelectedThreadCmd()
+	cmd = app.openSelectedThreadCmd(false)
 	if cmd != nil {
 		t.Errorf("second call should be a no-op, got cmd=%v", cmd)
 	}
 
 	// After moving selection, fetch should fire again.
 	app.threadsView.MoveDown()
-	cmd = app.openSelectedThreadCmd()
+	cmd = app.openSelectedThreadCmd(false)
 	if cmd == nil {
 		t.Fatal("after MoveDown, expected fetch")
 	}
