@@ -130,6 +130,21 @@ type wsChannelMarkedEvent struct {
 	UnreadCountDisplay int    `json:"unread_count_display"`
 }
 
+// wsThreadMarkedEvent represents a thread_marked event from Slack's
+// browser-protocol WebSocket. The subscription block carries the
+// channel/thread/last-read-ts and an `active` flag (true means the
+// thread is now unread / subscribed for unread updates; false means
+// the thread is now read).
+type wsThreadMarkedEvent struct {
+	Type         string `json:"type"`
+	Subscription struct {
+		Channel  string `json:"channel"`
+		ThreadTS string `json:"thread_ts"`
+		LastRead string `json:"last_read"`
+		Active   bool   `json:"active"`
+	} `json:"subscription"`
+}
+
 // dispatchWebSocketEvent parses a raw JSON WebSocket message and routes it
 // to the appropriate EventHandler method.
 func dispatchWebSocketEvent(data []byte, handler EventHandler) {
@@ -203,6 +218,16 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			return
 		}
 		handler.OnChannelMarked(evt.Channel, evt.TS, evt.UnreadCountDisplay)
+
+	case "thread_marked":
+		var evt wsThreadMarkedEvent
+		if err := json.Unmarshal(data, &evt); err != nil {
+			return
+		}
+		// active=true means subscribed-for-unread, i.e. the thread is
+		// now unread. Invert for the read flag we hand to the handler.
+		read := !evt.Subscription.Active
+		handler.OnThreadMarked(evt.Subscription.Channel, evt.Subscription.ThreadTS, evt.Subscription.LastRead, read)
 
 	case "user_typing":
 		var evt wsTypingEvent
