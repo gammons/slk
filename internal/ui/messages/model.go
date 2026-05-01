@@ -954,6 +954,14 @@ func (m *Model) SetChannelNames(names map[string]string) {
 // legacy single-line "[Image] <url>" form.
 func (m *Model) SetImageContext(ctx ImageContext) {
 	m.imgCtx = ctx
+	if m.imgCtx.Fetcher != nil {
+		m.imgCtx.Fetcher.ConfigurePrerender(m.imgCtx.Protocol)
+		if m.imgCtx.Protocol == imgpkg.ProtoKitty {
+			m.imgCtx.Fetcher.ConfigurePrerenderKitty(m.imgCtx.KittyRender)
+		} else {
+			m.imgCtx.Fetcher.ConfigurePrerenderKitty(nil)
+		}
+	}
 	m.cache = nil
 	m.dirty()
 }
@@ -1487,7 +1495,10 @@ func (m *Model) renderAttachmentBlock(att Attachment, ts string, availWidth, bas
 		channel := m.channelName
 		go func() {
 			_, err := ctx.Fetcher.Fetch(context.Background(), imgpkg.FetchRequest{
-				Key: key, URL: url, Target: pixelTarget,
+				Key:        key,
+				URL:        url,
+				Target:     pixelTarget,
+				CellTarget: target,
 			})
 			// On either success or failure, dispatch a message so the
 			// model can clear THIS key's in-flight bit. Without that,
@@ -1509,7 +1520,31 @@ func (m *Model) renderAttachmentBlock(att Attachment, ts string, availWidth, bas
 		return buildPlaceholder(att.Name, target), nil, nil, target.Y, hit
 	}
 
-	// Decode is cheap once cached. Render via the active protocol.
+	// Fast path: prerendered output baked by the fetch goroutine off
+	// the UI thread. This is the hot path post-Fetch — no protocol
+	// encoding runs on the bubbletea Update goroutine.
+	if pr, ok := ctx.Fetcher.Prerendered(key, target, ctx.Protocol); ok {
+		var fl []func(io.Writer) error
+		var sxlMap map[int]sixelEntry
+		if ctx.Protocol == imgpkg.ProtoSixel && pr.OnFlush != nil {
+			var bb bytes.Buffer
+			if err := pr.OnFlush(&bb); err == nil {
+				sxlMap = map[int]sixelEntry{
+					baseRow: {bytes: bb.Bytes(), fallback: pr.Fallback, height: target.Y},
+				}
+			}
+		} else if pr.OnFlush != nil {
+			fl = []func(io.Writer) error{pr.OnFlush}
+		}
+		return pr.Lines, fl, sxlMap, target.Y, hit
+	}
+
+	// Slow path: prerender wasn't populated (e.g. protocol changed
+	// since fetch, or this is a cache file from a previous session
+	// that hasn't been refreshed through Fetch). Fall through to the
+	// existing on-thread RenderImage path. Cached() already returned
+	// the decoded image as a pure memo lookup (Task 1) so the
+	// remaining cost is one protocol encode.
 	if ctx.Protocol == imgpkg.ProtoKitty && ctx.KittyRender != nil {
 		ckey := "F-" + att.FileID
 		ctx.KittyRender.SetSource(ckey, img)
@@ -1525,9 +1560,6 @@ func (m *Model) renderAttachmentBlock(att Attachment, ts string, availWidth, bas
 	var fl []func(io.Writer) error
 	var sxlMap map[int]sixelEntry
 	if ctx.Protocol == imgpkg.ProtoSixel {
-		// Sixel: capture the bytes once into sixelRows. Phase 6 will
-		// emit them inline at frame time. Don't surface OnFlush here
-		// because the bytes are already baked into the sentinel row.
 		if out.OnFlush != nil {
 			var bb bytes.Buffer
 			if err := out.OnFlush(&bb); err == nil {

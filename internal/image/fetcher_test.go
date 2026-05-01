@@ -203,6 +203,41 @@ func TestFetcher_FetchPopulatesDecodedMemo(t *testing.T) {
 	}
 }
 
+// After Fetch completes for a configured (proto), Prerendered must
+// return a non-empty Render at the requested target so the UI thread
+// doesn't have to call RenderImage synchronously.
+func TestFetcher_FetchPopulatesPrerender(t *testing.T) {
+	pngBytes := tinyPNG(t, 100, 100, imgcolor.RGBA{200, 0, 0, 255})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(pngBytes)
+	}))
+	defer srv.Close()
+
+	cache, _ := NewCache(t.TempDir(), 10)
+	f := NewFetcher(cache, http.DefaultClient)
+
+	cellTarget := image.Pt(10, 5)
+	pixelTarget := image.Pt(20, 10)
+
+	f.ConfigurePrerender(ProtoHalfBlock)
+
+	if _, err := f.Fetch(context.Background(), FetchRequest{
+		Key: "k1", URL: srv.URL, Target: pixelTarget, CellTarget: cellTarget,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	r, ok := f.Prerendered("k1", cellTarget, ProtoHalfBlock)
+	if !ok {
+		t.Fatal("expected Prerendered to return a halfblock render after Fetch")
+	}
+	if len(r.Lines) != cellTarget.Y {
+		t.Errorf("expected %d lines, got %d", cellTarget.Y, len(r.Lines))
+	}
+}
+
 func TestFetcher_HTTPErrorPropagates(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
