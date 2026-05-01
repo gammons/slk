@@ -107,12 +107,12 @@ JSON types.
 
 The three message-sending methods on `internal/slack/client.go` gain an
 extra return value carrying the converted mrkdwn so callers can use it
-for optimistic display:
+for optimistic display. Current → new signatures:
 
 ```go
-SendMessage(ctx, channelID, text)              (ts, sentMrkdwn, error)
-SendThreadReply(ctx, channelID, threadTS, text) (ts, sentMrkdwn, error)
-UpdateMessage(ctx, channelID, ts, text)        (sentMrkdwn, error)
+SendMessage(ctx, channelID, text)              (ts, error)            -> (ts, sentMrkdwn, error)
+SendReply  (ctx, channelID, threadTS, text)    (ts, error)            -> (ts, sentMrkdwn, error)
+EditMessage(ctx, channelID, ts, text)          (error)                -> (sentMrkdwn, error)
 ```
 
 Each method internally:
@@ -255,11 +255,21 @@ MessageSentMsg → messagepane.AppendMessage → renderMessagePlain
 The user types `**bold**`, sends, immediately sees their message
 rendered as bold in slk — same way other clients render it.
 
-There are three such callbacks in `cmd/slk/main.go`:
-`SetMessageSender` (line 587), `SetMessageEditor` (line 610), and
-`SetThreadReplySender` (line 748). Each receives `sentMrkdwn` from the
-client and stores it as `MessageItem.Text` for the optimistic display.
-This is the only caller-side change.
+Three callbacks in `cmd/slk/main.go` need updating:
+
+- `SetMessageSender` (line 587) — calls `client.SendMessage`. Capture
+  new `sentMrkdwn` return value, use it as `MessageItem.Text` instead
+  of `text` in the `MessageSentMsg.Message`.
+- `SetThreadReplySender` (line 748) — calls `client.SendReply`. Same
+  pattern: use `sentMrkdwn` for `ThreadReplySentMsg.Message.Text`.
+- `SetMessageEditor` (line 610) — calls `client.EditMessage`. The
+  callback receives the new `sentMrkdwn` return value but does NOT
+  need to plumb it into `MessageEditedMsg`: edit display is updated
+  via the `message_changed` WebSocket echo (`internal/ui/app.go:1382-1395`,
+  which calls `UpdateMessageInPlace` with the server-stored text and
+  bypasses the `isSelfSent` dedup). The callback can ignore the new
+  return; we keep the signature change for symmetry with the other
+  two methods. `MessageEditedMsg` itself is unchanged.
 
 ## Known limitation: edit flattening
 
@@ -320,21 +330,30 @@ comparisons use a JSON serializer for readability. Sample coverage:
 
 ### Updates to `internal/slack/client_test.go`
 
-`mockSlackAPI.PostMessage` and `UpdateMessage` already capture the
-options slice. New helpers extract `text` and `blocks` from those
-options (using `slack.UnsafeApplyMsgOptions` against an empty
-`slack.Msg`). New tests:
+`mockSlackAPI.PostMessage` and `UpdateMessage` are currently no-ops
+returning empty strings (`internal/slack/client_test.go:80,84`). We
+add capture function fields (`postMessageFn`, `updateMessageFn`) to
+the mock following the same pattern as `authTestFn`/`getEmojiFn`, so
+tests can record the options slice and return canned timestamps. A
+helper extracts `text` and `blocks` from the captured options using
+`slack.UnsafeApplyMsgOptions` against an empty `slack.Msg`. New
+tests:
 
 - `TestSendMessageBuildsRichTextBlock` — input `"**bold**"` produces
   `MsgOptionText("*bold*", false)` and `MsgOptionBlocks(<rich_text with
   bold>)` and returns `sentMrkdwn == "*bold*"`.
-- `TestSendThreadReplyBuildsRichTextBlock` — same as above plus
+- `TestSendReplyBuildsRichTextBlock` — same as above plus
   `MsgOptionTS(threadTS)`.
-- `TestUpdateMessageBuildsRichTextBlock` — verifies UpdateMessage path.
+- `TestEditMessageBuildsRichTextBlock` — verifies the EditMessage
+  path through `mockSlackAPI.UpdateMessage`.
 
-Existing tests for the three methods are updated to match the new
-return arity (the mrkdwn return is asserted equal to input when the
-input contains no markdown).
+These are new tests — `client_test.go` currently has no coverage of
+`SendMessage`, `SendReply`, or `EditMessage`. The mock's
+`PostMessage`/`UpdateMessage` are no-ops returning empty strings; we
+will add capture-and-replay function fields (`postMessageFn`,
+`updateMessageFn`) following the existing pattern of other mock
+methods (`authTestFn`, `getEmojiFn`, etc.) so tests can capture
+options and return canned timestamps.
 
 ### Out-of-scope for tests
 
@@ -353,7 +372,7 @@ input contains no markdown).
 | `internal/slack/mrkdwn/doc.go` | NEW — package doc |
 | `internal/slack/client.go` | EDIT — three send methods get the converter + new return value |
 | `internal/slack/client_test.go` | EDIT — assert blocks + text in mock options; update existing tests for new return arity |
-| `cmd/slk/main.go` | EDIT — three callbacks (`SetMessageSender` and the thread-reply / edit equivalents) use `sentMrkdwn` for optimistic display |
+| `cmd/slk/main.go` | EDIT — three callbacks: `SetMessageSender` and `SetThreadReplySender` use `sentMrkdwn` for optimistic display; `SetMessageEditor` accepts new return arity but ignores it (edit echo updates via WS) |
 | `go.mod` / `go.sum` | EDIT — add `github.com/yuin/goldmark` |
 | `README.md` | EDIT — Compose-section bullet about CommonMark; Tradeoffs note about edit flattening |
 
