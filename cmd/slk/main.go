@@ -23,7 +23,6 @@ import (
 	"github.com/gammons/slk/internal/notify"
 	"github.com/gammons/slk/internal/service"
 	slackclient "github.com/gammons/slk/internal/slack"
-	"github.com/gammons/slk/internal/slackfmt"
 	"github.com/gammons/slk/internal/ui"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/compose"
@@ -1056,69 +1055,23 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	}
 
 	for _, ch := range channels {
-		chType := "channel"
-		if ch.IsIM {
-			// Slack returns the same `is_im=true` for human DMs and app
-			// DMs; the only differentiator is the peer user's IsBot/
-			// IsAppUser flag, which we look up via the cache-seeded
-			// BotUserIDs set. Unknown peers default to "dm" and are
-			// reclassified later by the resolveUser path below.
-			if wctx.BotUserIDs[ch.User] {
-				chType = "app"
-			} else {
-				chType = "dm"
-			}
-		} else if ch.IsMpIM {
-			chType = "group_dm"
-		} else if ch.IsPrivate {
-			chType = "private"
-		}
+		item, finderItem := buildChannelItem(ch, wctx, cfg, client.TeamID())
+		upsertChannelInDB(db, ch, item.Type, client.TeamID())
 
-		db.UpsertChannel(cache.Channel{
-			ID:          ch.ID,
-			WorkspaceID: client.TeamID(),
-			Name:        ch.Name,
-			Type:        chType,
-			Topic:       ch.Topic.Value,
-			IsMember:    ch.IsMember,
-		})
-
-		displayName := ch.Name
 		if ch.IsIM {
-			if resolved, ok := wctx.UserNames[ch.User]; ok {
-				displayName = resolved
-			} else {
-				displayName = ch.User
+			if _, ok := wctx.UserNames[ch.User]; !ok {
 				wctx.UnresolvedDMs = append(wctx.UnresolvedDMs, UnresolvedDM{
 					ChannelID: ch.ID,
 					UserID:    ch.User,
 				})
 			}
-		} else if ch.IsMpIM {
-			displayName = slackfmt.FormatMPDMName(ch.Name, func(h string) string {
-				return wctx.UserNamesByHandle[h]
-			})
-		}
-
-		section := cfg.MatchSection(client.TeamID(), ch.Name)
-		var sectionOrder int
-		if section != "" {
-			sectionOrder = cfg.SectionOrder(client.TeamID(), section)
-		}
-		item := sidebar.ChannelItem{
-			ID:           ch.ID,
-			Name:         displayName,
-			Type:         chType,
-			Section:      section,
-			SectionOrder: sectionOrder,
-		}
-		if ch.IsIM {
-			item.DMUserID = ch.User
 			if cachedUser, err := db.GetUser(ch.User); err == nil && cachedUser.Presence != "" {
 				item.Presence = cachedUser.Presence
+				finderItem.Presence = cachedUser.Presence
 			}
 		}
 		wctx.Channels = append(wctx.Channels, item)
+		wctx.FinderItems = append(wctx.FinderItems, finderItem)
 	}
 
 	// Fetch unread counts
@@ -1143,19 +1096,11 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		}
 	}
 
-	// Build finder items. The user is a member of every channel returned by
-	// GetChannels (it's backed by users.conversations), so Joined=true here.
-	// A separate background fetch surfaces non-joined public channels for
-	// browsing -- see startBrowseableChannelsFetch in main.go.
-	for _, ch := range wctx.Channels {
-		wctx.FinderItems = append(wctx.FinderItems, channelfinder.Item{
-			ID:       ch.ID,
-			Name:     ch.Name,
-			Type:     ch.Type,
-			Presence: ch.Presence,
-			Joined:   true,
-		})
-	}
+	// Finder items are built alongside the sidebar items in the loop above
+	// (see buildChannelItem). The user is a member of every channel returned
+	// by GetChannels (it's backed by users.conversations), so those entries
+	// have Joined=true. A separate background fetch surfaces non-joined
+	// public channels for browsing -- see startBrowseableChannelsFetch.
 
 	return wctx, nil
 }
