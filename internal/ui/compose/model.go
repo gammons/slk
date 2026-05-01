@@ -104,7 +104,14 @@ func New(channelName string) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Message #" + channelName + "... (i to insert)"
 	ta.CharLimit = 40000
-	ta.MaxHeight = 5
+	// MaxHeight is the textarea's logical-line cap, which also gates
+	// InsertNewline via atContentLimit(). We want users to be able to
+	// compose arbitrarily long multi-line drafts (Slack itself imposes
+	// no line cap below the 40k char limit), so we set this high. The
+	// *visible* row cap is enforced separately in autoGrow() via
+	// composeMaxVisibleRows so the box still scrolls internally instead
+	// of pushing the rest of the UI off-screen.
+	ta.MaxHeight = 1000
 	// DynamicHeight delegates height-tracking to the textarea itself,
 	// which calls recalculateHeight() after every input mutation
 	// (insert / delete / paste / SetValue). Without it, the textarea
@@ -456,14 +463,21 @@ func (m Model) cursorPosition() int {
 	return pos
 }
 
+// composeMaxVisibleRows caps the on-screen height of the compose box.
+// Beyond this, the textarea scrolls internally rather than pushing the
+// messages pane off-screen. Decoupled from textarea.MaxHeight (the
+// logical-line content cap) so users can compose drafts longer than
+// what fits on screen.
+const composeMaxVisibleRows = 20
+
 // autoGrow adjusts the textarea height to match the visual line count.
 func (m *Model) autoGrow() {
 	lines := m.visualLineCount()
 	if lines < 1 {
 		lines = 1
 	}
-	if lines > m.input.MaxHeight {
-		lines = m.input.MaxHeight
+	if lines > composeMaxVisibleRows {
+		lines = composeMaxVisibleRows
 	}
 	if m.input.Height() != lines {
 		// SetHeight alone is sufficient for the modern textarea

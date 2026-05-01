@@ -258,6 +258,28 @@ func TestHandleInsertMode_ShiftEnterInsertsNewline(t *testing.T) {
 	}
 }
 
+// Regression: Shift+Enter must keep working past the visible-row cap of
+// the compose box. The textarea's MaxHeight used to be 5, which also
+// gated InsertNewline via atContentLimit, so users hit a silent
+// 4-newline ceiling once the box was full.
+func TestHandleInsertMode_ShiftEnterPastVisibleHeight(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.focusedPanel = PanelMessages
+	app.SetMode(ModeInsert)
+	app.compose.Focus()
+
+	app.compose.SetValue("a\nb\nc\nd\ne\nf")
+	app.compose.MoveCursorToEnd()
+
+	app.handleInsertMode(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+
+	val := app.compose.Value()
+	if got, want := strings.Count(val, "\n"), 6; got != want {
+		t.Fatalf("expected %d newlines after shift+enter on a 6-line draft, got %d (value=%q)", want, got, val)
+	}
+}
+
 func TestHandleInsertMode_PlainEnterSends(t *testing.T) {
 	app := NewApp()
 	app.activeChannelID = "C1"
