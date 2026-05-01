@@ -390,6 +390,35 @@ type MessageDeletedMsg struct {
 	Err       error
 }
 
+// MarkUnreadMsg requests the App to mark the given message as unread.
+// ThreadTS is "" for channel-level mark-unread; non-empty for thread-level
+// (in which case ChannelID is the parent channel and BoundaryTS is the
+// boundary within the thread). BoundaryTS is the ts that should become
+// the new last_read watermark — i.e., the ts of the message immediately
+// before the user's selection. UnreadCount is computed by the dispatcher
+// from the loaded buffer at press time and is forwarded to the sidebar
+// for an exact badge value (0 for thread-level, since the sidebar only
+// tracks channel-level unreads).
+type MarkUnreadMsg struct {
+	ChannelID   string
+	ThreadTS    string
+	BoundaryTS  string
+	UnreadCount int
+}
+
+// MessageMarkedUnreadMsg carries the result of a MarkUnreadFunc call.
+// On success Err is nil and the App's Update arm applies the local
+// state changes (move the unread boundary, update the sidebar badge,
+// flip the threads-view row, emit a toast). On error Err is populated
+// and the toast goes to the failure path; no local state mutates.
+type MessageMarkedUnreadMsg struct {
+	ChannelID   string
+	ThreadTS    string
+	BoundaryTS  string
+	UnreadCount int
+	Err         error
+}
+
 // WSMessageDeletedMsg is dispatched by the RTM event handler when a
 // message_deleted event arrives. App.Update handles it by removing the
 // message from both panes and the cache.
@@ -423,6 +452,13 @@ type MessageEditFunc func(channelID, ts, newText string) tea.Msg
 // MessageDeleteFunc performs the chat.delete API call. Returns a tea.Msg
 // (typically MessageDeletedMsg) describing the result.
 type MessageDeleteFunc func(channelID, ts string) tea.Msg
+
+// MarkUnreadFunc performs the conversations.mark or
+// subscriptions.thread.mark HTTP call (with the rolled-back ts /
+// read=0 form), updates SQLite + in-memory caches if the call
+// succeeded, and returns a tea.Msg (typically MessageMarkedUnreadMsg)
+// describing the result. ThreadTS == "" means channel-level.
+type MarkUnreadFunc func(channelID, threadTS, boundaryTS string, unreadCount int) tea.Msg
 
 // ThreadFetchFunc is called when the user opens a thread.
 type ThreadFetchFunc func(channelID, threadTS string) tea.Msg
@@ -538,6 +574,7 @@ type App struct {
 	messageSender        MessageSendFunc
 	messageEditor        MessageEditFunc
 	messageDeleter       MessageDeleteFunc
+	messageMarkUnreader  MarkUnreadFunc
 	uploader             UploadFunc
 
 	// clipboardAvailable is set at startup based on the result of
@@ -1409,6 +1446,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			chID, ts := msg.ChannelID, msg.TS
 			cmds = append(cmds, func() tea.Msg {
 				return deleter(chID, ts)
+			})
+		}
+
+	case MarkUnreadMsg:
+		if a.messageMarkUnreader != nil {
+			marker := a.messageMarkUnreader
+			chID, threadTS, ts, n := msg.ChannelID, msg.ThreadTS, msg.BoundaryTS, msg.UnreadCount
+			cmds = append(cmds, func() tea.Msg {
+				return marker(chID, threadTS, ts, n)
 			})
 		}
 
@@ -3386,6 +3432,15 @@ func (a *App) SetMessageEditor(fn MessageEditFunc) {
 // SetMessageDeleter wires the chat.delete callback used by delete confirm.
 func (a *App) SetMessageDeleter(fn MessageDeleteFunc) {
 	a.messageDeleter = fn
+}
+
+// SetMessageMarkUnreader wires the conversations.mark / subscriptions.thread.mark
+// callback used by the U key. Implementations should perform the HTTP call
+// best-effort, persist the new last_read_ts to SQLite for channel-level
+// marks (no-op for thread-level until per-thread state lands), update the
+// in-memory LastReadMap, and return MessageMarkedUnreadMsg.
+func (a *App) SetMessageMarkUnreader(fn MarkUnreadFunc) {
+	a.messageMarkUnreader = fn
 }
 
 // SetUploader wires the upload callback used by Ctrl+V smart-paste
