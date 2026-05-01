@@ -89,8 +89,13 @@ type Sidebar struct {
 // a raw Slack team ID (with TeamID left empty; Load fills it in
 // from the key).
 type Workspace struct {
-	TeamID   string                `toml:"team_id"`
-	Theme    string                `toml:"theme"`
+	TeamID string `toml:"team_id"`
+	Theme  string `toml:"theme"`
+	// Order controls the workspace's position in the rail and the
+	// digit-key mapping (1-9). Positive values are explicit positions
+	// ascending; 0 or unset means "unordered" (sorts after ordered
+	// workspaces, alphabetically by slug). Ties in Order break by slug.
+	Order    int                   `toml:"order"`
 	Sections map[string]SectionDef `toml:"sections"`
 }
 
