@@ -397,20 +397,27 @@ func run() error {
 	app.SetImageFetcher(imageFetcher)
 	app.SetImageProtocol(proto)
 
-	// Build workspace rail items for all tokens
+	// Apply user-configured workspace ordering to tokens before
+	// building the rail. The rail and digit-key (1-9) mapping both
+	// follow this order, so a stable sort here is what makes
+	// `1` always go to the same workspace across runs.
+	orderedTokens := config.OrderTokens(tokens, cfg)
+
+	// Build workspace rail items for all tokens, in configured order.
 	var wsItems []workspace.WorkspaceItem
-	for _, token := range tokens {
+	for _, ot := range orderedTokens {
 		wsItems = append(wsItems, workspace.WorkspaceItem{
-			ID:       token.TeamID,
-			Name:     token.TeamName,
-			Initials: workspace.WorkspaceInitials(token.TeamName),
+			ID:       ot.Token.TeamID,
+			Name:     ot.Token.TeamName,
+			Initials: workspace.WorkspaceInitials(ot.Token.TeamName),
 		})
 	}
 
-	// Set up loading overlay with workspace names
+	// Set up loading overlay with workspace names, in the same order
+	// so the loading list visually matches the rail.
 	var wsNames []string
-	for _, t := range tokens {
-		wsNames = append(wsNames, t.TeamName)
+	for _, ot := range orderedTokens {
+		wsNames = append(wsNames, ot.Token.TeamName)
 	}
 	app.SetLoadingWorkspaces(wsNames)
 	app.SetWorkspaces(wsItems)
@@ -811,7 +818,7 @@ func run() error {
 
 	// Launch workspace connections in background goroutines
 	// Results are sent to the TUI via p.Send()
-	for _, token := range tokens {
+	for _, ot := range orderedTokens {
 		go func(tok slackclient.Token) {
 			wctx, err := connectWorkspace(ctx, tok, db, cfg, avatarCache)
 			if err != nil {
@@ -917,7 +924,7 @@ func run() error {
 				}
 				}()
 			}
-		}(token)
+		}(ot.Token)
 	}
 
 	_, err = p.Run()
