@@ -185,6 +185,16 @@ type (
 		TeamID    string
 		ChannelID string
 	}
+	// ConversationOpenedMsg is sent when Slack delivers an mpim_open,
+	// im_created, group_joined, or channel_joined event. The TeamID
+	// disambiguates events for inactive workspaces; only events whose
+	// TeamID matches the currently-active workspace mutate the live
+	// sidebar — others are persisted in the workspace's WorkspaceContext
+	// for when the user switches in.
+	ConversationOpenedMsg struct {
+		TeamID string
+		Item   sidebar.ChannelItem
+	}
 	WorkspaceReadyMsg struct {
 		TeamID      string
 		TeamName    string
@@ -1787,6 +1797,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case WorkspaceUnreadMsg:
 		a.workspaceRail.SetUnread(msg.TeamID, true)
+
+	case ConversationOpenedMsg:
+		if msg.TeamID == a.activeTeamID {
+			a.sidebar.UpsertItem(msg.Item)
+		}
+		// Inactive-workspace events update WorkspaceContext.Channels
+		// from the rtmEventHandler in cmd/slk/main.go (Task 6); App.Update
+		// only mutates the active sidebar.
 
 	case SpinnerTickMsg:
 		if a.loading {

@@ -333,3 +333,154 @@ func TestSetUnreadCount_UnknownChannel_NoOp(t *testing.T) {
 		}
 	}
 }
+
+func TestUpsertItem_AddsNewChannel(t *testing.T) {
+	m := New(nil)
+	m.SetItems([]ChannelItem{{ID: "C1", Name: "general", Type: "channel"}})
+
+	m.UpsertItem(ChannelItem{ID: "G1", Name: "alice, bob", Type: "group_dm"})
+
+	items := m.AllItems()
+	if len(items) != 2 {
+		t.Fatalf("len(items) = %d, want 2", len(items))
+	}
+	found := false
+	for _, it := range items {
+		if it.ID == "G1" && it.Type == "group_dm" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("G1 not present after upsert: %+v", items)
+	}
+}
+
+func TestUpsertItem_UpdatesExistingChannel(t *testing.T) {
+	m := New(nil)
+	m.SetItems([]ChannelItem{{ID: "G1", Name: "old name", Type: "group_dm", UnreadCount: 3}})
+
+	m.UpsertItem(ChannelItem{ID: "G1", Name: "new name", Type: "group_dm"})
+
+	items := m.AllItems()
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+	if items[0].Name != "new name" {
+		t.Errorf("Name = %q, want %q", items[0].Name, "new name")
+	}
+	// UnreadCount must be preserved on update — Slack's mpim_open does
+	// not carry unread state, and clobbering a live count to 0 would
+	// erase the indicator we're trying to fix.
+	if items[0].UnreadCount != 3 {
+		t.Errorf("UnreadCount = %d, want 3 (preserved)", items[0].UnreadCount)
+	}
+}
+
+func TestUpsertItem_ThenMarkUnread(t *testing.T) {
+	m := New(nil)
+	m.SetItems([]ChannelItem{{ID: "C1", Name: "general", Type: "channel"}})
+	// Simulate the bug scenario: a new mpdm shows up via mpim_open,
+	// then a message arrives. MarkUnread must successfully bump the
+	// count on the freshly-upserted item.
+	m.UpsertItem(ChannelItem{ID: "G1", Name: "alice, bob", Type: "group_dm"})
+	m.MarkUnread("G1")
+
+	items := m.AllItems()
+	for _, it := range items {
+		if it.ID == "G1" && it.UnreadCount != 1 {
+			t.Errorf("G1 UnreadCount = %d, want 1", it.UnreadCount)
+		}
+	}
+}
+
+func TestRender_UnreadDMRow_KeepsBoldAfterPrefixReset(t *testing.T) {
+	m := New(nil)
+	m.SetItems([]ChannelItem{
+		{ID: "D1", Name: "alice", Type: "dm", Presence: "active", UnreadCount: 1},
+	})
+
+	out := m.View(20, 40)
+
+	if !strings.Contains(out, "alice") {
+		t.Fatalf("output missing channel name; got: %q", out)
+	}
+	aliceIdx := strings.Index(out, "alice")
+	prefix := out[:aliceIdx]
+	lastResetIdx := strings.LastIndex(prefix, "\x1b[m")
+	if lastResetIdx == -1 {
+		t.Skip("no mid-label reset found before name; render path changed")
+	}
+	afterReset := prefix[lastResetIdx:]
+	if !strings.Contains(afterReset, "\x1b[1m") {
+		t.Errorf("bold attribute not re-emitted after prefix reset for unread DM row\nafterReset=%q", afterReset)
+	}
+}
+
+func TestRender_ReadDMRow_DoesNotEmitBoldAfterReset(t *testing.T) {
+	m := New(nil)
+	m.SetItems([]ChannelItem{
+		{ID: "D1", Name: "alice", Type: "dm", Presence: "active", UnreadCount: 0},
+	})
+
+	out := m.View(20, 40)
+	aliceIdx := strings.Index(out, "alice")
+	if aliceIdx < 0 {
+		t.Fatalf("output missing channel name")
+	}
+	prefix := out[:aliceIdx]
+	lastResetIdx := strings.LastIndex(prefix, "\x1b[m")
+	if lastResetIdx == -1 {
+		return
+	}
+	afterReset := prefix[lastResetIdx:]
+	if strings.Contains(afterReset, "\x1b[1m") {
+		t.Errorf("read DM row unexpectedly emitted bold after reset; afterReset=%q", afterReset)
+	}
+}
+
+// TestRender_UnreadThreadsRow_KeepsBoldAfterPrefixReset is the Threads-row
+// counterpart to TestRender_UnreadDMRow_KeepsBoldAfterPrefixReset. The ⚑
+// glyph emits a mid-label ANSI reset; an unread Threads row must re-emit
+// \x1b[1m so "Threads" stays bold past the reset.
+func TestRender_UnreadThreadsRow_KeepsBoldAfterPrefixReset(t *testing.T) {
+	m := New(nil)
+	m.SetThreadsUnreadCount(3)
+	out := m.View(20, 40)
+
+	threadsIdx := strings.Index(out, "Threads")
+	if threadsIdx < 0 {
+		t.Fatalf("output missing Threads label; got: %q", out)
+	}
+	prefix := out[:threadsIdx]
+	lastResetIdx := strings.LastIndex(prefix, "\x1b[m")
+	if lastResetIdx == -1 {
+		t.Skip("no mid-label reset found before Threads; render path changed")
+	}
+	afterReset := prefix[lastResetIdx:]
+	if !strings.Contains(afterReset, "\x1b[1m") {
+		t.Errorf("bold attribute not re-emitted after ⚑ reset for unread Threads row\nafterReset=%q", afterReset)
+	}
+}
+
+// TestRender_ReadThreadsRow_DoesNotEmitBoldAfterReset locks in the negative
+// case: a Threads row with zero unread must NOT emit \x1b[1m after the
+// prefix reset, so the muted ChannelNormal style stays muted.
+func TestRender_ReadThreadsRow_DoesNotEmitBoldAfterReset(t *testing.T) {
+	m := New(nil)
+	m.SetThreadsUnreadCount(0)
+	out := m.View(20, 40)
+
+	threadsIdx := strings.Index(out, "Threads")
+	if threadsIdx < 0 {
+		t.Fatalf("output missing Threads label")
+	}
+	prefix := out[:threadsIdx]
+	lastResetIdx := strings.LastIndex(prefix, "\x1b[m")
+	if lastResetIdx == -1 {
+		return
+	}
+	afterReset := prefix[lastResetIdx:]
+	if strings.Contains(afterReset, "\x1b[1m") {
+		t.Errorf("read Threads row unexpectedly emitted bold after reset; afterReset=%q", afterReset)
+	}
+}

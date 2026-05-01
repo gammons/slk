@@ -36,6 +36,13 @@ type EventHandler interface {
 	// event. read indicates whether the thread is now read (true) or
 	// unread (false). ts is the new boundary within the thread.
 	OnThreadMarked(channelID, threadTS, ts string, read bool)
+
+	// OnConversationOpened is delivered when a new or previously-closed
+	// conversation becomes visible to the user mid-session: mpim_open,
+	// im_created, group_joined, or channel_joined. The full slack.Channel
+	// payload is forwarded so the receiver can construct a sidebar item
+	// without an extra conversations.info round-trip.
+	OnConversationOpened(channel slack.Channel)
 }
 
 // wsEvent is the minimal structure for identifying a WebSocket event type.
@@ -130,6 +137,14 @@ type wsChannelMarkedEvent struct {
 	UnreadCountDisplay int    `json:"unread_count_display"`
 }
 
+// wsConversationOpenedEvent is the shared shape for mpim_open, im_created,
+// group_joined, and channel_joined events. All four carry a top-level
+// `channel` field with the full conversation object.
+type wsConversationOpenedEvent struct {
+	Type    string        `json:"type"`
+	Channel slack.Channel `json:"channel"`
+}
+
 // wsThreadMarkedEvent represents a thread_marked event from Slack's
 // browser-protocol WebSocket. The subscription block carries the
 // channel/thread/last-read-ts and an `active` flag (true means the
@@ -218,6 +233,15 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			return
 		}
 		handler.OnChannelMarked(evt.Channel, evt.TS, evt.UnreadCountDisplay)
+
+	case "mpim_open", "im_created", "im_open", "group_joined", "channel_joined":
+		var evt wsConversationOpenedEvent
+		if err := json.Unmarshal(data, &evt); err != nil {
+			return
+		}
+		if evt.Channel.ID != "" {
+			handler.OnConversationOpened(evt.Channel)
+		}
 
 	case "thread_marked":
 		var evt wsThreadMarkedEvent

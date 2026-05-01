@@ -23,7 +23,6 @@ import (
 	"github.com/gammons/slk/internal/notify"
 	"github.com/gammons/slk/internal/service"
 	slackclient "github.com/gammons/slk/internal/slack"
-	"github.com/gammons/slk/internal/slackfmt"
 	"github.com/gammons/slk/internal/ui"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/compose"
@@ -907,6 +906,7 @@ func run() error {
 				channelTypes:    channelTypes,
 				workspaceName:   wctx.TeamName,
 				activeChannelID: func() string { return app.ActiveChannelID() },
+				cfg:             cfg,
 				wsCtx:           wctx,
 			}
 			wctx.RTMHandler = handler
@@ -1056,69 +1056,23 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	}
 
 	for _, ch := range channels {
-		chType := "channel"
-		if ch.IsIM {
-			// Slack returns the same `is_im=true` for human DMs and app
-			// DMs; the only differentiator is the peer user's IsBot/
-			// IsAppUser flag, which we look up via the cache-seeded
-			// BotUserIDs set. Unknown peers default to "dm" and are
-			// reclassified later by the resolveUser path below.
-			if wctx.BotUserIDs[ch.User] {
-				chType = "app"
-			} else {
-				chType = "dm"
-			}
-		} else if ch.IsMpIM {
-			chType = "group_dm"
-		} else if ch.IsPrivate {
-			chType = "private"
-		}
+		item, finderItem := buildChannelItem(ch, wctx, cfg, client.TeamID())
+		upsertChannelInDB(db, ch, item.Type, client.TeamID())
 
-		db.UpsertChannel(cache.Channel{
-			ID:          ch.ID,
-			WorkspaceID: client.TeamID(),
-			Name:        ch.Name,
-			Type:        chType,
-			Topic:       ch.Topic.Value,
-			IsMember:    ch.IsMember,
-		})
-
-		displayName := ch.Name
 		if ch.IsIM {
-			if resolved, ok := wctx.UserNames[ch.User]; ok {
-				displayName = resolved
-			} else {
-				displayName = ch.User
+			if _, ok := wctx.UserNames[ch.User]; !ok {
 				wctx.UnresolvedDMs = append(wctx.UnresolvedDMs, UnresolvedDM{
 					ChannelID: ch.ID,
 					UserID:    ch.User,
 				})
 			}
-		} else if ch.IsMpIM {
-			displayName = slackfmt.FormatMPDMName(ch.Name, func(h string) string {
-				return wctx.UserNamesByHandle[h]
-			})
-		}
-
-		section := cfg.MatchSection(client.TeamID(), ch.Name)
-		var sectionOrder int
-		if section != "" {
-			sectionOrder = cfg.SectionOrder(client.TeamID(), section)
-		}
-		item := sidebar.ChannelItem{
-			ID:           ch.ID,
-			Name:         displayName,
-			Type:         chType,
-			Section:      section,
-			SectionOrder: sectionOrder,
-		}
-		if ch.IsIM {
-			item.DMUserID = ch.User
 			if cachedUser, err := db.GetUser(ch.User); err == nil && cachedUser.Presence != "" {
 				item.Presence = cachedUser.Presence
+				finderItem.Presence = cachedUser.Presence
 			}
 		}
 		wctx.Channels = append(wctx.Channels, item)
+		wctx.FinderItems = append(wctx.FinderItems, finderItem)
 	}
 
 	// Fetch unread counts
@@ -1143,19 +1097,11 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		}
 	}
 
-	// Build finder items. The user is a member of every channel returned by
-	// GetChannels (it's backed by users.conversations), so Joined=true here.
-	// A separate background fetch surfaces non-joined public channels for
-	// browsing -- see startBrowseableChannelsFetch in main.go.
-	for _, ch := range wctx.Channels {
-		wctx.FinderItems = append(wctx.FinderItems, channelfinder.Item{
-			ID:       ch.ID,
-			Name:     ch.Name,
-			Type:     ch.Type,
-			Presence: ch.Presence,
-			Joined:   true,
-		})
-	}
+	// Finder items are built alongside the sidebar items in the loop above
+	// (see buildChannelItem). The user is a member of every channel returned
+	// by GetChannels (it's backed by users.conversations), so those entries
+	// have Joined=true. A separate background fetch surfaces non-joined
+	// public channels for browsing -- see startBrowseableChannelsFetch.
 
 	return wctx, nil
 }
@@ -1666,22 +1612,30 @@ type rtmEventHandler struct {
 	workspaceName   string
 	activeChannelID func() string
 
+	// cfg is the loaded user config; used by OnConversationOpened to
+	// resolve sidebar section + section order via buildChannelItem.
+	cfg config.Config
+
 	// Back-reference for self-presence/DND state mutation.
 	wsCtx *WorkspaceContext
 }
 
 func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment) {
-	// Cache every message to SQLite, regardless of active workspace
-	h.db.UpsertMessage(cache.Message{
-		TS:          ts,
-		ChannelID:   channelID,
-		WorkspaceID: h.workspaceID,
-		UserID:      userID,
-		Text:        text,
-		ThreadTS:    threadTS,
-		Subtype:     subtype,
-		CreatedAt:   time.Now().Unix(),
-	})
+	// Cache every message to SQLite, regardless of active workspace.
+	// Guard against nil db so handlers constructed in tests (without
+	// real persistence) don't panic.
+	if h.db != nil {
+		h.db.UpsertMessage(cache.Message{
+			TS:          ts,
+			ChannelID:   channelID,
+			WorkspaceID: h.workspaceID,
+			UserID:      userID,
+			Text:        text,
+			ThreadTS:    threadTS,
+			Subtype:     subtype,
+			CreatedAt:   time.Now().Unix(),
+		})
+	}
 
 	// Check if this message should trigger a desktop notification.
 	// Do this before the active workspace check so inactive workspaces
@@ -1718,11 +1672,32 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	}
 
 	if h.isActive != nil && !h.isActive() {
-		// Inactive workspace — just notify about unread
-		h.program.Send(ui.WorkspaceUnreadMsg{
-			TeamID:    h.workspaceID,
-			ChannelID: channelID,
-		})
+		// Inactive workspace — persist per-channel unread so a later
+		// workspace switch reflects the activity, then notify the rail.
+		//
+		// Skip thread replies that aren't broadcasts: per Slack's
+		// channel-unread semantics they don't mark the parent channel
+		// as unread (only top-level messages and thread_broadcast
+		// subtypes do). Mirrors the active-branch guard at
+		// internal/ui/app.go:1430-1431.
+		isThreadReply := threadTS != "" && threadTS != ts
+		isBroadcast := subtype == "thread_broadcast"
+		if !isThreadReply || isBroadcast {
+			if h.wsCtx != nil {
+				for i := range h.wsCtx.Channels {
+					if h.wsCtx.Channels[i].ID == channelID {
+						h.wsCtx.Channels[i].UnreadCount++
+						break
+					}
+				}
+			}
+		}
+		if h.program != nil {
+			h.program.Send(ui.WorkspaceUnreadMsg{
+				TeamID:    h.workspaceID,
+				ChannelID: channelID,
+			})
+		}
 		return
 	}
 
@@ -1932,6 +1907,71 @@ func (h *rtmEventHandler) OnThreadMarked(channelID, threadTS, ts string, read bo
 		ThreadTS:  threadTS,
 		TS:        ts,
 		Read:      read,
+	})
+}
+
+// OnConversationOpened handles WS events that surface a new or
+// previously-closed conversation: mpim_open, im_created, group_joined,
+// channel_joined. Builds a sidebar.ChannelItem via the shared helper,
+// persists it in WorkspaceContext (de-duped by ID, preserving live
+// unread/last-read state), upserts the SQLite cache row, mirrors
+// channelNames/Types maps used by the notifier, and — if the
+// workspace is active — forwards a ConversationOpenedMsg to the UI
+// so the live sidebar updates.
+func (h *rtmEventHandler) OnConversationOpened(ch slack.Channel) {
+	if h.wsCtx == nil {
+		return
+	}
+
+	item, finderItem := buildChannelItem(ch, h.wsCtx, h.cfg, h.workspaceID)
+	if h.db != nil {
+		upsertChannelInDB(h.db, ch, item.Type, h.workspaceID)
+	}
+
+	// Persist in the workspace context so a workspace switch later
+	// shows the new conversation. De-dupe on ID — the same event can
+	// arrive twice (e.g. im_open followed by im_created on first DM).
+	replaced := false
+	for i := range h.wsCtx.Channels {
+		if h.wsCtx.Channels[i].ID == item.ID {
+			// Preserve unread/last-read from the live context.
+			item.UnreadCount = h.wsCtx.Channels[i].UnreadCount
+			item.LastReadTS = h.wsCtx.Channels[i].LastReadTS
+			h.wsCtx.Channels[i] = item
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		h.wsCtx.Channels = append(h.wsCtx.Channels, item)
+		// FinderItems is intentionally only appended on the new-channel
+		// path. On dedupe, the existing finder entry was added at
+		// bootstrap (or a prior open) and carries no unread state to
+		// refresh, so re-appending would double-list the channel in
+		// Ctrl+T.
+		h.wsCtx.FinderItems = append(h.wsCtx.FinderItems, finderItem)
+	}
+
+	// Mirror channelTypes / channelNames maps used by the notifier so
+	// follow-up messages on this channel get notified correctly.
+	if h.channelNames != nil {
+		h.channelNames[ch.ID] = item.Name
+	}
+	if h.channelTypes != nil {
+		h.channelTypes[ch.ID] = item.Type
+	}
+
+	if h.program == nil {
+		return
+	}
+	if h.isActive != nil && !h.isActive() {
+		// Persistence above already updated wctx.Channels; defer the
+		// UI message until the user switches into this workspace.
+		return
+	}
+	h.program.Send(ui.ConversationOpenedMsg{
+		TeamID: h.workspaceID,
+		Item:   item,
 	})
 }
 
