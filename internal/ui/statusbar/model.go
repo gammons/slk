@@ -318,3 +318,14 @@ type EditNotOwnMsg struct{}
 
 // DeleteNotOwnMsg is delivered when D was pressed on a non-owned message.
 type DeleteNotOwnMsg struct{}
+
+// MarkedUnreadMsg is delivered when the user successfully marks a
+// message (or thread reply) as unread. App handles by setting the toast
+// to "Marked unread" and scheduling a CopiedClearMsg.
+type MarkedUnreadMsg struct{}
+
+// MarkUnreadFailedMsg is delivered when conversations.mark or
+// subscriptions.thread.mark fail during a mark-unread. App handles by
+// setting the toast to "Mark unread failed" and scheduling a
+// CopiedClearMsg.
+type MarkUnreadFailedMsg struct{ Reason string }
