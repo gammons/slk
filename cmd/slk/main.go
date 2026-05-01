@@ -906,6 +906,7 @@ func run() error {
 				channelTypes:    channelTypes,
 				workspaceName:   wctx.TeamName,
 				activeChannelID: func() string { return app.ActiveChannelID() },
+				cfg:             cfg,
 				wsCtx:           wctx,
 			}
 			wctx.RTMHandler = handler
@@ -1611,6 +1612,10 @@ type rtmEventHandler struct {
 	workspaceName   string
 	activeChannelID func() string
 
+	// cfg is the loaded user config; used by OnConversationOpened to
+	// resolve sidebar section + section order via buildChannelItem.
+	cfg config.Config
+
 	// Back-reference for self-presence/DND state mutation.
 	wsCtx *WorkspaceContext
 }
@@ -1880,9 +1885,65 @@ func (h *rtmEventHandler) OnThreadMarked(channelID, threadTS, ts string, read bo
 	})
 }
 
-// OnConversationOpened is wired in Task 5; this stub satisfies the
-// EventHandler interface so the package compiles.
-func (h *rtmEventHandler) OnConversationOpened(ch slack.Channel) {}
+// OnConversationOpened handles WS events that surface a new or
+// previously-closed conversation: mpim_open, im_created, group_joined,
+// channel_joined. Builds a sidebar.ChannelItem via the shared helper,
+// persists it in WorkspaceContext (de-duped by ID, preserving live
+// unread/last-read state), upserts the SQLite cache row, mirrors
+// channelNames/Types maps used by the notifier, and — if the
+// workspace is active — forwards a ConversationOpenedMsg to the UI
+// so the live sidebar updates.
+func (h *rtmEventHandler) OnConversationOpened(ch slack.Channel) {
+	if h.wsCtx == nil {
+		return
+	}
+
+	item, finderItem := buildChannelItem(ch, h.wsCtx, h.cfg, h.workspaceID)
+	if h.db != nil {
+		upsertChannelInDB(h.db, ch, item.Type, h.workspaceID)
+	}
+
+	// Persist in the workspace context so a workspace switch later
+	// shows the new conversation. De-dupe on ID — the same event can
+	// arrive twice (e.g. im_open followed by im_created on first DM).
+	replaced := false
+	for i := range h.wsCtx.Channels {
+		if h.wsCtx.Channels[i].ID == item.ID {
+			// Preserve unread/last-read from the live context.
+			item.UnreadCount = h.wsCtx.Channels[i].UnreadCount
+			item.LastReadTS = h.wsCtx.Channels[i].LastReadTS
+			h.wsCtx.Channels[i] = item
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		h.wsCtx.Channels = append(h.wsCtx.Channels, item)
+		// FinderItems is intentionally only appended on the new-channel
+		// path. On dedupe, the existing finder entry was added at
+		// bootstrap (or a prior open) and carries no unread state to
+		// refresh, so re-appending would double-list the channel in
+		// Ctrl+T.
+		h.wsCtx.FinderItems = append(h.wsCtx.FinderItems, finderItem)
+	}
+
+	// Mirror channelTypes / channelNames maps used by the notifier so
+	// follow-up messages on this channel get notified correctly.
+	if h.channelNames != nil {
+		h.channelNames[ch.ID] = item.Name
+	}
+	if h.channelTypes != nil {
+		h.channelTypes[ch.ID] = item.Type
+	}
+
+	if h.program == nil {
+		return
+	}
+	h.program.Send(ui.ConversationOpenedMsg{
+		TeamID: h.workspaceID,
+		Item:   item,
+	})
+}
 
 // listWorkspaces prints the configured workspaces with their TeamID and
 // Name, one per line. Useful for users who want to hand-edit per-workspace
