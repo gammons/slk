@@ -1885,11 +1885,43 @@ func (h *rtmEventHandler) OnDNDChange(enabled bool, endUnix int64) {
 }
 
 func (h *rtmEventHandler) OnChannelMarked(channelID, ts string, unreadCount int) {
-	// Real body wired in Task 17; this stub satisfies the interface so the package builds.
+	// Persist regardless of active workspace so the cache stays
+	// authoritative across workspace switches.
+	if err := h.db.UpdateLastReadTS(channelID, ts); err != nil {
+		log.Printf("Warning: UpdateLastReadTS on channel_marked: %v", err)
+	}
+	if h.wsCtx != nil && h.wsCtx.LastReadMap != nil {
+		h.wsCtx.LastReadMap[channelID] = ts
+	}
+	if h.isActive != nil && !h.isActive() {
+		// Inactive workspace: nothing to draw, but the persistence
+		// above already updated state for when the user switches in.
+		return
+	}
+	if h.program == nil {
+		return
+	}
+	h.program.Send(ui.ChannelMarkedRemoteMsg{
+		ChannelID:   channelID,
+		TS:          ts,
+		UnreadCount: unreadCount,
+	})
 }
 
 func (h *rtmEventHandler) OnThreadMarked(channelID, threadTS, ts string, read bool) {
-	// Real body wired in Task 17; this stub satisfies the interface so the package builds.
+	if h.isActive != nil && !h.isActive() {
+		// Inactive workspace: skip (no per-thread persistence in v1).
+		return
+	}
+	if h.program == nil {
+		return
+	}
+	h.program.Send(ui.ThreadMarkedRemoteMsg{
+		ChannelID: channelID,
+		ThreadTS:  threadTS,
+		TS:        ts,
+		Read:      read,
+	})
 }
 
 // listWorkspaces prints the configured workspaces with their TeamID and
