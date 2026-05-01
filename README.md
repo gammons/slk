@@ -30,6 +30,7 @@
 - Infinite scroll backfill into SQLite cache
 - New-message landmark (red `── new ──` line at the unread boundary)
 - Mark-as-read synced to Slack on channel entry
+- Mark-as-unread (`U`) — rolls the read watermark backward to the selected message; thread replies supported. Inbound `channel_marked` / `thread_marked` events from other Slack clients are reflected live.
 - Edited / threaded message indicators
 - ANSI-aware wrapping and truncation (no broken color codes mid-line)
 - Drag-to-copy: drag the mouse across messages to highlight them; release to copy plain text to the system clipboard via OSC 52
@@ -298,6 +299,7 @@ To remove a workspace later, run `./bin/slk --remove-workspace` for an interacti
 | `R` | Normal (message) | Quick-toggle existing reactions |
 | `E` | Normal (message) | Edit your own message |
 | `D` | Normal (message) | Delete your own message (with confirmation) |
+| `U` | Normal (message) | Mark selected message and everything newer as unread |
 | `Y` / `C` | Normal (message) | Copy message permalink |
 | `O` / `v` | Normal (message) | Open full-screen image preview |
 | `Esc` / `q` | Preview | Close preview |
