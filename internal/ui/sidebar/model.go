@@ -558,6 +558,31 @@ func (m *Model) ClearUnread(channelID string) {
 	}
 }
 
+// SetUnreadCount sets the unread count for the given channel to an exact
+// value (use n=0 to clear). Re-runs the staleness filter so a channel that
+// becomes unread reappears in the sidebar (the staleness rule exempts items
+// with UnreadCount > 0). No-op if the channel is not in the sidebar.
+//
+// Differs from MarkUnread (which only increments by 1) and ClearUnread
+// (which only sets to 0): this setter is used by mark-unread and by the
+// channel_marked WS event reconciliation, both of which know the desired
+// final count.
+func (m *Model) SetUnreadCount(channelID string, n int) {
+	for i := range m.items {
+		if m.items[i].ID == channelID {
+			if m.items[i].UnreadCount == n {
+				return
+			}
+			m.items[i].UnreadCount = n
+			m.rebuildFilter()
+			m.rebuildNavPreserveCursor()
+			m.cacheValid = false
+			m.dirty()
+			return
+		}
+	}
+}
+
 // UpdatePresenceByUser updates the presence for any DM item whose DMUserID matches.
 func (m *Model) UpdatePresenceByUser(userID, presence string) {
 	for i := range m.items {
