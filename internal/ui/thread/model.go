@@ -881,6 +881,18 @@ func (m *Model) View(height, width int) string {
 	}
 
 	// Rebuild render cache if replies or width changed
+	//
+	// Per-reply cache rebuild predicate intentionally excludes m.selected,
+	// m.focused, m.reactionNavActive/Index, and theme version. The cache
+	// holds renderThreadMessage output, which depends on those fields, so
+	// any state that can change rendered output for a given (reply, width)
+	// MUST call InvalidateCache() on its mutation path. EnterReactionNav /
+	// ExitReactionNav / ReactionNavLeft / ReactionNavRight all do this
+	// today; MoveUp/MoveDown call ExitReactionNav before mutating selected.
+	// If you add a new visual feature gated on mutable model state, either
+	// invalidate on the relevant transition or add the state to this
+	// predicate. Adding to the predicate forces a full cache rebuild on the
+	// transition, which defeats the j/k speedup — prefer invalidation.
 	if m.cache == nil || m.cacheWidth != width || m.cacheReplyLen != len(m.replies) {
 		m.cache = m.cache[:0]
 		if m.replyIDToIdx == nil {
@@ -950,16 +962,22 @@ func (m *Model) View(height, width int) string {
 
 		// "── new ──" landmark inserted just before the first reply with
 		// TS > unreadBoundaryTS. Mirrors the channel pane's new-message
-		// line (messages/model.go:642-664). The landmark line is NOT
-		// inside any cache entry, matching the inter-reply separator
-		// convention so selection overlay / extraction skip it naturally.
-		landmarkStyle := lipgloss.NewStyle().
-			Width(width).
-			Background(styles.Background).
-			Foreground(styles.Error).
-			Bold(true).
-			Align(lipgloss.Center)
-		newLandmark := landmarkStyle.Render("── new ──")
+		// line (see the unread-landmark logic in messages/model.go). The
+		// landmark line is NOT inside any cache entry, matching the
+		// inter-reply separator convention so selection overlay /
+		// extraction skip it naturally. Only constructed when a boundary
+		// is set — the typical case (no unread boundary) skips the style
+		// allocation entirely.
+		var newLandmark string
+		if m.unreadBoundaryTS != "" {
+			landmarkStyle := lipgloss.NewStyle().
+				Width(width).
+				Background(styles.Background).
+				Foreground(styles.Error).
+				Bold(true).
+				Align(lipgloss.Center)
+			newLandmark = landmarkStyle.Render("── new ──")
+		}
 		landmarkInserted := false
 
 		var allRows []string
@@ -978,7 +996,7 @@ func (m *Model) View(height, width int) string {
 			// TS exceeds the unread boundary. We check this BEFORE
 			// recording the entry offset so the landmark sits above
 			// reply i.
-			if !landmarkInserted && m.unreadBoundaryTS != "" && i < len(m.replies) && m.replies[i].TS > m.unreadBoundaryTS {
+			if !landmarkInserted && newLandmark != "" && i < len(m.replies) && m.replies[i].TS > m.unreadBoundaryTS {
 				allRows = append(allRows, newLandmark)
 				currentLine++
 				landmarkInserted = true
