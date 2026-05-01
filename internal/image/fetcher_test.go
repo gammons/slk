@@ -163,6 +163,81 @@ func TestFetcher_CachedNeverStartsDownload(t *testing.T) {
 	}
 }
 
+// After Fetch completes, Cached(key, target) must hit the in-memory
+// memo without re-opening the file from disk. We assert this by
+// deleting the on-disk file and confirming Cached still returns the
+// image — only possible if the memo was populated by the fetch path.
+func TestFetcher_FetchPopulatesDecodedMemo(t *testing.T) {
+	pngBytes := tinyPNG(t, 100, 100, imgcolor.RGBA{0, 0, 200, 255})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(pngBytes)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	cache, _ := NewCache(dir, 10)
+	f := NewFetcher(cache, http.DefaultClient)
+
+	target := image.Pt(20, 20)
+	if _, err := f.Fetch(context.Background(), FetchRequest{
+		Key: "k1", URL: srv.URL, Target: target,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete the cache file. If Cached still returns true, we know the
+	// memo was populated and Cached did NOT do disk I/O + decode.
+	cache.Delete("k1")
+
+	img, ok := f.Cached("k1", target)
+	if !ok {
+		t.Fatal("expected Cached to hit memo after Fetch, even with file deleted")
+	}
+	if img == nil {
+		t.Fatal("expected non-nil image from memo")
+	}
+	if img.Bounds().Dx() != 20 || img.Bounds().Dy() != 20 {
+		t.Errorf("expected 20x20 image from memo, got %v", img.Bounds())
+	}
+}
+
+// After Fetch completes for a configured (proto), Prerendered must
+// return a non-empty Render at the requested target so the UI thread
+// doesn't have to call RenderImage synchronously.
+func TestFetcher_FetchPopulatesPrerender(t *testing.T) {
+	pngBytes := tinyPNG(t, 100, 100, imgcolor.RGBA{200, 0, 0, 255})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(pngBytes)
+	}))
+	defer srv.Close()
+
+	cache, _ := NewCache(t.TempDir(), 10)
+	f := NewFetcher(cache, http.DefaultClient)
+
+	cellTarget := image.Pt(10, 5)
+	pixelTarget := image.Pt(20, 10)
+
+	f.ConfigurePrerender(ProtoHalfBlock)
+
+	if _, err := f.Fetch(context.Background(), FetchRequest{
+		Key: "k1", URL: srv.URL, Target: pixelTarget, CellTarget: cellTarget,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	r, ok := f.Prerendered("k1", cellTarget, ProtoHalfBlock)
+	if !ok {
+		t.Fatal("expected Prerendered to return a halfblock render after Fetch")
+	}
+	if len(r.Lines) != cellTarget.Y {
+		t.Errorf("expected %d lines, got %d", cellTarget.Y, len(r.Lines))
+	}
+}
+
 func TestFetcher_HTTPErrorPropagates(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
