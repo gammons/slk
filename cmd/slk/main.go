@@ -401,6 +401,10 @@ func run() error {
 	// building the rail. The rail and digit-key (1-9) mapping both
 	// follow this order, so a stable sort here is what makes
 	// `1` always go to the same workspace across runs.
+	//
+	// `tokens` remains the authoritative slice for order-insensitive
+	// operations (image-auth registration, default_workspace lookup);
+	// `orderedTokens` is only for user-facing iteration order.
 	orderedTokens := config.OrderTokens(tokens, cfg)
 
 	// Build workspace rail items for all tokens, in configured order.
@@ -1873,21 +1877,20 @@ func listWorkspaces() error {
 	configPath := filepath.Join(xdgConfig(), "config.toml")
 	cfg, _ := config.Load(configPath) // best-effort
 
-	slugByTeamID := make(map[string]string, len(cfg.Workspaces))
-	for k, w := range cfg.Workspaces {
-		slugByTeamID[w.TeamID] = k
-	}
+	// Print in the same order the rail would use, so the digit-key
+	// mapping is obvious from the output.
+	orderedTokens := config.OrderTokens(tokens, cfg)
 
 	idW, slugW, nameW := len("TEAM ID"), len("SLUG"), len("NAME")
-	for _, t := range tokens {
-		if len(t.TeamID) > idW {
-			idW = len(t.TeamID)
+	for _, ot := range orderedTokens {
+		if len(ot.Token.TeamID) > idW {
+			idW = len(ot.Token.TeamID)
 		}
-		if s := slugByTeamID[t.TeamID]; len(s) > slugW {
-			slugW = len(s)
+		if len(ot.Slug) > slugW {
+			slugW = len(ot.Slug)
 		}
-		if len(t.TeamName) > nameW {
-			nameW = len(t.TeamName)
+		if len(ot.Token.TeamName) > nameW {
+			nameW = len(ot.Token.TeamName)
 		}
 	}
 	fmt.Printf("%-*s  %-*s  %s\n", idW, "TEAM ID", slugW, "SLUG", "NAME")
@@ -1895,8 +1898,8 @@ func listWorkspaces() error {
 		strings.Repeat("-", idW),
 		strings.Repeat("-", slugW),
 		strings.Repeat("-", nameW))
-	for _, t := range tokens {
-		fmt.Printf("%-*s  %-*s  %s\n", idW, t.TeamID, slugW, slugByTeamID[t.TeamID], t.TeamName)
+	for _, ot := range orderedTokens {
+		fmt.Printf("%-*s  %-*s  %s\n", idW, ot.Token.TeamID, slugW, ot.Slug, ot.Token.TeamName)
 	}
 	return nil
 }

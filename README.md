@@ -387,6 +387,9 @@ mapping for the `1`–`9` digit keys. Positive values sort ascending
 sort after explicitly ordered ones, alphabetically by slug. Tokens
 on disk that have no `[workspaces.<slug>]` block at all sort last,
 alphabetically by team ID. The order is stable across runs.
+Previously the rail order depended on which workspace's WebSocket
+connected first; it is now deterministic regardless of network
+timing, even without an explicit `order` set.
 
 Legacy configs that key the block by raw team ID
 (`[workspaces.T01ABCDEF]`) keep working unchanged.
