@@ -930,9 +930,13 @@ func (m *Model) buildCache(width int) {
 		threadsCursor += badge
 		threadsActiveLabel += badge
 	}
-	threadsLabel = messages.ReapplyBgAfterResets(threadsLabel, bgAnsi)
-	threadsCursor = messages.ReapplyBgAfterResets(threadsCursor, bgAnsi)
-	threadsActiveLabel = messages.ReapplyBgAfterResets(threadsActiveLabel, bgAnsi)
+	threadsAttrs := bgAnsi
+	if m.threadsUnread > 0 {
+		threadsAttrs += "\x1b[1m"
+	}
+	threadsLabel = messages.ReapplyBgAfterResets(threadsLabel, threadsAttrs)
+	threadsCursor = messages.ReapplyBgAfterResets(threadsCursor, threadsAttrs)
+	threadsActiveLabel = messages.ReapplyBgAfterResets(threadsActiveLabel, threadsAttrs)
 	threadsBaseStyle := styles.ChannelNormal
 	if m.threadsUnread > 0 {
 		threadsBaseStyle = styles.ChannelUnread
@@ -1032,9 +1036,18 @@ func (m *Model) buildCache(width int) {
 		// Re-apply theme background after ANSI resets from inline styled
 		// glyphs (cursor, prefix, unread dot) so the outer channel style's
 		// background isn't interrupted.
-		labelNormal = messages.ReapplyBgAfterResets(labelNormal, bgAnsi)
-		labelSelected = messages.ReapplyBgAfterResets(labelSelected, bgAnsi)
-		labelActive = messages.ReapplyBgAfterResets(labelActive, bgAnsi)
+		//
+		// Unread rows must also re-emit the bold attribute after every
+		// inline-prefix ANSI reset, otherwise lipgloss's outer
+		// ChannelUnread bold is wiped for the channel name + dot
+		// span that follows the styled prefix glyph.
+		rowAttrs := bgAnsi
+		if item.UnreadCount > 0 {
+			rowAttrs += "\x1b[1m"
+		}
+		labelNormal = messages.ReapplyBgAfterResets(labelNormal, rowAttrs)
+		labelSelected = messages.ReapplyBgAfterResets(labelSelected, rowAttrs)
+		labelActive = messages.ReapplyBgAfterResets(labelActive, rowAttrs)
 
 		// Pick base style for non-selected state.
 		var baseStyle lipgloss.Style
