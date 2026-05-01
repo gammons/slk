@@ -274,3 +274,54 @@ func TestVersion_StableAcrossIdenticalSetCalls(t *testing.T) {
 		t.Errorf("Version drifted across identical Set calls: v0=%d v1=%d", v0, v1)
 	}
 }
+
+func TestMarkByThreadTSUnread_FlipsFlagAndReturnsTrue(t *testing.T) {
+	m := New(map[string]string{}, "USELF")
+	m.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "P1", Unread: false},
+		{ChannelID: "C1", ThreadTS: "P2", Unread: false},
+	})
+
+	if !m.MarkByThreadTSUnread("C1", "P2") {
+		t.Fatal("expected return true when flag flipped")
+	}
+
+	for _, s := range m.Summaries() {
+		if s.ThreadTS == "P2" && !s.Unread {
+			t.Error("P2 should be Unread=true after MarkByThreadTSUnread")
+		}
+		if s.ThreadTS == "P1" && s.Unread {
+			t.Error("P1 should remain Unread=false")
+		}
+	}
+}
+
+func TestMarkByThreadTSUnread_AlreadyUnread_ReturnsFalse(t *testing.T) {
+	m := New(map[string]string{}, "USELF")
+	m.SetSummaries([]cache.ThreadSummary{{ChannelID: "C1", ThreadTS: "P1", Unread: true}})
+
+	if m.MarkByThreadTSUnread("C1", "P1") {
+		t.Error("expected false when flag was already true")
+	}
+}
+
+func TestMarkByThreadTSUnread_NotFound_ReturnsFalse(t *testing.T) {
+	m := New(map[string]string{}, "USELF")
+	m.SetSummaries([]cache.ThreadSummary{{ChannelID: "C1", ThreadTS: "P1", Unread: false}})
+
+	if m.MarkByThreadTSUnread("C2", "P9") {
+		t.Error("expected false when (channel, thread) not in summaries")
+	}
+}
+
+func TestMarkByThreadTSUnread_EmptyArgs_ReturnsFalse(t *testing.T) {
+	m := New(map[string]string{}, "USELF")
+	m.SetSummaries([]cache.ThreadSummary{{ChannelID: "C1", ThreadTS: "P1", Unread: false}})
+
+	if m.MarkByThreadTSUnread("", "P1") {
+		t.Error("expected false for empty channelID")
+	}
+	if m.MarkByThreadTSUnread("C1", "") {
+		t.Error("expected false for empty threadTS")
+	}
+}
