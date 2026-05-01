@@ -875,6 +875,27 @@ func (c *Client) MarkThread(ctx context.Context, channelID, threadTS, ts string)
 	return c.markThread(ctx, channelID, threadTS, ts, true)
 }
 
+// MarkChannelUnread rolls the channel's read watermark backward to ts,
+// effectively making the message at ts and every newer message in the
+// channel unread again. Pass ts == "" to mark the entire channel unread
+// (Slack's "0" sentinel).
+func (c *Client) MarkChannelUnread(ctx context.Context, channelID, ts string) error {
+	if ts == "" {
+		ts = "0"
+	}
+	return c.markChannel(ctx, channelID, ts)
+}
+
+// MarkThreadUnread marks a thread as unread starting at ts using Slack's
+// subscriptions.thread.mark endpoint with read=0. Mirrors MarkThread but
+// flips the read flag. channelID is the parent channel, threadTS is the
+// parent message ts, and ts is the reply that should become the new
+// "first unread" boundary (use threadTS to mark the entire thread
+// unread when there are no replies). Best-effort.
+func (c *Client) MarkThreadUnread(ctx context.Context, channelID, threadTS, ts string) error {
+	return c.markThread(ctx, channelID, threadTS, ts, false)
+}
+
 // ChannelSection represents a user's sidebar section from the undocumented Slack API.
 type ChannelSection struct {
 	ID         string   `json:"channel_section_id"`
