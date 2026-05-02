@@ -173,8 +173,16 @@ func TestConvert_BoldWithSurroundingText(t *testing.T) {
 	if len(sec.Elements) != 3 {
 		t.Fatalf("got %d elements, want 3 (plain, bold, plain)", len(sec.Elements))
 	}
+	left := sec.Elements[0].(*slack.RichTextSectionTextElement)
+	if left.Style != nil {
+		t.Errorf("leading element style = %+v, want nil (bold leaked left)", left.Style)
+	}
 	mid := sec.Elements[1].(*slack.RichTextSectionTextElement)
 	if mid.Text != "there" || mid.Style == nil || !mid.Style.Bold {
 		t.Errorf("middle element = %+v / style %+v, want bold 'there'", mid, mid.Style)
+	}
+	right := sec.Elements[2].(*slack.RichTextSectionTextElement)
+	if right.Style != nil {
+		t.Errorf("trailing element style = %+v, want nil (bold leaked right)", right.Style)
 	}
 }

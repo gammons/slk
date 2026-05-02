@@ -120,7 +120,7 @@ func (w *walker) walkInline(n ast.Node) {
 // duration of the inline-children walk. Save/restore inheritedStyle
 // so nested formatting (e.g. **bold _italic_**) correctly composes
 // the styles.
-func (w *walker) walkBold(n ast.Node) {
+func (w *walker) walkBold(n *ast.Emphasis) {
 	w.mrkdwn.WriteString("*")
 	prev := w.inheritedStyle
 	w.inheritedStyle.Bold = true
