@@ -7,8 +7,11 @@ import (
 	"unicode/utf8"
 )
 
-// Sentinel runes from the Unicode private-use area. Guaranteed not to
-// collide with real text and treated as opaque characters by goldmark.
+// Sentinel runes from the Unicode Private Use Area. Treated as opaque
+// characters by goldmark. PUA characters can legitimately appear in
+// real text (some CJK IMEs, legacy Mac fonts, icon-font copy-paste),
+// so tokenize sanitizes any pre-existing occurrences in the input by
+// replacing them with U+FFFD before emitting its own sentinels.
 const (
 	sentinelStart = '\uE000'
 	sentinelEnd   = '\uE001'
@@ -52,6 +55,15 @@ var (
 // The marker for table index N is the three-rune sequence
 // sentinelStart, decimal digits of N, sentinelEnd.
 func tokenize(s string) (string, []token) {
+	// Sanitize any pre-existing PUA sentinel characters in the input
+	// so they cannot be confused with sentinel markers we emit.
+	if strings.ContainsAny(s, string(sentinelStart)+string(sentinelEnd)) {
+		s = strings.NewReplacer(
+			string(sentinelStart), "\uFFFD",
+			string(sentinelEnd), "\uFFFD",
+		).Replace(s)
+	}
+
 	var table []token
 	var b strings.Builder
 	b.Grow(len(s))
@@ -140,7 +152,14 @@ func parseSentinel(s string, start int) (int, int, bool) {
 	if r != sentinelEnd {
 		return 0, 0, false
 	}
-	idx, err := strconv.Atoi(s[digitStart:pos])
+	digits := s[digitStart:pos]
+	// Reject leading-zero indices: tokenize never emits them
+	// (strconv.Itoa is canonical), so accepting them only widens the
+	// collision-attack surface.
+	if len(digits) > 1 && digits[0] == '0' {
+		return 0, 0, false
+	}
+	idx, err := strconv.Atoi(digits)
 	if err != nil {
 		return 0, 0, false
 	}

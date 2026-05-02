@@ -1,6 +1,10 @@
 package mrkdwn
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 func TestTokenize_NoTokens(t *testing.T) {
 	got, table := tokenize("hello world")
@@ -116,5 +120,36 @@ func TestParseSentinel_NotASentinel(t *testing.T) {
 	_, _, ok := parseSentinel("hello", 0)
 	if ok {
 		t.Fatal("expected ok=false for plain text")
+	}
+}
+
+func TestTokenize_ManyTokens(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i < 15; i++ {
+		fmt.Fprintf(&b, "msg <@U%02d> ", i)
+	}
+	in := strings.TrimSpace(b.String())
+	tokenized, table := tokenize(in)
+	if len(table) != 15 {
+		t.Fatalf("got %d tokens, want 15", len(table))
+	}
+	if got := detokenizeText(tokenized, table); got != in {
+		t.Errorf("round trip failed:\n in:  %q\n out: %q", in, got)
+	}
+}
+
+func TestTokenize_SanitizesPreExistingPUAChars(t *testing.T) {
+	// User input containing literal PUA sentinel runes must NOT be
+	// interpreted as a sentinel reference after tokenize. We replace
+	// them with U+FFFD so they survive as visible characters.
+	in := "weird \uE0000\uE001 stuff <@U1>"
+	tokenized, table := tokenize(in)
+	if len(table) != 1 {
+		t.Fatalf("got %d tokens, want 1 (just the @mention)", len(table))
+	}
+	out := detokenizeText(tokenized, table)
+	want := "weird \uFFFD0\uFFFD stuff <@U1>"
+	if out != want {
+		t.Errorf("got %q, want %q", out, want)
 	}
 }
