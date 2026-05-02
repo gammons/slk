@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	imgpkg "github.com/gammons/slk/internal/image"
+	"github.com/gammons/slk/internal/ui/imgrender"
 	"github.com/gammons/slk/internal/ui/messages"
 )
 
@@ -142,7 +143,7 @@ func TestMouseClick_OnImageDispatchesOpenPreview(t *testing.T) {
 	app.activeChannelID = channelID
 	app.focusedPanel = PanelMessages
 	app.messagepane.SetMessages([]messages.MessageItem{msg})
-	app.messagepane.SetImageContext(messages.ImageContext{
+	app.messagepane.SetImageContext(imgrender.ImageContext{
 		Protocol:   imgpkg.ProtoHalfBlock,
 		Fetcher:    fetcher,
 		CellPixels: stdimage.Pt(8, 16),

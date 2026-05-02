@@ -2,20 +2,17 @@ package messages
 
 import (
 	"bytes"
-	"context"
 	"fmt"
-	"image"
 	"io"
-	"log"
 	"strconv"
 	"strings"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	emojiutil "github.com/gammons/slk/internal/emoji"
 	imgpkg "github.com/gammons/slk/internal/image"
+	"github.com/gammons/slk/internal/ui/imgrender"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/scrollbar"
 	"github.com/gammons/slk/internal/ui/selection"
@@ -177,50 +174,6 @@ type sixelEntry struct {
 	height   int      // image height in rows
 }
 
-// ImageContext holds the dependencies the messages model needs for image
-// rendering. Configured at startup via Model.SetImageContext. SendMsg is
-// optional; when nil, image fetches still complete but no re-render is
-// triggered when bytes arrive (set by Task 5.6 once the tea.Program is
-// available).
-type ImageContext struct {
-	Protocol    imgpkg.Protocol
-	Fetcher     *imgpkg.Fetcher
-	KittyRender *imgpkg.KittyRenderer
-	CellPixels  image.Point
-	// MaxRows caps the height of an inline image in terminal rows.
-	MaxRows int
-	// MaxCols caps the width of an inline image in terminal columns.
-	// The image is also bounded by the available message-pane width
-	// when narrower. 0 disables the column cap (width-only bounded by
-	// the message pane).
-	MaxCols int
-	SendMsg func(tea.Msg)
-}
-
-// ImageReadyMsg is dispatched by the prefetcher when an image attachment
-// has finished downloading and decoding into the cache. The model
-// invalidates the cache for the affected message and re-renders.
-// Key is the cache key whose fetch just succeeded; the model uses it
-// to clear ONLY that entry from its in-flight tracking set, avoiding
-// the fetch-stampede that occurs if every successful arrival cleared
-// the whole set (which would re-spawn fetches for every still-failing
-// sibling image, each one re-running the slow multi-auth retry path).
-type ImageReadyMsg struct {
-	Channel string
-	TS      string
-	Key     string
-}
-
-// ImageFailedMsg is dispatched by the prefetcher when all auth attempts
-// for an image have failed. Carries the cache key only; the model uses
-// it to clear the in-flight bit for that key so a future cache
-// invalidation doesn't try the same image again. It does NOT trigger a
-// re-render (the placeholder is already on screen and the bytes still
-// aren't available).
-type ImageFailedMsg struct {
-	Key string
-}
-
 // OpenImagePreviewMsg requests opening the full-screen preview overlay
 // for a specific message attachment. Dispatched by the messages model
 // on click (Phase 7.4) or `O` keybind (Phase 7.3). The App's Update
@@ -312,22 +265,13 @@ type Model struct {
 	// ReplyCount, so optimistic + WS-echo paths don't double-increment.
 	countedReplies map[string]map[string]struct{}
 
-	// imgCtx is the inline-image rendering context: protocol, fetcher,
-	// cell metrics, and tea.Program send-fn. Zero-valued ImageContext is
-	// equivalent to ProtoOff (no inline rendering, attachments fall back
-	// to the legacy single-line OSC 8 hyperlink form).
-	imgCtx ImageContext
-
-	// fetchingImages tracks the set of cache keys for which a placeholder
-	// path has already spawned a fetch goroutine. Prevents per-frame
-	// goroutine pile-up during scroll/resize when an image is in flight.
-	// Cleared per-key when the corresponding ImageReadyMsg or
-	// ImageFailedMsg lands.
-	//
-	// Concurrency: only mutated from Update-driven render paths
-	// (Model is single-threaded from bubbletea's perspective). Goroutines
-	// never write to this map directly.
-	fetchingImages map[string]struct{}
+	// imgRenderer owns the inline-image rendering state (active
+	// ImageContext, in-flight fetch keys, permanently-failed keys).
+	// Configured at startup via Model.SetImageContext (which forwards
+	// to the Renderer). nil is equivalent to ProtoOff (no inline
+	// rendering, attachments fall back to the legacy single-line OSC 8
+	// hyperlink form).
+	imgRenderer *imgrender.Renderer
 
 	// staleEntries is the set of message TSes whose render-cache slot
 	// must be rebuilt before the next View() commit, while sibling
@@ -339,13 +283,6 @@ type Model struct {
 	// of partialRebuild and by full buildCache invocations. nil is
 	// equivalent to "nothing stale".
 	staleEntries map[string]struct{}
-
-	// failedImages remembers cache keys whose fetch hit a permanent
-	// failure (e.g. all auths exhausted on a Slack Connect channel the
-	// user isn't actually a member of). renderAttachmentBlock skips
-	// re-spawning fetches for these keys until the channel is switched.
-	// Cleared by SetChannel.
-	failedImages map[string]struct{}
 
 	// lastHits holds the inline-image hit rects captured during the most
 	// recent View() call, in viewport-absolute coordinates relative to
@@ -408,12 +345,14 @@ func (m *Model) HandleImageReady(channel, ts, key string) {
 		// is meant to avoid. Used by tests that drive transitions
 		// synchronously without a real fetch key.
 		m.cache = nil
-		m.fetchingImages = nil
+		if m.imgRenderer != nil {
+			m.imgRenderer.ResetFailed()
+		}
 		m.dirty()
 		return
 	}
-	if m.fetchingImages != nil {
-		delete(m.fetchingImages, key)
+	if m.imgRenderer != nil {
+		m.imgRenderer.ClearFetching(key)
 	}
 	if ts != "" && m.cache != nil {
 		if m.staleEntries == nil {
@@ -429,12 +368,13 @@ func (m *Model) HandleImageReady(channel, ts, key string) {
 }
 
 // HandleImageFailed clears the in-flight bit for a specific key and
-// records the key as permanently failed. renderAttachmentBlock checks
-// failedImages before spawning a fetch, so a permanently-failed image
-// (e.g. all auths exhausted on a Slack Connect channel the user isn't
-// actually a member of) won't be re-fetched on every cache
-// invalidation. The failure record is cleared on channel switch so
-// the user can retry by switching away and back.
+// records the key as permanently failed via the embedded
+// imgrender.Renderer. RenderBlock checks the renderer's failed-set
+// before spawning a fetch, so a permanently-failed image (e.g. all
+// auths exhausted on a Slack Connect channel the user isn't actually
+// a member of) won't be re-fetched on every cache invalidation. The
+// failure record is cleared on channel switch so the user can retry
+// by switching away and back.
 //
 // Does NOT invalidate the render cache: the placeholder is already on
 // screen and we have no new bytes to show.
@@ -442,13 +382,10 @@ func (m *Model) HandleImageFailed(key string) {
 	if key == "" {
 		return
 	}
-	if m.fetchingImages != nil {
-		delete(m.fetchingImages, key)
+	if m.imgRenderer == nil {
+		m.imgRenderer = imgrender.NewRenderer()
 	}
-	if m.failedImages == nil {
-		m.failedImages = make(map[string]struct{})
-	}
-	m.failedImages[key] = struct{}{}
+	m.imgRenderer.MarkFailed(key)
 }
 
 // Version returns a counter that increments every time the View() output
@@ -467,6 +404,7 @@ func New(msgs []MessageItem, channelName string) Model {
 		messages:    msgs,
 		selected:    selected,
 		channelName: channelName,
+		imgRenderer: imgrender.NewRenderer(),
 	}
 }
 
@@ -485,9 +423,8 @@ func (m *Model) SetChannel(name, topic string) {
 		// Different channel = different attachment set; clear the
 		// permanently-failed-image record so the user can retry by
 		// re-entering this channel later.
-		if m.channelName != name {
-			m.failedImages = nil
-			m.fetchingImages = nil
+		if m.channelName != name && m.imgRenderer != nil {
+			m.imgRenderer.ResetFailed()
 		}
 	}
 	m.channelName = name
@@ -1000,14 +937,17 @@ func (m *Model) SetChannelNames(names map[string]string) {
 // invalidate the render cache. A zero-valued ImageContext (or one with
 // Protocol == ProtoOff) disables inline rendering and falls back to the
 // legacy single-line "[Image] <url>" form.
-func (m *Model) SetImageContext(ctx ImageContext) {
-	m.imgCtx = ctx
-	if m.imgCtx.Fetcher != nil {
-		m.imgCtx.Fetcher.ConfigurePrerender(m.imgCtx.Protocol)
-		if m.imgCtx.Protocol == imgpkg.ProtoKitty {
-			m.imgCtx.Fetcher.ConfigurePrerenderKitty(m.imgCtx.KittyRender)
+func (m *Model) SetImageContext(ctx imgrender.ImageContext) {
+	if m.imgRenderer == nil {
+		m.imgRenderer = imgrender.NewRenderer()
+	}
+	m.imgRenderer.SetContext(ctx)
+	if ctx.Fetcher != nil {
+		ctx.Fetcher.ConfigurePrerender(ctx.Protocol)
+		if ctx.Protocol == imgpkg.ProtoKitty {
+			ctx.Fetcher.ConfigurePrerenderKitty(ctx.KittyRender)
 		} else {
-			m.imgCtx.Fetcher.ConfigurePrerenderKitty(nil)
+			ctx.Fetcher.ConfigurePrerenderKitty(nil)
 		}
 	}
 	m.cache = nil
@@ -1278,14 +1218,18 @@ func (m *Model) partialRebuild(width int) {
 // Wired here rather than in the constructor so it picks up runtime
 // changes to imgCtx (e.g., when image_protocol is reconfigured).
 func (m *Model) blockkitContext(msg MessageItem, userNames, channelNames map[string]string) blockkit.Context {
-	send := m.imgCtx.SendMsg
+	var imgCtx imgrender.ImageContext
+	if m.imgRenderer != nil {
+		imgCtx = m.imgRenderer.Context()
+	}
+	send := imgCtx.SendMsg
 	return blockkit.Context{
-		Protocol:    m.imgCtx.Protocol,
-		Fetcher:     m.imgCtx.Fetcher,
-		KittyRender: m.imgCtx.KittyRender,
-		CellPixels:  m.imgCtx.CellPixels,
-		MaxRows:     m.imgCtx.MaxRows,
-		MaxCols:     m.imgCtx.MaxCols,
+		Protocol:    imgCtx.Protocol,
+		Fetcher:     imgCtx.Fetcher,
+		KittyRender: imgCtx.KittyRender,
+		CellPixels:  imgCtx.CellPixels,
+		MaxRows:     imgCtx.MaxRows,
+		MaxCols:     imgCtx.MaxCols,
 		UserNames:   userNames,
 		MessageTS:   msg.TS,
 		Channel:     m.channelName,
@@ -1429,7 +1373,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 	//   col 1 + 5 = 6   when an avatar is present
 	//   col 1           when no avatar
 	//
-	// We compute it here (before calling renderAttachmentBlock) and
+	// We compute it here (before calling imgRenderer.RenderBlock) and
 	// pass it down so the per-image hit rects come back in absolute
 	// linesNormal columns, ready for direct viewport translation in
 	// View() without any further offset arithmetic.
@@ -1496,20 +1440,33 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 	if len(msg.Attachments) > 0 {
 		rowCursor := preAttachmentRows
 		for attIdx, att := range msg.Attachments {
-			lines, fls, sxl, h, hit := m.renderAttachmentBlock(att, msg.TS, contentWidth, rowCursor, attIdx, contentColBase)
-			attachLineSlices = append(attachLineSlices, lines)
-			allFlushes = append(allFlushes, fls...)
-			for k, v := range sxl {
+			if m.imgRenderer == nil {
+				m.imgRenderer = imgrender.NewRenderer()
+			}
+			imgThumbs := make([]imgrender.ThumbSpec, len(att.Thumbs))
+			for i, t := range att.Thumbs {
+				imgThumbs[i] = imgrender.ThumbSpec{URL: t.URL, W: t.W, H: t.H}
+			}
+			res := m.imgRenderer.RenderBlock(imgrender.Block{
+				Kind:   att.Kind,
+				FileID: att.FileID,
+				Name:   att.Name,
+				URL:    att.URL,
+				Thumbs: imgThumbs,
+			}, m.channelName, msg.TS, contentWidth, rowCursor, attIdx, contentColBase)
+			attachLineSlices = append(attachLineSlices, res.Lines)
+			allFlushes = append(allFlushes, res.Flushes...)
+			for k, v := range convertSixelMap(res.SixelRows) {
 				allSixel[k] = v
 			}
 			// Only record hits for actual image-block renders (the
-			// fallback-to-link path returns a zero entryHit, which we
+			// fallback-to-link path returns a zero Hit, which we
 			// skip — clicking a single-line "[Image] <url>" doesn't
 			// open the preview overlay; that's a hyperlink.).
-			if hit.rowEndInEntry > hit.rowStartInEntry {
-				hits = append(hits, hit)
+			if res.Hit.RowEndInEntry > res.Hit.RowStartInEntry {
+				hits = append(hits, convertHit(res.Hit))
 			}
-			rowCursor += h
+			rowCursor += res.Height
 		}
 	}
 	var attachmentLines string
@@ -1572,280 +1529,33 @@ func placeAvatarBeside(avatar, content string) string {
 	return strings.Join(result, "\n")
 }
 
-// renderAttachmentBlock returns the rendered rows + per-frame flushes +
-// sixel sentinel rows + the image-hit footprint (for click-to-preview)
-// for one attachment. baseRow is the absolute row index where this
-// attachment's first row will land within the containing message's
-// rendered output (used as the key for sixelRows AND as the row-base
-// for the returned hit rect). attIdx is the index of this attachment
-// within its parent MessageItem.Attachments slice; preserved on the
-// returned hit so the mouse handler can identify which attachment was
-// clicked when a message has multiple. contentColBase is the display
-// column at which the message-content area begins within the entry's
-// rendered linesNormal — i.e., the offset added by the avatar gutter
-// (when present) plus the thick-left-border (1 col, added by
-// buildCache). The returned entryHit's colStart/colEnd are absolute
-// columns within linesNormal so View() can translate them directly.
-//
-// Behavior matrix:
-//   - Non-image attachment, ProtoOff, missing fetcher, or missing thumbs:
-//     fall back to the legacy single-line "[Image|File] <url>" form.
-//     No hit rect (hit.rowEndInEntry == hit.rowStartInEntry).
-//   - Image with bytes already in the on-disk cache: render via the active
-//     protocol's renderer (kitty stable-key path, halfblock inline, or
-//     sixel sentinel + bytes). Hit rect spans the full image extent.
-//   - Image not yet cached: emit a reserved-height placeholder block of
-//     theme-surface-colored spaces with a centered loading indicator,
-//     and kick off an async prefetch via go func. The placeholder is
-//     ALSO clickable — clicking it before the bytes arrive is a no-op
-//     for the preview overlay (Phase 7's open handler guards), but it
-//     gives the user immediate feedback that the row is interactive.
-func (m *Model) renderAttachmentBlock(att Attachment, ts string, availWidth, baseRow, attIdx, contentColBase int) (
-	lines []string, flushes []func(io.Writer) error, sixelRows map[int]sixelEntry, height int, hit entryHit,
-) {
-	ctx := m.imgCtx
-	if att.Kind != "image" || ctx.Protocol == imgpkg.ProtoOff || ctx.Fetcher == nil {
-		return []string{renderSingleAttachment(att)}, nil, nil, 1, entryHit{}
+// convertHit translates an imgrender.Hit into the messages-pane's
+// private entryHit cache type. Field names differ in capitalization
+// because imgrender's are exported and entryHit's are kept private to
+// the messages package.
+func convertHit(h imgrender.Hit) entryHit {
+	return entryHit{
+		rowStartInEntry: h.RowStartInEntry,
+		rowEndInEntry:   h.RowEndInEntry,
+		colStart:        h.ColStart,
+		colEnd:          h.ColEnd,
+		fileID:          h.FileID,
+		attIdx:          h.AttIdx,
 	}
-	// Defensive: an image attachment without a FileID can't form a
-	// stable cache key, so there's nothing the inline pipeline can do
-	// with it. Fall back to the single-line link form.
-	if att.FileID == "" {
-		return []string{renderSingleAttachment(att)}, nil, nil, 1, entryHit{}
-	}
-
-	target := computeImageTarget(att, ctx, availWidth)
-	if target.X <= 0 || target.Y <= 0 {
-		return []string{renderSingleAttachment(att)}, nil, nil, 1, entryHit{}
-	}
-
-	pixelTarget := image.Pt(target.X*ctx.CellPixels.X, target.Y*ctx.CellPixels.Y)
-	url, suffix := imgpkg.PickThumb(toImgThumbs(att.Thumbs), pixelTarget)
-	if url == "" {
-		return []string{renderSingleAttachment(att)}, nil, nil, 1, entryHit{}
-	}
-	key := att.FileID + "-" + suffix
-
-	// The hit rect spans the image's reserved cell extent (target.X cells
-	// wide × target.Y rows tall), starting at baseRow within the entry's
-	// linesNormal and at contentColBase within each of those lines.
-	hit = entryHit{
-		rowStartInEntry: baseRow,
-		rowEndInEntry:   baseRow + target.Y,
-		colStart:        contentColBase,
-		colEnd:          contentColBase + target.X,
-		fileID:          att.FileID,
-		attIdx:          attIdx,
-	}
-
-	img, cached := ctx.Fetcher.Cached(key, pixelTarget)
-	if !cached {
-		// Reserved-height placeholder; kick off async prefetch. The
-		// fetcher is concurrency-safe (singleflight dedupes), so it's
-		// fine for multiple visible messages to fire prefetches for
-		// the same key in parallel — but each goroutine still
-		// independently fires ImageReadyMsg, which can pile up under
-		// scroll/resize churn. Gate spawn on an in-flight set so each
-		// (key) only has one goroutine in flight at a time.
-		if m.fetchingImages == nil {
-			m.fetchingImages = make(map[string]struct{})
-		}
-		// Skip re-spawn for previously-failed keys. The failure set
-		// clears on SetChannel so the user can retry by switching
-		// channels.
-		if _, failed := m.failedImages[key]; failed {
-			return buildPlaceholder(att.Name, target), nil, nil, target.Y, hit
-		}
-		if _, inFlight := m.fetchingImages[key]; inFlight {
-			return buildPlaceholder(att.Name, target), nil, nil, target.Y, hit
-		}
-		m.fetchingImages[key] = struct{}{}
-		channel := m.channelName
-		go func() {
-			_, err := ctx.Fetcher.Fetch(context.Background(), imgpkg.FetchRequest{
-				Key:        key,
-				URL:        url,
-				Target:     pixelTarget,
-				CellTarget: target,
-			})
-			// On either success or failure, dispatch a message so the
-			// model can clear THIS key's in-flight bit. Without that,
-			// failed fetches leave a permanent "fetching" placeholder
-			// AND get re-attempted on every successful sibling's
-			// arrival (sibling success used to nil the entire in-flight
-			// set, causing fetch stampedes that locked up the UI on
-			// channels with many failing-to-auth Slack Connect images).
-			if ctx.SendMsg == nil {
-				return
-			}
-			if err != nil {
-				log.Printf("image fetch failed: key=%s url=%s err=%v", key, url, err)
-				ctx.SendMsg(ImageFailedMsg{Key: key})
-				return
-			}
-			ctx.SendMsg(ImageReadyMsg{Channel: channel, TS: ts, Key: key})
-		}()
-		return buildPlaceholder(att.Name, target), nil, nil, target.Y, hit
-	}
-
-	// Fast path: prerendered output baked by the fetch goroutine off
-	// the UI thread. This is the hot path post-Fetch — no protocol
-	// encoding runs on the bubbletea Update goroutine.
-	if pr, ok := ctx.Fetcher.Prerendered(key, target, ctx.Protocol); ok {
-		var fl []func(io.Writer) error
-		var sxlMap map[int]sixelEntry
-		if ctx.Protocol == imgpkg.ProtoSixel && pr.OnFlush != nil {
-			var bb bytes.Buffer
-			if err := pr.OnFlush(&bb); err == nil {
-				sxlMap = map[int]sixelEntry{
-					baseRow: {bytes: bb.Bytes(), fallback: pr.Fallback, height: target.Y},
-				}
-			}
-		} else if pr.OnFlush != nil {
-			fl = []func(io.Writer) error{pr.OnFlush}
-		}
-		return pr.Lines, fl, sxlMap, target.Y, hit
-	}
-
-	// Slow path: prerender wasn't populated (e.g. protocol changed
-	// since fetch, or this is a cache file from a previous session
-	// that hasn't been refreshed through Fetch). Fall through to the
-	// existing on-thread RenderImage path. Cached() already returned
-	// the decoded image as a pure memo lookup (Task 1) so the
-	// remaining cost is one protocol encode.
-	if ctx.Protocol == imgpkg.ProtoKitty && ctx.KittyRender != nil {
-		ckey := "F-" + att.FileID
-		ctx.KittyRender.SetSource(ckey, img)
-		out := ctx.KittyRender.RenderKey(ckey, target)
-		var fl []func(io.Writer) error
-		if out.OnFlush != nil {
-			fl = []func(io.Writer) error{out.OnFlush}
-		}
-		return out.Lines, fl, nil, target.Y, hit
-	}
-
-	out := imgpkg.RenderImage(ctx.Protocol, img, target)
-	var fl []func(io.Writer) error
-	var sxlMap map[int]sixelEntry
-	if ctx.Protocol == imgpkg.ProtoSixel {
-		if out.OnFlush != nil {
-			var bb bytes.Buffer
-			if err := out.OnFlush(&bb); err == nil {
-				sxlMap = map[int]sixelEntry{
-					baseRow: {bytes: bb.Bytes(), fallback: out.Fallback, height: target.Y},
-				}
-			}
-		}
-	} else if out.OnFlush != nil {
-		fl = []func(io.Writer) error{out.OnFlush}
-	}
-	return out.Lines, fl, sxlMap, target.Y, hit
 }
 
-// computeImageTarget chooses (cols, rows) for an inline image render.
-// rows is capped at ctx.MaxRows; cols is capped at min(availWidth,
-// ctx.MaxCols). Aspect ratio is always preserved. Returns image.Point{}
-// when the attachment has no usable thumbnail or the cell metrics are
-// zero.
-func computeImageTarget(att Attachment, ctx ImageContext, availWidth int) image.Point {
-	if len(att.Thumbs) == 0 || ctx.CellPixels.X <= 0 || ctx.CellPixels.Y <= 0 {
-		return image.Point{}
+// convertSixelMap translates imgrender.SixelEntry values into the
+// messages-pane's private sixelEntry type, preserving the row keys.
+// Returns nil for an empty/nil input so callers don't have to nil-check.
+func convertSixelMap(in map[int]imgrender.SixelEntry) map[int]sixelEntry {
+	if len(in) == 0 {
+		return nil
 	}
-	largest := att.Thumbs[len(att.Thumbs)-1]
-	if largest.W <= 0 || largest.H <= 0 {
-		return image.Point{}
-	}
-	aspect := float64(largest.W) / float64(largest.H)
-	cellRatio := float64(ctx.CellPixels.X) / float64(ctx.CellPixels.Y)
-
-	rows := ctx.MaxRows
-	if rows <= 0 {
-		rows = 20
-	}
-	// Width cap is the smaller of the user's MaxCols and the available
-	// message-pane width. MaxCols == 0 disables the user cap.
-	maxCols := availWidth
-	if ctx.MaxCols > 0 && ctx.MaxCols < maxCols {
-		maxCols = ctx.MaxCols
-	}
-	// cols = rows * aspect / cellRatio  (cells are taller than wide,
-	// so cellRatio < 1 inflates cols to compensate).
-	cols := int(float64(rows) * aspect / cellRatio)
-	if cols < 1 {
-		// Extreme tall/skinny aspect ratios (e.g., 100×9000 px scrolling
-		// screenshots) underflow cols to zero. Clamp to 1 col and let
-		// the renderer downscale the source to fit. Without this clamp
-		// the attachment falls through to the "[Image] <url>" text
-		// fallback, which the user perceives as a missing image.
-		cols = 1
-	}
-	if cols > maxCols {
-		cols = maxCols
-		rows = int(float64(cols) * cellRatio / aspect)
-	}
-	if rows < 1 {
-		rows = 1
-	}
-	return image.Pt(cols, rows)
-}
-
-// toImgThumbs converts the messages-package ThumbSpec slice to the
-// image-package's. The two types are intentionally distinct (see
-// model.go ThumbSpec doc) so the messages UI doesn't depend on the
-// image package's internal type.
-func toImgThumbs(ts []ThumbSpec) []imgpkg.ThumbSpec {
-	out := make([]imgpkg.ThumbSpec, len(ts))
-	for i, t := range ts {
-		out[i] = imgpkg.ThumbSpec{URL: t.URL, W: t.W, H: t.H}
+	out := make(map[int]sixelEntry, len(in))
+	for k, v := range in {
+		out[k] = sixelEntry{bytes: v.Bytes, fallback: v.Fallback, height: v.Height}
 	}
 	return out
-}
-
-// buildPlaceholder produces a target.Y-row block with theme-surface
-// background and a centered "⏳ Loading <name>..." indicator on the
-// middle row. Used while the image bytes are being fetched.
-func buildPlaceholder(name string, target image.Point) []string {
-	bg := lipgloss.NewStyle().Background(styles.SurfaceDark)
-	pad := strings.Repeat(" ", target.X)
-	emptyRow := bg.Render(pad)
-
-	lines := make([]string, target.Y)
-	for i := range lines {
-		lines[i] = emptyRow
-	}
-
-	label := "⏳ Loading " + name + "..."
-	labelW := lipgloss.Width(label)
-	if labelW > target.X {
-		// Truncate to fit. Use rune-safe slicing via a runes round-trip
-		// — image labels are user-controlled file names and can contain
-		// multi-byte UTF-8.
-		if target.X > 1 {
-			runes := []rune(label)
-			// Conservatively trim to target.X-1 runes plus an ellipsis;
-			// some runes are wide so the result may still be slightly
-			// over, in which case we re-trim.
-			for len(runes) > 0 {
-				candidate := string(runes[:len(runes)-1]) + "…"
-				if lipgloss.Width(candidate) <= target.X {
-					label = candidate
-					labelW = lipgloss.Width(label)
-					break
-				}
-				runes = runes[:len(runes)-1]
-			}
-			if labelW > target.X {
-				return lines
-			}
-		} else {
-			return lines
-		}
-	}
-	leftPad := (target.X - labelW) / 2
-	rightPad := target.X - labelW - leftPad
-	mid := target.Y / 2
-	lines[mid] = bg.Render(strings.Repeat(" ", leftPad)) + bg.Render(label) + bg.Render(strings.Repeat(" ", rightPad))
-	return lines
 }
 
 // ClickAt handles a mouse click at the given y-coordinate (the pane-local

@@ -28,6 +28,7 @@ import (
 	"github.com/gammons/slk/internal/ui/channelpicker"
 	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/confirmprompt"
+	"github.com/gammons/slk/internal/ui/imgrender"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/presencemenu"
@@ -1297,7 +1298,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.messagepane.PrependMessages(msg.Messages)
 		}
 
-	case messages.ImageReadyMsg:
+	case imgrender.ImageReadyMsg:
 		// Image attachment finished downloading; invalidate the
 		// messages pane's render cache for the affected channel so the
 		// next View() picks up the cached bytes inline. Only the
@@ -1307,7 +1308,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// user has switched away).
 		a.messagepane.HandleImageReady(msg.Channel, msg.TS, msg.Key)
 
-	case messages.ImageFailedMsg:
+	case imgrender.ImageFailedMsg:
 		// Image attachment fetch hit a permanent failure (all auths
 		// exhausted, or some other terminal error). Clear the in-flight
 		// bit so a future cache invalidation doesn't keep retrying;
@@ -3596,7 +3597,7 @@ func (a *App) SetAvatarFunc(fn messages.AvatarFunc) {
 // SetImageContext configures the inline-image rendering pipeline on the
 // messages pane. Should be called once at startup, before the first
 // View(). Pass a zero-valued ImageContext to disable inline rendering.
-func (a *App) SetImageContext(ctx messages.ImageContext) {
+func (a *App) SetImageContext(ctx imgrender.ImageContext) {
 	a.messagepane.SetImageContext(ctx)
 }
 

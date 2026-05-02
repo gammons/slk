@@ -11,6 +11,7 @@ import (
 
 	"github.com/gammons/slk/internal/config"
 	imgpkg "github.com/gammons/slk/internal/image"
+	"github.com/gammons/slk/internal/ui/imgrender"
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
@@ -308,7 +309,7 @@ func TestImageReady_DoesNotChangeMessageHeight(t *testing.T) {
 	}
 
 	m := New([]MessageItem{msg}, channel)
-	m.SetImageContext(ImageContext{
+	m.SetImageContext(imgrender.ImageContext{
 		Protocol:   imgpkg.ProtoHalfBlock,
 		Fetcher:    fetcher,
 		CellPixels: stdimage.Pt(8, 16),
@@ -403,7 +404,7 @@ func setupImageMessageModel(t *testing.T, protocol imgpkg.Protocol) *Model {
 		}},
 	}
 	m := New([]MessageItem{msg}, "C123")
-	ctx := ImageContext{
+	ctx := imgrender.ImageContext{
 		Protocol:   protocol,
 		Fetcher:    fetcher,
 		CellPixels: stdimage.Pt(8, 16),
