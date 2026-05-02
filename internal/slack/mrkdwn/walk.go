@@ -106,9 +106,15 @@ func (w *walker) walkInline(n ast.Node) {
 			w.walkBold(n)
 			return
 		}
-		// Level 1 (italic) handled in Task 5; for now walk children
-		// without styling so plain-text fallback is preserved.
-		w.walkInlineChildren(n)
+		// Level 1: distinguish _italic_ from *italic*. Goldmark's
+		// emphasis node doesn't expose the delimiter byte directly,
+		// so we look at the byte immediately before the first child
+		// text segment.
+		if w.emphasisDelimiter(n) == '_' {
+			w.walkItalic(n)
+		} else {
+			w.walkAsteriskLiteral(n)
+		}
 	default:
 		// Other inline nodes (CodeSpan, Link, etc.) are handled in
 		// later tasks. Walk children to preserve text.
@@ -127,6 +133,57 @@ func (w *walker) walkBold(n *ast.Emphasis) {
 	w.walkInlineChildren(n)
 	w.inheritedStyle = prev
 	w.mrkdwn.WriteString("*")
+}
+
+// emphasisDelimiter returns the rune used to start a Level-1 emphasis
+// node ('_' or '*'). It inspects the byte immediately before the
+// first text-bearing descendant's source segment.
+func (w *walker) emphasisDelimiter(n *ast.Emphasis) byte {
+	first := n.FirstChild()
+	if first == nil {
+		return '_'
+	}
+	tn, ok := first.(*ast.Text)
+	if !ok {
+		// Nested inline (e.g. <em><code>x</code></em>). Walk down
+		// to the first text node.
+		for c := first.FirstChild(); c != nil; c = c.FirstChild() {
+			if t, ok := c.(*ast.Text); ok {
+				tn = t
+				break
+			}
+		}
+		if tn == nil {
+			return '_'
+		}
+	}
+	pos := tn.Segment.Start - 1
+	if pos < 0 || pos >= len(w.source) {
+		return '_'
+	}
+	return w.source[pos]
+}
+
+// walkItalic emits _x_ mrkdwn and sets Style.Italic for the duration
+// of the inline-children walk.
+func (w *walker) walkItalic(n *ast.Emphasis) {
+	w.mrkdwn.WriteString("_")
+	prev := w.inheritedStyle
+	w.inheritedStyle.Italic = true
+	w.walkInlineChildren(n)
+	w.inheritedStyle = prev
+	w.mrkdwn.WriteString("_")
+}
+
+// walkAsteriskLiteral preserves *x* as literal text in both outputs.
+// The asterisks become text elements (no italic style) in the rich
+// text block. Inline formatting inside the run (e.g. *hello **bold***)
+// is still processed via walkInlineChildren — only the outer asterisk
+// pair is treated as literal text.
+func (w *walker) walkAsteriskLiteral(n *ast.Emphasis) {
+	w.appendText("*")
+	w.walkInlineChildren(n)
+	w.appendText("*")
 }
 
 // walkRawHTMLBlock preserves block-level HTML as literal text. Goldmark

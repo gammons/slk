@@ -186,3 +186,57 @@ func TestConvert_BoldWithSurroundingText(t *testing.T) {
 		t.Errorf("trailing element style = %+v, want nil (bold leaked right)", right.Style)
 	}
 }
+
+func TestConvert_ItalicUnderscore(t *testing.T) {
+	mr, blk := Convert("_hello_")
+	if mr != "_hello_" {
+		t.Errorf("mrkdwn = %q, want %q", mr, "_hello_")
+	}
+	sec := blk.Elements[0].(*slack.RichTextSection)
+	te := sec.Elements[0].(*slack.RichTextSectionTextElement)
+	if te.Text != "hello" {
+		t.Errorf("text = %q, want %q", te.Text, "hello")
+	}
+	if te.Style == nil || !te.Style.Italic {
+		t.Errorf("expected Style.Italic = true, got %+v", te.Style)
+	}
+}
+
+func TestConvert_AsteriskPreservedAsLiteral(t *testing.T) {
+	// *x* in CommonMark is italic, but in Slack mrkdwn it's bold.
+	// We preserve the asterisks as literal characters so users who
+	// type Slack-style *bold* don't get it converted to _italic_.
+	mr, blk := Convert("*hello*")
+	if mr != "*hello*" {
+		t.Errorf("mrkdwn = %q, want %q", mr, "*hello*")
+	}
+	// Block side: text elements concatenate to "*hello*", no italic.
+	sec := blk.Elements[0].(*slack.RichTextSection)
+	var got string
+	for _, el := range sec.Elements {
+		te, ok := el.(*slack.RichTextSectionTextElement)
+		if !ok {
+			t.Fatalf("element is %T, want only text elements", el)
+		}
+		if te.Style != nil && (te.Style.Italic || te.Style.Bold) {
+			t.Errorf("element %+v has style %+v, want no italic/bold for literal asterisks", te, te.Style)
+		}
+		got += te.Text
+	}
+	if got != "*hello*" {
+		t.Errorf("concatenated text = %q, want %q", got, "*hello*")
+	}
+}
+
+func TestConvert_AsteriskRoundTripStable(t *testing.T) {
+	// After one conversion, **bold** -> *bold*. Re-converting the
+	// result must NOT change it (this is what happens on edit).
+	mr1, _ := Convert("**bold**")
+	if mr1 != "*bold*" {
+		t.Fatalf("first pass: %q, want *bold*", mr1)
+	}
+	mr2, _ := Convert(mr1)
+	if mr2 != "*bold*" {
+		t.Errorf("second pass: %q, want *bold* (round-trip stable)", mr2)
+	}
+}
