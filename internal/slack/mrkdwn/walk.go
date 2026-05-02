@@ -1,6 +1,7 @@
 package mrkdwn
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/slack-go/slack"
@@ -57,6 +58,8 @@ func (w *walker) walkBlock(n ast.Node) {
 		w.mrkdwn.WriteString("\n\n")
 	case *ast.HTMLBlock:
 		w.walkRawHTMLBlock(n)
+	case *ast.List:
+		w.walkList(n, 0)
 	default:
 		// Other block types (List, FencedCodeBlock, Heading, Blockquote)
 		// will be handled in later tasks. For now, walk children as
@@ -286,6 +289,97 @@ func (w *walker) collectInlineText(n ast.Node) string {
 	}
 	// Restore Slack wire-form tokens that may live inside the label.
 	return detokenizeText(b.String(), w.table)
+}
+
+// walkList emits a rich_text_list block (flat at Slack's level —
+// nested CommonMark lists are emitted as separate top-level lists
+// with increasing Indent). Mrkdwn fallback uses U+2022 bullets for
+// unordered and "N. " for ordered, with two-space indent per level.
+func (w *walker) walkList(n *ast.List, indent int) {
+	w.flushSection()
+
+	style := slack.RTEListBullet
+	if n.IsOrdered() {
+		style = slack.RTEListOrdered
+	}
+
+	list := slack.NewRichTextList(style, indent)
+
+	// Nested lists from this list's children are emitted as sibling
+	// top-level lists (Slack flat-with-indent shape). Collect them
+	// here so they append AFTER this list in w.block.Elements.
+	var nested []*slack.RichTextList
+
+	itemIdx := 0
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		item, ok := c.(*ast.ListItem)
+		if !ok {
+			continue
+		}
+		sec := slack.NewRichTextSection()
+		prev := w.curSection
+		w.curSection = sec
+
+		// Mrkdwn marker for the item.
+		w.mrkdwn.WriteString(strings.Repeat("  ", indent))
+		if n.IsOrdered() {
+			w.mrkdwn.WriteString(strconv.Itoa(itemIdx + 1))
+			w.mrkdwn.WriteString(". ")
+		} else {
+			w.mrkdwn.WriteString("• ")
+		}
+		itemIdx++
+
+		// Walk item children: inline body then any nested lists.
+		for sub := item.FirstChild(); sub != nil; sub = sub.NextSibling() {
+			switch sub := sub.(type) {
+			case *ast.TextBlock, *ast.Paragraph:
+				w.walkInlineChildren(sub)
+			case *ast.List:
+				w.mrkdwn.WriteString("\n")
+				w.walkListInto(sub, indent+1, &nested)
+			default:
+				w.walkInline(sub)
+			}
+		}
+		w.mrkdwn.WriteString("\n")
+
+		w.curSection = prev
+		list.Elements = append(list.Elements, sec)
+	}
+	// Trim the trailing newline added by the last item so that the
+	// list doesn't add an extra blank line before the next block.
+	trimTrailingNewline(&w.mrkdwn)
+
+	w.block.Elements = append(w.block.Elements, list)
+	for _, nl := range nested {
+		w.block.Elements = append(w.block.Elements, nl)
+	}
+}
+
+// walkListInto walks a nested list, appending its block-level result
+// to the given slice (instead of w.block.Elements directly), so that
+// the parent walkList can interleave nested lists in the right order.
+func (w *walker) walkListInto(n *ast.List, indent int, out *[]*slack.RichTextList) {
+	prev := w.block
+	tmp := slack.NewRichTextBlock("")
+	w.block = tmp
+	w.walkList(n, indent)
+	w.block = prev
+	for _, e := range tmp.Elements {
+		if l, ok := e.(*slack.RichTextList); ok {
+			*out = append(*out, l)
+		}
+	}
+}
+
+// trimTrailingNewline removes one trailing '\n' from b if present.
+func trimTrailingNewline(b *strings.Builder) {
+	s := b.String()
+	if strings.HasSuffix(s, "\n") {
+		b.Reset()
+		b.WriteString(s[:len(s)-1])
+	}
 }
 
 // walkRawHTMLBlock preserves block-level HTML as literal text. Goldmark

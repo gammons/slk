@@ -120,23 +120,6 @@ func TestConvert_InlineHTMLPreserved(t *testing.T) {
 	}
 }
 
-// TestConvert_BlockFallback_KnownLimitation_TasksFix810 documents
-// that the scaffold's walkBlock default case glues block-level
-// children together without separators. List/heading/blockquote
-// handlers added in Tasks 8 and 10 replace this behavior; until
-// then, this test pins the (intentionally degraded) interim state
-// so a regression doesn't slip past unnoticed.
-//
-// When Tasks 8/10 land, this test will fail and must be removed
-// (the new tests in those tasks will assert correct behavior).
-func TestConvert_BlockFallback_KnownLimitation_TasksFix810(t *testing.T) {
-	// List input — items glue together, no separator
-	mr, _ := Convert("- one\n- two")
-	if mr != "onetwo" {
-		t.Errorf("interim list-fallback mrkdwn = %q, want %q (replace this test in Task 8)", mr, "onetwo")
-	}
-}
-
 func TestConvert_BoldDoubleAsterisk(t *testing.T) {
 	mr, blk := Convert("**hello**")
 	if mr != "*hello*" {
@@ -526,5 +509,67 @@ func TestConvert_BoldContainingMention(t *testing.T) {
 	}
 	if user.Style == nil || !user.Style.Bold {
 		t.Errorf("user.Style = %+v, want bold inherited", user.Style)
+	}
+}
+
+func TestConvert_UnorderedList(t *testing.T) {
+	mr, blk := Convert("- one\n- two")
+	want := "• one\n• two"
+	if mr != want {
+		t.Errorf("mrkdwn = %q, want %q", mr, want)
+	}
+	if len(blk.Elements) != 1 {
+		t.Fatalf("got %d block elements, want 1 list", len(blk.Elements))
+	}
+	list, ok := blk.Elements[0].(*slack.RichTextList)
+	if !ok {
+		t.Fatalf("element[0] is %T, want *RichTextList", blk.Elements[0])
+	}
+	if list.Style != slack.RTEListBullet {
+		t.Errorf("list style = %q, want bullet", list.Style)
+	}
+	if list.Indent != 0 {
+		t.Errorf("Indent = %d, want 0", list.Indent)
+	}
+	if len(list.Elements) != 2 {
+		t.Fatalf("got %d items, want 2", len(list.Elements))
+	}
+	first := list.Elements[0].(*slack.RichTextSection)
+	te := first.Elements[0].(*slack.RichTextSectionTextElement)
+	if te.Text != "one" {
+		t.Errorf("first item text = %q", te.Text)
+	}
+}
+
+func TestConvert_OrderedList(t *testing.T) {
+	mr, blk := Convert("1. one\n2. two")
+	want := "1. one\n2. two"
+	if mr != want {
+		t.Errorf("mrkdwn = %q, want %q", mr, want)
+	}
+	list := blk.Elements[0].(*slack.RichTextList)
+	if list.Style != slack.RTEListOrdered {
+		t.Errorf("list style = %q, want ordered", list.Style)
+	}
+}
+
+func TestConvert_NestedList(t *testing.T) {
+	mr, blk := Convert("- a\n    - b")
+	wantMr := "• a\n  • b"
+	if mr != wantMr {
+		t.Errorf("mrkdwn = %q, want %q", mr, wantMr)
+	}
+	// Block side: two RichTextList elements at the top level
+	// (slack's wire shape — nested lists are flat with Indent=N).
+	if len(blk.Elements) != 2 {
+		t.Fatalf("got %d block elements, want 2 lists (flattened nested)", len(blk.Elements))
+	}
+	outer := blk.Elements[0].(*slack.RichTextList)
+	if outer.Indent != 0 {
+		t.Errorf("outer.Indent = %d, want 0", outer.Indent)
+	}
+	inner := blk.Elements[1].(*slack.RichTextList)
+	if inner.Indent != 1 {
+		t.Errorf("inner.Indent = %d, want 1", inner.Indent)
 	}
 }
