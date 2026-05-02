@@ -48,6 +48,74 @@ func TestDecodeSection_REST(t *testing.T) {
 			t.Errorf("ChannelIDs[%d] = %q, want %q", i, got.ChannelIDs[i], c)
 		}
 	}
+	if got.ChannelsCount != 2 {
+		t.Errorf("ChannelsCount = %d, want 2", got.ChannelsCount)
+	}
+	if got.ChannelsCursor != "D09R4P6G6QL" {
+		t.Errorf("ChannelsCursor = %q, want D09R4P6G6QL", got.ChannelsCursor)
+	}
+	if got.Emoji != "" {
+		t.Errorf("Emoji = %q, want empty", got.Emoji)
+	}
+	if got.IsRedacted {
+		t.Errorf("IsRedacted = true, want false")
+	}
+}
+
+func TestDecodeSection_TailHasEmptyNext(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "sections_rest_truelist.json"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	var resp channelSectionsListResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var got *SidebarSection
+	for i := range resp.Sections {
+		if resp.Sections[i].Name == "Agents" {
+			got = &resp.Sections[i]
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("Agents section not found")
+	}
+	if got.Next != "" {
+		t.Errorf("Next = %q, want empty (null in JSON)", got.Next)
+	}
+	if got.Type != "agents" {
+		t.Errorf("Type = %q, want agents", got.Type)
+	}
+	if got.ChannelsCursor != "" {
+		t.Errorf("ChannelsCursor = %q, want empty", got.ChannelsCursor)
+	}
+}
+
+func TestDecodeSection_RedactedSection(t *testing.T) {
+	data := []byte(`{
+		"channel_section_id": "L_R",
+		"name": "Hidden",
+		"type": "standard",
+		"emoji": "",
+		"next_channel_section_id": null,
+		"last_updated": 1700000000,
+		"channel_ids_page": {"channel_ids": [], "count": 0},
+		"is_redacted": true
+	}`)
+	var s SidebarSection
+	if err := json.Unmarshal(data, &s); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !s.IsRedacted {
+		t.Errorf("IsRedacted = false, want true")
+	}
+	if s.ID != "L_R" || s.Name != "Hidden" {
+		t.Errorf("got %+v", s)
+	}
+	if s.Next != "" {
+		t.Errorf("Next = %q, want empty (null in JSON)", s.Next)
+	}
 }
 
 func TestDecodeSection_WS(t *testing.T) {

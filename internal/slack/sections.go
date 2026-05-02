@@ -2,10 +2,6 @@ package slackclient
 
 import "encoding/json"
 
-// jsonUnmarshal exists so SidebarSection.UnmarshalJSON can defer to
-// the standard decoder without infinite-recursing on its own method.
-var jsonUnmarshal = json.Unmarshal
-
 // SidebarSection represents one entry in the user's Slack sidebar
 // section list. Both the REST endpoint (users.channelSections.list)
 // and the WebSocket events use this model after normalization;
@@ -65,7 +61,7 @@ type restSectionEnvelope struct {
 // normalizes into the canonical struct.
 func (s *SidebarSection) UnmarshalJSON(data []byte) error {
 	var env restSectionEnvelope
-	if err := jsonUnmarshal(data, &env); err != nil {
+	if err := json.Unmarshal(data, &env); err != nil {
 		return err
 	}
 	s.ID = env.ID
