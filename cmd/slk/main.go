@@ -617,7 +617,12 @@ func run() error {
 		app.SetMessageEditor(func(channelID, ts, text string) tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			err := client.EditMessage(ctx, channelID, ts, text)
+			// EditMessage returns the converted mrkdwn but we ignore
+			// it here: the message_changed WS echo updates the local
+			// copy with the server-stored text via UpdateMessageInPlace
+			// (internal/ui/app.go:1382). MessageEditedMsg only carries
+			// success/fail status.
+			_, err := client.EditMessage(ctx, channelID, ts, text)
 			if err != nil {
 				log.Printf("Warning: failed to edit message %s/%s: %v", channelID, ts, err)
 			}

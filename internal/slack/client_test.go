@@ -1226,3 +1226,30 @@ func TestSendReply_BuildsRichTextBlock(t *testing.T) {
 		t.Errorf("thread_ts = %q, want parent ts", form.Get("thread_ts"))
 	}
 }
+
+func TestEditMessage_BuildsRichTextBlock(t *testing.T) {
+	api, getForm, closeFn := newTestSlackAPI(t, `{"ok":true,"channel":"C1","ts":"1700000000.000100","text":"*new* text"}`)
+	defer closeFn()
+	c := &Client{api: api}
+
+	sentMrkdwn, err := c.EditMessage(context.Background(), "C1", "1700000000.000100", "**new** text")
+	if err != nil {
+		t.Fatalf("EditMessage: %v", err)
+	}
+	if sentMrkdwn != "*new* text" {
+		t.Errorf("sentMrkdwn = %q", sentMrkdwn)
+	}
+	form := getForm()
+	if form.Get("text") != "*new* text" {
+		t.Errorf("wire text = %q", form.Get("text"))
+	}
+	if form.Get("ts") != "1700000000.000100" {
+		t.Errorf("ts = %q", form.Get("ts"))
+	}
+	if form.Get("channel") != "C1" {
+		t.Errorf("channel = %q", form.Get("channel"))
+	}
+	if form.Get("blocks") == "" {
+		t.Error("blocks form value empty; expected rich_text block")
+	}
+}

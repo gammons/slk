@@ -710,13 +710,21 @@ func (c *Client) GetReplies(ctx context.Context, channelID, threadTS string) ([]
 	return allMessages, nil
 }
 
-// EditMessage updates an existing message's text.
-func (c *Client) EditMessage(ctx context.Context, channelID, ts, text string) error {
-	_, _, _, err := c.api.UpdateMessage(channelID, ts, slack.MsgOptionText(text, false))
-	if err != nil {
-		return fmt.Errorf("editing message: %w", err)
+// EditMessage updates an existing message's text. Returns the
+// converted mrkdwn text that was sent (callers may use it for
+// optimistic display, but the message-changed WS echo is the
+// authoritative source of truth for the displayed body).
+func (c *Client) EditMessage(ctx context.Context, channelID, ts, text string) (string, error) {
+	mr, block := mrkdwn.Convert(text)
+	opts := []slack.MsgOption{slack.MsgOptionText(mr, false)}
+	if block != nil {
+		opts = append(opts, slack.MsgOptionBlocks(block))
 	}
-	return nil
+	_, _, _, err := c.api.UpdateMessage(channelID, ts, opts...)
+	if err != nil {
+		return "", fmt.Errorf("editing message: %w", err)
+	}
+	return mr, nil
 }
 
 // RemoveMessage deletes a message from the channel.
