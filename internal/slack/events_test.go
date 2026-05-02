@@ -2,6 +2,8 @@ package slackclient
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -30,6 +32,13 @@ type mockEventHandler struct {
 
 	lastConversationOpenedID string
 	lastConversationOpenedCh slack.Channel
+
+	sectionUpserted               *ChannelSectionUpserted
+	sectionDeletedID              string
+	sectionChannelsAddedSection   string
+	sectionChannelsAdded          []string
+	sectionChannelsRemovedSection string
+	sectionChannelsRemoved        []string
 }
 
 type channelMarkRecord struct {
@@ -85,6 +94,21 @@ func (m *mockEventHandler) OnThreadMarked(channelID, threadTS, ts string, read b
 func (m *mockEventHandler) OnConversationOpened(ch slack.Channel) {
 	m.lastConversationOpenedID = ch.ID
 	m.lastConversationOpenedCh = ch
+}
+
+func (m *mockEventHandler) OnChannelSectionUpserted(ev ChannelSectionUpserted) {
+	m.sectionUpserted = &ev
+}
+func (m *mockEventHandler) OnChannelSectionDeleted(sectionID string) {
+	m.sectionDeletedID = sectionID
+}
+func (m *mockEventHandler) OnChannelSectionChannelsUpserted(sectionID string, channelIDs []string) {
+	m.sectionChannelsAddedSection = sectionID
+	m.sectionChannelsAdded = channelIDs
+}
+func (m *mockEventHandler) OnChannelSectionChannelsRemoved(sectionID string, channelIDs []string) {
+	m.sectionChannelsRemovedSection = sectionID
+	m.sectionChannelsRemoved = channelIDs
 }
 
 func TestEventHandlerInterface(t *testing.T) {
@@ -490,5 +514,62 @@ func TestDispatch_ChannelJoined(t *testing.T) {
 	dispatchWebSocketEvent(payload, h)
 	if h.lastConversationOpenedID != "C1" {
 		t.Errorf("OnConversationOpened not called or wrong ID; got %q", h.lastConversationOpenedID)
+	}
+}
+
+func TestDispatch_ChannelSectionUpserted(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "ws_section_upserted.json"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	h := &mockEventHandler{}
+	dispatchWebSocketEvent(data, h)
+	if h.sectionUpserted == nil {
+		t.Fatalf("handler not called")
+	}
+	if h.sectionUpserted.ID != "L0B12LBBCTD" || h.sectionUpserted.Type != "standard" {
+		t.Errorf("got %+v", h.sectionUpserted)
+	}
+}
+
+func TestDispatch_ChannelSectionDeleted(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "ws_section_deleted.json"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	h := &mockEventHandler{}
+	dispatchWebSocketEvent(data, h)
+	if h.sectionDeletedID != "L0B12L90PLK" {
+		t.Errorf("sectionDeletedID = %q", h.sectionDeletedID)
+	}
+}
+
+func TestDispatch_ChannelsUpserted(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "ws_channels_upserted.json"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	h := &mockEventHandler{}
+	dispatchWebSocketEvent(data, h)
+	if h.sectionChannelsAddedSection != "L0B1709V0LE" {
+		t.Errorf("section = %q", h.sectionChannelsAddedSection)
+	}
+	if len(h.sectionChannelsAdded) != 1 || h.sectionChannelsAdded[0] != "D09R4P6G6QL" {
+		t.Errorf("channels = %v", h.sectionChannelsAdded)
+	}
+}
+
+func TestDispatch_ChannelsRemoved(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "ws_channels_removed.json"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	h := &mockEventHandler{}
+	dispatchWebSocketEvent(data, h)
+	if h.sectionChannelsRemovedSection != "L0B1709V0LE" {
+		t.Errorf("section = %q", h.sectionChannelsRemovedSection)
+	}
+	if len(h.sectionChannelsRemoved) != 1 || h.sectionChannelsRemoved[0] != "C0AR3C3HMJT" {
+		t.Errorf("channels = %v", h.sectionChannelsRemoved)
 	}
 }

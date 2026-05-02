@@ -52,6 +52,20 @@ type EventHandler interface {
 	// payload is forwarded so the receiver can construct a sidebar item
 	// without an extra conversations.info round-trip.
 	OnConversationOpened(channel slack.Channel)
+
+	// OnChannelSectionUpserted is called for channel_section_upserted
+	// WS events: section create, rename, reorder, or emoji change.
+	OnChannelSectionUpserted(ev ChannelSectionUpserted)
+	// OnChannelSectionDeleted is called for channel_section_deleted.
+	OnChannelSectionDeleted(sectionID string)
+	// OnChannelSectionChannelsUpserted is called for
+	// channel_sections_channels_upserted: one or more channels added
+	// to the named section. A channel previously in another section
+	// is implicitly moved.
+	OnChannelSectionChannelsUpserted(sectionID string, channelIDs []string)
+	// OnChannelSectionChannelsRemoved is called for
+	// channel_sections_channels_removed.
+	OnChannelSectionChannelsRemoved(sectionID string, channelIDs []string)
 }
 
 // wsEvent is the minimal structure for identifying a WebSocket event type.
@@ -268,6 +282,34 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			return
 		}
 		handler.OnUserTyping(evt.Channel, evt.User)
+
+	case "channel_section_upserted":
+		var raw wsChannelSectionUpserted
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return
+		}
+		handler.OnChannelSectionUpserted(raw.toUpserted())
+
+	case "channel_section_deleted":
+		var raw wsChannelSectionDeleted
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return
+		}
+		handler.OnChannelSectionDeleted(raw.ID)
+
+	case "channel_sections_channels_upserted":
+		var raw wsChannelSectionsChannelsDelta
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return
+		}
+		handler.OnChannelSectionChannelsUpserted(raw.SectionID, raw.ChannelIDs)
+
+	case "channel_sections_channels_removed":
+		var raw wsChannelSectionsChannelsDelta
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return
+		}
+		handler.OnChannelSectionChannelsRemoved(raw.SectionID, raw.ChannelIDs)
 
 	case "hello":
 		handler.OnConnect()

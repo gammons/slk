@@ -1983,6 +1983,22 @@ func (h *rtmEventHandler) OnConversationOpened(ch slack.Channel) {
 	})
 }
 
+// OnChannelSectionUpserted is a no-op stub. SectionStore wiring lands
+// in a follow-up task; right now this method exists solely to satisfy
+// the extended EventHandler interface.
+func (h *rtmEventHandler) OnChannelSectionUpserted(ev slackclient.ChannelSectionUpserted) {}
+
+// OnChannelSectionDeleted is a no-op stub; see OnChannelSectionUpserted.
+func (h *rtmEventHandler) OnChannelSectionDeleted(sectionID string) {}
+
+// OnChannelSectionChannelsUpserted is a no-op stub; see OnChannelSectionUpserted.
+func (h *rtmEventHandler) OnChannelSectionChannelsUpserted(sectionID string, channelIDs []string) {
+}
+
+// OnChannelSectionChannelsRemoved is a no-op stub; see OnChannelSectionUpserted.
+func (h *rtmEventHandler) OnChannelSectionChannelsRemoved(sectionID string, channelIDs []string) {
+}
+
 // listWorkspaces prints the configured workspaces with their TeamID and
 // Name, one per line. Useful for users who want to hand-edit per-workspace
 // settings in config.toml.
