@@ -236,19 +236,28 @@ func (w *walker) walkAsteriskLiteral(n *ast.Emphasis) {
 
 // handleLink emits a CommonMark [label](url) as Slack mrkdwn
 // <url|label> and a RichTextSectionLinkElement in the block.
+//
+// If the URL contains '|', we emit the bare-URL form <url> on the
+// mrkdwn side (Slack's wire format has no escape mechanism for pipes
+// in URLs; with a label, the parser would split on the first pipe
+// and produce a wrong URL). The block element still carries URL and
+// label as separate fields, so block-rendering Slack clients see the
+// labeled link correctly.
 func (w *walker) handleLink(n *ast.Link) {
 	url := string(n.Destination)
-
-	// Build the label by walking children into a temporary string
-	// builder so we can use it both for the mrkdwn '<url|label>'
-	// form and the link element's Text field.
 	label := w.collectInlineText(n)
 
-	w.mrkdwn.WriteString("<")
-	w.mrkdwn.WriteString(url)
-	w.mrkdwn.WriteString("|")
-	w.mrkdwn.WriteString(label)
-	w.mrkdwn.WriteString(">")
+	if strings.Contains(url, "|") {
+		w.mrkdwn.WriteString("<")
+		w.mrkdwn.WriteString(url)
+		w.mrkdwn.WriteString(">")
+	} else {
+		w.mrkdwn.WriteString("<")
+		w.mrkdwn.WriteString(url)
+		w.mrkdwn.WriteString("|")
+		w.mrkdwn.WriteString(label)
+		w.mrkdwn.WriteString(">")
+	}
 
 	if w.curSection == nil {
 		w.curSection = slack.NewRichTextSection()

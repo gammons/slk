@@ -390,3 +390,78 @@ func TestConvert_LinkLabelEqualsURL(t *testing.T) {
 		t.Errorf("URL = %q", link.URL)
 	}
 }
+
+func TestConvert_LinkWithPipeInURL(t *testing.T) {
+	// URLs with '|' (e.g., tracking parameters) cannot use the
+	// <url|label> wire form because Slack's parser would split on
+	// the first pipe and corrupt the URL. We emit <url> only on the
+	// mrkdwn side; the block element still carries URL and label
+	// as separate fields.
+	mr, blk := Convert("[click](https://x.com?a=1|b=2)")
+	wantMr := "<https://x.com?a=1|b=2>"
+	if mr != wantMr {
+		t.Errorf("mrkdwn = %q, want %q (label dropped to avoid pipe corruption)", mr, wantMr)
+	}
+	link := blk.Elements[0].(*slack.RichTextSection).Elements[0].(*slack.RichTextSectionLinkElement)
+	if link.URL != "https://x.com?a=1|b=2" {
+		t.Errorf("block URL = %q, want full URL preserved", link.URL)
+	}
+	if link.Text != "click" {
+		t.Errorf("block label = %q, want %q", link.Text, "click")
+	}
+}
+
+func TestConvert_LinkLabelStripsFormatting(t *testing.T) {
+	// Slack's <url|label> wire form expects plain text after '|'.
+	// CommonMark allows formatting inside a link label, so we strip
+	// it: [**bold**](url) becomes <url|bold>, no asterisks.
+	mr, blk := Convert("[**bold**](https://x.com)")
+	wantMr := "<https://x.com|bold>"
+	if mr != wantMr {
+		t.Errorf("mrkdwn = %q, want %q", mr, wantMr)
+	}
+	link := blk.Elements[0].(*slack.RichTextSection).Elements[0].(*slack.RichTextSectionLinkElement)
+	if link.Text != "bold" {
+		t.Errorf("block label = %q, want %q", link.Text, "bold")
+	}
+}
+
+func TestConvert_LinkInsideBoldCarriesBoldStyle(t *testing.T) {
+	// **[link](url)** : the link element should inherit Bold style
+	// from the enclosing emphasis.
+	_, blk := Convert("**[click](https://x.com)**")
+	sec := blk.Elements[0].(*slack.RichTextSection)
+	for _, el := range sec.Elements {
+		if link, ok := el.(*slack.RichTextSectionLinkElement); ok {
+			if link.Style == nil || !link.Style.Bold {
+				t.Errorf("link style = %+v, want Bold=true", link.Style)
+			}
+			return
+		}
+	}
+	t.Error("did not find a link element")
+}
+
+func TestConvert_StrikethroughInsideBold(t *testing.T) {
+	// Verify ~~strike~~ nested in **bold** composes styles correctly.
+	mr, blk := Convert("**bold ~~strike~~ bold**")
+	wantMr := "*bold ~strike~ bold*"
+	if mr != wantMr {
+		t.Errorf("mrkdwn = %q, want %q", mr, wantMr)
+	}
+	sec := blk.Elements[0].(*slack.RichTextSection)
+	// Find the "strike" element and verify both Bold and Strike.
+	for _, el := range sec.Elements {
+		te, ok := el.(*slack.RichTextSectionTextElement)
+		if !ok {
+			continue
+		}
+		if te.Text == "strike" {
+			if te.Style == nil || !te.Style.Bold || !te.Style.Strike {
+				t.Errorf("'strike' style = %+v, want Bold+Strike", te.Style)
+			}
+			return
+		}
+	}
+	t.Error("did not find a 'strike' text element")
+}
