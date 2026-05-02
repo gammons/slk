@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gammons/slk/internal/slack/mrkdwn"
 	"github.com/gorilla/websocket"
 	"github.com/slack-go/slack"
 )
@@ -474,14 +475,21 @@ func (c *Client) ListCustomEmoji(ctx context.Context) (map[string]string, error)
 	return emojis, nil
 }
 
-// SendMessage posts a new message to the specified channel.
-// Returns the timestamp of the sent message.
-func (c *Client) SendMessage(ctx context.Context, channelID, text string) (string, error) {
-	_, ts, err := c.api.PostMessage(channelID, slack.MsgOptionText(text, false))
-	if err != nil {
-		return "", fmt.Errorf("sending message: %w", err)
+// SendMessage posts a new message to the specified channel. Returns
+// the timestamp and the converted mrkdwn text actually sent (callers
+// use this for optimistic display so it matches what other Slack
+// clients will render).
+func (c *Client) SendMessage(ctx context.Context, channelID, text string) (string, string, error) {
+	mr, block := mrkdwn.Convert(text)
+	opts := []slack.MsgOption{slack.MsgOptionText(mr, false)}
+	if block != nil {
+		opts = append(opts, slack.MsgOptionBlocks(block))
 	}
-	return ts, nil
+	_, ts, err := c.api.PostMessage(channelID, opts...)
+	if err != nil {
+		return "", "", fmt.Errorf("sending message: %w", err)
+	}
+	return ts, mr, nil
 }
 
 // UploadFile uploads a single file to a channel (and optional thread)

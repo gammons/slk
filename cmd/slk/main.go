@@ -593,7 +593,7 @@ func run() error {
 
 		app.SetMessageSender(func(channelID, text string) tea.Msg {
 			ctx := context.Background()
-			ts, err := client.SendMessage(ctx, channelID, text)
+			ts, sentMrkdwn, err := client.SendMessage(ctx, channelID, text)
 			if err != nil {
 				log.Printf("Warning: failed to send message: %v", err)
 				return nil
@@ -608,7 +608,7 @@ func run() error {
 					TS:        ts,
 					UserID:    client.UserID(),
 					UserName:  userName,
-					Text:      text,
+					Text:      sentMrkdwn,
 					Timestamp: formatTimestamp(ts, tsFormat),
 				},
 			}

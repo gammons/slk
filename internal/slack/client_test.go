@@ -24,6 +24,110 @@ func TestNewClient(t *testing.T) {
 	}
 }
 
+// newTestSlackAPI returns a real *slack.Client wired to a captured
+// httptest.Server, plus a closure to inspect the most recent request's
+// form values. Use this when tests need to verify the actual wire-form
+// payload (especially blocks, which slack-go only serialises inside
+// the request pipeline, NOT inside UnsafeApplyMsgOptions).
+//
+// The server returns a successful chat.postMessage response by default.
+// Pass a non-empty resp to override the response body.
+func newTestSlackAPI(t *testing.T, resp string) (*slack.Client, func() url.Values, func()) {
+	t.Helper()
+	if resp == "" {
+		resp = `{"ok":true,"ts":"1700000000.000100","channel":"C1"}`
+	}
+	var lastForm url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("ParseForm: %v", err)
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		lastForm = r.Form
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, resp)
+	}))
+	api := slack.New("xoxc-test", slack.OptionAPIURL(srv.URL+"/"))
+	return api, func() url.Values { return lastForm }, srv.Close
+}
+
+func TestSendMessage_BuildsRichTextBlock(t *testing.T) {
+	api, getForm, closeFn := newTestSlackAPI(t, "")
+	defer closeFn()
+	c := &Client{api: api}
+
+	ts, sentMrkdwn, err := c.SendMessage(context.Background(), "C1", "**hello** world")
+	if err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	if ts != "1700000000.000100" {
+		t.Errorf("ts = %q, want canned timestamp", ts)
+	}
+	if sentMrkdwn != "*hello* world" {
+		t.Errorf("sentMrkdwn = %q, want %q", sentMrkdwn, "*hello* world")
+	}
+	form := getForm()
+	if got := form.Get("channel"); got != "C1" {
+		t.Errorf("channel = %q, want C1", got)
+	}
+	if got := form.Get("text"); got != "*hello* world" {
+		t.Errorf("wire text = %q, want %q", got, "*hello* world")
+	}
+	blocksJSON := form.Get("blocks")
+	if blocksJSON == "" {
+		t.Fatal("blocks form value is empty; expected serialised rich_text block")
+	}
+	if !strings.Contains(blocksJSON, `"type":"rich_text"`) {
+		t.Errorf("blocks JSON does not contain rich_text type: %s", blocksJSON)
+	}
+	// Loose check: the bold word should appear with bold style
+	if !strings.Contains(blocksJSON, `"bold":true`) {
+		t.Errorf("blocks JSON does not contain bold style: %s", blocksJSON)
+	}
+}
+
+func TestSendMessage_PlainTextSendsBothTextAndBlocks(t *testing.T) {
+	// Even plain text gets a rich_text block (uniform wire shape).
+	api, getForm, closeFn := newTestSlackAPI(t, "")
+	defer closeFn()
+	c := &Client{api: api}
+
+	_, mr, err := c.SendMessage(context.Background(), "C1", "hello")
+	if err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	if mr != "hello" {
+		t.Errorf("mrkdwn = %q", mr)
+	}
+	form := getForm()
+	if form.Get("text") != "hello" {
+		t.Errorf("wire text = %q", form.Get("text"))
+	}
+	if form.Get("blocks") == "" {
+		t.Error("blocks form value empty; want a rich_text block even for plain text")
+	}
+}
+
+func TestSendMessage_EmptyTextSendsNoBlocks(t *testing.T) {
+	// Empty input should produce empty mrkdwn and no blocks.
+	api, getForm, closeFn := newTestSlackAPI(t, "")
+	defer closeFn()
+	c := &Client{api: api}
+
+	_, mr, _ := c.SendMessage(context.Background(), "C1", "")
+	if mr != "" {
+		t.Errorf("mrkdwn = %q, want empty", mr)
+	}
+	form := getForm()
+	if form.Get("text") != "" {
+		t.Errorf("text = %q, want empty", form.Get("text"))
+	}
+	if form.Get("blocks") != "" {
+		t.Errorf("blocks = %q, want empty", form.Get("blocks"))
+	}
+}
+
 // mockSlackAPI implements SlackAPI for testing.
 // Function fields allow tests to override default behavior.
 type mockSlackAPI struct {
