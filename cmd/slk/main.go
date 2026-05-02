@@ -2065,6 +2065,14 @@ func dumpSections() error {
 		} else {
 			fmt.Println(string(raw))
 		}
+		// Detect pagination truncation. GetChannelSectionsRaw is intentionally
+		// first-page-only for the diagnostic; warn so the user knows.
+		var trunc struct {
+			Cursor string `json:"cursor"`
+		}
+		if err := json.Unmarshal(raw, &trunc); err == nil && trunc.Cursor != "" {
+			fmt.Fprintf(os.Stderr, "  warning: response cursor=%q; additional sections beyond first page were not fetched\n", trunc.Cursor)
+		}
 		fmt.Println()
 	}
 	return nil

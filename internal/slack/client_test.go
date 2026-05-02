@@ -913,8 +913,85 @@ func TestGetChannelSections_UsesAPIBaseURL(t *testing.T) {
 	if s.ID != "L1" || s.Name != "Engineering" || s.Type != "standard" {
 		t.Errorf("section = %+v", s)
 	}
-	if len(s.ChannelIDs) != 2 || s.ChannelIDs[0] != "C1" {
+	if len(s.ChannelIDs) != 2 || s.ChannelIDs[0] != "C1" || s.ChannelIDs[1] != "C2" {
 		t.Errorf("ChannelIDs = %v", s.ChannelIDs)
+	}
+}
+
+func TestGetChannelSections_FollowsTopLevelCursor(t *testing.T) {
+	var calls int
+	var capturedCursors []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_ = r.ParseForm()
+		capturedCursors = append(capturedCursors, r.PostForm.Get("cursor"))
+		w.Header().Set("Content-Type", "application/json")
+		switch calls {
+		case 1:
+			// First page: returns cursor "P2".
+			_, _ = w.Write([]byte(`{
+				"ok": true,
+				"channel_sections": [
+					{
+						"channel_section_id": "L1",
+						"name": "First",
+						"type": "standard",
+						"emoji": "",
+						"next_channel_section_id": "L2",
+						"last_updated": 1700000000,
+						"channel_ids_page": {"channel_ids": [], "count": 0},
+						"is_redacted": false
+					}
+				],
+				"cursor": "P2"
+			}`))
+		case 2:
+			// Second page: cursor empty terminates loop.
+			_, _ = w.Write([]byte(`{
+				"ok": true,
+				"channel_sections": [
+					{
+						"channel_section_id": "L2",
+						"name": "Second",
+						"type": "standard",
+						"emoji": "",
+						"next_channel_section_id": null,
+						"last_updated": 1700000001,
+						"channel_ids_page": {"channel_ids": [], "count": 0},
+						"is_redacted": false
+					}
+				],
+				"cursor": ""
+			}`))
+		default:
+			t.Errorf("unexpected call %d", calls)
+		}
+	}))
+	defer srv.Close()
+
+	c := &Client{
+		token:      "xoxc-test",
+		cookie:     "d-cookie",
+		apiBaseURL: srv.URL + "/api/",
+	}
+	sections, err := c.GetChannelSections(context.Background())
+	if err != nil {
+		t.Fatalf("GetChannelSections: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("calls = %d, want 2", calls)
+	}
+	if len(sections) != 2 || sections[0].ID != "L1" || sections[1].ID != "L2" {
+		t.Errorf("sections = %+v, want L1 then L2", sections)
+	}
+	if len(capturedCursors) != 2 {
+		t.Fatalf("capturedCursors len = %d", len(capturedCursors))
+	}
+	if capturedCursors[0] != "" {
+		t.Errorf("first call cursor = %q, want empty", capturedCursors[0])
+	}
+	if capturedCursors[1] != "P2" {
+		t.Errorf("second call cursor = %q, want P2", capturedCursors[1])
 	}
 }
 

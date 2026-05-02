@@ -950,9 +950,13 @@ func (c *Client) GetChannelSections(ctx context.Context) ([]SidebarSection, erro
 			return nil, fmt.Errorf("parsing response: %w", err)
 		}
 		if !resp.OK {
-			return nil, fmt.Errorf("API error: %s", resp.Error)
+			return nil, fmt.Errorf("API error: %s (response: %s)", resp.Error, string(body))
 		}
 		all = append(all, resp.Sections...)
+		// Slack's documented contract is empty cursor on the last page.
+		// Bail also when the server echoes back the same cursor we just
+		// sent — defensive against server bugs that would otherwise infinite-loop
+		// against an undocumented endpoint.
 		if resp.Cursor == "" || resp.Cursor == cursor {
 			break
 		}
