@@ -2591,3 +2591,81 @@ func TestConversationOpenedMsg_InactiveWorkspaceIgnored(t *testing.T) {
 		}
 	}
 }
+
+// TestSelfSendInFlight_SuppressesEarlyWSEcho asserts that when a slk-
+// originated send has been marked in-flight for a channel, an
+// arriving WS echo from the same user is dropped. Without this guard,
+// the WS echo (with Slack's normalised text) would render briefly,
+// then flicker-replace with the optimistic version.
+//
+// Cross-session messages (where lastSelfSendByChannel is NOT updated
+// for that channel because the user sent from another tool) must
+// still pass through.
+func TestSelfSendInFlight_SuppressesEarlyWSEcho(t *testing.T) {
+	app := NewApp()
+	app.SetCurrentUserID("USELF")
+	app.activeChannelID = "C1"
+
+	// User submits a slk-originated send. SendMessageMsg dispatch
+	// records the in-flight timestamp.
+	app.Update(SendMessageMsg{ChannelID: "C1", Text: "Hello\nWorld"})
+
+	// Slack's WS echo arrives BEFORE chat.postMessage HTTP responds.
+	// Currently no MessageSentMsg has fired, so isSelfSent(ts) is false.
+	app.Update(NewMessageMsg{
+		ChannelID: "C1",
+		Message: messages.MessageItem{
+			TS: "1700000999.000001", UserID: "USELF", Text: "Hello World",
+		},
+	})
+
+	// The echo must NOT have been added yet — the optimistic path
+	// will add it later via UpsertSelfSent with the correct text.
+	if got := len(app.messagepane.Messages()); got != 0 {
+		t.Errorf("WS echo added before optimistic; got %d messages, want 0", got)
+	}
+
+	// Now MessageSentMsg arrives with the converted-mrkdwn text.
+	app.Update(MessageSentMsg{
+		ChannelID: "C1",
+		Message: messages.MessageItem{
+			TS: "1700000999.000001", UserID: "USELF", Text: "Hello\nWorld",
+		},
+	})
+
+	got := app.messagepane.Messages()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(got))
+	}
+	if got[0].Text != "Hello\nWorld" {
+		t.Errorf("Text = %q, want %q", got[0].Text, "Hello\nWorld")
+	}
+}
+
+// TestSelfSendInFlight_PassesThroughCrossSession asserts that a
+// WS echo for the current user that arrived with no slk-originated
+// send in flight (i.e. cross-session: the user sent from the
+// official Slack client) is still applied to the pane.
+func TestSelfSendInFlight_PassesThroughCrossSession(t *testing.T) {
+	app := NewApp()
+	app.SetCurrentUserID("USELF")
+	app.activeChannelID = "C1"
+
+	// No SendMessageMsg dispatched here — lastSelfSendByChannel["C1"]
+	// is unset. A WS echo from the user (e.g., they sent via the
+	// official Slack web client) must still render.
+	app.Update(NewMessageMsg{
+		ChannelID: "C1",
+		Message: messages.MessageItem{
+			TS: "1700000999.000002", UserID: "USELF", Text: "from another client",
+		},
+	})
+
+	got := app.messagepane.Messages()
+	if len(got) != 1 {
+		t.Fatalf("cross-session message dropped; got %d messages, want 1", len(got))
+	}
+	if got[0].Text != "from another client" {
+		t.Errorf("Text = %q", got[0].Text)
+	}
+}

@@ -710,3 +710,28 @@ func TestUpsertSelfSent_AppendsWhenNoExisting(t *testing.T) {
 		t.Errorf("SelectedIndex = %d, want 0", got)
 	}
 }
+
+// TestUpsertSelfSent_ReplaceTriggersResnap asserts that replacing an
+// existing message via UpsertSelfSent invalidates the snap-to-selected
+// anchor so View() re-pins yOffset to the now-larger entry. Without
+// this, the optimistic version's expanded body (e.g. multi-line list)
+// extends below the fold and the user has to scroll manually.
+func TestUpsertSelfSent_ReplaceTriggersResnap(t *testing.T) {
+	m := New(nil, "general")
+
+	// First call: append a 1-line WS-echo placeholder.
+	m.AppendMessage(MessageItem{TS: "1.0", UserName: "grant", Text: "Hello World", Timestamp: "12:21 PM"})
+
+	// Render once to establish snap state.
+	_ = m.View(20, 80)
+	if !m.hasSnapped {
+		t.Fatal("setup: expected hasSnapped=true after first View")
+	}
+
+	// Now upsert with the optimistic, taller body. The snap anchor
+	// should be invalidated so the next View re-pins to the bottom.
+	m.UpsertSelfSent(MessageItem{TS: "1.0", UserName: "grant", Text: "Hello\nWorld\nMore\nLines", Timestamp: "12:21 PM"})
+	if m.hasSnapped {
+		t.Errorf("UpsertSelfSent replace should clear hasSnapped; got hasSnapped=true")
+	}
+}

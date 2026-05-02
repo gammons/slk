@@ -575,6 +575,12 @@ func (m *Model) AppendMessage(msg MessageItem) {
 // rich_text_block messages), and our renderer only consults the
 // Text field, so without this fix multi-line composed messages
 // render horizontally when the WS echo races ahead.
+//
+// Replacement also invalidates the snap-to-selected anchor so View()
+// re-pins yOffset to the bottom: when the optimistic version's text
+// expands the message from a 1-line WS-echo placeholder to multiple
+// lines, the previously-selected last index now extends below the
+// fold and would otherwise stay clipped.
 func (m *Model) UpsertSelfSent(msg MessageItem) {
 	if msg.TS != "" {
 		for i := len(m.messages) - 1; i >= 0; i-- {
@@ -582,6 +588,10 @@ func (m *Model) UpsertSelfSent(msg MessageItem) {
 				m.messages[i] = msg
 				m.cache = nil
 				m.dirty()
+				// Force the next View() to re-snap yOffset to the
+				// updated selected entry's range, even when m.selected
+				// hasn't changed.
+				m.hasSnapped = false
 				return
 			}
 		}
