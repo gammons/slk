@@ -35,6 +35,12 @@ type ThemeColors struct {
 	RailBackground      string `toml:"rail_background"`
 	SelectionBackground string `toml:"selection_background"`
 	SelectionForeground string `toml:"selection_foreground"`
+	// ComposeInsertBG, SelectionBgFocused, and SelectionBgUnfocused are
+	// optional explicit overrides for the tints derived in tint.go. When
+	// empty, tint.go computes them from Accent/TextMuted+Background.
+	ComposeInsertBG      string `toml:"compose_insert_bg"`
+	SelectionBgFocused   string `toml:"selection_bg_focused"`
+	SelectionBgUnfocused string `toml:"selection_bg_unfocused"`
 }
 
 // builtinThemes maps lowercase theme names to their display name and colors.
