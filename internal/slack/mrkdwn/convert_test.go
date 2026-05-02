@@ -465,3 +465,66 @@ func TestConvert_StrikethroughInsideBold(t *testing.T) {
 	}
 	t.Error("did not find a 'strike' text element")
 }
+
+func TestConvert_UserMention(t *testing.T) {
+	mr, blk := Convert("hi <@U12345>!")
+	want := "hi <@U12345>!"
+	if mr != want {
+		t.Errorf("mrkdwn = %q, want %q", mr, want)
+	}
+	sec := blk.Elements[0].(*slack.RichTextSection)
+	if len(sec.Elements) != 3 {
+		t.Fatalf("got %d elements, want 3 (text, user, text)", len(sec.Elements))
+	}
+	user, ok := sec.Elements[1].(*slack.RichTextSectionUserElement)
+	if !ok {
+		t.Fatalf("middle is %T, want *RichTextSectionUserElement", sec.Elements[1])
+	}
+	if user.UserID != "U12345" {
+		t.Errorf("UserID = %q, want U12345", user.UserID)
+	}
+}
+
+func TestConvert_ChannelMention(t *testing.T) {
+	mr, blk := Convert("see <#C123|general> please")
+	if mr != "see <#C123|general> please" {
+		t.Errorf("mrkdwn = %q", mr)
+	}
+	ch := blk.Elements[0].(*slack.RichTextSection).Elements[1].(*slack.RichTextSectionChannelElement)
+	if ch.ChannelID != "C123" {
+		t.Errorf("ChannelID = %q, want C123", ch.ChannelID)
+	}
+}
+
+func TestConvert_Broadcast(t *testing.T) {
+	mr, blk := Convert("<!here> deploy now")
+	if mr != "<!here> deploy now" {
+		t.Errorf("mrkdwn = %q", mr)
+	}
+	bc := blk.Elements[0].(*slack.RichTextSection).Elements[0].(*slack.RichTextSectionBroadcastElement)
+	if bc.Range != "here" {
+		t.Errorf("Range = %q, want here", bc.Range)
+	}
+}
+
+func TestConvert_BoldContainingMention(t *testing.T) {
+	mr, blk := Convert("**Hi <@U1>**")
+	if mr != "*Hi <@U1>*" {
+		t.Errorf("mrkdwn = %q, want *Hi <@U1>*", mr)
+	}
+	sec := blk.Elements[0].(*slack.RichTextSection)
+	if len(sec.Elements) != 2 {
+		t.Fatalf("got %d elements, want 2 (text, user)", len(sec.Elements))
+	}
+	te := sec.Elements[0].(*slack.RichTextSectionTextElement)
+	if te.Text != "Hi " || te.Style == nil || !te.Style.Bold {
+		t.Errorf("text = %+v / %+v, want bold 'Hi '", te, te.Style)
+	}
+	user := sec.Elements[1].(*slack.RichTextSectionUserElement)
+	if user.UserID != "U1" {
+		t.Errorf("UserID = %q", user.UserID)
+	}
+	if user.Style == nil || !user.Style.Bold {
+		t.Errorf("user.Style = %+v, want bold inherited", user.Style)
+	}
+}

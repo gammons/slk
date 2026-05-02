@@ -314,17 +314,78 @@ func (w *walker) walkRawHTMLBlock(n *ast.HTMLBlock) {
 }
 
 // appendText writes s to both outputs with the current inherited
-// style. Empty s is a no-op.
+// style. Slack wire-form sentinels embedded in s are split out into
+// typed rich_text elements (user / channel / broadcast / link) and
+// restored to their original <...> form in the mrkdwn output.
 func (w *walker) appendText(s string) {
 	if s == "" {
 		return
 	}
+	// Mrkdwn side: write as-is. The detokenize pass at the end of
+	// Convert restores all sentinels in one go.
 	w.mrkdwn.WriteString(s)
+
+	// Block side: split on sentinels.
 	if w.curSection == nil {
 		w.curSection = slack.NewRichTextSection()
 	}
-	te := slack.NewRichTextSectionTextElement(s, w.copyStyle())
-	w.curSection.Elements = append(w.curSection.Elements, te)
+	i := 0
+	for i < len(s) {
+		idx, end, ok := parseSentinel(s, i)
+		if !ok {
+			// Find the next sentinel boundary (or end of string)
+			// and emit the run between [i, j) as a text element.
+			j := nextSentinelStart(s, i)
+			if j > i {
+				te := slack.NewRichTextSectionTextElement(s[i:j], w.copyStyle())
+				w.curSection.Elements = append(w.curSection.Elements, te)
+			}
+			i = j
+			continue
+		}
+		if idx >= 0 && idx < len(w.table) {
+			w.curSection.Elements = append(w.curSection.Elements, w.tokenElement(w.table[idx]))
+		} else {
+			// Out-of-range index, emit raw bytes.
+			te := slack.NewRichTextSectionTextElement(s[i:end], w.copyStyle())
+			w.curSection.Elements = append(w.curSection.Elements, te)
+		}
+		i = end
+	}
+}
+
+// nextSentinelStart returns the byte index of the next sentinelStart
+// rune in s at or after i, or len(s) if none.
+func nextSentinelStart(s string, i int) int {
+	idx := strings.IndexRune(s[i:], sentinelStart)
+	if idx < 0 {
+		return len(s)
+	}
+	return i + idx
+}
+
+// tokenElement converts a wire-form token into the corresponding
+// rich_text element with the current inherited style applied where
+// the schema supports a style.
+func (w *walker) tokenElement(t token) slack.RichTextSectionElement {
+	style := w.copyStyle()
+	switch t.kind {
+	case tokUser:
+		return slack.NewRichTextSectionUserElement(t.id, style)
+	case tokChannel:
+		return slack.NewRichTextSectionChannelElement(t.id, style)
+	case tokBroadcast:
+		// Broadcasts don't carry a style on the wire (slack-go's
+		// RichTextSectionBroadcastElement has no Style field).
+		return slack.NewRichTextSectionBroadcastElement(t.id)
+	case tokLink:
+		text := t.label
+		if text == "" {
+			text = t.id
+		}
+		return slack.NewRichTextSectionLinkElement(t.id, text, style)
+	}
+	return nil
 }
 
 // copyStyle returns a pointer to a copy of inheritedStyle, or nil if
