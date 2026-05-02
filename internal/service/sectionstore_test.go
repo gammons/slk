@@ -124,3 +124,143 @@ func TestSectionStore_NotReady_SectionForChannelFalse(t *testing.T) {
 		t.Errorf("ok=true on never-bootstrapped store")
 	}
 }
+
+func TestApplyUpsert_NewSection(t *testing.T) {
+	store := NewSectionStore()
+	c := &fakeSectionsClient{sections: []slk.SidebarSection{
+		{ID: "A", Type: "standard", Name: "A", LastUpdate: 100},
+	}}
+	_ = store.Bootstrap(context.Background(), c)
+
+	store.ApplyUpsert(slk.ChannelSectionUpserted{
+		ID: "B", Name: "Brand New", Type: "standard", Next: "", LastUpdate: 200,
+	})
+	got := store.OrderedSections()
+	// Both A and B exist now; the head is whichever isn't pointed at.
+	// A.Next="" (set in fixture), B.Next="" too — multiple heads.
+	// Our heuristic picks the highest LastUpdate.
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1 (multi-head heuristic picks newest)", len(got))
+	}
+	if got[0].ID != "B" {
+		t.Errorf("head = %q, want B (newer LastUpdate wins)", got[0].ID)
+	}
+}
+
+func TestApplyUpsert_RenameExistingByID(t *testing.T) {
+	store := NewSectionStore()
+	c := &fakeSectionsClient{sections: []slk.SidebarSection{
+		{ID: "A", Type: "standard", Name: "Old", Next: "", LastUpdate: 100},
+	}}
+	_ = store.Bootstrap(context.Background(), c)
+	store.ApplyUpsert(slk.ChannelSectionUpserted{
+		ID: "A", Name: "New", Type: "standard", Next: "", LastUpdate: 200,
+	})
+	got := store.OrderedSections()
+	if len(got) != 1 || got[0].Name != "New" {
+		t.Errorf("got %+v, want one section named New", got)
+	}
+}
+
+func TestApplyUpsert_StaleEventIgnored(t *testing.T) {
+	store := NewSectionStore()
+	c := &fakeSectionsClient{sections: []slk.SidebarSection{
+		{ID: "A", Type: "standard", Name: "Latest", Next: "", LastUpdate: 200},
+	}}
+	_ = store.Bootstrap(context.Background(), c)
+	// Older event arrives.
+	store.ApplyUpsert(slk.ChannelSectionUpserted{
+		ID: "A", Name: "Stale", Type: "standard", LastUpdate: 100,
+	})
+	got := store.OrderedSections()
+	if got[0].Name != "Latest" {
+		t.Errorf("name = %q, want Latest (stale event must be dropped)", got[0].Name)
+	}
+}
+
+func TestApplyDelete_RemovesSectionAndChannels(t *testing.T) {
+	store := NewSectionStore()
+	c := &fakeSectionsClient{sections: []slk.SidebarSection{
+		{ID: "A", Type: "standard", Name: "A", Next: "", LastUpdate: 100, ChannelIDs: []string{"C1"}, ChannelsCount: 1},
+	}}
+	_ = store.Bootstrap(context.Background(), c)
+	store.ApplyDelete("A")
+	if _, ok := store.SectionForChannel("C1"); ok {
+		t.Errorf("channel still mapped after section delete")
+	}
+	if got := store.OrderedSections(); len(got) != 0 {
+		t.Errorf("len = %d, want 0", len(got))
+	}
+}
+
+func TestApplyChannelsAdded_UpdatesIndex(t *testing.T) {
+	store := NewSectionStore()
+	c := &fakeSectionsClient{sections: []slk.SidebarSection{
+		{ID: "A", Type: "standard", Next: "", LastUpdate: 100},
+	}}
+	_ = store.Bootstrap(context.Background(), c)
+	store.ApplyChannelsAdded("A", []string{"C1", "C2"})
+	if id, ok := store.SectionForChannel("C1"); !ok || id != "A" {
+		t.Errorf("C1 → (%q,%v), want (A,true)", id, ok)
+	}
+	if id, ok := store.SectionForChannel("C2"); !ok || id != "A" {
+		t.Errorf("C2 → (%q,%v), want (A,true)", id, ok)
+	}
+}
+
+func TestApplyChannelsAdded_OverwritesPreviousSection(t *testing.T) {
+	// Channel moves from A to B via remove-then-add (Slack's pattern):
+	// upsert into B should replace its membership in A.
+	store := NewSectionStore()
+	c := &fakeSectionsClient{sections: []slk.SidebarSection{
+		{ID: "A", Type: "standard", Next: "B", LastUpdate: 100, ChannelIDs: []string{"C1"}, ChannelsCount: 1},
+		{ID: "B", Type: "standard", Next: "", LastUpdate: 100},
+	}}
+	_ = store.Bootstrap(context.Background(), c)
+	store.ApplyChannelsAdded("B", []string{"C1"})
+	if id, _ := store.SectionForChannel("C1"); id != "B" {
+		t.Errorf("C1 in %q, want B (add must overwrite)", id)
+	}
+}
+
+func TestApplyChannelsRemoved_DropsIndex(t *testing.T) {
+	store := NewSectionStore()
+	c := &fakeSectionsClient{sections: []slk.SidebarSection{
+		{ID: "A", Type: "standard", Next: "", LastUpdate: 100, ChannelIDs: []string{"C1"}, ChannelsCount: 1},
+	}}
+	_ = store.Bootstrap(context.Background(), c)
+	store.ApplyChannelsRemoved("A", []string{"C1"})
+	if _, ok := store.SectionForChannel("C1"); ok {
+		t.Errorf("C1 still mapped after removal")
+	}
+}
+
+func TestMaybeRebootstrap_DebouncedWithin30s(t *testing.T) {
+	store := NewSectionStore()
+	c := &fakeSectionsClient{sections: []slk.SidebarSection{
+		{ID: "A", Type: "standard", Next: "", LastUpdate: 100},
+	}}
+	if err := store.Bootstrap(context.Background(), c); err != nil {
+		t.Fatal(err)
+	}
+	// First call: too soon, skipped.
+	calledAgain := false
+	c2 := &fakeSectionsClient{sections: []slk.SidebarSection{
+		{ID: "B", Type: "standard", Next: "", LastUpdate: 200},
+	}}
+	wrap := &countingClient{inner: c2, onCall: func() { calledAgain = true }}
+	store.MaybeRebootstrap(context.Background(), wrap)
+	if calledAgain {
+		t.Errorf("MaybeRebootstrap should be debounced within 30s")
+	}
+}
+
+type countingClient struct {
+	inner  SectionsClient
+	onCall func()
+}
+
+func (cc *countingClient) GetChannelSections(ctx context.Context) ([]slk.SidebarSection, error) {
+	cc.onCall()
+	return cc.inner.GetChannelSections(ctx)
+}

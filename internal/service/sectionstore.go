@@ -169,3 +169,128 @@ func includeInSidebar(sec *slk.SidebarSection) bool {
 		return false
 	}
 }
+
+// ApplyUpsert applies a channel_section_upserted WS event (also used
+// for create / rename / reorder / emoji change). Last-write-wins by
+// LastUpdate: stale events are dropped.
+func (s *SectionStore) ApplyUpsert(ev slk.ChannelSectionUpserted) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.ready {
+		return
+	}
+	if existing, ok := s.sectionsByID[ev.ID]; ok && ev.LastUpdate < existing.LastUpdate {
+		return
+	}
+	prev := s.sectionsByID[ev.ID]
+	sec := &slk.SidebarSection{
+		ID:         ev.ID,
+		Name:       ev.Name,
+		Type:       ev.Type,
+		Emoji:      ev.Emoji,
+		Next:       ev.Next,
+		LastUpdate: ev.LastUpdate,
+		IsRedacted: ev.IsRedacted,
+	}
+	if prev != nil {
+		// Preserve channel membership; upsert events don't carry it.
+		sec.ChannelIDs = prev.ChannelIDs
+		sec.ChannelsCount = prev.ChannelsCount
+	}
+	s.sectionsByID[ev.ID] = sec
+}
+
+// ApplyDelete applies a channel_section_deleted WS event.
+func (s *SectionStore) ApplyDelete(sectionID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.ready {
+		return
+	}
+	delete(s.sectionsByID, sectionID)
+	for ch, sec := range s.channelToSection {
+		if sec == sectionID {
+			delete(s.channelToSection, ch)
+		}
+	}
+}
+
+// ApplyChannelsAdded applies a channel_sections_channels_upserted WS event.
+// A channel can only belong to one section, so adding to section X
+// implicitly removes it from any prior section in our index.
+func (s *SectionStore) ApplyChannelsAdded(sectionID string, channelIDs []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.ready {
+		return
+	}
+	sec, ok := s.sectionsByID[sectionID]
+	if !ok {
+		// Section we don't know about yet; skip — bootstrap or upsert
+		// will reconcile.
+		return
+	}
+	added := map[string]bool{}
+	for _, ch := range sec.ChannelIDs {
+		added[ch] = true
+	}
+	for _, ch := range channelIDs {
+		if !added[ch] {
+			sec.ChannelIDs = append(sec.ChannelIDs, ch)
+			added[ch] = true
+		}
+		// Remove from any other section's ChannelIDs.
+		if prevSec, prev := s.channelToSection[ch]; prev && prevSec != sectionID {
+			if old, ok := s.sectionsByID[prevSec]; ok {
+				filtered := old.ChannelIDs[:0]
+				for _, x := range old.ChannelIDs {
+					if x != ch {
+						filtered = append(filtered, x)
+					}
+				}
+				old.ChannelIDs = filtered
+			}
+		}
+		s.channelToSection[ch] = sectionID
+	}
+}
+
+// ApplyChannelsRemoved applies a channel_sections_channels_removed WS event.
+func (s *SectionStore) ApplyChannelsRemoved(sectionID string, channelIDs []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.ready {
+		return
+	}
+	sec, ok := s.sectionsByID[sectionID]
+	if !ok {
+		return
+	}
+	dropped := map[string]bool{}
+	for _, ch := range channelIDs {
+		dropped[ch] = true
+		if cur, ok := s.channelToSection[ch]; ok && cur == sectionID {
+			delete(s.channelToSection, ch)
+		}
+	}
+	filtered := sec.ChannelIDs[:0]
+	for _, ch := range sec.ChannelIDs {
+		if !dropped[ch] {
+			filtered = append(filtered, ch)
+		}
+	}
+	sec.ChannelIDs = filtered
+}
+
+// MaybeRebootstrap re-runs Bootstrap when the previous successful one was
+// more than 30 seconds ago. Cheap insurance against missed events during
+// disconnects without thundering during a flapping connection.
+func (s *SectionStore) MaybeRebootstrap(ctx context.Context, client SectionsClient) error {
+	s.mu.RLock()
+	last := s.lastBootstrap
+	s.mu.RUnlock()
+	if !last.IsZero() && time.Since(last) < 30*time.Second {
+		return nil
+	}
+	return s.Bootstrap(ctx, client)
+}
