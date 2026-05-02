@@ -1,0 +1,130 @@
+{
+  "ok": true,
+  "channel_sections": [
+    {
+      "channel_section_id": "L08B64V3K9C",
+      "name": "",
+      "type": "stars",
+      "emoji": "",
+      "next_channel_section_id": "L08AY7DQLMD",
+      "last_updated": 1757371630,
+      "channel_ids_page": {
+        "channel_ids": [],
+        "count": 0
+      },
+      "is_redacted": false
+    },
+    {
+      "channel_section_id": "L08AY7DQLMD",
+      "name": "Slack Connect",
+      "type": "slack_connect",
+      "emoji": "",
+      "next_channel_section_id": "L0B1709V0LE",
+      "last_updated": 1777720341,
+      "channel_ids_page": {
+        "channel_ids": [],
+        "count": 0
+      },
+      "is_redacted": false
+    },
+    {
+      "channel_section_id": "L0B1709V0LE",
+      "name": "automated22",
+      "type": "standard",
+      "emoji": "",
+      "next_channel_section_id": "L0B12LBBCTD",
+      "last_updated": 1777720328,
+      "channel_ids_page": {
+        "channel_ids": [
+          "C054JFCBN69",
+          "D09R4P6G6QL"
+        ],
+        "count": 2,
+        "cursor": "D09R4P6G6QL"
+      },
+      "is_redacted": false
+    },
+    {
+      "channel_section_id": "L0B12LBBCTD",
+      "name": "test2",
+      "type": "standard",
+      "emoji": "",
+      "next_channel_section_id": "L08BCNXM15Y",
+      "last_updated": 1777720183,
+      "channel_ids_page": {
+        "channel_ids": [],
+        "count": 0
+      },
+      "is_redacted": false
+    },
+    {
+      "channel_section_id": "L08BCNXM15Y",
+      "name": "Channels",
+      "type": "channels",
+      "emoji": "",
+      "next_channel_section_id": "L08C1HMAA8Y",
+      "last_updated": 1738491116,
+      "channel_ids_page": {
+        "channel_ids": [],
+        "count": 0
+      },
+      "is_redacted": false
+    },
+    {
+      "channel_section_id": "L08C1HMAA8Y",
+      "name": "Direct Messages",
+      "type": "direct_messages",
+      "emoji": "",
+      "next_channel_section_id": "L08B9U0TRJ9",
+      "last_updated": 1738491116,
+      "channel_ids_page": {
+        "channel_ids": [],
+        "count": 0
+      },
+      "is_redacted": false
+    },
+    {
+      "channel_section_id": "L08B9U0TRJ9",
+      "name": "Recent Apps",
+      "type": "recent_apps",
+      "emoji": "",
+      "next_channel_section_id": "L08BCLFET7V",
+      "last_updated": 1738491116,
+      "channel_ids_page": {
+        "channel_ids": [],
+        "count": 0
+      },
+      "is_redacted": false
+    },
+    {
+      "channel_section_id": "L08BCLFET7V",
+      "name": "Salesforce",
+      "type": "salesforce_records",
+      "emoji": "salesforce",
+      "next_channel_section_id": "L08M7SCUY67",
+      "last_updated": 1744053352,
+      "channel_ids_page": {
+        "channel_ids": [],
+        "count": 0
+      },
+      "is_redacted": false
+    },
+    {
+      "channel_section_id": "L08M7SCUY67",
+      "name": "Agents",
+      "type": "agents",
+      "emoji": "",
+      "next_channel_section_id": null,
+      "last_updated": 1744053352,
+      "channel_ids_page": {
+        "channel_ids": [],
+        "count": 0
+      },
+      "is_redacted": false
+    }
+  ],
+  "last_updated": 1777720341,
+  "count": 9,
+  "cursor": "L08M7SCUY67",
+  "entities": []
+}
