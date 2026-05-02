@@ -5,6 +5,7 @@ import (
 
 	"github.com/slack-go/slack"
 	"github.com/yuin/goldmark/ast"
+	extensionAST "github.com/yuin/goldmark/extension/ast"
 )
 
 // walker accumulates two parallel outputs as it walks a goldmark AST:
@@ -115,9 +116,25 @@ func (w *walker) walkInline(n ast.Node) {
 		} else {
 			w.walkAsteriskLiteral(n)
 		}
+	case *ast.CodeSpan:
+		w.mrkdwn.WriteString("`")
+		prev := w.inheritedStyle
+		w.inheritedStyle.Code = true
+		w.walkInlineChildren(n)
+		w.inheritedStyle = prev
+		w.mrkdwn.WriteString("`")
+	case *ast.Link:
+		w.handleLink(n)
+	case *extensionAST.Strikethrough:
+		w.mrkdwn.WriteString("~")
+		prev := w.inheritedStyle
+		w.inheritedStyle.Strike = true
+		w.walkInlineChildren(n)
+		w.inheritedStyle = prev
+		w.mrkdwn.WriteString("~")
 	default:
-		// Other inline nodes (CodeSpan, Link, etc.) are handled in
-		// later tasks. Walk children to preserve text.
+		// Other inline nodes are handled in later tasks. Walk
+		// children to preserve text.
 		w.walkInlineChildren(n)
 	}
 }
@@ -215,6 +232,51 @@ func (w *walker) walkAsteriskLiteral(n *ast.Emphasis) {
 	w.appendText("*")
 	w.walkInlineChildren(n)
 	w.appendText("*")
+}
+
+// handleLink emits a CommonMark [label](url) as Slack mrkdwn
+// <url|label> and a RichTextSectionLinkElement in the block.
+func (w *walker) handleLink(n *ast.Link) {
+	url := string(n.Destination)
+
+	// Build the label by walking children into a temporary string
+	// builder so we can use it both for the mrkdwn '<url|label>'
+	// form and the link element's Text field.
+	label := w.collectInlineText(n)
+
+	w.mrkdwn.WriteString("<")
+	w.mrkdwn.WriteString(url)
+	w.mrkdwn.WriteString("|")
+	w.mrkdwn.WriteString(label)
+	w.mrkdwn.WriteString(">")
+
+	if w.curSection == nil {
+		w.curSection = slack.NewRichTextSection()
+	}
+	link := slack.NewRichTextSectionLinkElement(url, label, w.copyStyle())
+	w.curSection.Elements = append(w.curSection.Elements, link)
+}
+
+// collectInlineText concatenates the text content of n's children,
+// stripping inline formatting markers. Used for link labels where
+// Slack's wire form expects plain text after the '|'.
+func (w *walker) collectInlineText(n ast.Node) string {
+	var b strings.Builder
+	var walk func(ast.Node)
+	walk = func(c ast.Node) {
+		if t, ok := c.(*ast.Text); ok {
+			b.Write(w.source[t.Segment.Start:t.Segment.Stop])
+			return
+		}
+		for cc := c.FirstChild(); cc != nil; cc = cc.NextSibling() {
+			walk(cc)
+		}
+	}
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		walk(c)
+	}
+	// Restore Slack wire-form tokens that may live inside the label.
+	return detokenizeText(b.String(), w.table)
 }
 
 // walkRawHTMLBlock preserves block-level HTML as literal text. Goldmark

@@ -332,3 +332,61 @@ func TestConvert_ItalicContainingBold(t *testing.T) {
 	}
 	t.Error("did not find a 'y' text element")
 }
+
+func TestConvert_Strikethrough(t *testing.T) {
+	mr, blk := Convert("~~done~~")
+	if mr != "~done~" {
+		t.Errorf("mrkdwn = %q, want ~done~", mr)
+	}
+	te := blk.Elements[0].(*slack.RichTextSection).Elements[0].(*slack.RichTextSectionTextElement)
+	if te.Text != "done" || te.Style == nil || !te.Style.Strike {
+		t.Errorf("got %+v / %+v, want strike=true on 'done'", te, te.Style)
+	}
+}
+
+func TestConvert_InlineCode(t *testing.T) {
+	mr, blk := Convert("type `make build` to compile")
+	want := "type `make build` to compile"
+	if mr != want {
+		t.Errorf("mrkdwn = %q, want %q", mr, want)
+	}
+	sec := blk.Elements[0].(*slack.RichTextSection)
+	if len(sec.Elements) != 3 {
+		t.Fatalf("got %d elements, want 3 (text, code, text)", len(sec.Elements))
+	}
+	mid := sec.Elements[1].(*slack.RichTextSectionTextElement)
+	if mid.Text != "make build" || mid.Style == nil || !mid.Style.Code {
+		t.Errorf("middle = %+v / %+v, want code 'make build'", mid, mid.Style)
+	}
+}
+
+func TestConvert_LinkLabeled(t *testing.T) {
+	mr, blk := Convert("see [Slack](https://slack.com) docs")
+	want := "see <https://slack.com|Slack> docs"
+	if mr != want {
+		t.Errorf("mrkdwn = %q, want %q", mr, want)
+	}
+	sec := blk.Elements[0].(*slack.RichTextSection)
+	if len(sec.Elements) != 3 {
+		t.Fatalf("got %d elements, want 3 (text, link, text)", len(sec.Elements))
+	}
+	link, ok := sec.Elements[1].(*slack.RichTextSectionLinkElement)
+	if !ok {
+		t.Fatalf("middle element is %T, want *RichTextSectionLinkElement", sec.Elements[1])
+	}
+	if link.URL != "https://slack.com" || link.Text != "Slack" {
+		t.Errorf("link = %+v", link)
+	}
+}
+
+func TestConvert_LinkLabelEqualsURL(t *testing.T) {
+	mr, blk := Convert("see [https://x.com](https://x.com)")
+	want := "see <https://x.com|https://x.com>"
+	if mr != want {
+		t.Errorf("mrkdwn = %q, want %q", mr, want)
+	}
+	link := blk.Elements[0].(*slack.RichTextSection).Elements[1].(*slack.RichTextSectionLinkElement)
+	if link.URL != "https://x.com" {
+		t.Errorf("URL = %q", link.URL)
+	}
+}
