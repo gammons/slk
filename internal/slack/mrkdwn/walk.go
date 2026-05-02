@@ -60,6 +60,10 @@ func (w *walker) walkBlock(n ast.Node) {
 		w.walkRawHTMLBlock(n)
 	case *ast.List:
 		w.walkList(n, 0)
+	case *ast.FencedCodeBlock:
+		w.walkCodeBlock(n)
+	case *ast.CodeBlock:
+		w.walkCodeBlock(n)
 	default:
 		// Other block types (List, FencedCodeBlock, Heading, Blockquote)
 		// will be handled in later tasks. For now, walk children as
@@ -405,6 +409,34 @@ func (w *walker) walkRawHTMLBlock(n *ast.HTMLBlock) {
 	sec := slack.NewRichTextSection()
 	sec.Elements = append(sec.Elements, slack.NewRichTextSectionTextElement(body, nil))
 	w.block.Elements = append(w.block.Elements, sec)
+}
+
+// walkCodeBlock collects all line content of n (works for both
+// FencedCodeBlock and CodeBlock) and emits ```body``` mrkdwn plus a
+// RichTextPreformatted block.
+func (w *walker) walkCodeBlock(n ast.Node) {
+	w.flushSection()
+	var b strings.Builder
+	for i := 0; i < n.Lines().Len(); i++ {
+		seg := n.Lines().At(i)
+		b.Write(w.source[seg.Start:seg.Stop])
+	}
+	body := b.String()
+	if !strings.HasSuffix(body, "\n") {
+		body += "\n"
+	}
+
+	w.mrkdwn.WriteString("```\n")
+	w.mrkdwn.WriteString(body)
+	w.mrkdwn.WriteString("```\n")
+
+	pre := &slack.RichTextPreformatted{
+		Type: slack.RTEPreformatted,
+		Elements: []slack.RichTextSectionElement{
+			slack.NewRichTextSectionTextElement(body, nil),
+		},
+	}
+	w.block.Elements = append(w.block.Elements, pre)
 }
 
 // appendText writes s to both outputs with the current inherited

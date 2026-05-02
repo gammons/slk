@@ -573,3 +573,40 @@ func TestConvert_NestedList(t *testing.T) {
 		t.Errorf("inner.Indent = %d, want 1", inner.Indent)
 	}
 }
+
+func TestConvert_FencedCodeBlock(t *testing.T) {
+	in := "```\nfoo\nbar\n```"
+	mr, blk := Convert(in)
+	wantMr := "```\nfoo\nbar\n```"
+	if mr != wantMr {
+		t.Errorf("mrkdwn = %q, want %q", mr, wantMr)
+	}
+	if len(blk.Elements) != 1 {
+		t.Fatalf("got %d elements, want 1", len(blk.Elements))
+	}
+	pre, ok := blk.Elements[0].(*slack.RichTextPreformatted)
+	if !ok {
+		t.Fatalf("element[0] is %T, want *RichTextPreformatted", blk.Elements[0])
+	}
+	if len(pre.Elements) != 1 {
+		t.Fatalf("got %d preformatted children, want 1 text", len(pre.Elements))
+	}
+	te := pre.Elements[0].(*slack.RichTextSectionTextElement)
+	if te.Text != "foo\nbar\n" {
+		t.Errorf("text = %q, want \"foo\\nbar\\n\"", te.Text)
+	}
+}
+
+func TestConvert_IndentedCodeBlock(t *testing.T) {
+	in := "    foo\n    bar"
+	mr, blk := Convert(in)
+	wantMr := "```\nfoo\nbar\n```"
+	if mr != wantMr {
+		t.Errorf("mrkdwn = %q, want %q", mr, wantMr)
+	}
+	pre := blk.Elements[0].(*slack.RichTextPreformatted)
+	te := pre.Elements[0].(*slack.RichTextSectionTextElement)
+	if te.Text != "foo\nbar\n" {
+		t.Errorf("text = %q", te.Text)
+	}
+}
