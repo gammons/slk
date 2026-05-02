@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"image"
 	"io"
@@ -141,6 +142,12 @@ func main() {
 				os.Exit(1)
 			}
 			os.Exit(0)
+		case "--dump-sections":
+			if err := dumpSections(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
 		}
 	}
 
@@ -197,6 +204,7 @@ Usage:
   slk --add-workspace     Add a Slack workspace (interactive)
   slk --remove-workspace  Remove a configured workspace (interactive)
   slk --list-workspaces   List configured workspaces (TeamID, Slug, Name)
+  slk --dump-sections     Dump raw users.channelSections.list JSON (diagnostic)
   slk --version          Print version and exit
   slk --help             Show this help
 
@@ -2015,6 +2023,49 @@ func listWorkspaces() error {
 		strings.Repeat("-", nameW))
 	for _, ot := range orderedTokens {
 		fmt.Printf("%-*s  %-*s  %s\n", idW, ot.Token.TeamID, slugW, ot.Slug, ot.Token.TeamName)
+	}
+	return nil
+}
+
+// dumpSections is a diagnostic command that calls users.channelSections.list
+// for every configured workspace and prints the raw JSON response, pretty-
+// printed. Intended for reverse-engineering the undocumented endpoint; safe
+// to remove once we ship server-side section support.
+func dumpSections() error {
+	tokenDir := filepath.Join(xdgData(), "tokens")
+	store := slackclient.NewTokenStore(tokenDir)
+	tokens, err := store.List()
+	if err != nil {
+		return fmt.Errorf("list tokens: %w", err)
+	}
+	if len(tokens) == 0 {
+		fmt.Println("No workspaces configured. Run 'slk --add-workspace' first.")
+		return nil
+	}
+
+	ctx := context.Background()
+	for _, tok := range tokens {
+		fmt.Printf("=== %s (%s) ===\n", tok.TeamName, tok.TeamID)
+		client := slackclient.NewClient(tok.AccessToken, tok.Cookie)
+		// Connect resolves the per-workspace API base URL via auth.test;
+		// required for enterprise grid hosts.
+		if err := client.Connect(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "  connect failed: %v\n\n", err)
+			continue
+		}
+		raw, err := client.GetChannelSectionsRaw(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  fetch failed: %v\n\n", err)
+			continue
+		}
+		// Pretty-print if it parses as JSON; otherwise dump raw.
+		var pretty bytes.Buffer
+		if err := json.Indent(&pretty, raw, "", "  "); err == nil {
+			fmt.Println(pretty.String())
+		} else {
+			fmt.Println(string(raw))
+		}
+		fmt.Println()
 	}
 	return nil
 }

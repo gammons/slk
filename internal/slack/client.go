@@ -904,23 +904,42 @@ type ChannelSection struct {
 	Type       string   `json:"type"`
 }
 
-// GetChannelSections calls the undocumented users.channelSections.list API
-// to retrieve the user's sidebar sections. This may break if Slack changes the API.
-func (c *Client) GetChannelSections(ctx context.Context) ([]ChannelSection, error) {
+// callChannelSectionsList performs the raw POST to users.channelSections.list
+// using cookie-aware auth (Bearer xoxc + d cookie). Shared by both the typed
+// and raw accessors.
+func (c *Client) callChannelSectionsList(ctx context.Context) ([]byte, error) {
 	endpoint := c.apiBaseURL + "users.channelSections.list"
 
-	form := url.Values{}
-	form.Set("token", c.token)
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := http.PostForm(endpoint, form)
+	httpClient := newCookieHTTPClient(c.cookie)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("calling channelSections API: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	return io.ReadAll(resp.Body)
+}
+
+// GetChannelSectionsRaw calls users.channelSections.list and returns the raw
+// JSON response body. Intended for diagnostic tooling (e.g. --dump-sections);
+// production code should use GetChannelSections.
+func (c *Client) GetChannelSectionsRaw(ctx context.Context) ([]byte, error) {
+	return c.callChannelSectionsList(ctx)
+}
+
+// GetChannelSections calls the undocumented users.channelSections.list API
+// to retrieve the user's sidebar sections. This may break if Slack changes the API.
+func (c *Client) GetChannelSections(ctx context.Context) ([]ChannelSection, error) {
+	body, err := c.callChannelSectionsList(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("reading response: %w", err)
+		return nil, err
 	}
 
 	var result struct {
