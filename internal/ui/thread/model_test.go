@@ -1,10 +1,14 @@
 package thread
 
 import (
+	stdimage "image"
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/config"
+	imgpkg "github.com/gammons/slk/internal/image"
+	"github.com/gammons/slk/internal/ui/imgrender"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/styles"
 )
@@ -324,5 +328,95 @@ func TestSelectedReplyContainsTintBackground(t *testing.T) {
 	want := fmtRGBBg(uint8(r>>8), uint8(g>>8), uint8(b>>8))
 	if !strings.Contains(out, want) {
 		t.Fatalf("expected selected reply to contain tint bg %q\nout=%q", want, out)
+	}
+}
+
+// TestThreadRendersInlineImagePlaceholder asserts that when a reply has
+// an image attachment and the renderer's ImageContext has a non-Off
+// Protocol with a fetcher, the thread panel emits a reserved-height
+// placeholder block (multiple lines of "Loading…" or similar) instead
+// of the legacy single-line "[Image] <url>" text.
+//
+// Uses a real *imgpkg.Fetcher with an empty tempdir cache so Cached()
+// returns false and RenderBlock takes the placeholder path without
+// needing to mock the (concrete-typed) Fetcher.
+func TestThreadRendersInlineImagePlaceholder(t *testing.T) {
+	styles.Apply("dark", config.Theme{})
+	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
+
+	cache, err := imgpkg.NewCache(t.TempDir(), 10)
+	if err != nil {
+		t.Fatalf("NewCache: %v", err)
+	}
+	fetcher := imgpkg.NewFetcher(cache, nil)
+
+	m := New()
+	parent := messages.MessageItem{TS: "1.0", UserID: "U1", UserName: "alice", Text: "parent"}
+	reply := messages.MessageItem{
+		TS:       "1.001",
+		UserID:   "U2",
+		UserName: "bob",
+		Text:     "look",
+		Attachments: []messages.Attachment{{
+			Kind:   "image",
+			Name:   "screenshot.png",
+			FileID: "F123",
+			URL:    "https://example.com/x.png",
+			Thumbs: []messages.ThumbSpec{{URL: "https://example.com/x-720.png", W: 320, H: 240}},
+		}},
+	}
+	m.SetThread(parent, []messages.MessageItem{reply}, "C1", "1.0")
+
+	m.SetImageContext(imgrender.ImageContext{
+		Protocol:   imgpkg.ProtoHalfBlock,
+		Fetcher:    fetcher,
+		CellPixels: stdimage.Pt(8, 16),
+		MaxRows:    20,
+		// SendMsg deliberately nil: we only need the synchronous
+		// Cached() == false branch; the spawned fetch goroutine will
+		// no-op since there's no real HTTP client and SendMsg is nil.
+	})
+
+	out := ansi.Strip(m.View(20, 60))
+
+	if !strings.Contains(out, "Loading") {
+		t.Fatalf("expected reserved-height placeholder for unfetched image, got:\n%s", out)
+	}
+	// Inline rendering active: the legacy text fallback prefix MUST be absent.
+	if strings.Contains(out, "[Image]") && strings.Contains(out, "https://example.com/x.png") {
+		t.Fatalf("thread fell back to text rendering; should use inline placeholder. got:\n%s", out)
+	}
+}
+
+// TestThread_LegacyTextFallback_WhenImageContextOff asserts that without
+// SetImageContext (zero-valued context, ProtoOff), the thread panel
+// falls back to the legacy "[Image] <url>" text rendering rather than
+// silently dropping the attachment. This pins the safe default during
+// app startup before SetImageContext has been called.
+func TestThread_LegacyTextFallback_WhenImageContextOff(t *testing.T) {
+	styles.Apply("dark", config.Theme{})
+	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
+
+	m := New()
+	parent := messages.MessageItem{TS: "1.0", UserID: "U1", UserName: "alice", Text: "parent"}
+	reply := messages.MessageItem{
+		TS:       "1.001",
+		UserID:   "U2",
+		UserName: "bob",
+		Attachments: []messages.Attachment{{
+			Kind:   "image",
+			Name:   "x.png",
+			FileID: "F123",
+			URL:    "https://example.com/x.png",
+			Thumbs: []messages.ThumbSpec{{URL: "https://example.com/x-720.png", W: 320, H: 240}},
+		}},
+	}
+	m.SetThread(parent, []messages.MessageItem{reply}, "C1", "1.0")
+
+	// No SetImageContext call — zero-valued context falls back to text.
+	out := ansi.Strip(m.View(20, 60))
+
+	if !strings.Contains(out, "[Image]") {
+		t.Fatalf("expected [Image] legacy text fallback when no ImageContext set; got:\n%s", out)
 	}
 }

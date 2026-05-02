@@ -1,7 +1,9 @@
 package thread
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"strings"
 
 	"charm.land/bubbles/v2/viewport"
@@ -10,6 +12,8 @@ import (
 	emojiutil "github.com/gammons/slk/internal/emoji"
 	emoji "github.com/kyokomi/emoji/v2"
 
+	imgpkg "github.com/gammons/slk/internal/image"
+	"github.com/gammons/slk/internal/ui/imgrender"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/selection"
 	"github.com/gammons/slk/internal/ui/styles"
@@ -33,6 +37,18 @@ type viewEntry struct {
 	height           int
 	replyIdx         int
 	contentColOffset int
+
+	// flushes are per-frame side effects (kitty image upload escapes)
+	// returned by imgrender.Renderer.RenderBlock for inline image
+	// attachments on this reply. Invoked during View() with a per-frame
+	// buffer that is then written directly to imgpkg.KittyOutput.
+	// Mirrors internal/ui/messages viewEntry.flushes. nil for entries
+	// with no inline image attachments.
+	//
+	// v1 scope: sixel inline-byte injection is deferred — sixel images
+	// render as their imgrender placeholder/sentinel only, so no
+	// sixelRows field is captured here.
+	flushes []func(io.Writer) error
 }
 
 // Model represents the thread panel UI component.
@@ -120,11 +136,31 @@ type Model struct {
 
 	// version increments on every state change that could alter View() output.
 	version int64
+
+	// imgRenderer is the inline-image rendering pipeline. Configured at
+	// startup via Model.SetImageContext (mirrors messages.Model). v1
+	// renders images inline (kitty + halfblock fully supported; sixel
+	// renders placeholder-only) but does not support click-to-preview
+	// from a thread reply.
+	imgRenderer *imgrender.Renderer
 }
 
 // New creates an empty thread panel.
 func New() *Model {
-	return &Model{}
+	return &Model{
+		imgRenderer: imgrender.NewRenderer(),
+	}
+}
+
+// SetImageContext configures the inline-image rendering pipeline for
+// the thread panel. Triggers a cache rebuild so existing replies
+// re-render with the new context. Mirrors messages.Model.SetImageContext.
+func (m *Model) SetImageContext(ctx imgrender.ImageContext) {
+	if m.imgRenderer == nil {
+		m.imgRenderer = imgrender.NewRenderer()
+	}
+	m.imgRenderer.SetContext(ctx)
+	m.InvalidateCache()
 }
 
 // Version returns a counter that increments any time the View() output could
@@ -921,7 +957,11 @@ func (m *Model) View(height, width int) string {
 			Background(styles.Background).
 			Foreground(styles.Border).
 			Render(strings.Repeat("-", width))
-		parentContent := m.renderThreadMessage(m.parent, width, m.userNames, m.channelNames, false)
+		// v1: discard parent flushes — parent attachments are rare
+		// in the chrome-cached path and threading kitty flushes through
+		// the chromeCache lifecycle adds complexity. Reply flushes are
+		// captured below in the per-reply cache loop.
+		parentContent, _ := m.renderThreadMessage(m.parent, width, m.userNames, m.channelNames, false)
 		m.chromeCache = header + "\n" + separator + "\n" + parentContent + "\n" + separator
 		m.chromeHeight = lipgloss.Height(m.chromeCache)
 		m.chromeCacheValid = true
@@ -999,7 +1039,7 @@ func (m *Model) View(height, width int) string {
 			// so the cache rebuilds whenever the highlighted index changes.
 			// This matches the messages-pane convention
 			// (internal/ui/messages/model.go:1050).
-			rendered := m.renderThreadMessage(reply, width, m.userNames, m.channelNames, i == m.selected)
+			rendered, attachFlushes := m.renderThreadMessage(reply, width, m.userNames, m.channelNames, i == m.selected)
 			// Two filled variants — see internal/ui/messages/model.go for the
 			// rationale. Without per-variant fills, the trailing whitespace of
 			// every wrapped line shows the wrong bg and the tint stops at the
@@ -1026,6 +1066,7 @@ func (m *Model) View(height, width int) string {
 				height:           len(linesN),
 				replyIdx:         i,
 				contentColOffset: 1,
+				flushes:          attachFlushes,
 			})
 			m.replyIDToIdx[reply.TS] = i
 		}
@@ -1070,6 +1111,16 @@ func (m *Model) View(height, width int) string {
 		startLine := 0
 		endLine := 0
 		currentLine := 0
+		// kittyFlushBuf collects per-image kitty APC upload bytes for
+		// every cached entry (the thread cache holds only the open
+		// thread's replies — typically a handful — so we don't bother
+		// with viewport-visibility scoping). Written directly to
+		// imgpkg.KittyOutput AFTER the loop, before viewContent is
+		// assembled. Mirrors internal/ui/messages/model.go's
+		// kittyFlushBuf handling; APC sequences embedded in line
+		// content are known to get mangled by the bubbletea/lipgloss
+		// renderer, so we bypass the frame buffer.
+		var kittyFlushBuf bytes.Buffer
 
 		// entryOffsets / totalLines mirror the BORDERED viewContent. Each
 		// reply takes lipgloss.Height(borderedReply) lines (== e.height,
@@ -1106,6 +1157,18 @@ func (m *Model) View(height, width int) string {
 			}
 			allRows = append(allRows, content)
 			currentLine += h
+
+			// Collect kitty per-image upload escapes for this entry.
+			// We invoke flushes for every cached entry rather than only
+			// viewport-visible ones; the thread cache is small and
+			// scoping adds complexity. A future optimization can clip
+			// to visible entries.
+			for _, fl := range e.flushes {
+				if fl != nil {
+					_ = fl(&kittyFlushBuf)
+				}
+			}
+
 			// Separator between replies (not after the last). Separator
 			// lines are NOT inside any cache entry — selection overlay /
 			// extraction skip them naturally because no entry covers
@@ -1114,6 +1177,13 @@ func (m *Model) View(height, width int) string {
 				allRows = append(allRows, replySeparator)
 				currentLine++
 			}
+		}
+
+		// Write kitty upload escapes directly to the terminal output,
+		// bypassing bubbletea's frame buffer. Same rationale as
+		// internal/ui/messages/model.go's kittyFlushBuf write.
+		if kittyFlushBuf.Len() > 0 {
+			_, _ = imgpkg.KittyOutput.Write(kittyFlushBuf.Bytes())
 		}
 
 		m.viewContent = strings.Join(allRows, "\n")
@@ -1152,7 +1222,12 @@ func (m *Model) View(height, width int) string {
 }
 
 // renderThreadMessage renders a single message for the thread panel.
-func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNames map[string]string, channelNames map[string]string, isSelected bool) string {
+// Returns the content string and any per-frame kitty flush callbacks
+// for inline image attachments. The flushes are consumed by View()
+// when the entry is visible (mirroring messages.Model). v1: per-block
+// Hit and SixelRows from imgrender are discarded — click-to-preview
+// from a thread reply and inline sixel emission are out of scope.
+func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNames map[string]string, channelNames map[string]string, isSelected bool) (string, []func(io.Writer) error) {
 	line := styles.Username.Render(msg.UserName) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.Timestamp)
 
 	contentWidth := width - 4
@@ -1211,10 +1286,36 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 		reactionLine = "\n" + strings.Join(reactionLines, "\n")
 	}
 
+	// Attachments: per-attachment inline render via imgrender.Renderer.
+	// v1: flushes are aggregated and returned for the cache layer to
+	// invoke during View(); the per-block Hit and SixelRows are
+	// discarded (click-to-preview from threads and inline sixel
+	// emission are out of scope for v1; sixel images render their
+	// res.Lines placeholder/sentinel only).
 	var attachmentLines string
-	if rendered := messages.RenderAttachments(msg.Attachments); rendered != "" {
-		attachmentLines = "\n" + messages.WordWrap(rendered, contentWidth)
+	var aggFlushes []func(io.Writer) error
+	if len(msg.Attachments) > 0 {
+		if m.imgRenderer == nil {
+			m.imgRenderer = imgrender.NewRenderer()
+		}
+		blocks := make([]string, 0, len(msg.Attachments))
+		for attIdx, att := range msg.Attachments {
+			imgThumbs := make([]imgrender.ThumbSpec, len(att.Thumbs))
+			for i, t := range att.Thumbs {
+				imgThumbs[i] = imgrender.ThumbSpec{URL: t.URL, W: t.W, H: t.H}
+			}
+			res := m.imgRenderer.RenderBlock(imgrender.Block{
+				Kind:   att.Kind,
+				FileID: att.FileID,
+				Name:   att.Name,
+				URL:    att.URL,
+				Thumbs: imgThumbs,
+			}, m.channelID, msg.TS, contentWidth, 0 /* baseRow */, attIdx, 0 /* contentColBase */)
+			blocks = append(blocks, strings.Join(res.Lines, "\n"))
+			aggFlushes = append(aggFlushes, res.Flushes...)
+		}
+		attachmentLines = "\n" + strings.Join(blocks, "\n")
 	}
 
-	return line + "\n" + text + attachmentLines + reactionLine
+	return line + "\n" + text + attachmentLines + reactionLine, aggFlushes
 }
