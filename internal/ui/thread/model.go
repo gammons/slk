@@ -268,6 +268,35 @@ func (m *Model) IsEmpty() bool {
 	return m.threadTS == ""
 }
 
+// HasReply returns true when the open thread contains a reply with the
+// given TS. App.Update uses this to decide whether to invalidate the
+// thread cache on ImageReadyMsg.
+//
+// Note: replyIDToIdx is built lazily during View() (see the cache-build
+// path), so HasReply may return false for replies whose cache hasn't
+// been built yet. That's acceptable for v1 — when the user opens a
+// thread, View() runs at least once before any image bytes arrive.
+// Returning false when the index is nil is the safe default; the cache
+// is rebuilt on the next frame anyway.
+func (m *Model) HasReply(ts string) bool {
+	if m.replyIDToIdx == nil {
+		return false
+	}
+	_, ok := m.replyIDToIdx[ts]
+	return ok
+}
+
+// HandleImageFailed clears the in-flight bit for key on the thread's
+// renderer and marks it as permanently failed for this session.
+// App.Update calls this when an ImageFailedMsg lands so the thread's
+// renderer state stays in sync with the messages-pane renderer's.
+func (m *Model) HandleImageFailed(key string) {
+	if m.imgRenderer == nil {
+		return
+	}
+	m.imgRenderer.MarkFailed(key)
+}
+
 // ReplyCount returns the number of replies.
 func (m *Model) ReplyCount() int {
 	return len(m.replies)

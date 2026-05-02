@@ -420,3 +420,33 @@ func TestThread_LegacyTextFallback_WhenImageContextOff(t *testing.T) {
 		t.Fatalf("expected [Image] legacy text fallback when no ImageContext set; got:\n%s", out)
 	}
 }
+
+func TestHasReply(t *testing.T) {
+	m := New()
+
+	// Empty thread: HasReply always false.
+	if m.HasReply("anything") {
+		t.Error("HasReply on empty thread must return false")
+	}
+
+	parent := messages.MessageItem{TS: "1.0", UserID: "U1", UserName: "alice", Text: "p"}
+	replies := []messages.MessageItem{
+		{TS: "1.001", UserID: "U2", UserName: "bob", Text: "r1"},
+		{TS: "1.002", UserID: "U3", UserName: "carol", Text: "r2"},
+	}
+	m.SetThread(parent, replies, "C1", "1.0")
+
+	// HasReply might be false until View() builds the index — call
+	// View once so replyIDToIdx is populated.
+	_ = m.View(20, 60)
+
+	if !m.HasReply("1.001") {
+		t.Error("expected HasReply(1.001) true after View()")
+	}
+	if !m.HasReply("1.002") {
+		t.Error("expected HasReply(1.002) true after View()")
+	}
+	if m.HasReply("1.999") {
+		t.Error("expected HasReply(1.999) false; not in thread")
+	}
+}

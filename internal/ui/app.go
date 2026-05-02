@@ -1307,6 +1307,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// model itself filters by active channel name (no-op when the
 		// user has switched away).
 		a.messagepane.HandleImageReady(msg.Channel, msg.TS, msg.Key)
+		// Thread panel: v1 uses coarse cache invalidation. If any reply
+		// in the open thread has a matching TS, blow the thread cache
+		// so renderThreadMessage runs again with the now-cached image
+		// bytes. HasReply guards against churning the thread cache on
+		// every messages-pane image arrival.
+		if a.threadPanel.HasReply(msg.TS) {
+			a.threadPanel.InvalidateCache()
+		}
 
 	case imgrender.ImageFailedMsg:
 		// Image attachment fetch hit a permanent failure (all auths
@@ -1315,6 +1323,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// don't trigger a re-render — the placeholder is already on
 		// screen and we have no new bytes to show.
 		a.messagepane.HandleImageFailed(msg.Key)
+		// Mirror the in-flight bookkeeping on the thread panel so a
+		// permanently-failed image isn't re-attempted from the thread.
+		a.threadPanel.HandleImageFailed(msg.Key)
 
 	case messages.OpenImagePreviewMsg:
 		// Open the overlay IMMEDIATELY in a loading state so the user
@@ -3599,6 +3610,7 @@ func (a *App) SetAvatarFunc(fn messages.AvatarFunc) {
 // View(). Pass a zero-valued ImageContext to disable inline rendering.
 func (a *App) SetImageContext(ctx imgrender.ImageContext) {
 	a.messagepane.SetImageContext(ctx)
+	a.threadPanel.SetImageContext(ctx)
 }
 
 // SetImageFetcher records the image fetcher so the preview overlay can
