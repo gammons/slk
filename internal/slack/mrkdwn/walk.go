@@ -7,6 +7,7 @@ import (
 	"github.com/slack-go/slack"
 	"github.com/yuin/goldmark/ast"
 	extensionAST "github.com/yuin/goldmark/extension/ast"
+	"github.com/yuin/goldmark/util"
 )
 
 // walker accumulates two parallel outputs as it walks a goldmark AST:
@@ -64,6 +65,10 @@ func (w *walker) walkBlock(n ast.Node) {
 		w.walkCodeBlock(n)
 	case *ast.CodeBlock:
 		w.walkCodeBlock(n)
+	case *ast.Heading:
+		w.walkRawBlock(n)
+	case *ast.Blockquote:
+		w.walkRawBlock(n)
 	default:
 		// Other block types (List, FencedCodeBlock, Heading, Blockquote)
 		// will be handled in later tasks. For now, walk children as
@@ -91,7 +96,10 @@ func (w *walker) walkInline(n ast.Node) {
 	switch n := n.(type) {
 	case *ast.Text:
 		seg := n.Segment
-		w.appendText(string(w.source[seg.Start:seg.Stop]))
+		// CommonMark backslash-escapes (\*, \_, etc.) appear in the
+		// source segment as the literal "\X". Unescape so they emit
+		// as literal X without inline formatting.
+		w.appendText(string(util.UnescapePunctuations(w.source[seg.Start:seg.Stop])))
 		if n.HardLineBreak() || n.SoftLineBreak() {
 			// Slack chat preserves line layout; treat both hard and
 			// soft breaks as literal newlines.
@@ -437,6 +445,60 @@ func (w *walker) walkCodeBlock(n ast.Node) {
 		},
 	}
 	w.block.Elements = append(w.block.Elements, pre)
+}
+
+// walkRawBlock emits the original source of a heading or blockquote
+// verbatim. Slack mrkdwn has no headings, and `>` is already a valid
+// blockquote marker on the wire, so we don't translate either type.
+func (w *walker) walkRawBlock(n ast.Node) {
+	w.flushSection()
+
+	prefix := ""
+	body := ""
+
+	if h, ok := n.(*ast.Heading); ok {
+		// Heading source segments contain the inline content WITHOUT
+		// the leading "# " marker (goldmark consumes it).
+		var b strings.Builder
+		for i := 0; i < n.Lines().Len(); i++ {
+			seg := n.Lines().At(i)
+			b.Write(w.source[seg.Start:seg.Stop])
+		}
+		body = strings.TrimRight(b.String(), "\n")
+		prefix = strings.Repeat("#", h.Level) + " "
+	} else if _, ok := n.(*ast.Blockquote); ok {
+		// Blockquote segments aren't directly populated; walk
+		// children to gather inline text.
+		var sb strings.Builder
+		for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+			collectRawInline(&sb, c, w.source)
+		}
+		body = sb.String()
+		prefix = "> "
+	}
+
+	w.mrkdwn.WriteString(prefix)
+	w.mrkdwn.WriteString(body)
+	w.mrkdwn.WriteString("\n\n")
+
+	if w.curSection == nil {
+		w.curSection = slack.NewRichTextSection()
+	}
+	te := slack.NewRichTextSectionTextElement(prefix+body, nil)
+	w.curSection.Elements = append(w.curSection.Elements, te)
+	w.flushSection()
+}
+
+// collectRawInline appends the source bytes of all *ast.Text descendants
+// of n to b.
+func collectRawInline(b *strings.Builder, n ast.Node, source []byte) {
+	if t, ok := n.(*ast.Text); ok {
+		b.Write(source[t.Segment.Start:t.Segment.Stop])
+		return
+	}
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		collectRawInline(b, c, source)
+	}
 }
 
 // appendText writes s to both outputs with the current inherited

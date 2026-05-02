@@ -610,3 +610,50 @@ func TestConvert_IndentedCodeBlock(t *testing.T) {
 		t.Errorf("text = %q", te.Text)
 	}
 }
+
+func TestConvert_HeadingPlainText(t *testing.T) {
+	mr, blk := Convert("# My Title")
+	want := "# My Title"
+	if mr != want {
+		t.Errorf("mrkdwn = %q, want %q", mr, want)
+	}
+	sec := blk.Elements[0].(*slack.RichTextSection)
+	if len(sec.Elements) != 1 {
+		t.Fatalf("got %d elements, want 1 plain text", len(sec.Elements))
+	}
+	te := sec.Elements[0].(*slack.RichTextSectionTextElement)
+	if te.Text != "# My Title" {
+		t.Errorf("text = %q, want %q", te.Text, "# My Title")
+	}
+	if te.Style != nil {
+		t.Errorf("style = %+v, want nil", te.Style)
+	}
+}
+
+func TestConvert_BlockquotePassthrough(t *testing.T) {
+	mr, blk := Convert("> a quoted line")
+	want := "> a quoted line"
+	if mr != want {
+		t.Errorf("mrkdwn = %q, want %q", mr, want)
+	}
+	sec := blk.Elements[0].(*slack.RichTextSection)
+	te := sec.Elements[0].(*slack.RichTextSectionTextElement)
+	if te.Text != "> a quoted line" {
+		t.Errorf("text = %q", te.Text)
+	}
+}
+
+func TestConvert_BackslashEscape(t *testing.T) {
+	mr, blk := Convert(`\*not bold\*`)
+	want := "*not bold*"
+	if mr != want {
+		t.Errorf("mrkdwn = %q, want %q", mr, want)
+	}
+	te := blk.Elements[0].(*slack.RichTextSection).Elements[0].(*slack.RichTextSectionTextElement)
+	if te.Text != "*not bold*" {
+		t.Errorf("text = %q", te.Text)
+	}
+	if te.Style != nil {
+		t.Errorf("style = %+v, want nil for escaped asterisks", te.Style)
+	}
+}
