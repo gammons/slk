@@ -329,7 +329,10 @@ func tokenize(s string) (string, []token) {
 			full := s[i : i+loc[1]]
 			tok := token{kind: p.kind}
 			tok.id = s[i+loc[2] : i+loc[3]]
-			if loc[4] >= 0 {
+			// reUser has one capture group (length-4 loc); the
+			// other patterns have two (length-6 loc with optional
+			// second group). Guard before reading the label.
+			if len(loc) >= 6 && loc[4] >= 0 {
 				tok.label = s[i+loc[4] : i+loc[5]]
 			}
 			table = append(table, tok)
