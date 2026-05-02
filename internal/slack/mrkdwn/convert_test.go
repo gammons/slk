@@ -136,3 +136,45 @@ func TestConvert_BlockFallback_KnownLimitation_TasksFix810(t *testing.T) {
 		t.Errorf("interim list-fallback mrkdwn = %q, want %q (replace this test in Task 8)", mr, "onetwo")
 	}
 }
+
+func TestConvert_BoldDoubleAsterisk(t *testing.T) {
+	mr, blk := Convert("**hello**")
+	if mr != "*hello*" {
+		t.Errorf("mrkdwn = %q, want %q", mr, "*hello*")
+	}
+	sec := blk.Elements[0].(*slack.RichTextSection)
+	te := sec.Elements[0].(*slack.RichTextSectionTextElement)
+	if te.Text != "hello" {
+		t.Errorf("text = %q, want %q", te.Text, "hello")
+	}
+	if te.Style == nil || !te.Style.Bold {
+		t.Errorf("expected Style.Bold = true, got %+v", te.Style)
+	}
+}
+
+func TestConvert_BoldDoubleUnderscore(t *testing.T) {
+	mr, blk := Convert("__hello__")
+	if mr != "*hello*" {
+		t.Errorf("mrkdwn = %q, want %q", mr, "*hello*")
+	}
+	sec := blk.Elements[0].(*slack.RichTextSection)
+	te := sec.Elements[0].(*slack.RichTextSectionTextElement)
+	if te.Style == nil || !te.Style.Bold {
+		t.Errorf("expected Style.Bold = true, got %+v", te.Style)
+	}
+}
+
+func TestConvert_BoldWithSurroundingText(t *testing.T) {
+	mr, blk := Convert("hi **there** friend")
+	if mr != "hi *there* friend" {
+		t.Errorf("mrkdwn = %q, want %q", mr, "hi *there* friend")
+	}
+	sec := blk.Elements[0].(*slack.RichTextSection)
+	if len(sec.Elements) != 3 {
+		t.Fatalf("got %d elements, want 3 (plain, bold, plain)", len(sec.Elements))
+	}
+	mid := sec.Elements[1].(*slack.RichTextSectionTextElement)
+	if mid.Text != "there" || mid.Style == nil || !mid.Style.Bold {
+		t.Errorf("middle element = %+v / style %+v, want bold 'there'", mid, mid.Style)
+	}
+}

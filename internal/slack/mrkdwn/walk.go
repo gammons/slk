@@ -101,11 +101,32 @@ func (w *walker) walkInline(n ast.Node) {
 		if s := b.String(); s != "" {
 			w.appendText(s)
 		}
+	case *ast.Emphasis:
+		if n.Level == 2 {
+			w.walkBold(n)
+			return
+		}
+		// Level 1 (italic) handled in Task 5; for now walk children
+		// without styling so plain-text fallback is preserved.
+		w.walkInlineChildren(n)
 	default:
-		// Other inline nodes (Emphasis, CodeSpan, Link, etc.) are
-		// handled in later tasks. Walk children to preserve text.
+		// Other inline nodes (CodeSpan, Link, etc.) are handled in
+		// later tasks. Walk children to preserve text.
 		w.walkInlineChildren(n)
 	}
+}
+
+// walkBold emits *body* mrkdwn and sets the bold style flag for the
+// duration of the inline-children walk. Save/restore inheritedStyle
+// so nested formatting (e.g. **bold _italic_**) correctly composes
+// the styles.
+func (w *walker) walkBold(n ast.Node) {
+	w.mrkdwn.WriteString("*")
+	prev := w.inheritedStyle
+	w.inheritedStyle.Bold = true
+	w.walkInlineChildren(n)
+	w.inheritedStyle = prev
+	w.mrkdwn.WriteString("*")
 }
 
 // walkRawHTMLBlock preserves block-level HTML as literal text. Goldmark
