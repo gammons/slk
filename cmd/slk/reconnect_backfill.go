@@ -158,7 +158,7 @@ func (b *backfiller) backfillOneChannel(ctx context.Context, row cache.ChannelSy
 
 	for _, m := range msgs {
 		raw, _ := json.Marshal(m)
-		b.db.UpsertMessage(cache.Message{
+		if err := b.db.UpsertMessage(cache.Message{
 			TS:          m.Timestamp,
 			ChannelID:   row.ChannelID,
 			WorkspaceID: b.workspaceID,
@@ -169,7 +169,9 @@ func (b *backfiller) backfillOneChannel(ctx context.Context, row cache.ChannelSy
 			Subtype:     m.SubType,
 			RawJSON:     string(raw),
 			CreatedAt:   time.Now().Unix(),
-		})
+		}); err != nil {
+			return 0, err
+		}
 		if m.ThreadTimestamp != "" {
 			b.mu.Lock()
 			b.discoveredThreads[threadKey{ChannelID: row.ChannelID, ThreadTS: m.ThreadTimestamp}] = struct{}{}
@@ -180,7 +182,9 @@ func (b *backfiller) backfillOneChannel(ctx context.Context, row cache.ChannelSy
 	// zero messages came back so a quiet channel still gets its
 	// "last looked at" stamp refreshed and the next reconnect window
 	// stays small.
-	b.db.SetChannelSyncedAt(row.ChannelID, time.Now().Unix())
+	if err := b.db.SetChannelSyncedAt(row.ChannelID, time.Now().Unix()); err != nil {
+		return 0, err
+	}
 
 	capped := ""
 	if len(msgs) >= b.perChannelCap {

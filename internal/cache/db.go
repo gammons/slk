@@ -16,6 +16,12 @@ func New(dsn string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
+	// modernc.org/sqlite can surface transient "database is locked"
+	// under concurrent writers unless a busy timeout is configured.
+	if _, err := conn.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("setting busy timeout: %w", err)
+	}
 
 	// Enable WAL mode for better concurrent read performance
 	if _, err := conn.Exec("PRAGMA journal_mode=WAL"); err != nil {
