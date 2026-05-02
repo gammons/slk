@@ -1075,10 +1075,15 @@ func (m *Model) View(height, width int) string {
 			// last character of content. linesPlain mirrors the UNTINTED
 			// (filledNormal) so clipboard text never carries the tint.
 			filledNormal := borderFill.Width(width - 1).Render(rendered)
+			// For the selected variant, repaint inner explicit-bg ANSI
+			// escapes (Username, Timestamp, MessageText, RenderSlackMarkdown's
+			// reset-reapplications) with the tint color so the tint reaches
+			// every cell of the row, not just the trailing whitespace.
+			renderedTinted := messages.RepaintBgToSelectionTint(rendered, m.focused)
 			selectedFill := lipgloss.NewStyle().
 				Background(styles.SelectionTintColor(m.focused)).
 				Width(width - 1).
-				Render(rendered)
+				Render(renderedTinted)
 			normal := borderInvis.Render(filledNormal)
 			selected := borderSelect.Render(selectedFill)
 			linesN := strings.Split(normal, "\n")

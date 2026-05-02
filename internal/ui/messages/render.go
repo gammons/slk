@@ -263,7 +263,59 @@ var (
 	cachedFgColor        color.Color
 	cachedSidebarFgANSI  string
 	cachedSidebarFgColor color.Color
+
+	// Selection-tint ANSI cache, focused/unfocused. Recomputed when
+	// the underlying SelectionTintColor changes (via Apply()).
+	cachedSelTintBgFocusedANSI    string
+	cachedSelTintBgFocusedColor   color.Color
+	cachedSelTintBgUnfocusedANSI  string
+	cachedSelTintBgUnfocusedColor color.Color
 )
+
+// SelectionTintBgANSI returns the ANSI 24-bit bg escape for the current
+// SelectionTintColor at the given focus state. Used by the messages and
+// thread panels to repaint inner explicit-bg styles (Username, Timestamp,
+// MessageText, RenderSlackMarkdown's reset-reapplications, etc.) so the
+// tint reaches every cell of the selected row, not just the trailing
+// whitespace and gutter.
+func SelectionTintBgANSI(focused bool) string {
+	c := styles.SelectionTintColor(focused)
+	if focused {
+		if c == cachedSelTintBgFocusedColor && cachedSelTintBgFocusedANSI != "" {
+			return cachedSelTintBgFocusedANSI
+		}
+		cachedSelTintBgFocusedANSI = bgANSIFor(c)
+		cachedSelTintBgFocusedColor = c
+		return cachedSelTintBgFocusedANSI
+	}
+	if c == cachedSelTintBgUnfocusedColor && cachedSelTintBgUnfocusedANSI != "" {
+		return cachedSelTintBgUnfocusedANSI
+	}
+	cachedSelTintBgUnfocusedANSI = bgANSIFor(c)
+	cachedSelTintBgUnfocusedColor = c
+	return cachedSelTintBgUnfocusedANSI
+}
+
+// RepaintBgToSelectionTint replaces every occurrence of the theme
+// background ANSI escape in s with the SelectionTintColor escape. Used
+// to rebuild a selected-message variant from a rendered "normal"
+// message string without re-running the full render pipeline.
+//
+// Inner styles like Username/Timestamp/MessageText set Background(styles.Background)
+// explicitly, and RenderSlackMarkdown emits BgANSI()+FgANSI() after every
+// \x1b[m reset to avoid dark patches around inline-styled spans. Those
+// theme-bg escapes show through as dark cells on the tinted row unless
+// we substitute them. styles.Surface (used by code blocks) is intentionally
+// untouched — code blocks keep their distinct surface background even on
+// a selected row.
+func RepaintBgToSelectionTint(s string, focused bool) string {
+	from := BgANSI()
+	to := SelectionTintBgANSI(focused)
+	if from == to {
+		return s
+	}
+	return strings.ReplaceAll(s, from, to)
+}
 
 // bgANSIFor returns the ANSI 24-bit background-color escape for c.
 func bgANSIFor(c color.Color) string {

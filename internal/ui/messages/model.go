@@ -1040,8 +1040,16 @@ func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles) viewEntry {
 	// Without per-variant fills, the trailing whitespace of every wrapped
 	// line shows the WRONG background and the tint stops at the last
 	// character of content.
+	//
+	// For the selected variant we also substitute every theme-bg ANSI
+	// escape inside `rendered` with the tint-bg escape. Inner spans
+	// (Username, Timestamp, MessageText, the reset-reapplications
+	// emitted by RenderSlackMarkdown) explicitly paint Background, and
+	// without this substitution they show through as dark patches on
+	// the tinted row.
 	filledNormal := cs.borderFill.Width(width - 1).Render(rendered)
-	selectedFill := lipgloss.NewStyle().Background(styles.SelectionTintColor(m.focused)).Width(width - 1).Render(rendered)
+	renderedTinted := RepaintBgToSelectionTint(rendered, m.focused)
+	selectedFill := lipgloss.NewStyle().Background(styles.SelectionTintColor(m.focused)).Width(width - 1).Render(renderedTinted)
 	normal := cs.borderInvis.Render(filledNormal)
 	selected := cs.borderSelect.Render(selectedFill)
 
