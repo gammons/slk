@@ -54,6 +54,8 @@ func (w *walker) walkBlock(n ast.Node) {
 		w.flushSection()
 		// Paragraph separator in mrkdwn is a blank line.
 		w.mrkdwn.WriteString("\n\n")
+	case *ast.HTMLBlock:
+		w.walkRawHTMLBlock(n)
 	default:
 		// Other block types (List, FencedCodeBlock, Heading, Blockquote)
 		// will be handled in later tasks. For now, walk children as
@@ -83,13 +85,52 @@ func (w *walker) walkInline(n ast.Node) {
 		seg := n.Segment
 		w.appendText(string(w.source[seg.Start:seg.Stop]))
 		if n.HardLineBreak() || n.SoftLineBreak() {
+			// Slack chat preserves line layout; treat both hard and
+			// soft breaks as literal newlines.
 			w.appendText("\n")
+		}
+	case *ast.RawHTML:
+		// Inline HTML (e.g. <span class=...>) — copy source bytes via
+		// the segments slice so it appears as literal text. Same rationale
+		// as walkRawHTMLBlock above.
+		var b strings.Builder
+		for i := 0; i < n.Segments.Len(); i++ {
+			seg := n.Segments.At(i)
+			b.Write(w.source[seg.Start:seg.Stop])
+		}
+		if s := b.String(); s != "" {
+			w.appendText(s)
 		}
 	default:
 		// Other inline nodes (Emphasis, CodeSpan, Link, etc.) are
 		// handled in later tasks. Walk children to preserve text.
 		w.walkInlineChildren(n)
 	}
+}
+
+// walkRawHTMLBlock preserves block-level HTML as literal text. Goldmark
+// parses HTML by default and emits HTMLBlock for things like <p>foo</p>;
+// without explicit handling these nodes have no Text children and the
+// content silently vanishes. We keep the source bytes intact so user-
+// typed HTML survives as readable text in Slack (Slack mrkdwn doesn't
+// process HTML, so this round-trips as expected).
+func (w *walker) walkRawHTMLBlock(n *ast.HTMLBlock) {
+	w.flushSection()
+	var b strings.Builder
+	for i := 0; i < n.Lines().Len(); i++ {
+		seg := n.Lines().At(i)
+		b.Write(w.source[seg.Start:seg.Stop])
+	}
+	body := strings.TrimRight(b.String(), "\n")
+	if body == "" {
+		return
+	}
+	w.mrkdwn.WriteString(body)
+	w.mrkdwn.WriteString("\n\n")
+
+	sec := slack.NewRichTextSection()
+	sec.Elements = append(sec.Elements, slack.NewRichTextSectionTextElement(body, nil))
+	w.block.Elements = append(w.block.Elements, sec)
 }
 
 // appendText writes s to both outputs with the current inherited

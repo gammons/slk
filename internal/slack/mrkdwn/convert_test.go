@@ -80,3 +80,59 @@ func TestConvert_TwoParagraphs(t *testing.T) {
 		t.Fatalf("got %d elements, want 2 (one section per paragraph)", len(blk.Elements))
 	}
 }
+
+func TestConvert_HTMLBlockPreserved(t *testing.T) {
+	mr, blk := Convert("<p>raw html</p>")
+	if mr != "<p>raw html</p>" {
+		t.Errorf("mrkdwn = %q, want %q", mr, "<p>raw html</p>")
+	}
+	if blk == nil {
+		t.Fatal("block is nil; expected one section with HTML as literal text")
+	}
+	sec := blk.Elements[0].(*slack.RichTextSection)
+	te := sec.Elements[0].(*slack.RichTextSectionTextElement)
+	if te.Text != "<p>raw html</p>" {
+		t.Errorf("text = %q, want %q", te.Text, "<p>raw html</p>")
+	}
+	if te.Style != nil {
+		t.Errorf("style = %+v, want nil for HTML passthrough", te.Style)
+	}
+}
+
+func TestConvert_InlineHTMLPreserved(t *testing.T) {
+	// Inline HTML inside a paragraph; verify it survives.
+	mr, blk := Convert(`hello <span class="x">world</span> foo`)
+	want := `hello <span class="x">world</span> foo`
+	if mr != want {
+		t.Errorf("mrkdwn = %q, want %q", mr, want)
+	}
+	sec := blk.Elements[0].(*slack.RichTextSection)
+	var got string
+	for _, el := range sec.Elements {
+		te, ok := el.(*slack.RichTextSectionTextElement)
+		if !ok {
+			t.Fatalf("element is %T, want only text elements", el)
+		}
+		got += te.Text
+	}
+	if got != want {
+		t.Errorf("concatenated text = %q, want %q", got, want)
+	}
+}
+
+// TestConvert_BlockFallback_KnownLimitation_TasksFix810 documents
+// that the scaffold's walkBlock default case glues block-level
+// children together without separators. List/heading/blockquote
+// handlers added in Tasks 8 and 10 replace this behavior; until
+// then, this test pins the (intentionally degraded) interim state
+// so a regression doesn't slip past unnoticed.
+//
+// When Tasks 8/10 land, this test will fail and must be removed
+// (the new tests in those tasks will assert correct behavior).
+func TestConvert_BlockFallback_KnownLimitation_TasksFix810(t *testing.T) {
+	// List input — items glue together, no separator
+	mr, _ := Convert("- one\n- two")
+	if mr != "onetwo" {
+		t.Errorf("interim list-fallback mrkdwn = %q, want %q (replace this test in Task 8)", mr, "onetwo")
+	}
+}
