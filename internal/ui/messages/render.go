@@ -297,8 +297,8 @@ func SelectionTintBgANSI(focused bool) string {
 }
 
 // RepaintBgToSelectionTint replaces every occurrence of the theme
-// background ANSI escape in s with the SelectionTintColor escape. Used
-// to rebuild a selected-message variant from a rendered "normal"
+// background SGR parameters in s with the SelectionTintColor parameters.
+// Used to rebuild a selected-message variant from a rendered "normal"
 // message string without re-running the full render pipeline.
 //
 // Inner styles like Username/Timestamp/MessageText set Background(styles.Background)
@@ -308,13 +308,34 @@ func SelectionTintBgANSI(focused bool) string {
 // we substitute them. styles.Surface (used by code blocks) is intentionally
 // untouched — code blocks keep their distinct surface background even on
 // a selected row.
+//
+// Implementation note: lipgloss/v2 combines multiple SGR codes into a
+// single escape sequence (e.g. "\x1b[1;38;2;R;G;B;48;2;R;G;Bm" for
+// bold + fg + bg), so substituting the framed "\x1b[48;2;R;G;Bm" form
+// would miss every occurrence where the bg is bundled with other
+// attributes. We strip the "\x1b[" prefix and "m" suffix and match
+// just the bg-parameter substring "48;2;R;G;B", which appears
+// verbatim regardless of how lipgloss bundles other SGR params around
+// it.
 func RepaintBgToSelectionTint(s string, focused bool) string {
-	from := BgANSI()
-	to := SelectionTintBgANSI(focused)
-	if from == to {
+	from := bgSGRParams(BgANSI())
+	to := bgSGRParams(SelectionTintBgANSI(focused))
+	if from == "" || from == to {
 		return s
 	}
 	return strings.ReplaceAll(s, from, to)
+}
+
+// bgSGRParams strips the "\x1b[" prefix and "m" suffix from a bg ANSI
+// escape, returning just the parameter substring (e.g. "48;2;26;26;46").
+// Returns "" if the input doesn't have the expected framing.
+func bgSGRParams(ansi string) string {
+	const prefix = "\x1b["
+	const suffix = "m"
+	if !strings.HasPrefix(ansi, prefix) || !strings.HasSuffix(ansi, suffix) {
+		return ""
+	}
+	return ansi[len(prefix) : len(ansi)-len(suffix)]
 }
 
 // bgANSIFor returns the ANSI 24-bit background-color escape for c.
