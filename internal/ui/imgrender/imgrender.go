@@ -9,7 +9,11 @@
 package imgrender
 
 import (
+	"bytes"
+	"context"
 	"image"
+	"io"
+	"log"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -171,4 +175,240 @@ func buildPlaceholder(name string, target image.Point) []string {
 	mid := target.Y / 2
 	lines[mid] = bg.Render(strings.Repeat(" ", leftPad)) + bg.Render(label) + bg.Render(strings.Repeat(" ", rightPad))
 	return lines
+}
+
+// Block is the per-attachment input to RenderBlock. Hosts construct it
+// from their own attachment representation (e.g. messages.Attachment).
+// Defining a local struct here avoids a circular import on the messages
+// package.
+type Block struct {
+	Kind   string // "image" or anything else (non-image falls back to text)
+	FileID string // Slack file ID; required for cache keys
+	Name   string // user-visible filename (for placeholder label)
+	URL    string // canonical URL for OSC 8 hyperlink in the legacy text fallback
+	Thumbs []ThumbSpec
+}
+
+// BlockResult bundles RenderBlock's return values.
+type BlockResult struct {
+	Lines     []string
+	Flushes   []func(io.Writer) error
+	SixelRows map[int]SixelEntry
+	Height    int
+	Hit       Hit
+}
+
+// Renderer owns the per-panel inline-image state: fetch-in-flight set,
+// permanent-failure set, and the active ImageContext. One instance per
+// host panel (one for messages, one for thread).
+type Renderer struct {
+	ctx      ImageContext
+	fetching map[string]struct{}
+	failed   map[string]struct{}
+}
+
+// NewRenderer returns an empty Renderer. Hosts must call SetContext
+// before RenderBlock can produce inline output (a zero-valued context
+// falls through to the legacy text rendering, which is also the safe
+// default during early app startup).
+func NewRenderer() *Renderer {
+	return &Renderer{
+		fetching: map[string]struct{}{},
+		failed:   map[string]struct{}{},
+	}
+}
+
+// SetContext configures the inline-image rendering pipeline. May be
+// called multiple times (e.g. when the prefetcher's tea.Program send
+// fn becomes available). Resets the fetch-tracking state.
+func (r *Renderer) SetContext(ctx ImageContext) {
+	r.ctx = ctx
+	for k := range r.fetching {
+		delete(r.fetching, k)
+	}
+	for k := range r.failed {
+		delete(r.failed, k)
+	}
+}
+
+// Context returns the current ImageContext (read-only).
+func (r *Renderer) Context() ImageContext { return r.ctx }
+
+// ClearFetching removes a key from the in-flight set. Returns true if
+// the key was present (i.e. this Renderer was tracking that fetch).
+func (r *Renderer) ClearFetching(key string) bool {
+	if _, ok := r.fetching[key]; !ok {
+		return false
+	}
+	delete(r.fetching, key)
+	return true
+}
+
+// MarkFailed clears the in-flight bit for key and adds it to the
+// failed set so RenderBlock won't re-spawn a fetch goroutine. Returns
+// true if the key was being tracked here.
+func (r *Renderer) MarkFailed(key string) bool {
+	tracked := false
+	if _, ok := r.fetching[key]; ok {
+		delete(r.fetching, key)
+		tracked = true
+	}
+	r.failed[key] = struct{}{}
+	return tracked
+}
+
+// ResetFailed clears the failure and in-flight sets. Hosts call this
+// on channel / thread switch so the user can retry.
+func (r *Renderer) ResetFailed() {
+	for k := range r.failed {
+		delete(r.failed, k)
+	}
+	for k := range r.fetching {
+		delete(r.fetching, k)
+	}
+}
+
+// RenderBlock returns the rendered rows + per-frame flushes + sixel
+// sentinel rows + the image-hit footprint for one attachment. channel
+// + ts identify the originating message for ImageReadyMsg routing
+// when a fetch completes. baseRow is the absolute row index where this
+// block's first row will land within the containing entry. attIdx is
+// the index of this attachment within its parent message. contentColBase
+// is the display column at which the message-content area begins
+// within the entry's lines.
+//
+// Behavior matrix (matches the legacy renderAttachmentBlock):
+//   - Non-image, ProtoOff, missing fetcher, missing FileID, or no
+//     usable thumb -> single-line legacy "[Image|File] <url>" form.
+//   - Cached bytes -> render via active protocol.
+//   - Not cached -> reserved-height placeholder + async prefetch.
+func (r *Renderer) RenderBlock(att Block, channel, ts string, availWidth, baseRow, attIdx, contentColBase int) BlockResult {
+	// Fall through to the legacy text line for any attachment we can't
+	// or shouldn't render inline.
+	if att.Kind != "image" || r.ctx.Protocol == imgpkg.ProtoOff || r.ctx.Fetcher == nil {
+		return BlockResult{Lines: []string{renderLegacyLine(att)}, Height: 1}
+	}
+	if att.FileID == "" {
+		return BlockResult{Lines: []string{renderLegacyLine(att)}, Height: 1}
+	}
+
+	target := computeImageTarget(att.Thumbs, r.ctx, availWidth)
+	if target.X <= 0 || target.Y <= 0 {
+		return BlockResult{Lines: []string{renderLegacyLine(att)}, Height: 1}
+	}
+
+	pixelTarget := image.Pt(target.X*r.ctx.CellPixels.X, target.Y*r.ctx.CellPixels.Y)
+	imgThumbs := make([]imgpkg.ThumbSpec, len(att.Thumbs))
+	for i, t := range att.Thumbs {
+		imgThumbs[i] = imgpkg.ThumbSpec{URL: t.URL, W: t.W, H: t.H}
+	}
+	url, suffix := imgpkg.PickThumb(imgThumbs, pixelTarget)
+	if url == "" {
+		return BlockResult{Lines: []string{renderLegacyLine(att)}, Height: 1}
+	}
+	key := att.FileID + "-" + suffix
+
+	hit := Hit{
+		RowStartInEntry: baseRow,
+		RowEndInEntry:   baseRow + target.Y,
+		ColStart:        contentColBase,
+		ColEnd:          contentColBase + target.X,
+		FileID:          att.FileID,
+		AttIdx:          attIdx,
+	}
+
+	img, cached := r.ctx.Fetcher.Cached(key, pixelTarget)
+	if !cached {
+		if _, failed := r.failed[key]; failed {
+			return BlockResult{Lines: buildPlaceholder(att.Name, target), Height: target.Y, Hit: hit}
+		}
+		if _, inFlight := r.fetching[key]; inFlight {
+			return BlockResult{Lines: buildPlaceholder(att.Name, target), Height: target.Y, Hit: hit}
+		}
+		r.fetching[key] = struct{}{}
+		ctx := r.ctx // capture for the goroutine
+		go func() {
+			_, err := ctx.Fetcher.Fetch(context.Background(), imgpkg.FetchRequest{
+				Key:        key,
+				URL:        url,
+				Target:     pixelTarget,
+				CellTarget: target,
+			})
+			if ctx.SendMsg == nil {
+				return
+			}
+			if err != nil {
+				log.Printf("image fetch failed: key=%s url=%s err=%v", key, url, err)
+				ctx.SendMsg(ImageFailedMsg{Key: key})
+				return
+			}
+			ctx.SendMsg(ImageReadyMsg{Channel: channel, TS: ts, Key: key})
+		}()
+		return BlockResult{Lines: buildPlaceholder(att.Name, target), Height: target.Y, Hit: hit}
+	}
+
+	// Fast path: prerendered output baked off the UI thread.
+	if pr, ok := r.ctx.Fetcher.Prerendered(key, target, r.ctx.Protocol); ok {
+		var fl []func(io.Writer) error
+		var sxlMap map[int]SixelEntry
+		if r.ctx.Protocol == imgpkg.ProtoSixel && pr.OnFlush != nil {
+			var bb bytes.Buffer
+			if err := pr.OnFlush(&bb); err == nil {
+				sxlMap = map[int]SixelEntry{
+					baseRow: {Bytes: bb.Bytes(), Fallback: pr.Fallback, Height: target.Y},
+				}
+			}
+		} else if pr.OnFlush != nil {
+			fl = []func(io.Writer) error{pr.OnFlush}
+		}
+		return BlockResult{Lines: pr.Lines, Flushes: fl, SixelRows: sxlMap, Height: target.Y, Hit: hit}
+	}
+
+	// Slow path: prerender wasn't populated. Encode on this goroutine.
+	if r.ctx.Protocol == imgpkg.ProtoKitty && r.ctx.KittyRender != nil {
+		ckey := "F-" + att.FileID
+		r.ctx.KittyRender.SetSource(ckey, img)
+		out := r.ctx.KittyRender.RenderKey(ckey, target)
+		var fl []func(io.Writer) error
+		if out.OnFlush != nil {
+			fl = []func(io.Writer) error{out.OnFlush}
+		}
+		return BlockResult{Lines: out.Lines, Flushes: fl, Height: target.Y, Hit: hit}
+	}
+
+	out := imgpkg.RenderImage(r.ctx.Protocol, img, target)
+	var fl []func(io.Writer) error
+	var sxlMap map[int]SixelEntry
+	if r.ctx.Protocol == imgpkg.ProtoSixel {
+		if out.OnFlush != nil {
+			var bb bytes.Buffer
+			if err := out.OnFlush(&bb); err == nil {
+				sxlMap = map[int]SixelEntry{
+					baseRow: {Bytes: bb.Bytes(), Fallback: out.Fallback, Height: target.Y},
+				}
+			}
+		}
+	} else if out.OnFlush != nil {
+		fl = []func(io.Writer) error{out.OnFlush}
+	}
+	return BlockResult{Lines: out.Lines, Flushes: fl, SixelRows: sxlMap, Height: target.Y, Hit: hit}
+}
+
+// renderLegacyLine returns the single-line "[Image] <url>" or
+// "[File] <url>" fallback used when inline rendering is unavailable
+// for an attachment. Mirrors the existing internal/ui/messages
+// renderSingleAttachment helper byte-for-byte (Bold marker style,
+// underlined link style, OSC 8 wrapping the entire body), but takes
+// an imgrender.Block to keep imgrender independent of the messages
+// package.
+func renderLegacyLine(att Block) string {
+	markerStyle := lipgloss.NewStyle().Foreground(styles.TextMuted).Bold(true)
+	urlStyle := lipgloss.NewStyle().Foreground(styles.Primary).Underline(true)
+	marker := "[File]"
+	if att.Kind == "image" {
+		marker = "[Image]"
+	}
+	body := markerStyle.Render(marker) + " " + urlStyle.Render(att.URL)
+	// OSC 8 hyperlink: ESC ] 8 ;; URL ESC \ LABEL ESC ] 8 ;; ESC \
+	return "\x1b]8;;" + att.URL + "\x1b\\" + body + "\x1b]8;;\x1b\\"
 }
