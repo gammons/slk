@@ -240,3 +240,95 @@ func TestConvert_AsteriskRoundTripStable(t *testing.T) {
 		t.Errorf("second pass: %q, want *bold* (round-trip stable)", mr2)
 	}
 }
+
+func TestConvert_NestedItalicAroundAsteriskLiteral(t *testing.T) {
+	// _*both*_ : outer italic, inner literal asterisks. The outer
+	// underscore-italic must apply, and the inner asterisks must be
+	// preserved as literal text inside the italic run.
+	mr, blk := Convert("_*both*_")
+	want := "_*both*_"
+	if mr != want {
+		t.Errorf("mrkdwn = %q, want %q", mr, want)
+	}
+	// Block side: italic should be set on text elements inside the
+	// outer wrapper. The literal asterisks inherit italic from the
+	// surrounding inheritedStyle.
+	sec := blk.Elements[0].(*slack.RichTextSection)
+	for i, el := range sec.Elements {
+		te, ok := el.(*slack.RichTextSectionTextElement)
+		if !ok {
+			t.Fatalf("element[%d] is %T, want text", i, el)
+		}
+		if te.Style == nil || !te.Style.Italic {
+			t.Errorf("element[%d] %q style = %+v, want italic", i, te.Text, te.Style)
+		}
+		if te.Style != nil && te.Style.Bold {
+			t.Errorf("element[%d] %q has bold style, want italic only", i, te.Text)
+		}
+	}
+}
+
+func TestConvert_NestedAsteriskLiteralAroundItalic(t *testing.T) {
+	// *_both_* : outer literal asterisks, inner underscore-italic.
+	// The outer asterisks must be preserved as literal text, and
+	// the inner italic must apply to "both".
+	mr, blk := Convert("*_both_*")
+	want := "*_both_*"
+	if mr != want {
+		t.Errorf("mrkdwn = %q, want %q", mr, want)
+	}
+	// Block side: walk the elements and verify "both" carries italic
+	// while the surrounding asterisks do not.
+	sec := blk.Elements[0].(*slack.RichTextSection)
+	var got string
+	sawItalicBoth := false
+	for _, el := range sec.Elements {
+		te, ok := el.(*slack.RichTextSectionTextElement)
+		if !ok {
+			t.Fatalf("element is %T, want text", el)
+		}
+		got += te.Text
+		if te.Text == "both" {
+			if te.Style == nil || !te.Style.Italic {
+				t.Errorf("'both' element style = %+v, want italic", te.Style)
+			}
+			sawItalicBoth = true
+		}
+	}
+	if got != "*both*" {
+		t.Errorf("concatenated visible text = %q, want %q", got, "*both*")
+	}
+	if !sawItalicBoth {
+		t.Error("did not find a 'both' text element with italic style")
+	}
+}
+
+func TestConvert_TwoSeparateItalics(t *testing.T) {
+	// _a_ and _b_ : two italics in one paragraph.
+	mr, _ := Convert("_a_ and _b_")
+	want := "_a_ and _b_"
+	if mr != want {
+		t.Errorf("mrkdwn = %q, want %q", mr, want)
+	}
+}
+
+func TestConvert_ItalicContainingBold(t *testing.T) {
+	// _x **y** z_ : italic envelope, bold inside.
+	// The "y" should carry BOTH italic and bold.
+	mr, blk := Convert("_x **y** z_")
+	want := "_x *y* z_"
+	if mr != want {
+		t.Errorf("mrkdwn = %q, want %q", mr, want)
+	}
+	sec := blk.Elements[0].(*slack.RichTextSection)
+	for _, el := range sec.Elements {
+		te := el.(*slack.RichTextSectionTextElement)
+		if te.Text == "y" {
+			if te.Style == nil || !te.Style.Italic || !te.Style.Bold {
+				t.Errorf("'y' element style = %+v, want italic+bold", te.Style)
+			}
+			return
+		}
+	}
+	t.Error("did not find a 'y' text element")
+}

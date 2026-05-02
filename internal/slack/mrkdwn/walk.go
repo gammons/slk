@@ -135,33 +135,62 @@ func (w *walker) walkBold(n *ast.Emphasis) {
 	w.mrkdwn.WriteString("*")
 }
 
-// emphasisDelimiter returns the rune used to start a Level-1 emphasis
-// node ('_' or '*'). It inspects the byte immediately before the
-// first text-bearing descendant's source segment.
+// emphasisDelimiter returns the byte used to open the emphasis node n
+// ('_' or '*'). The source contains a stack of opening delimiters
+// before the first text descendant: outermost first, innermost last.
+// To locate n's own opener we skip past the openers belonging to any
+// emphasis nodes nested INSIDE n (each Level-1 emphasis consumes one
+// byte; a Level-2 bold consumes two), then read the byte that n itself
+// contributed. Returns '_' as a safe default for malformed input.
 func (w *walker) emphasisDelimiter(n *ast.Emphasis) byte {
-	first := n.FirstChild()
+	first := findFirstTextDescendant(n)
 	if first == nil {
 		return '_'
 	}
-	tn, ok := first.(*ast.Text)
-	if !ok {
-		// Nested inline (e.g. <em><code>x</code></em>). Walk down
-		// to the first text node.
-		for c := first.FirstChild(); c != nil; c = c.FirstChild() {
-			if t, ok := c.(*ast.Text); ok {
-				tn = t
+	// Sum of delimiter widths for emphasis nodes strictly between n
+	// and the text descendant.
+	innerWidth := 0
+	for c := n.FirstChild(); c != nil; {
+		em, ok := c.(*ast.Emphasis)
+		if !ok {
+			// Walk into non-emphasis container looking for the path
+			// to first; if we find emphasis ancestors of first, they
+			// add to innerWidth too. For our current grammar this
+			// branch is unused (emphasis only nests directly), but
+			// stay defensive.
+			next := c.FirstChild()
+			if next == nil {
 				break
 			}
+			c = next
+			continue
 		}
-		if tn == nil {
-			return '_'
-		}
+		innerWidth += em.Level
+		c = em.FirstChild()
 	}
-	pos := tn.Segment.Start - 1
+	pos := first.Segment.Start - innerWidth - 1
 	if pos < 0 || pos >= len(w.source) {
 		return '_'
 	}
-	return w.source[pos]
+	b := w.source[pos]
+	if b != '_' && b != '*' {
+		return '_'
+	}
+	return b
+}
+
+// findFirstTextDescendant returns the leftmost *ast.Text node under n,
+// or nil if there isn't one.
+func findFirstTextDescendant(n ast.Node) *ast.Text {
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		if t, ok := c.(*ast.Text); ok {
+			return t
+		}
+		if t := findFirstTextDescendant(c); t != nil {
+			return t
+		}
+	}
+	return nil
 }
 
 // walkItalic emits _x_ mrkdwn and sets Style.Italic for the duration
@@ -176,10 +205,12 @@ func (w *walker) walkItalic(n *ast.Emphasis) {
 }
 
 // walkAsteriskLiteral preserves *x* as literal text in both outputs.
-// The asterisks become text elements (no italic style) in the rich
-// text block. Inline formatting inside the run (e.g. *hello **bold***)
-// is still processed via walkInlineChildren — only the outer asterisk
-// pair is treated as literal text.
+// The asterisks become text elements (no italic style of their own)
+// in the rich text block; if an enclosing emphasis is in scope, they
+// inherit ITS style via inheritedStyle so they visually flow with the
+// surrounding text. Inline formatting inside the run (e.g. *hello
+// **bold***) is still processed via walkInlineChildren — only the
+// outer asterisk pair is treated as literal text.
 func (w *walker) walkAsteriskLiteral(n *ast.Emphasis) {
 	w.appendText("*")
 	w.walkInlineChildren(n)
