@@ -896,21 +896,19 @@ func (c *Client) MarkThreadUnread(ctx context.Context, channelID, threadTS, ts s
 	return c.markThread(ctx, channelID, threadTS, ts, false)
 }
 
-// ChannelSection represents a user's sidebar section from the undocumented Slack API.
-type ChannelSection struct {
-	ID         string   `json:"channel_section_id"`
-	Name       string   `json:"name"`
-	ChannelIDs []string `json:"channel_ids_page"`
-	Type       string   `json:"type"`
-}
-
 // callChannelSectionsList performs the raw POST to users.channelSections.list
-// using cookie-aware auth (Bearer xoxc + d cookie). Shared by both the typed
-// and raw accessors.
-func (c *Client) callChannelSectionsList(ctx context.Context) ([]byte, error) {
+// using cookie-aware auth (Bearer xoxc + d cookie) and an optional cursor for
+// pagination through sections. Shared by both the typed and raw accessors.
+func (c *Client) callChannelSectionsList(ctx context.Context, cursor string) ([]byte, error) {
 	endpoint := c.apiBaseURL + "users.channelSections.list"
 
-	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, nil)
+	form := url.Values{}
+	if cursor != "" {
+		form.Set("cursor", cursor)
+	}
+	body := strings.NewReader(form.Encode())
+
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, body)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
@@ -927,34 +925,38 @@ func (c *Client) callChannelSectionsList(ctx context.Context) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-// GetChannelSectionsRaw calls users.channelSections.list and returns the raw
-// JSON response body. Intended for diagnostic tooling (e.g. --dump-sections);
-// production code should use GetChannelSections.
+// GetChannelSectionsRaw calls users.channelSections.list with no cursor and
+// returns the raw JSON response body. Diagnostic only (--dump-sections).
 func (c *Client) GetChannelSectionsRaw(ctx context.Context) ([]byte, error) {
-	return c.callChannelSectionsList(ctx)
+	return c.callChannelSectionsList(ctx, "")
 }
 
-// GetChannelSections calls the undocumented users.channelSections.list API
-// to retrieve the user's sidebar sections. This may break if Slack changes the API.
-func (c *Client) GetChannelSections(ctx context.Context) ([]ChannelSection, error) {
-	body, err := c.callChannelSectionsList(ctx)
-	if err != nil {
-		return nil, err
+// GetChannelSections calls users.channelSections.list and returns the
+// fully-paginated section list. Loops on the top-level cursor until the
+// server reports no more sections. Per-section channel_ids_page pagination
+// is NOT followed here — see ListSectionChannels.
+//
+// This endpoint is undocumented; may break if Slack changes the API.
+func (c *Client) GetChannelSections(ctx context.Context) ([]SidebarSection, error) {
+	var all []SidebarSection
+	cursor := ""
+	for {
+		body, err := c.callChannelSectionsList(ctx, cursor)
+		if err != nil {
+			return nil, err
+		}
+		var resp channelSectionsListResponse
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return nil, fmt.Errorf("parsing response: %w", err)
+		}
+		if !resp.OK {
+			return nil, fmt.Errorf("API error: %s", resp.Error)
+		}
+		all = append(all, resp.Sections...)
+		if resp.Cursor == "" || resp.Cursor == cursor {
+			break
+		}
+		cursor = resp.Cursor
 	}
-
-	var result struct {
-		OK              bool             `json:"ok"`
-		Error           string           `json:"error"`
-		ChannelSections []ChannelSection `json:"channel_sections"`
-	}
-
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("parsing response: %w", err)
-	}
-
-	if !result.OK {
-		return nil, fmt.Errorf("API error: %s (response: %s)", result.Error, string(body))
-	}
-
-	return result.ChannelSections, nil
+	return all, nil
 }

@@ -874,7 +874,23 @@ func TestGetChannelSections_UsesAPIBaseURL(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"channel_sections":[]}`))
+		_, _ = w.Write([]byte(`{
+			"ok": true,
+			"channel_sections": [
+				{
+					"channel_section_id": "L1",
+					"name": "Engineering",
+					"type": "standard",
+					"emoji": "rocket",
+					"next_channel_section_id": "L2",
+					"last_updated": 1700000000,
+					"channel_ids_page": {"channel_ids": ["C1","C2"], "count": 2, "cursor": ""},
+					"is_redacted": false
+				}
+			],
+			"count": 1,
+			"cursor": ""
+		}`))
 	}))
 	defer srv.Close()
 
@@ -883,11 +899,22 @@ func TestGetChannelSections_UsesAPIBaseURL(t *testing.T) {
 		cookie:     "d-cookie",
 		apiBaseURL: srv.URL + "/api/",
 	}
-	if _, err := c.GetChannelSections(context.Background()); err != nil {
+	sections, err := c.GetChannelSections(context.Background())
+	if err != nil {
 		t.Fatalf("GetChannelSections: %v", err)
 	}
 	if gotPath != "/api/users.channelSections.list" {
 		t.Errorf("path = %q, want %q", gotPath, "/api/users.channelSections.list")
+	}
+	if len(sections) != 1 {
+		t.Fatalf("sections len = %d, want 1", len(sections))
+	}
+	s := sections[0]
+	if s.ID != "L1" || s.Name != "Engineering" || s.Type != "standard" {
+		t.Errorf("section = %+v", s)
+	}
+	if len(s.ChannelIDs) != 2 || s.ChannelIDs[0] != "C1" {
+		t.Errorf("ChannelIDs = %v", s.ChannelIDs)
 	}
 }
 
