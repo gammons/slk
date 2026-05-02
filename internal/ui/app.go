@@ -3846,6 +3846,9 @@ func (a *App) SetCustomEmoji(customs map[string]string) {
 	entries := emoji.BuildEntries(customs)
 	a.compose.SetEmojiEntries(entries)
 	a.threadCompose.SetEmojiEntries(entries)
+	if a.reactionPicker != nil {
+		a.reactionPicker.SetCustomEmoji(customs)
+	}
 }
 
 // SetInitialChannel sets the active channel and its messages before the TUI starts.

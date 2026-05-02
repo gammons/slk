@@ -8,6 +8,7 @@ import (
 	emoji "github.com/kyokomi/emoji/v2"
 	"github.com/muesli/reflow/truncate"
 
+	slkemoji "github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/overlay"
 	"github.com/gammons/slk/internal/ui/styles"
@@ -62,6 +63,25 @@ func (m *Model) buildEmojiList() {
 	sort.Slice(m.allEmoji, func(i, j int) bool {
 		return m.allEmoji[i].Name < m.allEmoji[j].Name
 	})
+}
+
+// SetCustomEmoji rebuilds the searchable emoji list from built-ins plus
+// the active workspace's custom emoji map (as returned by Slack's
+// emoji.list, name -> URL or "alias:target"). Customs shadow built-ins
+// of the same name. Pass nil to reset to built-ins only.
+func (m *Model) SetCustomEmoji(customs map[string]string) {
+	entries := slkemoji.BuildEntries(customs)
+	m.allEmoji = make([]EmojiEntry, 0, len(entries))
+	for _, e := range entries {
+		m.allEmoji = append(m.allEmoji, EmojiEntry{
+			Name:    e.Name,
+			Unicode: e.Display,
+		})
+	}
+	// Re-run the active filter so visible results reflect the new list.
+	if m.visible && m.query != "" {
+		m.filter()
+	}
 }
 
 // Open shows the picker for a specific message.

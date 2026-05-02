@@ -161,6 +161,53 @@ func TestFrecentShownWhenQueryEmpty(t *testing.T) {
 	}
 }
 
+func TestCustomEmojiAppearsInSearch(t *testing.T) {
+	m := New()
+	// A workspace returns a mix of URL-backed and alias-backed customs
+	// from emoji.list. Both should be searchable in the reaction picker.
+	m.SetCustomEmoji(map[string]string{
+		"partyparrot":  "https://emoji.example.com/partyparrot.gif",
+		"shipit_squir": "alias:rocket",
+	})
+	m.Open("C123", "1234.5678", nil)
+
+	m.HandleKey("p")
+	m.HandleKey("a")
+	m.HandleKey("r")
+	m.HandleKey("t")
+	m.HandleKey("y")
+	m.HandleKey("p")
+
+	found := false
+	for _, e := range m.filtered {
+		if e.Name == "partyparrot" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected custom emoji 'partyparrot' in filtered results, got %v", m.filtered)
+	}
+}
+
+func TestCustomEmojiOverridesBuiltin(t *testing.T) {
+	m := New()
+	m.SetCustomEmoji(map[string]string{
+		"rocket": "https://emoji.example.com/rocket.gif",
+	})
+	m.Open("C123", "1234.5678", nil)
+
+	count := 0
+	for _, e := range m.allEmoji {
+		if e.Name == "rocket" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly one 'rocket' entry, got %d", count)
+	}
+}
+
 func stringContains(s, sub string) bool {
 	for i := 0; i <= len(s)-len(sub); i++ {
 		if s[i:i+len(sub)] == sub {
