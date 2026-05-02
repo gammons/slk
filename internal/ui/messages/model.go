@@ -1057,7 +1057,11 @@ type cacheStyles struct {
 func (m *Model) buildCacheStyles(width int) cacheStyles {
 	borderFill := lipgloss.NewStyle().Background(styles.Background)
 	borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Background).BorderBackground(styles.Background)
-	borderSelect := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.SelectionBorderColor(m.focused)).BorderBackground(styles.Background)
+	borderSelect := lipgloss.NewStyle().
+		BorderStyle(thickLeftBorder).BorderLeft(true).
+		BorderForeground(styles.SelectionBorderColor(m.focused)).
+		BorderBackground(styles.SelectionTintColor(m.focused)).
+		Background(styles.SelectionTintColor(m.focused))
 	spacerBg := lipgloss.NewStyle().Background(styles.Background)
 	m.cacheSpacer = spacerBg.Width(width).Render("")
 	hintStyle := lipgloss.NewStyle().Background(styles.Background).Foreground(styles.TextMuted)
@@ -1091,9 +1095,15 @@ func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles) viewEntry {
 		avatarStr = m.avatarFn(msg.UserID)
 	}
 	rendered, attachFlushes, attachSixel, attachHits := m.renderMessagePlain(msg, width, avatarStr, m.userNames, m.channelNames, i == m.selected)
-	filled := cs.borderFill.Width(width - 1).Render(rendered)
-	normal := cs.borderInvis.Render(filled)
-	selected := cs.borderSelect.Render(filled)
+	// Two filled variants: borderFill (Background) for the unselected
+	// pre-render, and the SelectionTintColor for the selected pre-render.
+	// Without per-variant fills, the trailing whitespace of every wrapped
+	// line shows the WRONG background and the tint stops at the last
+	// character of content.
+	filledNormal := cs.borderFill.Width(width - 1).Render(rendered)
+	selectedFill := lipgloss.NewStyle().Background(styles.SelectionTintColor(m.focused)).Width(width - 1).Render(rendered)
+	normal := cs.borderInvis.Render(filledNormal)
+	selected := cs.borderSelect.Render(selectedFill)
 
 	linesN := strings.Split(normal, "\n")
 	linesS := strings.Split(selected, "\n")
@@ -1101,7 +1111,7 @@ func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles) viewEntry {
 	// thick left-border column is NOT present in plain text and never
 	// bleeds into clipboard output via SelectionText. The mouse-column
 	// to plain-column mapping happens in anchorAt via contentColOffset.
-	linesP := plainLines(filled)
+	linesP := plainLines(filledNormal)
 	// Append a trailing spacer line after every message except the last.
 	// Both variants share the same spacer (it has no border styling).
 	// The plain mirror of the spacer is the empty string -- selection

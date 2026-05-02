@@ -9,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gammons/slk/internal/config"
 	imgpkg "github.com/gammons/slk/internal/image"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 func TestMessagePaneView(t *testing.T) {
@@ -642,4 +644,55 @@ func equalLines(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// itoaU8 / fmtRGBBg are local helpers used by the tint-background tests.
+// They build the SGR fragment lipgloss/v2 emits for an RGB background
+// ("48;2;R;G;B"), so the test can substring-match against rendered
+// output without depending on terminal dimensions or layout.
+func itoaU8(v uint8) string {
+	if v == 0 {
+		return "0"
+	}
+	var buf [3]byte
+	i := len(buf)
+	for v > 0 {
+		i--
+		buf[i] = byte('0' + v%10)
+		v /= 10
+	}
+	return string(buf[i:])
+}
+
+func fmtRGBBg(r, g, b uint8) string {
+	return "48;2;" + itoaU8(r) + ";" + itoaU8(g) + ";" + itoaU8(b)
+}
+
+// TestSelectedRowContainsTintBackground asserts that the rendered output
+// for the selected message includes the SelectionTintColor as an ANSI
+// background, while a non-selected row does not. Guards against
+// regressions in cacheStyles' borderSelect construction.
+func TestSelectedRowContainsTintBackground(t *testing.T) {
+	styles.Apply("dark", config.Theme{})
+	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
+
+	msgs := []MessageItem{
+		{TS: "1.0", UserID: "U1", UserName: "alice", Text: "first message"},
+		{TS: "2.0", UserID: "U2", UserName: "bob", Text: "second message"},
+	}
+	m := New(msgs, "general")
+	m.SetFocused(true)
+	// Selection starts at the newest message (index 1) so we don't
+	// even need MoveDown — but call it explicitly to be deterministic.
+	if m.SelectedIndex() != 1 {
+		t.Fatalf("expected initial selection at last message, got %d", m.SelectedIndex())
+	}
+
+	out := m.View(20 /*height*/, 60 /*width*/)
+
+	r, g, b, _ := styles.SelectionTintColor(true).RGBA()
+	want := fmtRGBBg(uint8(r>>8), uint8(g>>8), uint8(b>>8))
+	if !strings.Contains(out, want) {
+		t.Fatalf("expected selected row to contain tint bg %q\nout=%q", want, out)
+	}
 }
