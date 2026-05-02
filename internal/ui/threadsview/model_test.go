@@ -6,6 +6,8 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 func sampleSummaries() []cache.ThreadSummary {
@@ -323,5 +325,71 @@ func TestMarkByThreadTSUnread_EmptyArgs_ReturnsFalse(t *testing.T) {
 	}
 	if m.MarkByThreadTSUnread("C1", "") {
 		t.Error("expected false for empty threadTS")
+	}
+}
+
+// itoaU8 / fmtRGBBg / fmtRGBFg are local helpers used by the
+// focus-dim test. They build the SGR fragments lipgloss/v2 emits
+// for RGB foreground / background ("38;2;R;G;B" / "48;2;R;G;B"),
+// so the test can substring-match against rendered output.
+func itoaU8(v uint8) string {
+	if v == 0 {
+		return "0"
+	}
+	var buf [3]byte
+	i := len(buf)
+	for v > 0 {
+		i--
+		buf[i] = byte('0' + v%10)
+		v /= 10
+	}
+	return string(buf[i:])
+}
+
+func fmtRGBFg(r, g, b uint8) string { return "38;2;" + itoaU8(r) + ";" + itoaU8(g) + ";" + itoaU8(b) }
+func fmtRGBBg(r, g, b uint8) string { return "48;2;" + itoaU8(r) + ";" + itoaU8(g) + ";" + itoaU8(b) }
+
+// TestSelectedCardDimsWhenUnfocused asserts:
+//  1. Focused selected row uses Accent for the border foreground and
+//     SelectionTintColor(true) for the background.
+//  2. Unfocused selected row uses TextMuted for the border foreground
+//     and SelectionTintColor(false) for the background — i.e. the
+//     bright Accent goes away when the panel loses focus.
+func TestSelectedCardDimsWhenUnfocused(t *testing.T) {
+	styles.Apply("dark", config.Theme{})
+	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
+
+	m := New(map[string]string{}, "USELF")
+	m.SetSummaries(sampleSummaries())
+
+	// Focused
+	m.SetFocused(true)
+	focusedOut := m.View(20, 60)
+
+	ar, ag, ab, _ := styles.Accent.RGBA()
+	wantAccent := fmtRGBFg(uint8(ar>>8), uint8(ag>>8), uint8(ab>>8))
+	if !strings.Contains(focusedOut, wantAccent) {
+		t.Fatalf("focused selected card missing Accent border fg %q", wantAccent)
+	}
+	fr, fg, fb, _ := styles.SelectionTintColor(true).RGBA()
+	wantFocusedTint := fmtRGBBg(uint8(fr>>8), uint8(fg>>8), uint8(fb>>8))
+	if !strings.Contains(focusedOut, wantFocusedTint) {
+		t.Fatalf("focused selected card missing focused tint bg %q", wantFocusedTint)
+	}
+
+	// Unfocused
+	m.SetFocused(false)
+	unfocusedOut := m.View(20, 60)
+
+	if strings.Contains(unfocusedOut, wantAccent) {
+		t.Fatal("unfocused selected card still contains Accent border fg; should dim to TextMuted")
+	}
+	mr, mg, mb, _ := styles.TextMuted.RGBA()
+	wantMuted := fmtRGBFg(uint8(mr>>8), uint8(mg>>8), uint8(mb>>8))
+	if !strings.Contains(unfocusedOut, wantMuted) {
+		t.Fatalf("unfocused selected card missing TextMuted border fg %q", wantMuted)
+	}
+	if strings.Contains(unfocusedOut, wantFocusedTint) {
+		t.Fatal("unfocused selected card still contains focused tint bg; should use unfocused tint")
 	}
 }

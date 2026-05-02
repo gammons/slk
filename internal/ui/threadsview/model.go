@@ -60,13 +60,22 @@ func borderInvisStyle() lipgloss.Style {
 		BorderBackground(styles.Background)
 }
 
-func borderSelectStyle() lipgloss.Style {
+// borderSelectStyle returns the bordered style for the selected card.
+// focused drives both the border foreground (Accent vs TextMuted) and
+// the row background (focused tint vs unfocused tint), matching the
+// "you're acting on this" language used by the messages and thread
+// panels.
+func borderSelectStyle(focused bool) lipgloss.Style {
 	return lipgloss.NewStyle().
 		BorderStyle(thickLeftBorder).BorderLeft(true).
-		BorderForeground(styles.Accent).
-		BorderBackground(styles.Background)
+		BorderForeground(styles.SelectionBorderColor(focused)).
+		BorderBackground(styles.SelectionTintColor(focused)).
+		Background(styles.SelectionTintColor(focused))
 }
 
+// borderFillStyle returns the row-fill style for unselected cards
+// (themed Background). Selected cards use a SelectionTintColor fill
+// inside renderCard so the tint reaches the right edge.
 func borderFillStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Background(styles.Background)
 }
@@ -550,14 +559,18 @@ func (m *Model) renderCard(s cache.ThreadSummary, width int, selected bool) []st
 	footerText := "  " + strconv.Itoa(s.ReplyCount) + " " + replyWord + " · last by " + lastBy + " " + formatRelTime(s.LastReplyTS)
 	footerText = clipToWidth(footerText, contentWidth)
 
-	// Pick border color (green when selected, bg-colored when not) and
-	// fill content to contentWidth so the border-rendered output is
-	// exactly `width` columns wide. Same pattern used by messages.Model.
+	// Pick border + fill (themed Background for unselected; tinted
+	// SelectionTintColor for selected so trailing whitespace carries
+	// the tint to the right edge — same per-variant fill pattern used
+	// in internal/ui/messages/model.go).
 	borderStyle := borderInvisStyle()
-	if selected {
-		borderStyle = borderSelectStyle()
-	}
 	fill := borderFillStyle().Width(contentWidth)
+	if selected {
+		borderStyle = borderSelectStyle(m.focused)
+		fill = lipgloss.NewStyle().
+			Background(styles.SelectionTintColor(m.focused)).
+			Width(contentWidth)
+	}
 
 	headerOut := borderStyle.Render(fill.Render(header))
 	previewOut := borderStyle.Render(fill.Render(previewLine))
