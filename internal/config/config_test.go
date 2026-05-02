@@ -523,3 +523,49 @@ team_id = "T03QQQRRR"
 		t.Errorf("oss order (unset) = %d, want 0", got)
 	}
 }
+
+func TestEffectiveUseSlackSections_DefaultTrue(t *testing.T) {
+	cfg := Config{}
+	if !cfg.EffectiveUseSlackSections("T1") {
+		t.Errorf("default should be true")
+	}
+}
+
+func TestEffectiveUseSlackSections_GlobalFalse(t *testing.T) {
+	f := false
+	cfg := Config{General: General{UseSlackSections: &f}}
+	if cfg.EffectiveUseSlackSections("T1") {
+		t.Errorf("global=false should disable")
+	}
+}
+
+func TestEffectiveUseSlackSections_WorkspaceOverride(t *testing.T) {
+	tr, fa := true, false
+	// Global=true (default), workspace=false → false
+	cfg := Config{
+		Workspaces: map[string]Workspace{
+			"work": {TeamID: "T1", UseSlackSections: &fa},
+		},
+	}
+	if cfg.EffectiveUseSlackSections("T1") {
+		t.Errorf("workspace override (false) should win over global (true)")
+	}
+	// Global=false, workspace=true → true
+	cfg2 := Config{
+		General: General{UseSlackSections: &fa},
+		Workspaces: map[string]Workspace{
+			"work": {TeamID: "T1", UseSlackSections: &tr},
+		},
+	}
+	if !cfg2.EffectiveUseSlackSections("T1") {
+		t.Errorf("workspace override (true) should win over global (false)")
+	}
+}
+
+func TestEffectiveUseSlackSections_UnknownTeamUsesGlobal(t *testing.T) {
+	f := false
+	cfg := Config{General: General{UseSlackSections: &f}}
+	if cfg.EffectiveUseSlackSections("T_UNKNOWN") {
+		t.Errorf("unknown team should fall through to global=false")
+	}
+}
