@@ -1199,3 +1199,30 @@ func TestMarkThreadUnread_EmptyArgs_NoOp(t *testing.T) {
 		t.Error("expected no HTTP call when args empty")
 	}
 }
+
+func TestSendReply_BuildsRichTextBlock(t *testing.T) {
+	api, getForm, closeFn := newTestSlackAPI(t, `{"ok":true,"ts":"1700000000.000200","channel":"C1"}`)
+	defer closeFn()
+	c := &Client{api: api}
+
+	ts, sentMrkdwn, err := c.SendReply(context.Background(), "C1", "1700000000.000100", "see [docs](https://x.com)")
+	if err != nil {
+		t.Fatalf("SendReply: %v", err)
+	}
+	if ts != "1700000000.000200" {
+		t.Errorf("ts = %q", ts)
+	}
+	if sentMrkdwn != "see <https://x.com|docs>" {
+		t.Errorf("sentMrkdwn = %q", sentMrkdwn)
+	}
+	form := getForm()
+	if form.Get("text") != "see <https://x.com|docs>" {
+		t.Errorf("wire text = %q", form.Get("text"))
+	}
+	if form.Get("blocks") == "" {
+		t.Error("blocks form value empty; expected rich_text block")
+	}
+	if form.Get("thread_ts") != "1700000000.000100" {
+		t.Errorf("thread_ts = %q, want parent ts", form.Get("thread_ts"))
+	}
+}

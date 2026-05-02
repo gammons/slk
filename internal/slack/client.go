@@ -668,15 +668,21 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
 }
 
 // SendReply posts a threaded reply to the specified message.
-func (c *Client) SendReply(ctx context.Context, channelID, threadTS, text string) (string, error) {
-	_, ts, err := c.api.PostMessage(channelID,
-		slack.MsgOptionText(text, false),
+// Returns the timestamp and the converted mrkdwn text actually sent.
+func (c *Client) SendReply(ctx context.Context, channelID, threadTS, text string) (string, string, error) {
+	mr, block := mrkdwn.Convert(text)
+	opts := []slack.MsgOption{
+		slack.MsgOptionText(mr, false),
 		slack.MsgOptionTS(threadTS),
-	)
-	if err != nil {
-		return "", fmt.Errorf("sending reply: %w", err)
 	}
-	return ts, nil
+	if block != nil {
+		opts = append(opts, slack.MsgOptionBlocks(block))
+	}
+	_, ts, err := c.api.PostMessage(channelID, opts...)
+	if err != nil {
+		return "", "", fmt.Errorf("sending reply: %w", err)
+	}
+	return ts, mr, nil
 }
 
 // GetReplies retrieves all replies in a thread.

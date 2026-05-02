@@ -754,7 +754,7 @@ func run() error {
 
 		app.SetThreadReplySender(func(channelID, threadTS, text string) tea.Msg {
 			ctx := context.Background()
-			ts, err := client.SendReply(ctx, channelID, threadTS, text)
+			ts, sentMrkdwn, err := client.SendReply(ctx, channelID, threadTS, text)
 			if err != nil {
 				log.Printf("Warning: failed to send thread reply: %v", err)
 				return nil
@@ -770,7 +770,7 @@ func run() error {
 					TS:        ts,
 					UserID:    client.UserID(),
 					UserName:  userName,
-					Text:      text,
+					Text:      sentMrkdwn,
 					Timestamp: formatTimestamp(ts, tsFormat),
 					ThreadTS:  threadTS,
 				},
