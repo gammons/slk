@@ -13,14 +13,22 @@ func rgb(c color.Color) (uint8, uint8, uint8) {
 	return uint8(r >> 8), uint8(g >> 8), uint8(b >> 8)
 }
 
+// applyTheme calls Apply and registers a cleanup that resets to "dark"
+// after the test, isolating package-level mutations.
+func applyTheme(t *testing.T, name string, overrides config.Theme) {
+	t.Helper()
+	Apply(name, overrides)
+	t.Cleanup(func() { Apply("dark", config.Theme{}) })
+}
+
 func TestMixColors_HalfwayBlend(t *testing.T) {
 	fg := lipgloss.Color("#FF0000") // red
 	bg := lipgloss.Color("#0000FF") // blue
 	out := mixColors(fg, bg, 0.5)
 	r, g, b := rgb(out)
-	// Halfway between #FF0000 and #0000FF is #7F007F (rounding to 0x7F).
-	if r != 0x7F || g != 0x00 || b != 0x7F {
-		t.Fatalf("expected #7F007F, got #%02X%02X%02X", r, g, b)
+	// Halfway between #FF0000 and #0000FF, with round-half-up, is #800080.
+	if r != 0x80 || g != 0x00 || b != 0x80 {
+		t.Fatalf("expected #800080, got #%02X%02X%02X", r, g, b)
 	}
 }
 
@@ -41,7 +49,7 @@ func TestMixColors_AlphaOneIsForeground(t *testing.T) {
 }
 
 func TestSelectionTintColor_FocusedIsAccentMix(t *testing.T) {
-	Apply("dark", config.Theme{})
+	applyTheme(t, "dark", config.Theme{})
 	expected := mixColors(Accent, Background, defaultTintAlpha)
 	got := SelectionTintColor(true)
 	er, eg, eb := rgb(expected)
@@ -52,7 +60,7 @@ func TestSelectionTintColor_FocusedIsAccentMix(t *testing.T) {
 }
 
 func TestSelectionTintColor_UnfocusedIsTextMutedMix(t *testing.T) {
-	Apply("dark", config.Theme{})
+	applyTheme(t, "dark", config.Theme{})
 	expected := mixColors(TextMuted, Background, defaultTintAlpha)
 	got := SelectionTintColor(false)
 	er, eg, eb := rgb(expected)
@@ -63,7 +71,7 @@ func TestSelectionTintColor_UnfocusedIsTextMutedMix(t *testing.T) {
 }
 
 func TestComposeInsertBG_DerivedFromAccentAndBackground(t *testing.T) {
-	Apply("dark", config.Theme{})
+	applyTheme(t, "dark", config.Theme{})
 	expected := mixColors(Accent, Background, defaultTintAlpha)
 	er, eg, eb := rgb(expected)
 	gr, gg, gb := rgb(ComposeInsertBG)
@@ -74,23 +82,23 @@ func TestComposeInsertBG_DerivedFromAccentAndBackground(t *testing.T) {
 
 func TestComposeInsertBG_OverrideFromThemeColors(t *testing.T) {
 	RegisterCustomTheme("tinttest", ThemeColors{
-		Primary: "#000000", Accent: "#000000", Warning: "#000000",
-		Error: "#000000", Background: "#000000", Surface: "#000000",
-		SurfaceDark: "#000000", Text: "#FFFFFF", TextMuted: "#888888",
+		Primary: "#001122", Accent: "#334455", Warning: "#556677",
+		Error: "#778899", Background: "#1A1A2E", Surface: "#16162B",
+		SurfaceDark: "#0F0F23", Text: "#FFFFFF", TextMuted: "#888888",
 		Border:          "#222222",
 		ComposeInsertBG: "#ABCDEF",
 	})
-	Apply("tinttest", config.Theme{})
+	applyTheme(t, "tinttest", config.Theme{})
 	r, g, b := rgb(ComposeInsertBG)
 	if r != 0xAB || g != 0xCD || b != 0xEF {
 		t.Fatalf("override not honored: got #%02X%02X%02X", r, g, b)
 	}
-	Apply("dark", config.Theme{})
 }
 
 // Lock the default α for the 12 built-in themes — guarantees the
 // derived tints don't drift silently across refactors.
 func TestComposeInsertBG_StableAcrossBuiltinThemes(t *testing.T) {
+	t.Cleanup(func() { Apply("dark", config.Theme{}) })
 	for _, name := range ThemeNames() {
 		Apply(name, config.Theme{})
 		// Just assert it's non-nil and distinct from Background;
@@ -104,5 +112,4 @@ func TestComposeInsertBG_StableAcrossBuiltinThemes(t *testing.T) {
 			t.Fatalf("%s: ComposeInsertBG must differ from Background", name)
 		}
 	}
-	Apply("dark", config.Theme{})
 }

@@ -3,6 +3,7 @@ package styles
 
 import (
 	"image/color"
+	"math"
 
 	"charm.land/lipgloss/v2"
 )
@@ -59,9 +60,9 @@ func mixColors(fg, bg color.Color, alpha float64) color.Color {
 	// RGBA returns 16-bit channels; collapse to 8-bit before mixing.
 	fr8, fg8, fb8 := float64(fr>>8), float64(fg2>>8), float64(fb>>8)
 	br8, bg8, bb8 := float64(br>>8), float64(bg2>>8), float64(bb>>8)
-	r := uint8(fr8*alpha + br8*(1-alpha))
-	g := uint8(fg8*alpha + bg8*(1-alpha))
-	b := uint8(fb8*alpha + bb8*(1-alpha))
+	r := uint8(math.Round(fr8*alpha + br8*(1-alpha)))
+	g := uint8(math.Round(fg8*alpha + bg8*(1-alpha)))
+	b := uint8(math.Round(fb8*alpha + bb8*(1-alpha)))
 	return lipgloss.Color(rgbHex(r, g, b))
 }
 
