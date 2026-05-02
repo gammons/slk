@@ -6,8 +6,10 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 func TestComposeViewPlaceholder(t *testing.T) {
@@ -873,5 +875,72 @@ func TestMoveCursorToStart_Then_BackToEnd(t *testing.T) {
 	m.MoveCursorToEnd()
 	if !m.CursorAtLastLine() {
 		t.Errorf("expected cursor on last line after MoveCursorToEnd")
+	}
+}
+
+// itoaU8 / fmtRGBBg are local helpers used by the tint-background tests.
+func itoaU8(v uint8) string {
+	if v == 0 {
+		return "0"
+	}
+	var buf [3]byte
+	i := len(buf)
+	for v > 0 {
+		i--
+		buf[i] = byte('0' + v%10)
+		v /= 10
+	}
+	return string(buf[i:])
+}
+
+// fmtRGBBg returns the SGR fragment lipgloss/v2 emits for an RGB
+// background ("48;2;R;G;B"). Substring-matching this fragment in
+// View()'s raw output is enough to assert the tint is being painted.
+func fmtRGBBg(r, g, b uint8) string {
+	return "48;2;" + itoaU8(r) + ";" + itoaU8(g) + ";" + itoaU8(b)
+}
+
+// composeInsertBgRGB returns the current theme's ComposeInsertBG as
+// 8-bit RGB so the tests can build the expected SGR fragment.
+func composeInsertBgRGB(t *testing.T) (uint8, uint8, uint8) {
+	t.Helper()
+	r, g, b, _ := styles.ComposeInsertBG.RGBA()
+	return uint8(r >> 8), uint8(g >> 8), uint8(b >> 8)
+}
+
+// TestView_FocusedRendersComposeInsertBackground asserts that when
+// the compose box is focused, its rendered output contains the
+// ComposeInsertBG tint as an ANSI background code. Guards against
+// regressions where ComposeInsert loses its Background() call.
+func TestView_FocusedRendersComposeInsertBackground(t *testing.T) {
+	styles.Apply("dark", config.Theme{})
+	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
+
+	m := New("general")
+	out := m.View(60, true /* focused */)
+
+	r, g, b := composeInsertBgRGB(t)
+	expected := fmtRGBBg(r, g, b)
+	if !strings.Contains(out, expected) {
+		t.Fatalf("focused compose output missing tint bg %q\nraw=%q",
+			expected, out)
+	}
+}
+
+// TestView_UnfocusedDoesNotUseComposeInsertBackground asserts that
+// when the compose box is NOT focused, the ComposeInsertBG tint is
+// absent. The unfocused box keeps SurfaceDark as its background.
+func TestView_UnfocusedDoesNotUseComposeInsertBackground(t *testing.T) {
+	styles.Apply("dark", config.Theme{})
+	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
+
+	m := New("general")
+	out := m.View(60, false /* focused */)
+
+	r, g, b := composeInsertBgRGB(t)
+	expected := fmtRGBBg(r, g, b)
+	if strings.Contains(out, expected) {
+		t.Fatalf("unfocused compose output unexpectedly contains tint bg %q\nraw=%q",
+			expected, out)
 	}
 }

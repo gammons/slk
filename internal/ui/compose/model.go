@@ -1059,22 +1059,31 @@ func (m Model) View(width int, focused bool) string {
 		style = styles.ComposeInsert.Width(width - 1)
 	}
 
+	// Pick the inner background to match the outer style: ComposeInsertBG
+	// when focused, SurfaceDark when not. Without this, the textarea's
+	// internal Inline(true) styles only paint behind text and the row's
+	// trailing whitespace shows the WRONG bg.
+	innerBG := styles.SurfaceDark
+	if focused {
+		innerBG = styles.ComposeInsertBG
+	}
+
 	var box string
 	// If empty and unfocused, render placeholder manually with correct background.
 	// When focused, show an empty compose box with cursor (no placeholder).
 	if m.input.Value() == "" && !focused {
 		placeholder := lipgloss.NewStyle().
 			Foreground(styles.TextMuted).
-			Background(styles.SurfaceDark).
+			Background(innerBG).
 			Width(innerWidth).
 			Render(m.input.Placeholder)
 		box = style.Render(placeholder)
 	} else {
-		// Wrap textarea output with full-width dark background.
+		// Wrap textarea output with full-width tinted background.
 		// The textarea's internal styles use Inline(true) which only covers text,
 		// not the full line width. This wrapper ensures consistent background.
 		content := lipgloss.NewStyle().
-			Background(styles.SurfaceDark).
+			Background(innerBG).
 			Foreground(styles.TextPrimary).
 			Width(innerWidth).
 			Render(m.input.View())

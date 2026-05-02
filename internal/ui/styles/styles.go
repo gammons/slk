@@ -165,9 +165,9 @@ var (
 	ComposeInsert = lipgloss.NewStyle().
 			BorderStyle(thickLeftBorder).
 			BorderLeft(true).
-			BorderForeground(Primary).
-			BorderBackground(SurfaceDark).
-			Background(SurfaceDark).
+			BorderForeground(Accent).
+			BorderBackground(ComposeInsertBG).
+			Background(ComposeInsertBG).
 			Foreground(TextPrimary).
 			Padding(1, 1, 1, 1)
 
@@ -397,8 +397,8 @@ func buildStyles() {
 		BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(Primary).BorderBackground(SurfaceDark).
 		Background(SurfaceDark).Foreground(TextPrimary).Padding(1, 1, 1, 1)
 	ComposeInsert = lipgloss.NewStyle().
-		BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(Primary).BorderBackground(SurfaceDark).
-		Background(SurfaceDark).Foreground(TextPrimary).Padding(1, 1, 1, 1)
+		BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(Accent).BorderBackground(ComposeInsertBG).
+		Background(ComposeInsertBG).Foreground(TextPrimary).Padding(1, 1, 1, 1)
 	PresenceOnline = lipgloss.NewStyle().Foreground(Accent)
 	PresenceAway = lipgloss.NewStyle().Foreground(TextMuted)
 	ReactionPillOwn = lipgloss.NewStyle().
