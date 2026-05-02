@@ -206,6 +206,30 @@ func (m *Model) AddReply(msg messages.MessageItem) {
 	m.selected = len(m.replies) - 1
 }
 
+// UpsertSelfSentReply is the optimistic-add variant of AddReply for
+// thread replies the user just sent themselves. If a reply with the
+// same TS already exists (e.g. a WS echo arrived faster than the
+// HTTP response and AddReply stored its version first), this method
+// REPLACES that entry's contents with msg. Otherwise it appends.
+//
+// Mirrors messages.Model.UpsertSelfSent — see that method for the
+// motivating bug (Slack's WS-echo Text may flatten paragraph breaks
+// for rich_text_block messages).
+func (m *Model) UpsertSelfSentReply(msg messages.MessageItem) {
+	if msg.TS != "" {
+		for i := len(m.replies) - 1; i >= 0; i-- {
+			if m.replies[i].TS == msg.TS {
+				m.replies[i] = msg
+				m.InvalidateCache()
+				return
+			}
+		}
+	}
+	m.replies = append(m.replies, msg)
+	m.InvalidateCache()
+	m.selected = len(m.replies) - 1
+}
+
 // Clear resets all thread state.
 func (m *Model) Clear() {
 	m.ClearSelection()

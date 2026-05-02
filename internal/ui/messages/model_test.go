@@ -643,3 +643,70 @@ func equalLines(a, b []string) bool {
 	}
 	return true
 }
+
+// TestUpsertSelfSent_ReplacesRacingWSEcho asserts that when the WS
+// echo of our own message races ahead of the HTTP response and
+// AppendMessage stores the WS-echo MessageItem first, calling
+// UpsertSelfSent with the optimistic version replaces the existing
+// entry's content. This ensures the converted-mrkdwn text from
+// internal/slack/mrkdwn always wins for self-sent messages.
+func TestUpsertSelfSent_ReplacesRacingWSEcho(t *testing.T) {
+	m := New(nil, "general")
+
+	// Simulate WS echo arriving first with text Slack normalized.
+	wsEcho := MessageItem{
+		TS:        "1.0",
+		UserID:    "U1",
+		UserName:  "grant",
+		Text:      "Hello World",
+		Timestamp: "12:21 PM",
+	}
+	m.AppendMessage(wsEcho)
+	if got := m.Messages()[0].Text; got != "Hello World" {
+		t.Fatalf("setup: WS-echo text not stored, got %q", got)
+	}
+
+	// Now the optimistic MessageSentMsg arrives with our converted mrkdwn.
+	optimistic := MessageItem{
+		TS:        "1.0",
+		UserID:    "U1",
+		UserName:  "grant",
+		Text:      "Hello\nWorld",
+		Timestamp: "12:21 PM",
+	}
+	m.UpsertSelfSent(optimistic)
+
+	if n := len(m.Messages()); n != 1 {
+		t.Fatalf("got %d messages, want 1 (upsert should not duplicate)", n)
+	}
+	if got := m.Messages()[0].Text; got != "Hello\nWorld" {
+		t.Errorf("Text = %q, want %q (optimistic should replace WS-echo)", got, "Hello\nWorld")
+	}
+}
+
+// TestUpsertSelfSent_AppendsWhenNoExisting asserts that when no
+// message with the given TS exists yet (the common case where the
+// HTTP response arrives before the WS echo), UpsertSelfSent simply
+// appends the message.
+func TestUpsertSelfSent_AppendsWhenNoExisting(t *testing.T) {
+	m := New(nil, "general")
+	msg := MessageItem{
+		TS:        "1.0",
+		UserID:    "U1",
+		UserName:  "grant",
+		Text:      "Hello\nWorld",
+		Timestamp: "12:21 PM",
+	}
+	m.UpsertSelfSent(msg)
+
+	if n := len(m.Messages()); n != 1 {
+		t.Fatalf("got %d messages, want 1", n)
+	}
+	if got := m.Messages()[0].Text; got != "Hello\nWorld" {
+		t.Errorf("Text = %q", got)
+	}
+	// Selection should follow the new message.
+	if got := m.SelectedIndex(); got != 0 {
+		t.Errorf("SelectedIndex = %d, want 0", got)
+	}
+}

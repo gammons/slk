@@ -1453,11 +1453,17 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case MessageSentMsg:
 		// Optimistic add using the chat.postMessage HTTP response. The
 		// matching WS echo (if it arrives) is filtered in NewMessageMsg
-		// via isSelfSent so we don't double-render.
+		// via isSelfSent so we don't double-render. We use UpsertSelfSent
+		// rather than AppendMessage so that the optimistic text wins
+		// even when the WS echo races ahead and was already stored
+		// (Slack may normalise wire-form text — e.g. flatten paragraph
+		// breaks for rich_text_block messages — but our renderer only
+		// reads the Text field; without upserting, multi-line composed
+		// messages render horizontally when the echo arrives first).
 		if msg.Message.TS != "" {
 			a.recordSelfSent(msg.Message.TS)
 			if msg.ChannelID == a.activeChannelID {
-				a.messagepane.AppendMessage(msg.Message)
+				a.messagepane.UpsertSelfSent(msg.Message)
 			}
 		}
 
@@ -1645,8 +1651,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// thread's channel, so gating on it here meant the user's own
 			// reply was sent to Slack but never appended locally -- they
 			// had to leave and re-enter the thread to see it.
+			//
+			// UpsertSelfSentReply (rather than AddReply) ensures the
+			// optimistic, locally-converted-mrkdwn text wins even when
+			// the WS echo races ahead and was already stored.
 			if a.threadVisible && msg.ThreadTS == a.threadPanel.ThreadTS() && msg.ChannelID == a.threadPanel.ChannelID() {
-				a.threadPanel.AddReply(msg.Message)
+				a.threadPanel.UpsertSelfSentReply(msg.Message)
 			}
 			if msg.ChannelID == a.activeChannelID {
 				a.messagepane.IncrementReplyCount(msg.ThreadTS, msg.Message.TS)

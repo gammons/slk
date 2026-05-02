@@ -562,6 +562,36 @@ func (m *Model) AppendMessage(msg MessageItem) {
 	m.selected = len(m.messages) - 1
 }
 
+// UpsertSelfSent is the optimistic-add variant of AppendMessage for
+// messages we just sent ourselves. If a message with the same TS
+// already exists (e.g. a WS echo arrived faster than the HTTP
+// response and AppendMessage stored its version first), this method
+// REPLACES that entry's contents with msg. Otherwise it appends.
+//
+// The replace-on-duplicate behaviour ensures the optimistic-display
+// text — which carries the locally-converted mrkdwn from the slk
+// compose box — always wins over Slack's WS-echo text. Slack may
+// normalise the wire-form text (e.g. flatten paragraph breaks for
+// rich_text_block messages), and our renderer only consults the
+// Text field, so without this fix multi-line composed messages
+// render horizontally when the WS echo races ahead.
+func (m *Model) UpsertSelfSent(msg MessageItem) {
+	if msg.TS != "" {
+		for i := len(m.messages) - 1; i >= 0; i-- {
+			if m.messages[i].TS == msg.TS {
+				m.messages[i] = msg
+				m.cache = nil
+				m.dirty()
+				return
+			}
+		}
+	}
+	m.messages = append(m.messages, msg)
+	m.cache = nil
+	m.dirty()
+	m.selected = len(m.messages) - 1
+}
+
 func (m *Model) Messages() []MessageItem {
 	return m.messages
 }

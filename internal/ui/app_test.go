@@ -979,33 +979,41 @@ func TestApp_WorkspaceReadyAppliesPerWorkspaceTheme(t *testing.T) {
 
 // Defends Bug A: a duplicate of the same TS (e.g. WS echo arriving before
 // the optimistic-add path can record the TS) must not produce two messages
-// in the pane.
+// in the pane. The optimistic version (which carries the locally-converted
+// mrkdwn from compose) must REPLACE the WS-echo version, not be silently
+// dropped — Slack normalises wire-form text, so the WS echo's Text may
+// differ from what slk's renderer expects.
 func TestApp_DuplicateMessageEventDoesNotDoubleAppend(t *testing.T) {
 	app := NewApp()
 	app.SetCurrentUserID("USELF")
 	app.activeChannelID = "C1"
 
-	// Simulate the race: WS echo arrives FIRST, before MessageSentMsg.
+	// Simulate the race: WS echo arrives FIRST with text Slack flattened
+	// (no \n, single line) — the user composed "Hello\nWorld".
 	app.Update(NewMessageMsg{
 		ChannelID: "C1",
 		Message: messages.MessageItem{
-			TS: "1700000999.000001", UserID: "USELF", Text: "hello",
+			TS: "1700000999.000001", UserID: "USELF", Text: "Hello World",
 		},
 	})
-	verAfterEcho := app.messagepane.Version()
-	// Then the HTTP-response optimistic path fires.
+	// Then the HTTP-response optimistic path fires with the converted
+	// mrkdwn text that preserves the line break.
 	app.Update(MessageSentMsg{
 		ChannelID: "C1",
 		Message: messages.MessageItem{
-			TS: "1700000999.000001", UserID: "USELF", Text: "hello",
+			TS: "1700000999.000001", UserID: "USELF", Text: "Hello\nWorld",
 		},
 	})
-	if app.messagepane.Version() != verAfterEcho {
-		t.Errorf("MessageSentMsg arriving after WS echo should not re-append; messagepane version advanced")
+
+	// The model contains exactly one message (no duplicate).
+	got := app.messagepane.Messages()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 message in pane, got %d (duplicate)", len(got))
 	}
-	// And the model itself contains exactly one message.
-	if got := len(app.messagepane.Messages()); got != 1 {
-		t.Errorf("expected 1 message in pane, got %d (duplicate)", got)
+	// And its Text is the optimistic, line-preserving version — not the
+	// flattened WS-echo text.
+	if got[0].Text != "Hello\nWorld" {
+		t.Errorf("Text = %q, want %q (optimistic should win over WS-echo)", got[0].Text, "Hello\nWorld")
 	}
 }
 
