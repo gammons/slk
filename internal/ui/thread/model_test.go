@@ -4,7 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 func TestSetThread(t *testing.T) {
@@ -270,5 +272,57 @@ func TestUpdateParentInPlace_NoMatch(t *testing.T) {
 	}
 	if m.ParentMsg().Text != "parent" {
 		t.Error("parent should be unchanged when TS does not match")
+	}
+}
+
+// itoaU8 / fmtRGBBg are local helpers used by the tint-background test.
+// Build the SGR fragment lipgloss/v2 emits for an RGB background
+// ("48;2;R;G;B"), so the test can substring-match against rendered
+// output without depending on terminal dimensions.
+func itoaU8(v uint8) string {
+	if v == 0 {
+		return "0"
+	}
+	var buf [3]byte
+	i := len(buf)
+	for v > 0 {
+		i--
+		buf[i] = byte('0' + v%10)
+		v /= 10
+	}
+	return string(buf[i:])
+}
+
+func fmtRGBBg(r, g, b uint8) string {
+	return "48;2;" + itoaU8(r) + ";" + itoaU8(g) + ";" + itoaU8(b)
+}
+
+// TestSelectedReplyContainsTintBackground asserts that the rendered
+// thread output for a selected reply contains the SelectionTintColor
+// as an ANSI background code. Mirror of the messages-pane test.
+func TestSelectedReplyContainsTintBackground(t *testing.T) {
+	styles.Apply("dark", config.Theme{})
+	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
+
+	m := New()
+	parent := messages.MessageItem{TS: "1.0", UserID: "U1", UserName: "alice", Text: "parent"}
+	replies := []messages.MessageItem{
+		{TS: "1.001", UserID: "U2", UserName: "bob", Text: "reply one"},
+		{TS: "1.002", UserID: "U3", UserName: "carol", Text: "reply two"},
+	}
+	m.SetThread(parent, replies, "C123", "1.0")
+	m.SetFocused(true)
+	// Walk the selection to the second reply (index 1). The thread's
+	// initial selection is implementation-defined — moving deterministically
+	// avoids depending on it.
+	m.MoveDown()
+	m.MoveDown()
+
+	out := m.View(20 /*height*/, 60 /*width*/)
+
+	r, g, b, _ := styles.SelectionTintColor(true).RGBA()
+	want := fmtRGBBg(uint8(r>>8), uint8(g>>8), uint8(b>>8))
+	if !strings.Contains(out, want) {
+		t.Fatalf("expected selected reply to contain tint bg %q\nout=%q", want, out)
 	}
 }

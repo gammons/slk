@@ -986,7 +986,9 @@ func (m *Model) View(height, width int) string {
 		borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).
 			BorderForeground(styles.Background).BorderBackground(styles.Background)
 		borderSelect := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).
-			BorderForeground(styles.SelectionBorderColor(m.focused)).BorderBackground(styles.Background)
+			BorderForeground(styles.SelectionBorderColor(m.focused)).
+			BorderBackground(styles.SelectionTintColor(m.focused)).
+			Background(styles.SelectionTintColor(m.focused))
 		for i, reply := range m.replies {
 			// renderThreadMessage's last arg ("isSelected") drives reaction-
 			// nav pill highlighting (lines 1040, 1049): when reaction nav
@@ -998,20 +1000,29 @@ func (m *Model) View(height, width int) string {
 			// This matches the messages-pane convention
 			// (internal/ui/messages/model.go:1050).
 			rendered := m.renderThreadMessage(reply, width, m.userNames, m.channelNames, i == m.selected)
-			filled := borderFill.Width(width - 1).Render(rendered)
-			normal := borderInvis.Render(filled)
-			selected := borderSelect.Render(filled)
+			// Two filled variants — see internal/ui/messages/model.go for the
+			// rationale. Without per-variant fills, the trailing whitespace of
+			// every wrapped line shows the wrong bg and the tint stops at the
+			// last character of content. linesPlain mirrors the UNTINTED
+			// (filledNormal) so clipboard text never carries the tint.
+			filledNormal := borderFill.Width(width - 1).Render(rendered)
+			selectedFill := lipgloss.NewStyle().
+				Background(styles.SelectionTintColor(m.focused)).
+				Width(width - 1).
+				Render(rendered)
+			normal := borderInvis.Render(filledNormal)
+			selected := borderSelect.Render(selectedFill)
 			linesN := strings.Split(normal, "\n")
 			linesS := strings.Split(selected, "\n")
 			m.cache = append(m.cache, viewEntry{
 				linesNormal:   linesN,
 				linesSelected: linesS,
-				// linesPlain mirrors the UNBORDERED content (filled) so the
-				// thick left-border column is NOT present in plain text and
+				// linesPlain mirrors the UNBORDERED, UNTINTED content (filledNormal)
+				// so the thick left-border column is NOT present in plain text and
 				// never bleeds into clipboard output via SelectionText. The
 				// mouse-column to plain-column mapping uses contentColOffset.
 				// Same convention as internal/ui/messages/model.go:1057-1061.
-				linesPlain:       messages.PlainLines(filled),
+				linesPlain:       messages.PlainLines(filledNormal),
 				height:           len(linesN),
 				replyIdx:         i,
 				contentColOffset: 1,
