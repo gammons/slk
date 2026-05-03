@@ -1107,6 +1107,16 @@ func (m *Model) buildCache(width int) {
 		if m.IsCollapsed(sectionName) {
 			continue
 		}
+		// Defense-in-depth: if sectionFor returns a section name that
+		// modelOrderedSections didn't include (e.g. an item carries a
+		// stale Section ID for a section that has been deleted or
+		// filtered out as non-renderable), skip it rather than
+		// nil-dereferencing sectionMap[sectionName] below. The user
+		// will see the channel reappear once the next refresh cycle
+		// (WS event or workspace switch) re-resolves its Section.
+		if _, ok := sectionMap[sectionName]; !ok {
+			continue
+		}
 
 		// Unread dot indicator (same regardless of selection state).
 		unreadDot := " "

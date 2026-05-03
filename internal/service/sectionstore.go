@@ -90,6 +90,13 @@ func (s *SectionStore) Bootstrap(ctx context.Context, client SectionsClient) err
 
 // SectionForChannel returns the section ID a channel belongs to. Returns
 // ok=false when the store isn't ready or the channel isn't in any section.
+// SectionForChannel returns the renderable section ID a channel belongs
+// to. Returns ok=false when the store isn't ready, the channel isn't
+// indexed, OR the indexed section is not renderable in the v1 sidebar
+// (e.g. stars, slack_connect, salesforce_records, agents). Hiding
+// non-renderable sections at this boundary prevents the sidebar from
+// trying to bucket items into headers it never created — see
+// includeInSidebar for the renderability rule.
 func (s *SectionStore) SectionForChannel(channelID string) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -97,7 +104,17 @@ func (s *SectionStore) SectionForChannel(channelID string) (string, bool) {
 		return "", false
 	}
 	id, ok := s.channelToSection[channelID]
-	return id, ok
+	if !ok {
+		return "", false
+	}
+	sec, secOK := s.sectionsByID[id]
+	if !secOK || !includeInSidebar(sec) {
+		// Section was deleted, or has a non-renderable type (stars /
+		// slack_connect / etc.). Treat the channel as unclaimed so it
+		// falls into the appropriate type-default bucket.
+		return "", false
+	}
+	return id, true
 }
 
 // OrderedSections walks the linked-list (head-first) and returns the

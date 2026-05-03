@@ -264,3 +264,56 @@ func (cc *countingClient) GetChannelSections(ctx context.Context) ([]slk.Sidebar
 	cc.onCall()
 	return cc.inner.GetChannelSections(ctx)
 }
+
+// TestSectionForChannel_HidesNonRenderableSections regresses a sidebar
+// crash where a channel mapped to a non-renderable section (stars,
+// slack_connect, salesforce_records, agents) ended up with a
+// Section ID the sidebar's modelOrderedSections never emitted, causing
+// a nil-pointer dereference in buildCache. SectionForChannel now
+// returns ok=false for such channels so the resolver falls through to
+// type-default bucketing.
+func TestSectionForChannel_HidesNonRenderableSections(t *testing.T) {
+	store := NewSectionStore()
+	c := &fakeSectionsClient{sections: []slk.SidebarSection{
+		// A starred channel: real, indexed, but the section type is
+		// hidden by the v1 renderability filter.
+		{ID: "L_STARS", Type: "stars", Next: "L_STD", LastUpdate: 100,
+			ChannelIDs: []string{"C_STARRED"}, ChannelsCount: 1},
+		// A regular standard section, fully renderable.
+		{ID: "L_STD", Type: "standard", Name: "Mine", Next: "", LastUpdate: 100,
+			ChannelIDs: []string{"C_STD"}, ChannelsCount: 1},
+	}}
+	if err := store.Bootstrap(context.Background(), c); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+
+	// Channel in the renderable section — returns the ID.
+	if id, ok := store.SectionForChannel("C_STD"); !ok || id != "L_STD" {
+		t.Errorf("C_STD → (%q, %v), want (L_STD, true)", id, ok)
+	}
+	// Channel in the non-renderable (stars) section — returns ("", false)
+	// even though the channelToSection index has it. This prevents the
+	// sidebar from receiving a Section ID it can't bucket against.
+	if id, ok := store.SectionForChannel("C_STARRED"); ok {
+		t.Errorf("C_STARRED → (%q, %v), want ('', false) for non-renderable section", id, ok)
+	}
+}
+
+// TestSectionForChannel_HidesRedactedSections is the parallel guard for
+// is_redacted=true sections: even if the type would otherwise render,
+// a redacted section is hidden from the sidebar, and channels in it
+// must not leak their Section ID upward.
+func TestSectionForChannel_HidesRedactedSections(t *testing.T) {
+	store := NewSectionStore()
+	c := &fakeSectionsClient{sections: []slk.SidebarSection{
+		{ID: "L_R", Type: "standard", Name: "Hidden", Next: "", LastUpdate: 100,
+			IsRedacted: true,
+			ChannelIDs: []string{"C_REDACTED"}, ChannelsCount: 1},
+	}}
+	if err := store.Bootstrap(context.Background(), c); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	if id, ok := store.SectionForChannel("C_REDACTED"); ok {
+		t.Errorf("C_REDACTED → (%q, %v), want ('', false) for redacted section", id, ok)
+	}
+}
