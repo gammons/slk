@@ -194,3 +194,29 @@ func TestLoadCachedMessagesHandlesMissingRawJSON(t *testing.T) {
 		t.Errorf("LegacyAttachments: got %d, want 0", len(mi.LegacyAttachments))
 	}
 }
+
+// TestLoadCachedThreadRepliesEnrichesFromCache verifies that the
+// thread-cache reader returns the parent + replies in chronological
+// order, mirroring the channel reader's enrichment pattern.
+func TestLoadCachedThreadRepliesEnrichesFromCache(t *testing.T) {
+	db := newCacheForTest(t)
+
+	// Parent + 2 replies, all in the same thread.
+	for _, m := range []cache.Message{
+		{TS: "100.0", ChannelID: "C1", WorkspaceID: "T1", UserID: "U1", Text: "parent", ThreadTS: "100.0", CreatedAt: 1},
+		{TS: "101.0", ChannelID: "C1", WorkspaceID: "T1", UserID: "U2", Text: "reply 1", ThreadTS: "100.0", CreatedAt: 2},
+		{TS: "102.0", ChannelID: "C1", WorkspaceID: "T1", UserID: "U1", Text: "reply 2", ThreadTS: "100.0", CreatedAt: 3},
+	} {
+		if err := db.UpsertMessage(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	items := loadCachedThreadReplies(db, "USELF", "C1", "100.0", nil, "3:04 PM")
+	if len(items) != 3 {
+		t.Fatalf("want 3 thread items, got %d", len(items))
+	}
+	if items[0].Text != "parent" || items[2].Text != "reply 2" {
+		t.Errorf("unexpected ordering: %+v", items)
+	}
+}

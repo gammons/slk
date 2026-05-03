@@ -765,6 +765,10 @@ func run() error {
 			}
 		})
 
+		app.SetThreadCacheReader(func(channelID, threadTS string) []messages.MessageItem {
+			return loadCachedThreadReplies(db, client.UserID(), channelID, threadTS, userNames, tsFormat)
+		})
+
 		app.SetThreadMarker(func(channelID, threadTS, ts string) {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1488,82 +1492,147 @@ func loadCachedMessages(
 
 	out := make([]messages.MessageItem, 0, len(rows))
 	for _, m := range rows {
-		// Resolve username from the in-memory map first; fall back to
-		// the cached users table; finally fall back to the user ID
-		// itself so the row still renders something readable.
-		userName := userNames[m.UserID]
-		if userName == "" && m.UserID != "" {
-			if u, err := db.GetUser(m.UserID); err == nil {
-				if u.DisplayName != "" {
-					userName = u.DisplayName
-				} else if u.Name != "" {
-					userName = u.Name
-				}
-				if userName != "" {
-					userNames[m.UserID] = userName
-				}
-			}
-		}
-		if userName == "" {
-			userName = m.UserID
-		}
+		out = append(out, enrichCachedRow(db, selfUserID, channelID, m, userNames, tsFormat, "loadCachedMessages"))
+	}
+	return out
+}
 
-		// Reactions for this message.
-		var reactions []messages.ReactionItem
-		// TODO(perf): N+1 query — for 50 messages this is 50 SQLite calls on the
-		// channel-open hot path. If this becomes a bottleneck, add a batched
-		// db.GetReactionsForMessages([]ts) map[ts][]ReactionRow to the cache layer.
-		if rs, err := db.GetReactions(m.TS, channelID); err == nil {
-			for _, r := range rs {
-				hasReacted := false
-				for _, uid := range r.UserIDs {
-					if uid == selfUserID {
-						hasReacted = true
-						break
-					}
-				}
-				reactions = append(reactions, messages.ReactionItem{
-					Emoji:      r.Emoji,
-					Count:      r.Count,
-					HasReacted: hasReacted,
-				})
+// enrichCachedRow reconstructs a single messages.MessageItem from a
+// cache.Message row using the same fidelity as the network fetchers:
+// 3-tier username fallback, per-row reactions, and raw_json
+// reconstruction of files / blocks / legacy attachments.
+//
+// userNames may be nil — username resolution still works via the
+// cached users table or the userID fallback, but no memoization
+// occurs.
+//
+// raw_json unmarshal failures degrade the row to text-only without
+// failing the caller. logPrefix tags the per-row log lines so callers
+// (loadCachedMessages vs loadCachedThreadReplies) remain
+// distinguishable in logs.
+func enrichCachedRow(
+	db *cache.DB,
+	selfUserID string,
+	channelID string,
+	m cache.Message,
+	userNames map[string]string,
+	tsFormat string,
+	logPrefix string,
+) messages.MessageItem {
+	// Resolve username from the in-memory map first; fall back to
+	// the cached users table; finally fall back to the user ID
+	// itself so the row still renders something readable.
+	var userName string
+	if userNames != nil {
+		userName = userNames[m.UserID]
+	}
+	if userName == "" && m.UserID != "" {
+		if u, err := db.GetUser(m.UserID); err == nil {
+			if u.DisplayName != "" {
+				userName = u.DisplayName
+			} else if u.Name != "" {
+				userName = u.Name
 			}
+			if userName != "" && userNames != nil {
+				userNames[m.UserID] = userName
+			}
+		}
+	}
+	if userName == "" {
+		userName = m.UserID
+	}
+
+	// Reactions for this message.
+	var reactions []messages.ReactionItem
+	// TODO(perf): N+1 query — for 50 messages this is 50 SQLite calls on the
+	// channel-open hot path. If this becomes a bottleneck, add a batched
+	// db.GetReactionsForMessages([]ts) map[ts][]ReactionRow to the cache layer.
+	if rs, err := db.GetReactions(m.TS, channelID); err == nil {
+		for _, r := range rs {
+			hasReacted := false
+			for _, uid := range r.UserIDs {
+				if uid == selfUserID {
+					hasReacted = true
+					break
+				}
+			}
+			reactions = append(reactions, messages.ReactionItem{
+				Emoji:      r.Emoji,
+				Count:      r.Count,
+				HasReacted: hasReacted,
+			})
+		}
+	} else {
+		log.Printf("%s: GetReactions %s/%s: %v", logPrefix, channelID, m.TS, err)
+	}
+
+	// Attachments / blocks / legacy attachments come from
+	// raw_json. Pre-Task-2 rows have an empty raw_json; for
+	// those we render text-only.
+	var attachments []messages.Attachment
+	var blocks []blockkit.Block
+	var legacy []blockkit.LegacyAttachment
+	if m.RawJSON != "" {
+		var raw slack.Message
+		if err := json.Unmarshal([]byte(m.RawJSON), &raw); err != nil {
+			log.Printf("%s: raw_json unmarshal for %s/%s: %v",
+				logPrefix, channelID, m.TS, err)
 		} else {
-			log.Printf("loadCachedMessages: GetReactions %s/%s: %v", channelID, m.TS, err)
+			attachments = extractAttachments(raw.Files)
+			blocks = extractBlocks(raw.Blocks)
+			legacy = extractLegacyAttachments(raw.Attachments)
 		}
+	}
 
-		// Attachments / blocks / legacy attachments come from
-		// raw_json. Pre-Task-2 rows have an empty raw_json; for
-		// those we render text-only.
-		var attachments []messages.Attachment
-		var blocks []blockkit.Block
-		var legacy []blockkit.LegacyAttachment
-		if m.RawJSON != "" {
-			var raw slack.Message
-			if err := json.Unmarshal([]byte(m.RawJSON), &raw); err != nil {
-				log.Printf("loadCachedMessages: raw_json unmarshal for %s/%s: %v",
-					channelID, m.TS, err)
-			} else {
-				attachments = extractAttachments(raw.Files)
-				blocks = extractBlocks(raw.Blocks)
-				legacy = extractLegacyAttachments(raw.Attachments)
-			}
-		}
+	return messages.MessageItem{
+		TS:                m.TS,
+		UserID:            m.UserID,
+		UserName:          userName,
+		Text:              m.Text,
+		Timestamp:         formatTimestamp(m.TS, tsFormat),
+		ThreadTS:          m.ThreadTS,
+		ReplyCount:        m.ReplyCount,
+		Subtype:           m.Subtype,
+		Reactions:         reactions,
+		Attachments:       attachments,
+		Blocks:            blocks,
+		LegacyAttachments: legacy,
+	}
+}
 
-		out = append(out, messages.MessageItem{
-			TS:                m.TS,
-			UserID:            m.UserID,
-			UserName:          userName,
-			Text:              m.Text,
-			Timestamp:         formatTimestamp(m.TS, tsFormat),
-			ThreadTS:          m.ThreadTS,
-			ReplyCount:        m.ReplyCount,
-			Subtype:           m.Subtype,
-			Reactions:         reactions,
-			Attachments:       attachments,
-			Blocks:            blocks,
-			LegacyAttachments: legacy,
-		})
+// loadCachedThreadReplies reads cached parent + replies for a thread
+// from SQLite and reconstructs []messages.MessageItem with the same
+// fidelity as fetchThreadReplies. Offline-pure (no network).
+//
+// The returned slice includes the parent message at index 0 followed
+// by replies in chronological order, matching db.GetThreadReplies'
+// ordering. Callers that pass the slice into
+// ui.ThreadRepliesLoadedMsg.Replies must strip the parent
+// (slice[1:]) since the reducer expects replies-only.
+//
+// Returns nil when no rows are cached or on DB error.
+func loadCachedThreadReplies(
+	db *cache.DB,
+	selfUserID string,
+	channelID, threadTS string,
+	userNames map[string]string,
+	tsFormat string,
+) []messages.MessageItem {
+	if db == nil {
+		return nil
+	}
+	rows, err := db.GetThreadReplies(channelID, threadTS)
+	if err != nil {
+		log.Printf("loadCachedThreadReplies: GetThreadReplies %s/%s: %v", channelID, threadTS, err)
+		return nil
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+
+	out := make([]messages.MessageItem, 0, len(rows))
+	for _, m := range rows {
+		out = append(out, enrichCachedRow(db, selfUserID, channelID, m, userNames, tsFormat, "loadCachedThreadReplies"))
 	}
 	return out
 }

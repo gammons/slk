@@ -523,6 +523,13 @@ type MarkUnreadFunc func(channelID, threadTS, boundaryTS string, unreadCount int
 // ThreadFetchFunc is called when the user opens a thread.
 type ThreadFetchFunc func(channelID, threadTS string) tea.Msg
 
+// ThreadCacheReadFunc is called synchronously when a thread is opened;
+// returns cached replies (or nil) so the thread panel can populate
+// without waiting for the network. Returning a non-empty slice causes
+// the thread panel to render immediately; the subsequent network
+// response overwrites with authoritative data.
+type ThreadCacheReadFunc func(channelID, threadTS string) []messages.MessageItem
+
 // ThreadMarkFunc is called to mark a thread as read on Slack's servers
 // (subscriptions.thread.mark). channelID is the parent channel, threadTS
 // is the parent message ts, and ts is the latest reply ts the user has now
@@ -647,6 +654,7 @@ type App struct {
 	clipboardRead clipboardReader
 
 	threadFetcher        ThreadFetchFunc
+	threadCacheReader    ThreadCacheReadFunc
 	threadMarker         ThreadMarkFunc
 	threadReplySender    ThreadReplySendFunc
 	channelJoiner        JoinChannelFunc
@@ -1657,7 +1665,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		fetcher := a.threadFetcher
 		chID, threadTS := msg.channelID, msg.threadTS
-		return a, func() tea.Msg { return fetcher(chID, threadTS) }
+		var batch []tea.Cmd
+		if a.threadCacheReader != nil {
+			if cached := a.threadCacheReader(chID, threadTS); len(cached) > 1 {
+				replies := cached[1:] // strip parent; reducer expects replies-only
+				ts := threadTS
+				batch = append(batch, func() tea.Msg {
+					return ThreadRepliesLoadedMsg{ThreadTS: ts, Replies: replies}
+				})
+			}
+		}
+		batch = append(batch, func() tea.Msg { return fetcher(chID, threadTS) })
+		return a, tea.Batch(batch...)
 
 	case ThreadRepliesLoadedMsg:
 		if a.threadVisible && msg.ThreadTS == a.threadPanel.ThreadTS() {
@@ -3277,9 +3296,17 @@ func (a *App) handleEnter() tea.Cmd {
 				fetcher := a.threadFetcher
 				chID := a.activeChannelID
 				ts := threadTS
-				return func() tea.Msg {
-					return fetcher(chID, ts)
+				var batch []tea.Cmd
+				if a.threadCacheReader != nil {
+					if cached := a.threadCacheReader(chID, ts); len(cached) > 1 {
+						replies := cached[1:] // strip parent; reducer expects replies-only
+						batch = append(batch, func() tea.Msg {
+							return ThreadRepliesLoadedMsg{ThreadTS: ts, Replies: replies}
+						})
+					}
 				}
+				batch = append(batch, func() tea.Msg { return fetcher(chID, ts) })
+				return tea.Batch(batch...)
 			}
 		}
 	}
@@ -3441,7 +3468,17 @@ func (a *App) openSelectedThreadCmd(debounce bool) tea.Cmd {
 	fetcher := a.threadFetcher
 	chID, threadTS := sum.ChannelID, sum.ThreadTS
 	if !debounce {
-		return func() tea.Msg { return fetcher(chID, threadTS) }
+		var batch []tea.Cmd
+		if a.threadCacheReader != nil {
+			if cached := a.threadCacheReader(chID, threadTS); len(cached) > 1 {
+				replies := cached[1:] // strip parent; reducer expects replies-only
+				batch = append(batch, func() tea.Msg {
+					return ThreadRepliesLoadedMsg{ThreadTS: threadTS, Replies: replies}
+				})
+			}
+		}
+		batch = append(batch, func() tea.Msg { return fetcher(chID, threadTS) })
+		return tea.Batch(batch...)
 	}
 	a.pendingThreadFetchGen++
 	gen := a.pendingThreadFetchGen
@@ -3694,6 +3731,13 @@ func (a *App) SetClipboardReader(fn clipboardReader) {
 // SetThreadFetcher sets the callback used to load thread replies.
 func (a *App) SetThreadFetcher(fn ThreadFetchFunc) {
 	a.threadFetcher = fn
+}
+
+// SetThreadCacheReader sets the callback consulted synchronously when
+// a thread is opened to render cached replies before the network
+// fetch completes. Pass nil to disable cache-first thread rendering.
+func (a *App) SetThreadCacheReader(fn ThreadCacheReadFunc) {
+	a.threadCacheReader = fn
 }
 
 // SetThreadMarker wires the callback that marks a thread as read on Slack's
