@@ -1338,6 +1338,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			a.messagepane.SetLoading(true)
 			a.messagepane.SetMessages(nil) // clear while loading
+			cmds = append(cmds, tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+				return SpinnerTickMsg{}
+			}))
 		}
 		a.compose.SetChannel(msg.Name)
 		a.statusbar.SetChannel(msg.Name)
@@ -1853,6 +1856,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.compose.Reset()
 		a.messagepane.SetLoading(true)
 		a.messagepane.SetMessages(nil)
+		cmds = append(cmds, tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+			return SpinnerTickMsg{}
+		}))
 		a.SetMode(ModeNormal)
 		a.compose.Blur()
 		a.sidebar.SetSectionsProvider(msg.SectionsProvider)
@@ -1928,8 +1934,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the active sidebar.
 
 	case SpinnerTickMsg:
-		if a.loading {
+		if a.loading || a.messagepane.IsLoading() {
 			a.spinnerFrame = (a.spinnerFrame + 1) % len(styles.SpinnerChars)
+			a.messagepane.SetSpinnerFrame(a.spinnerFrame)
 			return a, tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
 				return SpinnerTickMsg{}
 			})
@@ -1987,6 +1994,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				first := msg.Channels[0]
 				a.messagepane.SetLoading(true)
 				a.messagepane.SetMessages(nil)
+				cmds = append(cmds, tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+					return SpinnerTickMsg{}
+				}))
 				cmds = append(cmds, func() tea.Msg {
 					return ChannelSelectedMsg{ID: first.ID, Name: first.Name, Type: first.Type}
 				})

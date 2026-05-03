@@ -789,3 +789,69 @@ func TestSelectedRowContainsTintBackground(t *testing.T) {
 		t.Fatalf("expected selected row to contain tint bg %q\nout=%q", want, out)
 	}
 }
+
+// TestEmptyStateRendersSpinnerWhenLoading asserts the empty-state
+// branch in View() prefixes the "Loading messages..." text with the
+// current braille spinner glyph (frame 0 = "⠋"), matching the
+// workspace overlay spinner for visual consistency.
+func TestEmptyStateRendersSpinnerWhenLoading(t *testing.T) {
+	m := New(nil, "general")
+	m.SetLoading(true)
+	m.SetSpinnerFrame(0)
+	out := m.View(20 /*height*/, 80 /*width*/)
+	want := string(styles.SpinnerChars[0]) + " Loading messages..."
+	if !strings.Contains(out, want) {
+		t.Errorf("expected %q in empty-state output:\n%s", want, out)
+	}
+}
+
+// TestEmptyStateRendersPlainTextWhenNotLoading asserts the empty-state
+// branch falls back to the plain "No messages yet" string when the
+// pane is not in loading state.
+func TestEmptyStateRendersPlainTextWhenNotLoading(t *testing.T) {
+	m := New(nil, "general")
+	m.SetLoading(false)
+	out := m.View(20 /*height*/, 80 /*width*/)
+	if !strings.Contains(out, "No messages yet") {
+		t.Errorf("expected 'No messages yet' fallback in output:\n%s", out)
+	}
+}
+
+// TestLoadingOlderMessagesHintAnimatesAcrossFrames asserts that the
+// "Loading older messages..." hint glyph reflects the CURRENT
+// m.spinnerFrame on every View() call, not whatever frame was set
+// when the cache was last built. Regression for: spinner glyph
+// computed inside buildCache and stored on m.cacheLoadingHint, which
+// only changes on cache-invalidating events (width/messages), so
+// SetSpinnerFrame's m.dirty() call had no visible effect on the
+// hint between cache rebuilds.
+func TestLoadingOlderMessagesHintAnimatesAcrossFrames(t *testing.T) {
+	msgs := []MessageItem{
+		{TS: "1.0", UserName: "alice", UserID: "U1", Text: "hello", Timestamp: "1:00 PM"},
+		{TS: "2.0", UserName: "bob", UserID: "U2", Text: "world", Timestamp: "1:01 PM"},
+	}
+	m := New(msgs, "general")
+	m.SetLoading(true)
+	// Build cache at frame 0 -- this would bake "⠋" into m.cacheLoadingHint
+	// under the old behaviour.
+	m.SetSpinnerFrame(0)
+	_ = m.View(20 /*height*/, 60 /*width*/)
+	// Now advance the spinner. Cache stays valid (width and message
+	// count unchanged), so the next View() must compute the hint
+	// glyph fresh from the current spinnerFrame, not reuse a cached
+	// frame-0 glyph.
+	m.SetSpinnerFrame(3)
+	out := m.View(20, 60)
+	wantGlyph := string(styles.SpinnerChars[3])
+	want := wantGlyph + " Loading older messages..."
+	if !strings.Contains(out, want) {
+		t.Errorf("expected hint with frame-3 glyph %q in output; got:\n%s", want, out)
+	}
+	// Belt-and-suspenders: the frame-0 glyph must NOT be present in
+	// a "Loading older messages..." hint. (It can legitimately appear
+	// elsewhere in styled output, so we check the full hint string.)
+	frame0Hint := string(styles.SpinnerChars[0]) + " Loading older messages..."
+	if strings.Contains(out, frame0Hint) {
+		t.Errorf("output still contains stale frame-0 hint %q:\n%s", frame0Hint, out)
+	}
+}

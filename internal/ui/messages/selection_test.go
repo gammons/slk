@@ -243,9 +243,10 @@ func TestSelection_HighlightDoesNotCorruptScrollIndicators(t *testing.T) {
 		t.Fatalf("expected at least %d output lines; got %d", m.chromeHeight+1, len(lines))
 	}
 	hintRow := lines[m.chromeHeight]
-	if hintRow != m.cacheLoadingHint {
+	wantHint := m.renderLoadingOlderHint(60)
+	if hintRow != wantHint {
 		t.Fatalf("loading hint row corrupted by selection overlay\nwant: %q\ngot:  %q",
-			m.cacheLoadingHint, hintRow)
+			wantHint, hintRow)
 	}
 }
 
