@@ -379,6 +379,13 @@ type SwitchWorkspaceFunc func(teamID string) tea.Msg
 // ChannelFetchFunc is called when the user selects a channel.
 type ChannelFetchFunc func(channelID, channelName string) tea.Msg
 
+// ChannelCacheReadFunc is called synchronously when the user selects a
+// channel; it returns cached messages from local storage. Returning a
+// non-empty slice causes the messagepane to render immediately without
+// the loading spinner. Returning nil falls through to the network
+// fetcher.
+type ChannelCacheReadFunc func(channelID string) []messages.MessageItem
+
 // OlderMessagesFetchFunc is called when the user scrolls to the top of a channel.
 type OlderMessagesFetchFunc func(channelID, oldestTS string) tea.Msg
 
@@ -623,6 +630,7 @@ type App struct {
 
 	// Callbacks
 	channelFetcher       ChannelFetchFunc
+	channelCacheReader   ChannelCacheReadFunc
 	olderMessagesFetcher OlderMessagesFetchFunc
 	messageSender        MessageSendFunc
 	messageEditor        MessageEditFunc
@@ -1314,12 +1322,28 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sidebar.SetActiveChannelID(msg.ID)
 		a.messagepane.SetChannel(msg.Name, "")
 		a.messagepane.SetChannelType(msg.Type)
-		a.messagepane.SetLoading(true)
-		a.messagepane.SetMessages(nil) // clear while loading
+
+		// Cache-first render: if a cache reader is wired and returns
+		// items synchronously, paint them immediately without the
+		// spinner. The network fetch below still runs and
+		// MessagesLoadedMsg authoritatively replaces this best-effort
+		// cached render once it arrives.
+		var cached []messages.MessageItem
+		if a.channelCacheReader != nil {
+			cached = a.channelCacheReader(msg.ID)
+		}
+		if len(cached) > 0 {
+			a.messagepane.SetLoading(false)
+			a.messagepane.SetMessages(cached)
+		} else {
+			a.messagepane.SetLoading(true)
+			a.messagepane.SetMessages(nil) // clear while loading
+		}
 		a.compose.SetChannel(msg.Name)
 		a.statusbar.SetChannel(msg.Name)
 		a.statusbar.SetChannelType(msg.Type)
-		// Fetch messages for the newly selected channel
+		// Always fetch fresh from the network in the background; the
+		// cached render is best-effort.
 		if a.channelFetcher != nil {
 			fetcher := a.channelFetcher
 			chID, chName := msg.ID, msg.Name
@@ -3594,6 +3618,13 @@ func (a *App) SetChannels(items []sidebar.ChannelItem) {
 // SetChannelFetcher sets the callback used to load messages when a channel is selected.
 func (a *App) SetChannelFetcher(fn ChannelFetchFunc) {
 	a.channelFetcher = fn
+}
+
+// SetChannelCacheReader sets the callback consulted synchronously on
+// channel selection to render cached messages before the network fetch
+// completes. Pass nil to disable cache-first rendering.
+func (a *App) SetChannelCacheReader(fn ChannelCacheReadFunc) {
+	a.channelCacheReader = fn
 }
 
 // SetOlderMessagesFetcher sets the callback used to load older messages when scrolling up.

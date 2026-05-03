@@ -2669,3 +2669,65 @@ func TestSelfSendInFlight_PassesThroughCrossSession(t *testing.T) {
 		t.Errorf("Text = %q", got[0].Text)
 	}
 }
+
+// TestChannelSelectedRendersFromCacheWithoutSpinner verifies that when a
+// channel-cache reader is wired and returns items synchronously,
+// ChannelSelectedMsg renders them immediately and skips the spinner.
+// The network fetcher still fires; MessagesLoadedMsg ultimately
+// authoritatively replaces the cached render.
+func TestChannelSelectedRendersFromCacheWithoutSpinner(t *testing.T) {
+	app := NewApp()
+
+	cachedItems := []messages.MessageItem{
+		{TS: "1.0", UserID: "U1", UserName: "alice", Text: "from cache"},
+	}
+	app.SetChannelCacheReader(func(channelID string) []messages.MessageItem {
+		if channelID == "C1" {
+			return cachedItems
+		}
+		return nil
+	})
+	fetcherCalled := false
+	app.SetChannelFetcher(func(channelID, channelName string) tea.Msg {
+		fetcherCalled = true
+		return MessagesLoadedMsg{ChannelID: channelID, Messages: nil}
+	})
+
+	_, cmd := app.Update(ChannelSelectedMsg{ID: "C1", Name: "general", Type: "channel"})
+
+	if app.messagepane.IsLoading() {
+		t.Errorf("expected loading=false on cache hit, got true")
+	}
+	got := app.messagepane.Messages()
+	if len(got) != 1 || got[0].Text != "from cache" {
+		t.Errorf("expected cached items rendered, got %+v", got)
+	}
+
+	// The cached render is best-effort; the network fetcher MUST still
+	// fire in the background so MessagesLoadedMsg can authoritatively
+	// replace the cached content. Drain the returned cmd batch to
+	// execute the fetcher closure and assert it ran. A regression that
+	// gated the fetcher on a cache miss (e.g. moving the dispatch into
+	// the else branch) would silently break this guarantee.
+	_ = drainBatch(cmd)
+	if !fetcherCalled {
+		t.Errorf("expected network fetcher to fire even on cache hit, but it did not")
+	}
+}
+
+// TestChannelSelectedFallsBackToSpinnerOnCacheMiss verifies that when
+// the cache reader returns nil (or is absent), ChannelSelectedMsg falls
+// back to the loading spinner while the network fetch is in flight.
+func TestChannelSelectedFallsBackToSpinnerOnCacheMiss(t *testing.T) {
+	app := NewApp()
+	app.SetChannelCacheReader(func(channelID string) []messages.MessageItem { return nil })
+	app.SetChannelFetcher(func(channelID, channelName string) tea.Msg {
+		return MessagesLoadedMsg{ChannelID: channelID, Messages: nil}
+	})
+
+	app.Update(ChannelSelectedMsg{ID: "C2", Name: "alerts", Type: "channel"})
+
+	if !app.messagepane.IsLoading() {
+		t.Errorf("expected loading=true on cache miss, got false")
+	}
+}

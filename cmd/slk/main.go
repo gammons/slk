@@ -603,6 +603,10 @@ func run() error {
 			return lastReadMap[channelID]
 		})
 
+		app.SetChannelCacheReader(func(channelID string) []messages.MessageItem {
+			return loadCachedMessages(db, client.UserID(), channelID, userNames, tsFormat)
+		})
+
 		app.SetChannelFetcher(func(channelID, channelName string) tea.Msg {
 			msgItems := fetchChannelMessages(client, channelID, db, userNames, tsFormat, avatarCache)
 

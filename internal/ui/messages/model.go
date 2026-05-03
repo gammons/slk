@@ -944,6 +944,10 @@ func (m *Model) SetLoading(loading bool) {
 	}
 }
 
+// IsLoading reports whether the messagepane is currently displaying its
+// loading spinner.
+func (m *Model) IsLoading() bool { return m.loading }
+
 func (m *Model) SetAvatarFunc(fn AvatarFunc) {
 	m.avatarFn = fn
 }
