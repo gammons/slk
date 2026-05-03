@@ -27,6 +27,7 @@ import (
 	"github.com/gammons/slk/internal/ui"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/compose"
+	"github.com/gammons/slk/internal/ui/imgrender"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/presencemenu"
@@ -389,8 +390,8 @@ func run() error {
 	// SetImageContext after `p` is constructed to populate it (see
 	// below). Both calls share buildImgCtx so the only difference is
 	// the SendMsg callback.
-	buildImgCtx := func(send func(tea.Msg)) messages.ImageContext {
-		return messages.ImageContext{
+	buildImgCtx := func(send func(tea.Msg)) imgrender.ImageContext {
+		return imgrender.ImageContext{
 			Protocol:    proto,
 			Fetcher:     imageFetcher,
 			KittyRender: imgpkg.KittyRendererInstance(),

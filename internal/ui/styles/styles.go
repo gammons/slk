@@ -165,9 +165,9 @@ var (
 	ComposeInsert = lipgloss.NewStyle().
 			BorderStyle(thickLeftBorder).
 			BorderLeft(true).
-			BorderForeground(Primary).
-			BorderBackground(SurfaceDark).
-			Background(SurfaceDark).
+			BorderForeground(Accent).
+			BorderBackground(ComposeInsertBG).
+			Background(ComposeInsertBG).
 			Foreground(TextPrimary).
 			Padding(1, 1, 1, 1)
 
@@ -318,6 +318,25 @@ func Apply(themeName string, overrides config.Theme) {
 		SelectionForeground = Background
 	}
 
+	// Compose-insert background: explicit theme override wins, otherwise
+	// derive from Accent + Background at defaultTintAlpha.
+	if colors.ComposeInsertBG != "" {
+		ComposeInsertBG = lipgloss.Color(colors.ComposeInsertBG)
+	} else {
+		ComposeInsertBG = mixColors(Accent, Background, defaultTintAlpha)
+	}
+
+	// Pre-resolve selection tints (theme overrides take precedence). Caching
+	// avoids recomputing on every render; resetDerivedTints clears them so
+	// the next SelectionTintColor() call repopulates from the new theme.
+	resetDerivedTints()
+	if colors.SelectionBgFocused != "" {
+		selectionBgFocused = lipgloss.Color(colors.SelectionBgFocused)
+	}
+	if colors.SelectionBgUnfocused != "" {
+		selectionBgUnfocused = lipgloss.Color(colors.SelectionBgUnfocused)
+	}
+
 	buildStyles()
 }
 
@@ -378,8 +397,8 @@ func buildStyles() {
 		BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(Primary).BorderBackground(SurfaceDark).
 		Background(SurfaceDark).Foreground(TextPrimary).Padding(1, 1, 1, 1)
 	ComposeInsert = lipgloss.NewStyle().
-		BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(Primary).BorderBackground(SurfaceDark).
-		Background(SurfaceDark).Foreground(TextPrimary).Padding(1, 1, 1, 1)
+		BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(Accent).BorderBackground(ComposeInsertBG).
+		Background(ComposeInsertBG).Foreground(TextPrimary).Padding(1, 1, 1, 1)
 	PresenceOnline = lipgloss.NewStyle().Foreground(Accent)
 	PresenceAway = lipgloss.NewStyle().Foreground(TextMuted)
 	ReactionPillOwn = lipgloss.NewStyle().
