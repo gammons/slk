@@ -2715,6 +2715,78 @@ func TestChannelSelectedRendersFromCacheWithoutSpinner(t *testing.T) {
 	}
 }
 
+// TestMessagesLoadedNilDoesNotClobberCachedView guards the contract
+// that fetchChannelMessages returning nil signals a NETWORK FAILURE
+// (not an empty channel — those return []messages.MessageItem{}).
+// On failure we must preserve whatever the cache rendered so a
+// transient blip doesn't blank a working view. The bug this catches:
+// MessagesLoadedMsg unconditionally calling SetMessages(msg.Messages)
+// would wipe the cached items the moment the network call failed.
+func TestMessagesLoadedNilDoesNotClobberCachedView(t *testing.T) {
+	app := NewApp()
+	cachedItems := []messages.MessageItem{
+		{TS: "1.0", UserID: "U1", UserName: "alice", Text: "from cache"},
+	}
+	app.SetChannelCacheReader(func(channelID string) []messages.MessageItem {
+		return cachedItems
+	})
+	app.SetChannelFetcher(func(channelID, channelName string) tea.Msg {
+		// Simulate a network failure by returning the same shape the
+		// real fetcher uses on error.
+		return MessagesLoadedMsg{ChannelID: channelID, Messages: nil}
+	})
+
+	// First: open the channel; cache fills the pane.
+	app.activeChannelID = "C1" // ensure MessagesLoadedMsg matches when delivered
+	_, cmd := app.Update(ChannelSelectedMsg{ID: "C1", Name: "general", Type: "channel"})
+	if got := app.messagepane.Messages(); len(got) != 1 || got[0].Text != "from cache" {
+		t.Fatalf("setup: cached items not rendered: %+v", got)
+	}
+
+	// Now drain the fetcher cmd and feed each emitted message back
+	// through Update — that's how Bubbletea would deliver the failed
+	// MessagesLoadedMsg in production.
+	for _, m := range drainBatch(cmd) {
+		if m == nil {
+			continue
+		}
+		app.Update(m)
+	}
+
+	// The cached items must still be present.
+	got := app.messagepane.Messages()
+	if len(got) != 1 || got[0].Text != "from cache" {
+		t.Errorf("cached items were clobbered by failed fetch: got %+v", got)
+	}
+	if app.messagepane.IsLoading() {
+		t.Errorf("loading should still be false after failed fetch, got true")
+	}
+}
+
+// TestMessagesLoadedEmptyClearsView verifies the complementary case:
+// a successful fetch that returned zero messages (genuinely empty
+// channel) DOES replace the cached view with an empty list.
+func TestMessagesLoadedEmptyClearsView(t *testing.T) {
+	app := NewApp()
+	cachedItems := []messages.MessageItem{
+		{TS: "1.0", UserID: "U1", UserName: "alice", Text: "stale cache"},
+	}
+	app.SetChannelCacheReader(func(channelID string) []messages.MessageItem { return cachedItems })
+	app.SetChannelFetcher(func(channelID, channelName string) tea.Msg {
+		return MessagesLoadedMsg{ChannelID: channelID, Messages: []messages.MessageItem{}}
+	})
+	app.activeChannelID = "C1"
+	_, cmd := app.Update(ChannelSelectedMsg{ID: "C1", Name: "general", Type: "channel"})
+	for _, m := range drainBatch(cmd) {
+		if m != nil {
+			app.Update(m)
+		}
+	}
+	if got := app.messagepane.Messages(); len(got) != 0 {
+		t.Errorf("expected empty pane after authoritative empty fetch, got %+v", got)
+	}
+}
+
 // TestChannelSelectedFallsBackToSpinnerOnCacheMiss verifies that when
 // the cache reader returns nil (or is absent), ChannelSelectedMsg falls
 // back to the loading spinner while the network fetch is in flight.

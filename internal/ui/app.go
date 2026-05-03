@@ -1373,7 +1373,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.ChannelID == a.activeChannelID {
 			a.messagepane.SetLoading(false)
 			a.messagepane.SetLastReadTS(msg.LastReadTS)
-			a.messagepane.SetMessages(msg.Messages)
+			// nil Messages from the fetcher signals network FAILURE, not an
+			// empty channel (empty channels return []messages.MessageItem{}).
+			// On failure, preserve whatever the cache already rendered so a
+			// transient blip doesn't blank a working view. The Slack-side
+			// fetcher logs the error before returning nil.
+			if msg.Messages != nil {
+				a.messagepane.SetMessages(msg.Messages)
+			}
 		}
 
 	case OlderMessagesLoadedMsg:
@@ -1687,6 +1694,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ThreadRepliesLoadedMsg:
 		if a.threadVisible && msg.ThreadTS == a.threadPanel.ThreadTS() {
 			channelID := a.threadPanel.ChannelID()
+			// nil Replies signals network failure (the fetcher logs the error
+			// and returns nil); empty []MessageItem{} signals "no replies yet".
+			// Skip the panel update on failure so a transient blip doesn't
+			// blank a successfully-rendered cached thread view.
+			if msg.Replies == nil {
+				break
+			}
 			a.threadPanel.SetThread(a.threadPanel.ParentMsg(), msg.Replies, channelID, msg.ThreadTS)
 
 			// Mark the thread as read now that the user has actually

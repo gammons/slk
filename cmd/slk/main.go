@@ -1637,14 +1637,25 @@ func loadCachedThreadReplies(
 	return out
 }
 
+// fetchChannelMessages returns the channel's recent messages from the
+// network, with cache write-through. The return-value contract:
+//
+//	nil   - the network call FAILED (transient error, auth issue, etc.)
+//	[]    - the channel is genuinely empty
+//	[...] - normal case
+//
+// The MessagesLoadedMsg handler distinguishes nil from empty so a
+// failed background refresh doesn't wipe a successfully-rendered
+// cache view. Do NOT change nil to mean "empty channel".
 func fetchChannelMessages(client *slackclient.Client, channelID string, db *cache.DB, userNames map[string]string, tsFormat string, avatarCache *avatar.Cache) []messages.MessageItem {
 	ctx := context.Background()
 	history, err := client.GetHistory(ctx, channelID, 50, "")
 	if err != nil {
+		log.Printf("fetchChannelMessages: GetHistory %s: %v", channelID, err)
 		return nil
 	}
 
-	var msgItems []messages.MessageItem
+	msgItems := make([]messages.MessageItem, 0, len(history))
 	for _, m := range history {
 		rawBytes, _ := json.Marshal(m)
 		db.UpsertMessage(cache.Message{
@@ -1704,15 +1715,20 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 	return msgItems
 }
 
+// fetchThreadReplies returns network thread replies (parent stripped),
+// with cache write-through. Same nil-vs-empty contract as
+// fetchChannelMessages: nil signals failure, [] signals "no replies",
+// so the ThreadRepliesLoadedMsg consumer can decide whether to clobber
+// an already-rendered cached view.
 func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, db *cache.DB, userNames map[string]string, tsFormat string, avatarCache *avatar.Cache) []messages.MessageItem {
 	ctx := context.Background()
 	history, err := client.GetReplies(ctx, channelID, threadTS)
 	if err != nil {
-		log.Printf("Warning: failed to fetch thread replies: %v", err)
+		log.Printf("fetchThreadReplies: GetReplies %s/%s: %v", channelID, threadTS, err)
 		return nil
 	}
 
-	var msgItems []messages.MessageItem
+	msgItems := make([]messages.MessageItem, 0, len(history))
 	for _, m := range history {
 		rawBytes, _ := json.Marshal(m)
 		db.UpsertMessage(cache.Message{
@@ -1764,11 +1780,13 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 		})
 	}
 
-	// First message from GetConversationReplies is the parent -- skip it for the replies list
+	// First message from GetConversationReplies is the parent -- skip it for the replies list.
+	// Return non-nil empty on success-no-replies so the consumer can distinguish from the
+	// error path (which returns nil above).
 	if len(msgItems) > 1 {
 		return msgItems[1:]
 	}
-	return nil
+	return []messages.MessageItem{}
 }
 
 func formatTimestamp(ts, format string) string {
