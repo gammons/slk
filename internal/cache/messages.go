@@ -42,12 +42,20 @@ func (db *DB) UpsertMessage(m Message) error {
 	return nil
 }
 
-// GetMessages returns messages for a channel, ordered by ts ascending.
-// If beforeTS is non-empty, only returns messages with ts < beforeTS (for pagination).
+// GetMessages returns the NEWEST `limit` messages for a channel,
+// ordered by ts ascending in the result. If beforeTS is non-empty,
+// only considers messages with ts < beforeTS (for pagination).
+//
+// We pick newest-first inside a subquery and re-sort ascending in the
+// outer query so callers (UI render path, history backfill) get the
+// recency-anchored window they want without having to reverse it
+// themselves. A naive `ORDER BY ts ASC LIMIT N` would return the
+// OLDEST N rows, which is wrong for any cache that keeps growing as
+// new messages arrive.
 func (db *DB) GetMessages(channelID string, limit int, beforeTS string) ([]Message, error) {
 	// Main channel feed = top-level messages (thread_ts empty) plus
 	// thread broadcasts (thread_ts set, but subtype=thread_broadcast).
-	query := `
+	inner := `
 		SELECT ts, channel_id, workspace_id, user_id, text, thread_ts, reply_count, edited_at, is_deleted, raw_json, created_at, subtype
 		FROM messages
 		WHERE channel_id = ? AND is_deleted = 0
@@ -55,12 +63,14 @@ func (db *DB) GetMessages(channelID string, limit int, beforeTS string) ([]Messa
 	args := []any{channelID}
 
 	if beforeTS != "" {
-		query += " AND ts < ?"
+		inner += " AND ts < ?"
 		args = append(args, beforeTS)
 	}
 
-	query += " ORDER BY ts ASC LIMIT ?"
+	inner += " ORDER BY ts DESC LIMIT ?"
 	args = append(args, limit)
+
+	query := "SELECT * FROM (" + inner + ") ORDER BY ts ASC"
 
 	return db.queryMessages(query, args...)
 }

@@ -379,6 +379,13 @@ type SwitchWorkspaceFunc func(teamID string) tea.Msg
 // ChannelFetchFunc is called when the user selects a channel.
 type ChannelFetchFunc func(channelID, channelName string) tea.Msg
 
+// ChannelCacheReadFunc is called synchronously when the user selects a
+// channel; it returns cached messages from local storage. Returning a
+// non-empty slice causes the messagepane to render immediately without
+// the loading spinner. Returning nil falls through to the network
+// fetcher.
+type ChannelCacheReadFunc func(channelID string) []messages.MessageItem
+
 // OlderMessagesFetchFunc is called when the user scrolls to the top of a channel.
 type OlderMessagesFetchFunc func(channelID, oldestTS string) tea.Msg
 
@@ -516,6 +523,13 @@ type MarkUnreadFunc func(channelID, threadTS, boundaryTS string, unreadCount int
 // ThreadFetchFunc is called when the user opens a thread.
 type ThreadFetchFunc func(channelID, threadTS string) tea.Msg
 
+// ThreadCacheReadFunc is called synchronously when a thread is opened;
+// returns cached replies (or nil) so the thread panel can populate
+// without waiting for the network. Returning a non-empty slice causes
+// the thread panel to render immediately; the subsequent network
+// response overwrites with authoritative data.
+type ThreadCacheReadFunc func(channelID, threadTS string) []messages.MessageItem
+
 // ThreadMarkFunc is called to mark a thread as read on Slack's servers
 // (subscriptions.thread.mark). channelID is the parent channel, threadTS
 // is the parent message ts, and ts is the latest reply ts the user has now
@@ -623,6 +637,7 @@ type App struct {
 
 	// Callbacks
 	channelFetcher       ChannelFetchFunc
+	channelCacheReader   ChannelCacheReadFunc
 	olderMessagesFetcher OlderMessagesFetchFunc
 	messageSender        MessageSendFunc
 	messageEditor        MessageEditFunc
@@ -639,6 +654,7 @@ type App struct {
 	clipboardRead clipboardReader
 
 	threadFetcher        ThreadFetchFunc
+	threadCacheReader    ThreadCacheReadFunc
 	threadMarker         ThreadMarkFunc
 	threadReplySender    ThreadReplySendFunc
 	channelJoiner        JoinChannelFunc
@@ -964,6 +980,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						chID := a.activeChannelID
 						oldestTS := a.messagepane.OldestTS()
 						fetcher := a.olderMessagesFetcher
+						// Kick the spinner tick: if a.loading is already
+						// false (workspace fully loaded), no tick is alive
+						// and the glyph would freeze on its last frame.
+						cmds = append(cmds, tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+							return SpinnerTickMsg{}
+						}))
 						cmds = append(cmds, func() tea.Msg {
 							return fetcher(chID, oldestTS)
 						})
@@ -1314,12 +1336,31 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sidebar.SetActiveChannelID(msg.ID)
 		a.messagepane.SetChannel(msg.Name, "")
 		a.messagepane.SetChannelType(msg.Type)
-		a.messagepane.SetLoading(true)
-		a.messagepane.SetMessages(nil) // clear while loading
+
+		// Cache-first render: if a cache reader is wired and returns
+		// items synchronously, paint them immediately without the
+		// spinner. The network fetch below still runs and
+		// MessagesLoadedMsg authoritatively replaces this best-effort
+		// cached render once it arrives.
+		var cached []messages.MessageItem
+		if a.channelCacheReader != nil {
+			cached = a.channelCacheReader(msg.ID)
+		}
+		if len(cached) > 0 {
+			a.messagepane.SetLoading(false)
+			a.messagepane.SetMessages(cached)
+		} else {
+			a.messagepane.SetLoading(true)
+			a.messagepane.SetMessages(nil) // clear while loading
+			cmds = append(cmds, tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+				return SpinnerTickMsg{}
+			}))
+		}
 		a.compose.SetChannel(msg.Name)
 		a.statusbar.SetChannel(msg.Name)
 		a.statusbar.SetChannelType(msg.Type)
-		// Fetch messages for the newly selected channel
+		// Always fetch fresh from the network in the background; the
+		// cached render is best-effort.
 		if a.channelFetcher != nil {
 			fetcher := a.channelFetcher
 			chID, chName := msg.ID, msg.Name
@@ -1332,7 +1373,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.ChannelID == a.activeChannelID {
 			a.messagepane.SetLoading(false)
 			a.messagepane.SetLastReadTS(msg.LastReadTS)
-			a.messagepane.SetMessages(msg.Messages)
+			// nil Messages from the fetcher signals network FAILURE, not an
+			// empty channel (empty channels return []messages.MessageItem{}).
+			// On failure, preserve whatever the cache already rendered so a
+			// transient blip doesn't blank a working view. The Slack-side
+			// fetcher logs the error before returning nil.
+			if msg.Messages != nil {
+				a.messagepane.SetMessages(msg.Messages)
+			}
 		}
 
 	case OlderMessagesLoadedMsg:
@@ -1630,11 +1678,29 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		fetcher := a.threadFetcher
 		chID, threadTS := msg.channelID, msg.threadTS
-		return a, func() tea.Msg { return fetcher(chID, threadTS) }
+		var batch []tea.Cmd
+		if a.threadCacheReader != nil {
+			if cached := a.threadCacheReader(chID, threadTS); len(cached) > 1 {
+				replies := cached[1:] // strip parent; reducer expects replies-only
+				ts := threadTS
+				batch = append(batch, func() tea.Msg {
+					return ThreadRepliesLoadedMsg{ThreadTS: ts, Replies: replies}
+				})
+			}
+		}
+		batch = append(batch, func() tea.Msg { return fetcher(chID, threadTS) })
+		return a, tea.Batch(batch...)
 
 	case ThreadRepliesLoadedMsg:
 		if a.threadVisible && msg.ThreadTS == a.threadPanel.ThreadTS() {
 			channelID := a.threadPanel.ChannelID()
+			// nil Replies signals network failure (the fetcher logs the error
+			// and returns nil); empty []MessageItem{} signals "no replies yet".
+			// Skip the panel update on failure so a transient blip doesn't
+			// blank a successfully-rendered cached thread view.
+			if msg.Replies == nil {
+				break
+			}
 			a.threadPanel.SetThread(a.threadPanel.ParentMsg(), msg.Replies, channelID, msg.ThreadTS)
 
 			// Mark the thread as read now that the user has actually
@@ -1827,7 +1893,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.CloseThread()
 		a.clearSelections()
 		a.compose.Reset()
+		a.messagepane.SetLoading(true)
 		a.messagepane.SetMessages(nil)
+		cmds = append(cmds, tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+			return SpinnerTickMsg{}
+		}))
 		a.SetMode(ModeNormal)
 		a.compose.Blur()
 		a.sidebar.SetSectionsProvider(msg.SectionsProvider)
@@ -1903,8 +1973,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the active sidebar.
 
 	case SpinnerTickMsg:
-		if a.loading {
-			a.spinnerFrame = (a.spinnerFrame + 1) % 10
+		if a.loading || a.messagepane.IsLoading() {
+			a.spinnerFrame = (a.spinnerFrame + 1) % len(styles.SpinnerChars)
+			a.messagepane.SetSpinnerFrame(a.spinnerFrame)
 			return a, tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
 				return SpinnerTickMsg{}
 			})
@@ -1960,6 +2031,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.workspaceRail.SelectByID(msg.TeamID)
 			if len(msg.Channels) > 0 {
 				first := msg.Channels[0]
+				a.messagepane.SetLoading(true)
+				a.messagepane.SetMessages(nil)
+				cmds = append(cmds, tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+					return SpinnerTickMsg{}
+				}))
 				cmds = append(cmds, func() tea.Msg {
 					return ChannelSelectedMsg{ID: first.ID, Name: first.Name, Type: first.Type}
 				})
@@ -3047,9 +3123,17 @@ func (a *App) handleUp() tea.Cmd {
 			chID := a.activeChannelID
 			oldestTS := a.messagepane.OldestTS()
 			fetcher := a.olderMessagesFetcher
-			return func() tea.Msg {
-				return fetcher(chID, oldestTS)
-			}
+			// Kick the spinner tick: if a.loading is already false
+			// (workspace fully loaded), no tick is alive and the glyph
+			// would freeze on its last frame.
+			return tea.Batch(
+				tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+					return SpinnerTickMsg{}
+				}),
+				func() tea.Msg {
+					return fetcher(chID, oldestTS)
+				},
+			)
 		}
 	case PanelThread:
 		a.threadPanel.MoveUp()
@@ -3240,9 +3324,17 @@ func (a *App) handleEnter() tea.Cmd {
 				fetcher := a.threadFetcher
 				chID := a.activeChannelID
 				ts := threadTS
-				return func() tea.Msg {
-					return fetcher(chID, ts)
+				var batch []tea.Cmd
+				if a.threadCacheReader != nil {
+					if cached := a.threadCacheReader(chID, ts); len(cached) > 1 {
+						replies := cached[1:] // strip parent; reducer expects replies-only
+						batch = append(batch, func() tea.Msg {
+							return ThreadRepliesLoadedMsg{ThreadTS: ts, Replies: replies}
+						})
+					}
 				}
+				batch = append(batch, func() tea.Msg { return fetcher(chID, ts) })
+				return tea.Batch(batch...)
 			}
 		}
 	}
@@ -3404,7 +3496,17 @@ func (a *App) openSelectedThreadCmd(debounce bool) tea.Cmd {
 	fetcher := a.threadFetcher
 	chID, threadTS := sum.ChannelID, sum.ThreadTS
 	if !debounce {
-		return func() tea.Msg { return fetcher(chID, threadTS) }
+		var batch []tea.Cmd
+		if a.threadCacheReader != nil {
+			if cached := a.threadCacheReader(chID, threadTS); len(cached) > 1 {
+				replies := cached[1:] // strip parent; reducer expects replies-only
+				batch = append(batch, func() tea.Msg {
+					return ThreadRepliesLoadedMsg{ThreadTS: threadTS, Replies: replies}
+				})
+			}
+		}
+		batch = append(batch, func() tea.Msg { return fetcher(chID, threadTS) })
+		return tea.Batch(batch...)
 	}
 	a.pendingThreadFetchGen++
 	gen := a.pendingThreadFetchGen
@@ -3508,11 +3610,9 @@ func (a *App) checkLoadingDone() {
 	a.loading = false
 }
 
-var spinnerChars = []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
-
 func (a *App) renderLoadingOverlay(width, height int) string {
 	var rows []string
-	spinner := string(spinnerChars[a.spinnerFrame])
+	spinner := string(styles.SpinnerChars[a.spinnerFrame])
 
 	for _, entry := range a.loadingStates {
 		switch entry.Status {
@@ -3596,6 +3696,13 @@ func (a *App) SetChannelFetcher(fn ChannelFetchFunc) {
 	a.channelFetcher = fn
 }
 
+// SetChannelCacheReader sets the callback consulted synchronously on
+// channel selection to render cached messages before the network fetch
+// completes. Pass nil to disable cache-first rendering.
+func (a *App) SetChannelCacheReader(fn ChannelCacheReadFunc) {
+	a.channelCacheReader = fn
+}
+
 // SetOlderMessagesFetcher sets the callback used to load older messages when scrolling up.
 func (a *App) SetOlderMessagesFetcher(fn OlderMessagesFetchFunc) {
 	a.olderMessagesFetcher = fn
@@ -3652,6 +3759,13 @@ func (a *App) SetClipboardReader(fn clipboardReader) {
 // SetThreadFetcher sets the callback used to load thread replies.
 func (a *App) SetThreadFetcher(fn ThreadFetchFunc) {
 	a.threadFetcher = fn
+}
+
+// SetThreadCacheReader sets the callback consulted synchronously when
+// a thread is opened to render cached replies before the network
+// fetch completes. Pass nil to disable cache-first thread rendering.
+func (a *App) SetThreadCacheReader(fn ThreadCacheReadFunc) {
+	a.threadCacheReader = fn
 }
 
 // SetThreadMarker wires the callback that marks a thread as read on Slack's

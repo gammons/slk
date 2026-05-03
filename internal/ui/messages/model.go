@@ -192,6 +192,7 @@ type Model struct {
 	channelTopic string
 	channelType  string // "channel", "private", "dm", "group_dm" -- drives header glyph
 	loading      bool
+	spinnerFrame int // braille-spinner frame index for "Loading messages..." animation
 	avatarFn     AvatarFunc        // optional: returns half-block avatar for a userID
 	userNames    map[string]string // user ID -> display name for mention resolution
 	channelNames map[string]string // channel ID -> name for bare <#CID> resolution
@@ -203,7 +204,6 @@ type Model struct {
 	cacheWidth  int
 	cacheMsgLen int
 	cacheSpacer       string // pre-rendered blank spacer line (1 row, full width, themed background)
-	cacheLoadingHint  string // pre-rendered "Loading older messages..." line
 	cacheMoreBelow    string // pre-rendered "-- more below --" line
 
 	// Chrome cache: header line(s). Depends on width, channelName, and
@@ -944,6 +944,21 @@ func (m *Model) SetLoading(loading bool) {
 	}
 }
 
+// IsLoading reports whether the messagepane is currently displaying its
+// loading spinner.
+func (m *Model) IsLoading() bool { return m.loading }
+
+// SetSpinnerFrame advances the braille-spinner frame used by the
+// "Loading messages..." empty state and the "Loading older messages..."
+// hint. Calling with the same value is a no-op; otherwise the cache is
+// invalidated so the next render picks up the new glyph.
+func (m *Model) SetSpinnerFrame(f int) {
+	if m.spinnerFrame != f {
+		m.spinnerFrame = f
+		m.dirty()
+	}
+}
+
 func (m *Model) SetAvatarFunc(fn AvatarFunc) {
 	m.avatarFn = fn
 }
@@ -1030,10 +1045,17 @@ type cacheStyles struct {
 }
 
 // buildCacheStyles materializes the shared styles for a given width.
-// Also writes m.cacheSpacer / m.cacheLoadingHint / m.cacheMoreBelow as
-// a side effect so View()'s per-frame chrome rendering can reuse the
-// same allocations. partialRebuild reuses the existing m.cacheSpacer
-// (since width hasn't changed) and only needs the border styles.
+// Also writes m.cacheSpacer / m.cacheMoreBelow as a side effect so
+// View()'s per-frame chrome rendering can reuse the same allocations.
+// partialRebuild reuses the existing m.cacheSpacer (since width
+// hasn't changed) and only needs the border styles.
+//
+// The "Loading older messages..." hint is intentionally NOT cached
+// here: its spinner glyph must reflect the current m.spinnerFrame,
+// which changes far more often than the cache is rebuilt. Caching
+// it would freeze the glyph at whatever frame happened to be set
+// when the cache last rebuilt. View() composes the hint fresh from
+// renderLoadingOlderHint(width) on every frame instead.
 func (m *Model) buildCacheStyles(width int) cacheStyles {
 	borderFill := lipgloss.NewStyle().Background(styles.Background)
 	borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Background).BorderBackground(styles.Background)
@@ -1045,7 +1067,6 @@ func (m *Model) buildCacheStyles(width int) cacheStyles {
 	spacerBg := lipgloss.NewStyle().Background(styles.Background)
 	m.cacheSpacer = spacerBg.Width(width).Render("")
 	hintStyle := lipgloss.NewStyle().Background(styles.Background).Foreground(styles.TextMuted)
-	m.cacheLoadingHint = hintStyle.Render("  Loading older messages...")
 	m.cacheMoreBelow = hintStyle.Render("  -- more below --")
 	return cacheStyles{
 		borderFill:   borderFill,
@@ -1053,6 +1074,19 @@ func (m *Model) buildCacheStyles(width int) cacheStyles {
 		borderSelect: borderSelect,
 		spacerLines:  []string{m.cacheSpacer},
 	}
+}
+
+// renderLoadingOlderHint composes the "Loading older messages..." line
+// fresh on every call, using the CURRENT m.spinnerFrame for the
+// braille-spinner glyph. Called from View() each frame so the glyph
+// animates in lockstep with SetSpinnerFrame's tick. The width arg is
+// accepted for symmetry with other render helpers but is unused: the
+// hint is left-aligned and the host code (View()) drops it into a
+// pre-sized visible[0] slot.
+func (m *Model) renderLoadingOlderHint(_ int) string {
+	hintStyle := lipgloss.NewStyle().Background(styles.Background).Foreground(styles.TextMuted)
+	frame := styles.SpinnerChars[m.spinnerFrame%len(styles.SpinnerChars)]
+	return hintStyle.Render("  " + string(frame) + " Loading older messages...")
 }
 
 // renderMessageEntry builds a single viewEntry for m.messages[i] using
@@ -2016,7 +2050,8 @@ func (m *Model) View(height, width int) string {
 	if len(m.messages) == 0 {
 		text := "No messages yet"
 		if m.loading {
-			text = "Loading messages..."
+			frame := styles.SpinnerChars[m.spinnerFrame%len(styles.SpinnerChars)]
+			text = string(frame) + " Loading messages..."
 		}
 		empty := lipgloss.NewStyle().
 			Width(width).
@@ -2273,7 +2308,11 @@ func (m *Model) View(height, width int) string {
 	overrodeFirst := false
 	overrodeLast := false
 	if m.loading && len(visible) > 0 {
-		visible[0] = m.cacheLoadingHint
+		// Render the hint fresh per frame -- it MUST reflect the
+		// current m.spinnerFrame, which advances independently of
+		// the cache rebuild signals (width / message count). See
+		// buildCacheStyles' comment for the rationale.
+		visible[0] = m.renderLoadingOlderHint(width)
 		overrodeFirst = true
 	}
 	if m.yOffset+msgAreaHeight < m.totalLines && len(visible) > 0 {

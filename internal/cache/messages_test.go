@@ -122,6 +122,112 @@ func TestSubtypeRoundTrip(t *testing.T) {
 	}
 }
 
+func TestUpsertMessageRoundTripsRawJSON(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	defer db.Close()
+	payload := `{"type":"message","ts":"1.0","text":"hi","files":[{"id":"F1"}]}`
+	if err := db.UpsertMessage(Message{
+		TS:          "1.0",
+		ChannelID:   "C1",
+		WorkspaceID: "T1",
+		UserID:      "U1",
+		Text:        "hi",
+		RawJSON:     payload,
+		CreatedAt:   1,
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, err := db.GetMessages("C1", 50, "")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 row, got %d", len(got))
+	}
+	if got[0].RawJSON != payload {
+		t.Fatalf("raw_json round-trip mismatch:\nwant: %s\ngot:  %s", payload, got[0].RawJSON)
+	}
+}
+
+// TestGetMessagesReturnsNewestN guards against a regression where
+// GetMessages picked the OLDEST N rows by doing `ORDER BY ts ASC LIMIT N`.
+// Once the cache outgrows N rows (any active channel after a day or two),
+// that returned a frozen window of the oldest history. Callers want the
+// newest N, ascending in the result.
+func TestGetMessagesReturnsNewestN(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	defer db.Close()
+	db.UpsertChannel(Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel", IsMember: true})
+
+	// Insert 60 messages with monotonically increasing ts.
+	for i := 0; i < 60; i++ {
+		if err := db.UpsertMessage(Message{
+			TS:          fmt.Sprintf("17000000%02d.000000", i),
+			ChannelID:   "C1",
+			WorkspaceID: "T1",
+			UserID:      "U1",
+			Text:        fmt.Sprintf("msg %d", i),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := db.GetMessages("C1", 50, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 50 {
+		t.Fatalf("want 50 rows, got %d", len(got))
+	}
+	// Newest 50 = msgs 10..59. Oldest of those = msg 10. Newest = msg 59.
+	if got[0].Text != "msg 10" {
+		t.Errorf("first row should be the OLDEST of the newest 50 = 'msg 10', got %q", got[0].Text)
+	}
+	if got[len(got)-1].Text != "msg 59" {
+		t.Errorf("last row should be the newest = 'msg 59', got %q", got[len(got)-1].Text)
+	}
+	// Sanity: result is ASC.
+	for i := 1; i < len(got); i++ {
+		if got[i-1].TS >= got[i].TS {
+			t.Fatalf("result not ascending at index %d: %s >= %s", i, got[i-1].TS, got[i].TS)
+		}
+	}
+}
+
+// TestGetMessagesWithCursorReturnsNewestBeforeCursor verifies the
+// cursor variant also picks the newest N below the cursor (used by the
+// older-messages backfill path).
+func TestGetMessagesWithCursorReturnsNewestBeforeCursor(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	defer db.Close()
+	db.UpsertChannel(Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel", IsMember: true})
+
+	for i := 0; i < 60; i++ {
+		db.UpsertMessage(Message{
+			TS:          fmt.Sprintf("17000000%02d.000000", i),
+			ChannelID:   "C1",
+			WorkspaceID: "T1",
+			UserID:      "U1",
+			Text:        fmt.Sprintf("msg %d", i),
+		})
+	}
+
+	// Cursor at ts of msg 40 -> candidates are msgs 0..39. Newest 10 = msgs 30..39.
+	got, err := db.GetMessages("C1", 10, "1700000040.000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 10 {
+		t.Fatalf("want 10 rows, got %d", len(got))
+	}
+	if got[0].Text != "msg 30" {
+		t.Errorf("first row should be 'msg 30', got %q", got[0].Text)
+	}
+	if got[len(got)-1].Text != "msg 39" {
+		t.Errorf("last row should be 'msg 39', got %q", got[len(got)-1].Text)
+	}
+}
+
 func TestGetThreadReplies(t *testing.T) {
 	db := setupDBWithWorkspace(t)
 	defer db.Close()

@@ -2669,3 +2669,189 @@ func TestSelfSendInFlight_PassesThroughCrossSession(t *testing.T) {
 		t.Errorf("Text = %q", got[0].Text)
 	}
 }
+
+// TestChannelSelectedRendersFromCacheWithoutSpinner verifies that when a
+// channel-cache reader is wired and returns items synchronously,
+// ChannelSelectedMsg renders them immediately and skips the spinner.
+// The network fetcher still fires; MessagesLoadedMsg ultimately
+// authoritatively replaces the cached render.
+func TestChannelSelectedRendersFromCacheWithoutSpinner(t *testing.T) {
+	app := NewApp()
+
+	cachedItems := []messages.MessageItem{
+		{TS: "1.0", UserID: "U1", UserName: "alice", Text: "from cache"},
+	}
+	app.SetChannelCacheReader(func(channelID string) []messages.MessageItem {
+		if channelID == "C1" {
+			return cachedItems
+		}
+		return nil
+	})
+	fetcherCalled := false
+	app.SetChannelFetcher(func(channelID, channelName string) tea.Msg {
+		fetcherCalled = true
+		return MessagesLoadedMsg{ChannelID: channelID, Messages: nil}
+	})
+
+	_, cmd := app.Update(ChannelSelectedMsg{ID: "C1", Name: "general", Type: "channel"})
+
+	if app.messagepane.IsLoading() {
+		t.Errorf("expected loading=false on cache hit, got true")
+	}
+	got := app.messagepane.Messages()
+	if len(got) != 1 || got[0].Text != "from cache" {
+		t.Errorf("expected cached items rendered, got %+v", got)
+	}
+
+	// The cached render is best-effort; the network fetcher MUST still
+	// fire in the background so MessagesLoadedMsg can authoritatively
+	// replace the cached content. Drain the returned cmd batch to
+	// execute the fetcher closure and assert it ran. A regression that
+	// gated the fetcher on a cache miss (e.g. moving the dispatch into
+	// the else branch) would silently break this guarantee.
+	_ = drainBatch(cmd)
+	if !fetcherCalled {
+		t.Errorf("expected network fetcher to fire even on cache hit, but it did not")
+	}
+}
+
+// TestMessagesLoadedNilDoesNotClobberCachedView guards the contract
+// that fetchChannelMessages returning nil signals a NETWORK FAILURE
+// (not an empty channel — those return []messages.MessageItem{}).
+// On failure we must preserve whatever the cache rendered so a
+// transient blip doesn't blank a working view. The bug this catches:
+// MessagesLoadedMsg unconditionally calling SetMessages(msg.Messages)
+// would wipe the cached items the moment the network call failed.
+func TestMessagesLoadedNilDoesNotClobberCachedView(t *testing.T) {
+	app := NewApp()
+	cachedItems := []messages.MessageItem{
+		{TS: "1.0", UserID: "U1", UserName: "alice", Text: "from cache"},
+	}
+	app.SetChannelCacheReader(func(channelID string) []messages.MessageItem {
+		return cachedItems
+	})
+	app.SetChannelFetcher(func(channelID, channelName string) tea.Msg {
+		// Simulate a network failure by returning the same shape the
+		// real fetcher uses on error.
+		return MessagesLoadedMsg{ChannelID: channelID, Messages: nil}
+	})
+
+	// First: open the channel; cache fills the pane.
+	app.activeChannelID = "C1" // ensure MessagesLoadedMsg matches when delivered
+	_, cmd := app.Update(ChannelSelectedMsg{ID: "C1", Name: "general", Type: "channel"})
+	if got := app.messagepane.Messages(); len(got) != 1 || got[0].Text != "from cache" {
+		t.Fatalf("setup: cached items not rendered: %+v", got)
+	}
+
+	// Now drain the fetcher cmd and feed each emitted message back
+	// through Update — that's how Bubbletea would deliver the failed
+	// MessagesLoadedMsg in production.
+	for _, m := range drainBatch(cmd) {
+		if m == nil {
+			continue
+		}
+		app.Update(m)
+	}
+
+	// The cached items must still be present.
+	got := app.messagepane.Messages()
+	if len(got) != 1 || got[0].Text != "from cache" {
+		t.Errorf("cached items were clobbered by failed fetch: got %+v", got)
+	}
+	if app.messagepane.IsLoading() {
+		t.Errorf("loading should still be false after failed fetch, got true")
+	}
+}
+
+// TestMessagesLoadedEmptyClearsView verifies the complementary case:
+// a successful fetch that returned zero messages (genuinely empty
+// channel) DOES replace the cached view with an empty list.
+func TestMessagesLoadedEmptyClearsView(t *testing.T) {
+	app := NewApp()
+	cachedItems := []messages.MessageItem{
+		{TS: "1.0", UserID: "U1", UserName: "alice", Text: "stale cache"},
+	}
+	app.SetChannelCacheReader(func(channelID string) []messages.MessageItem { return cachedItems })
+	app.SetChannelFetcher(func(channelID, channelName string) tea.Msg {
+		return MessagesLoadedMsg{ChannelID: channelID, Messages: []messages.MessageItem{}}
+	})
+	app.activeChannelID = "C1"
+	_, cmd := app.Update(ChannelSelectedMsg{ID: "C1", Name: "general", Type: "channel"})
+	for _, m := range drainBatch(cmd) {
+		if m != nil {
+			app.Update(m)
+		}
+	}
+	if got := app.messagepane.Messages(); len(got) != 0 {
+		t.Errorf("expected empty pane after authoritative empty fetch, got %+v", got)
+	}
+}
+
+// TestChannelSelectedFallsBackToSpinnerOnCacheMiss verifies that when
+// the cache reader returns nil (or is absent), ChannelSelectedMsg falls
+// back to the loading spinner while the network fetch is in flight.
+func TestChannelSelectedFallsBackToSpinnerOnCacheMiss(t *testing.T) {
+	app := NewApp()
+	app.SetChannelCacheReader(func(channelID string) []messages.MessageItem { return nil })
+	app.SetChannelFetcher(func(channelID, channelName string) tea.Msg {
+		return MessagesLoadedMsg{ChannelID: channelID, Messages: nil}
+	})
+
+	app.Update(ChannelSelectedMsg{ID: "C2", Name: "alerts", Type: "channel"})
+
+	if !app.messagepane.IsLoading() {
+		t.Errorf("expected loading=true on cache miss, got false")
+	}
+}
+
+// TestWorkspaceSwitchedSetsLoadingBeforeChannelSelect verifies that the
+// WorkspaceSwitchedMsg handler flips the messagepane to loading=true at
+// the same time it clears the message list, so that the empty-state
+// branch ("No messages yet") cannot flash between the synchronous
+// SetMessages(nil) and the deferred ChannelSelectedMsg cmd that would
+// re-populate it on the next Bubbletea tick.
+func TestWorkspaceSwitchedSetsLoadingBeforeChannelSelect(t *testing.T) {
+	app := NewApp()
+	app.SetChannelCacheReader(func(channelID string) []messages.MessageItem { return nil })
+	app.SetChannelFetcher(func(channelID, channelName string) tea.Msg {
+		return MessagesLoadedMsg{ChannelID: channelID, Messages: nil}
+	})
+
+	// Note: do NOT drain the returned cmd batch — we want to assert the
+	// intermediate post-Update state before the deferred
+	// ChannelSelectedMsg dispatch runs on the next tick.
+	app.Update(WorkspaceSwitchedMsg{
+		TeamID:   "T2",
+		Channels: []sidebar.ChannelItem{{ID: "C9", Name: "general", Type: "channel"}},
+	})
+
+	if !app.messagepane.IsLoading() {
+		t.Fatalf("expected messagepane loading=true between ticks, got false")
+	}
+	if got := app.messagepane.Messages(); len(got) != 0 {
+		t.Fatalf("expected messages cleared, got %d", len(got))
+	}
+}
+
+// TestWorkspaceReadyFirstChannelSetsLoading mirrors the WorkspaceSwitched
+// case for the first-workspace bootstrap path: the WorkspaceReadyMsg
+// handler also auto-selects the first channel via a deferred
+// ChannelSelectedMsg, so it too must flip loading=true on the same tick
+// it clears the messagepane to avoid an empty-state flash.
+func TestWorkspaceReadyFirstChannelSetsLoading(t *testing.T) {
+	app := NewApp()
+	app.SetChannelCacheReader(func(channelID string) []messages.MessageItem { return nil })
+	app.SetChannelFetcher(func(channelID, channelName string) tea.Msg {
+		return MessagesLoadedMsg{ChannelID: channelID, Messages: nil}
+	})
+
+	app.Update(WorkspaceReadyMsg{
+		TeamID:   "T1",
+		TeamName: "Acme",
+		Channels: []sidebar.ChannelItem{{ID: "C1", Name: "general", Type: "channel"}},
+	})
+
+	if !app.messagepane.IsLoading() {
+		t.Fatalf("expected messagepane loading=true on first-channel auto-select, got false")
+	}
+}

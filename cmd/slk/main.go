@@ -603,6 +603,10 @@ func run() error {
 			return lastReadMap[channelID]
 		})
 
+		app.SetChannelCacheReader(func(channelID string) []messages.MessageItem {
+			return loadCachedMessages(db, client.UserID(), channelID, userNames, tsFormat)
+		})
+
 		app.SetChannelFetcher(func(channelID, channelName string) tea.Msg {
 			msgItems := fetchChannelMessages(client, channelID, db, userNames, tsFormat, avatarCache)
 
@@ -759,6 +763,10 @@ func run() error {
 				ThreadTS: threadTS,
 				Replies:  replies,
 			}
+		})
+
+		app.SetThreadCacheReader(func(channelID, threadTS string) []messages.MessageItem {
+			return loadCachedThreadReplies(db, client.UserID(), channelID, threadTS, userNames, tsFormat)
 		})
 
 		app.SetThreadMarker(func(channelID, threadTS, ts string) {
@@ -1387,6 +1395,7 @@ func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, 
 
 	var msgItems []messages.MessageItem
 	for _, m := range history {
+		rawBytes, _ := json.Marshal(m)
 		db.UpsertMessage(cache.Message{
 			TS:          m.Timestamp,
 			ChannelID:   channelID,
@@ -1396,6 +1405,7 @@ func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, 
 			ThreadTS:    m.ThreadTimestamp,
 			ReplyCount:  m.ReplyCount,
 			Subtype:     m.SubType,
+			RawJSON:     string(rawBytes),
 			CreatedAt:   time.Now().Unix(),
 		})
 
@@ -1443,15 +1453,211 @@ func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, 
 	return msgItems
 }
 
+// loadCachedMessages reads up to 50 cached messages for a channel from
+// SQLite and reconstructs []messages.MessageItem with the same fidelity
+// as fetchChannelMessages — including reactions and (when raw_json is
+// present) files / blocks / legacy attachments.
+//
+// Returns nil on cache miss (no rows for the channel) or any DB error;
+// callers treat nil as "fall through to the network fetch path".
+//
+// selfUserID is used to compute ReactionItem.HasReacted; it is NOT used
+// to drive any network call. Cache reads must remain offline-capable —
+// unknown user IDs render with their userID as a fallback rather than
+// triggering a fresh GetUserProfile RPC. Resolving them on-demand would
+// defeat the cache-first goal (and is what fetchChannelMessages already
+// does on the network path, populating userNames for next time).
+//
+// raw_json unmarshal failures on a single row degrade gracefully: that
+// row renders as text-only (no attachments / blocks / legacy
+// attachments) without aborting the rest of the load.
+func loadCachedMessages(
+	db *cache.DB,
+	selfUserID string,
+	channelID string,
+	userNames map[string]string,
+	tsFormat string,
+) []messages.MessageItem {
+	if db == nil {
+		return nil
+	}
+	rows, err := db.GetMessages(channelID, 50, "")
+	if err != nil {
+		log.Printf("loadCachedMessages: GetMessages %s: %v", channelID, err)
+		return nil
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+
+	out := make([]messages.MessageItem, 0, len(rows))
+	for _, m := range rows {
+		out = append(out, enrichCachedRow(db, selfUserID, channelID, m, userNames, tsFormat, "loadCachedMessages"))
+	}
+	return out
+}
+
+// enrichCachedRow reconstructs a single messages.MessageItem from a
+// cache.Message row using the same fidelity as the network fetchers:
+// 3-tier username fallback, per-row reactions, and raw_json
+// reconstruction of files / blocks / legacy attachments.
+//
+// userNames may be nil — username resolution still works via the
+// cached users table or the userID fallback, but no memoization
+// occurs.
+//
+// raw_json unmarshal failures degrade the row to text-only without
+// failing the caller. logPrefix tags the per-row log lines so callers
+// (loadCachedMessages vs loadCachedThreadReplies) remain
+// distinguishable in logs.
+func enrichCachedRow(
+	db *cache.DB,
+	selfUserID string,
+	channelID string,
+	m cache.Message,
+	userNames map[string]string,
+	tsFormat string,
+	logPrefix string,
+) messages.MessageItem {
+	// Resolve username from the in-memory map first; fall back to
+	// the cached users table; finally fall back to the user ID
+	// itself so the row still renders something readable.
+	var userName string
+	if userNames != nil {
+		userName = userNames[m.UserID]
+	}
+	if userName == "" && m.UserID != "" {
+		if u, err := db.GetUser(m.UserID); err == nil {
+			if u.DisplayName != "" {
+				userName = u.DisplayName
+			} else if u.Name != "" {
+				userName = u.Name
+			}
+			if userName != "" && userNames != nil {
+				userNames[m.UserID] = userName
+			}
+		}
+	}
+	if userName == "" {
+		userName = m.UserID
+	}
+
+	// Reactions for this message.
+	var reactions []messages.ReactionItem
+	// TODO(perf): N+1 query — for 50 messages this is 50 SQLite calls on the
+	// channel-open hot path. If this becomes a bottleneck, add a batched
+	// db.GetReactionsForMessages([]ts) map[ts][]ReactionRow to the cache layer.
+	if rs, err := db.GetReactions(m.TS, channelID); err == nil {
+		for _, r := range rs {
+			hasReacted := false
+			for _, uid := range r.UserIDs {
+				if uid == selfUserID {
+					hasReacted = true
+					break
+				}
+			}
+			reactions = append(reactions, messages.ReactionItem{
+				Emoji:      r.Emoji,
+				Count:      r.Count,
+				HasReacted: hasReacted,
+			})
+		}
+	} else {
+		log.Printf("%s: GetReactions %s/%s: %v", logPrefix, channelID, m.TS, err)
+	}
+
+	// Attachments / blocks / legacy attachments come from
+	// raw_json. Pre-Task-2 rows have an empty raw_json; for
+	// those we render text-only.
+	var attachments []messages.Attachment
+	var blocks []blockkit.Block
+	var legacy []blockkit.LegacyAttachment
+	if m.RawJSON != "" {
+		var raw slack.Message
+		if err := json.Unmarshal([]byte(m.RawJSON), &raw); err != nil {
+			log.Printf("%s: raw_json unmarshal for %s/%s: %v",
+				logPrefix, channelID, m.TS, err)
+		} else {
+			attachments = extractAttachments(raw.Files)
+			blocks = extractBlocks(raw.Blocks)
+			legacy = extractLegacyAttachments(raw.Attachments)
+		}
+	}
+
+	return messages.MessageItem{
+		TS:                m.TS,
+		UserID:            m.UserID,
+		UserName:          userName,
+		Text:              m.Text,
+		Timestamp:         formatTimestamp(m.TS, tsFormat),
+		ThreadTS:          m.ThreadTS,
+		ReplyCount:        m.ReplyCount,
+		Subtype:           m.Subtype,
+		Reactions:         reactions,
+		Attachments:       attachments,
+		Blocks:            blocks,
+		LegacyAttachments: legacy,
+	}
+}
+
+// loadCachedThreadReplies reads cached parent + replies for a thread
+// from SQLite and reconstructs []messages.MessageItem with the same
+// fidelity as fetchThreadReplies. Offline-pure (no network).
+//
+// The returned slice includes the parent message at index 0 followed
+// by replies in chronological order, matching db.GetThreadReplies'
+// ordering. Callers that pass the slice into
+// ui.ThreadRepliesLoadedMsg.Replies must strip the parent
+// (slice[1:]) since the reducer expects replies-only.
+//
+// Returns nil when no rows are cached or on DB error.
+func loadCachedThreadReplies(
+	db *cache.DB,
+	selfUserID string,
+	channelID, threadTS string,
+	userNames map[string]string,
+	tsFormat string,
+) []messages.MessageItem {
+	if db == nil {
+		return nil
+	}
+	rows, err := db.GetThreadReplies(channelID, threadTS)
+	if err != nil {
+		log.Printf("loadCachedThreadReplies: GetThreadReplies %s/%s: %v", channelID, threadTS, err)
+		return nil
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+
+	out := make([]messages.MessageItem, 0, len(rows))
+	for _, m := range rows {
+		out = append(out, enrichCachedRow(db, selfUserID, channelID, m, userNames, tsFormat, "loadCachedThreadReplies"))
+	}
+	return out
+}
+
+// fetchChannelMessages returns the channel's recent messages from the
+// network, with cache write-through. The return-value contract:
+//
+//	nil   - the network call FAILED (transient error, auth issue, etc.)
+//	[]    - the channel is genuinely empty
+//	[...] - normal case
+//
+// The MessagesLoadedMsg handler distinguishes nil from empty so a
+// failed background refresh doesn't wipe a successfully-rendered
+// cache view. Do NOT change nil to mean "empty channel".
 func fetchChannelMessages(client *slackclient.Client, channelID string, db *cache.DB, userNames map[string]string, tsFormat string, avatarCache *avatar.Cache) []messages.MessageItem {
 	ctx := context.Background()
 	history, err := client.GetHistory(ctx, channelID, 50, "")
 	if err != nil {
+		log.Printf("fetchChannelMessages: GetHistory %s: %v", channelID, err)
 		return nil
 	}
 
-	var msgItems []messages.MessageItem
+	msgItems := make([]messages.MessageItem, 0, len(history))
 	for _, m := range history {
+		rawBytes, _ := json.Marshal(m)
 		db.UpsertMessage(cache.Message{
 			TS:          m.Timestamp,
 			ChannelID:   channelID,
@@ -1461,6 +1667,7 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 			ThreadTS:    m.ThreadTimestamp,
 			ReplyCount:  m.ReplyCount,
 			Subtype:     m.SubType,
+			RawJSON:     string(rawBytes),
 			CreatedAt:   time.Now().Unix(),
 		})
 
@@ -1508,16 +1715,22 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 	return msgItems
 }
 
+// fetchThreadReplies returns network thread replies (parent stripped),
+// with cache write-through. Same nil-vs-empty contract as
+// fetchChannelMessages: nil signals failure, [] signals "no replies",
+// so the ThreadRepliesLoadedMsg consumer can decide whether to clobber
+// an already-rendered cached view.
 func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, db *cache.DB, userNames map[string]string, tsFormat string, avatarCache *avatar.Cache) []messages.MessageItem {
 	ctx := context.Background()
 	history, err := client.GetReplies(ctx, channelID, threadTS)
 	if err != nil {
-		log.Printf("Warning: failed to fetch thread replies: %v", err)
+		log.Printf("fetchThreadReplies: GetReplies %s/%s: %v", channelID, threadTS, err)
 		return nil
 	}
 
-	var msgItems []messages.MessageItem
+	msgItems := make([]messages.MessageItem, 0, len(history))
 	for _, m := range history {
+		rawBytes, _ := json.Marshal(m)
 		db.UpsertMessage(cache.Message{
 			TS:          m.Timestamp,
 			ChannelID:   channelID,
@@ -1527,6 +1740,7 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 			ThreadTS:    m.ThreadTimestamp,
 			ReplyCount:  m.ReplyCount,
 			Subtype:     m.SubType,
+			RawJSON:     string(rawBytes),
 			CreatedAt:   time.Now().Unix(),
 		})
 
@@ -1566,11 +1780,13 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 		})
 	}
 
-	// First message from GetConversationReplies is the parent -- skip it for the replies list
+	// First message from GetConversationReplies is the parent -- skip it for the replies list.
+	// Return non-nil empty on success-no-replies so the consumer can distinguish from the
+	// error path (which returns nil above).
 	if len(msgItems) > 1 {
 		return msgItems[1:]
 	}
-	return nil
+	return []messages.MessageItem{}
 }
 
 func formatTimestamp(ts, format string) string {
@@ -1701,6 +1917,18 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// Guard against nil db so handlers constructed in tests (without
 	// real persistence) don't panic.
 	if h.db != nil {
+		synthetic := slack.Message{Msg: slack.Msg{
+			Type:            "message",
+			Timestamp:       ts,
+			User:            userID,
+			Text:            text,
+			ThreadTimestamp: threadTS,
+			SubType:         subtype,
+			Files:           files,
+			Blocks:          blocks,
+			Attachments:     attachments,
+		}}
+		rawBytes, _ := json.Marshal(synthetic)
 		h.db.UpsertMessage(cache.Message{
 			TS:          ts,
 			ChannelID:   channelID,
@@ -1709,6 +1937,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 			Text:        text,
 			ThreadTS:    threadTS,
 			Subtype:     subtype,
+			RawJSON:     string(rawBytes),
 			CreatedAt:   time.Now().Unix(),
 		})
 	}
