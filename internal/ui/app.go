@@ -1929,7 +1929,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case SpinnerTickMsg:
 		if a.loading {
-			a.spinnerFrame = (a.spinnerFrame + 1) % 10
+			a.spinnerFrame = (a.spinnerFrame + 1) % len(styles.SpinnerChars)
 			return a, tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
 				return SpinnerTickMsg{}
 			})
@@ -3535,11 +3535,9 @@ func (a *App) checkLoadingDone() {
 	a.loading = false
 }
 
-var spinnerChars = []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
-
 func (a *App) renderLoadingOverlay(width, height int) string {
 	var rows []string
-	spinner := string(spinnerChars[a.spinnerFrame])
+	spinner := string(styles.SpinnerChars[a.spinnerFrame])
 
 	for _, entry := range a.loadingStates {
 		switch entry.Status {
