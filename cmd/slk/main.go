@@ -1896,6 +1896,19 @@ func (h *rtmEventHandler) OnConnect() {
 	if h.wsCtx != nil {
 		go bootstrapPresenceAndDND(context.Background(), h.wsCtx, h.program)
 	}
+	// Refresh Slack-native section state on reconnect. MaybeRebootstrap
+	// is debounced to once per 30s (Task 6) so a rapid flap doesn't
+	// thunder; a real long-disconnect-then-reconnect refreshes section
+	// state we may have missed during the gap.
+	if h.wsCtx != nil && h.wsCtx.SectionStore != nil && h.wsCtx.Client != nil {
+		go func(wctx *WorkspaceContext) {
+			if err := wctx.SectionStore.MaybeRebootstrap(context.Background(), wctx.Client); err != nil {
+				log.Printf("section store rebootstrap for %s failed: %v", wctx.TeamName, err)
+				return
+			}
+			h.refreshSectionsForActive()
+		}(h.wsCtx)
+	}
 }
 
 func (h *rtmEventHandler) OnDisconnect() {
@@ -2045,20 +2058,98 @@ func (h *rtmEventHandler) OnConversationOpened(ch slack.Channel) {
 	})
 }
 
-// OnChannelSectionUpserted is a no-op stub. SectionStore wiring lands
-// in a follow-up task; right now this method exists solely to satisfy
-// the extended EventHandler interface.
-func (h *rtmEventHandler) OnChannelSectionUpserted(ev slackclient.ChannelSectionUpserted) {}
-
-// OnChannelSectionDeleted is a no-op stub; see OnChannelSectionUpserted.
-func (h *rtmEventHandler) OnChannelSectionDeleted(sectionID string) {}
-
-// OnChannelSectionChannelsUpserted is a no-op stub; see OnChannelSectionUpserted.
-func (h *rtmEventHandler) OnChannelSectionChannelsUpserted(sectionID string, channelIDs []string) {
+// refreshSectionsForActive re-syncs every wctx.Channels item's Section
+// field with the current SectionStore state, then (if this workspace
+// is active) posts a SectionsRefreshedMsg so the App rebuckets the
+// sidebar. Inactive workspaces still get their wctx.Channels mutated
+// in place; the user sees the refresh on next workspace switch.
+//
+// Called from the four channel-section WS event handlers after they've
+// already applied their delta to the store.
+func (h *rtmEventHandler) refreshSectionsForActive() {
+	if h.wsCtx == nil || h.wsCtx.SectionStore == nil {
+		return
+	}
+	store := h.wsCtx.SectionStore
+	if !store.Ready() {
+		return
+	}
+	// Update Section field on every channel in the workspace context
+	// based on current store state. Channels not claimed by any
+	// section have Section reset to "" — letting the sidebar's Slack
+	// mode bucket them via type-default fallback (Task 8) or the
+	// config-glob path if Slack mode isn't active.
+	for i := range h.wsCtx.Channels {
+		item := &h.wsCtx.Channels[i]
+		if id, ok := store.SectionForChannel(item.ID); ok {
+			item.Section = id
+		} else {
+			item.Section = ""
+		}
+		// SectionOrder is unused in Slack mode (linked-list order
+		// comes from the provider); reset to 0 for consistency.
+		item.SectionOrder = 0
+	}
+	if h.program == nil {
+		return
+	}
+	if h.isActive != nil && !h.isActive() {
+		return
+	}
+	// Send a copy so the App can mutate without racing the workspace's
+	// mutator path.
+	channelsCopy := make([]sidebar.ChannelItem, len(h.wsCtx.Channels))
+	copy(channelsCopy, h.wsCtx.Channels)
+	h.program.Send(ui.SectionsRefreshedMsg{
+		TeamID:   h.workspaceID,
+		Channels: channelsCopy,
+	})
 }
 
-// OnChannelSectionChannelsRemoved is a no-op stub; see OnChannelSectionUpserted.
+// OnChannelSectionUpserted handles section create/rename/reorder/emoji-change.
+// The store applies last-write-wins; the sidebar refresh is a no-op for
+// channels (no membership change) but invalidates the cache so renames
+// re-render section header labels.
+func (h *rtmEventHandler) OnChannelSectionUpserted(ev slackclient.ChannelSectionUpserted) {
+	if h.wsCtx == nil || h.wsCtx.SectionStore == nil {
+		return
+	}
+	h.wsCtx.SectionStore.ApplyUpsert(ev)
+	h.refreshSectionsForActive()
+}
+
+// OnChannelSectionDeleted handles section delete. Channels formerly in
+// the section have their channel→section mapping dropped by the store;
+// refreshSectionsForActive then resets Section="" on those items and
+// the sidebar rebuckets them into the type-default bucket.
+func (h *rtmEventHandler) OnChannelSectionDeleted(sectionID string) {
+	if h.wsCtx == nil || h.wsCtx.SectionStore == nil {
+		return
+	}
+	h.wsCtx.SectionStore.ApplyDelete(sectionID)
+	h.refreshSectionsForActive()
+}
+
+// OnChannelSectionChannelsUpserted handles channels added (or moved
+// between sections). The store overwrites prior section membership;
+// refreshSectionsForActive picks up the new IDs.
+func (h *rtmEventHandler) OnChannelSectionChannelsUpserted(sectionID string, channelIDs []string) {
+	if h.wsCtx == nil || h.wsCtx.SectionStore == nil {
+		return
+	}
+	h.wsCtx.SectionStore.ApplyChannelsAdded(sectionID, channelIDs)
+	h.refreshSectionsForActive()
+}
+
+// OnChannelSectionChannelsRemoved handles channels removed from a section.
+// The store drops them from channelToSection; refreshSectionsForActive
+// resets their Section="" and the sidebar rebuckets via type-default.
 func (h *rtmEventHandler) OnChannelSectionChannelsRemoved(sectionID string, channelIDs []string) {
+	if h.wsCtx == nil || h.wsCtx.SectionStore == nil {
+		return
+	}
+	h.wsCtx.SectionStore.ApplyChannelsRemoved(sectionID, channelIDs)
+	h.refreshSectionsForActive()
 }
 
 // listWorkspaces prints the configured workspaces with their TeamID and

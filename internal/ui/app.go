@@ -199,6 +199,17 @@ type (
 		TeamID string
 		Item   sidebar.ChannelItem
 	}
+	// SectionsRefreshedMsg is sent when a workspace's Slack-native
+	// section state has mutated (via channel_section_* WS events) and
+	// the channel list needs to be re-bucketed in the sidebar. Channels
+	// carries a fresh slice with updated Section fields. The App only
+	// rebuckets if TeamID matches the active workspace; inactive
+	// workspaces have already been mutated in-place in their
+	// WorkspaceContext.
+	SectionsRefreshedMsg struct {
+		TeamID   string
+		Channels []sidebar.ChannelItem
+	}
 	WorkspaceReadyMsg struct {
 		TeamID      string
 		TeamName    string
@@ -1814,6 +1825,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Inactive-workspace events update WorkspaceContext.Channels
 		// from the rtmEventHandler in cmd/slk/main.go (Task 6); App.Update
 		// only mutates the active sidebar.
+
+	case SectionsRefreshedMsg:
+		if msg.TeamID == a.activeTeamID {
+			a.SetChannels(msg.Channels)
+		}
+		// Inactive-workspace events have already updated the
+		// WorkspaceContext.Channels in cmd/slk; App.Update only mutates
+		// the active sidebar.
 
 	case SpinnerTickMsg:
 		if a.loading {
