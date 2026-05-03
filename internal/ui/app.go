@@ -980,6 +980,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						chID := a.activeChannelID
 						oldestTS := a.messagepane.OldestTS()
 						fetcher := a.olderMessagesFetcher
+						// Kick the spinner tick: if a.loading is already
+						// false (workspace fully loaded), no tick is alive
+						// and the glyph would freeze on its last frame.
+						cmds = append(cmds, tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+							return SpinnerTickMsg{}
+						}))
 						cmds = append(cmds, func() tea.Msg {
 							return fetcher(chID, oldestTS)
 						})
@@ -3103,9 +3109,17 @@ func (a *App) handleUp() tea.Cmd {
 			chID := a.activeChannelID
 			oldestTS := a.messagepane.OldestTS()
 			fetcher := a.olderMessagesFetcher
-			return func() tea.Msg {
-				return fetcher(chID, oldestTS)
-			}
+			// Kick the spinner tick: if a.loading is already false
+			// (workspace fully loaded), no tick is alive and the glyph
+			// would freeze on its last frame.
+			return tea.Batch(
+				tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+					return SpinnerTickMsg{}
+				}),
+				func() tea.Msg {
+					return fetcher(chID, oldestTS)
+				},
+			)
 		}
 	case PanelThread:
 		a.threadPanel.MoveUp()
