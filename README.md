@@ -72,10 +72,10 @@
 ### Channels & Workspaces
 - Three-panel layout: workspace rail, channel sidebar, message pane
 - Public (`#`), private (`◆`), DM (`●`/`○` for presence), and group DM channels
-- Sidebar order: pinned custom sections first, then Direct Messages, then the catch-all Channels list
+- **Slack-native sidebar sections** — slk reads your sections directly from Slack and reflects them live: section names, emoji, linked-list order, and channel/DM membership are kept in sync via the same WebSocket events the official client uses. Reorder, rename, create, or delete sections in any other Slack client; slk catches up within a couple seconds. Read-only: section editing still happens in the official client. Falls back to glob-based config sections when disabled or if the API is unavailable.
 - Collapsible sections — `Enter`/`Space` on a section header toggles it. The default Channels section starts collapsed (`▸ Channels •3` shows aggregate unreads); pinned sections and DMs start expanded
 - Live unread indicators: bold + blue dot for unread channels, muted text for read ones, aggregate dot+count on collapsed section headers
-- Custom channel sections via glob patterns in config
+- Glob-based config sections (`[sections.*]` in `config.toml`) — used when `use_slack_sections = false` or as a fallback when Slack's API is unreachable
 - Fuzzy channel finder (`Ctrl+t` / `Ctrl+p`) — auto-expands a collapsed section when you open a channel inside it; ranks 1:1 DMs above group DMs when searching by person name
 - Workspace picker (`Ctrl+w`) and direct jump (`1`–`9`)
 - All workspaces stay connected in parallel for live unread badges
@@ -319,7 +319,9 @@ Config lives at `~/.config/slk/config.toml`:
 
 ```toml
 [general]
-default_workspace = "work"   # the slug, not the team ID
+default_workspace = "work"      # the slug, not the team ID
+use_slack_sections = true       # use real Slack sidebar sections (default).
+                                # set false to use [sections.*] globs instead.
 
 [appearance]
 theme = "dracula"
@@ -344,8 +346,9 @@ message_retention_days = 30
 max_db_size_mb = 500
 max_image_cache_mb = 200
 
-# Global channel sections (used as a fallback for workspaces that
-# don't define their own).
+# Glob-based channel sections — only consulted when use_slack_sections
+# is false (globally or per-workspace), or when Slack's section API is
+# unreachable. Otherwise slk reads the user's actual Slack sections.
 [sections.Alerts]
 channels = ["alerts", "ops", "*-alerts"]
 order = 1
@@ -354,8 +357,10 @@ order = 1
 # time. team_id ties the slug to the underlying Slack workspace.
 [workspaces.work]
 team_id = "T01ABCDEF"
-order   = 1                  # rail position; 1-based, used by 1-9 keys
-theme   = "dracula"          # overrides [appearance].theme
+order   = 1                     # rail position; 1-based, used by 1-9 keys
+theme   = "dracula"             # overrides [appearance].theme
+use_slack_sections = false      # this workspace uses [sections.*] globs;
+                                # other workspaces still use Slack sections
 
 [workspaces.work.sections.Alerts]
 channels = ["alerts", "*-alerts"]
@@ -379,9 +384,30 @@ background = "#1A1A2E"
 text = "#E0E0E0"
 ```
 
+**Section resolution.** When `use_slack_sections = true` (the default)
+and Slack's section endpoint is reachable, slk reads the user's actual
+sidebar sections — names, emoji, linked-list order, and channel
+membership — directly from Slack and keeps them live via WebSocket
+events. Any `[sections.*]` or `[workspaces.<slug>.sections.*]` blocks
+in `config.toml` are ignored in this mode (a one-line info note is
+emitted to the debug log on first connect so the shadowing isn't
+silent). Set `use_slack_sections = false` globally, or per-workspace,
+to opt into glob-based sections instead.
+
 Per-workspace `[workspaces.<slug>.sections.*]` blocks fully replace the
 global `[sections.*]` for that workspace. Workspaces that define no
 sections of their own fall back to the global table.
+
+**v1 limitations of Slack-native sections.** v1 is read-only — section
+editing still happens in the official client; slk reflects the
+results. Sections of type `stars`, `slack_connect`,
+`salesforce_records`, and `agents` are hidden (matching the official
+client's filtering). Sections with more than 10 channels may be
+returned only partially by Slack's API on initial load; the missing
+channels temporarily fall into the catch-all bucket and migrate into
+their correct section as WebSocket events fire or the workspace
+reconnects. A debug-log warning identifies which sections were
+truncated.
 
 The `order` field controls workspace position in the rail and the
 mapping for the `1`–`9` digit keys. Positive values sort ascending
