@@ -598,3 +598,66 @@ func slackModeNavHeaders(m *Model) []string {
 	}
 	return out
 }
+
+func TestSectionHeader_RendersEmojiPrefix(t *testing.T) {
+	items := []ChannelItem{{ID: "C1", Name: "ch1", Type: "channel", Section: "A"}}
+	provider := &fakeProvider{
+		ready:    true,
+		sections: []SectionMeta{{ID: "A", Name: "Alerts", Emoji: "rocket", Type: "standard"}},
+	}
+	m := New(items)
+	m.SetSectionsProvider(provider)
+	out := m.View(20, 40)
+	if !strings.Contains(out, "Alerts") {
+		t.Errorf("missing section name in output:\n%s", out)
+	}
+	// kyokomi/emoji renders :rocket: as 🚀. If unresolved (unknown
+	// shortcode), the raw :rocket: stays. Either is acceptable.
+	if !strings.Contains(out, "🚀") && !strings.Contains(out, ":rocket:") {
+		t.Errorf("missing emoji prefix in output:\n%s", out)
+	}
+}
+
+func TestCollapseByID_PreservedAcrossRename(t *testing.T) {
+	items := []ChannelItem{{ID: "C1", Name: "ch1", Type: "channel", Section: "A"}}
+	p := &fakeProvider{
+		ready:    true,
+		sections: []SectionMeta{{ID: "A", Name: "Alerts", Type: "standard"}},
+	}
+	m := New(items)
+	m.SetSectionsProvider(p)
+	m.ToggleCollapse("A")
+	if !m.IsCollapsed("A") {
+		t.Fatalf("collapse failed (set on A then queried A in same mode)")
+	}
+	// Rename: provider returns the same ID with a new name.
+	p.sections = []SectionMeta{{ID: "A", Name: "Renamed", Type: "standard"}}
+	m.SetSectionsProvider(p) // triggers a rebuild
+	if !m.IsCollapsed("A") {
+		t.Errorf("collapse state lost after rename (must key by ID, not by displayed name)")
+	}
+}
+
+func TestCollapseByID_IndependentFromConfigMode(t *testing.T) {
+	// Switching back from Slack mode to config mode should fall through
+	// to the name-keyed collapse map; collapseByID entries shouldn't
+	// leak into config-mode behavior.
+	items := []ChannelItem{{ID: "C1", Name: "ch1", Type: "channel", Section: "A"}}
+	p := &fakeProvider{
+		ready:    true,
+		sections: []SectionMeta{{ID: "A", Name: "Alerts", Type: "standard"}},
+	}
+	m := New(items)
+	m.SetSectionsProvider(p)
+	m.ToggleCollapse("A")        // collapse via ID
+	m.SetSectionsProvider(nil)   // back to config mode
+	// Now "A" is just a string in config mode; whether it's collapsed
+	// depends on the name-keyed `collapsed` map (which is the default
+	// state set in New). The ID-mode collapse must NOT bleed into
+	// config-mode IsCollapsed lookups.
+	// In config mode the default Channels section starts collapsed,
+	// but a custom "A" name has not been touched so it should be expanded.
+	if m.IsCollapsed("A") {
+		t.Errorf("collapse state for ID 'A' bled into config mode")
+	}
+}

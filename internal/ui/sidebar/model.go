@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/styles"
+	kyoemoji "github.com/kyokomi/emoji/v2"
 	"github.com/muesli/reflow/truncate"
 )
 
@@ -473,7 +474,16 @@ func (m *Model) IsSectionHeaderSelected() (name string, ok bool) {
 }
 
 // IsCollapsed reports whether the named section is currently collapsed.
+// In Slack mode, the section parameter is a section ID and lookup uses
+// collapseByID (so renames preserve state). In config mode, it's a
+// section name and lookup uses collapsed.
 func (m *Model) IsCollapsed(section string) bool {
+	if m.useSlackSections() {
+		if m.collapseByID == nil {
+			return false
+		}
+		return m.collapseByID[section]
+	}
 	if m.collapsed == nil {
 		return false
 	}
@@ -482,12 +492,20 @@ func (m *Model) IsCollapsed(section string) bool {
 
 // ToggleCollapse flips the collapsed state of the named section. The
 // cursor stays on the section's header (if it was already there) so a
-// subsequent toggle just expands again.
+// subsequent toggle just expands again. Dispatches to collapseByID in
+// Slack mode (ID-keyed; survives renames), collapsed in config mode.
 func (m *Model) ToggleCollapse(section string) {
-	if m.collapsed == nil {
-		m.collapsed = map[string]bool{}
+	if m.useSlackSections() {
+		if m.collapseByID == nil {
+			m.collapseByID = map[string]bool{}
+		}
+		m.collapseByID[section] = !m.collapseByID[section]
+	} else {
+		if m.collapsed == nil {
+			m.collapsed = map[string]bool{}
+		}
+		m.collapsed[section] = !m.collapsed[section]
 	}
-	m.collapsed[section] = !m.collapsed[section]
 	// Rebuild nav since the set of selectable rows changed. Preserve
 	// the cursor's logical target (header / threads / channel ID) so
 	// the user keeps their place.
@@ -1227,22 +1245,62 @@ func (m *Model) buildCache(width int) {
 	}
 }
 
+// sectionDisplayMeta returns the user-visible name and emoji shortcode
+// for a section as currently identified in the nav. In Slack mode the
+// nav header is the section ID; in config mode it's the section name
+// (no emoji available).
+func (m *Model) sectionDisplayMeta(sectionKey string) (name, emoji string) {
+	if m.useSlackSections() {
+		for _, meta := range m.sectionsProvider.OrderedSlackSections() {
+			if meta.ID == sectionKey {
+				name = meta.Name
+				if name == "" {
+					name = "(unnamed)"
+				}
+				return name, meta.Emoji
+			}
+		}
+		// ID not found in provider (shouldn't happen if nav is fresh).
+		return sectionKey, ""
+	}
+	return sectionKey, ""
+}
+
 // renderSectionHeaderLabel returns the (normal, selected) label
 // strings for a section header. Headers show a triangle indicating
 // expand/collapse state and, when collapsed, an aggregate unread badge
 // summing UnreadCount across every visible item in the section.
+//
+// In Slack mode, the `name` parameter is a section ID — we look up the
+// user-visible name and (if any) emoji shortcode from the provider and
+// prepend the resolved emoji.
 func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.Style, bgAnsi string) (string, string) {
+	displayName, emojiCode := m.sectionDisplayMeta(name)
+	emojiPrefix := ""
+	if emojiCode != "" {
+		// kyokomi/emoji.Sprint resolves :shortcode: to unicode; on
+		// unknown shortcodes it returns the input unchanged (which
+		// keeps the colons, giving a graceful textual fallback).
+		token := ":" + emojiCode + ":"
+		rendered := kyoemoji.Sprint(token)
+		if rendered != token {
+			emojiPrefix = rendered + " "
+		} else {
+			emojiPrefix = token + " "
+		}
+	}
+
 	glyph := "▾" // expanded
 	if m.IsCollapsed(name) {
 		glyph = "▸"
 	}
-	label := " " + glyph + " " + name
+	label := " " + glyph + " " + emojiPrefix + displayName
 	if m.IsCollapsed(name) {
 		if n := m.aggregateUnreadForSection(name); n > 0 {
 			label += " " + dotStyle.Render("•"+fmt.Sprintf("%d", n))
 		}
 	}
-	selected := cursor + glyph + " " + name
+	selected := cursor + glyph + " " + emojiPrefix + displayName
 	if m.IsCollapsed(name) {
 		if n := m.aggregateUnreadForSection(name); n > 0 {
 			selected += " " + dotStyle.Render("•"+fmt.Sprintf("%d", n))
