@@ -1387,6 +1387,7 @@ func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, 
 
 	var msgItems []messages.MessageItem
 	for _, m := range history {
+		rawBytes, _ := json.Marshal(m)
 		db.UpsertMessage(cache.Message{
 			TS:          m.Timestamp,
 			ChannelID:   channelID,
@@ -1396,6 +1397,7 @@ func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, 
 			ThreadTS:    m.ThreadTimestamp,
 			ReplyCount:  m.ReplyCount,
 			Subtype:     m.SubType,
+			RawJSON:     string(rawBytes),
 			CreatedAt:   time.Now().Unix(),
 		})
 
@@ -1452,6 +1454,7 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 
 	var msgItems []messages.MessageItem
 	for _, m := range history {
+		rawBytes, _ := json.Marshal(m)
 		db.UpsertMessage(cache.Message{
 			TS:          m.Timestamp,
 			ChannelID:   channelID,
@@ -1461,6 +1464,7 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 			ThreadTS:    m.ThreadTimestamp,
 			ReplyCount:  m.ReplyCount,
 			Subtype:     m.SubType,
+			RawJSON:     string(rawBytes),
 			CreatedAt:   time.Now().Unix(),
 		})
 
@@ -1518,6 +1522,7 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 
 	var msgItems []messages.MessageItem
 	for _, m := range history {
+		rawBytes, _ := json.Marshal(m)
 		db.UpsertMessage(cache.Message{
 			TS:          m.Timestamp,
 			ChannelID:   channelID,
@@ -1527,6 +1532,7 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 			ThreadTS:    m.ThreadTimestamp,
 			ReplyCount:  m.ReplyCount,
 			Subtype:     m.SubType,
+			RawJSON:     string(rawBytes),
 			CreatedAt:   time.Now().Unix(),
 		})
 
@@ -1701,6 +1707,18 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// Guard against nil db so handlers constructed in tests (without
 	// real persistence) don't panic.
 	if h.db != nil {
+		synthetic := slack.Message{Msg: slack.Msg{
+			Type:            "message",
+			Timestamp:       ts,
+			User:            userID,
+			Text:            text,
+			ThreadTimestamp: threadTS,
+			SubType:         subtype,
+			Files:           files,
+			Blocks:          blocks,
+			Attachments:     attachments,
+		}}
+		rawBytes, _ := json.Marshal(synthetic)
 		h.db.UpsertMessage(cache.Message{
 			TS:          ts,
 			ChannelID:   channelID,
@@ -1709,6 +1727,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 			Text:        text,
 			ThreadTS:    threadTS,
 			Subtype:     subtype,
+			RawJSON:     string(rawBytes),
 			CreatedAt:   time.Now().Unix(),
 		})
 	}
