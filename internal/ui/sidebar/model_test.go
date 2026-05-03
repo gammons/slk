@@ -484,3 +484,117 @@ func TestRender_ReadThreadsRow_DoesNotEmitBoldAfterReset(t *testing.T) {
 		t.Errorf("read Threads row unexpectedly emitted bold after reset; afterReset=%q", afterReset)
 	}
 }
+
+type fakeProvider struct {
+	ready    bool
+	sections []SectionMeta
+}
+
+func (f *fakeProvider) Ready() bool                         { return f.ready }
+func (f *fakeProvider) OrderedSlackSections() []SectionMeta { return f.sections }
+
+func TestOrderedSections_SlackMode_HonorsLinkedListOrder(t *testing.T) {
+	items := []ChannelItem{
+		{ID: "C1", Name: "ch1", Type: "channel", Section: "B"},
+		{ID: "C2", Name: "ch2", Type: "channel", Section: "A"},
+		{ID: "D1", Name: "u", Type: "dm", Section: "DMS"},
+	}
+	provider := &fakeProvider{
+		ready: true,
+		sections: []SectionMeta{
+			{ID: "A", Name: "Alerts", Type: "standard"},
+			{ID: "B", Name: "Books", Type: "standard"},
+			{ID: "DMS", Name: "Direct Messages", Type: "direct_messages"},
+		},
+	}
+	m := New(items)
+	m.SetSectionsProvider(provider)
+	got := slackModeNavHeaders(&m)
+	want := []string{"A", "B", "DMS"}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("[%d] = %q, want %q", i, got[i], w)
+		}
+	}
+}
+
+func TestSlackMode_UnclaimedItemFallsToTypeDefault(t *testing.T) {
+	// Item D1 is type "dm" with no Section; should bucket into the
+	// provider's direct_messages-type section.
+	items := []ChannelItem{
+		{ID: "C1", Name: "ch1", Type: "channel", Section: "A"},
+		{ID: "D1", Name: "u", Type: "dm"}, // no Section
+	}
+	provider := &fakeProvider{
+		ready: true,
+		sections: []SectionMeta{
+			{ID: "A", Name: "Alerts", Type: "standard"},
+			{ID: "DMS", Name: "Direct Messages", Type: "direct_messages"},
+		},
+	}
+	m := New(items)
+	m.SetSectionsProvider(provider)
+	// Force the DM section open (it defaults to expanded).
+	got := slackModeNavHeaders(&m)
+	if len(got) != 2 {
+		t.Fatalf("got %v, want both sections present", got)
+	}
+	// Find the DM and confirm it's bucketed under the DMS section.
+	dmIdx := -1
+	for i, n := range m.nav {
+		if n.kind == navChannel && m.items[m.filtered[n.fi]].ID == "D1" {
+			dmIdx = i
+			break
+		}
+	}
+	if dmIdx < 0 {
+		t.Fatalf("D1 not in nav: %+v", m.nav)
+	}
+	// Walk backwards to find the most recent header before D1.
+	headerBefore := ""
+	for i := dmIdx - 1; i >= 0; i-- {
+		if m.nav[i].kind == navHeader {
+			headerBefore = m.nav[i].header
+			break
+		}
+	}
+	if headerBefore != "DMS" {
+		t.Errorf("D1 bucketed under %q, want DMS (direct_messages-type fallback)", headerBefore)
+	}
+}
+
+func TestOrderedSections_ConfigMode_UnchangedWhenNoProvider(t *testing.T) {
+	// Regression guard: existing config-glob behavior must be intact.
+	items := []ChannelItem{
+		{ID: "C1", Name: "ch1", Type: "channel", Section: "Custom", SectionOrder: 1},
+		{ID: "C2", Name: "ch2", Type: "channel"},
+		{ID: "D1", Name: "u", Type: "dm"},
+	}
+	m := New(items)
+	got := orderedSections(m.items, m.filtered)
+	// Custom first, then DMs, then Channels.
+	want := []string{"Custom", "Direct Messages", "Channels"}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("[%d] = %q, want %q", i, got[i], w)
+		}
+	}
+}
+
+// slackModeNavHeaders returns the header strings (section IDs in
+// Slack mode) currently in the model's nav list.
+func slackModeNavHeaders(m *Model) []string {
+	var out []string
+	for _, n := range m.nav {
+		if n.kind == navHeader {
+			out = append(out, n.header)
+		}
+	}
+	return out
+}

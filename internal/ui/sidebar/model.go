@@ -39,9 +39,20 @@ type ChannelItem struct {
 	LastReadTS string
 }
 
-// sectionFor returns the section name an item belongs to, applying default
-// fallback rules for items that have no explicit Section set.
+// sectionFor is the package-level back-compat shim for callers
+// (including tests) that don't have a *Model. It always uses
+// config-mode logic. The Slack-mode dispatcher is *Model.sectionFor.
 func sectionFor(item ChannelItem) string {
+	return sectionForLegacy(item)
+}
+
+// sectionForLegacy returns the config-mode section name an item belongs
+// to, applying default fallback rules for items that have no explicit
+// Section set. The Slack-mode dispatcher is the *Model.sectionFor
+// method; this function is the back-compat path for callers without a
+// Model and the implementation Slack-mode delegates to when no
+// provider is wired.
+func sectionForLegacy(item ChannelItem) string {
 	if item.Section != "" {
 		return item.Section
 	}
@@ -54,14 +65,22 @@ func sectionFor(item ChannelItem) string {
 	return defaultChannelsSection
 }
 
-// orderedSections returns the section names in display order given the
+// orderedSections is the package-level back-compat shim. Tests and
+// other call sites that don't have a *Model continue to use this; it
+// always uses config-mode logic. The Slack-mode dispatcher is
+// *Model.modelOrderedSections.
+func orderedSections(items []ChannelItem, filtered []int) []string {
+	return orderedSectionsLegacy(items, filtered)
+}
+
+// orderedSectionsLegacy returns the section names in display order given the
 // currently filtered items. Custom (user-defined) sections come first,
 // sorted by SectionOrder ascending then by first-appearance for ties.
 // The three built-in fallback sections are appended at the end in this
 // order: "Direct Messages" (humans you talk to one-on-one), "Apps"
 // (Slack apps and bots), then "Channels" (the firehose). Anything the
 // user pinned to a custom section still wins the top spots.
-func orderedSections(items []ChannelItem, filtered []int) []string {
+func orderedSectionsLegacy(items []ChannelItem, filtered []int) []string {
 	type customInfo struct {
 		name      string
 		order     int
@@ -75,7 +94,7 @@ func orderedSections(items []ChannelItem, filtered []int) []string {
 
 	for pos, idx := range filtered {
 		item := items[idx]
-		name := sectionFor(item)
+		name := sectionForLegacy(item)
 		switch {
 		case item.Section != "":
 			if existing, ok := customSeen[name]; ok {
@@ -163,6 +182,16 @@ type Model struct {
 	// child has unreads.
 	collapsed map[string]bool
 
+	// sectionsProvider is the Slack-native sections data source. Nil
+	// means "use config-glob behavior". When non-nil and Ready, the
+	// orderedSections function returns the provider's verbatim order
+	// and headers are keyed by section ID instead of name.
+	sectionsProvider SectionsProvider
+	// collapseByID parallels `collapsed` for Slack-mode (ID-keyed).
+	// Renames preserve collapse state because the ID is stable.
+	// Populated lazily; lookups treat nil as empty. Used in Task 9.
+	collapseByID map[string]bool
+
 	// Staleness filter: items whose LastReadTS is older than
 	// staleThreshold are dropped from `filtered` (i.e. hidden from the
 	// rendered sidebar). 0 disables the feature. activeID names the
@@ -213,6 +242,90 @@ type Model struct {
 	// compete visually with the focused panel. Set by SetFocused() from
 	// the App layer.
 	focused bool
+}
+
+// SetSectionsProvider injects a Slack-native sections data source.
+// When non-nil and Ready, the sidebar renders sections in the
+// provider's order and keys collapse state by section ID. Pass nil
+// to revert to config-glob behavior.
+func (m *Model) SetSectionsProvider(p SectionsProvider) {
+	m.sectionsProvider = p
+	m.rebuildFilter()
+	m.rebuildNavPreserveCursor()
+	m.cacheValid = false
+	m.dirty()
+}
+
+// useSlackSections reports whether Slack-mode rendering is active.
+// True iff a non-nil provider is set AND it currently Ready.
+func (m *Model) useSlackSections() bool {
+	return m.sectionsProvider != nil && m.sectionsProvider.Ready()
+}
+
+// sectionFor returns the section key (Slack section ID in Slack mode,
+// section name in config mode) an item belongs to. Items without an
+// explicit Section get a default based on type: in Slack mode, the
+// default is whichever provider-returned section has the matching
+// type (direct_messages / recent_apps / channels). In config mode,
+// the existing string constants apply.
+func (m *Model) sectionFor(item ChannelItem) string {
+	if item.Section != "" {
+		return item.Section
+	}
+	if m.useSlackSections() {
+		// Find the appropriate default-type section in the provider.
+		var dmID, appsID, channelsID string
+		for _, meta := range m.sectionsProvider.OrderedSlackSections() {
+			switch meta.Type {
+			case "direct_messages":
+				if dmID == "" {
+					dmID = meta.ID
+				}
+			case "recent_apps":
+				if appsID == "" {
+					appsID = meta.ID
+				}
+			case "channels":
+				if channelsID == "" {
+					channelsID = meta.ID
+				}
+			}
+		}
+		switch item.Type {
+		case "app":
+			if appsID != "" {
+				return appsID
+			}
+		case "dm", "group_dm":
+			if dmID != "" {
+				return dmID
+			}
+		}
+		return channelsID // may be ""; rare edge case
+	}
+	return sectionForLegacy(item)
+}
+
+// modelOrderedSections returns the section keys in display order for
+// the current model state. Slack mode: provider's verbatim list,
+// returning IDs of sections that have at least one filtered item OR
+// are standard-typed. Config mode: legacy algorithm.
+func (m *Model) modelOrderedSections(filtered []int) []string {
+	if !m.useSlackSections() {
+		return orderedSectionsLegacy(m.items, filtered)
+	}
+	metas := m.sectionsProvider.OrderedSlackSections()
+	hasItem := map[string]bool{}
+	for _, idx := range filtered {
+		hasItem[m.sectionFor(m.items[idx])] = true
+	}
+	out := make([]string, 0, len(metas))
+	for _, meta := range metas {
+		if meta.Type == "standard" || hasItem[meta.ID] {
+			out = append(out, meta.ID)
+		}
+	}
+	return out
 }
 
 // SetFocused records whether the sidebar currently holds user focus and
@@ -664,7 +777,7 @@ func (m *Model) SelectByID(id string) {
 		if m.items[idx].ID != id {
 			continue
 		}
-		section := sectionFor(m.items[idx])
+		section := m.sectionFor(m.items[idx])
 		if m.collapsed != nil && m.collapsed[section] {
 			m.collapsed[section] = false
 			m.rebuildNav()
@@ -704,14 +817,14 @@ func (m *Model) rebuildFilter() {
 	// Sort filtered indices to match the visual section display order so that
 	// j/k navigation traverses items in the same order they're rendered.
 	// Within a section, preserve the original (Slack-provided) item order.
-	sectionOrder := orderedSections(m.items, m.filtered)
+	sectionOrder := m.modelOrderedSections(m.filtered)
 	rank := make(map[string]int, len(sectionOrder))
 	for i, name := range sectionOrder {
 		rank[name] = i
 	}
 	sort.SliceStable(m.filtered, func(a, b int) bool {
-		ra := rank[sectionFor(m.items[m.filtered[a]])]
-		rb := rank[sectionFor(m.items[m.filtered[b]])]
+		ra := rank[m.sectionFor(m.items[m.filtered[a]])]
+		rb := rank[m.sectionFor(m.items[m.filtered[b]])]
 		if ra != rb {
 			return ra < rb
 		}
@@ -753,12 +866,13 @@ func (m *Model) currentCursorKey() (cursorKey, bool) {
 // preserve the user's selection across rebuilds should use
 // rebuildNavPreserveCursor instead.
 func (m *Model) rebuildNav() {
-	sectionOrder := orderedSections(m.items, m.filtered)
+	sectionOrder := m.modelOrderedSections(m.filtered)
 
 	// Bucket filter indices by section in display order.
 	bucket := map[string][]int{}
 	for fi, idx := range m.filtered {
-		bucket[sectionFor(m.items[idx])] = append(bucket[sectionFor(m.items[idx])], fi)
+		key := m.sectionFor(m.items[idx])
+		bucket[key] = append(bucket[key], fi)
 	}
 
 	nav := make([]navItem, 0, 1+len(sectionOrder))
@@ -814,7 +928,7 @@ func (m *Model) rebuildNavPreserveCursor() {
 func (m *Model) aggregateUnreadForSection(section string) int {
 	total := 0
 	for _, idx := range m.filtered {
-		if sectionFor(m.items[idx]) != section {
+		if m.sectionFor(m.items[idx]) != section {
 			continue
 		}
 		total += m.items[idx].UnreadCount
@@ -877,7 +991,7 @@ func (m *Model) buildCache(width int) {
 		}
 	}
 
-	sectionOrder := orderedSections(m.items, m.filtered)
+	sectionOrder := m.modelOrderedSections(m.filtered)
 
 	// Combine sidebar bg + fg so styled glyphs (private/DM prefixes, cursor,
 	// unread dots) restore both colors after their ANSI reset.
@@ -971,7 +1085,7 @@ func (m *Model) buildCache(width int) {
 
 	for fi, idx := range m.filtered {
 		item := m.items[idx]
-		sectionName := sectionFor(item)
+		sectionName := m.sectionFor(item)
 		if m.IsCollapsed(sectionName) {
 			continue
 		}
