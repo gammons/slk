@@ -439,7 +439,7 @@ func (c *Client) GetChannelSectionsRaw(ctx context.Context) ([]byte, error) {
 // GetChannelSections calls users.channelSections.list and returns the
 // fully-paginated section list. Loops on the top-level cursor until the
 // server reports no more sections. Per-section channel_ids_page pagination
-// is NOT followed here — see ListSectionChannels.
+// is NOT followed here; see Task 3 (deferred to v2).
 //
 // This endpoint is undocumented; may break if Slack changes the API.
 func (c *Client) GetChannelSections(ctx context.Context) ([]SidebarSection, error) {
@@ -489,19 +489,25 @@ pagination through all sections in the workspace."
 
 ---
 
-## Task 3: Add per-section channel pagination
+## Task 3: SKIPPED — per-section channel pagination deferred to v2
 
-**Files:**
-- Modify: `internal/slack/client.go` — add `ListSectionChannels`
-- Modify: `internal/slack/client_test.go` — add pagination test
+**Status:** Removed from v1 scope based on investigation.
 
-> **Investigation note:** The exact endpoint shape for paginating channels within a section is not yet confirmed. Two candidates:
-> 1. `users.channelSections.list` itself with `?channel_section_id=X&channel_ids_cursor=Y` (or just `cursor`)
-> 2. A separate `users.channelSections.listChannels`
->
-> Before implementing this task, capture the network call the official Slack web client makes when you click to expand a section with >10 channels. In Chrome DevTools → Network → filter `slack.com/api/`. The first hit after expansion will reveal the URL and form fields. Update the implementation below accordingly.
->
-> **Fallback if neither pattern works:** ship Task 4's bootstrap with only first-page channel data; rely on `channel_sections_channels_upserted` WS events (Task 7) to fill gaps over time. Document this as a v1 limitation in README.
+**Investigation result:** Captured `users.channelSections.list` traffic from the official Slack web client showed:
+- Same endpoint on initial load and section expansion (no separate `listChannels`).
+- "Nothing interesting in the form data" — no obvious cursor-passing param.
+- Same workspace returned different page sizes between captures (Manager: 10→12 channels, Books: 1 of 2).
+- Conclusion: page completeness depends on Slack's server-side cache state, not on a client-controlled cursor we can drive.
+
+**v1 behavior:** SectionStore.Bootstrap (Task 5) uses only the first-page channel data returned by `users.channelSections.list`. For sections where `count > len(channel_ids)`, a warning is logged to the debug log; the unmapped channels stay in the catch-all "Channels" section until either:
+1. WS `channel_sections_channels_upserted` events deliver them (Task 7), or
+2. A reconnect-triggered re-bootstrap returns more complete data (Task 12).
+
+**Documentation:** Task 14 will note this as a known v1 limitation in the README.
+
+**v2 follow-up:** If real customers hit this badly enough, capture more network traffic to determine the actual pagination mechanism (may require viewing Slack's bundled JS or inspecting WebSocket subscription patterns). Until then, no speculative endpoint.
+
+The implementation steps below are **not executed**. Move directly to Task 4.
 
 - [ ] **Step 1: Capture the network call**
 
@@ -811,10 +817,8 @@ import (
 
 // fakeSectionsClient implements the subset of slk.Client SectionStore needs.
 type fakeSectionsClient struct {
-	sections   []slk.SidebarSection
-	pageCalls  map[string][]string // sectionID -> channel IDs returned
-	getErr     error
-	listErr    error
+	sections []slk.SidebarSection
+	getErr   error
 }
 
 func (f *fakeSectionsClient) GetChannelSections(ctx context.Context) ([]slk.SidebarSection, error) {
@@ -822,13 +826,6 @@ func (f *fakeSectionsClient) GetChannelSections(ctx context.Context) ([]slk.Side
 		return nil, f.getErr
 	}
 	return f.sections, nil
-}
-
-func (f *fakeSectionsClient) ListSectionChannels(ctx context.Context, sectionID, startCursor string) ([]string, error) {
-	if f.listErr != nil {
-		return nil, f.listErr
-	}
-	return f.pageCalls[sectionID], nil
 }
 
 func TestSectionStore_Bootstrap_Empty(t *testing.T) {
@@ -869,26 +866,32 @@ func TestSectionStore_Bootstrap_BuildsLinkedListOrder(t *testing.T) {
 	}
 }
 
-func TestSectionStore_Bootstrap_FollowsPaginationCursor(t *testing.T) {
+func TestSectionStore_Bootstrap_TruncatedSection_LogsAndContinues(t *testing.T) {
+	// Section "A" reports count=5 but only first 3 channels were returned
+	// in channel_ids_page. v1 trusts the first-page data and lets the
+	// remaining 2 stay in the catch-all "Channels" bucket until WS
+	// deltas migrate them. Bootstrap must NOT fail in this case.
 	sections := []slk.SidebarSection{
 		{ID: "A", Type: "standard", Next: "", LastUpdate: 100,
 			ChannelIDs:     []string{"C1", "C2", "C3"},
 			ChannelsCount:  5,
 			ChannelsCursor: "C3"},
 	}
-	c := &fakeSectionsClient{
-		sections:  sections,
-		pageCalls: map[string][]string{"A": {"C4", "C5"}},
-	}
+	c := &fakeSectionsClient{sections: sections}
 	store := NewSectionStore()
 	if err := store.Bootstrap(context.Background(), c); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	if id, ok := store.SectionForChannel("C5"); !ok || id != "A" {
-		t.Errorf("SectionForChannel(C5) = (%q, %v), want (A, true)", id, ok)
+	if !store.Ready() {
+		t.Errorf("Ready=false after truncated bootstrap")
 	}
+	// First-page channels are mapped.
 	if id, ok := store.SectionForChannel("C1"); !ok || id != "A" {
 		t.Errorf("SectionForChannel(C1) = (%q, %v), want (A, true)", id, ok)
+	}
+	// Channels beyond the first page are NOT mapped.
+	if _, ok := store.SectionForChannel("C5"); ok {
+		t.Errorf("SectionForChannel(C5) ok=true, want false (channel beyond first page must stay unmapped in v1)")
 	}
 }
 
@@ -949,6 +952,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -959,7 +963,6 @@ import (
 // Defined as an interface so tests can pass fakes.
 type SectionsClient interface {
 	GetChannelSections(ctx context.Context) ([]slk.SidebarSection, error)
-	ListSectionChannels(ctx context.Context, sectionID, startCursor string) ([]string, error)
 }
 
 // SectionStore is the per-workspace authoritative cache of the user's
@@ -1001,22 +1004,18 @@ func (s *SectionStore) Bootstrap(ctx context.Context, client SectionsClient) err
 		return fmt.Errorf("fetching sections: %w", err)
 	}
 
-	// For sections whose first page didn't drain (cursor non-empty AND
-	// fewer channels than count), follow up.
+	// v1 limitation (Task 3 deferred): when ChannelsCount exceeds
+	// len(ChannelIDs), the section is partially populated. We trust
+	// what we have; remaining channels stay in the catch-all bucket
+	// until either a WS channel_sections_channels_upserted event
+	// migrates them or a reconnect-triggered re-bootstrap fetches
+	// fresher data. Log so debugging is possible.
 	for i := range sections {
 		sec := &sections[i]
-		if sec.ChannelsCursor == "" || len(sec.ChannelIDs) >= sec.ChannelsCount {
-			continue
+		if sec.ChannelsCount > len(sec.ChannelIDs) {
+			log.Printf("section store: section %q (%s) reports %d channels but server returned %d on first page; remaining channels will fall through to default bucket",
+				sec.Name, sec.ID, sec.ChannelsCount, len(sec.ChannelIDs))
 		}
-		extra, err := client.ListSectionChannels(ctx, sec.ID, sec.ChannelsCursor)
-		if err != nil {
-			// Best-effort: log and proceed with first page only.
-			// SectionStore stays Ready; channels not in the first
-			// page land in the default bucket until WS deltas
-			// migrate them. Documented v1 limitation.
-			continue
-		}
-		sec.ChannelIDs = append(sec.ChannelIDs, extra...)
 	}
 
 	// Build new maps.
@@ -1292,9 +1291,7 @@ func (cc *countingClient) GetChannelSections(ctx context.Context) ([]slk.Sidebar
 	cc.onCall()
 	return cc.inner.GetChannelSections(ctx)
 }
-func (cc *countingClient) ListSectionChannels(ctx context.Context, sectionID, startCursor string) ([]string, error) {
-	return cc.inner.ListSectionChannels(ctx, sectionID, startCursor)
-}
+
 ```
 
 - [ ] **Step 2: Run tests to confirm they fail**

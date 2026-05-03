@@ -181,6 +181,10 @@ type (
 		UserNames   map[string]string
 		UserID      string
 		CustomEmoji map[string]string
+		// SectionsProvider supplies Slack-native sidebar sections for this
+		// workspace. Nil means "use config-glob behavior" (the App's
+		// sidebar reverts to its existing name-keyed buckets).
+		SectionsProvider sidebar.SectionsProvider
 	}
 	WorkspaceUnreadMsg struct {
 		TeamID    string
@@ -196,6 +200,17 @@ type (
 		TeamID string
 		Item   sidebar.ChannelItem
 	}
+	// SectionsRefreshedMsg is sent when a workspace's Slack-native
+	// section state has mutated (via channel_section_* WS events) and
+	// the channel list needs to be re-bucketed in the sidebar. Channels
+	// carries a fresh slice with updated Section fields. The App only
+	// rebuckets if TeamID matches the active workspace; inactive
+	// workspaces have already been mutated in-place in their
+	// WorkspaceContext.
+	SectionsRefreshedMsg struct {
+		TeamID   string
+		Channels []sidebar.ChannelItem
+	}
 	WorkspaceReadyMsg struct {
 		TeamID      string
 		TeamName    string
@@ -205,6 +220,10 @@ type (
 		UserNames   map[string]string
 		UserID      string
 		CustomEmoji map[string]string
+		// SectionsProvider supplies Slack-native sidebar sections for this
+		// workspace. Nil means "use config-glob behavior" (the App's
+		// sidebar reverts to its existing name-keyed buckets).
+		SectionsProvider sidebar.SectionsProvider
 	}
 	// CustomEmojisLoadedMsg is sent when a workspace's custom emoji list
 	// finishes loading in the background, after WorkspaceReadyMsg has
@@ -1803,6 +1822,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.messagepane.SetMessages(nil)
 		a.SetMode(ModeNormal)
 		a.compose.Blur()
+		a.sidebar.SetSectionsProvider(msg.SectionsProvider)
 		a.SetChannels(msg.Channels)
 		a.channelFinder.SetItems(msg.FinderItems)
 		a.SetUserNames(msg.UserNames)
@@ -1866,6 +1886,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// from the rtmEventHandler in cmd/slk/main.go (Task 6); App.Update
 		// only mutates the active sidebar.
 
+	case SectionsRefreshedMsg:
+		if msg.TeamID == a.activeTeamID {
+			a.SetChannels(msg.Channels)
+		}
+		// Inactive-workspace events have already updated the
+		// WorkspaceContext.Channels in cmd/slk; App.Update only mutates
+		// the active sidebar.
+
 	case SpinnerTickMsg:
 		if a.loading {
 			a.spinnerFrame = (a.spinnerFrame + 1) % 10
@@ -1909,6 +1937,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.compose.RefreshStyles()
 				a.threadCompose.RefreshStyles()
 			}
+			a.sidebar.SetSectionsProvider(msg.SectionsProvider)
 			a.SetChannels(msg.Channels)
 			a.channelFinder.SetItems(msg.FinderItems)
 			a.SetUserNames(msg.UserNames)

@@ -56,6 +56,36 @@ type UnresolvedDM struct {
 	UserID    string
 }
 
+// sectionsProviderAdapter adapts *service.SectionStore to the
+// sidebar.SectionsProvider interface. Translates SidebarSection into
+// the sidebar's view-only SectionMeta shape. The store may be nil;
+// the adapter reports Ready()==false in that case so the sidebar
+// stays in config-glob mode.
+type sectionsProviderAdapter struct {
+	store *service.SectionStore
+}
+
+func (a sectionsProviderAdapter) Ready() bool {
+	return a.store != nil && a.store.Ready()
+}
+
+func (a sectionsProviderAdapter) OrderedSlackSections() []sidebar.SectionMeta {
+	if a.store == nil {
+		return nil
+	}
+	secs := a.store.OrderedSections()
+	out := make([]sidebar.SectionMeta, 0, len(secs))
+	for _, s := range secs {
+		out = append(out, sidebar.SectionMeta{
+			ID:    s.ID,
+			Name:  s.Name,
+			Emoji: s.Emoji,
+			Type:  s.Type,
+		})
+	}
+	return out
+}
+
 // WorkspaceContext holds all state for a single connected workspace.
 type WorkspaceContext struct {
 	Client      *slackclient.Client
@@ -72,6 +102,12 @@ type WorkspaceContext struct {
 	// Used during channel construction to bucket app DMs into a separate
 	// "Apps" sidebar section.
 	BotUserIDs        map[string]bool
+	// SectionStore holds the user's Slack-native sidebar sections for
+	// this workspace. Nil when use_slack_sections is disabled, the
+	// REST bootstrap failed, or this workspace hasn't connected yet.
+	// channelitem.go's resolver and the sectionsProviderAdapter both
+	// nil-check it before use.
+	SectionStore *service.SectionStore
 	// ThreadsHasUnreads is the workspace-wide threads-have-any-unread
 	// signal returned by client.counts on startup. The local SQLite
 	// heuristic for per-thread unread state can produce false positives
@@ -825,14 +861,15 @@ func run() error {
 		wireCallbacks(wctx)
 
 		return ui.WorkspaceSwitchedMsg{
-			TeamID:      wctx.TeamID,
-			TeamName:    wctx.TeamName,
-			Theme:       cfg.ResolveTheme(teamID),
-			Channels:    wctx.Channels,
-			FinderItems: wctx.FinderItems,
-			UserNames:   wctx.UserNames,
-			UserID:      wctx.UserID,
-			CustomEmoji: wctx.CustomEmoji,
+			TeamID:           wctx.TeamID,
+			TeamName:         wctx.TeamName,
+			Theme:            cfg.ResolveTheme(teamID),
+			Channels:         wctx.Channels,
+			FinderItems:      wctx.FinderItems,
+			UserNames:        wctx.UserNames,
+			UserID:           wctx.UserID,
+			CustomEmoji:      wctx.CustomEmoji,
+			SectionsProvider: sectionsProviderAdapter{store: wctx.SectionStore},
 		}
 	})
 
@@ -928,14 +965,15 @@ func run() error {
 			go wctx.ConnMgr.Run(ctx)
 
 			p.Send(ui.WorkspaceReadyMsg{
-				TeamID:      wctx.TeamID,
-				TeamName:    wctx.TeamName,
-				Theme:       cfg.ResolveTheme(wctx.TeamID),
-				Channels:    wctx.Channels,
-				FinderItems: wctx.FinderItems,
-				UserNames:   wctx.UserNames,
-				UserID:      wctx.UserID,
-				CustomEmoji: wctx.CustomEmoji, // empty at this point; filled by the goroutine below
+				TeamID:           wctx.TeamID,
+				TeamName:         wctx.TeamName,
+				Theme:            cfg.ResolveTheme(wctx.TeamID),
+				Channels:         wctx.Channels,
+				FinderItems:      wctx.FinderItems,
+				UserNames:        wctx.UserNames,
+				UserID:           wctx.UserID,
+				CustomEmoji:      wctx.CustomEmoji, // empty at this point; filled by the goroutine below
+				SectionsProvider: sectionsProviderAdapter{store: wctx.SectionStore},
 			})
 
 			// Fetch workspace custom emojis in the background. When done,
@@ -1025,6 +1063,30 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		}
 		if u.IsBot {
 			wctx.BotUserIDs[u.ID] = true
+		}
+	}
+
+	// Initialize Slack-native section store if enabled. Bootstrap is
+	// best-effort: failure is logged, the field stays nil, and the
+	// resolver falls through to config-glob behavior. Doing this
+	// before GetChannels means the first pass through buildChannelItem
+	// already sees a Ready store.
+	if cfg.EffectiveUseSlackSections(client.TeamID()) {
+		store := service.NewSectionStore()
+		if err := store.Bootstrap(ctx, client); err != nil {
+			log.Printf("section store bootstrap for %s failed: %v (falling back to config sections)", token.TeamName, err)
+		} else {
+			wctx.SectionStore = store
+			// One-time info log when the user has both Slack sections
+			// active AND a non-empty [sections.*] config — the latter
+			// is being shadowed.
+			hasGlobSections := len(cfg.Sections) > 0
+			if ws, ok := cfg.WorkspaceByTeamID(client.TeamID()); ok && len(ws.Sections) > 0 {
+				hasGlobSections = true
+			}
+			if hasGlobSections {
+				log.Printf("workspace %s: using Slack-native sections; [sections.*] from config are shadowed (set use_slack_sections=false to disable)", token.TeamName)
+			}
 		}
 	}
 
@@ -1840,6 +1902,24 @@ func (h *rtmEventHandler) OnConnect() {
 	if h.wsCtx != nil {
 		go bootstrapPresenceAndDND(context.Background(), h.wsCtx, h.program)
 	}
+	// Refresh Slack-native section state on reconnect. MaybeRebootstrap
+	// is debounced to once per 30s (Task 6) so a rapid flap doesn't
+	// thunder; a real long-disconnect-then-reconnect refreshes section
+	// state we may have missed during the gap.
+	//
+	// Run synchronously on the WS read goroutine. This briefly blocks
+	// inbound event delivery during the bootstrap HTTP call, but that
+	// cost is bounded — at most one call per 30s per workspace — and
+	// avoids racing wsCtx.Channels mutations against the same loop's
+	// next event (which could be an OnConversationOpened that also
+	// touches wsCtx.Channels).
+	if h.wsCtx != nil && h.wsCtx.SectionStore != nil && h.wsCtx.Client != nil {
+		if err := h.wsCtx.SectionStore.MaybeRebootstrap(context.Background(), h.wsCtx.Client); err != nil {
+			log.Printf("section store rebootstrap for %s failed: %v", h.wsCtx.TeamName, err)
+		} else {
+			h.refreshSectionsForActive()
+		}
+	}
 }
 
 func (h *rtmEventHandler) OnDisconnect() {
@@ -1989,6 +2069,100 @@ func (h *rtmEventHandler) OnConversationOpened(ch slack.Channel) {
 	})
 }
 
+// refreshSectionsForActive re-syncs every wctx.Channels item's Section
+// field with the current SectionStore state, then (if this workspace
+// is active) posts a SectionsRefreshedMsg so the App rebuckets the
+// sidebar. Inactive workspaces still get their wctx.Channels mutated
+// in place; the user sees the refresh on next workspace switch.
+//
+// Called from the four channel-section WS event handlers after they've
+// already applied their delta to the store.
+func (h *rtmEventHandler) refreshSectionsForActive() {
+	if h.wsCtx == nil || h.wsCtx.SectionStore == nil {
+		return
+	}
+	store := h.wsCtx.SectionStore
+	if !store.Ready() {
+		return
+	}
+	// Update Section field on every channel in the workspace context
+	// based on current store state. Channels not claimed by any
+	// section have Section reset to "" — letting the sidebar's Slack
+	// mode bucket them via type-default fallback (Task 8) or the
+	// config-glob path if Slack mode isn't active.
+	for i := range h.wsCtx.Channels {
+		item := &h.wsCtx.Channels[i]
+		if id, ok := store.SectionForChannel(item.ID); ok {
+			item.Section = id
+		} else {
+			item.Section = ""
+		}
+		// SectionOrder is unused in Slack mode (linked-list order
+		// comes from the provider); reset to 0 for consistency.
+		item.SectionOrder = 0
+	}
+	if h.program == nil {
+		return
+	}
+	if h.isActive != nil && !h.isActive() {
+		return
+	}
+	// Send a copy so the App can mutate without racing the workspace's
+	// mutator path.
+	channelsCopy := make([]sidebar.ChannelItem, len(h.wsCtx.Channels))
+	copy(channelsCopy, h.wsCtx.Channels)
+	h.program.Send(ui.SectionsRefreshedMsg{
+		TeamID:   h.workspaceID,
+		Channels: channelsCopy,
+	})
+}
+
+// OnChannelSectionUpserted handles section create/rename/reorder/emoji-change.
+// The store applies last-write-wins; the sidebar refresh is a no-op for
+// channels (no membership change) but invalidates the cache so renames
+// re-render section header labels.
+func (h *rtmEventHandler) OnChannelSectionUpserted(ev slackclient.ChannelSectionUpserted) {
+	if h.wsCtx == nil || h.wsCtx.SectionStore == nil {
+		return
+	}
+	h.wsCtx.SectionStore.ApplyUpsert(ev)
+	h.refreshSectionsForActive()
+}
+
+// OnChannelSectionDeleted handles section delete. Channels formerly in
+// the section have their channel→section mapping dropped by the store;
+// refreshSectionsForActive then resets Section="" on those items and
+// the sidebar rebuckets them into the type-default bucket.
+func (h *rtmEventHandler) OnChannelSectionDeleted(sectionID string) {
+	if h.wsCtx == nil || h.wsCtx.SectionStore == nil {
+		return
+	}
+	h.wsCtx.SectionStore.ApplyDelete(sectionID)
+	h.refreshSectionsForActive()
+}
+
+// OnChannelSectionChannelsUpserted handles channels added (or moved
+// between sections). The store overwrites prior section membership;
+// refreshSectionsForActive picks up the new IDs.
+func (h *rtmEventHandler) OnChannelSectionChannelsUpserted(sectionID string, channelIDs []string) {
+	if h.wsCtx == nil || h.wsCtx.SectionStore == nil {
+		return
+	}
+	h.wsCtx.SectionStore.ApplyChannelsAdded(sectionID, channelIDs)
+	h.refreshSectionsForActive()
+}
+
+// OnChannelSectionChannelsRemoved handles channels removed from a section.
+// The store drops them from channelToSection; refreshSectionsForActive
+// resets their Section="" and the sidebar rebuckets via type-default.
+func (h *rtmEventHandler) OnChannelSectionChannelsRemoved(sectionID string, channelIDs []string) {
+	if h.wsCtx == nil || h.wsCtx.SectionStore == nil {
+		return
+	}
+	h.wsCtx.SectionStore.ApplyChannelsRemoved(sectionID, channelIDs)
+	h.refreshSectionsForActive()
+}
+
 // listWorkspaces prints the configured workspaces with their TeamID and
 // Name, one per line. Useful for users who want to hand-edit per-workspace
 // settings in config.toml.
@@ -2070,6 +2244,14 @@ func dumpSections() error {
 			fmt.Println(pretty.String())
 		} else {
 			fmt.Println(string(raw))
+		}
+		// Detect pagination truncation. GetChannelSectionsRaw is intentionally
+		// first-page-only for the diagnostic; warn so the user knows.
+		var trunc struct {
+			Cursor string `json:"cursor"`
+		}
+		if err := json.Unmarshal(raw, &trunc); err == nil && trunc.Cursor != "" {
+			fmt.Fprintf(os.Stderr, "  warning: response cursor=%q; additional sections beyond first page were not fetched\n", trunc.Cursor)
 		}
 		fmt.Println()
 	}

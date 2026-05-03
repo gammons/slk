@@ -484,3 +484,180 @@ func TestRender_ReadThreadsRow_DoesNotEmitBoldAfterReset(t *testing.T) {
 		t.Errorf("read Threads row unexpectedly emitted bold after reset; afterReset=%q", afterReset)
 	}
 }
+
+type fakeProvider struct {
+	ready    bool
+	sections []SectionMeta
+}
+
+func (f *fakeProvider) Ready() bool                         { return f.ready }
+func (f *fakeProvider) OrderedSlackSections() []SectionMeta { return f.sections }
+
+func TestOrderedSections_SlackMode_HonorsLinkedListOrder(t *testing.T) {
+	items := []ChannelItem{
+		{ID: "C1", Name: "ch1", Type: "channel", Section: "B"},
+		{ID: "C2", Name: "ch2", Type: "channel", Section: "A"},
+		{ID: "D1", Name: "u", Type: "dm", Section: "DMS"},
+	}
+	provider := &fakeProvider{
+		ready: true,
+		sections: []SectionMeta{
+			{ID: "A", Name: "Alerts", Type: "standard"},
+			{ID: "B", Name: "Books", Type: "standard"},
+			{ID: "DMS", Name: "Direct Messages", Type: "direct_messages"},
+		},
+	}
+	m := New(items)
+	m.SetSectionsProvider(provider)
+	got := slackModeNavHeaders(&m)
+	want := []string{"A", "B", "DMS"}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("[%d] = %q, want %q", i, got[i], w)
+		}
+	}
+}
+
+func TestSlackMode_UnclaimedItemFallsToTypeDefault(t *testing.T) {
+	// Item D1 is type "dm" with no Section; should bucket into the
+	// provider's direct_messages-type section.
+	items := []ChannelItem{
+		{ID: "C1", Name: "ch1", Type: "channel", Section: "A"},
+		{ID: "D1", Name: "u", Type: "dm"}, // no Section
+	}
+	provider := &fakeProvider{
+		ready: true,
+		sections: []SectionMeta{
+			{ID: "A", Name: "Alerts", Type: "standard"},
+			{ID: "DMS", Name: "Direct Messages", Type: "direct_messages"},
+		},
+	}
+	m := New(items)
+	m.SetSectionsProvider(provider)
+	// Force the DM section open (it defaults to expanded).
+	got := slackModeNavHeaders(&m)
+	if len(got) != 2 {
+		t.Fatalf("got %v, want both sections present", got)
+	}
+	// Find the DM and confirm it's bucketed under the DMS section.
+	dmIdx := -1
+	for i, n := range m.nav {
+		if n.kind == navChannel && m.items[m.filtered[n.fi]].ID == "D1" {
+			dmIdx = i
+			break
+		}
+	}
+	if dmIdx < 0 {
+		t.Fatalf("D1 not in nav: %+v", m.nav)
+	}
+	// Walk backwards to find the most recent header before D1.
+	headerBefore := ""
+	for i := dmIdx - 1; i >= 0; i-- {
+		if m.nav[i].kind == navHeader {
+			headerBefore = m.nav[i].header
+			break
+		}
+	}
+	if headerBefore != "DMS" {
+		t.Errorf("D1 bucketed under %q, want DMS (direct_messages-type fallback)", headerBefore)
+	}
+}
+
+func TestOrderedSections_ConfigMode_UnchangedWhenNoProvider(t *testing.T) {
+	// Regression guard: existing config-glob behavior must be intact.
+	items := []ChannelItem{
+		{ID: "C1", Name: "ch1", Type: "channel", Section: "Custom", SectionOrder: 1},
+		{ID: "C2", Name: "ch2", Type: "channel"},
+		{ID: "D1", Name: "u", Type: "dm"},
+	}
+	m := New(items)
+	got := orderedSections(m.items, m.filtered)
+	// Custom first, then DMs, then Channels.
+	want := []string{"Custom", "Direct Messages", "Channels"}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("[%d] = %q, want %q", i, got[i], w)
+		}
+	}
+}
+
+// slackModeNavHeaders returns the header strings (section IDs in
+// Slack mode) currently in the model's nav list.
+func slackModeNavHeaders(m *Model) []string {
+	var out []string
+	for _, n := range m.nav {
+		if n.kind == navHeader {
+			out = append(out, n.header)
+		}
+	}
+	return out
+}
+
+func TestSectionHeader_RendersEmojiPrefix(t *testing.T) {
+	items := []ChannelItem{{ID: "C1", Name: "ch1", Type: "channel", Section: "A"}}
+	provider := &fakeProvider{
+		ready:    true,
+		sections: []SectionMeta{{ID: "A", Name: "Alerts", Emoji: "rocket", Type: "standard"}},
+	}
+	m := New(items)
+	m.SetSectionsProvider(provider)
+	out := m.View(20, 40)
+	if !strings.Contains(out, "Alerts") {
+		t.Errorf("missing section name in output:\n%s", out)
+	}
+	// kyokomi/emoji renders :rocket: as 🚀. If unresolved (unknown
+	// shortcode), the raw :rocket: stays. Either is acceptable.
+	if !strings.Contains(out, "🚀") && !strings.Contains(out, ":rocket:") {
+		t.Errorf("missing emoji prefix in output:\n%s", out)
+	}
+}
+
+func TestCollapseByID_PreservedAcrossRename(t *testing.T) {
+	items := []ChannelItem{{ID: "C1", Name: "ch1", Type: "channel", Section: "A"}}
+	p := &fakeProvider{
+		ready:    true,
+		sections: []SectionMeta{{ID: "A", Name: "Alerts", Type: "standard"}},
+	}
+	m := New(items)
+	m.SetSectionsProvider(p)
+	m.ToggleCollapse("A")
+	if !m.IsCollapsed("A") {
+		t.Fatalf("collapse failed (set on A then queried A in same mode)")
+	}
+	// Rename: provider returns the same ID with a new name.
+	p.sections = []SectionMeta{{ID: "A", Name: "Renamed", Type: "standard"}}
+	m.SetSectionsProvider(p) // triggers a rebuild
+	if !m.IsCollapsed("A") {
+		t.Errorf("collapse state lost after rename (must key by ID, not by displayed name)")
+	}
+}
+
+func TestCollapseByID_IndependentFromConfigMode(t *testing.T) {
+	// Switching back from Slack mode to config mode should fall through
+	// to the name-keyed collapse map; collapseByID entries shouldn't
+	// leak into config-mode behavior.
+	items := []ChannelItem{{ID: "C1", Name: "ch1", Type: "channel", Section: "A"}}
+	p := &fakeProvider{
+		ready:    true,
+		sections: []SectionMeta{{ID: "A", Name: "Alerts", Type: "standard"}},
+	}
+	m := New(items)
+	m.SetSectionsProvider(p)
+	m.ToggleCollapse("A")        // collapse via ID
+	m.SetSectionsProvider(nil)   // back to config mode
+	// Now "A" is just a string in config mode; whether it's collapsed
+	// depends on the name-keyed `collapsed` map (which is the default
+	// state set in New). The ID-mode collapse must NOT bleed into
+	// config-mode IsCollapsed lookups.
+	// In config mode the default Channels section starts collapsed,
+	// but a custom "A" name has not been touched so it should be expanded.
+	if m.IsCollapsed("A") {
+		t.Errorf("collapse state for ID 'A' bled into config mode")
+	}
+}

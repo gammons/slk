@@ -55,10 +55,18 @@ func buildChannelItem(ch slack.Channel, wctx *WorkspaceContext, cfg config.Confi
 		})
 	}
 
-	section := cfg.MatchSection(teamID, ch.Name)
+	section := ""
+	if wctx.SectionStore != nil && wctx.SectionStore.Ready() {
+		if id, ok := wctx.SectionStore.SectionForChannel(ch.ID); ok {
+			section = id
+		}
+	}
 	var sectionOrder int
-	if section != "" {
-		sectionOrder = cfg.SectionOrder(teamID, section)
+	if section == "" {
+		section = cfg.MatchSection(teamID, ch.Name)
+		if section != "" {
+			sectionOrder = cfg.SectionOrder(teamID, section)
+		}
 	}
 
 	item := sidebar.ChannelItem{

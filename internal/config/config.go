@@ -32,6 +32,11 @@ type SectionDef struct {
 
 type General struct {
 	DefaultWorkspace string `toml:"default_workspace"`
+	// UseSlackSections opts in/out of using the user's actual Slack
+	// sidebar sections (via users.channelSections.list + WS events)
+	// instead of the config-glob [sections.*] system. Pointer so we
+	// can distinguish "unset" (default true) from explicit false.
+	UseSlackSections *bool `toml:"use_slack_sections"`
 }
 
 type Appearance struct {
@@ -95,8 +100,11 @@ type Workspace struct {
 	// digit-key mapping (1-9). Positive values are explicit positions
 	// ascending; 0 or unset means "unordered" (sorts after ordered
 	// workspaces, alphabetically by slug). Ties in Order break by slug.
-	Order    int                   `toml:"order"`
-	Sections map[string]SectionDef `toml:"sections"`
+	Order int `toml:"order"`
+	// UseSlackSections overrides [general].use_slack_sections for this
+	// workspace. Nil means "fall through to global".
+	UseSlackSections *bool                 `toml:"use_slack_sections"`
+	Sections         map[string]SectionDef `toml:"sections"`
 }
 
 type Theme struct {
@@ -249,6 +257,20 @@ func matchSectionIn(sections map[string]SectionDef, channelName string) string {
 		}
 	}
 	return ""
+}
+
+// EffectiveUseSlackSections returns whether Slack-native sidebar sections
+// are enabled for the given workspace. Resolution: per-workspace value
+// wins when set; otherwise the global [general].use_slack_sections;
+// default true.
+func (c Config) EffectiveUseSlackSections(teamID string) bool {
+	if ws, ok := c.WorkspaceByTeamID(teamID); ok && ws.UseSlackSections != nil {
+		return *ws.UseSlackSections
+	}
+	if c.General.UseSlackSections != nil {
+		return *c.General.UseSlackSections
+	}
+	return true
 }
 
 // ResolveTheme returns the theme name to use for the given workspace,
