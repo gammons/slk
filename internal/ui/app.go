@@ -924,51 +924,59 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.loading {
 			break
 		}
-		// Translate the wheel direction into a scroll delta. Three lines per
-		// wheel notch matches typical terminal-emulator behavior.
-		const wheelLines = 3
-		dir := 0
+		// Wheel notches move the selection like j/k rather than scrolling the
+		// viewport directly. Targets the panel under the cursor regardless of
+		// which panel currently has keyboard focus.
+		up := false
 		switch msg.Button {
 		case tea.MouseWheelUp:
-			dir = -wheelLines
+			up = true
 		case tea.MouseWheelDown:
-			dir = wheelLines
+			up = false
 		default:
-			break
-		}
-		if dir == 0 {
 			break
 		}
 		x := msg.X
 		switch {
 		case x < a.layoutRailWidth:
-			// Workspace rail: nothing scrollable yet.
+			// Workspace rail: no selection navigation here.
 		case a.sidebarVisible && x < a.layoutSidebarEnd:
-			if dir < 0 {
-				a.sidebar.ScrollUp(-dir)
+			if up {
+				a.sidebar.MoveUp()
 			} else {
-				a.sidebar.ScrollDown(dir)
+				a.sidebar.MoveDown()
 			}
 		case x < a.layoutMsgEnd:
 			if a.view == ViewThreads {
-				if dir < 0 {
-					a.threadsView.ScrollUp(-dir)
+				if up {
+					a.threadsView.MoveUp()
 				} else {
-					a.threadsView.ScrollDown(dir)
+					a.threadsView.MoveDown()
 				}
+				cmds = append(cmds, a.openSelectedThreadCmd(true))
 			} else {
-				if dir < 0 {
-					a.messagepane.ScrollUp(-dir)
+				if up {
+					a.messagepane.MoveUp()
+					// Mirror j/k: when selection hits the top, backfill older history.
+					if a.messagepane.AtTop() && !a.fetchingOlder && a.olderMessagesFetcher != nil {
+						a.fetchingOlder = true
+						a.messagepane.SetLoading(true)
+						chID := a.activeChannelID
+						oldestTS := a.messagepane.OldestTS()
+						fetcher := a.olderMessagesFetcher
+						cmds = append(cmds, func() tea.Msg {
+							return fetcher(chID, oldestTS)
+						})
+					}
 				} else {
-					a.messagepane.ScrollDown(dir)
+					a.messagepane.MoveDown()
 				}
 			}
 		case a.threadVisible && x < a.layoutThreadEnd:
-			// Thread panel: scroll if it exposes the methods.
-			if dir < 0 {
-				a.threadPanel.ScrollUp(-dir)
+			if up {
+				a.threadPanel.MoveUp()
 			} else {
-				a.threadPanel.ScrollDown(dir)
+				a.threadPanel.MoveDown()
 			}
 		}
 
