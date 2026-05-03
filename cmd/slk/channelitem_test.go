@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"testing"
 
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/service"
+	slk "github.com/gammons/slk/internal/slack"
 	"github.com/slack-go/slack"
 )
 
@@ -85,19 +88,37 @@ func TestBuildChannelItem_Channel(t *testing.T) {
 	}
 }
 
-// fakeStore mocks the parts of *service.SectionStore the resolver uses.
-type fakeStore struct {
-	ready   bool
-	mapping map[string]string // channelID → sectionID
+// fakeSectionsClient implements service.SectionsClient for tests; it
+// returns a fixed slice of sections so we can construct a real
+// *service.SectionStore (Bootstrap-driven) from a known mapping.
+type fakeSectionsClient struct {
+	sections []slk.SidebarSection
 }
 
-func (f *fakeStore) Ready() bool { return f.ready }
-func (f *fakeStore) SectionForChannel(id string) (string, bool) {
-	if !f.ready {
-		return "", false
+func (f *fakeSectionsClient) GetChannelSections(_ context.Context) ([]slk.SidebarSection, error) {
+	return f.sections, nil
+}
+
+// bootstrappedStore returns a Ready() *service.SectionStore whose
+// channelToSection map is built from the supplied (sectionID -> []channelID)
+// pairs. All synthetic sections use Type="channels" so they pass
+// includeInSidebar's filter (not that it matters for SectionForChannel).
+func bootstrappedStore(t *testing.T, mapping map[string][]string) *service.SectionStore {
+	t.Helper()
+	secs := make([]slk.SidebarSection, 0, len(mapping))
+	for id, chans := range mapping {
+		secs = append(secs, slk.SidebarSection{
+			ID:         id,
+			Name:       id,
+			Type:       "channels",
+			ChannelIDs: chans,
+		})
 	}
-	s, ok := f.mapping[id]
-	return s, ok
+	store := service.NewSectionStore()
+	if err := store.Bootstrap(context.Background(), &fakeSectionsClient{sections: secs}); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	return store
 }
 
 func TestBuildChannelItem_StoreReady_StoreWins(t *testing.T) {
@@ -107,7 +128,7 @@ func TestBuildChannelItem_StoreReady_StoreWins(t *testing.T) {
 		},
 	}
 	wctx := &WorkspaceContext{
-		SectionStore:      &fakeStore{ready: true, mapping: map[string]string{"C1": "L_SLACK"}},
+		SectionStore:      bootstrappedStore(t, map[string][]string{"L_SLACK": {"C1"}}),
 		UserNames:         map[string]string{},
 		UserNamesByHandle: map[string]string{},
 		BotUserIDs:        map[string]bool{},
@@ -130,8 +151,10 @@ func TestBuildChannelItem_StoreReady_StoreMisses_FallsToGlob(t *testing.T) {
 			"Globbed": {Channels: []string{"alerts*"}, Order: 1},
 		},
 	}
+	// Bootstrap a Ready store with no entry for C1; the resolver should
+	// fall through to config-glob matching.
 	wctx := &WorkspaceContext{
-		SectionStore:      &fakeStore{ready: true, mapping: map[string]string{}},
+		SectionStore:      bootstrappedStore(t, map[string][]string{}),
 		UserNames:         map[string]string{},
 		UserNamesByHandle: map[string]string{},
 		BotUserIDs:        map[string]bool{},
@@ -178,8 +201,10 @@ func TestBuildChannelItem_StoreNotReady_UsesGlob(t *testing.T) {
 			"Globbed": {Channels: []string{"alerts*"}, Order: 1},
 		},
 	}
+	// Fresh store (never bootstrapped) reports Ready()==false; the
+	// resolver must skip it even though we'd otherwise expect a match.
 	wctx := &WorkspaceContext{
-		SectionStore:      &fakeStore{ready: false, mapping: map[string]string{"C1": "L_SLACK"}},
+		SectionStore:      service.NewSectionStore(),
 		UserNames:         map[string]string{},
 		UserNamesByHandle: map[string]string{},
 		BotUserIDs:        map[string]bool{},

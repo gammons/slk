@@ -55,14 +55,34 @@ type UnresolvedDM struct {
 	UserID    string
 }
 
-// sectionResolver is the subset of *service.SectionStore that
-// channelitem.go's resolver uses. Defined as an interface so the
-// resolver can be tested without depending on the service package
-// (the field is promoted to the concrete *service.SectionStore in
-// Task 11). Methods match service.SectionStore's read-side surface.
-type sectionResolver interface {
-	Ready() bool
-	SectionForChannel(channelID string) (string, bool)
+// sectionsProviderAdapter adapts *service.SectionStore to the
+// sidebar.SectionsProvider interface. Translates SidebarSection into
+// the sidebar's view-only SectionMeta shape. The store may be nil;
+// the adapter reports Ready()==false in that case so the sidebar
+// stays in config-glob mode.
+type sectionsProviderAdapter struct {
+	store *service.SectionStore
+}
+
+func (a sectionsProviderAdapter) Ready() bool {
+	return a.store != nil && a.store.Ready()
+}
+
+func (a sectionsProviderAdapter) OrderedSlackSections() []sidebar.SectionMeta {
+	if a.store == nil {
+		return nil
+	}
+	secs := a.store.OrderedSections()
+	out := make([]sidebar.SectionMeta, 0, len(secs))
+	for _, s := range secs {
+		out = append(out, sidebar.SectionMeta{
+			ID:    s.ID,
+			Name:  s.Name,
+			Emoji: s.Emoji,
+			Type:  s.Type,
+		})
+	}
+	return out
 }
 
 // WorkspaceContext holds all state for a single connected workspace.
@@ -82,10 +102,11 @@ type WorkspaceContext struct {
 	// "Apps" sidebar section.
 	BotUserIDs        map[string]bool
 	// SectionStore holds the user's Slack-native sidebar sections for
-	// this workspace. Nil when use_slack_sections is disabled or the
-	// REST bootstrap failed; resolver falls through to config globs in
-	// that case. Promoted to *service.SectionStore in Task 11.
-	SectionStore sectionResolver
+	// this workspace. Nil when use_slack_sections is disabled, the
+	// REST bootstrap failed, or this workspace hasn't connected yet.
+	// channelitem.go's resolver and the sectionsProviderAdapter both
+	// nil-check it before use.
+	SectionStore *service.SectionStore
 	// ThreadsHasUnreads is the workspace-wide threads-have-any-unread
 	// signal returned by client.counts on startup. The local SQLite
 	// heuristic for per-thread unread state can produce false positives
@@ -834,14 +855,15 @@ func run() error {
 		wireCallbacks(wctx)
 
 		return ui.WorkspaceSwitchedMsg{
-			TeamID:      wctx.TeamID,
-			TeamName:    wctx.TeamName,
-			Theme:       cfg.ResolveTheme(teamID),
-			Channels:    wctx.Channels,
-			FinderItems: wctx.FinderItems,
-			UserNames:   wctx.UserNames,
-			UserID:      wctx.UserID,
-			CustomEmoji: wctx.CustomEmoji,
+			TeamID:           wctx.TeamID,
+			TeamName:         wctx.TeamName,
+			Theme:            cfg.ResolveTheme(teamID),
+			Channels:         wctx.Channels,
+			FinderItems:      wctx.FinderItems,
+			UserNames:        wctx.UserNames,
+			UserID:           wctx.UserID,
+			CustomEmoji:      wctx.CustomEmoji,
+			SectionsProvider: sectionsProviderAdapter{store: wctx.SectionStore},
 		}
 	})
 
@@ -937,14 +959,15 @@ func run() error {
 			go wctx.ConnMgr.Run(ctx)
 
 			p.Send(ui.WorkspaceReadyMsg{
-				TeamID:      wctx.TeamID,
-				TeamName:    wctx.TeamName,
-				Theme:       cfg.ResolveTheme(wctx.TeamID),
-				Channels:    wctx.Channels,
-				FinderItems: wctx.FinderItems,
-				UserNames:   wctx.UserNames,
-				UserID:      wctx.UserID,
-				CustomEmoji: wctx.CustomEmoji, // empty at this point; filled by the goroutine below
+				TeamID:           wctx.TeamID,
+				TeamName:         wctx.TeamName,
+				Theme:            cfg.ResolveTheme(wctx.TeamID),
+				Channels:         wctx.Channels,
+				FinderItems:      wctx.FinderItems,
+				UserNames:        wctx.UserNames,
+				UserID:           wctx.UserID,
+				CustomEmoji:      wctx.CustomEmoji, // empty at this point; filled by the goroutine below
+				SectionsProvider: sectionsProviderAdapter{store: wctx.SectionStore},
 			})
 
 			// Fetch workspace custom emojis in the background. When done,
@@ -1034,6 +1057,30 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		}
 		if u.IsBot {
 			wctx.BotUserIDs[u.ID] = true
+		}
+	}
+
+	// Initialize Slack-native section store if enabled. Bootstrap is
+	// best-effort: failure is logged, the field stays nil, and the
+	// resolver falls through to config-glob behavior. Doing this
+	// before GetChannels means the first pass through buildChannelItem
+	// already sees a Ready store.
+	if cfg.EffectiveUseSlackSections(client.TeamID()) {
+		store := service.NewSectionStore()
+		if err := store.Bootstrap(ctx, client); err != nil {
+			log.Printf("section store bootstrap for %s failed: %v (falling back to config sections)", token.TeamName, err)
+		} else {
+			wctx.SectionStore = store
+			// One-time info log when the user has both Slack sections
+			// active AND a non-empty [sections.*] config — the latter
+			// is being shadowed.
+			hasGlobSections := len(cfg.Sections) > 0
+			if ws, ok := cfg.WorkspaceByTeamID(client.TeamID()); ok && len(ws.Sections) > 0 {
+				hasGlobSections = true
+			}
+			if hasGlobSections {
+				log.Printf("workspace %s: using Slack-native sections; [sections.*] from config are shadowed (set use_slack_sections=false to disable)", token.TeamName)
+			}
 		}
 	}
 

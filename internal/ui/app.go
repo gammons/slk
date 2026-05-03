@@ -180,6 +180,10 @@ type (
 		UserNames   map[string]string
 		UserID      string
 		CustomEmoji map[string]string
+		// SectionsProvider supplies Slack-native sidebar sections for this
+		// workspace. Nil means "use config-glob behavior" (the App's
+		// sidebar reverts to its existing name-keyed buckets).
+		SectionsProvider sidebar.SectionsProvider
 	}
 	WorkspaceUnreadMsg struct {
 		TeamID    string
@@ -204,6 +208,10 @@ type (
 		UserNames   map[string]string
 		UserID      string
 		CustomEmoji map[string]string
+		// SectionsProvider supplies Slack-native sidebar sections for this
+		// workspace. Nil means "use config-glob behavior" (the App's
+		// sidebar reverts to its existing name-keyed buckets).
+		SectionsProvider sidebar.SectionsProvider
 	}
 	// CustomEmojisLoadedMsg is sent when a workspace's custom emoji list
 	// finishes loading in the background, after WorkspaceReadyMsg has
@@ -1743,6 +1751,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.messagepane.SetMessages(nil)
 		a.SetMode(ModeNormal)
 		a.compose.Blur()
+		a.sidebar.SetSectionsProvider(msg.SectionsProvider)
 		a.SetChannels(msg.Channels)
 		a.channelFinder.SetItems(msg.FinderItems)
 		a.SetUserNames(msg.UserNames)
@@ -1849,6 +1858,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.compose.RefreshStyles()
 				a.threadCompose.RefreshStyles()
 			}
+			a.sidebar.SetSectionsProvider(msg.SectionsProvider)
 			a.SetChannels(msg.Channels)
 			a.channelFinder.SetItems(msg.FinderItems)
 			a.SetUserNames(msg.UserNames)
