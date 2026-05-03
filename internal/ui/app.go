@@ -1851,6 +1851,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.CloseThread()
 		a.clearSelections()
 		a.compose.Reset()
+		a.messagepane.SetLoading(true)
 		a.messagepane.SetMessages(nil)
 		a.SetMode(ModeNormal)
 		a.compose.Blur()
@@ -1984,6 +1985,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.workspaceRail.SelectByID(msg.TeamID)
 			if len(msg.Channels) > 0 {
 				first := msg.Channels[0]
+				a.messagepane.SetLoading(true)
+				a.messagepane.SetMessages(nil)
 				cmds = append(cmds, func() tea.Msg {
 					return ChannelSelectedMsg{ID: first.ID, Name: first.Name, Type: first.Type}
 				})

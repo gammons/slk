@@ -2731,3 +2731,55 @@ func TestChannelSelectedFallsBackToSpinnerOnCacheMiss(t *testing.T) {
 		t.Errorf("expected loading=true on cache miss, got false")
 	}
 }
+
+// TestWorkspaceSwitchedSetsLoadingBeforeChannelSelect verifies that the
+// WorkspaceSwitchedMsg handler flips the messagepane to loading=true at
+// the same time it clears the message list, so that the empty-state
+// branch ("No messages yet") cannot flash between the synchronous
+// SetMessages(nil) and the deferred ChannelSelectedMsg cmd that would
+// re-populate it on the next Bubbletea tick.
+func TestWorkspaceSwitchedSetsLoadingBeforeChannelSelect(t *testing.T) {
+	app := NewApp()
+	app.SetChannelCacheReader(func(channelID string) []messages.MessageItem { return nil })
+	app.SetChannelFetcher(func(channelID, channelName string) tea.Msg {
+		return MessagesLoadedMsg{ChannelID: channelID, Messages: nil}
+	})
+
+	// Note: do NOT drain the returned cmd batch — we want to assert the
+	// intermediate post-Update state before the deferred
+	// ChannelSelectedMsg dispatch runs on the next tick.
+	app.Update(WorkspaceSwitchedMsg{
+		TeamID:   "T2",
+		Channels: []sidebar.ChannelItem{{ID: "C9", Name: "general", Type: "channel"}},
+	})
+
+	if !app.messagepane.IsLoading() {
+		t.Fatalf("expected messagepane loading=true between ticks, got false")
+	}
+	if got := app.messagepane.Messages(); len(got) != 0 {
+		t.Fatalf("expected messages cleared, got %d", len(got))
+	}
+}
+
+// TestWorkspaceReadyFirstChannelSetsLoading mirrors the WorkspaceSwitched
+// case for the first-workspace bootstrap path: the WorkspaceReadyMsg
+// handler also auto-selects the first channel via a deferred
+// ChannelSelectedMsg, so it too must flip loading=true on the same tick
+// it clears the messagepane to avoid an empty-state flash.
+func TestWorkspaceReadyFirstChannelSetsLoading(t *testing.T) {
+	app := NewApp()
+	app.SetChannelCacheReader(func(channelID string) []messages.MessageItem { return nil })
+	app.SetChannelFetcher(func(channelID, channelName string) tea.Msg {
+		return MessagesLoadedMsg{ChannelID: channelID, Messages: nil}
+	})
+
+	app.Update(WorkspaceReadyMsg{
+		TeamID:   "T1",
+		TeamName: "Acme",
+		Channels: []sidebar.ChannelItem{{ID: "C1", Name: "general", Type: "channel"}},
+	})
+
+	if !app.messagepane.IsLoading() {
+		t.Fatalf("expected messagepane loading=true on first-channel auto-select, got false")
+	}
+}
