@@ -122,6 +122,33 @@ func TestSubtypeRoundTrip(t *testing.T) {
 	}
 }
 
+func TestUpsertMessageRoundTripsRawJSON(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	defer db.Close()
+	payload := `{"type":"message","ts":"1.0","text":"hi","files":[{"id":"F1"}]}`
+	if err := db.UpsertMessage(Message{
+		TS:          "1.0",
+		ChannelID:   "C1",
+		WorkspaceID: "T1",
+		UserID:      "U1",
+		Text:        "hi",
+		RawJSON:     payload,
+		CreatedAt:   1,
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, err := db.GetMessages("C1", 50, "")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 row, got %d", len(got))
+	}
+	if got[0].RawJSON != payload {
+		t.Fatalf("raw_json round-trip mismatch:\nwant: %s\ngot:  %s", payload, got[0].RawJSON)
+	}
+}
+
 func TestGetThreadReplies(t *testing.T) {
 	db := setupDBWithWorkspace(t)
 	defer db.Close()
