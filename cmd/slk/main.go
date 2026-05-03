@@ -55,6 +55,16 @@ type UnresolvedDM struct {
 	UserID    string
 }
 
+// sectionResolver is the subset of *service.SectionStore that
+// channelitem.go's resolver uses. Defined as an interface so the
+// resolver can be tested without depending on the service package
+// (the field is promoted to the concrete *service.SectionStore in
+// Task 11). Methods match service.SectionStore's read-side surface.
+type sectionResolver interface {
+	Ready() bool
+	SectionForChannel(channelID string) (string, bool)
+}
+
 // WorkspaceContext holds all state for a single connected workspace.
 type WorkspaceContext struct {
 	Client      *slackclient.Client
@@ -71,6 +81,11 @@ type WorkspaceContext struct {
 	// Used during channel construction to bucket app DMs into a separate
 	// "Apps" sidebar section.
 	BotUserIDs        map[string]bool
+	// SectionStore holds the user's Slack-native sidebar sections for
+	// this workspace. Nil when use_slack_sections is disabled or the
+	// REST bootstrap failed; resolver falls through to config globs in
+	// that case. Promoted to *service.SectionStore in Task 11.
+	SectionStore sectionResolver
 	// ThreadsHasUnreads is the workspace-wide threads-have-any-unread
 	// signal returned by client.counts on startup. The local SQLite
 	// heuristic for per-thread unread state can produce false positives
