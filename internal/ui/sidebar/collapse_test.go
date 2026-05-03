@@ -127,6 +127,39 @@ func TestSelectByID_AutoExpandsCollapsedSection(t *testing.T) {
 	}
 }
 
+// TestSelectByID_AutoExpandsCollapsedSection_SlackMode regresses a bug
+// where SelectByID's auto-expand path consulted the name-keyed
+// `collapsed` map directly instead of routing through IsCollapsed /
+// ToggleCollapse, which dispatch by mode. In Slack mode the collapse
+// state lives in `collapseByID`, so the direct-map path silently
+// failed to expand the section and the cursor never moved.
+//
+// User-visible symptom (before the fix): with use_slack_sections=true
+// (the default), Ctrl+T-finding a channel inside a collapsed Slack
+// section did nothing.
+func TestSelectByID_AutoExpandsCollapsedSection_SlackMode(t *testing.T) {
+	items := []ChannelItem{{ID: "C1", Name: "general", Type: "channel", Section: "A"}}
+	provider := &fakeProvider{
+		ready:    true,
+		sections: []SectionMeta{{ID: "A", Name: "Alerts", Type: "standard"}},
+	}
+	m := New(items)
+	m.SetSectionsProvider(provider)
+	m.ToggleCollapse("A") // Slack-mode toggle writes collapseByID["A"]=true
+	if !m.IsCollapsed("A") {
+		t.Fatal("precondition: section A should be collapsed in Slack mode")
+	}
+
+	m.SelectByID("C1")
+
+	if m.IsCollapsed("A") {
+		t.Errorf("SelectByID into a collapsed Slack-mode section should auto-expand it")
+	}
+	if m.SelectedID() != "C1" {
+		t.Errorf("SelectByID should land the cursor on C1, got %q", m.SelectedID())
+	}
+}
+
 func TestToggleCollapse_PreservesCursorOnHeader(t *testing.T) {
 	m := New([]ChannelItem{
 		{ID: "C1", Name: "general", Type: "channel"},

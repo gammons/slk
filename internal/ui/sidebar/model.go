@@ -796,10 +796,11 @@ func (m *Model) SelectByID(id string) {
 			continue
 		}
 		section := m.sectionFor(m.items[idx])
-		if m.collapsed != nil && m.collapsed[section] {
-			m.collapsed[section] = false
-			m.rebuildNav()
-			m.cacheValid = false
+		if m.IsCollapsed(section) {
+			// ToggleCollapse handles both name-keyed (config mode) and
+			// ID-keyed (Slack mode) maps and rebuilds nav + invalidates
+			// cache as a side effect.
+			m.ToggleCollapse(section)
 		}
 		// Now find the channel in the freshly-rebuilt nav.
 		for i, n := range m.nav {

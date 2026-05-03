@@ -1900,14 +1900,19 @@ func (h *rtmEventHandler) OnConnect() {
 	// is debounced to once per 30s (Task 6) so a rapid flap doesn't
 	// thunder; a real long-disconnect-then-reconnect refreshes section
 	// state we may have missed during the gap.
+	//
+	// Run synchronously on the WS read goroutine. This briefly blocks
+	// inbound event delivery during the bootstrap HTTP call, but that
+	// cost is bounded — at most one call per 30s per workspace — and
+	// avoids racing wsCtx.Channels mutations against the same loop's
+	// next event (which could be an OnConversationOpened that also
+	// touches wsCtx.Channels).
 	if h.wsCtx != nil && h.wsCtx.SectionStore != nil && h.wsCtx.Client != nil {
-		go func(wctx *WorkspaceContext) {
-			if err := wctx.SectionStore.MaybeRebootstrap(context.Background(), wctx.Client); err != nil {
-				log.Printf("section store rebootstrap for %s failed: %v", wctx.TeamName, err)
-				return
-			}
+		if err := h.wsCtx.SectionStore.MaybeRebootstrap(context.Background(), h.wsCtx.Client); err != nil {
+			log.Printf("section store rebootstrap for %s failed: %v", h.wsCtx.TeamName, err)
+		} else {
 			h.refreshSectionsForActive()
-		}(h.wsCtx)
+		}
 	}
 }
 
