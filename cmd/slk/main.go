@@ -1445,6 +1445,125 @@ func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, 
 	return msgItems
 }
 
+// loadCachedMessages reads up to 50 cached messages for a channel from
+// SQLite and reconstructs []messages.MessageItem with the same fidelity
+// as fetchChannelMessages — including reactions and (when raw_json is
+// present) files / blocks / legacy attachments.
+//
+// Returns nil on cache miss (no rows for the channel) or any DB error;
+// callers treat nil as "fall through to the network fetch path".
+//
+// selfUserID is used to compute ReactionItem.HasReacted; it is NOT used
+// to drive any network call. Cache reads must remain offline-capable —
+// unknown user IDs render with their userID as a fallback rather than
+// triggering a fresh GetUserProfile RPC. Resolving them on-demand would
+// defeat the cache-first goal (and is what fetchChannelMessages already
+// does on the network path, populating userNames for next time).
+//
+// raw_json unmarshal failures on a single row degrade gracefully: that
+// row renders as text-only (no attachments / blocks / legacy
+// attachments) without aborting the rest of the load.
+func loadCachedMessages(
+	db *cache.DB,
+	selfUserID string,
+	channelID string,
+	userNames map[string]string,
+	tsFormat string,
+) []messages.MessageItem {
+	if db == nil {
+		return nil
+	}
+	rows, err := db.GetMessages(channelID, 50, "")
+	if err != nil {
+		log.Printf("loadCachedMessages: GetMessages %s: %v", channelID, err)
+		return nil
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+
+	out := make([]messages.MessageItem, 0, len(rows))
+	for _, m := range rows {
+		// Resolve username from the in-memory map first; fall back to
+		// the cached users table; finally fall back to the user ID
+		// itself so the row still renders something readable.
+		userName := userNames[m.UserID]
+		if userName == "" && m.UserID != "" {
+			if u, err := db.GetUser(m.UserID); err == nil {
+				if u.DisplayName != "" {
+					userName = u.DisplayName
+				} else if u.Name != "" {
+					userName = u.Name
+				}
+				if userName != "" {
+					userNames[m.UserID] = userName
+				}
+			}
+		}
+		if userName == "" {
+			userName = m.UserID
+		}
+
+		// Reactions for this message.
+		var reactions []messages.ReactionItem
+		// TODO(perf): N+1 query — for 50 messages this is 50 SQLite calls on the
+		// channel-open hot path. If this becomes a bottleneck, add a batched
+		// db.GetReactionsForMessages([]ts) map[ts][]ReactionRow to the cache layer.
+		if rs, err := db.GetReactions(m.TS, channelID); err == nil {
+			for _, r := range rs {
+				hasReacted := false
+				for _, uid := range r.UserIDs {
+					if uid == selfUserID {
+						hasReacted = true
+						break
+					}
+				}
+				reactions = append(reactions, messages.ReactionItem{
+					Emoji:      r.Emoji,
+					Count:      r.Count,
+					HasReacted: hasReacted,
+				})
+			}
+		} else {
+			log.Printf("loadCachedMessages: GetReactions %s/%s: %v", channelID, m.TS, err)
+		}
+
+		// Attachments / blocks / legacy attachments come from
+		// raw_json. Pre-Task-2 rows have an empty raw_json; for
+		// those we render text-only.
+		var attachments []messages.Attachment
+		var blocks []blockkit.Block
+		var legacy []blockkit.LegacyAttachment
+		if m.RawJSON != "" {
+			var raw slack.Message
+			if err := json.Unmarshal([]byte(m.RawJSON), &raw); err != nil {
+				log.Printf("loadCachedMessages: raw_json unmarshal for %s/%s: %v",
+					channelID, m.TS, err)
+			} else {
+				attachments = extractAttachments(raw.Files)
+				blocks = extractBlocks(raw.Blocks)
+				legacy = extractLegacyAttachments(raw.Attachments)
+			}
+		}
+
+		out = append(out, messages.MessageItem{
+			TS:                m.TS,
+			UserID:            m.UserID,
+			UserName:          userName,
+			Text:              m.Text,
+			Timestamp:         formatTimestamp(m.TS, tsFormat),
+			ThreadTS:          m.ThreadTS,
+			ReplyCount:        m.ReplyCount,
+			Subtype:           m.Subtype,
+			Reactions:         reactions,
+			Attachments:       attachments,
+			Blocks:            blocks,
+			LegacyAttachments: legacy,
+		})
+	}
+	return out
+}
+
 func fetchChannelMessages(client *slackclient.Client, channelID string, db *cache.DB, userNames map[string]string, tsFormat string, avatarCache *avatar.Cache) []messages.MessageItem {
 	ctx := context.Background()
 	history, err := client.GetHistory(ctx, channelID, 50, "")
