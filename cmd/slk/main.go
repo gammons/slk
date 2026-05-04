@@ -108,6 +108,12 @@ type WorkspaceContext struct {
 	// channelitem.go's resolver and the sectionsProviderAdapter both
 	// nil-check it before use.
 	SectionStore *service.SectionStore
+	// MuteStore tracks which channels the user has muted (Slack stores
+	// this in the user prefs blob, not on the channel objects). The
+	// sidebar uses it to suppress unread dots and apply a dimmer
+	// foreground for muted channels. Nil when the bootstrap fetch
+	// failed or hasn't run yet — callers must nil-check before use.
+	MuteStore *service.MuteStore
 	// ThreadsHasUnreads is the workspace-wide threads-have-any-unread
 	// signal returned by client.counts on startup. The local SQLite
 	// heuristic for per-thread unread state can produce false positives
@@ -181,6 +187,12 @@ func main() {
 			os.Exit(0)
 		case "--dump-sections":
 			if err := dumpSections(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		case "--dump-prefs":
+			if err := dumpPrefs(); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
 			}
@@ -1098,6 +1110,24 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		}
 	}
 
+	// Initialize the mute store. Best-effort: failure is logged and the
+	// field stays nil; the sidebar then renders every channel as
+	// unmuted (the conservative default). pref_change WS events for
+	// muted_channels can still rebuild the store mid-session via
+	// MuteStore.ApplyPrefChange even if this initial fetch failed.
+	{
+		store := service.NewMuteStore()
+		if err := store.Bootstrap(ctx, client); err != nil {
+			log.Printf("mute store bootstrap for %s failed: %v (channels will render as unmuted until first pref_change)", token.TeamName, err)
+		} else {
+			ids := store.MutedChannels()
+			log.Printf("mute store bootstrap for %s: %d muted channel(s) loaded: %v", token.TeamName, len(ids), ids)
+		}
+		// Assign even if not Ready — the pref_change handler can fill
+		// it in later, and IsMuted is a safe no-op while not ready.
+		wctx.MuteStore = store
+	}
+
 	// Background user fetch
 	go func() {
 		users, err := client.GetUsers(ctx)
@@ -1180,6 +1210,13 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 			wctx.Channels[i].LastReadTS = lr
 		}
 	}
+	mutedItemCount := 0
+	for _, c := range wctx.Channels {
+		if c.IsMuted {
+			mutedItemCount++
+		}
+	}
+	log.Printf("workspace %s: %d/%d channel items marked IsMuted after build", token.TeamName, mutedItemCount, len(wctx.Channels))
 
 	// Finder items are built alongside the sidebar items in the loop above
 	// (see buildChannelItem). The user is a member of every channel returned
@@ -2392,6 +2429,67 @@ func (h *rtmEventHandler) OnChannelSectionChannelsRemoved(sectionID string, chan
 	h.refreshSectionsForActive()
 }
 
+// OnPrefChange handles user-pref mutations from the WebSocket. Currently
+// the only pref slk reacts to is muted_channels: the MuteStore is
+// updated and (when the set actually changed) every wctx.Channels item's
+// IsMuted flag is recomputed and the active sidebar is asked to
+// re-render. Other prefs are ignored — add a case here when slk grows
+// support for them.
+func (h *rtmEventHandler) OnPrefChange(name, value string) {
+	if debugWSEvents {
+		log.Printf("pref_change received: name=%q value-len=%d", name, len(value))
+	}
+	// Both names are routes to mute state. all_notifications_prefs is
+	// the live per-channel notification blob (current Slack); the flat
+	// muted_channels pref is legacy back-compat.
+	if name != "muted_channels" && name != "all_notifications_prefs" {
+		return
+	}
+	if h.wsCtx == nil || h.wsCtx.MuteStore == nil {
+		return
+	}
+	changed := h.wsCtx.MuteStore.ApplyPrefChange(name, value)
+	log.Printf("pref_change %s for %s: changed=%v muted=%v", name, h.wsCtx.TeamName, changed, h.wsCtx.MuteStore.MutedChannels())
+	if !changed {
+		return
+	}
+	h.refreshMutedForActive()
+}
+
+// debugWSEvents flips on extra per-event logging when SLK_DEBUG_WS is
+// set. Same env var the slack package uses for unknown-event dumps;
+// reuse so users can flip both on with one variable.
+var debugWSEvents = os.Getenv("SLK_DEBUG_WS") != ""
+
+// refreshMutedForActive walks wctx.Channels, refreshes each item's
+// IsMuted flag from the current MuteStore, and posts a
+// SectionsRefreshedMsg so the App rebuilds the sidebar from the
+// updated list. Mirrors refreshSectionsForActive but for the mute
+// dimension; reuses the same message because the App treats it as a
+// "channel-list-attributes-changed" signal regardless of what
+// changed.
+func (h *rtmEventHandler) refreshMutedForActive() {
+	if h.wsCtx == nil || h.wsCtx.MuteStore == nil {
+		return
+	}
+	store := h.wsCtx.MuteStore
+	for i := range h.wsCtx.Channels {
+		h.wsCtx.Channels[i].IsMuted = store.IsMuted(h.wsCtx.Channels[i].ID)
+	}
+	if h.program == nil {
+		return
+	}
+	if h.isActive != nil && !h.isActive() {
+		return
+	}
+	channelsCopy := make([]sidebar.ChannelItem, len(h.wsCtx.Channels))
+	copy(channelsCopy, h.wsCtx.Channels)
+	h.program.Send(ui.SectionsRefreshedMsg{
+		TeamID:   h.workspaceID,
+		Channels: channelsCopy,
+	})
+}
+
 // listWorkspaces prints the configured workspaces with their TeamID and
 // Name, one per line. Useful for users who want to hand-edit per-workspace
 // settings in config.toml.
@@ -2432,6 +2530,46 @@ func listWorkspaces() error {
 		strings.Repeat("-", nameW))
 	for _, ot := range orderedTokens {
 		fmt.Printf("%-*s  %-*s  %s\n", idW, ot.Token.TeamID, slugW, ot.Slug, ot.Token.TeamName)
+	}
+	return nil
+}
+
+// dumpPrefs is a diagnostic command that calls users.prefs.get for
+// every configured workspace and prints the raw JSON response. Use
+// this when the muted-channel UI treatment isn't behaving as
+// expected to confirm what Slack is (or isn't) returning for the
+// muted_channels pref.
+func dumpPrefs() error {
+	tokenDir := filepath.Join(xdgData(), "tokens")
+	store := slackclient.NewTokenStore(tokenDir)
+	tokens, err := store.List()
+	if err != nil {
+		return fmt.Errorf("list tokens: %w", err)
+	}
+	if len(tokens) == 0 {
+		fmt.Println("No workspaces configured. Run 'slk --add-workspace' first.")
+		return nil
+	}
+	ctx := context.Background()
+	for _, tok := range tokens {
+		fmt.Printf("=== %s (%s) ===\n", tok.TeamName, tok.TeamID)
+		client := slackclient.NewClient(tok.AccessToken, tok.Cookie)
+		if err := client.Connect(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "  connect failed: %v\n\n", err)
+			continue
+		}
+		raw, err := client.GetMutedChannelsRaw(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  fetch failed: %v\n\n", err)
+			continue
+		}
+		var pretty bytes.Buffer
+		if err := json.Indent(&pretty, raw, "", "  "); err == nil {
+			fmt.Println(pretty.String())
+		} else {
+			fmt.Println(string(raw))
+		}
+		fmt.Println()
 	}
 	return nil
 }

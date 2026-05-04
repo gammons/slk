@@ -84,6 +84,18 @@ var (
 			Bold(true).
 			Padding(0, 1)
 
+	// ChannelMuted is the style for muted channels in the sidebar.
+	// Always uses the dim sidebar foreground (no bold) regardless of
+	// unread state — Slack treats muted channels as background noise,
+	// so they should look quieter than even read-but-unmuted rows.
+	// Pairs with the unread-dot suppression in buildCache: muted
+	// channels never get the blue "•" indicator, even when their
+	// UnreadCount is non-zero.
+	ChannelMuted = lipgloss.NewStyle().
+			Background(Background).
+			Foreground(TextMuted).
+			Padding(0, 1)
+
 	UnreadBadge = lipgloss.NewStyle().
 			Background(Error).
 			Foreground(lipgloss.Color("#FFFFFF")).
@@ -370,6 +382,8 @@ func buildStyles() {
 		Background(SidebarBackground).Foreground(SidebarTextMuted).Padding(0, 1)
 	ChannelUnread = lipgloss.NewStyle().
 		Background(SidebarBackground).Foreground(SidebarText).Bold(true).Padding(0, 1)
+	ChannelMuted = lipgloss.NewStyle().
+		Background(SidebarBackground).Foreground(SidebarTextMuted).Padding(0, 1)
 	UnreadBadge = lipgloss.NewStyle().
 		Background(Error).Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1)
 	SectionHeader = lipgloss.NewStyle().

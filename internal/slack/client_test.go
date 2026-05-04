@@ -1304,6 +1304,134 @@ func TestMarkThreadUnread_EmptyArgs_NoOp(t *testing.T) {
 	}
 }
 
+func TestGetMutedChannels_FromAllNotificationsPrefs(t *testing.T) {
+	// Real-world: Slack ships mute state inside the JSON-string
+	// `all_notifications_prefs` pref under channels[id].muted.
+	respBody := `{"ok":true,"prefs":{"all_notifications_prefs":"{\"channels\":{\"C1\":{\"muted\":true},\"C2\":{\"muted\":false},\"C3\":{\"muted\":true}},\"global\":{}}"}}`
+	var gotPath, gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(respBody))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	got, err := c.GetMutedChannels(context.Background())
+	if err != nil {
+		t.Fatalf("GetMutedChannels: %v", err)
+	}
+	if !strings.HasSuffix(gotPath, "/users.prefs.get") {
+		t.Errorf("path: got %q, want suffix /users.prefs.get", gotPath)
+	}
+	if gotAuth != "Bearer xoxc-test" {
+		t.Errorf("auth: got %q", gotAuth)
+	}
+	gotSet := map[string]bool{}
+	for _, id := range got {
+		gotSet[id] = true
+	}
+	if !gotSet["C1"] || !gotSet["C3"] {
+		t.Errorf("expected C1 and C3 muted, got %v", got)
+	}
+	if gotSet["C2"] {
+		t.Errorf("C2 should not be muted (muted=false), got %v", got)
+	}
+	if len(got) != 2 {
+		t.Errorf("len = %d, want 2 (got %v)", len(got), got)
+	}
+}
+
+func TestGetMutedChannels_LegacyMutedChannelsField(t *testing.T) {
+	// Back-compat: if Slack ever ships the flat muted_channels pref
+	// again, we still pick it up.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"prefs":{"muted_channels":"C1,C2"}}`))
+	}))
+	defer srv.Close()
+	c := newTestClient(srv)
+	got, err := c.GetMutedChannels(context.Background())
+	if err != nil {
+		t.Fatalf("GetMutedChannels: %v", err)
+	}
+	gotSet := map[string]bool{}
+	for _, id := range got {
+		gotSet[id] = true
+	}
+	if !gotSet["C1"] || !gotSet["C2"] || len(got) != 2 {
+		t.Errorf("expected {C1,C2}, got %v", got)
+	}
+}
+
+func TestGetMutedChannels_BothPrefsMerged(t *testing.T) {
+	// Defensive: if a workspace returns both, we take the union.
+	respBody := `{"ok":true,"prefs":{"muted_channels":"C1","all_notifications_prefs":"{\"channels\":{\"C2\":{\"muted\":true}}}"}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(respBody))
+	}))
+	defer srv.Close()
+	c := newTestClient(srv)
+	got, err := c.GetMutedChannels(context.Background())
+	if err != nil {
+		t.Fatalf("GetMutedChannels: %v", err)
+	}
+	gotSet := map[string]bool{}
+	for _, id := range got {
+		gotSet[id] = true
+	}
+	if !gotSet["C1"] || !gotSet["C2"] || len(got) != 2 {
+		t.Errorf("expected union {C1,C2}, got %v", got)
+	}
+}
+
+func TestGetMutedChannels_EmptyChannelsObject(t *testing.T) {
+	// Workspaces with no muted channels return channels:{} — should
+	// produce an empty (non-nil) slice.
+	respBody := `{"ok":true,"prefs":{"all_notifications_prefs":"{\"channels\":{},\"global\":{}}"}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(respBody))
+	}))
+	defer srv.Close()
+	c := newTestClient(srv)
+	got, err := c.GetMutedChannels(context.Background())
+	if err != nil {
+		t.Fatalf("GetMutedChannels: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("len = %d, want 0 (got %v)", len(got), got)
+	}
+}
+
+func TestParseMutedFromAllNotificationsPrefs_BadJSON(t *testing.T) {
+	// Garbage in => empty out, no panic. Mute is best-effort.
+	if got := ParseMutedFromAllNotificationsPrefs("not json"); len(got) != 0 {
+		t.Errorf("expected empty slice for invalid JSON, got %v", got)
+	}
+	if got := ParseMutedFromAllNotificationsPrefs(""); len(got) != 0 {
+		t.Errorf("expected empty slice for empty string, got %v", got)
+	}
+}
+
+func TestGetMutedChannels_ApiError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":false,"error":"invalid_auth"}`))
+	}))
+	defer srv.Close()
+	c := newTestClient(srv)
+	_, err := c.GetMutedChannels(context.Background())
+	if err == nil {
+		t.Fatal("expected error for ok=false response")
+	}
+	if !strings.Contains(err.Error(), "invalid_auth") {
+		t.Errorf("error = %v, want it to mention invalid_auth", err)
+	}
+}
+
 func TestSendReply_BuildsRichTextBlock(t *testing.T) {
 	api, getForm, closeFn := newTestSlackAPI(t, `{"ok":true,"ts":"1700000000.000200","channel":"C1"}`)
 	defer closeFn()

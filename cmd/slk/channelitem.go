@@ -69,12 +69,18 @@ func buildChannelItem(ch slack.Channel, wctx *WorkspaceContext, cfg config.Confi
 		}
 	}
 
+	muted := false
+	if wctx.MuteStore != nil {
+		muted = wctx.MuteStore.IsMuted(ch.ID)
+	}
+
 	item := sidebar.ChannelItem{
 		ID:           ch.ID,
 		Name:         displayName,
 		Type:         chType,
 		Section:      section,
 		SectionOrder: sectionOrder,
+		IsMuted:      muted,
 	}
 	if ch.IsIM {
 		item.DMUserID = ch.User

@@ -39,6 +39,12 @@ type mockEventHandler struct {
 	sectionChannelsAdded          []string
 	sectionChannelsRemovedSection string
 	sectionChannelsRemoved        []string
+
+	prefChanges []prefChangeRecord
+}
+
+type prefChangeRecord struct {
+	name, value string
 }
 
 type channelMarkRecord struct {
@@ -109,6 +115,9 @@ func (m *mockEventHandler) OnChannelSectionChannelsUpserted(sectionID string, ch
 func (m *mockEventHandler) OnChannelSectionChannelsRemoved(sectionID string, channelIDs []string) {
 	m.sectionChannelsRemovedSection = sectionID
 	m.sectionChannelsRemoved = channelIDs
+}
+func (m *mockEventHandler) OnPrefChange(name, value string) {
+	m.prefChanges = append(m.prefChanges, prefChangeRecord{name, value})
 }
 
 func TestEventHandlerInterface(t *testing.T) {
@@ -571,5 +580,38 @@ func TestDispatch_ChannelsRemoved(t *testing.T) {
 	}
 	if len(h.sectionChannelsRemoved) != 1 || h.sectionChannelsRemoved[0] != "C0AR3C3HMJT" {
 		t.Errorf("channels = %v", h.sectionChannelsRemoved)
+	}
+}
+
+func TestDispatch_PrefChange_StringValue(t *testing.T) {
+	h := &mockEventHandler{}
+	dispatchWebSocketEvent([]byte(`{"type":"pref_change","name":"muted_channels","value":"C1,C2"}`), h)
+	if len(h.prefChanges) != 1 {
+		t.Fatalf("prefChanges len = %d, want 1", len(h.prefChanges))
+	}
+	if h.prefChanges[0].name != "muted_channels" || h.prefChanges[0].value != "C1,C2" {
+		t.Errorf("got %+v, want {muted_channels C1,C2}", h.prefChanges[0])
+	}
+}
+
+func TestDispatch_PrefChange_ArrayValueJoinedWithCommas(t *testing.T) {
+	h := &mockEventHandler{}
+	dispatchWebSocketEvent([]byte(`{"type":"pref_change","name":"highlight_words","value":["alert","oncall"]}`), h)
+	if len(h.prefChanges) != 1 {
+		t.Fatalf("prefChanges len = %d, want 1", len(h.prefChanges))
+	}
+	if h.prefChanges[0].value != "alert,oncall" {
+		t.Errorf("value = %q, want alert,oncall (array joined)", h.prefChanges[0].value)
+	}
+}
+
+func TestDispatch_PrefChange_EmptyValue(t *testing.T) {
+	h := &mockEventHandler{}
+	dispatchWebSocketEvent([]byte(`{"type":"pref_change","name":"muted_channels","value":""}`), h)
+	if len(h.prefChanges) != 1 {
+		t.Fatalf("prefChanges len = %d, want 1", len(h.prefChanges))
+	}
+	if h.prefChanges[0].value != "" {
+		t.Errorf("value = %q, want empty", h.prefChanges[0].value)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/slack-go/slack"
@@ -66,6 +67,14 @@ type EventHandler interface {
 	// OnChannelSectionChannelsRemoved is called for
 	// channel_sections_channels_removed.
 	OnChannelSectionChannelsRemoved(sectionID string, channelIDs []string)
+
+	// OnPrefChange is called for pref_change WS events. Slack ships these
+	// for every user-pref mutation (mute/unmute, highlight words,
+	// notifications, etc.); receivers are expected to dispatch on `name`
+	// and ignore prefs they don't care about. value is the new pref
+	// value as a string — for list-shaped prefs like muted_channels,
+	// Slack ships the full updated list, comma-separated.
+	OnPrefChange(name, value string)
 }
 
 // wsEvent is the minimal structure for identifying a WebSocket event type.
@@ -166,6 +175,44 @@ type wsChannelMarkedEvent struct {
 type wsConversationOpenedEvent struct {
 	Type    string        `json:"type"`
 	Channel slack.Channel `json:"channel"`
+}
+
+// wsPrefChangeEvent represents a pref_change WS event. Slack ships
+// these for every user-pref mutation. The `value` field is polymorphic
+// across prefs — string for scalar prefs (muted_channels is a
+// comma-separated string), array for list prefs (highlight_words),
+// object for nested prefs. Stored as a raw message and converted to a
+// canonical string by stringValue() so the EventHandler interface can
+// stay simple (most consumers only care about a couple of scalar
+// prefs).
+type wsPrefChangeEvent struct {
+	Type  string          `json:"type"`
+	Name  string          `json:"name"`
+	Value json.RawMessage `json:"value"`
+}
+
+// stringValue returns the pref value coerced to a string. JSON strings
+// are returned with quotes stripped. Arrays of strings are joined with
+// commas to mirror Slack's own scalar-string convention for
+// list-shaped prefs (muted_channels). Anything else is returned as the
+// raw JSON, which preserves enough information that a future receiver
+// can reparse if needed.
+func (e wsPrefChangeEvent) stringValue() string {
+	if len(e.Value) == 0 {
+		return ""
+	}
+	// String form: "..."
+	var s string
+	if err := json.Unmarshal(e.Value, &s); err == nil {
+		return s
+	}
+	// Array of strings: ["a","b"]
+	var arr []string
+	if err := json.Unmarshal(e.Value, &arr); err == nil {
+		return strings.Join(arr, ",")
+	}
+	// Fallback: raw JSON.
+	return string(e.Value)
 }
 
 // wsThreadMarkedEvent represents a thread_marked event from Slack's
@@ -310,6 +357,13 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			return
 		}
 		handler.OnChannelSectionChannelsRemoved(raw.SectionID, raw.ChannelIDs)
+
+	case "pref_change":
+		var evt wsPrefChangeEvent
+		if err := json.Unmarshal(data, &evt); err != nil {
+			return
+		}
+		handler.OnPrefChange(evt.Name, evt.stringValue())
 
 	case "hello":
 		handler.OnConnect()

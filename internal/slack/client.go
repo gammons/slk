@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -916,6 +917,136 @@ func (c *Client) MarkChannelUnread(ctx context.Context, channelID, ts string) er
 // unread when there are no replies). Best-effort.
 func (c *Client) MarkThreadUnread(ctx context.Context, channelID, threadTS, ts string) error {
 	return c.markThread(ctx, channelID, threadTS, ts, false)
+}
+
+// GetMutedChannels fetches the authenticated user's mute set by
+// reading users.prefs.get and parsing the per-channel notification
+// prefs blob. Returns the IDs of channels the user has muted.
+//
+// Slack does NOT ship a flat `muted_channels` pref anymore (it used
+// to, and is still documented as such in some places, but live
+// browser-protocol responses no longer include it). Mute state lives
+// inside the JSON-encoded `all_notifications_prefs` string under
+// channels[id].muted=true. After this initial fetch, pref_change WS
+// events for `all_notifications_prefs` keep the set fresh.
+//
+// users.prefs.get is undocumented but is the same call the official
+// browser client uses; may break if Slack changes the API. Returns an
+// empty slice (not nil) when the user has no muted channels.
+func (c *Client) GetMutedChannels(ctx context.Context) ([]string, error) {
+	body, err := c.postForm(ctx, "users.prefs.get", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var parsed struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+		Prefs struct {
+			// Legacy — accept it if Slack ever ships it again, so this
+			// code keeps working on older workspaces.
+			MutedChannels        string `json:"muted_channels"`
+			AllNotificationPrefs string `json:"all_notifications_prefs"`
+		} `json:"prefs"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("parsing users.prefs.get response: %w (body=%q)", err, truncateForLog(body))
+	}
+	if !parsed.OK {
+		return nil, fmt.Errorf("users.prefs.get returned ok=false (error=%q, body=%q)", parsed.Error, truncateForLog(body))
+	}
+
+	merged := map[string]bool{}
+	for _, id := range strings.Split(parsed.Prefs.MutedChannels, ",") {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			merged[id] = true
+		}
+	}
+	for _, id := range ParseMutedFromAllNotificationsPrefs(parsed.Prefs.AllNotificationPrefs) {
+		merged[id] = true
+	}
+	if debugWS {
+		log.Printf("[users.prefs.get] muted_channels=%d all_notifications_prefs len=%d total muted=%d",
+			len(parsed.Prefs.MutedChannels), len(parsed.Prefs.AllNotificationPrefs), len(merged))
+	}
+	out := make([]string, 0, len(merged))
+	for id := range merged {
+		out = append(out, id)
+	}
+	return out, nil
+}
+
+// ParseMutedFromAllNotificationsPrefs decodes the JSON-string value
+// of the `all_notifications_prefs` pref and returns the channel IDs
+// where channels[id].muted == true. The pref's value is itself a
+// JSON-encoded string (Slack quirk), so callers should pass the raw
+// string contents directly. Returns an empty slice on any decode
+// failure — mute is best-effort UI sugar, not safety-critical.
+func ParseMutedFromAllNotificationsPrefs(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var parsed struct {
+		Channels map[string]struct {
+			Muted bool `json:"muted"`
+		} `json:"channels"`
+	}
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(parsed.Channels))
+	for id, prefs := range parsed.Channels {
+		if prefs.Muted {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// GetMutedChannelsRaw returns the raw users.prefs.get response body.
+// Diagnostic only (--dump-prefs).
+func (c *Client) GetMutedChannelsRaw(ctx context.Context) ([]byte, error) {
+	return c.postForm(ctx, "users.prefs.get", nil)
+}
+
+// postForm performs a cookie-aware POST to an endpoint under
+// c.apiBaseURL with optional form values and Bearer auth. Returns the
+// raw response body. Shared by hand-rolled undocumented endpoints.
+func (c *Client) postForm(ctx context.Context, method string, form url.Values) ([]byte, error) {
+	var body io.Reader
+	if len(form) > 0 {
+		body = strings.NewReader(form.Encode())
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", c.apiBaseURL+method, body)
+	if err != nil {
+		return nil, fmt.Errorf("creating %s request: %w", method, err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	httpClient := c.httpClient
+	if httpClient == nil {
+		httpClient = newCookieHTTPClient(c.cookie)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("calling %s: %w", method, err)
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}
+
+// truncateForLog clips a response body to a length safe to splat into
+// an error message or log line. Hand-rolled endpoints occasionally
+// return multi-KB HTML error pages; without truncation those would
+// blow out a single log line.
+func truncateForLog(b []byte) string {
+	const max = 512
+	if len(b) <= max {
+		return string(b)
+	}
+	return string(b[:max]) + "...(truncated)"
 }
 
 // callChannelSectionsList performs the raw POST to users.channelSections.list

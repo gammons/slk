@@ -38,6 +38,13 @@ type ChannelItem struct {
 	// read marker for this channel ("1700000001.000000"). Used by
 	// the staleness filter; empty means "never read" or "no signal".
 	LastReadTS string
+	// IsMuted reports whether the user has muted this channel (via
+	// Slack's muted_channels user pref). Muted channels render with a
+	// dimmer foreground and suppress their unread dot; they also do
+	// not contribute to the aggregate unread badges on collapsed
+	// section headers. Sourced from service.MuteStore in
+	// buildChannelItem.
+	IsMuted bool
 }
 
 // sectionFor is the package-level back-compat shim for callers
@@ -943,14 +950,21 @@ func (m *Model) rebuildNavPreserveCursor() {
 
 // aggregateUnreadForSection returns the sum of UnreadCount across every
 // item in the named section that is currently in m.filtered. Used to
-// render an aggregate badge on collapsed section headers.
+// render an aggregate badge on collapsed section headers. Muted
+// channels are excluded so the aggregate matches the per-row treatment
+// (no dot, dim foreground) — the user has explicitly asked Slack to
+// ignore those channels' unread activity.
 func (m *Model) aggregateUnreadForSection(section string) int {
 	total := 0
 	for _, idx := range m.filtered {
-		if m.sectionFor(m.items[idx]) != section {
+		item := m.items[idx]
+		if item.IsMuted {
 			continue
 		}
-		total += m.items[idx].UnreadCount
+		if m.sectionFor(item) != section {
+			continue
+		}
+		total += item.UnreadCount
 	}
 	return total
 }
@@ -1120,8 +1134,12 @@ func (m *Model) buildCache(width int) {
 		}
 
 		// Unread dot indicator (same regardless of selection state).
+		// Muted channels never get the dot — Slack's contract is "muted
+		// = no notification surface", so even unread activity should not
+		// pull the eye. The dimmer ChannelMuted style below distinguishes
+		// muted-with-unreads from a fully read row.
 		unreadDot := " "
-		if item.UnreadCount > 0 {
+		if item.UnreadCount > 0 && !item.IsMuted {
 			unreadDot = unreadDotStr
 		}
 
@@ -1136,13 +1154,15 @@ func (m *Model) buildCache(width int) {
 		case "group_dm":
 			prefix = groupDMPrefix
 		case "private":
-			if item.UnreadCount > 0 {
+			// Muted channels use the plain glyph regardless of unread
+			// state so the row reads as quiet across all of its parts.
+			if item.UnreadCount > 0 && !item.IsMuted {
 				prefix = privatePrefix
 			} else {
 				prefix = privatePrefixMuted
 			}
 		case "app":
-			if item.UnreadCount > 0 {
+			if item.UnreadCount > 0 && !item.IsMuted {
 				prefix = appPrefix
 			} else {
 				prefix = appPrefixMuted
@@ -1184,19 +1204,27 @@ func (m *Model) buildCache(width int) {
 		// inline-prefix ANSI reset, otherwise lipgloss's outer
 		// ChannelUnread bold is wiped for the channel name + dot
 		// span that follows the styled prefix glyph.
+		// Bold goes with ChannelUnread; muted rows never go bold even
+		// with unreads (the dimmer ChannelMuted style is the whole
+		// point — bold would defeat it).
 		rowAttrs := bgAnsi
-		if item.UnreadCount > 0 {
+		if item.UnreadCount > 0 && !item.IsMuted {
 			rowAttrs += "\x1b[1m"
 		}
 		labelNormal = messages.ReapplyBgAfterResets(labelNormal, rowAttrs)
 		labelSelected = messages.ReapplyBgAfterResets(labelSelected, rowAttrs)
 		labelActive = messages.ReapplyBgAfterResets(labelActive, rowAttrs)
 
-		// Pick base style for non-selected state.
+		// Pick base style for non-selected state. Muted always wins
+		// over Unread/Normal so muted-with-unreads renders dim, not
+		// bright-and-bold.
 		var baseStyle lipgloss.Style
-		if item.UnreadCount > 0 {
+		switch {
+		case item.IsMuted:
+			baseStyle = styles.ChannelMuted
+		case item.UnreadCount > 0:
 			baseStyle = styles.ChannelUnread
-		} else {
+		default:
 			baseStyle = styles.ChannelNormal
 		}
 
