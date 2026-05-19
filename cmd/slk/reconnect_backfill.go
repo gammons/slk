@@ -197,7 +197,9 @@ func (b *backfiller) backfillOneChannel(ctx context.Context, row cache.ChannelSy
 			Subtype:     m.SubType,
 			RawJSON:     string(raw),
 			CreatedAt:   time.Now().Unix(),
-		})
+		}); err != nil {
+			return 0, fmt.Errorf("upsert channel %s ts %s: %w", row.ChannelID, m.Timestamp, err)
+		}
 		if m.Timestamp > maxTS {
 			maxTS = m.Timestamp
 		}
