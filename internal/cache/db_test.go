@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -147,6 +148,52 @@ func TestMigrateAddsChannelsSyncedAtColumn(t *testing.T) {
 	}
 	if !found {
 		t.Error("channels table missing synced_at column")
+	}
+}
+
+// TestNew_SetsBusyTimeoutOnAllPoolConnections is a regression test
+// for issue #9. Without a busy_timeout pragma on every connection in
+// the pool, two goroutines in WAL mode that try to write at the same
+// time will fail the second writer with SQLITE_BUSY immediately
+// instead of waiting. The reconnect backfill (cmd/slk/reconnect_backfill.go)
+// fans out N goroutines across the shared *sql.DB and silently
+// dropped messages on systems where the lock window was long enough
+// to collide.
+//
+// We force the pool to open multiple connections and assert that
+// each one has a non-zero busy_timeout. PRAGMA busy_timeout is
+// per-connection in sqlite, so the only way to ensure every pooled
+// connection has it is to set it in the DSN (so it runs as part of
+// the per-connection init), not via a one-off conn.Exec.
+func TestNew_SetsBusyTimeoutOnAllPoolConnections(t *testing.T) {
+	db, err := New(filepath.Join(t.TempDir(), "busy.db"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	// Hold N concurrent conns so the pool actually opens N distinct
+	// underlying sqlite connections. If we just queried PRAGMA on
+	// db.conn N times, the pool would hand back the same connection.
+	const N = 4
+	conns := make([]*sql.Conn, 0, N)
+	for i := 0; i < N; i++ {
+		c, err := db.conn.Conn(ctx)
+		if err != nil {
+			t.Fatalf("Conn[%d]: %v", i, err)
+		}
+		conns = append(conns, c)
+	}
+	for i, c := range conns {
+		var bt int
+		if err := c.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&bt); err != nil {
+			t.Fatalf("conn %d PRAGMA busy_timeout: %v", i, err)
+		}
+		if bt < 1000 {
+			t.Errorf("conn %d busy_timeout = %d ms, want >= 1000 (writers must wait, not return SQLITE_BUSY immediately)", i, bt)
+		}
+		c.Close()
 	}
 }
 

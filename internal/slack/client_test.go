@@ -1516,12 +1516,15 @@ func TestGetHistorySince_PaginatesUntilExhausted(t *testing.T) {
 	}
 	c := &Client{api: mock}
 
-	msgs, err := c.GetHistorySince(context.Background(), "C1", "50.000000", 500)
+	res, err := c.GetHistorySince(context.Background(), "C1", "50.000000", 500)
 	if err != nil {
 		t.Fatalf("GetHistorySince: %v", err)
 	}
-	if len(msgs) != 3 {
-		t.Errorf("got %d messages, want 3", len(msgs))
+	if len(res.Messages) != 3 {
+		t.Errorf("got %d messages, want 3", len(res.Messages))
+	}
+	if res.Capped {
+		t.Errorf("Capped = true; expected false (exhausted all pages)")
 	}
 	if len(calls) != 2 {
 		t.Fatalf("expected 2 history calls, got %d", len(calls))
@@ -1565,12 +1568,15 @@ func TestGetHistorySince_RespectsHardCap(t *testing.T) {
 	}
 	c := &Client{api: mock}
 
-	msgs, err := c.GetHistorySince(context.Background(), "C1", "0", 4)
+	res, err := c.GetHistorySince(context.Background(), "C1", "0", 4)
 	if err != nil {
 		t.Fatalf("GetHistorySince: %v", err)
 	}
-	if len(msgs) != 4 {
-		t.Errorf("got %d, want 4 (cap)", len(msgs))
+	if len(res.Messages) != 4 {
+		t.Errorf("got %d, want 4 (cap)", len(res.Messages))
+	}
+	if !res.Capped {
+		t.Errorf("Capped = false; expected true (hit maxTotal)")
 	}
 	if calls != 2 {
 		t.Errorf("expected 2 calls before cap stop, got %d", calls)
@@ -1595,12 +1601,16 @@ func TestGetHistorySince_EmptyOldestFetchesLatestPageOnly(t *testing.T) {
 	c := &Client{api: mock}
 
 	// When oldest is empty (no prior sync), fetch latest page only — do NOT paginate.
-	msgs, err := c.GetHistorySince(context.Background(), "C1", "", 500)
+	res, err := c.GetHistorySince(context.Background(), "C1", "", 500)
 	if err != nil {
 		t.Fatalf("GetHistorySince: %v", err)
 	}
-	if len(msgs) != 1 {
-		t.Errorf("got %d msgs, want 1", len(msgs))
+	if len(res.Messages) != 1 {
+		t.Errorf("got %d msgs, want 1", len(res.Messages))
+	}
+	// HasMore was true in the response, so Capped must propagate that.
+	if !res.Capped {
+		t.Errorf("Capped = false; expected true (response had HasMore)")
 	}
 	if len(calls) != 1 {
 		t.Errorf("expected 1 call (no pagination when oldest is empty), got %d", len(calls))
@@ -1618,12 +1628,15 @@ func TestGetHistorySince_NoMessages(t *testing.T) {
 	}
 	c := &Client{api: mock}
 
-	msgs, err := c.GetHistorySince(context.Background(), "C1", "100.000000", 500)
+	res, err := c.GetHistorySince(context.Background(), "C1", "100.000000", 500)
 	if err != nil {
 		t.Fatalf("GetHistorySince: %v", err)
 	}
-	if len(msgs) != 0 {
-		t.Errorf("expected empty, got %+v", msgs)
+	if len(res.Messages) != 0 {
+		t.Errorf("expected empty, got %+v", res.Messages)
+	}
+	if res.Capped {
+		t.Errorf("Capped = true; expected false (HasMore was false)")
 	}
 }
 

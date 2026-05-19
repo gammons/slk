@@ -154,3 +154,150 @@ func TestSetChannelSyncedAt_RoundTrip(t *testing.T) {
 		t.Errorf("synced_at after overwrite = %d, want 1800000000", got)
 	}
 }
+
+func TestSetAndGetChannelLatestSyncedTS(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	defer db.Close()
+
+	if err := db.UpsertChannel(Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"}); err != nil {
+		t.Fatalf("upsert channel: %v", err)
+	}
+
+	// Default: empty string.
+	if got := db.GetChannelLatestSyncedTS("C1"); got != "" {
+		t.Errorf("default GetChannelLatestSyncedTS = %q, want empty", got)
+	}
+
+	// After Set, returns what we set.
+	if err := db.SetChannelLatestSyncedTS("C1", "1700000000.000123"); err != nil {
+		t.Fatalf("SetChannelLatestSyncedTS: %v", err)
+	}
+	if got := db.GetChannelLatestSyncedTS("C1"); got != "1700000000.000123" {
+		t.Errorf("GetChannelLatestSyncedTS = %q, want %q", got, "1700000000.000123")
+	}
+
+	// Unknown channel: returns empty without error.
+	if got := db.GetChannelLatestSyncedTS("CDOESNOTEXIST"); got != "" {
+		t.Errorf("GetChannelLatestSyncedTS unknown = %q, want empty", got)
+	}
+}
+
+func TestAdvanceChannelLatestSyncedTS_NoRegress(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	defer db.Close()
+
+	if err := db.UpsertChannel(Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"}); err != nil {
+		t.Fatalf("upsert channel: %v", err)
+	}
+
+	// First advance from empty: writes the value.
+	got, err := db.AdvanceChannelLatestSyncedTS("C1", "1700000000.000010")
+	if err != nil {
+		t.Fatalf("advance: %v", err)
+	}
+	if got != "1700000000.000010" {
+		t.Errorf("first advance: got %q want %q", got, "1700000000.000010")
+	}
+
+	// Advance to a newer ts: writes.
+	got, err = db.AdvanceChannelLatestSyncedTS("C1", "1700000001.000000")
+	if err != nil {
+		t.Fatalf("advance newer: %v", err)
+	}
+	if got != "1700000001.000000" {
+		t.Errorf("advance newer: got %q want %q", got, "1700000001.000000")
+	}
+
+	// Advance to an older ts: NO regress; current value preserved.
+	got, err = db.AdvanceChannelLatestSyncedTS("C1", "1699999999.000000")
+	if err != nil {
+		t.Fatalf("advance older: %v", err)
+	}
+	if got != "1700000001.000000" {
+		t.Errorf("advance older should not regress: got %q want %q", got, "1700000001.000000")
+	}
+
+	// Advance to equal ts: no change.
+	got, err = db.AdvanceChannelLatestSyncedTS("C1", "1700000001.000000")
+	if err != nil {
+		t.Fatalf("advance equal: %v", err)
+	}
+	if got != "1700000001.000000" {
+		t.Errorf("advance equal: got %q want %q", got, "1700000001.000000")
+	}
+
+	// Empty ts: no-op, returns current value.
+	got, err = db.AdvanceChannelLatestSyncedTS("C1", "")
+	if err != nil {
+		t.Fatalf("advance empty: %v", err)
+	}
+	if got != "1700000001.000000" {
+		t.Errorf("advance empty: got %q want %q", got, "1700000001.000000")
+	}
+}
+
+func TestMaxMessageTSForChannel(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	defer db.Close()
+
+	// Empty channel: empty result.
+	got, err := db.MaxMessageTSForChannel("C1")
+	if err != nil {
+		t.Fatalf("max empty: %v", err)
+	}
+	if got != "" {
+		t.Errorf("max empty: got %q want empty", got)
+	}
+
+	// Insert a few messages out of order.
+	for _, ts := range []string{"1700000000.000010", "1700000005.000000", "1700000002.000050"} {
+		if err := db.UpsertMessage(Message{
+			TS: ts, ChannelID: "C1", WorkspaceID: "T1", UserID: "U1", Text: "x",
+			CreatedAt: 1700000000,
+		}); err != nil {
+			t.Fatalf("upsert message %s: %v", ts, err)
+		}
+	}
+
+	got, err = db.MaxMessageTSForChannel("C1")
+	if err != nil {
+		t.Fatalf("max populated: %v", err)
+	}
+	if got != "1700000005.000000" {
+		t.Errorf("max: got %q want %q", got, "1700000005.000000")
+	}
+}
+
+func TestGetChannelWatermark_PrefersExplicitThenMaxTS(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	defer db.Close()
+
+	if err := db.UpsertChannel(Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"}); err != nil {
+		t.Fatalf("upsert channel: %v", err)
+	}
+
+	// No watermark, no messages → empty.
+	if got, err := db.GetChannelWatermark("C1"); err != nil || got != "" {
+		t.Errorf("empty: got %q err %v, want empty/nil", got, err)
+	}
+
+	// No explicit watermark, but cached messages → MAX(ts).
+	if err := db.UpsertMessage(Message{
+		TS: "1700000100.000000", ChannelID: "C1", WorkspaceID: "T1",
+		UserID: "U1", Text: "msg", CreatedAt: 1700000100,
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if got, err := db.GetChannelWatermark("C1"); err != nil || got != "1700000100.000000" {
+		t.Errorf("fallback: got %q err %v, want %q", got, err, "1700000100.000000")
+	}
+
+	// Explicit watermark takes precedence, even if behind MAX(ts).
+	// (This models the "we have a gap above the watermark" scenario.)
+	if err := db.SetChannelLatestSyncedTS("C1", "1700000050.000000"); err != nil {
+		t.Fatalf("set explicit: %v", err)
+	}
+	if got, err := db.GetChannelWatermark("C1"); err != nil || got != "1700000050.000000" {
+		t.Errorf("explicit precedence: got %q err %v, want %q", got, err, "1700000050.000000")
+	}
+}

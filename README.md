@@ -34,7 +34,13 @@ Full feature breakdown: **[[Features|https://github.com/gammons/slk/wiki/Feature
 
 ## Quick install
 
-**Linux/macOS** (auto-resolves the latest version):
+**Homebrew** (macOS and Linux):
+
+```bash
+brew install gammons/tap/slk
+```
+
+**Linux/macOS tarball** (auto-resolves the latest version):
 
 ```bash
 VERSION=$(curl -fsSL https://api.github.com/repos/gammons/slk/releases/latest | grep -oE '"tag_name": *"v[^"]+"' | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sed 's/^v//')

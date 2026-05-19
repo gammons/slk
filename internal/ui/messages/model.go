@@ -414,6 +414,52 @@ func (m *Model) HandleImageReady(channel, ts, key string) {
 	m.dirty()
 }
 
+// AvatarReadyMsg is dispatched by the host (cmd/slk wires it from
+// avatar.Cache.SetOnReady) when a lazy avatar fetch completes. The
+// messages pane is the consumer: receiving the message means the user
+// at UserID now has a non-empty render in the avatar.Cache, so a
+// re-render of any message authored by UserID will materialize the
+// avatar in its slot.
+type AvatarReadyMsg struct {
+	UserID string
+}
+
+// HandleAvatarReady marks every cached entry authored by userID as
+// stale so the next View() rebuilds ONLY those slots via
+// partialRebuild. Mirrors HandleImageReady's per-entry invalidation
+// fast path -- a busy channel that surfaces N unique authors at once
+// (channel switch, scroll up into unseen history) triggers a burst of
+// AvatarReadyMsg events as the lazy avatar.Cache fetches complete,
+// and the prior whole-cache nil paid an O(messages) full rebuild per
+// event on the bubbletea Update goroutine.
+//
+// No-op when:
+//   - userID is empty (defensive against malformed host events).
+//   - No cached entry is authored by userID (the user has messages in
+//     other channels but not the active one; AvatarReadyMsg is
+//     workspace-scoped, the cache is channel-scoped).
+//   - The cache has been invalidated already (m.cache == nil) -- a
+//     pending full rebuild will pick up the avatar naturally.
+func (m *Model) HandleAvatarReady(userID string) {
+	if userID == "" || m.cache == nil {
+		return
+	}
+	var marked bool
+	for _, msg := range m.messages {
+		if msg.UserID != userID {
+			continue
+		}
+		if m.staleEntries == nil {
+			m.staleEntries = make(map[string]struct{})
+		}
+		m.staleEntries[msg.TS] = struct{}{}
+		marked = true
+	}
+	if marked {
+		m.dirty()
+	}
+}
+
 // HandleImageFailed clears the in-flight bit for a specific key and
 // records the key as permanently failed via the embedded
 // imgrender.Renderer. RenderBlock checks the renderer's failed-set

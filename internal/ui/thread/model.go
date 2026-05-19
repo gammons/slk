@@ -218,6 +218,21 @@ func (m *Model) InvalidateCache() {
 	m.dirty()
 }
 
+// HandleAvatarReady invalidates the thread render cache so the next
+// View() picks up the now-rendered avatar for userID. Mirrors
+// messages.Model.HandleAvatarReady. Empty UserID is a no-op.
+//
+// Workspace-coarse: we don't try to scope by channel/thread identity
+// because (a) avatar arrivals are rare and (b) the thread panel only
+// renders if it's visible, so an invalidation while hidden is a noop
+// at next View() time anyway.
+func (m *Model) HandleAvatarReady(userID string) {
+	if userID == "" {
+		return
+	}
+	m.InvalidateCache()
+}
+
 // SetThread populates the thread panel with a parent message and replies.
 // The cursor starts at the bottom (newest reply). When the channel/thread
 // identity changes (i.e. the user is opening a different thread, not just

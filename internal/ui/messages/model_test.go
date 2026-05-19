@@ -635,6 +635,102 @@ func TestModel_HandleImageReady_PerEntryInvalidation(t *testing.T) {
 	}
 }
 
+// TestModel_HandleAvatarReady_PerUserStaleInvalidation asserts that
+// when an AvatarReadyMsg lands for a userID, the model marks ONLY the
+// cache slots authored by that user as stale -- siblings (entries from
+// other users) must survive untouched. This is the perf invariant that
+// prevents N back-to-back full-cache rebuilds when a busy channel's
+// scrollback brings in N unique authors and their avatars arrive in a
+// burst over many bubbletea ticks.
+//
+// Before the fix HandleAvatarReady did m.cache = nil, forcing
+// buildCache to walk every message and re-run the markdown / wordwrap
+// / blockkit pipeline. Now it mirrors HandleImageReady's per-TS stale
+// path: only the affected messages rebuild on the next View(), via
+// partialRebuild.
+func TestModel_HandleAvatarReady_PerUserStaleInvalidation(t *testing.T) {
+	const channel = "C-avatar-perf"
+	msgs := []MessageItem{
+		{TS: "1700000001.000000", UserID: "U1", UserName: "alice", Text: "first by alice", Timestamp: "10:30 AM"},
+		{TS: "1700000002.000000", UserID: "U2", UserName: "bob", Text: "by bob (target)", Timestamp: "10:31 AM"},
+		{TS: "1700000003.000000", UserID: "U3", UserName: "carol", Text: "by carol", Timestamp: "10:32 AM"},
+		{TS: "1700000004.000000", UserID: "U2", UserName: "bob", Text: "second by bob (target)", Timestamp: "10:33 AM"},
+	}
+	m := New(msgs, channel)
+	_ = m.View(20, 60)
+	if m.cache == nil {
+		t.Fatal("expected cache populated after View()")
+	}
+
+	aliceIdx := m.messageIDToEntryIdx["1700000001.000000"]
+	carolIdx := m.messageIDToEntryIdx["1700000003.000000"]
+	aliceBefore := append([]string(nil), m.cache[aliceIdx].linesNormal...)
+	carolBefore := append([]string(nil), m.cache[carolIdx].linesNormal...)
+
+	m.HandleAvatarReady("U2")
+
+	if m.cache == nil {
+		t.Fatal("HandleAvatarReady must not nil the entire cache; siblings get rebuilt unnecessarily")
+	}
+	if _, ok := m.staleEntries["1700000002.000000"]; !ok {
+		t.Error("expected bob's first message marked stale")
+	}
+	if _, ok := m.staleEntries["1700000004.000000"]; !ok {
+		t.Error("expected bob's second message marked stale")
+	}
+	if _, ok := m.staleEntries["1700000001.000000"]; ok {
+		t.Error("alice's message must NOT be marked stale (different author)")
+	}
+	if _, ok := m.staleEntries["1700000003.000000"]; ok {
+		t.Error("carol's message must NOT be marked stale (different author)")
+	}
+
+	// Drive the partial rebuild and confirm siblings are byte-identical.
+	_ = m.View(20, 60)
+
+	if !equalLines(aliceBefore, m.cache[m.messageIDToEntryIdx["1700000001.000000"]].linesNormal) {
+		t.Error("alice's cached lines changed across HandleAvatarReady -- sibling rebuilt unnecessarily")
+	}
+	if !equalLines(carolBefore, m.cache[m.messageIDToEntryIdx["1700000003.000000"]].linesNormal) {
+		t.Error("carol's cached lines changed across HandleAvatarReady -- sibling rebuilt unnecessarily")
+	}
+}
+
+// TestModel_HandleAvatarReady_UnknownUserIDNoOp covers the case where
+// AvatarReadyMsg arrives for a user whose messages aren't loaded in
+// the active channel (e.g. they're in another channel's history that
+// happens to share the workspace). Must not dirty the cache.
+func TestModel_HandleAvatarReady_UnknownUserIDNoOp(t *testing.T) {
+	msgs := []MessageItem{
+		{TS: "1700000001.000000", UserID: "U1", UserName: "alice", Text: "hi", Timestamp: "10:30 AM"},
+	}
+	m := New(msgs, "C")
+	_ = m.View(20, 60)
+
+	beforeVersion := m.version
+	m.HandleAvatarReady("U_NOT_IN_CHANNEL")
+
+	if len(m.staleEntries) != 0 {
+		t.Errorf("staleEntries should remain empty; got %d", len(m.staleEntries))
+	}
+	if m.version != beforeVersion {
+		t.Error("AvatarReady for non-present user should not dirty the version")
+	}
+}
+
+// TestModel_HandleAvatarReady_EmptyUserIDNoOp guards the no-op path so
+// a stray empty event from the host wiring doesn't pointlessly dirty
+// the cache.
+func TestModel_HandleAvatarReady_EmptyUserIDNoOp(t *testing.T) {
+	m := New([]MessageItem{{TS: "1", UserID: "U1", UserName: "a", Text: "hi"}}, "C")
+	_ = m.View(20, 60)
+	beforeVersion := m.version
+	m.HandleAvatarReady("")
+	if m.version != beforeVersion {
+		t.Error("HandleAvatarReady(\"\") should not dirty the version")
+	}
+}
+
 func equalLines(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

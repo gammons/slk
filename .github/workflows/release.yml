@@ -31,7 +31,6 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Uncomment after creating gammons/homebrew-tap and adding the PAT secret:
-          # HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
           # Uncomment after generating an AUR SSH key and adding it as a secret:
           # AUR_KEY: ${{ secrets.AUR_KEY }}

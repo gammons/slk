@@ -1612,6 +1612,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.threadPanel.InvalidateCache()
 		}
 
+	case messages.AvatarReadyMsg:
+		// A lazy avatar fetch landed for msg.UserID. Both the messages
+		// pane and the thread panel cache avatar slots in their render
+		// caches, so both must invalidate. The handlers no-op when the
+		// userID isn't in their current view, but coarse invalidation
+		// is cheap relative to the cost of a missing avatar.
+		a.messagepane.HandleAvatarReady(msg.UserID)
+		a.threadPanel.HandleAvatarReady(msg.UserID)
+
 	case imgrender.ImageFailedMsg:
 		debuglog.ImgFetch("recv: kind=failed key=%s req_id=%d", msg.Key, msg.ReqID)
 		// Image attachment fetch hit a permanent failure (all auths

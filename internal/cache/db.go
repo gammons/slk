@@ -3,6 +3,7 @@ package cache
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -11,8 +12,38 @@ type DB struct {
 	conn *sql.DB
 }
 
+// dsnPragmas are appended to every DSN passed to New(). They are
+// applied per-connection by modernc.org/sqlite as the pool opens new
+// connections, which is the only reliable way to set per-connection
+// pragmas (a one-off conn.Exec only sets the pragma on the single
+// connection that ran it). See issue #9: without busy_timeout, two
+// goroutines that write at the same time fail the second with
+// SQLITE_BUSY immediately instead of waiting, which the reconnect
+// backfill silently swallowed.
+//
+//   - busy_timeout(5000): writers wait up to 5s for a competing
+//     writer to finish before returning SQLITE_BUSY. Five seconds
+//     comfortably covers the bursty fan-out in runChannelPhase.
+//   - journal_mode(WAL): concurrent readers don't block the writer.
+//     WAL persists in the file header once set, but applying it
+//     per-connection is harmless and keeps it visible in the DSN
+//     alongside busy_timeout.
+//   - foreign_keys(ON): mirrors the previous one-shot PRAGMA exec.
+const dsnPragmas = "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"
+
+// appendPragmas returns dsn with the per-connection pragmas spliced
+// into its query string. Handles plain paths, ":memory:", and
+// already-URI-formatted DSNs (file:..., or path?key=value).
+func appendPragmas(dsn string) string {
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	return dsn + sep + dsnPragmas
+}
+
 func New(dsn string) (*DB, error) {
-	conn, err := sql.Open("sqlite", dsn)
+	conn, err := sql.Open("sqlite", appendPragmas(dsn))
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
@@ -21,18 +52,6 @@ func New(dsn string) (*DB, error) {
 	if _, err := conn.Exec("PRAGMA busy_timeout=5000"); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("setting busy timeout: %w", err)
-	}
-
-	// Enable WAL mode for better concurrent read performance
-	if _, err := conn.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("setting WAL mode: %w", err)
-	}
-
-	// Enable foreign keys
-	if _, err := conn.Exec("PRAGMA foreign_keys=ON"); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("enabling foreign keys: %w", err)
 	}
 
 	db := &DB{conn: conn}
@@ -169,6 +188,10 @@ func (db *DB) migrate() error {
 	}
 	if err := db.addColumnIfMissing("channels", "synced_at",
 		"ALTER TABLE channels ADD COLUMN synced_at INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := db.addColumnIfMissing("channels", "latest_synced_ts",
+		"ALTER TABLE channels ADD COLUMN latest_synced_ts TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 

@@ -95,6 +95,20 @@ type WorkspaceContext struct {
 	ConnMgr     *slackclient.ConnectionManager
 	RTMHandler  *rtmEventHandler
 	UserNames   map[string]string
+	// AvatarURLs maps userID -> avatar image URL. Populated from the
+	// local users cache at connect time (synchronous, before any
+	// goroutines spin up) and refreshed from the background
+	// client.GetUsers fetch and on-demand resolveUser calls. Read by
+	// the AvatarFunc closure on the UI goroutine to trigger a lazy
+	// avatar Preload when an avatar slot first renders empty.
+	//
+	// sync.Map (not a plain map) because writes happen from background
+	// goroutines (GetUsers fetch, resolveUser) while reads happen on
+	// the bubbletea Update goroutine. The lookup-or-trigger pattern
+	// (LoadOrStore-style) doesn't apply here — we only call Load — but
+	// we still need a concurrent map to avoid Go's "concurrent map
+	// writes" detector. Stored values are string (avatar URL).
+	AvatarURLs *sync.Map
 	// UserNamesByHandle maps a user's handle (the Slack `name` field
 	// without an `@`) to a display name. Used to resolve participant
 	// handles in mpdm channel names like `mpdm-grant--myles--ray-1`.
@@ -628,10 +642,9 @@ func run() error {
 	app.SetThemeItems(styles.ThemeNames())
 	app.SetThemeOverrides(cfg.Theme)
 
-	// Wire avatar rendering
-	app.SetAvatarFunc(func(userID string) string {
-		return avatarCache.Get(userID)
-	})
+	// AvatarFunc is wired below, after `router` is declared, because
+	// the lazy-fetch path needs router.Active().AvatarURLs to look up
+	// the avatar URL on cache misses.
 
 	// Wire up frecent emoji functions (not workspace-specific)
 	app.SetFrecentFuncs(
@@ -665,6 +678,43 @@ func run() error {
 	// wireCallbacks-registered callbacks read router.Active() at
 	// invocation time so they always see the current workspace.
 	router := newWorkspaceRouter()
+
+	// Wire avatar rendering with a lazy-fetch path. AvatarFunc is
+	// called by the messages/thread panes on the bubbletea Update
+	// goroutine for every message authored row. The fast path is a
+	// straight map lookup; on miss, we trigger a background Preload
+	// keyed by the workspace's AvatarURLs (populated at connect time
+	// from the local user cache and refreshed by the GetUsers fetch).
+	// The avatar.Cache's inflight dedup ensures only one Preload runs
+	// per userID regardless of how many redraws hit the miss path
+	// before completion. On completion, Cache.SetOnReady (wired below
+	// once `p` exists) sends an AvatarReadyMsg that invalidates the
+	// pane caches so the next View() picks up the rendered avatar.
+	//
+	// This replaces the prior eager bulk-Preload over every cached
+	// user in the workspace, which on large workspaces (tens of
+	// thousands of users) wrote ~100MB of kitty graphics APC escape
+	// data to stdout at startup and produced a multi-minute hang on
+	// terminals that decode kitty graphics (kitty, ghostty).
+	app.SetAvatarFunc(func(userID string) string {
+		if rendered := avatarCache.Get(userID); rendered != "" {
+			return rendered
+		}
+		// Cache miss: trigger a lazy Preload using the URL the
+		// workspace recorded at connect time (or that GetUsers
+		// refreshed). No router-active = pre-workspace-ready render;
+		// AvatarReadyMsg will invalidate once the avatar lands.
+		wctx := router.Active()
+		if wctx == nil || wctx.AvatarURLs == nil {
+			return ""
+		}
+		if v, ok := wctx.AvatarURLs.Load(userID); ok {
+			if url, ok := v.(string); ok && url != "" {
+				avatarCache.Preload(userID, url)
+			}
+		}
+		return ""
+	})
 
 	// Wire theme switcher: dispatch to the appropriate saver based on scope.
 	app.SetThemeSaver(func(name string, scope themeswitcher.ThemeScope) {
@@ -1205,6 +1255,16 @@ func run() error {
 	// be dropped on the floor.
 	app.SetImageContext(buildImgCtx(p.Send))
 
+	// Wire avatar-ready callback so the lazy AvatarFunc path's
+	// background fetches invalidate the messages/thread caches and
+	// re-render with the now-cached avatar. The callback fires from
+	// the avatar.Cache worker goroutine; p.Send is safe to call
+	// concurrently. Workspace-coarse: a single AvatarReadyMsg per
+	// user (the inflight dedup in avatar.Cache ensures this).
+	avatarCache.SetOnReady(func(userID string) {
+		p.Send(messages.AvatarReadyMsg{UserID: userID})
+	})
+
 	// Launch workspace connections in background goroutines
 	// Results are sent to the TUI via p.Send()
 	for _, ot := range orderedTokens {
@@ -1350,6 +1410,7 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		TeamName:             token.TeamName,
 		UserID:               client.UserID(),
 		UserNames:            make(map[string]string),
+		AvatarURLs:           &sync.Map{},
 		UserNamesByHandle:    make(map[string]string),
 		BotUserIDs:           make(map[string]bool),
 		LastReadMap:          make(map[string]string),
@@ -1374,12 +1435,23 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		if u.IsBot {
 			wctx.BotUserIDs[u.ID] = true
 		}
-		// Preload the avatar from the cached URL so the first render
-		// doesn't show empty avatar slots while the background
-		// client.GetUsers fetch races. Disk-cache hit avoids the network
-		// call in the common case. No-op when AvatarURL is empty (e.g.
-		// pre-AvatarURL-migration rows).
-		avatarCache.Preload(u.ID, u.AvatarURL)
+		// Record the avatar URL for lazy fetch on first render.
+		//
+		// We intentionally do NOT bulk-Preload every cached user here.
+		// A typical Slack workspace has tens of thousands of cached
+		// users, virtually none of whom are visible on first paint. The
+		// old eager-Preload spawned one goroutine per cached user, and
+		// for each one rendered into a kitty graphics APC upload that
+		// was synchronously written to os.Stdout. On kitty the terminal
+		// applies flow control while decoding the upload PNGs, which
+		// blocked the bubbletea View() goroutine's stdout writes and
+		// presented as a multi-minute startup hang with idle CPU. The
+		// lazy AvatarFunc path (see SetAvatarFunc) triggers a single
+		// Preload per userID on first render demand, deduped by
+		// avatar.Cache's inflight set.
+		if u.AvatarURL != "" {
+			wctx.AvatarURLs.Store(u.ID, u.AvatarURL)
+		}
 	}
 
 	// Construct the per-workspace async user resolver. It writes
@@ -1484,7 +1556,14 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 				Presence:    "away",
 				IsBot:       isBot,
 			})
-			avatarCache.Preload(u.ID, u.Profile.Image32)
+			// Record the avatar URL for lazy fetch (mirrors the cached-
+			// user seed above). The eager Preload was the second wave
+			// of the startup avatar burst — equally large on big
+			// workspaces — and is replaced by on-demand fetches driven
+			// by AvatarFunc.
+			if u.Profile.Image32 != "" {
+				wctx.AvatarURLs.Store(u.ID, u.Profile.Image32)
+			}
 		}
 	}()
 
@@ -2490,6 +2569,16 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 		})
 		if err := h.db.SetChannelSyncedAt(channelID, time.Now().Unix()); err != nil {
 			debuglog.Cache("OnMessage: SetChannelSyncedAt %s: %v", channelID, err)
+		}
+		// Advance the per-channel ts watermark used by reconnect
+		// backfill. Slack delivers WS messages in order, so receipt
+		// of a message with ts=X implies we have no missing messages
+		// with ts <= X on this channel — that is exactly the
+		// invariant latest_synced_ts encodes. AdvanceChannelLatestSyncedTS
+		// is no-regress, so out-of-order replay (e.g., a delayed
+		// duplicate after reconnect) won't move the cursor backward.
+		if _, err := h.db.AdvanceChannelLatestSyncedTS(channelID, ts); err != nil {
+			debuglog.Cache("OnMessage: AdvanceChannelLatestSyncedTS %s ts=%s: %v", channelID, ts, err)
 		}
 	}
 

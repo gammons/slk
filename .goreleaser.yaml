@@ -125,23 +125,41 @@ release:
 
     Verify downloads with `checksums.txt`.
 
-# Homebrew tap -- enable after creating the `gammons/homebrew-tap` repo
-# and adding a HOMEBREW_TAP_GITHUB_TOKEN secret (PAT with `repo` scope).
+# Homebrew tap.
 #
-# brews:
-#   - name: slk
-#     repository:
-#       owner: gammons
-#       name: homebrew-tap
-#       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-#     directory: Formula
-#     homepage: https://github.com/gammons/slk
-#     description: A blazingly fast Slack TUI
-#     license: MIT
-#     test: |
-#       system "#{bin}/slk", "--version"
-#     install: |
-#       bin.install "slk"
+# Publishes a formula to gammons/homebrew-tap on every non-prerelease
+# tag. Users install via:
+#
+#     brew install gammons/tap/slk
+#
+# The token is a fine-grained PAT scoped to the homebrew-tap repo with
+# contents:write, stored as HOMEBREW_TAP_GITHUB_TOKEN in this repo's
+# Actions secrets.
+brews:
+  - name: slk
+    repository:
+      owner: gammons
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    commit_author:
+      name: goreleaser
+      email: goreleaser@gammons.dev
+    commit_msg_template: "slk: brew formula update for {{ .ProjectName }} version {{ .Tag }}"
+    homepage: https://github.com/gammons/slk
+    description: A blazingly fast, keyboard-driven Slack TUI
+    license: MIT
+    # Skip the prerelease tags goreleaser auto-flags so the tap only
+    # tracks stable releases.
+    skip_upload: auto
+    install: |
+      bin.install "slk"
+    test: |
+      assert_match "slk", shell_output("#{bin}/slk --version")
+    caveats: |
+      First run: `slk login` to authenticate with your Slack workspace.
+      Config lives in ~/.config/slk/.
 
 # AUR -- enable after creating an SSH key for AUR and adding AUR_KEY secret.
 # Publishes a `slk-bin` package built from prebuilt linux_amd64 archives.

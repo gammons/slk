@@ -24,6 +24,26 @@ const (
 	AvatarRows = 2
 )
 
+// avatarPreloadWorkers caps the number of avatar Preload jobs that
+// can be downloading + rendering concurrently. Bounding this matters
+// because the lazy AvatarFunc path can call Preload for many distinct
+// userIDs in a single frame when a scrollback first paints; without
+// a bound, each unique user spawned a goroutine that could race to
+// write its kitty graphics APC upload to os.Stdout, and a burst of
+// hundreds of those is enough to make a kitty terminal visibly stall
+// while it decodes them. 8 keeps the disk/network subsystems busy
+// without saturating the kitty graphics queue.
+const avatarPreloadWorkers = 8
+
+// avatarPreloadQueueSize caps the worker pool's pending-job queue. In
+// the lazy-load model this is bounded by visible-history size in
+// practice (an extreme channel with thousands of unique authors in a
+// scrollback can still be drained linearly). When the queue is full,
+// Preload drops the job AND removes the userID from inflight so a
+// subsequent retry can re-enqueue. 256 covers ordinary workloads with
+// plenty of headroom.
+const avatarPreloadQueueSize = 256
+
 // Cache wraps an image.Fetcher and memoizes rendered ANSI strings per user.
 //
 // When the active rendering protocol is kitty, the avatar's "render"
@@ -39,6 +59,34 @@ type Cache struct {
 
 	mu      sync.RWMutex
 	renders map[string]string // userID -> rendered ANSI string
+
+	// inflight tracks userIDs whose Preload is currently in-flight (or
+	// already rendered). Acts as a dedup gate so a hot render path
+	// calling Preload on every redraw doesn't stampede the fetcher:
+	// the first call enters the map and starts work; subsequent calls
+	// short-circuit. Entries are NOT removed on completion — once a
+	// user has been rendered (or attempted-and-failed) we don't need
+	// to retry on every subsequent miss. Callers that need to force a
+	// refetch (theme change, avatar URL change) should construct a new
+	// Cache.
+	inflight sync.Map // userID -> struct{}
+
+	// onReady is invoked from the worker goroutine after a render is
+	// stored in c.renders. Hosts use it to dispatch a bubbletea
+	// invalidation message (AvatarReadyMsg). May be nil; nil-safe.
+	onReady func(userID string)
+
+	// preloadCh feeds the bounded worker pool. Preload enqueues jobs
+	// here; workers drain. Closed jobs are not supported (Cache lives
+	// for the program's lifetime). nil disables async pool dispatch
+	// (PreloadSync still works directly), which the kitty/parity tests
+	// rely on.
+	preloadCh chan preloadJob
+}
+
+type preloadJob struct {
+	userID    string
+	avatarURL string
 }
 
 // NewCache creates an avatar cache backed by the shared image.Fetcher.
@@ -46,24 +94,79 @@ type Cache struct {
 // renders avatars via half-block regardless of any kitty support
 // elsewhere in the app.
 func NewCache(fetcher *imgpkg.Fetcher, kitty *imgpkg.KittyRenderer, useKitty bool) *Cache {
-	return &Cache{
-		fetcher:  fetcher,
-		kitty:    kitty,
-		useKitty: useKitty && kitty != nil,
-		renders:  make(map[string]string),
+	return newCacheForTest(fetcher, kitty, useKitty, avatarPreloadWorkers, avatarPreloadQueueSize)
+}
+
+// newCacheForTest is the underlying constructor; production code uses
+// NewCache, tests use this to dial worker count and queue size to
+// produce deterministic backpressure behavior.
+func newCacheForTest(fetcher *imgpkg.Fetcher, kitty *imgpkg.KittyRenderer, useKitty bool, workers, queueSize int) *Cache {
+	c := &Cache{
+		fetcher:   fetcher,
+		kitty:     kitty,
+		useKitty:  useKitty && kitty != nil,
+		renders:   make(map[string]string),
+		preloadCh: make(chan preloadJob, queueSize),
+	}
+	for i := 0; i < workers; i++ {
+		go c.preloadWorker()
+	}
+	return c
+}
+
+func (c *Cache) preloadWorker() {
+	for job := range c.preloadCh {
+		c.preloadInner(job.userID, job.avatarURL)
 	}
 }
 
-// Preload downloads and renders an avatar in the background.
+// SetOnReady registers a callback invoked once per userID after a
+// successful Preload completes. Not called for fetch failures. Safe to
+// call once at startup before any Preload; concurrent reassignment is
+// not supported.
+func (c *Cache) SetOnReady(fn func(userID string)) {
+	c.onReady = fn
+}
+
+// Preload enqueues a background download+render for an avatar. Bounded
+// by the worker pool (see avatarPreloadWorkers). Idempotent: repeated
+// calls for the same userID short-circuit via the inflight set. If the
+// worker queue is full, the job is dropped AND the inflight slot is
+// released so a later retry can re-enqueue (otherwise a dropped userID
+// would be stuck "in flight" with no work pending and its avatar would
+// never appear). avatarURL of subsequent calls for the same userID is
+// ignored — the first call wins.
 func (c *Cache) Preload(userID, avatarURL string) {
 	if avatarURL == "" {
 		return
 	}
-	go c.PreloadSync(userID, avatarURL)
+	if _, loaded := c.inflight.LoadOrStore(userID, struct{}{}); loaded {
+		return
+	}
+	if c.preloadCh == nil {
+		// No pool wired (e.g. zero-value Cache in a test). Fall back
+		// to a one-shot goroutine so callers still see eventual work.
+		go c.preloadInner(userID, avatarURL)
+		return
+	}
+	select {
+	case c.preloadCh <- preloadJob{userID: userID, avatarURL: avatarURL}:
+	default:
+		// Queue full. Release the inflight slot so the next caller can
+		// retry; we'd rather re-attempt later than wedge this user.
+		c.inflight.Delete(userID)
+	}
 }
 
-// PreloadSync downloads and renders synchronously.
+// PreloadSync downloads and renders synchronously. Unlike Preload, this
+// does NOT participate in the inflight dedup set — it's the worker
+// entry point and tests' deterministic path. Callers that want dedup
+// should use Preload.
 func (c *Cache) PreloadSync(userID, avatarURL string) {
+	c.preloadInner(userID, avatarURL)
+}
+
+func (c *Cache) preloadInner(userID, avatarURL string) {
 	if avatarURL == "" {
 		return
 	}
@@ -92,6 +195,9 @@ func (c *Cache) PreloadSync(userID, avatarURL string) {
 	c.mu.Lock()
 	c.renders[userID] = rendered
 	c.mu.Unlock()
+	if c.onReady != nil {
+		c.onReady(userID)
+	}
 }
 
 // Get returns the rendered avatar string, or empty if not cached.

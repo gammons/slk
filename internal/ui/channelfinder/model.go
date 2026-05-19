@@ -1,6 +1,7 @@
 package channelfinder
 
 import (
+	"sort"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -186,12 +187,20 @@ func (m *Model) HandleKey(keyStr string) *ChannelResult {
 
 // filter rebuilds the filtered list based on the current query.
 //
-// Matching is tiered, best-first:
+// Ranking precedence (most significant first):
+//  1. Joined (members of the channel/DM come before non-members)
+//  2. Match tier: prefix > substring > subsequence (only when querying)
+//  3. LastVisited DESC (recency of user's last visit)
+//  4. Subsequence score DESC (only relevant in the subsequence tier)
+//  5. typeRank ASC (group_dm demoted; 1:1 DMs and channels equal)
+//  6. Name ASC (case-insensitive)
+//
+// Matching tiers:
 //  1. Prefix matches  (e.g. "eng" matches "engineering")
 //  2. Substring matches (e.g. "tomo" matches "ext-automote")
 //  3. Subsequence matches (e.g. "csp" matches "cs-product-triage" because
-//     c, s, p appear in order). Subsequence matches are further sorted so
-//     that tighter matches with more word-boundary hits rank higher.
+//     c, s, p appear in order). Tighter matches with more word-boundary
+//     hits score higher.
 func (m *Model) filter() {
 	m.filtered = nil
 	q := strings.ToLower(m.query)
@@ -201,106 +210,74 @@ func (m *Model) filter() {
 		for i := range m.items {
 			idxs[i] = i
 		}
-		// Insertion sort by (LastVisited DESC, typeRank ASC, name ASC).
-		// Insertion sort is stable and the n is small (channel lists).
-		for i := 1; i < len(idxs); i++ {
-			for j := i; j > 0 && m.lessByRecencyTypeRankName(idxs[j], idxs[j-1]); j-- {
-				idxs[j-1], idxs[j] = idxs[j], idxs[j-1]
-			}
-		}
+		sort.SliceStable(idxs, func(i, j int) bool {
+			return m.lessNoQuery(idxs[i], idxs[j])
+		})
 		m.filtered = idxs
 		return
 	}
 
-	type scored struct {
+	type match struct {
 		idx   int
-		score int // higher is better
+		tier  int // 0 prefix, 1 substring, 2 subsequence
+		score int // subsequence score; 0 for prefix/substring
 	}
 
-	var prefixMatches, substringMatches []int
-	var subsequenceMatches []scored
+	var matches []match
 	for i, item := range m.items {
 		name := strings.ToLower(item.Name)
 		switch {
 		case strings.HasPrefix(name, q):
-			prefixMatches = append(prefixMatches, i)
+			matches = append(matches, match{idx: i, tier: 0})
 		case strings.Contains(name, q):
-			substringMatches = append(substringMatches, i)
+			matches = append(matches, match{idx: i, tier: 1})
 		default:
 			if score, ok := subsequenceScore(name, q); ok {
-				subsequenceMatches = append(subsequenceMatches, scored{i, score})
+				matches = append(matches, match{idx: i, tier: 2, score: score})
 			}
 		}
 	}
 
-	// Within each tier, partition by type rank: individuals (1:1 DMs)
-	// always come first, group DMs always come last, and channels sit
-	// in between. Searching for a person's name commonly matches both
-	// their DM and any group DM containing them; without this tiebreak
-	// the group DMs win solely because of their position in m.items.
-	m.sortByTypeRankInPlace(prefixMatches)
-	m.sortByTypeRankInPlace(substringMatches)
-
-	// Stable sort subsequence matches by
-	// (LastVisited DESC, typeRank ASC, score DESC, Name ASC) so the
-	// most-recent match wins within a tier, with subsequence-score
-	// breaking deeper ties.
-	for i := 1; i < len(subsequenceMatches); i++ {
-		for j := i; j > 0; j-- {
-			ai, bi := subsequenceMatches[j-1].idx, subsequenceMatches[j].idx
-			a, b := m.items[ai], m.items[bi]
-			if a.LastVisited != b.LastVisited {
-				if a.LastVisited > b.LastVisited {
-					break
-				}
-			} else {
-				ar, br := m.typeRank(ai), m.typeRank(bi)
-				if ar != br {
-					if ar < br {
-						break
-					}
-				} else if subsequenceMatches[j-1].score != subsequenceMatches[j].score {
-					if subsequenceMatches[j-1].score > subsequenceMatches[j].score {
-						break
-					}
-				} else if strings.ToLower(a.Name) <= strings.ToLower(b.Name) {
-					break
-				}
-			}
-			subsequenceMatches[j-1], subsequenceMatches[j] = subsequenceMatches[j], subsequenceMatches[j-1]
+	sort.SliceStable(matches, func(i, j int) bool {
+		ai, bi := matches[i].idx, matches[j].idx
+		a, b := m.items[ai], m.items[bi]
+		// 1. Joined first.
+		if a.Joined != b.Joined {
+			return a.Joined
 		}
-	}
+		// 2. Match tier.
+		if matches[i].tier != matches[j].tier {
+			return matches[i].tier < matches[j].tier
+		}
+		// 3. Recency.
+		if a.LastVisited != b.LastVisited {
+			return a.LastVisited > b.LastVisited
+		}
+		// 4. Subsequence score (only meaningful inside tier 2; ties at 0 elsewhere).
+		if matches[i].score != matches[j].score {
+			return matches[i].score > matches[j].score
+		}
+		// 5. typeRank (group_dm demoted).
+		if ar, br := m.typeRank(ai), m.typeRank(bi); ar != br {
+			return ar < br
+		}
+		// 6. Name.
+		return strings.ToLower(a.Name) < strings.ToLower(b.Name)
+	})
 
-	m.filtered = append(m.filtered, prefixMatches...)
-	m.filtered = append(m.filtered, substringMatches...)
-	for _, s := range subsequenceMatches {
-		m.filtered = append(m.filtered, s.idx)
+	m.filtered = make([]int, len(matches))
+	for i, mm := range matches {
+		m.filtered[i] = mm.idx
 	}
 }
 
 // typeRank returns a sort key for an item: lower comes first. 1:1 DMs
-// rank ahead of channels; group DMs rank last.
+// and channels are considered equal weight; only group DMs are demoted.
 func (m *Model) typeRank(idx int) int {
-	switch m.items[idx].Type {
-	case "dm":
-		return 0
-	case "group_dm":
-		return 2
-	default:
+	if m.items[idx].Type == "group_dm" {
 		return 1
 	}
-}
-
-// sortByTypeRankInPlace stably reorders idxs by
-// (LastVisited DESC, typeRank ASC, Name ASC). Used within a single
-// match tier (prefix or substring), where the tier itself is the
-// outer sort key.
-func (m *Model) sortByTypeRankInPlace(idxs []int) {
-	for i := 1; i < len(idxs); i++ {
-		for j := i; j > 0 && m.lessByRecencyTypeRankName(idxs[j], idxs[j-1]); j-- {
-			idxs[j-1], idxs[j] = idxs[j], idxs[j-1]
-		}
-	}
+	return 0
 }
 
 // subsequenceScore returns a score and true if every rune of q appears in
@@ -358,16 +335,18 @@ func isSeparator(r rune) bool {
 	return false
 }
 
-// lessByRecencyTypeRankName reports whether item a should sort before item b
-// using the sort key: LastVisited DESC, typeRank ASC, Name ASC
-// (case-insensitive).
-func (m *Model) lessByRecencyTypeRankName(ai, bi int) bool {
+// lessNoQuery reports whether item a should sort before item b when no
+// search query is active. Order: Joined DESC, LastVisited DESC,
+// typeRank ASC, Name ASC (case-insensitive).
+func (m *Model) lessNoQuery(ai, bi int) bool {
 	a, b := m.items[ai], m.items[bi]
+	if a.Joined != b.Joined {
+		return a.Joined
+	}
 	if a.LastVisited != b.LastVisited {
 		return a.LastVisited > b.LastVisited
 	}
-	ar, br := m.typeRank(ai), m.typeRank(bi)
-	if ar != br {
+	if ar, br := m.typeRank(ai), m.typeRank(bi); ar != br {
 		return ar < br
 	}
 	return strings.ToLower(a.Name) < strings.ToLower(b.Name)

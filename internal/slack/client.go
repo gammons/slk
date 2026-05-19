@@ -464,11 +464,30 @@ func (c *Client) GetOlderHistory(ctx context.Context, channelID string, limit in
 // time). Callers that need oldest-first order should reverse the
 // slice.
 //
+// HistorySinceResult bundles the messages fetched by GetHistorySince
+// with a "did we get everything?" flag. Capped == true means the
+// caller hit maxTotal before the API ran out of pages, so there are
+// still older-than-cap messages between (oldest, latest-fetched-ts)
+// the caller didn't get. Callers that advance a sync watermark MUST
+// gate the advance on Capped == false.
+type HistorySinceResult struct {
+	Messages []slack.Message
+	Capped   bool
+}
+
+// GetHistorySince fetches all messages newer than `oldest` for the
+// given channel, paginating through next_cursor up to a hard ceiling
+// of maxTotal messages. Slack returns messages newest-first per page;
+// pagination via next_cursor walks toward older pages within the
+// (oldest, latest] window. When maxTotal is hit, the result's Capped
+// field is set to true so callers can decide whether to advance a
+// watermark (don't) or record a gap.
+//
 // If oldest == "", behaves like a single GetHistory call (no
 // pagination) and returns at most maxTotal messages from the latest
-// page. This matches the spec's "synced_at == 0 → fetch latest page
-// only" rule for first-sync channels.
-func (c *Client) GetHistorySince(ctx context.Context, channelID, oldest string, maxTotal int) ([]slack.Message, error) {
+// page, with Capped reflecting whether HasMore was true. This matches
+// the "first-sync channel: just give me the latest page" pattern.
+func (c *Client) GetHistorySince(ctx context.Context, channelID, oldest string, maxTotal int) (HistorySinceResult, error) {
 	if maxTotal <= 0 {
 		maxTotal = 500
 	}
@@ -481,12 +500,15 @@ func (c *Client) GetHistorySince(ctx context.Context, channelID, oldest string, 
 		}
 		resp, err := c.api.GetConversationHistory(params)
 		if err != nil {
-			return nil, fmt.Errorf("get history (no oldest): %w", err)
+			return HistorySinceResult{}, fmt.Errorf("get history (no oldest): %w", err)
 		}
-		if len(resp.Messages) > maxTotal {
-			return resp.Messages[:maxTotal], nil
+		out := resp.Messages
+		capped := resp.HasMore
+		if len(out) > maxTotal {
+			out = out[:maxTotal]
+			capped = true
 		}
-		return resp.Messages, nil
+		return HistorySinceResult{Messages: out, Capped: capped}, nil
 	}
 
 	var all []slack.Message
@@ -508,20 +530,20 @@ func (c *Client) GetHistorySince(ctx context.Context, channelID, oldest string, 
 				}
 				select {
 				case <-ctx.Done():
-					return all, ctx.Err()
+					return HistorySinceResult{Messages: all, Capped: true}, ctx.Err()
 				case <-time.After(wait):
 				}
 				continue
 			}
-			return all, fmt.Errorf("get history since %s: %w", oldest, err)
+			return HistorySinceResult{Messages: all, Capped: true}, fmt.Errorf("get history since %s: %w", oldest, err)
 		}
 
 		all = append(all, resp.Messages...)
 		if len(all) >= maxTotal {
-			return all[:maxTotal], nil
+			return HistorySinceResult{Messages: all[:maxTotal], Capped: true}, nil
 		}
 		if !resp.HasMore || resp.ResponseMetaData.NextCursor == "" {
-			return all, nil
+			return HistorySinceResult{Messages: all, Capped: false}, nil
 		}
 		cursor = resp.ResponseMetaData.NextCursor
 	}

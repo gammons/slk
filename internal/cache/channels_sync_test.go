@@ -91,3 +91,79 @@ func TestChannelsWithMessages_WorkspaceIsolation(t *testing.T) {
 		t.Errorf("expected only C1, got %+v", got)
 	}
 }
+
+func TestBackfillCandidates_UnionOfCachedAndUnread(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	defer db.Close()
+
+	// C1: cached, no unread. Will appear via ChannelsWithMessages.
+	if err := db.UpsertChannel(Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"}); err != nil {
+		t.Fatalf("upsert C1: %v", err)
+	}
+	if err := db.SetChannelSyncedAt("C1", 1700000050); err != nil {
+		t.Fatalf("synced_at C1: %v", err)
+	}
+	if err := db.UpsertMessage(Message{
+		TS: "1700000010.000000", ChannelID: "C1", WorkspaceID: "T1",
+		UserID: "U1", Text: "x", CreatedAt: 1700000010,
+	}); err != nil {
+		t.Fatalf("upsert message C1: %v", err)
+	}
+
+	// D1: unread DM, never opened in slk. Will appear via unread set.
+	// We do NOT pre-insert the channel row to simulate the
+	// "completely new" case.
+
+	// C2: cached AND unread (no double-count expected).
+	if err := db.UpsertChannel(Channel{ID: "C2", WorkspaceID: "T1", Name: "random", Type: "channel"}); err != nil {
+		t.Fatalf("upsert C2: %v", err)
+	}
+	if err := db.UpsertMessage(Message{
+		TS: "1700000020.000000", ChannelID: "C2", WorkspaceID: "T1",
+		UserID: "U1", Text: "x", CreatedAt: 1700000020,
+	}); err != nil {
+		t.Fatalf("upsert message C2: %v", err)
+	}
+
+	got, err := db.BackfillCandidates("T1", []string{"D1", "C2"})
+	if err != nil {
+		t.Fatalf("BackfillCandidates: %v", err)
+	}
+
+	want := map[string]bool{"C1": true, "C2": true, "D1": true}
+	if len(got) != 3 {
+		t.Fatalf("len got = %d, want 3 (rows=%+v)", len(got), got)
+	}
+	for _, r := range got {
+		if !want[r.ChannelID] {
+			t.Errorf("unexpected channel %q in candidates", r.ChannelID)
+		}
+		delete(want, r.ChannelID)
+	}
+	for missing := range want {
+		t.Errorf("expected channel %q in candidates, missing", missing)
+	}
+}
+
+func TestBackfillCandidates_EmptyUnreadList(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	defer db.Close()
+
+	if err := db.UpsertChannel(Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if err := db.UpsertMessage(Message{
+		TS: "1700000000.000000", ChannelID: "C1", WorkspaceID: "T1",
+		UserID: "U1", Text: "x", CreatedAt: 1700000000,
+	}); err != nil {
+		t.Fatalf("upsert msg: %v", err)
+	}
+
+	got, err := db.BackfillCandidates("T1", nil)
+	if err != nil {
+		t.Fatalf("BackfillCandidates: %v", err)
+	}
+	if len(got) != 1 || got[0].ChannelID != "C1" {
+		t.Errorf("unexpected: %+v", got)
+	}
+}

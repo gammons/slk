@@ -542,6 +542,91 @@ func TestFilterWithQueryRecencyBreaksTies(t *testing.T) {
 	}
 }
 
+// TestFilterJoinedBeatsNonJoinedAcrossTiers verifies that a channel the
+// user is a member of always sorts above a channel they are not in,
+// regardless of match tier. This is the core guarantee: typing a search
+// query should not surface unjoined channels above ones you actually
+// participate in.
+func TestFilterJoinedBeatsNonJoinedAcrossTiers(t *testing.T) {
+	m := New()
+	m.SetItems([]Item{
+		// Non-joined prefix match.
+		{ID: "C1", Name: "eng-public", Type: "channel", Joined: false, LastVisited: 0},
+		// Joined substring match.
+		{ID: "C2", Name: "team-eng", Type: "channel", Joined: true, LastVisited: 0},
+		// Joined subsequence-only match.
+		{ID: "C3", Name: "e-news-group", Type: "channel", Joined: true, LastVisited: 0},
+	})
+	m.Open()
+	for _, r := range "eng" {
+		m.HandleKey(string(r))
+	}
+
+	if len(m.filtered) < 3 {
+		t.Fatalf("want 3 matches, got %d", len(m.filtered))
+	}
+	// Joined items must come before non-joined regardless of tier.
+	gotIDs := []string{}
+	for _, idx := range m.filtered {
+		gotIDs = append(gotIDs, m.items[idx].ID)
+	}
+	// Joined block (C2, C3 in tier order) then non-joined (C1).
+	if gotIDs[2] != "C1" {
+		t.Errorf("expected non-joined C1 last, got order %v", gotIDs)
+	}
+	if !(gotIDs[0] == "C2" && gotIDs[1] == "C3") {
+		t.Errorf("expected joined items (C2 substring, C3 subseq) before non-joined, got %v", gotIDs)
+	}
+}
+
+// TestFilterJoinedBeatsNonJoinedEmptyQuery verifies the same Joined-first
+// invariant when no search query is entered.
+func TestFilterJoinedBeatsNonJoinedEmptyQuery(t *testing.T) {
+	m := New()
+	m.SetItems([]Item{
+		// Non-joined, very recent.
+		{ID: "C1", Name: "aaa-browseable", Type: "channel", Joined: false, LastVisited: 999},
+		// Joined, never visited.
+		{ID: "C2", Name: "zzz-mine", Type: "channel", Joined: true, LastVisited: 0},
+	})
+	m.Open()
+
+	if len(m.filtered) != 2 {
+		t.Fatalf("want 2 filtered, got %d", len(m.filtered))
+	}
+	if m.items[m.filtered[0]].ID != "C2" {
+		t.Errorf("expected joined C2 first even though non-joined C1 has higher LastVisited, got %q first",
+			m.items[m.filtered[0]].Name)
+	}
+}
+
+// TestFilterDMAndChannelEqualWeight verifies that 1:1 DMs and channels
+// are no longer ordered by type alone — recency wins between them. Only
+// group_dm remains demoted.
+func TestFilterDMAndChannelEqualWeight(t *testing.T) {
+	m := New()
+	m.SetItems([]Item{
+		// Channel, more recently visited.
+		{ID: "C1", Name: "engineering", Type: "channel", Joined: true, LastVisited: 500},
+		// DM, less recently visited.
+		{ID: "D1", Name: "engineer-dan", Type: "dm", Joined: true, LastVisited: 100},
+	})
+	m.Open()
+	for _, r := range "eng" {
+		m.HandleKey(string(r))
+	}
+
+	if len(m.filtered) < 2 {
+		t.Fatalf("want 2 matches, got %d", len(m.filtered))
+	}
+	// Both are prefix matches, both joined. Recency must decide,
+	// not the DM-over-channel type bias.
+	first := m.items[m.filtered[0]].ID
+	if first != "C1" {
+		t.Errorf("expected more-recent channel C1 before older DM D1, got %q first", first)
+	}
+}
+
 func TestFilterWithQueryMatchTierStillWins(t *testing.T) {
 	m := New()
 	// "engagement" is a prefix match (older); "ext-engineering" is a

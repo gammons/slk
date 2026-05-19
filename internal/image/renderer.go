@@ -8,6 +8,7 @@ import (
 	"image"
 	"io"
 	"os"
+	"sync"
 )
 
 // Protocol enumerates the rendering protocols this package can emit.
@@ -102,13 +103,44 @@ func KittyRendererInstance() *KittyRenderer {
 }
 
 // KittyOutput is the writer that receives kitty graphics-protocol APC
-// upload escapes. In production it's os.Stdout (bubbletea's terminal);
-// tests override it to capture and assert. We use a side-channel writer
-// rather than embedding the bytes in View()'s return string because
-// lipgloss / bubbletea v2 mangle APC sequences embedded in line content.
+// upload escapes. In production it's os.Stdout (bubbletea's terminal),
+// wrapped in a mutex-serialized writer so concurrent goroutines (the
+// bubbletea View() loop and avatar.Cache worker-pool goroutines) can
+// safely write to it without interleaving partial APC sequences. A
+// single kitty image upload runs into hundreds of KB of escape data
+// (chunked at 4096 base64 bytes per APC), and a byte-level interleave
+// from a competing writer corrupts the protocol stream and leaves the
+// terminal in an unknown state.
 //
-// Set once at startup if a non-default writer is needed.
-var KittyOutput io.Writer = os.Stdout
+// Tests override it to capture and assert; call SerializeOutput on
+// your test buffer if you need the same atomicity guarantee.
+//
+// We use a side-channel writer rather than embedding the bytes in
+// View()'s return string because lipgloss / bubbletea v2 mangle APC
+// sequences embedded in line content.
+var KittyOutput io.Writer = SerializeOutput(os.Stdout)
+
+// serializedWriter wraps an io.Writer with a mutex so concurrent
+// callers can't interleave their byte streams. See KittyOutput.
+type serializedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+// SerializeOutput wraps w in a mutex-serialized writer. Concurrent
+// Write calls block on the mutex, so each call's payload lands as a
+// contiguous run with no interleaving from other goroutines. Use this
+// when wrapping a buffer in tests that exercise concurrent kitty
+// emission paths.
+func SerializeOutput(w io.Writer) io.Writer {
+	return &serializedWriter{w: w}
+}
+
+func (s *serializedWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
 
 // SixelSentinel is a private-use codepoint reserved for slk to mark a row
 // in viewEntry.Lines that should trigger a sixel byte stream emission
