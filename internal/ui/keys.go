@@ -19,6 +19,7 @@ type KeyMap struct {
 	Tab                 key.Binding
 	ShiftTab            key.Binding
 	ToggleSidebar       key.Binding
+	ToggleWorkspaces    key.Binding
 	SidebarGrow         key.Binding
 	SidebarShrink       key.Binding
 	ToggleThread        key.Binding
@@ -78,6 +79,7 @@ func DefaultKeyMap() KeyMap {
 		Tab:             key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next panel")),
 		ShiftTab:        key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "prev panel")),
 		ToggleSidebar:   key.NewBinding(key.WithKeys("ctrl+b"), key.WithHelp("ctrl+b", "toggle sidebar")),
+		ToggleWorkspaces: key.NewBinding(key.WithKeys("ctrl+l", "ctrl+\\"), key.WithHelp("ctrl+l", "toggle workspaces")),
 		SidebarGrow:     key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "widen sidebar")),
 		SidebarShrink:   key.NewBinding(key.WithKeys("["), key.WithHelp("[", "narrow sidebar")),
 		ToggleThread:    key.NewBinding(key.WithKeys("ctrl+]"), key.WithHelp("ctrl+]", "toggle thread")),

@@ -75,6 +75,24 @@ func TestAppToggleSidebar(t *testing.T) {
 	}
 }
 
+func TestAppToggleWorkspaces(t *testing.T) {
+	app := NewApp()
+
+	if !app.workspacesVisible {
+		t.Error("expected workspaces visible initially")
+	}
+
+	app.ToggleWorkspaces()
+	if app.workspacesVisible {
+		t.Error("expected workspaces hidden after toggle")
+	}
+
+	app.ToggleWorkspaces()
+	if !app.workspacesVisible {
+		t.Error("expected workspaces visible after second toggle")
+	}
+}
+
 func TestTypingStateAddAndExpire(t *testing.T) {
 	app := NewApp()
 	app.activeChannelID = "C1"

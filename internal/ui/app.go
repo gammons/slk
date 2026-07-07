@@ -106,8 +106,9 @@ type App struct {
 	// State
 	mode           Mode
 	focusedPanel   Panel
-	sidebarVisible bool
-	threadVisible  bool
+	sidebarVisible    bool
+	workspacesVisible bool
+	threadVisible     bool
 	view           View
 	width          int
 	height         int
@@ -459,6 +460,7 @@ func NewApp() *App {
 		wins:                 wins,
 		focusedWin:           rootWin,
 		sidebarVisible:       true,
+		workspacesVisible:    true,
 		view:                 ViewChannels,
 		keys:                 DefaultKeyMap(),
 		selfSend:             newSelfSendDedup(),
@@ -1610,6 +1612,11 @@ func (a *App) ToggleSidebar() {
 	}
 }
 
+func (a *App) ToggleWorkspaces() {
+	a.clearSelections()
+	a.workspacesVisible = !a.workspacesVisible
+}
+
 func (a *App) ToggleThread() {
 	a.clearSelections()
 	if a.threadVisible {
@@ -2519,7 +2526,11 @@ func (a *App) View() tea.View {
 	// for subsequent mouse hit-testing (panelAt) and surfaces a
 	// ThreadAutoHidden flag when the available width can't fit the
 	// thread pane at its minimum.
-	frame := a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(), a.sidebarVisible, a.threadVisible)
+	railWidth := 0
+	if a.workspacesVisible {
+		railWidth = a.workspaceRail.Width()
+	}
+	frame := a.layout.Compute(a.width, a.height, railWidth, a.sidebar.Width(), a.sidebarVisible, a.threadVisible)
 	if frame.ThreadAutoHidden {
 		a.threadVisible = false
 		if a.focusedPanel == PanelThread {
@@ -2537,7 +2548,9 @@ func (a *App) View() tea.View {
 	previewActive := a.preview.Active()
 
 	var panels []string
-	panels = append(panels, a.renderRail(frame.RailWidth, frame.ContentHeight, themeVer))
+	if frame.RailWidth > 0 {
+		panels = append(panels, a.renderRail(frame.RailWidth, frame.ContentHeight, themeVer))
+	}
 	if a.sidebarVisible {
 		panels = append(panels, a.renderSidebar(frame.SidebarWidth, frame.SidebarBorder, frame.ContentHeight, themeVer))
 	}

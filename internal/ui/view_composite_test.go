@@ -45,8 +45,14 @@ func TestJoinPanelsHorizontal_MatchesLipgloss(t *testing.T) {
 // helpers can be checked against lipgloss on real rendered panels.
 func buildViewPanels(a *App) (panels []string, status string, contentHeight, width int) {
 	themeVer := int64(0)
-	frame := a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(), a.sidebarVisible, a.threadVisible)
-	panels = append(panels, a.renderRail(frame.RailWidth, frame.ContentHeight, themeVer))
+	railWidth := 0
+	if a.workspacesVisible {
+		railWidth = a.workspaceRail.Width()
+	}
+	frame := a.layout.Compute(a.width, a.height, railWidth, a.sidebar.Width(), a.sidebarVisible, a.threadVisible)
+	if frame.RailWidth > 0 {
+		panels = append(panels, a.renderRail(frame.RailWidth, frame.ContentHeight, themeVer))
+	}
 	if a.sidebarVisible {
 		panels = append(panels, a.renderSidebar(frame.SidebarWidth, frame.SidebarBorder, frame.ContentHeight, themeVer))
 	}
