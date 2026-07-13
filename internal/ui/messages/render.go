@@ -494,7 +494,12 @@ func isBasicBgParam(s string) bool {
 // \x1b[100m–\x1b[107m) so the user's terminal palette is honored.
 // For ansi.IndexedColor it emits the 256-color form (\x1b[48;5;Nm).
 // Otherwise it falls back to truecolor (\x1b[48;2;R;G;Bm).
+// A nil color (transparent theme value) emits the default-background
+// reset (\x1b[49m) so the terminal's own background shows through.
 func bgANSIFor(c color.Color) string {
+	if c == nil {
+		return "\x1b[49m"
+	}
 	switch v := c.(type) {
 	case ansi.BasicColor:
 		if v < 8 {
@@ -512,8 +517,12 @@ func bgANSIFor(c color.Color) string {
 }
 
 // fgANSIFor returns the ANSI foreground-color escape for c.
-// See bgANSIFor for the type-switch rationale.
+// See bgANSIFor for the type-switch rationale. A nil color emits the
+// default-foreground reset (\x1b[39m).
 func fgANSIFor(c color.Color) string {
+	if c == nil {
+		return "\x1b[39m"
+	}
 	switch v := c.(type) {
 	case ansi.BasicColor:
 		if v < 8 {
