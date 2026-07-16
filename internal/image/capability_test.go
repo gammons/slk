@@ -105,6 +105,11 @@ func TestDetect_Sixel(t *testing.T) {
 	cases := []Env{
 		{Term: "foot"},
 		{Term: "mlterm"},
+		// iTerm2 has no working kitty graphics implementation (the
+		// startup probe would time out and downgrade to halfblock),
+		// but it does support sixel — real pixels instead of the
+		// halfblock mosaic.
+		{TermProgram: "iTerm.app"},
 	}
 	for _, env := range cases {
 		if got := Detect(env, "auto"); got != ProtoSixel {

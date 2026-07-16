@@ -107,5 +107,11 @@ func Detect(env Env, cfg string) Protocol {
 	if env.Term == "foot" || env.Term == "mlterm" {
 		return ProtoSixel
 	}
+	// iTerm2: no working kitty graphics implementation (its partial
+	// support fails the startup probe, landing on halfblock), but
+	// solid sixel support — so auto picks sixel for real pixels.
+	if env.TermProgram == "iTerm.app" {
+		return ProtoSixel
+	}
 	return ProtoHalfBlock
 }
