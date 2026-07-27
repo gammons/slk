@@ -5,31 +5,31 @@
 // Owns the nine Update arms that drive the channel-selection
 // lifecycle and channel-list mutations:
 //
-//   ChannelSelectedMsg            - user picked a channel: reset
-//                                   view state, mark visit,
-//                                   dispatch by cache freshness
-//                                   tier (fresh / verify-in-bg /
-//                                   spinner).
-//   MessagesLoadedMsg             - initial messages fetch landed:
-//                                   replace pane contents (nil =
-//                                   network failure, keep cache).
-//   OlderMessagesLoadedMsg        - history backfill landed:
-//                                   prepend (anchor-validated: dropped
-//                                   if the buffer was replaced
-//                                   mid-flight).
-//   ChannelMarkedRemoteMsg        - WS echo of a remote mark:
-//                                   apply locally.
-//   ChannelMarkedReadMsg          - optimistic mark-read echo:
-//                                   refresh sidebar read state.
-//   ChannelMembershipMsg          - membership fetch landed:
-//                                   push to the cache used by
-//                                   mention picker / DM resolution.
-//   ChannelJoinedMsg              - finder-driven join succeeded:
-//                                   add to sidebar + open it.
-//   ChannelJoinFailedMsg          - finder-driven join failed:
-//                                   log warning (toast TBD).
-//   BrowseableChannelsLoadedMsg   - "all channels" list landed:
-//                                   push to the finder.
+//	ChannelSelectedMsg            - user picked a channel: reset
+//	                                view state, mark visit,
+//	                                dispatch by cache freshness
+//	                                tier (fresh / verify-in-bg /
+//	                                spinner).
+//	MessagesLoadedMsg             - initial messages fetch landed:
+//	                                replace pane contents (nil =
+//	                                network failure, keep cache).
+//	OlderMessagesLoadedMsg        - history backfill landed:
+//	                                prepend (anchor-validated: dropped
+//	                                if the buffer was replaced
+//	                                mid-flight).
+//	ChannelMarkedRemoteMsg        - WS echo of a remote mark:
+//	                                apply locally.
+//	ChannelMarkedReadMsg          - optimistic mark-read echo:
+//	                                refresh sidebar read state.
+//	ChannelMembershipMsg          - membership fetch landed:
+//	                                push to the cache used by
+//	                                mention picker / DM resolution.
+//	ChannelJoinedMsg              - finder-driven join succeeded:
+//	                                add to sidebar + open it.
+//	ChannelJoinFailedMsg          - finder-driven join failed:
+//	                                log warning (toast TBD).
+//	BrowseableChannelsLoadedMsg   - "all channels" list landed:
+//	                                push to the finder.
 //
 // Free reducer (not controller-absorbed): these arms cooperate on
 // the sidebar, messagepane, statusbar, channelFinder, navHistory,
@@ -312,6 +312,7 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 	// Picking a channel always exits the Threads view.
 	a.view = ViewChannels
 	a.sidebar.SetThreadsActive(false)
+	a.sidebar.SetActivityActive(false)
 	a.lastOpenedChannelID = ""
 	a.lastOpenedThreadTS = ""
 	// Close thread panel when switching channels.

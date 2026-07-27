@@ -176,6 +176,10 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 		a.sidebar.SetThreadsActive(false)
 		a.threadsView.SetSummaries(nil)
 		a.sidebar.SetThreadsUnreadCount(0)
+		a.sidebar.SetActivityActive(false)
+		a.activityView.SetItems(nil)
+		a.sidebar.SetActivityUnreadCount(0)
+		a.activityNextCursor = ""
 		a.lastOpenedChannelID = ""
 		a.lastOpenedThreadTS = ""
 		// Apply the resolved theme for the initial active
@@ -231,6 +235,16 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 				return ChannelSelectedMsg{ID: target.ID, Name: target.Name, Type: target.Type}
 			})
 		}
+		// Prime the sidebar Activity badge on connect (the feed is a
+		// network call scoped to the active workspace, so — unlike the
+		// per-workspace threads fetch below — fire it only for the one
+		// workspace that just became active).
+		activity := a.activity
+		team := ids.TeamID(m.TeamID)
+		unreadOnly := a.activityView.UnreadOnly()
+		batch = append(batch, func() tea.Msg {
+			return activity.Fetch(team, activityFeedPageLimit, "", unreadOnly)
+		})
 	}
 	// Initial threads-list fetch fires for every workspace as it
 	// becomes ready; the result is gated by ThreadsListLoadedMsg's
@@ -269,8 +283,12 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	// has no channels at all.
 	a.view = ViewChannels
 	a.sidebar.SetThreadsActive(false)
+	a.sidebar.SetActivityActive(false)
 	a.threadsView.SetSummaries(nil)
 	a.sidebar.SetThreadsUnreadCount(0)
+	a.activityView.SetItems(nil)
+	a.sidebar.SetActivityUnreadCount(0)
+	a.activityNextCursor = ""
 	a.lastOpenedChannelID = ""
 	a.lastOpenedThreadTS = ""
 	a.CloseThread()
@@ -354,5 +372,11 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	threads := a.threads
 	team := ids.TeamID(m.TeamID)
 	batch = append(batch, func() tea.Msg { return threads.ListFetch(team) })
+	// Refresh the Activity badge for the newly-active workspace too.
+	activity := a.activity
+	unreadOnly := a.activityView.UnreadOnly()
+	batch = append(batch, func() tea.Msg {
+		return activity.Fetch(team, activityFeedPageLimit, "", unreadOnly)
+	})
 	return tea.Batch(batch...)
 }

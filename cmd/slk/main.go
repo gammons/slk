@@ -1487,6 +1487,33 @@ func run() error {
 			},
 		}))
 
+		app.SetActivityService(ui.NewActivityService(ui.ActivityServiceFuncs{
+			Fetch: func(teamID ids.TeamID, limit int, cursor string, unreadOnly bool) tea.Msg {
+				teamIDStr := string(teamID)
+				wctx := router.Active()
+				if wctx == nil {
+					return nil
+				}
+				fetchCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				result, err := wctx.Client.GetActivityFeed(fetchCtx, limit, cursor, unreadOnly)
+				if err != nil {
+					log.Printf("Warning: GetActivityFeed(%s): %v", teamIDStr, err)
+					// Return nil (no message) on failure so the existing
+					// feed + badge are kept rather than blanked. Mirrors
+					// the "nil = keep cache" pattern used for message
+					// loads; a transient network error must not wipe the
+					// Activity view.
+					return nil
+				}
+				return ui.ActivityListLoadedMsg{
+					TeamID:     teamIDStr,
+					Items:      result.Items,
+					NextCursor: result.NextCursor,
+				}
+			},
+		}))
+
 		app.SetReactionService(ui.NewReactionService(
 			func(channelID ids.ChannelID, messageTS ids.MessageTS, emojiName string) error {
 				wctx := router.Active()

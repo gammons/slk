@@ -5,18 +5,18 @@
 // Owns the two remaining mouse Update arms that act as multi-panel
 // routers:
 //
-//   tea.MouseWheelMsg  - viewport scroll for the panel under the
-//                        cursor (sidebar, messages pane / threads
-//                        view, thread panel). Decoupled from j/k
-//                        selection. Triggers maybeFetchOlderHistory
-//                        on the messages pane when the viewport
-//                        hits the top.
-//   tea.MouseClickMsg  - panel-router: workspace rail (switch
-//                        workspace), sidebar (channel select /
-//                        threads view), messages pane (threads
-//                        click / reaction hit-test / image hit-test
-//                        / drag begin), thread panel (reaction
-//                        hit-test / drag begin).
+//	tea.MouseWheelMsg  - viewport scroll for the panel under the
+//	                     cursor (sidebar, messages pane / threads
+//	                     view, thread panel). Decoupled from j/k
+//	                     selection. Triggers maybeFetchOlderHistory
+//	                     on the messages pane when the viewport
+//	                     hits the top.
+//	tea.MouseClickMsg  - panel-router: workspace rail (switch
+//	                     workspace), sidebar (channel select /
+//	                     threads view), messages pane (threads
+//	                     click / reaction hit-test / image hit-test
+//	                     / drag begin), thread panel (reaction
+//	                     hit-test / drag begin).
 //
 // Free reducer (not controller-absorbed) because both arms route
 // across multiple sub-models: the sidebar, messagepane, threadPanel,
@@ -113,6 +113,14 @@ func reduceMouseWheel(a *App, m tea.MouseWheelMsg) tea.Cmd {
 			}
 			// No openSelectedThreadCmd here: pure viewport scroll
 			// does not change the highlighted thread card.
+			return nil
+		}
+		if a.view == ViewActivity {
+			if up {
+				a.activityView.ScrollUp(wheelLinesPerNotch)
+			} else {
+				a.activityView.ScrollDown(wheelLinesPerNotch)
+			}
 			return nil
 		}
 		if up {
@@ -223,6 +231,10 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		if a.sidebar.IsThreadsSelected() {
 			return func() tea.Msg { return ThreadsViewActivatedMsg{} }
 		}
+		// Same for the synthetic Activity row.
+		if a.sidebar.IsActivitySelected() {
+			return func() tea.Msg { return ActivityViewActivatedMsg{} }
+		}
 		return nil
 
 	case x < a.layout.MsgEnd():
@@ -249,6 +261,22 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 			panel, _, py, ok := a.panelAt(m.X, m.Y)
 			if ok && panel == PanelMessages && py >= 0 && a.threadsView.ClickAt(py) {
 				return a.openSelectedThreadCmd(false)
+			}
+			return nil
+		}
+		// In the Activity view the messages-pane region renders
+		// activityView; route the click through activityView.ClickAt so
+		// the cursor follows, then open the highlighted item (mirrors
+		// the ViewThreads branch and the j/k/Enter paths).
+		if a.view == ViewActivity {
+			panel, _, py, ok := a.panelAt(m.X, m.Y)
+			if ok && panel == PanelMessages && py >= 0 && a.activityView.ClickAt(py) {
+				if it, ok := a.activityView.SelectedItem(); ok {
+					channelID, ts, threadTS := it.ChannelID, it.TS, it.ThreadTS
+					return func() tea.Msg {
+						return ActivitySelectedMsg{ChannelID: channelID, TS: ts, ThreadTS: threadTS}
+					}
+				}
 			}
 			return nil
 		}

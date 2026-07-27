@@ -233,6 +233,52 @@ func (t threadAdapter) ChannelLastRead(channelID ids.ChannelID) string {
 	return t.fns.ChannelLastRead(channelID)
 }
 
+// ActivityService is the App's interface to Slack's Activity feed
+// (activity.feed): the notified-items list surfaced by the Activity
+// view — @mentions, thread replies, reactions to your messages, and
+// DMs. Implementations are wired by cmd/slk/main.go.
+//
+// Single method for the MVP (a network fetch per page); marking items
+// read is out of scope (opening an item marks the underlying
+// conversation read via existing paths).
+type ActivityService interface {
+	// Fetch loads one page of the Activity feed for teamID. limit is
+	// the max items; cursor is the response_metadata.next_cursor for
+	// pagination (empty for the first page); unreadOnly requests the
+	// server-side unread filter. Returns a tea.Msg (typically
+	// ActivityListLoadedMsg).
+	Fetch(teamID ids.TeamID, limit int, cursor string, unreadOnly bool) tea.Msg
+}
+
+// ActivityServiceFuncs is the closure bundle accepted by
+// NewActivityService. A nil Fetch no-ops (returns a nil tea.Msg).
+type ActivityServiceFuncs struct {
+	Fetch ActivityFetchFunc
+}
+
+// NewActivityService builds an ActivityService from an
+// ActivityServiceFuncs bundle. Used by cmd/slk/main.go (production
+// wiring) and tests (fake closures).
+func NewActivityService(fns ActivityServiceFuncs) ActivityService {
+	return activityAdapter{fns: fns}
+}
+
+// noopActivityService is the default ActivityService wired into App
+// by NewApp so call sites can dispatch without nil-checks even when
+// SetActivityService hasn't been called.
+var noopActivityService ActivityService = activityAdapter{}
+
+type activityAdapter struct {
+	fns ActivityServiceFuncs
+}
+
+func (a activityAdapter) Fetch(teamID ids.TeamID, limit int, cursor string, unreadOnly bool) tea.Msg {
+	if a.fns.Fetch == nil {
+		return nil
+	}
+	return a.fns.Fetch(teamID, limit, cursor, unreadOnly)
+}
+
 // MessageService is the App's interface to Slack's per-message
 // operations: send, edit, delete, mark-unread, and permalink lookup.
 // Implementations are wired by cmd/slk/main.go.

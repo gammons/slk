@@ -116,6 +116,23 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		a.SetMode(ModeWorkspaceSearch)
 		return nil
 
+	case key.Matches(msg, a.keys.ActivityView):
+		// Global toggle for the Activity feed (the desktop client's
+		// Cmd+Shift+A). Pressing it in the Activity view returns to the
+		// channel view you came from; pressing it anywhere else opens
+		// Activity. Mirrors :activity and clicking the sidebar row.
+		if a.view == ViewActivity {
+			a.view = ViewChannels
+			a.sidebar.SetActivityActive(false)
+			if a.activeChannelID != "" {
+				a.sidebar.SelectByID(a.activeChannelID)
+			}
+			a.focusedPanel = PanelMessages
+			return nil
+		}
+		a.sidebar.SelectActivityRow()
+		return func() tea.Msg { return ActivityViewActivatedMsg{} }
+
 	case key.Matches(msg, a.keys.Tab):
 		a.FocusNext()
 
@@ -269,6 +286,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 
 	case key.Matches(msg, a.keys.OpenLink):
 		return a.openLinksOfSelected()
+
+	case a.view == ViewActivity && key.Matches(msg, a.keys.ActivityUnreadToggle):
+		return func() tea.Msg { return ActivityToggleUnreadMsg{} }
 
 	case key.Matches(msg, a.keys.MarkUnread):
 		return a.markUnreadOfSelected()

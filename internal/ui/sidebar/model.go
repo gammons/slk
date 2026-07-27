@@ -170,6 +170,7 @@ type navKind int
 
 const (
 	navThreads navKind = iota
+	navActivity
 	navHeader
 	navChannel
 )
@@ -243,7 +244,12 @@ type Model struct {
 	// is on a different row), the synthetic Threads row renders with
 	// the same orange "active" indicator used for active channels.
 	threadsActive bool
-	nowFn         func() time.Time
+	// activityActive reports that the Activity view is the currently
+	// displayed view in the message pane. Mirrors threadsActive: when
+	// true (and the cursor is on a different row), the synthetic
+	// Activity row renders with the orange "active" indicator.
+	activityActive bool
+	nowFn          func() time.Time
 
 	// snappedSelection lets View() avoid snapping yOffset back to the
 	// selected row on every render. While snappedSelection == cursor,
@@ -273,6 +279,12 @@ type Model struct {
 	// the cursor sits on it, SelectedItem/SelectedID return zero / empty
 	// and the App layer activates the threads view instead.
 	threadsUnread int
+
+	// Synthetic "Activity" row state. Rendered directly below the
+	// Threads row. Like the Threads row it is selectable via j/k but is
+	// NOT a channel — when the cursor sits on it, SelectedItem/SelectedID
+	// return zero / empty and the App layer activates the Activity view.
+	activityUnread int
 
 	// focused tracks whether this panel currently has user focus. When
 	// false, the cursor "▌" glyph dims from Accent to TextMuted (via
@@ -484,6 +496,16 @@ func (m *Model) SetThreadsActive(active bool) {
 	m.dirty()
 }
 
+// SetActivityActive marks the synthetic "Activity" row as the active
+// destination in the message pane. Mirrors SetThreadsActive.
+func (m *Model) SetActivityActive(active bool) {
+	if m.activityActive == active {
+		return
+	}
+	m.activityActive = active
+	m.dirty()
+}
+
 // Version returns a counter that increments any time the View() output could
 // change. Callers can compare against a previously-seen version to know
 // whether to recompute downstream layout / wrapping.
@@ -523,6 +545,28 @@ func (m *Model) IsThreadsSelected() bool {
 func (m *Model) SelectThreadsRow() {
 	for i, n := range m.nav {
 		if n.kind == navThreads {
+			if m.cursor != i {
+				m.cursor = i
+				m.dirty()
+			}
+			return
+		}
+	}
+}
+
+// IsActivitySelected reports whether the synthetic "Activity" row is
+// the selected entry. Mirrors IsThreadsSelected.
+func (m *Model) IsActivitySelected() bool {
+	if m.cursor < 0 || m.cursor >= len(m.nav) {
+		return false
+	}
+	return m.nav[m.cursor].kind == navActivity
+}
+
+// SelectActivityRow moves the cursor to the synthetic Activity row.
+func (m *Model) SelectActivityRow() {
+	for i, n := range m.nav {
+		if n.kind == navActivity {
 			if m.cursor != i {
 				m.cursor = i
 				m.dirty()
@@ -613,6 +657,22 @@ func (m *Model) SetThreadsUnreadCount(n int) {
 
 // ThreadsUnreadCount returns the current Threads-row unread badge count.
 func (m *Model) ThreadsUnreadCount() int { return m.threadsUnread }
+
+// SetActivityUnreadCount updates the badge count shown next to the
+// Activity row. Mirrors SetThreadsUnreadCount.
+func (m *Model) SetActivityUnreadCount(n int) {
+	if n < 0 {
+		n = 0
+	}
+	if m.activityUnread != n {
+		m.activityUnread = n
+		m.cacheValid = false
+		m.dirty()
+	}
+}
+
+// ActivityUnreadCount returns the current Activity-row unread badge count.
+func (m *Model) ActivityUnreadCount() int { return m.activityUnread }
 
 // SetItems replaces the sidebar's channel list. It does NOT reset the
 // cursor to the Threads row — SetItems is called on every routine
@@ -977,6 +1037,8 @@ func (m *Model) currentCursorKey() (cursorKey, bool) {
 	switch n.kind {
 	case navThreads:
 		return cursorKey{kind: navThreads}, true
+	case navActivity:
+		return cursorKey{kind: navActivity}, true
 	case navHeader:
 		return cursorKey{kind: navHeader, header: n.header}, true
 	case navChannel:
@@ -1002,8 +1064,9 @@ func (m *Model) rebuildNav() {
 		bucket[key] = append(bucket[key], fi)
 	}
 
-	nav := make([]navItem, 0, 1+len(sectionOrder))
+	nav := make([]navItem, 0, 2+len(sectionOrder))
 	nav = append(nav, navItem{kind: navThreads})
+	nav = append(nav, navItem{kind: navActivity})
 	for _, name := range sectionOrder {
 		nav = append(nav, navItem{kind: navHeader, header: name})
 		if m.IsCollapsed(name) {
@@ -1032,6 +1095,9 @@ func (m *Model) rebuildNavPreserveCursor() {
 	for i, n := range m.nav {
 		switch {
 		case key.kind == navThreads && n.kind == navThreads:
+			m.cursor = i
+			return
+		case key.kind == navActivity && n.kind == navActivity:
 			m.cursor = i
 			return
 		case key.kind == navHeader && n.kind == navHeader && n.header == key.header:
@@ -1102,6 +1168,9 @@ type renderRow struct {
 	// the `active` variant whenever m.threadsActive is true (mirroring
 	// the channelID-based check used for channels).
 	isThreadsRow bool
+	// isActivityRow flags the synthetic Activity row so View() can swap
+	// in the `active` variant whenever m.activityActive is true.
+	isActivityRow bool
 }
 
 // buildCache rebuilds m.cacheRows for the given width. Expensive; runs only
@@ -1145,10 +1214,13 @@ func (m *Model) buildCache(width int) {
 	headerNavIdx := map[string]int{}
 	channelNavIdx := map[int]int{} // filter idx -> nav idx
 	threadsIdx := -1
+	activityIdx := -1
 	for i, n := range m.nav {
 		switch n.kind {
 		case navThreads:
 			threadsIdx = i
+		case navActivity:
+			activityIdx = i
 		case navHeader:
 			headerNavIdx[n.header] = i
 		case navChannel:
@@ -1231,8 +1303,44 @@ func (m *Model) buildCache(width int) {
 		navIdx:       threadsIdx,
 		isThreadsRow: true,
 	})
-	// Blank separator between the Threads row and the first section (or below
-	// the Threads row when there are no channels at all).
+
+	// Synthetic "Activity" row, rendered directly below the Threads row.
+	// Same treatment as the Threads row (see above): the App layer
+	// activates the Activity view when IsActivitySelected() is true.
+	activityLabel := " 🔔 Activity"
+	activityCursor := cursorSelected + "🔔 Activity"
+	activityActiveLabel := activeBorder + "🔔 Activity"
+	if m.activityUnread > 0 {
+		badge := " " + dotStyle.Render("•"+fmt.Sprintf("%d", m.activityUnread))
+		activityLabel += badge
+		activityCursor += badge
+		activityActiveLabel += badge
+	}
+	activityAttrs := bgAnsi
+	if m.activityUnread > 0 {
+		activityAttrs += "\x1b[1m"
+	}
+	activityLabel = messages.ReapplyBgAfterResets(activityLabel, activityAttrs)
+	activityCursor = messages.ReapplyBgAfterResets(activityCursor, activityAttrs)
+	activityActiveLabel = messages.ReapplyBgAfterResets(activityActiveLabel, activityAttrs)
+	activityBaseStyle := styles.ChannelNormal
+	if m.activityUnread > 0 {
+		activityBaseStyle = styles.ChannelUnread
+	}
+	activityNormal := activityBaseStyle.Width(width - 2).Render(activityLabel)
+	activitySelectedRow := styles.ChannelSelected.Width(width - 2).Render(activityCursor)
+	activityActiveRow := styles.ChannelSelected.Width(width - 2).Render(activityActiveLabel)
+	m.cacheRows = append(m.cacheRows, renderRow{
+		normal:        activityNormal,
+		selected:      activitySelectedRow,
+		active:        activityActiveRow,
+		height:        1,
+		navIdx:        activityIdx,
+		isActivityRow: true,
+	})
+
+	// Blank separator between the Threads/Activity rows and the first
+	// section (or below them when there are no channels at all).
 	m.cacheRows = append(m.cacheRows, renderRow{height: 1, navIdx: -1})
 
 	// Pre-build the per-section channel rows so we can flatten with
@@ -1576,6 +1684,10 @@ func (m *Model) View(height, width int) string {
 		case r.isThreadsRow && m.threadsActive && r.active != "":
 			// Threads view is the currently displayed view; mark the
 			// Threads row as active with the same orange indicator.
+			visible = append(visible, r.active)
+		case r.isActivityRow && m.activityActive && r.active != "":
+			// Activity view is the currently displayed view; mark the
+			// Activity row as active with the same orange indicator.
 			visible = append(visible, r.active)
 		case r.normal == "":
 			// Inter-section blank row -- emit a width-sized themed blank so

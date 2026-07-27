@@ -32,8 +32,10 @@ func TestToggleCollapse_OnSelectedHeader(t *testing.T) {
 		{ID: "C1", Name: "general", Type: "channel"},
 		{ID: "D1", Name: "alice", Type: "dm"},
 	})
-	// Cursor: Threads → Direct Messages header. Toggle it: should collapse.
-	m.MoveDown()
+	// Cursor: Threads → Activity → Direct Messages header. Toggle it:
+	// should collapse.
+	m.MoveDown() // Activity
+	m.MoveDown() // Direct Messages header
 	name, ok := m.IsSectionHeaderSelected()
 	if !ok || name != "Direct Messages" {
 		t.Fatalf("expected DM header selected, got name=%q ok=%v", name, ok)
@@ -176,6 +178,7 @@ func TestToggleCollapse_PreservesCursorOnHeader(t *testing.T) {
 		{ID: "C1", Name: "general", Type: "channel"},
 		{ID: "D1", Name: "alice", Type: "dm"},
 	})
+	m.MoveDown() // onto Activity row
 	m.MoveDown() // onto DM header
 	if name, _ := m.IsSectionHeaderSelected(); name != "Direct Messages" {
 		t.Fatalf("precondition: expected DM header, got %q", name)
