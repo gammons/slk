@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"testing"
 
 	"github.com/gammons/slk/internal/slackdesktop"
@@ -9,22 +8,16 @@ import (
 
 func TestBuildWorkspaceTokens(t *testing.T) {
 	ws := []slackdesktop.Workspace{
-		{Name: "Acme", Domain: "acme", TeamID: "T1"},
-		{Name: "Beta", Domain: "beta", TeamID: "T2"},
+		{Name: "Acme", Domain: "acme", TeamID: "T1", Token: "xoxc-acme"},
+		{Name: "Beta", Domain: "beta", TeamID: "T2", Token: "xoxc-beta"},
 	}
 	selected := map[string]bool{"T1": true} // only Acme
-	mint := func(_ context.Context, domain, cookie string) (string, error) {
-		return "xoxc-" + domain, nil
+	toks := buildWorkspaceTokens("xoxd-c", ws, selected)
+	if len(toks) != 1 {
+		t.Fatalf("got %d tokens, want 1", len(toks))
 	}
-	toks, err := buildWorkspaceTokens(context.Background(), "xoxd-c", ws, selected, mint)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(toks) != 1 || toks[0].TeamID != "T1" || toks[0].AccessToken != "xoxc-acme" || toks[0].Domain != "acme" {
-		t.Fatalf("unexpected tokens: %+v", toks)
-	}
-	if toks[0].Cookie != "xoxd-c" || toks[0].TeamName != "Acme" {
-		t.Fatalf("unexpected token fields: %+v", toks[0])
+	got := toks[0]
+	if got.TeamID != "T1" || got.AccessToken != "xoxc-acme" || got.Domain != "acme" || got.Cookie != "xoxd-c" || got.TeamName != "Acme" {
+		t.Fatalf("unexpected token: %+v", got)
 	}
 }
-

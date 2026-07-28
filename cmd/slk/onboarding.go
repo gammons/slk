@@ -78,14 +78,9 @@ func addWorkspace() error {
 		selected[id] = true
 	}
 
-	// Mint tokens for the selected workspaces.
 	fmt.Println()
 	fmt.Println(stepStyle.Render("Connecting..."))
-	tokens, err := buildWorkspaceTokens(context.Background(), cookie, workspaces, selected, slackclient.MintToken)
-	if err != nil {
-		fmt.Println(errorStyle.Render("  Failed to mint token: " + err.Error()))
-		return err
-	}
+	tokens := buildWorkspaceTokens(cookie, workspaces, selected)
 
 	// Validate each and save.
 	for _, tok := range tokens {
