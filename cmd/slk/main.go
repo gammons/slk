@@ -492,6 +492,12 @@ func main() {
 				os.Exit(1)
 			}
 			os.Exit(0)
+		case "--dump-mint":
+			if err := dumpMint(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
 		}
 	}
 
@@ -546,6 +552,7 @@ Usage:
   slk --remove-workspace  Remove a configured workspace (interactive)
   slk --list-workspaces   List configured workspaces (TeamID, Slug, Name)
   slk --dump-sections     Dump raw users.channelSections.list JSON (diagnostic)
+  slk --dump-mint         Diagnose token-minting failures (diagnostic)
   slk --version          Print version and exit
   slk --help             Show this help
 
@@ -4173,6 +4180,71 @@ func listWorkspaces() error {
 		strings.Repeat("-", nameW))
 	for _, ot := range orderedTokens {
 		fmt.Printf("%-*s  %-*s  %s\n", idW, ot.Token.TeamID, slugW, ot.Slug, ot.Token.TeamName)
+	}
+	return nil
+}
+
+// dumpMint is a diagnostic for token-minting failures (#111). Unlike the
+// other dumps it does NOT use saved tokens (minting is what's failing, so
+// onboarding never completed). It reads the desktop cookie + workspace list
+// directly, reports which Slack desktop profile(s) exist (to catch a
+// wrong/stale profile), and for each workspace performs the mint page load and
+// prints what Slack returned (status, final URL, whether api_token is present,
+// and any signed-out markers). Output is safe to paste — no secrets.
+func dumpMint() error {
+	fmt.Println("slk mint diagnostic (#111)")
+	fmt.Println()
+
+	fmt.Println("Slack desktop profiles (* = the one slk uses):")
+	for _, c := range slackdesktop.ProfileCandidates() {
+		marker := " "
+		if c.Active {
+			marker = "*"
+		}
+		fmt.Printf("  [%s] %-7s exists=%-5v cookieDB=%-5v %s\n", marker, c.Kind, c.Exists, c.HasCookie, c.Path)
+	}
+	fmt.Println()
+
+	dir, err := slackdesktop.ConfigDir()
+	if err != nil {
+		fmt.Printf("ConfigDir: ERROR: %v\n", err)
+		return nil
+	}
+	fmt.Printf("Using config dir: %s\n", dir)
+
+	cookie, err := slackdesktop.Cookie()
+	if err != nil {
+		fmt.Printf("Cookie: ERROR: %v\n", err)
+		return nil
+	}
+	format := "(not xoxd-)"
+	if strings.HasPrefix(cookie, "xoxd-") {
+		format = "xoxd-..."
+	}
+	fmt.Printf("Cookie: OK (len=%d, format=%s)\n\n", len(cookie), format)
+
+	workspaces, err := slackdesktop.Workspaces()
+	if err != nil {
+		fmt.Printf("Workspaces: ERROR: %v\n", err)
+		return nil
+	}
+
+	ctx := context.Background()
+	for _, ws := range workspaces {
+		fmt.Printf("=== %s (%s.slack.com) ===\n", ws.Name, ws.Domain)
+		d := slackclient.MintDiag(ctx, ws.Domain, cookie)
+		if d.Err != "" {
+			fmt.Printf("  request error: %s\n\n", d.Err)
+			continue
+		}
+		fmt.Printf("  status:      %d\n", d.Status)
+		fmt.Printf("  final URL:   %s\n", d.FinalURL)
+		fmt.Printf("  body bytes:  %d\n", d.BodyBytes)
+		fmt.Printf("  api_token:   %v\n", d.HasAPIToken)
+		if len(d.LoginMarkers) > 0 {
+			fmt.Printf("  login signs: %v\n", d.LoginMarkers)
+		}
+		fmt.Println()
 	}
 	return nil
 }

@@ -67,6 +67,36 @@ func TestMintTokenSendsNavigationHeaders(t *testing.T) {
 	}
 }
 
+func TestMintDiagDetectsToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<html>boot_data = {"api_token":"xoxc-ok"}</html>`))
+	}))
+	defer srv.Close()
+
+	d := mintDiagAt(context.Background(), srv.Client(), srv.URL, "xoxd-abc", "acme")
+	if d.Status != 200 || !d.HasAPIToken {
+		t.Fatalf("expected 200 + api_token, got %+v", d)
+	}
+	if len(d.LoginMarkers) != 0 {
+		t.Errorf("unexpected login markers: %v", d.LoginMarkers)
+	}
+}
+
+func TestMintDiagDetectsLoginPage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<html><h1>Sign in to Acme</h1> please enter your email</html>`))
+	}))
+	defer srv.Close()
+
+	d := mintDiagAt(context.Background(), srv.Client(), srv.URL, "xoxd-abc", "acme")
+	if d.HasAPIToken {
+		t.Fatalf("did not expect api_token on a login page: %+v", d)
+	}
+	if len(d.LoginMarkers) == 0 {
+		t.Errorf("expected login markers on a signed-out page, got none")
+	}
+}
+
 func TestMintTokenRetriesOn429(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
