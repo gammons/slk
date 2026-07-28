@@ -9,18 +9,30 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gammons/slk/internal/slackhttp"
 )
 
 var apiTokenRE = regexp.MustCompile(`"api_token":"([^"]+)"`)
 
 // MintToken mints a fresh xoxc token for a workspace by loading its page with
-// the desktop `d` cookie and scraping the embedded api_token. It uses a
-// browser-shaped HTTP client with the cookie set.
+// the desktop `d` cookie and scraping the embedded api_token.
+//
+// Loading the workspace page is a top-level *navigation*, not an XHR/CORS
+// call, so we deliberately use a plain HTTP client here rather than the
+// browser XHR transport used for the ongoing API/WebSocket traffic. That
+// transport stamps every request with Origin: https://app.slack.com and
+// Sec-Fetch-Mode: cors — correct for a fetch from app.slack.com, but a
+// contradictory signature on a page navigation that strict corporate
+// edges/proxies reject with HTTP 403 (#111). mintTokenAt sets
+// navigation-appropriate headers instead. Using a plain client (no cookie
+// jar) also avoids sending the `d` cookie twice.
 func MintToken(ctx context.Context, domain, dCookie string) (string, error) {
-	client := newCookieHTTPClient(dCookie)
-	// Bound the request so a hung/half-open connection (captive portal,
-	// offline) can't stall onboarding or the startup re-mint indefinitely.
-	client.Timeout = 15 * time.Second
+	client := &http.Client{
+		// Bound the request so a hung/half-open connection (captive portal,
+		// offline) can't stall onboarding or the startup re-mint indefinitely.
+		Timeout: 15 * time.Second,
+	}
 	return mintTokenAt(ctx, client, fmt.Sprintf("https://%s.slack.com", domain), dCookie)
 }
 
@@ -40,6 +52,16 @@ func mintTokenAt(ctx context.Context, client *http.Client, baseURL, dCookie stri
 			return "", err
 		}
 		req.AddCookie(&http.Cookie{Name: "d", Value: dCookie})
+		// Navigation-shaped headers: a real browser loading a workspace page
+		// sends these, NOT the Origin/Sec-Fetch-Mode: cors of an XHR call.
+		req.Header.Set("User-Agent", slackhttp.UserAgent())
+		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
+		req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+		req.Header.Set("Sec-Fetch-Site", "none")
+		req.Header.Set("Sec-Fetch-Mode", "navigate")
+		req.Header.Set("Sec-Fetch-Dest", "document")
+		req.Header.Set("Sec-Fetch-User", "?1")
+		req.Header.Set("Upgrade-Insecure-Requests", "1")
 
 		resp, err := client.Do(req)
 		if err != nil {

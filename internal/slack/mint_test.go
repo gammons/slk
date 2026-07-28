@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -33,6 +34,36 @@ func TestMintTokenNoToken(t *testing.T) {
 	defer srv.Close()
 	if _, err := mintTokenAt(context.Background(), srv.Client(), srv.URL, "xoxd-abc"); err == nil {
 		t.Error("expected error when api_token absent")
+	}
+}
+
+// Loading a workspace page is a top-level navigation, not an XHR/CORS call.
+// Sending API-XHR headers (Origin: app.slack.com, Sec-Fetch-Mode: cors) on
+// this GET can be rejected with 403 by strict corporate edges/proxies (#111).
+// Guard that the mint request is navigation-shaped.
+func TestMintTokenSendsNavigationHeaders(t *testing.T) {
+	got := make(chan http.Header, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- r.Header.Clone()
+		w.Write([]byte(`<html>"api_token":"xoxc-ok"</html>`))
+	}))
+	defer srv.Close()
+
+	if _, err := mintTokenAt(context.Background(), srv.Client(), srv.URL, "xoxd-abc"); err != nil {
+		t.Fatal(err)
+	}
+	h := <-got
+	if h.Get("Sec-Fetch-Mode") != "navigate" {
+		t.Errorf("Sec-Fetch-Mode = %q, want navigate", h.Get("Sec-Fetch-Mode"))
+	}
+	if h.Get("Sec-Fetch-Dest") != "document" {
+		t.Errorf("Sec-Fetch-Dest = %q, want document", h.Get("Sec-Fetch-Dest"))
+	}
+	if h.Get("Origin") != "" {
+		t.Errorf("Origin = %q, want empty (a navigation sends no Origin)", h.Get("Origin"))
+	}
+	if !strings.HasPrefix(h.Get("Accept"), "text/html") {
+		t.Errorf("Accept = %q, want a text/html navigation Accept", h.Get("Accept"))
 	}
 }
 
