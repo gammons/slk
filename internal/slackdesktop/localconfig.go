@@ -2,8 +2,16 @@ package slackdesktop
 
 import (
 	"encoding/json"
+	"io"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"unicode/utf16"
+
+	"github.com/syndtr/goleveldb/leveldb"
+	"github.com/syndtr/goleveldb/leveldb/opt"
+	"github.com/syndtr/goleveldb/leveldb/util"
 )
 
 // decodeLocalStorageValue strips the 1-byte encoding marker Chromium's Local
@@ -53,4 +61,88 @@ func parseLocalConfig(data []byte) ([]Workspace, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// Workspaces reads the desktop app's signed-in teams (with tokens) from the
+// localConfig_v2 value in its Local Storage leveldb.
+func Workspaces() ([]Workspace, error) {
+	dir, err := ConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	value, err := readLocalConfigValue(dir)
+	if err != nil {
+		return nil, err
+	}
+	return parseLocalConfig([]byte(decodeLocalStorageValue(value)))
+}
+
+// readLocalConfigValue returns the raw localConfig_v2 value bytes (including
+// the 1-byte encoding marker) from the Local Storage leveldb. Slack keeps the
+// DB open, so we read a temp copy.
+func readLocalConfigValue(configDir string) ([]byte, error) {
+	src := filepath.Join(configDir, "Local Storage", "leveldb")
+	if _, err := os.Stat(src); err != nil {
+		return nil, ErrNotSignedIn
+	}
+	tmp, err := os.MkdirTemp("", "slk-lvl-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmp)
+	if err := copyLevelDB(src, tmp); err != nil {
+		return nil, err
+	}
+
+	db, err := leveldb.OpenFile(tmp, &opt.Options{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	var value []byte
+	iter := db.NewIterator(&util.Range{}, nil)
+	for iter.Next() {
+		k := string(iter.Key())
+		if strings.HasSuffix(k, "localConfig_v2") && strings.Contains(k, "app.slack.com") {
+			value = append([]byte(nil), iter.Value()...) // last write wins
+		}
+	}
+	iter.Release()
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	if value == nil {
+		return nil, ErrNotSignedIn
+	}
+	return value, nil
+}
+
+// copyLevelDB copies the leveldb files (skipping the LOCK) into dst.
+func copyLevelDB(src, dst string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.IsDir() || e.Name() == "LOCK" {
+			continue
+		}
+		in, err := os.Open(filepath.Join(src, e.Name()))
+		if err != nil {
+			continue
+		}
+		out, err := os.Create(filepath.Join(dst, e.Name()))
+		if err != nil {
+			in.Close()
+			return err
+		}
+		_, cerr := io.Copy(out, in)
+		in.Close()
+		out.Close()
+		if cerr != nil {
+			return cerr
+		}
+	}
+	return nil
 }
