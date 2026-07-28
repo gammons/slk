@@ -492,6 +492,12 @@ func main() {
 				os.Exit(1)
 			}
 			os.Exit(0)
+		case "--dump-mint":
+			if err := dumpMint(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
 		}
 	}
 
@@ -546,6 +552,7 @@ Usage:
   slk --remove-workspace  Remove a configured workspace (interactive)
   slk --list-workspaces   List configured workspaces (TeamID, Slug, Name)
   slk --dump-sections     Dump raw users.channelSections.list JSON (diagnostic)
+  slk --dump-mint         Diagnose desktop auth: token + connect per team (diagnostic)
   slk --version          Print version and exit
   slk --help             Show this help
 
@@ -4182,6 +4189,53 @@ func listWorkspaces() error {
 // this when the muted-channel UI treatment isn't behaving as
 // expected to confirm what Slack is (or isn't) returning for the
 // muted_channels pref.
+// dumpMint is a diagnostic for desktop-auth failures (#111). Unlike the other
+// dumps it does NOT use saved tokens (onboarding may not have completed). It
+// reads the d cookie and the localConfig_v2 tokens directly and, per team,
+// reports whether a token was found and whether NewClient+Connect (auth.test)
+// succeeds against the resolved API host. Output is safe to paste (no secrets).
+func dumpMint() error {
+	fmt.Println("slk auth diagnostic (#111)")
+	fmt.Println()
+
+	dir, err := slackdesktop.ConfigDir()
+	if err != nil {
+		fmt.Printf("ConfigDir: ERROR: %v\n", err)
+		return nil
+	}
+	fmt.Printf("Using config dir: %s\n", dir)
+
+	cookie, err := slackdesktop.Cookie()
+	if err != nil {
+		fmt.Printf("Cookie: ERROR: %v\n", err)
+		return nil
+	}
+	format := "(not xoxd-)"
+	if strings.HasPrefix(cookie, "xoxd-") {
+		format = "xoxd-..."
+	}
+	fmt.Printf("Cookie: OK (len=%d, format=%s)\n\n", len(cookie), format)
+
+	workspaces, err := slackdesktop.Workspaces()
+	if err != nil {
+		fmt.Printf("Workspaces (localConfig_v2): ERROR: %v\n", err)
+		return nil
+	}
+
+	ctx := context.Background()
+	for _, ws := range workspaces {
+		fmt.Printf("=== %s (%s.slack.com) ===\n", ws.Name, ws.Domain)
+		fmt.Printf("  token in localConfig_v2: %v (len %d)\n", strings.HasPrefix(ws.Token, "xoxc-"), len(ws.Token))
+		client := slackclient.NewClient(ws.Token, cookie)
+		if err := client.Connect(ctx); err != nil {
+			fmt.Printf("  connect: FAILED: %v\n\n", err)
+			continue
+		}
+		fmt.Printf("  connect: OK (teamID=%s, apiHost=%s.slack.com)\n\n", client.TeamID(), client.TeamSubdomain())
+	}
+	return nil
+}
+
 func dumpPrefs() error {
 	tokenDir := filepath.Join(xdgData(), "tokens")
 	store := slackclient.NewTokenStore(tokenDir)
