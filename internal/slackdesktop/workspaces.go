@@ -12,6 +12,7 @@ type Workspace struct {
 	Name   string
 	Domain string // subdomain under .slack.com
 	TeamID string
+	Token  string // xoxc-… from localConfig_v2
 }
 
 type rootState struct {

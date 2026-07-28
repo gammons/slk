@@ -1,0 +1,5 @@
+{"teams":{
+  "T054JFC9S2Z":{"id":"T054JFC9S2Z","name":"Truelist","url":"https://truelist-workspace.slack.com/","domain":"truelist-workspace","token":"xoxc-truelist"},
+  "TUJLNE62Z":{"id":"TUJLNE62Z","name":"UserEvidence","url":"https://userevidence.slack.com/","domain":"userevidence","token":"xoxc-ue"},
+  "TBROKEN":{"id":"TBROKEN","name":"NoToken","url":"https://x.slack.com/","domain":"x","token":""}
+}}
