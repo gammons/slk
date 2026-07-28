@@ -1,42 +1,44 @@
 package main
 
 import (
-	"context"
 	"log"
 
 	slackclient "github.com/gammons/slk/internal/slack"
+	"github.com/gammons/slk/internal/slackdesktop"
 )
 
-// remintTokens refreshes every token's xoxc from the live desktop cookie. On
-// any failure for a given token it keeps the cached token (offline-friendly).
-// cookieFn is read once up front; mintFn/saveFn are injected for testing.
-func remintTokens(
-	ctx context.Context,
+// refreshTokens re-reads each workspace's xoxc token from the desktop app's
+// localConfig_v2 (and the live d cookie) on startup, so a rotated/expired
+// stored token never causes a failed launch. On any read failure, or when a
+// stored team is not present in localConfig_v2, the cached token is kept.
+func refreshTokens(
 	tokens []slackclient.Token,
 	cookieFn func() (string, error),
-	mintFn func(ctx context.Context, domain, cookie string) (string, error),
+	teamsFn func() ([]slackdesktop.Workspace, error),
 	saveFn func(slackclient.Token) error,
 ) []slackclient.Token {
-	cookie, err := cookieFn()
-	if err != nil {
-		log.Printf("remint: could not read desktop cookie, using cached tokens: %v", err)
+	cookie, cerr := cookieFn()
+	teams, terr := teamsFn()
+	if cerr != nil || terr != nil {
+		log.Printf("refresh: could not read desktop session (cookie err=%v, teams err=%v); using cached tokens", cerr, terr)
 		return tokens
+	}
+	byID := make(map[string]slackdesktop.Workspace, len(teams))
+	for _, w := range teams {
+		byID[w.TeamID] = w
 	}
 	out := make([]slackclient.Token, len(tokens))
 	copy(out, tokens)
 	for i := range out {
-		if out[i].Domain == "" {
-			continue // legacy token without a domain; cannot re-mint
-		}
-		newTok, err := mintFn(ctx, out[i].Domain, cookie)
-		if err != nil {
-			log.Printf("remint: %s: %v (keeping cached token)", out[i].TeamName, err)
+		w, ok := byID[out[i].TeamID]
+		if !ok || w.Token == "" {
+			log.Printf("refresh: %s not in localConfig_v2; keeping cached token", out[i].TeamName)
 			continue
 		}
-		out[i].AccessToken = newTok
+		out[i].AccessToken = w.Token
 		out[i].Cookie = cookie
 		if err := saveFn(out[i]); err != nil {
-			log.Printf("remint: %s: save failed: %v", out[i].TeamName, err)
+			log.Printf("refresh: %s: save failed: %v", out[i].TeamName, err)
 		}
 	}
 	return out

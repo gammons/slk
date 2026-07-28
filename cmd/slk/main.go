@@ -637,12 +637,12 @@ func run() error {
 		}
 	}
 
-	// Re-mint tokens from the live desktop cookie so every launch starts
-	// with fresh xoxc tokens (they expire; the desktop cookie is the source
-	// of truth). Falls back to cached tokens when offline / desktop absent.
-	tokens = remintTokens(context.Background(), tokens,
+	// Refresh tokens from the desktop app's localConfig_v2 so every launch
+	// starts with the current xoxc tokens (the desktop app rotates them).
+	// Falls back to cached tokens when offline / desktop absent.
+	tokens = refreshTokens(tokens,
 		slackdesktop.Cookie,
-		slackclient.MintToken,
+		slackdesktop.Workspaces,
 		tokenStore.Save,
 	)
 
