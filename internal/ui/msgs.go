@@ -191,6 +191,15 @@ type (
 		TS        string
 		ThreadTS  string
 	}
+	// ActivityBodiesLoadedMsg carries hydrated message bodies for the
+	// refs in a freshly loaded Activity page (fetched via messages.list
+	// as a second step after activity.feed, which returns refs only).
+	// Bodies are keyed by slack.ActivityMsgKey(channelID, ts). Ignored
+	// if it doesn't match the active team.
+	ActivityBodiesLoadedMsg struct {
+		TeamID string
+		Bodies map[string]slack.ActivityMessage
+	}
 	// ActivityToggleUnreadMsg flips the Activity view's unread-only
 	// filter and re-fetches the feed with the new flag (the server does
 	// the filtering). Dispatched by the unread-toggle key while the

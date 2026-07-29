@@ -1512,6 +1512,22 @@ func run() error {
 					NextCursor: result.NextCursor,
 				}
 			},
+			Hydrate: func(teamID ids.TeamID, refs map[string][]string) tea.Msg {
+				teamIDStr := string(teamID)
+				wctx := router.Active()
+				if wctx == nil {
+					return nil
+				}
+				fetchCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				bodies, err := wctx.Client.GetActivityMessages(fetchCtx, refs)
+				if err != nil {
+					log.Printf("Warning: GetActivityMessages(%s): %v", teamIDStr, err)
+					// nil = keep whatever bodies we already have.
+					return nil
+				}
+				return ui.ActivityBodiesLoadedMsg{TeamID: teamIDStr, Bodies: bodies}
+			},
 		}))
 
 		app.SetReactionService(ui.NewReactionService(

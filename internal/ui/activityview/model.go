@@ -6,9 +6,10 @@
 // symmetrically: callers push a fresh page via SetItems and read
 // SelectedItem to drive panel switching when the user activates a row.
 //
-// Unlike threadsview each item renders on a single line (type/channel/actor/
-// time only); the actual message body preview is phase 2 and deliberately
-// absent here.
+// Each item renders as a two-line card: line 1 is author + activity context
+// ("Mention/Thread/Reacted in #ch", or "DM") + relative time; line 2 is the
+// hydrated message-body preview (empty until the messages.list hydration
+// lands — see SetBodies).
 package activityview
 
 import (
@@ -18,15 +19,17 @@ import (
 
 	"charm.land/lipgloss/v2"
 	slack "github.com/gammons/slk/internal/slack"
+	"github.com/gammons/slk/internal/slackfmt"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/muesli/reflow/truncate"
 )
 
-// rowStride is the number of flat-list lines a single activity row occupies.
-// Rows are single-line with no inter-row separator, so this is 1. Kept as a
+// cardStride is the number of flat-list lines a single activity row occupies.
+// Rows are two-line cards (line 1: author + context + time; line 2: the
+// hydrated message-body preview), with no inter-card separator. Kept as a
 // named constant so ClickAt / snapToSelected read the same way as
 // threadsview's cardStride-based math.
-const rowStride = 1
+const cardStride = 2
 
 // Local styles, kept package-private and built from the shared color tokens
 // so theme changes propagate via styles.Apply().
@@ -74,6 +77,12 @@ type Model struct {
 	channelNames map[string]string
 	selfUserID   string
 
+	// bodies holds hydrated message text/author for each item ref,
+	// keyed by slack.ActivityMsgKey(channelID, ts). Filled by SetBodies
+	// after the messages.list second fetch; a row renders ref-only until
+	// its body arrives.
+	bodies map[string]slack.ActivityMessage
+
 	// unreadOnly tracks the read/unread filter flag. The view only tracks
 	// it and shows an indicator; the App re-fetches with unread_only=true
 	// when it flips (the server does the filtering).
@@ -101,7 +110,18 @@ func New(userNames map[string]string, selfUserID string) Model {
 		userNames:    userNames,
 		selfUserID:   selfUserID,
 		channelNames: map[string]string{},
+		bodies:       map[string]slack.ActivityMessage{},
 	}
+}
+
+// SetBodies installs hydrated message bodies (keyed by
+// slack.ActivityMsgKey) fetched via messages.list, and forces a re-render.
+func (m *Model) SetBodies(bodies map[string]slack.ActivityMessage) {
+	if bodies == nil {
+		bodies = map[string]slack.ActivityMessage{}
+	}
+	m.bodies = bodies
+	m.dirty()
 }
 
 // Version returns a counter that increments any time View() output could
@@ -298,13 +318,15 @@ func (m *Model) ViewportAtTop() bool {
 // panel-local Y inside the bordered messages-pane content area). Returns
 // true when a row was selected and the caller should follow up with the
 // open command; false for the blank-fill region past the last row and for
-// negative rowY. Rows are single-line (rowStride == 1) with no separators.
+// negative rowY. Cards are two-line (cardStride == 2) with no separators;
+// a click on either visual line of a card maps to the same item via
+// absLine / cardStride.
 func (m *Model) ClickAt(rowY int) bool {
 	if rowY < 0 {
 		return false
 	}
 	absLine := m.yOffset + rowY
-	idx := absLine / rowStride
+	idx := absLine / cardStride
 	if idx < 0 || idx >= len(m.items) {
 		return false
 	}
@@ -389,11 +411,11 @@ func (m *Model) View(height, width int) string {
 	return strings.Join(visible, "\n")
 }
 
-// snapToSelected adjusts yOffset so the selected single-line row is inside
-// the viewport.
+// snapToSelected adjusts yOffset so the selected two-line card (cardStride
+// lines) is fully inside the viewport.
 func (m *Model) snapToSelected(height, totalLines int) {
-	start := m.selected * rowStride
-	end := start + rowStride
+	start := m.selected * cardStride
+	end := start + cardStride
 
 	if end > m.yOffset+height {
 		m.yOffset = end - height
@@ -413,11 +435,14 @@ func (m *Model) snapToSelected(height, totalLines int) {
 	}
 }
 
-// renderRows builds the full (un-windowed) line list, one line per item.
+// renderRows builds the full (un-windowed) line list, flattening each
+// item's two-line card into the flat list (cardStride lines per item) so
+// the windowing / snap / click math stays stride-based.
 func (m *Model) renderRows(width int) []string {
-	lines := make([]string, 0, len(m.items))
+	lines := make([]string, 0, len(m.items)*cardStride)
 	for i, it := range m.items {
-		lines = append(lines, m.renderRow(it, width, i == m.selected))
+		l1, l2 := m.renderCard(it, width, i == m.selected)
+		lines = append(lines, l1, l2)
 	}
 	return lines
 }
@@ -427,38 +452,133 @@ func blankLine(width int) string {
 	return lipgloss.NewStyle().Width(width).Render("")
 }
 
-// renderRow returns the single line for one activity item:
+// renderCard returns the two lines for one activity item:
 //
-//	<glyph> <channel>  ·  <actor><detail>  · <relTime>  [●]
+//	<glyph> <author>  <Verb> in #<channel>              <relTime> [●]
+//	  <body preview>            (reactions prefix the :emoji:)
 //
-// Selection is a green left border (▌); unread items render bold with a
-// trailing unread dot. Non-selected rows reserve the same gutter with a
-// background-colored (invisible) border for uniform alignment.
-func (m *Model) renderRow(it slack.ActivityItem, width int, selected bool) string {
+// Line 1 is author-first with a natural-language context ("Mention in
+// #x" / "Thread in #x" / "Reacted in #x" / "DM"), mirroring the desktop
+// Activity feed; line 2 is the hydrated message body (empty until the
+// messages.list fetch lands). Selection is a green left border (▌) on
+// both lines; unread items get a trailing dot on line 1.
+func (m *Model) renderCard(it slack.ActivityItem, width int, selected bool) (string, string) {
 	contentWidth := width - 1
 	if contentWidth < 1 {
 		contentWidth = 1
 	}
 
-	glyph := activityGlyph(it.Type)
-	channel := m.resolveChannel(it.ChannelID)
-	actor := m.resolveUser(it.AuthorID)
+	body := m.bodies[slack.ActivityMsgKey(it.ChannelID, it.TS)]
 
-	line := glyph + " " + channelNameStyle().Render(channel)
-	if actor != "" {
-		line += "  " + mutedStyle().Render("·") + "  " + actor
+	// Author = the actor (reactor for reactions, message author
+	// otherwise), falling back to the hydrated message's user when the
+	// ref carried no author (thread_v2 / dm).
+	authorID := it.AuthorID
+	if authorID == "" {
+		authorID = body.UserID
 	}
-	if detail := activityDetail(it); detail != "" {
-		line += " " + mutedStyle().Render(detail)
+	author := m.resolveUser(authorID)
+
+	left := activityGlyph(it.Type) + " "
+	if author != "" {
+		left += authorStyle().Render(author)
 	}
+	if ctx := m.contextLabel(it); ctx != "" {
+		if author != "" {
+			left += "  "
+		}
+		left += ctx
+	}
+	right := ""
 	if rel := formatRelTime(it.FeedTS); rel != "" {
-		line += "  " + mutedStyle().Render("· "+rel)
+		right = mutedStyle().Render(rel)
 	}
 	if it.IsUnread {
-		line += "  " + unreadDotStyle().Render("●")
+		if right != "" {
+			right += " "
+		}
+		right += unreadDotStyle().Render("●")
 	}
-	line = clipToWidth(line, contentWidth)
+	line1 := layoutLine(left, right, contentWidth)
 
+	// Collapse the body to a single line: a card is exactly cardStride
+	// lines, so any newline in the message would desync the flat-list
+	// windowing/click math. strings.Fields folds newlines/tabs/runs of
+	// spaces into single spaces.
+	preview := strings.Join(strings.Fields(slackfmt.StripMarkup(body.Text, m.userNames)), " ")
+	if detail := activityDetail(it); detail != "" {
+		if preview != "" {
+			preview = detail + "  " + preview
+		} else {
+			preview = detail
+		}
+	}
+	line2 := "  " + mutedStyle().Render(preview)
+
+	return m.wrapLine(line1, contentWidth, selected), m.wrapLine(line2, contentWidth, selected)
+}
+
+// contextLabel renders the natural-language activity context for line 1:
+// "Mention in #ch" / "Thread in #ch" / "Reacted in #ch" / "DM" (no channel
+// for DMs). Empty for unknown types.
+func (m *Model) contextLabel(it slack.ActivityItem) string {
+	verb := contextVerb(it.Type)
+	if verb == "" {
+		return ""
+	}
+	if it.Type == "dm" || it.Type == "bot_dm_bundle" {
+		return mutedStyle().Render(verb)
+	}
+	ch := m.resolveChannel(it.ChannelID)
+	if ch == "" {
+		return mutedStyle().Render(verb)
+	}
+	return mutedStyle().Render(verb+" in ") + channelNameStyle().Render("#"+ch)
+}
+
+// contextVerb maps an item type to its Activity-feed verb.
+func contextVerb(itemType string) string {
+	switch itemType {
+	case "at_user", "at_user_group", "at_channel", "at_everyone",
+		"keyword", "list_user_mentioned", "unjoined_channel_mention", "channel":
+		return "Mention"
+	case "thread_v2":
+		return "Thread"
+	case "message_reaction":
+		return "Reacted"
+	case "dm", "bot_dm_bundle":
+		return "DM"
+	default:
+		return ""
+	}
+}
+
+// authorStyle renders the actor name in bold so it anchors the card.
+func authorStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true)
+}
+
+// layoutLine places `right` flush against the right edge of a width-column
+// line with `left` on the left, padding between. When there's no room for
+// both, the right meta is dropped and the left is clipped. Widths are
+// measured with lipgloss so ANSI styling doesn't skew the math.
+func layoutLine(left, right string, width int) string {
+	if right == "" {
+		return clipToWidth(left, width)
+	}
+	lw := lipgloss.Width(left)
+	rw := lipgloss.Width(right)
+	if lw+1+rw > width {
+		return clipToWidth(left, width)
+	}
+	return left + strings.Repeat(" ", width-lw-rw) + right
+}
+
+// wrapLine clips a rendered line to contentWidth and applies the selection
+// border + background fill (shared by both card lines so selection spans
+// the whole card).
+func (m *Model) wrapLine(line string, contentWidth int, selected bool) string {
+	line = clipToWidth(line, contentWidth)
 	borderStyle := borderInvisStyle()
 	fill := borderFillStyle().Width(contentWidth)
 	if selected {
@@ -489,9 +609,9 @@ func activityGlyph(itemType string) string {
 	}
 }
 
-// activityDetail returns a short trailing detail for the row, currently only
-// the reaction emoji name (":name:") for message_reaction items. Pure so it
-// can be unit-tested.
+// activityDetail returns a short detail (currently the reaction emoji
+// ":name:") that renderCard prefixes to the body preview for
+// message_reaction items. Pure so it can be unit-tested.
 func activityDetail(it slack.ActivityItem) string {
 	if it.Type == "message_reaction" && it.Reaction != "" {
 		return ":" + it.Reaction + ":"

@@ -257,3 +257,104 @@ func payloadMessage(b *rawActivityBundle) *rawActivityMessage {
 	}
 	return b.Payload.Message
 }
+
+// ActivityMessage is a hydrated message body for one activity ref
+// (channel + ts). The Activity feed itself returns only references; the
+// body text and author are fetched separately via messages.list.
+type ActivityMessage struct {
+	Text   string
+	UserID string
+}
+
+// ActivityMsgKey is the map key for a hydrated activity message,
+// combining channel ID and message ts. Shared with the activity view so
+// both sides agree on the lookup key.
+func ActivityMsgKey(channelID, ts string) string {
+	return channelID + "\x00" + ts
+}
+
+type rawChannelMessages struct {
+	Messages []rawListedMessage `json:"messages"`
+}
+
+type rawListedMessage struct {
+	TS   string `json:"ts"`
+	User string `json:"user"`
+	Text string `json:"text"`
+}
+
+type messageIDsGroup struct {
+	Channel    string   `json:"channel"`
+	Timestamps []string `json:"timestamps"`
+}
+
+// GetActivityMessages hydrates message bodies for a set of (channel, ts)
+// refs via Slack's internal messages.list endpoint (the same batch call
+// the web client uses to fill the Activity feed's previews). refs maps a
+// channel ID to the message timestamps wanted in that channel. The result
+// is keyed by ActivityMsgKey(channel, ts); refs the server doesn't return
+// are simply absent (callers render a ref-only row until — or if — a body
+// arrives). Parses leniently and never errors on a single missing message.
+func (c *Client) GetActivityMessages(ctx context.Context, refs map[string][]string) (map[string]ActivityMessage, error) {
+	if len(refs) == 0 {
+		return map[string]ActivityMessage{}, nil
+	}
+	groups := make([]messageIDsGroup, 0, len(refs))
+	for ch, tss := range refs {
+		if ch == "" || len(tss) == 0 {
+			continue
+		}
+		groups = append(groups, messageIDsGroup{Channel: ch, Timestamps: tss})
+	}
+	idsJSON, err := json.Marshal(groups)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling messages.list ids: %w", err)
+	}
+	form := url.Values{}
+	form.Set("message_ids", string(idsJSON))
+	form.Set("org_wide_aware", "true")
+	form.Set("cached_latest_updates", "{}")
+
+	body, err := c.postForm(ctx, "messages.list", form)
+	if err != nil {
+		return nil, err
+	}
+	return parseActivityMessages(body)
+}
+
+// parseActivityMessages decodes a messages.list response into a body map
+// keyed by ActivityMsgKey(channel, ts). Split out from GetActivityMessages
+// so tests can exercise the mapping against a fixture without a network
+// call (mirrors parseActivityFeed).
+//
+// Parses leniently, matching the internal-endpoint convention: each
+// channel and each message is decoded independently, so one entry of an
+// unexpected JSON type is skipped rather than failing the whole page.
+func parseActivityMessages(body []byte) (map[string]ActivityMessage, error) {
+	var env struct {
+		OK           bool                       `json:"ok"`
+		Error        string                     `json:"error"`
+		MessagesData map[string]json.RawMessage `json:"messages_data"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("parsing messages.list: %w (body=%s)", err, truncateForLog(body))
+	}
+	if !env.OK {
+		return nil, fmt.Errorf("messages.list: %s (body=%s)", env.Error, truncateForLog(body))
+	}
+	out := make(map[string]ActivityMessage)
+	for ch, rawCh := range env.MessagesData {
+		var cm rawChannelMessages
+		if err := json.Unmarshal(rawCh, &cm); err != nil {
+			debuglog.General("messages.list: skipping unparseable channel %s: %v", ch, err)
+			continue
+		}
+		for _, msg := range cm.Messages {
+			if msg.TS == "" {
+				continue
+			}
+			out[ActivityMsgKey(ch, msg.TS)] = ActivityMessage{Text: msg.Text, UserID: msg.User}
+		}
+	}
+	return out, nil
+}

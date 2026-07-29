@@ -248,13 +248,23 @@ type ActivityService interface {
 	// server-side unread filter. Returns a tea.Msg (typically
 	// ActivityListLoadedMsg).
 	Fetch(teamID ids.TeamID, limit int, cursor string, unreadOnly bool) tea.Msg
+
+	// Hydrate fetches message bodies for the Activity page's refs
+	// (activity.feed returns refs only). refs maps channel ID to the
+	// wanted message timestamps. Returns a tea.Msg (typically
+	// ActivityBodiesLoadedMsg), or nil when there's nothing to fetch.
+	Hydrate(teamID ids.TeamID, refs map[string][]string) tea.Msg
 }
 
 // ActivityServiceFuncs is the closure bundle accepted by
-// NewActivityService. A nil Fetch no-ops (returns a nil tea.Msg).
+// NewActivityService. A nil Fetch / Hydrate no-ops (returns a nil tea.Msg).
 type ActivityServiceFuncs struct {
-	Fetch ActivityFetchFunc
+	Fetch   ActivityFetchFunc
+	Hydrate ActivityHydrateFunc
 }
+
+// ActivityHydrateFunc fetches message bodies for a page's refs.
+type ActivityHydrateFunc func(teamID ids.TeamID, refs map[string][]string) tea.Msg
 
 // NewActivityService builds an ActivityService from an
 // ActivityServiceFuncs bundle. Used by cmd/slk/main.go (production
@@ -277,6 +287,13 @@ func (a activityAdapter) Fetch(teamID ids.TeamID, limit int, cursor string, unre
 		return nil
 	}
 	return a.fns.Fetch(teamID, limit, cursor, unreadOnly)
+}
+
+func (a activityAdapter) Hydrate(teamID ids.TeamID, refs map[string][]string) tea.Msg {
+	if a.fns.Hydrate == nil {
+		return nil
+	}
+	return a.fns.Hydrate(teamID, refs)
 }
 
 // MessageService is the App's interface to Slack's per-message

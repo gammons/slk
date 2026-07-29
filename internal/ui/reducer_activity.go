@@ -1,9 +1,7 @@
 // internal/ui/reducer_activity.go
 //
 // Activity-view reducer for App.Update. Modeled on reducer_threads.go's
-// ThreadsView arms — the Activity view mirrors the Threads view, so the
-// three arms here parallel ThreadsViewActivatedMsg / ThreadsListLoadedMsg
-// (plus the Enter-to-open path the Threads view drives via handleEnter):
+// ThreadsView arms — the Activity view mirrors the Threads view. Five arms:
 //
 //	ActivityViewActivatedMsg  - user opened the Activity view (sidebar
 //	                            row or :activity): switch view + focus,
@@ -11,7 +9,14 @@
 //	                            and kick a feed fetch.
 //	ActivityListLoadedMsg     - feed fetch returned: push items into
 //	                            the view, store the pagination cursor,
-//	                            and refresh the sidebar unread badge.
+//	                            refresh the sidebar unread badge, and kick
+//	                            a second fetch to hydrate message bodies
+//	                            (activity.feed returns refs only).
+//	ActivityBodiesLoadedMsg   - messages.list hydration returned: install
+//	                            the bodies (team-guarded) via SetBodies so
+//	                            rows show what the activity actually was.
+//	ActivityToggleUnreadMsg   - flip the unread-only filter and re-fetch
+//	                            with the new flag (the server filters).
 //	ActivitySelectedMsg       - user pressed Enter on a row: open the
 //	                            underlying thread (ThreadTS set) or the
 //	                            channel message (jump to TS), reusing
@@ -23,7 +28,30 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/gammons/slk/internal/ids"
+	slack "github.com/gammons/slk/internal/slack"
 )
+
+// activityRefs groups a page of activity items' (channel, ts) refs by
+// channel for a single batched messages.list hydration. Items with no
+// channel or ts are skipped; duplicate ts within a channel are de-duped.
+func activityRefs(items []slack.ActivityItem) map[string][]string {
+	seen := map[string]map[string]bool{}
+	refs := map[string][]string{}
+	for _, it := range items {
+		if it.ChannelID == "" || it.TS == "" {
+			continue
+		}
+		if seen[it.ChannelID] == nil {
+			seen[it.ChannelID] = map[string]bool{}
+		}
+		if seen[it.ChannelID][it.TS] {
+			continue
+		}
+		seen[it.ChannelID][it.TS] = true
+		refs[it.ChannelID] = append(refs[it.ChannelID], it.TS)
+	}
+	return refs
+}
 
 // activityFeedPageLimit is the number of items requested per
 // activity.feed page. Matches the desktop client's default page size.
@@ -71,6 +99,22 @@ var reduceActivity reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		a.activityView.SetItems(m.Items)
 		a.activityNextCursor = m.NextCursor
 		a.sidebar.SetActivityUnreadCount(a.activityView.UnreadCount())
+		// activity.feed returns refs only. Kick a second fetch to hydrate
+		// the message bodies (mention text, reply, reacted-to message, DM)
+		// so rows show what the activity actually was.
+		refs := activityRefs(m.Items)
+		if len(refs) == 0 {
+			return nil, true
+		}
+		activity := a.activity
+		team := ids.TeamID(a.activeTeamID)
+		return func() tea.Msg { return activity.Hydrate(team, refs) }, true
+
+	case ActivityBodiesLoadedMsg:
+		if m.TeamID != a.activeTeamID {
+			return nil, true
+		}
+		a.activityView.SetBodies(m.Bodies)
 		return nil, true
 
 	case ActivitySelectedMsg:
