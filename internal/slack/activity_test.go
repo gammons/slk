@@ -3,6 +3,7 @@ package slackclient
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -149,5 +150,60 @@ func TestParseActivityFeed_SkipsMalformedItem(t *testing.T) {
 	}
 	if res.NextCursor != "cur" {
 		t.Fatalf("next cursor lost: %q", res.NextCursor)
+	}
+}
+
+// parseActivityMessages maps a messages.list response into a body map keyed
+// by ActivityMsgKey, leniently: an empty-ts message is skipped, a malformed
+// channel is skipped (not fatal), and ok:false is a wrapped error.
+func TestParseActivityMessages_Fixture(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("testdata", "messages_list.json"))
+	if err != nil {
+		t.Fatalf("reading fixture: %v", err)
+	}
+	got, err := parseActivityMessages(body)
+	if err != nil {
+		t.Fatalf("parseActivityMessages: %v", err)
+	}
+
+	// 3 valid messages across 2 channels; empty-ts and malformed channel dropped.
+	if len(got) != 3 {
+		t.Fatalf("want 3 hydrated messages, got %d: %v", len(got), got)
+	}
+	m, ok := got[ActivityMsgKey("C0001TEST", "1700000001.000100")]
+	if !ok || m.Text != "first hydrated body" || m.UserID != "U0001TEST" {
+		t.Fatalf("C0001 first message wrong: %+v ok=%v", m, ok)
+	}
+	if _, ok := got[ActivityMsgKey("C0002TEST", "1700000003.000300")]; !ok {
+		t.Fatalf("second channel message missing")
+	}
+	// The empty-ts message must not produce a key.
+	if _, ok := got[ActivityMsgKey("C0001TEST", "")]; ok {
+		t.Fatalf("empty-ts message should be skipped")
+	}
+	// The malformed channel must contribute nothing (and not error above).
+	for k := range got {
+		if len(k) >= 9 && k[:9] == "C0003TEST" {
+			t.Fatalf("malformed channel should contribute no entries; got key %q", k)
+		}
+	}
+}
+
+func TestParseActivityMessages_NotOK(t *testing.T) {
+	_, err := parseActivityMessages([]byte(`{"ok":false,"error":"invalid_arguments"}`))
+	if err == nil {
+		t.Fatal("ok:false should return an error")
+	}
+	if !strings.Contains(err.Error(), "invalid_arguments") {
+		t.Fatalf("error should carry the Slack error: %v", err)
+	}
+}
+
+func TestActivityMsgKey_NoCollision(t *testing.T) {
+	// Distinct (channel, ts) pairs must not collide even when the raw
+	// concatenations would ("C1"+"2.3" vs "C1"+"2.3" is fine, but the
+	// separator prevents "C1","2.3" from matching "C","12.3").
+	if ActivityMsgKey("C1", "2.3") == ActivityMsgKey("C", "12.3") {
+		t.Fatal("ActivityMsgKey collision across a shifted channel/ts boundary")
 	}
 }

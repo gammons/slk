@@ -178,6 +178,7 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 		a.sidebar.SetThreadsUnreadCount(0)
 		a.sidebar.SetActivityActive(false)
 		a.activityView.SetItems(nil)
+		a.activityView.SetBodies(nil)
 		a.sidebar.SetActivityUnreadCount(0)
 		a.activityNextCursor = ""
 		a.lastOpenedChannelID = ""
@@ -287,6 +288,7 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	a.threadsView.SetSummaries(nil)
 	a.sidebar.SetThreadsUnreadCount(0)
 	a.activityView.SetItems(nil)
+	a.activityView.SetBodies(nil)
 	a.sidebar.SetActivityUnreadCount(0)
 	a.activityNextCursor = ""
 	a.lastOpenedChannelID = ""
