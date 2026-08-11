@@ -37,6 +37,16 @@ func keyringPassword() ([]byte, error) {
 	return findKeyringPassword(service.SearchItems)
 }
 
+// keyringPasswords adapts keyringPassword to the multi-candidate interface:
+// Linux stores a single Slack Safe Storage secret.
+func keyringPasswords() ([][]byte, error) {
+	pw, err := keyringPassword()
+	if err != nil {
+		return nil, err
+	}
+	return [][]byte{pw}, nil
+}
+
 func findKeyringPassword(searchItems searchSecretItemsFunc) ([]byte, error) {
 	foundLocked := false
 	for _, attrs := range slackSecretQueries {

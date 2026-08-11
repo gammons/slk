@@ -12,6 +12,16 @@ import (
 	"github.com/billgraziano/dpapi"
 )
 
+// keyringPasswords adapts keyringPassword to the multi-candidate interface:
+// Windows has a single os_crypt key.
+func keyringPasswords() ([][]byte, error) {
+	key, err := keyringPassword()
+	if err != nil {
+		return nil, err
+	}
+	return [][]byte{key}, nil
+}
+
 // keyringPassword returns the AES-256 key from Local State (Windows). On
 // Windows this key feeds AES-GCM (not PBKDF2).
 func keyringPassword() ([]byte, error) {
