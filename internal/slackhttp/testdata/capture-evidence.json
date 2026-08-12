@@ -1,0 +1,72 @@
+{
+  "source": "HAR captures of the official Slack web client, rands-leadership.slack.com, 2026-07-30",
+  "note": "Generated digest. Tokens redacted. Raw HARs are NOT in the repo (they contain live credentials and message content).",
+  "captures": {
+    "channel-switch-2": {
+      "slack_api_requests": 19,
+      "with_nonempty_referer": 0
+    },
+    "channel-switch": {
+      "slack_api_requests": 24,
+      "with_nonempty_referer": 0
+    },
+    "coldboot": {
+      "slack_api_requests": 70,
+      "with_nonempty_referer": 0
+    },
+    "initial-load": {
+      "slack_api_requests": 77,
+      "with_nonempty_referer": 0
+    },
+    "quickswitch": {
+      "slack_api_requests": 15,
+      "with_nonempty_referer": 0
+    },
+    "quickswitch2": {
+      "slack_api_requests": 37,
+      "with_nonempty_referer": 0
+    },
+    "reconnect": {
+      "slack_api_requests": 25,
+      "with_nonempty_referer": 0
+    },
+    "scroll": {
+      "slack_api_requests": 12,
+      "with_nonempty_referer": 0
+    }
+  },
+  "aggregate": {
+    "total_slack_api_requests": 279,
+    "requests_with_nonempty_referer": 0,
+    "x_id_total": 163,
+    "x_id_distinct": 160,
+    "x_id_duplicated_values": {
+      "noversion-1785409619.214": 2,
+      "741e4b14-1785407067.503": 2,
+      "37bae521-1785413591.707": 2
+    },
+    "x_reason_in_body": 153,
+    "x_reason_in_query": 0,
+    "x_reason_distinct_values": 48,
+    "sec_ch_ua_values": {
+      "\"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"150\", \"Google Chrome\";v=\"150\"": 279
+    },
+    "user_agent_values": {
+      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36": 279
+    },
+    "websocket_upgrade_headers": [
+      "accept-encoding",
+      "accept-language",
+      "cache-control",
+      "connection",
+      "host",
+      "origin",
+      "pragma",
+      "sec-websocket-extensions",
+      "sec-websocket-key",
+      "sec-websocket-version",
+      "upgrade",
+      "user-agent"
+    ]
+  }
+}

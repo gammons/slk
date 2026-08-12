@@ -300,3 +300,112 @@ func TestMigrate_CreatesThreadSubscriptionsTable(t *testing.T) {
 		t.Fatalf("thread_subscriptions: want %d cols, got %d", wantCols, count)
 	}
 }
+
+// countColumn reports how many columns named `column` exist on `table`.
+// Expected values are 0 (missing) or 1 (present).
+func countColumn(t *testing.T, db *DB, table, column string) int {
+	t.Helper()
+	var count int
+	err := db.conn.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`,
+		table, column,
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("pragma_table_info(%s): %v", table, err)
+	}
+	return count
+}
+
+// columnInfo reports the declared type, NOT NULL flag and DEFAULT
+// literal of `table`.`column`, plus whether the column exists at all.
+// dflt carries dflt_value verbatim as it appears in the DDL, so a
+// string default arrives still quoted: an empty-string default reads
+// back as a two-character value (a pair of single quotes), not as the
+// empty string.
+func columnInfo(t *testing.T, db *DB, table, column string) (ctype string, notnull int, dflt sql.NullString, found bool) {
+	t.Helper()
+	err := db.conn.QueryRow(
+		`SELECT type, "notnull", dflt_value FROM pragma_table_info(?) WHERE name = ?`,
+		table, column,
+	).Scan(&ctype, &notnull, &dflt)
+	if err == sql.ErrNoRows {
+		return "", 0, sql.NullString{}, false
+	}
+	if err != nil {
+		t.Fatalf("pragma_table_info(%s).%s: %v", table, column, err)
+	}
+	return ctype, notnull, dflt, true
+}
+
+// TestMigrate_AddsVersionColumns pins the *shape* of each version
+// column, not just its presence. The type split is the substance of
+// this migration: channels/users carry numeric versions, messages
+// carries Slack's opaque version string ("1783024685.163100").
+// SQLite type affinity is advisory, so declaring messages.version
+// INTEGER would not fail loudly — it would silently coerce that
+// string and corrupt the revalidation key, surfacing much later as
+// Slack returning full records where empty ones were expected.
+// Asserting type/notnull/default is what makes such a slip fail here.
+func TestMigrate_AddsVersionColumns(t *testing.T) {
+	db, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer db.Close()
+
+	for _, tc := range []struct {
+		table, column string
+		wantType      string
+		wantNotNull   int
+		wantDefault   string // dflt_value verbatim: quoted for string defaults
+	}{
+		{"channels", "version", "INTEGER", 1, "0"},
+		{"users", "version", "INTEGER", 1, "0"},
+		{"messages", "version", "TEXT", 1, "''"},
+	} {
+		t.Run(tc.table+"."+tc.column, func(t *testing.T) {
+			ctype, notnull, dflt, found := columnInfo(t, db, tc.table, tc.column)
+			if !found {
+				t.Fatalf("column %s.%s missing after migrate()", tc.table, tc.column)
+			}
+			if ctype != tc.wantType {
+				t.Errorf("%s.%s type = %q, want %q", tc.table, tc.column, ctype, tc.wantType)
+			}
+			if notnull != tc.wantNotNull {
+				t.Errorf("%s.%s NOT NULL = %d, want %d", tc.table, tc.column, notnull, tc.wantNotNull)
+			}
+			if !dflt.Valid || dflt.String != tc.wantDefault {
+				t.Errorf("%s.%s default = %v, want %q", tc.table, tc.column, dflt, tc.wantDefault)
+			}
+		})
+	}
+}
+
+func TestMigrate_VersionColumnsAreIdempotent(t *testing.T) {
+	// migrate() runs on every Open, so a second run must not error:
+	// ALTER TABLE ADD COLUMN fails on a duplicate name, so an unguarded
+	// add would break every Open after the first. The t.Fatalf below is
+	// the load-bearing assertion. The count check that follows cannot
+	// see a duplicate (sqlite would have errored above); it catches the
+	// opposite failure, a guard that skips the add entirely and leaves
+	// the column absent.
+	db, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.migrate(); err != nil {
+		t.Fatalf("second migrate(): %v", err)
+	}
+
+	for _, tc := range []struct{ table, column string }{
+		{"channels", "version"},
+		{"users", "version"},
+		{"messages", "version"},
+	} {
+		if got := countColumn(t, db, tc.table, tc.column); got != 1 {
+			t.Errorf("after second migrate(), %s.%s count = %d, want 1", tc.table, tc.column, got)
+		}
+	}
+}

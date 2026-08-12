@@ -15,6 +15,17 @@ import (
 // triggers a background re-fetch. Spec: 24h.
 const TTL = 24 * time.Hour
 
+// FailureBackoff bounds how soon a FAILED fetch may be retried. A
+// failed fetch never bumps last_full_fetch_at, so without this every
+// EnsureFresh re-issues conversations.members — and OnConnect's
+// ForceStale+EnsureFresh pair fires on every websocket reconnect.
+// Measured live: the on-screen channel was one the workspace's token
+// could not see (channel_not_found), the socket flapped, and a
+// 25-second session started 42 conversations.members requests. 5
+// minutes throttles that loop without wedging a transiently failing
+// channel for the full TTL.
+const FailureBackoff = 5 * time.Minute
+
 // ConversationMemberAPI is the slack-client subset Manager needs.
 // Decoupled from *slackclient.Client for testability.
 type ConversationMemberAPI interface {
@@ -45,6 +56,7 @@ type Manager struct {
 	members     map[string]map[string]struct{} // channelID -> member set
 	fetching    map[string]struct{}            // in-flight sentinel by channelID
 	lastFetched map[string]time.Time           // last successful full-fetch (in-memory, for dedup)
+	lastFailed  map[string]time.Time           // last failed fetch; backs off retries
 }
 
 // New constructs a Manager bound to one workspace.
@@ -58,6 +70,7 @@ func New(workspaceID string, api ConversationMemberAPI, db *cache.DB, push PushF
 		members:     map[string]map[string]struct{}{},
 		fetching:    map[string]struct{}{},
 		lastFetched: map[string]time.Time{},
+		lastFailed:  map[string]time.Time{},
 	}
 }
 
@@ -148,6 +161,15 @@ func (m *Manager) backgroundFetch(ctx context.Context, channelID string) {
 		m.mu.Unlock()
 		return
 	}
+	// A recent failure suppresses the retry. ForceStale clears
+	// lastFetched but deliberately NOT lastFailed: ForceStale runs on
+	// every websocket reconnect, and a channel whose fetch keeps
+	// failing (e.g. one this workspace's token cannot see) would
+	// otherwise be re-fetched on every flap.
+	if last, ok := m.lastFailed[channelID]; ok && time.Since(last) < FailureBackoff {
+		m.mu.Unlock()
+		return
+	}
 	m.fetching[channelID] = struct{}{}
 	m.mu.Unlock()
 	defer func() {
@@ -158,13 +180,34 @@ func (m *Manager) backgroundFetch(ctx context.Context, channelID string) {
 
 	ids, err := m.api.GetUsersInConversation(ctx, channelID)
 	if err != nil {
+		m.mu.Lock()
+		m.lastFailed[channelID] = time.Now()
+		m.mu.Unlock()
 		return
 	}
-	if m.resolver != nil {
-		for _, id := range ids {
-			m.resolver.Request(id)
-		}
-	}
+	// Deliberately no resolution pass over ids.
+	//
+	// This used to call m.resolver.Request for every member, which is
+	// one users.info request per member on any id the cache has not
+	// seen. Measured on a cold cache: a 35-second boot started 40,523
+	// of them, one per distinct row in channel_members. The resolver
+	// short-circuits on a cache hit, so the users.list sweep used to
+	// hide it by filling the cache first; deleting that sweep exposed
+	// it.
+	//
+	// It is also a question the official client never asks — zero
+	// /api/users.info and zero /api/conversations.members across all 8
+	// captures. It fetches one channel's first page of members through
+	// edgeapi's users/list (count 30, present first), which returns
+	// full user records with no resolution step at all. Moving to that
+	// is the next step; removing the fan-out does not have to wait for
+	// it.
+	//
+	// The ids themselves are still fetched and cached below: that is
+	// one bounded call per channel, and it is what the mention
+	// picker's in-channel ordering reads. Names for members slk has
+	// not met come from the cache, the boot response, and on-demand
+	// resolution when a row is actually rendered.
 	now := time.Now().Unix()
 	if err := m.db.ReplaceChannelMembers(m.workspaceID, channelID, ids, now); err != nil {
 		return
@@ -176,6 +219,7 @@ func (m *Manager) backgroundFetch(ctx context.Context, channelID string) {
 	m.mu.Lock()
 	m.members[channelID] = set
 	m.lastFetched[channelID] = time.Now()
+	delete(m.lastFailed, channelID)
 	m.mu.Unlock()
 	m.pushSnapshot(channelID)
 }

@@ -1,0 +1,4195 @@
+{
+  "source": "HAR captures of the official Slack web client, 2026-07-30, rands-leadership.slack.com (~10k users). Raw HARs are NOT committed: they contain live xoxc/xoxd credentials and message content.",
+  "purpose": "Phase 2 (bootstrap rewrite) API contracts. Request params are verbatim with tokens redacted; response bodies are reduced to type/shape summaries so no message content is included.",
+  "endpoints": {
+    "client.userBoot": {
+      "observed_count": 2,
+      "samples": [
+        {
+          "capture": "coldboot",
+          "method": "POST",
+          "content_type": "multipart/form-data",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "_x_reason": "initial-data",
+            "version_all_channels": "false",
+            "return_all_relevant_mpdms": "true",
+            "omit_extras": "feature_usage_data,plan_info,salesforce_features",
+            "_x_sonic": "true",
+            "_x_app_name": "client"
+          },
+          "response_status": 200,
+          "response_bytes": 139621,
+          "response_shape": {
+            "ok": "bool",
+            "app_commands_cache_ts": "<str len=17>",
+            "cache_ts_version": "<str len=8>",
+            "cache_version": "<str len=9>",
+            "emoji_cache_ts": "<str len=17>",
+            "translations_cache_ts": "<str len=17>",
+            "is_content_reporting_enabled": "bool",
+            "dnd": {
+              "dnd_enabled": "bool",
+              "next_dnd_start_ts": "int",
+              "next_dnd_end_ts": "int",
+              "snooze_enabled": "bool"
+            },
+            "is_europe": "bool",
+            "account_types": {
+              "is_admin": [],
+              "is_owner": [],
+              "is_primary_owner": []
+            },
+            "can_access_client_v2": "bool",
+            "channels_priority": {
+              "C04T4TH9N": "float",
+              "C04T4TH9Q": "float",
+              "C94H848UB": "float"
+            },
+            "channels": [
+              {
+                "id": "<str len=9>",
+                "name": "<str len=13>",
+                "is_channel": "bool",
+                "is_group": "bool",
+                "is_im": "bool",
+                "is_mpim": "bool",
+                "is_private": "bool",
+                "created": "int",
+                "is_archived": "bool",
+                "is_general": "bool",
+                "unlinked": "int",
+                "name_normalized": "<str len=13>",
+                "is_shared": "bool",
+                "is_frozen": "bool",
+                "is_org_shared": "bool",
+                "is_pending_ext_shared": "bool",
+                "pending_shared": [],
+                "context_team_id": "<str len=9>",
+                "updated": "int",
+                "parent_conversation": "null",
+                "creator": "<str len=9>",
+                "is_ext_shared": "bool",
+                "shared_team_ids": [
+                  "...",
+                  "\u2026len=1"
+                ],
+                "pending_connected_team_ids": [],
+                "topic": {
+                  "value": "...",
+                  "creator": "...",
+                  "last_set": "..."
+                },
+                "purpose": {
+                  "value": "...",
+                  "creator": "...",
+                  "last_set": "..."
+                },
+                "properties": {
+                  "posting_restricted_to": "...",
+                  "threads_restricted_to": "...",
+                  "canvas": "...",
+                  "meeting_notes": "...",
+                  "tabs": "...",
+                  "tabz": "..."
+                },
+                "previous_names": [
+                  "...",
+                  "\u2026len=1"
+                ]
+              },
+              "\u2026len=55"
+            ],
+            "default_workspace": "<str len=9>",
+            "has_more_mpdms": "bool",
+            "ims": [
+              {
+                "id": "<str len=9>",
+                "created": "int",
+                "is_org_shared": "bool",
+                "is_im": "bool",
+                "is_archived": "bool",
+                "context_team_id": "<str len=9>",
+                "updated": "int",
+                "is_frozen": "bool",
+                "user": "<str len=9>",
+                "is_open": "bool",
+                "properties": {
+                  "is_dormant": "..."
+                }
+              },
+              "\u2026len=11"
+            ],
+            "is_open": [
+              "<str len=9>",
+              "\u2026len=12"
+            ],
+            "non_threadable_channels": [],
+            "prefs": {
+              "underline_links": "bool",
+              "show_text_selection_context_menu": "bool",
+              "copy_messages_as_markdown": "bool",
+              "user_colors": "<str len=0>",
+              "color_names_in_list": "bool",
+              "keyboard": "null",
+              "slackbot_ai_nux_state": "<str len=0>",
+              "slackbot_zero_state_nux_state": "<str len=0>",
+              "slackbot_nux_kickoff_thread_ts": "<str len=0>",
+              "slackbot_unread_threads": "<str len=0>",
+              "email_alerts": "<str len=4>",
+              "email_alerts_sleep_until": "int",
+              "email_tips": "bool",
+              "email_weekly": "bool",
+              "email_offers": "bool",
+              "email_research": "bool",
+              "email_developer": "bool",
+              "email_changelog": "bool",
+              "welcome_message_hidden": "bool",
+              "search_sort": "<str len=14>",
+              "search_file_sort": "<str len=5>",
+              "search_channel_sort": "<str len=8>",
+              "search_mixed_results_sort": "<str len=8>",
+              "search_top_results_sort": "<str len=8>",
+              "search_work_objects_sort": "<str len=8>",
+              "search_people_sort": "<str len=8>",
+              "search_minimize_sources": "null",
+              "search_hidden_connectors": "<str len=0>",
+              "expand_inline_imgs": "bool",
+              "num_top_result_tab_clicked": "int",
+              "expand_internal_inline_imgs": "bool",
+              "expand_snippets": "bool",
+              "posts_formatting_guide": "bool",
+              "seen_welcome_2": "bool",
+              "seen_ssb_prompt": "bool",
+              "spaces_new_xp_banner_dismissed": "bool",
+              "search_only_my_channels": "bool",
+              "search_only_current_team": "bool",
+              "search_hide_my_channels": "bool",
+              "search_only_show_online": "bool",
+              "search_hide_deactivated_users": "bool",
+              "search_results_ia_layout": "null",
+              "emoji_mode": "<str len=7>",
+              "has_invited": "bool",
+              "has_uploaded": "bool",
+              "has_created_channel": "bool",
+              "has_created_channel_section": "bool",
+              "has_searched": "bool",
+              "has_installed_apps": "bool",
+              "search_exclude_channels": "<str len=0>",
+              "messages_theme": "<str len=7>",
+              "webapp_spellcheck": "bool",
+              "no_joined_overlays": "bool",
+              "no_created_overlays": "bool",
+              "dropbox_enabled": "bool",
+              "seen_domain_invite_reminder": "bool",
+              "seen_member_invite_reminder": "bool",
+              "mute_sounds": "bool",
+              "arrow_history": "bool",
+              "tab_ui_return_selects": "bool"
+            },
+            "prefs_version": "<str len=64>",
+            "read_only_channels": [
+              "<str len=9>",
+              "\u2026len=1"
+            ],
+            "self": {
+              "id": "<str len=9>",
+              "name": "<str len=8>",
+              "is_bot": "bool",
+              "updated": "int",
+              "is_app_user": "bool",
+              "team_id": "<str len=9>",
+              "deleted": "bool",
+              "color": "<str len=6>",
+              "is_email_confirmed": "bool",
+              "real_name": "<str len=12>",
+              "tz": "<str len=13>",
+              "tz_label": "<str len=19>",
+              "tz_offset": "int",
+              "is_admin": "bool",
+              "is_owner": "bool",
+              "is_primary_owner": "bool",
+              "is_restricted": "bool",
+              "is_ultra_restricted": "bool",
+              "has_2fa": "bool",
+              "who_can_share_contact_card": "<str len=8>",
+              "first_login": "int",
+              "manual_presence": "<str len=6>",
+              "profile": {
+                "real_name": "<str len=12>",
+                "display_name": "<str len=12>",
+                "avatar_hash": "<str len=12>",
+                "real_name_normalized": "<str len=12>",
+                "display_name_normalized": "<str len=12>",
+                "image_original": "<str len=114>",
+                "is_custom_image": "bool",
+                "first_name": "<str len=5>",
+                "last_name": "<str len=6>",
+                "team": "<str len=9>",
+                "email": "<str len=17>",
+                "title": "<str len=27>",
+                "phone": "<str len=0>",
+                "skype": "<str len=0>",
+                "status_text": "<str len=0>",
+                "status_text_canonical": "<str len=0>",
+                "status_emoji": "<str len=0>",
+                "status_emoji_display_info": [],
+                "status_expiration": "int",
+                "huddle_state": "<str len=13>"
+              }
+            },
+            "slack_route": "<str len=9>",
+            "starred": [],
+            "team": {
+              "id": "<str len=9>",
+              "name": "<str len=10>",
+              "url": "<str len=35>",
+              "domain": "<str len=16>",
+              "email_domain": "<str len=0>",
+              "avatar_base_url": "<str len=26>",
+              "is_verified": "bool",
+              "plan": "<str len=3>",
+              "icon": {
+                "image_default": "bool",
+                "image_34": "<str len=83>",
+                "image_44": "<str len=83>",
+                "image_68": "<str len=83>",
+                "image_88": "<str len=83>",
+                "image_102": "<str len=84>",
+                "image_230": "<str len=84>",
+                "image_132": "<str len=84>"
+              },
+              "date_created": "int",
+              "prefs": {
+                "default_channels": [
+                  "...",
+                  "\u2026len=3"
+                ],
+                "image_34": "<str len=83>",
+                "image_44": "<str len=83>",
+                "image_68": "<str len=83>",
+                "image_88": "<str len=83>",
+                "image_102": "<str len=84>",
+                "image_132": "<str len=84>",
+                "image_original": "<str len=114>",
+                "gateway_allow_xmpp_ssl": "int",
+                "gateway_allow_irc_ssl": "int",
+                "gateway_allow_irc_plain": "int",
+                "require_at_for_mention": "bool",
+                "posts_migrating": "int",
+                "allow_calls": "bool",
+                "display_email_addresses": "bool",
+                "image_230": "<str len=84>",
+                "limit_reached_ts": "int",
+                "show_join_leave": "bool",
+                "who_can_create_delete_user_groups": "<str len=7>",
+                "who_can_edit_user_groups": "<str len=7>",
+                "who_can_change_team_profile": "<str len=5>",
+                "enable_shared_channels": "int",
+                "gdrive_enabled_team": "bool",
+                "allow_retention_override": "bool",
+                "received_github_app_upgrade_prompt": "int",
+                "app_whitelist_enabled": "bool",
+                "who_can_manage_integrations": {
+                  "type": "..."
+                },
+                "app_whitelist_requests_require_comment_enabled": "bool",
+                "who_can_post_general": "<str len=5>",
+                "warn_before_at_channel": "<str len=6>",
+                "disabled_loading_messages": "<str len=0>",
+                "invited_user_preset": {
+                  "enable_invited_user": "..."
+                },
+                "invite_requests_approval_channel": "<str len=9>",
+                "invites_only_admins": "bool",
+                "billing_email_daily": "bool",
+                "slackbot_responses_disabled": "bool",
+                "subteams_auto_create_admin": "bool",
+                "welcome_place_enabled": "bool",
+                "onedrive_app_installed": "bool",
+                "disallow_public_file_urls": "bool",
+                "custom_status_presets": [
+                  "...",
+                  "\u2026len=5"
+                ],
+                "uses_customized_custom_status_presets": "bool",
+                "who_can_create_workflows": {
+                  "type": "...",
+                  "user": "...",
+                  "subteam": "..."
+                },
+                "has_installed_apps": "bool",
+                "received_esc_route_to_channel_awareness_message": "bool",
+                "display_external_email_addresses": "bool",
+                "joiner_notifications_enabled": "bool",
+                "has_shared_invites": "bool",
+                "who_can_dm_anyone": {
+                  "type": "..."
+                },
+                "who_can_manage_ext_shared_channels": {
+                  "type": "...",
+                  "user": "...",
+                  "subteam": "..."
+                },
+                "who_can_request_ext_shared_channels": {
+                  "type": "...",
+                  "user": "...",
+                  "subteam": "..."
+                },
+                "can_receive_shared_channels_invites": "bool",
+                "who_can_accept_slack_connect_channel_invites": {
+                  "type": "...",
+                  "user": "...",
+                  "subteam": "..."
+                },
+                "who_can_create_external_limited_invite": {
+                  "type": "...",
+                  "user": "...",
+                  "subteam": "..."
+                },
+                "who_can_create_slack_connect_channel_invite": {
+                  "type": "...",
+                  "user": "...",
+                  "subteam": "..."
+                },
+                "show_mobile_promos": "bool",
+                "display_pronouns": "bool",
+                "can_accept_slack_connect_channel_invites": "bool",
+                "can_create_external_limited_invite": "bool",
+                "can_create_slack_connect_channel_invite": "bool"
+              },
+              "image_proxy_url": "<str len=23>",
+              "onboarding_channel_id": "<str len=0>",
+              "messages_count": "int"
+            },
+            "thread_only_channels": [],
+            "workspaces": [
+              {
+                "id": "<str len=9>",
+                "name": "<str len=10>",
+                "url": "<str len=35>",
+                "domain": "<str len=16>",
+                "email_domain": "<str len=0>",
+                "avatar_base_url": "<str len=26>",
+                "is_verified": "bool",
+                "icon": {
+                  "image_default": "...",
+                  "image_34": "...",
+                  "image_44": "...",
+                  "image_68": "...",
+                  "image_88": "...",
+                  "image_102": "...",
+                  "image_230": "...",
+                  "image_132": "..."
+                },
+                "prefs": {
+                  "default_channels": "...",
+                  "image_34": "...",
+                  "image_44": "...",
+                  "image_68": "...",
+                  "image_88": "...",
+                  "image_102": "...",
+                  "image_132": "...",
+                  "image_original": "...",
+                  "gateway_allow_xmpp_ssl": "...",
+                  "gateway_allow_irc_ssl": "...",
+                  "gateway_allow_irc_plain": "...",
+                  "require_at_for_mention": "...",
+                  "posts_migrating": "...",
+                  "allow_calls": "...",
+                  "display_email_addresses": "...",
+                  "image_230": "...",
+                  "limit_reached_ts": "...",
+                  "show_join_leave": "...",
+                  "who_can_create_delete_user_groups": "...",
+                  "who_can_edit_user_groups": "...",
+                  "who_can_change_team_profile": "...",
+                  "enable_shared_channels": "...",
+                  "gdrive_enabled_team": "...",
+                  "allow_retention_override": "...",
+                  "received_github_app_upgrade_prompt": "...",
+                  "app_whitelist_enabled": "...",
+                  "who_can_manage_integrations": "...",
+                  "app_whitelist_requests_require_comment_enabled": "...",
+                  "who_can_post_general": "...",
+                  "warn_before_at_channel": "...",
+                  "disabled_loading_messages": "...",
+                  "invited_user_preset": "...",
+                  "invite_requests_approval_channel": "...",
+                  "invites_only_admins": "...",
+                  "billing_email_daily": "...",
+                  "slackbot_responses_disabled": "...",
+                  "subteams_auto_create_admin": "...",
+                  "welcome_place_enabled": "...",
+                  "onedrive_app_installed": "...",
+                  "disallow_public_file_urls": "...",
+                  "custom_status_presets": "...",
+                  "uses_customized_custom_status_presets": "...",
+                  "who_can_create_workflows": "...",
+                  "has_installed_apps": "...",
+                  "received_esc_route_to_channel_awareness_message": "...",
+                  "display_external_email_addresses": "...",
+                  "joiner_notifications_enabled": "...",
+                  "has_shared_invites": "...",
+                  "who_can_dm_anyone": "...",
+                  "who_can_manage_ext_shared_channels": "...",
+                  "who_can_request_ext_shared_channels": "...",
+                  "can_receive_shared_channels_invites": "...",
+                  "who_can_accept_slack_connect_channel_invites": "...",
+                  "who_can_create_external_limited_invite": "...",
+                  "who_can_create_slack_connect_channel_invite": "...",
+                  "show_mobile_promos": "...",
+                  "display_pronouns": "...",
+                  "can_accept_slack_connect_channel_invites": "...",
+                  "can_create_external_limited_invite": "...",
+                  "can_create_slack_connect_channel_invite": "..."
+                }
+              },
+              "\u2026len=1"
+            ],
+            "is_slack_first_crm": "bool",
+            "is_eligible_invited_user_glow_up": "bool",
+            "mobile_app_requires_upgrade": "bool",
+            "subteams": {
+              "self": []
+            },
+            "accept_tos_url": "null",
+            "links": {
+              "domains_ts": "int"
+            }
+          }
+        },
+        {
+          "capture": "initial-load",
+          "method": "POST",
+          "content_type": "multipart/form-data",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "_x_reason": "initial-data",
+            "version_all_channels": "false",
+            "return_all_relevant_mpdms": "true",
+            "omit_extras": "feature_usage_data,plan_info,salesforce_features",
+            "_x_sonic": "true",
+            "_x_app_name": "client"
+          },
+          "response_status": 200,
+          "response_bytes": 139621,
+          "response_shape": {
+            "ok": "bool",
+            "app_commands_cache_ts": "<str len=17>",
+            "cache_ts_version": "<str len=8>",
+            "cache_version": "<str len=9>",
+            "emoji_cache_ts": "<str len=17>",
+            "translations_cache_ts": "<str len=17>",
+            "is_content_reporting_enabled": "bool",
+            "dnd": {
+              "dnd_enabled": "bool",
+              "next_dnd_start_ts": "int",
+              "next_dnd_end_ts": "int",
+              "snooze_enabled": "bool"
+            },
+            "is_europe": "bool",
+            "account_types": {
+              "is_admin": [],
+              "is_owner": [],
+              "is_primary_owner": []
+            },
+            "can_access_client_v2": "bool",
+            "channels_priority": {
+              "C04T4TH9N": "float",
+              "C04T4TH9Q": "float",
+              "C94H848UB": "float"
+            },
+            "channels": [
+              {
+                "id": "<str len=9>",
+                "name": "<str len=13>",
+                "is_channel": "bool",
+                "is_group": "bool",
+                "is_im": "bool",
+                "is_mpim": "bool",
+                "is_private": "bool",
+                "created": "int",
+                "is_archived": "bool",
+                "is_general": "bool",
+                "unlinked": "int",
+                "name_normalized": "<str len=13>",
+                "is_shared": "bool",
+                "is_frozen": "bool",
+                "is_org_shared": "bool",
+                "is_pending_ext_shared": "bool",
+                "pending_shared": [],
+                "context_team_id": "<str len=9>",
+                "updated": "int",
+                "parent_conversation": "null",
+                "creator": "<str len=9>",
+                "is_ext_shared": "bool",
+                "shared_team_ids": [
+                  "...",
+                  "\u2026len=1"
+                ],
+                "pending_connected_team_ids": [],
+                "topic": {
+                  "value": "...",
+                  "creator": "...",
+                  "last_set": "..."
+                },
+                "purpose": {
+                  "value": "...",
+                  "creator": "...",
+                  "last_set": "..."
+                },
+                "properties": {
+                  "posting_restricted_to": "...",
+                  "threads_restricted_to": "...",
+                  "canvas": "...",
+                  "meeting_notes": "...",
+                  "tabs": "...",
+                  "tabz": "..."
+                },
+                "previous_names": [
+                  "...",
+                  "\u2026len=1"
+                ]
+              },
+              "\u2026len=55"
+            ],
+            "default_workspace": "<str len=9>",
+            "has_more_mpdms": "bool",
+            "ims": [
+              {
+                "id": "<str len=9>",
+                "created": "int",
+                "is_org_shared": "bool",
+                "is_im": "bool",
+                "is_archived": "bool",
+                "context_team_id": "<str len=9>",
+                "updated": "int",
+                "is_frozen": "bool",
+                "user": "<str len=9>",
+                "is_open": "bool",
+                "properties": {
+                  "is_dormant": "..."
+                }
+              },
+              "\u2026len=11"
+            ],
+            "is_open": [
+              "<str len=9>",
+              "\u2026len=12"
+            ],
+            "non_threadable_channels": [],
+            "prefs": {
+              "underline_links": "bool",
+              "show_text_selection_context_menu": "bool",
+              "copy_messages_as_markdown": "bool",
+              "user_colors": "<str len=0>",
+              "color_names_in_list": "bool",
+              "keyboard": "null",
+              "slackbot_ai_nux_state": "<str len=0>",
+              "slackbot_zero_state_nux_state": "<str len=0>",
+              "slackbot_nux_kickoff_thread_ts": "<str len=0>",
+              "slackbot_unread_threads": "<str len=0>",
+              "email_alerts": "<str len=4>",
+              "email_alerts_sleep_until": "int",
+              "email_tips": "bool",
+              "email_weekly": "bool",
+              "email_offers": "bool",
+              "email_research": "bool",
+              "email_developer": "bool",
+              "email_changelog": "bool",
+              "welcome_message_hidden": "bool",
+              "search_sort": "<str len=14>",
+              "search_file_sort": "<str len=5>",
+              "search_channel_sort": "<str len=8>",
+              "search_mixed_results_sort": "<str len=8>",
+              "search_top_results_sort": "<str len=8>",
+              "search_work_objects_sort": "<str len=8>",
+              "search_people_sort": "<str len=8>",
+              "search_minimize_sources": "null",
+              "search_hidden_connectors": "<str len=0>",
+              "expand_inline_imgs": "bool",
+              "num_top_result_tab_clicked": "int",
+              "expand_internal_inline_imgs": "bool",
+              "expand_snippets": "bool",
+              "posts_formatting_guide": "bool",
+              "seen_welcome_2": "bool",
+              "seen_ssb_prompt": "bool",
+              "spaces_new_xp_banner_dismissed": "bool",
+              "search_only_my_channels": "bool",
+              "search_only_current_team": "bool",
+              "search_hide_my_channels": "bool",
+              "search_only_show_online": "bool",
+              "search_hide_deactivated_users": "bool",
+              "search_results_ia_layout": "null",
+              "emoji_mode": "<str len=7>",
+              "has_invited": "bool",
+              "has_uploaded": "bool",
+              "has_created_channel": "bool",
+              "has_created_channel_section": "bool",
+              "has_searched": "bool",
+              "has_installed_apps": "bool",
+              "search_exclude_channels": "<str len=0>",
+              "messages_theme": "<str len=7>",
+              "webapp_spellcheck": "bool",
+              "no_joined_overlays": "bool",
+              "no_created_overlays": "bool",
+              "dropbox_enabled": "bool",
+              "seen_domain_invite_reminder": "bool",
+              "seen_member_invite_reminder": "bool",
+              "mute_sounds": "bool",
+              "arrow_history": "bool",
+              "tab_ui_return_selects": "bool"
+            },
+            "prefs_version": "<str len=64>",
+            "read_only_channels": [
+              "<str len=9>",
+              "\u2026len=1"
+            ],
+            "self": {
+              "id": "<str len=9>",
+              "name": "<str len=8>",
+              "is_bot": "bool",
+              "updated": "int",
+              "is_app_user": "bool",
+              "team_id": "<str len=9>",
+              "deleted": "bool",
+              "color": "<str len=6>",
+              "is_email_confirmed": "bool",
+              "real_name": "<str len=12>",
+              "tz": "<str len=13>",
+              "tz_label": "<str len=19>",
+              "tz_offset": "int",
+              "is_admin": "bool",
+              "is_owner": "bool",
+              "is_primary_owner": "bool",
+              "is_restricted": "bool",
+              "is_ultra_restricted": "bool",
+              "has_2fa": "bool",
+              "who_can_share_contact_card": "<str len=8>",
+              "first_login": "int",
+              "manual_presence": "<str len=6>",
+              "profile": {
+                "real_name": "<str len=12>",
+                "display_name": "<str len=12>",
+                "avatar_hash": "<str len=12>",
+                "real_name_normalized": "<str len=12>",
+                "display_name_normalized": "<str len=12>",
+                "image_original": "<str len=114>",
+                "is_custom_image": "bool",
+                "first_name": "<str len=5>",
+                "last_name": "<str len=6>",
+                "team": "<str len=9>",
+                "email": "<str len=17>",
+                "title": "<str len=27>",
+                "phone": "<str len=0>",
+                "skype": "<str len=0>",
+                "status_text": "<str len=0>",
+                "status_text_canonical": "<str len=0>",
+                "status_emoji": "<str len=0>",
+                "status_emoji_display_info": [],
+                "status_expiration": "int",
+                "huddle_state": "<str len=13>"
+              }
+            },
+            "slack_route": "<str len=9>",
+            "starred": [],
+            "team": {
+              "id": "<str len=9>",
+              "name": "<str len=10>",
+              "url": "<str len=35>",
+              "domain": "<str len=16>",
+              "email_domain": "<str len=0>",
+              "avatar_base_url": "<str len=26>",
+              "is_verified": "bool",
+              "plan": "<str len=3>",
+              "icon": {
+                "image_default": "bool",
+                "image_34": "<str len=83>",
+                "image_44": "<str len=83>",
+                "image_68": "<str len=83>",
+                "image_88": "<str len=83>",
+                "image_102": "<str len=84>",
+                "image_230": "<str len=84>",
+                "image_132": "<str len=84>"
+              },
+              "date_created": "int",
+              "prefs": {
+                "default_channels": [
+                  "...",
+                  "\u2026len=3"
+                ],
+                "image_34": "<str len=83>",
+                "image_44": "<str len=83>",
+                "image_68": "<str len=83>",
+                "image_88": "<str len=83>",
+                "image_102": "<str len=84>",
+                "image_132": "<str len=84>",
+                "image_original": "<str len=114>",
+                "gateway_allow_xmpp_ssl": "int",
+                "gateway_allow_irc_ssl": "int",
+                "gateway_allow_irc_plain": "int",
+                "require_at_for_mention": "bool",
+                "posts_migrating": "int",
+                "allow_calls": "bool",
+                "display_email_addresses": "bool",
+                "image_230": "<str len=84>",
+                "limit_reached_ts": "int",
+                "show_join_leave": "bool",
+                "who_can_create_delete_user_groups": "<str len=7>",
+                "who_can_edit_user_groups": "<str len=7>",
+                "who_can_change_team_profile": "<str len=5>",
+                "enable_shared_channels": "int",
+                "gdrive_enabled_team": "bool",
+                "allow_retention_override": "bool",
+                "received_github_app_upgrade_prompt": "int",
+                "app_whitelist_enabled": "bool",
+                "who_can_manage_integrations": {
+                  "type": "..."
+                },
+                "app_whitelist_requests_require_comment_enabled": "bool",
+                "who_can_post_general": "<str len=5>",
+                "warn_before_at_channel": "<str len=6>",
+                "disabled_loading_messages": "<str len=0>",
+                "invited_user_preset": {
+                  "enable_invited_user": "..."
+                },
+                "invite_requests_approval_channel": "<str len=9>",
+                "invites_only_admins": "bool",
+                "billing_email_daily": "bool",
+                "slackbot_responses_disabled": "bool",
+                "subteams_auto_create_admin": "bool",
+                "welcome_place_enabled": "bool",
+                "onedrive_app_installed": "bool",
+                "disallow_public_file_urls": "bool",
+                "custom_status_presets": [
+                  "...",
+                  "\u2026len=5"
+                ],
+                "uses_customized_custom_status_presets": "bool",
+                "who_can_create_workflows": {
+                  "type": "...",
+                  "user": "...",
+                  "subteam": "..."
+                },
+                "has_installed_apps": "bool",
+                "received_esc_route_to_channel_awareness_message": "bool",
+                "display_external_email_addresses": "bool",
+                "joiner_notifications_enabled": "bool",
+                "has_shared_invites": "bool",
+                "who_can_dm_anyone": {
+                  "type": "..."
+                },
+                "who_can_manage_ext_shared_channels": {
+                  "type": "...",
+                  "user": "...",
+                  "subteam": "..."
+                },
+                "who_can_request_ext_shared_channels": {
+                  "type": "...",
+                  "user": "...",
+                  "subteam": "..."
+                },
+                "can_receive_shared_channels_invites": "bool",
+                "who_can_accept_slack_connect_channel_invites": {
+                  "type": "...",
+                  "user": "...",
+                  "subteam": "..."
+                },
+                "who_can_create_external_limited_invite": {
+                  "type": "...",
+                  "user": "...",
+                  "subteam": "..."
+                },
+                "who_can_create_slack_connect_channel_invite": {
+                  "type": "...",
+                  "user": "...",
+                  "subteam": "..."
+                },
+                "show_mobile_promos": "bool",
+                "display_pronouns": "bool",
+                "can_accept_slack_connect_channel_invites": "bool",
+                "can_create_external_limited_invite": "bool",
+                "can_create_slack_connect_channel_invite": "bool"
+              },
+              "image_proxy_url": "<str len=23>",
+              "onboarding_channel_id": "<str len=0>",
+              "messages_count": "int"
+            },
+            "thread_only_channels": [],
+            "workspaces": [
+              {
+                "id": "<str len=9>",
+                "name": "<str len=10>",
+                "url": "<str len=35>",
+                "domain": "<str len=16>",
+                "email_domain": "<str len=0>",
+                "avatar_base_url": "<str len=26>",
+                "is_verified": "bool",
+                "icon": {
+                  "image_default": "...",
+                  "image_34": "...",
+                  "image_44": "...",
+                  "image_68": "...",
+                  "image_88": "...",
+                  "image_102": "...",
+                  "image_230": "...",
+                  "image_132": "..."
+                },
+                "prefs": {
+                  "default_channels": "...",
+                  "image_34": "...",
+                  "image_44": "...",
+                  "image_68": "...",
+                  "image_88": "...",
+                  "image_102": "...",
+                  "image_132": "...",
+                  "image_original": "...",
+                  "gateway_allow_xmpp_ssl": "...",
+                  "gateway_allow_irc_ssl": "...",
+                  "gateway_allow_irc_plain": "...",
+                  "require_at_for_mention": "...",
+                  "posts_migrating": "...",
+                  "allow_calls": "...",
+                  "display_email_addresses": "...",
+                  "image_230": "...",
+                  "limit_reached_ts": "...",
+                  "show_join_leave": "...",
+                  "who_can_create_delete_user_groups": "...",
+                  "who_can_edit_user_groups": "...",
+                  "who_can_change_team_profile": "...",
+                  "enable_shared_channels": "...",
+                  "gdrive_enabled_team": "...",
+                  "allow_retention_override": "...",
+                  "received_github_app_upgrade_prompt": "...",
+                  "app_whitelist_enabled": "...",
+                  "who_can_manage_integrations": "...",
+                  "app_whitelist_requests_require_comment_enabled": "...",
+                  "who_can_post_general": "...",
+                  "warn_before_at_channel": "...",
+                  "disabled_loading_messages": "...",
+                  "invited_user_preset": "...",
+                  "invite_requests_approval_channel": "...",
+                  "invites_only_admins": "...",
+                  "billing_email_daily": "...",
+                  "slackbot_responses_disabled": "...",
+                  "subteams_auto_create_admin": "...",
+                  "welcome_place_enabled": "...",
+                  "onedrive_app_installed": "...",
+                  "disallow_public_file_urls": "...",
+                  "custom_status_presets": "...",
+                  "uses_customized_custom_status_presets": "...",
+                  "who_can_create_workflows": "...",
+                  "has_installed_apps": "...",
+                  "received_esc_route_to_channel_awareness_message": "...",
+                  "display_external_email_addresses": "...",
+                  "joiner_notifications_enabled": "...",
+                  "has_shared_invites": "...",
+                  "who_can_dm_anyone": "...",
+                  "who_can_manage_ext_shared_channels": "...",
+                  "who_can_request_ext_shared_channels": "...",
+                  "can_receive_shared_channels_invites": "...",
+                  "who_can_accept_slack_connect_channel_invites": "...",
+                  "who_can_create_external_limited_invite": "...",
+                  "who_can_create_slack_connect_channel_invite": "...",
+                  "show_mobile_promos": "...",
+                  "display_pronouns": "...",
+                  "can_accept_slack_connect_channel_invites": "...",
+                  "can_create_external_limited_invite": "...",
+                  "can_create_slack_connect_channel_invite": "..."
+                }
+              },
+              "\u2026len=1"
+            ],
+            "is_slack_first_crm": "bool",
+            "is_eligible_invited_user_glow_up": "bool",
+            "mobile_app_requires_upgrade": "bool",
+            "subteams": {
+              "self": []
+            },
+            "accept_tos_url": "null",
+            "links": {
+              "domains_ts": "int"
+            }
+          }
+        }
+      ]
+    },
+    "conversations.view": {
+      "observed_count": 2,
+      "samples": [
+        {
+          "capture": "coldboot",
+          "method": "POST",
+          "content_type": "multipart/form-data",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "canonical_avatars": "true",
+            "no_user_profile": "true",
+            "ignore_replies": "true",
+            "no_self": "true",
+            "include_full_users": "true",
+            "include_use_case": "true",
+            "include_stories": "true",
+            "no_members": "true",
+            "include_mutation_timestamps": "true",
+            "count": "28",
+            "include_free_team_extra_messages": "true",
+            "_x_sonic": "true",
+            "_x_app_name": "client"
+          },
+          "response_status": 200,
+          "response_bytes": 204171,
+          "response_shape": {
+            "ok": "bool",
+            "history": {
+              "messages": [
+                {
+                  "user": "...",
+                  "type": "...",
+                  "ts": "...",
+                  "client_msg_id": "...",
+                  "text": "...",
+                  "team": "...",
+                  "blocks": "...",
+                  "reactions": "..."
+                },
+                "\u2026len=28"
+              ],
+              "has_more": "bool",
+              "mutation_timestamps": {
+                "latest": "<str len=17>",
+                "updated": "<str len=17>",
+                "history_invalid": "<str len=17>"
+              },
+              "channel_actions_ts": "null",
+              "channel_actions_count": "int",
+              "next_ts": "int"
+            },
+            "users": [
+              {
+                "id": "<str len=9>",
+                "name": "<str len=5>",
+                "is_bot": "bool",
+                "updated": "int",
+                "is_app_user": "bool",
+                "team_id": "<str len=9>",
+                "deleted": "bool",
+                "color": "<str len=6>",
+                "is_email_confirmed": "bool",
+                "real_name": "<str len=5>",
+                "tz": "<str len=19>",
+                "tz_label": "<str len=21>",
+                "tz_offset": "int",
+                "is_admin": "bool",
+                "is_owner": "bool",
+                "is_primary_owner": "bool",
+                "is_restricted": "bool",
+                "is_ultra_restricted": "bool",
+                "who_can_share_contact_card": "<str len=12>",
+                "profile": {
+                  "real_name": "...",
+                  "display_name": "...",
+                  "avatar_hash": "...",
+                  "real_name_normalized": "...",
+                  "display_name_normalized": "...",
+                  "image_original": "...",
+                  "is_custom_image": "...",
+                  "first_name": "...",
+                  "last_name": "...",
+                  "team": "...",
+                  "title": "...",
+                  "phone": "...",
+                  "skype": "...",
+                  "status_text": "...",
+                  "status_text_canonical": "...",
+                  "status_emoji": "...",
+                  "status_emoji_display_info": "...",
+                  "status_expiration": "...",
+                  "who_can_share_contact_card": "...",
+                  "huddle_state": "...",
+                  "huddle_state_expiration_ts": "..."
+                }
+              },
+              "\u2026len=5"
+            ],
+            "bots": [],
+            "channels": [
+              {
+                "id": "<str len=11>",
+                "created": "int",
+                "creator": "<str len=9>",
+                "is_org_shared": "bool",
+                "is_im": "bool",
+                "context_team_id": "<str len=9>",
+                "updated": "int",
+                "name": "<str len=8>",
+                "name_normalized": "<str len=8>",
+                "is_channel": "bool",
+                "is_group": "bool",
+                "is_mpim": "bool",
+                "is_private": "bool",
+                "is_archived": "bool",
+                "is_general": "bool",
+                "is_shared": "bool",
+                "is_ext_shared": "bool",
+                "unlinked": "int",
+                "is_pending_ext_shared": "bool",
+                "pending_shared": [],
+                "parent_conversation": "null",
+                "purpose": {
+                  "value": "...",
+                  "creator": "...",
+                  "last_set": "..."
+                },
+                "topic": {
+                  "value": "...",
+                  "creator": "...",
+                  "last_set": "..."
+                },
+                "shared_team_ids": [
+                  "...",
+                  "\u2026len=1"
+                ],
+                "pending_connected_team_ids": [],
+                "is_member": "bool",
+                "properties": {
+                  "canvas": "...",
+                  "meeting_notes": "...",
+                  "tabs": "...",
+                  "tabz": "..."
+                },
+                "previous_names": [
+                  "...",
+                  "\u2026len=2"
+                ]
+              },
+              "\u2026len=27"
+            ],
+            "emojis": {
+              "rls-heart": "<str len=69>",
+              "oregon-trail": "<str len=72>",
+              "woohoo": "<str len=66>",
+              "blob-salute-gif": "<str len=75>",
+              "thankyouty": "<str len=70>",
+              "ai-dr": "<str len=65>",
+              "killitwithfire": "<str len=74>",
+              "floyd-bot": "<str len=69>",
+              "grumbles-gray": "<str len=73>",
+              "noto-fireworks": "<str len=74>",
+              "flag-us-distress": "<str len=76>",
+              "sunny-day": "<str len=69>",
+              "bluey": "<str len=65>",
+              "dadjoke": "<str len=67>",
+              "bioshock-big-daddy": "<str len=78>",
+              "juneteenth": "<str len=70>",
+              "rls-thanks": "<str len=70>",
+              "skype-water-wave": "<str len=76>",
+              "nethack-war-hammer": "<str len=78>",
+              "rocket-intensified": "<str len=78>",
+              "clapping-all": "<str len=72>",
+              "sickos-yes": "<str len=70>",
+              "at-channel": "<str len=70>",
+              "hellthread": "<str len=70>",
+              "he-brings-you-hell-thread": "<str len=85>",
+              "he-brings-you-more-ram": "<str len=82>",
+              "questionblock": "<str len=73>",
+              "remembrance-poppy": "<str len=77>",
+              "good": "<str len=64>",
+              "ugh": "<str len=63>",
+              "noto-thumbs-up": "<str len=74>",
+              "thank-you": "<str len=69>",
+              "disapprove": "<str len=70>",
+              "jocko-good": "<str len=70>",
+              "blob-banhammer-gif": "<str len=78>",
+              "yikes": "<str len=65>",
+              "wtf": "<str len=63>",
+              "maru-earthhug": "<str len=73>",
+              "dancing-penguin": "<str len=75>",
+              "bunny-pancake": "<str len=73>",
+              "rabbithole": "<str len=70>",
+              "matzah": "<str len=66>",
+              "technicallycorrect": "<str len=78>",
+              "blob-wine-gif": "<str len=73>",
+              "i-have-many-questions": "<str len=81>",
+              "blob-goat-2": "<str len=71>",
+              "macaroon": "<str len=68>",
+              "ahhhhhhhhh": "<str len=70>",
+              "takemymoney": "<str len=71>",
+              "60fps_parrot": "<str len=72>",
+              "lucky-charmsl-clover": "<str len=80>",
+              "noto-four-leaf-clover": "<str len=81>",
+              "irish-coffee-mint": "<str len=77>",
+              "guinness": "<str len=68>",
+              "patrick_yay": "<str len=71>",
+              "whiskey": "<str len=67>",
+              "yay-frog": "<str len=68>",
+              "blobbounce": "<str len=70>",
+              "nice1": "<str len=65>",
+              "bender-neat": "<str len=71>"
+            },
+            "channel": {
+              "id": "<str len=9>",
+              "created": "int",
+              "creator": "<str len=9>",
+              "is_org_shared": "bool",
+              "is_im": "bool",
+              "context_team_id": "<str len=9>",
+              "updated": "int",
+              "name": "<str len=13>",
+              "name_normalized": "<str len=13>",
+              "is_channel": "bool",
+              "is_group": "bool",
+              "is_mpim": "bool",
+              "is_private": "bool",
+              "is_archived": "bool",
+              "is_general": "bool",
+              "is_shared": "bool",
+              "is_ext_shared": "bool",
+              "unlinked": "int",
+              "is_pending_ext_shared": "bool",
+              "pending_shared": [],
+              "parent_conversation": "null",
+              "purpose": {
+                "value": "<str len=152>",
+                "creator": "<str len=9>",
+                "last_set": "int"
+              },
+              "topic": {
+                "value": "<str len=222>",
+                "creator": "<str len=9>",
+                "last_set": "int"
+              },
+              "shared_team_ids": [
+                "<str len=9>",
+                "\u2026len=1"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": "bool",
+              "last_read": "<str len=17>",
+              "latest": "<str len=17>",
+              "unread_count": "int",
+              "unread_count_display": "int",
+              "properties": {
+                "posting_restricted_to": {
+                  "type": "..."
+                },
+                "threads_restricted_to": {
+                  "type": "..."
+                },
+                "canvas": {
+                  "file_id": "...",
+                  "is_empty": "...",
+                  "quip_thread_id": "...",
+                  "is_migrated": "..."
+                },
+                "meeting_notes": {
+                  "file_id": "..."
+                },
+                "tabs": [
+                  "...",
+                  "\u2026len=3"
+                ],
+                "tabz": [
+                  "...",
+                  "\u2026len=3"
+                ]
+              },
+              "is_thread_only": "bool",
+              "is_read_only": "bool",
+              "previous_names": [
+                "<str len=7>",
+                "\u2026len=1"
+              ]
+            },
+            "response_metadata": {
+              "next_cursor": "<str len=32>"
+            }
+          }
+        },
+        {
+          "capture": "initial-load",
+          "method": "POST",
+          "content_type": "multipart/form-data",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "canonical_avatars": "true",
+            "no_user_profile": "true",
+            "ignore_replies": "true",
+            "no_self": "true",
+            "include_full_users": "true",
+            "include_use_case": "true",
+            "include_stories": "true",
+            "no_members": "true",
+            "include_mutation_timestamps": "true",
+            "count": "28",
+            "include_free_team_extra_messages": "true",
+            "_x_sonic": "true",
+            "_x_app_name": "client"
+          },
+          "response_status": 200,
+          "response_bytes": 203906,
+          "response_shape": {
+            "ok": "bool",
+            "history": {
+              "messages": [
+                {
+                  "user": "...",
+                  "type": "...",
+                  "ts": "...",
+                  "client_msg_id": "...",
+                  "text": "...",
+                  "team": "...",
+                  "blocks": "...",
+                  "reactions": "..."
+                },
+                "\u2026len=28"
+              ],
+              "has_more": "bool",
+              "mutation_timestamps": {
+                "latest": "<str len=17>",
+                "updated": "<str len=17>",
+                "history_invalid": "<str len=17>"
+              },
+              "channel_actions_ts": "null",
+              "channel_actions_count": "int",
+              "next_ts": "int"
+            },
+            "users": [
+              {
+                "id": "<str len=9>",
+                "name": "<str len=5>",
+                "is_bot": "bool",
+                "updated": "int",
+                "is_app_user": "bool",
+                "team_id": "<str len=9>",
+                "deleted": "bool",
+                "color": "<str len=6>",
+                "is_email_confirmed": "bool",
+                "real_name": "<str len=5>",
+                "tz": "<str len=19>",
+                "tz_label": "<str len=21>",
+                "tz_offset": "int",
+                "is_admin": "bool",
+                "is_owner": "bool",
+                "is_primary_owner": "bool",
+                "is_restricted": "bool",
+                "is_ultra_restricted": "bool",
+                "who_can_share_contact_card": "<str len=12>",
+                "profile": {
+                  "real_name": "...",
+                  "display_name": "...",
+                  "avatar_hash": "...",
+                  "real_name_normalized": "...",
+                  "display_name_normalized": "...",
+                  "image_original": "...",
+                  "is_custom_image": "...",
+                  "first_name": "...",
+                  "last_name": "...",
+                  "team": "...",
+                  "title": "...",
+                  "phone": "...",
+                  "skype": "...",
+                  "status_text": "...",
+                  "status_text_canonical": "...",
+                  "status_emoji": "...",
+                  "status_emoji_display_info": "...",
+                  "status_expiration": "...",
+                  "who_can_share_contact_card": "...",
+                  "huddle_state": "...",
+                  "huddle_state_expiration_ts": "..."
+                }
+              },
+              "\u2026len=5"
+            ],
+            "bots": [],
+            "channels": [
+              {
+                "id": "<str len=11>",
+                "created": "int",
+                "creator": "<str len=9>",
+                "is_org_shared": "bool",
+                "is_im": "bool",
+                "context_team_id": "<str len=9>",
+                "updated": "int",
+                "name": "<str len=8>",
+                "name_normalized": "<str len=8>",
+                "is_channel": "bool",
+                "is_group": "bool",
+                "is_mpim": "bool",
+                "is_private": "bool",
+                "is_archived": "bool",
+                "is_general": "bool",
+                "is_shared": "bool",
+                "is_ext_shared": "bool",
+                "unlinked": "int",
+                "is_pending_ext_shared": "bool",
+                "pending_shared": [],
+                "parent_conversation": "null",
+                "purpose": {
+                  "value": "...",
+                  "creator": "...",
+                  "last_set": "..."
+                },
+                "topic": {
+                  "value": "...",
+                  "creator": "...",
+                  "last_set": "..."
+                },
+                "shared_team_ids": [
+                  "...",
+                  "\u2026len=1"
+                ],
+                "pending_connected_team_ids": [],
+                "is_member": "bool",
+                "properties": {
+                  "canvas": "...",
+                  "meeting_notes": "...",
+                  "tabs": "...",
+                  "tabz": "..."
+                },
+                "previous_names": [
+                  "...",
+                  "\u2026len=2"
+                ]
+              },
+              "\u2026len=27"
+            ],
+            "emojis": {
+              "rls-heart": "<str len=69>",
+              "oregon-trail": "<str len=72>",
+              "woohoo": "<str len=66>",
+              "blob-salute-gif": "<str len=75>",
+              "thankyouty": "<str len=70>",
+              "ai-dr": "<str len=65>",
+              "killitwithfire": "<str len=74>",
+              "floyd-bot": "<str len=69>",
+              "grumbles-gray": "<str len=73>",
+              "noto-fireworks": "<str len=74>",
+              "flag-us-distress": "<str len=76>",
+              "sunny-day": "<str len=69>",
+              "bluey": "<str len=65>",
+              "dadjoke": "<str len=67>",
+              "bioshock-big-daddy": "<str len=78>",
+              "juneteenth": "<str len=70>",
+              "rls-thanks": "<str len=70>",
+              "skype-water-wave": "<str len=76>",
+              "nethack-war-hammer": "<str len=78>",
+              "rocket-intensified": "<str len=78>",
+              "clapping-all": "<str len=72>",
+              "sickos-yes": "<str len=70>",
+              "at-channel": "<str len=70>",
+              "hellthread": "<str len=70>",
+              "he-brings-you-hell-thread": "<str len=85>",
+              "he-brings-you-more-ram": "<str len=82>",
+              "questionblock": "<str len=73>",
+              "remembrance-poppy": "<str len=77>",
+              "good": "<str len=64>",
+              "ugh": "<str len=63>",
+              "noto-thumbs-up": "<str len=74>",
+              "thank-you": "<str len=69>",
+              "disapprove": "<str len=70>",
+              "jocko-good": "<str len=70>",
+              "blob-banhammer-gif": "<str len=78>",
+              "yikes": "<str len=65>",
+              "wtf": "<str len=63>",
+              "maru-earthhug": "<str len=73>",
+              "dancing-penguin": "<str len=75>",
+              "bunny-pancake": "<str len=73>",
+              "rabbithole": "<str len=70>",
+              "matzah": "<str len=66>",
+              "technicallycorrect": "<str len=78>",
+              "blob-wine-gif": "<str len=73>",
+              "i-have-many-questions": "<str len=81>",
+              "blob-goat-2": "<str len=71>",
+              "macaroon": "<str len=68>",
+              "ahhhhhhhhh": "<str len=70>",
+              "takemymoney": "<str len=71>",
+              "60fps_parrot": "<str len=72>",
+              "lucky-charmsl-clover": "<str len=80>",
+              "noto-four-leaf-clover": "<str len=81>",
+              "irish-coffee-mint": "<str len=77>",
+              "guinness": "<str len=68>",
+              "patrick_yay": "<str len=71>",
+              "whiskey": "<str len=67>",
+              "yay-frog": "<str len=68>",
+              "blobbounce": "<str len=70>",
+              "nice1": "<str len=65>",
+              "bender-neat": "<str len=71>"
+            },
+            "channel": {
+              "id": "<str len=9>",
+              "created": "int",
+              "creator": "<str len=9>",
+              "is_org_shared": "bool",
+              "is_im": "bool",
+              "context_team_id": "<str len=9>",
+              "updated": "int",
+              "name": "<str len=13>",
+              "name_normalized": "<str len=13>",
+              "is_channel": "bool",
+              "is_group": "bool",
+              "is_mpim": "bool",
+              "is_private": "bool",
+              "is_archived": "bool",
+              "is_general": "bool",
+              "is_shared": "bool",
+              "is_ext_shared": "bool",
+              "unlinked": "int",
+              "is_pending_ext_shared": "bool",
+              "pending_shared": [],
+              "parent_conversation": "null",
+              "purpose": {
+                "value": "<str len=152>",
+                "creator": "<str len=9>",
+                "last_set": "int"
+              },
+              "topic": {
+                "value": "<str len=222>",
+                "creator": "<str len=9>",
+                "last_set": "int"
+              },
+              "shared_team_ids": [
+                "<str len=9>",
+                "\u2026len=1"
+              ],
+              "pending_connected_team_ids": [],
+              "is_member": "bool",
+              "last_read": "<str len=17>",
+              "latest": "<str len=17>",
+              "unread_count": "int",
+              "unread_count_display": "int",
+              "properties": {
+                "posting_restricted_to": {
+                  "type": "..."
+                },
+                "threads_restricted_to": {
+                  "type": "..."
+                },
+                "canvas": {
+                  "file_id": "...",
+                  "is_empty": "...",
+                  "quip_thread_id": "...",
+                  "is_migrated": "..."
+                },
+                "meeting_notes": {
+                  "file_id": "..."
+                },
+                "tabs": [
+                  "...",
+                  "\u2026len=3"
+                ],
+                "tabz": [
+                  "...",
+                  "\u2026len=3"
+                ]
+              },
+              "is_thread_only": "bool",
+              "is_read_only": "bool",
+              "previous_names": [
+                "<str len=7>",
+                "\u2026len=1"
+              ]
+            },
+            "response_metadata": {
+              "next_cursor": "<str len=32>"
+            }
+          }
+        }
+      ]
+    },
+    "client.counts": {
+      "observed_count": 6,
+      "samples": [
+        {
+          "capture": "channel-switch",
+          "method": "POST",
+          "content_type": "multipart/form-data",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "thread_counts_by_channel": "true",
+            "org_wide_aware": "true",
+            "include_file_channels": "true",
+            "include_all_unreads": "true",
+            "dry_run_last_fetched": "1785407070",
+            "_x_reason": "pollClientCountsAfterTimeout",
+            "_x_mode": "online",
+            "_x_sonic": "true",
+            "_x_app_name": "client"
+          },
+          "response_status": 200,
+          "response_bytes": 13590,
+          "response_shape": {
+            "ok": "bool",
+            "threads": {
+              "has_unreads": "bool",
+              "mention_count": "int",
+              "vip_count": "int",
+              "mention_count_by_channel": {},
+              "unread_count_by_channel": {
+                "C47A0C3TK": "int"
+              }
+            },
+            "channels": [
+              {
+                "id": "<str len=9>",
+                "last_read": "<str len=17>",
+                "latest": "<str len=17>",
+                "updated": "<str len=17>",
+                "history_invalid": "<str len=17>",
+                "mention_count": "int",
+                "has_unreads": "bool"
+              },
+              "\u2026len=53"
+            ],
+            "mpims": [
+              {
+                "id": "<str len=11>",
+                "last_read": "<str len=17>",
+                "latest": "<str len=17>",
+                "updated": "<str len=17>",
+                "history_invalid": "<str len=17>",
+                "mention_count": "int",
+                "has_unreads": "bool"
+              },
+              "\u2026len=1"
+            ],
+            "ims": [
+              {
+                "id": "<str len=9>",
+                "last_read": "<str len=17>",
+                "latest": "<str len=17>",
+                "updated": "<str len=17>",
+                "history_invalid": "<str len=17>",
+                "mention_count": "int",
+                "has_unreads": "bool"
+              },
+              "\u2026len=11"
+            ],
+            "file_channels": {
+              "quip": {
+                "mention_count_by_channel": {}
+              },
+              "list": {
+                "mention_count_by_channel": {}
+              }
+            },
+            "activity_v2": {
+              "at_user": "int",
+              "at_user_group": "int",
+              "at_channel": "int",
+              "at_everyone": "int",
+              "channel": "int",
+              "dm": "int",
+              "keyword": "int",
+              "message_reaction": "int",
+              "internal_channel_invite": "int",
+              "external_channel_invite": "int",
+              "external_dm_invite": "int",
+              "shared_workspace_invite": "int",
+              "team_joiner_invite": "int",
+              "unjoined_channel_mention": "int",
+              "list_record_assigned": "int",
+              "list_record_edited": "int",
+              "list_user_mentioned": "int",
+              "list_todo_notification": "int",
+              "list_approval_request": "int",
+              "list_approval_reviewed": "int",
+              "bot_dm_bundle": "int",
+              "thread_v2": "int",
+              "saved_reminder": "int",
+              "prejoin_dm_welcome_party_alert": "int",
+              "quietly_added_to_channel": "int"
+            },
+            "channel_badges": {
+              "channels": "int",
+              "dms": "int",
+              "app_dms": "int",
+              "thread_mentions": "int",
+              "thread_unreads": "int"
+            },
+            "alerts": {
+              "external_channel_invite": "int",
+              "external_dm_invite": "int",
+              "shared_workspace_invite": "int",
+              "sales_home_notification": "int",
+              "lists_user_mentioned": "int",
+              "lists_record_assigned": "int",
+              "lists_record_edited": "int",
+              "lists_todo_notification": "int",
+              "lists_approval_request": "int",
+              "lists_approval_reviewed": "int",
+              "huddles_missed_huddle": "int",
+              "calendar_upcoming_event": "int",
+              "unjoined_channel_mention": "int",
+              "generic_system_alert": "int",
+              "prejoin_dm_welcome_party_alert": "int",
+              "quietly_added_to_channel": "int"
+            },
+            "saved": {
+              "uncompleted_count": "int",
+              "uncompleted_overdue_count": "int",
+              "archived_count": "int",
+              "completed_count": "int",
+              "total_count": "int"
+            },
+            "counts_last_fetched": "int"
+          }
+        },
+        {
+          "capture": "coldboot",
+          "method": "POST",
+          "content_type": "multipart/form-data",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "thread_counts_by_channel": "true",
+            "org_wide_aware": "true",
+            "include_file_channels": "true",
+            "include_all_unreads": "true",
+            "_x_reason": "fetchClientCountsOnConnect",
+            "_x_mode": "online",
+            "_x_sonic": "true",
+            "_x_app_name": "client"
+          },
+          "response_status": 200,
+          "response_bytes": 13591,
+          "response_shape": {
+            "ok": "bool",
+            "threads": {
+              "has_unreads": "bool",
+              "mention_count": "int",
+              "vip_count": "int",
+              "mention_count_by_channel": {},
+              "unread_count_by_channel": {
+                "C47A0C3TK": "int"
+              }
+            },
+            "channels": [
+              {
+                "id": "<str len=9>",
+                "last_read": "<str len=17>",
+                "latest": "<str len=17>",
+                "updated": "<str len=17>",
+                "history_invalid": "<str len=17>",
+                "mention_count": "int",
+                "has_unreads": "bool"
+              },
+              "\u2026len=53"
+            ],
+            "mpims": [
+              {
+                "id": "<str len=11>",
+                "last_read": "<str len=17>",
+                "latest": "<str len=17>",
+                "updated": "<str len=17>",
+                "history_invalid": "<str len=17>",
+                "mention_count": "int",
+                "has_unreads": "bool"
+              },
+              "\u2026len=1"
+            ],
+            "ims": [
+              {
+                "id": "<str len=9>",
+                "last_read": "<str len=17>",
+                "latest": "<str len=17>",
+                "updated": "<str len=17>",
+                "history_invalid": "<str len=17>",
+                "mention_count": "int",
+                "has_unreads": "bool"
+              },
+              "\u2026len=11"
+            ],
+            "file_channels": {
+              "quip": {
+                "mention_count_by_channel": {}
+              },
+              "list": {
+                "mention_count_by_channel": {}
+              }
+            },
+            "activity_v2": {
+              "at_user": "int",
+              "at_user_group": "int",
+              "at_channel": "int",
+              "at_everyone": "int",
+              "channel": "int",
+              "dm": "int",
+              "keyword": "int",
+              "message_reaction": "int",
+              "internal_channel_invite": "int",
+              "external_channel_invite": "int",
+              "external_dm_invite": "int",
+              "shared_workspace_invite": "int",
+              "team_joiner_invite": "int",
+              "unjoined_channel_mention": "int",
+              "list_record_assigned": "int",
+              "list_record_edited": "int",
+              "list_user_mentioned": "int",
+              "list_todo_notification": "int",
+              "list_approval_request": "int",
+              "list_approval_reviewed": "int",
+              "bot_dm_bundle": "int",
+              "thread_v2": "int",
+              "saved_reminder": "int",
+              "prejoin_dm_welcome_party_alert": "int",
+              "quietly_added_to_channel": "int"
+            },
+            "channel_badges": {
+              "channels": "int",
+              "dms": "int",
+              "app_dms": "int",
+              "thread_mentions": "int",
+              "thread_unreads": "int"
+            },
+            "alerts": {
+              "external_channel_invite": "int",
+              "external_dm_invite": "int",
+              "shared_workspace_invite": "int",
+              "sales_home_notification": "int",
+              "lists_user_mentioned": "int",
+              "lists_record_assigned": "int",
+              "lists_record_edited": "int",
+              "lists_todo_notification": "int",
+              "lists_approval_request": "int",
+              "lists_approval_reviewed": "int",
+              "huddles_missed_huddle": "int",
+              "calendar_upcoming_event": "int",
+              "unjoined_channel_mention": "int",
+              "generic_system_alert": "int",
+              "prejoin_dm_welcome_party_alert": "int",
+              "quietly_added_to_channel": "int"
+            },
+            "saved": {
+              "uncompleted_count": "int",
+              "uncompleted_overdue_count": "int",
+              "archived_count": "int",
+              "completed_count": "int",
+              "total_count": "int"
+            },
+            "counts_last_fetched": "int"
+          }
+        },
+        {
+          "capture": "initial-load",
+          "method": "POST",
+          "content_type": "multipart/form-data",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "thread_counts_by_channel": "true",
+            "org_wide_aware": "true",
+            "include_file_channels": "true",
+            "include_all_unreads": "true",
+            "_x_reason": "fetchClientCountsOnConnect",
+            "_x_mode": "online",
+            "_x_sonic": "true",
+            "_x_app_name": "client"
+          },
+          "response_status": 200,
+          "response_bytes": 13588,
+          "response_shape": {
+            "ok": "bool",
+            "threads": {
+              "has_unreads": "bool",
+              "mention_count": "int",
+              "vip_count": "int",
+              "mention_count_by_channel": {},
+              "unread_count_by_channel": {
+                "C47A0C3TK": "int"
+              }
+            },
+            "channels": [
+              {
+                "id": "<str len=9>",
+                "last_read": "<str len=17>",
+                "latest": "<str len=17>",
+                "updated": "<str len=17>",
+                "history_invalid": "<str len=17>",
+                "mention_count": "int",
+                "has_unreads": "bool"
+              },
+              "\u2026len=53"
+            ],
+            "mpims": [
+              {
+                "id": "<str len=11>",
+                "last_read": "<str len=17>",
+                "latest": "<str len=17>",
+                "updated": "<str len=17>",
+                "history_invalid": "<str len=17>",
+                "mention_count": "int",
+                "has_unreads": "bool"
+              },
+              "\u2026len=1"
+            ],
+            "ims": [
+              {
+                "id": "<str len=9>",
+                "last_read": "<str len=17>",
+                "latest": "<str len=17>",
+                "updated": "<str len=17>",
+                "history_invalid": "<str len=17>",
+                "mention_count": "int",
+                "has_unreads": "bool"
+              },
+              "\u2026len=11"
+            ],
+            "file_channels": {
+              "quip": {
+                "mention_count_by_channel": {}
+              },
+              "list": {
+                "mention_count_by_channel": {}
+              }
+            },
+            "activity_v2": {
+              "at_user": "int",
+              "at_user_group": "int",
+              "at_channel": "int",
+              "at_everyone": "int",
+              "channel": "int",
+              "dm": "int",
+              "keyword": "int",
+              "message_reaction": "int",
+              "internal_channel_invite": "int",
+              "external_channel_invite": "int",
+              "external_dm_invite": "int",
+              "shared_workspace_invite": "int",
+              "team_joiner_invite": "int",
+              "unjoined_channel_mention": "int",
+              "list_record_assigned": "int",
+              "list_record_edited": "int",
+              "list_user_mentioned": "int",
+              "list_todo_notification": "int",
+              "list_approval_request": "int",
+              "list_approval_reviewed": "int",
+              "bot_dm_bundle": "int",
+              "thread_v2": "int",
+              "saved_reminder": "int",
+              "prejoin_dm_welcome_party_alert": "int",
+              "quietly_added_to_channel": "int"
+            },
+            "channel_badges": {
+              "channels": "int",
+              "dms": "int",
+              "app_dms": "int",
+              "thread_mentions": "int",
+              "thread_unreads": "int"
+            },
+            "alerts": {
+              "external_channel_invite": "int",
+              "external_dm_invite": "int",
+              "shared_workspace_invite": "int",
+              "sales_home_notification": "int",
+              "lists_user_mentioned": "int",
+              "lists_record_assigned": "int",
+              "lists_record_edited": "int",
+              "lists_todo_notification": "int",
+              "lists_approval_request": "int",
+              "lists_approval_reviewed": "int",
+              "huddles_missed_huddle": "int",
+              "calendar_upcoming_event": "int",
+              "unjoined_channel_mention": "int",
+              "generic_system_alert": "int",
+              "prejoin_dm_welcome_party_alert": "int",
+              "quietly_added_to_channel": "int"
+            },
+            "saved": {
+              "uncompleted_count": "int",
+              "uncompleted_overdue_count": "int",
+              "archived_count": "int",
+              "completed_count": "int",
+              "total_count": "int"
+            },
+            "counts_last_fetched": "int"
+          }
+        }
+      ]
+    },
+    "conversations.history": {
+      "observed_count": 14,
+      "samples": [
+        {
+          "capture": "channel-switch-2",
+          "method": "POST",
+          "content_type": "multipart/form-data",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "channel": "C04T4TH9Q",
+            "limit": "28",
+            "ignore_replies": "true",
+            "include_pin_count": "true",
+            "inclusive": "true",
+            "no_user_profile": "true",
+            "include_stories": "true",
+            "include_free_team_extra_messages": "true",
+            "include_date_joined": "true",
+            "latest": "1783282974.488529",
+            "cached_latest_updates": "{}",
+            "_x_reason": "message-pane/requestHistory",
+            "_x_mode": "online",
+            "_x_sonic": "true",
+            "_x_app_name": "client"
+          },
+          "response_status": 200,
+          "response_bytes": 59661,
+          "response_shape": {
+            "ok": "bool",
+            "latest_updates": {
+              "1783282974.488529": "<str len=17>",
+              "1783276293.201319": "<str len=17>",
+              "1783269911.925779": "<str len=17>",
+              "1783268832.426309": "<str len=17>",
+              "1783268603.128959": "<str len=17>",
+              "1783267572.641679": "<str len=17>",
+              "1783265877.234339": "<str len=17>",
+              "1783265493.687039": "<str len=17>",
+              "1783264935.716079": "<str len=17>",
+              "1783252604.567749": "<str len=17>",
+              "1783240227.703619": "<str len=17>",
+              "1783212170.078269": "<str len=17>",
+              "1783205735.925999": "<str len=17>",
+              "1783204563.224659": "<str len=17>",
+              "1783186030.379029": "<str len=17>",
+              "1783162941.615789": "<str len=17>",
+              "1783139968.985189": "<str len=17>",
+              "1783133158.735539": "<str len=17>",
+              "1783101972.120119": "<str len=17>",
+              "1783101925.894099": "<str len=17>",
+              "1783100340.666849": "<str len=17>",
+              "1783086532.394679": "<str len=17>",
+              "1783085024.846629": "<str len=17>",
+              "1783083352.129309": "<str len=17>",
+              "1783047934.185289": "<str len=17>",
+              "1783032078.186769": "<str len=17>",
+              "1783025550.642039": "<str len=17>",
+              "1783024189.429319": "<str len=17>"
+            },
+            "unchanged_messages": [],
+            "latest": "<str len=17>",
+            "messages": [
+              {
+                "user": "<str len=11>",
+                "type": "<str len=7>",
+                "ts": "<str len=17>",
+                "client_msg_id": "<str len=36>",
+                "text": "<str len=143>",
+                "team": "<str len=9>",
+                "thread_ts": "<str len=17>",
+                "reply_count": "int",
+                "reply_users_count": "int",
+                "latest_reply": "<str len=17>",
+                "reply_users": [
+                  "...",
+                  "\u2026len=16"
+                ],
+                "is_locked": "bool",
+                "subscribed": "bool",
+                "blocks": [
+                  "...",
+                  "\u2026len=1"
+                ]
+              },
+              "\u2026len=28"
+            ],
+            "has_more": "bool",
+            "pin_count": "int",
+            "channel_actions_ts": "null",
+            "channel_actions_count": "int",
+            "date_joined": "int",
+            "response_metadata": {
+              "next_cursor": "<str len=32>"
+            }
+          }
+        },
+        {
+          "capture": "channel-switch-2",
+          "method": "POST",
+          "content_type": "multipart/form-data",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "channel": "C04T4TH9Q",
+            "limit": "28",
+            "ignore_replies": "true",
+            "include_pin_count": "true",
+            "inclusive": "true",
+            "no_user_profile": "true",
+            "include_stories": "true",
+            "include_free_team_extra_messages": "true",
+            "include_date_joined": "true",
+            "oldest": "1783282974.488529",
+            "cached_latest_updates": "{}",
+            "_x_reason": "message-pane/requestHistory",
+            "_x_mode": "online",
+            "_x_sonic": "true",
+            "_x_app_name": "client"
+          },
+          "response_status": 200,
+          "response_bytes": 57807,
+          "response_shape": {
+            "ok": "bool",
+            "latest_updates": {
+              "1783282974.488529": "<str len=17>",
+              "1783292734.982369": "<str len=17>",
+              "1783344478.745069": "<str len=17>",
+              "1783347797.970679": "<str len=17>",
+              "1783349174.627129": "<str len=17>",
+              "1783350480.253879": "<str len=17>",
+              "1783360419.685699": "<str len=17>",
+              "1783360948.826739": "<str len=17>",
+              "1783361066.255119": "<str len=17>",
+              "1783361141.615509": "<str len=17>",
+              "1783361899.711869": "<str len=17>",
+              "1783370010.965169": "<str len=17>",
+              "1783371016.200879": "<str len=17>",
+              "1783372748.019319": "<str len=17>",
+              "1783425892.618299": "<str len=17>",
+              "1783429567.674359": "<str len=17>",
+              "1783432839.796519": "<str len=17>",
+              "1783438304.265489": "<str len=17>",
+              "1783438318.579389": "<str len=17>",
+              "1783441915.026719": "<str len=17>",
+              "1783461333.320629": "<str len=17>",
+              "1783463336.873169": "<str len=17>",
+              "1783463907.171849": "<str len=17>",
+              "1783518092.960059": "<str len=17>",
+              "1783518280.291849": "<str len=17>",
+              "1783519538.874719": "<str len=17>",
+              "1783522187.960939": "<str len=17>",
+              "1783523060.965539": "<str len=17>"
+            },
+            "unchanged_messages": [],
+            "oldest": "<str len=17>",
+            "messages": [
+              {
+                "user": "<str len=9>",
+                "type": "<str len=7>",
+                "ts": "<str len=17>",
+                "client_msg_id": "<str len=36>",
+                "text": "<str len=458>",
+                "team": "<str len=9>",
+                "thread_ts": "<str len=17>",
+                "reply_count": "int",
+                "reply_users_count": "int",
+                "latest_reply": "<str len=17>",
+                "reply_users": [
+                  "...",
+                  "\u2026len=1"
+                ],
+                "is_locked": "bool",
+                "subscribed": "bool",
+                "attachments": [
+                  "...",
+                  "\u2026len=1"
+                ],
+                "blocks": [
+                  "...",
+                  "\u2026len=1"
+                ]
+              },
+              "\u2026len=28"
+            ],
+            "has_more": "bool",
+            "pin_count": "int",
+            "channel_actions_ts": "null",
+            "channel_actions_count": "int",
+            "date_joined": "int",
+            "response_metadata": {
+              "next_cursor": "<str len=32>"
+            }
+          }
+        },
+        {
+          "capture": "channel-switch-2",
+          "method": "POST",
+          "content_type": "multipart/form-data",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "channel": "C04T4TH9Q",
+            "limit": "28",
+            "ignore_replies": "true",
+            "include_pin_count": "true",
+            "inclusive": "true",
+            "no_user_profile": "true",
+            "include_stories": "true",
+            "include_free_team_extra_messages": "true",
+            "include_date_joined": "false",
+            "cached_latest_updates": "{}",
+            "_x_reason": "unread-counts/onLastReadUpdated",
+            "_x_mode": "online",
+            "_x_sonic": "true",
+            "_x_app_name": "client"
+          },
+          "response_status": 200,
+          "response_bytes": 57712,
+          "response_shape": {
+            "ok": "bool",
+            "latest_updates": {
+              "1785383042.593949": "<str len=17>",
+              "1785380738.564949": "<str len=17>",
+              "1785369391.364939": "<str len=17>",
+              "1785367499.665079": "<str len=17>",
+              "1785361520.911509": "<str len=17>",
+              "1785361348.584909": "<str len=17>",
+              "1785358796.515279": "<str len=17>",
+              "1785354815.063789": "<str len=17>",
+              "1785349855.744939": "<str len=17>",
+              "1785348157.751209": "<str len=17>",
+              "1785347681.770139": "<str len=17>",
+              "1785345906.849529": "<str len=17>",
+              "1785343786.114789": "<str len=17>",
+              "1785339166.969199": "<str len=17>",
+              "1785289612.592069": "<str len=17>",
+              "1785288757.564369": "<str len=17>",
+              "1785285214.491679": "<str len=17>",
+              "1785282467.720019": "<str len=17>",
+              "1785280531.887819": "<str len=17>",
+              "1785275335.455429": "<str len=17>",
+              "1785263696.500789": "<str len=17>",
+              "1785261474.598759": "<str len=17>",
+              "1785261270.897499": "<str len=17>",
+              "1785260489.934959": "<str len=17>",
+              "1785252317.583259": "<str len=17>",
+              "1785251964.849719": "<str len=17>",
+              "1785251554.662869": "<str len=17>",
+              "1785250617.864669": "<str len=17>"
+            },
+            "unchanged_messages": [],
+            "messages": [
+              {
+                "user": "<str len=11>",
+                "type": "<str len=7>",
+                "ts": "<str len=17>",
+                "client_msg_id": "<str len=36>",
+                "text": "<str len=149>",
+                "team": "<str len=9>",
+                "attachments": [
+                  "...",
+                  "\u2026len=1"
+                ],
+                "blocks": [
+                  "...",
+                  "\u2026len=1"
+                ]
+              },
+              "\u2026len=28"
+            ],
+            "has_more": "bool",
+            "pin_count": "int",
+            "channel_actions_ts": "null",
+            "channel_actions_count": "int",
+            "response_metadata": {
+              "next_cursor": "<str len=32>"
+            }
+          }
+        }
+      ]
+    },
+    "users.prefs.get": {
+      "observed_count": 4,
+      "samples": [
+        {
+          "capture": "coldboot",
+          "method": "POST",
+          "content_type": "multipart/form-data",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "prefs": "emoji_use,frecency",
+            "_x_reason": "fetch-frecency-prefs",
+            "_x_mode": "online",
+            "_x_sonic": "true",
+            "_x_app_name": "client"
+          },
+          "response_status": 200,
+          "response_bytes": 8949,
+          "response_shape": {
+            "ok": "bool",
+            "prefs": {
+              "emoji_use": "<str len=514>",
+              "frecency": "<str len=7355>"
+            }
+          }
+        },
+        {
+          "capture": "coldboot",
+          "method": "POST",
+          "content_type": "multipart/form-data",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "prefs": "user_expectations_survey_last_trigger_attempt",
+            "_x_reason": "fetch-user-expectation-last-triggered-pref",
+            "_x_mode": "online",
+            "_x_sonic": "true",
+            "_x_app_name": "client"
+          },
+          "response_status": 200,
+          "response_bytes": 83,
+          "response_shape": {
+            "ok": "bool",
+            "prefs": {
+              "user_expectations_survey_last_trigger_attempt": "int"
+            }
+          }
+        },
+        {
+          "capture": "initial-load",
+          "method": "POST",
+          "content_type": "multipart/form-data",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "prefs": "emoji_use,frecency",
+            "_x_reason": "fetch-frecency-prefs",
+            "_x_mode": "online",
+            "_x_sonic": "true",
+            "_x_app_name": "client"
+          },
+          "response_status": 200,
+          "response_bytes": 8608,
+          "response_shape": {
+            "ok": "bool",
+            "prefs": {
+              "emoji_use": "<str len=514>",
+              "frecency": "<str len=7058>"
+            }
+          }
+        }
+      ]
+    },
+    "edge:channels/info": {
+      "observed_count": 18,
+      "samples": [
+        {
+          "capture": "channel-switch",
+          "method": "POST",
+          "content_type": "text/plain",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "check_membership": true,
+            "updated_ids": "<map len=11 sample_keys=['CUAAP1A3G', 'C016Y14ER7W', 'C07N1C686KZ']>"
+          },
+          "response_status": 200,
+          "response_bytes": 24,
+          "response_shape": {
+            "results": [],
+            "ok": "bool"
+          }
+        },
+        {
+          "capture": "channel-switch",
+          "method": "POST",
+          "content_type": "text/plain",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "check_membership": true,
+            "updated_ids": "<map len=1 sample_keys=['C2QPK1V44']>"
+          },
+          "response_status": 200,
+          "response_bytes": 2722,
+          "response_shape": {
+            "results": [
+              {
+                "id": "<str len=9>",
+                "enterprise_id": "<str len=0>",
+                "context_team_id": "<str len=9>",
+                "internal_team_ids": [],
+                "pending_connected_team_ids": [],
+                "pending_shared": [],
+                "shared_team_ids": [
+                  "...",
+                  "\u2026len=1"
+                ],
+                "connected_limited_team_ids": [],
+                "connected_team_ids": [],
+                "conversation_host_id": "<str len=0>",
+                "creator": "<str len=9>",
+                "name": "<str len=11>",
+                "name_normalized": "<str len=11>",
+                "previous_names": [],
+                "created": "int",
+                "unlinked": "int",
+                "updated": "int",
+                "is_archived": "bool",
+                "is_channel": "bool",
+                "is_frozen": "bool",
+                "is_general": "bool",
+                "is_group": "bool",
+                "is_im": "bool",
+                "is_moved": "int",
+                "is_mpim": "bool",
+                "is_org_default": "bool",
+                "is_org_mandatory": "bool",
+                "is_record_channel": "bool",
+                "is_file": "bool",
+                "is_shared": "bool",
+                "is_ext_shared": "bool",
+                "is_org_shared": "bool",
+                "is_pending_ext_shared": "bool",
+                "is_private": "bool",
+                "is_global_shared": "bool",
+                "parent_conversation": "<str len=0>",
+                "purpose": {
+                  "creator": "...",
+                  "last_set": "...",
+                  "value": "..."
+                },
+                "topic": {
+                  "creator": "...",
+                  "last_set": "...",
+                  "value": "..."
+                },
+                "properties": {
+                  "canvas": "...",
+                  "posting_restricted_to": "...",
+                  "threads_restricted_to": "...",
+                  "at_channel_restricted": "...",
+                  "at_here_restricted": "...",
+                  "tabs": "...",
+                  "record_channel": "...",
+                  "tabz": "...",
+                  "channel_workflows": "...",
+                  "huddles_restricted": "...",
+                  "sharing_disabled": "...",
+                  "meeting_notes": "...",
+                  "use_case": "...",
+                  "crm": "...",
+                  "workflow": "...",
+                  "default_tab_id": "...",
+                  "auto_open_tab_id": "...",
+                  "who_can_manage_tabs": "...",
+                  "huddles": "...",
+                  "agent_listener": "...",
+                  "default_agent": "...",
+                  "show_expanded_composer": "...",
+                  "membership_limit": "...",
+                  "channel_knowledge_agent": "...",
+                  "has_slack_connect_invite_created": "...",
+                  "exclude_from_slack_ai": "...",
+                  "is_channel_agent_enabled": "...",
+                  "who_can_manage_channel_agent": "...",
+                  "restrict_guests": "...",
+                  "restrict_message_and_file_sharing": "...",
+                  "agent_session": "...",
+                  "code_channel": "...",
+                  "has_custom_mpdm_name": "...",
+                  "agent_commands": "..."
+                },
+                "frozen_reason": "<str len=0>",
+                "is_ext_ws_shared": "bool",
+                "use_case": "<str len=0>",
+                "channel_agent_status": "<str len=0>"
+              },
+              "\u2026len=1"
+            ],
+            "ok": "bool"
+          }
+        },
+        {
+          "capture": "channel-switch",
+          "method": "POST",
+          "content_type": "text/plain",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "check_membership": true,
+            "updated_ids": "<map len=1 sample_keys=['C2QPK1V44']>"
+          },
+          "response_status": 200,
+          "response_bytes": 24,
+          "response_shape": {
+            "results": [],
+            "ok": "bool"
+          }
+        }
+      ],
+      "measured": {
+        "responses_observed": 18,
+        "top_level_key_frequency": {
+          "results": 18,
+          "ok": 18,
+          "member_channels": 5,
+          "failed_ids": 4
+        },
+        "response_shape_combinations": {
+          "results=False member_channels=False failed_ids=False": 5,
+          "results=True member_channels=False failed_ids=False": 7,
+          "results=False member_channels=True failed_ids=False": 2,
+          "results=False member_channels=False failed_ids=True": 1,
+          "results=False member_channels=True failed_ids=True": 3
+        },
+        "result_objects_observed": 36,
+        "result_object_field_counts": [
+          43
+        ],
+        "result_object_fields": [
+          "channel_agent_status",
+          "connected_limited_team_ids",
+          "connected_team_ids",
+          "context_team_id",
+          "conversation_host_id",
+          "created",
+          "creator",
+          "enterprise_id",
+          "frozen_reason",
+          "id",
+          "internal_team_ids",
+          "is_archived",
+          "is_channel",
+          "is_ext_shared",
+          "is_ext_ws_shared",
+          "is_file",
+          "is_frozen",
+          "is_general",
+          "is_global_shared",
+          "is_group",
+          "is_im",
+          "is_moved",
+          "is_mpim",
+          "is_org_default",
+          "is_org_mandatory",
+          "is_org_shared",
+          "is_pending_ext_shared",
+          "is_private",
+          "is_record_channel",
+          "is_shared",
+          "name",
+          "name_normalized",
+          "parent_conversation",
+          "pending_connected_team_ids",
+          "pending_shared",
+          "previous_names",
+          "properties",
+          "purpose",
+          "shared_team_ids",
+          "topic",
+          "unlinked",
+          "updated",
+          "use_case"
+        ],
+        "updated_ids_batch_sizes": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          3,
+          4,
+          6,
+          11,
+          20,
+          20,
+          26,
+          31,
+          63
+        ]
+      },
+      "note": "check_membership:true does NOT add is_member to the result objects (0 of 36 observed results carry it). It adds the top-level member_channels array, which is returned even when results is empty - all 5 observed responses carrying member_channels had results:[]. failed_ids lists ids the server could not resolve; absence from results otherwise means \"unchanged\", so ignoring failed_ids would mark a failed id fresh and keep its stale record forever."
+    },
+    "edge:users/info": {
+      "observed_count": 30,
+      "samples": [
+        {
+          "capture": "channel-switch-2",
+          "method": "POST",
+          "content_type": "text/plain",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "check_interaction": true,
+            "include_profile_only_users": true,
+            "updated_ids": "<map len=29 sample_keys=['U0D4QSJV8', 'UE7NYGEF2', 'UG8V6ETA5']>"
+          },
+          "response_status": 200,
+          "response_bytes": 24,
+          "response_shape": {
+            "results": [],
+            "ok": "bool"
+          }
+        },
+        {
+          "capture": "channel-switch-2",
+          "method": "POST",
+          "content_type": "text/plain",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "check_interaction": true,
+            "include_profile_only_users": true,
+            "updated_ids": "<map len=80 sample_keys=['U04MU54RHQA', 'U0B0QD6BH1N', 'UAVCLU3V4']>"
+          },
+          "response_status": 200,
+          "response_bytes": 92832,
+          "response_shape": {
+            "results": [
+              {
+                "id": "<str len=11>",
+                "team_id": "<str len=9>",
+                "name": "<str len=7>",
+                "deleted": "bool",
+                "color": "<str len=6>",
+                "real_name": "<str len=11>",
+                "tz": "<str len=13>",
+                "tz_label": "<str len=19>",
+                "tz_offset": "int",
+                "profile": {
+                  "title": "...",
+                  "phone": "...",
+                  "skype": "...",
+                  "real_name": "...",
+                  "real_name_normalized": "...",
+                  "display_name": "...",
+                  "display_name_normalized": "...",
+                  "fields": "...",
+                  "status_text": "...",
+                  "status_emoji": "...",
+                  "status_emoji_display_info": "...",
+                  "status_expiration": "...",
+                  "status_clear_on_focus_end": "...",
+                  "avatar_hash": "...",
+                  "start_date": "...",
+                  "huddle_state": "...",
+                  "first_name": "...",
+                  "last_name": "...",
+                  "status_text_canonical": "...",
+                  "team": "..."
+                },
+                "is_admin": "bool",
+                "is_owner": "bool",
+                "is_primary_owner": "bool",
+                "is_restricted": "bool",
+                "is_ultra_restricted": "bool",
+                "is_bot": "bool",
+                "is_app_user": "bool",
+                "updated": "int",
+                "is_email_confirmed": "bool",
+                "who_can_share_contact_card": "<str len=8>"
+              },
+              "\u2026len=80"
+            ],
+            "can_interact": {
+              "U014H7L65QF": "bool",
+              "U01CF3W3A3A": "bool",
+              "U01FDS5NVK3": "bool",
+              "U01PP17L7PA": "bool",
+              "U01QMHCNX9B": "bool",
+              "U027Z052CSE": "bool",
+              "U028AR57Q13": "bool",
+              "U02LGCYGBFX": "bool",
+              "U02MENXJVDM": "bool",
+              "U02ND7WM22X": "bool",
+              "U02SK91V7K5": "bool",
+              "U0306JM93G9": "bool",
+              "U030K75U0KD": "bool",
+              "U033EPRJTL4": "bool",
+              "U036CM19HAP": "bool",
+              "U03DV8KSKHV": "bool",
+              "U03JMP2N4F5": "bool",
+              "U04AP19BJR5": "bool",
+              "U04F4B1N92A": "bool",
+              "U04JC7DPQ1J": "bool",
+              "U04LVH33XCY": "bool",
+              "U04MU54RHQA": "bool",
+              "U04TFTKBQ": "bool",
+              "U04U6LNR0": "bool",
+              "U04UUHHH5": "bool",
+              "U04UYKAJ1": "bool",
+              "U050PMS1R": "bool",
+              "U05149MK266": "bool",
+              "U05268A9V": "bool",
+              "U05NJMK9QH2": "bool",
+              "U05STNCU6JK": "bool",
+              "U072G2AV30V": "bool",
+              "U07EC4GFQ6T": "bool",
+              "U07KNPC7Q2H": "bool",
+              "U07LSV41FHN": "bool",
+              "U07V8DKSDKN": "bool",
+              "U088GD8N96C": "bool",
+              "U08MGSBG7BQ": "bool",
+              "U08RXD5J0KD": "bool",
+              "U08U7UV1GV7": "bool",
+              "U0951JG18F9": "bool",
+              "U0A0YA1EULB": "bool",
+              "U0B0QD6BH1N": "bool",
+              "U0B4QL2U7LL": "bool",
+              "U0BLQLJM4AC": "bool",
+              "U0C4BBN9G": "bool",
+              "U0DRN8U4S": "bool",
+              "U0EHYHK5Y": "bool",
+              "U0HC5DD5Y": "bool",
+              "U0HE9NFL0": "bool",
+              "U0J3MBKE2": "bool",
+              "U0J4DN2AV": "bool",
+              "U0LBFUA5V": "bool",
+              "U18QTUL58": "bool",
+              "U1A81K67R": "bool",
+              "U1SC83W5U": "bool",
+              "U2AMTG6P7": "bool",
+              "U2DD8VATE": "bool",
+              "U4E0BCJKC": "bool",
+              "U4ZLWKWKU": "bool"
+            },
+            "ok": "bool"
+          }
+        },
+        {
+          "capture": "channel-switch-2",
+          "method": "POST",
+          "content_type": "text/plain",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "check_interaction": true,
+            "include_profile_only_users": true,
+            "updated_ids": "<map len=80 sample_keys=['U033EPRJTL4', 'U04LVH33XCY', 'U5379SERG']>"
+          },
+          "response_status": 200,
+          "response_bytes": 24,
+          "response_shape": {
+            "results": [],
+            "ok": "bool"
+          }
+        }
+      ],
+      "measured": {
+        "responses_observed": 30,
+        "top_level_key_frequency": {
+          "results": 30,
+          "ok": 30,
+          "can_interact": 12
+        },
+        "response_shape_combinations": {
+          "results=False member_channels=False failed_ids=False": 15,
+          "results=True member_channels=False failed_ids=False": 15
+        },
+        "result_objects_observed": 291,
+        "result_object_field_counts": [
+          6,
+          8,
+          20
+        ],
+        "result_object_fields": [
+          "color",
+          "deleted",
+          "id",
+          "is_admin",
+          "is_app_user",
+          "is_bot",
+          "is_email_confirmed",
+          "is_owner",
+          "is_primary_owner",
+          "is_restricted",
+          "is_ultra_restricted",
+          "name",
+          "profile",
+          "real_name",
+          "team_id",
+          "tz",
+          "tz_label",
+          "tz_offset",
+          "updated",
+          "who_can_share_contact_card"
+        ],
+        "updated_ids_batch_sizes": [
+          1,
+          1,
+          1,
+          3,
+          3,
+          6,
+          6,
+          8,
+          8,
+          13,
+          13,
+          14,
+          14,
+          14,
+          14,
+          15,
+          21,
+          21,
+          28,
+          29,
+          30,
+          30,
+          34,
+          34,
+          40,
+          40,
+          57,
+          57,
+          80,
+          80
+        ]
+      }
+    },
+    "edge:channels/search": {
+      "observed_count": 2,
+      "samples": [
+        {
+          "capture": "quickswitch2",
+          "method": "POST",
+          "content_type": "text/plain",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "query": "t",
+            "count": 30,
+            "fuzz": 1,
+            "include_record_channels": true,
+            "top_channels": "<list len=22 sample=['C04T4TH9N', 'C04T4TH9Q', 'C94H848UB']>",
+            "default_workspace": "T04T4TH8W",
+            "check_membership": true
+          },
+          "response_status": 200,
+          "response_bytes": 56129,
+          "response_shape": {
+            "results": [
+              {
+                "id": "<str len=9>",
+                "enterprise_id": "<str len=0>",
+                "context_team_id": "<str len=9>",
+                "internal_team_ids": [],
+                "pending_connected_team_ids": [],
+                "pending_shared": [],
+                "shared_team_ids": [
+                  "...",
+                  "\u2026len=1"
+                ],
+                "connected_limited_team_ids": [],
+                "connected_team_ids": [],
+                "conversation_host_id": "<str len=0>",
+                "creator": "<str len=9>",
+                "name": "<str len=5>",
+                "name_normalized": "<str len=5>",
+                "previous_names": [],
+                "created": "int",
+                "unlinked": "int",
+                "updated": "int",
+                "is_archived": "bool",
+                "is_channel": "bool",
+                "is_frozen": "bool",
+                "is_general": "bool",
+                "is_group": "bool",
+                "is_im": "bool",
+                "is_moved": "int",
+                "is_mpim": "bool",
+                "is_org_default": "bool",
+                "is_org_mandatory": "bool",
+                "is_record_channel": "bool",
+                "is_file": "bool",
+                "is_shared": "bool",
+                "is_ext_shared": "bool",
+                "is_org_shared": "bool",
+                "is_pending_ext_shared": "bool",
+                "is_private": "bool",
+                "is_global_shared": "bool",
+                "parent_conversation": "<str len=0>",
+                "purpose": {
+                  "creator": "...",
+                  "last_set": "...",
+                  "value": "..."
+                },
+                "topic": {
+                  "creator": "...",
+                  "last_set": "...",
+                  "value": "..."
+                },
+                "properties": {
+                  "canvas": "...",
+                  "posting_restricted_to": "...",
+                  "threads_restricted_to": "...",
+                  "at_channel_restricted": "...",
+                  "at_here_restricted": "...",
+                  "tabs": "...",
+                  "record_channel": "...",
+                  "tabz": "...",
+                  "channel_workflows": "...",
+                  "huddles_restricted": "...",
+                  "sharing_disabled": "...",
+                  "meeting_notes": "...",
+                  "use_case": "...",
+                  "crm": "...",
+                  "workflow": "...",
+                  "default_tab_id": "...",
+                  "auto_open_tab_id": "...",
+                  "who_can_manage_tabs": "...",
+                  "huddles": "...",
+                  "agent_listener": "...",
+                  "default_agent": "...",
+                  "show_expanded_composer": "...",
+                  "membership_limit": "...",
+                  "channel_knowledge_agent": "...",
+                  "has_slack_connect_invite_created": "...",
+                  "exclude_from_slack_ai": "...",
+                  "is_channel_agent_enabled": "...",
+                  "who_can_manage_channel_agent": "...",
+                  "restrict_guests": "...",
+                  "restrict_message_and_file_sharing": "...",
+                  "agent_session": "...",
+                  "code_channel": "...",
+                  "has_custom_mpdm_name": "...",
+                  "agent_commands": "..."
+                },
+                "frozen_reason": "<str len=0>",
+                "is_ext_ws_shared": "bool",
+                "use_case": "<str len=0>",
+                "channel_agent_status": "<str len=0>"
+              },
+              "\u2026len=30"
+            ],
+            "member_channels": [
+              "<str len=9>",
+              "\u2026len=3"
+            ],
+            "ok": "bool"
+          }
+        },
+        {
+          "capture": "quickswitch2",
+          "method": "POST",
+          "content_type": "text/plain",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "query": "test",
+            "count": 30,
+            "fuzz": 1,
+            "include_record_channels": true,
+            "top_channels": "<list len=22 sample=['C04T4TH9N', 'C04T4TH9Q', 'C94H848UB']>",
+            "default_workspace": "T04T4TH8W",
+            "check_membership": true
+          },
+          "response_status": 200,
+          "response_bytes": 40334,
+          "response_shape": {
+            "results": [
+              {
+                "id": "<str len=9>",
+                "enterprise_id": "<str len=0>",
+                "context_team_id": "<str len=9>",
+                "internal_team_ids": [],
+                "pending_connected_team_ids": [],
+                "pending_shared": [],
+                "shared_team_ids": [
+                  "...",
+                  "\u2026len=1"
+                ],
+                "connected_limited_team_ids": [],
+                "connected_team_ids": [],
+                "conversation_host_id": "<str len=0>",
+                "creator": "<str len=9>",
+                "name": "<str len=4>",
+                "name_normalized": "<str len=4>",
+                "previous_names": [],
+                "created": "int",
+                "unlinked": "int",
+                "updated": "int",
+                "is_archived": "bool",
+                "is_channel": "bool",
+                "is_frozen": "bool",
+                "is_general": "bool",
+                "is_group": "bool",
+                "is_im": "bool",
+                "is_moved": "int",
+                "is_mpim": "bool",
+                "is_org_default": "bool",
+                "is_org_mandatory": "bool",
+                "is_record_channel": "bool",
+                "is_file": "bool",
+                "is_shared": "bool",
+                "is_ext_shared": "bool",
+                "is_org_shared": "bool",
+                "is_pending_ext_shared": "bool",
+                "is_private": "bool",
+                "is_global_shared": "bool",
+                "parent_conversation": "<str len=0>",
+                "purpose": {
+                  "creator": "...",
+                  "last_set": "...",
+                  "value": "..."
+                },
+                "topic": {
+                  "creator": "...",
+                  "last_set": "...",
+                  "value": "..."
+                },
+                "properties": "null",
+                "frozen_reason": "<str len=0>",
+                "is_ext_ws_shared": "bool",
+                "use_case": "<str len=0>",
+                "channel_agent_status": "<str len=0>"
+              },
+              "\u2026len=30"
+            ],
+            "ok": "bool"
+          }
+        }
+      ],
+      "measured": {
+        "requests_observed": 2,
+        "request_key_frequency": {
+          "token": 2,
+          "query": 2,
+          "count": 2,
+          "fuzz": 2,
+          "include_record_channels": 2,
+          "top_channels": 2,
+          "default_workspace": 2,
+          "check_membership": 2
+        },
+        "response_key_frequency": {
+          "results": 2,
+          "ok": 2,
+          "member_channels": 1
+        },
+        "request_top_channels_lengths": [
+          22,
+          22
+        ],
+        "request_count_values": {
+          "30": 2
+        },
+        "request_fuzz_values": {
+          "1": 2
+        }
+      }
+    },
+    "edge:users/search": {
+      "observed_count": 2,
+      "samples": [
+        {
+          "capture": "quickswitch2",
+          "method": "POST",
+          "content_type": "text/plain",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "include_profile_only_users": true,
+            "query": "t",
+            "count": 30,
+            "fuzz": 1,
+            "enable_workspace_ranking": true,
+            "search_email": true,
+            "top_users": "<list len=50 sample=['UG2U3CFCN', 'U0B6SR2FLG1', 'UUC6ZQ2NQ']>",
+            "current_channel": "C014Y7K5U8K",
+            "default_workspace": "T04T4TH8W"
+          },
+          "response_status": 200,
+          "response_bytes": 28979,
+          "response_shape": {
+            "results": [
+              {
+                "id": "<str len=11>",
+                "team_id": "<str len=9>",
+                "name": "<str len=12>",
+                "deleted": "bool",
+                "color": "<str len=6>",
+                "real_name": "<str len=11>",
+                "tz": "<str len=13>",
+                "tz_label": "<str len=19>",
+                "tz_offset": "int",
+                "profile": {
+                  "title": "...",
+                  "phone": "...",
+                  "skype": "...",
+                  "real_name": "...",
+                  "real_name_normalized": "...",
+                  "display_name": "...",
+                  "display_name_normalized": "...",
+                  "fields": "...",
+                  "status_text": "...",
+                  "status_emoji": "...",
+                  "status_emoji_display_info": "...",
+                  "status_expiration": "...",
+                  "status_clear_on_focus_end": "...",
+                  "avatar_hash": "...",
+                  "image_original": "...",
+                  "is_custom_image": "...",
+                  "first_name": "...",
+                  "last_name": "...",
+                  "status_text_canonical": "...",
+                  "team": "..."
+                },
+                "is_admin": "bool",
+                "is_owner": "bool",
+                "is_primary_owner": "bool",
+                "is_restricted": "bool",
+                "is_ultra_restricted": "bool",
+                "is_bot": "bool",
+                "is_app_user": "bool",
+                "updated": "int",
+                "is_email_confirmed": "bool",
+                "who_can_share_contact_card": "<str len=8>"
+              },
+              "\u2026len=30"
+            ],
+            "ok": "bool"
+          }
+        },
+        {
+          "capture": "quickswitch2",
+          "method": "POST",
+          "content_type": "text/plain",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "include_profile_only_users": true,
+            "query": "test",
+            "count": 30,
+            "fuzz": 1,
+            "enable_workspace_ranking": true,
+            "search_email": true,
+            "top_users": "<list len=50 sample=['UG2U3CFCN', 'U0B6SR2FLG1', 'UUC6ZQ2NQ']>",
+            "current_channel": "C014Y7K5U8K",
+            "default_workspace": "T04T4TH8W"
+          },
+          "response_status": 200,
+          "response_bytes": 29647,
+          "response_shape": {
+            "results": [
+              {
+                "id": "<str len=9>",
+                "team_id": "<str len=9>",
+                "name": "<str len=6>",
+                "deleted": "bool",
+                "color": "<str len=6>",
+                "real_name": "<str len=16>",
+                "tz": "<str len=15>",
+                "tz_label": "<str len=13>",
+                "tz_offset": "int",
+                "profile": {
+                  "title": "...",
+                  "phone": "...",
+                  "skype": "...",
+                  "real_name": "...",
+                  "real_name_normalized": "...",
+                  "display_name": "...",
+                  "display_name_normalized": "...",
+                  "fields": "...",
+                  "status_text": "...",
+                  "status_emoji": "...",
+                  "status_emoji_display_info": "...",
+                  "status_expiration": "...",
+                  "status_clear_on_focus_end": "...",
+                  "avatar_hash": "...",
+                  "image_original": "...",
+                  "is_custom_image": "...",
+                  "first_name": "...",
+                  "last_name": "...",
+                  "status_text_canonical": "...",
+                  "team": "..."
+                },
+                "is_admin": "bool",
+                "is_owner": "bool",
+                "is_primary_owner": "bool",
+                "is_restricted": "bool",
+                "is_ultra_restricted": "bool",
+                "is_bot": "bool",
+                "is_app_user": "bool",
+                "updated": "int",
+                "is_email_confirmed": "bool",
+                "who_can_share_contact_card": "<str len=8>"
+              },
+              "\u2026len=30"
+            ],
+            "ok": "bool"
+          }
+        }
+      ],
+      "measured": {
+        "requests_observed": 2,
+        "request_key_frequency": {
+          "token": 2,
+          "include_profile_only_users": 2,
+          "query": 2,
+          "count": 2,
+          "fuzz": 2,
+          "enable_workspace_ranking": 2,
+          "search_email": 2,
+          "top_users": 2,
+          "current_channel": 2,
+          "default_workspace": 2
+        },
+        "response_key_frequency": {
+          "results": 2,
+          "ok": 2
+        },
+        "request_top_users_lengths": [
+          50,
+          50
+        ],
+        "request_count_values": {
+          "30": 2
+        },
+        "request_fuzz_values": {
+          "1": 2
+        }
+      }
+    },
+    "edge:users/list": {
+      "observed_count": 4,
+      "samples": [
+        {
+          "capture": "channel-switch-2",
+          "method": "POST",
+          "content_type": "text/plain",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "channels": "<list len=1 sample=['C04T4TH9Q']>",
+            "present_first": true,
+            "filter": "everyone AND NOT bots AND NOT apps",
+            "count": 30
+          },
+          "response_status": 200,
+          "response_bytes": 28895,
+          "response_shape": {
+            "next_marker": "<str len=48>",
+            "results": [
+              {
+                "id": "<str len=9>",
+                "team_id": "<str len=9>",
+                "name": "<str len=9>",
+                "deleted": "bool",
+                "color": "<str len=6>",
+                "real_name": "<str len=1>",
+                "tz": "<str len=16>",
+                "tz_label": "<str len=21>",
+                "tz_offset": "int",
+                "profile": {
+                  "title": "...",
+                  "phone": "...",
+                  "skype": "...",
+                  "real_name": "...",
+                  "real_name_normalized": "...",
+                  "display_name": "...",
+                  "display_name_normalized": "...",
+                  "fields": "...",
+                  "status_text": "...",
+                  "status_emoji": "...",
+                  "status_emoji_display_info": "...",
+                  "status_expiration": "...",
+                  "status_clear_on_focus_end": "...",
+                  "avatar_hash": "...",
+                  "first_name": "...",
+                  "last_name": "...",
+                  "status_text_canonical": "...",
+                  "team": "..."
+                },
+                "is_admin": "bool",
+                "is_owner": "bool",
+                "is_primary_owner": "bool",
+                "is_restricted": "bool",
+                "is_ultra_restricted": "bool",
+                "is_bot": "bool",
+                "is_app_user": "bool",
+                "updated": "int",
+                "is_email_confirmed": "bool",
+                "who_can_share_contact_card": "<str len=8>"
+              },
+              "\u2026len=30"
+            ],
+            "ok": "bool"
+          }
+        },
+        {
+          "capture": "channel-switch",
+          "method": "POST",
+          "content_type": "text/plain",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "channels": "<list len=1 sample=['C06FR0Q00']>",
+            "present_first": true,
+            "filter": "everyone AND NOT bots AND NOT apps",
+            "count": 30
+          },
+          "response_status": 200,
+          "response_bytes": 31565,
+          "response_shape": {
+            "next_marker": "<str len=48>",
+            "results": [
+              {
+                "id": "<str len=9>",
+                "team_id": "<str len=9>",
+                "name": "<str len=8>",
+                "deleted": "bool",
+                "color": "<str len=6>",
+                "real_name": "<str len=1>",
+                "tz": "<str len=13>",
+                "tz_label": "<str len=19>",
+                "tz_offset": "int",
+                "profile": {
+                  "title": "...",
+                  "phone": "...",
+                  "skype": "...",
+                  "real_name": "...",
+                  "real_name_normalized": "...",
+                  "display_name": "...",
+                  "display_name_normalized": "...",
+                  "fields": "...",
+                  "status_text": "...",
+                  "status_emoji": "...",
+                  "status_emoji_display_info": "...",
+                  "status_expiration": "...",
+                  "status_clear_on_focus_end": "...",
+                  "avatar_hash": "...",
+                  "first_name": "...",
+                  "last_name": "...",
+                  "status_text_canonical": "...",
+                  "team": "..."
+                },
+                "is_admin": "bool",
+                "is_owner": "bool",
+                "is_primary_owner": "bool",
+                "is_restricted": "bool",
+                "is_ultra_restricted": "bool",
+                "is_bot": "bool",
+                "is_app_user": "bool",
+                "updated": "int",
+                "is_email_confirmed": "bool",
+                "who_can_share_contact_card": "<str len=8>"
+              },
+              "\u2026len=30"
+            ],
+            "ok": "bool"
+          }
+        },
+        {
+          "capture": "quickswitch2",
+          "method": "POST",
+          "content_type": "text/plain",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "channels": "<list len=1 sample=['C0PMZGZQW']>",
+            "present_first": true,
+            "filter": "everyone AND NOT bots AND NOT apps",
+            "count": 20
+          },
+          "response_status": 200,
+          "response_bytes": 4891,
+          "response_shape": {
+            "results": [
+              {
+                "id": "<str len=11>",
+                "team_id": "<str len=9>",
+                "name": "<str len=3>",
+                "deleted": "bool",
+                "color": "<str len=6>",
+                "real_name": "<str len=3>",
+                "tz": "<str len=19>",
+                "tz_label": "<str len=21>",
+                "tz_offset": "int",
+                "profile": {
+                  "title": "...",
+                  "phone": "...",
+                  "skype": "...",
+                  "real_name": "...",
+                  "real_name_normalized": "...",
+                  "display_name": "...",
+                  "display_name_normalized": "...",
+                  "fields": "...",
+                  "status_text": "...",
+                  "status_emoji": "...",
+                  "status_emoji_display_info": "...",
+                  "status_expiration": "...",
+                  "status_clear_on_focus_end": "...",
+                  "avatar_hash": "...",
+                  "image_original": "...",
+                  "is_custom_image": "...",
+                  "who_can_share_contact_card": "...",
+                  "huddle_state": "...",
+                  "huddle_state_expiration_ts": "...",
+                  "first_name": "...",
+                  "last_name": "...",
+                  "status_text_canonical": "...",
+                  "team": "..."
+                },
+                "is_admin": "bool",
+                "is_owner": "bool",
+                "is_primary_owner": "bool",
+                "is_restricted": "bool",
+                "is_ultra_restricted": "bool",
+                "is_bot": "bool",
+                "is_app_user": "bool",
+                "updated": "int",
+                "is_email_confirmed": "bool",
+                "who_can_share_contact_card": "<str len=6>"
+              },
+              "\u2026len=4"
+            ],
+            "ok": "bool"
+          }
+        }
+      ],
+      "measured": {
+        "requests_observed": 4,
+        "request_key_frequency": {
+          "token": 4,
+          "channels": 4,
+          "present_first": 4,
+          "filter": 4,
+          "count": 4
+        },
+        "response_key_frequency": {
+          "results": 4,
+          "ok": 4,
+          "next_marker": 3
+        },
+        "request_channels_lengths": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "request_count_values": {
+          "30": 3,
+          "20": 1
+        },
+        "request_present_first_values": {
+          "true": 4
+        },
+        "request_filter_values": {
+          "\"everyone AND NOT bots AND NOT apps\"": 4
+        },
+        "response_results_lengths": {
+          "4": 1,
+          "30": 3
+        }
+      }
+    },
+    "edge:channels/membership": {
+      "observed_count": 10,
+      "samples": [
+        {
+          "capture": "channel-switch-2",
+          "method": "POST",
+          "content_type": "text/plain",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "channel": "C04T4TH9Q",
+            "users": "<list len=51 sample=['U0D4QSJV8', 'UAMBHRNE6', 'UE7NYGEF2']>",
+            "as_admin": false
+          },
+          "response_status": 200,
+          "response_bytes": 687,
+          "response_shape": {
+            "channel": "<str len=9>",
+            "members": [
+              "<str len=9>",
+              "\u2026len=51"
+            ],
+            "ok": "bool"
+          }
+        },
+        {
+          "capture": "channel-switch",
+          "method": "POST",
+          "content_type": "text/plain",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "channel": "C06FR0Q00",
+            "users": "<list len=48 sample=['UAMBHRNE6', 'U01B1F1BULA', 'UJ09D0W6B']>",
+            "as_admin": false
+          },
+          "response_status": 200,
+          "response_bytes": 687,
+          "response_shape": {
+            "channel": "<str len=9>",
+            "members": [
+              "<str len=9>",
+              "\u2026len=47"
+            ],
+            "non_members": [
+              "<str len=9>",
+              "\u2026len=1"
+            ],
+            "ok": "bool"
+          }
+        },
+        {
+          "capture": "coldboot",
+          "method": "POST",
+          "content_type": "text/plain",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "channel": "C04T4TH9N",
+            "users": "<list len=3 sample=['U04T4TH8Y', 'U02H0UWQDCJ', 'U012Y7CBCKH']>",
+            "as_admin": false
+          },
+          "response_status": 200,
+          "response_bytes": 85,
+          "response_shape": {
+            "channel": "<str len=9>",
+            "members": [
+              "<str len=9>",
+              "\u2026len=3"
+            ],
+            "ok": "bool"
+          }
+        }
+      ],
+      "measured": {
+        "requests_observed": 10,
+        "request_key_frequency": {
+          "token": 10,
+          "channel": 10,
+          "users": 10,
+          "as_admin": 10
+        },
+        "response_key_frequency": {
+          "channel": 10,
+          "ok": 10,
+          "members": 9,
+          "non_members": 5
+        },
+        "request_users_lengths": [
+          1,
+          2,
+          3,
+          3,
+          3,
+          22,
+          48,
+          51,
+          54,
+          66
+        ],
+        "request_as_admin_values": {
+          "false": 10
+        },
+        "members_plus_non_members_equals_users_sent": "10/10"
+      }
+    },
+    "edge:users/counts": {
+      "observed_count": 7,
+      "samples": [
+        {
+          "capture": "channel-switch-2",
+          "method": "POST",
+          "content_type": "text/plain",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "channel": "C04T4TH9Q",
+            "as_admin": false
+          },
+          "response_status": 200,
+          "response_bytes": 151,
+          "response_shape": {
+            "channel": "<str len=9>",
+            "counts": {
+              "everyone": "int",
+              "people": "int",
+              "members": "int",
+              "guests": "int",
+              "bots": "int",
+              "apps": "int",
+              "by_team": {
+                "T04T4TH8W": "int"
+              }
+            },
+            "ok": "bool"
+          }
+        },
+        {
+          "capture": "channel-switch",
+          "method": "POST",
+          "content_type": "text/plain",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "channel": "C06FR0Q00",
+            "as_admin": false
+          },
+          "response_status": 200,
+          "response_bytes": 147,
+          "response_shape": {
+            "channel": "<str len=9>",
+            "counts": {
+              "everyone": "int",
+              "people": "int",
+              "members": "int",
+              "guests": "int",
+              "bots": "int",
+              "apps": "int",
+              "by_team": {
+                "T04T4TH8W": "int"
+              }
+            },
+            "ok": "bool"
+          }
+        },
+        {
+          "capture": "coldboot",
+          "method": "POST",
+          "content_type": "text/plain",
+          "request_params": {
+            "token": "xoxc-<REDACTED>",
+            "channel": "C04T4TH9N",
+            "as_admin": false
+          },
+          "response_status": 200,
+          "response_bytes": 165,
+          "response_shape": {
+            "channel": "<str len=9>",
+            "counts": {
+              "everyone": "int",
+              "people": "int",
+              "members": "int",
+              "guests": "int",
+              "bots": "int",
+              "apps": "int",
+              "invited": "int",
+              "by_team": {
+                "T04T4TH8W": "int"
+              }
+            },
+            "ok": "bool"
+          }
+        }
+      ],
+      "measured": {
+        "requests_observed": 7,
+        "request_key_frequency": {
+          "token": 7,
+          "channel": 7,
+          "as_admin": 7
+        },
+        "response_key_frequency": {
+          "channel": 7,
+          "counts": 7,
+          "ok": 7
+        },
+        "request_as_admin_values": {
+          "false": 7
+        },
+        "counts_field_frequency": {
+          "everyone": 7,
+          "people": 7,
+          "members": 7,
+          "guests": 7,
+          "bots": 7,
+          "apps": 7,
+          "by_team": 7,
+          "invited": 2
+        },
+        "counts_objects_observed": 7
+      }
+    }
+  },
+  "boot_sequences": {
+    "initial-load": {
+      "total_api_calls": 78,
+      "sequence": [
+        {
+          "t": 2.96,
+          "call": "experiments.getByUser"
+        },
+        {
+          "t": 2.96,
+          "call": "api.features"
+        },
+        {
+          "t": 2.96,
+          "call": "features.access.policies.list"
+        },
+        {
+          "t": 2.97,
+          "call": "client.shouldReload"
+        },
+        {
+          "t": 2.97,
+          "call": "conversations.view"
+        },
+        {
+          "t": 3.13,
+          "call": "client.userBoot"
+        },
+        {
+          "t": 4.6,
+          "call": "sfdc.integration.listOrgs"
+        },
+        {
+          "t": 4.6,
+          "call": "users.prefs.get"
+        },
+        {
+          "t": 4.6,
+          "call": "client.appCommands"
+        },
+        {
+          "t": 4.6,
+          "call": "links.getDomains"
+        },
+        {
+          "t": 4.63,
+          "call": "users.stateMachine"
+        },
+        {
+          "t": 4.64,
+          "call": "api.getFlannelHttpUrl"
+        },
+        {
+          "t": 4.65,
+          "call": "client.getWebSocketURL"
+        },
+        {
+          "t": 5.03,
+          "call": "client.extras"
+        },
+        {
+          "t": 5.03,
+          "call": "drafts.list"
+        },
+        {
+          "t": 5.03,
+          "call": "drafts.listActive"
+        },
+        {
+          "t": 5.03,
+          "call": "workflows.triggers.listRecentlyRunForUser"
+        },
+        {
+          "t": 5.14,
+          "call": "users.prefs.get"
+        },
+        {
+          "t": 5.19,
+          "call": "functions.workflows.list"
+        },
+        {
+          "t": 5.2,
+          "call": "megaphone.notifications.list"
+        },
+        {
+          "t": 5.2,
+          "call": "megaphone.notifications.list"
+        },
+        {
+          "t": 5.21,
+          "call": "teams.trials.info"
+        },
+        {
+          "t": 5.22,
+          "call": "users.priority.list"
+        },
+        {
+          "t": 5.23,
+          "call": "edge:emojis/info"
+        },
+        {
+          "t": 5.24,
+          "call": "edge:huddles/info"
+        },
+        {
+          "t": 5.24,
+          "call": "edge:permissions/info"
+        },
+        {
+          "t": 6.07,
+          "call": "edge:permissions/info"
+        },
+        {
+          "t": 6.08,
+          "call": "edge:users/info"
+        },
+        {
+          "t": 6.1,
+          "call": "WEBSOCKET-UPGRADE"
+        },
+        {
+          "t": 6.11,
+          "call": "edge:users/info"
+        },
+        {
+          "t": 6.14,
+          "call": "edge:huddles/list"
+        },
+        {
+          "t": 6.14,
+          "call": "activity.views"
+        },
+        {
+          "t": 6.14,
+          "call": "aiApps.list"
+        },
+        {
+          "t": 6.15,
+          "call": "calendar.getInstalledCalendars"
+        },
+        {
+          "t": 6.15,
+          "call": "dnd.info"
+        },
+        {
+          "t": 6.16,
+          "call": "help.issues.ticketStats"
+        },
+        {
+          "t": 6.18,
+          "call": "edge:users/counts"
+        },
+        {
+          "t": 6.41,
+          "call": "edge:users/info"
+        },
+        {
+          "t": 6.41,
+          "call": "edge:emojis/info"
+        },
+        {
+          "t": 6.48,
+          "call": "edge:huddles/info"
+        },
+        {
+          "t": 6.49,
+          "call": "edge:channels/info"
+        },
+        {
+          "t": 6.49,
+          "call": "edge:channels/info"
+        },
+        {
+          "t": 6.5,
+          "call": "edge:permissions/info"
+        },
+        {
+          "t": 6.5,
+          "call": "users.channelSections.list"
+        },
+        {
+          "t": 6.51,
+          "call": "team.targetingCriteria"
+        },
+        {
+          "t": 6.51,
+          "call": "sharedInvites.canGetLink"
+        },
+        {
+          "t": 6.52,
+          "call": "users.interactions.list"
+        },
+        {
+          "t": 7.04,
+          "call": "edge:channels/membership"
+        },
+        {
+          "t": 7.05,
+          "call": "workflows.triggers.list"
+        },
+        {
+          "t": 7.05,
+          "call": "conversations.listPrefs"
+        },
+        {
+          "t": 7.06,
+          "call": "bookmarks.list"
+        },
+        {
+          "t": 7.07,
+          "call": "sharedInvites.canGetLink"
+        },
+        {
+          "t": 7.08,
+          "call": "onboarding.fetch"
+        },
+        {
+          "t": 7.09,
+          "call": "messages.list"
+        },
+        {
+          "t": 7.25,
+          "call": "conversations.bulkReacjiTriggers"
+        },
+        {
+          "t": 7.25,
+          "call": "calendar.user.info"
+        },
+        {
+          "t": 7.25,
+          "call": "users.customStatus.list"
+        },
+        {
+          "t": 7.62,
+          "call": "edge:channels/info"
+        },
+        {
+          "t": 7.62,
+          "call": "edge:channels/info"
+        },
+        {
+          "t": 7.63,
+          "call": "edge:emojis/info"
+        },
+        {
+          "t": 7.67,
+          "call": "edge:users/info"
+        },
+        {
+          "t": 7.68,
+          "call": "client.counts"
+        },
+        {
+          "t": 7.68,
+          "call": "conversations.history"
+        },
+        {
+          "t": 7.68,
+          "call": "dnd.info"
+        },
+        {
+          "t": 7.69,
+          "call": "dnd.teamInfo"
+        },
+        {
+          "t": 7.69,
+          "call": "files.list"
+        },
+        {
+          "t": 7.7,
+          "call": "onboarding.updateUser"
+        },
+        {
+          "t": 7.8,
+          "call": "edge:users/info"
+        },
+        {
+          "t": 7.81,
+          "call": "messages.list"
+        },
+        {
+          "t": 7.91,
+          "call": "conversations.genericInfo"
+        },
+        {
+          "t": 8.22,
+          "call": "edge:channels/membership"
+        },
+        {
+          "t": 8.85,
+          "call": "edge:huddles/info"
+        },
+        {
+          "t": 8.85,
+          "call": "dnd.teamInfo"
+        },
+        {
+          "t": 8.88,
+          "call": "edge:users/info"
+        },
+        {
+          "t": 8.91,
+          "call": "edge:channels/info"
+        },
+        {
+          "t": 9.08,
+          "call": "conversations.genericInfo"
+        },
+        {
+          "t": 13.88,
+          "call": "saved.list"
+        },
+        {
+          "t": 46.63,
+          "call": "conversations.suggestions"
+        }
+      ]
+    },
+    "coldboot": {
+      "total_api_calls": 71,
+      "sequence": [
+        {
+          "t": 4.67,
+          "call": "experiments.getByUser"
+        },
+        {
+          "t": 4.67,
+          "call": "api.features"
+        },
+        {
+          "t": 4.67,
+          "call": "features.access.policies.list"
+        },
+        {
+          "t": 4.67,
+          "call": "client.shouldReload"
+        },
+        {
+          "t": 4.67,
+          "call": "conversations.view"
+        },
+        {
+          "t": 8.74,
+          "call": "client.userBoot"
+        },
+        {
+          "t": 8.93,
+          "call": "sfdc.integration.listOrgs"
+        },
+        {
+          "t": 8.94,
+          "call": "users.prefs.get"
+        },
+        {
+          "t": 8.94,
+          "call": "client.appCommands"
+        },
+        {
+          "t": 8.94,
+          "call": "links.getDomains"
+        },
+        {
+          "t": 8.96,
+          "call": "users.stateMachine"
+        },
+        {
+          "t": 8.97,
+          "call": "api.getFlannelHttpUrl"
+        },
+        {
+          "t": 8.97,
+          "call": "client.getWebSocketURL"
+        },
+        {
+          "t": 9.31,
+          "call": "client.extras"
+        },
+        {
+          "t": 9.32,
+          "call": "drafts.list"
+        },
+        {
+          "t": 9.32,
+          "call": "workflows.triggers.listRecentlyRunForUser"
+        },
+        {
+          "t": 9.32,
+          "call": "functions.workflows.list"
+        },
+        {
+          "t": 10.04,
+          "call": "users.prefs.get"
+        },
+        {
+          "t": 12.43,
+          "call": "megaphone.notifications.list"
+        },
+        {
+          "t": 12.44,
+          "call": "megaphone.notifications.list"
+        },
+        {
+          "t": 12.44,
+          "call": "teams.trials.info"
+        },
+        {
+          "t": 12.44,
+          "call": "users.priority.list"
+        },
+        {
+          "t": 12.45,
+          "call": "activity.views"
+        },
+        {
+          "t": 12.45,
+          "call": "edge:emojis/info"
+        },
+        {
+          "t": 12.46,
+          "call": "edge:huddles/info"
+        },
+        {
+          "t": 12.46,
+          "call": "edge:permissions/info"
+        },
+        {
+          "t": 13.14,
+          "call": "edge:users/info"
+        },
+        {
+          "t": 13.14,
+          "call": "edge:channels/info"
+        },
+        {
+          "t": 13.14,
+          "call": "WEBSOCKET-UPGRADE"
+        },
+        {
+          "t": 13.15,
+          "call": "edge:users/info"
+        },
+        {
+          "t": 13.15,
+          "call": "edge:huddles/list"
+        },
+        {
+          "t": 13.15,
+          "call": "aiApps.list"
+        },
+        {
+          "t": 13.16,
+          "call": "calendar.getInstalledCalendars"
+        },
+        {
+          "t": 13.16,
+          "call": "dnd.info"
+        },
+        {
+          "t": 13.16,
+          "call": "help.issues.ticketStats"
+        },
+        {
+          "t": 13.17,
+          "call": "users.channelSections.list"
+        },
+        {
+          "t": 14.45,
+          "call": "team.targetingCriteria"
+        },
+        {
+          "t": 14.45,
+          "call": "workflows.triggers.list"
+        },
+        {
+          "t": 14.46,
+          "call": "onboarding.fetch"
+        },
+        {
+          "t": 14.49,
+          "call": "calendar.user.info"
+        },
+        {
+          "t": 14.51,
+          "call": "users.customStatus.list"
+        },
+        {
+          "t": 14.51,
+          "call": "client.counts"
+        },
+        {
+          "t": 14.52,
+          "call": "edge:channels/info"
+        },
+        {
+          "t": 14.54,
+          "call": "dnd.info"
+        },
+        {
+          "t": 14.56,
+          "call": "edge:users/info"
+        },
+        {
+          "t": 14.56,
+          "call": "conversations.genericInfo"
+        },
+        {
+          "t": 14.61,
+          "call": "conversations.listPrefs"
+        },
+        {
+          "t": 14.61,
+          "call": "edge:permissions/info"
+        },
+        {
+          "t": 14.7,
+          "call": "edge:channels/info"
+        },
+        {
+          "t": 14.76,
+          "call": "conversations.genericInfo"
+        },
+        {
+          "t": 14.78,
+          "call": "edge:channels/info"
+        },
+        {
+          "t": 14.79,
+          "call": "edge:users/counts"
+        },
+        {
+          "t": 14.87,
+          "call": "edge:permissions/info"
+        },
+        {
+          "t": 14.88,
+          "call": "bookmarks.list"
+        },
+        {
+          "t": 15.52,
+          "call": "sharedInvites.canGetLink"
+        },
+        {
+          "t": 15.53,
+          "call": "megaphone.setNotificationAsSeen"
+        },
+        {
+          "t": 15.53,
+          "call": "users.interactions.list"
+        },
+        {
+          "t": 15.53,
+          "call": "conversations.history"
+        },
+        {
+          "t": 15.53,
+          "call": "edge:permissions/info"
+        },
+        {
+          "t": 16.35,
+          "call": "sharedInvites.canGetLink"
+        },
+        {
+          "t": 17.11,
+          "call": "bookmarks.list"
+        },
+        {
+          "t": 17.12,
+          "call": "messages.list"
+        },
+        {
+          "t": 17.12,
+          "call": "edge:emojis/info"
+        },
+        {
+          "t": 17.13,
+          "call": "edge:huddles/info"
+        },
+        {
+          "t": 17.88,
+          "call": "edge:channels/membership"
+        },
+        {
+          "t": 17.88,
+          "call": "edge:channels/info"
+        },
+        {
+          "t": 17.88,
+          "call": "edge:users/info"
+        },
+        {
+          "t": 17.89,
+          "call": "dnd.teamInfo"
+        },
+        {
+          "t": 17.89,
+          "call": "conversations.bulkReacjiTriggers"
+        },
+        {
+          "t": 18.07,
+          "call": "edge:channels/info"
+        },
+        {
+          "t": 29.8,
+          "call": "saved.list"
+        }
+      ]
+    }
+  },
+  "captures_analyzed": {
+    "count": 8,
+    "names": [
+      "channel-switch",
+      "channel-switch-2",
+      "coldboot",
+      "initial-load",
+      "quickswitch",
+      "quickswitch2",
+      "reconnect",
+      "scroll"
+    ],
+    "note": "All measured/* aggregates in this file cover all of these captures. The samples/* lists are capped at 3 per endpoint, so the distinct capture names appearing under samples are a subset."
+  }
+}

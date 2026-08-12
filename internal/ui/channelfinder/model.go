@@ -694,3 +694,27 @@ func channelPrefix(item Item) string {
 		return lipgloss.NewStyle().Foreground(styles.TextMuted).Render("#")
 	}
 }
+
+// Query returns the text the user has typed. Callers outside this
+// package need it to decide whether a keystroke changed the query and
+// therefore whether a server-side search is worth scheduling — the
+// finder's own matching is local and does not.
+func (m Model) Query() string {
+	return m.query
+}
+
+// Items returns every row the finder holds: joined, synthetic and
+// browseable alike, in insertion order and unfiltered.
+func (m Model) Items() []Item {
+	return append([]Item(nil), m.items...)
+}
+
+// FilteredItems returns the rows matching the current query, in the
+// order they are rendered.
+func (m Model) FilteredItems() []Item {
+	out := make([]Item, 0, len(m.filtered))
+	for _, idx := range m.filtered {
+		out = append(out, m.items[idx])
+	}
+	return out
+}

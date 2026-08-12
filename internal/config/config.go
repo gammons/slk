@@ -165,6 +165,12 @@ type Workspace struct {
 	// workspace. Nil means "fall through to global".
 	UseSlackSections *bool                 `toml:"use_slack_sections"`
 	Sections         map[string]SectionDef `toml:"sections"`
+	// VersionTS caches the Slack build timestamp last reported by
+	// client.shouldReload, sent as _x_version_ts on every workspace-API
+	// request. Empty means "use the compiled-in fallback and refresh on
+	// boot". Persisted so the second and later runs start with a
+	// current value rather than a stale compiled-in one.
+	VersionTS string `toml:"version_ts"`
 }
 
 type Theme struct {

@@ -90,6 +90,13 @@ const (
 // finally lands on.
 const openThreadDebounceDelay = 200 * time.Millisecond
 
+// channelSearchDebounceDelay is how long the channel finder waits for
+// typing to stop before asking the server. ~300 ms is the figure the
+// Phase 2b design fixed on from the captures, where a four-second
+// typing session produced two channels/search requests — about one per
+// pause, never one per keystroke.
+const channelSearchDebounceDelay = 300 * time.Millisecond
+
 type App struct {
 	// Sub-models
 	workspaceRail    workspace.Model
@@ -258,6 +265,18 @@ type App struct {
 	// would needlessly invalidate any in-flight debounced fetch about to land.
 	pendingThreadFetchGen uint64
 
+	// pendingChannelSearchGen is bumped by every channel-finder
+	// keystroke that changes the query, including the one that empties
+	// it. channelSearchDebounceMsg runs the search only when its gen
+	// still matches, so a burst of keystrokes issues one request for
+	// the query the user stopped on — and deleting back to empty
+	// cancels the request that was about to go out.
+	pendingChannelSearchGen uint64
+
+	// channelSearchDebounce is the finder's debounce window. A field
+	// rather than the constant so tests can collapse it.
+	channelSearchDebounce time.Duration
+
 	// emojiInvalidatePending guards against scheduling multiple tick
 	// callbacks when many EmojiImageReadyMsg arrive in rapid succession
 	// (e.g., a fresh channel with 50+ cold-cache emoji whose fetches all
@@ -412,6 +431,19 @@ type App struct {
 	// cycling locate sibling attachments). See internal/ui/imagepreview.go.
 	preview *imagePreviewController
 
+	// sixelFrames is the shared frame store correlating every sixel
+	// App.View with the Bubble Tea frame that actually flushes. The App
+	// publishes immutable placement snapshots here; FrameOutput (wired
+	// in main) takes the exact flushed frame and paints it after the
+	// text diff. nil until SetSixelFrameStore runs.
+	sixelFrames *imgpkg.SixelFrameStore
+
+	// forceSixelRepaint marks the next published frame for a full
+	// erase/repaint. Set on a real terminal resize (width or height
+	// actually changed), consumed by finalizeSixelView after the next
+	// publication.
+	forceSixelRepaint bool
+
 	// Compositor memo (Stage A perf). bubbletea v2 calls View() after
 	// EVERY message -- every keystroke, key-repeat, mouse-motion, and
 	// tick -- synchronously in the event loop (tea.go render-on-update).
@@ -459,57 +491,58 @@ func NewApp() *App {
 	// first ChannelSelectedMsg apply records the channel on it.
 	wins, rootWin := wintree.New(wintree.Channel{})
 	app := &App{
-		workspaceRail:        workspace.New(nil, 0),
-		sidebar:              sidebar.New(nil),
-		compose:              compose.New(""),
-		statusbar:            statusbar.New(),
-		channelFinder:        channelfinder.New(),
-		searchResults:        searchresults.New(),
-		newMessagePicker:     newmessagepicker.New(),
-		workspaceFinder:      workspacefinder.New(),
-		themeSwitcher:        themeswitcher.New(),
-		presenceMenu:         presencemenu.New(),
-		help:                 help.New(),
-		threadPanel:          thread.New(),
-		threadCompose:        compose.New("thread"),
-		threadsView:          threadsview.New(nil, ""),
-		activityView:         activityview.New(nil, ""),
-		linkPicker:           linkpicker.New(),
-		reactionPicker:       reactionpicker.New(),
-		reactionsView:        reactionsview.New(),
-		confirmPrompt:        confirmprompt.New(),
-		mode:                 ModeNormal,
-		focusedPanel:         PanelSidebar,
-		wins:                 wins,
-		focusedWin:           rootWin,
-		sidebarVisible:       true,
-		view:                 ViewChannels,
-		keys:                 DefaultKeyMap(),
-		selfSend:             newSelfSendDedup(),
-		bootstrap:            newWorkspaceBootstrap(),
-		windowTitle:          "slk",
-		threadsDirtyDebounce: 150 * time.Millisecond,
-		fetchingOlder:        map[string]bool{},
-		mouseWheelLines:      3,
-		userNames:            map[string]string{},
-		externalUsers:        map[string]bool{},
-		presence:             newPresenceController(),
-		renderCache:          newPanelRenderCache(),
-		drag:                 newDragState(),
-		preview:              newImagePreviewController(),
-		layout:               newPanelLayout(),
-		reactions:            noopReactionService,
-		threads:              noopThreadService,
-		activity:             noopActivityService,
-		messageSvc:           noopMessageService,
-		channels:             noopChannelService,
-		searchSvc:            noopSearchService,
-		lastChannelByTeam:    map[string]string{},
-		workspaceDomains:     map[string]string{},
-		browserOpener:        openURLCmd,
-		navHistory:           newNavHistoryStore(),
-		clipboardRead:        defaultClipboardReader,
-		clipboardWrite:       defaultClipboardWriter,
+		workspaceRail:         workspace.New(nil, 0),
+		sidebar:               sidebar.New(nil),
+		compose:               compose.New(""),
+		statusbar:             statusbar.New(),
+		channelFinder:         channelfinder.New(),
+		searchResults:         searchresults.New(),
+		newMessagePicker:      newmessagepicker.New(),
+		workspaceFinder:       workspacefinder.New(),
+		themeSwitcher:         themeswitcher.New(),
+		presenceMenu:          presencemenu.New(),
+		help:                  help.New(),
+		threadPanel:           thread.New(),
+		threadCompose:         compose.New("thread"),
+		threadsView:           threadsview.New(nil, ""),
+		activityView:          activityview.New(nil, ""),
+		linkPicker:            linkpicker.New(),
+		reactionPicker:        reactionpicker.New(),
+		reactionsView:         reactionsview.New(),
+		confirmPrompt:         confirmprompt.New(),
+		mode:                  ModeNormal,
+		focusedPanel:          PanelSidebar,
+		wins:                  wins,
+		focusedWin:            rootWin,
+		sidebarVisible:        true,
+		view:                  ViewChannels,
+		keys:                  DefaultKeyMap(),
+		selfSend:              newSelfSendDedup(),
+		bootstrap:             newWorkspaceBootstrap(),
+		windowTitle:           "slk",
+		threadsDirtyDebounce:  150 * time.Millisecond,
+		channelSearchDebounce: channelSearchDebounceDelay,
+		fetchingOlder:         map[string]bool{},
+		mouseWheelLines:       3,
+		userNames:             map[string]string{},
+		externalUsers:         map[string]bool{},
+		presence:              newPresenceController(),
+		renderCache:           newPanelRenderCache(),
+		drag:                  newDragState(),
+		preview:               newImagePreviewController(),
+		layout:                newPanelLayout(),
+		reactions:             noopReactionService,
+		threads:               noopThreadService,
+		activity:              noopActivityService,
+		messageSvc:            noopMessageService,
+		channels:              noopChannelService,
+		searchSvc:             noopSearchService,
+		lastChannelByTeam:     map[string]string{},
+		workspaceDomains:      map[string]string{},
+		browserOpener:         openURLCmd,
+		navHistory:            newNavHistoryStore(),
+		clipboardRead:         defaultClipboardReader,
+		clipboardWrite:        defaultClipboardWriter,
 	}
 	// Root model deliberately bypasses newWindowModel: the config
 	// retention fields (avatarFn, userNames, emojiCtx, ...) are still
@@ -641,8 +674,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		// Only a real size change forces a sixel repaint; a duplicate
+		// size message (same dimensions) must not erase and repaint
+		// every image pointlessly.
+		changed := a.width != msg.Width || a.height != msg.Height
 		a.width = msg.Width
 		a.height = msg.Height
+		if changed {
+			a.forceSixelRepaint = true
+		}
 		return a, nil
 
 	case scrollFlushMsg:
@@ -2022,6 +2062,14 @@ func (a *App) SetImageContext(ctx imgrender.ImageContext) {
 	a.threadPanel.SetImageContext(ctx)
 }
 
+// SetSixelFrameStore wires the shared frame store used to correlate
+// every published sixel frame with the Bubble Tea frame that flushes.
+// The store is created in main and shared with FrameOutput; without it
+// the App still renders but publishes nothing.
+func (a *App) SetSixelFrameStore(frames *imgpkg.SixelFrameStore) {
+	a.sixelFrames = frames
+}
+
 // SetEmojiContext forwards the emoji rendering context to both the
 // messages pane and the thread pane. They each hold their own copy
 // because they have independent render caches and call paths.
@@ -2598,8 +2646,7 @@ func (a *App) renderTypingLine() string {
 
 func (a *App) View() tea.View {
 	if v, handled := a.renderEarlyFallback(); handled {
-		v.WindowTitle = a.windowTitle
-		return v
+		return a.finalizeSixelView(v, nil)
 	}
 
 	// Perf instrumentation: wall-clock the main View() path so we can
@@ -2692,7 +2739,6 @@ func (a *App) View() tea.View {
 	v := tea.NewView(screen)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
-	v.WindowTitle = a.windowTitle
 	if debuglog.Enabled() {
 		// panel: 0=workspace 1=sidebar 2=messages 3=thread
 		// view:  0=channels 1=threads
@@ -2701,6 +2747,83 @@ func (a *App) View() tea.View {
 			int(a.focusedPanel), int(a.view), a.mode.String(),
 			a.threadVisible, a.sidebarVisible, previewActive)
 	}
+	return a.finalizeSixelView(v, a.collectSixelPlacements(frame))
+}
+
+// collectSixelPlacements gathers the desired sixel placements for the
+// current screen. The preview overlay replaces the messages/thread
+// regions entirely when active, so it takes priority; otherwise every
+// visible window leaf contributes its own placements, mapped through
+// its own rectangle (split windows sit at their own origins, not the
+// unsplit messages-pane origin). The thread pane still renders
+// halfblock.
+func (a *App) collectSixelPlacements(frame panelLayoutFrame) []imgpkg.SixelPlacement {
+	if a.preview.Active() {
+		want := make([]imgpkg.SixelPlacement, 0, 1)
+		if ov := a.preview.Overlay(); ov != nil {
+			if sp := ov.SixelPaint(); sp != nil {
+				if pl, ok := a.absolutePreviewSixelPlacement(*sp); ok {
+					want = append(want, pl)
+				}
+			}
+		}
+		return want
+	}
+	if a.view != ViewChannels {
+		return nil
+	}
+	// The same bounds renderWindowsRegion uses, so leaf rectangles
+	// match the panes actually drawn.
+	bounds := wintree.Rect{
+		X: 0,
+		Y: 0,
+		W: frame.MsgWidth + frame.MsgBorder,
+		H: frame.ContentHeight,
+	}
+	rects := a.wins.ComputeRects(bounds)
+	out := make([]imgpkg.SixelPlacement, 0, 2)
+	for _, id := range a.wins.Leaves() {
+		rect, ok := rects[id]
+		model := a.winModels[id]
+		if !ok || model == nil || rect.W < 1 || rect.H < 1 {
+			continue
+		}
+		out = append(out, absoluteWindowSixelPlacements(
+			model.SixelPlacements(), model.ChromeHeight(), rect, a.layout.SidebarEnd(),
+		)...)
+	}
+	return out
+}
+
+// finalizeSixelView is the single exit point for every App.View path,
+// including the early fallback. It:
+//
+//   - sets the real window title for non-sixel protocols;
+//   - publishes an empty frame when no sixel surface is visible, so old
+//     pixels erase;
+//   - attaches each placement's guard from the complete screen string;
+//   - publishes the frame with the themed erase background and the
+//     pending resize force, then clears the force flag;
+//   - marks the title with the frame ID so FrameOutput can correlate
+//     the exact flushed Bubble Tea frame.
+//
+// It never writes to the terminal; painting happens later in
+// FrameOutput after the text diff for the same frame.
+func (a *App) finalizeSixelView(v tea.View, placements []imgpkg.SixelPlacement) tea.View {
+	if a.imgProtocol != imgpkg.ProtoSixel || a.sixelFrames == nil {
+		v.WindowTitle = a.windowTitle
+		return v
+	}
+	for i := range placements {
+		placements[i].Guard = frameGuard(v.Content, placements[i].Row-1, placements[i].Rows)
+	}
+	id := a.sixelFrames.Publish(imgpkg.SixelFrame{
+		Placements: placements,
+		EraseSGR:   messages.BgANSI(),
+		Force:      a.forceSixelRepaint,
+	})
+	a.forceSixelRepaint = false
+	v.WindowTitle = imgpkg.FrameTitle(a.windowTitle, id)
 	return v
 }
 
@@ -3243,4 +3366,29 @@ func (a *App) uploadToastCmd(text string, dur time.Duration) tea.Cmd {
 			return statusbar.CopiedClearMsg{}
 		}),
 	)
+}
+
+// scheduleChannelSearch defers a channels/search for the finder's
+// current query.
+//
+// The generation is bumped on every call, including the ones that
+// return nil: emptying the query must cancel the request that the last
+// keystroke had already scheduled, and only a bump can do that. An
+// empty query issues nothing — edge.ChannelsSearch would return early
+// anyway, but queueing the request and dropping it at the far end
+// still leaves a timer running against a finder that is on its way
+// closed.
+func (a *App) scheduleChannelSearch(query string) tea.Cmd {
+	a.pendingChannelSearchGen++
+	if query == "" {
+		return nil
+	}
+	gen := a.pendingChannelSearchGen
+	delay := a.channelSearchDebounce
+	if delay <= 0 {
+		delay = channelSearchDebounceDelay
+	}
+	return tea.Tick(delay, func(time.Time) tea.Msg {
+		return channelSearchDebounceMsg{query: query, gen: gen}
+	})
 }

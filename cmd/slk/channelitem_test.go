@@ -99,6 +99,10 @@ func (f *fakeSectionsClient) GetChannelSections(_ context.Context) ([]slk.Sideba
 	return f.sections, nil
 }
 
+func (f *fakeSectionsClient) GetStarredChannels(_ context.Context) ([]string, error) {
+	return nil, nil
+}
+
 // bootstrappedStore returns a Ready() *service.SectionStore whose
 // channelToSection map is built from the supplied (sectionID -> []channelID)
 // pairs. All synthetic sections use Type="channels" so they pass

@@ -112,8 +112,50 @@ release:
     ## slk {{ .Tag }}
 
     A blazingly fast Slack TUI. Keyboard-driven, beautifully themed, under 20MB.
+  # Two footers: one for pre-releases, one for stable.
+  #
+  # Everything here is PERMANENT config, so it carries only what is true
+  # of every pre-release. Warnings specific to one release -- "this one
+  # changes how slk talks to Slack, and Enterprise Grid is untested" --
+  # belong in that release's body, not in a template that would still be
+  # emitting them three betas later.
+  #
+  # The pre-release text deliberately omits the .deb/.rpm/.apk lines:
+  # installing a beta system-wide through a package manager is a worse
+  # idea than dropping a binary on $PATH, and the point of this channel
+  # is that it stays easy to back out of.
   footer: |
     ---
+    {{- if .Prerelease }}
+    **This is a pre-release.** It is not published to the Homebrew tap, and
+    `go install ...@latest` will not resolve to it. Both are deliberate:
+    pre-releases are opt-in only, and nothing you already have installed
+    will move to this by itself.
+
+    - **Go:** `go install github.com/gammons/slk/cmd/slk@{{ .Tag }}`
+    - **Linux/macOS:** download the `.tar.gz`, extract, and place `slk` in your `$PATH`
+    - **Windows:** download the `.zip`, extract `slk.exe`, add to `PATH`
+
+    Verify downloads with `checksums.txt`.
+
+    **Please run it with debug logging on:**
+
+    ```
+    SLK_DEBUG=1 slk
+    ```
+
+    That writes `slk-debug.log` to the working directory. If anything looks
+    wrong, that file is what makes a report actionable -- especially the
+    request tally at the end of it:
+
+    ```
+    grep -A30 'shutdown API request tally' slk-debug.log
+    ```
+
+    Please report anything you find at
+    https://github.com/gammons/slk/issues -- including "it seemed fine",
+    which is genuinely useful and almost never gets sent.
+    {{- else }}
     **Install**
 
     - **Linux/macOS:** download the appropriate `.tar.gz`, extract, and place `slk` in your `$PATH`
@@ -124,56 +166,59 @@ release:
     - **Go:** `go install github.com/gammons/slk/cmd/slk@{{ .Tag }}`
 
     Verify downloads with `checksums.txt`.
+    {{- end }}
 
 # Homebrew tap.
 #
-# Publishes a formula to gammons/homebrew-tap on every non-prerelease
-# tag. Users install via:
+# Casks, not formulas: goreleaser deprecated `brews` in v2.10 and the
+# historical formula was a hack for installing pre-compiled binaries.
+# Users still install with:
 #
 #     brew install gammons/tap/slk
+#
+# Two consequences of the move worth knowing:
+#
+#   1. Casks are macOS-only. Homebrew-on-Linux users lose this path and
+#      should use the .deb/.rpm/.apk or the tarball, which is the better
+#      route for them anyway.
+#   2. Existing installs do NOT migrate by themselves. The tap repo needs
+#      a tap_migrations.json containing {"slk": "slk"} and Formula/slk.rb
+#      deleted; only then does `brew upgrade` move someone from the old
+#      formula to the cask. That is manual work in gammons/homebrew-tap,
+#      and it should happen right after the first stable release that
+#      publishes a cask.
 #
 # The token is a fine-grained PAT scoped to the homebrew-tap repo with
 # contents:write, stored as HOMEBREW_TAP_GITHUB_TOKEN in this repo's
 # Actions secrets.
-brews:
+homebrew_casks:
   - name: slk
     repository:
       owner: gammons
       name: homebrew-tap
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    directory: Formula
     commit_author:
       name: goreleaser
       email: goreleaser@gammons.dev
-    commit_msg_template: "slk: brew formula update for {{ .ProjectName }} version {{ .Tag }}"
+    commit_msg_template: "slk: brew cask update for {{ .ProjectName }} version {{ .Tag }}"
     homepage: https://github.com/gammons/slk
     description: A blazingly fast, keyboard-driven Slack TUI
-    license: MIT
+    # Helps `brew audit` when the homepage and the download domain differ.
+    url:
+      verified: github.com/gammons/slk
     # Skip the prerelease tags goreleaser auto-flags so the tap only
     # tracks stable releases.
     skip_upload: auto
-    install: |
-      bin.install "slk"
-    test: |
-      assert_match "slk", shell_output("#{bin}/slk --version")
-    caveats: |
-      First run: `slk login` to authenticate with your Slack workspace.
-      Config lives in ~/.config/slk/.
-
-# AUR -- enable after creating an SSH key for AUR and adding AUR_KEY secret.
-# Publishes a `slk-bin` package built from prebuilt linux_amd64 archives.
-#
-# aurs:
-#   - name: slk-bin
-#     homepage: https://github.com/gammons/slk
-#     description: A blazingly fast Slack TUI
-#     maintainers:
-#       - "Grant Ammons <grant@grant.dev>"
-#     license: MIT
-#     private_key: "{{ .Env.AUR_KEY }}"
-#     git_url: "ssh://aur@aur.archlinux.org/slk-bin.git"
-#     package: |-
-#       install -Dm755 "./slk" "${pkgdir}/usr/bin/slk"
-#       install -Dm644 "./LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
-#       install -Dm644 "./README.md" "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+    binaries:
+      - slk
+    # slk's binaries are not signed or notarized, so macOS quarantines
+    # them on download and Gatekeeper refuses to run them. Stripping the
+    # attribute at install time is what goreleaser's migration guide
+    # prescribes for unsigned casks.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/slk"]
+          end

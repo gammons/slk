@@ -232,6 +232,24 @@ func (db *DB) migrate() error {
 		"ALTER TABLE thread_subscriptions ADD COLUMN latest_reply TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	// Version stamps for Slack's conditional cache-revalidation
+	// protocol (edgeapi updated_ids). channels.version is a
+	// millisecond int, users.version a second int, messages.version an
+	// opaque string from conversations.history's latest_updates. Zero
+	// or empty means "never seen", which is what we send to ask for a
+	// full record.
+	if err := db.addColumnIfMissing("channels", "version",
+		"ALTER TABLE channels ADD COLUMN version INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := db.addColumnIfMissing("users", "version",
+		"ALTER TABLE users ADD COLUMN version INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := db.addColumnIfMissing("messages", "version",
+		"ALTER TABLE messages ADD COLUMN version TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 
 	// Full-text search index. FTS5 may be unavailable in unusual
 	// driver builds; search degrades to LIKE rather than failing

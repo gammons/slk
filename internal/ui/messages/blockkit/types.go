@@ -211,6 +211,7 @@ type SixelEntry struct {
 	Bytes    []byte
 	Fallback []string
 	Height   int
+	Width    int
 }
 
 // HitRect is one clickable image footprint expressed in (row, col)

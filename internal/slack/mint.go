@@ -17,7 +17,9 @@ var apiTokenRE = regexp.MustCompile(`"api_token":"([^"]+)"`)
 // the desktop `d` cookie and scraping the embedded api_token. It uses a
 // browser-shaped HTTP client with the cookie set.
 func MintToken(ctx context.Context, domain, dCookie string) (string, error) {
-	client := newCookieHTTPClient(dCookie)
+	// No envelope: this fetches the workspace HTML page, not an /api/
+	// endpoint, and real clients send no telemetry params there.
+	client := newCookieHTTPClient(dCookie, nil)
 	// Bound the request so a hung/half-open connection (captive portal,
 	// offline) can't stall onboarding or the startup re-mint indefinitely.
 	client.Timeout = 15 * time.Second

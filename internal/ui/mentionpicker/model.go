@@ -127,44 +127,63 @@ func (m *Model) Select() *MentionResult {
 	}
 }
 
+// rankedUser pairs a candidate with its match rank so the sort can put
+// stronger matches first within a membership tier.
+type rankedUser struct {
+	user User
+	rank matchRank
+}
+
+// sortRanked orders candidates by match rank, then display name, then ID.
+// sort.Slice is unstable, so the ID tie-break keeps the dropdown from
+// reshuffling between identical keystrokes when two entries share a
+// display name.
+func sortRanked(s []rankedUser) {
+	sort.Slice(s, func(i, j int) bool {
+		if s[i].rank != s[j].rank {
+			return s[i].rank < s[j].rank
+		}
+		if s[i].user.DisplayName != s[j].user.DisplayName {
+			return s[i].user.DisplayName < s[j].user.DisplayName
+		}
+		return s[i].user.ID < s[j].user.ID
+	})
+}
+
 func (m *Model) filter() {
 	q := text.Fold(m.query)
-	matches := func(u User) bool {
-		if q == "" {
-			return true
-		}
-		return strings.HasPrefix(text.Fold(u.DisplayName), q) ||
-			strings.HasPrefix(text.Fold(u.Username), q)
-	}
+	sq := squash(q)
 
-	var specials, inCh, notInCh []User
+	var specials []User
+	var inCh, notInCh []rankedUser
 	for _, u := range specialMentions {
-		if matches(u) {
+		if rankUser(u, q, sq) != rankNone {
 			specials = append(specials, u)
 		}
 	}
 	for _, u := range m.users {
-		if !matches(u) {
+		r := rankUser(u, q, sq)
+		if r == rankNone {
 			continue
 		}
 		if u.InChannel {
-			inCh = append(inCh, u)
+			inCh = append(inCh, rankedUser{user: u, rank: r})
 		} else {
-			notInCh = append(notInCh, u)
+			notInCh = append(notInCh, rankedUser{user: u, rank: r})
 		}
 	}
 
-	sort.Slice(inCh, func(i, j int) bool {
-		return inCh[i].DisplayName < inCh[j].DisplayName
-	})
-	sort.Slice(notInCh, func(i, j int) bool {
-		return notInCh[i].DisplayName < notInCh[j].DisplayName
-	})
+	sortRanked(inCh)
+	sortRanked(notInCh)
 
 	results := make([]User, 0, len(specials)+len(inCh)+len(notInCh))
 	results = append(results, specials...)
-	results = append(results, inCh...)
-	results = append(results, notInCh...)
+	for _, r := range inCh {
+		results = append(results, r.user)
+	}
+	for _, r := range notInCh {
+		results = append(results, r.user)
+	}
 
 	if len(results) > MaxVisible {
 		results = results[:MaxVisible]

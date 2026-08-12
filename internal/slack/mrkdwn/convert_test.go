@@ -491,6 +491,43 @@ func TestConvert_Broadcast(t *testing.T) {
 	}
 }
 
+// TestConvert_Usergroup: @team mentions are a usergroup element, not a
+// broadcast range. Sending them as a broadcast makes Slack reject the
+// whole message with invalid_blocks.
+func TestConvert_Usergroup(t *testing.T) {
+	mr, blk := Convert("<!subteam^S01|@team> please review")
+	if mr != "<!subteam^S01|@team> please review" {
+		t.Errorf("mrkdwn = %q", mr)
+	}
+	ug := blk.Elements[0].(*slack.RichTextSection).Elements[0].(*slack.RichTextSectionUserGroupElement)
+	if ug.UsergroupID != "S01" {
+		t.Errorf("UsergroupID = %q, want S01", ug.UsergroupID)
+	}
+}
+
+func TestConvert_UsergroupPreservesStyle(t *testing.T) {
+	_, blk := Convert("**<!subteam^S01|@team>**")
+	ug := blk.Elements[0].(*slack.RichTextSection).Elements[0].(*slack.RichTextSectionUserGroupElement)
+	if ug.Style == nil || !ug.Style.Bold {
+		t.Fatalf("usergroup style = %+v, want bold", ug.Style)
+	}
+}
+
+// TestConvert_UnknownBroadcastStaysText: reBroadcast matches any
+// <!word>, but Slack only accepts here/channel/everyone as ranges.
+// Unknown ones must degrade to literal text, not fail the send.
+func TestConvert_UnknownBroadcastStaysText(t *testing.T) {
+	_, blk := Convert("<!bogus> hi")
+	el := blk.Elements[0].(*slack.RichTextSection).Elements[0]
+	te, ok := el.(*slack.RichTextSectionTextElement)
+	if !ok {
+		t.Fatalf("element = %T, want text element", el)
+	}
+	if te.Text != "<!bogus> hi" {
+		t.Errorf("Text = %q, want %q", te.Text, "<!bogus> hi")
+	}
+}
+
 func TestConvert_BoldContainingMention(t *testing.T) {
 	mr, blk := Convert("**Hi <@U1>**")
 	if mr != "*Hi <@U1>*" {

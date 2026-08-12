@@ -19,12 +19,12 @@ func TestSixel_RenderShape(t *testing.T) {
 	if len(out.Lines) != 5 {
 		t.Fatalf("expected 5 lines, got %d", len(out.Lines))
 	}
-	if !strings.ContainsRune(out.Lines[0], SixelSentinel) {
-		t.Errorf("row 0 missing sentinel: %q", out.Lines[0])
-	}
-	for i := 1; i < len(out.Lines); i++ {
-		if strings.ContainsRune(out.Lines[i], SixelSentinel) {
-			t.Errorf("row %d has unexpected sentinel", i)
+	// The placeholder rows are plain spaces reserving the footprint; the
+	// messages pane drives emission from the placement pipeline, not from
+	// any marker in the line content.
+	for i, l := range out.Lines {
+		if w := strings.Count(l, " "); w != 20 {
+			t.Errorf("row %d width = %d, want 20 cells of space", i, w)
 		}
 	}
 	if len(out.Fallback) != 5 {

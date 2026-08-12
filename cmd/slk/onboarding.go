@@ -78,12 +78,17 @@ func addWorkspace() error {
 		selected[id] = true
 	}
 
-	// Mint tokens for the selected workspaces.
+	// Resolve tokens for the selected workspaces. Prefer the desktop app's
+	// stored tokens (client-v2 no longer inlines them in page HTML); mint is a
+	// fallback for older workspaces. A read failure here is non-fatal — mint
+	// still covers those cases.
+	desktopTokens, _ := slackdesktop.Tokens()
+
 	fmt.Println()
 	fmt.Println(stepStyle.Render("Connecting..."))
-	tokens, err := buildWorkspaceTokens(context.Background(), cookie, workspaces, selected, slackclient.MintToken)
+	tokens, err := buildWorkspaceTokens(context.Background(), cookie, desktopTokens, workspaces, selected, slackclient.MintToken)
 	if err != nil {
-		fmt.Println(errorStyle.Render("  Failed to mint token: " + err.Error()))
+		fmt.Println(errorStyle.Render("  Failed to obtain token: " + err.Error()))
 		return err
 	}
 

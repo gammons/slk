@@ -96,6 +96,35 @@ func (db *DB) SetChannelSyncedAt(channelID string, unixSec int64) error {
 	return nil
 }
 
+// MarkChannelsStale zeroes synced_at for every channel in the
+// workspace except keepChannelID, so each one refetches the next time
+// it is opened.
+//
+// This is what makes reconnect cost a constant number of requests. slk
+// used to answer a reconnect by fetching conversations.history for
+// every channel it had ever cached — 288 calls in one measured
+// three-minute session, 250 of them (86%) returning zero messages —
+// and it ran from OnConnect, so every laptop sleep, wifi change and VPN
+// flap replayed the whole sweep. Marking the cache stale defers that
+// work to the moment a channel is actually looked at, where it is one
+// request the user is waiting for rather than hundreds nobody asked
+// for.
+//
+// keepChannelID is normally the channel on screen, which the caller
+// has just refreshed for real; pass "" when there is none. Zero is the
+// same value GetChannelSyncedAt returns for a channel it has never
+// seen, so readers need no new state to understand it.
+func (db *DB) MarkChannelsStale(workspaceID, keepChannelID string) error {
+	_, err := db.conn.Exec(
+		`UPDATE channels SET synced_at = 0 WHERE workspace_id = ? AND id != ?`,
+		workspaceID, keepChannelID,
+	)
+	if err != nil {
+		return fmt.Errorf("marking channels stale: %w", err)
+	}
+	return nil
+}
+
 // GetChannelSyncedAt returns the unix timestamp recorded by
 // SetChannelSyncedAt, or 0 if the channel row is missing or the column
 // was never set. The zero return doubles as the "never synced" signal

@@ -20,6 +20,7 @@ import (
 
 func handleChannelFinderMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	// Map tea.KeyMsg to string for the finder.
+	before := a.channelFinder.Query()
 	result := a.channelFinder.HandleKey(normalizeFinderKey(msg))
 	if result != nil {
 		a.channelFinder.Close()
@@ -49,7 +50,14 @@ func handleChannelFinderMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	// Check if finder closed itself (Esc).
 	if !a.channelFinder.IsVisible() {
 		a.SetMode(ModeNormal)
+		return nil
 	}
 
+	// The local filter has already run inside HandleKey, so the list
+	// on screen is up to date before anything touches the network.
+	// Only the server query is deferred.
+	if after := a.channelFinder.Query(); after != before {
+		return a.scheduleChannelSearch(after)
+	}
 	return nil
 }

@@ -412,6 +412,7 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 		if err := json.Unmarshal(data, &evt); err != nil {
 			return
 		}
+		debuglog.WS("user_typing: channel=%s user=%s", evt.Channel, evt.User)
 		handler.OnUserTyping(evt.Channel, evt.User)
 
 	case "member_joined_channel":

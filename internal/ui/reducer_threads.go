@@ -145,6 +145,14 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		if a.activeTeamID != "" {
 			threads := a.threads
 			team := ids.TeamID(a.activeTeamID)
+			// Opening the view is what pays for the subscription
+			// fetch. It returns immediately and refreshes the list via
+			// ThreadsListDirtyMsg when it lands, so the ListFetch
+			// below still renders from cache first.
+			batch = append(batch, func() tea.Msg {
+				threads.EnsureSubscriptions(team)
+				return nil
+			})
 			batch = append(batch, func() tea.Msg { return threads.ListFetch(team) })
 		}
 		// Activation is a single event -- fire the fetch immediately

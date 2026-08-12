@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,12 +23,15 @@ import (
 // SlackAPI defines the subset of the Slack API we use.
 // This interface enables mocking in tests.
 type SlackAPI interface {
-	GetConversations(params *slack.GetConversationsParameters) ([]slack.Channel, string, error)
 	GetConversationsForUser(params *slack.GetConversationsForUserParameters) ([]slack.Channel, string, error)
 	GetConversationHistory(params *slack.GetConversationHistoryParameters) (*slack.GetConversationHistoryResponse, error)
 	GetConversationReplies(params *slack.GetConversationRepliesParameters) ([]slack.Message, bool, string, error)
 	SearchMessagesContext(ctx context.Context, query string, params slack.SearchParameters) (*slack.SearchMessages, error)
-	GetUsersContext(ctx context.Context, options ...slack.GetUsersOption) ([]slack.User, error)
+	// Deliberately absent: GetConversations (conversations.list) and
+	// GetUsersContext (users.list). See
+	// TestSlackAPI_DeclaresNoWorkspaceEnumeration — the whole
+	// directory is never fetched, only individual users on demand via
+	// GetUserInfo.
 	GetUserGroupsContext(ctx context.Context, options ...slack.GetUserGroupsOption) ([]slack.UserGroup, error)
 	GetUsersInConversationContext(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error)
 	GetUserInfo(user string) (*slack.User, error)
@@ -57,6 +61,12 @@ type SlackAPI interface {
 // internal default (slack.APIURL).
 const defaultAPIBaseURL = "https://slack.com/api/"
 
+// defaultWSBaseURL is the scheme+host slk opens its event WebSocket
+// against, matching the official web client. Only the scheme and host
+// live here; StartWebSocket owns the query string, which is part of the
+// protocol fingerprint being impersonated.
+const defaultWSBaseURL = "wss://wss-primary.slack.com"
+
 // Client wraps the slack-go library, providing RTM connectivity
 // and a simplified Web API surface for the service layer.
 // Uses browser cookie auth (xoxc token + d cookie).
@@ -78,6 +88,13 @@ type Client struct {
 	// defaultAPIBaseURL until then.
 	apiBaseURL string
 
+	// wsBaseURL is the scheme+host StartWebSocket dials, e.g.
+	// "wss://wss-primary.slack.com". Never ends in "/" — StartWebSocket
+	// appends "/?..." itself. Set to defaultWSBaseURL by NewClient;
+	// overridden by tests so the upgrade handshake can be exercised
+	// against a local server, the same way apiBaseURL is.
+	wsBaseURL string
+
 	// teamURL is the raw workspace URL from auth.test's response
 	// (e.g. "https://truelist-workspace.slack.com/"). Used to derive
 	// the workspace subdomain for in-app permalink routing.
@@ -90,13 +107,26 @@ type Client struct {
 	// constructed directly in tests (e.g., &Client{api: mock}); in
 	// that case Connect() leaves the existing api field alone.
 	httpClient *http.Client
+
+	// envelope carries the per-session telemetry identity Slack's web
+	// client puts on every API request (_x_id, _x_csid, slack_route,
+	// _x_version_ts, ...). It is owned by the Client because its
+	// post-boot phase is keyed on the team id Connect discovers, and
+	// because httpClient's BrowserTransport holds the same pointer —
+	// so SetTeamID here changes what every subsequent request emits.
+	//
+	// Nil for clients constructed directly in tests
+	// (e.g. &Client{api: mock}); BrowserTransport treats a nil Env as
+	// "send no envelope params", so those clients still work.
+	envelope *slackhttp.Envelope
 }
 
 // NewClient creates a new Slack client using browser cookie auth.
 // xoxcToken is the xoxc-... token from the browser.
 // dCookie is the value of the 'd' cookie from slack.com.
 func NewClient(xoxcToken, dCookie string) *Client {
-	httpClient := newCookieHTTPClient(dCookie)
+	env := slackhttp.NewEnvelope()
+	httpClient := newCookieHTTPClient(dCookie, env)
 
 	api := slack.New(
 		xoxcToken,
@@ -108,7 +138,9 @@ func NewClient(xoxcToken, dCookie string) *Client {
 		token:      xoxcToken,
 		cookie:     dCookie,
 		apiBaseURL: defaultAPIBaseURL,
+		wsBaseURL:  defaultWSBaseURL,
 		httpClient: httpClient,
+		envelope:   env,
 	}
 }
 
@@ -134,8 +166,95 @@ func newCookieJar(dCookie string) http.CookieJar {
 // and a BrowserTransport that injects Chrome-like headers on every request
 // to *.slack.com hosts. This keeps Enterprise Grid anomaly detectors from
 // flagging slk's traffic as non-browser. See internal/slackhttp.
-func newCookieHTTPClient(dCookie string) *http.Client {
-	return slackhttp.NewBrowserHTTPClient(newCookieJar(dCookie))
+//
+// env supplies the telemetry envelope (_x_id, _x_csid, slack_route, ...)
+// added to workspace API calls. Pass nil for clients that fetch pages or
+// assets rather than calling /api/ — BrowserTransport scopes the envelope
+// to /api/ paths anyway, but nil states the intent.
+//
+// slackhttp.NewBrowserHTTPClient is deliberately not used here: it builds
+// a BrowserTransport with no Env, which is right for asset clients (see
+// internal/image) and wrong for the API client.
+func newCookieHTTPClient(dCookie string, env *slackhttp.Envelope) *http.Client {
+	return &http.Client{
+		Transport: &slackhttp.BrowserTransport{
+			Inner: http.DefaultTransport,
+			Env:   env,
+			// This client carries the bulk of slk's API traffic, so
+			// without this the per-boot tally Phase 2b's success
+			// criteria are stated in would miss almost everything.
+			// NewBrowserHTTPClient attaches the same counter to the
+			// clients it builds; this literal has to opt in by hand.
+			Counter: slackhttp.DefaultCounter,
+		},
+		Jar: newCookieJar(dCookie),
+	}
+}
+
+// apiHTTPClient returns the HTTP client every outbound request from
+// this Client must go through.
+//
+// GetUnreadCounts, callChannelSectionsList and GetStarredChannels used
+// to call newCookieHTTPClient directly instead. That was invisible in
+// two ways. It made a dropped envelope argument undetectable — a
+// mutation replacing their env argument with nil survived the whole
+// suite — because no test could observe those three requests:
+// pointClientAtTestServer redirects c.httpClient's transport, and a
+// method that builds its own client ignores it and dials slack.com for
+// real. It also built a fresh cookie jar per call.
+//
+// The nil branch exists only for Clients constructed directly in tests
+// (&Client{api: mock}); NewClient always sets httpClient. It is pinned
+// by TestAPIHTTPClient_FallbackCarriesEnvelope so it cannot lose the
+// envelope either.
+func (c *Client) apiHTTPClient() *http.Client {
+	if c.httpClient != nil {
+		return c.httpClient
+	}
+	return newCookieHTTPClient(c.cookie, c.envelope)
+}
+
+// HTTPClient returns the HTTP client this Client sends every request
+// through — the same one apiHTTPClient hands the internal call sites.
+//
+// It exists for one caller: edge.New, which takes an *http.Client and
+// documents that it must be one built with slackhttp.BrowserTransport.
+// Handing it a plain &http.Client{} instead compiles, runs, and sends
+// every edgeapi request with Go's default User-Agent, none of Chrome's
+// header set and no _x_app_name/fp envelope — the exact divergence this
+// phase exists to remove, visible nowhere in slk's own output. Routing
+// through apiHTTPClient rather than returning c.httpClient directly
+// also means a Client built as a literal in a test still gets an
+// envelope-carrying client rather than nil.
+//
+// A second, wanted consequence: this client's transport holds
+// slackhttp.DefaultCounter, so edgeapi calls appear in the shutdown
+// request tally alongside the workspace API's.
+func (c *Client) HTTPClient() *http.Client {
+	return c.apiHTTPClient()
+}
+
+// PostForm is postForm, exported.
+//
+// boot.UserBoot and boot.ConversationsView take a boot.PostFunc, whose
+// signature is exactly postForm's. internal/slack/boot is a
+// stdlib-only parser that cannot import this package, and
+// internal/bootstrap must not either (see that package's comment on
+// import direction), so the wiring in cmd/slk needs a method value it
+// can pass. This is that method value and nothing else: no defaulting,
+// no reshaping, no second token injection. Anything added here would be
+// a request-shape change invisible at the call sites that already use
+// postForm.
+func (c *Client) PostForm(ctx context.Context, method string, form url.Values) ([]byte, error) {
+	return c.postForm(ctx, method, form)
+}
+
+// Envelope returns the client's Slack telemetry envelope, or nil for a
+// Client constructed directly (tests). Callers use it to read or update
+// session-scoped values such as the build timestamp; the same pointer is
+// held by the HTTP transport, so updates take effect on the next request.
+func (c *Client) Envelope() *slackhttp.Envelope {
+	return c.envelope
 }
 
 // TeamID returns the authenticated workspace's team ID.
@@ -175,6 +294,13 @@ func (c *Client) Connect(ctx context.Context) error {
 		return fmt.Errorf("auth test failed: %w", err)
 	}
 	c.teamID = resp.TeamID
+	// Moves the envelope into its post-boot phase: from here on every
+	// request carries _x_csid and slack_route, as the official client's
+	// do once it knows the workspace. Nil for Clients built directly in
+	// tests, which have no transport to decorate either.
+	if c.envelope != nil {
+		c.envelope.SetTeamID(c.teamID)
+	}
 	c.userID = resp.UserID
 	c.apiBaseURL = deriveAPIBaseURL(resp.URL)
 	c.teamURL = resp.URL
@@ -237,19 +363,21 @@ func subdomainFromTeamURL(teamURL string) string {
 }
 
 // wsUpgradeHeaders returns the HTTP headers slk attaches to the WebSocket
-// upgrade request. These match the Chrome-like headers BrowserTransport
-// adds to ordinary HTTP requests, with Sec-Fetch-Dest narrowed to
-// "websocket" — the value a real browser sends when opening a WS to
-// app.slack.com.
+// upgrade request.
 //
-// gorilla/websocket's Dialer.Dial accepts arbitrary headers (except for
-// the protocol-managed Sec-WebSocket-* set, which it owns), so this is
-// the right injection point. We can't reuse BrowserTransport here because
+// This is NOT the same set BrowserTransport adds to ordinary HTTP
+// requests. Chrome sends a smaller set on a WS handshake: no Accept, no
+// Sec-Fetch-*, no sec-ch-ua* client hints, no Priority. An earlier
+// version of this function set Sec-Fetch-Dest: websocket on the belief
+// that browsers send it; the 2026-07-30 captures show they send no
+// Sec-Fetch-* header at all on an upgrade.
+//
+// gorilla/websocket's Dialer.Dial accepts arbitrary headers (except the
+// protocol-managed Sec-WebSocket-* set, which it owns), so this is the
+// right injection point. We can't reuse BrowserTransport here because
 // the dialer doesn't go through http.RoundTripper.
 func wsUpgradeHeaders() http.Header {
-	h := slackhttp.BrowserHeaders()
-	h.Set("Sec-Fetch-Dest", "websocket")
-	return h
+	return slackhttp.WebSocketHeaders()
 }
 
 // StartWebSocket connects to Slack's internal WebSocket using the xoxc token
@@ -257,9 +385,29 @@ func wsUpgradeHeaders() http.Header {
 // Events are dispatched to the provided handler in a goroutine.
 // Call this after Connect.
 func (c *Client) StartWebSocket(handler EventHandler) error {
+	// start_args matches the official client's, key for key, from the
+	// 2026-08-02 coldboot capture. slk used to send only
+	// agent/connect_only/ms_latest, and at some point user_typing
+	// frames stopped arriving — typing indicators silently disappeared
+	// while everything else on the socket kept working. Which key
+	// gates typing delivery is undocumented; the capture is the
+	// contract, so all of them go out. agent_version is the same
+	// version_ts the envelope carries (_x_version_ts); without an
+	// envelope it is simply empty, matching the no-envelope clients
+	// the envelope doc describes.
+	agentVersion := ""
+	if c.envelope != nil {
+		agentVersion = c.envelope.VersionTS()
+	}
+	startArgs := fmt.Sprintf(
+		"?agent=client&org_wide_aware=true&agent_version=%s&eac_cache_ts=true&cache_ts=0&name_tagging=true&only_self_subteams=true&connect_only=true&ms_latest=true",
+		agentVersion,
+	)
 	wsURL := fmt.Sprintf(
-		"wss://wss-primary.slack.com/?token=%s&sync_desync=1&slack_client=desktop&start_args=%%3Fagent%%3Dclient%%26connect_only%%3Dtrue%%26ms_latest%%3Dtrue&no_query_on_subscribe=1&flannel=3&lazy_channels=1&gateway_server=%s-1&batch_presence_aware=1",
+		"%s/?token=%s&sync_desync=1&slack_client=desktop&start_args=%s&no_query_on_subscribe=1&flannel=3&lazy_channels=1&gateway_server=%s-1&batch_presence_aware=1",
+		c.wsBaseURL,
 		url.QueryEscape(c.token),
+		url.QueryEscape(startArgs),
 		c.teamID,
 	)
 
@@ -395,66 +543,12 @@ func (c *Client) GetChannels(ctx context.Context) ([]slack.Channel, error) {
 	return allChannels, nil
 }
 
-// GetAllPublicChannels retrieves all public channels in the workspace via
-// conversations.list, including ones the user is NOT a member of. This is used
-// to populate the channel finder so users can join / switch to public channels
-// they haven't joined yet.
-//
-// Note: this is significantly slower than GetChannels for large workspaces
-// (potentially thousands of channels). Callers should run it in the background
-// after the joined-channel list is loaded.
-func (c *Client) GetAllPublicChannels(ctx context.Context) ([]slack.Channel, error) {
-	var allChannels []slack.Channel
-	cursor := ""
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
-
-		params := &slack.GetConversationsParameters{
-			Types:           []string{"public_channel"},
-			Limit:           1000,
-			Cursor:          cursor,
-			ExcludeArchived: true,
-		}
-
-		channels, nextCursor, err := c.api.GetConversations(params)
-		if err != nil {
-			if rlErr, ok := err.(*slack.RateLimitedError); ok {
-				wait := rlErr.RetryAfter
-				if wait == 0 {
-					wait = 30 * time.Second
-				}
-				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				case <-time.After(wait):
-				}
-				continue
-			}
-			return nil, fmt.Errorf("listing public channels: %w", err)
-		}
-
-		allChannels = append(allChannels, channels...)
-
-		if nextCursor == "" {
-			break
-		}
-		cursor = nextCursor
-	}
-
-	return allChannels, nil
-}
-
 // GetUsersInConversation returns all user IDs that are members of the
 // given conversation (channel, DM, group DM, or shared channel). Paginates
 // 1000 IDs per page. On 429 responses, sleeps the server-advised RetryAfter
 // (defaulting to 30s if zero) and retries the same page; honors ctx
 // cancellation both between iterations and during the rate-limit sleep.
-// Mirrors GetAllPublicChannels' loop structure.
+// Mirrors the paginate-until-empty-cursor loop structure.
 func (c *Client) GetUsersInConversation(ctx context.Context, channelID string) ([]string, error) {
 	var all []string
 	cursor := ""
@@ -723,15 +817,6 @@ func (c *Client) GetHistorySince(ctx context.Context, channelID, oldest string, 
 	}
 }
 
-// GetUsers retrieves all users in the workspace.
-func (c *Client) GetUsers(ctx context.Context) ([]slack.User, error) {
-	users, err := c.api.GetUsersContext(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("getting users: %w", err)
-	}
-	return users, nil
-}
-
 // GetUserGroups retrieves the workspace's usergroups (the @team
 // handles behind <!subteam^S…> mentions) via usergroups.list.
 func (c *Client) GetUserGroups(ctx context.Context) ([]slack.UserGroup, error) {
@@ -874,8 +959,7 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	httpClient := newCookieHTTPClient(c.cookie)
-	resp, err := httpClient.Do(req)
+	resp, err := c.apiHTTPClient().Do(req)
 	if err != nil {
 		return nil, ThreadsAggregate{}, fmt.Errorf("fetching unread counts: %w", err)
 	}
@@ -1312,6 +1396,76 @@ func (c *Client) GetMutedChannelsRaw(ctx context.Context) ([]byte, error) {
 	return c.postForm(ctx, "users.prefs.get", nil)
 }
 
+// shouldReloadResponse is the subset of client.shouldReload's response
+// slk reads. The full response also carries should_reload,
+// build_version_enabled, client_min_version,
+// build_manifest_last_modified and should_fetch_new_service_worker —
+// all about whether a browser tab needs to refresh its JS bundle, which
+// a TUI has no equivalent of.
+type shouldReloadResponse struct {
+	OK                      bool   `json:"ok"`
+	Error                   string `json:"error"`
+	RecommendedBuildVersion int64  `json:"recommended_build_version"`
+}
+
+// ShouldReload asks Slack which client build is current and returns
+// that build timestamp as a decimal string, suitable for
+// Envelope.SetVersionTS.
+//
+// _x_version_ts is Slack's build timestamp, and it moves: two captures
+// taken hours apart on 2026-07-30 carried 1785403052 and 1785403654.
+// A client that sends one hardcoded value forever is itself a signal —
+// it stays pinned to a build the fleet has moved off of — so slk learns
+// the current value the way the official client does.
+//
+// Why this endpoint rather than scraping the workspace page: slk used
+// to fetch that page, and commit da6a7e1 deliberately removed the
+// fetch. Issue #111 showed corporate proxies reject that navigation
+// with 403, breaking startup outright. client.shouldReload is a plain
+// form POST under /api/ — the same shape as every other call slk
+// already makes, through the same proxy-tolerant path — and it appears
+// in both official boot captures, so it is both safer and a closer
+// match to real client traffic.
+//
+// The envelope is deliberately NOT mutated here: the caller decides
+// whether to store the result, so a failed or nonsense lookup cannot
+// clobber a good value mid-session.
+func (c *Client) ShouldReload(ctx context.Context) (string, error) {
+	// The official client sends _x_reason=boot on this call;
+	// BrowserTransport reads it back off the context.
+	ctx = slackhttp.WithReason(ctx, "boot")
+
+	form := url.Values{}
+	if c.teamID != "" {
+		form.Set("team_ids", c.teamID)
+	}
+	if c.envelope != nil {
+		// The build slk currently believes is current. The official
+		// client sends the same, so the server can tell it whether to
+		// reload.
+		form.Set("build_version_ts", c.envelope.VersionTS())
+	}
+
+	raw, err := c.postForm(ctx, "client.shouldReload", form)
+	if err != nil {
+		return "", fmt.Errorf("client.shouldReload: %w", err)
+	}
+
+	var srr shouldReloadResponse
+	if err := json.Unmarshal(raw, &srr); err != nil {
+		return "", fmt.Errorf("client.shouldReload: parsing response: %w (body: %s)", err, truncateForLog(raw))
+	}
+	if !srr.OK {
+		return "", fmt.Errorf("client.shouldReload: API error: %s", srr.Error)
+	}
+	if srr.RecommendedBuildVersion <= 0 {
+		// Succeeding with a zero here would hand the caller "0" as a
+		// build timestamp, which is worse than the stale default.
+		return "", fmt.Errorf("client.shouldReload: no recommended_build_version in response (body: %s)", truncateForLog(raw))
+	}
+	return strconv.FormatInt(srr.RecommendedBuildVersion, 10), nil
+}
+
 // postForm performs a cookie-aware POST to an endpoint under
 // c.apiBaseURL with form values. The xoxc token is injected into the
 // form body — the same convention slack-go and the official browser
@@ -1338,16 +1492,26 @@ func (c *Client) postForm(ctx context.Context, method string, form url.Values) (
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	httpClient := c.httpClient
-	if httpClient == nil {
-		httpClient = newCookieHTTPClient(c.cookie)
-	}
-	resp, err := httpClient.Do(req)
+	resp, err := c.apiHTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("calling %s: %w", method, err)
 	}
 	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
+
+	raw, readErr := io.ReadAll(resp.Body)
+	// Status is checked before the read error so a truncated body on a
+	// 500 reports the 500, which is the useful half of the diagnosis.
+	// Slack's Web API answers 200 even for {"ok":false,...}, so any
+	// non-2xx here is a transport/proxy/edge failure whose body is HTML
+	// at best: reporting it as a JSON parse failure at the call site
+	// (as this used to) hides what actually happened.
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, fmt.Errorf("calling %s: HTTP %s: %s", method, resp.Status, truncateForLog(raw))
+	}
+	if readErr != nil {
+		return nil, fmt.Errorf("reading %s response: %w", method, readErr)
+	}
+	return raw, nil
 }
 
 // truncateForLog clips a response body to a length safe to splat into
@@ -1381,8 +1545,7 @@ func (c *Client) callChannelSectionsList(ctx context.Context, cursor string) ([]
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	httpClient := newCookieHTTPClient(c.cookie)
-	resp, err := httpClient.Do(req)
+	resp, err := c.apiHTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("calling channelSections API: %w", err)
 	}
@@ -1436,8 +1599,7 @@ func (c *Client) GetStarredChannels(ctx context.Context) ([]string, error) {
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	httpClient := newCookieHTTPClient(c.cookie)
-	resp, err := httpClient.Do(req)
+	resp, err := c.apiHTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("calling stars.list: %w", err)
 	}
@@ -1638,4 +1800,308 @@ func (c *Client) callListThreadSubscriptions(ctx context.Context, currentTS stri
 		form.Set("current_ts", currentTS)
 	}
 	return c.postForm(ctx, "subscriptions.thread.getView", form)
+}
+
+// historyMethod is the API method name. It is also the key slackhttp
+// looks up in its _x_reason and _x_mode tables, and
+// conversations.history is in NEITHER exclusion set — unlike
+// client.userBoot and conversations.view, this endpoint carries both
+// flags, on 14 of 14 captured requests.
+const historyMethod = "conversations.history"
+
+// historyReason is the _x_reason the official client sends on 11 of the
+// 14 captured conversations.history requests. The other 3 carry
+// "unread-counts/onLastReadUpdated", which reason.go documents as a
+// caller-supplied override rather than a second table entry — hence the
+// conditional in HistoryWithVersions.
+const historyReason = "message-pane/requestHistory"
+
+// defaultHistoryLimit is the page size the official web client asks
+// for: 28, on 14 of 14 captured conversations.history requests. Not 50,
+// not 200, not 500 — the three sizes slk's existing history paths use.
+//
+// It is 28 because that is what was measured, not because 28 is a good
+// number, and it must not be "tuned".
+const defaultHistoryLimit = 28
+
+// emptyCachedLatestUpdates is what cached_latest_updates carries when
+// the caller holds no cached messages: the literal two-character JSON
+// object, on 11 of the 14 captured requests. The key is never omitted —
+// omitting it is a request shape the official client emits zero times.
+//
+// A constant rather than json.Marshal of an empty map, because
+// json.Marshal of a nil map[string]string produces "null", not "{}",
+// and "null" is a third shape no capture shows.
+const emptyCachedLatestUpdates = "{}"
+
+// HistoryOpts are the caller-varying parameters of HistoryWithVersions.
+// Everything not here is fixed by the captures and is not configurable.
+type HistoryOpts struct {
+	// Limit is the page size. Non-positive means defaultHistoryLimit
+	// (28), the only value the official client was ever observed
+	// sending.
+	//
+	// A non-zero Limit is sent VERBATIM. It is deliberately not
+	// clamped to 28, and the reason is not timidity about changing
+	// caller-visible behaviour:
+	//
+	//  1. Clamping lies about data. A caller that asks for 200 and
+	//     silently receives 28 concludes the channel holds 28
+	//     messages. That misinformation propagates into caches,
+	//     watermarks and the UI, and nothing anywhere can detect it.
+	//     A fingerprint divergence, by contrast, is visible in the
+	//     source: somebody typed 200 at a call site, and a reviewer
+	//     can see it.
+	//
+	//  2. Clamping does not even remove the fingerprint. A caller that
+	//     needs 200 messages and gets 28 will loop eight times. That
+	//     turns one anomalous request into a burst of eight
+	//     well-shaped ones — and burst request volume is precisely
+	//     what Enterprise Grid's anomaly detection scores. Clamping
+	//     would trade the fingerprint this phase is removing for the
+	//     one it is removing harder.
+	//
+	// The fingerprint concern is answered by the default instead:
+	// every caller that does not think about page size gets 28.
+	//
+	// This mirrors edge.UsersList, which documents its count rather
+	// than bounding it, on the grounds that a silent truncation lies
+	// to the caller. The counter-argument is real here in a way it was
+	// not there — 28 is 14/14, whereas UsersList's captures disagreed
+	// 30/30/30/20 — but "the observed value is unanimous" argues for a
+	// firm default, which this has, not for overriding an explicit
+	// caller.
+	//
+	// The asymmetry with the non-positive case is the same one
+	// edge.UsersList draws: `limit=0` or `limit=-5` is a knowably
+	// wrong SHAPE that no capture shows and the server can only
+	// reject, whereas an unusually large page is a judgement about
+	// volume with no observed threshold behind it. Correcting the
+	// first is enforcing the captures; bounding the second would be
+	// enforcing a number invented here.
+	Limit int
+
+	// Latest and Oldest are the window anchors. Exactly one, or
+	// neither, in every capture: oldest on 5 requests, latest on 4,
+	// neither on 5, both on 0. Each is omitted entirely when empty —
+	// `latest=` on the wire is a shape no capture shows.
+	//
+	// Setting both is not rejected, because the server's behaviour
+	// with both is unmeasured and erroring would be enforcing a rule
+	// invented here rather than one read off the captures. It is
+	// nonetheless a shape the official client never emits; don't.
+	Latest string
+	Oldest string
+
+	// CachedVersions is the {ts: version} map for the messages the
+	// caller already holds — the whole point of this method. The
+	// server answers with unchanged_messages, confirming which of them
+	// are still current, plus the bodies of only those that actually
+	// changed. It is what makes validating cached scrollback cheap
+	// instead of a full re-download of every channel on every boot and
+	// every reconnect.
+	//
+	// Nil and empty both serialise to "{}", which is what the client
+	// sends when it holds nothing. The map is not retained or
+	// mutated.
+	CachedVersions map[string]string
+
+	// IncludeDateJoined is a genuine caller parameter, not a constant:
+	// true on 8 of 14 captured requests and false on 6. It is sent
+	// either way — the key is present on 14 of 14, carrying the
+	// literal string "false" when off, never omitted. The response's
+	// `date_joined` object appears on exactly the 8 requests that set
+	// it, and is not modelled here because nothing in slk consumes it.
+	IncludeDateJoined bool
+}
+
+// HistoryResult is the subset of the conversations.history response
+// this method models.
+//
+// Four of the eight keys present on 14 of 14 responses. pin_count,
+// channel_actions_ts and channel_actions_count are unmodelled because
+// nothing in slk consumes them; response_metadata is unmodelled because
+// following its next_cursor in a loop is the enumeration this phase
+// exists to stop, and a cursor sitting in the return values is an
+// invitation to write that loop. Adding any of them later is a two-line
+// change; inventing a consumer for them now is not.
+type HistoryResult struct {
+	// Messages are the message bodies the server actually sent. With a
+	// populated CachedVersions this is only what CHANGED — in the
+	// scroll capture, one cached ts came back in UnchangedTS and 27
+	// bodies arrived here.
+	Messages []slack.Message
+
+	// UnchangedTS lists the timestamps from the request's
+	// cached_latest_updates that the server confirms the caller still
+	// holds correctly. These are ts strings only; the caller already
+	// has the bodies. This is the response's `unchanged_messages`.
+	UnchangedTS []string
+
+	// LatestUpdates is {ts: version} for the returned messages — the
+	// values to feed back as CachedVersions on the next call. Versions
+	// are opaque 17-character ts-like strings; they are NOT
+	// timestamps to be parsed or compared, only echoed.
+	LatestUpdates map[string]string
+
+	// HasMore reports whether the window the caller asked for was
+	// truncated by Limit.
+	HasMore bool
+}
+
+// historyWithVersionsResponse is the wire shape. Separate from
+// HistoryResult so `ok` and `error` do not leak into the caller's type.
+type historyWithVersionsResponse struct {
+	OK    bool   `json:"ok"`
+	Error string `json:"error"`
+
+	Messages      []slack.Message   `json:"messages"`
+	UnchangedTS   []string          `json:"unchanged_messages"`
+	LatestUpdates map[string]string `json:"latest_updates"`
+	HasMore       bool              `json:"has_more"`
+}
+
+// HistoryWithVersions fetches channel history using Slack's incremental
+// sync primitive: the caller sends {ts: version} for the messages it
+// already holds, and the server replies with unchanged_messages — the
+// subset it confirms are still current — plus only the bodies that
+// actually changed.
+//
+// This is the fix for one of the three enumerations that get slk's
+// Enterprise Grid accounts signed out for "data scraping". slk re-downloads
+// conversations.history for every channel ever visited on every boot AND
+// every reconnect, at page sizes of 50/200/500. With cached_latest_updates
+// the same scrollback is VALIDATED rather than refetched, and at the page
+// size the official client actually uses.
+//
+// This is additive. GetHistory, GetHistoryAround and GetHistorySince are
+// untouched and still route through slack-go; nothing calls this yet.
+// Phase 2b wires it.
+//
+// # Request shape
+//
+// Measured across all 14 conversations.history requests in the 8
+// captures. Eleven business params on 14 of 14, plus `token` (injected
+// by postForm) and the four _x_ envelope params (added by
+// slackhttp.BrowserTransport — conversations.history is in neither of
+// its exclusion sets), plus at most one of latest/oldest.
+//
+// # _x_reason
+//
+// slackhttp's defaultReasons table ALREADY maps conversations.history
+// to historyReason, so the WithReason call below is, TODAY, byte-for-byte
+// redundant on the wire. That is measured, not assumed: deleting the
+// whole block is a surviving mutant against this file's full test suite,
+// because defaultReason("conversations.history") then supplies the same
+// string. It is kept as an explicit pin at the call site so the value
+// this endpoint sends does not depend on a shared table it does not own,
+// and so a method rename cannot silently drop it to slackhttp's
+// genericReason fallback. Mutating historyReason itself IS caught.
+//
+// It is conditional rather than unconditional because the unconditional
+// form would be actively wrong: 3 of the 14 captured requests carry
+// "unread-counts/onLastReadUpdated" instead, and reason.go deliberately
+// leaves that variant to a caller override. Clobbering a reason the
+// caller already set would make the second variant unreachable — that
+// mutation is caught.
+//
+// TRAP FOR PHASE 2b: the conditional cuts the other way too. A ctx that
+// already carries some OTHER endpoint's reason — say one built for
+// client.userBoot under WithReason(ctx, "initial-data") and then reused
+// here — reaches the wire unchanged, and "initial-data" on
+// conversations.history is a shape no capture shows. Derive the ctx for
+// this call from a reason-free one, or set the reason you mean.
+//
+// # Errors
+//
+// Any error returns a zero HistoryResult. That is load-bearing rather
+// than tidiness: encoding/json populates a struct as it goes and keeps
+// decoding past the first type error, and `ok` is only inspected after
+// the whole body is decoded — so at both failure points a populated
+// response struct is sitting in a local. Handing it back would give the
+// caller plausible-looking scrollback built from a response the server
+// rejected or the decoder could not read.
+func (c *Client) HistoryWithVersions(ctx context.Context, channelID string, opts HistoryOpts) (HistoryResult, error) {
+	if channelID == "" {
+		// `channel=` on the wire is a request shape none of the 14
+		// captures show, and the server can only reject it or answer
+		// uselessly.
+		return HistoryResult{}, fmt.Errorf("%s: channelID is required", historyMethod)
+	}
+
+	limit := opts.Limit
+	if limit <= 0 {
+		// Non-positive is not a page size, it is caller error:
+		// `limit=0` and `limit=-5` are wire shapes none of the 14
+		// captures show, and the server can only reject them or answer
+		// uselessly. Correcting a knowably-wrong shape is different
+		// from clamping a large well-formed one, which this
+		// deliberately does not do — see HistoryOpts.Limit.
+		limit = defaultHistoryLimit
+	}
+
+	cached := emptyCachedLatestUpdates
+	if len(opts.CachedVersions) > 0 {
+		b, err := json.Marshal(opts.CachedVersions)
+		if err != nil {
+			// Unreachable for map[string]string, but returning the
+			// empty object here would silently degrade an incremental
+			// sync into a full refetch.
+			return HistoryResult{}, fmt.Errorf("%s: encoding cached_latest_updates: %w", historyMethod, err)
+		}
+		cached = string(b)
+	}
+
+	// Strings, not booleans: this is a form body. Every value here was
+	// read off the captures.
+	form := url.Values{
+		"channel":                          {channelID},
+		"limit":                            {strconv.Itoa(limit)},
+		"ignore_replies":                   {"true"},
+		"include_pin_count":                {"true"},
+		"inclusive":                        {"true"},
+		"no_user_profile":                  {"true"},
+		"include_stories":                  {"true"},
+		"include_free_team_extra_messages": {"true"},
+		"include_date_joined":              {strconv.FormatBool(opts.IncludeDateJoined)},
+		"cached_latest_updates":            {cached},
+	}
+	// Set, not unconditional assignment: an unset anchor must leave
+	// the key absent, not present-and-empty.
+	if opts.Oldest != "" {
+		form.Set("oldest", opts.Oldest)
+	}
+	if opts.Latest != "" {
+		form.Set("latest", opts.Latest)
+	}
+
+	if slackhttp.ReasonFrom(ctx) == "" {
+		ctx = slackhttp.WithReason(ctx, historyReason)
+	}
+
+	raw, err := c.postForm(ctx, historyMethod, form)
+	if err != nil {
+		return HistoryResult{}, fmt.Errorf("%s: %w", historyMethod, err)
+	}
+
+	var resp historyWithVersionsResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return HistoryResult{}, fmt.Errorf("%s: parsing response: %w (body: %s)",
+			historyMethod, err, truncateForLog(raw))
+	}
+	if !resp.OK {
+		apiErr := resp.Error
+		if apiErr == "" {
+			// Without this the message names no failure at all.
+			apiErr = "ok=false with no error field"
+		}
+		return HistoryResult{}, fmt.Errorf("%s: API error: %s", historyMethod, apiErr)
+	}
+
+	return HistoryResult{
+		Messages:      resp.Messages,
+		UnchangedTS:   resp.UnchangedTS,
+		LatestUpdates: resp.LatestUpdates,
+		HasMore:       resp.HasMore,
+	}, nil
 }

@@ -2,6 +2,7 @@ package membership
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -277,12 +278,38 @@ func (r *fakeResolver) snapshot() []string {
 	return out
 }
 
-func TestBackgroundFetchTriggersResolverForEachID(t *testing.T) {
+// TestBackgroundFetchDoesNotResolveEveryMember replaces a test that
+// asserted the opposite.
+//
+// The old TestBackgroundFetchTriggersResolverForEachID pinned a
+// Request call per member, and that was measured doing real damage: on
+// a cold cache a 35-second boot started 40,523 users.info requests,
+// one per distinct row in channel_members (40,527 of them). The
+// resolver short-circuits on a cache hit, so the users.list sweep used
+// to hide this by filling the cache first; deleting that sweep in Task
+// 8 exposed it.
+//
+// It is also work the official client never does. Counted across all 8
+// captures: /api/users.info 0, /api/conversations.members 0. It asks
+// edge:users/list for one channel with count:30 and present_first:true
+// and gets full user records inline, with no resolution step at all.
+//
+// Names for members slk has not met now come from the cache, from the
+// boot response, and from on-demand resolution when a row is actually
+// rendered. The member ID list itself is still fetched: it is one
+// bounded call per channel and it is what the mention picker's
+// in-channel ordering reads.
+func TestBackgroundFetchDoesNotResolveEveryMember(t *testing.T) {
 	db, _ := cache.New(":memory:")
 	defer db.Close()
 	_ = db.UpsertWorkspace(cache.Workspace{ID: "T1", Name: "Test"})
 
-	api := &fakeMemberAPI{result: []string{"U1", "U2", "U3"}}
+	// A channel big enough that a per-member fan-out is unmistakable.
+	ids := make([]string, 500)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("U%03d", i)
+	}
+	api := &fakeMemberAPI{result: ids}
 	sink := &captureSink{}
 	resolver := &fakeResolver{}
 	mgr := New("T1", api, db, sink.Push, resolver)
@@ -291,28 +318,85 @@ func TestBackgroundFetchTriggersResolverForEachID(t *testing.T) {
 	waitForCallCount(t, api, 1)
 	waitForPush(t, sink, 2)
 
-	// Brief settle for the resolver Request calls.
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if len(resolver.snapshot()) >= 3 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
+	// Give a fan-out every chance to happen before declaring it absent.
+	time.Sleep(100 * time.Millisecond)
+
+	if seen := resolver.snapshot(); len(seen) != 0 {
+		t.Errorf("membership fetch resolved %d of %d members; want 0 — one request per member is what put 40,523 users.info calls into a cold-cache boot", len(seen), len(ids))
 	}
-	seen := resolver.snapshot()
-	if len(seen) != 3 {
-		t.Fatalf("expected resolver to see 3 IDs; got %v", seen)
+
+	// The membership itself must still land: this deletes the
+	// resolution, not the member list.
+	members, err := db.ListChannelMembers("T1", "C1")
+	if err != nil {
+		t.Fatalf("ListChannelMembers: %v", err)
 	}
-	// Verify each ID is present (order not required).
-	want := map[string]bool{"U1": true, "U2": true, "U3": true}
-	for _, id := range seen {
-		if !want[id] {
-			t.Errorf("unexpected ID %s", id)
-		}
-		delete(want, id)
+	if len(members) != len(ids) {
+		t.Errorf("cached %d members; want %d — the id list is still needed for in-channel ordering", len(members), len(ids))
 	}
-	if len(want) != 0 {
-		t.Errorf("missing IDs: %v", want)
+}
+
+// TestBackgroundFetchFailureSuppressesImmediateRefetch pins the
+// failure side of the fetch ledger. A failed conversations.members
+// never bumps last_full_fetch_at, so without a failure record every
+// EnsureFresh — and OnConnect's ForceStale+EnsureFresh pair fires on
+// every websocket reconnect — re-issues the call. Measured live: the
+// active channel was a DM the workspace's token could not see
+// (channel_not_found), the socket flapped, and a 25-second session
+// started 42 conversations.members requests, the exact amplification
+// shape this package's TTL exists to prevent.
+func TestBackgroundFetchFailureSuppressesImmediateRefetch(t *testing.T) {
+	mgr, api, sink, db := newManagerForTest(t)
+	defer db.Close()
+	api.err = fmt.Errorf("channel_not_found")
+
+	mgr.EnsureFresh(context.Background(), "C1")
+	waitForPush(t, sink, 1)
+	waitForCallCount(t, api, 1)
+
+	// A reconnect force-stales the channel and asks again. The fetch
+	// must not re-fire within the failure backoff window.
+	mgr.ForceStale("C1")
+	mgr.EnsureFresh(context.Background(), "C1")
+	time.Sleep(100 * time.Millisecond)
+
+	if c := api.callCount(); c != 1 {
+		t.Errorf("failed fetch re-issued within the backoff window: %d calls, want 1 — this is the reconnect-flap amplifier", c)
+	}
+}
+
+// TestBackgroundFetchRetriesAfterBackoffExpiry: the backoff throttles
+// retries, it does not cancel them. Once the window has passed a stale
+// channel must be fetched again — a transient error must not wedge
+// membership for the full 24h TTL.
+func TestBackgroundFetchRetriesAfterBackoffExpiry(t *testing.T) {
+	mgr, api, sink, db := newManagerForTest(t)
+	defer db.Close()
+	api.err = fmt.Errorf("channel_not_found")
+
+	mgr.EnsureFresh(context.Background(), "C1")
+	waitForPush(t, sink, 1)
+	waitForCallCount(t, api, 1)
+
+	// Simulate a failure far enough in the past that the backoff has
+	// expired, then recover.
+	mgr.mu.Lock()
+	mgr.lastFailed["C1"] = time.Now().Add(-2 * FailureBackoff)
+	mgr.mu.Unlock()
+	api.err = nil
+	api.result = []string{"U1"}
+
+	mgr.EnsureFresh(context.Background(), "C1")
+	waitForCallCount(t, api, 2)
+	waitForPush(t, sink, 2)
+
+	// A successful fetch clears the failure record, so the next
+	// EnsureFresh is governed by the normal TTL, not the backoff.
+	mgr.mu.Lock()
+	_, stillMarked := mgr.lastFailed["C1"]
+	mgr.mu.Unlock()
+	if stillMarked {
+		t.Error("lastFailed not cleared by a successful fetch; a recovered channel would stay throttled")
 	}
 }
 

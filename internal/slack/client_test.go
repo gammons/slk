@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -167,10 +168,6 @@ func (m *mockSlackAPI) SearchMessagesContext(ctx context.Context, query string, 
 	return &slack.SearchMessages{}, nil
 }
 
-func (m *mockSlackAPI) GetConversations(params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
-	return nil, "", nil
-}
-
 func (m *mockSlackAPI) GetConversationsForUser(params *slack.GetConversationsForUserParameters) ([]slack.Channel, string, error) {
 	return nil, "", nil
 }
@@ -198,10 +195,6 @@ func (m *mockSlackAPI) GetUserInfo(user string) (*slack.User, error) {
 
 func (m *mockSlackAPI) GetBotInfoContext(ctx context.Context, parameters slack.GetBotInfoParameters) (*slack.Bot, error) {
 	return nil, fmt.Errorf("bot not found")
-}
-
-func (m *mockSlackAPI) GetUsersContext(ctx context.Context, options ...slack.GetUsersOption) ([]slack.User, error) {
-	return nil, nil
 }
 
 func (m *mockSlackAPI) GetEmoji() (map[string]string, error) {
@@ -1316,6 +1309,18 @@ func TestNewClient_HasDefaultAPIBaseURL(t *testing.T) {
 	}
 }
 
+// NewClient must likewise give the Client a wsBaseURL, since StartWebSocket
+// builds its URL from that field alone. The value is pinned literally rather
+// than compared against defaultWSBaseURL: the host is the one the official
+// web client dials, and changing it silently would move slk's event socket
+// off the browser's path.
+func TestNewClient_HasDefaultWSBaseURL(t *testing.T) {
+	c := NewClient("xoxc-test", "d-cookie")
+	if c.wsBaseURL != "wss://wss-primary.slack.com" {
+		t.Errorf("wsBaseURL = %q, want %q", c.wsBaseURL, "wss://wss-primary.slack.com")
+	}
+}
+
 // newTestClient returns a *Client wired to point at the given test server.
 // Internal helpers like markChannel use c.httpClient (set here) and
 // c.apiBaseURL (which defaults to https://slack.com/api/ in production).
@@ -2051,13 +2056,29 @@ func TestNewClient_UsesBrowserTransport(t *testing.T) {
 	}
 }
 
-func TestStartWebSocket_SendsBrowserHeaders(t *testing.T) {
+// TestStartWebSocket_SendsChromeUpgradeHeaders checks what actually
+// reaches the wire on an upgrade, as opposed to
+// TestWSUpgradeHeaders_OmitsXHROnlyHeaders, which only inspects the map.
+// The name deliberately says "ChromeUpgrade" rather than "Browser": the
+// WS handshake carries a different, smaller set than the browser headers
+// BrowserTransport puts on ordinary HTTP requests.
+//
+// This drives StartWebSocket end-to-end rather than dialing with
+// wsUpgradeHeaders() directly, so that severing the two — passing nil
+// headers to dialer.Dial, say — fails here instead of silently turning
+// wsUpgradeHeaders into dead code that the rest of the suite still
+// happily exercises.
+func TestStartWebSocket_SendsChromeUpgradeHeaders(t *testing.T) {
 	// Spin up an httptest server that completes the WS upgrade and
-	// captures the upgrade request's headers.
-	var gotHeaders http.Header
+	// reports the upgrade request's headers back over a channel (rather
+	// than a shared var, which the race detector would flag).
+	gotCh := make(chan http.Header, 1)
 	upgrader := websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
-			gotHeaders = r.Header.Clone()
+			select {
+			case gotCh <- r.Header.Clone():
+			default:
+			}
 			return true
 		},
 	}
@@ -2071,31 +2092,137 @@ func TestStartWebSocket_SendsBrowserHeaders(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// Drive the dialer directly with the same headers StartWebSocket
-	// builds. We can't easily exercise StartWebSocket end-to-end because
-	// it dials wss-primary.slack.com — but we CAN test the header-merging
-	// helper. To make that helper independently testable, Step 3 extracts
-	// it into wsUpgradeHeaders.
-	headers := wsUpgradeHeaders()
-	wsURL := strings.Replace(srv.URL, "http://", "ws://", 1)
-	dialer := websocket.DefaultDialer
-	conn, _, err := dialer.Dial(wsURL, headers)
-	if err != nil {
-		t.Fatalf("Dial: %v", err)
+	// wsBaseURL is the seam: in production it is defaultWSBaseURL, here
+	// it points at the test server. Everything else about the URL —
+	// every query parameter — is StartWebSocket's own, and is part of
+	// the protocol fingerprint we are impersonating.
+	c := &Client{
+		token:     "xoxc-test",
+		cookie:    "d-cookie",
+		teamID:    "T12345",
+		wsBaseURL: "ws://" + srv.Listener.Addr().String(),
 	}
-	conn.Close()
+	if err := c.StartWebSocket(&mockEventHandler{}); err != nil {
+		t.Fatalf("StartWebSocket: %v", err)
+	}
+	// The server hangs up immediately; wait for the read loop to notice
+	// so the goroutine doesn't outlive the test.
+	defer func() { <-c.WsDone() }()
 
-	if got := gotHeaders.Get("User-Agent"); !strings.HasPrefix(got, "Mozilla/5.0") {
-		t.Errorf("upgrade User-Agent = %q; want Mozilla-prefixed", got)
+	var gotHeaders http.Header
+	select {
+	case gotHeaders = <-gotCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("server never received an upgrade request")
 	}
-	if got := gotHeaders.Get("Origin"); got != "https://app.slack.com" {
-		t.Errorf("upgrade Origin = %q; want https://app.slack.com", got)
+
+	// The five headers real Chrome sends on a WS upgrade.
+	wantPresent := map[string]string{
+		"User-Agent":      slackhttp.UserAgent(),
+		"Accept-Language": "en-US,en;q=0.9",
+		"Cache-Control":   "no-cache",
+		"Pragma":          "no-cache",
+		"Origin":          "https://app.slack.com",
 	}
-	if got := gotHeaders.Get("Accept-Language"); got == "" {
-		t.Errorf("upgrade missing Accept-Language")
+	for k, want := range wantPresent {
+		if got := gotHeaders.Get(k); got != want {
+			t.Errorf("upgrade header %s = %q; want %q", k, got, want)
+		}
 	}
-	if got := gotHeaders.Get("Sec-Fetch-Dest"); got != "websocket" {
-		t.Errorf("upgrade Sec-Fetch-Dest = %q; want websocket", got)
+
+	// Real Chrome sends none of these on a WS upgrade — verified against
+	// the status-101 upgrades in the 2026-07-30 captures. An earlier
+	// version of slk sent Sec-Fetch-Dest: websocket on the mistaken
+	// belief that browsers do; that made slk separable.
+	for _, k := range []string{
+		"Accept", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest",
+		"Sec-Ch-Ua", "Sec-Ch-Ua-Mobile", "Sec-Ch-Ua-Platform", "Priority", "Referer",
+	} {
+		if got := gotHeaders.Get(k); got != "" {
+			t.Errorf("upgrade header %s = %q; want absent (real Chrome omits it)", k, got)
+		}
+	}
+}
+
+// TestStartWebSocket_StartArgsMatchTheCapture pins the start_args
+// query param against the official client's, from the 2026-08-02
+// coldboot capture:
+//
+//	start_args = ?agent=client&org_wide_aware=true&agent_version=1785403654
+//	             &eac_cache_ts=true&cache_ts=0&name_tagging=true
+//	             &only_self_subteams=true&connect_only=true&ms_latest=true
+//
+// slk sent only agent/connect_only/ms_latest, and at some point
+// user_typing frames stopped arriving — the visible symptom was typing
+// indicators silently disappearing while everything else on the socket
+// kept working. Which of the missing keys gates typing delivery is not
+// documented anywhere; the fix is the project's standing rule — match
+// the capture, don't invent — applied in full.
+func TestStartWebSocket_StartArgsMatchTheCapture(t *testing.T) {
+	gotCh := make(chan url.Values, 1)
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			select {
+			case gotCh <- r.URL.Query():
+			default:
+			}
+			return true
+		},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Logf("upgrade failed: %v", err)
+			return
+		}
+		conn.Close()
+	}))
+	defer srv.Close()
+
+	env := slackhttp.NewEnvelope()
+	env.SetVersionTS("1785403654")
+	c := &Client{
+		token:     "xoxc-test",
+		cookie:    "d-cookie",
+		teamID:    "T12345",
+		wsBaseURL: "ws://" + srv.Listener.Addr().String(),
+		envelope:  env,
+	}
+	if err := c.StartWebSocket(&mockEventHandler{}); err != nil {
+		t.Fatalf("StartWebSocket: %v", err)
+	}
+	defer func() { <-c.WsDone() }()
+
+	var q url.Values
+	select {
+	case q = <-gotCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("server never received an upgrade request")
+	}
+
+	raw := q.Get("start_args")
+	if raw == "" {
+		t.Fatalf("no start_args in dialed URL: %v", q)
+	}
+	args, err := url.ParseQuery(strings.TrimPrefix(raw, "?"))
+	if err != nil {
+		t.Fatalf("start_args is not a query string: %q (%v)", raw, err)
+	}
+	want := map[string]string{
+		"agent":              "client",
+		"org_wide_aware":     "true",
+		"agent_version":      "1785403654", // the envelope's version_ts
+		"eac_cache_ts":       "true",
+		"cache_ts":           "0",
+		"name_tagging":       "true",
+		"only_self_subteams": "true",
+		"connect_only":       "true",
+		"ms_latest":          "true",
+	}
+	for k, v := range want {
+		if got := args.Get(k); got != v {
+			t.Errorf("start_args[%s] = %q; want %q (from the capture)", k, got, v)
+		}
 	}
 }
 
@@ -2549,5 +2676,440 @@ func TestGetHistoryAround_HonorsCancelledContext(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Errorf("expected 1 call before ctx check aborts, got %d", calls)
+	}
+}
+
+func TestWSUpgradeHeaders_OmitsXHROnlyHeaders(t *testing.T) {
+	h := wsUpgradeHeaders()
+	// Real Chrome omits all of these on a WebSocket upgrade. slk
+	// previously sent Sec-Fetch-Dest: websocket on the mistaken belief
+	// that browsers do; the 2026-07-30 captures show they send no
+	// Sec-Fetch-* header at all.
+	for _, k := range []string{
+		"Accept", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest",
+		"Sec-Ch-Ua", "Sec-Ch-Ua-Mobile", "Sec-Ch-Ua-Platform", "Priority", "Referer",
+	} {
+		if got := h.Get(k); got != "" {
+			t.Errorf("wsUpgradeHeaders()[%s] = %q; want absent", k, got)
+		}
+	}
+	if h.Get("User-Agent") == "" {
+		t.Error("wsUpgradeHeaders() missing User-Agent")
+	}
+	if h.Get("Origin") != "https://app.slack.com" {
+		t.Errorf("wsUpgradeHeaders() Origin = %q; want https://app.slack.com", h.Get("Origin"))
+	}
+}
+
+// --- Envelope wiring (Task 7) ---------------------------------------
+
+// pointClientAtTestServer makes the client's requests to slack.com land
+// on srv without changing the URL the client builds.
+//
+// BrowserTransport only decorates *.slack.com hosts, so a test that
+// pointed apiBaseURL straight at the 127.0.0.1 httptest address would
+// silently skip every envelope param and every browser header — and
+// would then "pass" only if we weakened it to assert struct fields
+// instead of wire bytes. Redirecting inside the dialer instead keeps
+// req.URL.Host genuinely "slack.com" (exactly as in production) while
+// the bytes go to the test server, so the production decoration path
+// runs for real.
+//
+// It deliberately reaches through c.httpClient.Transport rather than
+// replacing it: swapping only BrowserTransport.Inner leaves the Env
+// NewClient installed in place, so the test fails if NewClient stops
+// wiring it.
+func pointClientAtTestServer(t *testing.T, c *Client, srv *httptest.Server) {
+	t.Helper()
+	bt, ok := c.httpClient.Transport.(*slackhttp.BrowserTransport)
+	if !ok {
+		t.Fatalf("client transport is %T; want *slackhttp.BrowserTransport", c.httpClient.Transport)
+	}
+	addr := srv.Listener.Addr().String()
+	bt.Inner = &http.Transport{
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		},
+	}
+	c.apiBaseURL = "http://slack.com/api/"
+}
+
+func TestClient_EnvelopeExistsAndIsPreBoot(t *testing.T) {
+	c := NewClient("xoxc-test", "d-cookie")
+	if c.Envelope() == nil {
+		t.Fatal("Envelope() is nil; want a non-nil envelope")
+	}
+	if got := c.Envelope().TeamID(); got != "" {
+		t.Errorf("TeamID() = %q before Connect; want empty (pre-boot phase)", got)
+	}
+}
+
+func TestClient_ConnectSetsEnvelopeTeamID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"url":"https://acme.slack.com/","team":"Acme","user":"grant","team_id":"T04T4TH8W","user_id":"U123"}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient("xoxc-test", "d-cookie")
+	c.apiBaseURL = srv.URL + "/api/"
+	c.api = slack.New("xoxc-test",
+		slack.OptionHTTPClient(c.httpClient),
+		slack.OptionAPIURL(c.apiBaseURL))
+
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if got := c.Envelope().TeamID(); got != "T04T4TH8W" {
+		t.Errorf("Envelope().TeamID() = %q after Connect; want T04T4TH8W", got)
+	}
+}
+
+func TestClient_RequestsCarryEnvelopeParams(t *testing.T) {
+	// End-to-end: a real call through the client's http.Client must
+	// arrive with the envelope on it. This is the test that proves the
+	// wiring, not just that the field exists.
+	var gotQuery url.Values
+	var gotUA, gotSecCHUA string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query()
+		gotUA = r.Header.Get("User-Agent")
+		gotSecCHUA = r.Header.Get("Sec-Ch-Ua")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient("xoxc-test", "d-cookie")
+	pointClientAtTestServer(t, c, srv)
+	c.Envelope().SetTeamID("T04T4TH8W")
+
+	if _, err := c.postForm(context.Background(), "conversations.mark", url.Values{"channel": {"C123"}}); err != nil {
+		t.Fatalf("postForm: %v", err)
+	}
+
+	for _, k := range []string{"_x_id", "_x_version_ts", "slack_route", "_x_csid", "fp", "_x_num_retries"} {
+		if gotQuery.Get(k) == "" {
+			t.Errorf("request missing envelope param %s (query: %v)", k, gotQuery)
+		}
+	}
+	if gotQuery.Get("slack_route") != "T04T4TH8W" {
+		t.Errorf("slack_route = %q; want T04T4TH8W", gotQuery.Get("slack_route"))
+	}
+	if gotUA == "" || gotSecCHUA == "" {
+		t.Errorf("browser headers missing: UA=%q sec-ch-ua=%q", gotUA, gotSecCHUA)
+	}
+}
+
+// --- client.shouldReload (Task 8) -----------------------------------
+
+func TestShouldReload_ReturnsBuildVersion(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("ParseForm: %v", err)
+		}
+		if got := r.FormValue("build_version_ts"); got == "" {
+			t.Error("build_version_ts not sent in body")
+		}
+		if got := r.FormValue("team_ids"); got != "T04T4TH8W" {
+			t.Errorf("team_ids = %q; want T04T4TH8W", got)
+		}
+		if got := r.FormValue("_x_reason"); got != "boot" {
+			t.Errorf("_x_reason = %q; want boot", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"should_reload":false,"recommended_build_version":1785403654,"build_manifest_last_modified":1785408685}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient("xoxc-test", "d-cookie")
+	pointClientAtTestServer(t, c, srv)
+	c.teamID = "T04T4TH8W"
+	c.Envelope().SetTeamID("T04T4TH8W")
+
+	ts, err := c.ShouldReload(context.Background())
+	if err != nil {
+		t.Fatalf("ShouldReload: %v", err)
+	}
+	if ts != "1785403654" {
+		t.Errorf("ShouldReload = %q; want 1785403654", ts)
+	}
+}
+
+func TestShouldReload_DoesNotMutateEnvelope(t *testing.T) {
+	// ShouldReload returns a value; the caller decides whether to store
+	// it. A failed lookup must not be able to clobber a good value.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"recommended_build_version":1785403654}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient("xoxc-test", "d-cookie")
+	pointClientAtTestServer(t, c, srv)
+	before := c.Envelope().VersionTS()
+	if _, err := c.ShouldReload(context.Background()); err != nil {
+		t.Fatalf("ShouldReload: %v", err)
+	}
+	if after := c.Envelope().VersionTS(); after != before {
+		t.Errorf("ShouldReload mutated the envelope: %q -> %q", before, after)
+	}
+}
+
+func TestShouldReload_ErrorCases(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"http error", 500, ``},
+		{"api error", 200, `{"ok":false,"error":"invalid_auth"}`},
+		// ok:false *with* a version present. Without an explicit ok
+		// check this parses fine and looks like a success, so this is
+		// the case that actually pins the check — the plain "api error"
+		// body above is caught by the missing-version check instead.
+		{"api error with version", 200, `{"ok":false,"error":"invalid_auth","recommended_build_version":1785403654}`},
+		{"missing version", 200, `{"ok":true}`},
+		{"malformed json", 200, `not json`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+
+			c := NewClient("xoxc-test", "d-cookie")
+			pointClientAtTestServer(t, c, srv)
+			before := c.Envelope().VersionTS()
+			if _, err := c.ShouldReload(context.Background()); err == nil {
+				t.Error("ShouldReload returned nil error")
+			}
+			if after := c.Envelope().VersionTS(); after != before {
+				t.Errorf("VersionTS changed on failure: %q -> %q", before, after)
+			}
+		})
+	}
+}
+
+// postForm must treat a non-2xx as a failure rather than handing the
+// caller whatever bytes came back. Slack's Web API answers 200 even for
+// {"ok":false}, so a 5xx here is a proxy/edge failure — and it can
+// still carry a body that parses cleanly, which is how it used to slip
+// through as an apparent success.
+func TestPostForm_NonOKStatusIsAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient("xoxc-test", "d-cookie")
+	pointClientAtTestServer(t, c, srv)
+
+	body, err := c.postForm(context.Background(), "users.prefs.get", nil)
+	if err == nil {
+		t.Fatalf("postForm returned nil error on HTTP 502 (body: %s)", body)
+	}
+	if !strings.Contains(err.Error(), "502") {
+		t.Errorf("error = %v; want it to mention the 502 status", err)
+	}
+}
+
+// TestHandRolledEndpoints_RouteThroughSharedClient is the regression
+// guard for three endpoints that used to build their own http.Client
+// via newCookieHTTPClient instead of reusing c.httpClient:
+// client.counts (GetUnreadCounts), users.channelSections.list
+// (callChannelSectionsList) and stars.list (GetStarredChannels).
+//
+// Two things were wrong with that, and this test fails on both:
+//
+//   - Envelope loss was undetectable. Passing nil where c.envelope
+//     belongs stripped every _x_* param from three of slk's
+//     highest-traffic calls (client.counts runs on every boot and every
+//     reconnect) and no test in the suite noticed.
+//   - They were unreachable from the harness. pointClientAtTestServer
+//     redirects c.httpClient's transport; a method that ignores
+//     c.httpClient dials slack.com for real, so these endpoints made
+//     live outbound connections during `go test`.
+//
+// Driving them through pointClientAtTestServer covers both: a method
+// that bypasses c.httpClient never reaches this handler, so its
+// response never parses and the subtest fails before the param
+// assertions run.
+func TestHandRolledEndpoints_RouteThroughSharedClient(t *testing.T) {
+	cases := []struct {
+		name     string
+		respBody string
+		call     func(t *testing.T, c *Client)
+	}{
+		{
+			name:     "GetUnreadCounts",
+			respBody: `{"ok":true,"channels":[],"mpims":[],"ims":[],"threads":{"has_unreads":false}}`,
+			call: func(t *testing.T, c *Client) {
+				if _, _, err := c.GetUnreadCounts(); err != nil {
+					t.Fatalf("GetUnreadCounts: %v", err)
+				}
+			},
+		},
+		{
+			name:     "GetChannelSections",
+			respBody: `{"ok":true,"channel_sections":[],"count":0,"cursor":""}`,
+			call: func(t *testing.T, c *Client) {
+				if _, err := c.GetChannelSections(context.Background()); err != nil {
+					t.Fatalf("GetChannelSections: %v", err)
+				}
+			},
+		},
+		{
+			name:     "GetStarredChannels",
+			respBody: `{"ok":true,"items":[],"paging":{"count":0,"total":0}}`,
+			call: func(t *testing.T, c *Client) {
+				if _, err := c.GetStarredChannels(context.Background()); err != nil {
+					t.Fatalf("GetStarredChannels: %v", err)
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotQuery url.Values
+			var gotHost, gotUA string
+			var served bool
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				served = true
+				gotQuery = r.URL.Query()
+				gotHost = r.Host
+				gotUA = r.Header.Get("User-Agent")
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.respBody))
+			}))
+			defer srv.Close()
+
+			c := NewClient("xoxc-test", "d-cookie")
+			pointClientAtTestServer(t, c, srv)
+			c.Envelope().SetTeamID("T04T4TH8W")
+
+			tc.call(t, c)
+
+			if !served {
+				t.Fatal("request never reached the test server; the endpoint bypassed c.httpClient " +
+					"and dialed the network for real")
+			}
+			// req.URL.Host stays "slack.com" (only the dialer is
+			// redirected), so BrowserTransport's Slack-host gate runs
+			// exactly as it does in production.
+			if gotHost != "slack.com" {
+				t.Errorf("Host = %q; want slack.com — the request must look identical to production", gotHost)
+			}
+			for _, k := range []string{"_x_id", "_x_csid", "slack_route", "_x_version_ts", "fp", "_x_num_retries"} {
+				if gotQuery.Get(k) == "" {
+					t.Errorf("request missing envelope param %s (query: %v)", k, gotQuery)
+				}
+			}
+			if gotQuery.Get("slack_route") != "T04T4TH8W" {
+				t.Errorf("slack_route = %q; want T04T4TH8W", gotQuery.Get("slack_route"))
+			}
+			if gotUA == "" {
+				t.Error("request carries no browser User-Agent")
+			}
+		})
+	}
+}
+
+// TestAPIHTTPClient_FallbackCarriesEnvelope pins the one remaining
+// newCookieHTTPClient call site inside Client. It is reached only by
+// Clients constructed directly in tests (NewClient always sets
+// httpClient), so no wire-level test exercises it — and without this,
+// dropping the envelope there would again be a silent mutation.
+func TestAPIHTTPClient_FallbackCarriesEnvelope(t *testing.T) {
+	env := slackhttp.NewEnvelope()
+	c := &Client{cookie: "d-cookie", envelope: env}
+
+	got := c.apiHTTPClient()
+	bt, ok := got.Transport.(*slackhttp.BrowserTransport)
+	if !ok {
+		t.Fatalf("fallback transport is %T; want *slackhttp.BrowserTransport", got.Transport)
+	}
+	if bt.Env != env {
+		t.Errorf("fallback transport Env = %p; want the client's envelope %p", bt.Env, env)
+	}
+	if got.Jar == nil {
+		t.Error("fallback client has no cookie jar; the d cookie would not be sent")
+	}
+
+	// And when httpClient is set, that exact client is returned —
+	// never a fresh one, which is what made the three endpoints above
+	// unreachable from the test harness.
+	shared := &http.Client{}
+	c.httpClient = shared
+	if c.apiHTTPClient() != shared {
+		t.Error("apiHTTPClient() built a new client while c.httpClient was set")
+	}
+}
+
+// TestPostForm_BodyFieldOrderIsAlphabeticalThenEnvelope pins what
+// postForm actually puts on the wire. It is a characterization test:
+// the alphabetical lead it asserts is a known, deliberate residual
+// divergence, not the shape the official client emits.
+//
+// postForm builds its body with url.Values.Encode(), which SORTS keys.
+// So slk emits `channel=…&include_all_metadata=0&inclusive=0&limit=50&
+// token=…` — perfectly alphabetized — and only the four-field _x_*
+// envelope the transport appends is in the client's captured order.
+//
+// It is not fixed here because the fix would be partial and would make
+// things worse rather than better. slack-go builds its own bodies with
+// the same url.Values.Encode() (misc.go postForm) and is out of reach
+// from this package, so ordering postForm's handful of hand-rolled
+// endpoints would give slk TWO distinguishable body shapes — hand-
+// ordered on ~6 endpoints, sorted on ~50 — where the official client
+// has one. The real fix is the deferred multipart conversion, which
+// rebuilds every body at the transport chokepoint and can impose one
+// order on all of them; see the residual-divergence table in
+// docs/superpowers/plans/2026-07-30-grid-parity-phase1-outcomes.md.
+//
+// The golden fixture test cannot cover this: it hands the transport a
+// hand-written literal body, so it only proves appendQuery does not
+// reorder its input. This test drives the real production body
+// builder.
+func TestPostForm_BodyFieldOrderIsAlphabeticalThenEnvelope(t *testing.T) {
+	var raw string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		raw = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient("xoxc-test", "d-cookie")
+	pointClientAtTestServer(t, c, srv)
+	c.Envelope().SetTeamID("T04T4TH8W")
+
+	// Deliberately supplied out of alphabetical order, so a body that
+	// came back sorted can only have been sorted by postForm.
+	if _, err := c.postForm(context.Background(), "conversations.history", url.Values{
+		"limit":                {"50"},
+		"channel":              {"C123"},
+		"inclusive":            {"0"},
+		"include_all_metadata": {"0"},
+	}); err != nil {
+		t.Fatalf("postForm: %v", err)
+	}
+
+	const want = "channel=C123&include_all_metadata=0&inclusive=0&limit=50&token=xoxc-test" +
+		"&_x_reason=message-pane%2FrequestHistory&_x_mode=online&_x_sonic=true&_x_app_name=client"
+	if raw != want {
+		t.Errorf("postForm body =\n  %s\nwant\n  %s\n\n"+
+			"If the lead is no longer alphabetical, postForm stopped using url.Values.Encode(): "+
+			"that is an improvement only if slack-go's bodies were fixed too, otherwise slk now "+
+			"emits two different body shapes. Update the residual-divergence table either way.", raw, want)
 	}
 }

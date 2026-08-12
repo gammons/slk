@@ -539,19 +539,63 @@ func setupImageMessageModel(t *testing.T, protocol imgpkg.Protocol) *Model {
 	return &m
 }
 
-// TestView_SixelFullVisibility_EmitsBytes asserts that when a sixel-
-// rendered image fits entirely within the visible viewport, the View
-// output contains the actual sixel byte stream (the OnFlush bytes
-// captured into sixelRows during buildCache), not just the sentinel
-// placeholder line. The sixel byte stream begins with the DCS escape
-// "\x1bP" (ESC P) per the DEC standard.
-func TestView_SixelFullVisibility_EmitsBytes(t *testing.T) {
+// TestView_SixelFullVisibility_PublishesPlacement asserts that a fully
+// visible sixel image is published as a placement rather than embedded in
+// the frame string. Bytes in the frame would have to be re-emitted every
+// render (bubbletea rewrites a line whenever its content changes) and
+// could never be erased; the App paints placements out-of-band instead.
+func TestView_SixelFullVisibility_PublishesPlacement(t *testing.T) {
 	m := setupImageMessageModel(t, imgpkg.ProtoSixel)
 	// A tall viewport ensures the entire image (~20 rows + chrome + body)
 	// fits without clipping.
 	out := m.View(60, 80)
-	if !strings.Contains(out, "\x1bP") {
-		t.Errorf("expected View() output to contain a sixel DCS escape (\\x1bP) when the image is fully visible; got %d bytes without it", len(out))
+	if strings.Contains(out, "\x1bP") {
+		t.Error("sixel bytes leaked into the frame string; they must be painted out-of-band")
+	}
+	placements := m.SixelPlacements()
+	if len(placements) != 1 {
+		t.Fatalf("SixelPlacements() = %d, want 1 for a fully visible image", len(placements))
+	}
+	p := placements[0]
+	if len(p.Bytes) == 0 || !strings.HasPrefix(string(p.Bytes), "\x1bP") {
+		t.Error("placement carries no sixel DCS payload")
+	}
+	if p.Rows <= 0 || p.Cols <= 0 {
+		t.Errorf("placement footprint = %dx%d, want a positive erase region", p.Cols, p.Rows)
+	}
+	if p.Key == "" {
+		t.Error("placement has no identity key; the painter cannot detect changes")
+	}
+}
+
+// The published placement's Col must be the message content column
+// (contentColBase), not 0: with Col 0 the painter places the image at
+// the pane's content-left edge, shifting it left under the message
+// border / avatar and away from its placeholder.
+func TestView_SixelPlacementColumnMatchesContentColBase(t *testing.T) {
+	m := setupImageMessageModel(t, imgpkg.ProtoSixel)
+	_ = m.View(80, 60)
+	placements := m.SixelPlacements()
+	if len(placements) != 1 {
+		t.Fatalf("SixelPlacements() = %d, want 1", len(placements))
+	}
+	if placements[0].Col != 1 {
+		t.Fatalf("placement Col = %d, want 1 (contentColBase without avatar)", placements[0].Col)
+	}
+}
+
+// With an avatar the message content moves 5 columns right, so the
+// placement column must shift with it.
+func TestView_SixelPlacementColumnWithAvatar(t *testing.T) {
+	m := setupImageMessageModel(t, imgpkg.ProtoSixel)
+	m.SetAvatarFunc(func(string) string { return "▀▀▀▀\n▄▄▄▄" })
+	_ = m.View(80, 60)
+	placements := m.SixelPlacements()
+	if len(placements) != 1 {
+		t.Fatalf("SixelPlacements() = %d, want 1", len(placements))
+	}
+	if placements[0].Col != 6 {
+		t.Fatalf("placement Col = %d, want 6 (contentColBase with avatar)", placements[0].Col)
 	}
 }
 
@@ -581,6 +625,9 @@ func TestView_SixelPartialVisibility_UsesFallback(t *testing.T) {
 	clipped := m.View(entryHeight/2+m.chromeHeight, 80)
 	if strings.Contains(clipped, "\x1bP") {
 		t.Errorf("expected View() output to OMIT the sixel DCS escape under partial visibility; bytes leaked anyway")
+	}
+	if n := len(m.SixelPlacements()); n != 0 {
+		t.Errorf("SixelPlacements() = %d under partial visibility, want 0 (halfblock fallback covers it)", n)
 	}
 }
 
@@ -1525,5 +1572,105 @@ func TestSetSearchTerms_RedundantCallKeepsCache(t *testing.T) {
 	m.SetSearchTerms([]string{"deploy"})
 	if m.cache == nil {
 		t.Fatal("redundant SetSearchTerms invalidated the render cache")
+	}
+}
+
+// TestSixelIdentity_DifferentStableKeysNeverCollide pins the collision
+// regression: two different images whose payloads encode to the same
+// byte length must not share an identity when their stable cache keys
+// differ. The old length-based key made red and blue 80x64 images both
+// "128/80x64", so a slot swap between them was treated as unchanged and
+// never repainted.
+func TestSixelIdentity_DifferentStableKeysNeverCollide(t *testing.T) {
+	a := sixelEntry{key: "FRED-720", bytes: []byte("same-size-a"), width: 10, height: 5}
+	b := sixelEntry{key: "FBLUE-720", bytes: []byte("same-size-b"), width: 10, height: 5}
+	if len(a.bytes) != len(b.bytes) {
+		t.Fatal("precondition: payload lengths must match")
+	}
+	if imgpkg.PlacementKey(a.key, a.bytes, a.width, a.height) == imgpkg.PlacementKey(b.key, b.bytes, b.width, b.height) {
+		t.Fatalf("different stable keys collided: %q", imgpkg.PlacementKey(a.key, a.bytes, a.width, a.height))
+	}
+}
+
+// TestSixelIdentity_EmptyKeysHashPayload asserts the digest fallback:
+// when no stable key exists, equal-length different payloads still get
+// different identities (payload hashed once at construction time).
+func TestSixelIdentity_EmptyKeysHashPayload(t *testing.T) {
+	a := sixelEntry{bytes: []byte("same-size-a"), width: 10, height: 5}
+	b := sixelEntry{bytes: []byte("same-size-b"), width: 10, height: 5}
+	if len(a.bytes) != len(b.bytes) {
+		t.Fatal("precondition: payload lengths must match")
+	}
+	if imgpkg.PlacementKey(a.key, a.bytes, a.width, a.height) == imgpkg.PlacementKey(b.key, b.bytes, b.width, b.height) {
+		t.Fatalf("equal-length different payloads with empty keys collided: %q", imgpkg.PlacementKey(a.key, a.bytes, a.width, a.height))
+	}
+}
+
+// TestSixelIdentity_GeometryParticipates asserts that a key collision is
+// still broken by a footprint difference.
+func TestSixelIdentity_GeometryParticipates(t *testing.T) {
+	a := sixelEntry{key: "F1-720", bytes: []byte("payload"), width: 10, height: 5}
+	b := sixelEntry{key: "F1-720", bytes: []byte("payload"), width: 11, height: 5}
+	if imgpkg.PlacementKey(a.key, a.bytes, a.width, a.height) == imgpkg.PlacementKey(b.key, b.bytes, b.width, b.height) {
+		t.Fatalf("different target geometry collided: %q", imgpkg.PlacementKey(a.key, a.bytes, a.width, a.height))
+	}
+}
+
+// TestView_SixelIntersectingMoreBelowUsesFallbackAndPublishesNoPlacement
+// asserts that an image whose footprint includes the row later replaced
+// by the "-- more below --" indicator is treated as not fully paintable:
+// no sixel placement is published, the visible rows use half-block
+// fallback, and the indicator stays visible.
+func TestView_SixelIntersectingMoreBelowUsesFallbackAndPublishesNoPlacement(t *testing.T) {
+	m := setupImageMessageModel(t, imgpkg.ProtoSixel)
+	// First render at the same height pins lastViewHeight and marks the
+	// selection as snapped; ScrollUp then moves the viewport to the top
+	// (yOffset 0) so the image is fully visible.
+	_ = m.View(23, 60)
+	m.ScrollUp(1)
+
+	// msgAreaHeight = 22; the image spans window rows 2..21, and the
+	// more-below indicator replaces row 21 — the image's last row.
+	out := m.View(23, 60)
+	if strings.Contains(out, "\x1bP") {
+		t.Errorf("sixel DCS leaked under an indicator-intersecting frame")
+	}
+	if n := len(m.SixelPlacements()); n != 0 {
+		t.Errorf("SixelPlacements() = %d, want 0 when the image intersects the more-below indicator", n)
+	}
+	if !strings.Contains(out, "▀") {
+		t.Errorf("expected half-block fallback rows for the non-indicator rows")
+	}
+	if !strings.Contains(out, "more below") {
+		t.Errorf("more-below indicator missing from output")
+	}
+}
+
+// TestView_SixelIntersectingLoadingRowUsesFallbackAndPublishesNoPlacement
+// is the loading-hint twin: with m.loading true, the loading row replaces
+// window row 0, and an image starting on that row must fall back to
+// half-block rather than publish a placement that would sit under the
+// authoritative hint.
+func TestView_SixelIntersectingLoadingRowUsesFallbackAndPublishesNoPlacement(t *testing.T) {
+	m := setupImageMessageModel(t, imgpkg.ProtoSixel)
+	// First render pins the geometry at this height; the selection snap
+	// bottoms the viewport at yOffset=3 (maxOffset). ScrollUp moves the
+	// image's first row onto window row 0 (yOffset=2).
+	_ = m.View(21, 60)
+	m.SetLoading(true)
+	m.ScrollUp(1)
+
+	out := m.View(21, 60)
+	if strings.Contains(out, "\x1bP") {
+		t.Errorf("sixel DCS leaked under a loading-indicator-intersecting frame")
+	}
+	if n := len(m.SixelPlacements()); n != 0 {
+		t.Errorf("SixelPlacements() = %d, want 0 when the image intersects the loading row", n)
+	}
+	if !strings.Contains(out, "▀") {
+		t.Errorf("expected half-block fallback rows for the non-indicator rows")
+	}
+	if !strings.Contains(out, "Loading older messages") {
+		t.Errorf("loading indicator missing from output")
 	}
 }

@@ -652,9 +652,26 @@ func (w *walker) tokenElement(t token) slack.RichTextSectionElement {
 	case tokChannel:
 		return slack.NewRichTextSectionChannelElement(t.id, style)
 	case tokBroadcast:
-		// Broadcasts don't carry a style on the wire (slack-go's
-		// RichTextSectionBroadcastElement has no Style field).
-		return slack.NewRichTextSectionBroadcastElement(t.id)
+		// <!subteam^SID> is a usergroup (@team) mention, not a
+		// broadcast: it has its own rich_text element type. Sending it
+		// as a broadcast range gets the whole message rejected with
+		// invalid_blocks.
+		if id, ok := strings.CutPrefix(t.id, "subteam^"); ok {
+			el := slack.NewRichTextSectionUserGroupElement(id)
+			el.Style = style
+			return el
+		}
+		// Slack only accepts here / channel / everyone as broadcast
+		// ranges; anything else is invalid_blocks. reBroadcast matches
+		// any <!word> form, so keep unknown ones as literal text
+		// rather than letting them fail the send.
+		switch t.id {
+		case "here", "channel", "everyone":
+			// Broadcasts don't carry a style on the wire (slack-go's
+			// RichTextSectionBroadcastElement has no Style field).
+			return slack.NewRichTextSectionBroadcastElement(t.id)
+		}
+		return slack.NewRichTextSectionTextElement(wireForm(t), style)
 	case tokLink:
 		text := t.label
 		if text == "" {

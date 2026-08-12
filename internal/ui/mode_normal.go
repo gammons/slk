@@ -27,6 +27,8 @@
 package ui
 
 import (
+	"time"
+
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
@@ -293,6 +295,12 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, a.keys.MarkUnread):
 		return a.markUnreadOfSelected()
 
+	case key.Matches(msg, a.keys.NextUnread):
+		return a.jumpToUnread(1)
+
+	case key.Matches(msg, a.keys.PrevUnread):
+		return a.jumpToUnread(-1)
+
 	case key.Matches(msg, a.keys.CloseThreadView):
 		// Lowercase q is "close thread view" when one is open; if
 		// no thread panel is visible it's a no-op (Q and Ctrl+C
@@ -324,4 +332,22 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// jumpToUnread selects and opens the next (dir>0) or previous (dir<0)
+// visibly-unread channel relative to the one currently open, wrapping
+// around the sidebar. Opening a channel marks it read (ChannelSelectedMsg
+// tier logic in reducer_channels), so repeated presses walk-and-clear the
+// unread set -- the TUI analogue of the native "all unreads" skim: glance,
+// press again, the previous one is already marked read. A no-op with a
+// transient status toast when nothing else is unread.
+func (a *App) jumpToUnread(dir int) tea.Cmd {
+	id, name, chType, ok := a.sidebar.NextUnread(a.activeChannelID, dir)
+	if !ok {
+		return toastWithClear(a, "No other unread channels", 2*time.Second)
+	}
+	a.sidebar.SelectByID(id)
+	return func() tea.Msg {
+		return ChannelSelectedMsg{ID: id, Name: name, Type: chType}
+	}
 }

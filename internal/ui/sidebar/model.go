@@ -335,6 +335,69 @@ func (m *Model) UnreadChannelCount() int {
 	return count
 }
 
+// NextUnread returns the visibly-unread channel (HasUnread && !IsMuted)
+// that follows afterID, wrapping around, and the fields the App needs to
+// raise a ChannelSelectedMsg. afterID itself is always skipped so
+// repeated calls advance through the unread set; pass the currently-open
+// channel ID. dir > 0 walks forward (next), dir < 0 walks backward
+// (previous). ok is false when no *other* channel is unread (an empty
+// inbox, or afterID is the only unread one).
+//
+// Walk order is m.filtered -- the section-sorted order the sidebar renders
+// in -- so a/A traverse unread channels top-to-bottom rather than raw feed
+// order. Unread channels are never removed by the staleness filter
+// (IsStale returns false whenever hasUnread), so every unread channel is
+// reachable.
+//
+// m.filtered is built by rebuildFilter, which does NOT apply collapse
+// state (collapse is handled later, in rebuildNav). So the walk deliberately
+// includes unread channels inside collapsed sections, even though those
+// rows aren't currently visible -- and since the default layout collapses
+// the "Channels" firehose, a/A will jump into it and the caller's
+// SelectByID expands that section to reveal the target. This matches the
+// desktop client, which also surfaces unread channels regardless of
+// section collapse; it's an intentional "catch up on all unreads" skim,
+// not just "what's on screen".
+func (m *Model) NextUnread(afterID string, dir int) (id, name, chType string, ok bool) {
+	if m.readStateReader == nil {
+		return "", "", "", false
+	}
+	n := len(m.filtered)
+	if n == 0 {
+		return "", "", "", false
+	}
+	state := m.readStateReader()
+	step := 1
+	if dir < 0 {
+		step = -1
+	}
+	// Anchor one step *behind* afterID so the loop's first probe (off=1)
+	// is afterID's neighbour in the walk direction. When afterID isn't in
+	// the visible set, the sentinel (-1 forward / n backward) makes the
+	// first press land on the top / bottom row: the ((start+step*off)%n+n)%n
+	// normalization maps -1+1 -> 0 and n-1 -> n-1.
+	start := -1
+	if step < 0 {
+		start = n
+	}
+	for pos, idx := range m.filtered {
+		if m.items[idx].ID == afterID {
+			start = pos
+			break
+		}
+	}
+	for off := 1; off <= n; off++ {
+		item := m.items[m.filtered[((start+step*off)%n+n)%n]]
+		if item.ID == afterID {
+			continue
+		}
+		if item.IsVisiblyUnread(state[item.ID]) {
+			return item.ID, item.Name, item.Type, true
+		}
+	}
+	return "", "", "", false
+}
+
 // Invalidate forces the next View() call to re-read read state from
 // the installed reader. Called by App.Update on ReadStateChangedMsg.
 func (m *Model) Invalidate() {

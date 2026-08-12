@@ -85,8 +85,7 @@ func Detect(env Env, cfg string) Protocol {
 	if env.KittyWindowID != "" || env.Term == "xterm-kitty" {
 		return ProtoKitty
 	}
-	switch env.TermProgram {
-	case "ghostty", "WezTerm":
+	if env.TermProgram == "ghostty" {
 		return ProtoKitty
 	}
 	if env.TMUX != "" {
@@ -105,6 +104,19 @@ func Detect(env Env, cfg string) Protocol {
 		return ProtoHalfBlock
 	}
 	if env.Term == "foot" || env.Term == "mlterm" {
+		return ProtoSixel
+	}
+	// iTerm2 and WezTerm both support kitty *graphics*, but not the
+	// unicode-placeholder extension slk's kitty renderer depends on for
+	// placement (see the U=1 note on writeKittySequence / kitty.go) —
+	// iTerm2 because its kitty implementation is partial and fails the
+	// startup probe, WezTerm because it answers the probe but then
+	// prints the placeholder codepoints as literal glyphs. Both have
+	// solid sixel support, so auto picks sixel for real pixels instead
+	// of the halfblock mosaic the failed kitty probe would otherwise
+	// fall back to.
+	switch env.TermProgram {
+	case "iTerm.app", "WezTerm":
 		return ProtoSixel
 	}
 	return ProtoHalfBlock

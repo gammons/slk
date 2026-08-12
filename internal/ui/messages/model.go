@@ -205,9 +205,12 @@ type reactionHitRect struct {
 // plus the halfblock fallback used when the image is only partially
 // visible (Phase 6 cannot emit a half-image with sixel).
 type sixelEntry struct {
+	key      string // stable image cache key; empty -> payload-hash identity
 	bytes    []byte
 	fallback []string // halfblock-equivalent text for partial-visibility frames
 	height   int      // image height in rows
+	width    int      // image width in cells; the erase footprint
+	col      int      // display column within linesNormal where the image starts
 }
 
 // OpenImagePreviewMsg requests opening the full-screen preview overlay
@@ -222,6 +225,10 @@ type OpenImagePreviewMsg struct {
 }
 
 type Model struct {
+	// sixelPaints is the placement set produced by the last View, consumed
+	// by the App's out-of-band painter. See imgpkg.SixelPaint.
+	sixelPaints []imgpkg.SixelPaint
+
 	messages     []MessageItem
 	selected     int
 	channelName  string
@@ -2031,7 +2038,6 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 					emojiStr = ":" + legacyName + ":"
 				}
 			}
-			pillText := fmt.Sprintf("%s%d", emojiStr, r.Count)
 			var style lipgloss.Style
 			if isSelected && m.reactionNavActive && i == m.reactionNavIndex {
 				style = styles.ReactionPillSelected
@@ -2040,6 +2046,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 			} else {
 				style = styles.ReactionPillOther
 			}
+			pillText := ReactionPillText(emojiStr, r.Count, style, placedFlush != nil)
 			pills = append(pills, style.Render(pillText))
 			pillEmojis = append(pillEmojis, r.Emoji)
 			// Image emoji in reaction pills land in the same per-frame
@@ -2174,7 +2181,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		allFlushes = append(allFlushes, res.Flushes...)
 		rowOffset := preAttachmentRows + startInBk
 		for k, v := range res.SixelRows {
-			allSixel[rowOffset+k] = sixelEntry{bytes: v.Bytes, fallback: v.Fallback, height: v.Height}
+			allSixel[rowOffset+k] = sixelEntry{bytes: v.Bytes, fallback: v.Fallback, height: v.Height, width: v.Width}
 		}
 		// Note: res.Hits is intentionally NOT appended to `hits` in
 		// v1. App-level click routing (app.go) currently uses entryHit
@@ -2220,7 +2227,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		allFlushes = append(allFlushes, res.Flushes...)
 		rowOffset := preAttachmentRows + startInBk
 		for k, v := range res.SixelRows {
-			allSixel[rowOffset+k] = sixelEntry{bytes: v.Bytes, fallback: v.Fallback, height: v.Height}
+			allSixel[rowOffset+k] = sixelEntry{bytes: v.Bytes, fallback: v.Fallback, height: v.Height, width: v.Width}
 		}
 		// Note: res.Hits is intentionally NOT appended to `hits` in
 		// v1. App-level click routing (app.go) currently uses entryHit
@@ -2327,6 +2334,16 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 
 	if len(allSixel) == 0 {
 		allSixel = nil
+	} else {
+		// Stamp every entry with the message's content column. Block kit,
+		// legacy, and attachment entries all start at contentColBase
+		// within linesNormal; without this the painter would place the
+		// image at the pane's content-left edge (col 0) instead of its
+		// placeholder, shifting it left under the avatar / border.
+		for k, v := range allSixel {
+			v.col = contentColBase
+			allSixel[k] = v
+		}
 	}
 	// Merge body-text + reaction-pill emoji flushes (the named-return
 	// `flushes` slice, appended to at lines ~1811 / ~1914) with
@@ -2397,7 +2414,7 @@ func convertSixelMap(in map[int]imgrender.SixelEntry) map[int]sixelEntry {
 	}
 	out := make(map[int]sixelEntry, len(in))
 	for k, v := range in {
-		out[k] = sixelEntry{bytes: v.Bytes, fallback: v.Fallback, height: v.Height}
+		out[k] = sixelEntry{key: v.Key, bytes: v.Bytes, fallback: v.Fallback, height: v.Height, width: v.Width}
 	}
 	return out
 }
@@ -3037,10 +3054,20 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// entries; consumed AFTER the visible slice is fully built so partial
 	// visibility decisions know the slice's final extent.
 	type sixelAction struct {
-		appendBytes []byte // append after visible[row] (full-visibility start row)
-		fallback    string // replace visible[row] with this (partial-visibility row)
+		fallback string // replace visible[row] with this (partial-visibility row)
 	}
 	var sixelActions map[int]sixelAction
+	// Placements for this frame, pane-local. Reset every render: the App
+	// reconciles the full set against what is currently on screen, so a
+	// stale entry here would keep a vanished image alive.
+	pendingSixel := make([]imgpkg.SixelPaint, 0, 2)
+
+	// Whether the "-- more below --" indicator will replace the last
+	// visible row. An image that intersects that row (or the loading
+	// row at the top) is not fully paintable: the indicator assignment
+	// below is authoritative and must stay visible, so such an image
+	// uses half-block fallback instead of an out-of-band placement.
+	moreBelow := m.yOffset+msgAreaHeight < m.totalLines
 
 	for i, e := range entries {
 		if want == 0 {
@@ -3151,18 +3178,42 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 			absStart := entryStart + startRowInEntry
 			absEnd := absStart + sx.height
 			fullyVisible := absStart >= m.yOffset && absEnd <= m.yOffset+msgAreaHeight
+			windowRow := windowRowBase + (startRowInEntry - from)
+			// Indicator rows replace window row 0 (loading hint) and
+			// row msgAreaHeight-1 (more below). An image whose footprint
+			// includes either is not fully paintable: the indicator is
+			// authoritative and must stay visible, so the image takes
+			// the existing partial-visibility fallback path instead.
+			intersectsLoading := m.loading && windowRow <= 0 && windowRow+sx.height > 0
+			intersectsMoreBelow := moreBelow && windowRow <= msgAreaHeight-1 && windowRow+sx.height > msgAreaHeight-1
+			fullyPaintable := fullyVisible && !intersectsLoading && !intersectsMoreBelow
 			if sixelActions == nil {
 				sixelActions = make(map[int]sixelAction)
 			}
-			if fullyVisible {
-				windowRow := windowRowBase + (startRowInEntry - from)
+			if fullyPaintable {
 				if windowRow >= 0 && windowRow < len(visible) {
-					sixelActions[windowRow] = sixelAction{appendBytes: sx.bytes}
+					// Record the placement instead of appending the bytes
+					// to the line. Bytes in the frame string force a
+					// re-emit every render (bubbletea rewrites the line
+					// whenever its content changes, so omitting them once
+					// erases the image) and leave no way to clear a region
+					// the image has left. The App paints these out-of-band
+					// after the frame is flushed; see SixelPlacements.
+					pendingSixel = append(pendingSixel, imgpkg.SixelPaint{
+						Key:   imgpkg.PlacementKey(sx.key, sx.bytes, sx.width, sx.height),
+						Row:   windowRow,
+						Col:   sx.col,
+						Rows:  sx.height,
+						Cols:  sx.width,
+						Bytes: sx.bytes,
+					})
 				}
 				continue
 			}
-			// Partial visibility: walk every row of the image, emitting
-			// fallback for rows that ARE in the visible window.
+			// Partial visibility or an indicator intersection: walk every
+			// row of the image, emitting fallback for rows that ARE in
+			// the visible window. The later indicator assignments
+			// overwrite their rows and remain authoritative.
 			for k := 0; k < sx.height; k++ {
 				abs := absStart + k
 				if abs < m.yOffset || abs >= m.yOffset+msgAreaHeight {
@@ -3184,9 +3235,6 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 		}
 		if act.fallback != "" {
 			visible[row] = act.fallback
-		}
-		if len(act.appendBytes) > 0 {
-			visible[row] = visible[row] + string(act.appendBytes)
 		}
 	}
 
@@ -3239,6 +3287,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	visible = scrollbar.Overlay(visible, width, m.totalLines, m.yOffset, msgAreaHeight,
 		styles.Background, styles.Border, styles.Primary)
 
+	m.sixelPaints = pendingSixel
 	return chrome + "\n" + strings.Join(visible, "\n")
 }
 

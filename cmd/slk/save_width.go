@@ -12,6 +12,9 @@ import (
 // saveWorkspaceWidth rewrites or appends a sidebar_width entry in
 // [workspaces.<tomlKey>]. Mirrors saveWorkspaceTheme.
 func saveWorkspaceWidth(configPath, tomlKey, teamID, teamName string, width int) error {
+	configWriteMu.Lock()
+	defer configWriteMu.Unlock()
+
 	data, err := os.ReadFile(configPath)
 	if errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
@@ -58,7 +61,7 @@ func saveWorkspaceWidth(configPath, tomlKey, teamID, teamName string, width int)
 			newLines = append(newLines, lines[sectionStart+1:]...)
 			lines = newLines
 		}
-		return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
+		return writeConfigAtomic(configPath, []byte(strings.Join(lines, "\n")))
 	}
 
 	// No existing section — append a legacy-keyed block.
@@ -72,5 +75,5 @@ func saveWorkspaceWidth(configPath, tomlKey, teamID, teamName string, width int)
 	commentLine := "# " + safeName
 	legacyHeader := fmt.Sprintf("[workspaces.%s]", teamID)
 	lines = append(lines, commentLine, legacyHeader, "sidebar_width = "+strconv.Itoa(width))
-	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
+	return writeConfigAtomic(configPath, []byte(strings.Join(lines, "\n")))
 }

@@ -10,18 +10,26 @@ import (
 // minter matches slackclient.MintToken; injected for testing.
 type minter func(ctx context.Context, domain, cookie string) (string, error)
 
-// buildWorkspaceTokens mints a token for each selected workspace and returns
+// buildWorkspaceTokens resolves a token for each selected workspace and returns
 // the Token records to persist. Workspaces whose TeamID is not in `selected`
 // are skipped.
-func buildWorkspaceTokens(ctx context.Context, cookie string, ws []slackdesktop.Workspace, selected map[string]bool, mint minter) ([]slackclient.Token, error) {
+//
+// The token comes from the desktop app's Local Storage (desktopTokens, keyed by
+// team ID) — modern Slack (client-v2) no longer embeds it in page HTML. Minting
+// via page-scrape is kept only as a fallback for older workspaces that still do.
+func buildWorkspaceTokens(ctx context.Context, cookie string, desktopTokens map[string]string, ws []slackdesktop.Workspace, selected map[string]bool, mint minter) ([]slackclient.Token, error) {
 	var out []slackclient.Token
 	for _, w := range ws {
 		if !selected[w.TeamID] {
 			continue
 		}
-		tok, err := mint(ctx, w.Domain, cookie)
-		if err != nil {
-			return nil, err
+		tok := desktopTokens[w.TeamID]
+		if tok == "" {
+			var err error
+			tok, err = mint(ctx, w.Domain, cookie)
+			if err != nil {
+				return nil, err
+			}
 		}
 		out = append(out, slackclient.Token{
 			AccessToken: tok,

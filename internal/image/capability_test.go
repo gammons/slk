@@ -30,18 +30,36 @@ func TestDetect_ConfigOverrides(t *testing.T) {
 
 // Pre-tmux env signals still work if they happened to propagate (e.g.
 // user launched tmux from inside kitty, KITTY_WINDOW_ID survived).
+// WezTerm is deliberately not in this set: unlike ghostty it has no
+// U=1 placeholder support (see the sixel-detect comment on Detect),
+// and sixel-under-tmux is intentionally conservative, so an inherited
+// TermProgram=WezTerm under tmux with an unresolved client term falls
+// through to the same halfblock fallback as any other unrecognized
+// outer terminal — see TestDetect_TmuxWezTermInheritedFallsBackToHalfBlock.
 func TestDetect_TmuxKittyHostFromInheritedEnv(t *testing.T) {
 	withTmuxClientTerm(t, "")
 	cases := []Env{
 		{TMUX: "/tmp/tmux", KittyWindowID: "1"},
 		{TMUX: "/tmp/tmux", Term: "xterm-kitty"},
 		{TMUX: "/tmp/tmux", TermProgram: "ghostty"},
-		{TMUX: "/tmp/tmux", TermProgram: "WezTerm"},
 	}
 	for i, env := range cases {
 		if got := Detect(env, "auto"); got != ProtoKitty {
 			t.Errorf("case %d (%+v): want kitty, got %v", i, env, got)
 		}
+	}
+}
+
+// Under tmux, sixel is never auto-selected regardless of the outer
+// terminal (bandwidth-hostile with tmux passthrough, no probe-verify —
+// see Detect's doc comment), so an inherited TermProgram=WezTerm with
+// no resolvable client term must land on the same conservative
+// halfblock fallback as any other unrecognized tmux client, not sixel.
+func TestDetect_TmuxWezTermInheritedFallsBackToHalfBlock(t *testing.T) {
+	withTmuxClientTerm(t, "")
+	env := Env{TMUX: "/tmp/tmux", TermProgram: "WezTerm"}
+	if got := Detect(env, "auto"); got != ProtoHalfBlock {
+		t.Errorf("want halfblock, got %v", got)
 	}
 }
 
@@ -92,7 +110,6 @@ func TestDetect_KittyByEnvVar(t *testing.T) {
 		{KittyWindowID: "1"},
 		{Term: "xterm-kitty"},
 		{TermProgram: "ghostty"},
-		{TermProgram: "WezTerm"},
 	}
 	for i, env := range cases {
 		if got := Detect(env, "auto"); got != ProtoKitty {
@@ -105,6 +122,18 @@ func TestDetect_Sixel(t *testing.T) {
 	cases := []Env{
 		{Term: "foot"},
 		{Term: "mlterm"},
+		// iTerm2 has no working kitty graphics implementation (the
+		// startup probe would time out and downgrade to halfblock),
+		// but it does support sixel — real pixels instead of the
+		// halfblock mosaic.
+		{TermProgram: "iTerm.app"},
+		// WezTerm answers the kitty capability probe (it does support
+		// kitty *graphics*) but has no U=1 placeholder support, so the
+		// placeholder codepoints render as literal glyphs. Routing it
+		// to kitty and letting the probe downgrade it was the old
+		// behavior; that downgrade path lands on halfblock, which is
+		// what motivates going straight to sixel here instead.
+		{TermProgram: "WezTerm"},
 	}
 	for _, env := range cases {
 		if got := Detect(env, "auto"); got != ProtoSixel {

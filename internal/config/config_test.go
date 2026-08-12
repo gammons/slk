@@ -818,3 +818,46 @@ func TestMatchSectionAndOrder_WorkspaceOverride(t *testing.T) {
 		t.Errorf(`MatchSectionAndOrder("T01","eng-foo") = %q, want "" (workspace shadows global)`, section)
 	}
 }
+
+func TestWorkspaceVersionTSRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	contents := `
+[workspaces.acme]
+team_id = "T04T4TH8W"
+version_ts = "1785403654"
+`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	ws, ok := cfg.Workspaces["acme"]
+	if !ok {
+		t.Fatal("workspace acme not loaded")
+	}
+	if ws.VersionTS != "1785403654" {
+		t.Errorf("VersionTS = %q; want 1785403654", ws.VersionTS)
+	}
+}
+
+func TestWorkspaceVersionTSOptional(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	contents := `
+[workspaces.acme]
+team_id = "T04T4TH8W"
+`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Workspaces["acme"].VersionTS; got != "" {
+		t.Errorf("VersionTS = %q; want empty when unset", got)
+	}
+}

@@ -1,6 +1,7 @@
 package image
 
 import (
+	"bytes"
 	"fmt"
 	"image"
 	"strings"
@@ -42,6 +43,56 @@ type Preview struct {
 	sibIndex     int
 	loading      bool
 	loadingFrame int
+
+	// sixelPaint is the most recent frame's sixel placement, in
+	// coordinates relative to this panel's own content area (the panel
+	// has no border of its own — row/col 0 is the panel's top-left
+	// cell). nil except right after a View() call with proto ==
+	// ProtoSixel that produced a paintable image. See SixelPaint.
+	sixelPaint *SixelPaint
+
+	// Encoded-image memo. View() runs on every App.View(), which
+	// bubbletea calls after EVERY message — every keystroke, key repeat
+	// and mouse motion — and the compositor deliberately never memoizes
+	// overlay frames (see internal/ui/app.go: overlay content can change
+	// without a Version bump). Re-encoding is not cheap: a full-pane
+	// sixel encode measures ~1.4s at typical preview dimensions, so
+	// without this memo the overlay re-encodes on every message and the
+	// terminal visibly lags both opening and closing the preview.
+	//
+	// The key is everything RenderImage's result depends on: image
+	// identity, cell target, and protocol. SwapImage invalidates
+	// explicitly, because cycling siblings can land on an equal target
+	// and the loading→loaded swap can reuse a file ID.
+	memo      Render
+	memoValid bool
+	memoFID   string
+	memoProto Protocol
+	memoTgt   image.Point
+}
+
+// SixelPaint is one sixel image a rendering surface (the messages pane
+// or the preview overlay) wants painted, in that surface's LOCAL
+// coordinate frame: Row is the 0-based row of the image's first line
+// below the surface's content origin, Col the 0-based column where the
+// image's placeholder sits (the message content column, not 0 — images
+// sit next to the avatar). Rows/Cols are the cell footprint, which the
+// painter needs in order to erase the region.
+//
+// Key changes whenever the pixel content changes (a different image, or
+// the same image resized by a terminal resize) so the painter knows to
+// repaint rather than treat it as the same placement.
+//
+// Deliberately NOT written into the string View() returns: sixel bytes
+// in the frame string can't be erased or cheaply skipped when unchanged
+// (see internal/ui/sixelpaint.go, which has the same constraint for the
+// messages pane and the full rationale). The caller converts these to
+// absolute imgpkg.SixelPlacement values and paints them out-of-band.
+type SixelPaint struct {
+	Key        string
+	Row, Col   int
+	Rows, Cols int
+	Bytes      []byte
 }
 
 // NewPreview returns an open preview displaying the given image.
@@ -84,6 +135,12 @@ func normalizeSiblings(count, idx int) (int, int) {
 	}
 	return count, idx
 }
+
+// SixelPaint returns the sixel placement produced by the most recent
+// View() call, or nil when that call didn't render a paintable sixel
+// image (wrong protocol, loading state, no image, or no room). Valid
+// until the next View call.
+func (p *Preview) SixelPaint() *SixelPaint { return p.sixelPaint }
 
 // IsLoading reports whether the preview is currently waiting for image
 // bytes to land.
@@ -131,6 +188,20 @@ func (p *Preview) SwapImage(in PreviewInput) {
 		p.sibIndex = in.SiblingIndex
 	}
 	p.loading = false
+	p.memoValid = false
+}
+
+// renderImage returns the encoded render for target, reusing the memo
+// when the image, target and protocol are all unchanged. See the memo
+// fields on Preview for why this matters.
+func (p *Preview) renderImage(proto Protocol, target image.Point) Render {
+	if p.memoValid && p.memoFID == p.fid && p.memoProto == proto && p.memoTgt == target {
+		return p.memo
+	}
+	r := RenderImage(proto, p.img, target)
+	p.memo, p.memoValid = r, true
+	p.memoFID, p.memoProto, p.memoTgt = p.fid, proto, target
+	return r
 }
 
 // previewSpinnerFrames is the small set of braille glyphs used to
@@ -145,6 +216,7 @@ var previewSpinnerFrames = []rune{'⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦
 // While loading, the image area shows a centered spinner + filename
 // instead of an image. Caption and hint render the same way.
 func (p *Preview) View(width, height int, proto Protocol) string {
+	p.sixelPaint = nil
 	if !p.open || width <= 0 || height <= 0 {
 		return ""
 	}
@@ -167,15 +239,45 @@ func (p *Preview) View(width, height int, proto Protocol) string {
 	srcW, srcH := p.img.Bounds().Dx(), p.img.Bounds().Dy()
 	target := fitInto(srcW, srcH, imgCols, imgRows)
 
-	render := RenderImage(proto, p.img, target)
+	render := p.renderImage(proto, target)
 
-	// For kitty: write the upload APC escape directly to the terminal
-	// side channel before the placeholder cells go into the View string.
-	// Embedding the upload in the returned string would have it mangled
-	// by lipgloss/bubbletea (same reason the messages-pane goes around
-	// the frame buffer).
-	if render.OnFlush != nil {
-		_ = render.OnFlush(KittyOutput)
+	// Kitty and sixel both need their bytes to reach the terminal
+	// outside the View() return string — lipgloss/bubbletea's renderer
+	// is known to mangle escape sequences embedded in line content —
+	// but they need it delivered differently:
+	//
+	//   - kitty's upload (APC) must reach the terminal BEFORE the
+	//     unicode placeholder cells that reference it, and re-uploading
+	//     the same image ID is a harmless no-op, so writing it directly
+	//     here on every View() is correct.
+	//   - sixel has no re-render/erase of its own (see
+	//     internal/ui/sixelpaint.go for the full rationale): writing it
+	//     here, every View(), with no erase, is exactly what produced
+	//     the tiled/duplicated overlay images this replaces. Instead we
+	//     hand the bytes + position to the caller, which owns a
+	//     SixelPainter that paints once, erases on change, and stays
+	//     out of View() entirely.
+	leftPad := (width - target.X) / 2
+	topGap := (imgRows - target.Y) / 2
+	switch proto {
+	case ProtoKitty:
+		if render.OnFlush != nil {
+			_ = render.OnFlush(KittyOutput)
+		}
+	case ProtoSixel:
+		if render.OnFlush != nil {
+			var buf bytes.Buffer
+			if err := render.OnFlush(&buf); err == nil && buf.Len() > 0 {
+				p.sixelPaint = &SixelPaint{
+					Key:   PlacementKey(p.fid, buf.Bytes(), target.X, target.Y),
+					Row:   1 + topGap, // caption row + vertical centering gap
+					Col:   leftPad,
+					Rows:  target.Y,
+					Cols:  target.X,
+					Bytes: buf.Bytes(),
+				}
+			}
+		}
 	}
 
 	caption := fmt.Sprintf("%s  •  %dx%d", p.name, srcW, srcH)
@@ -188,12 +290,10 @@ func (p *Preview) View(width, height int, proto Protocol) string {
 	b.WriteString(captionStyle.Render(caption))
 	b.WriteByte('\n')
 
-	leftPad := (width - target.X) / 2
 	rightPad := width - target.X - leftPad
 	pad := strings.Repeat(" ", leftPad)
 	rpad := strings.Repeat(" ", rightPad)
 
-	topGap := (imgRows - target.Y) / 2
 	for i := 0; i < topGap; i++ {
 		b.WriteString(strings.Repeat(" ", width))
 		b.WriteByte('\n')

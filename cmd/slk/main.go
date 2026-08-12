@@ -9,6 +9,7 @@ import (
 	"image"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,6 +21,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/gammons/slk/internal/avatar"
+	"github.com/gammons/slk/internal/bootstrap"
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/debuglog"
@@ -29,6 +31,7 @@ import (
 	"github.com/gammons/slk/internal/notify"
 	"github.com/gammons/slk/internal/service"
 	slackclient "github.com/gammons/slk/internal/slack"
+	"github.com/gammons/slk/internal/slack/edge"
 	"github.com/gammons/slk/internal/slack/membership"
 	"github.com/gammons/slk/internal/slackdesktop"
 	"github.com/gammons/slk/internal/slackhttp"
@@ -100,19 +103,28 @@ func (a sectionsProviderAdapter) OrderedSlackSections() []sidebar.SectionMeta {
 
 // WorkspaceContext holds all state for a single connected workspace.
 type WorkspaceContext struct {
-	Client     *slackclient.Client
+	Client *slackclient.Client
+	// Edge is the edgeapi client for this workspace: the
+	// conditional-revalidation and server-side-search endpoints. Nil
+	// only if construction failed, and every caller nil-checks.
+	Edge       *edge.Client
+	// EdgeHealth records whether edge resolution is working for this
+	// workspace this session. bootstrap marks it degraded on a
+	// wholesale failure; the user resolver reads it to skip batch
+	// attempts that would resolve nothing.
+	EdgeHealth *edge.Health
 	ConnMgr    *slackclient.ConnectionManager
 	RTMHandler *rtmEventHandler
 	UserNames  map[string]string
 	// AvatarURLs maps userID -> avatar image URL. Populated from the
 	// local users cache at connect time (synchronous, before any
-	// goroutines spin up) and refreshed from the background
-	// client.GetUsers fetch and on-demand resolveUser calls. Read by
+	// goroutines spin up), from conversations.view's users array via
+	// applyBootUsers, and from on-demand resolveUser calls. Read by
 	// the AvatarFunc closure on the UI goroutine to trigger a lazy
 	// avatar Preload when an avatar slot first renders empty.
 	//
 	// sync.Map (not a plain map) because writes happen from background
-	// goroutines (GetUsers fetch, resolveUser) while reads happen on
+	// goroutines (resolveUser, the unresolved-DM sweep) while reads happen on
 	// the bubbletea Update goroutine. The lookup-or-trigger pattern
 	// (LoadOrStore-style) doesn't apply here — we only call Load — but
 	// we still need a concurrent map to avoid Go's "concurrent map
@@ -123,10 +135,10 @@ type WorkspaceContext struct {
 	// handles in mpdm channel names like `mpdm-grant--myles--ray-1`.
 	UserNamesByHandle map[string]string
 	// BotUserIDs is the set of user IDs known to be Slack apps or bots.
-	// Populated from the local cache on startup and refreshed by the
-	// background users.list fetch and any on-demand resolveUser calls.
-	// Used during channel construction to bucket app DMs into a separate
-	// "Apps" sidebar section.
+	// Populated from the local cache on startup, from
+	// conversations.view's users array via applyBootUsers, and by any
+	// on-demand resolveUser calls. Used during channel construction to
+	// bucket app DMs into a separate "Apps" sidebar section.
 	BotUserIDs map[string]bool
 	// SectionStore holds the user's Slack-native sidebar sections for
 	// this workspace. Nil when use_slack_sections is disabled, the
@@ -148,18 +160,23 @@ type WorkspaceContext struct {
 	// us the workspace has zero unread threads, we trust that and
 	// suppress the heuristic-derived flags entirely.
 	ThreadsHasUnreads bool
+	// ThreadSubsOnce gates the workspace's one
+	// subscriptions.thread.getView fetch, fired on the first open of
+	// the Threads view. See ensureThreadSubscriptions.
+	ThreadSubsOnce sync.Once
 	// SubscriptionsAvailable indicates whether the most recent
-	// runSubscriptionPhase attempt succeeded in fetching Slack's
+	// threadSubscriptionSync attempt succeeded in fetching Slack's
 	// authoritative thread-subscription list. true on bootstrap
-	// (optimistic — no banner during the brief pre-bootstrap
-	// window) and after every successful subscription phase; false
-	// after a failed one. The UI uses it to decide whether to draw
-	// the "Threads list unavailable" banner.
+	// (optimistic — no banner before the first Threads-view open, by
+	// which point nothing has been attempted) and after every
+	// successful sync; false after a failed one. The UI uses it to
+	// decide whether to draw the "Threads list unavailable" banner.
 	SubscriptionsAvailable bool
 	Channels               []sidebar.ChannelItem
-	// FinderItems is the merged list shown in the Ctrl+T finder. Initially
-	// contains only joined channels; the BrowseableChannelsLoadedMsg pipeline
-	// extends it with non-joined public channels in the background.
+	// FinderItems is the list shown in the Ctrl+T finder: the channels
+	// the user has joined. Channels they have not joined are not held
+	// here at all — they arrive per query from the finder's debounced
+	// channels/search and live only in the finder component.
 	FinderItems   []channelfinder.Item
 	TeamID        string
 	TeamName      string
@@ -248,11 +265,41 @@ func (r *workspaceRouter) ByID(teamID string) *WorkspaceContext {
 	return r.all[teamID]
 }
 
-// userResolver dispatches users.info lookups for unknown message
-// authors in the background. Deduplicates concurrent requests for
-// the same userID; failures are silent (the row stays rendered as
-// its user ID). Bound to a single workspace because user IDs are
-// workspace-scoped.
+// userResolverConcurrency caps how many users.info round trips the
+// resolver has open at once.
+//
+// The number is a rate bound, not a throughput target. Before it,
+// Request spawned one goroutine per unresolved user with nothing
+// between it and the transport, and a cold cache turned that into a
+// 40,000-request burst -- one per distinct channel member -- all
+// entering RoundTrip within moments of each other. The membership
+// fan-out that produced that particular burst is gone, but Request is
+// still reachable from the render path, the unresolved-DM sweep and
+// inbound messages, so the bound stays. Eight is well under what a
+// browser opens to one host and far more than a person generates.
+const userResolverConcurrency = 8
+
+// userResolverBatchWindow is how long Request waits for more misses
+// to coalesce before flushing them as one edge users/info call. The
+// render path resolves a channel's unknown authors in a single
+// burst, so a short window turns a channel open from N requests into
+// one; 200 ms is below what a person perceives as resolution lag.
+const userResolverBatchWindow = 200 * time.Millisecond
+
+// userBatcher is the edge.UsersInfo subset the resolver batches
+// misses through. *edge.Client satisfies it structurally; nil means
+// no batching and every miss takes the per-user users.info path.
+type userBatcher interface {
+	UsersInfo(ctx context.Context, updatedIDs map[string]int64) ([]edge.User, error)
+}
+
+// userResolver resolves unknown message authors in the background.
+// Misses coalesce into batched edge users/info calls (see flush); ids
+// edge cannot resolve, a failed batch, and degraded workspaces fall
+// back to the per-user Web API users.info path (see resolveOne).
+// Deduplicates concurrent requests for the same userID; failures are
+// silent (the row stays rendered as its user ID). Bound to a single
+// workspace because user IDs are workspace-scoped.
 type userResolver struct {
 	teamID   string
 	client   *slackclient.Client
@@ -260,6 +307,22 @@ type userResolver struct {
 	avatars  *avatar.Cache
 	send     func(tea.Msg)
 	inflight sync.Map // userID -> struct{}
+	// sem bounds concurrent round trips on the per-user users.info
+	// path (resolveOne). Buffered, so acquiring it happens inside the
+	// request goroutine and Request itself never blocks -- it is
+	// called from the render path and from WS event handlers, neither
+	// of which may wait on the network. The batch path needs no
+	// semaphore: it is bounded by the window itself, at one edge
+	// users/info call per userResolverBatchWindow (plus that call's
+	// internal 80-id splitting, sequential within the call).
+	sem chan struct{}
+
+	batcher  userBatcher
+	degraded func() bool // nil: never degraded
+
+	pendingMu  sync.Mutex
+	pending    map[string]struct{}
+	flushTimer *time.Timer
 }
 
 func newUserResolver(
@@ -268,13 +331,19 @@ func newUserResolver(
 	db *cache.DB,
 	avatars *avatar.Cache,
 	send func(tea.Msg),
+	batcher userBatcher,
+	degraded func() bool,
 ) *userResolver {
 	return &userResolver{
-		teamID:  teamID,
-		client:  client,
-		db:      db,
-		avatars: avatars,
-		send:    send,
+		teamID:   teamID,
+		client:   client,
+		db:       db,
+		avatars:  avatars,
+		send:     send,
+		sem:      make(chan struct{}, userResolverConcurrency),
+		batcher:  batcher,
+		degraded: degraded,
+		pending:  map[string]struct{}{},
 	}
 }
 
@@ -307,64 +376,228 @@ func (r *userResolver) Request(userID string) {
 		r.inflight.Delete(userID)
 		return
 	}
-	go func() {
-		defer r.inflight.Delete(userID)
-		u, err := r.client.GetUserProfile(userID)
-		if err != nil {
-			debuglog.Cache("userResolver: GetUserProfile team=%s user=%s err=%v",
-				r.teamID, userID, err)
-			return
+	if r.batcher == nil || (r.degraded != nil && r.degraded()) {
+		go r.resolveOne(userID)
+		return
+	}
+	r.pendingMu.Lock()
+	r.pending[userID] = struct{}{}
+	if r.flushTimer == nil {
+		r.flushTimer = time.AfterFunc(userResolverBatchWindow, r.flush)
+	}
+	r.pendingMu.Unlock()
+}
+
+// resolveOne resolves a single user through the Web API users.info
+// path: the pre-batch behaviour, now the fallback for ids edge did
+// not return, for a failed edge call, and for workspaces whose edge
+// is degraded. Callers run it on its own goroutine.
+func (r *userResolver) resolveOne(userID string) {
+	defer r.inflight.Delete(userID)
+	if r.sem != nil {
+		r.sem <- struct{}{}
+		defer func() { <-r.sem }()
+	}
+	u, err := r.client.GetUserProfile(userID)
+	if err != nil {
+		debuglog.Cache("userResolver: GetUserProfile team=%s user=%s err=%v",
+			r.teamID, userID, err)
+		return
+	}
+	name := u.Profile.DisplayName
+	if name == "" {
+		name = u.RealName
+	}
+	if name == "" {
+		name = u.Name
+	}
+	isBot := u.IsBot || u.IsAppUser
+	// r.teamID is the workspace's home TeamID; u.TeamID is the
+	// user's home TeamID. If they differ (and u.TeamID is set),
+	// the user is a Slack Connect / shared-channel guest. Treat
+	// an empty u.TeamID as internal — better to under-detect than
+	// to falsely flag.
+	isExternal := u.TeamID != "" && u.TeamID != r.teamID
+	// Persist to the cache DB (its own goroutine-safe SQLite
+	// connection) and the avatar cache (internal RWMutex), but
+	// do NOT write r.userNames[userID] from this goroutine —
+	// userNames is a plain map shared with the UI goroutine and
+	// other code paths, and a direct write here trips Go's
+	// "concurrent map writes" detector under load (two parallel
+	// Request goroutines for different userIDs is enough). The
+	// UserResolvedMsg below is delivered to the bubbletea Update
+	// loop, which calls Model.PatchUserName on the UI goroutine
+	// — that is the single safe writer for in-history rows.
+	// Subsequent resolveUserCached misses fall back to the DB
+	// row we just upserted, so we don't re-fetch on every miss
+	// in the small window before UserResolvedMsg lands.
+	r.avatars.Preload(userID, u.Profile.Image32)
+	_ = r.db.UpsertUser(cache.User{
+		ID:          userID,
+		WorkspaceID: r.teamID,
+		Name:        u.Name,
+		DisplayName: name,
+		AvatarURL:   u.Profile.Image32,
+		Presence:    "away",
+		IsBot:       isBot,
+		IsExternal:  isExternal,
+	})
+	if r.send != nil {
+		r.send(ui.UserResolvedMsg{
+			TeamID:      r.teamID,
+			UserID:      userID,
+			DisplayName: name,
+			IsBot:       isBot,
+		})
+	}
+	if isExternal && r.send != nil {
+		r.send(ui.UserExternalMsg{UserID: userID, IsExternal: true})
+	}
+}
+
+// flush resolves everything queued since the window opened, as one
+// edge users/info batch. Anything the batch does not return falls
+// back to the per-user path: absence from the batch means "could not
+// resolve", and an errored batch resolves nothing at all.
+func (r *userResolver) flush() {
+	r.pendingMu.Lock()
+	ids := make([]string, 0, len(r.pending))
+	for id := range r.pending {
+		ids = append(ids, id)
+	}
+	clear(r.pending)
+	r.flushTimer = nil
+	r.pendingMu.Unlock()
+	if len(ids) == 0 {
+		return
+	}
+	// Re-check at flush time: boot may have marked the workspace
+	// degraded while the window was open.
+	if r.degraded != nil && r.degraded() {
+		for _, id := range ids {
+			go r.resolveOne(id)
 		}
+		return
+	}
+	updated := make(map[string]int64, len(ids))
+	for _, id := range ids {
+		// 0 is the conditional protocol's "never seen, send the full
+		// record" — the resolver only ever queues cache misses.
+		updated[id] = 0
+	}
+	users, err := r.batcher.UsersInfo(context.Background(), updated)
+	if err != nil {
+		debuglog.Cache("userResolver: edge users/info for %d users team=%s: %v (falling back to per-user users.info)", len(ids), r.teamID, err)
+		for _, id := range ids {
+			go r.resolveOne(id)
+		}
+		return
+	}
+	returned := make(map[string]struct{}, len(users))
+	for _, u := range users {
 		name := u.Profile.DisplayName
 		if name == "" {
-			name = u.RealName
+			name = u.Profile.RealName
 		}
 		if name == "" {
 			name = u.Name
 		}
-		isBot := u.IsBot || u.IsAppUser
-		// r.teamID is the workspace's home TeamID; u.TeamID is the
-		// user's home TeamID. If they differ (and u.TeamID is set),
-		// the user is a Slack Connect / shared-channel guest. Treat
-		// an empty u.TeamID as internal — better to under-detect than
-		// to falsely flag.
-		isExternal := u.TeamID != "" && u.TeamID != r.teamID
-		// Persist to the cache DB (its own goroutine-safe SQLite
-		// connection) and the avatar cache (internal RWMutex), but
-		// do NOT write r.userNames[userID] from this goroutine —
-		// userNames is a plain map shared with the UI goroutine and
-		// other code paths, and a direct write here trips Go's
-		// "concurrent map writes" detector under load (two parallel
-		// Request goroutines for different userIDs is enough). The
-		// UserResolvedMsg below is delivered to the bubbletea Update
-		// loop, which calls Model.PatchUserName on the UI goroutine
-		// — that is the single safe writer for in-history rows.
-		// Subsequent resolveUserCached misses fall back to the DB
-		// row we just upserted, so we don't re-fetch on every miss
-		// in the small window before UserResolvedMsg lands.
-		r.avatars.Preload(userID, u.Profile.Image32)
-		_ = r.db.UpsertUser(cache.User{
-			ID:          userID,
-			WorkspaceID: r.teamID,
-			Name:        u.Name,
+		if name == "" {
+			// Unobserved, but an empty record would otherwise cache
+			// an empty name and blank a rendered one.
+			continue
+		}
+		returned[u.ID] = struct{}{}
+		r.applyEdgeUser(u)
+	}
+	for _, id := range ids {
+		if _, ok := returned[id]; !ok {
+			go r.resolveOne(id)
+		}
+	}
+}
+
+// ResolveNow resolves ids immediately through one edge users/info
+// batch and returns the records edge resolved. Unlike Request it
+// blocks the caller, so it is for background goroutines that need the
+// results — the unresolved-DM sweep maps them to channel ids and
+// cannot use the fire-and-forget queue. Ids edge does not resolve are
+// simply absent from the result; the caller falls back per-user.
+// Nil means "resolve everything per-user": no edge client, a degraded
+// workspace, a failed call, or nothing worth sending.
+//
+// Note applyEdgeUser's deferred inflight.Delete is NOT always a
+// no-op here: a Request(id) racing a ResolveNow for the same id can
+// claim the inflight slot after ResolveNow's batch returned but
+// before its applyEdgeUser runs, and the deferred Delete then drops
+// that claim. The duplicate work this enables is bounded: the Delete
+// runs after the cache upsert, so any Request arriving later bails
+// on the cache check; the realistic duplicate is a Request that
+// already queued a pending entry before the upsert landed, which
+// flush then re-fetches once. The upserts are idempotent, so no
+// guard is taken.
+func (r *userResolver) ResolveNow(ids []string) []edge.User {
+	if r == nil || r.batcher == nil || len(ids) == 0 {
+		return nil
+	}
+	if r.degraded != nil && r.degraded() {
+		return nil
+	}
+	updated := make(map[string]int64, len(ids))
+	for _, id := range ids {
+		if id != "" {
+			updated[id] = 0
+		}
+	}
+	if len(updated) == 0 {
+		return nil
+	}
+	users, err := r.batcher.UsersInfo(context.Background(), updated)
+	if err != nil {
+		debuglog.Cache("userResolver: ResolveNow edge users/info for %d users team=%s: %v (caller falls back per-user)", len(updated), r.teamID, err)
+		return nil
+	}
+	for _, u := range users {
+		r.applyEdgeUser(u)
+	}
+	return users
+}
+
+// applyEdgeUser records one user the edge batch returned: cache row
+// (created — these are misses), avatar preload, and the same
+// UserResolvedMsg/UserExternalMsg pair the per-user path emits, so
+// the UI cannot tell the two paths apart.
+func (r *userResolver) applyEdgeUser(u edge.User) {
+	defer r.inflight.Delete(u.ID)
+	name := u.Profile.DisplayName
+	if name == "" {
+		name = u.Profile.RealName
+	}
+	if name == "" {
+		name = u.Name
+	}
+	isExternal := u.TeamID != "" && u.TeamID != r.teamID
+	r.avatars.Preload(u.ID, u.Profile.ImageOriginal)
+	_ = r.db.UpsertUserFromEdge(r.teamID, cache.EdgeUserUpdate{
+		ID:          u.ID,
+		Name:        u.Name,
+		DisplayName: name,
+		AvatarURL:   u.Profile.ImageOriginal,
+		IsBot:       u.IsBot,
+		IsExternal:  isExternal,
+		Version:     u.Version,
+	})
+	if r.send != nil {
+		r.send(ui.UserResolvedMsg{
+			TeamID:      r.teamID,
+			UserID:      u.ID,
 			DisplayName: name,
-			AvatarURL:   u.Profile.Image32,
-			Presence:    "away",
-			IsBot:       isBot,
-			IsExternal:  isExternal,
+			IsBot:       u.IsBot,
 		})
-		if r.send != nil {
-			r.send(ui.UserResolvedMsg{
-				TeamID:      r.teamID,
-				UserID:      userID,
-				DisplayName: name,
-				IsBot:       isBot,
-			})
-		}
-		if isExternal && r.send != nil {
-			r.send(ui.UserExternalMsg{UserID: userID, IsExternal: true})
-		}
-	}()
+	}
+	if isExternal && r.send != nil {
+		r.send(ui.UserExternalMsg{UserID: u.ID, IsExternal: true})
+	}
 }
 
 // RequestBot enqueues a bots.info fetch for a bot author (bot_message has
@@ -557,6 +790,18 @@ Docs:    https://github.com/gammons/slk
 `, version)
 }
 
+// newImageHTTPClient builds the HTTP client the avatar/thumbnail
+// fetcher uses.
+//
+// Split out of run() so a test can pin the wiring: the difference
+// between this and the XHR client is invisible at the call site but
+// changes every asset request on the wire.
+func newImageHTTPClient() *http.Client {
+	c := slackhttp.NewImageHTTPClient(nil)
+	c.Timeout = 10 * time.Second
+	return c
+}
+
 func run() error {
 	// Resolve XDG paths
 	configDir := xdgConfig()
@@ -642,6 +887,7 @@ func run() error {
 	// of truth). Falls back to cached tokens when offline / desktop absent.
 	tokens = remintTokens(context.Background(), tokens,
 		slackdesktop.Cookie,
+		slackdesktop.Tokens,
 		slackclient.MintToken,
 		tokenStore.Save,
 	)
@@ -653,6 +899,16 @@ func run() error {
 
 	// Create app
 	app := ui.NewApp()
+	// Frame-correlated sixel output: the App publishes immutable
+	// placement snapshots into sixelFrames; terminalOutput strips the
+	// internal frame marker from Bubble Tea's window title, takes the
+	// exact flushed frame, and paints its sixel operations after the
+	// text diff. Kitty uploads share the same serialized writer so
+	// byte streams from different goroutines can't interleave.
+	sixelFrames := imgpkg.NewSixelFrameStore()
+	terminalOutput := imgpkg.NewFrameOutput(os.Stdout, sixelFrames)
+	imgpkg.KittyOutput = terminalOutput.SideChannel()
+	app.SetSixelFrameStore(sixelFrames)
 	app.SetHelpFooter(versionpkg.ModalFooter(version))
 	app.SetClipboardAvailable(clipboardOK)
 	if sr := notify.NewStatusReporter(cfg.Notifications.StatusCommand); sr != nil {
@@ -705,9 +961,7 @@ func run() error {
 		})
 		log.Printf("image fetcher: registered team %q (%s) for file auth", t.TeamName, t.TeamID)
 	}
-	imageHTTPClient := slackhttp.NewBrowserHTTPClient(nil)
-	imageHTTPClient.Timeout = 10 * time.Second
-	imageFetcher := imgpkg.NewFetcher(imageCache, imageHTTPClient)
+	imageFetcher := imgpkg.NewFetcher(imageCache, newImageHTTPClient())
 	imageFetcher.SetAuths(auths)
 
 	// Migrate old avatar cache (one-time, idempotent).
@@ -771,6 +1025,12 @@ func run() error {
 	// Cell pixel metrics for sizing decisions.
 	pxW, pxH := imgpkg.CellPixels(int(os.Stdout.Fd()))
 	debuglog.ImgRender("cell pixels: %dx%d", pxW, pxH)
+	// Sixel encodes at absolute pixel dimensions — the terminal paints
+	// one sixel pixel per device pixel rather than scaling into a cell
+	// box the way kitty does. Hand it the measured metrics so an image
+	// occupying N rows of layout is encoded N*cellHeight pixels tall and
+	// actually lands on those rows.
+	imgpkg.SetCellPixels(pxW, pxH)
 
 	// Wire the inline-image pipeline into the messages pane. SendMsg
 	// stays nil here because tea.NewProgram has not run yet; we re-call
@@ -872,7 +1132,7 @@ func run() error {
 	// goroutine for every message authored row. The fast path is a
 	// straight map lookup; on miss, we trigger a background Preload
 	// keyed by the workspace's AvatarURLs (populated at connect time
-	// from the local user cache and refreshed by the GetUsers fetch).
+	// from the local user cache and from the boot response).
 	// The avatar.Cache's inflight dedup ensures only one Preload runs
 	// per userID regardless of how many redraws hit the miss path
 	// before completion. On completion, Cache.SetOnReady (wired below
@@ -889,8 +1149,8 @@ func run() error {
 			return rendered
 		}
 		// Cache miss: trigger a lazy Preload using the URL the
-		// workspace recorded at connect time (or that GetUsers
-		// refreshed). No router-active = pre-workspace-ready render;
+		// workspace recorded at connect time (or that resolveUser
+		// filled in). No router-active = pre-workspace-ready render;
 		// AvatarReadyMsg will invalidate once the avatar lands.
 		wctx := router.Active()
 		if wctx == nil || wctx.AvatarURLs == nil {
@@ -1093,6 +1353,18 @@ func run() error {
 			},
 			SyncedAt: func(channelID ids.ChannelID) int64 {
 				return db.GetChannelSyncedAt(string(channelID))
+			},
+			// The finder's non-joined results. Debounced by the App
+			// (see scheduleChannelSearch) and only ever called for a
+			// non-empty query, so this runs once per typing pause
+			// rather than once per boot per workspace, which is what
+			// the conversations.list walk it replaced did.
+			SearchRemote: func(query string) []channelfinder.Item {
+				wctx := router.Active()
+				if wctx == nil {
+					return nil
+				}
+				return searchChannelsRemote(ctx, wctx.Edge, wctx.LastVisitedByChannel, query)
 			},
 			MembershipFetch: func(channelID ids.ChannelID) {
 				wctx := router.Active()
@@ -1472,6 +1744,25 @@ func run() error {
 					SubscriptionsAvailable: wctx.SubscriptionsAvailable,
 				}
 			},
+			// First open of the Threads view for this workspace is what
+			// pays for subscriptions.thread.getView, instead of every
+			// boot and (before that) every reconnect. Returns
+			// immediately; the list renders from cache and refreshes
+			// via ThreadsListDirtyMsg when the fetch lands.
+			EnsureSubscriptions: func(teamID ids.TeamID) {
+				wctx := router.Active()
+				if wctx == nil || string(teamID) != wctx.TeamID {
+					return
+				}
+				ensureThreadSubscriptions(ctx, &wctx.ThreadSubsOnce,
+					&threadSubscriptionSync{
+						client:      wctx.Client,
+						db:          db,
+						workspaceID: wctx.TeamID,
+						availableCb: func(available bool) { wctx.SubscriptionsAvailable = available },
+					},
+					func() { p.Send(ui.ThreadsListDirtyMsg{TeamID: wctx.TeamID}) })
+			},
 			ChannelLastRead: func(channelID ids.ChannelID) string {
 				wctx := router.Active()
 				if wctx == nil {
@@ -1652,8 +1943,11 @@ func run() error {
 	// activeTeamID == "" and both set InitialActive=true.
 	var firstReady sync.Once
 
-	// Start the TUI immediately (shows loading overlay)
-	p = tea.NewProgram(app)
+	// Start the TUI immediately (shows loading overlay). All output —
+	// every protocol — flows through the frame-correlated writer: it is
+	// a serialized pass-through for non-sixel frames (no marker present)
+	// and the sixel paint site for marked frames.
+	p = tea.NewProgram(app, tea.WithOutput(terminalOutput))
 
 	// Now that `p` exists, re-install the ImageContext with a real
 	// SendMsg callback so the prefetcher can dispatch ImageReadyMsg
@@ -1684,8 +1978,21 @@ func run() error {
 	// Results are sent to the TUI via p.Send()
 	for _, ot := range orderedTokens {
 		go func(tok slackclient.Token) {
-			wctx, err := connectWorkspace(ctx, tok, db, cfg, avatarCache, p)
+			wctx, err := connectWorkspace(ctx, tok, db, cfg, avatarCache, p, configPath)
 			if err != nil {
+				// Log it. WorkspaceFailedMsg carries only the team
+				// name, so without this the reason never reaches the
+				// user OR the debug log, and a workspace that fails to
+				// connect is indistinguishable from one that connected
+				// and found nothing: empty sidebar, no threads, and
+				// "no active workspace" from every service closure.
+				//
+				// That cost a full round trip with a Grid user in #5,
+				// whose users.conversations call was being rejected
+				// with enterprise_is_restricted while slk reported
+				// nothing at all.
+				log.Printf("workspace %s failed to connect: %v", tok.TeamName, err)
+				debuglog.General("workspace %s failed to connect: %v", tok.TeamName, err)
 				p.Send(ui.WorkspaceFailedMsg{TeamName: tok.TeamName})
 				return
 			}
@@ -1741,6 +2048,22 @@ func run() error {
 				cfg:             cfg,
 				wsCtx:           wctx,
 				backfillGate:    dedupeGate{window: 30 * time.Second},
+				// The reconnect refresh, deliberately NOT the
+				// ChannelService.Fetch closure: that one also marks the
+				// channel read, which is right when the user just
+				// clicked into it and wrong here, where slk is catching
+				// up on messages that arrived while it was offline and
+				// the user may not have looked at the terminal for
+				// hours.
+				refreshChannel: func(ctx context.Context, channelID string) {
+					msgItems := fetchChannelMessages(wctx.Client, channelID, db, wctx.UserNames, tsFormat, avatarCache, router)
+					state, _ := db.GetChannelReadState(channelID)
+					p.Send(ui.MessagesLoadedMsg{
+						ChannelID:  channelID,
+						Messages:   msgItems,
+						LastReadTS: state.LastReadTS,
+					})
+				},
 			}
 			wctx.RTMHandler = handler
 			wctx.ConnMgr = slackclient.NewConnectionManager(wctx.Client, handler)
@@ -1772,7 +2095,7 @@ func run() error {
 				UserNames:        wctx.UserNames,
 				ExternalUsers:    external,
 				UserID:           wctx.UserID,
-				CustomEmoji:      wctx.CustomEmoji,  // empty at this point; filled by the goroutine below
+				CustomEmoji:      wctx.CustomEmoji,  // from conversations.view, or filled by the goroutine below
 				UserGroups:       wctx.UserGroups(), // empty at this point; filled by the goroutine below
 				SectionsProvider: sectionsProviderAdapter{store: wctx.SectionStore},
 				InitialActive:    isInitial,
@@ -1784,6 +2107,11 @@ func run() error {
 			// emoji picker entries. Best-effort: failure leaves the picker
 			// using built-ins only.
 			go func(teamID string) {
+				// Nothing to fetch when conversations.view already
+				// returned them, which is the normal path.
+				if len(wctx.CustomEmoji) > 0 {
+					return
+				}
 				emojis, err := wctx.Client.ListCustomEmoji(ctx)
 				if err != nil {
 					return
@@ -1813,28 +2141,13 @@ func run() error {
 				})
 			}(wctx.TeamID)
 
-			// Background fetch of all public channels so the finder can show
-			// channels the user is not yet a member of. Slow on big workspaces;
-			// must not block initial workspace readiness.
-			go fetchBrowseableChannels(ctx, wctx, p)
-
 			// Resolve unknown DM user names in background
 			if len(wctx.UnresolvedDMs) > 0 {
-				go func() {
-					for _, dm := range wctx.UnresolvedDMs {
-						resolved, isBot := resolveUser(wctx.Client, dm.UserID, wctx.UserNames, db, avatarCache)
-						if isBot {
-							wctx.BotUserIDs[dm.UserID] = true
-						}
-						if resolved != dm.UserID {
-							p.Send(ui.DMNameResolvedMsg{
-								ChannelID:   dm.ChannelID,
-								DisplayName: resolved,
-								IsBot:       isBot,
-							})
-						}
+				go resolveDMNames(wctx, db, avatarCache, func(msg tea.Msg) {
+					if p != nil {
+						p.Send(msg)
 					}
-				}()
+				})
 			}
 		}(ot.Token)
 	}
@@ -1852,11 +2165,27 @@ func run() error {
 			if wctx == nil || wctx.RTMHandler == nil {
 				continue
 			}
-			wctx.RTMHandler.triggerBackfill("wake")
+			wctx.RTMHandler.syncOnReconnect("wake")
 		}
 	}).Run(wakeCtx)
 
 	_, err = p.Run()
+
+	// Dump the API request tally before anything else at shutdown.
+	//
+	// Phase 2b's success criteria are call counts -- "a boot issues
+	// <= 10 API calls, with zero users.list and zero per-channel
+	// conversations.history fan-out" -- and nothing in slk could
+	// report them. Reconstructing the numbers from a debug log only
+	// worked at all because triggerBackfill happens to log per
+	// channel; there was no way to see users.list or a total.
+	//
+	// Nobody is testing slk against a real Enterprise Grid account
+	// until the whole grid-parity series lands, so this is the only
+	// feedback loop the work has.
+	if debuglog.Enabled() {
+		debuglog.General("shutdown API request tally:\n%s", slackhttp.DefaultCounter.Report())
+	}
 
 	// Clean up connection managers
 	for _, wctx := range workspaces {
@@ -1910,14 +2239,61 @@ func slugifyHandle(name string) string {
 	return b.String()
 }
 
-func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB, cfg config.Config, avatarCache *avatar.Cache, p *tea.Program) (*WorkspaceContext, error) {
+// shouldReloadTimeout bounds the background _x_version_ts refresh.
+// Matches slackclient.MintToken's 15s — the only other bounded Slack
+// HTTP call in slk — rather than inventing a second number for the
+// same job. Nothing waits on this refresh, so a generous bound costs
+// nothing, while a tight one would turn a merely slow proxy into a
+// lost refresh and a stale build timestamp.
+const shouldReloadTimeout = 15 * time.Second
+
+func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB, cfg config.Config, avatarCache *avatar.Cache, p *tea.Program, configPath string) (*WorkspaceContext, error) {
 	client := slackclient.NewClient(token.AccessToken, token.Cookie)
+
+	// Seed the build timestamp from the last run so the very first
+	// request of this session already carries a current _x_version_ts
+	// instead of the compiled-in fallback.
+	seedVersionTS(client.Envelope(), cfg, token.TeamID)
+
 	if err := client.Connect(ctx); err != nil {
 		return nil, fmt.Errorf("connecting %s: %w", token.TeamName, err)
 	}
 
+	// Refresh the build timestamp in the background. Failure is
+	// non-fatal: the seeded or compiled-in value stays in use.
+	go func() {
+		// The API client sets no http.Client.Timeout, and
+		// http.DefaultTransport bounds only the dial and the TLS
+		// handshake — not the response headers or body. A server that
+		// accepts the connection and then never answers (captive
+		// portal, wedged corporate proxy — see #111) would otherwise
+		// pin this goroutine and its connection for the whole life of
+		// the process, because ctx here is the app root context.
+		rctx, cancel := context.WithTimeout(ctx, shouldReloadTimeout)
+		defer cancel()
+		ts, err := client.ShouldReload(rctx)
+		if err != nil {
+			debuglog.General("shouldReload: %v", err)
+			return
+		}
+		if env := client.Envelope(); env != nil {
+			env.SetVersionTS(ts)
+		}
+		tomlKey := workspaceTOMLKey(cfg, client.TeamID())
+		if err := saveWorkspaceVersionTS(configPath, tomlKey, client.TeamID(), token.TeamName, ts); err != nil {
+			debuglog.General("saving version_ts: %v", err)
+		}
+	}()
+
 	wctx := &WorkspaceContext{
-		Client:               client,
+		Client: client,
+		// Same construction as newBootstrapDeps makes for
+		// revalidation, and for the same reason it must be
+		// client.HTTPClient(): edge.New needs the
+		// BrowserTransport-carrying client, and a plain one differs
+		// only in what goes on the wire.
+		Edge:                 edge.New(token.AccessToken, client.TeamID(), client.HTTPClient()),
+		EdgeHealth:           edge.NewHealth(),
 		TeamID:               client.TeamID(),
 		TeamName:             token.TeamName,
 		UserID:               client.UserID(),
@@ -1982,6 +2358,7 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 				p.Send(msg)
 			}
 		},
+		wctx.Edge, wctx.EdgeHealth.Degraded,
 	)
 
 	// Per-workspace channel-membership manager. *slackclient.Client
@@ -2011,6 +2388,45 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		wctx.LastVisitedByChannel = visits
 	}
 
+	// The boot sequence: client.userBoot, client.counts,
+	// conversations.view for the restored channel (falling back to
+	// conversations.history), and conditional revalidation of the
+	// cache against edgeapi. See internal/bootstrap.
+	//
+	// This runs AFTER the channel-visits load because
+	// mostRecentlyVisitedChannel reads wctx.LastVisitedByChannel,
+	// which that load fills. It is the same expression the UI is
+	// handed as WorkspaceReadyMsg.LastChannelID, so the channel
+	// bootstrap opens is the channel the sidebar restores rather than
+	// a second, differently-chosen one. Empty is legal and means "open
+	// nothing" — a fresh profile with no recorded visits.
+	//
+	// The old enumeration paths below (GetChannels, GetUnreadCounts,
+	// and the reconnect backfill) still run. That is
+	// deliberate for this commit: they are deleted one at a time in
+	// the tasks that follow, each next to the call that replaces it,
+	// so no intermediate commit leaves slk unable to boot. Until then
+	// slk does both, and the request tally goes UP.
+	res, err := bootstrap.Run(ctx, newBootstrapDeps(client, db, token.AccessToken,
+		mostRecentlyVisitedChannel(wctx.LastVisitedByChannel), wctx.EdgeHealth))
+	if err != nil {
+		return nil, fmt.Errorf("bootstrapping %s: %w", token.TeamName, err)
+	}
+	// Order matters between these two: applyBootUsers fills
+	// wctx.BotUserIDs, which buildChannelItem reads to bucket app DMs,
+	// and hydrateFirstSight writes the cache rows the sidebar's
+	// channel list is later reconciled against.
+	applyBootUsers(wctx, res)
+	// conversations.view returns the workspace's custom emoji next to
+	// the history it was asked for, which is what emoji.list would
+	// have gone and fetched separately. Empty on the
+	// conversations.history fallback and when no channel was opened —
+	// the background fetch below still covers those.
+	if len(res.Emojis) > 0 {
+		wctx.CustomEmoji = res.Emojis
+	}
+	hydrateFirstSight(db, client.TeamID(), res)
+
 	// Initialize Slack-native section store if enabled. Bootstrap is
 	// best-effort: failure is logged, the field stays nil, and the
 	// resolver falls through to config-glob behavior. Doing this
@@ -2021,17 +2437,11 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		if err := store.Bootstrap(ctx, client); err != nil {
 			log.Printf("section store bootstrap for %s failed: %v (falling back to config sections)", token.TeamName, err)
 		} else {
-			// Slack's users.channelSections.list returns the stars section
-			// with an empty channel_ids array (it doesn't populate built-in
-			// section types). stars.list is the authoritative source for
-			// which channels the user has starred; fetch and inject so the
-			// sidebar can render the Starred header. Best-effort: on error
-			// the stars section stays empty and includeInSidebar hides it.
-			if starIDs, err := client.GetStarredChannels(ctx); err != nil {
-				log.Printf("stars.list for %s failed: %v (starred channels will be hidden)", token.TeamName, err)
-			} else if len(starIDs) > 0 {
-				store.PopulateStars(starIDs)
-			}
+			// Bootstrap repopulates the stars section from stars.list
+			// itself (channelSections.list returns built-in section
+			// types with empty channel_ids), so the Starred header is
+			// live at first render and survives reconnect-triggered
+			// re-bootstraps without caller help.
 			wctx.SectionStore = store
 			// One-time info log when the user has both Slack sections
 			// active AND a non-empty [sections.*] config — the latter
@@ -2051,9 +2461,16 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	// unmuted (the conservative default). pref_change WS events for
 	// muted_channels can still rebuild the store mid-session via
 	// MuteStore.ApplyPrefChange even if this initial fetch failed.
+	//
+	// The source is client.userBoot's prefs, not a users.prefs.get
+	// round trip: userBoot already returned all_notifications_prefs
+	// (and muted_channels on the workspaces that still ship it), so
+	// the second call asked the same server the same question. See
+	// bootMutedChannels, which merges the two exactly as
+	// slackclient.GetMutedChannels does.
 	{
 		store := service.NewMuteStore()
-		if err := store.Bootstrap(ctx, client); err != nil {
+		if err := store.Bootstrap(ctx, bootMutedChannels{res}); err != nil {
 			log.Printf("mute store bootstrap for %s failed: %v (channels will render as unmuted until first pref_change)", token.TeamName, err)
 		} else {
 			ids := store.MutedChannels()
@@ -2064,58 +2481,62 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		wctx.MuteStore = store
 	}
 
-	// Background user fetch
-	go func() {
-		users, err := client.GetUsers(ctx)
-		if err != nil {
-			return
-		}
-		for _, u := range users {
-			name := u.Profile.DisplayName
-			if name == "" {
-				name = u.RealName
-			}
-			if name == "" {
-				name = u.Name
-			}
-			wctx.UserNames[u.ID] = name
-			if u.Name != "" {
-				wctx.UserNamesByHandle[u.Name] = name
-			}
-			isBot := u.IsBot || u.IsAppUser
-			if isBot {
-				wctx.BotUserIDs[u.ID] = true
-			}
-			// Slack Connect / shared-channel guests have a TeamID
-			// that differs from this workspace's home TeamID. Empty
-			// TeamID is treated as internal (under-detect rather than
-			// falsely flag). Mirrors userResolver.Request semantics.
-			isExternal := u.TeamID != "" && u.TeamID != client.TeamID()
-			db.UpsertUser(cache.User{
-				ID:          u.ID,
-				WorkspaceID: client.TeamID(),
-				Name:        u.Name,
-				DisplayName: name,
-				AvatarURL:   u.Profile.Image32,
-				Presence:    "away",
-				IsBot:       isBot,
-				IsExternal:  isExternal,
-			})
-			// Record the avatar URL for lazy fetch (mirrors the cached-
-			// user seed above). The eager Preload was the second wave
-			// of the startup avatar burst — equally large on big
-			// workspaces — and is replaced by on-demand fetches driven
-			// by AvatarFunc.
-			if u.Profile.Image32 != "" {
-				wctx.AvatarURLs.Store(u.ID, u.Profile.Image32)
-			}
-		}
-	}()
+	// Thread subscriptions are deliberately NOT fetched here. They are
+	// pulled on the first open of the Threads view, by
+	// ensureThreadSubscriptions via the threads list fetcher. See that
+	// function for why: the call paginates to a 1000-item hard cap,
+	// ~62 requests per workspace on a real account, and the Threads
+	// view is not on screen at boot.
 
-	// Fetch channels
+	// There is deliberately no workspace-wide user fetch here.
+	//
+	// A users.list sweep used to run in the background at this point,
+	// paginating the entire directory — ~50 pages on a 10k-user
+	// workspace — to fill UserNames, UserNamesByHandle, BotUserIDs and
+	// the users cache. The official web client issues users.list zero
+	// times across all 8 captures, and it is the clearest single
+	// "scraping" signal slk emitted. Four sources cover the same
+	// ground without it:
+	//
+	//   - the cache seed above (db.ListUsers), which holds everyone
+	//     slk has ever resolved on this workspace;
+	//   - applyBootUsers, from conversations.view's users array — the
+	//     authors of the messages about to be rendered;
+	//   - edge.UsersInfo revalidation inside bootstrap.Run, which
+	//     refreshes those records by version;
+	//   - resolveUser, which fetches a single users.info on a miss and
+	//     writes it to the cache, so each unknown user costs one call
+	//     once rather than the whole directory every boot.
+	//
+	// The visible difference is that a name slk has never seen renders
+	// as its user ID for the moment before resolveUser answers, rather
+	// than for the (much longer) moment before the sweep finished.
+
+	// The sidebar comes from users.conversations, with client.userBoot
+	// as a fallback -- in that order, and the order was measured.
+	//
+	// userBoot cannot be the primary source. On a real 218-channel
+	// workspace its channels[] carried 67 of them; on another, 60 of
+	// 71. It is evidently not the complete joined-conversation list,
+	// and preferring it silently drops channels from the sidebar,
+	// which is a worse failure than the one this fixes because nobody
+	// notices a channel that is merely absent.
+	//
+	// But users.conversations must not be FATAL either. On the
+	// Enterprise Grid org in gammons/slk#5 it is rejected outright, and
+	// treating that as fatal dropped the entire workspace: no
+	// channels, no threads, no active workspace, and -- until the
+	// commit before this one -- no logged reason. userBoot had already
+	// returned all 217 of that user's conversations, so falling back to
+	// a partial list beats losing the session.
 	channels, err := client.GetChannels(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("fetching channels for %s: %w", token.TeamName, err)
+		log.Printf("workspace %s: users.conversations failed (%v); falling back to the conversations client.userBoot returned, which may be a subset", token.TeamName, err)
+		debuglog.General("workspace %s: users.conversations failed: %v", token.TeamName, err)
+		channels = bootConversations(res)
+	}
+	if len(channels) == 0 {
+		log.Printf("workspace %s: no conversations from either users.conversations or client.userBoot; the sidebar will be empty", token.TeamName)
 	}
 
 	for _, ch := range channels {
@@ -2139,12 +2560,19 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		wctx.FinderItems = append(wctx.FinderItems, finderItem)
 	}
 
-	// Fetch unread counts
-	unreadCounts, threadsAgg, ucErr := client.GetUnreadCounts()
-	if ucErr != nil {
-		debuglog.Cache("workspace_unread_bootstrap: team=%s GetUnreadCounts failed: %v", token.TeamName, ucErr)
+	// Unread counts come from the boot response rather than a second
+	// client.counts call. bootstrap.Run has already made exactly this
+	// request; asking again asked the same server the same question,
+	// and it did so once per workspace.
+	//
+	// res.CountsOK carries what the error return used to: a FAILED
+	// call and a workspace with nothing unread both produce an empty
+	// slice, and only the second may be applied as a snapshot.
+	unreadCounts, ucOK := res.Counts.Unreads, res.CountsOK
+	if !ucOK {
+		debuglog.Cache("workspace_unread_bootstrap: team=%s client.counts failed during bootstrap; leaving read state as cached", token.TeamName)
 	}
-	wctx.ThreadsHasUnreads = threadsAgg.HasUnreads
+	wctx.ThreadsHasUnreads = res.Counts.Threads.HasUnreads
 	// Boot applies an authoritative FULL snapshot: reset every channel
 	// in the workspace to read, then set the ones client.counts reports
 	// unread. This runs BEFORE the WebSocket goes live (ConnMgr.Run is
@@ -2155,7 +2583,7 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	// unreads legitimately means "everything is read" and must clear
 	// stale dots carried over from a prior session. A FAILED call must
 	// NOT reset — that would wipe every dot with no data to restore.
-	if ucErr == nil {
+	if ucOK {
 		updates := make([]cache.ChannelReadStateUpdate, 0, len(unreadCounts))
 		for _, u := range unreadCounts {
 			updates = append(updates, cache.ChannelReadStateUpdate{
@@ -2192,61 +2620,17 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 			}
 		}
 		debuglog.Cache("workspace_unread_bootstrap: team=%s total=%d muted=%d threads_has_unreads=%v threads_unread=%d",
-			token.TeamName, len(wctx.Channels), mutedChans, threadsAgg.HasUnreads, threadsAgg.UnreadCount)
+			token.TeamName, len(wctx.Channels), mutedChans, res.Counts.Threads.HasUnreads, res.Counts.Threads.UnreadCount)
 	}
 
 	// Finder items are built alongside the sidebar items in the loop above
 	// (see buildChannelItem). The user is a member of every channel returned
 	// by GetChannels (it's backed by users.conversations), so those entries
-	// have Joined=true. A separate background fetch surfaces non-joined
-	// public channels for browsing -- see startBrowseableChannelsFetch.
+	// have Joined=true. Channels the user has NOT joined are found on
+	// demand by the finder's debounced channels/search -- see
+	// searchChannelsRemote -- rather than enumerated up front.
 
 	return wctx, nil
-}
-
-// fetchBrowseableChannels fetches every public channel in the workspace and
-// sends a BrowseableChannelsLoadedMsg to the TUI with the entries the user
-// has NOT joined. Joined entries are skipped to avoid duplicates with the
-// existing finder list. Runs in a background goroutine; failures are logged
-// but otherwise ignored (the finder simply continues to show only joined
-// channels).
-func fetchBrowseableChannels(ctx context.Context, wctx *WorkspaceContext, p *tea.Program) {
-	channels, err := wctx.Client.GetAllPublicChannels(ctx)
-	if err != nil {
-		log.Printf("warning: fetching browseable channels for %s: %v", wctx.TeamName, err)
-		return
-	}
-
-	// Build set of joined IDs so we can skip them.
-	joined := make(map[string]struct{}, len(wctx.Channels))
-	for _, ch := range wctx.Channels {
-		joined[ch.ID] = struct{}{}
-	}
-
-	browseable := make([]channelfinder.Item, 0, len(channels))
-	for _, ch := range channels {
-		if _, ok := joined[ch.ID]; ok {
-			continue
-		}
-		browseable = append(browseable, channelfinder.Item{
-			ID:          ch.ID,
-			Name:        ch.Name,
-			Type:        "channel",
-			Joined:      false,
-			LastVisited: wctx.LastVisitedByChannel[ch.ID],
-		})
-	}
-
-	// Persist on the workspace context so future workspace switches preserve
-	// the merged list.
-	wctx.FinderItems = append(wctx.FinderItems, browseable...)
-
-	if p != nil {
-		p.Send(ui.BrowseableChannelsLoadedMsg{
-			TeamID: wctx.TeamID,
-			Items:  browseable,
-		})
-	}
 }
 
 // extractAttachments converts slack-go File entries into the UI's
@@ -2445,6 +2829,72 @@ func resolveUser(client *slackclient.Client, userID string, userNames map[string
 		return name, isBot
 	}
 	return userID, false
+}
+
+// resolveDMNames resolves the display names of unresolved DM
+// counterparties, one edge users/info batch for the whole sweep, with
+// the per-user resolveUser loop as the fallback for ids edge did not
+// return. Batched because the sweep is the dominant cold-boot
+// users.info source: one synchronous GetUserProfile per unresolved DM,
+// measured at ~100 calls on a two-workspace cold boot and 282 in a
+// full Grid session. The mapping to channel ids is why this cannot go
+// through UserResolver.Request: DMNameResolvedMsg renames the sidebar
+// row and re-buckets app DMs, while UserResolvedMsg only patches
+// in-history names.
+func resolveDMNames(wctx *WorkspaceContext, db *cache.DB, avatarCache *avatar.Cache, send func(tea.Msg)) {
+	dmIDs := make([]string, 0, len(wctx.UnresolvedDMs))
+	for _, dm := range wctx.UnresolvedDMs {
+		dmIDs = append(dmIDs, dm.UserID)
+	}
+	byEdge := make(map[string]edge.User)
+	for _, u := range wctx.UserResolver.ResolveNow(dmIDs) {
+		byEdge[u.ID] = u
+	}
+	for _, dm := range wctx.UnresolvedDMs {
+		if u, ok := byEdge[dm.UserID]; ok {
+			name := u.Profile.DisplayName
+			if name == "" {
+				name = u.Profile.RealName
+			}
+			if name == "" {
+				name = u.Name
+			}
+			if name != "" {
+				// edge users/info carries no is_app_user: a Slack app's DM
+				// resolved here may bucket as "dm" rather than "app" until
+				// something else classifies it. No capture shows that
+				// field on this endpoint, so none is invented; the
+				// per-user fallback below classifies the ids edge missed.
+				if u.IsBot {
+					wctx.BotUserIDs[dm.UserID] = true
+				}
+				if send != nil {
+					send(ui.DMNameResolvedMsg{
+						ChannelID:   dm.ChannelID,
+						DisplayName: name,
+						IsBot:       u.IsBot,
+					})
+				}
+				continue
+			}
+			// An edge record with all three name fields empty is no
+			// resolution at all — and applyEdgeUser has already
+			// upserted its empty-DisplayName row, which satisfies
+			// Request's cache-skip gate. Fall through to the per-user
+			// path, which re-fetches and repairs the row.
+		}
+		resolved, isBot := resolveUser(wctx.Client, dm.UserID, wctx.UserNames, db, avatarCache)
+		if isBot {
+			wctx.BotUserIDs[dm.UserID] = true
+		}
+		if resolved != dm.UserID && send != nil {
+			send(ui.DMNameResolvedMsg{
+				ChannelID:   dm.ChannelID,
+				DisplayName: resolved,
+				IsBot:       isBot,
+			})
+		}
+	}
 }
 
 // messageAuthor resolves the display identity for a fetched message.
@@ -3424,9 +3874,18 @@ type rtmEventHandler struct {
 	wsCtx *WorkspaceContext
 
 	// backfillGate enforces a 30 s minimum between reconnect-driven
-	// backfill passes. Per-handler so each workspace has its own gate.
+	// catch-up passes. Per-handler so each workspace has its own gate.
 	// Initialized at construction with window = 30 * time.Second.
 	backfillGate dedupeGate
+
+	// refreshChannel reloads one channel from the server through the
+	// same path a channel switch uses, and pushes the result into the
+	// UI. The reconnect handler calls it for the channel on screen and
+	// for nothing else — that is the whole of slk's post-reconnect
+	// network work, alongside one client.counts.
+	//
+	// nil in tests that construct a handler for unrelated events.
+	refreshChannel func(ctx context.Context, channelID string)
 }
 
 func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment, botID, username string) {
@@ -3711,6 +4170,11 @@ func (h *rtmEventHandler) OnUserTyping(channelID, userID string) {
 }
 
 func (h *rtmEventHandler) OnConnect() {
+	// connected doubles as "has this handler ever connected". It is
+	// never cleared on disconnect, deliberately: what the catch-up
+	// below needs to know is whether bootstrap.Run has already covered
+	// this session, not whether the socket is up right now.
+	firstConnect := !h.connected
 	h.connected = true
 	h.program.Send(ui.ConnectionStateMsg{State: int(statusbar.StateConnected)})
 	if h.wsCtx != nil {
@@ -3735,33 +4199,57 @@ func (h *rtmEventHandler) OnConnect() {
 		}
 	}
 
-	// Reconnect backfill: catch up on messages missed while the WS
-	// was dead. The 30 s dedupe in backfillGate prevents disconnect
-	// flaps from spawning overlapping passes. Runs in its own
-	// goroutine so the WS read loop isn't blocked on HTTP work.
+	// Bounded reconnect catch-up: client.counts, the channel on
+	// screen, and a staleness mark on everything else. The 30 s dedupe
+	// in backfillGate prevents disconnect flaps from spawning
+	// overlapping passes. Runs in its own goroutine so the WS read
+	// loop isn't blocked on HTTP work.
 	//
-	// Note on first-connect: the initial WS connect also fires
-	// OnConnect, so backfill runs at startup too. This is harmless —
-	// synced_at for freshly-bootstrapped channels is current, so most
-	// GetHistorySince calls return zero messages quickly. The 4-wide
-	// concurrency cap bounds the cost.
-	h.triggerBackfill("reconnect")
+	// Skipped on the first connect, which fires moments after
+	// connectWorkspace returns. bootstrap.Run has just done the same
+	// work — client.counts, and the restored channel's history — so
+	// running it again asked the same server the same questions, once
+	// per workspace, and marked every other channel stale seconds
+	// after boot had populated them.
+	if firstConnect {
+		debuglog.Backfill("team=%s first connect: skipping catch-up, bootstrap.Run already covered it", h.workspaceID)
+	} else {
+		h.syncOnReconnect("reconnect")
+	}
 
 	// Force-stale the active channel's membership cache and re-fetch.
 	// The WS may have missed member_joined/left deltas during the
 	// disconnect window; a fresh full fetch reconciles divergence.
 	// Inactive channels stay as-is — they'll re-fetch on their next
 	// EnsureFresh via the channel-switch fetcher path.
-	if h.wsCtx != nil && h.wsCtx.Membership != nil && h.activeChannelID != nil {
-		activeID := h.activeChannelID()
-		if activeID != "" {
-			h.wsCtx.Membership.ForceStale(activeID)
-			h.wsCtx.Membership.EnsureFresh(context.Background(), activeID)
-		}
-	}
+	h.refreshActiveMembership()
 }
 
-// triggerBackfill kicks off a reconnect-style backfill pass for this
+// refreshActiveMembership force-stales and re-fetches membership for
+// the channel on screen. Gated on isActive because activeChannelID
+// reads the GLOBAL UI active channel (app.ActiveChannelID), and every
+// workspace's handler runs OnConnect: without the gate, workspaces
+// that don't own the on-screen channel fetched it anyway, failed with
+// channel_not_found, and — because a failed fetch leaves the cache
+// stale — re-fired on every reconnect. Measured live: a flapping
+// session started 42 conversations.members in 25 seconds with no user
+// interaction.
+func (h *rtmEventHandler) refreshActiveMembership() {
+	if h.wsCtx == nil || h.wsCtx.Membership == nil || h.activeChannelID == nil {
+		return
+	}
+	if h.isActive != nil && !h.isActive() {
+		return
+	}
+	activeID := h.activeChannelID()
+	if activeID == "" {
+		return
+	}
+	h.wsCtx.Membership.ForceStale(activeID)
+	h.wsCtx.Membership.EnsureFresh(context.Background(), activeID)
+}
+
+// syncOnReconnect kicks off the bounded catch-up pass for this
 // workspace, subject to the per-handler 30 s dedupe gate. Called by
 // OnConnect on every WS reconnect AND by the wake detector when the
 // system wakes from sleep (where the WS may not have torn down — a
@@ -3770,12 +4258,11 @@ func (h *rtmEventHandler) OnConnect() {
 // explicit trigger).
 //
 // The dedupe gate is shared with OnConnect, so a wake event that
-// happens to coincide with a real WS reconnect runs the backfill
-// exactly once.
+// coincides with a real WS reconnect runs the pass exactly once.
 //
-// Returns true if the backfill was started, false if the gate
-// suppressed it.
-func (h *rtmEventHandler) triggerBackfill(trigger string) bool {
+// Returns true if the pass was started, false if the gate suppressed
+// it.
+func (h *rtmEventHandler) syncOnReconnect(trigger string) bool {
 	if h.wsCtx == nil || h.db == nil || h.wsCtx.Client == nil {
 		return false
 	}
@@ -3783,16 +4270,18 @@ func (h *rtmEventHandler) triggerBackfill(trigger string) bool {
 		debuglog.Backfill("team=%s trigger=%s skipped reason=dedupe", h.workspaceID, trigger)
 		return false
 	}
-	wctx := h.wsCtx
-	workspaceID := h.workspaceID
-	program := h.program
-	db := h.db
+	sync := &reconnectSync{
+		client:         h.wsCtx.Client,
+		db:             h.db,
+		workspaceID:    h.workspaceID,
+		program:        h.program,
+		activeChannel:  h.activeChannelID,
+		refreshChannel: h.refreshChannel,
+	}
 	go func() {
-		bf := newBackfiller(
-			wctx.Client, db, workspaceID, wctx.Client.UserID(), program, 4, 500,
-			func(available bool) { wctx.SubscriptionsAvailable = available },
-		)
-		_ = bf.run(context.Background())
+		if err := sync.run(context.Background()); err != nil {
+			debuglog.Backfill("team=%s trigger=%s reconnect-sync err=%v", sync.workspaceID, trigger, err)
+		}
 	}()
 	return true
 }

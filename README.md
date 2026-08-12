@@ -34,11 +34,18 @@ Full feature breakdown: **[[Features|https://github.com/gammons/slk/wiki/Feature
 
 ## Quick install
 
-**Homebrew** (macOS and Linux):
+**Homebrew** (macOS only):
 
 ```bash
-brew install gammons/tap/slk
+brew install --cask gammons/tap/slk
 ```
+
+> **Note:** As of v0.13.0, slk is published as a Homebrew Cask (goreleaser v2.10
+> deprecated the `brews`/formula path for prebuilt binaries). Casks are macOS-only;
+> Linuxbrew users should use the tarball or `.deb`/`.rpm`/`.apk` packages below.
+> Existing installs may also need `tap_migrations.json` on the tap (tracked
+> upstream) before `brew upgrade` will move them from the old 0.12.0 formula to
+> the cask — until then, run `brew uninstall slk && brew install --cask gammons/tap/slk`.
 
 **Linux/macOS tarball** (auto-resolves the latest version):
 

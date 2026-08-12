@@ -90,9 +90,16 @@ type Hit struct {
 // plus the halfblock fallback used when the image is only partially
 // visible (sixel cannot emit a half-image).
 type SixelEntry struct {
+	// Key is the stable image cache key (file ID + thumb suffix), the
+	// content identity that lets the painter detect a byte-for-byte
+	// different image in the same slot. Empty when no stable key exists
+	// (blockkit-derived entries); the messages pane then hashes the
+	// payload once at construction.
+	Key      string
 	Bytes    []byte
 	Fallback []string
 	Height   int
+	Width    int
 }
 
 // computeImageTarget chooses (cols, rows) for an inline image render.
@@ -386,7 +393,7 @@ func (r *Renderer) RenderBlock(att Block, channel, ts string, availWidth, baseRo
 			var bb bytes.Buffer
 			if err := pr.OnFlush(&bb); err == nil {
 				sxlMap = map[int]SixelEntry{
-					baseRow: {Bytes: bb.Bytes(), Fallback: pr.Fallback, Height: target.Y},
+					baseRow: {Key: key, Bytes: bb.Bytes(), Fallback: pr.Fallback, Height: target.Y, Width: target.X},
 				}
 			}
 		} else if pr.OnFlush != nil {
@@ -419,7 +426,7 @@ func (r *Renderer) RenderBlock(att Block, channel, ts string, availWidth, baseRo
 			var bb bytes.Buffer
 			if err := out.OnFlush(&bb); err == nil {
 				sxlMap = map[int]SixelEntry{
-					baseRow: {Bytes: bb.Bytes(), Fallback: out.Fallback, Height: target.Y},
+					baseRow: {Key: key, Bytes: bb.Bytes(), Fallback: out.Fallback, Height: target.Y, Width: target.X},
 				}
 			}
 		}

@@ -92,78 +92,81 @@ func TestChannelsWithMessages_WorkspaceIsolation(t *testing.T) {
 	}
 }
 
-func TestBackfillCandidates_UnionOfCachedAndUnread(t *testing.T) {
+func TestMarkChannelsStale_ZeroesEveryChannelExceptTheOneKept(t *testing.T) {
+	// The reconnect handler refreshes exactly one channel over the
+	// network — the one the user is looking at — and marks the rest
+	// stale so each revalidates when it is next opened. That is what
+	// makes reconnect O(1) instead of O(channels).
 	db := setupDBWithWorkspace(t)
 	defer db.Close()
 
-	// C1: cached, no unread. Will appear via ChannelsWithMessages.
-	if err := db.UpsertChannel(Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"}); err != nil {
-		t.Fatalf("upsert C1: %v", err)
-	}
-	if err := db.SetChannelSyncedAt("C1", 1700000050); err != nil {
-		t.Fatalf("synced_at C1: %v", err)
-	}
-	if err := db.UpsertMessage(Message{
-		TS: "1700000010.000000", ChannelID: "C1", WorkspaceID: "T1",
-		UserID: "U1", Text: "x", CreatedAt: 1700000010,
-	}); err != nil {
-		t.Fatalf("upsert message C1: %v", err)
-	}
-
-	// D1: unread DM, never opened in slk. Will appear via unread set.
-	// We do NOT pre-insert the channel row to simulate the
-	// "completely new" case.
-
-	// C2: cached AND unread (no double-count expected).
-	if err := db.UpsertChannel(Channel{ID: "C2", WorkspaceID: "T1", Name: "random", Type: "channel"}); err != nil {
-		t.Fatalf("upsert C2: %v", err)
-	}
-	if err := db.UpsertMessage(Message{
-		TS: "1700000020.000000", ChannelID: "C2", WorkspaceID: "T1",
-		UserID: "U1", Text: "x", CreatedAt: 1700000020,
-	}); err != nil {
-		t.Fatalf("upsert message C2: %v", err)
-	}
-
-	got, err := db.BackfillCandidates("T1", []string{"D1", "C2"})
-	if err != nil {
-		t.Fatalf("BackfillCandidates: %v", err)
-	}
-
-	want := map[string]bool{"C1": true, "C2": true, "D1": true}
-	if len(got) != 3 {
-		t.Fatalf("len got = %d, want 3 (rows=%+v)", len(got), got)
-	}
-	for _, r := range got {
-		if !want[r.ChannelID] {
-			t.Errorf("unexpected channel %q in candidates", r.ChannelID)
+	for _, id := range []string{"C1", "C2", "C3"} {
+		if err := db.UpsertChannel(Channel{ID: id, WorkspaceID: "T1", Name: id, Type: "channel"}); err != nil {
+			t.Fatalf("UpsertChannel(%s): %v", id, err)
 		}
-		delete(want, r.ChannelID)
+		if err := db.SetChannelSyncedAt(id, 1700000000); err != nil {
+			t.Fatalf("SetChannelSyncedAt(%s): %v", id, err)
+		}
 	}
-	for missing := range want {
-		t.Errorf("expected channel %q in candidates, missing", missing)
+
+	if err := db.MarkChannelsStale("T1", "C2"); err != nil {
+		t.Fatalf("MarkChannelsStale: %v", err)
+	}
+
+	if got := db.GetChannelSyncedAt("C1"); got != 0 {
+		t.Errorf("C1 synced_at = %d; want 0 — an unrefreshed channel must look stale so its next open refetches", got)
+	}
+	if got := db.GetChannelSyncedAt("C3"); got != 0 {
+		t.Errorf("C3 synced_at = %d; want 0", got)
+	}
+	if got := db.GetChannelSyncedAt("C2"); got != 1700000000 {
+		t.Errorf("C2 synced_at = %d; want 1700000000 preserved — it is the channel the handler just refreshed, and staling it would make the very next render refetch what it already has", got)
 	}
 }
 
-func TestBackfillCandidates_EmptyUnreadList(t *testing.T) {
+func TestMarkChannelsStale_LeavesOtherWorkspacesAlone(t *testing.T) {
+	// One workspace's socket flapping says nothing about another's.
 	db := setupDBWithWorkspace(t)
 	defer db.Close()
+	if err := db.UpsertWorkspace(Workspace{ID: "T2", Name: "Other"}); err != nil {
+		t.Fatalf("UpsertWorkspace: %v", err)
+	}
+	if err := db.UpsertChannel(Channel{ID: "C1", WorkspaceID: "T1", Name: "here", Type: "channel"}); err != nil {
+		t.Fatalf("UpsertChannel: %v", err)
+	}
+	if err := db.UpsertChannel(Channel{ID: "C9", WorkspaceID: "T2", Name: "elsewhere", Type: "channel"}); err != nil {
+		t.Fatalf("UpsertChannel: %v", err)
+	}
+	db.SetChannelSyncedAt("C1", 1700000000)
+	db.SetChannelSyncedAt("C9", 1700000000)
 
-	if err := db.UpsertChannel(Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"}); err != nil {
-		t.Fatalf("upsert: %v", err)
-	}
-	if err := db.UpsertMessage(Message{
-		TS: "1700000000.000000", ChannelID: "C1", WorkspaceID: "T1",
-		UserID: "U1", Text: "x", CreatedAt: 1700000000,
-	}); err != nil {
-		t.Fatalf("upsert msg: %v", err)
+	if err := db.MarkChannelsStale("T1", ""); err != nil {
+		t.Fatalf("MarkChannelsStale: %v", err)
 	}
 
-	got, err := db.BackfillCandidates("T1", nil)
-	if err != nil {
-		t.Fatalf("BackfillCandidates: %v", err)
+	if got := db.GetChannelSyncedAt("C1"); got != 0 {
+		t.Errorf("C1 synced_at = %d; want 0", got)
 	}
-	if len(got) != 1 || got[0].ChannelID != "C1" {
-		t.Errorf("unexpected: %+v", got)
+	if got := db.GetChannelSyncedAt("C9"); got != 1700000000 {
+		t.Errorf("C9 synced_at = %d; want it untouched — it belongs to another workspace", got)
+	}
+}
+
+func TestMarkChannelsStale_EmptyKeepStalesEverything(t *testing.T) {
+	// There is no active channel on a workspace the user has not
+	// looked at yet. "" must not be read as "keep the channel whose
+	// id is the empty string" in a way that skips the sweep.
+	db := setupDBWithWorkspace(t)
+	defer db.Close()
+	if err := db.UpsertChannel(Channel{ID: "C1", WorkspaceID: "T1", Name: "a", Type: "channel"}); err != nil {
+		t.Fatalf("UpsertChannel: %v", err)
+	}
+	db.SetChannelSyncedAt("C1", 1700000000)
+
+	if err := db.MarkChannelsStale("T1", ""); err != nil {
+		t.Fatalf("MarkChannelsStale: %v", err)
+	}
+	if got := db.GetChannelSyncedAt("C1"); got != 0 {
+		t.Errorf("C1 synced_at = %d; want 0", got)
 	}
 }

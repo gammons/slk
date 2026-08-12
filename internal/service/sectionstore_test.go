@@ -10,6 +10,8 @@ import (
 // fakeSectionsClient implements the subset of slk.Client SectionStore needs.
 type fakeSectionsClient struct {
 	sections []slk.SidebarSection
+	starIDs  []string
+	starErr  error
 	getErr   error
 }
 
@@ -18,6 +20,13 @@ func (f *fakeSectionsClient) GetChannelSections(ctx context.Context) ([]slk.Side
 		return nil, f.getErr
 	}
 	return f.sections, nil
+}
+
+func (f *fakeSectionsClient) GetStarredChannels(ctx context.Context) ([]string, error) {
+	if f.starErr != nil {
+		return nil, f.starErr
+	}
+	return f.starIDs, nil
 }
 
 func TestSectionStore_Bootstrap_Empty(t *testing.T) {
@@ -249,6 +258,60 @@ func TestSectionStore_PopulateStars_ReplacesPreviousStarList(t *testing.T) {
 	}
 }
 
+// TestBootstrap_PopulatesStars regresses a bug where the Starred header
+// disappeared after a WebSocket reconnect. Bootstrap atomically replaces
+// store state; channelSections.list returns the stars section with an
+// empty channel_ids array (built-in types aren't populated). Without
+// Bootstrap also fetching stars.list, a reconnect-triggered re-bootstrap
+// wiped the star list that PopulateStars had filled at startup and
+// includeInSidebar hid the header. Bootstrap now fetches stars.list
+// itself, so a single Bootstrap leaves stars populated — and any future
+// Bootstrap call site is automatically covered.
+func TestBootstrap_PopulatesStars(t *testing.T) {
+	c := &fakeSectionsClient{
+		sections: []slk.SidebarSection{
+			{ID: "ST", Type: "stars", Next: "U", LastUpdate: 1},
+			{ID: "U", Type: "standard", Name: "Mine", Next: "", LastUpdate: 1},
+		},
+		starIDs: []string{"C1", "C2"},
+	}
+	store := NewSectionStore()
+	if err := store.Bootstrap(context.Background(), c); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	// Stars section now renders (non-empty ChannelIDs).
+	got := store.OrderedSections()
+	if len(got) != 2 || got[0].ID != "ST" {
+		t.Fatalf("OrderedSections = %+v, want [ST, U] (stars populated by Bootstrap)", got)
+	}
+	for _, cid := range []string{"C1", "C2"} {
+		id, ok := store.SectionForChannel(cid)
+		if !ok || id != "ST" {
+			t.Errorf("SectionForChannel(%s) = (%q,%v), want (ST,true)", cid, id, ok)
+		}
+	}
+}
+
+// TestBootstrap_StarsFetchErrorIsBestEffort verifies that a stars.list
+// failure does not fail Bootstrap itself — sections still load and the
+// store becomes Ready; the stars section just stays hidden until the
+// next successful bootstrap.
+func TestBootstrap_StarsFetchErrorIsBestEffort(t *testing.T) {
+	c := &fakeSectionsClient{
+		sections: []slk.SidebarSection{
+			{ID: "U", Type: "standard", Name: "Mine", Next: "", LastUpdate: 1},
+		},
+		starErr: context.DeadlineExceeded,
+	}
+	store := NewSectionStore()
+	if err := store.Bootstrap(context.Background(), c); err != nil {
+		t.Fatalf("Bootstrap should succeed despite stars.list error: %v", err)
+	}
+	if !store.Ready() {
+		t.Fatalf("Ready=false; sections should still be loaded")
+	}
+}
+
 func TestSectionStore_BootstrapFailure_NotReady(t *testing.T) {
 	c := &fakeSectionsClient{getErr: context.DeadlineExceeded}
 	store := NewSectionStore()
@@ -405,6 +468,10 @@ type countingClient struct {
 func (cc *countingClient) GetChannelSections(ctx context.Context) ([]slk.SidebarSection, error) {
 	cc.onCall()
 	return cc.inner.GetChannelSections(ctx)
+}
+
+func (cc *countingClient) GetStarredChannels(ctx context.Context) ([]string, error) {
+	return cc.inner.GetStarredChannels(ctx)
 }
 
 // TestSectionForChannel_HidesNonRenderableSections regresses a sidebar

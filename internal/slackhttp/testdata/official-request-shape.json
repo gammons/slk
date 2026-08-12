@@ -1,0 +1,211 @@
+{
+  "source": "Measured from 8 HAR captures of the official Slack web client (Chrome 150 on Linux, rands-leadership.slack.com), taken 2026-07-30. Aggregate counts live alongside in capture-evidence.json.",
+  "note": "The raw HARs are deliberately NOT in the repo: they contain live xoxc tokens, session cookies and message content. This file is the redacted shape digest derived from them, and is the single source of truth for golden_test.go. Arrays are ORDERED where sequence is part of the contract — do not sort them.",
+
+  "http_headers": {
+    "comment": "Headers on a same-site XHR to *.slack.com/api/* and edgeapi.slack.com. Values are pinned separately by capture-evidence.json and TestBrowserHeaderPairsMatchesCapture; this list pins the SET.",
+    "present": [
+      "User-Agent",
+      "Accept",
+      "Accept-Language",
+      "Origin",
+      "Sec-Fetch-Site",
+      "Sec-Fetch-Mode",
+      "Sec-Fetch-Dest",
+      "Sec-Ch-Ua",
+      "Sec-Ch-Ua-Mobile",
+      "Sec-Ch-Ua-Platform",
+      "Cache-Control",
+      "Pragma",
+      "Priority"
+    ],
+    "absent": ["Referer", "Accept-Encoding"],
+    "absent_evidence": "Referer: 0 of 279 captured API requests carried a non-empty one. Accept-Encoding: absent from slk's header map ON PURPOSE, which is NOT the same as absent from the wire — see accept_encoding_note.",
+    "accept_encoding_note": "MEASURED AND DEFERRED, not solved. Chrome sends `gzip, deflate, br, zstd`; slk sends nothing, so Go's http.Transport supplies bare `gzip` at write time, and bare `gzip` is the stdlib's own signature. Setting the header here would turn net/http's automatic decompression OFF, so slk would have to decode bodies by hand and then either implement br/zstd or advertise a narrower set than Chrome — moving the divergence rather than removing it. Listed in `absent` so the tests at least pin that this is a decision and not an oversight."
+  },
+
+  "websocket_upgrade_headers": {
+    "comment": "Chrome sends a strictly SMALLER set on a WebSocket upgrade. These are the 5 slk sets; gorilla/websocket owns Connection, Upgrade, Host, Accept-Encoding and the Sec-Websocket-* set, so they are not listed here. Verified against the status-101 upgrades in initial-load.har and coldboot.har.",
+    "present": [
+      "User-Agent",
+      "Accept-Language",
+      "Cache-Control",
+      "Pragma",
+      "Origin"
+    ],
+    "absent": [
+      "Accept",
+      "Sec-Fetch-Site",
+      "Sec-Fetch-Mode",
+      "Sec-Fetch-Dest",
+      "Sec-Ch-Ua",
+      "Sec-Ch-Ua-Mobile",
+      "Sec-Ch-Ua-Platform",
+      "Priority",
+      "Referer"
+    ]
+  },
+
+  "image_headers": {
+    "comment": "Headers Chrome sends on an <img> load from Slack — avatars, file thumbnails, emoji. Measured across 40 files.slack.com 200-responses in the 2026-07-30 captures. Six differ from http_headers: the Accept image list, sec-fetch-dest: image, sec-fetch-mode: no-cors, priority: i, a PRESENT Referer, and an ABSENT Origin. Volume makes this the dominant surface: 337 CDN requests against 53 workspace-API calls on a single boot.",
+    "present": [
+      "User-Agent",
+      "Accept",
+      "Accept-Language",
+      "Referer",
+      "Sec-Fetch-Site",
+      "Sec-Fetch-Mode",
+      "Sec-Fetch-Dest",
+      "Sec-Ch-Ua",
+      "Sec-Ch-Ua-Mobile",
+      "Sec-Ch-Ua-Platform",
+      "Cache-Control",
+      "Pragma",
+      "Priority"
+    ],
+    "absent": ["Origin", "DNT", "Accept-Encoding"],
+    "absent_evidence": "Origin: Chrome sends none on a no-cors fetch, so the XHR set's Origin would be an slk signature here. DNT: real Chrome DOES send `dnt: 1` in these captures, but it reflects a USER preference rather than the client's identity — most installs leave it off — so reproducing it would narrow slk to that subset instead of blending in. Accept-Encoding: same measured-and-deferred divergence as on the XHR path, see http_headers.accept_encoding_note.",
+    "authorization_note": "MEASURED AND NOT FIXED, and the largest known divergence left on this path. 0 of 40 captured image requests carry an Authorization header, and the real client never uses that header anywhere — its API token rides in the POST body. slk's internal/image/fetcher.go sends `Authorization: Bearer xoxc-…` on every files.slack.com request, i.e. on the 337-request-per-boot surface. Not fixed here because cmd/slk/main.go (~line 687) records that the d cookie ALONE returns Slack's login page and the Bearer ALONE returns 403, so removing it likely breaks thumbnails outright; and the HAR cannot settle the cookie question because Chrome's export stripped cookies (the cookies array is empty even on /api/ requests that certainly sent d). Deliberately NOT in `absent`: listing it would make this fixture assert something slk does not do. See the residual-divergence table in docs/superpowers/plans/2026-07-30-grid-parity-phase1-outcomes.md."
+  },
+
+  "workspace_api": {
+    "comment": "*.slack.com/api/*, 163 captured requests. 0 of 163 carried alphabetically sorted params, so this ORDER is the contract, not just the set.",
+    "query_param_order": [
+      "_x_id",
+      "_x_csid",
+      "slack_route",
+      "_x_version_ts",
+      "_x_foreground",
+      "_x_frontend_build_type",
+      "_x_desktop_ia",
+      "_x_gantry",
+      "_x_b3_traceid",
+      "_x_b3_spanid",
+      "_x_b3_sampled",
+      "fp",
+      "_x_num_retries"
+    ],
+    "pre_boot": {
+      "comment": "Before the team id is known. The expected pre-boot order is query_param_order MINUS absent_params, in place — it is derived, never restated, so the two cannot drift.",
+      "absent_params": [
+        "_x_csid",
+        "slack_route",
+        "_x_b3_traceid",
+        "_x_b3_spanid",
+        "_x_b3_sampled"
+      ],
+      "x_id_prefix": "noversion-",
+      "evidence": "initial-load.har: experiments.getByUser at t+3.0s carries _x_id=noversion-… and no slack_route; sfdc.integration.listOrgs at t+4.6s carries _x_id=741e4b14-… and slack_route=T04T4TH8W."
+    },
+    "body_trailing_field_order": [
+      "_x_reason",
+      "_x_mode",
+      "_x_sonic",
+      "_x_app_name"
+    ],
+    "body_trailing_evidence": "149 of 163 request bodies end in exactly this sequence, with business params (token, channel, …) first.",
+    "body_x_mode_absent_methods": [
+      "api.features",
+      "client.getWebSocketURL",
+      "client.shouldReload",
+      "client.userBoot",
+      "conversations.view",
+      "experiments.getByUser",
+      "features.access.policies.list"
+    ],
+    "body_x_mode_evidence": "The tail above is the 149-request MAJORITY, not a universal. The other 14 of 163 form bodies carry NO _x_mode, and the split is clean per-endpoint: zero endpoints are mixed. These seven account for all 14, at n=2 each. On them body_trailing_field_order MINUS _x_mode is the expected shape — derived, never restated, so the two cannot drift — except for the five that are also in body_x_reason_absent_methods, which lose both leading fields. This is a SET, not an ordered list; the order here is alphabetical for reading only. Endpoints that always send _x_mode include dnd.teamInfo (17), conversations.history (14), bookmarks.list (8), conversations.listPrefs (7), conversations.bulkReacjiTriggers (7), client.counts (6), users.prefs.get (4) — note client.counts and the conversations.* trio, which share a name prefix with entries in this set and must NOT be caught by it.",
+    "body_x_reason_absent_methods": [
+      "api.features",
+      "client.getWebSocketURL",
+      "conversations.view",
+      "experiments.getByUser",
+      "features.access.policies.list"
+    ],
+    "body_x_reason_evidence": "10 of the 163 form bodies carry NO _x_reason, and the split is again clean per-endpoint with zero mixed endpoints: these five account for all 10, at n=2 each. They are a strict SUBSET of body_x_mode_absent_methods — they send NEITHER envelope flag. The remaining two of those seven, client.shouldReload and client.userBoot, are a middle tier: _x_reason but no _x_mode, 4 requests. On these five the expected shape is body_trailing_field_order minus BOTH _x_reason and _x_mode, in place — derived, never restated. This is a SET, not an ordered list. Prefix matching would be wrong in the same way it is for _x_mode: conversations.viewers, client.getWebSocketURLv2 and features.access.policies.listMore must NOT be caught by it.",
+    "body_x_reason_invariant": "The joint distribution over the 163 form bodies is (_x_reason, _x_mode) -> (true,true) 149, (true,false) 4, (false,false) 10, (false,true) ZERO. The official client NEVER sends _x_mode without _x_reason. That pair was the single-predicate separator the defaultReasons table was introduced to close, so slk must keep it true by construction, not by the two exclusion sets happening to agree.",
+    "body_x_mode_ambiguity": "WHAT THE CAPTURES CANNOT SETTLE. All seven are boot-phase calls and every observation of all seven is at boot time, so the data is equally consistent with (a) 'these endpoints never carry _x_mode' and (b) 'nothing carries _x_mode until some boot event fires, and these seven are merely the only endpoints called before it'. _x_mode=online reads as a liveness marker, which makes (b) the more plausible causal story, but no capture separates the two: that would need an endpoint observed both before AND after boot, and there is none. slk encodes (a) because it is what was measured, and because under (b) it still emits the right bytes for every endpoint there is evidence for. Do NOT restate this file as if the causal rule were known.",
+    "body_x_mode_shipped_bug": "slk shipped the unconditional form: every urlencoded body got _x_mode=online. Phase 1 added a client.shouldReload call (to source _x_version_ts), so slk sent _x_mode on an endpoint the real client never sends it on, on every startup. Phase 2a Tasks 7 and 8 add client.userBoot and conversations.view, two more from this set.",
+    "x_reason_observed_values": [
+      "ai_workspace_resource_tab_coachmark",
+      "automations_gallery",
+      "bookmarks-store/conditional-fetching",
+      "boot",
+      "calendar-get-installed-calendars",
+      "calendar-get-user-info",
+      "client-needs-valid-flannel-url",
+      "client-v2-boot-team",
+      "client_redux_store",
+      "conditional-fetch-manager",
+      "dispatch-onboarding-view-data",
+      "fallback:fetchAndUpsertChannelsById",
+      "fetch-all-apps-by-id",
+      "fetch-client-extras",
+      "fetch-deferred-messaging-client-data",
+      "fetch-frecency-prefs",
+      "fetch-orgs-and-sign-in-silently-v2",
+      "fetch-priority-users-on-boot-render",
+      "fetch-user-expectation-last-triggered-pref",
+      "fetchAndUpsertDndForUsers-getDndTimesFor:others",
+      "fetchAndUpsertDndForUsers-getDndTimesFor:self",
+      "fetchAndUpsertTicketStats",
+      "fetchClientCountsOnConnect",
+      "fetchCustomStatusOnReconnect",
+      "fetch_and_upsert_recently_run_triggers",
+      "files-store-unknown-fetch",
+      "initial-data",
+      "message-pane/requestHistory",
+      "messages-ufm",
+      "omniswitcher-fetch-timestamps",
+      "omniswitcher:suggestions-from-searcher",
+      "onboarding_pref_change",
+      "pollClientCountsAfterTimeout",
+      "prefs-api/setUserPrefByApi",
+      "quick-messages/prototype",
+      "reacji_triggers_ufm",
+      "record-notification-event",
+      "saved-api/savedList",
+      "search-precache-onFocus-omniswitcher",
+      "set-model-data",
+      "sidebar-mount",
+      "siws-get-domains",
+      "slack-connect-dm-eligibility-cfm",
+      "team_targeting_criteria",
+      "trigger-channel-suggestions",
+      "unread-counts/onLastReadUpdated",
+      "vacation_emoji_pack",
+      "viewed"
+    ],
+    "x_reason_observed_values_evidence": "Every distinct _x_reason the official client was seen sending, extracted from the form bodies of all 8 captures: 48 values over 153 requests, which is the same 153/48 as x_reason_evidence above and is how the two are cross-checked. This list exists to pin the FALLBACK. The nine values in slackhttp's defaultReasons table are each pinned to their endpoint by TestDefaultReasonMatchesCapture, but genericReason — which covers every endpoint NOT in that table, and so most of slk's traffic — had only its presence pinned, not its value. A reviewer set it to \"slk-tui-fetch\", a string appearing zero times here, and the whole suite still passed. By this package's own argument a wrong-but-attested reason keeps slk inside the 94% of requests that carry the field, while an slk-invented one is a signature on every request slk makes; membership in this list is what makes that argument enforceable rather than aspirational. The counts are deliberately NOT recorded per value: this is a membership set, and a count would invite pinning a frequency that two captures of one workspace cannot support.",
+    "x_reason_placement": "body",
+    "x_reason_evidence": "153 occurrences as a form field, 0 in any query string, 48 distinct values.",
+    "x_reason_present_outside_absent_methods": true,
+    "x_reason_presence_rationale": "SUPERSEDES an earlier x_reason_always_present:true in this file, which was wrong in the same direction the code was: the official client omits _x_reason on 10 of 163 requests, and those 10 are not scattered — they are the clean per-endpoint set in body_x_reason_absent_methods. So the requirement is scoped, not universal. OUTSIDE that set the field is mandatory for slk, and that part IS a requirement slk imposes on itself rather than a property of the captures: slk's callers almost never supply a reason, so 'omit when unset' meant omitting it on ~100% of requests, making 'has _x_mode, lacks _x_reason' a single predicate that separated slk from the client it imitates. Emitting the endpoint's observed reason (or a plausible fallback for unmapped endpoints) puts those requests inside the majority. INSIDE the set, emitting one is the divergence — including when a caller passes WithReason, since the set describes the wire shape rather than caller intent."
+  },
+
+  "edgeapi": {
+    "comment": "edgeapi.slack.com, 116 captured requests, 116/116 matching this exact order.",
+    "query_param_order": [
+      "_x_app_name",
+      "_x_b3_traceid",
+      "_x_b3_spanid",
+      "_x_b3_sampled",
+      "fp",
+      "_x_num_retries"
+    ],
+    "absent_params": [
+      "_x_id",
+      "_x_version_ts",
+      "slack_route",
+      "_x_csid",
+      "_x_frontend_build_type",
+      "_x_desktop_ia",
+      "_x_gantry",
+      "_x_foreground"
+    ],
+    "body": {
+      "content_type": "text/plain;charset=UTF-8",
+      "envelope_fields": [],
+      "evidence": "116/116 edgeapi bodies are JSON sent as text/plain and carry zero _x_* fields. The body envelope is workspace-API-only."
+    }
+  }
+}

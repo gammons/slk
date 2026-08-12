@@ -6,8 +6,27 @@ import (
 	"r00t2.io/gosecret"
 )
 
+type searchSecretItemsFunc func(map[string]string) (unlocked, locked []*gosecret.Item, err error)
+
+var slackSecretQueries = []map[string]string{
+	{
+		"xdg:schema":  "chrome_libsecret_os_crypt_password_v2",
+		"application": "Slack",
+	},
+	{
+		"xdg:schema":  "chrome_libsecret_os_crypt_password_v1",
+		"application": "Slack",
+	},
+	{
+		"xdg:schema": "org.qt.keychain",
+		"server":     "Slack Keys",
+		"user":       "Slack Safe Storage",
+	},
+}
+
 // keyringPassword fetches the "Slack Safe Storage" password from the
-// libsecret-backed Secret Service.
+// Secret Service. Slack stores it using Chromium's schema with libsecret
+// implementations and QtKeychain's schema with KDE Wallet.
 func keyringPassword() ([]byte, error) {
 	service, err := gosecret.NewService()
 	if err != nil {
@@ -15,30 +34,24 @@ func keyringPassword() ([]byte, error) {
 	}
 	defer service.Close()
 
-	attrs := map[string]string{
-		"xdg:schema":  "chrome_libsecret_os_crypt_password_v2",
-		"application": "Slack",
-	}
-	unlocked, locked, err := service.SearchItems(attrs)
-	if err != nil {
-		return nil, err
-	}
-	if len(unlocked) == 0 {
-		if len(locked) > 0 {
-			return nil, ErrKeyringLocked
-		}
-		// Try the v1 schema before giving up.
-		attrs["xdg:schema"] = "chrome_libsecret_os_crypt_password_v1"
-		unlocked, locked, err = service.SearchItems(attrs)
+	return findKeyringPassword(service.SearchItems)
+}
+
+func findKeyringPassword(searchItems searchSecretItemsFunc) ([]byte, error) {
+	foundLocked := false
+	for _, attrs := range slackSecretQueries {
+		unlocked, locked, err := searchItems(attrs)
 		if err != nil {
 			return nil, err
 		}
-		if len(unlocked) == 0 {
-			if len(locked) > 0 {
-				return nil, ErrKeyringLocked
-			}
-			return nil, ErrNoSecretService
+		if len(unlocked) > 0 {
+			return unlocked[0].Secret.Value, nil
 		}
+		foundLocked = foundLocked || len(locked) > 0
 	}
-	return unlocked[0].Secret.Value, nil
+
+	if foundLocked {
+		return nil, ErrKeyringLocked
+	}
+	return nil, ErrNoSecretService
 }

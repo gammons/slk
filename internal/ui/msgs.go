@@ -159,7 +159,7 @@ type (
 		TeamID    string
 		Summaries []cache.ThreadSummary
 		// SubscriptionsAvailable reflects whether the most recent
-		// runSubscriptionPhase succeeded in fetching the authoritative
+		// subscription sync succeeded in fetching the authoritative
 		// thread-subscription list. The threads view renders a banner
 		// when false (Task 10 wires the renderer).
 		SubscriptionsAvailable bool
@@ -388,12 +388,23 @@ type (
 	WorkspaceFailedMsg struct {
 		TeamName string
 	}
-	// BrowseableChannelsLoadedMsg is sent after the background fetch of all
-	// public channels (including ones the user has not joined) completes.
-	// The Items have Joined=false; the App merges them into the channel
-	// finder for the matching workspace.
-	BrowseableChannelsLoadedMsg struct {
+	// RemoteChannelsFoundMsg carries the answer to one debounced
+	// channels/search request: the public channels matching Query,
+	// including ones the user has not joined.
+	//
+	// It replaced a background walk of conversations.list at boot —
+	// 4 requests at Limit: 1000 on a measured two-workspace start,
+	// growing with the workspace and paid by every user whether or not
+	// they ever opened the finder. Now nothing is fetched until
+	// somebody types.
+	//
+	// Gen echoes the debounce generation so the reducer can drop a
+	// slow answer to a query the user has already moved past; TeamID
+	// does the same for a workspace switch mid-flight.
+	RemoteChannelsFoundMsg struct {
 		TeamID string
+		Query  string
+		Gen    uint64
 		Items  []channelfinder.Item
 	}
 	SpinnerTickMsg    struct{}
@@ -654,4 +665,19 @@ type NewMessageOpenedMsg struct {
 type NewMessageFailedMsg struct {
 	RequestID uint64
 	Err       error
+}
+
+// channelSearchDebounceMsg is delivered after the channel finder's
+// query stops changing for channelSearchDebounceDelay. Carries the
+// query and the generation at scheduling time; if the App's
+// pendingChannelSearchGen has moved on, the message is dropped, which
+// is what collapses a typing burst into one request.
+//
+// The debounce is a contract with edge.ChannelsSearch, not a nicety:
+// the captured client issues two channels/search requests for a
+// four-second typing session, and a per-keystroke finder would emit a
+// request pattern no human hand produces.
+type channelSearchDebounceMsg struct {
+	query string
+	gen   uint64
 }

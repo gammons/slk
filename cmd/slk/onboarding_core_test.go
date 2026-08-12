@@ -16,7 +16,7 @@ func TestBuildWorkspaceTokens(t *testing.T) {
 	mint := func(_ context.Context, domain, cookie string) (string, error) {
 		return "xoxc-" + domain, nil
 	}
-	toks, err := buildWorkspaceTokens(context.Background(), "xoxd-c", ws, selected, mint)
+	toks, err := buildWorkspaceTokens(context.Background(), "xoxd-c", nil, ws, selected, mint)
 	if err != nil {
 		t.Fatal(err)
 	}
