@@ -88,6 +88,11 @@ type ThreadReplySendFunc func(channelID ids.ChannelID, threadTS ids.ThreadTS, te
 // Returns the resulting tea.Msg (typically ThreadsListLoadedMsg).
 type ThreadsListFetchFunc func(teamID ids.TeamID) tea.Msg
 
+// ActivityFetchFunc loads one page of the Activity feed for a
+// workspace. Returns the resulting tea.Msg (typically
+// ActivityListLoadedMsg).
+type ActivityFetchFunc func(teamID ids.TeamID, limit int, cursor string, unreadOnly bool) tea.Msg
+
 type ReactionAddFunc func(channelID ids.ChannelID, messageTS ids.MessageTS, emoji string) error
 type ReactionRemoveFunc func(channelID ids.ChannelID, messageTS ids.MessageTS, emoji string) error
 

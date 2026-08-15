@@ -19,6 +19,7 @@ import (
 
 	"github.com/gammons/slk/internal/cache"
 	emojiutil "github.com/gammons/slk/internal/emoji"
+	slack "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/searchresults"
@@ -169,7 +170,42 @@ type (
 	ThreadsListDirtyMsg struct {
 		TeamID string
 	}
-	ConnectionStateMsg struct {
+	// ActivityViewActivatedMsg is dispatched when the user picks the
+	// synthetic Activity sidebar row (or runs :activity). The App
+	// switches the message pane to the Activity view and fetches the
+	// feed. Mirrors ThreadsViewActivatedMsg.
+	ActivityViewActivatedMsg struct{}
+	// ActivityListLoadedMsg carries a freshly loaded page of Activity
+	// feed items for the named workspace. The App ignores it if it
+	// doesn't match the active team. Mirrors ThreadsListLoadedMsg.
+	ActivityListLoadedMsg struct {
+		TeamID     string
+		Items      []slack.ActivityItem
+		NextCursor string
+	}
+	// ActivitySelectedMsg is dispatched when the user presses Enter on
+	// an Activity row. The App opens the underlying thread (ThreadTS
+	// set) or channel message (jumps to TS) reusing existing helpers.
+	ActivitySelectedMsg struct {
+		ChannelID string
+		TS        string
+		ThreadTS  string
+	}
+	// ActivityBodiesLoadedMsg carries hydrated message bodies for the
+	// refs in a freshly loaded Activity page (fetched via messages.list
+	// as a second step after activity.feed, which returns refs only).
+	// Bodies are keyed by slack.ActivityMsgKey(channelID, ts). Ignored
+	// if it doesn't match the active team.
+	ActivityBodiesLoadedMsg struct {
+		TeamID string
+		Bodies map[string]slack.ActivityMessage
+	}
+	// ActivityToggleUnreadMsg flips the Activity view's unread-only
+	// filter and re-fetches the feed with the new flag (the server does
+	// the filtering). Dispatched by the unread-toggle key while the
+	// Activity view is focused.
+	ActivityToggleUnreadMsg struct{}
+	ConnectionStateMsg      struct {
 		State int // 0=connecting, 1=connected, 2=disconnected
 	}
 	ReactionAddedMsg struct {

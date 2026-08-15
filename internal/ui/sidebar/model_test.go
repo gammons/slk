@@ -40,7 +40,8 @@ func TestSidebarNavigation(t *testing.T) {
 	// Expand the Channels section so j/k can reach the channel rows.
 	m.ToggleCollapse("Channels")
 
-	// Nav order: Threads → "Channels" header → C1 → C2 → C3.
+	// Nav order: Threads → Activity → "Channels" header → C1 → C2 → C3.
+	m.MoveDown() // onto the Activity row
 	m.MoveDown() // onto the "Channels" section header
 	if name, ok := m.IsSectionHeaderSelected(); !ok || name != "Channels" {
 		t.Errorf("expected Channels header selected, got name=%q ok=%v", name, ok)
@@ -84,6 +85,7 @@ func TestThreadsItem_MoveDownLeavesIt(t *testing.T) {
 		{ID: "C2", Name: "design", Type: "channel"},
 	})
 	m.ToggleCollapse("Channels")
+	m.MoveDown() // Activity
 	m.MoveDown() // header
 	m.MoveDown() // first channel
 	if m.IsThreadsSelected() {
@@ -660,8 +662,8 @@ func TestCollapseByID_IndependentFromConfigMode(t *testing.T) {
 	}
 	m := New(items)
 	m.SetSectionsProvider(p)
-	m.ToggleCollapse("A")        // collapse via ID
-	m.SetSectionsProvider(nil)   // back to config mode
+	m.ToggleCollapse("A")      // collapse via ID
+	m.SetSectionsProvider(nil) // back to config mode
 	// Now "A" is just a string in config mode; whether it's collapsed
 	// depends on the name-keyed `collapsed` map (which is the default
 	// state set in New). The ID-mode collapse must NOT bleed into

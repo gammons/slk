@@ -334,6 +334,7 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 	// Picking a channel always exits the Threads view.
 	a.view = ViewChannels
 	a.sidebar.SetThreadsActive(false)
+	a.sidebar.SetActivityActive(false)
 	a.lastOpenedChannelID = ""
 	a.lastOpenedThreadTS = ""
 	// Close thread panel when switching channels.
