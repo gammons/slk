@@ -2600,7 +2600,16 @@ func (a *App) View() tea.View {
 	// thread pane at its minimum.
 	frame := a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(), a.sidebarVisible, a.threadVisible)
 	if frame.ThreadAutoHidden {
+		// Say so. Dropping threadVisible silently left the status bar
+		// still reading "> Thread" while no thread panel was on
+		// screen: the user opened a thread, was told they were in one,
+		// and had nothing to look at — with no way to tell whether the
+		// open had failed or the panel was merely too wide to fit.
+		if a.threadVisible {
+			a.statusbar.SetToast("Panel wątku nie mieści się — ctrl+b chowa sidebar")
+		}
 		a.threadVisible = false
+		a.statusbar.SetInThread(false)
 		if a.focusedPanel == PanelThread {
 			a.focusedPanel = PanelMessages
 		}
