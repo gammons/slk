@@ -1323,6 +1323,39 @@ func (a *App) handleGoToBottom() tea.Cmd {
 	return nil
 }
 
+// handleGoToTop is the g half of the g/G pair.
+//
+// It was missing outright. keys.Top is declared, bound to "g", and
+// carries help text ("gg", "top"); help.FromKeyMap builds the help
+// modal by reflecting over every binding that has help text, so the
+// shortcut has always been listed to users. Nothing dispatched on it,
+// so pressing g did nothing in every panel.
+//
+// Every panel model already had GoToTop -- only this handler and its
+// case in handleNormalMode were absent, which reads as
+// intended-then-forgotten rather than a deliberate omission.
+//
+// Mirrors handleGoToBottom, with one addition: arriving at the top of
+// the channel history is slk's backfill trigger, the same one the
+// wheel and k paths fire.
+func (a *App) handleGoToTop() tea.Cmd {
+	switch a.focusedPanel {
+	case PanelSidebar:
+		a.sidebar.GoToTop()
+	case PanelMessages:
+		if a.view == ViewThreads {
+			a.threadsView.GoToTop()
+			// g is a one-shot jump — fire the fetch immediately.
+			return a.openSelectedThreadCmd(false)
+		}
+		a.messagepane.GoToTop()
+		return a.maybeFetchOlderHistory(a.messagepane.ViewportAtTop())
+	case PanelThread:
+		a.threadPanel.GoToTop()
+	}
+	return nil
+}
+
 // pageSize returns the number of lines to scroll for a full-page jump in the
 // currently-focused panel. Falls back to a sensible default if the layout
 // hasn't been measured yet (i.e. before the first render).
