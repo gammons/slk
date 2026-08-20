@@ -325,11 +325,17 @@ type ViewResult struct {
 	// that would otherwise be thrown away and refetched.
 	Channels []ViewChannelEntry `json:"channels"`
 
-	// Emojis replaces the emoji.list call. It is an OBJECT keyed by
-	// emoji name with a URL value — NOT an array, despite being the
-	// plural of a thing. Modelling it as a slice fails the whole
-	// decode. Same shape trap as boot.Subteams, in the other
-	// direction.
+	// Emojis is the custom emoji THIS CONVERSATION USES, scoped like
+	// Users and Channels are — it does NOT replace emoji.list, which
+	// returns the workspace's whole set. The captured response carries
+	// three entries. Reading it as the workspace set is a real bug
+	// that shipped once: every other channel then renders its custom
+	// emoji as literal `:name:`.
+	//
+	// It is an OBJECT keyed by emoji name with a URL value — NOT an
+	// array, despite being the plural of a thing. Modelling it as a
+	// slice fails the whole decode. Same shape trap as boot.Subteams,
+	// in the other direction.
 	Emojis map[string]string `json:"emojis"`
 
 	// Channel is the conversation that was opened.
@@ -364,8 +370,10 @@ type viewResponse struct {
 // This is the official client's channel-open call. One request returns
 // the history, the users and bots that authored it, the channels it
 // mentions and the custom emoji it uses — replacing slk's
-// conversations.history plus a users.info per distinct author plus
-// emoji.list.
+// conversations.history plus a users.info per distinct author.
+//
+// It does NOT replace emoji.list: everything it returns beside the
+// history is scoped to that conversation. See the Emojis field.
 //
 // # The channel param: verified off Grid, unverified on it
 //
