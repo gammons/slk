@@ -17,6 +17,7 @@ import (
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/ids"
 	imgpkg "github.com/gammons/slk/internal/image"
+	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/sidebar"
@@ -2993,6 +2994,12 @@ func TestConversationOpenedMsg_SidebarReceivesItemAndUnread(t *testing.T) {
 			Name: "alice, bob",
 			Type: "group_dm",
 		},
+		FinderItem: channelfinder.Item{
+			ID:     "G1",
+			Name:   "alice, bob",
+			Type:   "group_dm",
+			Joined: true,
+		},
 	})
 
 	// Capture sidebar version so we can verify the inbound NewMessageMsg
@@ -3023,6 +3030,18 @@ func TestConversationOpenedMsg_SidebarReceivesItemAndUnread(t *testing.T) {
 	if app.sidebar.Version() == verBefore {
 		t.Errorf("expected sidebar.Version() to bump after inactive-channel NewMessageMsg, stayed at %d", verBefore)
 	}
+
+	// G1 must also be present in the channel finder (Ctrl+P) immediately,
+	// not just after the next workspace activation.
+	foundInFinder := false
+	for _, it := range app.channelFinder.Items() {
+		if it.ID == "G1" {
+			foundInFinder = true
+		}
+	}
+	if !foundInFinder {
+		t.Errorf("G1 not in channel finder after ConversationOpenedMsg")
+	}
 }
 
 func TestConversationOpenedMsg_InactiveWorkspaceIgnored(t *testing.T) {
@@ -3032,13 +3051,19 @@ func TestConversationOpenedMsg_InactiveWorkspaceIgnored(t *testing.T) {
 
 	// Event for a different workspace must NOT mutate the active sidebar.
 	app.Update(ConversationOpenedMsg{
-		TeamID: "T2",
-		Item:   sidebar.ChannelItem{ID: "G1", Name: "alice, bob", Type: "group_dm"},
+		TeamID:     "T2",
+		Item:       sidebar.ChannelItem{ID: "G1", Name: "alice, bob", Type: "group_dm"},
+		FinderItem: channelfinder.Item{ID: "G1", Name: "alice, bob", Type: "group_dm", Joined: true},
 	})
 
 	for _, it := range app.sidebar.AllItems() {
 		if it.ID == "G1" {
 			t.Errorf("G1 unexpectedly added to active sidebar from inactive-workspace event")
+		}
+	}
+	for _, it := range app.channelFinder.Items() {
+		if it.ID == "G1" {
+			t.Errorf("G1 unexpectedly added to channel finder from inactive-workspace event")
 		}
 	}
 }

@@ -19,8 +19,8 @@
 //	                          compose draft), push new channels/users/
 //	                          emoji, apply theme, restore the last
 //	                          channel viewed for this workspace.
-//	ConversationOpenedMsg   - WS event: a DM/MPIM just opened.
-//	                          Upsert into the active sidebar.
+//	ConversationOpenedMsg   - WS event: a conversation just opened.
+//	                          Upsert into the active sidebar and finder.
 //	SectionsRefreshedMsg    - cache notice: sidebar sections were
 //	                          reorganized. Re-push channel items
 //	                          for the active workspace.
@@ -83,8 +83,8 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			}
 		}
 		// Inactive-workspace events update WorkspaceContext.Channels
-		// from the rtmEventHandler in cmd/slk/main.go (Task 6);
-		// App.Update only mutates the active sidebar.
+		// and FinderItems from the rtmEventHandler in cmd/slk/main.go;
+		// App.Update only mutates the active workspace's UI models.
 		return nil, true
 
 	case SectionsRefreshedMsg:
