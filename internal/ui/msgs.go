@@ -267,11 +267,12 @@ type (
 	// im_created, group_joined, or channel_joined event. The TeamID
 	// disambiguates events for inactive workspaces; only events whose
 	// TeamID matches the currently-active workspace mutate the live
-	// sidebar — others are persisted in the workspace's WorkspaceContext
-	// for when the user switches in.
+	// sidebar and channel finder — others are persisted in the
+	// workspace's WorkspaceContext for when the user switches in.
 	ConversationOpenedMsg struct {
-		TeamID string
-		Item   sidebar.ChannelItem
+		TeamID     string
+		Item       sidebar.ChannelItem
+		FinderItem channelfinder.Item
 	}
 	// SectionsRefreshedMsg is sent when a workspace's Slack-native
 	// section state has mutated (via channel_section_* WS events) and

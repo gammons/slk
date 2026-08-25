@@ -74,6 +74,13 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	case ConversationOpenedMsg:
 		if m.TeamID == a.activeTeamID {
 			a.sidebar.UpsertItem(m.Item)
+			// FinderItem is populated by today's one sender
+			// (cmd/slk's rtmEventHandler); guard against a future
+			// sender that forgets to set it, which would otherwise
+			// silently append an ID: "" row to the finder.
+			if m.FinderItem.ID != "" {
+				a.channelFinder.Upsert(m.FinderItem)
+			}
 		}
 		// Inactive-workspace events update WorkspaceContext.Channels
 		// from the rtmEventHandler in cmd/slk/main.go (Task 6);
