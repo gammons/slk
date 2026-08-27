@@ -25,6 +25,43 @@ func newTestAppWithMessages(t *testing.T) *App {
 	return a
 }
 
+func TestVisualMode_SelectsWithMotionsAndYanks(t *testing.T) {
+	a := newTestAppWithMessages(t)
+	a.focusedPanel = PanelMessages
+	a.SetClipboardAvailable(true)
+	var copied string
+	a.SetClipboardWriter(func(_ clipboard.Format, data []byte) <-chan struct{} {
+		copied = string(data)
+		return nil
+	})
+
+	_, _ = a.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
+	if a.mode != ModeVisual || !a.messagepane.HasSelection() {
+		t.Fatalf("v did not enter visual mode with a selection: mode=%v selected=%v", a.mode, a.messagepane.HasSelection())
+	}
+	for range 4 {
+		_, _ = a.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
+	}
+	_, cmd := a.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	_ = cmd()
+	if copied == "" {
+		t.Fatal("y did not copy the visual selection")
+	}
+	if a.mode != ModeNormal {
+		t.Fatalf("mode after yank = %v, want NORMAL", a.mode)
+	}
+}
+
+func TestVisualMode_EscapeCancelsSelection(t *testing.T) {
+	a := newTestAppWithMessages(t)
+	a.focusedPanel = PanelMessages
+	_, _ = a.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
+	_, _ = a.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if a.mode != ModeNormal || a.messagepane.HasSelection() {
+		t.Fatalf("Esc did not cancel visual mode: mode=%v selected=%v", a.mode, a.messagepane.HasSelection())
+	}
+}
+
 // drainBatch fully expands a tea.Cmd (including nested tea.BatchMsg) and
 // returns all leaf messages. Test-only; ignores nil cmds.
 func drainBatch(cmd tea.Cmd) []tea.Msg {

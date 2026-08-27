@@ -2686,6 +2686,75 @@ func (m *Model) HasSelection() bool {
 	return m.hasSelection
 }
 
+// BeginVisualSelection starts a character-wise selection at the beginning of
+// the currently selected message. The first display cell is selected, matching
+// Vim's inclusive visual-mode cursor.
+func (m *Model) BeginVisualSelection() bool {
+	for _, e := range m.cache {
+		if e.msgIdx != m.selected || e.msgIdx < 0 || len(e.linesPlain) == 0 {
+			continue
+		}
+		id := m.messages[e.msgIdx].TS
+		start := selection.Anchor{MessageID: id}
+		end := start
+		if w := displayWidthOfPlain(e.linesPlain[0]); w > 0 {
+			end.Col = 1
+		}
+		m.selRange = selection.Range{Start: start, End: end, Active: true}
+		m.hasSelection = true
+		return true
+	}
+	return false
+}
+
+// MoveVisualSelection moves the active selection end within its message.
+func (m *Model) MoveVisualSelection(motion string) {
+	if !m.hasSelection {
+		return
+	}
+	a := m.selRange.End
+	idx, ok := m.messageIDToEntryIdx[a.MessageID]
+	if !ok || idx >= len(m.cache) {
+		return
+	}
+	e := m.cache[idx]
+	switch motion {
+	case "h", "left":
+		if a.Col > 0 {
+			a.Col--
+		}
+	case "l", "right":
+		if w := displayWidthOfPlain(e.linesPlain[a.Line]); a.Col < w {
+			a.Col++
+		}
+	case "j", "down":
+		if a.Line+1 < len(e.linesPlain) {
+			a.Line++
+			if w := displayWidthOfPlain(e.linesPlain[a.Line]); a.Col > w {
+				a.Col = w
+			}
+		}
+	case "k", "up":
+		if a.Line > 0 {
+			a.Line--
+			if w := displayWidthOfPlain(e.linesPlain[a.Line]); a.Col > w {
+				a.Col = w
+			}
+		}
+	case "0":
+		a.Col = 0
+	case "$":
+		a.Col = displayWidthOfPlain(e.linesPlain[a.Line])
+	}
+	m.selRange.End = a
+}
+
+func (m *Model) SwapSelectionEnds() {
+	if m.hasSelection {
+		m.selRange.Start, m.selRange.End = m.selRange.End, m.selRange.Start
+	}
+}
+
 // ScrollHintForDrag returns -1 if the cursor is within 1 row of the top
 // edge of the message-content area, +1 if within 1 row of the bottom, else 0.
 // The incoming viewportY is pane-local (0 == top of panel content, just

@@ -52,6 +52,12 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	}
 
 	switch {
+	case key.Matches(msg, a.keys.VisualMode):
+		if a.beginVisualSelection() {
+			a.SetMode(ModeVisual)
+		}
+		return nil
+
 	case key.Matches(msg, a.keys.InsertMode):
 		a.SetMode(ModeInsert)
 		// In the Threads view there is no main compose box -- the

@@ -994,6 +994,79 @@ func (m *Model) ClearSelection() {
 // pinned-on-screen post-drag.
 func (m *Model) HasSelection() bool { return m.hasSelection }
 
+// BeginVisualSelection starts a character-wise selection at the beginning of
+// the selected reply. The first display cell is selected.
+func (m *Model) BeginVisualSelection() bool {
+	for _, e := range m.cache {
+		if e.replyIdx != m.selected || e.replyIdx < 0 || len(e.linesPlain) == 0 {
+			continue
+		}
+		id := m.replies[e.replyIdx].TS
+		start := selection.Anchor{MessageID: id}
+		end := start
+		if w := messages.DisplayWidthOfPlain(e.linesPlain[0]); w > 0 {
+			end.Col = 1
+		}
+		m.selRange = selection.Range{Start: start, End: end, Active: true}
+		m.hasSelection = true
+		m.dirty()
+		return true
+	}
+	return false
+}
+
+// MoveVisualSelection moves the active selection end within its reply.
+func (m *Model) MoveVisualSelection(motion string) {
+	if !m.hasSelection {
+		return
+	}
+	a := m.selRange.End
+	idx, ok := m.replyIDToIdx[a.MessageID]
+	if !ok || idx >= len(m.cache) {
+		return
+	}
+	e := m.cache[idx]
+	switch motion {
+	case "h", "left":
+		if a.Col > 0 {
+			a.Col--
+		}
+	case "l", "right":
+		if w := messages.DisplayWidthOfPlain(e.linesPlain[a.Line]); a.Col < w {
+			a.Col++
+		}
+	case "j", "down":
+		if a.Line+1 < len(e.linesPlain) {
+			a.Line++
+			if w := messages.DisplayWidthOfPlain(e.linesPlain[a.Line]); a.Col > w {
+				a.Col = w
+			}
+		}
+	case "k", "up":
+		if a.Line > 0 {
+			a.Line--
+			if w := messages.DisplayWidthOfPlain(e.linesPlain[a.Line]); a.Col > w {
+				a.Col = w
+			}
+		}
+	case "0":
+		a.Col = 0
+	case "$":
+		a.Col = messages.DisplayWidthOfPlain(e.linesPlain[a.Line])
+	}
+	if a != m.selRange.End {
+		m.selRange.End = a
+		m.dirty()
+	}
+}
+
+func (m *Model) SwapSelectionEnds() {
+	if m.hasSelection {
+		m.selRange.Start, m.selRange.End = m.selRange.End, m.selRange.Start
+		m.dirty()
+	}
+}
+
 // ScrollHintForDrag returns -1 if the cursor is within 1 row of the top
 // edge of the reply-content area, +1 if within 1 row of the bottom, else 0.
 // The incoming viewportY is pane-local (0 == top of panel content, just

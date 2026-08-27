@@ -11,6 +11,7 @@ type KeyMap struct {
 	Enter               key.Binding
 	Escape              key.Binding
 	InsertMode          key.Binding
+	VisualMode          key.Binding
 	CommandMode         key.Binding
 	SearchMode          key.Binding
 	SearchNext          key.Binding
@@ -70,6 +71,7 @@ func DefaultKeyMap() KeyMap {
 		Enter:           key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open/confirm")),
 		Escape:          key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		InsertMode:      key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "insert mode")),
+		VisualMode:      key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "visual mode")),
 		CommandMode:     key.NewBinding(key.WithKeys(":"), key.WithHelp(":", "command mode")),
 		SearchMode:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
 		SearchNext:      key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next match")),
@@ -97,7 +99,7 @@ func DefaultKeyMap() KeyMap {
 		Edit:            key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "edit message")),
 		Delete:          key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete message")),
 		CopyPermalink:   key.NewBinding(key.WithKeys("Y", "C"), key.WithHelp("Y/C", "copy permalink")),
-		OpenPreview:     key.NewBinding(key.WithKeys("O", "v"), key.WithHelp("O/v", "open image preview")),
+		OpenPreview:     key.NewBinding(key.WithKeys("O"), key.WithHelp("O", "open image preview")),
 		OpenLink:        key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open link in message")),
 		MarkUnread:      key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "mark unread")),
 		// Keyless: ctrl+w is reserved as the window-command prefix

@@ -73,6 +73,18 @@ func TestThreadSelection_ClickWithoutDragReturnsEmpty(t *testing.T) {
 	}
 }
 
+func TestThreadVisualSelection_Motions(t *testing.T) {
+	m := newTestThread()
+	if !m.BeginVisualSelection() {
+		t.Fatal("BeginVisualSelection returned false")
+	}
+	initial := m.SelectionText()
+	m.MoveVisualSelection("$")
+	if got := m.SelectionText(); len(got) <= len(initial) {
+		t.Fatalf("$ did not extend selection: initial=%q got=%q", initial, got)
+	}
+}
+
 func TestThreadSelection_ClearOnSetThread(t *testing.T) {
 	m := newTestThread()
 	m.BeginSelectionAt(firstContentY(m), 0)
