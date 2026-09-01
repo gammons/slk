@@ -1120,3 +1120,73 @@ func TestSetChannelMembershipAfterLoadingFlipsInChannel(t *testing.T) {
 		}
 	}
 }
+
+func TestBroadcastToggle(t *testing.T) {
+	m := New("general")
+	if m.Broadcast() {
+		t.Fatal("broadcast should default to off")
+	}
+	if m.ToggleBroadcast() != true || !m.Broadcast() {
+		t.Fatal("ToggleBroadcast should turn the flag on")
+	}
+	if m.ToggleBroadcast() != false || m.Broadcast() {
+		t.Fatal("second ToggleBroadcast should turn the flag off")
+	}
+	m.ToggleBroadcast()
+	m.SetBroadcast(false)
+	if m.Broadcast() {
+		t.Fatal("SetBroadcast(false) should clear the flag")
+	}
+	// Idempotent SetBroadcast must not dirty an already-cleared model.
+	v := m.Version()
+	m.SetBroadcast(false)
+	if m.Version() != v {
+		t.Error("no-op SetBroadcast should not bump Version")
+	}
+}
+
+func TestComposeViewBroadcastHint(t *testing.T) {
+	m := New("general")
+	m.SetValue("draft text")
+
+	off := m.View(40, true)
+	if strings.Contains(off, "also send to") {
+		t.Errorf("hint must be hidden while broadcast is off, got:\n%s", off)
+	}
+
+	m.ToggleBroadcast()
+	on := m.View(40, true)
+	if !strings.Contains(on, "also send to #general") {
+		t.Errorf("hint with channel name missing while broadcast is on, got:\n%s", on)
+	}
+	if !strings.Contains(on, "ctrl+o") {
+		t.Errorf("hint should name the toggle key, got:\n%s", on)
+	}
+	if strings.Contains(on, "draft text") == false {
+		t.Errorf("hint render must not drop compose content, got:\n%s", on)
+	}
+}
+
+func TestComposeViewBroadcastHintUnfocused(t *testing.T) {
+	// The hint must render even when the compose is blurred (e.g. the
+	// user toggled and Esc'd out), otherwise the pending broadcast is
+	// invisible until the next send.
+	m := New("ops")
+	m.ToggleBroadcast()
+	view := m.View(40, false)
+	if !strings.Contains(view, "also send to #ops") {
+		t.Errorf("hint missing in unfocused view, got:\n%s", view)
+	}
+}
+
+func TestResetClearsBroadcast(t *testing.T) {
+	m := New("general")
+	m.ToggleBroadcast()
+	if !m.Broadcast() {
+		t.Fatal("expected broadcast to be on")
+	}
+	m.Reset()
+	if m.Broadcast() {
+		t.Error("Reset() must clear broadcast flag (non-sticky across sends)")
+	}
+}

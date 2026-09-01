@@ -3,6 +3,7 @@ package compose
 
 import (
 	"fmt"
+	"image/color"
 	"sort"
 	"strings"
 
@@ -89,6 +90,14 @@ type Model struct {
 	// chip row to render in muted style and the Update() to refuse
 	// Esc / Backspace-clear.
 	uploading bool
+
+	// broadcast is Slack's "Also send to #channel" toggle for thread
+	// replies: when true, the next send posts the reply to the parent
+	// channel feed as well (reply_broadcast=true). Only meaningful for
+	// the thread compose; the channel compose never exposes the toggle.
+	// Non-sticky: cleared on send / Reset() and when a different thread
+	// opens, so a high-visibility broadcast never silently repeats.
+	broadcast bool
 
 	// version increments on every Update / state mutation. Used by App's
 	// panel-cache layer so the wrapped compose panel only re-renders when
@@ -278,6 +287,29 @@ func (m *Model) SetUploading(on bool) {
 // Uploading reports whether an upload is currently in flight.
 func (m *Model) Uploading() bool { return m.uploading }
 
+// ToggleBroadcast flips the "also send to channel" flag and reports
+// the new value. Bound to ctrl+o while composing a thread reply.
+func (m *Model) ToggleBroadcast() bool {
+	m.broadcast = !m.broadcast
+	m.dirty()
+	return m.broadcast
+}
+
+// SetBroadcast explicitly sets the "also send to channel" flag. The
+// host clears it when a different thread opens so the toggle never
+// silently carries over between threads.
+func (m *Model) SetBroadcast(on bool) {
+	if m.broadcast == on {
+		return
+	}
+	m.broadcast = on
+	m.dirty()
+}
+
+// Broadcast reports whether the next send will also post to the
+// parent channel.
+func (m Model) Broadcast() bool { return m.broadcast }
+
 // CursorAtFirstLine reports whether the textarea cursor is on the
 // first (topmost) line.
 func (m *Model) CursorAtFirstLine() bool {
@@ -320,6 +352,7 @@ func (m *Model) Reset() {
 	m.emojiPicker.Close()
 	m.pending = nil
 	m.uploading = false
+	m.broadcast = false
 	m.dirty()
 }
 
@@ -1251,6 +1284,22 @@ func (m Model) renderChips(width int) string {
 	return lipgloss.NewStyle().MaxWidth(width).Render(row)
 }
 
+// renderBroadcastHint returns the one-line "also send to channel"
+// indicator shown under the input while the broadcast toggle is on,
+// or "" when it is off. innerBG must match the background used by the
+// input box so the hint row reads as part of the compose area.
+func (m Model) renderBroadcastHint(width int, innerBG color.Color) string {
+	if !m.broadcast {
+		return ""
+	}
+	hint := lipgloss.NewStyle().
+		Foreground(styles.Accent).
+		Background(innerBG).
+		Width(width).
+		Render(fmt.Sprintf("↪ also send to #%s  (ctrl+o to cancel)", m.channelName))
+	return lipgloss.NewStyle().MaxWidth(width).Render(hint)
+}
+
 func (m Model) View(width int, focused bool) string {
 	chips := m.renderChips(width)
 
@@ -1295,8 +1344,16 @@ func (m Model) View(width int, focused bool) string {
 		box = style.Render(content)
 	}
 
+	hint := m.renderBroadcastHint(width-3, innerBG)
+
 	if chips == "" {
-		return box
+		if hint == "" {
+			return box
+		}
+		return lipgloss.JoinVertical(lipgloss.Left, box, hint)
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, chips, box)
+	if hint == "" {
+		return lipgloss.JoinVertical(lipgloss.Left, chips, box)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, chips, box, hint)
 }

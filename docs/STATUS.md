@@ -77,6 +77,8 @@ Last updated: 2026-05-03
 - [x] Thread reply compose with Shift+Enter for newlines
 - [x] Real-time thread reply routing via WebSocket
 - [x] Thread reply sending via Slack API
+- [x] Also send to channel (`Ctrl+O` in thread compose toggles Slack's
+  reply-broadcast checkbox; optimistic thread_broadcast row in the channel feed)
 - [x] Channel switch closes thread panel
 - [x] Threads view (top-of-sidebar `⚑ Threads` entry): list of threads the
   user authored, replied to, or was @-mentioned in for the active workspace,
