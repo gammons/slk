@@ -1476,7 +1476,7 @@ func run() error {
 			Fetch: func(channelID ids.ChannelID, channelName string) tea.Msg {
 				chIDStr := string(channelID)
 				wctx := router.Active()
-				if wctx == nil {
+				if wctx == nil || wctx.Client == nil {
 					return nil
 				}
 				msgItems := fetchChannelMessages(wctx.Client, chIDStr, db, wctx.UserNames, tsFormat, avatarCache, router)
@@ -1498,7 +1498,7 @@ func run() error {
 			},
 			MarkRead: func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
 				wctx := router.Active()
-				if wctx == nil {
+				if wctx == nil || wctx.Client == nil {
 					return nil
 				}
 				markChannelReadAsync(ctx, wctx.Client, db, p, string(channelID), string(ts))
@@ -3124,8 +3124,40 @@ func markChannelRead(ctx context.Context, client channelMarker, db *cache.DB, ch
 	return nil
 }
 
-// markChannelReadAsync fires markChannelRead in a background goroutine
-// and returns immediately. client may be nil (returns silently).
+// markChannelReadAndNotify marks the channel read and, only on success,
+// hands ChannelMarkedReadMsg to notify. A rejected mark must not notify:
+// the UI would optimistically clear an unread badge that Slack still
+// considers unread.
+//
+// notify is a plain func rather than a *tea.Program so this whole
+// decision stays synchronous and testable. Taking the program here
+// would push the send decision back into the goroutine and make
+// "did not notify" assertable only with a sleep.
+func markChannelReadAndNotify(
+	ctx context.Context,
+	client channelMarker,
+	db *cache.DB,
+	notify func(tea.Msg),
+	channelID, ts string,
+) {
+	if err := markChannelRead(ctx, client, db, channelID, ts); err != nil {
+		log.Printf("Warning: conversations.mark %s/%s failed, leaving channel unread: %v", channelID, ts, err)
+		return
+	}
+	if notify != nil {
+		notify(ui.ChannelMarkedReadMsg{ChannelID: channelID})
+	}
+}
+
+// markChannelReadAsync runs markChannelReadAndNotify in a background
+// goroutine and returns immediately. The goroutine is required: p.Send
+// blocks until the Update goroutine receives (bubbletea v2's program
+// channel is unbuffered), so this must never run on Update.
+//
+// client must be non-nil and non-typed-nil: the guard below catches only
+// an untyped nil interface, so a nil *slackclient.Client boxed into a
+// channelMarker would pass it and panic inside the goroutine. Callers
+// check wctx.Client themselves.
 func markChannelReadAsync(
 	ctx context.Context,
 	client channelMarker,
@@ -3136,15 +3168,11 @@ func markChannelReadAsync(
 	if client == nil || ts == "" {
 		return
 	}
-	go func() {
-		if err := markChannelRead(ctx, client, db, channelID, ts); err != nil {
-			log.Printf("Warning: conversations.mark %s/%s failed, leaving channel unread: %v", channelID, ts, err)
-			return
-		}
-		if p != nil {
-			p.Send(ui.ChannelMarkedReadMsg{ChannelID: channelID})
-		}
-	}()
+	var notify func(tea.Msg)
+	if p != nil {
+		notify = func(m tea.Msg) { p.Send(m) }
+	}
+	go markChannelReadAndNotify(ctx, client, db, notify, channelID, ts)
 }
 
 // loadCachedMessages reads up to 50 cached messages for a channel from

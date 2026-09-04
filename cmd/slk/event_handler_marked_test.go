@@ -5,7 +5,9 @@ import (
 	"errors"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/ui"
 )
 
 func TestOnChannelMarked_WritesReadState(t *testing.T) {
@@ -177,5 +179,56 @@ func TestMarkChannelRead_FailureLeavesChannelUnread(t *testing.T) {
 	}
 	if !s.HasUnread {
 		t.Error("HasUnread must stay true so the state can be reconciled later")
+	}
+}
+
+func TestMarkChannelReadAndNotify_FailureDoesNotNotify(t *testing.T) {
+	// The UI must not optimistically clear an unread state that Slack
+	// rejected: a ChannelMarkedReadMsg would blank the sidebar's unread
+	// badge for a channel Slack still considers unread, which is the
+	// cross-client divergence #159 is about.
+	db := newTestDB(t)
+	_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
+	if err := db.UpdateChannelReadState("C1", "", true); err != nil {
+		t.Fatalf("seed has_unread: %v", err)
+	}
+	marker := &fakeChannelMarker{err: errors.New("conversations.mark: invalid_auth")}
+	var sent []tea.Msg
+
+	markChannelReadAndNotify(context.Background(), marker, db, func(m tea.Msg) {
+		sent = append(sent, m)
+	}, "C1", "1700000000.000100")
+
+	if len(sent) != 0 {
+		t.Errorf("notify called %d time(s) with %v; want no notification after a rejected mark", len(sent), sent)
+	}
+	s, _ := db.GetChannelReadState("C1")
+	if s.LastReadTS != "" || !s.HasUnread {
+		t.Errorf("read state = %+v, want untouched after a rejected mark", s)
+	}
+}
+
+func TestMarkChannelReadAndNotify_SuccessNotifiesOnce(t *testing.T) {
+	db := newTestDB(t)
+	_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
+	if err := db.UpdateChannelReadState("C1", "", true); err != nil {
+		t.Fatalf("seed has_unread: %v", err)
+	}
+	marker := &fakeChannelMarker{}
+	var sent []tea.Msg
+
+	markChannelReadAndNotify(context.Background(), marker, db, func(m tea.Msg) {
+		sent = append(sent, m)
+	}, "C1", "1700000000.000100")
+
+	if len(sent) != 1 {
+		t.Fatalf("notify called %d time(s), want exactly 1", len(sent))
+	}
+	got, ok := sent[0].(ui.ChannelMarkedReadMsg)
+	if !ok {
+		t.Fatalf("notified with %T, want ui.ChannelMarkedReadMsg", sent[0])
+	}
+	if got != (ui.ChannelMarkedReadMsg{ChannelID: "C1"}) {
+		t.Errorf("notified with %+v, want ChannelID C1", got)
 	}
 }
