@@ -2954,10 +2954,18 @@ func TestThreadMarkedRemoteMsg_CursorBehindLatestFlipsRowUnread(t *testing.T) {
 	if cmd != nil && cmdContainsMsgType(cmd, statusbar.MarkedUnreadMsg{}) {
 		t.Error("expected no toast on remote thread event")
 	}
+	found := false
 	for _, s := range app.threadsView.Summaries() {
-		if s.ThreadTS == "P1" && !s.Unread {
+		if s.ThreadTS != "P1" {
+			continue
+		}
+		found = true
+		if !s.Unread {
 			t.Error("expected P1 Unread=true when the cursor is behind the latest reply")
 		}
+	}
+	if !found {
+		t.Fatal("summary P1 missing; the assertion above would have passed vacuously")
 	}
 }
 
@@ -2971,10 +2979,18 @@ func TestThreadMarkedRemoteMsg_CursorAtLatestClearsRow(t *testing.T) {
 		ChannelID: "C1", ThreadTS: "P1", LastRead: "5.000000",
 	})
 
+	found := false
 	for _, s := range app.threadsView.Summaries() {
-		if s.ThreadTS == "P1" && s.Unread {
+		if s.ThreadTS != "P1" {
+			continue
+		}
+		found = true
+		if s.Unread {
 			t.Error("expected P1 Unread=false when the cursor reaches the latest reply")
 		}
+	}
+	if !found {
+		t.Fatal("summary P1 missing; the assertion above would have passed vacuously")
 	}
 }
 
@@ -3014,10 +3030,18 @@ func TestThreadMarkedRemoteMsg_SelfReplyDoesNotReFlagUnread(t *testing.T) {
 		ChannelID: "C1", ThreadTS: "P1", LastRead: "7.000000",
 	})
 
+	found := false
 	for _, s := range app.threadsView.Summaries() {
-		if s.ThreadTS == "P1" && s.Unread {
+		if s.ThreadTS != "P1" {
+			continue
+		}
+		found = true
+		if s.Unread {
 			t.Error("replying to a thread must not mark it unread")
 		}
+	}
+	if !found {
+		t.Fatal("summary P1 missing; the assertion above would have passed vacuously")
 	}
 }
 

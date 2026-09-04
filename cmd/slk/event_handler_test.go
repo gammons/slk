@@ -281,9 +281,14 @@ func TestOnThreadMarked_EmptyLastReadIsIgnored(t *testing.T) {
 	h := &rtmEventHandler{
 		db:          db,
 		workspaceID: "T1",
-		isActive:    func() bool { return true },
-		// program intentionally nil: a UI dispatch here would panic,
-		// pinning that the handler returns before touching it.
+		// The guard returns before the isActive check, which is the
+		// first thing on the dispatch path. Failing here pins the
+		// "skip the UI dispatch" half of the requirement; a nil
+		// program would not, since OnThreadMarked nil-checks it.
+		isActive: func() bool {
+			t.Fatal("handler must return before reaching the dispatch path")
+			return true
+		},
 	}
 
 	h.OnThreadMarked("C1", "1700000100.000000", "")
