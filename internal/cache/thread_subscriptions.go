@@ -1,6 +1,8 @@
 package cache
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -65,6 +67,49 @@ func (db *DB) DeleteThreadSubscription(workspaceID, channelID, threadTS string) 
 		return fmt.Errorf("deleting thread_subscriptions: %w", err)
 	}
 	return nil
+}
+
+// UpdateThreadLastRead advances (or rewinds) a thread's read cursor
+// WITHOUT touching `active`. thread_marked carries a read cursor, not a
+// subscription change, so it must not be able to tombstone a row or
+// resurrect one: `active` is owned solely by thread_subscribed,
+// thread_unsubscribed, and the getView reconcile.
+//
+// A missing row is inserted with active=1 because Slack only pushes
+// thread_marked for threads the user is subscribed to.
+func (db *DB) UpdateThreadLastRead(workspaceID, channelID, threadTS, lastRead string) error {
+	if workspaceID == "" || channelID == "" || threadTS == "" {
+		return fmt.Errorf("UpdateThreadLastRead: workspace/channel/thread_ts required")
+	}
+	const q = `
+INSERT INTO thread_subscriptions
+    (workspace_id, channel_id, thread_ts, last_read, active, updated_at)
+VALUES (?, ?, ?, ?, 1, ?)
+ON CONFLICT(workspace_id, channel_id, thread_ts) DO UPDATE SET
+    last_read  = excluded.last_read,
+    updated_at = excluded.updated_at
+`
+	if _, err := db.conn.Exec(q, workspaceID, channelID, threadTS, lastRead, time.Now().Unix()); err != nil {
+		return fmt.Errorf("updating thread last_read: %w", err)
+	}
+	return nil
+}
+
+// GetThreadLastRead returns a thread's read cursor, or "" when no row
+// exists (which the thread panel treats as "no unread boundary").
+// A missing row is not an error.
+func (db *DB) GetThreadLastRead(workspaceID, channelID, threadTS string) (string, error) {
+	const q = `SELECT last_read FROM thread_subscriptions
+WHERE workspace_id=? AND channel_id=? AND thread_ts=?`
+	var lastRead string
+	err := db.conn.QueryRow(q, workspaceID, channelID, threadTS).Scan(&lastRead)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading thread last_read: %w", err)
+	}
+	return lastRead, nil
 }
 
 // ListActiveThreadSubscriptions returns every active subscription in
