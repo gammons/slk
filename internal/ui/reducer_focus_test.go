@@ -232,6 +232,27 @@ func TestTmuxWithoutFocusEvents_DoesNotAutoMark(t *testing.T) {
 	}
 }
 
+// A lone blur arms auto-marking, and only a state assertion can show
+// it. No mark-level test can: scheduleMarkFlush needs terminalFocused
+// too, and the only thing that sets that back to true is the FocusMsg
+// arm, which sets focusEverReported itself. So the assignment in the
+// BlurMsg arm is unobservable through marks today and stays that way
+// only as long as nothing else restores terminalFocused. This test is
+// what keeps the two arms from drifting apart.
+func TestBlurMsg_CountsAsProofOfFocusReporting(t *testing.T) {
+	app, _ := markCapture(t)
+	app.inTmux = true
+	if app.autoMarkArmed() {
+		t.Fatal("must start disarmed in tmux, or the assertion below is vacuous")
+	}
+
+	_, _ = app.Update(tea.BlurMsg{})
+
+	if !app.autoMarkArmed() {
+		t.Error("a BlurMsg proves focus reporting works and must arm auto-marking")
+	}
+}
+
 func TestTmuxAfterBlurEvent_ArmsAutoMarking(t *testing.T) {
 	app, calls := markCapture(t)
 	app.inTmux = true
