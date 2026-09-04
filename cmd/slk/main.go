@@ -4149,12 +4149,18 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	//
 	// Your own message never makes a channel unread on Slack, whichever
 	// client sent it, so the exclusion is global rather than scoped to
-	// the active channel. It compares the raw userID rather than the
-	// derived authorID: a bot message carries userID == "" (and
-	// authorID == botID), and h.currentUserID is also "" before
-	// workspace bootstrap wires it (main.go:2076), so an unguarded
-	// equality would exempt every bot message from marking its channel
-	// unread.
+	// the active channel.
+	//
+	// The userID != "" guard is load-bearing, not defensive: a bot
+	// message carries userID == "", and h.currentUserID is also ""
+	// until workspace bootstrap wires it (main.go:2076), so a bare
+	// equality would classify every bot message arriving in that window
+	// as self-authored and never flag its channel. Keyed on the raw
+	// userID for the same reason the notification block above is: "did
+	// I write this" is a question about the human sender. (authorID
+	// would behave identically today, since it only diverges for bot
+	// messages and a B-prefixed bot ID cannot equal a U-prefixed user
+	// ID — the choice is about intent, not a behavioral difference.)
 	isSelfMessage := userID != "" && userID == h.currentUserID
 	// edited is true only for message_changed
 	// (internal/slack/events.go:307): a re-delivery of a message the
