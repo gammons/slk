@@ -126,6 +126,23 @@ Expected: FAIL — all four report `want error ..., got nil`, because the curren
 Replace `internal/slack/client.go:1215-1278` in full with:
 
 ```go
+// parseOKResponse checks a Slack Web API response envelope. Slack
+// answers HTTP 200 even for failures, so the {"ok":false,"error":...}
+// body is the only signal that a call was rejected.
+func parseOKResponse(method string, raw []byte) error {
+	var resp struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return fmt.Errorf("parsing %s: %w (body=%s)", method, err, truncateForLog(raw))
+	}
+	if !resp.OK {
+		return fmt.Errorf("%s: %s (body=%s)", method, resp.Error, truncateForLog(raw))
+	}
+	return nil
+}
+
 // markChannel posts to conversations.mark. Used by both MarkChannel
 // (read up to ts) and MarkChannelUnread (roll the watermark backward to
 // ts). Routed through postForm so HTTP status, 429, and the Slack
@@ -139,17 +156,7 @@ func (c *Client) markChannel(ctx context.Context, channelID, ts string) error {
 	if err != nil {
 		return err
 	}
-	var resp struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
-	}
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return fmt.Errorf("parsing conversations.mark: %w (body=%s)", err, truncateForLog(raw))
-	}
-	if !resp.OK {
-		return fmt.Errorf("conversations.mark: %s (body=%s)", resp.Error, truncateForLog(raw))
-	}
-	return nil
+	return parseOKResponse("conversations.mark", raw)
 }
 
 // markThread posts to subscriptions.thread.mark. Used by both MarkThread
@@ -176,19 +183,11 @@ func (c *Client) markThread(ctx context.Context, channelID, threadTS, ts string,
 	if err != nil {
 		return err
 	}
-	var resp struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
-	}
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return fmt.Errorf("parsing subscriptions.thread.mark: %w (body=%s)", err, truncateForLog(raw))
-	}
-	if !resp.OK {
-		return fmt.Errorf("subscriptions.thread.mark: %s (body=%s)", resp.Error, truncateForLog(raw))
-	}
-	return nil
+	return parseOKResponse("subscriptions.thread.mark", raw)
 }
 ```
+
+`parseOKResponse` is a package-level function, not a method — it needs no `Client` state. If `internal/slack` already has an equivalent envelope-checking helper, use that one instead of adding a second.
 
 Leave `MarkChannel`, `MarkThread`, `MarkChannelUnread`, and `MarkThreadUnread` (`client.go:1280-1314`) untouched.
 
@@ -400,7 +399,7 @@ git commit -m "feat(cache): add thread read-cursor accessors that preserve activ
 - Consumes: `cache.ThreadSummary` fields `ChannelID`, `ThreadTS`, `LastReplyTS`, `Unread` (`internal/cache/threads.go:12-24`); the private `m.summaries []cache.ThreadSummary` and `m.dirty()`.
 - Produces: `func (m *Model) MarkByThreadTSReadAt(channelID, threadTS, lastRead string) bool` — sets `Unread = LastReplyTS > lastRead` on the matching row. Returns true only when the flag actually changed.
 
-`MarkByThreadTSRead` and `MarkByThreadTSUnread` stay: the explicit user-initiated mark-unread flow still needs to force a row unread (Task 4 keeps it on a separate path).
+`MarkByThreadTSUnread` stays: the user-initiated mark-unread flow still needs to force a row unread, and Task 4 keeps it on a separate path. `MarkByThreadTSRead` is left alone for now but loses both its callers across Tasks 4 and 6; Task 6 deletes it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1238,15 +1237,29 @@ Add a new arm to the same switch, immediately after the `ThreadMarkedRemoteMsg` 
 
 Add `"github.com/gammons/slk/internal/debuglog"` to that file's imports if it is not already present.
 
-- [ ] **Step 6: Run the full suite**
+- [ ] **Step 6: Delete the now-dead MarkByThreadTSRead**
+
+That edit removed the last caller of `threadsview.MarkByThreadTSRead` — Task 4 already replaced the other one, in `applyThreadMark`. Delete the method from `internal/ui/threadsview/model.go` (it sits between `MarkSelectedRead` and `MarkByThreadTSUnread`) along with its tests in `internal/ui/threadsview/model_test.go` (`TestMarkByThreadTSRead_*`).
+
+Keep `MarkSelectedRead` and `MarkByThreadTSUnread`: `openSelectedThreadCmd` still calls the former, and `applyThreadMarkUnread` still calls the latter.
+
+Confirm nothing references it before deleting:
+
+```bash
+grep -rn "MarkByThreadTSRead\b" --include='*.go' internal/ cmd/
+```
+
+Expected: no matches (`MarkByThreadTSReadAt` will not match because of the `\b`).
+
+- [ ] **Step 7: Run the full suite**
 
 Run: `make test`
 Expected: PASS. Any test that supplied a `Mark` closure with the old void signature must be updated to return `tea.Cmd` (return `nil`).
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add internal/ui/callbacks.go internal/ui/services.go internal/ui/msgs.go internal/ui/reducer_threads.go internal/ui/reducer_threads_test.go cmd/slk/main.go
+git add internal/ui/callbacks.go internal/ui/services.go internal/ui/msgs.go internal/ui/reducer_threads.go internal/ui/reducer_threads_test.go internal/ui/threadsview/model.go internal/ui/threadsview/model_test.go cmd/slk/main.go
 git commit -m "feat(threads): persist the thread read cursor after a successful mark"
 ```
 
@@ -1756,6 +1769,10 @@ func TestInactiveChannelArrivalDoesNotMark(t *testing.T) {
 func TestFocusedArrivalLeavesDividerInPlace(t *testing.T) {
 	app, _ := markCapture(t)
 	app.activeChannelID = "C1"
+	// Bind the pane to C1 first. Without this the pane is not in
+	// modelsForChannel("C1"), the arrival never reaches it, and the
+	// assertion below would hold trivially without testing anything.
+	app.messagepane.SetChannel("C1", "general")
 	app.messagepane.SetLastReadTS("1.000000")
 
 	_, cmd := app.Update(NewMessageMsg{
@@ -1764,11 +1781,18 @@ func TestFocusedArrivalLeavesDividerInPlace(t *testing.T) {
 	})
 	feed(t, app, cmd, 0)
 
+	// Guard the guard: prove the arrival actually landed in the pane,
+	// so this test fails if the binding above ever stops working.
+	if n := len(app.messagepane.Messages()); n == 0 {
+		t.Fatal("arrival never reached the pane; the divider assertion would be vacuous")
+	}
 	if got := app.messagepane.LastReadTS(); got != "1.000000" {
 		t.Errorf("messagepane LastReadTS = %q, want the divider left at 1.000000", got)
 	}
 }
 ```
+
+`SetChannel` and `Messages()` are the assumed accessor names on the messages pane model. Check `internal/ui/messages/model.go` for the real ones and use whatever the existing pane tests use to bind a channel and read back its buffer — the point is that the arrival must demonstrably reach the pane before the divider assertion runs.
 
 Add `"strings"`, `"time"`, and the `ids` / `messages` imports to the file.
 
