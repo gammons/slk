@@ -934,6 +934,13 @@ type UnreadInfo struct {
 	Count     int
 	HasUnread bool
 	LastRead  string // Slack message timestamp
+	// Latest is the channel's newest message timestamp as Slack knows
+	// it. It is what client.counts compares against LastRead to decide
+	// HasUnread, and it can name a message conversations.history will
+	// not return -- on a retention-limited plan the message that makes
+	// a channel unread may have aged out of the fetchable window.
+	// Empty when Slack omits it.
+	Latest string
 }
 
 // ThreadsAggregate captures Slack's server-side notion of whether the
@@ -984,17 +991,20 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
 			MentionCount       int    `json:"mention_count"`
 			UnreadCountDisplay int    `json:"unread_count_display,omitempty"`
 			LastRead           string `json:"last_read"`
+			Latest             string `json:"latest"`
 		} `json:"channels"`
 		Mpims []struct {
 			ID           string `json:"id"`
 			HasUnreads   bool   `json:"has_unreads"`
 			MentionCount int    `json:"mention_count"`
 			LastRead     string `json:"last_read"`
+			Latest       string `json:"latest"`
 		} `json:"mpims"`
 		Ims []struct {
 			ID         string `json:"id"`
 			HasUnreads bool   `json:"has_unreads"`
 			LastRead   string `json:"last_read"`
+			Latest     string `json:"latest"`
 		} `json:"ims"`
 		// Threads is the workspace-wide thread-subscription rollup.
 		// Slack returns this top-level when the user has subscribed
@@ -1022,6 +1032,7 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
 			ChannelID: ch.ID,
 			LastRead:  ch.LastRead,
 			HasUnread: ch.HasUnreads,
+			Latest:    ch.Latest,
 		}
 		if ch.HasUnreads {
 			info.Count = ch.MentionCount
@@ -1036,6 +1047,7 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
 			ChannelID: ch.ID,
 			LastRead:  ch.LastRead,
 			HasUnread: ch.HasUnreads,
+			Latest:    ch.Latest,
 		}
 		if ch.HasUnreads {
 			info.Count = max(ch.MentionCount, 1)
@@ -1047,6 +1059,7 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
 			ChannelID: ch.ID,
 			LastRead:  ch.LastRead,
 			HasUnread: ch.HasUnreads,
+			Latest:    ch.Latest,
 		}
 		if ch.HasUnreads {
 			info.Count = 1
