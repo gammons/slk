@@ -75,8 +75,17 @@ func (db *DB) DeleteThreadSubscription(workspaceID, channelID, threadTS string) 
 // resurrect one: `active` is owned solely by thread_subscribed,
 // thread_unsubscribed, and the getView reconcile.
 //
-// A missing row is inserted with active=1 because Slack only pushes
-// thread_marked for threads the user is subscribed to.
+// A missing row is inserted with active=1. That branch is ONLY valid for
+// callers that can prove the user is subscribed to the thread, because
+// ListSubscribedThreads filters on active=1 and would surface the
+// inserted row in the Threads list. The sole such caller is
+// rtmEventHandler.OnThreadMarked: Slack only pushes thread_marked for
+// threads the user is subscribed to, so the insert reconstructs a row
+// the local cache merely hasn't seen yet.
+//
+// Callers that CANNOT prove subscription — notably the local mark path,
+// which fires for any thread the user opens — must use
+// UpdateThreadLastReadIfExists instead.
 func (db *DB) UpdateThreadLastRead(workspaceID, channelID, threadTS, lastRead string) error {
 	if workspaceID == "" || channelID == "" || threadTS == "" {
 		return fmt.Errorf("UpdateThreadLastRead: workspace/channel/thread_ts required")
@@ -90,6 +99,34 @@ ON CONFLICT(workspace_id, channel_id, thread_ts) DO UPDATE SET
     updated_at = excluded.updated_at
 `
 	if _, err := db.conn.Exec(q, workspaceID, channelID, threadTS, lastRead, time.Now().Unix()); err != nil {
+		return fmt.Errorf("updating thread last_read: %w", err)
+	}
+	return nil
+}
+
+// UpdateThreadLastReadIfExists advances a thread's read cursor only when
+// a subscription row already exists, and never creates one. Used by the
+// local mark path, which fires for ANY thread the user opens — including
+// threads they were never subscribed to. Inserting there would fabricate
+// an active=1 row and surface a phantom entry in the Threads list, since
+// ListSubscribedThreads filters on active=1.
+//
+// A missing row is not an error: an unsubscribed thread has no cursor
+// worth storing, and if the user later becomes subscribed the getView
+// reconcile supplies last_read from Slack.
+//
+// Like UpdateThreadLastRead it never touches `active` (so a tombstoned
+// row stays tombstoned) or `latest_reply`.
+func (db *DB) UpdateThreadLastReadIfExists(workspaceID, channelID, threadTS, lastRead string) error {
+	if workspaceID == "" || channelID == "" || threadTS == "" {
+		return fmt.Errorf("UpdateThreadLastReadIfExists: workspace/channel/thread_ts required")
+	}
+	const q = `
+UPDATE thread_subscriptions
+SET last_read = ?, updated_at = ?
+WHERE workspace_id=? AND channel_id=? AND thread_ts=?
+`
+	if _, err := db.conn.Exec(q, lastRead, time.Now().Unix(), workspaceID, channelID, threadTS); err != nil {
 		return fmt.Errorf("updating thread last_read: %w", err)
 	}
 	return nil

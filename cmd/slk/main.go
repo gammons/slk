@@ -3130,8 +3130,13 @@ func markThreadRead(ctx context.Context, client threadMarker, db *cache.DB, team
 		return err
 	}
 	if db != nil {
-		if err := db.UpdateThreadLastRead(teamID, channelID, threadTS, ts); err != nil {
-			debuglog.Cache("markThreadRead: UpdateThreadLastRead %s/%s: %v",
+		// ...IfExists, not UpdateThreadLastRead: this path fires for
+		// ANY thread the user opens, including ones opened from the
+		// messages pane that they never subscribed to. The inserting
+		// variant would fabricate an active=1 row and put a phantom
+		// entry in the Threads list.
+		if err := db.UpdateThreadLastReadIfExists(teamID, channelID, threadTS, ts); err != nil {
+			debuglog.Cache("markThreadRead: UpdateThreadLastReadIfExists %s/%s: %v",
 				channelID, threadTS, err)
 		}
 	}

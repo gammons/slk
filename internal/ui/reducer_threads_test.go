@@ -95,24 +95,48 @@ func TestThreadMarkedLocalMsg_FailureLeavesFlagAlone(t *testing.T) {
 	}
 }
 
+// markSentinelMsg stands in for the ThreadMarkedLocalMsg the production
+// Mark cmd yields, so the test can prove the reducer actually propagated
+// the cmd rather than merely calling Mark for its side effect.
+type markSentinelMsg struct{}
+
+// The cmd returned by Mark is the entire delivery mechanism for this
+// task: it is what persists the read cursor and hands
+// ThreadMarkedLocalMsg back to the reducer. If the reducer drops it,
+// MarkThread still fires but the cursor is never written locally and
+// slk regresses to the stale-cursor bug. Asserting only that Mark was
+// called cannot see that, so this asserts the cmd reaches the caller
+// and yields the sentinel.
 func TestThreadRepliesLoaded_ReturnsMarkCmd(t *testing.T) {
 	app := NewApp()
 	var got []string
 	app.SetThreadService(NewThreadService(ThreadServiceFuncs{
 		Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) tea.Cmd {
 			got = append(got, string(channelID)+"/"+string(threadTS)+"/"+string(ts))
-			return nil
+			return func() tea.Msg { return markSentinelMsg{} }
 		},
 	}))
 	app.threadVisible = true
 	app.threadPanel.SetThread(messages.MessageItem{TS: "P1"}, nil, "C1", "P1")
 
-	_, _ = app.Update(ThreadRepliesLoadedMsg{
+	_, cmd := app.Update(ThreadRepliesLoadedMsg{
 		ThreadTS: "P1",
 		Replies:  []messages.MessageItem{{TS: "R1"}, {TS: "R5"}},
 	})
 
 	if len(got) != 1 || got[0] != "C1/P1/R5" {
 		t.Fatalf("Mark calls = %v, want one call marking up to the newest reply", got)
+	}
+	if cmd == nil {
+		t.Fatal("Update returned no cmd; the mark cmd was dropped, so the read cursor would never be persisted")
+	}
+	var found bool
+	for _, m := range drainBatch(cmd) {
+		if _, ok := m.(markSentinelMsg); ok {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the cmd returned by Mark did not reach the caller; ThreadMarkedLocalMsg would never reach the reducer")
 	}
 }

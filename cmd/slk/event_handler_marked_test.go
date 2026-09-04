@@ -285,3 +285,27 @@ func TestMarkThreadRead_FailureLeavesTheCursorAlone(t *testing.T) {
 		t.Errorf("last_read = %q, want it unchanged after a rejected mark", got)
 	}
 }
+
+// The local mark path fires for every thread the user opens, including
+// threads from the messages pane they never subscribed to. Persisting
+// the cursor must not fabricate an active=1 subscription row, or the
+// Threads list gains a phantom entry until the next getView reconcile.
+func TestMarkThreadRead_UnsubscribedThreadDoesNotFabricateASubscription(t *testing.T) {
+	db := newTestDB(t)
+	marker := &fakeThreadMarker{}
+
+	if err := markThreadRead(context.Background(), marker, db, "T1", "C1", "1700000000.000100", "1700000000.000500"); err != nil {
+		t.Fatalf("markThreadRead: %v", err)
+	}
+
+	if len(marker.calls) != 1 {
+		t.Fatalf("unexpected MarkThread calls: %v", marker.calls)
+	}
+	active, err := db.ListActiveThreadSubscriptions("T1")
+	if err != nil {
+		t.Fatalf("ListActiveThreadSubscriptions: %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("marking an unsubscribed thread read created %d subscription row(s): %+v", len(active), active)
+	}
+}

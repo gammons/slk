@@ -304,3 +304,121 @@ func TestUpdateThreadLastRead_PreservesLatestReply(t *testing.T) {
 		t.Errorf("latest_reply = %q, want it preserved as %q", latestReply, "1700000200.000000")
 	}
 }
+
+// The local mark path fires for ANY thread the user opens, including
+// threads opened from the messages pane that they were never subscribed
+// to. Inserting a row there would fabricate active=1 and put a phantom
+// entry in the Threads list (ListSubscribedThreads filters active=1)
+// until the next getView reconcile tombstoned it.
+func TestUpdateThreadLastReadIfExists_MissingRowIsNotCreated(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+
+	if err := db.UpdateThreadLastReadIfExists("T1", "C1", "P1", "R5"); err != nil {
+		t.Fatalf("a missing row must not be an error: %v", err)
+	}
+
+	active, err := db.ListActiveThreadSubscriptions("T1")
+	if err != nil {
+		t.Fatalf("ListActiveThreadSubscriptions: %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("must not fabricate a subscription row, got %+v", active)
+	}
+	got, err := db.GetThreadLastRead("T1", "C1", "P1")
+	if err != nil {
+		t.Fatalf("GetThreadLastRead: %v", err)
+	}
+	if got != "" {
+		t.Errorf("GetThreadLastRead = %q, want empty; no row should exist at all", got)
+	}
+}
+
+func TestUpdateThreadLastReadIfExists_AdvancesExistingRow(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	if err := db.UpsertThreadSubscription("T1", "C1", "P1", "R1", true); err != nil {
+		t.Fatalf("UpsertThreadSubscription: %v", err)
+	}
+
+	if err := db.UpdateThreadLastReadIfExists("T1", "C1", "P1", "R9"); err != nil {
+		t.Fatalf("UpdateThreadLastReadIfExists: %v", err)
+	}
+
+	active, err := db.ListActiveThreadSubscriptions("T1")
+	if err != nil {
+		t.Fatalf("ListActiveThreadSubscriptions: %v", err)
+	}
+	if len(active) != 1 {
+		t.Fatalf("want 1 active row, got %d", len(active))
+	}
+	if active[0].LastRead != "R9" {
+		t.Errorf("LastRead = %q, want %q", active[0].LastRead, "R9")
+	}
+}
+
+// `active` is owned solely by thread_subscribed, thread_unsubscribed and
+// the getView reconcile. Advancing a cursor must neither resurrect a
+// tombstone nor refuse to record the read.
+func TestUpdateThreadLastReadIfExists_PreservesTombstone(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	if err := db.UpsertThreadSubscription("T1", "C1", "P1", "R1", false); err != nil {
+		t.Fatalf("UpsertThreadSubscription: %v", err)
+	}
+
+	if err := db.UpdateThreadLastReadIfExists("T1", "C1", "P1", "R9"); err != nil {
+		t.Fatalf("UpdateThreadLastReadIfExists: %v", err)
+	}
+
+	active, err := db.ListActiveThreadSubscriptions("T1")
+	if err != nil {
+		t.Fatalf("ListActiveThreadSubscriptions: %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("must not resurrect a tombstoned row, got %d active", len(active))
+	}
+	got, err := db.GetThreadLastRead("T1", "C1", "P1")
+	if err != nil {
+		t.Fatalf("GetThreadLastRead: %v", err)
+	}
+	if got != "R9" {
+		t.Errorf("GetThreadLastRead = %q, want the cursor still advanced to R9", got)
+	}
+}
+
+func TestUpdateThreadLastReadIfExists_PreservesLatestReply(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	fresh := []ThreadSubscription{{
+		WorkspaceID: "T1", ChannelID: "C1", ThreadTS: "1700000100.000000",
+		LastRead: "1700000150.000000", LatestReply: "1700000200.000000", Active: true,
+	}}
+	if err := db.ReconcileThreadSubscriptions("T1", fresh); err != nil {
+		t.Fatalf("ReconcileThreadSubscriptions: %v", err)
+	}
+
+	if err := db.UpdateThreadLastReadIfExists("T1", "C1", "1700000100.000000", "1700000200.000000"); err != nil {
+		t.Fatalf("UpdateThreadLastReadIfExists: %v", err)
+	}
+
+	var latestReply string
+	if err := db.conn.QueryRow(
+		`SELECT latest_reply FROM thread_subscriptions WHERE workspace_id=? AND channel_id=? AND thread_ts=?`,
+		"T1", "C1", "1700000100.000000",
+	).Scan(&latestReply); err != nil {
+		t.Fatalf("reading latest_reply: %v", err)
+	}
+	if latestReply != "1700000200.000000" {
+		t.Errorf("latest_reply = %q, want it preserved", latestReply)
+	}
+}
+
+func TestUpdateThreadLastReadIfExists_RejectsEmptyKey(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	if err := db.UpdateThreadLastReadIfExists("", "C1", "P1", "R5"); err == nil {
+		t.Error("want error for empty workspaceID, got nil")
+	}
+	if err := db.UpdateThreadLastReadIfExists("T1", "", "P1", "R5"); err == nil {
+		t.Error("want error for empty channelID, got nil")
+	}
+	if err := db.UpdateThreadLastReadIfExists("T1", "C1", "", "R5"); err == nil {
+		t.Error("want error for empty threadTS, got nil")
+	}
+}
