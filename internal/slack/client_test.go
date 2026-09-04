@@ -3232,3 +3232,47 @@ func TestMarkThreadUnread_NotOK_ReturnsError(t *testing.T) {
 		t.Fatal("MarkThreadUnread: want error for ok:false, got nil")
 	}
 }
+
+// The mark helpers must reject a 200 with an empty body. Slack always
+// returns a JSON envelope, so an empty 200 is a proxy/edge failure, not a
+// successful mark. Treating it as success would silently drop read state —
+// the failure mode issue #159 exists to eliminate. Pinned explicitly
+// because every other mark stub in this file now returns {"ok":true}, so
+// nothing else would catch a regression here.
+func TestMarkChannel_EmptyBody_ReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	if err := newTestClient(srv).MarkChannel(context.Background(), "C123", "1700000000.000100"); err == nil {
+		t.Fatal("MarkChannel: want error for empty 200 body, got nil")
+	}
+}
+
+// Same constraint on the thread path: parseOKResponse is shared, but
+// markChannel and markThread call it independently.
+func TestMarkThread_EmptyBody_ReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	if err := newTestClient(srv).MarkThread(context.Background(), "C1", "P1", "R5"); err == nil {
+		t.Fatal("MarkThread: want error for empty 200 body, got nil")
+	}
+}
+
+// A 200 carrying an HTML error page (captive portal, gateway, edge node)
+// is not a successful mark either.
+func TestMarkChannel_NonJSONBody_ReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<html>gateway</html>`))
+	}))
+	defer srv.Close()
+
+	if err := newTestClient(srv).MarkChannel(context.Background(), "C123", "1700000000.000100"); err == nil {
+		t.Fatal("MarkChannel: want error for non-JSON 200 body, got nil")
+	}
+}
