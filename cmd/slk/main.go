@@ -2780,19 +2780,16 @@ func lookupUserCached(userID string, userNames map[string]string, db *cache.DB) 
 	return "", false
 }
 
-// resolveUserCached is lookupUserCached plus map memoization: a DB hit
-// is written back to userNames so subsequent lookups skip SQLite.
-// UI-goroutine callers only — the map write is what lookupUserCached
-// exists to avoid. Returns ("", false) when the user is unknown —
-// caller is expected to fall back to userID-as-name and enqueue an
-// async lookup via wctx.UserResolver.Request.
-func resolveUserCached(userID string, userNames map[string]string, db *cache.DB) (string, bool) {
-	name, ok := lookupUserCached(userID, userNames, db)
-	if ok {
-		userNames[userID] = name
-	}
-	return name, ok
-}
+// resolveUserCached used to sit here: lookupUserCached plus a
+// write-back into the shared userNames map, documented "UI-goroutine
+// callers only". Every one of its call sites was off the UI goroutine —
+// three fetch paths running as bubbletea commands and rtmEventHandler
+// .OnMessage running on the WebSocket goroutine — so the map write
+// raced the UI's reads on every resolved name. A function whose stated
+// contract nothing satisfies is a trap, not an optimisation, so it is
+// gone rather than merely unused; the memoisation it bought was one
+// SQLite point lookup, and the resolver patches names into the models
+// anyway.
 
 // resolveUser ensures we have the display name and avatar for a user.
 // If the user is unknown, fetches their profile from Slack on demand.
@@ -2930,7 +2927,7 @@ func resolveDMNames(wctx *WorkspaceContext, db *cache.DB, avatarCache *avatar.Ca
 // and the MessageItem are keyed on so the avatar pipeline can attach.
 func messageAuthor(m slack.Message, userNames map[string]string, db *cache.DB, router *workspaceRouter) (userID, userName string) {
 	if m.User != "" {
-		name, ok := resolveUserCached(m.User, userNames, db)
+		name, ok := lookupUserCached(m.User, userNames, db)
 		if !ok {
 			name = m.User
 			if router != nil {
@@ -2944,7 +2941,7 @@ func messageAuthor(m slack.Message, userNames map[string]string, db *cache.DB, r
 	if m.BotID != "" {
 		name := m.Username
 		if name == "" {
-			if cached, ok := resolveUserCached(m.BotID, userNames, db); ok {
+			if cached, ok := lookupUserCached(m.BotID, userNames, db); ok {
 				name = cached
 			} else {
 				name = m.BotID
@@ -4069,7 +4066,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 		return
 	}
 
-	userName, ok := resolveUserCached(authorID, h.userNames, h.db)
+	userName, ok := lookupUserCached(authorID, h.userNames, h.db)
 	if !ok {
 		userName = authorID
 		if userID != "" {
