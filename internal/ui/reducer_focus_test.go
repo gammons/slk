@@ -1006,6 +1006,28 @@ func TestThreadsDirty_WindowReopensAfterTheFetch(t *testing.T) {
 	}
 }
 
+// A workspace switch inside an open window drops that window's fetch —
+// it was for the workspace the user just left — but must still close
+// the window. The clear has to happen before the fetch arm's team
+// check, not after it: after, this path would leave the window latched
+// open and freeze the new workspace's threads list for the session.
+func TestThreadsDirty_WorkspaceSwitchInsideTheWindowStillReopensIt(t *testing.T) {
+	app, fetches := threadsDirtyCapture(t)
+
+	_, cmd := app.Update(ThreadsListDirtyMsg{TeamID: "T1"})
+	app.activeTeamID = "T2"
+	feed(t, app, cmd, 0)
+	if *fetches != 0 {
+		t.Fatalf("ListFetch calls = %d, want 0: the window's fetch was for the team just left", *fetches)
+	}
+
+	_, cmd = app.Update(ThreadsListDirtyMsg{TeamID: "T2"})
+	feed(t, app, cmd, 0)
+	if *fetches != 1 {
+		t.Errorf("ListFetch calls = %d, want 1: the abandoned window must not stay latched open", *fetches)
+	}
+}
+
 // The team filter has to come before the window opens. Opening it for
 // another workspace's dirty message would swallow the active
 // workspace's next one for the length of the debounce.
