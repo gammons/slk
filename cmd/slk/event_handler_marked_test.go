@@ -232,3 +232,56 @@ func TestMarkChannelReadAndNotify_SuccessNotifiesOnce(t *testing.T) {
 		t.Errorf("notified with %+v, want ChannelID C1", got)
 	}
 }
+
+type fakeThreadMarker struct {
+	err   error
+	calls []string // "channelID/threadTS/ts" per call
+}
+
+func (f *fakeThreadMarker) MarkThread(_ context.Context, channelID, threadTS, ts string) error {
+	f.calls = append(f.calls, channelID+"/"+threadTS+"/"+ts)
+	return f.err
+}
+
+func TestMarkThreadRead_SuccessAdvancesTheCursor(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertThreadSubscription("T1", "C1", "1700000000.000100", "1700000000.000100", true); err != nil {
+		t.Fatalf("seed subscription: %v", err)
+	}
+	marker := &fakeThreadMarker{}
+
+	if err := markThreadRead(context.Background(), marker, db, "T1", "C1", "1700000000.000100", "1700000000.000500"); err != nil {
+		t.Fatalf("markThreadRead: %v", err)
+	}
+
+	if len(marker.calls) != 1 || marker.calls[0] != "C1/1700000000.000100/1700000000.000500" {
+		t.Fatalf("unexpected MarkThread calls: %v", marker.calls)
+	}
+	got, err := db.GetThreadLastRead("T1", "C1", "1700000000.000100")
+	if err != nil {
+		t.Fatalf("GetThreadLastRead: %v", err)
+	}
+	if got != "1700000000.000500" {
+		t.Errorf("last_read = %q, want it advanced to 1700000000.000500; the WS echo may never arrive", got)
+	}
+}
+
+func TestMarkThreadRead_FailureLeavesTheCursorAlone(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertThreadSubscription("T1", "C1", "1700000000.000100", "1700000000.000100", true); err != nil {
+		t.Fatalf("seed subscription: %v", err)
+	}
+	marker := &fakeThreadMarker{err: errors.New("subscriptions.thread.mark: thread_not_found")}
+
+	if err := markThreadRead(context.Background(), marker, db, "T1", "C1", "1700000000.000100", "1700000000.000500"); err == nil {
+		t.Fatal("markThreadRead: want error, got nil")
+	}
+
+	got, err := db.GetThreadLastRead("T1", "C1", "1700000000.000100")
+	if err != nil {
+		t.Fatalf("GetThreadLastRead: %v", err)
+	}
+	if got != "1700000000.000100" {
+		t.Errorf("last_read = %q, want it unchanged after a rejected mark", got)
+	}
+}

@@ -532,6 +532,16 @@ type ThreadMarkedRemoteMsg struct {
 	LastRead  string
 }
 
+// ThreadMarkedLocalMsg reports the outcome of an slk-initiated
+// subscriptions.thread.mark. Err is nil on success, in which case
+// thread_subscriptions.last_read has already been advanced to TS.
+type ThreadMarkedLocalMsg struct {
+	ChannelID string
+	ThreadTS  string
+	TS        string
+	Err       error
+}
+
 // WSMessageDeletedMsg is dispatched by the RTM event handler when a
 // message_deleted event arrives. App.Update handles it by removing the
 // message from both panes and the cache.

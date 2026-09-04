@@ -2,11 +2,15 @@
 //
 // Thread-family reducer for App.Update (Phase 4h).
 //
-// Owns the nine Update arms that drive the thread panel, the
+// Owns the ten Update arms that drive the thread panel, the
 // threads-list view, and the thread-reply send path:
 //
 //	ThreadMarkedRemoteMsg       - apply a remote subscriptions.thread.mark
 //	                              echo to the local read state.
+//	ThreadMarkedLocalMsg        - outcome of an slk-initiated
+//	                              subscriptions.thread.mark: apply the
+//	                              accepted cursor, or log and leave the
+//	                              read state alone when Slack rejected it.
 //	threadFetchDebounceMsg      - debounced j/k stop: fire the actual
 //	                              thread fetch (drops stale generations
 //	                              and post-navigation ticks).
@@ -44,6 +48,7 @@ package ui
 import (
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/debuglog"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/slack/mrkdwn"
 	"github.com/gammons/slk/internal/ui/messages"
@@ -54,6 +59,15 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	switch m := msg.(type) {
 	case ThreadMarkedRemoteMsg:
 		a.applyThreadMark(m.ChannelID, m.ThreadTS, m.LastRead)
+		return nil, true
+
+	case ThreadMarkedLocalMsg:
+		if m.Err != nil {
+			debuglog.Cache("ThreadMarkedLocalMsg: channel=%s thread_ts=%s failed: %v",
+				m.ChannelID, m.ThreadTS, m.Err)
+			return nil, true
+		}
+		a.applyThreadMark(m.ChannelID, m.ThreadTS, m.TS)
 		return nil, true
 
 	case threadFetchDebounceMsg:
@@ -107,9 +121,10 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		a.threadPanel.SetThread(parentMsg, m.Replies, channelID, m.ThreadTS)
 
 		// Mark the thread as read now that the user has actually
-		// seen the replies. Server-side: fire-and-forget against
-		// Slack's subscriptions.thread.mark with the latest reply
-		// ts (or the parent ts when the thread has no replies).
+		// seen the replies. Server-side: subscriptions.thread.mark
+		// with the latest reply ts (or the parent ts when the thread
+		// has no replies); the returned cmd persists the cursor and
+		// reports back as ThreadMarkedLocalMsg.
 		// Local-side: clear the Unread flag in the threads-list
 		// view and refresh the sidebar's threads-row badge so the
 		// UI reflects the change immediately, regardless of which
@@ -122,16 +137,16 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}
 		var cmd tea.Cmd
 		if channelID != "" && m.ThreadTS != "" {
-			threads := a.threads
-			chID := ids.ChannelID(channelID)
-			threadTS := ids.ThreadTS(m.ThreadTS)
-			ts := ids.MessageTS(latestTS)
-			cmd = func() tea.Msg {
-				threads.Mark(chID, threadTS, ts)
-				return nil
-			}
+			cmd = a.threads.Mark(
+				ids.ChannelID(channelID),
+				ids.ThreadTS(m.ThreadTS),
+				ids.MessageTS(latestTS),
+			)
 		}
-		if a.threadsView.MarkByThreadTSRead(channelID, m.ThreadTS) {
+		// Optimistic local clear so the badge updates immediately; the
+		// ThreadMarkedLocalMsg above reconciles it against the cursor
+		// Slack actually accepted.
+		if a.threadsView.MarkByThreadTSReadAt(channelID, m.ThreadTS, latestTS) {
 			a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
 		}
 		return cmd, true

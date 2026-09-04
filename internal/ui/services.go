@@ -144,10 +144,11 @@ type ThreadService interface {
 	CacheRead(channelID ids.ChannelID, threadTS ids.ThreadTS) []messages.MessageItem
 
 	// Mark marks the thread as read on Slack's servers
-	// (subscriptions.thread.mark). channelID is the parent channel,
-	// threadTS is the parent message ts, ts is the latest reply ts
-	// the user has now seen. Best-effort and non-blocking.
-	Mark(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS)
+	// (subscriptions.thread.mark) and, on success, advances the local
+	// thread_subscriptions cursor. channelID is the parent channel,
+	// threadTS is the parent message ts, ts is the latest reply ts the
+	// user has now seen. Returns a tea.Cmd yielding ThreadMarkedLocalMsg.
+	Mark(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) tea.Cmd
 
 	// SendReply posts a reply to threadTS in channelID. Returns a
 	// tea.Msg (typically ThreadReplySentMsg or ThreadReplySendFailedMsg).
@@ -220,11 +221,11 @@ func (t threadAdapter) CacheRead(channelID ids.ChannelID, threadTS ids.ThreadTS)
 	return t.fns.CacheRead(channelID, threadTS)
 }
 
-func (t threadAdapter) Mark(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) {
+func (t threadAdapter) Mark(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) tea.Cmd {
 	if t.fns.Mark == nil {
-		return
+		return nil
 	}
-	t.fns.Mark(channelID, threadTS, ts)
+	return t.fns.Mark(channelID, threadTS, ts)
 }
 
 func (t threadAdapter) SendReply(channelID ids.ChannelID, threadTS ids.ThreadTS, text string) tea.Msg {

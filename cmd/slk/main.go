@@ -1741,20 +1741,29 @@ func run() error {
 				}
 				return loadCachedThreadReplies(db, wctx.Client.UserID(), string(channelID), string(threadTS), wctx.UserNames, tsFormat, router)
 			},
-			Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) {
+			Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) tea.Cmd {
 				chIDStr, threadTSStr, tsStr := string(channelID), string(threadTS), string(ts)
 				wctx := router.Active()
 				if wctx == nil {
-					return
+					return nil
 				}
 				client := wctx.Client
-				go func() {
+				teamID := wctx.TeamID
+				return func() tea.Msg {
 					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 					defer cancel()
-					if err := client.MarkThread(ctx, chIDStr, threadTSStr, tsStr); err != nil {
+					// markThreadRead persists the cursor only after
+					// Slack accepts; see its doc comment.
+					if err := markThreadRead(ctx, client, db, teamID, chIDStr, threadTSStr, tsStr); err != nil {
 						log.Printf("Warning: MarkThread(%s, %s): %v", chIDStr, threadTSStr, err)
+						return ui.ThreadMarkedLocalMsg{
+							ChannelID: chIDStr, ThreadTS: threadTSStr, TS: tsStr, Err: err,
+						}
 					}
-				}()
+					return ui.ThreadMarkedLocalMsg{
+						ChannelID: chIDStr, ThreadTS: threadTSStr, TS: tsStr,
+					}
+				}
 			},
 			SendReply: func(channelID ids.ChannelID, threadTS ids.ThreadTS, text string) tea.Msg {
 				chIDStr, threadTSStr := string(channelID), string(threadTS)
@@ -3096,6 +3105,37 @@ func summarizeCachedRows(rows []cache.Message) string {
 	}
 	return fmt.Sprintf("count=%d oldest=%s newest=%s",
 		len(rows), rows[0].TS, rows[len(rows)-1].TS)
+}
+
+// threadMarker is the single Slack operation the thread mark-read path
+// needs. Narrowed to an interface for the same reason as channelMarker
+// below: it makes the "did Slack accept?" branch testable without real
+// HTTP wiring.
+type threadMarker interface {
+	MarkThread(ctx context.Context, channelID, threadTS, ts string) error
+}
+
+// markThreadRead calls subscriptions.thread.mark and, ONLY if Slack
+// accepts it, advances the local thread_subscriptions cursor. Before
+// this gate existed the cursor advanced solely via the thread_marked WS
+// echo, and a lost echo left last_read stale enough to flip the thread
+// back to unread on the next threads-list refresh.
+//
+// A failed local write is logged, not returned: Slack accepted the mark,
+// so the thread genuinely is read and the cache heals on the next
+// getView reconcile. Only a rejected mark is an error, because that is
+// the case where the UI must not clear the unread flag.
+func markThreadRead(ctx context.Context, client threadMarker, db *cache.DB, teamID, channelID, threadTS, ts string) error {
+	if err := client.MarkThread(ctx, channelID, threadTS, ts); err != nil {
+		return err
+	}
+	if db != nil {
+		if err := db.UpdateThreadLastRead(teamID, channelID, threadTS, ts); err != nil {
+			debuglog.Cache("markThreadRead: UpdateThreadLastRead %s/%s: %v",
+				channelID, threadTS, err)
+		}
+	}
+	return nil
 }
 
 // channelMarker is the single Slack operation the mark-read path needs.
