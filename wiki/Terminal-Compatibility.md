@@ -120,7 +120,7 @@ to slk's pane arms it, and from then on messages arriving in the channel
 you're viewing are marked read while the pane is focused. Without it no
 event ever arrives, auto-marking stays disarmed for the whole session,
 and slk falls back to marking a channel read when you open it — exactly
-what it did before this feature existed.
+the read-marking behavior it had before this feature existed.
 
 slk detects tmux from the `$TMUX` environment variable, read once at
 startup. It does not inspect your tmux config, so with `focus-events`

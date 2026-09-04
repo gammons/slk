@@ -230,6 +230,13 @@ func TestTmuxWithoutFocusEvents_DoesNotAutoMark(t *testing.T) {
 	if len(*calls) != 0 {
 		t.Fatalf("calls = %v; tmux without focus events must not auto-mark", *calls)
 	}
+	// Guard the guard: staging is not gated, so the arrival must have
+	// reached the slot. Without this a mis-shaped NewMessageMsg would
+	// satisfy the assertion above for the wrong reason.
+	if app.pendingChannelMark.ts != "5.000000" {
+		t.Fatalf("pendingChannelMark.ts = %q, want the arrival staged at 5.000000",
+			app.pendingChannelMark.ts)
+	}
 }
 
 // A lone blur arms auto-marking, and only a state assertion can show

@@ -237,7 +237,10 @@ type App struct {
 	// screen — the selected channel, or the open thread panel —
 	// whether or not the user is looking at it. Staging is not
 	// focus-gated; only the flush is, so a slot staged while blurred
-	// waits for the next FocusMsg.
+	// waits for the next FocusMsg. A slot staged while FOCUSED waits
+	// too if auto-marking is not armed — inside a tmux session that
+	// has never reported a focus event that is the whole session, and
+	// the slot is only ever issued if one arrives. See autoMarkArmed.
 	//
 	// Single-slot and newest-wins: a burst coalesces into one request,
 	// and a slot can never issue a ts older than one it already holds
