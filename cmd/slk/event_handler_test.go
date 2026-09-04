@@ -232,7 +232,7 @@ func TestOnMessage_ThreadBroadcast_SetsHasUnread(t *testing.T) {
 	}
 }
 
-func TestOnThreadMarked_UpsertsSubscription(t *testing.T) {
+func TestOnThreadMarked_AdvancesCursorWithoutTombstoning(t *testing.T) {
 	db := newTestDB(t)
 	h := &rtmEventHandler{
 		db:          db,
@@ -240,9 +240,7 @@ func TestOnThreadMarked_UpsertsSubscription(t *testing.T) {
 		isActive:    func() bool { return true },
 	}
 
-	// read=false means the thread is now unread, which corresponds to
-	// active=true in thread_subscriptions.
-	h.OnThreadMarked("C1", "1700000100.000000", "1700000150.000000", false)
+	h.OnThreadMarked("C1", "1700000100.000000", "1700000150.000000")
 
 	got, err := db.ListActiveThreadSubscriptions("T1")
 	if err != nil {
@@ -256,11 +254,46 @@ func TestOnThreadMarked_UpsertsSubscription(t *testing.T) {
 		t.Fatalf("subscription row mismatch: %+v", got[0])
 	}
 
-	// Marking read flips the row to inactive (tombstone-style).
-	h.OnThreadMarked("C1", "1700000100.000000", "1700000150.000000", true)
-	got, _ = db.ListActiveThreadSubscriptions("T1")
-	if len(got) != 0 {
-		t.Fatalf("expected 0 active after read=true, got %d", len(got))
+	// A later cursor move must advance last_read and leave the row
+	// active. Writing `active` here used to tombstone the row, making
+	// the thread disappear from the Threads list.
+	h.OnThreadMarked("C1", "1700000100.000000", "1700000200.000000")
+	got, err = db.ListActiveThreadSubscriptions("T1")
+	if err != nil {
+		t.Fatalf("ListActiveThreadSubscriptions: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("thread must stay in the list after being read, got %d active", len(got))
+	}
+	if got[0].LastRead != "1700000200.000000" {
+		t.Errorf("LastRead = %q, want 1700000200.000000", got[0].LastRead)
+	}
+}
+
+// An empty last_read would erase the read cursor and make the whole
+// thread render unread. UpdateThreadLastRead does not reject it, so the
+// handler must drop the event outright rather than persist or dispatch.
+func TestOnThreadMarked_EmptyLastReadIsIgnored(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpdateThreadLastRead("T1", "C1", "1700000100.000000", "1700000150.000000"); err != nil {
+		t.Fatalf("UpdateThreadLastRead: %v", err)
+	}
+	h := &rtmEventHandler{
+		db:          db,
+		workspaceID: "T1",
+		isActive:    func() bool { return true },
+		// program intentionally nil: a UI dispatch here would panic,
+		// pinning that the handler returns before touching it.
+	}
+
+	h.OnThreadMarked("C1", "1700000100.000000", "")
+
+	lastRead, err := db.GetThreadLastRead("T1", "C1", "1700000100.000000")
+	if err != nil {
+		t.Fatalf("GetThreadLastRead: %v", err)
+	}
+	if lastRead != "1700000150.000000" {
+		t.Errorf("LastRead = %q, want the cursor left untouched at 1700000150.000000", lastRead)
 	}
 }
 
@@ -327,8 +360,7 @@ func TestOnThreadMarked_PersistsOnInactiveWorkspace(t *testing.T) {
 		// persist the DB row.
 	}
 
-	// read=false → thread is now unread → row should be active=true.
-	h.OnThreadMarked("C1", "1700000100.000000", "1700000150.000000", false)
+	h.OnThreadMarked("C1", "1700000100.000000", "1700000150.000000")
 
 	got, err := db.ListActiveThreadSubscriptions("T1")
 	if err != nil {

@@ -40,7 +40,7 @@
 // read-state, and the message service. No single existing
 // controller owns all of that cross-section.
 //
-// Helpers (applyChannelMark, applyThreadMark, scheduleThreadsDirty,
+// Helpers (applyChannelMark, applyThreadMarkUnread, scheduleThreadsDirty,
 // notifyReadStateChanged, userNameFor, nowFormatted, cancelEdit,
 // CloseThread) stay on App; the reducer calls them via `a`.
 package ui
@@ -169,7 +169,7 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		if m.ThreadTS == "" {
 			a.applyChannelMark(m.ChannelID, m.BoundaryTS, m.UnreadCount)
 		} else {
-			a.applyThreadMark(m.ChannelID, m.ThreadTS, m.BoundaryTS, false)
+			a.applyThreadMarkUnread(m.ChannelID, m.ThreadTS, m.BoundaryTS)
 		}
 		return func() tea.Msg {
 			return statusbar.MarkedUnreadMsg{}

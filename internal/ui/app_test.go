@@ -2939,43 +2939,84 @@ func TestChannelMarkedRemoteMsg_InactiveChannel_OnlyUpdatesSidebar(t *testing.T)
 	}
 }
 
-func TestThreadMarkedRemoteMsg_UnreadFlipsRow(t *testing.T) {
+func TestThreadMarkedRemoteMsg_CursorBehindLatestFlipsRowUnread(t *testing.T) {
 	app := NewApp()
 	app.threadsView.SetSummaries([]cache.ThreadSummary{
-		{ChannelID: "C1", ThreadTS: "P1", Unread: false},
+		{ChannelID: "C1", ThreadTS: "P1", LastReplyTS: "5.000000", Unread: false},
 	})
 
 	_, cmd := app.Update(ThreadMarkedRemoteMsg{
 		ChannelID: "C1",
 		ThreadTS:  "P1",
-		TS:        "R5",
-		Read:      false,
+		LastRead:  "4.000000",
 	})
 
 	if cmd != nil && cmdContainsMsgType(cmd, statusbar.MarkedUnreadMsg{}) {
 		t.Error("expected no toast on remote thread event")
 	}
-
 	for _, s := range app.threadsView.Summaries() {
 		if s.ThreadTS == "P1" && !s.Unread {
-			t.Errorf("expected P1 to be Unread=true after remote thread_marked")
+			t.Error("expected P1 Unread=true when the cursor is behind the latest reply")
 		}
 	}
 }
 
-func TestThreadMarkedRemoteMsg_ReadClearsRow(t *testing.T) {
+func TestThreadMarkedRemoteMsg_CursorAtLatestClearsRow(t *testing.T) {
 	app := NewApp()
 	app.threadsView.SetSummaries([]cache.ThreadSummary{
-		{ChannelID: "C1", ThreadTS: "P1", Unread: true},
+		{ChannelID: "C1", ThreadTS: "P1", LastReplyTS: "5.000000", Unread: true},
 	})
 
 	_, _ = app.Update(ThreadMarkedRemoteMsg{
-		ChannelID: "C1", ThreadTS: "P1", TS: "R5", Read: true,
+		ChannelID: "C1", ThreadTS: "P1", LastRead: "5.000000",
 	})
 
 	for _, s := range app.threadsView.Summaries() {
 		if s.ThreadTS == "P1" && s.Unread {
-			t.Errorf("expected P1 Unread=false after remote thread_marked read=true")
+			t.Error("expected P1 Unread=false when the cursor reaches the latest reply")
+		}
+	}
+}
+
+// The open thread panel draws its "── new ──" landmark after the
+// boundary ts, so a remote cursor move must move the landmark rather
+// than clear it: a cursor mid-thread still has unread replies below it.
+func TestThreadMarkedRemoteMsg_MovesOpenPanelBoundaryToCursor(t *testing.T) {
+	app := NewApp()
+	app.threadPanel.SetThread(
+		messages.MessageItem{TS: "P1", UserID: "U1", Text: "parent"},
+		[]messages.MessageItem{
+			{TS: "R1", UserID: "U1", Text: "r1"},
+			{TS: "R2", UserID: "U1", Text: "r2"},
+		}, "C1", "P1")
+	app.threadVisible = true
+
+	_, _ = app.Update(ThreadMarkedRemoteMsg{
+		ChannelID: "C1", ThreadTS: "P1", LastRead: "R1",
+	})
+
+	if got := app.threadPanel.UnreadBoundaryTS(); got != "R1" {
+		t.Errorf("thread panel unreadBoundary = %q, want R1", got)
+	}
+}
+
+// Regression for the reported bug: posting a reply auto-subscribes you,
+// so Slack echoes thread_marked with active=true. slk used to read that
+// as "unread" and re-flag the thread the user was looking at.
+func TestThreadMarkedRemoteMsg_SelfReplyDoesNotReFlagUnread(t *testing.T) {
+	app := NewApp()
+	app.threadsView.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "P1", LastReplyTS: "7.000000", Unread: false},
+	})
+
+	// Slack's echo after our own reply: cursor caught up to our reply.
+	_, _ = app.Update(ThreadMarkedRemoteMsg{
+		ChannelID: "C1", ThreadTS: "P1", LastRead: "7.000000",
+	})
+
+	for _, s := range app.threadsView.Summaries() {
+		if s.ThreadTS == "P1" && s.Unread {
+			t.Error("replying to a thread must not mark it unread")
 		}
 	}
 }

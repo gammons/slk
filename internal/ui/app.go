@@ -3146,30 +3146,41 @@ func (a *App) applyChannelMark(channelID, ts string, unreadCount int) {
 	a.notifyReadStateChanged()
 }
 
-// applyThreadMark updates local state for a thread-level read-state
-// change. read=false means the thread is now unread (move boundary +
-// flip threads-view row); read=true means the thread is now read
-// (clear boundary + clear threads-view row).
-func (a *App) applyThreadMark(channelID, threadTS, ts string, read bool) {
-	debuglog.Cache("applyThreadMark: channel=%s thread_ts=%s ts=%s read=%v active=%s",
-		channelID, threadTS, ts, read, a.activeChannelID)
+// applyThreadMark updates local state for an inbound thread read-cursor
+// move. Read/unread is derived by comparing the cursor against the
+// thread's newest known reply — never from the subscription's `active`
+// flag, which means "subscribed".
+func (a *App) applyThreadMark(channelID, threadTS, lastRead string) {
+	debuglog.Cache("applyThreadMark: channel=%s thread_ts=%s last_read=%s active=%s",
+		channelID, threadTS, lastRead, a.activeChannelID)
 	if a.threadVisible &&
 		a.threadPanel.ChannelID() == channelID &&
 		a.threadPanel.ThreadTS() == threadTS {
-		if read {
-			a.threadPanel.SetUnreadBoundary("")
-		} else {
-			a.threadPanel.SetUnreadBoundary(ts)
-		}
+		// The panel renders its "── new ──" landmark after the boundary
+		// ts, so a fully-caught-up cursor renders no landmark.
+		a.threadPanel.SetUnreadBoundary(lastRead)
 	}
-	if read {
-		if a.threadsView.MarkByThreadTSRead(channelID, threadTS) {
-			a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
-		}
-	} else {
-		if a.threadsView.MarkByThreadTSUnread(channelID, threadTS) {
-			a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
-		}
+	if a.threadsView.MarkByThreadTSReadAt(channelID, threadTS, lastRead) {
+		a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
+	}
+}
+
+// applyThreadMarkUnread forces a thread unread from boundaryTS. Used by
+// the user-initiated mark-unread flow, which knows its own intent.
+// It does not go through applyThreadMark's cursor comparison: Slack sets
+// the cursor to just BEFORE boundaryTS, so comparing boundaryTS against
+// the newest reply would wrongly report the thread read whenever the
+// boundary is that newest reply.
+func (a *App) applyThreadMarkUnread(channelID, threadTS, boundaryTS string) {
+	debuglog.Cache("applyThreadMarkUnread: channel=%s thread_ts=%s boundary=%s active=%s",
+		channelID, threadTS, boundaryTS, a.activeChannelID)
+	if a.threadVisible &&
+		a.threadPanel.ChannelID() == channelID &&
+		a.threadPanel.ThreadTS() == threadTS {
+		a.threadPanel.SetUnreadBoundary(boundaryTS)
+	}
+	if a.threadsView.MarkByThreadTSUnread(channelID, threadTS) {
+		a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
 	}
 }
 

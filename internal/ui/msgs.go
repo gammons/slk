@@ -523,14 +523,13 @@ type ChannelMarkedRemoteMsg struct {
 }
 
 // ThreadMarkedRemoteMsg is dispatched by the WS event handler when
-// Slack pushes a thread_marked event. Read=true means the thread is
-// now read (clear local boundary + threads-view row); Read=false means
-// it's unread.
+// Slack pushes a thread_marked event. LastRead is the thread's new read
+// cursor; whether that means read or unread is decided by comparing it
+// against the thread's newest known reply.
 type ThreadMarkedRemoteMsg struct {
 	ChannelID string
 	ThreadTS  string
-	TS        string
-	Read      bool
+	LastRead  string
 }
 
 // WSMessageDeletedMsg is dispatched by the RTM event handler when a

@@ -35,9 +35,12 @@ type EventHandler interface {
 	// drive the sidebar badge).
 	OnChannelMarked(channelID, ts string, unreadCount int)
 	// OnThreadMarked is delivered when Slack pushes a thread_marked
-	// event. read indicates whether the thread is now read (true) or
-	// unread (false). ts is the new boundary within the thread.
-	OnThreadMarked(channelID, threadTS, ts string, read bool)
+	// event: the user's read cursor inside a thread moved (in either
+	// direction). lastRead is the new cursor. The subscription block's
+	// `active` flag is deliberately NOT passed on — it means
+	// "subscribed", not "unread"; see OnThreadSubscriptionChanged,
+	// which owns that bit.
+	OnThreadMarked(channelID, threadTS, lastRead string)
 
 	// OnThreadSubscriptionChanged is delivered for thread_subscribed and
 	// thread_unsubscribed WS events. active=true on subscribe,
@@ -245,9 +248,9 @@ func (e wsPrefChangeEvent) stringValue() string {
 
 // wsThreadMarkedEvent represents a thread_marked event from Slack's
 // browser-protocol WebSocket. The subscription block carries the
-// channel/thread/last-read-ts and an `active` flag (true means the
-// thread is now unread / subscribed for unread updates; false means
-// the thread is now read).
+// channel/thread and the new last-read ts. It also carries an `active`
+// flag, which means "subscribed for unread updates" — the same meaning
+// it has in wsThreadSubscribedEvent — and is NOT a read/unread signal.
 type wsThreadMarkedEvent struct {
 	Type         string `json:"type"`
 	Subscription struct {
@@ -379,12 +382,9 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 		if err := json.Unmarshal(data, &evt); err != nil {
 			return
 		}
-		// active=true means subscribed-for-unread, i.e. the thread is
-		// now unread. Invert for the read flag we hand to the handler.
-		read := !evt.Subscription.Active
-		debuglog.WS("thread_marked: channel=%s thread_ts=%s last_read=%s read=%v",
-			evt.Subscription.Channel, evt.Subscription.ThreadTS, evt.Subscription.LastRead, read)
-		handler.OnThreadMarked(evt.Subscription.Channel, evt.Subscription.ThreadTS, evt.Subscription.LastRead, read)
+		debuglog.WS("thread_marked: channel=%s thread_ts=%s last_read=%s",
+			evt.Subscription.Channel, evt.Subscription.ThreadTS, evt.Subscription.LastRead)
+		handler.OnThreadMarked(evt.Subscription.Channel, evt.Subscription.ThreadTS, evt.Subscription.LastRead)
 
 	case "thread_subscribed", "thread_unsubscribed":
 		var evt wsThreadSubscribedEvent

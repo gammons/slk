@@ -53,7 +53,7 @@ import (
 var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	switch m := msg.(type) {
 	case ThreadMarkedRemoteMsg:
-		a.applyThreadMark(m.ChannelID, m.ThreadTS, m.TS, m.Read)
+		a.applyThreadMark(m.ChannelID, m.ThreadTS, m.LastRead)
 		return nil, true
 
 	case threadFetchDebounceMsg:

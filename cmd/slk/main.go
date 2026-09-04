@@ -1658,7 +1658,7 @@ func run() error {
 					// thread_subscriptions row's last_read is the
 					// source of truth and gets updated when Slack
 					// echoes back a thread_marked event. The UI
-					// updates immediately via applyThreadMark; on
+					// updates immediately via applyThreadMarkUnread; on
 					// next refresh cache.ListSubscribedThreads will
 					// reconcile from the persisted subscription row.
 				}
@@ -4406,18 +4406,27 @@ func (h *rtmEventHandler) OnChannelMarked(channelID, ts string, unreadCount int)
 	})
 }
 
-func (h *rtmEventHandler) OnThreadMarked(channelID, threadTS, ts string, read bool) {
-	// Persist subscription state regardless of active-workspace state.
-	// Mirrors OnChannelMarked / OnMessage: durable cache must reflect
-	// every WS event, otherwise switching to an inactive workspace
-	// would surface stale read state and (worse) miss newly-unread
-	// threads until the next reconnect-driven reconcile. active =
-	// !read per the dispatch in internal/slack/events.go: WS `active`
-	// means "subscribed for unread updates", which corresponds to
-	// active=1 in our table.
+// OnThreadMarked persists a thread read-cursor move from Slack's
+// thread_marked event. It writes last_read ONLY: `active` is owned by
+// thread_subscribed / thread_unsubscribed / the getView reconcile.
+// Writing `active` here used to tombstone the row on every read, which
+// made the thread vanish from the Threads list until the next sweep.
+func (h *rtmEventHandler) OnThreadMarked(channelID, threadTS, lastRead string) {
+	// An empty cursor would erase the thread's read position and make
+	// every reply render unread. UpdateThreadLastRead does not reject
+	// it, so drop the event here instead of corrupting the row.
+	if lastRead == "" {
+		debuglog.Cache("OnThreadMarked: empty last_read for %s/%s, ignoring",
+			channelID, threadTS)
+		return
+	}
+
+	// Persist regardless of active-workspace state, matching OnMessage
+	// and OnChannelMarked: dropping the write on inactive workspaces
+	// leaves stale read state behind on the next switch.
 	if h.db != nil {
-		if err := h.db.UpsertThreadSubscription(h.workspaceID, channelID, threadTS, ts, !read); err != nil {
-			debuglog.Cache("OnThreadMarked: UpsertThreadSubscription %s/%s: %v",
+		if err := h.db.UpdateThreadLastRead(h.workspaceID, channelID, threadTS, lastRead); err != nil {
+			debuglog.Cache("OnThreadMarked: UpdateThreadLastRead %s/%s: %v",
 				channelID, threadTS, err)
 		}
 	}
@@ -4434,9 +4443,11 @@ func (h *rtmEventHandler) OnThreadMarked(channelID, threadTS, ts string, read bo
 	h.program.Send(ui.ThreadMarkedRemoteMsg{
 		ChannelID: channelID,
 		ThreadTS:  threadTS,
-		TS:        ts,
-		Read:      read,
+		LastRead:  lastRead,
 	})
+	// Optimistic flag updates above are in-memory only; this schedules
+	// the authoritative recompute from cache.ListSubscribedThreads.
+	h.program.Send(ui.ThreadsListDirtyMsg{TeamID: h.workspaceID})
 }
 
 // OnThreadSubscriptionChanged persists a subscribe/unsubscribe event
