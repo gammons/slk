@@ -108,7 +108,7 @@ type WorkspaceContext struct {
 	// Edge is the edgeapi client for this workspace: the
 	// conditional-revalidation and server-side-search endpoints. Nil
 	// only if construction failed, and every caller nil-checks.
-	Edge       *edge.Client
+	Edge *edge.Client
 	// EdgeHealth records whether edge resolution is working for this
 	// workspace this session. bootstrap marks it degraded on a
 	// wholesale failure; the user resolver reads it to skip batch
@@ -2132,26 +2132,11 @@ func run() error {
 			})
 
 			// Fetch the workspace's custom emoji in the background. When
-			// done, send a follow-up so message rendering and the emoji
-			// picker pick up the full set.
-			//
-			// This runs unconditionally. Bootstrap may already have
-			// published the handful conversations.view returned for the
-			// restored channel, but that is a per-conversation subset —
-			// only emoji.list knows the workspace. Best-effort: on
-			// failure nothing is sent, so the bootstrap subset (or the
-			// built-ins) stays in place rather than being cleared.
-			go func(teamID string) {
-				emojis, err := wctx.Client.ListCustomEmoji(ctx)
-				if err != nil {
-					return
-				}
-				wctx.SetCustomEmoji(emojis)
-				p.Send(ui.CustomEmojisLoadedMsg{
-					TeamID:      teamID,
-					CustomEmoji: emojis,
-				})
-			}(wctx.TeamID)
+			// done, a follow-up message makes rendering and the emoji
+			// picker pick up the full set. Runs unconditionally — see
+			// fetchWorkspaceEmoji for why the bootstrap subset must not
+			// be treated as an answer.
+			go fetchWorkspaceEmoji(ctx, wctx, wctx.Client, p, wctx.TeamID)
 
 			// Fetch workspace usergroups in the background. When done,
 			// send a follow-up so render caches and compose pickers can
