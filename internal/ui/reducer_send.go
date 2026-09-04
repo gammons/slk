@@ -286,8 +286,10 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 	// so those panels went stale until a reopen forced a refetch.)
 	//
 	// Shared with the thread read-cursor gate below, which must not
-	// drift from this one: the message is marked read exactly when it
-	// is rendered into the open panel.
+	// drift from this one: the message is staged for a read-cursor
+	// advance exactly when it is rendered into the open panel. Whether
+	// that advance is actually issued is decided later, at flush time,
+	// by terminal focus.
 	inOpenThreadPanel := a.threadVisible &&
 		m.ChannelID == a.threadPanel.ChannelID() &&
 		m.Message.ThreadTS == a.threadPanel.ThreadTS()

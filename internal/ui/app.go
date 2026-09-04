@@ -219,21 +219,32 @@ type App struct {
 	terminalFocused bool
 
 	// pendingChannelMark / pendingThreadMark stage a read-cursor
-	// advance for a message that arrived in what the user is currently
-	// looking at. Single-slot and newest-wins: a burst coalesces into
-	// one request, and a slot can never issue a ts older than one it
-	// already holds. Staged whether focused or blurred; only the flush
-	// is focus-gated, so a blurred slot waits for the next FocusMsg.
+	// advance for a message that arrived in what is currently on
+	// screen — the selected channel, or the open thread panel —
+	// whether or not the user is looking at it. Staging is not
+	// focus-gated; only the flush is, so a slot staged while blurred
+	// waits for the next FocusMsg.
+	//
+	// Single-slot and newest-wins: a burst coalesces into one request,
+	// and a slot can never issue a ts older than one it already holds
+	// FOR THE SAME TARGET. Switching target (another channel, another
+	// thread) replaces the slot outright, so a staged advance the
+	// flush has not yet issued is dropped. Accepted: that advance is
+	// reconciled by the target's next entry mark or by reconnect sync.
 	pendingChannelMark pendingChannelMarkState
 	pendingThreadMark  pendingThreadMarkState
 
-	// markFlushScheduled guards against stacking flush ticks; see
+	// markFlushScheduled caps the conversations.mark RATE at one per
+	// markFlushDebounce per target, not merely the number of live
+	// timers: without it a stream arriving faster than the debounce
+	// would interleave ticks with arrivals, and each tick would find
+	// the slot already refilled and issue a request. See
 	// scheduleMarkFlush.
 	markFlushScheduled bool
 
-	// markFlushDebounce bounds a burst to one network write per
-	// interval per target. Longer than threadsDirtyDebounce (150ms)
-	// because that one only re-queries local SQLite.
+	// markFlushDebounce is that interval. Longer than
+	// threadsDirtyDebounce (150ms) because that one only re-queries
+	// local SQLite, whereas this one is a network write.
 	markFlushDebounce time.Duration
 
 	// fetchingOlder tracks in-flight older-history backfills per
@@ -1928,9 +1939,15 @@ func (a *App) recordThreadMark(channelID, threadTS, ts string) {
 
 // scheduleMarkFlush returns a tick that flushes the pending marks after
 // the debounce interval, or nil when nothing is staged, a tick is
-// already in flight, or the terminal is blurred. Blurred slots stay
-// staged and flush on the next FocusMsg instead, so no timer is armed
-// while the user is away.
+// already in flight, or the terminal is blurred.
+//
+// The markFlushScheduled arm is what caps the mark rate: while a tick
+// is in flight, further arrivals only update the slots. Drop it and a
+// stream arriving faster than the debounce issues one
+// conversations.mark per message.
+//
+// Blurred slots stay staged and flush on the next FocusMsg instead, so
+// no timer is armed while the user is away.
 func (a *App) scheduleMarkFlush() tea.Cmd {
 	if a.markFlushScheduled || !a.terminalFocused {
 		return nil

@@ -132,20 +132,26 @@ func TestFanout_SameChannelLoadDoesNotAliasSlices(t *testing.T) {
 	}
 }
 
-// TestFanout_MarkReadOnlyOnFocusedSelection pins the spec read-state
-// rule: realtime traffic to an UNFOCUSED window must not trigger a
-// mark-read — the read marker only advances on focused entry.
+// TestFanout_MarkReadOnlyOnFocusedSelection pins the read-state rule
+// for UNFOCUSED windows: realtime traffic to a window that is merely
+// visible must not trigger a mark-read.
 //
-// Seam choice: the only UI-side mark-read producer is
-// ChannelService.MarkRead, dispatched solely from the tier-1 branch
-// of reduceChannelSelected (reducer_channels.go). reduceNewMessage
-// never calls it, and nothing else in the NewMessageMsg path can.
-// The strongest assertions available are therefore both of: (1) a
-// MarkRead spy on the channel service records zero calls when the
-// NewMessageMsg cmd batch is drained — guards against a future
-// fan-out accidentally wiring mark-read into the path; and (2) the
-// unfocused C1 model's LastReadTS is unchanged — guards the
-// per-model write loop against advancing the local watermark.
+// Scope note (#159): reduceNewMessage IS now a mark-read producer —
+// an arrival in the FOCUSED window's channel legitimately stages a
+// cursor advance and flushes it while the terminal has focus (see
+// internal/ui/reducer_focus_test.go). This test covers the other
+// case: twoWindowApp leaves activeChannelID == "C2", so the C1
+// arrival below reaches only the unfocused window, which is exactly
+// the configuration that must stage nothing. The other UI-side
+// producer, ChannelService.MarkRead from the tier-1 branch of
+// reduceChannelSelected (reducer_channels.go), is not on this path
+// either.
+//
+// Two assertions: (1) a MarkRead spy records zero calls when the
+// NewMessageMsg cmd batch is drained — the unfocused window's channel
+// never advances Slack's cursor; and (2) the unfocused C1 model's
+// LastReadTS is unchanged — guards the per-model write loop against
+// advancing the local watermark.
 func TestFanout_MarkReadOnlyOnFocusedSelection(t *testing.T) {
 	a, w1, _ := twoWindowApp(t)
 	a.winModels[w1].SetLastReadTS("5.0")

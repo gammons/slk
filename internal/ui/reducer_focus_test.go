@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -261,6 +262,46 @@ func TestBurstCoalescesToNewestTS(t *testing.T) {
 
 	if len(*calls) != 1 || (*calls)[0] != "ch:C1/3.000000" {
 		t.Fatalf("calls = %v, want a single mark at the newest ts", *calls)
+	}
+}
+
+// markFlushScheduled bounds the conversations.mark RATE, not just the
+// number of live timers. TestBurstCoalescesToNewestTS cannot see this:
+// there the whole burst lands before any tick fires, so the slot is
+// empty by the time the extra ticks arrive and they cost nothing.
+//
+// Under a stream that outpaces the debounce interval the ticks
+// interleave with the arrivals instead, and every tick lands on a slot
+// the next arrival has already refilled -- one mark per message
+// against a Tier-3 endpoint. This loop models that timing discretely:
+// each step delivers one arrival and then fires the tick armed on the
+// PREVIOUS step, i.e. arrivals run at twice the debounce rate.
+func TestSustainedStreamMarksPerWindowNotPerMessage(t *testing.T) {
+	app, calls := markCapture(t)
+	app.activeChannelID = "C1"
+
+	const steps = 8
+	var dueNextStep tea.Cmd
+	for i := 0; i < steps; i++ {
+		_, cmd := app.Update(NewMessageMsg{
+			ChannelID: "C1",
+			Message:   messages.MessageItem{TS: fmt.Sprintf("%d.000000", i), UserID: "U2"},
+		})
+		fireNow := dueNextStep
+		dueNextStep = cmd
+		feed(t, app, fireNow, 0)
+	}
+	feed(t, app, dueNextStep, 0)
+
+	// One mark per debounce window is steps/2 here; one per message
+	// would be steps-1. The midpoint separates them cleanly.
+	if n := len(*calls); n > steps/2 {
+		t.Fatalf("issued %d marks for %d arrivals (%v); the debounce must cap this at %d",
+			n, steps, *calls, steps/2)
+	}
+	// Not vacuous: the stream must still advance the cursor.
+	if len(*calls) == 0 {
+		t.Fatal("a sustained stream issued no mark at all")
 	}
 }
 
