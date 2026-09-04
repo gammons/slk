@@ -185,17 +185,24 @@ type WorkspaceContext struct {
 	TeamName      string
 	UserID        string
 	UnresolvedDMs []UnresolvedDM
-	CustomEmoji   map[string]string // emoji name -> URL or "alias:target"
+	// customEmoji holds this workspace's emoji name -> URL (or
+	// "alias:target") map. Access it via CustomEmoji/SetCustomEmoji,
+	// never directly.
+	//
+	// atomic.Pointer for the same reason as userGroups below: the
+	// background emoji.list fetch writes it while the workspace-switch
+	// cmd goroutine reads it. It used to be a plain map, exempted on
+	// the grounds that its single background write only happened on the
+	// rare conversations.history fallback; that stopped being true once
+	// emoji.list was restored to the normal path.
+	customEmoji atomic.Pointer[map[string]string]
 	// userGroups holds this workspace's usergroup ID -> handle map.
 	// Access it via UserGroups/SetUserGroups, never directly.
 	//
 	// atomic.Pointer (not a plain map) because the write happens on the
 	// background usergroups.list fetch goroutine while reads happen on
 	// the bubbletea Update/cmd goroutines (workspace switch, search) and
-	// on the RTM event loop (notification body stripping). This is where
-	// UserGroups differs from the CustomEmoji field it otherwise mirrors:
-	// CustomEmoji is only ever consumed through the tea message loop, so
-	// its single background write is never read cross-goroutine.
+	// on the RTM event loop (notification body stripping).
 	//
 	// The stored map is published once and never mutated afterwards, so
 	// readers need no further synchronization.
@@ -242,6 +249,22 @@ func (w *WorkspaceContext) UserGroups() map[string]string {
 // workspace. The caller must not mutate the map afterwards.
 func (w *WorkspaceContext) SetUserGroups(groups map[string]string) {
 	w.userGroups.Store(&groups)
+}
+
+// CustomEmoji returns this workspace's emoji name -> URL map, or an
+// empty map before the first publish.
+func (w *WorkspaceContext) CustomEmoji() map[string]string {
+	if m := w.customEmoji.Load(); m != nil {
+		return *m
+	}
+	return map[string]string{}
+}
+
+// SetCustomEmoji publishes an emoji name -> URL (or "alias:target")
+// map for this workspace. The caller must not mutate the map
+// afterwards.
+func (w *WorkspaceContext) SetCustomEmoji(emojis map[string]string) {
+	w.customEmoji.Store(&emojis)
 }
 
 // workspaceRouter holds the program-wide "active workspace" pointer.
@@ -1907,7 +1930,7 @@ func run() error {
 			UserNames:        wctx.UserNames,
 			ExternalUsers:    external,
 			UserID:           wctx.UserID,
-			CustomEmoji:      wctx.CustomEmoji,
+			CustomEmoji:      wctx.CustomEmoji(),
 			UserGroups:       wctx.UserGroups(),
 			SectionsProvider: sectionsProviderAdapter{store: wctx.SectionStore},
 		}
@@ -2100,33 +2123,19 @@ func run() error {
 				UserNames:        wctx.UserNames,
 				ExternalUsers:    external,
 				UserID:           wctx.UserID,
-				CustomEmoji:      wctx.CustomEmoji,  // from conversations.view, or filled by the goroutine below
-				UserGroups:       wctx.UserGroups(), // empty at this point; filled by the goroutine below
+				CustomEmoji:      wctx.CustomEmoji(), // bootstrap subset; replaced by the goroutine below
+				UserGroups:       wctx.UserGroups(),  // empty at this point; filled by the goroutine below
 				SectionsProvider: sectionsProviderAdapter{store: wctx.SectionStore},
 				InitialActive:    isInitial,
 				LastChannelID:    mostRecentlyVisitedChannel(wctx.LastVisitedByChannel),
 			})
 
-			// Fetch workspace custom emojis in the background. When done,
-			// send a follow-up so the active compose can refresh its
-			// emoji picker entries. Best-effort: failure leaves the picker
-			// using built-ins only.
-			go func(teamID string) {
-				// Nothing to fetch when conversations.view already
-				// returned them, which is the normal path.
-				if len(wctx.CustomEmoji) > 0 {
-					return
-				}
-				emojis, err := wctx.Client.ListCustomEmoji(ctx)
-				if err != nil {
-					return
-				}
-				wctx.CustomEmoji = emojis
-				p.Send(ui.CustomEmojisLoadedMsg{
-					TeamID:      teamID,
-					CustomEmoji: emojis,
-				})
-			}(wctx.TeamID)
+			// Fetch the workspace's custom emoji in the background. When
+			// done, a follow-up message makes rendering and the emoji
+			// picker pick up the full set. Runs unconditionally — see
+			// fetchWorkspaceEmoji for why the bootstrap subset must not
+			// be treated as an answer.
+			go fetchWorkspaceEmoji(ctx, wctx, wctx.Client, p, wctx.TeamID)
 
 			// Fetch workspace usergroups in the background. When done,
 			// send a follow-up so render caches and compose pickers can
@@ -2306,7 +2315,6 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		AvatarURLs:           &sync.Map{},
 		UserNamesByHandle:    make(map[string]string),
 		BotUserIDs:           make(map[string]bool),
-		CustomEmoji:          make(map[string]string),
 		LastVisitedByChannel: make(map[string]int64),
 		ThreadSubsGate:       threadSubsGate{window: threadSubsSyncInterval},
 	}
@@ -2423,13 +2431,20 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	// and hydrateFirstSight writes the cache rows the sidebar's
 	// channel list is later reconciled against.
 	applyBootUsers(wctx, res)
-	// conversations.view returns the workspace's custom emoji next to
-	// the history it was asked for, which is what emoji.list would
-	// have gone and fetched separately. Empty on the
-	// conversations.history fallback and when no channel was opened —
-	// the background fetch below still covers those.
+	// conversations.view returns the custom emoji THAT CONVERSATION
+	// USES next to the history it was asked for — not the workspace's
+	// set. An earlier version of this code read it as the latter and
+	// skipped emoji.list whenever it was non-empty, which left every
+	// channel other than the restored one rendering its custom emoji as
+	// literal `:name:`.
+	//
+	// So it is published as a head start, not an answer: the first
+	// channel's emoji resolve without waiting on a round trip, and the
+	// emoji.list fetch in run() replaces this with the full set as soon
+	// as it lands. Empty on the conversations.history fallback and when
+	// no channel was opened; emoji.list covers those the same way.
 	if len(res.Emojis) > 0 {
-		wctx.CustomEmoji = res.Emojis
+		wctx.SetCustomEmoji(res.Emojis)
 	}
 	hydrateFirstSight(db, client.TeamID(), res)
 

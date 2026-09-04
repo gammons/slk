@@ -37,7 +37,7 @@ type SlackAPI interface {
 	GetUsersInConversationContext(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error)
 	GetUserInfo(user string) (*slack.User, error)
 	GetBotInfoContext(ctx context.Context, parameters slack.GetBotInfoParameters) (*slack.Bot, error)
-	GetEmoji() (map[string]string, error)
+	GetEmojiContext(ctx context.Context) (map[string]string, error)
 	PostMessage(channelID string, options ...slack.MsgOption) (string, string, error)
 	UpdateMessage(channelID, timestamp string, options ...slack.MsgOption) (string, string, string, error)
 	DeleteMessage(channelID, timestamp string) (string, string, error)
@@ -832,7 +832,12 @@ func (c *Client) GetUserGroups(ctx context.Context) ([]slack.UserGroup, error) {
 // emoji.list API. Returns a map of emoji name -> URL or "alias:targetname".
 // The map is empty if the workspace has no custom emojis.
 func (c *Client) ListCustomEmoji(ctx context.Context) (map[string]string, error) {
-	emojis, err := c.api.GetEmoji()
+	// GetEmojiContext, not GetEmoji: the latter hardcodes
+	// context.Background() internally, so ctx was silently dropped and
+	// a shutdown could not cancel this. Harmless while the call only
+	// ran on the rare conversations.history fallback; it now runs on
+	// every workspace connect.
+	emojis, err := c.api.GetEmojiContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing custom emoji: %w", err)
 	}
