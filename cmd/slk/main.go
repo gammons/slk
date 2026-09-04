@@ -4151,16 +4151,25 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// client sent it, so the exclusion is global rather than scoped to
 	// the active channel.
 	//
-	// The userID != "" guard is load-bearing, not defensive: a bot
-	// message carries userID == "", and h.currentUserID is also ""
-	// until workspace bootstrap wires it (main.go:2076), so a bare
-	// equality would classify every bot message arriving in that window
-	// as self-authored and never flag its channel. Keyed on the raw
-	// userID for the same reason the notification block above is: "did
-	// I write this" is a question about the human sender. (authorID
-	// would behave identically today, since it only diverges for bot
-	// messages and a B-prefixed bot ID cannot equal a U-prefixed user
-	// ID — the choice is about intent, not a behavioral difference.)
+	// The userID != "" guard is defensive, not load-bearing. A bot
+	// message carries userID == "", so a bare equality would treat
+	// every one of them as self-authored — and silently stop flagging
+	// their channels — the moment h.currentUserID were empty. That
+	// cannot happen today: currentUserID is assigned once in the
+	// handler's struct literal (main.go:2076) from wctx.UserID and is
+	// never reassigned, so no message can reach this handler before it
+	// is populated. The adjacent notification path ships the unguarded
+	// form (internal/notify/notifier.go:68) without incident, which
+	// corroborates that. The guard is kept anyway because the failure
+	// it prevents is silent, it costs one comparison, and it matches
+	// App.isOwnMessage (internal/ui/app.go:3082).
+	//
+	// Keyed on the raw userID for the same reason the notification
+	// block above is: "did I write this" is a question about the human
+	// sender. authorID would behave identically today, since it only
+	// diverges for bot messages and a B-prefixed bot ID cannot equal a
+	// U-prefixed user ID — the choice is about intent, not a
+	// behavioral difference.
 	isSelfMessage := userID != "" && userID == h.currentUserID
 	// edited is true only for message_changed
 	// (internal/slack/events.go:307): a re-delivery of a message the

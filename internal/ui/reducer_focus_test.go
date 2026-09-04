@@ -293,15 +293,23 @@ func TestSustainedStreamMarksPerWindowNotPerMessage(t *testing.T) {
 	}
 	feed(t, app, dueNextStep, 0)
 
-	// One mark per debounce window is steps/2 here; one per message
-	// would be steps-1. The midpoint separates them cleanly.
-	if n := len(*calls); n > steps/2 {
-		t.Fatalf("issued %d marks for %d arrivals (%v); the debounce must cap this at %d",
-			n, steps, *calls, steps/2)
+	// The exact sequence, not just a count. Odd steps are the ones that
+	// fire a tick, and each flush carries the ts of the arrival that
+	// landed in that same step. Asserting the full sequence pins three
+	// things at once: the rate cap (one mark per window, not steps-1),
+	// newest-wins within each window, and — because a short sequence
+	// fails just as loudly as a long one — the markFlushScheduled reset
+	// in reduceFocus's markFlushMsg arm, without which auto-marking
+	// stops dead after the first flush.
+	want := []string{
+		"ch:C1/1.000000",
+		"ch:C1/3.000000",
+		"ch:C1/5.000000",
+		"ch:C1/7.000000",
 	}
-	// Not vacuous: the stream must still advance the cursor.
-	if len(*calls) == 0 {
-		t.Fatal("a sustained stream issued no mark at all")
+	if got := strings.Join(*calls, " "); got != strings.Join(want, " ") {
+		t.Fatalf("marks = %v\nwant  = %v\n(%d arrivals; one mark per debounce window, each at that window's newest ts)",
+			*calls, want, steps)
 	}
 }
 
