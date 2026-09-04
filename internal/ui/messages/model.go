@@ -3492,16 +3492,21 @@ func FormatDateSeparator(dateStr string) string {
 	if err != nil {
 		return dateStr
 	}
+	// Compare calendar days, not elapsed time: both endpoints are anchored
+	// to UTC midnight so the delta is always a whole number of days.
 	now := time.Now()
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	diff := today.Sub(d).Hours() / 24
+	// time.Parse already yields UTC midnight; restating it is defensive, not
+	// load-bearing.
+	dDay := time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, time.UTC)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	days := int(today.Sub(dDay).Hours() / 24)
 
 	switch {
-	case diff < 1:
+	case days <= 0:
 		return "Today"
-	case diff < 2:
+	case days == 1:
 		return "Yesterday"
-	case diff < 7:
+	case days < 7:
 		return d.Format("Monday")
 	default:
 		return d.Format("Monday, January 2, 2006")
