@@ -267,9 +267,10 @@ func ReapplyBgAfterResets(text string, style string) string {
 	if style == "" {
 		return text
 	}
-	// lipgloss v2 uses \x1b[m (no 0), but handle both forms
-	text = strings.ReplaceAll(text, "\x1b[m", "\x1b[m"+style)
-	return text
+	// lipgloss v2 emits the short form, but image renderers and other
+	// ANSI producers may emit the explicit zero form.
+	text = strings.ReplaceAll(text, "\x1b[0m", "\x1b[0m"+style)
+	return strings.ReplaceAll(text, "\x1b[m", "\x1b[m"+style)
 }
 
 var (
@@ -1199,3 +1200,30 @@ func DisplayWidthOfPlain(p PlainLine) int { return displayWidthOfPlain(p) }
 
 // SliceColumns is the exported form of sliceColumns.
 func SliceColumns(p PlainLine, from, to int) string { return sliceColumns(p, from, to) }
+
+// WithBackground makes each line self-sufficient about its background:
+// the line is prefixed with bg, and bg is re-applied after every reset
+// inside it. Joined with newlines, ready to compose.
+//
+// Block Kit lines need both halves. The prefix covers the run at the
+// start of a line — the background-clearing reset there belongs to the
+// avatar gutter prepended later, so there is nothing in the line itself
+// to patch after. ReapplyBgAfterResets covers the runs that follow the
+// line's own inline spans, whose closing resets clear it again.
+//
+// bg should be a background escape only. The foreground is deliberately
+// left alone: kitty image placeholders encode their image ID in the
+// cell foreground (image.PlaceholderRune) and repainting it would point
+// the terminal at a different image.
+//
+// An empty bg returns the lines joined and otherwise untouched.
+func WithBackground(lines []string, bg string) string {
+	if bg == "" {
+		return strings.Join(lines, "\n")
+	}
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = bg + ReapplyBgAfterResets(l, bg)
+	}
+	return strings.Join(out, "\n")
+}
