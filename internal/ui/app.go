@@ -215,7 +215,8 @@ type App struct {
 	// true. A terminal with no focus-event support sends nothing at
 	// all, and there the flag simply stays true for the whole session.
 	// tmux forwards focus events only when `set -g focus-events on`, so
-	// tmux users without that setting are in the same position.
+	// tmux users without that setting are in the same position. See
+	// wiki/Terminal-Compatibility.md, "Focus reporting and read state".
 	terminalFocused bool
 
 	// pendingChannelMark / pendingThreadMark stage a read-cursor

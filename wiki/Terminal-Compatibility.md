@@ -88,6 +88,41 @@ Expected output: `on` and `#T`.
 Passing the title escape through tmux's DCS passthrough instead — which
 would work with no tmux config at all — is a possible follow-up.
 
+## Focus reporting and read state
+
+slk marks a message read on Slack's servers when it arrives in the
+channel you're viewing — or in the thread panel you have open — but only
+while the terminal running slk is focused. Having a channel selected
+doesn't mean you can see it: slk may be sitting in a background terminal,
+an inactive tmux window, or an unfocused tmux pane. Marking those
+messages read would diverge from Slack's own read state and suppress the
+mobile notification for a message you never saw. A message that arrives
+while you're away stays unread until you come back; the mark goes out on
+the next focus.
+
+Focus is detected with DECSET 1004 focus reporting, which recent versions
+of the terminals at the top of the table above implement (kitty, Ghostty,
+WezTerm, foot, iTerm2, Alacritty, gnome-terminal).
+
+Inside tmux there's an extra step. tmux swallows focus events unless you
+turn them on explicitly. Add this to `~/.tmux.conf`:
+
+```tmux
+set -g focus-events on
+```
+
+Without it, tmux never tells slk that its pane lost focus, so slk behaves
+as though the terminal is always focused and marks messages read even
+when the pane is in the background.
+
+Terminals report focus *transitions*, never their current state, so slk
+assumes it starts focused — you did just launch it. slk cannot probe for
+focus reporting either, so a terminal that never sends focus events is
+indistinguishable from one that never loses focus: the assumed-focused
+state persists for the whole session, and arriving messages in the open
+channel are marked read whether or not you were there to see them. That
+is the same position as a tmux user without `focus-events on`.
+
 ## Overriding the image protocol
 
 You can override slk's image-protocol pick via the `[appearance] image_protocol`
