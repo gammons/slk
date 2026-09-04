@@ -604,15 +604,27 @@ type selfMarkKey struct {
 // one is treated as foreign.
 //
 // Recording races the echo in one direction only: an echo that arrives
-// BEFORE its record is applied, not suppressed. Two of the four
-// recording sites (reduceChannelSelected's tier-1 entry mark and
-// flushPendingMarks) record before issuing the mark and so cannot lose
-// that race. The two that instead report a completed round trip
-// (MessagesLoadedMsg.MarkedTS and ThreadMarkedLocalMsg, both recording
-// from the Update goroutine for a call issued on a cmd goroutine) are
-// exposed to it, because the HTTP response and the WebSocket broadcast
-// are independent. Losing it costs a divider move, not the correctness
-// of the read state.
+// BEFORE its record is applied, not suppressed. Four of the five
+// recording sites record before the mark is issued and so cannot lose
+// that race: reduceChannelSelected's tier-1 entry mark, both legs of
+// flushPendingMarks, and reduceThreads' ThreadRepliesLoadedMsg
+// mark-on-open. Each of those calls a service method that only BUILDS
+// a tea.Cmd, so nothing has reached Slack when the record lands.
+//
+// The one exposed site is MessagesLoadedMsg.MarkedTS: ChannelService's
+// fetcher issues that mark itself on a cmd goroutine and reports the ts
+// back afterwards, so its record cannot be written until the HTTP
+// response has already returned — and the WebSocket broadcast of the
+// same mark is independent of that response. Losing the race there
+// costs a divider move, not the correctness of the read state.
+//
+// No site records after a mark COMPLETES. Recording on completion (the
+// ThreadMarkedLocalMsg arm, say) would expose every thread mark to the
+// race, including the mark-on-open whose echo is exactly what this
+// dedup exists to suppress. The cost of recording early instead is that
+// a mark Slack rejects leaves a record with no echo to consume it; it
+// is evicted by selfMarkLimit, and until then it can hold a landmark
+// still, never move one wrongly.
 //
 // Not goroutine-safe. Every caller runs on the Bubble Tea Update
 // goroutine.
@@ -2127,9 +2139,12 @@ func (a *App) scheduleMarkFlush() tea.Cmd {
 // SetLastReadTS. Slack then broadcasts the channel mark back as a
 // channel_marked event, which DOES reach SetLastReadTS via
 // applyChannelMark — hence the selfMarks.record below, which is what
-// makes applyChannelMark recognise and skip its own echo. The thread
-// leg is symmetric: threads.Mark's ThreadMarkedLocalMsg arm applies
-// list state only. The divider recomputes on the next channel entry.
+// makes applyChannelMarkEcho recognise and skip its own echo. The
+// thread leg is symmetric on both counts: threads.Mark's
+// ThreadMarkedLocalMsg arm applies list state only, and the leg records
+// into selfThreadMarks so applyThreadMarkEcho skips the thread_marked
+// broadcast of the same mark. The divider recomputes on the next
+// channel entry.
 func (a *App) flushPendingMarks() tea.Cmd {
 	var cmds []tea.Cmd
 	if pc := a.pendingChannelMark; pc.ts != "" {
@@ -2147,6 +2162,14 @@ func (a *App) flushPendingMarks() tea.Cmd {
 			ids.ThreadTS(pt.threadTS),
 			ids.MessageTS(pt.ts),
 		); c != nil {
+			// Recorded before the cmd runs, symmetrically with the
+			// channel leg above: Mark only builds the cmd, so the mark
+			// has not been issued yet and this record cannot lose the
+			// race against Slack's thread_marked broadcast. A nil cmd
+			// means no mark, hence no echo to suppress.
+			a.selfThreadMarks.record(selfMarkKey{
+				channelID: pt.channelID, threadTS: pt.threadTS, ts: pt.ts,
+			})
 			cmds = append(cmds, c)
 		}
 	}
@@ -3547,7 +3570,7 @@ func (a *App) applyThreadMarkListState(channelID, threadTS, lastRead string) {
 //
 // Slack broadcasts thread_marked to every connected client INCLUDING
 // the one that issued the mark, so ThreadMarkedRemoteMsg does NOT mean
-// "another client": it carries slk's own marks back too, both the
+// "another client": it carries slk's own marks back too, chiefly the
 // mark-on-open from reducer_threads' ThreadRepliesLoadedMsg arm and the
 // auto-mark from flushPendingMarks. Those echoes carry the newest
 // reply, and the panel renders no landmark once its boundary reaches
@@ -3558,6 +3581,17 @@ func (a *App) applyThreadMarkListState(channelID, threadTS, lastRead string) {
 // not issue carries no record and still moves the landmark, which is
 // correct — the user really did read the thread elsewhere. See
 // selfMarkDedup.
+//
+// "Chiefly", not "only": the thread mark-unread press is a third
+// self-originated echo. MarkThreadUnread posts to the same
+// subscriptions.thread.mark endpoint with read=0, so it broadcasts back
+// here exactly as the read marks do. It is deliberately NOT recorded,
+// so its echo is treated as foreign and moves the landmark. That is
+// correct: Slack rolls the cursor back to just before the ts the user
+// picked, so applying it renders the landmark exactly where the press
+// asked for it. Do not "complete" the recording sites
+// by adding it: that would suppress the press's own effect, the
+// thread-side form of the applyChannelMark collision described below.
 //
 // The dedup lives here rather than inside applyThreadMark so that
 // consuming a record stays a property of the echo path alone.

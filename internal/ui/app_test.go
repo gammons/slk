@@ -3070,6 +3070,51 @@ func threadPanelOnR1R2(t *testing.T) *App {
 	return app
 }
 
+// issueThreadMarkOnOpen drives the real mark-on-open issue site: the
+// ThreadRepliesLoadedMsg arm calls ThreadService.Mark for the newest
+// reply and records the self-mark BEFORE the returned cmd — and so the
+// subscriptions.thread.mark request — has run. Returns the
+// ThreadMarkedLocalMsg that cmd yields, so callers can deliver it (or
+// deliberately not) to control the ordering against the WS echo.
+//
+// Tests record through this rather than poking selfThreadMarks so that
+// moving or losing the recording site fails them.
+func issueThreadMarkOnOpen(t *testing.T, app *App) ThreadMarkedLocalMsg {
+	t.Helper()
+	var marked []string
+	app.SetThreadService(NewThreadService(ThreadServiceFuncs{
+		Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) tea.Cmd {
+			marked = append(marked, string(channelID)+"/"+string(threadTS)+"/"+string(ts))
+			return func() tea.Msg {
+				return ThreadMarkedLocalMsg{
+					ChannelID: string(channelID),
+					ThreadTS:  string(threadTS),
+					TS:        string(ts),
+				}
+			}
+		},
+	}))
+	// Same thread identity as the panel already holds, so SetThread
+	// keeps the boundary the pre-open snapshot installed.
+	_, cmd := app.Update(ThreadRepliesLoadedMsg{
+		ThreadTS: "P1",
+		Replies: []messages.MessageItem{
+			{TS: "R1", UserID: "U1", Text: "r1"},
+			{TS: "R2", UserID: "U1", Text: "r2"},
+		},
+	})
+	if len(marked) != 1 || marked[0] != "C1/P1/R2" {
+		t.Fatalf("Mark calls = %v, want one mark of C1/P1 up to R2", marked)
+	}
+	for _, msg := range drainBatch(cmd) {
+		if local, ok := msg.(ThreadMarkedLocalMsg); ok {
+			return local
+		}
+	}
+	t.Fatal("the mark cmd yielded no ThreadMarkedLocalMsg")
+	return ThreadMarkedLocalMsg{}
+}
+
 // Slack broadcasts thread_marked back to the client that issued the
 // mark, so slk's own subscriptions.thread.mark returns as a
 // ThreadMarkedRemoteMsg carrying the ts slk just set — the newest
@@ -3079,17 +3124,14 @@ func threadPanelOnR1R2(t *testing.T) *App {
 // run: the thread really is read.
 func TestThreadMarkedRemoteMsg_SelfEchoHoldsPanelBoundary(t *testing.T) {
 	app := threadPanelOnR1R2(t)
-	app.threadsView.SetSummaries([]cache.ThreadSummary{
-		{ChannelID: "C1", ThreadTS: "P1", LastReplyTS: "R2", Unread: true},
-	})
+	local := issueThreadMarkOnOpen(t, app)
 
-	// slk's own mark completing. This is where the self-mark is
-	// recorded, on the Update goroutine.
-	_, _ = app.Update(ThreadMarkedLocalMsg{ChannelID: "C1", ThreadTS: "P1", TS: "R2"})
+	// The mark's own HTTP response, back on the Update goroutine.
+	_, _ = app.Update(local)
 
 	// Re-flag the row so the list-state assertion below cannot pass
-	// vacuously off the local arm's own work: this stands in for a
-	// threads-list refresh landing between the two messages.
+	// vacuously off work the issue and local arms already did: this
+	// stands in for a threads-list refresh landing before the echo.
 	app.threadsView.SetSummaries([]cache.ThreadSummary{
 		{ChannelID: "C1", ThreadTS: "P1", LastReplyTS: "R2", Unread: true},
 	})
@@ -3115,6 +3157,28 @@ func TestThreadMarkedRemoteMsg_SelfEchoHoldsPanelBoundary(t *testing.T) {
 	}
 }
 
+// The ordering the fix turns on: Slack's WebSocket broadcast and the
+// mark's own HTTP response are independent, so the echo can arrive
+// FIRST. Recording on completion instead of on issue would leave this
+// echo unrecorded and wipe the landmark — in production, silently, for
+// every thread the user opens.
+func TestThreadMarkedRemoteMsg_SelfEchoBeforeLocalMsgStillHoldsBoundary(t *testing.T) {
+	app := threadPanelOnR1R2(t)
+	local := issueThreadMarkOnOpen(t, app)
+
+	// Echo first, before the mark call has even returned.
+	_, _ = app.Update(ThreadMarkedRemoteMsg{ChannelID: "C1", ThreadTS: "P1", LastRead: "R2"})
+	if got := app.threadPanel.UnreadBoundaryTS(); got != "R1" {
+		t.Fatalf("unreadBoundary = %q, want R1: an echo that beats the HTTP response is still slk's own mark", got)
+	}
+
+	// The response then lands and must not disturb the landmark either.
+	_, _ = app.Update(local)
+	if got := app.threadPanel.UnreadBoundaryTS(); got != "R1" {
+		t.Errorf("unreadBoundary = %q after the local completion, want R1", got)
+	}
+}
+
 // The control, and the more important half: a thread_marked slk did not
 // issue means the user read that thread in another Slack client, and
 // the landmark must move. Suppression is keyed on the exact mark, so an
@@ -3136,8 +3200,8 @@ func TestThreadMarkedRemoteMsg_ForeignMarkStillMovesBoundary(t *testing.T) {
 // event — a genuine cursor move made elsewhere — and must be applied.
 func TestThreadMarkedRemoteMsg_SelfEchoSuppressionIsConsumedOnce(t *testing.T) {
 	app := threadPanelOnR1R2(t)
-
-	_, _ = app.Update(ThreadMarkedLocalMsg{ChannelID: "C1", ThreadTS: "P1", TS: "R2"})
+	local := issueThreadMarkOnOpen(t, app)
+	_, _ = app.Update(local)
 
 	_, _ = app.Update(ThreadMarkedRemoteMsg{ChannelID: "C1", ThreadTS: "P1", LastRead: "R2"})
 	if got := app.threadPanel.UnreadBoundaryTS(); got != "R1" {

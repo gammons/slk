@@ -896,3 +896,26 @@ func TestSelfMarkRecords_AreBounded(t *testing.T) {
 		t.Error("the very first record survived; it should have been evicted long ago")
 	}
 }
+
+// The channel and thread sets are bounded independently. Sharing one
+// instance between them would still pass the test above, but a burst of
+// thread marks — a run down the Threads view marks one per thread —
+// would evict outstanding channel records and let those echoes wipe the
+// message pane's divider.
+func TestSelfMarkRecords_ThreadBurstDoesNotEvictChannelRecords(t *testing.T) {
+	app, _ := markCapture(t)
+	app.selfMarks.record(selfMarkKey{channelID: "C1", ts: "5.000000"})
+
+	for i := range selfMarkLimit * 3 {
+		app.selfThreadMarks.record(selfMarkKey{
+			channelID: "C1", threadTS: fmt.Sprintf("P%d", i), ts: "9.000000",
+		})
+	}
+
+	if n := app.selfThreadMarks.len(); n > selfMarkLimit {
+		t.Errorf("recorded thread self-marks = %d, want at most %d", n, selfMarkLimit)
+	}
+	if !app.selfMarks.consume(selfMarkKey{channelID: "C1", ts: "5.000000"}) {
+		t.Error("the channel record was evicted by thread marks; the two sets must be bounded independently")
+	}
+}

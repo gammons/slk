@@ -113,8 +113,8 @@ func (m *mockEventHandler) OnChannelMarked(channelID, ts string, unreadCount int
 	m.channelMarks = append(m.channelMarks, channelMarkRecord{channelID, ts, unreadCount})
 }
 
-func (m *mockEventHandler) OnThreadMarked(channelID, threadTS, lastRead string, subscribed bool) {
-	m.threadMarks = append(m.threadMarks, threadMarkRecord{channelID, threadTS, lastRead, subscribed})
+func (m *mockEventHandler) OnThreadMarked(channelID, threadTS, lastRead string, subscribed Subscribed) {
+	m.threadMarks = append(m.threadMarks, threadMarkRecord{channelID, threadTS, lastRead, bool(subscribed)})
 }
 
 func (m *mockEventHandler) OnThreadSubscriptionChanged(channelID, threadTS, lastRead string, active bool) {

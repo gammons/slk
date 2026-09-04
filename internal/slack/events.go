@@ -9,6 +9,16 @@ import (
 	"github.com/slack-go/slack"
 )
 
+// Subscribed is thread_marked's subscription.active flag, carried under
+// its true meaning: the user is subscribed to this thread. It is a
+// named type rather than a bool so that it cannot be transposed with
+// OnThreadSubscriptionChanged's `active` parameter, which is the same
+// shape but obliges the receiver to do the opposite thing — write the
+// durable `active` column, which OnThreadMarked must never touch.
+//
+// It is NOT a read/unread signal. See OnThreadMarked.
+type Subscribed bool
+
 // EventHandler processes real-time events from Slack.
 type EventHandler interface {
 	// OnMessage delivers a new or edited message. subtype mirrors
@@ -49,16 +59,21 @@ type EventHandler interface {
 	// whether creating a missing thread_subscriptions row is
 	// legitimate; the durable `active` column stays owned by
 	// OnThreadSubscriptionChanged and the getView reconcile.
-	OnThreadMarked(channelID, threadTS, lastRead string, subscribed bool)
+	OnThreadMarked(channelID, threadTS, lastRead string, subscribed Subscribed)
 
 	// OnThreadSubscriptionChanged is delivered for thread_subscribed and
 	// thread_unsubscribed WS events. active=true on subscribe,
 	// active=false on unsubscribe. lastRead is the per-thread last_read ts
 	// the server reports — pass-through to thread_subscriptions.last_read.
-	// The payload shape is identical to thread_marked.subscription, so
-	// implementations can share state-update logic with OnThreadMarked
-	// (this handler is the persistence-only path; OnThreadMarked also
-	// drives the UI's read-state side effects).
+	//
+	// The payload shape is identical to thread_marked.subscription, but
+	// the HANDLING must not be shared: this handler owns the `active`
+	// column and is required to write it, while OnThreadMarked is
+	// forbidden from writing it — a thread_marked that tombstoned or
+	// resurrected a row is a bug slk has already shipped once. Only the
+	// last_read pass-through is common. The bool parameters are
+	// distinctly typed (Subscribed vs plain bool) so that the two
+	// handlers cannot be transposed silently.
 	OnThreadSubscriptionChanged(channelID, threadTS, lastRead string, active bool)
 
 	// OnConversationOpened is delivered when a new or previously-closed
@@ -398,7 +413,7 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 		// only. See OnThreadMarked's doc for why it must never reach a
 		// read/unread decision.
 		handler.OnThreadMarked(evt.Subscription.Channel, evt.Subscription.ThreadTS,
-			evt.Subscription.LastRead, evt.Subscription.Active)
+			evt.Subscription.LastRead, Subscribed(evt.Subscription.Active))
 
 	case "thread_subscribed", "thread_unsubscribed":
 		var evt wsThreadSubscribedEvent

@@ -4579,7 +4579,7 @@ func (h *rtmEventHandler) OnChannelMarked(channelID, ts string, unreadCount int)
 //
 // Neither writer touches `active`, so a tombstoned row stays
 // tombstoned either way.
-func (h *rtmEventHandler) OnThreadMarked(channelID, threadTS, lastRead string, subscribed bool) {
+func (h *rtmEventHandler) OnThreadMarked(channelID, threadTS, lastRead string, subscribed slackclient.Subscribed) {
 	// An empty cursor would erase the thread's read position and make
 	// every reply render unread. UpdateThreadLastRead does not reject
 	// it, so drop the event here instead of corrupting the row.

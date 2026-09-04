@@ -73,16 +73,11 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 				m.ChannelID, m.ThreadTS, m.Err)
 			return nil, true
 		}
-		// Slack broadcasts this same mark back as thread_marked, which
-		// returns as a ThreadMarkedRemoteMsg carrying m.TS. Record it
-		// here so applyThreadMarkEcho recognises that echo as slk's
-		// own. This arm is the recording site because it is the first
-		// point on the Update goroutine that knows the mark succeeded:
-		// markThreadRead issues it from a cmd goroutine, which must not
-		// touch App state. See selfMarkDedup.
-		a.selfThreadMarks.record(selfMarkKey{
-			channelID: m.ChannelID, threadTS: m.ThreadTS, ts: m.TS,
-		})
+		// No self-mark recording here: both issue sites record before
+		// handing off the cmd, so by the time this arrives the record
+		// already exists and recording again would double-count and
+		// suppress a second, foreign echo. See selfMarkDedup.
+		//
 		// List state only: this is slk's own mark completing, so the
 		// open panel's landmark stays where opening the thread put it.
 		// See applyThreadMarkListState.
@@ -161,6 +156,20 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 				ids.ThreadTS(m.ThreadTS),
 				ids.MessageTS(latestTS),
 			)
+			if cmd != nil {
+				// Record BEFORE the cmd runs, i.e. before the mark is
+				// issued: Slack's thread_marked broadcast races the
+				// mark's own HTTP response, and this is the mark whose
+				// echo would otherwise wipe the landmark the user just
+				// opened the thread to read. Mark only builds the cmd,
+				// so nothing has been sent yet and this record cannot
+				// lose that race. A nil cmd means no mark will be
+				// issued (no active workspace), hence no echo to
+				// suppress. See selfMarkDedup.
+				a.selfThreadMarks.record(selfMarkKey{
+					channelID: channelID, threadTS: m.ThreadTS, ts: latestTS,
+				})
+			}
 		}
 		// Optimistic local recompute so the badge updates immediately
 		// rather than waiting on the round-trip. MarkByThreadTSReadAt
