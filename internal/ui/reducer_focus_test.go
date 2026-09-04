@@ -95,7 +95,19 @@ func markCapture(t *testing.T) (*App, *[]string) {
 	app.SetThreadService(NewThreadService(ThreadServiceFuncs{
 		Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) tea.Cmd {
 			*calls = append(*calls, "th:"+string(channelID)+"/"+string(threadTS)+"/"+string(ts))
-			return nil
+			// A non-nil cmd, as the production adapter returns for any
+			// mark it will actually issue. Returning nil here made
+			// flushPendingMarks' `if c := …; c != nil` guard false, so
+			// its selfThreadMarks.record was unreachable from every
+			// test in this file and could be deleted without failing
+			// one. The cmd itself yields what the real one yields.
+			return func() tea.Msg {
+				return ThreadMarkedLocalMsg{
+					ChannelID: string(channelID),
+					ThreadTS:  string(threadTS),
+					TS:        string(ts),
+				}
+			}
 		},
 	}))
 	return app, calls
@@ -693,15 +705,62 @@ func TestSelfIssuedMarkEcho_LeavesDividerInPlace(t *testing.T) {
 
 // The control. A channel_marked slk never issued means the user read
 // the channel in another Slack client, and slk's divider must follow.
+//
+// The outstanding record is deliberate: with an empty dedup this would
+// pass against a consume that matched on channelID alone and ignored
+// ts, which is the over-match that would swallow foreign echoes in
+// production. Mirrors TestThreadMarkedRemoteMsg_ForeignMarkStillMoves-
+// Boundary, which holds a record for R2 while echoing R1.
 func TestForeignMarkEcho_MovesDivider(t *testing.T) {
 	app, _ := markCapture(t)
 	app.activeChannelID = "C1"
 	app.messagepane.SetLastReadTS("1.000000")
+	app.selfMarks.record(selfMarkKey{channelID: "C1", ts: "5.000000"})
 
 	_, _ = app.Update(ChannelMarkedRemoteMsg{ChannelID: "C1", TS: "9.000000"})
 
 	if got := app.messagepane.LastReadTS(); got != "9.000000" {
 		t.Errorf("messagepane LastReadTS = %q, want a foreign mark to move the divider to 9.000000", got)
+	}
+}
+
+// The thread-side headline case of #159 end to end: a reply lands in
+// the thread panel the user is looking at, the debounced flush
+// auto-marks it, and Slack broadcasts that mark back a round trip
+// later. The landmark the user is reading against must survive slk's
+// own echo.
+//
+// This is the only test that reaches flushPendingMarks' THREAD leg
+// record. The other thread issue site, the mark-on-open in
+// ThreadRepliesLoadedMsg, is covered in app_test.go via
+// issueThreadMarkOnOpen; before this test, deleting the flush leg's
+// record failed nothing in the package.
+func TestSelfIssuedThreadMarkEcho_HoldsPanelLandmark(t *testing.T) {
+	app, calls := markCapture(t)
+	app.activeChannelID = "C1"
+	app.threadVisible = true
+	app.threadPanel.SetThread(
+		messages.MessageItem{TS: "P1", UserID: "U1", Text: "parent"},
+		[]messages.MessageItem{{TS: "R1", UserID: "U1", Text: "r1"}},
+		"C1", "P1")
+	app.threadPanel.SetUnreadBoundary("R1")
+
+	// A reply into the open thread: staged by reduceNewMessage, issued
+	// by the flush tick that feed drives below.
+	_, cmd := app.Update(NewMessageMsg{
+		ChannelID: "C1",
+		Message:   messages.MessageItem{TS: "R2", UserID: "U2", ThreadTS: "P1"},
+	})
+	feed(t, app, cmd, 0)
+	if len(*calls) != 1 || (*calls)[0] != "th:C1/P1/R2" {
+		t.Fatalf("calls = %v, want the auto-mark of C1/P1 up to R2 (the echo assertion needs it)", *calls)
+	}
+
+	// Slack's thread_marked broadcast of that same mark.
+	_, _ = app.Update(ThreadMarkedRemoteMsg{ChannelID: "C1", ThreadTS: "P1", LastRead: "R2"})
+
+	if got := app.threadPanel.UnreadBoundaryTS(); got != "R1" {
+		t.Errorf("thread panel unreadBoundary = %q, want R1 held against slk's own auto-mark echo", got)
 	}
 }
 

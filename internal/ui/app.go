@@ -674,9 +674,13 @@ type selfMarkKey struct {
 // ThreadMarkedLocalMsg arm, say) would expose every thread mark to the
 // race, including the mark-on-open whose echo is exactly what this
 // dedup exists to suppress. The cost of recording early instead is that
-// a mark Slack rejects leaves a record with no echo to consume it; it
-// is evicted by selfMarkLimit, and until then it can hold a landmark
-// still, never move one wrongly.
+// a mark Slack rejects leaves a record with no echo to consume it — as
+// does a mark issued in one workspace whose echo arrives after a switch
+// to another, since OnChannelMarked returns before dispatching
+// ChannelMarkedRemoteMsg when its workspace is not active. Both leak
+// the same way and cost the same: the record is evicted by
+// selfMarkLimit, and until then it can hold a landmark still, never
+// move one wrongly.
 //
 // Not goroutine-safe. Every caller runs on the Bubble Tea Update
 // goroutine.
@@ -3536,9 +3540,16 @@ func (a *App) notifyReadStateChanged() {
 }
 
 // applyChannelMark updates local state for a channel-level read-state
-// change. channelID is the channel; ts is the new last_read watermark;
-// unreadCount is the canonical unread count to show in the sidebar
-// badge.
+// change. channelID is the channel; ts is the new last_read watermark.
+//
+// unreadCount is diagnostic only: it reaches the debug log and nothing
+// else. No badge is set from it — notifyReadStateChanged invalidates
+// the sidebar, which re-derives its own display from its channel
+// state, and the aggregate that reaches the window title and status
+// report comes from a.sidebar.UnreadChannelCount(). The parameter is
+// kept rather than dropped because logging the count Slack reported
+// next to the state slk derives is what makes a divergence between
+// them debuggable.
 //
 // This ALWAYS moves the on-screen cursor. Two callers: the local
 // mark-unread press (reducer_send.go's MessageMarkedUnreadMsg arm),

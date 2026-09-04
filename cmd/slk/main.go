@@ -4577,8 +4577,11 @@ func (h *rtmEventHandler) OnChannelMarked(channelID, ts string, unreadCount int)
 //     undo that guard one hop later and surface a phantom entry in the
 //     Threads list, which filters on active=1.
 //
-// Neither writer touches `active`, so a tombstoned row stays
-// tombstoned either way.
+// Neither writer touches `active` on a row that already exists, so a
+// tombstoned row stays tombstoned either way — it takes
+// UpdateThreadLastRead's ON CONFLICT path, which sets last_read and
+// updated_at only. The subscribed branch's INSERT does create a
+// missing row with active=1, which is the whole point of choosing it.
 func (h *rtmEventHandler) OnThreadMarked(channelID, threadTS, lastRead string, subscribed slackclient.Subscribed) {
 	// An empty cursor would erase the thread's read position and make
 	// every reply render unread. UpdateThreadLastRead does not reject

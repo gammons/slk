@@ -129,15 +129,24 @@ message a round trip after every mark — including the entry mark, which
 predates this feature.
 
 Suppressing that echo is therefore part of the design, not a free consequence
-of it. `selfMarkDedup` (`internal/ui/app.go`) records the `(channel, ts)` of
-every channel mark slk issues, at all three issuing sites: the tier-1 entry mark
-in `reduceChannelSelected`, the auto-mark in `flushPendingMarks`, and
+of it. `selfMarkDedup` (`internal/ui/app.go`) records the `(channel, ts)` of the
+channel marks slk issues, at three issuing sites: the tier-1 entry mark in
+`reduceChannelSelected`, the auto-mark in `flushPendingMarks`, and
 `ChannelService.Fetch`'s entry mark — the last reported back on the Update
 goroutine as `MessagesLoadedMsg.MarkedTS`, since the fetcher marks from a cmd
 goroutine and must not touch `App` state. `applyChannelMarkEcho`, which is what
 the `ChannelMarkedRemoteMsg` arm calls, consumes a matching record and skips the
 cursor update, while still calling `notifyReadStateChanged()` so the sidebar dot
 and workspace rail clear.
+
+"Chiefly", not "only" — the same qualification the thread side carries in
+`applyThreadMarkEcho`'s doc. The channel mark-unread press is a fourth issuer of
+the same endpoint: `MarkChannelUnread` posts to `conversations.mark` through the
+same `markChannel` helper the read marks use, so it broadcasts back as a
+`channel_marked` like any other. It is deliberately left unrecorded, so its echo
+is treated as foreign and moves the divider — which is exactly what the press
+asked for. The collision described next is why completing the list here would be
+a bug rather than a tidy-up.
 
 The dedup deliberately sits in `applyChannelMarkEcho` rather than in the shared
 `applyChannelMark` helper. `applyChannelMark`'s other caller is the local

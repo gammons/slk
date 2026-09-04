@@ -70,10 +70,13 @@ func (db *DB) DeleteThreadSubscription(workspaceID, channelID, threadTS string) 
 }
 
 // UpdateThreadLastRead advances (or rewinds) a thread's read cursor
-// WITHOUT touching `active`. thread_marked carries a read cursor, not a
-// subscription change, so it must not be able to tombstone a row or
-// resurrect one: `active` is owned solely by thread_subscribed,
-// thread_unsubscribed, and the getView reconcile.
+// WITHOUT touching `active` on a row that already exists — the ON
+// CONFLICT clause updates last_read and updated_at and nothing else.
+// thread_marked carries a read cursor, not a subscription change, so it
+// must not be able to tombstone a row or resurrect one: `active` is
+// owned solely by thread_subscribed, thread_unsubscribed, and the
+// getView reconcile. Creating a missing row is the one exception, and
+// the paragraph below is its precondition.
 //
 // A missing row is inserted with active=1. That branch is ONLY valid for
 // callers that can prove the user is subscribed to the thread, because
@@ -118,8 +121,9 @@ ON CONFLICT(workspace_id, channel_id, thread_ts) DO UPDATE SET
 // worth storing, and if the user later becomes subscribed the getView
 // reconcile supplies last_read from Slack.
 //
-// Like UpdateThreadLastRead it never touches `active` (so a tombstoned
-// row stays tombstoned) or `latest_reply`.
+// It never touches `active` (so a tombstoned row stays tombstoned) or
+// `latest_reply` — unlike UpdateThreadLastRead, which leaves `active`
+// alone on an existing row but writes active=1 when it inserts one.
 func (db *DB) UpdateThreadLastReadIfExists(workspaceID, channelID, threadTS, lastRead string) error {
 	if workspaceID == "" || channelID == "" || threadTS == "" {
 		return fmt.Errorf("UpdateThreadLastReadIfExists: workspace/channel/thread_ts required")
