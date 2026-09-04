@@ -251,9 +251,10 @@ func (m *Model) filter() {
 
 	var substringMatches []EmojiEntry
 	for _, e := range m.allEmoji {
-		if strings.HasPrefix(text.Fold(e.Name), q) {
+		name := text.Fold(e.Name)
+		if strings.HasPrefix(name, q) {
 			m.filtered = append(m.filtered, e)
-		} else if strings.Contains(text.Fold(e.Name), q) {
+		} else if strings.Contains(name, q) {
 			substringMatches = append(substringMatches, e)
 		}
 		if len(m.filtered)+len(substringMatches) >= 50 {
