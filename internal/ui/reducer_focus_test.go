@@ -139,6 +139,37 @@ func TestBlurredArrival_DoesNotMarkUntilFocusReturns(t *testing.T) {
 	}
 }
 
+// The blur-mid-flight race: the arrival was focused, so a tick is
+// armed, but the user leaves before it fires. The tick must re-park
+// the slot rather than issue the mark -- the user stopped looking
+// between the two events.
+func TestBlurBeforeFlushTickFires_KeepsMarkStaged(t *testing.T) {
+	app, calls := markCapture(t)
+	app.activeChannelID = "C1"
+
+	_, cmd := app.Update(NewMessageMsg{
+		ChannelID: "C1",
+		Message:   messages.MessageItem{TS: "5.000000", UserID: "U2"},
+	})
+	_, _ = app.Update(tea.BlurMsg{}) // ...before the tick lands
+	feed(t, app, cmd, 0)
+
+	if len(*calls) != 0 {
+		t.Fatalf("a tick firing while blurred must not mark read, got %v", *calls)
+	}
+	if app.pendingChannelMark.ts != "5.000000" {
+		t.Fatalf("pendingChannelMark.ts = %q, want the slot re-parked at 5.000000",
+			app.pendingChannelMark.ts)
+	}
+
+	_, cmd = app.Update(tea.FocusMsg{})
+	feed(t, app, cmd, 0)
+
+	if len(*calls) != 1 || (*calls)[0] != "ch:C1/5.000000" {
+		t.Fatalf("calls after refocus = %v, want the re-parked mark to flush", *calls)
+	}
+}
+
 // A blurred arrival stages its slot but must arm no timer: the only
 // way out of a blurred slot is the FocusMsg catch-up. Without the
 // focus check in scheduleMarkFlush a blurred burst would arm one
