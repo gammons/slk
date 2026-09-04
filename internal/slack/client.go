@@ -1062,9 +1062,13 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
 	return unreads, threads, nil
 }
 
-// SendReply posts a threaded reply to the specified message.
-// Returns the timestamp and the converted mrkdwn text actually sent.
-func (c *Client) SendReply(ctx context.Context, channelID, threadTS, text string) (string, string, error) {
+// SendReply posts a threaded reply to the specified message. When
+// broadcast is true, the reply is also posted to the parent channel
+// feed (chat.postMessage reply_broadcast=true, Slack's "Also send to
+// #channel" checkbox); Slack surfaces such replies with the
+// thread_broadcast subtype. Returns the timestamp and the converted
+// mrkdwn text actually sent.
+func (c *Client) SendReply(ctx context.Context, channelID, threadTS, text string, broadcast bool) (string, string, error) {
 	mr, block := mrkdwn.Convert(text)
 	opts := []slack.MsgOption{
 		slack.MsgOptionText(mr, false),
@@ -1072,6 +1076,9 @@ func (c *Client) SendReply(ctx context.Context, channelID, threadTS, text string
 	}
 	if block != nil {
 		opts = append(opts, slack.MsgOptionBlocks(block))
+	}
+	if broadcast {
+		opts = append(opts, slack.MsgOptionBroadcast())
 	}
 	_, ts, err := c.api.PostMessage(channelID, opts...)
 	if err != nil {

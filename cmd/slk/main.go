@@ -1753,7 +1753,7 @@ func run() error {
 					}
 				}()
 			},
-			SendReply: func(channelID ids.ChannelID, threadTS ids.ThreadTS, text string) tea.Msg {
+			SendReply: func(channelID ids.ChannelID, threadTS ids.ThreadTS, text string, broadcast bool) tea.Msg {
 				chIDStr, threadTSStr := string(channelID), string(threadTS)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1762,7 +1762,7 @@ func run() error {
 				client := wctx.Client
 				userNames := wctx.UserNames
 				ctx := context.Background()
-				ts, sentMrkdwn, err := client.SendReply(ctx, chIDStr, threadTSStr, text)
+				ts, sentMrkdwn, err := client.SendReply(ctx, chIDStr, threadTSStr, text, broadcast)
 				if err != nil {
 					log.Printf("Warning: failed to send thread reply: %v", err)
 					return ui.ThreadReplySendFailedMsg{ChannelID: chIDStr, ThreadTS: threadTSStr, Reason: err.Error()}
@@ -1771,9 +1771,18 @@ func run() error {
 				if resolved, ok := userNames[client.UserID()]; ok {
 					userName = resolved
 				}
+				// Broadcast replies surface in the parent channel feed as
+				// thread_broadcast rows; flag the authoritative copy so the
+				// reducer's channel-pane swap renders the same label the WS
+				// echo would have carried.
+				subtype := ""
+				if broadcast {
+					subtype = "thread_broadcast"
+				}
 				return ui.ThreadReplySentMsg{
 					ChannelID: chIDStr,
 					ThreadTS:  threadTSStr,
+					Broadcast: broadcast,
 					Message: messages.MessageItem{
 						TS:        ts,
 						UserID:    client.UserID(),
@@ -1781,6 +1790,7 @@ func run() error {
 						Text:      sentMrkdwn,
 						Timestamp: formatTimestamp(ts, tsFormat),
 						ThreadTS:  threadTSStr,
+						Subtype:   subtype,
 					},
 				}
 			},

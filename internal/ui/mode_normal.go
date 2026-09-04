@@ -7,7 +7,7 @@
 //     prompt), Ctrl-Y (theme switcher), ? (help),
 //     S (presence menu), R (reaction picker)
 //   - navigation: j/k (selection), Ctrl-D/U (half-page), C-f/b
-//     (page), G (bottom), Tab/h/l (focus next/prev), Ctrl-o/i
+//     (page), G (bottom), Tab/h/l (focus next/prev), Ctrl-h/k
 //     (nav back/forward through visited channels)
 //   - layout toggles: s (sidebar), t (thread)
 //   - message ops: y (copy message), Y/C (copy permalink), E (edit), D (delete),

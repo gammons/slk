@@ -1610,6 +1610,18 @@ func (a *App) openThreadForSelectedMessage() tea.Cmd {
 	return a.openThreadPanel(msg, a.activeChannelID, threadTS)
 }
 
+// threadComposeChannelName resolves the display name for the thread's
+// parent channel so the thread compose's placeholder and the
+// "also send to #channel" broadcast hint show the real channel.
+// Falls back to the generic "channel" when the ID isn't in the
+// mention-resolution map (e.g. DM/MPIM edge cases).
+func (a *App) threadComposeChannelName(channelID string) string {
+	if name, ok := a.channelNames[channelID]; ok && name != "" {
+		return name
+	}
+	return "channel"
+}
+
 // openThreadPanel makes the thread panel visible for (channelID,
 // threadTS) with the given parent row, primes replies from the thread
 // cache, and returns a cmd that fetches authoritative replies. Shared
@@ -1620,7 +1632,10 @@ func (a *App) openThreadPanel(parent messages.MessageItem, channelID, threadTS s
 	a.statusbar.SetInThread(true)
 	a.focusedPanel = PanelThread
 	a.threadPanel.SetThread(parent, nil, channelID, threadTS)
-	a.threadCompose.SetChannel("thread")
+	a.threadCompose.SetChannel(a.threadComposeChannelName(channelID))
+	// A fresh thread must not inherit the previous thread's
+	// "also send to channel" toggle.
+	a.threadCompose.SetBroadcast(false)
 	a.applyThreadUnreadBoundary(channelID)
 
 	threads := a.threads
@@ -1808,7 +1823,10 @@ func (a *App) openSelectedThreadCmd(debounce bool) tea.Cmd {
 		ThreadTS: sum.ThreadTS,
 	}
 	a.threadPanel.SetThread(parent, nil, sum.ChannelID, sum.ThreadTS)
-	a.threadCompose.SetChannel("thread")
+	a.threadCompose.SetChannel(a.threadComposeChannelName(sum.ChannelID))
+	// A fresh thread must not inherit the previous thread's
+	// "also send to channel" toggle.
+	a.threadCompose.SetBroadcast(false)
 	// Snapshot the parent channel's last_read_ts BEFORE the local mark-
 	// read flips below, so the "── new ──" landmark in the thread panel
 	// reflects what the user had actually seen prior to opening this

@@ -94,6 +94,10 @@ You can override slk's image-protocol pick via the `[appearance] image_protocol`
 config key (`auto` / `kitty` / `sixel` / `halfblock` / `off`). See
 [[Configuration]] for details.
 
+## Keybindings and terminal quirks
+
+- `Ctrl+O` in insert mode is the primary binding to toggle "also send to channel" for thread replies. Some terminals or outer shell configurations intercept `Ctrl+O` (readline's `operate-and-get-next`). In slk's raw terminal mode this is delivered cleanly, but `Alt+Enter` is also available as a one-shot send-with-broadcast without needing the toggle. Note that on macOS, Terminal.app and default iTerm2 profiles do not send Meta for the Option key by default; `Alt+Enter` requires enabling "Use Option as Meta key" (or Esc+) in your terminal preferences.
+
 ## Related
 
 - [[Clipboard and OSC 52|Clipboard-and-OSC-52]] — getting copy/paste to land

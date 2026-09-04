@@ -211,18 +211,39 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 				ThreadTS:  m.ThreadTS,
 			})
 		}
+		// Broadcast ("Also send to #channel"): the reply will also
+		// land in the parent channel feed as a thread_broadcast row.
+		// The self-send dedup (selfSend.RecordSent in
+		// ThreadReplySentMsg) suppresses the WS echo, so the only
+		// way the feed shows the row promptly is this optimistic
+		// add + the swap in ThreadReplySentMsg below.
+		if m.Broadcast {
+			for _, mm := range a.modelsForChannel(m.ChannelID) {
+				mm.AppendMessage(messages.MessageItem{
+					TS:        localTS,
+					UserID:    a.currentUserID,
+					UserName:  a.userNameFor(a.currentUserID),
+					Text:      optimisticText,
+					Timestamp: a.nowFormatted(),
+					ThreadTS:  m.ThreadTS,
+					Subtype:   "thread_broadcast",
+				})
+			}
+		}
 		threads := a.threads
 		chID := ids.ChannelID(m.ChannelID)
 		ts := ids.ThreadTS(m.ThreadTS)
 		text := m.Text
+		broadcast := m.Broadcast
 		return func() tea.Msg {
-			result := threads.SendReply(chID, ts, text)
+			result := threads.SendReply(chID, ts, text, broadcast)
 			switch r := result.(type) {
 			case ThreadReplySentMsg:
 				r.LocalTS = localTS
 				return r
 			case ThreadReplySendFailedMsg:
 				r.LocalTS = localTS
+				r.Broadcast = broadcast
 				return r
 			}
 			return result
@@ -256,6 +277,18 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 				a.threadPanel.UpsertSelfSentReply(m.Message)
 			}
 		}
+		// Broadcast: also land the authoritative message in the
+		// channel feed, swapping the optimistic thread_broadcast
+		// placeholder added in SendThreadReplyMsg. Mirrors
+		// MessageSentMsg's swap-or-upsert contract.
+		if m.Broadcast {
+			for _, mm := range a.modelsForChannel(m.ChannelID) {
+				item := cloneMessageItem(m.Message)
+				if !mm.SwapLocalSent(m.LocalTS, item) {
+					mm.UpsertSelfSent(item)
+				}
+			}
+		}
 		for _, mm := range a.modelsForChannel(m.ChannelID) {
 			mm.IncrementReplyCount(m.ThreadTS, m.Message.TS)
 		}
@@ -267,8 +300,15 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	case ThreadReplySendFailedMsg:
 		// chat.postMessage for the thread reply failed; roll back
 		// the optimistic placeholder. Mirrors MessageSendFailedMsg.
+		// For broadcasts, also roll back the thread_broadcast row
+		// optimistically added to the channel feed.
 		if a.threadVisible && m.ThreadTS == a.threadPanel.ThreadTS() && m.ChannelID == a.threadPanel.ChannelID() && m.LocalTS != "" {
 			a.threadPanel.RemoveLocalSentReply(m.LocalTS)
+		}
+		if m.Broadcast && m.LocalTS != "" {
+			for _, mm := range a.modelsForChannel(m.ChannelID) {
+				mm.RemoveLocalSent(m.LocalTS)
+			}
 		}
 		reason := m.Reason
 		return func() tea.Msg {

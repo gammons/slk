@@ -132,12 +132,21 @@ type (
 		ChannelID string
 		ThreadTS  string
 		Text      string
+		// Broadcast is Slack's "Also send to #channel": the reply is
+		// additionally posted to the parent channel feed
+		// (reply_broadcast=true; Slack echoes it with the
+		// thread_broadcast subtype).
+		Broadcast bool
 	}
 	ThreadReplySentMsg struct {
 		ChannelID string
 		ThreadTS  string
 		LocalTS   string // optimistic-placeholder id; see MessageSentMsg.LocalTS
 		Message   messages.MessageItem
+		// Broadcast mirrors SendThreadReplyMsg.Broadcast; when true the
+		// reducer also lands the message in the channel pane as a
+		// thread_broadcast row.
+		Broadcast bool
 	}
 	// ThreadReplySendFailedMsg is returned when chat.postMessage for a
 	// thread reply fails. Mirrors MessageSendFailedMsg.
@@ -146,6 +155,10 @@ type (
 		ThreadTS  string
 		LocalTS   string
 		Reason    string
+		// Broadcast mirrors SendThreadReplyMsg.Broadcast so the failure
+		// handler can also roll back the optimistic thread_broadcast
+		// row in the channel feed.
+		Broadcast bool
 	}
 	// ThreadsViewActivatedMsg is dispatched when the user picks the
 	// synthetic Threads sidebar row. The App switches the message pane to

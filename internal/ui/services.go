@@ -149,9 +149,11 @@ type ThreadService interface {
 	// the user has now seen. Best-effort and non-blocking.
 	Mark(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS)
 
-	// SendReply posts a reply to threadTS in channelID. Returns a
-	// tea.Msg (typically ThreadReplySentMsg or ThreadReplySendFailedMsg).
-	SendReply(channelID ids.ChannelID, threadTS ids.ThreadTS, text string) tea.Msg
+	// SendReply posts a reply to threadTS in channelID. When broadcast
+	// is true the reply is also posted to the parent channel feed
+	// (reply_broadcast=true). Returns a tea.Msg (typically
+	// ThreadReplySentMsg or ThreadReplySendFailedMsg).
+	SendReply(channelID ids.ChannelID, threadTS ids.ThreadTS, text string, broadcast bool) tea.Msg
 
 	// ListFetch loads the involved-threads list for the workspace
 	// (Slack subscriptions.list). Returns a tea.Msg (typically
@@ -227,11 +229,11 @@ func (t threadAdapter) Mark(channelID ids.ChannelID, threadTS ids.ThreadTS, ts i
 	t.fns.Mark(channelID, threadTS, ts)
 }
 
-func (t threadAdapter) SendReply(channelID ids.ChannelID, threadTS ids.ThreadTS, text string) tea.Msg {
+func (t threadAdapter) SendReply(channelID ids.ChannelID, threadTS ids.ThreadTS, text string, broadcast bool) tea.Msg {
 	if t.fns.SendReply == nil {
 		return nil
 	}
-	return t.fns.SendReply(channelID, threadTS, text)
+	return t.fns.SendReply(channelID, threadTS, text, broadcast)
 }
 
 func (t threadAdapter) ListFetch(teamID ids.TeamID) tea.Msg {

@@ -1667,7 +1667,7 @@ func TestSendReply_BuildsRichTextBlock(t *testing.T) {
 	defer closeFn()
 	c := &Client{api: api}
 
-	ts, sentMrkdwn, err := c.SendReply(context.Background(), "C1", "1700000000.000100", "see [docs](https://x.com)")
+	ts, sentMrkdwn, err := c.SendReply(context.Background(), "C1", "1700000000.000100", "see [docs](https://x.com)", false)
 	if err != nil {
 		t.Fatalf("SendReply: %v", err)
 	}
@@ -1683,6 +1683,30 @@ func TestSendReply_BuildsRichTextBlock(t *testing.T) {
 	}
 	if form.Get("blocks") == "" {
 		t.Error("blocks form value empty; expected rich_text block")
+	}
+	if form.Get("thread_ts") != "1700000000.000100" {
+		t.Errorf("thread_ts = %q, want parent ts", form.Get("thread_ts"))
+	}
+	if form.Get("reply_broadcast") != "" {
+		t.Errorf("reply_broadcast = %q, want unset for plain reply", form.Get("reply_broadcast"))
+	}
+}
+
+func TestSendReply_BroadcastSetsReplyBroadcast(t *testing.T) {
+	// A broadcast reply (Slack's "Also send to #channel") must carry
+	// reply_broadcast=true on the wire so Slack surfaces it in the
+	// parent channel feed with the thread_broadcast subtype.
+	api, getForm, closeFn := newTestSlackAPI(t, `{"ok":true,"ts":"1700000000.000300","channel":"C1"}`)
+	defer closeFn()
+	c := &Client{api: api}
+
+	_, _, err := c.SendReply(context.Background(), "C1", "1700000000.000100", "heads up", true)
+	if err != nil {
+		t.Fatalf("SendReply(broadcast): %v", err)
+	}
+	form := getForm()
+	if got := form.Get("reply_broadcast"); got != "true" {
+		t.Errorf("reply_broadcast = %q, want %q", got, "true")
 	}
 	if form.Get("thread_ts") != "1700000000.000100" {
 		t.Errorf("thread_ts = %q, want parent ts", form.Get("thread_ts"))

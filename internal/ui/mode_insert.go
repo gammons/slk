@@ -17,6 +17,8 @@
 //     file path / verbatim text).
 //   - Ctrl+U                     -> clear compose (text +
 //     attachments + uploading flag).
+//   - Ctrl+O (thread compose)    -> toggle "also send to channel" for
+//     the next thread reply.
 //   - Up / Down on first/last line -> jump to start/end of textarea.
 //   - Plain Enter                -> send (or commit edit, or upload-
 //     then-send if attachments present).
@@ -134,6 +136,14 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	// shortcuts below swallow the arrow keys before the picker
 	// ever sees them.
 	pickerActive := target.IsEmojiActive() || target.IsMentionActive() || target.IsChannelActive()
+	// Ctrl+O toggles Slack's "Also send to #channel" for the next
+	// thread reply. Thread compose only -- the channel compose has no
+	// broadcast concept. Skipped while a picker is active so picker
+	// navigation keys keep precedence.
+	if target == &a.threadCompose && !pickerActive && code == 'o' && mod == tea.ModCtrl {
+		a.threadCompose.ToggleBroadcast()
+		return nil
+	}
 	if !pickerActive {
 		if code == tea.KeyUp && mod == 0 && target.CursorAtFirstLine() {
 			target.MoveCursorToStart()
@@ -146,7 +156,9 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	}
 	// Plain Enter sends; Shift+Enter (and Ctrl+J as a fallback
 	// for terminals that don't disambiguate modifiers) inserts a
-	// newline.
+	// newline. Alt+Enter sends with broadcast in thread compose
+	// (one-shot send-with-broadcast without needing the Ctrl+O toggle).
+	isAltEnter := code == tea.KeyEnter && mod.Contains(tea.ModAlt)
 	isSend := code == tea.KeyEnter && !mod.Contains(tea.ModShift)
 	isNewline := (code == tea.KeyEnter && mod.Contains(tea.ModShift)) ||
 		(code == 'j' && mod == tea.ModCtrl)
@@ -181,6 +193,7 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 			text := a.threadCompose.Value()
 			if text != "" {
 				text = a.threadCompose.TranslateMentionsForSend(text)
+				broadcast := a.threadCompose.Broadcast() || isAltEnter
 				a.threadCompose.Reset()
 				threadTS := a.threadPanel.ThreadTS()
 				channelID := a.threadPanel.ChannelID()
@@ -190,6 +203,7 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 						ChannelID: channelID,
 						ThreadTS:  threadTS,
 						Text:      text,
+						Broadcast: broadcast,
 					}
 				}
 			}
