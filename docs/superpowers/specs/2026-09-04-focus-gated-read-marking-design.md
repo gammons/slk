@@ -109,16 +109,44 @@ On `FocusMsg`, pending marks accumulated while blurred are issued immediately.
 Without this, a user who alt-tabs back, reads everything, and never switches
 channels leaves the channel unread on Slack indefinitely.
 
-### The divider does not move
+### The divider does not move, but only because the echo is suppressed
 
-Advancing the cursor updates `last_read_ts` in SQLite and on Slack, but does not
-push a new value into the on-screen message models. The `── new ──` divider
-stays at the entry point and recomputes on next entry.
+The `── new ──` divider must stay where the user entered the channel and
+recompute on next entry. Advancing the cursor writes `last_read_ts` to SQLite
+and to Slack; the local path does not push a new value into the on-screen
+message models. `MarkRead` produces `ChannelMarkedReadMsg`, whose arm calls
+`notifyReadStateChanged()` and nothing else, and channel entry already installs
+the pre-mark cursor — `MessagesLoadedMsg` carries `LastReadTS` read before the
+mark.
 
-This requires no extra work: `MarkRead` produces `ChannelMarkedReadMsg`, whose
-arm at `reducer_channels.go:191` calls `notifyReadStateChanged()` and nothing
-else. It never touches `SetLastReadTS`. It also matches what channel entry
-already does — `MessagesLoadedMsg` carries the pre-mark `LastReadTS`.
+The local path is not the whole system, and an earlier revision of this section
+reasoned only from it. Slack broadcasts `channel_marked` to every connected
+client **including the one that issued the mark**. That echo arrives at
+`rtmEventHandler.OnChannelMarked`, becomes a `ChannelMarkedRemoteMsg`, and its
+arm calls `applyChannelMark`, which does run `SetLastReadTS` on every window
+viewing the channel. So without further work the divider moved to the newest
+message a round trip after every mark — including the entry mark, which
+predates this feature.
+
+Suppressing that echo is therefore part of the design, not a free consequence
+of it. `selfMarkDedup` (`internal/ui/app.go`) records the `(channel, ts)` of
+every channel mark slk issues, at all three issuing sites: the tier-1 entry mark
+in `reduceChannelSelected`, the auto-mark in `flushPendingMarks`, and
+`ChannelService.Fetch`'s entry mark — the last reported back on the Update
+goroutine as `MessagesLoadedMsg.MarkedTS`, since the fetcher marks from a cmd
+goroutine and must not touch `App` state. `applyChannelMark` consumes a matching
+record and skips the `SetLastReadTS` loop, while still calling
+`notifyReadStateChanged()` so the sidebar dot and workspace rail clear.
+
+Records are consumed on match and the set is bounded, so a `channel_marked` slk
+did not issue — the user reading the channel in another Slack client — still
+moves the divider, which is the correct response to that event.
+
+The thread panel's landmark has the same shape and the same rule.
+`ThreadMarkedLocalMsg` reports slk's own `subscriptions.thread.mark` completing;
+its arm applies threads-list state only and leaves the panel boundary at the
+pre-open snapshot. `ThreadMarkedRemoteMsg`, a mark from another client, still
+moves it.
 
 ### The decision lives in the UI reducer
 
@@ -326,7 +354,7 @@ otherwise need" — no longer holds.
 | `internal/slack/events` | `thread_marked` passes `last_read` through and no longer derives a read bool. |
 | `internal/cache` | `UpdateThreadLastRead` preserves `active`; `ListSubscribedThreads` recomputes unread correctly as the cursor moves in both directions. |
 | `cmd/slk` | `OnMessage` sets `has_unread` even for the active channel; `OnThreadMarked` updates the cursor and leaves the row active (rewrite of `event_handler_test.go:245`); `markChannelReadAsync` skips the local write on error via the new seam. |
-| `internal/ui` | Matrix of focused/blurred × active/inactive channel × top-level/plain reply/broadcast. Plus focus-regain flush, burst coalescing (N arrivals produce one `MarkRead`), blurred arrivals staying pending until `FocusMsg`, and the divider unmoved after an auto-mark. All via the existing `ChannelServiceFuncs` / `ThreadServiceFuncs` closure seams. |
+| `internal/ui` | Matrix of focused/blurred × active/inactive channel × top-level/plain reply/broadcast. Plus focus-regain flush, burst coalescing (N arrivals produce one `MarkRead`), blurred arrivals staying pending until `FocusMsg`, and the divider unmoved after an auto-mark *and after the `channel_marked` echo of that mark*, with a foreign `channel_marked` still moving it as the control. All via the existing `ChannelServiceFuncs` / `ThreadServiceFuncs` closure seams. |
 
 ## Documentation
 

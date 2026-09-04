@@ -3016,6 +3016,40 @@ func TestThreadMarkedRemoteMsg_MovesOpenPanelBoundaryToCursor(t *testing.T) {
 	}
 }
 
+// The local counterpart of the test above, and its mirror image.
+// ThreadMarkedLocalMsg reports slk's OWN subscriptions.thread.mark
+// completing — the one openSelectedThreadCmd and flushPendingMarks
+// issue. Moving the boundary to that cursor would land it on the newest
+// reply, rendering no landmark at all, and would destroy the pre-open
+// snapshot openSelectedThreadCmd took (app.go:1861-1865) precisely so
+// the user can see what is new in the panel they are reading.
+func TestThreadMarkedLocalMsg_LeavesOpenPanelBoundaryInPlace(t *testing.T) {
+	app := NewApp()
+	app.threadPanel.SetThread(
+		messages.MessageItem{TS: "P1", UserID: "U1", Text: "parent"},
+		[]messages.MessageItem{
+			{TS: "R1", UserID: "U1", Text: "r1"},
+			{TS: "R2", UserID: "U1", Text: "r2"},
+		}, "C1", "P1")
+	app.threadVisible = true
+	app.threadPanel.SetUnreadBoundary("R1")
+	app.threadsView.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "P1", LastReplyTS: "R2", Unread: true},
+	})
+
+	_, _ = app.Update(ThreadMarkedLocalMsg{ChannelID: "C1", ThreadTS: "P1", TS: "R2"})
+
+	if got := app.threadPanel.UnreadBoundaryTS(); got != "R1" {
+		t.Errorf("thread panel unreadBoundary = %q, want the pre-open snapshot R1 held", got)
+	}
+	// The threads-list side of the same mark must still take effect.
+	for _, s := range app.threadsView.Summaries() {
+		if s.ThreadTS == "P1" && s.Unread {
+			t.Error("a successful local thread mark must still clear the threads-list unread flag")
+		}
+	}
+}
+
 // Regression for the reported bug: posting a reply auto-subscribes you,
 // so Slack echoes thread_marked with active=true. slk used to read that
 // as "unread" and re-flag the thread the user was looking at.

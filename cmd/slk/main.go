@@ -1485,15 +1485,20 @@ func run() error {
 				lastReadTS := state.LastReadTS
 
 				// Mark channel as read up to the latest message
+				markedTS := ""
 				if len(msgItems) > 0 {
-					latestTS := msgItems[len(msgItems)-1].TS
-					markChannelReadAsync(ctx, wctx.Client, db, p, chIDStr, latestTS)
+					markedTS = msgItems[len(msgItems)-1].TS
+					markChannelReadAsync(ctx, wctx.Client, db, p, chIDStr, markedTS)
 				}
 
 				return ui.MessagesLoadedMsg{
 					ChannelID:  chIDStr,
 					Messages:   msgItems,
 					LastReadTS: lastReadTS,
+					// Reported so the reducer can record it on the
+					// Update goroutine and suppress the echo of this
+					// mark; see ui.MessagesLoadedMsg.MarkedTS.
+					MarkedTS: markedTS,
 				}
 			},
 			MarkRead: func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {

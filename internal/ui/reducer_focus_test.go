@@ -654,3 +654,203 @@ func TestFocusedArrivalLeavesDividerInPlace(t *testing.T) {
 		t.Errorf("messagepane LastReadTS = %q, want the divider left at 1.000000", got)
 	}
 }
+
+// The tests above stop at the local path. Slack does not: every
+// conversations.mark slk issues comes back over the WebSocket as a
+// channel_marked event, which cmd/slk/main.go's OnChannelMarked turns
+// into a ChannelMarkedRemoteMsg. markCapture's fake MarkRead returns
+// nil, so that echo has to be synthesised here — its absence is why
+// TestFocusedArrivalLeavesDividerInPlace passed while the divider still
+// vanished in production.
+
+func TestSelfIssuedMarkEcho_LeavesDividerInPlace(t *testing.T) {
+	app, calls := markCapture(t)
+	app.activeChannelID = "C1"
+	app.messagepane.SetLastReadTS("1.000000")
+
+	_, cmd := app.Update(NewMessageMsg{
+		ChannelID: "C1",
+		Message:   messages.MessageItem{TS: "5.000000", UserID: "U2"},
+	})
+	feed(t, app, cmd, 0)
+	if len(*calls) != 1 || (*calls)[0] != "ch:C1/5.000000" {
+		t.Fatalf("calls = %v, want the auto-mark issued at 5.000000 (the echo assertion needs it)", *calls)
+	}
+
+	version := app.sidebar.Version()
+	_, _ = app.Update(ChannelMarkedRemoteMsg{ChannelID: "C1", TS: "5.000000"})
+
+	if got := app.messagepane.LastReadTS(); got != "1.000000" {
+		t.Errorf("messagepane LastReadTS = %q, want the divider held at 1.000000", got)
+	}
+	// sidebar.Invalidate bumps the version (sidebar/model.go:391,556),
+	// so this pins that the suppressed branch still runs
+	// notifyReadStateChanged and clears the unread dot.
+	if app.sidebar.Version() == version {
+		t.Error("a suppressed self-mark echo must still call notifyReadStateChanged")
+	}
+}
+
+// The control. A channel_marked slk never issued means the user read
+// the channel in another Slack client, and slk's divider must follow.
+func TestForeignMarkEcho_MovesDivider(t *testing.T) {
+	app, _ := markCapture(t)
+	app.activeChannelID = "C1"
+	app.messagepane.SetLastReadTS("1.000000")
+
+	_, _ = app.Update(ChannelMarkedRemoteMsg{ChannelID: "C1", TS: "9.000000"})
+
+	if got := app.messagepane.LastReadTS(); got != "9.000000" {
+		t.Errorf("messagepane LastReadTS = %q, want a foreign mark to move the divider to 9.000000", got)
+	}
+}
+
+// One issued mark suppresses exactly one echo. A second channel_marked
+// at the same ts cannot have come from that mark, so it is foreign and
+// must move the divider.
+func TestSelfIssuedMarkEcho_SuppressionIsConsumed(t *testing.T) {
+	app, calls := markCapture(t)
+	app.activeChannelID = "C1"
+	app.messagepane.SetLastReadTS("1.000000")
+
+	_, cmd := app.Update(NewMessageMsg{
+		ChannelID: "C1",
+		Message:   messages.MessageItem{TS: "5.000000", UserID: "U2"},
+	})
+	feed(t, app, cmd, 0)
+	if len(*calls) != 1 {
+		t.Fatalf("calls = %v, want exactly one issued mark", *calls)
+	}
+
+	_, _ = app.Update(ChannelMarkedRemoteMsg{ChannelID: "C1", TS: "5.000000"})
+	if got := app.messagepane.LastReadTS(); got != "1.000000" {
+		t.Fatalf("messagepane LastReadTS = %q after the first echo, want 1.000000", got)
+	}
+
+	_, _ = app.Update(ChannelMarkedRemoteMsg{ChannelID: "C1", TS: "5.000000"})
+	if got := app.messagepane.LastReadTS(); got != "5.000000" {
+		t.Errorf("messagepane LastReadTS = %q after the second echo, want 5.000000 (suppression is single-use)", got)
+	}
+}
+
+// The headline scenario end to end: messages pile up while the user is
+// away, they come back, the FocusMsg catch-up flushes the mark, and the
+// echo lands ~200ms later. The divider showing what arrived must
+// survive it.
+func TestFocusRegainFlushEcho_LeavesDividerInPlace(t *testing.T) {
+	app, calls := markCapture(t)
+	app.activeChannelID = "C1"
+	app.messagepane.SetLastReadTS("1.000000")
+	_, _ = app.Update(tea.BlurMsg{})
+
+	_, cmd := app.Update(NewMessageMsg{
+		ChannelID: "C1",
+		Message:   messages.MessageItem{TS: "5.000000", UserID: "U2"},
+	})
+	feed(t, app, cmd, 0)
+
+	_, cmd = app.Update(tea.FocusMsg{})
+	feed(t, app, cmd, 0)
+	if len(*calls) != 1 || (*calls)[0] != "ch:C1/5.000000" {
+		t.Fatalf("calls after refocus = %v, want the staged mark to flush", *calls)
+	}
+
+	_, _ = app.Update(ChannelMarkedRemoteMsg{ChannelID: "C1", TS: "5.000000"})
+
+	if got := app.messagepane.LastReadTS(); got != "1.000000" {
+		t.Errorf("messagepane LastReadTS = %q, want the divider held at 1.000000", got)
+	}
+}
+
+// The entry mark has the same defect and predates this branch: tier 1
+// of reduceChannelSelected issues conversations.mark straight from the
+// fresh cache, and its echo used to overwrite the pre-entry cursor
+// MessagesLoadedMsg had just installed.
+func TestEntryMarkEcho_LeavesDividerInPlace(t *testing.T) {
+	app, _ := markCapture(t)
+	cached := []messages.MessageItem{
+		{TS: "1.000000", UserID: "U2"},
+		{TS: "5.000000", UserID: "U2"},
+	}
+	calls := &[]string{}
+	app.SetChannelService(NewChannelService(ChannelServiceFuncs{
+		ReadCache: func(ids.ChannelID) []messages.MessageItem { return cached },
+		// syncedAt within cacheFreshThreshold selects tier 1, the
+		// branch that marks read without fetching.
+		SyncedAt: func(ids.ChannelID) int64 { return time.Now().Unix() },
+		MarkRead: func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
+			*calls = append(*calls, "ch:"+string(channelID)+"/"+string(ts))
+			return nil
+		},
+	}))
+
+	_, cmd := app.Update(ChannelSelectedMsg{ID: "C1", Name: "general"})
+	feed(t, app, cmd, 0)
+	if len(*calls) != 1 || (*calls)[0] != "ch:C1/5.000000" {
+		t.Fatalf("calls = %v, want the tier-1 entry mark at 5.000000", *calls)
+	}
+	app.messagepane.SetLastReadTS("1.000000")
+
+	_, _ = app.Update(ChannelMarkedRemoteMsg{ChannelID: "C1", TS: "5.000000"})
+
+	if got := app.messagepane.LastReadTS(); got != "1.000000" {
+		t.Errorf("messagepane LastReadTS = %q, want the entry divider held at 1.000000", got)
+	}
+}
+
+// The third issuer: ChannelService.Fetch marks read on the cmd
+// goroutine and reports the ts it used on MessagesLoadedMsg.MarkedTS,
+// so the recording happens here, on the Update goroutine.
+func TestFetchMarkEcho_LeavesDividerInPlace(t *testing.T) {
+	app, _ := markCapture(t)
+	app.activeChannelID = "C1"
+
+	_, _ = app.Update(MessagesLoadedMsg{
+		ChannelID:  "C1",
+		Messages:   []messages.MessageItem{{TS: "1.000000"}, {TS: "5.000000"}},
+		LastReadTS: "1.000000",
+		MarkedTS:   "5.000000",
+	})
+	if got := app.messagepane.LastReadTS(); got != "1.000000" {
+		t.Fatalf("messagepane LastReadTS = %q after load, want the pre-mark cursor 1.000000", got)
+	}
+
+	_, _ = app.Update(ChannelMarkedRemoteMsg{ChannelID: "C1", TS: "5.000000"})
+
+	if got := app.messagepane.LastReadTS(); got != "1.000000" {
+		t.Errorf("messagepane LastReadTS = %q, want the divider held at 1.000000", got)
+	}
+}
+
+// The reconnect refresh (cmd/slk/main.go:2091) reuses MessagesLoadedMsg
+// but deliberately does NOT mark read, so it leaves MarkedTS empty. A
+// channel_marked at its newest message is then genuinely foreign — the
+// user read the channel elsewhere while slk was offline — and must move
+// the divider.
+func TestMessagesLoadedWithoutMarkedTS_DoesNotSuppress(t *testing.T) {
+	app, _ := markCapture(t)
+	app.activeChannelID = "C1"
+
+	_, _ = app.Update(MessagesLoadedMsg{
+		ChannelID:  "C1",
+		Messages:   []messages.MessageItem{{TS: "1.000000"}, {TS: "5.000000"}},
+		LastReadTS: "1.000000",
+	})
+
+	_, _ = app.Update(ChannelMarkedRemoteMsg{ChannelID: "C1", TS: "5.000000"})
+
+	if got := app.messagepane.LastReadTS(); got != "5.000000" {
+		t.Errorf("messagepane LastReadTS = %q, want 5.000000: a load that issued no mark must not suppress", got)
+	}
+}
+
+// The recorded set must not grow without bound over a long session.
+func TestSelfMarkRecords_AreBounded(t *testing.T) {
+	app, _ := markCapture(t)
+	for i := range selfMarkLimit * 3 {
+		app.selfMarks.record("C1", fmt.Sprintf("%d.000000", i))
+	}
+	if n := app.selfMarks.len(); n > selfMarkLimit {
+		t.Errorf("recorded self-marks = %d, want at most %d", n, selfMarkLimit)
+	}
+}

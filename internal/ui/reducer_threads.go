@@ -67,7 +67,10 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 				m.ChannelID, m.ThreadTS, m.Err)
 			return nil, true
 		}
-		a.applyThreadMark(m.ChannelID, m.ThreadTS, m.TS)
+		// List state only: this is slk's own mark completing, so the
+		// open panel's landmark stays where opening the thread put it.
+		// See applyThreadMarkListState.
+		a.applyThreadMarkListState(m.ChannelID, m.ThreadTS, m.TS)
 		return nil, true
 
 	case threadFetchDebounceMsg:
