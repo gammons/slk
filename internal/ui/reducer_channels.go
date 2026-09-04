@@ -42,7 +42,7 @@
 // that cross-section.
 //
 // Helpers (cancelEdit, CloseThread, clearSelections, SetChannels,
-// SetChannelMembership, notifyReadStateChanged, applyChannelMark,
+// SetChannelMembership, notifyReadStateChanged, applyChannelMarkEcho,
 // uploadToastCmd, userNameFor, nowFormatted) stay on App; the
 // reducer calls them via `a`.
 //
@@ -189,7 +189,9 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 
 	case ChannelMarkedRemoteMsg:
-		a.applyChannelMark(m.ChannelID, m.TS, m.UnreadCount)
+		// Echo path: may be slk's own mark coming back. See
+		// applyChannelMarkEcho.
+		a.applyChannelMarkEcho(m.ChannelID, m.TS, m.UnreadCount)
 		return nil, true
 
 	case ChannelMarkedReadMsg:

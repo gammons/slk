@@ -3018,11 +3018,13 @@ func TestThreadMarkedRemoteMsg_MovesOpenPanelBoundaryToCursor(t *testing.T) {
 
 // The local counterpart of the test above, and its mirror image.
 // ThreadMarkedLocalMsg reports slk's OWN subscriptions.thread.mark
-// completing — the one openSelectedThreadCmd and flushPendingMarks
-// issue. Moving the boundary to that cursor would land it on the newest
-// reply, rendering no landmark at all, and would destroy the pre-open
-// snapshot openSelectedThreadCmd took (app.go:1861-1865) precisely so
-// the user can see what is new in the panel they are reading.
+// completing — the one issued by reducer_threads.go's
+// ThreadRepliesLoadedMsg arm on open, or by App.flushPendingMarks for a
+// reply that arrived in the open panel. Moving the boundary to that
+// cursor would land it on the newest reply, rendering no landmark at
+// all, and would destroy the pre-open snapshot openSelectedThreadCmd
+// takes via applyThreadUnreadBoundary precisely so the user can see
+// what is new in the panel they are reading.
 func TestThreadMarkedLocalMsg_LeavesOpenPanelBoundaryInPlace(t *testing.T) {
 	app := NewApp()
 	app.threadPanel.SetThread(

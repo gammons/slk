@@ -3428,31 +3428,55 @@ func (a *App) notifyReadStateChanged() {
 }
 
 // applyChannelMark updates local state for a channel-level read-state
-// change (used by both the local mark-unread press and the inbound
-// channel_marked WS event). channelID is the channel; ts is the new
-// last_read watermark; unreadCount is the canonical unread count to
-// show in the sidebar badge.
+// change. channelID is the channel; ts is the new last_read watermark;
+// unreadCount is the canonical unread count to show in the sidebar
+// badge.
 //
-// When (channelID, ts) matches a mark slk issued itself, this is Slack
-// broadcasting that mark back to us rather than news of the user
-// reading the channel somewhere else. The read-state notification still
-// runs — the sidebar dot and workspace rail must clear — but the
-// on-screen cursor is left alone, so the "── new ──" divider keeps
-// showing what arrived instead of jumping to the newest message a round
-// trip after slk marked it. See selfMarkDedup.
+// This ALWAYS moves the on-screen cursor. Two callers: the local
+// mark-unread press (reducer_send.go's MessageMarkedUnreadMsg arm),
+// which is a deliberate user action, and applyChannelMarkEcho, which
+// has already decided the inbound channel_marked is not slk's own.
 //
 // Idempotent: calling twice with the same values is a no-op past the
 // first one (the underlying setters short-circuit on equality).
 func (a *App) applyChannelMark(channelID, ts string, unreadCount int) {
-	selfEcho := a.selfMarks.consume(channelID, ts)
-	debuglog.Cache("applyChannelMark: channel=%s ts=%s unread_count=%d active=%s self_echo=%v",
-		channelID, ts, unreadCount, a.activeChannelID, selfEcho)
-	if !selfEcho {
-		for _, mm := range a.modelsForChannel(channelID) {
-			mm.SetLastReadTS(ts)
-		}
+	debuglog.Cache("applyChannelMark: channel=%s ts=%s unread_count=%d active=%s",
+		channelID, ts, unreadCount, a.activeChannelID)
+	for _, mm := range a.modelsForChannel(channelID) {
+		mm.SetLastReadTS(ts)
 	}
 	a.notifyReadStateChanged()
+}
+
+// applyChannelMarkEcho handles an inbound channel_marked WS event.
+//
+// Slack broadcasts channel_marked to every connected client INCLUDING
+// the one that issued the mark, so this arrives both for marks made in
+// another Slack client and for slk's own. Applying slk's own would drag
+// the "── new ──" divider to the newest message a round trip after slk
+// marked it, deleting the user's place moments after they looked at it.
+// Those are suppressed: the read-state notification still runs, so the
+// sidebar dot and workspace rail clear, but the cursor is left alone.
+// A mark slk did not issue carries no record and still moves the
+// cursor, which is correct — the user really did read the channel
+// elsewhere. See selfMarkDedup.
+//
+// The dedup lives here rather than inside applyChannelMark because that
+// helper is shared with the local mark-unread press, which must move
+// the divider unconditionally. Those two can collide on ts: slk
+// auto-marks at the newest message, and "mark this newest message
+// unread so I deal with it later" targets that same ts. Consuming there
+// would silently swallow the user's explicit action for as long as the
+// self-mark record lives — one round trip normally, unbounded if the
+// echo never arrives.
+func (a *App) applyChannelMarkEcho(channelID, ts string, unreadCount int) {
+	if a.selfMarks.consume(channelID, ts) {
+		debuglog.Cache("applyChannelMarkEcho: channel=%s ts=%s self_echo=true (cursor held)",
+			channelID, ts)
+		a.notifyReadStateChanged()
+		return
+	}
+	a.applyChannelMark(channelID, ts, unreadCount)
 }
 
 // applyThreadMark updates local state for an inbound thread read-cursor
@@ -3476,14 +3500,26 @@ func (a *App) applyThreadMark(channelID, threadTS, lastRead string) {
 // settles the row's unread flag and the sidebar badge against lastRead
 // without touching an open thread panel's landmark.
 //
-// This is what a thread mark slk issued ITSELF gets. The panel is on
-// screen, the user is reading it, and its boundary was deliberately set
-// on open from the pre-open cursor (see openSelectedThreadCmd). Slack's
-// answer to slk's own subscriptions.thread.mark carries the cursor slk
-// just set — the newest reply — so applying it to the panel would erase
-// that landmark. A thread mark from ANOTHER client is different and
-// still goes through applyThreadMark: it means the user read the thread
-// elsewhere, so the landmark should follow.
+// This is what ThreadMarkedLocalMsg gets — slk's own
+// subscriptions.thread.mark reporting success. The panel is on screen,
+// the user is reading it, and its boundary was deliberately set on open
+// from the pre-open cursor (see openSelectedThreadCmd). That mark
+// carries the cursor slk just set — the newest reply — so applying it
+// to the panel would erase the landmark.
+//
+// KNOWN GAP, deliberately out of scope: this covers only the local
+// completion message. Slack also broadcasts thread_marked back to the
+// issuing client, and that arrives as ThreadMarkedRemoteMsg, which
+// still calls the full applyThreadMark and so can move the panel
+// boundary for a mark slk issued itself — the same defect by the other
+// route. ThreadMarkedRemoteMsg therefore does NOT mean "another
+// client"; it carries slk's own echoes too (see
+// TestThreadMarkedRemoteMsg_SelfReplyDoesNotReFlagUnread, which
+// documents Slack echoing thread_marked after slk posts a reply).
+// Closing it needs a thread-side dedup keyed on
+// (channel, threadTS, ts), mirroring selfMarkDedup; blanket
+// suppression would be wrong, because a thread mark genuinely made in
+// another client must still move the landmark.
 func (a *App) applyThreadMarkListState(channelID, threadTS, lastRead string) {
 	if a.threadsView.MarkByThreadTSReadAt(channelID, threadTS, lastRead) {
 		a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())

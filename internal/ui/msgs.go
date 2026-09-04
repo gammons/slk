@@ -70,8 +70,9 @@ type (
 		// MarkedTS is the ts the fetcher already marked the channel
 		// read at, or "" if it marked nothing. ChannelService.Fetch
 		// marks on entry and sets this; the reconnect refresh
-		// (cmd/slk/main.go:2091) reuses this message but deliberately
-		// does not mark, and leaves it empty. The reducer records it
+		// (rtmEventHandler.refreshChannel in cmd/slk/main.go) reuses
+		// this message but deliberately does not mark, and leaves it
+		// empty. The reducer records it
 		// as a self-mark so the resulting channel_marked echo does not
 		// drag the divider off LastReadTS. See selfMarkDedup.
 		MarkedTS string

@@ -822,8 +822,9 @@ func TestFetchMarkEcho_LeavesDividerInPlace(t *testing.T) {
 	}
 }
 
-// The reconnect refresh (cmd/slk/main.go:2091) reuses MessagesLoadedMsg
-// but deliberately does NOT mark read, so it leaves MarkedTS empty. A
+// The reconnect refresh (rtmEventHandler.refreshChannel in
+// cmd/slk/main.go) reuses MessagesLoadedMsg but deliberately does NOT
+// mark read, so it leaves MarkedTS empty. A
 // channel_marked at its newest message is then genuinely foreign — the
 // user read the channel elsewhere while slk was offline — and must move
 // the divider.
@@ -844,13 +845,54 @@ func TestMessagesLoadedWithoutMarkedTS_DoesNotSuppress(t *testing.T) {
 	}
 }
 
-// The recorded set must not grow without bound over a long session.
+// Marking a message unread is a deliberate user action, and it must
+// move the divider even when it targets the same ts as a self-mark
+// whose echo has not landed. That collision is the ordinary case, not a
+// corner: slk auto-marks at the newest message, and "mark this newest
+// message unread so I deal with it later" names that same message. If
+// the dedup lived in applyChannelMark — shared by both paths — the
+// press would silently do nothing.
+func TestMarkUnreadAtSelfMarkedTS_StillMovesDivider(t *testing.T) {
+	app, calls := markCapture(t)
+	app.activeChannelID = "C1"
+	app.messagepane.SetLastReadTS("1.000000")
+
+	_, cmd := app.Update(NewMessageMsg{
+		ChannelID: "C1",
+		Message:   messages.MessageItem{TS: "5.000000", UserID: "U2"},
+	})
+	feed(t, app, cmd, 0)
+	if len(*calls) != 1 || (*calls)[0] != "ch:C1/5.000000" {
+		t.Fatalf("calls = %v, want the auto-mark issued at 5.000000 (the collision needs it)", *calls)
+	}
+
+	// No ChannelMarkedRemoteMsg fed: the self-mark record is still
+	// outstanding, which is the state that makes this a collision.
+	_, _ = app.Update(MessageMarkedUnreadMsg{ChannelID: "C1", BoundaryTS: "5.000000", UnreadCount: 1})
+
+	if got := app.messagepane.LastReadTS(); got != "5.000000" {
+		t.Errorf("messagepane LastReadTS = %q, want the explicit mark-unread applied at 5.000000", got)
+	}
+}
+
+// The recorded set must not grow without bound over a long session, and
+// must evict OLDEST first: an eviction policy that dropped the newest
+// key would keep the count under the cap while discarding exactly the
+// records whose echoes are still in flight.
 func TestSelfMarkRecords_AreBounded(t *testing.T) {
 	app, _ := markCapture(t)
+	newest := ""
 	for i := range selfMarkLimit * 3 {
-		app.selfMarks.record("C1", fmt.Sprintf("%d.000000", i))
+		newest = fmt.Sprintf("%d.000000", i)
+		app.selfMarks.record("C1", newest)
 	}
 	if n := app.selfMarks.len(); n > selfMarkLimit {
 		t.Errorf("recorded self-marks = %d, want at most %d", n, selfMarkLimit)
+	}
+	if !app.selfMarks.consume("C1", newest) {
+		t.Errorf("the most recent record (%s) was evicted; eviction must drop the oldest", newest)
+	}
+	if app.selfMarks.consume("C1", "0.000000") {
+		t.Error("the very first record survived; it should have been evicted long ago")
 	}
 }

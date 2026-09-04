@@ -134,19 +134,40 @@ every channel mark slk issues, at all three issuing sites: the tier-1 entry mark
 in `reduceChannelSelected`, the auto-mark in `flushPendingMarks`, and
 `ChannelService.Fetch`'s entry mark — the last reported back on the Update
 goroutine as `MessagesLoadedMsg.MarkedTS`, since the fetcher marks from a cmd
-goroutine and must not touch `App` state. `applyChannelMark` consumes a matching
-record and skips the `SetLastReadTS` loop, while still calling
-`notifyReadStateChanged()` so the sidebar dot and workspace rail clear.
+goroutine and must not touch `App` state. `applyChannelMarkEcho`, which is what
+the `ChannelMarkedRemoteMsg` arm calls, consumes a matching record and skips the
+cursor update, while still calling `notifyReadStateChanged()` so the sidebar dot
+and workspace rail clear.
 
-Records are consumed on match and the set is bounded, so a `channel_marked` slk
-did not issue — the user reading the channel in another Slack client — still
-moves the divider, which is the correct response to that event.
+The dedup deliberately sits in `applyChannelMarkEcho` rather than in the shared
+`applyChannelMark` helper. `applyChannelMark`'s other caller is the local
+mark-unread press (`MessageMarkedUnreadMsg`), a deliberate user action that must
+move the divider unconditionally — and the two collide on ts routinely, since
+slk auto-marks at the newest message and "mark this newest message unread"
+targets the same one. Consuming in the shared helper would silently swallow the
+press for as long as the record lives: one round trip normally, unbounded if the
+echo never arrives.
 
-The thread panel's landmark has the same shape and the same rule.
+Records are consumed on match and the set is bounded (oldest evicted first), so
+a `channel_marked` slk did not issue — the user reading the channel in another
+Slack client — still moves the divider, which is the correct response to that
+event.
+
+The thread panel's landmark has the same shape, and is only half fixed.
 `ThreadMarkedLocalMsg` reports slk's own `subscriptions.thread.mark` completing;
-its arm applies threads-list state only and leaves the panel boundary at the
-pre-open snapshot. `ThreadMarkedRemoteMsg`, a mark from another client, still
-moves it.
+its arm applies threads-list state only (`applyThreadMarkListState`) and leaves
+the panel boundary at the pre-open snapshot.
+
+`ThreadMarkedRemoteMsg` still calls the full `applyThreadMark` and still moves
+the boundary. **That is not equivalent to "a mark from another client."** Slack
+broadcasts `thread_marked` back to the issuing client exactly as it does
+`channel_marked` — `TestThreadMarkedRemoteMsg_SelfReplyDoesNotReFlagUnread`
+documents slk receiving one after posting its own reply — so slk's own thread
+marks can still erase the panel landmark by the remote route. This is a known,
+unfixed gap, left open deliberately: closing it needs a thread-side dedup keyed
+on `(channel, threadTS, ts)` mirroring `selfMarkDedup`, and blanket suppression
+would be wrong, because a thread mark genuinely made in another client must
+still move the landmark.
 
 ### The decision lives in the UI reducer
 
