@@ -204,6 +204,20 @@ type App struct {
 	threads ThreadService
 
 	threadsDirtyDebounce time.Duration
+
+	// terminalFocused tracks whether the terminal running slk currently
+	// has focus. Maintained by reduceFocus from tea.FocusMsg /
+	// tea.BlurMsg, which the terminal only emits once View sets
+	// ReportFocus.
+	//
+	// Terminals report focus *transitions* only — enabling focus
+	// reporting elicits no current-state report — so NewApp starts this
+	// true. A terminal with no focus-event support sends nothing at
+	// all, and there the flag simply stays true for the whole session.
+	// tmux forwards focus events only when `set -g focus-events on`, so
+	// tmux users without that setting are in the same position.
+	terminalFocused bool
+
 	// fetchingOlder tracks in-flight older-history backfills per
 	// channel ID (Phase 3: a global bool would let one window's
 	// backfill block another channel's, and a fetch completing for
@@ -515,6 +529,7 @@ func NewApp() *App {
 		bootstrap:             newWorkspaceBootstrap(),
 		windowTitle:           "slk",
 		threadsDirtyDebounce:  150 * time.Millisecond,
+		terminalFocused:       true,
 		channelSearchDebounce: channelSearchDebounceDelay,
 		fetchingOlder:         map[string]bool{},
 		mouseWheelLines:       3,
@@ -614,6 +629,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.bootstrap,
 		reduceReactions,
 		reduceThreads,
+		reduceFocus,
 		reduceSend,
 		reduceChannels,
 		reduceLinks,
@@ -2770,6 +2786,10 @@ func (a *App) View() tea.View {
 	v := tea.NewView(screen)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
+	// Ask the terminal to report focus gain/loss so reduceFocus can keep
+	// a.terminalFocused current. Bubble Tea diffs this against the
+	// previous frame and only emits the enable sequence on change.
+	v.ReportFocus = true
 	if debuglog.Enabled() {
 		// panel: 0=workspace 1=sidebar 2=messages 3=thread
 		// view:  0=channels 1=threads
