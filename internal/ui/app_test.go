@@ -4484,3 +4484,28 @@ func TestListReactionsNoOpWhenNoReactions(t *testing.T) {
 		t.Fatal("mode should not change when there are no reactions")
 	}
 }
+
+// The thread panel's "── new ──" divider must be sourced from the
+// thread's own cursor in thread_subscriptions, not the parent
+// channel's last_read_ts: plain replies never advance the channel
+// watermark, so the channel cursor is systematically stale and puts
+// the divider too early.
+func TestOpenThreadPanel_BoundaryUsesThreadCursor(t *testing.T) {
+	app := NewApp()
+	var gotChannel, gotThread string
+	app.SetThreadService(NewThreadService(ThreadServiceFuncs{
+		ThreadLastRead: func(channelID ids.ChannelID, threadTS ids.ThreadTS) string {
+			gotChannel, gotThread = string(channelID), string(threadTS)
+			return "R7"
+		},
+	}))
+
+	_ = app.openThreadPanel(messages.MessageItem{TS: "P1"}, "C1", "P1")
+
+	if gotChannel != "C1" || gotThread != "P1" {
+		t.Fatalf("ThreadLastRead called with (%q, %q), want (C1, P1)", gotChannel, gotThread)
+	}
+	if got := app.threadPanel.UnreadBoundaryTS(); got != "R7" {
+		t.Errorf("thread panel boundary = %q, want the thread cursor R7", got)
+	}
+}

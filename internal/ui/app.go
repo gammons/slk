@@ -1589,7 +1589,7 @@ func (a *App) openThreadPanel(parent messages.MessageItem, channelID, threadTS s
 	a.focusedPanel = PanelThread
 	a.threadPanel.SetThread(parent, nil, channelID, threadTS)
 	a.threadCompose.SetChannel("thread")
-	a.applyThreadUnreadBoundary(channelID)
+	a.applyThreadUnreadBoundary(channelID, threadTS)
 
 	threads := a.threads
 	chID := ids.ChannelID(channelID)
@@ -1777,11 +1777,11 @@ func (a *App) openSelectedThreadCmd(debounce bool) tea.Cmd {
 	}
 	a.threadPanel.SetThread(parent, nil, sum.ChannelID, sum.ThreadTS)
 	a.threadCompose.SetChannel("thread")
-	// Snapshot the parent channel's last_read_ts BEFORE the local mark-
+	// Snapshot the thread's own last-read cursor BEFORE the local mark-
 	// read flips below, so the "── new ──" landmark in the thread panel
 	// reflects what the user had actually seen prior to opening this
 	// thread.
-	a.applyThreadUnreadBoundary(sum.ChannelID)
+	a.applyThreadUnreadBoundary(sum.ChannelID, sum.ThreadTS)
 	// Local mark-as-read for the threads list: opening a thread should
 	// clear its unread flag in the threads-view list and the sidebar
 	// badge. This is presentation-only — it does not call Slack's
@@ -1812,14 +1812,17 @@ func (a *App) openSelectedThreadCmd(debounce bool) tea.Cmd {
 }
 
 // applyThreadUnreadBoundary tells the thread panel where the unread
-// boundary is for `channelID` so it can render a "── new ──" landmark
-// before the first reply the user hasn't seen. No-op when no last-read
-// fetcher is wired (e.g. in tests).
-func (a *App) applyThreadUnreadBoundary(channelID string) {
-	if channelID == "" {
+// boundary is for (channelID, threadTS) so it can render a "── new ──"
+// landmark before the first reply the user hasn't seen. Sourced from
+// the thread's own cursor in thread_subscriptions — the parent
+// channel's cursor is stale for threads, since plain replies never
+// advance it. No-op when no last-read fetcher is wired (e.g. in tests).
+func (a *App) applyThreadUnreadBoundary(channelID, threadTS string) {
+	if channelID == "" || threadTS == "" {
 		return
 	}
-	a.threadPanel.SetUnreadBoundary(a.threads.ChannelLastRead(ids.ChannelID(channelID)))
+	a.threadPanel.SetUnreadBoundary(a.threads.ThreadLastRead(
+		ids.ChannelID(channelID), ids.ThreadTS(threadTS)))
 }
 
 // scheduleThreadsDirty returns a tea.Cmd that fires a ThreadsListDirtyMsg

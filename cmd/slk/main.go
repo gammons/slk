@@ -1840,18 +1840,17 @@ func run() error {
 				}
 				ensureWorkspaceThreadSubs(ctx, wctx, db, p.Send)
 			},
-			ChannelLastRead: func(channelID ids.ChannelID) string {
+			ThreadLastRead: func(channelID ids.ChannelID, threadTS ids.ThreadTS) string {
 				wctx := router.Active()
 				if wctx == nil {
 					return ""
 				}
-				chIDStr := string(channelID)
-				state, err := db.GetChannelReadState(chIDStr)
+				lastRead, err := db.GetThreadLastRead(wctx.TeamID, string(channelID), string(threadTS))
 				if err != nil {
-					log.Printf("Warning: GetChannelReadState for %s: %v", chIDStr, err)
+					debuglog.Cache("ThreadLastRead: %s/%s: %v", channelID, threadTS, err)
 					return ""
 				}
-				return state.LastReadTS
+				return lastRead
 			},
 		}))
 

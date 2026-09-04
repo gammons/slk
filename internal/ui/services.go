@@ -125,9 +125,8 @@ func (r reactionAdapter) RecordFrecent(emoji string) {
 // ThreadService is the App's interface to Slack's thread surfaces:
 // fetching replies, marking threads read, posting replies, and loading
 // the involved-threads list for the user's threads view. Includes
-// ChannelLastRead because the thread panel needs the parent channel's
-// last_read_ts to render its unread boundary — that's a thread-display
-// concern even though the data is channel-scoped.
+// ThreadLastRead because the thread panel needs the thread's own
+// last-read cursor to render its unread boundary.
 //
 // Implementations are wired by cmd/slk/main.go. Build one via
 // NewThreadService from a ThreadServiceFuncs struct so unused
@@ -172,10 +171,12 @@ type ThreadService interface {
 	// a 1000-item hard cap — measured at ~62 requests per workspace.
 	EnsureSubscriptions(teamID ids.TeamID)
 
-	// ChannelLastRead returns the parent channel's last_read_ts so
-	// the thread panel can render a "── new ──" boundary. Optional;
-	// returning "" disables the unread boundary in the thread panel.
-	ChannelLastRead(channelID ids.ChannelID) string
+	// ThreadLastRead returns the thread's own last-read cursor from
+	// thread_subscriptions so the thread panel can render a "── new ──"
+	// boundary. The parent channel's cursor is NOT a substitute: plain
+	// thread replies never advance it, so it is systematically stale and
+	// puts the divider too early. Optional; "" disables the boundary.
+	ThreadLastRead(channelID ids.ChannelID, threadTS ids.ThreadTS) string
 }
 
 // ThreadServiceFuncs is the closure bundle accepted by
@@ -188,7 +189,7 @@ type ThreadServiceFuncs struct {
 	SendReply           ThreadReplySendFunc
 	ListFetch           ThreadsListFetchFunc
 	EnsureSubscriptions func(teamID ids.TeamID)
-	ChannelLastRead     func(channelID ids.ChannelID) string
+	ThreadLastRead      func(channelID ids.ChannelID, threadTS ids.ThreadTS) string
 }
 
 // NewThreadService builds a ThreadService from a ThreadServiceFuncs
@@ -249,11 +250,11 @@ func (t threadAdapter) EnsureSubscriptions(teamID ids.TeamID) {
 	t.fns.EnsureSubscriptions(teamID)
 }
 
-func (t threadAdapter) ChannelLastRead(channelID ids.ChannelID) string {
-	if t.fns.ChannelLastRead == nil {
+func (t threadAdapter) ThreadLastRead(channelID ids.ChannelID, threadTS ids.ThreadTS) string {
+	if t.fns.ThreadLastRead == nil {
 		return ""
 	}
-	return t.fns.ChannelLastRead(channelID)
+	return t.fns.ThreadLastRead(channelID, threadTS)
 }
 
 // MessageService is the App's interface to Slack's per-message
