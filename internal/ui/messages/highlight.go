@@ -129,16 +129,17 @@ func HighlightSearchTerms(s string, terms []string, hlStart, hlEnd string) strin
 		}
 		runes := []rune(sg.text)
 		folded := make([]string, len(runes))
-		for i, r := range runes {
-			if r < utf8.RuneSelf {
-				// ASCII fast path: text.Fold allocates a transform
-				// chain per call (see fold.go); for ASCII, folding is
-				// just lowercasing.
-				if r >= 'A' && r <= 'Z' {
-					r += 'a' - 'A'
-				}
-				folded[i] = string(r)
-			} else {
+		if len(runes) == len(sg.text) && utf8.ValidString(sg.text) {
+			// ASCII is one byte per rune, so folding the segment once keeps
+			// each byte aligned with the corresponding original rune.
+			foldedText := text.Fold(sg.text)
+			for i := range folded {
+				folded[i] = foldedText[i : i+1]
+			}
+		} else {
+			// Preserve one entry per original rune when folding can change
+			// byte or rune counts, as with decomposed combining marks.
+			for i, r := range runes {
 				folded[i] = text.Fold(string(r))
 			}
 		}
