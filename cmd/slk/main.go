@@ -176,7 +176,7 @@ type WorkspaceContext struct {
 	// decide whether to draw the "Threads list unavailable" banner.
 	SubscriptionsAvailable bool
 	Channels               []sidebar.ChannelItem
-	// FinderItems is the list shown in the Ctrl+T finder: the channels
+	// FinderItems is the list shown in the Ctrl+P finder: the channels
 	// the user has joined. Channels they have not joined are not held
 	// here at all — they arrive per query from the finder's debounced
 	// channels/search and live only in the finder component.
@@ -4478,7 +4478,7 @@ func (h *rtmEventHandler) OnThreadSubscriptionChanged(channelID, threadTS, lastR
 // unread/last-read state), upserts the SQLite cache row, mirrors
 // channelNames/Types maps used by the notifier, and — if the
 // workspace is active — forwards a ConversationOpenedMsg to the UI
-// so the live sidebar updates.
+// so the live sidebar and channel finder (Ctrl+P) both update.
 func (h *rtmEventHandler) OnConversationOpened(ch slack.Channel) {
 	if h.wsCtx == nil {
 		return
@@ -4509,7 +4509,7 @@ func (h *rtmEventHandler) OnConversationOpened(ch slack.Channel) {
 		// path. On dedupe, the existing finder entry was added at
 		// bootstrap (or a prior open) and carries no unread state to
 		// refresh, so re-appending would double-list the channel in
-		// Ctrl+T.
+		// Ctrl+P.
 		finderItem.LastVisited = h.wsCtx.LastVisitedByChannel[ch.ID]
 		h.wsCtx.FinderItems = append(h.wsCtx.FinderItems, finderItem)
 	}
@@ -4532,8 +4532,9 @@ func (h *rtmEventHandler) OnConversationOpened(ch slack.Channel) {
 		return
 	}
 	h.program.Send(ui.ConversationOpenedMsg{
-		TeamID: h.workspaceID,
-		Item:   item,
+		TeamID:     h.workspaceID,
+		Item:       item,
+		FinderItem: finderItem,
 	})
 }
 
