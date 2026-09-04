@@ -325,7 +325,11 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 			// cursor advance. No notifyReadStateChanged, so this event
 			// triggers no sidebar repaint -- the has_unread=true the WS
 			// handler just wrote is cleared by the flush before
-			// anything normally repaints the dot.
+			// anything normally repaints the dot. Inside a tmux
+			// session that has not yet proven focus reporting no flush
+			// is armed (see autoMarkArmed), so there has_unread
+			// survives and the dot appears at the next repaint --
+			// which is what this arm did before it marked anything.
 			debuglog.Cache("NewMessageMsg: channel=%s ts=%s decision=active_focused_mark_read",
 				m.ChannelID, m.Message.TS)
 			a.recordChannelMark(m.ChannelID, m.Message.TS)
