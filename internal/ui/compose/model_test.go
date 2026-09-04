@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
@@ -1188,5 +1189,40 @@ func TestResetClearsBroadcast(t *testing.T) {
 	m.Reset()
 	if m.Broadcast() {
 		t.Error("Reset() must clear broadcast flag (non-sticky across sends)")
+	}
+}
+
+func TestBroadcastHintWrapping(t *testing.T) {
+	styles.Apply("default", config.Theme{})
+	m := New("newsroom")
+	m.ToggleBroadcast()
+
+	// With width=40, the compose box style has Width(39). The hint
+	// "↪ also send to #newsroom  (ctrl+o to cancel)" is 44 display columns
+	// wide, so it must wrap into 2 lines.
+	view := m.View(40, true)
+	lines := strings.Split(view, "\n")
+	if len(lines) < 4 {
+		t.Fatalf("expected at least 4 lines (top pad, input, wrapped hint lines, bottom pad), got %d:\n%s", len(lines), view)
+	}
+
+	wantWidth := 39 // style.Width(width - 1)
+	for i, l := range lines {
+		w := lipgloss.Width(l)
+		if w != wantWidth {
+			t.Errorf("line %d visual width = %d, want %d (line: %q)", i, w, wantWidth, l)
+		}
+		if !strings.Contains(l, "▌") {
+			t.Errorf("line %d missing left border ▌ (line: %q)", i, l)
+		}
+	}
+
+	// Verify unfocused view also maintains uniform width and border.
+	viewUnfocused := m.View(40, false)
+	for i, l := range strings.Split(viewUnfocused, "\n") {
+		w := lipgloss.Width(l)
+		if w != wantWidth {
+			t.Errorf("unfocused line %d visual width = %d, want %d", i, w, wantWidth)
+		}
 	}
 }

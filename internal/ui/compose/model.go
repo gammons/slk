@@ -1284,20 +1284,19 @@ func (m Model) renderChips(width int) string {
 	return lipgloss.NewStyle().MaxWidth(width).Render(row)
 }
 
-// renderBroadcastHint returns the one-line "also send to channel"
-// indicator shown under the input while the broadcast toggle is on,
-// or "" when it is off. innerBG must match the background used by the
-// input box so the hint row reads as part of the compose area.
+// renderBroadcastHint returns the "also send to channel" indicator
+// shown under the input while the broadcast toggle is on, or "" when
+// it is off. innerBG must match the background used by the input box
+// so the hint row reads as part of the compose area.
 func (m Model) renderBroadcastHint(width int, innerBG color.Color) string {
 	if !m.broadcast {
 		return ""
 	}
-	hint := lipgloss.NewStyle().
+	return lipgloss.NewStyle().
 		Foreground(styles.Accent).
 		Background(innerBG).
 		Width(width).
 		Render(fmt.Sprintf("↪ also send to #%s  (ctrl+o to cancel)", m.channelName))
-	return lipgloss.NewStyle().MaxWidth(width).Render(hint)
 }
 
 func (m Model) View(width int, focused bool) string {
@@ -1307,6 +1306,9 @@ func (m Model) View(width int, focused bool) string {
 	// lipgloss Width includes padding but excludes border.
 	// Total rendered = Width + border = (width-1) + 1 = width.
 	innerWidth := width - 3 // content area: width - border(1) - padding(2)
+	if innerWidth < 1 {
+		innerWidth = 1
+	}
 
 	var style = styles.ComposeBox.Width(width - 1)
 	if focused {
@@ -1322,38 +1324,34 @@ func (m Model) View(width int, focused bool) string {
 		innerBG = styles.ComposeInsertBG
 	}
 
-	var box string
+	var content string
 	// If empty and unfocused, render placeholder manually with correct background.
 	// When focused, show an empty compose box with cursor (no placeholder).
 	if m.input.Value() == "" && !focused {
-		placeholder := lipgloss.NewStyle().
+		content = lipgloss.NewStyle().
 			Foreground(styles.TextMuted).
 			Background(innerBG).
 			Width(innerWidth).
 			Render(m.input.Placeholder)
-		box = style.Render(placeholder)
 	} else {
 		// Wrap textarea output with full-width tinted background.
 		// The textarea's internal styles use Inline(true) which only covers text,
 		// not the full line width. This wrapper ensures consistent background.
-		content := lipgloss.NewStyle().
+		content = lipgloss.NewStyle().
 			Background(innerBG).
 			Foreground(styles.TextPrimary).
 			Width(innerWidth).
 			Render(m.input.View())
-		box = style.Render(content)
 	}
 
-	hint := m.renderBroadcastHint(width-3, innerBG)
+	hint := m.renderBroadcastHint(innerWidth, innerBG)
+	if hint != "" {
+		content = content + "\n" + hint
+	}
+	box := style.Render(content)
 
 	if chips == "" {
-		if hint == "" {
-			return box
-		}
-		return lipgloss.JoinVertical(lipgloss.Left, box, hint)
+		return box
 	}
-	if hint == "" {
-		return lipgloss.JoinVertical(lipgloss.Left, chips, box)
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, chips, box, hint)
+	return lipgloss.JoinVertical(lipgloss.Left, chips, box)
 }

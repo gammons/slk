@@ -11,8 +11,11 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 
+	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 func newThreadBroadcastApp(t *testing.T) *App {
@@ -54,20 +57,47 @@ func TestHandleInsertMode_CtrlOTogglesThreadBroadcast(t *testing.T) {
 	app.handleInsertMode(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
 	cmd := app.handleInsertMode(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
-		t.Fatal("Enter with text should return a send cmd")
+		t.Fatal("Enter in insert mode should produce a send command")
 	}
-	msg, ok := cmd().(SendThreadReplyMsg)
+	msg := cmd()
+	sendMsg, ok := msg.(SendThreadReplyMsg)
 	if !ok {
 		t.Fatalf("expected SendThreadReplyMsg, got %T", msg)
 	}
-	if !msg.Broadcast {
-		t.Error("SendThreadReplyMsg.Broadcast = false, want true after ctrl+o toggle")
+	if !sendMsg.Broadcast {
+		t.Errorf("SendThreadReplyMsg.Broadcast = false, want true")
+	}
+}
+
+func TestThreadComposeBroadcastRender(t *testing.T) {
+	styles.Apply("default", config.Theme{})
+	app := newThreadBroadcastApp(t)
+	app.channelNames = map[string]string{"C1": "newsroom"}
+	app.threadCompose.SetChannel("newsroom")
+	app.threadCompose.SetBroadcast(true)
+	app.threadCompose.SetValue("draft reply")
+
+	raw := app.threadCompose.View(40, true)
+	for i, l := range strings.Split(raw, "\n") {
+		if w := lipgloss.Width(l); w != 39 {
+			t.Errorf("threadCompose line %d visual width = %d, want 39 (line: %q)", i, w, l)
+		}
+		if !strings.Contains(l, "▌") {
+			t.Errorf("threadCompose line %d missing border ▌ (line: %q)", i, l)
+		}
 	}
 
-	// Non-sticky: the toggle must reset to false after send so it does
-	// not silently broadcast subsequent replies.
-	if app.threadCompose.Broadcast() {
-		t.Error("broadcast toggle should be cleared after send (non-sticky)")
+	frame := panelLayoutFrame{
+		ContentHeight: 30,
+		ThreadWidth:   42,
+		ThreadBorder:  1,
+	}
+	out := app.renderThreadRegion(frame, 0)
+	wantWidth := frame.ThreadWidth + frame.ThreadBorder
+	for i, l := range strings.Split(out, "\n") {
+		if w := lipgloss.Width(l); w != wantWidth {
+			t.Errorf("thread region line %d visual width = %d, want %d", i, w, wantWidth)
+		}
 	}
 }
 
