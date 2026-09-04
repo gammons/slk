@@ -218,6 +218,24 @@ type App struct {
 	// tmux users without that setting are in the same position.
 	terminalFocused bool
 
+	// pendingChannelMark / pendingThreadMark stage a read-cursor
+	// advance for a message that arrived in what the user is currently
+	// looking at. Single-slot and newest-wins: a burst coalesces into
+	// one request, and a slot can never issue a ts older than one it
+	// already holds. Staged whether focused or blurred; only the flush
+	// is focus-gated, so a blurred slot waits for the next FocusMsg.
+	pendingChannelMark pendingChannelMarkState
+	pendingThreadMark  pendingThreadMarkState
+
+	// markFlushScheduled guards against stacking flush ticks; see
+	// scheduleMarkFlush.
+	markFlushScheduled bool
+
+	// markFlushDebounce bounds a burst to one network write per
+	// interval per target. Longer than threadsDirtyDebounce (150ms)
+	// because that one only re-queries local SQLite.
+	markFlushDebounce time.Duration
+
 	// fetchingOlder tracks in-flight older-history backfills per
 	// channel ID (Phase 3: a global bool would let one window's
 	// backfill block another channel's, and a fetch completing for
@@ -495,6 +513,23 @@ type App struct {
 	scrollFlushScheduled bool
 }
 
+// pendingChannelMarkState is App.pendingChannelMark's slot: the newest
+// channel read-cursor advance staged but not yet issued. A zero ts
+// means "nothing staged".
+type pendingChannelMarkState struct {
+	channelID string
+	ts        string
+}
+
+// pendingThreadMarkState is App.pendingThreadMark's slot: the newest
+// thread read-cursor advance staged but not yet issued. A zero ts
+// means "nothing staged".
+type pendingThreadMarkState struct {
+	channelID string
+	threadTS  string
+	ts        string
+}
+
 func NewApp() *App {
 	// The window tree starts as a single window with no channel; the
 	// first ChannelSelectedMsg apply records the channel on it.
@@ -530,6 +565,7 @@ func NewApp() *App {
 		windowTitle:           "slk",
 		threadsDirtyDebounce:  150 * time.Millisecond,
 		terminalFocused:       true,
+		markFlushDebounce:     time.Second,
 		channelSearchDebounce: channelSearchDebounceDelay,
 		fetchingOlder:         map[string]bool{},
 		mouseWheelLines:       3,
@@ -1859,6 +1895,91 @@ func (a *App) scheduleThreadsDirty() tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg {
 		return ThreadsListDirtyMsg{TeamID: team}
 	})
+}
+
+// recordChannelMark stages a channel read-cursor advance. Newest-wins:
+// an older ts for the same channel is ignored, so out-of-order arrivals
+// can never roll the cursor backward. Slack timestamps are decimal
+// strings of equal shape, so the string comparison orders them
+// correctly without parsing.
+func (a *App) recordChannelMark(channelID, ts string) {
+	if channelID == "" || ts == "" {
+		return
+	}
+	if a.pendingChannelMark.channelID == channelID && a.pendingChannelMark.ts >= ts {
+		return
+	}
+	a.pendingChannelMark = pendingChannelMarkState{channelID: channelID, ts: ts}
+}
+
+// recordThreadMark stages a thread read-cursor advance. Newest-wins for
+// the same (channel, thread); a different thread replaces the slot.
+func (a *App) recordThreadMark(channelID, threadTS, ts string) {
+	if channelID == "" || threadTS == "" || ts == "" {
+		return
+	}
+	if a.pendingThreadMark.channelID == channelID &&
+		a.pendingThreadMark.threadTS == threadTS &&
+		a.pendingThreadMark.ts >= ts {
+		return
+	}
+	a.pendingThreadMark = pendingThreadMarkState{channelID: channelID, threadTS: threadTS, ts: ts}
+}
+
+// scheduleMarkFlush returns a tick that flushes the pending marks after
+// the debounce interval, or nil when nothing is staged, a tick is
+// already in flight, or the terminal is blurred. Blurred slots stay
+// staged and flush on the next FocusMsg instead, so no timer is armed
+// while the user is away.
+func (a *App) scheduleMarkFlush() tea.Cmd {
+	if a.markFlushScheduled || !a.terminalFocused {
+		return nil
+	}
+	if a.pendingChannelMark.ts == "" && a.pendingThreadMark.ts == "" {
+		return nil
+	}
+	a.markFlushScheduled = true
+	d := a.markFlushDebounce
+	if d == 0 {
+		d = time.Second
+	}
+	return tea.Tick(d, func(time.Time) tea.Msg { return markFlushMsg{} })
+}
+
+// flushPendingMarks clears both slots and returns the commands that
+// issue their marks. Clearing before issuing is deliberate: a mark
+// Slack rejects is not retried here, it is reconciled by the next
+// arrival, the next channel entry, or reconnect sync. Retrying a
+// rejected mark risks hammering a rate-limited endpoint.
+//
+// Note this does NOT move any on-screen "── new ──" divider.
+// ChannelService.MarkRead yields ChannelMarkedReadMsg, whose reducer
+// arm (reducer_channels.go:188) only calls notifyReadStateChanged and
+// never touches SetLastReadTS; the divider recomputes on the next
+// channel entry.
+func (a *App) flushPendingMarks() tea.Cmd {
+	var cmds []tea.Cmd
+	if pc := a.pendingChannelMark; pc.ts != "" {
+		a.pendingChannelMark = pendingChannelMarkState{}
+		channels := a.channels
+		chID := ids.ChannelID(pc.channelID)
+		ts := ids.MessageTS(pc.ts)
+		cmds = append(cmds, func() tea.Msg { return channels.MarkRead(chID, ts) })
+	}
+	if pt := a.pendingThreadMark; pt.ts != "" {
+		a.pendingThreadMark = pendingThreadMarkState{}
+		if c := a.threads.Mark(
+			ids.ChannelID(pt.channelID),
+			ids.ThreadTS(pt.threadTS),
+			ids.MessageTS(pt.ts),
+		); c != nil {
+			cmds = append(cmds, c)
+		}
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
 }
 
 // userNameFor returns the display name for a Slack user ID, falling back

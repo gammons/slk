@@ -142,8 +142,10 @@ func TestOnConversationOpened_InactiveWorkspace_PersistsContext(t *testing.T) {
 // (InactiveWorkspace_BumpsChannelUnreadCount, ...ThreadReplyDoesNotBumpChannel,
 // ...ThreadBroadcastBumpsChannel), which asserted against the now-removed
 // wctx.Channels[i].UnreadCount in-memory bump. The DB-backed assertions
-// here exercise the actual contract (UpdateChannelReadState writes) and
-// also cover the new active-channel suppression dimension.
+// here exercise the actual contract (UpdateChannelReadState writes).
+// The active/inactive channel dimension is kept as a pair because the
+// write used to be gated on it; it now runs unconditionally, and the
+// focus-gated clear lives in internal/ui (reduceNewMessage).
 
 func TestOnMessage_InactiveChannel_SetsHasUnread(t *testing.T) {
 	db := newTestDB(t)
@@ -162,20 +164,24 @@ func TestOnMessage_InactiveChannel_SetsHasUnread(t *testing.T) {
 	}
 }
 
-func TestOnMessage_ActiveChannel_DoesNotSetHasUnread(t *testing.T) {
+// The active channel is no longer exempt: whether the user can see it
+// depends on terminal focus, which only the UI goroutine knows. The WS
+// handler always flags, and reduceNewMessage clears it by marking read
+// when focused.
+func TestOnMessage_ActiveChannel_StillSetsHasUnread(t *testing.T) {
 	db := newTestDB(t)
 	_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
 	h := &rtmEventHandler{
 		db:              db,
 		wsCtx:           &WorkspaceContext{},
 		isActive:        func() bool { return true },
-		activeChannelID: func() string { return "C1" }, // viewing the same channel
+		activeChannelID: func() string { return "C1" },
 	}
 	h.OnMessage("C1", "U1", "1.001", "hi", "", "", false, nil, slack.Blocks{}, nil, "", "")
 
 	s, _ := db.GetChannelReadState("C1")
-	if s.HasUnread {
-		t.Errorf("HasUnread = true, want false (active-channel suppression)")
+	if !s.HasUnread {
+		t.Error("HasUnread = false, want true: the UI layer owns the focus-gated clear")
 	}
 }
 

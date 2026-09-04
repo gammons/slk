@@ -4121,26 +4121,25 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 		}
 	}
 
-	// Read-state: mark the channel has_unread=true when a message
-	// arrives in a channel the user is NOT actively viewing. Mirrors
-	// Slack's channel-unread semantics — non-broadcast thread replies
-	// do not mark the parent channel unread (only top-level messages
-	// and thread_broadcast subtypes do). See internal/ui/app.go's
-	// thread-reply guard for the matching active-path treatment.
+	// Read-state: mark the channel has_unread=true for every eligible
+	// message. Mirrors Slack's channel-unread semantics — non-broadcast
+	// thread replies do not mark the parent channel unread (only
+	// top-level messages and thread_broadcast subtypes do).
+	//
+	// There is deliberately NO active-channel exemption here. Whether
+	// the user can actually see the active channel depends on terminal
+	// focus, which is only known on the UI goroutine. reduceNewMessage
+	// owns that decision and clears this flag by marking read when the
+	// terminal is focused; if the mark fails, or the terminal is
+	// blurred, the flag correctly stands.
 	//
 	// This write runs for BOTH active and inactive workspaces; the
 	// active/inactive split below only governs the UI dispatch path,
-	// not durable read state. Task 10 of the read-state-sync plan
-	// consolidated the previously duplicated paths into this single
-	// gated write.
+	// not durable read state.
 	isThreadReply := threadTS != "" && threadTS != ts
 	isBroadcast := subtype == "thread_broadcast"
 	shouldMarkChannel := !isThreadReply || isBroadcast
-	activeChIDForRead := ""
-	if h.activeChannelID != nil {
-		activeChIDForRead = h.activeChannelID()
-	}
-	if h.db != nil && shouldMarkChannel && activeChIDForRead != channelID {
+	if h.db != nil && shouldMarkChannel {
 		if err := h.db.UpdateChannelReadState(channelID, "", true); err != nil {
 			log.Printf("Warning: failed to set has_unread for %s: %v", channelID, err)
 		}
