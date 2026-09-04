@@ -2980,6 +2980,45 @@ func TestThreadMarkedRemoteMsg_ReadClearsRow(t *testing.T) {
 	}
 }
 
+func TestDMNameResolvedMsg_RenamesSidebarDM(t *testing.T) {
+	app := NewApp()
+	app.activeTeamID = "T1"
+	app.SetChannels([]sidebar.ChannelItem{
+		{ID: "D1", Name: "U123", Type: "dm", DMUserID: "U123"},
+	})
+	app.Update(DMNameResolvedMsg{TeamID: "T1", ChannelID: "D1", DisplayName: "Alice"})
+	got := app.sidebar.Items()
+	if len(got) != 1 || got[0].Name != "Alice" {
+		t.Errorf("sidebar DM = %+v; want Name Alice", got)
+	}
+}
+
+func TestDMNameResolvedMsg_IgnoresOtherWorkspace(t *testing.T) {
+	app := NewApp()
+	app.activeTeamID = "T1"
+	app.SetChannels([]sidebar.ChannelItem{
+		{ID: "D1", Name: "U123", Type: "dm", DMUserID: "U123"},
+	})
+	app.Update(DMNameResolvedMsg{TeamID: "T2", ChannelID: "D1", DisplayName: "Alice"})
+	got := app.sidebar.Items()
+	if len(got) != 1 || got[0].Name != "U123" {
+		t.Errorf("inactive-workspace DMNameResolvedMsg mutated the active sidebar: %+v", got)
+	}
+}
+
+func TestUserResolvedMsg_RenamesSidebarDM(t *testing.T) {
+	app := NewApp()
+	app.activeTeamID = "T1"
+	app.SetChannels([]sidebar.ChannelItem{
+		{ID: "D1", Name: "U123", Type: "dm", DMUserID: "U123"},
+	})
+	app.Update(UserResolvedMsg{TeamID: "T1", UserID: "U123", DisplayName: "Alice", IsBot: false})
+	got := app.sidebar.Items()
+	if len(got) != 1 || got[0].Name != "Alice" {
+		t.Errorf("sidebar DM = %+v; want Name Alice from UserResolvedMsg", got)
+	}
+}
+
 func TestConversationOpenedMsg_SidebarReceivesItemAndUnread(t *testing.T) {
 	app := NewApp()
 	app.activeTeamID = "T1"

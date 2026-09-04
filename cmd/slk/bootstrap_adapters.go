@@ -455,6 +455,39 @@ func bootConversations(res *bootstrap.Result) []slack.Channel {
 	return out
 }
 
+// fillIMUsers copies counterparty user IDs from userBoot's ims[] onto
+// IM conversations that lack them.
+//
+// users.conversations is the sidebar's primary source, but its IM
+// objects are not guaranteed to carry `user` — Slack's conversation
+// payload sometimes omits it, and slack-go then leaves Channel.User
+// empty. buildChannelItem names a DM from that field (falling back to
+// the raw user ID), and an empty User means the sidebar row is blank
+// and the unresolved-DM sweep has nothing to fetch. userBoot's ims[]
+// always include `user`; overlaying them is how a DM gets a name when
+// GetChannels succeeded. Existing User values are left alone.
+func fillIMUsers(channels []slack.Channel, ims []boot.IM) {
+	if len(channels) == 0 || len(ims) == 0 {
+		return
+	}
+	byID := make(map[string]string, len(ims))
+	for _, im := range ims {
+		if im.UserID != "" {
+			byID[im.ID] = im.UserID
+		}
+	}
+	for i := range channels {
+		uid, ok := byID[channels[i].ID]
+		if !ok {
+			continue
+		}
+		channels[i].IsIM = true
+		if channels[i].User == "" {
+			channels[i].User = uid
+		}
+	}
+}
+
 // hydrateFirstSight inserts cache rows for the conversations and users
 // this boot learned about that the cache has never seen.
 //

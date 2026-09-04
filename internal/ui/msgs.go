@@ -199,6 +199,7 @@ type (
 		ChannelID string
 	}
 	DMNameResolvedMsg struct {
+		TeamID      string
 		ChannelID   string
 		DisplayName string
 		// IsBot is true when the resolved peer is a Slack app or bot.

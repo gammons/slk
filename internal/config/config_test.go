@@ -462,6 +462,48 @@ team_id = "T01ABCDEF"
 	}
 }
 
+func TestLoadWorkspacesMergesLegacyTeamIDKeyIntoSlug(t *testing.T) {
+	// saveWorkspaceVersionTS used to append [workspaces.<teamID>] when
+	// it could not find the slug header, so a real config looks like
+	// this after the first boot. Two slugs for the same team is still
+	// an error (TestLoadWorkspacesDuplicateTeamID); a leftover team-ID
+	// key next to the slug that owns that team is prefs, not a second
+	// workspace.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	data := []byte(`
+[workspaces.work]
+team_id = "T01ABCDEF"
+theme = "dracula"
+
+[workspaces.T01ABCDEF]
+version_ts = "1788174451"
+`)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, ok := cfg.Workspaces["T01ABCDEF"]; ok {
+		t.Fatal("leftover team-ID key should be dropped after merge")
+	}
+	ws, ok := cfg.Workspaces["work"]
+	if !ok {
+		t.Fatalf("expected slug key 'work', got %v", cfg.Workspaces)
+	}
+	if ws.TeamID != "T01ABCDEF" {
+		t.Errorf("TeamID = %q, want T01ABCDEF", ws.TeamID)
+	}
+	if ws.Theme != "dracula" {
+		t.Errorf("Theme = %q, want dracula (slug fields must survive the merge)", ws.Theme)
+	}
+	if ws.VersionTS != "1788174451" {
+		t.Errorf("VersionTS = %q, want the leftover block's 1788174451", ws.VersionTS)
+	}
+}
+
 func TestLoadWorkspacesMixedKeys(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
