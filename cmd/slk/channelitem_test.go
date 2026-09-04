@@ -41,6 +41,27 @@ func TestBuildChannelItem_DM(t *testing.T) {
 	}
 }
 
+func TestBuildChannelItem_DMUnknownFallsBackToUserID(t *testing.T) {
+	wctx := &WorkspaceContext{
+		BotUserIDs:        map[string]bool{},
+		UserNames:         map[string]string{},
+		UserNamesByHandle: map[string]string{},
+	}
+	ch := slack.Channel{
+		GroupConversation: slack.GroupConversation{
+			Conversation: slack.Conversation{
+				ID:   "D1",
+				IsIM: true,
+				User: "U123",
+			},
+		},
+	}
+	item, _ := buildChannelItem(ch, wctx, config.Config{}, "T1")
+	if item.Name != "U123" {
+		t.Errorf("Name = %q, want the user ID when UserNames has no entry", item.Name)
+	}
+}
+
 func TestBuildChannelItem_GroupDM(t *testing.T) {
 	wctx := &WorkspaceContext{
 		BotUserIDs:        map[string]bool{},

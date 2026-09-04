@@ -484,7 +484,7 @@ type fakeProvider struct {
 func (f *fakeProvider) Ready() bool                         { return f.ready }
 func (f *fakeProvider) OrderedSlackSections() []SectionMeta { return f.sections }
 
-func TestOrderedSections_SlackMode_HonorsLinkedListOrder(t *testing.T) {
+func TestOrderedSections_SlackMode_HoistsDirectMessages(t *testing.T) {
 	items := []ChannelItem{
 		{ID: "C1", Name: "ch1", Type: "channel", Section: "B"},
 		{ID: "C2", Name: "ch2", Type: "channel", Section: "A"},
@@ -501,7 +501,9 @@ func TestOrderedSections_SlackMode_HonorsLinkedListOrder(t *testing.T) {
 	m := New(items)
 	m.SetSectionsProvider(provider)
 	got := slackModeNavHeaders(&m)
-	want := []string{"A", "B", "DMS"}
+	// Direct Messages is hoisted above Slack's linked-list order so
+	// DMs sit under Threads instead of at the bottom of the rail.
+	want := []string{"DMS", "A", "B"}
 	if len(got) != len(want) {
 		t.Fatalf("len = %d, want %d (%v)", len(got), len(want), got)
 	}
@@ -566,8 +568,8 @@ func TestOrderedSections_ConfigMode_UnchangedWhenNoProvider(t *testing.T) {
 	}
 	m := New(items)
 	got := orderedSections(m.items, m.filtered)
-	// Custom first, then DMs, then Channels.
-	want := []string{"Custom", "Direct Messages", "Channels"}
+	// DMs first, then custom sections, then Channels.
+	want := []string{"Direct Messages", "Custom", "Channels"}
 	if len(got) != len(want) {
 		t.Fatalf("len = %d, want %d (%v)", len(got), len(want), got)
 	}

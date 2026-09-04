@@ -48,12 +48,17 @@ func Slugify(s string) string {
 // blocks). Returns an error if a slug-keyed block lacks team_id, if
 // two slugs map to the same team_id, or if a slug-keyed block's
 // team_id field is itself not a Slack-team-ID-shaped string.
+//
+// A leftover [workspaces.<teamID>] block next to a slug-keyed block
+// for the same team is not a duplicate workspace — it is how
+// saveWorkspaceVersionTS used to persist version_ts when it could not
+// find the slug header. Those prefs are merged into the slug block
+// and the leftover key is dropped so Load does not refuse to start.
 func resolveWorkspaceKeys(ws map[string]Workspace) (map[string]Workspace, error) {
 	if len(ws) == 0 {
 		return ws, nil
 	}
-	out := make(map[string]Workspace, len(ws))
-	seenTeamID := make(map[string]string, len(ws)) // teamID -> first slug we saw
+	prepared := make(map[string]Workspace, len(ws))
 	for key, w := range ws {
 		switch {
 		case w.TeamID != "":
@@ -71,13 +76,62 @@ func resolveWorkspaceKeys(ws map[string]Workspace) (map[string]Workspace, error)
 				"workspace %q is missing team_id (the TOML key is a slug, "+
 					"so the block must set team_id explicitly)", key)
 		}
-		if first, dup := seenTeamID[w.TeamID]; dup {
+		prepared[key] = w
+	}
+
+	slugForTeam := make(map[string]string, len(prepared)) // teamID -> slug key
+	for key, w := range prepared {
+		if key == w.TeamID {
+			continue
+		}
+		if first, dup := slugForTeam[w.TeamID]; dup {
 			return nil, fmt.Errorf(
 				"workspaces %q and %q both reference team_id %q",
 				first, key, w.TeamID)
 		}
-		seenTeamID[w.TeamID] = key
+		slugForTeam[w.TeamID] = key
+	}
+
+	out := make(map[string]Workspace, len(prepared))
+	for key, w := range prepared {
+		if key != w.TeamID {
+			continue
+		}
+		if slug, ok := slugForTeam[w.TeamID]; ok {
+			prepared[slug] = mergeWorkspacePrefs(prepared[slug], w)
+			continue
+		}
 		out[key] = w
 	}
+	for _, slug := range slugForTeam {
+		out[slug] = prepared[slug]
+	}
 	return out, nil
+}
+
+// mergeWorkspacePrefs copies unset preference fields from src into dst.
+// Used when a leftover team-ID-keyed block sits beside a slug-keyed
+// block for the same team: the slug keeps identity, the leftover
+// donates version_ts / theme / width / etc. that were saved under
+// the team-ID key. Non-empty dst fields win.
+func mergeWorkspacePrefs(dst, src Workspace) Workspace {
+	if dst.VersionTS == "" {
+		dst.VersionTS = src.VersionTS
+	}
+	if dst.Theme == "" {
+		dst.Theme = src.Theme
+	}
+	if dst.SidebarWidth == 0 {
+		dst.SidebarWidth = src.SidebarWidth
+	}
+	if dst.Order == 0 {
+		dst.Order = src.Order
+	}
+	if dst.UseSlackSections == nil {
+		dst.UseSlackSections = src.UseSlackSections
+	}
+	if len(dst.Sections) == 0 {
+		dst.Sections = src.Sections
+	}
+	return dst
 }

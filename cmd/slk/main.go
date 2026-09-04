@@ -2542,20 +2542,34 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		debuglog.General("workspace %s: users.conversations failed: %v", token.TeamName, err)
 		channels = bootConversations(res)
 	}
+	// Overlay IM counterparty ids from userBoot even when
+	// users.conversations succeeded: its IM objects sometimes omit
+	// `user`, and without that id the sidebar row is the raw (empty)
+	// Channel.User and the unresolved-DM sweep has nothing to fetch.
+	fillIMUsers(channels, res.IMs)
 	if len(channels) == 0 {
 		log.Printf("workspace %s: no conversations from either users.conversations or client.userBoot; the sidebar will be empty", token.TeamName)
 	}
+
+	// Resolve DM counterparties before buildChannelItem so the first
+	// sidebar paint already has display names, matching what the
+	// README screenshot shows. This is still on the connect goroutine,
+	// so writing wctx.UserNames is safe. Misses stay in UnresolvedDMs
+	// and the async sweep below covers them.
+	seedDMDisplayNames(wctx, channels)
 
 	for _, ch := range channels {
 		item, finderItem := buildChannelItem(ch, wctx, cfg, client.TeamID())
 		upsertChannelInDB(db, ch, item.Type, client.TeamID())
 
 		if ch.IsIM {
-			if _, ok := wctx.UserNames[ch.User]; !ok {
-				wctx.UnresolvedDMs = append(wctx.UnresolvedDMs, UnresolvedDM{
-					ChannelID: ch.ID,
-					UserID:    ch.User,
-				})
+			if ch.User != "" {
+				if name, ok := wctx.UserNames[ch.User]; !ok || name == "" {
+					wctx.UnresolvedDMs = append(wctx.UnresolvedDMs, UnresolvedDM{
+						ChannelID: ch.ID,
+						UserID:    ch.User,
+					})
+				}
 			}
 			if cachedUser, err := db.GetUser(ch.User); err == nil && cachedUser.Presence != "" {
 				item.Presence = cachedUser.Presence
@@ -2840,6 +2854,101 @@ func resolveUser(client *slackclient.Client, userID string, userNames map[string
 	return userID, false
 }
 
+// edgeUserDisplayName is the display → real → handle chain used
+// everywhere a user record from edge users/info is shown. Empty means
+// the record resolved nothing and the caller must fall back.
+func edgeUserDisplayName(u edge.User) string {
+	if u.Profile.DisplayName != "" {
+		return u.Profile.DisplayName
+	}
+	if u.Profile.RealName != "" {
+		return u.Profile.RealName
+	}
+	return u.Name
+}
+
+// seedDMDisplayNames batch-resolves IM counterparties that are not yet
+// in wctx.UserNames and writes the results into the in-memory maps
+// buildChannelItem reads. Must run on the connectWorkspace goroutine
+// before the UI is told the workspace is ready — after that,
+// wctx.UserNames has other readers and PatchUserName is the only safe
+// writer.
+func seedDMDisplayNames(wctx *WorkspaceContext, channels []slack.Channel) {
+	if wctx == nil || wctx.UserResolver == nil {
+		return
+	}
+	if wctx.UserNames == nil {
+		wctx.UserNames = make(map[string]string)
+	}
+	if wctx.UserNamesByHandle == nil {
+		wctx.UserNamesByHandle = make(map[string]string)
+	}
+	if wctx.BotUserIDs == nil {
+		wctx.BotUserIDs = make(map[string]bool)
+	}
+	seen := make(map[string]struct{})
+	ids := make([]string, 0)
+	for _, ch := range channels {
+		if !ch.IsIM || ch.User == "" {
+			continue
+		}
+		if _, dup := seen[ch.User]; dup {
+			continue
+		}
+		seen[ch.User] = struct{}{}
+		if name, ok := wctx.UserNames[ch.User]; ok && name != "" {
+			continue
+		}
+		ids = append(ids, ch.User)
+	}
+	if len(ids) == 0 {
+		return
+	}
+	for _, u := range wctx.UserResolver.ResolveNow(ids) {
+		name := edgeUserDisplayName(u)
+		if name == "" {
+			continue
+		}
+		wctx.UserNames[u.ID] = name
+		if u.Name != "" {
+			wctx.UserNamesByHandle[u.Name] = name
+		}
+		if u.IsBot {
+			wctx.BotUserIDs[u.ID] = true
+		}
+	}
+}
+
+// patchWorkspaceDM renames a DM (and re-buckets an app DM) on the
+// workspace's in-memory channel lists so a later workspace switch
+// still shows the resolved name. DMNameResolvedMsg only patches the
+// active sidebar.
+func patchWorkspaceDM(wctx *WorkspaceContext, channelID, name string, isBot bool) {
+	if wctx == nil || channelID == "" || name == "" {
+		return
+	}
+	for i := range wctx.Channels {
+		if wctx.Channels[i].ID != channelID {
+			continue
+		}
+		wctx.Channels[i].Name = name
+		if isBot && wctx.Channels[i].Type == "dm" {
+			wctx.Channels[i].Type = "app"
+		}
+		break
+	}
+	for i := range wctx.FinderItems {
+		if wctx.FinderItems[i].ID != channelID {
+			continue
+		}
+		wctx.FinderItems[i].Name = name
+		if isBot && wctx.FinderItems[i].Type == "dm" {
+			wctx.FinderItems[i].Type = "app"
+		}
+		break
+	}
+}
+
 // resolveDMNames resolves the display names of unresolved DM
 // counterparties, one edge users/info batch for the whole sweep, with
 // the per-user resolveUser loop as the fallback for ids edge did not
@@ -2853,21 +2962,20 @@ func resolveUser(client *slackclient.Client, userID string, userNames map[string
 func resolveDMNames(wctx *WorkspaceContext, db *cache.DB, avatarCache *avatar.Cache, send func(tea.Msg)) {
 	dmIDs := make([]string, 0, len(wctx.UnresolvedDMs))
 	for _, dm := range wctx.UnresolvedDMs {
-		dmIDs = append(dmIDs, dm.UserID)
+		if dm.UserID != "" {
+			dmIDs = append(dmIDs, dm.UserID)
+		}
 	}
 	byEdge := make(map[string]edge.User)
 	for _, u := range wctx.UserResolver.ResolveNow(dmIDs) {
 		byEdge[u.ID] = u
 	}
 	for _, dm := range wctx.UnresolvedDMs {
+		if dm.UserID == "" {
+			continue
+		}
 		if u, ok := byEdge[dm.UserID]; ok {
-			name := u.Profile.DisplayName
-			if name == "" {
-				name = u.Profile.RealName
-			}
-			if name == "" {
-				name = u.Name
-			}
+			name := edgeUserDisplayName(u)
 			if name != "" {
 				// edge users/info carries no is_app_user: a Slack app's DM
 				// resolved here may bucket as "dm" rather than "app" until
@@ -2877,8 +2985,10 @@ func resolveDMNames(wctx *WorkspaceContext, db *cache.DB, avatarCache *avatar.Ca
 				if u.IsBot {
 					wctx.BotUserIDs[dm.UserID] = true
 				}
+				patchWorkspaceDM(wctx, dm.ChannelID, name, u.IsBot)
 				if send != nil {
 					send(ui.DMNameResolvedMsg{
+						TeamID:      wctx.TeamID,
 						ChannelID:   dm.ChannelID,
 						DisplayName: name,
 						IsBot:       u.IsBot,
@@ -2896,12 +3006,16 @@ func resolveDMNames(wctx *WorkspaceContext, db *cache.DB, avatarCache *avatar.Ca
 		if isBot {
 			wctx.BotUserIDs[dm.UserID] = true
 		}
-		if resolved != dm.UserID && send != nil {
-			send(ui.DMNameResolvedMsg{
-				ChannelID:   dm.ChannelID,
-				DisplayName: resolved,
-				IsBot:       isBot,
-			})
+		if resolved != dm.UserID {
+			patchWorkspaceDM(wctx, dm.ChannelID, resolved, isBot)
+			if send != nil {
+				send(ui.DMNameResolvedMsg{
+					TeamID:      wctx.TeamID,
+					ChannelID:   dm.ChannelID,
+					DisplayName: resolved,
+					IsBot:       isBot,
+				})
+			}
 		}
 	}
 }

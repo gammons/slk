@@ -15,6 +15,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/gammons/slk/internal/slack/edge"
 	"github.com/gammons/slk/internal/ui"
+	"github.com/gammons/slk/internal/ui/sidebar"
+	"github.com/slack-go/slack"
 )
 
 // TestUserResolver_BoundsConcurrentRequests is the second half of the
@@ -489,13 +491,18 @@ func TestResolveDMNames(t *testing.T) {
 		edgeUserRecord("U_APP", "someapp", "Some App", "", "T1", 1, true),
 	}}
 	wctx := &WorkspaceContext{
-		TeamID:       "T1",
-		UserNames:    map[string]string{},
-		BotUserIDs:   map[string]bool{},
-		UserResolver: newUserResolver("T1", nil, db, nil, nil, batcher, nil),
+		TeamID:            "T1",
+		UserNames:         map[string]string{},
+		UserNamesByHandle: map[string]string{},
+		BotUserIDs:        map[string]bool{},
+		UserResolver:      newUserResolver("T1", nil, db, nil, nil, batcher, nil),
 		UnresolvedDMs: []UnresolvedDM{
 			{ChannelID: "D_ALICE", UserID: "U_ALICE"},
 			{ChannelID: "D_APP", UserID: "U_APP"},
+		},
+		Channels: []sidebar.ChannelItem{
+			{ID: "D_ALICE", Name: "U_ALICE", Type: "dm", DMUserID: "U_ALICE"},
+			{ID: "D_APP", Name: "U_APP", Type: "dm", DMUserID: "U_APP"},
 		},
 	}
 	var mu sync.Mutex
@@ -524,6 +531,9 @@ func TestResolveDMNames(t *testing.T) {
 	if alice == nil || alice.DisplayName != "Alice A" {
 		t.Errorf("D_ALICE got %+v; want a DMNameResolvedMsg naming Alice A", alice)
 	}
+	if alice != nil && alice.TeamID != "T1" {
+		t.Errorf("D_ALICE TeamID = %q; want T1 so the UI ignores other workspaces", alice.TeamID)
+	}
 	if app == nil || app.DisplayName != "Some App" || !app.IsBot {
 		t.Errorf("D_APP got %+v; want a DMNameResolvedMsg naming Some App with IsBot true — that flag re-buckets the row into the Apps section", app)
 	}
@@ -532,5 +542,41 @@ func TestResolveDMNames(t *testing.T) {
 	}
 	if n := len(batcher.calls()); n != 1 {
 		t.Errorf("the sweep made %d edge calls; want 1 for any number of DMs", n)
+	}
+	byID := map[string]sidebar.ChannelItem{}
+	for _, ch := range wctx.Channels {
+		byID[ch.ID] = ch
+	}
+	if got := byID["D_ALICE"]; got.Name != "Alice A" {
+		t.Errorf("wctx.Channels D_ALICE Name = %q; want Alice A so a workspace switch still shows the resolved name", got.Name)
+	}
+	if got := byID["D_APP"]; got.Name != "Some App" || got.Type != "app" {
+		t.Errorf("wctx.Channels D_APP = {Name:%q Type:%q}; want Some App / app", got.Name, got.Type)
+	}
+}
+
+func TestSeedDMDisplayNames_FillsUserNamesFromEdge(t *testing.T) {
+	db := newTestDB(t)
+	batcher := &fakeBatcher{res: []edge.User{
+		edgeUserRecord("U1", "alice", "Alice A", "", "T1", 1, false),
+	}}
+	wctx := &WorkspaceContext{
+		TeamID:            "T1",
+		UserNames:         map[string]string{},
+		UserNamesByHandle: map[string]string{},
+		BotUserIDs:        map[string]bool{},
+		UserResolver:      newUserResolver("T1", nil, db, nil, nil, batcher, nil),
+	}
+	channels := []slack.Channel{{
+		GroupConversation: slack.GroupConversation{
+			Conversation: slack.Conversation{ID: "D1", IsIM: true, User: "U1"},
+		},
+	}}
+	seedDMDisplayNames(wctx, channels)
+	if got := wctx.UserNames["U1"]; got != "Alice A" {
+		t.Errorf("UserNames[U1] = %q; want Alice A — sidebar DMs read this map at first paint", got)
+	}
+	if got := wctx.UserNamesByHandle["alice"]; got != "Alice A" {
+		t.Errorf("UserNamesByHandle[alice] = %q; want Alice A", got)
 	}
 }

@@ -30,13 +30,13 @@ func TestRenderedSelectionMatchesNavigation(t *testing.T) {
 	// cursor lands on a line containing each name in order. Headers
 	// share names with the visible section titles ("Engineering",
 	// "Alerts", "Direct Messages", "Channels") so we list them too.
-	// Custom sections are ordered by SectionOrder ascending, so Alerts
-	// (order=1) precedes Engineering (order=2). Then DMs, then the
-	// catch-all Channels section.
+	// DMs lead, then custom sections by SectionOrder ascending (Alerts
+	// order=1 before Engineering order=2), then the catch-all Channels
+	// section.
 	expectedOrder := []string{
+		"Direct Messages", "alice", "bob",
 		"Alerts", "alerts", "ops",
 		"Engineering", "deploys",
-		"Direct Messages", "alice", "bob",
 		"Channels", "general",
 	}
 	for i, name := range expectedOrder {
@@ -60,8 +60,8 @@ func TestRenderedSelectionMatchesNavigation(t *testing.T) {
 
 func TestNavigationFollowsSectionOrder(t *testing.T) {
 	// Items in Slack-response order: a default channel, then two custom-section
-	// channels, then a DM. Expected display order: custom section first, then
-	// "Direct Messages", then "Channels".
+	// channels, then a DM. Expected display order: Direct Messages first, then
+	// the custom section, then Channels.
 	items := []ChannelItem{
 		{ID: "C1", Name: "general", Type: "channel"},
 		{ID: "C2", Name: "alerts", Type: "channel", Section: "Alerts", SectionOrder: 1},
@@ -73,9 +73,9 @@ func TestNavigationFollowsSectionOrder(t *testing.T) {
 	m.ToggleCollapse("Channels")
 
 	// Walk through every channel ID, advancing j past section headers
-	// as needed. Selection-by-channel-ID order: C2, C3 (Alerts), D1
-	// (Direct Messages), C1 (Channels).
-	want := []string{"C2", "C3", "D1", "C1"}
+	// as needed. Selection-by-channel-ID order: D1 (Direct Messages),
+	// C2, C3 (Alerts), C1 (Channels).
+	want := []string{"D1", "C2", "C3", "C1"}
 	stepDownToID := func(t *testing.T, want string) {
 		t.Helper()
 		for i := 0; i < 50; i++ {
@@ -104,7 +104,7 @@ func TestNavigationFollowsSectionOrder(t *testing.T) {
 	}
 }
 
-func TestOrderedSectionsCustomFirstDMsLast(t *testing.T) {
+func TestOrderedSectionsDMsFirstThenCustom(t *testing.T) {
 	items := []ChannelItem{
 		{ID: "C1", Name: "general", Type: "channel"},
 		{ID: "D1", Name: "bob", Type: "dm"},
@@ -113,7 +113,7 @@ func TestOrderedSectionsCustomFirstDMsLast(t *testing.T) {
 	}
 	filtered := []int{0, 1, 2, 3}
 	got := orderedSections(items, filtered)
-	want := []string{"Engineering", "Alerts", "Direct Messages", "Channels"}
+	want := []string{"Direct Messages", "Engineering", "Alerts", "Channels"}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
