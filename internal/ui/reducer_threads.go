@@ -144,13 +144,15 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			)
 		}
 		// Optimistic local recompute so the badge updates immediately
-		// rather than waiting on the round-trip. Usually this clears
-		// Unread, but it re-derives the flag from latestTS, so it can
-		// also set it (a reply that landed after the summary's
-		// LastReplyTS leaves the thread legitimately unread).
-		// ThreadMarkedLocalMsg reconciles this against the cursor Slack
-		// accepted on success; a rejected mark leaves state untouched
-		// and heals on the next list refresh.
+		// rather than waiting on the round-trip. MarkByThreadTSReadAt
+		// sets Unread = summary.LastReplyTS > latestTS, so it usually
+		// clears the flag; but it re-derives rather than clears, so it
+		// can also set it. That happens when the summary knows a newer
+		// reply than this fetch returned (LastReplyTS > latestTS), in
+		// which case the thread really is still unread and stays
+		// flagged. ThreadMarkedLocalMsg reconciles this against the
+		// cursor Slack accepted on success; a rejected mark leaves
+		// state untouched and heals on the next list refresh.
 		if a.threadsView.MarkByThreadTSReadAt(channelID, m.ThreadTS, latestTS) {
 			a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
 		}
