@@ -4124,7 +4124,9 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// Read-state: mark the channel has_unread=true for every eligible
 	// message. Mirrors Slack's channel-unread semantics — non-broadcast
 	// thread replies do not mark the parent channel unread (only
-	// top-level messages and thread_broadcast subtypes do).
+	// top-level messages and thread_broadcast subtypes do), and neither
+	// your own sends nor edits of existing messages do (see the two
+	// exclusions below).
 	//
 	// There is deliberately NO active-channel exemption here. Whether
 	// the user can actually see the active channel depends on terminal
@@ -4138,7 +4140,27 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// not durable read state.
 	isThreadReply := threadTS != "" && threadTS != ts
 	isBroadcast := subtype == "thread_broadcast"
-	shouldMarkChannel := !isThreadReply || isBroadcast
+	channelEligible := !isThreadReply || isBroadcast
+	// Self-sends and edit echoes are excluded because reduceNewMessage
+	// returns BEFORE its read-state tail for both (reducer_send.go, the
+	// IsEdited and IsSelfSent arms). Nothing on the UI side would ever
+	// clear a flag set here, so it would stick until the next channel
+	// entry — the dot would appear on the channel you just posted in.
+	//
+	// Your own message never makes a channel unread on Slack, whichever
+	// client sent it, so the exclusion is global rather than scoped to
+	// the active channel. It compares the raw userID rather than the
+	// derived authorID: a bot message carries userID == "" (and
+	// authorID == botID), and h.currentUserID is also "" before
+	// workspace bootstrap wires it (main.go:2076), so an unguarded
+	// equality would exempt every bot message from marking its channel
+	// unread.
+	isSelfMessage := userID != "" && userID == h.currentUserID
+	// edited is true only for message_changed
+	// (internal/slack/events.go:307): a re-delivery of a message the
+	// channel already accounted for. Editing it does not make the
+	// channel unread on Slack.
+	shouldMarkChannel := channelEligible && !isSelfMessage && !edited
 	if h.db != nil && shouldMarkChannel {
 		if err := h.db.UpdateChannelReadState(channelID, "", true); err != nil {
 			log.Printf("Warning: failed to set has_unread for %s: %v", channelID, err)
@@ -4146,16 +4168,21 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	}
 
 	if h.isActive != nil && !h.isActive() {
-		// Inactive workspace — read state was already persisted above.
-		// Fire a ReadStateChangedMsg so the workspace rail refreshes
-		// its dot from db.WorkspacesWithUnreads(). The sidebar's
-		// Invalidate is a no-op here because the active workspace's
-		// sidebar isn't showing this channel anyway.
-		if shouldMarkChannel {
+		// Inactive workspace — durable read state is already settled
+		// above (written, or deliberately skipped). Fire a
+		// ReadStateChangedMsg so the workspace rail refreshes its dot
+		// from db.WorkspacesWithUnreads(). The sidebar's Invalidate is
+		// a no-op here because the active workspace's sidebar isn't
+		// showing this channel anyway.
+		switch {
+		case shouldMarkChannel:
 			debuglog.Cache("OnMessage: team=%s channel=%s ts=%s subtype=%q thread_ts=%s decision=inactive_workspace_persisted",
 				h.workspaceID, channelID, ts, subtype, threadTS)
-		} else {
+		case !channelEligible:
 			debuglog.Cache("OnMessage: team=%s channel=%s ts=%s subtype=%q thread_ts=%s decision=skipped_thread_reply_inactive",
+				h.workspaceID, channelID, ts, subtype, threadTS)
+		default:
+			debuglog.Cache("OnMessage: team=%s channel=%s ts=%s subtype=%q thread_ts=%s decision=skipped_self_or_edit_inactive",
 				h.workspaceID, channelID, ts, subtype, threadTS)
 		}
 		if h.program != nil {
