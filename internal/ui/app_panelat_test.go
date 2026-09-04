@@ -9,15 +9,15 @@
 // rail | sidebar | messages | thread, with the 1-row status bar at
 // y == height-1.
 //
-//   x < layout.railWidth                                   → PanelWorkspace, ok=false
-//   sidebarVisible && x < layout.sidebarEnd                → PanelSidebar, ok=false
-//   x < layout.msgEnd                                      → PanelMessages
-//                                                            paneX = x - layout.sidebarEnd - 1
-//                                                            paneY = y - 1, ok=true
-//   threadVisible && x < layout.threadEnd                  → PanelThread
-//                                                            paneX = x - layout.msgEnd - 1
-//                                                            paneY = y - 1, ok=true
-//   y >= height-1                                          → PanelWorkspace, ok=false
+//	x < layout.railWidth                                   → PanelWorkspace, ok=false
+//	sidebarVisible && x < layout.sidebarEnd                → PanelSidebar, ok=false
+//	x < layout.msgEnd                                      → PanelMessages
+//	                                                         paneX = x - layout.sidebarEnd - 1
+//	                                                         paneY = y - 1, ok=true
+//	threadVisible && x < layout.threadEnd                  → PanelThread
+//	                                                         paneX = x - layout.msgEnd - 1
+//	                                                         paneY = y - 1, ok=true
+//	y >= height-1                                          → PanelWorkspace, ok=false
 package ui
 
 import "testing"

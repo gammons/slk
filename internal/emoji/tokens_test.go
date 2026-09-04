@@ -38,7 +38,7 @@ func TestResolveEmojiToTokens_Shortcodes(t *testing.T) {
 	rocketURL := CDNBaseURL + "1f680.png"    // :rocket:
 	customParrot := "https://emoji.slack-edge.com/T01/party_parrot/abc.gif"
 	customs := map[string]string{
-		"party_parrot": customParrot,
+		"party_parrot":     customParrot,
 		"alias_for_rocket": "alias:rocket",
 	}
 
@@ -104,10 +104,10 @@ func TestResolveEmojiToTokens_Shortcodes(t *testing.T) {
 }
 
 func TestResolveEmojiToTokens_UnicodeClusters(t *testing.T) {
-	thumbURL := CDNBaseURL + "1f44d.png"                  // 👍
-	astronautURL := CDNBaseURL + "1f468-200d-1f680.png"   // 👨‍🚀 (ZWJ kept)
-	heartURL := CDNBaseURL + "2764-fe0f.png"              // ❤️ (VS16 preserved)
-	flagUSURL := CDNBaseURL + "1f1fa-1f1f8.png"           // 🇺🇸 (regional indicators)
+	thumbURL := CDNBaseURL + "1f44d.png"                   // 👍
+	astronautURL := CDNBaseURL + "1f468-200d-1f680.png"    // 👨‍🚀 (ZWJ kept)
+	heartURL := CDNBaseURL + "2764-fe0f.png"               // ❤️ (VS16 preserved)
+	flagUSURL := CDNBaseURL + "1f1fa-1f1f8.png"            // 🇺🇸 (regional indicators)
 	rainbowURL := CDNBaseURL + "1f3f3-fe0f-200d-1f308.png" // 🏳️‍🌈 (VS16 preserved mid-sequence)
 
 	cases := []struct {

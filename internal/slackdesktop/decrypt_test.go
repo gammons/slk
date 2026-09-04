@@ -6,8 +6,8 @@ import (
 	"crypto/cipher"
 	"testing"
 
-	"golang.org/x/crypto/pbkdf2"
 	"crypto/sha1"
+	"golang.org/x/crypto/pbkdf2"
 )
 
 func cbcEncrypt(t *testing.T, plaintext, password []byte, rounds int) []byte {

@@ -13,15 +13,15 @@ import (
 )
 
 type Config struct {
-	General       General                      `toml:"general"`
-	Appearance    Appearance                   `toml:"appearance"`
-	Animations    Animations                   `toml:"animations"`
-	Notifications Notifications                `toml:"notifications"`
-	Cache         CacheConfig                  `toml:"cache"`
-	Sidebar       Sidebar                      `toml:"sidebar"`
-	Sections      map[string]SectionDef        `toml:"sections"`
-	Theme         Theme                        `toml:"theme"`
-	Workspaces    map[string]Workspace         `toml:"workspaces"`
+	General       General               `toml:"general"`
+	Appearance    Appearance            `toml:"appearance"`
+	Animations    Animations            `toml:"animations"`
+	Notifications Notifications         `toml:"notifications"`
+	Cache         CacheConfig           `toml:"cache"`
+	Sidebar       Sidebar               `toml:"sidebar"`
+	Sections      map[string]SectionDef `toml:"sections"`
+	Theme         Theme                 `toml:"theme"`
+	Workspaces    map[string]Workspace  `toml:"workspaces"`
 }
 
 // SectionDef defines a sidebar section with channel name patterns.

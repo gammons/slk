@@ -104,6 +104,25 @@ func TestUserResolver_RequestDoesNotBlockTheCaller(t *testing.T) {
 	}
 }
 
+// waitUntil polls cond until it holds or the deadline passes.
+//
+// Use this rather than waiting on fakeBatcher.calls() whenever the
+// assertion is about resolver *output* (cache rows, sent messages).
+// fakeBatcher records a batch on entry and returns immediately, while
+// the resolver applies the records afterwards — so a call count is not
+// a barrier for anything applyEdgeUser writes.
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
 // fakeBatcher implements userBatcher and records each batch it was
 // asked for.
 type fakeBatcher struct {
@@ -166,10 +185,34 @@ func TestUserResolver_BatchesMissesThroughEdge(t *testing.T) {
 	r.Request("U001")
 	r.Request("U002")
 
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) && len(batcher.calls()) == 0 {
-		time.Sleep(10 * time.Millisecond)
-	}
+	// Wait for the cache rows, not for the batch call.
+	//
+	// fakeBatcher records the call and returns; the resolver only then
+	// loops applyEdgeUser, which is what writes the row
+	// (UpsertUserFromEdge). Waiting on batcher.calls() therefore
+	// returns *before* the state asserted below exists, and the
+	// GetUser calls race the write — an intermittent "U001 was not
+	// cached from the edge batch: sql: no rows in result set".
+	// applyEdgeUser writes the row and *then* sends UserResolvedMsg,
+	// per user, so waiting for both messages implies every write has
+	// landed.
+	waitUntil(t, "the edge batch to be applied to the cache", func() bool {
+		for _, id := range []string{"U001", "U002"} {
+			if _, err := db.GetUser(id); err != nil {
+				return false
+			}
+		}
+		sentMu.Lock()
+		defer sentMu.Unlock()
+		n := 0
+		for _, m := range sent {
+			if _, ok := m.(ui.UserResolvedMsg); ok {
+				n++
+			}
+		}
+		return n == 2
+	})
+
 	calls := batcher.calls()
 	if len(calls) != 1 {
 		t.Fatalf("edge batches = %d; want 1 — misses inside the window coalesce (sent: %v)", len(calls), calls)

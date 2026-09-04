@@ -660,8 +660,8 @@ func TestCollapseByID_IndependentFromConfigMode(t *testing.T) {
 	}
 	m := New(items)
 	m.SetSectionsProvider(p)
-	m.ToggleCollapse("A")        // collapse via ID
-	m.SetSectionsProvider(nil)   // back to config mode
+	m.ToggleCollapse("A")      // collapse via ID
+	m.SetSectionsProvider(nil) // back to config mode
 	// Now "A" is just a string in config mode; whether it's collapsed
 	// depends on the name-keyed `collapsed` map (which is the default
 	// state set in New). The ID-mode collapse must NOT bleed into

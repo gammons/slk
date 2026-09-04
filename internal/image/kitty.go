@@ -226,8 +226,14 @@ func (k *KittyRenderer) RenderKey(key string, target image.Point) Render {
 		payload, payloadHit := k.payloads[payloadKey]
 		k.mu.Unlock()
 		if !payloadHit {
-			pxW := target.X * 8
-			pxH := target.Y * 16
+			// Encode against the terminal's real cell size, not a
+			// hardcoded 8x16. The placement is by cell either way, so
+			// this does not move the image — it decides how many
+			// pixels the terminal has to work with when it scales the
+			// image across those cells. See measuredCellPixels.
+			cw, ch := measuredCellPixels()
+			pxW := target.X * cw
+			pxH := target.Y * ch
 			resized := image.NewRGBA(image.Rect(0, 0, pxW, pxH))
 			draw.BiLinear.Scale(resized, resized.Bounds(), src, src.Bounds(), draw.Over, nil)
 			var pngBuf bytes.Buffer

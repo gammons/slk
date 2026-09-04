@@ -9,15 +9,15 @@
 //
 // Layout is a two-step dance with View():
 //
-//	1. View calls Compute(...) at frame start. Compute resolves the
-//	   per-pane widths/borders for the current terminal size and
-//	   visibility flags, stores the resulting horizontal bands for
-//	   subsequent PanelAt calls, and returns a panelLayoutFrame the
-//	   caller uses to drive rendering.
+//  1. View calls Compute(...) at frame start. Compute resolves the
+//     per-pane widths/borders for the current terminal size and
+//     visibility flags, stores the resulting horizontal bands for
+//     subsequent PanelAt calls, and returns a panelLayoutFrame the
+//     caller uses to drive rendering.
 //
-//	2. As each pane renders, it calls SetSidebarHeight / SetMsgHeight /
-//	   SetThreadHeight with the chrome-stripped content height. These
-//	   feed PageHeight() which pageSize / halfPageSize consult.
+//  2. As each pane renders, it calls SetSidebarHeight / SetMsgHeight /
+//     SetThreadHeight with the chrome-stripped content height. These
+//     feed PageHeight() which pageSize / halfPageSize consult.
 //
 // Auto-hide: if there isn't room for both the messages pane (≥40 cols)
 // AND the thread pane (≥30 cols), Compute returns ThreadAutoHidden=true.

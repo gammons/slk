@@ -60,5 +60,5 @@ func findKeyringPassword(searchItems searchSecretItemsFunc) ([]byte, error) {
 	if foundLocked {
 		return nil, ErrKeyringLocked
 	}
-	return nil, ErrNoSecretService
+	return nil, ErrSecretNotFound
 }

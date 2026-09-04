@@ -82,7 +82,7 @@ func TestFindKeyringPasswordErrors(t *testing.T) {
 			search: func(map[string]string) ([]*gosecret.Item, []*gosecret.Item, error) {
 				return nil, nil, nil
 			},
-			want: ErrNoSecretService,
+			want: ErrSecretNotFound,
 		},
 		{
 			name: "matching item is locked",

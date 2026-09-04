@@ -38,7 +38,7 @@ func TestStatusReporter_NilReportIsNoop(t *testing.T) {
 }
 
 func TestStatusReporter_NilEnqueueIsNoop(t *testing.T) {
-	var sr *StatusReporter // nil
+	var sr *StatusReporter          // nil
 	sr.Enqueue(1, 0, "ws", "title") // must not panic or block
 }
 

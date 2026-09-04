@@ -100,10 +100,17 @@ changelog:
     - title: Other
       order: 999
   filters:
+    # Scoped prefixes must be matched explicitly: "^chore:" does NOT
+    # match "chore(ci): ...", so scoped internal commits were leaking
+    # into user-facing notes (v0.16.0 shipped with "chore(ci): bump
+    # golangci-lint" under Other). The (\(.*\))? makes the scope
+    # optional so both spellings are excluded.
     exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
+      - "^docs(\\(.*\\))?:"
+      - "^test(\\(.*\\))?:"
+      - "^chore(\\(.*\\))?:"
+      - "^style(\\(.*\\))?:"
+      - "^ci(\\(.*\\))?:"
       - "Merge pull request"
       - "Merge branch"
 

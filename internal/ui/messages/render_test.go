@@ -783,12 +783,13 @@ func TestBgFgANSIForBasicColorOutOfRange(t *testing.T) {
 
 // TestSubstituteBgSGR exercises the grammar-aware bg-parameter
 // substitution. The helper must:
-//   (1) substitute the param when it stands alone (\x1b[40m)
-//   (2) substitute the param within a bundled SGR (\x1b[1;31;40m)
-//   (3) NOT corrupt literal digits in non-SGR content
-//   (4) NOT match the param value inside a 256-color sub-argument
-//       (\x1b[38;5;40m is an FG index 40, not a bg basic 40)
-//   (5) leave the string unchanged when from == to
+//
+//	(1) substitute the param when it stands alone (\x1b[40m)
+//	(2) substitute the param within a bundled SGR (\x1b[1;31;40m)
+//	(3) NOT corrupt literal digits in non-SGR content
+//	(4) NOT match the param value inside a 256-color sub-argument
+//	    (\x1b[38;5;40m is an FG index 40, not a bg basic 40)
+//	(5) leave the string unchanged when from == to
 func TestSubstituteBgSGR(t *testing.T) {
 	const to = "48;2;100;100;200"
 

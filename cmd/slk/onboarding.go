@@ -67,7 +67,7 @@ func addWorkspace() error {
 				Description("All selected by default; space to toggle, enter to confirm.").
 				Options(opts...).
 				Value(&chosen).
-				Height(visibleRows+4),
+				Height(visibleRows + 4),
 		),
 	).WithTheme(huh.ThemeFunc(huh.ThemeDracula))
 	if err := form.Run(); err != nil {
@@ -132,6 +132,8 @@ func desktopErrorMessage(err error) string {
 		return "Your system keyring is locked. Unlock it (log in to your desktop session) and retry."
 	case errors.Is(err, slackdesktop.ErrNoSecretService):
 		return "No system keyring/secret service found. slk needs it to read the Slack session."
+	case errors.Is(err, slackdesktop.ErrSecretNotFound):
+		return "No Slack entry found in your keyring. Sign in to the Slack desktop app (and make sure it uses the system keyring), then retry."
 	case errors.Is(err, slackdesktop.ErrDecryptFailed):
 		// Keep the wrapped detail: it names which step failed (padding, length,
 		// non-printable result), which is the difference between a diagnosable

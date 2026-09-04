@@ -7,7 +7,8 @@ that the Slack desktop app is installed and you're signed in to it.
 ## 1. Sign in to the Slack desktop app
 
 Install the Slack desktop app if you haven't already, and sign in to each
-workspace you want to use in slk.
+workspace you want to use in slk. Native packages, flatpak
+(`com.slack.Slack`), and snap installs are all detected on Linux.
 
 ## 2. Add your workspaces
 

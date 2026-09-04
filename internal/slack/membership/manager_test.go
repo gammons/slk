@@ -11,18 +11,30 @@ import (
 )
 
 // fakeMemberAPI implements ConversationMemberAPI for tests.
+//
+// delay is slept *after* the call is recorded and the lock released, so
+// a test can hold the Manager's post-call bookkeeping (lastFailed /
+// lastFetched, which backgroundFetch writes only once the API returns)
+// open for a deterministic window. Tests that assert on that
+// bookkeeping must therefore never treat callCount as a barrier for it
+// — see waitUntil.
 type fakeMemberAPI struct {
 	mu     sync.Mutex
 	calls  int
 	result []string
 	err    error
+	delay  time.Duration
 }
 
 func (f *fakeMemberAPI) GetUsersInConversation(ctx context.Context, channelID string) ([]string, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls++
-	return f.result, f.err
+	result, err, delay := f.result, f.err, f.delay
+	f.mu.Unlock()
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+	return result, err
 }
 
 func (f *fakeMemberAPI) callCount() int {
@@ -157,6 +169,36 @@ func waitForCallCount(t *testing.T, api *fakeMemberAPI, n int) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %d API calls", n)
+}
+
+// waitUntil polls cond until it holds or the deadline passes.
+//
+// Prefer this over waitForCallCount/waitForPush when asserting on
+// Manager bookkeeping. Neither of those is a barrier for it:
+// fakeMemberAPI records a call on *entry* while backgroundFetch writes
+// lastFailed/lastFetched only after the call returns (manager.go), and
+// EnsureFresh pushes synchronously on the caller's goroutine
+// (manager.go, pushSnapshot) so a push can be the caller's own rather
+// than the background fetch's.
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// failureRecordedAt reports the manager's lastFailed entry for a
+// channel under the manager's own lock.
+func failureRecordedAt(mgr *Manager, channelID string) (time.Time, bool) {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	ts, ok := mgr.lastFailed[channelID]
+	return ts, ok
 }
 
 func TestApplyJoinPersistsAndPushes(t *testing.T) {
@@ -373,10 +415,19 @@ func TestBackgroundFetchRetriesAfterBackoffExpiry(t *testing.T) {
 	mgr, api, sink, db := newManagerForTest(t)
 	defer db.Close()
 	api.err = fmt.Errorf("channel_not_found")
+	api.delay = 50 * time.Millisecond
 
 	mgr.EnsureFresh(context.Background(), "C1")
-	waitForPush(t, sink, 1)
-	waitForCallCount(t, api, 1)
+
+	// Wait for the failure to be *recorded*, not merely for the API to
+	// be entered. backgroundFetch writes lastFailed after the call
+	// returns, so backdating it below on a callCount barrier alone
+	// races the write and gets clobbered — leaving the backoff live and
+	// suppressing the retry this test exists to prove.
+	waitUntil(t, "the failed fetch to be recorded", func() bool {
+		_, ok := failureRecordedAt(mgr, "C1")
+		return ok
+	})
 
 	// Simulate a failure far enough in the past that the backoff has
 	// expired, then recover.
@@ -388,16 +439,27 @@ func TestBackgroundFetchRetriesAfterBackoffExpiry(t *testing.T) {
 
 	mgr.EnsureFresh(context.Background(), "C1")
 	waitForCallCount(t, api, 2)
-	waitForPush(t, sink, 2)
 
 	// A successful fetch clears the failure record, so the next
 	// EnsureFresh is governed by the normal TTL, not the backoff.
-	mgr.mu.Lock()
-	_, stillMarked := mgr.lastFailed["C1"]
-	mgr.mu.Unlock()
-	if stillMarked {
-		t.Error("lastFailed not cleared by a successful fetch; a recovered channel would stay throttled")
-	}
+	//
+	// Poll rather than assert once: EnsureFresh above pushed
+	// synchronously, so waiting on a push count would return before the
+	// background fetch had cleared anything.
+	waitUntil(t, "lastFailed to be cleared by the successful fetch", func() bool {
+		_, stillMarked := failureRecordedAt(mgr, "C1")
+		return !stillMarked
+	})
+
+	// And the recovered members actually landed.
+	waitUntil(t, "the recovered member set to be pushed", func() bool {
+		for _, p := range sink.snapshot() {
+			if p.channelID == "C1" && len(p.memberIDs) == 1 && p.memberIDs[0] == "U1" {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 func TestEnsureFreshConcurrentDoesNotDuplicate(t *testing.T) {

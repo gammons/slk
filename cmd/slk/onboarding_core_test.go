@@ -27,4 +27,3 @@ func TestBuildWorkspaceTokens(t *testing.T) {
 		t.Fatalf("unexpected token fields: %+v", toks[0])
 	}
 }
-

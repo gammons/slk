@@ -30,9 +30,9 @@ func TestPanelCacheHitAfterStore(t *testing.T) {
 
 func TestPanelCacheMissOnAnyKeyChange(t *testing.T) {
 	cases := []struct {
-		name                            string
+		name                           string
 		version, width, height, layout int64
-		w, h                            int
+		w, h                           int
 	}{
 		{"different version", 9, 80, 24, 42, 80, 24},
 		{"different width", 7, 81, 24, 42, 81, 24},

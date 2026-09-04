@@ -6,19 +6,19 @@
 // sidebar, MESSAGES, thread). It has two top-level branches
 // depending on a.view:
 //
-//   ViewThreads  -> threads-list panel (no compose, no typing
-//                   line). Whole bordered panel is cached on
-//                   threadsView.Version + layout key.
-//   ViewChannels -> message pane + typing row + compose box, with
-//                   a split-cache pattern: bordered top region
-//                   (messages + top edge + sides only, no bottom
-//                   edge) cached on messagepane.Version only;
-//                   bottom region (typing + compose + bottom
-//                   edge + sides) re-rendered fresh each frame.
-//                   The two stack into a continuous bordered
-//                   panel because BorderBottom(false) on the top
-//                   + BorderTop(false) on the bottom lines up the
-//                   border glyphs.
+//	ViewThreads  -> threads-list panel (no compose, no typing
+//	                line). Whole bordered panel is cached on
+//	                threadsView.Version + layout key.
+//	ViewChannels -> message pane + typing row + compose box, with
+//	                a split-cache pattern: bordered top region
+//	                (messages + top edge + sides only, no bottom
+//	                edge) cached on messagepane.Version only;
+//	                bottom region (typing + compose + bottom
+//	                edge + sides) re-rendered fresh each frame.
+//	                The two stack into a continuous bordered
+//	                panel because BorderBottom(false) on the top
+//	                + BorderTop(false) on the bottom lines up the
+//	                border glyphs.
 //
 // PERF (see Phase 2g render-cache discussion + the split-rendering
 // note in the channels branch): caching the entire bordered panel

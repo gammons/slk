@@ -7,23 +7,23 @@
 // visibility). It also owns:
 //
 //   - Esc with active upload     -> "Upload in progress" toast (Esc
-//                                   doesn't cancel an in-flight
-//                                   upload).
+//     doesn't cancel an in-flight
+//     upload).
 //   - Esc with active edit       -> close any open compose picker
-//                                   first, else cancel the edit.
+//     first, else cancel the edit.
 //   - Esc otherwise              -> close any open compose picker
-//                                   first, else exit insert mode.
+//     first, else exit insert mode.
 //   - Ctrl+V                     -> smartPaste (clipboard image /
-//                                   file path / verbatim text).
+//     file path / verbatim text).
 //   - Ctrl+U                     -> clear compose (text +
-//                                   attachments + uploading flag).
+//     attachments + uploading flag).
 //   - Up / Down on first/last line -> jump to start/end of textarea.
 //   - Plain Enter                -> send (or commit edit, or upload-
-//                                   then-send if attachments present).
+//     then-send if attachments present).
 //   - Shift+Enter / Ctrl+J       -> insert literal newline.
 //   - Other keys                 -> forward to compose; throttled
-//                                   typing-indicator emit on every
-//                                   text keystroke.
+//     typing-indicator emit on every
+//     text keystroke.
 //
 // Compose-overlay pickers (emoji / @mention / #channel) get
 // priority on Up/Down/Enter: when a picker is active, those keys

@@ -99,5 +99,3 @@ func (a *App) setChannelMembershipFetcherForTest(fn func(channelID ids.ChannelID
 	fns.MembershipFetch = fn
 	a.SetChannelService(NewChannelService(fns))
 }
-
-

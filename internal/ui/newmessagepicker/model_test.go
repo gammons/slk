@@ -134,7 +134,7 @@ func TestFilter_PrefixBeatsSubstring(t *testing.T) {
 
 func TestFilter_SubstringBeatsSubsequence(t *testing.T) {
 	users := []User{
-		{ID: "U1", DisplayName: "Stephanie", Username: "steph", Recency: 100},   // contains "eph"
+		{ID: "U1", DisplayName: "Stephanie", Username: "steph", Recency: 100},    // contains "eph"
 		{ID: "U2", DisplayName: "Edward Phillips", Username: "ep", Recency: 999}, // subseq e-p-h
 	}
 	m := New()
@@ -437,7 +437,7 @@ func TestHandleKey_EnterWithEmptyFilteredButPillsStillSubmits(t *testing.T) {
 	m := New()
 	m.SetUsers(testUsers())
 	m.Open()
-	m.HandleKey(" ")     // select Alice
+	m.HandleKey(" ")    // select Alice
 	m.setQuery("xyzqq") // filter to nothing
 	res := m.HandleKey("enter")
 	if res == nil || len(res.UserIDs) != 1 || res.UserIDs[0] != "U1" {

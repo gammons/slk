@@ -26,4 +26,3 @@ func TestBackoffSequence(t *testing.T) {
 		backoff = nextBackoff(backoff, maxBackoff)
 	}
 }
-

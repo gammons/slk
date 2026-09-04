@@ -7,15 +7,15 @@
 // than the main-tab panels behind it:
 //
 //   - Click OUTSIDE the box        -> dismiss the modal (synthesised Esc,
-//                                     reusing each mode handler's esc path:
-//                                     close + restore mode + any cleanup).
+//     reusing each mode handler's esc path:
+//     close + restore mode + any cleanup).
 //   - Click ON a list row          -> move the modal's selection there and
-//                                     synthesise the modal's activation key
-//                                     (Enter to choose, Space to toggle for
-//                                     the multi-select new-message picker;
-//                                     help has no activation).
+//     synthesise the modal's activation key
+//     (Enter to choose, Space to toggle for
+//     the multi-select new-message picker;
+//     help has no activation).
 //   - Click INSIDE but not a row   -> consumed, no-op (never leaks to the
-//                                     main tab).
+//     main tab).
 //
 // Geometry comes from each modal's BoxSize, mirroring the centering done
 // by overlay.DimmedOverlay so the hit-test lines up with what was drawn.

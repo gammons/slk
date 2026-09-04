@@ -11,16 +11,16 @@
 //
 // Two dedup windows cooperate:
 //
-//   1. InFlight(channelID) — channel-level, time-based: covers the
-//      gap between SendMessageMsg dispatch (we call MarkInFlight) and
-//      the matching chat.postMessage HTTP response landing. Drops
-//      self-user WS echoes that arrive before we know the
-//      authoritative TS.
+//  1. InFlight(channelID) — channel-level, time-based: covers the
+//     gap between SendMessageMsg dispatch (we call MarkInFlight) and
+//     the matching chat.postMessage HTTP response landing. Drops
+//     self-user WS echoes that arrive before we know the
+//     authoritative TS.
 //
-//   2. IsSelfSent(ts) — TS-level, exact match: applies after we know
-//      the authoritative TS (RecordSent has been called from
-//      MessageSentMsg / ThreadReplySentMsg). Drops any late WS echo
-//      that carries that TS.
+//  2. IsSelfSent(ts) — TS-level, exact match: applies after we know
+//     the authoritative TS (RecordSent has been called from
+//     MessageSentMsg / ThreadReplySentMsg). Drops any late WS echo
+//     that carries that TS.
 //
 // NextLocalTS mints unique "local:<counter>" placeholder IDs for the
 // optimistic rows added at send time, before chat.postMessage returns.

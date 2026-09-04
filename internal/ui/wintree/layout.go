@@ -78,4 +78,3 @@ func (t *Tree) ComputeRects(bounds Rect) map[LeafID]Rect {
 	walk(t.Layout(bounds))
 	return out
 }
-

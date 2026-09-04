@@ -21,10 +21,29 @@ func configDirForOS(goos string, getenv func(string) string, exists func(string)
 		}
 		return second
 	default: // linux and others
-		if x := getenv("XDG_CONFIG_DIR"); x != "" {
-			return filepath.Join(x, "Slack")
+		home := getenv("HOME")
+		var candidates []string
+		if x := getenv("XDG_CONFIG_HOME"); x != "" {
+			candidates = append(candidates, filepath.Join(x, "Slack"))
 		}
-		return filepath.Join(getenv("HOME"), ".config", "Slack")
+		if x := getenv("XDG_CONFIG_DIR"); x != "" {
+			candidates = append(candidates, filepath.Join(x, "Slack"))
+		}
+		candidates = append(candidates,
+			filepath.Join(home, ".config", "Slack"),
+			// flatpak (com.slack.Slack)
+			filepath.Join(home, ".var", "app", "com.slack.Slack", "config", "Slack"),
+			// snap
+			filepath.Join(home, "snap", "slack", "current", ".config", "Slack"),
+		)
+		for _, c := range candidates {
+			if exists(c) {
+				return c
+			}
+		}
+		// Nothing found: fall back to the primary location so the
+		// not-found error references the conventional path.
+		return candidates[0]
 	}
 }
 

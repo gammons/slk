@@ -19,9 +19,9 @@ func resetCellPixels(t *testing.T) {
 
 func TestSixelCellPixels_DefaultsTo8x16(t *testing.T) {
 	resetCellPixels(t)
-	w, h := sixelCellPixels()
+	w, h := measuredCellPixels()
 	if w != 8 || h != 16 {
-		t.Errorf("sixelCellPixels() = %dx%d, want 8x16 default", w, h)
+		t.Errorf("measuredCellPixels() = %dx%d, want 8x16 default", w, h)
 	}
 }
 
@@ -30,8 +30,8 @@ func TestSetCellPixels_UsesMeasuredMetrics(t *testing.T) {
 	SetCellPixels(14, 33)
 	t.Cleanup(func() { resetCellPixels(t) })
 
-	if w, h := sixelCellPixels(); w != 14 || h != 33 {
-		t.Errorf("sixelCellPixels() = %dx%d, want 14x33", w, h)
+	if w, h := measuredCellPixels(); w != 14 || h != 33 {
+		t.Errorf("measuredCellPixels() = %dx%d, want 14x33", w, h)
 	}
 }
 
@@ -39,8 +39,8 @@ func TestSetCellPixels_IgnoresNonPositive(t *testing.T) {
 	resetCellPixels(t)
 	SetCellPixels(0, 33)
 	SetCellPixels(14, -1)
-	if w, h := sixelCellPixels(); w != 8 || h != 16 {
-		t.Errorf("sixelCellPixels() = %dx%d, want the 8x16 default to survive bad input", w, h)
+	if w, h := measuredCellPixels(); w != 8 || h != 16 {
+		t.Errorf("measuredCellPixels() = %dx%d, want the 8x16 default to survive bad input", w, h)
 	}
 }
 

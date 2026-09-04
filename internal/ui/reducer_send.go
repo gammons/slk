@@ -6,34 +6,34 @@
 // message lifecycle for channel messages (thread-reply lifecycle
 // lives in reducer_threads.go):
 //
-//   NewMessageMsg            - inbound WS event for any channel:
-//                              edit-echo update, self-send dedup
-//                              (recorded + early-arrival in-flight
-//                              guards), append-to-pane or
-//                              mark-channel-unread, and threads-list
-//                              dirty-bump for replies.
-//   SendMessageMsg           - user send: optimistic placeholder +
-//                              chat.postMessage call.
-//   MessageSentMsg           - send landed: swap placeholder for
-//                              authoritative message.
-//   MessageSendFailedMsg     - send failed: roll back placeholder
-//                              + fire SendFailed toast.
-//   EditMessageMsg           - user edit: chat.update call.
-//   MessageEditedMsg         - edit result: leave edit mode + on
-//                              failure fire EditFailed toast.
-//   DeleteMessageMsg         - user delete: chat.delete call.
-//   MessageDeletedMsg        - delete result: on failure fire
-//                              DeleteFailed toast.
-//   MarkUnreadMsg            - user mark-unread: subscriptions
-//                              mark call.
-//   MessageMarkedUnreadMsg   - mark-unread result: apply local
-//                              read-state mark + fire success or
-//                              failure toast.
-//   WSMessageDeletedMsg      - inbound WS delete echo: remove from
-//                              both panes, cancel any in-flight
-//                              edit of this message, close the
-//                              thread panel if the deleted message
-//                              is the open thread's parent.
+//	NewMessageMsg            - inbound WS event for any channel:
+//	                           edit-echo update, self-send dedup
+//	                           (recorded + early-arrival in-flight
+//	                           guards), append-to-pane or
+//	                           mark-channel-unread, and threads-list
+//	                           dirty-bump for replies.
+//	SendMessageMsg           - user send: optimistic placeholder +
+//	                           chat.postMessage call.
+//	MessageSentMsg           - send landed: swap placeholder for
+//	                           authoritative message.
+//	MessageSendFailedMsg     - send failed: roll back placeholder
+//	                           + fire SendFailed toast.
+//	EditMessageMsg           - user edit: chat.update call.
+//	MessageEditedMsg         - edit result: leave edit mode + on
+//	                           failure fire EditFailed toast.
+//	DeleteMessageMsg         - user delete: chat.delete call.
+//	MessageDeletedMsg        - delete result: on failure fire
+//	                           DeleteFailed toast.
+//	MarkUnreadMsg            - user mark-unread: subscriptions
+//	                           mark call.
+//	MessageMarkedUnreadMsg   - mark-unread result: apply local
+//	                           read-state mark + fire success or
+//	                           failure toast.
+//	WSMessageDeletedMsg      - inbound WS delete echo: remove from
+//	                           both panes, cancel any in-flight
+//	                           edit of this message, close the
+//	                           thread panel if the deleted message
+//	                           is the open thread's parent.
 //
 // Free reducer (not controller-absorbed): these arms cooperate on
 // the messagepane, threadPanel, selfSend, editController, sidebar
