@@ -175,6 +175,10 @@ type (
 	// ThreadsListDirtyMsg is dispatched when something that could affect
 	// the involved-threads list has changed (new message, mention, etc.)
 	// and the list should be refetched. Ignored if not the active team.
+	//
+	// Senders need not deduplicate or debounce: reduceThreads coalesces
+	// these on receipt, so several from several senders inside one
+	// threadsDirtyDebounce window cost a single refetch.
 	ThreadsListDirtyMsg struct {
 		TeamID string
 	}
