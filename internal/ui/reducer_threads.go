@@ -5,8 +5,10 @@
 // Owns the ten Update arms that drive the thread panel, the
 // threads-list view, and the thread-reply send path:
 //
-//	ThreadMarkedRemoteMsg       - apply a remote subscriptions.thread.mark
-//	                              echo to the local read state.
+//	ThreadMarkedRemoteMsg       - apply an inbound thread_marked event
+//	                              to the local read state, skipping the
+//	                              panel landmark when it is the echo of
+//	                              a mark slk itself issued.
 //	ThreadMarkedLocalMsg        - outcome of an slk-initiated
 //	                              subscriptions.thread.mark: apply the
 //	                              accepted cursor, or log and leave the
@@ -40,9 +42,9 @@
 // of that cross-section, and creating one would be a rename rather
 // than an extraction (see Phase 3's WorkspaceService skip rationale).
 //
-// The helpers (applyThreadMark, scheduleThreadsDirty,
-// openSelectedThreadCmd) stay on App; this reducer calls them via
-// `a`.
+// The helpers (applyThreadMarkEcho, applyThreadMarkListState,
+// scheduleThreadsDirty, openSelectedThreadCmd) stay on App; this
+// reducer calls them via `a`.
 package ui
 
 import (
@@ -58,7 +60,9 @@ import (
 var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	switch m := msg.(type) {
 	case ThreadMarkedRemoteMsg:
-		a.applyThreadMark(m.ChannelID, m.ThreadTS, m.LastRead)
+		// Via the echo helper: this event is also how slk's own thread
+		// marks come back. See applyThreadMarkEcho.
+		a.applyThreadMarkEcho(m.ChannelID, m.ThreadTS, m.LastRead)
 		return nil, true
 
 	case ThreadMarkedLocalMsg:
@@ -67,6 +71,16 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 				m.ChannelID, m.ThreadTS, m.Err)
 			return nil, true
 		}
+		// Slack broadcasts this same mark back as thread_marked, which
+		// returns as a ThreadMarkedRemoteMsg carrying m.TS. Record it
+		// here so applyThreadMarkEcho recognises that echo as slk's
+		// own. This arm is the recording site because it is the first
+		// point on the Update goroutine that knows the mark succeeded:
+		// markThreadRead issues it from a cmd goroutine, which must not
+		// touch App state. See selfMarkDedup.
+		a.selfThreadMarks.record(selfMarkKey{
+			channelID: m.ChannelID, threadTS: m.ThreadTS, ts: m.TS,
+		})
 		// List state only: this is slk's own mark completing, so the
 		// open panel's landmark stays where opening the thread put it.
 		// See applyThreadMarkListState.

@@ -3052,6 +3052,104 @@ func TestThreadMarkedLocalMsg_LeavesOpenPanelBoundaryInPlace(t *testing.T) {
 	}
 }
 
+// threadPanelOnR1R2 opens the thread panel on C1/P1 with two replies
+// and the "── new ──" landmark sitting on R1, which is the state
+// openSelectedThreadCmd's pre-open snapshot produces for a thread whose
+// second reply is unread.
+func threadPanelOnR1R2(t *testing.T) *App {
+	t.Helper()
+	app := NewApp()
+	app.threadPanel.SetThread(
+		messages.MessageItem{TS: "P1", UserID: "U1", Text: "parent"},
+		[]messages.MessageItem{
+			{TS: "R1", UserID: "U1", Text: "r1"},
+			{TS: "R2", UserID: "U1", Text: "r2"},
+		}, "C1", "P1")
+	app.threadVisible = true
+	app.threadPanel.SetUnreadBoundary("R1")
+	return app
+}
+
+// Slack broadcasts thread_marked back to the client that issued the
+// mark, so slk's own subscriptions.thread.mark returns as a
+// ThreadMarkedRemoteMsg carrying the ts slk just set — the newest
+// reply. Applying it would move the landmark past every reply and
+// render no landmark at all, destroying the pre-open snapshot a round
+// trip after the user started reading. The list-state half must still
+// run: the thread really is read.
+func TestThreadMarkedRemoteMsg_SelfEchoHoldsPanelBoundary(t *testing.T) {
+	app := threadPanelOnR1R2(t)
+	app.threadsView.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "P1", LastReplyTS: "R2", Unread: true},
+	})
+
+	// slk's own mark completing. This is where the self-mark is
+	// recorded, on the Update goroutine.
+	_, _ = app.Update(ThreadMarkedLocalMsg{ChannelID: "C1", ThreadTS: "P1", TS: "R2"})
+
+	// Re-flag the row so the list-state assertion below cannot pass
+	// vacuously off the local arm's own work: this stands in for a
+	// threads-list refresh landing between the two messages.
+	app.threadsView.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "P1", LastReplyTS: "R2", Unread: true},
+	})
+
+	// Slack's echo of that same mark.
+	_, _ = app.Update(ThreadMarkedRemoteMsg{ChannelID: "C1", ThreadTS: "P1", LastRead: "R2"})
+
+	if got := app.threadPanel.UnreadBoundaryTS(); got != "R1" {
+		t.Errorf("thread panel unreadBoundary = %q, want the pre-open snapshot R1 held against slk's own echo", got)
+	}
+	found := false
+	for _, s := range app.threadsView.Summaries() {
+		if s.ThreadTS != "P1" {
+			continue
+		}
+		found = true
+		if s.Unread {
+			t.Error("a suppressed self-echo must still settle the threads-list unread flag")
+		}
+	}
+	if !found {
+		t.Fatal("summary P1 missing; the assertion above would have passed vacuously")
+	}
+}
+
+// The control, and the more important half: a thread_marked slk did not
+// issue means the user read that thread in another Slack client, and
+// the landmark must move. Suppression is keyed on the exact mark, so an
+// outstanding record for a DIFFERENT ts must not shield a foreign one.
+func TestThreadMarkedRemoteMsg_ForeignMarkStillMovesBoundary(t *testing.T) {
+	app := threadPanelOnR1R2(t)
+	app.threadPanel.SetUnreadBoundary("P1")
+	app.selfThreadMarks.record(selfMarkKey{channelID: "C1", threadTS: "P1", ts: "R2"})
+
+	_, _ = app.Update(ThreadMarkedRemoteMsg{ChannelID: "C1", ThreadTS: "P1", LastRead: "R1"})
+
+	if got := app.threadPanel.UnreadBoundaryTS(); got != "R1" {
+		t.Errorf("thread panel unreadBoundary = %q, want R1: a mark slk never issued must move the landmark", got)
+	}
+}
+
+// One issued mark suppresses one echo. Slack sends a single
+// thread_marked per mark, so a second one at the same ts is a new
+// event — a genuine cursor move made elsewhere — and must be applied.
+func TestThreadMarkedRemoteMsg_SelfEchoSuppressionIsConsumedOnce(t *testing.T) {
+	app := threadPanelOnR1R2(t)
+
+	_, _ = app.Update(ThreadMarkedLocalMsg{ChannelID: "C1", ThreadTS: "P1", TS: "R2"})
+
+	_, _ = app.Update(ThreadMarkedRemoteMsg{ChannelID: "C1", ThreadTS: "P1", LastRead: "R2"})
+	if got := app.threadPanel.UnreadBoundaryTS(); got != "R1" {
+		t.Fatalf("first echo: unreadBoundary = %q, want R1 held", got)
+	}
+
+	_, _ = app.Update(ThreadMarkedRemoteMsg{ChannelID: "C1", ThreadTS: "P1", LastRead: "R2"})
+	if got := app.threadPanel.UnreadBoundaryTS(); got != "R2" {
+		t.Errorf("second echo: unreadBoundary = %q, want R2 — the record is consumed by the first echo", got)
+	}
+}
+
 // Regression for the reported bug: posting a reply auto-subscribes you,
 // so Slack echoes thread_marked with active=true. slk used to read that
 // as "unread" and re-flag the thread the user was looking at.

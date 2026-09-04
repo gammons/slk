@@ -306,6 +306,9 @@ func TestOnMessage_ThreadBroadcast_SetsHasUnread(t *testing.T) {
 	}
 }
 
+// subscribed=true is the case where reconstructing a missing row is
+// legitimate: Slack says the user is subscribed, so a row the local
+// cache has never seen is a gap in the cache, not a phantom.
 func TestOnThreadMarked_AdvancesCursorWithoutTombstoning(t *testing.T) {
 	db := newTestDB(t)
 	h := &rtmEventHandler{
@@ -314,7 +317,7 @@ func TestOnThreadMarked_AdvancesCursorWithoutTombstoning(t *testing.T) {
 		isActive:    func() bool { return true },
 	}
 
-	h.OnThreadMarked("C1", "1700000100.000000", "1700000150.000000")
+	h.OnThreadMarked("C1", "1700000100.000000", "1700000150.000000", true)
 
 	got, err := db.ListActiveThreadSubscriptions("T1")
 	if err != nil {
@@ -331,7 +334,7 @@ func TestOnThreadMarked_AdvancesCursorWithoutTombstoning(t *testing.T) {
 	// A later cursor move must advance last_read and leave the row
 	// active. Writing `active` here used to tombstone the row, making
 	// the thread disappear from the Threads list.
-	h.OnThreadMarked("C1", "1700000100.000000", "1700000200.000000")
+	h.OnThreadMarked("C1", "1700000100.000000", "1700000200.000000", true)
 	got, err = db.ListActiveThreadSubscriptions("T1")
 	if err != nil {
 		t.Fatalf("ListActiveThreadSubscriptions: %v", err)
@@ -365,7 +368,7 @@ func TestOnThreadMarked_EmptyLastReadIsIgnored(t *testing.T) {
 		},
 	}
 
-	h.OnThreadMarked("C1", "1700000100.000000", "")
+	h.OnThreadMarked("C1", "1700000100.000000", "", true)
 
 	lastRead, err := db.GetThreadLastRead("T1", "C1", "1700000100.000000")
 	if err != nil {
@@ -373,6 +376,102 @@ func TestOnThreadMarked_EmptyLastReadIsIgnored(t *testing.T) {
 	}
 	if lastRead != "1700000150.000000" {
 		t.Errorf("LastRead = %q, want the cursor left untouched at 1700000150.000000", lastRead)
+	}
+}
+
+// slk's own subscriptions.thread.mark comes back as a thread_marked
+// echo, so opening an unsubscribed thread from the messages pane
+// reaches this handler. markThreadRead deliberately writes nothing for
+// such a thread; inserting a row here would fabricate the active=1 row
+// it refused to create and put a phantom entry in the Threads list.
+// `subscribed` (Slack's subscription.active) is the signal that says
+// which case this is.
+func TestOnThreadMarked_UnsubscribedDoesNotCreateRow(t *testing.T) {
+	db := newTestDB(t)
+	h := &rtmEventHandler{
+		db:          db,
+		workspaceID: "T1",
+		isActive:    func() bool { return true },
+	}
+
+	h.OnThreadMarked("C1", "1700000100.000000", "1700000150.000000", false)
+
+	got, err := db.ListActiveThreadSubscriptions("T1")
+	if err != nil {
+		t.Fatalf("ListActiveThreadSubscriptions: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("want no active subscription rows for an unsubscribed thread, got %d: %+v", len(got), got)
+	}
+	// ListActiveThreadSubscriptions filters on active=1, so it would
+	// also report 0 for a fabricated row that happened to be
+	// tombstoned. Assert on the row itself: no cursor means no row.
+	lastRead, err := db.GetThreadLastRead("T1", "C1", "1700000100.000000")
+	if err != nil {
+		t.Fatalf("GetThreadLastRead: %v", err)
+	}
+	if lastRead != "" {
+		t.Errorf("GetThreadLastRead = %q, want \"\" — no row should have been created at all", lastRead)
+	}
+}
+
+// The cursor is still the cursor: an existing row advances whether or
+// not the event reports the user as subscribed. Only the missing-row
+// case turns on `subscribed`.
+func TestOnThreadMarked_UnsubscribedAdvancesExistingRow(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertThreadSubscription("T1", "C1", "1700000100.000000", "1700000150.000000", true); err != nil {
+		t.Fatalf("UpsertThreadSubscription: %v", err)
+	}
+	h := &rtmEventHandler{
+		db:          db,
+		workspaceID: "T1",
+		isActive:    func() bool { return true },
+	}
+
+	h.OnThreadMarked("C1", "1700000100.000000", "1700000200.000000", false)
+
+	got, err := db.ListActiveThreadSubscriptions("T1")
+	if err != nil {
+		t.Fatalf("ListActiveThreadSubscriptions: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want the existing row still active, got %d rows", len(got))
+	}
+	if got[0].LastRead != "1700000200.000000" {
+		t.Errorf("LastRead = %q, want 1700000200.000000", got[0].LastRead)
+	}
+}
+
+// `active` is owned by thread_subscribed / thread_unsubscribed / the
+// getView reconcile. Neither cursor writer may resurrect a tombstoned
+// row, including the inserting one taken when subscribed=true.
+func TestOnThreadMarked_SubscribedLeavesTombstonedRowTombstoned(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertThreadSubscription("T1", "C1", "1700000100.000000", "1700000150.000000", false); err != nil {
+		t.Fatalf("UpsertThreadSubscription: %v", err)
+	}
+	h := &rtmEventHandler{
+		db:          db,
+		workspaceID: "T1",
+		isActive:    func() bool { return true },
+	}
+
+	h.OnThreadMarked("C1", "1700000100.000000", "1700000200.000000", true)
+
+	got, err := db.ListActiveThreadSubscriptions("T1")
+	if err != nil {
+		t.Fatalf("ListActiveThreadSubscriptions: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("a tombstoned row must stay tombstoned, got %d active: %+v", len(got), got)
+	}
+	lastRead, err := db.GetThreadLastRead("T1", "C1", "1700000100.000000")
+	if err != nil {
+		t.Fatalf("GetThreadLastRead: %v", err)
+	}
+	if lastRead != "1700000200.000000" {
+		t.Errorf("LastRead = %q, want the cursor advanced to 1700000200.000000", lastRead)
 	}
 }
 
@@ -439,7 +538,7 @@ func TestOnThreadMarked_PersistsOnInactiveWorkspace(t *testing.T) {
 		// persist the DB row.
 	}
 
-	h.OnThreadMarked("C1", "1700000100.000000", "1700000150.000000")
+	h.OnThreadMarked("C1", "1700000100.000000", "1700000150.000000", true)
 
 	got, err := db.ListActiveThreadSubscriptions("T1")
 	if err != nil {

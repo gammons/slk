@@ -3139,6 +3139,10 @@ func markThreadRead(ctx context.Context, client threadMarker, db *cache.DB, team
 		// messages pane that they never subscribed to. The inserting
 		// variant would fabricate an active=1 row and put a phantom
 		// entry in the Threads list.
+		//
+		// Slack echoes this very mark back as thread_marked, so the
+		// guard only holds because OnThreadMarked applies the same
+		// rule to the echo, using the event's own subscription flag.
 		if err := db.UpdateThreadLastReadIfExists(teamID, channelID, threadTS, ts); err != nil {
 			debuglog.Cache("markThreadRead: UpdateThreadLastReadIfExists %s/%s: %v",
 				channelID, threadTS, err)
@@ -4556,7 +4560,26 @@ func (h *rtmEventHandler) OnChannelMarked(channelID, ts string, unreadCount int)
 // thread_subscribed / thread_unsubscribed / the getView reconcile.
 // Writing `active` here used to tombstone the row on every read, which
 // made the thread vanish from the Threads list until the next sweep.
-func (h *rtmEventHandler) OnThreadMarked(channelID, threadTS, lastRead string) {
+//
+// subscribed (Slack's subscription.active) chooses the cursor writer,
+// and does nothing else. It is a subscription signal, never a
+// read/unread one: whether the thread is unread stays a comparison of
+// last_read against the newest known reply, computed downstream.
+//
+//   - subscribed: UpdateThreadLastRead, which inserts a missing row.
+//     Slack says the user is subscribed, so a row the local cache lacks
+//     is a gap to reconstruct rather than a phantom to invent.
+//   - not subscribed: UpdateThreadLastReadIfExists, which never
+//     inserts. slk's own subscriptions.thread.mark echoes back here, so
+//     this handler sees marks for threads the user merely opened from
+//     the messages pane and never subscribed to. markThreadRead
+//     deliberately writes no row for those; inserting one here would
+//     undo that guard one hop later and surface a phantom entry in the
+//     Threads list, which filters on active=1.
+//
+// Neither writer touches `active`, so a tombstoned row stays
+// tombstoned either way.
+func (h *rtmEventHandler) OnThreadMarked(channelID, threadTS, lastRead string, subscribed bool) {
 	// An empty cursor would erase the thread's read position and make
 	// every reply render unread. UpdateThreadLastRead does not reject
 	// it, so drop the event here instead of corrupting the row.
@@ -4570,9 +4593,15 @@ func (h *rtmEventHandler) OnThreadMarked(channelID, threadTS, lastRead string) {
 	// and OnChannelMarked: dropping the write on inactive workspaces
 	// leaves stale read state behind on the next switch.
 	if h.db != nil {
-		if err := h.db.UpdateThreadLastRead(h.workspaceID, channelID, threadTS, lastRead); err != nil {
-			debuglog.Cache("OnThreadMarked: UpdateThreadLastRead %s/%s: %v",
-				channelID, threadTS, err)
+		write := h.db.UpdateThreadLastReadIfExists
+		writer := "UpdateThreadLastReadIfExists"
+		if subscribed {
+			write = h.db.UpdateThreadLastRead
+			writer = "UpdateThreadLastRead"
+		}
+		if err := write(h.workspaceID, channelID, threadTS, lastRead); err != nil {
+			debuglog.Cache("OnThreadMarked: %s %s/%s: %v",
+				writer, channelID, threadTS, err)
 		}
 	}
 

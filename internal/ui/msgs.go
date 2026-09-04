@@ -532,9 +532,12 @@ type ChannelMarkedRemoteMsg struct {
 }
 
 // ThreadMarkedRemoteMsg is dispatched by the WS event handler when
-// Slack pushes a thread_marked event. LastRead is the thread's new read
-// cursor; whether that means read or unread is decided by comparing it
-// against the thread's newest known reply.
+// Slack pushes a thread_marked event (a thread's read cursor moved in
+// another client, or via slk's own subscriptions.thread.mark echoing
+// back — the arm routes through applyThreadMarkEcho, which tells the
+// two apart). LastRead is the thread's new read cursor; whether that
+// means read or unread is decided by comparing it against the thread's
+// newest known reply.
 type ThreadMarkedRemoteMsg struct {
 	ChannelID string
 	ThreadTS  string

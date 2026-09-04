@@ -67,6 +67,7 @@ type channelMarkRecord struct {
 
 type threadMarkRecord struct {
 	channelID, threadTS, lastRead string
+	subscribed                    bool
 }
 
 type threadSubChangeRecord struct {
@@ -112,8 +113,8 @@ func (m *mockEventHandler) OnChannelMarked(channelID, ts string, unreadCount int
 	m.channelMarks = append(m.channelMarks, channelMarkRecord{channelID, ts, unreadCount})
 }
 
-func (m *mockEventHandler) OnThreadMarked(channelID, threadTS, lastRead string) {
-	m.threadMarks = append(m.threadMarks, threadMarkRecord{channelID, threadTS, lastRead})
+func (m *mockEventHandler) OnThreadMarked(channelID, threadTS, lastRead string, subscribed bool) {
+	m.threadMarks = append(m.threadMarks, threadMarkRecord{channelID, threadTS, lastRead, subscribed})
 }
 
 func (m *mockEventHandler) OnThreadSubscriptionChanged(channelID, threadTS, lastRead string, active bool) {
@@ -513,11 +514,17 @@ func TestDispatch_ThreadMarked_PassesCursorThrough(t *testing.T) {
 	if got.channelID != "C1" || got.threadTS != "1700000000.000100" || got.lastRead != "1700000000.000200" {
 		t.Errorf("unexpected: %+v", got)
 	}
+	if !got.subscribed {
+		t.Errorf("subscribed = false, want true for active:true")
+	}
 }
 
-// active=false previously meant "read". It means "unsubscribed", which
-// thread_marked does not report, so it must not change what we pass on.
-func TestDispatch_ThreadMarked_IgnoresActiveFlag(t *testing.T) {
+// `active` means "subscribed", never "read". The dispatcher forwards it
+// as `subscribed` so the handler can decide whether inserting a
+// subscription row is legitimate; the cursor it forwards must be the
+// one the event carried either way, so that no downstream read/unread
+// decision can be derived from the flag.
+func TestDispatch_ThreadMarked_InactiveSubscriptionStillPassesCursor(t *testing.T) {
 	handler := &mockEventHandler{}
 	data := []byte(`{"type":"thread_marked","subscription":{"channel":"C1","thread_ts":"P1","last_read":"R5","active":false}}`)
 	dispatchWebSocketEvent(data, handler)
@@ -527,6 +534,9 @@ func TestDispatch_ThreadMarked_IgnoresActiveFlag(t *testing.T) {
 	}
 	if handler.threadMarks[0].lastRead != "R5" {
 		t.Errorf("lastRead = %q, want R5", handler.threadMarks[0].lastRead)
+	}
+	if handler.threadMarks[0].subscribed {
+		t.Errorf("subscribed = true, want false for active:false")
 	}
 }
 

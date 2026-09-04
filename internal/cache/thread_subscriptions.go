@@ -79,13 +79,16 @@ func (db *DB) DeleteThreadSubscription(workspaceID, channelID, threadTS string) 
 // callers that can prove the user is subscribed to the thread, because
 // ListSubscribedThreads filters on active=1 and would surface the
 // inserted row in the Threads list. The sole such caller is
-// rtmEventHandler.OnThreadMarked: Slack only pushes thread_marked for
-// threads the user is subscribed to, so the insert reconstructs a row
-// the local cache merely hasn't seen yet.
+// rtmEventHandler.OnThreadMarked, and only on the branch where the
+// thread_marked event's subscription block reports active=true: there
+// the insert reconstructs a row the local cache merely hasn't seen yet.
+// The precondition is checked by that caller, not assumed here — slk's
+// own subscriptions.thread.mark echoes back as thread_marked, so the
+// event by itself does not prove subscription.
 //
-// Callers that CANNOT prove subscription — notably the local mark path,
-// which fires for any thread the user opens — must use
-// UpdateThreadLastReadIfExists instead.
+// Callers that CANNOT prove subscription — the local mark path, which
+// fires for any thread the user opens, and OnThreadMarked's
+// active=false branch — must use UpdateThreadLastReadIfExists instead.
 func (db *DB) UpdateThreadLastRead(workspaceID, channelID, threadTS, lastRead string) error {
 	if workspaceID == "" || channelID == "" || threadTS == "" {
 		return fmt.Errorf("UpdateThreadLastRead: workspace/channel/thread_ts required")

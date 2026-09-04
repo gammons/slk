@@ -103,7 +103,7 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// for loads that issued no mark. Recorded before the no-window
 		// early return: slk sent the mark either way, and a window may
 		// open before the echo lands. See selfMarkDedup.
-		a.selfMarks.record(m.ChannelID, m.MarkedTS)
+		a.selfMarks.record(selfMarkKey{channelID: m.ChannelID, ts: m.MarkedTS})
 		// Fan out to every window viewing the channel, focused or
 		// not (Phase 3).
 		models := a.modelsForChannel(m.ChannelID)
@@ -420,7 +420,7 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 		// Record before issuing: Slack echoes this mark back as
 		// channel_marked, and applying that echo would drag the
 		// divider off the pre-entry cursor. See selfMarkDedup.
-		a.selfMarks.record(m.ID, string(latestTS))
+		a.selfMarks.record(selfMarkKey{channelID: m.ID, ts: string(latestTS)})
 		// MarkRead produces ChannelMarkedReadMsg, NOT MessagesLoadedMsg,
 		// so no authoritative permalink completion will follow.
 		return func() tea.Msg { return channels.MarkRead(chID, latestTS) }, false

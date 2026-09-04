@@ -884,15 +884,15 @@ func TestSelfMarkRecords_AreBounded(t *testing.T) {
 	newest := ""
 	for i := range selfMarkLimit * 3 {
 		newest = fmt.Sprintf("%d.000000", i)
-		app.selfMarks.record("C1", newest)
+		app.selfMarks.record(selfMarkKey{channelID: "C1", ts: newest})
 	}
 	if n := app.selfMarks.len(); n > selfMarkLimit {
 		t.Errorf("recorded self-marks = %d, want at most %d", n, selfMarkLimit)
 	}
-	if !app.selfMarks.consume("C1", newest) {
+	if !app.selfMarks.consume(selfMarkKey{channelID: "C1", ts: newest}) {
 		t.Errorf("the most recent record (%s) was evicted; eviction must drop the oldest", newest)
 	}
-	if app.selfMarks.consume("C1", "0.000000") {
+	if app.selfMarks.consume(selfMarkKey{channelID: "C1", ts: "0.000000"}) {
 		t.Error("the very first record survived; it should have been evicted long ago")
 	}
 }
