@@ -256,6 +256,32 @@ func TestOutOfOrderArrivalDoesNotRollCursorBack(t *testing.T) {
 	}
 }
 
+// The thread slot is newest-wins on its own, independent of the
+// channel slot: a burst of replies coalesces to one mark, and a late
+// older reply does not roll the thread cursor backward.
+func TestThreadBurstCoalescesToNewestTS(t *testing.T) {
+	app, calls := markCapture(t)
+	app.activeChannelID = "C1"
+	app.threadVisible = true
+	app.threadPanel.SetThread(messages.MessageItem{TS: "1.000000"}, nil, "C1", "1.000000")
+
+	var cmds []tea.Cmd
+	for _, ts := range []string{"2.000000", "9.000000", "4.000000"} {
+		_, cmd := app.Update(NewMessageMsg{
+			ChannelID: "C1",
+			Message:   messages.MessageItem{TS: ts, ThreadTS: "1.000000", UserID: "U2"},
+		})
+		cmds = append(cmds, cmd)
+	}
+	for _, cmd := range cmds {
+		feed(t, app, cmd, 0)
+	}
+
+	if len(*calls) != 1 || (*calls)[0] != "th:C1/1.000000/9.000000" {
+		t.Fatalf("calls = %v, want a single thread mark at the newest ts", *calls)
+	}
+}
+
 func TestPlainThreadReplyDoesNotMarkChannel(t *testing.T) {
 	app, calls := markCapture(t)
 	app.activeChannelID = "C1"
