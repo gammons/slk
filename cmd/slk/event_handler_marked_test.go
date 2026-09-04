@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/gammons/slk/internal/cache"
@@ -126,14 +128,54 @@ func TestOnChannelMarked_ZeroUnreadCount_ClearsHasUnread(t *testing.T) {
 	}
 }
 
-func TestMarkChannelReadAsync_UpdatesReadState(t *testing.T) {
-	// markChannelReadAsync runs its work in a goroutine and calls
-	// client.MarkChannel on a *slackclient.Client, which requires real
-	// HTTP/Slack wiring (or a fake) to construct. The function body is
-	// otherwise a thin wrapper over db.UpdateChannelReadState (covered by
-	// cache-level tests) plus a tea.Program send. Wiring a fake Client
-	// would require introducing an interface seam we don't otherwise need.
-	// The reconnect-backfill integration test in Task 20 exercises this
-	// path end-to-end.
-	t.Skip("markChannelReadAsync requires a real *slackclient.Client; covered by Task 20 integration test")
+type fakeChannelMarker struct {
+	err   error
+	calls []string // "channelID/ts" per call
+}
+
+func (f *fakeChannelMarker) MarkChannel(_ context.Context, channelID, ts string) error {
+	f.calls = append(f.calls, channelID+"/"+ts)
+	return f.err
+}
+
+func TestMarkChannelRead_SuccessPersistsReadState(t *testing.T) {
+	db := newTestDB(t)
+	_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
+	if err := db.UpdateChannelReadState("C1", "", true); err != nil {
+		t.Fatalf("seed has_unread: %v", err)
+	}
+	marker := &fakeChannelMarker{}
+
+	if err := markChannelRead(context.Background(), marker, db, "C1", "1700000000.000100"); err != nil {
+		t.Fatalf("markChannelRead: %v", err)
+	}
+
+	if len(marker.calls) != 1 || marker.calls[0] != "C1/1700000000.000100" {
+		t.Fatalf("unexpected MarkChannel calls: %v", marker.calls)
+	}
+	s, _ := db.GetChannelReadState("C1")
+	if s.LastReadTS != "1700000000.000100" || s.HasUnread {
+		t.Errorf("read state = %+v, want LastReadTS advanced and HasUnread=false", s)
+	}
+}
+
+func TestMarkChannelRead_FailureLeavesChannelUnread(t *testing.T) {
+	db := newTestDB(t)
+	_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
+	if err := db.UpdateChannelReadState("C1", "", true); err != nil {
+		t.Fatalf("seed has_unread: %v", err)
+	}
+	marker := &fakeChannelMarker{err: errors.New("conversations.mark: invalid_auth")}
+
+	if err := markChannelRead(context.Background(), marker, db, "C1", "1700000000.000100"); err == nil {
+		t.Fatal("markChannelRead: want error, got nil")
+	}
+
+	s, _ := db.GetChannelReadState("C1")
+	if s.LastReadTS != "" {
+		t.Errorf("LastReadTS = %q, want unchanged after a rejected mark", s.LastReadTS)
+	}
+	if !s.HasUnread {
+		t.Error("HasUnread must stay true so the state can be reconciled later")
+	}
 }

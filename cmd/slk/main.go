@@ -1487,7 +1487,7 @@ func run() error {
 				// Mark channel as read up to the latest message
 				if len(msgItems) > 0 {
 					latestTS := msgItems[len(msgItems)-1].TS
-					markChannelReadAsync(ctx, wctx, db, p, chIDStr, latestTS)
+					markChannelReadAsync(ctx, wctx.Client, db, p, chIDStr, latestTS)
 				}
 
 				return ui.MessagesLoadedMsg{
@@ -1498,7 +1498,10 @@ func run() error {
 			},
 			MarkRead: func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
 				wctx := router.Active()
-				markChannelReadAsync(ctx, wctx, db, p, string(channelID), string(ts))
+				if wctx == nil {
+					return nil
+				}
+				markChannelReadAsync(ctx, wctx.Client, db, p, string(channelID), string(ts))
 				return nil // ChannelMarkedReadMsg is emitted from inside the goroutine
 			},
 			FetchOlder: func(channelID ids.ChannelID, oldestTS ids.MessageTS) tea.Msg {
@@ -3095,24 +3098,48 @@ func summarizeCachedRows(rows []cache.Message) string {
 		len(rows), rows[0].TS, rows[len(rows)-1].TS)
 }
 
-// markChannelReadAsync fires Slack's conversations.mark plus the local
-// LastReadTS persistence in a background goroutine. Returns
-// immediately. wctx may be nil (returns silently in that case).
+// channelMarker is the single Slack operation the mark-read path needs.
+// Narrowing it to an interface (rather than taking *WorkspaceContext and
+// reaching through to a concrete *slackclient.Client) is what makes the
+// failure path testable without real HTTP wiring.
+type channelMarker interface {
+	MarkChannel(ctx context.Context, channelID, ts string) error
+}
+
+// markChannelRead calls conversations.mark and, ONLY if Slack accepts
+// it, persists the local read state. On failure the channel stays
+// unread locally, which is the honest state: it reconciles on the next
+// channel entry or reconnect sync. Synchronous so the failure path is
+// deterministically testable; markChannelReadAsync is the goroutine
+// wrapper.
+func markChannelRead(ctx context.Context, client channelMarker, db *cache.DB, channelID, ts string) error {
+	if err := client.MarkChannel(ctx, channelID, ts); err != nil {
+		return err
+	}
+	if db != nil {
+		if err := db.UpdateChannelReadState(channelID, ts, false); err != nil {
+			log.Printf("Warning: failed to update read state in markChannelRead %s/%s: %v", channelID, ts, err)
+		}
+	}
+	return nil
+}
+
+// markChannelReadAsync fires markChannelRead in a background goroutine
+// and returns immediately. client may be nil (returns silently).
 func markChannelReadAsync(
 	ctx context.Context,
-	wctx *WorkspaceContext,
+	client channelMarker,
 	db *cache.DB,
 	p *tea.Program,
 	channelID, ts string,
 ) {
-	if wctx == nil || ts == "" {
+	if client == nil || ts == "" {
 		return
 	}
-	client := wctx.Client
 	go func() {
-		_ = client.MarkChannel(ctx, channelID, ts)
-		if err := db.UpdateChannelReadState(channelID, ts, false); err != nil {
-			log.Printf("Warning: failed to update read state in markChannelReadAsync %s/%s: %v", channelID, ts, err)
+		if err := markChannelRead(ctx, client, db, channelID, ts); err != nil {
+			log.Printf("Warning: conversations.mark %s/%s failed, leaving channel unread: %v", channelID, ts, err)
+			return
 		}
 		if p != nil {
 			p.Send(ui.ChannelMarkedReadMsg{ChannelID: channelID})
