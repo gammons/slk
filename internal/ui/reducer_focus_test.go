@@ -919,3 +919,108 @@ func TestSelfMarkRecords_ThreadBurstDoesNotEvictChannelRecords(t *testing.T) {
 		t.Error("the channel record was evicted by thread marks; the two sets must be bounded independently")
 	}
 }
+
+// The flush interval is a rate limit, not a UI delay: nothing on screen
+// changes when it fires, so the only thing the number has to respect is
+// conversations.mark's Tier 3 budget of ~50 requests/minute. At 5s a
+// continuously busy focused channel issues at most 60/5 = 12 of them a
+// minute; at the 1s this branch was first written with, a channel
+// receiving roughly a message a second produces ~60 a minute, over the
+// tier, where the mark is dropped with no retry (see flushPendingMarks)
+// and no sign to the user — exactly the cross-client divergence #159
+// exists to fix.
+//
+// Pinned as a value, not observed by timing: asserting the real
+// interval would mean a five-second test.
+func TestMarkFlushDebounce_DefaultFitsTheRateTier(t *testing.T) {
+	if defaultMarkFlushDebounce != 5*time.Second {
+		t.Errorf("defaultMarkFlushDebounce = %v, want 5s: conversations.mark is Tier 3 (~50/min)",
+			defaultMarkFlushDebounce)
+	}
+	if got := NewApp().markFlushDebounce; got != defaultMarkFlushDebounce {
+		t.Errorf("NewApp markFlushDebounce = %v, want the default %v",
+			got, defaultMarkFlushDebounce)
+	}
+}
+
+// threadsDirtyCapture returns an App whose ThreadService counts
+// ListFetch calls, with a tiny dirty debounce so the coalescing window
+// closes without the tests waiting on the 150ms production value.
+func threadsDirtyCapture(t *testing.T) (*App, *int) {
+	t.Helper()
+	app := NewApp()
+	app.activeTeamID = "T1"
+	app.threadsDirtyDebounce = time.Millisecond
+	fetches := new(int)
+	app.SetThreadService(NewThreadService(ThreadServiceFuncs{
+		ListFetch: func(ids.TeamID) tea.Msg {
+			*fetches++
+			return nil
+		},
+	}))
+	return app, fetches
+}
+
+// ThreadsListDirtyMsg has four senders that do not coordinate: the
+// thread_marked and thread_subscription_changed WS handlers send one
+// per event, the subscription sync sends one when it completes, and
+// scheduleThreadsDirty sends one per thread reply and per reply slk
+// itself sends. An actively-read thread therefore produces several for
+// the same stretch of activity, and each delivery re-runs
+// cache.ListSubscribedThreads. Coalescing on receipt is what holds that
+// to one query per window regardless of which senders fired.
+func TestThreadsDirtyBurst_CoalescesToOneListFetch(t *testing.T) {
+	app, fetches := threadsDirtyCapture(t)
+
+	// The whole burst is delivered before anything it scheduled runs:
+	// draining each cmd as it comes would close the window between
+	// messages and the test would prove nothing.
+	var cmds []tea.Cmd
+	for range 3 {
+		if _, cmd := app.Update(ThreadsListDirtyMsg{TeamID: "T1"}); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	for _, cmd := range cmds {
+		feed(t, app, cmd, 0)
+	}
+
+	if *fetches != 1 {
+		t.Errorf("ListFetch calls = %d, want 1: a burst of dirty messages must coalesce", *fetches)
+	}
+}
+
+// The window must reopen once its fetch has been dispatched. A latch
+// that never cleared would pass the burst test above and then leave the
+// threads list frozen for the rest of the session.
+func TestThreadsDirty_WindowReopensAfterTheFetch(t *testing.T) {
+	app, fetches := threadsDirtyCapture(t)
+
+	for range 2 {
+		_, cmd := app.Update(ThreadsListDirtyMsg{TeamID: "T1"})
+		feed(t, app, cmd, 0)
+	}
+
+	if *fetches != 2 {
+		t.Errorf("ListFetch calls = %d, want 2: dirty messages in separate windows each fetch", *fetches)
+	}
+}
+
+// The team filter has to come before the window opens. Opening it for
+// another workspace's dirty message would swallow the active
+// workspace's next one for the length of the debounce.
+func TestThreadsDirty_ForeignTeamNeitherFetchesNorOpensAWindow(t *testing.T) {
+	app, fetches := threadsDirtyCapture(t)
+
+	_, cmd := app.Update(ThreadsListDirtyMsg{TeamID: "T2"})
+	feed(t, app, cmd, 0)
+	if *fetches != 0 {
+		t.Fatalf("ListFetch calls = %d, want 0 for an inactive team", *fetches)
+	}
+
+	_, cmd = app.Update(ThreadsListDirtyMsg{TeamID: "T1"})
+	feed(t, app, cmd, 0)
+	if *fetches != 1 {
+		t.Errorf("ListFetch calls = %d, want 1: the foreign message must not have taken the window", *fetches)
+	}
+}

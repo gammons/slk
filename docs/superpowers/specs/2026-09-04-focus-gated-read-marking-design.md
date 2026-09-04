@@ -265,10 +265,28 @@ Rules:
 Focus-regain catch-up falls out of this mechanism rather than needing a separate
 path, and a burst coalesces to one request per interval per target.
 
-Debounce default is 1 s, in a configurable `App` field. `threadsDirtyDebounce`
-is 150 ms because it re-queries local SQLite; this is a network write, so a full
-second is the right order of magnitude. Tests set it to zero or drive the flush
-message directly.
+Debounce default is 5 s (`defaultMarkFlushDebounce`), in a configurable `App`
+field. What fixes that number is `conversations.mark`'s rate tier, not the
+general observation that network writes cost more than local ones:
+`conversations.mark` is Tier 3, roughly 50 requests a minute. The interval is
+the ceiling on how often a focused target spends one, so 5 s caps the
+steady-state cost at 60/5 = 12 a minute and leaves room for the entry marks and
+mark-unread presses that mark on other paths. The 1 s this design originally
+specified put a channel receiving about a message a second at ~60 a minute —
+over the tier, where `postForm` returns `rateLimitError`, `markChannelRead`
+returns before the local write, and `markChannelReadAndNotify` logs and drops
+it. `markChannel` does not retry, and nothing in this design does either (see
+the flush rule above). Self-healing on the next arrival makes that survivable
+but not acceptable: a mark dropped with no sign to the user is the
+cross-client divergence this design exists to remove.
+
+The longer interval costs nothing the user perceives, because the flush changes
+nothing on screen — it moves Slack's server-side cursor, and the local divider
+deliberately stays put. Compare `threadsDirtyDebounce` at 150 ms, which delays
+a query against local SQLite and so is bounded by nothing but responsiveness.
+
+Tests set the field to 1 ms or drive `markFlushMsg` directly rather than
+waiting out the real interval.
 
 ### Channel path
 

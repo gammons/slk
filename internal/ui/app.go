@@ -94,6 +94,30 @@ const openThreadDebounceDelay = 200 * time.Millisecond
 // pause, never one per keystroke.
 const channelSearchDebounceDelay = 300 * time.Millisecond
 
+// defaultMarkFlushDebounce is the App.markFlushDebounce NewApp starts
+// with, and the fallback scheduleMarkFlush uses for a zero field.
+//
+// conversations.mark is a Tier 3 method — Slack budgets those at
+// roughly 50 requests a minute. This interval is the ceiling on how
+// often the flush spends one: 60/5 = 12 a minute, with room left for
+// the entry marks and mark-unread presses that call it on other paths. One second, the value this started at, put a
+// channel receiving about a message a second at ~60 a minute — over
+// the tier, and an over-tier mark is dropped rather than retried (see
+// flushPendingMarks), which is the cross-client divergence the
+// auto-marking exists to prevent.
+//
+// Five seconds is not felt by the user: nothing on screen changes when
+// the flush fires. It moves Slack's server-side cursor, and the local
+// divider deliberately stays put (again, see flushPendingMarks).
+const defaultMarkFlushDebounce = 5 * time.Second
+
+// defaultThreadsDirtyDebounce is the App.threadsDirtyDebounce NewApp
+// starts with, and the fallback for a zero field in scheduleThreadsDirty
+// and in reduceThreads' ThreadsListDirtyMsg arm. It only delays a query
+// against local SQLite, so it is two orders of magnitude below the mark
+// flush above.
+const defaultThreadsDirtyDebounce = 150 * time.Millisecond
+
 type App struct {
 	// Sub-models
 	workspaceRail    workspace.Model
@@ -205,6 +229,19 @@ type App struct {
 
 	threadsDirtyDebounce time.Duration
 
+	// threadsListFetchScheduled is set while a threads-list refresh is
+	// waiting out threadsDirtyDebounce, and cleared when the
+	// threadsListFetchMsg that ends the wait arrives. Further
+	// ThreadsListDirtyMsg deliveries are dropped while it is set: the
+	// refresh they would ask for is already scheduled, and it reads
+	// the cache when it runs rather than when it was scheduled. The
+	// coalescing lives here, on the receiving side, because the
+	// message's senders — the thread_marked and
+	// thread_subscription_changed WS handlers, the subscription
+	// sync's completion callback, and scheduleThreadsDirty's two
+	// callers — do not coordinate.
+	threadsListFetchScheduled bool
+
 	// terminalFocused tracks whether the terminal running slk currently
 	// has focus. Maintained by reduceFocus from tea.FocusMsg /
 	// tea.BlurMsg, which the terminal only emits once View sets
@@ -267,9 +304,10 @@ type App struct {
 	// scheduleMarkFlush.
 	markFlushScheduled bool
 
-	// markFlushDebounce is that interval. Longer than
-	// threadsDirtyDebounce (150ms) because that one only re-queries
-	// local SQLite, whereas this one is a network write.
+	// markFlushDebounce is that interval. What sets its size is
+	// conversations.mark's rate tier, not merely that it is a network
+	// write; see defaultMarkFlushDebounce before changing it. Tests
+	// shorten it.
 	markFlushDebounce time.Duration
 
 	// fetchingOlder tracks in-flight older-history backfills per
@@ -715,10 +753,10 @@ func NewApp() *App {
 		selfSend:              newSelfSendDedup(),
 		bootstrap:             newWorkspaceBootstrap(),
 		windowTitle:           "slk",
-		threadsDirtyDebounce:  150 * time.Millisecond,
+		threadsDirtyDebounce:  defaultThreadsDirtyDebounce,
 		terminalFocused:       true,
 		inTmux:                os.Getenv("TMUX") != "",
-		markFlushDebounce:     time.Second,
+		markFlushDebounce:     defaultMarkFlushDebounce,
 		channelSearchDebounce: channelSearchDebounceDelay,
 		fetchingOlder:         map[string]bool{},
 		mouseWheelLines:       3,
@@ -2031,11 +2069,16 @@ func (a *App) applyThreadUnreadBoundary(channelID, threadTS string) {
 }
 
 // scheduleThreadsDirty returns a tea.Cmd that fires a ThreadsListDirtyMsg
-// after the configured debounce interval. Used to coalesce bursts of thread
-// replies (each delivered as its own NewMessageMsg) into a single re-query
-// of the involved-threads list. Returns nil when no workspace is active —
-// without an activeTeamID the dirty handler would just drop the message
-// anyway.
+// for the active workspace after the configured debounce interval. Returns
+// nil when no workspace is active — without an activeTeamID the dirty
+// handler would just drop the message anyway.
+//
+// The tick does not itself coalesce anything: tea.Tick arms a one-shot
+// timer per call, so a burst of thread replies arms a timer each and
+// sends a dirty message each. Collapsing those into a single
+// ListSubscribedThreads query is the receiving arm's job in
+// reduceThreads, where the dirty messages the WS handlers send are
+// collapsed with them.
 func (a *App) scheduleThreadsDirty() tea.Cmd {
 	if a.activeTeamID == "" {
 		return nil
@@ -2043,7 +2086,7 @@ func (a *App) scheduleThreadsDirty() tea.Cmd {
 	team := a.activeTeamID
 	d := a.threadsDirtyDebounce
 	if d == 0 {
-		d = 150 * time.Millisecond
+		d = defaultThreadsDirtyDebounce
 	}
 	return tea.Tick(d, func(time.Time) tea.Msg {
 		return ThreadsListDirtyMsg{TeamID: team}
@@ -2122,7 +2165,7 @@ func (a *App) scheduleMarkFlush() tea.Cmd {
 	a.markFlushScheduled = true
 	d := a.markFlushDebounce
 	if d == 0 {
-		d = time.Second
+		d = defaultMarkFlushDebounce
 	}
 	return tea.Tick(d, func(time.Time) tea.Msg { return markFlushMsg{} })
 }

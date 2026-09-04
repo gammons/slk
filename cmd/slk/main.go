@@ -4619,8 +4619,13 @@ func (h *rtmEventHandler) OnThreadMarked(channelID, threadTS, lastRead string, s
 		ThreadTS:  threadTS,
 		LastRead:  lastRead,
 	})
-	// Optimistic flag updates above are in-memory only; this schedules
-	// the authoritative recompute from cache.ListSubscribedThreads.
+	// The message above carries this thread's cursor only, and its
+	// reducer applies it to the open panel and to that one list row.
+	// This asks for the authoritative recompute of the whole list,
+	// from the cache rows the write above just updated. Sent per
+	// event with no deduplication here: the reducer coalesces dirty
+	// messages on receipt, so an echo landing inside an open refresh
+	// window costs no additional ListSubscribedThreads query.
 	h.program.Send(ui.ThreadsListDirtyMsg{TeamID: h.workspaceID})
 }
 

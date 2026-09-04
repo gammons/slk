@@ -426,6 +426,16 @@ type threadFetchDebounceMsg struct {
 	gen       uint64
 }
 
+// threadsListFetchMsg ends the coalescing window a ThreadsListDirtyMsg
+// opened: it is delivered threadsDirtyDebounce after that message, and
+// its arm is what dispatches the ThreadService.ListFetch the dirty
+// message asked for. teamID is whichever team was active when the window
+// opened, so a workspace switch during the window can be told apart
+// from a refresh that is still wanted.
+type threadsListFetchMsg struct {
+	teamID string
+}
+
 // MessageSentMsg is returned after a message is successfully sent.
 // LocalTS, if non-empty, identifies the optimistic placeholder added
 // when the user pressed Enter. The handler uses it to swap the

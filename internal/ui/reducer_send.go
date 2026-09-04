@@ -355,8 +355,9 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 		cmds = append(cmds, c)
 	}
 	// A thread reply (regardless of channel) may have changed the
-	// involved-threads list -- schedule a debounced re-query so a
-	// burst of replies coalesces into a single fetch.
+	// involved-threads list -- ask for a re-query. A burst of replies
+	// sends one dirty message each; the receiving arm in reduceThreads
+	// is what collapses them into a single fetch.
 	if m.Message.ThreadTS != "" {
 		if c := a.scheduleThreadsDirty(); c != nil {
 			cmds = append(cmds, c)

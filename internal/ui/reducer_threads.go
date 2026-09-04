@@ -2,7 +2,7 @@
 //
 // Thread-family reducer for App.Update (Phase 4h).
 //
-// Owns the ten Update arms that drive the thread panel, the
+// Owns the eleven Update arms that drive the thread panel, the
 // threads-list view, and the thread-reply send path:
 //
 //	ThreadMarkedRemoteMsg       - apply an inbound thread_marked event
@@ -27,8 +27,12 @@
 //	ThreadsListLoadedMsg        - threads-list fetch returned: push
 //	                              summaries + refresh badge, re-open
 //	                              the highlighted thread if visible.
-//	ThreadsListDirtyMsg         - a debounced "list might be stale"
-//	                              trigger: kick a refresh fetch.
+//	ThreadsListDirtyMsg         - "the list might be stale" from any of
+//	                              its uncoordinated senders: open a
+//	                              coalescing window, or join the open
+//	                              one.
+//	threadsListFetchMsg         - that window closing: run the refresh
+//	                              fetch the window's messages asked for.
 //	SendThreadReplyMsg          - user sent a reply: optimistic
 //	                              placeholder + chat.postMessage call.
 //	ThreadReplySentMsg          - reply landed: swap placeholder for
@@ -50,6 +54,8 @@
 package ui
 
 import (
+	"time"
+
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/gammons/slk/internal/debuglog"
@@ -235,7 +241,36 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 
 	case ThreadsListDirtyMsg:
+		// Team check first: a dirty message for another workspace must
+		// not take the coalescing window from the active one.
 		if m.TeamID != a.activeTeamID {
+			return nil, true
+		}
+		// Drop it if a refresh is already waiting: that fetch has not
+		// run yet, so it will see this change too. Senders do not
+		// coalesce among themselves — a thread being read produces one
+		// from the thread_marked handler per auto-mark on top of the
+		// one scheduleThreadsDirty schedules per reply, and each
+		// uncoalesced delivery is another ListSubscribedThreads query.
+		if a.threadsListFetchScheduled {
+			return nil, true
+		}
+		a.threadsListFetchScheduled = true
+		team := a.activeTeamID
+		d := a.threadsDirtyDebounce
+		if d == 0 {
+			d = defaultThreadsDirtyDebounce
+		}
+		return tea.Tick(d, func(time.Time) tea.Msg {
+			return threadsListFetchMsg{teamID: team}
+		}), true
+
+	case threadsListFetchMsg:
+		// Cleared before either return so the window always reopens.
+		// Leaving it set when the team check below drops the fetch
+		// would freeze the threads list for the rest of the session.
+		a.threadsListFetchScheduled = false
+		if m.teamID != a.activeTeamID {
 			return nil, true
 		}
 		threads := a.threads

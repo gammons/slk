@@ -995,20 +995,14 @@ func TestApp_NewThreadReplyTriggersDirtyMsg(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("NewMessageMsg with ThreadTS expected to return a cmd")
 	}
-	// Drive every leaf message produced by the cmd graph back into the app.
-	// tea.Tick blocks for the duration before returning a TickMsg-shaped
-	// value (here, ThreadsListDirtyMsg). drainBatch will block on it, which
-	// is fine because we set the debounce to 5ms.
-	for _, m := range drainBatch(cmd) {
-		if m != nil {
-			_, follow := app.Update(m)
-			for _, fm := range drainBatch(follow) {
-				if fm != nil {
-					app.Update(fm)
-				}
-			}
-		}
-	}
+	// Drive every leaf message produced by the cmd graph back into the
+	// app, to whatever depth it runs to: the reply's dirty tick is only
+	// the first of several hops -- the dirty message opens a coalescing
+	// window whose own tick delivers threadsListFetchMsg, and that arm
+	// is what dispatches the fetch. Each tea.Tick blocks for its
+	// duration inside drainBatch, which is fine at the 5ms debounce set
+	// above.
+	feed(t, app, cmd, 0)
 
 	select {
 	case team := <-fetched:
