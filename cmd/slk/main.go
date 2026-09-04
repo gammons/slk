@@ -4620,7 +4620,12 @@ func (h *rtmEventHandler) OnThreadMarked(channelID, threadTS, lastRead string, s
 		LastRead:  lastRead,
 	})
 	// The message above carries this thread's cursor only, and its
-	// reducer applies it to the open panel and to that one list row.
+	// reducer applies it to that one list row — and to the open
+	// panel's landmark, but only when the mark came from another
+	// client. Every mark slk issues itself is broadcast back here too,
+	// and applyThreadMarkEcho deliberately holds the landmark for
+	// those rather than dragging it off what the user was reading.
+	//
 	// This asks for the authoritative recompute of the whole list,
 	// from the cache rows the write above just updated. Sent per
 	// event with no deduplication here: the reducer coalesces dirty

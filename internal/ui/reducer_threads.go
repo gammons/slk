@@ -10,11 +10,15 @@
 //	                              panel landmark when it is the echo of
 //	                              a mark slk itself issued.
 //	ThreadMarkedLocalMsg        - outcome of an slk-initiated
-//	                              subscriptions.thread.mark: record the
-//	                              mark for echo suppression and apply
-//	                              the accepted cursor to the list, or
-//	                              log and leave the read state alone
-//	                              when Slack rejected it.
+//	                              subscriptions.thread.mark: apply the
+//	                              accepted cursor to list state only,
+//	                              leaving the open panel's landmark
+//	                              where opening the thread put it, or
+//	                              log and leave read state alone when
+//	                              Slack rejected it. The
+//	                              echo-suppression record is written at
+//	                              each issue site before the mark goes
+//	                              out, never here — see selfMarkDedup.
 //	threadFetchDebounceMsg      - debounced j/k stop: fire the actual
 //	                              thread fetch (drops stale generations
 //	                              and post-navigation ticks).

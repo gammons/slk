@@ -234,8 +234,16 @@ type App struct {
 	// threadsListFetchMsg that ends the wait arrives. Further
 	// ThreadsListDirtyMsg deliveries are dropped while it is set: the
 	// refresh they would ask for is already scheduled, and it reads
-	// the cache when it runs rather than when it was scheduled. The
-	// coalescing lives here, on the receiving side, because the
+	// the cache when it runs rather than when it was scheduled.
+	//
+	// That holds except across a workspace switch, where a dirty for
+	// the newly-active team can be dropped into a window opened for
+	// the old one, whose fetch is then discarded by the team check in
+	// the threadsListFetchMsg arm — so neither refreshes. Benign:
+	// reduceWorkspaceSwitched dispatches its own ListFetch for the new
+	// team, and the window reopens for the next dirty either way.
+	//
+	// The coalescing lives here, on the receiving side, because the
 	// message's senders — the thread_marked and
 	// thread_subscription_changed WS handlers, the subscription
 	// sync's completion callback, and scheduleThreadsDirty's two
@@ -646,8 +654,14 @@ type selfMarkKey struct {
 // recording sites record before the mark is issued and so cannot lose
 // that race: reduceChannelSelected's tier-1 entry mark, both legs of
 // flushPendingMarks, and reduceThreads' ThreadRepliesLoadedMsg
-// mark-on-open. Each of those calls a service method that only BUILDS
-// a tea.Cmd, so nothing has reached Slack when the record lands.
+// mark-on-open. What makes them safe is that each writes its record
+// before the tea.Cmd carrying the mark is handed to Bubble Tea — not a
+// shared service shape, because the two families differ. The thread
+// sites call ThreadService.Mark, which only BUILDS a tea.Cmd. The
+// channel sites call ChannelService.MarkRead, which returns a tea.Msg
+// and issues the mark itself; they wrap that call in a closure, and
+// the closure has not run yet. Either way nothing has reached Slack
+// when the record lands.
 //
 // The one exposed site is MessagesLoadedMsg.MarkedTS: ChannelService's
 // fetcher issues that mark itself on a cmd goroutine and reports the ts
@@ -2079,6 +2093,14 @@ func (a *App) applyThreadUnreadBoundary(channelID, threadTS string) {
 // ListSubscribedThreads query is the receiving arm's job in
 // reduceThreads, where the dirty messages the WS handlers send are
 // collapsed with them.
+//
+// Which leaves this tick redundant, and additive with the one the
+// receiving arm arms: a reply's list re-query now lands roughly two
+// debounce intervals after the reply. Deliberately left in place when
+// the receive-side window was added — it predates that window and has
+// two callers, so removing it is a separate change. Doing so would
+// also improve coalescing slightly, by letting a reply's dirty join a
+// window already open instead of arriving after it closed.
 func (a *App) scheduleThreadsDirty() tea.Cmd {
 	if a.activeTeamID == "" {
 		return nil
