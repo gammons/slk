@@ -53,7 +53,7 @@ Last updated: 2026-05-03
 - [x] Message editing (`E` on own message; reuses compose with stash/restore draft)
 - [x] Message deletion (`D` on own message; centered confirmation overlay)
 - [x] Paste-to-upload via `Ctrl+V` in insert mode (clipboard image, file path, or text fallback) using Slack's V2 file-upload API; multiple attachments + caption send together; status-bar progress + error toasts
-- [x] OSC 52 clipboard integration for message selection and permalink copying
+- [x] OSC 52 clipboard integration for message selection, message text (`y`), and permalink copying (`Y` / `C`)
 - [x] In-place update on `message_changed` echoes (no duplicate row on edit)
 - [x] Live removal on `message_deleted` echoes from any client
 - [x] @mention autocomplete in compose (inline picker, translates to <@UserID> on send)

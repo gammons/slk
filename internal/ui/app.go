@@ -1008,6 +1008,38 @@ func (a *App) toggleReactionOnMessageItem(channelIDStr string, msg messages.Mess
 	}
 }
 
+// copyMessageOfSelected copies the text of the currently-selected message or
+// thread reply to the system clipboard via OSC 52 and emits a status-bar toast.
+func (a *App) copyMessageOfSelected() tea.Cmd {
+	var msg messages.MessageItem
+	switch a.focusedPanel {
+	case PanelMessages:
+		m, ok := a.messagepane.SelectedMessage()
+		if !ok {
+			return nil
+		}
+		msg = m
+	case PanelThread:
+		reply := a.threadPanel.SelectedReply()
+		if reply == nil {
+			return nil
+		}
+		msg = *reply
+	default:
+		return nil
+	}
+
+	text := messages.MessageTextSource(msg)
+	if text == "" {
+		return func() tea.Msg { return ToastMsg{Text: "Message has no text"} }
+	}
+	n := len([]rune(text))
+	return tea.Batch(
+		a.clipboardWrite(text),
+		func() tea.Msg { return statusbar.CopiedMsg{N: n} },
+	)
+}
+
 // copyPermalinkOfSelected resolves the currently-selected message or thread
 // reply, calls the permalink fetcher, and returns a tea.Cmd that writes the
 // URL to the clipboard and emits a status-bar toast.
