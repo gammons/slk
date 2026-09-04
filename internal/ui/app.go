@@ -604,10 +604,15 @@ type selfMarkKey struct {
 // one is treated as foreign.
 //
 // Recording races the echo in one direction only: an echo that arrives
-// BEFORE its record is applied, not suppressed. Both recording sites
-// that follow a network round trip (MessagesLoadedMsg.MarkedTS,
-// ThreadMarkedLocalMsg) normally win that race, and losing it costs a
-// divider move, not correctness of read state.
+// BEFORE its record is applied, not suppressed. Two of the four
+// recording sites (reduceChannelSelected's tier-1 entry mark and
+// flushPendingMarks) record before issuing the mark and so cannot lose
+// that race. The two that instead report a completed round trip
+// (MessagesLoadedMsg.MarkedTS and ThreadMarkedLocalMsg, both recording
+// from the Update goroutine for a call issued on a cmd goroutine) are
+// exposed to it, because the HTTP response and the WebSocket broadcast
+// are independent. Losing it costs a divider move, not the correctness
+// of the read state.
 //
 // Not goroutine-safe. Every caller runs on the Bubble Tea Update
 // goroutine.
@@ -3499,11 +3504,11 @@ func (a *App) applyChannelMarkEcho(channelID, ts string, unreadCount int) {
 // newest known reply — never from the subscription's `active` flag,
 // which means "subscribed".
 //
-// This ALWAYS moves the panel landmark. Its callers are
-// applyThreadMarkEcho, which has already decided the inbound
-// thread_marked is not slk's own, and tests exercising that behaviour
-// directly. Mirrors applyChannelMark; see applyThreadMarkEcho for why
-// the dedup does not live here.
+// This applies lastRead to the panel unconditionally whenever the panel
+// is open on this thread — there is no self-echo check here. Its sole
+// caller is applyThreadMarkEcho, which has already decided the inbound
+// thread_marked is not slk's own. Mirrors applyChannelMark; see
+// applyThreadMarkEcho for why the dedup does not live here.
 func (a *App) applyThreadMark(channelID, threadTS, lastRead string) {
 	debuglog.Cache("applyThreadMark: channel=%s thread_ts=%s last_read=%s active=%s",
 		channelID, threadTS, lastRead, a.activeChannelID)
@@ -3521,14 +3526,17 @@ func (a *App) applyThreadMark(channelID, threadTS, lastRead string) {
 // settles the row's unread flag and the sidebar badge against lastRead
 // without touching an open thread panel's landmark.
 //
-// Both of slk's own-mark paths land here. ThreadMarkedLocalMsg is the
-// HTTP call reporting success; applyThreadMarkEcho is Slack's
-// broadcast of that same mark coming back. In both cases the panel is
-// on screen, the user is reading it, and its boundary was deliberately
-// set on open from the pre-open cursor (see openSelectedThreadCmd).
-// The mark carries the cursor slk just set — the newest reply — so
-// applying it to the panel would erase the landmark. The read state
-// itself is real, though, so the list flag and badge must still settle.
+// Three callers. applyThreadMark runs it as its own tail, after moving
+// the landmark for a mark slk did not issue. The other two are the two
+// ways slk sees its OWN mark: ThreadMarkedLocalMsg, the HTTP call
+// reporting success, and applyThreadMarkEcho's suppressed branch,
+// Slack's broadcast of that same mark coming back. For those two the
+// panel is on screen, the user is reading it, and its boundary was
+// deliberately set on open from the pre-open cursor (see
+// openSelectedThreadCmd); the mark carries the cursor slk just set —
+// the newest reply — so applying it to the panel would erase the
+// landmark. The read state itself is real, though, so the list flag and
+// the badge must still settle, which is what this does.
 func (a *App) applyThreadMarkListState(channelID, threadTS, lastRead string) {
 	if a.threadsView.MarkByThreadTSReadAt(channelID, threadTS, lastRead) {
 		a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
@@ -3551,10 +3559,15 @@ func (a *App) applyThreadMarkListState(channelID, threadTS, lastRead string) {
 // correct — the user really did read the thread elsewhere. See
 // selfMarkDedup.
 //
-// The dedup lives here rather than inside applyThreadMark for the same
-// reason it lives in applyChannelMarkEcho rather than applyChannelMark:
-// an echo helper may consume records, a shared helper reached by
-// deliberate user actions may not.
+// The dedup lives here rather than inside applyThreadMark so that
+// consuming a record stays a property of the echo path alone.
+// applyThreadMark has no other caller today — the thread mark-unread
+// press goes through applyThreadMarkUnread — but the channel pair
+// records why the split is worth keeping: applyChannelMark IS shared
+// with the mark-unread press, and folding the dedup into it would
+// silently swallow that deliberate action whenever the two collided on
+// ts. Anything later reaching applyThreadMark inherits the
+// unconditional behaviour rather than the suppression.
 func (a *App) applyThreadMarkEcho(channelID, threadTS, lastRead string) {
 	if a.selfThreadMarks.consume(selfMarkKey{
 		channelID: channelID, threadTS: threadTS, ts: lastRead,
