@@ -20,6 +20,17 @@ func TestNewApp_StartsFocused(t *testing.T) {
 	}
 }
 
+func TestNewApp_DetectsTmuxFromEnv(t *testing.T) {
+	t.Setenv("TMUX", "/tmp/tmux-1000/default,1234,0")
+	if !NewApp().inTmux {
+		t.Error("inTmux must be true when $TMUX is set")
+	}
+	t.Setenv("TMUX", "")
+	if NewApp().inTmux {
+		t.Error("inTmux must be false when $TMUX is empty")
+	}
+}
+
 func TestBlurMsg_ClearsFocus(t *testing.T) {
 	app := NewApp()
 	_, _ = app.Update(tea.BlurMsg{})
@@ -63,9 +74,16 @@ func TestReduceFocus_ClaimsOnlyItsOwnMessages(t *testing.T) {
 }
 
 // markCapture wires fake mark services and records every call.
+//
+// It pins inTmux false because NewApp derives it from $TMUX, and every
+// test below that expects an auto-mark is describing the outside-tmux
+// configuration. Without this pin the whole group would flip to the
+// tmux gate whenever the suite happens to be run from inside tmux. The
+// tmux tests set the field back to true themselves.
 func markCapture(t *testing.T) (*App, *[]string) {
 	t.Helper()
 	app := NewApp()
+	app.inTmux = false
 	app.markFlushDebounce = time.Millisecond
 	calls := &[]string{}
 	app.SetChannelService(NewChannelService(ChannelServiceFuncs{
@@ -195,6 +213,83 @@ func TestBlurredArrival_ArmsNoFlushTick(t *testing.T) {
 	if app.pendingChannelMark.ts != "5.000000" {
 		t.Fatalf("pendingChannelMark.ts = %q, want the arrival staged at 5.000000",
 			app.pendingChannelMark.ts)
+	}
+}
+
+func TestTmuxWithoutFocusEvents_DoesNotAutoMark(t *testing.T) {
+	app, calls := markCapture(t)
+	app.inTmux = true
+	app.activeChannelID = "C1"
+
+	_, cmd := app.Update(NewMessageMsg{
+		ChannelID: "C1",
+		Message:   messages.MessageItem{TS: "5.000000", UserID: "U2"},
+	})
+	feed(t, app, cmd, 0)
+
+	if len(*calls) != 0 {
+		t.Fatalf("calls = %v; tmux without focus events must not auto-mark", *calls)
+	}
+}
+
+func TestTmuxAfterBlurEvent_ArmsAutoMarking(t *testing.T) {
+	app, calls := markCapture(t)
+	app.inTmux = true
+	app.activeChannelID = "C1"
+
+	// A blur is as much proof that focus reporting works as a focus is.
+	_, _ = app.Update(tea.BlurMsg{})
+	_, _ = app.Update(tea.FocusMsg{})
+
+	_, cmd := app.Update(NewMessageMsg{
+		ChannelID: "C1",
+		Message:   messages.MessageItem{TS: "5.000000", UserID: "U2"},
+	})
+	feed(t, app, cmd, 0)
+
+	if len(*calls) != 1 || (*calls)[0] != "ch:C1/5.000000" {
+		t.Fatalf("calls = %v; want the mark once focus reporting has proven itself", *calls)
+	}
+}
+
+func TestTmuxFocusCatchUpFlushesStagedMarks(t *testing.T) {
+	app, calls := markCapture(t)
+	app.inTmux = true
+	app.activeChannelID = "C1"
+
+	// Staged before arming: no tick is scheduled, so nothing is issued.
+	_, cmd := app.Update(NewMessageMsg{
+		ChannelID: "C1",
+		Message:   messages.MessageItem{TS: "5.000000", UserID: "U2"},
+	})
+	feed(t, app, cmd, 0)
+	if len(*calls) != 0 {
+		t.Fatalf("calls = %v; nothing may be issued before arming", *calls)
+	}
+
+	// Reaching the FocusMsg arm proves reporting works, and the user is
+	// now looking at the channel, so the staged mark goes out.
+	_, cmd = app.Update(tea.FocusMsg{})
+	feed(t, app, cmd, 0)
+
+	if len(*calls) != 1 || (*calls)[0] != "ch:C1/5.000000" {
+		t.Fatalf("calls = %v; want the staged mark flushed on focus", *calls)
+	}
+}
+
+func TestOutsideTmux_AutoMarksWithoutAnyFocusEvent(t *testing.T) {
+	app, calls := markCapture(t)
+	app.inTmux = false
+	app.activeChannelID = "C1"
+
+	_, cmd := app.Update(NewMessageMsg{
+		ChannelID: "C1",
+		Message:   messages.MessageItem{TS: "5.000000", UserID: "U2"},
+	})
+	feed(t, app, cmd, 0)
+
+	if len(*calls) != 1 {
+		t.Fatalf("calls = %v; outside tmux the assume-focused default stands", *calls)
 	}
 }
 

@@ -33,13 +33,20 @@ var reduceFocus reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	switch msg.(type) {
 	case tea.FocusMsg:
 		a.terminalFocused = true
-		// Catch-up: marks staged while blurred go out now. Without
-		// this, a user who alt-tabs back, reads everything, and never
+		a.focusEverReported = true
+		// Not gated on autoMarkArmed: reaching this arm is itself the
+		// proof that arming waits for, and the user is by now looking
+		// at the channel. Catch-up — marks staged while blurred, or
+		// staged inside tmux before arming, go out now. Without this,
+		// a user who alt-tabs back, reads everything, and never
 		// switches channels leaves the channel unread on Slack.
 		return a.flushPendingMarks(), true
 
 	case tea.BlurMsg:
 		a.terminalFocused = false
+		// A blur proves focus reporting is wired up just as well as a
+		// focus does, and inside tmux it is the likelier first event.
+		a.focusEverReported = true
 		return nil, true
 
 	case markFlushMsg:

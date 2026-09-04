@@ -215,9 +215,22 @@ type App struct {
 	// true. A terminal with no focus-event support sends nothing at
 	// all, and there the flag simply stays true for the whole session.
 	// tmux forwards focus events only when `set -g focus-events on`, so
-	// tmux users without that setting are in the same position. See
-	// wiki/Terminal-Compatibility.md, "Focus reporting and read state".
+	// tmux users without that setting are in the same position; inside
+	// tmux, autoMarkArmed is what keeps that from silently advancing
+	// the read cursor. See wiki/Terminal-Compatibility.md, "Focus
+	// reporting and read state".
 	terminalFocused bool
+
+	// inTmux records whether slk is running inside tmux, captured once
+	// in NewApp from $TMUX. It exists because tmux swallows focus
+	// events unless `set -g focus-events on`, which defaults off — so
+	// inside tmux the assume-focused default is not safe on its own.
+	// See autoMarkArmed.
+	inTmux bool
+
+	// focusEverReported goes true on the first focus event of any kind.
+	// A blur is as much proof that reporting works as a focus is.
+	focusEverReported bool
 
 	// pendingChannelMark / pendingThreadMark stage a read-cursor
 	// advance for a message that arrived in what is currently on
@@ -577,6 +590,7 @@ func NewApp() *App {
 		windowTitle:           "slk",
 		threadsDirtyDebounce:  150 * time.Millisecond,
 		terminalFocused:       true,
+		inTmux:                os.Getenv("TMUX") != "",
 		markFlushDebounce:     time.Second,
 		channelSearchDebounce: channelSearchDebounceDelay,
 		fetchingOlder:         map[string]bool{},
@@ -1938,9 +1952,31 @@ func (a *App) recordThreadMark(channelID, threadTS, ts string) {
 	a.pendingThreadMark = pendingThreadMarkState{channelID: channelID, threadTS: threadTS, ts: ts}
 }
 
+// autoMarkArmed reports whether arrival-driven read-marking may fire.
+// It gates scheduleMarkFlush only: arrivals still stage their slots,
+// and reduceFocus's tea.FocusMsg catch-up still flushes them, because
+// reaching that arm is itself proof that focus reporting works.
+//
+// Outside tmux the assume-focused default of terminalFocused stands. A
+// terminal that never reports focus is indistinguishable there from one
+// that never loses it, and that risk is accepted for the common case.
+//
+// Inside tmux that default is not safe on its own: tmux forwards focus
+// events only when `set -g focus-events on`, which defaults off, so
+// such a user never produces a BlurMsg, terminalFocused stays true for
+// the whole session, and slk would advance Slack's read cursor while
+// the pane sat in the background. Requiring one observed focus event
+// proves reporting is wired up. With the setting on, the first focus
+// change arms this; without it slk never auto-marks and keeps its
+// pre-branch behavior of marking read on channel entry only.
+func (a *App) autoMarkArmed() bool {
+	return !a.inTmux || a.focusEverReported
+}
+
 // scheduleMarkFlush returns a tick that flushes the pending marks after
 // the debounce interval, or nil when nothing is staged, a tick is
-// already in flight, or the terminal is blurred.
+// already in flight, the terminal is blurred, or auto-marking is not
+// yet armed (see autoMarkArmed).
 //
 // The markFlushScheduled arm is what caps the mark rate: while a tick
 // is in flight, further arrivals only update the slots. Drop it and a
@@ -1950,7 +1986,7 @@ func (a *App) recordThreadMark(channelID, threadTS, ts string) {
 // Blurred slots stay staged and flush on the next FocusMsg instead, so
 // no timer is armed while the user is away.
 func (a *App) scheduleMarkFlush() tea.Cmd {
-	if a.markFlushScheduled || !a.terminalFocused {
+	if a.markFlushScheduled || !a.terminalFocused || !a.autoMarkArmed() {
 		return nil
 	}
 	if a.pendingChannelMark.ts == "" && a.pendingThreadMark.ts == "" {
