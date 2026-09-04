@@ -111,8 +111,12 @@ changelog:
       - "^chore(\\(.*\\))?:"
       - "^style(\\(.*\\))?:"
       - "^ci(\\(.*\\))?:"
-      - "Merge pull request"
-      - "Merge branch"
+      # Every merge commit, not just the two spellings we happened to
+      # hit first. "Merge pull request" and "Merge branch" both missed
+      # "Merge remote-tracking branch ...", which is what git writes
+      # when a PR branch is brought up to date with main -- so that
+      # leaked into the notes as if it were a change.
+      - "^Merge "
 
 nfpms:
   - id: slk
