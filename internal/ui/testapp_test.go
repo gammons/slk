@@ -53,8 +53,17 @@ func TestNewTestApp_WithChannelsAndActiveChannel(t *testing.T) {
 		),
 		withActiveChannel("C1"),
 	)
-	if got := a.sidebar.Items(); len(got) != 2 {
-		t.Errorf("sidebar item count = %d, want 2", len(got))
+	got := a.sidebar.Items()
+	if len(got) != 2 {
+		t.Fatalf("sidebar item count = %d, want 2", len(got))
+	}
+	// Identity, not just arity: a mis-wired option that populates the
+	// sidebar with the right number of wrong items must fail here.
+	if got[0].ID != "C1" || got[0].Name != "general" {
+		t.Errorf("sidebar item[0] = {ID:%q Name:%q}, want {ID:\"C1\" Name:\"general\"}", got[0].ID, got[0].Name)
+	}
+	if got[1].ID != "C2" || got[1].Name != "random" {
+		t.Errorf("sidebar item[1] = {ID:%q Name:%q}, want {ID:\"C2\" Name:\"random\"}", got[1].ID, got[1].Name)
 	}
 	if a.activeChannelID != "C1" {
 		t.Errorf("activeChannelID = %q, want %q", a.activeChannelID, "C1")
@@ -88,8 +97,14 @@ func TestNewTestApp_WithThreadsView(t *testing.T) {
 	a := newTestApp(t, withThreadsView([]cache.ThreadSummary{
 		{ChannelID: "C1", ThreadTS: "1.0", ReplyCount: 2},
 	}))
-	if got := a.threadsView.Summaries(); len(got) != 1 {
-		t.Errorf("thread summary count = %d, want 1", len(got))
+	got := a.threadsView.Summaries()
+	if len(got) != 1 {
+		t.Fatalf("thread summary count = %d, want 1", len(got))
+	}
+	// Identity, not just arity: the summary must be the one we passed.
+	if got[0].ChannelID != "C1" || got[0].ThreadTS != "1.0" || got[0].ReplyCount != 2 {
+		t.Errorf("summary[0] = {ChannelID:%q ThreadTS:%q ReplyCount:%d}, want {\"C1\" \"1.0\" 2}",
+			got[0].ChannelID, got[0].ThreadTS, got[0].ReplyCount)
 	}
 }
 
@@ -110,6 +125,19 @@ type testAppCfg struct {
 
 type testOpt func(*testAppCfg)
 
+// withSize sets a.width/a.height directly. It does NOT send a
+// tea.WindowSizeMsg, so sub-models (messagepane, sidebar, thread, ...)
+// keep whatever dimensions NewApp gave them. That matches most of the
+// legacy ad-hoc builders, but differs from makeBenchApp in
+// app_bench_test.go, which sizes via Update(tea.WindowSizeMsg{...}) and
+// therefore does propagate. A test that needs propagation must send the
+// message itself after construction:
+//
+//	a := newTestApp(t, withSize(200, 50))
+//	_, _ = a.Update(tea.WindowSizeMsg{Width: 200, Height: 50})
+//
+// (Update has a pointer receiver and mutates a in place, so the
+// returned tea.Model can be discarded.)
 func withSize(w, h int) testOpt { return func(c *testAppCfg) { c.w, c.h = w, h } }
 
 func withMessages(msgs ...messages.MessageItem) testOpt {
@@ -143,10 +171,17 @@ func withThreadsView(sums []cache.ThreadSummary) testOpt {
 	return func(c *testAppCfg) { c.threadSums, c.hasThreadSums = sums, true }
 }
 
-// newTestApp builds an App for tests. Options are applied in a fixed
-// order regardless of argument order: size, data, services, splits,
-// mode, then render. This keeps construction deterministic — a test
-// cannot accidentally depend on option ordering.
+// newTestApp builds an App for tests. Every option only records intent
+// into testAppCfg; the effects are then applied in one fixed sequence
+// regardless of the order the options were passed:
+//
+//	size → channels → channelService → messages → threadsView →
+//	activeChannel → splits → mode → render
+//
+// So withMessages(...) before or after withChannels(...) produces the
+// same App. Individual options are still last-wins (a second withSize
+// overwrites the first), and withWindowSplit is deliberately
+// order-sensitive: it appends, so splits apply in argument order.
 //
 // Takes testing.TB rather than *testing.T so benchmarks can use it too
 // (app_bench_test.go's builders route through this in Task 2).
@@ -178,6 +213,21 @@ func newTestApp(t testing.TB, opts ...testOpt) *App {
 	for _, d := range cfg.splits {
 		_ = a.splitWindow(d)
 	}
+	// withMode(ModeNormal) is deliberately a no-op: NewApp already starts
+	// in ModeNormal, and SetMode is not a plain field assignment (see
+	// app.go) — it disarms a pending ctrl+w chord and restores the help
+	// hint, clears a.cmdline when leaving ModeCommand, clears selections
+	// when entering ModeInsert, and always pushes the mode into the
+	// statusbar. Firing those on a freshly built App would contaminate
+	// the precondition the test is trying to establish, so we skip the
+	// call when the requested mode is already the default.
+	//
+	// Consequence for callers: passing a Mode variable that happens to
+	// equal ModeNormal gets you nothing. A test that genuinely wants
+	// SetMode's side effects must call it itself after construction:
+	//
+	//	a := newTestApp(t)
+	//	a.SetMode(ModeNormal)
 	if cfg.mode != ModeNormal {
 		a.SetMode(cfg.mode)
 	}
