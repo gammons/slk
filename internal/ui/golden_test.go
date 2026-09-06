@@ -2346,8 +2346,9 @@ func TestGolden_WindowSplitRendersTwoDistinctPanes(t *testing.T) {
 // goldenStatusOverflow is how many display columns wider than the
 // terminal every golden's rows come out.
 //
-// IT ENCODES A REAL, UNFIXED BUG, not a rendering convention. The status
-// row overruns its budget by six columns:
+// IT ENCODES A REAL, UNFIXED BUG, not a rendering convention -- tracked
+// as https://github.com/gammons/slk/issues/181. The status row overruns
+// its budget by six columns:
 //
 //   - statusbar.Model.render budgets the gap against width-1
 //     (statusbar/model.go:347-356), one column short to begin with;
