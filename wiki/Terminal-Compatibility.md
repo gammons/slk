@@ -88,6 +88,54 @@ Expected output: `on` and `#T`.
 Passing the title escape through tmux's DCS passthrough instead — which
 would work with no tmux config at all — is a possible follow-up.
 
+## Focus reporting and read state
+
+slk marks a message read on Slack's servers when it arrives in the
+channel you're viewing — or in the thread panel you have open — but only
+while the terminal running slk is focused, and inside tmux only once
+focus reporting has proven itself (see below). Having a channel selected
+doesn't mean you can see it: slk may be sitting in a background terminal,
+an inactive tmux window, or an unfocused tmux pane. Marking those
+messages read would diverge from Slack's own read state and suppress the
+mobile notification for a message you never saw. A message that arrives
+while you're away stays unread until you come back; the mark goes out on
+the next focus.
+
+Focus is detected with DECSET 1004 focus reporting, which recent versions
+of the terminals at the top of the table above implement (kitty, Ghostty,
+WezTerm, foot, iTerm2, Alacritty, gnome-terminal).
+
+Inside tmux there's an extra step. tmux forwards focus events to the
+programs it runs only if you ask it to. Add this to `~/.tmux.conf`:
+
+```tmux
+set -g focus-events on
+```
+
+Without that line tmux never tells slk that its pane lost focus, and slk
+has no way to ask. So inside tmux slk holds auto-marking back until it
+has actually seen a focus event — a gain or a loss, either one proves the
+wiring works. With `focus-events on` the first switch away from or back
+to slk's pane arms it, and from then on messages arriving in the channel
+you're viewing are marked read while the pane is focused. Without it no
+event ever arrives, auto-marking stays disarmed for the whole session,
+and slk falls back to marking a channel read when you open it — exactly
+the read-marking behavior it had before this feature existed.
+
+slk detects tmux from the `$TMUX` environment variable, read once at
+startup. It does not inspect your tmux config, so with `focus-events`
+left off you get that fallback silently rather than a warning.
+
+Outside tmux there is no such gate. Terminals report focus *transitions*,
+never their current state, so slk assumes it starts focused — you did
+just launch it — and marks read on arrival from the very first message.
+slk cannot probe for focus-reporting support either, so a terminal that
+never sends focus events is indistinguishable from one that never loses
+focus, and there the assumed-focused state persists for the whole
+session. That risk is accepted outside tmux, where focus reporting is
+widely supported; inside tmux, where the stock config breaks it for
+everyone, it is not.
+
 ## Overriding the image protocol
 
 You can override slk's image-protocol pick via the `[appearance] image_protocol`

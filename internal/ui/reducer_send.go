@@ -9,9 +9,10 @@
 //	NewMessageMsg            - inbound WS event for any channel:
 //	                           edit-echo update, self-send dedup
 //	                           (recorded + early-arrival in-flight
-//	                           guards), append-to-pane or
-//	                           mark-channel-unread, and threads-list
-//	                           dirty-bump for replies.
+//	                           guards), append-to-pane, staging a
+//	                           focus-gated read-cursor advance or
+//	                           surfacing the unread dot, and
+//	                           threads-list dirty-bump for replies.
 //	SendMessageMsg           - user send: optimistic placeholder +
 //	                           chat.postMessage call.
 //	MessageSentMsg           - send landed: swap placeholder for
@@ -40,7 +41,8 @@
 // read-state, and the message service. No single existing
 // controller owns all of that cross-section.
 //
-// Helpers (applyChannelMark, applyThreadMark, scheduleThreadsDirty,
+// Helpers (applyChannelMark, applyThreadMarkUnread, scheduleThreadsDirty,
+// recordChannelMark, recordThreadMark, scheduleMarkFlush,
 // notifyReadStateChanged, userNameFor, nowFormatted, cancelEdit,
 // CloseThread) stay on App; the reducer calls them via `a`.
 package ui
@@ -169,7 +171,7 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		if m.ThreadTS == "" {
 			a.applyChannelMark(m.ChannelID, m.BoundaryTS, m.UnreadCount)
 		} else {
-			a.applyThreadMark(m.ChannelID, m.ThreadTS, m.BoundaryTS, false)
+			a.applyThreadMarkUnread(m.ChannelID, m.ThreadTS, m.BoundaryTS)
 		}
 		return func() tea.Msg {
 			return statusbar.MarkedUnreadMsg{}
@@ -206,8 +208,9 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 
 // reduceNewMessage handles NewMessageMsg. Extracted because the
 // arm is ~100 lines covering five decision branches (edit echo,
-// self-send dedup, early-arrival in-flight guard, active vs
-// inactive channel, threads-list dirty bump).
+// self-send dedup, early-arrival in-flight guard, the read-state
+// decision for the channel and thread cursors, threads-list dirty
+// bump).
 func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 	debuglog.Cache("NewMessageMsg: channel=%s ts=%s thread_ts=%s active=%s",
 		m.ChannelID, m.Message.TS, m.Message.ThreadTS, a.activeChannelID)
@@ -281,56 +284,89 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 	// activeChannelID — and live replies must still land.
 	// (Previously this lived inside the active-channel branch below,
 	// so those panels went stale until a reopen forced a refetch.)
-	if a.threadVisible &&
+	//
+	// Shared with the thread read-cursor gate below, which must not
+	// drift from this one: the message is staged for a read-cursor
+	// advance exactly when it is rendered into the open panel. Whether
+	// that advance is actually issued is decided later, at flush time,
+	// by terminal focus.
+	inOpenThreadPanel := a.threadVisible &&
 		m.ChannelID == a.threadPanel.ChannelID() &&
-		m.Message.ThreadTS == a.threadPanel.ThreadTS() {
+		m.Message.ThreadTS == a.threadPanel.ThreadTS()
+	if inOpenThreadPanel {
 		a.threadPanel.AddReply(m.Message)
 	}
-	if m.ChannelID == a.activeChannelID {
-		// "active_channel_no_unread_bump": message arrived for the
-		// FOCUSED channel, so no unread bump is applied -- the user
-		// is actively reading (the read marker advances on focused
-		// entry via MarkChannel/MarkRead elsewhere).
-		debuglog.Cache("NewMessageMsg: channel=%s ts=%s decision=active_channel_no_unread_bump",
-			m.ChannelID, m.Message.TS)
-	} else {
-		// Message arrived for a channel that is NOT focused -- bump
-		// its unread state so the sidebar shows the dot + bold
-		// indicator. This runs regardless of whether some UNFOCUSED
-		// window views the channel: the read marker only advances on
-		// focused entry, so a visible-but-unfocused window's channel
-		// is still unread. Only the focused channel is auto-marked-
-		// read (MarkChannel on entry), so only it skips the bump.
-		//
-		// Skip plain thread replies: a reply inside a thread does
-		// not mark the parent channel as unread on Slack -- only
-		// top-level messages and thread_broadcasts do. The Threads
-		// view tracks its own unread state separately.
-		isThreadReply := m.Message.ThreadTS != "" && m.Message.ThreadTS != m.Message.TS
-		if !isThreadReply || m.Message.Subtype == "thread_broadcast" {
+	isThreadReply := m.Message.ThreadTS != "" && m.Message.ThreadTS != m.Message.TS
+	isBroadcast := m.Message.Subtype == "thread_broadcast"
+
+	// Thread-eligible: a reply the user has on screen in the open
+	// thread panel. The visibility gate mirrors the channel rule --
+	// "the panel is open on this thread", not "the thread pane holds
+	// slk-internal focus". Terminal focus is NOT checked here; it
+	// gates the flush (scheduleMarkFlush), so a blurred reply stays
+	// staged until the FocusMsg catch-up.
+	if isThreadReply && inOpenThreadPanel {
+		a.recordThreadMark(m.ChannelID, m.Message.ThreadTS, m.Message.TS)
+	}
+
+	// Channel-eligible: top-level messages and thread_broadcasts. Plain
+	// thread replies never advance the parent channel cursor on Slack.
+	if !isThreadReply || isBroadcast {
+		switch {
+		case m.ChannelID != a.activeChannelID:
+			// Not the channel on screen. The has_unread=true DB write
+			// already happened in the WS handler; force the sidebar and
+			// workspace rail to re-read it.
 			debuglog.Cache("NewMessageMsg: channel=%s ts=%s decision=mark_unread",
 				m.ChannelID, m.Message.TS)
-			// The DB write that flips has_unread=true for this
-			// channel already happened in the WS-handler path
-			// (cache.UpdateChannelReadState). Force the sidebar
-			// to re-read read state so the dot appears on the
-			// next render, and refresh the workspace rail so its
-			// HasUnread flag picks up the change too.
 			a.notifyReadStateChanged()
-		} else {
-			debuglog.Cache("NewMessageMsg: channel=%s ts=%s decision=skipped_thread_reply_inactive",
+		case a.terminalFocused:
+			// On screen AND the user can actually see it: stage a read-
+			// cursor advance. No notifyReadStateChanged, so this event
+			// triggers no sidebar repaint -- the has_unread=true the WS
+			// handler just wrote is cleared by the flush before
+			// anything normally repaints the dot. Inside a tmux
+			// session that has not yet proven focus reporting no flush
+			// is armed (see autoMarkArmed), so there has_unread
+			// survives and the dot appears at the next repaint --
+			// which is what this arm did before it marked anything.
+			debuglog.Cache("NewMessageMsg: channel=%s ts=%s decision=active_focused_mark_read",
 				m.ChannelID, m.Message.TS)
+			a.recordChannelMark(m.ChannelID, m.Message.TS)
+		default:
+			// Selected, but slk is in a background terminal / inactive
+			// tmux window or pane. The user has NOT seen this, so show
+			// the dot from the has_unread the WS handler just wrote.
+			// The advance is still staged, but scheduleMarkFlush arms
+			// no tick while blurred, so it sits until the FocusMsg
+			// catch-up in reducer_focus.go issues it.
+			debuglog.Cache("NewMessageMsg: channel=%s ts=%s decision=active_blurred_stay_unread",
+				m.ChannelID, m.Message.TS)
+			a.recordChannelMark(m.ChannelID, m.Message.TS)
+			a.notifyReadStateChanged()
 		}
+	} else {
+		debuglog.Cache("NewMessageMsg: channel=%s ts=%s decision=skipped_thread_reply",
+			m.ChannelID, m.Message.TS)
+	}
+
+	var cmds []tea.Cmd
+	if c := a.scheduleMarkFlush(); c != nil {
+		cmds = append(cmds, c)
 	}
 	// A thread reply (regardless of channel) may have changed the
-	// involved-threads list -- schedule a debounced re-query so a
-	// burst of replies coalesces into a single fetch.
+	// involved-threads list -- ask for a re-query. A burst of replies
+	// sends one dirty message each; the receiving arm in reduceThreads
+	// is what collapses them into a single fetch.
 	if m.Message.ThreadTS != "" {
 		if c := a.scheduleThreadsDirty(); c != nil {
-			return c
+			cmds = append(cmds, c)
 		}
 	}
-	return nil
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
 }
 
 // reduceSendMessage handles SendMessageMsg. Extracted to keep the

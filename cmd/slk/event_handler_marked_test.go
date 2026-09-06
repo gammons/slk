@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/ui"
 )
 
 func TestOnChannelMarked_WritesReadState(t *testing.T) {
@@ -126,14 +130,182 @@ func TestOnChannelMarked_ZeroUnreadCount_ClearsHasUnread(t *testing.T) {
 	}
 }
 
-func TestMarkChannelReadAsync_UpdatesReadState(t *testing.T) {
-	// markChannelReadAsync runs its work in a goroutine and calls
-	// client.MarkChannel on a *slackclient.Client, which requires real
-	// HTTP/Slack wiring (or a fake) to construct. The function body is
-	// otherwise a thin wrapper over db.UpdateChannelReadState (covered by
-	// cache-level tests) plus a tea.Program send. Wiring a fake Client
-	// would require introducing an interface seam we don't otherwise need.
-	// The reconnect-backfill integration test in Task 20 exercises this
-	// path end-to-end.
-	t.Skip("markChannelReadAsync requires a real *slackclient.Client; covered by Task 20 integration test")
+type fakeChannelMarker struct {
+	err   error
+	calls []string // "channelID/ts" per call
+}
+
+func (f *fakeChannelMarker) MarkChannel(_ context.Context, channelID, ts string) error {
+	f.calls = append(f.calls, channelID+"/"+ts)
+	return f.err
+}
+
+func TestMarkChannelRead_SuccessPersistsReadState(t *testing.T) {
+	db := newTestDB(t)
+	_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
+	if err := db.UpdateChannelReadState("C1", "", true); err != nil {
+		t.Fatalf("seed has_unread: %v", err)
+	}
+	marker := &fakeChannelMarker{}
+
+	if err := markChannelRead(context.Background(), marker, db, "C1", "1700000000.000100"); err != nil {
+		t.Fatalf("markChannelRead: %v", err)
+	}
+
+	if len(marker.calls) != 1 || marker.calls[0] != "C1/1700000000.000100" {
+		t.Fatalf("unexpected MarkChannel calls: %v", marker.calls)
+	}
+	s, _ := db.GetChannelReadState("C1")
+	if s.LastReadTS != "1700000000.000100" || s.HasUnread {
+		t.Errorf("read state = %+v, want LastReadTS advanced and HasUnread=false", s)
+	}
+}
+
+func TestMarkChannelRead_FailureLeavesChannelUnread(t *testing.T) {
+	db := newTestDB(t)
+	_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
+	if err := db.UpdateChannelReadState("C1", "", true); err != nil {
+		t.Fatalf("seed has_unread: %v", err)
+	}
+	marker := &fakeChannelMarker{err: errors.New("conversations.mark: invalid_auth")}
+
+	if err := markChannelRead(context.Background(), marker, db, "C1", "1700000000.000100"); err == nil {
+		t.Fatal("markChannelRead: want error, got nil")
+	}
+
+	s, _ := db.GetChannelReadState("C1")
+	if s.LastReadTS != "" {
+		t.Errorf("LastReadTS = %q, want unchanged after a rejected mark", s.LastReadTS)
+	}
+	if !s.HasUnread {
+		t.Error("HasUnread must stay true so the state can be reconciled later")
+	}
+}
+
+func TestMarkChannelReadAndNotify_FailureDoesNotNotify(t *testing.T) {
+	// The UI must not optimistically clear an unread state that Slack
+	// rejected: a ChannelMarkedReadMsg would blank the sidebar's unread
+	// badge for a channel Slack still considers unread, which is the
+	// cross-client divergence #159 is about.
+	db := newTestDB(t)
+	_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
+	if err := db.UpdateChannelReadState("C1", "", true); err != nil {
+		t.Fatalf("seed has_unread: %v", err)
+	}
+	marker := &fakeChannelMarker{err: errors.New("conversations.mark: invalid_auth")}
+	var sent []tea.Msg
+
+	markChannelReadAndNotify(context.Background(), marker, db, func(m tea.Msg) {
+		sent = append(sent, m)
+	}, "C1", "1700000000.000100")
+
+	if len(sent) != 0 {
+		t.Errorf("notify called %d time(s) with %v; want no notification after a rejected mark", len(sent), sent)
+	}
+	s, _ := db.GetChannelReadState("C1")
+	if s.LastReadTS != "" || !s.HasUnread {
+		t.Errorf("read state = %+v, want untouched after a rejected mark", s)
+	}
+}
+
+func TestMarkChannelReadAndNotify_SuccessNotifiesOnce(t *testing.T) {
+	db := newTestDB(t)
+	_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
+	if err := db.UpdateChannelReadState("C1", "", true); err != nil {
+		t.Fatalf("seed has_unread: %v", err)
+	}
+	marker := &fakeChannelMarker{}
+	var sent []tea.Msg
+
+	markChannelReadAndNotify(context.Background(), marker, db, func(m tea.Msg) {
+		sent = append(sent, m)
+	}, "C1", "1700000000.000100")
+
+	if len(sent) != 1 {
+		t.Fatalf("notify called %d time(s), want exactly 1", len(sent))
+	}
+	got, ok := sent[0].(ui.ChannelMarkedReadMsg)
+	if !ok {
+		t.Fatalf("notified with %T, want ui.ChannelMarkedReadMsg", sent[0])
+	}
+	if got != (ui.ChannelMarkedReadMsg{ChannelID: "C1"}) {
+		t.Errorf("notified with %+v, want ChannelID C1", got)
+	}
+}
+
+type fakeThreadMarker struct {
+	err   error
+	calls []string // "channelID/threadTS/ts" per call
+}
+
+func (f *fakeThreadMarker) MarkThread(_ context.Context, channelID, threadTS, ts string) error {
+	f.calls = append(f.calls, channelID+"/"+threadTS+"/"+ts)
+	return f.err
+}
+
+func TestMarkThreadRead_SuccessAdvancesTheCursor(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertThreadSubscription("T1", "C1", "1700000000.000100", "1700000000.000100", true); err != nil {
+		t.Fatalf("seed subscription: %v", err)
+	}
+	marker := &fakeThreadMarker{}
+
+	if err := markThreadRead(context.Background(), marker, db, "T1", "C1", "1700000000.000100", "1700000000.000500"); err != nil {
+		t.Fatalf("markThreadRead: %v", err)
+	}
+
+	if len(marker.calls) != 1 || marker.calls[0] != "C1/1700000000.000100/1700000000.000500" {
+		t.Fatalf("unexpected MarkThread calls: %v", marker.calls)
+	}
+	got, err := db.GetThreadLastRead("T1", "C1", "1700000000.000100")
+	if err != nil {
+		t.Fatalf("GetThreadLastRead: %v", err)
+	}
+	if got != "1700000000.000500" {
+		t.Errorf("last_read = %q, want it advanced to 1700000000.000500; the WS echo may never arrive", got)
+	}
+}
+
+func TestMarkThreadRead_FailureLeavesTheCursorAlone(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertThreadSubscription("T1", "C1", "1700000000.000100", "1700000000.000100", true); err != nil {
+		t.Fatalf("seed subscription: %v", err)
+	}
+	marker := &fakeThreadMarker{err: errors.New("subscriptions.thread.mark: thread_not_found")}
+
+	if err := markThreadRead(context.Background(), marker, db, "T1", "C1", "1700000000.000100", "1700000000.000500"); err == nil {
+		t.Fatal("markThreadRead: want error, got nil")
+	}
+
+	got, err := db.GetThreadLastRead("T1", "C1", "1700000000.000100")
+	if err != nil {
+		t.Fatalf("GetThreadLastRead: %v", err)
+	}
+	if got != "1700000000.000100" {
+		t.Errorf("last_read = %q, want it unchanged after a rejected mark", got)
+	}
+}
+
+// The local mark path fires for every thread the user opens, including
+// threads from the messages pane they never subscribed to. Persisting
+// the cursor must not fabricate an active=1 subscription row, or the
+// Threads list gains a phantom entry until the next getView reconcile.
+func TestMarkThreadRead_UnsubscribedThreadDoesNotFabricateASubscription(t *testing.T) {
+	db := newTestDB(t)
+	marker := &fakeThreadMarker{}
+
+	if err := markThreadRead(context.Background(), marker, db, "T1", "C1", "1700000000.000100", "1700000000.000500"); err != nil {
+		t.Fatalf("markThreadRead: %v", err)
+	}
+
+	if len(marker.calls) != 1 {
+		t.Fatalf("unexpected MarkThread calls: %v", marker.calls)
+	}
+	active, err := db.ListActiveThreadSubscriptions("T1")
+	if err != nil {
+		t.Fatalf("ListActiveThreadSubscriptions: %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("marking an unsubscribed thread read created %d subscription row(s): %+v", len(active), active)
+	}
 }

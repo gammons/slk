@@ -94,6 +94,30 @@ const openThreadDebounceDelay = 200 * time.Millisecond
 // pause, never one per keystroke.
 const channelSearchDebounceDelay = 300 * time.Millisecond
 
+// defaultMarkFlushDebounce is the App.markFlushDebounce NewApp starts
+// with, and the fallback scheduleMarkFlush uses for a zero field.
+//
+// conversations.mark is a Tier 3 method — Slack budgets those at
+// roughly 50 requests a minute. This interval is the ceiling on how
+// often the flush spends one: 60/5 = 12 a minute, with room left for
+// the entry marks and mark-unread presses that call it on other paths. One second, the value this started at, put a
+// channel receiving about a message a second at ~60 a minute — over
+// the tier, and an over-tier mark is dropped rather than retried (see
+// flushPendingMarks), which is the cross-client divergence the
+// auto-marking exists to prevent.
+//
+// Five seconds is not felt by the user: nothing on screen changes when
+// the flush fires. It moves Slack's server-side cursor, and the local
+// divider deliberately stays put (again, see flushPendingMarks).
+const defaultMarkFlushDebounce = 5 * time.Second
+
+// defaultThreadsDirtyDebounce is the App.threadsDirtyDebounce NewApp
+// starts with, and the fallback for a zero field in scheduleThreadsDirty
+// and in reduceThreads' ThreadsListDirtyMsg arm. It only delays a query
+// against local SQLite, so it is two orders of magnitude below the mark
+// flush above.
+const defaultThreadsDirtyDebounce = 150 * time.Millisecond
+
 type App struct {
 	// Sub-models
 	workspaceRail    workspace.Model
@@ -204,6 +228,96 @@ type App struct {
 	threads ThreadService
 
 	threadsDirtyDebounce time.Duration
+
+	// threadsListFetchScheduled is set while a threads-list refresh is
+	// waiting out threadsDirtyDebounce, and cleared when the
+	// threadsListFetchMsg that ends the wait arrives. Further
+	// ThreadsListDirtyMsg deliveries are dropped while it is set: the
+	// refresh they would ask for is already scheduled, and it reads
+	// the cache when it runs rather than when it was scheduled.
+	//
+	// That holds except across a workspace switch, where a dirty for
+	// the newly-active team can be dropped into a window opened for
+	// the old one, whose fetch is then discarded by the team check in
+	// the threadsListFetchMsg arm — so neither refreshes. Benign:
+	// reduceWorkspaceSwitched dispatches its own ListFetch for the new
+	// team, and the window reopens for the next dirty either way.
+	//
+	// The coalescing lives here, on the receiving side, because the
+	// message's senders — the thread_marked and
+	// thread_subscription_changed WS handlers, the subscription
+	// sync's completion callback, and scheduleThreadsDirty's two
+	// callers — do not coordinate.
+	threadsListFetchScheduled bool
+
+	// terminalFocused tracks whether the terminal running slk currently
+	// has focus. Maintained by reduceFocus from tea.FocusMsg /
+	// tea.BlurMsg, which the terminal only emits once View sets
+	// ReportFocus.
+	//
+	// Terminals report focus *transitions* only — enabling focus
+	// reporting elicits no current-state report — so NewApp starts this
+	// true. A terminal with no focus-event support sends nothing at
+	// all, and there the flag simply stays true for the whole session.
+	// tmux forwards focus events only when `set -g focus-events on`, so
+	// tmux users without that setting are in the same position; inside
+	// tmux, autoMarkArmed is what keeps that from silently advancing
+	// the read cursor. See wiki/Terminal-Compatibility.md, "Focus
+	// reporting and read state".
+	terminalFocused bool
+
+	// inTmux records whether slk is running inside tmux, captured once
+	// in NewApp from $TMUX. It exists because tmux swallows focus
+	// events unless `set -g focus-events on`, which defaults off — so
+	// inside tmux the assume-focused default is not safe on its own.
+	// See autoMarkArmed.
+	inTmux bool
+
+	// focusEverReported goes true on the first focus event of any kind.
+	// A blur is as much proof that reporting works as a focus is.
+	focusEverReported bool
+
+	// pendingChannelMark / pendingThreadMark stage a read-cursor
+	// advance for a message that arrived in what is currently on
+	// screen — the selected channel, or the open thread panel —
+	// whether or not the user is looking at it. Staging is not
+	// focus-gated; only the flush is, so a slot staged while blurred
+	// waits for the next FocusMsg. A slot staged while FOCUSED waits
+	// too if auto-marking is not armed — inside a tmux session that
+	// has never reported a focus event that is the whole session, and
+	// the slot is only ever issued if one arrives. See autoMarkArmed.
+	//
+	// Single-slot and newest-wins: a burst coalesces into one request,
+	// and a slot can never issue a ts older than one it already holds
+	// FOR THE SAME TARGET. Switching target (another channel, another
+	// thread) replaces the slot outright, so a staged advance the
+	// flush has not yet issued is dropped. Accepted: that advance is
+	// reconciled by the target's next entry mark or by reconnect sync.
+	pendingChannelMark pendingChannelMarkState
+	pendingThreadMark  pendingThreadMarkState
+
+	// selfMarks and selfThreadMarks record the channel and thread marks
+	// slk issued itself so their Slack-broadcast echoes can be told
+	// apart from a mark made in another client. Two sets rather than
+	// one so a burst on either side cannot evict the other's records.
+	// See selfMarkDedup.
+	selfMarks       selfMarkDedup
+	selfThreadMarks selfMarkDedup
+
+	// markFlushScheduled caps the conversations.mark RATE at one per
+	// markFlushDebounce per target, not merely the number of live
+	// timers: without it a stream arriving faster than the debounce
+	// would interleave ticks with arrivals, and each tick would find
+	// the slot already refilled and issue a request. See
+	// scheduleMarkFlush.
+	markFlushScheduled bool
+
+	// markFlushDebounce is that interval. What sets its size is
+	// conversations.mark's rate tier, not merely that it is a network
+	// write; see defaultMarkFlushDebounce before changing it. Tests
+	// shorten it.
+	markFlushDebounce time.Duration
+
 	// fetchingOlder tracks in-flight older-history backfills per
 	// channel ID (Phase 3: a global bool would let one window's
 	// backfill block another channel's, and a fetch completing for
@@ -481,6 +595,149 @@ type App struct {
 	scrollFlushScheduled bool
 }
 
+// pendingChannelMarkState is App.pendingChannelMark's slot: the newest
+// channel read-cursor advance staged but not yet issued. A zero ts
+// means "nothing staged".
+type pendingChannelMarkState struct {
+	channelID string
+	ts        string
+}
+
+// pendingThreadMarkState is App.pendingThreadMark's slot: the newest
+// thread read-cursor advance staged but not yet issued. A zero ts
+// means "nothing staged".
+type pendingThreadMarkState struct {
+	channelID string
+	threadTS  string
+	ts        string
+}
+
+// selfMarkLimit caps the number of DISTINCT keys ONE selfMarkDedup
+// holds (App keeps two: one for channel marks, one for thread marks).
+// slk issues at most one mark per channel or thread entry and one per
+// markFlushDebounce, and each echo consumes its entry within a round
+// trip, so a live set is normally one or two. The cap only exists so a
+// session whose echoes never arrive — a WebSocket that dropped and
+// reconnected past them, say — cannot grow a set for the life of the
+// process. Oldest entries are evicted first.
+const selfMarkLimit = 64
+
+// selfMarkKey identifies one read mark slk issued. threadTS is empty
+// for a channel mark (conversations.mark) and set for a thread mark
+// (subscriptions.thread.mark); ts is the cursor the mark carried, which
+// is what the matching echo reports back.
+type selfMarkKey struct {
+	channelID string
+	threadTS  string
+	ts        string
+}
+
+// selfMarkDedup records the read marks slk issued itself so the echo
+// helpers can tell slk's own channel_marked / thread_marked echo from
+// one raised by another Slack client.
+//
+// Slack broadcasts both events to every connected client including the
+// issuer, so each mark slk sends comes back a round trip later as a
+// ChannelMarkedRemoteMsg or ThreadMarkedRemoteMsg carrying the ts slk
+// just set. Applying that echo would drag the on-screen "── new ──"
+// divider to the newest message — deleting the user's place moments
+// after they looked at it. A mark from another client carries no such
+// record and still moves the divider, which is correct: it means the
+// user really did read the channel or thread elsewhere.
+//
+// Entries are counted, not merely present, and one echo consumes one
+// count: N issued marks at the same key suppress N echoes, and the next
+// one is treated as foreign.
+//
+// Recording races the echo in one direction only: an echo that arrives
+// BEFORE its record is applied, not suppressed. Four of the five
+// recording sites record before the mark is issued and so cannot lose
+// that race: reduceChannelSelected's tier-1 entry mark, both legs of
+// flushPendingMarks, and reduceThreads' ThreadRepliesLoadedMsg
+// mark-on-open. What makes them safe is that each writes its record
+// before the tea.Cmd carrying the mark is handed to Bubble Tea — not a
+// shared service shape, because the two families differ. The thread
+// sites call ThreadService.Mark, which only BUILDS a tea.Cmd. The
+// channel sites call ChannelService.MarkRead, which returns a tea.Msg
+// and issues the mark itself; they wrap that call in a closure, and
+// the closure has not run yet. Either way nothing has reached Slack
+// when the record lands.
+//
+// The one exposed site is MessagesLoadedMsg.MarkedTS: ChannelService's
+// fetcher issues that mark itself on a cmd goroutine and reports the ts
+// back afterwards, so its record cannot be written until the HTTP
+// response has already returned — and the WebSocket broadcast of the
+// same mark is independent of that response. Losing the race there
+// costs a divider move, not the correctness of the read state.
+//
+// No site records after a mark COMPLETES. Recording on completion (the
+// ThreadMarkedLocalMsg arm, say) would expose every thread mark to the
+// race, including the mark-on-open whose echo is exactly what this
+// dedup exists to suppress. The cost of recording early instead is that
+// a mark Slack rejects leaves a record with no echo to consume it — as
+// does a mark issued in one workspace whose echo arrives after a switch
+// to another, since OnChannelMarked returns before dispatching
+// ChannelMarkedRemoteMsg when its workspace is not active. Both leak
+// the same way and cost the same: the record is evicted by
+// selfMarkLimit, and until then it can hold a landmark still, never
+// move one wrongly.
+//
+// Not goroutine-safe. Every caller runs on the Bubble Tea Update
+// goroutine.
+type selfMarkDedup struct {
+	// counts holds the number of issued-but-unechoed marks per key.
+	// A key is deleted once its count reaches zero.
+	counts map[selfMarkKey]int
+	// order lists the distinct keys in counts by first-record time,
+	// oldest first. It is the eviction queue for selfMarkLimit.
+	order []selfMarkKey
+}
+
+// record notes that slk has issued the mark k. A key missing the
+// channel or the cursor identifies nothing and is dropped: callers
+// record unconditionally from paths that may not have issued a mark at
+// all (see MessagesLoadedMsg.MarkedTS).
+func (d *selfMarkDedup) record(k selfMarkKey) {
+	if k.channelID == "" || k.ts == "" {
+		return
+	}
+	if d.counts == nil {
+		d.counts = make(map[selfMarkKey]int)
+	}
+	if _, known := d.counts[k]; !known {
+		d.order = append(d.order, k)
+	}
+	d.counts[k]++
+	for len(d.order) > selfMarkLimit {
+		delete(d.counts, d.order[0])
+		d.order = d.order[1:]
+	}
+}
+
+// consume reports whether k matches a mark slk issued and has not yet
+// seen echoed, decrementing that mark's count if so.
+func (d *selfMarkDedup) consume(k selfMarkKey) bool {
+	n, ok := d.counts[k]
+	if !ok {
+		return false
+	}
+	if n > 1 {
+		d.counts[k] = n - 1
+		return true
+	}
+	delete(d.counts, k)
+	for i, e := range d.order {
+		if e == k {
+			d.order = append(d.order[:i], d.order[i+1:]...)
+			break
+		}
+	}
+	return true
+}
+
+// len returns the number of distinct keys held; used to pin the bound.
+func (d *selfMarkDedup) len() int { return len(d.counts) }
+
 func NewApp() *App {
 	// The window tree starts as a single window with no channel; the
 	// first ChannelSelectedMsg apply records the channel on it.
@@ -514,7 +771,10 @@ func NewApp() *App {
 		selfSend:              newSelfSendDedup(),
 		bootstrap:             newWorkspaceBootstrap(),
 		windowTitle:           "slk",
-		threadsDirtyDebounce:  150 * time.Millisecond,
+		threadsDirtyDebounce:  defaultThreadsDirtyDebounce,
+		terminalFocused:       true,
+		inTmux:                os.Getenv("TMUX") != "",
+		markFlushDebounce:     defaultMarkFlushDebounce,
 		channelSearchDebounce: channelSearchDebounceDelay,
 		fetchingOlder:         map[string]bool{},
 		mouseWheelLines:       3,
@@ -614,6 +874,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.bootstrap,
 		reduceReactions,
 		reduceThreads,
+		reduceFocus,
 		reduceSend,
 		reduceChannels,
 		reduceLinks,
@@ -1621,7 +1882,7 @@ func (a *App) openThreadPanel(parent messages.MessageItem, channelID, threadTS s
 	a.focusedPanel = PanelThread
 	a.threadPanel.SetThread(parent, nil, channelID, threadTS)
 	a.threadCompose.SetChannel("thread")
-	a.applyThreadUnreadBoundary(channelID)
+	a.applyThreadUnreadBoundary(channelID, threadTS)
 
 	threads := a.threads
 	chID := ids.ChannelID(channelID)
@@ -1809,11 +2070,11 @@ func (a *App) openSelectedThreadCmd(debounce bool) tea.Cmd {
 	}
 	a.threadPanel.SetThread(parent, nil, sum.ChannelID, sum.ThreadTS)
 	a.threadCompose.SetChannel("thread")
-	// Snapshot the parent channel's last_read_ts BEFORE the local mark-
+	// Snapshot the thread's own last-read cursor BEFORE the local mark-
 	// read flips below, so the "── new ──" landmark in the thread panel
 	// reflects what the user had actually seen prior to opening this
 	// thread.
-	a.applyThreadUnreadBoundary(sum.ChannelID)
+	a.applyThreadUnreadBoundary(sum.ChannelID, sum.ThreadTS)
 	// Local mark-as-read for the threads list: opening a thread should
 	// clear its unread flag in the threads-view list and the sidebar
 	// badge. This is presentation-only — it does not call Slack's
@@ -1844,22 +2105,38 @@ func (a *App) openSelectedThreadCmd(debounce bool) tea.Cmd {
 }
 
 // applyThreadUnreadBoundary tells the thread panel where the unread
-// boundary is for `channelID` so it can render a "── new ──" landmark
-// before the first reply the user hasn't seen. No-op when no last-read
-// fetcher is wired (e.g. in tests).
-func (a *App) applyThreadUnreadBoundary(channelID string) {
-	if channelID == "" {
+// boundary is for (channelID, threadTS) so it can render a "── new ──"
+// landmark before the first reply the user hasn't seen. Sourced from
+// the thread's own cursor in thread_subscriptions — the parent
+// channel's cursor is stale for threads, since plain replies never
+// advance it. No-op when no last-read fetcher is wired (e.g. in tests).
+func (a *App) applyThreadUnreadBoundary(channelID, threadTS string) {
+	if channelID == "" || threadTS == "" {
 		return
 	}
-	a.threadPanel.SetUnreadBoundary(a.threads.ChannelLastRead(ids.ChannelID(channelID)))
+	a.threadPanel.SetUnreadBoundary(a.threads.ThreadLastRead(
+		ids.ChannelID(channelID), ids.ThreadTS(threadTS)))
 }
 
 // scheduleThreadsDirty returns a tea.Cmd that fires a ThreadsListDirtyMsg
-// after the configured debounce interval. Used to coalesce bursts of thread
-// replies (each delivered as its own NewMessageMsg) into a single re-query
-// of the involved-threads list. Returns nil when no workspace is active —
-// without an activeTeamID the dirty handler would just drop the message
-// anyway.
+// for the active workspace after the configured debounce interval. Returns
+// nil when no workspace is active — without an activeTeamID the dirty
+// handler would just drop the message anyway.
+//
+// The tick does not itself coalesce anything: tea.Tick arms a one-shot
+// timer per call, so a burst of thread replies arms a timer each and
+// sends a dirty message each. Collapsing those into a single
+// ListSubscribedThreads query is the receiving arm's job in
+// reduceThreads, where the dirty messages the WS handlers send are
+// collapsed with them.
+//
+// Which leaves this tick redundant, and additive with the one the
+// receiving arm arms: a reply's list re-query now lands roughly two
+// debounce intervals after the reply. Deliberately left in place when
+// the receive-side window was added — it predates that window and has
+// two callers, so removing it is a separate change. Doing so would
+// also improve coalescing slightly, by letting a reply's dirty join a
+// window already open instead of arriving after it closed.
 func (a *App) scheduleThreadsDirty() tea.Cmd {
 	if a.activeTeamID == "" {
 		return nil
@@ -1867,11 +2144,143 @@ func (a *App) scheduleThreadsDirty() tea.Cmd {
 	team := a.activeTeamID
 	d := a.threadsDirtyDebounce
 	if d == 0 {
-		d = 150 * time.Millisecond
+		d = defaultThreadsDirtyDebounce
 	}
 	return tea.Tick(d, func(time.Time) tea.Msg {
 		return ThreadsListDirtyMsg{TeamID: team}
 	})
+}
+
+// recordChannelMark stages a channel read-cursor advance. Newest-wins:
+// an older ts for the same channel is ignored, so out-of-order arrivals
+// can never roll the cursor backward. Slack timestamps are decimal
+// strings of equal shape, so the string comparison orders them
+// correctly without parsing.
+func (a *App) recordChannelMark(channelID, ts string) {
+	if channelID == "" || ts == "" {
+		return
+	}
+	if a.pendingChannelMark.channelID == channelID && a.pendingChannelMark.ts >= ts {
+		return
+	}
+	a.pendingChannelMark = pendingChannelMarkState{channelID: channelID, ts: ts}
+}
+
+// recordThreadMark stages a thread read-cursor advance. Newest-wins for
+// the same (channel, thread); a different thread replaces the slot.
+func (a *App) recordThreadMark(channelID, threadTS, ts string) {
+	if channelID == "" || threadTS == "" || ts == "" {
+		return
+	}
+	if a.pendingThreadMark.channelID == channelID &&
+		a.pendingThreadMark.threadTS == threadTS &&
+		a.pendingThreadMark.ts >= ts {
+		return
+	}
+	a.pendingThreadMark = pendingThreadMarkState{channelID: channelID, threadTS: threadTS, ts: ts}
+}
+
+// autoMarkArmed reports whether arrival-driven read-marking may fire.
+// It gates scheduleMarkFlush only: arrivals still stage their slots,
+// and reduceFocus's tea.FocusMsg catch-up still flushes them, because
+// reaching that arm is itself proof that focus reporting works.
+//
+// Outside tmux the assume-focused default of terminalFocused stands. A
+// terminal that never reports focus is indistinguishable there from one
+// that never loses it, and that risk is accepted for the common case.
+//
+// Inside tmux that default is not safe on its own: tmux forwards focus
+// events only when `set -g focus-events on`, which defaults off, so
+// such a user never produces a BlurMsg, terminalFocused stays true for
+// the whole session, and slk would advance Slack's read cursor while
+// the pane sat in the background. Requiring one observed focus event
+// proves reporting is wired up. With the setting on, the first focus
+// change arms this; without it slk never auto-marks and keeps its
+// pre-branch behavior of marking read on channel entry only.
+func (a *App) autoMarkArmed() bool {
+	return !a.inTmux || a.focusEverReported
+}
+
+// scheduleMarkFlush returns a tick that flushes the pending marks after
+// the debounce interval, or nil when nothing is staged, a tick is
+// already in flight, the terminal is blurred, or auto-marking is not
+// yet armed (see autoMarkArmed).
+//
+// The markFlushScheduled arm is what caps the mark rate: while a tick
+// is in flight, further arrivals only update the slots. Drop it and a
+// stream arriving faster than the debounce issues one
+// conversations.mark per message.
+//
+// Blurred slots stay staged and flush on the next FocusMsg instead, so
+// no timer is armed while the user is away.
+func (a *App) scheduleMarkFlush() tea.Cmd {
+	if a.markFlushScheduled || !a.terminalFocused || !a.autoMarkArmed() {
+		return nil
+	}
+	if a.pendingChannelMark.ts == "" && a.pendingThreadMark.ts == "" {
+		return nil
+	}
+	a.markFlushScheduled = true
+	d := a.markFlushDebounce
+	if d == 0 {
+		d = defaultMarkFlushDebounce
+	}
+	return tea.Tick(d, func(time.Time) tea.Msg { return markFlushMsg{} })
+}
+
+// flushPendingMarks clears both slots and returns the commands that
+// issue their marks. Clearing before issuing is deliberate: a mark
+// Slack rejects is not retried here, it is reconciled by the next
+// arrival, the next channel entry, or reconnect sync. Retrying a
+// rejected mark risks hammering a rate-limited endpoint.
+//
+// Neither leg of this moves an on-screen "── new ──" divider.
+// ChannelService.MarkRead yields ChannelMarkedReadMsg, whose reducer
+// arm only calls notifyReadStateChanged and never touches
+// SetLastReadTS. Slack then broadcasts the channel mark back as a
+// channel_marked event, which DOES reach SetLastReadTS via
+// applyChannelMark — hence the selfMarks.record below, which is what
+// makes applyChannelMarkEcho recognise and skip its own echo. The
+// thread leg is symmetric on both counts: threads.Mark's
+// ThreadMarkedLocalMsg arm applies list state only, and the leg records
+// into selfThreadMarks so applyThreadMarkEcho skips the thread_marked
+// broadcast of the same mark. The divider recomputes on the next
+// channel entry.
+func (a *App) flushPendingMarks() tea.Cmd {
+	var cmds []tea.Cmd
+	if pc := a.pendingChannelMark; pc.ts != "" {
+		a.pendingChannelMark = pendingChannelMarkState{}
+		channels := a.channels
+		chID := ids.ChannelID(pc.channelID)
+		ts := ids.MessageTS(pc.ts)
+		a.selfMarks.record(selfMarkKey{channelID: pc.channelID, ts: pc.ts})
+		cmds = append(cmds, func() tea.Msg { return channels.MarkRead(chID, ts) })
+	}
+	if pt := a.pendingThreadMark; pt.ts != "" {
+		a.pendingThreadMark = pendingThreadMarkState{}
+		if c := a.threads.Mark(
+			ids.ChannelID(pt.channelID),
+			ids.ThreadTS(pt.threadTS),
+			ids.MessageTS(pt.ts),
+		); c != nil {
+			// Recorded before the cmd runs, symmetrically with the
+			// channel leg above: Mark only builds the cmd, so the mark
+			// has not been issued yet and this record cannot lose the
+			// race against Slack's thread_marked broadcast. A nil cmd
+			// means no mark, hence no echo to suppress.
+			//
+			// Converted, not aliased: the types stay distinct (staged
+			// vs. issued). Go allows the conversion only while their
+			// fields match in name, type and order, so a later
+			// divergence is a compile error here, not silent drift.
+			a.selfThreadMarks.record(selfMarkKey(pt))
+			cmds = append(cmds, c)
+		}
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
 }
 
 // userNameFor returns the display name for a Slack user ID, falling back
@@ -2799,6 +3208,10 @@ func (a *App) View() tea.View {
 	v := tea.NewView(screen)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
+	// Ask the terminal to report focus gain/loss so reduceFocus can keep
+	// a.terminalFocused current. Bubble Tea diffs this against the
+	// previous frame and only emits the enable sequence on change.
+	v.ReportFocus = true
 	if debuglog.Enabled() {
 		// panel: 0=workspace 1=sidebar 2=messages 3=thread
 		// view:  0=channels 1=threads
@@ -3162,10 +3575,21 @@ func (a *App) notifyReadStateChanged() {
 }
 
 // applyChannelMark updates local state for a channel-level read-state
-// change (used by both the local mark-unread press and the inbound
-// channel_marked WS event). channelID is the channel; ts is the new
-// last_read watermark; unreadCount is the canonical unread count to
-// show in the sidebar badge.
+// change. channelID is the channel; ts is the new last_read watermark.
+//
+// unreadCount is diagnostic only: it reaches the debug log and nothing
+// else. No badge is set from it — notifyReadStateChanged invalidates
+// the sidebar, which re-derives its own display from its channel
+// state, and the aggregate that reaches the window title and status
+// report comes from a.sidebar.UnreadChannelCount(). The parameter is
+// kept rather than dropped because logging the count Slack reported
+// next to the state slk derives is what makes a divergence between
+// them debuggable.
+//
+// This ALWAYS moves the on-screen cursor. Two callers: the local
+// mark-unread press (reducer_send.go's MessageMarkedUnreadMsg arm),
+// which is a deliberate user action, and applyChannelMarkEcho, which
+// has already decided the inbound channel_marked is not slk's own.
 //
 // Idempotent: calling twice with the same values is a no-op past the
 // first one (the underlying setters short-circuit on equality).
@@ -3178,30 +3602,145 @@ func (a *App) applyChannelMark(channelID, ts string, unreadCount int) {
 	a.notifyReadStateChanged()
 }
 
-// applyThreadMark updates local state for a thread-level read-state
-// change. read=false means the thread is now unread (move boundary +
-// flip threads-view row); read=true means the thread is now read
-// (clear boundary + clear threads-view row).
-func (a *App) applyThreadMark(channelID, threadTS, ts string, read bool) {
-	debuglog.Cache("applyThreadMark: channel=%s thread_ts=%s ts=%s read=%v active=%s",
-		channelID, threadTS, ts, read, a.activeChannelID)
+// applyChannelMarkEcho handles an inbound channel_marked WS event.
+//
+// Slack broadcasts channel_marked to every connected client INCLUDING
+// the one that issued the mark, so this arrives both for marks made in
+// another Slack client and for slk's own. Applying slk's own would drag
+// the "── new ──" divider to the newest message a round trip after slk
+// marked it, deleting the user's place moments after they looked at it.
+// Those are suppressed: the read-state notification still runs, so the
+// sidebar dot and workspace rail clear, but the cursor is left alone.
+// A mark slk did not issue carries no record and still moves the
+// cursor, which is correct — the user really did read the channel
+// elsewhere. See selfMarkDedup.
+//
+// The dedup lives here rather than inside applyChannelMark because that
+// helper is shared with the local mark-unread press, which must move
+// the divider unconditionally. Those two can collide on ts: slk
+// auto-marks at the newest message, and "mark this newest message
+// unread so I deal with it later" targets that same ts. Consuming there
+// would silently swallow the user's explicit action for as long as the
+// self-mark record lives — one round trip normally, unbounded if the
+// echo never arrives.
+func (a *App) applyChannelMarkEcho(channelID, ts string, unreadCount int) {
+	if a.selfMarks.consume(selfMarkKey{channelID: channelID, ts: ts}) {
+		debuglog.Cache("applyChannelMarkEcho: channel=%s ts=%s self_echo=true (cursor held)",
+			channelID, ts)
+		a.notifyReadStateChanged()
+		return
+	}
+	a.applyChannelMark(channelID, ts, unreadCount)
+}
+
+// applyThreadMark updates local state for a thread read-cursor move.
+// Read/unread is derived by comparing the cursor against the thread's
+// newest known reply — never from the subscription's `active` flag,
+// which means "subscribed".
+//
+// This applies lastRead to the panel unconditionally whenever the panel
+// is open on this thread — there is no self-echo check here. Its sole
+// caller is applyThreadMarkEcho, which has already decided the inbound
+// thread_marked is not slk's own. Mirrors applyChannelMark; see
+// applyThreadMarkEcho for why the dedup does not live here.
+func (a *App) applyThreadMark(channelID, threadTS, lastRead string) {
+	debuglog.Cache("applyThreadMark: channel=%s thread_ts=%s last_read=%s active=%s",
+		channelID, threadTS, lastRead, a.activeChannelID)
 	if a.threadVisible &&
 		a.threadPanel.ChannelID() == channelID &&
 		a.threadPanel.ThreadTS() == threadTS {
-		if read {
-			a.threadPanel.SetUnreadBoundary("")
-		} else {
-			a.threadPanel.SetUnreadBoundary(ts)
-		}
+		// The panel renders its "── new ──" landmark after the boundary
+		// ts, so a fully-caught-up cursor renders no landmark.
+		a.threadPanel.SetUnreadBoundary(lastRead)
 	}
-	if read {
-		if a.threadsView.MarkByThreadTSRead(channelID, threadTS) {
-			a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
-		}
-	} else {
-		if a.threadsView.MarkByThreadTSUnread(channelID, threadTS) {
-			a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
-		}
+	a.applyThreadMarkListState(channelID, threadTS, lastRead)
+}
+
+// applyThreadMarkListState is applyThreadMark's threads-list half: it
+// settles the row's unread flag and the sidebar badge against lastRead
+// without touching an open thread panel's landmark.
+//
+// Three callers. applyThreadMark runs it as its own tail, after moving
+// the landmark for a mark slk did not issue. The other two are the two
+// ways slk sees its OWN mark: ThreadMarkedLocalMsg, the HTTP call
+// reporting success, and applyThreadMarkEcho's suppressed branch,
+// Slack's broadcast of that same mark coming back. For those two the
+// panel is on screen, the user is reading it, and its boundary was
+// deliberately set on open from the pre-open cursor (see
+// openSelectedThreadCmd); the mark carries the cursor slk just set —
+// the newest reply — so applying it to the panel would erase the
+// landmark. The read state itself is real, though, so the list flag and
+// the badge must still settle, which is what this does.
+func (a *App) applyThreadMarkListState(channelID, threadTS, lastRead string) {
+	if a.threadsView.MarkByThreadTSReadAt(channelID, threadTS, lastRead) {
+		a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
+	}
+}
+
+// applyThreadMarkEcho handles an inbound thread_marked WS event.
+//
+// Slack broadcasts thread_marked to every connected client INCLUDING
+// the one that issued the mark, so ThreadMarkedRemoteMsg does NOT mean
+// "another client": it carries slk's own marks back too, chiefly the
+// mark-on-open from reducer_threads' ThreadRepliesLoadedMsg arm and the
+// auto-mark from flushPendingMarks. Those echoes carry the newest
+// reply, and the panel renders no landmark once its boundary reaches
+// the newest reply — so applying one wipes the "── new ──" divider a
+// round trip after the user opened the thread to look at it. They are
+// suppressed: the threads-list flag and sidebar badge still settle, but
+// the landmark is left where opening the thread put it. A mark slk did
+// not issue carries no record and still moves the landmark, which is
+// correct — the user really did read the thread elsewhere. See
+// selfMarkDedup.
+//
+// "Chiefly", not "only": the thread mark-unread press is a third
+// self-originated echo. MarkThreadUnread posts to the same
+// subscriptions.thread.mark endpoint with read=0, so it broadcasts back
+// here exactly as the read marks do. It is deliberately NOT recorded,
+// so its echo is treated as foreign and moves the landmark. That is
+// correct: Slack rolls the cursor back to just before the ts the user
+// picked, so applying it renders the landmark exactly where the press
+// asked for it. Do not "complete" the recording sites
+// by adding it: that would suppress the press's own effect, the
+// thread-side form of the applyChannelMark collision described below.
+//
+// The dedup lives here rather than inside applyThreadMark so that
+// consuming a record stays a property of the echo path alone.
+// applyThreadMark has no other caller today — the thread mark-unread
+// press goes through applyThreadMarkUnread — but the channel pair
+// records why the split is worth keeping: applyChannelMark IS shared
+// with the mark-unread press, and folding the dedup into it would
+// silently swallow that deliberate action whenever the two collided on
+// ts. Anything later reaching applyThreadMark inherits the
+// unconditional behaviour rather than the suppression.
+func (a *App) applyThreadMarkEcho(channelID, threadTS, lastRead string) {
+	if a.selfThreadMarks.consume(selfMarkKey{
+		channelID: channelID, threadTS: threadTS, ts: lastRead,
+	}) {
+		debuglog.Cache("applyThreadMarkEcho: channel=%s thread_ts=%s last_read=%s self_echo=true (landmark held)",
+			channelID, threadTS, lastRead)
+		a.applyThreadMarkListState(channelID, threadTS, lastRead)
+		return
+	}
+	a.applyThreadMark(channelID, threadTS, lastRead)
+}
+
+// applyThreadMarkUnread forces a thread unread from boundaryTS. Used by
+// the user-initiated mark-unread flow, which knows its own intent.
+// It does not go through applyThreadMark's cursor comparison: Slack sets
+// the cursor to just BEFORE boundaryTS, so comparing boundaryTS against
+// the newest reply would wrongly report the thread read whenever the
+// boundary is that newest reply.
+func (a *App) applyThreadMarkUnread(channelID, threadTS, boundaryTS string) {
+	debuglog.Cache("applyThreadMarkUnread: channel=%s thread_ts=%s boundary=%s active=%s",
+		channelID, threadTS, boundaryTS, a.activeChannelID)
+	if a.threadVisible &&
+		a.threadPanel.ChannelID() == channelID &&
+		a.threadPanel.ThreadTS() == threadTS {
+		a.threadPanel.SetUnreadBoundary(boundaryTS)
+	}
+	if a.threadsView.MarkByThreadTSUnread(channelID, threadTS) {
+		a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
 	}
 }
 

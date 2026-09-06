@@ -1,6 +1,8 @@
 package cache
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -65,6 +67,93 @@ func (db *DB) DeleteThreadSubscription(workspaceID, channelID, threadTS string) 
 		return fmt.Errorf("deleting thread_subscriptions: %w", err)
 	}
 	return nil
+}
+
+// UpdateThreadLastRead advances (or rewinds) a thread's read cursor
+// WITHOUT touching `active` on a row that already exists — the ON
+// CONFLICT clause updates last_read and updated_at and nothing else.
+// thread_marked carries a read cursor, not a subscription change, so it
+// must not be able to tombstone a row or resurrect one: `active` is
+// owned solely by thread_subscribed, thread_unsubscribed, and the
+// getView reconcile. Creating a missing row is the one exception, and
+// the paragraph below is its precondition.
+//
+// A missing row is inserted with active=1. That branch is ONLY valid for
+// callers that can prove the user is subscribed to the thread, because
+// ListSubscribedThreads filters on active=1 and would surface the
+// inserted row in the Threads list. The sole such caller is
+// rtmEventHandler.OnThreadMarked, and only on the branch where the
+// thread_marked event's subscription block reports active=true: there
+// the insert reconstructs a row the local cache merely hasn't seen yet.
+// The precondition is checked by that caller, not assumed here — slk's
+// own subscriptions.thread.mark echoes back as thread_marked, so the
+// event by itself does not prove subscription.
+//
+// Callers that CANNOT prove subscription — the local mark path, which
+// fires for any thread the user opens, and OnThreadMarked's
+// active=false branch — must use UpdateThreadLastReadIfExists instead.
+func (db *DB) UpdateThreadLastRead(workspaceID, channelID, threadTS, lastRead string) error {
+	if workspaceID == "" || channelID == "" || threadTS == "" {
+		return fmt.Errorf("UpdateThreadLastRead: workspace/channel/thread_ts required")
+	}
+	const q = `
+INSERT INTO thread_subscriptions
+    (workspace_id, channel_id, thread_ts, last_read, active, updated_at)
+VALUES (?, ?, ?, ?, 1, ?)
+ON CONFLICT(workspace_id, channel_id, thread_ts) DO UPDATE SET
+    last_read  = excluded.last_read,
+    updated_at = excluded.updated_at
+`
+	if _, err := db.conn.Exec(q, workspaceID, channelID, threadTS, lastRead, time.Now().Unix()); err != nil {
+		return fmt.Errorf("updating thread last_read: %w", err)
+	}
+	return nil
+}
+
+// UpdateThreadLastReadIfExists advances a thread's read cursor only when
+// a subscription row already exists, and never creates one. Used by the
+// local mark path, which fires for ANY thread the user opens — including
+// threads they were never subscribed to. Inserting there would fabricate
+// an active=1 row and surface a phantom entry in the Threads list, since
+// ListSubscribedThreads filters on active=1.
+//
+// A missing row is not an error: an unsubscribed thread has no cursor
+// worth storing, and if the user later becomes subscribed the getView
+// reconcile supplies last_read from Slack.
+//
+// It never touches `active` (so a tombstoned row stays tombstoned) or
+// `latest_reply` — unlike UpdateThreadLastRead, which leaves `active`
+// alone on an existing row but writes active=1 when it inserts one.
+func (db *DB) UpdateThreadLastReadIfExists(workspaceID, channelID, threadTS, lastRead string) error {
+	if workspaceID == "" || channelID == "" || threadTS == "" {
+		return fmt.Errorf("UpdateThreadLastReadIfExists: workspace/channel/thread_ts required")
+	}
+	const q = `
+UPDATE thread_subscriptions
+SET last_read = ?, updated_at = ?
+WHERE workspace_id=? AND channel_id=? AND thread_ts=?
+`
+	if _, err := db.conn.Exec(q, lastRead, time.Now().Unix(), workspaceID, channelID, threadTS); err != nil {
+		return fmt.Errorf("updating thread last_read: %w", err)
+	}
+	return nil
+}
+
+// GetThreadLastRead returns a thread's read cursor, or "" when no row
+// exists (which the thread panel treats as "no unread boundary").
+// A missing row is not an error.
+func (db *DB) GetThreadLastRead(workspaceID, channelID, threadTS string) (string, error) {
+	const q = `SELECT last_read FROM thread_subscriptions
+WHERE workspace_id=? AND channel_id=? AND thread_ts=?`
+	var lastRead string
+	err := db.conn.QueryRow(q, workspaceID, channelID, threadTS).Scan(&lastRead)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading thread last_read: %w", err)
+	}
+	return lastRead, nil
 }
 
 // ListActiveThreadSubscriptions returns every active subscription in

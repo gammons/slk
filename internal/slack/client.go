@@ -1212,37 +1212,43 @@ func (c *Client) GetPermalink(ctx context.Context, channelID, ts string) (string
 	return url, nil
 }
 
-// markChannel posts to conversations.mark with the given form values.
-// Used by both MarkChannel (read up to ts) and MarkChannelUnread (roll the
-// watermark backward to ts). Uses c.httpClient for the request so tests
-// can substitute an httptest.NewServer; production wiring (NewClient) sets
-// httpClient to a cookie-bearing client.
-func (c *Client) markChannel(ctx context.Context, channelID, ts string) error {
-	data := url.Values{
-		"token":   {c.token},
-		"channel": {channelID},
-		"ts":      {ts},
+// parseOKResponse checks a Slack Web API response envelope. Slack
+// answers HTTP 200 even for failures, so the {"ok":false,"error":...}
+// body is the only signal that a call was rejected.
+func parseOKResponse(method string, raw []byte) error {
+	var resp struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
 	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", c.apiBaseURL+"conversations.mark",
-		strings.NewReader(data.Encode()))
-	if err != nil {
-		return fmt.Errorf("creating mark request: %w", err)
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return fmt.Errorf("parsing %s: %w (body=%s)", method, err, truncateForLog(raw))
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("marking channel: %w", err)
+	if !resp.OK {
+		return fmt.Errorf("%s: %s (body=%s)", method, resp.Error, truncateForLog(raw))
 	}
-	defer resp.Body.Close()
 	return nil
 }
 
-// markThread posts to subscriptions.thread.mark with the given args.
-// Used by both MarkThread (read=true => "1") and MarkThreadUnread
-// (read=false => "0"). channelID/threadTS empty is a no-op. ts defaults
-// to threadTS when empty (parent has no replies yet).
+// markChannel posts to conversations.mark. Used by both MarkChannel
+// (read up to ts) and MarkChannelUnread (roll the watermark backward to
+// ts). Routed through postForm so HTTP status, 429, and the Slack
+// {"ok":false} envelope are all surfaced as errors — read state must
+// never be persisted locally for a mark Slack rejected.
+func (c *Client) markChannel(ctx context.Context, channelID, ts string) error {
+	raw, err := c.postForm(ctx, "conversations.mark", url.Values{
+		"channel": {channelID},
+		"ts":      {ts},
+	})
+	if err != nil {
+		return err
+	}
+	return parseOKResponse("conversations.mark", raw)
+}
+
+// markThread posts to subscriptions.thread.mark. Used by both MarkThread
+// (read=true => "1") and MarkThreadUnread (read=false => "0").
+// channelID/threadTS empty is a no-op. ts defaults to threadTS when empty
+// (parent has no replies yet). Error handling mirrors markChannel.
 func (c *Client) markThread(ctx context.Context, channelID, threadTS, ts string, read bool) error {
 	if channelID == "" || threadTS == "" {
 		return nil
@@ -1254,27 +1260,16 @@ func (c *Client) markThread(ctx context.Context, channelID, threadTS, ts string,
 	if read {
 		readVal = "1"
 	}
-	data := url.Values{
-		"token":     {c.token},
+	raw, err := c.postForm(ctx, "subscriptions.thread.mark", url.Values{
 		"channel":   {channelID},
 		"thread_ts": {threadTS},
 		"ts":        {ts},
 		"read":      {readVal},
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", c.apiBaseURL+"subscriptions.thread.mark",
-		strings.NewReader(data.Encode()))
+	})
 	if err != nil {
-		return fmt.Errorf("creating thread mark request: %w", err)
+		return err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("marking thread: %w", err)
-	}
-	defer resp.Body.Close()
-	return nil
+	return parseOKResponse("subscriptions.thread.mark", raw)
 }
 
 // MarkChannel marks a channel as read up to the given timestamp.
