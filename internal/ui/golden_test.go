@@ -5,19 +5,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/emoji"
 	imgpkg "github.com/gammons/slk/internal/image"
+	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/gammons/slk/internal/ui/wintree"
 )
 
 // updateGolden re-blesses every golden file this run touches.
@@ -1496,7 +1500,284 @@ func goldenScenarios() []goldenScenario {
 				return a
 			},
 		},
+		{
+			// Base's geometry deliberately: the ONLY difference from
+			// base is the missing sidebar, so a diff of the two
+			// goldens is exactly the sidebar-hidden layout shift.
+			name: "no_sidebar", w: goldenBaseW, h: goldenBaseH,
+			build: func(t *testing.T) *App {
+				a := newGoldenApp(t, goldenFixtureOpts()...)
+				// ToggleSidebar, not `a.sidebarVisible = false`: the
+				// production path (app.go:1747) also clears any pinned
+				// selections and falls focus back to PanelMessages when
+				// the sidebar had it. Assigning the field skips both,
+				// and the focus fallback is visible — it decides which
+				// pane gets the thick focused border.
+				a.ToggleSidebar()
+				_ = a.View()
+				return a
+			},
+		},
+		{
+			// The scenario that justifies storing raw ANSI: the
+			// selection highlight is a run of SGR bytes laid over
+			// text that does not change by a single character.
+			//
+			// Measured, not assumed — and NOT quite the "identical to
+			// base once stripped" the task brief predicted. The press
+			// also moves focus to the messages pane
+			// (reducer_mouse.go:249), and focus decides which pane
+			// gets the THICK border and which the rounded one, so the
+			// stripped text differs from base's in the border glyphs
+			// as well. The selection itself is still escapes-only;
+			// TestGolden_DragSelectionIsActuallySelected proves that
+			// against a baseline that holds the focus change fixed,
+			// which is the comparison that can actually be exact.
+			name: "drag_selection", w: goldenBaseW, h: goldenBaseH,
+			build: func(t *testing.T) *App {
+				return goldenDragApp(t, true)
+			},
+		},
+		{
+			// Pins applyOverlays' compositing (view_overlays.go:39):
+			// a centered box drawn over a backdrop whose every cell
+			// has been darkened by 50% (overlay/overlay.go:32). The
+			// dim is a per-cell color rewrite, so it exists ONLY in
+			// the escape sequences — stripped text cannot see it, and
+			// a raw-ANSI golden is the only thing that pins it.
+			//
+			// MEASURED WIDTH ANOMALY, for whoever writes the
+			// well-formedness guard: every other golden's rows are
+			// w+6 cells wide, because the status row overruns the
+			// terminal width by 6 (a known, unfixed bug). This one's
+			// rows are exactly w. The difference is
+			// maybeWrapFinalScreen (view_overlays.go:108), which
+			// re-wraps the whole screen in a Width(a.width) style —
+			// but ONLY when an overlay is active, which is exactly
+			// this scenario and no other. The wrapper truncates the
+			// overrun away, so the golden's last row ends
+			// "● Connectin". A guard that asserts w+6 uniformly will
+			// fail here, and the right predicate is a.overlayActive(),
+			// not the scenario's name.
+			name: "overlay_finder", w: goldenBaseW, h: goldenBaseH,
+			build: func(t *testing.T) *App {
+				a := newGoldenApp(t,
+					withSize(goldenBaseW, goldenBaseH),
+					withChannels(goldenChannels()...),
+					withMessages(goldenMessages()...),
+					withActiveChannel("C1"),
+					// Seeds the items AND opens the overlay
+					// (testapp_test.go:238); the mode is a separate
+					// option because buildTestApp applies it after.
+					withChannelFinderOpen(goldenFinderItems()...),
+					withMode(ModeChannelFinder),
+					withRender(),
+				)
+				return a
+			},
+		},
+		{
+			// Pins renderWindowNode's recursion and, more to the
+			// point, the focused-vs-unfocused pane chrome: the
+			// focused leaf renders through renderMessagesRegion with
+			// styles.FocusedBorder (thick), every other leaf through
+			// renderUnfocusedWindow with styles.UnfocusedBorder
+			// (rounded). TestGolden_WindowSplitRendersTwoDistinctPanes
+			// asserts both are actually on screen.
+			//
+			// 160x40: two side-by-side panes need the width, and the
+			// split path is the one place a too-narrow rect degrades
+			// silently rather than failing.
+			name: "window_split", w: 160, h: 40,
+			build: func(t *testing.T) *App {
+				return goldenWindowSplitScenario(t, 160, 40)
+			},
+		},
 	}
+}
+
+// goldenFinderItems is the channel-finder fixture, derived from
+// goldenChannels so the two cannot drift.
+//
+// LastVisited descends with the index because the finder's empty-query
+// order is LastVisited DESC (channelfinder/model.go:41-46). Deriving it
+// from the position rather than writing literals means the overlay
+// lists the channels in goldenChannels' own order, so a reader can
+// check the golden against one fixture instead of two.
+//
+// One row is deliberately NOT joined. Joined selects a whole separate
+// styling branch in the row renderer (channelfinder/model.go:599-609):
+// a joined row gets channelPrefix + TextPrimary, a non-joined row gets
+// a hardcoded dim grey over BOTH the prefix and the name. With every
+// row joined that branch is unreachable and the golden pins half the
+// list renderer. TestGolden_OverlayFinderIsCompositedOverBackdrop
+// asserts the mixed set survives to the screen.
+func goldenFinderItems() []channelfinder.Item {
+	src := goldenChannels()
+	out := make([]channelfinder.Item, 0, len(src))
+	for i, it := range src {
+		out = append(out, channelfinder.Item{
+			ID:          it.ID,
+			Name:        it.Name,
+			Type:        it.Type,
+			Presence:    it.Presence,
+			Joined:      it.ID != "C3",
+			LastVisited: int64(len(src) - i),
+		})
+	}
+	return out
+}
+
+// goldenDragPressX / goldenDragPressY / goldenDragDX / goldenDragDY
+// are the drag drag_selection performs: press on TERMINAL row 7, 11
+// columns into the messages band, then drag 25 columns right and 2
+// rows down.
+//
+// The lower bound on the press row is structural: panelAt subtracts
+// the 1-row panel border to give a pane-local y, and BeginSelectionAt
+// returns early for anything above the pane's chromeHeight (channel
+// header + separator = 2 rows, see app_selection_test.go:52-56), so
+// terminal y < 4 anchors on nothing.
+//
+// The specific value is not structural — it was measured against the
+// rendered fixture, and the constraint it satisfies is that the whole
+// 3-row span lands INSIDE a single message entry (bob's row: the
+// author line, the body, and the reaction pills). That matters because
+// applySelectionToRows (messages/model.go:3355) resolves each row
+// through the cache entry covering it and silently skips any line that
+// belongs to none. At terminal y=4 — the value the task brief carried
+// over from app_selection_test.go — the span straddles the gap between
+// two messages and the "── Today ──" divider, so the highlight lands
+// on two disjoint rows with an unhighlighted blank between them: a
+// legal selection, but one that pins the skip path instead of the
+// contiguous one.
+//
+// Down-AND-right rather than a same-row drag so the span has all three
+// row kinds in it, each a different arm of applySelectionToRows'
+// from/to computation (model.go:3407-3414):
+//
+//   - the FIRST row is partial, from loCol to end of line;
+//   - the MIDDLE row is whole, from 0 to end of line;
+//   - the LAST row is partial, from 0 to hiCol.
+//
+// A single-row drag reaches only the both-ends-partial case, and a
+// press at the pane's left edge makes the first row whole too — which
+// is why goldenDragPressX is 11 and not the "2 columns in" the task
+// brief used. 11 = 1 border column + 1 gutter column + 9 content
+// columns, which lands the start anchor inside the author line's text
+// rather than before it. Measured against the blessed golden: the
+// first highlighted row begins mid-timestamp.
+//
+// The last row is the reaction-pill line, so the 25-column cut also
+// runs through sliceColumns' emoji-width handling rather than plain
+// ASCII.
+//
+// TestGolden_DragSelectionSpansMultipleLines re-measures the
+// consequence (exactly goldenDragDY+1 highlighted rows, none of them
+// blank) rather than trusting this comment.
+const (
+	goldenDragPressX = 11
+	goldenDragPressY = 7
+	goldenDragDX     = 25
+	goldenDragDY     = 2
+)
+
+// goldenDragApp builds the drag_selection scenario's App: the base
+// fixture with a mouse drag held across three lines of the messages
+// pane.
+//
+// With drag=false it builds the SAME frame minus the selection, which
+// is the baseline the drag assertions compare against. base is not
+// usable as that baseline: the press has a second side effect — it
+// focuses the messages pane (reducer_mouse.go:249) — and focus decides
+// which pane draws the thick border, so a drag-vs-base comparison
+// cannot distinguish "the selection rendered" from "the borders
+// swapped". The baseline reproduces the focus change and nothing else,
+// so the remaining difference is the selection alone.
+//
+// The motionFlushTickMsg is NOT optional and is the one part of this
+// that a reader would omit. MouseMotionMsg only LATCHES the cursor
+// position into dragState.pending* and schedules a coalescing tick
+// (drag.go:220-246); ExtendSelectionAt runs in the tick's arm
+// (drag.go:256-277). Without the tick the selection's Start and End
+// stay equal, applySelectionToRows takes its `from >= to` continue
+// (model.go:3421), not one cell is styled, and the golden records a
+// selection nobody can see.
+//
+// The tick is constructed and delivered directly rather than waited
+// for: tea.Tick's timer never runs in a test, and the message carries
+// no payload, so synthesising it is exact rather than approximate.
+//
+// No MouseReleaseMsg. Release would finalize the drag and copy to the
+// clipboard, which is a different (and separately tested) behaviour;
+// the held-mid-drag frame is the one that renders the highlight.
+func goldenDragApp(t *testing.T, drag bool) *App {
+	t.Helper()
+	a := newGoldenApp(t, goldenFixtureOpts()...)
+
+	if !drag {
+		a.focusedPanel = PanelMessages
+		_ = a.View()
+		return a
+	}
+
+	x := a.layout.sidebarEnd + goldenDragPressX
+	y := goldenDragPressY
+	_, _ = a.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	_, _ = a.Update(tea.MouseMotionMsg{X: x + goldenDragDX, Y: y + goldenDragDY, Button: tea.MouseLeft})
+	_, _ = a.Update(motionFlushTickMsg{})
+
+	_ = a.View()
+	return a
+}
+
+// goldenWindowSplitScenario is the window_split scenario's App: two
+// side-by-side windows on different channels, the second focused.
+//
+// The ChannelSelectedMsg round trip is what makes this a split of two
+// DISTINCT windows rather than two views of nothing. splitWindow
+// clones the focused window's tree record (windows.go:61-68), and that
+// record is only written by the ChannelSelectedMsg apply path
+// (windows.go:152). Setting a.messagepane's channel by hand would
+// leave both tree records empty and both pane headers blank.
+//
+// The SetMessages / SetLoading pair after each selection is not
+// cosmetic. With no channel service wired, ReadCache returns nothing
+// and SyncedAt returns 0, so the reducer takes its tier-3 cold-start
+// branch (reducer_channels.go:430-438): it blanks the pane and turns
+// on the loading spinner. Left alone, both panes would render a
+// spinner and the golden would pin an empty split. Re-seeding is what
+// puts renderable rows in front of renderWindowNode.
+//
+// The two windows get DIFFERENT message counts on purpose: identical
+// content in both panes would render identically, and a bug that drew
+// the focused pane twice would look correct.
+func goldenWindowSplitScenario(t *testing.T, w, h int) *App {
+	t.Helper()
+	a := newGoldenApp(t,
+		withSize(w, h),
+		withChannels(goldenChannels()...),
+		withActiveChannel("C1"),
+	)
+
+	_, _ = a.Update(ChannelSelectedMsg{ID: "C1", Name: "general", Type: "channel"})
+	a.messagepane.SetMessages(goldenMessages())
+	a.messagepane.SetLoading(false)
+
+	if cmd := a.splitWindow(wintree.SplitSideBySide); cmd != nil {
+		// splitWindow returns a toast cmd, and only a toast cmd, when
+		// the tree refuses the split for want of room (windows.go:64).
+		// A refused split leaves one window and the golden silently
+		// becomes a second copy of base at another size.
+		t.Fatalf("splitWindow refused at %dx%d; the scenario would pin a single window", w, h)
+	}
+
+	_, _ = a.Update(ChannelSelectedMsg{ID: "C2", Name: "engineering", Type: "channel"})
+	a.messagepane.SetMessages(goldenMessages()[:2])
+	a.messagepane.SetLoading(false)
+
+	_ = a.View()
+	return a
 }
 
 func TestGolden(t *testing.T) {
@@ -1659,5 +1940,407 @@ func TestGolden_ThreadScenariosAreWideEnough(t *testing.T) {
 	// pass while asserting nothing at all.
 	if checked == 0 {
 		t.Error("no scenario opens a visible thread pane; this test asserted nothing")
+	}
+}
+
+// goldenScenarioNamed returns the named scenario from the table, or
+// fails. Used by the per-scenario assertions below so they exercise the
+// SAME build the golden was blessed from — a private near-copy of the
+// build func would drift and then assert nothing about the file.
+func goldenScenarioNamed(t *testing.T, name string) goldenScenario {
+	t.Helper()
+	for _, sc := range goldenScenarios() {
+		if sc.name == name {
+			return sc
+		}
+	}
+	t.Fatalf("no golden scenario named %q", name)
+	return goldenScenario{}
+}
+
+// TestGolden_NoSidebarActuallyHidesIt pins that no_sidebar records a
+// MISSING sidebar and not a narrow one.
+//
+// Like narrow, this golden records an absence, and an absence is what a
+// golden is worst at: a no_sidebar.ansi that still had the channel list
+// in it would look entirely plausible and would be re-blessed without
+// comment. The band arithmetic is asserted directly (sidebarEnd
+// collapses onto railWidth, panellayout.go:129), and separately the
+// rows that only ever appear in the sidebar are asserted absent.
+func TestGolden_NoSidebarActuallyHidesIt(t *testing.T) {
+	a := goldenScenarioNamed(t, "no_sidebar").build(t)
+
+	if a.sidebarVisible {
+		t.Error("sidebarVisible still set")
+	}
+	// Gone, not merely narrow: with sbWidth and sbBorder both zero the
+	// sidebar band has zero cells and starts where the rail ends.
+	if a.layout.sidebarEnd != a.layout.railWidth {
+		t.Errorf("sidebar band is %d cols wide, want 0 (sidebarEnd = %d, railWidth = %d)",
+			a.layout.sidebarEnd-a.layout.railWidth, a.layout.sidebarEnd, a.layout.railWidth)
+	}
+	// The messages pane must have claimed the freed columns rather
+	// than leaving them blank.
+	if a.layout.msgEnd != a.width {
+		t.Errorf("messages band does not reach the right edge: msgEnd = %d, width = %d",
+			a.layout.msgEnd, a.width)
+	}
+
+	plain := stripANSI(a.View().Content)
+	// Tokens unique to the sidebar. Deliberately NOT "# general":
+	// that also appears in the messages-pane header and the statusbar,
+	// so it would pass with the sidebar fully rendered.
+	for _, gone := range []string{"▾ Channels", "▾ DMs", "● bob", "○ carol", "# muted-noise"} {
+		if strings.Contains(plain, gone) {
+			t.Errorf("sidebar row %q still on screen with the sidebar hidden; view was:\n%s", gone, plain)
+		}
+	}
+
+	// Control: the same tokens ARE present in base. Without this the
+	// assertions above pass equally well against a fixture that never
+	// had a sidebar to hide.
+	ctrl := stripANSI(goldenScenarioNamed(t, "base").build(t).View().Content)
+	for _, want := range []string{"▾ Channels", "▾ DMs", "● bob", "○ carol"} {
+		if !strings.Contains(ctrl, want) {
+			t.Fatalf("control: base does not render sidebar row %q, so its absence in "+
+				"no_sidebar proves nothing; view was:\n%s", want, ctrl)
+		}
+	}
+}
+
+// TestGolden_DragSelectionIsActuallySelected is the assertion that
+// stops drag_selection from being a second copy of base.
+//
+// The scenario's whole value is that its stripped text equals base's
+// and the entire difference is escape sequences — which is also
+// precisely what makes it easy to get silently wrong. A drag whose
+// coordinates missed (chrome, a gap row, an off-by-one in the border
+// offset) produces a file that is plausible, readable, and identical
+// to base.ansi. Three things are checked, and all three are needed:
+//
+//  1. the model reports a selection at all;
+//  2. the rendered frame is strictly LONGER than the undragged
+//     baseline's, i.e. selection SGR bytes actually reached the screen
+//     — a selection that exists in the model but renders nothing
+//     (Start == End takes applySelectionToRows' `from >= to` continue,
+//     model.go:3421) fails here and nowhere else;
+//  3. the stripped text is unchanged against that baseline, i.e. what
+//     differs is styling and not content. Without this the test would
+//     also pass if the drag had scrolled the pane.
+//
+// The baseline is goldenDragApp(t, false), not base: see that function
+// for why base cannot serve. The comparison against base is still
+// made, but only for byte length — which is the check the golden FILE
+// needs, since drag_selection.ansi being no larger than base.ansi is
+// the concrete symptom of a drag that missed.
+func TestGolden_DragSelectionIsActuallySelected(t *testing.T) {
+	a := goldenScenarioNamed(t, "drag_selection").build(t)
+	if !a.messagepane.HasSelection() {
+		t.Fatal("no selection on the messages pane after the drag; the coordinates missed " +
+			"and drag_selection would be blessed as a frame with no highlight in it")
+	}
+
+	drag := a.View().Content
+	undragged := goldenDragApp(t, false).View().Content
+	base := goldenScenarioNamed(t, "base").build(t).View().Content
+
+	if len(drag) <= len(undragged) {
+		t.Errorf("drag_selection renders %d bytes, the same frame without the drag renders %d; "+
+			"the highlight emitted no escape sequences", len(drag), len(undragged))
+	}
+	if got, want := stripANSI(drag), stripANSI(undragged); got != want {
+		t.Errorf("drag_selection's stripped text differs from the undragged frame's; the drag "+
+			"changed CONTENT, not just styling: %s", firstLineDiff(want, got))
+	}
+	if len(drag) <= len(base) {
+		t.Errorf("drag_selection renders %d bytes, base renders %d; drag_selection.ansi would "+
+			"not be larger than base.ansi, which is what a missed drag looks like on disk",
+			len(drag), len(base))
+	}
+}
+
+// TestGolden_DragSelectionSpansMultipleLines pins the shape of the
+// selection, which is what decides how many branches of
+// applySelectionToRows (messages/model.go:3355) the golden covers.
+//
+// A same-line selection reaches only the both-ends-partial case. The
+// scenario drags down as well as right so the span has a partial first
+// line, at least one FULL middle line, and a partial last line.
+//
+// The highlighted rows are counted by looking for the selection style's
+// own SGR prefix, NOT by diffing against an unhighlighted frame. The
+// press has a second side effect — messagepane.ClickAt moves the
+// selected-MESSAGE cursor (reducer_mouse.go:308), which restyles the
+// rows of both the old and the new cursor message — so a diff counts
+// six rows where only three carry a selection. Measuring the style
+// directly is the only count that means what the name says.
+func TestGolden_DragSelectionSpansMultipleLines(t *testing.T) {
+	a := goldenScenarioNamed(t, "drag_selection").build(t)
+
+	spans := goldenSelectedSpans(t, a.View().Content)
+	if len(spans) != goldenDragDY+1 {
+		t.Fatalf("%d rendered rows carry the selection style, want %d; the span is a "+
+			"different shape than the %d-row drag implies. Highlighted rows were:\n%s",
+			len(spans), goldenDragDY+1, goldenDragDY, goldenFormatSpans(spans))
+	}
+
+	// Contiguous: consecutive entry lines, not rows with unhighlighted
+	// gaps between them. A gapped span means the selection crossed a
+	// message boundary or a divider, which is the shape
+	// goldenDragPressY was chosen to avoid.
+	for i := 1; i < len(spans); i++ {
+		if spans[i].row != spans[i-1].row+1 {
+			t.Errorf("highlighted rows %d and %d are not adjacent; the span straddles a "+
+				"gap or a divider. Rows were:\n%s",
+				spans[i-1].row, spans[i].row, goldenFormatSpans(spans))
+		}
+	}
+
+	// The three arms of the from/to computation, in the order they
+	// occur. Asserted rather than described, because the shape depends
+	// entirely on goldenDragPressX and would silently collapse to
+	// "whole, whole, partial" if that constant went back to the
+	// brief's value.
+	first, middle, last := spans[0], spans[1], spans[len(spans)-1]
+	if first.start <= middle.start {
+		t.Errorf("the first highlighted row starts at column %d and the middle one at %d; "+
+			"the first row is not partial, so the from = loCol arm is unpinned. Rows were:\n%s",
+			first.start, middle.start, goldenFormatSpans(spans))
+	}
+	if last.width >= middle.width {
+		t.Errorf("the last highlighted row is %d cells wide and the middle one %d; the last "+
+			"row is not partial, so the to = hiCol arm is unpinned. Rows were:\n%s",
+			last.width, middle.width, goldenFormatSpans(spans))
+	}
+
+	// Control: the same frame without the drag has no highlighted rows
+	// at all. Without this, a selection style that happened to equal
+	// some other style in the frame would satisfy every check above.
+	if n := len(goldenSelectedSpans(t, goldenDragApp(t, false).View().Content)); n != 0 {
+		t.Fatalf("control: %d rows carry the selection style with no drag performed, so "+
+			"the assertions above are not measuring the selection", n)
+	}
+}
+
+// goldenSelectedSpan is one row's selection highlight: which rendered
+// row it is on, the display column it starts at, and how many cells it
+// covers.
+type goldenSelectedSpan struct {
+	row   int
+	start int
+	width int
+	text  string
+}
+
+// goldenSelectedSpans locates the selection highlight in a rendered
+// frame.
+//
+// Detection is by the SGR prefix styles.SelectionStyle() emits, derived
+// at call time rather than written as a literal so a palette change
+// moves this with it. newGoldenApp has already pinned the theme, so the
+// prefix is the one the frame was rendered under.
+//
+// applySelectionToRows emits exactly one selStyle.Render per affected
+// row (model.go:3437), so the first occurrence per line is the whole
+// highlight and the run ends at the next escape byte.
+func goldenSelectedSpans(t *testing.T, view string) []goldenSelectedSpan {
+	t.Helper()
+	probe := styles.SelectionStyle().Render("x")
+	i := strings.Index(probe, "x")
+	if i <= 0 {
+		t.Fatalf("selection style emits no leading SGR (%q); this detector cannot work", probe)
+	}
+	prefix := probe[:i]
+
+	var out []goldenSelectedSpan
+	for row, line := range strings.Split(view, "\n") {
+		at := strings.Index(line, prefix)
+		if at < 0 {
+			continue
+		}
+		seg := line[at+len(prefix):]
+		if end := strings.IndexByte(seg, 0x1b); end >= 0 {
+			seg = seg[:end]
+		}
+		out = append(out, goldenSelectedSpan{
+			row:   row,
+			start: ansi.StringWidth(line[:at]),
+			width: ansi.StringWidth(seg),
+			text:  seg,
+		})
+	}
+	return out
+}
+
+func goldenFormatSpans(spans []goldenSelectedSpan) string {
+	var b strings.Builder
+	for _, s := range spans {
+		fmt.Fprintf(&b, "  row %2d col %3d w %3d %q\n", s.row, s.start, s.width, s.text)
+	}
+	return b.String()
+}
+
+// TestGolden_OverlayFinderIsCompositedOverBackdrop pins that
+// overlay_finder records a modal composited onto a dimmed screen, and
+// not either half on its own.
+//
+// applyOverlays (view_overlays.go:39) is a chain of conditionals; a
+// finder whose IsVisible went false, or a mode that stopped counting as
+// a modal overlay, yields a golden that is just base with a different
+// name. Both layers are therefore asserted: the box's own text, and the
+// background text still legible behind it.
+func TestGolden_OverlayFinderIsCompositedOverBackdrop(t *testing.T) {
+	a := goldenScenarioNamed(t, "overlay_finder").build(t)
+
+	if !a.channelFinder.IsVisible() {
+		t.Fatal("channel finder is not visible; the golden is base under another name")
+	}
+	if !a.overlayActive() {
+		t.Fatal("overlayActive() is false, so applyOverlays composited nothing and " +
+			"maybeWrapFinalScreen took its no-op path")
+	}
+
+	view := a.View().Content
+	plain := stripANSI(view)
+
+	// Layer 1: the box. "Switch Channel" is the finder's own title
+	// (channelfinder/model.go:530) and appears nowhere else.
+	for _, want := range []string{"Switch Channel", "Type to filter..."} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("finder box does not render %q; view was:\n%s", want, plain)
+		}
+	}
+	// Layer 2: the backdrop. The status row is outside the box, so its
+	// survival is what proves this is a composite and not a
+	// full-screen replacement.
+	if !strings.Contains(plain, "#general") {
+		t.Errorf("no backdrop behind the overlay; view was:\n%s", plain)
+	}
+
+	// The box is CENTERED: DimmedOverlay places it at
+	// (width-modalW)/2, so the rows carrying its text must start
+	// well inside the frame rather than at column 0.
+	for _, line := range strings.Split(plain, "\n") {
+		if !strings.Contains(line, "Switch Channel") {
+			continue
+		}
+		if lead := len(line) - len(strings.TrimLeft(line, " ")); lead < 4 {
+			t.Errorf("the finder box is not centered: %q has %d leading spaces", line, lead)
+		}
+	}
+
+	// The dim is a per-cell COLOR rewrite (overlay.go:66-71), so it is
+	// invisible to stripANSI and only a raw-ANSI golden can pin it.
+	// Assert it exists by comparing against the same frame rendered
+	// with the overlay closed: identical text, different bytes.
+	closed := newGoldenApp(t,
+		withSize(goldenBaseW, goldenBaseH),
+		withChannels(goldenChannels()...),
+		withMessages(goldenMessages()...),
+		withActiveChannel("C1"),
+		withRender(),
+	).View().Content
+	if view == closed {
+		t.Fatal("the overlay frame is byte-identical to the un-overlaid one")
+	}
+
+	// The non-joined row is on screen: without it the dim-grey branch
+	// of the row renderer (channelfinder/model.go:606-609) is
+	// unreachable and the golden pins only the joined path.
+	if !strings.Contains(plain, "muted-noise") {
+		t.Errorf("the non-joined finder row is not listed; view was:\n%s", plain)
+	}
+}
+
+// TestGolden_WindowSplitRendersTwoDistinctPanes pins the property
+// window_split exists for.
+//
+// The golden's value is renderWindowNode's recursion plus the
+// focused/unfocused border fork, and neither survives a scenario that
+// quietly ended up with one window: a single-window tree short-circuits
+// to renderMessagesRegion (view_window_region.go:30) and the file
+// becomes base at another size. The borders are the visible signature
+// of the fork — FocusedBorder is a THICK box, UnfocusedBorder a ROUNDED
+// one (styles/styles.go:439-442) — so both glyphs must be present in
+// the messages band, and neither on its own.
+func TestGolden_WindowSplitRendersTwoDistinctPanes(t *testing.T) {
+	sc := goldenScenarioNamed(t, "window_split")
+	a := sc.build(t)
+
+	if got := a.wins.Len(); got != 2 {
+		t.Fatalf("window count = %d, want 2; the split did not take and the golden "+
+			"records a single pane", got)
+	}
+
+	band := goldenPanelText(a.View().Content, a.layout.sidebarEnd, a.layout.msgEnd)
+	// Top-left corners, which are unambiguous: "┏" only comes from
+	// lipgloss.ThickBorder and "╭" only from RoundedBorder. Sliced to
+	// the messages band so the sidebar's own rounded border cannot
+	// satisfy the second one.
+	if !strings.Contains(band, "┏") {
+		t.Errorf("no thick (focused) border in the messages band; the focused pane did not "+
+			"render through renderMessagesRegion. Band was:\n%s", band)
+	}
+	if !strings.Contains(band, "╭") {
+		t.Errorf("no rounded (unfocused) border in the messages band; the second pane did not "+
+			"render through renderUnfocusedWindow. Band was:\n%s", band)
+	}
+
+	// Distinct CONTENT, not just distinct chrome. The two windows are
+	// seeded with different message counts, so text present in one and
+	// absent from the other proves the panes are not two renders of
+	// the same model.
+	plain := stripANSI(a.View().Content)
+	if !strings.Contains(plain, "# general") {
+		t.Errorf("the unfocused window's channel header is missing; view was:\n%s", plain)
+	}
+	if !strings.Contains(plain, "# engineering") {
+		t.Errorf("the focused window's channel header is missing; view was:\n%s", plain)
+	}
+	// goldenMessages()[:2] stops before carol's row, so this string
+	// can only have come from the six-message (unfocused) pane.
+	if !strings.Contains(plain, "wrapping behaviour") {
+		t.Errorf("the unfocused window is not rendering its own longer history; "+
+			"view was:\n%s", plain)
+	}
+
+	// Control: the same fixture WITHOUT the split has neither a second
+	// pane nor a thick border in the band, so the assertions above are
+	// about the split and not about the base chrome.
+	ctrl := goldenScenarioNamed(t, "base").build(t)
+	cband := goldenPanelText(ctrl.View().Content, ctrl.layout.sidebarEnd, ctrl.layout.msgEnd)
+	if strings.Contains(cband, "┏") {
+		t.Fatalf("control: the unsplit messages band already carries a thick border, so "+
+			"the focused-border assertion proves nothing. Band was:\n%s", cband)
+	}
+}
+
+// TestGolden_ScenariosArePairwiseDistinct is the cheapest guard against
+// the failure mode every scenario above is individually defended
+// against: two entries that render the same bytes.
+//
+// It has already happened once in this file's history — thread_open at
+// 120 columns was byte-for-byte base, because the thread pane auto-hid
+// (see goldenThreadMinWidth). A per-scenario assertion catches that only
+// if someone thought to write one for that scenario; this catches it for
+// every scenario, including ones added later.
+func TestGolden_ScenariosArePairwiseDistinct(t *testing.T) {
+	rendered := map[string]string{}
+	for _, sc := range goldenScenarios() {
+		rendered[sc.name] = sc.build(t).View().Content
+	}
+	names := make([]string, 0, len(rendered))
+	for n := range rendered {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	for i := 0; i < len(names); i++ {
+		for j := i + 1; j < len(names); j++ {
+			if rendered[names[i]] == rendered[names[j]] {
+				t.Errorf("scenarios %q and %q render byte-identical frames; one of the two "+
+					"golden files pins nothing the other does not", names[i], names[j])
+			}
+		}
 	}
 }
