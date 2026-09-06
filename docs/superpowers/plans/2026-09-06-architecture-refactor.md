@@ -180,8 +180,9 @@ needs `p.Send` and `p` does not exist yet.
 
 ### F5 — Smaller, well-bounded duplications
 
-- **`renderBox` appears 5 times**, 143–210 lines each, in `help`,
-  `reactionpicker`, `channelfinder`, `themeswitcher`, `workspacefinder`.
+(The `renderBox` duplication originally recorded here proved to be much larger
+than first counted; it is promoted to F6.)
+
 - `internal/ui/services.go`: ~250 of 600 lines are mechanical
   `if fn == nil { return zero }` adapter boilerplate over 30 methods.
   `ChannelService`'s own doc comment admits it "mixes three concerns" across its
@@ -191,7 +192,77 @@ needs `p.Send` and `p` does not exist yet.
 - `internal/ui/msgs.go`: 70 message types in one unlabelled block. They already
   map 1:1 onto the `reducer_*.go` files.
 
-### F6 — Test-suite gaps
+### F6 — The modal-widget cluster: 13 packages, 5,295 lines, one widget
+
+`internal/ui` contains 13 modal packages that are variations on the same
+component: a centered bordered box containing a filter prompt and a windowed,
+selectable list.
+
+```
+channelfinder 720   newmessagepicker 656   searchresults 617   reactionpicker 557
+help 489            themeswitcher 379      presencemenu 375    workspacefinder 372
+mentionpicker 335   emojipicker 237        linkpicker 200      confirmprompt 180
+channelpicker 178                                              total 5,295
+```
+
+There are **11 `renderBox` implementations** (143–210 lines each) and **7
+`visibleWindow`** implementations. An undeclared interface runs through them:
+
+| Method | Impls | Distinct signatures | Classification |
+|---|---|---|---|
+| `Close()` | 14 | 1 | chrome |
+| `IsVisible() bool` | 14 | 1 (receiver varies) | chrome |
+| `BoxSize(w, h) (int, int)` | 9 | 1 (receiver varies) | chrome |
+| `ClickRow(w, h, localY) bool` | 8 | 1 | chrome |
+| `Open(...)` | 13 | **6** | behavior — legitimately diverges |
+| `HandleKey(string)` | 11 | **9 return types** | behavior — legitimately diverges |
+
+The seam is clean: **chrome is uniform, behavior is not.** Two of the four
+chrome methods are *already* declared as interfaces — `boxedOverlay` and
+`clickableOverlay` at `internal/ui/reducer_modal_click.go:31,38` — but they are
+used only for mouse-click routing and never for rendering. The abstraction was
+discovered and then not applied.
+
+Consolidation target is the chrome (box rendering, list windowing, scrollbar
+integration, geometry), not the widgets. `Open` and `HandleKey` stay
+per-package.
+
+### F7 — Duplication recurs because copy-then-adapt is the cheapest correct path
+
+Measured with `dupl` (github.com/mibk/dupl) across all 234 non-generated source
+files:
+
+| Threshold | Clone pairs found |
+|---|---|
+| 150 tokens | 5 |
+| 100 tokens | 11 |
+| 75 tokens | 22 |
+| 50 tokens | 89 |
+
+**Automated clone detection misses this codebase's expensive duplication.** At
+75 tokens it finds the `main.go` history triple (`3014-3065` ≡ `3445-3496` ≡
+`3528-3579`) and 3 modal pairs. Against F3 — 377 verbatim lines, 45
+identically-named methods — it finds exactly **one** 34-line region
+(`messages/model.go:2095-2129` ≡ `thread/model.go:1973-2006`). Against F6's
+13-package cluster it finds 3 pairs.
+
+The reason is that duplication here is *copy-then-adapt*: names change, a field
+is added, a branch is reordered. Token-sequence detectors need long contiguous
+identical runs; adaptation fragments them below any useful threshold.
+
+Three root causes, none of which a linter addresses:
+
+1. **No shared home.** No modal-chrome package exists. Building modal #14, the
+   fastest correct path is to copy modal #13. Creating the shared package is a
+   bigger change than the feature that needs it, so nobody does.
+2. **No map.** The repo has no `AGENTS.md`, `CLAUDE.md`, or `CONTRIBUTING.md`.
+   Every contributor — and every agent session — starts cold, unaware that
+   `messages.WordWrap`, `internal/text.Fold`, `ui/scrollbar.Overlay` or
+   `ui/overlay.DimmedOverlay` exist.
+3. **Divergence is invisible.** `thread/model.go:37` asks humans to keep two
+   files in lockstep. A comment cannot fail a build.
+
+### F8 — Test-suite gaps
 
 Covered in detail in the Phase 0 spec. Summary:
 
@@ -236,12 +307,13 @@ Apply to every phase.
 
 **Spec:** [`../specs/2026-09-06-phase0-test-safety-net-design.md`](../specs/2026-09-06-phase0-test-safety-net-design.md)
 
-**Addresses:** F6
+**Addresses:** F8, plus F7 mitigation (lockstep test)
 
 Golden tests for `View()` (8 full-screen scenarios, raw ANSI), one
 `newTestApp(opts...)` harness with the 15 legacy builders rewritten as wrappers,
-flake elimination in 6 files, and table-driven characterization of all 16 mode
-handlers.
+flake elimination in 6 files, table-driven characterization of all 16 mode
+handlers, and a lockstep test pinning `messages`/`thread` render parity until
+Phase 3 merges them.
 
 One production change: `messages.SetNowFunc` clock injection.
 
@@ -350,7 +422,48 @@ goldens byte-identical.
 
 ---
 
-### Phase 4 — Finish the `App` decomposition
+### Phase 4 — De-duplication: extract the modal chrome substrate
+
+**Addresses:** F6, and structurally F7 cause #1
+
+**Prerequisite: Phases 0 and 3 must be complete.** Phase 3's pane extraction
+solves the same shape of problem one layer down (shared list substrate,
+divergent behavior hooks); its outcome should inform this design rather than the
+two being invented independently.
+
+The seam is already established by the data: **chrome is uniform across all 13
+modal packages; behavior is not.**
+
+Extract a modal-chrome package owning:
+
+- box rendering — replaces 11 `renderBox` implementations (143–210 lines each)
+- list windowing — replaces 7 `visibleWindow` implementations
+- geometry (`BoxSize`) and row hit-testing (`ClickRow`), promoting the existing
+  `boxedOverlay`/`clickableOverlay` interfaces
+  (`internal/ui/reducer_modal_click.go:31,38`) from mouse-routing-only to the
+  package's real contract
+- visibility (`Open`/`Close`/`IsVisible` state)
+- scrollbar integration (`ui/scrollbar.Overlay`) and dimmed backdrop
+  (`ui/overlay.DimmedOverlay`), which already exist and are inconsistently used
+
+**Explicitly out of scope:** `Open(...)` has 6 distinct signatures and
+`HandleKey(string)` has 9 distinct return types across the cluster. These encode
+genuine per-widget behavior. Do **not** unify them — forcing them into a common
+shape is the classic over-abstraction failure and would be worse than the
+duplication.
+
+**Exit:** modal cluster below ~3,000 lines (from 5,295); one `renderBox`; one
+`visibleWindow`; every modal package satisfying a declared chrome interface with
+a compile-time assertion; all 8 goldens byte-identical except
+`overlay_finder`, which is re-blessed once with a reviewed diff.
+
+**Risk:** medium-high. Touches 13 packages and the `overlay_finder` golden is
+expected to change. Consolidate incrementally — one modal migrated per commit,
+goldens green between each.
+
+---
+
+### Phase 5 — Finish the `App` decomposition
 
 **Addresses:** F4
 
@@ -376,11 +489,10 @@ Phase 0b harness is what keeps it to one place rather than fifteen.
 
 ---
 
-### Phase 5 — Opportunistic cleanup
+### Phase 6 — Opportunistic cleanup
 
 **Addresses:** F5, plus the stale documentation
 
-- Shared `renderBox` helper across the 5 modal packages (~800 lines → ~200).
 - Generic nil-guard in `services.go` (~250 lines → ~50).
 - Split `ChannelService` along the three concerns its own doc names (Slack API /
   local cache / session bookkeeping).
@@ -389,21 +501,79 @@ Phase 0b harness is what keeps it to one place rather than fifteen.
   that Phase 3 changes the first three substantially — do this after.
 - **Rewrite `wiki/Architecture.md`.** It is 7× off on every figure.
 - Refresh or retire `docs/STATUS.md`.
+- Enable `dupl` in `.golangci.yml` at a 100-token threshold, warn-only. See the
+  caveat below — this is deliberately last and deliberately low-expectation.
 
 **Risk:** low. Independent items; can be split across contributors.
 
 ---
 
+## Standing practice: preventing re-duplication
+
+Derived from F7. These are not phases; they apply continuously.
+
+### 1. `AGENTS.md` is the map — keep it current
+
+`AGENTS.md` at the repo root lists where shared code lives. It exists because
+the dominant cause of duplication here is discovery cost, not laziness.
+
+**When you add a reusable helper, add it to `AGENTS.md` in the same commit.** An
+unlisted helper will be re-implemented by the next contributor. When `AGENTS.md`
+and the code disagree, the code wins and `AGENTS.md` is a bug.
+
+### 2. Search before you write
+
+Before writing any helper, check `AGENTS.md`, then grep. The specific traps this
+codebase has already fallen into: text wrapping, box rendering, list windowing,
+scrollbars, date formatting, mrkdwn flattening, case-folding, ID formatting.
+
+### 3. Prefer a declared interface over a "keep in sync" comment
+
+If two implementations must stay parallel, express it as an interface with a
+compile-time assertion (`var _ Chrome = (*Model)(nil)`) or a lockstep test that
+feeds both the same input and compares output. `thread/model.go:37` is the
+counter-example: a comment asking humans to maintain a 377-line invariant.
+
+### 4. Extract the substrate, not the widget
+
+The uniform part is worth sharing; the divergent part is not. F6's split —
+chrome uniform, `Open`/`HandleKey` divergent — is the model. Forcing divergent
+behavior into a common shape is worse than the duplication it removes.
+
+### 5. `dupl` is a backstop, not a safety net
+
+Measured against this codebase: at a 75-token threshold `dupl` finds 22 clone
+pairs and misses nearly all of F3 (1 of ~45 duplicated methods) and most of F6
+(3 of 13 packages). It catches verbatim copies; this codebase's duplication is
+copy-then-adapt, which defeats token-sequence matching. Enable it, but do not
+treat a green `dupl` run as evidence of anything.
+
+Reproduce the measurement with:
+
+```
+go install github.com/mibk/dupl@latest
+dupl -t 75 -plumbing $(find . -name '*.go' \
+  -not -path './vendor/*' -not -path './.worktrees/*' \
+  -not -name '*_test.go' -not -name '*_gen.go')
+```
+
+---
+
 ## Status
 
-| Phase | Scope | Spec | Plan | Status |
-|---|---|---|---|---|
-| 0 | Test safety net | [spec](../specs/2026-09-06-phase0-test-safety-net-design.md) | — | **designed** |
-| 1 | `main.go` mechanical splits | — | — | not started |
-| 2 | `main.go` structural | — | — | not started |
-| 3 | Collapse `messages`/`thread` fork | — | — | not started |
-| 4 | Finish `App` decomposition | — | — | not started |
-| 5 | Opportunistic cleanup | — | — | not started |
+| Phase | Scope | Prereqs | Spec | Plan | Status |
+|---|---|---|---|---|---|
+| 0 | Test safety net | — | [spec](../specs/2026-09-06-phase0-test-safety-net-design.md) | — | **designed** |
+| 1 | `main.go` mechanical splits | — | — | — | not started |
+| 2 | `main.go` structural | 1 | — | — | not started |
+| 3 | Collapse `messages`/`thread` fork | 0 | — | — | not started |
+| 4 | Modal chrome substrate | 0, 3 | — | — | not started |
+| 5 | Finish `App` decomposition | 0b | — | — | not started |
+| 6 | Opportunistic cleanup | 3, 4 | — | — | not started |
+
+Standing practice (`AGENTS.md`, search-before-write, declared interfaces over
+sync comments, substrate-not-widget, `dupl` as backstop) applies from now, not
+at a phase boundary.
 
 ### Target end state
 
@@ -415,5 +585,8 @@ Phase 0b harness is what keeps it to one place rather than fifteen.
 | `App` struct fields | 107 | < 60 |
 | `App` `Set*` methods | 45 | < 25 |
 | `internal/ui/thread/model.go` | 2,072 lines | < 900 |
+| Modal-widget cluster (13 pkgs) | 5,295 lines | < 3,000 |
+| `renderBox` implementations | 11 | 1 |
+| `visibleWindow` implementations | 7 | 1 |
 | Golden tests for `View()` | 0 | 8 |
 | Known data races in `cmd/slk` | 3 | 0 |

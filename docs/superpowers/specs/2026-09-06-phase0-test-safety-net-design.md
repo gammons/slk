@@ -311,6 +311,35 @@ Two findings are anticipated and are results rather than failures:
 
 ---
 
+---
+
+## 7. `messages`/`thread` lockstep test
+
+`internal/ui/thread/model.go:37` documents a maintained-by-hand invariant:
+
+> *"This shape mirrors internal/ui/messages.viewEntry **exactly**; keeping them
+> in lockstep means scroll and selection logic can be kept in sync."*
+
+377 verbatim lines and 45 identically-named methods currently rest on a comment.
+Phase 3 removes the duplication, but Phases 1 and 2 land first, and any change
+to either file in the interim can silently break the parity that Phase 3's
+extraction will assume.
+
+Add `internal/ui/thread/lockstep_test.go`: feed the same message list to
+`messages.Model` and `thread.Model` and assert their rendered output matches for
+the shared subset of behaviors — plain message rows, day separators, reaction
+pills, wrapping at the same width, and selection range rendering.
+
+Where output legitimately differs (the parent row, the unread boundary, thread
+chrome), the test documents the difference explicitly rather than skipping it.
+That list *is* the specification for Phase 3's divergence hooks, so writing it
+now is design work for Phase 3, not just testing.
+
+This test is deleted by Phase 3, when the two models become one. That is the
+intended lifecycle, not waste.
+
+---
+
 ## Success criteria
 
 Phase 0 is complete when all of the following hold:
@@ -325,6 +354,8 @@ Phase 0 is complete when all of the following hold:
    larger than the rest and contain rarely-reachable arms).
 5. `internal/ui` package coverage is above its 67.8% baseline.
 6. Exactly one production change in the phase: `messages.SetNowFunc`.
+7. A `messages`/`thread` lockstep test exists, passes, and enumerates every
+   legitimate divergence between the two models.
 
 `cmd/slk` coverage is explicitly *not* a Phase 0 criterion; raising it is
 Phase 1 and 2's job, and it depends on extractions that Phase 0 does not make.
@@ -339,7 +370,8 @@ Four independent PRs off a `refactor/phase0-safety-net` worktree:
 | **0a** | Golden infrastructure + 8 scenarios + `messages.SetNowFunc` |
 | **0c** | Flake fixes (6 files) |
 | **0d** | Mode characterization (16 files) |
+| **0e** | `messages`/`thread` lockstep test |
 
 0b lands first: it is pure mechanical refactoring with no new assertions, and 0a
-builds `newGoldenApp` on top of it. 0c and 0d are independent of both and of
+builds `newGoldenApp` on top of it. 0c, 0d and 0e are independent of both and of
 each other.
