@@ -21,6 +21,7 @@
 - Exactly one production (non-`_test.go`) change is permitted in this entire plan: `internal/ui/messages` gains `nowFunc` + `SetNowFunc`. Any other production edit is out of scope — record it and raise it separately.
 - Characterization tests record **current** behavior. If behavior looks wrong, add a `// BUG?:` comment and keep the assertion matching reality. Do not fix it here.
 - Commit after every task. Use conventional-commit prefixes (`test:`, `refactor:`, `feat:`) matching repo style.
+- **Partial completion is permitted but must be escalated, never silent.** Two tasks (2 and 11) name items that may prove impossible within the one-production-change budget. If you cannot complete a task item, you must: (a) write the specific item and the blocking reason into your report file, (b) return status `DONE_WITH_CONCERNS`, not `DONE`. A success criterion missed without a written exception is a failed task. Do not exceed the one-production-change budget to avoid escalating — escalate instead.
 
 ## File Structure
 
@@ -1250,7 +1251,14 @@ that work completed within a wall-clock budget. Replace `time.Sleep` +
 
 **Interfaces:**
 - Consumes: nothing
-- Produces: `func awaitClose(t *testing.T, ch <-chan struct{}, what string)` — reusable in Tasks 10–12
+- Produces: no shared helper. Each wait is an inline `<-ch` receive.
+
+**Pre-flight amendment (agreed before execution):** an earlier draft of this
+plan introduced an `awaitClose(t, ch, what)` helper and instructed Tasks 11–12
+to copy it into three more packages. That is verbatim duplication of a logic
+block — the exact anti-pattern this refactor exists to remove — for a helper
+whose body is a single channel receive. **Do not create it.** Write the receive
+inline at each call site with a comment stating why there is no timeout.
 
 - [ ] **Step 1: Reproduce the flake**
 
@@ -1259,21 +1267,17 @@ Expected: mostly PASS. Then reproduce under load — run the full suite concurre
 `go test ./... -race -count=1 & go test ./cmd/slk -run TestUserResolver -race -count=20`
 Expected: at least one FAIL. Record the failure output; you need it to know the fix worked.
 
-- [ ] **Step 2: Add the shared wait helper**
+- [ ] **Step 2: Establish the inline wait idiom**
 
-Add near the top of `cmd/slk/user_resolver_test.go`:
+There is no helper. At each wait site, write the receive directly with a comment
+naming the event. Use this form throughout Tasks 9–12:
 
 ```go
-// awaitClose blocks until ch is closed. It has no timeout by design:
-// `go test` already imposes one (default 10m), and a wall-clock budget
-// inside the test is what makes these load-sensitive. A hang here
-// produces a goroutine dump naming the exact stuck test, which is
-// strictly more useful than "expected N calls, got N-1".
-func awaitClose(t *testing.T, ch <-chan struct{}, what string) {
-	t.Helper()
-	<-ch
-	_ = what
-}
+	// No timeout by design: `go test` already imposes one (default 10m),
+	// and a wall-clock budget inside the test is exactly what made this
+	// load-sensitive. A hang here produces a goroutine dump naming the
+	// stuck test, which beats "expected 2 calls, got 1".
+	<-b.flushed // edge users/info batch flushed
 ```
 
 - [ ] **Step 3: Convert the batch-window sleeps**
@@ -1322,7 +1326,7 @@ Then at each call site, replace:
 with:
 
 ```go
-	awaitClose(t, b.flushed, "edge users/info batch flush")
+	<-b.flushed // edge users/info batch flushed
 ```
 
 - [ ] **Step 4: Convert `TestUserResolver_RequestDoesNotBlockTheCaller`**
@@ -1358,7 +1362,7 @@ func TestUserResolver_RequestDoesNotBlockTheCaller(t *testing.T) {
 
 	// The handler is still blocked on `release`, so this close can only
 	// happen if Request never waited on the network.
-	awaitClose(t, returned, "Request calls to return while transport is blocked")
+	<-returned // Request calls returned while the transport is still blocked
 }
 ```
 
@@ -1406,7 +1410,7 @@ Batch-window sleeps become a channel the fake batcher closes."
 - Modify: `cmd/slk/thread_subscriptions_test.go` (3 `time.Sleep`, 10 `time.After`)
 
 **Interfaces:**
-- Consumes: `awaitClose` (Task 9) — same package, already in scope
+- Consumes: the inline-receive idiom established in Task 9
 - Produces: nothing new
 
 - [ ] **Step 1: Inventory the waits**
@@ -1421,10 +1425,10 @@ this file is the natural signalling point for most of them.
 Give it a `called chan struct{}` closed via `sync.Once` on first invocation,
 mirroring the `fakeBatcher` change in Task 9 Step 3.
 
-- [ ] **Step 3: Replace each wait with `awaitClose`**
+- [ ] **Step 3: Replace each wait with an inline receive**
 
 Replace every `select { case <-done: case <-time.After(...): t.Fatal("timeout") }`
-with `awaitClose(t, done, "<what>")`.
+with a bare `<-done` plus a comment naming the event.
 
 - [ ] **Step 4: Verify**
 
@@ -1450,8 +1454,8 @@ git commit -m "test(threadsubs): replace wall-clock waits with signals"
 - Modify: `internal/slack/membership/manager_test.go` (7 `time.Sleep`, 5 `time.After`)
 
 **Interfaces:**
-- Consumes: nothing (different package — needs its own `awaitClose`)
-- Produces: local `awaitClose` copy
+- Consumes: the inline-receive idiom from Task 9
+- Produces: nothing shared
 
 This file already has one flaky-fix commit against it (`8eaeba9`, *"fix flaky
 backoff-expiry test that reddened unrelated PRs"*). The backoff-expiry tests are
@@ -1470,7 +1474,7 @@ issue.
 - [ ] **Step 2: Convert the non-backoff waits**
 
 The waits that are "wait for the fetch goroutine to finish" convert to signals
-exactly as in Task 9. Add a local `awaitClose` (copy the doc comment) and use it.
+exactly as in Task 9, using an inline `<-ch` receive. Do not add a helper.
 
 - [ ] **Step 3: Verify**
 
@@ -1500,7 +1504,7 @@ scope for Phase 0. Raised separately."
 
 **Interfaces:**
 - Consumes: nothing
-- Produces: a local `awaitClose` in each package
+- Produces: nothing shared — inline receives only
 
 - [ ] **Step 1: `internal/avatar` — signal from `SetOnReady`**
 
@@ -1514,7 +1518,7 @@ c.SetOnReady(func(userID string) {
 	once.Do(func() { close(ready) })
 })
 c.Preload("U1", srv.URL+"/a.png")
-awaitClose(t, ready, "avatar preload")
+<-ready // avatar preload completed
 ```
 
 Run: `go test ./internal/avatar -race -count=50`
@@ -1569,7 +1573,8 @@ signals from the PlaceContext callback. go test ./... -race -count=5 green."
 
 **Interfaces:**
 - Consumes: `messages.SetNowFunc` (Task 3)
-- Produces: `func TestLockstep_SharedRenderBehaviour(t *testing.T)`
+- Produces: `func TestLockstep_SharedRenderBehaviour(t *testing.T)`, plus a
+  package-level doc comment enumerating the intended divergences
 
 `internal/ui/thread/model.go:37` documents a hand-maintained invariant: 377
 verbatim lines and 45 identically-named methods kept in sync by a comment. This
@@ -1622,8 +1627,8 @@ func lockstepItems() []messages.MessageItem {
 // thread/model.go:37 currently asks humans to maintain by hand.
 //
 // It asserts on the SHARED SUBSET only. Every legitimate divergence is
-// enumerated in TestLockstep_DocumentedDivergences below; that list is
-// the contract Phase 3's pane extraction must honour.
+// enumerated in the "Documented divergences" comment below; that list
+// is the contract Phase 3's pane extraction must honour.
 func TestLockstep_SharedRenderBehaviour(t *testing.T) {
 	messages.SetNowFunc(lockstepClock)
 	t.Cleanup(func() { messages.SetNowFunc(nil) })
@@ -1675,41 +1680,38 @@ func TestLockstep_SharedRenderBehaviour(t *testing.T) {
 	}
 }
 
-// TestLockstep_DocumentedDivergences enumerates every place the two
-// models legitimately differ. This list is the specification for the
-// divergence hooks Phase 3's shared pane package must provide.
+// Documented divergences between messages.Model and thread.Model.
 //
-// Adding a case here is a design decision, not a test fix: it asserts
-// "this difference is intended." If a behaviour drifts and you cannot
-// justify it as intended, the fix belongs in the model, not here.
-func TestLockstep_DocumentedDivergences(t *testing.T) {
-	messages.SetNowFunc(lockstepClock)
-	t.Cleanup(func() { messages.SetNowFunc(nil) })
-
-	divergences := []struct {
-		name string
-		why  string
-	}{
-		{"parent row", "thread renders a parent message at a pseudo-index above the replies; messages has no such row"},
-		{"unread boundary", "thread draws a '── new ──' divider from SetUnreadBoundary; messages uses SetLastReadTS differently"},
-		{"reply counts", "messages renders 'N replies' affordances; thread does not (it IS the thread)"},
-		{"scroll mechanism", "thread uses bubbles/viewport; messages hand-rolls yOffset. Phase 3 must pick one"},
-		{"channel chrome", "messages renders a channel header with topic; thread renders thread chrome"},
-		{"search terms", "messages supports SetSearchTerms highlighting; thread does not"},
-		{"loading spinner", "messages has SetLoading/SetSpinnerFrame; thread does not"},
-	}
-
-	if len(divergences) == 0 {
-		t.Fatal("divergence list must not be empty")
-	}
-	for _, d := range divergences {
-		if d.why == "" {
-			t.Errorf("divergence %q has no justification", d.name)
-		}
-	}
-	t.Logf("%d documented divergences; Phase 3 must provide a hook for each", len(divergences))
-}
+// This list is the specification for the divergence hooks Phase 3's
+// shared pane package must provide. Everything NOT listed here is
+// expected to render identically and is asserted above.
+//
+// Adding an entry is a design decision: it declares "this difference is
+// intended." If behaviour drifts and you cannot justify it as intended,
+// the fix belongs in the model, not in this list.
+//
+//  1. Parent row — thread renders a parent message at a pseudo-index
+//     above the replies; messages has no such row.
+//  2. Unread boundary — thread draws a "── new ──" divider from
+//     SetUnreadBoundary; messages uses SetLastReadTS differently.
+//  3. Reply counts — messages renders "N replies" affordances; thread
+//     does not (it IS the thread).
+//  4. Scroll mechanism — thread uses bubbles/viewport; messages
+//     hand-rolls yOffset. Phase 3 must pick one.
+//  5. Channel chrome — messages renders a channel header with topic;
+//     thread renders thread chrome.
+//  6. Search terms — messages supports SetSearchTerms highlighting;
+//     thread does not.
+//  7. Loading spinner — messages has SetLoading/SetSpinnerFrame; thread
+//     does not.
 ```
+
+**Pre-flight amendment (agreed before execution):** an earlier draft made the
+divergence list a `TestLockstep_DocumentedDivergences` function that asserted
+only that a hardcoded slice was non-empty. It exercised no production code — a
+test that asserts nothing. The list is valuable as Phase 3 input, so it stays as
+the doc comment above `TestLockstep_SharedRenderBehaviour`. **Do not write it as
+a test.**
 
 - [ ] **Step 2: Run and adapt to real signatures**
 
@@ -1721,13 +1723,13 @@ The constructor and `View` signatures above are best-effort. Verify them:
 
 Adapt the calls to match. Do **not** change production signatures.
 
-Expected once adapted: PASS — 2 tests.
+Expected once adapted: PASS — 1 test.
 
 - [ ] **Step 3: Handle genuine parity failures**
 
 If a shared-subset assertion fails, you have found a real drift between the two
 models. **Do not fix the model.** Either:
-- Move the case into `TestLockstep_DocumentedDivergences` with a written
+- Add it to the "Documented divergences" comment with a written
   justification, if the difference is intended; or
 - Add a `// BUG?:` comment, keep the assertion failing-as-skipped via
   `t.Skip` with the reason, and raise it separately.
@@ -2339,7 +2341,8 @@ Expected: only `internal/ui/messages/model.go`, and only the `nowFunc` /
 ```bash
 go test ./internal/ui/thread -run TestLockstep -v
 ```
-Expected: PASS, with the divergence-count log line.
+Expected: PASS. Confirm the "Documented divergences" comment lists every
+intended difference found during implementation.
 
 - [ ] **8. Lint clean**
 
