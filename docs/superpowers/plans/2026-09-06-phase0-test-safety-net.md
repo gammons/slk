@@ -1244,6 +1244,31 @@ indefinitely — `go test`'s own timeout is the backstop — but may not assert
 that work completed within a wall-clock budget. Replace `time.Sleep` +
 "probably done by now" with a channel the code under test closes.
 
+**CORRECTION (post-Task-9, confirmed by two independent reviews). The
+"signal from the fake's method" idiom below is WRONG and reintroduces the
+race it was meant to remove.** `userResolver.flush` calls
+`batcher.UsersInfo` at `cmd/slk/main.go:514` but only reaches
+`applyEdgeUser` — which writes the cache row — at `:537`. A channel closed
+inside the fake's `UsersInfo` therefore fires strictly *before* any row
+exists.
+
+**Signal from the last thing PRODUCTION code invokes on the path under
+test, not from the fake's entry point.** For the resolver that is the
+`send` callback: both `resolveOne` (upsert `:461` → send `:471`) and
+`applyEdgeUser` (upsert → send `:616`) write and then send, so observing
+the `ui.UserResolvedMsg` proves the write landed.
+
+Prefer barriers production reaches *unconditionally*. `resolveOne`'s error
+branch returns without sending, so a barrier on its `send` has no sender if
+a round trip fails — acceptable against a static `httptest` server, but a
+hang rather than a failure.
+
+**Also: do not grep only for `time.Sleep`/`time.After`.** Task 9's real
+flake was invisible to that grep — it was `t.TempDir` cleanup racing
+goroutines that outlived the test body
+(`TempDir RemoveAll cleanup: directory not empty`). Look for un-awaited
+async work, not just timing constructs.
+
 ### Task 9: `cmd/slk/user_resolver_test.go`
 
 **Files:**
