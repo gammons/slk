@@ -2236,9 +2236,12 @@ func (a *App) flushPendingMarks() tea.Cmd {
 			// has not been issued yet and this record cannot lose the
 			// race against Slack's thread_marked broadcast. A nil cmd
 			// means no mark, hence no echo to suppress.
-			a.selfThreadMarks.record(selfMarkKey{
-				channelID: pt.channelID, threadTS: pt.threadTS, ts: pt.ts,
-			})
+			//
+			// Converted, not aliased: the types stay distinct (staged
+			// vs. issued). Go allows the conversion only while their
+			// fields match in name, type and order, so a later
+			// divergence is a compile error here, not silent drift.
+			a.selfThreadMarks.record(selfMarkKey(pt))
 			cmds = append(cmds, c)
 		}
 	}
