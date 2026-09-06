@@ -15,6 +15,7 @@ import (
 	"github.com/gammons/slk/internal/emoji"
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/styles"
 )
@@ -398,6 +399,7 @@ func newGoldenApp(t *testing.T, opts ...testOpt) *App {
 
 	expandGoldenChannelsSection(a)
 	nameGoldenActiveChannel(a)
+	wireGoldenReadState(a)
 
 	// Per-Model clock. Reachable despite `sidebar` being a value field:
 	// a is a *App, so a.sidebar is addressable and Go takes its address
@@ -473,6 +475,27 @@ func nameGoldenActiveChannel(a *App) {
 	}
 }
 
+// wireGoldenReadState installs goldenReadState through the same setter
+// production uses (App.SetReadStateReader, app.go:2047, which forwards
+// to sidebar.SetReadStateReader).
+//
+// Without a reader the sidebar's readStateReader is nil, every lookup
+// returns the zero cache.ReadState, and so every row renders as read
+// (sidebar/model.go:1200). That is not a neutral default: it makes the
+// entire unread half of the sidebar's row renderer unreachable — the
+// "●" dot, the bold attribute, ChannelUnread vs ChannelNormal, and the
+// styled-vs-plain prefix fork at model.go:1358-1370. It also renders
+// ChannelItem.IsMuted inert, because ChannelMuted and ChannelNormal are
+// byte-identical styles and mute is only observable as the SUPPRESSION
+// of an unread dot (IsVisiblyUnread = HasUnread && !IsMuted,
+// model.go:59).
+//
+// TestNewGoldenApp_SidebarPinsUnreadAndMuteIndicators asserts both
+// halves are actually on screen.
+func wireGoldenReadState(a *App) {
+	a.SetReadStateReader(goldenReadState)
+}
+
 // goldenTS builds a Slack timestamp offset from goldenClock.
 //
 // Fixture timestamps are derived rather than written as literals for two
@@ -528,19 +551,51 @@ func goldenMessages() []messages.MessageItem {
 			Text: "nice — see thread", Timestamp: "9:01 AM", DateStr: "2026-03-15",
 			ThreadTS: goldenTS(time.Minute), ReplyCount: 4,
 		},
-		// Named "deploybot" for flavour only. This row pins the FILE
-		// ATTACHMENT branch, not a bot branch: messages.MessageItem
-		// carries no bot discriminator (the only IsBot in the tree is
-		// on ui/msgs.go's wire types) and the renderer's sole
-		// subtype branch is "thread_broadcast" (model.go:2156). A
-		// message from a bot renders byte-identically to one from a
-		// human, so no fixture value here can exercise "bot
-		// rendering" — there is nothing to exercise.
+		// The bot-shaped row. It pins three separate renderer branches
+		// on one message:
+		//
+		//   - the FILE ATTACHMENT branch (msg.Attachments), and
+		//   - the LEGACY ATTACHMENT branch (msg.LegacyAttachments →
+		//     blockkit.RenderLegacy, model.go:2216), which draws the
+		//     colored "█" stripe and the bold title.
+		//
+		// The name "deploybot" is flavour only; there is no bot branch
+		// to hit. messages.MessageItem carries no bot discriminator (the
+		// only IsBot in the tree is on ui/msgs.go's wire types) and the
+		// renderer's sole subtype branch is "thread_broadcast"
+		// (model.go:2156), so a message from a bot renders
+		// byte-identically to one from a human. The legacy attachment IS
+		// therefore the only way bot-SHAPED output gets pinned at all,
+		// which is why it lives here rather than nowhere.
+		//
+		// Only the legacy path is exercised, not msg.Blocks
+		// (blockkit.Render, model.go:2190), and the attachment carries
+		// Color + Title but no Text. That is a vertical-budget decision,
+		// not an oversight. The messages pane at 120x30 had exactly one
+		// spare row before this attachment existed; the stripe+title
+		// consumes it. Adding the attachment's Text, or a section block,
+		// pushes the "Yesterday" divider off the top of the viewport,
+		// which the base golden is specifically required to show (and
+		// which TestNewGoldenApp_PinsDateSeparatorClock catches). Both
+		// paths funnel into the same blockkit package at the same
+		// per-message splice site, so the incremental coverage of a
+		// second one does not pay for a scrolled-away day divider. To
+		// add one later, buy the rows first — shorten the wrapped line
+		// or give base more height.
+		//
+		// Deliberately image-free: an ImageURL would route through
+		// ctx.Fetcher and an async tea.Cmd, which is exactly the kind of
+		// nondeterminism a golden cannot tolerate. Footer/TS are omitted
+		// for the same reason in miniature — the footer formats TS as a
+		// local-zone time, which would make the golden zone-dependent.
 		{
 			TS: goldenTS(2 * time.Minute), UserID: "B1", UserName: "deploybot",
 			Text: "build #421 green", Timestamp: "9:02 AM", DateStr: "2026-03-15",
 			Attachments: []messages.Attachment{
 				{Kind: "file", Name: "build.log", URL: "https://example.invalid/build.log", Size: 20480},
+			},
+			LegacyAttachments: []blockkit.LegacyAttachment{
+				{Color: "good", Title: "deploy #421 succeeded"},
 			},
 		},
 		{
@@ -569,21 +624,22 @@ func goldenMessages() []messages.MessageItem {
 //     carrier field: nothing in internal/ui reads it at all (only
 //     internal/cache does).
 //
-//   - IsMuted changes nothing *for this fixture*. It selects
-//     styles.ChannelMuted over styles.ChannelNormal (model.go:1437-1446),
-//     but those two styles are field-for-field identical
-//     (styles.go:83-104 and :451-456: same Background, same TextMuted
-//     foreground, same padding, neither bold). Muting is only
-//     observable against an UNREAD row, where it suppresses the bold
-//     bright treatment and the "•" dot — and this fixture wires no read
-//     state, so every row is read. Task 6 should consider adding one
-//     unread channel and one unread-but-muted channel via
-//     sidebar.SetReadStateReader; see the task-5 fix report.
+//   - IsMuted IS live, but only in combination with goldenReadState.
+//     It selects styles.ChannelMuted over styles.ChannelNormal
+//     (model.go:1438-1446), and those two styles are field-for-field
+//     identical (styles.go:83-104 and :451-456: same Background, same
+//     TextMuted foreground, same padding, neither bold), so on a READ
+//     row the flag is invisible. What mute actually does is suppress
+//     the unread treatment: IsVisiblyUnread is HasUnread && !IsMuted
+//     (model.go:59), so a muted row never gets the "●" dot, the bold
+//     attribute, or the bright foreground. That is only observable on a
+//     row the read state marks unread — hence goldenReadState marks C2
+//     (unmuted) and C3 (muted) unread, giving one row of each kind.
 //
-// Both flags are kept (production data carries them) and pinned as
-// inert by TestNewGoldenApp_SidebarRendersEveryFixtureRow's subtests, so
-// wiring either one up later surfaces as a test failure and a golden
-// diff instead of a silent change in what the goldens mean.
+// IsStarred is kept (production data carries it) and pinned as inert by
+// TestNewGoldenApp_SidebarRendersEveryFixtureRow's subtest, so wiring it
+// up later surfaces as a test failure and a golden diff instead of a
+// silent change in what the goldens mean.
 //
 // Every item carries an explicit Section, which as a side effect exempts
 // all of them from the sidebar's staleness filter
@@ -597,6 +653,36 @@ func goldenChannels() []sidebar.ChannelItem {
 		{ID: "C3", Name: "muted-noise", Type: "channel", Section: "Channels", IsMuted: true},
 		{ID: "D1", Name: "bob", Type: "dm", Section: "DMs", Presence: "active", DMUserID: "U2"},
 		{ID: "D2", Name: "carol", Type: "dm", Section: "DMs", Presence: "away", DMUserID: "U3"},
+	}
+}
+
+// goldenReadState is the per-channel read state paired with
+// goldenChannels. newGoldenApp installs it (wireGoldenReadState) so
+// every scenario shares one set of unread rows.
+//
+// Two rows are unread, deliberately chosen to straddle the mute
+// predicate (sidebar/model.go:59, IsVisiblyUnread):
+//
+//   - C2 "engineering" — unread and unmuted. Renders the "●" dot, the
+//     bold attribute and the bright ChannelUnread foreground.
+//   - C3 "muted-noise" — unread and MUTED. The dot, the bold and the
+//     bright foreground are all suppressed; the row is styled
+//     ChannelMuted. This is the only configuration in which IsMuted
+//     changes a single byte of output.
+//
+// The remaining three rows (C1, D1, D2) have no entry, which a nil-safe
+// map lookup reports as the zero ReadState — read.
+//
+// LastReadTS is set for truthfulness rather than effect: nothing in the
+// row renderer reads it, and the one consumer that does (the staleness
+// filter) exempts every item carrying an explicit Section
+// (sidebar/staleness.go:49), which all of goldenChannels' items do. It
+// is derived from goldenClock rather than written as a literal for the
+// same reason goldenTS exists.
+func goldenReadState() map[string]cache.ReadState {
+	return map[string]cache.ReadState{
+		"C2": {LastReadTS: goldenTS(-2 * time.Hour), HasUnread: true},
+		"C3": {LastReadTS: goldenTS(-2 * time.Hour), HasUnread: true},
 	}
 }
 
@@ -835,37 +921,123 @@ func TestNewGoldenApp_SidebarRendersEveryFixtureRow(t *testing.T) {
 			"expandGoldenChannelsSection proves nothing; band was:\n%s", csb)
 	}
 
-	// The two boolean flags on the fixture are inert today — IsStarred
-	// because internal/ui never reads it, IsMuted because
-	// styles.ChannelMuted and styles.ChannelNormal are identical and
-	// muting is only observable against an unread row (goldenChannels'
-	// doc comment has the detail). Pinned as inert so that wiring
-	// either one up later surfaces here, and in a golden diff, instead
-	// of silently changing what the goldens mean. A failure below is
-	// not necessarily a bug: update goldenChannels' doc comment and
-	// re-bless.
-	flagCases := []struct {
-		name string
-		set  func(*sidebar.ChannelItem, bool)
-	}{
-		{"starred is inert", func(it *sidebar.ChannelItem, v bool) { it.IsStarred = v }},
-		{"muted is inert without unread state", func(it *sidebar.ChannelItem, v bool) { it.IsMuted = v }},
+	// IsStarred is inert: sidebar.ChannelItem.IsStarred is a carrier
+	// field that nothing in internal/ui reads (only internal/cache
+	// does). Pinned as inert so that wiring it up later surfaces here,
+	// and in a golden diff, instead of silently changing what the
+	// goldens mean. A failure below is not necessarily a bug: update
+	// goldenChannels' doc comment and re-bless.
+	//
+	// IsMuted used to be listed here too. It no longer is: since
+	// newGoldenApp installs goldenReadState, C3 is unread-and-muted and
+	// the flag suppresses a dot that would otherwise render. That is the
+	// point of the pairing; see
+	// TestNewGoldenApp_SidebarPinsUnreadAndMuteIndicators.
+	t.Run("starred is inert", func(t *testing.T) {
+		render := func(v bool) string {
+			items := goldenChannels()
+			for i := range items {
+				items[i].IsStarred = v
+			}
+			return newGoldenApp(t, withChannels(items...), withActiveChannel("C1"),
+				withMessages(goldenMessages()...), withRender()).View().Content
+		}
+		if on, off := render(true), render(false); on != off {
+			t.Errorf("IsStarred now affects the render, contradicting goldenChannels' doc comment: %s",
+				styleAwareDiff(off, on))
+		}
+	})
+}
+
+// goldenSidebarRow returns the single rendered sidebar line containing
+// token, or fails the test.
+//
+// Row-scoped rather than whole-band, because the assertions below are
+// about the presence of a "●" glyph and the sidebar has two other
+// legitimate sources of one: the DM presence prefix on "bob" and the
+// Threads-row unread badge. A band-wide strings.Contains would pass on
+// either of those and prove nothing about the channel it names.
+//
+// token is the full row prefix ("# general"), not the bare name: the
+// column band runs the full height of the frame, so it includes the
+// status row, and the status row renders the active channel as
+// "#general". Matching the bare name found two lines and the uniqueness
+// check below turned that into a confusing failure.
+func goldenSidebarRow(t *testing.T, a *App, token string) string {
+	t.Helper()
+	band := goldenPanelText(a.View().Content, 0, a.layout.sidebarEnd)
+	var hits []string
+	for _, line := range strings.Split(band, "\n") {
+		if strings.Contains(line, token) {
+			hits = append(hits, line)
+		}
 	}
-	for _, fc := range flagCases {
-		t.Run(fc.name, func(t *testing.T) {
-			render := func(v bool) string {
-				items := goldenChannels()
-				for i := range items {
-					fc.set(&items[i], v)
-				}
-				return newGoldenApp(t, withChannels(items...), withActiveChannel("C1"),
-					withMessages(goldenMessages()...), withRender()).View().Content
-			}
-			if on, off := render(true), render(false); on != off {
-				t.Errorf("this flag now affects the render, contradicting goldenChannels' doc comment: %s",
-					styleAwareDiff(off, on))
-			}
-		})
+	if len(hits) != 1 {
+		t.Fatalf("expected exactly one sidebar row containing %q, found %d; band was:\n%s",
+			token, len(hits), band)
+	}
+	return hits[0]
+}
+
+// unreadDotGlyph is the sidebar's unread indicator (sidebar/model.go:1236).
+const unreadDotGlyph = "●"
+
+// TestNewGoldenApp_SidebarPinsUnreadAndMuteIndicators is the assertion
+// that makes goldenReadState and ChannelItem.IsMuted load-bearing rather
+// than decorative fixture data.
+//
+// Before the read state was wired, every sidebar row rendered as read:
+// the "●" dot, the bold attribute and the ChannelUnread foreground were
+// unreachable, and IsMuted could not change a byte (ChannelMuted and
+// ChannelNormal are field-for-field identical, so mute is only visible
+// as the ABSENCE of unread treatment). A golden blessed from that state
+// would have pinned half of the row renderer as dead code.
+func TestNewGoldenApp_SidebarPinsUnreadAndMuteIndicators(t *testing.T) {
+	a := newGoldenApp(t, goldenFixtureOpts()...)
+
+	// C2: unread and unmuted — the dot must be there.
+	if row := goldenSidebarRow(t, a, "# engineering"); !strings.Contains(row, unreadDotGlyph) {
+		t.Errorf("unread channel row has no %q indicator: %q", unreadDotGlyph, row)
+	}
+	// C3: unread but MUTED — the dot must be suppressed.
+	if row := goldenSidebarRow(t, a, "# muted-noise"); strings.Contains(row, unreadDotGlyph) {
+		t.Errorf("unread-but-muted channel row shows the %q indicator; mute should suppress it: %q",
+			unreadDotGlyph, row)
+	}
+	// C1: no read-state entry at all — read, so no dot either. Without
+	// this the two assertions above are consistent with a renderer that
+	// simply never draws a dot for "muted-noise" for some unrelated
+	// reason.
+	if row := goldenSidebarRow(t, a, "# general"); strings.Contains(row, unreadDotGlyph) {
+		t.Errorf("read channel row shows the %q indicator: %q", unreadDotGlyph, row)
+	}
+
+	// Control: unmute C3 and the dot appears. This is what proves the
+	// suppression above is IsMuted's doing and not a missing read-state
+	// entry, a name typo, or a row that is simply scrolled out of view.
+	items := goldenChannels()
+	for i := range items {
+		if items[i].ID == "C3" {
+			items[i].IsMuted = false
+		}
+	}
+	unmuted := newGoldenApp(t, withChannels(items...), withActiveChannel("C1"),
+		withMessages(goldenMessages()...), withRender())
+	if row := goldenSidebarRow(t, unmuted, "# muted-noise"); !strings.Contains(row, unreadDotGlyph) {
+		t.Errorf("control: with IsMuted cleared the unread row still has no %q indicator, "+
+			"so the mute assertion above proves nothing: %q", unreadDotGlyph, row)
+	}
+
+	// Control: with no reader installed nothing is unread, which is the
+	// state Task 5 left behind. If the dot showed up here too,
+	// wireGoldenReadState would be redundant.
+	ctrl := newTestApp(t, goldenFixtureOpts()...)
+	ctrlBand := goldenPanelText(ctrl.View().Content, 0, ctrl.layout.sidebarEnd)
+	for _, line := range strings.Split(ctrlBand, "\n") {
+		if strings.Contains(line, "# engineering") && strings.Contains(line, unreadDotGlyph) {
+			t.Fatalf("control: an unwired sidebar already renders an unread dot, so "+
+				"wireGoldenReadState proves nothing; row was: %q", line)
+		}
 	}
 }
 
@@ -989,5 +1161,287 @@ func TestNewGoldenApp_HonoursWithRender(t *testing.T) {
 	}
 	if a := newGoldenApp(t); a.layout.sidebarEnd != 0 {
 		t.Error("newGoldenApp rendered without withRender()")
+	}
+}
+
+// TestNewGoldenApp_MessagePaneRendersLegacyAttachment pins the Block Kit
+// half of goldenMessages.
+//
+// msg.LegacyAttachments routes through blockkit.RenderLegacy
+// (messages/model.go:2216), a branch neither the plain-text rows nor the
+// msg.Attachments file row reaches. It is also the only way bot-SHAPED
+// output gets pinned at all: MessageItem carries no bot discriminator,
+// so a bot's plain message is byte-identical to a human's.
+//
+// Asserted rather than assumed because the fixture value is silently
+// droppable — an empty Title, a zero-width pane, or a future guard in
+// the splice site would all leave the field set and the output gone.
+func TestNewGoldenApp_MessagePaneRendersLegacyAttachment(t *testing.T) {
+	a := newGoldenApp(t, goldenFixtureOpts()...)
+	pane := goldenPanelText(a.View().Content, a.layout.sidebarEnd, a.layout.msgEnd)
+
+	// The stripe glyph and the title on the same line: the title alone
+	// would also match a plain-text message body, and the stripe alone
+	// is a single common character.
+	const want = "█ deploy #421 succeeded"
+	if !strings.Contains(pane, want) {
+		t.Errorf("legacy attachment not rendered; expected a line containing %q. Pane band was:\n%s", want, pane)
+	}
+
+	// Control: with the field cleared the stripe disappears, so the
+	// assertion above is about LegacyAttachments and not about some
+	// other fixture row that happens to contain the same text.
+	msgs := goldenMessages()
+	for i := range msgs {
+		msgs[i].LegacyAttachments = nil
+	}
+	ctrl := newGoldenApp(t, withChannels(goldenChannels()...), withActiveChannel("C1"),
+		withMessages(msgs...), withRender())
+	cpane := goldenPanelText(ctrl.View().Content, ctrl.layout.sidebarEnd, ctrl.layout.msgEnd)
+	if strings.Contains(cpane, want) {
+		t.Fatalf("control: the stripe renders with LegacyAttachments cleared, so the "+
+			"assertion above proves nothing. Pane band was:\n%s", cpane)
+	}
+}
+
+// ---------------------------------------------------------------------
+// The scenario table and the full-screen goldens.
+// ---------------------------------------------------------------------
+
+// goldenScenario is one full-screen render pinned to a file.
+//
+// Full-screen rather than per-region because composition — panel order,
+// width distribution, border placement, overlay compositing — is what
+// View() actually does, and is what the later refactor phases threaten.
+//
+// w and h are recorded on the scenario as well as passed to withSize
+// inside build. That is redundant by construction and deliberately so:
+// they are what the well-formedness guard measures the blessed file
+// against, so a scenario whose build stops honouring its declared size
+// fails rather than silently re-blessing at a new geometry.
+type goldenScenario struct {
+	name  string
+	w, h  int
+	build func(t *testing.T) *App
+}
+
+// goldenThreadMinWidth is the narrowest terminal width at which
+// layout.Compute keeps the thread pane, and the reason the thread_open
+// scenario is 140 columns rather than the 120 the task brief specified.
+//
+// Compute auto-hides the thread pane unless BOTH threadWidth >= 30 and
+// the residual messages pane >= 40 (panellayout.go:107-116). With the
+// 6-col workspace rail and the 30-col sidebar (+2 border) that every
+// golden scenario carries, msgAreaWidth is width-38 and threadWidth is
+// 35% of that, so the binding constraint is
+//
+//	floor((width-38) * 35 / 100) >= 30   →   width >= 124
+//
+// At 120 threadWidth comes out as 28 and the pane vanishes. A
+// thread_open golden blessed at 120 was byte-for-byte IDENTICAL to
+// base — which is exactly the failure a golden cannot report on its
+// own: the file looks entirely plausible while pinning two panes under
+// a name that promises three.
+//
+// TestGolden_ThreadScenariosAreWideEnough pins this against the real
+// Compute so the constant cannot drift away from the layout code.
+const goldenThreadMinWidth = 124
+
+// goldenThreadScenario builds the shared "a thread is open" App: the
+// standard fixture, plus carol's message (goldenMessages()[2], the one
+// carrying ThreadTS/ReplyCount) opened as the thread parent with the two
+// following rows as its replies.
+//
+// Shared by thread_open and wide so the two differ only in terminal
+// size, which is the whole point of having both. Callers must pass a
+// width of at least goldenThreadMinWidth or the pane they asked for
+// silently auto-hides; TestGolden_ThreadScenariosAreWideEnough enforces
+// that against the scenario table.
+//
+// Note what is NOT set here: focus stays on PanelMessages. The thread
+// pane renders on a.threadVisible && frame.ThreadWidth > 0 alone
+// (app.go:2747); focus only picks the border color. Leaving it on the
+// messages pane keeps thread_open's chrome comparable to base's.
+func goldenThreadScenario(t *testing.T, w, h int) *App {
+	t.Helper()
+	a := newGoldenApp(t,
+		withSize(w, h),
+		withChannels(goldenChannels()...),
+		withMessages(goldenMessages()...),
+		withActiveChannel("C1"),
+	)
+	msgs := goldenMessages()
+	// SetThread(parent, replies, channelID, threadTS) — thread/model.go:309.
+	// The threadTS is read off the parent rather than written as a
+	// literal so it cannot drift from goldenTS.
+	a.threadPanel.SetThread(msgs[2], msgs[3:5], "C1", msgs[2].ThreadTS)
+	a.threadVisible = true
+	_ = a.View()
+	return a
+}
+
+func goldenScenarios() []goldenScenario {
+	return []goldenScenario{
+		{
+			name: "base", w: 120, h: 30,
+			build: func(t *testing.T) *App {
+				return newGoldenApp(t,
+					withSize(120, 30),
+					withChannels(goldenChannels()...),
+					withMessages(goldenMessages()...),
+					withActiveChannel("C1"),
+					withRender(),
+				)
+			},
+		},
+		{
+			// 140, not the brief's 120. Measured: at 120 the thread
+			// pane AUTO-HIDES, so a 120-wide "thread_open" renders
+			// byte-for-byte identically to base and pins two panes
+			// while claiming to pin three. See goldenThreadMinWidth.
+			name: "thread_open", w: 140, h: 30,
+			build: func(t *testing.T) *App { return goldenThreadScenario(t, 140, 30) },
+		},
+		{
+			name: "wide", w: 200, h: 50,
+			build: func(t *testing.T) *App { return goldenThreadScenario(t, 200, 50) },
+		},
+		{
+			// 80x24 forces layout.Compute to set ThreadAutoHidden,
+			// which View() acts on at app.go:2726 by clearing
+			// threadVisible and falling focus back to PanelMessages.
+			//
+			// Verified, not assumed — the arithmetic is in
+			// panellayout.go:107-116. The workspace rail is 6 cols and
+			// the sidebar 30 (+2 border) at every size here, so
+			// msgAreaWidth is 80-6-30-2 = 42 and threadWidth is
+			// 42*35/100 = 14, well below the 30-col minimum.
+			// TestGolden_NarrowAutoHidesThreadPane pins the consequence
+			// rather than leaving the golden as the only record of it.
+			name: "narrow", w: 80, h: 24,
+			build: func(t *testing.T) *App {
+				a := newGoldenApp(t,
+					withSize(80, 24),
+					withChannels(goldenChannels()...),
+					withMessages(goldenMessages()...),
+					withActiveChannel("C1"),
+				)
+				a.threadPanel.SetThread(goldenMessages()[2], goldenMessages()[3:5], "C1", goldenMessages()[2].ThreadTS)
+				a.threadVisible = true
+				a.focusedPanel = PanelThread
+				_ = a.View()
+				return a
+			},
+		},
+	}
+}
+
+func TestGolden(t *testing.T) {
+	for _, sc := range goldenScenarios() {
+		t.Run(sc.name, func(t *testing.T) {
+			a := sc.build(t)
+			compareGolden(t, sc.name, a.View().Content)
+		})
+	}
+}
+
+// TestGolden_NarrowAutoHidesThreadPane pins the property the narrow
+// scenario exists to capture, in terms the golden file cannot express.
+//
+// The golden records the ABSENCE of a thread pane, and an absence is
+// exactly what a golden is worst at: if the scenario stopped opening a
+// thread at all, or the sidebar width changed so the auto-hide threshold
+// was no longer crossed, narrow.ansi would still look plausible and
+// would be re-blessed without comment. This asserts the mechanism —
+// ThreadAutoHidden, the threadVisible clear, the focus fallback, and the
+// collapsed layout band — instead of its shadow.
+func TestGolden_NarrowAutoHidesThreadPane(t *testing.T) {
+	var narrow *goldenScenario
+	for _, sc := range goldenScenarios() {
+		if sc.name == "narrow" {
+			narrow = &sc
+			break
+		}
+	}
+	if narrow == nil {
+		t.Fatal("no scenario named \"narrow\"; this test and the table have diverged")
+	}
+
+	a := narrow.build(t)
+
+	// The scenario asked for a thread AND focused it. View() must have
+	// undone both (app.go:2726-2731).
+	if a.threadVisible {
+		t.Errorf("threadVisible still set at %dx%d; the thread pane did not auto-hide, "+
+			"so the narrow golden is not pinning what it claims to", narrow.w, narrow.h)
+	}
+	if a.focusedPanel == PanelThread {
+		t.Error("focus stayed on PanelThread after the pane auto-hid")
+	}
+	// The thread band collapsed onto the messages band
+	// (panellayout.go:131-135), which is what makes PanelAt stop
+	// routing clicks into a pane that is not on screen.
+	if a.layout.threadEnd != a.layout.msgEnd {
+		t.Errorf("thread band did not collapse: threadEnd = %d, msgEnd = %d",
+			a.layout.threadEnd, a.layout.msgEnd)
+	}
+
+	// Control: the same build at the wide scenario's size keeps all
+	// three panes. Without it, a narrow golden with no thread pane is
+	// equally consistent with a fixture that never opened one.
+	wide := goldenThreadScenario(t, 200, 50)
+	if !wide.threadVisible {
+		t.Fatal("control: the thread pane auto-hid at 200x50 too, so the narrow " +
+			"assertions above are not about width at all")
+	}
+	if wide.layout.threadEnd <= wide.layout.msgEnd {
+		t.Fatalf("control: no thread band at 200x50 (threadEnd = %d, msgEnd = %d)",
+			wide.layout.threadEnd, wide.layout.msgEnd)
+	}
+}
+
+// TestGolden_ThreadScenariosAreWideEnough is the counterpart to
+// TestGolden_NarrowAutoHidesThreadPane: narrow pins that the pane goes
+// away, this pins that it is there at all in the scenarios named for it.
+//
+// Both are needed. A golden of a three-pane frame and a golden of a
+// two-pane frame are equally well-formed files; nothing in the .ansi
+// says which one was intended.
+func TestGolden_ThreadScenariosAreWideEnough(t *testing.T) {
+	// Boundary probe: goldenThreadMinWidth must be the exact edge, not
+	// merely a width that happens to work. One column narrower has to
+	// auto-hide, or the constant's doc comment is fiction.
+	probe := func(w int) bool {
+		a := newGoldenApp(t, withSize(w, 30), withChannels(goldenChannels()...))
+		f := a.layout.Compute(a.width, a.height, a.workspaceRail.Width(),
+			a.sidebar.Width(), a.sidebarVisible, true)
+		return f.ThreadAutoHidden
+	}
+	if probe(goldenThreadMinWidth) {
+		t.Errorf("thread pane auto-hides at goldenThreadMinWidth (%d)", goldenThreadMinWidth)
+	}
+	if !probe(goldenThreadMinWidth - 1) {
+		t.Errorf("thread pane survives at %d, so goldenThreadMinWidth is not the boundary "+
+			"its doc comment claims", goldenThreadMinWidth-1)
+	}
+
+	for _, sc := range goldenScenarios() {
+		if sc.name != "thread_open" && sc.name != "wide" {
+			continue
+		}
+		t.Run(sc.name, func(t *testing.T) {
+			if sc.w < goldenThreadMinWidth {
+				t.Fatalf("scenario is %d cols, below goldenThreadMinWidth (%d); its thread "+
+					"pane will auto-hide and the golden will pin two panes", sc.w, goldenThreadMinWidth)
+			}
+			a := sc.build(t)
+			if !a.threadVisible {
+				t.Errorf("threadVisible cleared at %dx%d", sc.w, sc.h)
+			}
+			if a.layout.threadEnd <= a.layout.msgEnd {
+				t.Errorf("no thread band: threadEnd = %d, msgEnd = %d",
+					a.layout.threadEnd, a.layout.msgEnd)
+			}
+		})
 	}
 }
