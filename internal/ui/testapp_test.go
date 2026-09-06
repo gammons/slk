@@ -4,11 +4,14 @@ import (
 	"fmt"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/ids"
+	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/wintree"
+	"github.com/gammons/slk/internal/ui/workspace"
 )
 
 func TestNewTestApp_Defaults(t *testing.T) {
@@ -25,7 +28,7 @@ func TestNewTestApp_Defaults(t *testing.T) {
 }
 
 func TestNewTestApp_WithSizeAndMessages(t *testing.T) {
-	a := newTestApp(t, withSize(200, 50), withMessages(sampleMessages(3)...))
+	a := newTestApp(t, withSize(200, 50), withMessages(testMessageItems(3)...))
 	if a.width != 200 || a.height != 50 {
 		t.Errorf("size = %dx%d, want 200x50", a.width, a.height)
 	}
@@ -112,33 +115,53 @@ func TestNewTestApp_WithThreadsView(t *testing.T) {
 // Zero value is the default App: 120x30, Normal mode, no data.
 type testAppCfg struct {
 	w, h          int
+	winSize       *[2]int
 	msgs          []messages.MessageItem
 	channels      []sidebar.ChannelItem
+	workspaces    []workspace.WorkspaceItem
 	mode          Mode
 	activeChannel string
+	activeTeam    string
 	render        bool
 	chanSvc       *ChannelServiceFuncs
 	splits        []wintree.Dir
 	threadSums    []cache.ThreadSummary
 	hasThreadSums bool
+	finderItems   []channelfinder.Item
+	openFinder    bool
+	view          View
 }
 
 type testOpt func(*testAppCfg)
 
 // withSize sets a.width/a.height directly. It does NOT send a
 // tea.WindowSizeMsg, so sub-models (messagepane, sidebar, thread, ...)
-// keep whatever dimensions NewApp gave them. That matches most of the
-// legacy ad-hoc builders, but differs from makeBenchApp in
-// app_bench_test.go, which sizes via Update(tea.WindowSizeMsg{...}) and
-// therefore does propagate. A test that needs propagation must send the
-// message itself after construction:
+// keep whatever dimensions NewApp gave them. That matches every legacy
+// ad-hoc builder except the two in app_bench_test.go, which need the
+// dimensions propagated and therefore use withWindowSize instead.
 //
-//	a := newTestApp(t, withSize(200, 50))
-//	_, _ = a.Update(tea.WindowSizeMsg{Width: 200, Height: 50})
-//
-// (Update has a pointer receiver and mutates a in place, so the
-// returned tea.Model can be discarded.)
+// withSize(0, 0) is meaningful and used deliberately: it reproduces
+// NewApp's unsized state, which several builders relied on.
 func withSize(w, h int) testOpt { return func(c *testAppCfg) { c.w, c.h = w, h } }
+
+// withWindowSize is withSize's counterpart for tests that need the real
+// resize path: it leaves a.width/a.height at NewApp's zero and delivers a
+// tea.WindowSizeMsg through Update instead.
+//
+// The difference is observable, so the two are not interchangeable.
+// Update's handler (app.go:669) sets a.forceSixelRepaint only when the
+// reported size differs from the current a.width/a.height, so pre-assigning
+// the fields and *then* sending the message would leave forceSixelRepaint
+// false. Sending it against the zero size sets it true, which is what the
+// legacy bench builders did. withWindowSize therefore zeroes c.w/c.h.
+//
+// Last-wins with withSize, in argument order.
+func withWindowSize(w, h int) testOpt {
+	return func(c *testAppCfg) {
+		c.w, c.h = 0, 0
+		c.winSize = &[2]int{w, h}
+	}
+}
 
 func withMessages(msgs ...messages.MessageItem) testOpt {
 	return func(c *testAppCfg) { c.msgs = msgs }
@@ -148,11 +171,29 @@ func withChannels(items ...sidebar.ChannelItem) testOpt {
 	return func(c *testAppCfg) { c.channels = items }
 }
 
+// withWorkspaces routes through App.SetWorkspaces, which fills the
+// workspace rail, refreshes its unread counts, and mirrors the set into
+// the workspace finder. Applied before withChannels, matching the order
+// the legacy builders used.
+func withWorkspaces(items ...workspace.WorkspaceItem) testOpt {
+	return func(c *testAppCfg) { c.workspaces = items }
+}
+
 func withMode(m Mode) testOpt { return func(c *testAppCfg) { c.mode = m } }
 
 func withActiveChannel(id string) testOpt {
 	return func(c *testAppCfg) { c.activeChannel = id }
 }
+
+// withActiveTeam sets a.activeTeamID. Plain field assignment, like
+// withActiveChannel — the App has no SetActiveTeam.
+func withActiveTeam(id string) testOpt {
+	return func(c *testAppCfg) { c.activeTeam = id }
+}
+
+// withView sets a.view (ViewChannels / ViewThreads). Plain field
+// assignment, applied before withRender so the render reflects it.
+func withView(v View) testOpt { return func(c *testAppCfg) { c.view = v } }
 
 // withRender calls View() once so a.layout bands and pane caches are
 // populated. Required by any test that does mouse hit-testing.
@@ -167,6 +208,18 @@ func withWindowSplit(dir wintree.Dir) testOpt {
 	return func(c *testAppCfg) { c.splits = append(c.splits, dir) }
 }
 
+// withChannelFinderOpen seeds the channel finder's item list and opens
+// the overlay. It does NOT set the mode; pair it with
+// withMode(ModeChannelFinder), which newTestApp applies afterwards.
+// Open-before-SetMode is the order both legacy builders used.
+//
+// App.SetChannelFinderItems is a one-line forwarder to
+// channelFinder.SetItems (app.go:2068), so builders that called either
+// one converge here.
+func withChannelFinderOpen(items ...channelfinder.Item) testOpt {
+	return func(c *testAppCfg) { c.finderItems, c.openFinder = items, true }
+}
+
 func withThreadsView(sums []cache.ThreadSummary) testOpt {
 	return func(c *testAppCfg) { c.threadSums, c.hasThreadSums = sums, true }
 }
@@ -175,8 +228,9 @@ func withThreadsView(sums []cache.ThreadSummary) testOpt {
 // into testAppCfg; the effects are then applied in one fixed sequence
 // regardless of the order the options were passed:
 //
-//	size → channels → channelService → messages → threadsView →
-//	activeChannel → splits → mode → render
+//	size → workspaces → channels → channelService → messages →
+//	threadsView → activeChannel → activeTeam → channelFinder →
+//	splits → mode → view → render
 //
 // So withMessages(...) before or after withChannels(...) produces the
 // same App. Individual options are still last-wins (a second withSize
@@ -184,17 +238,35 @@ func withThreadsView(sums []cache.ThreadSummary) testOpt {
 // order-sensitive: it appends, so splits apply in argument order.
 //
 // Takes testing.TB rather than *testing.T so benchmarks can use it too
-// (app_bench_test.go's builders route through this in Task 2).
+// (app_bench_test.go's builders route through this).
 func newTestApp(t testing.TB, opts ...testOpt) *App {
 	t.Helper()
-	cfg := testAppCfg{w: 120, h: 30, mode: ModeNormal}
+	return buildTestApp(opts...)
+}
+
+// buildTestApp is newTestApp without the testing.TB. It exists for the
+// two legacy builders that take no *testing.T and whose signatures must
+// not change, because changing them would edit test bodies at every call
+// site: newPanelAtApp (app_panelat_test.go) and sixelTestApp
+// (sixelpaint_test.go). Prefer newTestApp everywhere else — the TB is
+// there so a future assertion inside the builder reports at the caller's
+// line.
+func buildTestApp(opts ...testOpt) *App {
+	cfg := testAppCfg{w: 120, h: 30, mode: ModeNormal, view: ViewChannels}
 	for _, o := range opts {
 		o(&cfg)
 	}
 
 	a := NewApp()
 	a.width, a.height = cfg.w, cfg.h
+	if cfg.winSize != nil {
+		// Update has a pointer receiver and mutates a in place.
+		_, _ = a.Update(tea.WindowSizeMsg{Width: cfg.winSize[0], Height: cfg.winSize[1]})
+	}
 
+	if len(cfg.workspaces) > 0 {
+		a.SetWorkspaces(cfg.workspaces)
+	}
 	if len(cfg.channels) > 0 {
 		a.SetChannels(cfg.channels)
 	}
@@ -209,6 +281,13 @@ func newTestApp(t testing.TB, opts ...testOpt) *App {
 	}
 	if cfg.activeChannel != "" {
 		a.activeChannelID = cfg.activeChannel
+	}
+	if cfg.activeTeam != "" {
+		a.activeTeamID = cfg.activeTeam
+	}
+	if cfg.openFinder {
+		a.SetChannelFinderItems(cfg.finderItems)
+		a.channelFinder.Open()
 	}
 	for _, d := range cfg.splits {
 		_ = a.splitWindow(d)
@@ -231,17 +310,23 @@ func newTestApp(t testing.TB, opts ...testOpt) *App {
 	if cfg.mode != ModeNormal {
 		a.SetMode(cfg.mode)
 	}
+	// Unconditional: NewApp already sets ViewChannels, which is also the
+	// cfg default, so this is a no-op unless withView asked otherwise.
+	a.view = cfg.view
 	if cfg.render {
 		_ = a.View()
 	}
 	return a
 }
 
-// sampleMessages builds n plain messages with distinct TS values and
+// testMessageItems builds n plain messages with distinct TS values and
 // greppable text ("msg-1", "msg-2", ...). Deliberately minimal: no
 // reactions, attachments, or date grouping. Tests that need those
 // build their own items.
-func sampleMessages(n int) []messages.MessageItem {
+//
+// This is the single copy: an identical body previously lived in
+// fanout_test.go under this same name. Callers there are unchanged.
+func testMessageItems(n int) []messages.MessageItem {
 	out := make([]messages.MessageItem, 0, n)
 	for i := 1; i <= n; i++ {
 		out = append(out, messages.MessageItem{

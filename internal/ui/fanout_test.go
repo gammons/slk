@@ -7,7 +7,6 @@
 package ui
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
@@ -29,22 +28,6 @@ func twoWindowApp(t *testing.T) (*App, wintree.LeafID, wintree.LeafID) {
 	w2 := a.focusedWin
 	_, _ = a.Update(ChannelSelectedMsg{ID: "C2", Name: "ops", Type: "channel"})
 	return a, w1, w2
-}
-
-// testMessageItems builds n items with distinct TS and greppable text
-// ("msg-1", "msg-2", ...).
-func testMessageItems(n int) []messages.MessageItem {
-	out := make([]messages.MessageItem, 0, n)
-	for i := 1; i <= n; i++ {
-		out = append(out, messages.MessageItem{
-			TS:        fmt.Sprintf("%d.0", i),
-			UserID:    "U1",
-			UserName:  "alice",
-			Text:      fmt.Sprintf("msg-%d", i),
-			Timestamp: "1:00 PM",
-		})
-	}
-	return out
 }
 
 // inboundMsg builds the NewMessageMsg used across these tests: a

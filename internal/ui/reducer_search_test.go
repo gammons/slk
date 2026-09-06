@@ -21,14 +21,17 @@ import (
 
 func searchTestApp(t *testing.T) *App {
 	t.Helper()
-	app := NewApp()
-	app.activeChannelID = "C1"
-	app.messagepane.SetMessages([]messages.MessageItem{
-		{TS: "1700000001.000000", Text: "deploy went fine"},
-		{TS: "1700000002.000000", Text: "lunch?"},
-		{TS: "1700000003.000000", Text: "deployment failed"},
-	})
-	return app
+	// withSize(0, 0) preserves NewApp's unsized state: the original
+	// builder set no dimensions and these tests never render.
+	return newTestApp(t,
+		withSize(0, 0),
+		withActiveChannel("C1"),
+		withMessages(
+			messages.MessageItem{TS: "1700000001.000000", Text: "deploy went fine"},
+			messages.MessageItem{TS: "1700000002.000000", Text: "lunch?"},
+			messages.MessageItem{TS: "1700000003.000000", Text: "deployment failed"},
+		),
+	)
 }
 
 func resultsMsg(tses ...string) ChannelSearchResultsMsg {

@@ -4220,9 +4220,13 @@ func setupAppForTitleTest(
 	workspaceUnreads []string,
 ) *App {
 	t.Helper()
-	app := NewApp()
-	app.SetWorkspaces(workspaces)
-	app.SetChannels(channels)
+	// withSize(0, 0) preserves NewApp's unsized state: the original
+	// builder set no dimensions.
+	app := newTestApp(t,
+		withSize(0, 0),
+		withWorkspaces(workspaces...),
+		withChannels(channels...),
+	)
 	app.SetReadStateReader(func() map[string]cache.ReadState { return channelState })
 	app.SetWorkspaceUnreadReader(func() []string { return workspaceUnreads })
 	return app

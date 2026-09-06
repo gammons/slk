@@ -11,21 +11,23 @@ import (
 // channels, with a recording remote search wired in.
 func newFinderApp(t *testing.T, searched *[]string, results []channelfinder.Item) *App {
 	t.Helper()
-	a := NewApp()
-	a.activeTeamID = "T1"
-	a.SetChannelService(NewChannelService(ChannelServiceFuncs{
-		SearchRemote: func(query string) []channelfinder.Item {
-			*searched = append(*searched, query)
-			return results
-		},
-	}))
-	a.SetChannelFinderItems([]channelfinder.Item{
-		{ID: "C1", Name: "testing-local", Type: "channel", Joined: true},
-		{ID: "C2", Name: "unrelated", Type: "channel", Joined: true},
-	})
-	a.channelFinder.Open()
-	a.SetMode(ModeChannelFinder)
-	return a
+	// withSize(0, 0) preserves NewApp's unsized state: the original
+	// builder set no dimensions.
+	return newTestApp(t,
+		withSize(0, 0),
+		withActiveTeam("T1"),
+		withChannelService(ChannelServiceFuncs{
+			SearchRemote: func(query string) []channelfinder.Item {
+				*searched = append(*searched, query)
+				return results
+			},
+		}),
+		withChannelFinderOpen(
+			channelfinder.Item{ID: "C1", Name: "testing-local", Type: "channel", Joined: true},
+			channelfinder.Item{ID: "C2", Name: "unrelated", Type: "channel", Joined: true},
+		),
+		withMode(ModeChannelFinder),
+	)
 }
 
 // typeIntoFinder feeds one printable key per rune and returns the
