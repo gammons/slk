@@ -2315,6 +2315,114 @@ func TestGolden_WindowSplitRendersTwoDistinctPanes(t *testing.T) {
 	}
 }
 
+// goldenStatusOverflow is how many display columns wider than the
+// terminal every golden's rows come out.
+//
+// IT ENCODES A REAL, UNFIXED BUG, not a rendering convention. The status
+// row overruns its budget by six columns:
+//
+//   - statusbar.Model.render budgets the gap against width-1
+//     (statusbar/model.go:347-356), one column short to begin with;
+//   - it then emits the filler as up to three separate
+//     styles.StatusBar.Render calls (leftPad, hint, rightPad — or the
+//     single %*s filler), and styles.StatusBar carries Padding(0, 1)
+//     (styles/styles.go:467), so each Render adds two columns of
+//     padding that the budget never accounted for;
+//   - plus the 3-column rightPad gutter joined on at model.go:355.
+//
+// Nothing clips the result, so App.View() hands back a frame six cells
+// wider than a.width and the terminal wraps it. The goldens record that
+// faithfully, which is the point of a golden.
+//
+// WHEN THAT BUG IS FIXED: change this constant to 0 and re-bless. Do
+// not chase the new number — a correct statusbar renders at exactly
+// a.width, which is what `want = sc.w` already means for the overlay
+// case below.
+const goldenStatusOverflow = 6
+
+// TestGoldenFilesAreWellFormed catches the classic snapshot-suite
+// death: a golden blessed from a blank, truncated, or half-rendered
+// frame. Such a file is still valid ANSI and still compares equal to
+// itself forever, so TestGolden alone would keep passing while pinning
+// nothing.
+//
+// Four properties, each defending a different way a golden dies:
+//
+//   - non-empty bytes: the -update run wrote nothing at all;
+//   - line count == sc.h: the frame was truncated, or the scenario's
+//     declared height drifted from what its build actually renders;
+//   - non-blank after ANSI stripping: every cell is a space, i.e. the
+//     render produced chrome-free emptiness (a zero-size App, an
+//     un-Init'd model) that looks substantial on disk because of the
+//     escape sequences;
+//   - uniform display width: a partially-written or hand-edited file.
+//
+// On the width predicate, two facts that are easy to get wrong:
+//
+//  1. The expected width is sc.w + goldenStatusOverflow, NOT sc.w — see
+//     that constant. But a uniform w+6 is WRONG for overlay scenarios:
+//     maybeWrapFinalScreen (view_overlays.go:108-111) re-wraps the
+//     whole screen in a Width(a.width) style when an overlay is
+//     active, which truncates the overrun away. overlay_finder is
+//     therefore exactly 120 while the other seven are w+6. The
+//     exception is keyed on a.overlayActive() — derived from the built
+//     App — and deliberately NOT on the scenario's name, so a new
+//     overlay scenario is handled without an edit here and a scenario
+//     that stops opening its overlay fails rather than being excused.
+//
+//  2. Goldens carry NO trailing newline (compareGolden writes
+//     View().Content verbatim), so strings.Split on "\n" yields
+//     exactly h elements. A guard written for a trailing newline would
+//     compute h+1 and "fix" it by weakening the assertion.
+//
+// Width is measured with ansi.StringWidth rather than by stripping
+// "\x1b[...m" and counting runes: the frames contain OSC-8 hyperlinks
+// and wide graphemes, both of which a naive strip miscounts. Every line
+// is checked, not just the first — a truncated final row is the most
+// likely single-line defect and is exactly what a first-line-only
+// check misses.
+func TestGoldenFilesAreWellFormed(t *testing.T) {
+	for _, sc := range goldenScenarios() {
+		t.Run(sc.name, func(t *testing.T) {
+			path := filepath.Join(goldenDir, sc.name+".ansi")
+			b, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("reading %s: %v\n"+
+					"bless it with: go test ./internal/ui -run TestGolden -update", path, err)
+			}
+			content := string(b)
+			if len(content) == 0 {
+				t.Fatalf("%s is empty", path)
+			}
+
+			lines := strings.Split(content, "\n")
+			if len(lines) != sc.h {
+				t.Errorf("%s has %d lines, want %d (scenario height); a golden carries no "+
+					"trailing newline, so the split yields exactly h elements",
+					path, len(lines), sc.h)
+			}
+			if strings.TrimSpace(stripANSI(content)) == "" {
+				t.Errorf("%s renders as entirely blank once ANSI is stripped; it was blessed "+
+					"from an empty frame", path)
+			}
+
+			want := sc.w + goldenStatusOverflow // see goldenStatusOverflow: a real bug
+			if a := sc.build(t); a.overlayActive() {
+				// maybeWrapFinalScreen clamped the frame to a.width.
+				want = sc.w
+			}
+			for i, line := range lines {
+				if got := ansi.StringWidth(line); got != want {
+					t.Errorf("%s line %d is %d display columns wide, want %d "+
+						"(scenario width %d + %d statusbar overrun, or exactly the width "+
+						"when an overlay clamps it); line was:\n  %q",
+						path, i+1, got, want, sc.w, goldenStatusOverflow, line)
+				}
+			}
+		})
+	}
+}
+
 // TestGolden_ScenariosArePairwiseDistinct is the cheapest guard against
 // the failure mode every scenario above is individually defended
 // against: two entries that render the same bytes.
