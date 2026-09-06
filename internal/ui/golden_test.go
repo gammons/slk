@@ -1868,6 +1868,22 @@ func TestGolden_NarrowAutoHidesThreadPane(t *testing.T) {
 // (app.go:2726) — and every scenario that did is checked. Opting out
 // takes an explicit autoHidesThread on the scenario, and even that is
 // refused for a scenario wide enough to keep the pane.
+//
+// That derivation happens in THIS function body, before any t.Run, and
+// deliberately so. It used to happen inside the subtests, with a
+// `checked` counter tallying the in-scope ones and an "asserted
+// nothing" backstop after the loop. That backstop fired on a clean
+// tree: `go test -run 'TestGolden/drag_selection'` selects this test
+// too, because -run is an UNANCHORED regex and "TestGolden" is a prefix
+// of "TestGolden_ThreadScenariosAreWideEnough". Its subtests then all
+// filtered out, leaving the counter at zero and a red failure on
+// unmodified code. The parent body always runs when the test is
+// selected, whatever the subtest filter says, so computing the scope
+// here makes the emptiness check immune to -run — the same reason
+// TestGolden_NarrowAutoHidesThreadPane's identical `len(hiders) == 0`
+// guard never had the bug. Detecting the filter, renaming the test, or
+// gating on testing.Short() would each have voided the guard for
+// someone instead.
 func TestGolden_ThreadScenariosAreWideEnough(t *testing.T) {
 	// Boundary probe: goldenThreadMinWidth must be the exact edge, not
 	// merely a width that happens to work. One column narrower has to
@@ -1886,40 +1902,58 @@ func TestGolden_ThreadScenariosAreWideEnough(t *testing.T) {
 			"its doc comment claims", goldenThreadMinWidth-1)
 	}
 
-	checked := 0
+	// Scope, computed here rather than inside the subtests. The built
+	// App is carried along with the scenario so the assertions below
+	// run against the SAME build the scoping decision was made from.
+	type threadCase struct {
+		sc goldenScenario
+		a  *App
+	}
+	var checked []threadCase
 	for _, sc := range goldenScenarios() {
-		t.Run(sc.name, func(t *testing.T) {
-			a := sc.build(t)
+		a := sc.build(t)
 
-			// threadPanel keeps its parent+replies through View();
-			// only threadVisible is cleared by the auto-hide path.
-			// So this reads the scenario's REQUEST, after the render
-			// that may have denied it.
-			if a.threadPanel.IsEmpty() {
-				if sc.autoHidesThread {
-					t.Fatalf("scenario declares autoHidesThread but never opened a thread; "+
-						"the flag is silencing a check that has nothing to check (%dx%d)", sc.w, sc.h)
-				}
-				t.Skip("scenario does not open a thread")
-			}
-
+		// threadPanel keeps its parent+replies through View(); only
+		// threadVisible is cleared by the auto-hide path. So this
+		// reads the scenario's REQUEST, after the render that may
+		// have denied it.
+		if a.threadPanel.IsEmpty() {
 			if sc.autoHidesThread {
-				// The opt-out is only legitimate below the
-				// threshold. Above it the pane would render, so the
-				// flag would be hiding a genuine failure rather
-				// than describing an intended one.
-				if sc.w >= goldenThreadMinWidth {
-					t.Fatalf("scenario declares autoHidesThread at %d cols, at or above "+
-						"goldenThreadMinWidth (%d), where the pane does NOT auto-hide; "+
-						"the flag cannot be used to opt a wide thread scenario out of this check",
-						sc.w, goldenThreadMinWidth)
-				}
-				// The auto-hide itself is asserted by
-				// TestGolden_NarrowAutoHidesThreadPane.
-				return
+				t.Fatalf("scenario %q declares autoHidesThread but never opened a thread; "+
+					"the flag is silencing a check that has nothing to check (%dx%d)",
+					sc.name, sc.w, sc.h)
 			}
+			continue
+		}
 
-			checked++
+		if sc.autoHidesThread {
+			// The opt-out is only legitimate below the threshold.
+			// Above it the pane would render, so the flag would be
+			// hiding a genuine failure rather than describing an
+			// intended one.
+			if sc.w >= goldenThreadMinWidth {
+				t.Fatalf("scenario %q declares autoHidesThread at %d cols, at or above "+
+					"goldenThreadMinWidth (%d), where the pane does NOT auto-hide; "+
+					"the flag cannot be used to opt a wide thread scenario out of this check",
+					sc.name, sc.w, goldenThreadMinWidth)
+			}
+			// The auto-hide itself is asserted by
+			// TestGolden_NarrowAutoHidesThreadPane.
+			continue
+		}
+
+		checked = append(checked, threadCase{sc: sc, a: a})
+	}
+
+	// If every scenario stopped opening a thread, the loop below would
+	// pass while asserting nothing at all.
+	if len(checked) == 0 {
+		t.Fatal("no scenario opens a visible thread pane; this test asserted nothing")
+	}
+
+	for _, tc := range checked {
+		sc, a := tc.sc, tc.a
+		t.Run(sc.name, func(t *testing.T) {
 			if sc.w < goldenThreadMinWidth {
 				t.Fatalf("scenario opens a thread at %d cols, below goldenThreadMinWidth (%d); "+
 					"its thread pane will auto-hide and the golden will pin two panes under a "+
@@ -1934,12 +1968,6 @@ func TestGolden_ThreadScenariosAreWideEnough(t *testing.T) {
 					a.layout.threadEnd, a.layout.msgEnd)
 			}
 		})
-	}
-
-	// If every scenario stopped opening a thread, the loop above would
-	// pass while asserting nothing at all.
-	if checked == 0 {
-		t.Error("no scenario opens a visible thread pane; this test asserted nothing")
 	}
 }
 
@@ -2340,6 +2368,13 @@ func TestGolden_WindowSplitRendersTwoDistinctPanes(t *testing.T) {
 // case below.
 const goldenStatusOverflow = 6
 
+// goldenMaxWidthReports caps how many wrong-width lines
+// TestGoldenFilesAreWellFormed dumps per scenario. See the loop at the
+// bottom of that test for why a cap rather than skipping the width
+// check when the line count is already wrong: a plain width drift
+// leaves the line count correct and still fails every row.
+const goldenMaxWidthReports = 3
+
 // TestGoldenFilesAreWellFormed catches the classic snapshot-suite
 // death: a golden blessed from a blank, truncated, or half-rendered
 // frame. Such a file is still valid ANSI and still compares equal to
@@ -2411,13 +2446,34 @@ func TestGoldenFilesAreWellFormed(t *testing.T) {
 				// maybeWrapFinalScreen clamped the frame to a.width.
 				want = sc.w
 			}
+			// Report at most goldenMaxWidthReports mismatching lines.
+			// Every failure mode here is systemic — a truncated file,
+			// a scenario whose declared width drifted, an overlay
+			// that stopped opening — so the rows fail in bulk, and
+			// each report carries a %q of a full escape-laden line.
+			// Fifty rows of that buries the first one, which is the
+			// only one anybody reads. The tally still reports the
+			// true total so "3 lines wrong" and "all 50 wrong" stay
+			// distinguishable.
+			bad := 0
 			for i, line := range lines {
-				if got := ansi.StringWidth(line); got != want {
-					t.Errorf("%s line %d is %d display columns wide, want %d "+
-						"(scenario width %d + %d statusbar overrun, or exactly the width "+
-						"when an overlay clamps it); line was:\n  %q",
-						path, i+1, got, want, sc.w, goldenStatusOverflow, line)
+				got := ansi.StringWidth(line)
+				if got == want {
+					continue
 				}
+				bad++
+				if bad > goldenMaxWidthReports {
+					continue
+				}
+				t.Errorf("%s line %d is %d display columns wide, want %d "+
+					"(scenario width %d + %d statusbar overrun, or exactly the width "+
+					"when an overlay clamps it); line was:\n  %q",
+					path, i+1, got, want, sc.w, goldenStatusOverflow, line)
+			}
+			if bad > goldenMaxWidthReports {
+				t.Errorf("%s: %d lines are the wrong display width; %d further reports "+
+					"suppressed after the first %d",
+					path, bad, bad-goldenMaxWidthReports, goldenMaxWidthReports)
 			}
 		})
 	}
