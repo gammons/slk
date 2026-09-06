@@ -117,8 +117,11 @@ type testAppCfg struct {
 	w, h          int
 	winSize       *[2]int
 	msgs          []messages.MessageItem
+	hasMsgs       bool
 	channels      []sidebar.ChannelItem
+	hasChannels   bool
 	workspaces    []workspace.WorkspaceItem
+	hasWorkspaces bool
 	mode          Mode
 	activeChannel string
 	activeTeam    string
@@ -142,7 +145,12 @@ type testOpt func(*testAppCfg)
 //
 // withSize(0, 0) is meaningful and used deliberately: it reproduces
 // NewApp's unsized state, which several builders relied on.
-func withSize(w, h int) testOpt { return func(c *testAppCfg) { c.w, c.h = w, h } }
+//
+// Clears any pending withWindowSize so the two are genuinely last-wins
+// (see withWindowSize).
+func withSize(w, h int) testOpt {
+	return func(c *testAppCfg) { c.w, c.h, c.winSize = w, h, nil }
+}
 
 // withWindowSize is withSize's counterpart for tests that need the real
 // resize path: it leaves a.width/a.height at NewApp's zero and delivers a
@@ -155,7 +163,8 @@ func withSize(w, h int) testOpt { return func(c *testAppCfg) { c.w, c.h = w, h }
 // false. Sending it against the zero size sets it true, which is what the
 // legacy bench builders did. withWindowSize therefore zeroes c.w/c.h.
 //
-// Last-wins with withSize, in argument order.
+// Last-wins with withSize, in argument order: each clears the other's
+// state, so exactly one of the two sizing behaviours survives.
 func withWindowSize(w, h int) testOpt {
 	return func(c *testAppCfg) {
 		c.w, c.h = 0, 0
@@ -163,12 +172,22 @@ func withWindowSize(w, h int) testOpt {
 	}
 }
 
+// withMessages, withChannels and withWorkspaces each record a separate
+// "was this option passed" flag rather than testing len(...) > 0 in
+// buildTestApp. The distinction matters: the underlying setters are not
+// no-ops for an empty argument list. App.SetWorkspaces(nil) still bumps
+// the workspace rail (app.go:1911-1913), and the messagepane/sidebar
+// setters still clear whatever was there. withMessages() with no
+// arguments therefore means "call SetMessages with nothing", which is
+// not the same as never calling it — and that is what the legacy
+// builders, which called the setters unconditionally, actually did.
+
 func withMessages(msgs ...messages.MessageItem) testOpt {
-	return func(c *testAppCfg) { c.msgs = msgs }
+	return func(c *testAppCfg) { c.msgs, c.hasMsgs = msgs, true }
 }
 
 func withChannels(items ...sidebar.ChannelItem) testOpt {
-	return func(c *testAppCfg) { c.channels = items }
+	return func(c *testAppCfg) { c.channels, c.hasChannels = items, true }
 }
 
 // withWorkspaces routes through App.SetWorkspaces, which fills the
@@ -176,7 +195,7 @@ func withChannels(items ...sidebar.ChannelItem) testOpt {
 // the workspace finder. Applied before withChannels, matching the order
 // the legacy builders used.
 func withWorkspaces(items ...workspace.WorkspaceItem) testOpt {
-	return func(c *testAppCfg) { c.workspaces = items }
+	return func(c *testAppCfg) { c.workspaces, c.hasWorkspaces = items, true }
 }
 
 func withMode(m Mode) testOpt { return func(c *testAppCfg) { c.mode = m } }
@@ -264,16 +283,16 @@ func buildTestApp(opts ...testOpt) *App {
 		_, _ = a.Update(tea.WindowSizeMsg{Width: cfg.winSize[0], Height: cfg.winSize[1]})
 	}
 
-	if len(cfg.workspaces) > 0 {
+	if cfg.hasWorkspaces {
 		a.SetWorkspaces(cfg.workspaces)
 	}
-	if len(cfg.channels) > 0 {
+	if cfg.hasChannels {
 		a.SetChannels(cfg.channels)
 	}
 	if cfg.chanSvc != nil {
 		a.SetChannelService(NewChannelService(*cfg.chanSvc))
 	}
-	if len(cfg.msgs) > 0 {
+	if cfg.hasMsgs {
 		a.messagepane.SetMessages(cfg.msgs)
 	}
 	if cfg.hasThreadSums {
