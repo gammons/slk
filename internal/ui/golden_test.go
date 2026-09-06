@@ -396,6 +396,9 @@ func newGoldenApp(t *testing.T, opts ...testOpt) *App {
 
 	a := newTestApp(t, pinned...)
 
+	expandGoldenChannelsSection(a)
+	nameGoldenActiveChannel(a)
+
 	// Per-Model clock. Reachable despite `sidebar` being a value field:
 	// a is a *App, so a.sidebar is addressable and Go takes its address
 	// for the pointer-receiver method automatically.
@@ -416,6 +419,58 @@ func newGoldenApp(t *testing.T, opts ...testOpt) *App {
 		_ = a.View()
 	}
 	return a
+}
+
+// goldenSidebarSection is the sidebar section goldenChannels puts its
+// channel rows in. It is the package default name
+// (sidebar/model.go:22), which matters: sidebar.New starts exactly this
+// section — and "Apps" — collapsed (model.go:565).
+const goldenSidebarSection = "Channels"
+
+// expandGoldenChannelsSection un-collapses the default "Channels"
+// section so its rows actually render.
+//
+// This is not cosmetic. sidebar.New collapses "Channels" by default, so
+// a golden built straight out of newTestApp shows "▸ Channels" and
+// nothing beneath it: IsStarred, IsMuted and plain-channel row
+// rendering are pinned by nothing at all, and Task 6 would bless an
+// empty section as though it were coverage.
+//
+// Conditional rather than an unconditional ToggleCollapse: the sidebar
+// only offers a flip, so calling it blind would *collapse* the section
+// the day someone changes the default. Rendering is asserted by
+// TestNewGoldenApp_SidebarRendersEveryFixtureRow.
+func expandGoldenChannelsSection(a *App) {
+	if a.sidebar.IsCollapsed(goldenSidebarSection) {
+		a.sidebar.ToggleCollapse(goldenSidebarSection)
+	}
+}
+
+// nameGoldenActiveChannel gives the active channel a display name.
+//
+// withActiveChannel only assigns a.activeChannelID; nothing in the App
+// derives a name from an ID, so the messages-pane header renders as a
+// bare "#", the statusbar as "#", and the compose placeholder as
+// "Message #...". Task 6 would pin that emptiness.
+//
+// The name is looked up from the sidebar items rather than taken as a
+// parameter so it cannot drift from goldenChannels, and it is pushed
+// through the same three setters production uses on the initial-channel
+// path (App.SetInitialChannel, app.go:2531-2536). No-op when no active
+// channel was requested, or when its ID is not in the sidebar.
+func nameGoldenActiveChannel(a *App) {
+	if a.activeChannelID == "" {
+		return
+	}
+	for _, it := range a.sidebar.Items() {
+		if it.ID != a.activeChannelID {
+			continue
+		}
+		a.messagepane.SetChannel(it.Name, "")
+		a.compose.SetChannel(it.Name)
+		a.statusbar.SetChannel(it.Name)
+		return
+	}
 }
 
 // goldenTS builds a Slack timestamp offset from goldenClock.
@@ -447,8 +502,13 @@ func goldenTS(offset time.Duration) string {
 // Timestamp is a pre-formatted display string, deliberately NOT derived
 // from TS: in production it is the message time rendered in the user's
 // local zone, and re-deriving it here would make every golden
-// timezone-dependent. DateStr is set for documentation only — nothing in
-// the render path reads it.
+// timezone-dependent.
+//
+// DateStr is inert *here* and only here: the day-divider path reads
+// DateFromTS(msg.TS) (messages/model.go:1776), never DateStr. The field
+// is not dead in production — internal/export/markdown.go:33 writes it
+// into every exported thread — so it is set to a truthful value rather
+// than left blank.
 func goldenMessages() []messages.MessageItem {
 	return []messages.MessageItem{
 		{
@@ -468,6 +528,14 @@ func goldenMessages() []messages.MessageItem {
 			Text: "nice — see thread", Timestamp: "9:01 AM", DateStr: "2026-03-15",
 			ThreadTS: goldenTS(time.Minute), ReplyCount: 4,
 		},
+		// Named "deploybot" for flavour only. This row pins the FILE
+		// ATTACHMENT branch, not a bot branch: messages.MessageItem
+		// carries no bot discriminator (the only IsBot in the tree is
+		// on ui/msgs.go's wire types) and the renderer's sole
+		// subtype branch is "thread_broadcast" (model.go:2156). A
+		// message from a bot renders byte-identically to one from a
+		// human, so no fixture value here can exercise "bot
+		// rendering" — there is nothing to exercise.
 		{
 			TS: goldenTS(2 * time.Minute), UserID: "B1", UserName: "deploybot",
 			Text: "build #421 green", Timestamp: "9:02 AM", DateStr: "2026-03-15",
@@ -484,6 +552,38 @@ func goldenMessages() []messages.MessageItem {
 }
 
 // goldenChannels is the shared sidebar fixture.
+//
+// The three channels sit in the package-default "Channels" section,
+// which sidebar.New starts COLLAPSED (model.go:565). newGoldenApp
+// expands it (expandGoldenChannelsSection) — without that the rows are
+// not rendered at all and this fixture pins nothing.
+// TestNewGoldenApp_SidebarRendersEveryFixtureRow asserts each row is
+// actually on screen.
+//
+// What the rows pin, and — measured, not assumed — what they do not:
+//
+//   - Row text, section grouping, section ordering and the DM presence
+//     glyphs (● active / ○ away) are pinned.
+//
+//   - IsStarred changes nothing. sidebar.ChannelItem.IsStarred is a
+//     carrier field: nothing in internal/ui reads it at all (only
+//     internal/cache does).
+//
+//   - IsMuted changes nothing *for this fixture*. It selects
+//     styles.ChannelMuted over styles.ChannelNormal (model.go:1437-1446),
+//     but those two styles are field-for-field identical
+//     (styles.go:83-104 and :451-456: same Background, same TextMuted
+//     foreground, same padding, neither bold). Muting is only
+//     observable against an UNREAD row, where it suppresses the bold
+//     bright treatment and the "•" dot — and this fixture wires no read
+//     state, so every row is read. Task 6 should consider adding one
+//     unread channel and one unread-but-muted channel via
+//     sidebar.SetReadStateReader; see the task-5 fix report.
+//
+// Both flags are kept (production data carries them) and pinned as
+// inert by TestNewGoldenApp_SidebarRendersEveryFixtureRow's subtests, so
+// wiring either one up later surfaces as a test failure and a golden
+// diff instead of a silent change in what the goldens mean.
 //
 // Every item carries an explicit Section, which as a side effect exempts
 // all of them from the sidebar's staleness filter
@@ -668,6 +768,135 @@ func TestNewGoldenApp_PinsDateSeparatorClock(t *testing.T) {
 		if !strings.Contains(plain, want) {
 			t.Errorf("expected a %q day divider under the pinned clock; view was:\n%s", want, plain)
 		}
+	}
+}
+
+// goldenPanelText returns display columns [from, to) of every line of a
+// rendered view, as plain text.
+//
+// Region-sliced rather than substring-matched over the whole frame,
+// because the sidebar and the messages pane occupy the SAME lines: a
+// bare strings.Contains(view, "# general") matches the sidebar row and
+// the pane header indiscriminately, so it would keep passing with
+// either one rendering nothing — the exact failure mode these tests
+// exist to catch.
+//
+// Uses the shared grapheme-correct column slicer (AGENTS.md:
+// messages.PlainLines / messages.SliceColumns) rather than a private
+// rune-slicing copy; the sidebar contains ● / ○ / ▾ and the pane
+// contains emoji reaction pills.
+func goldenPanelText(view string, from, to int) string {
+	var b strings.Builder
+	for _, pl := range messages.PlainLines(view) {
+		b.WriteString(messages.SliceColumns(pl, from, to))
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// TestNewGoldenApp_SidebarRendersEveryFixtureRow is the assertion that
+// stops goldenChannels from being a fixture that pins nothing.
+//
+// sidebar.New starts the default "Channels" section collapsed
+// (sidebar/model.go:565), so before expandGoldenChannelsSection the
+// sidebar rendered "▸ Channels" and no rows at all — a golden blessed
+// from that would have recorded an empty section as if it were channel
+// coverage.
+func TestNewGoldenApp_SidebarRendersEveryFixtureRow(t *testing.T) {
+	a := newGoldenApp(t, goldenFixtureOpts()...)
+	sb := goldenPanelText(a.View().Content, 0, a.layout.sidebarEnd)
+
+	// Section headers expanded, all three channel rows, both DM rows
+	// with their presence glyphs.
+	for _, want := range []string{
+		"▾ Channels",
+		"# general",
+		"# engineering",
+		"# muted-noise",
+		"▾ DMs",
+		"● bob",
+		"○ carol",
+	} {
+		if !strings.Contains(sb, want) {
+			t.Errorf("sidebar does not render %q; sidebar band was:\n%s", want, sb)
+		}
+	}
+
+	// Control: the same fixture through newTestApp, which does not
+	// expand the section. If the rows showed up here too, the
+	// expansion would be redundant and the assertions above vacuous.
+	ctrl := newTestApp(t, goldenFixtureOpts()...)
+	csb := goldenPanelText(ctrl.View().Content, 0, ctrl.layout.sidebarEnd)
+	if !strings.Contains(csb, "▸ Channels") {
+		t.Fatalf("control: an unexpanded sidebar should show a collapsed \"▸ Channels\" header; band was:\n%s", csb)
+	}
+	if strings.Contains(csb, "# engineering") {
+		t.Fatalf("control: an unexpanded sidebar already renders channel rows, so "+
+			"expandGoldenChannelsSection proves nothing; band was:\n%s", csb)
+	}
+
+	// The two boolean flags on the fixture are inert today — IsStarred
+	// because internal/ui never reads it, IsMuted because
+	// styles.ChannelMuted and styles.ChannelNormal are identical and
+	// muting is only observable against an unread row (goldenChannels'
+	// doc comment has the detail). Pinned as inert so that wiring
+	// either one up later surfaces here, and in a golden diff, instead
+	// of silently changing what the goldens mean. A failure below is
+	// not necessarily a bug: update goldenChannels' doc comment and
+	// re-bless.
+	flagCases := []struct {
+		name string
+		set  func(*sidebar.ChannelItem, bool)
+	}{
+		{"starred is inert", func(it *sidebar.ChannelItem, v bool) { it.IsStarred = v }},
+		{"muted is inert without unread state", func(it *sidebar.ChannelItem, v bool) { it.IsMuted = v }},
+	}
+	for _, fc := range flagCases {
+		t.Run(fc.name, func(t *testing.T) {
+			render := func(v bool) string {
+				items := goldenChannels()
+				for i := range items {
+					fc.set(&items[i], v)
+				}
+				return newGoldenApp(t, withChannels(items...), withActiveChannel("C1"),
+					withMessages(goldenMessages()...), withRender()).View().Content
+			}
+			if on, off := render(true), render(false); on != off {
+				t.Errorf("this flag now affects the render, contradicting goldenChannels' doc comment: %s",
+					styleAwareDiff(off, on))
+			}
+		})
+	}
+}
+
+// TestNewGoldenApp_RendersActiveChannelName pins the fix for a header
+// that used to render as a bare "#": withActiveChannel only assigns
+// a.activeChannelID, and nothing in the App derives a display name from
+// an ID, so every pane that shows the channel name showed an empty one.
+func TestNewGoldenApp_RendersActiveChannelName(t *testing.T) {
+	a := newGoldenApp(t, goldenFixtureOpts()...)
+	view := a.View().Content
+
+	pane := goldenPanelText(view, a.layout.sidebarEnd, a.layout.msgEnd)
+	if !strings.Contains(pane, "# general") {
+		t.Errorf("messages-pane header has no channel name; pane band was:\n%s", pane)
+	}
+	// The compose placeholder and the statusbar read the same name from
+	// two other setters, so a partial wiring (header only) still fails.
+	plain := stripANSI(view)
+	if !strings.Contains(plain, "Message #general") {
+		t.Errorf("compose placeholder has no channel name; view was:\n%s", plain)
+	}
+	if !strings.Contains(plain, "NORMAL    #general") {
+		t.Errorf("statusbar has no channel name; view was:\n%s", plain)
+	}
+
+	// Control: unnamed through newTestApp.
+	ctrl := newTestApp(t, goldenFixtureOpts()...)
+	cpane := goldenPanelText(ctrl.View().Content, ctrl.layout.sidebarEnd, ctrl.layout.msgEnd)
+	if strings.Contains(cpane, "# general") {
+		t.Fatalf("control: newTestApp already names the channel, so nameGoldenActiveChannel "+
+			"proves nothing; pane band was:\n%s", cpane)
 	}
 }
 
