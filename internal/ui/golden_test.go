@@ -559,6 +559,11 @@ func goldenMessages() []messages.MessageItem {
 		//     blockkit.RenderLegacy, model.go:2216), which draws the
 		//     colored "█" stripe and the bold title.
 		//
+		// It also carries msg.Blocks, which routes through
+		// blockkit.Render (model.go:2190) — a DIFFERENT splice than
+		// RenderLegacy and one that runs before it, between the body
+		// text and the file attachment.
+		//
 		// The name "deploybot" is flavour only; there is no bot branch
 		// to hit. messages.MessageItem carries no bot discriminator (the
 		// only IsBot in the tree is on ui/msgs.go's wire types) and the
@@ -568,20 +573,25 @@ func goldenMessages() []messages.MessageItem {
 		// therefore the only way bot-SHAPED output gets pinned at all,
 		// which is why it lives here rather than nowhere.
 		//
-		// Only the legacy path is exercised, not msg.Blocks
-		// (blockkit.Render, model.go:2190), and the attachment carries
-		// Color + Title but no Text. That is a vertical-budget decision,
-		// not an oversight. The messages pane at 120x30 had exactly one
-		// spare row before this attachment existed; the stripe+title
-		// consumes it. Adding the attachment's Text, or a section block,
-		// pushes the "Yesterday" divider off the top of the viewport,
-		// which the base golden is specifically required to show (and
-		// which TestNewGoldenApp_PinsDateSeparatorClock catches). Both
-		// paths funnel into the same blockkit package at the same
-		// per-message splice site, so the incremental coverage of a
-		// second one does not pay for a scrolled-away day divider. To
-		// add one later, buy the rows first — shorten the wrapped line
-		// or give base more height.
+		// The section block's text is mrkdwn, not plain: the `*...*`
+		// is consumed by ctx.RenderText on the way through, which is
+		// how the golden pins that blockkit's host wiring
+		// (Context.RenderText → messages.RenderSlackMarkdown) is
+		// connected at all. Rendered output is "rollout: 100% of
+		// shards on v2.4.1" with "rollout" bold.
+		//
+		// The legacy attachment carries Color + Title but no Text.
+		// One line each is deliberate: the two paths differ in which
+		// renderer they enter, not in how many rows they can produce,
+		// so a second row of either buys nothing.
+		//
+		// Both of these cost vertical space, which is why base is 36
+		// rows and not the 30 it started at. Earlier revisions of this
+		// fixture treated the height as fixed and dropped coverage to
+		// fit; that is backwards. The height is a free parameter — if
+		// a future row pushes the "Yesterday" divider off the top of
+		// base (TestNewGoldenApp_PinsDateSeparatorClock catches it),
+		// raise goldenBaseH rather than delete the row.
 		//
 		// Deliberately image-free: an ImageURL would route through
 		// ctx.Fetcher and an async tea.Cmd, which is exactly the kind of
@@ -591,6 +601,9 @@ func goldenMessages() []messages.MessageItem {
 		{
 			TS: goldenTS(2 * time.Minute), UserID: "B1", UserName: "deploybot",
 			Text: "build #421 green", Timestamp: "9:02 AM", DateStr: "2026-03-15",
+			Blocks: []blockkit.Block{
+				blockkit.SectionBlock{Text: "*rollout*: 100% of shards on v2.4.1"},
+			},
 			Attachments: []messages.Attachment{
 				{Kind: "file", Name: "build.log", URL: "https://example.invalid/build.log", Size: 20480},
 			},
@@ -686,13 +699,35 @@ func goldenReadState() map[string]cache.ReadState {
 	}
 }
 
+// goldenBaseW and goldenBaseH are the terminal size of the base
+// scenario AND of goldenFixtureOpts, which is why they are a constant
+// rather than two independent literals.
+//
+// The height is 36, not buildTestApp's 120x30 default. At 30 rows the
+// fixture's content is one row taller than the messages viewport and
+// the "── Yesterday ──" divider scrolls off the top — which base is
+// specifically required to show, and which several assertions here
+// (TestNewGoldenApp_PinsDateSeparatorClock) depend on. 36 leaves 7
+// spare content rows, so the next fixture row is an edit rather than a
+// negotiation.
+//
+// Both must move together: goldenFixtureOpts is what the determinism
+// and wiring assertions render, and if it drifted from base's geometry
+// those assertions would be checking a frame no golden records.
+const (
+	goldenBaseW = 120
+	goldenBaseH = 36
+)
+
 // goldenFixtureOpts is the standard scenario the determinism tests
 // render: sidebar, active channel, and one message per interesting
-// render branch. Shared so every determinism assertion exercises the
-// same surface area, and so a scenario that stops covering a pinned
-// global fails loudly in one place rather than silently everywhere.
+// render branch, at the base scenario's geometry. Shared so every
+// determinism assertion exercises the same surface area, and so a
+// scenario that stops covering a pinned global fails loudly in one
+// place rather than silently everywhere.
 func goldenFixtureOpts() []testOpt {
 	return []testOpt{
+		withSize(goldenBaseW, goldenBaseH),
 		withChannels(goldenChannels()...),
 		withActiveChannel("C1"),
 		withMessages(goldenMessages()...),
@@ -1204,6 +1239,105 @@ func TestNewGoldenApp_MessagePaneRendersLegacyAttachment(t *testing.T) {
 	}
 }
 
+// TestNewGoldenApp_MessagePaneRendersBlockKitSection pins the OTHER
+// Block Kit splice: msg.Blocks → blockkit.Render (messages/model.go:2190).
+//
+// It is a different call site from the LegacyAttachments one
+// (RenderLegacy, model.go:2216), runs earlier in the same per-message
+// assembly, and takes a different Context field path — the section's
+// mrkdwn goes through Context.RenderText, which the legacy title does
+// not. A fixture that exercised only the legacy branch left this one
+// pinned by nothing.
+//
+// The asserted text is the mrkdwn-RENDERED form: the fixture's
+// "*rollout*: ..." loses its asterisks on the way through
+// RenderText, so matching this string also proves the host wired
+// Context.RenderText rather than letting raw text fall through.
+func TestNewGoldenApp_MessagePaneRendersBlockKitSection(t *testing.T) {
+	a := newGoldenApp(t, goldenFixtureOpts()...)
+	pane := goldenPanelText(a.View().Content, a.layout.sidebarEnd, a.layout.msgEnd)
+
+	const want = "rollout: 100% of shards on v2.4.1"
+	if !strings.Contains(pane, want) {
+		t.Errorf("Block Kit section not rendered; expected a line containing %q. Pane band was:\n%s", want, pane)
+	}
+	// The asterisks must be gone: their survival would mean
+	// Context.RenderText was nil and raw mrkdwn reached the screen.
+	if strings.Contains(pane, "*rollout*") {
+		t.Errorf("Block Kit section text was not run through Context.RenderText; "+
+			"raw mrkdwn reached the screen. Pane band was:\n%s", pane)
+	}
+
+	// Control: with msg.Blocks cleared the line disappears, so the
+	// assertion above is about the Blocks field and not about some
+	// other fixture row that happens to contain the same text.
+	msgs := goldenMessages()
+	for i := range msgs {
+		msgs[i].Blocks = nil
+	}
+	ctrl := newGoldenApp(t, withSize(goldenBaseW, goldenBaseH), withChannels(goldenChannels()...),
+		withActiveChannel("C1"), withMessages(msgs...), withRender())
+	cpane := goldenPanelText(ctrl.View().Content, ctrl.layout.sidebarEnd, ctrl.layout.msgEnd)
+	if strings.Contains(cpane, want) {
+		t.Fatalf("control: the section text renders with msg.Blocks cleared, so the "+
+			"assertion above proves nothing. Pane band was:\n%s", cpane)
+	}
+}
+
+// TestGolden_BaseHasVerticalHeadroom pins the reason goldenBaseH is 36
+// rather than the 30 it started at.
+//
+// Without it, base's headroom is an accident that the next fixture edit
+// spends without noticing, and the edit after that turns into the same
+// "drop the coverage to fit the height" trade this fixture already made
+// once and had to undo. Blank content rows are the budget; this asserts
+// there is some left.
+func TestGolden_BaseHasVerticalHeadroom(t *testing.T) {
+	const minSpare = 4
+
+	a := newGoldenApp(t, goldenFixtureOpts()...)
+	pane := goldenPanelText(a.View().Content, a.layout.sidebarEnd, a.layout.msgEnd)
+
+	// Count the run of blank content rows immediately above the
+	// compose box. Trailing blanks inside the messages viewport are
+	// exactly the unspent rows; blanks elsewhere are inter-message
+	// gaps and must not be counted, hence the contiguous run rather
+	// than a total.
+	lines := strings.Split(pane, "\n")
+	last := -1
+	for i, l := range lines {
+		if strings.Contains(l, "wrapping behaviour") {
+			last = i
+		}
+	}
+	if last < 0 {
+		t.Fatalf("last fixture message not found in the pane band:\n%s", pane)
+	}
+	spare := 0
+	for i := last + 1; i < len(lines); i++ {
+		// A blank content row is the two vertical borders and
+		// nothing but spaces between (and after) them. The cutset
+		// deliberately excludes the scrollbar glyphs: a row carrying
+		// a scrollbar cell is not spare capacity.
+		if strings.Trim(lines[i], " │") != "" {
+			break
+		}
+		spare++
+	}
+	if spare < minSpare {
+		t.Errorf("base has %d spare content rows at %dx%d, want at least %d; "+
+			"raise goldenBaseH rather than trimming the fixture. Pane band was:\n%s",
+			spare, goldenBaseW, goldenBaseH, minSpare, pane)
+	}
+
+	// The headroom is only meaningful if nothing scrolled off the top.
+	// The first divider is the one that goes first.
+	if !strings.Contains(pane, "── Yesterday ──") {
+		t.Errorf("the \"Yesterday\" divider is not on screen at %dx%d; content scrolled "+
+			"off the top. Pane band was:\n%s", goldenBaseW, goldenBaseH, pane)
+	}
+}
+
 // ---------------------------------------------------------------------
 // The scenario table and the full-screen goldens.
 // ---------------------------------------------------------------------
@@ -1223,6 +1357,22 @@ type goldenScenario struct {
 	name  string
 	w, h  int
 	build func(t *testing.T) *App
+
+	// autoHidesThread marks a scenario that deliberately opens a
+	// thread at a width too small to show it, so the golden records
+	// the auto-hidden two-pane frame.
+	//
+	// It is an OPT-OUT from the thread-width guard, not an opt-in to
+	// it. Whether a scenario opened a thread at all is derived from
+	// the built App (threadPanel.IsEmpty), so every thread scenario is
+	// checked by default and a new one cannot escape by not matching a
+	// hardcoded name. This flag only exists so the one scenario whose
+	// point IS the auto-hide can say so, and
+	// TestGolden_ThreadScenariosAreWideEnough refuses to honour it on
+	// a scenario wide enough to keep the pane, or on one that never
+	// opened a thread — so it cannot be used to silence a real
+	// failure.
+	autoHidesThread bool
 }
 
 // goldenThreadMinWidth is the narrowest terminal width at which
@@ -1247,22 +1397,24 @@ type goldenScenario struct {
 // Compute so the constant cannot drift away from the layout code.
 const goldenThreadMinWidth = 124
 
-// goldenThreadScenario builds the shared "a thread is open" App: the
+// goldenThreadApp builds the shared "a thread is open" App: the
 // standard fixture, plus carol's message (goldenMessages()[2], the one
 // carrying ThreadTS/ReplyCount) opened as the thread parent with the two
 // following rows as its replies.
 //
-// Shared by thread_open and wide so the two differ only in terminal
-// size, which is the whole point of having both. Callers must pass a
-// width of at least goldenThreadMinWidth or the pane they asked for
-// silently auto-hides; TestGolden_ThreadScenariosAreWideEnough enforces
-// that against the scenario table.
+// Returned UNRENDERED. Every thread scenario shares this body, but they
+// differ in what they set between the SetThread and the first View() —
+// narrow focuses the thread pane so the auto-hide path has a focus to
+// fall back from. Since View() is what consumes and mutates that state
+// (app.go:2726-2731), the render cannot live in here without either
+// forcing a second View() on the callers that need extra setup, or
+// pushing every future variation in as another parameter.
 //
 // Note what is NOT set here: focus stays on PanelMessages. The thread
 // pane renders on a.threadVisible && frame.ThreadWidth > 0 alone
 // (app.go:2747); focus only picks the border color. Leaving it on the
 // messages pane keeps thread_open's chrome comparable to base's.
-func goldenThreadScenario(t *testing.T, w, h int) *App {
+func goldenThreadApp(t *testing.T, w, h int) *App {
 	t.Helper()
 	a := newGoldenApp(t,
 		withSize(w, h),
@@ -1276,6 +1428,20 @@ func goldenThreadScenario(t *testing.T, w, h int) *App {
 	// literal so it cannot drift from goldenTS.
 	a.threadPanel.SetThread(msgs[2], msgs[3:5], "C1", msgs[2].ThreadTS)
 	a.threadVisible = true
+	return a
+}
+
+// goldenThreadScenario is goldenThreadApp plus the render, which is all
+// the scenarios that want a visible thread pane need.
+//
+// Callers must pass a width of at least goldenThreadMinWidth or the pane
+// they asked for silently auto-hides;
+// TestGolden_ThreadScenariosAreWideEnough enforces that against the
+// scenario table — derived from the built App, not from the scenario's
+// name, so a new thread scenario cannot escape it.
+func goldenThreadScenario(t *testing.T, w, h int) *App {
+	t.Helper()
+	a := goldenThreadApp(t, w, h)
 	_ = a.View()
 	return a
 }
@@ -1283,15 +1449,12 @@ func goldenThreadScenario(t *testing.T, w, h int) *App {
 func goldenScenarios() []goldenScenario {
 	return []goldenScenario{
 		{
-			name: "base", w: 120, h: 30,
+			// 36 rows, not the 30 this started at: see goldenBaseH.
+			// goldenFixtureOpts already carries the size, so base is
+			// exactly the shared fixture rendered to a file.
+			name: "base", w: goldenBaseW, h: goldenBaseH,
 			build: func(t *testing.T) *App {
-				return newGoldenApp(t,
-					withSize(120, 30),
-					withChannels(goldenChannels()...),
-					withMessages(goldenMessages()...),
-					withActiveChannel("C1"),
-					withRender(),
-				)
+				return newGoldenApp(t, goldenFixtureOpts()...)
 			},
 		},
 		{
@@ -1318,16 +1481,16 @@ func goldenScenarios() []goldenScenario {
 			// 42*35/100 = 14, well below the 30-col minimum.
 			// TestGolden_NarrowAutoHidesThreadPane pins the consequence
 			// rather than leaving the golden as the only record of it.
-			name: "narrow", w: 80, h: 24,
+			name: "narrow", w: 80, h: 24, autoHidesThread: true,
 			build: func(t *testing.T) *App {
-				a := newGoldenApp(t,
-					withSize(80, 24),
-					withChannels(goldenChannels()...),
-					withMessages(goldenMessages()...),
-					withActiveChannel("C1"),
-				)
-				a.threadPanel.SetThread(goldenMessages()[2], goldenMessages()[3:5], "C1", goldenMessages()[2].ThreadTS)
-				a.threadVisible = true
+				// goldenThreadApp, not goldenThreadScenario: the
+				// focus has to be on the thread pane BEFORE the
+				// first View(), because View() is what drops it
+				// back to PanelMessages. Rendering inside the
+				// helper and re-focusing afterwards would take a
+				// second View() to settle and would not exercise
+				// the fallback at all.
+				a := goldenThreadApp(t, 80, 24)
 				a.focusedPanel = PanelThread
 				_ = a.View()
 				return a
@@ -1356,43 +1519,50 @@ func TestGolden(t *testing.T) {
 // ThreadAutoHidden, the threadVisible clear, the focus fallback, and the
 // collapsed layout band — instead of its shadow.
 func TestGolden_NarrowAutoHidesThreadPane(t *testing.T) {
-	var narrow *goldenScenario
+	var hiders []goldenScenario
 	for _, sc := range goldenScenarios() {
-		if sc.name == "narrow" {
-			narrow = &sc
-			break
+		if sc.autoHidesThread {
+			hiders = append(hiders, sc)
 		}
 	}
-	if narrow == nil {
-		t.Fatal("no scenario named \"narrow\"; this test and the table have diverged")
+	if len(hiders) == 0 {
+		t.Fatal("no scenario declares autoHidesThread; the auto-hide path is pinned by nothing")
 	}
 
-	a := narrow.build(t)
+	for _, sc := range hiders {
+		t.Run(sc.name, func(t *testing.T) {
+			a := sc.build(t)
 
-	// The scenario asked for a thread AND focused it. View() must have
-	// undone both (app.go:2726-2731).
-	if a.threadVisible {
-		t.Errorf("threadVisible still set at %dx%d; the thread pane did not auto-hide, "+
-			"so the narrow golden is not pinning what it claims to", narrow.w, narrow.h)
-	}
-	if a.focusedPanel == PanelThread {
-		t.Error("focus stayed on PanelThread after the pane auto-hid")
-	}
-	// The thread band collapsed onto the messages band
-	// (panellayout.go:131-135), which is what makes PanelAt stop
-	// routing clicks into a pane that is not on screen.
-	if a.layout.threadEnd != a.layout.msgEnd {
-		t.Errorf("thread band did not collapse: threadEnd = %d, msgEnd = %d",
-			a.layout.threadEnd, a.layout.msgEnd)
+			// The scenario asked for a thread. View() must have
+			// taken it away again (app.go:2726-2731).
+			if a.threadPanel.IsEmpty() {
+				t.Fatalf("scenario declares autoHidesThread but never opened a thread, "+
+					"so %q pins an absence that was never a presence", sc.name)
+			}
+			if a.threadVisible {
+				t.Errorf("threadVisible still set at %dx%d; the thread pane did not auto-hide, "+
+					"so the %s golden is not pinning what it claims to", sc.w, sc.h, sc.name)
+			}
+			if a.focusedPanel == PanelThread {
+				t.Error("focus stayed on PanelThread after the pane auto-hid")
+			}
+			// The thread band collapsed onto the messages band
+			// (panellayout.go:131-135), which is what makes PanelAt
+			// stop routing clicks into a pane that is not on screen.
+			if a.layout.threadEnd != a.layout.msgEnd {
+				t.Errorf("thread band did not collapse: threadEnd = %d, msgEnd = %d",
+					a.layout.threadEnd, a.layout.msgEnd)
+			}
+		})
 	}
 
-	// Control: the same build at the wide scenario's size keeps all
+	// Control: the same build at a width above the threshold keeps all
 	// three panes. Without it, a narrow golden with no thread pane is
 	// equally consistent with a fixture that never opened one.
 	wide := goldenThreadScenario(t, 200, 50)
 	if !wide.threadVisible {
-		t.Fatal("control: the thread pane auto-hid at 200x50 too, so the narrow " +
-			"assertions above are not about width at all")
+		t.Fatal("control: the thread pane auto-hid at 200x50 too, so the assertions " +
+			"above are not about width at all")
 	}
 	if wide.layout.threadEnd <= wide.layout.msgEnd {
 		t.Fatalf("control: no thread band at 200x50 (threadEnd = %d, msgEnd = %d)",
@@ -1407,6 +1577,16 @@ func TestGolden_NarrowAutoHidesThreadPane(t *testing.T) {
 // Both are needed. A golden of a three-pane frame and a golden of a
 // two-pane frame are equally well-formed files; nothing in the .ansi
 // says which one was intended.
+//
+// Which scenarios are in scope is DERIVED, not listed. The set used to
+// be the hardcoded names {thread_open, wide}, which meant a new thread
+// scenario added later matched neither and silently escaped the only
+// check that has ever caught this defect. Instead every scenario is
+// built and asked whether it loaded a thread — threadPanel survives
+// View(), unlike threadVisible, which the auto-hide path clears
+// (app.go:2726) — and every scenario that did is checked. Opting out
+// takes an explicit autoHidesThread on the scenario, and even that is
+// refused for a scenario wide enough to keep the pane.
 func TestGolden_ThreadScenariosAreWideEnough(t *testing.T) {
 	// Boundary probe: goldenThreadMinWidth must be the exact edge, not
 	// merely a width that happens to work. One column narrower has to
@@ -1425,16 +1605,46 @@ func TestGolden_ThreadScenariosAreWideEnough(t *testing.T) {
 			"its doc comment claims", goldenThreadMinWidth-1)
 	}
 
+	checked := 0
 	for _, sc := range goldenScenarios() {
-		if sc.name != "thread_open" && sc.name != "wide" {
-			continue
-		}
 		t.Run(sc.name, func(t *testing.T) {
-			if sc.w < goldenThreadMinWidth {
-				t.Fatalf("scenario is %d cols, below goldenThreadMinWidth (%d); its thread "+
-					"pane will auto-hide and the golden will pin two panes", sc.w, goldenThreadMinWidth)
-			}
 			a := sc.build(t)
+
+			// threadPanel keeps its parent+replies through View();
+			// only threadVisible is cleared by the auto-hide path.
+			// So this reads the scenario's REQUEST, after the render
+			// that may have denied it.
+			if a.threadPanel.IsEmpty() {
+				if sc.autoHidesThread {
+					t.Fatalf("scenario declares autoHidesThread but never opened a thread; "+
+						"the flag is silencing a check that has nothing to check (%dx%d)", sc.w, sc.h)
+				}
+				t.Skip("scenario does not open a thread")
+			}
+
+			if sc.autoHidesThread {
+				// The opt-out is only legitimate below the
+				// threshold. Above it the pane would render, so the
+				// flag would be hiding a genuine failure rather
+				// than describing an intended one.
+				if sc.w >= goldenThreadMinWidth {
+					t.Fatalf("scenario declares autoHidesThread at %d cols, at or above "+
+						"goldenThreadMinWidth (%d), where the pane does NOT auto-hide; "+
+						"the flag cannot be used to opt a wide thread scenario out of this check",
+						sc.w, goldenThreadMinWidth)
+				}
+				// The auto-hide itself is asserted by
+				// TestGolden_NarrowAutoHidesThreadPane.
+				return
+			}
+
+			checked++
+			if sc.w < goldenThreadMinWidth {
+				t.Fatalf("scenario opens a thread at %d cols, below goldenThreadMinWidth (%d); "+
+					"its thread pane will auto-hide and the golden will pin two panes under a "+
+					"name that promises three. Widen it, or declare autoHidesThread if the "+
+					"auto-hide is the point", sc.w, goldenThreadMinWidth)
+			}
 			if !a.threadVisible {
 				t.Errorf("threadVisible cleared at %dx%d", sc.w, sc.h)
 			}
@@ -1443,5 +1653,11 @@ func TestGolden_ThreadScenariosAreWideEnough(t *testing.T) {
 					a.layout.threadEnd, a.layout.msgEnd)
 			}
 		})
+	}
+
+	// If every scenario stopped opening a thread, the loop above would
+	// pass while asserting nothing at all.
+	if checked == 0 {
+		t.Error("no scenario opens a visible thread pane; this test asserted nothing")
 	}
 }
