@@ -3,6 +3,7 @@ package membership
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -17,7 +18,11 @@ import (
 // lastFetched, which backgroundFetch writes only once the API returns)
 // open for a deterministic window. Tests that assert on that
 // bookkeeping must therefore never treat callCount as a barrier for it
-// — see waitUntil.
+// — see captureSink.pushed and awaitFailedFetchDone.
+//
+// The delay is a stimulus, not a deadline: nothing in this file is
+// asserted against it, so a loaded machine can only widen the window it
+// opens and make a false barrier more likely to be caught, never less.
 type fakeMemberAPI struct {
 	mu     sync.Mutex
 	calls  int
@@ -43,22 +48,49 @@ func (f *fakeMemberAPI) callCount() int {
 	return f.calls
 }
 
-// captureSink records ChannelMembershipMsg pushes.
+// captureSink records ChannelMembershipMsg pushes and hands each one to
+// a test through pushed.
+//
+// PushFunc is the *last* thing backgroundFetch invokes on the success
+// path (manager.go: pushSnapshot is its final statement), so a receive
+// from pushed is a barrier for everything that fetch wrote —
+// ReplaceChannelMembers, m.members, m.lastFetched, and the delete of
+// m.lastFailed all happen before it. The fake API is not such a
+// barrier: it records its call on *entry*, before the API has even
+// returned, which is the defect commit 8eaeba9 had to repair.
+//
+// Receives carry no timeout by design: `go test` already imposes one
+// (default 10m), and a wall-clock budget inside a test is exactly what
+// makes it load-sensitive. A push that never arrives hangs and produces
+// a goroutine dump naming the stuck test, which beats "timed out
+// waiting for 2 pushes" one second after the fact.
+//
+// The buffer is sized well past any test's push count (the largest here
+// is 6) because production pushes into it: EnsureFresh calls PushFunc
+// synchronously on the caller's goroutine, so a full buffer would
+// deadlock a test against itself rather than drop a signal.
 type captureSink struct {
 	mu     sync.Mutex
 	pushes []capturedPush
+	pushed chan capturedPush
 }
 type capturedPush struct {
 	channelID string
 	memberIDs []string
 }
 
+func newCaptureSink() *captureSink {
+	return &captureSink{pushed: make(chan capturedPush, 16)}
+}
+
 func (s *captureSink) Push(channelID string, memberIDs []string) {
+	cp := capturedPush{channelID: channelID, memberIDs: append([]string(nil), memberIDs...)}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	cp := make([]string, len(memberIDs))
-	copy(cp, memberIDs)
-	s.pushes = append(s.pushes, capturedPush{channelID, cp})
+	s.pushes = append(s.pushes, cp)
+	s.mu.Unlock()
+	// Sent outside the lock: snapshot() must stay callable from a test
+	// that has not drained yet.
+	s.pushed <- cp
 }
 func (s *captureSink) snapshot() []capturedPush {
 	s.mu.Lock()
@@ -76,7 +108,7 @@ func newManagerForTest(t *testing.T) (*Manager, *fakeMemberAPI, *captureSink, *c
 	}
 	_ = db.UpsertWorkspace(cache.Workspace{ID: "T1", Name: "Test"})
 	api := &fakeMemberAPI{}
-	sink := &captureSink{}
+	sink := newCaptureSink()
 	mgr := New("T1", api, db, sink.Push, nil /* userResolver */)
 	return mgr, api, sink, db
 }
@@ -88,8 +120,12 @@ func TestEnsureFreshCacheHitNoFetch(t *testing.T) {
 	_ = db.ReplaceChannelMembers("T1", "C1", []string{"U1", "U2"}, time.Now().Unix())
 
 	mgr.EnsureFresh(context.Background(), "C1")
-	// EnsureFresh kicks off background work; wait for any push.
-	waitForPush(t, sink, 1)
+	// EnsureFresh pushes the cached snapshot synchronously on this
+	// goroutine, so this receive is already satisfied by the time
+	// EnsureFresh returns; it names the event the assertions depend on
+	// and leaves the channel empty. A fresh cache starts no background
+	// fetch at all, so no second push is coming.
+	<-sink.pushed
 
 	if api.callCount() != 0 {
 		t.Errorf("fresh cache should NOT trigger fetch; got %d calls", api.callCount())
@@ -106,20 +142,21 @@ func TestEnsureFreshCacheMissTriggersFetch(t *testing.T) {
 	api.result = []string{"U1", "U2", "U3"}
 
 	mgr.EnsureFresh(context.Background(), "C1")
-	waitForPush(t, sink, 1)     // initial empty push
-	waitForCallCount(t, api, 1) // fetch happens
-	waitForPush(t, sink, 2)     // post-fetch push
+	<-sink.pushed // EnsureFresh's own synchronous push of the empty cache
+	// No timeout by design: `go test` already imposes one, and a
+	// wall-clock budget inside the test is exactly what made this
+	// load-sensitive. backgroundFetch pushes as its final statement,
+	// after ReplaceChannelMembers and after the in-memory set is
+	// swapped, so this receive is a barrier for both assertions below.
+	// The API call count is a barrier for neither: it increments on
+	// entry, before the call has even returned.
+	fetched := <-sink.pushed
 
 	if api.callCount() != 1 {
 		t.Errorf("expected 1 fetch call; got %d", api.callCount())
 	}
-	pushes := sink.snapshot()
-	if len(pushes) < 2 {
-		t.Fatalf("expected >=2 pushes; got %d", len(pushes))
-	}
-	last := pushes[len(pushes)-1]
-	if len(last.memberIDs) != 3 {
-		t.Errorf("final push had %d members; want 3", len(last.memberIDs))
+	if len(fetched.memberIDs) != 3 {
+		t.Errorf("final push had %d members; want 3", len(fetched.memberIDs))
 	}
 
 	// Cache persisted?
@@ -138,58 +175,46 @@ func TestEnsureFreshStaleTriggersFetch(t *testing.T) {
 	api.result = []string{"U1", "U2"}
 
 	mgr.EnsureFresh(context.Background(), "C1")
-	waitForPush(t, sink, 1)
-	waitForCallCount(t, api, 1)
-	waitForPush(t, sink, 2)
+	<-sink.pushed // EnsureFresh's own synchronous push of the stale cache
+	<-sink.pushed // the background fetch's push, sent after it persisted
 
 	if api.callCount() != 1 {
 		t.Errorf("stale cache should trigger fetch; got %d calls", api.callCount())
 	}
 }
 
-// Helpers — poll briefly because the Manager fans work to goroutines.
-func waitForPush(t *testing.T, s *captureSink, n int) {
-	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if len(s.snapshot()) >= n {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %d pushes; got %d", n, len(s.snapshot()))
-}
-func waitForCallCount(t *testing.T, api *fakeMemberAPI, n int) {
-	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if api.callCount() >= n {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %d API calls", n)
-}
-
-// waitUntil polls cond until it holds or the deadline passes.
+// awaitFailedFetchDone blocks until the goroutine EnsureFresh spawned
+// has recorded a failed fetch *and* exited.
 //
-// Prefer this over waitForCallCount/waitForPush when asserting on
-// Manager bookkeeping. Neither of those is a barrier for it:
-// fakeMemberAPI records a call on *entry* while backgroundFetch writes
-// lastFailed/lastFetched only after the call returns (manager.go), and
-// EnsureFresh pushes synchronously on the caller's goroutine
-// (manager.go, pushSnapshot) so a push can be the caller's own rather
-// than the background fetch's.
-func waitUntil(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
+// A failed fetch pushes nothing — backgroundFetch writes lastFailed and
+// returns (manager.go) — so there is no signal to receive from and the
+// manager's own state is the only barrier available. The conjunction is
+// what makes it one: the in-flight sentinel is set *before* the API
+// call and released by a deferred call *after* lastFailed is written,
+// so "failed and not busy" cannot be observed before the goroutine ran,
+// and cannot be observed while it is still running.
+//
+// Waiting for the sentinel too, rather than for lastFailed alone,
+// closes a latent race that predates this change: a caller that
+// re-triggers a fetch while the failed one is still unwinding gets it
+// dropped at the `busy` branch instead of at the branch under test.
+//
+// This is a condition wait, not a deadline: it returns the instant the
+// state holds, has no wall-clock budget, and so a loaded machine can
+// only make it spin a few more times — it cannot false-fail. If the
+// fetch never completes this hangs, and `go test`'s own timeout dumps
+// the stuck goroutine, the same failure mode as a blocking receive.
+func awaitFailedFetchDone(mgr *Manager, channelID string) {
+	for {
+		mgr.mu.Lock()
+		_, failed := mgr.lastFailed[channelID]
+		_, busy := mgr.fetching[channelID]
+		mgr.mu.Unlock()
+		if failed && !busy {
 			return
 		}
-		time.Sleep(5 * time.Millisecond)
+		runtime.Gosched()
 	}
-	t.Fatalf("timed out waiting for %s", what)
 }
 
 // failureRecordedAt reports the manager's lastFailed entry for a
@@ -207,7 +232,7 @@ func TestApplyJoinPersistsAndPushes(t *testing.T) {
 	// Pre-seed C1 with U1 so the active set isn't empty.
 	_ = db.ReplaceChannelMembers("T1", "C1", []string{"U1"}, time.Now().Unix())
 	mgr.EnsureFresh(context.Background(), "C1")
-	waitForPush(t, sink, 1)
+	<-sink.pushed // EnsureFresh's synchronous push; a fresh cache starts no fetch
 
 	mgr.ApplyJoin("C1", "U_NEW")
 
@@ -222,18 +247,18 @@ func TestApplyJoinPersistsAndPushes(t *testing.T) {
 	if !found {
 		t.Errorf("U_NEW not persisted; cache = %v", got)
 	}
-	// Pushed?
-	waitForPush(t, sink, 2)
-	pushes := sink.snapshot()
-	last := pushes[len(pushes)-1]
+	// Pushed? ApplyJoin pushes on the caller's goroutine as its last
+	// statement, after the row is upserted, so this receive is already
+	// satisfied.
+	joined := <-sink.pushed
 	hasNew := false
-	for _, id := range last.memberIDs {
+	for _, id := range joined.memberIDs {
 		if id == "U_NEW" {
 			hasNew = true
 		}
 	}
 	if !hasNew {
-		t.Errorf("U_NEW missing from push: %v", last.memberIDs)
+		t.Errorf("U_NEW missing from push: %v", joined.memberIDs)
 	}
 }
 
@@ -242,7 +267,7 @@ func TestApplyLeaveDeletesAndPushes(t *testing.T) {
 	defer db.Close()
 	_ = db.ReplaceChannelMembers("T1", "C1", []string{"U1", "U2"}, time.Now().Unix())
 	mgr.EnsureFresh(context.Background(), "C1")
-	waitForPush(t, sink, 1)
+	<-sink.pushed // EnsureFresh's synchronous push; a fresh cache starts no fetch
 
 	mgr.ApplyLeave("C1", "U1")
 
@@ -297,8 +322,20 @@ func TestForceStaleCausesRefetch(t *testing.T) {
 	mgr.ForceStale("C1")
 	mgr.EnsureFresh(context.Background(), "C1")
 
-	waitForCallCount(t, api, 1)
-	waitForPush(t, sink, 2)
+	<-sink.pushed              // EnsureFresh's synchronous push of the seeded set
+	refetched := <-sink.pushed // the forced re-fetch's push, sent after it persisted
+
+	// The receives above are the test: a ForceStale that did not
+	// invalidate would produce no second push and hang here rather than
+	// pass. These assertions name what arrived, so a re-fetch that
+	// fired twice or pushed the pre-ForceStale set is reported instead
+	// of being silently accepted.
+	if c := api.callCount(); c != 1 {
+		t.Errorf("ForceStale + EnsureFresh made %d fetch calls; want exactly 1", c)
+	}
+	if len(refetched.memberIDs) != 2 {
+		t.Errorf("re-fetch pushed %d members; want 2", len(refetched.memberIDs))
+	}
 }
 
 // fakeResolver records calls for the resolver-invocation test.
@@ -352,16 +389,19 @@ func TestBackgroundFetchDoesNotResolveEveryMember(t *testing.T) {
 		ids[i] = fmt.Sprintf("U%03d", i)
 	}
 	api := &fakeMemberAPI{result: ids}
-	sink := &captureSink{}
+	sink := newCaptureSink()
 	resolver := &fakeResolver{}
 	mgr := New("T1", api, db, sink.Push, resolver)
 
 	mgr.EnsureFresh(context.Background(), "C1")
-	waitForCallCount(t, api, 1)
-	waitForPush(t, sink, 2)
-
-	// Give a fan-out every chance to happen before declaring it absent.
-	time.Sleep(100 * time.Millisecond)
+	<-sink.pushed // EnsureFresh's own synchronous push of the empty cache
+	// The deleted fan-out sat between the API returning and
+	// ReplaceChannelMembers (manager.go), so it is strictly *before*
+	// this push. Receiving it therefore proves the fetch has already
+	// run past the point where it used to call resolver.Request once
+	// per member — an exact check, where the 100ms sleep it replaces
+	// was a bet on how long a 500-member fan-out takes.
+	<-sink.pushed
 
 	if seen := resolver.snapshot(); len(seen) != 0 {
 		t.Errorf("membership fetch resolved %d of %d members; want 0 — one request per member is what put 40,523 users.info calls into a cold-cache boot", len(seen), len(ids))
@@ -393,14 +433,31 @@ func TestBackgroundFetchFailureSuppressesImmediateRefetch(t *testing.T) {
 	api.err = fmt.Errorf("channel_not_found")
 
 	mgr.EnsureFresh(context.Background(), "C1")
-	waitForPush(t, sink, 1)
-	waitForCallCount(t, api, 1)
+	<-sink.pushed // EnsureFresh's own synchronous push of the empty cache
+
+	// Wait for the failure to be *recorded* and the fetch to be done,
+	// not merely for the API to be entered: it is the lastFailed record
+	// that suppresses the retry below, and an unfinished fetch would
+	// suppress it at the in-flight branch instead — a green test for
+	// the wrong reason.
+	awaitFailedFetchDone(mgr, "C1")
 
 	// A reconnect force-stales the channel and asks again. The fetch
 	// must not re-fire within the failure backoff window.
 	mgr.ForceStale("C1")
 	mgr.EnsureFresh(context.Background(), "C1")
-	time.Sleep(100 * time.Millisecond)
+	<-sink.pushed // ...and its own synchronous push
+
+	// EnsureFresh hands the retry to a goroutine it keeps no handle on,
+	// and a *suppressed* fetch leaves nothing to wait for: it takes the
+	// backoff branch and returns without touching the API, the cache or
+	// the sink. So the old test slept 100ms and hoped that goroutine
+	// had run. Running one more attempt inline makes the suppression a
+	// fact instead — backgroundFetch is exactly what EnsureFresh
+	// spawns, and this call returns only once the decision has been
+	// made. (The spawned one takes the same branch; it touches only the
+	// manager's mutex, never the db this test closes.)
+	mgr.backgroundFetch(context.Background(), "C1")
 
 	if c := api.callCount(); c != 1 {
 		t.Errorf("failed fetch re-issued within the backoff window: %d calls, want 1 — this is the reconnect-flap amplifier", c)
@@ -415,19 +472,21 @@ func TestBackgroundFetchRetriesAfterBackoffExpiry(t *testing.T) {
 	mgr, api, sink, db := newManagerForTest(t)
 	defer db.Close()
 	api.err = fmt.Errorf("channel_not_found")
+	// Hold the window between "the API was entered" and "the failure
+	// was recorded" open, so the interleaving that used to make this
+	// test flaky is its default path rather than a rare one (8eaeba9).
+	// Nothing is asserted against these 50ms.
 	api.delay = 50 * time.Millisecond
 
 	mgr.EnsureFresh(context.Background(), "C1")
+	<-sink.pushed // EnsureFresh's own synchronous push of the empty cache
 
 	// Wait for the failure to be *recorded*, not merely for the API to
 	// be entered. backgroundFetch writes lastFailed after the call
 	// returns, so backdating it below on a callCount barrier alone
 	// races the write and gets clobbered — leaving the backoff live and
 	// suppressing the retry this test exists to prove.
-	waitUntil(t, "the failed fetch to be recorded", func() bool {
-		_, ok := failureRecordedAt(mgr, "C1")
-		return ok
-	})
+	awaitFailedFetchDone(mgr, "C1")
 
 	// Simulate a failure far enough in the past that the backoff has
 	// expired, then recover.
@@ -438,46 +497,64 @@ func TestBackgroundFetchRetriesAfterBackoffExpiry(t *testing.T) {
 	api.result = []string{"U1"}
 
 	mgr.EnsureFresh(context.Background(), "C1")
-	waitForCallCount(t, api, 2)
+	<-sink.pushed // ...and its own synchronous push, still of the empty set
 
+	// The retry's push, which backgroundFetch sends as its final
+	// statement — after ReplaceChannelMembers, after m.members is
+	// swapped and after delete(m.lastFailed, ...). That makes it a
+	// barrier for both assertions below, so neither has to poll. A call
+	// count would fire 50ms before any of it, which is what forced the
+	// polling this replaces.
+	recovered := <-sink.pushed
+
+	if c := api.callCount(); c != 2 {
+		t.Errorf("%d fetch calls; want 2 — the backoff throttles retries, it must not cancel them", c)
+	}
+	if len(recovered.memberIDs) != 1 || recovered.memberIDs[0] != "U1" {
+		t.Errorf("retry pushed %v; want [U1]", recovered.memberIDs)
+	}
 	// A successful fetch clears the failure record, so the next
 	// EnsureFresh is governed by the normal TTL, not the backoff.
-	//
-	// Poll rather than assert once: EnsureFresh above pushed
-	// synchronously, so waiting on a push count would return before the
-	// background fetch had cleared anything.
-	waitUntil(t, "lastFailed to be cleared by the successful fetch", func() bool {
-		_, stillMarked := failureRecordedAt(mgr, "C1")
-		return !stillMarked
-	})
-
-	// And the recovered members actually landed.
-	waitUntil(t, "the recovered member set to be pushed", func() bool {
-		for _, p := range sink.snapshot() {
-			if p.channelID == "C1" && len(p.memberIDs) == 1 && p.memberIDs[0] == "U1" {
-				return true
-			}
-		}
-		return false
-	})
+	if _, stillMarked := failureRecordedAt(mgr, "C1"); stillMarked {
+		t.Error("lastFailed not cleared by a successful fetch; a recovered channel would stay throttled")
+	}
 }
 
 func TestEnsureFreshConcurrentDoesNotDuplicate(t *testing.T) {
-	mgr, api, _, db := newManagerForTest(t)
+	mgr, api, sink, db := newManagerForTest(t)
 	defer db.Close()
 	api.result = []string{"U1"}
 
+	const callers = 5
 	var wg sync.WaitGroup
-	for i := 0; i < 5; i++ {
+	for i := 0; i < callers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			mgr.EnsureFresh(context.Background(), "C1")
+			// EnsureFresh hands its fetch to a goroutine it keeps no
+			// handle on, so wg.Wait() alone proves nothing about the
+			// dedup — the old test slept 100ms in its place. Running
+			// one more attempt inline gives the WaitGroup something to
+			// await: once it returns, every caller's attempt has
+			// *decided*, which is what the sleep stood in for. This is the
+			// same function EnsureFresh spawns, reaching the same
+			// dedup branches.
+			mgr.backgroundFetch(context.Background(), "C1")
 		}()
 	}
 	wg.Wait()
-	// Allow background goroutines to settle.
-	time.Sleep(100 * time.Millisecond)
+
+	// Exactly one attempt gets past the dedup — the checks and the
+	// in-flight sentinel are set under one lock hold (manager.go), so
+	// no two can both proceed — and it pushes as its last act. That
+	// makes the push count exactly `callers` synchronous EnsureFresh
+	// snapshots plus one, and draining them is also what keeps the
+	// winning fetch from still writing to db while the deferred Close
+	// runs.
+	for i := 0; i < callers+1; i++ {
+		<-sink.pushed
+	}
 
 	if c := api.callCount(); c > 1 {
 		t.Errorf("expected at most 1 fetch under concurrent EnsureFresh; got %d", c)
