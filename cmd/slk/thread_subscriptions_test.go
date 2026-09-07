@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -171,6 +172,36 @@ func zeroStagger(t *testing.T) {
 	})
 }
 
+// awaitGateRelease blocks until the sync goroutine has released the
+// gate, which it does — through ensureThreadSubscriptions' deferred
+// gate.done() — as the very last thing it executes.
+//
+// Tests that need a barrier *after* that goroutine is finished have
+// nothing else to wait on. onDone is one deferred call too early: a
+// trigger issued the instant it fires still finds running=true and is
+// dropped on the floor, and a failed sync never calls onDone at all.
+// Nothing production invokes after gate.done(), so there is no channel
+// to receive from; the gate's own flag is the state, and reading it
+// under the gate's mutex is the barrier.
+//
+// This is a condition wait, not a wall-clock budget: it returns the
+// instant the flag clears and never on a deadline, so a loaded machine
+// can only make it spin a few more times — it cannot false-fail. If the
+// goroutine never exits, this hangs and `go test`'s own timeout dumps
+// the goroutine that is stuck, the same failure mode as a blocking
+// channel receive.
+func awaitGateRelease(g *threadSubsGate) {
+	for {
+		g.mu.Lock()
+		running := g.running
+		g.mu.Unlock()
+		if !running {
+			return
+		}
+		runtime.Gosched()
+	}
+}
+
 func TestThreadSubsGate_FirstSyncAdmittedOnce(t *testing.T) {
 	g := &threadSubsGate{window: time.Hour}
 	now := time.Now()
@@ -237,11 +268,18 @@ func TestEnsureThreadSubscriptions_FetchesOnceWithinWindow(t *testing.T) {
 	}
 	wg.Wait()
 
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("the first trigger never completed a subscription sync")
-	}
+	// No timeout by design: `go test` already imposes one, and a
+	// wall-clock budget inside the test is exactly what made this
+	// load-sensitive. A hang here produces a goroutine dump naming the
+	// stuck test, which beats "the first trigger never completed a
+	// subscription sync" two seconds after the fact.
+	//
+	// onDone is the barrier and the fake's entry point is not:
+	// ensureThreadSubscriptions calls onDone only after sync has
+	// reconciled the table and upserted every root_msg, so receiving
+	// here proves no goroutine is still writing to the cache that
+	// t.Cleanup is about to close.
+	<-done // the one admitted trigger finished its sync
 
 	fake.mu.Lock()
 	calls := fake.calls
@@ -269,21 +307,31 @@ func TestEnsureThreadSubscriptions_ResyncsAfterWindow(t *testing.T) {
 	ensureThreadSubscriptions(context.Background(), gate,
 		newSubscriptionSync(db, fake, nil),
 		func() { done <- struct{}{} })
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("first sync never completed")
-	}
+	// No timeout by design: `go test` already imposes one, and a
+	// wall-clock budget inside the test is exactly what made this
+	// load-sensitive. A hang here produces a goroutine dump naming the
+	// stuck test, which beats "first sync never completed".
+	<-done                 // the first sync completed
+	awaitGateRelease(gate) // ...and the goroutine released the gate
 
-	time.Sleep(40 * time.Millisecond)
+	// A duration is semantically required here and no signal can
+	// replace it: the property under test is that the throttle
+	// *window* elapses, and the gate reads the real clock
+	// (tryStart(time.Now())) with no seam a test may inject through.
+	// The bias is one-sided — time.Sleep is guaranteed to sleep at
+	// least its argument, and the gate recorded `last` before this
+	// line — so load can only leave the window more elapsed, never
+	// less. It cannot false-fail. The other reason the old
+	// time.Sleep(40ms) was needed, giving the first goroutine room to
+	// release the gate, is now awaitGateRelease's job above; that half
+	// *was* load-sensitive and would have silently dropped the second
+	// trigger.
+	time.Sleep(gate.window)
+
 	ensureThreadSubscriptions(context.Background(), gate,
 		newSubscriptionSync(db, fake, nil),
 		func() { done <- struct{}{} })
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("re-sync after the window never completed")
-	}
+	<-done // the post-window re-sync completed
 
 	fake.mu.Lock()
 	calls := fake.calls
@@ -300,8 +348,6 @@ func TestEnsureThreadSubscriptions_ResyncsAfterWindow(t *testing.T) {
 // already thinned out by the window and must not wait.
 func TestEnsureThreadSubscriptions_FirstSyncStaggers(t *testing.T) {
 	oldStep := threadSubsStaggerStep
-	threadSubsStaggerStep = 100 * time.Millisecond
-	threadSubsStagger.Store(2) // this workspace drew slot 2 → 200ms delay
 	t.Cleanup(func() {
 		threadSubsStaggerStep = oldStep
 		threadSubsStagger.Store(0)
@@ -311,38 +357,57 @@ func TestEnsureThreadSubscriptions_FirstSyncStaggers(t *testing.T) {
 	fake := &fakeSubscriptions{response: []slackclient.ThreadSubscriptionView{
 		subView("C1", "1700000100.000000", "1700000150.000000", "p1", "U2", true),
 	}}
-	gate := &threadSubsGate{window: 50 * time.Millisecond}
 	done := make(chan struct{}, 2)
 
-	ensureThreadSubscriptions(context.Background(), gate,
+	// The stagger holds the fetch back. A slot worth two hours cannot
+	// elapse, so cancelling the context is the only exit from the
+	// wait — and a sync that fetched anyway never waited. Proving it
+	// by cancellation rather than by sleeping is what makes this
+	// deterministic: the old form slept 50ms into a 200ms slot and
+	// failed on any machine that overshot the remaining 150ms, which
+	// is precisely the load-sensitive assertion this PR exists to
+	// remove.
+	threadSubsStaggerStep = time.Hour
+	threadSubsStagger.Store(2) // this workspace drew slot 2 → a 2h delay
+	blocked := &threadSubsGate{window: 0}
+	ctx, cancel := context.WithCancel(context.Background())
+	ensureThreadSubscriptions(ctx, blocked,
 		newSubscriptionSync(db, fake, nil),
 		func() { done <- struct{}{} })
-
-	time.Sleep(50 * time.Millisecond)
+	cancel()
+	awaitGateRelease(blocked) // the staggered goroutine abandoned its wait
 	fake.mu.Lock()
 	early := fake.calls
 	fake.mu.Unlock()
 	if early != 0 {
-		t.Fatalf("first sync fetched after 50ms despite a 200ms stagger slot")
+		t.Fatalf("the first sync fetched %d time(s) without waiting out its stagger slot", early)
 	}
 
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("staggered first sync never completed")
-	}
-
-	// Re-sync after the window: no stagger, runs immediately even
-	// though the slot counter says this process has booted workspaces.
-	time.Sleep(60 * time.Millisecond)
+	// A slot that does elapse still runs the sync — the stagger delays
+	// the first fetch, it does not cancel it. Nothing is asserted
+	// against the 2ms this waits; the receive below returns when the
+	// sync completes, however long the slot actually took.
+	threadSubsStaggerStep = time.Millisecond
+	threadSubsStagger.Store(2)
+	gate := &threadSubsGate{window: 0}
 	ensureThreadSubscriptions(context.Background(), gate,
 		newSubscriptionSync(db, fake, nil),
 		func() { done <- struct{}{} })
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("re-sync after the window never completed")
-	}
+	<-done                 // the staggered first sync completed
+	awaitGateRelease(gate) // ...and released the gate for the re-sync
+
+	// Re-sync: no stagger, runs immediately even though the slot
+	// counter says this process has booted workspaces. Restoring the
+	// hour-long step makes that an assertion rather than a hope — a
+	// re-sync that staggered would draw a slot worth hours and never
+	// reach onDone, hanging here instead of quietly passing the way it
+	// did under a 2s deadline that a 300ms stagger fits inside.
+	threadSubsStaggerStep = time.Hour
+	ensureThreadSubscriptions(context.Background(), gate,
+		newSubscriptionSync(db, fake, nil),
+		func() { done <- struct{}{} })
+	<-done // the un-staggered re-sync completed
+
 	fake.mu.Lock()
 	calls := fake.calls
 	fake.mu.Unlock()
@@ -364,24 +429,27 @@ func TestEnsureThreadSubscriptions_FailureDoesNotNotify(t *testing.T) {
 		newSubscriptionSync(db, fake, nil),
 		func() { notified <- struct{}{} })
 
-	// Give the goroutine room to do the wrong thing.
-	deadline := time.After(300 * time.Millisecond)
-	for {
-		fake.mu.Lock()
-		calls := fake.calls
-		fake.mu.Unlock()
-		if calls == 1 {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("the sync never ran")
-		case <-time.After(5 * time.Millisecond):
-		}
+	// The fetch fails, so onDone never fires and there is no signal to
+	// receive; gate.done() is the last thing the goroutine executes,
+	// which makes the released gate the only barrier available.
+	//
+	// It is also strictly stronger than what it replaces. The old form
+	// polled for the call count under a 300ms deadline and then waited
+	// 100ms to "give the goroutine room to do the wrong thing" — both
+	// bets on how long late is. Once the goroutine has exited, a
+	// notification can no longer arrive at all, so the check below is
+	// exact.
+	awaitGateRelease(gate) // the sync goroutine failed and exited
+
+	fake.mu.Lock()
+	calls := fake.calls
+	fake.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("ListThreadSubscriptions called %d times; want 1 — the sync never ran", calls)
 	}
 	select {
 	case <-notified:
 		t.Error("notified the UI after a failed fetch")
-	case <-time.After(100 * time.Millisecond):
+	default:
 	}
 }
