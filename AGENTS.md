@@ -11,12 +11,21 @@ a fourth time because the author did not know the first three existed. See
 
 ```
 go build ./...
-go test ./...                 # ~21s
-go test ./... -race           # ~44s; this is what CI runs
+go test ./...                 # ~10s
+go test ./... -race           # ~47s; this is what CI runs
 go vet ./...
 golangci-lint run             # v2.13.1, config in .golangci.yml
 gofmt -l .                    # must be empty; enforced in CI
 ```
+
+Those two timings are wall clock with `-count=1` and a warm build cache on an
+8-core Linux box, re-measured at the end of Phase 0 (they were `~21s`/`~44s`
+before it, on unrecorded hardware — treat them as a shape, not a target).
+The shape is what matters: under `-race`, four packages are ~95% of the run —
+`internal/ui` 32s, `cmd/slk` 29s, `internal/cache` 19s, `internal/ui/messages`
+16s (they overlap, hence a 47s wall). If you are iterating, run the one package
+you are changing; `internal/ui` alone is now longer under `-race` than the whole
+suite used to be.
 
 Tests are plain `testing.T`, stdlib only. No testify, no gomock, no golden
 libraries. White-box (`package ui`, not `package ui_test`) by convention.
@@ -103,10 +112,10 @@ greppable by name; no line numbers, because these files move.
 | Need | Use |
 |---|---|
 | Build an `App` for a test or benchmark | `newTestApp(t, opts...)` (`internal/ui/testapp_test.go`) |
-| The same without a `testing.TB` | `buildTestApp(opts...)` — only for the two legacy builders whose signatures cannot gain a `*testing.T` |
+| The same without a `testing.TB` | `buildTestApp(opts...)` — only for the four legacy builders whose signatures must not change: `newPanelAtApp`, `sixelTestApp`, `makeBenchApp`, `makeWideScrollApp` |
 | Size the App | `withSize(w, h)` (direct field assign) / `withWindowSize(w, h)` (real `tea.WindowSizeMsg` resize path). **Not interchangeable** — only the latter sets `forceSixelRepaint`. Mutually last-wins |
 | Seed panes and data | `withMessages`, `withChannels`, `withWorkspaces`, `withThreadsView`, `withChannelFinderOpen` |
-| Seed App-level state | `withMode`, `withView`, `withActiveChannel`, `withActiveTeam`, `withChannelService`, `withWindowSplit` |
+| Seed App-level state | `withMode`, `withView`, `withActiveChannel`, `withActiveTeam`, `withChannelService`, `withWindowSplit`. **`withActiveChannel` assigns only `a.activeChannelID`** — nothing derives a *name* from an ID, so the messages-pane header renders as a bare `#`, the statusbar as `#`, and the compose placeholder as `Message #...`. A test that asserts on any of those must push the name through the production trio itself; `newGoldenApp` does it via `nameGoldenActiveChannel` (`internal/ui/golden_test.go`) |
 | Populate `a.layout` bands / pane caches (needed for mouse hit-testing) | `withRender()` |
 | N plain message fixtures | `testMessageItems(n)` |
 | Compare or bless a full-screen frame against `testdata/golden/<name>.ansi` | `compareGolden(t, name, got)` (`internal/ui/golden_test.go`) |
@@ -135,11 +144,19 @@ them as templates:
   modal packages. If you are building a modal, expect a shared chrome package to
   land (Phase 4); coordinate rather than adding a twelfth copy.
 - **`messages.Model` and `thread.Model`** share 377 verbatim lines and 45
-  identically-named methods. `internal/ui/thread/lockstep_test.go` pins the
-  parity that is genuinely shared, and its doc comment enumerates **15 verified
+  identically-named methods. `internal/ui/thread/lockstep_test.go` pins *render*
+  parity in **one static state only**: 80×20 (`lockstepWidth`/`lockstepHeight`),
+  chosen so neither pane scrolls — so no scroll offset, no scrollbar gutter, no
+  search-term highlighting and no loading state is compared. The
+  scroll/viewport/selection math, which is most of the 377 shared lines, is
+  pinned *within* each model (`messages/scrollbar_test.go`,
+  `messages/selection_test.go`, `thread/selection_test.go`,
+  `thread/model_test.go`) but **not across** them: a change that breaks one
+  model's scrolling and not the other's will not fail the lockstep test. Its doc
+  comment enumerates **15 verified
   divergences** — that list is the specification Phase 3's pane hooks have to
   satisfy, not a wishlist. If you change one model, change both, and expect the
-  lockstep test to tell you when you forgot. Note that
+  lockstep test to tell you when you forgot — within the limits above. Note that
   `TestLockstep_ReactionHitTestFrames` is a tripwire that fires on
   *convergence*: Phase 3 must delete it, not satisfy it.
 - **`convertAndCacheHistory` / `fetchChannelMessages` / `fetchThreadReplies`** in
@@ -158,7 +175,8 @@ mirrors `internal/ui/messages.viewEntry` exactly; keeping them in lockstep
 means…" — was the counter-example: prose asking humans to maintain a 377-line
 invariant by hand. Phase 0 discharged it. The invariant now has a test,
 `internal/ui/thread/lockstep_test.go`, which asserts the shared render
-behaviour and carries a documented 15-item divergence list. Do the same: when
+behaviour in one static state and carries a documented 15-item divergence list.
+Do the same: when
 you find a comment standing in for a check, replace it with the check.
 
 **Extract the substrate, not the widget.** Share the uniform part; leave the
@@ -166,9 +184,15 @@ divergent part alone. Forcing genuinely different behavior into a common shape
 is worse than the duplication it removes.
 
 **Refactoring?** Moving functions is free — two phases of the prior refactor
-moved ~3,000 lines with zero test changes. Moving *state* costs roughly 150
-mechanical test-line edits per 10 extractions, because ~90% of `internal/ui`
-tests read unexported `App` fields directly.
+moved ~3,000 lines with zero test changes. Moving *state* is not: `internal/ui`
+test files make **2,905 references to 142 distinct unexported `App` fields and
+methods** (type-checked count, not a grep; measured at the end of Phase 0, up
+from 1,995 / 121 before it — Phase 0's characterization tests added ~910 of
+them). Budget roughly **220 mechanical test-line edits per 10 extractions**, and
+expect five members to dominate: `messagepane` (243), `compose` (204),
+`focusedPanel` (146), `mode` (129) and `activeChannelID` (125) are 847 of the
+total between them. Method and per-member breakdown:
+`docs/superpowers/plans/2026-09-06-architecture-refactor.md`, Phase 0 "Achieved".
 
 **Found a bug while refactoring?** Record it, annotate it, raise it separately.
 A refactor commit that also changes behavior cannot be reviewed.

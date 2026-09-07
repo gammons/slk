@@ -85,7 +85,12 @@ func TestLinkPickerModeKeys(t *testing.T) {
 				// the "files" arm clears both pickerKind and
 				// pickerFiles. The stale "links" is harmless today
 				// because the next open always reassigns it, but the
-				// asymmetry is unexplained.
+				// asymmetry is unexplained. Filed as
+				// https://github.com/gammons/slk/issues/194.
+				//
+				// WHEN THAT BUG IS FIXED: the links arm clears too, so
+				// flip this to want "" (and consider extending it to
+				// a.pickerFiles == nil, which the arm also leaves).
 				if a.pickerKind != "links" {
 					t.Errorf("pickerKind = %q; the links arm is expected to leave it set", a.pickerKind)
 				}

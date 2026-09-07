@@ -3489,9 +3489,16 @@ func DateFromTS(ts string) string {
 // Mirrors the injectable clock sidebar.Model already carries
 // (internal/ui/sidebar/model.go:500), but is package-level rather than a
 // struct field because FormatDateSeparator is a free function shared by
-// the channel and thread panes. Not guarded by a mutex: it is set from
-// test setup before any render and reverted in t.Cleanup, and this
-// package's tests do not run in parallel.
+// the channel and thread panes.
+//
+// Not guarded by a mutex. The invariant that makes that safe is not
+// "this package's tests are serial" — SetNowFunc is exported and is
+// called from three test binaries (this package, internal/ui and
+// internal/ui/thread), which cannot see each other's writes. It is
+// this: no production code path writes it, so every write comes from
+// test setup on the test goroutine before any render, and no test in
+// the repo calls t.Parallel. A future parallel test, or any production
+// caller, would need this to become an atomic.Value or a struct field.
 var nowFunc = time.Now
 
 // SetNowFunc injects a clock for tests. Pass nil to revert to time.Now.

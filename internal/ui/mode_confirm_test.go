@@ -146,7 +146,13 @@ func TestConfirmModeKeys(t *testing.T) {
 			// harmless rather than that it is load-bearing.
 			//
 			// BUG?: mode_confirm.go:19-20 therefore has no effect on
-			// behaviour today. Recorded, not changed.
+			// behaviour today. Recorded, not changed. Tracked as
+			// https://github.com/gammons/slk/issues/188, item 1.
+			//
+			// WHEN THAT DEAD CODE GOES: nothing here changes — the
+			// observable behaviour is identical with or without the
+			// normalisation, which is the point of the row. Keep it as
+			// the proof that deleting the arm is safe.
 			name:     "shift+esc cancels: the esc arm is inert, the default cancels either way",
 			setup:    openConfirm(&shiftEscFired),
 			key:      keyMod(tea.KeyEscape, tea.ModShift),

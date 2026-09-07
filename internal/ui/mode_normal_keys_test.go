@@ -1007,6 +1007,12 @@ func TestNormalModeKeys(t *testing.T) {
 			// happens. Enter on a header still toggles (app.go:1549) --
 			// see the row below -- so the feature has a working path;
 			// only this arm is dead. Characterized as-is, not fixed.
+			// Tracked as https://github.com/gammons/slk/issues/184.
+			// WHEN THAT BUG IS FIXED: space toggles, so this row must be
+			// re-pinned to assert IsCollapsed FLIPPED. Do not delete it;
+			// it is the regression guard for the fix. The precondition
+			// on keyPress(' ').String() == "space" stays useful either
+			// way.
 			//
 			// The section is recorded in setup rather than re-read after
 			// the press because ToggleCollapse rebuilds the nav rows
@@ -2103,6 +2109,12 @@ func TestNormalModeKeys(t *testing.T) {
 			// fails the '1'..'9' test, and does nothing. The
 			// counterpart `G` (Bottom, mode_normal.go:185) works.
 			// Recorded, not fixed: this is a characterization test.
+			// Same issue, https://github.com/gammons/slk/issues/184.
+			// WHEN THAT BUG IS FIXED: `g` (or `gg`) jumps to the top, so
+			// re-pin the selected index to 0 rather than 3. Note the
+			// issue records an open question — the binding says `g`, the
+			// help text says `gg` — so the fix may need a pending-chord
+			// state and this row may become two.
 			name:     "g is bound to Top but handleNormalMode has no arm for it",
 			opts:     normalOpts(),
 			setup:    func(t *testing.T, a *App) { focusMessageAt(t, a, 3) },

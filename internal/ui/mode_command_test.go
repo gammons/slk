@@ -182,7 +182,11 @@ func TestCommandMode_NonPrintableKeysAreDropped(t *testing.T) {
 // a command name with an accented character would be untypeable. It is
 // also what keeps the byte-wise backspace at mode_command.go:49 from
 // ever producing invalid UTF-8, so the two are coupled. Recorded, not
-// changed.
+// changed. Tracked as https://github.com/gammons/slk/issues/187,
+// together with the identical filter in channelfinder.
+//
+// WHEN THAT BUG IS FIXED: the rune is accepted, so this test must be
+// re-pinned to assert a.cmdline == "é" and renamed accordingly.
 func TestCommandMode_NonASCIIRuneIsDropped(t *testing.T) {
 	a := NewApp()
 	a.enterCommandMode()

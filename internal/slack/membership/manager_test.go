@@ -3,7 +3,6 @@ package membership
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -199,11 +198,15 @@ func TestEnsureFreshStaleTriggersFetch(t *testing.T) {
 // re-triggers a fetch while the failed one is still unwinding gets it
 // dropped at the `busy` branch instead of at the branch under test.
 //
-// This is a condition wait, not a deadline: it returns the instant the
-// state holds, has no wall-clock budget, and so a loaded machine can
-// only make it spin a few more times — it cannot false-fail. If the
-// fetch never completes this hangs, and `go test`'s own timeout dumps
-// the stuck goroutine, the same failure mode as a blocking receive.
+// This is a condition wait, not a deadline: it returns on the next poll
+// after the state holds, has no wall-clock budget, and so a loaded
+// machine can only make it poll a few more times — it cannot
+// false-fail. The 1ms is a poll INTERVAL, not a budget; it matches
+// internal/emoji/place_test.go's awaitInflightCleared, and it is a
+// sleep rather than a runtime.Gosched so the wait does not burn a core
+// under -race. If the fetch never completes this hangs, and `go test`'s
+// own timeout dumps the stuck goroutine, the same failure mode as a
+// blocking receive.
 func awaitFailedFetchDone(mgr *Manager, channelID string) {
 	for {
 		mgr.mu.Lock()
@@ -213,7 +216,7 @@ func awaitFailedFetchDone(mgr *Manager, channelID string) {
 		if failed && !busy {
 			return
 		}
-		runtime.Gosched()
+		time.Sleep(time.Millisecond)
 	}
 }
 

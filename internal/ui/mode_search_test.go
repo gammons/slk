@@ -138,7 +138,11 @@ func TestSearchModeKeys(t *testing.T) {
 			// segment redraw, and the prompt stays open.
 			//
 			// BUG?: a user holding shift cannot cancel the prompt.
-			// Recorded, not fixed.
+			// Recorded, not fixed. Tracked as
+			// https://github.com/gammons/slk/issues/186.
+			// WHEN THAT BUG IS FIXED: shift+esc cancels, so wantMode
+			// becomes ModeNormal and the search segment clears.
+			// Re-pin this row to that; do not delete it.
 			name:     "shift+esc does not cancel: key.Matches sees the modifier, the rune filter drops it",
 			opts:     searchOpts(),
 			setup:    typeSearch("part"),
@@ -260,6 +264,10 @@ func TestSearchModeKeys(t *testing.T) {
 			// which the rune filter drops.
 			//
 			// BUG?: shift+enter neither submits nor types. Recorded.
+			// Same issue, https://github.com/gammons/slk/issues/186.
+			// WHEN THAT BUG IS FIXED: shift+enter submits, so wantMode
+			// becomes ModeNormal and cmd is non-nil. Re-pin, do not
+			// delete.
 			name:     "shift+enter does not submit: key.Matches sees the modifier, the rune filter drops it",
 			opts:     searchOpts(),
 			setup:    typeSearch("hello"),

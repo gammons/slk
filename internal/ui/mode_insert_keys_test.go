@@ -916,6 +916,12 @@ func TestInsertModeKeys(t *testing.T) {
 			// breaking the line -- silently losing a draft the user
 			// meant to keep composing.
 			//
+			// Tracked as https://github.com/gammons/slk/issues/185.
+			// WHEN THAT BUG IS FIXED: alt+enter inserts a newline, so
+			// this row must be re-characterized — wantMode becomes
+			// ModeInsert, cmd becomes nil, and the compose value
+			// becomes "hello\n". Do not delete it; re-pin it.
+			//
 			// Asserted as it behaves today. Nothing was changed.
 			name: "alt+enter SENDS the channel message instead of inserting a newline",
 			opts: insertOpts(),
@@ -950,6 +956,10 @@ func TestInsertModeKeys(t *testing.T) {
 			// BUG?: the thread mirror of the same defect. isSend and
 			// isNewline are computed once at :150-152, ABOVE the panel
 			// split, so both composes inherit the classification.
+			//
+			// Same issue, https://github.com/gammons/slk/issues/185.
+			// WHEN THAT BUG IS FIXED: re-pin as ModeInsert / cmd nil /
+			// thread compose value "reply\n".
 			name: "alt+enter SENDS the thread reply instead of inserting a newline",
 			opts: insertOpts(),
 			setup: func(t *testing.T, a *App) {

@@ -539,6 +539,12 @@ func TestChannelFinderModeKeys(t *testing.T) {
 			//
 			// searchresults is NOT affected: its default arm counts
 			// RUNES (searchresults/model.go:180).
+			//
+			// Tracked as https://github.com/gammons/slk/issues/187,
+			// which covers both sites. WHEN THAT BUG IS FIXED: the rune
+			// reaches the query, so re-pin Query() to "é", expect the
+			// list to re-filter (0 items against this fixture) and a
+			// non-nil reschedule cmd.
 			name:     "a non-ASCII rune never reaches the query: the printable filter is byte-based",
 			opts:     channelFinderOpts(),
 			setup:    assertFinderOpen,

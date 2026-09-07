@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -176,6 +175,16 @@ func zeroStagger(t *testing.T) {
 // gate, which it does — through ensureThreadSubscriptions' deferred
 // gate.done() — as the very last thing it executes.
 //
+// PRECONDITION, and the reason this is a barrier at all: the caller has
+// already acquired the gate. gate.tryStart runs SYNCHRONOUSLY in
+// ensureThreadSubscriptions (thread_subscriptions.go:224) and sets
+// running=true before the goroutine is spawned at :228, so by the time
+// ensureThreadSubscriptions returns the flag is already up. If tryStart
+// ever moved inside the goroutine, every call site here would observe
+// running==false immediately and return without waiting for anything —
+// silently degrading the tests to mid-flight snapshots, with no failure
+// to announce it.
+//
 // Tests that need a barrier *after* that goroutine is finished have
 // nothing else to wait on. onDone is one deferred call too early: a
 // trigger issued the instant it fires still finds running=true and is
@@ -184,12 +193,15 @@ func zeroStagger(t *testing.T) {
 // to receive from; the gate's own flag is the state, and reading it
 // under the gate's mutex is the barrier.
 //
-// This is a condition wait, not a wall-clock budget: it returns the
-// instant the flag clears and never on a deadline, so a loaded machine
-// can only make it spin a few more times — it cannot false-fail. If the
-// goroutine never exits, this hangs and `go test`'s own timeout dumps
-// the goroutine that is stuck, the same failure mode as a blocking
-// channel receive.
+// This is a condition wait, not a wall-clock budget: it returns on the
+// next poll after the flag clears and never on a deadline, so a loaded
+// machine can only make it poll a few more times — it cannot
+// false-fail. The 1ms is a poll INTERVAL, not a budget; it matches
+// internal/emoji/place_test.go's awaitInflightCleared, and it is a
+// sleep rather than a runtime.Gosched so the wait does not burn a core
+// under -race. If the goroutine never exits, this hangs and `go test`'s
+// own timeout dumps the goroutine that is stuck, the same failure mode
+// as a blocking channel receive.
 func awaitGateRelease(g *threadSubsGate) {
 	for {
 		g.mu.Lock()
@@ -198,7 +210,7 @@ func awaitGateRelease(g *threadSubsGate) {
 		if !running {
 			return
 		}
-		runtime.Gosched()
+		time.Sleep(time.Millisecond)
 	}
 }
 

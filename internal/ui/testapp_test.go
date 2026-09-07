@@ -264,12 +264,15 @@ func newTestApp(t testing.TB, opts ...testOpt) *App {
 }
 
 // buildTestApp is newTestApp without the testing.TB. It exists for the
-// two legacy builders that take no *testing.T and whose signatures must
+// four legacy builders that take no testing.TB and whose signatures must
 // not change, because changing them would edit test bodies at every call
-// site: newPanelAtApp (app_panelat_test.go) and sixelTestApp
-// (sixelpaint_test.go). Prefer newTestApp everywhere else — the TB is
-// there so a future assertion inside the builder reports at the caller's
-// line.
+// site: newPanelAtApp (app_panelat_test.go), sixelTestApp
+// (sixelpaint_test.go), and makeBenchApp / makeWideScrollApp
+// (app_bench_test.go — their callers hold a *testing.B, which would
+// satisfy newTestApp's testing.TB, but threading it through means
+// editing every Benchmark body). Prefer newTestApp everywhere else —
+// the TB is there so a future assertion inside the builder reports at
+// the caller's line.
 func buildTestApp(opts ...testOpt) *App {
 	cfg := testAppCfg{w: 120, h: 30, mode: ModeNormal, view: ViewChannels}
 	for _, o := range opts {
@@ -316,9 +319,20 @@ func buildTestApp(opts ...testOpt) *App {
 	// app.go) — it disarms a pending ctrl+w chord and restores the help
 	// hint, clears a.cmdline when leaving ModeCommand, clears selections
 	// when entering ModeInsert, and always pushes the mode into the
-	// statusbar. Firing those on a freshly built App would contaminate
-	// the precondition the test is trying to establish, so we skip the
-	// call when the requested mode is already the default.
+	// statusbar.
+	//
+	// The skip is NOT because those side effects would contaminate the
+	// precondition — they would not. On a freshly built App all three
+	// guarded branches are inert (pendingWinCmd is false, a.mode is not
+	// ModeCommand, and clearSelections is a no-op with no selection),
+	// and the unconditional a.statusbar.SetMode(mode) at app.go:1663 is
+	// the one thing production ALWAYS does after a.mode = mode at :1662
+	// — so skipping it is what would desynchronise the statusbar from
+	// a.mode, a state production never reaches. The skip is safe here
+	// only because it is guarded on cfg.mode == ModeNormal, which is
+	// both NewApp's starting mode and the statusbar's own initial mode
+	// string ("NORMAL", statusbar/model.go:49): the call would be a
+	// no-op, so not making it desynchronises nothing.
 	//
 	// Consequence for callers: passing a Mode variable that happens to
 	// equal ModeNormal gets you nothing. A test that genuinely wants

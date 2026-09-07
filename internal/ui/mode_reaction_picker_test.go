@@ -384,6 +384,16 @@ func TestReactionPickerModeKeys(t *testing.T) {
 			// pressing up first is a clamp to 0 either way. Recorded
 			// because the asymmetry with "down" is easy to break.
 			//
+			// NO ISSUE FILED, and deliberately so — unlike the other
+			// twelve BUG?: rows this one records no defect. "down"
+			// needs the list because its bound is len(list)-1; "up"'s
+			// bound is the constant 0, and filter() resets m.selected
+			// to 0 whenever the list changes (model.go:249, :264), so
+			// there is no state in which consulting the list would
+			// change the outcome. The question mark is answered: no.
+			// Adding the lookup would leave this row green, which is
+			// why it needs no back-reference to close a loop.
+			//
 			// The setup moves DOWN off the boundary and back UP with
 			// the same key under test, so this row separates "clamped
 			// at the top" from "ignored entirely": an ignored up
@@ -434,6 +444,12 @@ func TestReactionPickerModeKeys(t *testing.T) {
 				// says so. A Contains-only assertion would survive the
 				// fix silently, which is the one thing a BUG?: marker
 				// must not do.
+				//
+				// Filed as https://github.com/gammons/slk/issues/193.
+				// WHEN THAT BUG IS FIXED: row 0 becomes a "t..." prefix
+				// match, the HasPrefix half fires with the message
+				// below, and this row should be re-pinned to REQUIRE
+				// HasPrefix rather than forbid it.
 				saveCommitted(t, a, &calls, func(name string) {
 					if !strings.Contains(name, "t") {
 						t.Errorf("committed %q, want a name matching the query \"t\"", name)
