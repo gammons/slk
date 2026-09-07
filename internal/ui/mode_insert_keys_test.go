@@ -33,6 +33,18 @@ import (
 // Where a pair could be satisfied by a handler that always picked one
 // side, the row opens a picker (or seeds text) in BOTH composes and
 // asserts the untouched one really was untouched.
+//
+// The two six-row Esc blocks (edit-active and plain) are deliberately
+// NOT collapsed into an (open, isActive) picker table, even though they
+// rhyme. The rhyme is shallow: the two blocks differ in setup (beginEdit
+// or not), in wantMode, in the post-condition asserted
+// (editing.IsActive() vs. the mode), and three of the twelve rows carry
+// extra assertions the other nine do not -- the picker-in-both-composes
+// pins at :325 and :480, and the threadVisible-conjunct pin at :533.
+// A table would have to parameterise all four axes, which is AGENTS.md's
+// "forcing genuinely different behavior into a common shape". For
+// characterization rows, whose job is to be readable against the source
+// during review, the explicit form is the cheaper one to check.
 // ---------------------------------------------------------------------
 
 // insertOpts is the shared bundle. An active channel is required by the
@@ -95,6 +107,16 @@ func openChannelPicker(t *testing.T, c *compose.Model) {
 	typeInto(t, c, "#")
 	if !c.IsChannelActive() {
 		t.Fatal("precondition: channel picker did not open")
+	}
+}
+
+// mustMention asserts the mention picker is open on the given compose.
+// Separate from openMentionPicker because these rows type a query after
+// the trigger and need the assertion at the end, not in the middle.
+func mustMention(t *testing.T, c *compose.Model) {
+	t.Helper()
+	if !c.IsMentionActive() {
+		t.Fatal("precondition: mention picker is not active")
 	}
 }
 
@@ -881,6 +903,79 @@ func TestInsertModeKeys(t *testing.T) {
 			},
 		},
 		{
+			// BUG?: alt+enter SENDS. Terminals that report Alt on Enter
+			// are common, and the natural reading of "Shift+Enter /
+			// Ctrl+J insert a newline" is that other Enter chords do
+			// too. They do not. mode_insert.go:150 computes
+			//
+			//	isSend := code == tea.KeyEnter && !mod.Contains(tea.ModShift)
+			//
+			// so EVERY modifier that is not Shift leaves isSend true,
+			// while :151 admits only ModShift (or ctrl+j) as a newline.
+			// Alt+Enter therefore dispatches the message rather than
+			// breaking the line -- silently losing a draft the user
+			// meant to keep composing.
+			//
+			// Asserted as it behaves today. Nothing was changed.
+			name: "alt+enter SENDS the channel message instead of inserting a newline",
+			opts: insertOpts(),
+			setup: func(t *testing.T, a *App) {
+				typeInto(t, &a.compose, "hello")
+				noPickerActive(t, "compose", &a.compose)
+			},
+			key: keyMod(tea.KeyEnter, tea.ModAlt),
+			// The send path runs exitInsertAfterSend (app.go:1674),
+			// which is itself the first observable separating "sent"
+			// from "inserted a newline".
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if cmd == nil {
+					t.Fatal("cmd = nil, want SendMessageMsg: alt+enter sends today")
+				}
+				sent, ok := cmd().(SendMessageMsg)
+				if !ok {
+					t.Fatalf("cmd() = %T, want SendMessageMsg", cmd())
+				}
+				if sent.ChannelID != "C1" || sent.Text != "hello" {
+					t.Errorf("SendMessageMsg = %+v, want {ChannelID:C1 Text:hello}", sent)
+				}
+				// No "\n" anywhere: the compose was Reset by the send
+				// path, not extended by a newline.
+				if got := a.compose.Value(); got != "" {
+					t.Errorf("compose value = %q, want empty (sent and reset, not a newline)", got)
+				}
+			},
+		},
+		{
+			// BUG?: the thread mirror of the same defect. isSend and
+			// isNewline are computed once at :150-152, ABOVE the panel
+			// split, so both composes inherit the classification.
+			name: "alt+enter SENDS the thread reply instead of inserting a newline",
+			opts: insertOpts(),
+			setup: func(t *testing.T, a *App) {
+				showThread(t, a)
+				typeInto(t, &a.threadCompose, "reply")
+				noPickerActive(t, "threadCompose", &a.threadCompose)
+			},
+			key:      keyMod(tea.KeyEnter, tea.ModAlt),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if cmd == nil {
+					t.Fatal("cmd = nil, want SendThreadReplyMsg: alt+enter sends today")
+				}
+				reply, ok := cmd().(SendThreadReplyMsg)
+				if !ok {
+					t.Fatalf("cmd() = %T, want SendThreadReplyMsg", cmd())
+				}
+				if reply.ChannelID != "C1" || reply.ThreadTS != "10.0" || reply.Text != "reply" {
+					t.Errorf("SendThreadReplyMsg = %+v, want {ChannelID:C1 ThreadTS:10.0 Text:reply}", reply)
+				}
+				if got := a.threadCompose.Value(); got != "" {
+					t.Errorf("thread compose value = %q, want empty (sent and reset, not a newline)", got)
+				}
+			},
+		},
+		{
 			// An empty thread compose swallows Enter: no cmd, no mode
 			// change, nothing sent.
 			name:     "enter on an empty THREAD compose sends nothing and stays in insert mode",
@@ -922,6 +1017,107 @@ func TestInsertModeKeys(t *testing.T) {
 				// MessageEditedMsg, not on submit (app.go:1670-1673).
 				if got := a.threadCompose.Value(); got != "edited reply" {
 					t.Errorf("thread compose value = %q, want it preserved until the edit lands", got)
+				}
+			},
+		},
+
+		// =============================================================
+		// Backspace and Tab (mode_insert.go:198-201, :207-211, :244-247)
+		//
+		// Neither key has an arm anywhere in mode_insert.go: both reach
+		// the same compose.Update statement that printable typing does.
+		// That absence IS the characterisation -- what these keys do is
+		// entirely the compose model's business, and what the handler
+		// contributes is only WHICH compose gets them. Rows exist
+		// because the brief named both groups, and because a future
+		// refactor that adds an interception here would be invisible
+		// otherwise.
+		// =============================================================
+		{
+			name:     "backspace deletes the last character of the channel compose",
+			opts:     insertOpts(),
+			setup:    func(t *testing.T, a *App) { typeInto(t, &a.compose, "abc") },
+			key:      keyCode(tea.KeyBackspace),
+			wantMode: ModeInsert,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if got := a.compose.Value(); got != "ab" {
+					t.Errorf("compose value = %q, want %q", got, "ab")
+				}
+			},
+		},
+		{
+			// The mirror. Seeding both composes keeps a wrong target
+			// visible: a handler that always edited the channel side
+			// would leave "draf" here.
+			name: "backspace with the thread panel focused edits the THREAD compose",
+			opts: insertOpts(),
+			setup: func(t *testing.T, a *App) {
+				showThread(t, a)
+				typeInto(t, &a.threadCompose, "reply")
+				typeInto(t, &a.compose, "draft")
+			},
+			key:      keyCode(tea.KeyBackspace),
+			wantMode: ModeInsert,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if got := a.threadCompose.Value(); got != "repl" {
+					t.Errorf("thread compose value = %q, want %q", got, "repl")
+				}
+				if got := a.compose.Value(); got != "draft" {
+					t.Errorf("channel compose value = %q, want %q untouched", got, "draft")
+				}
+			},
+		},
+		{
+			// Tab is the pickers' SECOND completion key
+			// (compose/model.go:557, :650, :1132). With no picker up
+			// there is nothing to complete, and the textarea drops it
+			// outright: no tab character, no space, and the cursor does
+			// not move -- which the follow-up keystroke is what proves.
+			name: "tab with no picker active inserts nothing and leaves the cursor at the end",
+			opts: insertOpts(),
+			setup: func(t *testing.T, a *App) {
+				typeInto(t, &a.compose, "abc")
+				noPickerActive(t, "compose", &a.compose)
+			},
+			key:      keyCode(tea.KeyTab),
+			wantMode: ModeInsert,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if got := a.compose.Value(); got != "abc" {
+					t.Errorf("compose value = %q, want %q: tab typed something", got, "abc")
+				}
+				if cmd != nil {
+					t.Errorf("cmd = %T, want nil", cmd)
+				}
+				if got := afterKeyValue(&a.compose, 'X'); got != "abcX" {
+					t.Errorf("value after a follow-up key = %q, want %q (cursor still at the end)", got, "abcX")
+				}
+			},
+		},
+		{
+			// The completion the brief named. Tab only reaches the
+			// picker through the forwarding branch at :207-211, so this
+			// row fails both if the picker stops handling Tab and if the
+			// handler stops forwarding.
+			name: "tab with a mention picker active completes the mention, exactly as enter does",
+			opts: insertOpts(),
+			setup: func(t *testing.T, a *App) {
+				a.compose.SetUsers([]mentionpicker.User{
+					{ID: "U9", DisplayName: "alice", Username: "alice", InChannel: true},
+				})
+				typeInto(t, &a.compose, "@al")
+				mustMention(t, &a.compose)
+			},
+			key:      keyCode(tea.KeyTab),
+			wantMode: ModeInsert,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if got := a.compose.Value(); got != "@alice " {
+					t.Errorf("compose value = %q, want %q (the picker's completion)", got, "@alice ")
+				}
+				if a.compose.IsMentionActive() {
+					t.Error("mention picker still active after tab")
+				}
+				if cmd != nil {
+					t.Errorf("cmd = %T, want nil", cmd)
 				}
 			},
 		},
@@ -971,14 +1167,4 @@ func TestInsertModeKeys(t *testing.T) {
 			},
 		},
 	})
-}
-
-// mustMention asserts the mention picker is open on the given compose.
-// Separate from openMentionPicker because these rows type a query after
-// the trigger and need the assertion at the end, not in the middle.
-func mustMention(t *testing.T, c *compose.Model) {
-	t.Helper()
-	if !c.IsMentionActive() {
-		t.Fatal("precondition: mention picker is not active")
-	}
 }

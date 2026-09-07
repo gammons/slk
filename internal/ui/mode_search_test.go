@@ -36,17 +36,19 @@ func searchOpts() []testOpt {
 
 // typeSearch seeds the prompt buffer and the segment that mirrors it,
 // exactly as a run of printable keys through this handler would have
-// left them. Asserting afterwards is not paranoia: several rows below
-// are about *editing* that buffer, and an empty buffer would make a
-// backspace row pass by doing nothing.
+// left them.
+//
+// Deliberately NOT followed by a read-back of a.searchInput: a direct
+// field assignment cannot fail its own read, so such a check would be
+// false assurance sitting next to the load-bearing guards elsewhere in
+// this file (assertFinderOpen, seedWorkspaceResults, openConfirm), all
+// of which push state through a sub-model's API that can silently
+// reject it. This one does not.
 func typeSearch(s string) func(*testing.T, *App) {
 	return func(t *testing.T, a *App) {
 		t.Helper()
 		a.searchInput = s
 		a.statusbar.SetSearch("/" + s)
-		if a.searchInput != s {
-			t.Fatalf("precondition: searchInput = %q, want %q", a.searchInput, s)
-		}
 	}
 }
 
@@ -111,9 +113,6 @@ func TestSearchModeKeys(t *testing.T) {
 					terms:   []string{"hello"},
 					matches: []string{"1.0", "2.0"},
 					idx:     1,
-				}
-				if a.search == nil || len(a.search.matches) != 2 {
-					t.Fatal("precondition: active search not seeded")
 				}
 			},
 			key:      keyCode(tea.KeyEscape),
@@ -237,9 +236,6 @@ func TestSearchModeKeys(t *testing.T) {
 				typeSearch("   ")(t, a)
 				emptyEnter.install(a)
 				a.search = &activeSearch{query: "old", matches: []string{"1.0"}}
-				if a.search == nil {
-					t.Fatal("precondition: active search not seeded")
-				}
 			},
 			key:      keyCode(tea.KeyEnter),
 			wantMode: ModeNormal,

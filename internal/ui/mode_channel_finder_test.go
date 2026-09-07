@@ -25,12 +25,20 @@ import (
 //	query changed  -> debounced server-side search
 //	otherwise      -> nil
 //
-// This is one of the three modes sharing normalizeFinderKey, and the
-// only one where every arm of it is load-bearing: channelfinder matches
-// the bare strings "enter"/"esc"/"up"/"down"/"backspace"
-// (channelfinder/model.go:272-306) and drops anything longer than one
-// rune. So each modified-key row below fails outright if its arm is
-// removed -- the finder would stay open and the mode would not change.
+// This is one of the three modes sharing normalizeFinderKey, and one of
+// the TWO where every arm of it is load-bearing -- handleWorkspaceSearchMode
+// is the other, and mode_workspace_search_test.go ships rows for all five
+// arms as well. (handleSearchMode is the odd one out: only its backspace
+// arm has an effect.)
+//
+// Load-bearing because channelfinder matches the bare strings
+// "enter"/"esc"/"up"/"down"/"backspace" (channelfinder/model.go:272-306)
+// and its printable-key filter is BYTE-based
+// (channelfinder/model.go:311: `len(keyStr) == 1 && keyStr[0] >= 32 &&
+// keyStr[0] <= 126`), so an un-normalised "shift+down" is neither
+// matched nor typed. Each modified-key row below therefore fails
+// outright if its arm is removed -- the finder would stay open and the
+// mode would not change.
 // ---------------------------------------------------------------------
 
 // channelFinderItems is the fixture list. LastVisited is set explicitly
@@ -347,6 +355,15 @@ func TestChannelFinderModeKeys(t *testing.T) {
 			},
 		},
 		{
+			// The `m.selected > 0` guard (channelfinder/model.go:296).
+			//
+			// Honest limit, same as the unbound-ctrl-chord row below:
+			// a pinned-and-unmoved highlight is also what a key that
+			// never reached the widget produces, so the assertions
+			// alone do not prove dispatch. What they DO catch is the
+			// guard's removal -- `m.selected--` would run to -1, and
+			// the render no longer highlights the Threads row. The
+			// preceding shift+up row is what pins the "up" arm proper.
 			name:     "up at the top row is inert but keeps the finder open",
 			opts:     channelFinderOpts(),
 			setup:    assertFinderOpen,
@@ -470,11 +487,22 @@ func TestChannelFinderModeKeys(t *testing.T) {
 			},
 		},
 		{
-			// channelfinder drops anything that is not a single
-			// printable ASCII rune, so a ctrl chord neither types nor
-			// navigates. Pinned because a naive query append would
-			// insert "ctrl+x" into the filter.
-			name:     "a ctrl chord neither types nor navigates",
+			// UNBOUND is the operative word: channelfinder DOES bind two
+			// ctrl chords -- "ctrl+n" alongside "down" and "ctrl+p"
+			// alongside "up" (channelfinder/model.go:289, :295) -- so
+			// "a ctrl chord does nothing" would be false as a general
+			// claim. ctrl+x hits neither, falls past the switch, and is
+			// then rejected by the printable filter at :311 because
+			// "ctrl+x" is six bytes long.
+			//
+			// Pinned because a naive query append would insert the
+			// literal "ctrl+x" into the filter.
+			//
+			// Honest limit: the assertions here would also hold if the
+			// key never reached the widget. What establishes that it
+			// does is a mutation -- dropping `len(keyStr) == 1` from
+			// :311 makes the query read "ctrl+x" and this row fail.
+			name:     "an unbound ctrl chord neither types nor navigates",
 			opts:     channelFinderOpts(),
 			setup:    assertFinderOpen,
 			key:      keyMod('x', tea.ModCtrl),
@@ -486,6 +514,46 @@ func TestChannelFinderModeKeys(t *testing.T) {
 				if got := modalHighlightedRow(t, a.channelFinder.View(120)); !strings.Contains(got, "Threads") {
 					t.Errorf("highlighted row = %q, want it to stay on %q", got, "Threads")
 				}
+				if cmd != nil {
+					t.Errorf("cmd = %T, want nil", cmd)
+				}
+			},
+		},
+		{
+			// BUG?: channelfinder's printable filter is BYTE-based --
+			// `len(keyStr) == 1 && keyStr[0] >= 32 && keyStr[0] <= 126`
+			// (channelfinder/model.go:311) -- byte-for-byte the same
+			// predicate as mode_command.go:57, which this commit already
+			// flags via TestCommandMode_NonASCIIRuneIsDropped. "e" with
+			// an acute accent is two bytes, fails the length test, and
+			// never reaches the query: a channel whose name carries
+			// non-ASCII characters cannot be searched by them.
+			//
+			// The two sites are materially identical, coupling included:
+			// channelfinder's backspace at :303 slices `m.query` by
+			// BYTE, exactly as mode_command.go:49 slices `a.cmdline`.
+			// Widening either filter alone would let the matching
+			// backspace cut a multi-byte rune in half. Neither is
+			// fixable in isolation -- which is why both are recorded
+			// rather than fixed.
+			//
+			// searchresults is NOT affected: its default arm counts
+			// RUNES (searchresults/model.go:180).
+			name:     "a non-ASCII rune never reaches the query: the printable filter is byte-based",
+			opts:     channelFinderOpts(),
+			setup:    assertFinderOpen,
+			key:      keyPress('é'),
+			wantMode: ModeChannelFinder,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if got := a.channelFinder.Query(); got != "" {
+					t.Errorf("finder query = %q, want empty: the byte-based filter should have dropped it", got)
+				}
+				if got := len(a.channelFinder.FilteredItems()); got != 4 {
+					t.Errorf("%d filtered items, want 4 (the list never re-filtered)", got)
+				}
+				// No query change means no reschedule, which is the
+				// second observable that the rune was dropped rather
+				// than accepted-then-filtered-to-nothing.
 				if cmd != nil {
 					t.Errorf("cmd = %T, want nil", cmd)
 				}

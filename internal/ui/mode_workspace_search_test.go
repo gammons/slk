@@ -509,7 +509,14 @@ func TestWorkspaceSearchModeKeys(t *testing.T) {
 			},
 		},
 		{
-			name:     "a ctrl chord neither types nor navigates",
+			// UNBOUND, and searchresults binds MORE ctrl chords than
+			// channelfinder does: "ctrl+k"/"ctrl+p" alongside "up" and
+			// "ctrl+j"/"ctrl+n" alongside "down"
+			// (searchresults/model.go:160, :164). ctrl+x hits none of
+			// them and falls to the default arm, where the single-RUNE
+			// test (:180 -- rune-based here, unlike channelfinder's
+			// byte-based :311) rejects the six-rune "ctrl+x".
+			name:     "an unbound ctrl chord neither types nor navigates",
 			opts:     wsSearchOpts(),
 			setup:    typeWorkspaceQuery("hello"),
 			key:      keyMod('x', tea.ModCtrl),
