@@ -89,6 +89,38 @@ func (f *fakeFetcher) fetchCallsSnapshot() []imgpkg.FetchRequest {
 	return out
 }
 
+// awaitInflightCleared blocks until spawnEmojiFetch's goroutine has
+// removed key from the process-global inflightEmoji map.
+//
+// This is the one place in this file that polls rather than receiving,
+// and it is deliberate: the delete runs in a *deferred* func that
+// executes after SendMsg, so SendMsg is not a barrier for it and there
+// is no later signal to receive. The map is the only observation point.
+//
+// It matters because inflightEmoji is process-global and several tests
+// below reuse the same URL (hence the same cache key). A test that
+// returns while its fetch goroutine still holds the entry makes the
+// next test's Place calls silently no-op: the next test then sees zero
+// fetches and no EmojiImageReadyMsg. Measured window: the entry was
+// still held at the SendMsg observation point in 9 of 20000 runs, and
+// `-count=N` re-runs every one of these tests in the same process.
+//
+// The 1ms is a poll interval, not a wall-clock budget — there is no
+// deadline. A genuinely leaked entry hangs, and `go test`'s own timeout
+// dumps the goroutine that still holds it, which is a better diagnostic
+// than a downstream test failing with "want 1 fetch, got 0".
+func awaitInflightCleared(key string) {
+	for {
+		inflightEmojiMu.Lock()
+		_, busy := inflightEmoji[key]
+		inflightEmojiMu.Unlock()
+		if !busy {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestPlace_InvalidInputs(t *testing.T) {
 	ff := newFakeFetcher()
 	ctx := PlaceContext{Fetcher: ff}
@@ -175,6 +207,11 @@ func TestPlace_ColdPath_SpawnsFetch(t *testing.T) {
 	ff := newFakeFetcher()
 	url := "https://a.slack-edge.com/...1f44d.png"
 
+	// SendMsg is not the fetch goroutine's last step — the inflight
+	// delete is deferred behind it — and the two tests below reuse this
+	// URL, so hand the entry back before returning.
+	t.Cleanup(func() { awaitInflightCleared(EmojiCacheKey(url)) })
+
 	// Configure fetch to succeed instantly. Prerender map is empty so
 	// Prerendered returns false — cold path triggered.
 	ff.fetchFn = func(ctx context.Context, req imgpkg.FetchRequest) (imgpkg.FetchResult, error) {
@@ -202,14 +239,17 @@ func TestPlace_ColdPath_SpawnsFetch(t *testing.T) {
 		t.Errorf("cold-path flush should be nil; got %T", flush)
 	}
 
-	// Wait for SendMsg to fire from the fetch goroutine.
-	select {
-	case msg := <-done:
-		if msg.URL != url {
-			t.Errorf("EmojiImageReadyMsg.URL = %q, want %q", msg.URL, url)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("SendMsg(EmojiImageReadyMsg) never fired within 1s")
+	// Wait for SendMsg to fire from the fetch goroutine. spawnEmojiFetch
+	// dispatches it after Fetch returns, so this also orders the
+	// fetchCalls read below.
+	//
+	// No timeout by design: `go test` already imposes one (default 10m),
+	// and a wall-clock budget inside the test is exactly what made this
+	// load-sensitive. A hang here produces a goroutine dump naming the
+	// stuck test, which beats "SendMsg never fired within 1s".
+	msg := <-done
+	if msg.URL != url {
+		t.Errorf("EmojiImageReadyMsg.URL = %q, want %q", msg.URL, url)
 	}
 
 	// Exactly one fetch should have been issued.
@@ -226,6 +266,10 @@ func TestPlace_ColdPath_SpawnsFetch(t *testing.T) {
 func TestPlace_ColdPath_DedupsConcurrentCalls(t *testing.T) {
 	ff := newFakeFetcher()
 	url := "https://a.slack-edge.com/...1f44d.png"
+
+	// Same shared cache key as the tests either side of this one; see
+	// awaitInflightCleared.
+	t.Cleanup(func() { awaitInflightCleared(EmojiCacheKey(url)) })
 
 	gate := make(chan struct{})
 	ff.fetchFn = func(ctx context.Context, req imgpkg.FetchRequest) (imgpkg.FetchResult, error) {
@@ -260,18 +304,26 @@ func TestPlace_ColdPath_DedupsConcurrentCalls(t *testing.T) {
 		}()
 	}
 
-	// Give goroutines a moment to enqueue their fetches.
-	time.Sleep(50 * time.Millisecond)
-	close(gate)
+	// Every Place call has returned, so every dedup decision against
+	// inflightEmoji has been made and no further fetch can be spawned.
+	// Place never blocks (it hands the work to a goroutine), so this
+	// does not deadlock against the gate. Ordering it *before* the
+	// release is the invariant the old 50ms sleep was approximating: if
+	// the single fetch were allowed to finish early, its deferred
+	// inflight cleanup would let a straggler Place spawn a second one
+	// and the assertion below would fail for a reason that has nothing
+	// to do with dedup.
 	wg.Wait()
+	close(gate)
 
 	// Wait for the single in-flight fetch goroutine to finish (and append
 	// to fetchCalls) before asserting.
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("deduped fetch never completed within 1s")
-	}
+	//
+	// No timeout by design: `go test` already imposes one (default 10m),
+	// and a wall-clock budget inside the test is exactly what made this
+	// load-sensitive. A hang here produces a goroutine dump naming the
+	// stuck test, which beats "deduped fetch never completed within 1s".
+	<-done
 
 	// All Place calls should have observed the in-flight dedup and
 	// only one Fetch should have actually been issued.
@@ -303,22 +355,22 @@ func TestPlace_ColdPath_FetchError_LeavesNoInflight(t *testing.T) {
 	pctx := PlaceContext{Fetcher: ff, SendMsg: func(any) {}}
 
 	Place(pctx, url, 2)
+
+	// Prove a fetch actually ran before waiting for the cleanup —
+	// otherwise a leaked inflight entry from an earlier test would make
+	// Place a no-op and the wait below would return instantly on an
+	// entry that was never ours, i.e. a false pass.
+	//
+	// No timeout by design: `go test` already imposes one (default 10m),
+	// and a wall-clock budget inside the test is exactly what made this
+	// load-sensitive. A hang here produces a goroutine dump naming the
+	// stuck test.
 	<-first
 
-	// Give the deferred inflight cleanup time to run.
-	deadline := time.Now().Add(time.Second)
-	for {
-		inflightEmojiMu.Lock()
-		_, busy := inflightEmoji[key]
-		inflightEmojiMu.Unlock()
-		if !busy {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("inflight entry for %q never cleared after fetch error", key)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	// The cleanup under test. Unbounded on purpose: a leak hangs and
+	// `go test` dumps the holder, rather than failing on a 1s budget
+	// that only holds on an unloaded machine.
+	awaitInflightCleared(key)
 }
 
 // TestPlace_NegativeCache_ShortCircuitsAfterFetchFailure verifies that
@@ -334,13 +386,25 @@ func TestPlace_NegativeCache_ShortCircuitsAfterFetchFailure(t *testing.T) {
 	badURL := "https://a.slack-edge.com/...nonexistent.png"
 
 	// Fetch always errors (404-style).
-	fetchDone := make(chan struct{}, 1)
 	ff.fetchFn = func(ctx context.Context, req imgpkg.FetchRequest) (imgpkg.FetchResult, error) {
-		defer func() { fetchDone <- struct{}{} }()
 		return imgpkg.FetchResult{}, errors.New("HTTP 404")
 	}
 
-	pctx := PlaceContext{Fetcher: ff, SendMsg: func(any) {}}
+	// spawnEmojiFetch's error branch calls markEmojiURLFailed and *then*
+	// SendMsg, so the dispatch is a barrier for the negative-cache write
+	// the second Place below depends on. The fake fetcher's own return
+	// is not: it happens before markEmojiURLFailed, which is why the old
+	// version had to follow it with a polling loop.
+	resolved := make(chan struct{}, 1)
+	pctx := PlaceContext{Fetcher: ff, SendMsg: func(m any) {
+		if _, ok := m.(EmojiImageReadyMsg); ok {
+			select {
+			case resolved <- struct{}{}:
+			default:
+			}
+		}
+	}}
+	t.Cleanup(func() { awaitInflightCleared(EmojiCacheKey(badURL)) })
 
 	// First Place: cold path, returns reservation + spawns fetch.
 	s1, _, ok1 := Place(pctx, badURL, 2)
@@ -351,15 +415,25 @@ func TestPlace_NegativeCache_ShortCircuitsAfterFetchFailure(t *testing.T) {
 		t.Errorf("first Place placement = %q, want two spaces", s1)
 	}
 
-	// Wait for the fetch goroutine to complete and mark the URL failed.
-	<-fetchDone
-	// Allow the deferred inflight-cleanup + negative-cache mark to settle.
-	deadline := time.Now().Add(time.Second)
-	for !isEmojiURLFailed(badURL) {
-		if time.Now().After(deadline) {
-			t.Fatalf("negative cache never marked %q as failed", badURL)
-		}
-		time.Sleep(5 * time.Millisecond)
+	// Wait for the fetch goroutine to resolve the URL's status.
+	//
+	// No timeout by design: `go test` already imposes one (default 10m),
+	// and a wall-clock budget inside the test is exactly what made this
+	// load-sensitive. A hang here produces a goroutine dump naming the
+	// stuck test, which beats "negative cache never marked X as failed".
+	<-resolved
+
+	// Best-effort guard on the ordering the barrier above relies on: the
+	// mark must already be visible when the ready msg is dispatched, or a
+	// host that re-renders on that msg would still take the cold path and
+	// re-reserve a blank. It cannot false-positive — firing means the
+	// mark genuinely was not visible — but it is a sample, not a proof:
+	// against a mutation that moves markEmojiURLFailed after SendMsg it
+	// fires in ~2/500 runs (0/500 at GOMAXPROCS=1). The prior version
+	// polled until marked and so tolerated that mutation entirely.
+	if !isEmojiURLFailed(badURL) {
+		t.Fatalf("EmojiImageReadyMsg dispatched before markEmojiURLFailed(%q); "+
+			"the negative cache is not visible to the re-render it triggers", badURL)
 	}
 
 	// Second Place: negative-cache short-circuit, returns ok=false.
@@ -385,13 +459,34 @@ func TestPlace_NegativeCache_DoesNotAffectOtherURLs(t *testing.T) {
 	ff.fetchFn = func(ctx context.Context, req imgpkg.FetchRequest) (imgpkg.FetchResult, error) {
 		return imgpkg.FetchResult{}, nil
 	}
-	pctx := PlaceContext{Fetcher: ff, SendMsg: func(any) {}}
+	resolved := make(chan struct{}, 1)
+	pctx := PlaceContext{Fetcher: ff, SendMsg: func(m any) {
+		if _, ok := m.(EmojiImageReadyMsg); ok {
+			select {
+			case resolved <- struct{}{}:
+			default:
+			}
+		}
+	}}
+	t.Cleanup(func() { awaitInflightCleared(EmojiCacheKey(goodURL)) })
 
 	// good URL should still take the cold path.
 	_, _, ok := Place(pctx, goodURL, 2)
 	if !ok {
-		t.Errorf("Place for unrelated URL after marking different URL failed: ok=false, want true")
+		// Fatal rather than Error: with no cold path there is no fetch
+		// goroutine, and the receive below would have nothing to wait for.
+		t.Fatalf("Place for unrelated URL after marking different URL failed: ok=false, want true")
 	}
+
+	// The cold path spawned a fetch goroutine. Await it so it does not
+	// outlive the test body — this test previously returned with the
+	// goroutine still running and still holding goodURL's inflight entry.
+	//
+	// No timeout by design: `go test` already imposes one (default 10m),
+	// and a wall-clock budget inside the test is exactly what made this
+	// load-sensitive. A hang here produces a goroutine dump naming the
+	// stuck test.
+	<-resolved
 }
 
 // TestPlace_NegativeCache_DispatchesReadyMsgOnFailure verifies that
@@ -417,14 +512,17 @@ func TestPlace_NegativeCache_DispatchesReadyMsgOnFailure(t *testing.T) {
 		},
 	}
 
+	t.Cleanup(func() { awaitInflightCleared(EmojiCacheKey(badURL)) })
+
 	Place(pctx, badURL, 2)
 
-	select {
-	case msg := <-gotMsg:
-		if msg.URL != badURL {
-			t.Errorf("EmojiImageReadyMsg.URL = %q, want %q", msg.URL, badURL)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("no EmojiImageReadyMsg dispatched after fetch failure")
+	// No timeout by design: `go test` already imposes one (default 10m),
+	// and a wall-clock budget inside the test is exactly what made this
+	// load-sensitive. A hang here produces a goroutine dump naming the
+	// stuck test, which beats "no EmojiImageReadyMsg dispatched after
+	// fetch failure".
+	msg := <-gotMsg
+	if msg.URL != badURL {
+		t.Errorf("EmojiImageReadyMsg.URL = %q, want %q", msg.URL, badURL)
 	}
 }
