@@ -218,6 +218,27 @@ func TestNewMessageModeKeys(t *testing.T) {
 			},
 		},
 		{
+			// Pins the enter/esc/up/down/backspace half of the
+			// normalisation switch. The tea.KeySpace arm below is
+			// load-bearing for unmodified presses too (String() answers
+			// "space"); these five are load-bearing only for MODIFIED
+			// ones, because Key.String() prefixes active modifiers
+			// before the special-key name (ultraviolet key.go:413-431,
+			// 459). shift+down arrives as "shift+down", which
+			// newmessagepicker.HandleKey ignores; the arm rewrites it
+			// to "down".
+			name:     "shift+down navigates: the Code switch strips the modifier",
+			opts:     newMessageOpts(),
+			setup:    openNewMessagePicker,
+			key:      keyMod(tea.KeyDown, tea.ModShift),
+			wantMode: ModeNewMessage,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if got := modalHighlightedRow(t, a.newMessagePicker.View(120)); !strings.Contains(got, "bob") {
+					t.Errorf("highlighted row = %q, want it to contain %q: shift+down should normalise to down", got, "bob")
+				}
+			},
+		},
+		{
 			name:     "ctrl+n moves the highlight like down",
 			opts:     newMessageOpts(),
 			setup:    openNewMessagePicker,
@@ -248,14 +269,34 @@ func TestNewMessageModeKeys(t *testing.T) {
 			},
 		},
 		{
-			name:     "ctrl+p at the top clamps rather than wrapping",
-			opts:     newMessageOpts(),
-			setup:    openNewMessagePicker,
+			// The setup walks DOWN to carol and back UP with the same
+			// ctrl+p under test, so this row separates "clamped at the
+			// top" from "ignored entirely". Asserting only that the
+			// highlight is on alice after one ctrl+p would pass against
+			// a handler that did nothing — alice is where it already
+			// was.
+			name: "ctrl+p at the top clamps rather than wrapping",
+			opts: newMessageOpts(),
+			setup: func(t *testing.T, a *App) {
+				openNewMessagePicker(t, a)
+				for range 2 {
+					_ = dispatchModeKey(a, keyCode(tea.KeyDown))
+				}
+				if got := modalHighlightedRow(t, a.newMessagePicker.View(120)); !strings.Contains(got, "carol") {
+					t.Fatalf("precondition: highlighted row = %q, want %q after two downs", got, "carol")
+				}
+				for range 2 {
+					_ = dispatchModeKey(a, keyMod('p', tea.ModCtrl))
+				}
+				if got := modalHighlightedRow(t, a.newMessagePicker.View(120)); !strings.Contains(got, "alice") {
+					t.Fatalf("precondition: highlighted row = %q, want %q: ctrl+p did not walk back to the top", got, "alice")
+				}
+			},
 			key:      keyMod('p', tea.ModCtrl),
 			wantMode: ModeNewMessage,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
 				if got := modalHighlightedRow(t, a.newMessagePicker.View(120)); !strings.Contains(got, "alice") {
-					t.Errorf("highlighted row = %q, want it to contain %q", got, "alice")
+					t.Errorf("highlighted row = %q, want %q: a further ctrl+p must clamp, not wrap", got, "alice")
 				}
 			},
 		},

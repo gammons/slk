@@ -9,15 +9,6 @@ import (
 	"github.com/gammons/slk/internal/ui/presencemenu"
 )
 
-// presenceMenuRows is the number of rows the menu is currently
-// showing, derived from the modal's own height math (nRows + 7).
-// presencemenu.Model exposes neither View nor Selected, so BoxSize is
-// the only window onto its filter state.
-func presenceMenuRows(a *App) int {
-	_, h := a.presenceMenu.BoxSize(120, 30)
-	return h - 7
-}
-
 // presenceMenuAllRows is the unfiltered row count for a menu opened
 // without DND active: Active, Away, six fixed snoozes, "until tomorrow
 // morning", and "Snooze custom...".
@@ -26,18 +17,20 @@ const presenceMenuAllRows = 10
 // openPresenceMenu mirrors the production open path
 // (mode_normal.go:228-231) for a workspace with no DND, and records
 // every setStatusFn call.
-func openPresenceMenu(calls *[]statusCall) func(*testing.T, *App) {
+func openPresenceMenu(calls *[]statusCall, withSetter bool) func(*testing.T, *App) {
 	return func(t *testing.T, a *App) {
 		*calls = nil
-		a.SetStatusSetter(func(action presencemenu.Action, mins int) {
-			*calls = append(*calls, statusCall{action: action, mins: mins})
-		})
+		if withSetter {
+			a.SetStatusSetter(func(action presencemenu.Action, mins int) {
+				*calls = append(*calls, statusCall{action: action, mins: mins})
+			})
+		}
 		pres, dndEnabled, dndEnd, _ := a.presence.Status(a.activeTeamID)
 		a.presenceMenu.OpenWith(a.workspaceNameForActive(), pres, dndEnabled, dndEnd)
 		if !a.presenceMenu.IsVisible() {
 			t.Fatal("precondition: presence menu did not open")
 		}
-		if got := presenceMenuRows(a); got != presenceMenuAllRows {
+		if got := modalRows(&a.presenceMenu); got != presenceMenuAllRows {
 			t.Fatalf("precondition: %d rows, want %d", got, presenceMenuAllRows)
 		}
 	}
@@ -51,7 +44,7 @@ func typePresenceQuery(t *testing.T, a *App, q string, wantRows int) {
 	for _, r := range q {
 		_ = dispatchModeKey(a, keyPress(r))
 	}
-	if got := presenceMenuRows(a); got != wantRows {
+	if got := modalRows(&a.presenceMenu); got != wantRows {
 		t.Fatalf("precondition: query %q left %d rows, want %d", q, got, wantRows)
 	}
 }
@@ -60,7 +53,8 @@ func typePresenceQuery(t *testing.T, a *App, q string, wantRows int) {
 // (mode_presence_menu.go:21).
 func TestPresenceMenuModeKeys(t *testing.T) {
 	var calls []statusCall
-	open := openPresenceMenu(&calls)
+	open := openPresenceMenu(&calls, true)
+	openNoSetter := openPresenceMenu(&calls, false)
 	opts := []testOpt{withActiveTeam("T1")}
 
 	runKeyCases(t, ModePresenceMenu, []keyCase{
@@ -101,6 +95,40 @@ func TestPresenceMenuModeKeys(t *testing.T) {
 				}
 				if len(calls) != 1 || calls[0].action != presencemenu.ActionSetActive {
 					t.Errorf("setStatusFn calls = %+v, want one ActionSetActive", calls)
+				}
+				if cmd != nil {
+					t.Errorf("cmd = %T, want nil", cmd)
+				}
+			},
+		},
+		{
+			// The false half of `if a.setStatusFn != nil`
+			// (mode_presence_menu.go:50): the optimistic local apply
+			// and the status bar update still happen, only the API
+			// hand-off is skipped. Every other row here installs a
+			// setter, and the one row that does not ("key with the
+			// menu closed") returns before the guard — so without this
+			// row that branch is never taken. Go statement coverage
+			// reports 100% either way, because the guarded call shares
+			// its statement with the guard.
+			name:     "enter with no status setter still applies presence locally",
+			opts:     opts,
+			setup:    openNoSetter,
+			key:      keyCode(tea.KeyEnter),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if a.setStatusFn != nil {
+					t.Fatal("precondition: setStatusFn should be nil; the guard is not being exercised")
+				}
+				if a.presenceMenu.IsVisible() {
+					t.Error("menu still visible after enter")
+				}
+				pres, _, _, ok := a.presence.Status("T1")
+				if !ok || pres != "active" {
+					t.Errorf("cached presence = %q (ok=%v), want \"active\": the local apply must not depend on the setter", pres, ok)
+				}
+				if len(calls) != 0 {
+					t.Errorf("setStatusFn calls = %+v, want none recorded with no setter wired", calls)
 				}
 				if cmd != nil {
 					t.Errorf("cmd = %T, want nil", cmd)
@@ -195,7 +223,7 @@ func TestPresenceMenuModeKeys(t *testing.T) {
 				a.presence.Set("T1", "away", true, time.Now().Add(time.Hour))
 				pres, dndEnabled, dndEnd, _ := a.presence.Status("T1")
 				a.presenceMenu.OpenWith("ws", pres, dndEnabled, dndEnd)
-				if got := presenceMenuRows(a); got != presenceMenuAllRows+1 {
+				if got := modalRows(&a.presenceMenu); got != presenceMenuAllRows+1 {
 					t.Fatalf("precondition: %d rows, want %d (End-DND row missing)", got, presenceMenuAllRows+1)
 				}
 				typePresenceQuery(t, a, "end", 1)
@@ -272,6 +300,24 @@ func TestPresenceMenuModeKeys(t *testing.T) {
 			},
 		},
 		{
+			// Pins the normalisation switch at the top of the handler.
+			// Key.String() prefixes active modifiers before the
+			// special-key name (ultraviolet key.go:413-431, 459), so
+			// shift+down arrives as "shift+down" and
+			// presencemenu.HandleKey ignores it; `case tea.KeyDown`
+			// rewrites it to "down". No unmodified row can distinguish
+			// the arm from a no-op, because KeyDown alone already
+			// stringifies to "down".
+			name:     "shift+down navigates: the Code switch strips the modifier",
+			opts:     opts,
+			setup:    open,
+			key:      keyMod(tea.KeyDown, tea.ModShift),
+			wantMode: ModePresenceMenu,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				assertCommitsTo(t, a, presencemenu.ActionSetAway)
+			},
+		},
+		{
 			name:     "ctrl+n moves the cursor like down",
 			opts:     opts,
 			setup:    open,
@@ -295,9 +341,28 @@ func TestPresenceMenuModeKeys(t *testing.T) {
 			},
 		},
 		{
-			name:     "k at the top clamps rather than wrapping",
-			opts:     opts,
-			setup:    open,
+			// The setup walks DOWN to row 2 and back UP with the same
+			// 'k' under test, so this row separates "clamped at the
+			// top" from "ignored entirely": a 'k' the model ignores
+			// leaves the cursor on row 2 (a snooze) and the commit
+			// probe reports that action instead of ActionSetActive.
+			//
+			// Unlike the finder tables the intermediate positions
+			// cannot be asserted here — presencemenu exposes neither
+			// View nor Selected, and the only probe (commit an enter)
+			// closes the menu, so it can be used once and only at the
+			// end.
+			name: "k at the top clamps rather than wrapping",
+			opts: opts,
+			setup: func(t *testing.T, a *App) {
+				open(t, a)
+				for range 2 {
+					_ = dispatchModeKey(a, keyCode(tea.KeyDown))
+				}
+				for range 2 {
+					_ = dispatchModeKey(a, keyPress('k'))
+				}
+			},
 			key:      keyPress('k'),
 			wantMode: ModePresenceMenu,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
@@ -305,9 +370,20 @@ func TestPresenceMenuModeKeys(t *testing.T) {
 			},
 		},
 		{
-			name:     "ctrl+p at the top clamps rather than wrapping",
-			opts:     opts,
-			setup:    open,
+			// Same construction as the 'k' row above, and for the same
+			// reason: two downs then two ctrl+p's, so an ignored
+			// ctrl+p leaves the cursor on row 2 and the probe fails.
+			name: "ctrl+p at the top clamps rather than wrapping",
+			opts: opts,
+			setup: func(t *testing.T, a *App) {
+				open(t, a)
+				for range 2 {
+					_ = dispatchModeKey(a, keyCode(tea.KeyDown))
+				}
+				for range 2 {
+					_ = dispatchModeKey(a, keyMod('p', tea.ModCtrl))
+				}
+			},
 			key:      keyMod('p', tea.ModCtrl),
 			wantMode: ModePresenceMenu,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
@@ -323,7 +399,7 @@ func TestPresenceMenuModeKeys(t *testing.T) {
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
 				// "Active" and "Away" prefix-match; no snooze label
 				// contains an "a".
-				if got := presenceMenuRows(a); got != 2 {
+				if got := modalRows(&a.presenceMenu); got != 2 {
 					t.Errorf("rows = %d, want 2 after filtering on \"a\"", got)
 				}
 			},
@@ -338,7 +414,7 @@ func TestPresenceMenuModeKeys(t *testing.T) {
 			key:      keyCode(tea.KeyBackspace),
 			wantMode: ModePresenceMenu,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
-				if got := presenceMenuRows(a); got != presenceMenuAllRows {
+				if got := modalRows(&a.presenceMenu); got != presenceMenuAllRows {
 					t.Errorf("rows = %d, want %d", got, presenceMenuAllRows)
 				}
 			},
@@ -350,7 +426,7 @@ func TestPresenceMenuModeKeys(t *testing.T) {
 			key:      keyCode(tea.KeyBackspace),
 			wantMode: ModePresenceMenu,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
-				if got := presenceMenuRows(a); got != presenceMenuAllRows {
+				if got := modalRows(&a.presenceMenu); got != presenceMenuAllRows {
 					t.Errorf("rows = %d, want %d", got, presenceMenuAllRows)
 				}
 			},
@@ -362,7 +438,7 @@ func TestPresenceMenuModeKeys(t *testing.T) {
 			key:      keyMod('x', tea.ModCtrl),
 			wantMode: ModePresenceMenu,
 			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
-				if got := presenceMenuRows(a); got != presenceMenuAllRows {
+				if got := modalRows(&a.presenceMenu); got != presenceMenuAllRows {
 					t.Errorf("rows = %d, want %d: ctrl+x should not have filtered", got, presenceMenuAllRows)
 				}
 				if cmd != nil {

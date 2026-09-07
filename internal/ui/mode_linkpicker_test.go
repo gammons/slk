@@ -224,6 +224,35 @@ func TestLinkPickerModeKeys(t *testing.T) {
 			},
 		},
 		{
+			// The control for the seven "shift+down navigates" rows in
+			// the sibling tables. Those handlers open with a
+			// `switch msg.Key().Code` that rewrites shift+down back to
+			// "down"; this handler has no such switch, so the raw
+			// Key.String() reaches linkpicker.HandleKey. Key.String()
+			// prefixes active modifiers before the special-key name
+			// (ultraviolet key.go:413-431, 459), so what arrives is
+			// "shift+down", which matches nothing and is dropped.
+			//
+			// Same keystroke, opposite outcome, and the only
+			// difference is the normalisation switch — which is what
+			// makes those seven rows evidence rather than coincidence.
+			name:     "shift+down is dropped: this handler does not normalise",
+			setup:    openLinkPicker,
+			key:      keyMod(tea.KeyDown, tea.ModShift),
+			wantMode: ModeLinkPicker,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if got := a.linkPicker.Selected(); got != 0 {
+					t.Errorf("selected = %d, want 0: \"shift+down\" reaches the model unnormalised and matches nothing", got)
+				}
+				if !a.linkPicker.IsVisible() {
+					t.Error("shift+down should not close the picker")
+				}
+				if cmd != nil {
+					t.Errorf("cmd = %T, want nil", cmd)
+				}
+			},
+		},
+		{
 			name: "k moves the selection back",
 			setup: func(t *testing.T, a *App) {
 				openLinkPicker(t, a)
@@ -238,13 +267,29 @@ func TestLinkPickerModeKeys(t *testing.T) {
 			},
 		},
 		{
-			name:     "up at the top clamps rather than wrapping",
-			setup:    openLinkPicker,
+			// The setup moves DOWN off the boundary and then back UP
+			// with the same key under test, so this row separates
+			// "clamped at the top" from "ignored entirely". Asserting
+			// only Selected() == 0 after one up would pass against a
+			// handler that did nothing, which the "unhandled key" row
+			// already covers.
+			name: "up at the top clamps rather than wrapping",
+			setup: func(t *testing.T, a *App) {
+				openLinkPicker(t, a)
+				_ = dispatchModeKey(a, keyCode(tea.KeyDown))
+				if got := a.linkPicker.Selected(); got != 1 {
+					t.Fatalf("precondition: selected = %d, want 1 after down", got)
+				}
+				_ = dispatchModeKey(a, keyCode(tea.KeyUp))
+				if got := a.linkPicker.Selected(); got != 0 {
+					t.Fatalf("precondition: selected = %d, want 0: up did not move the selection back", got)
+				}
+			},
 			key:      keyCode(tea.KeyUp),
 			wantMode: ModeLinkPicker,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
 				if got := a.linkPicker.Selected(); got != 0 {
-					t.Errorf("selected = %d, want 0", got)
+					t.Errorf("selected = %d, want 0: a further up at the top must clamp, not wrap", got)
 				}
 			},
 		},

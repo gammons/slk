@@ -20,14 +20,30 @@ type statusCall struct {
 // through the handler itself (so the buffer is reached the way
 // production reaches it) and records every setStatusFn call into calls.
 func snoozeSetup(digits string, calls *[]statusCall) func(*testing.T, *App) {
+	return snoozeSetupWith(digits, calls, true)
+}
+
+// snoozeSetupNoSetter is snoozeSetup with no status setter installed,
+// so the handler's `if a.setStatusFn != nil` guard
+// (mode_presence_snooze.go:41) is driven down its false branch. Every
+// other row in this table installs a setter, so without this one that
+// branch is never taken — and Go statement coverage would not say so,
+// because the guarded call is on the same statement line.
+func snoozeSetupNoSetter(digits string, calls *[]statusCall) func(*testing.T, *App) {
+	return snoozeSetupWith(digits, calls, false)
+}
+
+func snoozeSetupWith(digits string, calls *[]statusCall, withSetter bool) func(*testing.T, *App) {
 	return func(t *testing.T, a *App) {
 		// Reset: runKeyCases gives each row a fresh App but `calls`
 		// is captured by the whole table, so without this every row
 		// would see its predecessors' invocations.
 		*calls = nil
-		a.SetStatusSetter(func(action presencemenu.Action, mins int) {
-			*calls = append(*calls, statusCall{action: action, mins: mins})
-		})
+		if withSetter {
+			a.SetStatusSetter(func(action presencemenu.Action, mins int) {
+				*calls = append(*calls, statusCall{action: action, mins: mins})
+			})
+		}
 		for _, r := range digits {
 			_ = dispatchModeKey(a, keyPress(r))
 		}
@@ -127,6 +143,37 @@ func TestPresenceCustomSnoozeModeKeys(t *testing.T) {
 				}
 				if cmd == nil {
 					t.Error("cmd = nil, want the toast-clear tick")
+				}
+			},
+		},
+		{
+			// The false half of `if a.setStatusFn != nil`
+			// (mode_presence_snooze.go:41): the optimistic local apply
+			// still happens, only the API hand-off is skipped.
+			name:     "enter with no status setter still applies the snooze locally",
+			opts:     opts,
+			setup:    snoozeSetupNoSetter("30", &calls),
+			key:      keyCode(tea.KeyEnter),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if a.setStatusFn != nil {
+					t.Fatal("precondition: setStatusFn should be nil; the guard is not being exercised")
+				}
+				_, dnd, end, ok := a.presence.Status("T1")
+				if !ok || !dnd {
+					t.Fatalf("DNDEnabled = %v (ok=%v), want true: the local apply must not depend on the setter", dnd, ok)
+				}
+				if d := time.Until(end); d < 29*time.Minute || d > 31*time.Minute {
+					t.Errorf("DND ends in %v, want ~30m", d)
+				}
+				if got := a.presence.SnoozeBuf(); got != "" {
+					t.Errorf("snooze buffer = %q, want empty", got)
+				}
+				if len(calls) != 0 {
+					t.Errorf("setStatusFn calls = %+v, want none recorded with no setter wired", calls)
+				}
+				if cmd != nil {
+					t.Errorf("cmd = %T, want nil on the success path", cmd)
 				}
 			},
 		},

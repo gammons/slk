@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"image/color"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -10,6 +11,28 @@ import (
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/gammons/slk/internal/ui/themeswitcher"
 )
+
+// colorEqual compares two color.Color values by their RGBA components.
+//
+// styles.Primary is a color.Color interface value. Comparing two of
+// them with == happens to work today, because lipgloss.Color returns a
+// comparable color.RGBA for "#RRGGBB" input and every theme in the
+// table is hex — but == on an interface holding a non-comparable
+// dynamic type panics at runtime instead of failing cleanly, and this
+// comparison is the load-bearing mechanism of the only global-state
+// canary in the tree (see the three-layer containment note on
+// TestThemeSwitcherModeKeys). RGBA() has neither failure mode.
+//
+// Same shape as styles.colorEqual (styles/styles_test.go:13), which is
+// unexported in package styles and so unreachable from package ui.
+func colorEqual(a, b color.Color) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	r1, g1, b1, a1 := a.RGBA()
+	r2, g2, b2, a2 := b.RGBA()
+	return r1 == r2 && g1 == g2 && b1 == b2 && a1 == a2
+}
 
 // themeSave records one invocation of the App's theme saver.
 type themeSave struct {
@@ -27,14 +50,6 @@ const (
 	draculaPrimary = "#BD93F9"
 	lightPrimary   = "#0366D6"
 )
-
-// themeSwitcherRows is the number of rows the picker is showing,
-// derived from the modal's own height math (nRows + 7).
-// themeswitcher.Model exposes neither View nor Selected.
-func themeSwitcherRows(a *App) int {
-	_, h := a.themeSwitcher.BoxSize(120, 30)
-	return h - 7
-}
 
 // TestThemeSwitcherModeKeys characterizes handleThemeSwitcherMode
 // (mode_theme_switcher.go:22).
@@ -59,9 +74,7 @@ func themeSwitcherRows(a *App) int {
 // reducer_search_test.go use.
 func TestThemeSwitcherModeKeys(t *testing.T) {
 	styles.Apply("dark", config.Theme{})
-	// styles.Primary is a color.Color interface value, but lipgloss.Color
-	// returns a comparable color.RGBA for "#RRGGBB" inputs and every
-	// theme in the table is hex, so == is safe here.
+	// Compared with colorEqual, never ==: see the note there.
 	darkPrimary := styles.Primary
 	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
 
@@ -69,7 +82,7 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 
 	// pinDark is the per-case guard described above.
 	pinDark := func(t *testing.T, _ *App) {
-		if styles.Primary != darkPrimary {
+		if !colorEqual(styles.Primary, darkPrimary) {
 			t.Fatalf("a previous case leaked its theme: styles.Primary = %v, want %v",
 				styles.Primary, darkPrimary)
 		}
@@ -92,7 +105,7 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			if !a.themeSwitcher.IsVisible() {
 				t.Fatal("precondition: theme switcher did not open")
 			}
-			if got := themeSwitcherRows(a); got != len(themeSwitcherItems()) {
+			if got := modalRows(&a.themeSwitcher); got != len(themeSwitcherItems()) {
 				t.Fatalf("precondition: %d rows, want %d", got, len(themeSwitcherItems()))
 			}
 		}
@@ -126,7 +139,7 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 				if len(saves) != 0 {
 					t.Errorf("themeSaveFn called %d times, want 0", len(saves))
 				}
-				if styles.Primary != darkPrimary {
+				if !colorEqual(styles.Primary, darkPrimary) {
 					t.Errorf("styles.Primary = %v, want the palette untouched", styles.Primary)
 				}
 				if cmd != nil {
@@ -143,7 +156,7 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 				if a.themeSwitcher.IsVisible() {
 					t.Error("picker still visible after enter")
 				}
-				if want := lipgloss.Color(draculaPrimary); styles.Primary != want {
+				if want := lipgloss.Color(draculaPrimary); !colorEqual(styles.Primary, want) {
 					t.Errorf("styles.Primary = %v, want %v (Dracula)", styles.Primary, want)
 				}
 				if len(saves) != 1 {
@@ -211,7 +224,7 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			key:      keyCode(tea.KeyEnter),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
-				if want := lipgloss.Color("#FF00FF"); styles.Primary != want {
+				if want := lipgloss.Color("#FF00FF"); !colorEqual(styles.Primary, want) {
 					t.Errorf("styles.Primary = %v, want the override %v", styles.Primary, want)
 				}
 			},
@@ -225,7 +238,7 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 				if a.themeSaveFn != nil {
 					t.Fatal("precondition: themeSaveFn should be nil")
 				}
-				if want := lipgloss.Color(draculaPrimary); styles.Primary != want {
+				if want := lipgloss.Color(draculaPrimary); !colorEqual(styles.Primary, want) {
 					t.Errorf("styles.Primary = %v, want %v (Dracula)", styles.Primary, want)
 				}
 			},
@@ -237,7 +250,7 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 				for _, r := range "zzz" {
 					_ = dispatchModeKey(a, keyPress(r))
 				}
-				if got := themeSwitcherRows(a); got != 1 {
+				if got := modalRows(&a.themeSwitcher); got != 1 {
 					t.Fatalf("precondition: %d rows for a non-matching query, want the 1-row floor", got)
 				}
 			},
@@ -247,7 +260,7 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 				if !a.themeSwitcher.IsVisible() {
 					t.Error("picker closed on a no-match enter")
 				}
-				if styles.Primary != darkPrimary {
+				if !colorEqual(styles.Primary, darkPrimary) {
 					t.Errorf("styles.Primary = %v, want the palette untouched", styles.Primary)
 				}
 				if len(saves) != 0 {
@@ -265,7 +278,7 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			wantMode: ModeThemeSwitcher,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
 				commitsTo(t, a, "Light")
-				if want := lipgloss.Color(lightPrimary); styles.Primary != want {
+				if want := lipgloss.Color(lightPrimary); !colorEqual(styles.Primary, want) {
 					t.Errorf("styles.Primary = %v, want %v (Light)", styles.Primary, want)
 				}
 			},
@@ -274,6 +287,22 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			name:     "j moves the cursor like down",
 			setup:    openGlobal,
 			key:      keyPress('j'),
+			wantMode: ModeThemeSwitcher,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				commitsTo(t, a, "Light")
+			},
+		},
+		{
+			// Pins the normalisation switch at the top of the handler.
+			// Key.String() prefixes active modifiers before the
+			// special-key name (ultraviolet key.go:413-431, 459), so
+			// shift+down arrives as "shift+down" and
+			// themeswitcher.HandleKey ignores it; `case tea.KeyDown`
+			// rewrites it to "down". No unmodified row can distinguish
+			// the arm from a no-op.
+			name:     "shift+down navigates: the Code switch strips the modifier",
+			setup:    openGlobal,
+			key:      keyMod(tea.KeyDown, tea.ModShift),
 			wantMode: ModeThemeSwitcher,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
 				commitsTo(t, a, "Light")
@@ -301,8 +330,26 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			},
 		},
 		{
-			name:     "k at the top clamps rather than wrapping",
-			setup:    openGlobal,
+			// The setup walks DOWN to "Dark" (row 2) and back UP with
+			// the same 'k' under test, so this row separates "clamped
+			// at the top" from "ignored entirely": a 'k' the model
+			// ignores leaves the cursor on "Dark" and commitsTo says
+			// so. Asserting only that a single 'k' still commits
+			// "Dracula" would pass against a handler that did nothing.
+			//
+			// The intermediate positions cannot be asserted here:
+			// themeswitcher exposes neither View nor Selected, and the
+			// only cursor probe (commit an enter) closes the picker.
+			name: "k at the top clamps rather than wrapping",
+			setup: func(t *testing.T, a *App) {
+				openGlobal(t, a)
+				for range 2 {
+					_ = dispatchModeKey(a, keyCode(tea.KeyDown))
+				}
+				for range 2 {
+					_ = dispatchModeKey(a, keyPress('k'))
+				}
+			},
 			key:      keyPress('k'),
 			wantMode: ModeThemeSwitcher,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
@@ -310,8 +357,17 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			},
 		},
 		{
-			name:     "ctrl+p at the top clamps rather than wrapping",
-			setup:    openGlobal,
+			// Same construction as the 'k' row above, same reason.
+			name: "ctrl+p at the top clamps rather than wrapping",
+			setup: func(t *testing.T, a *App) {
+				openGlobal(t, a)
+				for range 2 {
+					_ = dispatchModeKey(a, keyCode(tea.KeyDown))
+				}
+				for range 2 {
+					_ = dispatchModeKey(a, keyMod('p', tea.ModCtrl))
+				}
+			},
 			key:      keyMod('p', tea.ModCtrl),
 			wantMode: ModeThemeSwitcher,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
@@ -326,7 +382,7 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			key:      keyPress('g'),
 			wantMode: ModeThemeSwitcher,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
-				if got := themeSwitcherRows(a); got != 1 {
+				if got := modalRows(&a.themeSwitcher); got != 1 {
 					t.Errorf("rows = %d, want 1 after filtering on \"g\"", got)
 				}
 				commitsTo(t, a, "Light")
@@ -337,14 +393,14 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			setup: func(t *testing.T, a *App) {
 				openGlobal(t, a)
 				_ = dispatchModeKey(a, keyPress('g'))
-				if got := themeSwitcherRows(a); got != 1 {
+				if got := modalRows(&a.themeSwitcher); got != 1 {
 					t.Fatalf("precondition: rows = %d, want 1", got)
 				}
 			},
 			key:      keyCode(tea.KeyBackspace),
 			wantMode: ModeThemeSwitcher,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
-				if got := themeSwitcherRows(a); got != len(themeSwitcherItems()) {
+				if got := modalRows(&a.themeSwitcher); got != len(themeSwitcherItems()) {
 					t.Errorf("rows = %d, want %d", got, len(themeSwitcherItems()))
 				}
 			},
@@ -355,7 +411,7 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			key:      keyCode(tea.KeyBackspace),
 			wantMode: ModeThemeSwitcher,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
-				if got := themeSwitcherRows(a); got != len(themeSwitcherItems()) {
+				if got := modalRows(&a.themeSwitcher); got != len(themeSwitcherItems()) {
 					t.Errorf("rows = %d, want %d", got, len(themeSwitcherItems()))
 				}
 			},
@@ -366,7 +422,7 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			key:      keyMod('x', tea.ModCtrl),
 			wantMode: ModeThemeSwitcher,
 			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
-				if got := themeSwitcherRows(a); got != len(themeSwitcherItems()) {
+				if got := modalRows(&a.themeSwitcher); got != len(themeSwitcherItems()) {
 					t.Errorf("rows = %d, want %d: ctrl+x should not have filtered", got, len(themeSwitcherItems()))
 				}
 				if cmd != nil {
@@ -386,7 +442,7 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			key:      keyPress('x'),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
-				if styles.Primary != darkPrimary {
+				if !colorEqual(styles.Primary, darkPrimary) {
 					t.Errorf("styles.Primary = %v, want the palette untouched", styles.Primary)
 				}
 			},
@@ -394,7 +450,7 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 	})
 
 	// Layer 3: the last case has no successor to notice its leak.
-	if styles.Primary != darkPrimary {
+	if !colorEqual(styles.Primary, darkPrimary) {
 		t.Errorf("theme leaked out of the table: styles.Primary = %v, want %v",
 			styles.Primary, darkPrimary)
 	}

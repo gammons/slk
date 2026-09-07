@@ -86,6 +86,26 @@ func TestHelpModeKeys(t *testing.T) {
 			},
 		},
 		{
+			// The normalisation switch at the top of the handler is
+			// not dead code, and this is the only row that shows it.
+			// Key.String() prefixes active modifiers before it reaches
+			// the special-key name (ultraviolet key.go:413-431, 459),
+			// so shift+down stringifies to "shift+down", which
+			// help.HandleKey does not match; `case tea.KeyDown` rewrites
+			// it to "down" and navigation still happens. Unmodified
+			// presses cannot see this — they stringify to "down"
+			// already.
+			name:     "shift+down navigates: the Code switch strips the modifier",
+			setup:    openHelp,
+			key:      keyMod(tea.KeyDown, tea.ModShift),
+			wantMode: ModeHelp,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if got := a.help.Selected(); got != 1 {
+					t.Errorf("selected = %d, want 1: shift+down should normalise to down", got)
+				}
+			},
+		},
+		{
 			name:     "j moves the selection like down",
 			setup:    openHelp,
 			key:      keyPress('j'),
@@ -115,13 +135,37 @@ func TestHelpModeKeys(t *testing.T) {
 			},
 		},
 		{
-			name:     "k at the top clamps rather than wrapping",
-			setup:    openHelp,
+			// The setup walks DOWN to 2 and then back UP to 0 using
+			// the same 'k' that is under test, so this row separates
+			// "clamped at the top" from "ignored entirely".
+			//
+			// A bare `openHelp` + one 'k' + `Selected() == 0` cannot:
+			// 0 is where the cursor already was, so that shape passes
+			// against a handler that does nothing — which is what the
+			// "unhandled key" row covers, not this one. Here a 'k' the
+			// model ignores leaves the cursor at 2 and the setup's
+			// second precondition says so by name.
+			name: "k at the top clamps rather than wrapping",
+			setup: func(t *testing.T, a *App) {
+				openHelp(t, a)
+				for range 2 {
+					_ = dispatchModeKey(a, keyCode(tea.KeyDown))
+				}
+				if got := a.help.Selected(); got != 2 {
+					t.Fatalf("precondition: selected = %d, want 2 after two downs", got)
+				}
+				for range 2 {
+					_ = dispatchModeKey(a, keyPress('k'))
+				}
+				if got := a.help.Selected(); got != 0 {
+					t.Fatalf("precondition: selected = %d, want 0: 'k' did not walk the selection back to the top", got)
+				}
+			},
 			key:      keyPress('k'),
 			wantMode: ModeHelp,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
 				if got := a.help.Selected(); got != 0 {
-					t.Errorf("selected = %d, want 0", got)
+					t.Errorf("selected = %d, want 0: a further 'k' at the top must clamp, not wrap", got)
 				}
 			},
 		},

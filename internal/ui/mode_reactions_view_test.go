@@ -124,6 +124,30 @@ func TestReactionsViewModeKeys(t *testing.T) {
 			},
 		},
 		{
+			// This is what the `switch msg.Key().Code` at the top of
+			// the handler is FOR, and the only row that shows it.
+			//
+			// Key.String() (ultraviolet key.go:391) returns Key.Text
+			// when non-empty, else Keystroke(), which writes every
+			// active modifier as a prefix (:413-431) BEFORE consulting
+			// keyTypeString (:459-467). So an unmodified KeyDown
+			// already stringifies to "down" and the arm looks
+			// redundant — but shift+down stringifies to "shift+down",
+			// which reactionsview.HandleKey does not match. The arm
+			// rewrites it back to "down", so a shift-held scroll still
+			// scrolls. Delete `case tea.KeyDown` and this row fails
+			// while every unmodified row keeps passing.
+			name:     "shift+down scrolls: the Code switch strips the modifier",
+			setup:    scrolled,
+			key:      keyMod(tea.KeyDown, tea.ModShift),
+			wantMode: ModeReactionsView,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if got := a.reactionsView.Offset(); got != 1 {
+					t.Errorf("offset = %d, want 1: shift+down should normalise to down", got)
+				}
+			},
+		},
+		{
 			name:     "j scrolls like down",
 			setup:    scrolled,
 			key:      keyPress('j'),
@@ -135,12 +159,16 @@ func TestReactionsViewModeKeys(t *testing.T) {
 			},
 		},
 		{
-			// BUG?: maxOff is only assigned inside renderBox
-			// (reactionsview/model.go), so between Open and the first
-			// View the modal cannot be scrolled at all. In production
-			// the App renders on the same Update tick that opened it,
-			// so a user never sees this; a synthesized wheel event
-			// arriving before any render would.
+			// Documented and pinned, not a suspected defect: maxOff is
+			// assigned only inside renderBox, and HandleKey's own doc
+			// comment (reactionsview/model.go:69-71) already says so —
+			// "Scroll is clamped to [0, maxOff], where maxOff is
+			// recomputed on each render; before the first render maxOff
+			// is 0 so scrolling is inert." This row is the executable
+			// form of that sentence. In production the App renders on
+			// the same Update tick that opened the modal, so a user
+			// never reaches it; a synthesized wheel event arriving
+			// before any render would.
 			name:     "down before any render is inert (maxOff still 0)",
 			setup:    openReactionsViewFor(40),
 			key:      keyCode(tea.KeyDown),
@@ -169,13 +197,33 @@ func TestReactionsViewModeKeys(t *testing.T) {
 			},
 		},
 		{
-			name:     "k scrolls up",
-			setup:    scrolled,
+			// The setup scrolls DOWN to 2 and then back UP to 0 with
+			// the same 'k' under test, so this row separates "clamped
+			// at the top" from "ignored entirely". The previous shape
+			// — `scrolled` plus one 'k', asserting offset 0 — asserted
+			// exactly the value `scrolled` had just established, so it
+			// passed against a handler that did nothing.
+			name: "k scrolls up and clamps at zero",
+			setup: func(t *testing.T, a *App) {
+				scrolled(t, a)
+				for range 2 {
+					_ = dispatchModeKey(a, keyCode(tea.KeyDown))
+				}
+				if got := a.reactionsView.Offset(); got != 2 {
+					t.Fatalf("precondition: offset = %d, want 2 after two downs", got)
+				}
+				for range 2 {
+					_ = dispatchModeKey(a, keyPress('k'))
+				}
+				if got := a.reactionsView.Offset(); got != 0 {
+					t.Fatalf("precondition: offset = %d, want 0: 'k' did not scroll back to the top", got)
+				}
+			},
 			key:      keyPress('k'),
 			wantMode: ModeReactionsView,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
 				if got := a.reactionsView.Offset(); got != 0 {
-					t.Errorf("offset = %d, want 0 (already at top)", got)
+					t.Errorf("offset = %d, want 0: a further 'k' at the top must clamp", got)
 				}
 			},
 		},

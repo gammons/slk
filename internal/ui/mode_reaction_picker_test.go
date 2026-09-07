@@ -97,18 +97,10 @@ func openReactionPicker(calls *reactionCalls, frecent ...string) func(*testing.T
 		if wantRows < 1 {
 			wantRows = 1
 		}
-		if got := reactionPickerRows(a); got != wantRows {
+		if got := modalRows(a.reactionPicker); got != wantRows {
 			t.Fatalf("precondition: %d rows, want %d for %d frecent entries", got, wantRows, len(frecent))
 		}
 	}
-}
-
-// reactionPickerRows is the number of rows the picker is showing,
-// derived from the modal's own height math (nRows + 7).
-// reactionpicker.Model exposes neither its query nor its selection.
-func reactionPickerRows(a *App) int {
-	_, h := a.reactionPicker.BoxSize(120, 30)
-	return h - 7
 }
 
 // reactionOn returns the message's reaction for emoji, or false.
@@ -290,6 +282,23 @@ func TestReactionPickerModeKeys(t *testing.T) {
 			},
 		},
 		{
+			// Pins the normalisation switch at the top of the handler.
+			// Key.String() prefixes active modifiers before the
+			// special-key name (ultraviolet key.go:413-431, 459), so
+			// shift+down arrives as "shift+down" and
+			// reactionpicker.HandleKey ignores it; `case tea.KeyDown`
+			// rewrites it to "down". No unmodified row can distinguish
+			// the arm from a no-op.
+			name:     "shift+down navigates: the Code switch strips the modifier",
+			opts:     reactionPickerOpts(false),
+			setup:    open,
+			key:      keyMod(tea.KeyDown, tea.ModShift),
+			wantMode: ModeReactionPicker,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				assertReactionCommitsTo(t, a, &calls, "rocket")
+			},
+		},
+		{
 			name: "up moves the cursor back",
 			opts: reactionPickerOpts(false),
 			setup: func(t *testing.T, a *App) {
@@ -307,9 +316,22 @@ func TestReactionPickerModeKeys(t *testing.T) {
 			// navigation arm that does not consult displayedList, so
 			// pressing up first is a clamp to 0 either way. Recorded
 			// because the asymmetry with "down" is easy to break.
-			name:     "up at the top clamps rather than wrapping",
-			opts:     reactionPickerOpts(false),
-			setup:    open,
+			//
+			// The setup moves DOWN off the boundary and back UP with
+			// the same key under test, so this row separates "clamped
+			// at the top" from "ignored entirely": an ignored up
+			// leaves the cursor on "rocket" and the commit probe says
+			// so. The intermediate position cannot be asserted —
+			// reactionpicker exposes neither its query nor its
+			// selection, and the only probe (commit an enter) closes
+			// the picker.
+			name: "up at the top clamps rather than wrapping",
+			opts: reactionPickerOpts(false),
+			setup: func(t *testing.T, a *App) {
+				open(t, a)
+				_ = dispatchModeKey(a, keyCode(tea.KeyDown))
+				_ = dispatchModeKey(a, keyCode(tea.KeyUp))
+			},
 			key:      keyCode(tea.KeyUp),
 			wantMode: ModeReactionPicker,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
@@ -326,20 +348,33 @@ func TestReactionPickerModeKeys(t *testing.T) {
 			key:      keyPress('t'),
 			wantMode: ModeReactionPicker,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
-				if got := reactionPickerRows(a); got != 10 {
+				if got := modalRows(a.reactionPicker); got != 10 {
 					t.Errorf("rows = %d, want the full 10-row window after filtering", got)
 				}
-				// Contains, not HasPrefix: reactionpicker.filter stops
-				// scanning at 50 accumulated candidates, and because
-				// allEmoji is sorted alphabetically the substring
-				// matches from "a..." exhaust the budget long before
-				// any "t..." prefix match is reached. The first row is
-				// therefore a substring hit ("accept"), not a prefix
-				// one. BUG?: the tier-0-first ordering the code intends
-				// is unreachable for late-alphabet queries.
+				// BUG?: reactionpicker.filter (reactionpicker/model.go:242-265)
+				// means to rank prefix matches ahead of substring ones,
+				// but it breaks out of the scan at 50 accumulated
+				// candidates and allEmoji is sorted alphabetically, so
+				// for a late-alphabet query the substring matches from
+				// "a..." exhaust the budget before any "t..." prefix
+				// match is even visited. The tier-0-first ordering is
+				// therefore unreachable for such queries.
+				//
+				// Both halves of this assertion are the pin. Contains
+				// records that the query filters at all; the NEGATIVE
+				// HasPrefix records the bug — fix the 50-cap and row 0
+				// becomes a "t..." prefix match, and this row fails and
+				// says so. A Contains-only assertion would survive the
+				// fix silently, which is the one thing a BUG?: marker
+				// must not do.
 				saveCommitted(t, a, &calls, func(name string) {
 					if !strings.Contains(name, "t") {
 						t.Errorf("committed %q, want a name matching the query \"t\"", name)
+					}
+					if strings.HasPrefix(name, "t") {
+						t.Errorf("committed %q, a prefix match: the 50-candidate cap in "+
+							"reactionpicker.filter appears to be fixed, so tier-0-first "+
+							"ranking now works. Re-characterize this row (and drop the BUG?).", name)
 					}
 				})
 			},
@@ -350,14 +385,14 @@ func TestReactionPickerModeKeys(t *testing.T) {
 			setup: func(t *testing.T, a *App) {
 				open(t, a)
 				_ = dispatchModeKey(a, keyPress('t'))
-				if got := reactionPickerRows(a); got != 10 {
+				if got := modalRows(a.reactionPicker); got != 10 {
 					t.Fatalf("precondition: rows = %d, want 10", got)
 				}
 			},
 			key:      keyCode(tea.KeyBackspace),
 			wantMode: ModeReactionPicker,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
-				if got := reactionPickerRows(a); got != 2 {
+				if got := modalRows(a.reactionPicker); got != 2 {
 					t.Errorf("rows = %d, want the 2 frecent entries back", got)
 				}
 			},
@@ -369,7 +404,7 @@ func TestReactionPickerModeKeys(t *testing.T) {
 			key:      keyCode(tea.KeyBackspace),
 			wantMode: ModeReactionPicker,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
-				if got := reactionPickerRows(a); got != 2 {
+				if got := modalRows(a.reactionPicker); got != 2 {
 					t.Errorf("rows = %d, want 2", got)
 				}
 			},
@@ -381,7 +416,7 @@ func TestReactionPickerModeKeys(t *testing.T) {
 			key:      keyMod('x', tea.ModCtrl),
 			wantMode: ModeReactionPicker,
 			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
-				if got := reactionPickerRows(a); got != 2 {
+				if got := modalRows(a.reactionPicker); got != 2 {
 					t.Errorf("rows = %d, want 2: ctrl+x should not have filtered", got)
 				}
 				if cmd != nil {
