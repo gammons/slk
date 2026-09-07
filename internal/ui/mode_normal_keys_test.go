@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -8,6 +9,7 @@ import (
 
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/ids"
+	"github.com/gammons/slk/internal/ui/help"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/themeswitcher"
@@ -63,6 +65,69 @@ func normalOpts() []testOpt {
 		withMessages(normalMessages()...),
 		withActiveChannel("C1"),
 		withRender(),
+	}
+}
+
+// unreadOpts is a SEPARATE bundle from normalOpts, used only by the
+// a/A (NextUnread/PrevUnread) rows.
+//
+// Those two arms differ solely in the direction they pass to
+// jumpToUnread (mode_normal.go:285 / :288), so distinguishing them
+// requires a sidebar where forward and backward land on *different*
+// channels. normalOpts' two channels cannot do that: from C1 the
+// forward and backward walks both reach C2 (sidebar/model.go:377-385
+// wraps modulo n, and with n==2 both offsets are the same row).
+//
+// Adding channels and unread state to normalOpts instead would push
+// them into the ~85 rows that share it -- the sidebar nav, section
+// header, enter-select and render-dependent rows all read the channel
+// list, and unread state additionally changes what View() draws. A
+// dedicated bundle keeps the blast radius at two rows.
+//
+// Section is set explicitly on every item: the staleness filter in
+// rebuildFilter (sidebar/model.go:985) exempts sectioned items
+// outright (staleness.go:49-51), so the walk order is the input order
+// and cannot drift with the clock.
+func unreadOpts() []testOpt {
+	return []testOpt{
+		withChannels(
+			sidebar.ChannelItem{ID: "C1", Name: "general", Type: "channel", Section: "Eng"},
+			sidebar.ChannelItem{ID: "C2", Name: "random", Type: "channel", Section: "Eng"},
+			sidebar.ChannelItem{ID: "C3", Name: "design", Type: "channel", Section: "Eng"},
+			sidebar.ChannelItem{ID: "C4", Name: "ops", Type: "channel", Section: "Eng"},
+		),
+		withMessages(normalMessages()...),
+		withActiveChannel("C1"),
+		withRender(),
+	}
+}
+
+// seedUnreads marks C2 and C4 (the active channel's forward and
+// backward neighbours in unreadOpts' walk order) unread, then asserts
+// the two directions really do resolve to different channels. Without
+// that assertion the a/A rows could both be green against a handler
+// that passed the same direction twice, which is precisely the mutation
+// they exist to catch.
+//
+// SetReadStateReader does not rebuild the sidebar's filtered list
+// (sidebar/model.go:301-305), which is fine here: unreadOpts' items are
+// sectioned, so the list built at SetChannels time already contains all
+// four in input order.
+func seedUnreads(t *testing.T, a *App) {
+	t.Helper()
+	a.SetReadStateReader(func() map[string]cache.ReadState {
+		return map[string]cache.ReadState{
+			"C2": {HasUnread: true},
+			"C4": {HasUnread: true},
+		}
+	})
+	next, _, _, ok := a.sidebar.NextUnread("C1", 1)
+	if !ok || next != "C2" {
+		t.Fatalf("precondition: NextUnread(C1, +1) = %q ok=%v, want C2", next, ok)
+	}
+	prev, _, _, ok := a.sidebar.NextUnread("C1", -1)
+	if !ok || prev != "C4" {
+		t.Fatalf("precondition: NextUnread(C1, -1) = %q ok=%v, want C4", prev, ok)
 	}
 }
 
@@ -579,11 +644,10 @@ func TestNormalModeKeys(t *testing.T) {
 		// land on PanelMessages and no row could tell them apart.
 		// -------------------------------------------------------------
 		{
-			name:  "tab moves focus messages -> thread",
-			opts:  normalOpts(),
-			setup: func(t *testing.T, a *App) { focusThreadPanel(t, a); focusMessages(t, a) },
-			key:   keyCode(tea.KeyTab),
-
+			name:     "tab moves focus messages -> thread",
+			opts:     normalOpts(),
+			setup:    func(t *testing.T, a *App) { focusThreadPanel(t, a); focusMessages(t, a) },
+			key:      keyCode(tea.KeyTab),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
 				if a.focusedPanel != PanelThread {
@@ -592,11 +656,10 @@ func TestNormalModeKeys(t *testing.T) {
 			},
 		},
 		{
-			name:  "shift+tab moves focus messages -> sidebar",
-			opts:  normalOpts(),
-			setup: func(t *testing.T, a *App) { focusThreadPanel(t, a); focusMessages(t, a) },
-			key:   keyMod(tea.KeyTab, tea.ModShift),
-
+			name:     "shift+tab moves focus messages -> sidebar",
+			opts:     normalOpts(),
+			setup:    func(t *testing.T, a *App) { focusThreadPanel(t, a); focusMessages(t, a) },
+			key:      keyMod(tea.KeyTab, tea.ModShift),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
 				if a.focusedPanel != PanelSidebar {
@@ -728,11 +791,10 @@ func TestNormalModeKeys(t *testing.T) {
 		// (mode_normal.go:145, :150)
 		// -------------------------------------------------------------
 		{
-			name:  "ctrl+h walks the nav history backward",
-			opts:  append(normalOpts(), withActiveTeam("T1"), navLookupOpt()),
-			setup: seedNavHistory,
-			key:   keyMod('h', tea.ModCtrl),
-
+			name:     "ctrl+h walks the nav history backward",
+			opts:     append(normalOpts(), withActiveTeam("T1"), navLookupOpt()),
+			setup:    seedNavHistory,
+			key:      keyMod('h', tea.ModCtrl),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
 				if cmd == nil {
@@ -870,11 +932,10 @@ func TestNormalModeKeys(t *testing.T) {
 		// Arms 19 & 20: Left `h` / Right `l` (mode_normal.go:165, :168)
 		// -------------------------------------------------------------
 		{
-			name:  "h focuses the previous panel (messages -> sidebar)",
-			opts:  normalOpts(),
-			setup: func(t *testing.T, a *App) { focusThreadPanel(t, a); focusMessages(t, a) },
-			key:   keyPress('h'),
-
+			name:     "h focuses the previous panel (messages -> sidebar)",
+			opts:     normalOpts(),
+			setup:    func(t *testing.T, a *App) { focusThreadPanel(t, a); focusMessages(t, a) },
+			key:      keyPress('h'),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
 				if a.focusedPanel != PanelSidebar {
@@ -883,11 +944,10 @@ func TestNormalModeKeys(t *testing.T) {
 			},
 		},
 		{
-			name:  "l focuses the next panel (messages -> thread)",
-			opts:  normalOpts(),
-			setup: func(t *testing.T, a *App) { focusThreadPanel(t, a); focusMessages(t, a) },
-			key:   keyPress('l'),
-
+			name:     "l focuses the next panel (messages -> thread)",
+			opts:     normalOpts(),
+			setup:    func(t *testing.T, a *App) { focusThreadPanel(t, a); focusMessages(t, a) },
+			key:      keyPress('l'),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
 				if a.focusedPanel != PanelThread {
@@ -1175,8 +1235,37 @@ func TestNormalModeKeys(t *testing.T) {
 				if !a.help.IsVisible() {
 					t.Error("help overlay not visible")
 				}
-				if n := len(a.help.VisibleEntries()); n < 3 {
-					t.Errorf("help entries = %d, want the keymap-derived list", n)
+				// mode_normal.go:211 seeds the overlay from
+				// help.FromKeyMap(a.keys) with no query set, and
+				// help.VisibleEntries returns the unfiltered list when
+				// the query is empty (help/model.go:186-195). So the
+				// overlay carries the WHOLE keymap, in FromKeyMap's
+				// desc-sorted order -- element-for-element, not "at
+				// least a few". Rebuilding the want from a.keys keeps
+				// this stable as bindings are added.
+				want := help.FromKeyMap(a.keys)
+				got := a.help.VisibleEntries()
+				if len(got) != len(want) {
+					t.Fatalf("help entries = %d, want %d (the full keymap)", len(got), len(want))
+				}
+				for i := range want {
+					if got[i] != want[i] {
+						t.Errorf("entry %d = %+v, want %+v", i, got[i], want[i])
+					}
+				}
+				// Absolute floor: len(got) == len(want) alone would
+				// still hold if the keymap itself collapsed, since both
+				// sides derive from a.keys. The real map has 59
+				// help-bearing bindings; 40 leaves ample room for
+				// removals without noticing a gutted keymap.
+				if len(got) < 40 {
+					t.Errorf("help entries = %d, want at least 40: the keymap looks gutted", len(got))
+				}
+				// Spot-check one entry that only the real keymap
+				// produces, so the row fails if FromKeyMap starts
+				// returning placeholder rows.
+				if !slices.Contains(got, help.Entry{Key: "Y/C", Desc: "copy permalink"}) {
+					t.Error("help entries do not include the Y/C copy-permalink row")
 				}
 			},
 		},
@@ -1186,10 +1275,8 @@ func TestNormalModeKeys(t *testing.T) {
 		// (mode_normal.go:215, :222)
 		// -------------------------------------------------------------
 		{
-			name: "ctrl+y opens the theme switcher scoped to the workspace",
-			opts: append(normalOpts(),
-				withWorkspaces(workspace.WorkspaceItem{ID: "T1", Name: "alpha", Initials: "AL"}),
-				withActiveTeam("T1")),
+			name:     "ctrl+y opens the theme switcher scoped to the workspace",
+			opts:     activeTeamOpts(),
 			key:      keyMod('y', tea.ModCtrl),
 			wantMode: ModeThemeSwitcher,
 			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
@@ -1229,10 +1316,8 @@ func TestNormalModeKeys(t *testing.T) {
 		// Arm 31: PresenceMenu `ctrl+s` (mode_normal.go:227)
 		// -------------------------------------------------------------
 		{
-			name: "ctrl+s opens the presence menu",
-			opts: append(normalOpts(),
-				withWorkspaces(workspace.WorkspaceItem{ID: "T1", Name: "alpha", Initials: "AL"}),
-				withActiveTeam("T1")),
+			name:     "ctrl+s opens the presence menu",
+			opts:     activeTeamOpts(),
 			key:      keyMod('s', tea.ModCtrl),
 			wantMode: ModePresenceMenu,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
@@ -1362,11 +1447,10 @@ func TestNormalModeKeys(t *testing.T) {
 		{
 			// messages.Model.EnterReactionNav silently refuses when the
 			// selected message has no reactions (messages/model.go:1036).
-			name:  "R on a message with no reactions does not enter the sub-state",
-			opts:  normalOpts(),
-			setup: func(t *testing.T, a *App) { focusMessageAt(t, a, 0) },
-			key:   keyPress('R'),
-
+			name:     "R on a message with no reactions does not enter the sub-state",
+			opts:     normalOpts(),
+			setup:    func(t *testing.T, a *App) { focusMessageAt(t, a, 0) },
+			key:      keyPress('R'),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
 				if a.messagepane.ReactionNavActive() {
@@ -1396,11 +1480,10 @@ func TestNormalModeKeys(t *testing.T) {
 			// focusedPanel (PanelSidebar hits the `default: return nil`
 			// arm at app.go:895 for an entirely different reason), so
 			// focusMessageAt pins the focus explicitly.
-			name:  "L on a message with no reactions is a no-op",
-			opts:  normalOpts(),
-			setup: func(t *testing.T, a *App) { focusMessageAt(t, a, 0) },
-			key:   keyPress('L'),
-
+			name:     "L on a message with no reactions is a no-op",
+			opts:     normalOpts(),
+			setup:    func(t *testing.T, a *App) { focusMessageAt(t, a, 0) },
+			key:      keyPress('L'),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
 				if a.reactionsView.IsVisible() {
@@ -1502,6 +1585,44 @@ func TestNormalModeKeys(t *testing.T) {
 			assert: func(t *testing.T, _ *App, cmd tea.Cmd) {
 				if cmd == nil {
 					t.Fatal("cmd = nil, want the permalink cmd")
+				}
+			},
+		},
+		{
+			// The negative sibling for both permalink rows above.
+			// copyPermalinkOfSelected switches on focusedPanel and its
+			// default arm returns nil (app.go:1063-1064), so with the
+			// sidebar focused the arm is reached and produces nothing.
+			// Without this row "cmd != nil" would not discriminate the
+			// permalink arm from any other arm returning a cmd.
+			name: "Y with the sidebar focused is a no-op",
+			opts: normalOpts(),
+			setup: func(t *testing.T, a *App) {
+				if a.focusedPanel != PanelSidebar {
+					t.Fatalf("precondition: focusedPanel = %v, want PanelSidebar", a.focusedPanel)
+				}
+			},
+			key:      keyPress('Y'),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, _ *App, cmd tea.Cmd) {
+				if cmd != nil {
+					t.Errorf("cmd = %#v, want nil", cmd())
+				}
+			},
+		},
+		{
+			name: "C with the sidebar focused is a no-op",
+			opts: normalOpts(),
+			setup: func(t *testing.T, a *App) {
+				if a.focusedPanel != PanelSidebar {
+					t.Fatalf("precondition: focusedPanel = %v, want PanelSidebar", a.focusedPanel)
+				}
+			},
+			key:      keyPress('C'),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, _ *App, cmd tea.Cmd) {
+				if cmd != nil {
+					t.Errorf("cmd = %#v, want nil", cmd())
 				}
 			},
 		},
@@ -1630,11 +1751,10 @@ func TestNormalModeKeys(t *testing.T) {
 			},
 		},
 		{
-			name:  "O on a message with no image attachment is a silent no-op",
-			opts:  normalOpts(),
-			setup: func(t *testing.T, a *App) { focusMessageAt(t, a, 0) },
-			key:   keyPress('O'),
-
+			name:     "O on a message with no image attachment is a silent no-op",
+			opts:     normalOpts(),
+			setup:    func(t *testing.T, a *App) { focusMessageAt(t, a, 0) },
+			key:      keyPress('O'),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, _ *App, cmd tea.Cmd) {
 				if cmd != nil {
@@ -1669,11 +1789,10 @@ func TestNormalModeKeys(t *testing.T) {
 			},
 		},
 		{
-			name:  "o with no links toasts",
-			opts:  normalOpts(),
-			setup: func(t *testing.T, a *App) { focusMessageAt(t, a, 0) },
-			key:   keyPress('o'),
-
+			name:     "o with no links toasts",
+			opts:     normalOpts(),
+			setup:    func(t *testing.T, a *App) { focusMessageAt(t, a, 0) },
+			key:      keyPress('o'),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, _ *App, cmd tea.Cmd) {
 				if cmd == nil {
@@ -1712,11 +1831,10 @@ func TestNormalModeKeys(t *testing.T) {
 			},
 		},
 		{
-			name:  "d with no files toasts",
-			opts:  normalOpts(),
-			setup: func(t *testing.T, a *App) { focusMessageAt(t, a, 0) },
-			key:   keyPress('d'),
-
+			name:     "d with no files toasts",
+			opts:     normalOpts(),
+			setup:    func(t *testing.T, a *App) { focusMessageAt(t, a, 0) },
+			key:      keyPress('d'),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, _ *App, cmd tea.Cmd) {
 				if cmd == nil {
@@ -1736,11 +1854,10 @@ func TestNormalModeKeys(t *testing.T) {
 		// Arm 45: MarkUnread `U` (mode_normal.go:281)
 		// -------------------------------------------------------------
 		{
-			name:  "U emits MarkUnreadMsg with the boundary before the selection",
-			opts:  normalOpts(),
-			setup: func(t *testing.T, a *App) { focusMessageAt(t, a, 2) },
-			key:   keyPress('U'),
-
+			name:     "U emits MarkUnreadMsg with the boundary before the selection",
+			opts:     normalOpts(),
+			setup:    func(t *testing.T, a *App) { focusMessageAt(t, a, 2) },
+			key:      keyPress('U'),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, _ *App, cmd tea.Cmd) {
 				if cmd == nil {
@@ -1762,6 +1879,59 @@ func TestNormalModeKeys(t *testing.T) {
 		// (mode_normal.go:284, :287)
 		// -------------------------------------------------------------
 		{
+			// The direction argument is the whole content of these two
+			// arms (mode_normal.go:285 passes 1, :288 passes -1), so
+			// the fixture has to make the two directions land on
+			// DIFFERENT channels. unreadOpts/seedUnreads do that: from
+			// C1, forward is C2 and backward wraps to C4.
+			name:     "a opens the next unread channel below the active one",
+			opts:     unreadOpts(),
+			setup:    seedUnreads,
+			key:      keyPress('a'),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if cmd == nil {
+					t.Fatal("cmd = nil, want a ChannelSelectedMsg cmd")
+				}
+				msg, ok := cmd().(ChannelSelectedMsg)
+				if !ok {
+					t.Fatalf("cmd() = %#v, want ChannelSelectedMsg", cmd())
+				}
+				want := ChannelSelectedMsg{ID: "C2", Name: "random", Type: "channel"}
+				if msg != want {
+					t.Errorf("cmd() = %+v, want %+v", msg, want)
+				}
+				// jumpToUnread also moves the sidebar cursor onto the
+				// target before returning (mode_normal.go:335).
+				if got := a.sidebar.SelectedID(); got != "C2" {
+					t.Errorf("sidebar SelectedID = %q, want %q", got, "C2")
+				}
+			},
+		},
+		{
+			name:     "A opens the previous unread channel, wrapping to the bottom",
+			opts:     unreadOpts(),
+			setup:    seedUnreads,
+			key:      keyPress('A'),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if cmd == nil {
+					t.Fatal("cmd = nil, want a ChannelSelectedMsg cmd")
+				}
+				msg, ok := cmd().(ChannelSelectedMsg)
+				if !ok {
+					t.Fatalf("cmd() = %#v, want ChannelSelectedMsg", cmd())
+				}
+				want := ChannelSelectedMsg{ID: "C4", Name: "ops", Type: "channel"}
+				if msg != want {
+					t.Errorf("cmd() = %+v, want %+v", msg, want)
+				}
+				if got := a.sidebar.SelectedID(); got != "C4" {
+					t.Errorf("sidebar SelectedID = %q, want %q", got, "C4")
+				}
+			},
+		},
+		{
 			name: "a with nothing unread toasts",
 			opts: normalOpts(),
 			setup: func(t *testing.T, a *App) {
@@ -1781,13 +1951,21 @@ func TestNormalModeKeys(t *testing.T) {
 			},
 		},
 		{
-			name:     "A walks unreads in the other direction and toasts the same way",
-			opts:     normalOpts(),
+			name: "A with nothing unread toasts the same way",
+			opts: normalOpts(),
+			setup: func(t *testing.T, a *App) {
+				if _, _, _, ok := a.sidebar.NextUnread("C1", -1); ok {
+					t.Fatal("precondition: fixture channels should have no unreads")
+				}
+			},
 			key:      keyPress('A'),
 			wantMode: ModeNormal,
-			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
 				if got := statusbarText(a); !strings.Contains(got, "No other unread channels") {
 					t.Errorf("statusbar = %q, want the no-unreads toast", got)
+				}
+				if cmd == nil {
+					t.Error("cmd = nil, want the toast-clear tick")
 				}
 			},
 		},
@@ -1857,19 +2035,9 @@ func TestNormalModeKeys(t *testing.T) {
 		// Default arm: numeric workspace switch (mode_normal.go:304)
 		// -------------------------------------------------------------
 		{
-			name: "2 switches to the second workspace",
-			opts: append(normalOpts(), withWorkspaces(
-				workspace.WorkspaceItem{ID: "T1", Name: "alpha", Initials: "AL"},
-				workspace.WorkspaceItem{ID: "T2", Name: "beta", Initials: "BE"},
-			)),
-			setup: func(t *testing.T, a *App) {
-				a.SetWorkspaceSwitcher(func(teamID string) tea.Msg {
-					return switchedTeamMsg{teamID: teamID}
-				})
-				if got := a.workspaceRail.SelectedID(); got != "T1" {
-					t.Fatalf("precondition: rail SelectedID = %q, want %q", got, "T1")
-				}
-			},
+			name:     "2 switches to the second workspace",
+			opts:     workspaceOpts(),
+			setup:    wireSwitcher,
 			key:      keyPress('2'),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, _ *App, cmd tea.Cmd) {
@@ -1888,16 +2056,9 @@ func TestNormalModeKeys(t *testing.T) {
 		{
 			// mode_normal.go:310 -- re-picking the workspace you are
 			// already on is suppressed.
-			name: "1 on the already-active workspace does not switch",
-			opts: append(normalOpts(), withWorkspaces(
-				workspace.WorkspaceItem{ID: "T1", Name: "alpha", Initials: "AL"},
-				workspace.WorkspaceItem{ID: "T2", Name: "beta", Initials: "BE"},
-			)),
-			setup: func(t *testing.T, a *App) {
-				a.SetWorkspaceSwitcher(func(teamID string) tea.Msg {
-					return switchedTeamMsg{teamID: teamID}
-				})
-			},
+			name:     "1 on the already-active workspace does not switch",
+			opts:     workspaceOpts(),
+			setup:    wireSwitcher,
 			key:      keyPress('1'),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, _ *App, cmd tea.Cmd) {
@@ -1909,16 +2070,9 @@ func TestNormalModeKeys(t *testing.T) {
 		{
 			// mode_normal.go:309 -- the index guard. Only two
 			// workspaces are seeded, so `9` addresses nothing.
-			name: "9 with only two workspaces is inert",
-			opts: append(normalOpts(), withWorkspaces(
-				workspace.WorkspaceItem{ID: "T1", Name: "alpha", Initials: "AL"},
-				workspace.WorkspaceItem{ID: "T2", Name: "beta", Initials: "BE"},
-			)),
-			setup: func(t *testing.T, a *App) {
-				a.SetWorkspaceSwitcher(func(teamID string) tea.Msg {
-					return switchedTeamMsg{teamID: teamID}
-				})
-			},
+			name:     "9 with only two workspaces is inert",
+			opts:     workspaceOpts(),
+			setup:    wireSwitcher,
 			key:      keyPress('9'),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, _ *App, cmd tea.Cmd) {
@@ -1930,16 +2084,9 @@ func TestNormalModeKeys(t *testing.T) {
 		{
 			// `0` is outside the '1'..'9' range tested at
 			// mode_normal.go:307, so it never reaches the switcher.
-			name: "0 is not a workspace key",
-			opts: append(normalOpts(), withWorkspaces(
-				workspace.WorkspaceItem{ID: "T1", Name: "alpha", Initials: "AL"},
-				workspace.WorkspaceItem{ID: "T2", Name: "beta", Initials: "BE"},
-			)),
-			setup: func(t *testing.T, a *App) {
-				a.SetWorkspaceSwitcher(func(teamID string) tea.Msg {
-					return switchedTeamMsg{teamID: teamID}
-				})
-			},
+			name:     "0 is not a workspace key",
+			opts:     workspaceOpts(),
+			setup:    wireSwitcher,
 			key:      keyPress('0'),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, _ *App, cmd tea.Cmd) {
@@ -1956,11 +2103,10 @@ func TestNormalModeKeys(t *testing.T) {
 			// fails the '1'..'9' test, and does nothing. The
 			// counterpart `G` (Bottom, mode_normal.go:185) works.
 			// Recorded, not fixed: this is a characterization test.
-			name:  "g is bound to Top but handleNormalMode has no arm for it",
-			opts:  normalOpts(),
-			setup: func(t *testing.T, a *App) { focusMessageAt(t, a, 3) },
-			key:   keyPress('g'),
-
+			name:     "g is bound to Top but handleNormalMode has no arm for it",
+			opts:     normalOpts(),
+			setup:    func(t *testing.T, a *App) { focusMessageAt(t, a, 3) },
+			key:      keyPress('g'),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
 				if got := a.messagepane.SelectedIndex(); got != 3 {
@@ -2025,6 +2171,42 @@ func wantYOffset(want func(*App) int) func(*testing.T, *App, tea.Cmd) {
 		if got, w := a.messagepane.YOffset(), want(a); got != w {
 			t.Errorf("yOffset = %d, want %d", got, w)
 		}
+	}
+}
+
+// activeTeamOpts is normalOpts plus a single named workspace, T1, made
+// active. Two arms need a resolvable a.activeTeamName(): ctrl+y (the
+// theme switcher's "Theme for <name>" header, mode_normal.go:218) and
+// ctrl+s (the presence menu).
+func activeTeamOpts() []testOpt {
+	return append(normalOpts(),
+		withWorkspaces(workspace.WorkspaceItem{ID: "T1", Name: "alpha", Initials: "AL"}),
+		withActiveTeam("T1"))
+}
+
+// workspaceOpts is normalOpts plus the two-workspace rail the numeric
+// default arm (mode_normal.go:304-318) indexes into. T1 is first, so
+// the rail selects it and `1` exercises the already-active guard while
+// `2` exercises the switch.
+func workspaceOpts() []testOpt {
+	return append(normalOpts(), withWorkspaces(
+		workspace.WorkspaceItem{ID: "T1", Name: "alpha", Initials: "AL"},
+		workspace.WorkspaceItem{ID: "T2", Name: "beta", Initials: "BE"},
+	))
+}
+
+// wireSwitcher installs an observable workspace switcher and asserts the
+// rail starts on T1. Both halves matter: mode_normal.go:309 requires a
+// non-nil a.workspaceSwitcher before it will emit anything, and :310
+// compares against a.workspaceRail.SelectedID(), so a rail that did not
+// start on T1 would silently turn the `1` row into a different test.
+func wireSwitcher(t *testing.T, a *App) {
+	t.Helper()
+	a.SetWorkspaceSwitcher(func(teamID string) tea.Msg {
+		return switchedTeamMsg{teamID: teamID}
+	})
+	if got := a.workspaceRail.SelectedID(); got != "T1" {
+		t.Fatalf("precondition: rail SelectedID = %q, want %q", got, "T1")
 	}
 }
 
