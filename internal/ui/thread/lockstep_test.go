@@ -1,5 +1,3 @@
-// internal/ui/thread/lockstep_test.go
-//
 // Lockstep parity between messages.Model and thread.Model.
 //
 // thread/model.go:35-36 asks humans to keep this package's viewEntry --
@@ -13,6 +11,7 @@
 // shared pane package. When it does, this file is deleted. That
 // lifecycle is intended: the file exists to make the merge verifiable,
 // not to be maintained forever.
+
 package thread
 
 import (
@@ -40,8 +39,7 @@ const (
 // lockstepClock is the instant both panes render against: Sunday
 // 2026-03-15, midday, in the process's LOCAL zone.
 //
-// Local, not UTC. This task's brief specified time.UTC; that is wrong
-// here for the same reason it was wrong for the goldens
+// Local, not UTC, for the same reason the goldens are local
 // (internal/ui/golden_test.go:321-343). The day-divider label compares
 // DateFromTS(msg.TS), which formats in the local zone
 // (messages/model.go:3473), against the calendar fields of nowFunc()
@@ -64,11 +62,12 @@ func lockstepClock() time.Time {
 
 // lockstepTS builds a Slack timestamp offset from lockstepClock.
 //
-// Derived, never a literal. Literal epochs are how this task's brief
-// broke: it paired 2024-epoch TS values with 2026 DateStr strings, and
-// the day-divider path reads DateFromTS(msg.TS), never DateStr
-// (messages/model.go:1776, thread/model.go:1602). Deriving from a local
-// clock also keeps every row on a fixed local calendar day in any zone.
+// Derived, never a literal. The day-divider path reads
+// DateFromTS(msg.TS) and never DateStr (messages/model.go:1776,
+// thread/model.go:1602), so a literal epoch that disagrees with the
+// clock moves every row onto the wrong calendar day while leaving the
+// fixture's DateStr fields looking correct. Deriving from a local clock
+// also keeps every row on a fixed local calendar day in any zone.
 func lockstepTS(offset time.Duration) string {
 	return fmt.Sprintf("%d.000100", lockstepClock().Add(offset).Unix())
 }
@@ -166,15 +165,15 @@ func lockstepStrip(view string) []string {
 // lockstepRow returns the index of the ONLY row in pane containing
 // anchor, and fails the test when the count is not exactly one.
 //
-// The "exactly one" requirement is load-bearing, and is the reason this
-// file does not use the shape the brief proposed:
+// The "exactly one" requirement is load-bearing. The obvious cheaper
+// shape,
 //
 //	strings.Contains(a, x) != strings.Contains(b, x)
 //
-// That assertion passes when BOTH sides are false -- a pane that
-// rendered nothing at all satisfies it. Resolving each anchor to a
-// concrete row index first means a missing row is a failure, not a
-// silent pass, and gives the comparison something to be exact about.
+// passes when BOTH sides are false -- a pane that rendered nothing at
+// all satisfies it. Resolving each anchor to a concrete row index first
+// means a missing row is a failure, not a silent pass, and gives the
+// comparison something to be exact about.
 func lockstepRow(t *testing.T, pane []string, paneName, anchor string) int {
 	t.Helper()
 	idx := -1
@@ -244,9 +243,15 @@ func TestLockstep_SharedRenderBehaviour(t *testing.T) {
 		{"wrapped line 1", "in both panes or the"},
 		{"wrapped line 2", "two renderers have drifted apart"},
 	}
+	// Resolved once, here, and reused by the structure layer below:
+	// every gap anchor is also a shared anchor, so re-resolving would
+	// re-scan both panes for a row index already in hand.
+	msgAt := make(map[string]int, len(shared))
+	thrAt := make(map[string]int, len(shared))
 	for _, s := range shared {
 		mi := lockstepRow(t, msgPane, "messages pane/"+s.name, s.anchor)
 		ti := lockstepRow(t, thrPane, "thread pane/"+s.name, s.anchor)
+		msgAt[s.anchor], thrAt[s.anchor] = mi, ti
 		if msgPane[mi] != thrPane[ti] {
 			t.Errorf("%s differs between panes:\n messages[%d] = %q\n thread[%d]   = %q",
 				s.name, mi, msgPane[mi], ti, thrPane[ti])
@@ -268,9 +273,24 @@ func TestLockstep_SharedRenderBehaviour(t *testing.T) {
 		{"author -> wrapped line 1 (carol)", "carol  9:01 AM", "in both panes or the"},
 		{"wrapped line 1 -> line 2", "in both panes or the", "two renderers have drifted apart"},
 	}
+	// gapIn reads the two endpoints out of an already-resolved pane
+	// index. A missing key means a gap names an anchor the content
+	// layer never resolved, which is a bug in the table above, not a
+	// parity failure -- so it is fatal and names the gap.
+	gapIn := func(at map[string]int, paneName, name, from, to string) int {
+		t.Helper()
+		f, okFrom := at[from]
+		to2, okTo := at[to]
+		if !okFrom || !okTo {
+			t.Fatalf("%s: row gap %q names anchor(s) missing from the shared table "+
+				"(from=%q resolved=%v, to=%q resolved=%v); add them to `shared` so "+
+				"they are resolved exactly once", paneName, name, from, okFrom, to, okTo)
+		}
+		return to2 - f
+	}
 	for _, g := range gaps {
-		msgGap := lockstepRow(t, msgPane, "messages pane", g.to) - lockstepRow(t, msgPane, "messages pane", g.from)
-		thrGap := lockstepRow(t, thrPane, "thread pane", g.to) - lockstepRow(t, thrPane, "thread pane", g.from)
+		msgGap := gapIn(msgAt, "messages pane", g.name, g.from, g.to)
+		thrGap := gapIn(thrAt, "thread pane", g.name, g.from, g.to)
 		if msgGap != thrGap {
 			t.Errorf("row gap %q: messages=%d thread=%d", g.name, msgGap, thrGap)
 		}
@@ -285,6 +305,10 @@ func TestLockstep_SharedRenderBehaviour(t *testing.T) {
 // It is a test rather than a line in the comment below because a
 // comment cannot notice when one side changes. AGENTS.md: express a
 // cross-model invariant as an assertion, not a comment.
+//
+// Lifecycle: this is a tripwire that fires on CONVERGENCE. When Phase 3
+// unifies the two frames it will start failing by design; the correct
+// response is to DELETE it (and divergence 6 below), not to satisfy it.
 func TestLockstep_ReactionHitTestFrames(t *testing.T) {
 	mm, tm, msgPane, thrPane := lockstepRender(t)
 
@@ -361,10 +385,9 @@ func lockstepHitColumns(hit func(col int) bool) []int {
 // intended". If behaviour drifts and you cannot justify it as intended,
 // the fix belongs in the model, not in this list.
 //
-// Verified against the code at the commit that introduced this file.
-// The task brief supplied 7 items from grep; 5 are confirmed below, 1
-// (the unread boundary) was wrong about which half diverges and is
-// corrected in item 8, and 8 further divergences were found.
+// Every citation below was opened and read, not grepped. Where an item
+// gives a rendered string it gives the SHAPE, not one observed instance:
+// a hook designer reading a literal as a template ships the literal.
 //
 //  1. Construction. messages.New(msgs, channelName) returns a VALUE
 //     Model preloaded with content (messages/model.go:597); thread.New()
@@ -382,24 +405,34 @@ func lockstepHitColumns(hit func(col int) bool) []int {
 //     TestLockstep_ReactionHitTestFrames.
 //
 //  3. Leading day divider. messages seeds lastDate empty
-//     (messages/model.go:1773), so the FIRST message always gets a day
-//     divider above it. thread seeds lastDate from the parent's day
-//     (thread/model.go:1559), so no divider is ever drawn above the
-//     parent, and none above the first reply that shares the parent's
-//     day. Only the day TRANSITION is shared, which is what the fixture
-//     above exercises.
+//     (messages/model.go:1773), so the FIRST message gets a day divider
+//     above it whenever its TS parses (DateFromTS returns "" otherwise,
+//     and the empty date is skipped). thread seeds lastDate from the
+//     parent's day (thread/model.go:1559), so no divider is ever drawn
+//     above the parent, and none above the first reply that shares the
+//     parent's day. Only the day TRANSITION is shared, which is what the
+//     fixture above exercises.
 //
 //  4. Inter-row separator. messages separates messages with a blank
-//     row; thread draws a full-width "─" rule after the parent
+//     full-width spacer row (m.cacheSpacer, messages/model.go:1528);
+//     thread draws a full-width "─" rule after the parent
 //     (thread/model.go:1355-1359) and between replies
 //     (thread/model.go:1522). This is why only intra-message row gaps
 //     are compared above.
 //
-//  5. Pane chrome. messages renders " # <channel>" plus an optional
-//     wrapped topic (messages/model.go:2840-2855) -- 1 row for the
-//     fixture -- and exports ChromeHeight(). thread renders
-//     "Thread  N replies" plus a "-" rule (thread/model.go:1296-1307)
-//     -- 2 rows -- and keeps chromeHeight unexported.
+//  5. Pane chrome. messages renders
+//     fmt.Sprintf("%s %s", channelGlyph(channelType), channelName) under
+//     Padding(0, 1), plus an optional wrapped topic
+//     (messages/model.go:2841-2855). The glyph is TYPE-dependent, not a
+//     constant "#": channelGlyph (messages/model.go:646-655) returns "◆"
+//     for "private", "●" for "dm"/"group_dm" and "#" otherwise, so a
+//     chrome hook must take the channel type, not a pre-formatted title.
+//     Height is 1 row without a topic (the fixture's case) and 1+wrapped
+//     topic height with one; ChromeHeight() is exported.
+//     thread renders fmt.Sprintf("Thread  %d %s", n, replyLabel) -- the
+//     label is pluralised, "reply" at n==1 (thread/model.go:1292-1301)
+//     -- plus a "-" rule (thread/model.go:1302-1306). Height is always
+//     2 rows and chromeHeight stays unexported.
 //
 //  6. Reaction hit-test row frame. messages.HitTestReaction takes a
 //     CONTENT-relative row; the app-level mouse handler subtracts
@@ -416,10 +449,11 @@ func lockstepHitColumns(hit func(col int) bool) []int {
 //     (messages/model.go:279-283). Phase 3 must pick one, and the
 //     hand-rolled side exists for a measured reason.
 //
-//  8. Unread landmark -- API and structure, NOT rendering. The brief
-//     listed the landmark as a rendering divergence. It is not: both
-//     panes emit a centred bold "── new ──" row that is byte-identical,
-//     and the assertions above pin that. What diverges is
+//  8. Unread landmark -- API and structure, NOT rendering. The
+//     rendering is shared: both panes emit a centred bold "── new ──"
+//     row that is byte-identical (messages/model.go:1788-1793,
+//     thread/model.go:1532-1540), and the assertions above pin that.
+//     Only the non-rendering half is a divergence. What diverges is
 //     (a) the setter -- messages.SetLastReadTS(ts) vs
 //     thread.SetUnreadBoundary(ts); (b) lifecycle -- thread clears its
 //     boundary when the thread identity changes
@@ -429,8 +463,10 @@ func lockstepHitColumns(hit func(col int) bool) []int {
 //     selection anchor resolution, while thread appends a bare row
 //     outside any entry (thread/model.go:1616).
 //
-//  9. Reply-count affordance. messages renders "[N replies ->]" when
-//     msg.ReplyCount > 0 (messages/model.go:1983-1989) and exposes
+//  9. Reply-count affordance. messages renders
+//     fmt.Sprintf("[%d %s ->]", n, word) when msg.ReplyCount > 0 --
+//     the word is pluralised, "[1 reply ->]" at n==1
+//     (messages/model.go:1982-1989) -- and exposes
 //     IncrementReplyCount; thread renders no such affordance -- it IS
 //     the thread. thread.ReplyCount() is unrelated: it is the open
 //     thread's own reply total, used only for the header.
@@ -444,11 +480,30 @@ func lockstepHitColumns(hit func(col int) bool) []int {
 //     "Loading messages..." (messages/model.go:2892-2894); thread has
 //     none of them.
 //
-// 12. Empty state. thread renders "No thread selected" when IsEmpty
-//     (thread/model.go:1253-1260) and "No replies yet" for a
-//     reply-less thread (thread/model.go:1373); messages has no
-//     equivalent -- its empty pane is either the loading spinner or
-//     blank.
+// 12. Empty state. BOTH panes have one; the divergence is threefold,
+//     and none of the three parts is "messages lacks an empty state".
+//     (a) Arity. thread has TWO empty states: "No thread selected" when
+//     IsEmpty, i.e. no thread is open (thread/model.go:1253-1260), and
+//     "No replies yet" when a thread is open but has no replies
+//     (thread/model.go:1363-1373). messages has ONE: "No messages yet"
+//     when len(m.messages) == 0 (messages/model.go:2890-2902). A hook
+//     with a single empty-state slot cannot express thread's pair.
+//     (b) Chrome retention. messages' empty branch returns
+//     chrome + "\n" + empty, so the header still renders and the empty
+//     block is sized height-chromeHeight (messages/model.go:2896-2902).
+//     thread's "No replies yet" branch does the same
+//     (thread/model.go:1389), but its IsEmpty branch returns the bare
+//     block at full height with NO chrome at all
+//     (thread/model.go:1254-1259). The two sides therefore disagree
+//     about whether chrome renders in the empty case, and the
+//     disagreement is internal to thread as well.
+//     (c) Loading fusion. messages' empty state doubles as its loading
+//     state -- same branch, same block, the text swapped for
+//     spinner + "Loading messages..." when m.loading
+//     (messages/model.go:2891-2895). thread has no loading concept at
+//     all (item 11), so a merged pane cannot model "empty" and
+//     "loading" as one slot without inventing a loading state for
+//     thread, nor as two without splitting messages' branch.
 //
 // 13. Selection entry points. messages splits View / ViewBare and
 //     offers ApplySelectionToBordered so the App layer can cache a
@@ -460,13 +515,15 @@ func lockstepHitColumns(hit func(col int) bool) []int {
 //
 // 14. Outer background wrapper. thread.View wraps its entire output in
 //     a Width/Height/MaxHeight/Background style
-//     (thread/model.go:1764); messages.View returns
-//     chrome + "\n" + rows unwrapped (messages/model.go:3312). The
-//     panes are visually identical but not byte-identical in ANSI,
-//     which is why the assertions above compare ANSI-stripped rows.
+//     (thread/model.go:1764); messages.View (messages/model.go:3321)
+//     delegates to viewInternal, which returns chrome + "\n" + rows
+//     unwrapped (messages/model.go:3312). The panes are visually
+//     identical but not byte-identical in ANSI, which is why the
+//     assertions above compare ANSI-stripped rows.
 //
-// 15. Inline-image click-to-preview. messages has HitTest and
-//     HandleImageReady for opening an image preview from a message;
-//     thread deliberately discards imgrender's per-block hits
+// 15. Inline-image click-to-preview. messages has HitTest
+//     (messages/model.go:2501) and HandleImageReady
+//     (messages/model.go:461) for opening an image preview from a
+//     message; thread deliberately discards imgrender's per-block hits
 //     (thread/model.go:1788-1790) and has no HitTest. Scoped out in
-//     thread/model.go:203-206.
+//     thread/model.go:202-206.
