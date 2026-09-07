@@ -1,5 +1,11 @@
 # Phase 0 — Test Safety Net Implementation Plan
 
+> **Status: COMPLETE.** All 17 tasks implemented and reviewed on branch
+> `refactor/phase0-safety-net` (base `79c78b9`). All nine exit criteria in
+> [Verification](#verification-phase-exit-criteria) below are ticked with their
+> achieved numbers. Summary of results is in the tracking document's Phase 0
+> section.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the test safety net that makes Phases 1–5 of the architecture refactor verifiable: golden tests for `View()`, one test-app harness, flake elimination, mode-handler characterization, and a `messages`/`thread` lockstep test.
@@ -2315,14 +2321,14 @@ normalizeFinderKey's mapping explicitly since three modes share it."
 Run all of these before declaring Phase 0 done. Each maps to a numbered success
 criterion in the spec.
 
-- [ ] **1. No flakes**
+- [x] **1. No flakes** — PASS, exit 0.
 
 ```bash
 go test ./... -race -count=5
 ```
 Expected: PASS, five consecutive full runs.
 
-- [ ] **2. Goldens exist and can fail**
+- [x] **2. Goldens exist and can fail** — 8 goldens. Layout perturbation failed 7 of 8 (`no_sidebar` correctly passed, it appends neither rail nor sidebar); style perturbation hit the styling-only diff tier at byte 4934, `48;2;74;158;255` → `48;2;255;0;255`, with no fall-through to the text tier. Both reverted.
 
 ```bash
 ls internal/ui/testdata/golden/*.ansi | wc -l    # expect 8
@@ -2330,7 +2336,7 @@ go test ./internal/ui -run TestGolden -count=3   # expect PASS
 ```
 Plus the two perturbation checks from Task 8 Steps 3–4, re-run and re-reverted.
 
-- [ ] **3. Builders are wrappers, test bodies untouched**
+- [x] **3. Builders are wrappers, test bodies untouched** — all 15 converted (13 textual, 2 transitive).
 
 ```bash
 git diff main --stat -- internal/ui/
@@ -2338,7 +2344,7 @@ git diff main -- internal/ui/ | grep -E '^[+-]' | grep -v '^[+-][+-]'
 ```
 Expected: no modified line inside a `func Test*` body.
 
-- [ ] **4. Mode coverage**
+- [x] **4. Mode coverage** — all 16 `handle*Mode` at **≥ 95.0%**, well clear of the 85%/80% bars. Lowest three: `handlePresenceCustomSnoozeMode` 95.0%, `handleNormalMode` 96.0%, `handleWorkspaceSearchMode` 96.0%. `handleNormalMode` 40.0% → 96.0%; `handleInsertMode` 53.1% → 100.0%.
 
 ```bash
 go test ./internal/ui -coverprofile=/tmp/c.out >/dev/null
@@ -2346,14 +2352,14 @@ go tool cover -func=/tmp/c.out | grep -E 'handle[A-Za-z]+Mode'
 ```
 Expected: all above 85%, except `handleNormalMode` / `handleInsertMode` above 80%.
 
-- [ ] **5. `internal/ui` coverage above baseline**
+- [x] **5. `internal/ui` coverage above baseline** — **67.8% → 79.8%**.
 
 ```bash
 go tool cover -func=/tmp/c.out | tail -1
 ```
 Expected: above 67.8%.
 
-- [ ] **6. Exactly one production change**
+- [x] **6. Exactly one production change** — `internal/ui/messages/model.go` only, +22/-1, the `nowFunc` / `SetNowFunc` addition and the single call-site substitution.
 
 ```bash
 git diff main --stat -- '*.go' ':!*_test.go'
@@ -2361,7 +2367,7 @@ git diff main --stat -- '*.go' ':!*_test.go'
 Expected: only `internal/ui/messages/model.go`, and only the `nowFunc` /
 `SetNowFunc` addition plus the single `time.Now()` → `nowFunc()` substitution.
 
-- [ ] **7. Lockstep test exists and enumerates divergences**
+- [x] **7. Lockstep test exists and enumerates divergences** — PASS. The doc comment lists **15 verified divergences** (up from the 7 the brief predicted: 5 confirmed, 1 refined, 1 corrected, 8 added). That list is Phase 3's hook specification.
 
 ```bash
 go test ./internal/ui/thread -run TestLockstep -v
@@ -2369,7 +2375,7 @@ go test ./internal/ui/thread -run TestLockstep -v
 Expected: PASS. Confirm the "Documented divergences" comment lists every
 intended difference found during implementation.
 
-- [ ] **8. Lint clean**
+- [x] **8. Lint clean** — `gofmt -l .` empty, `go vet ./...` no output, `golangci-lint run` 0 issues.
 
 ```bash
 gofmt -l .        # expect empty
@@ -2377,7 +2383,7 @@ go vet ./...      # expect no output
 golangci-lint run # expect no output
 ```
 
-- [ ] **9. Update the tracking document**
+- [x] **9. Update the tracking document**
 
 Mark Phase 0 complete in
 `docs/superpowers/plans/2026-09-06-architecture-refactor.md`'s status table and
