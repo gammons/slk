@@ -363,6 +363,24 @@ func keyCode(c rune) tea.KeyMsg {
 }
 
 // keyMod builds a modified key press (ctrl+w, shift+enter, ...).
+//
+// A modified special key is the ONLY input that can tell whether a
+// mode handler's leading `switch msg.Key().Code` normalisation is live
+// behaviour or dead code. Key.String() (ultraviolet key.go:391-396)
+// returns Key.Text when non-empty and otherwise Keystroke()
+// (:412-457), which writes every active modifier as a prefix (:414-431)
+// BEFORE consulting keyTypeString (:433, table at :459-467). So an
+// unmodified KeyDown already stringifies to "down" and every arm looks
+// redundant; shift+KeyDown stringifies to "shift+down", which no
+// sub-model matches, and only the arm rewriting it back to "down"
+// makes a shift-held scroll scroll.
+//
+// The seven handlers that carry such a switch declare DIFFERENT arm
+// sets — 3 in mode_reactions_view.go, 5 in five others, 7 in
+// mode_new_message.go — so each table pins the arms ITS handler
+// declares, and (for reactions view) the absence of the two it does
+// not. Rows following this convention are named
+// "<mod>+<key> …: the Code switch strips the modifier".
 func keyMod(c rune, mod tea.KeyMod) tea.KeyMsg {
 	return tea.KeyPressMsg{Code: c, Mod: mod}
 }

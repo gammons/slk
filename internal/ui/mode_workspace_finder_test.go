@@ -50,8 +50,10 @@ func modalHighlightedRow(t *testing.T, box string) string {
 // getter, and it is the portable form for the ones that do.
 //
 // Two gotchas, both load-bearing for callers:
-//   - most of these models floor nRows at 1, so an empty filtered list
-//     reports ONE row, not zero;
+//   - all four accepted receivers floor nRows at 1
+//     (presencemenu/model.go:153-155, themeswitcher/model.go:125-127,
+//     workspacefinder/model.go:92-94, reactionpicker/model.go:212-214),
+//     so an empty filtered list reports ONE row, not zero;
 //   - newmessagepicker.BoxSize measures the rendered box instead of
 //     nRows + 7, so it is NOT usable here.
 func modalRows(bs interface{ BoxSize(int, int) (int, int) }) int {
@@ -226,6 +228,76 @@ func TestWorkspaceFinderModeKeys(t *testing.T) {
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
 				if got := modalHighlightedRow(t, a.workspaceFinder.View(120)); !strings.Contains(got, "beta") {
 					t.Errorf("highlighted row = %q, want it to contain %q: shift+down should normalise to down", got, "beta")
+				}
+			},
+		},
+		{
+			// mode_workspace_finder.go:18-29 declares five arms; the
+			// shift+down row above plus these three pin four of them,
+			// and the alt+esc row after them the fifth. One row per arm,
+			// because the arm sets differ per handler and a
+			// generalisation from one arm to the rest is exactly the
+			// inference the shift+down experiment was too small to
+			// support.
+			name:     "alt+esc closes: the Code switch strips the modifier",
+			opts:     workspaceFinderOpts(),
+			setup:    openWorkspaceFinder,
+			key:      keyMod(tea.KeyEscape, tea.ModAlt),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if a.workspaceFinder.IsVisible() {
+					t.Error("finder still visible: alt+esc should normalise to esc")
+				}
+			},
+		},
+		{
+			name:  "ctrl+enter commits: the Code switch strips the modifier",
+			opts:  workspaceFinderOpts(),
+			setup: func(t *testing.T, a *App) { openWorkspaceFinder(t, a); moveFinderDown(t, a, "beta") },
+			key:   keyMod(tea.KeyEnter, tea.ModCtrl),
+
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if cmd == nil {
+					t.Fatal("cmd = nil: ctrl+enter should normalise to enter and switch")
+				}
+				msg, ok := cmd().(switchedTeamMsg)
+				if !ok {
+					t.Fatalf("cmd() = %#v, want switchedTeamMsg", cmd())
+				}
+				if msg.teamID != "T2" {
+					t.Errorf("switched to %q, want %q", msg.teamID, "T2")
+				}
+			},
+		},
+		{
+			name:  "shift+up navigates: the Code switch strips the modifier",
+			opts:  workspaceFinderOpts(),
+			setup: func(t *testing.T, a *App) { openWorkspaceFinder(t, a); moveFinderDown(t, a, "beta") },
+			key:   keyMod(tea.KeyUp, tea.ModShift),
+
+			wantMode: ModeWorkspaceFinder,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if got := modalHighlightedRow(t, a.workspaceFinder.View(120)); !strings.Contains(got, "alpha") {
+					t.Errorf("highlighted row = %q, want %q: shift+up should normalise to up", got, "alpha")
+				}
+			},
+		},
+		{
+			name: "shift+backspace deletes: the Code switch strips the modifier",
+			opts: workspaceFinderOpts(),
+			setup: func(t *testing.T, a *App) {
+				openWorkspaceFinder(t, a)
+				_ = dispatchModeKey(a, keyPress('b'))
+				if got := modalRows(&a.workspaceFinder); got != 1 {
+					t.Fatalf("precondition: rows = %d, want 1", got)
+				}
+			},
+			key:      keyMod(tea.KeyBackspace, tea.ModShift),
+			wantMode: ModeWorkspaceFinder,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if got := modalRows(&a.workspaceFinder); got != 3 {
+					t.Errorf("rows = %d, want 3: shift+backspace should normalise to backspace", got)
 				}
 			},
 		},

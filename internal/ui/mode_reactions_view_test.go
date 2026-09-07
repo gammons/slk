@@ -148,6 +148,115 @@ func TestReactionsViewModeKeys(t *testing.T) {
 			},
 		},
 		{
+			// mode_reactions_view.go:14-21 declares only THREE arms —
+			// esc/up/down, no enter and no backspace. This row and the
+			// shift+up row below pin the other two it does declare; the
+			// four rows after them pin the two it does not.
+			name:     "alt+esc closes: the Code switch strips the modifier",
+			setup:    openView,
+			key:      keyMod(tea.KeyEscape, tea.ModAlt),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if a.reactionsView.IsVisible() {
+					t.Error("overlay still visible: alt+esc should normalise to esc")
+				}
+			},
+		},
+		{
+			name: "shift+up scrolls back: the Code switch strips the modifier",
+			setup: func(t *testing.T, a *App) {
+				scrolled(t, a)
+				_ = dispatchModeKey(a, keyCode(tea.KeyDown))
+				if got := a.reactionsView.Offset(); got != 1 {
+					t.Fatalf("precondition: offset = %d, want 1", got)
+				}
+			},
+			key:      keyMod(tea.KeyUp, tea.ModShift),
+			wantMode: ModeReactionsView,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if got := a.reactionsView.Offset(); got != 0 {
+					t.Errorf("offset = %d, want 0: shift+up should normalise to up", got)
+				}
+			},
+		},
+		// The next four rows pin the arms this handler does NOT declare.
+		//
+		// They exist because mode_handlers.go:73-87 already holds
+		// normalizeFinderKey, whose five cases are a superset of this
+		// handler's three, and the Phase 4 consolidation is expected to
+		// substitute it here. That substitution is behaviour-neutral
+		// only because reactionsview.HandleKey (reactionsview/model.go:
+		// 72-84) matches neither "enter" nor "backspace": the raw form
+		// ("ctrl+enter") and the normalised form ("enter") are both
+		// inert, so rewriting one into the other cannot be observed.
+		// Two rows per key are needed to say that — one for each side of
+		// the equality. Nothing else in the suite pins it.
+		//
+		// These rows do not kill any mutation of the handler (there is
+		// no arm to delete). They kill a mutation of the SUB-MODEL:
+		// adding an "enter" or "backspace" arm to
+		// reactionsview.HandleKey silently makes the planned
+		// substitution behaviour-changing, and fires these.
+		{
+			name:     "enter is inert: reactionsview declares no enter arm (post-substitution side)",
+			setup:    scrolled,
+			key:      keyCode(tea.KeyEnter),
+			wantMode: ModeReactionsView,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if !a.reactionsView.IsVisible() {
+					t.Error("enter closed the overlay; reactionsview has no enter arm")
+				}
+				if got := a.reactionsView.Offset(); got != 0 {
+					t.Errorf("offset = %d, want 0", got)
+				}
+				if cmd != nil {
+					t.Errorf("cmd = %T, want nil", cmd)
+				}
+			},
+		},
+		{
+			name:     "ctrl+enter is inert: this handler does not normalise enter (pre-substitution side)",
+			setup:    scrolled,
+			key:      keyMod(tea.KeyEnter, tea.ModCtrl),
+			wantMode: ModeReactionsView,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if !a.reactionsView.IsVisible() {
+					t.Error("ctrl+enter closed the overlay")
+				}
+				if got := a.reactionsView.Offset(); got != 0 {
+					t.Errorf("offset = %d, want 0", got)
+				}
+			},
+		},
+		{
+			name:     "backspace is inert: reactionsview declares no backspace arm (post-substitution side)",
+			setup:    scrolled,
+			key:      keyCode(tea.KeyBackspace),
+			wantMode: ModeReactionsView,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if !a.reactionsView.IsVisible() {
+					t.Error("backspace closed the overlay; reactionsview has no backspace arm")
+				}
+				if got := a.reactionsView.Offset(); got != 0 {
+					t.Errorf("offset = %d, want 0", got)
+				}
+			},
+		},
+		{
+			name:     "shift+backspace is inert: this handler does not normalise backspace (pre-substitution side)",
+			setup:    scrolled,
+			key:      keyMod(tea.KeyBackspace, tea.ModShift),
+			wantMode: ModeReactionsView,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if !a.reactionsView.IsVisible() {
+					t.Error("shift+backspace closed the overlay")
+				}
+				if got := a.reactionsView.Offset(); got != 0 {
+					t.Errorf("offset = %d, want 0", got)
+				}
+			},
+		},
+		{
 			name:     "j scrolls like down",
 			setup:    scrolled,
 			key:      keyPress('j'),

@@ -318,6 +318,69 @@ func TestPresenceMenuModeKeys(t *testing.T) {
 			},
 		},
 		{
+			// mode_presence_menu.go:23-34 declares five arms; the
+			// shift+down row above and these three cover four, and the
+			// alt+esc row after them the fifth.
+			name: "shift+up navigates: the Code switch strips the modifier",
+			opts: opts,
+			setup: func(t *testing.T, a *App) {
+				open(t, a)
+				_ = dispatchModeKey(a, keyCode(tea.KeyDown))
+			},
+			key:      keyMod(tea.KeyUp, tea.ModShift),
+			wantMode: ModePresenceMenu,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				// The commit probe cannot assert the intermediate
+				// position without consuming it, so the setup's single
+				// down is unverified here; the "up moves the cursor
+				// back" row pins that same step unmodified.
+				assertCommitsTo(t, a, presencemenu.ActionSetActive)
+			},
+		},
+		{
+			name:     "alt+esc closes: the Code switch strips the modifier",
+			opts:     opts,
+			setup:    open,
+			key:      keyMod(tea.KeyEscape, tea.ModAlt),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if a.presenceMenu.IsVisible() {
+					t.Error("menu still visible: alt+esc should normalise to esc")
+				}
+			},
+		},
+		{
+			name:     "ctrl+enter commits: the Code switch strips the modifier",
+			opts:     opts,
+			setup:    open,
+			key:      keyMod(tea.KeyEnter, tea.ModCtrl),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				pres, _, _, ok := a.presence.Status("T1")
+				if !ok || pres != "active" {
+					t.Errorf("cached presence = %q (ok=%v), want \"active\": ctrl+enter should normalise to enter", pres, ok)
+				}
+				if len(calls) != 1 || calls[0].action != presencemenu.ActionSetActive {
+					t.Errorf("setStatusFn calls = %+v, want one ActionSetActive", calls)
+				}
+			},
+		},
+		{
+			name: "shift+backspace deletes: the Code switch strips the modifier",
+			opts: opts,
+			setup: func(t *testing.T, a *App) {
+				open(t, a)
+				typePresenceQuery(t, a, "x", 1)
+			},
+			key:      keyMod(tea.KeyBackspace, tea.ModShift),
+			wantMode: ModePresenceMenu,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if got := modalRows(&a.presenceMenu); got != presenceMenuAllRows {
+					t.Errorf("rows = %d, want %d: shift+backspace should normalise to backspace", got, presenceMenuAllRows)
+				}
+			},
+		},
+		{
 			name:     "ctrl+n moves the cursor like down",
 			opts:     opts,
 			setup:    open,

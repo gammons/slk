@@ -106,6 +106,80 @@ func TestHelpModeKeys(t *testing.T) {
 			},
 		},
 		{
+			// mode_help.go declares five arms; the four rows here plus
+			// the shift+down row above pin one apiece. See keyMod's doc
+			// for why only a modified press can see them.
+			name:     "alt+esc closes: the Code switch strips the modifier",
+			setup:    openHelp,
+			key:      keyMod(tea.KeyEscape, tea.ModAlt),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if a.help.IsVisible() {
+					t.Error("help still visible: alt+esc should normalise to esc")
+				}
+			},
+		},
+		{
+			name: "shift+up navigates: the Code switch strips the modifier",
+			setup: func(t *testing.T, a *App) {
+				openHelp(t, a)
+				for range 2 {
+					_ = dispatchModeKey(a, keyCode(tea.KeyDown))
+				}
+				if got := a.help.Selected(); got != 2 {
+					t.Fatalf("precondition: selected = %d, want 2 after two downs", got)
+				}
+			},
+			key:      keyMod(tea.KeyUp, tea.ModShift),
+			wantMode: ModeHelp,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if got := a.help.Selected(); got != 1 {
+					t.Errorf("selected = %d, want 1: shift+up should normalise to up", got)
+				}
+			},
+		},
+		{
+			// help.HandleKey has no "enter" arm; only handleSearchKey
+			// does (help/model.go:165), so the enter normalisation is
+			// observable in search mode only.
+			name: "ctrl+enter while searching commits: the Code switch strips the modifier",
+			setup: func(t *testing.T, a *App) {
+				openHelpSearching(t, a)
+				_ = dispatchModeKey(a, keyPress('q'))
+				if !a.help.IsSearching() {
+					t.Fatal("precondition: still expected to be in search mode")
+				}
+			},
+			key:      keyMod(tea.KeyEnter, tea.ModCtrl),
+			wantMode: ModeHelp,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if a.help.IsSearching() {
+					t.Error("IsSearching = true: ctrl+enter should normalise to enter")
+				}
+				if got := a.help.Query(); got != "q" {
+					t.Errorf("query = %q, want %q: enter must keep the filter", got, "q")
+				}
+			},
+		},
+		{
+			name: "shift+backspace while searching deletes: the Code switch strips the modifier",
+			setup: func(t *testing.T, a *App) {
+				openHelpSearching(t, a)
+				_ = dispatchModeKey(a, keyPress('u'))
+				_ = dispatchModeKey(a, keyPress('p'))
+				if a.help.Query() != "up" {
+					t.Fatalf("precondition: query = %q, want %q", a.help.Query(), "up")
+				}
+			},
+			key:      keyMod(tea.KeyBackspace, tea.ModShift),
+			wantMode: ModeHelp,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if got := a.help.Query(); got != "u" {
+					t.Errorf("query = %q, want %q: shift+backspace should normalise to backspace", got, "u")
+				}
+			},
+		},
+		{
 			name:     "j moves the selection like down",
 			setup:    openHelp,
 			key:      keyPress('j'),

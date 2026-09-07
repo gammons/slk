@@ -239,6 +239,94 @@ func TestNewMessageModeKeys(t *testing.T) {
 			},
 		},
 		{
+			// mode_new_message.go:17-32 declares SEVEN arms, the widest
+			// set of the seven handlers that carry this switch. space is
+			// pinned by its own unmodified row below (String() answers
+			// "space", so deleting the arm breaks it outright); the
+			// other six need a modified press, and the five rows here
+			// plus shift+down above supply one apiece.
+			name:     "alt+esc closes: the Code switch strips the modifier",
+			opts:     newMessageOpts(),
+			setup:    openNewMessagePicker,
+			key:      keyMod(tea.KeyEscape, tea.ModAlt),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if a.newMessagePicker.IsVisible() {
+					t.Error("picker still visible: alt+esc should normalise to esc")
+				}
+			},
+		},
+		{
+			name:     "ctrl+enter submits: the Code switch strips the modifier",
+			opts:     newMessageOpts(),
+			setup:    openNewMessagePicker,
+			key:      keyMod(tea.KeyEnter, tea.ModCtrl),
+			wantMode: ModeNewMessage,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if cmd == nil {
+					t.Fatal("cmd = nil: ctrl+enter should normalise to enter and submit")
+				}
+				msg, ok := cmd().(openedConversationMsg)
+				if !ok {
+					t.Fatalf("cmd() = %#v, want openedConversationMsg", cmd())
+				}
+				if len(msg.userIDs) != 1 || msg.userIDs[0] != "U1" {
+					t.Errorf("userIDs = %v, want [U1]", msg.userIDs)
+				}
+			},
+		},
+		{
+			name: "shift+up navigates: the Code switch strips the modifier",
+			opts: newMessageOpts(),
+			setup: func(t *testing.T, a *App) {
+				openNewMessagePicker(t, a)
+				_ = dispatchModeKey(a, keyCode(tea.KeyDown))
+				if got := modalHighlightedRow(t, a.newMessagePicker.View(120)); !strings.Contains(got, "bob") {
+					t.Fatalf("precondition: highlighted row = %q, want %q", got, "bob")
+				}
+			},
+			key:      keyMod(tea.KeyUp, tea.ModShift),
+			wantMode: ModeNewMessage,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if got := modalHighlightedRow(t, a.newMessagePicker.View(120)); !strings.Contains(got, "alice") {
+					t.Errorf("highlighted row = %q, want %q: shift+up should normalise to up", got, "alice")
+				}
+			},
+		},
+		{
+			name: "shift+backspace deletes: the Code switch strips the modifier",
+			opts: newMessageOpts(),
+			setup: func(t *testing.T, a *App) {
+				openNewMessagePicker(t, a)
+				_ = dispatchModeKey(a, keyPress('b'))
+				if strings.Contains(stripANSI(a.newMessagePicker.View(120)), "carol") {
+					t.Fatal("precondition: \"b\" should have filtered carol out")
+				}
+			},
+			key:      keyMod(tea.KeyBackspace, tea.ModShift),
+			wantMode: ModeNewMessage,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if !strings.Contains(stripANSI(a.newMessagePicker.View(120)), "carol") {
+					t.Error("carol did not come back: shift+backspace should normalise to backspace")
+				}
+			},
+		},
+		{
+			// Unlike space, an unmodified tab already stringifies to
+			// "tab", so the tab arm is invisible without a modifier —
+			// the same trap the whole group falls into.
+			name:     "shift+tab toggles: the Code switch strips the modifier",
+			opts:     newMessageOpts(),
+			setup:    openNewMessagePicker,
+			key:      keyMod(tea.KeyTab, tea.ModShift),
+			wantMode: ModeNewMessage,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if got := newMessagePillCount(a); got != "1 / 8" {
+					t.Errorf("pill counter = %q, want %q: shift+tab should normalise to tab", got, "1 / 8")
+				}
+			},
+		},
+		{
 			name:     "ctrl+n moves the highlight like down",
 			opts:     newMessageOpts(),
 			setup:    openNewMessagePicker,

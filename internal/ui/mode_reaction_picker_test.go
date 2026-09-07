@@ -312,6 +312,73 @@ func TestReactionPickerModeKeys(t *testing.T) {
 			},
 		},
 		{
+			// mode_reaction_picker.go:28-39 declares five arms; the
+			// shift+down row above and these three cover four, and the
+			// alt+esc row after them the fifth.
+			name: "shift+up navigates: the Code switch strips the modifier",
+			opts: reactionPickerOpts(false),
+			setup: func(t *testing.T, a *App) {
+				open(t, a)
+				_ = dispatchModeKey(a, keyCode(tea.KeyDown))
+			},
+			key:      keyMod(tea.KeyUp, tea.ModShift),
+			wantMode: ModeReactionPicker,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				// The commit probe closes the picker, so the setup's
+				// single down cannot be asserted separately; the row
+				// above pins that step unmodified.
+				assertReactionCommitsTo(t, a, &calls, "tada")
+			},
+		},
+		{
+			name:     "alt+esc closes: the Code switch strips the modifier",
+			opts:     reactionPickerOpts(false),
+			setup:    open,
+			key:      keyMod(tea.KeyEscape, tea.ModAlt),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if a.reactionPicker.IsVisible() {
+					t.Error("picker still visible: alt+esc should normalise to esc")
+				}
+				if len(calls.added)+len(calls.removed)+len(calls.frecent) != 0 {
+					t.Errorf("alt+esc touched the service: %+v", calls)
+				}
+			},
+		},
+		{
+			name:     "ctrl+enter commits: the Code switch strips the modifier",
+			opts:     reactionPickerOpts(false),
+			setup:    open,
+			key:      keyMod(tea.KeyEnter, tea.ModCtrl),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if len(calls.frecent) != 1 || calls.frecent[0] != "tada" {
+					t.Errorf("frecent = %v, want [tada]: ctrl+enter should normalise to enter", calls.frecent)
+				}
+				if cmd == nil {
+					t.Fatal("cmd = nil, want the reaction-add cmd")
+				}
+			},
+		},
+		{
+			name: "shift+backspace deletes: the Code switch strips the modifier",
+			opts: reactionPickerOpts(false),
+			setup: func(t *testing.T, a *App) {
+				open(t, a)
+				_ = dispatchModeKey(a, keyPress('t'))
+				if got := modalRows(a.reactionPicker); got != 10 {
+					t.Fatalf("precondition: rows = %d, want 10", got)
+				}
+			},
+			key:      keyMod(tea.KeyBackspace, tea.ModShift),
+			wantMode: ModeReactionPicker,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if got := modalRows(a.reactionPicker); got != 2 {
+					t.Errorf("rows = %d, want the 2 frecent entries back: shift+backspace should normalise to backspace", got)
+				}
+			},
+		},
+		{
 			// BUG?: reactionpicker.HandleKey's "up" arm is the only
 			// navigation arm that does not consult displayedList, so
 			// pressing up first is a clamp to 0 either way. Recorded

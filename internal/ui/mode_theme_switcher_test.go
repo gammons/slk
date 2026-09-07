@@ -174,21 +174,25 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			},
 		},
 		{
-			// The three InvalidateCache calls are the part of this
-			// handler a refactor is most likely to drop, and dropping
-			// them shows up as stale colors, not as a crash.
-			name: "enter bumps the sidebar and thread render versions",
+			// The three cache invalidations (mode_theme_switcher.go:44-46)
+			// are the part of this handler a refactor is most likely to
+			// drop, and dropping them shows up as stale colors, not as a
+			// crash. All three are covered here: the messages counter
+			// stands in for invalidateAllWinModelCaches() — see the
+			// themeVersions doc comment for why one model is the whole
+			// set on a test App.
+			name: "enter bumps the messagepane, sidebar and thread render versions",
 			setup: func(t *testing.T, a *App) {
 				openGlobal(t, a)
-				if v := themeVersionProbe(a); v.sidebar != 0 || v.thread != 0 {
-					t.Fatalf("precondition: version counters = %+v, want both 0 on a fresh App", v)
+				if v := themeVersionProbe(a); v.sidebar != 0 || v.thread != 0 || v.messages != 0 {
+					t.Fatalf("precondition: version counters = %+v, want all 0 on a fresh App", v)
 				}
 			},
 			key:      keyCode(tea.KeyEnter),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
-				// Both counters start at 0 on a freshly built App and
-				// InvalidateCache increments them, so any non-zero
+				// All three counters start at 0 on a freshly built App
+				// and InvalidateCache increments them, so any non-zero
 				// value means the call happened.
 				v := themeVersionProbe(a)
 				if v.sidebar == 0 {
@@ -196,6 +200,9 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 				}
 				if v.thread == 0 {
 					t.Error("threadPanel.Version() = 0; InvalidateCache was not called")
+				}
+				if v.messages == 0 {
+					t.Error("messagepane.Version() = 0; invalidateAllWinModelCaches was not called")
 				}
 			},
 		},
@@ -306,6 +313,70 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			wantMode: ModeThemeSwitcher,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
 				commitsTo(t, a, "Light")
+			},
+		},
+		{
+			// mode_theme_switcher.go:24-35 declares five arms; the
+			// shift+down row above and these three cover four, and the
+			// alt+esc row after them the fifth.
+			name: "shift+up navigates: the Code switch strips the modifier",
+			setup: func(t *testing.T, a *App) {
+				openGlobal(t, a)
+				_ = dispatchModeKey(a, keyCode(tea.KeyDown))
+			},
+			key:      keyMod(tea.KeyUp, tea.ModShift),
+			wantMode: ModeThemeSwitcher,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				// commitsTo consumes the cursor, so the setup's single
+				// down cannot be asserted here without spending the
+				// probe; "up moves the cursor back" pins that step.
+				commitsTo(t, a, "Dracula")
+			},
+		},
+		{
+			name:     "alt+esc closes: the Code switch strips the modifier",
+			setup:    openGlobal,
+			key:      keyMod(tea.KeyEscape, tea.ModAlt),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if a.themeSwitcher.IsVisible() {
+					t.Error("picker still visible: alt+esc should normalise to esc")
+				}
+				if !colorEqual(styles.Primary, darkPrimary) {
+					t.Errorf("styles.Primary = %v, want the palette untouched", styles.Primary)
+				}
+			},
+		},
+		{
+			name:     "ctrl+enter applies: the Code switch strips the modifier",
+			setup:    openGlobal,
+			key:      keyMod(tea.KeyEnter, tea.ModCtrl),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if want := lipgloss.Color(draculaPrimary); !colorEqual(styles.Primary, want) {
+					t.Errorf("styles.Primary = %v, want %v: ctrl+enter should normalise to enter", styles.Primary, want)
+				}
+				if len(saves) != 1 || saves[0].name != "Dracula" {
+					t.Errorf("saves = %+v, want one Dracula", saves)
+				}
+			},
+		},
+		{
+			name: "shift+backspace deletes: the Code switch strips the modifier",
+			setup: func(t *testing.T, a *App) {
+				openGlobal(t, a)
+				_ = dispatchModeKey(a, keyPress('g'))
+				if got := modalRows(&a.themeSwitcher); got != 1 {
+					t.Fatalf("precondition: rows = %d, want 1", got)
+				}
+			},
+			key:      keyMod(tea.KeyBackspace, tea.ModShift),
+			wantMode: ModeThemeSwitcher,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if got := modalRows(&a.themeSwitcher); got != len(themeSwitcherItems()) {
+					t.Errorf("rows = %d, want %d: shift+backspace should normalise to backspace",
+						got, len(themeSwitcherItems()))
+				}
 			},
 		},
 		{
@@ -456,13 +527,27 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 	}
 }
 
-// themeVersions bundles the two render-cache counters the theme
-// handler is supposed to bump.
+// themeVersions bundles the three render-cache counters the theme
+// handler is supposed to bump (mode_theme_switcher.go:44-46).
 type themeVersions struct {
 	sidebar int64
 	thread  int64
+	// messages is the focused window's messages.Model version. It
+	// stands in for a.invalidateAllWinModelCaches(), which walks
+	// allWinModels() (winmodels.go:110-118) — every leaf of a.wins.
+	// A test App is single-window, and App documents and maintains
+	// `messagepane == winModels[focusedWin]` (app.go:137-141,
+	// established at app.go:545-546), so on this App the one model
+	// reachable through messagepane IS the whole set the loop visits.
+	// A future multi-window fixture would need to widen this to
+	// allWinModels().
+	messages int64
 }
 
 func themeVersionProbe(a *App) themeVersions {
-	return themeVersions{sidebar: a.sidebar.Version(), thread: a.threadPanel.Version()}
+	return themeVersions{
+		sidebar:  a.sidebar.Version(),
+		thread:   a.threadPanel.Version(),
+		messages: a.messagepane.Version(),
+	}
 }
