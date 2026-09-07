@@ -407,17 +407,35 @@ func lockstepHitColumns(hit func(col int) bool) []int {
 //  3. Leading day divider. messages seeds lastDate empty
 //     (messages/model.go:1773), so the FIRST message gets a day divider
 //     above it whenever its TS parses (DateFromTS returns "" otherwise,
-//     and the empty date is skipped). thread seeds lastDate from the
-//     parent's day (thread/model.go:1559), so no divider is ever drawn
-//     above the parent, and none above the first reply that shares the
-//     parent's day. Only the day TRANSITION is shared, which is what the
+//     and the empty date is skipped). thread seeds lastDate from
+//     DateFromTS(parent.TS) (thread/model.go:1559), so no divider is
+//     ever drawn above the parent, and none above a first reply that
+//     shares the parent's day -- unless the parent's TS is itself
+//     unparseable, in which case lastDate seeds "" and the first reply
+//     with a parseable date DOES get a divider
+//     (thread/model.go:1601-1608), degenerating to the messages
+//     behaviour. Only the day TRANSITION is shared, which is what the
 //     fixture above exercises.
 //
-//  4. Inter-row separator. messages separates messages with a blank
-//     full-width spacer row (m.cacheSpacer, messages/model.go:1528);
-//     thread draws a full-width "─" rule after the parent
-//     (thread/model.go:1355-1359) and between replies
-//     (thread/model.go:1522). This is why only intra-message row gaps
+//  4. Inter-row separator, and where it lives structurally. messages
+//     separates messages with a blank full-width spacer row
+//     (m.cacheSpacer, messages/model.go:1528, reached as
+//     cs.spacerLines) that is appended INSIDE the message's own
+//     viewEntry for every message but the last
+//     (messages/model.go:1683-1687): the spacer line goes onto
+//     linesNormal/linesSelected and a plainLine{Text: ""} mirror onto
+//     linesPlain, so it counts toward that entry's height and carries
+//     that entry's msgIdx (messages/model.go:1688-1699). thread instead
+//     draws a full-width "─" rule as a STANDALONE row outside any cache
+//     entry -- after the parent (built thread/model.go:1355-1359, then
+//     joined into parentBlock at 1360, after parentEntry's height was
+//     taken from parentContent alone at 1337) and between replies
+//     (built 1518-1522, appended to allRows at 1655-1658, whose comment
+//     states the rule is deliberately not inside any entry so selection
+//     overlay and extraction skip it). This is the same entry-vs-bare-row
+//     distinction item 8(c) draws for the unread landmark, and it falls
+//     the same way round: separator inside an entry in messages, outside
+//     every entry in thread. It is also why only intra-message row gaps
 //     are compared above.
 //
 //  5. Pane chrome. messages renders
@@ -468,8 +486,15 @@ func lockstepHitColumns(hit func(col int) bool) []int {
 //     the word is pluralised, "[1 reply ->]" at n==1
 //     (messages/model.go:1982-1989) -- and exposes
 //     IncrementReplyCount; thread renders no such affordance -- it IS
-//     the thread. thread.ReplyCount() is unrelated: it is the open
-//     thread's own reply total, used only for the header.
+//     the thread. thread.ReplyCount() is unrelated, and it is NOT the
+//     header's source: it is len(m.replies)
+//     (thread/model.go:498-501), exported but with no production
+//     caller -- every call site is a test (thread/model_test.go:41, 42,
+//     68, 69, 89, 95; internal/ui/app_test.go:1221, 1247, 1267, 1292,
+//     1293, 1304, 1316). The chrome header computes len(m.replies)
+//     itself into a local (thread/model.go:1280) and renders from that
+//     (thread/model.go:1301), so wiring ReplyCount() into a chrome hook
+//     would be introducing a caller, not preserving one.
 //
 // 10. Search-term highlighting. messages has SetSearchTerms and calls
 //     HighlightSearchTerms in the body render path
