@@ -203,9 +203,10 @@ func TestPreload_DedupesInflight(t *testing.T) {
 func TestPreload_QueueBackpressureReleasesInflightSlot(t *testing.T) {
 	release := make(chan struct{})
 	// Buffered past the number of requests this test can possibly
-	// generate (3 expected, 4 if the drop under test regresses) so the
-	// handler never blocks on the send.
-	serving := make(chan struct{}, 4)
+	// generate (4 expected — 3 jobs plus the sentinel below — and 5 if
+	// the drop under test regresses) so the handler never blocks on the
+	// send.
+	serving := make(chan struct{}, 5)
 	src := image.NewRGBA(image.Rect(0, 0, 16, 16))
 	var buf bytes.Buffer
 	imgpng.Encode(&buf, src)
@@ -228,7 +229,10 @@ func TestPreload_QueueBackpressureReleasesInflightSlot(t *testing.T) {
 	// 1 worker, queue depth 2: easy to saturate.
 	c := newCacheForTest(fetcher, nil, false, 1, 2)
 
-	ready := make(chan string, 4)
+	// Buffered past every onReady this test can produce (4 expected, 5
+	// if the drop under test regresses) so no worker ever parks on the
+	// send while the test body is between receives.
+	ready := make(chan string, 8)
 	c.SetOnReady(func(userID string) { ready <- userID })
 
 	// Fill the worker (it'll block on the server) + the 2-slot queue.
@@ -276,6 +280,31 @@ func TestPreload_QueueBackpressureReleasesInflightSlot(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		completed[<-ready] = true
 	}
+
+	// The three receives above are not enough to say anything about
+	// U_DROP: were the queue-full drop to regress, U_DROP would be
+	// enqueued *fourth*, so its onReady would simply not be among the
+	// first three values — the check would be statically false in both
+	// builds. A sentinel makes the observation exact, the same way it
+	// does in TestPreload_DedupesInflight.
+	//
+	// It is enqueued here rather than before the drain because the
+	// 2-slot queue is deliberately full until then and Preload's
+	// enqueue is a non-blocking send: an early sentinel would itself be
+	// dropped and the drain below would hang. Three onReady fires mean
+	// three jobs have been dequeued, so at most one of the four can
+	// still be in the channel and a slot is guaranteed free. One worker
+	// draining a FIFO channel then means the sentinel's onReady cannot
+	// fire until everything enqueued before it has completed.
+	c.Preload("U_SENTINEL", srv.URL)
+	for {
+		id := <-ready
+		if id == "U_SENTINEL" {
+			break
+		}
+		completed[id] = true
+	}
+
 	for _, id := range []string{"U_W1", "U_Q1", "U_Q2"} {
 		if !completed[id] {
 			t.Errorf("onReady never fired for %s; the queued jobs did not all complete", id)
@@ -341,16 +370,24 @@ func TestPreload_BoundedConcurrencyN1(t *testing.T) {
 	// long enough for even the first request to land.
 	<-serving // request 0 reached the handler and is held at `release`
 
-	// "At most one worker runs at a time" is a negative-existence claim:
-	// no signal can ever prove that a *second* concurrent request is not
-	// about to arrive, so this window cannot be replaced by a receive.
-	// It is deliberately kept, and it is not a wall-clock budget — the
-	// bias is one-sided. If the pool is correctly bounded, peak stays 1
-	// no matter how long we wait, so a short window cannot false-fail;
-	// it can only false-pass by missing a widened pool. The loop exits
-	// the instant a violation appears, so the common (passing) case is
-	// the only one that pays the full window. The assertion itself is
-	// made after the drain below, where the value is exact.
+	// This window is load-bearing; do not delete it. It is NOT here
+	// because "no signal can prove a second request is not about to
+	// arrive" (true, but that only argues against *asserting* here —
+	// the assertion is the exact post-drain read at the bottom). It is
+	// here because the receive above proves only that ONE request
+	// landed, and the very next statement releases it. Under a widened
+	// pool the other three workers need a moment to reach the network;
+	// if we release request 0 immediately, its handler returns and
+	// inflight falls back to 0 before they arrive, so peak reads 1 and
+	// the mutation escapes. Measured against a workers→workers*4
+	// mutation, same machine, same harness: with this window 200/200
+	// detected, without it 166/200.
+	//
+	// It is not a wall-clock budget — the bias is one-sided. If the
+	// pool is correctly bounded, peak stays 1 however long we wait, so
+	// the window cannot false-fail; it can only false-pass. The loop
+	// exits the instant a violation appears, so only the passing case
+	// pays the full 50ms.
 	overlapWindow := time.Now().Add(50 * time.Millisecond)
 	for time.Now().Before(overlapWindow) && peak.Load() == 1 {
 		time.Sleep(time.Millisecond)

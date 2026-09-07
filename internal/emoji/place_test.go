@@ -340,6 +340,17 @@ func TestPlace_ColdPath_FetchError_LeavesNoInflight(t *testing.T) {
 	url := "https://a.slack-edge.com/...1f44d.png"
 	key := EmojiCacheKey(url)
 
+	// The cleanup under test, and simultaneously the hand-back of the
+	// shared 1f44d key to the tests either side of this one. Unbounded
+	// on purpose: a leak hangs and `go test` dumps the holder, rather
+	// than failing on a 1s budget that only holds on an unloaded
+	// machine. Registered as a Cleanup rather than run as the last
+	// statement so that a t.Fatal added above cannot skip it and wedge
+	// the next test. Registered *after* the resetNegativeEmojiCache
+	// cleanup above so LIFO runs it first: the fetch goroutine must be
+	// done before the negative cache it writes to is reset.
+	t.Cleanup(func() { awaitInflightCleared(key) })
+
 	// First fetch fails. The inflight registration must clear so the
 	// negative-cache short-circuit on the next Place call observes a
 	// clean inflight map (the failure path must not leak inflight
@@ -367,10 +378,8 @@ func TestPlace_ColdPath_FetchError_LeavesNoInflight(t *testing.T) {
 	// stuck test.
 	<-first
 
-	// The cleanup under test. Unbounded on purpose: a leak hangs and
-	// `go test` dumps the holder, rather than failing on a 1s budget
-	// that only holds on an unloaded machine.
-	awaitInflightCleared(key)
+	// The inflight-clearance wait itself is the t.Cleanup registered
+	// above.
 }
 
 // TestPlace_NegativeCache_ShortCircuitsAfterFetchFailure verifies that
