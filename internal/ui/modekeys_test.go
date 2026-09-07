@@ -6,11 +6,29 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// TestEveryModeHasAHandler pins the registration invariant. dispatchModeKey
-// falls back to handleNormalMode for unregistered modes
-// (mode_handlers.go:96); that fallback should be unreachable because
-// all 16 modes are registered. If someone adds a Mode without a
-// handler, modal keys would silently leak into normal-mode behaviour.
+// TestEveryModeHasAHandler pins the registration invariant.
+// dispatchModeKey falls back to handleNormalMode for unregistered modes
+// (mode_handlers.go:96); that fallback should be unreachable because all
+// 16 modes are registered, and a mode that reached it would silently
+// serve normal-mode behaviour to a modal.
+//
+// What this test detects:
+//
+//   - a modeHandlers entry deleted — len(modeHandlers) drops below
+//     len(all), and the loop names the orphaned mode;
+//   - a 17th Mode added AND registered — len(modeHandlers) exceeds
+//     len(all), forcing the pinned list below to be updated;
+//   - a 17th Mode added, NOT registered, but given a String() arm — the
+//     Mode(len(all)) probe below stops answering "UNKNOWN".
+//
+// What it cannot detect: a 17th Mode with neither a handler nor a
+// String() arm. `all` is a hand-maintained literal, and Mode is a bare
+// int iota with no count sentinel (mode.go:4-23), so nothing available
+// to test code ties the list to the constant block. Closing that
+// residual gap would take a production change (a ModeCount sentinel, or
+// a generated stringer), which this PR's budget does not allow. The
+// String() probe covers the overwhelmingly likely shape of the mistake,
+// since a new mode needs a String() arm for the statusbar.
 func TestEveryModeHasAHandler(t *testing.T) {
 	all := []Mode{
 		ModeNormal, ModeInsert, ModeCommand, ModeSearch,
@@ -26,6 +44,15 @@ func TestEveryModeHasAHandler(t *testing.T) {
 		if _, ok := modeHandlers[m]; !ok {
 			t.Errorf("mode %v (%s) has no handler; keys would fall back to Normal", m, m)
 		}
+	}
+	// A 17th Mode would take the value len(all). Mode.String() answers
+	// "UNKNOWN" only for values outside the constant block
+	// (mode.go:87-88), so anything else here means a Mode exists that
+	// the pinned list does not know about — including the case where it
+	// was added without a handler, which the two checks above cannot
+	// see because both counts stay at 16.
+	if got := Mode(len(all)).String(); got != "UNKNOWN" {
+		t.Errorf("Mode(%d).String() = %q, want UNKNOWN: a Mode exists beyond the pinned list", len(all), got)
 	}
 }
 
@@ -112,6 +139,23 @@ func TestRunKeyCases_EstablishesMode(t *testing.T) {
 			name:     "esc leaves command mode",
 			key:      keyCode(tea.KeyEscape),
 			wantMode: ModeNormal,
+		},
+		{
+			// Pins the append order in runKeyCases: withMode(mode) is
+			// appended AFTER tc.opts, so the mode argument wins. If a
+			// future edit swaps those two statements, this App is built
+			// in ModeHelp, handleHelpMode consumes 'x' (exiting to
+			// ModeNormal, since no help overlay is open —
+			// mode_help.go:29-31), and both assertions below fail.
+			name:     "mode argument beats a withMode in opts",
+			opts:     []testOpt{withMode(ModeHelp)},
+			key:      keyPress('x'),
+			wantMode: ModeCommand,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if a.cmdline != "x" {
+					t.Errorf("cmdline = %q, want %q: the table's mode argument did not win over opts", a.cmdline, "x")
+				}
+			},
 		},
 	})
 }
@@ -216,8 +260,9 @@ type keyCase struct {
 	name string
 	// opts are extra construction options, appended after the
 	// harness defaults, so they win on any last-wins option
-	// (withSize, withMode, ...). See runKeyCases for the one
-	// exception: the dispatch mode is applied after opts.
+	// (withSize, withView, ...). The dispatch mode is the one
+	// exception: runKeyCases appends withMode(mode) after opts, so a
+	// withMode here does NOT win.
 	opts []testOpt
 	// setup runs after construction, before dispatch. nil means the
 	// harness default is the precondition. Use it for preconditions
@@ -243,6 +288,18 @@ type keyCase struct {
 // of to the reducer chain that runs ahead of it. Each case gets its own
 // freshly built App.
 //
+// CONSEQUENCE, and it is not just a coverage gap: a key that never
+// reaches the handler in production still reaches it here, so a row for
+// such a key records behaviour that does not happen. Everything ahead
+// of dispatchModeKey is bypassed — the reducer chain (app.go:609), the
+// image-preview key swallow (app.go:643), and inside App.handleKey the
+// Quit/ctrl+c intercept (app.go:708), the bootstrap-loading gate
+// (app.go:715) and the scroll-coalesce flush (app.go:724). ctrl+c is
+// the concrete trap: app.go:708 returns before dispatch, so
+// handleNormalMode never sees it, and a row here would characterise a
+// dead branch as live. Rows that must be production-reachable belong on
+// a.handleKey or a.Update, outside this runner.
+//
 // The dispatch mode is established through newTestApp's withMode
 // option, i.e. through App.SetMode, rather than by assigning a.mode
 // directly. The plan's brief prescribed the direct assignment, on the
@@ -266,7 +323,6 @@ type keyCase struct {
 // buildTestApp (NewApp already starts there), so a ModeNormal table
 // gets NewApp's untouched statusbar rather than a redundant SetMode.
 func runKeyCases(t *testing.T, mode Mode, cases []keyCase) {
-	t.Helper()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			// withSize(120, 30) restates buildTestApp's own default
