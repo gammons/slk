@@ -10,6 +10,10 @@
 
 **Design doc:** `docs/superpowers/specs/2026-09-09-mention-badges-design.md`
 
+**Workspace:** all work happens in the `feat/mention-badges` worktree at
+`/home/dev/local_code/slk/.worktrees/feat-mention-badges`, branched from `main`
+at `8337707`. Do not commit to `main`.
+
 ## Global Constraints
 
 - Tests are plain `testing.T`, stdlib only. No testify, no gomock, no golden libraries.
@@ -103,7 +107,7 @@ Any temporary logging must be reverted. This task commits nothing except the
 Findings edit.
 
 ```bash
-cd /home/dev/local_code/slk
+cd /home/dev/local_code/slk/.worktrees/feat-mention-badges
 git status --short
 ```
 
@@ -180,7 +184,7 @@ func TestInText(t *testing.T) {
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```bash
-cd /home/dev/local_code/slk
+cd /home/dev/local_code/slk/.worktrees/feat-mention-badges
 go test ./internal/mention/ -run TestInText -v
 ```
 
@@ -269,7 +273,7 @@ regression proof: they must pass with zero modifications.
 - [ ] **Step 1: Confirm the existing tests pass before touching anything**
 
 ```bash
-cd /home/dev/local_code/slk
+cd /home/dev/local_code/slk/.worktrees/feat-mention-badges
 go test ./internal/notify/ -v 2>&1 | tail -30
 ```
 
@@ -458,7 +462,7 @@ so no import changes are needed.
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-cd /home/dev/local_code/slk
+cd /home/dev/local_code/slk/.worktrees/feat-mention-badges
 go test ./internal/cache/ -run 'TestMigration_AddsMentionCountColumn|TestSchema_FreshDBHasNoUnreadCountColumn' -v
 ```
 
@@ -787,7 +791,7 @@ func TestGetWorkspaceReadState_IncludesMentionCount(t *testing.T) {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-cd /home/dev/local_code/slk
+cd /home/dev/local_code/slk/.worktrees/feat-mention-badges
 go test ./internal/cache/ -run 'MentionCount|MentionSetters' -v
 ```
 
@@ -1121,7 +1125,7 @@ func TestGetUnreadCounts_ParsesMentionCounts(t *testing.T) {
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```bash
-cd /home/dev/local_code/slk
+cd /home/dev/local_code/slk/.worktrees/feat-mention-badges
 go test ./internal/slack/ -run TestGetUnreadCounts_ParsesMentionCounts -v
 ```
 
@@ -1415,7 +1419,7 @@ func TestDispatch_ChannelMarked_AbsentMentionCountIsZero(t *testing.T) {
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```bash
-cd /home/dev/local_code/slk
+cd /home/dev/local_code/slk/.worktrees/feat-mention-badges
 go test ./internal/slack/ -run 'TestDispatch_ChannelMarked_(CarriesMentionCount|AbsentMentionCountIsZero)' -v
 ```
 
@@ -1678,7 +1682,8 @@ below it.
 **Files:**
 - Modify: `cmd/slk/main.go:3101-3121` (`markChannelReadAsync`)
 - Modify: `cmd/slk/main.go:1630-1672` (the `MarkUnread` service closure)
-- Modify: `cmd/slk/event_handler_marked_test.go` or a new `cmd/slk/mark_read_mention_test.go` (append one test)
+- Create: `cmd/slk/mark_read_mention_test.go` (one behaviour test driving the
+  real `markChannelReadAsync` against a fake Slack, plus two guard tests)
 
 **Interfaces:**
 - Consumes: `cache.SetChannelMentionCount` from Task 4.
@@ -1698,10 +1703,31 @@ import (
 	"github.com/gammons/slk/internal/cache"
 )
 
-// Reading a channel clears its mention badge. markChannelReadAsync does
-// the work in a goroutine, so this drives the DB write directly rather
-// than racing the goroutine: the assertion is that the same two writes
-// happen together, which is what the badge depends on.
+// waitForMentionCount polls until the channel's mention count reaches
+// want, or fails. markChannelReadAsync does its work in a goroutine and,
+// with a nil *tea.Program, emits no completion signal — so poll rather
+// than sleeping a fixed duration.
+func waitForMentionCount(t *testing.T, db *cache.DB, channelID string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	last := -1
+	for time.Now().Before(deadline) {
+		state, err := db.GetChannelReadState(channelID)
+		if err != nil {
+			t.Fatalf("GetChannelReadState: %v", err)
+		}
+		last = state.MentionCount
+		if last == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("mention count for %s = %d after 2s, want %d", channelID, last, want)
+}
+
+// Entering a channel clears its mention badge. This drives the real
+// markChannelReadAsync against a fake Slack so the production path is
+// what gets exercised, not a hand-rolled pair of DB writes.
 func TestMarkChannelRead_ClearsMentionCount(t *testing.T) {
 	db := newTestDB(t)
 	if err := db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"}); err != nil {
@@ -1714,40 +1740,96 @@ func TestMarkChannelRead_ClearsMentionCount(t *testing.T) {
 		t.Fatalf("seed mention count: %v", err)
 	}
 
-	// wctx == nil makes markChannelReadAsync return before touching the
-	// network or the DB, which proves the guard still short-circuits.
+	srv := newFakeSlack(t, map[string]string{"/api/conversations.mark": `{"ok":true}`})
+	wctx := &WorkspaceContext{Client: newTestClient(t, srv.Server)}
+
+	markChannelReadAsync(context.Background(), wctx, db, nil, "C1", "1.0050")
+	waitForMentionCount(t, db, "C1", 0)
+
+	state, err := db.GetChannelReadState("C1")
+	if err != nil {
+		t.Fatalf("GetChannelReadState: %v", err)
+	}
+	if state.HasUnread {
+		t.Error("HasUnread = true, want false after read")
+	}
+	if state.LastReadTS != "1.0050" {
+		t.Errorf("LastReadTS = %q, want 1.0050", state.LastReadTS)
+	}
+	// The DB write is unconditional (markChannelReadAsync discards
+	// MarkChannel's error), so assert the API call really happened —
+	// otherwise this test would pass with no network path at all.
+	if got := srv.requestTo(t, "/api/conversations.mark").form.Get("channel"); got != "C1" {
+		t.Errorf("conversations.mark channel = %q, want C1", got)
+	}
+}
+
+// The nil-workspace guard must short-circuit before any write, so a
+// workspace that failed to construct cannot silently clear badges.
+// No goroutine starts in this path, so the check is immediate.
+func TestMarkChannelRead_NilWorkspaceDoesNotWrite(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"}); err != nil {
+		t.Fatalf("UpsertChannel: %v", err)
+	}
+	if err := db.SetChannelMentionCount("C1", 3); err != nil {
+		t.Fatalf("seed mention count: %v", err)
+	}
+
 	markChannelReadAsync(context.Background(), nil, db, nil, "C1", "1.0050")
+
 	state, err := db.GetChannelReadState("C1")
 	if err != nil {
 		t.Fatalf("GetChannelReadState: %v", err)
 	}
 	if state.MentionCount != 3 {
-		t.Errorf("nil wctx should not write; MentionCount = %d, want 3", state.MentionCount)
+		t.Errorf("nil wctx wrote to the DB; MentionCount = %d, want 3 untouched", state.MentionCount)
+	}
+}
+
+// An empty ts is the other guard: there is no watermark to advance, so
+// nothing should be cleared.
+func TestMarkChannelRead_EmptyTSDoesNotWrite(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"}); err != nil {
+		t.Fatalf("UpsertChannel: %v", err)
+	}
+	if err := db.SetChannelMentionCount("C1", 3); err != nil {
+		t.Fatalf("seed mention count: %v", err)
 	}
 
-	// The read path proper: assert the pairing the badge relies on.
-	if err := db.UpdateChannelReadState("C1", "1.0050", false); err != nil {
-		t.Fatalf("UpdateChannelReadState: %v", err)
-	}
-	if err := db.SetChannelMentionCount("C1", 0); err != nil {
-		t.Fatalf("SetChannelMentionCount: %v", err)
-	}
-	state, err = db.GetChannelReadState("C1")
+	srv := newFakeSlack(t, map[string]string{"/api/conversations.mark": `{"ok":true}`})
+	wctx := &WorkspaceContext{Client: newTestClient(t, srv.Server)}
+
+	markChannelReadAsync(context.Background(), wctx, db, nil, "C1", "")
+
+	state, err := db.GetChannelReadState("C1")
 	if err != nil {
 		t.Fatalf("GetChannelReadState: %v", err)
 	}
-	if state.HasUnread || state.MentionCount != 0 {
-		t.Errorf("after read: HasUnread=%v MentionCount=%d, want false/0", state.HasUnread, state.MentionCount)
+	if state.MentionCount != 3 {
+		t.Errorf("empty ts wrote to the DB; MentionCount = %d, want 3 untouched", state.MentionCount)
 	}
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it compiles and passes**
+Imports needed: `context`, `testing`, `time`, and
+`github.com/gammons/slk/internal/cache`. The helpers `newTestDB`
+(`cmd/slk/reconnect_sync_test.go:33`), `newFakeSlack`
+(`cmd/slk/bootstrap_adapters_test.go:75`), `newTestClient` (`:41`) and
+`fakeSlack.requestTo` all already exist in `package main`.
+
+- [ ] **Step 2: Run the tests to verify the first one fails**
 
 ```bash
-cd /home/dev/local_code/slk
-go test ./cmd/slk/ -run TestMarkChannelRead_ClearsMentionCount -v
+cd /home/dev/local_code/slk/.worktrees/feat-mention-badges
+go test ./cmd/slk/ -run TestMarkChannelRead -v 2>&1 | tail -25
 ```
+
+Expected: `TestMarkChannelRead_ClearsMentionCount` FAILS with
+"mention count for C1 = 3 after 2s, want 0" — the production path does not
+clear the count yet. The two guard tests PASS already, which is correct: they
+pin behaviour that must not change.
 
 Expected: PASS. This test pins the DB contract and the nil-guard; Steps 3-4 add
 the production wiring that makes the real path match it.
@@ -2011,7 +2093,7 @@ func TestOnMessage_MentionsAccumulate(t *testing.T) {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-cd /home/dev/local_code/slk
+cd /home/dev/local_code/slk/.worktrees/feat-mention-badges
 go test ./cmd/slk/ -run 'TestOnMessage_Mention' -v 2>&1 | tail -30
 ```
 
@@ -2203,7 +2285,7 @@ exist in `charm.land/lipgloss/v2` and to round-trip through the package's
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-cd /home/dev/local_code/slk
+cd /home/dev/local_code/slk/.worktrees/feat-mention-badges
 go test ./internal/ui/styles/ -run TestMentionBadgeStyle -v
 ```
 
@@ -2527,7 +2609,7 @@ func TestMentionBadge_UnbadgedRowKeepsOriginalNameWidth(t *testing.T) {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-cd /home/dev/local_code/slk
+cd /home/dev/local_code/slk/.worktrees/feat-mention-badges
 go test ./internal/ui/sidebar/ -run TestMentionBadge -v 2>&1 | tail -30
 ```
 
@@ -2813,7 +2895,7 @@ Add immediately after it:
 - [ ] **Step 2: Verify the table still renders**
 
 ```bash
-cd /home/dev/local_code/slk
+cd /home/dev/local_code/slk/.worktrees/feat-mention-badges
 grep -n 'mention.InText' AGENTS.md
 ```
 
