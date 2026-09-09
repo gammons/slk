@@ -299,20 +299,32 @@ func MentionBadgeStyle() lipgloss.Style {
 
 A function, not a package var, because `UnreadBadge` demonstrates the failure
 mode: it is defined twice, once as an init-time var (`styles.go:106-109`) and
-again inside `buildStyles()` (`:457-458`). `Apply()` populates `Selection*` at
-`:348-361` before calling `buildStyles()` at `:395`, so a var *inside*
-`buildStyles` would be correct — but the init-time copy reads `Selection*`
-while it is still nil, and any future style must be remembered in both places.
-A function has a single definition and cannot go stale by omission. This is why
+again inside `buildStyles()` (`:457-458`). Every var-shaped style must be
+remembered in both places, and the init-time copy reads `Selection*` while it
+is still nil (those two are declared without initializers at `:36-37`).
+`Apply()` populates them at `:348-361` before calling `buildStyles()` at
+`:395`, so the `buildStyles` copy would be correct — but a function has a
+single definition and cannot go stale by omission at all. This is why
 `SelectionStyle()` and `SearchHighlightStyle()`
 (`internal/ui/styles/styles.go:508-521`) are already functions.
 
-The unused `UnreadBadge` var (`styles.go:106-109`, rebuilt at `:457-458`) is
-deleted rather than left alongside. It hardcodes `Background(Error)` with a
-literal `#FFFFFF` foreground, which is unreadable on any theme with a pale
-`Error` — a latent bug surviving only because nothing references it. Leaving
-two near-identical badge styles in place is the mechanism that produced the 11
-duplicate `renderBox` implementations AGENTS.md warns about.
+`UnreadBadge` is **kept**. It is live: `internal/ui/statusbar/model.go:250`
+renders the status bar's " N unread " badge with it. An earlier draft of this
+document called it unused and proposed deleting it; that was wrong, and
+deleting it would break the build.
+
+### Recorded, out of scope: UnreadBadge contrast
+
+`UnreadBadge` hardcodes `Foreground(lipgloss.Color("#FFFFFF"))` over
+`Background(Error)` (`styles.go:457-458`). On a theme whose `Error` is pale,
+white-on-error is unreadable. `WorkspaceActive` (`:443-445`) and `StatusMode`
+(`:469-470`) hardcode the same literal white over `Primary`.
+
+This is a pre-existing defect in the status bar and workspace rail, not
+something this feature introduces or touches. Per AGENTS.md — *found a bug
+while refactoring? Record it, annotate it, raise it separately* — it is noted
+here and left alone. The mention badge avoids the whole class by using the
+theme's own contrast-guaranteed `Selection*` pair.
 
 ### Inline ANSI
 
