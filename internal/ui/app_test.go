@@ -995,20 +995,14 @@ func TestApp_NewThreadReplyTriggersDirtyMsg(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("NewMessageMsg with ThreadTS expected to return a cmd")
 	}
-	// Drive every leaf message produced by the cmd graph back into the app.
-	// tea.Tick blocks for the duration before returning a TickMsg-shaped
-	// value (here, ThreadsListDirtyMsg). drainBatch will block on it, which
-	// is fine because we set the debounce to 5ms.
-	for _, m := range drainBatch(cmd) {
-		if m != nil {
-			_, follow := app.Update(m)
-			for _, fm := range drainBatch(follow) {
-				if fm != nil {
-					app.Update(fm)
-				}
-			}
-		}
-	}
+	// Drive every leaf message produced by the cmd graph back into the
+	// app, to whatever depth it runs to: the reply's dirty tick is only
+	// the first of several hops -- the dirty message opens a coalescing
+	// window whose own tick delivers threadsListFetchMsg, and that arm
+	// is what dispatches the fetch. Each tea.Tick blocks for its
+	// duration inside drainBatch, which is fine at the 5ms debounce set
+	// above.
+	feed(t, app, cmd, 0)
 
 	select {
 	case team := <-fetched:
@@ -2939,44 +2933,307 @@ func TestChannelMarkedRemoteMsg_InactiveChannel_OnlyUpdatesSidebar(t *testing.T)
 	}
 }
 
-func TestThreadMarkedRemoteMsg_UnreadFlipsRow(t *testing.T) {
+func TestThreadMarkedRemoteMsg_CursorBehindLatestFlipsRowUnread(t *testing.T) {
 	app := NewApp()
 	app.threadsView.SetSummaries([]cache.ThreadSummary{
-		{ChannelID: "C1", ThreadTS: "P1", Unread: false},
+		{ChannelID: "C1", ThreadTS: "P1", LastReplyTS: "5.000000", Unread: false},
 	})
 
 	_, cmd := app.Update(ThreadMarkedRemoteMsg{
 		ChannelID: "C1",
 		ThreadTS:  "P1",
-		TS:        "R5",
-		Read:      false,
+		LastRead:  "4.000000",
 	})
 
 	if cmd != nil && cmdContainsMsgType(cmd, statusbar.MarkedUnreadMsg{}) {
 		t.Error("expected no toast on remote thread event")
 	}
-
+	found := false
 	for _, s := range app.threadsView.Summaries() {
-		if s.ThreadTS == "P1" && !s.Unread {
-			t.Errorf("expected P1 to be Unread=true after remote thread_marked")
+		if s.ThreadTS != "P1" {
+			continue
+		}
+		found = true
+		if !s.Unread {
+			t.Error("expected P1 Unread=true when the cursor is behind the latest reply")
+		}
+	}
+	if !found {
+		t.Fatal("summary P1 missing; the assertion above would have passed vacuously")
+	}
+}
+
+func TestThreadMarkedRemoteMsg_CursorAtLatestClearsRow(t *testing.T) {
+	app := NewApp()
+	app.threadsView.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "P1", LastReplyTS: "5.000000", Unread: true},
+	})
+
+	_, _ = app.Update(ThreadMarkedRemoteMsg{
+		ChannelID: "C1", ThreadTS: "P1", LastRead: "5.000000",
+	})
+
+	found := false
+	for _, s := range app.threadsView.Summaries() {
+		if s.ThreadTS != "P1" {
+			continue
+		}
+		found = true
+		if s.Unread {
+			t.Error("expected P1 Unread=false when the cursor reaches the latest reply")
+		}
+	}
+	if !found {
+		t.Fatal("summary P1 missing; the assertion above would have passed vacuously")
+	}
+}
+
+// The open thread panel draws its "── new ──" landmark after the
+// boundary ts, so a remote cursor move must move the landmark rather
+// than clear it: a cursor mid-thread still has unread replies below it.
+func TestThreadMarkedRemoteMsg_MovesOpenPanelBoundaryToCursor(t *testing.T) {
+	app := NewApp()
+	app.threadPanel.SetThread(
+		messages.MessageItem{TS: "P1", UserID: "U1", Text: "parent"},
+		[]messages.MessageItem{
+			{TS: "R1", UserID: "U1", Text: "r1"},
+			{TS: "R2", UserID: "U1", Text: "r2"},
+		}, "C1", "P1")
+	app.threadVisible = true
+
+	_, _ = app.Update(ThreadMarkedRemoteMsg{
+		ChannelID: "C1", ThreadTS: "P1", LastRead: "R1",
+	})
+
+	if got := app.threadPanel.UnreadBoundaryTS(); got != "R1" {
+		t.Errorf("thread panel unreadBoundary = %q, want R1", got)
+	}
+}
+
+// The local counterpart of the test above, and its mirror image.
+// ThreadMarkedLocalMsg reports slk's OWN subscriptions.thread.mark
+// completing — the one issued by reducer_threads.go's
+// ThreadRepliesLoadedMsg arm on open, or by App.flushPendingMarks for a
+// reply that arrived in the open panel. Moving the boundary to that
+// cursor would land it on the newest reply, rendering no landmark at
+// all, and would destroy the pre-open snapshot openSelectedThreadCmd
+// takes via applyThreadUnreadBoundary precisely so the user can see
+// what is new in the panel they are reading.
+func TestThreadMarkedLocalMsg_LeavesOpenPanelBoundaryInPlace(t *testing.T) {
+	app := NewApp()
+	app.threadPanel.SetThread(
+		messages.MessageItem{TS: "P1", UserID: "U1", Text: "parent"},
+		[]messages.MessageItem{
+			{TS: "R1", UserID: "U1", Text: "r1"},
+			{TS: "R2", UserID: "U1", Text: "r2"},
+		}, "C1", "P1")
+	app.threadVisible = true
+	app.threadPanel.SetUnreadBoundary("R1")
+	app.threadsView.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "P1", LastReplyTS: "R2", Unread: true},
+	})
+
+	_, _ = app.Update(ThreadMarkedLocalMsg{ChannelID: "C1", ThreadTS: "P1", TS: "R2"})
+
+	if got := app.threadPanel.UnreadBoundaryTS(); got != "R1" {
+		t.Errorf("thread panel unreadBoundary = %q, want the pre-open snapshot R1 held", got)
+	}
+	// The threads-list side of the same mark must still take effect.
+	for _, s := range app.threadsView.Summaries() {
+		if s.ThreadTS == "P1" && s.Unread {
+			t.Error("a successful local thread mark must still clear the threads-list unread flag")
 		}
 	}
 }
 
-func TestThreadMarkedRemoteMsg_ReadClearsRow(t *testing.T) {
+// threadPanelOnR1R2 opens the thread panel on C1/P1 with two replies
+// and the "── new ──" landmark sitting on R1, which is the state
+// openSelectedThreadCmd's pre-open snapshot produces for a thread whose
+// second reply is unread.
+func threadPanelOnR1R2(t *testing.T) *App {
+	t.Helper()
+	app := NewApp()
+	app.threadPanel.SetThread(
+		messages.MessageItem{TS: "P1", UserID: "U1", Text: "parent"},
+		[]messages.MessageItem{
+			{TS: "R1", UserID: "U1", Text: "r1"},
+			{TS: "R2", UserID: "U1", Text: "r2"},
+		}, "C1", "P1")
+	app.threadVisible = true
+	app.threadPanel.SetUnreadBoundary("R1")
+	return app
+}
+
+// issueThreadMarkOnOpen drives the real mark-on-open issue site: the
+// ThreadRepliesLoadedMsg arm calls ThreadService.Mark for the newest
+// reply and records the self-mark BEFORE the returned cmd — and so the
+// subscriptions.thread.mark request — has run. Returns the
+// ThreadMarkedLocalMsg that cmd yields, so callers can deliver it (or
+// deliberately not) to control the ordering against the WS echo.
+//
+// Tests record through this rather than poking selfThreadMarks so that
+// moving or losing the recording site fails them.
+func issueThreadMarkOnOpen(t *testing.T, app *App) ThreadMarkedLocalMsg {
+	t.Helper()
+	var marked []string
+	app.SetThreadService(NewThreadService(ThreadServiceFuncs{
+		Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) tea.Cmd {
+			marked = append(marked, string(channelID)+"/"+string(threadTS)+"/"+string(ts))
+			return func() tea.Msg {
+				return ThreadMarkedLocalMsg{
+					ChannelID: string(channelID),
+					ThreadTS:  string(threadTS),
+					TS:        string(ts),
+				}
+			}
+		},
+	}))
+	// Same thread identity as the panel already holds, so SetThread
+	// keeps the boundary the pre-open snapshot installed.
+	_, cmd := app.Update(ThreadRepliesLoadedMsg{
+		ThreadTS: "P1",
+		Replies: []messages.MessageItem{
+			{TS: "R1", UserID: "U1", Text: "r1"},
+			{TS: "R2", UserID: "U1", Text: "r2"},
+		},
+	})
+	if len(marked) != 1 || marked[0] != "C1/P1/R2" {
+		t.Fatalf("Mark calls = %v, want one mark of C1/P1 up to R2", marked)
+	}
+	for _, msg := range drainBatch(cmd) {
+		if local, ok := msg.(ThreadMarkedLocalMsg); ok {
+			return local
+		}
+	}
+	t.Fatal("the mark cmd yielded no ThreadMarkedLocalMsg")
+	return ThreadMarkedLocalMsg{}
+}
+
+// Slack broadcasts thread_marked back to the client that issued the
+// mark, so slk's own subscriptions.thread.mark returns as a
+// ThreadMarkedRemoteMsg carrying the ts slk just set — the newest
+// reply. Applying it would move the landmark past every reply and
+// render no landmark at all, destroying the pre-open snapshot a round
+// trip after the user started reading. The list-state half must still
+// run: the thread really is read.
+func TestThreadMarkedRemoteMsg_SelfEchoHoldsPanelBoundary(t *testing.T) {
+	app := threadPanelOnR1R2(t)
+	local := issueThreadMarkOnOpen(t, app)
+
+	// The mark's own HTTP response, back on the Update goroutine.
+	_, _ = app.Update(local)
+
+	// Re-flag the row so the list-state assertion below cannot pass
+	// vacuously off work the issue and local arms already did: this
+	// stands in for a threads-list refresh landing before the echo.
+	app.threadsView.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "P1", LastReplyTS: "R2", Unread: true},
+	})
+
+	// Slack's echo of that same mark.
+	_, _ = app.Update(ThreadMarkedRemoteMsg{ChannelID: "C1", ThreadTS: "P1", LastRead: "R2"})
+
+	if got := app.threadPanel.UnreadBoundaryTS(); got != "R1" {
+		t.Errorf("thread panel unreadBoundary = %q, want the pre-open snapshot R1 held against slk's own echo", got)
+	}
+	found := false
+	for _, s := range app.threadsView.Summaries() {
+		if s.ThreadTS != "P1" {
+			continue
+		}
+		found = true
+		if s.Unread {
+			t.Error("a suppressed self-echo must still settle the threads-list unread flag")
+		}
+	}
+	if !found {
+		t.Fatal("summary P1 missing; the assertion above would have passed vacuously")
+	}
+}
+
+// The ordering the fix turns on: Slack's WebSocket broadcast and the
+// mark's own HTTP response are independent, so the echo can arrive
+// FIRST. Recording on completion instead of on issue would leave this
+// echo unrecorded and wipe the landmark — in production, silently, for
+// every thread the user opens.
+func TestThreadMarkedRemoteMsg_SelfEchoBeforeLocalMsgStillHoldsBoundary(t *testing.T) {
+	app := threadPanelOnR1R2(t)
+	local := issueThreadMarkOnOpen(t, app)
+
+	// Echo first, before the mark call has even returned.
+	_, _ = app.Update(ThreadMarkedRemoteMsg{ChannelID: "C1", ThreadTS: "P1", LastRead: "R2"})
+	if got := app.threadPanel.UnreadBoundaryTS(); got != "R1" {
+		t.Fatalf("unreadBoundary = %q, want R1: an echo that beats the HTTP response is still slk's own mark", got)
+	}
+
+	// The response then lands and must not disturb the landmark either.
+	_, _ = app.Update(local)
+	if got := app.threadPanel.UnreadBoundaryTS(); got != "R1" {
+		t.Errorf("unreadBoundary = %q after the local completion, want R1", got)
+	}
+}
+
+// The control, and the more important half: a thread_marked slk did not
+// issue means the user read that thread in another Slack client, and
+// the landmark must move. Suppression is keyed on the exact mark, so an
+// outstanding record for a DIFFERENT ts must not shield a foreign one.
+func TestThreadMarkedRemoteMsg_ForeignMarkStillMovesBoundary(t *testing.T) {
+	app := threadPanelOnR1R2(t)
+	app.threadPanel.SetUnreadBoundary("P1")
+	app.selfThreadMarks.record(selfMarkKey{channelID: "C1", threadTS: "P1", ts: "R2"})
+
+	_, _ = app.Update(ThreadMarkedRemoteMsg{ChannelID: "C1", ThreadTS: "P1", LastRead: "R1"})
+
+	if got := app.threadPanel.UnreadBoundaryTS(); got != "R1" {
+		t.Errorf("thread panel unreadBoundary = %q, want R1: a mark slk never issued must move the landmark", got)
+	}
+}
+
+// One issued mark suppresses one echo. Slack sends a single
+// thread_marked per mark, so a second one at the same ts is a new
+// event — a genuine cursor move made elsewhere — and must be applied.
+func TestThreadMarkedRemoteMsg_SelfEchoSuppressionIsConsumedOnce(t *testing.T) {
+	app := threadPanelOnR1R2(t)
+	local := issueThreadMarkOnOpen(t, app)
+	_, _ = app.Update(local)
+
+	_, _ = app.Update(ThreadMarkedRemoteMsg{ChannelID: "C1", ThreadTS: "P1", LastRead: "R2"})
+	if got := app.threadPanel.UnreadBoundaryTS(); got != "R1" {
+		t.Fatalf("first echo: unreadBoundary = %q, want R1 held", got)
+	}
+
+	_, _ = app.Update(ThreadMarkedRemoteMsg{ChannelID: "C1", ThreadTS: "P1", LastRead: "R2"})
+	if got := app.threadPanel.UnreadBoundaryTS(); got != "R2" {
+		t.Errorf("second echo: unreadBoundary = %q, want R2 — the record is consumed by the first echo", got)
+	}
+}
+
+// Regression for the reported bug: posting a reply auto-subscribes you,
+// so Slack echoes thread_marked with active=true. slk used to read that
+// as "unread" and re-flag the thread the user was looking at.
+func TestThreadMarkedRemoteMsg_SelfReplyDoesNotReFlagUnread(t *testing.T) {
 	app := NewApp()
 	app.threadsView.SetSummaries([]cache.ThreadSummary{
-		{ChannelID: "C1", ThreadTS: "P1", Unread: true},
+		{ChannelID: "C1", ThreadTS: "P1", LastReplyTS: "7.000000", Unread: false},
 	})
 
+	// Slack's echo after our own reply: cursor caught up to our reply.
 	_, _ = app.Update(ThreadMarkedRemoteMsg{
-		ChannelID: "C1", ThreadTS: "P1", TS: "R5", Read: true,
+		ChannelID: "C1", ThreadTS: "P1", LastRead: "7.000000",
 	})
 
+	found := false
 	for _, s := range app.threadsView.Summaries() {
-		if s.ThreadTS == "P1" && s.Unread {
-			t.Errorf("expected P1 Unread=false after remote thread_marked read=true")
+		if s.ThreadTS != "P1" {
+			continue
 		}
+		found = true
+		if s.Unread {
+			t.Error("replying to a thread must not mark it unread")
+		}
+	}
+	if !found {
+		t.Fatal("summary P1 missing; the assertion above would have passed vacuously")
 	}
 }
 
@@ -4417,5 +4674,30 @@ func TestListReactionsNoOpWhenNoReactions(t *testing.T) {
 	}
 	if app.mode == ModeReactionsView {
 		t.Fatal("mode should not change when there are no reactions")
+	}
+}
+
+// The thread panel's "── new ──" divider must be sourced from the
+// thread's own cursor in thread_subscriptions, not the parent
+// channel's last_read_ts: plain replies never advance the channel
+// watermark, so the channel cursor is systematically stale and puts
+// the divider too early.
+func TestOpenThreadPanel_BoundaryUsesThreadCursor(t *testing.T) {
+	app := NewApp()
+	var gotChannel, gotThread string
+	app.SetThreadService(NewThreadService(ThreadServiceFuncs{
+		ThreadLastRead: func(channelID ids.ChannelID, threadTS ids.ThreadTS) string {
+			gotChannel, gotThread = string(channelID), string(threadTS)
+			return "R7"
+		},
+	}))
+
+	_ = app.openThreadPanel(messages.MessageItem{TS: "P1"}, "C1", "P1")
+
+	if gotChannel != "C1" || gotThread != "P1" {
+		t.Fatalf("ThreadLastRead called with (%q, %q), want (C1, P1)", gotChannel, gotThread)
+	}
+	if got := app.threadPanel.UnreadBoundaryTS(); got != "R7" {
+		t.Errorf("thread panel boundary = %q, want the thread cursor R7", got)
 	}
 }

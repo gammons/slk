@@ -418,32 +418,10 @@ func (m *Model) MarkSelectedRead() bool {
 	return true
 }
 
-// MarkByThreadTSRead clears the local Unread flag on the summary matching
-// (channelID, threadTS), regardless of whether it is the currently selected
-// row. Returns true when a flag was actually flipped, so callers can refresh
-// dependent state (sidebar threads-row badge). Like MarkSelectedRead this is
-// presentation-only and does not touch Slack server state.
-func (m *Model) MarkByThreadTSRead(channelID, threadTS string) bool {
-	if channelID == "" || threadTS == "" {
-		return false
-	}
-	for i := range m.summaries {
-		if m.summaries[i].ChannelID == channelID && m.summaries[i].ThreadTS == threadTS {
-			if !m.summaries[i].Unread {
-				return false
-			}
-			m.summaries[i].Unread = false
-			m.dirty()
-			return true
-		}
-	}
-	return false
-}
-
 // MarkByThreadTSUnread sets the local Unread flag on the summary matching
 // (channelID, threadTS) to true. Returns true when a flag was actually
 // flipped (i.e., the row existed and was previously read). Like
-// MarkByThreadTSRead this is presentation-only: it does not touch Slack
+// MarkByThreadTSReadAt this is presentation-only: it does not touch Slack
 // server state. Used by the U-key mark-unread flow and by the inbound
 // thread_marked WS handler.
 //
@@ -465,6 +443,36 @@ func (m *Model) MarkByThreadTSUnread(channelID, threadTS string) bool {
 			m.dirty()
 			return true
 		}
+	}
+	return false
+}
+
+// MarkByThreadTSReadAt sets the Unread flag on the summary matching
+// (channelID, threadTS) by comparing the thread's read cursor against
+// its newest known reply: unread iff LastReplyTS > lastRead. Returns
+// true only when the flag actually changed, so callers can skip the
+// sidebar badge refresh.
+//
+// This is the correct handler for an inbound thread_marked echo, which
+// carries a cursor. Slack's subscription `active` flag means
+// "subscribed", not "unread", and must never be used for this decision.
+// Presentation-only: the next cache.ListSubscribedThreads refresh
+// recomputes Unread from the same rule against durable state.
+func (m *Model) MarkByThreadTSReadAt(channelID, threadTS, lastRead string) bool {
+	if channelID == "" || threadTS == "" {
+		return false
+	}
+	for i := range m.summaries {
+		if m.summaries[i].ChannelID != channelID || m.summaries[i].ThreadTS != threadTS {
+			continue
+		}
+		want := m.summaries[i].LastReplyTS > lastRead
+		if m.summaries[i].Unread == want {
+			return false
+		}
+		m.summaries[i].Unread = want
+		m.dirty()
+		return true
 	}
 	return false
 }

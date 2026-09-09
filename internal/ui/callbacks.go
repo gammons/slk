@@ -76,10 +76,10 @@ type ThreadFetchFunc func(channelID ids.ChannelID, threadTS ids.ThreadTS) tea.Ms
 type ThreadCacheReadFunc func(channelID ids.ChannelID, threadTS ids.ThreadTS) []messages.MessageItem
 
 // ThreadMarkFunc is called to mark a thread as read on Slack's servers
-// (subscriptions.thread.mark). channelID is the parent channel, threadTS
-// is the parent message ts, and ts is the latest reply ts the user has now
-// seen. Implementations should be best-effort and non-blocking.
-type ThreadMarkFunc func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS)
+// (subscriptions.thread.mark) and, on success, to advance the local
+// thread_subscriptions cursor. Returns a tea.Cmd yielding
+// ThreadMarkedLocalMsg, or nil when no workspace is active.
+type ThreadMarkFunc func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) tea.Cmd
 
 // ThreadReplySendFunc is called when the user sends a thread reply.
 type ThreadReplySendFunc func(channelID ids.ChannelID, threadTS ids.ThreadTS, text string) tea.Msg

@@ -336,7 +336,7 @@ func (m *Model) SetThread(parent messages.MessageItem, replies []messages.Messag
 // this thread. A "── new ──" landmark is rendered between the last reply
 // with TS <= boundary and the first reply with TS > boundary. Pass "" to
 // clear the boundary. Typically called by the App right after SetThread,
-// using the parent channel's last_read_ts as the boundary.
+// using the thread's own last-read cursor from thread_subscriptions.
 func (m *Model) SetUnreadBoundary(ts string) {
 	if m.unreadBoundaryTS == ts {
 		return

@@ -1476,7 +1476,7 @@ func run() error {
 			Fetch: func(channelID ids.ChannelID, channelName string) tea.Msg {
 				chIDStr := string(channelID)
 				wctx := router.Active()
-				if wctx == nil {
+				if wctx == nil || wctx.Client == nil {
 					return nil
 				}
 				msgItems := fetchChannelMessages(wctx.Client, chIDStr, db, wctx.UserNames, tsFormat, avatarCache, router)
@@ -1485,20 +1485,28 @@ func run() error {
 				lastReadTS := state.LastReadTS
 
 				// Mark channel as read up to the latest message
+				markedTS := ""
 				if len(msgItems) > 0 {
-					latestTS := msgItems[len(msgItems)-1].TS
-					markChannelReadAsync(ctx, wctx, db, p, chIDStr, latestTS)
+					markedTS = msgItems[len(msgItems)-1].TS
+					markChannelReadAsync(ctx, wctx.Client, db, p, chIDStr, markedTS)
 				}
 
 				return ui.MessagesLoadedMsg{
 					ChannelID:  chIDStr,
 					Messages:   msgItems,
 					LastReadTS: lastReadTS,
+					// Reported so the reducer can record it on the
+					// Update goroutine and suppress the echo of this
+					// mark; see ui.MessagesLoadedMsg.MarkedTS.
+					MarkedTS: markedTS,
 				}
 			},
 			MarkRead: func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
 				wctx := router.Active()
-				markChannelReadAsync(ctx, wctx, db, p, string(channelID), string(ts))
+				if wctx == nil || wctx.Client == nil {
+					return nil
+				}
+				markChannelReadAsync(ctx, wctx.Client, db, p, string(channelID), string(ts))
 				return nil // ChannelMarkedReadMsg is emitted from inside the goroutine
 			},
 			FetchOlder: func(channelID ids.ChannelID, oldestTS ids.MessageTS) tea.Msg {
@@ -1658,7 +1666,7 @@ func run() error {
 					// thread_subscriptions row's last_read is the
 					// source of truth and gets updated when Slack
 					// echoes back a thread_marked event. The UI
-					// updates immediately via applyThreadMark; on
+					// updates immediately via applyThreadMarkUnread; on
 					// next refresh cache.ListSubscribedThreads will
 					// reconcile from the persisted subscription row.
 				}
@@ -1738,20 +1746,29 @@ func run() error {
 				}
 				return loadCachedThreadReplies(db, wctx.Client.UserID(), string(channelID), string(threadTS), wctx.UserNames, tsFormat, router)
 			},
-			Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) {
+			Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) tea.Cmd {
 				chIDStr, threadTSStr, tsStr := string(channelID), string(threadTS), string(ts)
 				wctx := router.Active()
 				if wctx == nil {
-					return
+					return nil
 				}
 				client := wctx.Client
-				go func() {
+				teamID := wctx.TeamID
+				return func() tea.Msg {
 					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 					defer cancel()
-					if err := client.MarkThread(ctx, chIDStr, threadTSStr, tsStr); err != nil {
+					// markThreadRead persists the cursor only after
+					// Slack accepts; see its doc comment.
+					if err := markThreadRead(ctx, client, db, teamID, chIDStr, threadTSStr, tsStr); err != nil {
 						log.Printf("Warning: MarkThread(%s, %s): %v", chIDStr, threadTSStr, err)
+						return ui.ThreadMarkedLocalMsg{
+							ChannelID: chIDStr, ThreadTS: threadTSStr, TS: tsStr, Err: err,
+						}
 					}
-				}()
+					return ui.ThreadMarkedLocalMsg{
+						ChannelID: chIDStr, ThreadTS: threadTSStr, TS: tsStr,
+					}
+				}
 			},
 			SendReply: func(channelID ids.ChannelID, threadTS ids.ThreadTS, text string) tea.Msg {
 				chIDStr, threadTSStr := string(channelID), string(threadTS)
@@ -1828,18 +1845,17 @@ func run() error {
 				}
 				ensureWorkspaceThreadSubs(ctx, wctx, db, p.Send)
 			},
-			ChannelLastRead: func(channelID ids.ChannelID) string {
+			ThreadLastRead: func(channelID ids.ChannelID, threadTS ids.ThreadTS) string {
 				wctx := router.Active()
 				if wctx == nil {
 					return ""
 				}
-				chIDStr := string(channelID)
-				state, err := db.GetChannelReadState(chIDStr)
+				lastRead, err := db.GetThreadLastRead(wctx.TeamID, string(channelID), string(threadTS))
 				if err != nil {
-					log.Printf("Warning: GetChannelReadState for %s: %v", chIDStr, err)
+					debuglog.Cache("ThreadLastRead: %s/%s: %v", channelID, threadTS, err)
 					return ""
 				}
-				return state.LastReadTS
+				return lastRead
 			},
 		}))
 
@@ -3095,29 +3111,121 @@ func summarizeCachedRows(rows []cache.Message) string {
 		len(rows), rows[0].TS, rows[len(rows)-1].TS)
 }
 
-// markChannelReadAsync fires Slack's conversations.mark plus the local
-// LastReadTS persistence in a background goroutine. Returns
-// immediately. wctx may be nil (returns silently in that case).
+// threadMarker is the single Slack operation the thread mark-read path
+// needs. Narrowed to an interface for the same reason as channelMarker
+// below: it makes the "did Slack accept?" branch testable without real
+// HTTP wiring.
+type threadMarker interface {
+	MarkThread(ctx context.Context, channelID, threadTS, ts string) error
+}
+
+// markThreadRead calls subscriptions.thread.mark and, ONLY if Slack
+// accepts it, advances the local thread_subscriptions cursor. Before
+// this gate existed the cursor advanced solely via the thread_marked WS
+// echo, and a lost echo left last_read stale enough to flip the thread
+// back to unread on the next threads-list refresh.
+//
+// A failed local write is logged, not returned: Slack accepted the mark,
+// so the thread genuinely is read and the cache heals on the next
+// getView reconcile. Only a rejected mark is an error, because that is
+// the case where the UI must not clear the unread flag.
+func markThreadRead(ctx context.Context, client threadMarker, db *cache.DB, teamID, channelID, threadTS, ts string) error {
+	if err := client.MarkThread(ctx, channelID, threadTS, ts); err != nil {
+		return err
+	}
+	if db != nil {
+		// ...IfExists, not UpdateThreadLastRead: this path fires for
+		// ANY thread the user opens, including ones opened from the
+		// messages pane that they never subscribed to. The inserting
+		// variant would fabricate an active=1 row and put a phantom
+		// entry in the Threads list.
+		//
+		// Slack echoes this very mark back as thread_marked, so the
+		// guard only holds because OnThreadMarked applies the same
+		// rule to the echo, using the event's own subscription flag.
+		if err := db.UpdateThreadLastReadIfExists(teamID, channelID, threadTS, ts); err != nil {
+			debuglog.Cache("markThreadRead: UpdateThreadLastReadIfExists %s/%s: %v",
+				channelID, threadTS, err)
+		}
+	}
+	return nil
+}
+
+// channelMarker is the single Slack operation the mark-read path needs.
+// Narrowing it to an interface (rather than taking *WorkspaceContext and
+// reaching through to a concrete *slackclient.Client) is what makes the
+// failure path testable without real HTTP wiring.
+type channelMarker interface {
+	MarkChannel(ctx context.Context, channelID, ts string) error
+}
+
+// markChannelRead calls conversations.mark and, ONLY if Slack accepts
+// it, persists the local read state. On failure the channel stays
+// unread locally, which is the honest state: it reconciles on the next
+// channel entry or reconnect sync. Synchronous so the failure path is
+// deterministically testable; markChannelReadAsync is the goroutine
+// wrapper.
+func markChannelRead(ctx context.Context, client channelMarker, db *cache.DB, channelID, ts string) error {
+	if err := client.MarkChannel(ctx, channelID, ts); err != nil {
+		return err
+	}
+	if db != nil {
+		if err := db.UpdateChannelReadState(channelID, ts, false); err != nil {
+			log.Printf("Warning: failed to update read state in markChannelRead %s/%s: %v", channelID, ts, err)
+		}
+	}
+	return nil
+}
+
+// markChannelReadAndNotify marks the channel read and, only on success,
+// hands ChannelMarkedReadMsg to notify. A rejected mark must not notify:
+// the UI would optimistically clear an unread badge that Slack still
+// considers unread.
+//
+// notify is a plain func rather than a *tea.Program so this whole
+// decision stays synchronous and testable. Taking the program here
+// would push the send decision back into the goroutine and make
+// "did not notify" assertable only with a sleep.
+func markChannelReadAndNotify(
+	ctx context.Context,
+	client channelMarker,
+	db *cache.DB,
+	notify func(tea.Msg),
+	channelID, ts string,
+) {
+	if err := markChannelRead(ctx, client, db, channelID, ts); err != nil {
+		log.Printf("Warning: conversations.mark %s/%s failed, leaving channel unread: %v", channelID, ts, err)
+		return
+	}
+	if notify != nil {
+		notify(ui.ChannelMarkedReadMsg{ChannelID: channelID})
+	}
+}
+
+// markChannelReadAsync runs markChannelReadAndNotify in a background
+// goroutine and returns immediately. The goroutine is required: p.Send
+// blocks until the Update goroutine receives (bubbletea v2's program
+// channel is unbuffered), so this must never run on Update.
+//
+// client must be non-nil and non-typed-nil: the guard below catches only
+// an untyped nil interface, so a nil *slackclient.Client boxed into a
+// channelMarker would pass it and panic inside the goroutine. Callers
+// check wctx.Client themselves.
 func markChannelReadAsync(
 	ctx context.Context,
-	wctx *WorkspaceContext,
+	client channelMarker,
 	db *cache.DB,
 	p *tea.Program,
 	channelID, ts string,
 ) {
-	if wctx == nil || ts == "" {
+	if client == nil || ts == "" {
 		return
 	}
-	client := wctx.Client
-	go func() {
-		_ = client.MarkChannel(ctx, channelID, ts)
-		if err := db.UpdateChannelReadState(channelID, ts, false); err != nil {
-			log.Printf("Warning: failed to update read state in markChannelReadAsync %s/%s: %v", channelID, ts, err)
-		}
-		if p != nil {
-			p.Send(ui.ChannelMarkedReadMsg{ChannelID: channelID})
-		}
-	}()
+	var notify func(tea.Msg)
+	if p != nil {
+		notify = func(m tea.Msg) { p.Send(m) }
+	}
+	go markChannelReadAndNotify(ctx, client, db, notify, channelID, ts)
 }
 
 // loadCachedMessages reads up to 50 cached messages for a channel from
@@ -4022,42 +4130,83 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 		}
 	}
 
-	// Read-state: mark the channel has_unread=true when a message
-	// arrives in a channel the user is NOT actively viewing. Mirrors
-	// Slack's channel-unread semantics — non-broadcast thread replies
-	// do not mark the parent channel unread (only top-level messages
-	// and thread_broadcast subtypes do). See internal/ui/app.go's
-	// thread-reply guard for the matching active-path treatment.
+	// Read-state: mark the channel has_unread=true for every eligible
+	// message. Mirrors Slack's channel-unread semantics — non-broadcast
+	// thread replies do not mark the parent channel unread (only
+	// top-level messages and thread_broadcast subtypes do), and neither
+	// your own sends nor edits of existing messages do (see the two
+	// exclusions below).
+	//
+	// There is deliberately NO active-channel exemption here. Whether
+	// the user can actually see the active channel depends on terminal
+	// focus, which is only known on the UI goroutine. reduceNewMessage
+	// owns that decision and clears this flag by marking read when the
+	// terminal is focused; if the mark fails, or the terminal is
+	// blurred, the flag correctly stands.
 	//
 	// This write runs for BOTH active and inactive workspaces; the
 	// active/inactive split below only governs the UI dispatch path,
-	// not durable read state. Task 10 of the read-state-sync plan
-	// consolidated the previously duplicated paths into this single
-	// gated write.
+	// not durable read state.
 	isThreadReply := threadTS != "" && threadTS != ts
 	isBroadcast := subtype == "thread_broadcast"
-	shouldMarkChannel := !isThreadReply || isBroadcast
-	activeChIDForRead := ""
-	if h.activeChannelID != nil {
-		activeChIDForRead = h.activeChannelID()
-	}
-	if h.db != nil && shouldMarkChannel && activeChIDForRead != channelID {
+	channelEligible := !isThreadReply || isBroadcast
+	// Self-sends and edit echoes are excluded because reduceNewMessage
+	// returns BEFORE its read-state tail for both (reducer_send.go, the
+	// IsEdited and IsSelfSent arms). Nothing on the UI side would ever
+	// clear a flag set here, so it would stick until the next channel
+	// entry — the dot would appear on the channel you just posted in.
+	//
+	// Your own message never makes a channel unread on Slack, whichever
+	// client sent it, so the exclusion is global rather than scoped to
+	// the active channel.
+	//
+	// The userID != "" guard is defensive, not load-bearing. A bot
+	// message carries userID == "", so a bare equality would treat
+	// every one of them as self-authored — and silently stop flagging
+	// their channels — the moment h.currentUserID were empty. That
+	// cannot happen today: currentUserID is assigned once in the
+	// handler's struct literal (main.go:2076) from wctx.UserID and is
+	// never reassigned, so no message can reach this handler before it
+	// is populated. The adjacent notification path ships the unguarded
+	// form (internal/notify/notifier.go:68) without incident, which
+	// corroborates that. The guard is kept anyway because the failure
+	// it prevents is silent, it costs one comparison, and it matches
+	// App.isOwnMessage (internal/ui/app.go:3082).
+	//
+	// Keyed on the raw userID for the same reason the notification
+	// block above is: "did I write this" is a question about the human
+	// sender. authorID would behave identically today, since it only
+	// diverges for bot messages and a B-prefixed bot ID cannot equal a
+	// U-prefixed user ID — the choice is about intent, not a
+	// behavioral difference.
+	isSelfMessage := userID != "" && userID == h.currentUserID
+	// edited is true only for message_changed
+	// (internal/slack/events.go:307): a re-delivery of a message the
+	// channel already accounted for. Editing it does not make the
+	// channel unread on Slack.
+	shouldMarkChannel := channelEligible && !isSelfMessage && !edited
+	if h.db != nil && shouldMarkChannel {
 		if err := h.db.UpdateChannelReadState(channelID, "", true); err != nil {
 			log.Printf("Warning: failed to set has_unread for %s: %v", channelID, err)
 		}
 	}
 
 	if h.isActive != nil && !h.isActive() {
-		// Inactive workspace — read state was already persisted above.
-		// Fire a ReadStateChangedMsg so the workspace rail refreshes
-		// its dot from db.WorkspacesWithUnreads(). The sidebar's
-		// Invalidate is a no-op here because the active workspace's
-		// sidebar isn't showing this channel anyway.
-		if shouldMarkChannel {
+		// Inactive workspace — durable read state is already settled
+		// above (written, or deliberately skipped). Fire a
+		// ReadStateChangedMsg so the workspace rail refreshes its dot
+		// from db.WorkspacesWithUnreads(). The sidebar's Invalidate is
+		// a no-op here because the active workspace's sidebar isn't
+		// showing this channel anyway.
+		switch {
+		case shouldMarkChannel:
 			debuglog.Cache("OnMessage: team=%s channel=%s ts=%s subtype=%q thread_ts=%s decision=inactive_workspace_persisted",
 				h.workspaceID, channelID, ts, subtype, threadTS)
-		} else {
+		case !channelEligible:
 			debuglog.Cache("OnMessage: team=%s channel=%s ts=%s subtype=%q thread_ts=%s decision=skipped_thread_reply_inactive",
+				h.workspaceID, channelID, ts, subtype, threadTS)
+		default:
+			debuglog.Cache("OnMessage: team=%s channel=%s ts=%s subtype=%q thread_ts=%s decision=skipped_self_or_edit_inactive",
 				h.workspaceID, channelID, ts, subtype, threadTS)
 		}
 		if h.program != nil {
@@ -4406,19 +4555,56 @@ func (h *rtmEventHandler) OnChannelMarked(channelID, ts string, unreadCount int)
 	})
 }
 
-func (h *rtmEventHandler) OnThreadMarked(channelID, threadTS, ts string, read bool) {
-	// Persist subscription state regardless of active-workspace state.
-	// Mirrors OnChannelMarked / OnMessage: durable cache must reflect
-	// every WS event, otherwise switching to an inactive workspace
-	// would surface stale read state and (worse) miss newly-unread
-	// threads until the next reconnect-driven reconcile. active =
-	// !read per the dispatch in internal/slack/events.go: WS `active`
-	// means "subscribed for unread updates", which corresponds to
-	// active=1 in our table.
+// OnThreadMarked persists a thread read-cursor move from Slack's
+// thread_marked event. It writes last_read ONLY: `active` is owned by
+// thread_subscribed / thread_unsubscribed / the getView reconcile.
+// Writing `active` here used to tombstone the row on every read, which
+// made the thread vanish from the Threads list until the next sweep.
+//
+// subscribed (Slack's subscription.active) chooses the cursor writer,
+// and does nothing else. It is a subscription signal, never a
+// read/unread one: whether the thread is unread stays a comparison of
+// last_read against the newest known reply, computed downstream.
+//
+//   - subscribed: UpdateThreadLastRead, which inserts a missing row.
+//     Slack says the user is subscribed, so a row the local cache lacks
+//     is a gap to reconstruct rather than a phantom to invent.
+//   - not subscribed: UpdateThreadLastReadIfExists, which never
+//     inserts. slk's own subscriptions.thread.mark echoes back here, so
+//     this handler sees marks for threads the user merely opened from
+//     the messages pane and never subscribed to. markThreadRead
+//     deliberately writes no row for those; inserting one here would
+//     undo that guard one hop later and surface a phantom entry in the
+//     Threads list, which filters on active=1.
+//
+// Neither writer touches `active` on a row that already exists, so a
+// tombstoned row stays tombstoned either way — it takes
+// UpdateThreadLastRead's ON CONFLICT path, which sets last_read and
+// updated_at only. The subscribed branch's INSERT does create a
+// missing row with active=1, which is the whole point of choosing it.
+func (h *rtmEventHandler) OnThreadMarked(channelID, threadTS, lastRead string, subscribed slackclient.Subscribed) {
+	// An empty cursor would erase the thread's read position and make
+	// every reply render unread. UpdateThreadLastRead does not reject
+	// it, so drop the event here instead of corrupting the row.
+	if lastRead == "" {
+		debuglog.Cache("OnThreadMarked: empty last_read for %s/%s, ignoring",
+			channelID, threadTS)
+		return
+	}
+
+	// Persist regardless of active-workspace state, matching OnMessage
+	// and OnChannelMarked: dropping the write on inactive workspaces
+	// leaves stale read state behind on the next switch.
 	if h.db != nil {
-		if err := h.db.UpsertThreadSubscription(h.workspaceID, channelID, threadTS, ts, !read); err != nil {
-			debuglog.Cache("OnThreadMarked: UpsertThreadSubscription %s/%s: %v",
-				channelID, threadTS, err)
+		write := h.db.UpdateThreadLastReadIfExists
+		writer := "UpdateThreadLastReadIfExists"
+		if subscribed {
+			write = h.db.UpdateThreadLastRead
+			writer = "UpdateThreadLastRead"
+		}
+		if err := write(h.workspaceID, channelID, threadTS, lastRead); err != nil {
+			debuglog.Cache("OnThreadMarked: %s %s/%s: %v",
+				writer, channelID, threadTS, err)
 		}
 	}
 
@@ -4434,9 +4620,21 @@ func (h *rtmEventHandler) OnThreadMarked(channelID, threadTS, ts string, read bo
 	h.program.Send(ui.ThreadMarkedRemoteMsg{
 		ChannelID: channelID,
 		ThreadTS:  threadTS,
-		TS:        ts,
-		Read:      read,
+		LastRead:  lastRead,
 	})
+	// The message above carries this thread's cursor only, and its
+	// reducer applies it to that one list row — and to the open
+	// panel's landmark, but only when the mark came from another
+	// client. Every mark slk issues itself is broadcast back here too,
+	// and applyThreadMarkEcho deliberately holds the landmark for
+	// those rather than dragging it off what the user was reading.
+	//
+	// This asks for the authoritative recompute of the whole list,
+	// from the cache rows the write above just updated. Sent per
+	// event with no deduplication here: the reducer coalesces dirty
+	// messages on receipt, so an echo landing inside an open refresh
+	// window costs no additional ListSubscribedThreads query.
+	h.program.Send(ui.ThreadsListDirtyMsg{TeamID: h.workspaceID})
 }
 
 // OnThreadSubscriptionChanged persists a subscribe/unsubscribe event
