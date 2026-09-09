@@ -110,35 +110,36 @@ vestigial column harmlessly; no destructive migration is performed.
 `cache.ReadState` and `cache.ChannelReadStateUpdate`
 (`internal/cache/channels_read_state.go:11-23`) each gain a mention field.
 
-`UpdateChannelReadState` currently overloads `LastReadTS == ""` to mean
-"preserve". Mention count needs three verbs, not two: *set* to a server-supplied
-value, *increment* on local detection, and *preserve* when a `has_unread` flip
-says nothing about mentions. Encoding a third verb as a sentinel integer would
-be genuinely ambiguous — `0` is a legitimate count — so the operation is
-explicit:
+`UpdateChannelReadState` keeps its current signature. Mention count is written
+through two dedicated methods instead:
 
 ```go
-type MentionOp int
-
-const (
-    MentionPreserve MentionOp = iota
-    MentionSet
-    MentionIncrement
-)
-
-type MentionUpdate struct {
-    Op    MentionOp
-    Count int // meaningful only when Op == MentionSet
-}
+func (db *DB) SetChannelMentionCount(channelID string, n int) error
+func (db *DB) IncrementChannelMentionCount(channelID string) error
 ```
 
-`MentionPreserve` is the zero value, so existing call sites that do not care
-about mentions keep their current behaviour without modification.
+Three verbs are needed — set, increment, and leave alone — but only two are
+operations. "Leave alone" is declining to call, not a parameter value. Encoding
+it as one would have forced a positional argument onto
+`UpdateChannelReadState`, whose four production callers are outnumbered by
+roughly twenty test callers in `internal/cache/channels_read_state_test.go` and
+`cmd/slk/event_handler_marked_test.go`. Those edits would be mechanical, would
+change no behaviour, and would bury the real diff.
 
-The three writers — `UpdateChannelReadState`, `BatchUpdateChannelReadState`,
-`ReplaceWorkspaceReadState` — each grow an arm for the new operation.
-`MentionIncrement` is expressed in SQL as `mention_count = mention_count + 1`
-so it is atomic and cannot lose a concurrent update.
+`ChannelReadStateUpdate` gains a plain `MentionCount int`. Both batch writers
+are fed exclusively from `client.counts`, so batch semantics are
+unconditionally "set" and need no operation field. `ReplaceWorkspaceReadState`
+extends its workspace-wide reset to zero `mention_count` alongside
+`has_unread`.
+
+`IncrementChannelMentionCount` is expressed as
+`mention_count = mention_count + 1` so it is atomic and cannot lose a
+concurrent update.
+
+The cost: `OnMessage` and `markChannelReadAsync` each issue two single-row
+UPDATEs rather than one. Both target the same row, SQLite serialises them, and
+because `MentionBadge` gates on `HasUnread` a reader landing between them
+cannot observe the intermediate state.
 
 ### Transport types
 
@@ -156,15 +157,15 @@ is what makes the boot and reconnect rows of the table below meaningful.
 
 ### Writes
 
-| Trigger | Operation |
+| Trigger | Write |
 |---|---|
-| `client.counts` at boot → `ReplaceWorkspaceReadState` | Set (also zeroes channels absent from the snapshot) |
-| `client.counts` on reconnect → `BatchUpdateChannelReadState` | Set |
-| `*_marked` WS event → `OnChannelMarked` | Set, from the event's `mention_count` |
-| `markChannelReadAsync` — user reads a channel | Set 0 |
-| `MarkUnread` — the `u` key | Set 0 |
-| Incoming `message`, mention detected | Increment |
-| Incoming `message`, no mention | Preserve |
+| `client.counts` at boot → `ReplaceWorkspaceReadState` | `MentionCount` per entry; workspace-wide reset zeroes channels absent from the snapshot |
+| `client.counts` on reconnect → `BatchUpdateChannelReadState` | `MentionCount` per entry |
+| `*_marked` WS event → `OnChannelMarked` | `SetChannelMentionCount` from the event's `mention_count` |
+| `markChannelReadAsync` — user reads a channel | `SetChannelMentionCount(id, 0)` |
+| `MarkUnread` — the `u` key | `SetChannelMentionCount(id, 0)` |
+| Incoming `message`, mention detected | `IncrementChannelMentionCount` |
+| Incoming `message`, no mention | no call |
 
 ### Reads
 
@@ -296,11 +297,15 @@ func MentionBadgeStyle() lipgloss.Style {
 }
 ```
 
-A function, not a package var, because `Selection*` is populated *after* the
-composite-style rebuild block in `Apply()`; a var would capture stale colors on
-first theme load. That ordering hazard is why `SelectionStyle()` and
-`SearchHighlightStyle()` (`internal/ui/styles/styles.go:508-521`) are already
-functions.
+A function, not a package var, because `UnreadBadge` demonstrates the failure
+mode: it is defined twice, once as an init-time var (`styles.go:106-109`) and
+again inside `buildStyles()` (`:457-458`). `Apply()` populates `Selection*` at
+`:348-361` before calling `buildStyles()` at `:395`, so a var *inside*
+`buildStyles` would be correct — but the init-time copy reads `Selection*`
+while it is still nil, and any future style must be remembered in both places.
+A function has a single definition and cannot go stale by omission. This is why
+`SelectionStyle()` and `SearchHighlightStyle()`
+(`internal/ui/styles/styles.go:508-521`) are already functions.
 
 The unused `UnreadBadge` var (`styles.go:106-109`, rebuilt at `:457-458`) is
 deleted rather than left alongside. It hardcodes `Background(Error)` with a
@@ -324,11 +329,12 @@ Plain `testing.T`, stdlib only, white-box, per repo convention.
   `U123`) proving the angle bracket is required; empty self ID.
 - **`internal/notify`** — the existing `ShouldNotify` tests must pass unchanged.
   That is the regression proof the extraction preserved behaviour.
-- **`internal/cache`** — each `MentionOp`: Set writes, Increment accumulates,
-  Preserve leaves the value untouched. `ReplaceWorkspaceReadState` zeroes
-  channels absent from the snapshot. Migration adds the column to a
-  pre-existing database, mirroring the column-type assertion at
-  `internal/cache/db_test.go:51-88`.
+- **`internal/cache`** — `SetChannelMentionCount` writes;
+  `IncrementChannelMentionCount` accumulates across repeated calls and starts
+  from zero on a fresh row; neither disturbs `last_read_ts` or `has_unread`.
+  `ReplaceWorkspaceReadState` zeroes `mention_count` for channels absent from
+  the snapshot. Migration adds the column to a pre-existing database, mirroring
+  the column-type assertion at `internal/cache/db_test.go:51-88`.
 - **`cmd/slk`** — `OnMessage` increments for a DM and for a channel mention;
   does *not* increment for a self-authored message, a non-mention, a plain
   thread reply, or the active channel. `OnChannelMarked` sets the count from the
