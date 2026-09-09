@@ -1484,10 +1484,13 @@ func run() error {
 				state, _ := db.GetChannelReadState(chIDStr)
 				lastReadTS := state.LastReadTS
 
-				// Mark channel as read up to the latest message
-				if len(msgItems) > 0 {
-					latestTS := msgItems[len(msgItems)-1].TS
-					markChannelReadAsync(ctx, wctx, db, p, chIDStr, latestTS)
+				// Mark channel as read up to the latest message, or --
+				// for a channel Slack calls unread but whose unread
+				// message we can never fetch -- up to now.
+				if ts := channelMarkTS(msgItems, state, func() string {
+					return latestFromCounts(wctx.Client, chIDStr)
+				}); ts != "" {
+					markChannelReadAsync(ctx, wctx, db, p, chIDStr, ts)
 				}
 
 				return ui.MessagesLoadedMsg{
@@ -3093,6 +3096,79 @@ func summarizeCachedRows(rows []cache.Message) string {
 	}
 	return fmt.Sprintf("count=%d oldest=%s newest=%s",
 		len(rows), rows[0].TS, rows[len(rows)-1].TS)
+}
+
+// channelMarkTS decides which timestamp a just-fetched channel should
+// be marked read at, or "" for "do not mark".
+//
+// It relies on fetchChannelMessages's nil-vs-[] contract:
+//
+//	nil -> the history call FAILED. We know nothing; never mark.
+//	[]  -> Slack authoritatively says the channel has no fetchable
+//	       messages.
+//	non-empty -> mark up to the newest message, as always.
+//
+// The [] case is why this helper exists. Slack's client.counts reports
+// has_unreads by comparing the channel's `latest` against `last_read`,
+// and it does so even when `latest` is no longer retrievable --
+// conversations.history then answers ok=true with messages:[] and
+// is_limited:true (a dormant channel on a retention-limited plan).
+// The result is an unread dot on a channel that renders "No messages
+// yet", and every mark-read path is gated on having at least one
+// message, so opening the channel cannot clear it. The dot is
+// permanent.
+//
+// slackLatest is consulted only in that case, and supplies Slack's
+// `latest` for the channel. Marking at that timestamp -- rather than
+// at the wall clock -- matters for more than tidiness: last_read_ts
+// also feeds the sidebar's staleness filter
+// (hide_inactive_after_days), so marking "now" would fabricate
+// recency the channel never had and pin a dormant channel to the
+// sidebar for the whole threshold window. The real `latest` is
+// typically long past it, so the channel correctly ages out.
+//
+// Returning "" when `latest` is unknown is deliberate: a wrong
+// timestamp here is worse than a dot that clears on the next open.
+//
+// Gating on state.HasUnread keeps this from firing a pointless
+// conversations.mark -- and a pointless lookup -- every time an
+// ordinary empty channel is opened.
+func channelMarkTS(msgItems []messages.MessageItem, state cache.ReadState, slackLatest func() string) string {
+	switch {
+	case len(msgItems) > 0:
+		return msgItems[len(msgItems)-1].TS
+	case msgItems != nil && state.HasUnread:
+		if slackLatest == nil {
+			return ""
+		}
+		return slackLatest()
+	default:
+		return ""
+	}
+}
+
+// latestFromCounts asks Slack for the channel's `latest` timestamp.
+//
+// client.counts is the only endpoint that reports it: conversations
+// .info omits `latest` entirely, and conversations.history cannot
+// return a message that has aged out of the plan's retention window --
+// which is precisely the situation this is called in.
+//
+// Returns "" on any failure. Callers treat that as "do not mark",
+// so a transient error costs one unread dot, not a wrong read state.
+func latestFromCounts(client *slackclient.Client, channelID string) string {
+	unreads, _, err := client.GetUnreadCounts()
+	if err != nil {
+		debuglog.Cache("latestFromCounts: channel=%s client.counts failed: %v", channelID, err)
+		return ""
+	}
+	for _, u := range unreads {
+		if u.ChannelID == channelID {
+			return u.Latest
+		}
+	}
+	debuglog.Cache("latestFromCounts: channel=%s absent from client.counts", channelID)
+	return ""
 }
 
 // markChannelReadAsync fires Slack's conversations.mark plus the local
