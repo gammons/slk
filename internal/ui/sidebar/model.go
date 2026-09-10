@@ -1158,33 +1158,46 @@ func (m *Model) rebuildNavPreserveCursor() {
 	m.cursor = 0
 }
 
-// aggregateUnreadForSection returns the count of channels-with-unreads
-// in the named section that are currently in m.filtered. Used to render
-// an aggregate badge on collapsed section headers. Muted channels are
+// aggregateForSection returns the two figures a collapsed section
+// header displays for the named section, over the items currently in
+// m.filtered. Both come from one walk of the same read state, so they
+// cannot disagree about which channels the section contains.
+//
+// unread is the count of channels-with-unreads. Muted channels are
 // excluded so the aggregate matches the per-row treatment (no dot, dim
 // foreground) — the user has explicitly asked Slack to ignore those
-// channels' unread activity.
+// channels' unread activity. After the read-state sync rewrite, integer
+// unread counts are abandoned in favor of a boolean has_unread per
+// channel; this aggregate counts channels-with-unreads instead of
+// summing per-channel counts. The DB (read via readStateReader) is the
+// source of truth.
 //
-// After the read-state sync rewrite, integer unread counts are
-// abandoned in favor of a boolean has_unread per channel; section
-// aggregates count channels-with-unreads instead of summing per-channel
-// counts. The DB (read via readStateReader) is the source of truth.
-func (m *Model) aggregateUnreadForSection(section string) int {
+// mentions is the SUM of per-channel MentionBadge values, not a count
+// of channels with mentions. The row-level badge answers "how many
+// times was I named here"; a header answering a different question with
+// the same glyph would teach the user the wrong thing.
+//
+// The two deliberately disagree about mute: MentionBadge ignores
+// IsMuted, so a muted channel feeds mentions but not unread. That is
+// the same asymmetry the rows already show — muting silences chatter,
+// not someone naming you.
+func (m *Model) aggregateForSection(section string) (unread, mentions int) {
 	var readState map[string]cache.ReadState
 	if m.readStateReader != nil {
 		readState = m.readStateReader()
 	}
-	total := 0
 	for _, idx := range m.filtered {
 		item := m.items[idx]
 		if m.sectionFor(item) != section {
 			continue
 		}
-		if item.IsVisiblyUnread(readState[item.ID]) {
-			total++
+		state := readState[item.ID]
+		if item.IsVisiblyUnread(state) {
+			unread++
 		}
+		mentions += item.MentionBadge(state)
 	}
-	return total
+	return unread, mentions
 }
 
 // renderRow describes a single rendered row in the sidebar.
@@ -1612,13 +1625,26 @@ func (m *Model) sectionDisplayMeta(sectionKey string) (name, emoji string) {
 
 // renderSectionHeaderLabel returns the (normal, selected) label
 // strings for a section header. Headers show a triangle indicating
-// expand/collapse state and, when collapsed, an aggregate unread badge
-// counting channels-with-unreads across every visible item in the
-// section (sourced from the read-state DB via readStateReader).
+// expand/collapse state and, when collapsed, the two aggregates
+// described on aggregateForSection: channels-with-unreads and summed
+// direct mentions, both sourced from the read-state DB via
+// readStateReader.
 //
 // In Slack mode, the `name` parameter is a section ID — we look up the
 // user-visible name and (if any) emoji shortcode from the provider and
 // prepend the resolved emoji.
+//
+// Known, pre-existing, NOT introduced here: this function takes no
+// width and truncates nothing. buildCache renders the result through
+// styles.SectionHeader.Width(width-2), and lipgloss WRAPS overlong
+// content rather than truncating it, while the renderRow it lands in
+// hardcodes height 1. A section header whose name plus aggregates
+// exceeds the sidebar width therefore emits a multi-line string into a
+// slot counted as one line. Reproducible today without any mention
+// badge — a 36-character section name wraps to three lines at width 20.
+// The mention badge widens the header by at most 6 columns (separator
+// plus a padded "99+"), so it reaches that threshold sooner but does
+// not create it. Filed separately; do not fix it inline here.
 func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.Style, bgAnsi string) (string, string) {
 	displayName, emojiCode := m.sectionDisplayMeta(name)
 	emojiPrefix := ""
@@ -1639,18 +1665,35 @@ func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.
 	if m.IsCollapsed(name) {
 		glyph = "▸"
 	}
-	label := " " + glyph + " " + emojiPrefix + displayName
+
+	// A collapsed header carries two independent figures, never merged:
+	// "•N" channels-with-unreads, and a mention badge summing the
+	// section's direct mentions. Either may be absent; zero renders
+	// nothing rather than an empty pill.
+	//
+	// Built once and appended to BOTH label variants. The aggregates
+	// are also computed once: two walks that must agree is how they
+	// drift apart, and the cursor landing on a header must not change
+	// what the header reports.
+	aggregates := ""
 	if m.IsCollapsed(name) {
-		if n := m.aggregateUnreadForSection(name); n > 0 {
-			label += " " + dotStyle.Render("•"+fmt.Sprintf("%d", n))
+		unread, mentions := m.aggregateForSection(name)
+		if unread > 0 {
+			aggregates += " " + dotStyle.Render("•"+fmt.Sprintf("%d", unread))
+		}
+		if badgeText := formatMentionBadge(mentions); badgeText != "" {
+			// One Render call so no ANSI reset lands between the
+			// digits, matching the channel rows and the Threads row --
+			// tests find the badge as a literal substring of View().
+			// The explicit separator space mirrors the rows' trailer
+			// (`name + " " + unreadDot`); the pill's own Padding(0, 1)
+			// supplies the rest of the gap.
+			aggregates += " " + styles.MentionBadgeStyle().Render(badgeText)
 		}
 	}
-	selected := cursor + glyph + " " + emojiPrefix + displayName
-	if m.IsCollapsed(name) {
-		if n := m.aggregateUnreadForSection(name); n > 0 {
-			selected += " " + dotStyle.Render("•"+fmt.Sprintf("%d", n))
-		}
-	}
+
+	label := " " + glyph + " " + emojiPrefix + displayName + aggregates
+	selected := cursor + glyph + " " + emojiPrefix + displayName + aggregates
 	return messages.ReapplyBgAfterResets(label, bgAnsi),
 		messages.ReapplyBgAfterResets(selected, bgAnsi)
 }
