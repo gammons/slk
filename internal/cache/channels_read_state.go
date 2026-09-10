@@ -32,8 +32,14 @@ type ChannelReadStateUpdate struct {
 }
 
 // UpdateChannelReadState atomically updates the per-channel read state.
-// If lastReadTS == "", the existing last_read_ts is preserved. This is
-// the ONLY function permitted to modify read state after bootstrap.
+// If lastReadTS == "", the existing last_read_ts is preserved.
+//
+// Outside the batch writers below (BatchUpdateChannelReadState and
+// ReplaceWorkspaceReadState, which apply authoritative snapshots on
+// bootstrap and reconnect), this is the only function permitted to
+// modify last_read_ts or has_unread. It never touches mention_count:
+// that column belongs to SetChannelMentionCount and
+// IncrementChannelMentionCount, the deliberate exception.
 func (db *DB) UpdateChannelReadState(channelID, lastReadTS string, hasUnread bool) error {
 	var q string
 	var args []any
@@ -72,7 +78,8 @@ func (db *DB) SetChannelMentionCount(channelID string, n int) error {
 // IncrementChannelMentionCount adds one to the channel's mention count.
 // Used by the inbound-message path, which detects mentions locally and has
 // no server-supplied total to set. The addition happens in SQL so it is
-// atomic and cannot lose a concurrent update.
+// atomic and cannot lose a concurrent update. Like SetChannelMentionCount
+// it writes mention_count and nothing else.
 func (db *DB) IncrementChannelMentionCount(channelID string) error {
 	if _, err := db.conn.Exec(
 		`UPDATE channels SET mention_count = mention_count + 1 WHERE id = ?`,

@@ -488,6 +488,44 @@ func TestReplaceWorkspaceReadState_ZeroesAbsentChannelMentionCount(t *testing.T)
 	}
 }
 
+// The boot path builds its updates from client.counts, whose last_read
+// field can be empty. Such an entry takes ReplaceWorkspaceReadState's
+// flag-only statement, which must still write mention_count while leaving
+// the existing last_read_ts alone.
+func TestReplaceWorkspaceReadState_EmptyLastReadTSWritesMentionCount(t *testing.T) {
+	db, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer db.Close()
+	newRSChannel(t, db, "C1", "T1")
+
+	// Prior-session last_read_ts that the snapshot has no fresh value for.
+	if err := db.UpdateChannelReadState("C1", "1700000000.000042", false); err != nil {
+		t.Fatalf("seed C1: %v", err)
+	}
+
+	if err := db.ReplaceWorkspaceReadState("T1", []ChannelReadStateUpdate{
+		{ChannelID: "C1", LastReadTS: "", HasUnread: true, MentionCount: 8},
+	}); err != nil {
+		t.Fatalf("ReplaceWorkspaceReadState: %v", err)
+	}
+
+	state, err := db.GetChannelReadState("C1")
+	if err != nil {
+		t.Fatalf("GetChannelReadState: %v", err)
+	}
+	if state.MentionCount != 8 {
+		t.Errorf("MentionCount = %d, want 8", state.MentionCount)
+	}
+	if state.LastReadTS != "1700000000.000042" {
+		t.Errorf("LastReadTS = %q, want preserved %q", state.LastReadTS, "1700000000.000042")
+	}
+	if !state.HasUnread {
+		t.Errorf("HasUnread = false, want true")
+	}
+}
+
 func TestGetWorkspaceReadState_IncludesMentionCount(t *testing.T) {
 	db, err := New(":memory:")
 	if err != nil {
