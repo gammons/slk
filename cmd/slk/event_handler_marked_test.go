@@ -38,6 +38,12 @@ func TestOnChannelMarked_WritesReadState(t *testing.T) {
 	}
 }
 
+// The only test that pins OnChannelMarked's ordering: both the read-state
+// write and the SetChannelMentionCount call sit ABOVE the isActive early
+// return, because the comment there claims "the cache stays authoritative
+// across workspace switches". Every other test in this file runs with
+// isActive true, so moving either call below the return would leave them
+// all green and only this one red.
 func TestOnChannelMarked_InactiveWorkspace_StillWritesDB(t *testing.T) {
 	db := newTestDB(t)
 	if err := db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"}); err != nil {
@@ -45,6 +51,16 @@ func TestOnChannelMarked_InactiveWorkspace_StillWritesDB(t *testing.T) {
 	}
 	if err := db.UpdateChannelReadState("C1", "1.0000", true); err != nil {
 		t.Fatalf("seed: %v", err)
+	}
+	// Local detection had accumulated 3 while this workspace was in the
+	// background; reading the channel elsewhere must still clear it.
+	// Assert the seed landed so the post-call check below cannot pass
+	// vacuously against the column default.
+	if err := db.SetChannelMentionCount("C1", 3); err != nil {
+		t.Fatalf("seed mention count: %v", err)
+	}
+	if seeded, _ := db.GetChannelReadState("C1"); seeded.MentionCount != 3 {
+		t.Fatalf("seed did not take: MentionCount = %d, want 3", seeded.MentionCount)
 	}
 	h := &rtmEventHandler{
 		db:          db,
@@ -60,6 +76,11 @@ func TestOnChannelMarked_InactiveWorkspace_StillWritesDB(t *testing.T) {
 	}
 	if s.LastReadTS != "1.0050" {
 		t.Errorf("LastReadTS = %q, want %q", s.LastReadTS, "1.0050")
+	}
+	if s.MentionCount != 0 {
+		t.Errorf("MentionCount = %d, want 0; the event's count must be written "+
+			"for an inactive workspace too, so SetChannelMentionCount must stay "+
+			"above OnChannelMarked's isActive early return", s.MentionCount)
 	}
 }
 
@@ -124,18 +145,6 @@ func TestOnChannelMarked_ZeroUnreadCount_ClearsHasUnread(t *testing.T) {
 	if state.HasUnread {
 		t.Errorf("HasUnread = true after channel_marked with unread_count=0; want false")
 	}
-}
-
-func TestMarkChannelReadAsync_UpdatesReadState(t *testing.T) {
-	// markChannelReadAsync runs its work in a goroutine and calls
-	// client.MarkChannel on a *slackclient.Client, which requires real
-	// HTTP/Slack wiring (or a fake) to construct. The function body is
-	// otherwise a thin wrapper over db.UpdateChannelReadState (covered by
-	// cache-level tests) plus a tea.Program send. Wiring a fake Client
-	// would require introducing an interface seam we don't otherwise need.
-	// The reconnect-backfill integration test in Task 20 exercises this
-	// path end-to-end.
-	t.Skip("markChannelReadAsync requires a real *slackclient.Client; covered by Task 20 integration test")
 }
 
 // The event's mention_count is authoritative: it replaces whatever the

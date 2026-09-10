@@ -201,7 +201,7 @@ func TestViewAdapter_SendsTheChannelAndParsesTheResult(t *testing.T) {
 const countsBody = `{
   "ok": true,
   "channels": [{"id":"C1","has_unreads":true,"mention_count":2,"unread_count_display":5,"last_read":"1.0"}],
-  "ims": [{"id":"D1","has_unreads":false,"last_read":"2.0"}],
+  "ims": [{"id":"D1","has_unreads":true,"last_read":"2.0"}],
   "threads": {"has_unreads":true,"unread_count":3,"mention_count":1}
 }`
 
@@ -220,8 +220,8 @@ func TestCountsAdapter_CarriesUnreadsAndTheThreadRollup(t *testing.T) {
 	for _, u := range counts.Unreads {
 		byID[u.ChannelID] = u.HasUnread
 	}
-	if !byID["C1"] || byID["D1"] {
-		t.Errorf("unread flags = %+v; want C1 unread and D1 read", byID)
+	if !byID["C1"] || !byID["D1"] {
+		t.Errorf("unread flags = %+v; want both C1 and D1 unread", byID)
 	}
 	// The threads rollup is the authoritative answer to "does the user
 	// have unread thread activity"; the local cache has no per-thread
@@ -866,10 +866,16 @@ func TestCountsAdapter_CarriesServerMentionCounts(t *testing.T) {
 	for _, u := range counts.Unreads {
 		got[u.ChannelID] = u.MentionCount
 	}
-	// C1 carries mention_count 2. D1 omits the field entirely, which
-	// must decode to 0 — an absent count is not a reason to invent one,
-	// and the local mention-detection path supplies DM badges when the
-	// server does not.
+	// C1 carries mention_count 2. D1 has unreads but omits the field
+	// entirely, which must decode to 0 — an absent count is not a reason
+	// to invent one, and the local mention-detection path supplies DM
+	// badges when the server does not.
+	//
+	// D1's has_unreads is true on purpose. The code this replaced read
+	// `if HasUnreads { count = 1 }` for every im, so an unread D1 is the
+	// only shape that distinguishes the two implementations; with
+	// has_unreads false the assertion below passes either way and pins
+	// nothing.
 	if got["C1"] != 2 {
 		t.Errorf("C1 MentionCount = %d, want 2", got["C1"])
 	}

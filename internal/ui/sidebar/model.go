@@ -27,17 +27,12 @@ const (
 	defaultAppsSection = "Apps"
 )
 
-// Mention badge sizing. The badge replaces the trailing unread dot, so
-// the row's width budget must account for whichever is present.
-//
 // mentionBadgeCap matches Slack: counts above it render as "99+", which
-// bounds the digit run at three characters. mentionBadgeMaxCells is the
-// worst-case column cost of the rendered badge -- three digits plus the
-// single space of Padding(0, 1) on each side.
-const (
-	mentionBadgeCap      = 99
-	mentionBadgeMaxCells = 5
-)
+// bounds the badge text at three characters. The badge replaces the
+// trailing unread dot, so the row's width budget must account for
+// whichever is present; View computes that cost exactly from the
+// rendered text rather than always charging the three-digit maximum.
+const mentionBadgeCap = 99
 
 // formatMentionBadge renders n as Slack does: the bare number up to
 // mentionBadgeCap, then "99+". Returns "" for n <= 0.
@@ -1409,7 +1404,15 @@ func (m *Model) buildCache(width int) {
 		trailerCells := 2 // worst-case cost of the dot glyph
 		if badgeText := formatMentionBadge(item.MentionBadge(readState[item.ID])); badgeText != "" {
 			unreadDot = styles.MentionBadgeStyle().Render(badgeText)
-			trailerCells = mentionBadgeMaxCells
+			// Exact, not worst-case. The 2-cell padding above is a
+			// hedge against East-Asian-Ambiguous glyphs, whose column
+			// count lipgloss cannot predict. badgeText has no such
+			// problem: formatMentionBadge emits only ASCII digits and
+			// '+', so one byte is one column, and the only other cost
+			// is the single space Padding(0, 1) adds on each side.
+			// Charging a 1-digit badge the 3-digit worst case would
+			// truncate a name by two columns for nothing.
+			trailerCells = len(badgeText) + 2
 		} else if hasUnread {
 			unreadDot = unreadDotStr
 		}
@@ -1451,10 +1454,10 @@ func (m *Model) buildCache(width int) {
 		//
 		//   cursor(2) + prefix(3) + space(1) + trailer = rowChromeCells
 		//
-		// trailer is 2 for the dot and mentionBadgeMaxCells for a
-		// badge, computed per row above. Charging every row the badge's
-		// width would truncate names on rows that have no badge, so
-		// this stays inside the loop.
+		// trailer is 2 for the dot and len(badgeText)+2 for a badge,
+		// computed per row above. Charging every row the badge's width
+		// would truncate names on rows that have no badge, so this
+		// stays inside the loop.
 		const rowChromeExcludingTrailer = 6 // cursor(2) + prefix(3) + space(1)
 		name := item.Name
 		maxNameLen := (width - 2) - rowChromeExcludingTrailer - trailerCells
