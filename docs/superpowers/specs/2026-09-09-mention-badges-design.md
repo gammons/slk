@@ -44,8 +44,34 @@ both in one field. In `client.counts`, `mention_count` means "@-mentions" for
 `channels`, and "all unread messages" for `ims` and `mpims`. Consuming that
 single field uniformly reproduces Slack's behaviour exactly.
 
+**This paragraph is the design's load-bearing assumption and it is unverified.**
+See Risks below: no capture in this repo proves what `ims` carries. Every
+statement of these semantics — in code comments, in doc comments, in tests —
+must carry that caveat, because the three sentences above are what implementers
+copy.
+
 The local-increment path (below) must therefore branch on conversation type to
 stay consistent with the server value it will later be overwritten by.
+
+### Conversation types: Slack's three kinds vs slk's five
+
+Slack's `client.counts` has three blocks: `channels`, `mpims`, `ims`. slk's
+`ChannelItem.Type` has five values: `channel`, `private`, `dm`, `group_dm`,
+`app`. The mapping is not one-to-one, and the gap is load-bearing:
+
+| slk `Type` | `client.counts` block | Local increment rule |
+|---|---|---|
+| `channel`, `private` | `channels` | `mention.InText` |
+| `group_dm` | `mpims` | every message |
+| `dm` | `ims` | every message |
+| **`app`** | **`ims`** | **every message** |
+
+`app` is the trap. `buildChannelItem` classifies an `is_im=true` conversation
+as `app` when the peer is a bot and `dm` otherwise — a distinction slk invents
+for sidebar grouping and Slack does not make. Both land in the `ims` block and
+both get all-unread semantics. Any local rule that tests for `dm` or `group_dm`
+without also testing `app` will badge app DMs from the server at boot and then
+never increment them live.
 
 ### Mute
 
@@ -270,6 +296,41 @@ costing no additional glyph slot in the row layout.
 
 Counts display as `99+` above 99, as Slack's do, bounding the badge at three
 characters.
+
+### Collapsed section headers
+
+A collapsed section header renders an aggregate — the count of
+channels-with-unreads inside it, via `IsVisiblyUnread`. That count cannot
+distinguish chatter from an @-mention, which is the one distinction this
+feature exists to make.
+
+It matters because of a default: `sidebar.New()` starts `defaultChannelsSection`
+and `defaultAppsSection` collapsed in config mode, so the channel firehose — the
+place a mention is most easily lost — is exactly where the badge is invisible.
+Slack-sections mode is unaffected, since `collapseByID` starts nil and nothing
+is collapsed; DMs default expanded on both paths.
+
+The header therefore carries **two** independent figures, never merged:
+
+```
+ ▸ Channels •5 ▐3▌
+```
+
+- `•5` — five channels in this section have unreads. Unchanged meaning,
+  unchanged glyph, still `IsVisiblyUnread`.
+- `▐3▌` — three unread direct mentions across the section, summed from
+  `MentionBadge`. Rendered with `MentionBadgeStyle()`, capped at `99+`, and
+  omitted entirely at zero.
+
+Summing mention counts rather than counting mentioned channels is deliberate:
+at row level the badge answers "how many times was I named here", and a section
+header that answered a different question with the same glyph would teach the
+user the wrong thing.
+
+Because `MentionBadge` ignores mute, a muted channel contributes to the
+mention figure but not to the unread figure. That asymmetry is the same one
+the rows already show, and it is the point: muting silences chatter, not
+someone naming you.
 
 ### Width budget
 
