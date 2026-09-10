@@ -186,3 +186,51 @@ func TestUsernameColoredToggle(t *testing.T) {
 		t.Fatal("Username with empty userID must fall back to Primary")
 	}
 }
+
+// The mention badge uses the theme's highlight pair rather than a
+// hardcoded color, so it stays legible on every theme. Apply() derives
+// Primary-on-Background when a theme omits the pair, so the style is
+// never blank.
+func TestMentionBadgeStyle_UsesThemeSelectionColors(t *testing.T) {
+	Apply("dark", config.Theme{})
+	s := MentionBadgeStyle()
+	if !colorEqual(s.GetBackground(), SelectionBackground) {
+		t.Errorf("background = %v, want SelectionBackground %v", s.GetBackground(), SelectionBackground)
+	}
+	if !colorEqual(s.GetForeground(), SelectionForeground) {
+		t.Errorf("foreground = %v, want SelectionForeground %v", s.GetForeground(), SelectionForeground)
+	}
+}
+
+// Switching themes must change the badge. A package-level var composed at
+// init time would not, which is why this is a function.
+func TestMentionBadgeStyle_TracksThemeChange(t *testing.T) {
+	Apply("dark", config.Theme{})
+	darkBg := MentionBadgeStyle().GetBackground()
+
+	Apply("light", config.Theme{})
+	lightBg := MentionBadgeStyle().GetBackground()
+
+	if colorEqual(darkBg, lightBg) {
+		t.Errorf("badge background did not change between dark and light themes (both %v)", darkBg)
+	}
+
+	// Restore the default so later tests in this package see a known theme.
+	Apply("dark", config.Theme{})
+}
+
+// An explicit theme override for the selection pair must reach the badge.
+func TestMentionBadgeStyle_HonorsSelectionOverride(t *testing.T) {
+	Apply("dark", config.Theme{})
+	defer Apply("dark", config.Theme{})
+
+	SelectionBackground = lipgloss.Color("#123456")
+	SelectionForeground = lipgloss.Color("#ABCDEF")
+	s := MentionBadgeStyle()
+	if !colorEqual(s.GetBackground(), lipgloss.Color("#123456")) {
+		t.Errorf("background = %v, want #123456", s.GetBackground())
+	}
+	if !colorEqual(s.GetForeground(), lipgloss.Color("#ABCDEF")) {
+		t.Errorf("foreground = %v, want #ABCDEF", s.GetForeground())
+	}
+}

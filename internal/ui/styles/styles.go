@@ -511,6 +511,27 @@ func SelectionStyle() lipgloss.Style {
 		Foreground(SelectionForeground)
 }
 
+// MentionBadgeStyle returns the style used for the sidebar's unread
+// direct-mention badge. It borrows the theme's selection highlight pair,
+// which Apply() always populates and which is contrast-safe by
+// construction (defaulting to Primary-on-Background).
+//
+// A function rather than a package var: var-shaped styles in this file
+// must be declared twice — once in the top-level var block and again in
+// buildStyles() — and the top-level copy would read SelectionBackground
+// while it is still nil, since that var has no initializer. SelectionStyle
+// and SearchHighlightStyle are functions for the same reason.
+//
+// Deliberately not UnreadBadge: that style hardcodes white over Error and
+// belongs to the status bar. See
+// docs/superpowers/specs/2026-09-09-mention-badges-design.md.
+func MentionBadgeStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Background(SelectionBackground).
+		Foreground(SelectionForeground).
+		Padding(0, 1)
+}
+
 // SearchHighlightStyle returns the style used to mark in-channel
 // search matches inside message text.
 func SearchHighlightStyle() lipgloss.Style {
