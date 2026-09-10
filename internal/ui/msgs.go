@@ -67,6 +67,15 @@ type (
 		ChannelID  string
 		Messages   []messages.MessageItem
 		LastReadTS string
+		// MarkedTS is the ts the fetcher already marked the channel
+		// read at, or "" if it marked nothing. ChannelService.Fetch
+		// marks on entry and sets this; the reconnect refresh
+		// (rtmEventHandler.refreshChannel in cmd/slk/main.go) reuses
+		// this message but deliberately does not mark, and leaves it
+		// empty. The reducer records it
+		// as a self-mark so the resulting channel_marked echo does not
+		// drag the divider off LastReadTS. See selfMarkDedup.
+		MarkedTS string
 	}
 	OlderMessagesLoadedMsg struct {
 		ChannelID string
@@ -166,6 +175,10 @@ type (
 	// ThreadsListDirtyMsg is dispatched when something that could affect
 	// the involved-threads list has changed (new message, mention, etc.)
 	// and the list should be refetched. Ignored if not the active team.
+	//
+	// Senders need not deduplicate or debounce: reduceThreads coalesces
+	// these on receipt, so several from several senders inside one
+	// threadsDirtyDebounce window cost a single refetch.
 	ThreadsListDirtyMsg struct {
 		TeamID string
 	}
@@ -417,6 +430,16 @@ type threadFetchDebounceMsg struct {
 	gen       uint64
 }
 
+// threadsListFetchMsg ends the coalescing window a ThreadsListDirtyMsg
+// opened: it is delivered threadsDirtyDebounce after that message, and
+// its arm is what dispatches the ThreadService.ListFetch the dirty
+// message asked for. teamID is whichever team was active when the window
+// opened, so a workspace switch during the window can be told apart
+// from a refresh that is still wanted.
+type threadsListFetchMsg struct {
+	teamID string
+}
+
 // MessageSentMsg is returned after a message is successfully sent.
 // LocalTS, if non-empty, identifies the optimistic placeholder added
 // when the user pressed Enter. The handler uses it to swap the
@@ -523,14 +546,26 @@ type ChannelMarkedRemoteMsg struct {
 }
 
 // ThreadMarkedRemoteMsg is dispatched by the WS event handler when
-// Slack pushes a thread_marked event. Read=true means the thread is
-// now read (clear local boundary + threads-view row); Read=false means
-// it's unread.
+// Slack pushes a thread_marked event (a thread's read cursor moved in
+// another client, or via slk's own subscriptions.thread.mark echoing
+// back — the arm routes through applyThreadMarkEcho, which tells the
+// two apart). LastRead is the thread's new read cursor; whether that
+// means read or unread is decided by comparing it against the thread's
+// newest known reply.
 type ThreadMarkedRemoteMsg struct {
 	ChannelID string
 	ThreadTS  string
+	LastRead  string
+}
+
+// ThreadMarkedLocalMsg reports the outcome of an slk-initiated
+// subscriptions.thread.mark. Err is nil on success, in which case
+// thread_subscriptions.last_read has already been advanced to TS.
+type ThreadMarkedLocalMsg struct {
+	ChannelID string
+	ThreadTS  string
 	TS        string
-	Read      bool
+	Err       error
 }
 
 // WSMessageDeletedMsg is dispatched by the RTM event handler when a

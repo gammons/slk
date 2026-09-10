@@ -570,3 +570,79 @@ func TestClickAt_AccountsForYOffset(t *testing.T) {
 		t.Errorf("ClickAt(0) at yOffset=6 should select card 1; got %d", got)
 	}
 }
+
+func TestMarkByThreadTSReadAt_CursorBehindLatestSetsUnread(t *testing.T) {
+	m := New(map[string]string{}, "USELF")
+	m.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "P1", LastReplyTS: "5.000000", Unread: false},
+	})
+
+	if !m.MarkByThreadTSReadAt("C1", "P1", "4.000000") {
+		t.Fatal("want true when the flag flips to unread")
+	}
+	if !m.Summaries()[0].Unread {
+		t.Error("cursor behind latest reply must render unread")
+	}
+}
+
+func TestMarkByThreadTSReadAt_CursorAtLatestClearsUnread(t *testing.T) {
+	m := New(map[string]string{}, "USELF")
+	m.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "P1", LastReplyTS: "5.000000", Unread: true},
+	})
+
+	if !m.MarkByThreadTSReadAt("C1", "P1", "5.000000") {
+		t.Fatal("want true when the flag flips to read")
+	}
+	if m.Summaries()[0].Unread {
+		t.Error("cursor at latest reply must render read")
+	}
+}
+
+func TestMarkByThreadTSReadAt_NoChangeReturnsFalse(t *testing.T) {
+	m := New(map[string]string{}, "USELF")
+	m.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "P1", LastReplyTS: "5.000000", Unread: true},
+	})
+
+	if m.MarkByThreadTSReadAt("C1", "P1", "4.000000") {
+		t.Error("want false when the flag is already correct")
+	}
+}
+
+func TestMarkByThreadTSReadAt_UnknownThreadReturnsFalse(t *testing.T) {
+	m := New(map[string]string{}, "USELF")
+	m.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "P1", LastReplyTS: "5.000000", Unread: true},
+	})
+
+	if m.MarkByThreadTSReadAt("C1", "P_MISSING", "9.000000") {
+		t.Error("want false for a thread not in the list")
+	}
+	if m.MarkByThreadTSReadAt("", "P1", "9.000000") {
+		t.Error("want false for an empty channelID")
+	}
+}
+
+func TestMarkByThreadTSReadAt_BumpsVersionOnlyOnChange(t *testing.T) {
+	m := New(map[string]string{}, "USELF")
+	m.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "P1", LastReplyTS: "5.000000", Unread: false},
+	})
+
+	before := m.Version()
+	if !m.MarkByThreadTSReadAt("C1", "P1", "4.000000") {
+		t.Fatal("want true when the flag flips to unread")
+	}
+	if m.Version() == before {
+		t.Error("a changed flag must bump the version so the list re-renders")
+	}
+
+	after := m.Version()
+	if m.MarkByThreadTSReadAt("C1", "P1", "4.000000") {
+		t.Fatal("want false on the repeated no-op call")
+	}
+	if m.Version() != after {
+		t.Error("a no-op must not bump the version")
+	}
+}

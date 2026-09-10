@@ -109,16 +109,94 @@ On `FocusMsg`, pending marks accumulated while blurred are issued immediately.
 Without this, a user who alt-tabs back, reads everything, and never switches
 channels leaves the channel unread on Slack indefinitely.
 
-### The divider does not move
+### The divider does not move, but only because the echo is suppressed
 
-Advancing the cursor updates `last_read_ts` in SQLite and on Slack, but does not
-push a new value into the on-screen message models. The `── new ──` divider
-stays at the entry point and recomputes on next entry.
+The `── new ──` divider must stay where the user entered the channel and
+recompute on next entry. Advancing the cursor writes `last_read_ts` to SQLite
+and to Slack; the local path does not push a new value into the on-screen
+message models. `MarkRead` produces `ChannelMarkedReadMsg`, whose arm calls
+`notifyReadStateChanged()` and nothing else, and channel entry already installs
+the pre-mark cursor — `MessagesLoadedMsg` carries `LastReadTS` read before the
+mark.
 
-This requires no extra work: `MarkRead` produces `ChannelMarkedReadMsg`, whose
-arm at `reducer_channels.go:191` calls `notifyReadStateChanged()` and nothing
-else. It never touches `SetLastReadTS`. It also matches what channel entry
-already does — `MessagesLoadedMsg` carries the pre-mark `LastReadTS`.
+The local path is not the whole system, and an earlier revision of this section
+reasoned only from it. Slack broadcasts `channel_marked` to every connected
+client **including the one that issued the mark**. That echo arrives at
+`rtmEventHandler.OnChannelMarked`, becomes a `ChannelMarkedRemoteMsg`, and its
+arm calls `applyChannelMark`, which does run `SetLastReadTS` on every window
+viewing the channel. So without further work the divider moved to the newest
+message a round trip after every mark — including the entry mark, which
+predates this feature.
+
+Suppressing that echo is therefore part of the design, not a free consequence
+of it. `selfMarkDedup` (`internal/ui/app.go`) records the `(channel, ts)` of the
+channel marks slk issues, at three issuing sites: the tier-1 entry mark in
+`reduceChannelSelected`, the auto-mark in `flushPendingMarks`, and
+`ChannelService.Fetch`'s entry mark — the last reported back on the Update
+goroutine as `MessagesLoadedMsg.MarkedTS`, since the fetcher marks from a cmd
+goroutine and must not touch `App` state. `applyChannelMarkEcho`, which is what
+the `ChannelMarkedRemoteMsg` arm calls, consumes a matching record and skips the
+cursor update, while still calling `notifyReadStateChanged()` so the sidebar dot
+and workspace rail clear.
+
+"Chiefly", not "only" — the same qualification the thread side carries in
+`applyThreadMarkEcho`'s doc. The channel mark-unread press is a fourth issuer of
+the same endpoint: `MarkChannelUnread` posts to `conversations.mark` through the
+same `markChannel` helper the read marks use, so it broadcasts back as a
+`channel_marked` like any other. It is deliberately left unrecorded, so its echo
+is treated as foreign and moves the divider — which is exactly what the press
+asked for. The collision described next is why completing the list here would be
+a bug rather than a tidy-up.
+
+The dedup deliberately sits in `applyChannelMarkEcho` rather than in the shared
+`applyChannelMark` helper. `applyChannelMark`'s other caller is the local
+mark-unread press (`MessageMarkedUnreadMsg`), a deliberate user action that must
+move the divider unconditionally — and the two collide on ts routinely, since
+slk auto-marks at the newest message and "mark this newest message unread"
+targets the same one. Consuming in the shared helper would silently swallow the
+press for as long as the record lives: one round trip normally, unbounded if the
+echo never arrives.
+
+Records are consumed on match and the set is bounded (oldest evicted first), so
+a `channel_marked` slk did not issue — the user reading the channel in another
+Slack client — still moves the divider, which is the correct response to that
+event.
+
+The thread panel's landmark has the same shape and the same two-sided fix.
+`ThreadMarkedLocalMsg` reports slk's own `subscriptions.thread.mark` completing;
+its arm applies threads-list state only (`applyThreadMarkListState`) and leaves
+the panel boundary at the pre-open snapshot.
+
+The remote side needed the same treatment, because **`ThreadMarkedRemoteMsg` is
+not equivalent to "a mark from another client."** Slack broadcasts
+`thread_marked` back to the issuing client exactly as it does `channel_marked` —
+`TestThreadMarkedRemoteMsg_SelfReplyDoesNotReFlagUnread` documents slk receiving
+one after posting its own reply — so slk's own thread marks used to erase the
+panel landmark by the remote route. `App.selfThreadMarks`, a second
+`selfMarkDedup` instance keyed on `(channel, threadTS, ts)` and bounded
+independently of the channel set, closes it. Both thread issue sites record —
+the mark-on-open in `reduceThreads`' `ThreadRepliesLoadedMsg` arm and the
+auto-mark in `flushPendingMarks` — and both record *before* handing the mark's
+`tea.Cmd` on, which is what makes the record beat the echo. `ThreadService.Mark`
+only builds the cmd, so no request has been sent when the record lands; the
+`markThreadRead` call that does send runs on a cmd goroutine and must not touch
+`App` state, which is why the record is taken here and not there.
+`applyThreadMarkEcho` — what the `ThreadMarkedRemoteMsg` arm calls — consumes a
+matching record and skips `SetUnreadBoundary` while still settling the
+threads-list flag and the sidebar badge.
+
+Recording on *completion* (`ThreadMarkedLocalMsg`) was rejected: Slack's
+broadcast and the mark's HTTP response are independent, so an echo can arrive
+first, and every thread mark — the mark-on-open above all — would then be
+exposed to that race. Recording on issue instead means a mark Slack rejects
+leaves a record no echo consumes; it ages out via `selfMarkLimit`, and until
+then it can only hold a landmark still, never move one wrongly.
+
+Suppression is per-record and consumed on match, never blanket, because a thread
+mark genuinely made in another client must still move the landmark. Note also
+that the thread mark-unread press hits the same endpoint (`read=0`) and so
+echoes here too; it is deliberately unrecorded, so its echo is treated as
+foreign and moves the landmark to where the press asked for it.
 
 ### The decision lives in the UI reducer
 
@@ -196,10 +274,28 @@ Rules:
 Focus-regain catch-up falls out of this mechanism rather than needing a separate
 path, and a burst coalesces to one request per interval per target.
 
-Debounce default is 1 s, in a configurable `App` field. `threadsDirtyDebounce`
-is 150 ms because it re-queries local SQLite; this is a network write, so a full
-second is the right order of magnitude. Tests set it to zero or drive the flush
-message directly.
+Debounce default is 5 s (`defaultMarkFlushDebounce`), in a configurable `App`
+field. What fixes that number is `conversations.mark`'s rate tier, not the
+general observation that network writes cost more than local ones:
+`conversations.mark` is Tier 3, roughly 50 requests a minute. The interval is
+the ceiling on how often a focused target spends one, so 5 s caps the
+steady-state cost at 60/5 = 12 a minute and leaves room for the entry marks and
+mark-unread presses that mark on other paths. The 1 s this design originally
+specified put a channel receiving about a message a second at ~60 a minute —
+over the tier, where `postForm` returns `rateLimitError`, `markChannelRead`
+returns before the local write, and `markChannelReadAndNotify` logs and drops
+it. `markChannel` does not retry, and nothing in this design does either (see
+the flush rule above). Self-healing on the next arrival makes that survivable
+but not acceptable: a mark dropped with no sign to the user is the
+cross-client divergence this design exists to remove.
+
+The longer interval costs nothing the user perceives, because the flush changes
+nothing on screen — it moves Slack's server-side cursor, and the local divider
+deliberately stays put. Compare `threadsDirtyDebounce` at 150 ms, which delays
+a query against local SQLite and so is bounded by nothing but responsiveness.
+
+Tests set the field to 1 ms or drive `markFlushMsg` directly rather than
+waiting out the real interval.
 
 ### Channel path
 
@@ -239,11 +335,25 @@ successful `MarkThread`. One existing call site updates,
 
 ### Thread `active`/unread conflation fix
 
-`OnThreadMarked` becomes `(channelID, threadTS, lastRead string)`. The derived
-`read` bool is deleted at its source, `events.go:384`. The handler writes the
-cursor via a new `cache.UpdateThreadLastRead`, which never touches `active`.
-Ownership of `active` belongs solely to `thread_subscribed`,
+`OnThreadMarked` becomes `(channelID, threadTS, lastRead string, subscribed
+Subscribed)`, where `Subscribed` is a named bool type. The name is the point:
+`OnThreadSubscriptionChanged(channelID, threadTS, lastRead string, active bool)`
+has the identical shape but the opposite obligation — it MUST write the `active`
+column, which `OnThreadMarked` must never touch — so distinct types keep the two
+from being transposed silently. The derived `read` bool is deleted at its source in `events.go`: nothing
+downstream may infer read/unread from the subscription block. `subscribed` is
+that block's `active` flag forwarded under its true meaning, and it does exactly
+one job — choose the cursor writer, both of which leave the durable `active`
+column alone. Ownership of `active` belongs solely to `thread_subscribed`,
 `thread_unsubscribed`, and `getView`.
+
+The writer choice matters because slk's own `subscriptions.thread.mark` echoes
+back as `thread_marked`, so this handler sees marks for threads the user merely
+opened and never subscribed to. `markThreadRead` refuses to create a row for
+those (`UpdateThreadLastReadIfExists`); without the same check here, the echo
+would insert the `active=1` row it refused to create and put a phantom entry in
+the Threads list. So: `subscribed` → `cache.UpdateThreadLastRead` (insert is a
+legitimate cache repair), otherwise → `cache.UpdateThreadLastReadIfExists`.
 
 Read/unread is decided by comparing `last_read` against the newest known reply —
 logic that already exists at `internal/cache/threads.go:105-130`.
@@ -323,10 +433,10 @@ otherwise need" — no longer holds.
 | Layer | Coverage |
 |---|---|
 | `internal/slack` | Mark helpers against HTTP 500, `{"ok":false,"error":"invalid_auth"}`, and 429. `newTestClient` (`client_test.go:1330`) provides the harness. |
-| `internal/slack/events` | `thread_marked` passes `last_read` through and no longer derives a read bool. |
+| `internal/slack/events` | `thread_marked` passes `last_read` through and no longer derives a read bool; `active` is forwarded as `Subscribed` and the cursor it forwards is unchanged either way. |
 | `internal/cache` | `UpdateThreadLastRead` preserves `active`; `ListSubscribedThreads` recomputes unread correctly as the cursor moves in both directions. |
-| `cmd/slk` | `OnMessage` sets `has_unread` even for the active channel; `OnThreadMarked` updates the cursor and leaves the row active (rewrite of `event_handler_test.go:245`); `markChannelReadAsync` skips the local write on error via the new seam. |
-| `internal/ui` | Matrix of focused/blurred × active/inactive channel × top-level/plain reply/broadcast. Plus focus-regain flush, burst coalescing (N arrivals produce one `MarkRead`), blurred arrivals staying pending until `FocusMsg`, and the divider unmoved after an auto-mark. All via the existing `ChannelServiceFuncs` / `ThreadServiceFuncs` closure seams. |
+| `cmd/slk` | `OnMessage` sets `has_unread` even for the active channel; `OnThreadMarked` updates the cursor and leaves the row active (rewrite of `event_handler_test.go:245`), creates no row when `subscribed` is false, and leaves a tombstoned row tombstoned when it is true; `markChannelReadAsync` skips the local write on error via the new seam. |
+| `internal/ui` | Matrix of focused/blurred × active/inactive channel × top-level/plain reply/broadcast. Plus focus-regain flush, burst coalescing (N arrivals produce one `MarkRead`), blurred arrivals staying pending until `FocusMsg`, and the divider unmoved after an auto-mark *and after the `channel_marked` echo of that mark*, with a foreign `channel_marked` still moving it as the control; and the same pair on the thread side, where slk's own `thread_marked` echo leaves the panel landmark alone — in both orderings, echo-after-response and echo-before-response — while a foreign one moves it. All via the existing `ChannelServiceFuncs` / `ThreadServiceFuncs` closure seams. |
 
 ## Documentation
 
