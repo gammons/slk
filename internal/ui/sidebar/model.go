@@ -27,6 +27,31 @@ const (
 	defaultAppsSection = "Apps"
 )
 
+// Mention badge sizing. The badge replaces the trailing unread dot, so
+// the row's width budget must account for whichever is present.
+//
+// mentionBadgeCap matches Slack: counts above it render as "99+", which
+// bounds the digit run at three characters. mentionBadgeMaxCells is the
+// worst-case column cost of the rendered badge -- three digits plus the
+// single space of Padding(0, 1) on each side.
+const (
+	mentionBadgeCap      = 99
+	mentionBadgeMaxCells = 5
+)
+
+// formatMentionBadge renders n as Slack does: the bare number up to
+// mentionBadgeCap, then "99+". Returns "" for n <= 0.
+func formatMentionBadge(n int) string {
+	switch {
+	case n <= 0:
+		return ""
+	case n > mentionBadgeCap:
+		return fmt.Sprintf("%d+", mentionBadgeCap)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
+}
+
 type ChannelItem struct {
 	ID           string
 	Name         string
@@ -51,13 +76,39 @@ type ChannelItem struct {
 	IsMuted bool
 }
 
-// IsVisiblyUnread reports whether this channel should render as having
-// unread messages -- DB-level HasUnread AND the user hasn't muted it.
-// This is the single source of truth for the "unread dot" predicate;
-// both the sidebar View, section aggregates, and the App's tab-title
-// counter MUST consult this helper rather than re-deriving the rule.
+// IsVisiblyUnread reports whether this channel should render the unread
+// DOT -- DB-level HasUnread AND the user hasn't muted it. This is the
+// single source of truth for the "unread dot" predicate; the sidebar
+// View, section aggregates, and the App's tab-title counter MUST consult
+// this helper rather than re-deriving the rule.
+//
+// Scoped to the dot deliberately: mentions pierce mute. See MentionBadge.
 func (item ChannelItem) IsVisiblyUnread(state cache.ReadState) bool {
 	return state.HasUnread && !item.IsMuted
+}
+
+// MentionBadge reports the direct-mention count to render on this row, or
+// 0 for no badge. It is the single source of truth for the badge
+// predicate, the counterpart to IsVisiblyUnread.
+//
+// Two differences from IsVisiblyUnread:
+//
+//   - It ignores IsMuted. Slack keeps a muted channel grey and unbolded
+//     for ordinary traffic but still badges an explicit @-mention; that
+//     escape hatch is what makes muting safe on a busy channel.
+//   - It requires HasUnread, so a stale non-zero mention_count cannot
+//     outlive the unread flag that justifies it.
+//
+// The 99+ cap is applied by the renderer, not here: the DB keeps the true
+// count so a later refresh below 100 shows the real number.
+func (item ChannelItem) MentionBadge(state cache.ReadState) int {
+	if !state.HasUnread {
+		return 0
+	}
+	if state.MentionCount < 0 {
+		return 0
+	}
+	return state.MentionCount
 }
 
 // sectionFor is the package-level back-compat shim for callers
@@ -1338,9 +1389,28 @@ func (m *Model) buildCache(width int) {
 		// App's tab-title counter and section aggregates agree.
 		hasUnread := item.IsVisiblyUnread(readState[item.ID])
 
-		// Unread dot indicator (same regardless of selection state).
+		// Trailing indicator: a mention badge when the channel has
+		// unread direct mentions, otherwise the unread dot, otherwise
+		// blank. Never both -- the badge subsumes the dot, matching
+		// Slack and costing no extra glyph slot.
+		//
+		// badgeText is computed from item.MentionBadge rather than
+		// hasUnread because the two predicates disagree on muted rows
+		// by design: a muted channel suppresses the dot but keeps the
+		// badge.
+		//
+		// The badge text is rendered by ONE Render call so no ANSI
+		// reset lands between the digits, which is what lets tests find
+		// the literal substring in View() output. The Threads row badge
+		// at the top of this function does the same for the same
+		// reason. (lipgloss does split Padding(0, 1) into separate
+		// spans around the text, but the text itself stays contiguous.)
 		unreadDot := " "
-		if hasUnread {
+		trailerCells := 2 // worst-case cost of the dot glyph
+		if badgeText := formatMentionBadge(item.MentionBadge(readState[item.ID])); badgeText != "" {
+			unreadDot = styles.MentionBadgeStyle().Render(badgeText)
+			trailerCells = mentionBadgeMaxCells
+		} else if hasUnread {
 			unreadDot = unreadDotStr
 		}
 
@@ -1376,11 +1446,18 @@ func (m *Model) buildCache(width int) {
 		// Unicode chars like ● (U+25CF), ○, ◆, ▌ have East Asian Width
 		// "Ambiguous" — terminals may render them as 2 columns wide, but
 		// lipgloss.Width() reports them as 1. We can't trust lipgloss
-		// measurements for these chars, so use a conservative fixed budget:
-		//   cursor(2) + prefix(3) + name + space(1) + dot(2) = name + 8
-		// This assumes worst-case 2-col rendering for every ambiguous char.
+		// measurements for these chars, so use a conservative budget
+		// assuming worst-case 2-col rendering for every ambiguous char:
+		//
+		//   cursor(2) + prefix(3) + space(1) + trailer = rowChromeCells
+		//
+		// trailer is 2 for the dot and mentionBadgeMaxCells for a
+		// badge, computed per row above. Charging every row the badge's
+		// width would truncate names on rows that have no badge, so
+		// this stays inside the loop.
+		const rowChromeExcludingTrailer = 6 // cursor(2) + prefix(3) + space(1)
 		name := item.Name
-		maxNameLen := (width - 2) - 8
+		maxNameLen := (width - 2) - rowChromeExcludingTrailer - trailerCells
 		if maxNameLen < 5 {
 			maxNameLen = 5
 		}
