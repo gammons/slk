@@ -65,9 +65,14 @@ type ChannelItem struct {
 	// IsMuted reports whether the user has muted this channel (via
 	// Slack's muted_channels user pref). Muted channels render with a
 	// dimmer foreground and suppress their unread dot; they also do
-	// not contribute to the aggregate unread badges on collapsed
-	// section headers. Sourced from service.MuteStore in
-	// buildChannelItem.
+	// not contribute to the unread half of a collapsed section
+	// header's aggregate.
+	//
+	// They DO contribute to the mention half, on both the row and the
+	// header: muting silences chatter, not someone naming you. See
+	// MentionBadge, which deliberately does not consult this field.
+	//
+	// Sourced from service.MuteStore in buildChannelItem.
 	IsMuted bool
 }
 

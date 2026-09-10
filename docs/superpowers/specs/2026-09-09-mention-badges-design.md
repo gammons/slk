@@ -440,3 +440,40 @@ either is missing.
 - A periodic `client.counts` poll to correct usergroup undercounting.
 - Typing `boot.Subteams.Self` to enable local usergroup mention detection, which
   requires a capture with a non-empty list.
+
+## Pre-existing bugs found during this work
+
+Neither is caused by this feature and neither is fixed here, per AGENTS.md's
+*record it, annotate it, raise it separately*. Both are recorded here so the
+annotation in the code has something to point at.
+
+### Sidebar render cache ignores theme changes
+
+`buildCache`'s `m.cacheValid` (`internal/ui/sidebar/model.go`) is not keyed on
+`styles.Version()`, so a `styles.Apply` after a `View()` returns the previous
+theme's bytes verbatim. `styles.Version()` exists precisely to drive this kind
+of invalidation, and the App-level `renderCache.sidebar` *is* keyed on
+`themeVer` (`internal/ui/view_sidebar.go:43-47`) — which masks the inner cache's
+miss rather than covering it.
+
+Affects every sidebar glyph, not just the badge. Surfaced by the themed test
+added in this work, which has to snapshot and restore global style state to
+work around it.
+
+### Section headers wrap instead of truncating
+
+`styles.SectionHeader.Width(width - 2)` feeds a `renderRow{height: 1}`
+(`internal/ui/sidebar/model.go`, header construction). lipgloss `Width()` wraps
+rather than truncates, so a header wider than its budget becomes a multi-line
+string occupying a slot the layout counts as one line, desynchronising row
+accounting below it. Reproducible today with a long section name and no
+aggregate at all: a 36-character name wraps to three lines at width 20.
+
+Channel rows do not have this problem — they truncate explicitly via
+`truncate.StringWithTail`. Headers never got the same treatment.
+
+This feature does not cause it but does consume headroom: a mention badge adds
+up to 6 columns (separator, two padding cells, and up to three digits), so a
+default `Channels` header that previously fit a narrow sidebar can now exceed
+it. The fix is to give the header a width budget and truncate its display name,
+which changes expanded headers too and therefore belongs in its own change.
