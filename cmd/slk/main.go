@@ -1646,6 +1646,15 @@ func run() error {
 						if dbErr := db.UpdateChannelReadState(chIDStr, boundaryTSStr, true); dbErr != nil {
 							log.Printf("Warning: failed to update read state on mark-unread %s/%s: %v", chIDStr, boundaryTSStr, dbErr)
 						}
+						// Mark-unread moves the read boundary to the
+						// selected message; slk has not evaluated
+						// whether anything below it mentions the user,
+						// so claiming a count would be inventing one.
+						// Zero shows the dot and lets Slack's echoed
+						// *_marked event supply the real number.
+						if dbErr := db.SetChannelMentionCount(chIDStr, 0); dbErr != nil {
+							log.Printf("Warning: failed to clear mention count on mark-unread %s: %v", chIDStr, dbErr)
+						}
 					} else {
 						log.Printf("Warning: failed to mark channel %s as unread (boundary %s): %v", chIDStr, boundaryTSStr, err)
 					}
@@ -3113,6 +3122,14 @@ func markChannelReadAsync(
 		_ = client.MarkChannel(ctx, channelID, ts)
 		if err := db.UpdateChannelReadState(channelID, ts, false); err != nil {
 			log.Printf("Warning: failed to update read state in markChannelReadAsync %s/%s: %v", channelID, ts, err)
+		}
+		// Reading the channel clears its mention badge. Slack echoes a
+		// *_marked event with mention_count=0 shortly after, which
+		// would do this anyway — but doing it here means the badge
+		// clears on the same render as the dot instead of one round
+		// trip later.
+		if err := db.SetChannelMentionCount(channelID, 0); err != nil {
+			log.Printf("Warning: failed to clear mention count in markChannelReadAsync %s: %v", channelID, err)
 		}
 		if p != nil {
 			p.Send(ui.ChannelMarkedReadMsg{ChannelID: channelID})
