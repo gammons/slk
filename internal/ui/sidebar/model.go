@@ -1186,11 +1186,16 @@ func (m *Model) rebuildNavPreserveCursor() {
 // IsMuted, so a muted channel feeds mentions but not unread. That is
 // the same asymmetry the rows already show — muting silences chatter,
 // not someone naming you.
-func (m *Model) aggregateForSection(section string) (unread, mentions int) {
+// allMuted reports whether every mention counted came from a muted
+// channel. A collapsed header dims its badge only in that case: if any
+// unmuted channel in the section is holding a mention, the header must
+// shout as loudly as that row would.
+func (m *Model) aggregateForSection(section string) (unread, mentions int, allMuted bool) {
 	var readState map[string]cache.ReadState
 	if m.readStateReader != nil {
 		readState = m.readStateReader()
 	}
+	allMuted = true
 	for _, idx := range m.filtered {
 		item := m.items[idx]
 		if m.sectionFor(item) != section {
@@ -1200,9 +1205,24 @@ func (m *Model) aggregateForSection(section string) (unread, mentions int) {
 		if item.IsVisiblyUnread(state) {
 			unread++
 		}
-		mentions += item.MentionBadge(state)
+		if n := item.MentionBadge(state); n > 0 {
+			mentions += n
+			if !item.IsMuted {
+				allMuted = false
+			}
+		}
 	}
-	return unread, mentions
+	return unread, mentions, allMuted
+}
+
+// mentionBadgeStyleFor picks the badge style for a row or header.
+// Muted mentions still render -- muting silences chatter, not someone
+// naming you -- but at a lower volume than an unmuted one.
+func mentionBadgeStyleFor(muted bool) lipgloss.Style {
+	if muted {
+		return styles.MutedMentionBadgeStyle()
+	}
+	return styles.MentionBadgeStyle()
 }
 
 // renderRow describes a single rendered row in the sidebar.
@@ -1421,7 +1441,7 @@ func (m *Model) buildCache(width int) {
 		unreadDot := " "
 		trailerCells := 2 // worst-case cost of the dot glyph
 		if badgeText := formatMentionBadge(item.MentionBadge(readState[item.ID])); badgeText != "" {
-			unreadDot = styles.MentionBadgeStyle().Render(badgeText)
+			unreadDot = mentionBadgeStyleFor(item.IsMuted).Render(badgeText)
 			// Exact, not worst-case. The 2-cell padding above is a
 			// hedge against East-Asian-Ambiguous glyphs, whose column
 			// count lipgloss cannot predict. badgeText has no such
@@ -1682,7 +1702,7 @@ func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.
 	// what the header reports.
 	aggregates := ""
 	if m.IsCollapsed(name) {
-		unread, mentions := m.aggregateForSection(name)
+		unread, mentions, mentionsAllMuted := m.aggregateForSection(name)
 		if unread > 0 {
 			aggregates += " " + dotStyle.Render("•"+fmt.Sprintf("%d", unread))
 		}
@@ -1693,7 +1713,7 @@ func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.
 			// The explicit separator space mirrors the rows' trailer
 			// (`name + " " + unreadDot`); the pill's own Padding(0, 1)
 			// supplies the rest of the gap.
-			aggregates += " " + styles.MentionBadgeStyle().Render(badgeText)
+			aggregates += " " + mentionBadgeStyleFor(mentionsAllMuted).Render(badgeText)
 		}
 	}
 

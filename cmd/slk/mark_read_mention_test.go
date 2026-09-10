@@ -141,3 +141,90 @@ func TestMarkChannelReadAsync_NilMarkerDoesNotMark(t *testing.T) {
 		t.Errorf("nil marker wrote to the DB; MentionCount = %d, want 3 untouched", state.MentionCount)
 	}
 }
+
+// Marking a direct mention unread must leave the count showing, not a
+// bare dot.
+//
+// This is the regression the u-key had in the first cut: the path wrote
+// 0 and waited for Slack's echoed *_marked event to restore the real
+// number. The echo carries no usable mention_count, so the badge the
+// user was deliberately preserving disappeared at the moment they tried
+// to preserve it.
+func TestCountMentionsSince_CountsFromTheBoundary(t *testing.T) {
+	const self = "USELF"
+	seed := func(t *testing.T, db *cache.DB, ts, user, text string) {
+		t.Helper()
+		if err := db.UpsertMessage(cache.Message{
+			TS: ts, ChannelID: "C1", WorkspaceID: "T1", UserID: user, Text: text,
+		}); err != nil {
+			t.Fatalf("UpsertMessage %s: %v", ts, err)
+		}
+	}
+
+	db := newTestDB(t)
+	if err := db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"}); err != nil {
+		t.Fatalf("UpsertChannel: %v", err)
+	}
+	// Below the boundary — must not be counted.
+	seed(t, db, "1.0001", "UOTHER", "hey <@USELF> earlier")
+	// At the boundary — counted, because marking a message unread makes
+	// that message itself unread.
+	seed(t, db, "1.0002", "UOTHER", "<@USELF> look at this")
+	seed(t, db, "1.0003", "UOTHER", "unrelated chatter")
+	seed(t, db, "1.0004", "UOTHER", "<!here> deploying")
+	// Self-authored, excluded to match the live path's isSelfMessage.
+	seed(t, db, "1.0005", self, "note to <@USELF>")
+
+	got, err := countMentionsSince(db, "channel", "C1", "1.0002", self)
+	if err != nil {
+		t.Fatalf("countMentionsSince: %v", err)
+	}
+	if got != 2 {
+		t.Errorf("count = %d, want 2 (boundary mention + @here, excluding the earlier one and the self-authored one)", got)
+	}
+}
+
+// In a DM every unread message counts, matching what client.counts
+// reports for the ims block.
+func TestCountMentionsSince_DMCountsEveryMessage(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertChannel(cache.Channel{ID: "D1", WorkspaceID: "T1", Name: "alice", Type: "dm"}); err != nil {
+		t.Fatalf("UpsertChannel: %v", err)
+	}
+	for _, ts := range []string{"1.0001", "1.0002", "1.0003"} {
+		if err := db.UpsertMessage(cache.Message{
+			TS: ts, ChannelID: "D1", WorkspaceID: "T1", UserID: "UOTHER", Text: "no markup here",
+		}); err != nil {
+			t.Fatalf("UpsertMessage: %v", err)
+		}
+	}
+
+	got, err := countMentionsSince(db, "dm", "D1", "1.0002", "USELF")
+	if err != nil {
+		t.Fatalf("countMentionsSince: %v", err)
+	}
+	if got != 2 {
+		t.Errorf("count = %d, want 2 (both messages at or after the boundary)", got)
+	}
+}
+
+// An empty boundary yields no rows rather than scanning the channel.
+func TestCountMentionsSince_EmptyBoundaryCountsNothing(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"}); err != nil {
+		t.Fatalf("UpsertChannel: %v", err)
+	}
+	if err := db.UpsertMessage(cache.Message{
+		TS: "1.0001", ChannelID: "C1", WorkspaceID: "T1", UserID: "UOTHER", Text: "<@USELF> hi",
+	}); err != nil {
+		t.Fatalf("UpsertMessage: %v", err)
+	}
+
+	got, err := countMentionsSince(db, "channel", "C1", "", "USELF")
+	if err != nil {
+		t.Fatalf("countMentionsSince: %v", err)
+	}
+	if got != 0 {
+		t.Errorf("count = %d, want 0 for an empty boundary", got)
+	}
+}

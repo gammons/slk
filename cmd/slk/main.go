@@ -1655,14 +1655,31 @@ func run() error {
 						if dbErr := db.UpdateChannelReadState(chIDStr, boundaryTSStr, true); dbErr != nil {
 							log.Printf("Warning: failed to update read state on mark-unread %s/%s: %v", chIDStr, boundaryTSStr, dbErr)
 						}
-						// Mark-unread moves the read boundary to the
-						// selected message; slk has not evaluated
-						// whether anything below it mentions the user,
-						// so claiming a count would be inventing one.
-						// Zero shows the dot and lets Slack's echoed
-						// *_marked event supply the real number.
-						if dbErr := db.SetChannelMentionCount(chIDStr, 0); dbErr != nil {
-							log.Printf("Warning: failed to clear mention count on mark-unread %s: %v", chIDStr, dbErr)
+						// Recount the badge from the new boundary.
+						//
+						// This used to write 0 and wait for Slack's
+						// echoed *_marked event to supply the real
+						// number. The echo does not carry one: marking
+						// a direct mention unread left the channel
+						// showing a plain dot, losing exactly the
+						// signal the user was trying to preserve.
+						//
+						// Counting the cached messages at or after the
+						// boundary is not the invented number that
+						// comment was avoiding — the user picked the
+						// boundary off their own screen, so those
+						// messages are cached. A failure here leaves
+						// the previous count rather than zeroing it,
+						// since a stale badge beats a vanished one.
+						chType := ""
+						if wctx.RTMHandler != nil {
+							chType = wctx.RTMHandler.channelTypes[chIDStr]
+						}
+						n, cntErr := countMentionsSince(db, chType, chIDStr, boundaryTSStr, wctx.Client.UserID())
+						if cntErr != nil {
+							log.Printf("Warning: failed to count mentions on mark-unread %s: %v", chIDStr, cntErr)
+						} else if dbErr := db.SetChannelMentionCount(chIDStr, n); dbErr != nil {
+							log.Printf("Warning: failed to set mention count on mark-unread %s: %v", chIDStr, dbErr)
 						}
 					} else {
 						log.Printf("Warning: failed to mark channel %s as unread (boundary %s): %v", chIDStr, boundaryTSStr, err)
@@ -3179,6 +3196,62 @@ type channelMarker interface {
 // channel entry or reconnect sync. Synchronous so the failure path is
 // deterministically testable; markChannelReadAsync is the goroutine
 // wrapper.
+// messageMentionsSelf reports whether a message in a conversation of the
+// given slk type counts toward that conversation's mention badge.
+//
+// Conversation type decides what counts. Slack reports every unread
+// message in mention_count for ims and mpims, and only @-mentions for
+// channels; matching that split locally keeps increments consistent with
+// the server value that will later overwrite them. That split is
+// unverified against a live capture — see UnreadInfo's doc in
+// internal/slack/client.go.
+//
+// "app" belongs in the DM branch because it is not one of Slack's
+// conversation kinds: buildChannelItem invents it for an is_im
+// conversation whose peer is a bot, purely so the sidebar can group Apps
+// separately. Slack reports human DMs and app DMs alike in the `ims`
+// block. See "Conversation types: Slack's three kinds vs slk's five" in
+// docs/superpowers/specs/2026-09-09-mention-badges-design.md.
+//
+// Deliberately says nothing about authorship or read state. Callers own
+// those: the live path inherits them from the has_unread gate, and the
+// mark-unread path applies its own.
+func messageMentionsSelf(chType, text, selfUserID string) bool {
+	switch chType {
+	case "dm", "group_dm", "app":
+		return true
+	default:
+		return mention.InText(text, selfUserID)
+	}
+}
+
+// countMentionsSince counts the cached messages at or after sinceTS that
+// mention the user, for the mark-unread path.
+//
+// Mark-unread moves the read boundary to a message the user picked off
+// their own screen, so the messages it makes unread are exactly the ones
+// just rendered — cached by construction. Counting them is arithmetic on
+// data slk holds, not a guess.
+//
+// Self-authored messages are excluded to match the live path, where
+// isSelfMessage keeps them out of the shared read-state gate.
+func countMentionsSince(db *cache.DB, chType, channelID, sinceTS, selfUserID string) (int, error) {
+	msgs, err := db.GetMessagesSince(channelID, sinceTS)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, m := range msgs {
+		if m.UserID != "" && m.UserID == selfUserID {
+			continue
+		}
+		if messageMentionsSelf(chType, m.Text, selfUserID) {
+			n++
+		}
+	}
+	return n, nil
+}
+
 func markChannelRead(ctx context.Context, client channelMarker, db *cache.DB, channelID, ts string) error {
 	if err := client.MarkChannel(ctx, channelID, ts); err != nil {
 		return err
@@ -4254,11 +4327,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 		// isSelfMessage's userID != "" guard lets it through, and
 		// mention.InText's empty-self guard makes the direct-mention
 		// probe a no-op for it while still honouring @here/@channel.
-		chTypeForMention := h.channelTypes[channelID]
-		isDMLike := chTypeForMention == "dm" ||
-			chTypeForMention == "group_dm" ||
-			chTypeForMention == "app"
-		if isDMLike || mention.InText(text, h.currentUserID) {
+		if messageMentionsSelf(h.channelTypes[channelID], text, h.currentUserID) {
 			if err := h.db.IncrementChannelMentionCount(channelID); err != nil {
 				log.Printf("Warning: failed to increment mention count for %s: %v", channelID, err)
 			}

@@ -86,6 +86,19 @@ makes muting safe to use on a busy channel. The existing invariant is narrowed
 to scope its suppression to the dot only; the comment at `styles.go:94-100` is
 amended in the same commit so code and comment do not diverge.
 
+A muted badge is *dimmed*, not suppressed. `MutedMentionBadgeStyle()` mixes the
+normal badge's background toward the sidebar background, keeping the hue while
+dropping the brightness — the same treatment `ChannelMuted` gives a row's
+foreground. Its foreground is `SidebarText` rather than `SelectionForeground`,
+because once the background has been mixed most of the way back toward the
+sidebar, the colour that contrasts with it is the one that contrasts with the
+sidebar. Both terms move together across themes, so this holds on light and
+dark alike.
+
+A collapsed section header dims its aggregate badge only when *every* mention
+it counted came from a muted channel. One unmuted channel holding a mention
+makes the header shout as loudly as that row would.
+
 ## Approach
 
 Server counts are authoritative; local detection fills the gap between
@@ -189,9 +202,34 @@ is what makes the boot and reconnect rows of the table below meaningful.
 | `client.counts` on reconnect → `BatchUpdateChannelReadState` | `MentionCount` per entry |
 | `*_marked` WS event → `OnChannelMarked` | `SetChannelMentionCount` from the event's `mention_count` |
 | `markChannelReadAsync` — user reads a channel | `SetChannelMentionCount(id, 0)` |
-| `MarkUnread` — the `u` key | `SetChannelMentionCount(id, 0)` |
+| `MarkUnread` — the `u` key | `SetChannelMentionCount` from a recount of cached messages at or after the new boundary |
 | Incoming `message`, mention detected | `IncrementChannelMentionCount` |
 | Incoming `message`, no mention | no call |
+
+
+### Mark-unread recounts rather than clearing
+
+Marking a message unread moves the read boundary to a message the user picked
+off their own screen. The first cut wrote `0` there and relied on Slack's
+echoed `*_marked` event to restore the real number, reasoning that slk had not
+evaluated what lay below the new boundary and should not invent a count.
+
+Testing showed the echo carries no usable `mention_count`, so marking a direct
+mention unread replaced its badge with a bare dot — destroying exactly the
+signal the user was trying to preserve. This is also partial evidence on the
+`*_marked` payload question in Risks below.
+
+The count is now computed from the cache: `GetMessagesSince` returns the
+main-feed messages at or after the boundary, and `countMentionsSince` counts
+those that mention the user, excluding self-authored ones to match the live
+path's `isSelfMessage`. That is arithmetic on data slk holds, not the guess the
+original reasoning was avoiding — the messages below a boundary the user just
+selected are cached by construction.
+
+It can undercount if the user marks something unread far enough back that the
+intervening messages were never fetched. `client.counts` corrects that on the
+next reconnect. A failure to count leaves the previous value rather than
+zeroing it, since a stale badge beats a vanished one.
 
 ### Reads
 

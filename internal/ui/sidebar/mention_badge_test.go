@@ -566,3 +566,78 @@ func TestMentionBadge_ThemedBadgePaintsOnlyItsOwnCells(t *testing.T) {
 		}
 	}
 }
+
+// Muting silences chatter, not someone naming you: a muted channel keeps
+// its badge. But it should not shout as loudly as an unmuted one, so the
+// pill's background is mixed back toward the sidebar background.
+//
+// Under test the palette is unthemed, so neither style emits ANSI and
+// both render the same plain string -- that is why this test themes the
+// package. It uses the same snapshot/restore helpers as
+// TestMentionBadge_ThemedBadgePaintsOnlyItsOwnCells.
+func TestMentionBadge_MutedChannelUsesDimmerPill(t *testing.T) {
+	saved := snapshotStyleGlobals()
+	defer saved.restore()
+	styles.Apply("dark", config.Theme{})
+
+	render := func(t *testing.T, muted bool) string {
+		t.Helper()
+		m := New([]ChannelItem{{ID: "C1", Name: "noisy", Type: "channel", IsMuted: muted}})
+		m.SetReadStateReader(func() map[string]cache.ReadState {
+			return map[string]cache.ReadState{"C1": {HasUnread: true, MentionCount: 4}}
+		})
+		m.ToggleCollapse("Channels")
+		return rowFor(t, m.View(10, 30), "noisy")
+	}
+
+	loud := render(t, false)
+	quiet := render(t, true)
+
+	// Both must still carry the count -- the muted row is dimmed, not
+	// suppressed. This is the half that would break if someone "fixed"
+	// muting by hiding the badge.
+	if !strings.Contains(ansiRe.ReplaceAllString(quiet, ""), "4") {
+		t.Errorf("muted row lost its badge:\n%q", quiet)
+	}
+	if !strings.Contains(ansiRe.ReplaceAllString(loud, ""), "4") {
+		t.Errorf("unmuted row lost its badge:\n%q", loud)
+	}
+	// And they must be visually distinguishable, which under a theme
+	// means different SGR bytes.
+	if loud == quiet {
+		t.Errorf("muted and unmuted badges render identically; the dimmer pill is not being applied:\n%q", loud)
+	}
+}
+
+// The dimmed background must stay legible: mixing toward the sidebar
+// background is only safe if the foreground contrasts with the result.
+func TestMutedMentionBadgeStyle_DiffersFromNormalOnBothThemes(t *testing.T) {
+	saved := snapshotStyleGlobals()
+	defer saved.restore()
+
+	for _, theme := range []string{"dark", "light"} {
+		t.Run(theme, func(t *testing.T) {
+			styles.Apply(theme, config.Theme{})
+			normal := styles.MentionBadgeStyle()
+			muted := styles.MutedMentionBadgeStyle()
+
+			if colorsEqualForTest(normal.GetBackground(), muted.GetBackground()) {
+				t.Errorf("%s: muted background equals normal; no dimming applied", theme)
+			}
+			// The dimmed pill must not collapse into the row it sits
+			// on, or it stops reading as a badge at all.
+			if colorsEqualForTest(muted.GetBackground(), styles.SidebarBackground) {
+				t.Errorf("%s: muted badge background equals the sidebar background; the pill is invisible", theme)
+			}
+			if colorsEqualForTest(muted.GetBackground(), muted.GetForeground()) {
+				t.Errorf("%s: muted badge fg and bg are identical", theme)
+			}
+		})
+	}
+}
+
+func colorsEqualForTest(a, b color.Color) bool {
+	r1, g1, b1, a1 := a.RGBA()
+	r2, g2, b2, a2 := b.RGBA()
+	return r1 == r2 && g1 == g2 && b1 == b2 && a1 == a2
+}
