@@ -60,9 +60,10 @@ type memberEventRecord struct {
 }
 
 type channelMarkRecord struct {
-	channelID   string
-	ts          string
-	unreadCount int
+	channelID    string
+	ts           string
+	unreadCount  int
+	mentionCount int
 }
 
 type threadMarkRecord struct {
@@ -109,8 +110,8 @@ func (m *mockEventHandler) OnDNDChange(enabled bool, endUnix int64) {
 	m.dndChanges = append(m.dndChanges, dndChangeRecord{enabled, endUnix})
 }
 
-func (m *mockEventHandler) OnChannelMarked(channelID, ts string, unreadCount int) {
-	m.channelMarks = append(m.channelMarks, channelMarkRecord{channelID, ts, unreadCount})
+func (m *mockEventHandler) OnChannelMarked(channelID, ts string, unreadCount, mentionCount int) {
+	m.channelMarks = append(m.channelMarks, channelMarkRecord{channelID, ts, unreadCount, mentionCount})
 }
 
 func (m *mockEventHandler) OnThreadMarked(channelID, threadTS, ts string, read bool) {
@@ -700,5 +701,41 @@ func TestDispatchMemberLeftChannel(t *testing.T) {
 	rec := handler.memberLeft[0]
 	if rec.channelID != "C1" || rec.userID != "U_GONE" {
 		t.Errorf("got %+v, want {C1 U_GONE}", rec)
+	}
+}
+
+// *_marked payloads carry mention_count alongside unread_count_display.
+// It is the live correction channel for the sidebar mention badge: reading
+// a channel elsewhere zeroes it, a remote mark-unread restores it.
+func TestDispatch_ChannelMarked_CarriesMentionCount(t *testing.T) {
+	handler := &mockEventHandler{}
+	data := []byte(`{"type":"channel_marked","channel":"C123","ts":"1700000000.000100","unread_count_display":9,"mention_count":4}`)
+	dispatchWebSocketEvent(data, handler)
+
+	if len(handler.channelMarks) != 1 {
+		t.Fatalf("expected 1 channelMark, got %d", len(handler.channelMarks))
+	}
+	got := handler.channelMarks[0]
+	if got.mentionCount != 4 {
+		t.Errorf("mentionCount = %d, want 4", got.mentionCount)
+	}
+	if got.unreadCount != 9 {
+		t.Errorf("unreadCount = %d, want 9", got.unreadCount)
+	}
+}
+
+// A payload without mention_count must decode to 0 rather than fail, so an
+// older or narrower Slack response degrades to "no badge" instead of
+// dropping the event.
+func TestDispatch_ChannelMarked_AbsentMentionCountIsZero(t *testing.T) {
+	handler := &mockEventHandler{}
+	data := []byte(`{"type":"channel_marked","channel":"C123","ts":"1.0","unread_count_display":2}`)
+	dispatchWebSocketEvent(data, handler)
+
+	if len(handler.channelMarks) != 1 {
+		t.Fatalf("expected 1 channelMark, got %d", len(handler.channelMarks))
+	}
+	if got := handler.channelMarks[0].mentionCount; got != 0 {
+		t.Errorf("mentionCount = %d, want 0", got)
 	}
 }

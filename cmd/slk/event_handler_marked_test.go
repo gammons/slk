@@ -24,7 +24,7 @@ func TestOnChannelMarked_WritesReadState(t *testing.T) {
 		program:  nil, // exercise the no-program path
 	}
 
-	h.OnChannelMarked("C1", "1.0050", 0)
+	h.OnChannelMarked("C1", "1.0050", 0, 0)
 
 	state, err := db.GetChannelReadState("C1")
 	if err != nil {
@@ -53,7 +53,7 @@ func TestOnChannelMarked_InactiveWorkspace_StillWritesDB(t *testing.T) {
 		program:     nil,
 		workspaceID: "T1",
 	}
-	h.OnChannelMarked("C1", "1.0050", 0)
+	h.OnChannelMarked("C1", "1.0050", 0, 0)
 	s, _ := db.GetChannelReadState("C1")
 	if s.HasUnread {
 		t.Errorf("HasUnread should be false even for inactive-workspace channel_marked")
@@ -86,7 +86,7 @@ func TestOnChannelMarked_RemoteMarkUnread_SetsHasUnread(t *testing.T) {
 	}
 	// User marks message at ts=1.0050 unread on phone. Slack rolls the
 	// last_read back to 1.0050 and reports unread_count=1.
-	h.OnChannelMarked("C1", "1.0050", 1)
+	h.OnChannelMarked("C1", "1.0050", 1, 0)
 
 	state, err := db.GetChannelReadState("C1")
 	if err != nil {
@@ -118,7 +118,7 @@ func TestOnChannelMarked_ZeroUnreadCount_ClearsHasUnread(t *testing.T) {
 		program:     nil,
 		workspaceID: "T1",
 	}
-	h.OnChannelMarked("C1", "1.0050", 0)
+	h.OnChannelMarked("C1", "1.0050", 0, 0)
 
 	state, _ := db.GetChannelReadState("C1")
 	if state.HasUnread {
@@ -136,4 +136,73 @@ func TestMarkChannelReadAsync_UpdatesReadState(t *testing.T) {
 	// The reconnect-backfill integration test in Task 20 exercises this
 	// path end-to-end.
 	t.Skip("markChannelReadAsync requires a real *slackclient.Client; covered by Task 20 integration test")
+}
+
+// The event's mention_count is authoritative: it replaces whatever the
+// local increment path accumulated. This is the mechanism that corrects
+// @usergroup undercounting without a poll.
+func TestOnChannelMarked_SetsMentionCountFromEvent(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"}); err != nil {
+		t.Fatalf("UpsertChannel: %v", err)
+	}
+	if err := db.UpdateChannelReadState("C1", "1.0000", true); err != nil {
+		t.Fatalf("seed read state: %v", err)
+	}
+	// Local detection had accumulated 5; the server says 2.
+	if err := db.SetChannelMentionCount("C1", 5); err != nil {
+		t.Fatalf("seed mention count: %v", err)
+	}
+
+	h := &rtmEventHandler{
+		db:       db,
+		wsCtx:    &WorkspaceContext{},
+		isActive: func() bool { return true },
+		program:  nil,
+	}
+
+	h.OnChannelMarked("C1", "1.0050", 9, 2)
+
+	state, err := db.GetChannelReadState("C1")
+	if err != nil {
+		t.Fatalf("GetChannelReadState: %v", err)
+	}
+	if state.MentionCount != 2 {
+		t.Errorf("MentionCount = %d, want 2 (server value replaces local)", state.MentionCount)
+	}
+}
+
+// Reading a channel in another client pushes unread_count_display=0 and
+// mention_count=0, which must clear the badge as well as the dot.
+func TestOnChannelMarked_ReadClearsMentionCount(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"}); err != nil {
+		t.Fatalf("UpsertChannel: %v", err)
+	}
+	if err := db.UpdateChannelReadState("C1", "1.0000", true); err != nil {
+		t.Fatalf("seed read state: %v", err)
+	}
+	if err := db.SetChannelMentionCount("C1", 4); err != nil {
+		t.Fatalf("seed mention count: %v", err)
+	}
+
+	h := &rtmEventHandler{
+		db:       db,
+		wsCtx:    &WorkspaceContext{},
+		isActive: func() bool { return true },
+		program:  nil,
+	}
+
+	h.OnChannelMarked("C1", "1.0050", 0, 0)
+
+	state, err := db.GetChannelReadState("C1")
+	if err != nil {
+		t.Fatalf("GetChannelReadState: %v", err)
+	}
+	if state.HasUnread {
+		t.Error("HasUnread = true, want false after read")
+	}
+	if state.MentionCount != 0 {
+		t.Errorf("MentionCount = %d, want 0 after read", state.MentionCount)
+	}
 }

@@ -31,9 +31,10 @@ type EventHandler interface {
 	// im_marked / group_marked / mpim_marked event (read state changed
 	// in another client, or via slk's own MarkChannel/MarkChannelUnread
 	// echoing back). ts is the new last_read watermark; unreadCount is
-	// the canonical workspace-side unread count for the channel (use to
-	// drive the sidebar badge).
-	OnChannelMarked(channelID, ts string, unreadCount int)
+	// the canonical workspace-side unread count for the channel;
+	// mentionCount is the canonical unread direct-mention count that
+	// drives the sidebar badge.
+	OnChannelMarked(channelID, ts string, unreadCount, mentionCount int)
 	// OnThreadMarked is delivered when Slack pushes a thread_marked
 	// event. read indicates whether the thread is now read (true) or
 	// unread (false). ts is the new boundary within the thread.
@@ -195,6 +196,10 @@ type wsChannelMarkedEvent struct {
 	Channel            string `json:"channel"`
 	TS                 string `json:"ts"`
 	UnreadCountDisplay int    `json:"unread_count_display"`
+	// MentionCount drives the sidebar mention badge. Absent on payloads
+	// that omit it, which decodes to 0 and clears the badge rather than
+	// dropping the event.
+	MentionCount int `json:"mention_count"`
 }
 
 // wsConversationOpenedEvent is the shared shape for mpim_open, im_created,
@@ -361,9 +366,9 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 		if err := json.Unmarshal(data, &evt); err != nil {
 			return
 		}
-		debuglog.WS("%s: channel=%s ts=%s unread_count=%d",
-			evt.Type, evt.Channel, evt.TS, evt.UnreadCountDisplay)
-		handler.OnChannelMarked(evt.Channel, evt.TS, evt.UnreadCountDisplay)
+		debuglog.WS("%s: channel=%s ts=%s unread_count=%d mention_count=%d",
+			evt.Type, evt.Channel, evt.TS, evt.UnreadCountDisplay, evt.MentionCount)
+		handler.OnChannelMarked(evt.Channel, evt.TS, evt.UnreadCountDisplay, evt.MentionCount)
 
 	case "mpim_open", "im_created", "im_open", "group_joined", "channel_joined":
 		var evt wsConversationOpenedEvent

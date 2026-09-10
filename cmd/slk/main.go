@@ -4414,7 +4414,7 @@ func (h *rtmEventHandler) OnDNDChange(enabled bool, endUnix int64) {
 	})
 }
 
-func (h *rtmEventHandler) OnChannelMarked(channelID, ts string, unreadCount int) {
+func (h *rtmEventHandler) OnChannelMarked(channelID, ts string, unreadCount, mentionCount int) {
 	// Slack's *_marked events fire in BOTH directions: when the user
 	// reads a channel (unreadCount=0) AND when the user marks one
 	// unread (unreadCount>0). The event payload's
@@ -4427,6 +4427,13 @@ func (h *rtmEventHandler) OnChannelMarked(channelID, ts string, unreadCount int)
 	// authoritative across workspace switches.
 	if err := h.db.UpdateChannelReadState(channelID, ts, hasUnread); err != nil {
 		log.Printf("Warning: failed to update read state on channel_marked %s/%s: %v", channelID, ts, err)
+	}
+	// The event's mention_count is authoritative and replaces whatever
+	// the local increment path accumulated, which is how @usergroup
+	// undercounting gets corrected. A read event carries 0 and clears
+	// the badge.
+	if err := h.db.SetChannelMentionCount(channelID, mentionCount); err != nil {
+		log.Printf("Warning: failed to set mention count on channel_marked %s: %v", channelID, err)
 	}
 	if h.program != nil {
 		// Always notify so the workspace rail can refresh, regardless
