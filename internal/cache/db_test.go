@@ -409,3 +409,75 @@ func TestMigrate_VersionColumnsAreIdempotent(t *testing.T) {
 		}
 	}
 }
+
+func TestMigration_AddsMentionCountColumn(t *testing.T) {
+	db, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer db.Close()
+
+	rows, err := db.conn.Query("PRAGMA table_info(channels)")
+	if err != nil {
+		t.Fatalf("PRAGMA: %v", err)
+	}
+	defer rows.Close()
+
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if name == "mention_count" {
+			found = true
+			if ctype != "INTEGER" {
+				t.Errorf("mention_count type = %q, want INTEGER", ctype)
+			}
+			if notnull != 1 {
+				t.Errorf("mention_count NOT NULL = %d, want 1", notnull)
+			}
+			if !dflt.Valid || dflt.String != "0" {
+				t.Errorf("mention_count default = %v, want 0", dflt)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("mention_count column not added")
+	}
+}
+
+// unread_count was declared in the original schema and never read or
+// written. It was removed when mention_count landed, because two
+// similarly-named count columns invite a future author to pick the wrong
+// one. Fresh databases must not have it. Pre-existing databases keep the
+// vestigial column harmlessly; no destructive migration is performed.
+func TestSchema_FreshDBHasNoUnreadCountColumn(t *testing.T) {
+	db, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer db.Close()
+
+	rows, err := db.conn.Query("PRAGMA table_info(channels)")
+	if err != nil {
+		t.Fatalf("PRAGMA: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if name == "unread_count" {
+			t.Error("unread_count column still present in fresh schema")
+		}
+	}
+}
