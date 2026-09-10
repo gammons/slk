@@ -19,9 +19,15 @@ type Config struct {
 	Notifications Notifications         `toml:"notifications"`
 	Cache         CacheConfig           `toml:"cache"`
 	Sidebar       Sidebar               `toml:"sidebar"`
+	Compose       Compose               `toml:"compose"`
 	Sections      map[string]SectionDef `toml:"sections"`
 	Theme         Theme                 `toml:"theme"`
 	Workspaces    map[string]Workspace  `toml:"workspaces"`
+}
+
+type Compose struct {
+	// Editor is the Ctrl+E fallback when $VISUAL/$EDITOR are unset.
+	Editor string `toml:"editor"`
 }
 
 // SectionDef defines a sidebar section with channel name patterns.

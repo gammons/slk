@@ -58,6 +58,9 @@ quiet_hours = "22:00-08:00"   # planned
 # matching Slack. (This is a behavior change: previously a mention or keyword
 # in a muted channel would still notify.)
 
+[compose]
+editor = "nvim"   # Ctrl+E editor, used when $VISUAL and $EDITOR are unset
+
 [cache]
 message_retention_days = 30
 max_db_size_mb = 500

@@ -21,6 +21,7 @@
 ## Compose
 
 - Multi-line input, `Shift+Enter` for newlines
+- External editor (`Ctrl+E`) — opens the draft in `$VISUAL`, then `$EDITOR`, then `[compose] editor` from config; the edited text replaces the draft when the editor exits
 - Inline `@mention` autocomplete (resolves to `<@UserID>` on send)
 - Special mentions: `@here`, `@channel`, `@everyone`
 - Bracketed paste — paste multi-line text from the system clipboard without it being interpreted as keystrokes

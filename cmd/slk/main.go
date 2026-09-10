@@ -1174,6 +1174,9 @@ func run() error {
 	app.SetSidebarStaleThreshold(time.Duration(cfg.Sidebar.HideInactiveAfterDays) * 24 * time.Hour)
 	app.SetMouseWheelLines(cfg.Appearance.MouseWheelLines)
 	app.SetColoredUsernames(cfg.Appearance.ColoredUsernames)
+	if editor, ok := ui.ResolveEditor(cfg.Compose.Editor); ok {
+		app.SetComposeEditor(editor)
+	}
 
 	// Wire theme switcher
 	app.SetThemeItems(styles.ThemeNames())

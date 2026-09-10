@@ -99,6 +99,10 @@ type Model struct {
 	// opens, so a high-visibility broadcast never silently repeats.
 	broadcast bool
 
+	// editingExternally is true while Ctrl+E's editor is open. Update()
+	// refuses all key input while set.
+	editingExternally bool
+
 	// version increments on every Update / state mutation. Used by App's
 	// panel-cache layer so the wrapped compose panel only re-renders when
 	// the compose has actually changed.
@@ -284,6 +288,19 @@ func (m *Model) SetUploading(on bool) {
 	m.dirty()
 }
 
+// SetEditingExternally sets whether Ctrl+E's editor is open, which
+// causes Update() to refuse key input.
+func (m *Model) SetEditingExternally(on bool) {
+	if m.editingExternally == on {
+		return
+	}
+	m.editingExternally = on
+	m.dirty()
+}
+
+// EditingExternally reports whether Ctrl+E's editor is open.
+func (m *Model) EditingExternally() bool { return m.editingExternally }
+
 // Uploading reports whether an upload is currently in flight.
 func (m *Model) Uploading() bool { return m.uploading }
 
@@ -429,6 +446,10 @@ func (m *Model) SetWidth(width int) {
 
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	keyMsg, isKey := msg.(tea.KeyMsg)
+
+	if isKey && m.editingExternally {
+		return m, nil
+	}
 
 	// Backspace at column 0 of an empty textarea removes the last
 	// pending attachment instead of forwarding to the textarea.
