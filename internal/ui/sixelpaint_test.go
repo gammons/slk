@@ -368,7 +368,10 @@ func TestAbsoluteSixelPlacement_RejectsZeroFootprint(t *testing.T) {
 // protocol sixel plus a fresh frame store, at the zero-size state so the
 // early-fallback path is reachable.
 func sixelTestApp() *App {
-	a := NewApp()
+	// buildTestApp rather than newTestApp: this builder takes no
+	// *testing.T and adding one would edit every call site. withSize(0, 0)
+	// preserves NewApp's unsized state, which is the point of the fixture.
+	a := buildTestApp(withSize(0, 0))
 	a.imgProtocol = imgpkg.ProtoSixel
 	a.sixelFrames = imgpkg.NewSixelFrameStore()
 	return a

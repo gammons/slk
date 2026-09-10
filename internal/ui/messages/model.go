@@ -3482,6 +3482,34 @@ func DateFromTS(ts string) string {
 	return time.Unix(sec, 0).Format("2006-01-02")
 }
 
+// nowFunc is the clock FormatDateSeparator reads. Production leaves it
+// as time.Now; tests override it via SetNowFunc so that day-divider
+// labels ("Today", "Yesterday", weekday names) are deterministic.
+//
+// Mirrors the injectable clock sidebar.Model already carries
+// (internal/ui/sidebar/model.go:500), but is package-level rather than a
+// struct field because FormatDateSeparator is a free function shared by
+// the channel and thread panes.
+//
+// Not guarded by a mutex. The invariant that makes that safe is not
+// "this package's tests are serial" — SetNowFunc is exported and is
+// called from three test binaries (this package, internal/ui and
+// internal/ui/thread), which cannot see each other's writes. It is
+// this: no production code path writes it, so every write comes from
+// test setup on the test goroutine before any render, and no test in
+// the repo calls t.Parallel. A future parallel test, or any production
+// caller, would need this to become an atomic.Value or a struct field.
+var nowFunc = time.Now
+
+// SetNowFunc injects a clock for tests. Pass nil to revert to time.Now.
+func SetNowFunc(fn func() time.Time) {
+	if fn == nil {
+		nowFunc = time.Now
+		return
+	}
+	nowFunc = fn
+}
+
 // FormatDateSeparator turns a "2006-01-02" date string into the
 // human-readable label used in day-divider rows ("Today", "Yesterday",
 // a weekday name within the last week, or a fully-qualified date).
@@ -3494,7 +3522,7 @@ func FormatDateSeparator(dateStr string) string {
 	}
 	// Compare calendar days, not elapsed time: both endpoints are anchored
 	// to UTC midnight so the delta is always a whole number of days.
-	now := time.Now()
+	now := nowFunc()
 	// time.Parse already yields UTC midnight; restating it is defensive, not
 	// load-bearing.
 	dDay := time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, time.UTC)

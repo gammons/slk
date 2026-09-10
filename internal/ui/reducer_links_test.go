@@ -13,8 +13,9 @@ import (
 
 func linkTestApp(t *testing.T) (*App, *string) {
 	t.Helper()
-	app := NewApp()
-	app.activeTeamID = "T1"
+	// withSize(0, 0) preserves NewApp's unsized state: this fixture never
+	// renders, and the original builder set no dimensions.
+	app := newTestApp(t, withSize(0, 0), withActiveTeam("T1"))
 	app.workspaceDomains["T1"] = "myteam"
 	var opened string
 	app.browserOpener = func(url string) tea.Cmd {
