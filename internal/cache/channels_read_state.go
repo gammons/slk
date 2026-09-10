@@ -13,9 +13,11 @@ type ReadState struct {
 	HasUnread  bool
 	// MentionCount is the number of unread direct mentions: an explicit
 	// @user or an @here/@channel/@everyone broadcast. For DMs and group
-	// DMs, Slack's client.counts reports every unread message here, which
-	// is what makes the sidebar badge match the official client without a
-	// client-side branch. Rendering gates it on HasUnread.
+	// DMs (Slack's ims and mpims), client.counts is believed to report
+	// every unread message here, which is what makes the sidebar badge
+	// match the official client without a client-side branch — that
+	// reading is unverified against a live capture; see UnreadInfo's doc
+	// in internal/slack/client.go. Rendering gates it on HasUnread.
 	MentionCount int
 }
 

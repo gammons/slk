@@ -34,6 +34,13 @@ type EventHandler interface {
 	// the canonical workspace-side unread count for the channel;
 	// mentionCount is the canonical unread direct-mention count that
 	// drives the sidebar badge.
+	//
+	// The mention_count field is unverified against a live capture:
+	// Slack has never been observed sending it on these events, and the
+	// repo's only fixture for them carries unread_count_display alone.
+	// An absent field decodes to 0, which zeroes the badge — an
+	// undercount that self-corrects at the next client.counts refresh
+	// (boot or reconnect), never an overcount.
 	OnChannelMarked(channelID, ts string, unreadCount, mentionCount int)
 	// OnThreadMarked is delivered when Slack pushes a thread_marked
 	// event. read indicates whether the thread is now read (true) or

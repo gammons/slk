@@ -932,10 +932,19 @@ func (c *Client) UploadFile(
 type UnreadInfo struct {
 	ChannelID string
 	// MentionCount is Slack's per-conversation mention count. For
-	// channels and mpims it counts @-mentions; for ims Slack reports
+	// channels it counts @-mentions; for ims and mpims Slack reports
 	// every unread message, which is exactly the DM badge semantics the
 	// official client shows. Zero is meaningful: an unread channel with
 	// no mentions reports 0 and must render a dot, not a "1".
+	//
+	// That ims/mpims reading is the branch's load-bearing hypothesis and
+	// it is UNVERIFIED: no capture in this repo proves what those two
+	// blocks carry. If it is wrong, an im or mpim with unread messages
+	// but no @-mention reports 0 here, which undercounts the badge and
+	// self-corrects at the next refresh; it cannot overcount. Every
+	// restatement of these semantics — comments, doc comments, tests —
+	// must carry the same caveat. See §Semantics in
+	// docs/superpowers/specs/2026-09-09-mention-badges-design.md.
 	MentionCount int
 	HasUnread    bool
 	LastRead     string // Slack message timestamp

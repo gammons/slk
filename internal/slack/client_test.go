@@ -3175,9 +3175,12 @@ func TestPostForm_BodyFieldOrderIsAlphabeticalThenEnvelope(t *testing.T) {
 }
 
 // client.counts is the only source of authoritative mention counts.
-// mention_count means "@-mentions" for channels and mpims, and "every
-// unread message" for ims — Slack's server encodes the DM special case
-// for us, so slk consumes one field uniformly.
+// mention_count is believed to mean "@-mentions" for channels and "every
+// unread message" for ims and mpims — Slack's server encoding the DM
+// special case for us is what lets slk consume one field uniformly. That
+// reading is unverified against a live capture (see UnreadInfo's doc);
+// this test pins only the parsing, which is uniform across all three
+// blocks and does not depend on which reading is correct.
 func TestGetUnreadCounts_ParsesMentionCounts(t *testing.T) {
 	const body = `{
 	  "ok": true,

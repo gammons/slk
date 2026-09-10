@@ -133,9 +133,11 @@ func TestOnMessage_MentionIncrementsCount(t *testing.T) {
 	}
 }
 
-// Two mentions arriving before the channel is read must both count. The
-// increment happens in SQL, so this also exercises that path rather than a
-// read-modify-write.
+// Two mentions arriving before the channel is read must both count: the
+// second increment adds to the first instead of overwriting it. This pins
+// additivity only. It says nothing about atomicity — two sequential calls
+// yield 2 under a read-modify-write implementation just as readily as
+// under the SQL increment the cache actually uses.
 func TestOnMessage_MentionsAccumulate(t *testing.T) {
 	h, db := onMessageMentionFixture(t, "channel", "")
 	h.OnMessage("C1", "UOTHER", "1.0001", "<@USELF> first", "", "", false, nil, slack.Blocks{}, nil, "", "")
