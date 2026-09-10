@@ -542,15 +542,22 @@ func (m *Model) autoGrow() {
 	}
 }
 
+// isCtrl reports whether mod represents Ctrl held, ignoring lock-state
+// bits (NumLock/CapsLock/ScrollLock) that ride along on terminals
+// implementing the Kitty Keyboard Protocol.
+func isCtrl(mod tea.KeyMod) bool {
+	return mod&^(tea.ModCapsLock|tea.ModNumLock|tea.ModScrollLock) == tea.ModCtrl
+}
+
 // handleMentionKey processes key events when the mention picker is active.
 func (m Model) handleMentionKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	k := msg.Key()
 	switch {
-	case k.Code == tea.KeyUp || (k.Code == 'p' && k.Mod == tea.ModCtrl):
+	case k.Code == tea.KeyUp || (k.Code == 'p' && isCtrl(k.Mod)):
 		m.mentionPicker.MoveUp()
 		return m, nil
 
-	case k.Code == tea.KeyDown || (k.Code == 'n' && k.Mod == tea.ModCtrl):
+	case k.Code == tea.KeyDown || (k.Code == 'n' && isCtrl(k.Mod)):
 		m.mentionPicker.MoveDown()
 		return m, nil
 
@@ -639,11 +646,11 @@ func (m *Model) insertMention(result *mentionpicker.MentionResult) {
 func (m Model) handleChannelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	k := msg.Key()
 	switch {
-	case k.Code == tea.KeyUp || (k.Code == 'p' && k.Mod == tea.ModCtrl):
+	case k.Code == tea.KeyUp || (k.Code == 'p' && isCtrl(k.Mod)):
 		m.channelPicker.MoveUp()
 		return m, nil
 
-	case k.Code == tea.KeyDown || (k.Code == 'n' && k.Mod == tea.ModCtrl):
+	case k.Code == tea.KeyDown || (k.Code == 'n' && isCtrl(k.Mod)):
 		m.channelPicker.MoveDown()
 		return m, nil
 
@@ -1121,11 +1128,11 @@ func (m *Model) maybeOpenEmojiPicker() {
 func (m Model) handleEmojiKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	k := msg.Key()
 	switch {
-	case k.Code == tea.KeyUp || (k.Code == 'p' && k.Mod == tea.ModCtrl):
+	case k.Code == tea.KeyUp || (k.Code == 'p' && isCtrl(k.Mod)):
 		m.emojiPicker.MoveUp()
 		return m, nil
 
-	case k.Code == tea.KeyDown || (k.Code == 'n' && k.Mod == tea.ModCtrl):
+	case k.Code == tea.KeyDown || (k.Code == 'n' && isCtrl(k.Mod)):
 		m.emojiPicker.MoveDown()
 		return m, nil
 
