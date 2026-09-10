@@ -17,9 +17,18 @@ import "strings"
 // required, so a bare user ID in prose is not a mention, and <@U123ABC> does
 // not match a selfUserID of "U123".
 //
+// Pipe-labeled variants (<@Uxxxx|name>, <!here|@here>) are NOT matched, even
+// though this repo demonstrably encounters them: internal/ui/messages/flatten.go
+// carries dedicated regexps for both labeled forms, and its tests exercise
+// fixtures in exactly that shape. The gap is inherited unchanged from
+// internal/notify/notifier.go, where this predicate originated; it is recorded
+// here rather than fixed so the extraction stays behavior-preserving. Like the
+// usergroup gap below, it can only undercount, never overcount, and is
+// corrected by the next client.counts refresh.
+//
 // Usergroup mentions (<!subteam^Sxxxx>) are deliberately NOT detected.
 // Resolving one requires knowing the user's own usergroup memberships, which
-// slk does not have: boot.Subteams.Self (internal/slack/boot/boot.go:203) is
+// slk does not have: boot.Subteams.Self (internal/slack/boot/boot.go) is
 // untyped because no capture with a non-empty list has ever been observed.
 // The consequence is a possible undercount, never an overcount, and it is
 // corrected by the next client.counts refresh. See

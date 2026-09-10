@@ -20,6 +20,13 @@ func TestInText(t *testing.T) {
 		{"here broadcast", "<!here> deploying now", self, true},
 		{"channel broadcast", "<!channel> all hands", self, true},
 		{"everyone broadcast", "<!everyone> notice", self, true},
+		// Pipe-labeled forms are a KNOWN GAP, not desired behavior:
+		// these pin what InText does today, inherited verbatim from
+		// internal/notify. internal/ui/messages/flatten.go proves the
+		// repo sees these forms. Changing this is a behavior change and
+		// belongs in its own commit.
+		{"labeled direct mention is not detected", "hi <@U123|alice> there", self, false},
+		{"labeled here broadcast is not detected", "<!here|@here> deploy", self, false},
 		// Usergroup mentions are deliberately out of scope: resolving
 		// them needs the user's own group memberships, which slk lacks.
 		{"usergroup labeled is not detected", "<!subteam^S1|@eng> ship it", self, false},
