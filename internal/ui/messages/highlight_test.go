@@ -36,6 +36,13 @@ func TestHighlightSearchTerms_CaseAndAccentInsensitive(t *testing.T) {
 	}
 }
 
+func TestHighlightSearchTerms_DecomposedAccentPreservesRuneMapping(t *testing.T) {
+	got := HighlightSearchTerms("Cafe\u0301 open", []string{"cafe"}, "[", "]")
+	if got != "[Cafe]\u0301 open" {
+		t.Errorf("fold: %q", got)
+	}
+}
+
 func TestHighlightSearchTerms_SkipsANSISequences(t *testing.T) {
 	in := "\x1b[31mdeploy\x1b[0m fine"
 	got := HighlightSearchTerms(in, []string{"deploy"}, "[", "]")
