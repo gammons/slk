@@ -97,13 +97,16 @@ func TestPreload_DedupesInflight(t *testing.T) {
 	// Build a server we can hold open so we can observe inflight state.
 	var hits atomic.Int32
 	release := make(chan struct{})
+	served := make(chan struct{})
 	src := image.NewRGBA(image.Rect(0, 0, 16, 16))
 	var buf bytes.Buffer
 	imgpng.Encode(&buf, src)
 	pngBytes := buf.Bytes()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits.Add(1)
+		if hits.Add(1) == 1 {
+			close(served)
+		}
 		<-release
 		w.Header().Set("Content-Type", "image/png")
 		w.Write(pngBytes)
@@ -115,10 +118,16 @@ func TestPreload_DedupesInflight(t *testing.T) {
 		t.Fatal(err)
 	}
 	fetcher := imgpkg.NewFetcher(imgCache, http.DefaultClient)
-	c := NewCache(fetcher, nil, false)
 
-	var ready atomic.Int32
-	c.SetOnReady(func(string) { ready.Add(1) })
+	// One worker, deep queue. The single worker is what makes the
+	// sentinel drain below exact: preloadCh is FIFO, so a job enqueued
+	// after every other job is also *completed* after every other job.
+	// With the production 8-worker pool that ordering does not hold and
+	// the counts below would be samples rather than totals.
+	c := newCacheForTest(fetcher, nil, false, 1, 256)
+
+	ready := make(chan string, 64) // > the 51 jobs a dedup failure can enqueue
+	c.SetOnReady(func(userID string) { ready <- userID })
 
 	// Fire 50 concurrent Preloads for the same user. With dedup, only
 	// one should reach the server.
@@ -132,31 +141,51 @@ func TestPreload_DedupesInflight(t *testing.T) {
 		}()
 	}
 
-	// Give goroutines a moment to enqueue and hit the server's hold.
-	time.Sleep(50 * time.Millisecond)
-	if h := hits.Load(); h != 1 {
-		close(release)
-		wg.Wait()
-		t.Fatalf("server saw %d fetches for one userID; want 1 (dedup failed)", h)
-	}
-
-	close(release)
+	// Preload never blocks — it makes its dedup decision under
+	// sync.Map.LoadOrStore, enqueues at most one job and returns — so
+	// this Wait does not deadlock against the server's hold. Once it
+	// returns, every one of the 50 dedup decisions has been made and the
+	// set of enqueued jobs is final.
 	wg.Wait()
 
-	// Allow async PreloadSync goroutines spawned by Preload to finish.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if c.Get("U_DUP") != "" {
+	// No timeout by design: `go test` already imposes one (default 10m),
+	// and a wall-clock budget inside the test is exactly what made this
+	// load-sensitive. A hang here produces a goroutine dump naming the
+	// stuck test, which beats "server saw 0 fetches; want 1".
+	<-served // the job that won the dedup is at the server, still held
+
+	// Enqueue a sentinel behind everything already queued. Because the
+	// pool has one worker draining a FIFO channel, the sentinel's
+	// onReady cannot fire until every job enqueued before it has run to
+	// completion — so once we see it, hits and the per-user completion
+	// counts are totals, not samples. This is what the old
+	// `sleep(50ms); read hits` could not guarantee: it read the counter
+	// while the duplicate jobs were still arriving.
+	c.Preload("U_SENTINEL", srv.URL)
+	close(release)
+
+	dupCompletions := 0
+	for {
+		id := <-ready // onReady fires after preloadInner stored the render
+		if id == "U_SENTINEL" {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		if id == "U_DUP" {
+			dupCompletions++
+		}
 	}
 
-	if got := c.Get("U_DUP"); got == "" {
-		t.Fatal("avatar never rendered after dedup'd Preloads completed")
+	// The drain above also serves as cleanup: every job has completed, so
+	// no worker is still writing into the fetcher's t.TempDir when this
+	// test body returns and races TempDir's RemoveAll.
+	if dupCompletions != 1 {
+		t.Errorf("U_DUP was fetched and rendered %d times; want 1 (dedup failed)", dupCompletions)
 	}
-	if r := ready.Load(); r != 1 {
-		t.Fatalf("onReady fired %d times for one userID; want 1", r)
+	if h := hits.Load(); h != 2 {
+		t.Errorf("server saw %d requests (U_DUP + sentinel); want 2 (dedup failed)", h)
+	}
+	if got := c.Get("U_DUP"); got == "" {
+		t.Error("avatar never rendered after dedup'd Preloads completed")
 	}
 }
 
@@ -173,12 +202,18 @@ func TestPreload_DedupesInflight(t *testing.T) {
 // observes inflight clearance even though it never reached a worker.
 func TestPreload_QueueBackpressureReleasesInflightSlot(t *testing.T) {
 	release := make(chan struct{})
+	// Buffered past the number of requests this test can possibly
+	// generate (4 expected — 3 jobs plus the sentinel below — and 5 if
+	// the drop under test regresses) so the handler never blocks on the
+	// send.
+	serving := make(chan struct{}, 5)
 	src := image.NewRGBA(image.Rect(0, 0, 16, 16))
 	var buf bytes.Buffer
 	imgpng.Encode(&buf, src)
 	pngBytes := buf.Bytes()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serving <- struct{}{}
 		<-release
 		w.Header().Set("Content-Type", "image/png")
 		w.Write(pngBytes)
@@ -194,10 +229,29 @@ func TestPreload_QueueBackpressureReleasesInflightSlot(t *testing.T) {
 	// 1 worker, queue depth 2: easy to saturate.
 	c := newCacheForTest(fetcher, nil, false, 1, 2)
 
+	// Buffered past every onReady this test can produce (4 expected, 5
+	// if the drop under test regresses) so no worker ever parks on the
+	// send while the test body is between receives.
+	ready := make(chan string, 8)
+	c.SetOnReady(func(userID string) { ready <- userID })
+
 	// Fill the worker (it'll block on the server) + the 2-slot queue.
 	// That's 3 jobs. A 4th must be dropped.
 	c.Preload("U_W1", srv.URL) // grabbed by worker
-	time.Sleep(20 * time.Millisecond)
+
+	// The handler is only entered after the lone worker dequeued U_W1
+	// and drove preloadInner as far as the network, so this receive
+	// establishes that the 2-slot queue is empty again before we fill
+	// it. Guessing that 20ms was enough for the dequeue is what made
+	// this test load-sensitive.
+	//
+	// No timeout by design: `go test` already imposes one (default 10m),
+	// and a wall-clock budget inside the test is exactly what made this
+	// load-sensitive. A hang here produces a goroutine dump naming the
+	// stuck test, which beats "dropped Preload left userID stuck in
+	// inflight set" pointing at the wrong cause.
+	<-serving
+
 	c.Preload("U_Q1", srv.URL) // queued
 	c.Preload("U_Q2", srv.URL) // queued
 	c.Preload("U_DROP", srv.URL)
@@ -217,13 +271,47 @@ func TestPreload_QueueBackpressureReleasesInflightSlot(t *testing.T) {
 
 	close(release)
 
-	// Drain.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if c.Get("U_Q2") != "" {
+	// Drain. Exactly three jobs reach a worker; U_DROP was rejected by
+	// backpressure and must never complete. onReady fires after
+	// preloadInner stores the render, which is after the fetcher's last
+	// write into t.TempDir, so this also keeps the workers from
+	// outliving the test body and racing TempDir's RemoveAll.
+	completed := map[string]bool{}
+	for i := 0; i < 3; i++ {
+		completed[<-ready] = true
+	}
+
+	// The three receives above are not enough to say anything about
+	// U_DROP: were the queue-full drop to regress, U_DROP would be
+	// enqueued *fourth*, so its onReady would simply not be among the
+	// first three values — the check would be statically false in both
+	// builds. A sentinel makes the observation exact, the same way it
+	// does in TestPreload_DedupesInflight.
+	//
+	// It is enqueued here rather than before the drain because the
+	// 2-slot queue is deliberately full until then and Preload's
+	// enqueue is a non-blocking send: an early sentinel would itself be
+	// dropped and the drain below would hang. Three onReady fires mean
+	// three jobs have been dequeued, so at most one of the four can
+	// still be in the channel and a slot is guaranteed free. One worker
+	// draining a FIFO channel then means the sentinel's onReady cannot
+	// fire until everything enqueued before it has completed.
+	c.Preload("U_SENTINEL", srv.URL)
+	for {
+		id := <-ready
+		if id == "U_SENTINEL" {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		completed[id] = true
+	}
+
+	for _, id := range []string{"U_W1", "U_Q1", "U_Q2"} {
+		if !completed[id] {
+			t.Errorf("onReady never fired for %s; the queued jobs did not all complete", id)
+		}
+	}
+	if completed["U_DROP"] {
+		t.Error("U_DROP was rejected by backpressure but still ran a fetch")
 	}
 }
 
@@ -234,6 +322,7 @@ func TestPreload_BoundedConcurrencyN1(t *testing.T) {
 	var inflight atomic.Int32
 	var peak atomic.Int32
 	release := make(chan struct{})
+	serving := make(chan struct{}, 4)
 
 	src := image.NewRGBA(image.Rect(0, 0, 16, 16))
 	var buf bytes.Buffer
@@ -248,6 +337,7 @@ func TestPreload_BoundedConcurrencyN1(t *testing.T) {
 				break
 			}
 		}
+		serving <- struct{}{} // request landed, peak already updated
 		<-release
 		inflight.Add(-1)
 		w.Header().Set("Content-Type", "image/png")
@@ -263,30 +353,67 @@ func TestPreload_BoundedConcurrencyN1(t *testing.T) {
 
 	c := newCacheForTest(fetcher, nil, false, 1, 8)
 
+	ready := make(chan struct{}, 4)
+	c.SetOnReady(func(string) { ready <- struct{}{} })
+
 	// Fire 4 Preloads for distinct users. Only one should hit the
 	// server at a time given workers=1.
 	for i := 0; i < 4; i++ {
 		c.Preload(fmt.Sprintf("U%d", i), srv.URL)
 	}
 
-	// Allow at least one to land at the server.
-	time.Sleep(50 * time.Millisecond)
-	if got := peak.Load(); got != 1 {
-		close(release)
-		t.Fatalf("expected peak inflight=1 with 1 worker; got %d", got)
+	// No timeout by design: `go test` already imposes one (default 10m),
+	// and a wall-clock budget inside the test is exactly what made this
+	// load-sensitive. A hang here produces a goroutine dump naming the
+	// stuck test, which beats "expected peak inflight=1; got 0" — which
+	// is precisely how the old fixed 50ms sleep failed when it was not
+	// long enough for even the first request to land.
+	<-serving // request 0 reached the handler and is held at `release`
+
+	// This window is load-bearing; do not delete it. It is NOT here
+	// because "no signal can prove a second request is not about to
+	// arrive" (true, but that only argues against *asserting* here —
+	// the assertion is the exact post-drain read at the bottom). It is
+	// here because the receive above proves only that ONE request
+	// landed, and the very next statement releases it. Under a widened
+	// pool the other three workers need a moment to reach the network;
+	// if we release request 0 immediately, its handler returns and
+	// inflight falls back to 0 before they arrive, so peak reads 1 and
+	// the mutation escapes. Measured against a workers→workers*4
+	// mutation, same machine, same harness: with this window 200/200
+	// detected, without it 166/200.
+	//
+	// It is not a wall-clock budget — the bias is one-sided. If the
+	// pool is correctly bounded, peak stays 1 however long we wait, so
+	// the window cannot false-fail; it can only false-pass. The loop
+	// exits the instant a violation appears, so only the passing case
+	// pays the full 50ms.
+	overlapWindow := time.Now().Add(50 * time.Millisecond)
+	for time.Now().Before(overlapWindow) && peak.Load() == 1 {
+		time.Sleep(time.Millisecond)
 	}
 
-	// Drain.
-	for i := 0; i < 4; i++ {
-		release <- struct{}{}
+	// Let the four requests through one at a time. With workers=1 the
+	// (i+1)-th request cannot even start until the i-th handler has
+	// returned, so each receive is guaranteed to have a sender.
+	release <- struct{}{} // release request 0, observed above
+	for i := 1; i < 4; i++ {
+		<-serving             // request i reached the handler
+		release <- struct{}{} // let it finish so the worker moves on
 	}
 	close(release)
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if c.Get("U3") != "" {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	// Drain: all four renders stored, so no worker is still writing into
+	// the fetcher's t.TempDir when this test body returns.
+	for i := 0; i < 4; i++ {
+		<-ready
+	}
+
+	// peak is a high-water mark and every job has now completed, so this
+	// read is exact rather than a sample: there is no later moment at
+	// which it could still rise. The old version sampled it after a
+	// fixed 50ms, which read 0 whenever that was not long enough.
+	if got := peak.Load(); got != 1 {
+		t.Fatalf("peak inflight=%d with 1 worker, want 1", got)
 	}
 }

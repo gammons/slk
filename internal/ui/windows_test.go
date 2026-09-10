@@ -9,10 +9,7 @@ import (
 
 func newWideTestApp(t *testing.T) *App {
 	t.Helper()
-	a := NewApp()
-	a.width = 200
-	a.height = 50
-	return a
+	return newTestApp(t, withSize(200, 50))
 }
 
 func TestSplitWindow_CreatesAndFocusesNewWindow(t *testing.T) {

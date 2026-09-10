@@ -12,16 +12,15 @@ import (
 
 func newTestAppWithMessages(t *testing.T) *App {
 	t.Helper()
-	a := NewApp()
-	a.width = 120
-	a.height = 30
-	a.messagepane.SetMessages([]messages.MessageItem{
-		{TS: "1.0", UserName: "alice", UserID: "U1", Text: "hello world", Timestamp: "1:00 PM"},
-		{TS: "2.0", UserName: "bob", UserID: "U2", Text: "second message", Timestamp: "1:01 PM"},
-	})
-	// Force a render so layout offsets and caches populate.
-	_ = a.View()
-	return a
+	return newTestApp(t,
+		withSize(120, 30),
+		withMessages(
+			messages.MessageItem{TS: "1.0", UserName: "alice", UserID: "U1", Text: "hello world", Timestamp: "1:00 PM"},
+			messages.MessageItem{TS: "2.0", UserName: "bob", UserID: "U2", Text: "second message", Timestamp: "1:01 PM"},
+		),
+		// Force a render so layout offsets and caches populate.
+		withRender(),
+	)
 }
 
 // drainBatch fully expands a tea.Cmd (including nested tea.BatchMsg) and

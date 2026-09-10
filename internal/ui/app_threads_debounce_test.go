@@ -15,13 +15,12 @@ import (
 // openSelectedThreadCmd / Update directly.
 func newTestAppWithThreadsView(t *testing.T, summaries []cache.ThreadSummary) *App {
 	t.Helper()
-	a := NewApp()
-	a.width = 120
-	a.height = 30
-	a.threadsView.SetSummaries(summaries)
-	a.view = ViewThreads
-	_ = a.View() // populate layout offsets and caches
-	return a
+	return newTestApp(t,
+		withSize(120, 30),
+		withThreadsView(summaries),
+		withView(ViewThreads),
+		withRender(), // populate layout offsets and caches
+	)
 }
 
 // TestThreadsViewDebouncesNetworkFetchOnRapidJK guards Task 3:

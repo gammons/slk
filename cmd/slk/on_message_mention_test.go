@@ -111,9 +111,16 @@ func TestOnMessage_MentionIncrementsCount(t *testing.T) {
 			text: "<@USELF> broadcasting", threadTS: "1.0000", subtype: "thread_broadcast", want: 1,
 		},
 		{
-			name:   "mention in the active channel does not count",
+			// The active channel no longer suppresses the write. Focus
+			// reporting replaced that gate in #159: "this channel is
+			// selected" never meant "the user can see it" — slk may be
+			// in a background terminal or an unfocused tmux pane. The
+			// badge follows has_unread here rather than re-deriving a
+			// visibility rule of its own, and markChannelRead clears
+			// both together once slk actually marks the channel read.
+			name:   "mention in the active channel still counts",
 			chType: "channel", author: "UOTHER",
-			text: "<@USELF> hi", active: "C1", want: 0,
+			text: "<@USELF> hi", active: "C1", want: 1,
 		},
 		{
 			name:   "usergroup mention is not detected",

@@ -1,6 +1,6 @@
 # slk Architecture Refactor — Tracking Document
 
-> **Status:** Phase 0 designed, not started. Phases 1–5 not designed.
+> **Status:** Phase 0 **complete**. Phases 1–5 not designed.
 > **Baseline commit:** `4184e60` (main, 2026-09-06)
 > **Toolchain:** Go 1.26.5, bubbletea v2, lipgloss v2
 
@@ -33,7 +33,7 @@ Update the status table at the bottom as phases complete.
 | Tests | 67,276 LOC across 268 files, 2,551 test funcs |
 | Statement coverage, repo-wide | 71.1% |
 | Statement coverage, `cmd/slk` | **36.9%** |
-| Statement coverage, `internal/ui` | 67.8% |
+| Statement coverage, `internal/ui` | 67.8% (**79.8%** after Phase 0) |
 | `go test ./... -race` | green, 44s |
 | Packages with no test file | 1 (`internal/ids`, 64 lines of type declarations) |
 | Third-party test libraries | none — pure stdlib `testing` |
@@ -324,8 +324,96 @@ above 85% statements, except `mode_normal` and `mode_insert` above 80%.
 **Delivery:** 4 PRs — 0b (harness) first, then 0a (goldens), 0c (flakes) and 0d
 (modes) in any order.
 
-**Note:** delivers no user-visible value. Its entire return is that Phases 1–4
-become verifiable.
+**Note:** delivers no user-visible value. Its return is that Phases **3–5**
+become verifiable — not Phases 1–4, as this note originally claimed.
+
+- **Phase 1** needs nothing from it: it is pure cut-paste with no closure
+  captures, and it moves no state.
+- **Phase 2 is the gap, and it is a real one.** It deliberately changes
+  concurrency behaviour in `cmd/slk`, which sits at 36.9% statement coverage,
+  and Phase 0 raised none of it: `cmd/slk` coverage is explicitly *not* a Phase
+  0 criterion (see the spec's exit criteria — "raising it is Phase 1 and 2's
+  job"). Two `cmd/slk` test files were converted from timing waits to signals
+  (`user_resolver_test.go`, `thread_subscriptions_test.go`), which removes
+  flakes but adds no coverage. Nothing covers `run` or `connectWorkspace`.
+  Phase 2 must budget for building its own safety net as step 0.
+- **Phases 3, 4 and 5** are what Phase 0 actually protects: the 8 goldens, the
+  16 mode-handler tables and the lockstep divergence list all bear directly on
+  them.
+
+#### Achieved (branch `refactor/phase0-safety-net`, 17 tasks)
+
+| Exit criterion | Bar | Achieved |
+|---|---|---|
+| `go test ./... -race -count=5` | PASS | **PASS** (exit 0) |
+| Goldens in `internal/ui/testdata/golden/` | 8 | **8** |
+| Goldens fail on a perturbed layout | must fail | **7 of 8** scenarios failed on a swapped rail/sidebar append order; `no_sidebar` correctly passed (it appends neither) |
+| Goldens fail on perturbed styling | must fail | **yes**, and on the styling-only diff branch: byte 4934, SGR `48;2;74;158;255` → `48;2;255;0;255`, no fall-through to the text tier |
+| `internal/ui` statement coverage | > 67.8% | **67.8% → 79.8%** |
+| Every `handle*Mode` | > 85% (80% for normal/insert) | **all 16 ≥ 95.0%**. Lowest: `handlePresenceCustomSnoozeMode` 95.0%, `handleNormalMode` 96.0%, `handleWorkspaceSearchMode` 96.0% |
+| `handleNormalMode` | > 80% | **40.0% → 96.0%** |
+| `handleInsertMode` | > 80% | **53.1% → 100.0%** |
+| Production `.go` changes | exactly 1 | **1**: `internal/ui/messages/model.go` (+22/-1), the `nowFunc` / `SetNowFunc` clock injection |
+| Lint | clean | `gofmt -l .` empty, `go vet ./...` clean, `golangci-lint run` 0 issues |
+
+#### Cost Phase 0 imposed on Phase 5 — measured, not estimated
+
+Phase 0's tests are white-box `package ui` tests, so they read `App`'s
+unexported fields and call its unexported methods directly. That is the same
+coupling this document already warns about, and Phase 0 materially increased it.
+
+**Method:** a type-checked count, not a grep. `golang.org/x/tools/go/packages`
+loads `internal/ui` with `Tests: true`; every `ast.SelectorExpr` in a `_test.go`
+file whose receiver resolves to `ui.App` or `*ui.App` and whose selected
+identifier is unexported is counted once. Comments, strings and same-named
+members of other types are excluded by construction, and the receiver's variable
+name is irrelevant. Counts cover unexported **fields and methods** alike.
+
+| | `main` (79c78b9) | after Phase 0 | delta |
+|---|---|---|---|
+| References from `internal/ui` test files | 1,995 | **2,905** | +910 (×1.46) |
+| Distinct unexported `App` members referenced | 121 | **142** | +21 |
+
+Of that, **914 references to 68 distinct members** are in the 18 test files
+Phase 0 added; the modified files net out to roughly zero. Heaviest new
+coupling: `compose` +88 (204 total), `threadCompose` +50 (62), `layout` +47
+(109), `help` +45 (58), `sidebar` +43 (103), `focusedPanel` +43 (146),
+`messagepane` +35 (243). Twenty-one members are newly reachable from tests at
+all, including `workspaceFinder`, `themeSwitcher`, `reactionPicker`,
+`presenceMenu` and `pickerKind` — each previously at zero.
+
+**Consequence for Phase 5** ("Finish `App` decomposition") and for any Phase 2/3
+field relocation: the per-extraction test-edit cost is now roughly **1.5× the
+pre-Phase-0 figure**. `AGENTS.md`'s "~150 mechanical test-line edits per 10
+extractions" rule of thumb predates this branch; budget nearer 220, and expect
+`compose`, `messagepane`, `focusedPanel`, `mode` and `activeChannelID` to
+dominate — those five alone account for 847 of the 2,905 references. This is a
+real cost of the safety net, not an accident: characterizing 16 mode handlers
+requires observing state that `App` exposes no getters for. Phase 5 should plan
+to add getters (or move the state) ahead of the mechanical edit, not during it.
+
+The lockstep test (`internal/ui/thread/lockstep_test.go`) documents **15
+verified divergences** between `messages.Model` and `thread.Model`. That list is
+Phase 3's pane-hook specification — read it before designing Phase 3.
+
+Phase 0 found production defects it deliberately did not fix — the
+one-production-change budget forbade it, and a characterization test that also
+changes behaviour cannot be reviewed. They are filed as **issues #181, #182 and
+#184–#194**: two rendering defects (status-row overrun, thread separator glyph),
+three user-facing keybinding defects, two input-filter defects, an emoji-picker
+ranking defect, plus dead code, stale comments, missing test seams, a swallowed
+error in `internal/slack/membership`, a missing `dirty()` in `compose`, and a
+picker state-clearing asymmetry. (#193 and #194 were filed during the
+whole-branch review, which found three `// BUG?:` rows with no issue behind
+them; the third — the reaction picker's `up`/`down` asymmetry — was examined and
+is not a defect, and its row now says so.) Several are
+pinned in place by `// BUG?:` characterization rows that must be **re-pinned,
+not deleted**, when the bug is fixed; each issue names what to re-bless.
+
+Two of these matter to later phases specifically: **#192** (`compose` render
+version) is the seam Phase 4 needs before it can safely move the theme-switcher
+calls, and **#190** item 4 (a `Mode` count sentinel) is the seam Phase 5 needs
+before it can add a mode without risking an unregistered handler.
 
 ---
 
@@ -563,7 +651,7 @@ dupl -t 75 -plumbing $(find . -name '*.go' \
 
 | Phase | Scope | Prereqs | Spec | Plan | Status |
 |---|---|---|---|---|---|
-| 0 | Test safety net | — | [spec](../specs/2026-09-06-phase0-test-safety-net-design.md) | — | **designed** |
+| 0 | Test safety net | — | [spec](../specs/2026-09-06-phase0-test-safety-net-design.md) | [plan](2026-09-06-phase0-test-safety-net.md) | **complete** |
 | 1 | `main.go` mechanical splits | — | — | — | not started |
 | 2 | `main.go` structural | 1 | — | — | not started |
 | 3 | Collapse `messages`/`thread` fork | 0 | — | — | not started |
@@ -588,5 +676,5 @@ at a phase boundary.
 | Modal-widget cluster (13 pkgs) | 5,295 lines | < 3,000 |
 | `renderBox` implementations | 11 | 1 |
 | `visibleWindow` implementations | 7 | 1 |
-| Golden tests for `View()` | 0 | 8 |
+| Golden tests for `View()` | 0 | 8 — **done (Phase 0)** |
 | Known data races in `cmd/slk` | 3 | 0 |

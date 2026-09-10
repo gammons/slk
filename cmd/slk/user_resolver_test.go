@@ -29,7 +29,9 @@ import (
 // not, and a client that opens hundreds of connections at once looks
 // like nothing a person is driving.
 func TestUserResolver_BoundsConcurrentRequests(t *testing.T) {
-	var inFlight, maxInFlight, completed int32
+	const requests = 60
+
+	var inFlight, maxInFlight int32
 
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cur := atomic.AddInt32(&inFlight, 1)
@@ -39,11 +41,17 @@ func TestUserResolver_BoundsConcurrentRequests(t *testing.T) {
 				break
 			}
 		}
-		// Long enough that a per-request goroutine would pile up
-		// visibly rather than finishing before the next one starts.
+		// A duration is semantically required here and no signal can
+		// replace it. The property under test is a *safety* property —
+		// the pool never has more than userResolverConcurrency round
+		// trips open — and the only way to observe a violation is to
+		// give an unbounded implementation room to pile up. This is a
+		// stimulus, not a deadline: nothing is asserted against it, and
+		// a loaded machine makes an unbounded implementation *more*
+		// visible, never less, so it cannot be starved into a false
+		// failure.
 		time.Sleep(25 * time.Millisecond)
 		atomic.AddInt32(&inFlight, -1)
-		atomic.AddInt32(&completed, 1)
 		w.Header().Set("Content-Type", "application/json")
 		// image_32 is deliberately absent: avatar.Cache.Preload
 		// returns before touching its receiver when the URL is empty,
@@ -53,20 +61,26 @@ func TestUserResolver_BoundsConcurrentRequests(t *testing.T) {
 	defer srv.Close()
 
 	db := newTestDB(t)
-	r := newUserResolver("T1", newTestClient(t, srv), db, nil, nil, nil, nil)
+	watch := newResolvedWatch(requests, nil)
+	r := newUserResolver("T1", newTestClient(t, srv), db, nil, watch.send, nil, nil)
 
-	const requests = 60
 	for i := 0; i < requests; i++ {
 		r.Request(fmt.Sprintf("U%03d", i))
 	}
 
-	deadline := time.Now().Add(10 * time.Second)
-	for atomic.LoadInt32(&completed) < requests && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if got := atomic.LoadInt32(&completed); got != requests {
-		t.Fatalf("%d of %d requests completed; the pool must bound concurrency, not drop work", got, requests)
-	}
+	// No timeout by design: `go test` already imposes one, and a
+	// wall-clock budget inside the test is exactly what made this
+	// load-sensitive. A hang here produces a goroutine dump naming the
+	// stuck test, which beats "expected 60 requests, got 57" — and a
+	// pool that drops work rather than bounding it hangs here, which is
+	// the failure the old 10s deadline poll was trying to catch.
+	//
+	// This is also the barrier for the cache writes: resolveOne upserts
+	// the row and only then sends UserResolvedMsg, so 60 messages means
+	// 60 goroutines are done touching the DB. Without it they outlive
+	// the test and race t.TempDir's RemoveAll.
+	<-watch.done // every users.info round trip resolved and was cached
+
 	if got := atomic.LoadInt32(&maxInFlight); got > userResolverConcurrency {
 		t.Errorf("peak concurrent users.info requests = %d; want at most %d — one goroutine per unresolved user is how a cold cache produced a 40,000-request burst", got, userResolverConcurrency)
 	}
@@ -76,51 +90,100 @@ func TestUserResolver_BoundsConcurrentRequests(t *testing.T) {
 // pool must not cost us: Request is called from render and event paths
 // that cannot wait on the network.
 func TestUserResolver_RequestDoesNotBlockTheCaller(t *testing.T) {
+	// Enough to fill the pool several times over. Every one of these
+	// must return even though nothing on the wire can complete.
+	const requests = userResolverConcurrency * 4
+
+	// release gates every handler. Nothing may finish until the test
+	// closes it, so a Request that has returned provably did not wait
+	// on a round trip. That is a happens-before relation, which is what
+	// this test actually claims — the previous form asserted the same
+	// thing inside a 2s budget, which load can starve.
 	release := make(chan struct{})
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-release
+		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ok":true,"user":{"id":"U1","name":"n","team_id":"T1","profile":{"display_name":"N"}}}`))
 	}))
 	defer srv.Close()
-	defer close(release)
 
 	db := newTestDB(t)
-	r := newUserResolver("T1", newTestClient(t, srv), db, nil, nil, nil, nil)
+	watch := newResolvedWatch(requests, nil)
+	r := newUserResolver("T1", newTestClient(t, srv), db, nil, watch.send, nil, nil)
 
-	// Enough to fill the pool several times over. Every one of these
-	// must return immediately even though nothing can complete.
-	done := make(chan struct{})
+	returned := make(chan struct{})
 	go func() {
-		for i := 0; i < userResolverConcurrency*4; i++ {
+		for i := 0; i < requests; i++ {
 			r.Request(fmt.Sprintf("U%03d", i))
 		}
-		close(done)
+		close(returned)
 	}()
 
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Request blocked its caller; it is called from the render path and from WS event handlers, neither of which may wait on a users.info round trip")
+	// No timeout by design: `go test` already imposes one, and a
+	// wall-clock budget inside the test is exactly what made this
+	// load-sensitive. A hang here produces a goroutine dump naming the
+	// stuck test — and it names the caller parked in RoundTrip, which
+	// is a far better diagnosis of "Request blocked its caller" than a
+	// 2s deadline that also fires on a busy machine. Request is called
+	// from the render path and from WS event handlers, neither of which
+	// may wait on a users.info round trip.
+	<-returned // every Request returned while the transport is still blocked
+
+	// Drain. Unblocking the handlers lets the resolveOne goroutines
+	// finish their cache writes; without this they outlive the test
+	// body and race t.TempDir's RemoveAll, which is the flake this file
+	// actually reproduced ("directory not empty", ~1 run in 5).
+	close(release)
+	<-watch.done // every resolveOne finished writing its cache row
+}
+
+// resolvedWatch is a userResolver send callback that records every
+// message and closes done once want of them are UserResolvedMsgs
+// satisfying match (nil matches any).
+//
+// It is the barrier tests wait on instead of the clock. Both resolution
+// paths write the cache row *before* sending UserResolvedMsg —
+// resolveOne upserts then sends, applyEdgeUser upserts then sends — so
+// a matching message proves the write landed. Waiting on
+// fakeBatcher.calls() does not: fakeBatcher records the batch on entry
+// and returns, while the resolver applies the records afterwards, so a
+// call count races everything applyEdgeUser writes.
+//
+// It is also what keeps background goroutines from outliving the test
+// body and racing t.TempDir's RemoveAll.
+type resolvedWatch struct {
+	mu    sync.Mutex
+	sent  []tea.Msg
+	match func(ui.UserResolvedMsg) bool
+	want  int
+	n     int
+	done  chan struct{}
+}
+
+func newResolvedWatch(want int, match func(ui.UserResolvedMsg) bool) *resolvedWatch {
+	return &resolvedWatch{match: match, want: want, done: make(chan struct{})}
+}
+
+func (w *resolvedWatch) send(m tea.Msg) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.sent = append(w.sent, m)
+	u, ok := m.(ui.UserResolvedMsg)
+	if !ok || (w.match != nil && !w.match(u)) {
+		return
+	}
+	w.n++
+	if w.n == w.want {
+		close(w.done)
 	}
 }
 
-// waitUntil polls cond until it holds or the deadline passes.
-//
-// Use this rather than waiting on fakeBatcher.calls() whenever the
-// assertion is about resolver *output* (cache rows, sent messages).
-// fakeBatcher records a batch on entry and returns immediately, while
-// the resolver applies the records afterwards — so a call count is not
-// a barrier for anything applyEdgeUser writes.
-func waitUntil(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", what)
+// messages returns every message sent so far. Call it only after
+// receiving from done, which is the ordering barrier.
+func (w *resolvedWatch) messages() []tea.Msg {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]tea.Msg(nil), w.sent...)
 }
 
 // fakeBatcher implements userBatcher and records each batch it was
@@ -174,13 +237,8 @@ func TestUserResolver_BatchesMissesThroughEdge(t *testing.T) {
 		edgeUserRecord("U001", "alice", "Alice", "", "T1", 1783337599010, false),
 		edgeUserRecord("U002", "bob", "", "Bob Real", "T1", 1783337599011, false),
 	}}
-	var sentMu sync.Mutex
-	var sent []tea.Msg
-	r := newUserResolver("T1", nil, db, nil, func(m tea.Msg) {
-		sentMu.Lock()
-		sent = append(sent, m)
-		sentMu.Unlock()
-	}, batcher, nil)
+	watch := newResolvedWatch(2, nil)
+	r := newUserResolver("T1", nil, db, nil, watch.send, batcher, nil)
 
 	r.Request("U001")
 	r.Request("U002")
@@ -196,22 +254,12 @@ func TestUserResolver_BatchesMissesThroughEdge(t *testing.T) {
 	// applyEdgeUser writes the row and *then* sends UserResolvedMsg,
 	// per user, so waiting for both messages implies every write has
 	// landed.
-	waitUntil(t, "the edge batch to be applied to the cache", func() bool {
-		for _, id := range []string{"U001", "U002"} {
-			if _, err := db.GetUser(id); err != nil {
-				return false
-			}
-		}
-		sentMu.Lock()
-		defer sentMu.Unlock()
-		n := 0
-		for _, m := range sent {
-			if _, ok := m.(ui.UserResolvedMsg); ok {
-				n++
-			}
-		}
-		return n == 2
-	})
+	//
+	// No timeout by design: `go test` already imposes one, and a
+	// wall-clock budget inside the test is exactly what made this
+	// load-sensitive. A hang here produces a goroutine dump naming the
+	// stuck test, which beats "expected 2 calls, got 1".
+	<-watch.done // both edge users/info records applied to the cache
 
 	calls := batcher.calls()
 	if len(calls) != 1 {
@@ -245,20 +293,32 @@ func TestUserResolver_BatchesMissesThroughEdge(t *testing.T) {
 		t.Errorf("U002 display = %q; want the real-name fallback", u2.DisplayName)
 	}
 	// One UserResolvedMsg per resolved user, same as the per-user path.
-	sentMu.Lock()
 	resolved := 0
-	for _, m := range sent {
+	for _, m := range watch.messages() {
 		if _, ok := m.(ui.UserResolvedMsg); ok {
 			resolved++
 		}
 	}
-	sentMu.Unlock()
 	if resolved != 2 {
 		t.Errorf("UserResolvedMsg count = %d; want 2 — the UI patches display names live from these", resolved)
 	}
 	// Dedup end-to-end: a repeat Request resolves nothing further.
+	//
+	// Request's cache check is synchronous — GetUser hits, inflight is
+	// released, and the call returns without queueing — so the absence
+	// of a queued id is observable the moment Request returns. Asserting
+	// on the queue rather than sleeping out the batch window is both
+	// duration-free and strictly stronger: a Request that lost its cache
+	// check would leave a pending entry and an armed flush timer here,
+	// which no amount of waiting for a batch that has not been sent yet
+	// can distinguish from "nothing queued".
 	r.Request("U001")
-	time.Sleep(userResolverBatchWindow + 300*time.Millisecond)
+	r.pendingMu.Lock()
+	queued, armed := len(r.pending), r.flushTimer != nil
+	r.pendingMu.Unlock()
+	if queued != 0 || armed {
+		t.Errorf("a repeat Request queued %d id(s) (flush armed: %v); the cache check must make it a no-op", queued, armed)
+	}
 	if n := len(batcher.calls()); n != 1 {
 		t.Errorf("a repeat Request produced batch %d; the cache check must make it a no-op", n)
 	}
@@ -280,17 +340,17 @@ func TestUserResolver_EdgeMissFallsBackToPerUser(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	r := newUserResolver("T1", newTestClient(t, srv), db, nil, nil, batcher, nil)
+	watch := newResolvedWatch(1, func(m ui.UserResolvedMsg) bool { return m.UserID == "U002" })
+	r := newUserResolver("T1", newTestClient(t, srv), db, nil, watch.send, batcher, nil)
 	r.Request("U001")
 	r.Request("U002")
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := db.GetUser("U002"); err == nil {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	// No timeout by design: `go test` already imposes one, and a
+	// wall-clock budget inside the test is exactly what made this
+	// load-sensitive. A hang here produces a goroutine dump naming the
+	// stuck test, which beats "U002 was never resolved per-user".
+	<-watch.done // U002 resolved through the per-user users.info fallback
+
 	if _, err := db.GetUser("U002"); err != nil {
 		t.Fatal("U002 was absent from the edge batch and was never resolved per-user")
 	}
@@ -318,23 +378,21 @@ func TestUserResolver_EmptyNameEdgeRecordFallsBackToPerUser(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	var sentMu sync.Mutex
-	var sent []tea.Msg
-	r := newUserResolver("T1", newTestClient(t, srv), db, nil, func(m tea.Msg) {
-		sentMu.Lock()
-		sent = append(sent, m)
-		sentMu.Unlock()
-	}, batcher, nil)
+	watch := newResolvedWatch(1, func(m ui.UserResolvedMsg) bool {
+		return m.UserID == "U001" && m.DisplayName == "Alice"
+	})
+	r := newUserResolver("T1", newTestClient(t, srv), db, nil, watch.send, batcher, nil)
 	r.Request("U001")
 	r.Request("U002")
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if u, err := db.GetUser("U001"); err == nil && u.DisplayName == "Alice" {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	// No timeout by design: `go test` already imposes one, and a
+	// wall-clock budget inside the test is exactly what made this
+	// load-sensitive. A hang here produces a goroutine dump naming the
+	// stuck test, which beats an empty-vs-Alice diff on a loaded box.
+	// U002's good record is applied inside flush, before the fallback
+	// goroutine is even spawned, so this also orders the U002 asserts.
+	<-watch.done // the per-user fallback resolved U001 as Alice
+
 	u1, err := db.GetUser("U001")
 	if err != nil || u1.DisplayName != "Alice" {
 		t.Fatalf("U001 cached as %+v (err=%v); want the per-user fallback's Alice — the empty edge record must be treated as a miss", u1, err)
@@ -345,9 +403,7 @@ func TestUserResolver_EmptyNameEdgeRecordFallsBackToPerUser(t *testing.T) {
 	if u2, err := db.GetUser("U002"); err != nil || u2.DisplayName != "Bob" {
 		t.Errorf("U002 cached as %+v (err=%v); the good record in the same batch must still apply", u2, err)
 	}
-	sentMu.Lock()
-	defer sentMu.Unlock()
-	for _, m := range sent {
+	for _, m := range watch.messages() {
 		if msg, ok := m.(ui.UserResolvedMsg); ok && msg.DisplayName == "" {
 			t.Errorf("an empty-name UserResolvedMsg was sent for %s; that blanks a rendered in-history name", msg.UserID)
 		}
@@ -363,17 +419,20 @@ func TestUserResolver_EdgeErrorFallsBackToPerUser(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	r := newUserResolver("T1", newTestClient(t, srv), db, nil, nil, batcher, nil)
+	watch := newResolvedWatch(1, func(m ui.UserResolvedMsg) bool { return m.UserID == "U001" })
+	r := newUserResolver("T1", newTestClient(t, srv), db, nil, watch.send, batcher, nil)
 	r.Request("U001")
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := db.GetUser("U001"); err == nil {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+	// No timeout by design: `go test` already imposes one, and a
+	// wall-clock budget inside the test is exactly what made this
+	// load-sensitive. If the fallback never runs this hangs, and the
+	// goroutine dump names the stuck test — strictly more useful than
+	// "the per-user fallback never ran" five seconds after the fact.
+	<-watch.done // the per-user fallback resolved U001 after the edge error
+
+	if _, err := db.GetUser("U001"); err != nil {
+		t.Fatal("the edge call failed and the per-user fallback never ran")
 	}
-	t.Fatal("the edge call failed and the per-user fallback never ran")
 }
 
 func TestUserResolver_DegradedWorkspaceSkipsEdge(t *testing.T) {
@@ -389,12 +448,28 @@ func TestUserResolver_DegradedWorkspaceSkipsEdge(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	r := newUserResolver("T1", newTestClient(t, srv), db, nil, nil, batcher, func() bool { return true })
+	watch := newResolvedWatch(1, nil)
+	r := newUserResolver("T1", newTestClient(t, srv), db, nil, watch.send, batcher, func() bool { return true })
 	r.Request("U001")
-	time.Sleep(userResolverBatchWindow + 300*time.Millisecond)
+
+	// No timeout by design: `go test` already imposes one, and a
+	// wall-clock budget inside the test is exactly what made this
+	// load-sensitive. A hang here produces a goroutine dump naming the
+	// stuck test, which beats "U001 was not resolved per-user".
+	<-watch.done // U001 resolved on the degraded per-user path
 
 	if n := len(batcher.calls()); n != 0 {
 		t.Errorf("a degraded workspace made %d edge calls; want 0", n)
+	}
+	// Nothing can arrive late: a degraded Request goes straight to
+	// resolveOne without queueing, so an empty queue with no armed
+	// timer means no batch is coming. Asserting that beats sleeping out
+	// the window, which could only ever say "not yet".
+	r.pendingMu.Lock()
+	queued, armed := len(r.pending), r.flushTimer != nil
+	r.pendingMu.Unlock()
+	if queued != 0 || armed {
+		t.Errorf("a degraded workspace queued %d id(s) for edge (flush armed: %v); want none", queued, armed)
 	}
 	if _, err := db.GetUser("U001"); err != nil {
 		t.Error("U001 was not resolved per-user on the degraded path")

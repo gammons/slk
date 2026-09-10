@@ -29,9 +29,9 @@ import "testing"
 //	rail   sidebar       messages              thread
 //	[0..3) [3..3+20+2=25) [25..25+50+2=77)     [77..77+25+2=104)  width=100 (clipped)
 func newPanelAtApp() *App {
-	a := NewApp()
-	a.width = 100
-	a.height = 24
+	// buildTestApp rather than newTestApp: this builder takes no
+	// *testing.T and adding one would edit every call site.
+	a := buildTestApp(withSize(100, 24))
 	a.sidebarVisible = true
 	a.threadVisible = true
 	a.layout.railWidth = 3

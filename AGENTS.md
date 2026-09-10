@@ -11,12 +11,21 @@ a fourth time because the author did not know the first three existed. See
 
 ```
 go build ./...
-go test ./...                 # ~21s
-go test ./... -race           # ~44s; this is what CI runs
+go test ./...                 # ~10s
+go test ./... -race           # ~47s; this is what CI runs
 go vet ./...
 golangci-lint run             # v2.13.1, config in .golangci.yml
 gofmt -l .                    # must be empty; enforced in CI
 ```
+
+Those two timings are wall clock with `-count=1` and a warm build cache on an
+8-core Linux box, re-measured at the end of Phase 0 (they were `~21s`/`~44s`
+before it, on unrecorded hardware — treat them as a shape, not a target).
+The shape is what matters: under `-race`, four packages are ~95% of the run —
+`internal/ui` 32s, `cmd/slk` 29s, `internal/cache` 19s, `internal/ui/messages`
+16s (they overlap, hence a 47s wall). If you are iterating, run the one package
+you are changing; `internal/ui` alone is now longer under `-race` than the whole
+suite used to be.
 
 Tests are plain `testing.T`, stdlib only. No testify, no gomock, no golden
 libraries. White-box (`package ui`, not `package ui_test`) by convention.
@@ -92,6 +101,41 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Window tree geometry | `ui/wintree` |
 | Modal geometry / row hit-testing | `boxedOverlay`, `clickableOverlay` in `internal/ui/reducer_modal_click.go` |
 
+### Test helpers
+
+Everything here is unexported and lives in a `_test.go` file, so it is
+reachable only from the package that declares it (all of these are
+`package ui` unless noted). They are listed because the failure mode this
+file exists to prevent — writing a sixteenth ad-hoc test-app builder — is
+exactly what happened before Phase 0 consolidated them. Symbols are
+greppable by name; no line numbers, because these files move.
+
+| Need | Use |
+|---|---|
+| Build an `App` for a test or benchmark | `newTestApp(t, opts...)` (`internal/ui/testapp_test.go`) |
+| The same without a `testing.TB` | `buildTestApp(opts...)` — only for the four legacy builders whose signatures must not change: `newPanelAtApp`, `sixelTestApp`, `makeBenchApp`, `makeWideScrollApp` |
+| Size the App | `withSize(w, h)` (direct field assign) / `withWindowSize(w, h)` (real `tea.WindowSizeMsg` resize path). **Not interchangeable** — only the latter sets `forceSixelRepaint`. Mutually last-wins |
+| Seed panes and data | `withMessages`, `withChannels`, `withWorkspaces`, `withThreadsView`, `withChannelFinderOpen` |
+| Seed App-level state | `withMode`, `withView`, `withActiveChannel`, `withActiveTeam`, `withChannelService`, `withWindowSplit`. **`withActiveChannel` assigns only `a.activeChannelID`** — nothing derives a *name* from an ID, so the messages-pane header renders as a bare `#`, the statusbar as `#`, and the compose placeholder as `Message #...`. A test that asserts on any of those must push the name through the production trio itself; `newGoldenApp` does it via `nameGoldenActiveChannel` (`internal/ui/golden_test.go`) |
+| Populate `a.layout` bands / pane caches (needed for mouse hit-testing) | `withRender()` |
+| N plain message fixtures | `testMessageItems(n)` |
+| Compare or bless a full-screen frame against `testdata/golden/<name>.ansi` | `compareGolden(t, name, got)` (`internal/ui/golden_test.go`) |
+| Re-bless goldens | the package-local `-update` flag: `go test ./internal/ui -run TestGolden -update`. It is not defined repo-wide, so `go test ./... -update` fails |
+| An `App` with every render nondeterminism pinned (theme, emoji mode, clock) | `newGoldenApp(t, opts...)`, with `goldenMessages()` / `goldenChannels()` as the fixtures |
+| Table-drive a mode handler's keys | `runKeyCases(t, mode, []keyCase{...})` (`internal/ui/modekeys_test.go`). Calls `dispatchModeKey` directly, so it **bypasses** the reducer chain and the `ctrl+c` / bootstrap / scroll-flush gates ahead of it |
+| Build a key message for such a table | `keyPress(r)` printable rune, `keyCode(c)` special key, `keyMod(c, mod)` modified key |
+| Count the rows a finder-style modal is showing | `modalRows(bs)` (`internal/ui/mode_workspace_finder_test.go`) — `h - 7`; floors at 1, and is **not** valid for `newmessagepicker` |
+| Read the highlighted (`▌`) row out of a rendered modal box | `modalHighlightedRow(t, box)` (same file) |
+| Compare two `color.Color` without `==` panicking on a non-comparable dynamic type | `colorEqual(a, b)` (`internal/ui/mode_theme_switcher_test.go`; `package styles` has its own twin in `styles/styles_test.go`) |
+| Observe a status-bar toast (no getter exists) | `statusbarText(a)` (`internal/ui/mode_presence_snooze_test.go`) |
+| Record status-setter invocations | the `statusCall` struct (same file) |
+| A fixture with real unread channels either side of the active one | `unreadOpts()` + `seedUnreads(t, a)` (`internal/ui/mode_normal_keys_test.go`) |
+| Establish a focused pane with an asserted selection | `focusMessages(t, a)`, `focusThreadPanel(t, a)` (same file) |
+| Park the message viewport at an exact `yOffset` | `scrollTo(off)` (same file) |
+| Make nav-history entries resolvable | `navLookupOpt()` (same file) |
+| Run only the first command of a `tea.Batch` (skip a 2s tick) | `firstBatchCmd(t, cmd)` (`internal/ui/mode_insert_keys_test.go`) |
+| Observe a compose cursor position or blur state (no getter exists) | `afterKeyValue(c, r)` (same file) |
+
 ### Known duplication — do not add to it
 
 These are tracked in the refactor plan and are being consolidated. Do not copy
@@ -101,8 +145,21 @@ them as templates:
   modal packages. If you are building a modal, expect a shared chrome package to
   land (Phase 4); coordinate rather than adding a twelfth copy.
 - **`messages.Model` and `thread.Model`** share 377 verbatim lines and 45
-  identically-named methods. A lockstep test pins their parity. If you change
-  one, change both, and expect the lockstep test to tell you when you forgot.
+  identically-named methods. `internal/ui/thread/lockstep_test.go` pins *render*
+  parity in **one static state only**: 80×20 (`lockstepWidth`/`lockstepHeight`),
+  chosen so neither pane scrolls — so no scroll offset, no scrollbar gutter, no
+  search-term highlighting and no loading state is compared. The
+  scroll/viewport/selection math, which is most of the 377 shared lines, is
+  pinned *within* each model (`messages/scrollbar_test.go`,
+  `messages/selection_test.go`, `thread/selection_test.go`,
+  `thread/model_test.go`) but **not across** them: a change that breaks one
+  model's scrolling and not the other's will not fail the lockstep test. Its doc
+  comment enumerates **15 verified
+  divergences** — that list is the specification Phase 3's pane hooks have to
+  satisfy, not a wishlist. If you change one model, change both, and expect the
+  lockstep test to tell you when you forgot — within the limits above. Note that
+  `TestLockstep_ReactionHitTestFrames` is a tripwire that fires on
+  *convergence*: Phase 3 must delete it, not satisfy it.
 - **`convertAndCacheHistory` / `fetchChannelMessages` / `fetchThreadReplies`** in
   `cmd/slk/main.go` have ~85% duplicated bodies.
 
@@ -114,17 +171,29 @@ code is right and this file is a bug — fix it.
 
 **Two implementations that must stay parallel?** Express it as an interface with
 a compile-time assertion (`var _ Chrome = (*Model)(nil)`) or a lockstep test.
-Not a comment. `internal/ui/thread/model.go:37` is the counter-example: a
-comment asking humans to maintain a 377-line invariant by hand.
+Not a comment. The comment at `internal/ui/thread/model.go:35-36` — "this shape
+mirrors `internal/ui/messages.viewEntry` exactly; keeping them in lockstep
+means…" — was the counter-example: prose asking humans to maintain a 377-line
+invariant by hand. Phase 0 discharged it. The invariant now has a test,
+`internal/ui/thread/lockstep_test.go`, which asserts the shared render
+behaviour in one static state and carries a documented 15-item divergence list.
+Do the same: when
+you find a comment standing in for a check, replace it with the check.
 
 **Extract the substrate, not the widget.** Share the uniform part; leave the
 divergent part alone. Forcing genuinely different behavior into a common shape
 is worse than the duplication it removes.
 
 **Refactoring?** Moving functions is free — two phases of the prior refactor
-moved ~3,000 lines with zero test changes. Moving *state* costs roughly 150
-mechanical test-line edits per 10 extractions, because ~90% of `internal/ui`
-tests read unexported `App` fields directly.
+moved ~3,000 lines with zero test changes. Moving *state* is not: `internal/ui`
+test files make **2,905 references to 142 distinct unexported `App` fields and
+methods** (type-checked count, not a grep; measured at the end of Phase 0, up
+from 1,995 / 121 before it — Phase 0's characterization tests added ~910 of
+them). Budget roughly **220 mechanical test-line edits per 10 extractions**, and
+expect five members to dominate: `messagepane` (243), `compose` (204),
+`focusedPanel` (146), `mode` (129) and `activeChannelID` (125) are 847 of the
+total between them. Method and per-member breakdown:
+`docs/superpowers/plans/2026-09-06-architecture-refactor.md`, Phase 0 "Achieved".
 
 **Found a bug while refactoring?** Record it, annotate it, raise it separately.
 A refactor commit that also changes behavior cannot be reviewed.

@@ -14,19 +14,17 @@ import (
 
 func openChannelFinder(t *testing.T) *App {
 	t.Helper()
-	app := NewApp()
-	app.width = 80
-	app.height = 24
-	// Descending LastVisited keeps these in declared order under the
-	// empty-query sort, so row N maps to items[N].
-	app.channelFinder.SetItems([]channelfinder.Item{
-		{ID: "C1", Name: "alpha", Type: "channel", Joined: true, LastVisited: 300},
-		{ID: "C2", Name: "bravo", Type: "channel", Joined: true, LastVisited: 200},
-		{ID: "C3", Name: "charlie", Type: "channel", Joined: true, LastVisited: 100},
-	})
-	app.channelFinder.Open()
-	app.SetMode(ModeChannelFinder)
-	return app
+	return newTestApp(t,
+		withSize(80, 24),
+		// Descending LastVisited keeps these in declared order under the
+		// empty-query sort, so row N maps to items[N].
+		withChannelFinderOpen(
+			channelfinder.Item{ID: "C1", Name: "alpha", Type: "channel", Joined: true, LastVisited: 300},
+			channelfinder.Item{ID: "C2", Name: "bravo", Type: "channel", Joined: true, LastVisited: 200},
+			channelfinder.Item{ID: "C3", Name: "charlie", Type: "channel", Joined: true, LastVisited: 100},
+		),
+		withMode(ModeChannelFinder),
+	)
 }
 
 // boxOrigin returns the top-left screen coords of the active channel
