@@ -4076,14 +4076,26 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 		// unread message in mention_count for ims and mpims, and only
 		// @-mentions for channels; matching that split here keeps local
 		// increments consistent with the server value that will later
-		// overwrite them.
+		// overwrite them. That split is unverified against a live
+		// capture — see UnreadInfo's doc in internal/slack/client.go.
+		//
+		// "app" belongs in the DM branch because it is not one of
+		// Slack's conversation kinds: buildChannelItem invents it for an
+		// is_im conversation whose peer is a bot, purely so the sidebar
+		// can group Apps separately. Slack reports human DMs and app DMs
+		// alike in the `ims` block, so omitting "app" here would badge
+		// an app DM from the server at boot and then never increment it
+		// live. See "Conversation types: Slack's three kinds vs slk's
+		// five" in docs/superpowers/specs/2026-09-09-mention-badges-design.md.
 		//
 		// userID, not authorID: a bot message has userID == "" and can
 		// never be "you", and mention.InText's empty-self guard makes
 		// the direct-mention check a no-op in that case while still
 		// honouring @here/@channel from bots.
 		chTypeForMention := h.channelTypes[channelID]
-		isDMLike := chTypeForMention == "dm" || chTypeForMention == "group_dm"
+		isDMLike := chTypeForMention == "dm" ||
+			chTypeForMention == "group_dm" ||
+			chTypeForMention == "app"
 		mentionsSelf := isDMLike || mention.InText(text, h.currentUserID)
 		if userID != h.currentUserID && mentionsSelf {
 			if err := h.db.IncrementChannelMentionCount(channelID); err != nil {

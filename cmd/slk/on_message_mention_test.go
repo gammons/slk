@@ -11,10 +11,16 @@ import (
 // reach its read-state block: a db, a channel-type map, the self user ID,
 // and an active-channel getter. notifier is nil so the notification
 // branch is skipped, and program is nil so no tea.Program is required.
+//
+// The cached row and the channelTypes map are given the SAME type on
+// purpose. Production reads the map, so only the map decides behaviour,
+// but a fixture whose row says "channel" while its map says "dm" is a
+// self-contradiction that hides type-dispatch bugs from anyone reading
+// the test.
 func onMessageMentionFixture(t *testing.T, chType, activeChannelID string) (*rtmEventHandler, *cache.DB) {
 	t.Helper()
 	db := newTestDB(t)
-	if err := db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"}); err != nil {
+	if err := db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: chType}); err != nil {
 		t.Fatalf("UpsertChannel: %v", err)
 	}
 	h := &rtmEventHandler{
@@ -76,6 +82,15 @@ func TestOnMessage_MentionIncrementsCount(t *testing.T) {
 			name:   "any group dm message counts",
 			chType: "group_dm", author: "UOTHER",
 			text: "no markup here", want: 1,
+		},
+		{
+			// "app" is slk's own label for a DM whose peer is a bot; it
+			// is not a Slack conversation kind. Slack reports app DMs in
+			// the same `ims` block as human DMs, so they get identical
+			// all-unread semantics and must increment on plain text.
+			name:   "any app dm message counts",
+			chType: "app", author: "UBOT",
+			text: "deploy finished", want: 1,
 		},
 		{
 			name:   "self-authored mention does not count",
