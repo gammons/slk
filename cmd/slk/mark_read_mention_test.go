@@ -87,3 +87,57 @@ func TestMarkChannelRead_FailureLeavesMentionCount(t *testing.T) {
 		t.Error("HasUnread must stay true so the state can be reconciled later")
 	}
 }
+
+// markChannelReadAsync's two guards. Both return before the goroutine is
+// spawned, so a synchronous assertion is deterministic — there is no
+// racing work to wait for.
+//
+// The ts == "" guard is reachable in production: MarkRead passes ts
+// straight through from the reducer, and only flushPendingMarks
+// pre-checks it. Without the guard an empty watermark would clear a
+// channel's badge while marking it read at ts "", which Slack rejects.
+func TestMarkChannelReadAsync_EmptyTSDoesNotMark(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"}); err != nil {
+		t.Fatalf("UpsertChannel: %v", err)
+	}
+	if err := db.SetChannelMentionCount("C1", 3); err != nil {
+		t.Fatalf("seed mention count: %v", err)
+	}
+	marker := &fakeChannelMarker{}
+
+	markChannelReadAsync(context.Background(), marker, db, nil, "C1", "")
+
+	if len(marker.calls) != 0 {
+		t.Errorf("empty ts issued a mark: %v", marker.calls)
+	}
+	state, err := db.GetChannelReadState("C1")
+	if err != nil {
+		t.Fatalf("GetChannelReadState: %v", err)
+	}
+	if state.MentionCount != 3 {
+		t.Errorf("MentionCount = %d, want 3 untouched", state.MentionCount)
+	}
+}
+
+// A nil marker means the workspace failed to construct. It must not
+// reach the goroutine, where it would nil-deref on MarkChannel.
+func TestMarkChannelReadAsync_NilMarkerDoesNotMark(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"}); err != nil {
+		t.Fatalf("UpsertChannel: %v", err)
+	}
+	if err := db.SetChannelMentionCount("C1", 3); err != nil {
+		t.Fatalf("seed mention count: %v", err)
+	}
+
+	markChannelReadAsync(context.Background(), nil, db, nil, "C1", "1.0050")
+
+	state, err := db.GetChannelReadState("C1")
+	if err != nil {
+		t.Fatalf("GetChannelReadState: %v", err)
+	}
+	if state.MentionCount != 3 {
+		t.Errorf("nil marker wrote to the DB; MentionCount = %d, want 3 untouched", state.MentionCount)
+	}
+}
