@@ -29,6 +29,7 @@ import (
 	"github.com/gammons/slk/internal/filedl"
 	"github.com/gammons/slk/internal/ids"
 	imgpkg "github.com/gammons/slk/internal/image"
+	"github.com/gammons/slk/internal/mention"
 	"github.com/gammons/slk/internal/notify"
 	"github.com/gammons/slk/internal/service"
 	slackclient "github.com/gammons/slk/internal/slack"
@@ -4061,6 +4062,29 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	if h.db != nil && shouldMarkChannel && activeChIDForRead != channelID {
 		if err := h.db.UpdateChannelReadState(channelID, "", true); err != nil {
 			log.Printf("Warning: failed to set has_unread for %s: %v", channelID, err)
+		}
+		// Mention badge: bump the count when this message mentions the
+		// user. Deliberately gated on the same three conditions as the
+		// has_unread write above so the dot and the badge can never
+		// disagree about whether a message "arrived unread".
+		//
+		// Conversation type decides what counts. Slack reports every
+		// unread message in mention_count for ims and mpims, and only
+		// @-mentions for channels; matching that split here keeps local
+		// increments consistent with the server value that will later
+		// overwrite them.
+		//
+		// userID, not authorID: a bot message has userID == "" and can
+		// never be "you", and mention.InText's empty-self guard makes
+		// the direct-mention check a no-op in that case while still
+		// honouring @here/@channel from bots.
+		chTypeForMention := h.channelTypes[channelID]
+		isDMLike := chTypeForMention == "dm" || chTypeForMention == "group_dm"
+		mentionsSelf := isDMLike || mention.InText(text, h.currentUserID)
+		if userID != h.currentUserID && mentionsSelf {
+			if err := h.db.IncrementChannelMentionCount(channelID); err != nil {
+				log.Printf("Warning: failed to increment mention count for %s: %v", channelID, err)
+			}
 		}
 	}
 

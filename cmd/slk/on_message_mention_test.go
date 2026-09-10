@@ -1,0 +1,131 @@
+package main
+
+import (
+	"testing"
+
+	"github.com/gammons/slk/internal/cache"
+	"github.com/slack-go/slack"
+)
+
+// onMessageMentionFixture builds the minimal handler OnMessage needs to
+// reach its read-state block: a db, a channel-type map, the self user ID,
+// and an active-channel getter. notifier is nil so the notification
+// branch is skipped, and program is nil so no tea.Program is required.
+func onMessageMentionFixture(t *testing.T, chType, activeChannelID string) (*rtmEventHandler, *cache.DB) {
+	t.Helper()
+	db := newTestDB(t)
+	if err := db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"}); err != nil {
+		t.Fatalf("UpsertChannel: %v", err)
+	}
+	h := &rtmEventHandler{
+		db:              db,
+		workspaceID:     "T1",
+		currentUserID:   "USELF",
+		channelTypes:    map[string]string{"C1": chType},
+		userNames:       map[string]string{},
+		channelNames:    map[string]string{"C1": "general"},
+		isActive:        func() bool { return false }, // stop before the UI dispatch
+		activeChannelID: func() string { return activeChannelID },
+	}
+	return h, db
+}
+
+func mentionCount(t *testing.T, db *cache.DB, channelID string) int {
+	t.Helper()
+	state, err := db.GetChannelReadState(channelID)
+	if err != nil {
+		t.Fatalf("GetChannelReadState(%s): %v", channelID, err)
+	}
+	return state.MentionCount
+}
+
+func TestOnMessage_MentionIncrementsCount(t *testing.T) {
+	tests := []struct {
+		name     string
+		chType   string
+		author   string
+		text     string
+		threadTS string
+		subtype  string
+		active   string
+		want     int
+	}{
+		{
+			name:   "explicit self mention in channel",
+			chType: "channel", author: "UOTHER",
+			text: "hey <@USELF> ship it", want: 1,
+		},
+		{
+			name:   "here broadcast in channel",
+			chType: "channel", author: "UOTHER",
+			text: "<!here> standup", want: 1,
+		},
+		{
+			name:   "plain channel message does not count",
+			chType: "channel", author: "UOTHER",
+			text: "unrelated chatter", want: 0,
+		},
+		{
+			// Slack badges every DM message, and client.counts reports
+			// them in mention_count, so local detection must agree.
+			name:   "any dm message counts",
+			chType: "dm", author: "UOTHER",
+			text: "no markup here", want: 1,
+		},
+		{
+			name:   "any group dm message counts",
+			chType: "group_dm", author: "UOTHER",
+			text: "no markup here", want: 1,
+		},
+		{
+			name:   "self-authored mention does not count",
+			chType: "channel", author: "USELF",
+			text: "note to <@USELF>", want: 0,
+		},
+		{
+			// Mirrors the has_unread gate: a non-broadcast thread reply
+			// does not touch the parent channel. Thread mentions surface
+			// in the Threads section instead.
+			name:   "plain thread reply does not count",
+			chType: "channel", author: "UOTHER",
+			text: "<@USELF> in a thread", threadTS: "1.0000", want: 0,
+		},
+		{
+			name:   "thread broadcast counts",
+			chType: "channel", author: "UOTHER",
+			text: "<@USELF> broadcasting", threadTS: "1.0000", subtype: "thread_broadcast", want: 1,
+		},
+		{
+			name:   "mention in the active channel does not count",
+			chType: "channel", author: "UOTHER",
+			text: "<@USELF> hi", active: "C1", want: 0,
+		},
+		{
+			name:   "usergroup mention is not detected",
+			chType: "channel", author: "UOTHER",
+			text: "<!subteam^S1|@eng> ship it", want: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h, db := onMessageMentionFixture(t, tt.chType, tt.active)
+			h.OnMessage("C1", tt.author, "1.0001", tt.text, tt.threadTS, tt.subtype,
+				false, nil, slack.Blocks{}, nil, "", "")
+			if got := mentionCount(t, db, "C1"); got != tt.want {
+				t.Errorf("MentionCount = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+// Two mentions arriving before the channel is read must both count. The
+// increment happens in SQL, so this also exercises that path rather than a
+// read-modify-write.
+func TestOnMessage_MentionsAccumulate(t *testing.T) {
+	h, db := onMessageMentionFixture(t, "channel", "")
+	h.OnMessage("C1", "UOTHER", "1.0001", "<@USELF> first", "", "", false, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("C1", "UOTHER", "1.0002", "<!channel> second", "", "", false, nil, slack.Blocks{}, nil, "", "")
+	if got := mentionCount(t, db, "C1"); got != 2 {
+		t.Errorf("MentionCount = %d, want 2", got)
+	}
+}
