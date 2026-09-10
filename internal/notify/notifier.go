@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/gammons/slk/internal/mention"
 	"github.com/gammons/slk/internal/usergroups"
 	"github.com/gen2brain/beeep"
 )
@@ -90,11 +91,10 @@ func ShouldNotify(ctx NotifyContext, channelID, userID, text, channelType string
 		return true
 	}
 
-	// Check mention trigger
-	if ctx.OnMention && (strings.Contains(text, "<@"+ctx.CurrentUserID+">") ||
-		strings.Contains(text, "<!here>") ||
-		strings.Contains(text, "<!channel>") ||
-		strings.Contains(text, "<!everyone>")) {
+	// Check mention trigger. The predicate lives in internal/mention so
+	// the sidebar's mention badge applies the same rule; the policy
+	// around it (OnMention, DND, mute, active channel) stays here.
+	if ctx.OnMention && mention.InText(text, ctx.CurrentUserID) {
 		return true
 	}
 

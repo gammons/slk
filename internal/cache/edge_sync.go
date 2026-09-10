@@ -24,8 +24,10 @@ type EdgeChannelUpdate struct {
 // is_member is NOT among them: 0 of 36 observed channels/info results
 // carried it, because membership comes back as the response's
 // top-level member_channels array instead. Use ApplyMembership for
-// that. is_starred, last_read_ts, unread_count and has_unread come
-// from other sources entirely and are likewise preserved.
+// that. is_starred, last_read_ts, has_unread and mention_count come
+// from other sources entirely and are likewise preserved. (This list
+// named unread_count until mention badges landed and dropped that
+// never-read column from the schema.)
 //
 // A row that does not exist is left alone rather than inserted: this
 // is a revalidation writer, and an unknown channel must go through

@@ -90,6 +90,32 @@ func (db *DB) GetMessages(channelID string, limit int, beforeTS string) ([]Messa
 	return db.queryMessages(query, args...)
 }
 
+// GetMessagesSince returns the cached main-feed messages at or after
+// sinceTS, oldest first. The row-shape filter matches GetMessages: plain
+// top-level messages, thread parents, and thread broadcasts, but not
+// plain thread replies, which belong to the thread panel.
+//
+// Inclusive of sinceTS, because its caller is mark-unread: the message
+// the user selected is itself unread.
+//
+// This reads the cache, not Slack, so it can only see messages slk has
+// already fetched. For the case it exists to serve — counting mentions
+// below a boundary the user just picked off their own screen — those
+// messages are cached by construction. Marking something unread far
+// enough back can undercount; client.counts corrects it on the next
+// reconnect.
+func (db *DB) GetMessagesSince(channelID, sinceTS string) ([]Message, error) {
+	if sinceTS == "" {
+		return nil, nil
+	}
+	return db.queryMessages(`
+		SELECT ts, channel_id, workspace_id, user_id, text, thread_ts, reply_count, edited_at, is_deleted, raw_json, created_at, subtype
+		FROM messages
+		WHERE channel_id = ? AND is_deleted = 0 AND ts >= ?
+		  AND (thread_ts = '' OR thread_ts = ts OR subtype = 'thread_broadcast')
+		ORDER BY ts ASC`, channelID, sinceTS)
+}
+
 // GetMessage returns the message with the given (channel_id, ts) primary
 // key. Returns sql.ErrNoRows if no such message exists.
 func (db *DB) GetMessage(channelID, ts string) (Message, error) {

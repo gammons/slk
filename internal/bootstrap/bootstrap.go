@@ -144,10 +144,10 @@ type Store interface {
 // package comment on import direction. The field set is identical, so
 // the Task 7 adapter's conversion is mechanical.
 type Unread struct {
-	ChannelID string
-	Count     int
-	HasUnread bool
-	LastRead  string
+	ChannelID    string
+	MentionCount int
+	HasUnread    bool
+	LastRead     string
 }
 
 // Threads is client.counts' workspace-wide thread rollup — a

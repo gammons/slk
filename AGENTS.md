@@ -82,6 +82,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Slack mrkdwn → plain text | `messages.FlattenMrkdwn`, `messages.FlattenMrkdwnWithUserGroups` |
 | Search-term highlighting (ANSI/OSC-safe) | `messages.HighlightSearchTerms`, `messages.SearchHighlightSGR` |
 | Extract links from message text | `messages.ExtractLinks` |
+| Does message text mention the current user? | `mention.InText(text, selfUserID)` |
 | Reaction pill rendering | `messages.ReactionPillText` |
 | Date label from a Slack ts | `messages.DateFromTS`, `messages.FormatDateSeparator` |
 | mpdm channel name → human name | `slackfmt.FormatMPDMName` |
@@ -96,7 +97,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Scrollbar gutter on a rendered pane | `ui/scrollbar.Overlay`, `ui/scrollbar.Visible` |
 | Centered modal over a dimmed backdrop | `ui/overlay.DimmedOverlay` |
 | Text selection ranges and anchors | `ui/selection` (`Range`, `Anchor`, `LessOrEqual`) |
-| Theme colors and styles | `ui/styles` (`Username`, `SelectionStyle`, `SearchHighlightStyle`, `UserColor`) |
+| Theme colors and styles | `ui/styles` (`Username`, `SelectionStyle`, `SearchHighlightStyle`, `MentionBadgeStyle`, `UserColor`) |
 | Window tree geometry | `ui/wintree` |
 | Modal geometry / row hit-testing | `boxedOverlay`, `clickableOverlay` in `internal/ui/reducer_modal_click.go` |
 

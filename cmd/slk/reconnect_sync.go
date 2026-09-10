@@ -140,6 +140,12 @@ func (r *reconnectSync) refreshUnreadState() {
 			ChannelID:  u.ChannelID,
 			LastReadTS: u.LastRead,
 			HasUnread:  u.HasUnread,
+			// Reconnect is additive, not a snapshot: only channels
+			// client.counts names are corrected. A channel read
+			// elsewhere during the outage and omitted here keeps its
+			// stale badge until the next boot, matching how
+			// has_unread already behaves on this path.
+			MentionCount: u.MentionCount,
 		})
 	}
 	if err := r.db.BatchUpdateChannelReadState(updates); err != nil {

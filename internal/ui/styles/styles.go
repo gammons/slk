@@ -511,6 +511,66 @@ func SelectionStyle() lipgloss.Style {
 		Foreground(SelectionForeground)
 }
 
+// MentionBadgeStyle returns the style used for the sidebar's unread
+// direct-mention badge. It borrows the theme's selection highlight pair,
+// which Apply() always populates and which is contrast-safe by
+// construction (defaulting to Primary-on-Background).
+//
+// A function rather than a package var: var-shaped styles in this file
+// must be declared twice — once in the top-level var block and again in
+// buildStyles() — and the top-level copy would read SelectionBackground
+// while it is still nil, since that var has no initializer. SelectionStyle
+// and SearchHighlightStyle are functions for the same reason.
+//
+// Deliberately not UnreadBadge: that style hardcodes white over Error and
+// belongs to the status bar. See
+// docs/superpowers/specs/2026-09-09-mention-badges-design.md.
+func MentionBadgeStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Background(SelectionBackground).
+		Foreground(SelectionForeground).
+		Padding(0, 1)
+}
+
+// mutedMentionBadgeAlpha is how much of the normal badge's background
+// survives when it is mixed toward the sidebar background. Low enough
+// that a muted badge stops competing with an unmuted one, high enough
+// that it still reads as the same badge rather than a new glyph.
+const mutedMentionBadgeAlpha = 0.45
+
+// MutedMentionBadgeStyle returns the badge style for a muted channel.
+//
+// Mentions pierce mute — muting a busy channel must not hide someone
+// naming you — but a muted mention should not shout as loudly as an
+// unmuted one. This mixes the normal badge's background toward the
+// sidebar background, keeping the same hue while dropping its
+// brightness, which is the same treatment ChannelMuted gives a row's
+// foreground.
+//
+// The foreground is SidebarText rather than MentionBadgeStyle's
+// SelectionForeground. SelectionForeground is derived from the theme's
+// Background so it contrasts against a full-strength Selection
+// background; once that background is mixed most of the way back toward
+// the sidebar, the contrasting colour is the one that reads against the
+// sidebar itself. That holds on light and dark themes alike, because
+// both terms move together.
+func MutedMentionBadgeStyle() lipgloss.Style {
+	// mixColors calls RGBA() on both arguments, so it panics on a nil
+	// color.Color. SelectionBackground has no initializer and is nil
+	// until Apply() runs — the state every sidebar test renders in, and
+	// the state at process start before a theme is loaded. Degrade to
+	// the undimmed background rather than panicking; there is nothing
+	// to mix toward yet.
+	bg := SelectionBackground
+	if bg != nil && SidebarBackground != nil {
+		bg = mixColors(bg, SidebarBackground, mutedMentionBadgeAlpha)
+	}
+	return lipgloss.NewStyle().
+		Background(bg).
+		Foreground(SidebarText).
+		Padding(0, 1)
+}
+
 // SearchHighlightStyle returns the style used to mark in-channel
 // search matches inside message text.
 func SearchHighlightStyle() lipgloss.Style {

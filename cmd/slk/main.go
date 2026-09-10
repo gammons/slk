@@ -29,6 +29,7 @@ import (
 	"github.com/gammons/slk/internal/filedl"
 	"github.com/gammons/slk/internal/ids"
 	imgpkg "github.com/gammons/slk/internal/image"
+	"github.com/gammons/slk/internal/mention"
 	"github.com/gammons/slk/internal/notify"
 	"github.com/gammons/slk/internal/service"
 	slackclient "github.com/gammons/slk/internal/slack"
@@ -1654,6 +1655,32 @@ func run() error {
 						if dbErr := db.UpdateChannelReadState(chIDStr, boundaryTSStr, true); dbErr != nil {
 							log.Printf("Warning: failed to update read state on mark-unread %s/%s: %v", chIDStr, boundaryTSStr, dbErr)
 						}
+						// Recount the badge from the new boundary.
+						//
+						// This used to write 0 and wait for Slack's
+						// echoed *_marked event to supply the real
+						// number. The echo does not carry one: marking
+						// a direct mention unread left the channel
+						// showing a plain dot, losing exactly the
+						// signal the user was trying to preserve.
+						//
+						// Counting the cached messages at or after the
+						// boundary is not the invented number that
+						// comment was avoiding — the user picked the
+						// boundary off their own screen, so those
+						// messages are cached. A failure here leaves
+						// the previous count rather than zeroing it,
+						// since a stale badge beats a vanished one.
+						chType := ""
+						if wctx.RTMHandler != nil {
+							chType = wctx.RTMHandler.channelTypes[chIDStr]
+						}
+						n, cntErr := countMentionsSince(db, chType, chIDStr, boundaryTSStr, wctx.Client.UserID())
+						if cntErr != nil {
+							log.Printf("Warning: failed to count mentions on mark-unread %s: %v", chIDStr, cntErr)
+						} else if dbErr := db.SetChannelMentionCount(chIDStr, n); dbErr != nil {
+							log.Printf("Warning: failed to set mention count on mark-unread %s: %v", chIDStr, dbErr)
+						}
 					} else {
 						log.Printf("Warning: failed to mark channel %s as unread (boundary %s): %v", chIDStr, boundaryTSStr, err)
 					}
@@ -2628,6 +2655,10 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 				ChannelID:  u.ChannelID,
 				LastReadTS: u.LastRead, // may be ""; ReplaceWorkspaceReadState preserves existing in that case
 				HasUnread:  u.HasUnread,
+				// Boot is the authoritative snapshot: channels absent
+				// from client.counts get mention_count reset to 0 by
+				// ReplaceWorkspaceReadState's workspace-wide reset.
+				MentionCount: u.MentionCount,
 			})
 		}
 		if err := db.ReplaceWorkspaceReadState(client.TeamID(), updates); err != nil {
@@ -3165,6 +3196,62 @@ type channelMarker interface {
 // channel entry or reconnect sync. Synchronous so the failure path is
 // deterministically testable; markChannelReadAsync is the goroutine
 // wrapper.
+// messageMentionsSelf reports whether a message in a conversation of the
+// given slk type counts toward that conversation's mention badge.
+//
+// Conversation type decides what counts. Slack reports every unread
+// message in mention_count for ims and mpims, and only @-mentions for
+// channels; matching that split locally keeps increments consistent with
+// the server value that will later overwrite them. That split is
+// unverified against a live capture — see UnreadInfo's doc in
+// internal/slack/client.go.
+//
+// "app" belongs in the DM branch because it is not one of Slack's
+// conversation kinds: buildChannelItem invents it for an is_im
+// conversation whose peer is a bot, purely so the sidebar can group Apps
+// separately. Slack reports human DMs and app DMs alike in the `ims`
+// block. See "Conversation types: Slack's three kinds vs slk's five" in
+// docs/superpowers/specs/2026-09-09-mention-badges-design.md.
+//
+// Deliberately says nothing about authorship or read state. Callers own
+// those: the live path inherits them from the has_unread gate, and the
+// mark-unread path applies its own.
+func messageMentionsSelf(chType, text, selfUserID string) bool {
+	switch chType {
+	case "dm", "group_dm", "app":
+		return true
+	default:
+		return mention.InText(text, selfUserID)
+	}
+}
+
+// countMentionsSince counts the cached messages at or after sinceTS that
+// mention the user, for the mark-unread path.
+//
+// Mark-unread moves the read boundary to a message the user picked off
+// their own screen, so the messages it makes unread are exactly the ones
+// just rendered — cached by construction. Counting them is arithmetic on
+// data slk holds, not a guess.
+//
+// Self-authored messages are excluded to match the live path, where
+// isSelfMessage keeps them out of the shared read-state gate.
+func countMentionsSince(db *cache.DB, chType, channelID, sinceTS, selfUserID string) (int, error) {
+	msgs, err := db.GetMessagesSince(channelID, sinceTS)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, m := range msgs {
+		if m.UserID != "" && m.UserID == selfUserID {
+			continue
+		}
+		if messageMentionsSelf(chType, m.Text, selfUserID) {
+			n++
+		}
+	}
+	return n, nil
+}
+
 func markChannelRead(ctx context.Context, client channelMarker, db *cache.DB, channelID, ts string) error {
 	if err := client.MarkChannel(ctx, channelID, ts); err != nil {
 		return err
@@ -3172,6 +3259,19 @@ func markChannelRead(ctx context.Context, client channelMarker, db *cache.DB, ch
 	if db != nil {
 		if err := db.UpdateChannelReadState(channelID, ts, false); err != nil {
 			log.Printf("Warning: failed to update read state in markChannelRead %s/%s: %v", channelID, ts, err)
+		}
+		// Reading the channel clears its mention badge. Slack echoes a
+		// *_marked event with mention_count=0 shortly after, which
+		// would do this anyway — but doing it here means the badge
+		// clears on the same render as the dot instead of one round
+		// trip later.
+		//
+		// Inside the post-MarkChannel branch deliberately: a failed
+		// mark returns above, so a badge is never cleared for a read
+		// Slack did not accept. That is the same guarantee the
+		// has_unread write above relies on.
+		if err := db.SetChannelMentionCount(channelID, 0); err != nil {
+			log.Printf("Warning: failed to clear mention count in markChannelRead %s: %v", channelID, err)
 		}
 	}
 	return nil
@@ -4189,6 +4289,49 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 		if err := h.db.UpdateChannelReadState(channelID, "", true); err != nil {
 			log.Printf("Warning: failed to set has_unread for %s: %v", channelID, err)
 		}
+		// Mention badge: bump the count when this message mentions the
+		// user. Deliberately nested inside the has_unread write's own
+		// gate rather than repeating its conditions, so the dot and the
+		// badge can never disagree about whether a message "arrived
+		// unread". Everything shouldMarkChannel excludes -- thread
+		// replies that are not broadcasts, self-authored messages, and
+		// edits -- is excluded from the badge for free.
+		//
+		// That an edit cannot badge is inherited, not incidental: a
+		// message_changed re-delivery does not make a channel unread on
+		// Slack, so a mention added by editing an existing message
+		// surfaces at the next client.counts refresh rather than
+		// immediately. Consistency with the dot is worth more than
+		// immediacy here.
+		//
+		// Conversation type decides what counts. Slack reports every
+		// unread message in mention_count for ims and mpims, and only
+		// @-mentions for channels; matching that split here keeps local
+		// increments consistent with the server value that will later
+		// overwrite them. That split is unverified against a live
+		// capture — see UnreadInfo's doc in internal/slack/client.go.
+		//
+		// "app" belongs in the DM branch because it is not one of
+		// Slack's conversation kinds: buildChannelItem invents it for an
+		// is_im conversation whose peer is a bot, purely so the sidebar
+		// can group Apps separately. Slack reports human DMs and app DMs
+		// alike in the `ims` block, so omitting "app" here would badge
+		// an app DM from the server at boot and then never increment it
+		// live. See "Conversation types: Slack's three kinds vs slk's
+		// five" in docs/superpowers/specs/2026-09-09-mention-badges-design.md.
+		//
+		// No self-author check here: isSelfMessage above already
+		// excludes it from shouldMarkChannel, so a duplicate test would
+		// be dead code that a future reader could "fix" in one place and
+		// not the other. A bot message still reaches this line, since
+		// isSelfMessage's userID != "" guard lets it through, and
+		// mention.InText's empty-self guard makes the direct-mention
+		// probe a no-op for it while still honouring @here/@channel.
+		if messageMentionsSelf(h.channelTypes[channelID], text, h.currentUserID) {
+			if err := h.db.IncrementChannelMentionCount(channelID); err != nil {
+				log.Printf("Warning: failed to increment mention count for %s: %v", channelID, err)
+			}
+		}
 	}
 
 	if h.isActive != nil && !h.isActive() {
@@ -4518,7 +4661,7 @@ func (h *rtmEventHandler) OnDNDChange(enabled bool, endUnix int64) {
 	})
 }
 
-func (h *rtmEventHandler) OnChannelMarked(channelID, ts string, unreadCount int) {
+func (h *rtmEventHandler) OnChannelMarked(channelID, ts string, unreadCount, mentionCount int) {
 	// Slack's *_marked events fire in BOTH directions: when the user
 	// reads a channel (unreadCount=0) AND when the user marks one
 	// unread (unreadCount>0). The event payload's
@@ -4531,6 +4674,13 @@ func (h *rtmEventHandler) OnChannelMarked(channelID, ts string, unreadCount int)
 	// authoritative across workspace switches.
 	if err := h.db.UpdateChannelReadState(channelID, ts, hasUnread); err != nil {
 		log.Printf("Warning: failed to update read state on channel_marked %s/%s: %v", channelID, ts, err)
+	}
+	// The event's mention_count is authoritative and replaces whatever
+	// the local increment path accumulated, which is how @usergroup
+	// undercounting gets corrected. A read event carries 0 and clears
+	// the badge.
+	if err := h.db.SetChannelMentionCount(channelID, mentionCount); err != nil {
+		log.Printf("Warning: failed to set mention count on channel_marked %s: %v", channelID, err)
 	}
 	if h.program != nil {
 		// Always notify so the workspace rail can refresh, regardless
