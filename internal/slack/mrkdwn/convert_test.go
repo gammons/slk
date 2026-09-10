@@ -186,29 +186,25 @@ func TestConvert_ItalicUnderscore(t *testing.T) {
 	}
 }
 
-func TestConvert_AsteriskPreservedAsLiteral(t *testing.T) {
-	// *x* in CommonMark is italic, but in Slack mrkdwn it's bold.
-	// We preserve the asterisks as literal characters so users who
-	// type Slack-style *bold* don't get it converted to _italic_.
+func TestConvert_SingleAsteriskIsBold(t *testing.T) {
+	// *x* in CommonMark is italic, but Slack's own mrkdwn treats a
+	// single asterisk pair as bold. slk treats it as bold (same as
+	// **x**) so a message that renders bold in slk's own compose/
+	// message view also renders bold in real Slack.
 	mr, blk := Convert("*hello*")
 	if mr != "*hello*" {
 		t.Errorf("mrkdwn = %q, want %q", mr, "*hello*")
 	}
-	// Block side: text elements concatenate to "*hello*", no italic.
 	sec := blk.Elements[0].(*slack.RichTextSection)
-	var got string
-	for _, el := range sec.Elements {
-		te, ok := el.(*slack.RichTextSectionTextElement)
-		if !ok {
-			t.Fatalf("element is %T, want only text elements", el)
-		}
-		if te.Style != nil && (te.Style.Italic || te.Style.Bold) {
-			t.Errorf("element %+v has style %+v, want no italic/bold for literal asterisks", te, te.Style)
-		}
-		got += te.Text
+	if len(sec.Elements) != 1 {
+		t.Fatalf("elements = %d, want 1: %s", len(sec.Elements), blockJSON(blk))
 	}
-	if got != "*hello*" {
-		t.Errorf("concatenated text = %q, want %q", got, "*hello*")
+	te := sec.Elements[0].(*slack.RichTextSectionTextElement)
+	if te.Text != "hello" {
+		t.Errorf("text = %q, want %q", te.Text, "hello")
+	}
+	if te.Style == nil || !te.Style.Bold {
+		t.Errorf("expected Style.Bold = true, got %+v", te.Style)
 	}
 }
 
@@ -225,65 +221,46 @@ func TestConvert_AsteriskRoundTripStable(t *testing.T) {
 	}
 }
 
-func TestConvert_NestedItalicAroundAsteriskLiteral(t *testing.T) {
-	// _*both*_ : outer italic, inner literal asterisks. The outer
-	// underscore-italic must apply, and the inner asterisks must be
-	// preserved as literal text inside the italic run.
+func TestConvert_NestedItalicAroundBold(t *testing.T) {
+	// _*both*_ : outer italic (underscore), inner bold (single
+	// asterisk pair, Slack's native bold syntax). Both styles apply
+	// to "both".
 	mr, blk := Convert("_*both*_")
 	want := "_*both*_"
 	if mr != want {
 		t.Errorf("mrkdwn = %q, want %q", mr, want)
 	}
-	// Block side: italic should be set on text elements inside the
-	// outer wrapper. The literal asterisks inherit italic from the
-	// surrounding inheritedStyle.
 	sec := blk.Elements[0].(*slack.RichTextSection)
-	for i, el := range sec.Elements {
-		te, ok := el.(*slack.RichTextSectionTextElement)
-		if !ok {
-			t.Fatalf("element[%d] is %T, want text", i, el)
-		}
-		if te.Style == nil || !te.Style.Italic {
-			t.Errorf("element[%d] %q style = %+v, want italic", i, te.Text, te.Style)
-		}
-		if te.Style != nil && te.Style.Bold {
-			t.Errorf("element[%d] %q has bold style, want italic only", i, te.Text)
-		}
+	if len(sec.Elements) != 1 {
+		t.Fatalf("elements = %d, want 1: %s", len(sec.Elements), blockJSON(blk))
+	}
+	te := sec.Elements[0].(*slack.RichTextSectionTextElement)
+	if te.Text != "both" {
+		t.Errorf("text = %q, want %q", te.Text, "both")
+	}
+	if te.Style == nil || !te.Style.Italic || !te.Style.Bold {
+		t.Errorf("style = %+v, want italic+bold", te.Style)
 	}
 }
 
-func TestConvert_NestedAsteriskLiteralAroundItalic(t *testing.T) {
-	// *_both_* : outer literal asterisks, inner underscore-italic.
-	// The outer asterisks must be preserved as literal text, and
-	// the inner italic must apply to "both".
+func TestConvert_NestedBoldAroundItalic(t *testing.T) {
+	// *_both_* : outer bold (single asterisk pair), inner italic
+	// (underscore). Both styles apply to "both".
 	mr, blk := Convert("*_both_*")
 	want := "*_both_*"
 	if mr != want {
 		t.Errorf("mrkdwn = %q, want %q", mr, want)
 	}
-	// Block side: walk the elements and verify "both" carries italic
-	// while the surrounding asterisks do not.
 	sec := blk.Elements[0].(*slack.RichTextSection)
-	var got string
-	sawItalicBoth := false
-	for _, el := range sec.Elements {
-		te, ok := el.(*slack.RichTextSectionTextElement)
-		if !ok {
-			t.Fatalf("element is %T, want text", el)
-		}
-		got += te.Text
-		if te.Text == "both" {
-			if te.Style == nil || !te.Style.Italic {
-				t.Errorf("'both' element style = %+v, want italic", te.Style)
-			}
-			sawItalicBoth = true
-		}
+	if len(sec.Elements) != 1 {
+		t.Fatalf("elements = %d, want 1: %s", len(sec.Elements), blockJSON(blk))
 	}
-	if got != "*both*" {
-		t.Errorf("concatenated visible text = %q, want %q", got, "*both*")
+	te := sec.Elements[0].(*slack.RichTextSectionTextElement)
+	if te.Text != "both" {
+		t.Errorf("text = %q, want %q", te.Text, "both")
 	}
-	if !sawItalicBoth {
-		t.Error("did not find a 'both' text element with italic style")
+	if te.Style == nil || !te.Style.Italic || !te.Style.Bold {
+		t.Errorf("style = %+v, want italic+bold", te.Style)
 	}
 }
 

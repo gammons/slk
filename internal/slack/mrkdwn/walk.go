@@ -125,11 +125,16 @@ func (w *walker) walkInline(n ast.Node) {
 		// Level 1: distinguish _italic_ from *italic*. Goldmark's
 		// emphasis node doesn't expose the delimiter byte directly,
 		// so we look at the byte immediately before the first child
-		// text segment.
+		// text segment. Underscore is CommonMark italic; a single
+		// asterisk pair is Slack's own native bold syntax, so treat
+		// it as bold (same as walkBold) rather than reinterpreting
+		// it as CommonMark italic — that keeps outgoing messages
+		// consistent with both real Slack's rendering and slk's own
+		// message view, which already displays "*word*" as bold.
 		if w.emphasisDelimiter(n) == '_' {
 			w.walkItalic(n)
 		} else {
-			w.walkAsteriskLiteral(n)
+			w.walkBold(n)
 		}
 	case *ast.CodeSpan:
 		w.mrkdwn.WriteString("`")
@@ -236,19 +241,6 @@ func (w *walker) walkItalic(n *ast.Emphasis) {
 	w.walkInlineChildren(n)
 	w.inheritedStyle = prev
 	w.mrkdwn.WriteString("_")
-}
-
-// walkAsteriskLiteral preserves *x* as literal text in both outputs.
-// The asterisks become text elements (no italic style of their own)
-// in the rich text block; if an enclosing emphasis is in scope, they
-// inherit ITS style via inheritedStyle so they visually flow with the
-// surrounding text. Inline formatting inside the run (e.g. *hello
-// **bold***) is still processed via walkInlineChildren — only the
-// outer asterisk pair is treated as literal text.
-func (w *walker) walkAsteriskLiteral(n *ast.Emphasis) {
-	w.appendText("*")
-	w.walkInlineChildren(n)
-	w.appendText("*")
 }
 
 // handleLink emits a CommonMark [label](url) as Slack mrkdwn
