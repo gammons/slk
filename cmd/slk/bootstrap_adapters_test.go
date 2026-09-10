@@ -841,3 +841,39 @@ func TestBootConversations_NilSafe(t *testing.T) {
 		t.Errorf("got %v; want nil", got)
 	}
 }
+
+// TestCountsAdapter_CarriesServerMentionCounts pins the boot path's one
+// testable transformation of the mention count.
+//
+// connectWorkspace, which owns the ChannelReadStateUpdate literal that
+// actually writes these to the cache, is not reachable from a test — it
+// opens a WebSocket, runs the full bootstrap and needs a *tea.Program —
+// so this covers the adapter link and the reconnect test covers the
+// write. The literal in main.go between them is reviewed, not tested.
+//
+// Written as a separate test rather than an assertion bolted onto
+// TestCountsAdapter_CarriesUnreadsAndTheThreadRollup so that a failure
+// names the thing that broke.
+func TestCountsAdapter_CarriesServerMentionCounts(t *testing.T) {
+	srv := newFakeSlack(t, map[string]string{"/api/client.counts": countsBody})
+	c := newTestClient(t, srv.Server)
+
+	counts, err := countsAdapter{c}.Counts(context.Background())
+	if err != nil {
+		t.Fatalf("Counts: %v", err)
+	}
+	got := map[string]int{}
+	for _, u := range counts.Unreads {
+		got[u.ChannelID] = u.MentionCount
+	}
+	// C1 carries mention_count 2. D1 omits the field entirely, which
+	// must decode to 0 — an absent count is not a reason to invent one,
+	// and the local mention-detection path supplies DM badges when the
+	// server does not.
+	if got["C1"] != 2 {
+		t.Errorf("C1 MentionCount = %d, want 2", got["C1"])
+	}
+	if got["D1"] != 0 {
+		t.Errorf("D1 MentionCount = %d, want 0 for an absent mention_count", got["D1"])
+	}
+}

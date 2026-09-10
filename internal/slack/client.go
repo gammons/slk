@@ -931,9 +931,14 @@ func (c *Client) UploadFile(
 // UnreadInfo holds the unread state for a single channel.
 type UnreadInfo struct {
 	ChannelID string
-	Count     int
-	HasUnread bool
-	LastRead  string // Slack message timestamp
+	// MentionCount is Slack's per-conversation mention count. For
+	// channels and mpims it counts @-mentions; for ims Slack reports
+	// every unread message, which is exactly the DM badge semantics the
+	// official client shows. Zero is meaningful: an unread channel with
+	// no mentions reports 0 and must render a dot, not a "1".
+	MentionCount int
+	HasUnread    bool
+	LastRead     string // Slack message timestamp
 }
 
 // ThreadsAggregate captures Slack's server-side notion of whether the
@@ -992,9 +997,10 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
 			LastRead     string `json:"last_read"`
 		} `json:"mpims"`
 		Ims []struct {
-			ID         string `json:"id"`
-			HasUnreads bool   `json:"has_unreads"`
-			LastRead   string `json:"last_read"`
+			ID           string `json:"id"`
+			HasUnreads   bool   `json:"has_unreads"`
+			MentionCount int    `json:"mention_count"`
+			LastRead     string `json:"last_read"`
 		} `json:"ims"`
 		// Threads is the workspace-wide thread-subscription rollup.
 		// Slack returns this top-level when the user has subscribed
@@ -1017,41 +1023,34 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
 	}
 
 	var unreads []UnreadInfo
+	// All three conversation kinds carry mention_count and are handled
+	// identically. The previous code floored the value to 1 whenever a
+	// conversation had unreads but no mentions, and hardcoded 1 for
+	// every im — a fabrication that was invisible only because nothing
+	// read the field.
 	for _, ch := range result.Channels {
-		info := UnreadInfo{
-			ChannelID: ch.ID,
-			LastRead:  ch.LastRead,
-			HasUnread: ch.HasUnreads,
-		}
-		if ch.HasUnreads {
-			info.Count = ch.MentionCount
-			if info.Count == 0 {
-				info.Count = 1 // has unreads but no mention count
-			}
-		}
-		unreads = append(unreads, info)
+		unreads = append(unreads, UnreadInfo{
+			ChannelID:    ch.ID,
+			MentionCount: ch.MentionCount,
+			HasUnread:    ch.HasUnreads,
+			LastRead:     ch.LastRead,
+		})
 	}
 	for _, ch := range result.Mpims {
-		info := UnreadInfo{
-			ChannelID: ch.ID,
-			LastRead:  ch.LastRead,
-			HasUnread: ch.HasUnreads,
-		}
-		if ch.HasUnreads {
-			info.Count = max(ch.MentionCount, 1)
-		}
-		unreads = append(unreads, info)
+		unreads = append(unreads, UnreadInfo{
+			ChannelID:    ch.ID,
+			MentionCount: ch.MentionCount,
+			HasUnread:    ch.HasUnreads,
+			LastRead:     ch.LastRead,
+		})
 	}
 	for _, ch := range result.Ims {
-		info := UnreadInfo{
-			ChannelID: ch.ID,
-			LastRead:  ch.LastRead,
-			HasUnread: ch.HasUnreads,
-		}
-		if ch.HasUnreads {
-			info.Count = 1
-		}
-		unreads = append(unreads, info)
+		unreads = append(unreads, UnreadInfo{
+			ChannelID:    ch.ID,
+			MentionCount: ch.MentionCount,
+			HasUnread:    ch.HasUnreads,
+			LastRead:     ch.LastRead,
+		})
 	}
 
 	threads := ThreadsAggregate{

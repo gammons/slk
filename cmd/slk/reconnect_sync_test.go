@@ -450,3 +450,68 @@ func TestSyncOnReconnect_KickSurvivesDedupedPass(t *testing.T) {
 		t.Fatal("deduped pass did not forward the kick to the thread gate, which owns the real throttle")
 	}
 }
+
+// countsWithMentionsBody is a client.counts response carrying non-zero
+// mention counts on all three conversation kinds.
+const countsWithMentionsBody = `{
+  "ok": true,
+  "channels": [
+    {"id":"C000","has_unreads":true,"mention_count":3,"last_read":"1700000005.000100"},
+    {"id":"C001","has_unreads":true,"mention_count":0,"last_read":"1700000006.000100"}
+  ],
+  "mpims": [{"id":"G000","has_unreads":true,"mention_count":5,"last_read":"1700000007.000100"}],
+  "ims": [{"id":"D000","has_unreads":true,"mention_count":2,"last_read":"1700000008.000100"}],
+  "threads": {"has_unreads":false,"unread_count":0,"mention_count":0}
+}`
+
+// TestReconnect_CarriesServerMentionCountsIntoTheCache drives the whole
+// trip — client.counts JSON, GetUnreadCounts' parse, refreshUnreadState's
+// ChannelReadStateUpdate, BatchUpdateChannelReadState — against a real
+// *slackclient.Client rather than fakeCounts, because the failure this
+// guards is a missing field on ONE struct literal in refreshUnreadState.
+// fakeCounts hands back UnreadInfo values a test wrote by hand, so it
+// cannot tell a parser that drops mention_count from a call site that
+// never copies it; and neither omission breaks the build or any other
+// test. The observed symptom was silent: reconnect wrote mention_count=0
+// over every badge local mention detection had accumulated, so badges
+// vanished on the first wifi flap.
+func TestReconnect_CarriesServerMentionCountsIntoTheCache(t *testing.T) {
+	db := newTestDB(t)
+	seedWorkspaceChannels(t, db, 2)
+	for _, id := range []string{"G000", "D000"} {
+		if err := db.UpsertChannel(cache.Channel{
+			ID: id, WorkspaceID: "T1", Name: id, Type: "im",
+		}); err != nil {
+			t.Fatalf("UpsertChannel(%s): %v", id, err)
+		}
+	}
+	// A badge accumulated locally during the session. C001 comes back
+	// from the server with mention_count 0, so this must be cleared —
+	// the server is authoritative for the channels it names.
+	if err := db.SetChannelMentionCount("C001", 4); err != nil {
+		t.Fatalf("SetChannelMentionCount: %v", err)
+	}
+
+	srv := newFakeSlack(t, map[string]string{"/api/client.counts": countsWithMentionsBody})
+	r := &reconnectSync{
+		client:      newTestClient(t, srv.Server),
+		db:          db,
+		workspaceID: "T1",
+		program:     &captureSender{},
+	}
+	r.refreshUnreadState()
+
+	want := map[string]int{"C000": 3, "C001": 0, "G000": 5, "D000": 2}
+	for id, wantCount := range want {
+		state, err := db.GetChannelReadState(id)
+		if err != nil {
+			t.Fatalf("GetChannelReadState(%s): %v", id, err)
+		}
+		if state.MentionCount != wantCount {
+			t.Errorf("%s mention_count = %d, want %d — the server count did not survive the trip from client.counts to the cache", id, state.MentionCount, wantCount)
+		}
+		if !state.HasUnread {
+			t.Errorf("%s has_unread = false; want true", id)
+		}
+	}
+}

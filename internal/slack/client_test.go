@@ -3173,3 +3173,52 @@ func TestPostForm_BodyFieldOrderIsAlphabeticalThenEnvelope(t *testing.T) {
 			"emits two different body shapes. Update the residual-divergence table either way.", raw, want)
 	}
 }
+
+// client.counts is the only source of authoritative mention counts.
+// mention_count means "@-mentions" for channels and mpims, and "every
+// unread message" for ims — Slack's server encodes the DM special case
+// for us, so slk consumes one field uniformly.
+func TestGetUnreadCounts_ParsesMentionCounts(t *testing.T) {
+	const body = `{
+	  "ok": true,
+	  "channels": [
+	    {"id":"C1","has_unreads":true,"mention_count":2,"unread_count_display":9,"last_read":"1.0"},
+	    {"id":"C2","has_unreads":true,"mention_count":0,"last_read":"2.0"},
+	    {"id":"C3","has_unreads":false,"mention_count":0,"last_read":"3.0"}
+	  ],
+	  "mpims": [{"id":"G1","has_unreads":true,"mention_count":4,"last_read":"4.0"}],
+	  "ims": [{"id":"D1","has_unreads":true,"mention_count":6,"last_read":"5.0"}],
+	  "threads": {"has_unreads":false,"unread_count":0,"mention_count":0}
+	}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	c := newTestClient(srv)
+
+	unreads, _, err := c.GetUnreadCounts()
+	if err != nil {
+		t.Fatalf("GetUnreadCounts: %v", err)
+	}
+
+	got := map[string]int{}
+	for _, u := range unreads {
+		got[u.ChannelID] = u.MentionCount
+	}
+	want := map[string]int{
+		"C1": 2,
+		// An unread channel with no mentions must report 0, not a
+		// floor of 1. The old code fabricated a 1 here, which would
+		// have painted a "1" badge on every unread channel.
+		"C2": 0,
+		"C3": 0,
+		"G1": 4,
+		"D1": 6,
+	}
+	for id, wantCount := range want {
+		if got[id] != wantCount {
+			t.Errorf("%s MentionCount = %d, want %d", id, got[id], wantCount)
+		}
+	}
+}

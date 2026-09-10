@@ -2622,6 +2622,10 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 				ChannelID:  u.ChannelID,
 				LastReadTS: u.LastRead, // may be ""; ReplaceWorkspaceReadState preserves existing in that case
 				HasUnread:  u.HasUnread,
+				// Boot is the authoritative snapshot: channels absent
+				// from client.counts get mention_count reset to 0 by
+				// ReplaceWorkspaceReadState's workspace-wide reset.
+				MentionCount: u.MentionCount,
 			})
 		}
 		if err := db.ReplaceWorkspaceReadState(client.TeamID(), updates); err != nil {
