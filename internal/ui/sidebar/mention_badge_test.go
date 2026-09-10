@@ -1,11 +1,16 @@
 package sidebar
 
 import (
+	"image/color"
 	"regexp"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
+	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 // rowFor returns the rendered sidebar line containing name, failing the
@@ -229,5 +234,335 @@ func TestMentionBadge_UnbadgedRowKeepsOriginalNameWidth(t *testing.T) {
 	}
 	if strings.Contains(plain, "engineering-dep") {
 		t.Errorf("unbadged row exceeded the 14-column budget: %q", plain)
+	}
+}
+
+// ---------------------------------------------------------------------
+// Themed rendering
+//
+// Every test above measures View() output with the styles package left at
+// its package defaults, where SelectionBackground and SelectionForeground
+// are still nil. MentionBadgeStyle() therefore emits no ANSI whatsoever
+// and those tests are really asserting on a plain string. The test below
+// is the only one that renders the badge the way a user actually sees it.
+//
+// It matters because the badge's output then passes through
+// messages.ReapplyBgAfterResets, which does a blunt
+//
+//	strings.ReplaceAll(label, "\x1b[m", "\x1b[m"+rowAttrs)
+//
+// across the whole row label -- including the resets lipgloss emits
+// *inside* the badge, because Padding(0, 1) splits it into three spans.
+// A themed 42-badge really does come back looking like this (dark theme;
+// row bg #0D0D1A, badge bg #4A9EFF, badge fg #1A1A2E):
+//
+//	\x1b[48;2;74;158;255m                              badge span 1
+//	" "                                                left padding cell
+//	\x1b[m                                             span 1 reset
+//	\x1b[48;2;13;13;26m\x1b[38;2;224;224;224m\x1b[1m   INJECTED row attrs
+//	\x1b[38;2;26;26;46;48;2;74;158;255m                badge span 2
+//	"42"                                               the digits
+//	\x1b[m                                             span 2 reset
+//	\x1b[48;2;13;13;26m\x1b[38;2;224;224;224m\x1b[1m   INJECTED row attrs
+//	\x1b[48;2;74;158;255m                              badge span 3
+//	" "                                                right padding cell
+//	\x1b[m                                             span 3 reset
+//
+// Each injection lands between one span's reset and the next span's SGR,
+// so it is overridden before any cell is painted. That is the property
+// asserted here, in the only form that cannot be faked: walk the row
+// tracking the active background, and require the cells painted in the
+// badge's background to be exactly ONE contiguous run -- " 42 ", the two
+// padding cells plus the digits. An injection that painted even a single
+// cell in the row's colours would split that run in two.
+
+// paintedCell is one printed character paired with the SGR background
+// token active when it was printed ("" meaning terminal default).
+type paintedCell struct {
+	r  rune
+	bg string
+}
+
+// scanSGR reports whether s begins with a CSI SGR sequence (ESC [ params m),
+// returning its byte length and its parameter substring.
+func scanSGR(s string) (n int, params string, ok bool) {
+	if len(s) < 2 || s[0] != 0x1b || s[1] != '[' {
+		return 0, "", false
+	}
+	for j := 2; j < len(s); j++ {
+		if c := s[j]; c == 'm' {
+			return j + 1, s[2:j], true
+		} else if c != ';' && (c < '0' || c > '9') {
+			return 0, "", false
+		}
+	}
+	return 0, "", false
+}
+
+// sgrParamTokens splits an SGR parameter list into attribute tokens,
+// keeping extended-colour groups (38/48 followed by ";5;N" or ";2;R;G;B")
+// intact. lipgloss bundles attributes into one sequence, so a span like
+// "1;38;2;224;224;224;48;2;13;13;26" must yield a single
+// "48;2;13;13;26" background token rather than a stray "48".
+func sgrParamTokens(params string) []string {
+	if params == "" {
+		return []string{"0"} // ESC[m is a full reset
+	}
+	f := strings.Split(params, ";")
+	out := make([]string, 0, len(f))
+	for i := 0; i < len(f); {
+		if f[i] == "38" || f[i] == "48" {
+			if i+2 < len(f) && f[i+1] == "5" {
+				out = append(out, strings.Join(f[i:i+3], ";"))
+				i += 3
+				continue
+			}
+			if i+4 < len(f) && f[i+1] == "2" {
+				out = append(out, strings.Join(f[i:i+5], ";"))
+				i += 5
+				continue
+			}
+		}
+		out = append(out, f[i])
+		i++
+	}
+	return out
+}
+
+// paintCells walks s interpreting SGR sequences and returns one
+// paintedCell per printed character. Only the background is tracked --
+// that is the attribute that decides which cells belong to the badge.
+func paintCells(s string) []paintedCell {
+	var out []paintedCell
+	bg := ""
+	for i := 0; i < len(s); {
+		if n, params, ok := scanSGR(s[i:]); ok {
+			for _, tok := range sgrParamTokens(params) {
+				switch {
+				case tok == "0", tok == "49":
+					bg = ""
+				case strings.HasPrefix(tok, "48;"):
+					bg = tok
+				case len(tok) == 2 && tok[0] == '4' && tok[1] <= '7':
+					bg = tok // ANSI-16 background, 40-47
+				}
+			}
+			i += n
+			continue
+		}
+		r, sz := utf8.DecodeRuneInString(s[i:])
+		out = append(out, paintedCell{r: r, bg: bg})
+		i += sz
+	}
+	return out
+}
+
+// bgRuns returns the maximal runs of consecutive printed characters whose
+// active background is bg.
+func bgRuns(cells []paintedCell, bg string) []string {
+	var runs []string
+	var cur strings.Builder
+	for _, c := range cells {
+		if c.bg == bg {
+			cur.WriteRune(c.r)
+			continue
+		}
+		if cur.Len() > 0 {
+			runs = append(runs, cur.String())
+			cur.Reset()
+		}
+	}
+	if cur.Len() > 0 {
+		runs = append(runs, cur.String())
+	}
+	return runs
+}
+
+// badgeBackgroundSGR renders the badge style in isolation and reports the
+// background token actually active on its text, so the assertions derive
+// the badge's colour from the style itself instead of hardcoding a
+// palette value that a theme edit would silently invalidate.
+func badgeBackgroundSGR(t *testing.T) string {
+	t.Helper()
+	for _, c := range paintCells(styles.MentionBadgeStyle().Render("X")) {
+		if c.r == 'X' {
+			return c.bg
+		}
+	}
+	t.Fatalf("badge style rendered no marker cell")
+	return ""
+}
+
+// styleGlobals holds every exported styles var the sidebar reads, either
+// directly or via messages.Sidebar*ANSI(). styles.Apply mutates
+// package-global state and no other sidebar test touches it, so a test
+// that themes the package must put it back or it changes what siblings
+// observe depending on run order.
+type styleGlobals struct {
+	primary, warning, accent, textMuted         color.Color
+	sidebarBg, sidebarText, sidebarTextMuted    color.Color
+	selectionBg, selectionFg                    color.Color
+	chSelected, chNormal, chUnread, chMuted     lipgloss.Style
+	sectionHeader, presenceOnline, presenceAway lipgloss.Style
+}
+
+func snapshotStyleGlobals() styleGlobals {
+	return styleGlobals{
+		primary: styles.Primary, warning: styles.Warning,
+		accent: styles.Accent, textMuted: styles.TextMuted,
+		sidebarBg: styles.SidebarBackground, sidebarText: styles.SidebarText,
+		sidebarTextMuted: styles.SidebarTextMuted,
+		selectionBg:      styles.SelectionBackground,
+		selectionFg:      styles.SelectionForeground,
+		chSelected:       styles.ChannelSelected, chNormal: styles.ChannelNormal,
+		chUnread: styles.ChannelUnread, chMuted: styles.ChannelMuted,
+		sectionHeader:  styles.SectionHeader,
+		presenceOnline: styles.PresenceOnline, presenceAway: styles.PresenceAway,
+	}
+}
+
+// restore puts the snapshot back. Restoring to the package's pristine
+// state is possible precisely because styles.Apply assigns the Selection*
+// pair on both branches of its if (styles.go:348-361): there is no path
+// on which Apply leaves them stale, so the snapshot is either a real
+// value or the untouched nil, and either round-trips.
+//
+// The listed set is exhaustive for this package, not for styles: the
+// sidebar reads only these vars, directly or through
+// messages.Sidebar{Bg,Fg,MutedFg}ANSI. Apply also themes Surface,
+// SearchHighlight*, ComposeInsertBG and the message-pane styles, which
+// nothing in this package's test binary observes. Go runs each package's
+// tests in their own process, so that residue cannot escape here.
+func (g styleGlobals) restore() {
+	styles.Primary, styles.Warning = g.primary, g.warning
+	styles.Accent, styles.TextMuted = g.accent, g.textMuted
+	styles.SidebarBackground, styles.SidebarText = g.sidebarBg, g.sidebarText
+	styles.SidebarTextMuted = g.sidebarTextMuted
+	styles.SelectionBackground, styles.SelectionForeground = g.selectionBg, g.selectionFg
+	styles.ChannelSelected, styles.ChannelNormal = g.chSelected, g.chNormal
+	styles.ChannelUnread, styles.ChannelMuted = g.chUnread, g.chMuted
+	styles.SectionHeader = g.sectionHeader
+	styles.PresenceOnline, styles.PresenceAway = g.presenceOnline, g.presenceAway
+}
+
+// canonicalSidebarView renders a fixture that exercises every styles var
+// in styleGlobals: a badged row (Selection*), a plain unread row
+// (Primary dot), a muted row (ChannelMuted), a private and an app row
+// (Warning), both DM presence glyphs, the cursor (Accent/TextMuted) and a
+// section header. Comparing its bytes before theming and after restoring
+// turns "I think I listed every global" into a checked claim.
+func canonicalSidebarView() string {
+	m := New([]ChannelItem{
+		{ID: "C1", Name: "deploys", Type: "channel"},
+		{ID: "C2", Name: "general", Type: "channel"},
+		{ID: "C3", Name: "quiet", Type: "channel", IsMuted: true},
+		{ID: "C4", Name: "secret", Type: "private"},
+		{ID: "C5", Name: "alice", Type: "dm", Presence: "active"},
+		{ID: "C6", Name: "bob", Type: "dm", Presence: "away"},
+		{ID: "C7", Name: "botty", Type: "app"},
+	})
+	m.SetReadStateReader(func() map[string]cache.ReadState {
+		return map[string]cache.ReadState{
+			"C1": {HasUnread: true, MentionCount: 42},
+			"C2": {HasUnread: true},
+			"C3": {HasUnread: true, MentionCount: 7},
+			"C4": {HasUnread: true},
+		}
+	})
+	m.ToggleCollapse("Channels")
+	return m.View(20, 30)
+}
+
+// TestMentionBadge_ThemedBadgePaintsOnlyItsOwnCells is the themed
+// counterpart to the plain-string tests above. See the commentary block
+// preceding it for why the reapply interaction needs pinning.
+func TestMentionBadge_ThemedBadgePaintsOnlyItsOwnCells(t *testing.T) {
+	baseline := canonicalSidebarView()
+
+	saved := snapshotStyleGlobals()
+	// Deferred so the restore survives an early t.Fatalf below, and so
+	// the restore itself is checked rather than trusted.
+	defer func() {
+		saved.restore()
+		got := canonicalSidebarView()
+		if got == baseline {
+			return
+		}
+		// Report the first divergent line rather than two 2.5 KB blobs.
+		wantL, gotL := strings.Split(baseline, "\n"), strings.Split(got, "\n")
+		for i := 0; i < len(wantL) && i < len(gotL); i++ {
+			if wantL[i] != gotL[i] {
+				t.Errorf("styles globals were not fully restored; sibling tests in"+
+					" this package would see a different palette depending on run"+
+					" order\nfirst divergent line %d:\n baseline: %q\n restored: %q",
+					i, wantL[i], gotL[i])
+				return
+			}
+		}
+		t.Errorf("styles globals were not fully restored: line count %d != %d",
+			len(gotL), len(wantL))
+	}()
+
+	styles.Apply("dark", config.Theme{})
+
+	badgeBg := badgeBackgroundSGR(t)
+	if badgeBg == "" {
+		t.Fatalf("badge emitted no background after styles.Apply; this test would be vacuous")
+	}
+
+	for _, tc := range []struct {
+		name   string
+		count  int
+		digits string
+	}{
+		{"two digit count", 42, "42"},
+		{"capped count", 250, "99+"},
+	} {
+		m := New([]ChannelItem{{ID: "C1", Name: "deploys", Type: "channel"}})
+		m.SetReadStateReader(func() map[string]cache.ReadState {
+			return map[string]cache.ReadState{"C1": {HasUnread: true, MentionCount: tc.count}}
+		})
+		m.ToggleCollapse("Channels")
+		row := rowFor(t, m.View(10, 30), "deploys")
+
+		// (1) The digit run is contiguous. strings.Contains on the raw
+		// bytes IS the contiguity assertion: any escape sequence between
+		// the digits would break the substring. This is the property
+		// every other test in this file relies on to find the badge, and
+		// until now it was only ever checked unthemed.
+		if !strings.Contains(row, tc.digits) {
+			t.Errorf("%s: themed badge digits %q are not a contiguous run;"+
+				" an ANSI sequence was emitted between them:\n%q",
+				tc.name, tc.digits, row)
+		}
+
+		// (2) No injected reapply payload paints a cell. The cells
+		// carrying the badge's background must form exactly one run, and
+		// that run must be the badge and nothing but the badge:
+		// left padding, the digits, right padding.
+		cells := paintCells(row)
+		runs := bgRuns(cells, badgeBg)
+		want := " " + tc.digits + " "
+		if len(runs) != 1 || runs[0] != want {
+			t.Errorf("%s: expected exactly one run of badge-coloured cells %q,"+
+				" got %q -- a reapply injection painted a cell in the row's"+
+				" colours inside the badge:\n%q", tc.name, want, runs, row)
+		}
+
+		// Guard against a vacuous pass: if the row background happened to
+		// equal the badge background, the run check above would be
+		// meaningless. Confirm the row really does paint in a different
+		// colour outside the badge.
+		rowBgSeen := false
+		for _, c := range cells {
+			if c.bg != badgeBg && c.bg != "" {
+				rowBgSeen = true
+				break
+			}
+		}
+		if !rowBgSeen {
+			t.Errorf("%s: row painted no non-badge background, so the badge"+
+				" isolation check proves nothing:\n%q", tc.name, row)
+		}
 	}
 }
