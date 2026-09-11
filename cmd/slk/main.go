@@ -268,17 +268,32 @@ func (w *WorkspaceContext) SetCustomEmoji(emojis map[string]string) {
 	w.customEmoji.Store(&emojis)
 }
 
-// workspaceRouter holds the program-wide "active workspace" pointer.
-// wireCallbacks(router) is invoked ONCE at startup. Every workspace-
-// scoped callback reads router.Active() at invocation time so the
-// effective workspace tracks the user's current Ctrl-N selection
-// without any closure rebinding.
+// workspaceRouter is the program-wide registry of connected
+// workspaces. active is the one the user is looking at:
+// wireCallbacks(router) is invoked ONCE at startup, and every
+// workspace-scoped callback reads router.Active() at invocation time
+// so the effective workspace tracks the user's current Ctrl-N
+// selection without any closure rebinding. all is every workspace
+// that has connected this session, keyed by team ID.
 //
-// The `all` map is populated only during the connect-workspaces phase
-// (before p.Run); subsequent reads from p.Send-invoked callbacks are
-// race-free without a mutex.
+// all is guarded by mu because its writers and readers are on
+// different goroutines. An earlier version of this comment said the
+// map "is populated only during the connect-workspaces phase (before
+// p.Run)" and so needed no mutex; that was wrong. run launches one
+// connect goroutine per workspace and then calls p.Run immediately,
+// so each goroutine's Add lands while the program is already handling
+// messages -- including the WorkspaceReadyMsg of whichever workspace
+// finished first, whose callbacks (EnsureSubscriptions, the rail's
+// unread reader on every read-state event, later the workspace
+// switcher) call ByID, and the wake watcher's All. Two workspaces
+// finishing together, or one finishing while another's ready message
+// is being handled, is a concurrent map write or read/write -- a
+// runtime fatal, not a data race the detector merely reports -- and
+// the window is exactly the boot phase, when every one of those
+// callbacks fires.
 type workspaceRouter struct {
 	active atomic.Pointer[WorkspaceContext]
+	mu     sync.RWMutex
 	all    map[string]*WorkspaceContext
 }
 
@@ -289,7 +304,30 @@ func newWorkspaceRouter() *workspaceRouter {
 func (r *workspaceRouter) Active() *WorkspaceContext  { return r.active.Load() }
 func (r *workspaceRouter) Set(wctx *WorkspaceContext) { r.active.Store(wctx) }
 func (r *workspaceRouter) ByID(teamID string) *WorkspaceContext {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.all[teamID]
+}
+
+// Add registers a connected workspace. Called from its connect
+// goroutine; this is the write side of mu.
+func (r *workspaceRouter) Add(wctx *WorkspaceContext) {
+	r.mu.Lock()
+	r.all[wctx.TeamID] = wctx
+	r.mu.Unlock()
+}
+
+// All returns a snapshot of every connected workspace, as a slice
+// rather than the map so callers can iterate without holding mu
+// across whatever they do per workspace.
+func (r *workspaceRouter) All() []*WorkspaceContext {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*WorkspaceContext, 0, len(r.all))
+	for _, wctx := range r.all {
+		out = append(out, wctx)
+	}
+	return out
 }
 
 // userResolverConcurrency caps how many users.info round trips the
@@ -1185,7 +1223,6 @@ func run() error {
 
 	// Declare p before wiring callbacks so closures can capture it
 	var p *tea.Program
-	workspaces := make(map[string]*WorkspaceContext)
 	var activeTeamID string
 
 	// router holds the program-wide active workspace pointer. All
@@ -1238,7 +1275,7 @@ func run() error {
 				return // shouldn't happen, but guard against it
 			}
 			teamName := activeTeamID
-			if wctx, ok := workspaces[activeTeamID]; ok && wctx.TeamName != "" {
+			if wctx := router.ByID(activeTeamID); wctx != nil && wctx.TeamName != "" {
 				teamName = wctx.TeamName
 			}
 			// Find the existing TOML key for this workspace, if any.
@@ -1278,7 +1315,7 @@ func run() error {
 			return
 		}
 		teamName := activeTeamID
-		if wctx, ok := workspaces[activeTeamID]; ok && wctx.TeamName != "" {
+		if wctx := router.ByID(activeTeamID); wctx != nil && wctx.TeamName != "" {
 			teamName = wctx.TeamName
 		}
 		tomlKey := activeTeamID
@@ -1300,11 +1337,11 @@ func run() error {
 		}
 	})
 
-	// Wire presence/DND status setter. Captured workspaces map and
-	// activeTeamID by reference so the closure always targets the
+	// Wire presence/DND status setter. Resolves activeTeamID through
+	// the router at invocation so the closure always targets the
 	// currently-active workspace context.
 	app.SetStatusSetter(func(action presencemenu.Action, snoozeMinutes int) {
-		wctx := workspaces[activeTeamID]
+		wctx := router.ByID(activeTeamID)
 		if wctx == nil || wctx.Client == nil {
 			return
 		}
@@ -2072,8 +2109,7 @@ func run() error {
 				return
 			}
 
-			workspaces[wctx.TeamID] = wctx
-			router.all[wctx.TeamID] = wctx
+			router.Add(wctx)
 			wsMgr.AddWorkspace(wctx.TeamID, wctx.TeamName, "")
 
 			// Decide whether this workspace becomes the active one.
@@ -2228,7 +2264,7 @@ func run() error {
 	defer wakeCancel()
 	go wake.New(10*time.Second, 5*time.Second, func(elapsed time.Duration) {
 		debuglog.Backfill("wake detected: elapsed=%v — triggering catch-up across all workspaces", elapsed)
-		for _, wctx := range router.all {
+		for _, wctx := range router.All() {
 			if wctx == nil || wctx.RTMHandler == nil {
 				continue
 			}
@@ -2255,7 +2291,7 @@ func run() error {
 	}
 
 	// Clean up connection managers
-	for _, wctx := range workspaces {
+	for _, wctx := range router.All() {
 		if wctx.ConnMgr != nil {
 			wctx.ConnMgr.Stop()
 		}
