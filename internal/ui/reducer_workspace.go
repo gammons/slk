@@ -83,6 +83,13 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	case SectionsRefreshedMsg:
 		if m.TeamID == a.activeTeamID {
 			a.SetChannels(m.Channels)
+			// The new list carries new IsMuted flags, and "(N)",
+			// $SLK_UNREAD and the rail derive from those, not just
+			// the sidebar's dots. SetChannels only swaps the items;
+			// without this a channel muted while unread lost its
+			// sidebar dot but stayed counted in the title until the
+			// next read-state event.
+			a.notifyReadStateChanged()
 		}
 		// Inactive-workspace events have already updated the
 		// WorkspaceContext.Channels in cmd/slk; App.Update only
@@ -250,6 +257,15 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 		threads.EnsureSubscriptions(team)
 		return nil
 	})
+	// The rail reader keeps a workspace's cached dot until the router
+	// knows the workspace, so last session's dots survive boot. Now
+	// that this one is connected the answer can change -- a cached dot
+	// held up only by muted or unlisted channels should go dark -- and
+	// nothing else recomputes it until some read-state event happens
+	// to arrive. connectWorkspace has already written the workspace's
+	// authoritative counts, so recompute here, for every workspace
+	// that becomes ready, not only the initial active one.
+	a.notifyReadStateChanged()
 	return tea.Batch(batch...)
 }
 

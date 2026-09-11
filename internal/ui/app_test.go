@@ -4493,7 +4493,9 @@ func setupAppForTitleTest(
 // wiring test. It verifies that notifyReadStateChanged actually plumbs
 // each input from the collaborator the architecture assigns to it:
 //   - active count comes from the sidebar (mute-filtered)
-//   - other-workspace count comes from the rail (not mute-filtered)
+//   - other-workspace count comes from the rail, whose installed reader
+//     applies the sidebar's mute rule per workspace (railUnreadWorkspaces
+//     in cmd/slk); this test's stub reader stands in for it
 //   - workspace name comes from the rail for the active team
 //
 // If a future refactor reroutes any of these sources, the assertions
