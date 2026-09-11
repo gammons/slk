@@ -209,6 +209,14 @@ func WordWrap(s string, limit int) string {
 // can't see and which would push downstream layout (e.g. the thread
 // compose box) over content above it.
 func wrapLine(buf *strings.Builder, line string, limit int) {
+	// Keep fitting lines byte-for-byte. The reflow below intentionally
+	// normalizes overlong prose with strings.Fields; applying it here
+	// would destroy code indentation and fragment ANSI-styled runs.
+	if lipgloss.Width(line) <= limit {
+		buf.WriteString(line)
+		return
+	}
+
 	words := strings.Fields(line)
 	if len(words) == 0 {
 		return
@@ -628,6 +636,14 @@ type RenderSlackMarkdownOpts struct {
 	EmojiCells   int                      // 0 falls back to 2
 	Customs      map[string]string        // workspace custom emoji map; may be nil
 	EmojiFlushes *[]func(io.Writer) error // append-only; may be nil
+
+	// Width is the content width the result will be wrapped to, and is
+	// used only by the code-block path: a fenced block is hard-wrapped
+	// and padded to exactly this width so every one of its lines
+	// carries the surface background edge to edge, the way Slack draws
+	// one. 0 leaves the old behaviour (block as wide as its longest
+	// line, ragged right edge).
+	Width int
 }
 
 // RenderSlackMarkdown converts Slack-flavored markdown and emoji shortcodes
@@ -655,7 +671,27 @@ func RenderSlackMarkdownWith(text string, opts RenderSlackMarkdownOpts) string {
 	// Handle code blocks first (before other formatting to avoid conflicts)
 	text = codeBlockRe.ReplaceAllStringFunc(text, func(match string) string {
 		inner := codeBlockRe.FindStringSubmatch(match)[1]
-		inner = strings.TrimSpace(inner)
+		// Remove the line break that separates a fenced block from its
+		// content, not the content's whitespace. strings.TrimSpace would
+		// erase indentation from the first and last code lines.
+		if trimmed, ok := strings.CutPrefix(inner, "\r\n"); ok {
+			inner = trimmed
+		} else {
+			inner = strings.TrimPrefix(inner, "\n")
+		}
+		if trimmed, ok := strings.CutSuffix(inner, "\r\n"); ok {
+			inner = trimmed
+		} else {
+			inner = strings.TrimSuffix(inner, "\n")
+		}
+		// Hard-wrap before styling so WordWrap never reflows code as
+		// prose. Width includes one padding column on each side; setting
+		// it on the style extends the surface background across the line.
+		// Breaking at word boundaries would move code tokens.
+		if w := opts.Width; w > 2 {
+			inner = ansi.Hardwrap(inner, w-2, false)
+			return "\n" + codeBlockStyle().Width(w).Render(inner) + "\n"
+		}
 		return "\n" + codeBlockStyle().Render(inner) + "\n"
 	})
 

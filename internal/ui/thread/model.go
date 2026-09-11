@@ -1849,6 +1849,7 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 		EmojiCells:   m.emojiCtx.Cells,
 		Customs:      m.emojiCtx.Customs,
 		EmojiFlushes: &flushes,
+		Width:        contentWidth,
 	}
 	text := styles.MessageText.Render(messages.WordWrap(messages.RenderSlackMarkdownWith(messages.MessageTextSource(msg), bodyOpts), contentWidth))
 

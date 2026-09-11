@@ -1963,6 +1963,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		EmojiCells:   m.emojiCtx.Cells,
 		Customs:      m.emojiCtx.Customs,
 		EmojiFlushes: &flushes,
+		Width:        contentWidth,
 	}
 	rendered := RenderSlackMarkdownWith(MessageTextSource(msg), bodyOpts)
 	if len(m.searchTerms) > 0 {
