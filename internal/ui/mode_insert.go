@@ -112,7 +112,10 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	}
 
 	code := msg.Key().Code
-	mod := msg.Key().Mod
+	// Lock-state bits (NumLock/CapsLock) ride along in Mod on terminals
+	// implementing the Kitty Keyboard Protocol, regardless of whether
+	// they're relevant to the binding — strip them before comparing.
+	mod := msg.Key().Mod &^ (tea.ModCapsLock | tea.ModNumLock | tea.ModScrollLock)
 	isPaste := code == 'v' && mod == tea.ModCtrl
 	if isPaste {
 		return a.smartPaste()

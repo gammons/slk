@@ -295,6 +295,65 @@ func TestMentionNavigateUpDown(t *testing.T) {
 	}
 }
 
+func TestIsCtrl_IgnoresLockStateBits(t *testing.T) {
+	cases := []struct {
+		name string
+		mod  tea.KeyMod
+		want bool
+	}{
+		{"plain ctrl", tea.ModCtrl, true},
+		{"ctrl + numlock", tea.ModCtrl | tea.ModNumLock, true},
+		{"ctrl + capslock", tea.ModCtrl | tea.ModCapsLock, true},
+		{"ctrl + scrolllock", tea.ModCtrl | tea.ModScrollLock, true},
+		{"ctrl + all lock bits", tea.ModCtrl | tea.ModNumLock | tea.ModCapsLock | tea.ModScrollLock, true},
+		{"no ctrl", 0, false},
+		{"numlock alone", tea.ModNumLock, false},
+		{"ctrl + shift", tea.ModCtrl | tea.ModShift, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isCtrl(c.mod); got != c.want {
+				t.Errorf("isCtrl(%v) = %v, want %v", c.mod, got, c.want)
+			}
+		})
+	}
+}
+
+// TestMentionNavigateUpDown_WithNumLock guards the picker-closing
+// regression: Ctrl+P/Ctrl+N must still navigate the list, not fall
+// through to the picker's default case (which closes it) whenever
+// NumLock's Mod bit rides along.
+func TestMentionNavigateUpDown_WithNumLock(t *testing.T) {
+	m := New("general")
+	m.SetUsers([]mentionpicker.User{
+		{ID: "U1", DisplayName: "Alice", Username: "alice"},
+		{ID: "U2", DisplayName: "Bob", Username: "bob"},
+	})
+	m.SetWidth(80)
+	m.Focus()
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: '@', Text: "@"})
+	if !m.IsMentionActive() {
+		t.Fatal("expected mention picker to be active")
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl | tea.ModNumLock})
+	if !m.IsMentionActive() {
+		t.Fatal("ctrl+n with NumLock closed the picker instead of navigating")
+	}
+	if m.mentionPicker.Selected() != 1 {
+		t.Errorf("expected selection 1 after ctrl+n, got %d", m.mentionPicker.Selected())
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl | tea.ModNumLock})
+	if !m.IsMentionActive() {
+		t.Fatal("ctrl+p with NumLock closed the picker instead of navigating")
+	}
+	if m.mentionPicker.Selected() != 0 {
+		t.Errorf("expected selection 0 after ctrl+p, got %d", m.mentionPicker.Selected())
+	}
+}
+
 func TestMentionBackspaceCancelsMention(t *testing.T) {
 	m := New("general")
 	m.SetUsers([]mentionpicker.User{

@@ -725,6 +725,26 @@ func TestInsertModeKeys(t *testing.T) {
 			},
 		},
 		{
+			// NumLock's Mod bit rides along on terminals implementing
+			// the Kitty Keyboard Protocol even for a bare Up press. Before
+			// the isCtrl-style masking on `mod` at mode_insert.go:116,
+			// `mod == 0` never matched, so this jump silently stopped
+			// working under NumLock.
+			name:     "up on the first line with NumLock still jumps to the start of the textarea",
+			opts:     insertOpts(),
+			setup:    func(t *testing.T, a *App) { typeInto(t, &a.compose, "abc") },
+			key:      keyMod(tea.KeyUp, tea.ModNumLock),
+			wantMode: ModeInsert,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if cmd != nil {
+					t.Errorf("cmd = %T, want nil", cmd)
+				}
+				if got := afterKeyValue(&a.compose, 'X'); got != "Xabc" {
+					t.Errorf("value after a follow-up key = %q, want %q (cursor at the start)", got, "Xabc")
+				}
+			},
+		},
+		{
 			// The picker guard: with a suggestion list up, Up belongs to
 			// the picker, not to the jump shortcut. Without the guard
 			// the cursor would be dragged to column 0 and the follow-up
@@ -748,6 +768,22 @@ func TestInsertModeKeys(t *testing.T) {
 			opts:     insertOpts(),
 			setup:    func(t *testing.T, a *App) { typeInto(t, &a.compose, "abc"); a.compose.MoveCursorToStart() },
 			key:      keyCode(tea.KeyDown),
+			wantMode: ModeInsert,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if cmd != nil {
+					t.Errorf("cmd = %T, want nil", cmd)
+				}
+				if got := afterKeyValue(&a.compose, 'X'); got != "abcX" {
+					t.Errorf("value after a follow-up key = %q, want %q (cursor at the end)", got, "abcX")
+				}
+			},
+		},
+		{
+			// CapsLock's Mod bit variant of the row above.
+			name:     "down on the last line with CapsLock still jumps to the end of the textarea",
+			opts:     insertOpts(),
+			setup:    func(t *testing.T, a *App) { typeInto(t, &a.compose, "abc"); a.compose.MoveCursorToStart() },
+			key:      keyMod(tea.KeyDown, tea.ModCapsLock),
 			wantMode: ModeInsert,
 			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
 				if cmd != nil {
