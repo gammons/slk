@@ -4,9 +4,11 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/gammons/slk/internal/bootstrap"
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/service"
+	"github.com/gammons/slk/internal/slack/boot"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/workspace"
 	"github.com/slack-go/slack"
@@ -71,6 +73,26 @@ func TestRailUnreadWorkspaces(t *testing.T) {
 			unread: nil,
 			all:    map[string]*WorkspaceContext{"T1": {}},
 			want:   nil,
+		},
+		{
+			// A channel the sidebar cannot show has no dot to explain
+			// this one and no keystroke to clear it, so it must not
+			// light the rail. The field case was an archived channel;
+			// see TestRailUnreadWorkspaces_ArchivedChannelInCache.
+			name:   "unread row for a channel not in the workspace list does not light",
+			unread: []cache.UnreadChannel{unreadRow("T1", "C9")},
+			all: map[string]*WorkspaceContext{
+				"T1": {Channels: []sidebar.ChannelItem{{ID: "C1"}}},
+			},
+			want: nil,
+		},
+		{
+			name:   "unlisted row next to a listed unread still lights",
+			unread: []cache.UnreadChannel{unreadRow("T1", "C1"), unreadRow("T1", "C9")},
+			all: map[string]*WorkspaceContext{
+				"T1": {Channels: []sidebar.ChannelItem{{ID: "C1"}}},
+			},
+			want: []string{"T1"},
 		},
 	}
 	for _, tc := range cases {
@@ -151,5 +173,63 @@ func TestRailUnreadWorkspaces_RailAndTitleAgree(t *testing.T) {
 	// T2 is active, so only T3 counts toward "+N".
 	if got := m.OtherUnreadCount("T2"); got != 1 {
 		t.Errorf("OtherUnreadCount(T2) = %d, want 1", got)
+	}
+}
+
+// TestRailUnreadWorkspaces_ArchivedChannelInCache is the synthetic
+// repro for the field case, built the way production builds it rather
+// than by hand: hydrateFirstSight caches every conversation userBoot
+// names, archived included; the sidebar list comes from
+// bootConversations, which drops the archived one; and the counts
+// snapshot then marks the archived channel unread with Slack's
+// never-opened last_read sentinel. Before the membership rule the
+// resulting row lit the rail with nothing visible to account for it.
+func TestRailUnreadWorkspaces_ArchivedChannelInCache(t *testing.T) {
+	db, err := cache.New(":memory:")
+	if err != nil {
+		t.Fatalf("cache.New: %v", err)
+	}
+	defer db.Close()
+
+	res := &bootstrap.Result{
+		Channels: []boot.Channel{
+			{ID: "C1", Name: "general", IsChannel: true},
+			{ID: "C2", Name: "amtrx-vendor-connect", IsChannel: true, IsPrivate: true, IsArchived: true},
+		},
+	}
+	hydrateFirstSight(db, "T1", res)
+	if _, err := db.GetChannel("C2"); err != nil {
+		t.Fatalf("archived channel was not cached; this test no longer exercises the repro: %v", err)
+	}
+
+	wctx := &WorkspaceContext{
+		UserNames:         map[string]string{},
+		UserNamesByHandle: map[string]string{},
+		BotUserIDs:        map[string]bool{},
+	}
+	for _, ch := range bootConversations(res) {
+		item, _ := buildChannelItem(ch, wctx, config.Config{}, "T1")
+		wctx.Channels = append(wctx.Channels, item)
+	}
+	if len(wctx.Channels) != 1 || wctx.Channels[0].ID != "C1" {
+		t.Fatalf("sidebar list = %+v; want only C1 (bootConversations drops archived)", wctx.Channels)
+	}
+
+	if err := db.ReplaceWorkspaceReadState("T1", []cache.ChannelReadStateUpdate{
+		{ChannelID: "C2", LastReadTS: "0000000000.000000", HasUnread: true},
+	}); err != nil {
+		t.Fatalf("ReplaceWorkspaceReadState: %v", err)
+	}
+	unread, err := db.UnreadChannels()
+	if err != nil {
+		t.Fatalf("UnreadChannels: %v", err)
+	}
+	if len(unread) != 1 || unread[0].ChannelID != "C2" {
+		t.Fatalf("UnreadChannels = %+v; want the archived row alone", unread)
+	}
+
+	all := map[string]*WorkspaceContext{"T1": wctx}
+	if got := railUnreadWorkspaces(unread, railLookup(all)); got != nil {
+		t.Errorf("archived channel lit the rail: got %v, want none", got)
 	}
 }

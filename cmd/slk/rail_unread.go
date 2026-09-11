@@ -23,17 +23,35 @@ import "github.com/gammons/slk/internal/cache"
 // the predicate is pure and testable with neither a router nor a DB,
 // the same reason sidebar.IsStale takes its read state as arguments.
 //
-// Two "unknown, so light it" cases keep the conservative default that
+// One "unknown, so light it" case keeps the conservative default that
 // MuteStore.Ready documents (a dot we might have suppressed beats one
-// the user wanted to see and lost):
+// the user wanted to see and lost): byID returning nil, meaning the
+// workspace is still connecting or its connect failed. There is no
+// channel list to check against, so any unread row lights it, exactly
+// as before this change. This is also what keeps last session's cached
+// dots visible during boot, before any workspace has connected.
 //
-//   - byID returns nil: the workspace is still connecting, or its
-//     connect failed. There is no channel list to check against, so
-//     any unread row lights it, exactly as before this change. This is
-//     also what keeps last session's cached dots visible during boot,
-//     before any workspace has connected.
-//   - the row's channel is not in wctx.Channels: its mute state is
-//     unknown, so it is treated as unmuted.
+// A row whose channel is NOT in wctx.Channels is the opposite case and
+// never lights. The sidebar and the local channel finder are built
+// from the same loop that fills wctx.Channels (connectWorkspace), so
+// such a channel has no row on screen, no dot, and no keystroke that
+// can mark it read: a rail dot it lights can be neither explained nor
+// cleared from inside slk. The field case was an archived Slack
+// Connect channel. client.userBoot lists archived conversations the
+// user belongs to, with is_archived=true (verified 2026-09-11 against
+// a live response); bootConversations and users.conversations
+// (ExcludeArchived) keep them out of the sidebar, but hydrateFirstSight
+// caches every conversation userBoot names, archived or not, and
+// client.counts still reported the channel unread because its
+// last_read was Slack's never-opened sentinel. So a row the sidebar
+// could not show carried has_unread=1 from the first boot, and kept it
+// -- nothing deletes channel rows -- until the channel was opened in
+// the official client. Filtering archived conversations out of
+// hydrateFirstSight instead was rejected: the cache is allowed to know
+// more conversations than the sidebar shows (search results resolve
+// <#C…> mentions through those rows; see resolveChannel in main.go),
+// it would leave every existing cache lit, and it would close one way
+// a row can be unshowable rather than the property itself.
 //
 // wctx.Channels is read here on the UI goroutine without
 // synchronization, against writes from the WebSocket handler
@@ -58,8 +76,9 @@ func railUnreadWorkspaces(unread []cache.UnreadChannel, byID func(teamID string)
 }
 
 // railRowLights reports whether one unread row lights its workspace's
-// dot. The two true-by-default branches are the "unknown, so light
-// it" cases railUnreadWorkspaces documents.
+// dot. The nil-wctx branch is the "unknown, so light it" case
+// railUnreadWorkspaces documents; a channel absent from wctx.Channels
+// is the "cannot be shown, so never light it" case.
 func railRowLights(u cache.UnreadChannel, wctx *WorkspaceContext) bool {
 	if wctx == nil {
 		return true
@@ -69,5 +88,5 @@ func railRowLights(u cache.UnreadChannel, wctx *WorkspaceContext) bool {
 			return item.IsVisiblyUnread(u.State)
 		}
 	}
-	return true
+	return false
 }
