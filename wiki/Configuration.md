@@ -44,7 +44,7 @@ quiet_hours = "22:00-08:00"   # planned
 # state always runs last, so the surface converges on the current state.
 # Executed via `sh -c` with:
 #   $SLK_UNREAD        unread channels in the active workspace (mute-filtered)
-#   $SLK_OTHER_UNREAD  unread count across other workspaces
+#   $SLK_OTHER_UNREAD  other workspaces with unread channels (mute-filtered)
 #   $SLK_WORKSPACE     active workspace name
 #   $SLK_TITLE         the window-title string, e.g. "slk SW (3) +1"
 # status_command = 'my-statusbar --slack-unread "$SLK_UNREAD"'

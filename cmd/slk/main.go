@@ -1365,12 +1365,12 @@ func run() error {
 		})
 
 		app.SetWorkspaceUnreadReader(func() []string {
-			ids, err := db.WorkspacesWithUnreads()
+			unread, err := db.UnreadChannels()
 			if err != nil {
-				log.Printf("Warning: WorkspacesWithUnreads: %v", err)
+				log.Printf("Warning: UnreadChannels: %v", err)
 				return nil
 			}
-			return ids
+			return railUnreadWorkspaces(unread, router.ByID)
 		})
 
 		app.SetChannelService(ui.NewChannelService(ui.ChannelServiceFuncs{
@@ -4348,7 +4348,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 		// Inactive workspace — durable read state is already settled
 		// above (written, or deliberately skipped). Fire a
 		// ReadStateChangedMsg so the workspace rail refreshes its dot
-		// from db.WorkspacesWithUnreads(). The sidebar's Invalidate is
+		// through railUnreadWorkspaces. The sidebar's Invalidate is
 		// a no-op here because the active workspace's sidebar isn't
 		// showing this channel anyway.
 		switch {
