@@ -26,15 +26,7 @@ func saveWorkspaceWidth(configPath, tomlKey, teamID, teamName string, width int)
 	}
 	lines := strings.Split(string(data), "\n")
 
-	header := fmt.Sprintf("[workspaces.%s]", tomlKey)
-
-	sectionStart := -1
-	for i, line := range lines {
-		if strings.TrimSpace(line) == header {
-			sectionStart = i
-			break
-		}
-	}
+	sectionStart := findWorkspaceSectionStart(lines, tomlKey, teamID)
 
 	if sectionStart >= 0 {
 		end := len(lines)
