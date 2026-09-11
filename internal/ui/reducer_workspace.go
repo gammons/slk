@@ -28,8 +28,8 @@
 //	                          roundtrip): patch the sidebar entry
 //	                          and re-render.
 //	UserResolvedMsg         - per-user display-name resolved:
-//	                          patch any in-history references in
-//	                          both messages pane and thread panel.
+//	                          patch in-history references and any
+//	                          sidebar DM whose peer is this user.
 //	UserExternalMsg         - per-user external/internal flag
 //	                          resolved: update the cache + re-push
 //	                          SetUserNames so styling refreshes.
@@ -90,6 +90,9 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 
 	case DMNameResolvedMsg:
+		if m.TeamID != "" && m.TeamID != a.activeTeamID {
+			return nil, true
+		}
 		items := a.sidebar.Items()
 		for i := range items {
 			if items[i].ID != m.ChannelID {
@@ -112,10 +115,32 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			mp.PatchUserName(m.UserID, m.DisplayName)
 		}
 		a.threadPanel.PatchUserName(m.UserID, m.DisplayName)
-		// IsBot affects DM channel-type classification, but that's
-		// orchestrated by DMNameResolvedMsg; this handler is only
-		// the in-history name patch. IsBot is carried for forward
-		// compatibility but not consumed here.
+		// Also rename any sidebar DM whose peer is this user. The
+		// unresolved-DM sweep sends DMNameResolvedMsg for the same
+		// purpose, but UserResolvedMsg is what the batched edge path
+		// emits, and a DM that was painted as its user ID would
+		// otherwise stay that way until a workspace switch rebuilt
+		// the sidebar from wctx.Channels.
+		if m.DisplayName != "" {
+			items := a.sidebar.Items()
+			changed := false
+			for i := range items {
+				if items[i].DMUserID != m.UserID {
+					continue
+				}
+				if items[i].Name != m.DisplayName {
+					items[i].Name = m.DisplayName
+					changed = true
+				}
+				if m.IsBot && items[i].Type == "dm" {
+					items[i].Type = "app"
+					changed = true
+				}
+			}
+			if changed {
+				a.SetChannels(items)
+			}
+		}
 		return nil, true
 
 	case UserExternalMsg:
