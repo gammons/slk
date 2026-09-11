@@ -5102,14 +5102,10 @@ func (h *rtmEventHandler) refreshMutedForActive() {
 // Inactive: ReadStateChangedMsg. There is no sidebar on screen for
 // this workspace, but its rail dot, the title's "+N" and
 // $SLK_OTHER_UNREAD are all derived from these flags by
-// railUnreadWorkspaces, and nothing re-reads them until the next
-// read-state event. Before this branch existed the inactive case
-// posted nothing, so a channel muted or unmuted from another Slack
-// client left the rail stale -- an unmute left a workspace with
-// unreads dark, a mute kept one lit -- until an unrelated message or
-// mark happened to arrive. ReadStateChangedMsg is what
-// notifyReadStateChanged already answers to, and the App ignores its
-// fields, so no new message type is needed.
+// railUnreadWorkspaces, and nothing else re-reads them until the next
+// read-state event. ReadStateChangedMsg is what notifyReadStateChanged
+// already answers to, and the App ignores its fields, so no new
+// message type is needed.
 //
 // Pure so the choice is testable without a *tea.Program.
 func muteRefreshMsg(active bool, teamID string, channels []sidebar.ChannelItem) tea.Msg {
