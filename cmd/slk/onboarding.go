@@ -141,6 +141,8 @@ func desktopErrorMessage(err error) string {
 		return "Could not decrypt the Slack session cookie: " + err.Error() +
 			". If you have had more than one Slack build installed (App Store and standalone), " +
 			"sign out of the one you no longer use. Otherwise please file an issue with your OS + Slack version."
+	case errors.Is(err, slackdesktop.ErrCookieLocked):
+		return "Your Slack cookie is locked by a running process of Slack. Close Slack and try again."
 	default:
 		return "Could not read Slack desktop session: " + err.Error()
 	}

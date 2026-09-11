@@ -39,3 +39,11 @@ func TestReadCookieRow(t *testing.T) {
 		t.Errorf("enc len = %d, want 3", len(enc))
 	}
 }
+
+func TestCopyToTempWithLockedCookie(t *testing.T) {
+	_, err := copyToTemp("/Slack/Network/Cookie", func(err error) bool { return true })
+
+	if err == nil || err != ErrCookieLocked {
+		t.Errorf("error = %q, expected = %q", err, ErrCookieLocked)
+	}
+}
