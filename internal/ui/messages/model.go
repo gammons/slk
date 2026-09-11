@@ -2267,7 +2267,31 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 
 	bkBlock := ""
 	if len(bkLines) > 0 {
-		bkBlock = "\n" + strings.Join(bkLines, "\n")
+		// Re-apply the background after every reset, the same treatment
+		// the body text gets from styles.MessageText.
+		//
+		// The inline styles (bold, italic, link, mention) deliberately
+		// omit .Background() and rely on an outer style providing it —
+		// see the comment on boldStyle in render.go. Body text has that
+		// outer style; Block Kit lines do not. They are composed from a
+		// gutter prefix plus rendered content, and the prefix's closing
+		// reset clears the background for everything after it on that
+		// line, so styled and plain runs alike drew on the terminal's
+		// default background while only the trailing pad kept the
+		// theme's. On a selected message that reads as the selection
+		// tint stopping at the glyphs.
+		//
+		// Background only, no foreground: kitty image placeholders
+		// encode their image ID in the cell foreground (see
+		// image.PlaceholderRune) and must not be repainted.
+		//
+		// Each line is also PREFIXED with the background, not just
+		// patched after its own resets. The reset that strips the
+		// background is not in these lines at all — it closes the
+		// avatar gutter that placeAvatarBeside prepends to every line
+		// afterwards, so the run at the start of the content has no
+		// preceding reset here to attach a background to.
+		bkBlock = "\n" + WithBackground(bkLines, BgANSI())
 	}
 
 	if len(msg.Attachments) > 0 {
