@@ -14,6 +14,8 @@
 | `Shift+Enter` | Insert | Newline |
 | `Ctrl+V` | Insert | Smart paste — image / file path / text (use `Ctrl+V`, not the terminal's `Ctrl+Shift+V`) |
 | `Ctrl+U` | Insert | Clear compose (text + pending attachments) |
+| `Ctrl+O` | Insert (thread) | Toggle "also send to channel" for the next thread reply |
+| `Alt+Enter` | Insert (thread) | Send thread reply and broadcast to channel (one-shot) |
 | `Ctrl+U` / `Ctrl+D` | Normal | Half-page up / down |
 | `Up` | Insert | Previous line; on the first line, jump to start of message |
 | `Down` | Insert | Next line; on the last line, jump to end of message |

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
@@ -1117,6 +1118,111 @@ func TestSetChannelMembershipAfterLoadingFlipsInChannel(t *testing.T) {
 	for _, u := range m.MentionUsers() {
 		if u.DisplayName == "alice" && u.InChannel {
 			t.Error("after empty C1 membership loads, alice should be not-in-channel")
+		}
+	}
+}
+
+func TestBroadcastToggle(t *testing.T) {
+	m := New("general")
+	if m.Broadcast() {
+		t.Fatal("broadcast should default to off")
+	}
+	if m.ToggleBroadcast() != true || !m.Broadcast() {
+		t.Fatal("ToggleBroadcast should turn the flag on")
+	}
+	if m.ToggleBroadcast() != false || m.Broadcast() {
+		t.Fatal("second ToggleBroadcast should turn the flag off")
+	}
+	m.ToggleBroadcast()
+	m.SetBroadcast(false)
+	if m.Broadcast() {
+		t.Fatal("SetBroadcast(false) should clear the flag")
+	}
+	// Idempotent SetBroadcast must not dirty an already-cleared model.
+	v := m.Version()
+	m.SetBroadcast(false)
+	if m.Version() != v {
+		t.Error("no-op SetBroadcast should not bump Version")
+	}
+}
+
+func TestComposeViewBroadcastHint(t *testing.T) {
+	m := New("general")
+	m.SetValue("draft text")
+
+	off := m.View(40, true)
+	if strings.Contains(off, "also send to") {
+		t.Errorf("hint must be hidden while broadcast is off, got:\n%s", off)
+	}
+
+	m.ToggleBroadcast()
+	on := m.View(40, true)
+	if !strings.Contains(on, "also send to #general") {
+		t.Errorf("hint with channel name missing while broadcast is on, got:\n%s", on)
+	}
+	if !strings.Contains(on, "ctrl+o") {
+		t.Errorf("hint should name the toggle key, got:\n%s", on)
+	}
+	if strings.Contains(on, "draft text") == false {
+		t.Errorf("hint render must not drop compose content, got:\n%s", on)
+	}
+}
+
+func TestComposeViewBroadcastHintUnfocused(t *testing.T) {
+	// The hint must render even when the compose is blurred (e.g. the
+	// user toggled and Esc'd out), otherwise the pending broadcast is
+	// invisible until the next send.
+	m := New("ops")
+	m.ToggleBroadcast()
+	view := m.View(40, false)
+	if !strings.Contains(view, "also send to #ops") {
+		t.Errorf("hint missing in unfocused view, got:\n%s", view)
+	}
+}
+
+func TestResetClearsBroadcast(t *testing.T) {
+	m := New("general")
+	m.ToggleBroadcast()
+	if !m.Broadcast() {
+		t.Fatal("expected broadcast to be on")
+	}
+	m.Reset()
+	if m.Broadcast() {
+		t.Error("Reset() must clear broadcast flag (non-sticky across sends)")
+	}
+}
+
+func TestBroadcastHintWrapping(t *testing.T) {
+	styles.Apply("default", config.Theme{})
+	m := New("newsroom")
+	m.ToggleBroadcast()
+
+	// With width=40, the compose box style has Width(39). The hint
+	// "↪ also send to #newsroom  (ctrl+o to cancel)" is 44 display columns
+	// wide, so it must wrap into 2 lines.
+	view := m.View(40, true)
+	lines := strings.Split(view, "\n")
+	if len(lines) < 4 {
+		t.Fatalf("expected at least 4 lines (top pad, input, wrapped hint lines, bottom pad), got %d:\n%s", len(lines), view)
+	}
+
+	wantWidth := 39 // style.Width(width - 1)
+	for i, l := range lines {
+		w := lipgloss.Width(l)
+		if w != wantWidth {
+			t.Errorf("line %d visual width = %d, want %d (line: %q)", i, w, wantWidth, l)
+		}
+		if !strings.Contains(l, "▌") {
+			t.Errorf("line %d missing left border ▌ (line: %q)", i, l)
+		}
+	}
+
+	// Verify unfocused view also maintains uniform width and border.
+	viewUnfocused := m.View(40, false)
+	for i, l := range strings.Split(viewUnfocused, "\n") {
+		w := lipgloss.Width(l)
+		if w != wantWidth {
+			t.Errorf("unfocused line %d visual width = %d, want %d", i, w, wantWidth)
 		}
 	}
 }
