@@ -42,14 +42,36 @@ func addWorkspace() error {
 		return err
 	}
 
-	// Multi-select (all pre-selected).
+	// Pre-select only the workspaces that are not configured yet.
+	//
+	// Selecting everything by default meant re-running --add-workspace
+	// re-added what was already there. That is not merely redundant:
+	// the config writer keyed uniqueness on the slug, so the second run
+	// wrote a second block for the same team_id under "<slug>-2", and
+	// config.Load then rejects the file — slk stops starting until the
+	// user hand-edits it. The writer is now idempotent by team_id, and
+	// this makes the picker say so out loud rather than silently
+	// dropping a selection the user made.
+	already := configuredTeamIDs(filepath.Join(xdgConfig(), "config.toml"))
+
 	var opts []huh.Option[string]
-	for _, w := range workspaces {
-		opts = append(opts, huh.NewOption(fmt.Sprintf("%s  (%s.slack.com)", w.Name, w.Domain), w.TeamID))
-	}
 	chosen := make([]string, 0, len(workspaces))
+	newCount := 0
 	for _, w := range workspaces {
-		chosen = append(chosen, w.TeamID)
+		label := fmt.Sprintf("%s  (%s.slack.com)", w.Name, w.Domain)
+		if already[w.TeamID] {
+			label += "  — już dodany"
+		} else {
+			chosen = append(chosen, w.TeamID)
+			newCount++
+		}
+		opts = append(opts, huh.NewOption(label, w.TeamID))
+	}
+
+	if newCount == 0 {
+		fmt.Println(dimStyle.Render("  Wszystkie workspace'y z aplikacji desktopowej są już dodane."))
+		fmt.Println(dimStyle.Render("  Zaznacz któryś, żeby odświeżyć jego token, albo wyjdź (Ctrl+C)."))
+		fmt.Println()
 	}
 	// huh sizes the MultiSelect option viewport to (Height - title/description
 	// lines); when Height is unset the viewport collapses to a row or two and
@@ -64,7 +86,7 @@ func addWorkspace() error {
 		huh.NewGroup(
 			huh.NewMultiSelect[string]().
 				Title("Workspaces to add").
-				Description("All selected by default; space to toggle, enter to confirm.").
+				Description("Nowe są zaznaczone; spacja przełącza, enter zatwierdza.").
 				Options(opts...).
 				Value(&chosen).
 				Height(visibleRows + 4),
