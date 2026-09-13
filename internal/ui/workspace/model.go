@@ -19,9 +19,11 @@ type Model struct {
 	items    []WorkspaceItem
 	selected int
 	version  int64
-	// unreadReader returns the set of workspace IDs that currently
-	// have at least one channel with has_unread=true. Set by App via
-	// SetUnreadReader; called by RefreshUnreads.
+	// unreadReader returns the set of workspace IDs whose dot should
+	// be lit: those with at least one channel their own sidebar would
+	// show as unread (mute-filtered; see railUnreadWorkspaces in
+	// cmd/slk). Set by App via SetUnreadReader; called by
+	// RefreshUnreads and OtherUnreadCount.
 	unreadReader func() []string
 }
 
@@ -56,8 +58,10 @@ func (m *Model) NameByID(id string) string {
 
 // OtherUnreadCount returns the number of workspaces with unreads,
 // excluding activeID. Reads through the installed unreadReader; returns
-// 0 when no reader is set. Does not filter mute -- matches the rail
-// dot's existing semantics so the title's "+N" and the rail dots agree.
+// 0 when no reader is set. Mute filtering is the reader's job, not
+// this method's: the reader applies the sidebar's IsVisiblyUnread
+// predicate per workspace, so the title's "+N", the rail dots and the
+// active workspace's "(N)" all agree on what counts as unread.
 func (m *Model) OtherUnreadCount(activeID string) int {
 	if m.unreadReader == nil {
 		return 0

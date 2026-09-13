@@ -2480,7 +2480,7 @@ func (a *App) SetReadStateReader(f func() map[string]cache.ReadState) {
 
 // SetWorkspaceUnreadReader installs the callback the workspace rail
 // uses on RefreshUnreads to learn which workspaces have at least one
-// channel with has_unread=true.
+// channel their sidebar would show as unread.
 func (a *App) SetWorkspaceUnreadReader(f func() []string) {
 	a.workspaceRail.SetUnreadReader(f)
 }

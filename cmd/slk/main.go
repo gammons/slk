@@ -268,17 +268,32 @@ func (w *WorkspaceContext) SetCustomEmoji(emojis map[string]string) {
 	w.customEmoji.Store(&emojis)
 }
 
-// workspaceRouter holds the program-wide "active workspace" pointer.
-// wireCallbacks(router) is invoked ONCE at startup. Every workspace-
-// scoped callback reads router.Active() at invocation time so the
-// effective workspace tracks the user's current Ctrl-N selection
-// without any closure rebinding.
+// workspaceRouter is the program-wide registry of connected
+// workspaces. active is the one the user is looking at:
+// wireCallbacks(router) is invoked ONCE at startup, and every
+// workspace-scoped callback reads router.Active() at invocation time
+// so the effective workspace tracks the user's current Ctrl-N
+// selection without any closure rebinding. all is every workspace
+// that has connected this session, keyed by team ID.
 //
-// The `all` map is populated only during the connect-workspaces phase
-// (before p.Run); subsequent reads from p.Send-invoked callbacks are
-// race-free without a mutex.
+// all is guarded by mu because its writers and readers are on
+// different goroutines. An earlier version of this comment said the
+// map "is populated only during the connect-workspaces phase (before
+// p.Run)" and so needed no mutex; that was wrong. run launches one
+// connect goroutine per workspace and then calls p.Run immediately,
+// so each goroutine's Add lands while the program is already handling
+// messages -- including the WorkspaceReadyMsg of whichever workspace
+// finished first, whose callbacks (EnsureSubscriptions, the rail's
+// unread reader on every read-state event, later the workspace
+// switcher) call ByID, and the wake watcher's All. Two workspaces
+// finishing together, or one finishing while another's ready message
+// is being handled, is a concurrent map write or read/write -- a
+// runtime fatal, not a data race the detector merely reports -- and
+// the window is exactly the boot phase, when every one of those
+// callbacks fires.
 type workspaceRouter struct {
 	active atomic.Pointer[WorkspaceContext]
+	mu     sync.RWMutex
 	all    map[string]*WorkspaceContext
 }
 
@@ -289,7 +304,30 @@ func newWorkspaceRouter() *workspaceRouter {
 func (r *workspaceRouter) Active() *WorkspaceContext  { return r.active.Load() }
 func (r *workspaceRouter) Set(wctx *WorkspaceContext) { r.active.Store(wctx) }
 func (r *workspaceRouter) ByID(teamID string) *WorkspaceContext {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.all[teamID]
+}
+
+// Add registers a connected workspace. Called from its connect
+// goroutine; this is the write side of mu.
+func (r *workspaceRouter) Add(wctx *WorkspaceContext) {
+	r.mu.Lock()
+	r.all[wctx.TeamID] = wctx
+	r.mu.Unlock()
+}
+
+// All returns a snapshot of every connected workspace, as a slice
+// rather than the map so callers can iterate without holding mu
+// across whatever they do per workspace.
+func (r *workspaceRouter) All() []*WorkspaceContext {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*WorkspaceContext, 0, len(r.all))
+	for _, wctx := range r.all {
+		out = append(out, wctx)
+	}
+	return out
 }
 
 // userResolverConcurrency caps how many users.info round trips the
@@ -1185,7 +1223,6 @@ func run() error {
 
 	// Declare p before wiring callbacks so closures can capture it
 	var p *tea.Program
-	workspaces := make(map[string]*WorkspaceContext)
 	var activeTeamID string
 
 	// router holds the program-wide active workspace pointer. All
@@ -1238,7 +1275,7 @@ func run() error {
 				return // shouldn't happen, but guard against it
 			}
 			teamName := activeTeamID
-			if wctx, ok := workspaces[activeTeamID]; ok && wctx.TeamName != "" {
+			if wctx := router.ByID(activeTeamID); wctx != nil && wctx.TeamName != "" {
 				teamName = wctx.TeamName
 			}
 			// Find the existing TOML key for this workspace, if any.
@@ -1278,7 +1315,7 @@ func run() error {
 			return
 		}
 		teamName := activeTeamID
-		if wctx, ok := workspaces[activeTeamID]; ok && wctx.TeamName != "" {
+		if wctx := router.ByID(activeTeamID); wctx != nil && wctx.TeamName != "" {
 			teamName = wctx.TeamName
 		}
 		tomlKey := activeTeamID
@@ -1300,11 +1337,11 @@ func run() error {
 		}
 	})
 
-	// Wire presence/DND status setter. Captured workspaces map and
-	// activeTeamID by reference so the closure always targets the
+	// Wire presence/DND status setter. Resolves activeTeamID through
+	// the router at invocation so the closure always targets the
 	// currently-active workspace context.
 	app.SetStatusSetter(func(action presencemenu.Action, snoozeMinutes int) {
-		wctx := workspaces[activeTeamID]
+		wctx := router.ByID(activeTeamID)
 		if wctx == nil || wctx.Client == nil {
 			return
 		}
@@ -1365,12 +1402,12 @@ func run() error {
 		})
 
 		app.SetWorkspaceUnreadReader(func() []string {
-			ids, err := db.WorkspacesWithUnreads()
+			unread, err := db.UnreadChannels()
 			if err != nil {
-				log.Printf("Warning: WorkspacesWithUnreads: %v", err)
+				log.Printf("Warning: UnreadChannels: %v", err)
 				return nil
 			}
-			return ids
+			return railUnreadWorkspaces(unread, router.ByID)
 		})
 
 		app.SetChannelService(ui.NewChannelService(ui.ChannelServiceFuncs{
@@ -2072,8 +2109,7 @@ func run() error {
 				return
 			}
 
-			workspaces[wctx.TeamID] = wctx
-			router.all[wctx.TeamID] = wctx
+			router.Add(wctx)
 			wsMgr.AddWorkspace(wctx.TeamID, wctx.TeamName, "")
 
 			// Decide whether this workspace becomes the active one.
@@ -2228,7 +2264,7 @@ func run() error {
 	defer wakeCancel()
 	go wake.New(10*time.Second, 5*time.Second, func(elapsed time.Duration) {
 		debuglog.Backfill("wake detected: elapsed=%v — triggering catch-up across all workspaces", elapsed)
-		for _, wctx := range router.all {
+		for _, wctx := range router.All() {
 			if wctx == nil || wctx.RTMHandler == nil {
 				continue
 			}
@@ -2255,7 +2291,7 @@ func run() error {
 	}
 
 	// Clean up connection managers
-	for _, wctx := range workspaces {
+	for _, wctx := range router.All() {
 		if wctx.ConnMgr != nil {
 			wctx.ConnMgr.Stop()
 		}
@@ -4348,7 +4384,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 		// Inactive workspace — durable read state is already settled
 		// above (written, or deliberately skipped). Fire a
 		// ReadStateChangedMsg so the workspace rail refreshes its dot
-		// from db.WorkspacesWithUnreads(). The sidebar's Invalidate is
+		// through railUnreadWorkspaces. The sidebar's Invalidate is
 		// a no-op here because the active workspace's sidebar isn't
 		// showing this channel anyway.
 		switch {
@@ -5029,12 +5065,10 @@ func (h *rtmEventHandler) OnMemberLeft(channelID, userID string) {
 }
 
 // refreshMutedForActive walks wctx.Channels, refreshes each item's
-// IsMuted flag from the current MuteStore, and posts a
-// SectionsRefreshedMsg so the App rebuilds the sidebar from the
-// updated list. Mirrors refreshSectionsForActive but for the mute
-// dimension; reuses the same message because the App treats it as a
-// "channel-list-attributes-changed" signal regardless of what
-// changed.
+// IsMuted flag from the current MuteStore, and posts the message
+// muteRefreshMsg chooses so the UI re-derives whatever it showed from
+// those flags. Mirrors refreshSectionsForActive but for the mute
+// dimension.
 func (h *rtmEventHandler) refreshMutedForActive() {
 	if h.wsCtx == nil || h.wsCtx.MuteStore == nil {
 		return
@@ -5053,15 +5087,34 @@ func (h *rtmEventHandler) refreshMutedForActive() {
 	if h.program == nil {
 		return
 	}
-	if h.isActive != nil && !h.isActive() {
-		return
+	active := h.isActive == nil || h.isActive()
+	h.program.Send(muteRefreshMsg(active, h.workspaceID, h.wsCtx.Channels))
+}
+
+// muteRefreshMsg is the message refreshMutedForActive posts after the
+// IsMuted flags change, chosen by whether the workspace is the active
+// one.
+//
+// Active: SectionsRefreshedMsg with a copy of the rebuilt list -- the
+// same "channel-list-attributes-changed" signal refreshSectionsForActive
+// uses -- so the App swaps the sidebar's items.
+//
+// Inactive: ReadStateChangedMsg. There is no sidebar on screen for
+// this workspace, but its rail dot, the title's "+N" and
+// $SLK_OTHER_UNREAD are all derived from these flags by
+// railUnreadWorkspaces, and nothing else re-reads them until the next
+// read-state event. ReadStateChangedMsg is what notifyReadStateChanged
+// already answers to, and the App ignores its fields, so no new
+// message type is needed.
+//
+// Pure so the choice is testable without a *tea.Program.
+func muteRefreshMsg(active bool, teamID string, channels []sidebar.ChannelItem) tea.Msg {
+	if !active {
+		return ui.ReadStateChangedMsg{WorkspaceID: teamID}
 	}
-	channelsCopy := make([]sidebar.ChannelItem, len(h.wsCtx.Channels))
-	copy(channelsCopy, h.wsCtx.Channels)
-	h.program.Send(ui.SectionsRefreshedMsg{
-		TeamID:   h.workspaceID,
-		Channels: channelsCopy,
-	})
+	channelsCopy := make([]sidebar.ChannelItem, len(channels))
+	copy(channelsCopy, channels)
+	return ui.SectionsRefreshedMsg{TeamID: teamID, Channels: channelsCopy}
 }
 
 // listWorkspaces prints the configured workspaces with their TeamID and

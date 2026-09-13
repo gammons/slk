@@ -5,6 +5,7 @@ import (
 
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/ui"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/slack-go/slack"
@@ -575,5 +576,35 @@ func TestOnThreadSubscriptionChanged_PersistsOnInactiveWorkspace(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].ChannelID != "C1" || !got[0].Active {
 		t.Fatalf("inactive workspace must still persist thread_subscribed; got %+v, want 1 active row", got)
+	}
+}
+
+// TestMuteRefreshMsg pins which message a mute change posts: the active
+// workspace gets its sidebar list swapped, an inactive one gets the
+// read-state signal the rail, title and status hook re-derive from.
+// The inactive case is the one that used to post nothing.
+func TestMuteRefreshMsg(t *testing.T) {
+	channels := []sidebar.ChannelItem{{ID: "C1", IsMuted: true}}
+
+	msg := muteRefreshMsg(true, "T1", channels)
+	sr, ok := msg.(ui.SectionsRefreshedMsg)
+	if !ok {
+		t.Fatalf("active: got %T, want ui.SectionsRefreshedMsg", msg)
+	}
+	if sr.TeamID != "T1" || len(sr.Channels) != 1 || !sr.Channels[0].IsMuted {
+		t.Errorf("active: msg = %+v", sr)
+	}
+	sr.Channels[0].IsMuted = false
+	if !channels[0].IsMuted {
+		t.Error("active: the message shares the handler's slice; the App would be mutating wctx.Channels")
+	}
+
+	msg = muteRefreshMsg(false, "T1", channels)
+	rs, ok := msg.(ui.ReadStateChangedMsg)
+	if !ok {
+		t.Fatalf("inactive: got %T, want ui.ReadStateChangedMsg", msg)
+	}
+	if rs.WorkspaceID != "T1" {
+		t.Errorf("inactive: WorkspaceID = %q, want T1", rs.WorkspaceID)
 	}
 }

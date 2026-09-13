@@ -249,23 +249,50 @@ func (db *DB) GetWorkspaceReadState(workspaceID string) (map[string]ReadState, e
 	return out, rows.Err()
 }
 
-// WorkspacesWithUnreads returns the set of workspace IDs with at least
-// one has_unread=true channel. Used by the workspace rail.
-func (db *DB) WorkspacesWithUnreads() ([]string, error) {
+// UnreadChannel is one has_unread=1 row together with the workspace
+// that owns it. It is the workspace rail's raw input. The rail's
+// question is not "does any row in this workspace have has_unread=1"
+// but "would this workspace's sidebar show an unread dot", and the
+// second question needs the channel ID -- which the workspace-only
+// query this replaced (WorkspacesWithUnreads) discarded, leaving the
+// caller nothing to check mute or membership against.
+type UnreadChannel struct {
+	WorkspaceID string
+	ChannelID   string
+	State       ReadState
+}
+
+// UnreadChannels returns every channel row with has_unread=1 across
+// all workspaces, ordered by workspace then channel ID so the caller's
+// output is deterministic. Used by the workspace rail reader in
+// cmd/slk (railUnreadWorkspaces), which decides per row whether the
+// owning workspace's sidebar would actually show it as unread.
+//
+// Mute state is deliberately not filtered here. It lives only in
+// service.MuteStore -- in memory, hydrated from userBoot's prefs and
+// kept live by pref_change -- and is never written to this table, so a
+// query cannot see it. The same goes for "is this channel in the
+// sidebar at all": that is wctx.Channels, not a column. Both filters
+// belong in the caller, where both are in scope.
+func (db *DB) UnreadChannels() ([]UnreadChannel, error) {
 	rows, err := db.conn.Query(
-		`SELECT DISTINCT workspace_id FROM channels WHERE has_unread = 1`,
+		`SELECT workspace_id, id, last_read_ts, has_unread, mention_count
+		 FROM channels WHERE has_unread = 1
+		 ORDER BY workspace_id, id`,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("query workspaces with unreads: %w", err)
+		return nil, fmt.Errorf("query unread channels: %w", err)
 	}
 	defer rows.Close()
-	var out []string
+	var out []UnreadChannel
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan workspace id: %w", err)
+		var u UnreadChannel
+		var hasUnread int
+		if err := rows.Scan(&u.WorkspaceID, &u.ChannelID, &u.State.LastReadTS, &hasUnread, &u.State.MentionCount); err != nil {
+			return nil, fmt.Errorf("scan unread channel: %w", err)
 		}
-		out = append(out, id)
+		u.State.HasUnread = hasUnread == 1
+		out = append(out, u)
 	}
 	return out, rows.Err()
 }

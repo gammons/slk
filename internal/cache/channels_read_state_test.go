@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"reflect"
 	"testing"
 )
 
@@ -177,32 +178,34 @@ func TestGetWorkspaceReadState_ReturnsAllChannels(t *testing.T) {
 	}
 }
 
-func TestWorkspacesWithUnreads(t *testing.T) {
+func TestUnreadChannels(t *testing.T) {
 	db, err := New(":memory:")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	defer db.Close()
+	newRSChannel(t, db, "C2", "T1")
 	newRSChannel(t, db, "C1", "T1")
-	newRSChannel(t, db, "C2", "T2")
-	newRSChannel(t, db, "C3", "T3")
+	newRSChannel(t, db, "C3", "T2")
+	newRSChannel(t, db, "C4", "T3")
 
 	_ = db.UpdateChannelReadState("C1", "1.0", true)
-	_ = db.UpdateChannelReadState("C3", "1.0", true)
-	// C2/T2 has no unreads
+	_ = db.UpdateChannelReadState("C2", "2.0", true)
+	_ = db.SetChannelMentionCount("C2", 3)
+	_ = db.UpdateChannelReadState("C4", "4.0", true)
+	// C3/T2 has no unreads and must not appear at all.
 
-	got, err := db.WorkspacesWithUnreads()
+	got, err := db.UnreadChannels()
 	if err != nil {
-		t.Fatalf("WorkspacesWithUnreads: %v", err)
+		t.Fatalf("UnreadChannels: %v", err)
 	}
-	want := map[string]bool{"T1": true, "T3": true}
-	if len(got) != 2 {
-		t.Fatalf("got %d ids, want 2: %v", len(got), got)
+	want := []UnreadChannel{
+		{WorkspaceID: "T1", ChannelID: "C1", State: ReadState{LastReadTS: "1.0", HasUnread: true}},
+		{WorkspaceID: "T1", ChannelID: "C2", State: ReadState{LastReadTS: "2.0", HasUnread: true, MentionCount: 3}},
+		{WorkspaceID: "T3", ChannelID: "C4", State: ReadState{LastReadTS: "4.0", HasUnread: true}},
 	}
-	for _, id := range got {
-		if !want[id] {
-			t.Errorf("unexpected workspace %q", id)
-		}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("UnreadChannels =\n%+v\nwant\n%+v", got, want)
 	}
 }
 
