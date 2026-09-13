@@ -287,6 +287,60 @@ func TestSetBrowseableReplacesPreviousBrowseable(t *testing.T) {
 	}
 }
 
+func TestUpsertRefiltersVisibleQuery(t *testing.T) {
+	m := New()
+	m.SetItems([]Item{{ID: "C1", Name: "general", Type: "channel", Joined: true}})
+	m.Open()
+	m.HandleKey("z")
+	m.HandleKey("e")
+	m.HandleKey("d")
+	if got := m.FilteredItems(); len(got) != 0 {
+		t.Fatalf("setup: filtered items = %+v, want none", got)
+	}
+
+	m.Upsert(Item{ID: "D1", Name: "zed person", Type: "dm", Joined: true})
+
+	got := m.FilteredItems()
+	if len(got) != 1 || got[0].ID != "D1" {
+		t.Errorf("filtered items after Upsert = %+v, want D1", got)
+	}
+}
+
+func TestUpsertReplacesByIDAndPreservesLastVisited(t *testing.T) {
+	m := New()
+	m.SetItems([]Item{{
+		ID: "C1", Name: "old name", Type: "channel", Joined: false, LastVisited: 123,
+	}})
+
+	m.Upsert(Item{ID: "C1", Name: "new name", Type: "private", Joined: true})
+
+	got := m.Items()
+	if len(got) != 1 {
+		t.Fatalf("items after Upsert = %+v, want one replacement", got)
+	}
+	if got[0].Name != "new name" || got[0].Type != "private" || !got[0].Joined {
+		t.Errorf("replacement = %+v, want updated descriptive fields", got[0])
+	}
+	if got[0].LastVisited != 123 {
+		t.Errorf("replacement LastVisited = %d, want preserved value 123", got[0].LastVisited)
+	}
+}
+
+func TestUpsertConvertsBrowseableEntryInPlace(t *testing.T) {
+	m := New()
+	m.SetBrowseable([]Item{{ID: "C9", Name: "announcements", Type: "channel", Joined: false}})
+
+	m.Upsert(Item{ID: "C9", Name: "announcements", Type: "channel", Joined: true})
+
+	got := m.Items()
+	if len(got) != 1 {
+		t.Fatalf("items after Upsert = %+v, want one converted entry, not a duplicate", got)
+	}
+	if !got[0].Joined {
+		t.Errorf("item %q: Joined = false, want true", got[0].ID)
+	}
+}
+
 func TestEnterReturnsJoinedFlag(t *testing.T) {
 	m := New()
 	// LastVisited values pin the order: C1 (joined) appears first, C2

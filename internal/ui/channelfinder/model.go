@@ -113,6 +113,33 @@ func (m *Model) extractSynthetic() []Item {
 	return synth
 }
 
+// Upsert adds item to the finder, or replaces the existing entry with the
+// same ID in place. Used when a single new conversation becomes known
+// outside of a full SetItems refresh (e.g. a live im_created/mpim_open WS
+// event or a Ctrl+N-initiated DM), so it shows up in Ctrl+P immediately
+// instead of waiting for the next workspace activation to pick up
+// WorkspaceContext.FinderItems. LastVisited is preserved from the existing
+// entry when the incoming item doesn't specify one.
+func (m *Model) Upsert(item Item) {
+	for i := range m.items {
+		if m.items[i].ID == item.ID {
+			if item.LastVisited == 0 {
+				item.LastVisited = m.items[i].LastVisited
+			}
+			item.Synthetic = m.items[i].Synthetic
+			m.items[i] = item
+			if m.visible {
+				m.filter()
+			}
+			return
+		}
+	}
+	m.items = append(m.items, item)
+	if m.visible {
+		m.filter()
+	}
+}
+
 // MarkJoined flips the Joined bit on a channel that the user just joined,
 // so it stops rendering as dimmed and the next Enter on it skips the join
 // step.
