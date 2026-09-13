@@ -212,6 +212,10 @@ type App struct {
 	// native clipboard initialization.
 	clipboardAvailable bool
 
+	// composeEditor is Ctrl+E's editor argv, resolved once at startup
+	// by ui.ResolveEditor (editor.go). Nil means unconfigured.
+	composeEditor []string
+
 	// clipboardRead is the function used by smartPaste to read OS clipboard
 	// contents. Tests inject fakes via SetClipboardReader.
 	clipboardRead clipboardReader
@@ -2438,6 +2442,11 @@ func (a *App) SetUploader(fn UploadFunc) {
 // available in headless and CGO-free environments.
 func (a *App) SetClipboardAvailable(ok bool) {
 	a.clipboardAvailable = ok
+}
+
+// SetComposeEditor sets Ctrl+E's resolved editor argv (see editor.go).
+func (a *App) SetComposeEditor(editor []string) {
+	a.composeEditor = editor
 }
 
 // SetClipboardReader replaces the clipboard read function. Used by

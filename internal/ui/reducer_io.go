@@ -11,6 +11,9 @@
 //	UploadProgressMsg         - in-flight upload progress toast.
 //	UploadResultMsg           - upload finished: clear compose
 //	                            attachments + Sent/Failed toast.
+//	EditorFinishedMsg         - Ctrl+E external-editor session ended:
+//	                            read the temp file back into the
+//	                            compose it came from, then remove it.
 //	ConnectionStateMsg        - WS connection state changed:
 //	                            push to status bar.
 //	ToastMsg                  - generic toast (3s auto-clear).
@@ -149,6 +152,9 @@ var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	case UploadProgressMsg:
 		a.statusbar.SetToast(fmt.Sprintf("Uploading %d/%d…", m.Done, m.Total))
 		return nil, true
+
+	case EditorFinishedMsg:
+		return reduceEditorFinished(a, m), true
 
 	case UploadResultMsg:
 		a.compose.SetUploading(false)
