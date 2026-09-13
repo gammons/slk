@@ -48,6 +48,21 @@ func TestMixColors_AlphaOneIsForeground(t *testing.T) {
 	}
 }
 
+func TestMixColors_TransparentBackgroundReturnsTransparent(t *testing.T) {
+	out := mixColors(lipgloss.Color("#FF0000"), nil, 0.5)
+	if out != nil {
+		t.Fatalf("mixing with transparent bg must return nil, got %T", out)
+	}
+}
+
+func TestMixColors_TransparentForegroundReturnsBackground(t *testing.T) {
+	out := mixColors(nil, lipgloss.Color("#0000FF"), 0.5)
+	r, g, b := rgb(out)
+	if r != 0x00 || g != 0x00 || b != 0xFF {
+		t.Fatalf("mixing with transparent fg must return bg, got #%02X%02X%02X", r, g, b)
+	}
+}
+
 func TestSelectionTintColor_FocusedIsAccentMix(t *testing.T) {
 	applyTheme(t, "dark", config.Theme{})
 	expected := mixColors(Accent, Background, defaultTintAlpha)

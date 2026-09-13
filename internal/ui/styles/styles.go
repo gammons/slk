@@ -4,6 +4,7 @@ package styles
 import (
 	"hash/fnv"
 	"image/color"
+	"strings"
 
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/config"
@@ -271,53 +272,68 @@ var version int64
 // Version returns the current theme version, incremented on every Apply call.
 func Version() int64 { return version }
 
+// parseColor converts a color string to a lipgloss color. It recognizes
+// "transparent", "none", and "default" as nil so terminal emulators with
+// background opacity (e.g. Ghostty) can show the underlying wallpaper
+// through slk's UI. A nil color makes lipgloss emit no color escape at
+// all, unlike lipgloss.NoColor{}, whose RGBA() reports opaque black and
+// gets painted as literal black by code paths that convert colors by
+// hand (bgANSIFor, mixColors, blockkit colorString).
+func parseColor(s string) color.Color {
+	switch strings.ToLower(s) {
+	case "transparent", "none", "default":
+		return nil
+	}
+	return lipgloss.Color(s)
+}
+
 // Apply sets the color palette from a named theme with optional overrides,
 // then rebuilds all composed styles.
 func Apply(themeName string, overrides config.Theme) {
 	version++
 	colors := lookupTheme(themeName)
 
-	Primary = lipgloss.Color(colors.Primary)
+	Primary = parseColor(colors.Primary)
 	Secondary = lipgloss.Color("#666666")
-	Accent = lipgloss.Color(colors.Accent)
-	Warning = lipgloss.Color(colors.Warning)
-	Error = lipgloss.Color(colors.Error)
-	Background = lipgloss.Color(colors.Background)
-	Surface = lipgloss.Color(colors.Surface)
-	SurfaceDark = lipgloss.Color(colors.SurfaceDark)
-	TextPrimary = lipgloss.Color(colors.Text)
-	TextMuted = lipgloss.Color(colors.TextMuted)
-	Border = lipgloss.Color(colors.Border)
+	Accent = parseColor(colors.Accent)
+	Warning = parseColor(colors.Warning)
+	Error = parseColor(colors.Error)
+	Background = parseColor(colors.Background)
+	Surface = parseColor(colors.Surface)
+	SurfaceDark = parseColor(colors.SurfaceDark)
+	TextPrimary = parseColor(colors.Text)
+	TextMuted = parseColor(colors.TextMuted)
+	Border = parseColor(colors.Border)
 
 	if overrides.Primary != "" {
-		Primary = lipgloss.Color(overrides.Primary)
+		Primary = parseColor(overrides.Primary)
 	}
 	if overrides.Accent != "" {
-		Accent = lipgloss.Color(overrides.Accent)
+		Accent = parseColor(overrides.Accent)
 	}
 	if overrides.Warning != "" {
-		Warning = lipgloss.Color(overrides.Warning)
+		Warning = parseColor(overrides.Warning)
 	}
 	if overrides.Error != "" {
-		Error = lipgloss.Color(overrides.Error)
+		Error = parseColor(overrides.Error)
 	}
 	if overrides.Background != "" {
-		Background = lipgloss.Color(overrides.Background)
+		Background = parseColor(overrides.Background)
 	}
 	if overrides.Surface != "" {
-		Surface = lipgloss.Color(overrides.Surface)
+		Surface = parseColor(overrides.Surface)
 	}
 	if overrides.SurfaceDark != "" {
-		SurfaceDark = lipgloss.Color(overrides.SurfaceDark)
+		SurfaceDark = parseColor(overrides.SurfaceDark)
 	}
 	if overrides.Text != "" {
-		TextPrimary = lipgloss.Color(overrides.Text)
+		TextPrimary = parseColor(overrides.Text)
 	}
 	if overrides.TextMuted != "" {
-		TextMuted = lipgloss.Color(overrides.TextMuted)
+		TextMuted = parseColor(overrides.TextMuted)
 	}
 	if overrides.Border != "" {
-		Border = lipgloss.Color(overrides.Border)
+		Border = parseColor(overrides.Border)
 	}
 
 	// Sidebar/rail colors fall back to their message-pane equivalents when
@@ -325,35 +341,35 @@ func Apply(themeName string, overrides config.Theme) {
 	// compute these AFTER overrides so a user override of Background also
 	// updates SidebarBackground (when not explicitly set on the theme).
 	if colors.SidebarBackground != "" {
-		SidebarBackground = lipgloss.Color(colors.SidebarBackground)
+		SidebarBackground = parseColor(colors.SidebarBackground)
 	} else {
 		SidebarBackground = Background
 	}
 	if colors.SidebarText != "" {
-		SidebarText = lipgloss.Color(colors.SidebarText)
+		SidebarText = parseColor(colors.SidebarText)
 	} else {
 		SidebarText = TextPrimary
 	}
 	if colors.SidebarTextMuted != "" {
-		SidebarTextMuted = lipgloss.Color(colors.SidebarTextMuted)
+		SidebarTextMuted = parseColor(colors.SidebarTextMuted)
 	} else {
 		SidebarTextMuted = TextMuted
 	}
 	if colors.RailBackground != "" {
-		RailBackground = lipgloss.Color(colors.RailBackground)
+		RailBackground = parseColor(colors.RailBackground)
 	} else {
 		RailBackground = SurfaceDark
 	}
 
 	if colors.SelectionBackground != "" {
-		SelectionBackground = lipgloss.Color(colors.SelectionBackground)
+		SelectionBackground = parseColor(colors.SelectionBackground)
 	} else {
 		// Default: Primary as the highlight bg gives readable contrast on
 		// every built-in theme.
 		SelectionBackground = Primary
 	}
 	if colors.SelectionForeground != "" {
-		SelectionForeground = lipgloss.Color(colors.SelectionForeground)
+		SelectionForeground = parseColor(colors.SelectionForeground)
 	} else {
 		// Default: theme background — paired with Primary bg this produces
 		// the inverse of the theme's normal text rendering.
@@ -361,14 +377,14 @@ func Apply(themeName string, overrides config.Theme) {
 	}
 
 	if colors.SearchHighlightBg != "" {
-		SearchHighlightBg = lipgloss.Color(colors.SearchHighlightBg)
+		SearchHighlightBg = parseColor(colors.SearchHighlightBg)
 	} else {
 		// Default: Warning is visible against message text in all
 		// built-in themes.
 		SearchHighlightBg = Warning
 	}
 	if colors.SearchHighlightFg != "" {
-		SearchHighlightFg = lipgloss.Color(colors.SearchHighlightFg)
+		SearchHighlightFg = parseColor(colors.SearchHighlightFg)
 	} else {
 		SearchHighlightFg = Background
 	}
@@ -376,7 +392,7 @@ func Apply(themeName string, overrides config.Theme) {
 	// Compose-insert background: explicit theme override wins, otherwise
 	// derive from Accent + Background at defaultTintAlpha.
 	if colors.ComposeInsertBG != "" {
-		ComposeInsertBG = lipgloss.Color(colors.ComposeInsertBG)
+		ComposeInsertBG = parseColor(colors.ComposeInsertBG)
 	} else {
 		ComposeInsertBG = mixColors(Accent, Background, defaultTintAlpha)
 	}
@@ -386,10 +402,10 @@ func Apply(themeName string, overrides config.Theme) {
 	// the next SelectionTintColor() call repopulates from the new theme.
 	resetDerivedTints()
 	if colors.SelectionBgFocused != "" {
-		selectionBgFocused = lipgloss.Color(colors.SelectionBgFocused)
+		selectionBgFocused = parseColor(colors.SelectionBgFocused)
 	}
 	if colors.SelectionBgUnfocused != "" {
-		selectionBgUnfocused = lipgloss.Color(colors.SelectionBgUnfocused)
+		selectionBgUnfocused = parseColor(colors.SelectionBgUnfocused)
 	}
 
 	buildStyles()
