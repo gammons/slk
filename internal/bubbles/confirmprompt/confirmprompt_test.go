@@ -19,8 +19,7 @@ func shifted(r rune) tea.KeyPressMsg {
 
 func opened(t *testing.T, onConfirm func() tea.Msg) Model {
 	t.Helper()
-	m := New()
-	m.SetSize(80, 24)
+	m := New(WithWidth(80))
 	m.Open("Delete message?", "hello world", onConfirm)
 	return m
 }
@@ -132,8 +131,7 @@ func TestViewHelpFollowsKeyMap(t *testing.T) {
 }
 
 func TestViewFlattensBody(t *testing.T) {
-	m := New()
-	m.SetSize(80, 24)
+	m := New(WithWidth(80))
 	m.Open("Title", "line1\nline2\tline3", nil)
 
 	out := m.View()
@@ -148,8 +146,7 @@ func TestViewFlattensBody(t *testing.T) {
 }
 
 func TestViewTruncatesLongBody(t *testing.T) {
-	m := New()
-	m.SetSize(40, 10)
+	m := New(WithWidth(40))
 	m.Open("Title", strings.Repeat("long ", 40), nil)
 
 	out := m.View()
@@ -175,9 +172,9 @@ func TestBoxWidthClampsToTerminalShare(t *testing.T) {
 	}
 }
 
-func TestSetSizeDrivesRenderedWidth(t *testing.T) {
+func TestSetWidthDrivesRenderedWidth(t *testing.T) {
 	m := opened(t, nil)
-	m.SetSize(200, 50)
+	m.SetWidth(200)
 	if got := lipgloss.Width(m.View()); got != maxWidth {
 		t.Errorf("width = %d, want %d", got, maxWidth)
 	}
@@ -185,9 +182,7 @@ func TestSetSizeDrivesRenderedWidth(t *testing.T) {
 
 func TestDefaultStylesUsable(t *testing.T) {
 	for _, dark := range []bool{true, false} {
-		m := New()
-		m.Styles = DefaultStyles(dark)
-		m.SetSize(80, 24)
+		m := New(WithStyles(DefaultStyles(dark)), WithWidth(80))
 		m.Open("Title", "Body", nil)
 		if m.View() == "" {
 			t.Errorf("isDark=%v: default styles should render", dark)
@@ -216,5 +211,45 @@ func TestUpdateIgnoresModifiersOnSpecialKeys(t *testing.T) {
 	if _, cmd := opened(t, func() tea.Msg { return sentinelMsg{} }).
 		Update(tea.KeyPressMsg{Code: 'z', Text: "z", Mod: tea.ModCtrl}); cmd != nil {
 		t.Error("ctrl+z should cancel, not confirm")
+	}
+}
+
+func TestNewAppliesOptions(t *testing.T) {
+	styles := DefaultStyles(false)
+	styles.BaseANSI = "\x1b[0m"
+	keys := KeyMap{
+		Confirm: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
+		Cancel:  key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "keep")),
+	}
+
+	m := New(WithStyles(styles), WithKeyMap(keys), WithWidth(200))
+	if got := m.Styles().BaseANSI; got != styles.BaseANSI {
+		t.Errorf("BaseANSI = %q, want %q", got, styles.BaseANSI)
+	}
+
+	m.Open("Title", "Body", func() tea.Msg { return sentinelMsg{} })
+	if got := lipgloss.Width(m.View()); got != maxWidth {
+		t.Errorf("width = %d, want %d from WithWidth(200)", got, maxWidth)
+	}
+	if !strings.Contains(m.View(), "[d] delete") {
+		t.Error("help text should come from the supplied key map")
+	}
+	if _, cmd := m.Update(keyPress('d')); cmd == nil {
+		t.Error("d should confirm with the supplied key map")
+	}
+}
+
+func TestNewDefaultsWithoutOptions(t *testing.T) {
+	m := New()
+	if m.IsVisible() {
+		t.Error("should start hidden")
+	}
+	m.Open("Title", "Body", nil)
+	// No width set: the box floors at its minimum.
+	if got := lipgloss.Width(m.View()); got != minWidth {
+		t.Errorf("width = %d, want the %d floor", got, minWidth)
+	}
+	if !strings.Contains(m.View(), "[y] confirm") {
+		t.Error("default key map should drive the help text")
 	}
 }

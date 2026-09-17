@@ -24,12 +24,12 @@ func (m Model) View() string {
 
 	width := boxWidth(m.width)
 	content := strings.Join([]string{
-		m.Styles.Title.Render(m.title),
-		m.Styles.Body.Render("> " + preview(m.body, width-chrome)),
-		m.Styles.Footer.Render(m.footer()),
+		m.styles.Title.Render(m.title),
+		m.styles.Body.Render("> " + preview(m.body, width-chrome)),
+		m.styles.Footer.Render(m.footer()),
 	}, "\n\n")
 
-	return m.Styles.Box.Width(width).Render(reassertBase(content, m.Styles.BaseANSI))
+	return m.styles.Box.Width(width).Render(reassertBase(content, m.styles.BaseANSI))
 }
 
 func boxWidth(termWidth int) int {

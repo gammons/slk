@@ -929,7 +929,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if changed {
 			a.forceSixelRepaint = true
 		}
-		a.confirmPrompt.SetSize(msg.Width, msg.Height)
+		a.confirmPrompt.SetWidth(msg.Width)
 		return a, nil
 
 	case scrollFlushMsg:

@@ -36,8 +36,8 @@ func confirmPromptStyles() confirmprompt.Styles {
 
 // openConfirmPrompt raises the prompt and switches to ModeConfirm.
 func (a *App) openConfirmPrompt(title, body string, onConfirm confirmprompt.ConfirmFunc) {
-	a.confirmPrompt.Styles = confirmPromptStyles()
-	a.confirmPrompt.SetSize(a.width, a.height)
+	a.confirmPrompt.SetStyles(confirmPromptStyles())
+	a.confirmPrompt.SetWidth(a.width)
 	a.confirmPrompt.Open(title, body, onConfirm)
 	a.SetMode(ModeConfirm)
 }
