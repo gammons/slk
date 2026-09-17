@@ -39,7 +39,12 @@ internal/core/          the ports (service interfaces) the TUI calls, and the
                         values the TUI and cmd/slk exchange through them
 internal/ui/            bubbletea App: reducers, mode key handlers, view regions
 internal/ui/<widget>/   self-contained sub-models (messages, thread, sidebar,
-                        compose, and 14 modal packages)
+                        compose, and 13 modal packages)
+internal/bubbles/       self-contained components and the substrate they
+                        share (RFC #236). No slk imports; a component may
+                        import only its internal/bubbles siblings. Widgets
+                        move here from internal/ui/<widget>/ one at a time;
+                        confirmprompt is the first
 internal/slack/         Slack Web API + browser-protocol WebSocket client
 internal/slack/edge/    edgeapi: conditional revalidation, server-side search
 internal/bootstrap/     startup fetch orchestration
@@ -134,6 +139,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 |---|---|
 | Scrollbar gutter on a rendered pane | `ui/scrollbar.Overlay`, `ui/scrollbar.Visible` |
 | Centered modal over a dimmed backdrop | `ui/overlay.DimmedOverlay` |
+| Yes/no confirmation modal (title, one-line preview, confirm/cancel keys) | `bubbles/confirmprompt` (`New`, `Open`, `Update`, `View`; `Styles`/`KeyMap` fields, `SetSize`). In the App, open it with `App.openConfirmPrompt` (`internal/ui/confirm.go`), which also maps the theme onto its styles and composites it |
 | Text selection ranges and anchors | `ui/selection` (`Range`, `Anchor`, `LessOrEqual`) |
 | Theme colors and styles | `ui/styles` (`Username`, `SelectionStyle`, `SearchHighlightStyle`, `MentionBadgeStyle`, `UserColor`) |
 | Window tree geometry | `ui/wintree` |
@@ -187,9 +193,12 @@ greppable by name; no line numbers, because these files move.
 These are tracked in the refactor plan and are being consolidated. Do not copy
 them as templates:
 
-- **11 `renderBox` implementations** and **7 `visibleWindow`** across the 14
-  modal packages. If you are building a modal, expect a shared chrome package to
-  land (Phase 4); coordinate rather than adding a twelfth copy.
+- **11 `renderBox` implementations** — 10 across the 13 `internal/ui` modal
+  packages, plus confirmprompt's `View` in `internal/bubbles/confirmprompt` —
+  and **7 `visibleWindow`** in the modal packages. If you are building or
+  migrating a modal, expect a shared chrome package in `internal/bubbles` to land
+  first (RFC #236 stages it ahead of the remaining modals); coordinate rather
+  than adding a twelfth copy.
 - **`messages.Model` and `thread.Model`** share 377 verbatim lines and 45
   identically-named methods. `internal/ui/thread/lockstep_test.go` pins *render*
   parity in **one static state only**: 80×20 (`lockstepWidth`/`lockstepHeight`),
