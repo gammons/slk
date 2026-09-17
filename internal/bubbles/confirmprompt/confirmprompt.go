@@ -13,22 +13,37 @@ type ConfirmFunc func() tea.Msg
 // Model is the confirmation overlay.
 type Model struct {
 	KeyMap KeyMap
-	Styles Styles
 
+	styles    Styles
 	width     int
-	height    int
 	visible   bool
 	title     string
 	body      string
 	onConfirm ConfirmFunc
 }
 
+// Option configures a Model at construction.
+type Option func(*Model)
+
+// WithStyles sets the prompt's styles.
+func WithStyles(s Styles) Option { return func(m *Model) { m.styles = s } }
+
+// WithKeyMap sets the prompt's key bindings.
+func WithKeyMap(k KeyMap) Option { return func(m *Model) { m.KeyMap = k } }
+
+// WithWidth sets the terminal width the box is sized against.
+func WithWidth(width int) Option { return func(m *Model) { m.width = width } }
+
 // New returns a hidden prompt with default keys and styles.
-func New() Model {
-	return Model{
+func New(opts ...Option) Model {
+	m := Model{
 		KeyMap: DefaultKeyMap(),
-		Styles: DefaultStyles(true),
+		styles: DefaultStyles(true),
 	}
+	for _, opt := range opts {
+		opt(&m)
+	}
+	return m
 }
 
 // Open shows the prompt. body is shown as a single-line preview, and onConfirm
@@ -51,11 +66,15 @@ func (m *Model) Close() {
 // IsVisible reports whether the prompt is showing.
 func (m Model) IsVisible() bool { return m.visible }
 
-// SetSize records the terminal dimensions the box is sized against.
-func (m *Model) SetSize(width, height int) {
-	m.width = width
-	m.height = height
-}
+// SetWidth sets the terminal width the box is sized against. Height follows
+// the content, so there is no SetHeight.
+func (m *Model) SetWidth(width int) { m.width = width }
+
+// Styles returns the prompt's current styles.
+func (m Model) Styles() Styles { return m.styles }
+
+// SetStyles replaces the prompt's styles.
+func (m *Model) SetStyles(s Styles) { m.styles = s }
 
 // Init does nothing; the prompt has no startup work.
 func (m Model) Init() tea.Cmd { return nil }

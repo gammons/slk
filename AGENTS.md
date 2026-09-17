@@ -139,7 +139,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 |---|---|
 | Scrollbar gutter on a rendered pane | `ui/scrollbar.Overlay`, `ui/scrollbar.Visible` |
 | Centered modal over a dimmed backdrop | `ui/overlay.DimmedOverlay` |
-| Yes/no confirmation modal (title, one-line preview, confirm/cancel keys) | `bubbles/confirmprompt` (`New`, `Open`, `Update`, `View`; `Styles`/`KeyMap` fields, `SetSize`). In the App, open it with `App.openConfirmPrompt` (`internal/ui/confirm.go`), which also maps the theme onto its styles and composites it |
+| Yes/no confirmation modal (title, one-line preview, confirm/cancel keys) | `bubbles/confirmprompt` (`New`, `Open`, `Update`, `View`, `SetStyles`, `SetWidth`; options `WithStyles`/`WithKeyMap`/`WithWidth`; `KeyMap` field). In the App, open it with `App.openConfirmPrompt` (`internal/ui/confirm.go`), which also maps the theme onto its styles and composites it |
 | Text selection ranges and anchors | `ui/selection` (`Range`, `Anchor`, `LessOrEqual`) |
 | Theme colors and styles | `ui/styles` (`Username`, `SelectionStyle`, `SearchHighlightStyle`, `MentionBadgeStyle`, `UserColor`) |
 | Window tree geometry | `ui/wintree` |
