@@ -1,12 +1,7 @@
 // internal/ui/mode_confirm.go
 //
-// Confirm-mode key handler (Phase 5j).
-//
-// Forwards normalised keys to the confirm prompt overlay.
-// HandleKey returns a result whose Cmd carries the action the
-// caller registered when opening the prompt (e.g. "really quit?"
-// returns the quit cmd on Enter). Mode drops back to Normal when
-// the prompt closes itself.
+// Confirm-mode key handler. The prompt closes itself on any key, so mode drops
+// back once it reports hidden.
 package ui
 
 import (
@@ -14,17 +9,10 @@ import (
 )
 
 func handleConfirmMode(a *App, msg tea.KeyMsg) tea.Cmd {
-	keyStr := msg.String()
-	switch msg.Key().Code {
-	case tea.KeyEscape:
-		keyStr = "esc"
-	case tea.KeyEnter:
-		keyStr = "enter"
-	}
-
-	res := a.confirmPrompt.HandleKey(keyStr)
+	var cmd tea.Cmd
+	a.confirmPrompt, cmd = a.confirmPrompt.Update(msg)
 	if !a.confirmPrompt.IsVisible() {
 		a.SetMode(ModeNormal)
 	}
-	return res.Cmd
+	return cmd
 }

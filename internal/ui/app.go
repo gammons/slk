@@ -15,6 +15,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/gammons/slk/internal/bubbles/confirmprompt"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	"github.com/gammons/slk/internal/emoji"
@@ -24,7 +25,6 @@ import (
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/channelpicker"
 	"github.com/gammons/slk/internal/ui/compose"
-	"github.com/gammons/slk/internal/ui/confirmprompt"
 	"github.com/gammons/slk/internal/ui/emojipicker"
 	"github.com/gammons/slk/internal/ui/help"
 	"github.com/gammons/slk/internal/ui/imgrender"
@@ -395,7 +395,7 @@ type App struct {
 	// Reaction picker
 	reactionPicker *reactionpicker.Model
 	reactionsView  *reactionsview.Model
-	confirmPrompt  *confirmprompt.Model
+	confirmPrompt  confirmprompt.Model
 	// reactions is the App's ReactionService collaborator (add/remove
 	// reactions on Slack + load/record frecent emoji history). See
 	// internal/ui/services.go. Defaulted to a no-op adapter in NewApp
@@ -929,6 +929,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if changed {
 			a.forceSixelRepaint = true
 		}
+		a.confirmPrompt.SetSize(msg.Width, msg.Height)
 		return a, nil
 
 	case scrollFlushMsg:
@@ -1754,12 +1755,11 @@ func (a *App) maybeFetchOlderHistory(atTop bool) tea.Cmd {
 // both lowercase `q` and Ctrl+C (the latter intercepted globally so an
 // accidental Ctrl+C in any mode never silently kills the app).
 func (a *App) openQuitConfirm() {
-	a.confirmPrompt.Open(
+	a.openConfirmPrompt(
 		"Quit slk?",
 		"All workspace connections will close.",
 		func() tea.Msg { return tea.Quit() },
 	)
-	a.SetMode(ModeConfirm)
 }
 
 func (a *App) handleEnter() tea.Cmd {
@@ -3737,14 +3737,13 @@ func (a *App) beginDeleteOfSelected() tea.Cmd {
 		preview = string(runes[:maxPreview]) + "…"
 	}
 
-	a.confirmPrompt.Open(
+	a.openConfirmPrompt(
 		"Delete message?",
 		preview,
 		func() tea.Msg {
 			return DeleteMessageMsg{ChannelID: channelID, TS: ts}
 		},
 	)
-	a.SetMode(ModeConfirm)
 	return nil
 }
 
