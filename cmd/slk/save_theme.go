@@ -125,6 +125,55 @@ func sanitizeComment(s string) string {
 	return strings.TrimSpace(b.String())
 }
 
+// findWorkspaceSectionStart returns the line index of the [workspaces.*]
+// header to write into for tomlKey/teamID, or -1 if none exists.
+//
+// Order: the literal tomlKey header, then a legacy [workspaces.<teamID>]
+// header, then any slug-keyed block whose team_id field matches. That
+// last fallback is load-bearing — saveWorkspaceVersionTS used to look
+// only for [workspaces.<tomlKey>], and when tomlKey was the raw team ID
+// it appended a second block next to the slug-keyed one, which Load
+// then rejected as a duplicate workspace.
+func findWorkspaceSectionStart(lines []string, tomlKey, teamID string) int {
+	headers := make([]string, 0, 2)
+	if tomlKey != "" {
+		headers = append(headers, "[workspaces."+tomlKey+"]")
+	}
+	if teamID != "" && teamID != tomlKey {
+		headers = append(headers, "[workspaces."+teamID+"]")
+	}
+	for i, line := range lines {
+		t := strings.TrimSpace(line)
+		for _, h := range headers {
+			if t == h {
+				return i
+			}
+		}
+	}
+	if teamID == "" {
+		return -1
+	}
+	sectionStart := -1
+	for i, line := range lines {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "[") {
+			if strings.HasPrefix(t, "[workspaces.") {
+				sectionStart = i
+			} else {
+				sectionStart = -1
+			}
+			continue
+		}
+		if sectionStart < 0 {
+			continue
+		}
+		if strings.HasPrefix(t, "team_id") && strings.Contains(t, teamID) {
+			return sectionStart
+		}
+	}
+	return -1
+}
+
 // saveGlobalTheme rewrites the [appearance] theme line in config.toml.
 // If the file has no theme line, it appends a new [appearance] section.
 // Existing comments and ordering are preserved (textual rewrite, not
@@ -190,15 +239,7 @@ func saveWorkspaceTheme(configPath, tomlKey, teamID, teamName, themeName string)
 	}
 	lines := strings.Split(string(data), "\n")
 
-	header := fmt.Sprintf("[workspaces.%s]", tomlKey)
-
-	sectionStart := -1
-	for i, line := range lines {
-		if strings.TrimSpace(line) == header {
-			sectionStart = i
-			break
-		}
-	}
+	sectionStart := findWorkspaceSectionStart(lines, tomlKey, teamID)
 
 	if sectionStart >= 0 {
 		end := len(lines)

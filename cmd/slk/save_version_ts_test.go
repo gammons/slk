@@ -76,6 +76,36 @@ func TestSaveWorkspaceVersionTS_DoesNotTouchOtherWorkspaces(t *testing.T) {
 	}
 }
 
+func TestSaveWorkspaceVersionTS_WritesIntoSlugWhenCalledWithTeamIDKey(t *testing.T) {
+	// workspaceTOMLKey falls back to the raw team ID when the in-memory
+	// config has no matching block. The on-disk file still has the
+	// slug-keyed section from --add-workspace. Writing a second
+	// [workspaces.<teamID>] block is what made Load refuse to start
+	// ("both reference team_id").
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	initial := "# Obvious AI\n[workspaces.obvious-ai]\nteam_id = \"T099JCA82HJ\"\n"
+	if err := os.WriteFile(path, []byte(initial), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := saveWorkspaceVersionTS(path, "T099JCA82HJ", "T099JCA82HJ", "Obvious AI", "1788174451"); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	out := string(mustRead(t, path))
+	if strings.Count(out, "[workspaces.") != 1 {
+		t.Errorf("expected a single workspace section, got:\n%s", out)
+	}
+	if !strings.Contains(out, "[workspaces.obvious-ai]") {
+		t.Errorf("slug section was not the write target:\n%s", out)
+	}
+	if strings.Contains(out, "[workspaces.T099JCA82HJ]") {
+		t.Errorf("appended a leftover team-ID block:\n%s", out)
+	}
+	if !strings.Contains(out, `version_ts = "1788174451"`) {
+		t.Errorf("version_ts missing:\n%s", out)
+	}
+}
+
 func TestSaveWorkspaceVersionTS_CreatesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "config.toml")

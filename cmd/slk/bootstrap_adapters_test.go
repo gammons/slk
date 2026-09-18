@@ -754,6 +754,33 @@ func TestBootMutedChannels_MergesBothPrefs(t *testing.T) {
 	}
 }
 
+func TestFillIMUsers_CopiesCounterpartyFromBoot(t *testing.T) {
+	// users.conversations IMs with an empty User would render as a
+	// blank sidebar row; userBoot's ims[] carry the counterparty id.
+	channels := []slack.Channel{
+		{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "D1", IsIM: true}}},
+		{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "D2", IsIM: true, User: "U_KEEP"}}},
+		{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C1"}}},
+	}
+	fillIMUsers(channels, []boot.IM{
+		{ID: "D1", UserID: "U1"},
+		{ID: "D2", UserID: "U_BOOT"},
+		{ID: "D3", UserID: "U3"},
+	})
+	if got := channels[0].User; got != "U1" {
+		t.Errorf("D1 User = %q; want U1 from userBoot", got)
+	}
+	if !channels[0].IsIM {
+		t.Error("D1 lost IsIM")
+	}
+	if got := channels[1].User; got != "U_KEEP" {
+		t.Errorf("D2 User = %q; want the users.conversations value left alone", got)
+	}
+	if channels[2].User != "" || channels[2].IsIM {
+		t.Errorf("C1 was touched: User=%q IsIM=%v", channels[2].User, channels[2].IsIM)
+	}
+}
+
 func TestBootConversations_MapsWhatTheSidebarBuilderReads(t *testing.T) {
 	// buildChannelItem reads ID, Name, Topic, IsIM, IsMpIM, IsPrivate,
 	// IsMember and User. Every one of those has to survive the trip
