@@ -69,3 +69,19 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
+
+  nix:
+    name: nix build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31.11.1
+
+      # vendorHash is derived from go.mod/go.sum, so any dependency change
+      # invalidates it. Without this the flake only breaks for whoever
+      # runs `nix build` next.
+      - name: Build the flake
+        run: nix build .#slk --print-build-logs
