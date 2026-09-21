@@ -182,6 +182,11 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 			}
 		}
 
+	case key.Matches(msg, a.keys.Top):
+		if cmd := a.handleGoToTop(); cmd != nil {
+			return cmd
+		}
+
 	case key.Matches(msg, a.keys.Bottom):
 		if cmd := a.handleGoToBottom(); cmd != nil {
 			return cmd
