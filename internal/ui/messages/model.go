@@ -1758,6 +1758,21 @@ func (m *Model) recomputeEntryOffsets() {
 	m.totalLines = off
 }
 
+// entryAndOffsetForLine maps a flattened line number to the entry that
+// contains it, plus the offset within that entry. ok is false if line
+// falls before the first entry.
+func (m *Model) entryAndOffsetForLine(line int) (idx, within int, ok bool) {
+	if len(m.entryOffsets) == 0 || line < m.entryOffsets[0] {
+		return 0, 0, false
+	}
+	for i := len(m.entryOffsets) - 1; i >= 0; i-- {
+		if m.entryOffsets[i] <= line {
+			return i, line - m.entryOffsets[i], true
+		}
+	}
+	return 0, 0, false
+}
+
 // buildCache pre-renders all messages and day separators, splitting each
 // rendered string on "\n" so View() can flatten everything into the visible
 // window with zero string-scanning per frame. Runs only on width / message-set
@@ -2981,6 +2996,17 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 		return chrome + "\n" + empty
 	}
 
+	// A width change rewraps every entry, so re-anchor yOffset to the same
+	// entry instead of reusing the now-stale line count. A bottom-anchored
+	// viewport is re-pinned to the new bottom instead.
+	widthChanged := m.cache != nil && m.cacheWidth != width && m.cacheMsgLen == len(m.messages)
+	wasAnchoredAtBottom := m.totalLines > 0 && m.yOffset+msgAreaHeight >= m.totalLines
+	var anchorEntryIdx, anchorWithin int
+	var anchorOK bool
+	if widthChanged {
+		anchorEntryIdx, anchorWithin, anchorOK = m.entryAndOffsetForLine(m.yOffset)
+	}
+
 	// Rebuild cache if messages or width changed. If only individual
 	// message TSes have been marked stale (e.g. by HandleImageReady
 	// landing one image at a time), take the targeted partial-rebuild
@@ -3013,6 +3039,22 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 		m.partialRebuild(width)
 		debuglog.Perf("messages.partialRebuild N=%d stale=%d width=%d took=%s",
 			len(m.messages), stale, width, time.Since(start))
+	}
+
+	if widthChanged {
+		switch {
+		case wasAnchoredAtBottom:
+			m.yOffset = m.totalLines // clamped to maxOffset below
+		case anchorOK && anchorEntryIdx < len(m.entryOffsets):
+			within := anchorWithin
+			if h := m.cache[anchorEntryIdx].height; within >= h {
+				within = h - 1
+			}
+			if within < 0 {
+				within = 0
+			}
+			m.yOffset = m.entryOffsets[anchorEntryIdx] + within
+		}
 	}
 
 	entries := m.cache

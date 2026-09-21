@@ -1014,3 +1014,21 @@ func TestScrollAnchorBottomPreservedAcrossWidthResize(t *testing.T) {
 			m.vp.YOffset(), m.vp.Height(), m.totalLines)
 	}
 }
+
+// TestScrollAnchorAtTopOfThreadPreservedAcrossWidthResize asserts that a
+// viewport scrolled to the top of a thread (inside the parent message
+// block, which is not a cache entry) does not jump past the parent on
+// resize.
+func TestScrollAnchorAtTopOfThreadPreservedAcrossWidthResize(t *testing.T) {
+	parent := messages.MessageItem{TS: "100.0", UserName: "alice", Text: "the parent message"}
+	m := New()
+	m.SetThread(parent, markedReplies(40), "C1", "100.0")
+	_ = m.View(20, 80)
+	m.vp.SetYOffset(0)
+
+	_ = m.View(20, 40) // narrower pane: parent block also rewraps
+
+	if got := m.vp.YOffset(); got != 0 {
+		t.Errorf("resize scrolled a top-of-thread viewport away from the top: YOffset=%d, want 0", got)
+	}
+}
