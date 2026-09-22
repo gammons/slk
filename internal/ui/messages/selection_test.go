@@ -78,6 +78,23 @@ func TestSelection_ClearRemovesSelection(t *testing.T) {
 	}
 }
 
+func TestVisualSelection_MotionsAndSwapEnds(t *testing.T) {
+	m := newTestModel(60)
+	if !m.BeginVisualSelection() {
+		t.Fatal("BeginVisualSelection returned false")
+	}
+	initial := m.SelectionText()
+	m.MoveVisualSelection("$")
+	if got := m.SelectionText(); len(got) <= len(initial) {
+		t.Fatalf("$ did not extend selection: initial=%q got=%q", initial, got)
+	}
+	m.SwapSelectionEnds()
+	m.MoveVisualSelection("l")
+	if !m.HasSelection() {
+		t.Fatal("moving the swapped end cleared selection")
+	}
+}
+
 func TestSelection_ScrollHintForDrag(t *testing.T) {
 	m := newTestModel(60)
 	// View() set lastViewHeight to msgAreaHeight = height - chromeHeight.
