@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -299,6 +300,7 @@ func run() error {
 	app.SetSixelFrameStore(sixelFrames)
 	app.SetHelpFooter(versionpkg.ModalFooter(version))
 	app.SetClipboardAvailable(clipboardOK)
+	app.SetClipboardWriter(newClipboardWriter(runtime.GOOS, os.Getenv, writeMacOSClipboard))
 	desktop := core.DesktopServiceFuncs{
 		Open:          launchOS,
 		ReadClipboard: nativeClipboardRead,

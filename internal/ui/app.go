@@ -215,8 +215,8 @@ type App struct {
 	// until wired.
 	desktop core.DesktopService
 
-	// clipboardWrite creates OSC 52 write commands for permalink and drag-copy
-	// actions. Tests inject fakes via SetClipboardWriter.
+	// clipboardWrite creates copy commands for message, permalink and drag-copy
+	// actions. cmd/slk wires the host backend; tests inject fakes.
 	clipboardWrite clipboardWriter
 
 	// threads is the App's ThreadService collaborator (fetch / mark /
@@ -1262,7 +1262,7 @@ func (a *App) toggleReactionOnMessageItem(channelIDStr string, msg messages.Mess
 }
 
 // copyMessageOfSelected copies the text of the currently-selected message or
-// thread reply to the system clipboard via OSC 52 and emits a status-bar toast.
+// thread reply to the system clipboard and emits a status-bar toast.
 func (a *App) copyMessageOfSelected() tea.Cmd {
 	var msg messages.MessageItem
 	switch a.focusedPanel {
@@ -2426,8 +2426,8 @@ func (a *App) SetDesktopService(s core.DesktopService) {
 	a.desktop = s
 }
 
-// SetClipboardWriter replaces the OSC 52 command factory. Used by tests to
-// capture copied text. Pass nil to restore tea.SetClipboard.
+// SetClipboardWriter supplies the host's copy command factory. Tests can also
+// use it to capture copied text. Pass nil to restore tea.SetClipboard.
 func (a *App) SetClipboardWriter(fn clipboardWriter) {
 	if fn == nil {
 		a.clipboardWrite = defaultClipboardWriter

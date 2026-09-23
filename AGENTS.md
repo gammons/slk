@@ -96,6 +96,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Current DND state from a Slack API result | `slack.DNDStateFromStatus` |
 | Peer custom status, DND and huddle rendering | `ui/peerstatus` (`Status`, glyph/expiry/summary methods); `messages.AuthorStatusSuffix` for author headers |
 | Usergroup map helpers | `usergroups.Copy`, `usergroups.Equal`, `usergroups.Display` |
+| Copy text to the clipboard | `App.clipboardWrite` / `SetClipboardWriter`; `cmd/slk/newClipboardWriter` selects local macOS `pbcopy` or terminal OSC 52 |
 
 ### UI chrome
 
