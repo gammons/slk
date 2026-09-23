@@ -3094,6 +3094,7 @@ func (a *App) View() tea.View {
 	frame := a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(), a.sidebarVisible, a.threadVisible)
 	if frame.ThreadAutoHidden {
 		a.threadVisible = false
+		a.statusbar.SetInThread(false)
 		if a.focusedPanel == PanelThread {
 			a.focusedPanel = PanelMessages
 		}

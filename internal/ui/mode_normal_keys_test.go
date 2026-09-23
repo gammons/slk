@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -2146,6 +2147,106 @@ func TestNormalModeKeys(t *testing.T) {
 			},
 		},
 	})
+}
+
+func TestNormalModeEnterKeepsThreadOpenAtDefaultWidth(t *testing.T) {
+	for _, width := range []int{120, 112, 108, 80} {
+		t.Run(fmt.Sprint(width), func(t *testing.T) {
+			opts := append(normalOpts(), withSize(width, 48))
+			a := newTestApp(t, opts...)
+			focusMessages(t, a)
+			selected, ok := a.messagepane.SelectedMessage()
+			if !ok {
+				t.Fatal("precondition: messages pane has no selected message")
+			}
+
+			fetchedChannel := ""
+			fetchedThread := ""
+			reply := messages.MessageItem{TS: "6.0", ThreadTS: selected.TS, Text: "reply"}
+			a.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) core.Msg {
+				fetchedChannel = string(channelID)
+				fetchedThread = string(threadTS)
+				return ThreadRepliesLoadedMsg{
+					ThreadTS: string(threadTS),
+					Replies:  []messages.MessageItem{reply},
+				}
+			})
+
+			_, cmd := a.Update(keyCode(tea.KeyEnter))
+			if cmd == nil {
+				t.Fatal("Enter returned nil cmd, want thread fetch")
+			}
+			_ = a.View()
+
+			if !a.threadVisible {
+				t.Fatalf("threadVisible = false after rendering at %d columns", width)
+			}
+			if a.focusedPanel != PanelThread {
+				t.Errorf("focusedPanel = %v, want PanelThread", a.focusedPanel)
+			}
+			if a.layout.threadEnd <= a.layout.msgEnd {
+				t.Errorf("thread band is not visible: threadEnd = %d, msgEnd = %d", a.layout.threadEnd, a.layout.msgEnd)
+			}
+			if got := statusbarText(a); !strings.Contains(got, "> Thread") {
+				t.Errorf("status bar = %q, want thread indicator", got)
+			}
+
+			for _, msg := range drainBatch(cmd) {
+				if msg != nil {
+					_, _ = a.Update(msg)
+				}
+			}
+			if fetchedChannel != "C1" || fetchedThread != selected.TS {
+				t.Errorf("thread fetch = %s/%s, want C1/%s", fetchedChannel, fetchedThread, selected.TS)
+			}
+			if got := a.threadPanel.Replies(); len(got) != 1 || got[0].TS != reply.TS {
+				t.Errorf("thread replies = %+v, want reply %q", got, reply.TS)
+			}
+			view := a.View()
+			if !a.threadVisible || a.focusedPanel != PanelThread || !strings.Contains(statusbarText(a), "> Thread") {
+				t.Fatal("loaded reply lost thread visibility, focus, or status")
+			}
+			if a.sidebarVisible != (width >= 112) {
+				t.Errorf("sidebarVisible = %v at width %d", a.sidebarVisible, width)
+			}
+			expected := newPanelLayout()
+			frame := expected.Compute(width, 48, a.workspaceRail.Width(), a.sidebar.Width(), width >= 112, true)
+			if a.layout.sidebarEnd != expected.sidebarEnd || a.layout.msgEnd != expected.msgEnd || a.layout.threadEnd != width {
+				t.Errorf("layout bands = %+v, want %+v", a.layout, expected)
+			}
+			if frame.MsgWidth < 40 || frame.ThreadWidth < 30 {
+				t.Fatalf("undersized frame: %+v", frame)
+			}
+			if panel, _, _, ok := a.layout.PanelAt(a.layout.msgEnd+1, 2, a.height, a.sidebarVisible, a.threadVisible); !ok || panel != PanelThread {
+				t.Error("thread hit test missed")
+			}
+			if !strings.Contains(view.Content, "reply") {
+				t.Error("loaded reply not rendered")
+			}
+		})
+	}
+}
+
+func TestNormalModeEnterAutoHideClearsThreadStatus(t *testing.T) {
+	opts := append(normalOpts(), withSize(79, 30))
+	a := newTestApp(t, opts...)
+	focusMessages(t, a)
+
+	_, _ = a.Update(keyCode(tea.KeyEnter))
+	_ = a.View()
+
+	if !a.sidebarVisible || a.layout.sidebarEnd != 38 || a.layout.msgEnd != 79 || a.layout.threadEnd != 79 {
+		t.Errorf("failed fallback changed sidebar or bands: sidebar=%v layout=%+v", a.sidebarVisible, a.layout)
+	}
+	if a.threadVisible {
+		t.Error("threadVisible = true at a width too narrow for both panes")
+	}
+	if a.focusedPanel != PanelMessages {
+		t.Errorf("focusedPanel = %v, want PanelMessages after thread auto-hide", a.focusedPanel)
+	}
+	if got := statusbarText(a); strings.Contains(got, "> Thread") {
+		t.Errorf("status bar still reports a hidden thread: %q", got)
+	}
 }
 
 // ---------------------------------------------------------------------

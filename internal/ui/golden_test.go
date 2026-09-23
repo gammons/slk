@@ -1380,26 +1380,20 @@ type goldenScenario struct {
 }
 
 // goldenThreadMinWidth is the narrowest terminal width at which
-// layout.Compute keeps the thread pane, and the reason the thread_open
-// scenario is 140 columns rather than the 120 the task brief specified.
+// layout.Compute keeps the thread pane with the standard golden rail and
+// sidebar. The 6-col workspace rail and 30-col sidebar (+2 border) leave
+// width-38 columns for the two content panes. Their 40- and 30-column
+// minima plus two 2-column pane borders require 74 columns:
 //
-// Compute auto-hides the thread pane unless BOTH threadWidth >= 30 and
-// the residual messages pane >= 40 (panellayout.go:107-116). With the
-// 6-col workspace rail and the 30-col sidebar (+2 border) that every
-// golden scenario carries, msgAreaWidth is width-38 and threadWidth is
-// 35% of that, so the binding constraint is
+//	width - 38 >= 40 + 30 + 4   →   width >= 112
 //
-//	floor((width-38) * 35 / 100) >= 30   →   width >= 124
-//
-// At 120 threadWidth comes out as 28 and the pane vanishes. A
-// thread_open golden blessed at 120 was byte-for-byte IDENTICAL to
-// base — which is exactly the failure a golden cannot report on its
-// own: the file looks entirely plausible while pinning two panes under
-// a name that promises three.
+// Between 112 and the point where the proportional split reaches 30,
+// Compute clamps the thread to its minimum instead of hiding a layout
+// that can fit both panes.
 //
 // TestGolden_ThreadScenariosAreWideEnough pins this against the real
 // Compute so the constant cannot drift away from the layout code.
-const goldenThreadMinWidth = 124
+const goldenThreadMinWidth = 112
 
 // goldenThreadApp builds the shared "a thread is open" App: the
 // standard fixture, plus carol's message (goldenMessages()[2], the one
@@ -1409,14 +1403,14 @@ const goldenThreadMinWidth = 124
 // Returned UNRENDERED. Every thread scenario shares this body, but they
 // differ in what they set between the SetThread and the first View() —
 // narrow focuses the thread pane so the auto-hide path has a focus to
-// fall back from. Since View() is what consumes and mutates that state
-// (app.go:2726-2731), the render cannot live in here without either
+// fall back from. Since View() is what consumes and mutates that state,
+// the render cannot live in here without either
 // forcing a second View() on the callers that need extra setup, or
 // pushing every future variation in as another parameter.
 //
 // Note what is NOT set here: focus stays on PanelMessages. The thread
-// pane renders on a.threadVisible && frame.ThreadWidth > 0 alone
-// (app.go:2747); focus only picks the border color. Leaving it on the
+// pane renders on a.threadVisible && frame.ThreadWidth > 0 alone;
+// focus only picks the border color. Leaving it on the
 // messages pane keeps thread_open's chrome comparable to base's.
 func goldenThreadApp(t *testing.T, w, h int) *App {
 	t.Helper()
@@ -1462,12 +1456,10 @@ func goldenScenarios() []goldenScenario {
 			},
 		},
 		{
-			// 140, not the brief's 120. Measured: at 120 the thread
-			// pane AUTO-HIDES, so a 120-wide "thread_open" renders
-			// byte-for-byte identically to base and pins two panes
-			// while claiming to pin three. See goldenThreadMinWidth.
-			name: "thread_open", w: 140, h: 30,
-			build: func(t *testing.T) *App { return goldenThreadScenario(t, 140, 30) },
+			// The default 120-column width exercises the clamped minimum
+			// thread width that regressed in issue #244.
+			name: "thread_open", w: 120, h: 30,
+			build: func(t *testing.T) *App { return goldenThreadScenario(t, 120, 30) },
 		},
 		{
 			name: "wide", w: 200, h: 50,
@@ -1475,14 +1467,14 @@ func goldenScenarios() []goldenScenario {
 		},
 		{
 			// 80x24 forces layout.Compute to set ThreadAutoHidden,
-			// which View() acts on at app.go:2726 by clearing
-			// threadVisible and falling focus back to PanelMessages.
+			// which View() handles by clearing threadVisible and
+			// falling focus back to PanelMessages.
 			//
 			// Verified, not assumed — the arithmetic is in
-			// panellayout.go:107-116. The workspace rail is 6 cols and
+			// panellayout.go:107-123. The workspace rail is 6 cols and
 			// the sidebar 30 (+2 border) at every size here, so
-			// msgAreaWidth is 80-6-30-2 = 42 and threadWidth is
-			// 42*35/100 = 14, well below the 30-col minimum.
+			// msgAreaWidth is 80-6-30-2 = 42, well below the 74 cols
+			// needed for both pane minima and borders.
 			// TestGolden_NarrowAutoHidesThreadPane pins the consequence
 			// rather than leaving the golden as the only record of it.
 			name: "narrow", w: 80, h: 24, autoHidesThread: true,
@@ -1815,7 +1807,7 @@ func TestGolden_NarrowAutoHidesThreadPane(t *testing.T) {
 			a := sc.build(t)
 
 			// The scenario asked for a thread. View() must have
-			// taken it away again (app.go:2726-2731).
+			// taken it away again.
 			if a.threadPanel.IsEmpty() {
 				t.Fatalf("scenario declares autoHidesThread but never opened a thread, "+
 					"so %q pins an absence that was never a presence", sc.name)
@@ -1864,8 +1856,8 @@ func TestGolden_NarrowAutoHidesThreadPane(t *testing.T) {
 // scenario added later matched neither and silently escaped the only
 // check that has ever caught this defect. Instead every scenario is
 // built and asked whether it loaded a thread — threadPanel survives
-// View(), unlike threadVisible, which the auto-hide path clears
-// (app.go:2726) — and every scenario that did is checked. Opting out
+// View(), unlike threadVisible, which the auto-hide path clears — and
+// every scenario that did is checked. Opting out
 // takes an explicit autoHidesThread on the scenario, and even that is
 // refused for a scenario wide enough to keep the pane.
 //

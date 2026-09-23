@@ -20,10 +20,10 @@
 //     feed PageHeight() which pageSize / halfPageSize consult.
 //
 // Auto-hide: if there isn't room for both the messages pane (≥40 cols)
-// AND the thread pane (≥30 cols), Compute returns ThreadAutoHidden=true.
-// The CALLER is responsible for flipping threadVisible=false and
-// stealing focus from PanelThread — Compute can't do that without
-// reaching back into App.
+// AND the thread pane (≥30 cols), including their borders, Compute returns
+// ThreadAutoHidden=true.
+// The caller is responsible for reconciling the App's thread visibility,
+// focus, and status chrome — Compute owns geometry only.
 package ui
 
 // panelLayout owns the per-frame layout state.
@@ -59,10 +59,9 @@ type panelLayoutFrame struct {
 	ThreadBorder  int
 	ContentHeight int // height minus the 1-row status bar
 
-	// ThreadAutoHidden is true when Compute had to hide the thread
-	// pane to keep the messages pane at its 40-col minimum. The caller
-	// must flip its own threadVisible to false and steal focus from
-	// PanelThread if focused there.
+	// ThreadAutoHidden is true when Compute had to hide the thread pane
+	// to keep both pane minima. The caller must reconcile its thread UI
+	// state, including visibility, focus, and status chrome.
 	ThreadAutoHidden bool
 }
 
@@ -73,9 +72,9 @@ type panelLayoutFrame struct {
 //   - rail consumes railWidth (caller supplies; comes from
 //     workspaceRail.Width()).
 //   - sidebar, when visible, consumes sidebarWidth + 2 cols of border.
-//   - thread, when visible, consumes 35% of (width - rail - sidebar)
-//     plus 2 cols of border; minimums are 40 cols messages + 30 cols
-//     thread or thread auto-hides.
+//   - thread, when visible, consumes 35% of (width - rail - sidebar),
+//     clamped to a 30-col minimum when both panes fit; if the available
+//     content cannot also preserve 40 cols for messages, thread auto-hides.
 //   - messages consumes whatever's left, with a floor of 10.
 //
 // Border bits are 2 cols on each non-rail pane (1 col left + 1 col
@@ -106,12 +105,20 @@ func (l *panelLayout) Compute(width, height, railWidth, sidebarWidth int, sideba
 
 	if threadVisible {
 		threadBorder = paneBorder
-		threadWidth = msgAreaWidth * 35 / 100
-		msgPaneWidth := msgAreaWidth - threadWidth - msgBorder - threadBorder
-		if msgPaneWidth < minMsgWidth || threadWidth < minThreadW {
+		paneContentWidth := msgAreaWidth - msgBorder - threadBorder
+		if paneContentWidth < minMsgWidth+minThreadW {
 			autoHidden = true
-			threadWidth = 0
 			threadBorder = 0
+		} else {
+			threadWidth = msgAreaWidth * 35 / 100
+			if threadWidth < minThreadW {
+				threadWidth = minThreadW
+			}
+			// Preserve the messages minimum if future layout constants make
+			// the proportional width more aggressive than today's 35%.
+			if maxThreadWidth := paneContentWidth - minMsgWidth; threadWidth > maxThreadWidth {
+				threadWidth = maxThreadWidth
+			}
 		}
 	}
 
