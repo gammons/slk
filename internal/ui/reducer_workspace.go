@@ -83,7 +83,7 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			}
 		}
 		// Inactive-workspace events update WorkspaceContext.Channels
-		// and FinderItems from the rtmEventHandler in cmd/slk/main.go;
+		// and FinderItems from the rtmEventHandler in cmd/slk;
 		// App.Update only mutates the active workspace's UI models.
 		return nil, true
 

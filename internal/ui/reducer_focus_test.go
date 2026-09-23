@@ -670,7 +670,7 @@ func TestFocusedArrivalLeavesDividerInPlace(t *testing.T) {
 
 // The tests above stop at the local path. Slack does not: every
 // conversations.mark slk issues comes back over the WebSocket as a
-// channel_marked event, which cmd/slk/main.go's OnChannelMarked turns
+// channel_marked event, which cmd/slk's OnChannelMarked turns
 // into a ChannelMarkedRemoteMsg. markCapture's fake MarkRead returns
 // nil, so that echo has to be synthesised here — its absence is why
 // TestFocusedArrivalLeavesDividerInPlace passed while the divider still

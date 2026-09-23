@@ -417,32 +417,74 @@ before it can add a mode without risking an unregistered handler.
 
 ---
 
-### Phase 1 — `main.go` mechanical splits
+### Phase 1 — `main.go` topical splits
+
+**Spec:** [`../specs/2026-09-22-phase1-main-go-splits-design.md`](../specs/2026-09-22-phase1-main-go-splits-design.md)
 
 **Addresses:** F1 (partially)
 
-Pure cut-paste. No closure captures involved; every function listed already
+Pure cut-paste. No closure captures involved; every declaration moved already
 takes its dependencies as explicit parameters.
 
-| New file | Source lines | Size |
-|---|---|---|
-| `cmd/slk/rtm_handler.go` | 3875–4711 | 837 |
-| `cmd/slk/history.go` | 2963–3599 | 637 |
-| `cmd/slk/attachments.go` | 2676–2761 | 86 |
-| `cmd/slk/search.go` | 3600–3705 | 106 |
-| `cmd/slk/paths.go` | 3706–3747 | 42 |
-| `cmd/slk/usergroups.go` | 2214–2261 | 48 |
-| `cmd/slk/presence.go` | 3748–3874 | 127 |
+> **The table that was here is superseded by the spec.** It was measured at
+> `4184e60`, when `main.go` was 4,842 lines. At `b733cce` it is **5,421** —
+> every source range in it was off by roughly 580 lines, and it omitted four
+> large self-contained regions (`userResolver`, `connectWorkspace`, the
+> workspace types, the CLI dump commands). Its `~1,900 lines moved` and `zero
+> test changes` exit criteria are superseded for the same reasons; see below.
 
-`rtmEventHandler` is constructed in exactly one place (`main.go:2056`) and all
-its dependencies are explicit struct fields, so the move is mechanical. Its
-existing tests (`event_handler_test.go`, `event_handler_marked_test.go`,
+Move ~3,655 lines into 16 new topical files plus one append, leaving `main.go`
+holding the entrypoint and `run()` and nothing else. Grouping is topical rather
+than positional, following the convention `cmd/slk` already uses — `peer_status.go`
+holds four `rtmEventHandler` methods alongside the non-handler code for the same
+topic — so handler methods go to the file that owns their subject rather than to
+one large `rtm_handler.go`.
+
+`rtmEventHandler` is constructed in exactly one place and all its dependencies
+are explicit struct fields, so the move is mechanical. Its existing tests
+(`event_handler_test.go`, `event_handler_marked_test.go`,
 `reconnect_sync_test.go`) already exercise it in isolation.
 
-**Exit:** ~1,900 lines moved out of `main.go`; zero test changes; zero behavior
-change; `go test ./... -race` green.
+Two additions beyond motion, both justified in the spec:
 
-**Risk:** low. This is the phase to do first if you want momentum.
+- **A purity proof.** A throwaway program compares the multiset of every
+  package-scope declaration's exact source bytes, and the import union including
+  aliases, before and after. This makes "pure motion" mechanical rather than a
+  reviewer's judgement — necessary because the aliased imports
+  (`slackclient` vs `slack-go/slack`, `imgpkg` vs `image`) make naive import
+  synthesis able to produce a plausible wrong answer.
+- **A regrowth guard.** `cmd/slk/main_scope_test.go` asserts `main.go` holds
+  only an allow-list of seven declarations. Without it `main.go` simply regrows,
+  which is what it did between `4184e60` and `b733cce`.
+
+**Exit:** `main.go` ≤ 1,700 lines; ~3,655 lines moved; declaration multiset and
+import union byte-identical; zero test assertions changed (six comment-only
+corrections in five files, plus one new test file); `go test ./... -race` green.
+Full criteria in the spec.
+
+**Risk:** low for the motion. The real cost is coordination: six open PRs touch
+`main.go` (#109, #147, #150, #167, #168, #227). The spec publishes a
+symbol → file → sha rebase table rather than deferring the hot regions.
+
+**Interaction with RFC #236:** none structural. #236 covers `internal/` only;
+the sole overlap is two one-line comment corrections in `internal/ui`. Neither
+effort blocks the other and neither needs to land first.
+
+#### Achieved (2026-09-22, branch `refactor/phase1-main-go-splits`)
+
+`cmd/slk/main.go` went from 5,421 to 1,647 lines (3,655 lines moved into 16 new
+topical files plus one append to `thread_subscriptions.go`); it now holds
+exactly five package-scope declarations, enforced by
+`cmd/slk/main_scope_test.go`. The purity proof ran identical before and after:
+223 decls, 69 distinct imports, byte-for-byte. Eight comment-only corrections
+landed: seven across four external files (`internal/bootstrap/revalidate.go`
+×3, `internal/bootstrap/revalidate_test.go` ×2,
+`internal/ui/reducer_focus_test.go` ×1, `internal/ui/reducer_workspace.go`
+×1 — 7 insertions/7 deletions total) plus one inside `cmd/slk`
+(`bootstrap_adapters_test.go`, a stale `main.go` citation retired alongside
+the `connect.go` move) — plus one new test file (`main_scope_test.go`). `go
+build`, `go vet`, `gofmt -l .` and `go test ./... -race` (57 packages, zero
+failures) are all clean.
 
 ---
 
@@ -652,7 +694,7 @@ dupl -t 75 -plumbing $(find . -name '*.go' \
 | Phase | Scope | Prereqs | Spec | Plan | Status |
 |---|---|---|---|---|---|
 | 0 | Test safety net | — | [spec](../specs/2026-09-06-phase0-test-safety-net-design.md) | [plan](2026-09-06-phase0-test-safety-net.md) | **complete** |
-| 1 | `main.go` mechanical splits | — | — | — | not started |
+| 1 | `main.go` topical splits | — | [spec](../specs/2026-09-22-phase1-main-go-splits-design.md) | [plan](2026-09-22-phase1-main-go-splits.md) | **complete** |
 | 2 | `main.go` structural | 1 | — | — | not started |
 | 3 | Collapse `messages`/`thread` fork | 0 | — | — | not started |
 | 4 | Modal chrome substrate | 0, 3 | — | — | not started |
@@ -667,7 +709,7 @@ at a phase boundary.
 
 | Metric | Baseline | Target |
 |---|---|---|
-| `cmd/slk/main.go` | 4,842 lines | < 600 |
+| `cmd/slk/main.go` | 4,842 lines (**5,421** at `b733cce`) | < 600 — via ≤ 1,700 after Phase 1 |
 | `cmd/slk` coverage | 36.9% | > 65% |
 | `internal/ui/app.go` | 3,454 lines | < 2,000 |
 | `App` struct fields | 107 | < 60 |

@@ -913,7 +913,7 @@ func TestBootConversations_NilSafe(t *testing.T) {
 // actually writes these to the cache, is not reachable from a test — it
 // opens a WebSocket, runs the full bootstrap and needs a *tea.Program —
 // so this covers the adapter link and the reconnect test covers the
-// write. The literal in main.go between them is reviewed, not tested.
+// write. The literal between them is reviewed, not tested.
 //
 // Written as a separate test rather than an assertion bolted onto
 // TestCountsAdapter_CarriesUnreadsAndTheThreadRollup so that a failure

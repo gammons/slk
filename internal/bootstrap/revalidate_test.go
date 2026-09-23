@@ -724,7 +724,7 @@ func TestRevalidate_UserDisplayNameFallsBack(t *testing.T) {
 	// UpdateUserFromEdge writes display_name unconditionally, so an
 	// empty one here blanks whatever the cache held and the sidebar
 	// starts showing raw handles. resolveUser already uses this exact
-	// chain (main.go:2432).
+	// chain (in cmd/slk).
 	for _, tc := range []struct {
 		name    string
 		display string
@@ -754,7 +754,7 @@ func TestRevalidate_UserDisplayNameFallsBack(t *testing.T) {
 }
 
 func TestRevalidate_MarksForeignTeamsExternal(t *testing.T) {
-	// Same test resolveUser applies (main.go:2440), empty guard
+	// Same test resolveUser applies (in cmd/slk), empty guard
 	// included: a result with no team_id is unknown, not foreign, and
 	// marking it external puts a Slack Connect badge on a colleague.
 	for _, tc := range []struct {

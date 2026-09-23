@@ -245,3 +245,41 @@ func ensureThreadSubscriptions(ctx context.Context, gate *threadSubsGate, s *thr
 		}
 	}()
 }
+
+// OnThreadSubscriptionChanged persists a subscribe/unsubscribe event
+// in the thread_subscriptions table. The threads-view UI refresh is
+// handled by a ThreadsListDirtyMsg dispatch so a new subscription
+// shows up (active=true) or an unsubscribe removes the row
+// (active=false) without per-event UI logic here.
+func (h *rtmEventHandler) OnThreadSubscriptionChanged(channelID, threadTS, lastRead string, active bool) {
+	// Persist subscribe/unsubscribe regardless of active-workspace
+	// state. Mirrors OnChannelMarked / OnMessage: dropping the DB
+	// write on inactive workspaces means a thread the user just got
+	// @-mentioned in (auto-subscribed) would never enter the local
+	// thread_subscriptions table, and the threads view would silently
+	// omit it on next workspace switch until the next reconnect's
+	// ReconcileThreadSubscriptions catches up.
+	if h.db != nil {
+		if err := h.db.UpsertThreadSubscription(h.workspaceID, channelID, threadTS, lastRead, active); err != nil {
+			debuglog.Cache("OnThreadSubscriptionChanged: UpsertThreadSubscription %s/%s: %v",
+				channelID, threadTS, err)
+		}
+	}
+	// The threads-list refresh is filtered by team in App.Update, so
+	// dispatching it for an inactive workspace would only wake the UI
+	// loop for a no-op; the DB write above is what the eventual switch
+	// reads. The rail is different: its thread half reads the row just
+	// upserted (railThreadsUnread), and an auto-subscription from an
+	// @-mention may be a new unread thread to light, an unsubscribe
+	// one to stop lighting. Same send as OnThreadMarked's inactive
+	// branch.
+	if h.isActive != nil && !h.isActive() {
+		if h.program != nil {
+			h.program.Send(ui.ReadStateChangedMsg{WorkspaceID: h.workspaceID})
+		}
+		return
+	}
+	if h.program != nil {
+		h.program.Send(ui.ThreadsListDirtyMsg{TeamID: h.workspaceID})
+	}
+}

@@ -413,7 +413,7 @@ func conditionalVersions(ids []string, cached map[string]int64) map[string]int64
 // nothing about who is on the other end — so a bot DM revalidates to
 // "dm". That is recoverable rather than lost: connectWorkspace
 // re-derives "app" from the cached users' is_bot on every boot
-// (main.go:1941), so the column is corrected before it is rendered.
+// (in cmd/slk), so the column is corrected before it is rendered.
 func channelType(ch edge.Channel) string {
 	switch {
 	case ch.IsIM:
@@ -428,7 +428,7 @@ func channelType(ch edge.Channel) string {
 }
 
 // userDisplayName picks the name to show, mirroring the fallback chain
-// resolveUser already uses (main.go:2432): display name, then real
+// resolveUser already uses (in cmd/slk): display name, then real
 // name, then the handle.
 //
 // The fallback matters more here than there, because
@@ -446,7 +446,7 @@ func userDisplayName(u edge.User) string {
 
 // isExternal reports whether a user's home team differs from this
 // workspace's — a Slack Connect or shared-channel guest. Same test
-// resolveUser applies (main.go:2440), including the empty guard: a
+// resolveUser applies (in cmd/slk), including the empty guard: a
 // result with no team_id is unknown, not foreign.
 func isExternal(u edge.User, workspaceID string) bool {
 	return u.TeamID != "" && u.TeamID != workspaceID
