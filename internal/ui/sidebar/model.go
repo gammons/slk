@@ -310,6 +310,11 @@ type Model struct {
 	snappedSelection int
 	hasSnapped       bool
 
+	// lastHeight is the viewport height of the most recent View() call.
+	// PageDown/PageUp need it to know whether the viewport can still
+	// scroll before deciding where the cursor lands.
+	lastHeight int
+
 	// version increments on every state change that could alter the rendered
 	// View() output. The App layer caches the WRAPPED panel output (border +
 	// exactSize) keyed on version + layout, so on compose keystrokes (where
@@ -908,6 +913,106 @@ func (m *Model) ScrollDown(n int) {
 // ViewportAtTop reports whether the sidebar viewport is scrolled to the top.
 func (m *Model) ViewportAtTop() bool {
 	return m.yOffset == 0
+}
+
+// PageDown is the keyboard half-page/page scroll (ctrl+d, PgDn) with vim
+// semantics: the viewport and the cursor both move down n rows, so the
+// cursor keeps its screen position and lands on whichever row now sits
+// there. When the viewport is already at the bottom and cannot move, the
+// cursor jumps to the last navigable row instead. Contrast ScrollDown,
+// the mouse-wheel scroll, which leaves the cursor alone until it would
+// leave the window.
+func (m *Model) PageDown(n int) { m.pageBy(n) }
+
+// PageUp is PageDown's mirror (ctrl+u, PgUp): viewport and cursor move up
+// together; at the top, the cursor jumps to the first navigable row.
+func (m *Model) PageUp(n int) { m.pageBy(-n) }
+
+func (m *Model) pageBy(delta int) {
+	if delta == 0 || len(m.nav) == 0 {
+		return
+	}
+	dir := 1
+	if delta < 0 {
+		dir = -1
+	}
+
+	// Without a rendered layout (a key before the first frame) there is
+	// no row geometry to keep; step the cursor by nav items instead.
+	if !m.cacheValid || len(m.cacheRows) == 0 || m.lastHeight <= 0 {
+		m.cursor += delta
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+		if m.cursor > len(m.nav)-1 {
+			m.cursor = len(m.nav) - 1
+		}
+		m.dirty()
+		return
+	}
+
+	maxOffset := len(m.cacheRows) - m.lastHeight
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	newOffset := m.yOffset + delta
+	if newOffset < 0 {
+		newOffset = 0
+	}
+	if newOffset > maxOffset {
+		newOffset = maxOffset
+	}
+
+	var targetLine int
+	if newOffset == m.yOffset {
+		// Nothing left to scroll: jump the cursor to the end.
+		if dir > 0 {
+			targetLine = len(m.cacheRows) - 1
+		} else {
+			targetLine = 0
+		}
+	} else {
+		// Keep the cursor's screen row: shift it by exactly what the
+		// viewport moved.
+		line := -1
+		for i, r := range m.cacheRows {
+			if r.navIdx == m.cursor {
+				line = i
+				break
+			}
+		}
+		if line < 0 {
+			return
+		}
+		targetLine = line + (newOffset - m.yOffset)
+	}
+
+	// Land on a navigable row: continue in the scroll direction past
+	// blank separators, and fall back to the other direction at the
+	// list's edge.
+	newCursor := m.nearestNavigable(targetLine, dir)
+	if newCursor < 0 {
+		newCursor = m.nearestNavigable(targetLine, -dir)
+	}
+
+	m.yOffset = newOffset
+	if newCursor >= 0 {
+		m.cursor = newCursor
+	}
+	m.snappedSelection = m.cursor
+	m.hasSnapped = true
+	m.dirty()
+}
+
+// nearestNavigable returns the nav index of the first navigable cacheRow
+// at or beyond line in direction dir (+1 down, -1 up), or -1 if none.
+func (m *Model) nearestNavigable(line, dir int) int {
+	for i := line; i >= 0 && i < len(m.cacheRows); i += dir {
+		if m.cacheRows[i].navIdx >= 0 {
+			return m.cacheRows[i].navIdx
+		}
+	}
+	return -1
 }
 
 func (m *Model) GoToTop() {
@@ -1843,6 +1948,7 @@ func (m *Model) View(height, width int) string {
 	if !m.cacheValid || m.cacheWidth != width {
 		m.buildCache(width)
 	}
+	m.lastHeight = height
 
 	// Each cacheRow is exactly one rendered line, so the line index of a
 	// row is just its slice index. Find the selected row by matching the
@@ -1877,6 +1983,38 @@ func (m *Model) View(height, width int) string {
 	}
 	if m.yOffset > maxOffset {
 		m.yOffset = maxOffset
+	}
+
+	// Clamp the cursor to the visible window so it follows scrolling
+	// (mouse wheel / page keys), mirroring the messages pane: when a
+	// viewport scroll pushes the selected row off-screen, drag the cursor
+	// to the nearest still-visible navigable row -- topmost when the row
+	// went above the window, bottommost when it went below. No-op when
+	// the selected row is already on screen, so the j/k snap path above
+	// is unaffected. Rows with navIdx < 0 (blank separators, the "No
+	// channels" placeholder) are never selectable and are skipped.
+	if selectedLine >= 0 {
+		visibleTop := m.yOffset
+		visibleBottom := m.yOffset + height
+		selectionAbove := selectedLine < visibleTop
+		selectionBelow := selectedLine >= visibleBottom
+		if selectionAbove || selectionBelow {
+			newCursor := -1
+			for i := visibleTop; i < visibleBottom && i < len(m.cacheRows); i++ {
+				if m.cacheRows[i].navIdx < 0 {
+					continue
+				}
+				newCursor = m.cacheRows[i].navIdx
+				if selectionAbove {
+					break // topmost visible row
+				}
+				// selectionBelow: keep going to land on the bottommost.
+			}
+			if newCursor >= 0 && newCursor != m.cursor {
+				m.cursor = newCursor
+				m.snappedSelection = m.cursor
+			}
+		}
 	}
 
 	// Build visible window by slicing cacheRows. No lipgloss work per frame.

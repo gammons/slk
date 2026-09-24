@@ -1694,10 +1694,13 @@ func (a *App) scrollFocusedPanel(delta int) tea.Cmd {
 	}
 	switch a.focusedPanel {
 	case PanelSidebar:
+		// Keyboard paging in the channel list has vim semantics: the
+		// cursor moves with the viewport (see sidebar.PageDown). The
+		// mouse wheel goes through sidebar.ScrollUp/Down instead.
 		if delta < 0 {
-			a.sidebar.ScrollUp(n)
+			a.sidebar.PageUp(n)
 		} else {
-			a.sidebar.ScrollDown(n)
+			a.sidebar.PageDown(n)
 		}
 	case PanelMessages:
 		if a.view == ViewThreads {
