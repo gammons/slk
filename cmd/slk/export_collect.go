@@ -249,16 +249,21 @@ func unresolvedUserIDs(convs []export.Conversation, names map[string]string) []s
 // resolveExportNames looks up every user ID convs still needs, adds
 // the results to names, and rewrites authors that were showing a raw
 // ID. The cache is consulted before Slack. An ID that cannot be
-// resolved (a bot ID, a deleted user) keeps its raw form; only a
-// cancelled context is an error.
-func resolveExportNames(ctx context.Context, convs []export.Conversation, names map[string]string, db *cache.DB, profiles exportProfileSource) error {
+// resolved keeps its raw form and is reported on warn with the lookup's
+// error, so a bot ID or deleted user reads differently from a network
+// failure; only a cancelled context is an error.
+func resolveExportNames(ctx context.Context, convs []export.Conversation, names map[string]string, db *cache.DB, profiles exportProfileSource, warn io.Writer) error {
 	for _, id := range unresolvedUserIDs(convs, names) {
 		if _, ok := resolveUserCached(id, names, db); ok {
 			continue
 		}
 		name, err := fetchUserName(ctx, profiles, id)
 		if err != nil {
-			return err
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			fmt.Fprintf(warn, "Warning: could not resolve user %s, keeping the ID: %v\n", id, err)
+			continue
 		}
 		if name != "" {
 			names[id] = name
@@ -274,8 +279,8 @@ func resolveExportNames(ctx context.Context, convs []export.Conversation, names 
 }
 
 // fetchUserName asks Slack for id's display name, waiting out rate
-// limits. It returns "" when Slack cannot resolve the ID, and an error
-// only when ctx is cancelled during a rate-limit wait.
+// limits. It returns the lookup's error when Slack cannot resolve the
+// ID, and ctx's error when ctx is cancelled during a rate-limit wait.
 func fetchUserName(ctx context.Context, profiles exportProfileSource, id string) (string, error) {
 	for {
 		u, err := profiles.GetUserProfile(id)
@@ -287,7 +292,7 @@ func fetchUserName(ctx context.Context, profiles exportProfileSource, id string)
 			return "", waitErr
 		}
 		if !limited {
-			return "", nil
+			return "", err
 		}
 	}
 }

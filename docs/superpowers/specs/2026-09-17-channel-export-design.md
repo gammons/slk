@@ -97,8 +97,10 @@ consumer-side interfaces, so it is tested against an in-memory fake.
 Credentials are the stored workspace token, re-minted from the desktop app the
 same way the TUI does at launch. The command calls `Connect` (auth.test) but
 never opens the WebSocket. User names come from the SQLite cache first, then
-`users.info`; an ID that cannot be resolved stays as the raw ID. The cache is
-read-only here, and the export proceeds without it if it cannot be opened.
+`users.info`; an ID that cannot be resolved stays as the raw ID, and a warning
+naming the ID and the lookup error goes to stderr so a network failure is not
+mistaken for a bot or deleted user. The cache is read-only here, and the
+export proceeds without it if it cannot be opened.
 
 Both bulk reads and the name lookups wait out rate limits rather than failing,
 and honour context cancellation while waiting.

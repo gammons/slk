@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -358,7 +359,8 @@ func TestResolveExportNames_AuthorsAndMentions(t *testing.T) {
 		"U2": slackUser("", "Bob B", "bb"),
 	}}
 
-	if err := resolveExportNames(context.Background(), convs, names, nil, profiles); err != nil {
+	var warn bytes.Buffer
+	if err := resolveExportNames(context.Background(), convs, names, nil, profiles, &warn); err != nil {
 		t.Fatalf("resolveExportNames: %v", err)
 	}
 	if got := convs[0].Parent.UserName; got != "alice" {
@@ -369,6 +371,9 @@ func TestResolveExportNames_AuthorsAndMentions(t *testing.T) {
 	}
 	if _, ok := names["U404"]; ok {
 		t.Errorf("unresolvable ID must not be given a name: %v", names)
+	}
+	if want := "Warning: could not resolve user U404, keeping the ID: user_not_found\n"; warn.String() != want {
+		t.Errorf("warnings = %q, want %q", warn.String(), want)
 	}
 	// Each unknown ID is asked for once; a known name (U3) and a bot
 	// author that already has one (B1) are not asked for at all.
@@ -385,7 +390,7 @@ func TestResolveExportNames_RetriesAfterRateLimit(t *testing.T) {
 		errs:  map[string][]error{"U1": {fmt.Errorf("getting user info: %w", &slack.RateLimitedError{RetryAfter: time.Millisecond})}},
 	}
 
-	if err := resolveExportNames(context.Background(), convs, names, nil, profiles); err != nil {
+	if err := resolveExportNames(context.Background(), convs, names, nil, profiles, io.Discard); err != nil {
 		t.Fatalf("resolveExportNames: %v", err)
 	}
 	if convs[0].Parent.UserName != "alice" || len(profiles.calls) != 2 {
@@ -399,9 +404,36 @@ func TestResolveExportNames_CancelledDuringRateLimitWait(t *testing.T) {
 	convs := []export.Conversation{{Parent: messages.MessageItem{UserID: "U1", UserName: "U1"}}}
 	profiles := &fakeProfiles{errs: map[string][]error{"U1": {&slack.RateLimitedError{RetryAfter: time.Hour}}}}
 
-	err := resolveExportNames(ctx, convs, map[string]string{}, nil, profiles)
+	var warn bytes.Buffer
+	err := resolveExportNames(ctx, convs, map[string]string{}, nil, profiles, &warn)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	if warn.Len() != 0 {
+		t.Errorf("cancellation was reported as a lookup failure: %q", warn.String())
+	}
+}
+
+func TestResolveExportNames_WarnsAndKeepsIDWhenLookupFails(t *testing.T) {
+	convs := []export.Conversation{{
+		Parent:  messages.MessageItem{UserID: "U1", UserName: "U1", Text: "hi"},
+		Replies: []messages.MessageItem{{UserID: "U2", UserName: "U2", Text: "hello"}},
+	}}
+	names := map[string]string{}
+	profiles := &fakeProfiles{
+		users: map[string]*slack.User{"U2": slackUser("bob", "", "")},
+		errs:  map[string][]error{"U1": {errors.New("getting user info: dial tcp: lookup slack.com: no such host")}},
+	}
+
+	var warn bytes.Buffer
+	if err := resolveExportNames(context.Background(), convs, names, nil, profiles, &warn); err != nil {
+		t.Fatalf("resolveExportNames: %v", err)
+	}
+	if got := warn.String(); got != "Warning: could not resolve user U1, keeping the ID: getting user info: dial tcp: lookup slack.com: no such host\n" {
+		t.Errorf("warnings = %q", got)
+	}
+	if convs[0].Parent.UserName != "U1" || convs[0].Replies[0].UserName != "bob" {
+		t.Errorf("authors = %q, %q; want the raw U1 and bob", convs[0].Parent.UserName, convs[0].Replies[0].UserName)
 	}
 }
 

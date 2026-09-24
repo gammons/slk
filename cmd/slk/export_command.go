@@ -225,7 +225,7 @@ func exportChannel(args []string) error {
 	}
 	userNames := make(map[string]string)
 	convs := exportConversations(raw, userNames, db)
-	if err := resolveExportNames(ctx, convs, userNames, db, client); err != nil {
+	if err := resolveExportNames(ctx, convs, userNames, db, client, os.Stderr); err != nil {
 		return err
 	}
 
