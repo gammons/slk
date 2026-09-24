@@ -13,8 +13,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gammons/slk/internal/cache"
@@ -181,7 +183,13 @@ func exportChannel(args []string) error {
 		return err
 	}
 
-	ctx := context.Background()
+	// Ctrl-C or SIGTERM cancels ctx, which the history walks, reply
+	// fetches and rate-limit waits all watch. Once it fires, default
+	// signal handling is restored so a second Ctrl-C still kills the
+	// process during any step that does not watch ctx.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	context.AfterFunc(ctx, stop)
 	// xoxc tokens expire; refresh from the desktop app as the TUI does
 	// at launch. remintTokens keeps the stored token on any failure.
 	tok = remintTokens(ctx, []slackclient.Token{tok}, slackdesktop.Cookie, slackdesktop.Tokens, slackclient.MintToken, store.Save)[0]
