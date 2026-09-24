@@ -209,6 +209,52 @@ func TestWriteChannel_SameSecondParentsGetDistinctFiles(t *testing.T) {
 	}
 }
 
+func TestWriteChannel_UnparseableTimestampsGetDistinctFiles(t *testing.T) {
+	ch := Channel{
+		Name:   "general",
+		Window: mustWindow(t, "2026-04-01", "2026-04-02", testTZ, 0),
+		Conversations: []Conversation{
+			{Parent: messages.MessageItem{TS: "", UserName: "a", Text: "FIRST"}},
+			{Parent: messages.MessageItem{TS: "garbage", UserName: "b", Text: "SECOND"}},
+		},
+	}
+	dir := filepath.Join(t.TempDir(), "out")
+	if _, err := WriteChannel(dir, ch, nil, nil); err != nil {
+		t.Fatalf("WriteChannel: %v", err)
+	}
+	for name, want := range map[string]string{"unknown-unknown.md": "FIRST", "unknown-unknown-2.md": "SECOND"} {
+		got := readFile(t, filepath.Join(dir, name))
+		if !strings.Contains(got, want) {
+			t.Errorf("%s missing %q, got:\n%s", name, want, got)
+		}
+		if !strings.HasPrefix(got, "# #general\n\n") {
+			t.Errorf("%s title carries a blank stamp, got:\n%s", name, got)
+		}
+	}
+	index := readFile(t, filepath.Join(dir, "index.md"))
+	for _, want := range []string{
+		"\n## Unknown date\n\n",
+		"- [a: FIRST](unknown-unknown.md)\n",
+		"- [b: SECOND](unknown-unknown-2.md)\n",
+	} {
+		if !strings.Contains(index, want) {
+			t.Errorf("index missing %q, got:\n%s", want, index)
+		}
+	}
+}
+
+func TestUniqueFilename(t *testing.T) {
+	used := map[string]bool{}
+	for i, want := range []string{"a.md", "a-2.md", "a-3.md"} {
+		if got := uniqueFilename("a.md", used); got != want {
+			t.Errorf("call %d = %q, want %q", i+1, got, want)
+		}
+	}
+	if got := uniqueFilename("b.md", used); got != "b.md" {
+		t.Errorf("unused name = %q, want b.md", got)
+	}
+}
+
 func TestWriteChannel_EmptyExportStillWritesIndex(t *testing.T) {
 	ch := Channel{Name: "quiet", Window: mustWindow(t, "2026-04-01", "2026-04-02", testTZ, 0)}
 	dir := filepath.Join(t.TempDir(), "out")

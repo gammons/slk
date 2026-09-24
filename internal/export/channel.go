@@ -77,13 +77,14 @@ func WriteChannel(dir string, ch Channel, userNames, channelNames map[string]str
 	var index strings.Builder
 	index.WriteString(indexHeader(ch, convs))
 	day := ""
-	for _, conv := range convs {
+	used := make(map[string]bool, len(convs))
+	for i, conv := range convs {
 		conv = stampConversation(conv, ch.Window)
-		if conv.Parent.DateStr != day {
+		if i == 0 || conv.Parent.DateStr != day {
 			day = conv.Parent.DateStr
-			index.WriteString("\n## " + day + "\n\n")
+			index.WriteString("\n## " + dayHeading(day) + "\n\n")
 		}
-		name := conversationFilename(conv.Parent.TS, ch.Window)
+		name := uniqueFilename(conversationFilename(conv.Parent.TS, ch.Window), used)
 		content := conversationMarkdown(ch.Name, conv, userNames, channelNames)
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 			return "", fmt.Errorf("writing conversation %s: %w", conv.Parent.TS, err)
@@ -163,7 +164,8 @@ func stampMessage(msg messages.MessageItem, w Window) messages.MessageItem {
 
 // conversationFilename names a conversation's file after its parent:
 // the local date and time for readability, then the Slack sequence
-// number so two messages posted in the same second stay distinct.
+// number so two messages posted in the same second stay distinct. A TS
+// that does not parse yields a name that uniqueFilename must separate.
 func conversationFilename(ts string, w Window) string {
 	_, seq, _ := strings.Cut(ts, ".")
 	stamp := "unknown"
@@ -173,11 +175,38 @@ func conversationFilename(ts string, w Window) string {
 	return stamp + "-" + sanitizeForFilename(seq) + ".md"
 }
 
+// uniqueFilename returns name, or name with a counter before its
+// extension when used already holds it, and records the result in used.
+// It is what keeps one export from writing two conversations to the
+// same file whatever their timestamps look like.
+func uniqueFilename(name string, used map[string]bool) string {
+	candidate := name
+	for n := 2; used[candidate]; n++ {
+		candidate = fmt.Sprintf("%s-%d.md", strings.TrimSuffix(name, ".md"), n)
+	}
+	used[candidate] = true
+	return candidate
+}
+
+// dayHeading is the index.md heading for a day; a blank day, from a
+// parent whose TS did not parse, gets a label rather than an empty
+// heading.
+func dayHeading(day string) string {
+	if day == "" {
+		return "Unknown date"
+	}
+	return day
+}
+
 // conversationMarkdown renders one conversation file. conv must already
 // be stamped.
 func conversationMarkdown(channelName string, conv Conversation, userNames, channelNames map[string]string) string {
 	var b strings.Builder
-	b.WriteString("# #" + channelName + " - " + conv.Parent.DateStr + " " + conv.Parent.Timestamp + "\n\n")
+	title := "# #" + channelName
+	if conv.Parent.DateStr != "" {
+		title += " - " + conv.Parent.DateStr + " " + conv.Parent.Timestamp
+	}
+	b.WriteString(title + "\n\n")
 	b.WriteString("[Back to index](" + indexFilename + ")\n\n")
 	if conv.ParentIsContext {
 		b.WriteString("> The first message predates the export range and is included as context for its replies.\n\n")
@@ -216,7 +245,10 @@ func indexHeader(ch Channel, convs []Conversation) string {
 // indexEntry renders one index.md list item linking to filename. conv
 // must already be stamped.
 func indexEntry(conv Conversation, filename string, userNames, channelNames map[string]string) string {
-	label := conv.Parent.Timestamp + " " + conv.Parent.UserName + ": " + snippet(conv.Parent, userNames, channelNames)
+	label := conv.Parent.UserName + ": " + snippet(conv.Parent, userNames, channelNames)
+	if conv.Parent.Timestamp != "" {
+		label = conv.Parent.Timestamp + " " + label
+	}
 	entry := "- [" + escapeLinkLabel(label) + "](" + filename + ")"
 
 	var notes []string
