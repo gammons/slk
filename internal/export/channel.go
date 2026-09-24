@@ -64,13 +64,64 @@ func (n nameMap) lookup(id string) (string, bool) {
 // WriteChannel writes ch into dir as one Markdown file per conversation
 // plus an index.md, creating dir if needed, and returns the index path.
 // It fails with ErrOutputNotEmpty rather than write into a directory
-// that already has content. Each message's DateStr and Timestamp are
-// derived from its TS in the window's timezone; values set by the
-// caller are ignored. userNames and channelNames resolve mentions.
+// that already has content. The files are staged in a sibling
+// directory and moved into dir only once every one of them is written,
+// so a failed export leaves dir empty and the command can be re-run.
+// Each message's DateStr and Timestamp are derived from its TS in the
+// window's timezone; values set by the caller are ignored. userNames
+// and channelNames resolve mentions.
 func WriteChannel(dir string, ch Channel, userNames, channelNames map[string]string) (string, error) {
 	if err := EnsureEmptyDir(dir); err != nil {
 		return "", err
 	}
+	staging, err := newStagingDir(dir)
+	if err != nil {
+		return "", err
+	}
+	if err := writeConversations(staging, ch, userNames, channelNames); err != nil {
+		return "", errors.Join(err, os.RemoveAll(staging))
+	}
+	if err := moveContents(staging, dir); err != nil {
+		return "", fmt.Errorf("moving the export into place, files left in %s: %w", staging, err)
+	}
+	return filepath.Join(dir, indexFilename), nil
+}
+
+// newStagingDir creates the directory an export is written to before it
+// is moved into dir: a uniquely named sibling of dir, so the move stays
+// on one filesystem and an interrupted export leaves dir itself empty.
+func newStagingDir(dir string) (string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("resolving output directory: %w", err)
+	}
+	staging, err := os.MkdirTemp(filepath.Dir(abs), filepath.Base(abs)+".partial-")
+	if err != nil {
+		return "", fmt.Errorf("creating staging directory: %w", err)
+	}
+	return staging, nil
+}
+
+// moveContents moves every entry of src into dst and removes src.
+// Renaming the directory itself is not an option: macOS refuses to
+// rename over an existing directory, and replacing dst would pull it
+// out from under a shell whose working directory it is.
+func moveContents(src, dst string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if err := os.Rename(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
+			return err
+		}
+	}
+	return os.Remove(src)
+}
+
+// writeConversations writes ch's conversation files and index.md into
+// dir, which must exist.
+func writeConversations(dir string, ch Channel, userNames, channelNames map[string]string) error {
 	convs := slices.Clone(ch.Conversations)
 	slices.SortFunc(convs, compareConversations)
 
@@ -87,16 +138,15 @@ func WriteChannel(dir string, ch Channel, userNames, channelNames map[string]str
 		name := uniqueFilename(conversationFilename(conv.Parent.TS, ch.Window), used)
 		content := conversationMarkdown(ch.Name, conv, userNames, channelNames)
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
-			return "", fmt.Errorf("writing conversation %s: %w", conv.Parent.TS, err)
+			return fmt.Errorf("writing conversation %s: %w", conv.Parent.TS, err)
 		}
 		index.WriteString(indexEntry(conv, name, userNames, channelNames))
 	}
 
-	indexPath := filepath.Join(dir, indexFilename)
-	if err := os.WriteFile(indexPath, []byte(index.String()), 0o644); err != nil {
-		return "", fmt.Errorf("writing index: %w", err)
+	if err := os.WriteFile(filepath.Join(dir, indexFilename), []byte(index.String()), 0o644); err != nil {
+		return fmt.Errorf("writing index: %w", err)
 	}
-	return indexPath, nil
+	return nil
 }
 
 // DefaultChannelDir returns the directory a channel export is written

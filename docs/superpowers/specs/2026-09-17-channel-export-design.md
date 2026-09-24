@@ -44,7 +44,10 @@ slk export \
   a thread saved with `S` render identically.
 - **Output directory.** Must be empty or absent; otherwise the command fails
   before fetching anything. An export never overwrites or mixes into an
-  earlier one. Default: `<exports dir>/slk-channel-<channel>-<since>-to-<until>`.
+  earlier one. The files are staged in a sibling `<dir>.partial-*` directory
+  and moved into place only once all of them are written, so a failed write
+  leaves the directory empty and the command can simply be re-run.
+  Default: `<exports dir>/slk-channel-<channel>-<since>-to-<until>`.
 - **Workspace and channel.** `--workspace` matches the config slug, team ID,
   team name or domain, case-insensitively, and is optional with a single
   workspace. `--channel` is a name (leading `#` allowed) or an ID; a channel

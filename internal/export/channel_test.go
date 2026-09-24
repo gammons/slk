@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -84,6 +85,80 @@ func TestWriteChannel_OneFilePerConversationPlusIndex(t *testing.T) {
 	}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Errorf("files = %v, want %v", names, want)
+	}
+	if siblings := dirNames(t, filepath.Dir(dir)); strings.Join(siblings, ",") != "out" {
+		t.Errorf("staging directory left beside the export: %v", siblings)
+	}
+}
+
+// dirNames lists dir's entry names in order.
+func dirNames(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s): %v", dir, err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+func TestWriteChannel_FailedWriteLeavesDirEmptyForRetry(t *testing.T) {
+	// A 300-digit sequence number makes a filename longer than any
+	// filesystem allows, so the second conversation's write fails after
+	// the first has already been written.
+	bad := strings.TrimSuffix(tsAt(t, testTZ, "2026-04-01 10:00:00"), "000100") + strings.Repeat("9", 300)
+	ch := Channel{
+		Name:   "general",
+		Window: mustWindow(t, "2026-04-01", "2026-04-02", testTZ, 0),
+		Conversations: []Conversation{
+			{Parent: messages.MessageItem{TS: tsAt(t, testTZ, "2026-04-01 09:00:00"), UserName: "alice", Text: "fine"}},
+			{Parent: messages.MessageItem{TS: bad, UserName: "bob", Text: "unwritable"}},
+		},
+	}
+	root := t.TempDir()
+	dir := filepath.Join(root, "out")
+	if _, err := WriteChannel(dir, ch, nil, nil); err == nil {
+		t.Fatal("WriteChannel succeeded with an unwritable filename")
+	}
+	if got := dirNames(t, dir); len(got) != 0 {
+		t.Errorf("failed export left files in the output directory: %v", got)
+	}
+	if got := dirNames(t, root); strings.Join(got, ",") != "out" {
+		t.Errorf("failed export left a staging directory behind: %v", got)
+	}
+
+	ch.Conversations = ch.Conversations[:1]
+	if _, err := WriteChannel(dir, ch, nil, nil); err != nil {
+		t.Fatalf("retry into the same directory: %v", err)
+	}
+	if got := dirNames(t, dir); strings.Join(got, ",") != "2026-04-01-090000-000100.md,index.md" {
+		t.Errorf("retry wrote %v", got)
+	}
+}
+
+func TestWriteChannel_IntoCurrentDirectory(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	indexPath, err := WriteChannel(".", testChannel(t), nil, nil)
+	if err != nil {
+		t.Fatalf("WriteChannel: %v", err)
+	}
+	if indexPath != "index.md" {
+		t.Errorf("index path = %q, want index.md", indexPath)
+	}
+	// Read through the absolute path: the test's own working directory
+	// must still be the directory the files landed in.
+	if got := dirNames(t, dir); len(got) != 4 {
+		t.Errorf("files = %v, want 3 conversations plus index.md", got)
+	}
+	if got := readFile(t, "index.md"); !strings.Contains(got, "- Conversations: 3\n") {
+		t.Errorf("index not readable relative to the working directory:\n%s", got)
+	}
+	if got := dirNames(t, filepath.Dir(dir)); slices.ContainsFunc(got, func(n string) bool { return strings.Contains(n, ".partial-") }) {
+		t.Errorf("staging directory left beside the export: %v", got)
 	}
 }
 
