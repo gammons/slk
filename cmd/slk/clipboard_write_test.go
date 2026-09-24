@@ -2,7 +2,9 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -69,13 +71,21 @@ func TestWriteMacOSClipboard(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake pbcopy uses a POSIX shell")
 	}
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Fatalf("find shell for fake pbcopy: %v", err)
+	}
+	cat, err := exec.LookPath("cat")
+	if err != nil {
+		t.Fatalf("find cat for fake pbcopy: %v", err)
+	}
 	for _, tt := range []struct {
 		name    string
 		script  string
 		wantErr bool
 	}{
-		{name: "exact stdin", script: "#!/bin/sh\n/bin/cat > \"$SLK_TEST_CLIPBOARD\"\n"},
-		{name: "nonzero exit", script: "#!/bin/sh\nexit 1\n", wantErr: true},
+		{name: "exact stdin", script: fmt.Sprintf("#!%s\n%s > \"$SLK_TEST_CLIPBOARD\"\n", shell, cat)},
+		{name: "nonzero exit", script: fmt.Sprintf("#!%s\nexit 1\n", shell), wantErr: true},
 		{name: "missing executable", wantErr: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

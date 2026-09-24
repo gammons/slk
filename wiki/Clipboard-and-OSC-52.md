@@ -31,6 +31,12 @@ inside slk — the protocol doesn't acknowledge writes. Check your terminal's
 clipboard documentation for an opt-in setting. Terminal.app cannot receive
 OSC 52 copies over SSH; use an OSC 52-capable terminal for remote sessions.
 
+The SSH check uses `SSH_CONNECTION`, `SSH_CLIENT`, and `SSH_TTY`. Environments
+such as mosh, or sessions where those variables were removed by `sudo`, may be
+identified as local; on a remote Mac that can copy to the wrong machine's
+pasteboard. In that case, use an OSC 52-capable terminal or preserve the SSH
+environment variables.
+
 ## Related
 
 - [[Terminal Compatibility|Terminal-Compatibility]] — per-terminal OSC 52 support summary
