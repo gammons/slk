@@ -184,6 +184,20 @@ func focusThreadPanel(t *testing.T, a *App) {
 // set is derived from the seeded channels, so hard-coding a name here
 // would silently stop matching if that derivation changed; scanning and
 // failing loudly is the durable form.
+// sidebarRowKey names the sidebar's selected row well enough to tell
+// two rows apart: the synthetic Threads row, a section header, or a
+// channel. The sidebar exposes no cursor index, so navigation tests
+// compare these keys instead.
+func sidebarRowKey(a *App) string {
+	if a.sidebar.IsThreadsSelected() {
+		return "threads"
+	}
+	if name, ok := a.sidebar.IsSectionHeaderSelected(); ok {
+		return "section:" + name
+	}
+	return "channel:" + a.sidebar.SelectedID()
+}
+
 func selectSidebarSectionHeader(t *testing.T, a *App) string {
 	t.Helper()
 	a.sidebar.GoToTop()
@@ -242,6 +256,8 @@ func TestNormalModeKeys(t *testing.T) {
 	// Carried from setup to assert for the space/section-header row.
 	var toggledSection string
 	var wantCollapsed bool
+	// Carried from setup to assert for the sidebar `gg` row.
+	var sidebarTopRow string
 
 	runKeyCases(t, ModeNormal, []keyCase{
 		// -------------------------------------------------------------
@@ -995,45 +1011,34 @@ func TestNormalModeKeys(t *testing.T) {
 		// Arm 22: ToggleSection space (mode_normal.go:174)
 		// -------------------------------------------------------------
 		{
-			// BUG?: this arm is DEAD, and not because a reducer eats the
-			// key -- the binding itself can never match. keys.go:120
-			// declares ToggleSection as key.WithKeys(" "), and
-			// key.Matches compares against tea.KeyMsg.String(). Key.String
-			// explicitly refuses to return a lone space (ultraviolet
-			// key.go:392: `if len(k.Text) > 0 && k.Text != " "`) and
-			// falls through to Keystroke, whose KeySpace arm writes
-			// "space" (:445-447, and keyTypeString at :463). So a space
-			// press arrives as "space", " " is unreachable, and the
-			// section-toggle documented at mode_normal.go:175-178 never
-			// happens. Enter on a header still toggles (app.go:1549) --
-			// see the row below -- so the feature has a working path;
-			// only this arm is dead. Characterized as-is, not fixed.
-			// Tracked as https://github.com/gammons/slk/issues/184.
-			// WHEN THAT BUG IS FIXED: space toggles, so this row must be
-			// re-pinned to assert IsCollapsed FLIPPED. Do not delete it;
-			// it is the regression guard for the fix. The precondition
-			// on keyPress(' ').String() == "space" stays useful either
-			// way.
+			// Regression guard for https://github.com/gammons/slk/issues/184.
+			// ToggleSection used to be declared as key.WithKeys(" "), but
+			// key.Matches compares against tea.KeyMsg.String(), and
+			// Key.String explicitly refuses to return a lone space
+			// (ultraviolet key.go: `if len(k.Text) > 0 && k.Text != " "`),
+			// falling through to Keystroke, which writes "space". So the
+			// arm was dead. The binding is now "space"; the precondition
+			// pins the stringification the fix relies on.
 			//
 			// The section is recorded in setup rather than re-read after
 			// the press because ToggleCollapse rebuilds the nav rows
 			// (sidebar/model.go:647) and the selected header afterwards
 			// can name a DIFFERENT section.
-			name: "space does NOT toggle a sidebar section: the \" \" binding can never match",
+			name: "space on a sidebar section header toggles its collapse state",
 			opts: normalOpts(),
 			setup: func(t *testing.T, a *App) {
 				toggledSection = selectSidebarSectionHeader(t, a)
-				wantCollapsed = a.sidebar.IsCollapsed(toggledSection)
+				wantCollapsed = !a.sidebar.IsCollapsed(toggledSection)
 				if got := keyPress(' ').String(); got != "space" {
 					t.Fatalf("precondition: a space press stringifies to %q, want %q -- "+
-						"if this changed, the dead arm may have come alive", got, "space")
+						"the ToggleSection binding relies on it", got, "space")
 				}
 			},
 			key:      keyPress(' '),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
 				if got := a.sidebar.IsCollapsed(toggledSection); got != wantCollapsed {
-					t.Errorf("section %q collapsed = %v, want %v (unchanged): the arm is expected to be dead",
+					t.Errorf("section %q collapsed = %v, want %v (flipped by space)",
 						toggledSection, got, wantCollapsed)
 				}
 				if cmd != nil {
@@ -2102,31 +2107,152 @@ func TestNormalModeKeys(t *testing.T) {
 				}
 			},
 		},
+		// -------------------------------------------------------------
+		// Arm: Top `gg` (mode_normal.go, pendingTop chord). Regression
+		// guards for https://github.com/gammons/slk/issues/184: `g` used
+		// to have no handler arm at all, so the advertised `gg` was inert.
+		// The fix models `gg` as a two-key chord like ctrl+w: the first
+		// `g` arms pendingTop and shows a transient hint, the second
+		// jumps to the top of the focused panel.
+		// -------------------------------------------------------------
 		{
-			// BUG?: keys.go:90 binds Top to `g` with help text "gg  top",
-			// and help.FromKeyMap therefore advertises it in the `?`
-			// overlay -- but handleNormalMode declares NO arm for
-			// a.keys.Top. `g` falls into the numeric default arm,
-			// fails the '1'..'9' test, and does nothing. The
-			// counterpart `G` (Bottom, mode_normal.go:185) works.
-			// Recorded, not fixed: this is a characterization test.
-			// Same issue, https://github.com/gammons/slk/issues/184.
-			// WHEN THAT BUG IS FIXED: `g` (or `gg`) jumps to the top, so
-			// re-pin the selected index to 0 rather than 3. Note the
-			// issue records an open question — the binding says `g`, the
-			// help text says `gg` — so the fix may need a pending-chord
-			// state and this row may become two.
-			name:     "g is bound to Top but handleNormalMode has no arm for it",
+			name:     "g arms the gg chord and shows the transient hint without moving the selection",
 			opts:     normalOpts(),
 			setup:    func(t *testing.T, a *App) { focusMessageAt(t, a, 3) },
 			key:      keyPress('g'),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if !a.pendingTop {
+					t.Error("pendingTop not armed after the first g")
+				}
 				if got := a.messagepane.SelectedIndex(); got != 3 {
-					t.Errorf("selected index = %d, want 3 (unchanged): `g` should still be inert", got)
+					t.Errorf("selected index = %d, want 3 (unchanged): a lone g must not jump", got)
+				}
+				if got := statusbarText(a); !strings.Contains(got, "g …") {
+					t.Errorf("statusbar = %q, want the pending g hint", got)
 				}
 				if cmd != nil {
 					t.Errorf("cmd = %#v, want nil", cmd())
+				}
+			},
+		},
+		{
+			name: "gg jumps the message pane to the top and restores the help hint",
+			opts: normalOpts(),
+			setup: func(t *testing.T, a *App) {
+				focusMessageAt(t, a, 3)
+				_ = dispatchModeKey(a, keyPress('g'))
+				if !a.pendingTop {
+					t.Fatal("precondition: first g did not arm the chord")
+				}
+			},
+			key:      keyPress('g'),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if a.pendingTop {
+					t.Error("pendingTop still armed after the chord completed")
+				}
+				if got := a.messagepane.SelectedIndex(); got != 0 {
+					t.Errorf("selected index = %d, want 0", got)
+				}
+				if got := statusbarText(a); !strings.Contains(got, "? for keybindings") {
+					t.Errorf("statusbar = %q, want the restored default help hint", got)
+				}
+				// Landing at the top of the loaded buffer kicks the
+				// older-history backfill, same as k/PgUp/ctrl+u/wheel.
+				if cmd == nil {
+					t.Fatal("cmd = nil, want the backfill batch")
+				}
+				if !a.fetchingOlder["C1"] {
+					t.Error("fetchingOlder gate not set for C1")
+				}
+				if !a.messagepane.IsLoading() {
+					t.Error("messages pane not marked loading")
+				}
+			},
+		},
+		{
+			name: "gg while a backfill is already in flight jumps to the top but does not refetch",
+			opts: normalOpts(),
+			setup: func(t *testing.T, a *App) {
+				focusMessageAt(t, a, 3)
+				a.fetchingOlder["C1"] = true
+				_ = dispatchModeKey(a, keyPress('g'))
+			},
+			key:      keyPress('g'),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if got := a.messagepane.SelectedIndex(); got != 0 {
+					t.Errorf("selected index = %d, want 0", got)
+				}
+				if cmd != nil {
+					t.Errorf("cmd = %#v, want nil: the in-flight gate must suppress a second fetch", cmd())
+				}
+			},
+		},
+		{
+			// The sidebar exposes no cursor index, so the row is identified
+			// by what it selects (threads row / section header / channel).
+			name: "gg jumps the sidebar to its first row",
+			opts: normalOpts(),
+			setup: func(t *testing.T, a *App) {
+				a.focusedPanel = PanelSidebar
+				a.sidebar.GoToTop()
+				sidebarTopRow = sidebarRowKey(a)
+				a.sidebar.GoToBottom()
+				if sidebarRowKey(a) == sidebarTopRow {
+					t.Fatal("precondition: sidebar bottom row is indistinguishable from its top row")
+				}
+				_ = dispatchModeKey(a, keyPress('g'))
+			},
+			key:      keyPress('g'),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if got := sidebarRowKey(a); got != sidebarTopRow {
+					t.Errorf("sidebar row = %q, want the top row %q", got, sidebarTopRow)
+				}
+				if cmd != nil {
+					t.Errorf("cmd = %#v, want nil", cmd())
+				}
+			},
+		},
+		{
+			name: "esc after g cancels the chord without reaching the esc arm",
+			opts: normalOpts(),
+			setup: func(t *testing.T, a *App) {
+				focusMessageAt(t, a, 3)
+				seedActiveSearch(t, a)
+				_ = dispatchModeKey(a, keyPress('g'))
+			},
+			key:      keyCode(tea.KeyEscape),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if a.pendingTop {
+					t.Error("pendingTop still armed after esc")
+				}
+				if a.search == nil {
+					t.Error("esc cancelling the g chord must not also clear the active search")
+				}
+				if got := a.messagepane.SelectedIndex(); got != 3 {
+					t.Errorf("selected index = %d, want 3 (unchanged)", got)
+				}
+			},
+		},
+		{
+			name: "a non-g key after g cancels the chord and is handled normally",
+			opts: normalOpts(),
+			setup: func(t *testing.T, a *App) {
+				focusMessageAt(t, a, 3)
+				_ = dispatchModeKey(a, keyPress('g'))
+			},
+			key:      keyPress('j'),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if a.pendingTop {
+					t.Error("pendingTop still armed after a non-g key")
+				}
+				if got := a.messagepane.SelectedIndex(); got != 4 {
+					t.Errorf("selected index = %d, want 4: j must still move down after cancelling the chord", got)
 				}
 			},
 		},
