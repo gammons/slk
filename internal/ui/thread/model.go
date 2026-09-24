@@ -1783,6 +1783,11 @@ func (m *Model) View(height, width int) string {
 	m.vp.SetContent(m.viewContent)
 
 	if widthChanged {
+		// Known limitation (gammons/slk#254): when anchorOK is false, the
+		// viewport was scrolled inside the parent-message prefix rather
+		// than a reply entry, and neither case below fires -- the stale
+		// pre-resize YOffset is left as-is. Deliberately out of scope
+		// here to keep this fix reviewable; tracked separately.
 		switch {
 		case wasAnchoredAtBottom:
 			m.vp.SetYOffset(m.totalLines) // clamps to the new bottom

@@ -1015,10 +1015,11 @@ func TestScrollAnchorBottomPreservedAcrossWidthResize(t *testing.T) {
 	}
 }
 
-// TestScrollAnchorAtTopOfThreadPreservedAcrossWidthResize asserts that a
-// viewport scrolled to the top of a thread (inside the parent message
-// block, which is not a cache entry) does not jump past the parent on
-// resize.
+// TestScrollAnchorAtTopOfThreadPreservedAcrossWidthResize asserts the
+// YOffset==0 boundary specifically: it stays 0 (there is nowhere lower to
+// clamp to). This does NOT exercise the general "scrolled inside the parent
+// prefix" case -- see TestScrollAnchorInsideParentPrefixNotPreservedAcrossWidthResize
+// for that, and gammons/slk#254 for why it isn't fixed yet.
 func TestScrollAnchorAtTopOfThreadPreservedAcrossWidthResize(t *testing.T) {
 	parent := messages.MessageItem{TS: "100.0", UserName: "alice", Text: "the parent message"}
 	m := New()
@@ -1030,5 +1031,31 @@ func TestScrollAnchorAtTopOfThreadPreservedAcrossWidthResize(t *testing.T) {
 
 	if got := m.vp.YOffset(); got != 0 {
 		t.Errorf("resize scrolled a top-of-thread viewport away from the top: YOffset=%d, want 0", got)
+	}
+}
+
+// TestScrollAnchorInsideParentPrefixNotPreservedAcrossWidthResize pins the
+// CURRENT, known-limited behavior (gammons/slk#254): entryAndOffsetForLine
+// returns ok=false for a line inside the parent-message prefix, the
+// resize-anchor switch has no case for that, and the pre-resize YOffset
+// carries through unchanged into the rewrapped content -- landing on
+// whatever reply now falls at that stale line number. This documents the
+// gap rather than asserting the desired behavior; flip it to assert
+// preservation once #254 is fixed.
+func TestScrollAnchorInsideParentPrefixNotPreservedAcrossWidthResize(t *testing.T) {
+	parent := messages.MessageItem{TS: "100.0", UserName: "alice", Text: strings.Repeat("word ", 300)}
+	m := New()
+	m.SetThread(parent, markedReplies(40), "C1", "100.0")
+	_ = m.View(20, 30) // narrow: parent wraps to many lines
+	m.vp.SetYOffset(40)
+
+	before := m.View(20, 30)
+	if threadMarkRE.MatchString(before) {
+		t.Fatalf("test setup: viewport should be inside the parent, not a reply:\n%s", before)
+	}
+
+	after := m.View(20, 200) // widen: parent shrinks to far fewer lines
+	if !threadMarkRE.MatchString(after) {
+		t.Fatalf("expected the known limitation (jump into a reply) to still reproduce; if this now fails, #254 was fixed -- replace this test with a real preservation assertion")
 	}
 }
