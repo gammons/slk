@@ -2149,10 +2149,10 @@ func TestNormalModeKeys(t *testing.T) {
 	})
 }
 
-func TestNormalModeEnterKeepsThreadOpenAtDefaultWidth(t *testing.T) {
-	for _, width := range []int{120, 112, 108, 80} {
+func TestNormalModeEnterKeepsThreadOpenWhenPanesFit(t *testing.T) {
+	for _, width := range []int{120, 112} {
 		t.Run(fmt.Sprint(width), func(t *testing.T) {
-			opts := append(normalOpts(), withSize(width, 48))
+			opts := append(normalOpts(), withWindowSize(width, 48))
 			a := newTestApp(t, opts...)
 			focusMessages(t, a)
 			selected, ok := a.messagepane.SelectedMessage()
@@ -2206,11 +2206,11 @@ func TestNormalModeEnterKeepsThreadOpenAtDefaultWidth(t *testing.T) {
 			if !a.threadVisible || a.focusedPanel != PanelThread || !strings.Contains(statusbarText(a), "> Thread") {
 				t.Fatal("loaded reply lost thread visibility, focus, or status")
 			}
-			if a.sidebarVisible != (width >= 112) {
-				t.Errorf("sidebarVisible = %v at width %d", a.sidebarVisible, width)
+			if !a.sidebarVisible {
+				t.Errorf("sidebarVisible = false at width %d; the sidebar should remain visible", width)
 			}
 			expected := newPanelLayout()
-			frame := expected.Compute(width, 48, a.workspaceRail.Width(), a.sidebar.Width(), width >= 112, true)
+			frame := expected.Compute(width, 48, a.workspaceRail.Width(), a.sidebar.Width(), true, true)
 			if a.layout.sidebarEnd != expected.sidebarEnd || a.layout.msgEnd != expected.msgEnd || a.layout.threadEnd != width {
 				t.Errorf("layout bands = %+v, want %+v", a.layout, expected)
 			}
@@ -2228,14 +2228,14 @@ func TestNormalModeEnterKeepsThreadOpenAtDefaultWidth(t *testing.T) {
 }
 
 func TestNormalModeEnterAutoHideClearsThreadStatus(t *testing.T) {
-	opts := append(normalOpts(), withSize(79, 30))
+	opts := append(normalOpts(), withWindowSize(108, 30))
 	a := newTestApp(t, opts...)
 	focusMessages(t, a)
 
 	_, _ = a.Update(keyCode(tea.KeyEnter))
 	_ = a.View()
 
-	if !a.sidebarVisible || a.layout.sidebarEnd != 38 || a.layout.msgEnd != 79 || a.layout.threadEnd != 79 {
+	if !a.sidebarVisible || a.layout.sidebarEnd != 38 || a.layout.msgEnd != 108 || a.layout.threadEnd != 108 {
 		t.Errorf("failed fallback changed sidebar or bands: sidebar=%v layout=%+v", a.sidebarVisible, a.layout)
 	}
 	if a.threadVisible {

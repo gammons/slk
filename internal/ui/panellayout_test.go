@@ -23,6 +23,12 @@ func TestPanelLayoutThreadFitUsesCombinedMinimumWidths(t *testing.T) {
 			wantThreadW:  30,
 		},
 		{
+			name:         "just below natural minimum still clamps thread width",
+			width:        121,
+			wantMsgWidth: 49,
+			wantThreadW:  30,
+		},
+		{
 			name:         "default terminal width keeps thread visible",
 			width:        120,
 			wantMsgWidth: 48,
