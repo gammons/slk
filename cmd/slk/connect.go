@@ -346,6 +346,11 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		debuglog.General("workspace %s: users.conversations failed: %v", token.TeamName, err)
 		channels = bootConversations(res)
 	}
+	// users.conversations lists every group DM the user is a member of,
+	// closed ones included; the official client shows only those in
+	// userBoot's is_open. bootConversations already applies this, so
+	// the call is redundant on the fallback path and harmless there.
+	channels = dropClosedMPIMs(channels, res.IsOpen)
 	if len(channels) == 0 {
 		log.Printf("workspace %s: no conversations from either users.conversations or client.userBoot; the sidebar will be empty", token.TeamName)
 	}
