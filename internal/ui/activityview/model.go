@@ -81,6 +81,7 @@ type Model struct {
 	items        []core.ActivityItem
 	userNames    map[string]string
 	channelNames map[string]string
+	channelTypes map[string]string
 	selfUserID   string
 
 	// bodies holds hydrated message text/author for each item ref,
@@ -116,6 +117,7 @@ func New(userNames map[string]string, selfUserID string) Model {
 		userNames:    userNames,
 		selfUserID:   selfUserID,
 		channelNames: map[string]string{},
+		channelTypes: map[string]string{},
 		bodies:       map[string]core.ActivityMessage{},
 	}
 }
@@ -160,6 +162,20 @@ func (m *Model) SetChannelNames(names map[string]string) {
 		return
 	}
 	m.channelNames = names
+	m.dirty()
+}
+
+// SetChannelTypes replaces the channel id -> type map ("channel",
+// "private", "dm", "group_dm"), which decides how a conversation is named
+// on a card. No-op when content-equal to the current one.
+func (m *Model) SetChannelTypes(types map[string]string) {
+	if types == nil {
+		types = map[string]string{}
+	}
+	if stringMapsEqual(m.channelTypes, types) {
+		return
+	}
+	m.channelTypes = types
 	m.dirty()
 }
 
@@ -490,6 +506,14 @@ func (m *Model) renderCard(it core.ActivityItem, width int, selected bool) (stri
 		authorID = body.UserID
 	}
 	author := m.resolveUser(authorID)
+	// A DM row is about the conversation, so it is headed by the other
+	// person (the DM's name) rather than by whoever wrote last, which is
+	// often you.
+	if isDMItem(it.Type) {
+		if name := m.channelNames[it.ChannelID]; name != "" {
+			author = name
+		}
+	}
 
 	left := activityGlyph(it.Type) + " "
 	if author != "" {
@@ -538,7 +562,13 @@ func (m *Model) renderCard(it core.ActivityItem, width int, selected bool) (stri
 		// span; on the selected card that must be the selection tint.
 		preview = messages.RepaintBgToSelectionTint(preview, m.focused)
 	}
-	line2 := "  " + bodyStyle().Render(preview)
+	line2 := "  "
+	if isDMItem(it.Type) && preview != "" && m.selfUserID != "" && body.UserID == m.selfUserID {
+		// Outside bodyStyle: its closing reset would drop the body's
+		// text colour.
+		line2 += mutedStyle().Render("You: ")
+	}
+	line2 += bodyStyle().Render(preview)
 
 	return m.wrapLine(line1, contentWidth, selected), m.wrapLine(line2, contentWidth, selected)
 }
@@ -551,14 +581,28 @@ func (m *Model) contextLabel(it core.ActivityItem) string {
 	if verb == "" {
 		return ""
 	}
-	if it.Type == "dm" || it.Type == "bot_dm_bundle" {
+	if isDMItem(it.Type) {
 		return mutedStyle().Render(verb)
 	}
 	ch := m.resolveChannel(it.ChannelID)
 	if ch == "" {
 		return mutedStyle().Render(verb)
 	}
-	return mutedStyle().Render(verb+" in ") + channelNameStyle().Render("#"+ch)
+	switch chType := m.channelTypes[it.ChannelID]; chType {
+	case "dm":
+		// The other person is already on the card as the author.
+		return mutedStyle().Render(verb + " in DM")
+	case "private", "group_dm":
+		return mutedStyle().Render(verb+" in ") + channelNameStyle().Render(messages.ChannelGlyph(chType)+" "+ch)
+	default:
+		return mutedStyle().Render(verb+" in ") + channelNameStyle().Render("#"+ch)
+	}
+}
+
+// isDMItem reports whether an activity type is a DM row, which is headed
+// by the conversation rather than by the latest message's sender.
+func isDMItem(itemType string) bool {
+	return itemType == "dm" || itemType == "bot_dm_bundle"
 }
 
 // contextVerb maps an item type to its Activity-feed verb.
@@ -604,6 +648,13 @@ func layoutLine(left, right string, width int) string {
 // the whole card).
 func (m *Model) wrapLine(line string, contentWidth int, selected bool) string {
 	line = clipToWidth(line, contentWidth)
+	// Each styled span ends in a reset that drops the row's background;
+	// restore it so the row is filled edge to edge.
+	bg := messages.BgANSI()
+	if selected {
+		bg = messages.SelectionTintBgANSI(m.focused)
+	}
+	line = messages.ReapplyBgAfterResets(line, bg)
 	borderStyle := borderInvisStyle()
 	fill := borderFillStyle().Width(contentWidth)
 	if selected {

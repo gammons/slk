@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -256,6 +257,93 @@ func TestRenderCard_SelectedPreviewKeepsSelectionTint(t *testing.T) {
 	}
 }
 
+// bgPerCell walks line's escape sequences and returns, for each printable
+// rune, the truecolor background in effect ("" when none is set, i.e. the
+// terminal default). OSC sequences (hyperlinks) are skipped.
+func bgPerCell(line string) []string {
+	var out []string
+	bg := ""
+	for i := 0; i < len(line); {
+		if strings.HasPrefix(line[i:], "\x1b]") {
+			end := strings.Index(line[i:], "\x1b\\")
+			if end < 0 {
+				break
+			}
+			i += end + 2
+			continue
+		}
+		if strings.HasPrefix(line[i:], "\x1b[") {
+			end := strings.IndexByte(line[i:], 'm')
+			params := strings.Split(line[i+2:i+end], ";")
+			for j := 0; j < len(params); j++ {
+				switch params[j] {
+				case "", "0":
+					bg = ""
+				case "38", "48":
+					if j+1 < len(params) && params[j+1] == "2" && j+4 < len(params) {
+						if params[j] == "48" {
+							bg = strings.Join(params[j+2:j+5], ";")
+						}
+						j += 4
+					} else if j+1 < len(params) && params[j+1] == "5" {
+						j += 2
+					}
+				}
+			}
+			i += end + 1
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(line[i:])
+		out = append(out, bg)
+		i += size
+	}
+	return out
+}
+
+// Every cell of a card carries the row background (the selection tint
+// when selected, the theme background otherwise), including
+// text that follows a styled span (the bold author, a muted "You:", a
+// channel link). A span's reset otherwise drops the row back to the
+// terminal's default background.
+func TestRenderCard_CardBackgroundIsUnbroken(t *testing.T) {
+	m := New(map[string]string{"U2": "alice"}, "U1")
+	m.SetChannelNames(map[string]string{"D1": "Alex", "C1": "general", "C9": "hiring"})
+	m.SetChannelTypes(map[string]string{"D1": "dm", "C1": "channel"})
+	tint := sgrBgRe.FindStringSubmatch(lipgloss.NewStyle().Background(styles.SelectionTintColor(false)).Render("x"))[1]
+
+	for _, c := range []struct {
+		name string
+		it   core.ActivityItem
+		body core.ActivityMessage
+	}{
+		{"your DM", core.ActivityItem{Type: "dm", ChannelID: "D1", TS: "1.1", IsUnread: true, FeedTS: "1700000000.0"},
+			core.ActivityMessage{Text: "thanks", UserID: "U1"}},
+		{"mention with link", core.ActivityItem{Type: "at_user", ChannelID: "C1", TS: "1.1", AuthorID: "U2"},
+			core.ActivityMessage{Text: "see <#C9> after :wave: *bold* end", UserID: "U2"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m.SetItems([]core.ActivityItem{c.it})
+			m.SetBodies(map[string]core.ActivityMessage{core.ActivityMsgKey(c.it.ChannelID, c.it.TS): c.body})
+			themeBg := sgrBgRe.FindStringSubmatch(lipgloss.NewStyle().Background(styles.Background).Render("x"))[1]
+			for _, sel := range []struct {
+				selected bool
+				want     string
+			}{{true, tint}, {false, themeBg}} {
+				l1, l2 := m.renderCard(c.it, 80, sel.selected)
+				for n, line := range []string{l1, l2} {
+					for i, bg := range bgPerCell(line) {
+						if bg != sel.want {
+							t.Errorf("selected=%v line %d cell %d background = %q, want %s\n%q",
+								sel.selected, n+1, i, bg, sel.want, ansi.Strip(line))
+							break
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
 // A reaction card leads with the reaction itself, rendered as an emoji.
 func TestRenderCard_ReactionRendersEmoji(t *testing.T) {
 	m := New(nil, "")
@@ -295,6 +383,70 @@ func TestContextLabel(t *testing.T) {
 	mention := m.contextLabel(core.ActivityItem{Type: "at_user", ChannelID: "C1"})
 	if !strings.Contains(mention, "#general") {
 		t.Fatalf("mention context should contain #general, got %q", mention)
+	}
+}
+
+// The context names the conversation the way the rest of slk does: "#"
+// only for public channels, "◆" for private ones, "●" for group DMs, and
+// just "DM" for a 1:1 DM (the other person is already on the card).
+func TestContextLabel_ByConversationType(t *testing.T) {
+	m := New(nil, "")
+	m.SetChannelNames(map[string]string{
+		"C1": "general", "G1": "secret", "D1": "Drew Gilliam", "M1": "Pav, Grant Ammons, Tom Hudson",
+	})
+	m.SetChannelTypes(map[string]string{
+		"C1": "channel", "G1": "private", "D1": "dm", "M1": "group_dm",
+	})
+	cases := []struct {
+		name, typ, ch, want string
+	}{
+		{"public channel", "at_user", "C1", "Mention in #general"},
+		{"private channel", "at_user", "G1", "Mention in ◆ secret"},
+		{"1:1 DM", "message_reaction", "D1", "Reacted in DM"},
+		{"group DM", "at_user", "M1", "Mention in ● Pav, Grant Ammons, Tom Hudson"},
+		{"unknown type falls back to #", "at_user", "CX", "Mention in #CX"},
+	}
+	for _, c := range cases {
+		got := ansi.Strip(m.contextLabel(core.ActivityItem{Type: c.typ, ChannelID: c.ch}))
+		if got != c.want {
+			t.Errorf("%s: contextLabel = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// A DM row is headed by the conversation (the other person), not by
+// whoever sent the latest message; when that was you, the preview says
+// so, as Slack does.
+func TestRenderCard_DMHeadedByConversation(t *testing.T) {
+	m := New(map[string]string{"U1": "Alex Lazar", "USELF": "Grant"}, "USELF")
+	m.SetChannelNames(map[string]string{"D1": "Alex Lazar"})
+	m.SetChannelTypes(map[string]string{"D1": "dm"})
+
+	for _, c := range []struct {
+		name, from, wantPrefix string
+	}{
+		{"latest from you", "USELF", "You: "},
+		{"latest from them", "U1", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			it := core.ActivityItem{Type: "dm", ChannelID: "D1", TS: "1.1"}
+			m.SetItems([]core.ActivityItem{it})
+			m.SetBodies(map[string]core.ActivityMessage{
+				core.ActivityMsgKey("D1", "1.1"): {Text: "thanks", UserID: c.from},
+			})
+			l1, l2 := m.renderCard(it, 80, false)
+			head := ansi.Strip(l1)
+			if !strings.Contains(head, "Alex Lazar") || strings.Contains(head, "me ") {
+				t.Errorf("header = %q, want it headed by the conversation, not the sender", head)
+			}
+			body := strings.TrimSpace(strings.TrimPrefix(ansi.Strip(l2), "▌"))
+			if want := c.wantPrefix + "thanks"; !strings.HasPrefix(body, want) {
+				t.Errorf("preview = %q, want it to start with %q", body, want)
+			}
+			if got, want := fgBefore(t, l2, "thanks"), fgOf(t, styles.TextPrimary); got != want {
+				t.Errorf("message colour = %s, want the text colour %s", got, want)
+			}
+		})
 	}
 }
 

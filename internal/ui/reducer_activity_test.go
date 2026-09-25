@@ -1,9 +1,13 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/ui/sidebar"
 )
 
 func TestActivityRefs(t *testing.T) {
@@ -39,5 +43,20 @@ func TestActivityRefs_Empty(t *testing.T) {
 	items := []core.ActivityItem{{ChannelID: "", TS: ""}, {ChannelID: "C1", TS: ""}}
 	if refs := activityRefs(items); len(refs) != 0 {
 		t.Fatalf("no hydratable refs -> empty, got %v", refs)
+	}
+}
+
+// App.SetChannels hands the Activity view each conversation's type, so a
+// reaction in a 1:1 DM reads "Reacted in DM" rather than "#<person>".
+func TestActivityView_ChannelTypesComeFromSetChannels(t *testing.T) {
+	a := newTestApp(t, withSize(120, 30), withActiveTeam("T1"), withView(ViewActivity),
+		withChannels(sidebar.ChannelItem{ID: "D1", Name: "Drew Gilliam", Type: "dm"}))
+	a.Update(ActivityListLoadedMsg{TeamID: "T1", Items: []core.ActivityItem{
+		{Key: "k1", Type: "message_reaction", ChannelID: "D1", TS: "1.1", Reaction: "eyes"},
+	}})
+
+	out := ansi.Strip(a.View().Content)
+	if !strings.Contains(out, "Reacted in DM") || strings.Contains(out, "#Drew Gilliam") {
+		t.Errorf("activity view does not name the DM as a DM:\n%s", out)
 	}
 }

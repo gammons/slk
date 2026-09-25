@@ -2473,6 +2473,7 @@ func (a *App) SetChannels(items []sidebar.ChannelItem) {
 	a.sidebar.SetItems(items)
 	picks := make([]channelpicker.Channel, 0, len(items))
 	names := make(map[string]string, len(items))
+	types := make(map[string]string, len(items))
 	for _, ch := range items {
 		// Skip entries with empty names (defensive -- they'd never
 		// match a typed query and would clutter the empty-query view).
@@ -2485,6 +2486,7 @@ func (a *App) SetChannels(items []sidebar.ChannelItem) {
 			Type: ch.Type,
 		})
 		names[ch.ID] = ch.Name
+		types[ch.ID] = ch.Type
 	}
 	a.compose.SetChannels(picks)
 	a.threadCompose.SetChannels(picks)
@@ -2495,6 +2497,7 @@ func (a *App) SetChannels(items []sidebar.ChannelItem) {
 	a.threadPanel.SetChannelNames(names)
 	a.threadsView.SetChannelNames(names)
 	a.activityView.SetChannelNames(names)
+	a.activityView.SetChannelTypes(types)
 }
 
 // SetChannelService wires the App's ChannelService collaborator
