@@ -50,7 +50,7 @@ func (a *App) applyOverlays(screen string) string {
 		screen = a.reactionPicker.ViewOverlay(a.width, a.height, screen)
 	}
 	if a.confirmPrompt.IsVisible() {
-		screen = a.confirmPrompt.ViewOverlay(a.width, a.height, screen)
+		screen = a.confirmPromptOverlay(screen)
 	}
 	if a.workspaceFinder.IsVisible() {
 		screen = a.workspaceFinder.ViewOverlay(a.width, a.height, screen)

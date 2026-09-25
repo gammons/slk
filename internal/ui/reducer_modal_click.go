@@ -75,7 +75,7 @@ func (a *App) activeModalClickTarget() (modalClickTarget, bool) {
 		return modalClickTarget{&a.help, &a.help, nil}, true
 	case ModeConfirm:
 		// Confirm has no list: outside dismisses, inside is a no-op.
-		return modalClickTarget{a.confirmPrompt, nil, nil}, true
+		return modalClickTarget{confirmPromptBox{&a.confirmPrompt}, nil, nil}, true
 	}
 	return modalClickTarget{}, false
 }
