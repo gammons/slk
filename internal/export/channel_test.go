@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -42,12 +43,22 @@ func testChannel(t *testing.T) Channel {
 	}
 }
 
+// prepareOutput is PrepareOutput or a fatal test failure.
+func prepareOutput(t *testing.T, dir string) Output {
+	t.Helper()
+	out, err := PrepareOutput(dir)
+	if err != nil {
+		t.Fatalf("PrepareOutput(%s): %v", dir, err)
+	}
+	return out
+}
+
 // writeTestChannel exports the fixture and returns the directory.
 func writeTestChannel(t *testing.T) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "out")
 	userNames := map[string]string{"U1": "alice", "U2": "bob", "U3": "carol"}
-	indexPath, err := WriteChannel(dir, testChannel(t), userNames, nil)
+	indexPath, err := WriteChannel(prepareOutput(t, dir), testChannel(t), userNames, nil)
 	if err != nil {
 		t.Fatalf("WriteChannel: %v", err)
 	}
@@ -120,7 +131,7 @@ func TestWriteChannel_FailedWriteLeavesDirEmptyForRetry(t *testing.T) {
 	}
 	root := t.TempDir()
 	dir := filepath.Join(root, "out")
-	if _, err := WriteChannel(dir, ch, nil, nil); err == nil {
+	if _, err := WriteChannel(prepareOutput(t, dir), ch, nil, nil); err == nil {
 		t.Fatal("WriteChannel succeeded with an unwritable filename")
 	}
 	if got := dirNames(t, dir); len(got) != 0 {
@@ -131,7 +142,7 @@ func TestWriteChannel_FailedWriteLeavesDirEmptyForRetry(t *testing.T) {
 	}
 
 	ch.Conversations = ch.Conversations[:1]
-	if _, err := WriteChannel(dir, ch, nil, nil); err != nil {
+	if _, err := WriteChannel(prepareOutput(t, dir), ch, nil, nil); err != nil {
 		t.Fatalf("retry into the same directory: %v", err)
 	}
 	if got := dirNames(t, dir); strings.Join(got, ",") != "2026-04-01-090000-000100.md,index.md" {
@@ -142,7 +153,7 @@ func TestWriteChannel_FailedWriteLeavesDirEmptyForRetry(t *testing.T) {
 func TestWriteChannel_IntoCurrentDirectory(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
-	indexPath, err := WriteChannel(".", testChannel(t), nil, nil)
+	indexPath, err := WriteChannel(prepareOutput(t, "."), testChannel(t), nil, nil)
 	if err != nil {
 		t.Fatalf("WriteChannel: %v", err)
 	}
@@ -184,7 +195,7 @@ func TestWriteChannel_IndexOmitsOverlapLineWhenZero(t *testing.T) {
 	ch := testChannel(t)
 	ch.Window = mustWindow(t, "2026-04-01", "2026-07-01", testTZ, 0)
 	dir := filepath.Join(t.TempDir(), "out")
-	if _, err := WriteChannel(dir, ch, nil, nil); err != nil {
+	if _, err := WriteChannel(prepareOutput(t, dir), ch, nil, nil); err != nil {
 		t.Fatalf("WriteChannel: %v", err)
 	}
 	if index := readFile(t, filepath.Join(dir, "index.md")); strings.Contains(index, "Overlap") {
@@ -251,7 +262,7 @@ func TestWriteChannel_TimesFollowTheWindowTimezone(t *testing.T) {
 		Conversations: []Conversation{{Parent: messages.MessageItem{TS: tsAt(t, testTZ, "2026-03-31 23:30:00"), UserName: "alice", Text: "hi", DateStr: "stale", Timestamp: "stale"}}},
 	}
 	dir := filepath.Join(t.TempDir(), "out")
-	if _, err := WriteChannel(dir, ch, nil, nil); err != nil {
+	if _, err := WriteChannel(prepareOutput(t, dir), ch, nil, nil); err != nil {
 		t.Fatalf("WriteChannel: %v", err)
 	}
 	got := readFile(t, filepath.Join(dir, "2026-04-01-123000-000100.md"))
@@ -274,7 +285,7 @@ func TestWriteChannel_SameSecondParentsGetDistinctFiles(t *testing.T) {
 		},
 	}
 	dir := filepath.Join(t.TempDir(), "out")
-	if _, err := WriteChannel(dir, ch, nil, nil); err != nil {
+	if _, err := WriteChannel(prepareOutput(t, dir), ch, nil, nil); err != nil {
 		t.Fatalf("WriteChannel: %v", err)
 	}
 	for name, want := range map[string]string{"2026-04-01-090000-000100.md": "first", "2026-04-01-090000-000200.md": "second"} {
@@ -294,7 +305,7 @@ func TestWriteChannel_UnparseableTimestampsGetDistinctFiles(t *testing.T) {
 		},
 	}
 	dir := filepath.Join(t.TempDir(), "out")
-	if _, err := WriteChannel(dir, ch, nil, nil); err != nil {
+	if _, err := WriteChannel(prepareOutput(t, dir), ch, nil, nil); err != nil {
 		t.Fatalf("WriteChannel: %v", err)
 	}
 	for name, want := range map[string]string{"unknown-unknown.md": "FIRST", "unknown-unknown-2.md": "SECOND"} {
@@ -333,7 +344,7 @@ func TestUniqueFilename(t *testing.T) {
 func TestWriteChannel_EmptyExportStillWritesIndex(t *testing.T) {
 	ch := Channel{Name: "quiet", Window: mustWindow(t, "2026-04-01", "2026-04-02", testTZ, 0)}
 	dir := filepath.Join(t.TempDir(), "out")
-	if _, err := WriteChannel(dir, ch, nil, nil); err != nil {
+	if _, err := WriteChannel(prepareOutput(t, dir), ch, nil, nil); err != nil {
 		t.Fatalf("WriteChannel: %v", err)
 	}
 	index := readFile(t, filepath.Join(dir, "index.md"))
@@ -342,36 +353,123 @@ func TestWriteChannel_EmptyExportStillWritesIndex(t *testing.T) {
 	}
 }
 
-func TestWriteChannel_RefusesNonEmptyDir(t *testing.T) {
+func TestPrepareOutput_RefusesNonEmptyDir(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "out")
+	keep := filepath.Join(dir, "notes.txt")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keep, []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := PrepareOutput(dir)
+	if !errors.Is(err, ErrOutputNotEmpty) {
+		t.Fatalf("err = %v, want ErrOutputNotEmpty", err)
+	}
+	if got := dirNames(t, dir); len(got) != 1 || readFile(t, keep) != "mine" {
+		t.Errorf("refused export still touched the directory: %v", got)
+	}
+	if got := dirNames(t, root); strings.Join(got, ",") != "out" {
+		t.Errorf("refused export created a staging directory: %v", got)
+	}
+}
+
+func TestPrepareOutput_CreatesBothDirectoriesUpFront(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "a", "out")
+	out := prepareOutput(t, dir)
+	if out.Dir != dir {
+		t.Errorf("Dir = %q, want %q", out.Dir, dir)
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		t.Errorf("missing output dir was not created: %v", err)
+	}
+	if got := dirNames(t, filepath.Join(root, "a")); len(got) != 2 || got[0] != "out" || !strings.HasPrefix(got[1], "out.partial-") {
+		t.Errorf("want out and a staging sibling, got %v", got)
+	}
+	if err := out.Discard(); err != nil {
+		t.Fatalf("Discard: %v", err)
+	}
+	if got := dirNames(t, filepath.Join(root, "a")); strings.Join(got, ",") != "out" {
+		t.Errorf("Discard left %v", got)
+	}
+	if err := out.Discard(); err != nil {
+		t.Errorf("second Discard: %v", err)
+	}
+	if err := (Output{}).Discard(); err != nil {
+		t.Errorf("Discard of the zero value: %v", err)
+	}
+}
+
+func TestPrepareOutput_FailsAtOnceWhenParentIsReadOnly(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permissions are not enforced here")
+	}
+	parent := filepath.Join(t.TempDir(), "parent")
+	dir := filepath.Join(parent, "out")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(parent, 0o755) })
+
+	_, err := PrepareOutput(dir)
+	if err == nil || !strings.Contains(err.Error(), "creating staging directory") {
+		t.Fatalf("err = %v, want a staging directory failure", err)
+	}
+	if got := dirNames(t, dir); len(got) != 0 {
+		t.Errorf("failed preparation touched the output directory: %v", got)
+	}
+}
+
+func TestWriteChannel_RejectsUnpreparedOutput(t *testing.T) {
 	dir := t.TempDir()
+	_, err := WriteChannel(Output{Dir: dir}, testChannel(t), nil, nil)
+	if err == nil {
+		t.Fatal("WriteChannel accepted an Output that PrepareOutput did not build")
+	}
+	if got := dirNames(t, dir); len(got) != 0 {
+		t.Errorf("rejected export still wrote %v", got)
+	}
+}
+
+func TestWriteChannel_RefusesDirFilledAfterPrepare(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "out")
+	out := prepareOutput(t, dir)
 	keep := filepath.Join(dir, "notes.txt")
 	if err := os.WriteFile(keep, []byte("mine"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := WriteChannel(dir, testChannel(t), nil, nil)
+	_, err := WriteChannel(out, testChannel(t), nil, nil)
 	if !errors.Is(err, ErrOutputNotEmpty) {
 		t.Fatalf("err = %v, want ErrOutputNotEmpty", err)
 	}
-	entries, _ := os.ReadDir(dir)
-	if len(entries) != 1 || readFile(t, keep) != "mine" {
-		t.Errorf("refused export still touched the directory: %v", entries)
+	if got := dirNames(t, dir); len(got) != 1 || readFile(t, keep) != "mine" {
+		t.Errorf("refused export still touched the directory: %v", got)
+	}
+	if got := dirNames(t, root); strings.Join(got, ",") != "out" {
+		t.Errorf("refused export left a staging directory behind: %v", got)
 	}
 }
 
 func TestEnsureEmptyDir(t *testing.T) {
 	root := t.TempDir()
-	if err := EnsureEmptyDir(root); err != nil {
+	if err := ensureEmptyDir(root); err != nil {
 		t.Errorf("existing empty dir: %v", err)
 	}
 	nested := filepath.Join(root, "a", "b")
-	if err := EnsureEmptyDir(nested); err != nil {
+	if err := ensureEmptyDir(nested); err != nil {
 		t.Fatalf("missing dir: %v", err)
 	}
 	if info, err := os.Stat(nested); err != nil || !info.IsDir() {
 		t.Errorf("missing dir was not created: %v", err)
 	}
 	// root now holds "a".
-	if err := EnsureEmptyDir(root); !errors.Is(err, ErrOutputNotEmpty) {
+	if err := ensureEmptyDir(root); !errors.Is(err, ErrOutputNotEmpty) {
 		t.Errorf("non-empty dir: err = %v, want ErrOutputNotEmpty", err)
 	}
 }

@@ -209,9 +209,14 @@ func exportChannel(args []string) error {
 			return err
 		}
 	}
-	if err := export.EnsureEmptyDir(outDir); err != nil {
+	// Every filesystem step that can fail happens here, before the
+	// fetch; the deferred Discard cleans up if the export does not
+	// reach WriteChannel.
+	out, err := export.PrepareOutput(outDir)
+	if err != nil {
 		return err
 	}
+	defer out.Discard()
 
 	fmt.Fprintf(os.Stderr, "Exporting #%s from %s\n", label, tok.TeamName)
 	raw, err := collectConversations(ctx, client, channel.ID, win, os.Stderr)
@@ -229,7 +234,7 @@ func exportChannel(args []string) error {
 		return err
 	}
 
-	indexPath, err := export.WriteChannel(outDir, export.Channel{
+	indexPath, err := export.WriteChannel(out, export.Channel{
 		Workspace:     tok.TeamName,
 		Name:          label,
 		Window:        win,

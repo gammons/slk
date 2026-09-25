@@ -61,45 +61,70 @@ func (n nameMap) lookup(id string) (string, bool) {
 	return name, ok
 }
 
-// WriteChannel writes ch into dir as one Markdown file per conversation
-// plus an index.md, creating dir if needed, and returns the index path.
-// It fails with ErrOutputNotEmpty rather than write into a directory
-// that already has content. The files are staged in a sibling
-// directory and moved into dir only once every one of them is written,
-// so a failed export leaves dir empty and the command can be re-run.
-// Each message's DateStr and Timestamp are derived from its TS in the
-// window's timezone; values set by the caller are ignored. userNames
-// and channelNames resolve mentions.
-func WriteChannel(dir string, ch Channel, userNames, channelNames map[string]string) (string, error) {
-	if err := EnsureEmptyDir(dir); err != nil {
-		return "", err
-	}
-	staging, err := newStagingDir(dir)
-	if err != nil {
-		return "", err
-	}
-	if err := writeConversations(staging, ch, userNames, channelNames); err != nil {
-		return "", errors.Join(err, os.RemoveAll(staging))
-	}
-	if err := moveContents(staging, dir); err != nil {
-		return "", fmt.Errorf("moving the export into place, files left in %s: %w", staging, err)
-	}
-	return filepath.Join(dir, indexFilename), nil
+// Output is where a channel export lands: Dir, which PrepareOutput
+// found empty or created, and a staging directory beside it that the
+// files are written to first. Only PrepareOutput builds a usable value.
+type Output struct {
+	Dir     string
+	staging string
 }
 
-// newStagingDir creates the directory an export is written to before it
-// is moved into dir: a uniquely named sibling of dir, so the move stays
-// on one filesystem and an interrupted export leaves dir itself empty.
-func newStagingDir(dir string) (string, error) {
+// PrepareOutput creates dir when it is missing, fails with
+// ErrOutputNotEmpty when it already has entries, and creates the
+// staging directory the export is written to before it is moved into
+// dir: a uniquely named sibling, so the move stays on one filesystem
+// and an interrupted export leaves dir itself empty. It does every
+// filesystem step that can fail, so a caller can reject a bad
+// directory before spending minutes on the fetch. Discard the result
+// if the export does not go ahead.
+func PrepareOutput(dir string) (Output, error) {
+	if err := ensureEmptyDir(dir); err != nil {
+		return Output{}, err
+	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
-		return "", fmt.Errorf("resolving output directory: %w", err)
+		return Output{}, fmt.Errorf("resolving output directory: %w", err)
 	}
 	staging, err := os.MkdirTemp(filepath.Dir(abs), filepath.Base(abs)+".partial-")
 	if err != nil {
-		return "", fmt.Errorf("creating staging directory: %w", err)
+		return Output{}, fmt.Errorf("creating staging directory: %w", err)
 	}
-	return staging, nil
+	return Output{Dir: dir, staging: staging}, nil
+}
+
+// Discard removes the staging directory and whatever was written to it.
+// It is a no-op once WriteChannel has moved the files into Dir, so it
+// is safe to defer right after PrepareOutput.
+func (o Output) Discard() error {
+	if o.staging == "" {
+		return nil
+	}
+	return os.RemoveAll(o.staging)
+}
+
+// WriteChannel writes ch into out as one Markdown file per conversation
+// plus an index.md and returns the index path. The files go to the
+// staging directory and are moved into out.Dir only once every one of
+// them is written, so a failed export leaves out.Dir empty and the
+// command can be re-run. It fails with ErrOutputNotEmpty rather than
+// mix into a directory that gained content since PrepareOutput. Each
+// message's DateStr and Timestamp are derived from its TS in the
+// window's timezone; values set by the caller are ignored. userNames
+// and channelNames resolve mentions.
+func WriteChannel(out Output, ch Channel, userNames, channelNames map[string]string) (string, error) {
+	if out.staging == "" {
+		return "", errors.New("output was not prepared with PrepareOutput")
+	}
+	if err := ensureEmptyDir(out.Dir); err != nil {
+		return "", errors.Join(err, out.Discard())
+	}
+	if err := writeConversations(out.staging, ch, userNames, channelNames); err != nil {
+		return "", errors.Join(err, out.Discard())
+	}
+	if err := moveContents(out.staging, out.Dir); err != nil {
+		return "", fmt.Errorf("moving the export into place, files left in %s: %w", out.staging, err)
+	}
+	return filepath.Join(out.Dir, indexFilename), nil
 }
 
 // moveContents moves every entry of src into dst and removes src.
@@ -161,11 +186,9 @@ func DefaultChannelDir(channelName string, w Window) (string, error) {
 	return filepath.Join(base, name), nil
 }
 
-// EnsureEmptyDir creates dir when it is missing and fails with
-// ErrOutputNotEmpty when it already has entries. WriteChannel calls it
-// itself; it is exported so a caller can reject a bad directory before
-// spending minutes on the fetch.
-func EnsureEmptyDir(dir string) error {
+// ensureEmptyDir creates dir when it is missing and fails with
+// ErrOutputNotEmpty when it already has entries.
+func ensureEmptyDir(dir string) error {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
