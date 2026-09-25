@@ -24,12 +24,14 @@ import (
 	"github.com/muesli/reflow/truncate"
 )
 
-// cardStride is the number of flat-list lines a single activity row occupies.
-// Rows are two-line cards (line 1: author + context + time; line 2: the
-// hydrated message-body preview), with no inter-card separator. Kept as a
-// named constant so ClickAt / snapToSelected read the same way as
-// threadsview's cardStride-based math.
-const cardStride = 2
+// Each activity row is a two-line card (line 1: author + context + time;
+// line 2: the hydrated message-body preview) followed by one blank
+// separator line, except the last card. card i therefore starts at flat
+// line i*cardStride. Same layout and math as threadsview.
+const (
+	cardContentLines = 2
+	cardStride       = cardContentLines + 1
+)
 
 // Local styles, kept package-private and built from the shared color tokens
 // so theme changes propagate via styles.Apply().
@@ -317,15 +319,17 @@ func (m *Model) ViewportAtTop() bool {
 // ClickAt selects the activity row whose visual row contains rowY (the
 // panel-local Y inside the bordered messages-pane content area). Returns
 // true when a row was selected and the caller should follow up with the
-// open command; false for the blank-fill region past the last row and for
-// negative rowY. Cards are two-line (cardStride == 2) with no separators;
-// a click on either visual line of a card maps to the same item via
-// absLine / cardStride.
+// open command; false for separator rows, the blank-fill region past the
+// last row, and negative rowY. A click on either line of a card maps to
+// the same item via absLine / cardStride.
 func (m *Model) ClickAt(rowY int) bool {
 	if rowY < 0 {
 		return false
 	}
 	absLine := m.yOffset + rowY
+	if absLine%cardStride >= cardContentLines {
+		return false
+	}
 	idx := absLine / cardStride
 	if idx < 0 || idx >= len(m.items) {
 		return false
@@ -411,11 +415,11 @@ func (m *Model) View(height, width int) string {
 	return strings.Join(visible, "\n")
 }
 
-// snapToSelected adjusts yOffset so the selected two-line card (cardStride
-// lines) is fully inside the viewport.
+// snapToSelected adjusts yOffset so the selected card's content lines are
+// fully inside the viewport.
 func (m *Model) snapToSelected(height, totalLines int) {
 	start := m.selected * cardStride
-	end := start + cardStride
+	end := start + cardContentLines
 
 	if end > m.yOffset+height {
 		m.yOffset = end - height
@@ -435,12 +439,16 @@ func (m *Model) snapToSelected(height, totalLines int) {
 	}
 }
 
-// renderRows builds the full (un-windowed) line list, flattening each
-// item's two-line card into the flat list (cardStride lines per item) so
-// the windowing / snap / click math stays stride-based.
+// renderRows builds the full (un-windowed) line list: each item's
+// two-line card, with a blank separator between adjacent cards, so the
+// windowing / snap / click math stays stride-based.
 func (m *Model) renderRows(width int) []string {
 	lines := make([]string, 0, len(m.items)*cardStride)
+	separator := blankLine(width)
 	for i, it := range m.items {
+		if i > 0 {
+			lines = append(lines, separator)
+		}
 		l1, l2 := m.renderCard(it, width, i == m.selected)
 		lines = append(lines, l1, l2)
 	}

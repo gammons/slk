@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/gammons/slk/internal/core"
 )
 
@@ -139,9 +141,10 @@ func TestRenderCardAlwaysTwoLines(t *testing.T) {
 	}
 }
 
-// renderRows flattens each item into exactly cardStride lines, none with a
-// newline.
-func TestRenderRowsStride(t *testing.T) {
+// renderRows lays cards out as two content lines each with one blank
+// separator between adjacent cards (none after the last), matching the
+// Threads view. No line may contain a newline.
+func TestRenderRowsSeparatesCards(t *testing.T) {
 	m := New(nil, "")
 	m.SetItems([]core.ActivityItem{
 		{Type: "at_user", ChannelID: "C1", TS: "1.1", Key: "a"},
@@ -149,12 +152,16 @@ func TestRenderRowsStride(t *testing.T) {
 		{Type: "thread_v2", ChannelID: "C3", TS: "3.3", Key: "c"},
 	})
 	lines := m.renderRows(60)
-	if len(lines) != 3*cardStride {
-		t.Fatalf("want %d lines (3 cards x %d), got %d", 3*cardStride, cardStride, len(lines))
+	if want := 3*2 + 2; len(lines) != want {
+		t.Fatalf("want %d lines (3 two-line cards + 2 separators), got %d", want, len(lines))
 	}
 	for i, l := range lines {
 		if strings.Contains(l, "\n") {
 			t.Fatalf("line %d contains a newline: %q", i, l)
+		}
+		isSeparator := i == 2 || i == 5
+		if blank := strings.TrimSpace(ansi.Strip(l)) == ""; blank != isSeparator {
+			t.Errorf("line %d blank=%v, want %v: %q", i, blank, isSeparator, ansi.Strip(l))
 		}
 	}
 }
@@ -203,8 +210,8 @@ func TestRenderCard_AuthorFallbackToBody(t *testing.T) {
 	}
 }
 
-// With cardStride == 2, a click on either visual line of a card selects the
-// same item; a click past the last card returns false.
+// A click on either line of a card selects that card; a click on a
+// separator or past the last card selects nothing.
 func TestClickAtStride(t *testing.T) {
 	m := New(nil, "")
 	m.SetItems([]core.ActivityItem{
@@ -212,16 +219,19 @@ func TestClickAtStride(t *testing.T) {
 		{Type: "dm", ChannelID: "C2", TS: "2.2", Key: "b"},
 		{Type: "thread_v2", ChannelID: "C3", TS: "3.3", Key: "c"},
 	})
-	// Card 0 occupies visual rows 0,1; card 1 rows 2,3; card 2 rows 4,5.
+	// Card 0 occupies rows 0,1; separator 2; card 1 rows 3,4; separator
+	// 5; card 2 rows 6,7.
 	for _, tc := range []struct {
 		rowY    int
 		wantOK  bool
 		wantSel int
 	}{
 		{0, true, 0}, {1, true, 0},
-		{2, true, 1}, {3, true, 1},
-		{4, true, 2}, {5, true, 2},
-		{6, false, 0}, {-1, false, 0},
+		{2, false, 0},
+		{3, true, 1}, {4, true, 1},
+		{5, false, 0},
+		{6, true, 2}, {7, true, 2},
+		{8, false, 0}, {-1, false, 0},
 	} {
 		ok := m.ClickAt(tc.rowY)
 		if ok != tc.wantOK {
