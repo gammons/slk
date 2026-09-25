@@ -1123,7 +1123,8 @@ func TestNormalModeKeys(t *testing.T) {
 
 		// -------------------------------------------------------------
 		// Arms 24-27: PageUp / PageDown / HalfPageUp / HalfPageDown
-		// (mode_normal.go:190, :195, :200, :205)
+		//
+		// All four return scrollFocusedPanel's result directly.
 		//
 		// Each row pins the EXACT viewport delta, which is the only way
 		// to separate the page arms from the half-page arms: both move
@@ -1164,10 +1165,10 @@ func TestNormalModeKeys(t *testing.T) {
 			assert:   wantYOffset(func(a *App) int { return 400 - a.halfPageSize() }),
 		},
 		{
-			// The `if cmd != nil` inner branch of the PageUp arm.
-			// scrollFocusedPanel returns a cmd only when an up-scroll
-			// lands the viewport at line 0 (app.go:1486), which kicks
-			// the older-history backfill.
+			// The PageUp arm's non-nil cmd. scrollFocusedPanel returns
+			// a cmd only when a messages-pane up-scroll lands the
+			// viewport at line 0, which kicks the older-history
+			// backfill (maybeFetchOlderHistory).
 			name:     "pgup that lands the viewport at the top kicks the history backfill",
 			opts:     normalOpts(),
 			setup:    scrollTo(2),
@@ -1189,7 +1190,7 @@ func TestNormalModeKeys(t *testing.T) {
 			},
 		},
 		{
-			// Same inner branch for the HalfPageUp arm.
+			// Same non-nil cmd for the HalfPageUp arm.
 			name:     "ctrl+u that lands the viewport at the top kicks the history backfill",
 			opts:     normalOpts(),
 			setup:    scrollTo(1),
@@ -1205,15 +1206,15 @@ func TestNormalModeKeys(t *testing.T) {
 			},
 		},
 		{
-			// BUG?-adjacent, recorded rather than fixed: the
-			// `if cmd := ...; cmd != nil { return cmd }` wrappers on the
-			// PageDown (mode_normal.go:196) and HalfPageDown (:206) arms
-			// are unreachable. scrollFocusedPanel returns a non-nil cmd
-			// on exactly one path -- the messages-pane UP-scroll backfill
-			// at app.go:1486 -- so for a positive delta it always returns
-			// nil and the wrapper falls through to the switch's bottom
-			// `return nil`. Same observable either way; this row pins the
-			// nil so a future change to that helper has a witness.
+			// scrollFocusedPanel returns a non-nil cmd on exactly one
+			// path -- the messages-pane UP-scroll backfill -- so a
+			// positive delta always yields nil. The PageDown and
+			// HalfPageDown arms used to wrap the call in an unreachable
+			// `if cmd != nil { return cmd }`; all four arms now return
+			// the result directly
+			// (https://github.com/gammons/slk/issues/188, item 3). This
+			// row pins the nil so a future change to that helper has a
+			// witness.
 			name:     "pgdown never returns a cmd: the down path has no backfill",
 			opts:     normalOpts(),
 			setup:    scrollTo(0),

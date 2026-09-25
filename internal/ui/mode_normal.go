@@ -232,24 +232,16 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		}
 
 	case key.Matches(msg, a.keys.PageUp):
-		if cmd := a.scrollFocusedPanel(-a.pageSize()); cmd != nil {
-			return cmd
-		}
+		return a.scrollFocusedPanel(-a.pageSize())
 
 	case key.Matches(msg, a.keys.PageDown):
-		if cmd := a.scrollFocusedPanel(a.pageSize()); cmd != nil {
-			return cmd
-		}
+		return a.scrollFocusedPanel(a.pageSize())
 
 	case key.Matches(msg, a.keys.HalfPageUp):
-		if cmd := a.scrollFocusedPanel(-a.halfPageSize()); cmd != nil {
-			return cmd
-		}
+		return a.scrollFocusedPanel(-a.halfPageSize())
 
 	case key.Matches(msg, a.keys.HalfPageDown):
-		if cmd := a.scrollFocusedPanel(a.halfPageSize()); cmd != nil {
-			return cmd
-		}
+		return a.scrollFocusedPanel(a.halfPageSize())
 
 	case key.Matches(msg, a.keys.Help):
 		a.help.SetEntries(help.FromKeyMap(a.keys))
