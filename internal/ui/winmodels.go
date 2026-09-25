@@ -22,6 +22,7 @@ func (a *App) newWindowModel(chName string) *messages.Model {
 	m := messages.New(nil, chName)
 	m.SetAvatarFunc(a.avatarFn)
 	m.SetUserNames(a.userNames)
+	m.SetUserStatuses(a.presence.peers)
 	m.SetChannelNames(a.channelNames)
 	m.SetUserGroups(a.userGroups)
 	m.SetEmojiContext(a.emojiCtx)

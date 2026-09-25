@@ -14,14 +14,14 @@ import (
 // renderRegion renders the messages region exactly as App.View does,
 // without depending on the tea.View wrapper API.
 func renderRegion(a *App) string {
-	frame := a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(), a.sidebarVisible, a.threadVisible)
+	frame := a.computeFrame()
 	return a.renderWindowsRegion(frame, 0, false)
 }
 
 func TestRegion_SingleWindowUnchanged(t *testing.T) {
 	a := newWideTestApp(t)
 	_, _ = a.Update(ChannelSelectedMsg{ID: "C1", Name: "general", Type: "channel"})
-	frame := a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(), a.sidebarVisible, a.threadVisible)
+	frame := a.computeFrame()
 	multi := a.renderWindowsRegion(frame, 0, false)
 	direct := a.renderMessagesRegion(frame, 0, false)
 	if multi != direct {
@@ -94,7 +94,7 @@ func TestRegion_UnfocusedPaneDoesNotRewrapModelLines(t *testing.T) {
 	// Reference: the model's own render at the SAME inner dims the
 	// renderer uses — derive w1's rect exactly as renderWindowsRegion
 	// does (focused window is w2/C2 "ops": empty, no interference).
-	frame := a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(), a.sidebarVisible, a.threadVisible)
+	frame := a.computeFrame()
 	bounds := wintree.Rect{X: 0, Y: 0, W: frame.MsgWidth + frame.MsgBorder, H: frame.ContentHeight}
 	r := a.wins.ComputeRects(bounds)[w1]
 	bare := ansi.Strip(a.winModels[w1].ViewBare(r.H-2, r.W-2))
@@ -150,7 +150,7 @@ func TestRegion_SurvivesHardShrinkAfterSplits(t *testing.T) {
 	}
 	// Hard shrink: must not panic, must keep exact region dimensions.
 	a.width, a.height = 30, 10
-	frame := a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(), a.sidebarVisible, a.threadVisible)
+	frame := a.computeFrame()
 	out := a.renderWindowsRegion(frame, 0, false) // panics before the fix
 	wantW := frame.MsgWidth + frame.MsgBorder
 	if lipgloss.Height(out) != frame.ContentHeight {
@@ -178,7 +178,7 @@ func TestRegion_SurvivesHardShrinkAfterStackedSplits(t *testing.T) {
 	}
 	// ContentHeight (3) < window count (4) → at least one H=0 rect.
 	a.width, a.height = 30, 4
-	frame := a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(), a.sidebarVisible, a.threadVisible)
+	frame := a.computeFrame()
 	out := a.renderWindowsRegion(frame, 0, false)
 	wantW := frame.MsgWidth + frame.MsgBorder
 	if lipgloss.Height(out) != frame.ContentHeight {
@@ -199,7 +199,7 @@ func TestRegion_CloseRestoresSingleWindowPath(t *testing.T) {
 	if a.wins.Len() != 1 {
 		t.Fatalf("Len = %d, want 1", a.wins.Len())
 	}
-	frame := a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(), a.sidebarVisible, a.threadVisible)
+	frame := a.computeFrame()
 	multi := a.renderWindowsRegion(frame, 0, false)
 	direct := a.renderMessagesRegion(frame, 0, false)
 	if multi != direct {

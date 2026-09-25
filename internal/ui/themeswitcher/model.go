@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/text"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/overlay"
@@ -13,11 +14,11 @@ import (
 
 // ThemeScope identifies whether a theme selection should be saved to
 // the active workspace or to the global default.
-type ThemeScope int
+type ThemeScope = core.ThemeScope
 
 const (
-	ScopeGlobal ThemeScope = iota
-	ScopeWorkspace
+	ScopeGlobal    = core.ThemeScopeGlobal
+	ScopeWorkspace = core.ThemeScopeWorkspace
 )
 
 // ThemeResult is returned when the user selects a theme.

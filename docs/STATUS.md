@@ -53,6 +53,7 @@ Last updated: 2026-05-03
 - [x] Message editing (`E` on own message; reuses compose with stash/restore draft)
 - [x] Message deletion (`D` on own message; centered confirmation overlay)
 - [x] Paste-to-upload via `Ctrl+V` in insert mode (clipboard image, file path, or text fallback) using Slack's V2 file-upload API; multiple attachments + caption send together; status-bar progress + error toasts
+- [x] OSC 52 clipboard integration for message selection, message text (`y`), and permalink copying (`Y` / `C`)
 - [x] In-place update on `message_changed` echoes (no duplicate row on edit)
 - [x] Live removal on `message_deleted` echoes from any client
 - [x] @mention autocomplete in compose (inline picker, translates to <@UserID> on send)
@@ -69,13 +70,17 @@ Last updated: 2026-05-03
 - [x] Block Kit & legacy attachment rendering -- bot messages render with structure (sections, fields, color stripes), with disabled controls visible and an "↗ open in Slack to interact" hint
 
 ### Threads
-- [x] Thread panel -- side panel (35% width) for viewing and replying to threads
+- [x] Thread panel -- opens beside the channel (at least 80 columns wide) for
+      viewing and replying to threads; on narrow terminals the thread and
+      channel stack, with focus deciding which is shown
 - [x] Enter on message opens thread, Escape closes
 - [x] Ctrl+] toggles thread panel
 - [x] Thread replies with green left-border selection
 - [x] Thread reply compose with Shift+Enter for newlines
 - [x] Real-time thread reply routing via WebSocket
 - [x] Thread reply sending via Slack API
+- [x] Also send to channel (`Ctrl+O` in thread compose toggles Slack's
+  reply-broadcast checkbox; optimistic thread_broadcast row in the channel feed)
 - [x] Channel switch closes thread panel
 - [x] Threads view (top-of-sidebar `⚑ Threads` entry): list of threads the
   user authored, replied to, or was @-mentioned in for the active workspace,
@@ -99,6 +104,7 @@ Last updated: 2026-05-03
 - [x] Public channels (# prefix)
 - [x] Private channels (◆ prefix)
 - [x] DMs with presence indicators (● online, ○ offline)
+- [x] Other people's custom status and huddle indicators on DM rows, message authors, the channel finder and the DM header; DND (⊘) on DM rows, the finder and the DM header
 - [x] Group DMs
 - [x] Slack-native sidebar sections (default): names, emoji, linked-list order, and channel/DM membership read from `users.channelSections.list` and kept live via WebSocket events (`channel_section_upserted`, `channel_section_deleted`, `channel_sections_channels_upserted`, `channel_sections_channels_removed`). Read-only in v1.
 - [x] Config-based channel sections with glob pattern matching (fallback when `use_slack_sections = false` or the API is unreachable)
@@ -113,7 +119,6 @@ Last updated: 2026-05-03
 - [ ] Search (`:search <query>` or `Ctrl+/`)
 - [ ] File downloads (browser-style "save attachment" command; uploads via Ctrl+V paste are implemented)
 - [x] Self presence and DND/snooze controls (Ctrl+S menu, live status bar segment, notification suppression)
-- [ ] OSC 52 clipboard integration (yank message text)
 ### Low Priority
 
 - [ ] Quiet hours for notifications

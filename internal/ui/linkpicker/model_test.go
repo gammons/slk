@@ -15,7 +15,7 @@ func TestOpenAndNavigate(t *testing.T) {
 	if m.IsVisible() {
 		t.Fatal("visible before Open")
 	}
-	m.Open(items3())
+	m.Open("Open link", items3())
 	if !m.IsVisible() {
 		t.Fatal("not visible after Open")
 	}
@@ -37,13 +37,13 @@ func TestOpenAndNavigate(t *testing.T) {
 
 func TestNavigationBounds(t *testing.T) {
 	m := New()
-	m.Open(items3())
+	m.Open("Open link", items3())
 	m.HandleKey("k") // at top; no-op
 	item, chosen := m.HandleKey("enter")
 	if !chosen || item.URL != items3()[0].URL {
 		t.Errorf("chose %+v chosen=%v", item, chosen)
 	}
-	m.Open(items3())
+	m.Open("Open link", items3())
 	for i := 0; i < 10; i++ {
 		m.HandleKey("j") // clamps at bottom
 	}
@@ -55,7 +55,7 @@ func TestNavigationBounds(t *testing.T) {
 
 func TestEscCloses(t *testing.T) {
 	m := New()
-	m.Open(items3())
+	m.Open("Open link", items3())
 	if _, chosen := m.HandleKey("esc"); chosen {
 		t.Error("esc must not choose")
 	}
@@ -66,8 +66,21 @@ func TestEscCloses(t *testing.T) {
 
 func TestEnterOnEmptyIsNoop(t *testing.T) {
 	m := New()
-	m.Open(nil)
+	m.Open("Open link", nil)
 	if _, chosen := m.HandleKey("enter"); chosen {
 		t.Error("enter on empty list must not choose")
+	}
+}
+
+func TestOpenAssignsIndexAndTitle(t *testing.T) {
+	m := New()
+	m.Open("Download file", items3())
+	if m.Title() != "Download file" {
+		t.Errorf("title = %q", m.Title())
+	}
+	m.HandleKey("j")
+	item, chosen := m.HandleKey("enter")
+	if !chosen || item.Index != 1 {
+		t.Errorf("chosen item = %+v chosen=%v", item, chosen)
 	}
 }

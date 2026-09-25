@@ -23,11 +23,44 @@ import (
 )
 
 // pendingLinkNav is the not-yet-completed tail of an in-app permalink
-// navigation. Set by routeLink, consumed by completePendingLinkNav.
+// navigation. Thread targets survive until both cache and fetch complete.
 type pendingLinkNav struct {
-	channelID string
-	messageTS string
-	threadTS  string // non-empty: open the thread panel instead of selecting
+	channelID    string
+	messageTS    string
+	threadTS     string // non-empty: select within the thread panel
+	teamID       string
+	threadOpened bool
+	loadsDone    int
+	fetchApplied bool
+}
+
+// Only permalink loads carry this envelope; ordinary thread refreshes must
+// not inherit a pending target. nav also identifies superseded requests.
+type permalinkThreadResultMsg struct {
+	nav           *pendingLinkNav
+	result        tea.Msg
+	authoritative bool
+	loads         int
+}
+
+func (p *pendingLinkNav) wrapThreadLoad(cmd tea.Cmd, authoritative bool, loads int) tea.Cmd {
+	return func() tea.Msg {
+		var result tea.Msg
+		if cmd != nil {
+			result = cmd()
+		}
+		if batch, ok := result.(tea.BatchMsg); ok {
+			// openThreadPanel batches an optional cache command followed by
+			// the authoritative fetch. Keep them concurrent, but tag their
+			// results so a late cache response cannot undo the fetch.
+			wrapped := make([]tea.Cmd, len(batch))
+			for i, child := range batch {
+				wrapped[i] = p.wrapThreadLoad(child, authoritative && i == len(batch)-1, len(batch))
+			}
+			return tea.Batch(wrapped...)()
+		}
+		return permalinkThreadResultMsg{nav: p, result: result, authoritative: authoritative, loads: loads}
+	}
 }
 
 var reduceLinks reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
@@ -56,6 +89,7 @@ func (a *App) routeLink(rawURL string) tea.Cmd {
 		channelID: string(pl.ChannelID),
 		messageTS: string(pl.MessageTS),
 		threadTS:  string(pl.ThreadTS),
+		teamID:    a.activeTeamID,
 	}
 	if string(pl.ChannelID) == a.activeChannelID {
 		// Already viewing the channel; the loaded buffer is as good
@@ -82,15 +116,26 @@ func (a *App) completePendingLinkNav(channelID string, authoritative bool) tea.C
 	if p == nil {
 		return nil
 	}
-	if p.channelID != channelID {
+	if p.channelID != channelID || (p.teamID != "" && p.teamID != a.activeTeamID) {
 		// The user navigated somewhere unrelated before the link
 		// target finished loading; the pending nav is stale.
 		a.pendingLinkNav = nil
 		return nil
 	}
+	if p.threadOpened {
+		// A channel history refresh must not reopen/reset the thread while
+		// its own cache/fetch commands are still completing.
+		return nil
+	}
+	a.view = ViewChannels
+	a.sidebar.SetThreadsActive(false)
+	a.lastOpenedChannelID = ""
+	a.lastOpenedThreadTS = ""
+	a.focusedPanel = PanelMessages
 	if p.threadTS != "" {
-		a.pendingLinkNav = nil
-		return a.openThreadForPermalink(p.channelID, p.threadTS)
+		p.teamID = a.activeTeamID
+		p.threadOpened = true
+		return p.wrapThreadLoad(a.openThreadForPermalink(p.channelID, p.threadTS), true, 1)
 	}
 	if a.messagepane.SelectByTS(p.messageTS) {
 		a.pendingLinkNav = nil

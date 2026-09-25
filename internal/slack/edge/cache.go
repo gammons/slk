@@ -144,6 +144,21 @@ type User struct {
 		// IsCustomImage tracks ImageOriginal exactly in the captures:
 		// present on the same 255 of 291.
 		IsCustomImage bool `json:"is_custom_image"`
+		// StatusText, StatusEmoji and StatusExpiration are the user's
+		// custom status. Unlike ImageOriginal, the keys are present
+		// with empty values when no status is set (see the recorded
+		// users/info and users/search fixtures), so empty means "no
+		// status" and a caller must write it rather than preserve.
+		// StatusExpiration is a Unix time; 0 means it never expires.
+		StatusText       string `json:"status_text"`
+		StatusEmoji      string `json:"status_emoji"`
+		StatusExpiration int64  `json:"status_expiration"`
+		// HuddleState is "in_a_huddle" while the user is in a huddle
+		// (captured live) and "default_unset" otherwise.
+		// HuddleStateExpirationTS is a Unix time, 0 when unset; live
+		// in-huddle results carried one about 22 minutes after joining.
+		HuddleState             string `json:"huddle_state"`
+		HuddleStateExpirationTS int64  `json:"huddle_state_expiration_ts"`
 	} `json:"profile"`
 }
 

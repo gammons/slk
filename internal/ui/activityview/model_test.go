@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	slack "github.com/gammons/slk/internal/slack"
+	"github.com/gammons/slk/internal/core"
 )
 
 func TestActivityGlyph(t *testing.T) {
@@ -34,13 +34,13 @@ func TestActivityGlyph(t *testing.T) {
 func TestActivityDetail(t *testing.T) {
 	cases := []struct {
 		name string
-		it   slack.ActivityItem
+		it   core.ActivityItem
 		want string
 	}{
-		{"reaction with name", slack.ActivityItem{Type: "message_reaction", Reaction: "tada"}, ":tada:"},
-		{"reaction without name", slack.ActivityItem{Type: "message_reaction"}, ""},
-		{"mention has no detail", slack.ActivityItem{Type: "at_user", Reaction: "tada"}, ""},
-		{"dm has no detail", slack.ActivityItem{Type: "dm"}, ""},
+		{"reaction with name", core.ActivityItem{Type: "message_reaction", Reaction: "tada"}, ":tada:"},
+		{"reaction without name", core.ActivityItem{Type: "message_reaction"}, ""},
+		{"mention has no detail", core.ActivityItem{Type: "at_user", Reaction: "tada"}, ""},
+		{"dm has no detail", core.ActivityItem{Type: "dm"}, ""},
 	}
 	for _, c := range cases {
 		if got := activityDetail(c.it); got != c.want {
@@ -60,7 +60,7 @@ func TestFormatRelTime(t *testing.T) {
 
 func TestSetItemsPreservesSelectionByKey(t *testing.T) {
 	m := New(nil, "")
-	m.SetItems([]slack.ActivityItem{
+	m.SetItems([]core.ActivityItem{
 		{Key: "a"}, {Key: "b"}, {Key: "c"},
 	})
 	m.MoveDown()
@@ -69,7 +69,7 @@ func TestSetItemsPreservesSelectionByKey(t *testing.T) {
 		t.Fatalf("SelectedIndex = %d, want 2", idx)
 	}
 	// Re-order; selection should follow "c" to its new position.
-	m.SetItems([]slack.ActivityItem{
+	m.SetItems([]core.ActivityItem{
 		{Key: "c"}, {Key: "a"}, {Key: "b"},
 	})
 	if idx := m.SelectedIndex(); idx != 0 {
@@ -96,7 +96,7 @@ func TestToggleUnreadOnly(t *testing.T) {
 
 func TestUnreadCount(t *testing.T) {
 	m := New(nil, "")
-	m.SetItems([]slack.ActivityItem{
+	m.SetItems([]core.ActivityItem{
 		{Key: "a", IsUnread: true},
 		{Key: "b"},
 		{Key: "c", IsUnread: true},
@@ -112,24 +112,24 @@ func TestUnreadCount(t *testing.T) {
 func TestRenderCardAlwaysTwoLines(t *testing.T) {
 	cases := []struct {
 		name string
-		it   slack.ActivityItem
-		body slack.ActivityMessage
+		it   core.ActivityItem
+		body core.ActivityMessage
 	}{
-		{"newline body", slack.ActivityItem{Type: "at_user", ChannelID: "C1", TS: "1.1", AuthorID: "U1"},
-			slack.ActivityMessage{Text: "line one\nline two\nline three", UserID: "U1"}},
-		{"empty body", slack.ActivityItem{Type: "thread_v2", ChannelID: "C1", TS: "1.1"},
-			slack.ActivityMessage{}},
-		{"wide CJK", slack.ActivityItem{Type: "dm", ChannelID: "C1", TS: "1.1", AuthorID: "U1"},
-			slack.ActivityMessage{Text: "あいうえお　かきくけこ　さしすせそ　たちつてと", UserID: "U1"}},
-		{"absent body key", slack.ActivityItem{Type: "message_reaction", ChannelID: "CX", TS: "9.9", Reaction: "tada", AuthorID: "U1"},
-			slack.ActivityMessage{}},
+		{"newline body", core.ActivityItem{Type: "at_user", ChannelID: "C1", TS: "1.1", AuthorID: "U1"},
+			core.ActivityMessage{Text: "line one\nline two\nline three", UserID: "U1"}},
+		{"empty body", core.ActivityItem{Type: "thread_v2", ChannelID: "C1", TS: "1.1"},
+			core.ActivityMessage{}},
+		{"wide CJK", core.ActivityItem{Type: "dm", ChannelID: "C1", TS: "1.1", AuthorID: "U1"},
+			core.ActivityMessage{Text: "あいうえお　かきくけこ　さしすせそ　たちつてと", UserID: "U1"}},
+		{"absent body key", core.ActivityItem{Type: "message_reaction", ChannelID: "CX", TS: "9.9", Reaction: "tada", AuthorID: "U1"},
+			core.ActivityMessage{}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			m := New(map[string]string{"U1": "alice"}, "")
-			m.SetItems([]slack.ActivityItem{c.it})
-			m.SetBodies(map[string]slack.ActivityMessage{
-				slack.ActivityMsgKey(c.it.ChannelID, c.it.TS): c.body,
+			m.SetItems([]core.ActivityItem{c.it})
+			m.SetBodies(map[string]core.ActivityMessage{
+				core.ActivityMsgKey(c.it.ChannelID, c.it.TS): c.body,
 			})
 			l1, l2 := m.renderCard(c.it, 40, false)
 			if strings.Contains(l1, "\n") || strings.Contains(l2, "\n") {
@@ -143,7 +143,7 @@ func TestRenderCardAlwaysTwoLines(t *testing.T) {
 // newline.
 func TestRenderRowsStride(t *testing.T) {
 	m := New(nil, "")
-	m.SetItems([]slack.ActivityItem{
+	m.SetItems([]core.ActivityItem{
 		{Type: "at_user", ChannelID: "C1", TS: "1.1", Key: "a"},
 		{Type: "dm", ChannelID: "C2", TS: "2.2", Key: "b"},
 		{Type: "thread_v2", ChannelID: "C3", TS: "3.3", Key: "c"},
@@ -178,11 +178,11 @@ func TestContextVerb(t *testing.T) {
 func TestContextLabel(t *testing.T) {
 	m := New(nil, "")
 	m.SetChannelNames(map[string]string{"C1": "general"})
-	dm := m.contextLabel(slack.ActivityItem{Type: "dm", ChannelID: "C1"})
+	dm := m.contextLabel(core.ActivityItem{Type: "dm", ChannelID: "C1"})
 	if strings.Contains(dm, "general") || strings.Contains(dm, "#") {
 		t.Fatalf("DM context should omit channel, got %q", dm)
 	}
-	mention := m.contextLabel(slack.ActivityItem{Type: "at_user", ChannelID: "C1"})
+	mention := m.contextLabel(core.ActivityItem{Type: "at_user", ChannelID: "C1"})
 	if !strings.Contains(mention, "#general") {
 		t.Fatalf("mention context should contain #general, got %q", mention)
 	}
@@ -192,10 +192,10 @@ func TestContextLabel(t *testing.T) {
 // to the hydrated message's user so line 1 still names someone.
 func TestRenderCard_AuthorFallbackToBody(t *testing.T) {
 	m := New(map[string]string{"U9": "alice"}, "")
-	it := slack.ActivityItem{Type: "thread_v2", ChannelID: "C1", TS: "1.1"} // AuthorID == ""
-	m.SetItems([]slack.ActivityItem{it})
-	m.SetBodies(map[string]slack.ActivityMessage{
-		slack.ActivityMsgKey("C1", "1.1"): {Text: "the reply", UserID: "U9"},
+	it := core.ActivityItem{Type: "thread_v2", ChannelID: "C1", TS: "1.1"} // AuthorID == ""
+	m.SetItems([]core.ActivityItem{it})
+	m.SetBodies(map[string]core.ActivityMessage{
+		core.ActivityMsgKey("C1", "1.1"): {Text: "the reply", UserID: "U9"},
 	})
 	l1, _ := m.renderCard(it, 60, false)
 	if !strings.Contains(l1, "alice") {
@@ -207,7 +207,7 @@ func TestRenderCard_AuthorFallbackToBody(t *testing.T) {
 // same item; a click past the last card returns false.
 func TestClickAtStride(t *testing.T) {
 	m := New(nil, "")
-	m.SetItems([]slack.ActivityItem{
+	m.SetItems([]core.ActivityItem{
 		{Type: "at_user", ChannelID: "C1", TS: "1.1", Key: "a"},
 		{Type: "dm", ChannelID: "C2", TS: "2.2", Key: "b"},
 		{Type: "thread_v2", ChannelID: "C3", TS: "3.3", Key: "c"},

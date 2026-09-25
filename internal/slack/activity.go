@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 )
 
@@ -15,21 +16,9 @@ import (
 // web client sends when bootstrapping its 🔔 Activity view.
 const activityFeedTypes = "at_user,at_user_group,at_channel,at_everyone,keyword,thread_v2,message_reaction,bot_dm_bundle,dm,unjoined_channel_mention,channel,saved_reminder,list_user_mentioned"
 
-// ActivityItem is a flattened, UI-friendly representation of a single
-// activity.feed entry. The per-type extraction happens in the client so
-// the UI never touches the raw (and wildly type-dependent) JSON.
-type ActivityItem struct {
-	Key       string // stable dedupe/selection id
-	Type      string // at_user, at_channel, thread_v2, message_reaction, dm, bot_dm_bundle, ...
-	IsUnread  bool
-	IsBot     bool
-	FeedTS    string // sort key (newest first)
-	ChannelID string // resolved target channel (from message OR bundle payload)
-	TS        string // resolved target message ts (may be "")
-	ThreadTS  string // set for thread_v2 (== thread root)
-	AuthorID  string // message author (mentions); "" when unknown
-	Reaction  string // emoji short name, for message_reaction only
-}
+// ActivityItem is one flattened activity.feed entry. Declared in
+// internal/core, which the TUI shares with this client.
+type ActivityItem = core.ActivityItem
 
 // ActivityFeedResult is one page of activity items plus the cursor for
 // the next page (empty when there are no more pages).
@@ -258,20 +247,9 @@ func payloadMessage(b *rawActivityBundle) *rawActivityMessage {
 	return b.Payload.Message
 }
 
-// ActivityMessage is a hydrated message body for one activity ref
-// (channel + ts). The Activity feed itself returns only references; the
-// body text and author are fetched separately via messages.list.
-type ActivityMessage struct {
-	Text   string
-	UserID string
-}
-
-// ActivityMsgKey is the map key for a hydrated activity message,
-// combining channel ID and message ts. Shared with the activity view so
-// both sides agree on the lookup key.
-func ActivityMsgKey(channelID, ts string) string {
-	return channelID + "\x00" + ts
-}
+// ActivityMessage is a hydrated message body for one activity ref.
+// Declared in internal/core, which the TUI shares with this client.
+type ActivityMessage = core.ActivityMessage
 
 type rawChannelMessages struct {
 	Messages []rawListedMessage `json:"messages"`
@@ -292,7 +270,7 @@ type messageIDsGroup struct {
 // refs via Slack's internal messages.list endpoint (the same batch call
 // the web client uses to fill the Activity feed's previews). refs maps a
 // channel ID to the message timestamps wanted in that channel. The result
-// is keyed by ActivityMsgKey(channel, ts); refs the server doesn't return
+// is keyed by core.ActivityMsgKey(channel, ts); refs the server doesn't return
 // are simply absent (callers render a ref-only row until — or if — a body
 // arrives). Parses leniently and never errors on a single missing message.
 func (c *Client) GetActivityMessages(ctx context.Context, refs map[string][]string) (map[string]ActivityMessage, error) {
@@ -323,7 +301,7 @@ func (c *Client) GetActivityMessages(ctx context.Context, refs map[string][]stri
 }
 
 // parseActivityMessages decodes a messages.list response into a body map
-// keyed by ActivityMsgKey(channel, ts). Split out from GetActivityMessages
+// keyed by core.ActivityMsgKey(channel, ts). Split out from GetActivityMessages
 // so tests can exercise the mapping against a fixture without a network
 // call (mirrors parseActivityFeed).
 //
@@ -353,7 +331,7 @@ func parseActivityMessages(body []byte) (map[string]ActivityMessage, error) {
 			if msg.TS == "" {
 				continue
 			}
-			out[ActivityMsgKey(ch, msg.TS)] = ActivityMessage{Text: msg.Text, UserID: msg.User}
+			out[core.ActivityMsgKey(ch, msg.TS)] = ActivityMessage{Text: msg.Text, UserID: msg.User}
 		}
 	}
 	return out, nil

@@ -45,10 +45,14 @@ func (a *App) handleWindowChord(msg tea.KeyMsg) tea.Cmd {
 }
 
 // windowBounds returns the messages-region rectangle the window tree
-// subdivides. Recomputing the layout frame here is safe: Compute is
-// deterministic for unchanged inputs and View re-runs it each frame.
+// subdivides. Windows are only drawn when the channel is in front, so
+// the rectangle is always the channel-in-front layout, even while a
+// stacked thread is in front. A scratch layout keeps the bands View
+// stored for mouse hit-testing intact.
 func (a *App) windowBounds() wintree.Rect {
-	frame := a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(), a.sidebarVisible, a.threadVisible)
+	var scratch panelLayout
+	frame := scratch.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),
+		a.sidebarVisible, a.threadVisible, false)
 	return wintree.Rect{X: 0, Y: 0, W: frame.MsgWidth + frame.MsgBorder, H: frame.ContentHeight}
 }
 
@@ -64,7 +68,7 @@ func (a *App) splitWindow(dir wintree.Dir) tea.Cmd {
 		return toastWithClear(a, "Not enough room", 2*time.Second)
 	}
 	m := a.newWindowModel(srcCh.Name)
-	m.SetChannel(srcCh.Name, "")
+	m.SetChannel(srcCh.Name, a.presence.dmTopicFor(a, srcCh.ID))
 	m.SetChannelType(srcCh.Type)
 	if src != nil {
 		// Messages() exposes the source's internal slice; the seed

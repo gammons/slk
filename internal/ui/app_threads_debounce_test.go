@@ -4,8 +4,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	tea "charm.land/bubbletea/v2"
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
 )
 
@@ -15,13 +15,12 @@ import (
 // openSelectedThreadCmd / Update directly.
 func newTestAppWithThreadsView(t *testing.T, summaries []cache.ThreadSummary) *App {
 	t.Helper()
-	a := NewApp()
-	a.width = 120
-	a.height = 30
-	a.threadsView.SetSummaries(summaries)
-	a.view = ViewThreads
-	_ = a.View() // populate layout offsets and caches
-	return a
+	return newTestApp(t,
+		withSize(120, 30),
+		withThreadsView(summaries),
+		withView(ViewThreads),
+		withRender(), // populate layout offsets and caches
+	)
 }
 
 // TestThreadsViewDebouncesNetworkFetchOnRapidJK guards Task 3:
@@ -35,7 +34,7 @@ func TestThreadsViewDebouncesNetworkFetchOnRapidJK(t *testing.T) {
 		{ChannelID: "C2", ThreadTS: "2.0", ParentText: "p2", ChannelName: "g2"},
 		{ChannelID: "C3", ThreadTS: "3.0", ParentText: "p3", ChannelName: "g3"},
 	})
-	a.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+	a.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) core.Msg {
 		atomic.AddInt32(&fetchCount, 1)
 		fetchedTS = append(fetchedTS, string(threadTS))
 		return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS)}
@@ -98,7 +97,7 @@ func TestOpenSelectedThread_NonDebouncedPathFiresImmediately(t *testing.T) {
 	a := newTestAppWithThreadsView(t, []cache.ThreadSummary{
 		{ChannelID: "C1", ThreadTS: "1.0", ParentText: "p1", ChannelName: "g1"},
 	})
-	a.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+	a.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) core.Msg {
 		atomic.AddInt32(&fetched, 1)
 		return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS)}
 	})

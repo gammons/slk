@@ -81,6 +81,99 @@ func TestProbeKittyGraphics_NoStdinTheftAfterTimeout(t *testing.T) {
 	}
 }
 
+func TestScanForSixelDA(t *testing.T) {
+	cases := []struct {
+		name        string
+		buf         string
+		wantMatched bool
+		wantOK      bool
+	}{
+		{"xterm vt340", "\x1b[?63;1;2;4;6;9;15;22c", true, true},
+		{"foot", "\x1b[?62;4;22c", true, true},
+		{"sixel only", "\x1b[?4c", true, true},
+		{"no sixel", "\x1b[?62;1;6;22c", true, false},
+		// Attributes are semicolon-separated values, not substrings:
+		// 14 / 24 / 41 are unrelated capabilities.
+		{"substring not attribute", "\x1b[?14;24;41c", true, false},
+		{"incomplete: no terminator", "\x1b[?62;4;22", false, false},
+		{"incomplete: no csi", "62;4;22c", false, false},
+		{"empty", "", false, false},
+		// Terminals emit the reply amid whatever else is in flight.
+		{"leading noise", "junk\x1b[?62;4;22c", true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			matched, ok := scanForSixelDA([]byte(tc.buf))
+			if matched != tc.wantMatched || ok != tc.wantOK {
+				t.Errorf("scanForSixelDA(%q) = (%v, %v), want (%v, %v)",
+					tc.buf, matched, ok, tc.wantMatched, tc.wantOK)
+			}
+		})
+	}
+}
+
+func TestProbeSixel_SendsDA1AndFailsOnTimeout(t *testing.T) {
+	var w bytes.Buffer
+	if ok := ProbeSixel(&w, blockingReader{}, 50*time.Millisecond); ok {
+		t.Error("expected probe to fail on timeout")
+	}
+	if w.String() != "\x1b[c" {
+		t.Errorf("expected DA1 query, got %q", w.String())
+	}
+}
+
+func TestProbeSixel_ReadsReply(t *testing.T) {
+	cases := []struct {
+		reply string
+		want  bool
+	}{
+		{"\x1b[?63;1;2;4;6;9;15;22c", true},
+		{"\x1b[?62;1;6;22c", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.reply, func(t *testing.T) {
+			var w bytes.Buffer
+			r := strings.NewReader(tc.reply)
+			if got := ProbeSixel(&w, r, time.Second); got != tc.want {
+				t.Errorf("ProbeSixel with reply %q = %v, want %v", tc.reply, got, tc.want)
+			}
+		})
+	}
+}
+
+// The poll-based production path (real *os.File) must reach the same
+// answer as the goroutine fallback, and must not leave a reader behind
+// that steals bytes from bubbletea afterwards (the issue #50 hazard).
+func TestProbeSixel_PollPathOnRealPipe(t *testing.T) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	defer pr.Close()
+	defer pw.Close()
+
+	if _, err := pw.Write([]byte("\x1b[?62;4;22c")); err != nil {
+		t.Fatalf("pipe write: %v", err)
+	}
+	var w bytes.Buffer
+	if ok := ProbeSixel(&w, pr, time.Second); !ok {
+		t.Fatal("expected sixel-capable DA1 reply to be recognized")
+	}
+
+	if _, err := pw.Write([]byte{'X'}); err != nil {
+		t.Fatalf("pipe write: %v", err)
+	}
+	if err := pr.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	buf := make([]byte, 1)
+	n, err := pr.Read(buf)
+	if err != nil || n != 1 || buf[0] != 'X' {
+		t.Fatalf("expected to read 'X' from pipe after probe; got n=%d err=%v buf=%q",
+			n, err, buf[:n])
+	}
+}
+
 type blockingReader struct{}
 
 func (blockingReader) Read(p []byte) (int, error) {

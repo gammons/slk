@@ -275,7 +275,7 @@ func TestGetThreadReplies(t *testing.T) {
 // TestGetMessages_IncludesThreadParents guards against the regression
 // where thread parents (top-level messages whose thread_ts equals
 // their own ts because they have replies) were excluded from
-// GetMessages by the original `thread_ts = ''` filter. Slack's
+// GetMessages by the original `thread_ts = ”` filter. Slack's
 // conversations.history returns parents with thread_ts == ts, so an
 // active channel quickly accumulates parents that the cache view
 // silently dropped until the next network refresh masked the bug.

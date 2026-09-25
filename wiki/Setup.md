@@ -7,7 +7,8 @@ that the Slack desktop app is installed and you're signed in to it.
 ## 1. Sign in to the Slack desktop app
 
 Install the Slack desktop app if you haven't already, and sign in to each
-workspace you want to use in slk.
+workspace you want to use in slk. Native packages, flatpak
+(`com.slack.Slack`), and snap installs are all detected on Linux.
 
 ## 2. Add your workspaces
 
@@ -21,6 +22,27 @@ configured.
 slk detects the workspaces you're signed in to in the desktop app and shows
 them in a list. Select the ones you want (all are selected by default) and
 you're done.
+
+## Linux secret stores
+
+Slack encrypts its session cookie with a key it keeps in your desktop's secret
+store, and Electron picks that store from the desktop session: **KWallet** on
+KDE Plasma, **gnome-keyring** (or any other Secret Service provider) elsewhere.
+slk reads both, so either one works and there is nothing to configure.
+
+Two cases still need you:
+
+- **"Your system keyring is locked"** — unlock it. On Plasma this means opening
+  your wallet in KWallet Manager; PAM normally unlocks it at login, so a locked
+  wallet usually means you changed your login password without changing the
+  wallet's.
+- **"No Slack entry found in your keyring or KWallet"** — Slack stored no key
+  at all. This happens when it was launched with `--password-store=basic`, which
+  falls back to a hardcoded password instead of a real secret store. Relaunch
+  Slack without that flag and sign in again.
+
+The first time slk reads KWallet, KWallet may ask you to grant access to an
+application called `slk`. Allow it once and it is remembered.
 
 ## Removing a workspace
 
@@ -48,3 +70,12 @@ needed), so sessions stay fresh on their own.
 If you ever sign out of the desktop app, just sign back in — slk will pick the
 session back up the next time it needs to re-mint. See the auth caveat in
 [[Tradeoffs and Non-Goals|Tradeoffs-and-Non-Goals]].
+
+## Enterprise Grid
+
+slk reuses the **desktop app's** existing signed-in session (the same session
+your admin already sanctioned) rather than a browser session, which avoids the
+session-anomaly alerts that browser-token extraction can trigger. If you're on
+Enterprise Grid and still hit a sign-out or security alert after adding a
+workspace, please file an issue — include your OS and Slack desktop version.
+See [#5](https://github.com/gammons/slk/issues/5) for history.

@@ -51,6 +51,15 @@ func TestNew_DefaultsToRealClock(t *testing.T) {
 		t.Fatal("New should default now to a non-nil function")
 	}
 	t1 := d.now()
+	// This sleep is deliberately NOT replaced with a signal, and is not
+	// a wall-clock budget. The property under test is precisely that
+	// real time elapses between two d.now() calls — a fake clock cannot
+	// express it, because the whole point is that New wired d.now to
+	// the real one. time.Sleep guarantees *at least* 1ms passes and
+	// time.Now's resolution is sub-millisecond everywhere Go runs, so
+	// the bias is one-sided: an overlong sleep on a loaded machine only
+	// makes the assertion below more true. It can false-pass (if now
+	// were wired to some other advancing clock), never false-fail.
 	time.Sleep(time.Millisecond)
 	t2 := d.now()
 	if !t2.After(t1) {
@@ -258,24 +267,45 @@ func TestStep_StripsMonotonicReading_SoWallJumpsAreDetected(t *testing.T) {
 }
 
 func TestRun_ContextCancellation_ReturnsCleanly(t *testing.T) {
-	// Drive Run with a real ticker for a short period, then cancel.
-	// Confirm the goroutine exits within a generous timeout.
+	// Drive Run with a real ticker until we have observed it tick a few
+	// times, then cancel. Confirm the goroutine exits.
 	d := New(10*time.Millisecond, 5*time.Millisecond, func(time.Duration) {})
+
+	// Count clock observations. Step calls d.now() exactly once per
+	// invocation, so N receives from stepped means Run has executed N
+	// Steps — the loop demonstrably spinning, rather than "50ms was
+	// probably long enough for three ticks". The send is non-blocking
+	// so Run is never throttled by a test that stopped listening.
+	stepped := make(chan struct{}, 8)
+	realNow := d.now
+	d.now = func() time.Time {
+		now := realNow()
+		select {
+		case stepped <- struct{}{}:
+		default:
+		}
+		return now
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		d.Run(ctx)
 		close(done)
 	}()
-	// Let the loop spin a few times.
-	time.Sleep(50 * time.Millisecond)
-	cancel()
-	select {
-	case <-done:
-		// success
-	case <-time.After(time.Second):
-		t.Fatal("Run did not return within 1s after ctx cancel")
+
+	// Three Steps: Run's immediate seeding Step plus two ticker-driven
+	// ones.
+	//
+	// No timeout by design: `go test` already imposes one (default 10m),
+	// and a wall-clock budget inside the test is exactly what made this
+	// load-sensitive. A hang here produces a goroutine dump naming the
+	// stuck test, which beats "Run did not return within 1s".
+	for i := 0; i < 3; i++ {
+		<-stepped
 	}
+	cancel()
+	<-done // Run observed ctx.Done and returned
 }
 
 func TestRun_FiresOnSimulatedJump(t *testing.T) {
@@ -291,24 +321,47 @@ func TestRun_FiresOnSimulatedJump(t *testing.T) {
 	d := New(5*time.Millisecond, 5*time.Millisecond, func(e time.Duration) {
 		fired <- e
 	})
-	d.now = fc.Now
+
+	// seeded closes once the first clock observation has *returned* its
+	// value. The return, not the call, is the barrier we need: Step
+	// stores exactly the value it read, so advancing the fake clock any
+	// time after the read is observed cannot corrupt the baseline.
+	// Signalling before fc.Now() ran would let fc.Advance land first,
+	// seeding the baseline at the post-jump time — the jump would then
+	// be invisible and this test would wait forever. (Signalling from
+	// the fake's entry point instead of after the production read is
+	// the exact defect this PR exists to remove.)
+	seeded := make(chan struct{})
+	var once sync.Once
+	d.now = func() time.Time {
+		now := fc.Now()
+		once.Do(func() { close(seeded) })
+		return now
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go d.Run(ctx)
+	done := make(chan struct{})
+	go func() {
+		d.Run(ctx)
+		close(done)
+	}()
+	defer func() {
+		cancel()
+		<-done // no detector goroutine outlives this test body
+	}()
 
-	// Give Run a moment to seed the baseline.
-	time.Sleep(20 * time.Millisecond)
+	<-seeded // Run's first Step has read the baseline off the fake clock
 
 	// Simulate a wake: advance the fake clock by 2 seconds. The next
-	// tick (within ~5ms) calls Step, observes the jump, fires onWake.
+	// tick calls Step, observes the jump, fires onWake.
 	fc.Advance(2 * time.Second)
-	select {
-	case e := <-fired:
-		if e < 2*time.Second {
-			t.Errorf("callback elapsed = %v, want >= 2s", e)
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("callback not fired within 500ms of simulated jump")
+
+	// No timeout by design: `go test` already imposes one (default 10m),
+	// and a wall-clock budget inside the test is exactly what made this
+	// load-sensitive. A hang here produces a goroutine dump naming the
+	// stuck test, which beats "callback not fired within 500ms".
+	e := <-fired
+	if e < 2*time.Second {
+		t.Errorf("callback elapsed = %v, want >= 2s", e)
 	}
 }

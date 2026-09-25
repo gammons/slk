@@ -26,8 +26,8 @@ func TestStripSkinTone(t *testing.T) {
 		{"empty", "", ""},
 
 		// Custom emoji names that happen to look similar — must not strip.
-		{"custom_emoji_named_tone6", "anything_tone6", "anything_tone6"},   // tone6 doesn't match 1-5
-		{"custom my_tonemate", "my_tonemate", "my_tonemate"},                // doesn't match _toneN pattern exactly
+		{"custom_emoji_named_tone6", "anything_tone6", "anything_tone6"},        // tone6 doesn't match 1-5
+		{"custom my_tonemate", "my_tonemate", "my_tonemate"},                    // doesn't match _toneN pattern exactly
 		{"name with skin-tone in middle", "skin-tone-thing", "skin-tone-thing"}, // no "::" prefix
 
 		// Edge: very short names.

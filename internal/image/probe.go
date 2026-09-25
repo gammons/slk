@@ -53,7 +53,7 @@ func ProbeKittyGraphics(w io.Writer, r io.Reader, timeout time.Duration) bool {
 	start := time.Now()
 
 	if f, ok := r.(*os.File); ok {
-		ok, bytesRead, reason := pollProbe(int(f.Fd()), timeout)
+		ok, bytesRead, reason := pollProbe(int(f.Fd()), timeout, scanForOK)
 		debuglog.ImgRender("probe: ok=%v reason=%s bytes_read=%d elapsed_ms=%d",
 			ok, reason, bytesRead, time.Since(start).Milliseconds())
 		return ok
@@ -61,6 +61,95 @@ func ProbeKittyGraphics(w io.Writer, r io.Reader, timeout time.Duration) bool {
 
 	// Test fallback for non-*os.File readers.
 	return probeViaGoroutine(r, timeout)
+}
+
+// ProbeSixel sends a Primary Device Attributes query (CSI c) and reports
+// whether the reply advertises sixel graphics — attribute 4 in the
+// DA1 response, e.g. `\e[?62;1;4;6;22c` from xterm -ti vt340.
+//
+// This is the same runtime check img2sixel / chafa use, and it is the
+// only reliable one: the set of sixel-capable terminals is open-ended
+// (foot, xterm, mlterm, WezTerm, contour, DomTerm, toyterm, …) and
+// several of them share a generic TERM value, so a TERM allowlist
+// silently downgrades them to the half-block mosaic (issue #116).
+//
+// Every terminal answers DA1, including ones with no sixel support, so
+// unlike the kitty probe a timeout here means "no reply at all" (a
+// multiplexer swallowed it, or stdin isn't really the terminal) rather
+// than "no sixel". Both outcomes are reported as false.
+//
+// Inputs match ProbeKittyGraphics: w is the terminal writer, r the
+// terminal reader in raw mode, timeout the reply deadline. Must run
+// before bubbletea takes over stdin.
+func ProbeSixel(w io.Writer, r io.Reader, timeout time.Duration) bool {
+	if _, err := io.WriteString(w, "\x1b[c"); err != nil {
+		return false
+	}
+
+	start := time.Now()
+
+	if f, ok := r.(*os.File); ok {
+		ok, bytesRead, reason := pollProbe(int(f.Fd()), timeout, scanForSixelDA)
+		debuglog.ImgRender("sixel probe: ok=%v reason=%s bytes_read=%d elapsed_ms=%d",
+			ok, reason, bytesRead, time.Since(start).Milliseconds())
+		return ok
+	}
+
+	// Test fallback for non-*os.File readers.
+	return probeViaGoroutineScan(r, timeout, scanForSixelDA)
+}
+
+// probeViaGoroutineScan is the generic goroutine-based probe used for
+// non-*os.File readers (tests only — see probeViaGoroutine). It reads
+// byte by byte, re-running scan over everything collected so far, and
+// stops at the first complete reply.
+func probeViaGoroutineScan(r io.Reader, timeout time.Duration, scan func([]byte) (bool, bool)) bool {
+	ch := make(chan bool, 1)
+	go func() {
+		br := bufio.NewReader(r)
+		var collected []byte
+		for {
+			b, err := br.ReadByte()
+			if err != nil {
+				ch <- false
+				return
+			}
+			collected = append(collected, b)
+			if matched, ok := scan(collected); matched {
+				ch <- ok
+				return
+			}
+		}
+	}()
+	select {
+	case ok := <-ch:
+		return ok
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+// scanForSixelDA returns (matched, ok). matched is true once a complete
+// DA1 reply (CSI ? … c) is present in buf; ok is true when that reply
+// lists attribute 4 (sixel graphics). Attributes are semicolon-
+// separated and must match exactly — "14" or "24" are unrelated
+// capabilities, so a substring test would be wrong.
+func scanForSixelDA(buf []byte) (matched, ok bool) {
+	i := bytes.Index(buf, []byte("\x1b[?"))
+	if i < 0 {
+		return false, false
+	}
+	tail := buf[i+3:] // skip past \x1b[?
+	j := bytes.IndexByte(tail, 'c')
+	if j < 0 {
+		return false, false
+	}
+	for _, attr := range bytes.Split(tail[:j], []byte(";")) {
+		if bytes.Equal(attr, []byte("4")) {
+			return true, true
+		}
+	}
+	return true, false
 }
 
 // probeViaGoroutine is the legacy goroutine-based probe. Retained for

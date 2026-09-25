@@ -1,6 +1,6 @@
 // Package activityview is the UI model for the "Activity" panel: a vertical
 // list of items the user was notified about — @mentions, thread replies,
-// reactions to their messages, and DMs — sourced from slack.ActivityItem.
+// reactions to their messages, and DMs — sourced from core.ActivityItem.
 //
 // It mirrors internal/ui/threadsview so the App layer can wire it
 // symmetrically: callers push a fresh page via SetItems and read
@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
-	slack "github.com/gammons/slk/internal/slack"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/slackfmt"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/muesli/reflow/truncate"
@@ -72,16 +72,16 @@ func borderFillStyle() lipgloss.Style {
 
 // Model holds the activity-list state.
 type Model struct {
-	items        []slack.ActivityItem
+	items        []core.ActivityItem
 	userNames    map[string]string
 	channelNames map[string]string
 	selfUserID   string
 
 	// bodies holds hydrated message text/author for each item ref,
-	// keyed by slack.ActivityMsgKey(channelID, ts). Filled by SetBodies
+	// keyed by core.ActivityMsgKey(channelID, ts). Filled by SetBodies
 	// after the messages.list second fetch; a row renders ref-only until
 	// its body arrives.
-	bodies map[string]slack.ActivityMessage
+	bodies map[string]core.ActivityMessage
 
 	// unreadOnly tracks the read/unread filter flag. The view only tracks
 	// it and shows an indicator; the App re-fetches with unread_only=true
@@ -110,15 +110,15 @@ func New(userNames map[string]string, selfUserID string) Model {
 		userNames:    userNames,
 		selfUserID:   selfUserID,
 		channelNames: map[string]string{},
-		bodies:       map[string]slack.ActivityMessage{},
+		bodies:       map[string]core.ActivityMessage{},
 	}
 }
 
 // SetBodies installs hydrated message bodies (keyed by
-// slack.ActivityMsgKey) fetched via messages.list, and forces a re-render.
-func (m *Model) SetBodies(bodies map[string]slack.ActivityMessage) {
+// core.ActivityMsgKey) fetched via messages.list, and forces a re-render.
+func (m *Model) SetBodies(bodies map[string]core.ActivityMessage) {
 	if bodies == nil {
-		bodies = map[string]slack.ActivityMessage{}
+		bodies = map[string]core.ActivityMessage{}
 	}
 	m.bodies = bodies
 	m.dirty()
@@ -206,7 +206,7 @@ func (m *Model) ToggleUnreadOnly() bool {
 // SetItems replaces the list of activity items. If the previously-selected
 // item (by Key) is still present, the selection follows it to its new
 // position; otherwise the selection resets to the top.
-func (m *Model) SetItems(items []slack.ActivityItem) {
+func (m *Model) SetItems(items []core.ActivityItem) {
 	prevKey, hadSel := m.selectedKey()
 	m.items = items
 
@@ -226,7 +226,7 @@ func (m *Model) SetItems(items []slack.ActivityItem) {
 }
 
 // Items returns the current list of activity items.
-func (m *Model) Items() []slack.ActivityItem { return m.items }
+func (m *Model) Items() []core.ActivityItem { return m.items }
 
 // SelectedIndex returns the selection cursor's position, or 0 when empty.
 func (m *Model) SelectedIndex() int { return m.selected }
@@ -234,9 +234,9 @@ func (m *Model) SelectedIndex() int { return m.selected }
 // SelectedItem returns the currently selected ActivityItem (ChannelID / TS /
 // ThreadTS carry enough to open the target), with ok=false when the list is
 // empty.
-func (m *Model) SelectedItem() (slack.ActivityItem, bool) {
+func (m *Model) SelectedItem() (core.ActivityItem, bool) {
 	if len(m.items) == 0 || m.selected < 0 || m.selected >= len(m.items) {
-		return slack.ActivityItem{}, false
+		return core.ActivityItem{}, false
 	}
 	return m.items[m.selected], true
 }
@@ -462,13 +462,13 @@ func blankLine(width int) string {
 // Activity feed; line 2 is the hydrated message body (empty until the
 // messages.list fetch lands). Selection is a green left border (▌) on
 // both lines; unread items get a trailing dot on line 1.
-func (m *Model) renderCard(it slack.ActivityItem, width int, selected bool) (string, string) {
+func (m *Model) renderCard(it core.ActivityItem, width int, selected bool) (string, string) {
 	contentWidth := width - 1
 	if contentWidth < 1 {
 		contentWidth = 1
 	}
 
-	body := m.bodies[slack.ActivityMsgKey(it.ChannelID, it.TS)]
+	body := m.bodies[core.ActivityMsgKey(it.ChannelID, it.TS)]
 
 	// Author = the actor (reactor for reactions, message author
 	// otherwise), falling back to the hydrated message's user when the
@@ -521,7 +521,7 @@ func (m *Model) renderCard(it slack.ActivityItem, width int, selected bool) (str
 // contextLabel renders the natural-language activity context for line 1:
 // "Mention in #ch" / "Thread in #ch" / "Reacted in #ch" / "DM" (no channel
 // for DMs). Empty for unknown types.
-func (m *Model) contextLabel(it slack.ActivityItem) string {
+func (m *Model) contextLabel(it core.ActivityItem) string {
 	verb := contextVerb(it.Type)
 	if verb == "" {
 		return ""
@@ -612,7 +612,7 @@ func activityGlyph(itemType string) string {
 // activityDetail returns a short detail (currently the reaction emoji
 // ":name:") that renderCard prefixes to the body preview for
 // message_reaction items. Pure so it can be unit-tested.
-func activityDetail(it slack.ActivityItem) string {
+func activityDetail(it core.ActivityItem) string {
 	if it.Type == "message_reaction" && it.Reaction != "" {
 		return ":" + it.Reaction + ":"
 	}

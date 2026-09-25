@@ -1,6 +1,7 @@
 package styles
 
 import (
+	"fmt"
 	"image/color"
 	"testing"
 
@@ -137,5 +138,99 @@ func TestApply_ResetsSelectionColorsBetweenThemes(t *testing.T) {
 	r, g, b, _ := SelectionBackground.RGBA()
 	if r>>8 == 0xAB && g>>8 == 0xCD && b>>8 == 0xEF {
 		t.Fatal("SelectionBackground leaked from previous theme; must reset to default when new theme omits it")
+	}
+}
+
+func TestUserColorDeterministic(t *testing.T) {
+	c1 := UserColor("U12345")
+	c2 := UserColor("U12345")
+	if !colorEqual(c1, c2) {
+		t.Fatal("same userID must return same color")
+	}
+}
+
+func TestUserColorEmptyFallback(t *testing.T) {
+	Apply("dark", config.Theme{})
+	if !colorEqual(UserColor(""), Primary) {
+		t.Fatal("empty userID must fall back to Primary")
+	}
+}
+
+func TestUserColorPaletteSpread(t *testing.T) {
+	seen := map[string]bool{}
+	for _, id := range []string{"U1", "U2", "U3", "U4", "U5", "U6", "U7", "U8", "U9", "U10", "U11", "U12"} {
+		r, g, b, _ := UserColor(id).RGBA()
+		key := fmt.Sprintf("%02x%02x%02x", r>>8, g>>8, b>>8)
+		seen[key] = true
+	}
+	if len(seen) < 8 {
+		t.Fatalf("poor distribution: only %d distinct colors for 12 users", len(seen))
+	}
+}
+
+func TestUsernameColoredToggle(t *testing.T) {
+	Apply("dark", config.Theme{})
+	// colored=false → Primary foreground
+	s := Username("U123", false)
+	if !colorEqual(s.GetForeground(), Primary) {
+		t.Fatal("Username with colored=false must use Primary")
+	}
+	// colored=true → UserColor foreground
+	s = Username("U123", true)
+	if !colorEqual(s.GetForeground(), UserColor("U123")) {
+		t.Fatal("Username with colored=true must use UserColor")
+	}
+	// colored=true + empty userID → Primary fallback
+	s = Username("", true)
+	if !colorEqual(s.GetForeground(), Primary) {
+		t.Fatal("Username with empty userID must fall back to Primary")
+	}
+}
+
+// The mention badge uses the theme's highlight pair rather than a
+// hardcoded color, so it stays legible on every theme. Apply() derives
+// Primary-on-Background when a theme omits the pair, so the style is
+// never blank.
+func TestMentionBadgeStyle_UsesThemeSelectionColors(t *testing.T) {
+	Apply("dark", config.Theme{})
+	s := MentionBadgeStyle()
+	if !colorEqual(s.GetBackground(), SelectionBackground) {
+		t.Errorf("background = %v, want SelectionBackground %v", s.GetBackground(), SelectionBackground)
+	}
+	if !colorEqual(s.GetForeground(), SelectionForeground) {
+		t.Errorf("foreground = %v, want SelectionForeground %v", s.GetForeground(), SelectionForeground)
+	}
+}
+
+// Switching themes must change the badge. A package-level var composed at
+// init time would not, which is why this is a function.
+func TestMentionBadgeStyle_TracksThemeChange(t *testing.T) {
+	Apply("dark", config.Theme{})
+	darkBg := MentionBadgeStyle().GetBackground()
+
+	Apply("light", config.Theme{})
+	lightBg := MentionBadgeStyle().GetBackground()
+
+	if colorEqual(darkBg, lightBg) {
+		t.Errorf("badge background did not change between dark and light themes (both %v)", darkBg)
+	}
+
+	// Restore the default so later tests in this package see a known theme.
+	Apply("dark", config.Theme{})
+}
+
+// An explicit theme override for the selection pair must reach the badge.
+func TestMentionBadgeStyle_HonorsSelectionOverride(t *testing.T) {
+	Apply("dark", config.Theme{})
+	defer Apply("dark", config.Theme{})
+
+	SelectionBackground = lipgloss.Color("#123456")
+	SelectionForeground = lipgloss.Color("#ABCDEF")
+	s := MentionBadgeStyle()
+	if !colorEqual(s.GetBackground(), lipgloss.Color("#123456")) {
+		t.Errorf("background = %v, want #123456", s.GetBackground())
+	}
+	if !colorEqual(s.GetForeground(), lipgloss.Color("#ABCDEF")) {
+		t.Errorf("foreground = %v, want #ABCDEF", s.GetForeground())
 	}
 }

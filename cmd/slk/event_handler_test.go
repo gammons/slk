@@ -1,10 +1,18 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"slices"
 	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/ui"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/slack-go/slack"
@@ -46,6 +54,43 @@ func TestOnConversationOpened_AppendsAndSends(t *testing.T) {
 	}
 	if len(wctx.FinderItems) != 2 {
 		t.Errorf("len(FinderItems) = %d, want 2", len(wctx.FinderItems))
+	}
+}
+
+// TestOnConversationOpened_SeedsDMStatusFromCache: a DM opened mid-session
+// shows its peer's cached status, as DMs seeded at startup do.
+func TestOnConversationOpened_SeedsDMStatusFromCache(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertWorkspace(cache.Workspace{ID: "T1", Name: "T1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertUser(cache.User{ID: "U1", WorkspaceID: "T1", Name: "alice", StatusEmoji: ":calendar:", StatusText: "In a meeting"}); err != nil {
+		t.Fatal(err)
+	}
+	wctx := &WorkspaceContext{
+		BotUserIDs:        map[string]bool{},
+		UserNames:         map[string]string{"U1": "alice"},
+		UserNamesByHandle: map[string]string{},
+	}
+	h := &rtmEventHandler{
+		wsCtx:        wctx,
+		db:           db,
+		workspaceID:  "T1",
+		cfg:          config.Config{},
+		channelNames: map[string]string{},
+		channelTypes: map[string]string{},
+	}
+	h.OnConversationOpened(slack.Channel{
+		GroupConversation: slack.GroupConversation{
+			Conversation: slack.Conversation{ID: "D1", IsIM: true, User: "U1"},
+		},
+	})
+
+	if len(wctx.Channels) != 1 {
+		t.Fatalf("len(Channels) = %d, want 1", len(wctx.Channels))
+	}
+	if got := wctx.Channels[0].Status; got.Emoji != ":calendar:" || got.Text != "In a meeting" {
+		t.Errorf("opened DM status = %+v, want the cached status", got)
 	}
 }
 
@@ -142,8 +187,10 @@ func TestOnConversationOpened_InactiveWorkspace_PersistsContext(t *testing.T) {
 // (InactiveWorkspace_BumpsChannelUnreadCount, ...ThreadReplyDoesNotBumpChannel,
 // ...ThreadBroadcastBumpsChannel), which asserted against the now-removed
 // wctx.Channels[i].UnreadCount in-memory bump. The DB-backed assertions
-// here exercise the actual contract (UpdateChannelReadState writes) and
-// also cover the new active-channel suppression dimension.
+// here exercise the actual contract (UpdateChannelReadState writes).
+// The active/inactive channel dimension is kept as a pair because the
+// write used to be gated on it; it now runs unconditionally, and the
+// focus-gated clear lives in internal/ui (reduceNewMessage).
 
 func TestOnMessage_InactiveChannel_SetsHasUnread(t *testing.T) {
 	db := newTestDB(t)
@@ -162,20 +209,92 @@ func TestOnMessage_InactiveChannel_SetsHasUnread(t *testing.T) {
 	}
 }
 
-func TestOnMessage_ActiveChannel_DoesNotSetHasUnread(t *testing.T) {
+// The active channel is no longer exempt: whether the user can see it
+// depends on terminal focus, which only the UI goroutine knows. The WS
+// handler always flags, and reduceNewMessage clears it by marking read
+// when focused.
+func TestOnMessage_ActiveChannel_StillSetsHasUnread(t *testing.T) {
 	db := newTestDB(t)
 	_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
 	h := &rtmEventHandler{
 		db:              db,
 		wsCtx:           &WorkspaceContext{},
 		isActive:        func() bool { return true },
-		activeChannelID: func() string { return "C1" }, // viewing the same channel
+		activeChannelID: func() string { return "C1" },
 	}
 	h.OnMessage("C1", "U1", "1.001", "hi", "", "", false, nil, slack.Blocks{}, nil, "", "")
 
 	s, _ := db.GetChannelReadState("C1")
+	if !s.HasUnread {
+		t.Error("HasUnread = false, want true: the UI layer owns the focus-gated clear")
+	}
+}
+
+// Your own send comes back over the WS like any other message. Nothing
+// downstream would ever clear a has_unread set for it -- reduceNewMessage
+// returns at its IsSelfSent arm before the read-state tail -- so the dot
+// would appear on the channel you just posted in and stick until the
+// next channel entry.
+func TestOnMessage_SelfMessage_DoesNotSetHasUnread(t *testing.T) {
+	db := newTestDB(t)
+	_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
+	h := &rtmEventHandler{
+		db:              db,
+		wsCtx:           &WorkspaceContext{},
+		isActive:        func() bool { return true },
+		activeChannelID: func() string { return "C1" },
+		currentUserID:   "USELF",
+	}
+	h.OnMessage("C1", "USELF", "1.001", "hi", "", "", false, nil, slack.Blocks{}, nil, "", "")
+
+	s, _ := db.GetChannelReadState("C1")
 	if s.HasUnread {
-		t.Errorf("HasUnread = true, want false (active-channel suppression)")
+		t.Error("HasUnread = true, want false: your own message never makes a channel unread")
+	}
+}
+
+// The author comparison must not treat "no human sender" as "it was me".
+// A bot message carries userID == "", and currentUserID is also "" until
+// workspace bootstrap wires it -- an unguarded equality would exempt
+// every bot message from marking its channel unread.
+func TestOnMessage_BotMessage_WithUnsetCurrentUser_SetsHasUnread(t *testing.T) {
+	db := newTestDB(t)
+	_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
+	h := &rtmEventHandler{
+		db:              db,
+		wsCtx:           &WorkspaceContext{},
+		isActive:        func() bool { return true },
+		activeChannelID: func() string { return "C2" },
+		// currentUserID deliberately left empty, as it is pre-bootstrap
+	}
+	h.OnMessage("C1", "", "1.001", "beep", "", "", false, nil, slack.Blocks{}, nil, "B1", "buildbot")
+
+	s, _ := db.GetChannelReadState("C1")
+	if !s.HasUnread {
+		t.Error("HasUnread = false, want true: an empty userID is a bot, not the current user")
+	}
+}
+
+// An edit echo (message_changed) re-delivers a message the channel has
+// already accounted for. reduceNewMessage returns at its IsEdited arm
+// before the read-state tail, so a flag set here would never clear.
+func TestOnMessage_EditEcho_DoesNotSetHasUnread(t *testing.T) {
+	db := newTestDB(t)
+	_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
+	h := &rtmEventHandler{
+		db:              db,
+		wsCtx:           &WorkspaceContext{},
+		isActive:        func() bool { return true },
+		activeChannelID: func() string { return "C2" },
+		currentUserID:   "USELF",
+	}
+	// edited=true, and from someone else, so only the edit gate can
+	// suppress the write.
+	h.OnMessage("C1", "U1", "1.001", "hi (edited)", "", "", true, nil, slack.Blocks{}, nil, "", "")
+
+	s, _ := db.GetChannelReadState("C1")
+	if s.HasUnread {
+		t.Error("HasUnread = true, want false: editing a message does not make a channel unread")
 	}
 }
 
@@ -232,7 +351,139 @@ func TestOnMessage_ThreadBroadcast_SetsHasUnread(t *testing.T) {
 	}
 }
 
-func TestOnThreadMarked_UpsertsSubscription(t *testing.T) {
+// conversations.info results in the shape a live Enterprise Grid
+// workspace returned (IDs and names replaced). The im carries no
+// is_member at all.
+const (
+	infoMPIM = `{"id":"G9","name":"mpdm-alice--bob--carol-1","is_channel":true,"is_group":false,"is_im":false,"is_mpim":true,"is_private":true,"is_archived":false,"is_shared":true,"is_org_shared":true,"is_member":true,"is_open":true,"last_read":"0000000000.000000","context_team_id":"E1","updated":1789571345593}`
+	infoIM   = `{"id":"D9","is_im":true,"user":"U2","is_archived":false,"is_shared":true,"is_org_shared":true,"is_open":true,"last_read":"1787068717.126069","unread_count":0,"context_team_id":"E1","updated":1787068717149}`
+)
+
+func decodeInfo(t *testing.T, raw string) *slack.Channel {
+	t.Helper()
+	var ch slack.Channel
+	if err := json.Unmarshal([]byte(raw), &ch); err != nil {
+		t.Fatal(err)
+	}
+	return &ch
+}
+
+type sendFunc func(tea.Msg)
+
+func (f sendFunc) Send(msg tea.Msg) { f(msg) }
+
+// A group DM another user created mid-session: its messages arrived and
+// were cached, but it never got a sidebar row.
+func TestOnMessage_UnknownConversation_AddsItUnread(t *testing.T) {
+	db := newTestDB(t)
+	wctx := &WorkspaceContext{
+		BotUserIDs:        map[string]bool{},
+		UserNames:         map[string]string{},
+		UserNamesByHandle: map[string]string{},
+	}
+	var sent []string
+	lookups := 0
+	h := &rtmEventHandler{
+		// The sidebar reads read state from the DB as soon as the row
+		// arrives, and hides a never-opened group DM that is not unread.
+		program: sendFunc(func(msg tea.Msg) {
+			switch msg.(type) {
+			case ui.ConversationOpenedMsg:
+				s, _ := db.GetChannelReadState("G9")
+				sent = append(sent, fmt.Sprintf("opened unread=%v", s.HasUnread))
+			case ui.NewMessageMsg:
+				sent = append(sent, "message")
+			}
+		}),
+		db:              db,
+		wsCtx:           wctx,
+		workspaceID:     "T1",
+		currentUserID:   "USELF",
+		isActive:        func() bool { return true },
+		activeChannelID: func() string { return "C1" },
+		channelNames:    map[string]string{},
+		channelTypes:    map[string]string{},
+		resolveConversation: func(context.Context, string) (*slack.Channel, error) {
+			lookups++
+			return decodeInfo(t, infoMPIM), nil
+		},
+	}
+
+	h.OnMessage("G9", "U2", "1.001", "hi", "", "", false, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("G9", "U2", "1.002", "again", "", "", false, nil, slack.Blocks{}, nil, "", "")
+
+	if lookups != 1 {
+		t.Errorf("lookups = %d, want 1", lookups)
+	}
+	if len(wctx.Channels) != 1 || wctx.Channels[0].ID != "G9" || wctx.Channels[0].Type != "group_dm" {
+		t.Fatalf("Channels = %+v, want the group DM G9", wctx.Channels)
+	}
+	if want := []string{"opened unread=true", "message", "message"}; !slices.Equal(sent, want) {
+		t.Errorf("sent = %q, want %q", sent, want)
+	}
+}
+
+// A refusal or rate limit waits instead of costing a request per
+// message; a network error retries on the very next message, which in a
+// short burst may be the only one left.
+func TestOnMessage_UnknownConversation_RetryDependsOnFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		err      error
+		backsOff bool
+	}{
+		{"timeout", context.DeadlineExceeded, false},
+		{"refused", fmt.Errorf("getting conversation D9: %w", slack.SlackErrorResponse{Err: "enterprise_is_restricted"}), true},
+		{"rate limited", fmt.Errorf("getting conversation D9: %w", &slack.RateLimitedError{RetryAfter: 30 * time.Second}), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wctx := &WorkspaceContext{
+				BotUserIDs:        map[string]bool{},
+				UserNames:         map[string]string{},
+				UserNamesByHandle: map[string]string{},
+			}
+			lookups := 0
+			h := &rtmEventHandler{
+				wsCtx:        wctx,
+				workspaceID:  "T1",
+				channelNames: map[string]string{},
+				channelTypes: map[string]string{},
+				resolveConversation: func(context.Context, string) (*slack.Channel, error) {
+					lookups++
+					if lookups == 1 {
+						return nil, tc.err
+					}
+					return decodeInfo(t, infoIM), nil
+				},
+			}
+			msg := func(ts string) {
+				h.OnMessage("D9", "U2", ts, "hi", "", "", false, nil, slack.Blocks{}, nil, "", "")
+			}
+
+			msg("1.001")
+			msg("1.002")
+			if !tc.backsOff {
+				if lookups != 2 || len(wctx.Channels) != 1 {
+					t.Errorf("lookups = %d, Channels = %d; want 2 and the DM", lookups, len(wctx.Channels))
+				}
+				return
+			}
+			if lookups != 1 || len(wctx.Channels) != 0 {
+				t.Fatalf("within the wait: lookups = %d, Channels = %d; want 1 and none", lookups, len(wctx.Channels))
+			}
+			h.lookupRetryAt["D9"] = time.Now().Add(-time.Second)
+			msg("1.003")
+			if lookups != 2 || len(wctx.Channels) != 1 || wctx.Channels[0].Type != "dm" {
+				t.Errorf("after the wait: lookups = %d, Channels = %+v; want 2 and the DM D9", lookups, wctx.Channels)
+			}
+		})
+	}
+}
+
+// subscribed=true is the case where reconstructing a missing row is
+// legitimate: Slack says the user is subscribed, so a row the local
+// cache has never seen is a gap in the cache, not a phantom.
+func TestOnThreadMarked_AdvancesCursorWithoutTombstoning(t *testing.T) {
 	db := newTestDB(t)
 	h := &rtmEventHandler{
 		db:          db,
@@ -240,9 +491,7 @@ func TestOnThreadMarked_UpsertsSubscription(t *testing.T) {
 		isActive:    func() bool { return true },
 	}
 
-	// read=false means the thread is now unread, which corresponds to
-	// active=true in thread_subscriptions.
-	h.OnThreadMarked("C1", "1700000100.000000", "1700000150.000000", false)
+	h.OnThreadMarked("C1", "1700000100.000000", "1700000150.000000", true)
 
 	got, err := db.ListActiveThreadSubscriptions("T1")
 	if err != nil {
@@ -256,11 +505,147 @@ func TestOnThreadMarked_UpsertsSubscription(t *testing.T) {
 		t.Fatalf("subscription row mismatch: %+v", got[0])
 	}
 
-	// Marking read flips the row to inactive (tombstone-style).
-	h.OnThreadMarked("C1", "1700000100.000000", "1700000150.000000", true)
-	got, _ = db.ListActiveThreadSubscriptions("T1")
+	// A later cursor move must advance last_read and leave the row
+	// active. Writing `active` here used to tombstone the row, making
+	// the thread disappear from the Threads list.
+	h.OnThreadMarked("C1", "1700000100.000000", "1700000200.000000", true)
+	got, err = db.ListActiveThreadSubscriptions("T1")
+	if err != nil {
+		t.Fatalf("ListActiveThreadSubscriptions: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("thread must stay in the list after being read, got %d active", len(got))
+	}
+	if got[0].LastRead != "1700000200.000000" {
+		t.Errorf("LastRead = %q, want 1700000200.000000", got[0].LastRead)
+	}
+}
+
+// An empty last_read would erase the read cursor and make the whole
+// thread render unread. UpdateThreadLastRead does not reject it, so the
+// handler must drop the event outright rather than persist or dispatch.
+func TestOnThreadMarked_EmptyLastReadIsIgnored(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpdateThreadLastRead("T1", "C1", "1700000100.000000", "1700000150.000000"); err != nil {
+		t.Fatalf("UpdateThreadLastRead: %v", err)
+	}
+	h := &rtmEventHandler{
+		db:          db,
+		workspaceID: "T1",
+		// The guard returns before the isActive check, which is the
+		// first thing on the dispatch path. Failing here pins the
+		// "skip the UI dispatch" half of the requirement; a nil
+		// program would not, since OnThreadMarked nil-checks it.
+		isActive: func() bool {
+			t.Fatal("handler must return before reaching the dispatch path")
+			return true
+		},
+	}
+
+	h.OnThreadMarked("C1", "1700000100.000000", "", true)
+
+	lastRead, err := db.GetThreadLastRead("T1", "C1", "1700000100.000000")
+	if err != nil {
+		t.Fatalf("GetThreadLastRead: %v", err)
+	}
+	if lastRead != "1700000150.000000" {
+		t.Errorf("LastRead = %q, want the cursor left untouched at 1700000150.000000", lastRead)
+	}
+}
+
+// slk's own subscriptions.thread.mark comes back as a thread_marked
+// echo, so opening an unsubscribed thread from the messages pane
+// reaches this handler. markThreadRead deliberately writes nothing for
+// such a thread; inserting a row here would fabricate the active=1 row
+// it refused to create and put a phantom entry in the Threads list.
+// `subscribed` (Slack's subscription.active) is the signal that says
+// which case this is.
+func TestOnThreadMarked_UnsubscribedDoesNotCreateRow(t *testing.T) {
+	db := newTestDB(t)
+	h := &rtmEventHandler{
+		db:          db,
+		workspaceID: "T1",
+		isActive:    func() bool { return true },
+	}
+
+	h.OnThreadMarked("C1", "1700000100.000000", "1700000150.000000", false)
+
+	got, err := db.ListActiveThreadSubscriptions("T1")
+	if err != nil {
+		t.Fatalf("ListActiveThreadSubscriptions: %v", err)
+	}
 	if len(got) != 0 {
-		t.Fatalf("expected 0 active after read=true, got %d", len(got))
+		t.Errorf("want no active subscription rows for an unsubscribed thread, got %d: %+v", len(got), got)
+	}
+	// ListActiveThreadSubscriptions filters on active=1, so it would
+	// also report 0 for a fabricated row that happened to be
+	// tombstoned. Assert on the row itself: no cursor means no row.
+	lastRead, err := db.GetThreadLastRead("T1", "C1", "1700000100.000000")
+	if err != nil {
+		t.Fatalf("GetThreadLastRead: %v", err)
+	}
+	if lastRead != "" {
+		t.Errorf("GetThreadLastRead = %q, want \"\" — no row should have been created at all", lastRead)
+	}
+}
+
+// The cursor is still the cursor: an existing row advances whether or
+// not the event reports the user as subscribed. Only the missing-row
+// case turns on `subscribed`.
+func TestOnThreadMarked_UnsubscribedAdvancesExistingRow(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertThreadSubscription("T1", "C1", "1700000100.000000", "1700000150.000000", true); err != nil {
+		t.Fatalf("UpsertThreadSubscription: %v", err)
+	}
+	h := &rtmEventHandler{
+		db:          db,
+		workspaceID: "T1",
+		isActive:    func() bool { return true },
+	}
+
+	h.OnThreadMarked("C1", "1700000100.000000", "1700000200.000000", false)
+
+	got, err := db.ListActiveThreadSubscriptions("T1")
+	if err != nil {
+		t.Fatalf("ListActiveThreadSubscriptions: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want the existing row still active, got %d rows", len(got))
+	}
+	if got[0].LastRead != "1700000200.000000" {
+		t.Errorf("LastRead = %q, want 1700000200.000000", got[0].LastRead)
+	}
+}
+
+// `active` is owned by thread_subscribed / thread_unsubscribed / the
+// getView reconcile. Neither cursor writer may resurrect a tombstoned
+// row, including the inserting one taken when subscribed=true.
+func TestOnThreadMarked_SubscribedLeavesTombstonedRowTombstoned(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertThreadSubscription("T1", "C1", "1700000100.000000", "1700000150.000000", false); err != nil {
+		t.Fatalf("UpsertThreadSubscription: %v", err)
+	}
+	h := &rtmEventHandler{
+		db:          db,
+		workspaceID: "T1",
+		isActive:    func() bool { return true },
+	}
+
+	h.OnThreadMarked("C1", "1700000100.000000", "1700000200.000000", true)
+
+	got, err := db.ListActiveThreadSubscriptions("T1")
+	if err != nil {
+		t.Fatalf("ListActiveThreadSubscriptions: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("a tombstoned row must stay tombstoned, got %d active: %+v", len(got), got)
+	}
+	lastRead, err := db.GetThreadLastRead("T1", "C1", "1700000100.000000")
+	if err != nil {
+		t.Fatalf("GetThreadLastRead: %v", err)
+	}
+	if lastRead != "1700000200.000000" {
+		t.Errorf("LastRead = %q, want the cursor advanced to 1700000200.000000", lastRead)
 	}
 }
 
@@ -327,8 +712,7 @@ func TestOnThreadMarked_PersistsOnInactiveWorkspace(t *testing.T) {
 		// persist the DB row.
 	}
 
-	// read=false → thread is now unread → row should be active=true.
-	h.OnThreadMarked("C1", "1700000100.000000", "1700000150.000000", false)
+	h.OnThreadMarked("C1", "1700000100.000000", "1700000150.000000", true)
 
 	got, err := db.ListActiveThreadSubscriptions("T1")
 	if err != nil {
@@ -340,6 +724,65 @@ func TestOnThreadMarked_PersistsOnInactiveWorkspace(t *testing.T) {
 	if got[0].ChannelID != "C1" || got[0].ThreadTS != "1700000100.000000" ||
 		got[0].LastRead != "1700000150.000000" || !got[0].Active {
 		t.Fatalf("subscription row mismatch on inactive workspace: %+v", got[0])
+	}
+}
+
+// TestOnThreadMarked_InactiveWorkspaceRefreshesRail pins the send the
+// inactive branch used to skip. The rail's thread half reads the
+// last_read this handler just wrote, so a thread read in another
+// client while the user is on a different workspace must reach the
+// rail, and ReadStateChangedMsg is what notifyReadStateChanged answers
+// to (the pattern refreshMutedForActive's inactive case uses). The
+// active-only messages must still stay out: there is no list or badge
+// on screen for this workspace.
+func TestOnThreadMarked_InactiveWorkspaceRefreshesRail(t *testing.T) {
+	db := newTestDB(t)
+	sender := &captureSender{}
+	h := &rtmEventHandler{
+		db:          db,
+		workspaceID: "T1",
+		isActive:    func() bool { return false },
+		program:     sender,
+	}
+
+	h.OnThreadMarked("C1", "1700000100.000000", "1700000150.000000", true)
+
+	assertOnlyRailRefresh(t, sender.sent)
+}
+
+// TestOnThreadSubscriptionChanged_InactiveWorkspaceRefreshesRail is the
+// same guard for thread_subscribed / thread_unsubscribed: an
+// auto-subscription from an @-mention in an inactive workspace is a new
+// subscribed thread the rail may need to light, and an unsubscribe one
+// it may need to stop lighting.
+func TestOnThreadSubscriptionChanged_InactiveWorkspaceRefreshesRail(t *testing.T) {
+	db := newTestDB(t)
+	sender := &captureSender{}
+	h := &rtmEventHandler{
+		db:          db,
+		workspaceID: "T1",
+		isActive:    func() bool { return false },
+		program:     sender,
+	}
+
+	h.OnThreadSubscriptionChanged("C1", "1700000100.000000", "1700000150.000000", true)
+
+	assertOnlyRailRefresh(t, sender.sent)
+}
+
+// assertOnlyRailRefresh checks that an inactive-workspace thread event
+// dispatched exactly one ReadStateChangedMsg for T1 and nothing else.
+func assertOnlyRailRefresh(t *testing.T, sent []tea.Msg) {
+	t.Helper()
+	if len(sent) != 1 {
+		t.Fatalf("sent %d messages, want exactly one ReadStateChangedMsg: %+v", len(sent), sent)
+	}
+	rs, ok := sent[0].(ui.ReadStateChangedMsg)
+	if !ok {
+		t.Fatalf("sent %T, want ui.ReadStateChangedMsg", sent[0])
+	}
+	if rs.WorkspaceID != "T1" {
+		t.Errorf("ReadStateChangedMsg.WorkspaceID = %q, want T1", rs.WorkspaceID)
 	}
 }
 
@@ -365,5 +808,35 @@ func TestOnThreadSubscriptionChanged_PersistsOnInactiveWorkspace(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].ChannelID != "C1" || !got[0].Active {
 		t.Fatalf("inactive workspace must still persist thread_subscribed; got %+v, want 1 active row", got)
+	}
+}
+
+// TestMuteRefreshMsg pins which message a mute change posts: the active
+// workspace gets its sidebar list swapped, an inactive one gets the
+// read-state signal the rail, title and status hook re-derive from.
+// The inactive case is the one that used to post nothing.
+func TestMuteRefreshMsg(t *testing.T) {
+	channels := []sidebar.ChannelItem{{ID: "C1", IsMuted: true}}
+
+	msg := muteRefreshMsg(true, "T1", channels)
+	sr, ok := msg.(ui.SectionsRefreshedMsg)
+	if !ok {
+		t.Fatalf("active: got %T, want ui.SectionsRefreshedMsg", msg)
+	}
+	if sr.TeamID != "T1" || len(sr.Channels) != 1 || !sr.Channels[0].IsMuted {
+		t.Errorf("active: msg = %+v", sr)
+	}
+	sr.Channels[0].IsMuted = false
+	if !channels[0].IsMuted {
+		t.Error("active: the message shares the handler's slice; the App would be mutating wctx.Channels")
+	}
+
+	msg = muteRefreshMsg(false, "T1", channels)
+	rs, ok := msg.(ui.ReadStateChangedMsg)
+	if !ok {
+		t.Fatalf("inactive: got %T, want ui.ReadStateChangedMsg", msg)
+	}
+	if rs.WorkspaceID != "T1" {
+		t.Errorf("inactive: WorkspaceID = %q, want T1", rs.WorkspaceID)
 	}
 }

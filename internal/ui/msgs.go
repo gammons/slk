@@ -17,11 +17,13 @@ import (
 	"image"
 	"time"
 
-	"github.com/gammons/slk/internal/cache"
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/gammons/slk/internal/core"
 	emojiutil "github.com/gammons/slk/internal/emoji"
-	slack "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/searchresults"
 	"github.com/gammons/slk/internal/ui/sidebar"
 )
@@ -68,6 +70,15 @@ type (
 		ChannelID  string
 		Messages   []messages.MessageItem
 		LastReadTS string
+		// MarkedTS is the ts the fetcher already marked the channel
+		// read at, or "" if it marked nothing. ChannelService.Fetch
+		// marks on entry and sets this; the reconnect refresh
+		// (rtmEventHandler.refreshChannel in cmd/slk/main.go) reuses
+		// this message but deliberately does not mark, and leaves it
+		// empty. The reducer records it
+		// as a self-mark so the resulting channel_marked echo does not
+		// drag the divider off LastReadTS. See selfMarkDedup.
+		MarkedTS string
 	}
 	OlderMessagesLoadedMsg struct {
 		ChannelID string
@@ -133,12 +144,21 @@ type (
 		ChannelID string
 		ThreadTS  string
 		Text      string
+		// Broadcast is Slack's "Also send to #channel": the reply is
+		// additionally posted to the parent channel feed
+		// (reply_broadcast=true; Slack echoes it with the
+		// thread_broadcast subtype).
+		Broadcast bool
 	}
 	ThreadReplySentMsg struct {
 		ChannelID string
 		ThreadTS  string
 		LocalTS   string // optimistic-placeholder id; see MessageSentMsg.LocalTS
 		Message   messages.MessageItem
+		// Broadcast mirrors SendThreadReplyMsg.Broadcast; when true the
+		// reducer also lands the message in the channel pane as a
+		// thread_broadcast row.
+		Broadcast bool
 	}
 	// ThreadReplySendFailedMsg is returned when chat.postMessage for a
 	// thread reply fails. Mirrors MessageSendFailedMsg.
@@ -147,6 +167,10 @@ type (
 		ThreadTS  string
 		LocalTS   string
 		Reason    string
+		// Broadcast mirrors SendThreadReplyMsg.Broadcast so the failure
+		// handler can also roll back the optimistic thread_broadcast
+		// row in the channel feed.
+		Broadcast bool
 	}
 	// ThreadsViewActivatedMsg is dispatched when the user picks the
 	// synthetic Threads sidebar row. The App switches the message pane to
@@ -157,7 +181,7 @@ type (
 	// match the active team.
 	ThreadsListLoadedMsg struct {
 		TeamID    string
-		Summaries []cache.ThreadSummary
+		Summaries []core.ThreadSummary
 		// SubscriptionsAvailable reflects whether the most recent
 		// subscription sync succeeded in fetching the authoritative
 		// thread-subscription list. The threads view renders a banner
@@ -167,6 +191,10 @@ type (
 	// ThreadsListDirtyMsg is dispatched when something that could affect
 	// the involved-threads list has changed (new message, mention, etc.)
 	// and the list should be refetched. Ignored if not the active team.
+	//
+	// Senders need not deduplicate or debounce: reduceThreads coalesces
+	// these on receipt, so several from several senders inside one
+	// threadsDirtyDebounce window cost a single refetch.
 	ThreadsListDirtyMsg struct {
 		TeamID string
 	}
@@ -180,7 +208,7 @@ type (
 	// doesn't match the active team. Mirrors ThreadsListLoadedMsg.
 	ActivityListLoadedMsg struct {
 		TeamID     string
-		Items      []slack.ActivityItem
+		Items      []core.ActivityItem
 		NextCursor string
 	}
 	// ActivitySelectedMsg is dispatched when the user presses Enter on
@@ -194,11 +222,11 @@ type (
 	// ActivityBodiesLoadedMsg carries hydrated message bodies for the
 	// refs in a freshly loaded Activity page (fetched via messages.list
 	// as a second step after activity.feed, which returns refs only).
-	// Bodies are keyed by slack.ActivityMsgKey(channelID, ts). Ignored
+	// Bodies are keyed by core.ActivityMsgKey(channelID, ts). Ignored
 	// if it doesn't match the active team.
 	ActivityBodiesLoadedMsg struct {
 		TeamID string
-		Bodies map[string]slack.ActivityMessage
+		Bodies map[string]core.ActivityMessage
 	}
 	// ActivityToggleUnreadMsg flips the Activity view's unread-only
 	// filter and re-fetches the feed with the new flag (the server does
@@ -276,6 +304,10 @@ type (
 		Channels     []sidebar.ChannelItem
 		FinderItems  []channelfinder.Item
 		UserNames    map[string]string
+		// UserStatuses is every cached user's custom status, for author
+		// names and DM rows. DND is not cached; RefreshPeerDND fetches it
+		// and delivers it as UserDNDChangeMsg.
+		UserStatuses map[string]peerstatus.Status
 		// ExternalUsers maps userID -> true for users this workspace
 		// considers Slack Connect / shared-channel guests. Hydrated from
 		// cache.User.IsExternal so the mention picker can flag externals
@@ -290,6 +322,10 @@ type (
 		// workspace. Nil means "use config-glob behavior" (the App's
 		// sidebar reverts to its existing name-keyed buckets).
 		SectionsProvider sidebar.SectionsProvider
+		// RefreshPeerDND, if set, is appended to reduceWorkspaceSwitched's
+		// batch after the switch applies. It fetches DM peers' DND for
+		// this workspace and delivers results as UserDNDChangeMsg.
+		RefreshPeerDND tea.Cmd
 	}
 	// ReadStateChangedMsg is sent whenever the persistent read state changes,
 	// so panels that read from cache.GetWorkspaceReadState re-render.
@@ -303,11 +339,12 @@ type (
 	// im_created, group_joined, or channel_joined event. The TeamID
 	// disambiguates events for inactive workspaces; only events whose
 	// TeamID matches the currently-active workspace mutate the live
-	// sidebar — others are persisted in the workspace's WorkspaceContext
-	// for when the user switches in.
+	// sidebar and channel finder — others are persisted in the
+	// workspace's WorkspaceContext for when the user switches in.
 	ConversationOpenedMsg struct {
-		TeamID string
-		Item   sidebar.ChannelItem
+		TeamID     string
+		Item       sidebar.ChannelItem
+		FinderItem channelfinder.Item
 	}
 	// SectionsRefreshedMsg is sent when a workspace's Slack-native
 	// section state has mutated (via channel_section_* WS events) and
@@ -341,6 +378,9 @@ type (
 		Channels     []sidebar.ChannelItem
 		FinderItems  []channelfinder.Item
 		UserNames    map[string]string
+		// UserStatuses is every cached user's custom status, for author
+		// names. DM peers' DND arrives separately after connect.
+		UserStatuses map[string]peerstatus.Status
 		// ExternalUsers maps userID -> true for users this workspace
 		// considers Slack Connect / shared-channel guests. Hydrated from
 		// cache.User.IsExternal so the mention picker can flag externals
@@ -419,6 +459,29 @@ type (
 		UserID   string
 		Presence string
 	}
+	// UserStatusChangeMsg carries a user's custom status for one
+	// workspace. Expires is the zero time for a status that never
+	// expires; renderers hide a status whose Expires has passed.
+	UserStatusChangeMsg struct {
+		TeamID  string
+		UserID  string
+		Emoji   string
+		Text    string
+		Expires time.Time
+		// Huddle is Slack's huddle_state; HuddleExpires its expiry, zero
+		// when unset. See peerstatus.Status.InHuddle.
+		Huddle        string
+		HuddleExpires time.Time
+	}
+	// UserDNDChangeMsg carries another user's DND state for one
+	// workspace. EndTS is the zero time when DND is off or its end is
+	// unknown.
+	UserDNDChangeMsg struct {
+		TeamID  string
+		UserID  string
+		Enabled bool
+		EndTS   time.Time
+	}
 	// StatusChangeMsg is sent when the authenticated user's own presence
 	// or DND state changes for any workspace. The App routes it to the
 	// status bar only when TeamID matches the active workspace; otherwise
@@ -451,6 +514,16 @@ type threadFetchDebounceMsg struct {
 	channelID string
 	threadTS  string
 	gen       uint64
+}
+
+// threadsListFetchMsg ends the coalescing window a ThreadsListDirtyMsg
+// opened: it is delivered threadsDirtyDebounce after that message, and
+// its arm is what dispatches the ThreadService.ListFetch the dirty
+// message asked for. teamID is whichever team was active when the window
+// opened, so a workspace switch during the window can be told apart
+// from a refresh that is still wanted.
+type threadsListFetchMsg struct {
+	teamID string
 }
 
 // MessageSentMsg is returned after a message is successfully sent.
@@ -511,6 +584,12 @@ type MessageDeletedMsg struct {
 // picker modal.
 type OpenLinkMsg struct{ URL string }
 
+// DownloadFileMsg requests download + OS-open of a file attachment.
+// Dispatched by the `d` keybinding (directly for single-file messages)
+// and by the picker modal for multi-file messages. Handled by
+// reduceFiles.
+type DownloadFileMsg struct{ Attachment messages.Attachment }
+
 // MarkUnreadMsg requests the App to mark the given message as unread.
 // ThreadTS is "" for channel-level mark-unread; non-empty for thread-level
 // (in which case ChannelID is the parent channel and BoundaryTS is the
@@ -553,14 +632,26 @@ type ChannelMarkedRemoteMsg struct {
 }
 
 // ThreadMarkedRemoteMsg is dispatched by the WS event handler when
-// Slack pushes a thread_marked event. Read=true means the thread is
-// now read (clear local boundary + threads-view row); Read=false means
-// it's unread.
+// Slack pushes a thread_marked event (a thread's read cursor moved in
+// another client, or via slk's own subscriptions.thread.mark echoing
+// back — the arm routes through applyThreadMarkEcho, which tells the
+// two apart). LastRead is the thread's new read cursor; whether that
+// means read or unread is decided by comparing it against the thread's
+// newest known reply.
 type ThreadMarkedRemoteMsg struct {
 	ChannelID string
 	ThreadTS  string
+	LastRead  string
+}
+
+// ThreadMarkedLocalMsg reports the outcome of an slk-initiated
+// subscriptions.thread.mark. Err is nil on success, in which case
+// thread_subscriptions.last_read has already been advanced to TS.
+type ThreadMarkedLocalMsg struct {
+	ChannelID string
+	ThreadTS  string
 	TS        string
-	Read      bool
+	Err       error
 }
 
 // WSMessageDeletedMsg is dispatched by the RTM event handler when a

@@ -2,10 +2,11 @@
 package styles
 
 import (
+	"hash/fnv"
 	"image/color"
 
 	"charm.land/lipgloss/v2"
-	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
 )
 
 var (
@@ -114,10 +115,25 @@ var (
 			Padding(0, 1)
 
 	// Messages
-	Username = lipgloss.NewStyle().
-			Background(Background).
-			Foreground(Primary).
-			Bold(true)
+
+	// UserColorPalette is the fixed set of colors used to deterministically
+	// color usernames by hashing user IDs, mirroring how Slack clients assign
+	// stable per-user colors. Mid-brightness colors are chosen for adequate
+	// contrast on both dark and light theme backgrounds.
+	UserColorPalette = []color.Color{
+		lipgloss.Color("#E01E5A"),
+		lipgloss.Color("#3B82F6"),
+		lipgloss.Color("#2EB67D"),
+		lipgloss.Color("#8B5CF6"),
+		lipgloss.Color("#F43F5E"),
+		lipgloss.Color("#06B6D4"),
+		lipgloss.Color("#F97316"),
+		lipgloss.Color("#10B981"),
+		lipgloss.Color("#6366F1"),
+		lipgloss.Color("#C026D3"),
+		lipgloss.Color("#0EA5E9"),
+		lipgloss.Color("#DB2777"),
+	}
 
 	Timestamp = lipgloss.NewStyle().
 			Background(Background).
@@ -257,7 +273,7 @@ func Version() int64 { return version }
 
 // Apply sets the color palette from a named theme with optional overrides,
 // then rebuilds all composed styles.
-func Apply(themeName string, overrides config.Theme) {
+func Apply(themeName string, overrides core.Theme) {
 	version++
 	colors := lookupTheme(themeName)
 
@@ -392,6 +408,33 @@ func SelectionBorderColor(focused bool) color.Color {
 	return TextMuted
 }
 
+// UserColor returns a deterministic color for the given user ID by hashing
+// it into UserColorPalette via FNV-1a. Returns Primary for empty IDs (e.g.
+// some bot messages) so they fall back to the theme default.
+func UserColor(userID string) color.Color {
+	if userID == "" {
+		return Primary
+	}
+	h := fnv.New32a()
+	h.Write([]byte(userID))
+	return UserColorPalette[h.Sum32()%uint32(len(UserColorPalette))]
+}
+
+// Username returns a lipgloss style for rendering a username. When colored
+// is true and userID is non-empty, the foreground color is deterministically
+// derived from userID via UserColor. Otherwise the theme default (Primary)
+// is used.
+func Username(userID string, colored bool) lipgloss.Style {
+	fg := Primary
+	if colored && userID != "" {
+		fg = UserColor(userID)
+	}
+	return lipgloss.NewStyle().
+		Background(Background).
+		Foreground(fg).
+		Bold(true)
+}
+
 func buildStyles() {
 	FocusedBorder = lipgloss.NewStyle().
 		BorderStyle(lipgloss.ThickBorder()).BorderForeground(Primary).BorderBackground(Background).Background(Background)
@@ -415,8 +458,6 @@ func buildStyles() {
 		Background(Error).Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1)
 	SectionHeader = lipgloss.NewStyle().
 		Background(SidebarBackground).Foreground(SidebarTextMuted).Bold(true).Padding(0, 1)
-	Username = lipgloss.NewStyle().
-		Background(Background).Foreground(Primary).Bold(true)
 	Timestamp = lipgloss.NewStyle().
 		Background(Background).Foreground(TextMuted).Italic(true)
 	MessageText = lipgloss.NewStyle().
@@ -468,6 +509,66 @@ func SelectionStyle() lipgloss.Style {
 	return lipgloss.NewStyle().
 		Background(SelectionBackground).
 		Foreground(SelectionForeground)
+}
+
+// MentionBadgeStyle returns the style used for the sidebar's unread
+// direct-mention badge. It borrows the theme's selection highlight pair,
+// which Apply() always populates and which is contrast-safe by
+// construction (defaulting to Primary-on-Background).
+//
+// A function rather than a package var: var-shaped styles in this file
+// must be declared twice — once in the top-level var block and again in
+// buildStyles() — and the top-level copy would read SelectionBackground
+// while it is still nil, since that var has no initializer. SelectionStyle
+// and SearchHighlightStyle are functions for the same reason.
+//
+// Deliberately not UnreadBadge: that style hardcodes white over Error and
+// belongs to the status bar. See
+// docs/superpowers/specs/2026-09-09-mention-badges-design.md.
+func MentionBadgeStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Background(SelectionBackground).
+		Foreground(SelectionForeground).
+		Padding(0, 1)
+}
+
+// mutedMentionBadgeAlpha is how much of the normal badge's background
+// survives when it is mixed toward the sidebar background. Low enough
+// that a muted badge stops competing with an unmuted one, high enough
+// that it still reads as the same badge rather than a new glyph.
+const mutedMentionBadgeAlpha = 0.45
+
+// MutedMentionBadgeStyle returns the badge style for a muted channel.
+//
+// Mentions pierce mute — muting a busy channel must not hide someone
+// naming you — but a muted mention should not shout as loudly as an
+// unmuted one. This mixes the normal badge's background toward the
+// sidebar background, keeping the same hue while dropping its
+// brightness, which is the same treatment ChannelMuted gives a row's
+// foreground.
+//
+// The foreground is SidebarText rather than MentionBadgeStyle's
+// SelectionForeground. SelectionForeground is derived from the theme's
+// Background so it contrasts against a full-strength Selection
+// background; once that background is mixed most of the way back toward
+// the sidebar, the contrasting colour is the one that reads against the
+// sidebar itself. That holds on light and dark themes alike, because
+// both terms move together.
+func MutedMentionBadgeStyle() lipgloss.Style {
+	// mixColors calls RGBA() on both arguments, so it panics on a nil
+	// color.Color. SelectionBackground has no initializer and is nil
+	// until Apply() runs — the state every sidebar test renders in, and
+	// the state at process start before a theme is loaded. Degrade to
+	// the undimmed background rather than panicking; there is nothing
+	// to mix toward yet.
+	bg := SelectionBackground
+	if bg != nil && SidebarBackground != nil {
+		bg = mixColors(bg, SidebarBackground, mutedMentionBadgeAlpha)
+	}
+	return lipgloss.NewStyle().
+		Background(bg).
+		Foreground(SidebarText).
+		Padding(0, 1)
 }
 
 // SearchHighlightStyle returns the style used to mark in-channel

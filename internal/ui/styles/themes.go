@@ -1,8 +1,7 @@
 package styles
 
 import (
-	"os"
-	"path/filepath"
+	"io/fs"
 	"sort"
 	"strings"
 
@@ -514,9 +513,10 @@ type customThemeFile struct {
 	Colors ThemeColors `toml:"colors"`
 }
 
-// LoadCustomThemes scans a directory for .toml theme files and registers them.
-func LoadCustomThemes(dir string) {
-	entries, err := os.ReadDir(dir)
+// LoadCustomThemes scans the top level of fsys for .toml theme files and
+// registers them.
+func LoadCustomThemes(fsys fs.FS) {
+	entries, err := fs.ReadDir(fsys, ".")
 	if err != nil {
 		return // directory doesn't exist or can't be read — silently skip
 	}
@@ -525,7 +525,7 @@ func LoadCustomThemes(dir string) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".toml") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		data, err := fs.ReadFile(fsys, entry.Name())
 		if err != nil {
 			continue
 		}

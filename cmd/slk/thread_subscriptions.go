@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/debuglog"
 	slackclient "github.com/gammons/slk/internal/slack"
+	"github.com/gammons/slk/internal/ui"
 )
 
 // threadSubscriptionLister is the one call this file makes:
@@ -125,34 +128,158 @@ func (s *threadSubscriptionSync) sync(ctx context.Context) error {
 	return nil
 }
 
-// ensureThreadSubscriptions runs one subscription sync per workspace
-// per session, in the background, and returns immediately.
+// threadSubsSyncInterval is the minimum gap between a workspace's
+// subscriptions.thread.getView sweeps. The call paginates to a
+// 1000-item hard cap, measured at ~62 requests per workspace on a real
+// account, so it cannot run on every trigger: boot, Threads-view
+// activation and every WS reconnect would otherwise multiply it. 30
+// minutes bounds the request volume while keeping the list fresh
+// across the gaps the socket cannot cover (app closed, laptop asleep
+// — the socket replays nothing).
+const threadSubsSyncInterval = 30 * time.Minute
+
+// threadSubsStagger hands out startup slots across workspaces. On
+// Enterprise Grid every workspace becomes ready in the same second
+// (connectWorkspace runs per-workspace goroutines), and an unstaggered
+// first sync would fire N paginated getView sweeps at once. Slot i
+// waits i*threadSubsStaggerStep before its first sync. Re-syncs never
+// wait — the interval above already thins them out.
+var threadSubsStagger atomic.Int64
+
+// threadSubsStaggerStep is a var so tests can shrink it.
+var threadSubsStaggerStep = 15 * time.Second
+
+// threadSubsGate admits at most one subscription sync per window per
+// workspace, and never two concurrently. It replaces the sync.Once
+// that gated the fetch when only the first Threads-view open triggered
+// it: a Once cannot express "again after a long offline gap", which is
+// exactly when the table goes stale.
+type threadSubsGate struct {
+	mu      sync.Mutex
+	last    time.Time
+	running bool
+	window  time.Duration
+}
+
+// tryStart reports whether a sync may begin at `now`. first is true
+// only for the workspace's first-ever admission, which is what the
+// startup stagger keys off. last is recorded at admission, not
+// completion, so a failed sync cannot be retried into a hammering
+// loop against a rate-limited endpoint.
+func (g *threadSubsGate) tryStart(now time.Time) (first, ok bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.running {
+		return false, false
+	}
+	if !g.last.IsZero() && now.Sub(g.last) < g.window {
+		return false, false
+	}
+	first = g.last.IsZero()
+	g.last = now
+	g.running = true
+	return first, true
+}
+
+func (g *threadSubsGate) done() {
+	g.mu.Lock()
+	g.running = false
+	g.mu.Unlock()
+}
+
+// ensureWorkspaceThreadSubs is the single construction site for the
+// throttled subscription sync, shared by every trigger: the
+// ThreadService closure (workspace-ready boot + Threads-view
+// activation) and the RTM handler's reconnect/wake catch-up.
+func ensureWorkspaceThreadSubs(ctx context.Context, wctx *WorkspaceContext, db *cache.DB, send func(tea.Msg)) {
+	ensureThreadSubscriptions(ctx, &wctx.ThreadSubsGate,
+		&threadSubscriptionSync{
+			client:      wctx.Client,
+			db:          db,
+			workspaceID: wctx.TeamID,
+			availableCb: func(available bool) { wctx.SubscriptionsAvailable = available },
+		},
+		func() { send(ui.ThreadsListDirtyMsg{TeamID: wctx.TeamID}) })
+}
+
+// ensureThreadSubscriptions starts a subscription sync in the
+// background when the gate admits one, and returns immediately
+// either way.
 //
-// It is called from the Threads view's list fetch, which is where the
-// data is first needed. It used to run at boot — before that, on every
-// reconnect — and the Threads view is not what the user is looking at
-// when slk starts, so the cost was paid by everyone and used by the
-// few who open it.
+// Triggers: workspace-ready (boot), Threads-view activation, and the
+// reconnect/wake catch-up. The gate collapses those to at most one
+// sync per threadSubsSyncInterval per workspace: within a session the
+// thread_subscription_changed WS events keep the table current, so
+// re-fetching more often buys nothing.
 //
-// The Once is not an optimisation. The list fetch runs on activation
-// AND on every ThreadsListDirtyMsg, including the one onDone sends, so
-// an ungated trigger would loop. And the call is not cheap:
-// subscriptions.thread.getView paginates to a 1000-item hard cap,
-// measured at ~62 requests per workspace on a real account. Within a
-// session the thread_subscription_changed WS events keep the table
-// current, which is what makes once enough.
+// The workspace's first sync waits out its stagger slot first, so a
+// Grid boot doesn't fire every workspace's sweep in the same second.
+// A sync admitted by boot that is still in its stagger sleep when the
+// user opens the Threads view is fine — the view renders from cache
+// and refreshes via onDone's ThreadsListDirtyMsg.
 //
 // onDone fires only on success — telling the view to re-read a cache
 // that a failed fetch did not change would be a wasted round trip.
-func ensureThreadSubscriptions(ctx context.Context, once *sync.Once, s *threadSubscriptionSync, onDone func()) {
-	once.Do(func() {
-		go func() {
-			if err := s.sync(ctx); err != nil {
-				return
+func ensureThreadSubscriptions(ctx context.Context, gate *threadSubsGate, s *threadSubscriptionSync, onDone func()) {
+	first, ok := gate.tryStart(time.Now())
+	if !ok {
+		return
+	}
+	go func() {
+		defer gate.done()
+		if first {
+			slot := threadSubsStagger.Add(1) - 1
+			if delay := time.Duration(slot) * threadSubsStaggerStep; delay > 0 {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(delay):
+				}
 			}
-			if onDone != nil {
-				onDone()
-			}
-		}()
-	})
+		}
+		if err := s.sync(ctx); err != nil {
+			return
+		}
+		if onDone != nil {
+			onDone()
+		}
+	}()
+}
+
+// OnThreadSubscriptionChanged persists a subscribe/unsubscribe event
+// in the thread_subscriptions table. The threads-view UI refresh is
+// handled by a ThreadsListDirtyMsg dispatch so a new subscription
+// shows up (active=true) or an unsubscribe removes the row
+// (active=false) without per-event UI logic here.
+func (h *rtmEventHandler) OnThreadSubscriptionChanged(channelID, threadTS, lastRead string, active bool) {
+	// Persist subscribe/unsubscribe regardless of active-workspace
+	// state. Mirrors OnChannelMarked / OnMessage: dropping the DB
+	// write on inactive workspaces means a thread the user just got
+	// @-mentioned in (auto-subscribed) would never enter the local
+	// thread_subscriptions table, and the threads view would silently
+	// omit it on next workspace switch until the next reconnect's
+	// ReconcileThreadSubscriptions catches up.
+	if h.db != nil {
+		if err := h.db.UpsertThreadSubscription(h.workspaceID, channelID, threadTS, lastRead, active); err != nil {
+			debuglog.Cache("OnThreadSubscriptionChanged: UpsertThreadSubscription %s/%s: %v",
+				channelID, threadTS, err)
+		}
+	}
+	// The threads-list refresh is filtered by team in App.Update, so
+	// dispatching it for an inactive workspace would only wake the UI
+	// loop for a no-op; the DB write above is what the eventual switch
+	// reads. The rail is different: its thread half reads the row just
+	// upserted (railThreadsUnread), and an auto-subscription from an
+	// @-mention may be a new unread thread to light, an unsubscribe
+	// one to stop lighting. Same send as OnThreadMarked's inactive
+	// branch.
+	if h.isActive != nil && !h.isActive() {
+		if h.program != nil {
+			h.program.Send(ui.ReadStateChangedMsg{WorkspaceID: h.workspaceID})
+		}
+		return
+	}
+	if h.program != nil {
+		h.program.Send(ui.ThreadsListDirtyMsg{TeamID: h.workspaceID})
+	}
 }

@@ -13,6 +13,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/searchresults"
@@ -21,14 +22,17 @@ import (
 
 func searchTestApp(t *testing.T) *App {
 	t.Helper()
-	app := NewApp()
-	app.activeChannelID = "C1"
-	app.messagepane.SetMessages([]messages.MessageItem{
-		{TS: "1700000001.000000", Text: "deploy went fine"},
-		{TS: "1700000002.000000", Text: "lunch?"},
-		{TS: "1700000003.000000", Text: "deployment failed"},
-	})
-	return app
+	// withSize(0, 0) preserves NewApp's unsized state: the original
+	// builder set no dimensions and these tests never render.
+	return newTestApp(t,
+		withSize(0, 0),
+		withActiveChannel("C1"),
+		withMessages(
+			messages.MessageItem{TS: "1700000001.000000", Text: "deploy went fine"},
+			messages.MessageItem{TS: "1700000002.000000", Text: "lunch?"},
+			messages.MessageItem{TS: "1700000003.000000", Text: "deployment failed"},
+		),
+	)
 }
 
 func resultsMsg(tses ...string) ChannelSearchResultsMsg {
@@ -119,7 +123,7 @@ func TestSearchEscClears(t *testing.T) {
 func TestSearchOffBufferMatchTriggersFetchAround(t *testing.T) {
 	app := searchTestApp(t)
 	var fetchedTS string
-	setChannelFetchAroundForTest(app, func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
+	setChannelFetchAroundForTest(app, func(channelID ids.ChannelID, ts ids.MessageTS) core.Msg {
 		fetchedTS = string(ts)
 		return nil
 	})
@@ -134,8 +138,8 @@ func TestSearchOffBufferMatchTriggersFetchAround(t *testing.T) {
 func TestSlashEntersSearchModeAndEnterExecutes(t *testing.T) {
 	app := searchTestApp(t)
 	var gotChannel, gotQuery string
-	app.SetSearchService(NewSearchService(SearchServiceFuncs{
-		SearchChannel: func(channelID ids.ChannelID, query string) tea.Msg {
+	app.SetSearchService(core.NewSearchService(core.SearchServiceFuncs{
+		SearchChannel: func(channelID ids.ChannelID, query string) core.Msg {
 			gotChannel, gotQuery = string(channelID), query
 			return nil
 		},
@@ -211,8 +215,8 @@ func searchDispatch(t *testing.T, app *App, query string) tea.Cmd {
 
 func TestSearchClearWhilePendingDropsLateResult(t *testing.T) {
 	app := searchTestApp(t)
-	app.SetSearchService(NewSearchService(SearchServiceFuncs{
-		SearchChannel: func(channelID ids.ChannelID, query string) tea.Msg {
+	app.SetSearchService(core.NewSearchService(core.SearchServiceFuncs{
+		SearchChannel: func(channelID ids.ChannelID, query string) core.Msg {
 			return resultsMsg("1700000003.000000")
 		},
 	}))
@@ -232,8 +236,8 @@ func TestSearchClearWhilePendingDropsLateResult(t *testing.T) {
 
 func TestSearchNewDispatchSupersedesOldResult(t *testing.T) {
 	app := searchTestApp(t)
-	app.SetSearchService(NewSearchService(SearchServiceFuncs{
-		SearchChannel: func(channelID ids.ChannelID, query string) tea.Msg {
+	app.SetSearchService(core.NewSearchService(core.SearchServiceFuncs{
+		SearchChannel: func(channelID ids.ChannelID, query string) core.Msg {
 			m := resultsMsg("1700000003.000000")
 			m.Query = query
 			return m
@@ -301,8 +305,8 @@ func TestCtrlFOpensWorkspaceSearch(t *testing.T) {
 func TestWorkspaceSearchSubmitAndResults(t *testing.T) {
 	app := searchTestApp(t)
 	var gotQuery string
-	app.SetSearchService(NewSearchService(SearchServiceFuncs{
-		SearchWorkspace: func(query string) tea.Msg {
+	app.SetSearchService(core.NewSearchService(core.SearchServiceFuncs{
+		SearchWorkspace: func(query string) core.Msg {
 			gotQuery = query
 			return WorkspaceSearchResultsMsg{Query: query, Items: []searchresults.Item{
 				{ChannelID: "C2", ChannelName: "ops", TS: "2.0", Text: "hit"},
@@ -475,8 +479,8 @@ func TestWorkspaceSearchErrorShownInModal(t *testing.T) {
 
 func TestWorkspaceSearchEscWhilePendingDropsLateResult(t *testing.T) {
 	app := searchTestApp(t)
-	app.SetSearchService(NewSearchService(SearchServiceFuncs{
-		SearchWorkspace: func(query string) tea.Msg {
+	app.SetSearchService(core.NewSearchService(core.SearchServiceFuncs{
+		SearchWorkspace: func(query string) core.Msg {
 			return WorkspaceSearchResultsMsg{Query: query, Items: []searchresults.Item{
 				{ChannelID: "C2", ChannelName: "ops", TS: "2.0", Text: "hit"},
 			}, Total: 1}

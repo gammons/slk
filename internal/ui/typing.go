@@ -14,14 +14,14 @@
 //
 // Two cohesive types live here:
 //
-//   typingTracker      Inbound state: per-channel "who is typing now"
-//                      map, the global enabled flag, and the ticker-
-//                      alive bookkeeping (one tea.Tick chain at a time
-//                      regardless of how many UserTypingMsg's arrive).
+//	typingTracker      Inbound state: per-channel "who is typing now"
+//	                   map, the global enabled flag, and the ticker-
+//	                   alive bookkeeping (one tea.Tick chain at a time
+//	                   regardless of how many UserTypingMsg's arrive).
 //
-//   typingBroadcaster  Outbound throttle: holds the TypingSendFunc and
-//                      the wall clock of the last self-emit. Refuses
-//                      to send more than once per 3 seconds.
+//	typingBroadcaster  Outbound throttle: holds the TypingSendFunc and
+//	                   the wall clock of the last self-emit. Refuses
+//	                   to send more than once per 3 seconds.
 //
 // The broadcaster holds a *typingTracker reference so it can consult
 // the shared Enabled() flag without forcing the App to re-check it at

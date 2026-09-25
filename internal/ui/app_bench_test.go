@@ -9,14 +9,10 @@ import (
 	"github.com/gammons/slk/internal/ui/sidebar"
 )
 
-// makeBenchApp builds a populated App approximating a real user session: a
-// sidebar with 100 channels, a message pane with 200 messages, a workspace
-// rail with 3 workspaces, in INSERT mode with focus on the messages panel
-// (the typical typing-in-compose state).
-func makeBenchApp() *App {
-	a := NewApp()
-	_, _ = a.Update(tea.WindowSizeMsg{Width: 200, Height: 50})
-
+// benchChannels and benchMessages are the fixed 100-channel / 200-message
+// data sets both bench builders load. Extracted verbatim from the two
+// identical inline loops they used to carry.
+func benchChannels() []sidebar.ChannelItem {
 	channels := make([]sidebar.ChannelItem, 100)
 	for i := range channels {
 		channels[i] = sidebar.ChannelItem{
@@ -25,8 +21,10 @@ func makeBenchApp() *App {
 			Type: "channel",
 		}
 	}
-	a.sidebar.SetItems(channels)
+	return channels
+}
 
+func benchMessages() []messages.MessageItem {
 	msgs := make([]messages.MessageItem, 200)
 	for i := range msgs {
 		msgs[i] = messages.MessageItem{
@@ -37,9 +35,32 @@ func makeBenchApp() *App {
 			Timestamp: "10:30 AM",
 		}
 	}
-	a.messagepane.SetMessages(msgs)
-	a.activeChannelID = "C1"
-	a.activeTeamID = "T1"
+	return msgs
+}
+
+// makeBenchApp builds a populated App approximating a real user session: a
+// sidebar with 100 channels, a message pane with 200 messages, a workspace
+// rail with 3 workspaces, in INSERT mode with focus on the messages panel
+// (the typical typing-in-compose state).
+func makeBenchApp() *App {
+	// buildTestApp rather than newTestApp: makeBenchApp takes no
+	// testing.TB and adding one would edit every call site.
+	//
+	// withWindowSize, not withSize: the original sized via
+	// Update(tea.WindowSizeMsg{...}), which propagates into sub-models and
+	// sets forceSixelRepaint. withSize would do neither.
+	//
+	// The sidebar is still populated with a.sidebar.SetItems below rather
+	// than withChannels. They are NOT equivalent: App.SetChannels also
+	// fills the compose/threadCompose channelpickers and the channelNames
+	// maps, which would change what the render benchmarks measure.
+	a := buildTestApp(
+		withWindowSize(200, 50),
+		withMessages(benchMessages()...),
+		withActiveChannel("C1"),
+		withActiveTeam("T1"),
+	)
+	a.sidebar.SetItems(benchChannels())
 
 	a.SetMode(ModeInsert)
 	a.focusedPanel = PanelMessages
@@ -83,33 +104,19 @@ func BenchmarkAppViewIdle(b *testing.B) {
 // compositor memo does NOT help: every scroll bumps messagepane.Version, so
 // the bordered top region re-renders and the screen re-composites.
 func makeWideScrollApp() *App {
-	a := NewApp()
-	_, _ = a.Update(tea.WindowSizeMsg{Width: 477, Height: 130})
-
-	channels := make([]sidebar.ChannelItem, 100)
-	for i := range channels {
-		channels[i] = sidebar.ChannelItem{
-			ID:   fmt.Sprintf("C%d", i),
-			Name: fmt.Sprintf("channel-%d", i),
-			Type: "channel",
-		}
-	}
-	a.sidebar.SetItems(channels)
-
-	msgs := make([]messages.MessageItem, 200)
-	for i := range msgs {
-		msgs[i] = messages.MessageItem{
-			TS:        fmt.Sprintf("%d.0", 1700000000+i),
-			UserName:  "alice",
-			UserID:    "U1",
-			Text:      "Hello world this is a moderately long message with **bold** and _italic_ formatting.",
-			Timestamp: "10:30 AM",
-		}
-	}
-	a.messagepane.SetMessages(msgs)
-	a.activeChannelID = "C1"
-	a.activeTeamID = "T1"
+	// See makeBenchApp for why this is buildTestApp + withWindowSize +
+	// a bare sidebar.SetItems rather than newTestApp/withSize/withChannels.
+	a := buildTestApp(
+		withWindowSize(477, 130),
+		withMessages(benchMessages()...),
+		withActiveChannel("C1"),
+		withActiveTeam("T1"),
+	)
+	a.sidebar.SetItems(benchChannels())
 	a.focusedPanel = PanelMessages
+	// Called explicitly, not via withMode: withMode(ModeNormal) is a
+	// deliberate no-op (App starts in ModeNormal), but this builder wants
+	// SetMode's side effects — notably pushing the mode into the statusbar.
 	a.SetMode(ModeNormal)
 
 	_ = a.View() // prime caches

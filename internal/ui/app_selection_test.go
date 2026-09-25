@@ -5,24 +5,23 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/statusbar"
-	"golang.design/x/clipboard"
 )
 
 func newTestAppWithMessages(t *testing.T) *App {
 	t.Helper()
-	a := NewApp()
-	a.width = 120
-	a.height = 30
-	a.messagepane.SetMessages([]messages.MessageItem{
-		{TS: "1.0", UserName: "alice", UserID: "U1", Text: "hello world", Timestamp: "1:00 PM"},
-		{TS: "2.0", UserName: "bob", UserID: "U2", Text: "second message", Timestamp: "1:01 PM"},
-	})
-	// Force a render so layout offsets and caches populate.
-	_ = a.View()
-	return a
+	return newTestApp(t,
+		withSize(120, 30),
+		withMessages(
+			messages.MessageItem{TS: "1.0", UserName: "alice", UserID: "U1", Text: "hello world", Timestamp: "1:00 PM"},
+			messages.MessageItem{TS: "2.0", UserName: "bob", UserID: "U2", Text: "second message", Timestamp: "1:01 PM"},
+		),
+		// Force a render so layout offsets and caches populate.
+		withRender(),
+	)
 }
 
 // drainBatch fully expands a tea.Cmd (including nested tea.BatchMsg) and
@@ -46,10 +45,9 @@ func drainBatch(cmd tea.Cmd) []tea.Msg {
 
 func TestApp_DragInMessagesEmitsClipboardAndToast(t *testing.T) {
 	a := newTestAppWithMessages(t)
-	a.SetClipboardAvailable(true)
-	var gotData []byte
-	a.SetClipboardWriter(func(format clipboard.Format, data []byte) <-chan struct{} {
-		gotData = data
+	var gotData string
+	a.SetClipboardWriter(func(text string) tea.Cmd {
+		gotData = text
 		return nil
 	})
 	pressX := a.layout.sidebarEnd + 2
@@ -89,9 +87,8 @@ func TestApp_DragInMessagesEmitsClipboardAndToast(t *testing.T) {
 
 func TestApp_PlainClickDoesNotCopy(t *testing.T) {
 	a := newTestAppWithMessages(t)
-	a.SetClipboardAvailable(true)
 	var wrote bool
-	a.SetClipboardWriter(func(format clipboard.Format, data []byte) <-chan struct{} {
+	a.SetClipboardWriter(func(string) tea.Cmd {
 		wrote = true
 		return nil
 	})
@@ -123,7 +120,7 @@ func TestApp_PlainClickOnMessageOpensThread(t *testing.T) {
 
 	fetchedCh := ""
 	fetchedTS := ""
-	a.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+	a.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) core.Msg {
 		fetchedCh = string(channelID)
 		fetchedTS = string(threadTS)
 		return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS), Replies: nil}
@@ -167,7 +164,7 @@ func TestApp_PlainClickOnChromeDoesNotOpenThread(t *testing.T) {
 	a.activeChannelID = "C1"
 
 	called := false
-	a.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+	a.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) core.Msg {
 		called = true
 		return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS), Replies: nil}
 	})
@@ -201,7 +198,7 @@ func TestApp_DragDoesNotOpenThread(t *testing.T) {
 	a.activeChannelID = "C1"
 
 	called := false
-	a.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+	a.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) core.Msg {
 		called = true
 		return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS), Replies: nil}
 	})
@@ -414,10 +411,9 @@ func TestDrag_MotionCoalescing_DefersExtendSelectionAt(t *testing.T) {
 // position even if the flush tick hasn't fired yet.
 func TestDrag_MotionCoalescing_ReleaseFlushesPending(t *testing.T) {
 	a := newTestAppWithMessages(t)
-	a.SetClipboardAvailable(true)
-	var gotData []byte
-	a.SetClipboardWriter(func(format clipboard.Format, data []byte) <-chan struct{} {
-		gotData = data
+	var gotData string
+	a.SetClipboardWriter(func(text string) tea.Cmd {
+		gotData = text
 		return nil
 	})
 	pressX := a.layout.sidebarEnd + 2

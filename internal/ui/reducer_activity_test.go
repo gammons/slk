@@ -3,11 +3,11 @@ package ui
 import (
 	"testing"
 
-	slack "github.com/gammons/slk/internal/slack"
+	"github.com/gammons/slk/internal/core"
 )
 
 func TestActivityRefs(t *testing.T) {
-	items := []slack.ActivityItem{
+	items := []core.ActivityItem{
 		{ChannelID: "C1", TS: "1.1"},
 		{ChannelID: "C1", TS: "1.1"}, // duplicate (channel, ts)
 		{ChannelID: "C1", TS: "2.2"},
@@ -36,7 +36,7 @@ func TestActivityRefs_Empty(t *testing.T) {
 		t.Fatalf("nil items -> empty refs, got %v", refs)
 	}
 	// All refs unhydratable -> empty (so the reducer skips the fetch).
-	items := []slack.ActivityItem{{ChannelID: "", TS: ""}, {ChannelID: "C1", TS: ""}}
+	items := []core.ActivityItem{{ChannelID: "", TS: ""}, {ChannelID: "C1", TS: ""}}
 	if refs := activityRefs(items); len(refs) != 0 {
 		t.Fatalf("no hydratable refs -> empty, got %v", refs)
 	}

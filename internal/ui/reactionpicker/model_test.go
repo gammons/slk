@@ -197,6 +197,26 @@ func TestCustomEmojiAppearsInSearch(t *testing.T) {
 	}
 }
 
+func TestSubstringSearchSelectsCustomEmoji(t *testing.T) {
+	m := New()
+	m.SetCustomEmoji(map[string]string{
+		"custom_needle": "https://emoji.example.com/custom_needle.gif",
+	})
+	m.Open("C123", "1234.5678", nil)
+
+	for _, ch := range "needle" {
+		m.HandleKey(string(ch))
+	}
+
+	result := m.HandleKey("enter")
+	if result == nil {
+		t.Fatal("expected substring search to produce a selectable result")
+	}
+	if result.Emoji != "custom_needle" {
+		t.Fatalf("selected emoji = %q, want %q", result.Emoji, "custom_needle")
+	}
+}
+
 func TestCustomEmojiOverridesBuiltin(t *testing.T) {
 	m := New()
 	m.SetCustomEmoji(map[string]string{

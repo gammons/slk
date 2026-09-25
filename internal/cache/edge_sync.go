@@ -24,8 +24,10 @@ type EdgeChannelUpdate struct {
 // is_member is NOT among them: 0 of 36 observed channels/info results
 // carried it, because membership comes back as the response's
 // top-level member_channels array instead. Use ApplyMembership for
-// that. is_starred, last_read_ts, unread_count and has_unread come
-// from other sources entirely and are likewise preserved.
+// that. is_starred, last_read_ts, has_unread and mention_count come
+// from other sources entirely and are likewise preserved. (This list
+// named unread_count until mention badges landed and dropped that
+// never-read column from the schema.)
 //
 // A row that does not exist is left alone rather than inserted: this
 // is a revalidation writer, and an unknown channel must go through
@@ -195,7 +197,18 @@ type EdgeUserUpdate struct {
 	AvatarURL  string
 	IsBot      bool
 	IsExternal bool
-	Version    int64
+	// StatusEmoji, StatusText and StatusExpiration are the exception
+	// to "absent means preserve": users/info carries the status keys
+	// with empty values when no status is set, so empty here means the
+	// status was cleared, and it is always written.
+	StatusEmoji      string
+	StatusText       string
+	StatusExpiration int64
+	// HuddleState and HuddleExpiration follow the status fields'
+	// contract: always present on users/info, so always written.
+	HuddleState      string
+	HuddleExpiration int64
+	Version          int64
 }
 
 // UpdateUserFromEdge applies a revalidation result, touching only the
@@ -209,15 +222,23 @@ func (db *DB) UpdateUserFromEdge(u EdgeUserUpdate) error {
 	if u.AvatarURL != "" {
 		_, err = db.conn.Exec(`
 			UPDATE users
-			SET name = ?, display_name = ?, avatar_url = ?, is_bot = ?, is_external = ?, version = ?
+			SET name = ?, display_name = ?, avatar_url = ?, is_bot = ?, is_external = ?,
+				status_emoji = ?, status_text = ?, status_expiration = ?,
+				huddle_state = ?, huddle_expiration = ?, version = ?
 			WHERE id = ?`,
-			u.Name, u.DisplayName, u.AvatarURL, boolToInt(u.IsBot), boolToInt(u.IsExternal), u.Version, u.ID)
+			u.Name, u.DisplayName, u.AvatarURL, boolToInt(u.IsBot), boolToInt(u.IsExternal),
+			u.StatusEmoji, u.StatusText, u.StatusExpiration,
+			u.HuddleState, u.HuddleExpiration, u.Version, u.ID)
 	} else {
 		_, err = db.conn.Exec(`
 			UPDATE users
-			SET name = ?, display_name = ?, is_bot = ?, is_external = ?, version = ?
+			SET name = ?, display_name = ?, is_bot = ?, is_external = ?,
+				status_emoji = ?, status_text = ?, status_expiration = ?,
+				huddle_state = ?, huddle_expiration = ?, version = ?
 			WHERE id = ?`,
-			u.Name, u.DisplayName, boolToInt(u.IsBot), boolToInt(u.IsExternal), u.Version, u.ID)
+			u.Name, u.DisplayName, boolToInt(u.IsBot), boolToInt(u.IsExternal),
+			u.StatusEmoji, u.StatusText, u.StatusExpiration,
+			u.HuddleState, u.HuddleExpiration, u.Version, u.ID)
 	}
 	if err != nil {
 		return fmt.Errorf("updating user %s from edge: %w", u.ID, err)
@@ -241,27 +262,39 @@ func (db *DB) UpsertUserFromEdge(workspaceID string, u EdgeUserUpdate) error {
 	var err error
 	if u.AvatarURL != "" {
 		_, err = db.conn.Exec(`
-			INSERT INTO users (id, workspace_id, name, display_name, avatar_url, is_bot, is_external, version)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO users (id, workspace_id, name, display_name, avatar_url, is_bot, is_external, status_emoji, status_text, status_expiration, huddle_state, huddle_expiration, version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
 				name=excluded.name,
 				display_name=excluded.display_name,
 				avatar_url=excluded.avatar_url,
 				is_bot=excluded.is_bot,
 				is_external=excluded.is_external,
+				status_emoji=excluded.status_emoji,
+				status_text=excluded.status_text,
+				status_expiration=excluded.status_expiration,
+				huddle_state=excluded.huddle_state,
+				huddle_expiration=excluded.huddle_expiration,
 				version=excluded.version
-		`, u.ID, workspaceID, u.Name, u.DisplayName, u.AvatarURL, boolToInt(u.IsBot), boolToInt(u.IsExternal), u.Version)
+		`, u.ID, workspaceID, u.Name, u.DisplayName, u.AvatarURL, boolToInt(u.IsBot), boolToInt(u.IsExternal),
+			u.StatusEmoji, u.StatusText, u.StatusExpiration, u.HuddleState, u.HuddleExpiration, u.Version)
 	} else {
 		_, err = db.conn.Exec(`
-			INSERT INTO users (id, workspace_id, name, display_name, is_bot, is_external, version)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO users (id, workspace_id, name, display_name, is_bot, is_external, status_emoji, status_text, status_expiration, huddle_state, huddle_expiration, version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
 				name=excluded.name,
 				display_name=excluded.display_name,
 				is_bot=excluded.is_bot,
 				is_external=excluded.is_external,
+				status_emoji=excluded.status_emoji,
+				status_text=excluded.status_text,
+				status_expiration=excluded.status_expiration,
+				huddle_state=excluded.huddle_state,
+				huddle_expiration=excluded.huddle_expiration,
 				version=excluded.version
-		`, u.ID, workspaceID, u.Name, u.DisplayName, boolToInt(u.IsBot), boolToInt(u.IsExternal), u.Version)
+		`, u.ID, workspaceID, u.Name, u.DisplayName, boolToInt(u.IsBot), boolToInt(u.IsExternal),
+			u.StatusEmoji, u.StatusText, u.StatusExpiration, u.HuddleState, u.HuddleExpiration, u.Version)
 	}
 	if err != nil {
 		return fmt.Errorf("upserting user %s from edge: %w", u.ID, err)

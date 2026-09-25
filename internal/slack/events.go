@@ -9,6 +9,16 @@ import (
 	"github.com/slack-go/slack"
 )
 
+// Subscribed is thread_marked's subscription.active flag, carried under
+// its true meaning: the user is subscribed to this thread. It is a
+// named type rather than a bool so that it cannot be transposed with
+// OnThreadSubscriptionChanged's `active` parameter, which is the same
+// shape but obliges the receiver to do the opposite thing — write the
+// durable `active` column, which OnThreadMarked must never touch.
+//
+// It is NOT a read/unread signal. See OnThreadMarked.
+type Subscribed bool
+
 // EventHandler processes real-time events from Slack.
 type EventHandler interface {
 	// OnMessage delivers a new or edited message. subtype mirrors
@@ -31,22 +41,47 @@ type EventHandler interface {
 	// im_marked / group_marked / mpim_marked event (read state changed
 	// in another client, or via slk's own MarkChannel/MarkChannelUnread
 	// echoing back). ts is the new last_read watermark; unreadCount is
-	// the canonical workspace-side unread count for the channel (use to
-	// drive the sidebar badge).
-	OnChannelMarked(channelID, ts string, unreadCount int)
+	// the canonical workspace-side unread count for the channel;
+	// mentionCount is the canonical unread direct-mention count that
+	// drives the sidebar badge.
+	//
+	// The mention_count field is unverified against a live capture:
+	// Slack has never been observed sending it on these events, and the
+	// repo's only fixture for them carries unread_count_display alone.
+	// An absent field decodes to 0, which zeroes the badge — an
+	// undercount that self-corrects at the next client.counts refresh
+	// (boot or reconnect), never an overcount.
+	OnChannelMarked(channelID, ts string, unreadCount, mentionCount int)
 	// OnThreadMarked is delivered when Slack pushes a thread_marked
-	// event. read indicates whether the thread is now read (true) or
-	// unread (false). ts is the new boundary within the thread.
-	OnThreadMarked(channelID, threadTS, ts string, read bool)
+	// event: the user's read cursor inside a thread moved (in either
+	// direction). lastRead is the new cursor.
+	//
+	// subscribed is the subscription block's `active` flag, and means
+	// exactly what it says: the user is subscribed to this thread. It
+	// must NEVER be used to derive read/unread — doing so was the
+	// reported bug, because replying to a thread auto-subscribes you
+	// and so echoes active=true, which slk read as "unread" and used
+	// to re-flag the thread the user was looking at. Read/unread is a
+	// comparison of lastRead against the thread's newest known reply,
+	// nothing else. What subscribed IS good for is telling a receiver
+	// whether creating a missing thread_subscriptions row is
+	// legitimate; the durable `active` column stays owned by
+	// OnThreadSubscriptionChanged and the getView reconcile.
+	OnThreadMarked(channelID, threadTS, lastRead string, subscribed Subscribed)
 
 	// OnThreadSubscriptionChanged is delivered for thread_subscribed and
 	// thread_unsubscribed WS events. active=true on subscribe,
 	// active=false on unsubscribe. lastRead is the per-thread last_read ts
 	// the server reports — pass-through to thread_subscriptions.last_read.
-	// The payload shape is identical to thread_marked.subscription, so
-	// implementations can share state-update logic with OnThreadMarked
-	// (this handler is the persistence-only path; OnThreadMarked also
-	// drives the UI's read-state side effects).
+	//
+	// The payload shape is identical to thread_marked.subscription, but
+	// the HANDLING must not be shared: this handler owns the `active`
+	// column and is required to write it, while OnThreadMarked is
+	// forbidden from writing it — a thread_marked that tombstoned or
+	// resurrected a row is a bug slk has already shipped once. Only the
+	// last_read pass-through is common. The bool parameters are
+	// distinctly typed (Subscribed vs plain bool) so that the two
+	// handlers cannot be transposed silently.
 	OnThreadSubscriptionChanged(channelID, threadTS, lastRead string, active bool)
 
 	// OnConversationOpened is delivered when a new or previously-closed
@@ -86,6 +121,24 @@ type EventHandler interface {
 
 	// OnMemberLeft is delivered for member_left_channel WS events.
 	OnMemberLeft(channelID, userID string)
+
+	// OnUserStatusChange is delivered for user_change and
+	// user_status_changed, which carry a full user record. Measured on
+	// a real workspace, the socket sends these only for the
+	// authenticated user; other users' changes arrive as
+	// OnUserInvalidated.
+	OnUserStatusChange(userID string, st UserStatus)
+	// OnUserInvalidated is delivered for user_invalidated, whose whole
+	// payload is a user ID: that user's profile changed, and the
+	// receiver must refetch it to learn how.
+	OnUserInvalidated(userID string)
+	// OnDNDInvalidated is delivered for dnd_invalidated, the ID-only
+	// counterpart of OnUserInvalidated for a user's DND state.
+	OnDNDInvalidated(userID string)
+	// OnUserDNDChange is delivered for a dnd_updated_user event naming
+	// a user. Never observed on the socket; handled so that another
+	// user's DND can never be mistaken for the authenticated user's.
+	OnUserDNDChange(userID string, enabled bool, endUnix int64)
 }
 
 // wsEvent is the minimal structure for identifying a WebSocket event type.
@@ -182,9 +235,45 @@ type wsDNDStatusInner struct {
 }
 
 // wsDNDUpdatedEvent represents a dnd_updated or dnd_updated_user event.
+// User is set only on dnd_updated_user, which is about another user.
 type wsDNDUpdatedEvent struct {
 	Type      string           `json:"type"`
+	User      string           `json:"user"`
 	DNDStatus wsDNDStatusInner `json:"dnd_status"`
+}
+
+// wsUserChangeEvent represents user_change and user_status_changed.
+// The payload is a full user record; only the status fields slk
+// renders are modelled.
+type wsUserChangeEvent struct {
+	Type string `json:"type"`
+	User struct {
+		ID      string     `json:"id"`
+		Profile UserStatus `json:"profile"`
+	} `json:"user"`
+}
+
+// UserStatus is the part of a user's profile that renders next to their
+// name. Its JSON tags are the profile keys, so a user_change profile
+// decodes straight into it.
+type UserStatus struct {
+	Emoji      string `json:"status_emoji"`
+	Text       string `json:"status_text"`
+	Expiration int64  `json:"status_expiration"`
+	// HuddleState is "in_a_huddle" while the user is in a huddle and
+	// "default_unset" otherwise.
+	HuddleState      string `json:"huddle_state"`
+	HuddleExpiration int64  `json:"huddle_state_expiration_ts"`
+}
+
+// wsUserInvalidatedEvent represents user_invalidated and
+// dnd_invalidated. Measured on a real workspace, the whole payload is
+// {type, event_ts, user:{id}}.
+type wsUserInvalidatedEvent struct {
+	Type string `json:"type"`
+	User struct {
+		ID string `json:"id"`
+	} `json:"user"`
 }
 
 // wsChannelMarkedEvent represents a channel_marked / im_marked /
@@ -195,6 +284,10 @@ type wsChannelMarkedEvent struct {
 	Channel            string `json:"channel"`
 	TS                 string `json:"ts"`
 	UnreadCountDisplay int    `json:"unread_count_display"`
+	// MentionCount drives the sidebar mention badge. Absent on payloads
+	// that omit it, which decodes to 0 and clears the badge rather than
+	// dropping the event.
+	MentionCount int `json:"mention_count"`
 }
 
 // wsConversationOpenedEvent is the shared shape for mpim_open, im_created,
@@ -245,9 +338,9 @@ func (e wsPrefChangeEvent) stringValue() string {
 
 // wsThreadMarkedEvent represents a thread_marked event from Slack's
 // browser-protocol WebSocket. The subscription block carries the
-// channel/thread/last-read-ts and an `active` flag (true means the
-// thread is now unread / subscribed for unread updates; false means
-// the thread is now read).
+// channel/thread and the new last-read ts. It also carries an `active`
+// flag, which means "subscribed for unread updates" — the same meaning
+// it has in wsThreadSubscribedEvent — and is NOT a read/unread signal.
 type wsThreadMarkedEvent struct {
 	Type         string `json:"type"`
 	Subscription struct {
@@ -348,7 +441,7 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 		}
 		handler.OnSelfPresenceChange(evt.Presence)
 
-	case "dnd_updated", "dnd_updated_user":
+	case "dnd_updated":
 		var evt wsDNDUpdatedEvent
 		if err := json.Unmarshal(data, &evt); err != nil {
 			return
@@ -356,14 +449,45 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 		isDND, end := computeDNDState(evt.DNDStatus, time.Now().Unix())
 		handler.OnDNDChange(isDND, end)
 
+	case "dnd_updated_user":
+		// About another user. Routing it into OnDNDChange would flip
+		// slk's own DND segment, so one naming no user is dropped.
+		var evt wsDNDUpdatedEvent
+		if err := json.Unmarshal(data, &evt); err != nil || evt.User == "" {
+			return
+		}
+		isDND, end := computeDNDState(evt.DNDStatus, time.Now().Unix())
+		debuglog.WS("dnd_updated_user: user=%s dnd=%v end=%d", evt.User, isDND, end)
+		handler.OnUserDNDChange(evt.User, isDND, end)
+
+	case "user_change", "user_status_changed":
+		var evt wsUserChangeEvent
+		if err := json.Unmarshal(data, &evt); err != nil || evt.User.ID == "" {
+			return
+		}
+		debuglog.WS("%s: user=%s huddle_state=%q", evt.Type, evt.User.ID, evt.User.Profile.HuddleState)
+		handler.OnUserStatusChange(evt.User.ID, evt.User.Profile)
+
+	case "user_invalidated", "dnd_invalidated":
+		var evt wsUserInvalidatedEvent
+		if err := json.Unmarshal(data, &evt); err != nil || evt.User.ID == "" {
+			return
+		}
+		debuglog.WS("%s: user=%s", evt.Type, evt.User.ID)
+		if evt.Type == "user_invalidated" {
+			handler.OnUserInvalidated(evt.User.ID)
+		} else {
+			handler.OnDNDInvalidated(evt.User.ID)
+		}
+
 	case "channel_marked", "im_marked", "group_marked", "mpim_marked":
 		var evt wsChannelMarkedEvent
 		if err := json.Unmarshal(data, &evt); err != nil {
 			return
 		}
-		debuglog.WS("%s: channel=%s ts=%s unread_count=%d",
-			evt.Type, evt.Channel, evt.TS, evt.UnreadCountDisplay)
-		handler.OnChannelMarked(evt.Channel, evt.TS, evt.UnreadCountDisplay)
+		debuglog.WS("%s: channel=%s ts=%s unread_count=%d mention_count=%d",
+			evt.Type, evt.Channel, evt.TS, evt.UnreadCountDisplay, evt.MentionCount)
+		handler.OnChannelMarked(evt.Channel, evt.TS, evt.UnreadCountDisplay, evt.MentionCount)
 
 	case "mpim_open", "im_created", "im_open", "group_joined", "channel_joined":
 		var evt wsConversationOpenedEvent
@@ -379,12 +503,14 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 		if err := json.Unmarshal(data, &evt); err != nil {
 			return
 		}
-		// active=true means subscribed-for-unread, i.e. the thread is
-		// now unread. Invert for the read flag we hand to the handler.
-		read := !evt.Subscription.Active
-		debuglog.WS("thread_marked: channel=%s thread_ts=%s last_read=%s read=%v",
-			evt.Subscription.Channel, evt.Subscription.ThreadTS, evt.Subscription.LastRead, read)
-		handler.OnThreadMarked(evt.Subscription.Channel, evt.Subscription.ThreadTS, evt.Subscription.LastRead, read)
+		debuglog.WS("thread_marked: channel=%s thread_ts=%s last_read=%s active=%t",
+			evt.Subscription.Channel, evt.Subscription.ThreadTS,
+			evt.Subscription.LastRead, evt.Subscription.Active)
+		// Active is forwarded as `subscribed`, a subscription signal
+		// only. See OnThreadMarked's doc for why it must never reach a
+		// read/unread decision.
+		handler.OnThreadMarked(evt.Subscription.Channel, evt.Subscription.ThreadTS,
+			evt.Subscription.LastRead, Subscribed(evt.Subscription.Active))
 
 	case "thread_subscribed", "thread_unsubscribed":
 		var evt wsThreadSubscribedEvent
@@ -485,6 +611,18 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			debuglog.WS("unknown event type=%q raw=%s", evt.Type, string(payload))
 		}
 	}
+}
+
+// DNDStateFromStatus is computeDNDState for a dnd.info or dnd.teamInfo
+// result, which slack-go decodes into its own type.
+func DNDStateFromStatus(st slack.DNDStatus, now int64) (bool, int64) {
+	return computeDNDState(wsDNDStatusInner{
+		Enabled:        st.Enabled,
+		SnoozeEnabled:  st.SnoozeEnabled,
+		SnoozeEndTime:  int64(st.SnoozeEndTime),
+		NextDNDStartTS: int64(st.NextStartTimestamp),
+		NextDNDEndTS:   int64(st.NextEndTimestamp),
+	}, now)
 }
 
 // computeDNDState evaluates whether the user is currently in DND from

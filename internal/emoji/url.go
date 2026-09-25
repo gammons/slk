@@ -157,8 +157,17 @@ var skinToneCodepoints = [...]rune{
 
 // ComposeSkinTonedCodepoints decomposes a skin-toned shortcode name
 // (either Slack's "::skin-tone-N" or kyokomi's "_toneN" form), looks
-// up the base shortcode in the kyokomi codemap, and appends the
-// matching skin-tone modifier codepoint.
+// up the base shortcode in the kyokomi codemap, and inserts the
+// matching skin-tone modifier codepoint right after the base (first)
+// codepoint.
+//
+// The skin-tone modifier applies to the base emoji — the first
+// codepoint in the sequence. For simple emojis (e.g. 👍 = U+1F44D)
+// this is equivalent to appending. For ZWJ sequences (e.g.
+// 🏃‍➡️ = U+1F3C3 U+200D U+27A1 U+FE0F) the modifier MUST go
+// after the base codepoint and BEFORE the ZWJ, producing
+// "1f3c3-1f3fb-200d-27a1-fe0f" — NOT "1f3c3-200d-27a1-fe0f-1f3fb",
+// which 404s on Slack's CDN.
 //
 // Used by URLForShortcode as a fallback for skin-toned variants that
 // aren't pre-resolved in kyokomi's codemap (e.g. ":+1_tone3:" is not
@@ -181,9 +190,14 @@ func ComposeSkinTonedCodepoints(name string) ([]rune, bool) {
 	if !ok {
 		return nil, false
 	}
+	// Insert the skin-tone modifier after the first codepoint (the
+	// base emoji), before any ZWJ / VS16 tail. This matches the
+	// codepoint ordering Slack's CDN uses for skin-toned ZWJ emoji
+	// assets.
 	out := make([]rune, len(baseCps)+1)
-	copy(out, baseCps)
-	out[len(baseCps)] = skinToneCodepoints[tone]
+	out[0] = baseCps[0]
+	out[1] = skinToneCodepoints[tone]
+	copy(out[2:], baseCps[1:])
 	return out, true
 }
 

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gammons/slk/internal/core"
 )
 
 func loadActivityFixture(t *testing.T) ActivityFeedResult {
@@ -170,15 +172,15 @@ func TestParseActivityMessages_Fixture(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("want 3 hydrated messages, got %d: %v", len(got), got)
 	}
-	m, ok := got[ActivityMsgKey("C0001TEST", "1700000001.000100")]
+	m, ok := got[core.ActivityMsgKey("C0001TEST", "1700000001.000100")]
 	if !ok || m.Text != "first hydrated body" || m.UserID != "U0001TEST" {
 		t.Fatalf("C0001 first message wrong: %+v ok=%v", m, ok)
 	}
-	if _, ok := got[ActivityMsgKey("C0002TEST", "1700000003.000300")]; !ok {
+	if _, ok := got[core.ActivityMsgKey("C0002TEST", "1700000003.000300")]; !ok {
 		t.Fatalf("second channel message missing")
 	}
 	// The empty-ts message must not produce a key.
-	if _, ok := got[ActivityMsgKey("C0001TEST", "")]; ok {
+	if _, ok := got[core.ActivityMsgKey("C0001TEST", "")]; ok {
 		t.Fatalf("empty-ts message should be skipped")
 	}
 	// The malformed channel must contribute nothing (and not error above).
@@ -203,7 +205,7 @@ func TestActivityMsgKey_NoCollision(t *testing.T) {
 	// Distinct (channel, ts) pairs must not collide even when the raw
 	// concatenations would ("C1"+"2.3" vs "C1"+"2.3" is fine, but the
 	// separator prevents "C1","2.3" from matching "C","12.3").
-	if ActivityMsgKey("C1", "2.3") == ActivityMsgKey("C", "12.3") {
+	if core.ActivityMsgKey("C1", "2.3") == core.ActivityMsgKey("C", "12.3") {
 		t.Fatal("ActivityMsgKey collision across a shifted channel/ts boundary")
 	}
 }

@@ -19,7 +19,10 @@
 // continues to work for white-box tests.
 package ui
 
-import "github.com/gammons/slk/internal/ids"
+import (
+	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/ids"
+)
 
 // navStack is a per-workspace browser-style back/forward history of
 // channel IDs. cursor points at the current entry; len(entries)==0
@@ -95,7 +98,7 @@ func (s *navHistoryStore) Push(teamID, channelID string) {
 // On return, the stack's cursor points at the surviving target entry
 // (or stays put if no valid target was found). Stale entries
 // discovered during the walk are removed regardless of outcome.
-func (s *navHistoryStore) Walk(teamID string, step int, lookup ChannelLookupFunc) (id, name, channelType string, ok bool) {
+func (s *navHistoryStore) Walk(teamID string, step int, lookup core.ChannelLookupFunc) (id, name, channelType string, ok bool) {
 	stack, exists := s.stacks[teamID]
 	if !exists || stack.cursor < 0 {
 		return "", "", "", false

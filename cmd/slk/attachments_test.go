@@ -67,3 +67,29 @@ func TestPickAttachmentURLFileUsesPermalink(t *testing.T) {
 		t.Errorf("expected Permalink for non-image, got %q", got)
 	}
 }
+
+// TestExtractAttachmentsPopulatesDownloadFields confirms every
+// attachment carries the auth-gated URLPrivate for the `d` download
+// keybinding, plus the byte size for the picker row.
+func TestExtractAttachmentsPopulatesDownloadFields(t *testing.T) {
+	files := []slack.File{
+		{
+			ID:         "F1",
+			Mimetype:   "text/csv",
+			Title:      "report.csv",
+			Permalink:  "https://team.slack.com/files/U/F1",
+			URLPrivate: "https://files.slack.com/files-pri/T-F1/report.csv",
+			Size:       1234,
+		},
+	}
+	atts := extractAttachments(files)
+	if len(atts) != 1 {
+		t.Fatalf("got %d attachments", len(atts))
+	}
+	if atts[0].DownloadURL != files[0].URLPrivate {
+		t.Errorf("DownloadURL = %q", atts[0].DownloadURL)
+	}
+	if atts[0].Size != 1234 {
+		t.Errorf("Size = %d", atts[0].Size)
+	}
+}

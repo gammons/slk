@@ -39,7 +39,7 @@ func handleNewMessageMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		a.newMessageCancelled = false
 		reqID := a.newMessageInFlightID
 		userIDs := result.UserIDs
-		return a.channels.OpenConversation(userIDs, reqID)
+		return teaCmd(a.channels.OpenConversation(userIDs, reqID))
 	}
 
 	// Picker closed itself (Esc). Mark any in-flight submit as

@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"reflect"
 	"testing"
 )
 
@@ -177,32 +178,34 @@ func TestGetWorkspaceReadState_ReturnsAllChannels(t *testing.T) {
 	}
 }
 
-func TestWorkspacesWithUnreads(t *testing.T) {
+func TestUnreadChannels(t *testing.T) {
 	db, err := New(":memory:")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	defer db.Close()
+	newRSChannel(t, db, "C2", "T1")
 	newRSChannel(t, db, "C1", "T1")
-	newRSChannel(t, db, "C2", "T2")
-	newRSChannel(t, db, "C3", "T3")
+	newRSChannel(t, db, "C3", "T2")
+	newRSChannel(t, db, "C4", "T3")
 
 	_ = db.UpdateChannelReadState("C1", "1.0", true)
-	_ = db.UpdateChannelReadState("C3", "1.0", true)
-	// C2/T2 has no unreads
+	_ = db.UpdateChannelReadState("C2", "2.0", true)
+	_ = db.SetChannelMentionCount("C2", 3)
+	_ = db.UpdateChannelReadState("C4", "4.0", true)
+	// C3/T2 has no unreads and must not appear at all.
 
-	got, err := db.WorkspacesWithUnreads()
+	got, err := db.UnreadChannels()
 	if err != nil {
-		t.Fatalf("WorkspacesWithUnreads: %v", err)
+		t.Fatalf("UnreadChannels: %v", err)
 	}
-	want := map[string]bool{"T1": true, "T3": true}
-	if len(got) != 2 {
-		t.Fatalf("got %d ids, want 2: %v", len(got), got)
+	want := []UnreadChannel{
+		{WorkspaceID: "T1", ChannelID: "C1", State: ReadState{LastReadTS: "1.0", HasUnread: true}},
+		{WorkspaceID: "T1", ChannelID: "C2", State: ReadState{LastReadTS: "2.0", HasUnread: true, MentionCount: 3}},
+		{WorkspaceID: "T3", ChannelID: "C4", State: ReadState{LastReadTS: "4.0", HasUnread: true}},
 	}
-	for _, id := range got {
-		if !want[id] {
-			t.Errorf("unexpected workspace %q", id)
-		}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("UnreadChannels =\n%+v\nwant\n%+v", got, want)
 	}
 }
 
@@ -315,5 +318,233 @@ func TestUpsertChannel_DoesNotClobberReadState(t *testing.T) {
 	}
 	if !state.HasUnread {
 		t.Errorf("HasUnread = false after upsert (clobber regression!)")
+	}
+}
+
+func TestSetChannelMentionCount(t *testing.T) {
+	db, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer db.Close()
+	newRSChannel(t, db, "C1", "T1")
+
+	if err := db.SetChannelMentionCount("C1", 4); err != nil {
+		t.Fatalf("SetChannelMentionCount: %v", err)
+	}
+	state, err := db.GetChannelReadState("C1")
+	if err != nil {
+		t.Fatalf("GetChannelReadState: %v", err)
+	}
+	if state.MentionCount != 4 {
+		t.Errorf("MentionCount = %d, want 4", state.MentionCount)
+	}
+
+	// Overwrite, including back down to zero — the read paths rely on
+	// this to clear a badge.
+	if err := db.SetChannelMentionCount("C1", 0); err != nil {
+		t.Fatalf("SetChannelMentionCount(0): %v", err)
+	}
+	state, err = db.GetChannelReadState("C1")
+	if err != nil {
+		t.Fatalf("GetChannelReadState: %v", err)
+	}
+	if state.MentionCount != 0 {
+		t.Errorf("MentionCount = %d, want 0 after reset", state.MentionCount)
+	}
+}
+
+func TestIncrementChannelMentionCount_AccumulatesFromZero(t *testing.T) {
+	db, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer db.Close()
+	newRSChannel(t, db, "C1", "T1")
+
+	// A freshly upserted channel has mention_count = 0 by column
+	// default, so the first increment must yield 1 rather than error or
+	// leave NULL.
+	for i := 1; i <= 3; i++ {
+		if err := db.IncrementChannelMentionCount("C1"); err != nil {
+			t.Fatalf("increment %d: %v", i, err)
+		}
+		state, err := db.GetChannelReadState("C1")
+		if err != nil {
+			t.Fatalf("GetChannelReadState: %v", err)
+		}
+		if state.MentionCount != i {
+			t.Errorf("after %d increments MentionCount = %d, want %d", i, state.MentionCount, i)
+		}
+	}
+}
+
+// The mention setters must not disturb the columns that drive the unread
+// dot and the "new messages" divider. An earlier design threaded mention
+// count through UpdateChannelReadState; this test pins the separation.
+func TestMentionSetters_DoNotDisturbReadState(t *testing.T) {
+	db, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer db.Close()
+	newRSChannel(t, db, "C1", "T1")
+
+	if err := db.UpdateChannelReadState("C1", "1700000000.000009", true); err != nil {
+		t.Fatalf("UpdateChannelReadState: %v", err)
+	}
+	if err := db.SetChannelMentionCount("C1", 2); err != nil {
+		t.Fatalf("SetChannelMentionCount: %v", err)
+	}
+	if err := db.IncrementChannelMentionCount("C1"); err != nil {
+		t.Fatalf("IncrementChannelMentionCount: %v", err)
+	}
+
+	state, err := db.GetChannelReadState("C1")
+	if err != nil {
+		t.Fatalf("GetChannelReadState: %v", err)
+	}
+	if state.LastReadTS != "1700000000.000009" {
+		t.Errorf("LastReadTS = %q, want preserved 1700000000.000009", state.LastReadTS)
+	}
+	if !state.HasUnread {
+		t.Error("HasUnread = false, want preserved true")
+	}
+	if state.MentionCount != 3 {
+		t.Errorf("MentionCount = %d, want 3", state.MentionCount)
+	}
+}
+
+func TestBatchUpdateChannelReadState_WritesMentionCount(t *testing.T) {
+	db, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer db.Close()
+	newRSChannel(t, db, "C1", "T1")
+	newRSChannel(t, db, "C2", "T1")
+
+	// C1 exercises the "both columns" statement (non-empty LastReadTS);
+	// C2 exercises the flag-only statement (empty LastReadTS).
+	updates := []ChannelReadStateUpdate{
+		{ChannelID: "C1", LastReadTS: "1.0001", HasUnread: true, MentionCount: 7},
+		{ChannelID: "C2", LastReadTS: "", HasUnread: true, MentionCount: 2},
+	}
+	if err := db.BatchUpdateChannelReadState(updates); err != nil {
+		t.Fatalf("BatchUpdateChannelReadState: %v", err)
+	}
+
+	for _, want := range []struct {
+		id    string
+		count int
+	}{{"C1", 7}, {"C2", 2}} {
+		state, err := db.GetChannelReadState(want.id)
+		if err != nil {
+			t.Fatalf("GetChannelReadState(%s): %v", want.id, err)
+		}
+		if state.MentionCount != want.count {
+			t.Errorf("%s MentionCount = %d, want %d", want.id, state.MentionCount, want.count)
+		}
+	}
+}
+
+// Boot applies an authoritative full snapshot. A channel the user read in
+// another client while slk was closed is simply absent from
+// client.counts, so the workspace-wide reset must clear its mention count
+// as well as its unread flag — otherwise a stale badge survives forever.
+func TestReplaceWorkspaceReadState_ZeroesAbsentChannelMentionCount(t *testing.T) {
+	db, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer db.Close()
+	newRSChannel(t, db, "C1", "T1")
+	newRSChannel(t, db, "C2", "T1")
+
+	if err := db.SetChannelMentionCount("C1", 5); err != nil {
+		t.Fatalf("seed C1: %v", err)
+	}
+	if err := db.SetChannelMentionCount("C2", 9); err != nil {
+		t.Fatalf("seed C2: %v", err)
+	}
+
+	// Snapshot mentions C1 only. C2 must be reset.
+	if err := db.ReplaceWorkspaceReadState("T1", []ChannelReadStateUpdate{
+		{ChannelID: "C1", LastReadTS: "1.0", HasUnread: true, MentionCount: 3},
+	}); err != nil {
+		t.Fatalf("ReplaceWorkspaceReadState: %v", err)
+	}
+
+	c1, err := db.GetChannelReadState("C1")
+	if err != nil {
+		t.Fatalf("GetChannelReadState(C1): %v", err)
+	}
+	if c1.MentionCount != 3 {
+		t.Errorf("C1 MentionCount = %d, want 3", c1.MentionCount)
+	}
+	c2, err := db.GetChannelReadState("C2")
+	if err != nil {
+		t.Fatalf("GetChannelReadState(C2): %v", err)
+	}
+	if c2.MentionCount != 0 {
+		t.Errorf("C2 MentionCount = %d, want 0 (absent from snapshot)", c2.MentionCount)
+	}
+}
+
+// The boot path builds its updates from client.counts, whose last_read
+// field can be empty. Such an entry takes ReplaceWorkspaceReadState's
+// flag-only statement, which must still write mention_count while leaving
+// the existing last_read_ts alone.
+func TestReplaceWorkspaceReadState_EmptyLastReadTSWritesMentionCount(t *testing.T) {
+	db, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer db.Close()
+	newRSChannel(t, db, "C1", "T1")
+
+	// Prior-session last_read_ts that the snapshot has no fresh value for.
+	if err := db.UpdateChannelReadState("C1", "1700000000.000042", false); err != nil {
+		t.Fatalf("seed C1: %v", err)
+	}
+
+	if err := db.ReplaceWorkspaceReadState("T1", []ChannelReadStateUpdate{
+		{ChannelID: "C1", LastReadTS: "", HasUnread: true, MentionCount: 8},
+	}); err != nil {
+		t.Fatalf("ReplaceWorkspaceReadState: %v", err)
+	}
+
+	state, err := db.GetChannelReadState("C1")
+	if err != nil {
+		t.Fatalf("GetChannelReadState: %v", err)
+	}
+	if state.MentionCount != 8 {
+		t.Errorf("MentionCount = %d, want 8", state.MentionCount)
+	}
+	if state.LastReadTS != "1700000000.000042" {
+		t.Errorf("LastReadTS = %q, want preserved %q", state.LastReadTS, "1700000000.000042")
+	}
+	if !state.HasUnread {
+		t.Errorf("HasUnread = false, want true")
+	}
+}
+
+func TestGetWorkspaceReadState_IncludesMentionCount(t *testing.T) {
+	db, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer db.Close()
+	newRSChannel(t, db, "C1", "T1")
+
+	if err := db.SetChannelMentionCount("C1", 6); err != nil {
+		t.Fatalf("SetChannelMentionCount: %v", err)
+	}
+	m, err := db.GetWorkspaceReadState("T1")
+	if err != nil {
+		t.Fatalf("GetWorkspaceReadState: %v", err)
+	}
+	if m["C1"].MentionCount != 6 {
+		t.Errorf("C1 MentionCount = %d, want 6", m["C1"].MentionCount)
 	}
 }

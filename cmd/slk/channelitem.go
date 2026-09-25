@@ -5,9 +5,29 @@ import (
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/slackfmt"
 	"github.com/gammons/slk/internal/ui/channelfinder"
+	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/slack-go/slack"
 )
+
+// seedDMFromCache copies a DM peer's cached presence and status onto a
+// freshly built DM item, so the row shows them before any live event.
+func seedDMFromCache(db *cache.DB, userID string, item *sidebar.ChannelItem, finderItem *channelfinder.Item) {
+	if db == nil {
+		return
+	}
+	u, err := db.GetUser(userID)
+	if err != nil {
+		return
+	}
+	if u.Presence != "" {
+		item.Presence = u.Presence
+		finderItem.Presence = u.Presence
+	}
+	item.Status = peerstatus.Status{}.
+		WithStatus(u.StatusEmoji, u.StatusText, statusExpiry(u.StatusExpiration)).
+		WithHuddle(u.HuddleState, statusExpiry(u.HuddleExpiration))
+}
 
 // buildChannelItem converts a Slack conversation into the sidebar
 // ChannelItem + finder Item shape used everywhere in slk. Pure function:

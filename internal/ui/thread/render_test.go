@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
@@ -96,5 +97,40 @@ func TestRenderThreadMessageTopLevelBlocks(t *testing.T) {
 	got, _, _ := m.renderThreadMessage(msg, width, nil, nil, false)
 	if !strings.Contains(got, "Deploy finished: v1.2.3") {
 		t.Errorf("thread render missing top-level block content; got %q", got)
+	}
+}
+
+// TestRenderThreadMessageBlocksCarryBody asserts that a reply whose
+// blocks carry its body draws no body row: the notification fallback in
+// msg.Text is not drawn, the block content sits directly under the
+// header rather than after an empty row, and the reaction hit row still
+// lands on the reaction line.
+func TestRenderThreadMessageBlocksCarryBody(t *testing.T) {
+	const width = 60
+	m := New()
+	msg := messages.MessageItem{
+		TS:        "1700000004.000000",
+		UserName:  "deploybot",
+		Timestamp: "10:33 AM",
+		Text:      "deploy notification fallback",
+		Blocks: []blockkit.Block{
+			blockkit.SectionBlock{Text: "Deploy finished: v1.2.3"},
+		},
+		Reactions: []messages.ReactionItem{{Emoji: "tada", Count: 1}},
+	}
+	got, _, hits := m.renderThreadMessage(msg, width, nil, nil, false)
+	plain := ansi.Strip(got)
+	if strings.Contains(plain, "deploy notification fallback") {
+		t.Errorf("fallback text drawn beside its blocks; got %q", plain)
+	}
+	lines := strings.Split(plain, "\n")
+	if len(lines) < 2 || !strings.Contains(lines[1], "Deploy finished: v1.2.3") {
+		t.Fatalf("row 1 should be the section block, not an empty body row; got %q", lines)
+	}
+	if len(hits) == 0 {
+		t.Fatal("no reaction hits recorded")
+	}
+	if row := hits[0].rowStartInEntry; row != len(lines)-1 {
+		t.Errorf("reaction hit row = %d, want %d (the reaction line); got %q", row, len(lines)-1, lines)
 	}
 }

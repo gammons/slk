@@ -3,6 +3,7 @@ package slackclient
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -36,8 +37,9 @@ type SlackAPI interface {
 	GetUsersInConversationContext(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error)
 	GetUserInfo(user string) (*slack.User, error)
 	GetBotInfoContext(ctx context.Context, parameters slack.GetBotInfoParameters) (*slack.Bot, error)
-	GetEmoji() (map[string]string, error)
+	GetEmojiContext(ctx context.Context) (map[string]string, error)
 	PostMessage(channelID string, options ...slack.MsgOption) (string, string, error)
+	PostMessageContext(ctx context.Context, channelID string, options ...slack.MsgOption) (string, string, error)
 	UpdateMessage(channelID, timestamp string, options ...slack.MsgOption) (string, string, string, error)
 	DeleteMessage(channelID, timestamp string) (string, string, error)
 	AddReaction(name string, item slack.ItemRef) error
@@ -51,8 +53,12 @@ type SlackAPI interface {
 	EndSnoozeContext(ctx context.Context) (*slack.DNDStatus, error)
 	EndDNDContext(ctx context.Context) error
 	GetDNDInfoContext(ctx context.Context, user *string, options ...slack.ParamOption) (*slack.DNDStatus, error)
+	// GetDNDTeamInfoContext is dnd.teamInfo. It is asked only about the
+	// users slk renders a DND marker for, never the whole team.
+	GetDNDTeamInfoContext(ctx context.Context, users []string, options ...slack.ParamOption) (map[string]slack.DNDStatus, error)
 	UploadFileContext(ctx context.Context, params slack.UploadFileParameters) (*slack.FileSummary, error)
 	OpenConversationContext(ctx context.Context, params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error)
+	GetConversationInfoContext(ctx context.Context, input *slack.GetConversationInfoInput) (*slack.Channel, error)
 }
 
 // defaultAPIBaseURL is the canonical Slack Web API root used as a fallback
@@ -543,6 +549,15 @@ func (c *Client) GetChannels(ctx context.Context) ([]slack.Channel, error) {
 	return allChannels, nil
 }
 
+// GetConversationInfo fetches one conversation (conversations.info).
+func (c *Client) GetConversationInfo(ctx context.Context, channelID string) (*slack.Channel, error) {
+	ch, err := c.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: channelID})
+	if err != nil {
+		return nil, fmt.Errorf("getting conversation %s: %w", channelID, err)
+	}
+	return ch, nil
+}
+
 // GetUsersInConversation returns all user IDs that are members of the
 // given conversation (channel, DM, group DM, or shared channel). Paginates
 // 1000 IDs per page. On 429 responses, sleeps the server-advised RetryAfter
@@ -831,7 +846,12 @@ func (c *Client) GetUserGroups(ctx context.Context) ([]slack.UserGroup, error) {
 // emoji.list API. Returns a map of emoji name -> URL or "alias:targetname".
 // The map is empty if the workspace has no custom emojis.
 func (c *Client) ListCustomEmoji(ctx context.Context) (map[string]string, error) {
-	emojis, err := c.api.GetEmoji()
+	// GetEmojiContext, not GetEmoji: the latter hardcodes
+	// context.Background() internally, so ctx was silently dropped and
+	// a shutdown could not cancel this. Harmless while the call only
+	// ran on the rare conversations.history fallback; it now runs on
+	// every workspace connect.
+	emojis, err := c.api.GetEmojiContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing custom emoji: %w", err)
 	}
@@ -925,9 +945,23 @@ func (c *Client) UploadFile(
 // UnreadInfo holds the unread state for a single channel.
 type UnreadInfo struct {
 	ChannelID string
-	Count     int
-	HasUnread bool
-	LastRead  string // Slack message timestamp
+	// MentionCount is Slack's per-conversation mention count. For
+	// channels it counts @-mentions; for ims and mpims Slack reports
+	// every unread message, which is exactly the DM badge semantics the
+	// official client shows. Zero is meaningful: an unread channel with
+	// no mentions reports 0 and must render a dot, not a "1".
+	//
+	// That ims/mpims reading is the branch's load-bearing hypothesis and
+	// it is UNVERIFIED: no capture in this repo proves what those two
+	// blocks carry. If it is wrong, an im or mpim with unread messages
+	// but no @-mention reports 0 here, which undercounts the badge and
+	// self-corrects at the next refresh; it cannot overcount. Every
+	// restatement of these semantics — comments, doc comments, tests —
+	// must carry the same caveat. See §Semantics in
+	// docs/superpowers/specs/2026-09-09-mention-badges-design.md.
+	MentionCount int
+	HasUnread    bool
+	LastRead     string // Slack message timestamp
 }
 
 // ThreadsAggregate captures Slack's server-side notion of whether the
@@ -986,9 +1020,10 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
 			LastRead     string `json:"last_read"`
 		} `json:"mpims"`
 		Ims []struct {
-			ID         string `json:"id"`
-			HasUnreads bool   `json:"has_unreads"`
-			LastRead   string `json:"last_read"`
+			ID           string `json:"id"`
+			HasUnreads   bool   `json:"has_unreads"`
+			MentionCount int    `json:"mention_count"`
+			LastRead     string `json:"last_read"`
 		} `json:"ims"`
 		// Threads is the workspace-wide thread-subscription rollup.
 		// Slack returns this top-level when the user has subscribed
@@ -1011,41 +1046,34 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
 	}
 
 	var unreads []UnreadInfo
+	// All three conversation kinds carry mention_count and are handled
+	// identically. The previous code floored the value to 1 whenever a
+	// conversation had unreads but no mentions, and hardcoded 1 for
+	// every im — a fabrication that was invisible only because nothing
+	// read the field.
 	for _, ch := range result.Channels {
-		info := UnreadInfo{
-			ChannelID: ch.ID,
-			LastRead:  ch.LastRead,
-			HasUnread: ch.HasUnreads,
-		}
-		if ch.HasUnreads {
-			info.Count = ch.MentionCount
-			if info.Count == 0 {
-				info.Count = 1 // has unreads but no mention count
-			}
-		}
-		unreads = append(unreads, info)
+		unreads = append(unreads, UnreadInfo{
+			ChannelID:    ch.ID,
+			MentionCount: ch.MentionCount,
+			HasUnread:    ch.HasUnreads,
+			LastRead:     ch.LastRead,
+		})
 	}
 	for _, ch := range result.Mpims {
-		info := UnreadInfo{
-			ChannelID: ch.ID,
-			LastRead:  ch.LastRead,
-			HasUnread: ch.HasUnreads,
-		}
-		if ch.HasUnreads {
-			info.Count = max(ch.MentionCount, 1)
-		}
-		unreads = append(unreads, info)
+		unreads = append(unreads, UnreadInfo{
+			ChannelID:    ch.ID,
+			MentionCount: ch.MentionCount,
+			HasUnread:    ch.HasUnreads,
+			LastRead:     ch.LastRead,
+		})
 	}
 	for _, ch := range result.Ims {
-		info := UnreadInfo{
-			ChannelID: ch.ID,
-			LastRead:  ch.LastRead,
-			HasUnread: ch.HasUnreads,
-		}
-		if ch.HasUnreads {
-			info.Count = 1
-		}
-		unreads = append(unreads, info)
+		unreads = append(unreads, UnreadInfo{
+			ChannelID:    ch.ID,
+			MentionCount: ch.MentionCount,
+			HasUnread:    ch.HasUnreads,
+			LastRead:     ch.LastRead,
+		})
 	}
 
 	threads := ThreadsAggregate{
@@ -1056,9 +1084,13 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
 	return unreads, threads, nil
 }
 
-// SendReply posts a threaded reply to the specified message.
-// Returns the timestamp and the converted mrkdwn text actually sent.
-func (c *Client) SendReply(ctx context.Context, channelID, threadTS, text string) (string, string, error) {
+// SendReply posts a threaded reply to the specified message. When
+// broadcast is true, the reply is also posted to the parent channel
+// feed (chat.postMessage reply_broadcast=true, Slack's "Also send to
+// #channel" checkbox); Slack surfaces such replies with the
+// thread_broadcast subtype. Returns the timestamp and the converted
+// mrkdwn text actually sent.
+func (c *Client) SendReply(ctx context.Context, channelID, threadTS, text string, broadcast bool) (string, string, error) {
 	mr, block := mrkdwn.Convert(text)
 	opts := []slack.MsgOption{
 		slack.MsgOptionText(mr, false),
@@ -1066,6 +1098,9 @@ func (c *Client) SendReply(ctx context.Context, channelID, threadTS, text string
 	}
 	if block != nil {
 		opts = append(opts, slack.MsgOptionBlocks(block))
+	}
+	if broadcast {
+		opts = append(opts, slack.MsgOptionBroadcast())
 	}
 	_, ts, err := c.api.PostMessage(channelID, opts...)
 	if err != nil {
@@ -1192,6 +1227,19 @@ func (c *Client) GetDNDInfo(ctx context.Context, userID string) (*slack.DNDStatu
 	return st, nil
 }
 
+// GetDNDTeamInfo fetches DND/snooze status for several users in one
+// dnd.teamInfo call, keyed by user ID. An empty userIDs sends nothing.
+func (c *Client) GetDNDTeamInfo(ctx context.Context, userIDs []string) (map[string]slack.DNDStatus, error) {
+	if len(userIDs) == 0 {
+		return nil, nil
+	}
+	st, err := c.api.GetDNDTeamInfoContext(ctx, userIDs)
+	if err != nil {
+		return nil, fmt.Errorf("getting team DND info: %w", err)
+	}
+	return st, nil
+}
+
 // GetPermalink returns the Slack permalink for a message. For a thread reply,
 // pass the reply's ts; Slack returns a thread-aware URL with thread_ts and cid
 // query parameters.
@@ -1206,37 +1254,43 @@ func (c *Client) GetPermalink(ctx context.Context, channelID, ts string) (string
 	return url, nil
 }
 
-// markChannel posts to conversations.mark with the given form values.
-// Used by both MarkChannel (read up to ts) and MarkChannelUnread (roll the
-// watermark backward to ts). Uses c.httpClient for the request so tests
-// can substitute an httptest.NewServer; production wiring (NewClient) sets
-// httpClient to a cookie-bearing client.
-func (c *Client) markChannel(ctx context.Context, channelID, ts string) error {
-	data := url.Values{
-		"token":   {c.token},
-		"channel": {channelID},
-		"ts":      {ts},
+// parseOKResponse checks a Slack Web API response envelope. Slack
+// answers HTTP 200 even for failures, so the {"ok":false,"error":...}
+// body is the only signal that a call was rejected.
+func parseOKResponse(method string, raw []byte) error {
+	var resp struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
 	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", c.apiBaseURL+"conversations.mark",
-		strings.NewReader(data.Encode()))
-	if err != nil {
-		return fmt.Errorf("creating mark request: %w", err)
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return fmt.Errorf("parsing %s: %w (body=%s)", method, err, truncateForLog(raw))
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("marking channel: %w", err)
+	if !resp.OK {
+		return fmt.Errorf("%s: %s (body=%s)", method, resp.Error, truncateForLog(raw))
 	}
-	defer resp.Body.Close()
 	return nil
 }
 
-// markThread posts to subscriptions.thread.mark with the given args.
-// Used by both MarkThread (read=true => "1") and MarkThreadUnread
-// (read=false => "0"). channelID/threadTS empty is a no-op. ts defaults
-// to threadTS when empty (parent has no replies yet).
+// markChannel posts to conversations.mark. Used by both MarkChannel
+// (read up to ts) and MarkChannelUnread (roll the watermark backward to
+// ts). Routed through postForm so HTTP status, 429, and the Slack
+// {"ok":false} envelope are all surfaced as errors — read state must
+// never be persisted locally for a mark Slack rejected.
+func (c *Client) markChannel(ctx context.Context, channelID, ts string) error {
+	raw, err := c.postForm(ctx, "conversations.mark", url.Values{
+		"channel": {channelID},
+		"ts":      {ts},
+	})
+	if err != nil {
+		return err
+	}
+	return parseOKResponse("conversations.mark", raw)
+}
+
+// markThread posts to subscriptions.thread.mark. Used by both MarkThread
+// (read=true => "1") and MarkThreadUnread (read=false => "0").
+// channelID/threadTS empty is a no-op. ts defaults to threadTS when empty
+// (parent has no replies yet). Error handling mirrors markChannel.
 func (c *Client) markThread(ctx context.Context, channelID, threadTS, ts string, read bool) error {
 	if channelID == "" || threadTS == "" {
 		return nil
@@ -1248,27 +1302,16 @@ func (c *Client) markThread(ctx context.Context, channelID, threadTS, ts string,
 	if read {
 		readVal = "1"
 	}
-	data := url.Values{
-		"token":     {c.token},
+	raw, err := c.postForm(ctx, "subscriptions.thread.mark", url.Values{
 		"channel":   {channelID},
 		"thread_ts": {threadTS},
 		"ts":        {ts},
 		"read":      {readVal},
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", c.apiBaseURL+"subscriptions.thread.mark",
-		strings.NewReader(data.Encode()))
+	})
 	if err != nil {
-		return fmt.Errorf("creating thread mark request: %w", err)
+		return err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("marking thread: %w", err)
-	}
-	defer resp.Body.Close()
-	return nil
+	return parseOKResponse("subscriptions.thread.mark", raw)
 }
 
 // MarkChannel marks a channel as read up to the given timestamp.
@@ -1466,6 +1509,20 @@ func (c *Client) ShouldReload(ctx context.Context) (string, error) {
 	return strconv.FormatInt(srr.RecommendedBuildVersion, 10), nil
 }
 
+// rateLimitError is what postForm returns on HTTP 429, carrying the
+// server-advised Retry-After so callers can sleep and retry the same
+// page instead of failing the whole sweep. Slack's internal endpoints
+// answer 429 (not ok=false ratelimited) when a paginated loop outruns
+// the limiter.
+type rateLimitError struct {
+	method     string
+	retryAfter time.Duration
+}
+
+func (e *rateLimitError) Error() string {
+	return fmt.Sprintf("calling %s: rate limited (HTTP 429), retry after %s", e.method, e.retryAfter)
+}
+
 // postForm performs a cookie-aware POST to an endpoint under
 // c.apiBaseURL with form values. The xoxc token is injected into the
 // form body — the same convention slack-go and the official browser
@@ -1505,6 +1562,12 @@ func (c *Client) postForm(ctx context.Context, method string, form url.Values) (
 	// non-2xx here is a transport/proxy/edge failure whose body is HTML
 	// at best: reporting it as a JSON parse failure at the call site
 	// (as this used to) hides what actually happened.
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, &rateLimitError{
+			method:     method,
+			retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), 5*time.Second),
+		}
+	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return nil, fmt.Errorf("calling %s: HTTP %s: %s", method, resp.Status, truncateForLog(raw))
 	}
@@ -1729,14 +1792,35 @@ const listThreadSubscriptionsHardCap = 1000
 // Returns (nil, err) on network failure or ok=false JSON. The caller
 // (the reconnect backfill phase) treats any error as "subscriptions
 // unavailable" and surfaces the UI banner.
+// listThreadSubscriptionsMaxRateLimitRetries bounds how often one
+// paginated sweep retries a 429ing page. The caller is a background
+// sync; an endpoint that keeps limiting after a few server-advised
+// waits is failed back to the UI banner and the caller's throttle
+// window instead of sleeping forever.
+const listThreadSubscriptionsMaxRateLimitRetries = 3
+
 func (c *Client) ListThreadSubscriptions(ctx context.Context) ([]ThreadSubscriptionView, error) {
 	var all []ThreadSubscriptionView
 	currentTS := ""
+	rateLimitRetries := 0
 	for {
 		body, err := c.callListThreadSubscriptions(ctx, currentTS)
 		if err != nil {
+			var rl *rateLimitError
+			if errors.As(err, &rl) && rateLimitRetries < listThreadSubscriptionsMaxRateLimitRetries {
+				rateLimitRetries++
+				// Retry the SAME page: currentTS deliberately does
+				// not advance.
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(rl.retryAfter):
+				}
+				continue
+			}
 			return nil, err
 		}
+		rateLimitRetries = 0
 		var resp listThreadSubscriptionsResponse
 		if err := json.Unmarshal(body, &resp); err != nil {
 			return nil, fmt.Errorf("parsing subscriptions.thread.getView: %w (body=%s)", err, truncateForLog(body))

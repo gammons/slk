@@ -19,9 +19,12 @@ type Model struct {
 	items    []WorkspaceItem
 	selected int
 	version  int64
-	// unreadReader returns the set of workspace IDs that currently
-	// have at least one channel with has_unread=true. Set by App via
-	// SetUnreadReader; called by RefreshUnreads.
+	// unreadReader returns the set of workspace IDs whose dot should
+	// be lit: those with at least one channel their own sidebar would
+	// show as unread (mute-filtered) or one unread subscribed thread
+	// (what the sidebar's Threads badge counts); see
+	// railUnreadWorkspaces in cmd/slk. Set by App via SetUnreadReader;
+	// called by RefreshUnreads and OtherUnreadCount.
 	unreadReader func() []string
 }
 
@@ -56,8 +59,13 @@ func (m *Model) NameByID(id string) string {
 
 // OtherUnreadCount returns the number of workspaces with unreads,
 // excluding activeID. Reads through the installed unreadReader; returns
-// 0 when no reader is set. Does not filter mute -- matches the rail
-// dot's existing semantics so the title's "+N" and the rail dots agree.
+// 0 when no reader is set. Deciding what counts is the reader's job,
+// not this method's: it applies the sidebar's IsVisiblyUnread predicate
+// per workspace and asks the same thread query the Threads badge uses,
+// so the title's "+N" and the rail dots agree with each workspace's
+// own sidebar. Note the active workspace's "(N)" and $SLK_UNREAD count
+// channels only; "+N" counts workspaces, and a workspace whose only
+// unread is a thread counts.
 func (m *Model) OtherUnreadCount(activeID string) int {
 	if m.unreadReader == nil {
 		return 0

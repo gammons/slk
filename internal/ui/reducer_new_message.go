@@ -2,18 +2,18 @@
 //
 // Reducer for the new-message picker lifecycle:
 //
-//   EnterNewMessageMsg     - user pressed Ctrl+N: seed the picker
-//                            with current workspace users, open it,
-//                            enter ModeNewMessage.
-//   NewMessageOpenedMsg    - conversations.open succeeded: validate
-//                            RequestID against the in-flight counter
-//                            and the cancelled flag, then close the
-//                            modal, switch to the opened channel,
-//                            and enter ModeInsert (so the cursor
-//                            lands in compose ready to type).
-//   NewMessageFailedMsg    - conversations.open failed: log and
-//                            keep the modal open so the user can
-//                            retry or cancel.
+//	EnterNewMessageMsg     - user pressed Ctrl+N: seed the picker
+//	                         with current workspace users, open it,
+//	                         enter ModeNewMessage.
+//	NewMessageOpenedMsg    - conversations.open succeeded: validate
+//	                         RequestID against the in-flight counter
+//	                         and the cancelled flag, then close the
+//	                         modal, switch to the opened channel,
+//	                         and enter ModeInsert (so the cursor
+//	                         lands in compose ready to type).
+//	NewMessageFailedMsg    - conversations.open failed: log and
+//	                         keep the modal open so the user can
+//	                         retry or cancel.
 //
 // Cache hydration for AlreadyOpen=false is implemented in Task 12;
 // this task emits ChannelSelectedMsg directly without inserting a

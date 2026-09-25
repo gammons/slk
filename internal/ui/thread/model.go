@@ -17,6 +17,7 @@ import (
 	"github.com/gammons/slk/internal/ui/imgrender"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
+	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/scrollbar"
 	"github.com/gammons/slk/internal/ui/selection"
 	"github.com/gammons/slk/internal/ui/styles"
@@ -89,6 +90,10 @@ type reactionHitRect struct {
 
 // Model represents the thread panel UI component.
 // It displays a parent message and its replies with cursor navigation.
+// parentSelected is the sentinel value of Model.selected meaning the
+// cursor sits on the parent message (the row above reply index 0).
+const parentSelected = -1
+
 type Model struct {
 	parent            messages.MessageItem
 	replies           []messages.MessageItem
@@ -96,8 +101,10 @@ type Model struct {
 	threadTS          string
 	selected          int
 	focused           bool
+	coloredUsernames  bool
 	avatarFn          messages.AvatarFunc
 	userNames         map[string]string
+	userStatuses      map[string]peerstatus.Status
 	channelNames      map[string]string
 	vp                viewport.Model
 	reactionNavActive bool
@@ -121,6 +128,11 @@ type Model struct {
 	entryOffsets []int
 	totalLines   int
 
+	// parentEntry mirrors the rendered parent message at the start of
+	// viewContent. It provides the same plain-text and column metadata as
+	// reply entries so mouse selection can address the parent.
+	parentEntry viewEntry
+
 	// View-level cache -- bordered content ready for viewport
 	viewContent       string
 	viewSelected      int
@@ -140,6 +152,14 @@ type Model struct {
 	chromeReplyCount    int
 	chromeUserNamesV    uint64 // version of the userNames map at build time
 	chromeChannelNamesV uint64 // version of the channelNames map at build time
+
+	// Breadcrumb inputs (SetBreadcrumb), and the values the chrome
+	// cache was last built from.
+	crumbChannel       string
+	crumbType          string
+	chromeCrumbChannel string
+	chromeCrumbType    string
+	chromeAuthor       string
 
 	// userNamesV / channelNamesV are bumped every time SetUserNames /
 	// SetChannelNames replaces the map. Used by chromeCache (and any other
@@ -307,11 +327,12 @@ func (m *Model) SetThread(parent messages.MessageItem, replies []messages.Messag
 	m.threadTS = threadTS
 	// Per the doc comment, the cursor starts at the bottom (newest reply)
 	// so a long thread opens scrolled to the latest activity rather than
-	// jammed up at the parent message.
+	// jammed up at the parent message. A reply-less thread selects the
+	// parent (parentSelected) so message ops still have a target.
 	if len(replies) > 0 {
 		m.selected = len(replies) - 1
 	} else {
-		m.selected = 0
+		m.selected = parentSelected
 	}
 	// Force the next View() to re-snap the viewport to the new selection.
 	// Without this, opening a thread whose newest-reply index matches the
@@ -325,7 +346,7 @@ func (m *Model) SetThread(parent messages.MessageItem, replies []messages.Messag
 // this thread. A "── new ──" landmark is rendered between the last reply
 // with TS <= boundary and the first reply with TS > boundary. Pass "" to
 // clear the boundary. Typically called by the App right after SetThread,
-// using the parent channel's last_read_ts as the boundary.
+// using the thread's own last-read cursor from thread_subscriptions.
 func (m *Model) SetUnreadBoundary(ts string) {
 	if m.unreadBoundaryTS == ts {
 		return
@@ -333,6 +354,26 @@ func (m *Model) SetUnreadBoundary(ts string) {
 	m.unreadBoundaryTS = ts
 	m.viewCacheValid = false
 	m.dirty()
+}
+
+// SetBreadcrumb sets the channel the header breadcrumb names.
+// channelType picks the glyph (see messages.ChannelGlyph); an empty
+// channelName omits the channel segment.
+func (m *Model) SetBreadcrumb(channelName, channelType string) {
+	if m.crumbChannel == channelName && m.crumbType == channelType {
+		return
+	}
+	m.crumbChannel, m.crumbType = channelName, channelType
+	m.dirty()
+}
+
+// breadcrumbAuthor is the parent's display name: the parent's own
+// UserName, else the userNames entry for its UserID.
+func (m *Model) breadcrumbAuthor() string {
+	if m.parent.UserName != "" {
+		return m.parent.UserName
+	}
+	return m.userNames[m.parent.UserID]
 }
 
 // UnreadBoundaryTS returns the current unread-boundary ts. Used by tests.
@@ -432,7 +473,7 @@ func (m *Model) Clear() {
 	m.replies = nil
 	m.channelID = ""
 	m.threadTS = ""
-	m.selected = 0
+	m.selected = parentSelected
 	m.InvalidateCache()
 }
 
@@ -532,7 +573,7 @@ func (m *Model) RemoveMessageByTS(ts string) bool {
 			}
 			if m.selected >= len(m.replies) {
 				if len(m.replies) == 0 {
-					m.selected = 0
+					m.selected = parentSelected
 				} else {
 					m.selected = len(m.replies) - 1
 				}
@@ -589,6 +630,14 @@ func (m *Model) SetUserNames(names map[string]string) {
 	m.InvalidateCache()
 }
 
+// SetColoredUsernames enables or disables deterministic per-user coloring
+// of usernames. Invalidates the render cache so existing rows re-render
+// with the new coloring.
+func (m *Model) SetColoredUsernames(enabled bool) {
+	m.coloredUsernames = enabled
+	m.InvalidateCache()
+}
+
 // SetUserGroups sets the workspace-scoped usergroup ID -> handle map used
 // to resolve bare <!subteam^SID> mentions in the parent and replies.
 // No-op when the new map matches the current one -- App.SetUserGroups
@@ -606,6 +655,70 @@ func (m *Model) SetUserGroups(groups map[string]string) {
 // flag the current user's own reactions (HasReacted) correctly.
 func (m *Model) SetCurrentUser(userID string) {
 	m.currentUserID = userID
+}
+
+// SetUserStatuses replaces the user ID -> custom status map; see
+// messages.Model.SetUserStatuses.
+func (m *Model) SetUserStatuses(statuses map[string]peerstatus.Status) {
+	m.userStatuses = make(map[string]peerstatus.Status, len(statuses))
+	for id, st := range statuses {
+		m.userStatuses[id] = st
+	}
+	m.invalidateAuthors()
+}
+
+// PatchUserStatus records one user's status; see
+// messages.Model.PatchUserStatus.
+func (m *Model) PatchUserStatus(userID string, st peerstatus.Status) {
+	if userID == "" || m.userStatuses[userID] == st {
+		return
+	}
+	if m.userStatuses == nil {
+		m.userStatuses = map[string]peerstatus.Status{}
+	}
+	m.userStatuses[userID] = st
+	if m.hasAuthor(userID) {
+		m.invalidateAuthors()
+	}
+}
+
+// ExpireStatuses drops statuses whose deadline has passed and reports
+// whether an author name rendered in this pane changed.
+func (m *Model) ExpireStatuses(now time.Time) bool {
+	changed := false
+	for uid, st := range m.userStatuses {
+		if st.Expired(now) {
+			m.userStatuses[uid] = st.Clear(now)
+			if m.hasAuthor(uid) {
+				changed = true
+			}
+		}
+	}
+	if changed {
+		m.invalidateAuthors()
+	}
+	return changed
+}
+
+func (m *Model) hasAuthor(userID string) bool {
+	if m.parent.UserID == userID {
+		return true
+	}
+	for i := range m.replies {
+		if m.replies[i].UserID == userID {
+			return true
+		}
+	}
+	return false
+}
+
+// invalidateAuthors forces every cached message header to re-render.
+// userNamesV is bumped because the chrome cache renders the parent
+// message's header too.
+func (m *Model) invalidateAuthors() {
+	m.userNamesV++
+	m.cache = nil
+	m.viewCacheValid = false
 }
 
 // PatchUserName updates the in-memory userNames map (used for @mention
@@ -662,6 +775,12 @@ func (m *Model) SetChannelNames(names map[string]string) {
 
 // SelectedReply returns the currently selected reply, or nil if none.
 func (m *Model) SelectedReply() *messages.MessageItem {
+	// The parent is a selectable row like any reply — returning it here
+	// makes every SelectedReply-driven message op (react, permalink,
+	// yank, open links) work on the thread's first message too.
+	if m.selected == parentSelected && m.parent.TS != "" {
+		return &m.parent
+	}
 	if m.selected < 0 || m.selected >= len(m.replies) {
 		return nil
 	}
@@ -717,7 +836,9 @@ func (m *Model) MoveUp() {
 	if m.reactionNavActive {
 		m.ExitReactionNav()
 	}
-	if m.selected > 0 {
+	// The parent row (parentSelected, index -1) sits above the first
+	// reply, so the cursor can move one step past index 0.
+	if m.selected > parentSelected {
 		m.selected--
 		m.dirty()
 	}
@@ -826,114 +947,108 @@ func (m *Model) ClampReactionNav() {
 
 // UpdateReaction updates the reaction state for a specific message in the thread.
 func (m *Model) UpdateReaction(messageTS, emojiName, userID string, remove bool) {
-	for i, reply := range m.replies {
-		if reply.TS == messageTS {
-			if remove {
-				for j, r := range reply.Reactions {
-					if r.Emoji == emojiName {
-						// Idempotent: only decrement if userID was present.
-						newIDs := messages.RemoveUserID(r.UserIDs, userID)
-						if len(newIDs) == len(r.UserIDs) && r.Count <= len(r.UserIDs) {
-							// Duplicate echo of an already-applied removal
-							// (un-listed reactor, non-truncated list) — skip.
-							// When Count > len(UserIDs) the list is truncated,
-							// so the removal is real; fall through to decrement.
-							break
-						}
-						r.UserIDs = newIDs
-						r.Count--
-						if userID == m.currentUserID {
-							r.HasReacted = false
-						}
-						if r.Count <= 0 {
-							m.replies[i].Reactions = append(reply.Reactions[:j], reply.Reactions[j+1:]...)
-						} else {
-							m.replies[i].Reactions[j] = r
-						}
-						break
-					}
-				}
-			} else {
-				found := false
-				for j, r := range reply.Reactions {
-					if r.Emoji == emojiName {
-						// Idempotent: only increment if userID is newly added,
-						// so an optimistic update + its WS echo don't double-count.
-						newIDs := messages.AppendUserID(r.UserIDs, userID)
-						if len(newIDs) != len(r.UserIDs) {
-							r.UserIDs = newIDs
-							r.Count++
-						}
-						if userID == m.currentUserID {
-							r.HasReacted = true
-						}
-						m.replies[i].Reactions[j] = r
-						found = true
-						break
-					}
-				}
-				if !found {
-					m.replies[i].Reactions = append(m.replies[i].Reactions, messages.ReactionItem{
-						Emoji:      emojiName,
-						Count:      1,
-						HasReacted: userID == m.currentUserID,
-						UserIDs:    messages.AppendUserID(nil, userID),
-					})
-				}
+	var msg *messages.MessageItem
+	if m.parent.TS == messageTS {
+		msg = &m.parent
+	} else {
+		for i := range m.replies {
+			if m.replies[i].TS == messageTS {
+				msg = &m.replies[i]
+				break
 			}
-			m.InvalidateCache()
-			if m.reactionNavActive {
-				m.ClampReactionNav()
+		}
+	}
+	if msg == nil {
+		return
+	}
+
+	m.updateMessageReaction(msg, emojiName, userID, remove)
+	m.InvalidateCache()
+	if m.reactionNavActive {
+		m.ClampReactionNav()
+	}
+}
+
+// updateMessageReaction applies one idempotent reaction event to msg.
+func (m *Model) updateMessageReaction(msg *messages.MessageItem, emojiName, userID string, remove bool) {
+	if remove {
+		for j, r := range msg.Reactions {
+			if r.Emoji != emojiName {
+				continue
+			}
+			newIDs := messages.RemoveUserID(r.UserIDs, userID)
+			if len(newIDs) == len(r.UserIDs) && r.Count <= len(r.UserIDs) {
+				return
+			}
+			r.UserIDs = newIDs
+			r.Count--
+			if userID == m.currentUserID {
+				r.HasReacted = false
+			}
+			if r.Count <= 0 {
+				msg.Reactions = append(msg.Reactions[:j], msg.Reactions[j+1:]...)
+			} else {
+				msg.Reactions[j] = r
 			}
 			return
 		}
+		return
 	}
+
+	for j, r := range msg.Reactions {
+		if r.Emoji != emojiName {
+			continue
+		}
+		newIDs := messages.AppendUserID(r.UserIDs, userID)
+		if len(newIDs) != len(r.UserIDs) {
+			r.UserIDs = newIDs
+			r.Count++
+		}
+		if userID == m.currentUserID {
+			r.HasReacted = true
+		}
+		msg.Reactions[j] = r
+		return
+	}
+	msg.Reactions = append(msg.Reactions, messages.ReactionItem{
+		Emoji:      emojiName,
+		Count:      1,
+		HasReacted: userID == m.currentUserID,
+		UserIDs:    messages.AppendUserID(nil, userID),
+	})
 }
 
 // ClickAt handles a mouse click at the given y-coordinate (the pane-local
 // y returned by App.panelAt — measured from the panel's top border, so
-// y=0..chromeHeight-1 sits inside the chrome (header / separator / parent
-// message / separator) and y=chromeHeight onward is reply content). Clicks
-// in the chrome are ignored.
+// y=0..chromeHeight-1 sits inside the chrome (header + separator) and
+// y=chromeHeight onward is the scrolling parent+replies content). Clicks
+// in the chrome are ignored: absoluteLineAt clamps them to the first
+// content line, which would otherwise read as a click on the parent.
 func (m *Model) ClickAt(y int) {
-	if len(m.replies) == 0 || len(m.cache) == 0 {
+	if y < m.chromeHeight {
 		return
 	}
-	contentY := y - m.chromeHeight
-	if contentY < 0 {
-		return // click on chrome — ignore
+	entry, _, messageTS, ok := m.selectionEntryAt(m.absoluteLineAt(y))
+	if !ok {
+		return
 	}
-	absoluteY := contentY + m.vp.YOffset()
-
-	currentLine := 0
-	for _, e := range m.cache {
-		h := e.height
-		if h == 0 {
-			h = 1
-		}
-		if absoluteY >= currentLine && absoluteY < currentLine+h {
-			if m.selected != e.replyIdx {
-				m.selected = e.replyIdx
-				m.viewCacheValid = false
-				m.dirty()
-			}
-			return
-		}
-		currentLine += h
-		// Inter-reply separators occupy 1 line in the bordered viewContent
-		// but are NOT inside any cache entry. Skip a line between entries
-		// so click coordinates stay in sync with viewContent.
-		currentLine++
+	selected := entry.replyIdx
+	if messageTS == m.parent.TS {
+		selected = parentSelected
+	}
+	if m.selected != selected {
+		m.selected = selected
+		m.viewCacheValid = false
+		m.dirty()
 	}
 }
 
 // BeginSelectionAt anchors a new selection at the given pane-local
 // coordinates (App.panelAt's coordinate system: 0 == panel content top,
-// just below the border). Clicks on the chrome (header / separator /
-// parent message / separator at pane-local y < chromeHeight) are
-// ignored — there's no reply content there to anchor on. The selection
-// becomes Active. Out-of-range inputs that don't land on any cache
-// entry are silently no-ops.
+// just below the border). Chrome rows (header + separator at
+// y < chromeHeight) are ignored; the scrolling parent+replies content
+// begins at chromeHeight. The selection becomes Active. Out-of-range
+// inputs that do not land on a message entry are silently no-ops.
 func (m *Model) BeginSelectionAt(viewportY, x int) {
 	if viewportY < m.chromeHeight {
 		return
@@ -1010,13 +1125,12 @@ func (m *Model) ClearSelection() {
 func (m *Model) HasSelection() bool { return m.hasSelection }
 
 // ScrollHintForDrag returns -1 if the cursor is within 1 row of the top
-// edge of the reply-content area, +1 if within 1 row of the bottom, else 0.
+// edge of the scrolling content, +1 if within 1 row of the bottom, else 0.
 // The incoming viewportY is pane-local (0 == top of panel content, just
-// below the border); we offset by m.chromeHeight so "top edge" is measured
-// against the reply content, not the chrome (header / separator / parent
-// message / separator). A cursor sitting on the chrome is treated the same
-// as the top content row, so an upward drag keeps auto-scrolling toward
-// older replies.
+// below the border). We offset by m.chromeHeight so the top edge is measured
+// below the header and separator. A cursor sitting on chrome is treated as
+// the top content row, so an upward drag keeps auto-scrolling toward older
+// messages.
 func (m *Model) ScrollHintForDrag(viewportY int) int {
 	h := m.lastViewHeight
 	if h <= 0 {
@@ -1034,13 +1148,11 @@ func (m *Model) ScrollHintForDrag(viewportY int) int {
 
 // absoluteLineAt converts a pane-local y coordinate to an absolute line
 // index inside m.viewContent (the bordered content the viewport scrolls
-// through). The incoming viewportY is what App.panelAt returns: zero at
-// the panel's content top (just below the border), so rows
-// 0..chromeHeight-1 are the thread chrome (header / separator / parent /
-// separator) and chromeHeight onward is reply content. We strip the chrome
-// offset before mapping into viewContent lines, clamping negative
-// (in-chrome) values to the first content line. The result is clamped to
-// [0, totalLines-1] for out-of-range inputs.
+// through). Rows 0..chromeHeight-1 are the thread chrome (header +
+// separator); chromeHeight onward is scrolling parent+replies content. We
+// strip the chrome offset before mapping into viewContent lines, clamping
+// negative (in-chrome) values to the first content line. The result is
+// clamped to [0, totalLines-1] for out-of-range inputs.
 func (m *Model) absoluteLineAt(viewportY int) int {
 	contentY := viewportY - m.chromeHeight
 	if contentY < 0 {
@@ -1056,35 +1168,42 @@ func (m *Model) absoluteLineAt(viewportY int) int {
 	return abs
 }
 
+// selectionEntryAt returns the rendered message entry containing absLine.
+// Parent lines begin at zero; reply lines use parent-inclusive offsets.
+func (m *Model) selectionEntryAt(absLine int) (*viewEntry, int, string, bool) {
+	if m.parent.TS != "" && absLine >= 0 && absLine < m.parentEntry.height {
+		return &m.parentEntry, 0, m.parent.TS, true
+	}
+	for i := range m.cache {
+		start := m.entryOffsets[i]
+		if absLine >= start && absLine < start+m.cache[i].height {
+			return &m.cache[i], start, m.replies[m.cache[i].replyIdx].TS, true
+		}
+	}
+	return nil, 0, "", false
+}
+
 // anchorAt converts an absolute line + display column into an Anchor.
 // `col` is the mouse's display column (relative to the reply area's
 // content). We subtract contentColOffset to get the plain column, then
 // clamp to plain-line width. Returns ok=false when no entry covers the
 // line (inter-reply separator) or when the cache is empty.
 func (m *Model) anchorAt(absLine, col int) (selection.Anchor, bool) {
-	for i, e := range m.cache {
-		start := m.entryOffsets[i]
-		end := start + e.height
-		if absLine < start || absLine >= end {
-			continue
-		}
-		j := absLine - start
-		plainCol := col - e.contentColOffset
-		if plainCol < 0 {
-			plainCol = 0
-		}
-		if j < len(e.linesPlain) {
-			if w := messages.DisplayWidthOfPlain(e.linesPlain[j]); plainCol > w {
-				plainCol = w
-			}
-		}
-		var msgID string
-		if e.replyIdx >= 0 && e.replyIdx < len(m.replies) {
-			msgID = m.replies[e.replyIdx].TS
-		}
-		return selection.Anchor{MessageID: msgID, Line: j, Col: plainCol}, true
+	entry, start, messageTS, ok := m.selectionEntryAt(absLine)
+	if !ok {
+		return selection.Anchor{}, false
 	}
-	return selection.Anchor{}, false
+	line := absLine - start
+	plainCol := col - entry.contentColOffset
+	if plainCol < 0 {
+		plainCol = 0
+	}
+	if line < len(entry.linesPlain) {
+		if width := messages.DisplayWidthOfPlain(entry.linesPlain[line]); plainCol > width {
+			plainCol = width
+		}
+	}
+	return selection.Anchor{MessageID: messageTS, Line: line, Col: plainCol}, true
 }
 
 // resolveAnchor returns the absolute line + plain col for an Anchor.
@@ -1093,12 +1212,18 @@ func (m *Model) resolveAnchor(a selection.Anchor) (absLine, col int, ok bool) {
 	if a.MessageID == "" {
 		return 0, 0, false
 	}
+	if a.MessageID == m.parent.TS {
+		if a.Line < 0 || a.Line >= m.parentEntry.height {
+			return 0, 0, false
+		}
+		return a.Line, a.Col, true
+	}
 	idx, found := m.replyIDToIdx[a.MessageID]
 	if !found || idx >= len(m.cache) {
 		return 0, 0, false
 	}
-	e := m.cache[idx]
-	if a.Line < 0 || a.Line >= e.height {
+	entry := m.cache[idx]
+	if a.Line < 0 || a.Line >= entry.height {
 		return 0, 0, false
 	}
 	return m.entryOffsets[idx] + a.Line, a.Col, true
@@ -1115,47 +1240,43 @@ func (m *Model) SelectionText() string {
 	loA, hiA := m.selRange.Normalize()
 	loLine, loCol, ok1 := m.resolveAnchor(loA)
 	hiLine, hiCol, ok2 := m.resolveAnchor(hiA)
-	if !ok1 || !ok2 {
-		return ""
-	}
-	if loLine > hiLine || (loLine == hiLine && loCol >= hiCol) {
+	if !ok1 || !ok2 || loLine > hiLine || (loLine == hiLine && loCol >= hiCol) {
 		return ""
 	}
 	var b strings.Builder
-	for i, e := range m.cache {
-		entryStart := m.entryOffsets[i]
-		entryEnd := entryStart + e.height
-		if entryEnd <= loLine {
-			continue
-		}
-		if entryStart > hiLine {
-			break
-		}
-		for j, plain := range e.linesPlain {
-			absLine := entryStart + j
-			if absLine < loLine {
-				continue
-			}
-			if absLine > hiLine {
-				break
-			}
-			from := 0
-			to := messages.DisplayWidthOfPlain(plain)
-			if absLine == loLine {
-				from = loCol
-			}
-			if absLine == hiLine {
-				to = hiCol
-			}
-			seg := messages.SliceColumns(plain, from, to)
-			seg = strings.TrimRight(seg, " ")
-			b.WriteString(seg)
-			if absLine != hiLine {
-				b.WriteByte('\n')
-			}
-		}
+	appendSelectionText(&b, 0, m.parentEntry, loLine, loCol, hiLine, hiCol)
+	for i, entry := range m.cache {
+		appendSelectionText(&b, m.entryOffsets[i], entry, loLine, loCol, hiLine, hiCol)
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func appendSelectionText(b *strings.Builder, entryStart int, entry viewEntry, loLine, loCol, hiLine, hiCol int) {
+	entryEnd := entryStart + entry.height
+	if entryEnd <= loLine || entryStart > hiLine {
+		return
+	}
+	for line, plain := range entry.linesPlain {
+		absLine := entryStart + line
+		if absLine < loLine {
+			continue
+		}
+		if absLine > hiLine {
+			break
+		}
+		from := 0
+		to := messages.DisplayWidthOfPlain(plain)
+		if absLine == loLine {
+			from = loCol
+		}
+		if absLine == hiLine {
+			to = hiCol
+		}
+		b.WriteString(strings.TrimRight(messages.SliceColumns(plain, from, to), " "))
+		if absLine != hiLine {
+			b.WriteByte('\n')
+		}
+	}
 }
 
 // applySelectionOverlay returns viewContent with selection-style
@@ -1177,25 +1298,15 @@ func (m *Model) applySelectionOverlay(content string) string {
 	selStyle := styles.SelectionStyle()
 	lines := strings.Split(content, "\n")
 	for absLine := loLine; absLine <= hiLine && absLine < len(lines); absLine++ {
-		entryIdx := -1
-		for i := range m.cache {
-			start := m.entryOffsets[i]
-			if absLine >= start && absLine < start+m.cache[i].height {
-				entryIdx = i
-				break
-			}
-		}
-		if entryIdx < 0 {
-			continue // separator line between replies
-		}
-		e := m.cache[entryIdx]
-		j := absLine - m.entryOffsets[entryIdx]
-		if j < 0 || j >= len(e.linesPlain) {
+		entry, entryStart, _, ok := m.selectionEntryAt(absLine)
+		if !ok {
 			continue
 		}
-		plain := e.linesPlain[j]
-		styled := lines[absLine]
-
+		line := absLine - entryStart
+		if line < 0 || line >= len(entry.linesPlain) {
+			continue
+		}
+		plain := entry.linesPlain[line]
 		from := 0
 		to := messages.DisplayWidthOfPlain(plain)
 		if absLine == loLine {
@@ -1213,9 +1324,9 @@ func (m *Model) applySelectionOverlay(content string) string {
 		if from >= to {
 			continue
 		}
-		dispFrom := from + e.contentColOffset
-		dispTo := to + e.contentColOffset
-
+		styled := lines[absLine]
+		dispFrom := from + entry.contentColOffset
+		dispTo := to + entry.contentColOffset
 		styledWidth := ansi.StringWidth(styled)
 		if dispFrom >= styledWidth {
 			continue
@@ -1225,8 +1336,7 @@ func (m *Model) applySelectionOverlay(content string) string {
 		}
 		prefix := ansi.Cut(styled, 0, dispFrom)
 		suffix := ansi.Cut(styled, dispTo, styledWidth)
-		seg := messages.SliceColumns(plain, from, to)
-		lines[absLine] = prefix + selStyle.Render(seg) + suffix
+		lines[absLine] = prefix + selStyle.Render(messages.SliceColumns(plain, from, to)) + suffix
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1268,21 +1378,16 @@ func (m *Model) View(height, width int) string {
 	// header line + a single border separator; everything else moved into
 	// the viewport, so parent identity no longer participates in the
 	// chrome cache key.
+	author := m.breadcrumbAuthor()
 	if !m.chromeCacheValid ||
 		m.chromeWidth != width ||
 		m.chromeReplyCount != chromeReplyCount ||
 		m.chromeUserNamesV != m.userNamesV ||
-		m.chromeChannelNamesV != m.channelNamesV {
-		replyLabel := "replies"
-		if chromeReplyCount == 1 {
-			replyLabel = "reply"
-		}
-		header := lipgloss.NewStyle().
-			Width(width).
-			Background(styles.Background).
-			Foreground(styles.TextPrimary).
-			Bold(true).
-			Render(fmt.Sprintf("Thread  %d %s", chromeReplyCount, replyLabel))
+		m.chromeChannelNamesV != m.channelNamesV ||
+		m.chromeCrumbChannel != m.crumbChannel ||
+		m.chromeCrumbType != m.crumbType ||
+		m.chromeAuthor != author {
+		header := renderBreadcrumb(width, m.crumbChannel, m.crumbType, author, chromeReplyCount)
 		separator := lipgloss.NewStyle().
 			Width(width).
 			Background(styles.Background).
@@ -1295,6 +1400,9 @@ func (m *Model) View(height, width int) string {
 		m.chromeReplyCount = chromeReplyCount
 		m.chromeUserNamesV = m.userNamesV
 		m.chromeChannelNamesV = m.channelNamesV
+		m.chromeCrumbChannel = m.crumbChannel
+		m.chromeCrumbType = m.crumbType
+		m.chromeAuthor = author
 	}
 	chrome := m.chromeCache
 	chromeHeight := m.chromeHeight
@@ -1314,7 +1422,28 @@ func (m *Model) View(height, width int) string {
 	// parent attachments are rare and threading flushes through the cache
 	// lifecycle adds complexity; reply flushes and hit rects ARE captured
 	// in the per-reply loop below.
-	parentContent, _, _ := m.renderThreadMessage(m.parent, width, m.userNames, m.channelNames, false)
+	parentIsSelected := m.selected == parentSelected
+	parentContent, _, _ := m.renderThreadMessage(m.parent, width, m.userNames, m.channelNames, parentIsSelected)
+	m.parentEntry = viewEntry{
+		linesPlain:       messages.PlainLines(parentContent),
+		height:           lipgloss.Height(parentContent),
+		contentColOffset: 1,
+	}
+	// Selection border for the parent row mirrors the per-reply
+	// cache-build treatment (borderSelect / borderInvis below): thick
+	// left border + tint when the cursor sits on the parent, invisible
+	// border otherwise so the parent's width matches the reply rows.
+	if parentIsSelected {
+		parentContent = lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).
+			BorderForeground(styles.SelectionBorderColor(m.focused)).
+			BorderBackground(styles.SelectionTintColor(m.focused)).
+			Background(styles.SelectionTintColor(m.focused)).
+			Render(parentContent)
+	} else {
+		parentContent = lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).
+			BorderForeground(styles.Background).BorderBackground(styles.Background).
+			Render(parentContent)
+	}
 	parentSeparator := lipgloss.NewStyle().
 		Width(width).
 		Background(styles.Background).
@@ -1530,6 +1659,11 @@ func (m *Model) View(height, width int) string {
 		allRows := []string{parentBlock}
 		startLine := 0
 		endLine := 0
+		if parentIsSelected {
+			// Parent row occupies lines 0..parentBlockHeight; the
+			// snap-to-selection math below scrolls to the top.
+			endLine = parentBlockHeight
+		}
 		currentLine := parentBlockHeight
 		// kittyFlushBuf collects per-image kitty APC upload bytes for
 		// every cached entry (the thread cache holds only the open
@@ -1787,7 +1921,7 @@ func (m *Model) blockkitContext(msg messages.MessageItem, userNames, channelName
 }
 
 func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNames map[string]string, channelNames map[string]string, isSelected bool) (string, []func(io.Writer) error, []reactionEntryHit) {
-	line := styles.Username.Render(msg.UserName) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.Timestamp)
+	line := styles.Username(msg.UserID, m.coloredUsernames).Render(msg.UserName) + messages.AuthorStatusSuffix(m.userStatuses, msg.UserID, time.Now()) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.Timestamp)
 
 	contentWidth := width - 4
 	if contentWidth < 20 {
@@ -1807,8 +1941,20 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 		EmojiCells:   m.emojiCtx.Cells,
 		Customs:      m.emojiCtx.Customs,
 		EmojiFlushes: &flushes,
+		Width:        contentWidth,
 	}
-	text := styles.MessageText.Render(messages.WordWrap(messages.RenderSlackMarkdownWith(messages.MessageTextSource(msg), bodyOpts), contentWidth))
+	// Match the main pane: content-bearing blocks suppress the fallback
+	// text and its row. See messages.BlocksCarryBody.
+	hasBody := !messages.BlocksCarryBody(msg)
+	bodySrc := messages.MessageTextSource(msg)
+	if !hasBody {
+		bodySrc = ""
+	}
+	text := styles.MessageText.Render(messages.WordWrap(messages.RenderSlackMarkdownWith(bodySrc, bodyOpts), contentWidth))
+	bodyRow, bodyRows := "", 0
+	if hasBody {
+		bodyRow, bodyRows = "\n"+text, lipgloss.Height(text)
+	}
 
 	// Block Kit blocks + legacy attachments render between the body
 	// text and file attachments, mirroring the main message pane's
@@ -1836,7 +1982,12 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 	bkBlock := ""
 	bkLineCount := len(bkLines)
 	if bkLineCount > 0 {
-		bkBlock = "\n" + strings.Join(bkLines, "\n")
+		// Same background treatment the message pane applies; see the
+		// comment at the matching site in messages/model.go. Block Kit
+		// lines have no outer background-providing style, so without
+		// this the run after the gutter's closing reset draws on the
+		// terminal default instead of the theme's.
+		bkBlock = "\n" + messages.WithBackground(bkLines, messages.BgANSI())
 	}
 
 	var reactionLine string
@@ -2013,7 +2164,7 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 	var reactionHits []reactionEntryHit
 	if len(pillSpecs) > 0 && reactionLineCount > 0 {
 		const contentColBase = 1 // thick left border occupies col 0 of linesNormal
-		reactionRowBase := 1 + lipgloss.Height(text) + bkLineCount + attachmentLineCount
+		reactionRowBase := 1 + bodyRows + bkLineCount + attachmentLineCount
 		for _, ps := range pillSpecs {
 			row := reactionRowBase + ps.lineIdx
 			reactionHits = append(reactionHits, reactionEntryHit{
@@ -2026,5 +2177,5 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 		}
 	}
 
-	return line + "\n" + text + bkBlock + attachmentLines + reactionLine, flushes, reactionHits
+	return line + bodyRow + bkBlock + attachmentLines + reactionLine, flushes, reactionHits
 }

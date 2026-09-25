@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"charm.land/lipgloss/v2"
 )
 
 // testMode is a simple fmt.Stringer for testing without importing ui (avoids circular import).
@@ -304,6 +306,46 @@ func TestModel_SetSearchElidesLongText(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, "…") {
 		t.Fatalf("elided search segment missing ellipsis: %q", got)
+	}
+}
+
+func TestChannelGlyphSpacing(t *testing.T) {
+	tests := []struct {
+		chType string
+		want   string
+	}{
+		{"channel", "#general"},
+		{"private", "◆ general"},
+		{"dm", "● general"},
+		{"group_dm", "● general"},
+	}
+	for _, tt := range tests {
+		m := New()
+		m.SetChannel("general")
+		m.SetChannelType(tt.chType)
+		if out := stripANSI(m.View(80)); !strings.Contains(out, tt.want) {
+			t.Errorf("channelType %q: want %q in %q", tt.chType, tt.want, out)
+		}
+	}
+}
+
+func TestViewIsExactlyWidthColumns(t *testing.T) {
+	m := New()
+	m.SetMode(testMode("NORMAL"))
+	m.SetChannel("Some Person")
+	m.SetChannelType("dm")
+	m.SetWorkspace("acme")
+	m.SetUnreadCount(3)
+	m.SetStatus("active", false, time.Time{})
+	m.SetConnectionState(StateConnected)
+	m.SetHelpHint("? for keybindings")
+
+	// 80 is narrow enough to drop the hint, the rest keep it: both
+	// filler branches must land on exactly width.
+	for _, width := range []int{80, 120, 240} {
+		if got := lipgloss.Width(m.View(width)); got != width {
+			t.Errorf("View(%d) is %d columns wide, want %d", width, got, width)
+		}
 	}
 }
 

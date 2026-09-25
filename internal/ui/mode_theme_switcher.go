@@ -48,8 +48,8 @@ func handleThemeSwitcherMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		a.compose.RefreshStyles()
 		a.threadCompose.RefreshStyles()
 		// Save selection.
-		if a.themeSaveFn != nil {
-			a.themeSaveFn(result.Name, result.Scope)
+		if a.settings != nil {
+			a.settings.SaveTheme(result.Name, result.Scope)
 		}
 		return nil
 	}

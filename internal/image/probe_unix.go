@@ -9,16 +9,21 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// pollProbe reads from fd up to timeout, looking for a kitty graphics
-// ;OK reply. Synchronous (no goroutine) so no leak is possible. Uses
-// poll(2) with a millisecond timeout to wait for readable data, then
-// performs ONE read(2) per ready cycle into a fixed-size buffer.
+// pollProbe reads from fd up to timeout, handing everything collected
+// so far to scan until it reports a complete reply. Synchronous (no
+// goroutine) so no leak is possible. Uses poll(2) with a millisecond
+// timeout to wait for readable data, then performs ONE read(2) per
+// ready cycle into a fixed-size buffer.
+//
+// scan is scanForOK for the kitty graphics probe and scanForSixelDA for
+// the sixel DA1 probe: it returns (matched, ok) where matched means the
+// reply is complete and ok is the capability answer.
 //
 // Returns (ok, bytesRead, reason). reason is a short identifier
 // suitable for logging:
 //
-//	"got_ok"          -- kitty graphics OK reply seen
-//	"got_reply_no_ok" -- a kitty graphics reply was seen but not ;OK
+//	"got_ok"          -- an affirmative reply was seen
+//	"got_reply_no_ok" -- a complete reply was seen, but negative
 //	"timeout"         -- the deadline elapsed before any reply
 //	"poll_err:<err>"  -- poll(2) returned an error
 //	"read_err:<err>"  -- read(2) returned an error
@@ -30,7 +35,7 @@ import (
 // The startup window is ~200ms; the rare user keystroke landing in
 // that window would also have been eaten by the prior goroutine-based
 // implementation, so this is not a regression.
-func pollProbe(fd int, timeout time.Duration) (bool, int, string) {
+func pollProbe(fd int, timeout time.Duration, scan func([]byte) (bool, bool)) (bool, int, string) {
 	deadline := time.Now().Add(timeout)
 	var collected []byte
 	var buf [256]byte
@@ -72,7 +77,7 @@ func pollProbe(fd int, timeout time.Duration) (bool, int, string) {
 		}
 		bytesRead += rn
 		collected = append(collected, buf[:rn]...)
-		if matched, ok := scanForOK(collected); matched {
+		if matched, ok := scan(collected); matched {
 			if ok {
 				return true, bytesRead, "got_ok"
 			}

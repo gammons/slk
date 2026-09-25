@@ -70,11 +70,17 @@ func wrapForTmux(seq string) string {
 }
 
 func writeKittySequence(w io.Writer, seq string) error {
-	if inTmux() {
-		seq = wrapForTmux(seq)
-	}
-	_, err := io.WriteString(w, seq)
+	_, err := io.WriteString(w, forTerminal(seq))
 	return err
+}
+
+// forTerminal returns seq as it must reach the terminal: wrapped for
+// tmux passthrough when running inside tmux, unchanged otherwise.
+func forTerminal(seq string) string {
+	if inTmux() {
+		return wrapForTmux(seq)
+	}
+	return seq
 }
 
 // KittyRenderer encodes images via the kitty graphics protocol with
@@ -226,8 +232,14 @@ func (k *KittyRenderer) RenderKey(key string, target image.Point) Render {
 		payload, payloadHit := k.payloads[payloadKey]
 		k.mu.Unlock()
 		if !payloadHit {
-			pxW := target.X * 8
-			pxH := target.Y * 16
+			// Encode against the terminal's real cell size, not a
+			// hardcoded 8x16. The placement is by cell either way, so
+			// this does not move the image — it decides how many
+			// pixels the terminal has to work with when it scales the
+			// image across those cells. See measuredCellPixels.
+			cw, ch := measuredCellPixels()
+			pxW := target.X * cw
+			pxH := target.Y * ch
 			resized := image.NewRGBA(image.Rect(0, 0, pxW, pxH))
 			draw.BiLinear.Scale(resized, resized.Bounds(), src, src.Bounds(), draw.Over, nil)
 			var pngBuf bytes.Buffer
@@ -286,8 +298,13 @@ func (k *KittyRenderer) RenderKey(key string, target image.Point) Render {
 // chunked. The final chunk has m=0 to mark the end.
 //
 // Reference: https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders
+//
+// The whole upload must be emitted in one Write. Continuation chunks
+// carry no image id, while KittyOutput serializes individual Write
+// calls rather than complete uploads.
 func emitKittyUpload(w io.Writer, id uint32, payload string, cols, rows int) error {
 	const chunk = 4096
+	var sb strings.Builder
 	for i := 0; i < len(payload); i += chunk {
 		end := i + chunk
 		more := 1
@@ -301,12 +318,10 @@ func emitKittyUpload(w io.Writer, id uint32, payload string, cols, rows int) err
 		} else {
 			hdr = fmt.Sprintf("m=%d", more)
 		}
-		seq := fmt.Sprintf("\x1b_G%s;%s\x1b\\", hdr, payload[i:end])
-		if err := writeKittySequence(w, seq); err != nil {
-			return err
-		}
+		sb.WriteString(forTerminal(fmt.Sprintf("\x1b_G%s;%s\x1b\\", hdr, payload[i:end])))
 	}
-	return nil
+	_, err := io.WriteString(w, sb.String())
+	return err
 }
 
 func buildPlaceholderLines(id uint32, cells image.Point) []string {

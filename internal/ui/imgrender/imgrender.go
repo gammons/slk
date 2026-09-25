@@ -19,6 +19,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/styles"
@@ -30,7 +31,7 @@ import (
 // triggered when bytes arrive.
 type ImageContext struct {
 	Protocol    imgpkg.Protocol
-	Fetcher     *imgpkg.Fetcher
+	Fetcher     core.ImageFetcher
 	KittyRender *imgpkg.KittyRenderer
 	CellPixels  image.Point
 	// MaxRows caps the height of an inline image in terminal rows.
@@ -438,13 +439,13 @@ func (r *Renderer) RenderBlock(att Block, channel, ts string, availWidth, baseRo
 	return BlockResult{Lines: out.Lines, Flushes: fl, SixelRows: sxlMap, Height: target.Y, Hit: hit}
 }
 
-// renderLegacyLine returns the single-line "[Image] <url>" or
-// "[File] <url>" fallback used when inline rendering is unavailable
-// for an attachment. Mirrors the existing internal/ui/messages
-// renderSingleAttachment helper byte-for-byte (Bold marker style,
-// underlined link style, OSC 8 wrapping the entire body), but takes
-// an imgrender.Block to keep imgrender independent of the messages
-// package.
+// renderLegacyLine returns the single-line "[Image] <name>" or
+// "[File] <name>" fallback used when inline rendering is unavailable
+// for an attachment. Mirrors the internal/ui/messages
+// renderSingleAttachment helper (Bold marker style, underlined link
+// style, OSC 8 wrapping the entire body, URL as label when name is
+// empty), but takes an imgrender.Block to keep imgrender independent
+// of the messages package.
 func renderLegacyLine(att Block) string {
 	markerStyle := lipgloss.NewStyle().Foreground(styles.TextMuted).Bold(true)
 	urlStyle := lipgloss.NewStyle().Foreground(styles.Primary).Underline(true)
@@ -452,7 +453,11 @@ func renderLegacyLine(att Block) string {
 	if att.Kind == "image" {
 		marker = "[Image]"
 	}
-	body := markerStyle.Render(marker) + " " + urlStyle.Render(att.URL)
+	label := att.Name
+	if label == "" {
+		label = att.URL
+	}
+	body := markerStyle.Render(marker) + " " + urlStyle.Render(label)
 	// OSC 8 hyperlink: ESC ] 8 ;; URL ESC \ LABEL ESC ] 8 ;; ESC \
 	return "\x1b]8;;" + att.URL + "\x1b\\" + body + "\x1b]8;;\x1b\\"
 }

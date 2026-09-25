@@ -21,7 +21,7 @@ import (
 //
 // It also carries keys this package does not model (unlinked,
 // pending_shared, parent_conversation, properties, previous_names,
-// is_admin, tz_label, huddle_state, …) exactly as the capture does —
+// is_admin, tz_label, …) exactly as the capture does —
 // decoding must ignore them, because Slack adds fields to this
 // response without notice.
 //
@@ -87,7 +87,7 @@ const fullViewBody = `{
         "team": "WRONG-team-1", "title": "WRONG-title-1", "phone": "WRONG-phone-1",
         "skype": "WRONG-skype-1", "status_text_canonical": "WRONG-stc-1",
         "status_emoji_display_info": [], "who_can_share_contact_card": "WRONG-share-p1",
-        "huddle_state": "WRONG-huddle-1", "huddle_state_expiration_ts": 0
+        "huddle_state": "huddle-state-1", "huddle_state_expiration_ts": 1783339101
       }
     },
     {
@@ -107,7 +107,7 @@ const fullViewBody = `{
         "team": "WRONG-team-2", "title": "WRONG-title-2", "phone": "WRONG-phone-2",
         "skype": "WRONG-skype-2", "status_text_canonical": "WRONG-stc-2",
         "status_emoji_display_info": [], "who_can_share_contact_card": "WRONG-share-p2",
-        "huddle_state": "WRONG-huddle-2", "huddle_state_expiration_ts": 0
+        "huddle_state": "huddle-state-2", "huddle_state_expiration_ts": 1783339102
       }
     },
     {
@@ -127,7 +127,7 @@ const fullViewBody = `{
         "team": "WRONG-team-3", "title": "WRONG-title-3", "phone": "WRONG-phone-3",
         "skype": "WRONG-skype-3", "status_text_canonical": "WRONG-stc-3",
         "status_emoji_display_info": [], "who_can_share_contact_card": "WRONG-share-p3",
-        "huddle_state": "WRONG-huddle-3", "huddle_state_expiration_ts": 0
+        "huddle_state": "huddle-state-3", "huddle_state_expiration_ts": 1783339103
       }
     },
     {
@@ -147,7 +147,7 @@ const fullViewBody = `{
         "team": "WRONG-team-4", "title": "WRONG-title-4", "phone": "WRONG-phone-4",
         "skype": "WRONG-skype-4", "status_text_canonical": "WRONG-stc-4",
         "status_emoji_display_info": [], "who_can_share_contact_card": "WRONG-share-p4",
-        "huddle_state": "WRONG-huddle-4", "huddle_state_expiration_ts": 0
+        "huddle_state": "huddle-state-4", "huddle_state_expiration_ts": 1783339104
       }
     },
     {
@@ -167,7 +167,7 @@ const fullViewBody = `{
         "team": "WRONG-team-5", "title": "WRONG-title-5", "phone": "WRONG-phone-5",
         "skype": "WRONG-skype-5", "status_text_canonical": "WRONG-stc-5",
         "status_emoji_display_info": [], "who_can_share_contact_card": "WRONG-share-p5",
-        "huddle_state": "WRONG-huddle-5", "huddle_state_expiration_ts": 0
+        "huddle_state": "huddle-state-5", "huddle_state_expiration_ts": 1783339105
       }
     }
   ],
@@ -638,6 +638,7 @@ func TestConversationsView_DecodesUsers(t *testing.T) {
 				RealName: "Profile Aardvark", DisplayName: "aard-display",
 				AvatarHash: "hash-aaa111", ImageOriginal: "https://avatars.example/aaa.png",
 				StatusText: "aardvark status", StatusEmoji: ":ant:", StatusExpiration: 1783339001,
+				HuddleState: "huddle-state-1", HuddleStateExpirationTS: 1783339101,
 			},
 		},
 		{
@@ -648,6 +649,7 @@ func TestConversationsView_DecodesUsers(t *testing.T) {
 				RealName: "Profile Badger", DisplayName: "badge-display",
 				AvatarHash: "hash-bbb222", ImageOriginal: "https://avatars.example/bbb.png",
 				StatusText: "badger status", StatusEmoji: ":badger:", StatusExpiration: 1783339002,
+				HuddleState: "huddle-state-2", HuddleStateExpirationTS: 1783339102,
 			},
 		},
 		{
@@ -658,6 +660,7 @@ func TestConversationsView_DecodesUsers(t *testing.T) {
 				RealName: "Profile Coyote", DisplayName: "coy-display",
 				AvatarHash: "hash-ccc333", ImageOriginal: "https://avatars.example/ccc.png",
 				StatusText: "coyote status", StatusEmoji: ":wolf:", StatusExpiration: 1783339003,
+				HuddleState: "huddle-state-3", HuddleStateExpirationTS: 1783339103,
 			},
 		},
 		{
@@ -668,6 +671,7 @@ func TestConversationsView_DecodesUsers(t *testing.T) {
 				RealName: "Profile Dingo", DisplayName: "ding-display",
 				AvatarHash: "hash-ddd444", ImageOriginal: "https://avatars.example/ddd.png",
 				StatusText: "dingo status", StatusEmoji: ":dog:", StatusExpiration: 1783339004,
+				HuddleState: "huddle-state-4", HuddleStateExpirationTS: 1783339104,
 			},
 		},
 		{
@@ -678,6 +682,7 @@ func TestConversationsView_DecodesUsers(t *testing.T) {
 				RealName: "Profile Emu", DisplayName: "emu-display",
 				AvatarHash: "hash-eee555", ImageOriginal: "https://avatars.example/eee.png",
 				StatusText: "emu status", StatusEmoji: ":bird:", StatusExpiration: 1783339005,
+				HuddleState: "huddle-state-5", HuddleStateExpirationTS: 1783339105,
 			},
 		},
 	}

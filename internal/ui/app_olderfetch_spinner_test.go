@@ -4,7 +4,7 @@ package ui
 import (
 	"testing"
 
-	tea "charm.land/bubbletea/v2"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/messages"
 )
@@ -31,7 +31,7 @@ func TestHandleUp_BackfillEmitsSpinnerTick(t *testing.T) {
 	})
 
 	called := false
-	app.setOlderMessagesFetcherForTest(func(channelID ids.ChannelID, oldestTS ids.MessageTS) tea.Msg {
+	app.setOlderMessagesFetcherForTest(func(channelID ids.ChannelID, oldestTS ids.MessageTS) core.Msg {
 		called = true
 		return nil
 	})
@@ -79,7 +79,7 @@ func TestScrollFocusedPanel_BackfillAtViewportTop(t *testing.T) {
 	})
 
 	called := false
-	app.setOlderMessagesFetcherForTest(func(channelID ids.ChannelID, oldestTS ids.MessageTS) tea.Msg {
+	app.setOlderMessagesFetcherForTest(func(channelID ids.ChannelID, oldestTS ids.MessageTS) core.Msg {
 		called = true
 		return nil
 	})

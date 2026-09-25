@@ -1,0 +1,128 @@
+name: nix vendor hash
+
+# When a dependency change invalidates flake.nix's vendorHash, work out
+# the correct value, prove it is the only problem by rebuilding with it,
+# and hand over a one-line patch. Pushes the fix only when a token that
+# can retrigger CI is configured -- a GITHUB_TOKEN push would leave the
+# new head SHA with no checks at all.
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - go.mod
+      - go.sum
+      - flake.nix
+      - flake.lock
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-vendor-hash-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vendor-hash:
+    name: vendor hash
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      # Never hand the PAT to a fork PR: the job runs `nix build`, i.e.
+      # arbitrary build code out of that PR's own flake.nix. An empty
+      # PUSH_TOKEN also skips the push, so a fork just gets the patch.
+      PUSH_TOKEN: ${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.NIX_HASH_PUSH_TOKEN || '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          token: ${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.NIX_HASH_PUSH_TOKEN || github.token }}
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31.11.1
+
+      - name: Build the flake
+        id: build
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          nix build .#slk --no-link --print-build-logs 2>&1 | tee build.log
+
+      - name: Refresh the vendorHash and rebuild
+        id: refresh
+        if: steps.build.outcome == 'failure'
+        shell: bash
+        run: |
+          set -o pipefail
+
+          got=$(grep -oE 'got:[[:space:]]+sha256-[A-Za-z0-9+/=]+' build.log \
+                | head -1 | grep -oE 'sha256-[A-Za-z0-9+/=]+')
+          if [ -z "$got" ]; then
+            echo "::error::nix build failed, but not with a vendorHash mismatch -- this needs a human"
+            exit 1
+          fi
+
+          old=$(grep -oE 'vendorHash = "sha256-[A-Za-z0-9+/=]+"' flake.nix \
+                | head -1 | grep -oE 'sha256-[A-Za-z0-9+/=]+')
+          if [ -z "$old" ]; then
+            echo "::error::could not find vendorHash in flake.nix"
+            exit 1
+          fi
+
+          sed -i "s|$old|$got|" flake.nix
+          echo "old=$old" >> "$GITHUB_OUTPUT"
+          echo "new=$got" >> "$GITHUB_OUTPUT"
+
+          # Proves the stale hash was the only problem. If this fails the
+          # job fails, which is correct -- something else is broken too.
+          nix build .#slk --no-link --print-build-logs
+
+          git diff -- flake.nix > vendor-hash.patch
+          {
+            echo "### vendorHash was stale"
+            echo
+            echo '```diff'
+            cat vendor-hash.patch
+            echo '```'
+            echo
+            echo "Rebuilt successfully with the new hash, so this is the only change needed."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Push the fix
+        id: push
+        if: steps.refresh.outcome == 'success' && env.PUSH_TOKEN != ''
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add flake.nix
+          git commit -m "chore(nix): refresh vendorHash for the updated module set"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
+          echo "Pushed the refreshed hash; CI will re-run on the new commit." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the patch
+        if: steps.refresh.outcome == 'success' && steps.push.outcome == 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vendor-hash-patch
+          path: vendor-hash.patch
+
+      # Without a push, the branch is still stale, so the PR must stay red.
+      - name: Report
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ steps.build.outcome }}" = "success" ]; then
+            echo "vendorHash is current."
+          elif [ "${{ steps.push.outcome }}" = "success" ]; then
+            echo "vendorHash was stale and has been fixed on the branch."
+          elif [ "${{ steps.refresh.outcome }}" = "success" ]; then
+            echo "::error::vendorHash is stale. Correct value: ${{ steps.refresh.outputs.new }} -- see the job summary for the patch."
+            exit 1
+          else
+            exit 1
+          fi

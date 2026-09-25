@@ -8,7 +8,7 @@ import (
 )
 
 // TestApp_ClickOnWorkspaceRailSwitches asserts that clicking a
-// workspace tile in the rail invokes the registered workspaceSwitcher
+// workspace tile in the rail invokes the registered workspace service
 // with the clicked team ID, and that clicking the currently-active
 // tile is a no-op (no switcher call, no command).
 func TestApp_ClickOnWorkspaceRailSwitches(t *testing.T) {
@@ -28,7 +28,7 @@ func TestApp_ClickOnWorkspaceRailSwitches(t *testing.T) {
 	// Workspace 0 is selected by default; we expect a click on
 	// workspace 1 (tile at Y=3) to trigger the switcher.
 	var lastSwitch string
-	a.SetWorkspaceSwitcher(func(teamID string) tea.Msg {
+	a.setWorkspaceSwitcherForTest(func(teamID string) tea.Msg {
 		lastSwitch = teamID
 		return nil
 	})
@@ -75,7 +75,7 @@ func TestApp_ClickOnWorkspaceRailGapDoesNothing(t *testing.T) {
 	_ = a.View()
 
 	called := false
-	a.SetWorkspaceSwitcher(func(teamID string) tea.Msg {
+	a.setWorkspaceSwitcherForTest(func(teamID string) tea.Msg {
 		called = true
 		return nil
 	})

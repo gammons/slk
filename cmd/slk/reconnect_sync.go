@@ -37,9 +37,9 @@ type reconnectClient interface {
 	GetUnreadCounts() ([]slackclient.UnreadInfo, slackclient.ThreadsAggregate, error)
 }
 
-// teaSender is the subset of *tea.Program the reconnect path uses to
-// dispatch a refresh into the UI loop. *tea.Program satisfies it
-// implicitly; tests pass a captureSender.
+// teaSender is the subset of *tea.Program the reconnect path and the
+// RTM event handler use to dispatch into the UI loop. *tea.Program
+// satisfies it implicitly; tests pass a captureSender.
 type teaSender interface {
 	Send(msg tea.Msg)
 }
@@ -62,6 +62,12 @@ type teaSender interface {
 //  2. Mark every other channel stale, so it revalidates when opened.
 //  3. Refresh the channel actually on screen, through the same path a
 //     channel switch uses.
+//
+// Thread subscriptions are NOT one of the steps. They rejoined the
+// reconnect path later, but at the handler level (syncOnReconnect's
+// ensureThreadSubs kick) with their own 30-minute throttle — one
+// paginated sweep per window, not the unbounded per-reconnect phase
+// measured above.
 type reconnectSync struct {
 	client      reconnectClient
 	db          *cache.DB
@@ -134,6 +140,12 @@ func (r *reconnectSync) refreshUnreadState() {
 			ChannelID:  u.ChannelID,
 			LastReadTS: u.LastRead,
 			HasUnread:  u.HasUnread,
+			// Reconnect is additive, not a snapshot: only channels
+			// client.counts names are corrected. A channel read
+			// elsewhere during the outage and omitted here keeps its
+			// stale badge until the next boot, matching how
+			// has_unread already behaves on this path.
+			MentionCount: u.MentionCount,
 		})
 	}
 	if err := r.db.BatchUpdateChannelReadState(updates); err != nil {

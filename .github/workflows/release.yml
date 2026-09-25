@@ -10,7 +10,12 @@ permissions:
 
 jobs:
   goreleaser:
-    runs-on: ubuntu-latest
+    # macOS runner, not Ubuntu: the darwin build sets CGO_ENABLED=1 so
+    # clipboard paste works (issue #156), and cgo for darwin needs the
+    # Apple SDK at link time. Go on macOS still cross-compiles the
+    # CGO_ENABLED=0 linux/windows targets, and nfpm runs fine there, so a
+    # single job covers every artifact.
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4

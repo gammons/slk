@@ -20,7 +20,7 @@
 //
 // Free reducer (not controller-absorbed) because both arms route
 // across multiple sub-models: the sidebar, messagepane, threadPanel,
-// workspaceRail, threadsView, drag controller, workspaceSwitcher
+// workspaceRail, threadsView, drag controller, workspaceSvc
 // service, and reaction toggle helper. No single existing
 // controller owns this cross-section.
 //
@@ -205,13 +205,13 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		if !ok {
 			return nil
 		}
-		if a.workspaceSwitcher == nil || item.ID == a.workspaceRail.SelectedID() {
+		if a.workspaceSvc == nil || item.ID == a.workspaceRail.SelectedID() {
 			return nil
 		}
-		switcher := a.workspaceSwitcher
+		switcher := a.workspaceSvc
 		teamID := item.ID
 		return func() tea.Msg {
-			return switcher(teamID)
+			return switcher.Switch(teamID)
 		}
 
 	case a.sidebarVisible && x < a.layout.SidebarEnd():
@@ -225,15 +225,24 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 				return ChannelSelectedMsg{ID: item.ID, Name: item.Name, Type: item.Type}
 			}
 		}
-		// ClickAt returns ok=false for the synthetic Threads row;
-		// if the click landed there (sidebar updates its own
-		// selection state), activate the threads view.
+		// ClickAt returns ok=false for every row that is not a
+		// channel: the synthetic Threads and Activity rows and section
+		// headers. It has still moved the sidebar's own selection to the
+		// clicked row, so dispatch on that -- in the same order as
+		// handleEnter, which is the keyboard half of this decision.
+		// The two must stay in step: a row that responds to Enter but
+		// not to a click reads as a dead row.
 		if a.sidebar.IsThreadsSelected() {
 			return func() tea.Msg { return ThreadsViewActivatedMsg{} }
 		}
-		// Same for the synthetic Activity row.
 		if a.sidebar.IsActivitySelected() {
 			return func() tea.Msg { return ActivityViewActivatedMsg{} }
+		}
+		// Section header: expand or collapse it in place, matching the
+		// Enter behaviour. Returns false when the selected row is not
+		// a header.
+		if a.sidebar.ToggleCollapseSelected() {
+			return nil
 		}
 		return nil
 

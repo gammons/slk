@@ -48,6 +48,22 @@ type mockEventHandler struct {
 
 	memberJoined []memberEventRecord
 	memberLeft   []memberEventRecord
+
+	userStatusChanges []userStatusRecord
+	userInvalidated   []string
+	dndInvalidated    []string
+	userDNDChanges    []userDNDRecord
+}
+
+type userStatusRecord struct {
+	userID string
+	status UserStatus
+}
+
+type userDNDRecord struct {
+	userID  string
+	enabled bool
+	endUnix int64
 }
 
 type prefChangeRecord struct {
@@ -60,14 +76,15 @@ type memberEventRecord struct {
 }
 
 type channelMarkRecord struct {
-	channelID   string
-	ts          string
-	unreadCount int
+	channelID    string
+	ts           string
+	unreadCount  int
+	mentionCount int
 }
 
 type threadMarkRecord struct {
-	channelID, threadTS, ts string
-	read                    bool
+	channelID, threadTS, lastRead string
+	subscribed                    bool
 }
 
 type threadSubChangeRecord struct {
@@ -109,12 +126,12 @@ func (m *mockEventHandler) OnDNDChange(enabled bool, endUnix int64) {
 	m.dndChanges = append(m.dndChanges, dndChangeRecord{enabled, endUnix})
 }
 
-func (m *mockEventHandler) OnChannelMarked(channelID, ts string, unreadCount int) {
-	m.channelMarks = append(m.channelMarks, channelMarkRecord{channelID, ts, unreadCount})
+func (m *mockEventHandler) OnChannelMarked(channelID, ts string, unreadCount, mentionCount int) {
+	m.channelMarks = append(m.channelMarks, channelMarkRecord{channelID, ts, unreadCount, mentionCount})
 }
 
-func (m *mockEventHandler) OnThreadMarked(channelID, threadTS, ts string, read bool) {
-	m.threadMarks = append(m.threadMarks, threadMarkRecord{channelID, threadTS, ts, read})
+func (m *mockEventHandler) OnThreadMarked(channelID, threadTS, lastRead string, subscribed Subscribed) {
+	m.threadMarks = append(m.threadMarks, threadMarkRecord{channelID, threadTS, lastRead, bool(subscribed)})
 }
 
 func (m *mockEventHandler) OnThreadSubscriptionChanged(channelID, threadTS, lastRead string, active bool) {
@@ -149,6 +166,18 @@ func (m *mockEventHandler) OnMemberJoined(channelID, userID string) {
 }
 func (m *mockEventHandler) OnMemberLeft(channelID, userID string) {
 	m.memberLeft = append(m.memberLeft, memberEventRecord{channelID, userID})
+}
+func (m *mockEventHandler) OnUserStatusChange(userID string, st UserStatus) {
+	m.userStatusChanges = append(m.userStatusChanges, userStatusRecord{userID, st})
+}
+func (m *mockEventHandler) OnUserInvalidated(userID string) {
+	m.userInvalidated = append(m.userInvalidated, userID)
+}
+func (m *mockEventHandler) OnDNDInvalidated(userID string) {
+	m.dndInvalidated = append(m.dndInvalidated, userID)
+}
+func (m *mockEventHandler) OnUserDNDChange(userID string, enabled bool, endUnix int64) {
+	m.userDNDChanges = append(m.userDNDChanges, userDNDRecord{userID, enabled, endUnix})
 }
 
 func TestEventHandlerInterface(t *testing.T) {
@@ -342,10 +371,10 @@ func TestDispatchWebSocketDNDUpdatedEvent_ActiveSnooze(t *testing.T) {
 	}
 }
 
-func TestDispatchWebSocketDNDUpdatedUserEvent_NoDND(t *testing.T) {
+func TestDispatchWebSocketDNDUpdatedEvent_NoDNDActive(t *testing.T) {
 	// Neither snooze nor schedule active.
 	handler := &mockEventHandler{}
-	data := []byte(`{"type":"dnd_updated_user","dnd_status":{"dnd_enabled":false,"snooze_enabled":false,"next_dnd_start_ts":0,"next_dnd_end_ts":0}}`)
+	data := []byte(`{"type":"dnd_updated","dnd_status":{"dnd_enabled":false,"snooze_enabled":false,"next_dnd_start_ts":0,"next_dnd_end_ts":0}}`)
 	dispatchWebSocketEvent(data, handler)
 	if len(handler.dndChanges) != 1 {
 		t.Fatalf("expected 1 dnd change, got %d", len(handler.dndChanges))
@@ -356,6 +385,84 @@ func TestDispatchWebSocketDNDUpdatedUserEvent_NoDND(t *testing.T) {
 	}
 	if got.endUnix != 0 {
 		t.Errorf("expected endUnix=0, got %d", got.endUnix)
+	}
+}
+
+// dnd_updated_user is about another user. It must reach OnUserDNDChange
+// and never OnDNDChange, which would flip slk's own DND segment.
+func TestDispatchWebSocketDNDUpdatedUserEvent_RoutesToPeerNotSelf(t *testing.T) {
+	end := time.Now().Add(time.Hour).Unix()
+	handler := &mockEventHandler{}
+	data := []byte(fmt.Sprintf(
+		`{"type":"dnd_updated_user","user":"U2","dnd_status":{"dnd_enabled":true,"snooze_enabled":true,"snooze_endtime":%d,"next_dnd_start_ts":0,"next_dnd_end_ts":0}}`,
+		end))
+	dispatchWebSocketEvent(data, handler)
+	if len(handler.dndChanges) != 0 {
+		t.Errorf("dnd_updated_user reached OnDNDChange %d times; it is about another user", len(handler.dndChanges))
+	}
+	if len(handler.userDNDChanges) != 1 {
+		t.Fatalf("expected 1 peer dnd change, got %d", len(handler.userDNDChanges))
+	}
+	if got := handler.userDNDChanges[0]; got.userID != "U2" || !got.enabled || got.endUnix != end {
+		t.Errorf("peer dnd change = %+v; want U2 enabled until %d", got, end)
+	}
+}
+
+func TestDispatchWebSocketDNDUpdatedUserEvent_WithoutUserIsDropped(t *testing.T) {
+	handler := &mockEventHandler{}
+	dispatchWebSocketEvent([]byte(`{"type":"dnd_updated_user","dnd_status":{"dnd_enabled":false}}`), handler)
+	if len(handler.dndChanges) != 0 || len(handler.userDNDChanges) != 0 {
+		t.Errorf("a dnd_updated_user naming no user must be dropped; got self=%d peer=%d", len(handler.dndChanges), len(handler.userDNDChanges))
+	}
+}
+
+func TestDispatchWebSocketUserChangeEvent_DeliversStatus(t *testing.T) {
+	for _, typ := range []string{"user_change", "user_status_changed"} {
+		handler := &mockEventHandler{}
+		data := []byte(`{"type":"` + typ + `","user":{"id":"U1","name":"alice","updated":1700000000,"profile":{"display_name":"Alice","status_emoji":":calendar:","status_text":"In a meeting","status_expiration":1700003600,"huddle_state":"in_a_huddle","huddle_state_expiration_ts":1700000900}},"cache_ts":1,"event_ts":"1.0"}`)
+		dispatchWebSocketEvent(data, handler)
+		if len(handler.userStatusChanges) != 1 {
+			t.Fatalf("%s: expected 1 status change, got %d", typ, len(handler.userStatusChanges))
+		}
+		want := userStatusRecord{"U1", UserStatus{
+			Emoji: ":calendar:", Text: "In a meeting", Expiration: 1700003600,
+			HuddleState: "in_a_huddle", HuddleExpiration: 1700000900,
+		}}
+		if got := handler.userStatusChanges[0]; got != want {
+			t.Errorf("%s: got %+v, want %+v", typ, got, want)
+		}
+	}
+}
+
+// user_invalidated and dnd_invalidated carry only the user's ID, so the
+// handler receives the ID and nothing that could pass for new state.
+func TestDispatchWebSocketInvalidationEvents(t *testing.T) {
+	handler := &mockEventHandler{}
+	dispatchWebSocketEvent([]byte(`{"type":"user_invalidated","user":{"id":"U1"},"event_ts":"1.0"}`), handler)
+	dispatchWebSocketEvent([]byte(`{"type":"dnd_invalidated","user":{"id":"U2"},"event_ts":"2.0"}`), handler)
+	dispatchWebSocketEvent([]byte(`{"type":"user_invalidated","user":{},"event_ts":"3.0"}`), handler)
+	if len(handler.userInvalidated) != 1 || handler.userInvalidated[0] != "U1" {
+		t.Errorf("userInvalidated = %v; want [U1]", handler.userInvalidated)
+	}
+	if len(handler.dndInvalidated) != 1 || handler.dndInvalidated[0] != "U2" {
+		t.Errorf("dndInvalidated = %v; want [U2]", handler.dndInvalidated)
+	}
+	if len(handler.userStatusChanges) != 0 || len(handler.dndChanges) != 0 || len(handler.userDNDChanges) != 0 {
+		t.Error("invalidation events carry no state and must not be delivered as a change")
+	}
+}
+
+func TestDNDStateFromStatus_MatchesComputeDNDState(t *testing.T) {
+	now := time.Now().Unix()
+	var snoozed slack.DNDStatus
+	snoozed.SnoozeEnabled = true
+	snoozed.SnoozeEndTime = int(now + 600)
+	if on, end := DNDStateFromStatus(snoozed, now); !on || end != now+600 {
+		t.Errorf("snoozed: got (%v, %d); want (true, %d)", on, end, now+600)
+	}
+	scheduled := slack.DNDStatus{Enabled: true, NextStartTimestamp: int(now + 3600), NextEndTimestamp: int(now + 7200)}
+	if on, end := DNDStateFromStatus(scheduled, now); on || end != 0 {
+		t.Errorf("schedule configured but not in window: got (%v, %d); want (false, 0)", on, end)
 	}
 }
 
@@ -502,7 +609,7 @@ func TestDispatch_ChannelMarked_MalformedJSON_NoCall(t *testing.T) {
 	}
 }
 
-func TestDispatch_ThreadMarked_Unread_CallsHandler(t *testing.T) {
+func TestDispatch_ThreadMarked_PassesCursorThrough(t *testing.T) {
 	handler := &mockEventHandler{}
 	data := []byte(`{"type":"thread_marked","subscription":{"channel":"C1","thread_ts":"1700000000.000100","last_read":"1700000000.000200","active":true}}`)
 	dispatchWebSocketEvent(data, handler)
@@ -511,15 +618,20 @@ func TestDispatch_ThreadMarked_Unread_CallsHandler(t *testing.T) {
 		t.Fatalf("expected 1 threadMark, got %d", len(handler.threadMarks))
 	}
 	got := handler.threadMarks[0]
-	if got.channelID != "C1" || got.threadTS != "1700000000.000100" || got.ts != "1700000000.000200" {
+	if got.channelID != "C1" || got.threadTS != "1700000000.000100" || got.lastRead != "1700000000.000200" {
 		t.Errorf("unexpected: %+v", got)
 	}
-	if got.read {
-		t.Error("expected read=false (active=true means unread)")
+	if !got.subscribed {
+		t.Errorf("subscribed = false, want true for active:true")
 	}
 }
 
-func TestDispatch_ThreadMarked_Read_CallsHandler(t *testing.T) {
+// `active` means "subscribed", never "read". The dispatcher forwards it
+// as `subscribed` so the handler can decide whether inserting a
+// subscription row is legitimate; the cursor it forwards must be the
+// one the event carried either way, so that no downstream read/unread
+// decision can be derived from the flag.
+func TestDispatch_ThreadMarked_InactiveSubscriptionStillPassesCursor(t *testing.T) {
 	handler := &mockEventHandler{}
 	data := []byte(`{"type":"thread_marked","subscription":{"channel":"C1","thread_ts":"P1","last_read":"R5","active":false}}`)
 	dispatchWebSocketEvent(data, handler)
@@ -527,8 +639,11 @@ func TestDispatch_ThreadMarked_Read_CallsHandler(t *testing.T) {
 	if len(handler.threadMarks) != 1 {
 		t.Fatalf("expected 1 threadMark, got %d", len(handler.threadMarks))
 	}
-	if !handler.threadMarks[0].read {
-		t.Error("expected read=true (active=false means read)")
+	if handler.threadMarks[0].lastRead != "R5" {
+		t.Errorf("lastRead = %q, want R5", handler.threadMarks[0].lastRead)
+	}
+	if handler.threadMarks[0].subscribed {
+		t.Errorf("subscribed = true, want false for active:false")
 	}
 }
 
@@ -700,5 +815,41 @@ func TestDispatchMemberLeftChannel(t *testing.T) {
 	rec := handler.memberLeft[0]
 	if rec.channelID != "C1" || rec.userID != "U_GONE" {
 		t.Errorf("got %+v, want {C1 U_GONE}", rec)
+	}
+}
+
+// *_marked payloads carry mention_count alongside unread_count_display.
+// It is the live correction channel for the sidebar mention badge: reading
+// a channel elsewhere zeroes it, a remote mark-unread restores it.
+func TestDispatch_ChannelMarked_CarriesMentionCount(t *testing.T) {
+	handler := &mockEventHandler{}
+	data := []byte(`{"type":"channel_marked","channel":"C123","ts":"1700000000.000100","unread_count_display":9,"mention_count":4}`)
+	dispatchWebSocketEvent(data, handler)
+
+	if len(handler.channelMarks) != 1 {
+		t.Fatalf("expected 1 channelMark, got %d", len(handler.channelMarks))
+	}
+	got := handler.channelMarks[0]
+	if got.mentionCount != 4 {
+		t.Errorf("mentionCount = %d, want 4", got.mentionCount)
+	}
+	if got.unreadCount != 9 {
+		t.Errorf("unreadCount = %d, want 9", got.unreadCount)
+	}
+}
+
+// A payload without mention_count must decode to 0 rather than fail, so an
+// older or narrower Slack response degrades to "no badge" instead of
+// dropping the event.
+func TestDispatch_ChannelMarked_AbsentMentionCountIsZero(t *testing.T) {
+	handler := &mockEventHandler{}
+	data := []byte(`{"type":"channel_marked","channel":"C123","ts":"1.0","unread_count_display":2}`)
+	dispatchWebSocketEvent(data, handler)
+
+	if len(handler.channelMarks) != 1 {
+		t.Fatalf("expected 1 channelMark, got %d", len(handler.channelMarks))
+	}
+	if got := handler.channelMarks[0].mentionCount; got != 0 {
+		t.Errorf("mentionCount = %d, want 0", got)
 	}
 }

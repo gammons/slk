@@ -8,7 +8,36 @@ before:
   hooks:
     - go mod tidy
 
+# Two build entries because of cgo:
+#
+#   * darwin NEEDS CGO_ENABLED=1: golang.design/x/clipboard reads the macOS
+#     pasteboard through Cocoa, which is cgo-only. The CGO_ENABLED=0 cask
+#     binary made clipboard.Init() fail at startup and silently disabled
+#     Ctrl+V smart-paste (issue #156). This requires the release workflow
+#     to run on a macOS runner.
+#   * linux/windows stay CGO_ENABLED=0: static binaries are what make the
+#     deb/rpm/apk packages and the Windows zip portable. Linux Wayland paste
+#     works without cgo (slk shells out to wl-paste); Linux X11 paste needs
+#     cgo + libX11, and dynamically linking it would break musl/Alpine and
+#     minimal containers, so release binaries keep X11 paste disabled.
 builds:
+  - id: slk-darwin
+    main: ./cmd/slk
+    binary: slk
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
   - id: slk
     main: ./cmd/slk
     binary: slk
@@ -16,7 +45,6 @@ builds:
       - CGO_ENABLED=0
     goos:
       - linux
-      - darwin
       - windows
     goarch:
       - amd64
@@ -72,12 +100,23 @@ changelog:
     - title: Other
       order: 999
   filters:
+    # Scoped prefixes must be matched explicitly: "^chore:" does NOT
+    # match "chore(ci): ...", so scoped internal commits were leaking
+    # into user-facing notes (v0.16.0 shipped with "chore(ci): bump
+    # golangci-lint" under Other). The (\(.*\))? makes the scope
+    # optional so both spellings are excluded.
     exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
-      - "Merge pull request"
-      - "Merge branch"
+      - "^docs(\\(.*\\))?:"
+      - "^test(\\(.*\\))?:"
+      - "^chore(\\(.*\\))?:"
+      - "^style(\\(.*\\))?:"
+      - "^ci(\\(.*\\))?:"
+      # Every merge commit, not just the two spellings we happened to
+      # hit first. "Merge pull request" and "Merge branch" both missed
+      # "Merge remote-tracking branch ...", which is what git writes
+      # when a PR branch is brought up to date with main -- so that
+      # leaked into the notes as if it were a change.
+      - "^Merge "
 
 nfpms:
   - id: slk
@@ -178,15 +217,12 @@ release:
 #
 # Two consequences of the move worth knowing:
 #
-#   1. Casks are macOS-only. Homebrew-on-Linux users lose this path and
-#      should use the .deb/.rpm/.apk or the tarball, which is the better
-#      route for them anyway.
-#   2. Existing installs do NOT migrate by themselves. The tap repo needs
-#      a tap_migrations.json containing {"slk": "slk"} and Formula/slk.rb
-#      deleted; only then does `brew upgrade` move someone from the old
-#      formula to the cask. That is manual work in gammons/homebrew-tap,
-#      and it should happen right after the first stable release that
-#      publishes a cask.
+#   1. The cask serves macOS AND Linux (Homebrew supports casks on Linux);
+#      goreleaser generates on_macos and on_linux stanzas pointing at the
+#      per-OS/arch tarballs.
+#   2. The old pre-v0.13.0 formula was deleted from the tap and a
+#      tap_migrations.json containing {"slk": "slk"} added, so `brew
+#      upgrade` moves existing formula installs to the cask.
 #
 # The token is a fine-grained PAT scoped to the homebrew-tap repo with
 # contents:write, stored as HOMEBREW_TAP_GITHUB_TOKEN in this repo's

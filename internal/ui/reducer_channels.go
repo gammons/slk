@@ -5,35 +5,35 @@
 // Owns the nine Update arms that drive the channel-selection
 // lifecycle and channel-list mutations:
 //
-//   ChannelSelectedMsg            - user picked a channel: reset
-//                                   view state, mark visit,
-//                                   dispatch by cache freshness
-//                                   tier (fresh / verify-in-bg /
-//                                   spinner).
-//   MessagesLoadedMsg             - initial messages fetch landed:
-//                                   replace pane contents (nil =
-//                                   network failure, keep cache).
-//   OlderMessagesLoadedMsg        - history backfill landed:
-//                                   prepend (anchor-validated: dropped
-//                                   if the buffer was replaced
-//                                   mid-flight).
-//   ChannelMarkedRemoteMsg        - WS echo of a remote mark:
-//                                   apply locally.
-//   ChannelMarkedReadMsg          - optimistic mark-read echo:
-//                                   refresh sidebar read state.
-//   ChannelMembershipMsg          - membership fetch landed:
-//                                   push to the cache used by
-//                                   mention picker / DM resolution.
-//   ChannelJoinedMsg              - finder-driven join succeeded:
-//                                   add to sidebar + open it.
-//   ChannelJoinFailedMsg          - finder-driven join failed:
-//                                   log warning (toast TBD).
-//   channelSearchDebounceMsg      - finder typing paused: issue one
-//                                   channels/search for the query
-//                                   the user stopped on.
-//   RemoteChannelsFoundMsg        - that search answered: merge the
-//                                   non-joined matches into the
-//                                   finder, unless superseded.
+//	ChannelSelectedMsg            - user picked a channel: reset
+//	                                view state, mark visit,
+//	                                dispatch by cache freshness
+//	                                tier (fresh / verify-in-bg /
+//	                                spinner).
+//	MessagesLoadedMsg             - initial messages fetch landed:
+//	                                replace pane contents (nil =
+//	                                network failure, keep cache).
+//	OlderMessagesLoadedMsg        - history backfill landed:
+//	                                prepend (anchor-validated: dropped
+//	                                if the buffer was replaced
+//	                                mid-flight).
+//	ChannelMarkedRemoteMsg        - WS echo of a remote mark:
+//	                                apply locally.
+//	ChannelMarkedReadMsg          - optimistic mark-read echo:
+//	                                refresh sidebar read state.
+//	ChannelMembershipMsg          - membership fetch landed:
+//	                                push to the cache used by
+//	                                mention picker / DM resolution.
+//	ChannelJoinedMsg              - finder-driven join succeeded:
+//	                                add to sidebar + open it.
+//	ChannelJoinFailedMsg          - finder-driven join failed:
+//	                                log warning (toast TBD).
+//	channelSearchDebounceMsg      - finder typing paused: issue one
+//	                                channels/search for the query
+//	                                the user stopped on.
+//	RemoteChannelsFoundMsg        - that search answered: merge the
+//	                                non-joined matches into the
+//	                                finder, unless superseded.
 //
 // Free reducer (not controller-absorbed): these arms cooperate on
 // the sidebar, messagepane, statusbar, channelFinder, navHistory,
@@ -42,7 +42,7 @@
 // that cross-section.
 //
 // Helpers (cancelEdit, CloseThread, clearSelections, SetChannels,
-// SetChannelMembership, notifyReadStateChanged, applyChannelMark,
+// SetChannelMembership, notifyReadStateChanged, applyChannelMarkEcho,
 // uploadToastCmd, userNameFor, nowFormatted) stay on App; the
 // reducer calls them via `a`.
 //
@@ -97,6 +97,13 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}
 		debuglog.Cache("MessagesLoadedMsg: channel=%s active=%s kind=%s count=%d",
 			m.ChannelID, a.activeChannelID, kind, len(m.Messages))
+		// The fetcher marked the channel read on its own goroutine and
+		// reported the ts here; record it on this one so the echo does
+		// not overwrite the pre-mark LastReadTS installed below. Empty
+		// for loads that issued no mark. Recorded before the no-window
+		// early return: slk sent the mark either way, and a window may
+		// open before the echo lands. See selfMarkDedup.
+		a.selfMarks.record(selfMarkKey{channelID: m.ChannelID, ts: m.MarkedTS})
 		// Fan out to every window viewing the channel, focused or
 		// not (Phase 3).
 		models := a.modelsForChannel(m.ChannelID)
@@ -182,7 +189,9 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 
 	case ChannelMarkedRemoteMsg:
-		a.applyChannelMark(m.ChannelID, m.TS, m.UnreadCount)
+		// Echo path: may be slk's own mark coming back. See
+		// applyChannelMarkEcho.
+		a.applyChannelMarkEcho(m.ChannelID, m.TS, m.UnreadCount)
 		return nil, true
 
 	case ChannelMarkedReadMsg:
@@ -360,7 +369,7 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 	// Tell the sidebar which channel is active so the staleness
 	// filter never hides it out from under the user.
 	a.sidebar.SetActiveChannelID(m.ID)
-	a.messagepane.SetChannel(m.Name, "")
+	a.messagepane.SetChannel(m.Name, a.presence.dmTopicFor(a, m.ID))
 	a.messagepane.SetChannelType(m.Type)
 
 	// Close any open mention picker before switching channels.
@@ -409,6 +418,10 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 		channels := a.channels
 		chID := ids.ChannelID(m.ID)
 		latestTS := ids.MessageTS(cached[len(cached)-1].TS)
+		// Record before issuing: Slack echoes this mark back as
+		// channel_marked, and applying that echo would drag the
+		// divider off the pre-entry cursor. See selfMarkDedup.
+		a.selfMarks.record(selfMarkKey{channelID: m.ID, ts: string(latestTS)})
 		// MarkRead produces ChannelMarkedReadMsg, NOT MessagesLoadedMsg,
 		// so no authoritative permalink completion will follow.
 		return func() tea.Msg { return channels.MarkRead(chID, latestTS) }, false

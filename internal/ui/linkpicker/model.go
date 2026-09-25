@@ -1,31 +1,46 @@
 // Package linkpicker provides the modal overlay that lets the user
-// pick which link in a message to open (issue #62). Opened by the
-// `o` keybinding when the selected message has more than one link;
-// the chosen link is dispatched as ui.OpenLinkMsg by the mode handler.
+// pick one item from a message: which link to open (the `o`
+// keybinding) or which file attachment to download (the `d`
+// keybinding). The chosen item is dispatched as ui.OpenLinkMsg or
+// ui.DownloadFileMsg by the mode handler, depending on the kind the
+// App recorded when opening the picker.
 package linkpicker
 
-// Item is one selectable link row.
+// Item is one selectable row.
 type Item struct {
 	URL   string
-	Label string // empty for bare links
+	Label string // filename for file rows; link label (may be empty) for links
+	// Detail is trailing muted info shown after the label (e.g. file
+	// size). Empty for link rows.
+	Detail string
 	// InApp marks links that the router will navigate inside slk
 	// (active-workspace archive permalinks); rendered with a badge.
 	InApp bool
+	// Index is the item's position in the slice passed to Open,
+	// assigned by Open so the dispatcher can map the chosen row back
+	// to its source data.
+	Index int
 }
 
-// Model is the link picker overlay state.
+// Model is the picker overlay state.
 type Model struct {
+	title    string
 	items    []Item
 	selected int
 	visible  bool
 }
 
-// New creates a hidden link picker.
+// New creates a hidden picker.
 func New() *Model { return &Model{} }
 
-// Open shows the picker over items, with the first row selected.
-func (m *Model) Open(items []Item) {
+// Open shows the picker over items with the given dialog title, first
+// row selected.
+func (m *Model) Open(title string, items []Item) {
+	m.title = title
 	m.items = items
+	for i := range m.items {
+		m.items[i].Index = i
+	}
 	m.selected = 0
 	m.visible = true
 }
@@ -40,6 +55,9 @@ func (m *Model) Close() {
 // IsVisible reports whether the picker is showing.
 func (m *Model) IsVisible() bool { return m.visible }
 
+// Title returns the dialog title set by Open.
+func (m *Model) Title() string { return m.title }
+
 // Items returns the current rows (for rendering and tests).
 func (m *Model) Items() []Item { return m.items }
 
@@ -47,7 +65,7 @@ func (m *Model) Items() []Item { return m.items }
 func (m *Model) Selected() int { return m.selected }
 
 // HandleKey processes one key. Returns (item, true) when the user
-// chose a link with enter (the picker closes itself); (Item{}, false)
+// chose a row with enter (the picker closes itself); (Item{}, false)
 // otherwise. esc/q close without choosing.
 func (m *Model) HandleKey(key string) (Item, bool) {
 	switch key {

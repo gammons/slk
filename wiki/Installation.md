@@ -29,6 +29,15 @@ curl -fsSLO "https://github.com/gammons/slk/releases/latest/download/slk_${VERSI
 sudo apk add --allow-untrusted "slk_${VERSION}_linux_amd64.apk"
 ```
 
+### Arch Linux
+
+slk is available in the AUR as [`slk`](https://aur.archlinux.org/packages/slk)
+(community-maintained; builds from source):
+
+```bash
+yay -S slk    # or: paru -S slk
+```
+
 ### Tarball (any distro)
 
 Swap `x86_64` for `arm64` on ARM:
@@ -40,6 +49,20 @@ sudo mv slk /usr/local/bin/
 ```
 
 ## macOS
+
+### Homebrew (macOS and Linux)
+
+```bash
+brew install --cask gammons/tap/slk
+```
+
+The cask carries per-OS/arch tarballs and serves both macOS and Linux.
+Anyone who installed via the old pre-v0.13.0 formula is migrated to the
+cask automatically on `brew upgrade` (the formula was removed from the tap
+and a `tap_migrations.json` entry added); if that ever fails, run
+`brew uninstall slk && brew install --cask gammons/tap/slk` once.
+
+### Tarball
 
 ```bash
 VERSION=$(curl -fsSL https://api.github.com/repos/gammons/slk/releases/latest | grep -oE '"tag_name": *"v[^"]+"' | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sed 's/^v//')

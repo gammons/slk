@@ -3,6 +3,9 @@ package channelfinder
 import (
 	"strings"
 	"testing"
+
+	"github.com/gammons/slk/internal/emoji"
+	"github.com/gammons/slk/internal/ui/peerstatus"
 )
 
 func testItems() []Item {
@@ -17,6 +20,78 @@ func testItems() []Item {
 		{ID: "C4", Name: "grant-planning", Type: "private", LastVisited: 300},
 		{ID: "D1", Name: "Alice", Type: "dm", Presence: "active", LastVisited: 200},
 		{ID: "D2", Name: "Bob", Type: "dm", Presence: "away", LastVisited: 100},
+	}
+}
+
+func TestViewShowsPeerStatusAndDND(t *testing.T) {
+	m := New()
+	m.SetItems([]Item{{
+		ID: "D1", Name: "Alice", Type: "dm", Joined: true, Presence: "active",
+	}})
+	m.SetStatus("D1", peerstatus.Status{Emoji: ":calendar:", DND: true})
+	m.Open()
+
+	got := m.View(80)
+	if !strings.Contains(got, peerstatus.DNDGlyph) {
+		t.Fatalf("finder row does not replace presence with DND:\n%s", got)
+	}
+	if !strings.Contains(got, "Alice "+emoji.CodeMap()[":calendar:"]) {
+		t.Fatalf("finder row does not show the custom status:\n%s", got)
+	}
+
+	m.SetStatus("D1", peerstatus.Status{Huddle: peerstatus.HuddleActive})
+	if got := m.View(80); !strings.Contains(got, "Alice "+peerstatus.HuddleGlyph) {
+		t.Fatalf("finder row does not show the huddle glyph:\n%s", got)
+	}
+}
+
+// TestRenderBoxTruncatesNameNotGlyph: a long name at a narrow width
+// truncates the name, not the status glyph.
+func TestRenderBoxTruncatesNameNotGlyph(t *testing.T) {
+	m := New()
+	longName := strings.Repeat("averylongdisplaynameforadirectmessage", 3)
+	m.SetItems([]Item{{ID: "D1", Name: longName, Type: "dm", Joined: true, Presence: "active"}})
+	m.SetStatus("D1", peerstatus.Status{Emoji: ":calendar:"})
+	m.Open()
+
+	got := m.View(40) // narrow terminal, forces truncation
+	glyph := emoji.CodeMap()[":calendar:"]
+	if !strings.Contains(got, glyph) {
+		t.Fatalf("a long name at a narrow width dropped the status glyph:\n%s", got)
+	}
+	if !strings.Contains(got, "…") {
+		t.Fatalf("expected the long name itself to be truncated:\n%s", got)
+	}
+}
+
+// TestStatusSurvivesSetItemsWithinWorkspace: a SetItems call that keeps
+// the same channel IDs (e.g. a sections refresh) must not lose their
+// statuses.
+func TestStatusSurvivesSetItemsWithinWorkspace(t *testing.T) {
+	m := New()
+	m.SetItems([]Item{{ID: "D1", Name: "Alice", Type: "dm", Joined: true}})
+	m.SetStatus("D1", peerstatus.Status{Emoji: ":calendar:"})
+
+	m.SetItems([]Item{
+		{ID: "D1", Name: "Alice", Type: "dm", Joined: true},
+		{ID: "C1", Name: "general", Type: "channel", Joined: true},
+	})
+
+	if got := m.StatusFor("D1"); got.Emoji != ":calendar:" {
+		t.Fatalf("status did not survive a same-workspace SetItems: %+v", got)
+	}
+}
+
+// TestSetItemsDropsStatusesForRemovedRows: a SetItems call that drops a
+// channel ID must also drop its status, not keep it around indefinitely.
+func TestSetItemsDropsStatusesForRemovedRows(t *testing.T) {
+	m := New()
+	m.SetItems([]Item{{ID: "D1", Name: "Alice", Type: "dm", Joined: true}})
+	m.SetStatus("D1", peerstatus.Status{Emoji: ":calendar:"})
+
+	m.SetItems([]Item{{ID: "D9", Name: "Bob", Type: "dm", Joined: true}})
+	if got := m.StatusFor("D1"); got != (peerstatus.Status{}) {
+		t.Fatalf("status survived removal of its row: %+v", got)
 	}
 }
 
@@ -284,6 +359,60 @@ func TestSetBrowseableReplacesPreviousBrowseable(t *testing.T) {
 		if it.ID == "C2" {
 			t.Error("expected previous browseable item C2 to be replaced")
 		}
+	}
+}
+
+func TestUpsertRefiltersVisibleQuery(t *testing.T) {
+	m := New()
+	m.SetItems([]Item{{ID: "C1", Name: "general", Type: "channel", Joined: true}})
+	m.Open()
+	m.HandleKey("z")
+	m.HandleKey("e")
+	m.HandleKey("d")
+	if got := m.FilteredItems(); len(got) != 0 {
+		t.Fatalf("setup: filtered items = %+v, want none", got)
+	}
+
+	m.Upsert(Item{ID: "D1", Name: "zed person", Type: "dm", Joined: true})
+
+	got := m.FilteredItems()
+	if len(got) != 1 || got[0].ID != "D1" {
+		t.Errorf("filtered items after Upsert = %+v, want D1", got)
+	}
+}
+
+func TestUpsertReplacesByIDAndPreservesLastVisited(t *testing.T) {
+	m := New()
+	m.SetItems([]Item{{
+		ID: "C1", Name: "old name", Type: "channel", Joined: false, LastVisited: 123,
+	}})
+
+	m.Upsert(Item{ID: "C1", Name: "new name", Type: "private", Joined: true})
+
+	got := m.Items()
+	if len(got) != 1 {
+		t.Fatalf("items after Upsert = %+v, want one replacement", got)
+	}
+	if got[0].Name != "new name" || got[0].Type != "private" || !got[0].Joined {
+		t.Errorf("replacement = %+v, want updated descriptive fields", got[0])
+	}
+	if got[0].LastVisited != 123 {
+		t.Errorf("replacement LastVisited = %d, want preserved value 123", got[0].LastVisited)
+	}
+}
+
+func TestUpsertConvertsBrowseableEntryInPlace(t *testing.T) {
+	m := New()
+	m.SetBrowseable([]Item{{ID: "C9", Name: "announcements", Type: "channel", Joined: false}})
+
+	m.Upsert(Item{ID: "C9", Name: "announcements", Type: "channel", Joined: true})
+
+	got := m.Items()
+	if len(got) != 1 {
+		t.Fatalf("items after Upsert = %+v, want one converted entry, not a duplicate", got)
+	}
+	if !got[0].Joined {
+		t.Errorf("item %q: Joined = false, want true", got[0].ID)
 	}
 }
 

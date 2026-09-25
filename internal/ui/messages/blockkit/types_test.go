@@ -12,7 +12,7 @@ func TestBlockTypesImplementInterface(t *testing.T) {
 		ActionsBlock{},
 		UnknownBlock{Type: "video"},
 	}
-	if got := blocks[6].blockType(); got != "video" {
+	if got := blockType(blocks[6]); got != "video" {
 		t.Errorf("UnknownBlock.blockType() = %q, want %q", got, "video")
 	}
 }

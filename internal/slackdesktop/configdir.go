@@ -11,7 +11,16 @@ import (
 func configDirForOS(goos string, getenv func(string) string, exists func(string) bool) string {
 	switch goos {
 	case "windows":
-		return filepath.Join(getenv("APPDATA"), "Slack")
+		var candidates []string
+		candidates = append(candidates, filepath.Join(getenv("APPDATA"), "Slack"))
+		candidates = append(candidates, filepath.Join(getenv("LOCALAPPDATA"), "Packages", "com.tinyspeck.slackdesktop_8yrtsj140pw4g", "LocalCache", "Roaming", "Slack"))
+		for _, c := range candidates {
+			if exists(c) {
+				return c
+			}
+		}
+		// Fall back to the first candidate if none was found.
+		return candidates[0]
 	case "darwin":
 		home := getenv("HOME")
 		first := filepath.Join(home, "Library", "Application Support", "Slack")
@@ -21,10 +30,29 @@ func configDirForOS(goos string, getenv func(string) string, exists func(string)
 		}
 		return second
 	default: // linux and others
-		if x := getenv("XDG_CONFIG_DIR"); x != "" {
-			return filepath.Join(x, "Slack")
+		home := getenv("HOME")
+		var candidates []string
+		if x := getenv("XDG_CONFIG_HOME"); x != "" {
+			candidates = append(candidates, filepath.Join(x, "Slack"))
 		}
-		return filepath.Join(getenv("HOME"), ".config", "Slack")
+		if x := getenv("XDG_CONFIG_DIR"); x != "" {
+			candidates = append(candidates, filepath.Join(x, "Slack"))
+		}
+		candidates = append(candidates,
+			filepath.Join(home, ".config", "Slack"),
+			// flatpak (com.slack.Slack)
+			filepath.Join(home, ".var", "app", "com.slack.Slack", "config", "Slack"),
+			// snap
+			filepath.Join(home, "snap", "slack", "current", ".config", "Slack"),
+		)
+		for _, c := range candidates {
+			if exists(c) {
+				return c
+			}
+		}
+		// Nothing found: fall back to the primary location so the
+		// not-found error references the conventional path.
+		return candidates[0]
 	}
 }
 

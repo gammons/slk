@@ -27,14 +27,14 @@ package ui
 import (
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
-	slack "github.com/gammons/slk/internal/slack"
 )
 
 // activityRefs groups a page of activity items' (channel, ts) refs by
 // channel for a single batched messages.list hydration. Items with no
 // channel or ts are skipped; duplicate ts within a channel are de-duped.
-func activityRefs(items []slack.ActivityItem) map[string][]string {
+func activityRefs(items []core.ActivityItem) map[string][]string {
 	seen := map[string]map[string]bool{}
 	refs := map[string][]string{}
 	for _, it := range items {

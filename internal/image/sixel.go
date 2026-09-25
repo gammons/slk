@@ -21,13 +21,22 @@ const (
 )
 
 // cellPxW / cellPxH hold the terminal's measured cell size in pixels.
+// BOTH encoders need them, for different reasons.
 //
-// Unlike kitty — which transmits c=<cols>,r=<rows> and lets the terminal
-// scale the image into that cell box — sixel has no cell-aware placement:
-// the terminal paints one sixel pixel per device pixel and advances the
-// cursor by the image's own height. So the encoded pixel dimensions ARE
-// the on-screen size, and they must be derived from the real cell metrics
-// or the image won't line up with the rows the layout reserved for it.
+// Sixel has no cell-aware placement: the terminal paints one sixel pixel
+// per device pixel and advances the cursor by the image's own height, so
+// the encoded pixel dimensions ARE the on-screen size and must come from
+// the real cell metrics or the image won't line up with the rows the
+// layout reserved for it.
+//
+// Kitty does place by cell — c=<cols>,r=<rows> — so its LAYOUT is correct
+// whatever we encode at. Its resolution is not. The terminal scales the
+// transmitted image across the cell box, so encoding against a cell that
+// is smaller than the real one hands it fewer pixels than the box can
+// show and it upscales the difference. On a HiDPI terminal reporting a
+// 14x34 cell, the old hardcoded 8x16 supplied 57% of the horizontal and
+// 47% of the vertical resolution available — which reads as a soft,
+// low-resolution image, most visibly on screenshots of text.
 //
 // Set once at startup from CellPixels() before any rendering goroutine
 // runs; atomics keep that safe against the prerender worker pool.
@@ -36,21 +45,21 @@ var (
 	cellPxH atomic.Int32
 )
 
-// SetCellPixels records the terminal's cell size for sixel encoding.
+// SetCellPixels records the terminal's cell size for image encoding.
 // Non-positive values are ignored, so a terminal that reports nothing
 // keeps the 8x16 default. Call once during startup.
 func SetCellPixels(w, h int) {
 	if w <= 0 || h <= 0 {
-		debuglog.ImgRender("sixel.SetCellPixels: ignoring non-positive cell size %dx%d", w, h)
+		debuglog.ImgRender("image.SetCellPixels: ignoring non-positive cell size %dx%d", w, h)
 		return
 	}
 	cellPxW.Store(int32(w))
 	cellPxH.Store(int32(h))
-	debuglog.ImgRender("sixel.SetCellPixels: cell_w=%d cell_h=%d", w, h)
+	debuglog.ImgRender("image.SetCellPixels: cell_w=%d cell_h=%d", w, h)
 }
 
-// sixelCellPixels returns the cell size to encode against.
-func sixelCellPixels() (int, int) {
+// measuredCellPixels returns the cell size to encode against.
+func measuredCellPixels() (int, int) {
 	w, h := int(cellPxW.Load()), int(cellPxH.Load())
 	if w <= 0 || h <= 0 {
 		return defaultCellPxW, defaultCellPxH
@@ -79,7 +88,7 @@ func (s *SixelRenderer) Render(img image.Image, target image.Point) Render {
 		return Render{Cells: target}
 	}
 
-	cw, ch := sixelCellPixels()
+	cw, ch := measuredCellPixels()
 	pxW := target.X * cw
 	pxH := target.Y * ch
 	resized := image.NewRGBA(image.Rect(0, 0, pxW, pxH))

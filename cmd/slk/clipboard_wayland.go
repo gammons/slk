@@ -1,4 +1,4 @@
-package ui
+package main
 
 import (
 	"bytes"
@@ -7,6 +7,8 @@ import (
 	"os/exec"
 
 	"golang.design/x/clipboard"
+
+	"github.com/gammons/slk/internal/core"
 )
 
 // IsWayland reports whether the runtime is a Wayland session.
@@ -25,17 +27,17 @@ func HasWlPaste() bool {
 	return err == nil
 }
 
-// WaylandClipboardReader returns a clipboardReader that shells out to
+// WaylandClipboardReader returns a clipboard reader that shells out to
 // `wl-paste` to read the Wayland compositor's clipboard. The native
 // X11-based golang.design/x/clipboard library does not see images
 // placed on the clipboard by Wayland-native applications even with
 // XWayland active, so we bypass it entirely on Wayland sessions.
-func WaylandClipboardReader() clipboardReader {
-	return func(format clipboard.Format) []byte {
+func WaylandClipboardReader() func(core.ClipboardFormat) []byte {
+	return func(format core.ClipboardFormat) []byte {
 		switch format {
-		case clipboard.FmtImage:
+		case core.ClipboardImage:
 			return wlPasteBytes("image/png")
-		case clipboard.FmtText:
+		case core.ClipboardText:
 			// Try utf-8 text explicitly, then fall back to whatever
 			// wl-paste's default type happens to be.
 			if b := wlPasteBytes("text/plain;charset=utf-8"); len(b) > 0 {
@@ -45,6 +47,15 @@ func WaylandClipboardReader() clipboardReader {
 		}
 		return nil
 	}
+}
+
+// nativeClipboardRead reads the clipboard through golang.design/x/clipboard,
+// which needs clipboard.Init to have succeeded.
+func nativeClipboardRead(format core.ClipboardFormat) []byte {
+	if format == core.ClipboardImage {
+		return clipboard.Read(clipboard.FmtImage)
+	}
+	return clipboard.Read(clipboard.FmtText)
 }
 
 // wlPasteBytes runs `wl-paste --no-newline` (optionally with --type)

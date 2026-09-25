@@ -105,8 +105,8 @@ func (db *DB) migrate() error {
 		is_member INTEGER NOT NULL DEFAULT 0,
 		is_starred INTEGER NOT NULL DEFAULT 0,
 		last_read_ts TEXT NOT NULL DEFAULT '',
-		unread_count INTEGER NOT NULL DEFAULT 0,
 		has_unread INTEGER NOT NULL DEFAULT 0,
+		mention_count INTEGER NOT NULL DEFAULT 0,
 		updated_at INTEGER NOT NULL DEFAULT 0,
 		FOREIGN KEY (workspace_id) REFERENCES workspaces(id)
 	);
@@ -224,6 +224,10 @@ func (db *DB) migrate() error {
 		"ALTER TABLE channels ADD COLUMN has_unread INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
+	if err := db.addColumnIfMissing("channels", "mention_count",
+		"ALTER TABLE channels ADD COLUMN mention_count INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 	if err := db.addColumnIfMissing("users", "is_external",
 		"ALTER TABLE users ADD COLUMN is_external INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
@@ -250,6 +254,56 @@ func (db *DB) migrate() error {
 		"ALTER TABLE messages ADD COLUMN version TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	// Custom status, rendered next to other users' names. Conditional
+	// revalidation only returns users whose version moved, so a user
+	// cached before these columns existed would never be refetched to
+	// fill them. Zeroing users.version once, when the columns first
+	// appear, makes the next revalidation fetch every cached user in
+	// full. The reset runs before the columns are added, so a crash
+	// part-way leaves the group incomplete and the next start resets
+	// again.
+	hadStatus, err := db.hasColumns("users", "status_emoji", "status_text", "status_expiration")
+	if err != nil {
+		return err
+	}
+	if !hadStatus {
+		if _, err := db.conn.Exec(`UPDATE users SET version = 0`); err != nil {
+			return fmt.Errorf("resetting user versions for status backfill: %w", err)
+		}
+	}
+	if err := db.addColumnIfMissing("users", "status_emoji",
+		"ALTER TABLE users ADD COLUMN status_emoji TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := db.addColumnIfMissing("users", "status_text",
+		"ALTER TABLE users ADD COLUMN status_text TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := db.addColumnIfMissing("users", "status_expiration",
+		"ALTER TABLE users ADD COLUMN status_expiration INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	// Huddle state, shown next to other users' names like the status.
+	// The same one-time version reset, keyed on its own column group,
+	// so a database that already gained the status columns refetches
+	// too.
+	hadHuddle, err := db.hasColumns("users", "huddle_state", "huddle_expiration")
+	if err != nil {
+		return err
+	}
+	if !hadHuddle {
+		if _, err := db.conn.Exec(`UPDATE users SET version = 0`); err != nil {
+			return fmt.Errorf("resetting user versions for huddle backfill: %w", err)
+		}
+	}
+	if err := db.addColumnIfMissing("users", "huddle_state",
+		"ALTER TABLE users ADD COLUMN huddle_state TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := db.addColumnIfMissing("users", "huddle_expiration",
+		"ALTER TABLE users ADD COLUMN huddle_expiration INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 
 	// Full-text search index. FTS5 may be unavailable in unusual
 	// driver builds; search degrades to LIKE rather than failing
@@ -262,13 +316,11 @@ func (db *DB) migrate() error {
 	return nil
 }
 
-// addColumnIfMissing runs the given DDL only if the column isn't
-// already present on the table. Used for additive schema migrations on
-// pre-existing databases.
-func (db *DB) addColumnIfMissing(table, column, ddl string) error {
+// hasColumn reports whether table already has column.
+func (db *DB) hasColumn(table, column string) (bool, error) {
 	rows, err := db.conn.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {
-		return fmt.Errorf("inspecting %s columns: %w", table, err)
+		return false, fmt.Errorf("inspecting %s columns: %w", table, err)
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -277,14 +329,40 @@ func (db *DB) addColumnIfMissing(table, column, ddl string) error {
 		var notnull, pk int
 		var dflt sql.NullString
 		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			return fmt.Errorf("scanning %s columns: %w", table, err)
+			return false, fmt.Errorf("scanning %s columns: %w", table, err)
 		}
 		if name == column {
-			return nil // already present
+			return true, nil
 		}
 	}
-	if err := rows.Err(); err != nil {
+	return false, rows.Err()
+}
+
+// hasColumns reports whether table already has every column in
+// columns.
+func (db *DB) hasColumns(table string, columns ...string) (bool, error) {
+	for _, column := range columns {
+		ok, err := db.hasColumn(table, column)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// addColumnIfMissing runs the given DDL only if the column isn't
+// already present on the table. Used for additive schema migrations on
+// pre-existing databases.
+func (db *DB) addColumnIfMissing(table, column, ddl string) error {
+	has, err := db.hasColumn(table, column)
+	if err != nil {
 		return err
+	}
+	if has {
+		return nil // already present
 	}
 	if _, err := db.conn.Exec(ddl); err != nil {
 		return fmt.Errorf("adding %s.%s: %w", table, column, err)

@@ -1,0 +1,41 @@
+name: renovate
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      logLevel:
+        description: Renovate log level
+        type: choice
+        default: info
+        options:
+          - info
+          - debug
+
+permissions:
+  contents: read
+
+jobs:
+  renovate:
+    name: renovate
+    runs-on: ubuntu-latest
+    # Forks track this repo; dependency PRs there would only create
+    # go.mod conflicts on the next rebase.
+    if: github.repository == 'gammons/slk'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Renovate
+        uses: renovatebot/github-action@v46.3.1
+        with:
+          configurationFile: .github/renovate.json5
+          token: ${{ secrets.RENOVATE_TOKEN }}
+        env:
+          LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
+          # The action runs renovate against whatever repositories it is
+          # told about; without this it exits with "No repositories found"
+          # and does nothing. github.repository keeps it pointing at this
+          # repo (the job's if: guard already stops forks from running it).
+          RENOVATE_REPOSITORIES: ${{ github.repository }}

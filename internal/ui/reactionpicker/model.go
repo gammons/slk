@@ -8,6 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/muesli/reflow/truncate"
 
+	"github.com/gammons/slk/internal/core"
 	slkemoji "github.com/gammons/slk/internal/emoji"
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/text"
@@ -17,10 +18,7 @@ import (
 )
 
 // EmojiEntry represents an emoji with its name and Unicode character.
-type EmojiEntry struct {
-	Name    string // e.g. "thumbsup"
-	Unicode string // e.g. "\U0001f44d"
-}
+type EmojiEntry = core.EmojiEntry
 
 // ReactionResult is returned when the user selects an emoji.
 type ReactionResult struct {
@@ -251,9 +249,10 @@ func (m *Model) filter() {
 
 	var substringMatches []EmojiEntry
 	for _, e := range m.allEmoji {
-		if strings.HasPrefix(text.Fold(e.Name), q) {
+		name := text.Fold(e.Name)
+		if strings.HasPrefix(name, q) {
 			m.filtered = append(m.filtered, e)
-		} else if strings.Contains(text.Fold(e.Name), q) {
+		} else if strings.Contains(name, q) {
 			substringMatches = append(substringMatches, e)
 		}
 		if len(m.filtered)+len(substringMatches) >= 50 {

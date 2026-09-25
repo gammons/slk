@@ -8,5 +8,7 @@ var (
 	ErrCookieDBMissing = errors.New("slack cookie database not found")
 	ErrKeyringLocked   = errors.New("system keyring is locked")
 	ErrNoSecretService = errors.New("no system secret service available")
+	ErrSecretNotFound  = errors.New("slack secret not found in system keyring")
 	ErrDecryptFailed   = errors.New("failed to decrypt slack session cookie")
+	ErrCookieLocked    = errors.New("slack cookie database is locked")
 )

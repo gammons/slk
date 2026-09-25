@@ -41,16 +41,23 @@ func (m *Model) renderBox(termWidth int) string {
 		Bold(true).
 		Background(bg).
 		Foreground(styles.Primary).
-		Render("Open link")
+		Render(m.title)
 
 	badgeStyle := lipgloss.NewStyle().Background(bg).Foreground(styles.Accent)
 
 	var rows []string
 	for i, it := range m.items {
-		text := it.URL
-		if it.Label != "" && it.Label != it.URL {
-			text = it.Label + "  " + it.URL
+		var parts []string
+		if it.Label != "" {
+			parts = append(parts, it.Label)
 		}
+		if it.URL != "" && it.URL != it.Label {
+			parts = append(parts, it.URL)
+		}
+		if it.Detail != "" {
+			parts = append(parts, it.Detail)
+		}
+		text := strings.Join(parts, "  ")
 		badge := ""
 		if it.InApp {
 			badge = " [slk]"
@@ -86,7 +93,7 @@ func (m *Model) renderBox(termWidth int) string {
 	footer := lipgloss.NewStyle().
 		Background(bg).
 		Foreground(styles.TextMuted).
-		Render("j/k move   enter open   esc/q close")
+		Render("j/k move   enter select   esc/q close")
 
 	content := title + "\n\n" + strings.Join(rows, "\n") + "\n\n" + footer
 	content = messages.ReapplyBgAfterResets(content, messages.BgANSI()+messages.FgANSI())

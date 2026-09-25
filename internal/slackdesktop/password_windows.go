@@ -12,9 +12,20 @@ import (
 	"github.com/billgraziano/dpapi"
 )
 
-// keyringPassword returns the AES-256 key from Local State (Windows). On
+// keyringPasswords returns the AES-256 key from Local State (Windows). On
 // Windows this key feeds AES-GCM (not PBKDF2).
-func keyringPassword() ([]byte, error) {
+//
+// Local State is read from the profile directory itself, so there is only ever
+// one candidate — no keychain-style ambiguity to resolve as on macOS.
+func keyringPasswords() ([][]byte, error) {
+	key, err := localStateKey()
+	if err != nil {
+		return nil, err
+	}
+	return [][]byte{key}, nil
+}
+
+func localStateKey() ([]byte, error) {
 	dir, err := ConfigDir()
 	if err != nil {
 		return nil, err

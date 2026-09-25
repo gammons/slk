@@ -135,3 +135,23 @@ func TestOpenLinkKey_FromThreadPanel(t *testing.T) {
 		t.Errorf("got %#v", cmd())
 	}
 }
+
+// TestLinkPickerMode_LinkKindUnaffected guards the shared picker:
+// opening it for links must still dispatch OpenLinkMsg, not
+// DownloadFileMsg.
+func TestLinkPickerMode_LinkKindUnaffected(t *testing.T) {
+	app := NewApp()
+	app.focusedPanel = PanelMessages
+	app.messagepane.SetMessages([]messages.MessageItem{
+		{TS: "1.0", Text: "<https://a.example/1> <https://b.example/2>"},
+	})
+	pressO(app)
+	cmd := app.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	msg, ok := cmd().(OpenLinkMsg)
+	if !ok {
+		t.Fatalf("expected OpenLinkMsg, got %#v", cmd())
+	}
+	if msg.URL != "https://a.example/1" {
+		t.Errorf("URL = %q", msg.URL)
+	}
+}

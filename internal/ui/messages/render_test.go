@@ -242,31 +242,30 @@ func TestDateTokenRendersFallback(t *testing.T) {
 	}
 }
 
-// TestRenderAttachmentsImageMarker asserts that an Image attachment renders
-// with an [Image] marker, the URL (visible for copy-paste), and an OSC 8
-// hyperlink for clickability. Filenames are intentionally omitted to keep
-// attachment lines short enough to fit in narrow panes.
+// TestRenderAttachmentsImageMarker asserts that an Image attachment
+// renders with an [Image] marker and its filename, hyperlinked (OSC 8)
+// to the URL. The raw URL is not shown in the visible text.
 func TestRenderAttachmentsImageMarker(t *testing.T) {
 	got := RenderAttachments([]Attachment{
-		{Kind: "image", Name: "uniquefile12345.png", URL: "https://files.slack.com/abc/xyz.png"},
+		{Kind: "image", Name: "photo.png", URL: "https://files.slack.com/abc/xyz.png"},
 	})
 	plain := ansi.Strip(got)
 	if !strings.Contains(plain, "[Image]") {
 		t.Errorf("expected [Image] marker, got %q", plain)
 	}
-	if strings.Contains(plain, "uniquefile12345.png") {
-		t.Errorf("filename should be omitted from attachment line, got %q", plain)
+	if !strings.Contains(plain, "photo.png") {
+		t.Errorf("expected filename visible, got %q", plain)
 	}
-	if !strings.Contains(plain, "https://files.slack.com") {
-		t.Errorf("expected URL visible in plain output, got %q", plain)
+	if strings.Contains(plain, "https://files.slack.com") {
+		t.Errorf("raw URL should not be visible, got %q", plain)
 	}
-	if !strings.Contains(got, "\x1b]8;;https://files.slack.com") {
+	if !strings.Contains(got, "\x1b]8;;https://files.slack.com/abc/xyz.png") {
 		t.Error("expected OSC 8 hyperlink escape on attachment line")
 	}
 }
 
-// TestRenderAttachmentsFileMarker confirms non-image attachments use [File]
-// and omit the filename.
+// TestRenderAttachmentsFileMarker confirms non-image attachments use
+// the [File] marker and show the filename.
 func TestRenderAttachmentsFileMarker(t *testing.T) {
 	got := ansi.Strip(RenderAttachments([]Attachment{
 		{Kind: "file", Name: "design.pdf", URL: "https://files.slack.com/x.pdf"},
@@ -274,11 +273,19 @@ func TestRenderAttachmentsFileMarker(t *testing.T) {
 	if !strings.Contains(got, "[File]") {
 		t.Errorf("expected [File] marker, got %q", got)
 	}
-	if strings.Contains(got, "design.pdf") {
-		t.Errorf("filename should be omitted, got %q", got)
+	if !strings.Contains(got, "design.pdf") {
+		t.Errorf("expected filename visible, got %q", got)
 	}
-	if !strings.Contains(got, "https://files.slack.com/x.pdf") {
-		t.Errorf("expected URL visible, got %q", got)
+}
+
+// TestRenderAttachmentsNamelessFallsBackToURL covers files whose
+// title and filename are both empty: the raw URL is the label.
+func TestRenderAttachmentsNamelessFallsBackToURL(t *testing.T) {
+	got := ansi.Strip(RenderAttachments([]Attachment{
+		{Kind: "file", URL: "https://files.slack.com/raw"},
+	}))
+	if !strings.Contains(got, "https://files.slack.com/raw") {
+		t.Errorf("expected URL fallback, got %q", got)
 	}
 }
 
@@ -776,12 +783,13 @@ func TestBgFgANSIForBasicColorOutOfRange(t *testing.T) {
 
 // TestSubstituteBgSGR exercises the grammar-aware bg-parameter
 // substitution. The helper must:
-//   (1) substitute the param when it stands alone (\x1b[40m)
-//   (2) substitute the param within a bundled SGR (\x1b[1;31;40m)
-//   (3) NOT corrupt literal digits in non-SGR content
-//   (4) NOT match the param value inside a 256-color sub-argument
-//       (\x1b[38;5;40m is an FG index 40, not a bg basic 40)
-//   (5) leave the string unchanged when from == to
+//
+//	(1) substitute the param when it stands alone (\x1b[40m)
+//	(2) substitute the param within a bundled SGR (\x1b[1;31;40m)
+//	(3) NOT corrupt literal digits in non-SGR content
+//	(4) NOT match the param value inside a 256-color sub-argument
+//	    (\x1b[38;5;40m is an FG index 40, not a bg basic 40)
+//	(5) leave the string unchanged when from == to
 func TestSubstituteBgSGR(t *testing.T) {
 	const to = "48;2;100;100;200"
 

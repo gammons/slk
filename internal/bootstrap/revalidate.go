@@ -344,7 +344,12 @@ func revalidateUsers(ctx context.Context, deps Deps, out *Result, logf func(stri
 		return
 	}
 
+	// Counts of each huddle_state value, logged without user IDs, so a
+	// debug run shows if Slack starts sending a value other than
+	// "in_a_huddle" and "default_unset".
+	huddleStates := map[string]int{}
 	for _, u := range users {
+		huddleStates[u.Profile.HuddleState]++
 		if err := deps.Store.UpdateUserFromEdge(cache.EdgeUserUpdate{
 			ID:          u.ID,
 			Name:        u.Name,
@@ -356,11 +361,19 @@ func revalidateUsers(ctx context.Context, deps Deps, out *Result, logf func(stri
 			AvatarURL:  u.Profile.ImageOriginal,
 			IsBot:      u.IsBot,
 			IsExternal: isExternal(u, deps.WorkspaceID),
-			Version:    u.Version,
+			// Always written, empty included: users/info carries
+			// the status keys empty when no status is set.
+			StatusEmoji:      u.Profile.StatusEmoji,
+			StatusText:       u.Profile.StatusText,
+			StatusExpiration: u.Profile.StatusExpiration,
+			HuddleState:      u.Profile.HuddleState,
+			HuddleExpiration: u.Profile.HuddleStateExpirationTS,
+			Version:          u.Version,
 		}); err != nil {
 			logf("bootstrap: caching revalidated user %s: %v", u.ID, err)
 		}
 	}
+	logf("bootstrap: users/info huddle_state values across %d users: %v", len(users), huddleStates)
 }
 
 // conditionalVersions builds the {id: version} map a cache endpoint
@@ -400,7 +413,7 @@ func conditionalVersions(ids []string, cached map[string]int64) map[string]int64
 // nothing about who is on the other end — so a bot DM revalidates to
 // "dm". That is recoverable rather than lost: connectWorkspace
 // re-derives "app" from the cached users' is_bot on every boot
-// (main.go:1941), so the column is corrected before it is rendered.
+// (in cmd/slk), so the column is corrected before it is rendered.
 func channelType(ch edge.Channel) string {
 	switch {
 	case ch.IsIM:
@@ -415,7 +428,7 @@ func channelType(ch edge.Channel) string {
 }
 
 // userDisplayName picks the name to show, mirroring the fallback chain
-// resolveUser already uses (main.go:2432): display name, then real
+// resolveUser already uses (in cmd/slk): display name, then real
 // name, then the handle.
 //
 // The fallback matters more here than there, because
@@ -433,7 +446,7 @@ func userDisplayName(u edge.User) string {
 
 // isExternal reports whether a user's home team differs from this
 // workspace's — a Slack Connect or shared-channel guest. Same test
-// resolveUser applies (main.go:2440), including the empty guard: a
+// resolveUser applies (in cmd/slk), including the empty guard: a
 // result with no team_id is unknown, not foreign.
 func isExternal(u edge.User, workspaceID string) bool {
 	return u.TeamID != "" && u.TeamID != workspaceID

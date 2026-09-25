@@ -3,28 +3,34 @@ package cache
 import (
 	"database/sql"
 	"fmt"
+
+	"github.com/gammons/slk/internal/core"
 )
 
-// ReadState captures the per-channel read-state values that drive the
-// unread dot and "new messages" line. It is the canonical type for
-// passing read state across package boundaries.
-type ReadState struct {
-	LastReadTS string
-	HasUnread  bool
-}
+// ReadState is defined in internal/core, which the TUI shares.
+type ReadState = core.ReadState
 
 // ChannelReadStateUpdate is one entry in a batched read-state write.
 // LastReadTS == "" means "preserve the existing last_read_ts" (used by
 // events that update has_unread only, e.g. new-message arrivals).
+// MentionCount is always applied: both batch writers are fed from
+// client.counts, which is authoritative.
 type ChannelReadStateUpdate struct {
-	ChannelID  string
-	LastReadTS string
-	HasUnread  bool
+	ChannelID    string
+	LastReadTS   string
+	HasUnread    bool
+	MentionCount int
 }
 
 // UpdateChannelReadState atomically updates the per-channel read state.
-// If lastReadTS == "", the existing last_read_ts is preserved. This is
-// the ONLY function permitted to modify read state after bootstrap.
+// If lastReadTS == "", the existing last_read_ts is preserved.
+//
+// Outside the batch writers below (BatchUpdateChannelReadState and
+// ReplaceWorkspaceReadState, which apply authoritative snapshots on
+// bootstrap and reconnect), this is the only function permitted to
+// modify last_read_ts or has_unread. It never touches mention_count:
+// that column belongs to SetChannelMentionCount and
+// IncrementChannelMentionCount, the deliberate exception.
 func (db *DB) UpdateChannelReadState(channelID, lastReadTS string, hasUnread bool) error {
 	var q string
 	var args []any
@@ -41,6 +47,40 @@ func (db *DB) UpdateChannelReadState(channelID, lastReadTS string, hasUnread boo
 	return nil
 }
 
+// SetChannelMentionCount overwrites the channel's mention count with an
+// authoritative value. Callers: the *_marked WS handler (server-supplied
+// count) and the read paths that clear it (markChannelReadAsync, the u-key
+// mark-unread).
+//
+// Deliberately separate from UpdateChannelReadState rather than a
+// parameter on it: "leave the mention count alone" is the common case, and
+// expressing it as a parameter value would have forced ~20 existing test
+// call sites to spell out a no-op.
+func (db *DB) SetChannelMentionCount(channelID string, n int) error {
+	if _, err := db.conn.Exec(
+		`UPDATE channels SET mention_count = ? WHERE id = ?`,
+		n, channelID,
+	); err != nil {
+		return fmt.Errorf("setting channel mention count: %w", err)
+	}
+	return nil
+}
+
+// IncrementChannelMentionCount adds one to the channel's mention count.
+// Used by the inbound-message path, which detects mentions locally and has
+// no server-supplied total to set. The addition happens in SQL so it is
+// atomic and cannot lose a concurrent update. Like SetChannelMentionCount
+// it writes mention_count and nothing else.
+func (db *DB) IncrementChannelMentionCount(channelID string) error {
+	if _, err := db.conn.Exec(
+		`UPDATE channels SET mention_count = mention_count + 1 WHERE id = ?`,
+		channelID,
+	); err != nil {
+		return fmt.Errorf("incrementing channel mention count: %w", err)
+	}
+	return nil
+}
+
 // BatchUpdateChannelReadState writes multiple updates in a single
 // transaction. Used by bootstrap and reconnect catch-up paths.
 func (db *DB) BatchUpdateChannelReadState(updates []ChannelReadStateUpdate) error {
@@ -51,13 +91,13 @@ func (db *DB) BatchUpdateChannelReadState(updates []ChannelReadStateUpdate) erro
 	if err != nil {
 		return fmt.Errorf("begin batch read-state tx: %w", err)
 	}
-	stmtBoth, err := tx.Prepare(`UPDATE channels SET last_read_ts = ?, has_unread = ? WHERE id = ?`)
+	stmtBoth, err := tx.Prepare(`UPDATE channels SET last_read_ts = ?, has_unread = ?, mention_count = ? WHERE id = ?`)
 	if err != nil {
 		tx.Rollback()
 		return fmt.Errorf("prepare both: %w", err)
 	}
 	defer stmtBoth.Close()
-	stmtFlag, err := tx.Prepare(`UPDATE channels SET has_unread = ? WHERE id = ?`)
+	stmtFlag, err := tx.Prepare(`UPDATE channels SET has_unread = ?, mention_count = ? WHERE id = ?`)
 	if err != nil {
 		tx.Rollback()
 		return fmt.Errorf("prepare flag: %w", err)
@@ -66,12 +106,12 @@ func (db *DB) BatchUpdateChannelReadState(updates []ChannelReadStateUpdate) erro
 
 	for _, u := range updates {
 		if u.LastReadTS == "" {
-			if _, err := stmtFlag.Exec(boolToInt(u.HasUnread), u.ChannelID); err != nil {
+			if _, err := stmtFlag.Exec(boolToInt(u.HasUnread), u.MentionCount, u.ChannelID); err != nil {
 				tx.Rollback()
 				return fmt.Errorf("batch flag for %s: %w", u.ChannelID, err)
 			}
 		} else {
-			if _, err := stmtBoth.Exec(u.LastReadTS, boolToInt(u.HasUnread), u.ChannelID); err != nil {
+			if _, err := stmtBoth.Exec(u.LastReadTS, boolToInt(u.HasUnread), u.MentionCount, u.ChannelID); err != nil {
 				tx.Rollback()
 				return fmt.Errorf("batch both for %s: %w", u.ChannelID, err)
 			}
@@ -85,9 +125,10 @@ func (db *DB) BatchUpdateChannelReadState(updates []ChannelReadStateUpdate) erro
 
 // ReplaceWorkspaceReadState applies an authoritative full snapshot of
 // unread state for a workspace. In a single transaction it first
-// resets has_unread=0 for EVERY channel in the workspace, then applies
-// the given updates (has_unread + last_read_ts). Channels absent from
-// updates are therefore treated as read.
+// resets has_unread=0 and mention_count=0 for EVERY channel in the
+// workspace, then applies the given updates (has_unread + last_read_ts
+// + mention_count). Channels absent from updates are therefore treated
+// as read.
 //
 // This is the boot/bootstrap path. Unlike BatchUpdateChannelReadState
 // (which only touches rows named in the batch), the reset step clears
@@ -113,18 +154,18 @@ func (db *DB) ReplaceWorkspaceReadState(workspaceID string, updates []ChannelRea
 	defer tx.Rollback() //nolint:errcheck
 
 	if _, err := tx.Exec(
-		`UPDATE channels SET has_unread = 0 WHERE workspace_id = ?`,
+		`UPDATE channels SET has_unread = 0, mention_count = 0 WHERE workspace_id = ?`,
 		workspaceID,
 	); err != nil {
 		return fmt.Errorf("reset workspace unread: %w", err)
 	}
 
-	stmtBoth, err := tx.Prepare(`UPDATE channels SET last_read_ts = ?, has_unread = ? WHERE id = ?`)
+	stmtBoth, err := tx.Prepare(`UPDATE channels SET last_read_ts = ?, has_unread = ?, mention_count = ? WHERE id = ?`)
 	if err != nil {
 		return fmt.Errorf("prepare both: %w", err)
 	}
 	defer stmtBoth.Close()
-	stmtFlag, err := tx.Prepare(`UPDATE channels SET has_unread = ? WHERE id = ?`)
+	stmtFlag, err := tx.Prepare(`UPDATE channels SET has_unread = ?, mention_count = ? WHERE id = ?`)
 	if err != nil {
 		return fmt.Errorf("prepare flag: %w", err)
 	}
@@ -132,11 +173,11 @@ func (db *DB) ReplaceWorkspaceReadState(workspaceID string, updates []ChannelRea
 
 	for _, u := range updates {
 		if u.LastReadTS == "" {
-			if _, err := stmtFlag.Exec(boolToInt(u.HasUnread), u.ChannelID); err != nil {
+			if _, err := stmtFlag.Exec(boolToInt(u.HasUnread), u.MentionCount, u.ChannelID); err != nil {
 				return fmt.Errorf("replace flag for %s: %w", u.ChannelID, err)
 			}
 		} else {
-			if _, err := stmtBoth.Exec(u.LastReadTS, boolToInt(u.HasUnread), u.ChannelID); err != nil {
+			if _, err := stmtBoth.Exec(u.LastReadTS, boolToInt(u.HasUnread), u.MentionCount, u.ChannelID); err != nil {
 				return fmt.Errorf("replace both for %s: %w", u.ChannelID, err)
 			}
 		}
@@ -151,18 +192,22 @@ func (db *DB) ReplaceWorkspaceReadState(workspaceID string, updates []ChannelRea
 // A missing row yields a zero-valued ReadState and a nil error.
 func (db *DB) GetChannelReadState(channelID string) (ReadState, error) {
 	var lastReadTS string
-	var hasUnread int
+	var hasUnread, mentionCount int
 	err := db.conn.QueryRow(
-		`SELECT last_read_ts, has_unread FROM channels WHERE id = ?`,
+		`SELECT last_read_ts, has_unread, mention_count FROM channels WHERE id = ?`,
 		channelID,
-	).Scan(&lastReadTS, &hasUnread)
+	).Scan(&lastReadTS, &hasUnread, &mentionCount)
 	if err == sql.ErrNoRows {
 		return ReadState{}, nil
 	}
 	if err != nil {
 		return ReadState{}, fmt.Errorf("getting channel read state: %w", err)
 	}
-	return ReadState{LastReadTS: lastReadTS, HasUnread: hasUnread == 1}, nil
+	return ReadState{
+		LastReadTS:   lastReadTS,
+		HasUnread:    hasUnread == 1,
+		MentionCount: mentionCount,
+	}, nil
 }
 
 // GetWorkspaceReadState returns channelID -> ReadState for every
@@ -170,7 +215,7 @@ func (db *DB) GetChannelReadState(channelID string) (ReadState, error) {
 // sidebar View() at render time.
 func (db *DB) GetWorkspaceReadState(workspaceID string) (map[string]ReadState, error) {
 	rows, err := db.conn.Query(
-		`SELECT id, last_read_ts, has_unread FROM channels WHERE workspace_id = ?`,
+		`SELECT id, last_read_ts, has_unread, mention_count FROM channels WHERE workspace_id = ?`,
 		workspaceID,
 	)
 	if err != nil {
@@ -180,32 +225,63 @@ func (db *DB) GetWorkspaceReadState(workspaceID string) (map[string]ReadState, e
 	out := make(map[string]ReadState)
 	for rows.Next() {
 		var id, lastRead string
-		var hasUnread int
-		if err := rows.Scan(&id, &lastRead, &hasUnread); err != nil {
+		var hasUnread, mentionCount int
+		if err := rows.Scan(&id, &lastRead, &hasUnread, &mentionCount); err != nil {
 			return nil, fmt.Errorf("scan workspace read state: %w", err)
 		}
-		out[id] = ReadState{LastReadTS: lastRead, HasUnread: hasUnread == 1}
+		out[id] = ReadState{
+			LastReadTS:   lastRead,
+			HasUnread:    hasUnread == 1,
+			MentionCount: mentionCount,
+		}
 	}
 	return out, rows.Err()
 }
 
-// WorkspacesWithUnreads returns the set of workspace IDs with at least
-// one has_unread=true channel. Used by the workspace rail.
-func (db *DB) WorkspacesWithUnreads() ([]string, error) {
+// UnreadChannel is one has_unread=1 row together with the workspace
+// that owns it. It is the workspace rail's raw input. The rail's
+// question is not "does any row in this workspace have has_unread=1"
+// but "would this workspace's sidebar show an unread dot", and the
+// second question needs the channel ID -- which the workspace-only
+// query this replaced (WorkspacesWithUnreads) discarded, leaving the
+// caller nothing to check mute or membership against.
+type UnreadChannel struct {
+	WorkspaceID string
+	ChannelID   string
+	State       ReadState
+}
+
+// UnreadChannels returns every channel row with has_unread=1 across
+// all workspaces, ordered by workspace then channel ID so the caller's
+// output is deterministic. Used by the workspace rail reader in
+// cmd/slk (railUnreadWorkspaces), which decides per row whether the
+// owning workspace's sidebar would actually show it as unread.
+//
+// Mute state is deliberately not filtered here. It lives only in
+// service.MuteStore -- in memory, hydrated from userBoot's prefs and
+// kept live by pref_change -- and is never written to this table, so a
+// query cannot see it. The same goes for "is this channel in the
+// sidebar at all": that is wctx.Channels, not a column. Both filters
+// belong in the caller, where both are in scope.
+func (db *DB) UnreadChannels() ([]UnreadChannel, error) {
 	rows, err := db.conn.Query(
-		`SELECT DISTINCT workspace_id FROM channels WHERE has_unread = 1`,
+		`SELECT workspace_id, id, last_read_ts, has_unread, mention_count
+		 FROM channels WHERE has_unread = 1
+		 ORDER BY workspace_id, id`,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("query workspaces with unreads: %w", err)
+		return nil, fmt.Errorf("query unread channels: %w", err)
 	}
 	defer rows.Close()
-	var out []string
+	var out []UnreadChannel
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan workspace id: %w", err)
+		var u UnreadChannel
+		var hasUnread int
+		if err := rows.Scan(&u.WorkspaceID, &u.ChannelID, &u.State.LastReadTS, &hasUnread, &u.State.MentionCount); err != nil {
+			return nil, fmt.Errorf("scan unread channel: %w", err)
 		}
-		out = append(out, id)
+		u.State.HasUnread = hasUnread == 1
+		out = append(out, u)
 	}
 	return out, rows.Err()
 }

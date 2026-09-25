@@ -16,7 +16,7 @@ import (
 // path feeds to the border (ViewBare + ReapplyBgAfterResets), plus the
 // derived geometry, for the current selection/focus.
 func buildMsgViewForTest(a *App, focused bool) (msgView string, msgWidth, msgBorder, topHeight, msgContentHeight int) {
-	frame := a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(), a.sidebarVisible, a.threadVisible)
+	frame := a.computeFrame()
 	msgWidth = frame.MsgWidth
 	msgBorder = frame.MsgBorder
 	msgContentHeight = frame.ContentHeight - 2 - 3

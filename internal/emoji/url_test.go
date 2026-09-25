@@ -146,6 +146,12 @@ func TestComposeSkinTonedCodepoints(t *testing.T) {
 		{"slack +1 tone 2", "+1::skin-tone-2", []rune{0x1F44D, 0x1F3FC}, true},
 		// kyokomi form.
 		{"kyokomi wave tone 5", "wave_tone5", []rune{0x1F44B, 0x1F3FF}, true},
+		// ZWJ sequence: the modifier belongs after the base codepoint,
+		// before the ZWJ tail. Appending it instead builds a filename
+		// Slack's CDN 404s. Every other case here has a single-codepoint
+		// base, where the two orderings are indistinguishable.
+		{"zwj person_running_facing_right tone 2", "person_running_facing_right::skin-tone-2",
+			[]rune{0x1F3C3, 0x1F3FC, 0x200D, 0x27A1, 0xFE0F}, true},
 		// No tone suffix.
 		{"no suffix", "thumbsup", nil, false},
 		// Tone out of range.
@@ -178,6 +184,9 @@ func TestURLForShortcode_SkinTonedFallback(t *testing.T) {
 		{"thumbsup slack form", "thumbsup::skin-tone-2", CDNBaseURL + "1f44d-1f3fc.png"},
 		{"+1 slack form (alias)", "+1::skin-tone-3", CDNBaseURL + "1f44d-1f3fd.png"},
 		{"+1_tone3 (kyokomi miss)", "+1_tone3", CDNBaseURL + "1f44d-1f3fd.png"},
+		// The ordering above, end to end as a CDN filename.
+		{"zwj slack form", "person_running_facing_right::skin-tone-2",
+			CDNBaseURL + "1f3c3-1f3fc-200d-27a1-fe0f.png"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

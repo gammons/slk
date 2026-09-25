@@ -9,12 +9,15 @@ Config lives at `~/.config/slk/config.toml`.
 default_workspace = "work"      # the slug, not the team ID
 use_slack_sections = true       # use real Slack sidebar sections (default).
                                 # set false to use [sections.*] globs instead.
+download_dir = "~/Downloads"    # where file attachments (`d` keybinding) are
+                                # saved. "~" is expanded to your home directory.
 
 [appearance]
 theme = "dracula"
 timestamp_format = "3:04 PM"
 image_protocol = "auto"   # auto | kitty | sixel | halfblock | off
 max_image_rows = 20       # cap inline image height in terminal rows
+colored_usernames = false # color each user's name by ID hash (Slack-style)
 
 [animations]
 enabled = true
@@ -43,7 +46,7 @@ quiet_hours = "22:00-08:00"   # planned
 # state always runs last, so the surface converges on the current state.
 # Executed via `sh -c` with:
 #   $SLK_UNREAD        unread channels in the active workspace (mute-filtered)
-#   $SLK_OTHER_UNREAD  unread count across other workspaces
+#   $SLK_OTHER_UNREAD  other workspaces with unread channels (mute-filtered) or threads
 #   $SLK_WORKSPACE     active workspace name
 #   $SLK_TITLE         the window-title string, e.g. "slk SW (3) +1"
 # status_command = 'my-statusbar --slack-unread "$SLK_UNREAD"'
@@ -56,6 +59,9 @@ quiet_hours = "22:00-08:00"   # planned
 # Muted channels and DMs never notify — including on mentions and keywords —
 # matching Slack. (This is a behavior change: previously a mention or keyword
 # in a muted channel would still notify.)
+
+[compose]
+editor = "nvim"   # Ctrl+E editor, used when $VISUAL and $EDITOR are unset
 
 [cache]
 message_retention_days = 30

@@ -17,8 +17,12 @@
           pname = "slk";
           version = "0.0.0";
           src = ./.;
-          vendorHash = "sha256-deqCUDgRvhe/Bpmy+9bIHjSBo+KTCtAN2XcGMhAj/G0=";
+          vendorHash = "sha256-/J4gr4m9v6Y0Be8BU4wepIdl2sjoPh0pFCvJL2kIeLk=";
           buildInputs = [pkgs.libX11];
+          # The test suite spins up httptest servers on loopback. The macOS
+          # Nix sandbox denies all networking by default, so allow loopback
+          # there; the attribute is a no-op on Linux.
+          __darwinAllowLocalNetworking = true;
         };
       in {
         packages.default = slk;

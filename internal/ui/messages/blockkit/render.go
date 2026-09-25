@@ -32,6 +32,42 @@ func Render(blocks []Block, ctx Context, width int) RenderResult {
 	return out
 }
 
+// RendersBody reports whether blocks render content in place of the
+// message text fallback. RichTextBlock renders through the host body
+// row, UnknownBlock renders only a compatibility marker, and a lone
+// DividerBlock does not carry the author's body; none suppress text.
+// Empty blocks likewise preserve the fallback rather than blanking the
+// message.
+//
+// Keep this switch aligned with appendBlock below.
+func RendersBody(blocks []Block) bool {
+	for _, b := range blocks {
+		switch v := b.(type) {
+		case SectionBlock:
+			if v.Text != "" || len(v.Fields) > 0 || v.Accessory != nil {
+				return true
+			}
+		case HeaderBlock:
+			if v.Text != "" {
+				return true
+			}
+		case ContextBlock:
+			if len(v.Elements) > 0 {
+				return true
+			}
+		case ImageBlock:
+			if v.URL != "" {
+				return true
+			}
+		case ActionsBlock:
+			if len(v.Elements) > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // appendBlock dispatches one block to its renderer and appends the
 // result onto out. Per-block renderers MUST produce lines that each
 // consume <= width display columns.
@@ -62,7 +98,7 @@ func appendBlock(out *RenderResult, b Block, ctx Context, width int) {
 		// Other block types (Context, Image, Actions) are added by
 		// later tasks; for now, render them as unsupported so the
 		// package is total even mid-implementation.
-		out.Lines = append(out.Lines, renderUnsupported(v.blockType(), width))
+		out.Lines = append(out.Lines, renderUnsupported(blockType(v), width))
 	}
 }
 

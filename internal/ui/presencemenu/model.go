@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/text"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/overlay"
@@ -15,14 +16,14 @@ import (
 )
 
 // Action is the high-level operation the user picked.
-type Action int
+type Action = core.PresenceAction
 
 const (
-	ActionSetActive Action = iota
-	ActionSetAway
-	ActionSnooze       // SnoozeMinutes is set
-	ActionCustomSnooze // open the custom-snooze input
-	ActionEndDND
+	ActionSetActive    = core.PresenceSetActive
+	ActionSetAway      = core.PresenceSetAway
+	ActionSnooze       = core.PresenceSnooze
+	ActionCustomSnooze = core.PresenceCustomSnooze
+	ActionEndDND       = core.PresenceEndDND
 )
 
 // Result is returned when the user commits a selection.

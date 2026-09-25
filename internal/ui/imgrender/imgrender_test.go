@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/gammons/slk/internal/config"
 	imgpkg "github.com/gammons/slk/internal/image"
@@ -159,7 +160,7 @@ func TestRenderBlock_NonImage_FallsBackToLegacyLine(t *testing.T) {
 
 	r := NewRenderer()
 	// No SetContext call — zero-valued context.
-	res := r.RenderBlock(Block{Kind: "file", Name: "doc.pdf", URL: "https://example.com/doc.pdf"},
+	res := r.RenderBlock(Block{Kind: "file", Name: "doc.pdf", URL: "https://example.com/files-pri/T-F/abc123"},
 		"C1", "1.0", 80, 0, 0, 0)
 
 	if res.Height != 1 {
@@ -168,8 +169,12 @@ func TestRenderBlock_NonImage_FallsBackToLegacyLine(t *testing.T) {
 	if len(res.Lines) != 1 {
 		t.Fatalf("expected 1 fallback line, got %d", len(res.Lines))
 	}
-	if !strings.Contains(res.Lines[0], "[File]") {
-		t.Fatalf("expected [File] prefix in fallback, got %q", res.Lines[0])
+	plain := ansi.Strip(res.Lines[0])
+	if !strings.Contains(plain, "[File]") {
+		t.Fatalf("expected [File] prefix in fallback, got %q", plain)
+	}
+	if !strings.Contains(plain, "doc.pdf") {
+		t.Fatalf("expected filename in fallback, got %q", plain)
 	}
 }
 

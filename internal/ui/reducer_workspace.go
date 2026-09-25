@@ -19,8 +19,8 @@
 //	                          compose draft), push new channels/users/
 //	                          emoji, apply theme, restore the last
 //	                          channel viewed for this workspace.
-//	ConversationOpenedMsg   - WS event: a DM/MPIM just opened.
-//	                          Upsert into the active sidebar.
+//	ConversationOpenedMsg   - WS event: a conversation just opened.
+//	                          Upsert into the active sidebar and finder.
 //	SectionsRefreshedMsg    - cache notice: sidebar sections were
 //	                          reorganized. Re-push channel items
 //	                          for the active workspace.
@@ -74,15 +74,29 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	case ConversationOpenedMsg:
 		if m.TeamID == a.activeTeamID {
 			a.sidebar.UpsertItem(m.Item)
+			// FinderItem is populated by today's one sender
+			// (cmd/slk's rtmEventHandler); guard against a future
+			// sender that forgets to set it, which would otherwise
+			// silently append an ID: "" row to the finder.
+			if m.FinderItem.ID != "" {
+				a.channelFinder.Upsert(m.FinderItem)
+			}
 		}
 		// Inactive-workspace events update WorkspaceContext.Channels
-		// from the rtmEventHandler in cmd/slk/main.go (Task 6);
-		// App.Update only mutates the active sidebar.
+		// and FinderItems from the rtmEventHandler in cmd/slk;
+		// App.Update only mutates the active workspace's UI models.
 		return nil, true
 
 	case SectionsRefreshedMsg:
 		if m.TeamID == a.activeTeamID {
 			a.SetChannels(m.Channels)
+			// The new list carries new IsMuted flags, and "(N)",
+			// $SLK_UNREAD and the rail derive from those, not just
+			// the sidebar's dots. SetChannels only swaps the items;
+			// without this a channel muted while unread lost its
+			// sidebar dot but stayed counted in the title until the
+			// next read-state event.
+			a.notifyReadStateChanged()
 		}
 		// Inactive-workspace events have already updated the
 		// WorkspaceContext.Channels in cmd/slk; App.Update only
@@ -205,6 +219,7 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 		// SetUserNames last is the canonical state.
 		a.SetExternalUsers(m.ExternalUsers)
 		a.SetUserNames(m.UserNames)
+		batch = append(batch, a.presence.SetPeers(a, m.UserStatuses))
 		a.SetCustomEmoji(m.CustomEmoji)
 		a.SetUserGroups(m.UserGroups)
 		// Route through the setter so messagepane/threadPanel also learn
@@ -254,6 +269,26 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 	threads := a.threads
 	team := ids.TeamID(m.TeamID)
 	batch = append(batch, func() tea.Msg { return threads.ListFetch(team) })
+	// Boot is also the subscription sync's primary trigger: the socket
+	// replays nothing, so after any offline gap (app closed, laptop
+	// asleep) the cached thread_subscriptions table is stale and only
+	// subscriptions.thread.getView reconciles it. Fires for EVERY
+	// workspace, not just the active one — the reducer stays dumb;
+	// the main-package gate collapses this to one throttled, staggered
+	// network sweep per workspace.
+	batch = append(batch, func() tea.Msg {
+		threads.EnsureSubscriptions(team)
+		return nil
+	})
+	// The rail reader keeps a workspace's cached dot until the router
+	// knows the workspace, so last session's dots survive boot. Now
+	// that this one is connected the answer can change -- a cached dot
+	// held up only by muted or unlisted channels should go dark -- and
+	// nothing else recomputes it until some read-state event happens
+	// to arrive. connectWorkspace has already written the workspace's
+	// authoritative counts, so recompute here, for every workspace
+	// that becomes ready, not only the initial active one.
+	a.notifyReadStateChanged()
 	return tea.Batch(batch...)
 }
 
@@ -345,6 +380,8 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	a.workspaceRail.SelectByID(m.TeamID)
 
 	var batch []tea.Cmd
+	// After resetWindowTree above, so the fresh panes get the statuses.
+	batch = append(batch, a.presence.SetPeers(a, m.UserStatuses))
 	// Restore the last-viewed channel for this workspace if we
 	// have one and it still exists; otherwise fall back to the
 	// first channel in the sidebar. Move the sidebar cursor to
@@ -380,5 +417,10 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	batch = append(batch, func() tea.Msg {
 		return activity.Fetch(team, activityFeedPageLimit, "", unreadOnly)
 	})
+	// Must run after ResetPresence and a.activeTeamID above, so its
+	// UserDNDChangeMsg result isn't wiped or dropped as stale.
+	if m.RefreshPeerDND != nil {
+		batch = append(batch, m.RefreshPeerDND)
+	}
 	return tea.Batch(batch...)
 }

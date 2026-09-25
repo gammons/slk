@@ -11,10 +11,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/config"
 	emojiutil "github.com/gammons/slk/internal/emoji"
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/imgrender"
+	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
@@ -35,6 +37,22 @@ func TestMessagePaneView(t *testing.T) {
 	}
 	if !strings.Contains(view, "general") {
 		t.Error("expected channel name in header")
+	}
+}
+
+func TestMessagePaneViewUpdatesAuthorStatus(t *testing.T) {
+	m := New([]MessageItem{{
+		UserID: "U1", UserName: "alice", Text: "Hello", Timestamp: "10:30 AM",
+	}}, "general")
+
+	m.PatchUserStatus("U1", peerstatus.Status{Emoji: ":calendar:"})
+	if got := ansi.Strip(m.View(20, 60)); !strings.Contains(got, "alice "+emojiutil.CodeMap()[":calendar:"]) {
+		t.Fatalf("message header does not show the author's status:\n%s", got)
+	}
+
+	m.PatchUserStatus("U1", peerstatus.Status{Huddle: peerstatus.HuddleActive})
+	if got := ansi.Strip(m.View(20, 60)); !strings.Contains(got, "alice "+peerstatus.HuddleGlyph) {
+		t.Fatalf("message header does not replace the status with the huddle glyph:\n%s", got)
 	}
 }
 

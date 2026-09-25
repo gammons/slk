@@ -8,21 +8,16 @@ import (
 	"log"
 	"mime"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
-	"unicode"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/gammons/slk/internal/cache"
-	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	"github.com/gammons/slk/internal/emoji"
-	"github.com/gammons/slk/internal/export"
 	"github.com/gammons/slk/internal/ids"
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/slackurl"
@@ -52,7 +47,6 @@ import (
 	"github.com/gammons/slk/internal/ui/workspace"
 	"github.com/gammons/slk/internal/ui/workspacefinder"
 	"github.com/gammons/slk/internal/usergroups"
-	"golang.design/x/clipboard"
 )
 
 type Panel int
@@ -97,6 +91,30 @@ const openThreadDebounceDelay = 200 * time.Millisecond
 // pause, never one per keystroke.
 const channelSearchDebounceDelay = 300 * time.Millisecond
 
+// defaultMarkFlushDebounce is the App.markFlushDebounce NewApp starts
+// with, and the fallback scheduleMarkFlush uses for a zero field.
+//
+// conversations.mark is a Tier 3 method — Slack budgets those at
+// roughly 50 requests a minute. This interval is the ceiling on how
+// often the flush spends one: 60/5 = 12 a minute, with room left for
+// the entry marks and mark-unread presses that call it on other paths. One second, the value this started at, put a
+// channel receiving about a message a second at ~60 a minute — over
+// the tier, and an over-tier mark is dropped rather than retried (see
+// flushPendingMarks), which is the cross-client divergence the
+// auto-marking exists to prevent.
+//
+// Five seconds is not felt by the user: nothing on screen changes when
+// the flush fires. It moves Slack's server-side cursor, and the local
+// divider deliberately stays put (again, see flushPendingMarks).
+const defaultMarkFlushDebounce = 5 * time.Second
+
+// defaultThreadsDirtyDebounce is the App.threadsDirtyDebounce NewApp
+// starts with, and the fallback for a zero field in scheduleThreadsDirty
+// and in reduceThreads' ThreadsListDirtyMsg arm. It only delays a query
+// against local SQLite, so it is two orders of magnitude below the mark
+// flush above.
+const defaultThreadsDirtyDebounce = 150 * time.Millisecond
+
 type App struct {
 	// Sub-models
 	workspaceRail    workspace.Model
@@ -105,6 +123,7 @@ type App struct {
 	compose          compose.Model
 	statusbar        statusbar.Model
 	channelFinder    channelfinder.Model
+	pendingForward   *forwardSource
 	searchResults    searchresults.Model
 	newMessagePicker newmessagepicker.Model
 	workspaceFinder  workspacefinder.Model
@@ -121,10 +140,13 @@ type App struct {
 	focusedPanel   Panel
 	sidebarVisible bool
 	threadVisible  bool
-	view           View
-	width          int
-	height         int
-	keys           KeyMap
+	// stackFront is the content pane (PanelMessages or PanelThread)
+	// that last had focus. Recorded by Update, read by threadInFront.
+	stackFront Panel
+	view       View
+	width      int
+	height     int
+	keys       KeyMap
 
 	// cmdline accumulates the text typed at the vi-style ':' prompt
 	// while in ModeCommand. Owned by mode_command.go; always "" in
@@ -173,31 +195,37 @@ type App struct {
 	// channels API + local cache + session bookkeeping). See
 	// internal/ui/services.go. Defaulted to a no-op adapter in
 	// NewApp so call sites can dispatch without nil-checks.
-	channels ChannelService
+	channels core.ChannelService
 	// messages is the App's MessageService collaborator (send / edit /
 	// delete / mark-unread / permalink). See internal/ui/services.go.
 	// Defaulted to a no-op adapter in NewApp so call sites can dispatch
 	// without nil-checks.
-	messageSvc MessageService
+	messageSvc core.MessageService
 
-	uploader UploadFunc
+	// files uploads and downloads attachments. Nil until wired; both
+	// paths toast when it is unset.
+	files core.FileService
 
-	// statusReport mirrors slk's unread state onto an external surface,
-	// invoked by notifyReadStateChanged on every read-state change. Nil unless
-	// a status_command is configured (config: notifications.status_command).
-	statusReport StatusReportFunc
-
-	// clipboardAvailable is set at startup based on the result of
-	// clipboard.Init(). When false, Ctrl+V smart-paste is a no-op.
+	// clipboardAvailable is set from the native clipboard reader's startup
+	// result. It gates Ctrl+V smart-paste only; OSC 52 writes do not depend on
+	// native clipboard initialization.
 	clipboardAvailable bool
 
-	// clipboardRead is the function used by smartPaste to read OS
-	// clipboard contents. Tests inject fakes via SetClipboardReader.
-	clipboardRead clipboardReader
+	// composeEditor is Ctrl+E's editor argv, resolved once at startup
+	// by ui.ResolveEditor (editor.go). Nil means unconfigured.
+	composeEditor []string
 
-	// clipboardWrite is the function used by copyPermalink and drag-copy
-	// to write OS clipboard contents. Tests inject fakes via
-	// SetClipboardWriter.
+	// editor hands Ctrl+E's draft to composeEditor and back. A no-op
+	// until wired.
+	editor core.EditorService
+
+	// desktop is the host OS: opening links and files, clipboard reads,
+	// paste-a-path stats, thread export and the status command. A no-op
+	// until wired.
+	desktop core.DesktopService
+
+	// clipboardWrite creates OSC 52 write commands for permalink and drag-copy
+	// actions. Tests inject fakes via SetClipboardWriter.
 	clipboardWrite clipboardWriter
 
 	// threads is the App's ThreadService collaborator (fetch / mark /
@@ -205,15 +233,105 @@ type App struct {
 	// unread boundary). See internal/ui/services.go. Defaulted to a
 	// no-op adapter in NewApp so call sites can dispatch without
 	// nil-checks.
-	threads ThreadService
+	threads core.ThreadService
 
 	// activity is the App's ActivityService collaborator: fetches the
 	// Slack Activity feed (mentions, thread replies, reactions, DMs)
 	// for the Activity view. Defaulted to a no-op adapter in NewApp so
-	// call sites can dispatch without nil-checks. See internal/ui/services.go.
-	activity ActivityService
+	// call sites can dispatch without nil-checks.
+	activity core.ActivityService
 
 	threadsDirtyDebounce time.Duration
+
+	// threadsListFetchScheduled is set while a threads-list refresh is
+	// waiting out threadsDirtyDebounce, and cleared when the
+	// threadsListFetchMsg that ends the wait arrives. Further
+	// ThreadsListDirtyMsg deliveries are dropped while it is set: the
+	// refresh they would ask for is already scheduled, and it reads
+	// the cache when it runs rather than when it was scheduled.
+	//
+	// That holds except across a workspace switch, where a dirty for
+	// the newly-active team can be dropped into a window opened for
+	// the old one, whose fetch is then discarded by the team check in
+	// the threadsListFetchMsg arm — so neither refreshes. Benign:
+	// reduceWorkspaceSwitched dispatches its own ListFetch for the new
+	// team, and the window reopens for the next dirty either way.
+	//
+	// The coalescing lives here, on the receiving side, because the
+	// message's senders — the thread_marked and
+	// thread_subscription_changed WS handlers, the subscription
+	// sync's completion callback, and scheduleThreadsDirty's two
+	// callers — do not coordinate.
+	threadsListFetchScheduled bool
+
+	// terminalFocused tracks whether the terminal running slk currently
+	// has focus. Maintained by reduceFocus from tea.FocusMsg /
+	// tea.BlurMsg, which the terminal only emits once View sets
+	// ReportFocus.
+	//
+	// Terminals report focus *transitions* only — enabling focus
+	// reporting elicits no current-state report — so NewApp starts this
+	// true. A terminal with no focus-event support sends nothing at
+	// all, and there the flag simply stays true for the whole session.
+	// tmux forwards focus events only when `set -g focus-events on`, so
+	// tmux users without that setting are in the same position; inside
+	// tmux, autoMarkArmed is what keeps that from silently advancing
+	// the read cursor. See wiki/Terminal-Compatibility.md, "Focus
+	// reporting and read state".
+	terminalFocused bool
+
+	// inTmux records whether slk is running inside tmux, captured once
+	// in NewApp from $TMUX. It exists because tmux swallows focus
+	// events unless `set -g focus-events on`, which defaults off — so
+	// inside tmux the assume-focused default is not safe on its own.
+	// See autoMarkArmed.
+	inTmux bool
+
+	// focusEverReported goes true on the first focus event of any kind.
+	// A blur is as much proof that reporting works as a focus is.
+	focusEverReported bool
+
+	// pendingChannelMark / pendingThreadMark stage a read-cursor
+	// advance for a message that arrived in what is currently on
+	// screen — the selected channel, or the open thread panel —
+	// whether or not the user is looking at it. Staging is not
+	// focus-gated; only the flush is, so a slot staged while blurred
+	// waits for the next FocusMsg. A slot staged while FOCUSED waits
+	// too if auto-marking is not armed — inside a tmux session that
+	// has never reported a focus event that is the whole session, and
+	// the slot is only ever issued if one arrives. See autoMarkArmed.
+	//
+	// Single-slot and newest-wins: a burst coalesces into one request,
+	// and a slot can never issue a ts older than one it already holds
+	// FOR THE SAME TARGET. Switching target (another channel, another
+	// thread) replaces the slot outright, so a staged advance the
+	// flush has not yet issued is dropped. Accepted: that advance is
+	// reconciled by the target's next entry mark or by reconnect sync.
+	pendingChannelMark pendingChannelMarkState
+	pendingThreadMark  pendingThreadMarkState
+
+	// selfMarks and selfThreadMarks record the channel and thread marks
+	// slk issued itself so their Slack-broadcast echoes can be told
+	// apart from a mark made in another client. Two sets rather than
+	// one so a burst on either side cannot evict the other's records.
+	// See selfMarkDedup.
+	selfMarks       selfMarkDedup
+	selfThreadMarks selfMarkDedup
+
+	// markFlushScheduled caps the conversations.mark RATE at one per
+	// markFlushDebounce per target, not merely the number of live
+	// timers: without it a stream arriving faster than the debounce
+	// would interleave ticks with arrivals, and each tick would find
+	// the slot already refilled and issue a request. See
+	// scheduleMarkFlush.
+	markFlushScheduled bool
+
+	// markFlushDebounce is that interval. What sets its size is
+	// conversations.mark's rate tier, not merely that it is a network
+	// write; see defaultMarkFlushDebounce before changing it. Tests
+	// shorten it.
+	markFlushDebounce time.Duration
+
 	// fetchingOlder tracks in-flight older-history backfills per
 	// channel ID (Phase 3: a global bool would let one window's
 	// backfill block another channel's, and a fetch completing for
@@ -288,6 +406,12 @@ type App struct {
 	// linkPicker is the open-link choice modal (issue #62).
 	linkPicker *linkpicker.Model
 
+	// pickerKind records what the linkpicker modal is choosing:
+	// "links" (Enter dispatches OpenLinkMsg) or "files" (Enter
+	// dispatches DownloadFileMsg from pickerFiles).
+	pickerKind  string
+	pickerFiles []messages.Attachment
+
 	// Reaction picker
 	reactionPicker *reactionpicker.Model
 	reactionsView  *reactionsview.Model
@@ -296,7 +420,7 @@ type App struct {
 	// reactions on Slack + load/record frecent emoji history). See
 	// internal/ui/services.go. Defaulted to a no-op adapter in NewApp
 	// so call sites can dispatch without nil-checks.
-	reactions     ReactionService
+	reactions     core.ReactionService
 	currentUserID string
 
 	// editing tracks in-progress message edit state. See
@@ -315,8 +439,8 @@ type App struct {
 	newMessageCancelled bool
 
 	// Workspace switching
-	workspaceSwitcher SwitchWorkspaceFunc
-	workspaceItems    []workspace.WorkspaceItem // cached for lookup
+	workspaceSvc   core.WorkspaceService
+	workspaceItems []workspace.WorkspaceItem // cached for lookup
 	// lastChannelByTeam remembers the active channel ID per workspace so
 	// that switching back to a workspace returns to the same channel the
 	// user was last viewing there. Saved at the start of every workspace
@@ -345,7 +469,7 @@ type App struct {
 	search      *activeSearch
 	searchInput string
 	searchGen   uint64
-	searchSvc   SearchService
+	searchSvc   core.SearchService
 
 	// browserOpener launches a URL in the OS browser. Defaults to
 	// openURLCmd; tests inject fakes.
@@ -357,21 +481,17 @@ type App struct {
 	// stacks are session-only by design.
 	navHistory *navHistoryStore
 
-	// Theme switching
-	themeSaveFn    func(name string, scope themeswitcher.ThemeScope)
-	themeOverrides config.Theme
-
-	// Sidebar width persistence
-	widthSaveFn func(width int)
+	// settings persists the theme choice and sidebar width. Nil until wired.
+	settings       core.SettingsService
+	themeOverrides core.Theme
 
 	// presence owns per-workspace presence/DND cache, the DND-tick
 	// guard, and the custom-snooze numeric input buffer. See
 	// internal/ui/presence.go.
 	presence *presenceController
-	// setStatusFn is the callback invoked when the user picks a presence-
-	// menu action; it runs the Slack API call for the active workspace.
-	// Wired by cmd/slk/main.go via SetStatusSetter.
-	setStatusFn func(action presencemenu.Action, snoozeMinutes int)
+	// presenceSvc sets the user's status on Slack and sends typing
+	// events. Nil until wired.
+	presenceSvc core.PresenceService
 
 	// typing owns both inbound typing-indicator state (other users
 	// typing in channels) and outbound typing-send throttle. See
@@ -420,7 +540,7 @@ type App struct {
 	// pane; the App uses it to load the larger thumb when the user
 	// opens the full-screen preview overlay. Wired via SetImageFetcher
 	// from main.go, after Detect / cache construction.
-	imageFetcher *imgpkg.Fetcher
+	imageFetcher core.ImageFetcher
 
 	// imgProtocol is the active terminal image protocol detected at
 	// startup. Used to render the full-screen preview overlay.
@@ -486,6 +606,149 @@ type App struct {
 	scrollFlushScheduled bool
 }
 
+// pendingChannelMarkState is App.pendingChannelMark's slot: the newest
+// channel read-cursor advance staged but not yet issued. A zero ts
+// means "nothing staged".
+type pendingChannelMarkState struct {
+	channelID string
+	ts        string
+}
+
+// pendingThreadMarkState is App.pendingThreadMark's slot: the newest
+// thread read-cursor advance staged but not yet issued. A zero ts
+// means "nothing staged".
+type pendingThreadMarkState struct {
+	channelID string
+	threadTS  string
+	ts        string
+}
+
+// selfMarkLimit caps the number of DISTINCT keys ONE selfMarkDedup
+// holds (App keeps two: one for channel marks, one for thread marks).
+// slk issues at most one mark per channel or thread entry and one per
+// markFlushDebounce, and each echo consumes its entry within a round
+// trip, so a live set is normally one or two. The cap only exists so a
+// session whose echoes never arrive — a WebSocket that dropped and
+// reconnected past them, say — cannot grow a set for the life of the
+// process. Oldest entries are evicted first.
+const selfMarkLimit = 64
+
+// selfMarkKey identifies one read mark slk issued. threadTS is empty
+// for a channel mark (conversations.mark) and set for a thread mark
+// (subscriptions.thread.mark); ts is the cursor the mark carried, which
+// is what the matching echo reports back.
+type selfMarkKey struct {
+	channelID string
+	threadTS  string
+	ts        string
+}
+
+// selfMarkDedup records the read marks slk issued itself so the echo
+// helpers can tell slk's own channel_marked / thread_marked echo from
+// one raised by another Slack client.
+//
+// Slack broadcasts both events to every connected client including the
+// issuer, so each mark slk sends comes back a round trip later as a
+// ChannelMarkedRemoteMsg or ThreadMarkedRemoteMsg carrying the ts slk
+// just set. Applying that echo would drag the on-screen "── new ──"
+// divider to the newest message — deleting the user's place moments
+// after they looked at it. A mark from another client carries no such
+// record and still moves the divider, which is correct: it means the
+// user really did read the channel or thread elsewhere.
+//
+// Entries are counted, not merely present, and one echo consumes one
+// count: N issued marks at the same key suppress N echoes, and the next
+// one is treated as foreign.
+//
+// Recording races the echo in one direction only: an echo that arrives
+// BEFORE its record is applied, not suppressed. Four of the five
+// recording sites record before the mark is issued and so cannot lose
+// that race: reduceChannelSelected's tier-1 entry mark, both legs of
+// flushPendingMarks, and reduceThreads' ThreadRepliesLoadedMsg
+// mark-on-open. What makes them safe is that each writes its record
+// before the tea.Cmd carrying the mark is handed to Bubble Tea — not a
+// shared service shape, because the two families differ. The thread
+// sites call ThreadService.Mark, which only BUILDS a tea.Cmd. The
+// channel sites call ChannelService.MarkRead, which returns a tea.Msg
+// and issues the mark itself; they wrap that call in a closure, and
+// the closure has not run yet. Either way nothing has reached Slack
+// when the record lands.
+//
+// The one exposed site is MessagesLoadedMsg.MarkedTS: ChannelService's
+// fetcher issues that mark itself on a cmd goroutine and reports the ts
+// back afterwards, so its record cannot be written until the HTTP
+// response has already returned — and the WebSocket broadcast of the
+// same mark is independent of that response. Losing the race there
+// costs a divider move, not the correctness of the read state.
+//
+// No site records after a mark COMPLETES. Recording on completion (the
+// ThreadMarkedLocalMsg arm, say) would expose every thread mark to the
+// race, including the mark-on-open whose echo is exactly what this
+// dedup exists to suppress. The cost of recording early instead is that
+// a mark Slack rejects leaves a record with no echo to consume it — as
+// does a mark issued in one workspace whose echo arrives after a switch
+// to another, since OnChannelMarked returns before dispatching
+// ChannelMarkedRemoteMsg when its workspace is not active. Both leak
+// the same way and cost the same: the record is evicted by
+// selfMarkLimit, and until then it can hold a landmark still, never
+// move one wrongly.
+//
+// Not goroutine-safe. Every caller runs on the Bubble Tea Update
+// goroutine.
+type selfMarkDedup struct {
+	// counts holds the number of issued-but-unechoed marks per key.
+	// A key is deleted once its count reaches zero.
+	counts map[selfMarkKey]int
+	// order lists the distinct keys in counts by first-record time,
+	// oldest first. It is the eviction queue for selfMarkLimit.
+	order []selfMarkKey
+}
+
+// record notes that slk has issued the mark k. A key missing the
+// channel or the cursor identifies nothing and is dropped: callers
+// record unconditionally from paths that may not have issued a mark at
+// all (see MessagesLoadedMsg.MarkedTS).
+func (d *selfMarkDedup) record(k selfMarkKey) {
+	if k.channelID == "" || k.ts == "" {
+		return
+	}
+	if d.counts == nil {
+		d.counts = make(map[selfMarkKey]int)
+	}
+	if _, known := d.counts[k]; !known {
+		d.order = append(d.order, k)
+	}
+	d.counts[k]++
+	for len(d.order) > selfMarkLimit {
+		delete(d.counts, d.order[0])
+		d.order = d.order[1:]
+	}
+}
+
+// consume reports whether k matches a mark slk issued and has not yet
+// seen echoed, decrementing that mark's count if so.
+func (d *selfMarkDedup) consume(k selfMarkKey) bool {
+	n, ok := d.counts[k]
+	if !ok {
+		return false
+	}
+	if n > 1 {
+		d.counts[k] = n - 1
+		return true
+	}
+	delete(d.counts, k)
+	for i, e := range d.order {
+		if e == k {
+			d.order = append(d.order[:i], d.order[i+1:]...)
+			break
+		}
+	}
+	return true
+}
+
+// len returns the number of distinct keys held; used to pin the bound.
+func (d *selfMarkDedup) len() int { return len(d.counts) }
+
 func NewApp() *App {
 	// The window tree starts as a single window with no channel; the
 	// first ChannelSelectedMsg apply records the channel on it.
@@ -520,7 +783,10 @@ func NewApp() *App {
 		selfSend:              newSelfSendDedup(),
 		bootstrap:             newWorkspaceBootstrap(),
 		windowTitle:           "slk",
-		threadsDirtyDebounce:  150 * time.Millisecond,
+		threadsDirtyDebounce:  defaultThreadsDirtyDebounce,
+		terminalFocused:       true,
+		inTmux:                os.Getenv("TMUX") != "",
+		markFlushDebounce:     defaultMarkFlushDebounce,
 		channelSearchDebounce: channelSearchDebounceDelay,
 		fetchingOlder:         map[string]bool{},
 		mouseWheelLines:       3,
@@ -539,9 +805,9 @@ func NewApp() *App {
 		searchSvc:             noopSearchService,
 		lastChannelByTeam:     map[string]string{},
 		workspaceDomains:      map[string]string{},
-		browserOpener:         openURLCmd,
+		desktop:               noopDesktopService,
+		editor:                noopEditorService,
 		navHistory:            newNavHistoryStore(),
-		clipboardRead:         defaultClipboardReader,
 		clipboardWrite:        defaultClipboardWriter,
 	}
 	// Root model deliberately bypasses newWindowModel: the config
@@ -557,6 +823,7 @@ func NewApp() *App {
 	// reference sibling fields.
 	app.typing = newTypingTracker()
 	app.typingOut = newTypingBroadcaster(app.typing)
+	app.browserOpener = app.openURLCmd
 	// Seed the picker with built-in emojis so the autocomplete works even
 	// before the first workspace finishes loading customs.
 	app.compose.SetEmojiEntries(emoji.BuildEntries(nil))
@@ -601,7 +868,63 @@ func (a *App) Init() tea.Cmd {
 	return nil
 }
 
+// Update is the bubbletea entry point: the reducer chain in update,
+// then one piece of bookkeeping that must see the result of every
+// message — which content pane last had focus (see threadInFront).
+// Recorded here once rather than at the ~30 sites that set
+// focusedPanel.
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m, cmd := a.update(msg)
+	if a.focusedPanel == PanelMessages || a.focusedPanel == PanelThread {
+		a.stackFront = a.focusedPanel
+	}
+	return m, cmd
+}
+
+// threadInFront reports whether the thread is the pane drawn when the
+// layout is too narrow for both (panelLayout.Compute). Focus decides;
+// with focus elsewhere (the sidebar), the content pane that last had
+// focus stays in front.
+func (a *App) threadInFront() bool {
+	if !a.threadVisible {
+		return false
+	}
+	switch a.focusedPanel {
+	case PanelThread:
+		return true
+	case PanelMessages:
+		return false
+	}
+	return a.stackFront == PanelThread
+}
+
+// threadDrawnAlone reports whether the thread is the only content pane
+// on screen this frame: threadVisible and the layout has stacked with
+// the thread in front, leaving the messages pane undrawn (MsgWidth ==
+// 0). Uses a scratch panelLayout (see windowBounds) so the query
+// doesn't disturb a.layout's stored hit-test bands. Handlers that must
+// route a keypress to whichever content pane the user can actually see
+// — even while focus is elsewhere, such as the sidebar — consult this
+// instead of threadVisible alone.
+func (a *App) threadDrawnAlone() bool {
+	if !a.threadVisible {
+		return false
+	}
+	var scratch panelLayout
+	frame := scratch.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),
+		a.sidebarVisible, a.threadVisible, a.threadInFront())
+	return frame.MsgWidth == 0
+}
+
+// computeFrame resolves this frame's layout from the App's state and
+// stores the hit-test bands. The one place View's layout inputs are
+// assembled; tests call it instead of repeating Compute's arguments.
+func (a *App) computeFrame() panelLayoutFrame {
+	return a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),
+		a.sidebarVisible, a.threadVisible, a.threadInFront())
+}
+
+func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	// Phase 4 reducer chain (extension point — see internal/ui/reducers.go).
@@ -622,9 +945,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		reduceReactions,
 		reduceThreads,
 		reduceActivity,
+		reduceFocus,
 		reduceSend,
 		reduceChannels,
 		reduceLinks,
+		reduceFiles,
 		reduceSearch,
 		reduceWorkspace,
 		reduceNewMessagePicker,
@@ -656,7 +981,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter":
 				path := a.preview.Overlay().Path()
 				a.preview.Close()
-				return a, openInSystemViewerCmd(path)
+				return a, a.openInSystemViewerCmd(path)
 			case "h", "left":
 				if a.preview.Overlay().SiblingCount() > 1 {
 					return a, a.cycleImagePreviewCmd(a.preview.Channel(), a.preview.TS(), a.preview.AttIdx(), -1)
@@ -1015,6 +1340,38 @@ func (a *App) toggleReactionOnMessageItem(channelIDStr string, msg messages.Mess
 	}
 }
 
+// copyMessageOfSelected copies the text of the currently-selected message or
+// thread reply to the system clipboard via OSC 52 and emits a status-bar toast.
+func (a *App) copyMessageOfSelected() tea.Cmd {
+	var msg messages.MessageItem
+	switch a.focusedPanel {
+	case PanelMessages:
+		m, ok := a.messagepane.SelectedMessage()
+		if !ok {
+			return nil
+		}
+		msg = m
+	case PanelThread:
+		reply := a.threadPanel.SelectedReply()
+		if reply == nil {
+			return nil
+		}
+		msg = *reply
+	default:
+		return nil
+	}
+
+	text := messages.MessageTextSource(msg)
+	if text == "" {
+		return func() tea.Msg { return ToastMsg{Text: "Message has no text"} }
+	}
+	n := len([]rune(text))
+	return tea.Batch(
+		a.clipboardWrite(text),
+		func() tea.Msg { return statusbar.CopiedMsg{N: n} },
+	)
+}
+
 // copyPermalinkOfSelected resolves the currently-selected message or thread
 // reply, calls the permalink fetcher, and returns a tea.Cmd that writes the
 // URL to the clipboard and emits a status-bar toast.
@@ -1060,13 +1417,10 @@ func (a *App) copyPermalinkOfSelected() tea.Cmd {
 			// false success toast.
 			return nil
 		}
-
-		if !a.clipboardAvailable {
-			return statusbar.PermalinkCopyFailedMsg{}
-		}
-		_ = a.clipboardWrite(clipboard.FmtText, []byte(url))
-
-		return statusbar.PermalinkCopiedMsg{}
+		return tea.Batch(
+			a.clipboardWrite(url),
+			func() tea.Msg { return statusbar.PermalinkCopiedMsg{} },
+		)()
 	}
 }
 
@@ -1105,7 +1459,61 @@ func (a *App) openLinksOfSelected() tea.Cmd {
 		for i, l := range links {
 			items[i] = linkpicker.Item{URL: l.URL, Label: l.Label, InApp: a.linkOpensInApp(l.URL)}
 		}
-		a.linkPicker.Open(items)
+		a.pickerKind = "links"
+		a.linkPicker.Open("Open link", items)
+		a.SetMode(ModeLinkPicker)
+		return nil
+	}
+}
+
+// downloadFilesOfSelected implements the `d` keybinding: collect the
+// downloadable (non-image) file attachments of the selected message
+// (messages pane or thread panel). 0 files -> toast; 1 file ->
+// dispatch DownloadFileMsg directly; 2+ -> open the picker modal in
+// "files" mode. Mirrors openLinksOfSelected. Images are excluded: they
+// already have the preview flow (O/v).
+func (a *App) downloadFilesOfSelected() tea.Cmd {
+	var atts []messages.Attachment
+	switch a.focusedPanel {
+	case PanelMessages:
+		msg, ok := a.messagepane.SelectedMessage()
+		if !ok {
+			return nil
+		}
+		atts = msg.Attachments
+	case PanelThread:
+		reply := a.threadPanel.SelectedReply()
+		if reply == nil {
+			return nil
+		}
+		atts = reply.Attachments
+	default:
+		return nil
+	}
+	files := make([]messages.Attachment, 0, len(atts))
+	for _, att := range atts {
+		if att.Kind == "file" && att.DownloadURL != "" {
+			files = append(files, att)
+		}
+	}
+	switch len(files) {
+	case 0:
+		return func() tea.Msg { return ToastMsg{Text: "No files in message"} }
+	case 1:
+		att := files[0]
+		return func() tea.Msg { return DownloadFileMsg{Attachment: att} }
+	default:
+		items := make([]linkpicker.Item, len(files))
+		for i, f := range files {
+			var detail string
+			if f.Size > 0 {
+				detail = humanSize(f.Size)
+			}
+			items[i] = linkpicker.Item{Label: f.Name, Detail: detail}
+		}
+		a.pickerKind = "files"
+		a.pickerFiles = files
+		a.linkPicker.Open("Download file", items)
 		a.SetMode(ModeLinkPicker)
 		return nil
 	}
@@ -1146,42 +1554,14 @@ func (a *App) saveThreadToFile() tea.Cmd {
 		}
 	}
 
+	desktop := a.desktop
 	return func() tea.Msg {
-		content := export.ThreadToMarkdown(parent, replies, userNames, channelNames)
-
-		dir, err := export.ExportDir()
+		path, err := desktop.SaveThread(parent, replies, userNames, channelNames, channelName)
 		if err != nil {
-			return statusbar.ThreadSaveFailedMsg{Reason: err.Error()}
-		}
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return statusbar.ThreadSaveFailedMsg{Reason: err.Error()}
-		}
-		filename := fmt.Sprintf("slk-thread-%s-%s.md", sanitizeForFilename(channelName), time.Now().Format("2006-01-02-150405"))
-		path := filepath.Join(dir, filename)
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			return statusbar.ThreadSaveFailedMsg{Reason: err.Error()}
 		}
 		return statusbar.ThreadSavedMsg{Path: path}
 	}
-}
-
-func sanitizeForFilename(s string) string {
-	var b strings.Builder
-	prev := false
-	for _, r := range s {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' {
-			b.WriteRune(r)
-			prev = false
-		} else if !prev {
-			b.WriteByte('-')
-			prev = true
-		}
-	}
-	result := strings.Trim(b.String(), "-")
-	if result == "" {
-		return "unknown"
-	}
-	return result
 }
 
 // scrollFlushInterval is the coalescing window for held j/k selection
@@ -1571,6 +1951,35 @@ func (a *App) openThreadForSelectedMessage() tea.Cmd {
 	return a.openThreadPanel(msg, a.activeChannelID, threadTS)
 }
 
+// threadComposeChannelName resolves the display name for the thread's
+// parent channel so the thread compose's placeholder and the
+// "also send to #channel" broadcast hint show the real channel.
+// Falls back to the generic "channel" when the ID isn't in the
+// mention-resolution map (e.g. DM/MPIM edge cases).
+func (a *App) threadComposeChannelName(channelID string) string {
+	if name, ok := a.channelNames[channelID]; ok && name != "" {
+		return name
+	}
+	return "channel"
+}
+
+// applyThreadBreadcrumb names the open thread's channel in the thread
+// header. The name is the one the thread compose placeholder shows.
+// channelType may be "" when the caller has none, in which case the
+// sidebar's entry for channelID supplies it; an unknown channel falls
+// back to the default "#" glyph.
+func (a *App) applyThreadBreadcrumb(channelID, channelType string) {
+	if channelType == "" {
+		for _, it := range a.sidebar.Items() {
+			if it.ID == channelID {
+				channelType = it.Type
+				break
+			}
+		}
+	}
+	a.threadPanel.SetBreadcrumb(a.threadComposeChannelName(channelID), channelType)
+}
+
 // openThreadPanel makes the thread panel visible for (channelID,
 // threadTS) with the given parent row, primes replies from the thread
 // cache, and returns a cmd that fetches authoritative replies. Shared
@@ -1581,8 +1990,12 @@ func (a *App) openThreadPanel(parent messages.MessageItem, channelID, threadTS s
 	a.statusbar.SetInThread(true)
 	a.focusedPanel = PanelThread
 	a.threadPanel.SetThread(parent, nil, channelID, threadTS)
-	a.threadCompose.SetChannel("thread")
-	a.applyThreadUnreadBoundary(channelID)
+	a.threadCompose.SetChannel(a.threadComposeChannelName(channelID))
+	a.applyThreadBreadcrumb(channelID, "")
+	// A fresh thread must not inherit the previous thread's
+	// "also send to channel" toggle.
+	a.threadCompose.SetBroadcast(false)
+	a.applyThreadUnreadBoundary(channelID, threadTS)
 
 	threads := a.threads
 	chID := ids.ChannelID(channelID)
@@ -1599,6 +2012,12 @@ func (a *App) openThreadPanel(parent messages.MessageItem, channelID, threadTS s
 }
 
 func (a *App) SetMode(mode Mode) {
+	// Global interrupts and workspace switches must abandon an unsubmitted
+	// forward, just like Esc, rather than leave a stale source armed.
+	if mode != ModeChannelFinder && a.pendingForward != nil {
+		a.pendingForward = nil
+		a.channelFinder.Close()
+	}
 	// A mode change always disarms a pending ctrl+w chord — a global
 	// intercept (e.g. ctrl+c quit-confirm) must not strand it armed.
 	// The `if` guard scopes the hint restore to chord disarms only, so
@@ -1707,9 +2126,17 @@ func (a *App) FocusPrev() {
 
 func (a *App) ToggleSidebar() {
 	a.clearSelections()
+	// Must be read before the flip: threadDrawnAlone consults
+	// a.sidebarVisible, and the question is whether the thread was
+	// alone in front WITH the sidebar still shown.
+	wasThreadAlone := a.threadDrawnAlone()
 	a.sidebarVisible = !a.sidebarVisible
 	if !a.sidebarVisible && a.focusedPanel == PanelSidebar {
-		a.focusedPanel = PanelMessages
+		if wasThreadAlone {
+			a.focusedPanel = PanelThread
+		} else {
+			a.focusedPanel = PanelMessages
+		}
 	}
 }
 
@@ -1733,6 +2160,10 @@ func (a *App) CloseThread() {
 	if a.focusedPanel == PanelThread {
 		a.focusedPanel = PanelMessages
 	}
+	// Reset which content pane was "in front" so a later reopen that
+	// doesn't itself move focus (e.g. a WS-driven reactivation) can't
+	// come up in front from stale state left by this closed thread.
+	a.stackFront = PanelMessages
 }
 
 // openSelectedThreadCmd updates UI state for whichever row the threadsview
@@ -1769,12 +2200,16 @@ func (a *App) openSelectedThreadCmd(debounce bool) tea.Cmd {
 		ThreadTS: sum.ThreadTS,
 	}
 	a.threadPanel.SetThread(parent, nil, sum.ChannelID, sum.ThreadTS)
-	a.threadCompose.SetChannel("thread")
-	// Snapshot the parent channel's last_read_ts BEFORE the local mark-
+	a.threadCompose.SetChannel(a.threadComposeChannelName(sum.ChannelID))
+	a.applyThreadBreadcrumb(sum.ChannelID, sum.ChannelType)
+	// A fresh thread must not inherit the previous thread's
+	// "also send to channel" toggle.
+	a.threadCompose.SetBroadcast(false)
+	// Snapshot the thread's own last-read cursor BEFORE the local mark-
 	// read flips below, so the "── new ──" landmark in the thread panel
 	// reflects what the user had actually seen prior to opening this
 	// thread.
-	a.applyThreadUnreadBoundary(sum.ChannelID)
+	a.applyThreadUnreadBoundary(sum.ChannelID, sum.ThreadTS)
 	// Local mark-as-read for the threads list: opening a thread should
 	// clear its unread flag in the threads-view list and the sidebar
 	// badge. This is presentation-only — it does not call Slack's
@@ -1805,22 +2240,38 @@ func (a *App) openSelectedThreadCmd(debounce bool) tea.Cmd {
 }
 
 // applyThreadUnreadBoundary tells the thread panel where the unread
-// boundary is for `channelID` so it can render a "── new ──" landmark
-// before the first reply the user hasn't seen. No-op when no last-read
-// fetcher is wired (e.g. in tests).
-func (a *App) applyThreadUnreadBoundary(channelID string) {
-	if channelID == "" {
+// boundary is for (channelID, threadTS) so it can render a "── new ──"
+// landmark before the first reply the user hasn't seen. Sourced from
+// the thread's own cursor in thread_subscriptions — the parent
+// channel's cursor is stale for threads, since plain replies never
+// advance it. No-op when no last-read fetcher is wired (e.g. in tests).
+func (a *App) applyThreadUnreadBoundary(channelID, threadTS string) {
+	if channelID == "" || threadTS == "" {
 		return
 	}
-	a.threadPanel.SetUnreadBoundary(a.threads.ChannelLastRead(ids.ChannelID(channelID)))
+	a.threadPanel.SetUnreadBoundary(a.threads.ThreadLastRead(
+		ids.ChannelID(channelID), ids.ThreadTS(threadTS)))
 }
 
 // scheduleThreadsDirty returns a tea.Cmd that fires a ThreadsListDirtyMsg
-// after the configured debounce interval. Used to coalesce bursts of thread
-// replies (each delivered as its own NewMessageMsg) into a single re-query
-// of the involved-threads list. Returns nil when no workspace is active —
-// without an activeTeamID the dirty handler would just drop the message
-// anyway.
+// for the active workspace after the configured debounce interval. Returns
+// nil when no workspace is active — without an activeTeamID the dirty
+// handler would just drop the message anyway.
+//
+// The tick does not itself coalesce anything: tea.Tick arms a one-shot
+// timer per call, so a burst of thread replies arms a timer each and
+// sends a dirty message each. Collapsing those into a single
+// ListSubscribedThreads query is the receiving arm's job in
+// reduceThreads, where the dirty messages the WS handlers send are
+// collapsed with them.
+//
+// Which leaves this tick redundant, and additive with the one the
+// receiving arm arms: a reply's list re-query now lands roughly two
+// debounce intervals after the reply. Deliberately left in place when
+// the receive-side window was added — it predates that window and has
+// two callers, so removing it is a separate change. Doing so would
+// also improve coalescing slightly, by letting a reply's dirty join a
+// window already open instead of arriving after it closed.
 func (a *App) scheduleThreadsDirty() tea.Cmd {
 	if a.activeTeamID == "" {
 		return nil
@@ -1828,11 +2279,143 @@ func (a *App) scheduleThreadsDirty() tea.Cmd {
 	team := a.activeTeamID
 	d := a.threadsDirtyDebounce
 	if d == 0 {
-		d = 150 * time.Millisecond
+		d = defaultThreadsDirtyDebounce
 	}
 	return tea.Tick(d, func(time.Time) tea.Msg {
 		return ThreadsListDirtyMsg{TeamID: team}
 	})
+}
+
+// recordChannelMark stages a channel read-cursor advance. Newest-wins:
+// an older ts for the same channel is ignored, so out-of-order arrivals
+// can never roll the cursor backward. Slack timestamps are decimal
+// strings of equal shape, so the string comparison orders them
+// correctly without parsing.
+func (a *App) recordChannelMark(channelID, ts string) {
+	if channelID == "" || ts == "" {
+		return
+	}
+	if a.pendingChannelMark.channelID == channelID && a.pendingChannelMark.ts >= ts {
+		return
+	}
+	a.pendingChannelMark = pendingChannelMarkState{channelID: channelID, ts: ts}
+}
+
+// recordThreadMark stages a thread read-cursor advance. Newest-wins for
+// the same (channel, thread); a different thread replaces the slot.
+func (a *App) recordThreadMark(channelID, threadTS, ts string) {
+	if channelID == "" || threadTS == "" || ts == "" {
+		return
+	}
+	if a.pendingThreadMark.channelID == channelID &&
+		a.pendingThreadMark.threadTS == threadTS &&
+		a.pendingThreadMark.ts >= ts {
+		return
+	}
+	a.pendingThreadMark = pendingThreadMarkState{channelID: channelID, threadTS: threadTS, ts: ts}
+}
+
+// autoMarkArmed reports whether arrival-driven read-marking may fire.
+// It gates scheduleMarkFlush only: arrivals still stage their slots,
+// and reduceFocus's tea.FocusMsg catch-up still flushes them, because
+// reaching that arm is itself proof that focus reporting works.
+//
+// Outside tmux the assume-focused default of terminalFocused stands. A
+// terminal that never reports focus is indistinguishable there from one
+// that never loses it, and that risk is accepted for the common case.
+//
+// Inside tmux that default is not safe on its own: tmux forwards focus
+// events only when `set -g focus-events on`, which defaults off, so
+// such a user never produces a BlurMsg, terminalFocused stays true for
+// the whole session, and slk would advance Slack's read cursor while
+// the pane sat in the background. Requiring one observed focus event
+// proves reporting is wired up. With the setting on, the first focus
+// change arms this; without it slk never auto-marks and keeps its
+// pre-branch behavior of marking read on channel entry only.
+func (a *App) autoMarkArmed() bool {
+	return !a.inTmux || a.focusEverReported
+}
+
+// scheduleMarkFlush returns a tick that flushes the pending marks after
+// the debounce interval, or nil when nothing is staged, a tick is
+// already in flight, the terminal is blurred, or auto-marking is not
+// yet armed (see autoMarkArmed).
+//
+// The markFlushScheduled arm is what caps the mark rate: while a tick
+// is in flight, further arrivals only update the slots. Drop it and a
+// stream arriving faster than the debounce issues one
+// conversations.mark per message.
+//
+// Blurred slots stay staged and flush on the next FocusMsg instead, so
+// no timer is armed while the user is away.
+func (a *App) scheduleMarkFlush() tea.Cmd {
+	if a.markFlushScheduled || !a.terminalFocused || !a.autoMarkArmed() {
+		return nil
+	}
+	if a.pendingChannelMark.ts == "" && a.pendingThreadMark.ts == "" {
+		return nil
+	}
+	a.markFlushScheduled = true
+	d := a.markFlushDebounce
+	if d == 0 {
+		d = defaultMarkFlushDebounce
+	}
+	return tea.Tick(d, func(time.Time) tea.Msg { return markFlushMsg{} })
+}
+
+// flushPendingMarks clears both slots and returns the commands that
+// issue their marks. Clearing before issuing is deliberate: a mark
+// Slack rejects is not retried here, it is reconciled by the next
+// arrival, the next channel entry, or reconnect sync. Retrying a
+// rejected mark risks hammering a rate-limited endpoint.
+//
+// Neither leg of this moves an on-screen "── new ──" divider.
+// ChannelService.MarkRead yields ChannelMarkedReadMsg, whose reducer
+// arm only calls notifyReadStateChanged and never touches
+// SetLastReadTS. Slack then broadcasts the channel mark back as a
+// channel_marked event, which DOES reach SetLastReadTS via
+// applyChannelMark — hence the selfMarks.record below, which is what
+// makes applyChannelMarkEcho recognise and skip its own echo. The
+// thread leg is symmetric on both counts: threads.Mark's
+// ThreadMarkedLocalMsg arm applies list state only, and the leg records
+// into selfThreadMarks so applyThreadMarkEcho skips the thread_marked
+// broadcast of the same mark. The divider recomputes on the next
+// channel entry.
+func (a *App) flushPendingMarks() tea.Cmd {
+	var cmds []tea.Cmd
+	if pc := a.pendingChannelMark; pc.ts != "" {
+		a.pendingChannelMark = pendingChannelMarkState{}
+		channels := a.channels
+		chID := ids.ChannelID(pc.channelID)
+		ts := ids.MessageTS(pc.ts)
+		a.selfMarks.record(selfMarkKey{channelID: pc.channelID, ts: pc.ts})
+		cmds = append(cmds, func() tea.Msg { return channels.MarkRead(chID, ts) })
+	}
+	if pt := a.pendingThreadMark; pt.ts != "" {
+		a.pendingThreadMark = pendingThreadMarkState{}
+		if c := teaCmd(a.threads.Mark(
+			ids.ChannelID(pt.channelID),
+			ids.ThreadTS(pt.threadTS),
+			ids.MessageTS(pt.ts),
+		)); c != nil {
+			// Recorded before the cmd runs, symmetrically with the
+			// channel leg above: Mark only builds the cmd, so the mark
+			// has not been issued yet and this record cannot lose the
+			// race against Slack's thread_marked broadcast. A nil cmd
+			// means no mark, hence no echo to suppress.
+			//
+			// Converted, not aliased: the types stay distinct (staged
+			// vs. issued). Go allows the conversion only while their
+			// fields match in name, type and order, so a later
+			// divergence is a compile error here, not silent drift.
+			a.selfThreadMarks.record(selfMarkKey(pt))
+			cmds = append(cmds, c)
+		}
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
 }
 
 // userNameFor returns the display name for a Slack user ID, falling back
@@ -1922,7 +2505,7 @@ func (a *App) SetChannels(items []sidebar.ChannelItem) {
 // SetChannelService wires the App's ChannelService collaborator
 // (Slack channels API + local cache + session bookkeeping). Build
 // one via NewChannelService from a ChannelServiceFuncs bundle.
-func (a *App) SetChannelService(s ChannelService) {
+func (a *App) SetChannelService(s core.ChannelService) {
 	if s == nil {
 		s = noopChannelService
 	}
@@ -1931,7 +2514,7 @@ func (a *App) SetChannelService(s ChannelService) {
 
 // SetSearchService injects the search backend (wired by cmd/slk).
 // Build one via NewSearchService from a SearchServiceFuncs bundle.
-func (a *App) SetSearchService(s SearchService) {
+func (a *App) SetSearchService(s core.SearchService) {
 	if s == nil {
 		s = noopSearchService
 	}
@@ -1953,42 +2536,52 @@ func (a *App) clearActiveSearch() {
 }
 
 // SetMessageService wires the App's MessageService collaborator
-// (send / edit / delete / mark-unread / permalink). Build one via
+// (send / forward / edit / delete / mark-unread / permalink). Build one via
 // NewMessageService from a MessageServiceFuncs bundle.
-func (a *App) SetMessageService(s MessageService) {
+func (a *App) SetMessageService(s core.MessageService) {
 	if s == nil {
 		s = noopMessageService
 	}
 	a.messageSvc = s
 }
 
-// SetUploader wires the upload callback used by Ctrl+V smart-paste
-// when the user submits with attachments.
-func (a *App) SetUploader(fn UploadFunc) {
-	a.uploader = fn
+// SetFileService wires attachment uploads (submitting with Ctrl+V
+// attachments) and downloads (the `d` keybinding).
+func (a *App) SetFileService(s core.FileService) {
+	a.files = s
 }
 
-// SetClipboardAvailable signals whether the OS clipboard library
-// initialized successfully. When false, the smart-paste code path
-// is short-circuited.
+// SetClipboardAvailable reports whether native clipboard reads initialized
+// successfully. It controls Ctrl+V smart-paste only; OSC 52 writes remain
+// available in headless and CGO-free environments.
 func (a *App) SetClipboardAvailable(ok bool) {
 	a.clipboardAvailable = ok
 }
 
-// SetClipboardReader replaces the clipboard read function. Used by
-// tests to inject canned clipboard contents. Pass nil to restore
-// the default real clipboard reader.
-func (a *App) SetClipboardReader(fn clipboardReader) {
-	if fn == nil {
-		a.clipboardRead = defaultClipboardReader
-		return
-	}
-	a.clipboardRead = fn
+// SetComposeEditor sets Ctrl+E's resolved editor argv (see editor.go).
+func (a *App) SetComposeEditor(editor []string) {
+	a.composeEditor = editor
 }
 
-// SetClipboardWriter replaces the clipboard write function. Used by
-// tests to inject a fake writer. Pass nil to restore the default
-// real clipboard writer.
+// SetEditorService wires Ctrl+E's temp file and editor process. nil
+// restores the no-op.
+func (a *App) SetEditorService(s core.EditorService) {
+	if s == nil {
+		s = noopEditorService
+	}
+	a.editor = s
+}
+
+// SetDesktopService wires the host OS integration. nil restores the no-op.
+func (a *App) SetDesktopService(s core.DesktopService) {
+	if s == nil {
+		s = noopDesktopService
+	}
+	a.desktop = s
+}
+
+// SetClipboardWriter replaces the OSC 52 command factory. Used by tests to
+// capture copied text. Pass nil to restore tea.SetClipboard.
 func (a *App) SetClipboardWriter(fn clipboardWriter) {
 	if fn == nil {
 		a.clipboardWrite = defaultClipboardWriter
@@ -2000,7 +2593,7 @@ func (a *App) SetClipboardWriter(fn clipboardWriter) {
 // SetThreadService wires the App's ThreadService collaborator
 // (fetch / mark / reply / list-fetch + parent-channel last-read).
 // Build one via NewThreadService from a ThreadServiceFuncs bundle.
-func (a *App) SetThreadService(s ThreadService) {
+func (a *App) SetThreadService(s core.ThreadService) {
 	if s == nil {
 		s = noopThreadService
 	}
@@ -2008,47 +2601,50 @@ func (a *App) SetThreadService(s ThreadService) {
 }
 
 // SetActivityService wires the App's ActivityService collaborator
-// (Slack Activity-feed fetch). Build one via NewActivityService from
-// an ActivityServiceFuncs bundle.
-func (a *App) SetActivityService(s ActivityService) {
+// (Slack Activity-feed fetch). Build one via core.NewActivityService.
+func (a *App) SetActivityService(s core.ActivityService) {
 	if s == nil {
 		s = noopActivityService
 	}
 	a.activity = s
 }
 
-// SetReadStateReader installs a callback the sidebar (and any future
-// readers) will call at render time to fetch per-channel read state.
-// Must be set before the first render for unread dots to appear.
-func (a *App) SetReadStateReader(f func() map[string]cache.ReadState) {
-	a.sidebar.SetReadStateReader(f)
-}
-
-// SetWorkspaceUnreadReader installs the callback the workspace rail
-// uses on RefreshUnreads to learn which workspaces have at least one
-// channel with has_unread=true.
-func (a *App) SetWorkspaceUnreadReader(f func() []string) {
-	a.workspaceRail.SetUnreadReader(f)
-}
-
-// SetStatusReporter installs the StatusReportFunc invoked on every unread-state
-// change to mirror slk's unread state onto an external surface (config:
-// notifications.status_command).
-func (a *App) SetStatusReporter(fn StatusReportFunc) {
-	a.statusReport = fn
+// SetUnreadService wires the read state the sidebar and workspace rail
+// render. Must be set before the first render for unread dots to appear.
+func (a *App) SetUnreadService(s core.UnreadService) {
+	if s == nil {
+		a.sidebar.SetReadStateReader(nil)
+		a.workspaceRail.SetUnreadReader(nil)
+		return
+	}
+	a.sidebar.SetReadStateReader(s.ChannelReadStates)
+	a.workspaceRail.SetUnreadReader(s.UnreadWorkspaces)
 }
 
 func (a *App) SetChannelFinderItems(items []channelfinder.Item) {
 	a.channelFinder.SetItems(items)
 }
 
-// SetAvatarFunc sets the function used to get rendered avatars for messages.
-func (a *App) SetAvatarFunc(fn messages.AvatarFunc) {
+// SetAvatarService wires the rendered avatars shown beside messages.
+func (a *App) SetAvatarService(s core.AvatarService) {
+	var fn messages.AvatarFunc
+	if s != nil {
+		fn = s.Avatar
+	}
 	a.avatarFn = fn
 	for _, m := range a.allWinModels() {
 		m.SetAvatarFunc(fn)
 	}
 	a.threadPanel.SetAvatarFunc(fn)
+}
+
+// SetColoredUsernames enables or disables deterministic per-user coloring
+// of usernames across all message panes and the thread panel.
+func (a *App) SetColoredUsernames(enabled bool) {
+	for _, m := range a.allWinModels() {
+		m.SetColoredUsernames(enabled)
+	}
+	a.threadPanel.SetColoredUsernames(enabled)
 }
 
 // SetImageContext configures the inline-image rendering pipeline on the
@@ -2106,7 +2702,7 @@ func (a *App) SetEmojiContext(ctx messages.EmojiContext) {
 
 // SetImageFetcher records the image fetcher so the preview overlay can
 // fetch large thumbs on demand. Called once at startup from main.go.
-func (a *App) SetImageFetcher(f *imgpkg.Fetcher) {
+func (a *App) SetImageFetcher(f core.ImageFetcher) {
 	a.imageFetcher = f
 }
 
@@ -2302,47 +2898,54 @@ func (a *App) findMessageInActiveChannel(channel, ts string) (messages.MessageIt
 // viewer for path. Uses xdg-open on Linux, open on macOS, and
 // rundll32 on Windows. Errors are logged and otherwise silent — the
 // overlay is already closed by the time this runs.
-func openInSystemViewerCmd(path string) tea.Cmd {
+func (a *App) openInSystemViewerCmd(path string) tea.Cmd {
+	desktop := a.desktop
 	return func() tea.Msg {
 		if path == "" {
 			return nil
 		}
-		if err := launchOS(path); err != nil {
+		if err := desktop.Open(path); err != nil {
 			log.Printf("system viewer launch failed: %v", err)
 		}
 		return nil
 	}
 }
 
-// launchOS starts the platform's default handler for target (a URL or
-// file path): open (macOS), rundll32 (Windows), xdg-open (Linux).
-func launchOS(target string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", target)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", target)
-	default:
-		cmd = exec.Command("xdg-open", target)
-	}
-	return cmd.Start()
-}
-
 // openURLCmd asynchronously launches the OS default browser for url.
 // Same launcher matrix as openInSystemViewerCmd (xdg-open / open /
 // rundll32). A failed launch surfaces a toast — unlike the image
 // viewer, the user otherwise gets no feedback at all.
-func openURLCmd(url string) tea.Cmd {
+func (a *App) openURLCmd(url string) tea.Cmd {
+	desktop := a.desktop
 	return func() tea.Msg {
 		if url == "" {
 			return nil
 		}
-		if err := launchOS(url); err != nil {
+		if err := desktop.Open(url); err != nil {
 			log.Printf("browser launch failed: %v", err)
 			return ToastMsg{Text: "Failed to open link"}
 		}
 		return nil
+	}
+}
+
+// downloadFileCmd downloads att to the temp download dir and opens it
+// in the OS default app. Runs async; the user gets a toast either way.
+func (a *App) downloadFileCmd(att messages.Attachment) tea.Cmd {
+	return func() tea.Msg {
+		if a.files == nil {
+			return ToastMsg{Text: "File downloads unavailable"}
+		}
+		path, err := a.files.Download(context.Background(), att.DownloadURL, att.Name)
+		if err != nil {
+			log.Printf("file download failed: %v", err)
+			return ToastMsg{Text: "Download failed: " + att.Name}
+		}
+		if err := a.desktop.Open(path); err != nil {
+			log.Printf("file open failed: %v", err)
+			return ToastMsg{Text: "Failed to open " + att.Name}
+		}
+		return ToastMsg{Text: "Downloaded " + att.Name}
 	}
 }
 
@@ -2479,7 +3082,7 @@ func (a *App) SetInitialChannel(channelID, channelName string, msgs []messages.M
 // The supplied service handles both reaction add/remove and frecent
 // emoji bookkeeping; build one via NewReactionService from
 // internal/ui/services.go.
-func (a *App) SetReactionService(r ReactionService) {
+func (a *App) SetReactionService(r core.ReactionService) {
 	if r == nil {
 		r = noopReactionService
 	}
@@ -2517,9 +3120,9 @@ func (a *App) ActiveChannelID() string {
 	return a.activeChannelID
 }
 
-// SetWorkspaceSwitcher sets the callback used to switch workspaces.
-func (a *App) SetWorkspaceSwitcher(fn SwitchWorkspaceFunc) {
-	a.workspaceSwitcher = fn
+// SetWorkspaceService wires workspace switching.
+func (a *App) SetWorkspaceService(s core.WorkspaceService) {
+	a.workspaceSvc = s
 }
 
 // SetThemeItems sets the available themes for the switcher.
@@ -2563,28 +3166,24 @@ func (a *App) workspaceNameForActive() string {
 	return ""
 }
 
-// SetThemeSaver sets the callback for saving the theme selection. The
-// callback receives the chosen theme name and the scope (workspace vs.
-// global) so the implementation can route to the correct save target.
-func (a *App) SetThemeSaver(fn func(name string, scope themeswitcher.ThemeScope)) {
-	a.themeSaveFn = fn
+// SetSettingsService wires persistence of the theme choice and sidebar width.
+func (a *App) SetSettingsService(s core.SettingsService) {
+	a.settings = s
 }
 
-// SetWidthSaver sets the callback for persisting the sidebar width.
-// The callback receives the current width after a resize.
-func (a *App) SetWidthSaver(fn func(width int)) {
-	a.widthSaveFn = fn
-}
-
-// SetStatusSetter registers a callback the App invokes when the user picks
-// a status action from the presence menu. The callback runs the appropriate
-// Slack API call (typically asynchronously) for the active workspace.
-func (a *App) SetStatusSetter(fn func(action presencemenu.Action, snoozeMinutes int)) {
-	a.setStatusFn = fn
+// SetPresenceService wires setting the user's own status from the presence
+// menu and broadcasting typing indicators.
+func (a *App) SetPresenceService(s core.PresenceService) {
+	a.presenceSvc = s
+	if s == nil {
+		a.typingOut.SetSender(nil)
+		return
+	}
+	a.typingOut.SetSender(s.SendTyping)
 }
 
 // SetThemeOverrides stores the config theme overrides for applying on switch.
-func (a *App) SetThemeOverrides(overrides config.Theme) {
+func (a *App) SetThemeOverrides(overrides core.Theme) {
 	a.themeOverrides = overrides
 }
 
@@ -2613,11 +3212,6 @@ func (a *App) SetMouseWheelLines(n int) {
 // before a channel is hidden; pass 0 to disable.
 func (a *App) SetSidebarStaleThreshold(d time.Duration) {
 	a.sidebar.SetStaleThreshold(d)
-}
-
-// SetTypingSender sets the callback for sending typing indicators.
-func (a *App) SetTypingSender(fn TypingSendFunc) {
-	a.typingOut.SetSender(fn)
 }
 
 // renderTypingLine returns the styled typing indicator for the current
@@ -2659,16 +3253,10 @@ func (a *App) View() tea.View {
 	}
 
 	// Resolve per-pane widths/borders. Compute stores horizontal bands
-	// for subsequent mouse hit-testing (panelAt) and surfaces a
-	// ThreadAutoHidden flag when the available width can't fit the
-	// thread pane at its minimum.
-	frame := a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(), a.sidebarVisible, a.threadVisible)
-	if frame.ThreadAutoHidden {
-		a.threadVisible = false
-		if a.focusedPanel == PanelThread {
-			a.focusedPanel = PanelMessages
-		}
-	}
+	// for subsequent mouse hit-testing (panelAt). When the thread and
+	// channel stack, the pane behind has zero width and is not drawn.
+	// View reads App state here; it never writes it.
+	frame := a.computeFrame()
 	themeVer := styles.Version()
 
 	// If the full-screen image preview is open, the messages and
@@ -2684,8 +3272,10 @@ func (a *App) View() tea.View {
 	if a.sidebarVisible {
 		panels = append(panels, a.renderSidebar(frame.SidebarWidth, frame.SidebarBorder, frame.ContentHeight, themeVer))
 	}
-	if s := a.renderWindowsRegion(frame, themeVer, previewActive); s != "" {
-		panels = append(panels, s)
+	if frame.MsgWidth > 0 {
+		if s := a.renderWindowsRegion(frame, themeVer, previewActive); s != "" {
+			panels = append(panels, s)
+		}
 	}
 	if a.threadVisible && frame.ThreadWidth > 0 && !previewActive {
 		panels = append(panels, a.renderThreadRegion(frame, themeVer))
@@ -2739,6 +3329,10 @@ func (a *App) View() tea.View {
 	v := tea.NewView(screen)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
+	// Ask the terminal to report focus gain/loss so reduceFocus can keep
+	// a.terminalFocused current. Bubble Tea diffs this against the
+	// previous frame and only emits the enable sequence on change.
+	v.ReportFocus = true
 	if debuglog.Enabled() {
 		// panel: 0=workspace 1=sidebar 2=messages 3=thread
 		// view:  0=channels 1=threads
@@ -2769,7 +3363,7 @@ func (a *App) collectSixelPlacements(frame panelLayoutFrame) []imgpkg.SixelPlace
 		}
 		return want
 	}
-	if a.view != ViewChannels {
+	if a.view != ViewChannels || frame.MsgWidth == 0 {
 		return nil
 	}
 	// The same bounds renderWindowsRegion uses, so leaf rectangles
@@ -2942,13 +3536,13 @@ func (a *App) submitWithAttachments(c *compose.Model) tea.Cmd {
 		channelID = a.activeChannelID
 		threadTS = ""
 	}
-	if channelID == "" || a.uploader == nil {
+	if channelID == "" || a.files == nil {
 		return a.uploadToastCmd("Cannot upload: no active channel", 2*time.Second)
 	}
 
 	c.SetUploading(true)
 	cmds := []tea.Cmd{
-		a.uploader(channelID, threadTS, caption, attachments),
+		teaCmd(a.files.Upload(channelID, threadTS, caption, attachments)),
 		a.uploadToastCmd(fmt.Sprintf("Uploading 0/%d…", len(attachments)), 30*time.Second),
 	}
 	return tea.Batch(cmds...)
@@ -2972,7 +3566,7 @@ func (a *App) smartPaste() tea.Cmd {
 		target = &a.threadCompose
 	}
 
-	textBytes := a.clipboardRead(clipboard.FmtText)
+	textBytes := a.desktop.ReadClipboard(core.ClipboardText)
 	if consumed, cmd := a.tryAttachFromClipboard(target, string(textBytes)); consumed {
 		return cmd
 	}
@@ -2996,7 +3590,7 @@ func (a *App) smartPaste() tea.Cmd {
 // bracketed-paste this is the PasteMsg's payload.
 func (a *App) tryAttachFromClipboard(target *compose.Model, pathCandidate string) (bool, tea.Cmd) {
 	// 1. Image bytes from the OS clipboard.
-	if imgBytes := a.clipboardRead(clipboard.FmtImage); len(imgBytes) > 0 {
+	if imgBytes := a.desktop.ReadClipboard(core.ClipboardImage); len(imgBytes) > 0 {
 		if int64(len(imgBytes)) > maxAttachmentSize {
 			return true, a.uploadToastCmd(
 				fmt.Sprintf("Image too large (%s > 10 MB limit)", humanSize(int64(len(imgBytes)))),
@@ -3018,7 +3612,7 @@ func (a *App) tryAttachFromClipboard(target *compose.Model, pathCandidate string
 
 	// 2. File-path text.
 	if path, ok := resolveFilePath(pathCandidate); ok {
-		info, err := os.Stat(path)
+		info, err := a.desktop.Stat(path)
 		if err == nil && info.Mode().IsRegular() {
 			if info.Size() > maxAttachmentSize {
 				return true, a.uploadToastCmd("File too large (>10 MB limit)", 3*time.Second)
@@ -3096,16 +3690,25 @@ func (a *App) notifyReadStateChanged() {
 	other := a.workspaceRail.OtherUnreadCount(a.activeTeamID)
 	name := a.workspaceRail.NameByID(a.activeTeamID)
 	a.windowTitle = computeWindowTitle(a.activeTeamID, name, active, other)
-	if a.statusReport != nil {
-		a.statusReport(active, other, name, a.windowTitle)
-	}
+	a.desktop.ReportStatus(active, other, name, a.windowTitle)
 }
 
 // applyChannelMark updates local state for a channel-level read-state
-// change (used by both the local mark-unread press and the inbound
-// channel_marked WS event). channelID is the channel; ts is the new
-// last_read watermark; unreadCount is the canonical unread count to
-// show in the sidebar badge.
+// change. channelID is the channel; ts is the new last_read watermark.
+//
+// unreadCount is diagnostic only: it reaches the debug log and nothing
+// else. No badge is set from it — notifyReadStateChanged invalidates
+// the sidebar, which re-derives its own display from its channel
+// state, and the aggregate that reaches the window title and status
+// report comes from a.sidebar.UnreadChannelCount(). The parameter is
+// kept rather than dropped because logging the count Slack reported
+// next to the state slk derives is what makes a divergence between
+// them debuggable.
+//
+// This ALWAYS moves the on-screen cursor. Two callers: the local
+// mark-unread press (reducer_send.go's MessageMarkedUnreadMsg arm),
+// which is a deliberate user action, and applyChannelMarkEcho, which
+// has already decided the inbound channel_marked is not slk's own.
 //
 // Idempotent: calling twice with the same values is a no-op past the
 // first one (the underlying setters short-circuit on equality).
@@ -3118,30 +3721,159 @@ func (a *App) applyChannelMark(channelID, ts string, unreadCount int) {
 	a.notifyReadStateChanged()
 }
 
-// applyThreadMark updates local state for a thread-level read-state
-// change. read=false means the thread is now unread (move boundary +
-// flip threads-view row); read=true means the thread is now read
-// (clear boundary + clear threads-view row).
-func (a *App) applyThreadMark(channelID, threadTS, ts string, read bool) {
-	debuglog.Cache("applyThreadMark: channel=%s thread_ts=%s ts=%s read=%v active=%s",
-		channelID, threadTS, ts, read, a.activeChannelID)
+// applyChannelMarkEcho handles an inbound channel_marked WS event.
+//
+// Slack broadcasts channel_marked to every connected client INCLUDING
+// the one that issued the mark, so this arrives both for marks made in
+// another Slack client and for slk's own. Applying slk's own would drag
+// the "── new ──" divider to the newest message a round trip after slk
+// marked it, deleting the user's place moments after they looked at it.
+// Those are suppressed: the read-state notification still runs, so the
+// sidebar dot and workspace rail clear, but the cursor is left alone.
+// A mark slk did not issue carries no record and still moves the
+// cursor, which is correct — the user really did read the channel
+// elsewhere. See selfMarkDedup.
+//
+// The dedup lives here rather than inside applyChannelMark because that
+// helper is shared with the local mark-unread press, which must move
+// the divider unconditionally. Those two can collide on ts: slk
+// auto-marks at the newest message, and "mark this newest message
+// unread so I deal with it later" targets that same ts. Consuming there
+// would silently swallow the user's explicit action for as long as the
+// self-mark record lives — one round trip normally, unbounded if the
+// echo never arrives.
+func (a *App) applyChannelMarkEcho(channelID, ts string, unreadCount int) {
+	if a.selfMarks.consume(selfMarkKey{channelID: channelID, ts: ts}) {
+		debuglog.Cache("applyChannelMarkEcho: channel=%s ts=%s self_echo=true (cursor held)",
+			channelID, ts)
+		a.notifyReadStateChanged()
+		return
+	}
+	a.applyChannelMark(channelID, ts, unreadCount)
+}
+
+// applyThreadMark updates local state for a thread read-cursor move.
+// Read/unread is derived by comparing the cursor against the thread's
+// newest known reply — never from the subscription's `active` flag,
+// which means "subscribed".
+//
+// This applies lastRead to the panel unconditionally whenever the panel
+// is open on this thread — there is no self-echo check here. Its sole
+// caller is applyThreadMarkEcho, which has already decided the inbound
+// thread_marked is not slk's own. Mirrors applyChannelMark; see
+// applyThreadMarkEcho for why the dedup does not live here.
+func (a *App) applyThreadMark(channelID, threadTS, lastRead string) {
+	debuglog.Cache("applyThreadMark: channel=%s thread_ts=%s last_read=%s active=%s",
+		channelID, threadTS, lastRead, a.activeChannelID)
 	if a.threadVisible &&
 		a.threadPanel.ChannelID() == channelID &&
 		a.threadPanel.ThreadTS() == threadTS {
-		if read {
-			a.threadPanel.SetUnreadBoundary("")
-		} else {
-			a.threadPanel.SetUnreadBoundary(ts)
-		}
+		// The panel renders its "── new ──" landmark after the boundary
+		// ts, so a fully-caught-up cursor renders no landmark.
+		a.threadPanel.SetUnreadBoundary(lastRead)
 	}
-	if read {
-		if a.threadsView.MarkByThreadTSRead(channelID, threadTS) {
-			a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
-		}
-	} else {
-		if a.threadsView.MarkByThreadTSUnread(channelID, threadTS) {
-			a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
-		}
+	a.applyThreadMarkListState(channelID, threadTS, lastRead)
+}
+
+// applyThreadMarkListState is applyThreadMark's threads-list half: it
+// settles the row's unread flag and the sidebar badge against lastRead
+// without touching an open thread panel's landmark.
+//
+// Three callers. applyThreadMark runs it as its own tail, after moving
+// the landmark for a mark slk did not issue. The other two are the two
+// ways slk sees its OWN mark: ThreadMarkedLocalMsg, the HTTP call
+// reporting success, and applyThreadMarkEcho's suppressed branch,
+// Slack's broadcast of that same mark coming back. For those two the
+// panel is on screen, the user is reading it, and its boundary was
+// deliberately set on open from the pre-open cursor (see
+// openSelectedThreadCmd); the mark carries the cursor slk just set —
+// the newest reply — so applying it to the panel would erase the
+// landmark. The read state itself is real, though, so the list flag and
+// the badge must still settle, which is what this does.
+func (a *App) applyThreadMarkListState(channelID, threadTS, lastRead string) {
+	if a.threadsView.MarkByThreadTSReadAt(channelID, threadTS, lastRead) {
+		a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
+	}
+	// The cursor is already in thread_subscriptions -- markThreadRead
+	// writes it before ThreadMarkedLocalMsg, OnThreadMarked before
+	// ThreadMarkedRemoteMsg -- and the rail's thread half reads that
+	// table (railThreadsUnread in cmd/slk), so recompute the rail here,
+	// whether or not the list had a row to settle: after a workspace
+	// switch the list is empty but the cursor still moved.
+	//
+	// This is the one thread mark site that fans out. The optimistic
+	// ones -- MarkSelectedRead on open, the ThreadRepliesLoadedMsg
+	// recompute, applyThreadMarkUnread -- change nothing in the DB at
+	// that moment, so the rail would only re-read the answer it already
+	// shows; the mark they issue, or its thread_marked echo, lands here
+	// and refreshes it then.
+	a.notifyReadStateChanged()
+}
+
+// applyThreadMarkEcho handles an inbound thread_marked WS event.
+//
+// Slack broadcasts thread_marked to every connected client INCLUDING
+// the one that issued the mark, so ThreadMarkedRemoteMsg does NOT mean
+// "another client": it carries slk's own marks back too, chiefly the
+// mark-on-open from reducer_threads' ThreadRepliesLoadedMsg arm and the
+// auto-mark from flushPendingMarks. Those echoes carry the newest
+// reply, and the panel renders no landmark once its boundary reaches
+// the newest reply — so applying one wipes the "── new ──" divider a
+// round trip after the user opened the thread to look at it. They are
+// suppressed: the threads-list flag and sidebar badge still settle, but
+// the landmark is left where opening the thread put it. A mark slk did
+// not issue carries no record and still moves the landmark, which is
+// correct — the user really did read the thread elsewhere. See
+// selfMarkDedup.
+//
+// "Chiefly", not "only": the thread mark-unread press is a third
+// self-originated echo. MarkThreadUnread posts to the same
+// subscriptions.thread.mark endpoint with read=0, so it broadcasts back
+// here exactly as the read marks do. It is deliberately NOT recorded,
+// so its echo is treated as foreign and moves the landmark. That is
+// correct: Slack rolls the cursor back to just before the ts the user
+// picked, so applying it renders the landmark exactly where the press
+// asked for it. Do not "complete" the recording sites
+// by adding it: that would suppress the press's own effect, the
+// thread-side form of the applyChannelMark collision described below.
+//
+// The dedup lives here rather than inside applyThreadMark so that
+// consuming a record stays a property of the echo path alone.
+// applyThreadMark has no other caller today — the thread mark-unread
+// press goes through applyThreadMarkUnread — but the channel pair
+// records why the split is worth keeping: applyChannelMark IS shared
+// with the mark-unread press, and folding the dedup into it would
+// silently swallow that deliberate action whenever the two collided on
+// ts. Anything later reaching applyThreadMark inherits the
+// unconditional behaviour rather than the suppression.
+func (a *App) applyThreadMarkEcho(channelID, threadTS, lastRead string) {
+	if a.selfThreadMarks.consume(selfMarkKey{
+		channelID: channelID, threadTS: threadTS, ts: lastRead,
+	}) {
+		debuglog.Cache("applyThreadMarkEcho: channel=%s thread_ts=%s last_read=%s self_echo=true (landmark held)",
+			channelID, threadTS, lastRead)
+		a.applyThreadMarkListState(channelID, threadTS, lastRead)
+		return
+	}
+	a.applyThreadMark(channelID, threadTS, lastRead)
+}
+
+// applyThreadMarkUnread forces a thread unread from boundaryTS. Used by
+// the user-initiated mark-unread flow, which knows its own intent.
+// It does not go through applyThreadMark's cursor comparison: Slack sets
+// the cursor to just BEFORE boundaryTS, so comparing boundaryTS against
+// the newest reply would wrongly report the thread read whenever the
+// boundary is that newest reply.
+func (a *App) applyThreadMarkUnread(channelID, threadTS, boundaryTS string) {
+	debuglog.Cache("applyThreadMarkUnread: channel=%s thread_ts=%s boundary=%s active=%s",
+		channelID, threadTS, boundaryTS, a.activeChannelID)
+	if a.threadVisible &&
+		a.threadPanel.ChannelID() == channelID &&
+		a.threadPanel.ThreadTS() == threadTS {
+		a.threadPanel.SetUnreadBoundary(boundaryTS)
+	}
+	if a.threadsView.MarkByThreadTSUnread(channelID, threadTS) {
+		a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
 	}
 }
 

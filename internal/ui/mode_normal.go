@@ -7,11 +7,11 @@
 //     prompt), Ctrl-Y (theme switcher), ? (help),
 //     S (presence menu), R (reaction picker)
 //   - navigation: j/k (selection), Ctrl-D/U (half-page), C-f/b
-//     (page), G (bottom), Tab/h/l (focus next/prev), Ctrl-o/i
+//     (page), G (bottom), Tab/h/l (focus next/prev), Ctrl-h/k
 //     (nav back/forward through visited channels)
 //   - layout toggles: s (sidebar), t (thread)
-//   - message ops: y (copy permalink), E (edit), D (delete),
-//     M (mark unread), O (open image preview)
+//   - message ops: y (copy message), Y/C (copy permalink), E (edit), D (delete),
+//     U (mark unread), O/v (open image preview)
 //   - reaction nav sub-state: r enters; arrows + Enter select
 //     (delegated to handleReactionNav / handleThreadReactionNav)
 //   - window commands: Ctrl-W prefix arms a pending sub-state; the
@@ -59,8 +59,12 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		// In the Threads view there is no main compose box -- the
 		// only way to type is into the right-side thread panel's
 		// compose. Force focus there even when the threads list
-		// itself was the focused panel.
-		if a.focusedPanel == PanelThread || (a.view == ViewThreads && a.threadVisible) {
+		// itself was the focused panel. Same for a stacked, narrow
+		// layout where the thread is the only content pane drawn
+		// (e.g. focus on the sidebar): typing must land where the
+		// user can see it, not in a channel compose hidden behind
+		// the thread.
+		if a.focusedPanel == PanelThread || (a.view == ViewThreads && a.threadVisible) || a.threadDrawnAlone() {
 			a.focusedPanel = PanelThread
 			return a.threadCompose.Focus()
 		}
@@ -146,14 +150,14 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 
 	case key.Matches(msg, a.keys.SidebarGrow):
 		a.sidebar.GrowWidth()
-		if a.widthSaveFn != nil {
-			a.widthSaveFn(a.sidebar.Width())
+		if a.settings != nil {
+			a.settings.SaveSidebarWidth(a.sidebar.Width())
 		}
 
 	case key.Matches(msg, a.keys.SidebarShrink):
 		a.sidebar.ShrinkWidth()
-		if a.widthSaveFn != nil {
-			a.widthSaveFn(a.sidebar.Width())
+		if a.settings != nil {
+			a.settings.SaveSidebarWidth(a.sidebar.Width())
 		}
 
 	case key.Matches(msg, a.keys.ToggleThread):
@@ -186,6 +190,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		a.FocusNext()
 
 	case key.Matches(msg, a.keys.Enter):
+		if cmd, ok := a.openForwardedSelected(); ok {
+			return cmd
+		}
 		return a.handleEnter()
 
 	case key.Matches(msg, a.keys.ToggleSection):
@@ -274,8 +281,14 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, a.keys.SaveThread):
 		return a.saveThreadToFile()
 
+	case key.Matches(msg, a.keys.CopyMessage):
+		return a.copyMessageOfSelected()
+
 	case key.Matches(msg, a.keys.CopyPermalink):
 		return a.copyPermalinkOfSelected()
+
+	case key.Matches(msg, a.keys.ForwardMessage):
+		return a.beginForwardOfSelected()
 
 	case key.Matches(msg, a.keys.Edit):
 		return a.beginEditOfSelected()
@@ -289,8 +302,11 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, a.keys.OpenLink):
 		return a.openLinksOfSelected()
 
-	case a.view == ViewActivity && key.Matches(msg, a.keys.ActivityUnreadToggle):
+	case a.view == ViewActivity && key.Matches(msg, a.keys.ActivityUnread):
 		return func() tea.Msg { return ActivityToggleUnreadMsg{} }
+
+	case key.Matches(msg, a.keys.DownloadFile):
+		return a.downloadFilesOfSelected()
 
 	case key.Matches(msg, a.keys.MarkUnread):
 		return a.markUnreadOfSelected()
@@ -320,12 +336,12 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		keyStr := msg.String()
 		if len(keyStr) == 1 && keyStr[0] >= '1' && keyStr[0] <= '9' {
 			idx := int(keyStr[0] - '1') // 0-indexed
-			if idx < len(a.workspaceItems) && a.workspaceSwitcher != nil {
+			if idx < len(a.workspaceItems) && a.workspaceSvc != nil {
 				if a.workspaceItems[idx].ID != a.workspaceRail.SelectedID() {
-					switcher := a.workspaceSwitcher
+					switcher := a.workspaceSvc
 					teamID := a.workspaceItems[idx].ID
 					return func() tea.Msg {
-						return switcher(teamID)
+						return switcher.Switch(teamID)
 					}
 				}
 			}

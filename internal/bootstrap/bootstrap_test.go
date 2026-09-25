@@ -167,8 +167,8 @@ func cannedBootResult() *boot.Result {
 func cannedCounts() Counts {
 	return Counts{
 		Unreads: []Unread{
-			{ChannelID: "C_GENERAL", Count: 7, HasUnread: true, LastRead: "1700000001.000100"},
-			{ChannelID: "D_ALICE", Count: 3, HasUnread: true, LastRead: "1700000002.000200"},
+			{ChannelID: "C_GENERAL", MentionCount: 7, HasUnread: true, LastRead: "1700000001.000100"},
+			{ChannelID: "D_ALICE", MentionCount: 3, HasUnread: true, LastRead: "1700000002.000200"},
 		},
 		Threads: Threads{HasUnreads: true, UnreadCount: 11, MentionCount: 5},
 	}
@@ -470,7 +470,7 @@ func (f *fakeDeps) UserBoot(context.Context) (*boot.Result, error) {
 // of its way to return a nil Result on every error path.
 func poisonedCounts() Counts {
 	return Counts{
-		Unreads: []Unread{{ChannelID: "C_POISON", Count: 999, HasUnread: true, LastRead: "9999999999.999999"}},
+		Unreads: []Unread{{ChannelID: "C_POISON", MentionCount: 999, HasUnread: true, LastRead: "9999999999.999999"}},
 		Threads: Threads{HasUnreads: true, UnreadCount: 999, MentionCount: 999},
 	}
 }

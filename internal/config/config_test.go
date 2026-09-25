@@ -33,6 +33,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Cache.MaxDBSizeMB != 500 {
 		t.Errorf("expected 500 MB max, got %d", cfg.Cache.MaxDBSizeMB)
 	}
+	if cfg.General.DownloadDir != "~/Downloads" {
+		t.Errorf("expected default download_dir '~/Downloads', got %q", cfg.General.DownloadDir)
+	}
 }
 
 func TestLoadConfigFromFile(t *testing.T) {
@@ -75,6 +78,84 @@ message_retention_days = 7
 	}
 	if cfg.Cache.MessageRetentionDays != 7 {
 		t.Errorf("expected 7 day retention, got %d", cfg.Cache.MessageRetentionDays)
+	}
+}
+
+// TestLoadConfig_DownloadDirExpansion covers Load()'s handling of
+// general.download_dir: the default (and any user-supplied "~"-prefixed
+// value) is expanded against the real home directory, while an absolute
+// path passes through unchanged.
+func TestLoadConfig_DownloadDirExpansion(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory available in this environment")
+	}
+
+	cases := []struct {
+		name     string
+		toml     string
+		expected string
+	}{
+		{
+			name:     "unset uses default and expands",
+			toml:     "",
+			expected: filepath.Join(home, "Downloads"),
+		},
+		{
+			name:     "tilde path expands",
+			toml:     "[general]\ndownload_dir = \"~/slack-files\"\n",
+			expected: filepath.Join(home, "slack-files"),
+		},
+		{
+			name:     "absolute path passes through unchanged",
+			toml:     "[general]\ndownload_dir = \"/custom/downloads\"\n",
+			expected: "/custom/downloads",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.toml")
+			if err := os.WriteFile(path, []byte(tc.toml), 0644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.General.DownloadDir != tc.expected {
+				t.Errorf("expected download_dir %q, got %q", tc.expected, cfg.General.DownloadDir)
+			}
+		})
+	}
+}
+
+// TestLoadConfig_DownloadDirFallsBackWhenHomeUnresolvable covers the
+// case where "~" expansion can't resolve a home directory (e.g. $HOME
+// unset): Load() must fall back to the pre-configurable-directory
+// default rather than leaving a literal, unusable "~/..." path.
+func TestLoadConfig_DownloadDirFallsBackWhenHomeUnresolvable(t *testing.T) {
+	t.Setenv("HOME", "")
+
+	if _, err := os.UserHomeDir(); err == nil {
+		t.Skip("os.UserHomeDir() still resolves with HOME unset on this platform")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected := filepath.Join(os.TempDir(), "slk-files")
+	if cfg.General.DownloadDir != expected {
+		t.Errorf("expected fallback download_dir %q, got %q", expected, cfg.General.DownloadDir)
 	}
 }
 

@@ -128,7 +128,7 @@ func TestFocusSwap_RenderShowsFocusedWindowAtEqualVersions(t *testing.T) {
 
 	// Render the messages panel with a FIXED frame so both renders see
 	// identical dims — the same inputs the panel cache keys on.
-	frame := a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(), a.sidebarVisible, a.threadVisible)
+	frame := a.computeFrame()
 	render := func() string { return ansi.Strip(a.renderMessagesRegion(frame, 0, false)) }
 
 	if out := render(); !strings.Contains(out, "beta-marker") {

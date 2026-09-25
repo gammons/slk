@@ -23,6 +23,9 @@ func handleChannelFinderMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	before := a.channelFinder.Query()
 	result := a.channelFinder.HandleKey(normalizeFinderKey(msg))
 	if result != nil {
+		if a.pendingForward != nil {
+			return a.forwardToChannel(*result)
+		}
 		a.channelFinder.Close()
 		a.SetMode(ModeNormal)
 		// Synthetic destinations (e.g. Threads view) live alongside
@@ -56,7 +59,7 @@ func handleChannelFinderMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	// The local filter has already run inside HandleKey, so the list
 	// on screen is up to date before anything touches the network.
 	// Only the server query is deferred.
-	if after := a.channelFinder.Query(); after != before {
+	if after := a.channelFinder.Query(); after != before && a.pendingForward == nil {
 		return a.scheduleChannelSearch(after)
 	}
 	return nil

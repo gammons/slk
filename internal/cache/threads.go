@@ -4,24 +4,12 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+
+	"github.com/gammons/slk/internal/core"
 )
 
-// ThreadSummary is one row in the Threads view: a thread the user is
-// involved in (authored, replied to, or @-mentioned in). Computed from
-// the local cache; v1 has no Slack-side authoritative data.
-type ThreadSummary struct {
-	ChannelID    string
-	ChannelName  string
-	ChannelType  string // "channel" | "private" | "dm" | "group_dm"
-	ThreadTS     string
-	ParentUserID string
-	ParentText   string
-	ParentTS     string
-	ReplyCount   int // number of replies (does not count the parent)
-	LastReplyTS  string
-	LastReplyBy  string
-	Unread       bool
-}
+// ThreadSummary is defined in internal/core, which the TUI shares.
+type ThreadSummary = core.ThreadSummary
 
 // ListSubscribedThreads returns the workspace's subscribed-threads
 // list — the authoritative set from thread_subscriptions joined

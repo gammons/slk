@@ -40,7 +40,7 @@ border = "#555555"
 		t.Fatal(err)
 	}
 
-	LoadCustomThemes(dir)
+	LoadCustomThemes(os.DirFS(dir))
 
 	// Verify the custom theme was loaded
 	names := ThemeNames()
@@ -71,7 +71,7 @@ border = "#555555"
 
 func TestLoadCustomThemesMissingDir(t *testing.T) {
 	// Should not panic on non-existent directory
-	LoadCustomThemes("/tmp/nonexistent-theme-dir-12345")
+	LoadCustomThemes(os.DirFS("/tmp/nonexistent-theme-dir-12345"))
 }
 
 func TestNewBuiltinThemesRegistered(t *testing.T) {

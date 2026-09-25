@@ -17,9 +17,31 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/presencemenu"
 	"github.com/gammons/slk/internal/ui/statusbar"
 )
+
+// peerStatusTickMsg re-checks other users' status and DND deadlines so
+// an expired status stops rendering without waiting for Slack to report
+// the change.
+type peerStatusTickMsg struct{}
+
+const peerStatusTickInterval = time.Minute
+
+// dmTopicLayout formats a DND end time in the DM header.
+const dmTopicLayout = "15:04"
+
+func peerStatusTick() tea.Cmd {
+	return tea.Tick(peerStatusTickInterval, func(time.Time) tea.Msg {
+		return peerStatusTickMsg{}
+	})
+}
+
+// hasDeadline reports whether st holds a status or DND that will end.
+func hasDeadline(st peerstatus.Status) bool {
+	return st.HasDeadline()
+}
 
 // workspaceStatus caches the latest StatusChangeMsg per team so the
 // status bar can refresh on workspace switch without round-tripping.
@@ -35,6 +57,12 @@ type presenceController struct {
 	byTeam      map[string]workspaceStatus
 	dndTickerOn bool
 	customBuf   string
+
+	// peers is other users' custom status and DND, pushed to the message
+	// panes and channel finder. The sidebar keeps its own copy, with
+	// rules for surviving rebuilds, and is the source for DM headers.
+	peers        map[string]peerstatus.Status
+	peerTickerOn bool
 }
 
 func newPresenceController() *presenceController {
@@ -164,6 +192,25 @@ func (p *presenceController) Handle(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		a.sidebar.UpdatePresenceByUser(m.UserID, m.Presence)
 		return nil, true
 
+	case UserStatusChangeMsg:
+		if m.TeamID != "" && m.TeamID != a.activeTeamID {
+			return nil, true
+		}
+		a.sidebar.UpdateStatusByUser(m.UserID, m.Emoji, m.Text, m.Expires)
+		a.sidebar.UpdateHuddleByUser(m.UserID, m.Huddle, m.HuddleExpires)
+		st := p.peers[m.UserID].WithStatus(m.Emoji, m.Text, m.Expires).WithHuddle(m.Huddle, m.HuddleExpires)
+		return p.applyPeer(a, m.UserID, st), true
+
+	case UserDNDChangeMsg:
+		if m.TeamID != "" && m.TeamID != a.activeTeamID {
+			return nil, true
+		}
+		a.sidebar.UpdateDNDByUser(m.UserID, m.Enabled, m.EndTS)
+		return p.applyPeer(a, m.UserID, p.peers[m.UserID].WithDND(m.Enabled, m.EndTS)), true
+
+	case peerStatusTickMsg:
+		return p.expirePeers(a, time.Now()), true
+
 	case StatusChangeMsg:
 		st := p.Set(m.TeamID, m.Presence, m.DNDEnabled, m.DNDEndTS)
 		if m.TeamID != a.activeTeamID {
@@ -214,4 +261,116 @@ func (p *presenceController) Handle(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 	}
 	return nil, false
+}
+
+// applyPeer records st for userID and pushes it to the message panes,
+// the thread panel, the channel finder and, when that DM is open, the
+// header. Returns the expiry tick when st will end and none is running.
+func (p *presenceController) applyPeer(a *App, userID string, st peerstatus.Status) tea.Cmd {
+	if userID == "" {
+		return nil
+	}
+	if p.peers == nil {
+		p.peers = make(map[string]peerstatus.Status)
+	}
+	p.peers[userID] = st
+	for _, mp := range a.allWinModels() {
+		mp.PatchUserStatus(userID, st)
+	}
+	a.threadPanel.PatchUserStatus(userID, st)
+	p.pushDMStatus(a, userID, time.Now())
+	return p.claimPeerTick(st)
+}
+
+// SetPeers replaces every known peer status, for a workspace becoming
+// active with statuses seeded from the cache. Returns the expiry tick
+// when any of them will end.
+func (p *presenceController) SetPeers(a *App, statuses map[string]peerstatus.Status) tea.Cmd {
+	p.peers = make(map[string]peerstatus.Status, len(statuses))
+	var cmd tea.Cmd
+	for id, st := range statuses {
+		p.peers[id] = st
+		if c := p.claimPeerTick(st); c != nil {
+			cmd = c
+		}
+	}
+	for _, mp := range a.allWinModels() {
+		mp.SetUserStatuses(statuses)
+	}
+	a.threadPanel.SetUserStatuses(statuses)
+	// The finder takes DM statuses from the sidebar, which both callers
+	// populate (SetChannels) before calling this.
+	for _, item := range a.sidebar.Items() {
+		if item.DMUserID != "" {
+			a.channelFinder.SetStatus(item.ID, item.Status)
+		}
+	}
+	return cmd
+}
+
+func (p *presenceController) claimPeerTick(st peerstatus.Status) tea.Cmd {
+	if !hasDeadline(st) || p.peerTickerOn {
+		return nil
+	}
+	p.peerTickerOn = true
+	return peerStatusTick()
+}
+
+// pushDMStatus copies the sidebar's status for userID's DM onto the
+// channel finder row and every window (focused or not) currently
+// showing that DM's header.
+func (p *presenceController) pushDMStatus(a *App, userID string, now time.Time) {
+	for _, item := range a.sidebar.Items() {
+		if item.DMUserID != userID {
+			continue
+		}
+		a.channelFinder.SetStatus(item.ID, item.Status)
+		topic := item.Status.Summary(now, dmTopicLayout)
+		for _, mp := range a.modelsForChannel(item.ID) {
+			mp.SetChannelTopic(topic)
+		}
+	}
+}
+
+// dmTopicFor is the header topic for channelID: its DM peer's status
+// summary, or "" for a channel that is not a DM.
+func (p *presenceController) dmTopicFor(a *App, channelID string) string {
+	for _, item := range a.sidebar.Items() {
+		if item.ID == channelID && item.DMUserID != "" {
+			return item.Status.Summary(time.Now(), dmTopicLayout)
+		}
+	}
+	return ""
+}
+
+// expirePeers is the peerStatusTickMsg arm: it clears every status and
+// DND whose deadline has passed from each surface, and keeps ticking
+// while any remaining one still has a deadline.
+func (p *presenceController) expirePeers(a *App, now time.Time) tea.Cmd {
+	a.sidebar.ExpireStatuses(now)
+	for _, mp := range a.allWinModels() {
+		mp.ExpireStatuses(now)
+	}
+	a.threadPanel.ExpireStatuses(now)
+	pending := false
+	for uid, st := range p.peers {
+		if st.Expired(now) {
+			st = st.Clear(now)
+			p.peers[uid] = st
+			p.pushDMStatus(a, uid, now)
+		}
+		if hasDeadline(st) {
+			pending = true
+		}
+	}
+	for _, item := range a.sidebar.Items() {
+		if hasDeadline(item.Status) {
+			pending = true
+		}
+	}
+	if !pending {
+		p.peerTickerOn = false
+		return nil
+	}
+	return peerStatusTick()
 }

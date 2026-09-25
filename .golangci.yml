@@ -24,3 +24,12 @@ linters:
         text: "ST1023:" # should omit type from declaration; it will be inferred
       - linters: [staticcheck]
         text: "QF1011:" # could omit type from declaration; it will be inferred
+
+# Formatting is checked in CI, not just linted. Without this, `gofmt`
+# drift accumulates silently: contributors' editors reformat whatever
+# they touch, so unrelated alignment churn lands in feature diffs and
+# review has to separate signal from noise every time. Keeping the tree
+# gofmt-clean makes that churn impossible to introduce.
+formatters:
+  enable:
+    - gofmt

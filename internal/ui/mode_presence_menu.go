@@ -47,8 +47,8 @@ func handlePresenceMenuMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		// call returns. The WS echo will reaffirm it.
 		st := a.presence.Apply(a.activeTeamID, result.Action, result.SnoozeMinutes)
 		a.statusbar.SetStatus(st.Presence, st.DNDEnabled, st.DNDEndTS)
-		if a.setStatusFn != nil {
-			a.setStatusFn(result.Action, result.SnoozeMinutes)
+		if a.presenceSvc != nil {
+			a.presenceSvc.SetStatus(result.Action, result.SnoozeMinutes)
 		}
 		return nil
 	}

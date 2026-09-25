@@ -3,11 +3,14 @@ package channelfinder
 import (
 	"sort"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/text"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/overlay"
+	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/muesli/reflow/truncate"
 )
@@ -32,33 +35,21 @@ type ChannelResult struct {
 }
 
 // Item represents a searchable channel/DM entry.
-type Item struct {
-	ID       string
-	Name     string
-	Type     string // channel, dm, group_dm, private, threads
-	Presence string // for DMs: active, away
-	Joined   bool   // true if the user is already a member; false for browseable public channels
-	// LastVisited is the unix timestamp (seconds) of the user's most
-	// recent visit to this channel; 0 means never visited. Drives the
-	// recency-based sort used by filter(): empty-query order is by
-	// LastVisited DESC, and on a query LastVisited breaks ties within
-	// a match tier.
-	LastVisited int64
-	// Synthetic marks non-channel destinations (e.g. "Threads") that
-	// the finder pins above real channels under empty-query and that
-	// callers route differently (e.g. activating a view rather than
-	// opening a channel). These items are preserved across SetItems
-	// and SetBrowseable mutations so the finder always offers them.
-	Synthetic bool
-}
+type Item = core.ChannelFinderItem
 
 // Model is the fuzzy channel finder overlay.
 type Model struct {
-	items    []Item
-	filtered []int // indices into items matching query
-	query    string
-	selected int // index into filtered
-	visible  bool
+	items      []Item
+	filtered   []int // indices into items matching query
+	query      string
+	selected   int // index into filtered
+	visible    bool
+	forwarding bool
+
+	// statuses holds each DM channel's custom status and DND, keyed by
+	// channel ID (see SetStatus). Pruned to the current item set on
+	// every SetItems.
+	statuses map[string]peerstatus.Status
 }
 
 // New creates a new channel finder.
@@ -73,6 +64,27 @@ func New() Model {
 func (m *Model) SetItems(items []Item) {
 	synth := m.extractSynthetic()
 	m.items = append(synth, items...)
+	m.pruneStatuses()
+	if m.visible && m.forwarding {
+		m.filter()
+	}
+}
+
+// pruneStatuses drops any status entry whose channel ID is no longer in
+// m.items, so a status never outlives the row it belongs to.
+func (m *Model) pruneStatuses() {
+	if len(m.statuses) == 0 {
+		return
+	}
+	have := make(map[string]struct{}, len(m.items))
+	for _, it := range m.items {
+		have[it.ID] = struct{}{}
+	}
+	for id := range m.statuses {
+		if _, ok := have[id]; !ok {
+			delete(m.statuses, id)
+		}
+	}
 }
 
 // SetSyntheticItems replaces the set of non-channel destinations the finder
@@ -111,6 +123,33 @@ func (m *Model) extractSynthetic() []Item {
 		}
 	}
 	return synth
+}
+
+// Upsert adds item to the finder, or replaces the existing entry with the
+// same ID in place. Used when a single new conversation becomes known
+// outside of a full SetItems refresh (e.g. a live im_created/mpim_open WS
+// event or a Ctrl+N-initiated DM), so it shows up in Ctrl+P immediately
+// instead of waiting for the next workspace activation to pick up
+// WorkspaceContext.FinderItems. LastVisited is preserved from the existing
+// entry when the incoming item doesn't specify one.
+func (m *Model) Upsert(item Item) {
+	for i := range m.items {
+		if m.items[i].ID == item.ID {
+			if item.LastVisited == 0 {
+				item.LastVisited = m.items[i].LastVisited
+			}
+			item.Synthetic = m.items[i].Synthetic
+			m.items[i] = item
+			if m.visible {
+				m.filter()
+			}
+			return
+		}
+	}
+	m.items = append(m.items, item)
+	if m.visible {
+		m.filter()
+	}
 }
 
 // MarkJoined flips the Joined bit on a channel that the user just joined,
@@ -248,8 +287,20 @@ func (m *Model) ClickRow(termWidth, termHeight, localY int) bool {
 	return true
 }
 
-// Open shows the overlay and resets state.
+// Open shows the channel-switching overlay and resets state.
 func (m *Model) Open() {
+	m.open(false)
+}
+
+// OpenForForwarding shows the overlay with only joined, non-synthetic
+// destinations and resets the query and selection. The full item list is
+// preserved for the next Open; selections use the same ChannelResult API.
+func (m *Model) OpenForForwarding() {
+	m.open(true)
+}
+
+func (m *Model) open(forwarding bool) {
+	m.forwarding = forwarding
 	m.visible = true
 	m.query = ""
 	m.selected = 0
@@ -259,6 +310,7 @@ func (m *Model) Open() {
 // Close hides the overlay.
 func (m *Model) Close() {
 	m.visible = false
+	m.forwarding = false
 }
 
 // IsVisible returns whether the overlay is showing.
@@ -337,14 +389,23 @@ func (m *Model) HandleKey(keyStr string) *ChannelResult {
 //     c, s, p appear in order). Tighter matches with more word-boundary
 //     hits score higher.
 func (m *Model) filter() {
+	// Live updates can remove the selected forwarding destination.
+	defer func() {
+		if m.selected >= len(m.filtered) {
+			m.selected = max(0, len(m.filtered)-1)
+		}
+	}()
 	m.filtered = nil
 	q := text.Fold(m.query)
+	idxs := make([]int, 0, len(m.items))
+	for i, item := range m.items {
+		if m.forwarding && (!item.Joined || item.Synthetic) {
+			continue
+		}
+		idxs = append(idxs, i)
+	}
 
 	if q == "" {
-		idxs := make([]int, len(m.items))
-		for i := range m.items {
-			idxs[i] = i
-		}
 		sort.SliceStable(idxs, func(i, j int) bool {
 			return m.lessNoQuery(idxs[i], idxs[j])
 		})
@@ -359,8 +420,8 @@ func (m *Model) filter() {
 	}
 
 	var matches []match
-	for i, item := range m.items {
-		name := text.Fold(item.Name)
+	for _, i := range idxs {
+		name := text.Fold(m.items[i].Name)
 		switch {
 		case strings.HasPrefix(name, q):
 			matches = append(matches, match{idx: i, tier: 0})
@@ -523,11 +584,15 @@ func (m Model) renderBox(termWidth int) string {
 	bg := styles.Background
 
 	// Title
+	titleText := "Switch Channel"
+	if m.forwarding {
+		titleText = "Forward message to…"
+	}
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Background(bg).
 		Foreground(styles.Primary).
-		Render("Switch Channel")
+		Render(titleText)
 
 	// Query input with blue left border
 	var inputText string
@@ -588,6 +653,7 @@ func (m Model) renderBox(termWidth int) string {
 	for i := startIdx; i < endIdx; i++ {
 		idx := m.filtered[i]
 		item := m.items[idx]
+		st := m.statuses[item.ID]
 
 		isSelected := i == m.selected
 
@@ -597,12 +663,31 @@ func (m Model) renderBox(termWidth int) string {
 		// attributes for everything after it, defeating the dim treatment.
 		var prefix, name string
 		if item.Joined {
-			prefix = channelPrefix(item)
+			prefix = channelPrefix(item, st)
 			nameStyle := lipgloss.NewStyle().Background(bg).Foreground(styles.TextPrimary)
 			if isSelected {
 				nameStyle = nameStyle.Background(bg).Foreground(styles.Primary).Bold(true)
 			}
-			name = nameStyle.Render(item.Name)
+			// Charge the status glyph to the name's own truncation
+			// budget (like the sidebar's buildCache) so a long name
+			// truncates before the glyph is lost.
+			label := item.Name
+			glyph := st.Glyph(time.Now())
+			glyphCells := 0
+			if glyph != "" {
+				glyphCells = 1 + st.GlyphWidth(time.Now())
+			}
+			nameBudget := contentWidth - lipgloss.Width(prefix) - 1 - glyphCells
+			if nameBudget < 1 {
+				nameBudget = 1
+			}
+			if lipgloss.Width(label) > nameBudget {
+				label = truncate.StringWithTail(label, uint(nameBudget), "…")
+			}
+			if glyph != "" {
+				label += " " + glyph
+			}
+			name = nameStyle.Render(label)
 		} else {
 			// Non-joined: dim grey for everything, including the prefix.
 			dim := lipgloss.NewStyle().Background(bg).Foreground(nonJoinedColor)
@@ -611,7 +696,8 @@ func (m Model) renderBox(termWidth int) string {
 		}
 
 		line := prefix + " " + name
-		// Truncate to fit (truncate.StringWithTail is ANSI-aware).
+		// Backstop for the non-joined branch; the joined branch above
+		// already budgets to fit.
 		if lipgloss.Width(line) > contentWidth {
 			line = truncate.StringWithTail(line, uint(contentWidth), "…")
 		}
@@ -669,8 +755,9 @@ func (m Model) renderBox(termWidth int) string {
 		Render(content)
 }
 
-// channelPrefix returns the display prefix for a channel type.
-func channelPrefix(item Item) string {
+// channelPrefix returns the display prefix for a channel type. st is
+// the DM peer's status (zero value for anything else).
+func channelPrefix(item Item, st peerstatus.Status) string {
 	switch item.Type {
 	case "threads":
 		// Single-cell flag glyph marks the synthetic "Threads" row as
@@ -684,6 +771,9 @@ func channelPrefix(item Item) string {
 	case "private":
 		return lipgloss.NewStyle().Foreground(styles.Warning).Render("◆")
 	case "dm":
+		if st.InDND(time.Now()) {
+			return lipgloss.NewStyle().Foreground(styles.Warning).Render(peerstatus.DNDGlyph)
+		}
 		if item.Presence == "active" {
 			return lipgloss.NewStyle().Foreground(styles.Accent).Render("●")
 		}
@@ -693,6 +783,23 @@ func channelPrefix(item Item) string {
 	default:
 		return lipgloss.NewStyle().Foreground(styles.TextMuted).Render("#")
 	}
+}
+
+// SetStatus updates the custom status and DND shown on the row with the
+// given channel ID. No-op for an empty ID; a zero-value st deletes the
+// entry instead of storing it.
+func (m *Model) SetStatus(channelID string, st peerstatus.Status) {
+	if channelID == "" {
+		return
+	}
+	if st == (peerstatus.Status{}) {
+		delete(m.statuses, channelID)
+		return
+	}
+	if m.statuses == nil {
+		m.statuses = make(map[string]peerstatus.Status)
+	}
+	m.statuses[channelID] = st
 }
 
 // Query returns the text the user has typed. Callers outside this
@@ -707,6 +814,12 @@ func (m Model) Query() string {
 // browseable alike, in insertion order and unfiltered.
 func (m Model) Items() []Item {
 	return append([]Item(nil), m.items...)
+}
+
+// StatusFor returns the DM status set on channelID via SetStatus, the
+// zero value when none is set.
+func (m Model) StatusFor(channelID string) peerstatus.Status {
+	return m.statuses[channelID]
 }
 
 // FilteredItems returns the rows matching the current query, in the

@@ -51,6 +51,19 @@ var tmuxClientTerm = func() string {
 	return strings.TrimSpace(string(out))
 }
 
+// IsAutoProtocol reports whether cfg asks for automatic detection —
+// i.e. anything other than the four explicit protocol names Detect
+// honors. Callers use this to decide whether they may refine Detect's
+// answer with an interactive probe: an explicit "halfblock" must stay
+// half-block even if the terminal turns out to speak sixel.
+func IsAutoProtocol(cfg string) bool {
+	switch strings.ToLower(strings.TrimSpace(cfg)) {
+	case "off", "halfblock", "sixel", "kitty":
+		return false
+	}
+	return true
+}
+
 // Detect picks the rendering protocol for the current terminal.
 // cfg is the user's config value (e.g. "auto", "kitty", "sixel", "halfblock", "off").
 // Anything other than the four explicit values is treated as "auto".
@@ -103,7 +116,11 @@ func Detect(env Env, cfg string) Protocol {
 		// Sixel-under-tmux is also halfblock — see function doc.
 		return ProtoHalfBlock
 	}
-	if env.Term == "foot" || env.Term == "mlterm" {
+	// Prefix match: foot ships both "foot" and "foot-extra" terminfo
+	// entries and picks between them per install, and mlterm appends
+	// variants like "mlterm-256color". Both are sixel-capable in every
+	// variant.
+	if strings.HasPrefix(env.Term, "foot") || strings.HasPrefix(env.Term, "mlterm") {
 		return ProtoSixel
 	}
 	// iTerm2 and WezTerm both support kitty *graphics*, but not the

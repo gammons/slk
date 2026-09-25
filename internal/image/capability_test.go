@@ -121,7 +121,10 @@ func TestDetect_KittyByEnvVar(t *testing.T) {
 func TestDetect_Sixel(t *testing.T) {
 	cases := []Env{
 		{Term: "foot"},
+		// foot installs ship either terminfo entry; both are sixel.
+		{Term: "foot-extra"},
 		{Term: "mlterm"},
+		{Term: "mlterm-256color"},
 		// iTerm2 has no working kitty graphics implementation (the
 		// startup probe would time out and downgrade to halfblock),
 		// but it does support sixel — real pixels instead of the
@@ -146,6 +149,29 @@ func TestDetect_FallbackHalfBlock(t *testing.T) {
 	env := Env{Term: "xterm-256color", Colorterm: "truecolor"}
 	if got := Detect(env, "auto"); got != ProtoHalfBlock {
 		t.Errorf("want halfblock fallback, got %v", got)
+	}
+}
+
+// IsAutoProtocol gates the startup sixel probe: only an auto config may
+// be refined from halfblock up to sixel (issue #116).
+func TestIsAutoProtocol(t *testing.T) {
+	cases := []struct {
+		cfg  string
+		want bool
+	}{
+		{"auto", true},
+		{"", true},
+		{"bogus", true},
+		{"off", false},
+		{"halfblock", false},
+		{"HalfBlock", false},
+		{"  sixel  ", false},
+		{"kitty", false},
+	}
+	for _, tc := range cases {
+		if got := IsAutoProtocol(tc.cfg); got != tc.want {
+			t.Errorf("IsAutoProtocol(%q) = %v, want %v", tc.cfg, got, tc.want)
+		}
 	}
 }
 

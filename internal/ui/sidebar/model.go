@@ -7,11 +7,12 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
-	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	emojiutil "github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/text"
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/muesli/reflow/truncate"
 )
@@ -26,6 +27,26 @@ const (
 	// between "Direct Messages" (humans) and "Channels" (firehose).
 	defaultAppsSection = "Apps"
 )
+
+// mentionBadgeCap matches Slack: counts above it render as "99+", which
+// bounds the badge text at three characters. The badge replaces the
+// trailing unread dot, so the row's width budget must account for
+// whichever is present; View computes that cost exactly from the
+// rendered text rather than always charging the three-digit maximum.
+const mentionBadgeCap = 99
+
+// formatMentionBadge renders n as Slack does: the bare number up to
+// mentionBadgeCap, then "99+". Returns "" for n <= 0.
+func formatMentionBadge(n int) string {
+	switch {
+	case n <= 0:
+		return ""
+	case n > mentionBadgeCap:
+		return fmt.Sprintf("%d+", mentionBadgeCap)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
+}
 
 type ChannelItem struct {
 	ID           string
@@ -42,22 +63,56 @@ type ChannelItem struct {
 	IsStarred    bool
 	Presence     string // for DMs: active, away, dnd
 	DMUserID     string // for DMs: the user ID of the other party
+	// Status is the DM peer's custom status and DND state, kept current
+	// by UpdateStatusByUser / UpdateDNDByUser the same way Presence is.
+	Status peerstatus.Status
 	// IsMuted reports whether the user has muted this channel (via
 	// Slack's muted_channels user pref). Muted channels render with a
 	// dimmer foreground and suppress their unread dot; they also do
-	// not contribute to the aggregate unread badges on collapsed
-	// section headers. Sourced from service.MuteStore in
-	// buildChannelItem.
+	// not contribute to the unread half of a collapsed section
+	// header's aggregate.
+	//
+	// They DO contribute to the mention half, on both the row and the
+	// header: muting silences chatter, not someone naming you. See
+	// MentionBadge, which deliberately does not consult this field.
+	//
+	// Sourced from service.MuteStore in buildChannelItem.
 	IsMuted bool
 }
 
-// IsVisiblyUnread reports whether this channel should render as having
-// unread messages -- DB-level HasUnread AND the user hasn't muted it.
-// This is the single source of truth for the "unread dot" predicate;
-// both the sidebar View, section aggregates, and the App's tab-title
-// counter MUST consult this helper rather than re-deriving the rule.
-func (item ChannelItem) IsVisiblyUnread(state cache.ReadState) bool {
+// IsVisiblyUnread reports whether this channel should render the unread
+// DOT -- DB-level HasUnread AND the user hasn't muted it. This is the
+// single source of truth for the "unread dot" predicate; the sidebar
+// View, section aggregates, and the App's tab-title counter MUST consult
+// this helper rather than re-deriving the rule.
+//
+// Scoped to the dot deliberately: mentions pierce mute. See MentionBadge.
+func (item ChannelItem) IsVisiblyUnread(state core.ReadState) bool {
 	return state.HasUnread && !item.IsMuted
+}
+
+// MentionBadge reports the direct-mention count to render on this row, or
+// 0 for no badge. It is the single source of truth for the badge
+// predicate, the counterpart to IsVisiblyUnread.
+//
+// Two differences from IsVisiblyUnread:
+//
+//   - It ignores IsMuted. Slack keeps a muted channel grey and unbolded
+//     for ordinary traffic but still badges an explicit @-mention; that
+//     escape hatch is what makes muting safe on a busy channel.
+//   - It requires HasUnread, so a stale non-zero mention_count cannot
+//     outlive the unread flag that justifies it.
+//
+// The 99+ cap is applied by the renderer, not here: the DB keeps the true
+// count so a later refresh below 100 shows the real number.
+func (item ChannelItem) MentionBadge(state core.ReadState) int {
+	if !state.HasUnread {
+		return 0
+	}
+	if state.MentionCount < 0 {
+		return 0
+	}
+	return state.MentionCount
 }
 
 // sectionFor is the package-level back-compat shim for callers
@@ -199,6 +254,9 @@ type Model struct {
 	// via ResetPresence. Also remembers events that arrive before their DM
 	// item exists (startup race) so they apply once the item is set.
 	presenceByUser map[string]string
+	// statusByUser is presenceByUser's counterpart for custom status and
+	// DND, with the same survive-rebuilds contract.
+	statusByUser map[string]peerstatus.Status
 
 	// Flat list of navigable stops in display order: threads row,
 	// section headers, and channel rows belonging to expanded sections.
@@ -224,7 +282,7 @@ type Model struct {
 	// active workspace, keyed by channel ID. Set by App via
 	// SetReadStateReader. May be nil — nil means "treat everything as
 	// no-unread" (used during early construction).
-	readStateReader func() map[string]cache.ReadState
+	readStateReader func() map[string]core.ReadState
 	// collapseByID parallels `collapsed` for Slack-mode (ID-keyed).
 	// Renames preserve collapse state because the ID is stable.
 	// Populated lazily; lookups treat nil as empty. Used in Task 9.
@@ -310,7 +368,7 @@ func (m *Model) SetSectionsProvider(p SectionsProvider) {
 // read state map for the workspace currently presented by this sidebar.
 // Called by View() at render time. Setting it invalidates the row cache
 // so the next render reflects the new source.
-func (m *Model) SetReadStateReader(f func() map[string]cache.ReadState) {
+func (m *Model) SetReadStateReader(f func() map[string]core.ReadState) {
 	m.readStateReader = f
 	m.cacheValid = false
 	m.dirty()
@@ -753,11 +811,12 @@ func (m *Model) SetItems(items []ChannelItem) {
 	m.dirty()
 }
 
-// applyPresence overwrites each DM item's Presence with the authoritative
-// live value from presenceByUser, so a rebuild that supplies stale/default
-// presence doesn't clobber the real state. No-op when no presence is known.
+// applyPresence overwrites each DM item's Presence and Status with the
+// authoritative live values from presenceByUser and statusByUser, so a
+// rebuild that supplies stale/default state doesn't clobber the real
+// state. No-op when nothing is known.
 func (m *Model) applyPresence() {
-	if len(m.presenceByUser) == 0 {
+	if len(m.presenceByUser) == 0 && len(m.statusByUser) == 0 {
 		return
 	}
 	for i := range m.items {
@@ -768,14 +827,19 @@ func (m *Model) applyPresence() {
 		if p, ok := m.presenceByUser[uid]; ok {
 			m.items[i].Presence = p
 		}
+		if st, ok := m.statusByUser[uid]; ok {
+			m.items[i].Status = st
+		}
 	}
 }
 
-// ResetPresence forgets all remembered per-user presence. Called on
-// workspace switch so the newly-active workspace starts from its own
-// cache-seeded item presence rather than the previous workspace's peers.
+// ResetPresence forgets all remembered per-user presence, status and
+// DND. Called on workspace switch so the newly-active workspace starts
+// from its own cache-seeded items rather than the previous workspace's
+// peers.
 func (m *Model) ResetPresence() {
 	m.presenceByUser = nil
+	m.statusByUser = nil
 }
 
 // UpsertItem inserts a new ChannelItem keyed by ID, or updates an existing
@@ -795,6 +859,9 @@ func (m *Model) UpsertItem(item ChannelItem) {
 	if item.DMUserID != "" {
 		if p, ok := m.presenceByUser[item.DMUserID]; ok {
 			item.Presence = p
+		}
+		if st, ok := m.statusByUser[item.DMUserID]; ok {
+			item.Status = st
 		}
 	}
 	for i := range m.items {
@@ -966,6 +1033,85 @@ func (m *Model) UpdatePresenceByUser(userID, presence string) {
 	}
 }
 
+// UpdateStatusByUser records a user's custom status with
+// UpdatePresenceByUser's contract: remembered across SetItems rebuilds
+// and applied to DM rows that appear later. DND is left as it was.
+func (m *Model) UpdateStatusByUser(userID, emoji, text string, expires time.Time) {
+	if userID == "" {
+		return
+	}
+	m.setStatus(userID, m.statusFor(userID).WithStatus(emoji, text, expires))
+}
+
+// UpdateHuddleByUser records a user's huddle state; see
+// UpdateStatusByUser. Status and DND are left as they were.
+func (m *Model) UpdateHuddleByUser(userID, state string, expires time.Time) {
+	if userID == "" {
+		return
+	}
+	m.setStatus(userID, m.statusFor(userID).WithHuddle(state, expires))
+}
+
+// UpdateDNDByUser records a user's DND state; see UpdateStatusByUser.
+// The custom status is left as it was.
+func (m *Model) UpdateDNDByUser(userID string, on bool, end time.Time) {
+	if userID == "" {
+		return
+	}
+	m.setStatus(userID, m.statusFor(userID).WithDND(on, end))
+}
+
+// statusFor is the current status for userID: the remembered live value,
+// else the cache-seeded value on its DM row.
+func (m *Model) statusFor(userID string) peerstatus.Status {
+	if st, ok := m.statusByUser[userID]; ok {
+		return st
+	}
+	for i := range m.items {
+		if m.items[i].DMUserID == userID {
+			return m.items[i].Status
+		}
+	}
+	return peerstatus.Status{}
+}
+
+func (m *Model) setStatus(userID string, st peerstatus.Status) {
+	if m.statusByUser == nil {
+		m.statusByUser = make(map[string]peerstatus.Status)
+	}
+	m.statusByUser[userID] = st
+	for i := range m.items {
+		if m.items[i].DMUserID == userID && m.items[i].Status != st {
+			m.items[i].Status = st
+			m.cacheValid = false
+			m.dirty()
+		}
+	}
+}
+
+// ExpireStatuses drops custom statuses and DND whose deadline has passed
+// and reports whether any DM row changed, so a periodic tick repaints
+// only when something actually expired.
+func (m *Model) ExpireStatuses(now time.Time) bool {
+	for uid, st := range m.statusByUser {
+		if st.Expired(now) {
+			m.statusByUser[uid] = st.Clear(now)
+		}
+	}
+	changed := false
+	for i := range m.items {
+		if st := m.items[i].Status; st.Expired(now) {
+			m.items[i].Status = st.Clear(now)
+			changed = true
+		}
+	}
+	if changed {
+		m.cacheValid = false
+		m.dirty()
+	}
+	return changed
+}
+
 func (m *Model) SelectByID(id string) {
 	// Fast path: the channel is already in nav (its section is expanded).
 	for i, n := range m.nav {
@@ -1030,7 +1176,7 @@ func (m *Model) rebuildFilter() {
 	// nil-safe: when no reader is installed (early construction, some
 	// tests) every lookup returns the zero value and IsStale's
 	// type-aware empty-LastReadTS branch handles it.
-	var readState map[string]cache.ReadState
+	var readState map[string]core.ReadState
 	if m.readStateReader != nil {
 		readState = m.readStateReader()
 	}
@@ -1178,33 +1324,66 @@ func (m *Model) rebuildNavPreserveCursor() {
 	m.cursor = 0
 }
 
-// aggregateUnreadForSection returns the count of channels-with-unreads
-// in the named section that are currently in m.filtered. Used to render
-// an aggregate badge on collapsed section headers. Muted channels are
+// aggregateForSection returns the two figures a collapsed section
+// header displays for the named section, over the items currently in
+// m.filtered. Both come from one walk of the same read state, so they
+// cannot disagree about which channels the section contains.
+//
+// unread is the count of channels-with-unreads. Muted channels are
 // excluded so the aggregate matches the per-row treatment (no dot, dim
 // foreground) — the user has explicitly asked Slack to ignore those
-// channels' unread activity.
+// channels' unread activity. After the read-state sync rewrite, integer
+// unread counts are abandoned in favor of a boolean has_unread per
+// channel; this aggregate counts channels-with-unreads instead of
+// summing per-channel counts. The DB (read via readStateReader) is the
+// source of truth.
 //
-// After the read-state sync rewrite, integer unread counts are
-// abandoned in favor of a boolean has_unread per channel; section
-// aggregates count channels-with-unreads instead of summing per-channel
-// counts. The DB (read via readStateReader) is the source of truth.
-func (m *Model) aggregateUnreadForSection(section string) int {
-	var readState map[string]cache.ReadState
+// mentions is the SUM of per-channel MentionBadge values, not a count
+// of channels with mentions. The row-level badge answers "how many
+// times was I named here"; a header answering a different question with
+// the same glyph would teach the user the wrong thing.
+//
+// The two deliberately disagree about mute: MentionBadge ignores
+// IsMuted, so a muted channel feeds mentions but not unread. That is
+// the same asymmetry the rows already show — muting silences chatter,
+// not someone naming you.
+// allMuted reports whether every mention counted came from a muted
+// channel. A collapsed header dims its badge only in that case: if any
+// unmuted channel in the section is holding a mention, the header must
+// shout as loudly as that row would.
+func (m *Model) aggregateForSection(section string) (unread, mentions int, allMuted bool) {
+	var readState map[string]core.ReadState
 	if m.readStateReader != nil {
 		readState = m.readStateReader()
 	}
-	total := 0
+	allMuted = true
 	for _, idx := range m.filtered {
 		item := m.items[idx]
 		if m.sectionFor(item) != section {
 			continue
 		}
-		if item.IsVisiblyUnread(readState[item.ID]) {
-			total++
+		state := readState[item.ID]
+		if item.IsVisiblyUnread(state) {
+			unread++
+		}
+		if n := item.MentionBadge(state); n > 0 {
+			mentions += n
+			if !item.IsMuted {
+				allMuted = false
+			}
 		}
 	}
-	return total
+	return unread, mentions, allMuted
+}
+
+// mentionBadgeStyleFor picks the badge style for a row or header.
+// Muted mentions still render -- muting silences chatter, not someone
+// naming you -- but at a lower volume than an unmuted one.
+func mentionBadgeStyleFor(muted bool) lipgloss.Style {
+	if muted {
+		return styles.MutedMentionBadgeStyle()
+	}
+	return styles.MentionBadgeStyle()
 }
 
 // renderRow describes a single rendered row in the sidebar.
@@ -1266,7 +1445,7 @@ func (m *Model) buildCache(width int) {
 	// is no longer consulted by rendering. A nil reader (early
 	// construction, tests without wiring) means "treat everything as
 	// no-unread" — lookups on a nil map return the zero ReadState.
-	var readState map[string]cache.ReadState
+	var readState map[string]core.ReadState
 	if m.readStateReader != nil {
 		readState = m.readStateReader()
 	}
@@ -1317,6 +1496,9 @@ func (m *Model) buildCache(width int) {
 	privatePrefixMuted := "◆ "
 	dmActivePrefix := styles.PresenceOnline.Render("● ")
 	dmAwayPrefix := styles.PresenceAway.Render("○ ")
+	// DND replaces the presence dot, like Slack's badge on the avatar.
+	dmDNDPrefix := lipgloss.NewStyle().Foreground(styles.Warning).Render(peerstatus.DNDGlyph + " ")
+	statusNow := time.Now()
 	// Apps use a filled square glyph to visually distinguish them from
 	// human DMs (which use a circle). No presence concept for apps --
 	// they're always "available". Two variants mirror the private-channel
@@ -1446,18 +1628,48 @@ func (m *Model) buildCache(width int) {
 		// App's tab-title counter and section aggregates agree.
 		hasUnread := item.IsVisiblyUnread(readState[item.ID])
 
-		// Unread dot indicator (same regardless of selection state).
+		// Trailing indicator: a mention badge when the channel has
+		// unread direct mentions, otherwise the unread dot, otherwise
+		// blank. Never both -- the badge subsumes the dot, matching
+		// Slack and costing no extra glyph slot.
+		//
+		// badgeText is computed from item.MentionBadge rather than
+		// hasUnread because the two predicates disagree on muted rows
+		// by design: a muted channel suppresses the dot but keeps the
+		// badge.
+		//
+		// The badge text is rendered by ONE Render call so no ANSI
+		// reset lands between the digits, which is what lets tests find
+		// the literal substring in View() output. The Threads row badge
+		// at the top of this function does the same for the same
+		// reason. (lipgloss does split Padding(0, 1) into separate
+		// spans around the text, but the text itself stays contiguous.)
 		unreadDot := " "
-		if hasUnread {
+		trailerCells := 2 // worst-case cost of the dot glyph
+		if badgeText := formatMentionBadge(item.MentionBadge(readState[item.ID])); badgeText != "" {
+			unreadDot = mentionBadgeStyleFor(item.IsMuted).Render(badgeText)
+			// Exact, not worst-case. The 2-cell padding above is a
+			// hedge against East-Asian-Ambiguous glyphs, whose column
+			// count lipgloss cannot predict. badgeText has no such
+			// problem: formatMentionBadge emits only ASCII digits and
+			// '+', so one byte is one column, and the only other cost
+			// is the single space Padding(0, 1) adds on each side.
+			// Charging a 1-digit badge the 3-digit worst case would
+			// truncate a name by two columns for nothing.
+			trailerCells = len(badgeText) + 2
+		} else if hasUnread {
 			unreadDot = unreadDotStr
 		}
 
 		var prefix string
 		switch item.Type {
 		case "dm":
-			if item.Presence == "active" {
+			switch {
+			case item.Status.InDND(statusNow):
+				prefix = dmDNDPrefix
+			case item.Presence == "active":
 				prefix = dmActivePrefix
-			} else {
+			default:
 				prefix = dmAwayPrefix
 			}
 		case "group_dm":
@@ -1484,16 +1696,34 @@ func (m *Model) buildCache(width int) {
 		// Unicode chars like ● (U+25CF), ○, ◆, ▌ have East Asian Width
 		// "Ambiguous" — terminals may render them as 2 columns wide, but
 		// lipgloss.Width() reports them as 1. We can't trust lipgloss
-		// measurements for these chars, so use a conservative fixed budget:
-		//   cursor(2) + prefix(3) + name + space(1) + dot(2) = name + 8
-		// This assumes worst-case 2-col rendering for every ambiguous char.
+		// measurements for these chars, so use a conservative budget
+		// assuming worst-case 2-col rendering for every ambiguous char:
+		//
+		//   cursor(2) + prefix(3) + space(1) + trailer = rowChromeCells
+		//
+		// trailer is 2 for the dot and len(badgeText)+2 for a badge,
+		// computed per row above. Charging every row the badge's width
+		// would truncate names on rows that have no badge, so this
+		// stays inside the loop.
+		const rowChromeExcludingTrailer = 6 // cursor(2) + prefix(3) + space(1)
 		name := item.Name
-		maxNameLen := (width - 2) - 8
+		// A DM peer's status emoji follows the name after a space. It is
+		// charged to the name's budget so a long name truncates instead
+		// of pushing the emoji or the trailer off the row.
+		statusGlyph := item.Status.Glyph(statusNow)
+		statusCells := 0
+		if statusGlyph != "" {
+			statusCells = 1 + item.Status.GlyphWidth(statusNow)
+		}
+		maxNameLen := (width - 2) - rowChromeExcludingTrailer - trailerCells - statusCells
 		if maxNameLen < 5 {
 			maxNameLen = 5
 		}
 		if lipgloss.Width(name) > maxNameLen {
 			name = truncate.StringWithTail(name, uint(maxNameLen), "…")
+		}
+		if statusGlyph != "" {
+			name += " " + statusGlyph
 		}
 
 		// Three label variants: selected (cursor, green ▌), active
@@ -1640,13 +1870,26 @@ func (m *Model) sectionDisplayMeta(sectionKey string) (name, emoji string) {
 
 // renderSectionHeaderLabel returns the (normal, selected) label
 // strings for a section header. Headers show a triangle indicating
-// expand/collapse state and, when collapsed, an aggregate unread badge
-// counting channels-with-unreads across every visible item in the
-// section (sourced from the read-state DB via readStateReader).
+// expand/collapse state and, when collapsed, the two aggregates
+// described on aggregateForSection: channels-with-unreads and summed
+// direct mentions, both sourced from the read-state DB via
+// readStateReader.
 //
 // In Slack mode, the `name` parameter is a section ID — we look up the
 // user-visible name and (if any) emoji shortcode from the provider and
 // prepend the resolved emoji.
+//
+// Known, pre-existing, NOT introduced here: this function takes no
+// width and truncates nothing. buildCache renders the result through
+// styles.SectionHeader.Width(width-2), and lipgloss WRAPS overlong
+// content rather than truncating it, while the renderRow it lands in
+// hardcodes height 1. A section header whose name plus aggregates
+// exceeds the sidebar width therefore emits a multi-line string into a
+// slot counted as one line. Reproducible today without any mention
+// badge — a 36-character section name wraps to three lines at width 20.
+// The mention badge widens the header by at most 6 columns (separator
+// plus a padded "99+"), so it reaches that threshold sooner but does
+// not create it. Filed separately; do not fix it inline here.
 func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.Style, bgAnsi string) (string, string) {
 	displayName, emojiCode := m.sectionDisplayMeta(name)
 	emojiPrefix := ""
@@ -1667,18 +1910,35 @@ func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.
 	if m.IsCollapsed(name) {
 		glyph = "▸"
 	}
-	label := " " + glyph + " " + emojiPrefix + displayName
+
+	// A collapsed header carries two independent figures, never merged:
+	// "•N" channels-with-unreads, and a mention badge summing the
+	// section's direct mentions. Either may be absent; zero renders
+	// nothing rather than an empty pill.
+	//
+	// Built once and appended to BOTH label variants. The aggregates
+	// are also computed once: two walks that must agree is how they
+	// drift apart, and the cursor landing on a header must not change
+	// what the header reports.
+	aggregates := ""
 	if m.IsCollapsed(name) {
-		if n := m.aggregateUnreadForSection(name); n > 0 {
-			label += " " + dotStyle.Render("•"+fmt.Sprintf("%d", n))
+		unread, mentions, mentionsAllMuted := m.aggregateForSection(name)
+		if unread > 0 {
+			aggregates += " " + dotStyle.Render("•"+fmt.Sprintf("%d", unread))
+		}
+		if badgeText := formatMentionBadge(mentions); badgeText != "" {
+			// One Render call so no ANSI reset lands between the
+			// digits, matching the channel rows and the Threads row --
+			// tests find the badge as a literal substring of View().
+			// The explicit separator space mirrors the rows' trailer
+			// (`name + " " + unreadDot`); the pill's own Padding(0, 1)
+			// supplies the rest of the gap.
+			aggregates += " " + mentionBadgeStyleFor(mentionsAllMuted).Render(badgeText)
 		}
 	}
-	selected := cursor + glyph + " " + emojiPrefix + displayName
-	if m.IsCollapsed(name) {
-		if n := m.aggregateUnreadForSection(name); n > 0 {
-			selected += " " + dotStyle.Render("•"+fmt.Sprintf("%d", n))
-		}
-	}
+
+	label := " " + glyph + " " + emojiPrefix + displayName + aggregates
+	selected := cursor + glyph + " " + emojiPrefix + displayName + aggregates
 	return messages.ReapplyBgAfterResets(label, bgAnsi),
 		messages.ReapplyBgAfterResets(selected, bgAnsi)
 }

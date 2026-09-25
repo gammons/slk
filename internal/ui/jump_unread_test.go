@@ -18,7 +18,7 @@ func TestJumpToUnread_EmitsChannelSelected(t *testing.T) {
 		{ID: "C1", Name: "one", Type: "channel", Section: "Eng"},
 		{ID: "C2", Name: "two", Type: "dm", Section: "Eng"},
 	})
-	a.SetReadStateReader(func() map[string]cache.ReadState {
+	a.setReadStateReaderForTest(func() map[string]cache.ReadState {
 		return map[string]cache.ReadState{"C2": {HasUnread: true}}
 	})
 	a.activeChannelID = "C1"
@@ -47,7 +47,7 @@ func TestJumpToPrevUnread_EmitsChannelSelected(t *testing.T) {
 		{ID: "C2", Name: "two", Type: "channel", Section: "Eng"},
 		{ID: "C3", Name: "three", Type: "channel", Section: "Eng"},
 	})
-	a.SetReadStateReader(func() map[string]cache.ReadState {
+	a.setReadStateReaderForTest(func() map[string]cache.ReadState {
 		return map[string]cache.ReadState{"C1": {HasUnread: true}, "C3": {HasUnread: true}}
 	})
 	a.activeChannelID = "C3"
@@ -69,7 +69,7 @@ func TestJumpToUnread_NoUnread_Toasts(t *testing.T) {
 	a.sidebar.SetItems([]sidebar.ChannelItem{
 		{ID: "C1", Name: "one", Type: "channel", Section: "Eng"},
 	})
-	a.SetReadStateReader(func() map[string]cache.ReadState { return map[string]cache.ReadState{} })
+	a.setReadStateReaderForTest(func() map[string]cache.ReadState { return map[string]cache.ReadState{} })
 	a.activeChannelID = "C1"
 
 	// jumpToUnread returns the toast's clear-tick cmd on the empty path

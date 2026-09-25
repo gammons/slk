@@ -7,14 +7,16 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/messages"
 )
 
 func linkTestApp(t *testing.T) (*App, *string) {
 	t.Helper()
-	app := NewApp()
-	app.activeTeamID = "T1"
+	// withSize(0, 0) preserves NewApp's unsized state: this fixture never
+	// renders, and the original builder set no dimensions.
+	app := newTestApp(t, withSize(0, 0), withActiveTeam("T1"))
 	app.workspaceDomains["T1"] = "myteam"
 	var opened string
 	app.browserOpener = func(url string) tea.Cmd {
@@ -123,7 +125,7 @@ func TestOpenLink_ActiveChannel_SelectsMessage(t *testing.T) {
 func TestOpenLink_ActiveChannel_TSNotLoaded_FetchesAround(t *testing.T) {
 	app, _ := linkTestApp(t)
 	var fetchedChannel, fetchedTS string
-	setChannelFetchAroundForTest(app, func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
+	setChannelFetchAroundForTest(app, func(channelID ids.ChannelID, ts ids.MessageTS) core.Msg {
 		fetchedChannel, fetchedTS = string(channelID), string(ts)
 		return nil
 	})
@@ -145,7 +147,7 @@ func TestOpenLink_ThreadPermalink_OpensThread(t *testing.T) {
 	app, _ := linkTestApp(t)
 	app.activeChannelID = "C054JFCBN69"
 	var fetchedChannel, fetchedThread string
-	app.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+	app.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) core.Msg {
 		fetchedChannel, fetchedThread = string(channelID), string(threadTS)
 		return nil
 	})
@@ -159,6 +161,202 @@ func TestOpenLink_ThreadPermalink_OpensThread(t *testing.T) {
 	}
 	if fetchedChannel != "C054JFCBN69" || fetchedThread != "1779284700.000100" {
 		t.Errorf("fetch = (%q, %q)", fetchedChannel, fetchedThread)
+	}
+}
+
+func TestOpenLink_ThreadPermalink_SelectsExactTarget(t *testing.T) {
+	const parentTS = "1779284700.000100"
+	const targetTS = "1779284733.270139"
+	parent := messages.MessageItem{TS: parentTS, Text: "parent"}
+	target := messages.MessageItem{TS: targetTS, Text: "older reply"}
+	newer := messages.MessageItem{TS: "1779284734.000000", Text: "newer reply"}
+	for _, tc := range []struct {
+		name, permalinkTS, wantTS string
+		cached                    []messages.MessageItem
+	}{
+		{"older reply", "1779284733270139", targetTS, nil},
+		{"cache contains target", "1779284733270139", targetTS, []messages.MessageItem{parent, target, newer}},
+		{"cache misses target", "1779284733270139", targetTS, []messages.MessageItem{parent, newer}},
+		{"parent", "1779284700000100", parentTS, []messages.MessageItem{parent, target, newer}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app, _ := linkTestApp(t)
+			app.activeChannelID = "C054JFCBN69"
+			app.SetThreadService(core.NewThreadService(core.ThreadServiceFuncs{
+				CacheRead: func(ids.ChannelID, ids.ThreadTS) []messages.MessageItem { return tc.cached },
+				Fetch: func(ids.ChannelID, ids.ThreadTS) core.Msg {
+					return ThreadRepliesLoadedMsg{ThreadTS: parentTS, Replies: []messages.MessageItem{target, newer}}
+				},
+			}))
+			_, cmd := app.Update(OpenLinkMsg{URL: "https://myteam.slack.com/archives/C054JFCBN69/p" + tc.permalinkTS + "?thread_ts=" + parentTS})
+			loads := drainCmd(cmd)
+			for i, m := range loads {
+				app.Update(m)
+				if i == len(loads)-1 || tc.name == "cache contains target" || tc.name == "parent" {
+					if sel := app.threadPanel.SelectedReply(); sel == nil || sel.TS != tc.wantTS {
+						t.Fatalf("load %d selected %+v, want %s", i, sel, tc.wantTS)
+					}
+				}
+				if i < len(loads)-1 && app.pendingLinkNav == nil {
+					t.Fatal("cached load cleared target before authoritative reload")
+				}
+			}
+			if app.pendingLinkNav != nil {
+				t.Fatal("authoritative load did not clear pending navigation")
+			}
+			// A subsequent ordinary refresh must not retain permalink targeting.
+			app.Update(ThreadRepliesLoadedMsg{ThreadTS: parentTS, Replies: []messages.MessageItem{target, newer}})
+			if sel := app.threadPanel.SelectedReply(); sel == nil || sel.TS != newer.TS {
+				t.Fatalf("ordinary reload selected %+v, want newest", sel)
+			}
+		})
+	}
+}
+
+func TestOpenLink_ThreadPermalink_RejectsStaleLoads(t *testing.T) {
+	const parentTS = "1779284700.000100"
+	target := messages.MessageItem{TS: "1779284733.270139", Text: "target"}
+	newer := messages.MessageItem{TS: "1779284734.000000", Text: "keep"}
+	for _, scenario := range []string{"other thread", "other channel", "other team", "closed", "new permalink"} {
+		t.Run(scenario, func(t *testing.T) {
+			app, _ := linkTestApp(t)
+			app.activeChannelID = "C054JFCBN69"
+			app.setThreadFetcherForTest(func(ids.ChannelID, ids.ThreadTS) core.Msg {
+				return ThreadRepliesLoadedMsg{ThreadTS: parentTS, Replies: []messages.MessageItem{target, newer}}
+			})
+			_, cmd := app.Update(OpenLinkMsg{URL: "https://myteam.slack.com/archives/C054JFCBN69/p1779284733270139?thread_ts=" + parentTS})
+			loads := drainCmd(cmd)
+			channelID, threadTS := app.activeChannelID, parentTS
+			switch scenario {
+			case "other thread":
+				threadTS = "1779284600.000100"
+			case "other channel":
+				channelID = "COTHER"
+				app.activeChannelID = channelID
+			case "other team":
+				app.activeTeamID = "T2"
+			case "closed":
+				app.CloseThread()
+			case "new permalink":
+				app.Update(OpenLinkMsg{URL: "https://myteam.slack.com/archives/C054JFCBN69/p1779284734000000?thread_ts=" + parentTS})
+			}
+			app.threadPanel.SetThread(messages.MessageItem{TS: threadTS}, []messages.MessageItem{newer}, channelID, threadTS)
+			pending := app.pendingLinkNav
+			for _, m := range loads {
+				app.Update(m)
+			}
+			if got := app.threadPanel.Replies(); len(got) != 1 || got[0].TS != newer.TS {
+				t.Fatalf("stale load replaced replies: %+v", got)
+			}
+			if scenario == "new permalink" {
+				if app.pendingLinkNav != pending {
+					t.Fatal("stale load cleared newer navigation")
+				}
+			} else if app.pendingLinkNav != nil {
+				t.Fatal("stale navigation not cleared")
+			}
+		})
+	}
+}
+
+func TestOpenLink_ThreadPermalink_LoadOrderingAndCompletion(t *testing.T) {
+	const parentTS = "1779284700.000100"
+	target := messages.MessageItem{TS: "1779284733.270139", Text: "target"}
+	newer := messages.MessageItem{TS: "1779284734.000000", Text: "newer"}
+	for _, scenario := range []string{"fetch before cache", "nil fetch", "failed fetch", "failure before cache", "missing target", "empty thread"} {
+		t.Run(scenario, func(t *testing.T) {
+			app, _ := linkTestApp(t)
+			app.activeChannelID = "C054JFCBN69"
+			app.SetThreadService(core.NewThreadService(core.ThreadServiceFuncs{
+				CacheRead: func(ids.ChannelID, ids.ThreadTS) []messages.MessageItem {
+					return []messages.MessageItem{{TS: parentTS, Text: "parent"}, target, newer}
+				},
+				Fetch: func(ids.ChannelID, ids.ThreadTS) core.Msg {
+					switch scenario {
+					case "nil fetch":
+						return nil
+					case "failed fetch", "failure before cache":
+						return ThreadRepliesLoadedMsg{ThreadTS: parentTS}
+					case "missing target":
+						return ThreadRepliesLoadedMsg{ThreadTS: parentTS, Replies: []messages.MessageItem{newer}}
+					case "empty thread":
+						return ThreadRepliesLoadedMsg{ThreadTS: parentTS, Replies: []messages.MessageItem{}}
+					}
+					return ThreadRepliesLoadedMsg{ThreadTS: parentTS, Replies: []messages.MessageItem{target}}
+				},
+			}))
+			_, cmd := app.Update(OpenLinkMsg{URL: "https://myteam.slack.com/archives/C054JFCBN69/p1779284733270139?thread_ts=" + parentTS})
+			loads := drainCmd(cmd)
+			if len(loads) != 2 {
+				t.Fatalf("got %d loads, want cache + fetch", len(loads))
+			}
+			if cmd := app.completePendingLinkNav(app.activeChannelID, true); cmd != nil {
+				t.Fatal("channel reload reopened the pending thread")
+			}
+			if scenario == "fetch before cache" || scenario == "failure before cache" {
+				loads[0], loads[1] = loads[1], loads[0]
+			}
+			for _, m := range loads {
+				app.Update(m)
+			}
+			wantTS := target.TS
+			if scenario == "missing target" {
+				wantTS = newer.TS
+			} else if scenario == "empty thread" {
+				wantTS = parentTS
+			}
+			if sel := app.threadPanel.SelectedReply(); sel == nil || sel.TS != wantTS {
+				t.Fatalf("selected %+v, want %s", sel, wantTS)
+			}
+			if scenario == "fetch before cache" && len(app.threadPanel.Replies()) != 1 {
+				t.Fatal("late cache overwrote authoritative replies")
+			}
+			if app.pendingLinkNav != nil {
+				t.Fatal("completed load left pending target armed")
+			}
+		})
+	}
+}
+
+func TestOpenLink_ThreadPermalink_DoesNotTargetOrdinaryLoads(t *testing.T) {
+	app, _ := linkTestApp(t)
+	app.activeChannelID = "C054JFCBN69"
+	const parentTS = "1779284700.000100"
+	replies := []messages.MessageItem{{TS: "1779284733.270139"}, {TS: "1779284734.000000"}}
+	app.setThreadFetcherForTest(func(ids.ChannelID, ids.ThreadTS) core.Msg {
+		return ThreadRepliesLoadedMsg{ThreadTS: parentTS, Replies: replies}
+	})
+	app.Update(OpenLinkMsg{URL: "https://myteam.slack.com/archives/C054JFCBN69/p1779284733270139?thread_ts=" + parentTS})
+	// An untagged refresh during the navigation cannot apply its target.
+	app.Update(ThreadRepliesLoadedMsg{ThreadTS: parentTS, Replies: replies})
+	if sel := app.threadPanel.SelectedReply(); sel == nil || sel.TS != replies[1].TS {
+		t.Fatalf("ordinary refresh selected %+v, want newest", sel)
+	}
+	app.pendingLinkNav = nil
+	cmd := app.openThreadPanel(messages.MessageItem{TS: parentTS}, app.activeChannelID, parentTS)
+	for _, m := range drainCmd(cmd) {
+		app.Update(m)
+	}
+	if sel := app.threadPanel.SelectedReply(); sel == nil || sel.TS != replies[1].TS {
+		t.Fatalf("ordinary thread open selected %+v, want newest", sel)
+	}
+}
+
+func TestOpenLink_ActiveChannel_RevealsSource(t *testing.T) {
+	for _, fromThreads := range []bool{false, true} {
+		app, _ := linkTestApp(t)
+		app.activeChannelID = "C054JFCBN69"
+		app.focusedPanel = PanelThread
+		app.threadVisible = true
+		if fromThreads {
+			app.view = ViewThreads
+			app.sidebar.SetThreadsActive(true)
+		}
+		app.messagepane.SetMessages([]messages.MessageItem{{TS: "1779284733.270139", Text: "source"}})
+		app.Update(OpenLinkMsg{URL: "https://myteam.slack.com/archives/C054JFCBN69/p1779284733270139"})
+		if app.view != ViewChannels || app.focusedPanel != PanelMessages {
+			t.Fatalf("fromThreads=%v: view=%v focus=%v", fromThreads, app.view, app.focusedPanel)
+		}
 	}
 }
 
@@ -202,7 +400,7 @@ func TestOpenLink_OtherChannel_FreshCacheMissingTS_FetchesAround(t *testing.T) {
 		return time.Now().Unix()
 	})
 	var fetchedChannel, fetchedTS string
-	setChannelFetchAroundForTest(app, func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
+	setChannelFetchAroundForTest(app, func(channelID ids.ChannelID, ts ids.MessageTS) core.Msg {
 		fetchedChannel, fetchedTS = string(channelID), string(ts)
 		return nil
 	})
@@ -316,7 +514,7 @@ func TestMessagesAroundLoaded_StaleChannelDropped(t *testing.T) {
 func TestCompletePendingNav_OffBufferTriggersFetchAround(t *testing.T) {
 	app, _ := linkTestApp(t)
 	var fetchedChannel, fetchedTS string
-	setChannelFetchAroundForTest(app, func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
+	setChannelFetchAroundForTest(app, func(channelID ids.ChannelID, ts ids.MessageTS) core.Msg {
 		fetchedChannel, fetchedTS = string(channelID), string(ts)
 		return nil
 	})

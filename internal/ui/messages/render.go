@@ -124,13 +124,12 @@ func blockquoteStyle() lipgloss.Style {
 // whole line is wrapped in an OSC 8 hyperlink escape so it's clickable in
 // modern terminals. Returns "" if there are no attachments.
 //
-// Filenames are intentionally omitted: most Slack file names are noisy
-// (e.g. UUID-style image names) and including them in addition to the
-// already-long URL pushed message lines past the panel width.
+// The filename is the link label; the raw URL is not shown (it's in
+// the OSC 8 escape). Attachments with no name fall back to the URL.
 //
 // Output format per attachment:
 //
-//	[Image] https://files.slack.com/...
+//	[Image] photo.png
 //
 // Callers must pass the result through WordWrap before composing it into
 // a width-bounded layout, since file URLs frequently exceed the panel
@@ -146,11 +145,13 @@ func RenderAttachments(attachments []Attachment) string {
 	return strings.Join(lines, "\n")
 }
 
-// renderSingleAttachment formats one attachment as the legacy single-line
-// "[Image] <url>" or "[File] <url>" form, wrapped in an OSC 8 hyperlink.
-// The messages-pane image-rendering pipeline uses this when no inline
-// renderer is available (ProtoOff, missing thumbs) and the thread pane
-// uses it via RenderAttachments for all attachments.
+// renderSingleAttachment formats one attachment as the single-line
+// "[Image] <name>" / "[File] <name>" form, with the name wrapped in an
+// OSC 8 hyperlink to the URL. Falls back to the URL as label when the
+// attachment has no name. The messages-pane image-rendering pipeline
+// uses this when no inline renderer is available (ProtoOff, missing
+// thumbs) and the thread pane uses it via RenderAttachments for all
+// attachments.
 func renderSingleAttachment(a Attachment) string {
 	markerStyle := lipgloss.NewStyle().Foreground(styles.TextMuted).Bold(true)
 	urlStyle := linkStyle()
@@ -158,7 +159,11 @@ func renderSingleAttachment(a Attachment) string {
 	if a.Kind == "image" {
 		marker = "[Image]"
 	}
-	body := markerStyle.Render(marker) + " " + urlStyle.Render(a.URL)
+	label := a.Name
+	if label == "" {
+		label = a.URL
+	}
+	body := markerStyle.Render(marker) + " " + urlStyle.Render(label)
 	return osc8Hyperlink(a.URL, body)
 }
 
@@ -204,6 +209,14 @@ func WordWrap(s string, limit int) string {
 // can't see and which would push downstream layout (e.g. the thread
 // compose box) over content above it.
 func wrapLine(buf *strings.Builder, line string, limit int) {
+	// Keep fitting lines byte-for-byte. The reflow below intentionally
+	// normalizes overlong prose with strings.Fields; applying it here
+	// would destroy code indentation and fragment ANSI-styled runs.
+	if lipgloss.Width(line) <= limit {
+		buf.WriteString(line)
+		return
+	}
+
 	words := strings.Fields(line)
 	if len(words) == 0 {
 		return
@@ -262,9 +275,10 @@ func ReapplyBgAfterResets(text string, style string) string {
 	if style == "" {
 		return text
 	}
-	// lipgloss v2 uses \x1b[m (no 0), but handle both forms
-	text = strings.ReplaceAll(text, "\x1b[m", "\x1b[m"+style)
-	return text
+	// lipgloss v2 emits the short form, but image renderers and other
+	// ANSI producers may emit the explicit zero form.
+	text = strings.ReplaceAll(text, "\x1b[0m", "\x1b[0m"+style)
+	return strings.ReplaceAll(text, "\x1b[m", "\x1b[m"+style)
 }
 
 var (
@@ -622,6 +636,14 @@ type RenderSlackMarkdownOpts struct {
 	EmojiCells   int                      // 0 falls back to 2
 	Customs      map[string]string        // workspace custom emoji map; may be nil
 	EmojiFlushes *[]func(io.Writer) error // append-only; may be nil
+
+	// Width is the content width the result will be wrapped to, and is
+	// used only by the code-block path: a fenced block is hard-wrapped
+	// and padded to exactly this width so every one of its lines
+	// carries the surface background edge to edge, the way Slack draws
+	// one. 0 leaves the old behaviour (block as wide as its longest
+	// line, ragged right edge).
+	Width int
 }
 
 // RenderSlackMarkdown converts Slack-flavored markdown and emoji shortcodes
@@ -649,7 +671,27 @@ func RenderSlackMarkdownWith(text string, opts RenderSlackMarkdownOpts) string {
 	// Handle code blocks first (before other formatting to avoid conflicts)
 	text = codeBlockRe.ReplaceAllStringFunc(text, func(match string) string {
 		inner := codeBlockRe.FindStringSubmatch(match)[1]
-		inner = strings.TrimSpace(inner)
+		// Remove the line break that separates a fenced block from its
+		// content, not the content's whitespace. strings.TrimSpace would
+		// erase indentation from the first and last code lines.
+		if trimmed, ok := strings.CutPrefix(inner, "\r\n"); ok {
+			inner = trimmed
+		} else {
+			inner = strings.TrimPrefix(inner, "\n")
+		}
+		if trimmed, ok := strings.CutSuffix(inner, "\r\n"); ok {
+			inner = trimmed
+		} else {
+			inner = strings.TrimSuffix(inner, "\n")
+		}
+		// Hard-wrap before styling so WordWrap never reflows code as
+		// prose. Width includes one padding column on each side; setting
+		// it on the style extends the surface background across the line.
+		// Breaking at word boundaries would move code tokens.
+		if w := opts.Width; w > 2 {
+			inner = ansi.Hardwrap(inner, w-2, false)
+			return "\n" + codeBlockStyle().Width(w).Render(inner) + "\n"
+		}
 		return "\n" + codeBlockStyle().Render(inner) + "\n"
 	})
 
@@ -1194,3 +1236,30 @@ func DisplayWidthOfPlain(p PlainLine) int { return displayWidthOfPlain(p) }
 
 // SliceColumns is the exported form of sliceColumns.
 func SliceColumns(p PlainLine, from, to int) string { return sliceColumns(p, from, to) }
+
+// WithBackground makes each line self-sufficient about its background:
+// the line is prefixed with bg, and bg is re-applied after every reset
+// inside it. Joined with newlines, ready to compose.
+//
+// Block Kit lines need both halves. The prefix covers the run at the
+// start of a line — the background-clearing reset there belongs to the
+// avatar gutter prepended later, so there is nothing in the line itself
+// to patch after. ReapplyBgAfterResets covers the runs that follow the
+// line's own inline spans, whose closing resets clear it again.
+//
+// bg should be a background escape only. The foreground is deliberately
+// left alone: kitty image placeholders encode their image ID in the
+// cell foreground (image.PlaceholderRune) and repainting it would point
+// the terminal at a different image.
+//
+// An empty bg returns the lines joined and otherwise untouched.
+func WithBackground(lines []string, bg string) string {
+	if bg == "" {
+		return strings.Join(lines, "\n")
+	}
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = bg + ReapplyBgAfterResets(l, bg)
+	}
+	return strings.Join(out, "\n")
+}

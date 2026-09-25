@@ -53,7 +53,7 @@ type Manager struct {
 	resolver    UserResolver
 
 	mu          sync.Mutex
-	members     map[string]map[string]struct{} // channelID -> member set
+	members     map[string]map[string]struct{} // channelID -> member set; absent until a full fetch has succeeded
 	fetching    map[string]struct{}            // in-flight sentinel by channelID
 	lastFetched map[string]time.Time           // last successful full-fetch (in-memory, for dedup)
 	lastFailed  map[string]time.Time           // last failed fetch; backs off retries
@@ -75,8 +75,8 @@ func New(workspaceID string, api ConversationMemberAPI, db *cache.DB, push PushF
 }
 
 // EnsureFresh loads (if needed) cached membership for a channel,
-// pushes it to the UI, and triggers a background full-fetch if the
-// cache is missing or older than TTL. The background fetch is
+// pushes it to the UI if known, and triggers a background full-fetch
+// if the cache is missing or older than TTL. The background fetch is
 // asynchronous, but the initial cache load and PushFunc invocation
 // run synchronously on the caller's goroutine.
 //
@@ -104,12 +104,16 @@ func (m *Manager) EnsureFresh(ctx context.Context, channelID string) {
 }
 
 // loadIntoMemory reads the cached member set into the in-memory map
-// if not already present. Safe to call repeatedly.
+// if not already present. Safe to call repeatedly. Without a meta row
+// any cached rows are join deltas, not a member list.
 func (m *Manager) loadIntoMemory(channelID string) {
 	m.mu.Lock()
 	_, have := m.members[channelID]
 	m.mu.Unlock()
 	if have {
+		return
+	}
+	if _, fetched, err := m.db.GetChannelMembershipMeta(m.workspaceID, channelID); err != nil || !fetched {
 		return
 	}
 	ids, err := m.db.ListChannelMembers(m.workspaceID, channelID)
@@ -128,10 +132,15 @@ func (m *Manager) loadIntoMemory(channelID string) {
 }
 
 // pushSnapshot calls the push callback with the current in-memory
-// member set for a channel.
+// member set for a channel. Unknown channels are not pushed, which
+// leaves the UI in its not-loaded state.
 func (m *Manager) pushSnapshot(channelID string) {
 	m.mu.Lock()
-	set := m.members[channelID]
+	set, known := m.members[channelID]
+	if !known {
+		m.mu.Unlock()
+		return
+	}
 	ids := make([]string, 0, len(set))
 	for id := range set {
 		ids = append(ids, id)
@@ -234,13 +243,13 @@ func (m *Manager) ApplyJoin(channelID, userID string) {
 	if err := m.db.UpsertChannelMember(m.workspaceID, channelID, userID, now); err != nil {
 		return
 	}
+	// Load first: otherwise a join landing while EnsureFresh loads this
+	// channel is missing from the set it installs.
+	m.loadIntoMemory(channelID)
 	m.mu.Lock()
-	set := m.members[channelID]
-	if set == nil {
-		set = map[string]struct{}{}
-		m.members[channelID] = set
+	if set, known := m.members[channelID]; known {
+		set[userID] = struct{}{}
 	}
-	set[userID] = struct{}{}
 	m.mu.Unlock()
 
 	if m.resolver != nil {

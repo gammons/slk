@@ -11,6 +11,13 @@ on:
 permissions:
   contents: read
 
+env:
+  # v2.13.0+ is required for go1.27 (which setup-go's "stable" now
+  # resolves to); older binaries panic in go/types with "file requires
+  # newer Go version go1.27".
+  # renovate: datasource=github-releases depName=golangci/golangci-lint
+  GOLANGCI_LINT_VERSION: v2.13.1
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -61,4 +68,20 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.12.2
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+
+  nix:
+    name: nix build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31.11.1
+
+      # vendorHash is derived from go.mod/go.sum, so any dependency change
+      # invalidates it. Without this the flake only breaks for whoever
+      # runs `nix build` next.
+      - name: Build the flake
+        run: nix build .#slk --print-build-logs

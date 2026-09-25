@@ -30,32 +30,20 @@
 - 59 themes + drop-in custom themes, live theme switcher
 - OS desktop notifications on DMs, mentions, and configurable keywords
 
-Full feature breakdown: **[[Features|https://github.com/gammons/slk/wiki/Features]]**
+Full feature breakdown: **[Features](https://github.com/gammons/slk/wiki/Features)**
 
 ## Quick install
 
-**Homebrew** (macOS only):
+**Homebrew** (macOS and Linux):
 
 ```bash
 brew install --cask gammons/tap/slk
 ```
 
-> **Note:** As of v0.13.0, slk is published as a Homebrew Cask (goreleaser v2.10
-> deprecated the `brews`/formula path for prebuilt binaries). Casks are macOS-only;
-> Linuxbrew users should use the tarball or `.deb`/`.rpm`/`.apk` packages below.
-> Existing installs may also need `tap_migrations.json` on the tap (tracked
-> upstream) before `brew upgrade` will move them from the old 0.12.0 formula to
-> the cask — until then, run `brew uninstall slk && brew install --cask gammons/tap/slk`.
-
-**Linux/macOS tarball** (auto-resolves the latest version):
+**Arch Linux** (community-maintained [AUR package](https://aur.archlinux.org/packages/slk)):
 
 ```bash
-VERSION=$(curl -fsSL https://api.github.com/repos/gammons/slk/releases/latest | grep -oE '"tag_name": *"v[^"]+"' | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sed 's/^v//')
-# Linux x86_64
-curl -fsSL "https://github.com/gammons/slk/releases/latest/download/slk_${VERSION}_linux_x86_64.tar.gz" | tar xz
-# macOS Apple Silicon
-curl -fsSL "https://github.com/gammons/slk/releases/latest/download/slk_${VERSION}_darwin_arm64.tar.gz" | tar xz
-sudo mv slk /usr/local/bin/
+yay -S slk
 ```
 
 **Go:**
@@ -64,7 +52,7 @@ sudo mv slk /usr/local/bin/
 go install -ldflags="-s -w" -trimpath github.com/gammons/slk/cmd/slk@latest
 ```
 
-For `.deb` / `.rpm` / `.apk` packages, Windows, build-from-source, and checksums, see the [Installation wiki page](https://github.com/gammons/slk/wiki/Installation).
+For tarballs, `.deb` / `.rpm` / `.apk` packages, Windows, build-from-source, and the Homebrew formula→cask migration note, see the [Installation wiki page](https://github.com/gammons/slk/wiki/Installation).
 
 ## Setup
 
@@ -79,78 +67,6 @@ slk lists the workspaces you're signed in to; pick the ones you want and
 you're done.
 
 Full walkthrough: [Setup wiki page](https://github.com/gammons/slk/wiki/Setup).
-
-## Enterprise Grid
-
-slk reuses the **desktop app's** existing signed-in session (the same session
-your admin already sanctioned) rather than a browser session, which avoids the
-session-anomaly alerts that browser-token extraction can trigger. If you're on
-Enterprise Grid and still hit a sign-out or security alert after adding a
-workspace, please file an issue — include your OS and Slack desktop version.
-
-See [#5](https://github.com/gammons/slk/issues/5) for history.
-
-## Inline images in tmux
-
-If you run `slk` inside tmux on a Kitty-capable terminal (Kitty, Ghostty,
-WezTerm), images render natively as long as tmux passthrough is enabled:
-
-```tmux
-set -g allow-passthrough on
-```
-
-Reload tmux for the setting to take effect (`tmux kill-server`, then
-reattach). Verify with:
-
-```bash
-tmux show -gv allow-passthrough
-```
-
-Expected output: `on` (or `all`).
-
-If passthrough is off, `slk` detects this at startup and falls back to
-half-block rendering automatically — no config change needed. To force a
-specific renderer regardless of detection, set `image_protocol` in
-`config.toml` to `kitty`, `sixel`, `halfblock`, or `off`.
-
-## Unread indicator in tmux
-
-`slk` sets the terminal window title to reflect unread state — for
-example `slk SW (3) +1` means three channels-with-unreads in the active
-workspace and at least one other workspace also has unreads. The
-two-letter prefix is the active workspace's initials (matching the
-left-rail label).
-
-Outside tmux this just works — modern terminals (Kitty, WezTerm,
-Alacritty, Ghostty, iTerm2, Windows Terminal, gnome-terminal) render
-title changes in their tab/window chrome.
-
-Inside tmux there's an extra step. tmux intercepts the title escape
-from slk, and only re-emits it to the outer terminal when title
-forwarding is on, *and* it uses its own title template by default
-(`#W` = window name) rather than the pane's title. Add both lines to
-`~/.tmux.conf`:
-
-```tmux
-set -g set-titles on
-set -g set-titles-string '#T'
-```
-
-`#T` (active pane title) is what carries slk's string. Reload tmux for
-the setting to take effect (`tmux kill-server`, then reattach). Verify
-with:
-
-```bash
-tmux show -gv set-titles
-tmux show -gv set-titles-string
-```
-
-Expected output: `on` and `#T`.
-
-If you'd prefer slk's unread indicator to work in tmux without any
-config change at all, that's tracked as a follow-up — it requires
-passing the title escape through tmux's DCS passthrough rather than
-relying on `set-titles`. Not in this release.
 
 ## Debugging
 
@@ -170,7 +86,7 @@ Everything lives in the [**wiki**](https://github.com/gammons/slk/wiki):
 - [Features](https://github.com/gammons/slk/wiki/Features) — full feature breakdown
 - [Keybindings](https://github.com/gammons/slk/wiki/Keybindings) — every key, every mode
 - [Configuration](https://github.com/gammons/slk/wiki/Configuration) — `config.toml`, custom themes, XDG paths
-- [Terminal Compatibility](https://github.com/gammons/slk/wiki/Terminal-Compatibility) — what each terminal supports
+- [Terminal Compatibility](https://github.com/gammons/slk/wiki/Terminal-Compatibility) — what each terminal supports, including tmux setup (inline images, unread-title forwarding)
 - [Clipboard and OSC 52](https://github.com/gammons/slk/wiki/Clipboard-and-OSC-52) — copy/paste setup notes
 - [Tradeoffs and Non-Goals](https://github.com/gammons/slk/wiki/Tradeoffs-and-Non-Goals) — roadmap, caveats, TOS notice
 - [Architecture](https://github.com/gammons/slk/wiki/Architecture) — service layout, data layer

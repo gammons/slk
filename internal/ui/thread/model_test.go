@@ -14,6 +14,7 @@ import (
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/imgrender"
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
@@ -40,6 +41,26 @@ func TestSetThread(t *testing.T) {
 	}
 	if m.ReplyCount() != 2 {
 		t.Errorf("expected 2 replies, got %d", m.ReplyCount())
+	}
+}
+
+func TestThreadViewUpdatesAuthorStatus(t *testing.T) {
+	m := New()
+	m.SetThread(
+		messages.MessageItem{TS: "1.0", UserID: "U1", UserName: "alice", Text: "parent"},
+		[]messages.MessageItem{{TS: "2.0", UserID: "U2", UserName: "bob", Text: "reply"}},
+		"C1",
+		"1.0",
+	)
+
+	m.PatchUserStatus("U2", peerstatus.Status{Emoji: ":calendar:"})
+	if got := ansi.Strip(m.View(20, 60)); !strings.Contains(got, "bob "+emojiutil.CodeMap()[":calendar:"]) {
+		t.Fatalf("thread reply header does not show the author's status:\n%s", got)
+	}
+
+	m.PatchUserStatus("U2", peerstatus.Status{Huddle: peerstatus.HuddleActive})
+	if got := ansi.Strip(m.View(20, 60)); !strings.Contains(got, "bob "+peerstatus.HuddleGlyph) {
+		t.Fatalf("thread reply header does not replace the status with the huddle glyph:\n%s", got)
 	}
 }
 
@@ -284,8 +305,11 @@ func TestRemoveMessageByTS_LastBecomesEmpty(t *testing.T) {
 	if len(m.replies) != 0 {
 		t.Error("expected empty replies")
 	}
-	if m.SelectedReply() != nil {
-		t.Error("SelectedReply should be nil when empty")
+	// With no replies left the cursor falls back to the parent row
+	// (parentSelected) so message ops still have a target.
+	sel := m.SelectedReply()
+	if sel == nil || sel.TS != "P1" {
+		t.Errorf("SelectedReply = %+v, want parent (TS P1) when replies empty", sel)
 	}
 }
 

@@ -1,0 +1,76 @@
+{
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  extends: [
+    'config:recommended',
+    ':dependencyDashboard',
+    'helpers:pinGitHubActionDigests',
+  ],
+  timezone: 'Etc/UTC',
+  schedule: ['before 5am on monday'],
+  semanticCommits: 'enabled',
+  semanticCommitType: 'chore',
+  labels: ['dependencies'],
+  prConcurrentLimit: 5,
+  postUpdateOptions: ['gomodTidy'],
+  // Wait out the window in which a bad or compromised release gets yanked.
+  minimumReleaseAge: '7 days',
+
+  // Beta manager, off unless asked for. Both flake.nix inputs are branch
+  // refs, so flake.lock's pinned revs are the only thing to move here.
+  nix: {
+    enabled: true,
+    lockFileMaintenance: {
+      enabled: true,
+    },
+  },
+
+  // Later rules win, so the charm rule sits last and overrides automerge.
+  packageRules: [
+    {
+      // No gomod automerge: flake.nix pins a vendorHash derived from
+      // go.mod/go.sum, and no workflow builds the flake, so a merged bump
+      // breaks `nix build` with nothing to catch it.
+      matchManagers: ['gomod'],
+      automerge: false,
+    },
+    {
+      matchPackageNames: ['golang.org/x/**'],
+      groupName: 'golang.org/x',
+    },
+    {
+      matchPackageNames: ['modernc.org/**'],
+      groupName: 'modernc.org',
+    },
+    {
+      matchManagers: ['github-actions'],
+      groupName: 'github actions',
+      matchUpdateTypes: ['pin', 'digest', 'minor', 'patch'],
+      automerge: true,
+    },
+    {
+      matchUpdateTypes: ['major'],
+      automerge: false,
+      minimumReleaseAge: '21 days',
+    },
+    {
+      // internal/ui/golden_test.go renders through bubbletea and x/ansi.
+      // A bump shifts the .ansi snapshots, which need re-blessing by hand.
+      matchPackageNames: ['charm.land/**', 'github.com/charmbracelet/**'],
+      groupName: 'charm',
+      automerge: false,
+    },
+  ],
+
+  // Versions that are workflow inputs rather than modules, pinned in an
+  // `env:` block and tagged with a marker comment on the line above.
+  customManagers: [
+    {
+      customType: 'regex',
+      managerFilePatterns: ['/^\\.github/workflows/.+\\.ya?ml$/'],
+      matchStrings: [
+        '# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+\\S+?:\\s*"?(?<currentValue>[^"\\s]+)"?',
+      ],
+      versioningTemplate: 'semver',
+    },
+  ],
+}

@@ -10,7 +10,10 @@ import (
 	"r00t2.io/gosecret"
 )
 
-func TestFindKeyringPasswordSupportsKDEWallet(t *testing.T) {
+// Covers the QtKeychain schema as served over the Secret Service, i.e. where
+// kwalletd bridges onto org.freedesktop.secrets. Not coverage of KDE generally
+// — see readKWalletPassword for the unbridged case.
+func TestFindKeyringPasswordSupportsQtKeychainOverSecretService(t *testing.T) {
 	var queries []map[string]string
 	wantPassword := []byte("kde-slack-safe-storage")
 
@@ -82,7 +85,7 @@ func TestFindKeyringPasswordErrors(t *testing.T) {
 			search: func(map[string]string) ([]*gosecret.Item, []*gosecret.Item, error) {
 				return nil, nil, nil
 			},
-			want: ErrNoSecretService,
+			want: ErrSecretNotFound,
 		},
 		{
 			name: "matching item is locked",
@@ -125,4 +128,126 @@ func cloneStringMap(src map[string]string) map[string]string {
 		dst[key] = value
 	}
 	return dst
+}
+
+// source is a keyring source with a fixed result.
+func source(pws [][]byte, err error) func() ([][]byte, error) {
+	return func() ([][]byte, error) { return pws, err }
+}
+
+// Both answers are kept: decryptCookieValue validates each, so an extra
+// candidate costs a failed decrypt while dropping one can lose the right key.
+func TestCollectKeyringPasswordsMergesEverySource(t *testing.T) {
+	got, err := collectKeyringPasswords(
+		source([][]byte{[]byte("from-secret-service")}, nil),
+		source([][]byte{[]byte("from-kwallet")}, nil),
+	)
+	if err != nil {
+		t.Fatalf("collectKeyringPasswords: %v", err)
+	}
+	want := [][]byte{[]byte("from-secret-service"), []byte("from-kwallet")}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("passwords = %q, want %q", got, want)
+	}
+}
+
+// The KDE bug: Secret Service answers and has nothing, key is in KWallet.
+func TestCollectKeyringPasswordsSucceedsWhenOnlyKWalletHasTheKey(t *testing.T) {
+	got, err := collectKeyringPasswords(
+		source(nil, ErrSecretNotFound),
+		source([][]byte{[]byte("from-kwallet")}, nil),
+	)
+	if err != nil {
+		t.Fatalf("collectKeyringPasswords: %v", err)
+	}
+	if want := [][]byte{[]byte("from-kwallet")}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("passwords = %q, want %q", got, want)
+	}
+}
+
+// An absent or broken store must not mask a key another store produced.
+func TestCollectKeyringPasswordsIgnoresFailuresWhenAKeyWasFound(t *testing.T) {
+	for _, otherErr := range []error{ErrNoSecretService, ErrKeyringLocked, errors.New("boom")} {
+		got, err := collectKeyringPasswords(
+			source([][]byte{[]byte("found")}, nil),
+			source(nil, otherErr),
+		)
+		if err != nil {
+			t.Fatalf("collectKeyringPasswords with %v: %v", otherErr, err)
+		}
+		if want := [][]byte{[]byte("found")}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("passwords = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestCollectKeyringPasswordsErrorPrecedence(t *testing.T) {
+	boom := errors.New("dbus: connection closed")
+
+	tests := []struct {
+		name    string
+		sources []func() ([][]byte, error)
+		want    error
+	}{
+		{
+			name:    "no sources at all",
+			sources: nil,
+			want:    ErrSecretNotFound,
+		},
+		{
+			name: "neither store exists",
+			sources: []func() ([][]byte, error){
+				source(nil, ErrNoSecretService),
+				source(nil, ErrNoSecretService),
+			},
+			want: ErrNoSecretService,
+		},
+		{
+			// "Answered and empty" is more informative than "not installed".
+			name: "answered and empty beats absent",
+			sources: []func() ([][]byte, error){
+				source(nil, ErrNoSecretService),
+				source(nil, ErrSecretNotFound),
+			},
+			want: ErrSecretNotFound,
+		},
+		{
+			// The only one the user can act on.
+			name: "locked beats not found",
+			sources: []func() ([][]byte, error){
+				source(nil, ErrSecretNotFound),
+				source(nil, ErrKeyringLocked),
+			},
+			want: ErrKeyringLocked,
+		},
+		{
+			name: "locked beats a transport error",
+			sources: []func() ([][]byte, error){
+				source(nil, boom),
+				source(nil, ErrKeyringLocked),
+			},
+			want: ErrKeyringLocked,
+		},
+		{
+			// Points at the bus; "not found" would point at Slack.
+			name: "transport error beats not found",
+			sources: []func() ([][]byte, error){
+				source(nil, ErrSecretNotFound),
+				source(nil, boom),
+			},
+			want: boom,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := collectKeyringPasswords(tt.sources...)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("error = %v, want %v", err, tt.want)
+			}
+			if got != nil {
+				t.Errorf("passwords = %q, want none alongside an error", got)
+			}
+		})
+	}
 }
