@@ -35,7 +35,7 @@ var commands = map[string]commandFunc{
 }
 
 // cmdActivity opens the Activity view (mentions, thread replies,
-// reactions to your messages, DMs). The sidebar 🔔 Activity row is the
+// reactions to your messages, DMs). The sidebar ◉ Activity row is the
 // primary entry point; this command mirrors it for discoverability.
 func cmdActivity(a *App, _ []string) tea.Cmd {
 	a.sidebar.SelectActivityRow()

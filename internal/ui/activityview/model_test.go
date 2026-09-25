@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
@@ -25,15 +26,38 @@ func TestActivityGlyph(t *testing.T) {
 		"unjoined_channel_mention": "@",
 		"channel":                  "@",
 		"thread_v2":                "⚑",
-		"message_reaction":         "☺",
-		"dm":                       "✉",
-		"bot_dm_bundle":            "✉",
+		"message_reaction":         "✦",
+		"dm":                       "●",
+		"bot_dm_bundle":            "●",
 		"something_unknown":        "•",
 		"":                         "•",
 	}
 	for typ, want := range cases {
 		if got := activityGlyph(typ); got != want {
 			t.Errorf("activityGlyph(%q) = %q, want %q", typ, got, want)
+		}
+	}
+}
+
+// Card glyphs must be one column wide and must not be characters a
+// terminal may draw as a colour emoji. Those (✉, ☺) are counted as one
+// column but drawn as two by terminals with an emoji font, which pushed
+// "DM" into the glyph ("✉DM").
+func TestActivityGlyphs_SingleCellAndNotEmoji(t *testing.T) {
+	emojiGlyphs := map[string]bool{}
+	for _, g := range emoji.CodeMap() {
+		emojiGlyphs[strings.TrimSuffix(g, "\ufe0f")] = true
+	}
+	if !emojiGlyphs["✉"] || !emojiGlyphs["☺"] {
+		t.Fatal("emoji.CodeMap no longer lists ✉ and ☺; this test cannot detect emoji-capable glyphs")
+	}
+	for _, typ := range []string{"at_user", "thread_v2", "message_reaction", "dm", "bot_dm_bundle", ""} {
+		g := activityGlyph(typ)
+		if w := emoji.Width(g); w != 1 {
+			t.Errorf("glyph %q for %q is %d columns wide, want 1", g, typ, w)
+		}
+		if emojiGlyphs[g] {
+			t.Errorf("glyph %q for %q can be drawn as a colour emoji", g, typ)
 		}
 	}
 }

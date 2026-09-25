@@ -1552,9 +1552,9 @@ func (m *Model) buildCache(width int) {
 	// Synthetic "Activity" row, rendered directly below the Threads row.
 	// Same treatment as the Threads row (see above): the App layer
 	// activates the Activity view when IsActivitySelected() is true.
-	activityLabel := " 🔔 Activity"
-	activityCursor := cursorSelected + "🔔 Activity"
-	activityActiveLabel := activeBorder + "🔔 Activity"
+	activityLabel := " ◉ Activity"
+	activityCursor := cursorSelected + "◉ Activity"
+	activityActiveLabel := activeBorder + "◉ Activity"
 	if m.activityUnread > 0 {
 		badge := " " + dotStyle.Render("•"+fmt.Sprintf("%d", m.activityUnread))
 		activityLabel += badge

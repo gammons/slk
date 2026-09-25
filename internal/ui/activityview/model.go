@@ -667,8 +667,10 @@ func (m *Model) wrapLine(line string, contentWidth int, selected bool) string {
 }
 
 // activityGlyph returns the leading glyph for a row keyed on the item type:
-// "@" for mentions, a thread flag for thread replies, a face for reactions,
-// and an envelope for DMs. Pure (no styling) so it can be unit-tested.
+// "@" for mentions, the sidebar's thread flag for thread replies, a star
+// for reactions, and the sidebar's DM dot for DMs. Each is one column wide
+// and has no colour-emoji form, so terminals agree on its width. Pure (no
+// styling) so it can be unit-tested.
 func activityGlyph(itemType string) string {
 	switch itemType {
 	case "at_user", "at_user_group", "at_channel", "at_everyone",
@@ -677,9 +679,9 @@ func activityGlyph(itemType string) string {
 	case "thread_v2":
 		return "⚑"
 	case "message_reaction":
-		return "☺"
+		return "✦"
 	case "dm", "bot_dm_bundle":
-		return "✉"
+		return "●"
 	default:
 		return "•"
 	}
