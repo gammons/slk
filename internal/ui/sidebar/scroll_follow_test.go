@@ -347,3 +347,95 @@ func TestCursorFollowsScrollSkipsNonNavigableRows(t *testing.T) {
 		}
 	}
 }
+
+// TestPageBySkipsSeparatorBeforeRender pins the separator skip inside
+// pageBy itself. The other paging tests call View() after paging, and
+// View()'s own clamp would move a cursor off a blank row anyway, so they
+// cannot tell whether pageBy landed on a navigable row or View() rescued
+// it. Here the cursor is asserted straight after the page call, before
+// any frame is rendered. The fixture's rows are: Threads, blank, "Alpha"
+// header, A00..A14, blank (line 18), "Beta" header, B00..B14.
+func TestPageBySkipsSeparatorBeforeRender(t *testing.T) {
+	const height = 10
+	newModel := func(t *testing.T) Model {
+		t.Helper()
+		items := make([]ChannelItem, 0, 30)
+		for i := 0; i < 15; i++ {
+			items = append(items, ChannelItem{ID: fmt.Sprintf("A%02d", i), Name: fmt.Sprintf("alpha-%02d", i), Type: "channel", Section: "Alpha"})
+		}
+		for i := 0; i < 15; i++ {
+			items = append(items, ChannelItem{ID: fmt.Sprintf("B%02d", i), Name: fmt.Sprintf("beta-%02d", i), Type: "channel", Section: "Beta"})
+		}
+		m := New(items)
+		_ = m.View(height, 30)
+		if got := len(m.cacheRows); got != 35 {
+			t.Fatalf("setup: fixture has %d rows, want 35", got)
+		}
+		if got := m.cacheRows[18].navIdx; got != -1 {
+			t.Fatalf("setup: line 18 navIdx = %d, want -1 (blank separator)", got)
+		}
+		return m
+	}
+	assertNavigable := func(t *testing.T, m *Model) {
+		t.Helper()
+		line := selectedLine(m)
+		if line < 0 || m.cacheRows[line].navIdx < 0 {
+			t.Fatalf("cursor %d sits on a non-navigable row (line %d)", m.cursor, line)
+		}
+	}
+
+	t.Run("down lands on the header past the separator", func(t *testing.T) {
+		m := newModel(t)
+		// Threads → Alpha header → A00 → A01 → A02 → A03
+		for range 5 {
+			m.MoveDown()
+		}
+		_ = m.View(height, 30)
+		if got := m.SelectedID(); got != "A03" {
+			t.Fatalf("setup: selected = %q, want A03 (line 6)", got)
+		}
+
+		m.PageDown(12) // line 6 + 12 = line 18, the blank separator
+
+		if got := m.yOffset; got != 12 {
+			t.Errorf("yOffset = %d, want 12", got)
+		}
+		assertNavigable(t, &m)
+		if got := selectedLine(&m); got != 19 {
+			t.Errorf("selected line = %d, want 19 (the Beta header just below the separator)", got)
+		}
+		if got := m.nav[m.cursor].header; got != "Beta" {
+			t.Errorf("cursor on %q, want the Beta section header", got)
+		}
+	})
+
+	t.Run("up lands on the channel before the separator", func(t *testing.T) {
+		m := newModel(t)
+		m.ScrollDown(15)
+		_ = m.View(height, 30) // clamps the cursor to A12 at line 15
+		// A12 → A13 → A14 → Beta header → B00 → B01
+		for range 5 {
+			m.MoveDown()
+		}
+		_ = m.View(height, 30)
+		if got := m.SelectedID(); got != "B01" {
+			t.Fatalf("setup: selected = %q, want B01 (line 21)", got)
+		}
+		if got := m.yOffset; got != 15 {
+			t.Fatalf("setup: yOffset = %d, want 15", got)
+		}
+
+		m.PageUp(3) // line 21 - 3 = line 18, the blank separator
+
+		if got := m.yOffset; got != 12 {
+			t.Errorf("yOffset = %d, want 12", got)
+		}
+		assertNavigable(t, &m)
+		if got := selectedLine(&m); got != 17 {
+			t.Errorf("selected line = %d, want 17 (A14, just above the separator)", got)
+		}
+		if got := m.SelectedID(); got != "A14" {
+			t.Errorf("selected = %q, want A14", got)
+		}
+	})
+}
