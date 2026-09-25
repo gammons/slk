@@ -99,6 +99,12 @@ func main() {
 				os.Exit(1)
 			}
 			os.Exit(0)
+		case "export":
+			if err := exportChannel(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
 		case "--dump-sections":
 			if err := dumpSections(); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -165,6 +171,8 @@ Usage:
   slk --remove-workspace  Remove a configured workspace (interactive)
   slk --list-workspaces   List configured workspaces (TeamID, Slug, Name)
   slk --dump-sections     Dump raw users.channelSections.list JSON (diagnostic)
+  slk export [flags]      Export a channel's messages and threads to Markdown
+                          (see 'slk export --help')
   slk --version          Print version and exit
   slk --help             Show this help
 

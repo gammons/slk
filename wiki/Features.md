@@ -118,6 +118,36 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
 - Shows other people's state too: their custom status emoji (🎧 instead while they are in a huddle) follows their name on DM rows, message authors and channel-finder rows, `⊘` replaces the presence dot while they are in DND, and an open DM's header shows the full status text and when their DND ends
 - Statuses and DND disappear when they expire; a huddle is re-checked every minute, because Slack does not always announce that one ended
 
+## Export
+
+- Save the open thread to Markdown with `S` (see [[Keybindings]])
+- Export one channel's messages and threads for a date range, without
+  launching the TUI:
+
+  ```sh
+  slk export \
+    --workspace example-workspace \
+    --channel project_alpha \
+    --since 2026-04-01 \
+    --until 2026-07-01 \
+    --timezone America/New_York \
+    --output ./project-alpha-export \
+    --overlap 14
+  ```
+
+  Each conversation (a standalone message, or a thread with its replies)
+  becomes one Markdown file, and `index.md` links them by day.
+  - `--since` is inclusive and `--until` exclusive, both read as midnight in
+    `--timezone` (default: local). `--until` defaults to tomorrow.
+  - `--overlap N` widens the range by N calendar days on each side.
+  - A reply inside the range is exported even when its thread started
+    earlier; the older parent is kept, labelled, as context. Finding those
+    threads means scanning the channel's whole earlier history, so a first
+    export of a long-lived channel takes a while.
+  - `--workspace` takes a slug, team ID or name, and may be omitted with a
+    single workspace. `--channel` takes a name or ID. `--output` must be
+    empty or absent, and defaults to a folder under the exports directory.
+
 ## Connectivity
 
 - Browser-cookie auth (`xoxc` + `d`) — works as any user, no Slack App required
