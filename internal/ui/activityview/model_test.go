@@ -1,12 +1,16 @@
 package activityview
 
 import (
+	"image/color"
+	"regexp"
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 func TestActivityGlyph(t *testing.T) {
@@ -163,6 +167,105 @@ func TestRenderRowsSeparatesCards(t *testing.T) {
 		if blank := strings.TrimSpace(ansi.Strip(l)) == ""; blank != isSeparator {
 			t.Errorf("line %d blank=%v, want %v: %q", i, blank, isSeparator, ansi.Strip(l))
 		}
+	}
+}
+
+var sgrFgRe = regexp.MustCompile(`\x1b\[[0-9;]*?38;2;(\d+;\d+;\d+)[0-9;]*m`)
+
+// fgOf returns the "r;g;b" truecolor foreground a style emits.
+func fgOf(t *testing.T, c color.Color) string {
+	t.Helper()
+	m := sgrFgRe.FindStringSubmatch(lipgloss.NewStyle().Foreground(c).Render("x"))
+	if m == nil {
+		t.Fatalf("style for %v emitted no truecolor foreground", c)
+	}
+	return m[1]
+}
+
+// fgBefore returns the last truecolor foreground set before word in line.
+func fgBefore(t *testing.T, line, word string) string {
+	t.Helper()
+	i := strings.Index(line, word)
+	if i < 0 {
+		t.Fatalf("%q not found in %q", word, ansi.Strip(line))
+	}
+	all := sgrFgRe.FindAllStringSubmatch(line[:i], -1)
+	if len(all) == 0 {
+		return ""
+	}
+	return all[len(all)-1][1]
+}
+
+// The preview is the message itself, rendered like everywhere else in
+// slk: emoji shortcodes become emoji, channel references resolve, and the
+// text is in the normal text colour rather than the muted metadata one.
+func TestRenderCard_PreviewRendersSlackMarkup(t *testing.T) {
+	m := New(map[string]string{"U1": "alice"}, "")
+	m.SetChannelNames(map[string]string{"C1": "general", "C9": "hiring"})
+	it := core.ActivityItem{Type: "at_user", ChannelID: "C1", TS: "1.1", AuthorID: "U1"}
+	m.SetItems([]core.ActivityItem{it})
+	m.SetBodies(map[string]core.ActivityMessage{
+		core.ActivityMsgKey("C1", "1.1"): {Text: ":wave: hello see <#C9>", UserID: "U1"},
+	})
+
+	_, l2 := m.renderCard(it, 80, false)
+	plain := ansi.Strip(l2)
+	for _, want := range []string{"👋", "hello", "#hiring"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("preview missing %q: %q", want, plain)
+		}
+	}
+	for _, raw := range []string{":wave:", "<#C9"} {
+		if strings.Contains(plain, raw) {
+			t.Errorf("preview shows raw markup %q: %q", raw, plain)
+		}
+	}
+	if text, muted := fgOf(t, styles.TextPrimary), fgOf(t, styles.TextMuted); text == muted {
+		t.Fatalf("theme's text and muted colours are equal (%s); test cannot tell them apart", text)
+	} else if got := fgBefore(t, l2, "hello"); got != text {
+		t.Errorf("preview text colour = %s, want the text colour %s (muted is %s)", got, text, muted)
+	}
+}
+
+var sgrBgRe = regexp.MustCompile(`\x1b\[[0-9;]*?48;2;(\d+;\d+;\d+)[0-9;]*m`)
+
+// The renderer restores the theme background after every styled span.
+// On the selected card that must be the selection tint instead, or the
+// text after a link or mention loses the highlight.
+func TestRenderCard_SelectedPreviewKeepsSelectionTint(t *testing.T) {
+	m := New(nil, "")
+	m.SetChannelNames(map[string]string{"C9": "hiring"})
+	it := core.ActivityItem{Type: "at_user", ChannelID: "C1", TS: "1.1"}
+	m.SetItems([]core.ActivityItem{it})
+	m.SetBodies(map[string]core.ActivityMessage{
+		core.ActivityMsgKey("C1", "1.1"): {Text: "see <#C9> after"},
+	})
+
+	_, l2 := m.renderCard(it, 60, true)
+	i := strings.Index(l2, "after")
+	if i < 0 {
+		t.Fatalf("preview missing text: %q", ansi.Strip(l2))
+	}
+	bgs := sgrBgRe.FindAllStringSubmatch(l2[:i], -1)
+	if len(bgs) == 0 {
+		t.Fatal("no background set before the text")
+	}
+	tint := sgrBgRe.FindStringSubmatch(lipgloss.NewStyle().Background(styles.SelectionTintColor(false)).Render("x"))
+	if got := bgs[len(bgs)-1][1]; got != tint[1] {
+		t.Errorf("background behind text after a channel link = %s, want the selection tint %s", got, tint[1])
+	}
+}
+
+// A reaction card leads with the reaction itself, rendered as an emoji.
+func TestRenderCard_ReactionRendersEmoji(t *testing.T) {
+	m := New(nil, "")
+	it := core.ActivityItem{Type: "message_reaction", ChannelID: "C1", TS: "1.1", Reaction: "eyes"}
+	m.SetItems([]core.ActivityItem{it})
+
+	_, l2 := m.renderCard(it, 80, false)
+	plain := ansi.Strip(l2)
+	if !strings.Contains(plain, "👀") || strings.Contains(plain, ":eyes:") {
+		t.Errorf("reaction preview = %q, want the 👀 emoji and no :eyes: shortcode", plain)
 	}
 }
 

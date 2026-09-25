@@ -19,7 +19,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/core"
-	"github.com/gammons/slk/internal/slackfmt"
+	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/muesli/reflow/truncate"
 )
@@ -37,6 +37,10 @@ const (
 // so theme changes propagate via styles.Apply().
 func mutedStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(styles.TextMuted)
+}
+
+func bodyStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(styles.TextPrimary)
 }
 
 func unreadDotStyle() lipgloss.Style {
@@ -509,19 +513,32 @@ func (m *Model) renderCard(it core.ActivityItem, width int, selected bool) (stri
 	}
 	line1 := layoutLine(left, right, contentWidth)
 
-	// Collapse the body to a single line: a card is exactly cardStride
-	// lines, so any newline in the message would desync the flat-list
-	// windowing/click math. strings.Fields folds newlines/tabs/runs of
-	// spaces into single spaces.
-	preview := strings.Join(strings.Fields(slackfmt.StripMarkup(body.Text, m.userNames)), " ")
+	// Render the body the way the Threads view and message pane do, then
+	// fold it onto one line: a card has exactly cardContentLines lines,
+	// so a newline in the message would desync the windowing/click math.
+	opts := messages.RenderSlackMarkdownOpts{UserNames: m.userNames, ChannelNames: m.channelNames}
+	preview := ""
+	if body.Text != "" {
+		preview = messages.RenderSlackMarkdownWith(body.Text, opts)
+	}
 	if detail := activityDetail(it); detail != "" {
+		detail = messages.RenderSlackMarkdownWith(detail, opts)
 		if preview != "" {
 			preview = detail + "  " + preview
 		} else {
 			preview = detail
 		}
 	}
-	line2 := "  " + mutedStyle().Render(preview)
+	// The renderer leaves plain text unstyled, so set the base text colour
+	// here (the message pane does the same via styles.MessageText). Only
+	// the foreground: a background would paint over the selection tint.
+	preview = strings.ReplaceAll(preview, "\n", " ")
+	if selected {
+		// The renderer restores the theme background after each styled
+		// span; on the selected card that must be the selection tint.
+		preview = messages.RepaintBgToSelectionTint(preview, m.focused)
+	}
+	line2 := "  " + bodyStyle().Render(preview)
 
 	return m.wrapLine(line1, contentWidth, selected), m.wrapLine(line2, contentWidth, selected)
 }
