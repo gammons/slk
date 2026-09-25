@@ -3,8 +3,11 @@ package slackclient
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"net/url"
+	"slices"
 	"strconv"
 
 	"github.com/gammons/slk/internal/core"
@@ -281,6 +284,15 @@ type messageIDsGroup struct {
 	Timestamps []string `json:"timestamps"`
 }
 
+// activityMessagesBatch is the most channels one messages.list call
+// names. Slack rejects larger requests with too_many_channels. The limit
+// is undocumented: a live workspace accepted 9 channels and rejected 39.
+// A batch that is still rejected is split in half and retried, so the
+// exact figure does not have to be right.
+const activityMessagesBatch = 8
+
+var errTooManyChannels = errors.New("messages.list: too_many_channels")
+
 // GetActivityMessages hydrates message bodies for a set of (channel, ts)
 // refs via Slack's internal messages.list endpoint (the same batch call
 // the web client uses to fill the Activity feed's previews). refs maps a
@@ -288,17 +300,67 @@ type messageIDsGroup struct {
 // is keyed by core.ActivityMsgKey(channel, ts); refs the server doesn't return
 // are simply absent (callers render a ref-only row until — or if — a body
 // arrives). Parses leniently and never errors on a single missing message.
+//
+// The refs are fetched in batches of at most activityMessagesBatch
+// channels. A batch that fails is skipped; an error is returned only when
+// no batch succeeded.
 func (c *Client) GetActivityMessages(ctx context.Context, refs map[string][]string) (map[string]ActivityMessage, error) {
-	if len(refs) == 0 {
-		return map[string]ActivityMessage{}, nil
-	}
-	groups := make([]messageIDsGroup, 0, len(refs))
+	channels := make([]string, 0, len(refs))
 	for ch, tss := range refs {
-		if ch == "" || len(tss) == 0 {
+		if ch != "" && len(tss) > 0 {
+			channels = append(channels, ch)
+		}
+	}
+	slices.Sort(channels)
+
+	var batches [][]messageIDsGroup
+	for start := 0; start < len(channels); start += activityMessagesBatch {
+		end := min(start+activityMessagesBatch, len(channels))
+		batch := make([]messageIDsGroup, 0, end-start)
+		for _, ch := range channels[start:end] {
+			batch = append(batch, messageIDsGroup{Channel: ch, Timestamps: refs[ch]})
+		}
+		batches = append(batches, batch)
+	}
+	return c.fetchMessageBatches(ctx, batches)
+}
+
+// fetchMessageBatches fetches each batch and merges the bodies. It
+// returns an error only if every batch failed.
+func (c *Client) fetchMessageBatches(ctx context.Context, batches [][]messageIDsGroup) (map[string]ActivityMessage, error) {
+	out := map[string]ActivityMessage{}
+	var firstErr error
+	succeeded := false
+	for _, batch := range batches {
+		bodies, err := c.fetchMessageBatch(ctx, batch)
+		if err != nil {
+			debuglog.General("messages.list: batch of %d channels failed: %v", len(batch), err)
+			if firstErr == nil {
+				firstErr = err
+			}
 			continue
 		}
-		groups = append(groups, messageIDsGroup{Channel: ch, Timestamps: tss})
+		succeeded = true
+		maps.Copy(out, bodies)
 	}
+	if !succeeded && firstErr != nil {
+		return nil, firstErr
+	}
+	return out, nil
+}
+
+// fetchMessageBatch makes one messages.list call, splitting the batch in
+// half while Slack rejects it as too_many_channels.
+func (c *Client) fetchMessageBatch(ctx context.Context, groups []messageIDsGroup) (map[string]ActivityMessage, error) {
+	bodies, err := c.callMessagesList(ctx, groups)
+	if errors.Is(err, errTooManyChannels) && len(groups) > 1 {
+		mid := len(groups) / 2
+		return c.fetchMessageBatches(ctx, [][]messageIDsGroup{groups[:mid], groups[mid:]})
+	}
+	return bodies, err
+}
+
+func (c *Client) callMessagesList(ctx context.Context, groups []messageIDsGroup) (map[string]ActivityMessage, error) {
 	idsJSON, err := json.Marshal(groups)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling messages.list ids: %w", err)
@@ -333,6 +395,9 @@ func parseActivityMessages(body []byte) (map[string]ActivityMessage, error) {
 		return nil, fmt.Errorf("parsing messages.list: %w (body=%s)", err, truncateForLog(body))
 	}
 	if !env.OK {
+		if env.Error == "too_many_channels" {
+			return nil, errTooManyChannels
+		}
 		return nil, fmt.Errorf("messages.list: %s (body=%s)", env.Error, truncateForLog(body))
 	}
 	out := make(map[string]ActivityMessage)
