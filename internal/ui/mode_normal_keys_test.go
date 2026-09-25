@@ -2274,6 +2274,48 @@ func TestNormalModeKeys(t *testing.T) {
 	})
 }
 
+// TestChord_GGModeChangeDisarms is the `gg` twin of
+// TestChord_ModeChangeDisarms (windows_chord_test.go): a mode change
+// from outside the normal-mode handler -- the global ctrl+c
+// quit-confirm is the reachable case -- must disarm a half-typed `gg`.
+// Without the `|| a.pendingTop` in SetMode's guard the chord survives
+// the prompt, and the next unrelated `g` after cancelling it completes
+// the chord and jumps to the top.
+func TestChord_GGModeChangeDisarms(t *testing.T) {
+	a := newTestApp(t, normalOpts()...)
+	focusMessageAt(t, a, 3)
+
+	_ = dispatchModeKey(a, keyPress('g'))
+	if !a.pendingTop {
+		t.Fatal("precondition: first g did not arm the chord")
+	}
+	if got := statusHint(a); !strings.Contains(got, "g …") {
+		t.Fatalf("precondition: pending g hint missing, got %q", got)
+	}
+
+	a.SetMode(ModeConfirm) // e.g. global ctrl+c intercept fires mid-chord
+	if a.pendingTop {
+		t.Fatal("any mode change must disarm the pending gg chord")
+	}
+	if got := statusHint(a); strings.Contains(got, "g …") {
+		t.Errorf("after SetMode disarm: pending hint must clear, got %q", got)
+	}
+	if got := statusHint(a); !strings.Contains(got, "? for keybindings") {
+		t.Errorf("after SetMode disarm: default hint must be restored, got %q", got)
+	}
+
+	// Cancelling the prompt and pressing g again starts a fresh chord;
+	// it must not complete the one the prompt interrupted.
+	a.SetMode(ModeNormal)
+	_ = dispatchModeKey(a, keyPress('g'))
+	if !a.pendingTop {
+		t.Error("g after the disarm must re-arm the chord")
+	}
+	if got := a.messagepane.SelectedIndex(); got != 3 {
+		t.Errorf("selected index = %d, want 3: g after the disarm must not complete the interrupted chord", got)
+	}
+}
+
 // ---------------------------------------------------------------------
 // Row helpers
 // ---------------------------------------------------------------------
