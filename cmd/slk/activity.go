@@ -12,10 +12,14 @@ import (
 
 // activityFetchFunc builds the ActivityService.Fetch closure: one page
 // of the workspace's activity.feed.
+//
+// Both Activity closures resolve the workspace by the requested teamID,
+// not router.Active(): a workspace switch can land between dispatch and
+// execution, and the result is labelled with teamID.
 func activityFetchFunc(router *workspaceRouter) core.ActivityFetchFunc {
 	return func(teamID ids.TeamID, limit int, unreadOnly bool) core.Msg {
 		teamIDStr := string(teamID)
-		wctx := router.Active()
+		wctx := router.ByID(teamIDStr)
 		if wctx == nil {
 			return nil
 		}
@@ -43,7 +47,7 @@ func activityFetchFunc(router *workspaceRouter) core.ActivityFetchFunc {
 func activityHydrateFunc(router *workspaceRouter) core.ActivityHydrateFunc {
 	return func(teamID ids.TeamID, refs map[string][]string) core.Msg {
 		teamIDStr := string(teamID)
-		wctx := router.Active()
+		wctx := router.ByID(teamIDStr)
 		if wctx == nil {
 			return nil
 		}
