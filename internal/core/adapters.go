@@ -160,11 +160,11 @@ type activityAdapter struct {
 	hydrate ActivityHydrateFunc
 }
 
-func (a activityAdapter) Fetch(teamID ids.TeamID, limit int, cursor string, unreadOnly bool) Msg {
+func (a activityAdapter) Fetch(teamID ids.TeamID, limit int, unreadOnly bool) Msg {
 	if a.fetch == nil {
 		return nil
 	}
-	return a.fetch(teamID, limit, cursor, unreadOnly)
+	return a.fetch(teamID, limit, unreadOnly)
 }
 
 func (a activityAdapter) Hydrate(teamID ids.TeamID, refs map[string][]string) Msg {
@@ -661,10 +661,10 @@ type ThreadReplySendFunc func(channelID ids.ChannelID, threadTS ids.ThreadTS, te
 // Returns the resulting Msg (typically ThreadsListLoadedMsg).
 type ThreadsListFetchFunc func(teamID ids.TeamID) Msg
 
-// ActivityFetchFunc loads one page of the Activity feed for a
+// ActivityFetchFunc loads the first page of the Activity feed for a
 // workspace. Returns the resulting Msg (typically
 // ActivityListLoadedMsg).
-type ActivityFetchFunc func(teamID ids.TeamID, limit int, cursor string, unreadOnly bool) Msg
+type ActivityFetchFunc func(teamID ids.TeamID, limit int, unreadOnly bool) Msg
 
 // ActivityHydrateFunc fetches message bodies for a page's refs.
 // Returns the resulting Msg (typically ActivityBodiesLoadedMsg).

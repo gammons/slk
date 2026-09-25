@@ -1265,7 +1265,7 @@ func run() error {
 		}))
 
 		app.SetActivityService(core.NewActivityService(
-			func(teamID ids.TeamID, limit int, cursor string, unreadOnly bool) core.Msg {
+			func(teamID ids.TeamID, limit int, unreadOnly bool) core.Msg {
 				teamIDStr := string(teamID)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1273,7 +1273,7 @@ func run() error {
 				}
 				fetchCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 				defer cancel()
-				result, err := wctx.Client.GetActivityFeed(fetchCtx, limit, cursor, unreadOnly)
+				result, err := wctx.Client.GetActivityFeed(fetchCtx, limit, "", unreadOnly)
 				if err != nil {
 					log.Printf("Warning: GetActivityFeed(%s): %v", teamIDStr, err)
 					// Return nil (no message) on failure so the existing
@@ -1284,9 +1284,8 @@ func run() error {
 					return nil
 				}
 				return ui.ActivityListLoadedMsg{
-					TeamID:     teamIDStr,
-					Items:      result.Items,
-					NextCursor: result.NextCursor,
+					TeamID: teamIDStr,
+					Items:  result.Items,
 				}
 			},
 			func(teamID ids.TeamID, refs map[string][]string) core.Msg {

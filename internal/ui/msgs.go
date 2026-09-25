@@ -207,9 +207,8 @@ type (
 	// feed items for the named workspace. The App ignores it if it
 	// doesn't match the active team. Mirrors ThreadsListLoadedMsg.
 	ActivityListLoadedMsg struct {
-		TeamID     string
-		Items      []core.ActivityItem
-		NextCursor string
+		TeamID string
+		Items  []core.ActivityItem
 	}
 	// ActivitySelectedMsg is dispatched when the user presses Enter on
 	// an Activity row. The App opens the underlying thread (ThreadTS

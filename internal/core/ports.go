@@ -108,12 +108,10 @@ type ThreadService interface {
 // Marking items read is out of scope: opening an item marks the
 // underlying conversation read via existing paths.
 type ActivityService interface {
-	// Fetch loads one page of the Activity feed for teamID. limit is
-	// the max items; cursor is the response_metadata.next_cursor for
-	// pagination (empty for the first page); unreadOnly requests the
-	// server-side unread filter. Returns a Msg (typically
-	// ActivityListLoadedMsg).
-	Fetch(teamID ids.TeamID, limit int, cursor string, unreadOnly bool) Msg
+	// Fetch loads the first page of the Activity feed for teamID.
+	// limit is the max items; unreadOnly requests the server-side
+	// unread filter. Returns a Msg (typically ActivityListLoadedMsg).
+	Fetch(teamID ids.TeamID, limit int, unreadOnly bool) Msg
 
 	// Hydrate fetches message bodies for the Activity page's refs
 	// (activity.feed returns refs only). refs maps channel ID to the

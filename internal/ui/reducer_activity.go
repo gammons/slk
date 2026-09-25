@@ -8,8 +8,8 @@
 //	                            mark the sidebar Activity row active,
 //	                            and kick a feed fetch.
 //	ActivityListLoadedMsg     - feed fetch returned: push items into
-//	                            the view, store the pagination cursor,
-//	                            refresh the sidebar unread badge, and kick
+//	                            the view, refresh the sidebar unread
+//	                            badge, and kick
 //	                            a second fetch to hydrate message bodies
 //	                            (activity.feed returns refs only).
 //	ActivityBodiesLoadedMsg   - messages.list hydration returned: install
@@ -74,7 +74,7 @@ var reduceActivity reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		team := ids.TeamID(a.activeTeamID)
 		unreadOnly := a.activityView.UnreadOnly()
 		return func() tea.Msg {
-			return activity.Fetch(team, activityFeedPageLimit, "", unreadOnly)
+			return activity.Fetch(team, activityFeedPageLimit, unreadOnly)
 		}, true
 
 	case ActivityToggleUnreadMsg:
@@ -89,7 +89,7 @@ var reduceActivity reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		activity := a.activity
 		team := ids.TeamID(a.activeTeamID)
 		return func() tea.Msg {
-			return activity.Fetch(team, activityFeedPageLimit, "", unreadOnly)
+			return activity.Fetch(team, activityFeedPageLimit, unreadOnly)
 		}, true
 
 	case ActivityListLoadedMsg:
@@ -97,7 +97,6 @@ var reduceActivity reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			return nil, true
 		}
 		a.activityView.SetItems(m.Items)
-		a.activityNextCursor = m.NextCursor
 		a.sidebar.SetActivityUnreadCount(a.activityView.UnreadCount())
 		// activity.feed returns refs only. Kick a second fetch to hydrate
 		// the message bodies (mention text, reply, reacted-to message, DM)

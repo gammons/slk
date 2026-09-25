@@ -370,11 +370,6 @@ type App struct {
 	lastOpenedChannelID string
 	lastOpenedThreadTS  string
 
-	// activityNextCursor holds the response_metadata.next_cursor from
-	// the most recent Activity-feed page, for paginating further pages
-	// (phase 2). Refreshed by every ActivityListLoadedMsg.
-	activityNextCursor string
-
 	// pendingThreadFetchGen is bumped by every debounced openSelectedThreadCmd
 	// call (j/k path). The threadFetchDebounceMsg handler only runs the network
 	// fetch when its `gen` matches; older ticks are dropped so a held j produces

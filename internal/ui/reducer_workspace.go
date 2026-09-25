@@ -194,7 +194,6 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 		a.activityView.SetItems(nil)
 		a.activityView.SetBodies(nil)
 		a.sidebar.SetActivityUnreadCount(0)
-		a.activityNextCursor = ""
 		a.lastOpenedChannelID = ""
 		a.lastOpenedThreadTS = ""
 		// Apply the resolved theme for the initial active
@@ -259,7 +258,7 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 		team := ids.TeamID(m.TeamID)
 		unreadOnly := a.activityView.UnreadOnly()
 		batch = append(batch, func() tea.Msg {
-			return activity.Fetch(team, activityFeedPageLimit, "", unreadOnly)
+			return activity.Fetch(team, activityFeedPageLimit, unreadOnly)
 		})
 	}
 	// Initial threads-list fetch fires for every workspace as it
@@ -325,7 +324,6 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	a.activityView.SetItems(nil)
 	a.activityView.SetBodies(nil)
 	a.sidebar.SetActivityUnreadCount(0)
-	a.activityNextCursor = ""
 	a.lastOpenedChannelID = ""
 	a.lastOpenedThreadTS = ""
 	a.CloseThread()
@@ -415,7 +413,7 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	activity := a.activity
 	unreadOnly := a.activityView.UnreadOnly()
 	batch = append(batch, func() tea.Msg {
-		return activity.Fetch(team, activityFeedPageLimit, "", unreadOnly)
+		return activity.Fetch(team, activityFeedPageLimit, unreadOnly)
 	})
 	// Must run after ResetPresence and a.activeTeamID above, so its
 	// UserDNDChangeMsg result isn't wiped or dropped as stale.
