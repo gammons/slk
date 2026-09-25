@@ -202,6 +202,30 @@ func TestEnterWhileLoadingIsNoop(t *testing.T) {
 	}
 }
 
+// ActionSelect implies Selected() reports a hit: with zero results,
+// enter is a no-op rather than a select of nothing.
+// handleWorkspaceSearchMode relies on this and does not re-check ok.
+func TestEnterOnEmptyResultsIsNoop(t *testing.T) {
+	m := New()
+	m.Open()
+	for _, r := range "deploy" {
+		m.HandleKey(string(r))
+	}
+	if act := m.HandleKey("enter"); act != ActionSubmit {
+		t.Fatalf("first enter = %v, want ActionSubmit", act)
+	}
+	m.SetResults(nil, 0)
+	if m.Loading() {
+		t.Fatal("precondition: still loading after SetResults")
+	}
+	if _, ok := m.Selected(); ok {
+		t.Fatal("precondition: Selected reports a hit with zero results")
+	}
+	if act := m.HandleKey("enter"); act != ActionNone {
+		t.Fatalf("enter on empty results = %v, want ActionNone", act)
+	}
+}
+
 func TestCtrlPNNavigation(t *testing.T) {
 	m := New()
 	m.Open()
