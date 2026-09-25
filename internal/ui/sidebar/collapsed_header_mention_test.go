@@ -216,8 +216,9 @@ func TestCollapsedHeader_SelectedVariantCarriesBothFigures(t *testing.T) {
 		}
 	})
 
-	// Nav is [Threads, Channels header]; one MoveDown selects the header.
-	m.MoveDown()
+	// Nav is [Threads, Activity, Channels header].
+	m.MoveDown() // Activity
+	m.MoveDown() // Channels header
 	if name, ok := m.IsSectionHeaderSelected(); !ok || name != "Channels" {
 		t.Fatalf("precondition: expected the Channels header selected, got name=%q ok=%v", name, ok)
 	}

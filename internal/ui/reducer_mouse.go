@@ -115,6 +115,14 @@ func reduceMouseWheel(a *App, m tea.MouseWheelMsg) tea.Cmd {
 			// does not change the highlighted thread card.
 			return nil
 		}
+		if a.view == ViewActivity {
+			if up {
+				a.activityView.ScrollUp(wheelLinesPerNotch)
+			} else {
+				a.activityView.ScrollDown(wheelLinesPerNotch)
+			}
+			return nil
+		}
 		if up {
 			a.messagepane.ScrollUp(wheelLinesPerNotch)
 			// Backfill older history when the viewport hits the
@@ -218,14 +226,17 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 			}
 		}
 		// ClickAt returns ok=false for every row that is not a
-		// channel: the synthetic Threads row and section headers. It
-		// has still moved the sidebar's own selection to the clicked
-		// row, so dispatch on that -- in the same order as
+		// channel: the synthetic Threads and Activity rows and section
+		// headers. It has still moved the sidebar's own selection to the
+		// clicked row, so dispatch on that -- in the same order as
 		// handleEnter, which is the keyboard half of this decision.
 		// The two must stay in step: a row that responds to Enter but
 		// not to a click reads as a dead row.
 		if a.sidebar.IsThreadsSelected() {
 			return func() tea.Msg { return ThreadsViewActivatedMsg{} }
+		}
+		if a.sidebar.IsActivitySelected() {
+			return func() tea.Msg { return ActivityViewActivatedMsg{} }
 		}
 		// Section header: expand or collapse it in place, matching the
 		// Enter behaviour. Returns false when the selected row is not
@@ -259,6 +270,22 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 			panel, _, py, ok := a.panelAt(m.X, m.Y)
 			if ok && panel == PanelMessages && py >= 0 && a.threadsView.ClickAt(py) {
 				return a.openSelectedThreadCmd(false)
+			}
+			return nil
+		}
+		// In the Activity view the messages-pane region renders
+		// activityView; route the click through activityView.ClickAt so
+		// the cursor follows, then open the highlighted item (mirrors
+		// the ViewThreads branch and the j/k/Enter paths).
+		if a.view == ViewActivity {
+			panel, _, py, ok := a.panelAt(m.X, m.Y)
+			if ok && panel == PanelMessages && py >= 0 && a.activityView.ClickAt(py) {
+				if it, ok := a.activityView.SelectedItem(); ok {
+					channelID, ts, threadTS := it.ChannelID, it.TS, it.ThreadTS
+					return func() tea.Msg {
+						return ActivitySelectedMsg{ChannelID: channelID, TS: ts, ThreadTS: threadTS}
+					}
+				}
 			}
 			return nil
 		}

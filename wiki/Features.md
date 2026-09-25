@@ -64,6 +64,25 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
   v1 is computed from the local SQLite cache, so threads from channels
   you have not yet opened in slk will not appear until they are seen.
 
+## Activity
+
+- **Activity view** (`◉ Activity` in the sidebar, below Threads): the same
+  feed as the Activity tab in the official client — @mentions (including
+  `@here`/`@channel`, user groups and keywords), replies in threads you
+  follow, reactions to your messages, and DMs. Open it from the sidebar,
+  with `Ctrl+a` (which toggles back to your channel), or with `:activity`.
+- Each item is a card: who, what happened and where (`Mention in #general`,
+  `Reacted in DM`, `Thread in ◆ private`), how long ago, and an unread dot,
+  over the message itself — rendered like the message pane, with emoji,
+  mentions and channel links. Reactions lead with the emoji; DMs are headed
+  by the other person, and your own latest message reads `You: …`
+- `Enter` opens the item: a thread reply opens the thread in the side panel,
+  anything else jumps to the message in its channel
+- `u` toggles unread-only (filtered by Slack, not locally)
+- Shows the 50 most recent items. The sidebar badge counts the unread ones;
+  it refreshes when the workspace connects, when you switch workspaces, and
+  whenever you open the view
+
 ## Reactions
 
 - Search-first picker overlay (`r`) with frecent emoji

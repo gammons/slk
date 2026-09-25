@@ -98,6 +98,9 @@ func (a *App) renderMessagesRegion(frame panelLayoutFrame, themeVer int64, previ
 	if a.view == ViewThreads {
 		return a.renderThreadsViewPanel(msgWidth, msgBorder, contentHeight, msgFocused, msgLayoutKey)
 	}
+	if a.view == ViewActivity {
+		return a.renderActivityViewPanel(msgWidth, msgBorder, contentHeight, msgFocused, msgLayoutKey)
+	}
 	return a.renderChannelMessagesPanel(msgWidth, msgBorder, contentHeight, msgFocused, composeFocused, msgLayoutKey)
 }
 
@@ -142,6 +145,44 @@ func (a *App) renderThreadsViewPanel(msgWidth, msgBorder, contentHeight int, msg
 		msgWidth+msgBorder, contentHeight,
 	)
 	c.store(out, tvVersion, msgWidth, contentHeight, msgLayoutKey)
+	return out
+}
+
+// renderActivityViewPanel handles the a.view == ViewActivity branch:
+// a single bordered panel containing the Activity feed, no compose /
+// typing row. Mirrors renderThreadsViewPanel but caches on its own
+// panelCache slot (renderCache.activityPanel) keyed on
+// activityView.Version.
+//
+// SetUserNames and SetSelfUserID MUST run BEFORE snapshotting
+// activityView.Version (both are equality-checked no-ops in the model,
+// so identical input is free, but reading Version() first would key the
+// cache on a pre-update version). Channel names are fanned out from
+// SetChannels (rare) and not pushed on this hot path.
+func (a *App) renderActivityViewPanel(msgWidth, msgBorder, contentHeight int, msgFocused bool, msgLayoutKey int64) string {
+	a.activityView.SetUserNames(a.userNames)
+	a.activityView.SetSelfUserID(a.currentUserID)
+	avVersion := a.activityView.Version()
+	c := &a.renderCache.activityPanel
+	if c.hit(avVersion, msgWidth, contentHeight, msgLayoutKey) {
+		return c.output
+	}
+	msgBorderStyle := styles.UnfocusedBorder.Width(msgWidth)
+	if msgFocused {
+		msgBorderStyle = styles.FocusedBorder.Width(msgWidth)
+	}
+	msgContentHeight := contentHeight - 2
+	a.layout.SetMsgHeight(msgContentHeight)
+	if msgContentHeight < 3 {
+		msgContentHeight = 3
+	}
+	avView := a.activityView.View(msgContentHeight, msgWidth-2)
+	avView = messages.ReapplyBgAfterResets(avView, messages.BgANSI())
+	out := exactSize(
+		msgBorderStyle.Render(avView),
+		msgWidth+msgBorder, contentHeight,
+	)
+	c.store(out, avVersion, msgWidth, contentHeight, msgLayoutKey)
 	return out
 }
 

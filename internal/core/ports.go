@@ -100,6 +100,26 @@ type ThreadService interface {
 	ThreadLastRead(channelID ids.ChannelID, threadTS ids.ThreadTS) string
 }
 
+// ActivityService is the App's interface to Slack's Activity feed
+// (activity.feed): the notified-items list surfaced by the Activity
+// view — @mentions, thread replies, reactions to your messages, and
+// DMs. Implementations are wired by cmd/slk/main.go.
+//
+// Marking items read is out of scope: opening an item marks the
+// underlying conversation read via existing paths.
+type ActivityService interface {
+	// Fetch loads the first page of the Activity feed for teamID.
+	// limit is the max items; unreadOnly requests the server-side
+	// unread filter. Returns a Msg (typically ActivityListLoadedMsg).
+	Fetch(teamID ids.TeamID, limit int, unreadOnly bool) Msg
+
+	// Hydrate fetches message bodies for the Activity page's refs
+	// (activity.feed returns refs only). refs maps channel ID to the
+	// wanted message timestamps. Returns a Msg (typically
+	// ActivityBodiesLoadedMsg), or nil when there's nothing to fetch.
+	Hydrate(teamID ids.TeamID, refs map[string][]string) Msg
+}
+
 // MessageService is the App's interface to Slack's per-message
 // operations: send, forward, edit, delete, mark-unread, and permalink lookup.
 // Implementations are wired by cmd/slk/main.go.

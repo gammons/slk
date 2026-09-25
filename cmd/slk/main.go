@@ -1263,6 +1263,11 @@ func run() error {
 			},
 		}))
 
+		app.SetActivityService(core.NewActivityService(
+			activityFetchFunc(router),
+			activityHydrateFunc(router),
+		))
+
 		app.SetReactionService(core.NewReactionService(
 			func(channelID ids.ChannelID, messageTS ids.MessageTS, emojiName string) error {
 				wctx := router.Active()

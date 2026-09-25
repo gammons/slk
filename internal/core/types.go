@@ -175,6 +175,38 @@ type ThreadSummary struct {
 	Unread       bool
 }
 
+// ActivityItem is a flattened, UI-friendly representation of a single
+// activity.feed entry. The per-type extraction happens in the Slack
+// client so the UI never touches the raw (and wildly type-dependent)
+// JSON.
+type ActivityItem struct {
+	Key       string // stable dedupe/selection id
+	Type      string // at_user, at_channel, thread_v2, message_reaction, dm, bot_dm_bundle, ...
+	IsUnread  bool
+	IsBot     bool
+	FeedTS    string // sort key (newest first)
+	ChannelID string // resolved target channel (from message OR bundle payload)
+	TS        string // resolved target message ts (may be "")
+	ThreadTS  string // set for thread_v2 (== thread root)
+	AuthorID  string // message author (mentions); "" when unknown
+	Reaction  string // emoji short name, for message_reaction only
+}
+
+// ActivityMessage is a hydrated message body for one activity ref
+// (channel + ts). The Activity feed itself returns only references; the
+// body text and author are fetched separately via messages.list.
+type ActivityMessage struct {
+	Text   string
+	UserID string
+}
+
+// ActivityMsgKey is the map key for a hydrated activity message,
+// combining channel ID and message ts. Shared by the Slack client and
+// the activity view so both sides agree on the lookup key.
+func ActivityMsgKey(channelID, ts string) string {
+	return channelID + "\x00" + ts
+}
+
 // Theme holds the user's color overrides from config.
 type Theme struct {
 	Primary     string `toml:"primary"`

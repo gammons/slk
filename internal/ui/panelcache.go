@@ -81,9 +81,14 @@ type panelRenderCache struct {
 	rail     panelCache
 	sidebar  panelCache
 	msgPanel panelCache
-	msgTop   panelCache
-	thread   panelCache
-	status   panelCache
+	// activityPanel backs the bordered messages region in the Activity
+	// view (no compose). Kept distinct from msgPanel (threads view) so
+	// the two views' independent Version() counters can't collide on a
+	// (version, dims, layoutKey) key when the user switches between them.
+	activityPanel panelCache
+	msgTop        panelCache
+	thread        panelCache
+	status        panelCache
 
 	// winPanes caches the bordered output of unfocused live window
 	// panes, one slot per window (Phase 3). Focused windows render

@@ -1461,7 +1461,7 @@ func TestApp_SidebarHalfPageScrollMovesCursorWithViewport(t *testing.T) {
 	const height = 10
 	app.layout.SetSidebarHeight(height)
 	_ = app.sidebar.View(height, 30)
-	for range 4 {
+	for range 5 { // Threads → Activity → header → C01 → C02 → C03
 		app.handleDown()
 	}
 	_ = app.sidebar.View(height, 30)

@@ -21,6 +21,7 @@ import (
 	"github.com/gammons/slk/internal/ids"
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/slackurl"
+	"github.com/gammons/slk/internal/ui/activityview"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/channelpicker"
 	"github.com/gammons/slk/internal/ui/compose"
@@ -65,6 +66,9 @@ type View int
 const (
 	ViewChannels View = iota
 	ViewThreads
+	// ViewActivity swaps the pane's contents for the Activity feed
+	// (mentions, thread replies, reactions to your messages, DMs).
+	ViewActivity
 )
 
 const (
@@ -129,6 +133,7 @@ type App struct {
 	threadPanel      *thread.Model
 	threadCompose    compose.Model
 	threadsView      threadsview.Model
+	activityView     activityview.Model
 
 	// State
 	mode           Mode
@@ -234,6 +239,12 @@ type App struct {
 	// no-op adapter in NewApp so call sites can dispatch without
 	// nil-checks.
 	threads core.ThreadService
+
+	// activity is the App's ActivityService collaborator: fetches the
+	// Slack Activity feed (mentions, thread replies, reactions, DMs)
+	// for the Activity view. Defaulted to a no-op adapter in NewApp so
+	// call sites can dispatch without nil-checks.
+	activity core.ActivityService
 
 	threadsDirtyDebounce time.Duration
 
@@ -757,6 +768,7 @@ func NewApp() *App {
 		threadPanel:           thread.New(),
 		threadCompose:         compose.New("thread"),
 		threadsView:           threadsview.New(nil, ""),
+		activityView:          activityview.New(nil, ""),
 		linkPicker:            linkpicker.New(),
 		reactionPicker:        reactionpicker.New(),
 		reactionsView:         reactionsview.New(),
@@ -787,6 +799,7 @@ func NewApp() *App {
 		layout:                newPanelLayout(),
 		reactions:             noopReactionService,
 		threads:               noopThreadService,
+		activity:              noopActivityService,
 		messageSvc:            noopMessageService,
 		channels:              noopChannelService,
 		searchSvc:             noopSearchService,
@@ -931,6 +944,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.bootstrap,
 		reduceReactions,
 		reduceThreads,
+		reduceActivity,
 		reduceFocus,
 		reduceSend,
 		reduceChannels,
@@ -1577,6 +1591,10 @@ func (a *App) handleDown() tea.Cmd {
 			// don't fire one conversations.replies call per row.
 			return a.openSelectedThreadCmd(true)
 		}
+		if a.view == ViewActivity {
+			a.activityView.MoveDown()
+			return nil
+		}
 		return a.coalesceContentScroll(+1)
 	case PanelThread:
 		return a.coalesceContentScroll(+1)
@@ -1593,6 +1611,10 @@ func (a *App) handleUp() tea.Cmd {
 			a.threadsView.MoveUp()
 			// k: same debounce as j — see handleDown.
 			return a.openSelectedThreadCmd(true)
+		}
+		if a.view == ViewActivity {
+			a.activityView.MoveUp()
+			return nil
 		}
 		return a.coalesceContentScroll(-1)
 	case PanelThread:
@@ -1728,6 +1750,10 @@ func (a *App) handleGoToBottom() tea.Cmd {
 			// G is a one-shot jump — fire the fetch immediately.
 			return a.openSelectedThreadCmd(false)
 		}
+		if a.view == ViewActivity {
+			a.activityView.GoToBottom()
+			return nil
+		}
 		a.messagepane.GoToBottom()
 	case PanelThread:
 		a.threadPanel.GoToBottom()
@@ -1797,6 +1823,12 @@ func (a *App) scrollFocusedPanel(delta int) tea.Cmd {
 			} else {
 				a.threadsView.ScrollDown(n)
 			}
+		} else if a.view == ViewActivity {
+			if delta < 0 {
+				a.activityView.ScrollUp(n)
+			} else {
+				a.activityView.ScrollDown(n)
+			}
 		} else {
 			if delta < 0 {
 				a.messagepane.ScrollUp(n)
@@ -1859,6 +1891,9 @@ func (a *App) handleEnter() tea.Cmd {
 		if a.sidebar.IsThreadsSelected() {
 			return func() tea.Msg { return ThreadsViewActivatedMsg{} }
 		}
+		if a.sidebar.IsActivitySelected() {
+			return func() tea.Msg { return ActivityViewActivatedMsg{} }
+		}
 		// A section header? Toggle its collapse state and stay in
 		// place. Section headers are also navigable via j/k so the
 		// user can expand/collapse the firehose Channels section
@@ -1885,6 +1920,22 @@ func (a *App) handleEnter() tea.Cmd {
 	// "enter this thread to interact with it"), distinguishing it
 	// from the j/k navigation which preserves PanelMessages focus so
 	// the user can keep walking the list.
+	// In the Activity view, Enter on the highlighted row opens its
+	// underlying message or thread. Mirrors the ViewThreads branch: the
+	// messages-pane slot renders the activityView model, so route the
+	// selection explicitly rather than falling through to the channel
+	// message pane below.
+	if a.focusedPanel == PanelMessages && a.view == ViewActivity {
+		it, ok := a.activityView.SelectedItem()
+		if !ok {
+			return nil
+		}
+		channelID, ts, threadTS := it.ChannelID, it.TS, it.ThreadTS
+		return func() tea.Msg {
+			return ActivitySelectedMsg{ChannelID: channelID, TS: ts, ThreadTS: threadTS}
+		}
+	}
+
 	if a.focusedPanel == PanelMessages && a.view == ViewThreads {
 		if _, ok := a.threadsView.SelectedSummary(); !ok {
 			return nil
@@ -2455,6 +2506,7 @@ func (a *App) SetChannels(items []sidebar.ChannelItem) {
 	a.sidebar.SetItems(items)
 	picks := make([]channelpicker.Channel, 0, len(items))
 	names := make(map[string]string, len(items))
+	types := make(map[string]string, len(items))
 	for _, ch := range items {
 		// Skip entries with empty names (defensive -- they'd never
 		// match a typed query and would clutter the empty-query view).
@@ -2467,6 +2519,7 @@ func (a *App) SetChannels(items []sidebar.ChannelItem) {
 			Type: ch.Type,
 		})
 		names[ch.ID] = ch.Name
+		types[ch.ID] = ch.Type
 	}
 	a.compose.SetChannels(picks)
 	a.threadCompose.SetChannels(picks)
@@ -2476,6 +2529,8 @@ func (a *App) SetChannels(items []sidebar.ChannelItem) {
 	}
 	a.threadPanel.SetChannelNames(names)
 	a.threadsView.SetChannelNames(names)
+	a.activityView.SetChannelNames(names)
+	a.activityView.SetChannelTypes(types)
 }
 
 // SetChannelService wires the App's ChannelService collaborator
@@ -2574,6 +2629,15 @@ func (a *App) SetThreadService(s core.ThreadService) {
 		s = noopThreadService
 	}
 	a.threads = s
+}
+
+// SetActivityService wires the App's ActivityService collaborator
+// (Slack Activity-feed fetch). Build one via core.NewActivityService.
+func (a *App) SetActivityService(s core.ActivityService) {
+	if s == nil {
+		s = noopActivityService
+	}
+	a.activity = s
 }
 
 // SetUnreadService wires the read state the sidebar and workspace rail
@@ -2920,6 +2984,7 @@ func (a *App) downloadFileCmd(att messages.Attachment) tea.Cmd {
 func (a *App) SetUserNames(names map[string]string) {
 	a.userNames = names
 	a.threadsView.SetUserNames(names)
+	a.activityView.SetUserNames(names)
 	for _, m := range a.allWinModels() {
 		m.SetUserNames(names)
 	}
@@ -3058,6 +3123,7 @@ func (a *App) SetReactionService(r core.ReactionService) {
 func (a *App) SetCurrentUserID(userID string) {
 	a.currentUserID = userID
 	a.threadsView.SetSelfUserID(userID)
+	a.activityView.SetSelfUserID(userID)
 	a.messagepane.SetCurrentUser(userID)
 	a.threadPanel.SetCurrentUser(userID)
 }

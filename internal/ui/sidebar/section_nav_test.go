@@ -23,8 +23,9 @@ func TestRenderedSelectionMatchesNavigation(t *testing.T) {
 	// default-collapsed "Channels" section would otherwise hide
 	// "general" from the rendered output.
 	m.ToggleCollapse("Channels")
-	// Step off the synthetic Threads row.
-	m.MoveDown()
+	// Step off the synthetic Threads and Activity rows.
+	m.MoveDown() // Activity
+	m.MoveDown() // first section header
 
 	// Expected nav stops include section headers; the test asserts the
 	// cursor lands on a line containing each name in order. Headers

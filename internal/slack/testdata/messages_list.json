@@ -1,0 +1,20 @@
+{
+  "ok": true,
+  "messages_data": {
+    "C0001TEST": {
+      "messages": [
+        { "ts": "1700000001.000100", "user": "U0001TEST", "text": "first hydrated body" },
+        { "ts": "1700000002.000200", "user": "U0002TEST", "text": "<@U0003TEST> こんにちは *bold*" },
+        { "ts": "", "user": "U0004TEST", "text": "message with no ts is skipped" }
+      ]
+    },
+    "C0002TEST": {
+      "messages": [
+        { "ts": "1700000003.000300", "user": "U0005TEST", "text": "body in another channel" }
+      ]
+    },
+    "C0003TEST": {
+      "messages": "this is not an object — a malformed channel must be skipped, not fatal"
+    }
+  }
+}

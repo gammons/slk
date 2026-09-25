@@ -148,6 +148,32 @@ func (t threadAdapter) ThreadLastRead(channelID ids.ChannelID, threadTS ids.Thre
 	return t.fns.ThreadLastRead(channelID, threadTS)
 }
 
+// NewActivityService builds an ActivityService from closures. Either
+// may be nil; the resulting service no-ops that operation (returns a
+// nil Msg).
+func NewActivityService(fetch ActivityFetchFunc, hydrate ActivityHydrateFunc) ActivityService {
+	return activityAdapter{fetch: fetch, hydrate: hydrate}
+}
+
+type activityAdapter struct {
+	fetch   ActivityFetchFunc
+	hydrate ActivityHydrateFunc
+}
+
+func (a activityAdapter) Fetch(teamID ids.TeamID, limit int, unreadOnly bool) Msg {
+	if a.fetch == nil {
+		return nil
+	}
+	return a.fetch(teamID, limit, unreadOnly)
+}
+
+func (a activityAdapter) Hydrate(teamID ids.TeamID, refs map[string][]string) Msg {
+	if a.hydrate == nil {
+		return nil
+	}
+	return a.hydrate(teamID, refs)
+}
+
 // MessageServiceFuncs is the closure bundle accepted by
 // NewMessageService. Nil Forward returns an unsupported error; other nil
 // fields make the resulting service no-op that operation.
@@ -634,6 +660,15 @@ type ThreadReplySendFunc func(channelID ids.ChannelID, threadTS ids.ThreadTS, te
 // ThreadsListFetchFunc loads the involved-threads list for a workspace.
 // Returns the resulting Msg (typically ThreadsListLoadedMsg).
 type ThreadsListFetchFunc func(teamID ids.TeamID) Msg
+
+// ActivityFetchFunc loads the first page of the Activity feed for a
+// workspace. Returns the resulting Msg (typically
+// ActivityListLoadedMsg).
+type ActivityFetchFunc func(teamID ids.TeamID, limit int, unreadOnly bool) Msg
+
+// ActivityHydrateFunc fetches message bodies for a page's refs.
+// Returns the resulting Msg (typically ActivityBodiesLoadedMsg).
+type ActivityHydrateFunc func(teamID ids.TeamID, refs map[string][]string) Msg
 
 type ReactionAddFunc func(channelID ids.ChannelID, messageTS ids.MessageTS, emoji string) error
 type ReactionRemoveFunc func(channelID ids.ChannelID, messageTS ids.MessageTS, emoji string) error

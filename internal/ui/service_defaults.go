@@ -12,6 +12,7 @@ var (
 	noopChannelService  = core.NewChannelService(core.ChannelServiceFuncs{})
 	noopMessageService  = core.NewMessageService(core.MessageServiceFuncs{})
 	noopThreadService   = core.NewThreadService(core.ThreadServiceFuncs{})
+	noopActivityService = core.NewActivityService(nil, nil)
 	noopReactionService = core.NewReactionService(nil, nil, nil, nil)
 	noopSearchService   = core.NewSearchService(core.SearchServiceFuncs{})
 	noopDesktopService  = core.NewDesktopService(core.DesktopServiceFuncs{})

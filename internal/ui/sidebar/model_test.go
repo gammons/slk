@@ -40,7 +40,8 @@ func TestSidebarNavigation(t *testing.T) {
 	// Expand the Channels section so j/k can reach the channel rows.
 	m.ToggleCollapse("Channels")
 
-	// Nav order: Threads → "Channels" header → C1 → C2 → C3.
+	// Nav order: Threads → Activity → "Channels" header → C1 → C2 → C3.
+	m.MoveDown() // onto the Activity row
 	m.MoveDown() // onto the "Channels" section header
 	if name, ok := m.IsSectionHeaderSelected(); !ok || name != "Channels" {
 		t.Errorf("expected Channels header selected, got name=%q ok=%v", name, ok)
@@ -84,6 +85,7 @@ func TestThreadsItem_MoveDownLeavesIt(t *testing.T) {
 		{ID: "C2", Name: "design", Type: "channel"},
 	})
 	m.ToggleCollapse("Channels")
+	m.MoveDown() // Activity
 	m.MoveDown() // header
 	m.MoveDown() // first channel
 	if m.IsThreadsSelected() {
