@@ -1886,13 +1886,15 @@ func (a *App) openThreadForSelectedMessage() tea.Cmd {
 	if !ok {
 		return nil
 	}
-	// Use the message's own TS as the thread parent.
-	// If it's already a thread reply, use its ThreadTS instead.
-	threadTS := msg.TS
+	// Use the message's own TS as the thread parent. If it's a thread
+	// reply (a thread_broadcast row in the channel feed), the selected
+	// row is NOT the parent: resolve the real parent from the pane
+	// buffer / thread cache via the permalink path, else the reply
+	// would render twice — once as the "parent" and once as a reply.
 	if msg.ThreadTS != "" && msg.ThreadTS != msg.TS {
-		threadTS = msg.ThreadTS
+		return a.openThreadForPermalink(a.activeChannelID, msg.ThreadTS)
 	}
-	return a.openThreadPanel(msg, a.activeChannelID, threadTS)
+	return a.openThreadPanel(msg, a.activeChannelID, msg.TS)
 }
 
 // threadComposeChannelName resolves the display name for the thread's
