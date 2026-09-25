@@ -75,9 +75,10 @@ type rawActivityBundle struct {
 }
 
 type rawActivityPayload struct {
-	ThreadEntry *rawThreadEntry     `json:"thread_entry"`
-	DMEntry     *rawDMEntry         `json:"dm_entry"`
-	Message     *rawActivityMessage `json:"message"`
+	ThreadEntry  *rawThreadEntry     `json:"thread_entry"`
+	DMEntry      *rawLatestEntry     `json:"dm_entry"`
+	ChannelEntry *rawLatestEntry     `json:"channel_entry"`
+	Message      *rawActivityMessage `json:"message"`
 }
 
 type rawThreadEntry struct {
@@ -86,7 +87,9 @@ type rawThreadEntry struct {
 	LatestTS  string `json:"latest_ts"`
 }
 
-type rawDMEntry struct {
+// rawLatestEntry is the shape shared by the dm_entry and channel_entry
+// bundle payloads: a pointer to the conversation's newest message.
+type rawLatestEntry struct {
 	LatestMessage *rawActivityMessage `json:"latest_message"`
 }
 
@@ -176,7 +179,7 @@ func flattenActivityItem(raw rawActivityItem) ActivityItem {
 
 	switch raw.Item.Type {
 	case "at_user", "at_user_group", "at_channel", "at_everyone",
-		"keyword", "list_user_mentioned", "unjoined_channel_mention", "channel":
+		"keyword", "list_user_mentioned", "unjoined_channel_mention":
 		// A mention — reference lives in item.message.
 		if m := raw.Item.Message; m != nil {
 			out.ChannelID = m.Channel
@@ -204,6 +207,11 @@ func flattenActivityItem(raw rawActivityItem) ActivityItem {
 		if de := payloadDMEntry(raw.Item.BundleInfo); de != nil && de.LatestMessage != nil {
 			out.ChannelID = de.LatestMessage.Channel
 			out.TS = de.LatestMessage.TS
+		}
+	case "channel":
+		if ce := payloadChannelEntry(raw.Item.BundleInfo); ce != nil && ce.LatestMessage != nil {
+			out.ChannelID = ce.LatestMessage.Channel
+			out.TS = ce.LatestMessage.TS
 		}
 	case "bot_dm_bundle":
 		if m := payloadMessage(raw.Item.BundleInfo); m != nil {
@@ -233,11 +241,18 @@ func payloadThreadEntry(b *rawActivityBundle) *rawThreadEntry {
 	return b.Payload.ThreadEntry
 }
 
-func payloadDMEntry(b *rawActivityBundle) *rawDMEntry {
+func payloadDMEntry(b *rawActivityBundle) *rawLatestEntry {
 	if b == nil {
 		return nil
 	}
 	return b.Payload.DMEntry
+}
+
+func payloadChannelEntry(b *rawActivityBundle) *rawLatestEntry {
+	if b == nil {
+		return nil
+	}
+	return b.Payload.ChannelEntry
 }
 
 func payloadMessage(b *rawActivityBundle) *rawActivityMessage {

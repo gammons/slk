@@ -158,6 +158,27 @@ func TestParseActivityFeed_SkipsMalformedItem(t *testing.T) {
 // parseActivityMessages maps a messages.list response into a body map keyed
 // by ActivityMsgKey, leniently: an empty-ts message is skipped, a malformed
 // channel is skipped (not fatal), and ok:false is a wrapped error.
+// A "channel" item carries its ref in the bundle payload's channel_entry,
+// not in item.message. The committed capture has no "channel" item, so
+// this body is hand-built to that shape.
+func TestParseActivityFeed_ChannelItemReadsChannelEntry(t *testing.T) {
+	body := []byte(`{"ok":true,"items":[
+		{"is_unread":true,"feed_ts":"4.4","key":"channel-C3","item":{"type":"channel","bundle_info":{"payload":{"channel_entry":{"latest_message":{"channel":"C3","ts":"4.4"}}}}}}
+	]}`)
+
+	res, err := parseActivityFeed(body)
+	if err != nil {
+		t.Fatalf("parseActivityFeed: %v", err)
+	}
+	if len(res.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(res.Items))
+	}
+	it := res.Items[0]
+	if it.ChannelID != "C3" || it.TS != "4.4" {
+		t.Fatalf("channel item ref = (%q, %q), want (\"C3\", \"4.4\")", it.ChannelID, it.TS)
+	}
+}
+
 func TestParseActivityMessages_Fixture(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join("testdata", "messages_list.json"))
 	if err != nil {
