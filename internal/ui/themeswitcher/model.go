@@ -12,10 +12,6 @@ import (
 	"github.com/muesli/reflow/truncate"
 )
 
-// ThemeScope identifies whether a theme selection should be saved to
-// the active workspace or to the global default.
-type ThemeScope = core.ThemeScope
-
 const (
 	ScopeGlobal    = core.ThemeScopeGlobal
 	ScopeWorkspace = core.ThemeScopeWorkspace
@@ -24,7 +20,7 @@ const (
 // ThemeResult is returned when the user selects a theme.
 type ThemeResult struct {
 	Name  string
-	Scope ThemeScope
+	Scope core.ThemeScope
 }
 
 // Model is the theme switcher overlay.
@@ -34,7 +30,7 @@ type Model struct {
 	query      string
 	selected   int // index into filtered
 	visible    bool
-	scope      ThemeScope
+	scope      core.ThemeScope
 	headerText string
 }
 
@@ -57,7 +53,7 @@ func (m *Model) Open() {
 // OpenWithScope shows the overlay scoped to either the active workspace or
 // the global default. headerText, if non-empty, replaces the default
 // "Switch Theme" title in the rendered overlay.
-func (m *Model) OpenWithScope(scope ThemeScope, headerText string) {
+func (m *Model) OpenWithScope(scope core.ThemeScope, headerText string) {
 	m.visible = true
 	m.query = ""
 	m.selected = 0
@@ -67,7 +63,7 @@ func (m *Model) OpenWithScope(scope ThemeScope, headerText string) {
 }
 
 // Scope returns the scope the picker was last opened with.
-func (m Model) Scope() ThemeScope { return m.scope }
+func (m Model) Scope() core.ThemeScope { return m.scope }
 
 // HeaderText returns the header text the picker was last opened with.
 func (m Model) HeaderText() string { return m.headerText }

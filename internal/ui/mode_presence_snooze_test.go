@@ -7,12 +7,13 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/presencemenu"
 )
 
 // statusCall records one invocation of the App's status setter.
 type statusCall struct {
-	action presencemenu.Action
+	action core.PresenceAction
 	mins   int
 }
 
@@ -40,7 +41,7 @@ func snoozeSetupWith(digits string, calls *[]statusCall, withSetter bool) func(*
 		// would see its predecessors' invocations.
 		*calls = nil
 		if withSetter {
-			a.setStatusSetterForTest(func(action presencemenu.Action, mins int) {
+			a.setStatusSetterForTest(func(action core.PresenceAction, mins int) {
 				*calls = append(*calls, statusCall{action: action, mins: mins})
 			})
 		}

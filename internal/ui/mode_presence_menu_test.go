@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/presencemenu"
 )
 
@@ -21,7 +22,7 @@ func openPresenceMenu(calls *[]statusCall, withSetter bool) func(*testing.T, *Ap
 	return func(t *testing.T, a *App) {
 		*calls = nil
 		if withSetter {
-			a.setStatusSetterForTest(func(action presencemenu.Action, mins int) {
+			a.setStatusSetterForTest(func(action core.PresenceAction, mins int) {
 				*calls = append(*calls, statusCall{action: action, mins: mins})
 			})
 		}
@@ -526,11 +527,11 @@ func TestPresenceMenuModeKeys(t *testing.T) {
 
 // assertCommitsTo presses enter and asserts the menu committed the
 // given action, which is how this table observes cursor position.
-func assertCommitsTo(t *testing.T, a *App, want presencemenu.Action) {
+func assertCommitsTo(t *testing.T, a *App, want core.PresenceAction) {
 	t.Helper()
-	var got presencemenu.Action
+	var got core.PresenceAction
 	seen := false
-	a.setStatusSetterForTest(func(action presencemenu.Action, _ int) {
+	a.setStatusSetterForTest(func(action core.PresenceAction, _ int) {
 		got, seen = action, true
 	})
 	_ = dispatchModeKey(a, keyCode(tea.KeyEnter))

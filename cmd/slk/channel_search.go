@@ -4,9 +4,9 @@ import (
 	"context"
 	"sort"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	"github.com/gammons/slk/internal/slack/edge"
-	"github.com/gammons/slk/internal/ui/channelfinder"
 )
 
 // channelSearcher is edgeapi's channels/search, the endpoint that
@@ -41,7 +41,7 @@ const maxTopChannels = 25
 // Returns nil on any failure, which leaves the finder showing its
 // local matches: the same thing it showed before the server answered,
 // and before this function existed at all.
-func searchChannelsRemote(ctx context.Context, s channelSearcher, lastVisited map[string]int64, query string) []channelfinder.Item {
+func searchChannelsRemote(ctx context.Context, s channelSearcher, lastVisited map[string]int64, query string) []core.ChannelFinderItem {
 	if s == nil || query == "" {
 		return nil
 	}
@@ -57,12 +57,12 @@ func searchChannelsRemote(ctx context.Context, s channelSearcher, lastVisited ma
 	// finder resolves membership from the sidebar list it already
 	// holds. Trusting member_channels here would mean two sources
 	// disagreeing about the same flag.
-	items := make([]channelfinder.Item, 0, len(channels))
+	items := make([]core.ChannelFinderItem, 0, len(channels))
 	for _, ch := range channels {
 		if ch.IsArchived {
 			continue
 		}
-		items = append(items, channelfinder.Item{
+		items = append(items, core.ChannelFinderItem{
 			ID:          ch.ID,
 			Name:        ch.Name,
 			Type:        finderChannelType(ch),

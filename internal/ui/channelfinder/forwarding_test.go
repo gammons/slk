@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/gammons/slk/internal/core"
 )
 
 func TestForwardingFiltersAndRanks(t *testing.T) {
@@ -22,14 +24,14 @@ func TestForwardingFiltersAndRanks(t *testing.T) {
 	} {
 		t.Run("query="+tc.query, func(t *testing.T) {
 			m := New()
-			m.SetItems([]Item{
+			m.SetItems([]core.ChannelFinderItem{
 				{ID: "C1", Name: "engineering", Type: "channel", Joined: true, LastVisited: 10},
 				{ID: "D1", Name: "Eng Person", Type: "dm", Joined: true, LastVisited: 20},
 				{ID: "P1", Name: "team-engineering", Type: "private", Joined: true, LastVisited: 40},
 				{ID: "G1", Name: "team-eng-group", Type: "group_dm", Joined: true, LastVisited: 30},
 				{ID: "C2", Name: "eng-browse", Type: "channel"},
 			})
-			m.SetSyntheticItems([]Item{
+			m.SetSyntheticItems([]core.ChannelFinderItem{
 				{ID: ThreadsViewID, Name: "eng-threads", Type: "threads", Joined: true},
 				{ID: "other", Name: "eng-other", Type: "threads"},
 			})
@@ -71,9 +73,9 @@ func TestForwardingOpenResetAndNormalRestoration(t *testing.T) {
 			items[0].Joined = true
 			items[1].Joined = true
 			m.SetItems(items)
-			m.SetSyntheticItems([]Item{{ID: ThreadsViewID, Name: "Threads", Type: "threads", Joined: true}})
+			m.SetSyntheticItems([]core.ChannelFinderItem{{ID: ThreadsViewID, Name: "Threads", Type: "threads", Joined: true}})
 			m.Open()
-			originalItems := append([]Item(nil), m.Items()...)
+			originalItems := append([]core.ChannelFinderItem(nil), m.Items()...)
 			originalFiltered := m.FilteredItems()
 			m.HandleKey("e")
 			m.HandleKey("down")
@@ -125,15 +127,15 @@ func TestForwardingOpenResetAndNormalRestoration(t *testing.T) {
 
 func TestForwardingNavigationAndClicks(t *testing.T) {
 	m := New()
-	var items []Item
+	var items []core.ChannelFinderItem
 	for i := 0; i < maxVisibleRows+3; i++ {
 		items = append(items,
-			Item{ID: fmt.Sprintf("C%02d", i), Name: fmt.Sprintf("channel-%02d", i), Type: "channel", Joined: true},
-			Item{ID: fmt.Sprintf("B%02d", i), Name: fmt.Sprintf("browse-%02d", i), Type: "channel"},
+			core.ChannelFinderItem{ID: fmt.Sprintf("C%02d", i), Name: fmt.Sprintf("channel-%02d", i), Type: "channel", Joined: true},
+			core.ChannelFinderItem{ID: fmt.Sprintf("B%02d", i), Name: fmt.Sprintf("browse-%02d", i), Type: "channel"},
 		)
 	}
 	m.SetItems(items)
-	m.SetSyntheticItems([]Item{{ID: ThreadsViewID, Name: "Threads", Type: "threads", Joined: true}})
+	m.SetSyntheticItems([]core.ChannelFinderItem{{ID: ThreadsViewID, Name: "Threads", Type: "threads", Joined: true}})
 	m.OpenForForwarding()
 	for _, key := range []string{"down", "ctrl+n", "up", "ctrl+p", "up"} {
 		m.HandleKey(key)
@@ -165,13 +167,13 @@ func TestForwardingNavigationAndClicks(t *testing.T) {
 
 func TestForwardingSetItemsRefresh(t *testing.T) {
 	m := New()
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		{ID: "C1", Name: "one", Joined: true},
 		{ID: "C2", Name: "two", Joined: true},
 	})
 	m.OpenForForwarding()
 	m.HandleKey("down")
-	m.SetItems([]Item{{ID: "C3", Name: "browse", Joined: false}})
+	m.SetItems([]core.ChannelFinderItem{{ID: "C3", Name: "browse", Joined: false}})
 	if len(m.FilteredItems()) != 0 || m.HandleKey("enter") != nil {
 		t.Fatal("replacing items left a stale forwarding destination")
 	}
@@ -181,38 +183,38 @@ func TestForwardingUpdates(t *testing.T) {
 	for _, query := range []string{"", "eng"} {
 		t.Run("query="+query, func(t *testing.T) {
 			m := New()
-			m.SetItems([]Item{
+			m.SetItems([]core.ChannelFinderItem{
 				{ID: "C1", Name: "eng-one", Type: "channel", Joined: true},
 				{ID: "C2", Name: "eng-two", Type: "channel", Joined: true},
 			})
-			m.SetSyntheticItems([]Item{{ID: ThreadsViewID, Name: "eng-threads", Type: "threads", Joined: true}})
+			m.SetSyntheticItems([]core.ChannelFinderItem{{ID: ThreadsViewID, Name: "eng-threads", Type: "threads", Joined: true}})
 			m.OpenForForwarding()
 			for _, r := range query {
 				m.HandleKey(string(r))
 			}
 			m.HandleKey("down")
-			m.SetBrowseable([]Item{{ID: "B1", Name: "eng-browse", Type: "channel"}})
-			m.Upsert(Item{ID: "B2", Name: "eng-browse-two", Type: "channel"})
-			m.Upsert(Item{ID: ThreadsViewID, Name: "eng-updated-threads", Type: "threads", Joined: true})
-			m.Upsert(Item{ID: "S2", Name: "eng-synthetic", Type: "threads", Joined: true, Synthetic: true})
+			m.SetBrowseable([]core.ChannelFinderItem{{ID: "B1", Name: "eng-browse", Type: "channel"}})
+			m.Upsert(core.ChannelFinderItem{ID: "B2", Name: "eng-browse-two", Type: "channel"})
+			m.Upsert(core.ChannelFinderItem{ID: ThreadsViewID, Name: "eng-updated-threads", Type: "threads", Joined: true})
+			m.Upsert(core.ChannelFinderItem{ID: "S2", Name: "eng-synthetic", Type: "threads", Joined: true, Synthetic: true})
 			if got := m.FilteredItems(); len(got) != 2 || got[0].ID != "C1" || got[1].ID != "C2" {
 				t.Fatalf("updates admitted ineligible items: %+v", got)
 			}
 
 			// Removing the selected destination must keep Enter and rendering safe.
-			m.Upsert(Item{ID: "C2", Name: "eng-two", Type: "channel", Joined: false})
+			m.Upsert(core.ChannelFinderItem{ID: "C2", Name: "eng-two", Type: "channel", Joined: false})
 			if got := m.FilteredItems(); len(got) != 1 || got[0].ID != "C1" {
 				t.Fatalf("departed channel remains visible: %+v", got)
 			}
 			if result := m.HandleKey("enter"); result == nil || result.ID != "C1" {
 				t.Fatalf("selection after removal = %+v, want C1", result)
 			}
-			m.Upsert(Item{ID: "C1", Name: "eng-one", Type: "channel", Joined: false})
+			m.Upsert(core.ChannelFinderItem{ID: "C1", Name: "eng-one", Type: "channel", Joined: false})
 			if len(m.FilteredItems()) != 0 || m.HandleKey("enter") != nil || m.ClickRow(100, 30, listTopOffset) {
 				t.Fatal("empty forwarding results remained selectable")
 			}
-			m.Upsert(Item{ID: "B1", Name: "eng-browse", Type: "channel", Joined: true})
-			m.Upsert(Item{ID: "D1", Name: "eng-person", Type: "dm", Joined: true})
+			m.Upsert(core.ChannelFinderItem{ID: "B1", Name: "eng-browse", Type: "channel", Joined: true})
+			m.Upsert(core.ChannelFinderItem{ID: "D1", Name: "eng-person", Type: "dm", Joined: true})
 			if got := m.FilteredItems(); len(got) != 2 || got[0].ID != "B1" || got[1].ID != "D1" {
 				t.Fatalf("joined/new destinations missing: %+v", got)
 			}

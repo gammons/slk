@@ -8,7 +8,6 @@ import (
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
-	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/wintree"
@@ -131,7 +130,7 @@ type testAppCfg struct {
 	splits        []wintree.Dir
 	threadSums    []cache.ThreadSummary
 	hasThreadSums bool
-	finderItems   []channelfinder.Item
+	finderItems   []core.ChannelFinderItem
 	openFinder    bool
 	view          View
 }
@@ -236,7 +235,7 @@ func withWindowSplit(dir wintree.Dir) testOpt {
 // App.SetChannelFinderItems is a one-line forwarder to
 // channelFinder.SetItems (app.go:2068), so builders that called either
 // one converge here.
-func withChannelFinderOpen(items ...channelfinder.Item) testOpt {
+func withChannelFinderOpen(items ...core.ChannelFinderItem) testOpt {
 	return func(c *testAppCfg) { c.finderItems, c.openFinder = items, true }
 }
 

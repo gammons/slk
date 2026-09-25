@@ -814,7 +814,7 @@ func NewApp() *App {
 	// can jump to the threads-list view from the same overlay they use
 	// to switch channels (ctrl+t / ctrl+p). Selecting this row dispatches
 	// ThreadsViewActivatedMsg in handleChannelFinderMode below.
-	app.channelFinder.SetSyntheticItems([]channelfinder.Item{{
+	app.channelFinder.SetSyntheticItems([]core.ChannelFinderItem{{
 		ID:     channelfinder.ThreadsViewID,
 		Name:   "Threads",
 		Type:   "threads",
@@ -2555,7 +2555,7 @@ func (a *App) SetUnreadService(s core.UnreadService) {
 	a.workspaceRail.SetUnreadReader(s.UnreadWorkspaces)
 }
 
-func (a *App) SetChannelFinderItems(items []channelfinder.Item) {
+func (a *App) SetChannelFinderItems(items []core.ChannelFinderItem) {
 	a.channelFinder.SetItems(items)
 }
 
@@ -3530,7 +3530,7 @@ func (a *App) tryAttachFromClipboard(target *compose.Model, pathCandidate string
 			)
 		}
 		filename := "slk-paste-" + time.Now().Format("2006-01-02-15-04-05") + ".png"
-		target.AddAttachment(compose.PendingAttachment{
+		target.AddAttachment(core.PendingAttachment{
 			Filename: filename,
 			Bytes:    imgBytes,
 			Mime:     "image/png",
@@ -3553,7 +3553,7 @@ func (a *App) tryAttachFromClipboard(target *compose.Model, pathCandidate string
 				return true, a.uploadToastCmd("Empty file", 2*time.Second)
 			}
 			filename := filepath.Base(path)
-			target.AddAttachment(compose.PendingAttachment{
+			target.AddAttachment(core.PendingAttachment{
 				Filename: filename,
 				Path:     path,
 				Mime:     mime.TypeByExtension(filepath.Ext(path)),

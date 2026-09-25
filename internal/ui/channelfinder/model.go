@@ -34,12 +34,9 @@ type ChannelResult struct {
 	Joined bool   // false => caller should join the channel before opening it
 }
 
-// Item represents a searchable channel/DM entry.
-type Item = core.ChannelFinderItem
-
 // Model is the fuzzy channel finder overlay.
 type Model struct {
-	items      []Item
+	items      []core.ChannelFinderItem
 	filtered   []int // indices into items matching query
 	query      string
 	selected   int // index into filtered
@@ -61,7 +58,7 @@ func New() Model {
 // registered via SetSyntheticItems are preserved at the front of the list so
 // non-channel destinations (e.g. the Threads view) remain reachable across
 // workspace bootstraps.
-func (m *Model) SetItems(items []Item) {
+func (m *Model) SetItems(items []core.ChannelFinderItem) {
 	synth := m.extractSynthetic()
 	m.items = append(synth, items...)
 	m.pruneStatuses()
@@ -91,7 +88,7 @@ func (m *Model) pruneStatuses() {
 // offers alongside channels (e.g. the Threads view). These rows are pinned
 // above real channels under empty-query and preserved across SetItems /
 // SetBrowseable. Pass nil to clear.
-func (m *Model) SetSyntheticItems(items []Item) {
+func (m *Model) SetSyntheticItems(items []core.ChannelFinderItem) {
 	// Drop existing synthetic rows; keep real channels intact.
 	keep := m.items[:0]
 	for _, it := range m.items {
@@ -100,7 +97,7 @@ func (m *Model) SetSyntheticItems(items []Item) {
 		}
 	}
 	// Prepend the new synthetic rows, marking each.
-	merged := make([]Item, 0, len(items)+len(keep))
+	merged := make([]core.ChannelFinderItem, 0, len(items)+len(keep))
 	for _, it := range items {
 		it.Synthetic = true
 		merged = append(merged, it)
@@ -115,8 +112,8 @@ func (m *Model) SetSyntheticItems(items []Item) {
 // extractSynthetic returns the currently registered synthetic items in their
 // existing order; used by SetItems / SetBrowseable to preserve them across
 // list mutations.
-func (m *Model) extractSynthetic() []Item {
-	var synth []Item
+func (m *Model) extractSynthetic() []core.ChannelFinderItem {
+	var synth []core.ChannelFinderItem
 	for _, it := range m.items {
 		if it.Synthetic {
 			synth = append(synth, it)
@@ -132,7 +129,7 @@ func (m *Model) extractSynthetic() []Item {
 // instead of waiting for the next workspace activation to pick up
 // WorkspaceContext.FinderItems. LastVisited is preserved from the existing
 // entry when the incoming item doesn't specify one.
-func (m *Model) Upsert(item Item) {
+func (m *Model) Upsert(item core.ChannelFinderItem) {
 	for i := range m.items {
 		if m.items[i].ID == item.ID {
 			if item.LastVisited == 0 {
@@ -185,7 +182,7 @@ func (m *Model) UpdateLastVisited(channelID string, ts int64) {
 // SetSyntheticItems) are preserved; previous non-joined items are dropped
 // and replaced with the new set. Items whose IDs already appear among the
 // joined / synthetic entries are skipped to avoid duplicates.
-func (m *Model) SetBrowseable(browseable []Item) {
+func (m *Model) SetBrowseable(browseable []core.ChannelFinderItem) {
 	// Drop existing non-joined items; keep joined + synthetic rows.
 	keep := m.items[:0]
 	have := make(map[string]struct{}, len(m.items))
@@ -757,7 +754,7 @@ func (m Model) renderBox(termWidth int) string {
 
 // channelPrefix returns the display prefix for a channel type. st is
 // the DM peer's status (zero value for anything else).
-func channelPrefix(item Item, st peerstatus.Status) string {
+func channelPrefix(item core.ChannelFinderItem, st peerstatus.Status) string {
 	switch item.Type {
 	case "threads":
 		// Single-cell flag glyph marks the synthetic "Threads" row as
@@ -812,8 +809,8 @@ func (m Model) Query() string {
 
 // Items returns every row the finder holds: joined, synthetic and
 // browseable alike, in insertion order and unfiltered.
-func (m Model) Items() []Item {
-	return append([]Item(nil), m.items...)
+func (m Model) Items() []core.ChannelFinderItem {
+	return append([]core.ChannelFinderItem(nil), m.items...)
 }
 
 // StatusFor returns the DM status set on channelID via SetStatus, the
@@ -824,8 +821,8 @@ func (m Model) StatusFor(channelID string) peerstatus.Status {
 
 // FilteredItems returns the rows matching the current query, in the
 // order they are rendered.
-func (m Model) FilteredItems() []Item {
-	out := make([]Item, 0, len(m.filtered))
+func (m Model) FilteredItems() []core.ChannelFinderItem {
+	out := make([]core.ChannelFinderItem, 0, len(m.filtered))
 	for _, idx := range m.filtered {
 		out = append(out, m.items[idx])
 	}

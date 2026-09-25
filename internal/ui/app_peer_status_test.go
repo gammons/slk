@@ -7,7 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/gammons/slk/internal/ui/channelfinder"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/wintree"
@@ -20,7 +20,7 @@ func newPeerStatusTestApp(t *testing.T) *App {
 		{ID: "D1", Name: "alice", Type: "dm", DMUserID: "U1"},
 		{ID: "C1", Name: "general", Type: "channel"},
 	})
-	a.channelFinder.SetItems([]channelfinder.Item{
+	a.channelFinder.SetItems([]core.ChannelFinderItem{
 		{ID: "D1", Name: "alice", Type: "dm", Joined: true},
 		{ID: "C1", Name: "general", Type: "channel", Joined: true},
 	})

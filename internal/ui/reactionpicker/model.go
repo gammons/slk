@@ -17,9 +17,6 @@ import (
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
-// EmojiEntry represents an emoji with its name and Unicode character.
-type EmojiEntry = core.EmojiEntry
-
 // ReactionResult is returned when the user selects an emoji.
 type ReactionResult struct {
 	Emoji  string // emoji name without colons
@@ -28,9 +25,9 @@ type ReactionResult struct {
 
 // Model is the reaction picker overlay.
 type Model struct {
-	allEmoji          []EmojiEntry
-	frecent           []EmojiEntry
-	filtered          []EmojiEntry
+	allEmoji          []core.EmojiEntry
+	frecent           []core.EmojiEntry
+	filtered          []core.EmojiEntry
 	query             string
 	selected          int
 	visible           bool
@@ -86,7 +83,7 @@ func New() *Model {
 func (m *Model) buildEmojiList() {
 	codeMap := slkemoji.CodeMap()
 	seen := make(map[string]bool)
-	m.allEmoji = make([]EmojiEntry, 0, len(codeMap))
+	m.allEmoji = make([]core.EmojiEntry, 0, len(codeMap))
 
 	for code, unicode := range codeMap {
 		name := strings.Trim(code, ":")
@@ -94,7 +91,7 @@ func (m *Model) buildEmojiList() {
 			continue
 		}
 		seen[name] = true
-		m.allEmoji = append(m.allEmoji, EmojiEntry{Name: name, Unicode: strings.TrimRight(unicode, " ")})
+		m.allEmoji = append(m.allEmoji, core.EmojiEntry{Name: name, Unicode: strings.TrimRight(unicode, " ")})
 	}
 
 	sort.Slice(m.allEmoji, func(i, j int) bool {
@@ -108,9 +105,9 @@ func (m *Model) buildEmojiList() {
 // of the same name. Pass nil to reset to built-ins only.
 func (m *Model) SetCustomEmoji(customs map[string]string) {
 	entries := slkemoji.BuildEntries(customs)
-	m.allEmoji = make([]EmojiEntry, 0, len(entries))
+	m.allEmoji = make([]core.EmojiEntry, 0, len(entries))
 	for _, e := range entries {
-		m.allEmoji = append(m.allEmoji, EmojiEntry{
+		m.allEmoji = append(m.allEmoji, core.EmojiEntry{
 			Name:    e.Name,
 			Unicode: e.Display,
 		})
@@ -146,7 +143,7 @@ func (m *Model) IsVisible() bool {
 }
 
 // SetFrecentEmoji sets the frequently/recently used emoji list.
-func (m *Model) SetFrecentEmoji(entries []EmojiEntry) {
+func (m *Model) SetFrecentEmoji(entries []core.EmojiEntry) {
 	m.frecent = entries
 }
 
@@ -230,7 +227,7 @@ func (m *Model) ClickRow(termWidth, termHeight, localY int) bool {
 }
 
 // displayedList returns the list currently shown (frecent or filtered).
-func (m *Model) displayedList() []EmojiEntry {
+func (m *Model) displayedList() []core.EmojiEntry {
 	if m.query == "" {
 		return m.frecent
 	}
@@ -247,7 +244,7 @@ func (m *Model) filter() {
 	q := text.Fold(m.query)
 	m.filtered = m.filtered[:0]
 
-	var substringMatches []EmojiEntry
+	var substringMatches []core.EmojiEntry
 	for _, e := range m.allEmoji {
 		name := text.Fold(e.Name)
 		if strings.HasPrefix(name, q) {

@@ -3,8 +3,8 @@ package main
 import (
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/slackfmt"
-	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/slack-go/slack"
@@ -12,7 +12,7 @@ import (
 
 // seedDMFromCache copies a DM peer's cached presence and status onto a
 // freshly built DM item, so the row shows them before any live event.
-func seedDMFromCache(db *cache.DB, userID string, item *sidebar.ChannelItem, finderItem *channelfinder.Item) {
+func seedDMFromCache(db *cache.DB, userID string, item *sidebar.ChannelItem, finderItem *core.ChannelFinderItem) {
 	if db == nil {
 		return
 	}
@@ -43,7 +43,7 @@ func seedDMFromCache(db *cache.DB, userID string, item *sidebar.ChannelItem, fin
 // (e.g. "alice" for a DM, the formatted participant list for a group DM)
 // because that's what the bootstrap loop has always passed to the finder
 // and what the finder's filter/render code expects.
-func buildChannelItem(ch slack.Channel, wctx *WorkspaceContext, cfg config.Config, teamID string) (sidebar.ChannelItem, channelfinder.Item) {
+func buildChannelItem(ch slack.Channel, wctx *WorkspaceContext, cfg config.Config, teamID string) (sidebar.ChannelItem, core.ChannelFinderItem) {
 	chType := "channel"
 	if ch.IsIM {
 		// Slack returns the same is_im=true for human DMs and app DMs;
@@ -110,7 +110,7 @@ func buildChannelItem(ch slack.Channel, wctx *WorkspaceContext, cfg config.Confi
 		item.DMUserID = ch.User
 	}
 
-	finderItem := channelfinder.Item{
+	finderItem := core.ChannelFinderItem{
 		ID:       ch.ID,
 		Name:     displayName,
 		Type:     chType,
