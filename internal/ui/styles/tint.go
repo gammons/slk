@@ -55,6 +55,15 @@ func mixColors(fg, bg color.Color, alpha float64) color.Color {
 	if alpha >= 1 {
 		return fg
 	}
+	// If the background is transparent (nil), there's nothing to tint
+	// against; stay transparent.
+	if bg == nil {
+		return nil
+	}
+	// If the foreground is transparent, just return the background.
+	if fg == nil {
+		return bg
+	}
 	fr, fg2, fb, _ := fg.RGBA()
 	br, bg2, bb, _ := bg.RGBA()
 	// RGBA returns 16-bit channels; collapse to 8-bit before mixing.
