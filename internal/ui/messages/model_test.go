@@ -4,10 +4,13 @@ package messages
 import (
 	"bytes"
 	"context"
+	"fmt"
 	stdimage "image"
 	imgcolor "image/color"
 	imgpng "image/png"
 	"io"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -186,6 +189,95 @@ func TestScrollPreservedAcrossRenders(t *testing.T) {
 	_ = m.View(20, 80)
 	if m.yOffset <= scrolled {
 		t.Errorf("expected yOffset to re-snap down after moving selection below the fold: scrolled=%d got=%d", scrolled, m.yOffset)
+	}
+}
+
+// markedMessages builds n messages with distinct TSes and a unique
+// "markNNN" token per body, so a test can identify which message rendered
+// at a given screen position from the rendered text alone.
+func markedMessages(n int) []MessageItem {
+	msgs := make([]MessageItem, n)
+	for i := range msgs {
+		msgs[i] = MessageItem{
+			TS:        fmt.Sprintf("%d.000000", 1700000000+i),
+			UserName:  "alice",
+			Text:      fmt.Sprintf("mark%03d %s", i, strings.Repeat("word ", 30)),
+			Timestamp: "10:00 AM",
+		}
+	}
+	return msgs
+}
+
+var markRE = regexp.MustCompile(`mark(\d{3})`)
+
+// topMarkedMessage returns the index embedded in the first "markNNN" token
+// found in the rendered view, i.e. the message at the top of the viewport.
+func topMarkedMessage(t *testing.T, view string) int {
+	t.Helper()
+	m := markRE.FindStringSubmatch(view)
+	if m == nil {
+		t.Fatalf("no marked message found in view:\n%s", view)
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		t.Fatalf("bad mark token %q: %v", m[1], err)
+	}
+	return n
+}
+
+// TestScrollAnchorPreservedAcrossWidthResize asserts that narrowing the
+// pane keeps the same message anchored at the top of the viewport.
+func TestScrollAnchorPreservedAcrossWidthResize(t *testing.T) {
+	m := New(markedMessages(40), "general")
+	_ = m.View(20, 80)
+	m.ScrollUp(20) // leave the bottom-anchored state for a mid-scroll position
+	before := m.View(20, 80)
+	beforeTop := topMarkedMessage(t, before)
+
+	after := m.View(20, 40) // narrower pane: every entry rewraps to more lines
+	afterTop := topMarkedMessage(t, after)
+
+	if afterTop != beforeTop {
+		t.Errorf("narrowing jumped the viewport: was showing message %d at top, now showing %d", beforeTop, afterTop)
+	}
+}
+
+// TestScrollAnchorPreservedAcrossWidening mirrors the test above in the
+// other direction: widening shrinks the anchored entry's height, so the
+// within-entry offset must be clamped or the restored yOffset overshoots
+// into a later entry and skips messages.
+func TestScrollAnchorPreservedAcrossWidening(t *testing.T) {
+	m := New(markedMessages(300), "general")
+	_ = m.View(20, 30) // narrow pane: entries wrap across many lines
+
+	// Anchor on the last line of a mid-list entry, away from either end
+	// so the final maxOffset clamp doesn't mask the bug.
+	midIdx := 150
+	m.yOffset = m.entryOffsets[midIdx] + m.cache[midIdx].height - 1
+	before := m.View(20, 30)
+	beforeTop := topMarkedMessage(t, before)
+
+	after := m.View(20, 160) // much wider: entries shrink to a couple of lines
+	afterTop := topMarkedMessage(t, after)
+
+	if afterTop != beforeTop {
+		t.Errorf("widening jumped the viewport: was showing message %d at top, now showing %d", beforeTop, afterTop)
+	}
+}
+
+// TestScrollAnchorBottomPreservedAcrossWidthResize asserts that a
+// bottom-pinned viewport stays pinned to the bottom across a resize.
+func TestScrollAnchorBottomPreservedAcrossWidthResize(t *testing.T) {
+	m := New(markedMessages(40), "general")
+	_ = m.View(20, 80) // default state is bottom-anchored
+
+	_ = m.View(20, 40) // narrower pane: content grows taller
+
+	// IsAtBottom reflects the selection cursor, not scroll position, so
+	// check yOffset directly.
+	if m.yOffset+m.lastViewHeight < m.totalLines {
+		t.Errorf("resize un-pinned a bottom-anchored viewport: yOffset=%d lastViewHeight=%d totalLines=%d",
+			m.yOffset, m.lastViewHeight, m.totalLines)
 	}
 }
 
