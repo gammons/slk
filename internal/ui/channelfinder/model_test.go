@@ -4,16 +4,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/peerstatus"
 )
 
-func testItems() []Item {
+func testItems() []core.ChannelFinderItem {
 	// Descending LastVisited values keep these items in their declared
 	// order under the empty-query sort (LastVisited DESC, typeRank ASC,
 	// Name ASC). Several legacy tests below exercise selection /
 	// navigation mechanics and assume this declared order.
-	return []Item{
+	return []core.ChannelFinderItem{
 		{ID: "C1", Name: "marketing", Type: "channel", LastVisited: 600},
 		{ID: "C2", Name: "engineering", Type: "channel", LastVisited: 500},
 		{ID: "C3", Name: "ext-automote", Type: "channel", LastVisited: 400},
@@ -25,7 +26,7 @@ func testItems() []Item {
 
 func TestViewShowsPeerStatusAndDND(t *testing.T) {
 	m := New()
-	m.SetItems([]Item{{
+	m.SetItems([]core.ChannelFinderItem{{
 		ID: "D1", Name: "Alice", Type: "dm", Joined: true, Presence: "active",
 	}})
 	m.SetStatus("D1", peerstatus.Status{Emoji: ":calendar:", DND: true})
@@ -50,7 +51,7 @@ func TestViewShowsPeerStatusAndDND(t *testing.T) {
 func TestRenderBoxTruncatesNameNotGlyph(t *testing.T) {
 	m := New()
 	longName := strings.Repeat("averylongdisplaynameforadirectmessage", 3)
-	m.SetItems([]Item{{ID: "D1", Name: longName, Type: "dm", Joined: true, Presence: "active"}})
+	m.SetItems([]core.ChannelFinderItem{{ID: "D1", Name: longName, Type: "dm", Joined: true, Presence: "active"}})
 	m.SetStatus("D1", peerstatus.Status{Emoji: ":calendar:"})
 	m.Open()
 
@@ -69,10 +70,10 @@ func TestRenderBoxTruncatesNameNotGlyph(t *testing.T) {
 // statuses.
 func TestStatusSurvivesSetItemsWithinWorkspace(t *testing.T) {
 	m := New()
-	m.SetItems([]Item{{ID: "D1", Name: "Alice", Type: "dm", Joined: true}})
+	m.SetItems([]core.ChannelFinderItem{{ID: "D1", Name: "Alice", Type: "dm", Joined: true}})
 	m.SetStatus("D1", peerstatus.Status{Emoji: ":calendar:"})
 
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		{ID: "D1", Name: "Alice", Type: "dm", Joined: true},
 		{ID: "C1", Name: "general", Type: "channel", Joined: true},
 	})
@@ -86,10 +87,10 @@ func TestStatusSurvivesSetItemsWithinWorkspace(t *testing.T) {
 // channel ID must also drop its status, not keep it around indefinitely.
 func TestSetItemsDropsStatusesForRemovedRows(t *testing.T) {
 	m := New()
-	m.SetItems([]Item{{ID: "D1", Name: "Alice", Type: "dm", Joined: true}})
+	m.SetItems([]core.ChannelFinderItem{{ID: "D1", Name: "Alice", Type: "dm", Joined: true}})
 	m.SetStatus("D1", peerstatus.Status{Emoji: ":calendar:"})
 
-	m.SetItems([]Item{{ID: "D9", Name: "Bob", Type: "dm", Joined: true}})
+	m.SetItems([]core.ChannelFinderItem{{ID: "D9", Name: "Bob", Type: "dm", Joined: true}})
 	if got := m.StatusFor("D1"); got != (peerstatus.Status{}) {
 		t.Fatalf("status survived removal of its row: %+v", got)
 	}
@@ -169,7 +170,7 @@ func TestFilterDMRanksAboveGroupDM(t *testing.T) {
 	// kinds of items can match the same query as substrings; without a
 	// type-aware tiebreak the group_dm wins simply by appearing first in
 	// m.items.
-	items := []Item{
+	items := []core.ChannelFinderItem{
 		{ID: "G1", Name: "alice, bob, carol", Type: "group_dm"},
 		{ID: "G2", Name: "alice, dave", Type: "group_dm"},
 		{ID: "D1", Name: "alice", Type: "dm", Presence: "active"},
@@ -201,7 +202,7 @@ func TestFilterGroupDMRanksLastAcrossTiers(t *testing.T) {
 	// channel/dm with a *substring* match? No — prefix tier still wins
 	// over substring tier (that's the whole point of tiering). But within
 	// the same tier, group_dm ranks last. Verify both invariants.
-	items := []Item{
+	items := []core.ChannelFinderItem{
 		{ID: "G1", Name: "alice, bob", Type: "group_dm"}, // prefix match for "ali"
 		{ID: "C1", Name: "talia-team", Type: "channel"},  // substring match for "ali"
 		{ID: "D1", Name: "alice", Type: "dm"},            // prefix match for "ali"
@@ -312,12 +313,12 @@ func TestNoMatchesNoResult(t *testing.T) {
 
 func TestSetBrowseableMergesWithJoined(t *testing.T) {
 	m := New()
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		{ID: "C1", Name: "general", Type: "channel", Joined: true},
 		{ID: "C2", Name: "random", Type: "channel", Joined: true},
 	})
 
-	m.SetBrowseable([]Item{
+	m.SetBrowseable([]core.ChannelFinderItem{
 		// Duplicate of a joined channel: must be skipped.
 		{ID: "C1", Name: "general", Type: "channel"},
 		// New non-joined channels.
@@ -344,14 +345,14 @@ func TestSetBrowseableMergesWithJoined(t *testing.T) {
 
 func TestSetBrowseableReplacesPreviousBrowseable(t *testing.T) {
 	m := New()
-	m.SetItems([]Item{{ID: "C1", Name: "general", Type: "channel", Joined: true}})
-	m.SetBrowseable([]Item{{ID: "C2", Name: "old", Type: "channel"}})
+	m.SetItems([]core.ChannelFinderItem{{ID: "C1", Name: "general", Type: "channel", Joined: true}})
+	m.SetBrowseable([]core.ChannelFinderItem{{ID: "C2", Name: "old", Type: "channel"}})
 	if len(m.items) != 2 {
 		t.Fatalf("expected 2 items after first SetBrowseable, got %d", len(m.items))
 	}
 
 	// Second call should drop C2 and add C3.
-	m.SetBrowseable([]Item{{ID: "C3", Name: "new", Type: "channel"}})
+	m.SetBrowseable([]core.ChannelFinderItem{{ID: "C3", Name: "new", Type: "channel"}})
 	if len(m.items) != 2 {
 		t.Fatalf("expected 2 items after second SetBrowseable, got %d", len(m.items))
 	}
@@ -364,7 +365,7 @@ func TestSetBrowseableReplacesPreviousBrowseable(t *testing.T) {
 
 func TestUpsertRefiltersVisibleQuery(t *testing.T) {
 	m := New()
-	m.SetItems([]Item{{ID: "C1", Name: "general", Type: "channel", Joined: true}})
+	m.SetItems([]core.ChannelFinderItem{{ID: "C1", Name: "general", Type: "channel", Joined: true}})
 	m.Open()
 	m.HandleKey("z")
 	m.HandleKey("e")
@@ -373,7 +374,7 @@ func TestUpsertRefiltersVisibleQuery(t *testing.T) {
 		t.Fatalf("setup: filtered items = %+v, want none", got)
 	}
 
-	m.Upsert(Item{ID: "D1", Name: "zed person", Type: "dm", Joined: true})
+	m.Upsert(core.ChannelFinderItem{ID: "D1", Name: "zed person", Type: "dm", Joined: true})
 
 	got := m.FilteredItems()
 	if len(got) != 1 || got[0].ID != "D1" {
@@ -383,11 +384,11 @@ func TestUpsertRefiltersVisibleQuery(t *testing.T) {
 
 func TestUpsertReplacesByIDAndPreservesLastVisited(t *testing.T) {
 	m := New()
-	m.SetItems([]Item{{
+	m.SetItems([]core.ChannelFinderItem{{
 		ID: "C1", Name: "old name", Type: "channel", Joined: false, LastVisited: 123,
 	}})
 
-	m.Upsert(Item{ID: "C1", Name: "new name", Type: "private", Joined: true})
+	m.Upsert(core.ChannelFinderItem{ID: "C1", Name: "new name", Type: "private", Joined: true})
 
 	got := m.Items()
 	if len(got) != 1 {
@@ -403,9 +404,9 @@ func TestUpsertReplacesByIDAndPreservesLastVisited(t *testing.T) {
 
 func TestUpsertConvertsBrowseableEntryInPlace(t *testing.T) {
 	m := New()
-	m.SetBrowseable([]Item{{ID: "C9", Name: "announcements", Type: "channel", Joined: false}})
+	m.SetBrowseable([]core.ChannelFinderItem{{ID: "C9", Name: "announcements", Type: "channel", Joined: false}})
 
-	m.Upsert(Item{ID: "C9", Name: "announcements", Type: "channel", Joined: true})
+	m.Upsert(core.ChannelFinderItem{ID: "C9", Name: "announcements", Type: "channel", Joined: true})
 
 	got := m.Items()
 	if len(got) != 1 {
@@ -420,7 +421,7 @@ func TestEnterReturnsJoinedFlag(t *testing.T) {
 	m := New()
 	// LastVisited values pin the order: C1 (joined) appears first, C2
 	// (browseable) second under the empty-query sort.
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		{ID: "C1", Name: "general", Type: "channel", Joined: true, LastVisited: 200},
 		{ID: "C2", Name: "browseable", Type: "channel", Joined: false, LastVisited: 100},
 	})
@@ -445,12 +446,12 @@ func TestEnterReturnsJoinedFlag(t *testing.T) {
 // the outer dim styling on the name part of the row, making both look identical.
 func TestNonJoinedVisuallyDistinct(t *testing.T) {
 	mJoined := New()
-	mJoined.SetItems([]Item{{ID: "C1", Name: "channel-name", Type: "channel", Joined: true}})
+	mJoined.SetItems([]core.ChannelFinderItem{{ID: "C1", Name: "channel-name", Type: "channel", Joined: true}})
 	mJoined.Open()
 	joinedView := mJoined.View(80)
 
 	mNot := New()
-	mNot.SetItems([]Item{{ID: "C1", Name: "channel-name", Type: "channel", Joined: false}})
+	mNot.SetItems([]core.ChannelFinderItem{{ID: "C1", Name: "channel-name", Type: "channel", Joined: false}})
 	mNot.Open()
 	notView := mNot.View(80)
 
@@ -473,7 +474,7 @@ func TestNonJoinedVisuallyDistinct(t *testing.T) {
 // separators. This is what makes "csp" find "cs-product-triage".
 func TestFilterSubsequence(t *testing.T) {
 	m := New()
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		{ID: "C1", Name: "general", Type: "channel"},
 		{ID: "C2", Name: "cs-product-triage", Type: "channel"},
 		{ID: "C3", Name: "random", Type: "channel"},
@@ -497,7 +498,7 @@ func TestFilterSubsequence(t *testing.T) {
 // outranks a subsequence-only hit, so familiar searches don't regress.
 func TestFilterRanksPrefixOverSubsequence(t *testing.T) {
 	m := New()
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		// Subsequence match for "eng": 'e' at 0, 'n' at 4, 'g' at 6.
 		{ID: "C1", Name: "ext-engage", Type: "channel"},
 		// Prefix match.
@@ -522,7 +523,7 @@ func TestFilterRanksPrefixOverSubsequence(t *testing.T) {
 // hitting word boundaries rank above ones that don't.
 func TestFilterSubsequenceWordBoundaryRanking(t *testing.T) {
 	m := New()
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		// 'a' and 'b' both mid-word -- no boundary bonus.
 		{ID: "C1", Name: "xxaxxbxxyyy", Type: "channel"},
 		// 'a' at start, 'b' at start of second word -- two boundary hits.
@@ -544,7 +545,7 @@ func TestFilterSubsequenceWordBoundaryRanking(t *testing.T) {
 
 func TestFilterEmptyOrdersByRecency(t *testing.T) {
 	m := New()
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		{ID: "C1", Name: "alpha", Type: "channel", LastVisited: 100},
 		{ID: "C2", Name: "bravo", Type: "channel", LastVisited: 300},
 		{ID: "C3", Name: "charlie", Type: "channel", LastVisited: 200},
@@ -572,7 +573,7 @@ func TestFilterEmptyOrdersByRecency(t *testing.T) {
 
 func TestFilterEmptyNeverVisitedFallsBackToTypeRank(t *testing.T) {
 	m := New()
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		// All never visited; must come out in DM, channel, group_dm order.
 		{ID: "C1", Name: "zulu", Type: "channel", LastVisited: 0},
 		{ID: "G1", Name: "alpha-group", Type: "group_dm", LastVisited: 0},
@@ -598,7 +599,7 @@ func TestFilterEmptyNeverVisitedFallsBackToTypeRank(t *testing.T) {
 
 func TestMarkJoined(t *testing.T) {
 	m := New()
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		{ID: "C1", Name: "general", Type: "channel", Joined: false},
 	})
 	m.MarkJoined("C1")
@@ -609,7 +610,7 @@ func TestMarkJoined(t *testing.T) {
 
 func TestUpdateLastVisitedMutatesAndReorders(t *testing.T) {
 	m := New()
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		{ID: "C1", Name: "alpha", Type: "channel", LastVisited: 100},
 		{ID: "C2", Name: "bravo", Type: "channel", LastVisited: 200},
 		{ID: "C3", Name: "charlie", Type: "channel", LastVisited: 50},
@@ -631,7 +632,7 @@ func TestUpdateLastVisitedMutatesAndReorders(t *testing.T) {
 
 func TestUpdateLastVisitedNoopForUnknownID(t *testing.T) {
 	m := New()
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		{ID: "C1", Name: "alpha", Type: "channel", LastVisited: 100},
 	})
 	m.Open()
@@ -648,7 +649,7 @@ func TestFilterWithQueryRecencyBreaksTies(t *testing.T) {
 	m := New()
 	// Two prefix matches for "eng": "engineering" (older) and "engagement" (newer).
 	// Recency tiebreak should put "engagement" first.
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		{ID: "C1", Name: "engineering", Type: "channel", LastVisited: 100},
 		{ID: "C2", Name: "engagement", Type: "channel", LastVisited: 200},
 		{ID: "C3", Name: "marketing", Type: "channel", LastVisited: 999}, // no match
@@ -678,7 +679,7 @@ func TestFilterWithQueryRecencyBreaksTies(t *testing.T) {
 // participate in.
 func TestFilterJoinedBeatsNonJoinedAcrossTiers(t *testing.T) {
 	m := New()
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		// Non-joined prefix match.
 		{ID: "C1", Name: "eng-public", Type: "channel", Joined: false, LastVisited: 0},
 		// Joined substring match.
@@ -712,7 +713,7 @@ func TestFilterJoinedBeatsNonJoinedAcrossTiers(t *testing.T) {
 // invariant when no search query is entered.
 func TestFilterJoinedBeatsNonJoinedEmptyQuery(t *testing.T) {
 	m := New()
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		// Non-joined, very recent.
 		{ID: "C1", Name: "aaa-browseable", Type: "channel", Joined: false, LastVisited: 999},
 		// Joined, never visited.
@@ -734,7 +735,7 @@ func TestFilterJoinedBeatsNonJoinedEmptyQuery(t *testing.T) {
 // group_dm remains demoted.
 func TestFilterDMAndChannelEqualWeight(t *testing.T) {
 	m := New()
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		// Channel, more recently visited.
 		{ID: "C1", Name: "engineering", Type: "channel", Joined: true, LastVisited: 500},
 		// DM, less recently visited.
@@ -760,7 +761,7 @@ func TestFilterWithQueryMatchTierStillWins(t *testing.T) {
 	m := New()
 	// "engagement" is a prefix match (older); "ext-engineering" is a
 	// substring match (newer). Tier wins over recency: prefix first.
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		{ID: "C1", Name: "engagement", Type: "channel", LastVisited: 100},
 		{ID: "C2", Name: "ext-engineering", Type: "channel", LastVisited: 999},
 	})
@@ -784,7 +785,7 @@ func TestFilterWithQueryMatchTierStillWins(t *testing.T) {
 // to single-byte printable ASCII (model.go:179) — that input-side
 // limitation is a separate concern from the matching behavior under test.
 func TestFilterAccentInsensitive(t *testing.T) {
-	items := []Item{
+	items := []core.ChannelFinderItem{
 		{ID: "D1", Name: "Mélanie", Type: "dm", LastVisited: 100},
 		{ID: "D2", Name: "François", Type: "dm", LastVisited: 90},
 		{ID: "C1", Name: "café-discussion", Type: "channel", LastVisited: 80},
@@ -826,10 +827,10 @@ func TestFilterAccentInsensitive(t *testing.T) {
 // typing.
 func TestSyntheticItemsPinnedAtTopEmptyQuery(t *testing.T) {
 	m := New()
-	m.SetSyntheticItems([]Item{{
+	m.SetSyntheticItems([]core.ChannelFinderItem{{
 		ID: ThreadsViewID, Name: "Threads", Type: "threads", Joined: true,
 	}})
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		// Recent visit — would normally sort first.
 		{ID: "C1", Name: "general", Type: "channel", Joined: true, LastVisited: 9999},
 		{ID: "C2", Name: "random", Type: "channel", Joined: true, LastVisited: 500},
@@ -852,10 +853,10 @@ func TestSyntheticItemsPinnedAtTopEmptyQuery(t *testing.T) {
 // ThreadsViewActivatedMsg instead of switching channels.
 func TestSyntheticItemEnterReturnsThreadsType(t *testing.T) {
 	m := New()
-	m.SetSyntheticItems([]Item{{
+	m.SetSyntheticItems([]core.ChannelFinderItem{{
 		ID: ThreadsViewID, Name: "Threads", Type: "threads", Joined: true,
 	}})
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		{ID: "C1", Name: "general", Type: "channel", Joined: true, LastVisited: 9999},
 	})
 	m.Open()
@@ -876,14 +877,14 @@ func TestSyntheticItemEnterReturnsThreadsType(t *testing.T) {
 // the Threads view shortcut and force the user to click to reach it.
 func TestSyntheticItemSurvivesSetItems(t *testing.T) {
 	m := New()
-	m.SetSyntheticItems([]Item{{
+	m.SetSyntheticItems([]core.ChannelFinderItem{{
 		ID: ThreadsViewID, Name: "Threads", Type: "threads", Joined: true,
 	}})
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		{ID: "C1", Name: "general", Type: "channel", Joined: true},
 	})
 	// Second SetItems, simulating a workspace re-bootstrap.
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		{ID: "C2", Name: "random", Type: "channel", Joined: true},
 	})
 
@@ -907,13 +908,13 @@ func TestSyntheticItemSurvivesSetItems(t *testing.T) {
 // public channels the user hasn't joined yet).
 func TestSyntheticItemSurvivesSetBrowseable(t *testing.T) {
 	m := New()
-	m.SetSyntheticItems([]Item{{
+	m.SetSyntheticItems([]core.ChannelFinderItem{{
 		ID: ThreadsViewID, Name: "Threads", Type: "threads", Joined: true,
 	}})
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		{ID: "C1", Name: "general", Type: "channel", Joined: true},
 	})
-	m.SetBrowseable([]Item{
+	m.SetBrowseable([]core.ChannelFinderItem{
 		{ID: "C2", Name: "announcements", Type: "channel"},
 	})
 
@@ -934,10 +935,10 @@ func TestSyntheticItemSurvivesSetBrowseable(t *testing.T) {
 // letters of "threads" surfaces it).
 func TestSyntheticItemMatchesByName(t *testing.T) {
 	m := New()
-	m.SetSyntheticItems([]Item{{
+	m.SetSyntheticItems([]core.ChannelFinderItem{{
 		ID: ThreadsViewID, Name: "Threads", Type: "threads", Joined: true,
 	}})
-	m.SetItems([]Item{
+	m.SetItems([]core.ChannelFinderItem{
 		{ID: "C1", Name: "general", Type: "channel", Joined: true},
 	})
 	m.Open()

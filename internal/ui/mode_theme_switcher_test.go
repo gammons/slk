@@ -8,6 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/gammons/slk/internal/ui/themeswitcher"
 )
@@ -37,7 +38,7 @@ func colorEqual(a, b color.Color) bool {
 // themeSave records one invocation of the App's theme saver.
 type themeSave struct {
 	name  string
-	scope themeswitcher.ThemeScope
+	scope core.ThemeScope
 }
 
 // themeSwitcherItems is the picker's fixture. Order matters: the
@@ -91,12 +92,12 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 
 	// open is the shared precondition: dark pinned, a recording theme
 	// saver, three themes, and the picker open at the given scope.
-	open := func(scope themeswitcher.ThemeScope, withSaver bool) func(*testing.T, *App) {
+	open := func(scope core.ThemeScope, withSaver bool) func(*testing.T, *App) {
 		return func(t *testing.T, a *App) {
 			pinDark(t, a)
 			saves = nil
 			if withSaver {
-				a.setThemeSaverForTest(func(name string, sc themeswitcher.ThemeScope) {
+				a.setThemeSaverForTest(func(name string, sc core.ThemeScope) {
 					saves = append(saves, themeSave{name: name, scope: sc})
 				})
 			}

@@ -4,12 +4,14 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/gammons/slk/internal/core"
 )
 
 func TestBoxSizeMatchesRender(t *testing.T) {
 	m := New()
 	m.Open("C1", "1.2", nil)
-	m.SetFrecentEmoji([]EmojiEntry{{Name: "a"}, {Name: "b"}, {Name: "c"}, {Name: "d"}})
+	m.SetFrecentEmoji([]core.EmojiEntry{{Name: "a"}, {Name: "b"}, {Name: "c"}, {Name: "d"}})
 
 	w, h := m.BoxSize(80, 24)
 	box := m.renderBox(80)
@@ -24,7 +26,7 @@ func TestBoxSizeMatchesRender(t *testing.T) {
 func TestClickRowSelectsItem(t *testing.T) {
 	m := New()
 	m.Open("C1", "1.2", nil)
-	m.SetFrecentEmoji([]EmojiEntry{{Name: "a"}, {Name: "b"}, {Name: "c"}, {Name: "d"}})
+	m.SetFrecentEmoji([]core.EmojiEntry{{Name: "a"}, {Name: "b"}, {Name: "c"}, {Name: "d"}})
 
 	if !m.ClickRow(80, 24, listTopOffset+2) {
 		t.Fatal("ClickRow on a populated row should return true")

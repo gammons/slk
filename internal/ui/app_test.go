@@ -18,8 +18,6 @@ import (
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
 	imgpkg "github.com/gammons/slk/internal/image"
-	"github.com/gammons/slk/internal/ui/channelfinder"
-	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/statusbar"
@@ -354,10 +352,10 @@ func TestHandleInsertMode_AttachmentSendReturnsToNormalMode(t *testing.T) {
 	app.activeChannelID = "C1"
 	app.focusedPanel = PanelMessages
 	app.SetMode(ModeInsert)
-	app.compose.AddAttachment(compose.PendingAttachment{
+	app.compose.AddAttachment(core.PendingAttachment{
 		Filename: "a.png", Bytes: []byte("png"), Size: 3,
 	})
-	app.setUploaderForTest(func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd {
+	app.setUploaderForTest(func(channelID, threadTS, caption string, attachments []core.PendingAttachment) tea.Cmd {
 		return func() tea.Msg { return UploadResultMsg{Err: nil} }
 	})
 
@@ -380,10 +378,10 @@ func TestHandleInsertMode_ThreadAttachmentSendReturnsToNormalMode(t *testing.T) 
 	app.threadVisible = true
 	app.focusedPanel = PanelThread
 	app.SetMode(ModeInsert)
-	app.threadCompose.AddAttachment(compose.PendingAttachment{
+	app.threadCompose.AddAttachment(core.PendingAttachment{
 		Filename: "a.png", Bytes: []byte("png"), Size: 3,
 	})
-	app.setUploaderForTest(func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd {
+	app.setUploaderForTest(func(channelID, threadTS, caption string, attachments []core.PendingAttachment) tea.Cmd {
 		return func() tea.Msg { return UploadResultMsg{Err: nil} }
 	})
 
@@ -2087,13 +2085,13 @@ func TestSubmitWithAttachments_InvokesUploaderAndSetsUploading(t *testing.T) {
 	app.activeChannelID = "C1"
 	app.focusedPanel = PanelMessages
 	app.SetMode(ModeInsert)
-	app.compose.AddAttachment(compose.PendingAttachment{
+	app.compose.AddAttachment(core.PendingAttachment{
 		Filename: "a.png", Bytes: []byte("png"), Size: 3,
 	})
 	app.compose.SetValue("look")
 	// Set a no-op uploader so the cmd doesn't error out — we just want to
 	// observe state changes (uploading flag, that an attempt was made).
-	app.setUploaderForTest(func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd {
+	app.setUploaderForTest(func(channelID, threadTS, caption string, attachments []core.PendingAttachment) tea.Cmd {
 		return func() tea.Msg { return UploadResultMsg{Err: nil} }
 	})
 
@@ -2110,12 +2108,12 @@ func TestSubmitWithAttachments_RefusesDuringEdit(t *testing.T) {
 	app := NewApp()
 	app.activeChannelID = "C1"
 	app.focusedPanel = PanelMessages
-	app.compose.AddAttachment(compose.PendingAttachment{Filename: "a.png", Size: 1})
+	app.compose.AddAttachment(core.PendingAttachment{Filename: "a.png", Size: 1})
 	app.editing.active = true
 	app.editing.channelID = "C1"
 	app.editing.ts = "1.0"
 	app.editing.panel = PanelMessages
-	app.setUploaderForTest(func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd {
+	app.setUploaderForTest(func(channelID, threadTS, caption string, attachments []core.PendingAttachment) tea.Cmd {
 		return func() tea.Msg { return UploadResultMsg{Err: nil} }
 	})
 
@@ -2132,7 +2130,7 @@ func TestSubmitWithAttachments_RefusesDuringEdit(t *testing.T) {
 
 func TestUploadResultMsg_SuccessClearsAttachmentsAndCompose(t *testing.T) {
 	app := NewApp()
-	app.compose.AddAttachment(compose.PendingAttachment{Filename: "a.png", Size: 1})
+	app.compose.AddAttachment(core.PendingAttachment{Filename: "a.png", Size: 1})
 	app.compose.SetValue("caption")
 	app.compose.SetUploading(true)
 
@@ -2151,7 +2149,7 @@ func TestUploadResultMsg_SuccessClearsAttachmentsAndCompose(t *testing.T) {
 
 func TestUploadResultMsg_FailureKeepsAttachments(t *testing.T) {
 	app := NewApp()
-	app.compose.AddAttachment(compose.PendingAttachment{Filename: "a.png", Size: 1})
+	app.compose.AddAttachment(core.PendingAttachment{Filename: "a.png", Size: 1})
 	app.compose.SetValue("caption")
 	app.compose.SetUploading(true)
 
@@ -2306,7 +2304,7 @@ func TestHandleInsertMode_CtrlU_ClearsCompose(t *testing.T) {
 	app.SetMode(ModeInsert)
 	_ = app.compose.Focus()
 	app.compose.SetValue("draft text")
-	app.compose.AddAttachment(compose.PendingAttachment{Filename: "a.png", Size: 1})
+	app.compose.AddAttachment(core.PendingAttachment{Filename: "a.png", Size: 1})
 
 	app.handleInsertMode(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
 
@@ -3254,7 +3252,7 @@ func TestConversationOpenedMsg_SidebarReceivesItemAndUnread(t *testing.T) {
 			Name: "alice, bob",
 			Type: "group_dm",
 		},
-		FinderItem: channelfinder.Item{
+		FinderItem: core.ChannelFinderItem{
 			ID:     "G1",
 			Name:   "alice, bob",
 			Type:   "group_dm",
@@ -3313,7 +3311,7 @@ func TestConversationOpenedMsg_InactiveWorkspaceIgnored(t *testing.T) {
 	app.Update(ConversationOpenedMsg{
 		TeamID:     "T2",
 		Item:       sidebar.ChannelItem{ID: "G1", Name: "alice, bob", Type: "group_dm"},
-		FinderItem: channelfinder.Item{ID: "G1", Name: "alice, bob", Type: "group_dm", Joined: true},
+		FinderItem: core.ChannelFinderItem{ID: "G1", Name: "alice, bob", Type: "group_dm", Joined: true},
 	})
 
 	for _, it := range app.sidebar.AllItems() {

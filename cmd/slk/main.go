@@ -34,12 +34,9 @@ import (
 	"github.com/gammons/slk/internal/slackhttp"
 	"github.com/gammons/slk/internal/text"
 	"github.com/gammons/slk/internal/ui"
-	"github.com/gammons/slk/internal/ui/channelfinder"
-	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/imgrender"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/presencemenu"
-	"github.com/gammons/slk/internal/ui/reactionpicker"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/gammons/slk/internal/ui/themeswitcher"
 	"github.com/gammons/slk/internal/ui/workspace"
@@ -611,7 +608,7 @@ func run() error {
 	}))
 
 	// Wire theme switcher: dispatch to the appropriate saver based on scope.
-	saveTheme := func(name string, scope themeswitcher.ThemeScope) {
+	saveTheme := func(name string, scope core.ThemeScope) {
 		switch scope {
 		case themeswitcher.ScopeWorkspace:
 			active := router.Active()
@@ -657,7 +654,7 @@ func run() error {
 	// Wire presence/DND status setter. Resolves the active team ID
 	// through the router at invocation so the closure always targets
 	// the currently-active workspace context.
-	setStatus := func(action presencemenu.Action, snoozeMinutes int) {
+	setStatus := func(action core.PresenceAction, snoozeMinutes int) {
 		wctx := router.Active()
 		if wctx == nil || wctx.Client == nil {
 			return
@@ -780,7 +777,7 @@ func run() error {
 			// non-empty query, so this runs once per typing pause
 			// rather than once per boot per workspace, which is what
 			// the conversations.list walk it replaced did.
-			SearchRemote: func(query string) []channelfinder.Item {
+			SearchRemote: func(query string) []core.ChannelFinderItem {
 				wctx := router.Active()
 				if wctx == nil {
 					return nil
@@ -1081,7 +1078,7 @@ func run() error {
 			},
 		}))
 
-		upload := func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) core.Cmd {
+		upload := func(channelID, threadTS, caption string, attachments []core.PendingAttachment) core.Cmd {
 			return func() core.Msg {
 				wctx := router.Active()
 				if wctx == nil {
@@ -1280,16 +1277,16 @@ func run() error {
 				return wctx.Client.RemoveReaction(ctx, string(channelID), string(messageTS), emojiName)
 			},
 			// LoadFrecent: not workspace-specific, captures only db.
-			func(limit int) []reactionpicker.EmojiEntry {
+			func(limit int) []core.EmojiEntry {
 				names, err := db.GetFrecentEmoji(limit)
 				if err != nil {
 					return nil
 				}
 				codeMap := emojiwidth.CodeMap()
-				var entries []reactionpicker.EmojiEntry
+				var entries []core.EmojiEntry
 				for _, name := range names {
 					unicode := codeMap[":"+name+":"]
-					entries = append(entries, reactionpicker.EmojiEntry{
+					entries = append(entries, core.EmojiEntry{
 						Name:    name,
 						Unicode: unicode,
 					})

@@ -1,8 +1,8 @@
 package main
 
 import (
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui"
-	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/slack-go/slack"
 )
@@ -22,9 +22,9 @@ func (h *rtmEventHandler) OnConversationOpened(ch slack.Channel) {
 }
 
 // addConversation is OnConversationOpened without the UI message.
-func (h *rtmEventHandler) addConversation(ch slack.Channel) (sidebar.ChannelItem, channelfinder.Item, bool) {
+func (h *rtmEventHandler) addConversation(ch slack.Channel) (sidebar.ChannelItem, core.ChannelFinderItem, bool) {
 	if h.wsCtx == nil {
-		return sidebar.ChannelItem{}, channelfinder.Item{}, false
+		return sidebar.ChannelItem{}, core.ChannelFinderItem{}, false
 	}
 
 	item, finderItem := buildChannelItem(ch, h.wsCtx, h.cfg, h.workspaceID)
@@ -71,7 +71,7 @@ func (h *rtmEventHandler) addConversation(ch slack.Channel) (sidebar.ChannelItem
 	return item, finderItem, true
 }
 
-func (h *rtmEventHandler) publishConversation(item sidebar.ChannelItem, finderItem channelfinder.Item) {
+func (h *rtmEventHandler) publishConversation(item sidebar.ChannelItem, finderItem core.ChannelFinderItem) {
 	if h.program == nil {
 		return
 	}

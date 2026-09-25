@@ -14,9 +14,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/emoji"
 	imgpkg "github.com/gammons/slk/internal/image"
-	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/sidebar"
@@ -1587,11 +1587,11 @@ func goldenScenarios() []goldenScenario {
 // row joined that branch is unreachable and the golden pins half the
 // list renderer. TestGolden_OverlayFinderIsCompositedOverBackdrop
 // asserts the mixed set survives to the screen.
-func goldenFinderItems() []channelfinder.Item {
+func goldenFinderItems() []core.ChannelFinderItem {
 	src := goldenChannels()
-	out := make([]channelfinder.Item, 0, len(src))
+	out := make([]core.ChannelFinderItem, 0, len(src))
 	for i, it := range src {
-		out = append(out, channelfinder.Item{
+		out = append(out, core.ChannelFinderItem{
 			ID:          it.ID,
 			Name:        it.Name,
 			Type:        it.Type,

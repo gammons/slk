@@ -17,6 +17,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/presencemenu"
 	"github.com/gammons/slk/internal/ui/statusbar"
@@ -111,7 +112,7 @@ func (p *presenceController) ClearDNDFor(teamID string) workspaceStatus {
 // action. SetActive/SetAway touch only Presence; Snooze sets DND fields
 // and leaves Presence alone; EndDND clears DND fields and leaves
 // Presence alone. Returns the resulting struct.
-func (p *presenceController) Apply(teamID string, action presencemenu.Action, snoozeMinutes int) workspaceStatus {
+func (p *presenceController) Apply(teamID string, action core.PresenceAction, snoozeMinutes int) workspaceStatus {
 	st := p.byTeam[teamID]
 	switch action {
 	case presencemenu.ActionSetActive:

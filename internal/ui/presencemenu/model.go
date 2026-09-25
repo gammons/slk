@@ -15,9 +15,6 @@ import (
 	"github.com/muesli/reflow/truncate"
 )
 
-// Action is the high-level operation the user picked.
-type Action = core.PresenceAction
-
 const (
 	ActionSetActive    = core.PresenceSetActive
 	ActionSetAway      = core.PresenceSetAway
@@ -28,14 +25,14 @@ const (
 
 // Result is returned when the user commits a selection.
 type Result struct {
-	Action        Action
+	Action        core.PresenceAction
 	SnoozeMinutes int // populated when Action == ActionSnooze
 }
 
 // item is a single row in the menu.
 type item struct {
 	label   string
-	action  Action
+	action  core.PresenceAction
 	minutes int  // for ActionSnooze
 	current bool // currently-active row (decorated, still selectable)
 }

@@ -21,7 +21,6 @@ import (
 
 	"github.com/gammons/slk/internal/core"
 	emojiutil "github.com/gammons/slk/internal/emoji"
-	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/searchresults"
@@ -267,7 +266,7 @@ type (
 		Theme        string // resolved theme name (per-workspace or global default)
 		SidebarWidth int    // resolved sidebar width (per-workspace or global default)
 		Channels     []sidebar.ChannelItem
-		FinderItems  []channelfinder.Item
+		FinderItems  []core.ChannelFinderItem
 		UserNames    map[string]string
 		// UserStatuses is every cached user's custom status, for author
 		// names and DM rows. DND is not cached; RefreshPeerDND fetches it
@@ -309,7 +308,7 @@ type (
 	ConversationOpenedMsg struct {
 		TeamID     string
 		Item       sidebar.ChannelItem
-		FinderItem channelfinder.Item
+		FinderItem core.ChannelFinderItem
 	}
 	// SectionsRefreshedMsg is sent when a workspace's Slack-native
 	// section state has mutated (via channel_section_* WS events) and
@@ -341,7 +340,7 @@ type (
 		Theme        string // resolved theme name (per-workspace or global default)
 		SidebarWidth int    // resolved sidebar width (per-workspace or global default)
 		Channels     []sidebar.ChannelItem
-		FinderItems  []channelfinder.Item
+		FinderItems  []core.ChannelFinderItem
 		UserNames    map[string]string
 		// UserStatuses is every cached user's custom status, for author
 		// names. DM peers' DND arrives separately after connect.
@@ -410,7 +409,7 @@ type (
 		TeamID string
 		Query  string
 		Gen    uint64
-		Items  []channelfinder.Item
+		Items  []core.ChannelFinderItem
 	}
 	SpinnerTickMsg    struct{}
 	LoadingTimeoutMsg struct{}

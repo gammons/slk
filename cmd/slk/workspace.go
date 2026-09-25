@@ -5,11 +5,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/service"
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slack/edge"
 	"github.com/gammons/slk/internal/slack/membership"
-	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/sidebar"
 )
 
@@ -97,7 +97,7 @@ type WorkspaceContext struct {
 	// the user has joined. Channels they have not joined are not held
 	// here at all — they arrive per query from the finder's debounced
 	// channels/search and live only in the finder component.
-	FinderItems   []channelfinder.Item
+	FinderItems   []core.ChannelFinderItem
 	TeamID        string
 	TeamName      string
 	UserID        string
@@ -134,7 +134,7 @@ type WorkspaceContext struct {
 	// the user's most recent visit to that channel in this workspace.
 	// Populated once at connect from cache.GetChannelVisits and
 	// updated on every ChannelSelectedMsg via the visit recorder.
-	// Used to populate channelfinder.Item.LastVisited for sort.
+	// Used to populate core.ChannelFinderItem.LastVisited for sort.
 	LastVisitedByChannel map[string]int64
 	// UserResolver dispatches background users.info lookups for
 	// unknown message authors. Set in connectWorkspace once the

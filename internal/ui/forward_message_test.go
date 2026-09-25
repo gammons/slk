@@ -10,7 +10,6 @@ import (
 
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
-	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/messages"
 )
 
@@ -29,7 +28,7 @@ func TestForwardMessageSelected(t *testing.T) {
 			}
 			a.compose.SetValue("unsent draft")
 			a.threadCompose.SetValue("unsent reply")
-			a.SetChannelFinderItems([]channelfinder.Item{
+			a.SetChannelFinderItems([]core.ChannelFinderItem{
 				{ID: "C2", Name: "destination", Type: "channel", Joined: true},
 				{ID: "D2", Name: "alice", Type: "dm", Joined: true},
 				{ID: "C3", Name: "browse only", Type: "channel"},
@@ -191,7 +190,7 @@ func TestForwardMessageNoSelection(t *testing.T) {
 func TestForwardMessageClickAndFailure(t *testing.T) {
 	a := newTestApp(t, withActiveTeam("T1"), withActiveChannel("C1"), withMessages(testMessageItems(1)...))
 	focusMessages(t, a)
-	a.SetChannelFinderItems([]channelfinder.Item{{ID: "D2", Name: "alice", Type: "dm", Joined: true}})
+	a.SetChannelFinderItems([]core.ChannelFinderItem{{ID: "D2", Name: "alice", Type: "dm", Joined: true}})
 	calls := 0
 	a.SetMessageService(core.NewMessageService(core.MessageServiceFuncs{
 		Forward: func(_ context.Context, _ string, _ ids.ChannelID, _ ids.MessageTS, dest ids.ChannelID) (core.ForwardResult, error) {

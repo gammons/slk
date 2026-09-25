@@ -10,7 +10,6 @@ import (
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/messages"
-	"github.com/gammons/slk/internal/ui/reactionpicker"
 )
 
 // reactionCalls records what the injected ReactionService was asked to
@@ -65,9 +64,9 @@ func reactionPickerOpts(reacted bool) []testOpt {
 func openReactionPicker(calls *reactionCalls, frecent ...string) func(*testing.T, *App) {
 	return func(t *testing.T, a *App) {
 		*calls = reactionCalls{}
-		entries := make([]reactionpicker.EmojiEntry, 0, len(frecent))
+		entries := make([]core.EmojiEntry, 0, len(frecent))
 		for _, n := range frecent {
-			entries = append(entries, reactionpicker.EmojiEntry{Name: n})
+			entries = append(entries, core.EmojiEntry{Name: n})
 		}
 		a.SetCurrentUserID(reactionTestUserID)
 		a.SetReactionService(core.NewReactionService(
@@ -79,7 +78,7 @@ func openReactionPicker(calls *reactionCalls, frecent ...string) func(*testing.T
 				calls.removed = append(calls.removed, emoji)
 				return errReactionFailed
 			},
-			func(int) []reactionpicker.EmojiEntry { return entries },
+			func(int) []core.EmojiEntry { return entries },
 			func(emoji string) { calls.frecent = append(calls.frecent, emoji) },
 		))
 		a.openPickerFromMessage()

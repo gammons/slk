@@ -6,8 +6,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
-	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/help"
 	"github.com/gammons/slk/internal/ui/searchresults"
 )
@@ -19,9 +19,9 @@ func openChannelFinder(t *testing.T) *App {
 		// Descending LastVisited keeps these in declared order under the
 		// empty-query sort, so row N maps to items[N].
 		withChannelFinderOpen(
-			channelfinder.Item{ID: "C1", Name: "alpha", Type: "channel", Joined: true, LastVisited: 300},
-			channelfinder.Item{ID: "C2", Name: "bravo", Type: "channel", Joined: true, LastVisited: 200},
-			channelfinder.Item{ID: "C3", Name: "charlie", Type: "channel", Joined: true, LastVisited: 100},
+			core.ChannelFinderItem{ID: "C1", Name: "alpha", Type: "channel", Joined: true, LastVisited: 300},
+			core.ChannelFinderItem{ID: "C2", Name: "bravo", Type: "channel", Joined: true, LastVisited: 200},
+			core.ChannelFinderItem{ID: "C3", Name: "charlie", Type: "channel", Joined: true, LastVisited: 100},
 		),
 		withMode(ModeChannelFinder),
 	)

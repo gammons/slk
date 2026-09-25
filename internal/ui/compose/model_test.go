@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
 	"github.com/gammons/slk/internal/ui/styles"
@@ -727,7 +728,7 @@ func TestSetPlaceholderOverride_SurvivesReset(t *testing.T) {
 
 func TestAddAttachment_AppendsToPending(t *testing.T) {
 	m := New("general")
-	att := PendingAttachment{Filename: "a.png", Bytes: []byte("x"), Mime: "image/png", Size: 1}
+	att := core.PendingAttachment{Filename: "a.png", Bytes: []byte("x"), Mime: "image/png", Size: 1}
 	m.AddAttachment(att)
 
 	got := m.Attachments()
@@ -741,7 +742,7 @@ func TestAddAttachment_AppendsToPending(t *testing.T) {
 
 func TestAttachments_ReturnsCopy(t *testing.T) {
 	m := New("general")
-	m.AddAttachment(PendingAttachment{Filename: "a.png", Bytes: []byte("x"), Size: 1})
+	m.AddAttachment(core.PendingAttachment{Filename: "a.png", Bytes: []byte("x"), Size: 1})
 	got := m.Attachments()
 	got[0].Filename = "MUTATED"
 
@@ -753,8 +754,8 @@ func TestAttachments_ReturnsCopy(t *testing.T) {
 
 func TestRemoveLastAttachment(t *testing.T) {
 	m := New("general")
-	m.AddAttachment(PendingAttachment{Filename: "a.png", Size: 1})
-	m.AddAttachment(PendingAttachment{Filename: "b.png", Size: 2})
+	m.AddAttachment(core.PendingAttachment{Filename: "a.png", Size: 1})
+	m.AddAttachment(core.PendingAttachment{Filename: "b.png", Size: 2})
 
 	removed, ok := m.RemoveLastAttachment()
 	if !ok {
@@ -778,8 +779,8 @@ func TestRemoveLastAttachment_Empty(t *testing.T) {
 
 func TestClearAttachments(t *testing.T) {
 	m := New("general")
-	m.AddAttachment(PendingAttachment{Filename: "a.png", Size: 1})
-	m.AddAttachment(PendingAttachment{Filename: "b.png", Size: 2})
+	m.AddAttachment(core.PendingAttachment{Filename: "a.png", Size: 1})
+	m.AddAttachment(core.PendingAttachment{Filename: "b.png", Size: 2})
 	m.ClearAttachments()
 	if len(m.Attachments()) != 0 {
 		t.Errorf("expected empty after Clear, got %d", len(m.Attachments()))
@@ -812,7 +813,7 @@ func TestComposeView_NoAttachments_NoChipRow(t *testing.T) {
 
 func TestComposeView_WithAttachment_RendersChip(t *testing.T) {
 	m := New("general")
-	m.AddAttachment(PendingAttachment{Filename: "screenshot.png", Size: 12345})
+	m.AddAttachment(core.PendingAttachment{Filename: "screenshot.png", Size: 12345})
 	view := m.View(60, false)
 	if !strings.Contains(view, "📎") {
 		t.Errorf("expected chip glyph in view: %q", view)
@@ -824,8 +825,8 @@ func TestComposeView_WithAttachment_RendersChip(t *testing.T) {
 
 func TestComposeView_MultipleAttachments_AllChipsRender(t *testing.T) {
 	m := New("general")
-	m.AddAttachment(PendingAttachment{Filename: "a.png", Size: 1024})
-	m.AddAttachment(PendingAttachment{Filename: "b.pdf", Size: 2048})
+	m.AddAttachment(core.PendingAttachment{Filename: "a.png", Size: 1024})
+	m.AddAttachment(core.PendingAttachment{Filename: "b.pdf", Size: 2048})
 	view := m.View(80, false)
 	if !strings.Contains(view, "a.png") {
 		t.Errorf("expected a.png in view")
@@ -837,8 +838,8 @@ func TestComposeView_MultipleAttachments_AllChipsRender(t *testing.T) {
 
 func TestUpdate_BackspaceAtColZeroEmpty_RemovesLastAttachment(t *testing.T) {
 	m := New("general")
-	m.AddAttachment(PendingAttachment{Filename: "a.png", Size: 1})
-	m.AddAttachment(PendingAttachment{Filename: "b.png", Size: 2})
+	m.AddAttachment(core.PendingAttachment{Filename: "a.png", Size: 1})
+	m.AddAttachment(core.PendingAttachment{Filename: "b.png", Size: 2})
 
 	// Cursor starts at (0, 0) and value is empty.
 	m2, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
@@ -853,7 +854,7 @@ func TestUpdate_BackspaceAtColZeroEmpty_RemovesLastAttachment(t *testing.T) {
 
 func TestUpdate_BackspaceWithText_DoesNotRemoveAttachment(t *testing.T) {
 	m := New("general")
-	m.AddAttachment(PendingAttachment{Filename: "a.png", Size: 1})
+	m.AddAttachment(core.PendingAttachment{Filename: "a.png", Size: 1})
 	m.SetValue("hello")
 
 	m2, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
@@ -879,7 +880,7 @@ func TestUpdate_BackspaceNoAttachments_PassesThrough(t *testing.T) {
 
 func TestUpdate_BackspaceWhileUploading_DoesNotRemove(t *testing.T) {
 	m := New("general")
-	m.AddAttachment(PendingAttachment{Filename: "a.png", Size: 1})
+	m.AddAttachment(core.PendingAttachment{Filename: "a.png", Size: 1})
 	m.SetUploading(true)
 
 	m2, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
@@ -890,7 +891,7 @@ func TestUpdate_BackspaceWhileUploading_DoesNotRemove(t *testing.T) {
 
 func TestReset_ClearsPendingAttachmentsAndUploadingFlag(t *testing.T) {
 	m := New("general")
-	m.AddAttachment(PendingAttachment{Filename: "a.png", Size: 1})
+	m.AddAttachment(core.PendingAttachment{Filename: "a.png", Size: 1})
 	m.SetUploading(true)
 	m.SetValue("draft")
 
