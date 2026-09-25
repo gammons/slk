@@ -19,10 +19,10 @@ import (
 
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/export"
 	"github.com/gammons/slk/internal/ids"
 	imgpkg "github.com/gammons/slk/internal/image"
-	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/presencemenu"
 	"github.com/gammons/slk/internal/ui/sidebar"
@@ -38,14 +38,14 @@ import (
 // with the answer. Wiring lives in seams_wiring_test.go.
 
 type seamStatusCall struct {
-	action presencemenu.Action
+	action core.PresenceAction
 	mins   int
 }
 
 func TestSeam_PresenceMenuSetsStatus(t *testing.T) {
 	a := newTestApp(t, withActiveTeam("T1"))
 	var calls []seamStatusCall
-	wireStatusSetter(a, func(action presencemenu.Action, mins int) {
+	wireStatusSetter(a, func(action core.PresenceAction, mins int) {
 		calls = append(calls, seamStatusCall{action, mins})
 	})
 	pres, dnd, end, _ := a.presence.Status(a.activeTeamID)
@@ -69,7 +69,7 @@ func TestSeam_PresenceMenuSetsStatus(t *testing.T) {
 func TestSeam_CustomSnoozeSetsStatus(t *testing.T) {
 	a := newTestApp(t, withActiveTeam("T1"))
 	var calls []seamStatusCall
-	wireStatusSetter(a, func(action presencemenu.Action, mins int) {
+	wireStatusSetter(a, func(action core.PresenceAction, mins int) {
 		calls = append(calls, seamStatusCall{action, mins})
 	})
 	a.presence.ClearSnoozeBuf()
@@ -128,10 +128,10 @@ func TestSeam_ThemeSwitcherSavesChoice(t *testing.T) {
 	a := newTestApp(t)
 	type save struct {
 		name  string
-		scope themeswitcher.ThemeScope
+		scope core.ThemeScope
 	}
 	var saves []save
-	wireThemeSaver(a, func(name string, scope themeswitcher.ThemeScope) {
+	wireThemeSaver(a, func(name string, scope core.ThemeScope) {
 		saves = append(saves, save{name, scope})
 	})
 	a.SetThemeItems([]string{"dracula", "nord"})
@@ -166,7 +166,7 @@ func TestSeam_SidebarResizeSavesWidth(t *testing.T) {
 
 type seamUpload struct {
 	channelID, threadTS, caption string
-	atts                         []compose.PendingAttachment
+	atts                         []core.PendingAttachment
 }
 
 type seamUploadDone struct{}
@@ -174,19 +174,19 @@ type seamUploadDone struct{}
 func TestSeam_UploadFromChannelCompose(t *testing.T) {
 	a := newTestApp(t, withActiveChannel("C1"))
 	var got []seamUpload
-	wireUploader(a, func(channelID, threadTS, caption string, atts []compose.PendingAttachment) tea.Cmd {
+	wireUploader(a, func(channelID, threadTS, caption string, atts []core.PendingAttachment) tea.Cmd {
 		got = append(got, seamUpload{channelID, threadTS, caption, atts})
 		return func() tea.Msg { return seamUploadDone{} }
 	})
 	a.focusedPanel = PanelMessages
 	a.SetMode(ModeInsert)
-	att := compose.PendingAttachment{Filename: "a.png", Bytes: []byte("png"), Mime: "image/png", Size: 3}
+	att := core.PendingAttachment{Filename: "a.png", Bytes: []byte("png"), Mime: "image/png", Size: 3}
 	a.compose.AddAttachment(att)
 	a.compose.SetValue("look")
 
 	cmd := a.handleInsertMode(tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	want := []seamUpload{{"C1", "", "look", []compose.PendingAttachment{att}}}
+	want := []seamUpload{{"C1", "", "look", []core.PendingAttachment{att}}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("uploads = %+v, want %+v", got, want)
 	}
@@ -225,7 +225,7 @@ func drainSkippingTimers(cmd tea.Cmd) []tea.Msg {
 func TestSeam_UploadFromThreadCompose(t *testing.T) {
 	a := newTestApp(t, withActiveChannel("C1"))
 	var got []seamUpload
-	wireUploader(a, func(channelID, threadTS, caption string, atts []compose.PendingAttachment) tea.Cmd {
+	wireUploader(a, func(channelID, threadTS, caption string, atts []core.PendingAttachment) tea.Cmd {
 		got = append(got, seamUpload{channelID, threadTS, caption, atts})
 		return nil
 	})
@@ -233,12 +233,12 @@ func TestSeam_UploadFromThreadCompose(t *testing.T) {
 	a.threadVisible = true
 	a.focusedPanel = PanelThread
 	a.SetMode(ModeInsert)
-	att := compose.PendingAttachment{Filename: "b.txt", Path: "/tmp/b.txt", Size: 5}
+	att := core.PendingAttachment{Filename: "b.txt", Path: "/tmp/b.txt", Size: 5}
 	a.threadCompose.AddAttachment(att)
 
 	_ = a.handleInsertMode(tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	want := []seamUpload{{"C1", "P1", "", []compose.PendingAttachment{att}}}
+	want := []seamUpload{{"C1", "P1", "", []core.PendingAttachment{att}}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("uploads = %+v, want %+v", got, want)
 	}
@@ -248,7 +248,7 @@ func TestSeam_UploadUnwiredToasts(t *testing.T) {
 	a := newTestApp(t, withActiveChannel("C1"))
 	a.focusedPanel = PanelMessages
 	a.SetMode(ModeInsert)
-	a.compose.AddAttachment(compose.PendingAttachment{Filename: "a.png", Bytes: []byte("png"), Size: 3})
+	a.compose.AddAttachment(core.PendingAttachment{Filename: "a.png", Bytes: []byte("png"), Size: 3})
 
 	cmd := a.handleInsertMode(tea.KeyPressMsg{Code: tea.KeyEnter})
 	firstBatchCmd(t, cmd)

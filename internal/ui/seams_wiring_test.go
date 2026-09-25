@@ -9,16 +9,13 @@ import (
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/export"
 	"github.com/gammons/slk/internal/ids"
-	"github.com/gammons/slk/internal/ui/compose"
-	"github.com/gammons/slk/internal/ui/presencemenu"
-	"github.com/gammons/slk/internal/ui/themeswitcher"
 )
 
 // How seams_test.go installs each collaborator on the App. The scenarios
 // there must not change when the wiring does; this file is the only one
 // that should.
 
-func wireStatusSetter(a *App, fn func(action presencemenu.Action, mins int)) {
+func wireStatusSetter(a *App, fn func(action core.PresenceAction, mins int)) {
 	a.SetPresenceService(core.NewPresenceService(fn, nil))
 }
 
@@ -26,7 +23,7 @@ func wireTypingSender(a *App, fn func(channelID string)) {
 	a.SetPresenceService(core.NewPresenceService(nil, fn))
 }
 
-func wireThemeSaver(a *App, fn func(name string, scope themeswitcher.ThemeScope)) {
+func wireThemeSaver(a *App, fn func(name string, scope core.ThemeScope)) {
 	a.SetSettingsService(core.NewSettingsService(fn, nil))
 }
 
@@ -34,7 +31,7 @@ func wireWidthSaver(a *App, fn func(width int)) {
 	a.SetSettingsService(core.NewSettingsService(nil, fn))
 }
 
-func wireUploader(a *App, fn func(channelID, threadTS, caption string, atts []compose.PendingAttachment) tea.Cmd) {
+func wireUploader(a *App, fn func(channelID, threadTS, caption string, atts []core.PendingAttachment) tea.Cmd) {
 	a.SetFileService(core.NewFileService(func(channelID, threadTS, caption string, atts []core.PendingAttachment) core.Cmd {
 		return coreCmd(fn(channelID, threadTS, caption, atts))
 	}, nil))

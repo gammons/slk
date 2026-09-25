@@ -20,10 +20,6 @@ import (
 	"github.com/gammons/slk/internal/usergroups"
 )
 
-// PendingAttachment is a file (or in-memory image) waiting to be
-// uploaded with the next send.
-type PendingAttachment = core.PendingAttachment
-
 type Model struct {
 	input       textarea.Model
 	channelName string
@@ -77,7 +73,7 @@ type Model struct {
 
 	// pending lists attachments queued for the next send. Cleared on
 	// successful submit; preserved on failure for retry.
-	pending []PendingAttachment
+	pending []core.PendingAttachment
 
 	// uploading is true while attachments are mid-upload. Causes the
 	// chip row to render in muted style and the Update() to refuse
@@ -235,16 +231,16 @@ func (m *Model) SetValue(s string) {
 }
 
 // AddAttachment appends a pending attachment. Newest is last.
-func (m *Model) AddAttachment(a PendingAttachment) {
+func (m *Model) AddAttachment(a core.PendingAttachment) {
 	m.pending = append(m.pending, a)
 	m.dirty()
 }
 
 // RemoveLastAttachment removes the most-recently-added pending
 // attachment and returns it. Returns ok=false if pending is empty.
-func (m *Model) RemoveLastAttachment() (PendingAttachment, bool) {
+func (m *Model) RemoveLastAttachment() (core.PendingAttachment, bool) {
 	if len(m.pending) == 0 {
-		return PendingAttachment{}, false
+		return core.PendingAttachment{}, false
 	}
 	last := m.pending[len(m.pending)-1]
 	m.pending = m.pending[:len(m.pending)-1]
@@ -253,11 +249,11 @@ func (m *Model) RemoveLastAttachment() (PendingAttachment, bool) {
 }
 
 // Attachments returns a copy of the current pending attachments.
-func (m *Model) Attachments() []PendingAttachment {
+func (m *Model) Attachments() []core.PendingAttachment {
 	if len(m.pending) == 0 {
 		return nil
 	}
-	out := make([]PendingAttachment, len(m.pending))
+	out := make([]core.PendingAttachment, len(m.pending))
 	copy(out, m.pending)
 	return out
 }

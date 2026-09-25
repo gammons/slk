@@ -5,12 +5,11 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/gammons/slk/internal/core"
-	"github.com/gammons/slk/internal/ui/channelfinder"
 )
 
 // newFinderApp opens the channel finder over a local cache of joined
 // channels, with a recording remote search wired in.
-func newFinderApp(t *testing.T, searched *[]string, results []channelfinder.Item) *App {
+func newFinderApp(t *testing.T, searched *[]string, results []core.ChannelFinderItem) *App {
 	t.Helper()
 	// withSize(0, 0) preserves NewApp's unsized state: the original
 	// builder set no dimensions.
@@ -18,14 +17,14 @@ func newFinderApp(t *testing.T, searched *[]string, results []channelfinder.Item
 		withSize(0, 0),
 		withActiveTeam("T1"),
 		withChannelService(core.ChannelServiceFuncs{
-			SearchRemote: func(query string) []channelfinder.Item {
+			SearchRemote: func(query string) []core.ChannelFinderItem {
 				*searched = append(*searched, query)
 				return results
 			},
 		}),
 		withChannelFinderOpen(
-			channelfinder.Item{ID: "C1", Name: "testing-local", Type: "channel", Joined: true},
-			channelfinder.Item{ID: "C2", Name: "unrelated", Type: "channel", Joined: true},
+			core.ChannelFinderItem{ID: "C1", Name: "testing-local", Type: "channel", Joined: true},
+			core.ChannelFinderItem{ID: "C2", Name: "unrelated", Type: "channel", Joined: true},
 		),
 		withMode(ModeChannelFinder),
 	)
@@ -163,7 +162,7 @@ func TestChannelFinder_StaleSearchResultsAreDropped(t *testing.T) {
 		TeamID: "T1",
 		Query:  "te",
 		Gen:    1,
-		Items:  []channelfinder.Item{{ID: "CSTALE", Name: "stale-result", Type: "channel"}},
+		Items:  []core.ChannelFinderItem{{ID: "CSTALE", Name: "stale-result", Type: "channel"}},
 	})
 	for _, it := range a.channelFinder.Items() {
 		if it.ID == "CSTALE" {
@@ -175,7 +174,7 @@ func TestChannelFinder_StaleSearchResultsAreDropped(t *testing.T) {
 		TeamID: "T1",
 		Query:  "test",
 		Gen:    a.pendingChannelSearchGen,
-		Items:  []channelfinder.Item{{ID: "CFRESH", Name: "testing-remote", Type: "channel"}},
+		Items:  []core.ChannelFinderItem{{ID: "CFRESH", Name: "testing-remote", Type: "channel"}},
 	})
 	var sawFresh bool
 	for _, it := range a.channelFinder.Items() {
@@ -197,7 +196,7 @@ func TestChannelFinder_ResultsForAnotherWorkspaceAreDropped(t *testing.T) {
 		TeamID: "T_OTHER",
 		Query:  "test",
 		Gen:    a.pendingChannelSearchGen,
-		Items:  []channelfinder.Item{{ID: "COTHER", Name: "other-workspace", Type: "channel"}},
+		Items:  []core.ChannelFinderItem{{ID: "COTHER", Name: "other-workspace", Type: "channel"}},
 	})
 	for _, it := range a.channelFinder.Items() {
 		if it.ID == "COTHER" {

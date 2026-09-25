@@ -767,7 +767,7 @@ func TestBootConversations_MapsWhatTheSidebarBuilderReads(t *testing.T) {
 			{ID: "C3", Name: "mpdm-a--b--c", IsMPIM: true},
 		},
 		IMs:    []boot.IM{{ID: "D1", UserID: "U9", IsIM: true, IsOpen: true}},
-		IsOpen: []string{"D1"},
+		IsOpen: []string{"D1", "C3"},
 	}
 
 	got := bootConversations(res)
@@ -834,6 +834,105 @@ func TestBootConversations_SkipsArchivedAndClosed(t *testing.T) {
 	if !ids["C1"] || !ids["D1"] {
 		t.Errorf("dropped something live: %v", ids)
 	}
+}
+
+func TestBootConversations_SkipsClosedMPIMs(t *testing.T) {
+	// userBoot is asked for return_all_relevant_mpdms=true, so its
+	// channels[] carries every group DM the user was ever in --
+	// including the ones they have closed. The official client shows
+	// only those in the top-level is_open list; the rest are hidden
+	// even when a custom sidebar section claims them.
+	res := &bootstrap.Result{
+		Channels: []boot.Channel{
+			{ID: "C1", Name: "live", IsChannel: true},
+			{ID: "G1", Name: "mpdm-a--b--c-1", IsMPIM: true},
+			{ID: "G2", Name: "mpdm-a--d--e-1", IsMPIM: true},
+		},
+		IsOpen: []string{"G1"},
+	}
+	ids := map[string]bool{}
+	for _, c := range bootConversations(res) {
+		ids[c.ID] = true
+	}
+	if !ids["G1"] {
+		t.Error("open MPIM dropped")
+	}
+	if ids["G2"] {
+		t.Error("closed MPIM kept; it is not in IsOpen")
+	}
+	if !ids["C1"] {
+		t.Error("regular channel dropped; is_open only governs DMs and MPIMs")
+	}
+}
+
+func TestBootConversations_EmptyIsOpenDisablesMPIMFilter(t *testing.T) {
+	// An empty is_open list is indistinguishable from userBoot not
+	// returning the field at all. This is the fallback path -- the one
+	// that runs precisely when userBoot came back thin -- so hiding
+	// every group DM on that evidence would be a silent regression.
+	// Mirrors dropClosedMPIMs' "no is_open data means no filtering".
+	for _, tc := range []struct {
+		name   string
+		isOpen []string
+	}{
+		{"nil", nil},
+		{"empty", []string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := &bootstrap.Result{
+				Channels: []boot.Channel{
+					{ID: "C1", Name: "live", IsChannel: true},
+					{ID: "G1", Name: "mpdm-a--b--c-1", IsMPIM: true},
+				},
+				IsOpen: tc.isOpen,
+			}
+			ids := map[string]bool{}
+			for _, c := range bootConversations(res) {
+				ids[c.ID] = true
+			}
+			if !ids["G1"] {
+				t.Error("MPIM dropped on empty is_open; the filter must be disabled, not applied to everything")
+			}
+			if !ids["C1"] {
+				t.Error("regular channel dropped")
+			}
+		})
+	}
+}
+
+func TestDropClosedMPIMs(t *testing.T) {
+	chans := []slack.Channel{
+		{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C1"}}, IsChannel: true},
+		{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "G1", IsMpIM: true}}},
+		{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "G2", IsMpIM: true}}},
+		{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "D2", IsIM: true}}},
+	}
+
+	t.Run("drops MPIMs absent from is_open, keeps everything else", func(t *testing.T) {
+		got := dropClosedMPIMs(chans, []string{"G1", "D1"})
+		ids := map[string]bool{}
+		for _, c := range got {
+			ids[c.ID] = true
+		}
+		if len(got) != 3 || !ids["C1"] || !ids["G1"] || ids["G2"] || !ids["D2"] {
+			t.Errorf("got %v; want C1, G1, D2 (G2 is a closed MPIM)", ids)
+		}
+	})
+
+	t.Run("no is_open data means no filtering", func(t *testing.T) {
+		// An empty list is indistinguishable from "userBoot did not
+		// return it"; hiding every group DM on that evidence would be
+		// a silent regression, so the input passes through untouched.
+		if got := dropClosedMPIMs(chans, nil); len(got) != len(chans) {
+			t.Errorf("got %d channels; want %d unchanged", len(got), len(chans))
+		}
+	})
+
+	t.Run("nil input", func(t *testing.T) {
+		if got := dropClosedMPIMs(nil, []string{"G1"}); got != nil {
+			t.Errorf("got %v; want nil", got)
+		}
+	})
 }
 
 func TestBootConversations_NilSafe(t *testing.T) {

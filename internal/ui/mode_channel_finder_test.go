@@ -9,7 +9,6 @@ import (
 
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
-	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/sidebar"
 )
 
@@ -52,8 +51,8 @@ import (
 // (app.go:561) and SetItems preserves it, so the finder holds FOUR rows,
 // not three, and the empty-query order is: Threads (synthetic, pinned),
 // general (joined, newest), random (joined), design (not joined).
-func channelFinderItems() []channelfinder.Item {
-	return []channelfinder.Item{
+func channelFinderItems() []core.ChannelFinderItem {
+	return []core.ChannelFinderItem{
 		{ID: "C1", Name: "general", Type: "channel", Joined: true, LastVisited: 300},
 		{ID: "C2", Name: "random", Type: "channel", Joined: true, LastVisited: 200},
 		{ID: "C3", Name: "design", Type: "channel", Joined: false},

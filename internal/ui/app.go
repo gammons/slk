@@ -171,6 +171,11 @@ type App struct {
 	// any mode change disarms (see SetMode).
 	pendingWinCmd bool
 
+	// pendingTop is true between the first and second `g` of the vim
+	// `gg` chord (jump to top). Any other key cancels; any mode change
+	// disarms (see SetMode).
+	pendingTop bool
+
 	// layout owns the per-frame layout geometry (horizontal bands for
 	// mouse hit-testing + per-pane content heights for pageSize). See
 	// internal/ui/panellayout.go.
@@ -224,8 +229,8 @@ type App struct {
 	// until wired.
 	desktop core.DesktopService
 
-	// clipboardWrite creates OSC 52 write commands for permalink and drag-copy
-	// actions. Tests inject fakes via SetClipboardWriter.
+	// clipboardWrite creates copy commands for message, permalink and drag-copy
+	// actions. cmd/slk wires the host backend; tests inject fakes.
 	clipboardWrite clipboardWriter
 
 	// threads is the App's ThreadService collaborator (fetch / mark /
@@ -827,7 +832,7 @@ func NewApp() *App {
 	// can jump to the threads-list view from the same overlay they use
 	// to switch channels (ctrl+t / ctrl+p). Selecting this row dispatches
 	// ThreadsViewActivatedMsg in handleChannelFinderMode below.
-	app.channelFinder.SetSyntheticItems([]channelfinder.Item{{
+	app.channelFinder.SetSyntheticItems([]core.ChannelFinderItem{{
 		ID:     channelfinder.ThreadsViewID,
 		Name:   "Threads",
 		Type:   "threads",
@@ -1336,7 +1341,7 @@ func (a *App) toggleReactionOnMessageItem(channelIDStr string, msg messages.Mess
 }
 
 // copyMessageOfSelected copies the text of the currently-selected message or
-// thread reply to the system clipboard via OSC 52 and emits a status-bar toast.
+// thread reply to the system clipboard and emits a status-bar toast.
 func (a *App) copyMessageOfSelected() tea.Cmd {
 	var msg messages.MessageItem
 	switch a.focusedPanel {
@@ -1711,6 +1716,30 @@ func (a *App) flushScrollCoalesce() tea.Cmd {
 	return a.applyScrollMove(a.scrollPanel, n)
 }
 
+// handleGoToTop is the `gg` counterpart of handleGoToBottom: it jumps
+// the focused panel's selection to its first item. In the messages
+// pane that is the oldest *loaded* message, so like every other path
+// that lands the selection at the top (k, PgUp, ctrl+u, wheel) it also
+// kicks the older-history backfill: repeated `gg` pages back through
+// the channel one fetch at a time.
+func (a *App) handleGoToTop() tea.Cmd {
+	switch a.focusedPanel {
+	case PanelSidebar:
+		a.sidebar.GoToTop()
+	case PanelMessages:
+		if a.view == ViewThreads {
+			a.threadsView.GoToTop()
+			// gg is a one-shot jump — fire the fetch immediately.
+			return a.openSelectedThreadCmd(false)
+		}
+		a.messagepane.GoToTop()
+		return a.maybeFetchOlderHistory(a.messagepane.AtTop())
+	case PanelThread:
+		a.threadPanel.GoToTop()
+	}
+	return nil
+}
+
 func (a *App) handleGoToBottom() tea.Cmd {
 	switch a.focusedPanel {
 	case PanelSidebar:
@@ -1779,10 +1808,13 @@ func (a *App) scrollFocusedPanel(delta int) tea.Cmd {
 	}
 	switch a.focusedPanel {
 	case PanelSidebar:
+		// Keyboard paging in the channel list has vim semantics: the
+		// cursor moves with the viewport (see sidebar.PageDown). The
+		// mouse wheel goes through sidebar.ScrollUp/Down instead.
 		if delta < 0 {
-			a.sidebar.ScrollUp(n)
+			a.sidebar.PageUp(n)
 		} else {
-			a.sidebar.ScrollDown(n)
+			a.sidebar.PageDown(n)
 		}
 	case PanelMessages:
 		if a.view == ViewThreads {
@@ -2017,8 +2049,9 @@ func (a *App) SetMode(mode Mode) {
 	// intercept (e.g. ctrl+c quit-confirm) must not strand it armed.
 	// The `if` guard scopes the hint restore to chord disarms only, so
 	// other helpHint states aren't clobbered by unrelated mode changes.
-	if a.pendingWinCmd {
+	if a.pendingWinCmd || a.pendingTop {
 		a.pendingWinCmd = false
+		a.pendingTop = false
 		a.statusbar.SetHelpHint(a.defaultHelpHint())
 	}
 	if mode == ModeInsert {
@@ -2578,8 +2611,8 @@ func (a *App) SetDesktopService(s core.DesktopService) {
 	a.desktop = s
 }
 
-// SetClipboardWriter replaces the OSC 52 command factory. Used by tests to
-// capture copied text. Pass nil to restore tea.SetClipboard.
+// SetClipboardWriter supplies the host's copy command factory. Tests can also
+// use it to capture copied text. Pass nil to restore tea.SetClipboard.
 func (a *App) SetClipboardWriter(fn clipboardWriter) {
 	if fn == nil {
 		a.clipboardWrite = defaultClipboardWriter
@@ -2619,7 +2652,7 @@ func (a *App) SetUnreadService(s core.UnreadService) {
 	a.workspaceRail.SetUnreadReader(s.UnreadWorkspaces)
 }
 
-func (a *App) SetChannelFinderItems(items []channelfinder.Item) {
+func (a *App) SetChannelFinderItems(items []core.ChannelFinderItem) {
 	a.channelFinder.SetItems(items)
 }
 
@@ -3596,7 +3629,7 @@ func (a *App) tryAttachFromClipboard(target *compose.Model, pathCandidate string
 			)
 		}
 		filename := "slk-paste-" + time.Now().Format("2006-01-02-15-04-05") + ".png"
-		target.AddAttachment(compose.PendingAttachment{
+		target.AddAttachment(core.PendingAttachment{
 			Filename: filename,
 			Bytes:    imgBytes,
 			Mime:     "image/png",
@@ -3619,7 +3652,7 @@ func (a *App) tryAttachFromClipboard(target *compose.Model, pathCandidate string
 				return true, a.uploadToastCmd("Empty file", 2*time.Second)
 			}
 			filename := filepath.Base(path)
-			target.AddAttachment(compose.PendingAttachment{
+			target.AddAttachment(core.PendingAttachment{
 				Filename: filename,
 				Path:     path,
 				Mime:     mime.TypeByExtension(filepath.Ext(path)),

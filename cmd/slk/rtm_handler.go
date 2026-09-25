@@ -9,10 +9,10 @@ import (
 
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	"github.com/gammons/slk/internal/notify"
 	"github.com/gammons/slk/internal/ui"
-	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/slack-go/slack"
@@ -87,15 +87,15 @@ const discoveryRetryAfter = time.Minute
 //
 // A delivered message is treated as membership, so there is no
 // is_member check (conversations.info has none for ims anyway).
-func (h *rtmEventHandler) discoverConversation(channelID string) (sidebar.ChannelItem, channelfinder.Item, bool) {
+func (h *rtmEventHandler) discoverConversation(channelID string) (sidebar.ChannelItem, core.ChannelFinderItem, bool) {
 	if h.resolveConversation == nil {
-		return sidebar.ChannelItem{}, channelfinder.Item{}, false
+		return sidebar.ChannelItem{}, core.ChannelFinderItem{}, false
 	}
 	if _, known := h.channelTypes[channelID]; known {
-		return sidebar.ChannelItem{}, channelfinder.Item{}, false
+		return sidebar.ChannelItem{}, core.ChannelFinderItem{}, false
 	}
 	if time.Now().Before(h.lookupRetryAt[channelID]) {
-		return sidebar.ChannelItem{}, channelfinder.Item{}, false
+		return sidebar.ChannelItem{}, core.ChannelFinderItem{}, false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -121,7 +121,7 @@ func (h *rtmEventHandler) discoverConversation(channelID string) (sidebar.Channe
 			}
 			h.lookupRetryAt[channelID] = time.Now().Add(wait)
 		}
-		return sidebar.ChannelItem{}, channelfinder.Item{}, false
+		return sidebar.ChannelItem{}, core.ChannelFinderItem{}, false
 	}
 	delete(h.lookupRetryAt, channelID)
 	debuglog.WS("discovered conversation from message: team=%s channel=%s mpim=%v im=%v", h.workspaceID, ch.ID, ch.IsMpIM, ch.IsIM)

@@ -84,10 +84,10 @@ func reduceMouseWheel(a *App, m tea.MouseWheelMsg) tea.Cmd {
 	}
 	// Lines moved per wheel notch -- configured via
 	// [appearance].mouse_wheel_lines (default 3, matches typical
-	// terminal behavior). Single-row panes (sidebar) still feel
-	// fine because real-world workspace lists are short and the
-	// snap-back on the next j/k restores the previously-selected
-	// channel.
+	// terminal behavior). Each pane's View() clamps its cursor to
+	// the visible window after a wheel scroll, so the next j/k
+	// continues from a row on screen rather than snapping back to
+	// the row selected before the scroll.
 	wheelLinesPerNotch := a.mouseWheelLines
 	if wheelLinesPerNotch < 1 {
 		wheelLinesPerNotch = 1

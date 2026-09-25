@@ -399,13 +399,25 @@ func applyBootUsers(wctx *WorkspaceContext, res *bootstrap.Result) {
 // flag and userBoot's top-level is_open list are consulted, because
 // either alone would silently empty the DM list if that response shape
 // varies.
+//
+// MPIMs get the same treatment via the top-level is_open list only:
+// userBoot is asked for return_all_relevant_mpdms=true, so channels[]
+// carries every group DM the user was ever in, and the official client
+// shows just the open ones. See dropClosedMPIMs.
 func bootConversations(res *bootstrap.Result) []slack.Channel {
 	if res == nil {
 		return nil
 	}
+	open := make(map[string]bool, len(res.IsOpen))
+	for _, id := range res.IsOpen {
+		open[id] = true
+	}
 	out := make([]slack.Channel, 0, len(res.Channels)+len(res.IMs))
 	for _, ch := range res.Channels {
 		if ch.IsArchived {
+			continue
+		}
+		if ch.IsMPIM && len(open) > 0 && !open[ch.ID] {
 			continue
 		}
 		out = append(out, slack.Channel{
@@ -429,10 +441,6 @@ func bootConversations(res *bootstrap.Result) []slack.Channel {
 			IsMember:  true,
 		})
 	}
-	open := make(map[string]bool, len(res.IsOpen))
-	for _, id := range res.IsOpen {
-		open[id] = true
-	}
 	for _, im := range res.IMs {
 		if im.IsArchived {
 			continue
@@ -451,6 +459,50 @@ func bootConversations(res *bootstrap.Result) []slack.Channel {
 			},
 			IsMember: true,
 		})
+	}
+	return out
+}
+
+// dropClosedMPIMs removes group DMs (MPIMs) that are not in userBoot's
+// top-level is_open list.
+//
+// users.conversations returns every mpim the user is a member of, and
+// Slack never removes a user from a group DM -- closing one in the
+// official client only takes it out of is_open. So a workspace of any
+// age accumulates hundreds of closed group DMs that the official
+// client never shows, and slk was listing all of them. The sidebar's
+// staleness filter catches most, but not those a custom Slack section
+// claims (sections exempt their members from hiding), which is exactly
+// where a group DM with a departed colleague tends to sit.
+//
+// Only MPIMs are filtered. 1:1 DMs are left to the existing staleness
+// path: the finder relies on closed DMs being present to offer "message
+// this person", and the sidebar already hides the stale ones.
+//
+// An empty isOpen disables the filter. It cannot be told apart from
+// "userBoot did not return the field", and hiding every group DM on
+// that evidence would be a silent regression. A closed MPIM that
+// receives a message is re-added by the mpim_open / message-discovery
+// paths, the same way the official client reopens it.
+func dropClosedMPIMs(channels []slack.Channel, isOpen []string) []slack.Channel {
+	if channels == nil || len(isOpen) == 0 {
+		return channels
+	}
+	open := make(map[string]bool, len(isOpen))
+	for _, id := range isOpen {
+		open[id] = true
+	}
+	out := make([]slack.Channel, 0, len(channels))
+	dropped := 0
+	for _, ch := range channels {
+		if ch.IsMpIM && !open[ch.ID] {
+			dropped++
+			continue
+		}
+		out = append(out, ch)
+	}
+	if dropped > 0 {
+		debuglog.General("dropClosedMPIMs: hid %d closed group DMs (is_open has %d ids)", dropped, len(isOpen))
 	}
 	return out
 }

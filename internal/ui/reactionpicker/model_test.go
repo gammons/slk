@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gammons/slk/internal/core"
 	slkemoji "github.com/gammons/slk/internal/emoji"
 	imgpkg "github.com/gammons/slk/internal/image"
 )
@@ -153,7 +154,7 @@ func TestBackspace(t *testing.T) {
 
 func TestFrecentShownWhenQueryEmpty(t *testing.T) {
 	m := New()
-	m.SetFrecentEmoji([]EmojiEntry{
+	m.SetFrecentEmoji([]core.EmojiEntry{
 		{Name: "thumbsup", Unicode: "\U0001f44d"},
 		{Name: "rocket", Unicode: "\U0001f680"},
 	})

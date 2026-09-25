@@ -1341,6 +1341,23 @@ func (m *Model) applySelectionOverlay(content string) string {
 	return strings.Join(lines, "\n")
 }
 
+// entryAndOffsetForLine maps a flattened line number to the entry that
+// contains it, plus the offset within that entry. entryOffsets covers
+// replies only -- the parent message block is a content prefix, not a
+// cache entry -- so ok is false when line falls before the first reply
+// (including the parent) or entryOffsets is empty.
+func (m *Model) entryAndOffsetForLine(line int) (idx, within int, ok bool) {
+	if len(m.entryOffsets) == 0 || line < m.entryOffsets[0] {
+		return 0, 0, false
+	}
+	for i := len(m.entryOffsets) - 1; i >= 0; i-- {
+		if m.entryOffsets[i] <= line {
+			return i, line - m.entryOffsets[i], true
+		}
+	}
+	return 0, 0, false
+}
+
 // View renders the thread panel content without a border.
 // The parent App is responsible for adding the border.
 func (m *Model) View(height, width int) string {
@@ -1480,6 +1497,20 @@ func (m *Model) View(height, width int) string {
 		)
 		result := chrome + "\n" + strings.Join(visibleLines, "\n")
 		return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Background(styles.Background).Render(result)
+	}
+
+	// A width change rewraps every reply, so re-anchor YOffset to the same
+	// entry instead of reusing the now-stale line count (mirrors
+	// messages.Model.View()). Must be captured before the reply-cache
+	// rebuild below, which unconditionally clears m.viewCacheValid on a
+	// width change.
+	oldEntryCount := len(m.entryOffsets)
+	widthChanged := m.viewCacheValid && m.viewWidth != width
+	wasAnchoredAtBottom := m.totalLines > 0 && m.vp.YOffset()+m.vp.Height() >= m.totalLines
+	var anchorEntryIdx, anchorWithin int
+	var anchorOK bool
+	if widthChanged {
+		anchorEntryIdx, anchorWithin, anchorOK = m.entryAndOffsetForLine(m.vp.YOffset())
 	}
 
 	// Rebuild render cache if replies or width changed
@@ -1776,6 +1807,27 @@ func (m *Model) View(height, width int) string {
 	m.vp.SetHeight(replyAreaHeight)
 	m.vp.KeyMap = viewport.KeyMap{}
 	m.vp.SetContent(m.viewContent)
+
+	if widthChanged {
+		// Known limitation (gammons/slk#254): when anchorOK is false, the
+		// viewport was scrolled inside the parent-message prefix rather
+		// than a reply entry, and neither case below fires -- the stale
+		// pre-resize YOffset is left as-is. Deliberately out of scope
+		// here to keep this fix reviewable; tracked separately.
+		switch {
+		case wasAnchoredAtBottom:
+			m.vp.SetYOffset(m.totalLines) // clamps to the new bottom
+		case oldEntryCount == len(m.replies) && anchorOK && anchorEntryIdx < len(m.entryOffsets):
+			within := anchorWithin
+			if h := m.cache[anchorEntryIdx].height; within >= h {
+				within = h - 1
+			}
+			if within < 0 {
+				within = 0
+			}
+			m.vp.SetYOffset(m.entryOffsets[anchorEntryIdx] + within)
+		}
+	}
 
 	// Scroll to keep selected item visible -- but only when the selection
 	// has actually changed since the last snap. This lets the mouse wheel

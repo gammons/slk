@@ -45,6 +45,20 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		return a.handleWindowChord(msg)
 	}
 
+	// `g` pending sub-state: a second `g` completes the vim `gg` chord
+	// (jump to top). Esc cancels silently; any other key cancels the
+	// chord and is then handled as if it had been pressed on its own.
+	if a.pendingTop {
+		a.pendingTop = false
+		a.statusbar.SetHelpHint(a.defaultHelpHint())
+		switch {
+		case key.Matches(msg, a.keys.Top):
+			return a.handleGoToTop()
+		case key.Matches(msg, a.keys.Escape):
+			return nil
+		}
+	}
+
 	// Reaction-nav sub-state (intercept before normal keys).
 	if a.focusedPanel == PanelMessages && a.messagepane.ReactionNavActive() {
 		return a.handleReactionNav(msg)
@@ -205,6 +219,12 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 				return nil
 			}
 		}
+
+	case key.Matches(msg, a.keys.Top):
+		// First half of the `gg` chord; see the pendingTop guard above.
+		a.pendingTop = true
+		a.statusbar.SetHelpHint("g …")
+		return nil
 
 	case key.Matches(msg, a.keys.Bottom):
 		if cmd := a.handleGoToBottom(); cmd != nil {

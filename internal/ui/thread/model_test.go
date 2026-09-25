@@ -5,6 +5,8 @@ import (
 	"fmt"
 	stdimage "image"
 	"io"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -916,5 +918,144 @@ func TestThreadUpdateReactionMaintainsUserIDs(t *testing.T) {
 	reply = m.SelectedReply()
 	if reply != nil && len(reply.Reactions) != 0 {
 		t.Fatalf("want 0 reactions after remove, got %d", len(reply.Reactions))
+	}
+}
+
+// markedReplies builds n replies with distinct TSes and a unique "markNNN"
+// token per body, so a test can identify which reply rendered at a given
+// screen position from the rendered text alone.
+func markedReplies(n int) []messages.MessageItem {
+	replies := make([]messages.MessageItem, n)
+	for i := range replies {
+		replies[i] = messages.MessageItem{
+			TS:        fmt.Sprintf("%d.000000", 1700000000+i),
+			UserName:  "bob",
+			Text:      fmt.Sprintf("mark%03d %s", i, strings.Repeat("word ", 30)),
+			Timestamp: "10:30 AM",
+		}
+	}
+	return replies
+}
+
+var threadMarkRE = regexp.MustCompile(`mark(\d{3})`)
+
+// topMarkedReply returns the index embedded in the first "markNNN" token
+// found in the rendered view, i.e. the reply currently at the top of the
+// visible viewport.
+func topMarkedReply(t *testing.T, view string) int {
+	t.Helper()
+	m := threadMarkRE.FindStringSubmatch(view)
+	if m == nil {
+		t.Fatalf("no marked reply found in view:\n%s", view)
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		t.Fatalf("bad mark token %q: %v", m[1], err)
+	}
+	return n
+}
+
+// TestScrollAnchorPreservedAcrossWidthResize asserts that narrowing the
+// thread panel keeps the same reply anchored at the top of the viewport.
+func TestScrollAnchorPreservedAcrossWidthResize(t *testing.T) {
+	parent := messages.MessageItem{TS: "100.0", UserName: "alice", Text: "parent"}
+	m := New()
+	m.SetThread(parent, markedReplies(40), "C1", "100.0")
+	_ = m.View(20, 80)
+	m.ScrollUp(20) // leave the bottom-anchored state for a mid-scroll position
+	before := m.View(20, 80)
+	beforeTop := topMarkedReply(t, before)
+
+	after := m.View(20, 40) // narrower pane: every entry rewraps to more lines
+	afterTop := topMarkedReply(t, after)
+
+	if afterTop != beforeTop {
+		t.Errorf("narrowing jumped the viewport: was showing reply %d at top, now showing %d", beforeTop, afterTop)
+	}
+}
+
+// TestScrollAnchorPreservedAcrossWidening mirrors the test above in the
+// other direction: widening shrinks the anchored entry's height, so the
+// within-entry offset must be clamped or the restored YOffset overshoots
+// into a later entry and skips replies.
+func TestScrollAnchorPreservedAcrossWidening(t *testing.T) {
+	parent := messages.MessageItem{TS: "100.0", UserName: "alice", Text: "parent"}
+	m := New()
+	m.SetThread(parent, markedReplies(150), "C1", "100.0")
+	_ = m.View(20, 30) // narrow pane: entries wrap across many lines
+
+	// Anchor on the last line of a mid-list entry, away from either end
+	// so the final maxYOffset clamp doesn't mask the bug.
+	midIdx := 75
+	m.vp.SetYOffset(m.entryOffsets[midIdx] + m.cache[midIdx].height - 1)
+	before := m.View(20, 30)
+	beforeTop := topMarkedReply(t, before)
+
+	after := m.View(20, 160) // much wider: entries shrink to a couple of lines
+	afterTop := topMarkedReply(t, after)
+
+	if afterTop != beforeTop {
+		t.Errorf("widening jumped the viewport: was showing reply %d at top, now showing %d", beforeTop, afterTop)
+	}
+}
+
+// TestScrollAnchorBottomPreservedAcrossWidthResize asserts that a
+// bottom-pinned thread viewport stays pinned to the bottom across a resize.
+func TestScrollAnchorBottomPreservedAcrossWidthResize(t *testing.T) {
+	parent := messages.MessageItem{TS: "100.0", UserName: "alice", Text: "parent"}
+	m := New()
+	m.SetThread(parent, markedReplies(40), "C1", "100.0")
+	_ = m.View(20, 80) // default state is bottom-anchored
+
+	_ = m.View(20, 40) // narrower pane: content grows taller
+
+	if m.vp.YOffset()+m.vp.Height() < m.totalLines {
+		t.Errorf("resize un-pinned a bottom-anchored viewport: YOffset=%d vpHeight=%d totalLines=%d",
+			m.vp.YOffset(), m.vp.Height(), m.totalLines)
+	}
+}
+
+// TestScrollAnchorAtTopOfThreadPreservedAcrossWidthResize asserts the
+// YOffset==0 boundary specifically: it stays 0 (there is nowhere lower to
+// clamp to). This does NOT exercise the general "scrolled inside the parent
+// prefix" case -- see TestScrollAnchorInsideParentPrefixNotPreservedAcrossWidthResize
+// for that, and gammons/slk#254 for why it isn't fixed yet.
+func TestScrollAnchorAtTopOfThreadPreservedAcrossWidthResize(t *testing.T) {
+	parent := messages.MessageItem{TS: "100.0", UserName: "alice", Text: "the parent message"}
+	m := New()
+	m.SetThread(parent, markedReplies(40), "C1", "100.0")
+	_ = m.View(20, 80)
+	m.vp.SetYOffset(0)
+
+	_ = m.View(20, 40) // narrower pane: parent block also rewraps
+
+	if got := m.vp.YOffset(); got != 0 {
+		t.Errorf("resize scrolled a top-of-thread viewport away from the top: YOffset=%d, want 0", got)
+	}
+}
+
+// TestScrollAnchorInsideParentPrefixNotPreservedAcrossWidthResize pins the
+// CURRENT, known-limited behavior (gammons/slk#254): entryAndOffsetForLine
+// returns ok=false for a line inside the parent-message prefix, the
+// resize-anchor switch has no case for that, and the pre-resize YOffset
+// carries through unchanged into the rewrapped content -- landing on
+// whatever reply now falls at that stale line number. This documents the
+// gap rather than asserting the desired behavior; flip it to assert
+// preservation once #254 is fixed.
+func TestScrollAnchorInsideParentPrefixNotPreservedAcrossWidthResize(t *testing.T) {
+	parent := messages.MessageItem{TS: "100.0", UserName: "alice", Text: strings.Repeat("word ", 300)}
+	m := New()
+	m.SetThread(parent, markedReplies(40), "C1", "100.0")
+	_ = m.View(20, 30) // narrow: parent wraps to many lines
+	m.vp.SetYOffset(40)
+
+	before := m.View(20, 30)
+	if threadMarkRE.MatchString(before) {
+		t.Fatalf("test setup: viewport should be inside the parent, not a reply:\n%s", before)
+	}
+
+	after := m.View(20, 200) // widen: parent shrinks to far fewer lines
+	if !threadMarkRE.MatchString(after) {
+		t.Fatalf("expected the known limitation (jump into a reply) to still reproduce; if this now fails, #254 was fixed -- replace this test with a real preservation assertion")
 	}
 }
