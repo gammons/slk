@@ -1265,45 +1265,8 @@ func run() error {
 		}))
 
 		app.SetActivityService(core.NewActivityService(
-			func(teamID ids.TeamID, limit int, unreadOnly bool) core.Msg {
-				teamIDStr := string(teamID)
-				wctx := router.Active()
-				if wctx == nil {
-					return nil
-				}
-				fetchCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				defer cancel()
-				result, err := wctx.Client.GetActivityFeed(fetchCtx, limit, "", unreadOnly)
-				if err != nil {
-					log.Printf("Warning: GetActivityFeed(%s): %v", teamIDStr, err)
-					// Return nil (no message) on failure so the existing
-					// feed + badge are kept rather than blanked. Mirrors
-					// the "nil = keep cache" pattern used for message
-					// loads; a transient network error must not wipe the
-					// Activity view.
-					return nil
-				}
-				return ui.ActivityListLoadedMsg{
-					TeamID: teamIDStr,
-					Items:  result.Items,
-				}
-			},
-			func(teamID ids.TeamID, refs map[string][]string) core.Msg {
-				teamIDStr := string(teamID)
-				wctx := router.Active()
-				if wctx == nil {
-					return nil
-				}
-				fetchCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				defer cancel()
-				bodies, err := wctx.Client.GetActivityMessages(fetchCtx, refs)
-				if err != nil {
-					log.Printf("Warning: GetActivityMessages(%s): %v", teamIDStr, err)
-					// nil = keep whatever bodies we already have.
-					return nil
-				}
-				return ui.ActivityBodiesLoadedMsg{TeamID: teamIDStr, Bodies: bodies}
-			},
+			activityFetchFunc(router),
+			activityHydrateFunc(router),
 		))
 
 		app.SetReactionService(core.NewReactionService(
