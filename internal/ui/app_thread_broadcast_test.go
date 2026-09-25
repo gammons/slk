@@ -14,6 +14,8 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/styles"
 )
@@ -319,5 +321,48 @@ func TestNewMessage_InboundThreadBroadcastRendersInChannelFeed(t *testing.T) {
 	}
 	if got := app.threadPanel.Replies()[0].TS; got != "1700000050.000200" {
 		t.Errorf("thread reply TS = %q, want 1700000050.000200", got)
+	}
+}
+
+// TestOpenThread_FromBroadcastRowUsesRealParent pins the fix for
+// opening a thread from its thread_broadcast row in the channel feed:
+// the panel's parent must be the thread's actual parent message, not
+// the broadcast reply itself (which would then render twice — once as
+// the "parent" and once as the reply).
+func TestOpenThread_FromBroadcastRowUsesRealParent(t *testing.T) {
+	parent := messages.MessageItem{TS: "1700000000.000100", UserID: "U1", Text: "parent discussion"}
+	broadcast := messages.MessageItem{
+		TS: "1700000050.000200", UserID: "U2", Text: "tuletan kord veel meelde!",
+		ThreadTS: "1700000000.000100", Subtype: "thread_broadcast",
+	}
+	app := newTestApp(t, withSize(120, 30), withMessages(parent, broadcast), withRender())
+	app.activeChannelID = "C1"
+	app.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) core.Msg {
+		return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS), Replies: []messages.MessageItem{broadcast}}
+	})
+
+	// Selection defaults to the newest row — the broadcast.
+	if sel, _ := app.messagepane.SelectedMessage(); sel.TS != broadcast.TS {
+		t.Fatalf("precondition: selected TS = %q, want broadcast %q", sel.TS, broadcast.TS)
+	}
+
+	cmd := app.openThreadForSelectedMessage()
+	if cmd == nil {
+		t.Fatal("openThreadForSelectedMessage returned nil cmd")
+	}
+	if got := app.threadPanel.ThreadTS(); got != parent.TS {
+		t.Errorf("threadTS = %q, want parent %q", got, parent.TS)
+	}
+	if got := app.threadPanel.ParentMsg().TS; got != parent.TS {
+		t.Errorf("parent row TS = %q, want %q (got the broadcast reply as parent)", got, parent.TS)
+	}
+	for _, m := range drainBatch(cmd) {
+		app.Update(m)
+	}
+	if got := app.threadPanel.ParentMsg().TS; got != parent.TS {
+		t.Errorf("after replies load: parent row TS = %q, want %q", got, parent.TS)
+	}
+	if got := app.threadPanel.ReplyCount(); got != 1 {
+		t.Errorf("reply count = %d, want 1", got)
 	}
 }
