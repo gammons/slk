@@ -865,6 +865,41 @@ func TestBootConversations_SkipsClosedMPIMs(t *testing.T) {
 	}
 }
 
+func TestBootConversations_EmptyIsOpenDisablesMPIMFilter(t *testing.T) {
+	// An empty is_open list is indistinguishable from userBoot not
+	// returning the field at all. This is the fallback path -- the one
+	// that runs precisely when userBoot came back thin -- so hiding
+	// every group DM on that evidence would be a silent regression.
+	// Mirrors dropClosedMPIMs' "no is_open data means no filtering".
+	for _, tc := range []struct {
+		name   string
+		isOpen []string
+	}{
+		{"nil", nil},
+		{"empty", []string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := &bootstrap.Result{
+				Channels: []boot.Channel{
+					{ID: "C1", Name: "live", IsChannel: true},
+					{ID: "G1", Name: "mpdm-a--b--c-1", IsMPIM: true},
+				},
+				IsOpen: tc.isOpen,
+			}
+			ids := map[string]bool{}
+			for _, c := range bootConversations(res) {
+				ids[c.ID] = true
+			}
+			if !ids["G1"] {
+				t.Error("MPIM dropped on empty is_open; the filter must be disabled, not applied to everything")
+			}
+			if !ids["C1"] {
+				t.Error("regular channel dropped")
+			}
+		})
+	}
+}
+
 func TestDropClosedMPIMs(t *testing.T) {
 	chans := []slack.Channel{
 		{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C1"}}, IsChannel: true},
