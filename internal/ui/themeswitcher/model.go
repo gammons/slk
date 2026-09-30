@@ -1,6 +1,7 @@
 package themeswitcher
 
 import (
+	"slices"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -42,6 +43,25 @@ func New() Model {
 // SetItems updates the list of available theme names.
 func (m *Model) SetItems(items []string) {
 	m.items = items
+}
+
+// Neighbor returns the theme step places from current in the picker's
+// item order, wrapping at either end, so repeated calls with the result
+// cycle through every theme. current matches case-insensitively. When it
+// is not in the list, a forward step starts at the first item and a
+// backward step at the last. Returns "" when there are no items.
+func (m Model) Neighbor(current string, step int) string {
+	n := len(m.items)
+	if n == 0 {
+		return ""
+	}
+	idx := slices.IndexFunc(m.items, func(item string) bool {
+		return strings.EqualFold(item, current)
+	})
+	if idx < 0 && step < 0 {
+		idx = n
+	}
+	return m.items[((idx+step)%n+n)%n]
 }
 
 // Open shows the overlay and resets state. Defaults to ScopeGlobal with no
