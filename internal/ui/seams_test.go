@@ -252,7 +252,9 @@ func TestSeam_UploadUnwiredToasts(t *testing.T) {
 	a.compose.AddAttachment(core.PendingAttachment{Filename: "a.png", Bytes: []byte("png"), Size: 3})
 
 	cmd := a.handleInsertMode(tea.KeyPressMsg{Code: tea.KeyEnter})
-	firstBatchCmd(t, cmd)
+	if cmd == nil {
+		t.Error("cmd = nil, want the toast-clear tick")
+	}
 
 	if got := statusbarText(a); !strings.Contains(got, "Cannot upload: no active channel") {
 		t.Errorf("status bar = %q, want the cannot-upload toast", got)

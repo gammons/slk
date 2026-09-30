@@ -155,7 +155,6 @@ greppable by name; no line numbers, because these files move.
 | Establish a focused pane with an asserted selection | `focusMessages(t, a)`, `focusThreadPanel(t, a)` (same file) |
 | Park the message viewport at an exact `yOffset` | `scrollTo(off)` (same file) |
 | Make nav-history entries resolvable | `navLookupOpt()` (same file) |
-| Run only the first command of a `tea.Batch` (skip a 2s tick) | `firstBatchCmd(t, cmd)` (`internal/ui/mode_insert_keys_test.go`) |
 | Observe a compose cursor position or blur state (no getter exists) | `afterKeyValue(c, r)` (same file) |
 
 ### Known duplication — do not add to it

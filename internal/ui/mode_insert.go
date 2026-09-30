@@ -43,7 +43,7 @@ import (
 
 func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	if (a.compose.Uploading() || a.threadCompose.Uploading()) && key.Matches(msg, a.keys.Escape) {
-		return a.uploadToastCmd("Upload in progress", 2*time.Second)
+		return toastWithClear(a, "Upload in progress", 2*time.Second)
 	}
 	if a.editing.IsActive() && key.Matches(msg, a.keys.Escape) {
 		// If a picker is active in the relevant compose, close it

@@ -165,7 +165,7 @@ var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		a.compose.SetUploading(false)
 		a.threadCompose.SetUploading(false)
 		if m.Err != nil {
-			return a.uploadToastCmd(
+			return toastWithClear(a,
 				"Upload failed: "+truncateReason(m.Err.Error(), 40),
 				3*time.Second,
 			), true
@@ -174,7 +174,7 @@ var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		a.threadCompose.ClearAttachments()
 		a.compose.Reset()
 		a.threadCompose.Reset()
-		return a.uploadToastCmd("Sent", 2*time.Second), true
+		return toastWithClear(a, "Sent", 2*time.Second), true
 
 	case ConnectionStateMsg:
 		a.statusbar.SetConnectionState(statusbar.ConnectionState(m.State))
