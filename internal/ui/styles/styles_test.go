@@ -3,6 +3,8 @@ package styles
 import (
 	"fmt"
 	"image/color"
+	"maps"
+	"slices"
 	"testing"
 
 	"charm.land/lipgloss/v2"
@@ -69,6 +71,53 @@ func TestApplyCaseInsensitive(t *testing.T) {
 		t.Errorf("expected dracula primary #BD93F9")
 	}
 	Apply("dark", config.Theme{})
+}
+
+func TestCurrentThemeReportsDisplayName(t *testing.T) {
+	t.Cleanup(func() { Apply("dark", config.Theme{}) })
+	for _, tc := range []struct{ applied, want string }{
+		{"dracula", "Dracula"},
+		{"ANSI Dark", "ANSI Dark"},
+		{"nonexistent", "Dark"},
+	} {
+		Apply(tc.applied, config.Theme{})
+		if got := CurrentTheme(); got != tc.want {
+			t.Errorf("after Apply(%q): CurrentTheme() = %q, want %q", tc.applied, got, tc.want)
+		}
+	}
+}
+
+// TestCurrentThemeRoundTripsEveryListedTheme pins the property theme
+// cycling relies on: every name ThemeNames lists applies as itself, so
+// CurrentTheme reports the listed name and the cycle finds its place in
+// the list again. It includes custom themes, one of them overriding a
+// built-in under a different case, which ThemeNames then lists as the
+// custom spelling.
+func TestCurrentThemeRoundTripsEveryListedTheme(t *testing.T) {
+	saved := maps.Clone(customThemes)
+	t.Cleanup(func() {
+		customThemes = saved
+		Apply("dark", config.Theme{})
+	})
+	colors := ThemeColors{Primary: "#AABBCC", Background: "#000000", Text: "#FFFFFF"}
+	RegisterCustomTheme("My Cycle Theme", colors)
+	RegisterCustomTheme("dracula", colors)
+
+	names := ThemeNames()
+	for _, want := range []string{"My Cycle Theme", "dracula"} {
+		if !slices.Contains(names, want) {
+			t.Fatalf("ThemeNames() does not list the custom theme %q", want)
+		}
+	}
+	if slices.Contains(names, "Dracula") {
+		t.Error("ThemeNames() lists the built-in Dracula next to the custom theme that overrides it")
+	}
+	for _, name := range names {
+		Apply(name, config.Theme{})
+		if got := CurrentTheme(); got != name {
+			t.Errorf("after Apply(%q): CurrentTheme() = %q, want the listed name", name, got)
+		}
+	}
 }
 
 func TestThemeNames(t *testing.T) {

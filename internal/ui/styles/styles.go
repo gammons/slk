@@ -271,11 +271,21 @@ var version int64
 // Version returns the current theme version, incremented on every Apply call.
 func Version() int64 { return version }
 
+// currentTheme is the display name of the theme the last Apply call
+// resolved to.
+var currentTheme string
+
+// CurrentTheme returns the display name of the applied theme ("" before
+// the first Apply). An unknown name passed to Apply falls back to the dark
+// theme, so this reports "Dark" in that case.
+func CurrentTheme() string { return currentTheme }
+
 // Apply sets the color palette from a named theme with optional overrides,
 // then rebuilds all composed styles.
 func Apply(themeName string, overrides core.Theme) {
 	version++
-	colors := lookupTheme(themeName)
+	name, colors := resolveTheme(themeName)
+	currentTheme = name
 
 	Primary = lipgloss.Color(colors.Primary)
 	Secondary = lipgloss.Color("#666666")

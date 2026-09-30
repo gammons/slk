@@ -494,17 +494,20 @@ func ThemeNames() []string {
 	return names
 }
 
-// lookupTheme finds a theme by name (case-insensitive). Custom themes take
-// priority over built-in. Returns dark theme if not found.
-func lookupTheme(name string) ThemeColors {
+// resolveTheme finds a theme by name (case-insensitive) and returns its
+// display name and colors. Custom themes take priority over built-in.
+// Returns the dark theme if not found, so an unknown name reports
+// "Dark", not itself.
+func resolveTheme(name string) (string, ThemeColors) {
 	key := strings.ToLower(name)
 	if t, ok := customThemes[key]; ok {
-		return t.Colors
+		return t.Name, t.Colors
 	}
 	if t, ok := builtinThemes[key]; ok {
-		return t.Colors
+		return t.Name, t.Colors
 	}
-	return builtinThemes["dark"].Colors
+	t := builtinThemes["dark"]
+	return t.Name, t.Colors
 }
 
 // customThemeFile is the TOML structure for a custom theme file.
