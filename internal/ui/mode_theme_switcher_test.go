@@ -37,8 +37,9 @@ func colorEqual(a, b color.Color) bool {
 
 // themeSave records one invocation of the App's theme saver.
 type themeSave struct {
-	name  string
-	scope core.ThemeScope
+	teamID string
+	name   string
+	scope  core.ThemeScope
 }
 
 // themeSwitcherItems is the picker's fixture. Order matters: the
@@ -97,8 +98,8 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			pinDark(t, a)
 			saves = nil
 			if withSaver {
-				a.setThemeSaverForTest(func(name string, sc core.ThemeScope) {
-					saves = append(saves, themeSave{name: name, scope: sc})
+				a.setThemeSaverForTest(func(teamID, name string, sc core.ThemeScope) {
+					saves = append(saves, themeSave{teamID: teamID, name: name, scope: sc})
 				})
 			}
 			a.SetThemeItems(themeSwitcherItems())
@@ -208,7 +209,10 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			},
 		},
 		{
-			name:     "the picker's scope is forwarded to the saver",
+			// The workspace is the one on screen (a.activeTeamID), not
+			// whichever one the backend treats as active at save time.
+			name:     "the picker's scope and workspace are forwarded to the saver",
+			opts:     []testOpt{withActiveTeam("T1")},
 			setup:    open(themeswitcher.ScopeWorkspace, true),
 			key:      keyCode(tea.KeyEnter),
 			wantMode: ModeNormal,
@@ -218,6 +222,9 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 				}
 				if saves[0].scope != themeswitcher.ScopeWorkspace {
 					t.Errorf("saved scope = %v, want ScopeWorkspace", saves[0].scope)
+				}
+				if saves[0].teamID != "T1" {
+					t.Errorf("saved workspace = %q, want T1", saves[0].teamID)
 				}
 			},
 		},

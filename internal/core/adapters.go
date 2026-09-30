@@ -522,20 +522,20 @@ func (p presenceAdapter) SendTyping(channelID string) {
 
 // NewSettingsService builds a SettingsService from closures.
 func NewSettingsService(
-	saveTheme func(name string, scope ThemeScope),
+	saveTheme func(teamID, name string, scope ThemeScope),
 	saveSidebarWidth func(width int),
 ) SettingsService {
 	return settingsAdapter{saveTheme: saveTheme, saveSidebarWidth: saveSidebarWidth}
 }
 
 type settingsAdapter struct {
-	saveTheme        func(name string, scope ThemeScope)
+	saveTheme        func(teamID, name string, scope ThemeScope)
 	saveSidebarWidth func(width int)
 }
 
-func (s settingsAdapter) SaveTheme(name string, scope ThemeScope) {
+func (s settingsAdapter) SaveTheme(teamID, name string, scope ThemeScope) {
 	if s.saveTheme != nil {
-		s.saveTheme(name, scope)
+		s.saveTheme(teamID, name, scope)
 	}
 }
 

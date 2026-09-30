@@ -613,14 +613,15 @@ func run() error {
 	}))
 
 	// Wire theme switcher: dispatch to the appropriate saver based on scope.
-	saveTheme := func(name string, scope core.ThemeScope) {
+	// A workspace save names its workspace instead of reading
+	// router.Active(): a switch moves router.Active() before the UI shows
+	// the new workspace, and the choice belongs to the one it showed.
+	saveTheme := func(teamID, name string, scope core.ThemeScope) {
 		switch scope {
 		case themeswitcher.ScopeWorkspace:
-			active := router.Active()
-			if active == nil {
-				return // shouldn't happen, but guard against it
+			if teamID == "" {
+				return // no workspace was showing yet
 			}
-			teamID := active.TeamID
 			teamName := teamID
 			if wctx := router.ByID(teamID); wctx != nil && wctx.TeamName != "" {
 				teamName = wctx.TeamName

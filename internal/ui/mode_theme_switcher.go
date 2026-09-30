@@ -49,7 +49,7 @@ func handleThemeSwitcherMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		a.threadCompose.RefreshStyles()
 		// Save selection.
 		if a.settings != nil {
-			a.settings.SaveTheme(result.Name, result.Scope)
+			a.settings.SaveTheme(a.activeTeamID, result.Name, result.Scope)
 		}
 		return nil
 	}
