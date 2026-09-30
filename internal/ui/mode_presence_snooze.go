@@ -19,7 +19,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/gammons/slk/internal/ui/presencemenu"
-	"github.com/gammons/slk/internal/ui/statusbar"
 )
 
 func handlePresenceCustomSnoozeMode(a *App, msg tea.KeyMsg) tea.Cmd {
@@ -33,8 +32,7 @@ func handlePresenceCustomSnoozeMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		a.presence.ClearSnoozeBuf()
 		a.SetMode(ModeNormal)
 		if err != nil || mins <= 0 {
-			a.statusbar.SetToast("Invalid snooze duration")
-			return tea.Tick(2*time.Second, func(time.Time) tea.Msg { return statusbar.CopiedClearMsg{} })
+			return toastWithClear(a, "Invalid snooze duration", 2*time.Second)
 		}
 		st := a.presence.Apply(a.activeTeamID, presencemenu.ActionSnooze, mins)
 		a.statusbar.SetStatus(st.Presence, st.DNDEnabled, st.DNDEndTS)

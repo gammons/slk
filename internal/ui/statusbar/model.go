@@ -28,6 +28,7 @@ type Model struct {
 	connState   ConnectionState
 	inThread    bool
 	toast       string // "" == no toast; otherwise rendered verbatim in the right slot
+	toastSeq    uint64 // bumped by every SetToast; see ToastSeq
 	presence    string // "active", "away", or "" (unknown — segment hidden)
 	dndEnabled  bool
 	dndEndTS    time.Time // zero if not in DND
@@ -188,11 +189,17 @@ func (m *Model) SetCommandLine(s string) {
 // to clear. Callers are responsible for clearing the toast (typically via a
 // tea.Tick that delivers CopiedClearMsg).
 func (m *Model) SetToast(s string) {
+	m.toastSeq++
 	if m.toast != s {
 		m.toast = s
 		m.dirty()
 	}
 }
+
+// ToastSeq identifies the toast now in the slot. Every SetToast call
+// bumps it, also one that repeats the text or clears the slot, so a
+// clear scheduled for one toast can tell that another replaced it.
+func (m Model) ToastSeq() uint64 { return m.toastSeq }
 
 // ShowCopied is a backwards-compatible shim that sets the toast to
 // "Copied N chars". Pass 0 for a no-op.
@@ -391,8 +398,10 @@ type CopiedMsg struct {
 	N int
 }
 
-// CopiedClearMsg is the follow-up tick that clears the toast.
-type CopiedClearMsg struct{}
+// CopiedClearMsg is the follow-up tick that clears the toast. Seq is the
+// ToastSeq of the toast it clears; when another toast replaced that one,
+// the tick leaves the slot alone.
+type CopiedClearMsg struct{ Seq uint64 }
 
 // PermalinkCopiedMsg is delivered when a message permalink has been copied to
 // the clipboard. App handles it by setting the toast to "Copied permalink"
