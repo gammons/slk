@@ -3166,6 +3166,18 @@ func (a *App) SetWorkspaceService(s core.WorkspaceService) {
 	a.workspaceSvc = s
 }
 
+// switchWorkspace returns the command that switches to teamID. Every
+// switch goes through here, because it first saves a theme a cycle
+// left pending. The command reads the target workspace's theme, and
+// the target can be the workspace that pending theme belongs to.
+func (a *App) switchWorkspace(teamID string) tea.Cmd {
+	a.SavePendingTheme()
+	switcher := a.workspaceSvc
+	return func() tea.Msg {
+		return switcher.Switch(teamID)
+	}
+}
+
 // SetThemeItems sets the available themes for the switcher.
 func (a *App) SetThemeItems(names []string) {
 	a.themeSwitcher.SetItems(names)

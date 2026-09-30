@@ -1640,6 +1640,10 @@ func run() error {
 
 	_, err = p.Run()
 
+	// A theme cycle saves only after a pause, so save a theme still
+	// pending: quitting right after the last alt+y would lose it.
+	app.SavePendingTheme()
+
 	// Dump the API request tally before anything else at shutdown.
 	//
 	// Phase 2b's success criteria are call counts -- "a boot issues

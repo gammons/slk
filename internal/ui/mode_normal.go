@@ -10,6 +10,8 @@
 //     (page), G (bottom), Tab/h/l (focus next/prev), Ctrl-h/k
 //     (nav back/forward through visited channels)
 //   - layout toggles: s (sidebar), t (thread)
+//   - theme cycle: Alt-Y / Alt-Shift-Y apply the next / previous
+//     theme, wrapping around (saved per workspace, like Ctrl-Y)
 //   - message ops: y (copy message), Y/C (copy permalink), E (edit), D (delete),
 //     U (mark unread), O/v (open image preview)
 //   - reaction nav sub-state: r enters; arrows + Enter select
@@ -267,6 +269,10 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		a.themeSwitcher.OpenWithScope(themeswitcher.ScopeGlobal, "Default theme for new workspaces")
 		a.SetMode(ModeThemeSwitcher)
 		return nil
+	case key.Matches(msg, a.keys.ThemeNext):
+		return a.cycleTheme(1)
+	case key.Matches(msg, a.keys.ThemePrev):
+		return a.cycleTheme(-1)
 
 	case key.Matches(msg, a.keys.PresenceMenu):
 		header := a.workspaceNameForActive()
@@ -358,11 +364,7 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 			idx := int(keyStr[0] - '1') // 0-indexed
 			if idx < len(a.workspaceItems) && a.workspaceSvc != nil {
 				if a.workspaceItems[idx].ID != a.workspaceRail.SelectedID() {
-					switcher := a.workspaceSvc
-					teamID := a.workspaceItems[idx].ID
-					return func() tea.Msg {
-						return switcher.Switch(teamID)
-					}
+					return a.switchWorkspace(a.workspaceItems[idx].ID)
 				}
 			}
 		}
