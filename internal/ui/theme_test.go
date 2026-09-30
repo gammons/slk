@@ -370,3 +370,295 @@ func TestThemeCycle_FullRegistry(t *testing.T) {
 	}
 }
 
+// TestThemeCycleSave characterizes the delayed save a cycle press
+// schedules (theme.go): the save tick; the workspace each save goes
+// to, including while a workspace switch is in flight; and every place
+// that saves a pending theme early (a press for another workspace,
+// switchWorkspace, the theme switcher, cmd/slk at exit). The ticks are
+// delivered by hand instead of waited for.
+func TestThemeCycleSave(t *testing.T) {
+	styles.Apply("dark", config.Theme{})
+	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
+
+	// press dispatches one normal-mode key.
+	press := func(a *App, k tea.KeyMsg) tea.Cmd {
+		a.SetMode(ModeNormal)
+		return dispatchModeKey(a, k)
+	}
+	// dueTick is the save tick of the latest press.
+	dueTick := func(a *App) themeSaveDueMsg { return themeSaveDueMsg{gen: a.themeSaveGen} }
+	// switchedTo is the result a real switch to T2 delivers.
+	switchedTo := func(theme string) WorkspaceSwitchedMsg {
+		return WorkspaceSwitchedMsg{TeamID: "T2", TeamName: "beta", Theme: theme}
+	}
+	onT1 := func(opts ...testOpt) []testOpt { return append(opts, withActiveTeam("T1")) }
+
+	t.Run("the save tick saves the pending theme for the workspace", func(t *testing.T) {
+		a := newTestApp(t, onT1()...)
+		rec := startThemeCycle(t, a, "Dark", themeSwitcherItems())
+		press(a, themeNextKey)
+		a.Update(dueTick(a))
+		if want := []themeSave{workspaceSave("T1", "Dracula")}; !slices.Equal(rec.saves, want) {
+			t.Errorf("saves = %+v, want %+v", rec.saves, want)
+		}
+		if a.pendingTheme != (pendingThemeSave{}) {
+			t.Errorf("pending save = %+v after the tick, want none", a.pendingTheme)
+		}
+	})
+
+	t.Run("holding alt+y saves once, for the theme it stops on", func(t *testing.T) {
+		a := newTestApp(t, onT1()...)
+		rec := startThemeCycle(t, a, "Dark", themeSwitcherItems())
+		press(a, themeNextKey) // Dracula
+		first := dueTick(a)
+		press(a, themeNextKey) // Light
+		a.Update(first)
+		if len(rec.saves) != 0 {
+			t.Fatalf("saves = %+v after a stale tick, want none", rec.saves)
+		}
+		last := dueTick(a)
+		a.Update(last)
+		a.Update(last)
+		if want := []themeSave{workspaceSave("T1", "Light")}; !slices.Equal(rec.saves, want) {
+			t.Errorf("saves = %+v, want %+v", rec.saves, want)
+		}
+	})
+
+	// switchesAfterSave runs a switch command and asserts that the
+	// pending save landed while the command was built, before the
+	// switch itself ran.
+	switchesAfterSave := func(t *testing.T, rec *themeCycleRecorder, cmd tea.Cmd) {
+		t.Helper()
+		if want := []string{"save Dracula for T1"}; !slices.Equal(rec.events, want) {
+			t.Fatalf("events before the switch ran = %v, want %v", rec.events, want)
+		}
+		if cmd == nil {
+			t.Fatal("cmd = nil, want the workspace-switch cmd")
+		}
+		if msg, ok := cmd().(switchedTeamMsg); !ok || msg.teamID != "T2" {
+			t.Fatalf("cmd() = %#v, want a switch to T2", msg)
+		}
+		if want := []string{"save Dracula for T1", "switch T2"}; !slices.Equal(rec.events, want) {
+			t.Errorf("events = %v, want %v", rec.events, want)
+		}
+	}
+
+	t.Run("a number-key workspace switch saves the pending theme first", func(t *testing.T) {
+		a := newTestApp(t, onT1(workspaceOpts()...)...)
+		rec := startThemeCycle(t, a, "Dark", themeSwitcherItems())
+		press(a, themeNextKey)
+		switchesAfterSave(t, rec, press(a, keyPress('2')))
+	})
+
+	t.Run("a workspace finder switch saves the pending theme first", func(t *testing.T) {
+		a := newTestApp(t, onT1(workspaceFinderOpts()...)...)
+		rec := startThemeCycle(t, a, "Dark", themeSwitcherItems())
+		press(a, themeNextKey)
+		a.workspaceFinder.Open()
+		a.SetMode(ModeWorkspaceFinder)
+		moveFinderDown(t, a, "beta")
+		switchesAfterSave(t, rec, dispatchModeKey(a, keyCode(tea.KeyEnter)))
+	})
+
+	t.Run("a workspace rail click saves the pending theme first", func(t *testing.T) {
+		// Same geometry as TestApp_ClickOnWorkspaceRailSwitches: the
+		// rail has no top border, and its tiles sit on rows 1, 3, ...
+		a := NewApp()
+		a.width, a.height = 120, 30
+		a.SetWorkspaces([]workspace.WorkspaceItem{
+			{ID: "T1", Name: "alpha", Initials: "AL"},
+			{ID: "T2", Name: "beta", Initials: "BE"},
+		})
+		a.activeTeamID = "T1"
+		_ = a.View()
+		rec := startThemeCycle(t, a, "Dark", themeSwitcherItems())
+		press(a, themeNextKey)
+		_, cmd := a.Update(tea.MouseClickMsg{X: 0, Y: 3, Button: tea.MouseLeft})
+		switchesAfterSave(t, rec, cmd)
+	})
+
+	// The backend moves its active workspace when the switch command
+	// runs, and the UI shows T2 only when the result arrives. A press
+	// between the two still shows T1, so its theme belongs to T1 in
+	// every ordering of the command, the result and the save tick.
+	t.Run("a cycle during a switch saves for the workspace on screen when the tick comes first", func(t *testing.T) {
+		a := newTestApp(t, onT1(workspaceOpts()...)...)
+		rec := startThemeCycle(t, a, "Dark", themeSwitcherItems())
+		switchCmd := press(a, keyPress('2'))
+		press(a, themeNextKey)
+		_ = switchCmd()
+		a.Update(dueTick(a))
+		a.Update(switchedTo("Light"))
+		if want := []string{"switch T2", "save Dracula for T1"}; !slices.Equal(rec.events, want) {
+			t.Errorf("events = %v, want %v", rec.events, want)
+		}
+		if got := styles.CurrentTheme(); got != "Light" {
+			t.Errorf("current theme = %q, want T2's Light", got)
+		}
+	})
+
+	t.Run("a cycle during a switch saves for the workspace on screen when the result comes first", func(t *testing.T) {
+		a := newTestApp(t, onT1(workspaceOpts()...)...)
+		rec := startThemeCycle(t, a, "Dark", themeSwitcherItems())
+		switchCmd := press(a, keyPress('2'))
+		press(a, themeNextKey)
+		_ = switchCmd()
+		a.Update(switchedTo("Light"))
+		if got := styles.CurrentTheme(); got != "Light" {
+			t.Errorf("current theme = %q, want T2's Light", got)
+		}
+		a.Update(dueTick(a))
+		if want := []string{"switch T2", "save Dracula for T1"}; !slices.Equal(rec.events, want) {
+			t.Errorf("events = %v, want %v: the result must not discard T1's choice", rec.events, want)
+		}
+	})
+
+	t.Run("a press in the new workspace first saves the choice left for the old one", func(t *testing.T) {
+		a := newTestApp(t, onT1(workspaceOpts()...)...)
+		rec := startThemeCycle(t, a, "Dark", themeSwitcherItems())
+		switchCmd := press(a, keyPress('2'))
+		press(a, themeNextKey) // Dracula, for T1
+		stale := dueTick(a)
+		_ = switchCmd()
+		a.Update(switchedTo("Light"))
+		press(a, themeNextKey) // Dark, for T2
+		if want := []themeSave{workspaceSave("T1", "Dracula")}; !slices.Equal(rec.saves, want) {
+			t.Fatalf("saves after the press in T2 = %+v, want %+v", rec.saves, want)
+		}
+		a.Update(stale)
+		a.Update(dueTick(a))
+		want := []themeSave{workspaceSave("T1", "Dracula"), workspaceSave("T2", "Dark")}
+		if !slices.Equal(rec.saves, want) {
+			t.Errorf("saves = %+v, want %+v", rec.saves, want)
+		}
+	})
+
+	t.Run("the theme switcher saves after a pending cycle save", func(t *testing.T) {
+		a := newTestApp(t, onT1()...)
+		rec := startThemeCycle(t, a, "Dark", themeSwitcherItems())
+		press(a, themeNextKey) // Dracula, pending
+		a.themeSwitcher.OpenWithScope(themeswitcher.ScopeWorkspace, "")
+		a.SetMode(ModeThemeSwitcher)
+		_ = dispatchModeKey(a, keyCode(tea.KeyDown))  // row 1: Light
+		_ = dispatchModeKey(a, keyCode(tea.KeyEnter)) // pick it
+		a.Update(dueTick(a))
+		want := []themeSave{workspaceSave("T1", "Dracula"), workspaceSave("T1", "Light")}
+		if !slices.Equal(rec.saves, want) {
+			t.Errorf("saves = %+v, want %+v: the picker's save must land last", rec.saves, want)
+		}
+	})
+
+	t.Run("SavePendingTheme saves a pending theme once", func(t *testing.T) {
+		a := newTestApp(t, onT1()...)
+		rec := startThemeCycle(t, a, "Dark", themeSwitcherItems())
+		a.SavePendingTheme()
+		if len(rec.saves) != 0 {
+			t.Fatalf("saves = %+v with nothing pending, want none", rec.saves)
+		}
+		press(a, themeNextKey)
+		// cmd/slk calls this after the program exits, which can be
+		// before the tick is due.
+		a.SavePendingTheme()
+		a.SavePendingTheme()
+		if want := []themeSave{workspaceSave("T1", "Dracula")}; !slices.Equal(rec.saves, want) {
+			t.Errorf("saves = %+v, want %+v", rec.saves, want)
+		}
+	})
+
+	t.Run("the initial workspace's own theme replaces a cycle made before it", func(t *testing.T) {
+		a := newTestApp(t)
+		rec := startThemeCycle(t, a, "Dark", themeSwitcherItems())
+		press(a, themeNextKey)
+		a.Update(WorkspaceReadyMsg{
+			TeamID:        "T1",
+			TeamName:      "alpha",
+			Channels:      []sidebar.ChannelItem{{ID: "C1", Name: "general", Type: "channel"}},
+			InitialActive: true,
+			Theme:         "Light",
+		})
+		if got := styles.CurrentTheme(); got != "Light" {
+			t.Errorf("current theme = %q, want the workspace's Light", got)
+		}
+		a.Update(dueTick(a))
+		a.SavePendingTheme()
+		if len(rec.saves) != 0 {
+			t.Errorf("saves = %+v, want none: no workspace showed at the press", rec.saves)
+		}
+	})
+
+	// runKeyCases calls dispatchModeKey directly and so bypasses the
+	// reducer chain; this row sends the keys and the tick through
+	// App.Update, the path a real key press takes.
+	t.Run("the keys and the save tick work through App.Update", func(t *testing.T) {
+		a := newTestApp(t, onT1()...)
+		rec := startThemeCycle(t, a, "Dark", themeSwitcherItems())
+		a.Update(themeNextKey)
+		if got := styles.CurrentTheme(); got != "Dracula" {
+			t.Fatalf("current theme after alt+y = %q, want Dracula", got)
+		}
+		a.Update(keyMod('Y', tea.ModAlt))
+		if got := styles.CurrentTheme(); got != "Dark" {
+			t.Fatalf("current theme after alt+Y = %q, want Dark", got)
+		}
+		a.Update(dueTick(a))
+		if want := []themeSave{workspaceSave("T1", "Dark")}; !slices.Equal(rec.saves, want) {
+			t.Errorf("saves = %+v, want %+v", rec.saves, want)
+		}
+	})
+
+	if got := styles.CurrentTheme(); got != "Dark" {
+		t.Errorf("theme leaked out of the test: current theme = %q, want Dark", got)
+	}
+}
+
+// TestThemeCycleToast characterizes the "Theme: …" toast a press shows
+// when something else then applies a theme: the toast names a theme no
+// longer on screen, so applyTheme clears it. A toast shown after it is
+// not the theme's, and stays.
+func TestThemeCycleToast(t *testing.T) {
+	styles.Apply("dark", config.Theme{})
+	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
+
+	// cycled returns an App on T1 whose last press showed "Theme:
+	// Dracula".
+	cycled := func(t *testing.T) *App {
+		t.Helper()
+		a := newTestApp(t, withActiveTeam("T1"))
+		startThemeCycle(t, a, "Dark", themeSwitcherItems())
+		_ = dispatchModeKey(a, themeNextKey)
+		if got := statusbarText(a); !strings.Contains(got, "Theme: Dracula") {
+			t.Fatalf("precondition: status bar = %q, want the theme toast", got)
+		}
+		return a
+	}
+	noThemeToast := func(t *testing.T, a *App) {
+		t.Helper()
+		if got := statusbarText(a); strings.Contains(got, "Theme: Dracula") {
+			t.Errorf("status bar = %q, want the stale theme toast gone", got)
+		}
+	}
+
+	t.Run("a workspace switch clears it", func(t *testing.T) {
+		a := cycled(t)
+		a.Update(WorkspaceSwitchedMsg{TeamID: "T2", TeamName: "beta", Theme: "Light"})
+		noThemeToast(t, a)
+	})
+
+	t.Run("a theme switcher pick clears it", func(t *testing.T) {
+		a := cycled(t)
+		a.themeSwitcher.OpenWithScope(themeswitcher.ScopeWorkspace, "")
+		a.SetMode(ModeThemeSwitcher)
+		_ = dispatchModeKey(a, keyCode(tea.KeyDown)) // row 1: Light
+		_ = dispatchModeKey(a, keyCode(tea.KeyEnter))
+		noThemeToast(t, a)
+	})
+
+	t.Run("a later toast survives the next theme change", func(t *testing.T) {
+		a := cycled(t)
+		a.Update(statusbar.CopiedMsg{N: 5})
+		a.Update(WorkspaceSwitchedMsg{TeamID: "T2", TeamName: "beta", Theme: "Light"})
+		if got := statusbarText(a); !strings.Contains(got, "Copied 5 chars") {
+			t.Errorf("status bar = %q, want the later toast kept", got)
+		}
+	})
+}
