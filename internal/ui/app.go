@@ -484,6 +484,15 @@ type App struct {
 	// settings persists the theme choice and sidebar width. Nil until wired.
 	settings       core.SettingsService
 	themeOverrides core.Theme
+	// pendingTheme is the theme a cycle (alt+y / alt+shift+y) applied
+	// but has not saved yet, with its workspace. themeSaveGen counts
+	// cycle presses, so a save tick from an earlier press can tell that
+	// it is stale. themeToastSeq is the status-bar ToastSeq of the last
+	// "Theme: …" toast, so applyTheme can tell whether it still shows.
+	// See theme.go.
+	pendingTheme  pendingThemeSave
+	themeSaveGen  int
+	themeToastSeq uint64
 
 	// presence owns per-workspace presence/DND cache, the DND-tick
 	// guard, and the custom-snooze numeric input buffer. See
@@ -952,6 +961,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		reduceFiles,
 		reduceSearch,
 		reduceWorkspace,
+		reduceTheme,
 		reduceNewMessagePicker,
 		reduceIO,
 		reduceMouse,

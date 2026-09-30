@@ -113,6 +113,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Centered modal over a dimmed backdrop | `ui/overlay.DimmedOverlay` |
 | Text selection ranges and anchors | `ui/selection` (`Range`, `Anchor`, `LessOrEqual`) |
 | Theme colors and styles | `ui/styles` (`Username`, `SelectionStyle`, `SearchHighlightStyle`, `MentionBadgeStyle`, `UserColor`) |
+| Apply a theme at runtime (palette + render-cache invalidation + compose restyle) | `App.applyTheme` (`internal/ui/theme.go`); `styles.CurrentTheme()` names the applied one |
 | Save a per-workspace theme | `settings.SaveTheme(teamID, name, scope)` with the workspace on screen (`a.activeTeamID`), never the backend's active one: a switch moves that first |
 | Status-bar toast that clears itself | `toastWithClear(a, text, d)` (`internal/ui/reducer_io.go`). Set toasts on the Update goroutine, never inside a `tea.Cmd`; `statusbar.ToastSeq()` identifies the toast showing, so a clear tick leaves a newer toast alone |
 | Window tree geometry | `ui/wintree` |

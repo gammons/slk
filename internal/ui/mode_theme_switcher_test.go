@@ -54,7 +54,7 @@ const (
 )
 
 // TestThemeSwitcherModeKeys characterizes handleThemeSwitcherMode
-// (mode_theme_switcher.go:22).
+// (mode_theme_switcher.go).
 //
 // This is the one handler in PR 0d that mutates process-global state:
 // styles.Apply rewrites the package-level palette every other test in
@@ -176,7 +176,7 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			},
 		},
 		{
-			// The three cache invalidations (mode_theme_switcher.go:44-46)
+			// The three cache invalidations (applyTheme, theme.go)
 			// are the part of this handler a refactor is most likely to
 			// drop, and dropping them shows up as stale colors, not as a
 			// crash. All three are covered here: the messages counter
@@ -324,9 +324,10 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			},
 		},
 		{
-			// mode_theme_switcher.go:24-35 declares five arms; the
-			// shift+down row above and these three cover four, and the
-			// alt+esc row after them the fifth.
+			// The Code switch at the top of handleThemeSwitcherMode
+			// declares five arms; the shift+down row above and these
+			// three cover four, and the alt+esc row after them the
+			// fifth.
 			name: "shift+up navigates: the Code switch strips the modifier",
 			setup: func(t *testing.T, a *App) {
 				openGlobal(t, a)
@@ -536,7 +537,7 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 }
 
 // themeVersions bundles the three render-cache counters the theme
-// handler is supposed to bump (mode_theme_switcher.go:44-46).
+// handler is supposed to bump (applyTheme, theme.go).
 type themeVersions struct {
 	sidebar int64
 	thread  int64
