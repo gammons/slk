@@ -16,11 +16,8 @@ import (
 
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/statusbar"
 )
-
-// noProfileToast is the toast text app.go's openUserProfile sets for
-// every reject path (no selection, bot ID, empty UserID).
-const noProfileToast = "No profile for this message"
 
 // TestUserProfileKey_OpensFromMessages drives K through the real
 // Update chain (updateAndRender), from the messages pane.
@@ -74,71 +71,52 @@ func TestUserProfileKey_OpensFromThread(t *testing.T) {
 	}
 }
 
-// TestUserProfileKey_NoSelectionToast: no message selected (empty
-// pane) -> toast, mode stays Normal, no cmd.
-func TestUserProfileKey_NoSelectionToast(t *testing.T) {
-	a := newTestApp(t, withChannels(), withMessages(), withActiveChannel(""))
-	a.focusedPanel = PanelMessages
+// TestUserProfileKey_RejectionToast: K with no person behind the
+// selection opens nothing and shows noProfileToast, which its own clear
+// tick then removes. The rejected selections are none (an empty pane),
+// a UserID starting with "B" (cmd/slk/history.go's bot-ID substitute),
+// and an empty UserID (a message carrying only a bot_id upstream).
+//
+// The cmd is fed back as the message its real 2s tick delivers, since
+// a non-nil check would also accept the profile fetch. The three ticks
+// run together, so the test waits 2s, not 6s.
+func TestUserProfileKey_RejectionToast(t *testing.T) {
+	cases := []struct {
+		name string
+		msgs []messages.MessageItem
+	}{
+		{"no selection", nil},
+		{"bot ID", []messages.MessageItem{{TS: "1.0", UserID: "B123", Text: "build ok"}}},
+		{"empty UserID", []messages.MessageItem{{TS: "1.0", UserID: "", Text: "hello"}}},
+	}
+	apps := make([]*App, len(cases))
+	cmds := make([]tea.Cmd, len(cases))
+	for i, tc := range cases {
+		a := newTestApp(t, withChannels(), withMessages(tc.msgs...), withActiveChannel(""))
+		a.focusedPanel = PanelMessages
 
-	_, cmd := a.Update(keyPress('K'))
-	if a.mode != ModeNormal {
-		t.Fatalf("mode = %v, want ModeNormal", a.mode)
+		_, cmds[i] = a.Update(keyPress('K'))
+		if cmds[i] == nil {
+			t.Fatalf("%s: cmd = nil, want the toast's clear tick", tc.name)
+		}
+		if a.mode != ModeNormal {
+			t.Fatalf("%s: mode = %v, want ModeNormal", tc.name, a.mode)
+		}
+		if a.userProfile.IsVisible() {
+			t.Fatalf("%s: userProfile modal opened", tc.name)
+		}
+		if got := statusbarText(a); !containsToast(got, noProfileToast) {
+			t.Errorf("%s: statusbar = %q, want it to contain %q", tc.name, got, noProfileToast)
+		}
+		apps[i] = a
 	}
-	if cmd != nil {
-		t.Error("cmd != nil, want nil for a no-selection K")
-	}
-	if got := statusbarText(a); !containsToast(got, noProfileToast) {
-		t.Errorf("statusbar = %q, want it to contain %q", got, noProfileToast)
-	}
-}
 
-// TestUserProfileKey_BotIDToast: the selected message's UserID starts
-// with "B" (cmd/slk/history.go's bot-ID substitute) -> toast, no open.
-func TestUserProfileKey_BotIDToast(t *testing.T) {
-	a := newTestApp(t,
-		withChannels(),
-		withMessages(messages.MessageItem{TS: "1.0", UserID: "B123", Text: "build ok"}),
-		withActiveChannel(""),
-	)
-	a.focusedPanel = PanelMessages
-
-	_, cmd := a.Update(keyPress('K'))
-	if a.mode != ModeNormal {
-		t.Fatalf("mode = %v, want ModeNormal", a.mode)
-	}
-	if a.userProfile.IsVisible() {
-		t.Error("userProfile modal opened for a bot-ID message")
-	}
-	if cmd != nil {
-		t.Error("cmd != nil, want nil for a bot-ID K")
-	}
-	if got := statusbarText(a); !containsToast(got, noProfileToast) {
-		t.Errorf("statusbar = %q, want it to contain %q", got, noProfileToast)
-	}
-}
-
-// TestUserProfileKey_EmptyUserIDToast: a message with no UserID at
-// all (e.g. carrying only a bot_id upstream) -> same toast.
-func TestUserProfileKey_EmptyUserIDToast(t *testing.T) {
-	a := newTestApp(t,
-		withChannels(),
-		withMessages(messages.MessageItem{TS: "1.0", UserID: "", Text: "hello"}),
-		withActiveChannel(""),
-	)
-	a.focusedPanel = PanelMessages
-
-	_, cmd := a.Update(keyPress('K'))
-	if a.mode != ModeNormal {
-		t.Fatalf("mode = %v, want ModeNormal", a.mode)
-	}
-	if a.userProfile.IsVisible() {
-		t.Error("userProfile modal opened for an empty-UserID message")
-	}
-	if cmd != nil {
-		t.Error("cmd != nil, want nil for an empty-UserID K")
-	}
-	if got := statusbarText(a); !containsToast(got, noProfileToast) {
-		t.Errorf("statusbar = %q, want it to contain %q", got, noProfileToast)
+	ticks := deliveredMsgs[statusbar.CopiedClearMsg](t, cmds...)
+	for i, tc := range cases {
+		apps[i].Update(ticks[i])
+		if got := statusbarText(apps[i]); containsToast(got, noProfileToast) {
+			t.Errorf("%s: statusbar = %q after the toast's clear tick, want it cleared", tc.name, got)
+		}
 	}
 }
 

@@ -1262,38 +1262,23 @@ func (a *App) openReactionsView() tea.Cmd {
 	return nil
 }
 
+// noProfileToast is the toast openUserProfile shows when it opens
+// nothing.
+const noProfileToast = "No profile for this message"
+
 // openUserProfile opens the read-only "who is this person?" modal for
 // the selected message's author (main pane) or selected reply's author
 // (thread pane), like openReactionsView. It rejects no selection, an
 // empty UserID, and a UserID starting with "B" (cmd/slk/history.go's
-// bot-ID substitute for a message with no human author) with a toast
-// and opens nothing. On success it seeds the modal from the App's own
-// cached identity, switches to ModeUserProfile, and returns a tea.Cmd
-// that fetches the full profile under a 10s timeout.
+// bot-ID substitute for a message with no human author): it opens
+// nothing, shows noProfileToast, and returns that toast's clear tick.
+// On success it seeds the modal from the App's own cached identity,
+// switches to ModeUserProfile, and returns a tea.Cmd that fetches the
+// full profile under a 10s timeout.
 func (a *App) openUserProfile() tea.Cmd {
-	var userID string
-	switch a.focusedPanel {
-	case PanelMessages:
-		msg, ok := a.messagepane.SelectedMessage()
-		if !ok {
-			a.statusbar.SetToast("No profile for this message")
-			return nil
-		}
-		userID = msg.UserID
-	case PanelThread:
-		reply := a.threadPanel.SelectedReply()
-		if reply == nil {
-			a.statusbar.SetToast("No profile for this message")
-			return nil
-		}
-		userID = reply.UserID
-	default:
-		a.statusbar.SetToast("No profile for this message")
-		return nil
-	}
-	if userID == "" || strings.HasPrefix(userID, "B") {
-		a.statusbar.SetToast("No profile for this message")
-		return nil
+	_, _, _, userID, _, ok := a.selectedMessageContext()
+	if !ok || userID == "" || strings.HasPrefix(userID, "B") {
+		return toastWithClear(a, noProfileToast, 2*time.Second)
 	}
 
 	teamID := a.activeTeamID
