@@ -614,14 +614,15 @@ func run() error {
 	}))
 
 	// Wire theme switcher: dispatch to the appropriate saver based on scope.
-	saveTheme := func(name string, scope core.ThemeScope) {
+	// A workspace save names its workspace instead of reading
+	// router.Active(): a switch moves router.Active() before the UI shows
+	// the new workspace, and the choice belongs to the one it showed.
+	saveTheme := func(teamID, name string, scope core.ThemeScope) {
 		switch scope {
 		case themeswitcher.ScopeWorkspace:
-			active := router.Active()
-			if active == nil {
-				return // shouldn't happen, but guard against it
+			if teamID == "" {
+				return // no workspace was showing yet
 			}
-			teamID := active.TeamID
 			teamName := teamID
 			if wctx := router.ByID(teamID); wctx != nil && wctx.TeamName != "" {
 				teamName = wctx.TeamName
@@ -1673,29 +1674,7 @@ func run() error {
 	}).Run(wakeCtx)
 
 	_, err = p.Run()
-
-	// Dump the API request tally before anything else at shutdown.
-	//
-	// Phase 2b's success criteria are call counts -- "a boot issues
-	// <= 10 API calls, with zero users.list and zero per-channel
-	// conversations.history fan-out" -- and nothing in slk could
-	// report them. Reconstructing the numbers from a debug log only
-	// worked at all because triggerBackfill happens to log per
-	// channel; there was no way to see users.list or a total.
-	//
-	// Nobody is testing slk against a real Enterprise Grid account
-	// until the whole grid-parity series lands, so this is the only
-	// feedback loop the work has.
-	if debuglog.Enabled() {
-		debuglog.General("shutdown API request tally:\n%s", slackhttp.DefaultCounter.Report())
-	}
-
-	// Clean up connection managers
-	for _, wctx := range router.All() {
-		if wctx.ConnMgr != nil {
-			wctx.ConnMgr.Stop()
-		}
-	}
+	shutdown(app, router)
 
 	return err
 }

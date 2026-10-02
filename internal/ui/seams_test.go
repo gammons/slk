@@ -125,14 +125,15 @@ func TestSeam_TypingSendsForActiveChannel(t *testing.T) {
 
 func TestSeam_ThemeSwitcherSavesChoice(t *testing.T) {
 	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
-	a := newTestApp(t)
+	a := newTestApp(t, withActiveTeam("T1"))
 	type save struct {
-		name  string
-		scope core.ThemeScope
+		teamID string
+		name   string
+		scope  core.ThemeScope
 	}
 	var saves []save
-	wireThemeSaver(a, func(name string, scope core.ThemeScope) {
-		saves = append(saves, save{name, scope})
+	wireThemeSaver(a, func(teamID, name string, scope core.ThemeScope) {
+		saves = append(saves, save{teamID, name, scope})
 	})
 	a.SetThemeItems([]string{"dracula", "nord"})
 	a.themeSwitcher.OpenWithScope(themeswitcher.ScopeWorkspace, "")
@@ -140,7 +141,7 @@ func TestSeam_ThemeSwitcherSavesChoice(t *testing.T) {
 
 	_ = dispatchModeKey(a, keyCode(tea.KeyEnter))
 
-	want := []save{{"dracula", themeswitcher.ScopeWorkspace}}
+	want := []save{{"T1", "dracula", themeswitcher.ScopeWorkspace}}
 	if !reflect.DeepEqual(saves, want) {
 		t.Errorf("theme saves = %+v, want %+v", saves, want)
 	}
@@ -251,7 +252,9 @@ func TestSeam_UploadUnwiredToasts(t *testing.T) {
 	a.compose.AddAttachment(core.PendingAttachment{Filename: "a.png", Bytes: []byte("png"), Size: 3})
 
 	cmd := a.handleInsertMode(tea.KeyPressMsg{Code: tea.KeyEnter})
-	firstBatchCmd(t, cmd)
+	if cmd == nil {
+		t.Error("cmd = nil, want the toast-clear tick")
+	}
 
 	if got := statusbarText(a); !strings.Contains(got, "Cannot upload: no active channel") {
 		t.Errorf("status bar = %q, want the cannot-upload toast", got)

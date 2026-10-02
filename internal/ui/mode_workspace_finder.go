@@ -33,11 +33,7 @@ func handleWorkspaceFinderMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		a.workspaceFinder.Close()
 		a.SetMode(ModeNormal)
 		if a.workspaceSvc != nil && result.ID != a.workspaceRail.SelectedID() {
-			switcher := a.workspaceSvc
-			teamID := result.ID
-			return func() tea.Msg {
-				return switcher.Switch(teamID)
-			}
+			return a.switchWorkspace(result.ID)
 		}
 	}
 	if !a.workspaceFinder.IsVisible() {

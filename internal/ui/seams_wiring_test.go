@@ -23,7 +23,7 @@ func wireTypingSender(a *App, fn func(channelID string)) {
 	a.SetPresenceService(core.NewPresenceService(nil, fn))
 }
 
-func wireThemeSaver(a *App, fn func(name string, scope core.ThemeScope)) {
+func wireThemeSaver(a *App, fn func(teamID, name string, scope core.ThemeScope)) {
 	a.SetSettingsService(core.NewSettingsService(fn, nil))
 }
 

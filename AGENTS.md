@@ -127,9 +127,19 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Centered modal over a dimmed backdrop | `ui/overlay.DimmedOverlay` |
 | Text selection ranges and anchors | `ui/selection` (`Range`, `Anchor`, `LessOrEqual`) |
 | Theme colors and styles | `ui/styles` (`Username`, `SelectionStyle`, `SearchHighlightStyle`, `MentionBadgeStyle`, `UserColor`) |
+| Apply a theme at runtime (palette + render-cache invalidation + compose restyle) | `App.applyTheme` (`internal/ui/theme.go`); `styles.CurrentTheme()` names the applied one |
+| Status-bar toast that clears itself | `toastWithClear(a, text, d)` (`internal/ui/reducer_io.go`); `toastUntilReplaced(a, text)` only for a toast a later one replaces on purpose (upload progress). Set toasts on the Update goroutine, never inside a `tea.Cmd`; `statusbar.ToastSeq()` identifies the toast showing, so a clear tick leaves a newer toast alone. `TestToastsGoThroughToastSetters` fails on a direct `statusbar.SetToast` with text |
 | Window tree geometry | `ui/wintree` |
 | Modal geometry / row hit-testing | `boxedOverlay`, `clickableOverlay` (list rows), `pointClickable` (a single glyph, e.g. the profile dialog's 📋) in `internal/ui/reducer_modal_click.go` |
 | Channel/DM destination picker for forwarding | `channelfinder.Model.OpenForForwarding()` (joined conversations only); `Open()` restores the normal switcher |
+
+### App state and actions
+
+| Need | Use |
+|---|---|
+| Selected message or reply in the focused pane (channel, TS, text, author, panel) | `App.selectedMessageContext()` (`internal/ui/app.go`) |
+| Switch the active workspace from the UI | `App.switchWorkspace(teamID)` (`internal/ui/app.go`). Always use it: it saves a theme a cycle left pending, so a switch back to that workspace reads the new theme |
+| Save a per-workspace theme | `settings.SaveTheme(teamID, name, scope)` with the workspace on screen (`a.activeTeamID`), never the backend's active one: a switch moves that first |
 
 ### Test helpers
 
@@ -153,6 +163,7 @@ greppable by name; no line numbers, because these files move.
 | Re-bless goldens | the package-local `-update` flag: `go test ./internal/ui -run TestGolden -update`. It is not defined repo-wide, so `go test ./... -update` fails |
 | An `App` with every render nondeterminism pinned (theme, emoji mode, clock) | `newGoldenApp(t, opts...)`, with `goldenMessages()` / `goldenChannels()` as the fixtures |
 | Drive a message through the real `Update` chain and render one frame | `updateAndRender(t, a, msg)` (`internal/ui/thread_breadcrumb_test.go`) |
+| Run a command the way the runtime does (batch members concurrently, ticks on their real timers) and take the message it delivers | `deliveredMsgs[T](t, cmds...)` (`internal/ui/cmdmsgs_test.go`). Use it, not a hand-built tick message, to show what a real tick carries |
 | An App at a given width, resized via `WindowSizeMsg`, channel focused, for thread-layout tests | `stackedApp(t, w, extra...)` (`internal/ui/thread_stacked_test.go`) |
 | Assert which of channel / thread the last frame drew | `assertFront(t, a, wantChannel, wantThread)` (same file) |
 | Fake one service method on an `App` | `a.setChannelFetcherForTest(fn)` and its siblings, `setUploaderForTest`, `setClipboardReaderForTest`, `setReadStateReaderForTest`, `setDesktopForTest(func(*core.DesktopServiceFuncs))`, `setFilesystemForTest()`, `setEditorForTest()`, `setProfileFetcherForTest(fn)` (`internal/ui/services_helpers_test.go`). Calls for sibling methods of one service compose instead of replacing each other |
@@ -167,7 +178,6 @@ greppable by name; no line numbers, because these files move.
 | Establish a focused pane with an asserted selection | `focusMessages(t, a)`, `focusThreadPanel(t, a)` (same file) |
 | Park the message viewport at an exact `yOffset` | `scrollTo(off)` (same file) |
 | Make nav-history entries resolvable | `navLookupOpt()` (same file) |
-| Run only the first command of a `tea.Batch` (skip a 2s tick) | `firstBatchCmd(t, cmd)` (`internal/ui/mode_insert_keys_test.go`) |
 | Observe a compose cursor position or blur state (no getter exists) | `afterKeyValue(c, r)` (same file) |
 
 ### Known duplication — do not add to it

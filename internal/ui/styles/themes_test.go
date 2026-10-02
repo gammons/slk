@@ -119,7 +119,7 @@ func TestNewThemesHaveRequiredColors(t *testing.T) {
 		"material palenight",
 	}
 	for _, key := range newThemes {
-		c := lookupTheme(key)
+		_, c := resolveTheme(key)
 		if c.Primary == "" || c.Accent == "" || c.Warning == "" || c.Error == "" ||
 			c.Background == "" || c.Surface == "" || c.SurfaceDark == "" ||
 			c.Text == "" || c.TextMuted == "" || c.Border == "" {
@@ -138,7 +138,7 @@ func TestLightThemesHaveDarkSidebars(t *testing.T) {
 		"atom one light",
 	}
 	for _, key := range lightThemes {
-		c := lookupTheme(key)
+		_, c := resolveTheme(key)
 		if c.SidebarBackground == "" {
 			t.Errorf("light theme %q must set SidebarBackground", key)
 		}
@@ -165,7 +165,7 @@ func TestANSIDarkThemeRegistered(t *testing.T) {
 		t.Errorf("expected \"ANSI Dark\" in ThemeNames, got %v", names)
 	}
 
-	c := lookupTheme("ANSI Dark")
+	_, c := resolveTheme("ANSI Dark")
 	required := map[string]string{
 		"Primary":     c.Primary,
 		"Accent":      c.Accent,
@@ -206,7 +206,7 @@ func TestANSILightThemeRegistered(t *testing.T) {
 		t.Errorf("expected \"ANSI Light\" in ThemeNames, got %v", names)
 	}
 
-	c := lookupTheme("ANSI Light")
+	_, c := resolveTheme("ANSI Light")
 	required := map[string]string{
 		"Primary":     c.Primary,
 		"Accent":      c.Accent,
@@ -235,21 +235,21 @@ func TestANSILightThemeRegistered(t *testing.T) {
 // TestANSIThemeLookupViaDisplayName regression-pins the realistic
 // theme-switcher path: when the user picks "ANSI Dark" via Ctrl+y,
 // the display name is saved verbatim to config.toml. On the next
-// render, lookupTheme must resolve "ANSI Dark" to the ansi-dark
+// render, resolveTheme must resolve "ANSI Dark" to the ansi-dark
 // theme — not fall through to the default "dark" theme.
 //
 // The key in builtinThemes must therefore lowercase-match "ANSI Dark"
 // after strings.ToLower, i.e. it must use a space separator like every
 // other multi-word built-in theme ("tokyo night", "gruvbox dark", etc).
 func TestANSIThemeLookupViaDisplayName(t *testing.T) {
-	dark := lookupTheme("ANSI Dark")
+	_, dark := resolveTheme("ANSI Dark")
 	if dark.Background != "0" {
-		t.Errorf("lookupTheme(\"ANSI Dark\").Background = %q, want \"0\" — likely fell through to default \"dark\" theme", dark.Background)
+		t.Errorf("resolveTheme(\"ANSI Dark\").Background = %q, want \"0\" — likely fell through to default \"dark\" theme", dark.Background)
 	}
 
-	light := lookupTheme("ANSI Light")
+	_, light := resolveTheme("ANSI Light")
 	if light.Background != "15" {
-		t.Errorf("lookupTheme(\"ANSI Light\").Background = %q, want \"15\" — likely fell through to default \"dark\" theme", light.Background)
+		t.Errorf("resolveTheme(\"ANSI Light\").Background = %q, want \"15\" — likely fell through to default \"dark\" theme", light.Background)
 	}
 }
 
@@ -383,7 +383,7 @@ func TestDarkEditorThemesRegistered(t *testing.T) {
 
 func TestDarkEditorThemesHaveRequiredColors(t *testing.T) {
 	for _, name := range darkEditorThemes {
-		c := lookupTheme(strings.ToLower(name))
+		_, c := resolveTheme(strings.ToLower(name))
 		if c.Primary == "" || c.Accent == "" || c.Warning == "" || c.Error == "" ||
 			c.Background == "" || c.Surface == "" || c.SurfaceDark == "" ||
 			c.Text == "" || c.TextMuted == "" || c.Border == "" {
@@ -411,7 +411,7 @@ func TestLightEditorThemesRegistered(t *testing.T) {
 
 func TestLightEditorThemesHaveRequiredColors(t *testing.T) {
 	for _, name := range lightEditorThemes {
-		c := lookupTheme(strings.ToLower(name))
+		_, c := resolveTheme(strings.ToLower(name))
 		if c.Primary == "" || c.Accent == "" || c.Warning == "" || c.Error == "" ||
 			c.Background == "" || c.Surface == "" || c.SurfaceDark == "" ||
 			c.Text == "" || c.TextMuted == "" || c.Border == "" {
@@ -422,7 +422,7 @@ func TestLightEditorThemesHaveRequiredColors(t *testing.T) {
 
 func TestLightEditorThemesHaveDarkSidebars(t *testing.T) {
 	for _, name := range lightEditorThemes {
-		c := lookupTheme(strings.ToLower(name))
+		_, c := resolveTheme(strings.ToLower(name))
 		if c.SidebarBackground == "" {
 			t.Errorf("light theme %q must set SidebarBackground", name)
 		}
@@ -450,7 +450,7 @@ func TestSlackBrandedThemesRegistered(t *testing.T) {
 
 func TestSlackBrandedThemesHaveRequiredColors(t *testing.T) {
 	for _, name := range slackBrandedThemes {
-		c := lookupTheme(strings.ToLower(name))
+		_, c := resolveTheme(strings.ToLower(name))
 		if c.Primary == "" || c.Accent == "" || c.Warning == "" || c.Error == "" ||
 			c.Background == "" || c.Surface == "" || c.SurfaceDark == "" ||
 			c.Text == "" || c.TextMuted == "" || c.Border == "" {

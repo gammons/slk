@@ -115,3 +115,35 @@ func TestLegacyOpenStillWorks(t *testing.T) {
 		t.Errorf("Open() default scope = %v, want ScopeGlobal", m.Scope())
 	}
 }
+
+func TestNeighbor(t *testing.T) {
+	m := New()
+	m.SetItems([]string{"Dark", "Light", "Dracula"})
+	for _, tc := range []struct {
+		current string
+		step    int
+		want    string
+	}{
+		{"Dark", 1, "Light"},
+		{"Light", -1, "Dark"},
+		{"Dracula", 1, "Dark"},  // wraps forward
+		{"Dark", -1, "Dracula"}, // wraps backward
+		{"dracula", 1, "Dark"},  // case-insensitive
+		{"Nord", 1, "Dark"},     // not listed: forward starts at the first
+		{"Nord", -1, "Dracula"}, // not listed: backward starts at the last
+		{"", 1, "Dark"},
+		{"Dark", 4, "Light"}, // larger steps wrap too
+		{"Dark", -4, "Dracula"},
+	} {
+		if got := m.Neighbor(tc.current, tc.step); got != tc.want {
+			t.Errorf("Neighbor(%q, %d) = %q, want %q", tc.current, tc.step, got, tc.want)
+		}
+	}
+}
+
+func TestNeighborWithNoItems(t *testing.T) {
+	m := New()
+	if got := m.Neighbor("Dark", 1); got != "" {
+		t.Errorf("Neighbor on an empty list = %q, want \"\"", got)
+	}
+}

@@ -232,7 +232,7 @@ func TestApp_CopiedMsgShowsToastAndSchedulesClear(t *testing.T) {
 	// produces a CopiedClearMsg type when invoked.
 	// tea.Tick wraps a function; calling it returns a TickMsg-like value.
 	// Easier path: directly send CopiedClearMsg and verify it clears.
-	_, _ = a.Update(statusbar.CopiedClearMsg{})
+	_, _ = a.Update(statusbar.CopiedClearMsg{Seq: a.statusbar.ToastSeq()})
 	if strings.Contains(a.statusbar.View(80), "Copied") {
 		t.Fatalf("status bar still showing toast after CopiedClearMsg")
 	}

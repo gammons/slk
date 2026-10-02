@@ -231,9 +231,10 @@ func seedActiveSearch(t *testing.T, a *App) {
 
 // TestNormalModeKeys characterizes handleNormalMode (mode_normal.go:39).
 //
-// One row per `case key.Matches(...)` arm (49 of them) plus the three
-// early guards ahead of the switch and the numeric workspace-switch
-// default arm. Rows record CURRENT behaviour; where that behaviour
+// One row per `case key.Matches(...)` arm plus the three early guards
+// ahead of the switch and the numeric workspace-switch default arm. The
+// exceptions are the ThemeNext / ThemePrev arms (alt+y / alt+shift+y):
+// TestThemeCycleKeys (theme_test.go) has their rows. Rows record CURRENT behaviour; where that behaviour
 // looks wrong the row carries a `// BUG?:` and still asserts reality.
 //
 // Reachability note, which the runner's doc comment spells out in
@@ -1283,8 +1284,9 @@ func TestNormalModeKeys(t *testing.T) {
 		},
 
 		// -------------------------------------------------------------
-		// Arms 29 & 30: ThemeSwitcher / ThemeSwitcherGlobal
-		// (mode_normal.go:215, :222)
+		// Arms 29 & 30: ThemeSwitcher / ThemeSwitcherGlobal. The
+		// ThemeNext / ThemePrev arms that follow them in
+		// handleNormalMode are in TestThemeCycleKeys (theme_test.go).
 		// -------------------------------------------------------------
 		{
 			name:     "ctrl+y opens the theme switcher scoped to the workspace",

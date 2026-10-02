@@ -169,28 +169,6 @@ func beginEdit(a *App, panel Panel, stashed string) func(*testing.T, *App) {
 	}
 }
 
-// firstBatchCmd runs the first command of a tea.Batch. uploadToastCmd
-// batches a status-bar setter with a 2s tea.Tick; running the whole
-// batch would sleep for the tick. The slice order is deterministic --
-// tea.Batch's compactCmds appends in argument order
-// (bubbletea/commands.go:36-46) -- even though the RUNTIME executes the
-// members concurrently, which is what the "no ordering guarantees"
-// comment on BatchMsg refers to.
-func firstBatchCmd(t *testing.T, cmd tea.Cmd) {
-	t.Helper()
-	if cmd == nil {
-		t.Fatal("cmd = nil, want a toast batch")
-	}
-	batch, ok := cmd().(tea.BatchMsg)
-	if !ok {
-		t.Fatalf("cmd() = %T, want tea.BatchMsg", cmd())
-	}
-	if len(batch) != 2 {
-		t.Fatalf("batch has %d cmds, want 2 (setter + tick)", len(batch))
-	}
-	batch[0]()
-}
-
 // afterKeyValue feeds one more printable key straight into a compose and
 // returns the resulting text. It is how the arrow-key rows observe the
 // CURSOR, which compose exposes no getter for: a cursor parked at the
@@ -217,7 +195,11 @@ func TestInsertModeKeys(t *testing.T) {
 			// The upload arm returns before SetMode.
 			wantMode: ModeInsert,
 			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
-				firstBatchCmd(t, cmd)
+				// The toast shows without running cmd, which is only
+				// its clear tick.
+				if cmd == nil {
+					t.Error("cmd = nil, want the toast-clear tick")
+				}
 				if got := statusbarText(a); !strings.Contains(got, "Upload in progress") {
 					t.Errorf("status bar = %q, want it to contain %q", got, "Upload in progress")
 				}
@@ -243,7 +225,11 @@ func TestInsertModeKeys(t *testing.T) {
 			key:      keyCode(tea.KeyEscape),
 			wantMode: ModeInsert,
 			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
-				firstBatchCmd(t, cmd)
+				// The toast shows without running cmd, which is only
+				// its clear tick.
+				if cmd == nil {
+					t.Error("cmd = nil, want the toast-clear tick")
+				}
 				if got := statusbarText(a); !strings.Contains(got, "Upload in progress") {
 					t.Errorf("status bar = %q, want it to contain %q", got, "Upload in progress")
 				}

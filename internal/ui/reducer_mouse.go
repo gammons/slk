@@ -208,11 +208,7 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		if a.workspaceSvc == nil || item.ID == a.workspaceRail.SelectedID() {
 			return nil
 		}
-		switcher := a.workspaceSvc
-		teamID := item.ID
-		return func() tea.Msg {
-			return switcher.Switch(teamID)
-		}
+		return a.switchWorkspace(item.ID)
 
 	case a.sidebarVisible && x < a.layout.SidebarEnd():
 		a.focusedPanel = PanelSidebar

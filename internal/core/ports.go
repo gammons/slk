@@ -332,7 +332,11 @@ type PresenceService interface {
 
 // SettingsService persists the user's display preferences.
 type SettingsService interface {
-	SaveTheme(name string, scope ThemeScope)
+	// SaveTheme persists a theme choice. For ThemeScopeWorkspace, teamID
+	// is the workspace the choice belongs to: the one the UI showed when
+	// the user chose. It can differ from the active workspace, which
+	// changes before the UI shows a switch. ThemeScopeGlobal ignores it.
+	SaveTheme(teamID, name string, scope ThemeScope)
 	SaveSidebarWidth(width int)
 }
 
