@@ -67,3 +67,17 @@ func TestToastClear_UploadProgressOutlivesEarlierExpiry(t *testing.T) {
 		t.Errorf("status bar = %q after the result toast's tick, want it cleared", got)
 	}
 }
+
+// TestCopiedMsg_ZeroShowsNothing: a copy of nothing shows no toast and
+// schedules no clear. A clear scheduled then would belong to the toast
+// on screen, here an upload's progress, and remove it.
+func TestCopiedMsg_ZeroShowsNothing(t *testing.T) {
+	a := newTestApp(t)
+	a.Update(UploadProgressMsg{Done: 1, Total: 3})
+	if _, cmd := a.Update(statusbar.CopiedMsg{N: 0}); cmd != nil {
+		t.Errorf("cmd = %T, want nil: its tick would clear the upload progress", cmd)
+	}
+	if got := statusbarText(a); !strings.Contains(got, "Uploading 1/3") {
+		t.Errorf("status bar = %q, want the upload progress untouched", got)
+	}
+}

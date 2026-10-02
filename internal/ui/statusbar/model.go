@@ -392,8 +392,9 @@ func formatDND(endTS time.Time) string {
 }
 
 // CopiedMsg is delivered when the messages or thread pane copies a
-// selection to the clipboard. App handles it by calling ShowCopied and
-// scheduling a ClearCopied after a short delay.
+// selection to the clipboard. App shows "Copied N chars" through
+// toastWithClear, which clears it after a short delay; N <= 0 shows
+// nothing.
 type CopiedMsg struct {
 	N int
 }

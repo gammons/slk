@@ -28,7 +28,7 @@
 //	messages.AvatarReadyMsg   - lazy avatar fetch landed:
 //	                            invalidate both pane caches.
 //
-//	statusbar.CopiedMsg               - "N chars copied"
+//	statusbar.CopiedMsg               - "Copied N chars"
 //	statusbar.CopiedClearMsg          - 2/3s expiry tick
 //	statusbar.PermalinkCopiedMsg      - "Copied permalink"
 //	statusbar.PermalinkCopyFailedMsg  - "Failed to copy link"
@@ -107,8 +107,12 @@ var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return reducePaste(a, m), true
 
 	case statusbar.CopiedMsg:
-		a.statusbar.ShowCopied(m.N)
-		return copiedClearAfter(a, 2*time.Second), true
+		// No toast means no clear: a clear scheduled now would belong
+		// to the toast on screen, such as an upload's progress.
+		if m.N <= 0 {
+			return nil, true
+		}
+		return toastWithClear(a, fmt.Sprintf("Copied %d chars", m.N), 2*time.Second), true
 
 	case statusbar.CopiedClearMsg:
 		if m.Seq == a.statusbar.ToastSeq() {
