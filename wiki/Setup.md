@@ -44,6 +44,34 @@ Two cases still need you:
 The first time slk reads KWallet, KWallet may ask you to grant access to an
 application called `slk`. Allow it once and it is remembered.
 
+## Without the desktop app
+
+On a machine without the Slack desktop app (a server, a container, an SSH
+session), or without a system keyring to decrypt its session, slk can sign in
+from your browser session instead. It offers this on its own when it cannot
+read the desktop app, or you can ask for it:
+
+```bash
+slk --add-workspace --browser
+```
+
+1. Open https://app.slack.com in your browser and sign in.
+2. DevTools > Network, filter on `api/`, click a channel, then right click one
+   of the requests > Copy > Copy as cURL (the bash, cmd and PowerShell forms
+   all work).
+3. Paste it at the prompt and press Enter. Nothing is echoed.
+
+The copied request carries both values slk needs: the `xoxc-` token and the
+`d` cookie, which is HttpOnly and cannot be read from the DevTools console. A
+bare `xoxc-` token also works; slk then asks for the `d` cookie (DevTools >
+Application > Cookies). The pair is checked with `auth.test` and saved like any
+other workspace.
+
+Such a token is not re-minted on launch, since there is no desktop cookie to
+mint from: it lasts as long as the browser session. When Slack signs it out,
+run `slk --add-workspace --browser` again: it refreshes the token and leaves
+your `config.toml` as it is.
+
 ## Removing a workspace
 
 ```bash

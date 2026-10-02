@@ -915,6 +915,7 @@ func TestConnect_DiscoversStandardWorkspaceAPIBaseURL(t *testing.T) {
 		authTestFn: func() (*slack.AuthTestResponse, error) {
 			return &slack.AuthTestResponse{
 				URL:    "https://myteam.slack.com/",
+				Team:   "My Team",
 				TeamID: "T1",
 				UserID: "U1",
 			}, nil
@@ -927,6 +928,12 @@ func TestConnect_DiscoversStandardWorkspaceAPIBaseURL(t *testing.T) {
 	want := "https://myteam.slack.com/api/"
 	if c.apiBaseURL != want {
 		t.Errorf("apiBaseURL = %q, want %q", c.apiBaseURL, want)
+	}
+	if got := c.TeamName(); got != "My Team" {
+		t.Errorf("TeamName() = %q, want %q", got, "My Team")
+	}
+	if got := c.TeamSubdomain(); got != "myteam" {
+		t.Errorf("TeamSubdomain() = %q, want %q", got, "myteam")
 	}
 }
 
