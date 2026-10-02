@@ -8,66 +8,62 @@ import (
 	"github.com/gammons/slk/internal/ui/statusbar"
 )
 
+// The tests here run the real clear ticks that toastWithClear (and so
+// copiedClearAfter) schedules, and feed back the messages they deliver.
+// They pass short durations so the ticks fire at once; Update's arms
+// differ only in the duration they pass.
+
 // TestToastClear_StaleTickLeavesLaterToast pins the CopiedClearMsg
 // sequence (statusbar ToastSeq): when a second toast replaces the first
 // before the first toast's tick fires, that tick must leave the second
 // toast alone, and the second toast's own tick clears it. Before the
-// sequence, the first tick cut the second toast short.
+// sequence, the first tick cut the second toast short. The second toast
+// can repeat the first one's text, as copying twice does.
 func TestToastClear_StaleTickLeavesLaterToast(t *testing.T) {
-	a := newTestApp(t)
-	_ = toastWithClear(a, "first toast", 2*time.Second)
-	first := statusbar.CopiedClearMsg{Seq: a.statusbar.ToastSeq()}
-	_ = toastWithClear(a, "second toast", 2*time.Second)
-	second := statusbar.CopiedClearMsg{Seq: a.statusbar.ToastSeq()}
+	for _, tc := range []struct{ name, first, second string }{
+		{"another text", "first toast", "second toast"},
+		{"the same text", "Copied 5 chars", "Copied 5 chars"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTestApp(t)
+			firstCmd := toastWithClear(a, tc.first, 10*time.Millisecond)
+			secondCmd := toastWithClear(a, tc.second, 10*time.Millisecond)
+			// Both ticks fire now, after the second toast showed.
+			ticks := deliveredMsgs[statusbar.CopiedClearMsg](t, firstCmd, secondCmd)
 
-	a.Update(first)
-	if got := statusbarText(a); !strings.Contains(got, "second toast") {
-		t.Fatalf("status bar = %q after the first toast's tick, want the second toast", got)
-	}
-	a.Update(second)
-	if got := statusbarText(a); strings.Contains(got, "second toast") {
-		t.Errorf("status bar = %q after the second toast's tick, want it cleared", got)
+			a.Update(ticks[0])
+			if got := statusbarText(a); !strings.Contains(got, tc.second) {
+				t.Fatalf("status bar = %q after the first toast's tick, want the second toast", got)
+			}
+			a.Update(ticks[1])
+			if got := statusbarText(a); strings.Contains(got, tc.second) {
+				t.Errorf("status bar = %q after the second toast's tick, want it cleared", got)
+			}
+		})
 	}
 }
 
 // TestToastClear_UploadProgressOutlivesEarlierExpiry covers a toast
 // with no expiry of its own: upload progress. It replaces the toast
 // without scheduling a clear, and the tick of the toast it replaced
-// must not erase it. The upload result's toast then clears on its own
-// tick.
+// must not erase it. The upload result's toast then replaces it and
+// clears on its own real tick, which takes the production 2s.
 func TestToastClear_UploadProgressOutlivesEarlierExpiry(t *testing.T) {
 	a := newTestApp(t)
-	_ = toastWithClear(a, "Theme: Dracula", 2*time.Second)
-	themeClear := statusbar.CopiedClearMsg{Seq: a.statusbar.ToastSeq()}
+	themeCmd := toastWithClear(a, "Theme: Dracula", 10*time.Millisecond)
 
 	a.Update(UploadProgressMsg{Done: 1, Total: 3})
-	a.Update(themeClear)
+	a.Update(deliveredMsgs[statusbar.CopiedClearMsg](t, themeCmd)[0])
 	if got := statusbarText(a); !strings.Contains(got, "Uploading 1/3") {
 		t.Fatalf("status bar = %q after the theme toast's tick, want the upload progress", got)
 	}
 
-	a.Update(UploadResultMsg{})
+	_, cmd := a.Update(UploadResultMsg{})
 	if got := statusbarText(a); !strings.Contains(got, "Sent") {
 		t.Fatalf("status bar = %q after the upload result, want %q", got, "Sent")
 	}
-	a.Update(statusbar.CopiedClearMsg{Seq: a.statusbar.ToastSeq()})
+	a.Update(deliveredMsgs[statusbar.CopiedClearMsg](t, cmd)[0])
 	if got := statusbarText(a); strings.Contains(got, "Sent") {
 		t.Errorf("status bar = %q after the result toast's tick, want it cleared", got)
-	}
-}
-
-// TestCopiedClearAfter_TickCarriesToastSeq checks the tick end of the
-// same contract: the message copiedClearAfter delivers carries the
-// ToastSeq of the toast showing when it was scheduled.
-func TestCopiedClearAfter_TickCarriesToastSeq(t *testing.T) {
-	a := newTestApp(t)
-	a.statusbar.SetToast("a toast")
-	want := a.statusbar.ToastSeq()
-	msg, ok := copiedClearAfter(a, time.Millisecond)().(statusbar.CopiedClearMsg)
-	if !ok {
-		t.Fatalf("tick delivered %T, want statusbar.CopiedClearMsg", msg)
-	}
-	if msg.Seq != want || want == 0 {
-		t.Errorf("tick Seq = %d, want the toast's ToastSeq %d", msg.Seq, want)
 	}
 }
