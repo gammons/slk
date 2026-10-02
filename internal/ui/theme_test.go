@@ -385,7 +385,10 @@ func TestThemeCycleSave(t *testing.T) {
 		a.SetMode(ModeNormal)
 		return dispatchModeKey(a, k)
 	}
-	// dueTick is the save tick of the latest press.
+	// dueTick is the save tick of the latest press, built by hand so a
+	// row can choose when it arrives without waiting themeSaveDelay.
+	// "the real save ticks from App.Update ..." pins that the real tick
+	// carries this same gen.
 	dueTick := func(a *App) themeSaveDueMsg { return themeSaveDueMsg{gen: a.themeSaveGen} }
 	// switchedTo is the result a real switch to T2 delivers.
 	switchedTo := func(theme string) WorkspaceSwitchedMsg {
@@ -587,21 +590,34 @@ func TestThemeCycleSave(t *testing.T) {
 	})
 
 	// runKeyCases calls dispatchModeKey directly and so bypasses the
-	// reducer chain; this row sends the keys and the tick through
-	// App.Update, the path a real key press takes.
-	t.Run("the keys and the save tick work through App.Update", func(t *testing.T) {
+	// reducer chain. This row sends the keys through App.Update, the
+	// path a real key press takes, and feeds back the save ticks that
+	// the commands Update returned really deliver, not dueTick's
+	// hand-built ones. The ticks fire after the last press, as they do
+	// when presses come faster than themeSaveDelay, so the first two
+	// are stale.
+	t.Run("the real save ticks from App.Update save once, for the last press", func(t *testing.T) {
 		a := newTestApp(t, onT1()...)
 		rec := startThemeCycle(t, a, "Dark", themeSwitcherItems())
-		a.Update(themeNextKey)
+		var cmds []tea.Cmd
+		for _, k := range []tea.KeyMsg{themeNextKey, themeNextKey, keyMod('Y', tea.ModAlt)} {
+			_, cmd := a.Update(k)
+			cmds = append(cmds, cmd)
+		}
+		// Dark → Dracula → Light, then alt+Y back to Dracula.
 		if got := styles.CurrentTheme(); got != "Dracula" {
-			t.Fatalf("current theme after alt+y = %q, want Dracula", got)
+			t.Fatalf("current theme after the presses = %q, want Dracula", got)
 		}
-		a.Update(keyMod('Y', tea.ModAlt))
-		if got := styles.CurrentTheme(); got != "Dark" {
-			t.Fatalf("current theme after alt+Y = %q, want Dark", got)
+		ticks := deliveredMsgs[themeSaveDueMsg](t, cmds...)
+		for i, tick := range ticks[:2] {
+			a.Update(tick)
+			if len(rec.saves) != 0 {
+				t.Fatalf("saves = %+v after the tick of press %d, want none: a later press superseded it",
+					rec.saves, i+1)
+			}
 		}
-		a.Update(dueTick(a))
-		if want := []themeSave{workspaceSave("T1", "Dark")}; !slices.Equal(rec.saves, want) {
+		a.Update(ticks[2])
+		if want := []themeSave{workspaceSave("T1", "Dracula")}; !slices.Equal(rec.saves, want) {
 			t.Errorf("saves = %+v, want %+v", rec.saves, want)
 		}
 	})
