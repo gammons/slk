@@ -201,15 +201,6 @@ func (m *Model) SetToast(s string) {
 // clear scheduled for one toast can tell that another replaced it.
 func (m Model) ToastSeq() uint64 { return m.toastSeq }
 
-// ShowCopied is a backwards-compatible shim that sets the toast to
-// "Copied N chars". Pass 0 for a no-op.
-func (m *Model) ShowCopied(n int) {
-	if n <= 0 {
-		return
-	}
-	m.SetToast(fmt.Sprintf("Copied %d chars", n))
-}
-
 // ClearCopied removes any toast.
 func (m *Model) ClearCopied() {
 	m.SetToast("")
