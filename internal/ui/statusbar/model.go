@@ -186,8 +186,9 @@ func (m *Model) SetCommandLine(s string) {
 }
 
 // SetToast displays an arbitrary string in the right-side toast slot. Pass ""
-// to clear. Callers are responsible for clearing the toast (typically via a
-// tea.Tick that delivers CopiedClearMsg).
+// to clear. In internal/ui, do not call it with text directly: use
+// toastWithClear, which also schedules the toast's clear, or
+// toastUntilReplaced (the toast rule in AGENTS.md).
 func (m *Model) SetToast(s string) {
 	m.toastSeq++
 	if m.toast != s {

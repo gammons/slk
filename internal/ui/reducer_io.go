@@ -45,8 +45,11 @@
 // shape. Grouping them here keeps the residual Update switch
 // near-empty.
 //
-// Two small helpers (toastCmd, fixedToastCmd) collapse the
-// repetitive `cmds = append(cmds, tea.Tick(Ns, ... CopiedClearMsg))`
+// Every toast goes through one of two helpers (the toast rule in
+// AGENTS.md): toastWithClear shows a toast and schedules its clear
+// (copiedClearAfter), and toastUntilReplaced shows one that a later
+// toast replaces on purpose (upload progress). toastWithClear also
+// collapses the `cmds = append(cmds, tea.Tick(Ns, ... CopiedClearMsg))`
 // idiom that recurred ~11 times in the original switch.
 package ui
 
