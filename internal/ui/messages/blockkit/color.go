@@ -42,8 +42,13 @@ func ResolveAttachmentColor(c string) string {
 // go through the color.Color RGBA() interface method because the
 // concrete lipgloss.Color values land as image/color.RGBA, which
 // has no String method and whose %v formatting ("{r g b a}") is not
-// re-parseable by lipgloss.
+// re-parseable by lipgloss. A nil color (transparent theme value) has
+// no hex representation; fall back to the neutral gray used for subdued
+// attachment bars so the caller always gets a parseable color.
 func colorString(c color.Color) string {
+	if c == nil {
+		return "#333333"
+	}
 	r, g, b, _ := c.RGBA()
 	// RGBA returns 16-bit per channel; shift down to 8-bit.
 	return fmt.Sprintf("#%02x%02x%02x", r>>8, g>>8, b>>8)

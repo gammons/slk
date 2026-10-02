@@ -9,8 +9,12 @@ import (
 	"github.com/gammons/slk/internal/config"
 )
 
-// colorEqual compares two color.Color values.
+// colorEqual compares two color.Color values. nil (transparent) only
+// equals nil.
 func colorEqual(a, b color.Color) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
 	r1, g1, b1, a1 := a.RGBA()
 	r2, g2, b2, a2 := b.RGBA()
 	return r1 == r2 && g1 == g2 && b1 == b2 && a1 == a2
@@ -52,6 +56,22 @@ func TestApplyOverrides(t *testing.T) {
 	}
 	if !colorEqual(Accent, lipgloss.Color("#50C878")) {
 		t.Errorf("expected dark accent #50C878")
+	}
+	Apply("dark", config.Theme{})
+}
+
+func TestParseColor_Transparent(t *testing.T) {
+	for _, input := range []string{"transparent", "none", "default", "TRANSPARENT", "None", "Default"} {
+		if c := parseColor(input); c != nil {
+			t.Errorf("parseColor(%q) expected nil, got %T", input, c)
+		}
+	}
+}
+
+func TestApplyOverrides_Transparent(t *testing.T) {
+	Apply("dark", config.Theme{Background: "transparent"})
+	if Background != nil {
+		t.Errorf("expected transparent background (nil), got %T", Background)
 	}
 	Apply("dark", config.Theme{})
 }
