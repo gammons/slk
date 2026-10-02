@@ -65,3 +65,43 @@ func TestDimmedOverlayDropsKittyPlaceholders(t *testing.T) {
 		t.Fatalf("dim left raw image-ID FG escape %q in output:\n%q", idFG, out)
 	}
 }
+
+// TestDimmedOverlayKeepsBoxKittyPlaceholders is the sibling assertion
+// TestDimmedOverlayDropsKittyPlaceholders' own doc comment calls out as
+// untested: a placeholder rune that sits INSIDE the modal box itself
+// (as the user-profile dialog's avatar does, DimmedOverlay's step 5
+// splices the box's own bytes back onto the output row verbatim after
+// the dim-and-copy pass corrupts their SGR-bundled form (see the "Step
+// 5" comment in overlay.go). This test pins that the placeholder rune
+// and its original image-ID-as-RGB foreground survive byte-for-byte on
+// a box row, in contrast to the background case above where both are
+// dropped.
+func TestDimmedOverlayKeepsBoxKittyPlaceholders(t *testing.T) {
+	const id uint32 = 7
+	r := byte((id >> 16) & 0xFF)
+	g := byte((id >> 8) & 0xFF)
+	b := byte(id & 0xFF)
+	idFG := fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r, g, b)
+	placeholder := idFG + string(image.PlaceholderRune) + "\x1b[39m"
+
+	const width, height = 20, 6
+	bg := strings.Join([]string{
+		strings.Repeat("a", width),
+		strings.Repeat("a", width),
+		strings.Repeat("a", width),
+		strings.Repeat("a", width),
+		strings.Repeat("a", width),
+		strings.Repeat("a", width),
+	}, "\n")
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		Width(4).
+		Render(placeholder)
+
+	out := overlay.DimmedOverlay(width, height, bg, box, 0.5)
+
+	if !strings.Contains(out, placeholder) {
+		t.Fatalf("box's kitty placeholder was not preserved byte-for-byte in the composited output:\n%q\nwant to contain:\n%q", out, placeholder)
+	}
+}

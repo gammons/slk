@@ -420,6 +420,7 @@ func newGoldenApp(t *testing.T, opts ...testOpt) *App {
 	// protocol that emits no escape sequences (renderer.go:19).
 	a.imgProtocol = imgpkg.ProtoOff
 	a.SetNowTimestampFormatter(func() string { return goldenClock().Format("3:04 PM") })
+	a.now = goldenClock
 
 	if probe.render {
 		_ = a.View()
@@ -1893,14 +1894,38 @@ func TestGolden_DragSelectionIsActuallySelected(t *testing.T) {
 	}
 
 	drag := a.View().Content
-	undragged := goldenDragApp(t, false).View().Content
+	undraggedApp := goldenDragApp(t, false)
+	undragged := undraggedApp.View().Content
 	base := goldenScenarioNamed(t, "base").build(t).View().Content
 
 	if len(drag) <= len(undragged) {
 		t.Errorf("drag_selection renders %d bytes, the same frame without the drag renders %d; "+
 			"the highlight emitted no escape sequences", len(drag), len(undragged))
 	}
-	if got, want := stripANSI(drag), stripANSI(undragged); got != want {
+	// The one intended content difference: the baseline's selected row
+	// shows the long, date-qualified timestamp. In the dragged frame no
+	// row does -- the press moved the cursor elsewhere, and while a text
+	// selection exists the selected row shows its short timestamp because
+	// the overlay splices short-form plain text into it by column
+	// (messages.Model selectedLines). Normalise exactly that one row: its
+	// text must match once the long form is swapped for the short one;
+	// only its padding may differ. Every other row stays byte-exact.
+	wantLines := strings.Split(stripANSI(undragged), "\n")
+	gotLines := strings.Split(stripANSI(drag), "\n")
+	if sel, ok := undraggedApp.messagepane.SelectedMessage(); ok {
+		long := messages.LongTimestamp(sel.TS, sel.Timestamp)
+		collapse := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+		for i, l := range wantLines {
+			if strings.Contains(l, long) && i < len(gotLines) {
+				if collapse(strings.Replace(l, long, sel.Timestamp, 1)) == collapse(gotLines[i]) {
+					wantLines[i] = gotLines[i]
+				}
+				break
+			}
+		}
+	}
+	want := strings.Join(wantLines, "\n")
+	if got := strings.Join(gotLines, "\n"); got != want {
 		t.Errorf("drag_selection's stripped text differs from the undragged frame's; the drag "+
 			"changed CONTENT, not just styling: %s", firstLineDiff(want, got))
 	}
@@ -2281,6 +2306,69 @@ func TestGoldenFilesAreWellFormed(t *testing.T) {
 // (the old auto-hide, since removed). A per-scenario assertion catches
 // that only if someone thought to write one for that scenario; this
 // catches it for every scenario, including ones added later.
+// goldenLocalOffsetSeconds returns "your" offset (seconds east of UTC)
+// at goldenClock's instant, exactly what formatLocalTime compares an
+// author's TZOffset against. TestGolden_UserProfile derives its
+// fixture's TZOffset from this, rather than a hardcoded literal, so
+// the rendered "N h from you" delta -- and the golden -- is the same
+// number in every timezone the suite runs in.
+func goldenLocalOffsetSeconds(t *testing.T) int {
+	t.Helper()
+	_, offset := goldenClock().Zone()
+	return offset
+}
+
+// TestGolden_UserProfile pins the K-opened user-profile dialog's frame:
+// select the first fixture message, K to open it, then deliver a fixed
+// UserProfileLoadedMsg so the "loaded" state (title, email, local time
+// with TZOffset/TZAbbrev) renders deterministically.
+func TestGolden_UserProfile(t *testing.T) {
+	a := newGoldenApp(t, goldenFixtureOpts()...)
+	a.activeTeamID = "T1"
+	focusMessageAt(t, a, 0)
+	msg, ok := a.messagepane.SelectedMessage()
+	if !ok {
+		t.Fatal("precondition: no selected message")
+	}
+
+	updateAndRender(t, a, keyPress('K'))
+	if !a.userProfile.IsVisible() {
+		t.Fatal("precondition: K did not open the user-profile dialog")
+	}
+
+	updateAndRender(t, a, UserProfileLoadedMsg{
+		TeamID: "T1", UserID: msg.UserID,
+		Profile: core.UserProfile{
+			UserID:      msg.UserID,
+			TeamID:      "T1",
+			Handle:      "alice",
+			RealName:    "Alice Anderson",
+			DisplayName: "Alice",
+			Title:       "Staff Engineer, Platform",
+			Pronouns:    "she/her",
+			Email:       "alice@example.com",
+			Phone:       "+1 555 0100",
+			TZ:          "America/Los_Angeles",
+			TZAbbrev:    "PDT",
+			// Deliberately derived from goldenClock's own zone offset
+			// rather than a hardcoded UTC-7 literal: formatLocalTime
+			// (userprofile/localtime.go) computes its "−7h from you"
+			// delta against "your" offset, which is this machine's
+			// time.Local at the instant goldenClock() was evaluated
+			// (goldenClock is anchored to time.Local, same rationale as
+			// goldenClock's own doc comment on timezone independence).
+			// A fixed literal would make the rendered delta -- and so
+			// the golden -- depend on which zone the test happens to
+			// run in; offsetting from goldenClock's own zone keeps the
+			// delta fixed at exactly 7 hours everywhere.
+			TZOffset: goldenLocalOffsetSeconds(t) - 7*3600,
+		},
+	})
+
+	frame := a.View().Content
+	compareGolden(t, "user_profile", frame)
+}
+
 func TestGolden_ScenariosArePairwiseDistinct(t *testing.T) {
 	rendered := map[string]string{}
 	for _, sc := range goldenScenarios() {

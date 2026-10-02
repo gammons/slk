@@ -17,6 +17,7 @@
 package ui
 
 import (
+	"context"
 	"os"
 	"sync"
 
@@ -221,4 +222,10 @@ func (a *App) setWorkspaceUnreadReaderForTest(fn func() []string) {
 
 func (a *App) setWorkspaceSwitcherForTest(fn func(teamID string) tea.Msg) {
 	a.SetWorkspaceService(core.NewWorkspaceService(func(teamID string) core.Msg { return fn(teamID) }))
+}
+
+// setProfileFetcherForTest wires a ProfileService built from fn, for
+// the K-opened user-profile dialog.
+func (a *App) setProfileFetcherForTest(fn func(ctx context.Context, teamID, userID string) (core.UserProfile, error)) {
+	a.SetProfileService(core.NewProfileService(core.ProfileServiceFuncs{Profile: fn}))
 }

@@ -525,6 +525,10 @@ func TestCollectSixelPlacements_WithheldWhileAModalIsOpen(t *testing.T) {
 		"channel finder": {func(a *App) { a.channelFinder.Open() }, func(a *App) { a.channelFinder.Close() }},
 		"help":           {func(a *App) { a.help.Open() }, func(a *App) { a.help.Close() }},
 		"theme switcher": {func(a *App) { a.themeSwitcher.Open() }, func(a *App) { a.themeSwitcher.Close() }},
+		"user profile": {
+			func(a *App) { a.focusedPanel = PanelMessages; _ = a.openUserProfile() },
+			func(a *App) { a.userProfile.Close() },
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			a, _, _ := twoWindowApp(t)

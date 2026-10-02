@@ -667,6 +667,16 @@ type UploadProgressMsg struct {
 	Total int
 }
 
+// UserProfileLoadedMsg carries the result of the K-opened user-profile
+// dialog's fetch (core.ProfileService.Profile), successful or not.
+// reduceUserProfile applies it only when the dialog is still visible
+// and still targeting TeamID/UserID; otherwise it is dropped as stale.
+type UserProfileLoadedMsg struct {
+	TeamID, UserID string
+	Profile        core.UserProfile
+	Err            error
+}
+
 // UploadResultMsg carries the final result of an upload batch.
 type UploadResultMsg struct {
 	Err error

@@ -1113,6 +1113,15 @@ func (m *Model) VisibleItems() []ChannelItem {
 	return result
 }
 
+// PresenceByUser returns the authoritative live presence last recorded
+// for userID via UpdatePresenceByUser, and whether one has been
+// recorded at all. Used by the user-profile dialog, which shows
+// presence only when it is known.
+func (m *Model) PresenceByUser(userID string) (string, bool) {
+	p, ok := m.presenceByUser[userID]
+	return p, ok
+}
+
 // UpdatePresenceByUser records the authoritative live presence for a user
 // and updates any DM item whose DMUserID matches. Recording in
 // presenceByUser (even when no item matches yet) makes the value survive

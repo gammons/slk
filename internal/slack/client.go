@@ -36,6 +36,7 @@ type SlackAPI interface {
 	GetUserGroupsContext(ctx context.Context, options ...slack.GetUserGroupsOption) ([]slack.UserGroup, error)
 	GetUsersInConversationContext(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error)
 	GetUserInfo(user string) (*slack.User, error)
+	GetUserInfoContext(ctx context.Context, user string) (*slack.User, error)
 	GetBotInfoContext(ctx context.Context, parameters slack.GetBotInfoParameters) (*slack.Bot, error)
 	GetEmojiContext(ctx context.Context) (map[string]string, error)
 	PostMessage(channelID string, options ...slack.MsgOption) (string, string, error)
@@ -625,6 +626,14 @@ func (c *Client) GetUserProfile(userID string) (*slack.User, error) {
 		return nil, fmt.Errorf("getting user info: %w", err)
 	}
 	return user, nil
+}
+
+// GetUserProfileContext fetches a single user's full profile by ID
+// (users.info), for the user profile dialog. Unlike GetUserProfile,
+// errors are returned unwrapped so callers can type-assert
+// *slack.RateLimitedError.
+func (c *Client) GetUserProfileContext(ctx context.Context, userID string) (*slack.User, error) {
+	return c.api.GetUserInfoContext(ctx, userID)
 }
 
 // GetBotInfo fetches a bot's name and icon by bot ID (the `bot_id` on a

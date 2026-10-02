@@ -43,6 +43,7 @@ import (
 	"github.com/gammons/slk/internal/ui/themeswitcher"
 	"github.com/gammons/slk/internal/ui/thread"
 	"github.com/gammons/slk/internal/ui/threadsview"
+	"github.com/gammons/slk/internal/ui/userprofile"
 	"github.com/gammons/slk/internal/ui/wintree"
 	"github.com/gammons/slk/internal/ui/workspace"
 	"github.com/gammons/slk/internal/ui/workspacefinder"
@@ -416,6 +417,18 @@ type App struct {
 	reactionPicker *reactionpicker.Model
 	reactionsView  *reactionsview.Model
 	confirmPrompt  *confirmprompt.Model
+	// userProfile is the K-opened read-only "who is this person?"
+	// modal (see internal/ui/userprofile). profileSvc fetches the
+	// full profile; defaulted to noopProfileService in NewApp so the
+	// cmd built by openUserProfile never calls a nil interface.
+	userProfile *userprofile.Model
+	profileSvc  core.ProfileService
+	// now is the clock used by the user-profile dialog's "local time"
+	// and status-expiry math. Defaults to time.Now; goldens pin it to
+	// goldenClock so the rendered frame is deterministic. Only this
+	// feature reads it -- other App code still calls time.Now
+	// directly.
+	now func() time.Time
 	// reactions is the App's ReactionService collaborator (add/remove
 	// reactions on Slack + load/record frecent emoji history). See
 	// internal/ui/services.go. Defaulted to a no-op adapter in NewApp
@@ -818,6 +831,9 @@ func NewApp() *App {
 		editor:                noopEditorService,
 		navHistory:            newNavHistoryStore(),
 		clipboardWrite:        defaultClipboardWriter,
+		userProfile:           userprofile.New(),
+		profileSvc:            noopProfileService,
+		now:                   time.Now,
 	}
 	// Root model deliberately bypasses newWindowModel: the config
 	// retention fields (avatarFn, userNames, emojiCtx, ...) are still
@@ -963,6 +979,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		reduceWorkspace,
 		reduceTheme,
 		reduceNewMessagePicker,
+		reduceUserProfile,
 		reduceIO,
 		reduceMouse,
 	); handled {
@@ -1243,6 +1260,58 @@ func (a *App) openReactionsView() tea.Cmd {
 	a.reactionsView.Open(a.buildReactionGroups(reactions))
 	a.SetMode(ModeReactionsView)
 	return nil
+}
+
+// openUserProfile opens the read-only "who is this person?" modal for
+// the selected message's author (main pane) or selected reply's author
+// (thread pane), like openReactionsView. It rejects no selection, an
+// empty UserID, and a UserID starting with "B" (cmd/slk/history.go's
+// bot-ID substitute for a message with no human author) with a toast
+// and opens nothing. On success it seeds the modal from the App's own
+// cached identity, switches to ModeUserProfile, and returns a tea.Cmd
+// that fetches the full profile under a 10s timeout.
+func (a *App) openUserProfile() tea.Cmd {
+	var userID string
+	switch a.focusedPanel {
+	case PanelMessages:
+		msg, ok := a.messagepane.SelectedMessage()
+		if !ok {
+			a.statusbar.SetToast("No profile for this message")
+			return nil
+		}
+		userID = msg.UserID
+	case PanelThread:
+		reply := a.threadPanel.SelectedReply()
+		if reply == nil {
+			a.statusbar.SetToast("No profile for this message")
+			return nil
+		}
+		userID = reply.UserID
+	default:
+		a.statusbar.SetToast("No profile for this message")
+		return nil
+	}
+	if userID == "" || strings.HasPrefix(userID, "B") {
+		a.statusbar.SetToast("No profile for this message")
+		return nil
+	}
+
+	teamID := a.activeTeamID
+	a.userProfile.Open(userprofile.Seed{
+		TeamID:      teamID,
+		UserID:      userID,
+		DisplayName: a.userNames[userID],
+		IsExternal:  a.externalUsers[userID],
+	})
+	a.SetMode(ModeUserProfile)
+
+	svc := a.profileSvc
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		profile, err := svc.Profile(ctx, teamID, userID)
+		return UserProfileLoadedMsg{TeamID: teamID, UserID: userID, Profile: profile, Err: err}
+	}
 }
 
 // buildReactionGroups resolves each reaction's user IDs to display names,
@@ -3128,6 +3197,16 @@ func (a *App) SetReactionService(r core.ReactionService) {
 		r = noopReactionService
 	}
 	a.reactions = r
+}
+
+// SetProfileService wires the App's ProfileService collaborator, used
+// by the K-opened user-profile dialog. A nil s restores the no-op
+// default, so a caller can pass through cmd/slk's wiring unconditionally.
+func (a *App) SetProfileService(s core.ProfileService) {
+	if s == nil {
+		s = noopProfileService
+	}
+	a.profileSvc = s
 }
 
 func (a *App) SetCurrentUserID(userID string) {

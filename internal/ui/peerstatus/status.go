@@ -93,12 +93,15 @@ func (s Status) Glyph(now time.Time) string {
 	if s.InHuddle(now) {
 		return HuddleGlyph
 	}
-	return s.statusGlyph(now)
+	return s.StatusGlyph(now)
 }
 
-// statusGlyph is the custom status emoji as a terminal glyph, or "" when
-// there is no live custom status.
-func (s Status) statusGlyph(now time.Time) string {
+// StatusGlyph is the custom status emoji as a terminal glyph, or "" when
+// there is no live custom status. Unlike Glyph, it ignores huddle state,
+// so callers that need the status glyph even while a huddle is also
+// active (e.g. the user-profile modal's status block, which shows both
+// facets on separate lines) can use it directly.
+func (s Status) StatusGlyph(now time.Time) string {
 	if !s.HasStatus(now) {
 		return ""
 	}
@@ -126,7 +129,7 @@ func (s Status) Summary(now time.Time, layout string) string {
 		parts = append(parts, HuddleGlyph+" In a huddle")
 	}
 	if s.HasStatus(now) {
-		parts = append(parts, strings.TrimSpace(s.statusGlyph(now)+" "+s.Text))
+		parts = append(parts, strings.TrimSpace(s.StatusGlyph(now)+" "+s.Text))
 	}
 	if s.InDND(now) {
 		dnd := DNDGlyph + " Do not disturb"

@@ -572,6 +572,27 @@ func (u unreadAdapter) UnreadWorkspaces() []string {
 	return u.unreadWorkspaces()
 }
 
+// ProfileServiceFuncs is the closure bundle accepted by
+// NewProfileService. A nil Profile func returns errors.ErrUnsupported.
+type ProfileServiceFuncs struct {
+	Profile func(ctx context.Context, teamID, userID string) (UserProfile, error)
+}
+
+// NewProfileService builds a ProfileService from a ProfileServiceFuncs
+// bundle. Used by cmd/slk/main.go (production wiring) and tests.
+func NewProfileService(fns ProfileServiceFuncs) ProfileService {
+	return profileAdapter{fns: fns}
+}
+
+type profileAdapter struct{ fns ProfileServiceFuncs }
+
+func (p profileAdapter) Profile(ctx context.Context, teamID, userID string) (UserProfile, error) {
+	if p.fns.Profile == nil {
+		return UserProfile{}, errors.ErrUnsupported
+	}
+	return p.fns.Profile(ctx, teamID, userID)
+}
+
 // NewWorkspaceService builds a WorkspaceService from a closure.
 func NewWorkspaceService(switchTo func(teamID string) Msg) WorkspaceService {
 	return workspaceAdapter{switchTo: switchTo}

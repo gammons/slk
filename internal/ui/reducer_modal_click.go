@@ -16,6 +16,11 @@
 //     help has no activation).
 //   - Click INSIDE but not a row   -> consumed, no-op (never leaks to the
 //     main tab).
+//   - Click ON a point target      -> for modals whose hot spot is a
+//     single glyph rather than a row (the
+//     profile dialog's 📋), ClickAt tests
+//     the exact cell and a hit synthesises
+//     the modal's activation key.
 //
 // Geometry comes from each modal's BoxSize, mirroring the centering done
 // by overlay.DimmedOverlay so the hit-test lines up with what was drawn.
@@ -40,13 +45,23 @@ type clickableOverlay interface {
 	ClickRow(termWidth, termHeight, localY int) bool
 }
 
+// pointClickable is a boxedOverlay whose hot spot is a single cell range
+// rather than a list row. ClickAt reports whether the box-local cell
+// (localX, localY) is on it. A modal implements this or
+// clickableOverlay, not both.
+type pointClickable interface {
+	boxedOverlay
+	ClickAt(termWidth, termHeight, localX, localY int) bool
+}
+
 // modalClickTarget bundles the active modal's geometry source, its
-// optional list-hit-testing, and the key to synthesise when a row is
-// clicked.
+// optional list- or point-hit-testing, and the key to synthesise on a
+// hit.
 type modalClickTarget struct {
 	box        boxedOverlay
 	click      clickableOverlay // nil for non-list modals (e.g. confirm)
 	activation tea.KeyMsg       // nil when a row click has no activation (help)
+	point      pointClickable   // nil unless the modal has a point hot spot
 }
 
 // activeModalClickTarget resolves the modal addressed by the current
@@ -57,25 +72,30 @@ func (a *App) activeModalClickTarget() (modalClickTarget, bool) {
 	space := tea.KeyPressMsg{Code: tea.KeySpace}
 	switch a.mode {
 	case ModeChannelFinder:
-		return modalClickTarget{&a.channelFinder, &a.channelFinder, enter}, true
+		return modalClickTarget{box: &a.channelFinder, click: &a.channelFinder, activation: enter}, true
 	case ModeWorkspaceSearch:
-		return modalClickTarget{&a.searchResults, &a.searchResults, enter}, true
+		return modalClickTarget{box: &a.searchResults, click: &a.searchResults, activation: enter}, true
 	case ModeWorkspaceFinder:
-		return modalClickTarget{&a.workspaceFinder, &a.workspaceFinder, enter}, true
+		return modalClickTarget{box: &a.workspaceFinder, click: &a.workspaceFinder, activation: enter}, true
 	case ModeThemeSwitcher:
-		return modalClickTarget{&a.themeSwitcher, &a.themeSwitcher, enter}, true
+		return modalClickTarget{box: &a.themeSwitcher, click: &a.themeSwitcher, activation: enter}, true
 	case ModePresenceMenu:
-		return modalClickTarget{&a.presenceMenu, &a.presenceMenu, enter}, true
+		return modalClickTarget{box: &a.presenceMenu, click: &a.presenceMenu, activation: enter}, true
 	case ModeReactionPicker:
-		return modalClickTarget{a.reactionPicker, a.reactionPicker, enter}, true
+		return modalClickTarget{box: a.reactionPicker, click: a.reactionPicker, activation: enter}, true
 	case ModeNewMessage:
-		return modalClickTarget{&a.newMessagePicker, &a.newMessagePicker, space}, true
+		return modalClickTarget{box: &a.newMessagePicker, click: &a.newMessagePicker, activation: space}, true
 	case ModeHelp:
 		// Help has no activation: clicking a row only moves the highlight.
-		return modalClickTarget{&a.help, &a.help, nil}, true
+		return modalClickTarget{box: &a.help, click: &a.help, activation: nil}, true
 	case ModeConfirm:
 		// Confirm has no list: outside dismisses, inside is a no-op.
-		return modalClickTarget{a.confirmPrompt, nil, nil}, true
+		return modalClickTarget{box: a.confirmPrompt}, true
+	case ModeUserProfile:
+		// Read-only: the only hot spot is the email's 📋, which does
+		// what e does. Inside elsewhere is a no-op.
+		e := tea.KeyPressMsg{Code: 'e', Text: "e"}
+		return modalClickTarget{box: a.userProfile, activation: e, point: a.userProfile}, true
 	}
 	return modalClickTarget{}, false
 }
@@ -104,6 +124,14 @@ func reduceModalClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 	// Outside the box -> dismiss.
 	if m.X < startX || m.X >= startX+w || m.Y < startY || m.Y >= startY+h {
 		return esc()
+	}
+
+	// Inside the box on a point hot spot -> its activation.
+	if target.point != nil {
+		if target.activation != nil && target.point.ClickAt(a.width, a.height, m.X-startX, m.Y-startY) {
+			return dispatchModeKey(a, target.activation)
+		}
+		return nil
 	}
 
 	// Inside the box. Non-list modal: consume, no-op.

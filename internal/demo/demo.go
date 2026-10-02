@@ -91,6 +91,7 @@ func (d *Demo) Install(app *ui.App) {
 	app.SetSettingsService(s.settings)
 	app.SetPresenceService(s.presence)
 	app.SetFileService(s.files)
+	app.SetProfileService(s.profiles)
 
 	app.SetImageFetcher(d.images)
 	app.SetImageProtocol(d.proto)

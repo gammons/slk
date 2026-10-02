@@ -35,6 +35,29 @@ func BenchmarkViewScroll(b *testing.B) {
 	}
 }
 
+// BenchmarkBuildCache measures a full cache build of a 200-message
+// channel: the cost of every channel switch, SetMessages, width change and
+// theme change.
+func BenchmarkBuildCache(b *testing.B) {
+	msgs := make([]MessageItem, 200)
+	for i := range msgs {
+		msgs[i] = MessageItem{
+			TS:        fmt.Sprintf("%d.0", 1700000000+i),
+			UserName:  "alice",
+			UserID:    "U1",
+			Text:      "Hello world this is a moderately long message with **bold** and _italic_ and a `code` snippet.",
+			Timestamp: "10:30 AM",
+		}
+	}
+	m := New(msgs, "general")
+	_ = m.View(40, 100)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.buildCache(m.cacheWidth)
+	}
+}
+
 // BenchmarkViewFocusFlip simulates the slow operations the user reported:
 // pressing i / arrow keys / opening or closing the thread panel all flip
 // the messages-pane focus bit, which (prior to the partial-rebuild fix)

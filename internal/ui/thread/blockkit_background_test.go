@@ -66,7 +66,7 @@ func TestRenderThreadMessage_BlockKitRunsKeepBackground(t *testing.T) {
 			blockkit.SectionBlock{Text: "leading plain text _then italic_"},
 		},
 	}
-	got, _, _ := m.renderThreadMessage(msg, 80, nil, nil, true)
+	got, _, _, _, _ := m.renderThreadMessage(msg, 80, nil, nil, true)
 	if !strings.Contains(sgrRe.ReplaceAllString(got, ""), "leading plain text") {
 		t.Fatalf("the Block Kit section never reached the render: %q", got)
 	}

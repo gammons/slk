@@ -352,6 +352,17 @@ type UnreadService interface {
 	UnreadWorkspaces() []string
 }
 
+// ProfileService fetches other users' full profiles for the user
+// profile dialog: the fields the App's own cached identity data (e.g.
+// display names) doesn't carry — title, pronouns, timezone, email,
+// phone. Implementations are wired by cmd/slk/main.go.
+type ProfileService interface {
+	// Profile fetches userID's profile in workspace teamID. Blocking;
+	// callers run it from a tea.Cmd with a bounded context. Returns a
+	// *RateLimitedError (wrapped) when Slack rate-limits the request.
+	Profile(ctx context.Context, teamID, userID string) (UserProfile, error)
+}
+
 // WorkspaceService switches the active workspace.
 type WorkspaceService interface {
 	// Switch makes teamID active and returns WorkspaceSwitchedMsg (or

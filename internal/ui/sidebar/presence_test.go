@@ -57,3 +57,21 @@ func TestResetPresenceClearsRememberedState(t *testing.T) {
 		t.Errorf("presence = %q, want away (reset must forget prior presence)", got)
 	}
 }
+
+// TestSidebar_PresenceByUser pins PresenceByUser's contract: an unknown
+// user reports ("", false); a user recorded via UpdatePresenceByUser
+// reports (value, true) -- the "presence shown only when known" rule
+// the user-profile dialog depends on to decide whether to render the
+// presence indicator at all.
+func TestSidebar_PresenceByUser(t *testing.T) {
+	m := New(nil)
+
+	if p, ok := m.PresenceByUser("U1"); ok || p != "" {
+		t.Errorf("unknown user: PresenceByUser = (%q, %v), want (\"\", false)", p, ok)
+	}
+
+	m.UpdatePresenceByUser("U1", "away")
+	if p, ok := m.PresenceByUser("U1"); !ok || p != "away" {
+		t.Errorf("after UpdatePresenceByUser: PresenceByUser = (%q, %v), want (\"away\", true)", p, ok)
+	}
+}

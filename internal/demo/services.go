@@ -26,6 +26,7 @@ type services struct {
 	settings  core.SettingsService
 	presence  core.PresenceService
 	files     core.FileService
+	profiles  core.ProfileService
 }
 
 // toMrkdwn converts what the user typed, as cmd/slk's real send does, so
@@ -182,6 +183,11 @@ func (d *Demo) services() services {
 		avatars:  core.NewAvatarService(func(userID string) string { return d.avatars[userID] }),
 		settings: core.NewSettingsService(nil, nil),
 		presence: core.NewPresenceService(nil, nil),
+		profiles: core.NewProfileService(core.ProfileServiceFuncs{
+			Profile: func(ctx context.Context, teamID, userID string) (core.UserProfile, error) {
+				return w.profile(teamID, userID)
+			},
+		}),
 		files: core.NewFileService(
 			func(string, string, string, []core.PendingAttachment) core.Cmd {
 				return func() core.Msg { return ui.UploadResultMsg{Err: errUnavailable} }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -56,7 +55,15 @@ type viewEntry struct {
 	// For separator entries (msgIdx == -1) the two slices are identical.
 	linesNormal   []string
 	linesSelected []string
-	linesPlain    []plainLine // column-aligned mirror of CONTENT (sans border)
+	// linesSelectedShort is the selected variant with the short
+	// timestamp, shown while a text selection exists: the drag overlay
+	// splices linesPlain (short form) into the displayed row by column,
+	// so the long header would garble. Built on demand by selectedLines
+	// from shortSrc, the unmodified content, which is empty when the
+	// selected variant carries no long timestamp.
+	linesSelectedShort []string
+	shortSrc           string
+	linesPlain         []plainLine // column-aligned mirror of CONTENT (sans border)
 	// contentColOffset is the number of display columns at the START of each
 	// linesNormal[i] that belong to chrome (e.g. the thick left border ▌ on
 	// message entries) and should be skipped when mapping mouse columns to
@@ -1545,6 +1552,23 @@ type cacheStyles struct {
 	spacerLines  []string
 }
 
+// borderSelectStyle is the thick, tinted left border of the selected row.
+func (m *Model) borderSelectStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		BorderStyle(thickLeftBorder).BorderLeft(true).
+		BorderForeground(styles.SelectionBorderColor(m.focused)).
+		BorderBackground(styles.SelectionTintColor(m.focused)).
+		Background(styles.SelectionTintColor(m.focused))
+}
+
+// selectedVariant renders content r as the selected row: the selection
+// tint repainted over inner spans, filled to the row width, then the
+// selection border. Split on "\n".
+func (m *Model) selectedVariant(r string, width int, borderSelect lipgloss.Style) []string {
+	fill := lipgloss.NewStyle().Background(styles.SelectionTintColor(m.focused)).Width(width - 1)
+	return strings.Split(borderSelect.Render(fill.Render(RepaintBgToSelectionTint(r, m.focused))), "\n")
+}
+
 // buildCacheStyles materializes the shared styles for a given width.
 // Also writes m.cacheSpacer / m.cacheMoreBelow as a side effect so
 // View()'s per-frame chrome rendering can reuse the same allocations.
@@ -1560,11 +1584,7 @@ type cacheStyles struct {
 func (m *Model) buildCacheStyles(width int) cacheStyles {
 	borderFill := lipgloss.NewStyle().Background(styles.Background)
 	borderInvis := lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(styles.Background).BorderBackground(styles.Background)
-	borderSelect := lipgloss.NewStyle().
-		BorderStyle(thickLeftBorder).BorderLeft(true).
-		BorderForeground(styles.SelectionBorderColor(m.focused)).
-		BorderBackground(styles.SelectionTintColor(m.focused)).
-		Background(styles.SelectionTintColor(m.focused))
+	borderSelect := m.borderSelectStyle()
 	spacerBg := lipgloss.NewStyle().Background(styles.Background)
 	m.cacheSpacer = spacerBg.Width(width).Render("")
 	hintStyle := lipgloss.NewStyle().Background(styles.Background).Foreground(styles.TextMuted)
@@ -1675,7 +1695,11 @@ func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles, stats *entr
 	if m.avatarFn != nil {
 		avatarStr = m.avatarFn(msg.UserID)
 	}
-	rendered, attachFlushes, attachSixel, attachHits, reactHits := m.renderMessagePlain(msg, width, avatarStr, m.userNames, m.channelNames, i == m.selected, stats)
+	rendered, attachFlushes, attachSixel, attachHits, reactHits, header, headerBudget := m.renderMessagePlain(msg, width, avatarStr, m.userNames, m.channelNames, i == m.selected, stats)
+	// The selected variant carries the date-qualified timestamp. Only
+	// it: linesNormal and linesPlain keep the short form, so clipboard
+	// text and mouse->column mapping are unchanged.
+	renderedSel := SelectedHeader(rendered, header, msg.TS, msg.Timestamp, headerBudget)
 	// Two filled variants: borderFill (Background) for the unselected
 	// pre-render, and the SelectionTintColor for the selected pre-render.
 	// Without per-variant fills, the trailing whitespace of every wrapped
@@ -1693,16 +1717,20 @@ func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles, stats *entr
 		bwT0 = time.Now()
 	}
 	filledNormal := cs.borderFill.Width(width - 1).Render(rendered)
-	renderedTinted := RepaintBgToSelectionTint(rendered, m.focused)
-	selectedFill := lipgloss.NewStyle().Background(styles.SelectionTintColor(m.focused)).Width(width - 1).Render(renderedTinted)
 	normal := cs.borderInvis.Render(filledNormal)
-	selected := cs.borderSelect.Render(selectedFill)
+	linesS := m.selectedVariant(renderedSel, width, cs.borderSelect)
+	// The short-timestamp selected variant is built on demand from
+	// shortSrc (see selectedLines); building it here for every entry
+	// would double the fill+border cost of every cache build.
+	var shortSrc string
+	if renderedSel != rendered {
+		shortSrc = rendered
+	}
 	if stats != nil {
 		stats.borderWrapTotal += time.Since(bwT0)
 	}
 
 	linesN := strings.Split(normal, "\n")
-	linesS := strings.Split(selected, "\n")
 	// linesPlain mirrors the UNBORDERED content (filled) so that the
 	// thick left-border column is NOT present in plain text and never
 	// bleeds into clipboard output via SelectionText. The mouse-column
@@ -1729,6 +1757,7 @@ func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles, stats *entr
 	return viewEntry{
 		linesNormal:      linesN,
 		linesSelected:    linesS,
+		shortSrc:         shortSrc,
 		linesPlain:       linesP,
 		contentColOffset: 1, // thick left border ▌ occupies column 0 of linesNormal
 		height:           len(linesN),
@@ -1989,7 +2018,7 @@ func (m *Model) blockkitContext(msg MessageItem, userNames, channelNames map[str
 // avatar gutter (5 cols when an avatar is present), so View() can
 // translate directly to pane-local mouse columns.
 func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string, userNames map[string]string, channelNames map[string]string, isSelected bool, stats *entryPerfStats) (
-	content string, flushes []func(io.Writer) error, sixelRows map[int]sixelEntry, hits []entryHit, reactionHits []reactionEntryHit,
+	content string, flushes []func(io.Writer) error, sixelRows map[int]sixelEntry, hits []entryHit, reactionHits []reactionEntryHit, header string, headerBudget int,
 ) {
 	line := styles.Username(msg.UserID, m.coloredUsernames).Render(msg.UserName) + AuthorStatusSuffix(m.userStatuses, msg.UserID, time.Now()) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.Timestamp)
 
@@ -2468,7 +2497,13 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 	// Phase 6's wiring; without this merge the body+reaction emoji
 	// kitty uploads would be silently dropped here and the terminal
 	// would show blank cells where placeholder runes were rendered.
-	return msgContent, append(allFlushes, flushes...), allSixel, hits, reactionHits
+	//
+	// The header row is the only row SelectedHeader may lengthen. It
+	// must fit both the width the body wraps to and the columns the row
+	// really has: contentWidth is floored at 20, which at narrow widths
+	// exceeds width-1 (the fill) minus the avatar gutter.
+	headerBudget = min(contentWidth, width-1-(contentColBase-1))
+	return msgContent, append(allFlushes, flushes...), allSixel, hits, reactionHits, line + editedMark, headerBudget
 }
 
 // placeAvatarBeside renders the avatar to the left of the message content.
@@ -2764,6 +2799,12 @@ func (m *Model) BeginSelectionAt(viewportY, x int) {
 		return
 	}
 	m.selRange = selection.Range{Start: a, End: a, Active: true}
+	if !m.hasSelection {
+		// The one exception to the rule below: the selected row swaps to
+		// its short-timestamp variant (see selectedLines), which changes
+		// the bordered output. Once per drag, not per cell of motion.
+		m.dirty()
+	}
 	m.hasSelection = true
 	// No m.dirty() here: the App-layer bordered render cache stores
 	// the SELECTION-FREE output (see ViewBare + ApplySelectionToBordered),
@@ -2812,6 +2853,7 @@ func (m *Model) EndSelection() (string, bool) {
 	if m.selRange.IsEmpty() {
 		m.hasSelection = false
 		m.selRange = selection.Range{}
+		m.dirty() // selectedLines swaps back to the long timestamp
 		return "", false
 	}
 	text := m.SelectionText()
@@ -2828,6 +2870,29 @@ func (m *Model) ClearSelection() {
 	}
 	m.hasSelection = false
 	m.selRange = selection.Range{}
+	m.dirty() // selectedLines swaps back to the long timestamp
+}
+
+// selectedLines returns the lines to draw for the selected entry e: the
+// long-timestamp variant, or the short one while a text selection exists.
+// The drag overlay (applySelectionToRows) splices linesPlain, which holds
+// the short form, into the displayed row by column; the long header would
+// come out garbled.
+//
+// The short variant is memoised into e, which must point into m.cache.
+func (m *Model) selectedLines(e *viewEntry) []string {
+	if !m.hasSelection || e.shortSrc == "" {
+		return e.linesSelected
+	}
+	if e.linesSelectedShort == nil {
+		short := m.selectedVariant(e.shortSrc, m.cacheWidth, m.borderSelectStyle())
+		if len(short) > len(e.linesSelected) {
+			return e.linesSelected // unreachable: variants share a height
+		}
+		// Trailing spacer rows are shared by every variant.
+		e.linesSelectedShort = append(short, e.linesSelected[len(short):]...)
+	}
+	return e.linesSelectedShort
 }
 
 // HasSelection reports whether a selection is currently active or
@@ -3226,7 +3291,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 		}
 		var lines []string
 		if e.msgIdx == m.selected {
-			lines = e.linesSelected
+			lines = m.selectedLines(&entries[i])
 		} else {
 			lines = e.linesNormal
 		}
@@ -3593,15 +3658,11 @@ func (m *Model) ApplySelectionToBordered(bordered string, topBorderRows, leftBor
 // parsed. Exported so the thread pane can reuse the same day-boundary
 // computation that drives the channel pane's date separators.
 func DateFromTS(ts string) string {
-	parts := strings.SplitN(ts, ".", 2)
-	if len(parts) == 0 {
+	t, ok := timeFromTS(ts)
+	if !ok {
 		return ""
 	}
-	sec, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil {
-		return ""
-	}
-	return time.Unix(sec, 0).Format("2006-01-02")
+	return t.Format("2006-01-02")
 }
 
 // nowFunc is the clock FormatDateSeparator reads. Production leaves it

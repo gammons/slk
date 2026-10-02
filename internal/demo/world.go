@@ -59,6 +59,11 @@ type (
 		id, name string
 		presence string // "active" or "away"; shown on DM rows
 		status   peerstatus.Status
+		title    string // shown in the profile dialog
+		pronouns string
+		tz       string // IANA name, e.g. "America/Los_Angeles"
+		tzAbbrev string // "PDT"
+		tzOffset int    // seconds east of UTC
 	}
 )
 
@@ -250,7 +255,38 @@ func cloneItems(ms []core.MessageItem) []core.MessageItem {
 	return out
 }
 
-// teamByID requires w.mu.
+// profile looks up userID's profile in team teamID, built from the
+// fixture's title/pronouns/timezone fields. It errors for an unknown
+// team or user, as the real Slack API would.
+func (w *World) profile(teamID, userID string) (core.UserProfile, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	t := w.teamByID(teamID)
+	if t == nil {
+		return core.UserProfile{}, fmt.Errorf("demo: unknown team %q", teamID)
+	}
+	for _, u := range t.users {
+		if u.id != userID {
+			continue
+		}
+		handle := strings.ToLower(strings.ReplaceAll(u.name, " ", ""))
+		return core.UserProfile{
+			UserID:      u.id,
+			TeamID:      t.id,
+			Handle:      handle,
+			RealName:    u.name,
+			DisplayName: u.name,
+			Title:       u.title,
+			Pronouns:    u.pronouns,
+			Email:       handle + "@example.com",
+			TZ:          u.tz,
+			TZAbbrev:    u.tzAbbrev,
+			TZOffset:    u.tzOffset,
+			IsBot:       u.id == bDeploy,
+		}, nil
+	}
+	return core.UserProfile{}, fmt.Errorf("demo: unknown user %q in team %q", userID, teamID)
+}
 func (w *World) teamByID(id string) *team {
 	for _, t := range w.teams {
 		if t.id == id {

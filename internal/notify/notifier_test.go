@@ -4,7 +4,16 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/gen2brain/beeep"
 )
+
+func TestNew_SetsAppName(t *testing.T) {
+	New(true, "")
+	if beeep.AppName != "slk" {
+		t.Errorf("beeep.AppName = %q, want %q", beeep.AppName, "slk")
+	}
+}
 
 func TestShouldNotify_SelfMessage(t *testing.T) {
 	ctx := NotifyContext{

@@ -91,3 +91,30 @@ func TestWithDNDOffClearsEnd(t *testing.T) {
 		t.Errorf("WithDND(false) = %+v; want DND off with no end", st)
 	}
 }
+
+func TestStatusGlyph(t *testing.T) {
+	calendar := emoji.CodeMap()[":calendar:"]
+	if calendar == "" {
+		t.Fatal("test fixture missing from the emoji code map")
+	}
+	cases := []struct {
+		name string
+		st   Status
+		want string
+	}{
+		{"known shortcode", Status{Emoji: ":calendar:"}, calendar},
+		{"unknown shortcode falls back", Status{Emoji: ":company-logo-not-unicode:"}, FallbackGlyph},
+		{"no status", Status{}, ""},
+		{"expired status", Status{Emoji: ":calendar:", Expires: testNow}, ""},
+		{
+			"huddle active does not change it",
+			Status{Emoji: ":calendar:", Huddle: HuddleActive},
+			calendar,
+		},
+	}
+	for _, c := range cases {
+		if got := c.st.StatusGlyph(testNow); got != c.want {
+			t.Errorf("%s: StatusGlyph = %q; want %q", c.name, got, c.want)
+		}
+	}
+}

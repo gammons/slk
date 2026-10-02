@@ -397,31 +397,37 @@ func TestSelection_ExtendUnchangedDoesNotDirty(t *testing.T) {
 // extends where the resolved end anchor genuinely changes every
 // cell. The selection is now applied as a post-pass over the
 // cached bordered output (see Model.ApplySelectionToBordered),
-// so Begin / Extend / End / Clear must NOT bump version.
+// so Extend / End must NOT bump version.
+//
+// The one allowed bump is on the hasSelection transition (Begin from no
+// selection, Clear): the selected row swaps between its long- and
+// short-timestamp variants there (see Model.selectedLines). That is at
+// most one bump per drag, never one per cell of motion.
 func TestSelection_MutationsDoNotBumpVersion(t *testing.T) {
 	m := newTestModel(60)
 	_ = m.View(40, 60) // prime cache
 	v0 := m.version
 
 	m.BeginSelectionAt(firstContentY(m), 0)
-	if m.version != v0 {
-		t.Errorf("BeginSelectionAt bumped version: before=%d after=%d", v0, m.version)
+	v1 := m.version
+	if v1 > v0+1 {
+		t.Errorf("BeginSelectionAt bumped version more than once: before=%d after=%d", v0, v1)
 	}
 	// Drag character-by-character — each Extend resolves to a
 	// distinct end anchor (Col advances by 1 every call).
 	for col := 1; col <= 8; col++ {
 		m.ExtendSelectionAt(firstContentY(m)+1, col)
-		if m.version != v0 {
-			t.Errorf("ExtendSelectionAt(col=%d) bumped version: before=%d after=%d", col, v0, m.version)
+		if m.version != v1 {
+			t.Errorf("ExtendSelectionAt(col=%d) bumped version: before=%d after=%d", col, v1, m.version)
 		}
 	}
 	_, _ = m.EndSelection()
-	if m.version != v0 {
-		t.Errorf("EndSelection bumped version: before=%d after=%d", v0, m.version)
+	if m.version != v1 {
+		t.Errorf("EndSelection bumped version: before=%d after=%d", v1, m.version)
 	}
 	m.ClearSelection()
-	if m.version != v0 {
-		t.Errorf("ClearSelection bumped version: before=%d after=%d", v0, m.version)
+	if m.version > v1+1 {
+		t.Errorf("ClearSelection bumped version more than once: before=%d after=%d", v1, m.version)
 	}
 }
 
@@ -449,6 +455,9 @@ func TestApplySelectionToBordered_OverlaysOnContentRows(t *testing.T) {
 	y := firstContentY(m) + 1
 	m.BeginSelectionAt(y, 5)
 	m.ExtendSelectionAt(y, 15)
+	// Starting a selection bumps Version (the selected row swaps to its
+	// short-timestamp variant), so the App re-renders its bare cache here.
+	bare = m.ViewBare(40, 60)
 	// View() applies the overlay internally; that's our reference output
 	// for the unbordered case (topBorderRows=0, leftBorderCols=0).
 	withOverlayViaView := m.View(40, 60)

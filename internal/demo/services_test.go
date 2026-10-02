@@ -221,3 +221,41 @@ func TestAvatarsAreServedPerUser(t *testing.T) {
 		t.Errorf("unknown user avatar = %q, want empty", got)
 	}
 }
+
+func TestDemoProfiles_ReturnCast(t *testing.T) {
+	d := testDemo(t)
+	s := d.services()
+	ctx := context.Background()
+
+	var sawHalfHourZone bool
+	for _, team := range d.world.teams {
+		for _, u := range team.users {
+			p, err := s.profiles.Profile(ctx, team.id, u.id)
+			if err != nil {
+				t.Fatalf("Profile(%s, %s) = %v", team.id, u.id, err)
+			}
+			if p.Title == "" {
+				t.Errorf("Profile(%s) has no Title", u.id)
+			}
+			if p.TZ == "" {
+				t.Errorf("Profile(%s) has no TZ", u.id)
+			}
+			if p.UserID != u.id || p.TeamID != team.id {
+				t.Errorf("Profile(%s) UserID/TeamID = %q/%q", u.id, p.UserID, p.TeamID)
+			}
+			if p.TZOffset%3600 != 0 {
+				sawHalfHourZone = true
+			}
+		}
+	}
+	if !sawHalfHourZone {
+		t.Error("no cast member has a half-hour UTC offset (e.g. Asia/Kolkata)")
+	}
+
+	if _, err := s.profiles.Profile(ctx, teamLumen, "UNOBODY"); err == nil {
+		t.Error("Profile(unknown user) = nil error, want an error")
+	}
+	if _, err := s.profiles.Profile(ctx, "TNOPE", uAlex); err == nil {
+		t.Error("Profile(unknown team) = nil error, want an error")
+	}
+}

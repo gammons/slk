@@ -22,6 +22,9 @@ type Notifier struct {
 // lets you route notifications through your own tooling (a terminal
 // multiplexer's notifier, terminal-notifier, mako, etc.).
 func New(enabled bool, command string) *Notifier {
+	// beeep's default app name is "DefaultAppName"; brand the notification
+	// as slk so the notification daemon attributes it correctly.
+	beeep.AppName = "slk"
 	return &Notifier{enabled: enabled, command: command}
 }
 

@@ -239,7 +239,7 @@ func TestLockstep_SharedRenderBehaviour(t *testing.T) {
 		{"author row (bob)", "bob  9:00 AM"},
 		{"body row (second)", "▌second"},
 		{"reaction pill", "🎉 2"},
-		{"author row (carol)", "carol  9:01 AM"},
+		{"author row (carol)", "carol  Sun Mar 15, 9:01 AM"},
 		{"wrapped line 1", "in both panes or the"},
 		{"wrapped line 2", "two renderers have drifted apart"},
 	}
@@ -270,7 +270,7 @@ func TestLockstep_SharedRenderBehaviour(t *testing.T) {
 		{"unread landmark -> author (bob)", "── new ──", "bob  9:00 AM"},
 		{"author -> body (bob)", "bob  9:00 AM", "▌second"},
 		{"body -> reaction pill (bob)", "▌second", "🎉 2"},
-		{"author -> wrapped line 1 (carol)", "carol  9:01 AM", "in both panes or the"},
+		{"author -> wrapped line 1 (carol)", "carol  Sun Mar 15, 9:01 AM", "in both panes or the"},
 		{"wrapped line 1 -> line 2", "in both panes or the", "two renderers have drifted apart"},
 	}
 	// gapIn reads the two endpoints out of an already-resolved pane
