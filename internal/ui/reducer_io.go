@@ -94,6 +94,13 @@ func toastWithClear(a *App, text string, d time.Duration) tea.Cmd {
 	return copiedClearAfter(a, d)
 }
 
+// toastUntilReplaced shows a toast with no expiry of its own, for a
+// toast that a later one replaces on purpose, as an upload's result
+// replaces its progress. Every other toast goes through toastWithClear.
+func toastUntilReplaced(a *App, text string) {
+	a.statusbar.SetToast(text)
+}
+
 var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	switch m := msg.(type) {
 	case tea.PasteMsg:
@@ -155,7 +162,7 @@ var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return toastWithClear(a, m.Text, 3*time.Second), true
 
 	case UploadProgressMsg:
-		a.statusbar.SetToast(fmt.Sprintf("Uploading %d/%d…", m.Done, m.Total))
+		toastUntilReplaced(a, fmt.Sprintf("Uploading %d/%d…", m.Done, m.Total))
 		return nil, true
 
 	case EditorFinishedMsg:
