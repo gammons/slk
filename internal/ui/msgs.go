@@ -58,7 +58,7 @@ type (
 		// back to a default `#` glyph.
 		Type string
 		// FromHistory marks navigations synthesized by Ctrl+H /
-		// Ctrl+K. The case ChannelSelectedMsg handler suppresses
+		// Ctrl+L. The case ChannelSelectedMsg handler suppresses
 		// pushing onto navHistory when this is true so back/forward
 		// walks don't grow the stack on every step. Visit recording
 		// is unaffected — going back to a channel still updates its

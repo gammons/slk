@@ -804,8 +804,7 @@ func TestNormalModeKeys(t *testing.T) {
 		},
 
 		// -------------------------------------------------------------
-		// Arms 15 & 16: NavBack `ctrl+h` / NavForward `ctrl+k`
-		// (mode_normal.go:145, :150)
+		// Arms 15 & 16: NavBack `ctrl+h` / NavForward `ctrl+l` (alias `ctrl+k`)
 		// -------------------------------------------------------------
 		{
 			name:     "ctrl+h walks the nav history backward",
@@ -826,30 +825,8 @@ func TestNormalModeKeys(t *testing.T) {
 				}
 			},
 		},
-		{
-			name: "ctrl+k walks the nav history forward",
-			opts: append(normalOpts(), withActiveTeam("T1"), navLookupOpt()),
-			setup: func(t *testing.T, a *App) {
-				seedNavHistory(t, a)
-				if _, _, _, ok := a.navHistory.Walk("T1", -1, a.channels.Lookup); !ok {
-					t.Fatal("precondition: could not step back before stepping forward")
-				}
-			},
-			key:      keyMod('k', tea.ModCtrl),
-			wantMode: ModeNormal,
-			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
-				if cmd == nil {
-					t.Fatal("cmd = nil, want a ChannelSelectedMsg cmd")
-				}
-				msg, ok := cmd().(ChannelSelectedMsg)
-				if !ok {
-					t.Fatalf("cmd() = %#v, want ChannelSelectedMsg", cmd())
-				}
-				if msg.ID != "C2" || !msg.FromHistory {
-					t.Errorf("cmd() = %+v, want {ID:C2 FromHistory:true}", msg)
-				}
-			},
-		},
+		navForwardCase("ctrl+l walks the nav history forward", 'l'),
+		navForwardCase("ctrl+k (alias) walks the nav history forward", 'k'),
 		{
 			// The arm's `if cmd != nil` guard falls THROUGH on an empty
 			// stack rather than returning, so the switch ends at the
@@ -2407,6 +2384,35 @@ func navLookupOpt() testOpt {
 			return "", "", false
 		},
 	})
+}
+
+// navForwardCase builds the NavForward row for one of its keys: seed
+// [C1 C2], step back to C1, then ctrl+<r> must step forward to C2.
+func navForwardCase(name string, r rune) keyCase {
+	return keyCase{
+		name: name,
+		opts: append(normalOpts(), withActiveTeam("T1"), navLookupOpt()),
+		setup: func(t *testing.T, a *App) {
+			seedNavHistory(t, a)
+			if _, _, _, ok := a.navHistory.Walk("T1", -1, a.channels.Lookup); !ok {
+				t.Fatal("precondition: could not step back before stepping forward")
+			}
+		},
+		key:      keyMod(r, tea.ModCtrl),
+		wantMode: ModeNormal,
+		assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+			if cmd == nil {
+				t.Fatal("cmd = nil, want a ChannelSelectedMsg cmd")
+			}
+			msg, ok := cmd().(ChannelSelectedMsg)
+			if !ok {
+				t.Fatalf("cmd() = %#v, want ChannelSelectedMsg", cmd())
+			}
+			if msg.ID != "C2" || !msg.FromHistory {
+				t.Errorf("cmd() = %+v, want {ID:C2 FromHistory:true}", msg)
+			}
+		},
+	}
 }
 
 // seedNavHistory pushes C1 then C2 for team T1, leaving the cursor on

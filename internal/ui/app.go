@@ -489,7 +489,7 @@ type App struct {
 	// openURLCmd; tests inject fakes.
 	browserOpener func(url string) tea.Cmd
 
-	// navHistory owns the per-workspace ctrl+h / ctrl+k browser-style
+	// navHistory owns the per-workspace ctrl+h / ctrl+l browser-style
 	// jump list. See internal/ui/navhistory.go. Lazy-initialized on
 	// first push for each team. Cleared only when slk exits — the
 	// stacks are session-only by design.

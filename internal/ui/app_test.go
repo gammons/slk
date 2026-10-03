@@ -4122,7 +4122,7 @@ func TestCtrlHTriggersNavBack(t *testing.T) {
 	}
 }
 
-func TestCtrlKTriggersNavForward(t *testing.T) {
+func TestCtrlLTriggersNavForward(t *testing.T) {
 	app := NewApp()
 	app.activeTeamID = "T1"
 	app.setChannelLookupFuncForTest(func(channelID ids.ChannelID) (string, string, bool) {
@@ -4133,16 +4133,22 @@ func TestCtrlKTriggersNavForward(t *testing.T) {
 	_, _ = app.Update(ChannelSelectedMsg{ID: "C2", Name: "b", Type: "channel"})
 	app.navHistory.Stack("T1").cursor = 0
 
-	cmd := app.handleNormalMode(tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
+	// Go through Update, not handleNormalMode, so the reducer chain
+	// that runs before handleKey is covered too.
+	_, cmd := app.Update(tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl})
 	if cmd == nil {
-		t.Fatal("expected cmd from ctrl+k dispatch")
+		t.Fatal("expected cmd from ctrl+l dispatch")
 	}
-	got := cmd()
-	cs, ok := got.(ChannelSelectedMsg)
-	if !ok {
-		t.Fatalf("want ChannelSelectedMsg, got %T", got)
+	var selected []ChannelSelectedMsg
+	for _, m := range drainCmd(cmd) {
+		if cs, ok := m.(ChannelSelectedMsg); ok {
+			selected = append(selected, cs)
+		}
 	}
-	if cs.ID != "C2" || !cs.FromHistory {
+	if len(selected) != 1 {
+		t.Fatalf("want one ChannelSelectedMsg, got %d", len(selected))
+	}
+	if cs := selected[0]; cs.ID != "C2" || !cs.FromHistory {
 		t.Errorf("want ID=C2 FromHistory=true, got %+v", cs)
 	}
 }
