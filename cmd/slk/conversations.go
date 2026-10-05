@@ -51,14 +51,10 @@ func (h *rtmEventHandler) addConversation(ch slack.Channel) (sidebar.ChannelItem
 	}
 	if !replaced {
 		h.wsCtx.Channels = append(h.wsCtx.Channels, item)
-		// FinderItems is intentionally only appended on the new-channel
-		// path. On dedupe, the existing finder entry was added at
-		// bootstrap (or a prior open) and carries no unread state to
-		// refresh, so re-appending would double-list the channel in
-		// Ctrl+P.
-		finderItem.LastVisited = h.wsCtx.LastVisitedByChannel[ch.ID]
-		h.wsCtx.FinderItems = append(h.wsCtx.FinderItems, finderItem)
 	}
+	// Refresh rather than merely dedupe: a duplicate open may carry a
+	// resolved name, presence or app classification that the finder lacks.
+	finderItem, _ = h.upsertFinderItem(finderItem)
 
 	// Mirror channelTypes / channelNames maps used by the notifier so
 	// follow-up messages on this channel get notified correctly.
@@ -69,6 +65,26 @@ func (h *rtmEventHandler) addConversation(ch slack.Channel) (sidebar.ChannelItem
 		h.channelTypes[ch.ID] = item.Type
 	}
 	return item, finderItem, true
+}
+
+// upsertFinderItem refreshes one workspace finder entry by conversation ID.
+// It returns the stored entry and whether it changed. A deduplicated row keeps
+// its live LastVisited value; only a new row uses the startup visit snapshot.
+// Callers must be on the serialized event owner, like addConversation.
+func (h *rtmEventHandler) upsertFinderItem(item core.ChannelFinderItem) (core.ChannelFinderItem, bool) {
+	for i, existing := range h.wsCtx.FinderItems {
+		if existing.ID == item.ID {
+			item.LastVisited = existing.LastVisited
+			if item == existing {
+				return item, false
+			}
+			h.wsCtx.FinderItems[i] = item
+			return item, true
+		}
+	}
+	item.LastVisited = h.wsCtx.LastVisitedByChannel[item.ID]
+	h.wsCtx.FinderItems = append(h.wsCtx.FinderItems, item)
+	return item, true
 }
 
 func (h *rtmEventHandler) publishConversation(item sidebar.ChannelItem, finderItem core.ChannelFinderItem) {
