@@ -223,7 +223,7 @@ func (r *userResolver) resolveOne(userID string) {
 		})
 	}
 	if isExternal && r.send != nil {
-		r.send(ui.UserExternalMsg{UserID: userID, IsExternal: true})
+		r.send(ui.UserExternalMsg{TeamID: r.teamID, UserID: userID, IsExternal: true})
 	}
 }
 
@@ -384,7 +384,7 @@ func (r *userResolver) applyEdgeUser(u edge.User) {
 		})
 	}
 	if isExternal && r.send != nil {
-		r.send(ui.UserExternalMsg{UserID: u.ID, IsExternal: true})
+		r.send(ui.UserExternalMsg{TeamID: r.teamID, UserID: u.ID, IsExternal: true})
 	}
 }
 

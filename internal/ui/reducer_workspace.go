@@ -133,6 +133,9 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 
 	case UserExternalMsg:
+		if m.TeamID != a.activeTeamID {
+			return nil, true
+		}
 		if a.externalUsers == nil {
 			a.externalUsers = map[string]bool{}
 		}

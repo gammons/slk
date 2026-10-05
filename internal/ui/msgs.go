@@ -285,8 +285,11 @@ type (
 	// UserExternalMsg flags a single user as external (Slack Connect /
 	// shared-channel guest). Emitted by the user-resolution path when a
 	// users.info response shows team_id != workspace TeamID. The App
-	// updates externalUsers and re-pushes user-list state to the pickers.
+	// updates externalUsers and re-pushes user-list state to the pickers only
+	// for TeamID's active workspace. External is relative to that workspace,
+	// not an intrinsic property of a user shared across workspaces.
 	UserExternalMsg struct {
+		TeamID     string
 		UserID     string
 		IsExternal bool
 	}

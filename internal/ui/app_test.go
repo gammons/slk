@@ -4296,7 +4296,7 @@ func TestUserExternalMsgFlagsPickerEntry(t *testing.T) {
 	app.threadCompose.SetActiveChannel("C1")
 	app.SetUserNames(map[string]string{"U1": "alice"})
 
-	_, _ = app.Update(UserExternalMsg{UserID: "U1", IsExternal: true})
+	_, _ = app.Update(UserExternalMsg{TeamID: "T1", UserID: "U1", IsExternal: true})
 
 	for _, u := range app.compose.MentionUsers() {
 		if u.ID == "U1" && !u.IsExternal {
