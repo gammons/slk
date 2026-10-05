@@ -674,7 +674,6 @@ func TestApplyBootUsers_FillsTheMapsTheSidebarReads(t *testing.T) {
 	wctx := &WorkspaceContext{
 		UserNames:         newUserNameStore(nil),
 		UserNamesByHandle: map[string]string{},
-		BotUserIDs:        map[string]bool{},
 		AvatarURLs:        &sync.Map{},
 	}
 	applyBootUsers(wctx, &bootstrap.Result{Users: []boot.User{
@@ -694,8 +693,8 @@ func TestApplyBootUsers_FillsTheMapsTheSidebarReads(t *testing.T) {
 	if got := wctx.UserNamesByHandle["pat"]; got != "Pat" {
 		t.Errorf("UserNamesByHandle[pat] = %q; want Pat", got)
 	}
-	if !wctx.BotUserIDs["U4"] || wctx.BotUserIDs["U1"] {
-		t.Errorf("BotUserIDs = %+v; want only U4", wctx.BotUserIDs)
+	if !wctx.IsBotUser("U4") || wctx.IsBotUser("U1") {
+		t.Errorf("bot classification: U4=%v U1=%v; want only U4", wctx.IsBotUser("U4"), wctx.IsBotUser("U1"))
 	}
 	if v, ok := wctx.AvatarURLs.Load("U1"); !ok || v.(string) != "https://cdn/pat.png" {
 		t.Errorf("AvatarURLs[U1] = %v/%v; want the image_original URL", v, ok)
