@@ -751,6 +751,12 @@ func (m *Model) PatchUserName(userID, displayName string) {
 		return
 	}
 	m.userNames[userID] = displayName
+	if debuglog.Enabled() {
+		authored, mentioned := messages.CountUserRefs(m.replies, userID)
+		pa, pm := messages.CountUserRefs([]messages.MessageItem{m.parent}, userID)
+		debuglog.Perf("thread.PatchUserName wipe user=%s replies=%d hadCache=%v authored=%d mentioned=%d",
+			userID, len(m.replies), m.cache != nil, authored+pa, mentioned+pm)
+	}
 	// The render cache stores rows with their mentions already resolved
 	// (RenderSlackMarkdown consults userNames at render time), so any
 	// cached row that mentioned <@userID> is now stale. Mirror

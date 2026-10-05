@@ -59,6 +59,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/debuglog"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/styles"
 )
@@ -119,6 +120,8 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 
 	case UserResolvedMsg:
+		debuglog.Perf("UserResolvedMsg team=%s user=%s active=%v",
+			m.TeamID, m.UserID, m.TeamID == a.activeTeamID)
 		if m.TeamID != a.activeTeamID {
 			return nil, true
 		}

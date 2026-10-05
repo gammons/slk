@@ -104,6 +104,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Search-term highlighting (ANSI/OSC-safe) | `messages.HighlightSearchTerms`, `messages.SearchHighlightSGR` |
 | Extract links from message text | `messages.ExtractLinks` |
 | Does message text mention the current user? | `mention.InText(text, selfUserID)` |
+| How many messages a user authored / is `<@mentioned>` in | `messages.CountUserRefs(msgs, userID)` |
 | Reaction pill rendering | `messages.ReactionPillText` |
 | Date label from a Slack ts | `messages.DateFromTS`, `messages.FormatDateSeparator` |
 | Date-qualified timestamp for the selected message header | `messages.LongTimestamp(ts, short)`, `messages.SelectedHeader(rendered, header, ts, short, maxWidth)` |

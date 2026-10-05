@@ -1357,6 +1357,11 @@ func (m *Model) PatchUserName(userID, displayName string) {
 		return
 	}
 	m.userNames[userID] = displayName
+	if debuglog.Enabled() {
+		authored, mentioned := CountUserRefs(m.messages, userID)
+		debuglog.Perf("messages.PatchUserName wipe user=%s msgs=%d hadCache=%v authored=%d mentioned=%d",
+			userID, len(m.messages), m.cache != nil, authored, mentioned)
+	}
 	// The render cache stores rows with their mentions already resolved
 	// (RenderSlackMarkdown consults userNames at render time), so any
 	// cached row that mentioned <@userID> is now stale. Mirror
@@ -1368,6 +1373,25 @@ func (m *Model) PatchUserName(userID, displayName string) {
 		}
 	}
 	m.dirty()
+}
+
+// CountUserRefs reports how many of msgs userID authored and how many
+// mention <@userID> in their text: the rows a change to userID's display
+// name can actually affect.
+func CountUserRefs(msgs []MessageItem, userID string) (authored, mentioned int) {
+	if userID == "" {
+		return 0, 0
+	}
+	plain, labelled := "<@"+userID+">", "<@"+userID+"|"
+	for i := range msgs {
+		if msgs[i].UserID == userID {
+			authored++
+		}
+		if strings.Contains(msgs[i].Text, plain) || strings.Contains(msgs[i].Text, labelled) {
+			mentioned++
+		}
+	}
+	return authored, mentioned
 }
 
 // SetUserStatuses replaces the user ID -> custom status map whose emoji
