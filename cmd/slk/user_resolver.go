@@ -199,22 +199,16 @@ func (r *userResolver) resolveOne(userID string) {
 		HuddleState:      u.Profile.HuddleState,
 		HuddleExpiration: int64(u.Profile.HuddleStateExpirationTS),
 	})
+	// UpsertUser intentionally preserves existing status for placeholder
+	// callers. This is a full profile: persist changes and clears before
+	// UserResolvedMsg can trigger a row repair that re-reads the cache.
+	applyProfileStatus(r.teamID, userID, u.Profile, r.db, r.send)
 	// In the store too, so the name survives for this workspace's next
 	// switch snapshot even if the UserResolvedMsg below is dropped
 	// because the workspace is not the active one.
 	r.names.Set(userID, name)
 	if r.send != nil {
-		// Status before UserResolvedMsg, which callers treat as the
-		// end of this user's resolution.
-		r.send(ui.UserStatusChangeMsg{
-			TeamID:        r.teamID,
-			UserID:        userID,
-			Emoji:         u.Profile.StatusEmoji,
-			Text:          u.Profile.StatusText,
-			Expires:       statusExpiry(int64(u.Profile.StatusExpiration)),
-			Huddle:        u.Profile.HuddleState,
-			HuddleExpires: statusExpiry(int64(u.Profile.HuddleStateExpirationTS)),
-		})
+		// Status has already been persisted and sent by applyProfileStatus.
 		r.send(ui.UserResolvedMsg{
 			TeamID:      r.teamID,
 			UserID:      userID,
