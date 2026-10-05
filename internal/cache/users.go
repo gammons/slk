@@ -5,6 +5,10 @@ import "fmt"
 type User struct {
 	ID          string
 	WorkspaceID string
+	// HomeTeamID is Slack's user team_id, not the workspace that first
+	// cached this globally keyed profile. Empty means unknown; placeholder
+	// upserts must not erase a known home team.
+	HomeTeamID  string
 	Name        string
 	DisplayName string
 	AvatarURL   string
@@ -14,9 +18,9 @@ type User struct {
 	// the "Apps" sidebar section so they don't clutter the human DM
 	// list.
 	IsBot bool
-	// IsExternal is true for users whose home team_id differs from
-	// the workspace's TeamID (Slack Connect / shared-channel guests).
-	// Set by the user-resolution path; persisted so we don't re-resolve.
+	// IsExternal is relative to WorkspaceID, never a global user attribute.
+	// Reads derive it from HomeTeamID when known. The stored flag is only
+	// a legacy fallback for the workspace that first cached the profile.
 	IsExternal bool
 	// StatusEmoji, StatusText and StatusExpiration are the user's
 	// custom status as Slack last reported it. StatusExpiration is a
@@ -37,19 +41,23 @@ type User struct {
 // Several callers upsert a placeholder record built without a profile,
 // so writing them on conflict would blank real values; changes go
 // through UpdateUserStatus and the edge revalidation writes instead.
+// The original workspace association is retained on conflict; another
+// workspace may refresh the profile/home team but not its legacy external flag.
 func (db *DB) UpsertUser(u User) error {
 	_, err := db.conn.Exec(`
-		INSERT INTO users (id, workspace_id, name, display_name, avatar_url, presence, is_bot, is_external, status_emoji, status_text, status_expiration, huddle_state, huddle_expiration, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO users (id, workspace_id, home_team_id, name, display_name, avatar_url, presence, is_bot, is_external, status_emoji, status_text, status_expiration, huddle_state, huddle_expiration, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name=excluded.name,
 			display_name=excluded.display_name,
 			avatar_url=excluded.avatar_url,
 			presence=excluded.presence,
 			is_bot=excluded.is_bot,
-			is_external=excluded.is_external,
+			home_team_id=COALESCE(NULLIF(excluded.home_team_id, ''), users.home_team_id),
+			is_external=CASE WHEN users.workspace_id=excluded.workspace_id
+				THEN excluded.is_external ELSE users.is_external END,
 			updated_at=excluded.updated_at
-	`, u.ID, u.WorkspaceID, u.Name, u.DisplayName, u.AvatarURL, u.Presence, u.IsBot, u.IsExternal,
+	`, u.ID, u.WorkspaceID, u.HomeTeamID, u.Name, u.DisplayName, u.AvatarURL, u.Presence, u.IsBot, u.IsExternal,
 		u.StatusEmoji, u.StatusText, u.StatusExpiration, u.HuddleState, u.HuddleExpiration, u.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("upserting user: %w", err)
@@ -60,9 +68,11 @@ func (db *DB) UpsertUser(u User) error {
 func (db *DB) GetUser(id string) (User, error) {
 	var u User
 	err := db.conn.QueryRow(`
-		SELECT id, workspace_id, name, display_name, avatar_url, presence, is_bot, is_external, status_emoji, status_text, status_expiration, huddle_state, huddle_expiration, updated_at
+		SELECT id, workspace_id, home_team_id, name, display_name, avatar_url, presence, is_bot,
+			CASE WHEN home_team_id != '' THEN home_team_id != workspace_id ELSE is_external END,
+			status_emoji, status_text, status_expiration, huddle_state, huddle_expiration, updated_at
 		FROM users WHERE id = ?
-	`, id).Scan(&u.ID, &u.WorkspaceID, &u.Name, &u.DisplayName, &u.AvatarURL, &u.Presence, &u.IsBot, &u.IsExternal,
+	`, id).Scan(&u.ID, &u.WorkspaceID, &u.HomeTeamID, &u.Name, &u.DisplayName, &u.AvatarURL, &u.Presence, &u.IsBot, &u.IsExternal,
 		&u.StatusEmoji, &u.StatusText, &u.StatusExpiration, &u.HuddleState, &u.HuddleExpiration, &u.UpdatedAt)
 	if err != nil {
 		return u, fmt.Errorf("getting user: %w", err)
@@ -72,7 +82,9 @@ func (db *DB) GetUser(id string) (User, error) {
 
 func (db *DB) ListUsers(workspaceID string) ([]User, error) {
 	rows, err := db.conn.Query(`
-		SELECT id, workspace_id, name, display_name, avatar_url, presence, is_bot, is_external, status_emoji, status_text, status_expiration, huddle_state, huddle_expiration, updated_at
+		SELECT id, workspace_id, home_team_id, name, display_name, avatar_url, presence, is_bot,
+			CASE WHEN home_team_id != '' THEN home_team_id != workspace_id ELSE is_external END,
+			status_emoji, status_text, status_expiration, huddle_state, huddle_expiration, updated_at
 		FROM users WHERE workspace_id = ? ORDER BY display_name, name
 	`, workspaceID)
 	if err != nil {
@@ -83,13 +95,43 @@ func (db *DB) ListUsers(workspaceID string) ([]User, error) {
 	var users []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.WorkspaceID, &u.Name, &u.DisplayName, &u.AvatarURL, &u.Presence, &u.IsBot, &u.IsExternal,
+		if err := rows.Scan(&u.ID, &u.WorkspaceID, &u.HomeTeamID, &u.Name, &u.DisplayName, &u.AvatarURL, &u.Presence, &u.IsBot, &u.IsExternal,
 			&u.StatusEmoji, &u.StatusText, &u.StatusExpiration, &u.HuddleState, &u.HuddleExpiration, &u.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scanning user: %w", err)
 		}
 		users = append(users, u)
 	}
 	return users, rows.Err()
+}
+
+// ExternalUsers returns a caller-owned set of cached users external to
+// workspaceID. Known home teams can be classified in any workspace, regardless
+// of which workspace first inserted the profile. Old rows without a home team
+// use their legacy flag only in their original workspace; unknown teams are
+// otherwise treated as internal until a profile supplies the home team.
+func (db *DB) ExternalUsers(workspaceID string) (map[string]bool, error) {
+	rows, err := db.conn.Query(`
+		SELECT id FROM users
+		WHERE (home_team_id != '' AND home_team_id != ?)
+			OR (home_team_id = '' AND workspace_id = ? AND is_external = 1)
+	`, workspaceID, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("listing external users: %w", err)
+	}
+	defer rows.Close()
+
+	external := make(map[string]bool)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning external user: %w", err)
+		}
+		external[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("listing external users: %w", err)
+	}
+	return external, nil
 }
 
 func (db *DB) UpdatePresence(userID, presence string) error {

@@ -352,6 +352,8 @@ func revalidateUsers(ctx context.Context, deps Deps, out *Result, logf func(stri
 		huddleStates[u.Profile.HuddleState]++
 		if err := deps.Store.UpdateUserFromEdge(cache.EdgeUserUpdate{
 			ID:          u.ID,
+			WorkspaceID: deps.WorkspaceID,
+			HomeTeamID:  u.TeamID,
 			Name:        u.Name,
 			DisplayName: userDisplayName(u),
 			// ImageOriginal is present on 255 of 291 observed

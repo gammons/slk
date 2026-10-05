@@ -49,7 +49,8 @@ type userBatcher interface {
 // back to the per-user Web API users.info path (see resolveOne).
 // Deduplicates concurrent requests for the same userID; failures are
 // silent (the row stays rendered as its user ID). Bound to a single
-// workspace because user IDs are workspace-scoped.
+// workspace because notifications and external classification are scoped to it;
+// cached profiles can be shared across workspaces by user ID.
 type userResolver struct {
 	teamID   string
 	client   *slackclient.Client
@@ -185,6 +186,7 @@ func (r *userResolver) resolveOne(userID string) {
 	_ = r.db.UpsertUser(cache.User{
 		ID:               userID,
 		WorkspaceID:      r.teamID,
+		HomeTeamID:       u.TeamID,
 		Name:             u.Name,
 		DisplayName:      name,
 		AvatarURL:        u.Profile.Image32,
@@ -349,6 +351,7 @@ func (r *userResolver) applyEdgeUser(u edge.User) {
 	r.avatars.Preload(u.ID, u.Profile.ImageOriginal)
 	_ = r.db.UpsertUserFromEdge(r.teamID, cache.EdgeUserUpdate{
 		ID:               u.ID,
+		HomeTeamID:       u.TeamID,
 		Name:             u.Name,
 		DisplayName:      name,
 		AvatarURL:        u.Profile.ImageOriginal,

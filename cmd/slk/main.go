@@ -1356,18 +1356,10 @@ func run() error {
 		// outer cfg, for the same reason.
 		router.Set(wctx)
 
-		// Build external-user set from cached records so the mention
-		// picker reflects Slack Connect / shared-channel guest status
-		// for the workspace we're switching into. Best-effort: empty
-		// map on error.
-		external := map[string]bool{}
-		if users, err := db.ListUsers(wctx.TeamID); err == nil {
-			for _, u := range users {
-				if u.IsExternal {
-					external[u.ID] = true
-				}
-			}
-		}
+		// Profiles are cached globally; classification is relative to the
+		// workspace being displayed, not the profile's first cache owner.
+		// Best-effort: nil on error (the picker shows no external flags).
+		external, _ := db.ExternalUsers(wctx.TeamID)
 
 		// Statuses are re-read from the cache, which live changes keep
 		// current, rather than the connect-time items. DND is not
@@ -1581,20 +1573,10 @@ func run() error {
 			wctx.ConnMgr = slackclient.NewConnectionManager(wctx.Client, handler)
 			go wctx.ConnMgr.Run(ctx)
 
-			// Build external-user set from cached records so the
-			// mention picker can flag Slack Connect / shared-channel
-			// guests on first render, without waiting for fresh
-			// userResolver lookups. Best-effort: empty map on error
-			// (the picker just won't flag anyone until live resolution
-			// fires).
-			external := map[string]bool{}
-			if users, err := db.ListUsers(wctx.TeamID); err == nil {
-				for _, u := range users {
-					if u.IsExternal {
-						external[u.ID] = true
-					}
-				}
-			}
+			// Use the same workspace-relative cache projection as switching,
+			// including profiles first cached by a different workspace.
+			// Best-effort: nil on error, until live resolution fills the flags.
+			external, _ := db.ExternalUsers(wctx.TeamID)
 
 			readyStatuses := cachedPeerStatuses(db, wctx.TeamID)
 			wctx.PeerStatus.SeedHuddles(readyStatuses)

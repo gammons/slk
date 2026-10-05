@@ -254,6 +254,25 @@ func (db *DB) migrate() error {
 		"ALTER TABLE messages ADD COLUMN version TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	// External classification is relative to a workspace, whereas profiles
+	// are keyed globally by user ID. Persist the home team so each workspace
+	// derives its own flag. Like status/huddle backfill below, reset versions
+	// once to request full profiles for pre-migration rows. Do not infer a
+	// home team from the old boolean: it may already have been overwritten
+	// by resolution in another workspace.
+	hadHomeTeam, err := db.hasColumn("users", "home_team_id")
+	if err != nil {
+		return err
+	}
+	if !hadHomeTeam {
+		if _, err := db.conn.Exec(`UPDATE users SET version = 0`); err != nil {
+			return fmt.Errorf("resetting user versions for home-team backfill: %w", err)
+		}
+	}
+	if err := db.addColumnIfMissing("users", "home_team_id",
+		"ALTER TABLE users ADD COLUMN home_team_id TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	// Custom status, rendered next to other users' names. Conditional
 	// revalidation only returns users whose version moved, so a user
 	// cached before these columns existed would never be refetched to

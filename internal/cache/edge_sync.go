@@ -194,9 +194,15 @@ type EdgeUserUpdate struct {
 	// image_original on 255 of 291 observed results, and the users
 	// without it are the ones with no custom image. Empty therefore
 	// means "this response says nothing", so the column is preserved.
-	AvatarURL  string
-	IsBot      bool
-	IsExternal bool
+	AvatarURL string
+	IsBot     bool
+	// HomeTeamID has User.HomeTeamID's preserve-on-empty contract.
+	HomeTeamID string
+	// WorkspaceID scopes the legacy IsExternal flag in UpdateUserFromEdge.
+	// Empty means the row's original workspace (legacy callers).
+	// UpsertUserFromEdge uses its explicit workspaceID argument instead.
+	WorkspaceID string
+	IsExternal  bool
 	// StatusEmoji, StatusText and StatusExpiration are the exception
 	// to "absent means preserve": users/info carries the status keys
 	// with empty values when no status is set, so empty here means the
@@ -222,21 +228,27 @@ func (db *DB) UpdateUserFromEdge(u EdgeUserUpdate) error {
 	if u.AvatarURL != "" {
 		_, err = db.conn.Exec(`
 			UPDATE users
-			SET name = ?, display_name = ?, avatar_url = ?, is_bot = ?, is_external = ?,
+			SET name = ?, display_name = ?, avatar_url = ?, is_bot = ?,
+				home_team_id = COALESCE(NULLIF(?, ''), home_team_id),
+				is_external = CASE WHEN ? = '' OR workspace_id = ? THEN ? ELSE is_external END,
 				status_emoji = ?, status_text = ?, status_expiration = ?,
 				huddle_state = ?, huddle_expiration = ?, version = ?
 			WHERE id = ?`,
-			u.Name, u.DisplayName, u.AvatarURL, boolToInt(u.IsBot), boolToInt(u.IsExternal),
+			u.Name, u.DisplayName, u.AvatarURL, boolToInt(u.IsBot), u.HomeTeamID,
+			u.WorkspaceID, u.WorkspaceID, boolToInt(u.IsExternal),
 			u.StatusEmoji, u.StatusText, u.StatusExpiration,
 			u.HuddleState, u.HuddleExpiration, u.Version, u.ID)
 	} else {
 		_, err = db.conn.Exec(`
 			UPDATE users
-			SET name = ?, display_name = ?, is_bot = ?, is_external = ?,
+			SET name = ?, display_name = ?, is_bot = ?,
+				home_team_id = COALESCE(NULLIF(?, ''), home_team_id),
+				is_external = CASE WHEN ? = '' OR workspace_id = ? THEN ? ELSE is_external END,
 				status_emoji = ?, status_text = ?, status_expiration = ?,
 				huddle_state = ?, huddle_expiration = ?, version = ?
 			WHERE id = ?`,
-			u.Name, u.DisplayName, boolToInt(u.IsBot), boolToInt(u.IsExternal),
+			u.Name, u.DisplayName, boolToInt(u.IsBot), u.HomeTeamID,
+			u.WorkspaceID, u.WorkspaceID, boolToInt(u.IsExternal),
 			u.StatusEmoji, u.StatusText, u.StatusExpiration,
 			u.HuddleState, u.HuddleExpiration, u.Version, u.ID)
 	}
@@ -251,8 +263,8 @@ func (db *DB) UpdateUserFromEdge(u EdgeUserUpdate) error {
 // exist yet — the batched user resolver's cache misses. (Bootstrap
 // uses UpdateUserFromEdge because hydrateFirstSight has already
 // inserted placeholder rows; UPDATE-only there is a feature: it
-// cannot invent rows.) workspaceID is taken explicitly because
-// EdgeUserUpdate does not carry it.
+// cannot invent rows.) workspaceID is authoritative for insertion and the
+// legacy external flag; it overrides EdgeUserUpdate.WorkspaceID.
 //
 // The preserve-on-empty avatar contract is identical to
 // UpdateUserFromEdge, and for the same reason. presence and
@@ -262,38 +274,42 @@ func (db *DB) UpsertUserFromEdge(workspaceID string, u EdgeUserUpdate) error {
 	var err error
 	if u.AvatarURL != "" {
 		_, err = db.conn.Exec(`
-			INSERT INTO users (id, workspace_id, name, display_name, avatar_url, is_bot, is_external, status_emoji, status_text, status_expiration, huddle_state, huddle_expiration, version)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO users (id, workspace_id, home_team_id, name, display_name, avatar_url, is_bot, is_external, status_emoji, status_text, status_expiration, huddle_state, huddle_expiration, version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
 				name=excluded.name,
 				display_name=excluded.display_name,
 				avatar_url=excluded.avatar_url,
 				is_bot=excluded.is_bot,
-				is_external=excluded.is_external,
+				home_team_id=COALESCE(NULLIF(excluded.home_team_id, ''), users.home_team_id),
+				is_external=CASE WHEN users.workspace_id=excluded.workspace_id
+					THEN excluded.is_external ELSE users.is_external END,
 				status_emoji=excluded.status_emoji,
 				status_text=excluded.status_text,
 				status_expiration=excluded.status_expiration,
 				huddle_state=excluded.huddle_state,
 				huddle_expiration=excluded.huddle_expiration,
 				version=excluded.version
-		`, u.ID, workspaceID, u.Name, u.DisplayName, u.AvatarURL, boolToInt(u.IsBot), boolToInt(u.IsExternal),
+		`, u.ID, workspaceID, u.HomeTeamID, u.Name, u.DisplayName, u.AvatarURL, boolToInt(u.IsBot), boolToInt(u.IsExternal),
 			u.StatusEmoji, u.StatusText, u.StatusExpiration, u.HuddleState, u.HuddleExpiration, u.Version)
 	} else {
 		_, err = db.conn.Exec(`
-			INSERT INTO users (id, workspace_id, name, display_name, is_bot, is_external, status_emoji, status_text, status_expiration, huddle_state, huddle_expiration, version)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO users (id, workspace_id, home_team_id, name, display_name, is_bot, is_external, status_emoji, status_text, status_expiration, huddle_state, huddle_expiration, version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
 				name=excluded.name,
 				display_name=excluded.display_name,
 				is_bot=excluded.is_bot,
-				is_external=excluded.is_external,
+				home_team_id=COALESCE(NULLIF(excluded.home_team_id, ''), users.home_team_id),
+				is_external=CASE WHEN users.workspace_id=excluded.workspace_id
+					THEN excluded.is_external ELSE users.is_external END,
 				status_emoji=excluded.status_emoji,
 				status_text=excluded.status_text,
 				status_expiration=excluded.status_expiration,
 				huddle_state=excluded.huddle_state,
 				huddle_expiration=excluded.huddle_expiration,
 				version=excluded.version
-		`, u.ID, workspaceID, u.Name, u.DisplayName, boolToInt(u.IsBot), boolToInt(u.IsExternal),
+		`, u.ID, workspaceID, u.HomeTeamID, u.Name, u.DisplayName, boolToInt(u.IsBot), boolToInt(u.IsExternal),
 			u.StatusEmoji, u.StatusText, u.StatusExpiration, u.HuddleState, u.HuddleExpiration, u.Version)
 	}
 	if err != nil {
