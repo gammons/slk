@@ -14,11 +14,11 @@ import (
 // Defined as an interface so tests can pass fakes.
 type SectionsClient interface {
 	GetChannelSections(ctx context.Context) ([]slk.SidebarSection, error)
-	// GetStarredChannels backs the stars section membership.
+	// GetStarredConversations backs the stars section membership.
 	// channelSections.list returns built-in section types (stars,
 	// recent_apps) with an empty channel_ids array; stars.list is the
 	// authoritative source Bootstrap uses to fill them.
-	GetStarredChannels(ctx context.Context) ([]string, error)
+	GetStarredConversations(ctx context.Context) ([]string, error)
 }
 
 // SectionStore is the per-workspace authoritative cache of the user's
@@ -94,7 +94,7 @@ func (s *SectionStore) Bootstrap(ctx context.Context, client SectionsClient) err
 	// Slack's users.channelSections.list returns the stars section with
 	// an empty channel_ids array (it doesn't populate built-in section
 	// types). stars.list is the authoritative source for starred
-	// channels; fetch and inject here so EVERY Bootstrap — including
+	// conversations; fetch and inject here so EVERY Bootstrap — including
 	// reconnect-triggered re-bootstraps via MaybeRebootstrap — leaves
 	// the Starred header populated. Without this, a reconnect Bootstrap
 	// atomically replaced the store state and wiped the ChannelIDs that
@@ -104,8 +104,8 @@ func (s *SectionStore) Bootstrap(ctx context.Context, client SectionsClient) err
 	//
 	// PopulateStars re-locks internally; safe to call after unlock now
 	// that ready==true.
-	if stars, sErr := client.GetStarredChannels(ctx); sErr != nil {
-		log.Printf("section store: stars.list failed: %v (starred channels hidden until next bootstrap)", sErr)
+	if stars, sErr := client.GetStarredConversations(ctx); sErr != nil {
+		log.Printf("section store: stars.list failed: %v (starred conversations hidden until next bootstrap)", sErr)
 	} else if len(stars) > 0 {
 		s.PopulateStars(stars)
 	}
@@ -113,7 +113,7 @@ func (s *SectionStore) Bootstrap(ctx context.Context, client SectionsClient) err
 }
 
 // PopulateStars fills the stars section's ChannelIDs from stars.list,
-// the authoritative source for starred channels. Slack's
+// the authoritative source for starred conversations (channels and IMs). Slack's
 // users.channelSections.list returns the stars section with an empty
 // channel_ids array (it doesn't populate built-in section types); without
 // this call the stars section stays empty and includeInSidebar hides it.
@@ -150,6 +150,24 @@ func (s *SectionStore) PopulateStars(channelIDs []string) {
 	for _, cid := range channelIDs {
 		s.channelToSection[cid] = starsSectionID
 	}
+}
+
+// StarredConversationIDs returns a defensive copy of the authoritative stars
+// membership under the store lock. Unready stores and workspaces without a
+// renderable stars section return nil. Callers can hydrate missing rows without
+// retaining the mutable section pointers exposed by OrderedSections.
+func (s *SectionStore) StarredConversationIDs() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.ready {
+		return nil
+	}
+	for _, sec := range s.sectionsByID {
+		if sec.Type == "stars" && includeInSidebar(sec) {
+			return append([]string(nil), sec.ChannelIDs...)
+		}
+	}
+	return nil
 }
 
 // SectionForChannel returns the renderable section ID a channel belongs
@@ -234,7 +252,7 @@ func (s *SectionStore) OrderedSections() []*slk.SidebarSection {
 // standard (always, even when empty — user intent), channels (default
 // catch-all), direct_messages (default DM bucket), stars (Slack's
 // Starred feature — only when non-empty, mirroring recent_apps so users
-// without starred channels don't see an empty header). recent_apps is
+// without starred conversations don't see an empty header). recent_apps is
 // only rendered when non-empty (slk has its own Apps logic for the
 // empty case). Everything else is hidden (slack_connect,
 // salesforce_records, agents, anything new).

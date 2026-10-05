@@ -90,14 +90,15 @@ func TestBuildChannelItem_Channel(t *testing.T) {
 // *service.SectionStore (Bootstrap-driven) from a known mapping.
 type fakeSectionsClient struct {
 	sections []slk.SidebarSection
+	starIDs  []string
 }
 
 func (f *fakeSectionsClient) GetChannelSections(_ context.Context) ([]slk.SidebarSection, error) {
 	return f.sections, nil
 }
 
-func (f *fakeSectionsClient) GetStarredChannels(_ context.Context) ([]string, error) {
-	return nil, nil
+func (f *fakeSectionsClient) GetStarredConversations(_ context.Context) ([]string, error) {
+	return f.starIDs, nil
 }
 
 // bootstrappedStore returns a Ready() *service.SectionStore whose

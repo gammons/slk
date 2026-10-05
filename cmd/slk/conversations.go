@@ -56,14 +56,7 @@ func (h *rtmEventHandler) addConversation(ch slack.Channel) (sidebar.ChannelItem
 	// resolved name, presence or app classification that the finder lacks.
 	finderItem, _ = h.upsertFinderItem(finderItem)
 
-	// Mirror channelTypes / channelNames maps used by the notifier so
-	// follow-up messages on this channel get notified correctly.
-	if h.channelNames != nil {
-		h.channelNames[ch.ID] = item.Name
-	}
-	if h.channelTypes != nil {
-		h.channelTypes[ch.ID] = item.Type
-	}
+	h.rememberConversation(item)
 	return item, finderItem, true
 }
 
@@ -85,6 +78,61 @@ func (h *rtmEventHandler) upsertFinderItem(item core.ChannelFinderItem) (core.Ch
 	item.LastVisited = h.wsCtx.LastVisitedByChannel[item.ID]
 	h.wsCtx.FinderItems = append(h.wsCtx.FinderItems, item)
 	return item, true
+}
+
+// refreshDMPeerFromCache repairs existing DM rows after a deferred profile
+// resolves. It preserves section/order/visit metadata, updates both workspace
+// snapshots independently, and publishes through the normal active-workspace
+// insertion port (an ID-based upsert). Missing finder entries are recovered only
+// for existing DM conversations; no conversation or network request is created.
+// Like addConversation, only the serialized event owner may call this method.
+func (h *rtmEventHandler) refreshDMPeerFromCache(userID string) {
+	name, ok := resolveUserCached(userID, h.wsCtx.UserNames, h.db)
+	if !ok {
+		return
+	}
+	for i, item := range h.wsCtx.Channels {
+		if item.DMUserID != userID || (item.Type != "dm" && item.Type != "app") {
+			continue
+		}
+		updated := item
+		updated.Name = name
+		if h.wsCtx.IsBotUser(userID) {
+			updated.Type = "app"
+		}
+		finder := core.ChannelFinderItem{
+			ID: item.ID, Name: updated.Name, Type: updated.Type,
+			Presence: updated.Presence, Joined: true,
+		}
+		seedDMFromCache(h.db, userID, &updated, &finder)
+		finder, finderChanged := h.upsertFinderItem(finder)
+		// These are independent snapshots. An already-correct sidebar
+		// must not suppress finder-only repairs (including a missing row),
+		// nor status/presence changes after a successful profile retry.
+		if updated == item && !finderChanged {
+			continue
+		}
+		h.wsCtx.Channels[i] = updated
+		if h.db != nil && updated.Type != item.Type {
+			if cached, err := h.db.GetChannel(item.ID); err == nil {
+				cached.Type = updated.Type
+				_ = h.db.UpsertChannel(cached)
+			}
+		}
+		h.rememberConversation(updated)
+		h.publishConversation(updated, finder)
+	}
+}
+
+// rememberConversation mirrors the latest name/type into notifier lookup maps.
+// It shares addConversation's serialized-event-owner requirement.
+func (h *rtmEventHandler) rememberConversation(item sidebar.ChannelItem) {
+	if h.channelNames != nil {
+		h.channelNames[item.ID] = item.Name
+	}
+	if h.channelTypes != nil {
+		h.channelTypes[item.ID] = item.Type
+	}
 }
 
 func (h *rtmEventHandler) publishConversation(item sidebar.ChannelItem, finderItem core.ChannelFinderItem) {

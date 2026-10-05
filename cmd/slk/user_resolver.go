@@ -151,11 +151,26 @@ func (r *userResolver) Request(userID string) {
 // is degraded. Callers run it on its own goroutine.
 func (r *userResolver) resolveOne(userID string) {
 	defer r.inflight.Delete(userID)
+	r.resolveOneContext(context.Background(), userID)
+}
+
+// resolveOneContext is the synchronous, context-bounded variant of resolveOne.
+// Reconnect hydration uses it before publishing a DM row so peer names and bot
+// classification also survive inactive-workspace switches. It uses the same
+// cache writes and notifications as background resolution, without touching
+// workspace conversation slices. Cancellation also bounds the semaphore wait.
+// This direct path does not own a Request inflight slot; background callers
+// release their own claim in resolveOne rather than clearing a racing request.
+func (r *userResolver) resolveOneContext(ctx context.Context, userID string) {
 	if r.sem != nil {
-		r.sem <- struct{}{}
-		defer func() { <-r.sem }()
+		select {
+		case r.sem <- struct{}{}:
+			defer func() { <-r.sem }()
+		case <-ctx.Done():
+			return
+		}
 	}
-	u, err := r.client.GetUserProfile(userID)
+	u, err := r.client.GetUserProfileContext(ctx, userID)
 	if err != nil {
 		debuglog.Cache("userResolver: GetUserProfile team=%s user=%s err=%v",
 			r.teamID, userID, err)
@@ -303,6 +318,14 @@ func (r *userResolver) flush() {
 // flush then re-fetches once. The upserts are idempotent, so no
 // guard is taken.
 func (r *userResolver) ResolveNow(ids []string) []edge.User {
+	return r.ResolveNowContext(context.Background(), ids)
+}
+
+// ResolveNowContext is ResolveNow with a caller-owned deadline/cancellation.
+// Reconnect hydration batches unknown peers without exceeding its shared HTTP
+// budget. Returned records have already reached the normal cache/name/notice
+// path; absent or empty-name records still require the per-user fallback.
+func (r *userResolver) ResolveNowContext(ctx context.Context, ids []string) []edge.User {
 	if r == nil || r.batcher == nil || len(ids) == 0 {
 		return nil
 	}
@@ -318,7 +341,7 @@ func (r *userResolver) ResolveNow(ids []string) []edge.User {
 	if len(updated) == 0 {
 		return nil
 	}
-	users, err := r.batcher.UsersInfo(context.Background(), updated)
+	users, err := r.batcher.UsersInfo(ctx, updated)
 	if err != nil {
 		debuglog.Cache("userResolver: ResolveNow edge users/info for %d users team=%s: %v (caller falls back per-user)", len(updated), r.teamID, err)
 		return nil

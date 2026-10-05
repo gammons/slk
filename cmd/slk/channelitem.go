@@ -5,13 +5,13 @@ import (
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/slackfmt"
-	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/slack-go/slack"
 )
 
-// seedDMFromCache copies a DM peer's cached presence and status onto a
-// freshly built DM item, so the row shows them before any live event.
+// seedDMFromCache copies a DM peer's cached presence, status and huddle onto
+// a built or repaired DM item and its finder entry. Existing DND state is
+// preserved: it is live-only and cannot be reconstructed from the profile cache.
 func seedDMFromCache(db *cache.DB, userID string, item *sidebar.ChannelItem, finderItem *core.ChannelFinderItem) {
 	if db == nil {
 		return
@@ -24,7 +24,7 @@ func seedDMFromCache(db *cache.DB, userID string, item *sidebar.ChannelItem, fin
 		item.Presence = u.Presence
 		finderItem.Presence = u.Presence
 	}
-	item.Status = peerstatus.Status{}.
+	item.Status = item.Status.
 		WithStatus(u.StatusEmoji, u.StatusText, statusExpiry(u.StatusExpiration)).
 		WithHuddle(u.HuddleState, statusExpiry(u.HuddleExpiration))
 }
