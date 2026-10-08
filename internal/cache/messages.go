@@ -144,6 +144,44 @@ func (db *DB) GetThreadReplies(channelID, threadTS string) ([]Message, error) {
 	return db.queryMessages(query, channelID, threadTS)
 }
 
+// PruneThreadReplies soft-deletes the thread's cached replies that are
+// not in keep, the ts set of a complete conversations.replies response.
+// Without it a reply Slack no longer returns (a Slackbot ephemeral that
+// arrived over the WebSocket, a deletion missed while offline) stays in
+// the thread forever, and when it is the newest row it outranks every
+// read cursor the thread can be marked with.
+//
+// Only rows cached before insertedBefore (unix seconds, the moment the
+// fetch was issued) are candidates: a reply the WebSocket delivered
+// while the request was in flight is missing from the response because
+// it is newer than it, not because Slack dropped it. The parent row is
+// never touched. Returns the number of rows pruned.
+func (db *DB) PruneThreadReplies(channelID, threadTS string, keep []string, insertedBefore int64) (int, error) {
+	candidates, err := db.queryMessages(`
+		SELECT ts, channel_id, workspace_id, user_id, text, thread_ts, reply_count, edited_at, is_deleted, raw_json, created_at, subtype
+		FROM messages
+		WHERE channel_id = ? AND thread_ts = ? AND ts != thread_ts
+		  AND is_deleted = 0 AND created_at < ?`, channelID, threadTS, insertedBefore)
+	if err != nil {
+		return 0, fmt.Errorf("pruning thread replies: %w", err)
+	}
+	kept := make(map[string]bool, len(keep))
+	for _, ts := range keep {
+		kept[ts] = true
+	}
+	n := 0
+	for _, m := range candidates {
+		if kept[m.TS] {
+			continue
+		}
+		if err := db.DeleteMessage(channelID, m.TS); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
+}
+
 func (db *DB) DeleteMessage(channelID, ts string) error {
 	_, err := db.conn.Exec(`UPDATE messages SET is_deleted = 1 WHERE channel_id = ? AND ts = ?`, channelID, ts)
 	if err != nil {

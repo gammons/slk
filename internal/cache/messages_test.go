@@ -272,6 +272,74 @@ func TestGetThreadReplies(t *testing.T) {
 	}
 }
 
+// TestPruneThreadReplies_SoftDeletesRepliesSlackNoLongerReturns is the
+// regression for a thread that could never be marked read: Slackbot
+// ephemerals ("You mentioned @x, but they're not in this channel")
+// arrive over the WebSocket, get cached as thread replies, and are never
+// returned by conversations.replies. The newest one outranked the
+// thread's real newest reply, so every mark-read landed behind it.
+func TestPruneThreadReplies_SoftDeletesRepliesSlackNoLongerReturns(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	defer db.Close()
+	const parent = "1700000001.000000"
+	put := func(ts, threadTS string, createdAt int64) {
+		t.Helper()
+		if err := db.UpsertMessage(Message{TS: ts, ChannelID: "C1", WorkspaceID: "T1", UserID: "U1",
+			ThreadTS: threadTS, CreatedAt: createdAt}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put(parent, parent, 100)
+	put("1700000002.000000", parent, 100)              // real reply
+	put("1700000003.000000", parent, 100)              // ghost: Slack no longer returns it
+	put("1700000009.000000", "1700000008.000000", 100) // reply in another thread
+
+	n, err := db.PruneThreadReplies("C1", parent, []string{parent, "1700000002.000000"}, 200)
+	if err != nil {
+		t.Fatalf("PruneThreadReplies: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("pruned %d rows, want 1", n)
+	}
+	replies, err := db.GetThreadReplies("C1", parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, r := range replies {
+		got = append(got, r.TS)
+	}
+	if fmt.Sprint(got) != fmt.Sprint([]string{parent, "1700000002.000000"}) {
+		t.Errorf("thread rows after prune = %v, want parent and the real reply", got)
+	}
+	if other, _ := db.GetThreadReplies("C1", "1700000008.000000"); len(other) != 1 {
+		t.Errorf("another thread's reply was pruned: %d rows left, want 1", len(other))
+	}
+}
+
+// TestPruneThreadReplies_KeepsRepliesCachedDuringTheFetch: a reply the
+// WebSocket delivered after the conversations.replies request went out
+// is absent from that response only because it is newer than it. Rows
+// inserted at or after the cutoff must survive.
+func TestPruneThreadReplies_KeepsRepliesCachedDuringTheFetch(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	defer db.Close()
+	const parent = "1700000001.000000"
+	db.UpsertMessage(Message{TS: parent, ChannelID: "C1", WorkspaceID: "T1", ThreadTS: parent, CreatedAt: 100})
+	db.UpsertMessage(Message{TS: "1700000005.000000", ChannelID: "C1", WorkspaceID: "T1", ThreadTS: parent, CreatedAt: 200})
+
+	n, err := db.PruneThreadReplies("C1", parent, []string{parent}, 200)
+	if err != nil {
+		t.Fatalf("PruneThreadReplies: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("pruned %d rows, want 0: the reply was cached at the cutoff", n)
+	}
+	if replies, _ := db.GetThreadReplies("C1", parent); len(replies) != 2 {
+		t.Errorf("thread has %d rows, want 2", len(replies))
+	}
+}
+
 // TestGetMessages_IncludesThreadParents guards against the regression
 // where thread parents (top-level messages whose thread_ts equals
 // their own ts because they have replies) were excluded from
