@@ -170,17 +170,17 @@ func TestRenderCardAlwaysTwoLines(t *testing.T) {
 	}
 }
 
-// renderRows lays cards out as two content lines each with one blank
+// renderLines lays cards out as two content lines each with one blank
 // separator between adjacent cards (none after the last), matching the
 // Threads view. No line may contain a newline.
-func TestRenderRowsSeparatesCards(t *testing.T) {
+func TestRenderLinesSeparatesCards(t *testing.T) {
 	m := New(nil, "")
 	m.SetItems([]core.ActivityItem{
 		{Type: "at_user", ChannelID: "C1", TS: "1.1", Key: "a"},
 		{Type: "dm", ChannelID: "C2", TS: "2.2", Key: "b"},
 		{Type: "thread_v2", ChannelID: "C3", TS: "3.3", Key: "c"},
 	})
-	lines := m.renderRows(60)
+	lines := m.renderLines(0, 3*cardStride-1, 60)
 	if want := 3*2 + 2; len(lines) != want {
 		t.Fatalf("want %d lines (3 two-line cards + 2 separators), got %d", want, len(lines))
 	}
@@ -519,5 +519,46 @@ func TestClickAtStride(t *testing.T) {
 		if ok && m.SelectedIndex() != tc.wantSel {
 			t.Fatalf("ClickAt(%d) selected=%d, want %d", tc.rowY, m.SelectedIndex(), tc.wantSel)
 		}
+	}
+}
+
+// PatchUserName delivers a name resolved after SetUserNames. The map is
+// usually the App's shared one, which already holds the name, so the
+// version must bump on the user being referenced, not on a map change.
+func TestPatchUserName_BumpsVersionOnlyWhenFeedReferencesUser(t *testing.T) {
+	shared := map[string]string{}
+	m := New(shared, "USELF")
+	m.SetItems([]core.ActivityItem{
+		{Key: "a", Type: "at_user", ChannelID: "C1", TS: "1.0", AuthorID: "U1"},
+		{Key: "b", Type: "thread_v2", ChannelID: "C1", TS: "2.0"},
+	})
+	m.SetBodies(map[string]core.ActivityMessage{
+		core.ActivityMsgKey("C1", "1.0"): {Text: "hi <@U3>", UserID: "U1"},
+		core.ActivityMsgKey("C1", "2.0"): {Text: "reply", UserID: "U2"},
+	})
+	for _, c := range []struct {
+		uid  string
+		want bool
+	}{{"U1", true}, {"U2", true}, {"U3", true}, {"U4", false}, {"", false}} {
+		shared[c.uid] = "name-" + c.uid // the App writes the shared map first
+		v0 := m.Version()
+		m.PatchUserName(c.uid, "name-"+c.uid)
+		if bumped := m.Version() != v0; bumped != c.want {
+			t.Errorf("PatchUserName(%q) bumped=%v, want %v", c.uid, bumped, c.want)
+		}
+	}
+	if !strings.Contains(m.View(20, 60), "name-U1") {
+		t.Error("View does not show the patched name")
+	}
+}
+
+// Without a shared map (SetUserNames never called) the name must still
+// land in the model's own map.
+func TestPatchUserName_RecordsNameInOwnMap(t *testing.T) {
+	m := New(nil, "USELF")
+	m.SetItems([]core.ActivityItem{{Key: "a", Type: "at_user", ChannelID: "C1", TS: "1.0", AuthorID: "U1"}})
+	m.PatchUserName("U1", "alice")
+	if !strings.Contains(m.View(20, 60), "alice") {
+		t.Error("View does not show the patched name")
 	}
 }

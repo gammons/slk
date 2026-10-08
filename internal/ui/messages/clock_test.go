@@ -47,3 +47,21 @@ func TestSetNowFunc_NilRevertsToTimeNow(t *testing.T) {
 		t.Errorf("after SetNowFunc(nil), today = %q, want \"Today\"", got)
 	}
 }
+
+func TestFormatShortDate(t *testing.T) {
+	SetNowFunc(fixedClock)
+	t.Cleanup(func() { SetNowFunc(nil) })
+
+	for date, want := range map[string]string{
+		"2026-03-15": "Today",
+		"2026-03-14": "Yesterday",
+		"2026-03-11": "Wednesday",
+		"2026-01-02": "Jan 2",
+		"2025-05-27": "May 27, 2025",
+		"garbage":    "garbage",
+	} {
+		if got := FormatShortDate(date); got != want {
+			t.Errorf("FormatShortDate(%q) = %q, want %q", date, got, want)
+		}
+	}
+}

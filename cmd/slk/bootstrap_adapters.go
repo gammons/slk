@@ -353,13 +353,13 @@ func bootUserDisplayName(u boot.User) string {
 // what replaces it, alongside the cache seed and on-demand resolveUser.
 //
 // Called on the connectWorkspace goroutine before the UI is told the
-// workspace is ready, which is why these maps can be written directly:
-// after that point wctx.UserNames has other readers and
-// Model.PatchUserName is the only safe writer.
+// workspace is ready. UserNames is the locked store and safe from any
+// goroutine; the other two maps are only safe to write here, before
+// the workspace has other readers.
 func applyBootUsers(wctx *WorkspaceContext, res *bootstrap.Result) {
 	for _, u := range res.Users {
 		name := bootUserDisplayName(u)
-		wctx.UserNames[u.ID] = name
+		wctx.UserNames.Set(u.ID, name)
 		if u.Name != "" {
 			wctx.UserNamesByHandle[u.Name] = name
 		}
@@ -368,7 +368,7 @@ func applyBootUsers(wctx *WorkspaceContext, res *bootstrap.Result) {
 		// second, and this flag decides whether a DM lands in the
 		// "Apps" sidebar section.
 		if u.IsBot || u.IsAppUser {
-			wctx.BotUserIDs[u.ID] = true
+			wctx.MarkBotUser(u.ID)
 		}
 		if u.Profile.ImageOriginal != "" {
 			wctx.AvatarURLs.Store(u.ID, u.Profile.ImageOriginal)

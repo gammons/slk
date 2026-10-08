@@ -9,9 +9,9 @@ import (
 // ---------------------------------------------------------------------
 // handleConfirmMode (mode_confirm.go:16)
 //
-// Eight statements, no sub-branching of its own: it normalises Escape
-// and Enter to the strings confirmprompt.Model.HandleKey matches
-// (mode_confirm.go:18-23), forwards, and drops to ModeNormal whenever
+// No sub-branching of its own: it normalises Enter to the string
+// confirmprompt.Model.HandleKey matches, forwards, and drops to
+// ModeNormal whenever
 // the prompt closed itself. confirmprompt.HandleKey always closes
 // (confirmprompt/model.go:70-88), so in practice every key exits the
 // mode -- including keys the prompt treats as a cancel.
@@ -118,13 +118,13 @@ func TestConfirmModeKeys(t *testing.T) {
 			assert:   wantConfirmed(&enterFired),
 		},
 		{
-			// The Code switch (mode_confirm.go:21) looks redundant for
-			// a bare Enter, whose String() is already "enter". Holding
-			// shift is the only input that separates live normalisation
-			// from dead code: Keystroke() prefixes the modifier
-			// ("shift+enter"), which confirmprompt's switch does not
-			// match, so without the arm this row would cancel.
-			name:     "shift+enter confirms: the Code switch strips the modifier",
+			// The KeyEnter normalisation in handleConfirmMode looks
+			// redundant for a bare Enter, whose String() is already
+			// "enter". Holding shift is the only input that separates
+			// live normalisation from dead code: Keystroke() prefixes the
+			// modifier ("shift+enter"), which confirmprompt's switch does
+			// not match, so without it this row would cancel.
+			name:     "shift+enter confirms: the KeyEnter normalisation strips the modifier",
 			setup:    openConfirm(&shiftEnterFired),
 			key:      keyMod(tea.KeyEnter, tea.ModShift),
 			wantMode: ModeNormal,
@@ -138,22 +138,17 @@ func TestConfirmModeKeys(t *testing.T) {
 			assert:   wantCancelled(&escFired),
 		},
 		{
-			// Escape's arm cannot be proven the same way: confirmprompt
+			// handleConfirmMode does not normalise Escape: confirmprompt
 			// has no "esc" case at all -- everything that is not
-			// y/Y/enter falls into the cancel default
-			// (confirmprompt/model.go:83). So "shift+esc" and "esc"
-			// both cancel, and this row pins that the normalisation is
-			// harmless rather than that it is load-bearing.
+			// y/Y/enter falls into its cancel default. So "shift+esc"
+			// and "esc" both cancel without help from this layer.
 			//
-			// BUG?: mode_confirm.go:19-20 therefore has no effect on
-			// behaviour today. Recorded, not changed. Tracked as
-			// https://github.com/gammons/slk/issues/188, item 1.
-			//
-			// WHEN THAT DEAD CODE GOES: nothing here changes — the
-			// observable behaviour is identical with or without the
-			// normalisation, which is the point of the row. Keep it as
-			// the proof that deleting the arm is safe.
-			name:     "shift+esc cancels: the esc arm is inert, the default cancels either way",
+			// An Escape arm that rewrote the key to "esc" used to sit
+			// beside the Enter one; it had no effect and was removed
+			// (https://github.com/gammons/slk/issues/188, item 1). This
+			// row is the witness that the removal was safe, and fails if
+			// a modified Escape ever stops cancelling.
+			name:     "shift+esc cancels: confirmprompt's default cancels without an esc arm",
 			setup:    openConfirm(&shiftEscFired),
 			key:      keyMod(tea.KeyEscape, tea.ModShift),
 			wantMode: ModeNormal,

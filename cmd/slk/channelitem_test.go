@@ -12,8 +12,7 @@ import (
 
 func TestBuildChannelItem_DM(t *testing.T) {
 	wctx := &WorkspaceContext{
-		BotUserIDs:        map[string]bool{},
-		UserNames:         map[string]string{"U123": "alice"},
+		UserNames:         newUserNameStore(map[string]string{"U123": "alice"}),
 		UserNamesByHandle: map[string]string{"alice": "alice"},
 	}
 	cfg := config.Config{}
@@ -43,8 +42,7 @@ func TestBuildChannelItem_DM(t *testing.T) {
 
 func TestBuildChannelItem_GroupDM(t *testing.T) {
 	wctx := &WorkspaceContext{
-		BotUserIDs:        map[string]bool{},
-		UserNames:         map[string]string{},
+		UserNames:         newUserNameStore(nil),
 		UserNamesByHandle: map[string]string{"alice": "Alice", "bob": "Bob"},
 	}
 	cfg := config.Config{}
@@ -68,8 +66,7 @@ func TestBuildChannelItem_GroupDM(t *testing.T) {
 
 func TestBuildChannelItem_Channel(t *testing.T) {
 	wctx := &WorkspaceContext{
-		BotUserIDs:        map[string]bool{},
-		UserNames:         map[string]string{},
+		UserNames:         newUserNameStore(nil),
 		UserNamesByHandle: map[string]string{},
 	}
 	cfg := config.Config{}
@@ -133,9 +130,8 @@ func TestBuildChannelItem_StoreReady_StoreWins(t *testing.T) {
 	}
 	wctx := &WorkspaceContext{
 		SectionStore:      bootstrappedStore(t, map[string][]string{"L_SLACK": {"C1"}}),
-		UserNames:         map[string]string{},
+		UserNames:         newUserNameStore(nil),
 		UserNamesByHandle: map[string]string{},
-		BotUserIDs:        map[string]bool{},
 	}
 	ch := slack.Channel{
 		GroupConversation: slack.GroupConversation{
@@ -159,9 +155,8 @@ func TestBuildChannelItem_StoreReady_StoreMisses_FallsToGlob(t *testing.T) {
 	// fall through to config-glob matching.
 	wctx := &WorkspaceContext{
 		SectionStore:      bootstrappedStore(t, map[string][]string{}),
-		UserNames:         map[string]string{},
+		UserNames:         newUserNameStore(nil),
 		UserNamesByHandle: map[string]string{},
-		BotUserIDs:        map[string]bool{},
 	}
 	ch := slack.Channel{
 		GroupConversation: slack.GroupConversation{
@@ -183,9 +178,8 @@ func TestBuildChannelItem_StoreNil_UsesGlob(t *testing.T) {
 	}
 	wctx := &WorkspaceContext{
 		SectionStore:      nil,
-		UserNames:         map[string]string{},
+		UserNames:         newUserNameStore(nil),
 		UserNamesByHandle: map[string]string{},
-		BotUserIDs:        map[string]bool{},
 	}
 	ch := slack.Channel{
 		GroupConversation: slack.GroupConversation{
@@ -210,9 +204,8 @@ func TestBuildChannelItem_GlobMatchPopulatesChannelOrder(t *testing.T) {
 	}
 	wctx := &WorkspaceContext{
 		SectionStore:      nil,
-		UserNames:         map[string]string{},
+		UserNames:         newUserNameStore(nil),
 		UserNamesByHandle: map[string]string{},
-		BotUserIDs:        map[string]bool{},
 	}
 	// "eng-general" matches the literal pattern first → order 1.
 	ch1 := slack.Channel{
@@ -253,9 +246,8 @@ func TestBuildChannelItem_SlackStoreWins_ChannelOrderZero(t *testing.T) {
 	}
 	wctx := &WorkspaceContext{
 		SectionStore:      bootstrappedStore(t, map[string][]string{"L_SLACK": {"C1"}}),
-		UserNames:         map[string]string{},
+		UserNames:         newUserNameStore(nil),
 		UserNamesByHandle: map[string]string{},
-		BotUserIDs:        map[string]bool{},
 	}
 	ch := slack.Channel{
 		GroupConversation: slack.GroupConversation{
@@ -282,9 +274,8 @@ func TestBuildChannelItem_StoreNotReady_UsesGlob(t *testing.T) {
 	// resolver must skip it even though we'd otherwise expect a match.
 	wctx := &WorkspaceContext{
 		SectionStore:      service.NewSectionStore(),
-		UserNames:         map[string]string{},
+		UserNames:         newUserNameStore(nil),
 		UserNamesByHandle: map[string]string{},
-		BotUserIDs:        map[string]bool{},
 	}
 	ch := slack.Channel{
 		GroupConversation: slack.GroupConversation{

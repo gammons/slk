@@ -58,7 +58,7 @@ type (
 		// back to a default `#` glyph.
 		Type string
 		// FromHistory marks navigations synthesized by Ctrl+H /
-		// Ctrl+K. The case ChannelSelectedMsg handler suppresses
+		// Ctrl+L. The case ChannelSelectedMsg handler suppresses
 		// pushing onto navHistory when this is true so back/forward
 		// walks don't grow the stack on every step. Visit recording
 		// is unaffected — going back to a channel still updates its
@@ -285,8 +285,11 @@ type (
 	// UserExternalMsg flags a single user as external (Slack Connect /
 	// shared-channel guest). Emitted by the user-resolution path when a
 	// users.info response shows team_id != workspace TeamID. The App
-	// updates externalUsers and re-pushes user-list state to the pickers.
+	// updates externalUsers and re-pushes user-list state to the pickers only
+	// for TeamID's active workspace. External is relative to that workspace,
+	// not an intrinsic property of a user shared across workspaces.
 	UserExternalMsg struct {
+		TeamID     string
 		UserID     string
 		IsExternal bool
 	}
@@ -324,6 +327,12 @@ type (
 		// batch after the switch applies. It fetches DM peers' DND for
 		// this workspace and delivers results as UserDNDChangeMsg.
 		RefreshPeerDND tea.Cmd
+		// AfterSwitch, if set, is appended to reduceWorkspaceSwitched's
+		// batch after activeTeamID is updated, like RefreshPeerDND. cmd/slk
+		// uses it to start reporting the workspace's newly learned user
+		// names as UserResolvedMsg; any sent before the switch applied
+		// would be dropped as belonging to an inactive workspace.
+		AfterSwitch tea.Cmd
 	}
 	// ReadStateChangedMsg is sent whenever the persistent read state changes,
 	// so panels that read from cache.GetWorkspaceReadState re-render.

@@ -57,6 +57,20 @@ func (db *DB) UpsertUser(u User) error {
 	return nil
 }
 
+// FillUserAvatarURL sets id's avatar_url only when it is empty, and
+// never creates a row. It exists for users Slack's edge endpoints
+// left without one (they carry only image_original, which is absent
+// for users who never uploaded an avatar), backfilled from users.info.
+// A URL already stored, e.g. by an edge revalidation, is kept; the
+// other columns are untouched, unlike UpsertUser.
+func (db *DB) FillUserAvatarURL(id, url string) error {
+	_, err := db.conn.Exec(`UPDATE users SET avatar_url = ? WHERE id = ? AND avatar_url = ''`, url, id)
+	if err != nil {
+		return fmt.Errorf("filling avatar for user %s: %w", id, err)
+	}
+	return nil
+}
+
 func (db *DB) GetUser(id string) (User, error) {
 	var u User
 	err := db.conn.QueryRow(`

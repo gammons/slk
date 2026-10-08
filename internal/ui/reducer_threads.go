@@ -163,12 +163,19 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}
 		channelID := a.threadPanel.ChannelID()
 		parentMsg := a.threadPanel.ParentMsg()
-		// Permalink-opened threads start with a stub parent (TS only).
-		// The fetch that produced this msg also wrote the full thread
-		// to cache — backfill the parent row from there.
-		if parentMsg.Text == "" {
+		// Permalink-opened threads start with a stub parent (TS only),
+		// and a thread opened from a reply row may carry the wrong row
+		// as parent. The fetch that produced this msg also wrote the
+		// full thread to cache — backfill the parent row from there.
+		// Threads-view opens build the parent from the list summary,
+		// which has text but no formatted time — take just that field.
+		if parentMsg.Text == "" || parentMsg.Timestamp == "" || parentMsg.TS != m.ThreadTS {
 			if cached := a.threads.CacheRead(ids.ChannelID(channelID), ids.ThreadTS(m.ThreadTS)); len(cached) > 0 && cached[0].Text != "" {
-				parentMsg = cached[0]
+				if parentMsg.Text == "" || parentMsg.TS != m.ThreadTS {
+					parentMsg = cached[0]
+				} else if parentMsg.Timestamp == "" {
+					parentMsg.Timestamp = cached[0].Timestamp
+				}
 			}
 		}
 		a.threadPanel.SetThread(parentMsg, m.Replies, channelID, m.ThreadTS)

@@ -15,10 +15,8 @@ import (
 // is active: a nil msg would leave the ctrl+f modal spinner stuck
 // (the reducer only clears loading on a WorkspaceSearchResultsMsg).
 // TestLookupUserCachedDoesNotMutateMap pins the read-only contract of
-// lookupUserCached: the search path runs in a bubbletea cmd goroutine,
-// where a write to the shared UserNames map would race the UI goroutine
-// (see the concurrent-map-writes note on userResolver.Request). A DB
-// hit must be returned WITHOUT being memoized into the map.
+// lookupUserCached: a DB hit is returned WITHOUT being recorded in the
+// name store (resolveUserCached is the memoizing variant).
 func TestLookupUserCachedDoesNotMutateMap(t *testing.T) {
 	db, err := cache.New(":memory:")
 	if err != nil {
@@ -32,23 +30,23 @@ func TestLookupUserCachedDoesNotMutateMap(t *testing.T) {
 		t.Fatalf("UpsertUser: %v", err)
 	}
 
-	userNames := map[string]string{}
+	userNames := newUserNameStore(nil)
 	name, ok := lookupUserCached("U1", userNames, db)
 	if !ok || name != "Alice" {
 		t.Fatalf("lookupUserCached = (%q, %v), want (\"Alice\", true)", name, ok)
 	}
-	if len(userNames) != 0 {
-		t.Fatalf("lookupUserCached mutated the map: %v", userNames)
+	if snap := userNames.Snapshot(); len(snap) != 0 {
+		t.Fatalf("lookupUserCached mutated the store: %v", snap)
 	}
 
-	// Map hits still work and still don't mutate.
-	userNames = map[string]string{"U2": "Bob"}
+	// Store hits still work and still don't mutate.
+	userNames = newUserNameStore(map[string]string{"U2": "Bob"})
 	name, ok = lookupUserCached("U2", userNames, db)
 	if !ok || name != "Bob" {
-		t.Fatalf("map hit = (%q, %v), want (\"Bob\", true)", name, ok)
+		t.Fatalf("store hit = (%q, %v), want (\"Bob\", true)", name, ok)
 	}
-	if len(userNames) != 1 || userNames["U2"] != "Bob" {
-		t.Fatalf("map changed: %v", userNames)
+	if snap := userNames.Snapshot(); len(snap) != 1 || snap["U2"] != "Bob" {
+		t.Fatalf("store changed: %v", snap)
 	}
 }
 

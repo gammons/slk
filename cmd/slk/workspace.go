@@ -33,7 +33,10 @@ type WorkspaceContext struct {
 	EdgeHealth *edge.Health
 	ConnMgr    *slackclient.ConnectionManager
 	RTMHandler *rtmEventHandler
-	UserNames  map[string]string
+	// UserNames is the engine-side user ID -> display name cache, safe
+	// from any goroutine. The UI never holds it: it gets a Snapshot.
+	// See userNameStore for why, and for the UserResolvedMsg rule.
+	UserNames *userNameStore
 	// AvatarURLs maps userID -> avatar image URL. Populated from the
 	// local users cache at connect time (synchronous, before any
 	// goroutines spin up), from conversations.view's users array via
@@ -52,12 +55,10 @@ type WorkspaceContext struct {
 	// without an `@`) to a display name. Used to resolve participant
 	// handles in mpdm channel names like `mpdm-grant--myles--ray-1`.
 	UserNamesByHandle map[string]string
-	// BotUserIDs is the set of user IDs known to be Slack apps or bots.
-	// Populated from the local cache on startup, from
-	// conversations.view's users array via applyBootUsers, and by any
-	// on-demand resolveUser calls. Used during channel construction to
-	// bucket app DMs into a separate "Apps" sidebar section.
-	BotUserIDs map[string]bool
+	// botUserIDs holds known app/bot peers. The DM sweep writes concurrently
+	// with WS hydration and item construction, so this must not be a plain
+	// map. Use MarkBotUser/IsBotUser; sync.Map's zero value is ready for use.
+	botUserIDs sync.Map // user ID -> struct{}; positive classifications only
 	// SectionStore holds the user's Slack-native sidebar sections for
 	// this workspace. Nil when use_slack_sections is disabled, the
 	// REST bootstrap failed, or this workspace hasn't connected yet.
@@ -138,7 +139,7 @@ type WorkspaceContext struct {
 	LastVisitedByChannel map[string]int64
 	// UserResolver dispatches background users.info lookups for
 	// unknown message authors. Set in connectWorkspace once the
-	// in-memory UserNames map and the *tea.Program are both available.
+	// in-memory UserNames store and the *tea.Program are both available.
 	// Hot-path message processors call resolveUserCached first and
 	// fall back to UserResolver.Request(userID) to enqueue an async
 	// fetch; the goroutine emits ui.UserResolvedMsg back into the
@@ -154,6 +155,25 @@ type WorkspaceContext struct {
 	// in connectWorkspace alongside UserResolver (it depends on the
 	// resolver to trigger external-user lookups for newly-seen IDs).
 	Membership *membership.Manager
+}
+
+// IsBotUser reports whether userID has been classified as an app or bot.
+// Safe from any goroutine; a nil workspace or unknown peer returns false.
+func (w *WorkspaceContext) IsBotUser(userID string) bool {
+	if w == nil {
+		return false
+	}
+	_, ok := w.botUserIDs.Load(userID)
+	return ok
+}
+
+// MarkBotUser records a positive app/bot classification from Slack or cache.
+// Safe from any goroutine. Unknown/failed lookups must not erase a previously
+// confirmed classification; empty IDs and nil workspaces are ignored.
+func (w *WorkspaceContext) MarkBotUser(userID string) {
+	if w != nil && userID != "" {
+		w.botUserIDs.Store(userID, struct{}{})
+	}
 }
 
 // UserGroups returns this workspace's usergroup ID -> handle map, or an

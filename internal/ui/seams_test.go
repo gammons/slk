@@ -516,6 +516,47 @@ func TestSeam_SaveThreadWritesMarkdown(t *testing.T) {
 	}
 }
 
+// TestSaveThread_CmdDoesNotShareNameMaps: the export runs in a Cmd
+// goroutine while the UI goroutine keeps patching the thread panel's
+// name map (PatchUserName on every UserResolvedMsg). If the Cmd held
+// the live map, that is the same concurrent-map fatal that crashed slk
+// on 2026-10-02 (there via cmd/slk's fetchers). The cmd must carry
+// copies: a patch after the cmd is built must not reach it.
+func TestSaveThread_CmdDoesNotShareNameMaps(t *testing.T) {
+	a := newTestApp(t, withActiveChannel("C1"))
+	var gotUsers, gotChannels map[string]string
+	a.setDesktopForTest(func(d *core.DesktopServiceFuncs) {
+		d.SaveThread = func(_ messages.MessageItem, _ []messages.MessageItem, userNames, channelNames map[string]string, _ string) (string, error) {
+			gotUsers, gotChannels = userNames, channelNames
+			return "/dev/null", nil
+		}
+	})
+	a.threadPanel.SetThread(messages.MessageItem{TS: "1.0", UserID: "U1", Text: "p"}, nil, "C1", "1.0")
+	a.threadPanel.SetUserNames(map[string]string{"U1": "alice"})
+	a.threadPanel.SetChannelNames(map[string]string{"C1": "dev"})
+	a.threadVisible = true
+	a.focusedPanel = PanelThread
+
+	cmd := a.saveThreadToFile()
+	if cmd == nil {
+		t.Fatal("no save cmd")
+	}
+	// The UI goroutine keeps going after the cmd is handed to bubbletea.
+	a.threadPanel.PatchUserName("U2", "bob")
+	a.threadPanel.ChannelNames()["C2"] = "ops"
+	cmd()
+
+	if _, ok := gotUsers["U2"]; ok {
+		t.Error("a PatchUserName after the save cmd was built reached the export: the cmd shares the panel's userNames map")
+	}
+	if _, ok := gotChannels["C2"]; ok {
+		t.Error("a channel-name write after the save cmd was built reached the export: the cmd shares the panel's channelNames map")
+	}
+	if gotUsers["U1"] != "alice" || gotChannels["C1"] != "dev" {
+		t.Errorf("export got users=%v channels=%v; want the names as of the keypress", gotUsers, gotChannels)
+	}
+}
+
 func TestSeam_SaveThreadReportsWriteFailure(t *testing.T) {
 	// A file where the exports directory should be makes MkdirAll fail.
 	dataHome := t.TempDir()

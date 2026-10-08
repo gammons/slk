@@ -30,6 +30,7 @@
 - Bracketed paste — paste multi-line text from the system clipboard without it being interpreted as keystrokes
 - Smart paste (`Ctrl+V`) — pastes a clipboard image as an attachment, or a copied file path as an attached file, or falls through to text. Multiple attachments + caption send together via Slack's V2 file-upload API. Note: use `Ctrl+V` (not your terminal's `Ctrl+Shift+V` paste shortcut) — terminal-initiated paste only delivers text, never image bytes.
 - CommonMark in compose: type `**bold**`, `~~strike~~`, `[label](url)`, `- list items`, `1. numbered`, or fenced ```code blocks``` and slk converts them on send to Slack's mrkdwn + rich_text format. Already-mrkdwn syntax (`*bold*`, `_italic_`, `~strike~`) passes through unchanged and receives the corresponding rich-text styling.
+- Unsent drafts stay with their conversation. Text and attachments are kept separately for each workspace, channel, DM and thread, and come back when you switch to it again. Drafts are in-session only — nothing is written to disk and nothing is synced to Slack — and a draft's attachments stay in memory until you send or remove them. While a file upload is in progress, navigation that would switch the composer is refused, so the upload's caption and attachments stay with the conversation they were sent from.
 
 ## Images
 
@@ -125,6 +126,36 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
 - Reflects external state changes — set from the official Slack client or via your own API scripts — in real time over the WebSocket
 - Shows other people's state too: their custom status emoji (🎧 instead while they are in a huddle) follows their name on DM rows, message authors and channel-finder rows, `⊘` replaces the presence dot while they are in DND, and an open DM's header shows the full status text and when their DND ends
 - Statuses and DND disappear when they expire; a huddle is re-checked every minute, because Slack does not always announce that one ended
+
+## Export
+
+- Save the open thread to Markdown with `S` (see [[Keybindings]])
+- Export one channel's messages and threads for a date range, without
+  launching the TUI:
+
+  ```sh
+  slk export \
+    --workspace example-workspace \
+    --channel project_alpha \
+    --since 2026-04-01 \
+    --until 2026-07-01 \
+    --timezone America/New_York \
+    --output ./project-alpha-export \
+    --overlap 14
+  ```
+
+  Each conversation (a standalone message, or a thread with its replies)
+  becomes one Markdown file, and `index.md` links them by day.
+  - `--since` is inclusive and `--until` exclusive, both read as midnight in
+    `--timezone` (default: local). `--until` defaults to tomorrow.
+  - `--overlap N` widens the range by N calendar days on each side.
+  - A reply inside the range is exported even when its thread started
+    earlier; the older parent is kept, labelled, as context. Finding those
+    threads means scanning the channel's whole earlier history, so a first
+    export of a long-lived channel takes a while.
+  - `--workspace` takes a slug, team ID or name, and may be omitted with a
+    single workspace. `--channel` takes a name or ID. `--output` must be
+    empty or absent, and defaults to a folder under the exports directory.
 
 ## Connectivity
 

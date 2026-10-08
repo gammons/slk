@@ -61,6 +61,9 @@ func (a *App) windowBounds() wintree.Rect {
 // from the source so the clone shows the same history immediately.
 // Toasts "Not enough room" on refusal.
 func (a *App) splitWindow(dir wintree.Dir) tea.Cmd {
+	if a.compose.Uploading() || a.threadCompose.Uploading() {
+		return toastWithClear(a, "Upload in progress", 2*time.Second)
+	}
 	src := a.messagepane
 	srcCh, _ := a.wins.Channel(a.focusedWin)
 	id, err := a.wins.Split(a.focusedWin, dir, a.windowBounds())
@@ -88,6 +91,9 @@ func (a *App) splitWindow(dir wintree.Dir) tea.Cmd {
 // closeWindow closes the focused window; focus falls to its neighbor.
 // Toasts "Cannot close last window" instead of ever quitting.
 func (a *App) closeWindow() tea.Cmd {
+	if a.compose.Uploading() || a.threadCompose.Uploading() {
+		return toastWithClear(a, "Upload in progress", 2*time.Second)
+	}
 	next, err := a.wins.Close(a.focusedWin)
 	if err != nil {
 		return toastWithClear(a, "Cannot close last window", 2*time.Second)
@@ -98,6 +104,9 @@ func (a *App) closeWindow() tea.Cmd {
 
 // onlyWindow closes every window except the focused one.
 func (a *App) onlyWindow() {
+	if a.compose.Uploading() || a.threadCompose.Uploading() {
+		return
+	}
 	_ = a.wins.Only(a.focusedWin)
 	a.syncWinModels()
 }
@@ -120,6 +129,9 @@ func (a *App) navigateWindow(nd wintree.NavDir) tea.Cmd {
 // active-channel context retarget (compose, statusbar, typing,
 // activeChannelID). Per-window models mean no channel re-dispatch.
 func (a *App) focusWindow(id wintree.LeafID) tea.Cmd {
+	if a.compose.Uploading() || a.threadCompose.Uploading() {
+		return toastWithClear(a, "Upload in progress", 2*time.Second)
+	}
 	if id == a.focusedWin {
 		return nil
 	}
@@ -127,6 +139,10 @@ func (a *App) focusWindow(id wintree.LeafID) tea.Cmd {
 	if m == nil {
 		return nil // unknown window; invariant breach, ignore
 	}
+	// Cancel any in-flight edit before the channel context switches:
+	// otherwise the restored edit text could be stored as a normal
+	// draft for the outgoing conversation.
+	a.cancelEdit()
 	// In-channel search is focused-pane state (App-level match list +
 	// model-level highlights). Clear it BEFORE the pointer swap so the
 	// outgoing model's highlights are removed; n/N against a different

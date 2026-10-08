@@ -7,8 +7,9 @@
 //     prompt), Ctrl-Y (theme switcher), ? (help),
 //     S (presence menu), R (reaction picker)
 //   - navigation: j/k (selection), Ctrl-D/U (half-page), C-f/b
-//     (page), G (bottom), Tab/h/l (focus next/prev), Ctrl-h/k
-//     (nav back/forward through visited channels)
+//     (page), G (bottom), Tab/h/l (focus next/prev), Ctrl-h/l
+//     (nav back/forward through visited channels; Ctrl-k is an
+//     alias for forward)
 //   - layout toggles: s (sidebar), t (thread)
 //   - theme cycle: Alt-Y / Alt-Shift-Y apply the next / previous
 //     theme, wrapping around (saved per workspace, like Ctrl-Y)
@@ -234,24 +235,16 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		}
 
 	case key.Matches(msg, a.keys.PageUp):
-		if cmd := a.scrollFocusedPanel(-a.pageSize()); cmd != nil {
-			return cmd
-		}
+		return a.scrollFocusedPanel(-a.pageSize())
 
 	case key.Matches(msg, a.keys.PageDown):
-		if cmd := a.scrollFocusedPanel(a.pageSize()); cmd != nil {
-			return cmd
-		}
+		return a.scrollFocusedPanel(a.pageSize())
 
 	case key.Matches(msg, a.keys.HalfPageUp):
-		if cmd := a.scrollFocusedPanel(-a.halfPageSize()); cmd != nil {
-			return cmd
-		}
+		return a.scrollFocusedPanel(-a.halfPageSize())
 
 	case key.Matches(msg, a.keys.HalfPageDown):
-		if cmd := a.scrollFocusedPanel(a.halfPageSize()); cmd != nil {
-			return cmd
-		}
+		return a.scrollFocusedPanel(a.halfPageSize())
 
 	case key.Matches(msg, a.keys.Help):
 		a.help.SetEntries(help.FromKeyMap(a.keys))
@@ -364,6 +357,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		// Number keys 1-9 switch workspaces.
 		keyStr := msg.String()
 		if len(keyStr) == 1 && keyStr[0] >= '1' && keyStr[0] <= '9' {
+			if a.compose.Uploading() || a.threadCompose.Uploading() {
+				return toastWithClear(a, "Upload in progress", 2*time.Second)
+			}
 			idx := int(keyStr[0] - '1') // 0-indexed
 			if idx < len(a.workspaceItems) && a.workspaceSvc != nil {
 				if a.workspaceItems[idx].ID != a.workspaceRail.SelectedID() {

@@ -28,7 +28,7 @@ func onMessageMentionFixture(t *testing.T, chType, activeChannelID string) (*rtm
 		workspaceID:     "T1",
 		currentUserID:   "USELF",
 		channelTypes:    map[string]string{"C1": chType},
-		userNames:       map[string]string{},
+		userNames:       newUserNameStore(nil),
 		channelNames:    map[string]string{"C1": "general"},
 		isActive:        func() bool { return false }, // stop before the UI dispatch
 		activeChannelID: func() string { return activeChannelID },

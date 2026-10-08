@@ -24,8 +24,7 @@ import (
 // nil — the handler must guard all three.
 func TestOnConversationOpened_AppendsAndSends(t *testing.T) {
 	wctx := &WorkspaceContext{
-		BotUserIDs:        map[string]bool{},
-		UserNames:         map[string]string{},
+		UserNames:         newUserNameStore(nil),
 		UserNamesByHandle: map[string]string{},
 		Channels:          []sidebar.ChannelItem{{ID: "C1", Name: "general", Type: "channel"}},
 		FinderItems:       []core.ChannelFinderItem{{ID: "C1", Name: "general", Type: "channel", Joined: true}},
@@ -68,8 +67,7 @@ func TestOnConversationOpened_SeedsDMStatusFromCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	wctx := &WorkspaceContext{
-		BotUserIDs:        map[string]bool{},
-		UserNames:         map[string]string{"U1": "alice"},
+		UserNames:         newUserNameStore(map[string]string{"U1": "alice"}),
 		UserNamesByHandle: map[string]string{},
 	}
 	h := &rtmEventHandler{
@@ -106,8 +104,7 @@ func TestOnConversationOpened_SeedsDMStatusFromCache(t *testing.T) {
 // overwrite and FinderItems dedupe are the only behaviors that remain.
 func TestOnConversationOpened_DedupesByID(t *testing.T) {
 	wctx := &WorkspaceContext{
-		BotUserIDs:        map[string]bool{},
-		UserNames:         map[string]string{},
+		UserNames:         newUserNameStore(nil),
 		UserNamesByHandle: map[string]string{"alice": "Alice", "bob": "Bob"},
 		Channels: []sidebar.ChannelItem{
 			{ID: "G1", Name: "old", Type: "group_dm"},
@@ -152,8 +149,7 @@ func TestOnConversationOpened_DedupesByID(t *testing.T) {
 // beyond the scope of this task.
 func TestOnConversationOpened_InactiveWorkspace_PersistsContext(t *testing.T) {
 	wctx := &WorkspaceContext{
-		BotUserIDs:        map[string]bool{},
-		UserNames:         map[string]string{},
+		UserNames:         newUserNameStore(nil),
 		UserNamesByHandle: map[string]string{},
 	}
 	h := &rtmEventHandler{
@@ -377,8 +373,7 @@ func (f sendFunc) Send(msg tea.Msg) { f(msg) }
 func TestOnMessage_UnknownConversation_AddsItUnread(t *testing.T) {
 	db := newTestDB(t)
 	wctx := &WorkspaceContext{
-		BotUserIDs:        map[string]bool{},
-		UserNames:         map[string]string{},
+		UserNames:         newUserNameStore(nil),
 		UserNamesByHandle: map[string]string{},
 	}
 	var sent []string
@@ -438,8 +433,7 @@ func TestOnMessage_UnknownConversation_RetryDependsOnFailure(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			wctx := &WorkspaceContext{
-				BotUserIDs:        map[string]bool{},
-				UserNames:         map[string]string{},
+				UserNames:         newUserNameStore(nil),
 				UserNamesByHandle: map[string]string{},
 			}
 			lookups := 0

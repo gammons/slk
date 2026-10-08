@@ -24,8 +24,12 @@ type Model struct {
 	// show as unread (mute-filtered) or one unread subscribed thread
 	// (what the sidebar's Threads badge counts); see
 	// railUnreadWorkspaces in cmd/slk. Set by App via SetUnreadReader;
-	// called by RefreshUnreads and OtherUnreadCount.
+	// called only by RefreshUnreads, since it queries SQLite on the UI
+	// goroutine.
 	unreadReader func() []string
+	// lastUnread is the set the last RefreshUnreads read, which
+	// OtherUnreadCount counts.
+	lastUnread []string
 }
 
 // Version returns a counter that increments any time the View() output could
@@ -58,8 +62,9 @@ func (m *Model) NameByID(id string) string {
 }
 
 // OtherUnreadCount returns the number of workspaces with unreads,
-// excluding activeID. Reads through the installed unreadReader; returns
-// 0 when no reader is set. Deciding what counts is the reader's job,
+// excluding activeID, as of the last RefreshUnreads; 0 before any. It
+// does not call the reader itself, so a refresh followed by this call
+// reads it once. Deciding what counts is the reader's job,
 // not this method's: it applies the sidebar's IsVisiblyUnread predicate
 // per workspace and asks the same thread query the Threads badge uses,
 // so the title's "+N" and the rail dots agree with each workspace's
@@ -67,11 +72,8 @@ func (m *Model) NameByID(id string) string {
 // channels only; "+N" counts workspaces, and a workspace whose only
 // unread is a thread counts.
 func (m *Model) OtherUnreadCount(activeID string) int {
-	if m.unreadReader == nil {
-		return 0
-	}
 	count := 0
-	for _, id := range m.unreadReader() {
+	for _, id := range m.lastUnread {
 		if id != activeID {
 			count++
 		}
@@ -125,6 +127,9 @@ func (m *Model) SetUnread(teamID string, hasUnread bool) {
 // SetUnreadReader installs the callback used by RefreshUnreads.
 func (m *Model) SetUnreadReader(f func() []string) {
 	m.unreadReader = f
+	if f == nil {
+		m.lastUnread = nil
+	}
 }
 
 // RefreshUnreads pulls the latest set of workspaces-with-unreads from
@@ -134,8 +139,9 @@ func (m *Model) RefreshUnreads() {
 	if m.unreadReader == nil {
 		return
 	}
+	m.lastUnread = m.unreadReader()
 	set := make(map[string]bool, len(m.items))
-	for _, id := range m.unreadReader() {
+	for _, id := range m.lastUnread {
 		set[id] = true
 	}
 	changed := false

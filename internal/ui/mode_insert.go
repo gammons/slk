@@ -6,9 +6,8 @@
 // compose or thread compose, depending on focusedPanel + thread
 // visibility). It also owns:
 //
-//   - Esc with active upload     -> "Upload in progress" toast (Esc
-//     doesn't cancel an in-flight
-//     upload).
+//   - Any key with active upload -> "Upload in progress" toast (no
+//     draft mutations or sends while an upload is in flight).
 //   - Esc with active edit       -> close any open compose picker
 //     first, else cancel the edit.
 //   - Esc otherwise              -> close any open compose picker
@@ -42,7 +41,11 @@ import (
 )
 
 func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
-	if (a.compose.Uploading() || a.threadCompose.Uploading()) && key.Matches(msg, a.keys.Escape) {
+	if a.compose.Uploading() || a.threadCompose.Uploading() {
+		// An upload is in flight: no insert-mode key may mutate the
+		// in-flight caption or send through the other composer. A
+		// single early return covers every key (Esc included),
+		// replacing the former Esc-only guard.
 		return toastWithClear(a, "Upload in progress", 2*time.Second)
 	}
 	if a.editing.IsActive() && key.Matches(msg, a.keys.Escape) {
@@ -251,11 +254,15 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		text := a.compose.Value()
 		if text != "" {
 			text = a.compose.TranslateMentionsForSend(text)
+			// Capture the target channel before the reset/closure:
+			// a.activeChannelID may mutate before the deferred cmd
+			// runs, so the send must use this local snapshot.
+			channelID := a.activeChannelID
 			a.compose.Reset()
 			a.exitInsertAfterSend()
 			return func() tea.Msg {
 				return SendMessageMsg{
-					ChannelID: a.activeChannelID,
+					ChannelID: channelID,
 					Text:      text,
 				}
 			}

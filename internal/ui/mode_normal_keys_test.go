@@ -805,8 +805,7 @@ func TestNormalModeKeys(t *testing.T) {
 		},
 
 		// -------------------------------------------------------------
-		// Arms 15 & 16: NavBack `ctrl+h` / NavForward `ctrl+k`
-		// (mode_normal.go:145, :150)
+		// Arms 15 & 16: NavBack `ctrl+h` / NavForward `ctrl+l` (alias `ctrl+k`)
 		// -------------------------------------------------------------
 		{
 			name:     "ctrl+h walks the nav history backward",
@@ -827,30 +826,8 @@ func TestNormalModeKeys(t *testing.T) {
 				}
 			},
 		},
-		{
-			name: "ctrl+k walks the nav history forward",
-			opts: append(normalOpts(), withActiveTeam("T1"), navLookupOpt()),
-			setup: func(t *testing.T, a *App) {
-				seedNavHistory(t, a)
-				if _, _, _, ok := a.navHistory.Walk("T1", -1, a.channels.Lookup); !ok {
-					t.Fatal("precondition: could not step back before stepping forward")
-				}
-			},
-			key:      keyMod('k', tea.ModCtrl),
-			wantMode: ModeNormal,
-			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
-				if cmd == nil {
-					t.Fatal("cmd = nil, want a ChannelSelectedMsg cmd")
-				}
-				msg, ok := cmd().(ChannelSelectedMsg)
-				if !ok {
-					t.Fatalf("cmd() = %#v, want ChannelSelectedMsg", cmd())
-				}
-				if msg.ID != "C2" || !msg.FromHistory {
-					t.Errorf("cmd() = %+v, want {ID:C2 FromHistory:true}", msg)
-				}
-			},
-		},
+		navForwardCase("ctrl+l walks the nav history forward", 'l'),
+		navForwardCase("ctrl+k (alias) walks the nav history forward", 'k'),
 		{
 			// The arm's `if cmd != nil` guard falls THROUGH on an empty
 			// stack rather than returning, so the switch ends at the
@@ -1124,7 +1101,8 @@ func TestNormalModeKeys(t *testing.T) {
 
 		// -------------------------------------------------------------
 		// Arms 24-27: PageUp / PageDown / HalfPageUp / HalfPageDown
-		// (mode_normal.go:190, :195, :200, :205)
+		//
+		// All four return scrollFocusedPanel's result directly.
 		//
 		// Each row pins the EXACT viewport delta, which is the only way
 		// to separate the page arms from the half-page arms: both move
@@ -1165,10 +1143,10 @@ func TestNormalModeKeys(t *testing.T) {
 			assert:   wantYOffset(func(a *App) int { return 400 - a.halfPageSize() }),
 		},
 		{
-			// The `if cmd != nil` inner branch of the PageUp arm.
-			// scrollFocusedPanel returns a cmd only when an up-scroll
-			// lands the viewport at line 0 (app.go:1486), which kicks
-			// the older-history backfill.
+			// The PageUp arm's non-nil cmd. scrollFocusedPanel returns
+			// a cmd only when a messages-pane up-scroll lands the
+			// viewport at line 0, which kicks the older-history
+			// backfill (maybeFetchOlderHistory).
 			name:     "pgup that lands the viewport at the top kicks the history backfill",
 			opts:     normalOpts(),
 			setup:    scrollTo(2),
@@ -1190,7 +1168,7 @@ func TestNormalModeKeys(t *testing.T) {
 			},
 		},
 		{
-			// Same inner branch for the HalfPageUp arm.
+			// Same non-nil cmd for the HalfPageUp arm.
 			name:     "ctrl+u that lands the viewport at the top kicks the history backfill",
 			opts:     normalOpts(),
 			setup:    scrollTo(1),
@@ -1206,15 +1184,15 @@ func TestNormalModeKeys(t *testing.T) {
 			},
 		},
 		{
-			// BUG?-adjacent, recorded rather than fixed: the
-			// `if cmd := ...; cmd != nil { return cmd }` wrappers on the
-			// PageDown (mode_normal.go:196) and HalfPageDown (:206) arms
-			// are unreachable. scrollFocusedPanel returns a non-nil cmd
-			// on exactly one path -- the messages-pane UP-scroll backfill
-			// at app.go:1486 -- so for a positive delta it always returns
-			// nil and the wrapper falls through to the switch's bottom
-			// `return nil`. Same observable either way; this row pins the
-			// nil so a future change to that helper has a witness.
+			// scrollFocusedPanel returns a non-nil cmd on exactly one
+			// path -- the messages-pane UP-scroll backfill -- so a
+			// positive delta always yields nil. The PageDown and
+			// HalfPageDown arms used to wrap the call in an unreachable
+			// `if cmd != nil { return cmd }`; all four arms now return
+			// the result directly
+			// (https://github.com/gammons/slk/issues/188, item 3). This
+			// row pins the nil so a future change to that helper has a
+			// witness.
 			name:     "pgdown never returns a cmd: the down path has no backfill",
 			opts:     normalOpts(),
 			setup:    scrollTo(0),
@@ -2409,6 +2387,35 @@ func navLookupOpt() testOpt {
 			return "", "", false
 		},
 	})
+}
+
+// navForwardCase builds the NavForward row for one of its keys: seed
+// [C1 C2], step back to C1, then ctrl+<r> must step forward to C2.
+func navForwardCase(name string, r rune) keyCase {
+	return keyCase{
+		name: name,
+		opts: append(normalOpts(), withActiveTeam("T1"), navLookupOpt()),
+		setup: func(t *testing.T, a *App) {
+			seedNavHistory(t, a)
+			if _, _, _, ok := a.navHistory.Walk("T1", -1, a.channels.Lookup); !ok {
+				t.Fatal("precondition: could not step back before stepping forward")
+			}
+		},
+		key:      keyMod(r, tea.ModCtrl),
+		wantMode: ModeNormal,
+		assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+			if cmd == nil {
+				t.Fatal("cmd = nil, want a ChannelSelectedMsg cmd")
+			}
+			msg, ok := cmd().(ChannelSelectedMsg)
+			if !ok {
+				t.Fatalf("cmd() = %#v, want ChannelSelectedMsg", cmd())
+			}
+			if msg.ID != "C2" || !msg.FromHistory {
+				t.Errorf("cmd() = %+v, want {ID:C2 FromHistory:true}", msg)
+			}
+		},
+	}
 }
 
 // seedNavHistory pushes C1 then C2 for team T1, leaving the cursor on

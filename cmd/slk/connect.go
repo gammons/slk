@@ -79,10 +79,9 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		TeamID:               client.TeamID(),
 		TeamName:             token.TeamName,
 		UserID:               client.UserID(),
-		UserNames:            make(map[string]string),
+		UserNames:            newUserNameStore(nil),
 		AvatarURLs:           &sync.Map{},
 		UserNamesByHandle:    make(map[string]string),
-		BotUserIDs:           make(map[string]bool),
 		LastVisitedByChannel: make(map[string]int64),
 		ThreadSubsGate:       threadSubsGate{window: threadSubsSyncInterval},
 	}
@@ -97,12 +96,12 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		if name == "" {
 			name = u.Name
 		}
-		wctx.UserNames[u.ID] = name
+		wctx.UserNames.Set(u.ID, name)
 		if u.Name != "" {
 			wctx.UserNamesByHandle[u.Name] = name
 		}
 		if u.IsBot {
-			wctx.BotUserIDs[u.ID] = true
+			wctx.MarkBotUser(u.ID)
 		}
 		// Record the avatar URL for lazy fetch on first render.
 		//
@@ -124,11 +123,11 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	}
 
 	// Construct the per-workspace async user resolver. It writes
-	// resolved display names to the cache DB and emits
-	// UserResolvedMsg back into the bubbletea program; the UI's
-	// Update handler patches the in-memory userNames map on the
-	// UI goroutine via Model.PatchUserName (the single safe writer
-	// for that shared map). p may be nil in tests, in which case
+	// resolved display names to the cache DB and the name store, and
+	// emits UserResolvedMsg back into the bubbletea program; the UI's
+	// Update handler patches its own name map on the UI goroutine
+	// via Model.PatchUserName. The UI's map is a snapshot of
+	// wctx.UserNames, never the store itself. p may be nil in tests, in which case
 	// the resolver's send callback is a no-op.
 	wctx.UserResolver = newUserResolver(
 		wctx.TeamID,
@@ -142,6 +141,7 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		},
 		wctx.Edge, wctx.EdgeHealth.Degraded,
 	)
+	wctx.UserResolver.names = wctx.UserNames
 
 	// Refetches other users' custom status and DND on the socket's
 	// ID-only user_invalidated / dnd_invalidated events. known reads the
@@ -216,7 +216,7 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		return nil, fmt.Errorf("bootstrapping %s: %w", token.TeamName, err)
 	}
 	// Order matters between these two: applyBootUsers fills
-	// wctx.BotUserIDs, which buildChannelItem reads to bucket app DMs,
+	// the synchronized bot classification, which buildChannelItem reads to bucket app DMs,
 	// and hydrateFirstSight writes the cache rows the sidebar's
 	// channel list is later reconciled against.
 	applyBootUsers(wctx, res)
@@ -303,7 +303,7 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	//
 	// A users.list sweep used to run in the background at this point,
 	// paginating the entire directory — ~50 pages on a 10k-user
-	// workspace — to fill UserNames, UserNamesByHandle, BotUserIDs and
+	// workspace — to fill UserNames, UserNamesByHandle, bot classification and
 	// the users cache. The official web client issues users.list zero
 	// times across all 8 captures, and it is the clearest single
 	// "scraping" signal slk emitted. Four sources cover the same
@@ -360,7 +360,7 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		upsertChannelInDB(db, ch, item.Type, client.TeamID())
 
 		if ch.IsIM {
-			if _, ok := wctx.UserNames[ch.User]; !ok {
+			if _, ok := wctx.UserNames.Get(ch.User); !ok {
 				wctx.UnresolvedDMs = append(wctx.UnresolvedDMs, UnresolvedDM{
 					ChannelID: ch.ID,
 					UserID:    ch.User,

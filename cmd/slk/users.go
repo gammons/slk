@@ -11,17 +11,15 @@ import (
 )
 
 // lookupUserCached returns the display name for userID using only
-// local sources: the in-memory userNames map and the cached users
-// table. Never hits the network and NEVER writes to userNames — safe
-// to call from goroutines off the UI loop (e.g. the search cmd),
-// where a map write would race the UI goroutine (see the
-// concurrent-map-writes note on userResolver.Request). Returns
-// ("", false) when the user is unknown.
-func lookupUserCached(userID string, userNames map[string]string, db *cache.DB) (string, bool) {
+// local sources: the in-memory name store and the cached users
+// table. Never hits the network and never records the result —
+// resolveUserCached is the memoizing variant. Returns ("", false)
+// when the user is unknown.
+func lookupUserCached(userID string, userNames *userNameStore, db *cache.DB) (string, bool) {
 	if userID == "" {
 		return "", false
 	}
-	if name, ok := userNames[userID]; ok && name != "" {
+	if name, ok := userNames.Get(userID); ok && name != "" {
 		return name, true
 	}
 	if db != nil {
@@ -38,16 +36,17 @@ func lookupUserCached(userID string, userNames map[string]string, db *cache.DB) 
 	return "", false
 }
 
-// resolveUserCached is lookupUserCached plus map memoization: a DB hit
-// is written back to userNames so subsequent lookups skip SQLite.
-// UI-goroutine callers only — the map write is what lookupUserCached
-// exists to avoid. Returns ("", false) when the user is unknown —
-// caller is expected to fall back to userID-as-name and enqueue an
-// async lookup via wctx.UserResolver.Request.
-func resolveUserCached(userID string, userNames map[string]string, db *cache.DB) (string, bool) {
+// resolveUserCached is lookupUserCached plus memoization: a DB hit is
+// recorded in the store so subsequent lookups skip SQLite. Safe from
+// any goroutine (the store is locked). Recording it is also how the
+// name reaches the UI, if the UI has not seen it: the store reports
+// new names (see userNameStore). Returns ("", false) when the user is
+// unknown — caller is expected to fall back to userID-as-name and
+// enqueue an async lookup via wctx.UserResolver.Request.
+func resolveUserCached(userID string, userNames *userNameStore, db *cache.DB) (string, bool) {
 	name, ok := lookupUserCached(userID, userNames, db)
 	if ok {
-		userNames[userID] = name
+		userNames.Set(userID, name)
 	}
 	return name, ok
 }
@@ -61,8 +60,13 @@ func resolveUserCached(userID string, userNames map[string]string, db *cache.DB)
 // and return false. Callers that care (the unresolved-DM goroutine)
 // only invoke resolveUser for users not yet in the cache, so the
 // fast-path miss is irrelevant for them.
-func resolveUser(client *slackclient.Client, userID string, userNames map[string]string, db *cache.DB, avatarCache *avatar.Cache, send func(tea.Msg)) (string, bool) {
-	if name, ok := userNames[userID]; ok {
+//
+// Runs on the DM-sweep goroutine. A name fetched from the network is
+// recorded in the store (which reports it to the UI once notifying) and
+// also sent as UserResolvedMsg directly, so the sweep works before the
+// store's notifier is installed.
+func resolveUser(client *slackclient.Client, userID string, userNames *userNameStore, db *cache.DB, avatarCache *avatar.Cache, send func(tea.Msg)) (string, bool) {
+	if name, ok := userNames.Get(userID); ok {
 		// Check if avatar is also cached
 		if avatarCache.Get(userID) == "" {
 			// Have name but no avatar — try to fetch profile for avatar URL
@@ -98,7 +102,7 @@ func resolveUser(client *slackclient.Client, userID string, userNames map[string
 		}
 		isBot := u.IsBot || u.IsAppUser
 		isExternal := u.TeamID != "" && u.TeamID != client.TeamID()
-		userNames[userID] = name
+		userNames.Set(userID, name)
 		avatarCache.Preload(userID, u.Profile.Image32)
 		db.UpsertUser(cache.User{
 			ID:          userID,
@@ -111,6 +115,14 @@ func resolveUser(client *slackclient.Client, userID string, userNames map[string
 			IsExternal:  isExternal,
 		})
 		applyProfileStatus(client.TeamID(), userID, u.Profile, db, send)
+		if send != nil {
+			send(ui.UserResolvedMsg{
+				TeamID:      client.TeamID(),
+				UserID:      userID,
+				DisplayName: name,
+				IsBot:       isBot,
+			})
+		}
 		return name, isBot
 	}
 	return userID, false
@@ -151,7 +163,7 @@ func resolveDMNames(wctx *WorkspaceContext, db *cache.DB, avatarCache *avatar.Ca
 				// field on this endpoint, so none is invented; the
 				// per-user fallback below classifies the ids edge missed.
 				if u.IsBot {
-					wctx.BotUserIDs[dm.UserID] = true
+					wctx.MarkBotUser(dm.UserID)
 				}
 				if send != nil {
 					send(ui.DMNameResolvedMsg{
@@ -170,7 +182,7 @@ func resolveDMNames(wctx *WorkspaceContext, db *cache.DB, avatarCache *avatar.Ca
 		}
 		resolved, isBot := resolveUser(wctx.Client, dm.UserID, wctx.UserNames, db, avatarCache, send)
 		if isBot {
-			wctx.BotUserIDs[dm.UserID] = true
+			wctx.MarkBotUser(dm.UserID)
 		}
 		if resolved != dm.UserID && send != nil {
 			send(ui.DMNameResolvedMsg{
@@ -189,7 +201,7 @@ func resolveDMNames(wctx *WorkspaceContext, db *cache.DB, avatarCache *avatar.Ca
 // username for the name, and enqueue a bots.info lookup for the avatar
 // (and a name fallback). The returned userID is what both the cache row
 // and the MessageItem are keyed on so the avatar pipeline can attach.
-func messageAuthor(m slack.Message, userNames map[string]string, db *cache.DB, router *workspaceRouter) (userID, userName string) {
+func messageAuthor(m slack.Message, userNames *userNameStore, db *cache.DB, router *workspaceRouter) (userID, userName string) {
 	if m.User != "" {
 		name, ok := resolveUserCached(m.User, userNames, db)
 		if !ok {

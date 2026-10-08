@@ -31,12 +31,11 @@ func handleWorkspaceSearchMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		search := a.searchSvc
 		return func() tea.Msg { return search.SearchWorkspace(query) }
 	case searchresults.ActionSelect:
-		item, ok := a.searchResults.Selected()
+		// HandleKey only returns ActionSelect when Selected() reports a
+		// hit, so ok is guaranteed here. Read it before Close resets it.
+		item, _ := a.searchResults.Selected()
 		a.searchResults.Close()
 		a.SetMode(ModeNormal)
-		if !ok {
-			return nil
-		}
 		if item.ChannelID == a.activeChannelID {
 			a.pendingLinkNav = &pendingLinkNav{
 				channelID: item.ChannelID,

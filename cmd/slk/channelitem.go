@@ -48,10 +48,10 @@ func buildChannelItem(ch slack.Channel, wctx *WorkspaceContext, cfg config.Confi
 	if ch.IsIM {
 		// Slack returns the same is_im=true for human DMs and app DMs;
 		// the only differentiator is the peer user's IsBot/IsAppUser
-		// flag, which we look up via the cache-seeded BotUserIDs set.
+		// flag, which we look up via the synchronized workspace classification.
 		// Unknown peers default to "dm" and are reclassified later by
 		// the resolveUser path.
-		if wctx.BotUserIDs[ch.User] {
+		if wctx.IsBotUser(ch.User) {
 			chType = "app"
 		} else {
 			chType = "dm"
@@ -64,7 +64,7 @@ func buildChannelItem(ch slack.Channel, wctx *WorkspaceContext, cfg config.Confi
 
 	displayName := ch.Name
 	if ch.IsIM {
-		if resolved, ok := wctx.UserNames[ch.User]; ok {
+		if resolved, ok := wctx.UserNames.Get(ch.User); ok {
 			displayName = resolved
 		} else {
 			displayName = ch.User

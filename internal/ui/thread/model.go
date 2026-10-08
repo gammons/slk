@@ -731,24 +731,22 @@ func (m *Model) invalidateAuthors() {
 // PatchUserName updates the in-memory userNames map (used for @mention
 // rendering) and overwrites the UserName field on the parent message
 // and every cached reply authored by userID. Always invalidates the
-// render cache after a map change so mentions of <@userID> in other
-// authors' text re-resolve. Idempotent: no-op when the name is
-// unchanged.
+// render cache so mentions of <@userID> in other authors' text
+// re-resolve.
 //
-// Mirrors messages.Model.PatchUserName. Used by the async user-
-// resolution path: history fetchers stash MessageItem.UserName =
-// m.UserID for unknown authors. When the resolution returns
-// asynchronously, the App calls PatchUserName to replace the
-// placeholders live without re-fetching the thread.
+// Mirrors messages.Model.PatchUserName, including why it always
+// applies: the map is normally the App's, shared by every pane and
+// already holding the name by the time this pane is patched. Used by
+// the async user-resolution path: history fetchers stash
+// MessageItem.UserName = m.UserID for unknown authors. When the
+// resolution returns asynchronously, the App calls PatchUserName to
+// replace the placeholders live without re-fetching the thread.
 func (m *Model) PatchUserName(userID, displayName string) {
 	if userID == "" {
 		return
 	}
 	if m.userNames == nil {
 		m.userNames = map[string]string{}
-	}
-	if m.userNames[userID] == displayName {
-		return
 	}
 	m.userNames[userID] = displayName
 	// The render cache stores rows with their mentions already resolved
@@ -1485,6 +1483,18 @@ func (m *Model) View(height, width int) string {
 	// in the per-reply loop below.
 	parentIsSelected := m.selected == parentSelected
 	parentContent, _, _, parentHeader, parentHeaderBudget := m.renderThreadMessage(m.parent, width, m.userNames, m.channelNames, parentIsSelected)
+	// Replies only get a day divider when their day differs from the
+	// parent's, so the parent header carries its own date; otherwise a
+	// thread whose first replies share the parent's day shows no date.
+	// Before m.parentEntry, so the plain mirror (copy, drag highlight)
+	// matches what is drawn. Skipped when the header would not fit, and
+	// for a summary-built parent that has no time yet.
+	if !parentIsSelected && m.parent.Timestamp != "" {
+		if date := messages.DateFromTS(m.parent.TS); date != "" {
+			dated := messages.FormatShortDate(date) + ", " + m.parent.Timestamp
+			parentContent = messages.ReplaceHeaderTimestamp(parentContent, parentHeader, m.parent.Timestamp, dated, parentHeaderBudget)
+		}
+	}
 	m.parentEntry = viewEntry{
 		linesPlain:       messages.PlainLines(parentContent),
 		height:           lipgloss.Height(parentContent),

@@ -31,6 +31,17 @@ var (
 	linkBareRe      = regexp.MustCompile(`<((?:https?://|mailto:)[^>]+)>`)
 )
 
+// MentionedUserIDs returns the user IDs of every <@U…> mention in text,
+// in order, duplicates included.
+func MentionedUserIDs(text string) []string {
+	matches := userMentionRe.FindAllStringSubmatch(text, -1)
+	ids := make([]string, 0, len(matches))
+	for _, m := range matches {
+		ids = append(ids, m[1])
+	}
+	return ids
+}
+
 // StripMarkup converts Slack mrkdwn to plain text, resolving user mentions
 // against userNames. Bare <!subteam^ID> tokens can't be resolved without a
 // usergroup map, so they fall back to "@group"; use StripMarkupWithUserGroups

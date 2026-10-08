@@ -79,7 +79,7 @@ func TestLoadCachedMessagesEnrichesFromCache(t *testing.T) {
 		t.Fatalf("UpsertReaction: %v", err)
 	}
 
-	userNames := map[string]string{"UAUTHOR": "alice"}
+	userNames := newUserNameStore(map[string]string{"UAUTHOR": "alice"})
 
 	got := loadCachedMessages(db, selfUserID, channelID, userNames, "3:04 PM", nil)
 	if got == nil {
@@ -139,7 +139,7 @@ func TestLoadCachedMessagesEnrichesFromCache(t *testing.T) {
 func TestLoadCachedMessagesReturnsNilOnEmptyChannel(t *testing.T) {
 	db := newCacheForTest(t)
 
-	got := loadCachedMessages(db, "USELF", "C-empty", map[string]string{}, "3:04 PM", nil)
+	got := loadCachedMessages(db, "USELF", "C-empty", newUserNameStore(nil), "3:04 PM", nil)
 	if got != nil {
 		t.Errorf("expected nil for channel with no cached rows, got %d items", len(got))
 	}
@@ -170,7 +170,7 @@ func TestLoadCachedMessagesHandlesMissingRawJSON(t *testing.T) {
 		t.Fatalf("UpsertMessage: %v", err)
 	}
 
-	got := loadCachedMessages(db, "USELF", channelID, map[string]string{"UAUTHOR": "alice"}, "3:04 PM", nil)
+	got := loadCachedMessages(db, "USELF", channelID, newUserNameStore(map[string]string{"UAUTHOR": "alice"}), "3:04 PM", nil)
 	if got == nil {
 		t.Fatal("expected one cached message, got nil")
 	}

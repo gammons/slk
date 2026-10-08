@@ -15,10 +15,10 @@ import (
 
 func handleConfirmMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	keyStr := msg.String()
-	switch msg.Key().Code {
-	case tea.KeyEscape:
-		keyStr = "esc"
-	case tea.KeyEnter:
+	// Collapse a modified Enter ("shift+enter") to "enter" so it
+	// confirms. Escape needs no such arm: confirmprompt cancels on
+	// every key it does not recognise.
+	if msg.Key().Code == tea.KeyEnter {
 		keyStr = "enter"
 	}
 

@@ -34,9 +34,8 @@ func searchWorkspaceFunc(router *workspaceRouter, db *cache.DB, tsFormat string)
 		if err != nil {
 			return ui.WorkspaceSearchResultsMsg{Query: query, Err: err}
 		}
-		// Read-only lookup: this closure runs in a bubbletea cmd
-		// goroutine, so it must not write wctx.UserNames (shared with
-		// the UI goroutine; see userResolver.Request).
+		// Read-only lookup: there is no reason for a search to
+		// populate the name store.
 		resolveUser := func(id string) (string, bool) {
 			return lookupUserCached(id, wctx.UserNames, db)
 		}

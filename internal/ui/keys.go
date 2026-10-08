@@ -132,11 +132,13 @@ func DefaultKeyMap() KeyMap {
 		PresenceMenu:        key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "set status")),
 		ToggleSection:       key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "toggle section")),
 		NavBack:             key.NewBinding(key.WithKeys("ctrl+h"), key.WithHelp("ctrl+h", "navigate back")),
-		NavForward:          key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "navigate forward")),
-		Help:                key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "show keybindings")),
-		SaveThread:          key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "save thread")),
-		ListReactions:       key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "list reactions")),
-		UserProfile:         key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "show author's profile")),
+		// ctrl+k was the original forward key. It stays bound for
+		// existing users but is left out of the help overlay.
+		NavForward:    key.NewBinding(key.WithKeys("ctrl+l", "ctrl+k"), key.WithHelp("ctrl+l", "navigate forward")),
+		Help:          key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "show keybindings")),
+		SaveThread:    key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "save thread")),
+		ListReactions: key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "list reactions")),
+		UserProfile:   key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "show author's profile")),
 		// Window commands (design §4). WindowPrefix is the only real
 		// binding; the Win* entries are keyless help-only bindings
 		// (same trick as WorkspaceFinder above) — actual dispatch of

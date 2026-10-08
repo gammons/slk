@@ -47,3 +47,40 @@ func TestWorkspaceSwitched_RefreshesPeerDNDAfterSwitchApplies(t *testing.T) {
 	}
 	t.Fatal("D1 not found in sidebar after switch")
 }
+
+// TestWorkspaceSwitched_RunsAfterSwitchOnceActive: cmd/slk starts
+// reporting the workspace's newly learned names from AfterSwitch, and
+// the reducer drops UserResolvedMsg for any team but the active one. So
+// AfterSwitch must be in the returned batch (not run inline), and a
+// name it reports must land, i.e. activeTeamID is already the new team
+// when it runs.
+func TestWorkspaceSwitched_RunsAfterSwitchOnceActive(t *testing.T) {
+	app := NewApp()
+	app.activeTeamID = "T1"
+	ranInline := false
+	_, cmd := app.Update(WorkspaceSwitchedMsg{
+		TeamID:    "T2",
+		UserNames: map[string]string{},
+		AfterSwitch: func() tea.Msg {
+			ranInline = true
+			return UserResolvedMsg{TeamID: "T2", UserID: "U9", DisplayName: "Nina"}
+		},
+	})
+	if ranInline {
+		t.Fatal("AfterSwitch ran inside Update; it must be returned as a cmd")
+	}
+
+	var resolved *UserResolvedMsg
+	for _, m := range drainBatch(cmd) {
+		if r, ok := m.(UserResolvedMsg); ok {
+			resolved = &r
+		}
+	}
+	if resolved == nil {
+		t.Fatal("switch cmd did not include AfterSwitch's message")
+	}
+	app.Update(*resolved)
+	if got := app.threadPanel.UserNames()["U9"]; got != "Nina" {
+		t.Errorf("thread panel name for U9 = %q after AfterSwitch's UserResolvedMsg; want Nina (dropped as another team's?)", got)
+	}
+}

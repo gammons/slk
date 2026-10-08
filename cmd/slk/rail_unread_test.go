@@ -141,9 +141,8 @@ func TestRailUnreadWorkspaces(t *testing.T) {
 func TestRailUnreadWorkspaces_MuteStoreNotReady(t *testing.T) {
 	wctx := &WorkspaceContext{
 		MuteStore:         service.NewMuteStore(), // never bootstrapped: Ready() == false
-		UserNames:         map[string]string{},
+		UserNames:         newUserNameStore(nil),
 		UserNamesByHandle: map[string]string{},
-		BotUserIDs:        map[string]bool{},
 	}
 	ch := slack.Channel{
 		GroupConversation: slack.GroupConversation{
@@ -234,9 +233,8 @@ func TestRailUnreadWorkspaces_ArchivedChannelInCache(t *testing.T) {
 	}
 
 	wctx := &WorkspaceContext{
-		UserNames:         map[string]string{},
+		UserNames:         newUserNameStore(nil),
 		UserNamesByHandle: map[string]string{},
-		BotUserIDs:        map[string]bool{},
 	}
 	for _, ch := range bootConversations(res) {
 		item, _ := buildChannelItem(ch, wctx, config.Config{}, "T1")

@@ -14,6 +14,8 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/styles"
 )
@@ -319,5 +321,89 @@ func TestNewMessage_InboundThreadBroadcastRendersInChannelFeed(t *testing.T) {
 	}
 	if got := app.threadPanel.Replies()[0].TS; got != "1700000050.000200" {
 		t.Errorf("thread reply TS = %q, want 1700000050.000200", got)
+	}
+}
+
+// TestOpenThread_FromBroadcastRowUsesRealParent pins the fix for
+// opening a thread from its thread_broadcast row in the channel feed:
+// the panel's parent must be the thread's actual parent message, not
+// the broadcast reply itself (which would then render twice — once as
+// the "parent" and once as the reply). Driven by a real Enter through
+// Update so the key wiring is covered, not just the helper.
+func TestOpenThread_FromBroadcastRowUsesRealParent(t *testing.T) {
+	parent := messages.MessageItem{TS: "1700000000.000100", UserID: "U1", Text: "parent discussion"}
+	broadcast := messages.MessageItem{
+		TS: "1700000050.000200", UserID: "U2", Text: "tuletan kord veel meelde!",
+		ThreadTS: "1700000000.000100", Subtype: "thread_broadcast",
+	}
+	app := newTestApp(t, withSize(120, 30), withMessages(parent, broadcast), withActiveChannel("C1"), withRender())
+	app.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) core.Msg {
+		return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS), Replies: []messages.MessageItem{broadcast}}
+	})
+
+	// Selection defaults to the newest row — the broadcast.
+	focusMessages(t, app)
+	if sel, _ := app.messagepane.SelectedMessage(); sel.TS != broadcast.TS {
+		t.Fatalf("precondition: selected TS = %q, want broadcast %q", sel.TS, broadcast.TS)
+	}
+
+	_, cmd := app.Update(keyCode(tea.KeyEnter))
+	if !app.threadVisible {
+		t.Fatal("Enter on a broadcast row should open the thread panel")
+	}
+	if cmd == nil {
+		t.Fatal("Enter returned nil cmd, want the thread fetch")
+	}
+	if got := app.threadPanel.ThreadTS(); got != parent.TS {
+		t.Errorf("threadTS = %q, want parent %q", got, parent.TS)
+	}
+	if got := app.threadPanel.ParentMsg().TS; got != parent.TS {
+		t.Errorf("parent row TS = %q, want %q (got the broadcast reply as parent)", got, parent.TS)
+	}
+	for _, m := range drainBatch(cmd) {
+		app.Update(m)
+	}
+	if got := app.threadPanel.ParentMsg().TS; got != parent.TS {
+		t.Errorf("after replies load: parent row TS = %q, want %q", got, parent.TS)
+	}
+	if got := app.threadPanel.ReplyCount(); got != 1 {
+		t.Errorf("reply count = %d, want 1", got)
+	}
+}
+
+// TestThreadRepliesLoaded_ReplacesMismatchedParentFromCache pins the
+// reducer's safety net: a populated parent whose TS is not the thread's
+// TS is wrong by construction, and the fetch's cached thread must
+// replace it. Every open path already sets parent.TS == threadTS, so
+// this drives ThreadRepliesLoadedMsg against a hand-built panel.
+func TestThreadRepliesLoaded_ReplacesMismatchedParentFromCache(t *testing.T) {
+	parent := messages.MessageItem{TS: "1700000000.000100", UserID: "U1", Text: "parent discussion"}
+	reply := messages.MessageItem{
+		TS: "1700000050.000200", UserID: "U2", Text: "tuletan kord veel meelde!",
+		ThreadTS: parent.TS, Subtype: "thread_broadcast",
+	}
+	app := NewApp()
+	app.activeChannelID = "C1"
+	app.SetThreadService(core.NewThreadService(core.ThreadServiceFuncs{
+		CacheRead: func(ids.ChannelID, ids.ThreadTS) []messages.MessageItem {
+			return []messages.MessageItem{parent, reply}
+		},
+	}))
+	// Wrong-but-populated parent: the reply row itself, as the pre-fix
+	// open path used to supply. Text != "" so the stub backfill alone
+	// would leave it in place.
+	app.threadPanel.SetThread(reply, nil, "C1", parent.TS)
+	app.threadVisible = true
+
+	app.Update(ThreadRepliesLoadedMsg{ThreadTS: parent.TS, Replies: []messages.MessageItem{reply}})
+
+	if got := app.threadPanel.ParentMsg().TS; got != parent.TS {
+		t.Errorf("parent row TS = %q, want %q (mismatched parent not replaced from cache)", got, parent.TS)
+	}
+	if got := app.threadPanel.ParentMsg().Text; got != parent.Text {
+		t.Errorf("parent row text = %q, want %q", got, parent.Text)
+	}
+	if got := app.threadPanel.ReplyCount(); got != 1 {
+		t.Errorf("reply count = %d, want 1", got)
 	}
 }

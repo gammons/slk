@@ -50,6 +50,7 @@ func TestToastClear_StaleTickLeavesLaterToast(t *testing.T) {
 // clears on its own real tick, which takes the production 2s.
 func TestToastClear_UploadProgressOutlivesEarlierExpiry(t *testing.T) {
 	a := newTestApp(t)
+	a.compose.SetUploading(true)
 	themeCmd := toastWithClear(a, "Theme: Dracula", 10*time.Millisecond)
 
 	a.Update(UploadProgressMsg{Done: 1, Total: 3})

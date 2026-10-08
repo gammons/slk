@@ -11,7 +11,7 @@ import (
 // uses the message's username, so a name and avatar can attach — while
 // human messages keep resolving by user ID.
 func TestMessageAuthorBotIdentity(t *testing.T) {
-	userNames := map[string]string{}
+	userNames := newUserNameStore(nil)
 
 	// Bot message: empty user, bot_id + username present.
 	bot := slack.Message{Msg: slack.Msg{User: "", BotID: "B123", Username: "Deploybot"}}
@@ -24,7 +24,7 @@ func TestMessageAuthorBotIdentity(t *testing.T) {
 	}
 
 	// Human message: user present, name pre-cached (so no db/resolver needed).
-	userNames["U1"] = "Alice"
+	userNames.Set("U1", "Alice")
 	human := slack.Message{Msg: slack.Msg{User: "U1"}}
 	uid2, name2 := messageAuthor(human, userNames, nil, nil)
 	if uid2 != "U1" {

@@ -17,7 +17,7 @@ import (
 	"github.com/slack-go/slack"
 )
 
-func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, db *cache.DB, userNames map[string]string, tsFormat string, router *workspaceRouter) []messages.MessageItem {
+func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, db *cache.DB, userNames *userNameStore, tsFormat string, router *workspaceRouter) []messages.MessageItem {
 	ctx := context.Background()
 	debuglog.Cache("fetchOlderMessages: channel=%s latest_ts=%s entry", channelID, latestTS)
 	start := time.Now()
@@ -42,7 +42,7 @@ func fetchOlderMessages(client *slackclient.Client, channelID, latestTS string, 
 // window is empty — callers cannot distinguish the two from the
 // return value alone (the FetchAround closure treats both as
 // failure).
-func fetchMessagesAround(client *slackclient.Client, channelID, targetTS string, db *cache.DB, userNames map[string]string, tsFormat string, router *workspaceRouter) []messages.MessageItem {
+func fetchMessagesAround(client *slackclient.Client, channelID, targetTS string, db *cache.DB, userNames *userNameStore, tsFormat string, router *workspaceRouter) []messages.MessageItem {
 	ctx := context.Background()
 	debuglog.Cache("fetchMessagesAround: channel=%s target_ts=%s entry", channelID, targetTS)
 	start := time.Now()
@@ -66,7 +66,7 @@ func fetchMessagesAround(client *slackclient.Client, channelID, targetTS string,
 // messages.MessageItem, and reverses the slice from Slack's
 // newest-first order to the ascending-by-TS convention used
 // throughout slk.
-func convertAndCacheHistory(client *slackclient.Client, channelID string, history []slack.Message, db *cache.DB, userNames map[string]string, tsFormat string, router *workspaceRouter) []messages.MessageItem {
+func convertAndCacheHistory(client *slackclient.Client, channelID string, history []slack.Message, db *cache.DB, userNames *userNameStore, tsFormat string, router *workspaceRouter) []messages.MessageItem {
 	var msgItems []messages.MessageItem
 	for _, m := range history {
 		rawBytes, _ := json.Marshal(m)
@@ -165,7 +165,7 @@ func summarizeCachedRows(rows []cache.Message) string {
 // unknown user IDs render with their userID as a fallback rather than
 // triggering a fresh GetUserProfile RPC. Resolving them on-demand would
 // defeat the cache-first goal (and is what fetchChannelMessages already
-// does on the network path, populating userNames for next time).
+// does on the network path, populating the name store for next time).
 //
 // raw_json unmarshal failures on a single row degrade gracefully: that
 // row renders as text-only (no attachments / blocks / legacy
@@ -188,7 +188,7 @@ func loadCachedMessages(
 	db *cache.DB,
 	selfUserID string,
 	channelID string,
-	userNames map[string]string,
+	userNames *userNameStore,
 	tsFormat string,
 	router *workspaceRouter,
 ) []messages.MessageItem {
@@ -245,8 +245,7 @@ func loadCachedMessages(
 // reconstruction of files / blocks / legacy attachments.
 //
 // userNames may be nil — username resolution still works via the
-// cached users table or the userID fallback, but no memoization
-// occurs.
+// cached users table or the userID fallback, but nothing is recorded.
 //
 // raw_json unmarshal failures degrade the row to text-only without
 // failing the caller. logPrefix tags the per-row log lines so callers
@@ -257,7 +256,7 @@ func enrichCachedRow(
 	selfUserID string,
 	channelID string,
 	m cache.Message,
-	userNames map[string]string,
+	userNames *userNameStore,
 	tsFormat string,
 	logPrefix string,
 	router *workspaceRouter,
@@ -286,13 +285,13 @@ func enrichCachedRow(
 		}
 	}
 
-	// Resolve username from the in-memory map first; fall back to
+	// Resolve username from the in-memory store first; fall back to
 	// the cached users table; finally fall back to the bot username /
 	// user ID so the row still renders something readable.
-	var userName string
-	if userNames != nil {
-		userName = userNames[effUserID]
-	}
+	//
+	// Runs on a bubbletea Cmd goroutine (ReadCache / CacheRead), so it
+	// goes through the locked store, never a UI-held map.
+	userName, _ := userNames.Get(effUserID)
 	if userName == "" && effUserID != "" {
 		var t0 time.Time
 		if stats != nil {
@@ -309,8 +308,8 @@ func enrichCachedRow(
 			} else if u.Name != "" {
 				userName = u.Name
 			}
-			if userName != "" && userNames != nil {
-				userNames[effUserID] = userName
+			if userName != "" {
+				userNames.Set(effUserID, userName)
 			}
 		}
 	}
@@ -424,7 +423,7 @@ func loadCachedThreadReplies(
 	db *cache.DB,
 	selfUserID string,
 	channelID, threadTS string,
-	userNames map[string]string,
+	userNames *userNameStore,
 	tsFormat string,
 	router *workspaceRouter,
 ) []messages.MessageItem {
@@ -462,7 +461,7 @@ func loadCachedThreadReplies(
 // The MessagesLoadedMsg handler distinguishes nil from empty so a
 // failed background refresh doesn't wipe a successfully-rendered
 // cache view. Do NOT change nil to mean "empty channel".
-func fetchChannelMessages(client *slackclient.Client, channelID string, db *cache.DB, userNames map[string]string, tsFormat string, avatarCache *avatar.Cache, router *workspaceRouter) []messages.MessageItem {
+func fetchChannelMessages(client *slackclient.Client, channelID string, db *cache.DB, userNames *userNameStore, tsFormat string, avatarCache *avatar.Cache, router *workspaceRouter) []messages.MessageItem {
 	ctx := context.Background()
 	debuglog.Cache("fetchChannelMessages: channel=%s entry", channelID)
 	start := time.Now()
@@ -545,7 +544,7 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 // fetchChannelMessages: nil signals failure, [] signals "no replies",
 // so the ThreadRepliesLoadedMsg consumer can decide whether to clobber
 // an already-rendered cached view.
-func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, db *cache.DB, userNames map[string]string, tsFormat string, avatarCache *avatar.Cache, router *workspaceRouter) []messages.MessageItem {
+func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, db *cache.DB, userNames *userNameStore, tsFormat string, avatarCache *avatar.Cache, router *workspaceRouter) []messages.MessageItem {
 	ctx := context.Background()
 	debuglog.Cache("fetchThreadReplies: channel=%s thread_ts=%s entry", channelID, threadTS)
 	start := time.Now()

@@ -10,6 +10,8 @@
 package ui
 
 import (
+	"time"
+
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -30,6 +32,9 @@ func handleWorkspaceFinderMode(a *App, msg tea.KeyMsg) tea.Cmd {
 
 	result := a.workspaceFinder.HandleKey(keyStr)
 	if result != nil {
+		if a.compose.Uploading() || a.threadCompose.Uploading() {
+			return toastWithClear(a, "Upload in progress", 2*time.Second)
+		}
 		a.workspaceFinder.Close()
 		a.SetMode(ModeNormal)
 		if a.workspaceSvc != nil && result.ID != a.workspaceRail.SelectedID() {

@@ -24,7 +24,7 @@ type rtmEventHandler struct {
 	// program is the running *tea.Program, narrowed to teaSender so
 	// tests can capture what the handler dispatches.
 	program     teaSender
-	userNames   map[string]string
+	userNames   *userNameStore
 	tsFormat    string
 	db          *cache.DB
 	workspaceID string
@@ -210,7 +210,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 		// empty userID is intentional, not a bug to "fix" later.
 		if notify.ShouldNotify(ctx, channelID, userID, text, chType) {
 			senderName := authorID
-			if resolved, ok := h.userNames[authorID]; ok {
+			if resolved, ok := h.userNames.Get(authorID); ok {
 				senderName = resolved
 			} else if username != "" {
 				senderName = username
@@ -224,7 +224,9 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 			if h.wsCtx != nil {
 				groupNames = h.wsCtx.UserGroups()
 			}
-			body := senderName + ": " + notify.StripSlackMarkupWithUserGroups(text, h.userNames, groupNames)
+			// Just the mentioned names, not a copy of the whole store:
+			// the stripper wants a plain map.
+			body := senderName + ": " + notify.StripSlackMarkupWithUserGroups(text, h.userNames.MentionedNames(text), groupNames)
 			go func() {
 				if err := h.notifier.Notify(title, body); err != nil {
 					debuglog.Notify("notification failed: %v", err)

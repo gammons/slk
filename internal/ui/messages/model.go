@@ -1339,22 +1339,23 @@ func (m *Model) SetCurrentUser(userID string) {
 // PatchUserName updates the in-memory userNames map (used for @mention
 // rendering) and overwrites the UserName field on every cached message
 // authored by userID. Invalidates the render cache so the next View()
-// re-renders affected rows. Idempotent: no-op when the name is
-// unchanged.
+// re-renders affected rows.
 //
 // Used by the async user-resolution path: history fetchers stash
 // MessageItem.UserName = m.UserID for unknown authors. When the
 // resolution returns asynchronously, the App calls PatchUserName to
 // replace the placeholders live without re-fetching history.
+//
+// Always applies: the map is normally the App's, shared by every pane
+// and already holding the name by the time this pane is patched, so
+// "already in the map" says nothing about this pane's rows or cache.
+// The App drops resolutions that change nothing.
 func (m *Model) PatchUserName(userID, displayName string) {
 	if userID == "" {
 		return
 	}
 	if m.userNames == nil {
 		m.userNames = map[string]string{}
-	}
-	if m.userNames[userID] == displayName {
-		return
 	}
 	m.userNames[userID] = displayName
 	// The render cache stores rows with their mentions already resolved
@@ -3691,6 +3692,25 @@ func SetNowFunc(fn func() time.Time) {
 		return
 	}
 	nowFunc = fn
+}
+
+// FormatShortDate turns a "2006-01-02" date string into a compact
+// label for a message header: "Today", "Yesterday", a weekday within
+// the last week, "Jan 2" earlier this year, or "Jan 2, 2006" before
+// that. The thread pane prefixes the parent's time with it, because
+// the parent is the only row there with no day divider above it.
+func FormatShortDate(dateStr string) string {
+	d, err := time.Parse("2006-01-02", dateStr)
+	if err != nil {
+		return dateStr
+	}
+	if label := FormatDateSeparator(dateStr); !strings.Contains(label, ",") {
+		return label
+	}
+	if d.Year() == nowFunc().Year() {
+		return d.Format("Jan 2")
+	}
+	return d.Format("Jan 2, 2006")
 }
 
 // FormatDateSeparator turns a "2006-01-02" date string into the

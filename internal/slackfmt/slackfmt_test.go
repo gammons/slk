@@ -31,3 +31,19 @@ func TestStripMarkup_NoTruncationAndUTF8Safe(t *testing.T) {
 		t.Fatalf("StripMarkup produced invalid UTF-8")
 	}
 }
+
+func TestMentionedUserIDs(t *testing.T) {
+	got := MentionedUserIDs("hi <@U1>, <@W2X> and <@U1> again; not <#C1|c> or <!here>")
+	want := []string{"U1", "W2X", "U1"}
+	if len(got) != len(want) {
+		t.Fatalf("MentionedUserIDs = %v; want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("MentionedUserIDs = %v; want %v", got, want)
+		}
+	}
+	if got := MentionedUserIDs("none"); len(got) != 0 {
+		t.Errorf("MentionedUserIDs(none) = %v; want empty", got)
+	}
+}

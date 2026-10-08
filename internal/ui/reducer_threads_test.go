@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
@@ -138,5 +140,42 @@ func TestThreadRepliesLoaded_ReturnsMarkCmd(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("the cmd returned by Mark did not reach the caller; ThreadMarkedLocalMsg would never reach the reducer")
+	}
+}
+
+// TestThreadRepliesLoaded_BackfillsParentTimestampFromCache pins the
+// threads-view open path: the parent is built from the list summary,
+// which has text but no formatted time, so the reducer copies only the
+// Timestamp from the cached thread and keeps the rest of the row.
+func TestThreadRepliesLoaded_BackfillsParentTimestampFromCache(t *testing.T) {
+	const threadTS = "1700000000.000100"
+	cachedParent := messages.MessageItem{TS: threadTS, UserID: "U1", Text: "cached text", Timestamp: "9:01 AM"}
+	reply := messages.MessageItem{TS: "1700000050.000200", UserID: "U2", Text: "reply", ThreadTS: threadTS}
+
+	app := newTestApp(t,
+		withThreadsView([]cache.ThreadSummary{{
+			ChannelID: "C1", ThreadTS: threadTS, ParentTS: threadTS, ParentUserID: "U1", ParentText: "summary text",
+		}}),
+		withView(ViewThreads),
+	)
+	app.SetThreadService(core.NewThreadService(core.ThreadServiceFuncs{
+		CacheRead: func(ids.ChannelID, ids.ThreadTS) []messages.MessageItem {
+			return []messages.MessageItem{cachedParent, reply}
+		},
+	}))
+	app.focusedPanel = PanelMessages
+	app.Update(keyCode(tea.KeyEnter))
+	if !app.threadVisible || app.threadPanel.ParentMsg().Timestamp != "" {
+		t.Fatalf("precondition: want an open thread whose summary-built parent has no time (visible %v, ts %q)",
+			app.threadVisible, app.threadPanel.ParentMsg().Timestamp)
+	}
+
+	app.Update(ThreadRepliesLoadedMsg{ThreadTS: threadTS, Replies: []messages.MessageItem{reply}})
+
+	if got := app.threadPanel.ParentMsg().Timestamp; got != cachedParent.Timestamp {
+		t.Errorf("parent timestamp = %q, want %q backfilled from cache", got, cachedParent.Timestamp)
+	}
+	if got := app.threadPanel.ParentMsg().Text; got != "summary text" {
+		t.Errorf("parent text = %q, want the summary's %q kept", got, "summary text")
 	}
 }
