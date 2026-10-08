@@ -138,6 +138,12 @@ type (
 	ThreadRepliesLoadedMsg struct {
 		ThreadTS string
 		Replies  []messages.MessageItem
+		// FromCache marks the instant render from SQLite that precedes
+		// the network fetch. It only renders: the cache can lag Slack
+		// (or hold rows Slack dropped), so marking the thread read from
+		// it raced the fetched result's mark with a stale cursor. The
+		// zero value is the fetched result, which alone marks.
+		FromCache bool
 	}
 	SendThreadReplyMsg struct {
 		ChannelID string

@@ -2115,14 +2115,26 @@ func (a *App) openThreadPanel(parent messages.MessageItem, channelID, threadTS s
 	chID := ids.ChannelID(channelID)
 	tTS := ids.ThreadTS(threadTS)
 	var batch []tea.Cmd
-	if cached := threads.CacheRead(chID, tTS); len(cached) > 1 {
-		replies := cached[1:] // strip parent; reducer expects replies-only
-		batch = append(batch, func() tea.Msg {
-			return ThreadRepliesLoadedMsg{ThreadTS: threadTS, Replies: replies}
-		})
+	if cmd := cachedThreadRepliesCmd(threads, chID, tTS); cmd != nil {
+		batch = append(batch, cmd)
 	}
 	batch = append(batch, func() tea.Msg { return threads.Fetch(chID, tTS) })
 	return tea.Batch(batch...)
+}
+
+// cachedThreadRepliesCmd reads the thread from cache now and returns a
+// cmd delivering its replies as a FromCache ThreadRepliesLoadedMsg, or
+// nil when the cache holds no replies. Every thread open pairs it with
+// the network fetch, which alone marks the thread read.
+func cachedThreadRepliesCmd(threads core.ThreadService, chID ids.ChannelID, threadTS ids.ThreadTS) tea.Cmd {
+	cached := threads.CacheRead(chID, threadTS)
+	if len(cached) <= 1 {
+		return nil
+	}
+	replies := cached[1:] // strip parent; reducer expects replies-only
+	return func() tea.Msg {
+		return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS), Replies: replies, FromCache: true}
+	}
 }
 
 func (a *App) SetMode(mode Mode) {
@@ -2360,11 +2372,8 @@ func (a *App) openSelectedThreadCmd(debounce bool) tea.Cmd {
 	tThreadTS := ids.ThreadTS(threadTS)
 	if !debounce {
 		var batch []tea.Cmd
-		if cached := threads.CacheRead(tChID, tThreadTS); len(cached) > 1 {
-			replies := cached[1:] // strip parent; reducer expects replies-only
-			batch = append(batch, func() tea.Msg {
-				return ThreadRepliesLoadedMsg{ThreadTS: threadTS, Replies: replies}
-			})
+		if cmd := cachedThreadRepliesCmd(threads, tChID, tThreadTS); cmd != nil {
+			batch = append(batch, cmd)
 		}
 		batch = append(batch, func() tea.Msg { return threads.Fetch(tChID, tThreadTS) })
 		return tea.Batch(batch...)
