@@ -438,6 +438,36 @@ func TestContextLabel_ByConversationType(t *testing.T) {
 	}
 }
 
+// An item type slk does not recognise used to render as a blank card:
+// no verb, and (with no item.message to take a channel from) no author
+// and no body either -- issue #285. The label falls back to the type
+// itself so the row says what it is.
+func TestContextLabel_UnknownTypeIsNeverBlank(t *testing.T) {
+	m := New(nil, "")
+	m.SetChannelNames(map[string]string{"C1": "general"})
+	cases := []struct {
+		name, typ, ch, want string
+	}{
+		{"unrecognised type, no channel", "saved_reminder", "", "Saved reminder"},
+		{"unrecognised type in a channel", "something_new", "C1", "Something new in #general"},
+		{"empty type", "", "", "Unknown activity"},
+	}
+	for _, c := range cases {
+		got := ansi.Strip(m.contextLabel(core.ActivityItem{Type: c.typ, ChannelID: c.ch}))
+		if got != c.want {
+			t.Errorf("%s: contextLabel = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestRenderCard_UnknownTypeWithNoRefIsLabelled(t *testing.T) {
+	m := New(nil, "")
+	line1, _ := m.renderCard(core.ActivityItem{Key: "k", Type: "saved_reminder", FeedTS: "1700000000.000000", IsUnread: true}, 80, false)
+	if got := ansi.Strip(line1); !strings.Contains(got, "Saved reminder") {
+		t.Errorf("card line 1 = %q, want it to name the item type", got)
+	}
+}
+
 // A DM row is headed by the conversation (the other person), not by
 // whoever sent the latest message; when that was you, the preview says
 // so, as Slack does.
