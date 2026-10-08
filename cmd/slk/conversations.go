@@ -54,7 +54,7 @@ func (h *rtmEventHandler) addConversation(ch slack.Channel) (sidebar.ChannelItem
 	}
 	// Refresh rather than merely dedupe: a duplicate open may carry a
 	// resolved name, presence or app classification that the finder lacks.
-	finderItem, _ = h.upsertFinderItem(finderItem)
+	finderItem = h.upsertFinderItem(finderItem)
 
 	// Mirror channelTypes / channelNames maps used by the notifier so
 	// follow-up messages on this channel get notified correctly.
@@ -68,23 +68,20 @@ func (h *rtmEventHandler) addConversation(ch slack.Channel) (sidebar.ChannelItem
 }
 
 // upsertFinderItem refreshes one workspace finder entry by conversation ID.
-// It returns the stored entry and whether it changed. A deduplicated row keeps
-// its live LastVisited value; only a new row uses the startup visit snapshot.
+// It returns the stored entry. A deduplicated row keeps its live LastVisited
+// value; only a new row uses the startup visit snapshot.
 // Callers must be on the serialized event owner, like addConversation.
-func (h *rtmEventHandler) upsertFinderItem(item core.ChannelFinderItem) (core.ChannelFinderItem, bool) {
+func (h *rtmEventHandler) upsertFinderItem(item core.ChannelFinderItem) core.ChannelFinderItem {
 	for i, existing := range h.wsCtx.FinderItems {
 		if existing.ID == item.ID {
 			item.LastVisited = existing.LastVisited
-			if item == existing {
-				return item, false
-			}
 			h.wsCtx.FinderItems[i] = item
-			return item, true
+			return item
 		}
 	}
 	item.LastVisited = h.wsCtx.LastVisitedByChannel[item.ID]
 	h.wsCtx.FinderItems = append(h.wsCtx.FinderItems, item)
-	return item, true
+	return item
 }
 
 func (h *rtmEventHandler) publishConversation(item sidebar.ChannelItem, finderItem core.ChannelFinderItem) {
