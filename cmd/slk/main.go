@@ -81,8 +81,12 @@ func main() {
 		case "--help", "-h", "help":
 			printHelp()
 			return
-		case "--add-workspace":
-			if err := addWorkspace(); err != nil {
+		case "--add-workspace", "--browser":
+			browser, err := addWorkspaceArgs(os.Args[1:])
+			if err == nil {
+				err = addWorkspace(browser)
+			}
+			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
 			}
@@ -181,6 +185,8 @@ func printHelp() {
 Usage:
   slk                    Launch the TUI
   slk --add-workspace     Add a Slack workspace (interactive)
+  slk --add-workspace --browser
+                          Add one from a browser session (no desktop app)
   slk --remove-workspace  Remove a configured workspace (interactive)
   slk --list-workspaces   List configured workspaces (TeamID, Slug, Name)
   slk --dump-sections     Dump raw users.channelSections.list JSON (diagnostic)
@@ -279,7 +285,7 @@ func run() error {
 	tokens, err := tokenStore.List()
 	if err != nil || len(tokens) == 0 {
 		// No workspaces configured -- launch onboarding automatically
-		if err := addWorkspace(); err != nil {
+		if err := addWorkspace(false); err != nil {
 			return err
 		}
 		// Reload tokens after onboarding
@@ -602,23 +608,7 @@ func run() error {
 	// data to stdout at startup and produced a multi-minute hang on
 	// terminals that decode kitty graphics (kitty, ghostty).
 	app.SetAvatarService(core.NewAvatarService(func(userID string) string {
-		if rendered := avatarCache.Get(userID); rendered != "" {
-			return rendered
-		}
-		// Cache miss: trigger a lazy Preload using the URL the
-		// workspace recorded at connect time (or that resolveUser
-		// filled in). No router-active = pre-workspace-ready render;
-		// AvatarReadyMsg will invalidate once the avatar lands.
-		wctx := router.Active()
-		if wctx == nil || wctx.AvatarURLs == nil {
-			return ""
-		}
-		if v, ok := wctx.AvatarURLs.Load(userID); ok {
-			if url, ok := v.(string); ok && url != "" {
-				avatarCache.Preload(userID, url)
-			}
-		}
-		return ""
+		return lazyAvatar(router.Active(), avatarCache, userID)
 	}))
 
 	// Wire theme switcher: dispatch to the appropriate saver based on scope.
@@ -715,6 +705,10 @@ func run() error {
 	// workspace-scoped values (Client, UserNames, ...) into local
 	// vars BEFORE the `go func()` so they are not affected by a
 	// concurrent router.Set during the goroutine's lifetime.
+	// The rail's thread half, kept off the UI goroutine (see
+	// railThreadsCache). Its notifier is installed once p exists.
+	railThreads := newRailThreadsCache(railThreadsUnread(db))
+
 	wireCallbacks := func(router *workspaceRouter) {
 		channelReadStates := func() map[string]cache.ReadState {
 			wctx := router.Active()
@@ -735,7 +729,7 @@ func run() error {
 				log.Printf("Warning: UnreadChannels: %v", err)
 				return nil
 			}
-			return railUnreadWorkspaces(unread, railTeamIDs, router.ByID, railThreadsUnread(db))
+			return railUnreadWorkspaces(unread, railTeamIDs, router.ByID, railThreads.Unread)
 		}
 		app.SetUnreadService(core.NewUnreadService(channelReadStates, unreadWorkspaces))
 
@@ -1445,6 +1439,12 @@ func run() error {
 	// a serialized pass-through for non-sixel frames (no marker present)
 	// and the sixel paint site for marked frames.
 	p = tea.NewProgram(app, tea.WithOutput(terminalOutput))
+
+	// A changed thread-unread answer re-runs the rail refresh, which
+	// then reads the new answer from the cache.
+	railThreads.SetNotify(func(teamID string) {
+		p.Send(ui.ReadStateChangedMsg{WorkspaceID: teamID})
+	})
 
 	// Now that `p` exists, re-install the ImageContext with a real
 	// SendMsg callback so the prefetcher can dispatch ImageReadyMsg

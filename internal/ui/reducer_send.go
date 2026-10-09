@@ -211,7 +211,11 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// with a hidden compose.
 		if a.threadVisible && a.threadPanel.ThreadTS() == m.TS && m.ChannelID == a.threadPanel.ChannelID() {
 			a.cancelEdit()
-			a.CloseThread()
+			if a.compose.Uploading() || a.threadCompose.Uploading() {
+				a.threadCloseAfterUpload = true
+			} else {
+				a.CloseThread()
+			}
 		}
 		return nil, true
 	}

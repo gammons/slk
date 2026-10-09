@@ -28,7 +28,9 @@ import (
 //
 // In production unread is db.UnreadChannels, teamIDs the configured
 // workspace list, byID router.ByID and threadsUnread
-// railThreadsUnread(db); all are parameters so the predicate is pure.
+// railThreadsCache.Unread over railThreadsUnread(db), which answers
+// without waiting for SQLite; all are parameters so the predicate is
+// pure.
 //
 // Two edge cases go opposite ways. byID returning nil (still
 // connecting, or connect failed) lights on any unread channel row, and
@@ -91,10 +93,11 @@ func railRowLights(u cache.UnreadChannel, wctx *WorkspaceContext) bool {
 // query the Threads badge is counted from and reports whether any row
 // is Unread. Reusing the query rather than writing an EXISTS twin of
 // it is deliberate: a second predicate is a second place for the rail
-// and the badge to drift apart. The cost was measured before choosing
-// this: five workspaces with at most ten active subscriptions each
-// answer in well under a millisecond total on the field cache, and
-// the reader only runs on read-state events.
+// and the badge to drift apart. It is not cheap: since the subscription
+// sync pages the whole list, a workspace can hold 1000 subscriptions,
+// measured at 40-50ms per workspace on a warm local cache and far more
+// in the field. So it runs behind railThreadsCache, never on the UI
+// goroutine.
 func railThreadsUnread(db *cache.DB) func(teamID, selfUserID string) bool {
 	return func(teamID, selfUserID string) bool {
 		summaries, err := db.ListSubscribedThreads(teamID, selfUserID)

@@ -285,7 +285,7 @@ func (a *App) retargetActiveChannel(id, name, chType string) {
 	a.typingOut.ResetThrottle() // reset typing throttle for new channel
 	a.compose.SetChannel(name)
 	a.compose.SetActiveChannel(id)
-	a.threadCompose.SetActiveChannel(id)
+	a.compose.SetDraftContext(a.activeTeamID, id, "")
 	// Fire the membership fetcher on a fresh goroutine so it can't
 	// block the Update loop. Fire-and-forget -- results arrive
 	// later via ChannelMembershipMsg. main.go's MembershipFetch

@@ -13,6 +13,8 @@
 package activityview
 
 import (
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -124,9 +126,14 @@ func New(userNames map[string]string, selfUserID string) Model {
 
 // SetBodies installs hydrated message bodies (keyed by
 // core.ActivityMsgKey) fetched via messages.list, and forces a re-render.
+// Identical contents are a no-op: every feed load re-hydrates, usually to
+// the same bodies.
 func (m *Model) SetBodies(bodies map[string]core.ActivityMessage) {
 	if bodies == nil {
 		bodies = map[string]core.ActivityMessage{}
+	}
+	if maps.Equal(m.bodies, bodies) {
+		return
 	}
 	m.bodies = bodies
 	m.dirty()
@@ -150,6 +157,30 @@ func (m *Model) SetUserNames(names map[string]string) {
 	}
 	m.userNames = names
 	m.dirty()
+}
+
+// PatchUserName records a display name resolved after SetUserNames and
+// bumps the version when a card shows that user (as actor, hydrated
+// author, or a <@id> mention in the body). The map is normally the App's
+// shared one, which already holds the name, so the bump is decided by
+// the cards rather than by a map change; unrelated names, which resolve
+// in bursts, cost no re-render.
+func (m *Model) PatchUserName(userID, displayName string) {
+	if userID == "" {
+		return
+	}
+	if m.userNames == nil {
+		m.userNames = map[string]string{}
+	}
+	m.userNames[userID] = displayName
+	mention := "<@" + userID
+	for _, it := range m.items {
+		body := m.bodies[core.ActivityMsgKey(it.ChannelID, it.TS)]
+		if it.AuthorID == userID || body.UserID == userID || strings.Contains(body.Text, mention) {
+			m.dirty()
+			return
+		}
+	}
 }
 
 // SetChannelNames replaces the channel id -> name map. No-op when
@@ -228,7 +259,13 @@ func (m *Model) ToggleUnreadOnly() bool {
 // SetItems replaces the list of activity items. If the previously-selected
 // item (by Key) is still present, the selection follows it to its new
 // position; otherwise the selection resets to the top.
+//
+// Identical contents are a no-op (no version bump, no re-snap): every
+// activation of the view refetches the feed, usually unchanged.
 func (m *Model) SetItems(items []core.ActivityItem) {
+	if slices.Equal(m.items, items) {
+		return
+	}
 	prevKey, hadSel := m.selectedKey()
 	m.items = items
 
@@ -402,13 +439,15 @@ func (m *Model) View(height, width int) string {
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, empty)
 	}
 
-	lines := m.renderRows(width)
+	// Cards have a fixed stride, so the scroll math needs only the line
+	// count; render just the cards in the viewport.
+	totalLines := len(m.items)*cardStride - 1
 	if !m.hasSnapped || m.snappedSelection != m.selected {
-		m.snapToSelected(height, len(lines))
+		m.snapToSelected(height, totalLines)
 		m.snappedSelection = m.selected
 		m.hasSnapped = true
 	}
-	maxOffset := len(lines) - height
+	maxOffset := totalLines - height
 	if maxOffset < 0 {
 		maxOffset = 0
 	}
@@ -419,10 +458,10 @@ func (m *Model) View(height, width int) string {
 		m.yOffset = 0
 	}
 	end := m.yOffset + height
-	if end > len(lines) {
-		end = len(lines)
+	if end > totalLines {
+		end = totalLines
 	}
-	visible := lines[m.yOffset:end]
+	visible := m.renderLines(m.yOffset, end, width)
 	if pad := height - len(visible); pad > 0 {
 		filler := blankLine(width)
 		out := make([]string, 0, height)
@@ -459,20 +498,32 @@ func (m *Model) snapToSelected(height, totalLines int) {
 	}
 }
 
-// renderRows builds the full (un-windowed) line list: each item's
-// two-line card, with a blank separator between adjacent cards, so the
-// windowing / snap / click math stays stride-based.
-func (m *Model) renderRows(width int) []string {
-	lines := make([]string, 0, len(m.items)*cardStride)
-	separator := blankLine(width)
-	for i, it := range m.items {
-		if i > 0 {
-			lines = append(lines, separator)
-		}
-		l1, l2 := m.renderCard(it, width, i == m.selected)
-		lines = append(lines, l1, l2)
+// renderLines returns lines [start, end) of the flat line list -- each
+// item's two-line card, with a blank separator between adjacent cards, so
+// the windowing / snap / click math stays stride-based -- rendering only
+// the cards that overlap that range.
+func (m *Model) renderLines(start, end, width int) []string {
+	if end <= start {
+		return nil
 	}
-	return lines
+	out := make([]string, 0, end-start)
+	var separator string
+	for i := start / cardStride; i < len(m.items) && i*cardStride < end; i++ {
+		base := i * cardStride
+		l1, l2 := m.renderCard(m.items[i], width, i == m.selected)
+		for j, line := range [cardContentLines]string{l1, l2} {
+			if abs := base + j; abs >= start && abs < end {
+				out = append(out, line)
+			}
+		}
+		if sep := base + cardContentLines; i < len(m.items)-1 && sep >= start && sep < end {
+			if separator == "" {
+				separator = blankLine(width)
+			}
+			out = append(out, separator)
+		}
+	}
+	return out
 }
 
 // blankLine returns an exactly `width`-column-wide empty line.

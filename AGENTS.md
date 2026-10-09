@@ -105,8 +105,8 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Extract links from message text | `messages.ExtractLinks` |
 | Does message text mention the current user? | `mention.InText(text, selfUserID)` |
 | Reaction pill rendering | `messages.ReactionPillText` |
-| Date label from a Slack ts | `messages.DateFromTS`, `messages.FormatDateSeparator` |
-| Date-qualified timestamp for the selected message header | `messages.LongTimestamp(ts, short)`, `messages.SelectedHeader(rendered, header, ts, short, maxWidth)` |
+| Date label from a Slack ts | `messages.DateFromTS`, `messages.FormatDateSeparator`, `messages.FormatShortDate` (compact form for a message header: "Today", "Jan 2") |
+| Date-qualified timestamp for the selected message header | `messages.LongTimestamp(ts, short)`, `messages.SelectedHeader(rendered, header, ts, short, maxWidth)`; any other header timestamp swap that must fit the width budget: `messages.ReplaceHeaderTimestamp(rendered, header, short, replacement, maxWidth)` |
 | mpdm channel name → human name | `slackfmt.FormatMPDMName` |
 | Channel-type glyph (`#` / `◆` / `●`) | `messages.ChannelGlyph(chType)` |
 | Slack permalink parsing | `slackurl.Parse` |
@@ -117,11 +117,15 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Emoji shortcode → glyph | `emoji.Sprint`, `emoji.CodeMap`, `emoji.StripSkinTone` |
 | Does Block Kit already render the message body? | `blockkit.RendersBody(blocks)`, `messages.BlocksCarryBody(msg)` |
 | Current DND state from a Slack API result | `slack.DNDStateFromStatus` |
+| Persist a full Web API profile's custom status and huddle (including clears) | `cmd/slk/applyProfileStatus(teamID, userID, profile, db, send)` after `UpsertUser`, before any resolved-user notice or row repair; `UpsertUser` alone deliberately preserves status on conflict |
+| Drop cached thread replies a complete `conversations.replies` response no longer contains (missed deletes, Slackbot ephemerals) | `(*cache.DB).PruneThreadReplies(channelID, threadTS, returnedTS, fetchStartUnix)`; soft-deletes, never touches the parent or rows cached after the fetch began |
 | Peer custom status, DND and huddle rendering | `ui/peerstatus` (`Status`, glyph/expiry/summary methods); `messages.AuthorStatusSuffix` for author headers |
+| Workspace app/bot classification, from any goroutine | `WorkspaceContext.IsBotUser` / `MarkBotUser`; private synchronized set, never directly read/write a plain bot-ID map |
 | Usergroup map helpers | `usergroups.Copy`, `usergroups.Equal`, `usergroups.Display` |
 | A workspace's user ID → display name, from any goroutine in `cmd/slk` | `wctx.UserNames` (`*userNameStore`: `Get`/`Set`, `MentionedNames(text)` for one message; `lookupUserCached` / `resolveUserCached` add the SQLite fallback). Just `Set`: hand the UI the map from `SnapshotForUI()` and pass only its version to `NotifyFrom`, which makes every later new or changed name reach the UI as `UserResolvedMsg`. Never keep or read the map you handed over |
 | User IDs mentioned in message text | `slackfmt.MentionedUserIDs(text)` |
 | Workspace-relative cached external-user flags | `cache.DB.ExternalUsers(workspaceID)` returns a caller-owned map, derived from `User.HomeTeamID`; the legacy boolean is only a fallback within the row's original workspace |
+| Slack original-avatar URL → sized CDN URL (e.g. 72px) | `avatar.SizedURL(orig, px)`; returns non-Slack-original URLs unchanged |
 | Copy text to the clipboard | `App.clipboardWrite` / `SetClipboardWriter`; `cmd/slk/newClipboardWriter` selects local macOS `pbcopy` or terminal OSC 52 |
 
 ### UI chrome
@@ -135,6 +139,8 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Window tree geometry | `ui/wintree` |
 | Modal geometry / row hit-testing | `boxedOverlay`, `clickableOverlay` (list rows), `pointClickable` (a single glyph, e.g. the profile dialog's 📋) in `internal/ui/reducer_modal_click.go` |
 | Channel/DM destination picker for forwarding | `channelfinder.Model.OpenForForwarding()` (joined conversations only); `Open()` restores the normal switcher |
+| Render a thread from cache on open, before the fetch lands | `cachedThreadRepliesCmd(threads, chID, threadTS)` (`internal/ui/app.go`); yields a `FromCache` `ThreadRepliesLoadedMsg`, which renders but never marks the thread read — only the fetched result does |
+| Bind a composer to the conversation its draft belongs to | `(*compose.Model).SetDraftContext(teamID, channelID, threadTS)` — an empty channel detaches (saves the prior conversation's draft, clears the visible input). `SetActiveChannel` sets only mention context; it does not move draft storage |
 
 ### Test helpers
 
@@ -173,6 +179,7 @@ greppable by name; no line numbers, because these files move.
 | Park the message viewport at an exact `yOffset` | `scrollTo(off)` (same file) |
 | Make nav-history entries resolvable | `navLookupOpt()` (same file) |
 | Run only the first command of a `tea.Batch` (skip a 2s tick) | `firstBatchCmd(t, cmd)` (`internal/ui/mode_insert_keys_test.go`) |
+| An `App` with the main composer mid-upload, a thread open with its own draft, and workspaces T1/T2, counting uploader and workspace-switcher calls | `uploadGuardApp(t)` (`internal/ui/conversation_drafts_safety_test.go`) |
 | Observe a compose cursor position or blur state (no getter exists) | `afterKeyValue(c, r)` (same file) |
 
 ### Known duplication — do not add to it

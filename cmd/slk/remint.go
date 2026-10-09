@@ -32,6 +32,12 @@ func remintTokens(
 	out := make([]slackclient.Token, len(tokens))
 	copy(out, tokens)
 	for i := range out {
+		if out[i].Source == slackclient.TokenSourceBrowser {
+			// Signed in from a browser session on purpose. The desktop
+			// app can hold the same workspace under another account, and
+			// its credentials would silently replace the chosen ones.
+			continue
+		}
 		newTok := desktopTokens[out[i].TeamID]
 		if newTok == "" {
 			if out[i].Domain == "" {

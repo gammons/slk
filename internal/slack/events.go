@@ -2,6 +2,7 @@ package slackclient
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 	"time"
 
@@ -365,6 +366,43 @@ type wsThreadSubscribedEvent struct {
 	} `json:"subscription"`
 }
 
+// topLevelFields renders a WS event's top-level keys, sorted, as
+// key=value with objects and arrays abbreviated to {…} / […]. It is for
+// the debug log only: wsMessageEvent drops every field it does not
+// declare, so this is the one place an undeclared marker (such as
+// whatever flags a Slackbot ephemeral) can be seen. Text is quoted and
+// clipped so one long message cannot flood the line.
+func topLevelFields(data []byte) string {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return "unparseable: " + err.Error()
+	}
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		v := fields[k]
+		switch {
+		case len(v) > 0 && v[0] == '{':
+			v = json.RawMessage("{…}")
+		case len(v) > 0 && v[0] == '[':
+			v = json.RawMessage("[…]")
+		case len(v) > 80:
+			v = append(v[:80:80], "…"...)
+		}
+		b.WriteString(k)
+		b.WriteByte('=')
+		b.Write(v)
+	}
+	return b.String()
+}
+
 // dispatchWebSocketEvent parses a raw JSON WebSocket message and routes it
 // to the appropriate EventHandler method.
 func dispatchWebSocketEvent(data []byte, handler EventHandler) {
@@ -378,6 +416,9 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 		var msg wsMessageEvent
 		if err := json.Unmarshal(data, &msg); err != nil {
 			return
+		}
+		if debuglog.Enabled() {
+			debuglog.WS("message raw fields: %s", topLevelFields(data))
 		}
 		switch msg.SubType {
 		case "", "bot_message", "thread_broadcast", "file_share":

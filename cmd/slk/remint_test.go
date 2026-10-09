@@ -81,3 +81,37 @@ func TestRemintTokensKeepsOldOnPerTokenMintFailure(t *testing.T) {
 		t.Fatalf("cookie must not change when mint fails, got %+v", out[0])
 	}
 }
+
+// A token signed in from a browser session is the user's explicit choice: the
+// desktop app can hold the same workspace under another account, so neither
+// its stored token nor a mint from its cookie may replace it.
+func TestRemintTokensLeavesBrowserSessionsAlone(t *testing.T) {
+	browser := slackclient.Token{
+		AccessToken: "xoxc-browser", Cookie: "c-browser", Domain: "acme",
+		TeamID: "T1", TeamName: "Acme", Source: slackclient.TokenSourceBrowser,
+	}
+	desktop := slackclient.Token{AccessToken: "old2", Cookie: "c-old", Domain: "other", TeamID: "T2", TeamName: "Other"}
+	saved := map[string]slackclient.Token{}
+	mintedFor := []string{}
+	out := remintTokens(context.Background(), []slackclient.Token{browser, desktop},
+		func() (string, error) { return "c-desktop", nil },
+		func() (map[string]string, error) { return map[string]string{"T1": "xoxc-desktop-user"}, nil },
+		func(_ context.Context, domain, _ string) (string, error) {
+			mintedFor = append(mintedFor, domain)
+			return "xoxc-" + domain, nil
+		},
+		func(tok slackclient.Token) error { saved[tok.TeamID] = tok; return nil },
+	)
+	if out[0] != browser {
+		t.Errorf("browser session changed: %+v", out[0])
+	}
+	if _, ok := saved["T1"]; ok {
+		t.Errorf("browser session was saved over: %+v", saved["T1"])
+	}
+	if out[1].AccessToken != "xoxc-other" || out[1].Cookie != "c-desktop" {
+		t.Errorf("desktop token not refreshed: %+v", out[1])
+	}
+	if len(mintedFor) != 1 || mintedFor[0] != "other" {
+		t.Errorf("minted for %v, want only the desktop workspace", mintedFor)
+	}
+}

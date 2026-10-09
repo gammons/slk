@@ -1259,15 +1259,31 @@ func TestPatchUserName_UpdatesMatchingRowsAndUserNamesMap(t *testing.T) {
 	}
 }
 
-func TestPatchUserName_NoOpWhenUnchanged(t *testing.T) {
-	m := New([]MessageItem{{TS: "1.0", UserID: "U1", UserName: "bob"}}, "general")
-	m.PatchUserName("U1", "bob") // prime the userNames map
+// The App hands one name map to every pane and writes a resolved name
+// into it before fanning PatchUserName out, so a pane must apply the
+// patch even when its map already holds the name. Deduplicating repeat
+// resolutions is the App's job (TestUserResolved_UnchangedNameIsNoOp).
+func TestPatchUserName_AppliesWhenSharedMapAlreadyHasName(t *testing.T) {
+	shared := map[string]string{}
+	m := New([]MessageItem{
+		{TS: "1.0", UserID: "U1", UserName: "U1", Text: "hi"},
+		{TS: "2.0", UserID: "U2", UserName: "alice", Text: "hey <@U1>"},
+	}, "general")
+	m.SetUserNames(shared)
+	_ = m.View(80, 10)
 	verBefore := m.Version()
 
-	m.PatchUserName("U1", "bob") // second call, identical
+	shared["U1"] = "bob" // another pane (or the App) got there first
+	m.PatchUserName("U1", "bob")
 
-	if m.Version() != verBefore {
-		t.Error("Version should NOT bump on no-op PatchUserName")
+	if m.messages[0].UserName != "bob" {
+		t.Errorf("msg[0].UserName = %q, want bob", m.messages[0].UserName)
+	}
+	if m.cache != nil {
+		t.Error("PatchUserName should invalidate the cache so the <@U1> mention re-resolves")
+	}
+	if m.Version() == verBefore {
+		t.Error("Version should bump after PatchUserName")
 	}
 }
 
