@@ -103,6 +103,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Slack mrkdwn → plain text | `messages.FlattenMrkdwn`, `messages.FlattenMrkdwnWithUserGroups` |
 | Search-term highlighting (ANSI/OSC-safe) | `messages.HighlightSearchTerms`, `messages.SearchHighlightSGR` |
 | Extract links from message text | `messages.ExtractLinks` |
+| Every link a message offers to `o` (text links + permalinks of messages it shares, from attachment `from_url`) | `messages.MessageLinks(msg)` |
 | Does message text mention the current user? | `mention.InText(text, selfUserID)` |
 | Reaction pill rendering | `messages.ReactionPillText` |
 | Date label from a Slack ts | `messages.DateFromTS`, `messages.FormatDateSeparator`, `messages.FormatShortDate` (compact form for a message header: "Today", "Jan 2") |

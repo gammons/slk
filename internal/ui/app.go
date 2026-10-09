@@ -1504,24 +1504,23 @@ func (a *App) copyPermalinkOfSelected() tea.Cmd {
 // open the link picker modal. All opens converge on OpenLinkMsg,
 // the single routing point in reducer_links.go.
 func (a *App) openLinksOfSelected() tea.Cmd {
-	var text string
+	var links []messages.Link
 	switch a.focusedPanel {
 	case PanelMessages:
 		msg, ok := a.messagepane.SelectedMessage()
 		if !ok {
 			return nil
 		}
-		text = msg.Text
+		links = messages.MessageLinks(msg)
 	case PanelThread:
 		reply := a.threadPanel.SelectedReply()
 		if reply == nil {
 			return nil
 		}
-		text = reply.Text
+		links = messages.MessageLinks(*reply)
 	default:
 		return nil
 	}
-	links := messages.ExtractLinks(text)
 	switch len(links) {
 	case 0:
 		return func() tea.Msg { return ToastMsg{Text: "No links in message"} }
