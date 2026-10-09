@@ -270,7 +270,8 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 	// Cross-session messages from this user (sent via the official
 	// Slack client while slk is open) do NOT update
 	// lastSelfSendByChannel, so they pass through this guard.
-	if m.Message.UserID != "" && m.Message.UserID == a.currentUserID && a.selfSend.InFlight(m.ChannelID) {
+	// An ephemeral is never an echo of chat.postMessage, so it is exempt.
+	if !m.Message.Ephemeral && m.Message.UserID != "" && m.Message.UserID == a.currentUserID && a.selfSend.InFlight(m.ChannelID) {
 		debuglog.Cache("NewMessageMsg: channel=%s ts=%s decision=skipped_self_send_in_flight",
 			m.ChannelID, m.Message.TS)
 		return nil
@@ -290,7 +291,7 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 		if m.Message.ThreadTS == "" || m.Message.ThreadTS == m.Message.TS || isBroadcast {
 			mm.AppendMessage(cloneMessageItem(m.Message))
 		}
-		if m.Message.ThreadTS != "" && m.Message.ThreadTS != m.Message.TS {
+		if m.Message.ThreadTS != "" && m.Message.ThreadTS != m.Message.TS && !m.Message.Ephemeral {
 			mm.IncrementReplyCount(m.Message.ThreadTS, m.Message.TS)
 		}
 	}
@@ -313,6 +314,16 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 		m.Message.ThreadTS == a.threadPanel.ThreadTS()
 	if inOpenThreadPanel {
 		a.threadPanel.AddReply(m.Message)
+	}
+	if m.Message.Ephemeral {
+		// Only the current user can see it, and Slack does not know it
+		// as a message in the conversation: no read cursor may land on
+		// its ts (Slack never returns it, so the cursor would sit
+		// behind a ghost), it changes no read state, and it does not
+		// make the threads list dirty. Display only.
+		debuglog.Cache("NewMessageMsg: channel=%s ts=%s decision=ephemeral_display_only",
+			m.ChannelID, m.Message.TS)
+		return nil
 	}
 	isThreadReply := m.Message.ThreadTS != "" && m.Message.ThreadTS != m.Message.TS
 	isBroadcast := m.Message.Subtype == "thread_broadcast"
