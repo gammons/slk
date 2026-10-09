@@ -39,7 +39,12 @@ internal/core/          the ports (service interfaces) the TUI calls, and the
                         values the TUI and cmd/slk exchange through them
 internal/ui/            bubbletea App: reducers, mode key handlers, view regions
 internal/ui/<widget>/   self-contained sub-models (messages, thread, sidebar,
-                        compose, and 14 modal packages)
+                        compose, and 13 modal packages)
+internal/bubbles/       self-contained components and the substrate they
+                        share (RFC #236), e.g. ansi. Never imports
+                        internal/ui; the TUI's I/O ban applies here too.
+                        Widgets move here from internal/ui/<widget>/ one at
+                        a time; confirmprompt is the first
 internal/slack/         Slack Web API + browser-protocol WebSocket client
 internal/slack/edge/    edgeapi: conditional revalidation, server-side search
 internal/bootstrap/     startup fetch orchestration
@@ -65,7 +70,10 @@ that no longer exists. Do not trust it.** Current structural documentation:
   ports in `internal/core`, which `cmd/slk` wires. No `internal/slack`,
   `slackhttp`, `cache`, `config`, `filedl`, `export`, `editor`, `net/http` or
   `os/exec`; `slack-go` only in `blockkit`, as the data it renders. `internal/ui/boundary_test.go`
-  enforces this. The boundary is deliberate; do not breach it.
+  enforces this. The boundary is deliberate; do not breach it. The same
+  rules cover `internal/bubbles`, with no `slack-go` exemption, and it may not
+  import `internal/ui` or anything under it: components are the app's building
+  blocks, not part of it (`TestBubblesReachTheAppOnlyThroughCore`, same file).
 - **`App.Update` routes through a reducer chain**, not a switch. Add behavior by
   adding to a `reducer_*.go` file, not by extending `Update`. The only step
   outside the chain is the thin `Update` wrapper that records `stackFront`
@@ -102,6 +110,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Case/accent-insensitive fold for matching | `text.Fold(s)` |
 | Slack mrkdwn → plain text | `messages.FlattenMrkdwn`, `messages.FlattenMrkdwnWithUserGroups` |
 | Search-term highlighting (ANSI/OSC-safe) | `messages.HighlightSearchTerms`, `messages.SearchHighlightSGR` |
+| Re-assert a background (or background+foreground) after every SGR reset, so nested lipgloss renders don't drop it | `bubbles/ansi.ReapplyAfterResets(text, style)` — the one implementation; `messages.ReapplyBgAfterResets` delegates to it for existing callers. The theme's sequences come from `messages.BgANSI()` / `messages.FgANSI()` |
 | Extract links from message text | `messages.ExtractLinks` |
 | Every link a message offers to `o` (text links + permalinks of messages it shares, from attachment `from_url`) | `messages.MessageLinks(msg)` |
 | Does message text mention the current user? | `mention.InText(text, selfUserID)` |
@@ -134,8 +143,10 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 |---|---|
 | Scrollbar gutter on a rendered pane | `ui/scrollbar.Overlay`, `ui/scrollbar.Visible` |
 | Centered modal over a dimmed backdrop | `ui/overlay.DimmedOverlay` |
+| Yes/no confirmation modal (title, one-line preview, confirm/cancel keys) | `bubbles/confirmprompt` (`New`, `Open`, `Update`, `View`, `SetStyles`, `SetWidth`; options `WithStyles`/`WithKeyMap`/`WithWidth`; `KeyMap` field). In the App, open it with `App.openConfirmPrompt` (`internal/ui/confirm.go`), which also maps the theme onto its styles and composites it |
 | Text selection ranges and anchors | `ui/selection` (`Range`, `Anchor`, `LessOrEqual`) |
 | Theme colors and styles | `ui/styles` (`Username`, `SelectionStyle`, `SearchHighlightStyle`, `MentionBadgeStyle`, `UserColor`) |
+| Change the theme inside the App | `App.applyTheme(name)` (`internal/ui/app.go`): applies it, invalidates render caches and pushes fresh styles to components that snapshot them. A component that holds a style snapshot (anything in `internal/bubbles`) gets its push added there, not at each call site |
 | Window tree geometry | `ui/wintree` |
 | Modal geometry / row hit-testing | `boxedOverlay`, `clickableOverlay` (list rows), `pointClickable` (a single glyph, e.g. the profile dialog's 📋) in `internal/ui/reducer_modal_click.go` |
 | Channel/DM destination picker for forwarding | `channelfinder.Model.OpenForForwarding()` (joined conversations only); `Open()` restores the normal switcher |
@@ -187,9 +198,12 @@ greppable by name; no line numbers, because these files move.
 These are tracked in the refactor plan and are being consolidated. Do not copy
 them as templates:
 
-- **11 `renderBox` implementations** and **7 `visibleWindow`** across the 14
-  modal packages. If you are building a modal, expect a shared chrome package to
-  land (Phase 4); coordinate rather than adding a twelfth copy.
+- **11 `renderBox` implementations** — 10 across the 13 `internal/ui` modal
+  packages, plus confirmprompt's `View` in `internal/bubbles/confirmprompt` —
+  and **7 `visibleWindow`** in the modal packages. If you are building or
+  migrating a modal, expect a shared chrome package in `internal/bubbles` to land
+  first (RFC #236 stages it ahead of the remaining modals); coordinate rather
+  than adding a twelfth copy.
 - **`messages.Model` and `thread.Model`** share 377 verbatim lines and 45
   identically-named methods. `internal/ui/thread/lockstep_test.go` pins *render*
   parity in **one static state only**: 80×20 (`lockstepWidth`/`lockstepHeight`),

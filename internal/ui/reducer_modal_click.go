@@ -90,7 +90,7 @@ func (a *App) activeModalClickTarget() (modalClickTarget, bool) {
 		return modalClickTarget{box: &a.help, click: &a.help, activation: nil}, true
 	case ModeConfirm:
 		// Confirm has no list: outside dismisses, inside is a no-op.
-		return modalClickTarget{box: a.confirmPrompt}, true
+		return modalClickTarget{box: confirmPromptBox{&a.confirmPrompt}}, true
 	case ModeUserProfile:
 		// Read-only: the only hot spot is the email's 📋, which does
 		// what e does. Inside elsewhere is a no-op.
