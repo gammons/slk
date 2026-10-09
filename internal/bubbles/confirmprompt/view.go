@@ -5,6 +5,8 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/muesli/reflow/truncate"
+
+	"github.com/gammons/slk/internal/bubbles/ansi"
 )
 
 // Box width as a share of the terminal, and the bounds it is clamped to.
@@ -29,7 +31,7 @@ func (m Model) View() string {
 		m.styles.Footer.Render(m.footer()),
 	}, "\n\n")
 
-	return m.styles.Box.Width(width).Render(reassertBase(content, m.styles.BaseANSI))
+	return m.styles.Box.Width(width).Render(ansi.ReapplyAfterResets(content, m.styles.BaseANSI))
 }
 
 func boxWidth(termWidth int) int {
@@ -49,14 +51,4 @@ func preview(body string, limit int) string {
 func (m Model) footer() string {
 	confirm, cancel := m.KeyMap.Confirm.Help(), m.KeyMap.Cancel.Help()
 	return "[" + confirm.Key + "] " + confirm.Desc + "   [" + cancel.Key + "] " + cancel.Desc
-}
-
-// reassertBase re-emits style after each SGR reset. lipgloss v2 emits the short
-// form; other producers may emit the explicit zero form.
-func reassertBase(text, style string) string {
-	if style == "" {
-		return text
-	}
-	text = strings.ReplaceAll(text, "\x1b[0m", "\x1b[0m"+style)
-	return strings.ReplaceAll(text, "\x1b[m", "\x1b[m"+style)
 }
