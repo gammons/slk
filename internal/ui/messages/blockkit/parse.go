@@ -182,11 +182,16 @@ func parseAttachment(a slack.Attachment) LegacyAttachment {
 		Footer:     a.Footer,
 		FooterIcon: a.FooterIcon,
 		Blocks:     Parse(a.Blocks),
+		ID:         a.ID,
+		CallbackID: a.CallbackID,
 	}
 	for _, f := range a.Fields {
 		la.Fields = append(la.Fields, LegacyField{
 			Title: f.Title, Value: f.Value, Short: f.Short,
 		})
+	}
+	for _, act := range a.Actions {
+		la.Actions = append(la.Actions, parseLegacyAction(act))
 	}
 	if a.Ts != "" {
 		// json.Number; safe to parse as int64.
@@ -195,4 +200,26 @@ func parseAttachment(a slack.Attachment) LegacyAttachment {
 		}
 	}
 	return la
+}
+
+// parseLegacyAction converts one slack-go attachment action. ID is left
+// empty: slack-go's AttachmentAction does not declare it.
+func parseLegacyAction(a slack.AttachmentAction) LegacyAction {
+	out := LegacyAction{
+		Name:  a.Name,
+		Text:  a.Text,
+		Type:  string(a.Type),
+		Value: a.Value,
+		Style: a.Style,
+		URL:   a.URL,
+	}
+	if a.Confirm != nil {
+		out.Confirm = &ActionConfirm{
+			Title:       a.Confirm.Title,
+			Text:        a.Confirm.Text,
+			OKText:      a.Confirm.OkText,
+			DismissText: a.Confirm.DismissText,
+		}
+	}
+	return out
 }

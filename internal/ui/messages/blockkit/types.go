@@ -42,6 +42,8 @@ type (
 	ActionElement    = blocks.ActionElement
 	LegacyAttachment = blocks.LegacyAttachment
 	LegacyField      = blocks.LegacyField
+	LegacyAction     = blocks.LegacyAction
+	ActionConfirm    = blocks.ActionConfirm
 )
 
 func blockType(b Block) string { return blocks.TypeName(b) }

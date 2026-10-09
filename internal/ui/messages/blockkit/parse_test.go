@@ -1,6 +1,7 @@
 package blockkit
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/slack-go/slack"
@@ -319,5 +320,68 @@ func TestParseAttachmentNestedBlocks(t *testing.T) {
 	}
 	if sec.Text != "TRU-111 Customer Facing Blacklist Monitoring" {
 		t.Errorf("section text = %q", sec.Text)
+	}
+}
+
+// capturedMentionAttachments is the `attachments` array of Slackbot's
+// "You mentioned @x, but they're not in this channel" ephemeral, as
+// captured from the Slack web client (IDs replaced with placeholders).
+// See docs/superpowers/specs/2026-10-09-interactive-ephemeral-messages-design.md.
+const capturedMentionAttachments = `[{
+  "callback_id":"consistentephemeralmentions_U0EXAMPLE01_1791541429559219_0",
+  "fallback":"You may want to invite them.","id":1,
+  "actions":[
+    {"id":"1","name":"invite","text":"Add Them","type":"button","value":"invite","style":"",
+     "confirm":{"text":"New members will be able to see all of the channel's history, including any files that have been shared in the channel.",
+                "title":"Are you sure you want to add them?","ok_text":"Add","dismiss_text":"Cancel"}},
+    {"id":"2","name":"ignore","text":"Dismiss","type":"button","value":"ignore","style":""},
+    {"id":"3","name":"dont-show-again","text":"Don't Show Again","type":"button","value":"dont-show-again","style":""}]}]`
+
+func decodeCapturedAttachments(t *testing.T) []slack.Attachment {
+	t.Helper()
+	var atts []slack.Attachment
+	if err := json.Unmarshal([]byte(capturedMentionAttachments), &atts); err != nil {
+		t.Fatalf("decoding captured attachments: %v", err)
+	}
+	return atts
+}
+
+// TestParseAttachmentLegacyActions: the buttons of a legacy attachment,
+// with everything chat.attachmentAction echoes back, survive parsing.
+func TestParseAttachmentLegacyActions(t *testing.T) {
+	a := ParseAttachments(decodeCapturedAttachments(t))[0]
+	if a.ID != 1 {
+		t.Errorf("ID = %d, want 1", a.ID)
+	}
+	if a.CallbackID != "consistentephemeralmentions_U0EXAMPLE01_1791541429559219_0" {
+		t.Errorf("CallbackID = %q", a.CallbackID)
+	}
+	if len(a.Actions) != 3 {
+		t.Fatalf("len(Actions) = %d, want 3", len(a.Actions))
+	}
+	add := a.Actions[0]
+	if add.Name != "invite" || add.Text != "Add Them" || add.Type != "button" || add.Value != "invite" {
+		t.Errorf("Actions[0] = %+v", add)
+	}
+	if add.Confirm == nil {
+		t.Fatal("Actions[0].Confirm = nil, want the captured confirm dialog")
+	}
+	if add.Confirm.Title != "Are you sure you want to add them?" || add.Confirm.OKText != "Add" || add.Confirm.DismissText != "Cancel" {
+		t.Errorf("Actions[0].Confirm = %+v", *add.Confirm)
+	}
+	if a.Actions[1].Confirm != nil {
+		t.Errorf("Actions[1].Confirm = %+v, want nil", *a.Actions[1].Confirm)
+	}
+	// slack-go's AttachmentAction has no id field: the parser cannot
+	// see it. The WebSocket path fills it from the raw frame (Task 4).
+	if a.Actions[1].ID != "" {
+		t.Errorf("Actions[1].ID = %q, want empty from slack-go parsing", a.Actions[1].ID)
+	}
+}
+
+func TestParseAttachmentWithoutActions(t *testing.T) {
+	a := ParseAttachments([]slack.Attachment{{Title: "T"}})[0]
+	if a.Actions != nil {
+		t.Errorf("Actions = %+v, want nil", a.Actions)
 	}
 }
