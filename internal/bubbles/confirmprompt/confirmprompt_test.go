@@ -3,6 +3,7 @@ package confirmprompt
 import (
 	"strings"
 	"testing"
+	"unicode"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -13,8 +14,21 @@ type sentinelMsg struct{}
 
 func keyPress(r rune) tea.KeyPressMsg { return tea.KeyPressMsg{Code: r, Text: string(r)} }
 func keyCode(c rune) tea.KeyPressMsg  { return tea.KeyPressMsg{Code: c} }
-func shifted(r rune) tea.KeyPressMsg {
-	return tea.KeyPressMsg{Code: r, Text: strings.ToUpper(string(r)), Mod: tea.ModShift}
+
+// realKey builds base+mod as bubbletea's decoder does: Text is set only for an
+// unmodified or shifted letter.
+func realKey(base rune, mod tea.KeyMod) tea.KeyPressMsg {
+	k := tea.KeyPressMsg{Code: base, Mod: mod}
+	if unicode.IsLetter(base) {
+		switch mod {
+		case 0:
+			k.Text = string(base)
+		case tea.ModShift:
+			k.ShiftedCode = unicode.ToUpper(base)
+			k.Text = string(k.ShiftedCode)
+		}
+	}
+	return k
 }
 
 func opened(t *testing.T, onConfirm func() tea.Msg) Model {
@@ -40,7 +54,7 @@ func TestOpenClose(t *testing.T) {
 }
 
 func TestUpdateConfirmRunsAction(t *testing.T) {
-	for _, press := range []tea.KeyPressMsg{keyPress('y'), shifted('y'), keyCode(tea.KeyEnter)} {
+	for _, press := range []tea.KeyPressMsg{keyPress('y'), realKey('y', tea.ModShift), keyCode(tea.KeyEnter)} {
 		called := false
 		m, cmd := opened(t, func() tea.Msg {
 			called = true
@@ -64,7 +78,7 @@ func TestUpdateConfirmRunsAction(t *testing.T) {
 
 func TestUpdateCancels(t *testing.T) {
 	// n/N/Esc cancel explicitly; any unbound key cancels too.
-	for _, press := range []tea.KeyPressMsg{keyPress('n'), shifted('n'), keyCode(tea.KeyEscape), keyPress('z'), keyCode(tea.KeyTab)} {
+	for _, press := range []tea.KeyPressMsg{keyPress('n'), realKey('n', tea.ModShift), keyCode(tea.KeyEscape), keyPress('z'), keyCode(tea.KeyTab)} {
 		m, cmd := opened(t, func() tea.Msg { return sentinelMsg{} }).Update(press)
 		if cmd != nil {
 			t.Errorf("%q: expected no command on cancel", press.String())
@@ -196,21 +210,48 @@ func TestInitNoCommand(t *testing.T) {
 	}
 }
 
-func TestUpdateIgnoresModifiersOnSpecialKeys(t *testing.T) {
-	// A stray modifier on Enter must still confirm; on a printable key
-	// the shifted text is the binding, so Shift+y is "Y".
-	m, cmd := opened(t, func() tea.Msg { return sentinelMsg{} }).
-		Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
-	if cmd == nil {
-		t.Error("shift+enter should confirm")
+// TestUpdateModifierGrid pins which modified keys confirm, with each key built
+// the way bubbletea's decoder builds it: a shifted letter carries its
+// upper-case Text, while ctrl/alt on a letter and any modifier on a special key
+// leave Text empty. want is the grid internal/ui recorded on main before this
+// package existed (TestConfirmPromptModifierGrid): a modifier on a
+// non-printable key is ignored, on a printable one it is part of the key.
+func TestUpdateModifierGrid(t *testing.T) {
+	t.Parallel()
+	mods := []struct {
+		name string
+		mod  tea.KeyMod
+	}{
+		{"none", 0},
+		{"shift", tea.ModShift},
+		{"ctrl", tea.ModCtrl},
+		{"alt", tea.ModAlt},
+		{"ctrl+alt", tea.ModCtrl | tea.ModAlt},
 	}
-	if m.IsVisible() {
-		t.Error("prompt should close")
+	keys := []struct {
+		name string
+		base rune
+		want [5]bool // confirms, per mods
+	}{
+		{"y", 'y', [5]bool{true, true, false, false, false}},
+		{"n", 'n', [5]bool{false, false, false, false, false}},
+		{"enter", tea.KeyEnter, [5]bool{true, true, true, true, true}},
+		{"esc", tea.KeyEscape, [5]bool{false, false, false, false, false}},
 	}
-
-	if _, cmd := opened(t, func() tea.Msg { return sentinelMsg{} }).
-		Update(tea.KeyPressMsg{Code: 'z', Text: "z", Mod: tea.ModCtrl}); cmd != nil {
-		t.Error("ctrl+z should cancel, not confirm")
+	for _, k := range keys {
+		for i, md := range mods {
+			press := realKey(k.base, md.mod)
+			t.Run(k.name+"/"+md.name, func(t *testing.T) {
+				t.Parallel()
+				m, cmd := opened(t, func() tea.Msg { return sentinelMsg{} }).Update(press)
+				if got := cmd != nil; got != k.want[i] {
+					t.Errorf("%s (Text %q): confirmed = %v, want %v", press.String(), press.Text, got, k.want[i])
+				}
+				if m.IsVisible() {
+					t.Errorf("%s: prompt should close", press.String())
+				}
+			})
+		}
 	}
 }
 

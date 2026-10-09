@@ -1,7 +1,10 @@
 package ui
 
 import (
+	"fmt"
+	"strings"
 	"testing"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -85,6 +88,75 @@ func wantCancelled(fired *bool) func(*testing.T, *App, tea.Cmd) {
 			t.Error("onConfirm callback ran on a cancel key")
 		}
 	}
+}
+
+// realKey builds base+mod the way bubbletea's decoder does: a shifted
+// letter carries its upper-case Text and ShiftedCode, while any other
+// modifier on a letter, and every modifier on a special key, leaves
+// Text empty.
+func realKey(base rune, mod tea.KeyMod) tea.KeyPressMsg {
+	k := tea.KeyPressMsg{Code: base, Mod: mod}
+	if unicode.IsLetter(base) {
+		switch mod {
+		case 0:
+			k.Text = string(base)
+		case tea.ModShift:
+			k.ShiftedCode = unicode.ToUpper(base)
+			k.Text = string(k.ShiftedCode)
+		}
+	}
+	return k
+}
+
+// TestConfirmPromptModifierGrid drives every {key} x {modifier} pair
+// through the real Update chain against the real quit prompt, which
+// confirms by returning tea.Quit. want is the grid recorded by running
+// this test on main before the prompt moved to internal/bubbles: only
+// y, Y and Enter (with any modifier) confirm; ctrl+y and alt+y cancel.
+func TestConfirmPromptModifierGrid(t *testing.T) {
+	mods := []struct {
+		name string
+		mod  tea.KeyMod
+	}{
+		{"none", 0},
+		{"shift", tea.ModShift},
+		{"ctrl", tea.ModCtrl},
+		{"alt", tea.ModAlt},
+		{"ctrl+alt", tea.ModCtrl | tea.ModAlt},
+	}
+	keys := []struct {
+		name string
+		base rune
+		want [5]bool // confirms, per mods
+	}{
+		{"y", 'y', [5]bool{true, true, false, false, false}},
+		{"n", 'n', [5]bool{false, false, false, false, false}},
+		{"enter", tea.KeyEnter, [5]bool{true, true, true, true, true}},
+		{"esc", tea.KeyEscape, [5]bool{false, false, false, false, false}},
+	}
+
+	var grid strings.Builder
+	for _, k := range keys {
+		fmt.Fprintf(&grid, "\n%-6s", k.name)
+		for i, m := range mods {
+			press := realKey(k.base, m.mod)
+			a := newTestApp(t, withSize(120, 40))
+			a.openQuitConfirm()
+			if !a.confirmPrompt.IsVisible() || a.mode != ModeConfirm {
+				t.Fatal("precondition: quit prompt is not open")
+			}
+			_, cmd := a.Update(press)
+			got := cmd != nil && cmd() == tea.QuitMsg{}
+			fmt.Fprintf(&grid, " %-9s", fmt.Sprintf("%s=%s", m.name, map[bool]string{true: "C", false: "x"}[got]))
+			if got != k.want[i] {
+				t.Errorf("%s (%q): confirmed = %v, want %v", press.String(), press.Text, got, k.want[i])
+			}
+			if a.confirmPrompt.IsVisible() || a.mode != ModeNormal {
+				t.Errorf("%s: prompt should close and drop to ModeNormal", press.String())
+			}
+		}
+	}
+	t.Logf("C = confirmed, x = cancelled%s", grid.String())
 }
 
 func TestConfirmModeKeys(t *testing.T) {
