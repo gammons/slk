@@ -134,3 +134,26 @@ func TestRenderThreadMessageBlocksCarryBody(t *testing.T) {
 		t.Errorf("reaction hit row = %d, want %d (the reaction line); got %q", row, len(lines)-1, lines)
 	}
 }
+
+// TestRenderThreadMessageEphemeralLabel: same marker as the messages
+// pane, above the author, and the reaction hit row accounts for it.
+func TestRenderThreadMessageEphemeralLabel(t *testing.T) {
+	const width = 60
+	m := New()
+	msg := messages.MessageItem{
+		TS: "1700000005.000000", UserName: "slackbot", Timestamp: "10:34 AM",
+		Text: "not in channel", Ephemeral: true,
+		Reactions: []messages.ReactionItem{{Emoji: "tada", Count: 1}},
+	}
+	got, _, hits, _, _ := m.renderThreadMessage(msg, width, nil, nil, false)
+	lines := strings.Split(ansi.Strip(got), "\n")
+	if len(lines) < 2 || !strings.Contains(lines[0], "Only visible to you") || !strings.Contains(lines[1], "slackbot") {
+		t.Fatalf("want the label on row 0 and the author on row 1; got %q", lines)
+	}
+	if len(hits) == 0 {
+		t.Fatal("no reaction hits recorded")
+	}
+	if row := hits[0].rowStartInEntry; row != len(lines)-1 {
+		t.Errorf("reaction hit row = %d, want %d (the reaction line); got %q", row, len(lines)-1, lines)
+	}
+}

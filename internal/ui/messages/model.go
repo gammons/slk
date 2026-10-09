@@ -2240,16 +2240,20 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 	// Pre-attachment row count, so attachment rows can compute their
 	// absolute row index (used as the sixelRows key).
 	//
-	//   row 0: broadcastLabel (only when subtype=thread_broadcast)
-	//   row 0|1: username line + editedMark
+	//   rows 0..: label rows (ephemeral, then thread_broadcast), each optional
+	//   next row: username line + editedMark
 	//   row N: wrapped body text (lipgloss.Height of styled `text`);
 	//          absent when BlocksCarryBody
 	//
 	// Attachments begin immediately after the body text.
-	var broadcastLabel string
+	var labelRows string
 	preAttachmentRows := 0
+	if msg.Ephemeral {
+		labelRows += EphemeralLabel() + "\n"
+		preAttachmentRows++ // the ephemeral label occupies its own row
+	}
 	if msg.Subtype == "thread_broadcast" {
-		broadcastLabel = styles.Timestamp.Render("\u21b3 replied to a thread") + "\n"
+		labelRows += styles.Timestamp.Render("\u21b3 replied to a thread") + "\n"
 		preAttachmentRows++ // the broadcast label occupies its own row
 	}
 	preAttachmentRows++ // username + ts row
@@ -2446,7 +2450,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 	if hasBody {
 		bodyRow = "\n" + text
 	}
-	msgContent := broadcastLabel + line + editedMark + bodyRow + bkBlock + attachmentLines + threadLine + reactionLine
+	msgContent := labelRows + line + editedMark + bodyRow + bkBlock + attachmentLines + threadLine + reactionLine
 
 	// Translate per-pill specs into entry-relative reaction hit rects.
 	// reactionRowBase is the row index (within linesNormal) where the
