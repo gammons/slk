@@ -113,7 +113,7 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
 
 ## Marks & Navigation
 
-- **Vim-style marks** — `m` + a letter records the selected message; `'` + that letter jumps back to it. A mark captures the channel, the message, and, when set inside a thread, the thread and the reply, so a mark can return you to one message in a 200-reply thread.
+- **Vim-style marks** — `m` + a letter records the selected message; `'` + that letter jumps back to it. A mark captures the channel, the message, and, when set inside a thread, the thread and the reply, so a mark can return you to one message in a 200-reply thread. In the Threads view, a mark records the selected thread.
 - Session vs. persistent, as in vim: lowercase marks (`ma`–`mz`) die with the session, uppercase (`mA`–`mZ`) survive a restart. `persist_all` makes lowercase persist too, non-destructively.
 - `''` back-jump — returns you to where you were before the last jump, whether or not it changed channel; press again to toggle back.
 - `:marks` overlay — every mark with its channel and a preview of the message, rendered from a snapshot taken at mark time, so it works offline and immediately after a restart. `Backspace` deletes a row; `:delmarks abc` deletes by letter.

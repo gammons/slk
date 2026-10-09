@@ -76,10 +76,10 @@ func TestMarksOverlay_DeleteRemovesRowAndKeepsRest(t *testing.T) {
 		t.Fatalf("delete produced a cmd: %v", cmd)
 	}
 
-	if _, ok := app.marks.Load("T1", "a"); ok {
+	if _, ok, _ := app.marks.Load("T1", "a"); ok {
 		t.Fatal("mark a must be removed by the delete action")
 	}
-	if _, ok := app.marks.Load("T1", "b"); !ok {
+	if _, ok, _ := app.marks.Load("T1", "b"); !ok {
 		t.Fatal("mark b must remain")
 	}
 	// The overlay stays open showing the remaining marks.
@@ -157,5 +157,30 @@ func TestMarksOverlay_PreviewResolvesEmojiAndCollapsesNewlines(t *testing.T) {
 	}
 	if !strings.Contains(got, "Hello team, the demo moves") {
 		t.Errorf("collapse mangled the text: %q", got)
+	}
+}
+
+// Ctrl+C leaves ModeMarks through the global quit intercept, not
+// through handleMarksMode. The list must close with the mode, or it
+// stays drawn over the quit prompt and, once the prompt is cancelled,
+// over a channel whose keys are live underneath.
+func TestMarksOverlay_ClosesWhenQuitPromptInterrupts(t *testing.T) {
+	app := jumpMarkTestApp(t)
+	app.Update(keyPress('\''))
+	if !app.marksOverlay.IsVisible() {
+		t.Fatal("precondition: ' did not open the marks list")
+	}
+
+	app.Update(keyMod('c', tea.ModCtrl))
+	if app.mode != ModeConfirm {
+		t.Fatalf("mode = %v, want ModeConfirm", app.mode)
+	}
+	if app.marksOverlay.IsVisible() {
+		t.Fatal("marks list still visible behind the quit prompt")
+	}
+
+	app.Update(keyCode(tea.KeyEscape))
+	if app.mode != ModeNormal || app.marksOverlay.IsVisible() {
+		t.Fatalf("after cancelling the prompt: mode=%v list visible=%v, want normal and closed", app.mode, app.marksOverlay.IsVisible())
 	}
 }

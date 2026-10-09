@@ -93,10 +93,10 @@ func TestMarksStore_UppercasePersistsLowercaseDoesNot(t *testing.T) {
 	s2 := newMarksStore()
 	s2.persist = persist
 
-	if m, ok := s2.Load("T1", "A"); !ok || m.ChannelID != "C1" {
+	if m, ok, _ := s2.Load("T1", "A"); !ok || m.ChannelID != "C1" {
 		t.Fatalf("uppercase mark after restart = %+v ok=%v, want the persisted location", m, ok)
 	}
-	if _, ok := s2.Load("T1", "a"); ok {
+	if _, ok, _ := s2.Load("T1", "a"); ok {
 		t.Fatal("lowercase mark must not survive a restart with persist_all off")
 	}
 }
@@ -111,7 +111,7 @@ func TestMarksStore_PersistAll_KeepsLowercaseAcrossRestart(t *testing.T) {
 	s2 := newMarksStore()
 	s2.persist = persist
 	s2.persistAll = true
-	if m, ok := s2.Load("T1", "a"); !ok || m.MessageTS != "1.0" {
+	if m, ok, _ := s2.Load("T1", "a"); !ok || m.MessageTS != "1.0" {
 		t.Fatalf("lowercase mark after restart with persist_all on = %+v ok=%v", m, ok)
 	}
 }
@@ -130,10 +130,10 @@ func TestMarksStore_PersistAllOff_IsNonDestructive(t *testing.T) {
 	// and does not appear in the list.
 	s2 := newMarksStore()
 	s2.persist = persist
-	if _, ok := s2.Load("T1", "a"); ok {
+	if _, ok, _ := s2.Load("T1", "a"); ok {
 		t.Fatal("lowercase mark must not load while persist_all is off")
 	}
-	if marks := s2.List("T1"); len(marks) != 0 {
+	if marks := mustListMarks(t, s2, "T1"); len(marks) != 0 {
 		t.Fatalf("lowercase mark must not surface while persist_all is off, got %+v", marks)
 	}
 
@@ -142,7 +142,7 @@ func TestMarksStore_PersistAllOff_IsNonDestructive(t *testing.T) {
 	s3 := newMarksStore()
 	s3.persist = persist
 	s3.persistAll = true
-	if m, ok := s3.Load("T1", "a"); !ok || m.MessageTS != "1.0" {
+	if m, ok, _ := s3.Load("T1", "a"); !ok || m.MessageTS != "1.0" {
 		t.Fatalf("lowercase mark after toggling persist_all back on = %+v ok=%v", m, ok)
 	}
 }
@@ -155,13 +155,13 @@ func TestMarksStore_PerWorkspaceIsolation(t *testing.T) {
 	s.Set("T1", "a", testMark("a", "C1", "1.0"))
 	s.Set("T2", "a", testMark("a", "C9", "9.0"))
 
-	if m, ok := s.Load("T1", "a"); !ok || m.ChannelID != "C1" {
+	if m, ok, _ := s.Load("T1", "a"); !ok || m.ChannelID != "C1" {
 		t.Fatalf("T1 mark a = %+v ok=%v, want C1", m, ok)
 	}
-	if m, ok := s.Load("T2", "a"); !ok || m.ChannelID != "C9" {
+	if m, ok, _ := s.Load("T2", "a"); !ok || m.ChannelID != "C9" {
 		t.Fatalf("T2 mark a = %+v ok=%v, want C9", m, ok)
 	}
-	t1 := s.List("T1")
+	t1 := mustListMarks(t, s, "T1")
 	if len(t1) != 1 || t1[0].ChannelID != "C1" {
 		t.Fatalf("T1 list = %+v, want only the T1 mark", t1)
 	}
@@ -175,10 +175,10 @@ func TestMarksStore_OverwriteReplaces(t *testing.T) {
 	s.Set("T1", "a", testMark("a", "C1", "1.0"))
 	s.Set("T1", "a", testMark("a", "C2", "2.0"))
 
-	if m, ok := s.Load("T1", "a"); !ok || m.ChannelID != "C2" || m.MessageTS != "2.0" {
+	if m, ok, _ := s.Load("T1", "a"); !ok || m.ChannelID != "C2" || m.MessageTS != "2.0" {
 		t.Fatalf("mark after overwrite = %+v ok=%v, want the new location", m, ok)
 	}
-	if marks := s.List("T1"); len(marks) != 1 {
+	if marks := mustListMarks(t, s, "T1"); len(marks) != 1 {
 		t.Fatalf("list after overwrite = %+v, want exactly one entry", marks)
 	}
 }
@@ -193,13 +193,13 @@ func TestMarksStore_DeleteRemovesFromBothTiers(t *testing.T) {
 	}
 	s.Delete("T1", "A")
 
-	if _, ok := s.Load("T1", "A"); ok {
+	if _, ok, _ := s.Load("T1", "A"); ok {
 		t.Fatal("deleted uppercase mark still loads")
 	}
 	// Restart: the deletion reached the table, so the mark stays gone.
 	s2 := newMarksStore()
 	s2.persist = persist
-	if _, ok := s2.Load("T1", "A"); ok {
+	if _, ok, _ := s2.Load("T1", "A"); ok {
 		t.Fatal("deleted uppercase mark resurrected after restart")
 	}
 }
@@ -216,7 +216,7 @@ func TestMarksStore_ListMergesTiers(t *testing.T) {
 		}
 	}
 
-	got := s.List("T1")
+	got := mustListMarks(t, s, "T1")
 	if len(got) != 4 {
 		t.Fatalf("list = %+v, want 4 entries", got)
 	}
@@ -248,4 +248,14 @@ func lettersOf(marks []Mark) string {
 		out += m.Letter
 	}
 	return out
+}
+
+// mustListMarks lists teamID's marks and fails the test on a read error.
+func mustListMarks(t *testing.T, s *marksStore, teamID string) []Mark {
+	t.Helper()
+	marks, err := s.List(teamID)
+	if err != nil {
+		t.Fatalf("List(%q): %v", teamID, err)
+	}
+	return marks
 }

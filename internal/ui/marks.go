@@ -137,39 +137,43 @@ func (s *marksStore) Set(teamID, letter string, m Mark) error {
 
 // Load returns the mark recorded under letter in teamID. The session
 // tier wins for lowercase marks (it is fresher and the only copy when
-// persist_all is off); everything else resolves through the table.
-func (s *marksStore) Load(teamID, letter string) (Mark, bool) {
+// persist_all is off); everything else resolves through the table. A
+// failed table read is returned as an error, not as an unset mark.
+func (s *marksStore) Load(teamID, letter string) (Mark, bool, error) {
 	if !isUpper(letter) {
 		if m, ok := s.session[teamID][letter]; ok {
-			return m, true
+			return m, true, nil
 		}
 		if !s.persistAll {
-			return Mark{}, false
+			return Mark{}, false, nil
 		}
 	}
 	if s.persist == nil {
-		return Mark{}, false
+		return Mark{}, false, nil
 	}
 	marks, err := s.persist.ListMarks(teamID)
 	if err != nil {
-		return Mark{}, false
+		return Mark{}, false, err
 	}
 	for _, m := range marks {
 		if m.Letter == letter {
-			return m, true
+			return m, true, nil
 		}
 	}
-	return Mark{}, false
+	return Mark{}, false, nil
 }
 
 // List returns every mark in teamID, lowercase letters first then
 // uppercase, both in alphabetical order. Lowercase rows that reached
 // the table during a persist_all-on period are excluded while the
-// option is off.
-func (s *marksStore) List(teamID string) []Mark {
+// option is off. When the table cannot be read, the session marks are
+// still returned, together with the error.
+func (s *marksStore) List(teamID string) ([]Mark, error) {
 	merged := make(map[string]Mark)
+	var err error
 	if s.persist != nil {
-		if marks, err := s.persist.ListMarks(teamID); err == nil {
+		var marks []Mark
+		if marks, err = s.persist.ListMarks(teamID); err == nil {
 			for _, m := range marks {
 				if isUpper(m.Letter) || s.persistAll {
 					merged[m.Letter] = m
@@ -191,18 +195,20 @@ func (s *marksStore) List(teamID string) []Mark {
 			out = append(out, m)
 		}
 	}
-	return out
+	return out, err
 }
 
 // Delete removes letter from teamID, from the session tier and from
 // the table. Always touching the table means a lowercase row left over
 // from a persist_all-on period is really gone — it must not resurrect
-// the mark if the option is turned back on.
-func (s *marksStore) Delete(teamID, letter string) {
+// the mark if the option is turned back on. A failed table delete is
+// returned: the row would bring the mark back after a restart.
+func (s *marksStore) Delete(teamID, letter string) error {
 	delete(s.session[teamID], letter)
 	if s.persist != nil {
-		_ = s.persist.DeleteMark(teamID, letter)
+		return s.persist.DeleteMark(teamID, letter)
 	}
+	return nil
 }
 
 // SetMarksPersistStore wires the SQLite-backed half of the marks

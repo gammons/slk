@@ -51,7 +51,10 @@ func (a *App) handleJumpChord(msg tea.KeyMsg) tea.Cmd {
 // the existing completePendingLinkNav / MessagesAroundLoadedMsg
 // pipeline toasts "Message not found", leaving the mark intact.
 func (a *App) jumpToMark(letter string) tea.Cmd {
-	m, ok := a.marks.Load(a.activeTeamID, letter)
+	m, ok, err := a.marks.Load(a.activeTeamID, letter)
+	if err != nil {
+		return toastWithClear(a, "Failed to read mark "+letter, 3*time.Second)
+	}
 	if !ok {
 		return toastWithClear(a, "Mark "+letter+" is not set", 2*time.Second)
 	}

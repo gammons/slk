@@ -70,9 +70,9 @@ func cmdWorkspaceFinder(a *App, _ []string) tea.Cmd {
 // the overlay — the show_jump_overlay option suppresses the overlay on
 // the jump key only, never the list-marks command.
 func cmdMarks(a *App, _ []string) tea.Cmd {
-	a.openMarksOverlay()
+	cmd := a.openMarksOverlay()
 	a.SetMode(ModeMarks)
-	return nil
+	return cmd
 }
 
 // cmdDelMarks deletes marks by letter. Each whitespace-separated token
@@ -83,12 +83,18 @@ func cmdMarks(a *App, _ []string) tea.Cmd {
 // overlay's row delete action calls, so the two surfaces cannot
 // diverge.
 func cmdDelMarks(a *App, args []string) tea.Cmd {
+	var failed string
 	for _, arg := range args {
 		for i := 0; i < len(arg); i++ {
 			if isMarkLetter(arg[i]) {
-				a.marks.Delete(a.activeTeamID, string(arg[i]))
+				if err := a.marks.Delete(a.activeTeamID, string(arg[i])); err != nil {
+					failed += string(arg[i])
+				}
 			}
 		}
+	}
+	if failed != "" {
+		return toastWithClear(a, "Failed to delete saved mark "+failed, 3*time.Second)
 	}
 	return nil
 }

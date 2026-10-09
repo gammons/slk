@@ -239,7 +239,7 @@ func TestJumpMark_ForeignWorkspaceRefusedAndRetained(t *testing.T) {
 	if sel, _ := app.messagepane.SelectedMessage(); sel.TS != "1.0" {
 		t.Fatalf("selection moved on refusal: %+v", sel)
 	}
-	if _, ok := app.marks.Load("T1", "a"); !ok {
+	if _, ok, _ := app.marks.Load("T1", "a"); !ok {
 		t.Fatal("the refused mark must be retained")
 	}
 }
@@ -280,7 +280,7 @@ func TestJumpMark_MessageGoneOpensChannelToastsAndRetains(t *testing.T) {
 	if app.activeChannelID != "C2" {
 		t.Fatalf("the channel must still open, active = %q, want C2", app.activeChannelID)
 	}
-	if _, ok := app.marks.Load("T1", "a"); !ok {
+	if _, ok, _ := app.marks.Load("T1", "a"); !ok {
 		t.Fatal("a mark whose message is gone must be retained")
 	}
 }
@@ -311,7 +311,7 @@ func TestJumpMark_UnresolvableChannelLeavesInPlace(t *testing.T) {
 	if sel, _ := app.messagepane.SelectedMessage(); sel.TS != "1.0" {
 		t.Fatalf("selection moved on refusal: %+v", sel)
 	}
-	if _, ok := app.marks.Load("T1", "a"); !ok {
+	if _, ok, _ := app.marks.Load("T1", "a"); !ok {
 		t.Fatal("the refused mark must be retained")
 	}
 }
@@ -849,5 +849,31 @@ func TestJumpMark_UploadInFlightRefusesNavigation(t *testing.T) {
 				t.Errorf("history cursor = %d, want %d", s.cursor, cursor)
 			}
 		})
+	}
+}
+
+// A same-channel jump taken while the channel's fetch is still running
+// lands on the cached buffer. The fetched messages then replace that
+// buffer, and the jump must survive it rather than snap to the newest
+// message.
+func TestJumpMark_SameChannelSurvivesRunningFetch(t *testing.T) {
+	app := jumpMarkTestApp(t)
+	// syncedAt 0: the cache renders and a fetch is fired (tier 2).
+	app.setChannelSyncedAtReaderForTest(func(ids.ChannelID) int64 { return 0 })
+	seedMark(t, app, "a", Location{TeamID: "T1", ChannelID: "C1", MessageTS: "1.0"})
+	app.Update(ChannelSelectedMsg{ID: "C1", Name: "one", Type: "channel"})
+
+	driveJump(app, pressJumpChord(app, 'a'))
+	if sel, ok := app.messagepane.SelectedMessage(); !ok || sel.TS != "1.0" {
+		t.Fatalf("precondition: jump selected %+v ok=%v, want 1.0", sel, ok)
+	}
+
+	_, cmd := app.Update(MessagesLoadedMsg{ChannelID: "C1", Messages: []messages.MessageItem{
+		{TS: "1.0", Text: "one"}, {TS: "2.0", Text: "two"}, {TS: "3.0", Text: "three"},
+	}})
+	drainCmd(cmd)
+
+	if sel, ok := app.messagepane.SelectedMessage(); !ok || sel.TS != "1.0" {
+		t.Fatalf("after the fetch landed, selected = %+v ok=%v, want the marked 1.0", sel, ok)
 	}
 }

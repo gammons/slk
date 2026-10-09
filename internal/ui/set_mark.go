@@ -53,6 +53,14 @@ func (a *App) setMark(letter string) tea.Cmd {
 			m.AuthorName = reply.UserName
 			m.Excerpt = truncateReason(reply.Text, 100)
 		}
+	} else if a.view == ViewThreads {
+		if s, ok := a.threadsView.SelectedSummary(); ok {
+			m.AuthorName = a.userNameFor(s.ParentUserID)
+			m.Excerpt = truncateReason(s.ParentText, 100)
+			if m.ChannelName == "" {
+				m.ChannelName = s.ChannelName
+			}
+		}
 	} else if msg, ok := a.messagepane.SelectedMessage(); ok {
 		m.AuthorName = msg.UserName
 		m.Excerpt = truncateReason(msg.Text, 100)

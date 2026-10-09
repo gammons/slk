@@ -12,6 +12,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/messages"
 )
@@ -48,7 +49,7 @@ func TestSetMark_ChannelMessageRecordsLocationAndSnapshot(t *testing.T) {
 		t.Fatalf("marking returned a cmd: %v", cmd)
 	}
 
-	m, ok := app.marks.Load("T1", "a")
+	m, ok, _ := app.marks.Load("T1", "a")
 	if !ok {
 		t.Fatal("mark a not recorded")
 	}
@@ -81,7 +82,7 @@ func TestSetMark_ThreadReplyRecordsThreadAndReply(t *testing.T) {
 		t.Fatalf("marking returned a cmd: %v", cmd)
 	}
 
-	m, ok := app.marks.Load("T1", "b")
+	m, ok, _ := app.marks.Load("T1", "b")
 	if !ok {
 		t.Fatal("mark b not recorded")
 	}
@@ -105,11 +106,11 @@ func TestSetMark_OverwriteReplaces(t *testing.T) {
 	app.messagepane.SelectByTS("2.0")
 	pressMarkChord(app, 'a')
 
-	m, ok := app.marks.Load("T1", "a")
+	m, ok, _ := app.marks.Load("T1", "a")
 	if !ok || m.MessageTS != "2.0" {
 		t.Fatalf("mark after overwrite = %+v ok=%v, want 2.0", m, ok)
 	}
-	if marks := app.marks.List("T1"); len(marks) != 1 {
+	if marks := mustListMarks(t, app.marks, "T1"); len(marks) != 1 {
 		t.Fatalf("list after overwrite = %+v, want exactly one entry", marks)
 	}
 }
@@ -135,7 +136,7 @@ func TestSetMark_NonLetterCancelsSilently(t *testing.T) {
 			if app.pendingMark {
 				t.Fatal("pendingMark must be cleared by the cancel")
 			}
-			if marks := app.marks.List("T1"); len(marks) != 0 {
+			if marks := mustListMarks(t, app.marks, "T1"); len(marks) != 0 {
 				t.Fatalf("cancel recorded marks: %+v", marks)
 			}
 		})
@@ -153,7 +154,7 @@ func TestSetMark_NoSelectionToastsAndRecordsNothing(t *testing.T) {
 	if !strings.Contains(app.statusbar.View(80), "No message selected") {
 		t.Fatalf("expected no-selection toast, got %q", app.statusbar.View(80))
 	}
-	if _, ok := app.marks.Load("T1", "a"); ok {
+	if _, ok, _ := app.marks.Load("T1", "a"); ok {
 		t.Fatal("no-selection must not record a mark")
 	}
 }
@@ -178,7 +179,7 @@ func TestSetMark_FailedPersistToasts(t *testing.T) {
 	if !strings.Contains(app.statusbar.View(80), "Failed to save mark") {
 		t.Fatalf("expected persist-failure toast, got %q", app.statusbar.View(80))
 	}
-	if _, ok := app.marks.Load("T1", "A"); ok {
+	if _, ok, _ := app.marks.Load("T1", "A"); ok {
 		t.Fatal("the failed uppercase mark must not exist")
 	}
 }
@@ -208,7 +209,7 @@ func TestSetMark_FailedPersistUnderPersistAllToasts(t *testing.T) {
 	}
 	// The session copy still exists — the mark works for this session,
 	// it just will not survive the restart the user asked for.
-	if _, ok := app.marks.Load("T1", "a"); !ok {
+	if _, ok, _ := app.marks.Load("T1", "a"); !ok {
 		t.Fatal("the lowercase mark should still be usable this session")
 	}
 }
@@ -230,7 +231,7 @@ func TestSetMark_LowercaseWithoutPersistAllIsSilent(t *testing.T) {
 	if strings.Contains(app.statusbar.View(80), "Failed to save mark") {
 		t.Fatal("a session-only lowercase mark must not report a persist failure")
 	}
-	if _, ok := app.marks.Load("T1", "a"); !ok {
+	if _, ok, _ := app.marks.Load("T1", "a"); !ok {
 		t.Fatal("the lowercase mark should exist in the session tier")
 	}
 }
@@ -262,7 +263,7 @@ func TestSetMark_ModeChangeDisarmsPendingChord(t *testing.T) {
 	// Back in normal mode, a letter must do its own job, not name a mark.
 	app.SetMode(ModeNormal)
 	app.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
-	if _, ok := app.marks.Load("T1", "j"); ok {
+	if _, ok, _ := app.marks.Load("T1", "j"); ok {
 		t.Fatal("j was swallowed as a mark letter after the mode change")
 	}
 }
@@ -287,7 +288,7 @@ func TestSetMark_ThreadReplyRecordsTheThreadsOwnChannel(t *testing.T) {
 	app.Update(tea.KeyPressMsg{Code: 'm', Text: "m"})
 	app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 
-	m, ok := app.marks.Load("T1", "a")
+	m, ok, _ := app.marks.Load("T1", "a")
 	if !ok {
 		t.Fatal("mark a should exist")
 	}
@@ -296,5 +297,53 @@ func TestSetMark_ThreadReplyRecordsTheThreadsOwnChannel(t *testing.T) {
 	}
 	if string(m.ThreadTS) != "P1" || string(m.MessageTS) != "R1" {
 		t.Errorf("thread/reply = %q/%q, want P1/R1", m.ThreadTS, m.MessageTS)
+	}
+}
+
+// In the Threads view the focused list is the threads list, and the
+// messages pane behind it still holds the last channel. A mark must
+// name the selected thread, not a hidden channel message.
+func TestSetMark_ThreadsViewMarksSelectedThread(t *testing.T) {
+	app := setMarkTestApp(t)
+	app.messagepane.SetMessages([]messages.MessageItem{{TS: "1.0", UserName: "alice", Text: "hidden channel message"}})
+	app.threadsView.SetSummaries([]core.ThreadSummary{{
+		ChannelID:   "C2",
+		ChannelName: "design",
+		ThreadTS:    "5.0",
+		ParentText:  "thread parent",
+	}})
+	app.view = ViewThreads
+	app.focusedPanel = PanelMessages
+
+	if cmd := pressMarkChord(app, 'a'); cmd != nil {
+		t.Fatalf("setting the mark toasted %q", statusbarText(app))
+	}
+	m, ok, _ := app.marks.Load("T1", "a")
+	if !ok {
+		t.Fatal("no mark recorded")
+	}
+	want := Location{TeamID: "T1", ChannelID: "C2", MessageTS: "5.0", ThreadTS: "5.0"}
+	if m.Location != want {
+		t.Fatalf("mark = %+v, want the selected thread %+v", m.Location, want)
+	}
+	if m.Excerpt != "thread parent" {
+		t.Errorf("excerpt = %q, want the thread parent's text", m.Excerpt)
+	}
+}
+
+// The Activity view has no message selection of its own; the messages
+// pane behind it is hidden, so nothing may be marked from it.
+func TestSetMark_ActivityViewRefuses(t *testing.T) {
+	app := setMarkTestApp(t)
+	app.messagepane.SetMessages([]messages.MessageItem{{TS: "1.0", Text: "hidden channel message"}})
+	app.view = ViewActivity
+	app.focusedPanel = PanelMessages
+
+	pressMarkChord(app, 'a')
+	if _, ok, _ := app.marks.Load("T1", "a"); ok {
+		t.Fatal("a hidden channel message was marked from the Activity view")
+	}
+	if got := statusbarText(app); !strings.Contains(got, "No message selected") {
+		t.Errorf("status bar = %q, want the no-selection toast", got)
 	}
 }

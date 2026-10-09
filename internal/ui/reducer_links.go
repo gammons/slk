@@ -127,8 +127,9 @@ func (a *App) applyLocation(loc Location, fromHistory bool) (tea.Cmd, bool) {
 	}
 	a.pendingLinkNav = &pendingLinkNav{Location: loc}
 	if !fromHistory && string(loc.ChannelID) == a.activeChannelID {
-		// Already viewing the channel; the loaded buffer is as good
-		// as it gets, so complete authoritatively right now.
+		// Already viewing the channel; unless its fetch is still
+		// running (below), the loaded buffer is as good as it gets,
+		// so complete authoritatively right now.
 		//
 		// This path skips ChannelSelectedMsg, and with it the view and
 		// focus reset that arm performs (reducer_channels.go). Without
@@ -148,7 +149,11 @@ func (a *App) applyLocation(loc Location, fromHistory bool) (tea.Cmd, bool) {
 			a.CloseThread()
 		}
 		a.focusedPanel = PanelMessages
-		return a.completePendingLinkNav(a.activeChannelID, true), true
+		// With the channel's fetch still running, the cached buffer
+		// is not final: select now, and keep the target so the
+		// MessagesLoadedMsg arm re-applies it after the load.
+		authoritative := a.channelFetchInFlight != a.activeChannelID
+		return a.completePendingLinkNav(a.activeChannelID, authoritative), true
 	}
 	id, n, t, team := string(loc.ChannelID), name, chType, a.activeTeamID
 	return func() tea.Msg {

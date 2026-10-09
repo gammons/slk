@@ -31,34 +31,59 @@ type Location struct {
 	ThreadTS ids.ThreadTS
 }
 
-// currentLocation snapshots the position the user is at right now:
-// the active team, the active channel, and the selected message — the
-// thread panel's selected reply when the thread panel is focused, the
-// messages pane's selection otherwise. ok=false when no message is
-// selected (there is nothing to name).
+// currentLocation snapshots the message the user is looking at right
+// now: the thread panel's selected reply when the thread panel is
+// focused; in the Threads view, the parent of the selected thread; and
+// otherwise the messages pane's selection. In the Activity view nothing
+// is named: the messages pane is hidden behind the list there. ok=false
+// when there is nothing to name.
 func (a *App) currentLocation() (Location, bool) {
-	if a.focusedPanel == PanelThread {
-		reply := a.threadPanel.SelectedReply()
-		if reply == nil {
+	if a.focusedPanel != PanelThread {
+		switch a.view {
+		case ViewThreads:
+			// The messages pane behind the list still holds the last
+			// channel, so reading it would name a message the user
+			// cannot see.
+			s, ok := a.threadsView.SelectedSummary()
+			if !ok {
+				return Location{}, false
+			}
+			return Location{
+				TeamID:    ids.TeamID(a.activeTeamID),
+				ChannelID: ids.ChannelID(s.ChannelID),
+				MessageTS: ids.MessageTS(s.ThreadTS),
+				ThreadTS:  ids.ThreadTS(s.ThreadTS),
+			}, true
+		case ViewActivity:
 			return Location{}, false
 		}
-		// The thread's own channel, NOT activeChannelID. In the Threads
-		// view the panel shows a thread from any channel while
-		// activeChannelID still names whichever channel was last
-		// opened, so recording the active channel here stored a thread
-		// ts against a channel that has no such thread — the jump then
-		// opened an empty panel reading "0 replies".
-		channelID := a.threadPanel.ChannelID()
-		if channelID == "" {
-			channelID = a.activeChannelID
-		}
-		return Location{
-			TeamID:    ids.TeamID(a.activeTeamID),
-			ChannelID: ids.ChannelID(channelID),
-			MessageTS: ids.MessageTS(reply.TS),
-			ThreadTS:  ids.ThreadTS(a.threadPanel.ThreadTS()),
-		}, true
+		return a.channelPaneLocation()
 	}
+	reply := a.threadPanel.SelectedReply()
+	if reply == nil {
+		return Location{}, false
+	}
+	// The thread's own channel, NOT activeChannelID. In the Threads
+	// view the panel shows a thread from any channel while
+	// activeChannelID still names whichever channel was last
+	// opened, so recording the active channel here stored a thread
+	// ts against a channel that has no such thread — the jump then
+	// opened an empty panel reading "0 replies".
+	channelID := a.threadPanel.ChannelID()
+	if channelID == "" {
+		channelID = a.activeChannelID
+	}
+	return Location{
+		TeamID:    ids.TeamID(a.activeTeamID),
+		ChannelID: ids.ChannelID(channelID),
+		MessageTS: ids.MessageTS(reply.TS),
+		ThreadTS:  ids.ThreadTS(a.threadPanel.ThreadTS()),
+	}, true
+}
+
+// channelPaneLocation names the messages pane's selection in the
+// active channel.
+func (a *App) channelPaneLocation() (Location, bool) {
 	msg, ok := a.messagepane.SelectedMessage()
 	if !ok {
 		return Location{}, false
@@ -74,9 +99,20 @@ func (a *App) currentLocation() (Location, bool) {
 // falling back to a channel-only location when no message is selected.
 // The fallback carries just the workspace and channel so a
 // position-less departure still degrades cleanly instead of being
-// dropped.
+// dropped. It is what history records for the active channel, so
+// outside the thread panel it reads the messages pane even from the
+// Threads and Activity views: that pane still holds the active
+// channel's position, which is where walking back should return.
 func (a *App) currentPosition() Location {
-	loc, ok := a.currentLocation()
+	var (
+		loc Location
+		ok  bool
+	)
+	if a.focusedPanel == PanelThread {
+		loc, ok = a.currentLocation()
+	} else {
+		loc, ok = a.channelPaneLocation()
+	}
 	if ok {
 		return loc
 	}

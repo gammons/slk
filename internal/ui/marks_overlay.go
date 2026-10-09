@@ -8,6 +8,9 @@ package ui
 
 import (
 	"strings"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/marks"
@@ -23,9 +26,10 @@ func (a *App) SetShowJumpOverlay(b bool) {
 // marksRows converts the active workspace's marks into overlay rows.
 // Only the preview snapshot recorded at mark time is used — no channel
 // lookup, no message fetch — so the list renders offline and right
-// after a restart.
-func (a *App) marksRows() []marks.Row {
-	stored := a.marks.List(a.activeTeamID)
+// after a restart. A failed table read still yields the session rows,
+// with the error.
+func (a *App) marksRows() ([]marks.Row, error) {
+	stored, err := a.marks.List(a.activeTeamID)
 	rows := make([]marks.Row, 0, len(stored))
 	for _, m := range stored {
 		rows = append(rows, marks.Row{
@@ -35,22 +39,29 @@ func (a *App) marksRows() []marks.Row {
 			Excerpt:     previewText(m.Excerpt),
 		})
 	}
-	return rows
+	return rows, err
 }
 
 // openMarksOverlay populates the overlay from the active workspace and
 // shows it. Used by the ' chord (when the jump overlay is enabled) and
-// by the :marks command.
-func (a *App) openMarksOverlay() {
-	a.marksOverlay.SetRows(a.marksRows())
+// by the :marks command. Returns a toast when the saved marks could not
+// be read.
+func (a *App) openMarksOverlay() tea.Cmd {
+	cmd := a.refreshMarksOverlay()
 	a.marksOverlay.Open()
+	return cmd
 }
 
 // refreshMarksOverlay repopulates the overlay in place, keeping it
 // open — used after a delete action so the remaining marks stay
-// visible.
-func (a *App) refreshMarksOverlay() {
-	a.marksOverlay.SetRows(a.marksRows())
+// visible. Returns a toast when the saved marks could not be read.
+func (a *App) refreshMarksOverlay() tea.Cmd {
+	rows, err := a.marksRows()
+	a.marksOverlay.SetRows(rows)
+	if err != nil {
+		return toastWithClear(a, "Failed to load saved marks", 3*time.Second)
+	}
+	return nil
 }
 
 // previewText renders stored snapshot text for one overlay row:

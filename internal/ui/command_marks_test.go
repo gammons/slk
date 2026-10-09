@@ -8,6 +8,7 @@
 package ui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -40,7 +41,7 @@ func TestCmdMarks_RendersStoredMarks(t *testing.T) {
 	}
 
 	_ = executeCommand(app, "marks")
-	if got := len(app.marks.List("T1")); got != 1 {
+	if got := len(mustListMarks(t, app.marks, "T1")); got != 1 {
 		t.Fatalf("overlay holds %d rows, want 1", got)
 	}
 	if !strings.Contains(app.marksOverlay.View(80), "alice: hello world") {
@@ -56,10 +57,10 @@ func TestCmdDelMarks_SingleLetter(t *testing.T) {
 	if cmd := executeCommand(app, "delmarks a"); cmd != nil {
 		t.Fatalf(":delmarks returned a cmd: %v", cmd)
 	}
-	if _, ok := app.marks.Load("T1", "a"); ok {
+	if _, ok, _ := app.marks.Load("T1", "a"); ok {
 		t.Fatal("mark a must be removed")
 	}
-	if _, ok := app.marks.Load("T1", "b"); !ok {
+	if _, ok, _ := app.marks.Load("T1", "b"); !ok {
 		t.Fatal("mark b must remain")
 	}
 }
@@ -82,11 +83,11 @@ func TestCmdDelMarks_MultipleLetters(t *testing.T) {
 
 			_ = executeCommand(app, tc.line)
 			for _, letter := range []string{"a", "b", "c"} {
-				if _, ok := app.marks.Load("T1", letter); ok {
+				if _, ok, _ := app.marks.Load("T1", letter); ok {
 					t.Fatalf("mark %s must be removed by %q", letter, tc.line)
 				}
 			}
-			if _, ok := app.marks.Load("T1", "d"); !ok {
+			if _, ok, _ := app.marks.Load("T1", "d"); !ok {
 				t.Fatal("mark d must remain")
 			}
 		})
@@ -100,7 +101,7 @@ func TestCmdDelMarks_UnsetLetterIsNoop(t *testing.T) {
 	if cmd := executeCommand(app, "delmarks z"); cmd != nil {
 		t.Fatalf(":delmarks of an unset letter returned a cmd: %v", cmd)
 	}
-	if _, ok := app.marks.Load("T1", "a"); !ok {
+	if _, ok, _ := app.marks.Load("T1", "a"); !ok {
 		t.Fatal("existing marks must be untouched")
 	}
 }
@@ -121,7 +122,7 @@ func TestCmdDelMarks_UppercaseStaysGoneAcrossRestart(t *testing.T) {
 	// Restart: fresh session over the same persistence.
 	restarted := jumpMarkTestApp(t)
 	restarted.SetMarksPersistStore(persist)
-	if _, ok := restarted.marks.Load("T1", "A"); ok {
+	if _, ok, _ := restarted.marks.Load("T1", "A"); ok {
 		t.Fatal("deleted uppercase mark resurrected after restart")
 	}
 }
@@ -142,7 +143,69 @@ func TestCmdDelMarks_OverlayDeleteReachesSameTier(t *testing.T) {
 
 	restarted := jumpMarkTestApp(t)
 	restarted.SetMarksPersistStore(persist)
-	if _, ok := restarted.marks.Load("T1", "A"); ok {
+	if _, ok, _ := restarted.marks.Load("T1", "A"); ok {
 		t.Fatal("uppercase mark deleted from the overlay resurrected after restart")
+	}
+}
+
+// failingMarksPersist is a marks table whose every call fails.
+func failingMarksPersist() MarksPersistStore {
+	fail := errors.New("disk I/O error")
+	return NewMarksPersistStore(MarksPersistStoreFuncs{
+		Upsert: func(string, string, Mark) error { return fail },
+		List:   func(string) ([]Mark, error) { return nil, fail },
+		Delete: func(string, string) error { return fail },
+	})
+}
+
+// A failing marks table must be reported, not read as "no such mark",
+// an empty list, or a delete that worked and then comes back after a
+// restart.
+func TestMarks_TableFailuresToast(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(app *App) tea.Cmd
+		want string
+	}{
+		{
+			name: "jump to a saved mark",
+			run: func(app *App) tea.Cmd {
+				app.SetShowJumpOverlay(false)
+				return pressJumpChord(app, 'A')
+			},
+			want: "Failed to read mark A",
+		},
+		{
+			name: ":marks",
+			run:  func(app *App) tea.Cmd { return executeCommand(app, "marks") },
+			want: "Failed to load saved marks",
+		},
+		{
+			name: ":delmarks",
+			run:  func(app *App) tea.Cmd { return executeCommand(app, "delmarks aB") },
+			want: "Failed to delete saved mark aB",
+		},
+		{
+			name: "Backspace in the marks list",
+			run: func(app *App) tea.Cmd {
+				app.Update(keyPress('\''))
+				_, cmd := app.Update(keyCode(tea.KeyBackspace))
+				return cmd
+			},
+			want: "Failed to delete saved mark a",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := jumpMarkTestApp(t)
+			app.SetMarksPersistStore(failingMarksPersist())
+			seedMark(t, app, "a", Location{TeamID: "T1", ChannelID: "C1", MessageTS: "1.0"})
+
+			if cmd := tc.run(app); cmd == nil {
+				t.Fatal("expected a toast command")
+			}
+			if got := statusbarText(app); !strings.Contains(got, tc.want) {
+				t.Errorf("status bar = %q, want it to contain %q", got, tc.want)
+			}
+		})
 	}
 }

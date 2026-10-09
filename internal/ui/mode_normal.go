@@ -353,9 +353,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		// marks list; a letter then jumps immediately from there, so
 		// 'a behaves exactly as it does with the overlay suppressed.
 		if a.showJumpOverlay {
-			a.openMarksOverlay()
+			cmd := a.openMarksOverlay()
 			a.SetMode(ModeMarks)
-			return nil
+			return cmd
 		}
 		a.pendingJumpMark = true
 		a.statusbar.SetHelpHint("'…")

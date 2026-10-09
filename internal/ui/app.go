@@ -369,6 +369,13 @@ type App struct {
 	// a no-longer-viewed channel must still clear its own flag).
 	fetchingOlder map[string]bool
 
+	// channelFetchInFlight names the channel whose MessagesLoadedMsg
+	// is still expected after a channel switch fired a fetch (cache
+	// tiers 2 and 3). An in-place jump into that channel must not
+	// complete authoritatively against the cached buffer: the load
+	// replaces it and would reset the selection to the newest message.
+	channelFetchInFlight string
+
 	// Cached user-id -> display-name map (mirror of what SetUserNames
 	// last received). Used by openSelectedThreadCmd to populate the
 	// thread panel parent's UserName without round-tripping through any
@@ -2236,6 +2243,12 @@ func (a *App) SetMode(mode Mode) {
 	if a.mode == ModeCommand && mode != ModeCommand {
 		a.cmdline = ""
 		a.statusbar.SetCommandLine("")
+	}
+	// Same for the marks list: a global intercept (ctrl+c) leaves
+	// ModeMarks without going through handleMarksMode, and the list
+	// would stay drawn over the screen, and over the quit prompt.
+	if a.mode == ModeMarks && mode != ModeMarks {
+		a.marksOverlay.Close()
 	}
 	a.mode = mode
 	a.statusbar.SetMode(mode)
