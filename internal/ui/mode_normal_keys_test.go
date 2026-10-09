@@ -2395,7 +2395,7 @@ func navForwardCase(name string, r rune) keyCase {
 		opts: append(normalOpts(), withActiveTeam("T1"), navLookupOpt()),
 		setup: func(t *testing.T, a *App) {
 			seedNavHistory(t, a)
-			if _, _, _, ok := a.navHistory.Walk("T1", -1, a.channels.Lookup); !ok {
+			if _, ok := a.navHistory.Walk("T1", -1, a.channels.Lookup); !ok {
 				t.Fatal("precondition: could not step back before stepping forward")
 			}
 		},
@@ -2420,8 +2420,8 @@ func navForwardCase(name string, r rune) keyCase {
 // C2 so one step back lands on C1.
 func seedNavHistory(t *testing.T, a *App) {
 	t.Helper()
-	a.navHistory.Push("T1", "C1")
-	a.navHistory.Push("T1", "C2")
+	a.navHistory.Push("T1", Location{TeamID: "T1", ChannelID: "C1"})
+	a.navHistory.Push("T1", Location{TeamID: "T1", ChannelID: "C2"})
 	stack := a.navHistory.Stack("T1")
 	if stack == nil {
 		t.Fatal("precondition: nav stack was not created")

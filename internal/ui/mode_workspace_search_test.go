@@ -350,8 +350,8 @@ func TestWorkspaceSearchModeKeys(t *testing.T) {
 				if a.pendingLinkNav == nil {
 					t.Fatal("pendingLinkNav = nil, want it armed for the post-switch jump")
 				}
-				if a.pendingLinkNav.channelID != "C2" || a.pendingLinkNav.messageTS != "5.0" {
-					t.Errorf("pendingLinkNav = %+v, want {channelID:C2 messageTS:5.0}", *a.pendingLinkNav)
+				if a.pendingLinkNav.ChannelID != "C2" || a.pendingLinkNav.MessageTS != "5.0" {
+					t.Errorf("pendingLinkNav = %+v, want {ChannelID:C2 MessageTS:5.0}", *a.pendingLinkNav)
 				}
 				if cmd == nil {
 					t.Fatal("cmd = nil, want ChannelSelectedMsg")

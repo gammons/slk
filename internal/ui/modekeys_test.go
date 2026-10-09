@@ -35,7 +35,7 @@ func TestEveryModeHasAHandler(t *testing.T) {
 		ModeChannelFinder, ModeReactionPicker, ModeWorkspaceFinder,
 		ModeThemeSwitcher, ModePresenceMenu, ModePresenceCustomSnooze,
 		ModeConfirm, ModeHelp, ModeNewMessage, ModeReactionsView,
-		ModeLinkPicker, ModeWorkspaceSearch, ModeUserProfile,
+		ModeLinkPicker, ModeWorkspaceSearch, ModeUserProfile, ModeMarks,
 	}
 	if len(modeHandlers) != len(all) {
 		t.Errorf("modeHandlers has %d entries, want %d", len(modeHandlers), len(all))
@@ -60,7 +60,7 @@ func TestRunKeyCases_Harness(t *testing.T) {
 	runKeyCases(t, ModeNormal, []keyCase{
 		{
 			name:     "unbound key leaves mode unchanged",
-			key:      keyPress('\''),
+			key:      keyPress('z'),
 			wantMode: ModeNormal,
 		},
 		{
@@ -112,7 +112,7 @@ func TestRunKeyCases_Harness(t *testing.T) {
 		{
 			name:     "per-case opts reach newTestApp",
 			opts:     []testOpt{withSize(80, 24)},
-			key:      keyPress('\''),
+			key:      keyPress('z'),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
 				if a.width != 80 || a.height != 24 {
@@ -201,14 +201,14 @@ func TestRunKeyCases_InvokesHooks(t *testing.T) {
 		{
 			name:     "first",
 			setup:    func(*testing.T, *App) { setups++ },
-			key:      keyPress('\''),
+			key:      keyPress('z'),
 			wantMode: ModeNormal,
 			assert:   func(*testing.T, *App, tea.Cmd) { asserts++ },
 		},
 		{
 			name:     "second",
 			setup:    func(*testing.T, *App) { setups++ },
-			key:      keyPress('\''),
+			key:      keyPress('z'),
 			wantMode: ModeNormal,
 			assert:   func(*testing.T, *App, tea.Cmd) { asserts++ },
 		},
@@ -231,13 +231,13 @@ func TestRunKeyCases_IsolatesCases(t *testing.T) {
 		{
 			name:     "first mutates",
 			setup:    func(_ *testing.T, a *App) { seen = append(seen, a); a.cmdline = "dirty" },
-			key:      keyPress('\''),
+			key:      keyPress('z'),
 			wantMode: ModeNormal,
 		},
 		{
 			name:  "second sees a clean App",
 			setup: func(_ *testing.T, a *App) { seen = append(seen, a) },
-			key:   keyPress('\''),
+			key:   keyPress('z'),
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
 				if a.cmdline != "" {
 					t.Errorf("cmdline = %q, want empty: App leaked from the previous case", a.cmdline)

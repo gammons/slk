@@ -1,6 +1,6 @@
 // internal/ui/navhistory.go
 //
-// Per-workspace browser-style back/forward history of channel IDs.
+// Per-workspace browser-style back/forward history of locations.
 //
 // Phase 2 of the SOLID refactor of internal/ui/app.go: extracts the
 // navHistory map + the pushNavHistory / navigateBack / navigateForward
@@ -21,14 +21,14 @@ package ui
 
 import (
 	"github.com/gammons/slk/internal/core"
-	"github.com/gammons/slk/internal/ids"
 )
 
 // navStack is a per-workspace browser-style back/forward history of
-// channel IDs. cursor points at the current entry; len(entries)==0
-// is the empty state with cursor==-1.
+// locations — the channel plus the message/thread position the user
+// was at when they left it. cursor points at the current entry;
+// len(entries)==0 is the empty state with cursor==-1.
 type navStack struct {
-	entries []string
+	entries []Location
 	cursor  int
 }
 
@@ -55,15 +55,21 @@ func (s *navHistoryStore) Stack(teamID string) *navStack {
 	return s.stacks[teamID]
 }
 
-// Push appends channelID onto the team's navigation stack.
+// Push appends loc onto the team's navigation stack. loc is the
+// channel being OPENED (the arriving channel), exactly as the pre-
+// position history pushed — the arriving position is not known yet and
+// is folded into the entry later, when the user leaves the channel, via
+// UpdateCurrent.
 // Behavior:
 //   - Lazy-creates the stack on first push.
-//   - Dedupes consecutive: a no-op if entries[cursor] == channelID.
+//   - Dedupes consecutive: a no-op if the entry at the cursor names the
+//     same channel as loc — returning to a channel at a different
+//     position is still not a new entry.
 //   - Truncates the forward path: cursor < len-1 entries beyond cursor
 //     are dropped (browser-style "new visit kills forward history").
 //   - Caps at navStackMax: drops oldest entries and shifts cursor.
-func (s *navHistoryStore) Push(teamID, channelID string) {
-	if teamID == "" || channelID == "" {
+func (s *navHistoryStore) Push(teamID string, loc Location) {
+	if teamID == "" || loc.ChannelID == "" {
 		return
 	}
 	stack, ok := s.stacks[teamID]
@@ -71,13 +77,13 @@ func (s *navHistoryStore) Push(teamID, channelID string) {
 		stack = &navStack{cursor: -1}
 		s.stacks[teamID] = stack
 	}
-	if stack.cursor >= 0 && stack.cursor < len(stack.entries) && stack.entries[stack.cursor] == channelID {
+	if stack.cursor >= 0 && stack.cursor < len(stack.entries) && stack.entries[stack.cursor].ChannelID == loc.ChannelID {
 		return
 	}
 	if stack.cursor < len(stack.entries)-1 {
 		stack.entries = stack.entries[:stack.cursor+1]
 	}
-	stack.entries = append(stack.entries, channelID)
+	stack.entries = append(stack.entries, loc)
 	stack.cursor = len(stack.entries) - 1
 	if len(stack.entries) > navStackMax {
 		drop := len(stack.entries) - navStackMax
@@ -86,11 +92,29 @@ func (s *navHistoryStore) Push(teamID, channelID string) {
 	}
 }
 
+// UpdateCurrent overwrites the entry at the cursor with loc, but only
+// when that entry already names the same channel — i.e. the entry for
+// the channel the user is leaving. This is how the stack picks up the
+// departing position without growing: the entry's channel was recorded
+// on arrival (Push), and its position is filled in when the user
+// departs. A no-op when the team has no stack, when the cursor is at
+// -1, or when the channels differ.
+func (s *navHistoryStore) UpdateCurrent(teamID string, loc Location) {
+	stack, ok := s.stacks[teamID]
+	if !ok || stack.cursor < 0 || stack.cursor >= len(stack.entries) {
+		return
+	}
+	if stack.entries[stack.cursor].ChannelID != loc.ChannelID {
+		return
+	}
+	stack.entries[stack.cursor] = loc
+}
+
 // Walk advances the cursor on teamID's stack by step (±1), skipping
-// any channel IDs for which lookup returns ok=false and dropping them
-// from the stack. Returns the resolved channel metadata on success.
-// Returns ok=false at the stack boundary, when the team has no stack,
-// or when the cursor is at -1 (empty state).
+// any entries whose channel no longer resolves via lookup and dropping
+// them from the stack. Returns the resolved location on success, or
+// ok=false at the stack boundary, when the team has no stack, or when
+// the cursor is at -1 (empty state).
 //
 // If lookup is nil, all entries are treated as valid (used in tests
 // that don't wire a ChannelLookupFunc).
@@ -98,10 +122,15 @@ func (s *navHistoryStore) Push(teamID, channelID string) {
 // On return, the stack's cursor points at the surviving target entry
 // (or stays put if no valid target was found). Stale entries
 // discovered during the walk are removed regardless of outcome.
-func (s *navHistoryStore) Walk(teamID string, step int, lookup core.ChannelLookupFunc) (id, name, channelType string, ok bool) {
+//
+// Only the CHANNEL is validated here; a location whose message is gone
+// is walked to anyway and degrades downstream (the channel opens and
+// the user is told the message was not found) rather than being
+// dropped.
+func (s *navHistoryStore) Walk(teamID string, step int, lookup core.ChannelLookupFunc) (Location, bool) {
 	stack, exists := s.stacks[teamID]
 	if !exists || stack.cursor < 0 {
-		return "", "", "", false
+		return Location{}, false
 	}
 
 	// Walk in `step` direction looking for the first valid entry.
@@ -109,23 +138,21 @@ func (s *navHistoryStore) Walk(teamID string, step int, lookup core.ChannelLooku
 	var stale []int
 	idx := stack.cursor + step
 	var (
-		foundID    string
-		foundName  string
-		foundType  string
+		found      Location
 		foundIndex = -1
 	)
 	for idx >= 0 && idx < len(stack.entries) {
 		entry := stack.entries[idx]
 		if lookup != nil {
-			n, ctype, valid := lookup(ids.ChannelID(entry))
+			_, _, valid := lookup(entry.ChannelID)
 			if valid {
-				foundID, foundName, foundType, foundIndex = entry, n, ctype, idx
+				found, foundIndex = entry, idx
 				break
 			}
 			stale = append(stale, idx)
 		} else {
 			// No lookup wired (tests/early init): treat all as valid.
-			foundID, foundName, foundType, foundIndex = entry, entry, "channel", idx
+			found, foundIndex = entry, idx
 			break
 		}
 		idx += step
@@ -143,7 +170,7 @@ func (s *navHistoryStore) Walk(teamID string, step int, lookup core.ChannelLooku
 		}
 		dropStaleEntries(stack, stale)
 		stack.cursor -= droppedBeforeCursor
-		return "", "", "", false
+		return Location{}, false
 	}
 
 	// Compute foundIndex's new position after stale drops:
@@ -157,7 +184,7 @@ func (s *navHistoryStore) Walk(teamID string, step int, lookup core.ChannelLooku
 	dropStaleEntries(stack, stale)
 	stack.cursor = newFoundIndex
 
-	return foundID, foundName, foundType, true
+	return found, true
 }
 
 // dropStaleEntries rewrites stack.entries to omit the indices in
@@ -170,7 +197,7 @@ func dropStaleEntries(stack *navStack, stale []int) {
 	for _, idx := range stale {
 		drop[idx] = struct{}{}
 	}
-	out := make([]string, 0, len(stack.entries)-len(stale))
+	out := make([]Location, 0, len(stack.entries)-len(stale))
 	for i, e := range stack.entries {
 		if _, skip := drop[i]; !skip {
 			out = append(out, e)

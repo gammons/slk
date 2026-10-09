@@ -21,6 +21,7 @@ type Config struct {
 	Cache         CacheConfig           `toml:"cache"`
 	Sidebar       Sidebar               `toml:"sidebar"`
 	Compose       Compose               `toml:"compose"`
+	Marks         Marks                 `toml:"marks"`
 	Sections      map[string]SectionDef `toml:"sections"`
 	Theme         Theme                 `toml:"theme"`
 	Workspaces    map[string]Workspace  `toml:"workspaces"`
@@ -161,6 +162,29 @@ type Sidebar struct {
 	// hidden regardless of this setting.
 	HideInactiveAfterDays int `toml:"hide_inactive_after_days"`
 	Width                 int `toml:"width"`
+}
+
+// Marks holds preferences for vim-style marks.
+//
+// The two options default in OPPOSITE directions, and the defaults are
+// deliberately expressed differently:
+//
+//   - persist_all is a plain bool whose zero value (false) is already
+//     the right default — lowercase marks are session-only unless
+//     explicitly persisted.
+//   - show_jump_overlay is a *bool so "unset" (nil, resolved to true
+//     by EffectiveShowJumpOverlay) is distinguishable from an explicit
+//     false, mirroring General.UseSlackSections. A plain bool would
+//     give the wrong default for it.
+type Marks struct {
+	// PersistAll, when true, writes lowercase marks to the marks table
+	// as well as the session tier, so they survive a restart. Default
+	// off.
+	PersistAll bool `toml:"persist_all"`
+	// ShowJumpOverlay, when false, runs the ' chord as the silent
+	// pending-key flow instead of opening the marks overlay. It never
+	// affects :marks, which always shows the overlay. Default on.
+	ShowJumpOverlay *bool `toml:"show_jump_overlay"`
 }
 
 // Workspace holds per-workspace user preferences. The TOML key for
@@ -409,6 +433,17 @@ func (c Config) EffectiveUseSlackSections(teamID string) bool {
 	}
 	if c.General.UseSlackSections != nil {
 		return *c.General.UseSlackSections
+	}
+	return true
+}
+
+// EffectiveShowJumpOverlay returns whether the ' chord shows the marks
+// overlay: an explicit [marks].show_jump_overlay wins when set,
+// otherwise the default is on. The :marks command ignores this — it
+// always opens the overlay.
+func (c Config) EffectiveShowJumpOverlay() bool {
+	if c.Marks.ShowJumpOverlay != nil {
+		return *c.Marks.ShowJumpOverlay
 	}
 	return true
 }

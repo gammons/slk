@@ -44,6 +44,11 @@ type KeyMap struct {
 	OpenLink            key.Binding
 	DownloadFile        key.Binding
 	MarkUnread          key.Binding
+	MarkSet             key.Binding
+	JumpMark            key.Binding
+	MarkBackJump        key.Binding
+	MarksList           key.Binding
+	MarksDelete         key.Binding
 	NextUnread          key.Binding
 	PrevUnread          key.Binding
 	ActivityView        key.Binding
@@ -113,10 +118,20 @@ func DefaultKeyMap() KeyMap {
 		OpenLink:        key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open link in message")),
 		DownloadFile:    key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "download file in message")),
 		MarkUnread:      key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "mark unread")),
-		NextUnread:      key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "next unread channel")),
-		PrevUnread:      key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "prev unread channel")),
-		ActivityView:    key.NewBinding(key.WithKeys("ctrl+a"), key.WithHelp("ctrl+a", "open activity")),
-		ActivityUnread:  key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "Activity: toggle unread-only")),
+		MarkSet:         key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "set mark")),
+		JumpMark:        key.NewBinding(key.WithKeys("'", "`"), key.WithHelp("'/`", "jump to mark")),
+		// Keyless help-only entries (same trick as WorkspaceFinder
+		// below). The back-jump is the doubled apostrophe consumed
+		// inside the ' chord, and the two commands are dispatched from
+		// the command registry, so none of them is a KeyMap binding —
+		// but all three need to appear in the help overlay.
+		MarkBackJump:   key.NewBinding(key.WithHelp("''", "back-jump to where you jumped from")),
+		MarksList:      key.NewBinding(key.WithHelp(":marks", "list marks")),
+		MarksDelete:    key.NewBinding(key.WithHelp(":delmarks", "delete marks by letter")),
+		NextUnread:     key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "next unread channel")),
+		PrevUnread:     key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "prev unread channel")),
+		ActivityView:   key.NewBinding(key.WithKeys("ctrl+a"), key.WithHelp("ctrl+a", "open activity")),
+		ActivityUnread: key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "Activity: toggle unread-only")),
 		// Keyless: ctrl+w is reserved as the window-command prefix
 		// (window-management design §4). The keyless binding never
 		// matches but keeps the help-overlay entry pointing at :ws

@@ -133,10 +133,11 @@ var reduceActivity reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			return nil, true
 		}
 		if m.TS != "" {
-			a.pendingLinkNav = &pendingLinkNav{
-				channelID: m.ChannelID,
-				messageTS: m.TS,
-			}
+			a.pendingLinkNav = &pendingLinkNav{Location: Location{
+				TeamID:    ids.TeamID(a.activeTeamID),
+				ChannelID: ids.ChannelID(m.ChannelID),
+				MessageTS: ids.MessageTS(m.TS),
+			}}
 		}
 		name, chType, _ := a.channels.Lookup(ids.ChannelID(m.ChannelID))
 		// Already viewing the channel: the loaded buffer is as good as

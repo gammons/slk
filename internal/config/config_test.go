@@ -405,6 +405,84 @@ func TestConfig_EmojiClamp(t *testing.T) {
 	}
 }
 
+// loadConfigString writes body to a temp config file and Loads it,
+// the same shape the other config tests use.
+func loadConfigString(t *testing.T, body string) Config {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+// The two [marks] options default in opposite directions: an unset
+// config yields persist_all off (lowercase marks temporary) and
+// show_jump_overlay on.
+func TestConfig_MarksDefaults(t *testing.T) {
+	cfg := loadConfigString(t, "")
+	if cfg.Marks.PersistAll {
+		t.Error("persist_all must default to off (lowercase marks are session-only)")
+	}
+	if cfg.Marks.ShowJumpOverlay != nil {
+		t.Fatalf("show_jump_overlay must be unset (nil) by default, got %v", *cfg.Marks.ShowJumpOverlay)
+	}
+	if !cfg.EffectiveShowJumpOverlay() {
+		t.Error("unset show_jump_overlay must resolve to on")
+	}
+}
+
+func TestConfig_MarksPersistAllExplicit(t *testing.T) {
+	cfg := loadConfigString(t, "[marks]\npersist_all = true\n")
+	if !cfg.Marks.PersistAll {
+		t.Error("persist_all = true must be honoured")
+	}
+}
+
+func TestConfig_MarksShowJumpOverlayExplicit(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"on", "[marks]\nshow_jump_overlay = true\n", true},
+		{"off", "[marks]\nshow_jump_overlay = false\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := loadConfigString(t, tc.body)
+			if cfg.Marks.ShowJumpOverlay == nil {
+				t.Fatal("an explicit show_jump_overlay must set the pointer")
+			}
+			if got := cfg.EffectiveShowJumpOverlay(); got != tc.want {
+				t.Fatalf("EffectiveShowJumpOverlay = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// The whole point of the *bool: an explicit false must be
+// distinguishable from leaving the option unset, so a user who flips
+// the option off is not silently re-defaulted to on.
+func TestConfig_MarksShowJumpOverlayFalseDistinguishableFromUnset(t *testing.T) {
+	unset := loadConfigString(t, "")
+	off := loadConfigString(t, "[marks]\nshow_jump_overlay = false\n")
+
+	if unset.Marks.ShowJumpOverlay != nil {
+		t.Fatalf("unset must leave the pointer nil, got %v", *unset.Marks.ShowJumpOverlay)
+	}
+	if off.Marks.ShowJumpOverlay == nil || *off.Marks.ShowJumpOverlay {
+		t.Fatalf("explicit false must set the pointer to false, got %v", off.Marks.ShowJumpOverlay)
+	}
+	if unset.EffectiveShowJumpOverlay() == off.EffectiveShowJumpOverlay() {
+		t.Fatal("unset and explicit false must resolve differently")
+	}
+}
+
 func TestResolveThemeWorkspaceWins(t *testing.T) {
 	c := Config{
 		Appearance: Appearance{Theme: "dark"},

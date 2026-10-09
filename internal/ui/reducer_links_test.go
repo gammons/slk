@@ -96,7 +96,7 @@ func TestOpenLink_OtherChannel_DispatchesChannelSelected(t *testing.T) {
 	if sel.ID != "C054JFCBN69" || sel.Name != "general" || sel.Type != "channel" {
 		t.Errorf("ChannelSelectedMsg = %+v", sel)
 	}
-	if app.pendingLinkNav == nil || app.pendingLinkNav.messageTS != "1779284733.270139" {
+	if app.pendingLinkNav == nil || string(app.pendingLinkNav.MessageTS) != "1779284733.270139" {
 		t.Errorf("pendingLinkNav = %+v", app.pendingLinkNav)
 	}
 	if *opened != "" {
@@ -105,7 +105,7 @@ func TestOpenLink_OtherChannel_DispatchesChannelSelected(t *testing.T) {
 }
 
 func TestOpenLink_ActiveChannel_SelectsMessage(t *testing.T) {
-	app, _ := linkTestApp(t)
+	app, opened := linkTestApp(t)
 	app.activeChannelID = "C054JFCBN69"
 	app.messagepane.SetMessages([]messages.MessageItem{
 		{TS: "1779284733.270139", Text: "target"},
@@ -119,6 +119,9 @@ func TestOpenLink_ActiveChannel_SelectsMessage(t *testing.T) {
 	}
 	if app.pendingLinkNav != nil {
 		t.Errorf("pendingLinkNav not cleared: %+v", app.pendingLinkNav)
+	}
+	if *opened != "" {
+		t.Errorf("browser should not open for an in-app navigation, got %q", *opened)
 	}
 }
 
@@ -363,10 +366,10 @@ func TestOpenLink_ActiveChannel_RevealsSource(t *testing.T) {
 func TestMessagesLoaded_CompletesPendingNav(t *testing.T) {
 	app, _ := linkTestApp(t)
 	app.activeChannelID = "C054JFCBN69"
-	app.pendingLinkNav = &pendingLinkNav{
-		channelID: "C054JFCBN69",
-		messageTS: "1779284733.270139",
-	}
+	app.pendingLinkNav = &pendingLinkNav{Location: Location{
+		ChannelID: ids.ChannelID("C054JFCBN69"),
+		MessageTS: ids.MessageTS("1779284733.270139"),
+	}}
 	_, cmd := app.Update(MessagesLoadedMsg{
 		ChannelID: "C054JFCBN69",
 		Messages: []messages.MessageItem{
@@ -425,7 +428,10 @@ func TestOpenLink_OtherChannel_FreshCacheMissingTS_FetchesAround(t *testing.T) {
 
 func TestChannelSelected_DifferentChannel_DropsPendingNav(t *testing.T) {
 	app, _ := linkTestApp(t)
-	app.pendingLinkNav = &pendingLinkNav{channelID: "C054JFCBN69", messageTS: "1.0"}
+	app.pendingLinkNav = &pendingLinkNav{Location: Location{
+		ChannelID: ids.ChannelID("C054JFCBN69"),
+		MessageTS: ids.MessageTS("1.0"),
+	}}
 	_, cmd := app.Update(ChannelSelectedMsg{ID: "COTHER", Name: "other", Type: "channel"})
 	drainCmd(cmd)
 	if app.pendingLinkNav != nil {
@@ -519,7 +525,10 @@ func TestCompletePendingNav_OffBufferTriggersFetchAround(t *testing.T) {
 		return nil
 	})
 	app.activeChannelID = "C054JFCBN69"
-	app.pendingLinkNav = &pendingLinkNav{channelID: "C054JFCBN69", messageTS: "1700000001.000000"}
+	app.pendingLinkNav = &pendingLinkNav{Location: Location{
+		ChannelID: ids.ChannelID("C054JFCBN69"),
+		MessageTS: ids.MessageTS("1700000001.000000"),
+	}}
 
 	_, cmd := app.Update(MessagesLoadedMsg{ChannelID: "C054JFCBN69", Messages: []messages.MessageItem{{TS: "1700000099.000000"}}})
 	drainCmd(cmd)

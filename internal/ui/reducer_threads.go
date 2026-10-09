@@ -76,8 +76,8 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		if a.pendingLinkNav != p {
 			return nil, true
 		}
-		if p.teamID != a.activeTeamID || p.channelID != a.activeChannelID ||
-			!a.threadVisible || p.channelID != a.threadPanel.ChannelID() || p.threadTS != a.threadPanel.ThreadTS() {
+		if string(p.TeamID) != a.activeTeamID || string(p.ChannelID) != a.activeChannelID ||
+			!a.threadVisible || string(p.ChannelID) != a.threadPanel.ChannelID() || string(p.ThreadTS) != a.threadPanel.ThreadTS() {
 			a.pendingLinkNav = nil
 			return nil, true
 		}
@@ -182,12 +182,12 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}
 		a.threadPanel.SetThread(parentMsg, m.Replies, channelID, m.ThreadTS)
 		if linkNav != nil {
-			if linkNav.messageTS == m.ThreadTS {
+			if string(linkNav.MessageTS) == m.ThreadTS {
 				a.threadPanel.GoToTop()
 				a.threadPanel.MoveUp() // the parent precedes the first reply
 			} else {
 				for i, reply := range a.threadPanel.Replies() {
-					if reply.TS == linkNav.messageTS {
+					if reply.TS == string(linkNav.MessageTS) {
 						a.threadPanel.SelectByIndex(i)
 						break
 					}

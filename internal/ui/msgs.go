@@ -64,6 +64,12 @@ type (
 		// is unaffected — going back to a channel still updates its
 		// last-visited timestamp.
 		FromHistory bool
+		// TeamID, when set, is the workspace the selection was made
+		// in. applyLocation sets it because its command is queued: a
+		// workspace switch reduced first would otherwise apply one
+		// workspace's channel in another. Empty means "the active
+		// workspace", which is what every other sender means.
+		TeamID string
 	}
 	MessagesLoadedMsg struct {
 		ChannelID  string
