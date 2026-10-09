@@ -626,11 +626,12 @@ func (m *Model) renderCard(it core.ActivityItem, width int, selected bool) (stri
 
 // contextLabel renders the natural-language activity context for line 1:
 // "Mention in #ch" / "Thread in #ch" / "Reacted in #ch" / "DM" (no channel
-// for DMs). Empty for unknown types.
+// for DMs). An unrecognised type is labelled with the type itself; see
+// fallbackVerb.
 func (m *Model) contextLabel(it core.ActivityItem) string {
 	verb := contextVerb(it.Type)
 	if verb == "" {
-		return ""
+		verb = fallbackVerb(it.Type)
 	}
 	if isDMItem(it.Type) {
 		return mutedStyle().Render(verb)
@@ -671,6 +672,18 @@ func contextVerb(itemType string) string {
 	default:
 		return ""
 	}
+}
+
+// fallbackVerb labels an item type contextVerb does not know, from the
+// type itself ("saved_reminder" -> "Saved reminder"). Such an item may
+// carry no message ref, leaving the card no author and no body, so
+// without this label it rendered as a blank row (issue #285).
+func fallbackVerb(itemType string) string {
+	if itemType == "" {
+		return "Unknown activity"
+	}
+	s := strings.ReplaceAll(itemType, "_", " ")
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // authorStyle renders the actor name in bold so it anchors the card.

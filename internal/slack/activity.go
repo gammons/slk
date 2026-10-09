@@ -159,7 +159,17 @@ func parseActivityFeed(body []byte) (ActivityFeedResult, error) {
 			debuglog.General("activity.feed: skipping unparseable item: %v", err)
 			continue
 		}
-		items = append(items, flattenActivityItem(raw))
+		item := flattenActivityItem(raw)
+		if item.ChannelID == "" {
+			// No conversation to open, so Enter does nothing and the
+			// item can never be cleared (issue #285). Log it whole:
+			// an unrecognised type, or a known one in a shape
+			// flattenActivityItem does not expect, is only diagnosable
+			// from the raw JSON.
+			debuglog.General("activity.feed: item with no channel ref type=%q key=%q is_unread=%v raw=%s",
+				raw.Item.Type, raw.Key, raw.IsUnread, rawJSON)
+		}
+		items = append(items, item)
 	}
 	return ActivityFeedResult{
 		Items:      items,
