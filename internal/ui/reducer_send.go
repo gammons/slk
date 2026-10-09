@@ -223,10 +223,11 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 }
 
 // reduceNewMessage handles NewMessageMsg. Extracted because the
-// arm is ~100 lines covering five decision branches (edit echo,
-// self-send dedup, early-arrival in-flight guard, the read-state
-// decision for the channel and thread cursors, threads-list dirty
-// bump).
+// arm is ~100 lines covering six decision branches (edit echo,
+// self-send dedup, early-arrival in-flight guard, the ephemeral
+// display-only return, the read-state decision for the channel and
+// thread cursors, threads-list dirty bump). The ephemeral branch
+// returns after the message is displayed, before any read-state work.
 func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 	debuglog.Cache("NewMessageMsg: channel=%s ts=%s thread_ts=%s active=%s",
 		m.ChannelID, m.Message.TS, m.Message.ThreadTS, a.activeChannelID)

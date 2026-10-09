@@ -45,7 +45,8 @@ func LongTimestamp(ts, short string) string {
 //
 // The first occurrence of the styled short timestamp in rendered is the
 // header's: the only earlier Timestamp-styled text is the
-// thread-broadcast label, whose text differs.
+// thread-broadcast label and the ephemeral "Only visible to you" label
+// (EphemeralLabel, drawn in both panes), whose text differs.
 func SelectedHeader(rendered, header, ts, short string, maxWidth int) string {
 	return ReplaceHeaderTimestamp(rendered, header, short, LongTimestamp(ts, short), maxWidth)
 }

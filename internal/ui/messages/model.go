@@ -2455,7 +2455,8 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 	// Translate per-pill specs into entry-relative reaction hit rects.
 	// reactionRowBase is the row index (within linesNormal) where the
 	// first reaction line lands. Row layout:
-	//   preAttachmentRows = broadcast + username + body + bk
+	//   preAttachmentRows = label rows (ephemeral and/or thread_broadcast)
+	//   + username + body + bk
 	//   + attachmentLineCount (each attachment line is 1 row)
 	//   + 1 if threadLine is present
 	// (placeAvatarBeside does not change row counts.)

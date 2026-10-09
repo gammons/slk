@@ -1430,7 +1430,13 @@ func (m *Model) View(height, width int) string {
 	// Adding to the predicate is preferred when the state changes
 	// infrequently — chrome is rebuilt rarely, so the comparison cost is
 	// negligible and invalidation discipline is easier to get wrong.
-	chromeReplyCount := len(m.replies)
+	// An ephemeral reply is not a reply: the header counts the rest.
+	chromeReplyCount := 0
+	for _, r := range m.replies {
+		if !r.Ephemeral {
+			chromeReplyCount++
+		}
+	}
 	// Chrome no longer contains the parent message -- the parent now lives
 	// at the top of m.viewContent so it scrolls with the replies (a long
 	// parent must not pin and block the reply area). Chrome is only the

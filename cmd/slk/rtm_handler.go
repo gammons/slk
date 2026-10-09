@@ -132,7 +132,7 @@ func (h *rtmEventHandler) discoverConversation(channelID string) (sidebar.Channe
 func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment, botID, username string) {
 	// Bot messages (bot_message) carry no user, only a bot_id + username.
 	// Key the row on the bot_id and resolve its avatar/name via bots.info,
-	// mirroring the fetch-path messageAuthor helper.
+	// mirroring the fetch path's messageAuthor (cmd/slk/users.go).
 	authorID := h.messageAuthor(userID, botID, username)
 	// Synchronous, so the channel's row and type exist before the writes
 	// below. The UI hears of it only after the unread write.
