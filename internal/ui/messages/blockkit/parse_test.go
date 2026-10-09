@@ -280,6 +280,24 @@ func TestParseAttachmentTimestampParsesUnixSeconds(t *testing.T) {
 	}
 }
 
+// TestParseAttachmentSharedMessageSource covers Slack's "Share
+// message" / forward shape: the shared message's permalink is only
+// in the attachment's from_url (the outer text carries no link), and
+// `o` needs it to jump to the original.
+func TestParseAttachmentSharedMessageSource(t *testing.T) {
+	in := []slack.Attachment{{
+		FromURL:    "https://myteam.slack.com/archives/C054JFCBN69/p1779284733270139",
+		AuthorName: "Jenny Leyva",
+	}}
+	a := ParseAttachments(in)[0]
+	if a.FromURL != "https://myteam.slack.com/archives/C054JFCBN69/p1779284733270139" {
+		t.Errorf("FromURL = %q", a.FromURL)
+	}
+	if a.AuthorName != "Jenny Leyva" {
+		t.Errorf("AuthorName = %q", a.AuthorName)
+	}
+}
+
 func TestParseAttachmentImageAndThumb(t *testing.T) {
 	in := []slack.Attachment{{
 		ImageURL: "https://example.com/img.png",
