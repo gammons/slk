@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -205,5 +206,73 @@ func TestRenderLegacyRendersNestedBlocks(t *testing.T) {
 		if !strings.HasPrefix(ansi.Strip(line), "█") {
 			t.Errorf("line %d missing stripe prefix: %q", i, ansi.Strip(line))
 		}
+	}
+}
+
+func plainCtx() Context {
+	return Context{
+		RenderText: func(s string, _ map[string]string) string { return s },
+		WrapText:   func(s string, _ int) string { return s },
+	}
+}
+
+// TestRenderLegacyActionsDrawButtonsInsideStripe: the captured Slackbot
+// attachment has no title, text or fields, only actions -- the buttons
+// must still render, inside the attachment's bar.
+func TestRenderLegacyActionsDrawButtonsInsideStripe(t *testing.T) {
+	r := RenderLegacy(ParseAttachments(decodeCapturedAttachments(t)), plainCtx(), 80)
+	plain := ansi.Strip(strings.Join(r.Lines, "\n"))
+	for _, want := range []string{"[ Add Them ]", "[ Dismiss ]", "[ Don't Show Again ]"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("missing button %q in %q", want, plain)
+		}
+	}
+	if len(r.Lines) == 0 {
+		t.Fatal("no lines rendered")
+	}
+	for i, line := range r.Lines {
+		if !strings.HasPrefix(ansi.Strip(line), "█") {
+			t.Errorf("line %d is outside the stripe: %q", i, ansi.Strip(line))
+		}
+	}
+	if !r.Interactive {
+		t.Error("Interactive = false, want true for an attachment with buttons")
+	}
+}
+
+// fallback is notification text; Slack's web client does not draw it.
+func TestRenderLegacyDoesNotRenderFallback(t *testing.T) {
+	r := RenderLegacy(ParseAttachments(decodeCapturedAttachments(t)), plainCtx(), 80)
+	if plain := ansi.Strip(strings.Join(r.Lines, "\n")); strings.Contains(plain, "You may want to invite them.") {
+		t.Errorf("fallback text rendered: %q", plain)
+	}
+}
+
+func TestRenderLegacyActionsWrapAtNarrowWidth(t *testing.T) {
+	const width = 24
+	r := RenderLegacy(ParseAttachments(decodeCapturedAttachments(t)), plainCtx(), width)
+	if len(r.Lines) < 2 {
+		t.Fatalf("got %d lines, want the buttons wrapped over several", len(r.Lines))
+	}
+	for i, line := range r.Lines {
+		if w := lipgloss.Width(line); w > width {
+			t.Errorf("line %d is %d cols wide, want <= %d: %q", i, w, width, ansi.Strip(line))
+		}
+	}
+}
+
+func TestRenderLegacyWithoutActionsIsNotInteractive(t *testing.T) {
+	r := RenderLegacy([]LegacyAttachment{{Title: "T"}}, plainCtx(), 80)
+	if r.Interactive {
+		t.Error("Interactive = true for an attachment without actions")
+	}
+}
+
+func TestRenderLegacySelectActionDrawsAsSelect(t *testing.T) {
+	r := RenderLegacy([]LegacyAttachment{{
+		Actions: []LegacyAction{{Name: "env", Text: "Pick env", Type: "select"}},
+	}}, plainCtx(), 80)
+	if plain := ansi.Strip(strings.Join(r.Lines, "\n")); !strings.Contains(plain, "Pick env ▾") {
+		t.Errorf("select not drawn as a select: %q", plain)
 	}
 }
