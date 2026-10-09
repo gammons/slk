@@ -12,6 +12,7 @@ import (
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	"github.com/gammons/slk/internal/notify"
+	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/ui"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/sidebar"
@@ -405,6 +406,12 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 			},
 		})
 	}
+}
+
+// OnEphemeralMessage takes OnMessage's path until it gets its own
+// display-only handling.
+func (h *rtmEventHandler) OnEphemeralMessage(m slackclient.EphemeralMessage) {
+	h.OnMessage(m.ChannelID, m.UserID, m.TS, m.Text, m.ThreadTS, m.Subtype, false, nil, m.Blocks, m.Attachments, m.BotID, m.Username)
 }
 
 func (h *rtmEventHandler) OnMessageDeleted(channelID, ts string) {
