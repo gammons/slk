@@ -39,6 +39,7 @@ func opened(t *testing.T, onConfirm func() tea.Msg) Model {
 }
 
 func TestOpenClose(t *testing.T) {
+	t.Parallel()
 	m := New()
 	if m.IsVisible() {
 		t.Fatal("new prompt should be hidden")
@@ -54,6 +55,7 @@ func TestOpenClose(t *testing.T) {
 }
 
 func TestUpdateConfirmRunsAction(t *testing.T) {
+	t.Parallel()
 	for _, press := range []tea.KeyPressMsg{keyPress('y'), realKey('y', tea.ModShift), keyCode(tea.KeyEnter)} {
 		called := false
 		m, cmd := opened(t, func() tea.Msg {
@@ -77,6 +79,7 @@ func TestUpdateConfirmRunsAction(t *testing.T) {
 }
 
 func TestUpdateCancels(t *testing.T) {
+	t.Parallel()
 	// n/N/Esc cancel explicitly; any unbound key cancels too.
 	for _, press := range []tea.KeyPressMsg{keyPress('n'), realKey('n', tea.ModShift), keyCode(tea.KeyEscape), keyPress('z'), keyCode(tea.KeyTab)} {
 		m, cmd := opened(t, func() tea.Msg { return sentinelMsg{} }).Update(press)
@@ -90,6 +93,7 @@ func TestUpdateCancels(t *testing.T) {
 }
 
 func TestUpdateConfirmWithoutAction(t *testing.T) {
+	t.Parallel()
 	m, cmd := opened(t, nil).Update(keyPress('y'))
 	if cmd != nil {
 		t.Error("expected no command when no action was registered")
@@ -100,6 +104,7 @@ func TestUpdateConfirmWithoutAction(t *testing.T) {
 }
 
 func TestUpdateIgnoresNonKeyAndHidden(t *testing.T) {
+	t.Parallel()
 	if _, cmd := opened(t, nil).Update(sentinelMsg{}); cmd != nil {
 		t.Error("non-key message should be ignored")
 	}
@@ -110,6 +115,7 @@ func TestUpdateIgnoresNonKeyAndHidden(t *testing.T) {
 }
 
 func TestUpdateHonorsCustomKeyMap(t *testing.T) {
+	t.Parallel()
 	m := opened(t, func() tea.Msg { return sentinelMsg{} })
 	m.KeyMap.Confirm = key.NewBinding(key.WithKeys("d"))
 
@@ -122,12 +128,14 @@ func TestUpdateHonorsCustomKeyMap(t *testing.T) {
 }
 
 func TestViewHiddenIsEmpty(t *testing.T) {
+	t.Parallel()
 	if New().View() != "" {
 		t.Error("hidden prompt should render nothing")
 	}
 }
 
 func TestViewShowsTitleBodyAndHelp(t *testing.T) {
+	t.Parallel()
 	out := opened(t, nil).View()
 	for _, want := range []string{"Delete message?", "hello world", "[y] confirm", "[n/Esc] cancel"} {
 		if !strings.Contains(out, want) {
@@ -137,6 +145,7 @@ func TestViewShowsTitleBodyAndHelp(t *testing.T) {
 }
 
 func TestViewHelpFollowsKeyMap(t *testing.T) {
+	t.Parallel()
 	m := opened(t, nil)
 	m.KeyMap.Confirm = key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete"))
 	if out := m.View(); !strings.Contains(out, "[d] delete") {
@@ -145,6 +154,7 @@ func TestViewHelpFollowsKeyMap(t *testing.T) {
 }
 
 func TestViewFlattensBody(t *testing.T) {
+	t.Parallel()
 	m := New(WithWidth(80))
 	m.Open("Title", "line1\nline2\tline3", nil)
 
@@ -160,6 +170,7 @@ func TestViewFlattensBody(t *testing.T) {
 }
 
 func TestViewTruncatesLongBody(t *testing.T) {
+	t.Parallel()
 	m := New(WithWidth(40))
 	m.Open("Title", strings.Repeat("long ", 40), nil)
 
@@ -173,6 +184,7 @@ func TestViewTruncatesLongBody(t *testing.T) {
 }
 
 func TestBoxWidthClampsToTerminalShare(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ term, want int }{
 		{0, minWidth},
 		{80, minWidth},  // 28% -> clamped up
@@ -187,6 +199,7 @@ func TestBoxWidthClampsToTerminalShare(t *testing.T) {
 }
 
 func TestSetWidthDrivesRenderedWidth(t *testing.T) {
+	t.Parallel()
 	m := opened(t, nil)
 	m.SetWidth(200)
 	if got := lipgloss.Width(m.View()); got != maxWidth {
@@ -195,6 +208,7 @@ func TestSetWidthDrivesRenderedWidth(t *testing.T) {
 }
 
 func TestDefaultStylesUsable(t *testing.T) {
+	t.Parallel()
 	for _, dark := range []bool{true, false} {
 		m := New(WithStyles(DefaultStyles(dark)), WithWidth(80))
 		m.Open("Title", "Body", nil)
@@ -205,6 +219,7 @@ func TestDefaultStylesUsable(t *testing.T) {
 }
 
 func TestInitNoCommand(t *testing.T) {
+	t.Parallel()
 	if New().Init() != nil {
 		t.Error("Init should not schedule work")
 	}
@@ -256,6 +271,7 @@ func TestUpdateModifierGrid(t *testing.T) {
 }
 
 func TestNewAppliesOptions(t *testing.T) {
+	t.Parallel()
 	styles := DefaultStyles(false)
 	styles.BaseANSI = "\x1b[0m"
 	keys := KeyMap{
@@ -281,6 +297,7 @@ func TestNewAppliesOptions(t *testing.T) {
 }
 
 func TestNewDefaultsWithoutOptions(t *testing.T) {
+	t.Parallel()
 	m := New()
 	if m.IsVisible() {
 		t.Error("should start hidden")
