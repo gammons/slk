@@ -41,10 +41,10 @@ internal/ui/            bubbletea App: reducers, mode key handlers, view regions
 internal/ui/<widget>/   self-contained sub-models (messages, thread, sidebar,
                         compose, and 13 modal packages)
 internal/bubbles/       self-contained components and the substrate they
-                        share (RFC #236). No slk imports; a component may
-                        import only its internal/bubbles siblings. Widgets
-                        move here from internal/ui/<widget>/ one at a time;
-                        confirmprompt is the first
+                        share (RFC #236), e.g. ansi. Never imports
+                        internal/ui; the TUI's I/O ban applies here too.
+                        Widgets move here from internal/ui/<widget>/ one at
+                        a time; confirmprompt is the first
 internal/slack/         Slack Web API + browser-protocol WebSocket client
 internal/slack/edge/    edgeapi: conditional revalidation, server-side search
 internal/bootstrap/     startup fetch orchestration
@@ -70,7 +70,10 @@ that no longer exists. Do not trust it.** Current structural documentation:
   ports in `internal/core`, which `cmd/slk` wires. No `internal/slack`,
   `slackhttp`, `cache`, `config`, `filedl`, `export`, `editor`, `net/http` or
   `os/exec`; `slack-go` only in `blockkit`, as the data it renders. `internal/ui/boundary_test.go`
-  enforces this. The boundary is deliberate; do not breach it.
+  enforces this. The boundary is deliberate; do not breach it. The same
+  rules cover `internal/bubbles`, with no `slack-go` exemption, and it may not
+  import `internal/ui` or anything under it: components are the app's building
+  blocks, not part of it (`TestBubblesReachTheAppOnlyThroughCore`, same file).
 - **`App.Update` routes through a reducer chain**, not a switch. Add behavior by
   adding to a `reducer_*.go` file, not by extending `Update`. The only step
   outside the chain is the thin `Update` wrapper that records `stackFront`
