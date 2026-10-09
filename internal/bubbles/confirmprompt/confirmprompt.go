@@ -10,7 +10,9 @@ import tea "charm.land/bubbletea/v2"
 // tea.Cmd rather than calling it.
 type ConfirmFunc func() tea.Msg
 
-// Model is the confirmation overlay.
+// Model is the confirmation overlay. Construct it with New; the zero value is
+// not usable: its KeyMap is empty, so nothing matches Confirm and every key
+// cancels.
 type Model struct {
 	KeyMap KeyMap
 
@@ -34,7 +36,8 @@ func WithKeyMap(k KeyMap) Option { return func(m *Model) { m.KeyMap = k } }
 // WithWidth sets the terminal width the box is sized against.
 func WithWidth(width int) Option { return func(m *Model) { m.width = width } }
 
-// New returns a hidden prompt with default keys and styles.
+// New returns a hidden prompt with default keys and styles, then applies opts.
+// It is the only usable constructor.
 func New(opts ...Option) Model {
 	m := Model{
 		KeyMap: DefaultKeyMap(),
