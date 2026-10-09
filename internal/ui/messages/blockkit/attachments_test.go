@@ -261,6 +261,18 @@ func TestRenderLegacyActionsWrapAtNarrowWidth(t *testing.T) {
 	}
 }
 
+// Narrower than "[ Don't Show Again ]" (20 cols) plus the 2-col stripe:
+// the button must be shortened to stay inside the bar.
+func TestRenderLegacyActionsNarrowerThanOneButton(t *testing.T) {
+	const width = 20
+	r := RenderLegacy(ParseAttachments(decodeCapturedAttachments(t)), plainCtx(), width)
+	for i, line := range r.Lines {
+		if w := lipgloss.Width(line); w > width {
+			t.Errorf("line %d is %d cols wide, want <= %d: %q", i, w, width, ansi.Strip(line))
+		}
+	}
+}
+
 func TestRenderLegacyWithoutActionsIsNotInteractive(t *testing.T) {
 	r := RenderLegacy([]LegacyAttachment{{Title: "T"}}, plainCtx(), 80)
 	if r.Interactive {
