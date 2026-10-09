@@ -180,7 +180,10 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 				}
 			}
 		}
-		a.threadPanel.SetThread(parentMsg, m.Replies, channelID, m.ThreadTS)
+		// Ephemeral replies already on screen are carried over: the
+		// fetch never contains them, and opening a thread clears the
+		// panel first, so any still shown belong to this thread.
+		a.threadPanel.SetThread(parentMsg, keepEphemerals(m.Replies, a.threadPanel.Replies()), channelID, m.ThreadTS)
 		if linkNav != nil {
 			if linkNav.messageTS == m.ThreadTS {
 				a.threadPanel.GoToTop()
