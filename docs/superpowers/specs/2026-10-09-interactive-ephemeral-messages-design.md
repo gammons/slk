@@ -112,9 +112,19 @@ What the captures establish:
 - `EventHandler` gains a method:
 
   ```go
-  OnEphemeralMessage(channelID, userID, ts, text, threadTS, subtype string,
-      blocks slack.Blocks, attachments []slack.Attachment, botID, username string)
+  OnEphemeralMessage(m EphemeralMessage)
+
+  type EphemeralMessage struct {
+      ChannelID, UserID, BotID, Username string
+      TS, ThreadTS, Subtype, Text        string
+      Blocks      slack.Blocks
+      Attachments []slack.Attachment
+      ActionIDs   [][]string // ActionIDs[i][j] = Attachments[i].Actions[j]'s "id"; see §6
+  }
   ```
+
+  A struct rather than positional parameters: `OnMessage`'s twelve positional
+  strings and slices are easy to transpose, and this method is new.
 
   `dispatchWebSocketEvent` routes a `message` event with `is_ephemeral: true`
   to it instead of `OnMessage`, in the same subtype arm. Files are omitted —
@@ -208,9 +218,14 @@ the open thread — except it **must not**:
   is not rendered in Part A.
 - **`fallback` is not rendered**, matching Slack's web client: it is
   notification text, and the message body already says the same thing.
-- **Ephemeral marker.** A muted `Only visible to you` line under the message
-  header, in **both** `messages.Model` and `thread.Model` (AGENTS.md: change one,
-  change both).
+- **Ephemeral marker.** A muted `Only visible to you` line above the author
+  row — the slot the `↳ replied to a thread` label already uses, so the
+  messages pane's row math (`preAttachmentRows`) absorbs it the same way — in
+  **both** `messages.Model` and `thread.Model` (AGENTS.md: change one, change
+  both). One shared `messages.EphemeralLabel()` renders it for both.
+- **The existing `↗ open in Slack to interact` hint** still follows any
+  interactive render, including these buttons. It stays in Part A; Part B
+  replaces it for messages slk can press.
 - **Lifetime.** Ephemerals live only in pane memory. Switching away and back
   reloads the pane from cache and history, neither of which contains them, so
   they disappear — as they do on reload in Slack's web client. Accepted.
@@ -237,27 +252,30 @@ the action object as `id, name, text, type, value, style` with `style` kept
 even when empty, as captured. A pressed action that carried a `confirm` is
 echoed with its `confirm` object, "as received" — the capture only covers
 "Dismiss", which has none, so this is the one unverified detail of the shape
-and is checked in the same live task as `id`.
+(see below).
 
-**Open question, resolved by the first plan task:** does Slack accept the
-payload without the action's `"id"`?
+**The action `id` is always sent.** Whether Slack strictly requires it is
+unknown, and it does not matter: slk mimics the web client's requests
+deliberately, because a request shape the web client never produces is the
+kind of contradictory signature that trips Enterprise Grid anomaly detection
+(`postForm`'s comment, issue #5). So `dispatchWebSocketEvent` captures
+`attachments[].actions[].id` with a second, narrow decode of the same frame —
+slack-go's `AttachmentAction` does not declare the field — and carries it to
+`LegacyAction.ID`.
 
-- **If yes:** send what slack-go gives us; `LegacyAction.ID` stays empty.
-- **If no:** capture `attachments[].actions[].id` by decoding attachments into
-  a slack-go-embedding wrapper that adds the field, and thread it into
-  `LegacyAction.ID`. This is needed on the WebSocket path **and** the history
-  paths, because Part B's `b` key presses buttons on non-ephemeral messages
-  loaded from history too. If the history-path work proves large, Part B may
-  instead restrict `b` to ephemerals; that is a Part B planning decision, not a
-  Part A one.
+That capture is on the WebSocket path only. History paths decode through
+slack-go and leave `ID` empty; nothing in Part A presses a button. Part B's `b`
+key would press buttons on non-ephemeral messages loaded from history, so Part
+B either extends the capture to history or restricts `b` to ephemerals — a Part
+B planning decision.
 
-The task: an `SLK_DEBUG`-gated or test-binary call against a live workspace,
-pressing "Dismiss" on a real mention ephemeral, once with and once without
-`id`. Dismiss is harmless.
+Verification is by construction rather than a live call: a unit test asserts
+the marshalled `payload` is byte-equal to the captured web-client payload,
+which Slack accepted. The first real press — and the one unverified detail,
+`confirm` echo — is checked by hand in Part B, the first time a button is
+pressed from slk.
 
 The `core` port and the UI wiring that call this method land with Part B.
-Part A ships the method with unit tests only, because the verification above
-decides Part A's decoding.
 
 ### 7. Error handling
 
@@ -271,7 +289,8 @@ decides Part A's decoding.
 All stdlib `testing`, white-box, per AGENTS.md.
 
 - **`internal/slack`:** the captured inbound frame (verbatim apart from the placeholder IDs)
-  routes to `OnEphemeralMessage`, not `OnMessage`; the same frame without
+  routes to `OnEphemeralMessage`, not `OnMessage`, with `ActionIDs`
+  `[["1","2","3"]]`; the same frame without
   `is_ephemeral` still routes to `OnMessage`. `AttachmentAction` against an
   `httptest` server: method path `chat.attachmentAction`, the `payload` field
   byte-equal to the captured payload, `ok:false` surfaced as an error.
