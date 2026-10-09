@@ -10,14 +10,15 @@ import (
 )
 
 // ---------------------------------------------------------------------
-// handleConfirmMode (mode_confirm.go:16)
+// handleConfirmMode
 //
-// No sub-branching of its own: it normalises Enter to the string
-// confirmprompt.Model.HandleKey matches, forwards, and drops to
-// ModeNormal whenever
-// the prompt closed itself. confirmprompt.HandleKey always closes
-// (confirmprompt/model.go:70-88), so in practice every key exits the
-// mode -- including keys the prompt treats as a cancel.
+// No branching of its own: it forwards the key to the component's
+// Update (internal/bubbles/confirmprompt) and drops to ModeNormal
+// whenever the prompt closed itself. Update closes the prompt on every
+// key press, so in practice every key exits the mode -- including keys
+// the prompt treats as a cancel. Which keys confirm is decided by the
+// component's confirms (see TestConfirmPromptModifierGrid below for the
+// full modifier grid).
 //
 // The only observable difference between confirm and cancel at this
 // layer is the returned Cmd, so every confirm row registers a callback
@@ -35,9 +36,9 @@ type confirmSentinelMsg struct{}
 // invocation into fired and emits confirmSentinelMsg.
 //
 // It asserts visibility, because a hidden prompt makes every row here
-// vacuous in the worst way: HandleKey returns a zero Result without
-// looking at the key (confirmprompt/model.go:71-73), so a cancel row
-// would still see cmd == nil and mode == ModeNormal and pass.
+// vacuous in the worst way: Update ignores keys while the prompt is
+// hidden, so a cancel row would still see cmd == nil and mode ==
+// ModeNormal and pass.
 func openConfirm(fired *bool) func(*testing.T, *App) {
 	return func(t *testing.T, a *App) {
 		t.Helper()
@@ -190,13 +191,13 @@ func TestConfirmModeKeys(t *testing.T) {
 			assert:   wantConfirmed(&enterFired),
 		},
 		{
-			// The KeyEnter normalisation in handleConfirmMode looks
-			// redundant for a bare Enter, whose String() is already
-			// "enter". Holding shift is the only input that separates
-			// live normalisation from dead code: Keystroke() prefixes the
-			// modifier ("shift+enter"), which confirmprompt's switch does
-			// not match, so without it this row would cancel.
-			name:     "shift+enter confirms: the KeyEnter normalisation strips the modifier",
+			// A bare Enter's String() is already "enter", which the
+			// Confirm binding matches. Holding shift is the input that
+			// shows the modifier handling is live: Keystroke() prefixes
+			// it ("shift+enter"), which the binding does not match, so
+			// this row confirms only because confirms() drops modifiers
+			// on a non-printable key and matches again.
+			name:     "shift+enter confirms: confirms() ignores modifiers on a non-printable key",
 			setup:    openConfirm(&shiftEnterFired),
 			key:      keyMod(tea.KeyEnter, tea.ModShift),
 			wantMode: ModeNormal,
@@ -210,17 +211,18 @@ func TestConfirmModeKeys(t *testing.T) {
 			assert:   wantCancelled(&escFired),
 		},
 		{
-			// handleConfirmMode does not normalise Escape: confirmprompt
-			// has no "esc" case at all -- everything that is not
-			// y/Y/enter falls into its cancel default. So "shift+esc"
-			// and "esc" both cancel without help from this layer.
+			// Nothing matches Escape specifically: Update cancels on
+			// every key that is not Confirm, and the Cancel binding's
+			// keys only feed the footer. So "shift+esc" and "esc" both
+			// cancel, the former even though confirms() strips its
+			// modifier, because "esc" is not a Confirm key.
 			//
-			// An Escape arm that rewrote the key to "esc" used to sit
-			// beside the Enter one; it had no effect and was removed
+			// An Escape arm that rewrote the key to "esc" used to sit in
+			// handleConfirmMode; it had no effect and was removed
 			// (https://github.com/gammons/slk/issues/188, item 1). This
 			// row is the witness that the removal was safe, and fails if
 			// a modified Escape ever stops cancelling.
-			name:     "shift+esc cancels: confirmprompt's default cancels without an esc arm",
+			name:     "shift+esc cancels: every key that is not Confirm cancels",
 			setup:    openConfirm(&shiftEscFired),
 			key:      keyMod(tea.KeyEscape, tea.ModShift),
 			wantMode: ModeNormal,
@@ -275,7 +277,7 @@ func TestConfirmModeKeys(t *testing.T) {
 		{
 			// ModeConfirm with a closed prompt is not a state the App
 			// reaches on purpose, but the handler has no guard for it:
-			// HandleKey short-circuits, IsVisible stays false, and the
+			// Update ignores the key, IsVisible stays false, and the
 			// mode is forced back to Normal. Pinning it documents that
 			// the mode cannot get stuck.
 			name: "a key with the prompt already hidden still drops to Normal",
