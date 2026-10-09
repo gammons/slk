@@ -163,7 +163,7 @@ func resolveDMNames(wctx *WorkspaceContext, db *cache.DB, avatarCache *avatar.Ca
 				// field on this endpoint, so none is invented; the
 				// per-user fallback below classifies the ids edge missed.
 				if u.IsBot {
-					wctx.BotUserIDs[dm.UserID] = true
+					wctx.MarkBotUser(dm.UserID)
 				}
 				if send != nil {
 					send(ui.DMNameResolvedMsg{
@@ -182,7 +182,7 @@ func resolveDMNames(wctx *WorkspaceContext, db *cache.DB, avatarCache *avatar.Ca
 		}
 		resolved, isBot := resolveUser(wctx.Client, dm.UserID, wctx.UserNames, db, avatarCache, send)
 		if isBot {
-			wctx.BotUserIDs[dm.UserID] = true
+			wctx.MarkBotUser(dm.UserID)
 		}
 		if resolved != dm.UserID && send != nil {
 			send(ui.DMNameResolvedMsg{

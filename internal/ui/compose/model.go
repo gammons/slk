@@ -20,6 +20,29 @@ import (
 	"github.com/gammons/slk/internal/usergroups"
 )
 
+// draftKey identifies one conversation's composer slot. It is a
+// comparable struct (not a concatenated string) so map lookups don't
+// allocate. An empty threadTS is a plain channel/DM draft; an empty
+// channelID marks a detached composer with no storage slot.
+type draftKey struct {
+	teamID    string
+	channelID string
+	threadTS  string
+}
+
+// draft is an inactive conversation's unsent composer state. The
+// attachments slice is moved by ownership (no clone) between the
+// visible composer and the map entry.
+type draft struct {
+	text        string
+	attachments []core.PendingAttachment
+}
+
+// isEmpty reports whether the draft carries nothing worth storing.
+func (d draft) isEmpty() bool {
+	return d.text == "" && len(d.attachments) == 0
+}
+
 type Model struct {
 	input       textarea.Model
 	channelName string
@@ -45,6 +68,14 @@ type Model struct {
 	// for a channel. Used to distinguish "no members" (empty set, after
 	// load) from "not loaded yet" (default-everyone-in-channel state).
 	channelMembersOK map[string]bool
+
+	// drafts stores inactive conversations' unsent composer state,
+	// keyed by (team, channel, thread). Only inactive slots hold an
+	// entry: the visible composer lives in input/pending, and its key
+	// is deleted when restored. Draft ownership does NOT ride on
+	// activeChannelID (that field is mention-picker context only).
+	activeKey draftKey
+	drafts    map[draftKey]draft
 
 	// Channel picker state. Mirrors the mention picker exactly:
 	// channelStartCol is the byte offset of the FIRST CHARACTER AFTER
@@ -164,6 +195,7 @@ func New(channelName string) Model {
 	return Model{
 		input:       ta,
 		channelName: channelName,
+		drafts:      make(map[draftKey]draft),
 	}
 }
 
@@ -347,19 +379,12 @@ func (m *Model) MoveCursorToEnd() {
 	m.dirty()
 }
 
+// Reset clears the visible composer: text, attachments, picker
+// sessions, height, upload and broadcast flags. It deliberately does
+// NOT touch the inactive draft map, so unrelated conversations keep
+// their stored drafts. Called after a successful send/clear.
 func (m *Model) Reset() {
-	m.input.Reset()
-	m.input.SetHeight(1)
-	m.mentionActive = false
-	m.mentionPicker.Close()
-	m.channelActive = false
-	m.channelPicker.Close()
-	m.emojiActive = false
-	m.emojiPicker.Close()
-	m.pending = nil
-	m.uploading = false
-	m.broadcast = false
-	m.dirty()
+	m.clearVisibleDraft()
 }
 
 // visualLineCount returns the number of visual lines the text occupies,
@@ -837,6 +862,11 @@ func (m *Model) SetUserGroups(groups map[string]string) {
 // App on every ChannelSelectedMsg. Idempotent: a no-op if the channel
 // hasn't actually changed (avoids needless picker rebuilds on the
 // hot reselect path).
+//
+// This is mention-membership context ONLY; it deliberately does not
+// touch draft storage. Drafts are bound independently via
+// SetDraftContext, because the main-pane channel does not identify a
+// thread composer's conversation.
 func (m *Model) SetActiveChannel(channelID string) {
 	if m.activeChannelID == channelID {
 		return
@@ -848,6 +878,115 @@ func (m *Model) SetActiveChannel(channelID string) {
 // ActiveChannel returns the channel ID currently active for
 // mention-picker context.
 func (m *Model) ActiveChannel() string { return m.activeChannelID }
+
+// SetDraftContext points the composer at the conversation its visible
+// draft belongs to. teamID/channelID/threadTS identify that
+// conversation; an empty threadTS means a channel/DM composer. The
+// previous key's draft is saved into the inactive map first (when it
+// had a valid key), and the new key's stored draft is restored into
+// the visible composer.
+//
+// An empty channelID detaches the composer: the prior valid draft is
+// saved, the visible state is cleared, and nothing is stored under an
+// empty channel. Calling with the same key is a no-op that preserves
+// text, cursor, and any open pickers. A non-empty teamID is not
+// required (startup may not know it yet): when the current key has an
+// unknown team and the new key resolves it for the same channel/thread,
+// the composer rebinds in place and keeps its draft.
+func (m *Model) SetDraftContext(teamID, channelID, threadTS string) {
+	next := draftKey{teamID: teamID, channelID: channelID, threadTS: threadTS}
+	if channelID == "" {
+		// A detached composer has no identity: threadTS/teamID are
+		// meaningless without a channel, so normalize so repeated
+		// detach calls collapse to a no-op.
+		next = draftKey{}
+	}
+	if next == m.activeKey {
+		return // same conversation: preserve text, cursor, pickers
+	}
+	// Startup rebind: the composer may be bound before its workspace is
+	// known, so a later call carries the same channel/thread but a
+	// newly-resolved teamID. Adopt the new key in place instead of
+	// treating it as a different conversation and losing the draft.
+	// Only an unknown team resolving to a known one is a rebind; two
+	// known teams are a real workspace switch and must isolate drafts,
+	// and a known team never migrates to an unknown/empty team.
+	if next.channelID != "" &&
+		next.channelID == m.activeKey.channelID &&
+		next.threadTS == m.activeKey.threadTS &&
+		m.activeKey.teamID == "" && next.teamID != "" {
+		m.activeKey = next
+		return
+	}
+
+	// Save the outgoing conversation's visible state and clear the
+	// visible composer. A valid key (non-empty channelID) stores the
+	// draft; a detached composer has no slot.
+	m.saveVisibleDraft()
+	m.clearVisibleDraft()
+
+	// Restore the incoming conversation's stored draft.
+	if channelID != "" {
+		if d, ok := m.drafts[next]; ok {
+			m.restoreDraft(d)
+			delete(m.drafts, next) // only inactive slots stay in the map
+		}
+	}
+	m.activeKey = next
+}
+
+// saveVisibleDraft moves the visible composer state into the inactive
+// map under the current key, when that key addresses a real
+// conversation. Empty drafts don't create entries.
+func (m *Model) saveVisibleDraft() {
+	if m.activeKey.channelID == "" {
+		return
+	}
+	d := draft{text: m.input.Value(), attachments: m.pending}
+	if d.isEmpty() {
+		delete(m.drafts, m.activeKey)
+		return
+	}
+	m.drafts[m.activeKey] = d
+	m.pending = nil
+}
+
+// clearVisibleDraft resets the visible transient composer state:
+// text, attachments, picker sessions, upload/broadcast flags, and
+// height. Inactive map entries are untouched. Used when the composer
+// is detached or its conversation is swapped out.
+func (m *Model) clearVisibleDraft() {
+	m.input.Reset()
+	m.input.SetHeight(1)
+	m.closePickers()
+	m.pending = nil
+	m.uploading = false
+	m.broadcast = false
+	m.dirty()
+}
+
+// restoreDraft moves an inactive draft into the visible composer and
+// takes ownership of its attachment slice.
+func (m *Model) restoreDraft(d draft) {
+	m.input.SetValue(d.text)
+	m.pending = d.attachments
+	// Recompute the visible height for the restored text; SetValue
+	// already recalcs internally, but autoGrow enforces our row cap.
+	m.autoGrow()
+	m.dirty()
+}
+
+// closePickers ends every completion session (mention, channel, emoji)
+// so no stale start-offset survives a text replacement. A leftover
+// offset indexing a shorter value is the slice-bounds panic source.
+func (m *Model) closePickers() {
+	m.mentionActive = false
+	m.mentionPicker.Close()
+	m.channelActive = false
+	m.channelPicker.Close()
+	m.emojiActive = false
+	m.emojiPicker.Close()
+}
 
 // SetChannelMembership records the member set for a channel and, if
 // that channel is active, rebuilds the picker's user list. Membership

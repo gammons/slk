@@ -555,6 +555,21 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 		return nil
 	}
 
+	// GetReplies pages to the end, so history is the whole thread: any
+	// cached reply missing from it is one Slack no longer has (or never
+	// had, like a Slackbot ephemeral). Cutoff is the request's start, so
+	// a reply the WebSocket cached mid-request is not mistaken for one.
+	returned := make([]string, 0, len(history))
+	for _, m := range history {
+		returned = append(returned, m.Timestamp)
+	}
+	if n, err := db.PruneThreadReplies(channelID, threadTS, returned, start.Unix()); err != nil {
+		debuglog.Cache("fetchThreadReplies: PruneThreadReplies %s/%s: %v", channelID, threadTS, err)
+	} else if n > 0 {
+		debuglog.Cache("fetchThreadReplies: channel=%s thread_ts=%s pruned=%d cached replies Slack did not return",
+			channelID, threadTS, n)
+	}
+
 	msgItems := make([]messages.MessageItem, 0, len(history))
 	for _, m := range history {
 		rawBytes, _ := json.Marshal(m)

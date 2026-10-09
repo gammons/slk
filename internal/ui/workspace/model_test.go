@@ -106,6 +106,13 @@ func TestOtherUnreadCount_NoReader(t *testing.T) {
 	if got := m.OtherUnreadCount("T1"); got != 0 {
 		t.Errorf("OtherUnreadCount with no reader = %d want 0", got)
 	}
+	// Removing the reader drops what it last reported.
+	m.SetUnreadReader(func() []string { return []string{"T2"} })
+	m.RefreshUnreads()
+	m.SetUnreadReader(nil)
+	if got := m.OtherUnreadCount("T1"); got != 0 {
+		t.Errorf("OtherUnreadCount after removing the reader = %d want 0", got)
+	}
 }
 
 func TestOtherUnreadCount(t *testing.T) {
@@ -113,6 +120,7 @@ func TestOtherUnreadCount(t *testing.T) {
 		{ID: "T1"}, {ID: "T2"}, {ID: "T3"},
 	}, 0)
 	m.SetUnreadReader(func() []string { return []string{"T1", "T2", "T3"} })
+	m.RefreshUnreads()
 
 	cases := []struct {
 		activeID string
@@ -134,7 +142,28 @@ func TestOtherUnreadCount(t *testing.T) {
 func TestOtherUnreadCount_EmptyReaderResult(t *testing.T) {
 	m := New([]WorkspaceItem{{ID: "T1"}, {ID: "T2"}}, 0)
 	m.SetUnreadReader(func() []string { return nil })
+	m.RefreshUnreads()
 	if got := m.OtherUnreadCount("T1"); got != 0 {
 		t.Errorf("OtherUnreadCount with empty reader = %d want 0", got)
+	}
+}
+
+// The reader runs SQLite queries on the UI goroutine (railUnreadWorkspaces
+// in cmd/slk), so a refresh followed by OtherUnreadCount, which is what
+// App.notifyReadStateChanged does, must read it once, not twice.
+// OtherUnreadCount counts the set the last RefreshUnreads read.
+func TestOtherUnreadCount_UsesLastRefreshWithoutReading(t *testing.T) {
+	m := New([]WorkspaceItem{{ID: "T1"}, {ID: "T2"}, {ID: "T3"}}, 0)
+	calls := 0
+	unread := []string{"T2", "T3"}
+	m.SetUnreadReader(func() []string { calls++; return unread })
+
+	m.RefreshUnreads()
+	unread = nil // a reader call from here on would change the answer
+	if got := m.OtherUnreadCount("T1"); got != 2 {
+		t.Errorf("OtherUnreadCount(T1) = %d want 2 (from the last refresh)", got)
+	}
+	if calls != 1 {
+		t.Errorf("reader calls = %d want 1 (RefreshUnreads only)", calls)
 	}
 }

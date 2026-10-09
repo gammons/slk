@@ -31,6 +31,8 @@
 package ui
 
 import (
+	"time"
+
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/gammons/slk/internal/ui/messages"
@@ -197,6 +199,9 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 	// Determine which panel was clicked.
 	switch {
 	case x < a.layout.RailWidth():
+		if a.compose.Uploading() || a.threadCompose.Uploading() {
+			return a.uploadToastCmd("Upload in progress", 2*time.Second)
+		}
 		// Workspace rail: clicking a workspace tile switches to
 		// that workspace (same code path as the 1-9 keybinds and
 		// the workspace finder). The rail has no border above, so

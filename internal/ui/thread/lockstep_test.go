@@ -232,7 +232,6 @@ func TestLockstep_SharedRenderBehaviour(t *testing.T) {
 	// centring, padding, glyph choice or wrap column fails even though
 	// the anchor still resolves.
 	shared := []struct{ name, anchor string }{
-		{"author row (alice)", "alice  9:00 AM"},
 		{"body row (first)", "▌first"},
 		{"day-transition divider", "── Today ──"},
 		{"unread landmark", "── new ──"},
@@ -258,6 +257,11 @@ func TestLockstep_SharedRenderBehaviour(t *testing.T) {
 		}
 	}
 
+	// The parent's author row carries its date in thread only
+	// (divergence 3), so it is checked per pane rather than shared.
+	lockstepRow(t, msgPane, "messages pane/author row (alice)", "alice  9:00 AM")
+	lockstepRow(t, thrPane, "thread pane/author row (alice)", "alice  Yesterday, 9:00 AM")
+
 	// --- structure ------------------------------------------------
 	//
 	// Only gaps WITHIN a message (or between a divider and the message
@@ -265,7 +269,6 @@ func TestLockstep_SharedRenderBehaviour(t *testing.T) {
 	// differ: messages separates with a blank row, thread with a
 	// full-width rule (divergence 4).
 	gaps := []struct{ name, from, to string }{
-		{"author -> body (alice)", "alice  9:00 AM", "▌first"},
 		{"day divider -> unread landmark", "── Today ──", "── new ──"},
 		{"unread landmark -> author (bob)", "── new ──", "bob  9:00 AM"},
 		{"author -> body (bob)", "bob  9:00 AM", "▌second"},
@@ -415,7 +418,9 @@ func lockstepHitColumns(hit func(col int) bool) []int {
 //     with a parseable date DOES get a divider
 //     (thread/model.go:1601-1608), degenerating to the messages
 //     behaviour. Only the day TRANSITION is shared, which is what the
-//     fixture above exercises.
+//     fixture above exercises. To compensate, thread prefixes the
+//     parent's header time with messages.FormatShortDate
+//     ("Yesterday, 9:00 AM"), so the parent's author row is not shared.
 //
 //  4. Inter-row separator, and where it lives structurally. messages
 //     separates messages with a blank full-width spacer row

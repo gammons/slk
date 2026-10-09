@@ -75,7 +75,7 @@ func assertPaneGeometry(t *testing.T, rows []string, width, height int) {
 func TestThreadSelectedTimestamp_SelectedReplyShowsLong(t *testing.T) {
 	m, rows := threadLongTS(t, "priya", "lee", 80, 30)
 	view := strings.Join(rows, "\n")
-	for _, want := range []string{"lee  Tue Sep 29, 3:42 PM", "priya  3:40 PM", "sam  3:41 PM"} {
+	for _, want := range []string{"lee  Tue Sep 29, 3:42 PM", "priya  Today, 3:40 PM", "sam  3:41 PM"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view missing %q:\n%s", want, view)
 		}
@@ -120,8 +120,8 @@ func TestThreadSelectedTimestamp_ParentSelectedShowsLong(t *testing.T) {
 func TestThreadSelectedTimestamp_UnselectedParentShort(t *testing.T) {
 	_, rows := threadLongTS(t, "priya", "lee", 80, 30)
 	view := strings.Join(rows, "\n")
-	if !strings.Contains(view, "priya  3:40 PM") || strings.Contains(view, "priya  Tue") {
-		t.Fatalf("unselected parent should show the short timestamp:\n%s", view)
+	if !strings.Contains(view, "priya  Today, 3:40 PM") || strings.Contains(view, "priya  Tue") {
+		t.Fatalf("unselected parent should show the short date timestamp:\n%s", view)
 	}
 }
 
@@ -129,7 +129,7 @@ func TestThreadSelectedTimestamp_NarrowReplyFallsBack(t *testing.T) {
 	// 24-col name: short header 33 fits contentWidth 36; long 45 does not.
 	m, rows := threadLongTS(t, "priya", "a-quite-long-displayname", 40, 30)
 	view := strings.Join(rows, "\n")
-	if strings.Contains(view, "Sep 29") {
+	if strings.Contains(view, "Tue Sep 29") {
 		t.Fatalf("narrow thread shows long timestamp:\n%s", view)
 	}
 	assertThreadHeightsMatch(t, m)
@@ -142,7 +142,7 @@ func TestThreadSelectedTimestamp_NarrowParentFallsBack(t *testing.T) {
 	m.GoToTop()
 	m.MoveUp() // parent
 	rows := stripRows(m.View(30, 40))
-	if view := strings.Join(rows, "\n"); strings.Contains(view, "Sep 29") {
+	if view := strings.Join(rows, "\n"); strings.Contains(view, "Tue Sep 29") {
 		t.Fatalf("narrow selected parent shows long timestamp:\n%s", view)
 	}
 	assertPaneGeometry(t, rows, 40, 30)
@@ -195,7 +195,7 @@ func TestThreadSelectedTimestamp_DragOverParentHeaderKeepsTextIntact(t *testing.
 	m.BeginSelectionAt(y, 0)
 	m.ExtendSelectionAt(y, 8)
 	view := strings.Join(stripRows(m.View(30, 80)), "\n")
-	if !strings.Contains(view, "priya  3:40 PM") || strings.Contains(view, "Sep 29") {
+	if !strings.Contains(view, "priya  3:40 PM") || strings.Contains(view, "Tue") {
 		t.Fatalf("drag over selected parent header garbled it or kept the long form:\n%s", view)
 	}
 	m.ClearSelection()
@@ -219,7 +219,7 @@ func TestThreadSelectedTimestamp_ShortVariantBuiltLazily(t *testing.T) {
 	_ = m.View(30, 80)
 	m.MoveUp() // selection stays pinned; the cursor lands on sam
 	view := strings.Join(stripRows(m.View(30, 80)), "\n")
-	if !strings.Contains(view, "sam  3:41 PM") || strings.Contains(view, "Sep 29") {
+	if !strings.Contains(view, "sam  3:41 PM") || strings.Contains(view, "sam  Tue") {
 		t.Fatalf("j/k under a pinned selection should show the short form:\n%s", view)
 	}
 	assertThreadHeightsMatch(t, m)
@@ -235,5 +235,52 @@ func TestThreadSelectedTimestamp_CopyUsesShortForm(t *testing.T) {
 	}
 	if !strings.Contains(text, "lee  3:42 PM") || strings.Contains(text, "Sep 29") {
 		t.Fatalf("copied text should carry the short form only; got %q", text)
+	}
+}
+
+func TestThreadParentDate_CopyAndDragMatchDisplay(t *testing.T) {
+	// The unselected parent's date is drawn, so the plain mirror carries
+	// it too: a drag over the header keeps it intact and copies it.
+	m, _ := threadLongTS(t, "priya", "lee", 80, 30)
+	m.GoToTop()
+	_ = m.View(30, 80)
+	y := m.chromeHeight - m.vp.YOffset()
+	m.BeginSelectionAt(y, 0)
+	m.ExtendSelectionAt(y, 79)
+	view := strings.Join(stripRows(m.View(30, 80)), "\n")
+	if !strings.Contains(view, "priya  Today, 3:40 PM") {
+		t.Fatalf("drag over the unselected parent header garbled it:\n%s", view)
+	}
+	text, ok := m.EndSelection()
+	if !ok || !strings.Contains(text, "priya  Today, 3:40 PM") {
+		t.Fatalf("copied parent header = %q (ok=%v), want it to carry the displayed date", text, ok)
+	}
+}
+
+func TestThreadParentDate_NarrowFallsBackToTime(t *testing.T) {
+	// 24-col name: "Today, 3:40 PM" header 40 overflows contentWidth 36;
+	// the time-only header 33 fits.
+	m, rows := threadLongTS(t, "a-quite-long-displayname", "lee", 40, 30)
+	view := strings.Join(rows, "\n")
+	if !strings.Contains(view, "a-quite-long-displayname  3:40 PM") || strings.Contains(view, "Today, 3:40") {
+		t.Fatalf("narrow unselected parent should keep the full time-only header:\n%s", view)
+	}
+	assertThreadHeightsMatch(t, m)
+	assertPaneGeometry(t, rows, 40, 30)
+}
+
+func TestThreadParentDate_NoTimeNoDate(t *testing.T) {
+	// A threads-view open builds the parent from the list summary, with
+	// no formatted time until the fetch backfills it. The reply keeps
+	// the parent unselected.
+	styles.Apply("dark", config.Theme{})
+	messages.SetNowFunc(threadLongTSClock)
+	t.Cleanup(func() { messages.SetNowFunc(nil) })
+	m := New()
+	parent := messages.MessageItem{TS: threadLongTSAt(40), UserID: "U1", UserName: "priya", Text: "parent"}
+	reply := messages.MessageItem{TS: threadLongTSAt(41), UserID: "U2", UserName: "sam", Text: "first reply", Timestamp: "3:41 PM"}
+	m.SetThread(parent, []messages.MessageItem{reply}, "C1", parent.TS)
+	if view := strings.Join(stripRows(m.View(30, 80)), "\n"); strings.Contains(view, "Today") {
+		t.Fatalf("a parent with no time should get no date label:\n%s", view)
 	}
 }

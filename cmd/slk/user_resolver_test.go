@@ -567,7 +567,6 @@ func TestResolveDMNames(t *testing.T) {
 	wctx := &WorkspaceContext{
 		TeamID:       "T1",
 		UserNames:    newUserNameStore(nil),
-		BotUserIDs:   map[string]bool{},
 		UserResolver: newUserResolver("T1", nil, db, nil, nil, batcher, nil),
 		UnresolvedDMs: []UnresolvedDM{
 			{ChannelID: "D_ALICE", UserID: "U_ALICE"},
@@ -603,8 +602,8 @@ func TestResolveDMNames(t *testing.T) {
 	if app == nil || app.DisplayName != "Some App" || !app.IsBot {
 		t.Errorf("D_APP got %+v; want a DMNameResolvedMsg naming Some App with IsBot true — that flag re-buckets the row into the Apps section", app)
 	}
-	if !wctx.BotUserIDs["U_APP"] {
-		t.Error("U_APP was not recorded in BotUserIDs")
+	if !wctx.IsBotUser("U_APP") {
+		t.Error("U_APP was not recorded as a bot peer")
 	}
 	if n := len(batcher.calls()); n != 1 {
 		t.Errorf("the sweep made %d edge calls; want 1 for any number of DMs", n)
@@ -634,7 +633,6 @@ func TestResolveDMNames_FallbackPersistsStatusAndEmitsMessage(t *testing.T) {
 		TeamID:       "T1",
 		Client:       client,
 		UserNames:    newUserNameStore(nil),
-		BotUserIDs:   map[string]bool{},
 		UserResolver: newUserResolver("T1", nil, db, nil, nil, batcher, nil),
 		UnresolvedDMs: []UnresolvedDM{
 			{ChannelID: "D_BOB", UserID: "U_BOB"},

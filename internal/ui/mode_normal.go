@@ -7,8 +7,9 @@
 //     prompt), Ctrl-Y (theme switcher), ? (help),
 //     S (presence menu), R (reaction picker)
 //   - navigation: j/k (selection), Ctrl-D/U (half-page), C-f/b
-//     (page), G (bottom), Tab/h/l (focus next/prev), Ctrl-h/k
-//     (nav back/forward through visited channels)
+//     (page), G (bottom), Tab/h/l (focus next/prev), Ctrl-h/l
+//     (nav back/forward through visited channels; Ctrl-k is an
+//     alias for forward)
 //   - layout toggles: s (sidebar), t (thread)
 //   - message ops: y (copy message), Y/C (copy permalink), E (edit), D (delete),
 //     U (mark unread), O/v (open image preview)
@@ -350,6 +351,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		// Number keys 1-9 switch workspaces.
 		keyStr := msg.String()
 		if len(keyStr) == 1 && keyStr[0] >= '1' && keyStr[0] <= '9' {
+			if a.compose.Uploading() || a.threadCompose.Uploading() {
+				return a.uploadToastCmd("Upload in progress", 2*time.Second)
+			}
 			idx := int(keyStr[0] - '1') // 0-indexed
 			if idx < len(a.workspaceItems) && a.workspaceSvc != nil {
 				if a.workspaceItems[idx].ID != a.workspaceRail.SelectedID() {

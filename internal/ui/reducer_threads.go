@@ -138,13 +138,9 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		threads := a.threads
 		chID := ids.ChannelID(m.channelID)
 		threadTS := ids.ThreadTS(m.threadTS)
-		parentTS := m.threadTS
 		var batch []tea.Cmd
-		if cached := threads.CacheRead(chID, threadTS); len(cached) > 1 {
-			replies := cached[1:] // strip parent; reducer expects replies-only
-			batch = append(batch, func() tea.Msg {
-				return ThreadRepliesLoadedMsg{ThreadTS: parentTS, Replies: replies}
-			})
+		if cmd := cachedThreadRepliesCmd(threads, chID, threadTS); cmd != nil {
+			batch = append(batch, cmd)
 		}
 		batch = append(batch, func() tea.Msg { return threads.Fetch(chID, threadTS) })
 		return tea.Batch(batch...), true
@@ -153,23 +149,35 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		if !(a.threadVisible && m.ThreadTS == a.threadPanel.ThreadTS()) {
 			return nil, true
 		}
+		channelID := a.threadPanel.ChannelID()
 		// nil Replies signals network failure (the fetcher logs the
 		// error and returns nil); empty []MessageItem{} signals
 		// "no replies yet". Skip the panel update on failure so a
 		// transient blip doesn't blank a successfully-rendered
-		// cached thread view.
+		// cached thread view. That cached view did not mark the
+		// thread (see FromCache), so mark it now from what the user
+		// is looking at; with no cached replies on screen there is
+		// nothing they have seen to mark.
 		if m.Replies == nil {
+			if replies := a.threadPanel.Replies(); len(replies) > 0 {
+				return a.markOpenThreadRead(channelID, m.ThreadTS, replies), true
+			}
 			return nil, true
 		}
-		channelID := a.threadPanel.ChannelID()
 		parentMsg := a.threadPanel.ParentMsg()
 		// Permalink-opened threads start with a stub parent (TS only),
 		// and a thread opened from a reply row may carry the wrong row
 		// as parent. The fetch that produced this msg also wrote the
 		// full thread to cache — backfill the parent row from there.
-		if parentMsg.Text == "" || parentMsg.TS != m.ThreadTS {
+		// Threads-view opens build the parent from the list summary,
+		// which has text but no formatted time — take just that field.
+		if parentMsg.Text == "" || parentMsg.Timestamp == "" || parentMsg.TS != m.ThreadTS {
 			if cached := a.threads.CacheRead(ids.ChannelID(channelID), ids.ThreadTS(m.ThreadTS)); len(cached) > 0 && cached[0].Text != "" {
-				parentMsg = cached[0]
+				if parentMsg.Text == "" || parentMsg.TS != m.ThreadTS {
+					parentMsg = cached[0]
+				} else if parentMsg.Timestamp == "" {
+					parentMsg.Timestamp = cached[0].Timestamp
+				}
 			}
 		}
 		a.threadPanel.SetThread(parentMsg, m.Replies, channelID, m.ThreadTS)
@@ -187,57 +195,14 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			}
 		}
 
-		// Mark the thread as read now that the user has actually
-		// seen the replies. Server-side: subscriptions.thread.mark
-		// with the latest reply ts (or the parent ts when the thread
-		// has no replies); the returned cmd persists the cursor and
-		// reports back as ThreadMarkedLocalMsg.
-		// Local-side: clear the Unread flag in the threads-list
-		// view and refresh the sidebar's threads-row badge so the
-		// UI reflects the change immediately, regardless of which
-		// path (messages pane or threads view) opened the thread.
-		latestTS := m.ThreadTS
-		if n := len(m.Replies); n > 0 {
-			if t := m.Replies[n-1].TS; t != "" {
-				latestTS = t
-			}
+		// Cached replies only render. Marking from them raced the
+		// fetched result's mark with a cursor that may lag Slack:
+		// the stale mark re-flagged the thread unread and, landing
+		// last, persisted the stale cursor. See FromCache.
+		if m.FromCache {
+			return nil, true
 		}
-		var cmd tea.Cmd
-		if channelID != "" && m.ThreadTS != "" {
-			cmd = teaCmd(a.threads.Mark(
-				ids.ChannelID(channelID),
-				ids.ThreadTS(m.ThreadTS),
-				ids.MessageTS(latestTS),
-			))
-			if cmd != nil {
-				// Record BEFORE the cmd runs, i.e. before the mark is
-				// issued: Slack's thread_marked broadcast races the
-				// mark's own HTTP response, and this is the mark whose
-				// echo would otherwise wipe the landmark the user just
-				// opened the thread to read. Mark only builds the cmd,
-				// so nothing has been sent yet and this record cannot
-				// lose that race. A nil cmd means no mark will be
-				// issued (no active workspace), hence no echo to
-				// suppress. See selfMarkDedup.
-				a.selfThreadMarks.record(selfMarkKey{
-					channelID: channelID, threadTS: m.ThreadTS, ts: latestTS,
-				})
-			}
-		}
-		// Optimistic local recompute so the badge updates immediately
-		// rather than waiting on the round-trip. MarkByThreadTSReadAt
-		// sets Unread = summary.LastReplyTS > latestTS, so it usually
-		// clears the flag; but it re-derives rather than clears, so it
-		// can also set it. That happens when the summary knows a newer
-		// reply than this fetch returned (LastReplyTS > latestTS), in
-		// which case the thread really is still unread and stays
-		// flagged. ThreadMarkedLocalMsg reconciles this against the
-		// cursor Slack accepted on success; a rejected mark leaves
-		// state untouched and heals on the next list refresh.
-		if a.threadsView.MarkByThreadTSReadAt(channelID, m.ThreadTS, latestTS) {
-			a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
-		}
-		return cmd, true
+		return a.markOpenThreadRead(channelID, m.ThreadTS, m.Replies), true
 
 	case ThreadsViewActivatedMsg:
 		_ = m
@@ -471,4 +436,57 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}, true
 	}
 	return nil, false
+}
+
+// markOpenThreadRead marks the open thread read up to the newest of
+// replies, the replies the user has now seen. Server-side:
+// subscriptions.thread.mark with the latest reply ts (or the parent ts
+// when the thread has no replies); the returned cmd persists the cursor
+// and reports back as ThreadMarkedLocalMsg. Local-side: clear the Unread
+// flag in the threads-list view and refresh the sidebar's threads-row
+// badge so the UI reflects the change immediately, regardless of which
+// path (messages pane or threads view) opened the thread.
+func (a *App) markOpenThreadRead(channelID, threadTS string, replies []messages.MessageItem) tea.Cmd {
+	latestTS := threadTS
+	if n := len(replies); n > 0 {
+		if t := replies[n-1].TS; t != "" {
+			latestTS = t
+		}
+	}
+	var cmd tea.Cmd
+	if channelID != "" && threadTS != "" {
+		cmd = teaCmd(a.threads.Mark(
+			ids.ChannelID(channelID),
+			ids.ThreadTS(threadTS),
+			ids.MessageTS(latestTS),
+		))
+		if cmd != nil {
+			// Record BEFORE the cmd runs, i.e. before the mark is
+			// issued: Slack's thread_marked broadcast races the
+			// mark's own HTTP response, and this is the mark whose
+			// echo would otherwise wipe the landmark the user just
+			// opened the thread to read. Mark only builds the cmd,
+			// so nothing has been sent yet and this record cannot
+			// lose that race. A nil cmd means no mark will be
+			// issued (no active workspace), hence no echo to
+			// suppress. See selfMarkDedup.
+			a.selfThreadMarks.record(selfMarkKey{
+				channelID: channelID, threadTS: threadTS, ts: latestTS,
+			})
+		}
+	}
+	// Optimistic local recompute so the badge updates immediately
+	// rather than waiting on the round-trip. MarkByThreadTSReadAt
+	// sets Unread = summary.LastReplyTS > latestTS, so it usually
+	// clears the flag; but it re-derives rather than clears, so it
+	// can also set it. That happens when the summary knows a newer
+	// reply than this fetch returned (LastReplyTS > latestTS), in
+	// which case the thread really is still unread and stays
+	// flagged. ThreadMarkedLocalMsg reconciles this against the
+	// cursor Slack accepted on success; a rejected mark leaves
+	// state untouched and heals on the next list refresh.
+	if a.threadsView.MarkByThreadTSReadAt(channelID, threadTS, latestTS) {
+		a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
+	}
+	return cmd
 }

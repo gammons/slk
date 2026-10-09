@@ -368,7 +368,7 @@ func applyBootUsers(wctx *WorkspaceContext, res *bootstrap.Result) {
 		// second, and this flag decides whether a DM lands in the
 		// "Apps" sidebar section.
 		if u.IsBot || u.IsAppUser {
-			wctx.BotUserIDs[u.ID] = true
+			wctx.MarkBotUser(u.ID)
 		}
 		if u.Profile.ImageOriginal != "" {
 			wctx.AvatarURLs.Store(u.ID, u.Profile.ImageOriginal)

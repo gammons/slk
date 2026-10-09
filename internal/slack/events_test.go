@@ -853,3 +853,16 @@ func TestDispatch_ChannelMarked_AbsentMentionCountIsZero(t *testing.T) {
 		t.Errorf("mentionCount = %d, want 0", got)
 	}
 }
+
+// topLevelFields feeds the "message raw fields" WS debug line, which
+// exists to surface whatever marks a message ephemeral. That marker can
+// sit after kilobytes of blocks, so every top-level key must appear
+// regardless of position, with nested values abbreviated.
+func TestTopLevelFields_ListsEveryKeyAndAbbreviatesNested(t *testing.T) {
+	data := []byte(`{"type":"message","attachments":[{"id":1}],"blocks":[],"user":"USLACKBOT","is_ephemeral":true,"n":3,"meta":{"a":1}}`)
+	got := topLevelFields(data)
+	want := `attachments=[…] blocks=[…] is_ephemeral=true meta={…} n=3 type="message" user="USLACKBOT"`
+	if got != want {
+		t.Errorf("topLevelFields =\n  %s\nwant\n  %s", got, want)
+	}
+}

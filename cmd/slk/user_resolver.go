@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -79,6 +80,10 @@ type userResolver struct {
 	// is what the UI is handed on a workspace switch, and its notifier
 	// is how a name reaches an already-showing UI. Nil (tests) skips it.
 	names *userNameStore
+
+	// avatarTried is RequestAvatar's once-per-session set: userID ->
+	// struct{}. Entries are never removed.
+	avatarTried sync.Map
 }
 
 func newUserResolver(
@@ -197,22 +202,16 @@ func (r *userResolver) resolveOne(userID string) {
 		HuddleState:      u.Profile.HuddleState,
 		HuddleExpiration: int64(u.Profile.HuddleStateExpirationTS),
 	})
+	// UpsertUser intentionally preserves existing status for placeholder
+	// callers. This is a full profile: persist changes and clears before
+	// UserResolvedMsg can trigger a row repair that re-reads the cache.
+	applyProfileStatus(r.teamID, userID, u.Profile, r.db, r.send)
 	// In the store too, so the name survives for this workspace's next
 	// switch snapshot even if the UserResolvedMsg below is dropped
 	// because the workspace is not the active one.
 	r.names.Set(userID, name)
 	if r.send != nil {
-		// Status before UserResolvedMsg, which callers treat as the
-		// end of this user's resolution.
-		r.send(ui.UserStatusChangeMsg{
-			TeamID:        r.teamID,
-			UserID:        userID,
-			Emoji:         u.Profile.StatusEmoji,
-			Text:          u.Profile.StatusText,
-			Expires:       statusExpiry(int64(u.Profile.StatusExpiration)),
-			Huddle:        u.Profile.HuddleState,
-			HuddleExpires: statusExpiry(int64(u.Profile.HuddleStateExpirationTS)),
-		})
+		// Status has already been persisted and sent by applyProfileStatus.
 		r.send(ui.UserResolvedMsg{
 			TeamID:      r.teamID,
 			UserID:      userID,
@@ -221,8 +220,89 @@ func (r *userResolver) resolveOne(userID string) {
 		})
 	}
 	if isExternal && r.send != nil {
-		r.send(ui.UserExternalMsg{UserID: userID, IsExternal: true})
+		r.send(ui.UserExternalMsg{TeamID: r.teamID, UserID: userID, IsExternal: true})
 	}
+}
+
+// wantsAvatarBackfill reports whether userID is a human user users.info
+// can describe: U… IDs, and W… on Enterprise Grid. Bot authors are
+// keyed by their B… bot ID and get their icon from bots.info instead
+// (RequestBot).
+func wantsAvatarBackfill(userID string) bool {
+	return strings.HasPrefix(userID, "U") || strings.HasPrefix(userID, "W")
+}
+
+// RequestAvatar backfills the avatar of a user the workspace has no
+// avatar URL for. Called by the render path (lazyAvatar) on a miss, so
+// it returns immediately; the work runs on its own goroutine.
+//
+// The gap it fills: edge users/info, boot and conversations.view carry
+// only image_original, which Slack omits for users who never uploaded
+// an avatar, so those users arrive with no URL at all. users.info does
+// carry their sized image_NN (a Gravatar URL falling back to Slack's
+// default avatar), but Request never reaches it once a row exists.
+//
+// At most once per user per session, whatever the outcome: a user
+// users.info cannot help would otherwise cost a call per frame.
+func (r *userResolver) RequestAvatar(userID string) {
+	if r == nil || !wantsAvatarBackfill(userID) {
+		return
+	}
+	if _, tried := r.avatarTried.LoadOrStore(userID, struct{}{}); tried {
+		return
+	}
+	go r.backfillAvatar(userID)
+}
+
+// backfillAvatar is RequestAvatar's synchronous worker: a URL already
+// in SQLite is used as is; otherwise one users.info call, then the URL
+// is stored (only where avatar_url is still empty)
+// so the next launch has it at connect time, and preloaded, so this
+// session's AvatarReadyMsg redraws the row.
+func (r *userResolver) backfillAvatar(userID string) {
+	// Users the edge batch resolved this session have their URL in
+	// SQLite but not in wctx.AvatarURLs, so their first render lands
+	// here. Their avatar needs no users.info call: edge batching exists
+	// to avoid exactly one call per newly seen author.
+	stored, err := r.db.GetUser(userID)
+	if err != nil {
+		// No row: the user is unresolved, and resolving them (edge
+		// batch or users.info) is Request's job. Calling users.info
+		// here would cost a call per newly seen author, and with no
+		// row FillUserAvatarURL could not save the URL. Release the
+		// token: the resolver's UserResolvedMsg re-renders the row, and
+		// that render's RequestAvatar finds it.
+		r.avatarTried.Delete(userID)
+		return
+	}
+	if stored.AvatarURL != "" {
+		r.avatars.Preload(userID, stored.AvatarURL)
+		return
+	}
+	if r.sem != nil {
+		r.sem <- struct{}{}
+		defer func() { <-r.sem }()
+	}
+	u, err := r.client.GetUserProfile(userID)
+	if err != nil {
+		debuglog.Cache("userResolver: avatar backfill team=%s user=%s err=%v", r.teamID, userID, err)
+		return
+	}
+	var url string
+	for _, candidate := range []string{u.Profile.Image72, u.Profile.Image48, u.Profile.Image32} {
+		if candidate != "" {
+			url = candidate
+			break
+		}
+	}
+	if url == "" {
+		debuglog.Cache("userResolver: avatar backfill team=%s user=%s: users.info has no image", r.teamID, userID)
+		return
+	}
+	if err := r.db.FillUserAvatarURL(userID, url); err != nil {
+		debuglog.Cache("userResolver: avatar backfill team=%s user=%s store: %v", r.teamID, userID, err)
+	}
+	r.avatars.Preload(userID, url)
 }
 
 // flush resolves everything queued since the window opened, as one
@@ -381,7 +461,7 @@ func (r *userResolver) applyEdgeUser(u edge.User) {
 		})
 	}
 	if isExternal && r.send != nil {
-		r.send(ui.UserExternalMsg{UserID: u.ID, IsExternal: true})
+		r.send(ui.UserExternalMsg{TeamID: r.teamID, UserID: u.ID, IsExternal: true})
 	}
 }
 

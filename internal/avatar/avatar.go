@@ -8,10 +8,13 @@ package avatar
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"image"
 	"strings"
 	"sync"
 
+	"github.com/gammons/slk/internal/debuglog"
 	imgpkg "github.com/gammons/slk/internal/image"
 )
 
@@ -43,6 +46,11 @@ const avatarPreloadWorkers = 8
 // subsequent retry can re-enqueue. 256 covers ordinary workloads with
 // plenty of headroom.
 const avatarPreloadQueueSize = 256
+
+// sizedAvatarPx is the CDN variant fetched in place of a Slack original
+// avatar (see SizedURL). 72px is ~2x the 4x2-cell slot at a typical
+// 9x17 cell, and a few KB where originals run to 3000x3000 and MBs.
+const sizedAvatarPx = 72
 
 // Cache wraps an image.Fetcher and memoizes rendered ANSI strings per user.
 //
@@ -82,6 +90,11 @@ type Cache struct {
 	// (PreloadSync still works directly), which the kitty/parity tests
 	// rely on.
 	preloadCh chan preloadJob
+
+	// sizeURL maps the URL handed to Preload to the URL actually
+	// fetched: SizedURL in production. Tests replace it so httptest
+	// URLs can stand in for Slack's. nil fetches the URL as given.
+	sizeURL func(string) string
 }
 
 type preloadJob struct {
@@ -107,6 +120,7 @@ func newCacheForTest(fetcher *imgpkg.Fetcher, kitty *imgpkg.KittyRenderer, useKi
 		useKitty:  useKitty && kitty != nil,
 		renders:   make(map[string]string),
 		preloadCh: make(chan preloadJob, queueSize),
+		sizeURL:   func(u string) string { return SizedURL(u, sizedAvatarPx) },
 	}
 	for i := 0; i < workers; i++ {
 		go c.preloadWorker()
@@ -183,11 +197,16 @@ func (c *Cache) preloadInner(userID, avatarURL string) {
 	if c.useKitty {
 		target = image.Point{}
 	}
-	res, err := c.fetcher.Fetch(context.Background(), imgpkg.FetchRequest{
-		Key:    "avatar-" + userID,
-		URL:    avatarURL,
-		Target: target,
-	})
+	fetchURL := avatarURL
+	if c.sizeURL != nil {
+		fetchURL = c.sizeURL(avatarURL)
+	}
+	res, err := c.fetch(userID, fetchURL, target)
+	if err != nil && fetchURL != avatarURL {
+		debuglog.ImgFetch("avatar: sized fetch failed user=%s url=%s err=%v; falling back to original",
+			userID, fetchURL, err)
+		res, err = c.fetch(userID, avatarURL, target)
+	}
 	if err != nil {
 		return
 	}
@@ -198,6 +217,25 @@ func (c *Cache) preloadInner(userID, avatarURL string) {
 	if c.onReady != nil {
 		c.onReady(userID)
 	}
+}
+
+// fetch downloads one avatar URL, or reads it from the disk cache,
+// under that URL's key.
+func (c *Cache) fetch(userID, url string, target image.Point) (imgpkg.FetchResult, error) {
+	return c.fetcher.Fetch(context.Background(), imgpkg.FetchRequest{
+		Key:    fetchKey(userID, url),
+		URL:    url,
+		Target: target,
+	})
+}
+
+// fetchKey is the disk-cache key for one user's avatar at one URL. The
+// URL hash means a changed avatar (a new URL) is fetched fresh, and the
+// older `avatar-<userID>` entries, which held full-size originals, are
+// never read again; the image cache's LRU evicts them.
+func fetchKey(userID, url string) string {
+	sum := sha256.Sum256([]byte(url))
+	return "avatar-" + userID + "-" + hex.EncodeToString(sum[:])[:12]
 }
 
 // Get returns the rendered avatar string, or empty if not cached.
