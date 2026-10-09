@@ -14,9 +14,11 @@ permissions:
 env:
   # v2.13.0+ is required for go1.27 (which setup-go's "stable" now
   # resolves to); older binaries panic in go/types with "file requires
-  # newer Go version go1.27".
+  # newer Go version go1.27". v2.14.0+ is required for go1.27.2, whose
+  # export data v2.13.x cannot read ("export data version 5 is greater
+  # than maximum supported version 4").
   # renovate: datasource=github-releases depName=golangci/golangci-lint
-  GOLANGCI_LINT_VERSION: v2.13.1
+  GOLANGCI_LINT_VERSION: v2.14.0
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
