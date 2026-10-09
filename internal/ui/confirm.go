@@ -65,7 +65,12 @@ type confirmPromptBox struct{ m *confirmprompt.Model }
 
 var _ boxedOverlay = confirmPromptBox{}
 
+// BoxSize returns the rendered box's outer size, or (0, 0) when hidden, like
+// the other modals. lipgloss.Height("") is 1, so the guard is needed.
 func (b confirmPromptBox) BoxSize(int, int) (int, int) {
 	box := b.m.View()
+	if box == "" {
+		return 0, 0
+	}
 	return lipgloss.Width(box), lipgloss.Height(box)
 }

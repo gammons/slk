@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/ui/styles"
@@ -56,5 +57,22 @@ func TestConfirmPromptFollowsThemeChange(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestConfirmPromptBoxSizeHiddenIsZero: like the other modals' BoxSize, a
+// hidden prompt has no box. lipgloss.Height("") is 1, so measuring View()
+// alone would report (0, 1).
+func TestConfirmPromptBoxSizeHiddenIsZero(t *testing.T) {
+	a := newTestApp(t, withSize(120, 40))
+	box := confirmPromptBox{&a.confirmPrompt}
+	if w, h := box.BoxSize(a.width, a.height); w != 0 || h != 0 {
+		t.Errorf("hidden: BoxSize = (%d, %d), want (0, 0)", w, h)
+	}
+
+	a.openQuitConfirm()
+	view := a.confirmPrompt.View()
+	if w, h := box.BoxSize(a.width, a.height); w != lipgloss.Width(view) || h != lipgloss.Height(view) || w == 0 {
+		t.Errorf("open: BoxSize = (%d, %d), want the rendered box (%d, %d)", w, h, lipgloss.Width(view), lipgloss.Height(view))
 	}
 }
