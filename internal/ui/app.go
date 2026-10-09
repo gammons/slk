@@ -3348,6 +3348,21 @@ func (a *App) SetThemeOverrides(overrides core.Theme) {
 	a.themeOverrides = overrides
 }
 
+// applyTheme switches the process-wide theme and brings every component
+// that does not re-read it per frame up to date: render caches are
+// invalidated, and components holding a style snapshot get a fresh one.
+// Every in-App theme change goes through here, so a component that
+// snapshots styles is pushed in one place.
+func (a *App) applyTheme(name string) {
+	styles.Apply(name, a.themeOverrides)
+	a.invalidateAllWinModelCaches()
+	a.threadPanel.InvalidateCache()
+	a.sidebar.InvalidateCache()
+	a.compose.RefreshStyles()
+	a.threadCompose.RefreshStyles()
+	a.confirmPrompt.SetStyles(confirmPromptStyles())
+}
+
 // SetTypingEnabled controls whether typing indicators are shown and sent.
 func (a *App) SetTypingEnabled(enabled bool) {
 	a.typing.SetEnabled(enabled)

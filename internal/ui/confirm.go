@@ -15,9 +15,12 @@ import (
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
-// confirmPromptStyles maps the active theme onto the prompt's styles. Re-read
-// per open: ModeConfirm and ModeThemeSwitcher are mutually exclusive, so the
-// prompt cannot be visible across a theme change.
+// confirmPromptStyles maps the active theme onto the prompt's styles. The
+// prompt keeps a snapshot rather than reading the theme per frame, so it is
+// pushed a fresh one on open and by applyTheme on every theme change. The
+// latter matters while the prompt is open: the workspace reducers apply a
+// per-workspace theme with no mode gate, so a quit prompt raised while a
+// workspace connects is still visible when the theme changes.
 func confirmPromptStyles() confirmprompt.Styles {
 	bg := styles.Background
 	return confirmprompt.Styles{
