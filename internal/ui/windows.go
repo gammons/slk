@@ -62,7 +62,7 @@ func (a *App) windowBounds() wintree.Rect {
 // Toasts "Not enough room" on refusal.
 func (a *App) splitWindow(dir wintree.Dir) tea.Cmd {
 	if a.compose.Uploading() || a.threadCompose.Uploading() {
-		return a.uploadToastCmd("Upload in progress", 2*time.Second)
+		return toastWithClear(a, "Upload in progress", 2*time.Second)
 	}
 	src := a.messagepane
 	srcCh, _ := a.wins.Channel(a.focusedWin)
@@ -92,7 +92,7 @@ func (a *App) splitWindow(dir wintree.Dir) tea.Cmd {
 // Toasts "Cannot close last window" instead of ever quitting.
 func (a *App) closeWindow() tea.Cmd {
 	if a.compose.Uploading() || a.threadCompose.Uploading() {
-		return a.uploadToastCmd("Upload in progress", 2*time.Second)
+		return toastWithClear(a, "Upload in progress", 2*time.Second)
 	}
 	next, err := a.wins.Close(a.focusedWin)
 	if err != nil {
@@ -130,7 +130,7 @@ func (a *App) navigateWindow(nd wintree.NavDir) tea.Cmd {
 // activeChannelID). Per-window models mean no channel re-dispatch.
 func (a *App) focusWindow(id wintree.LeafID) tea.Cmd {
 	if a.compose.Uploading() || a.threadCompose.Uploading() {
-		return a.uploadToastCmd("Upload in progress", 2*time.Second)
+		return toastWithClear(a, "Upload in progress", 2*time.Second)
 	}
 	if id == a.focusedWin {
 		return nil

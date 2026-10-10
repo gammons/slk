@@ -53,10 +53,10 @@ func TestStatusBarUnreadCount(t *testing.T) {
 	}
 }
 
-func TestModel_CopiedToastShowsAndClears(t *testing.T) {
+func TestModel_ClearCopiedClearsToast(t *testing.T) {
 	m := New()
 	m.SetChannel("general")
-	m.ShowCopied(42)
+	m.SetToast("Copied 42 chars")
 	out := m.View(80)
 	if !strings.Contains(out, "Copied 42 chars") {
 		t.Fatalf("expected toast in status bar; got %q", out)
@@ -65,27 +65,6 @@ func TestModel_CopiedToastShowsAndClears(t *testing.T) {
 	out = m.View(80)
 	if strings.Contains(out, "Copied") {
 		t.Fatalf("expected toast cleared; got %q", out)
-	}
-}
-
-func TestModel_ShowCopiedBumpsVersion(t *testing.T) {
-	m := New()
-	v0 := m.Version()
-	m.ShowCopied(1)
-	if m.Version() == v0 {
-		t.Fatal("ShowCopied must bump Version()")
-	}
-}
-
-func TestModel_ShowCopiedZeroIsNoop(t *testing.T) {
-	m := New()
-	v0 := m.Version()
-	m.ShowCopied(0)
-	if m.Version() != v0 {
-		t.Fatal("ShowCopied(0) must be a no-op (no version bump)")
-	}
-	if strings.Contains(m.View(80), "Copied") {
-		t.Fatal("ShowCopied(0) must not display toast")
 	}
 }
 
@@ -128,15 +107,6 @@ func TestModel_SetToastBumpsVersionOnChange(t *testing.T) {
 	m.SetToast("a")
 	if m.Version() != v1 {
 		t.Fatal("SetToast with same value must be a no-op")
-	}
-}
-
-func TestModel_ShowCopiedStillRendersCopiedNChars(t *testing.T) {
-	// Backwards-compat: existing CopiedMsg path.
-	m := New()
-	m.ShowCopied(13)
-	if !strings.Contains(m.View(80), "Copied 13 chars") {
-		t.Fatalf("expected legacy 'Copied N chars' toast; got %q", m.View(80))
 	}
 }
 

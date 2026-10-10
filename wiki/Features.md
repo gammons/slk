@@ -170,7 +170,7 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
 
 - 59 built-in themes (including `ANSI Dark` / `ANSI Light` that inherit your terminal palette)
 - Drop-in custom themes (`~/.config/slk/themes/*.toml`)
-- Live theme switcher (`Ctrl+y`)
+- Live theme switcher (`Ctrl+y`); `Alt+y` / `Alt+Shift+y` cycle to the next / previous theme
 - TOML config for appearance, animations, notifications, and channel sections
 - Deterministic per-user username coloring, opt-in via `colored_usernames`
 

@@ -200,7 +200,7 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 	switch {
 	case x < a.layout.RailWidth():
 		if a.compose.Uploading() || a.threadCompose.Uploading() {
-			return a.uploadToastCmd("Upload in progress", 2*time.Second)
+			return toastWithClear(a, "Upload in progress", 2*time.Second)
 		}
 		// Workspace rail: clicking a workspace tile switches to
 		// that workspace (same code path as the 1-9 keybinds and
@@ -213,11 +213,7 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		if a.workspaceSvc == nil || item.ID == a.workspaceRail.SelectedID() {
 			return nil
 		}
-		switcher := a.workspaceSvc
-		teamID := item.ID
-		return func() tea.Msg {
-			return switcher.Switch(teamID)
-		}
+		return a.switchWorkspace(item.ID)
 
 	case a.sidebarVisible && x < a.layout.SidebarEnd():
 		a.focusedPanel = PanelSidebar

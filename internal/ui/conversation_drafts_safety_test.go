@@ -366,7 +366,9 @@ func TestDraftSafety_UploadInFlightRefusesEntryPoints(t *testing.T) {
 
 			_, cmd := a.Update(tc.msg)
 			if !tc.silent {
-				firstBatchCmd(t, cmd)
+				if cmd == nil {
+					t.Fatal("upload refusal returned no toast clear command")
+				}
 				if got := statusbarText(a); !strings.Contains(got, "Upload in progress") {
 					t.Errorf("status bar = %q, want it to contain %q", got, "Upload in progress")
 				}
@@ -401,7 +403,9 @@ func TestDraftSafety_SubmitWithAttachmentsRefusesDuringUpload(t *testing.T) {
 	a, uploads, _ := uploadGuardApp(t)
 	a.threadCompose.AddAttachment(core.PendingAttachment{Filename: "t.png", Bytes: []byte("y")})
 
-	firstBatchCmd(t, a.submitWithAttachments(&a.threadCompose))
+	if cmd := a.submitWithAttachments(&a.threadCompose); cmd == nil {
+		t.Fatal("upload refusal returned no toast clear command")
+	}
 	if *uploads != 1 {
 		t.Errorf("uploader calls = %d, want 1", *uploads)
 	}

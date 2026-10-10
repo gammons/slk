@@ -4,12 +4,13 @@
 //
 // Forwards normalised keys to the theme-switcher overlay. On a
 // result:
-//   - Applies the theme immediately via App.applyTheme, which
+//   - Applies the theme immediately via App.applyTheme (theme.go), which
 //     invalidates the render caches of messagepane / threadPanel /
 //     sidebar and refreshes the components holding style snapshots
 //     (compose / threadCompose, the confirm prompt).
 //   - Forwards to themeSaveFn for persistence (per-workspace vs
-//     global is encoded in result.Scope).
+//     global is encoded in result.Scope; a per-workspace save names
+//     the workspace on screen).
 package ui
 
 import (
@@ -35,12 +36,12 @@ func handleThemeSwitcherMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	if result != nil {
 		a.themeSwitcher.Close()
 		a.SetMode(ModeNormal)
-		// Apply theme immediately; applyTheme invalidates render
-		// caches and refreshes style snapshots.
 		a.applyTheme(result.Name)
-		// Save selection.
+		// Save selection, after any save a cycle left pending, so
+		// this one is the last write.
+		a.SavePendingTheme()
 		if a.settings != nil {
-			a.settings.SaveTheme(result.Name, result.Scope)
+			a.settings.SaveTheme(a.activeTeamID, result.Name, result.Scope)
 		}
 		return nil
 	}

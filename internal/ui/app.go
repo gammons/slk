@@ -502,6 +502,15 @@ type App struct {
 	// settings persists the theme choice and sidebar width. Nil until wired.
 	settings       core.SettingsService
 	themeOverrides core.Theme
+	// pendingTheme is the theme a cycle (alt+y / alt+shift+y) applied
+	// but has not saved yet, with its workspace. themeSaveGen counts
+	// cycle presses, so a save tick from an earlier press can tell that
+	// it is stale. themeToastSeq is the status-bar ToastSeq of the last
+	// "Theme: …" toast, so applyTheme can tell whether it still shows.
+	// See theme.go.
+	pendingTheme  pendingThemeSave
+	themeSaveGen  int
+	themeToastSeq uint64
 
 	// presence owns per-workspace presence/DND cache, the DND-tick
 	// guard, and the custom-snooze numeric input buffer. See
@@ -973,6 +982,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		reduceFiles,
 		reduceSearch,
 		reduceWorkspace,
+		reduceTheme,
 		reduceNewMessagePicker,
 		reduceUserProfile,
 		reduceIO,
@@ -1258,38 +1268,23 @@ func (a *App) openReactionsView() tea.Cmd {
 	return nil
 }
 
+// noProfileToast is the toast openUserProfile shows when it opens
+// nothing.
+const noProfileToast = "No profile for this message"
+
 // openUserProfile opens the read-only "who is this person?" modal for
 // the selected message's author (main pane) or selected reply's author
 // (thread pane), like openReactionsView. It rejects no selection, an
 // empty UserID, and a UserID starting with "B" (cmd/slk/history.go's
-// bot-ID substitute for a message with no human author) with a toast
-// and opens nothing. On success it seeds the modal from the App's own
-// cached identity, switches to ModeUserProfile, and returns a tea.Cmd
-// that fetches the full profile under a 10s timeout.
+// bot-ID substitute for a message with no human author): it opens
+// nothing, shows noProfileToast, and returns that toast's clear tick.
+// On success it seeds the modal from the App's own cached identity,
+// switches to ModeUserProfile, and returns a tea.Cmd that fetches the
+// full profile under a 10s timeout.
 func (a *App) openUserProfile() tea.Cmd {
-	var userID string
-	switch a.focusedPanel {
-	case PanelMessages:
-		msg, ok := a.messagepane.SelectedMessage()
-		if !ok {
-			a.statusbar.SetToast("No profile for this message")
-			return nil
-		}
-		userID = msg.UserID
-	case PanelThread:
-		reply := a.threadPanel.SelectedReply()
-		if reply == nil {
-			a.statusbar.SetToast("No profile for this message")
-			return nil
-		}
-		userID = reply.UserID
-	default:
-		a.statusbar.SetToast("No profile for this message")
-		return nil
-	}
-	if userID == "" || strings.HasPrefix(userID, "B") {
-		a.statusbar.SetToast("No profile for this message")
-		return nil
+	_, _, _, userID, _, ok := a.selectedMessageContext()
+	if !ok || userID == "" || strings.HasPrefix(userID, "B") {
+		return toastWithClear(a, noProfileToast, 2*time.Second)
 	}
 
 	teamID := a.activeTeamID
@@ -2094,7 +2089,7 @@ func (a *App) applyThreadBreadcrumb(channelID, channelType string) {
 // and openThreadForPermalink (parent reconstructed from cache/stub).
 func (a *App) openThreadPanel(parent messages.MessageItem, channelID, threadTS string) tea.Cmd {
 	if a.compose.Uploading() || a.threadCompose.Uploading() {
-		return a.uploadToastCmd("Upload in progress", 2*time.Second)
+		return toastWithClear(a, "Upload in progress", 2*time.Second)
 	}
 	a.cancelEdit()
 	a.threadVisible = true
@@ -2315,7 +2310,7 @@ func (a *App) CloseThread() {
 // press or list reload).
 func (a *App) openSelectedThreadCmd(debounce bool) tea.Cmd {
 	if a.compose.Uploading() || a.threadCompose.Uploading() {
-		return a.uploadToastCmd("Upload in progress", 2*time.Second)
+		return toastWithClear(a, "Upload in progress", 2*time.Second)
 	}
 	sum, ok := a.threadsView.SelectedSummary()
 	if !ok {
@@ -3286,6 +3281,18 @@ func (a *App) SetWorkspaceService(s core.WorkspaceService) {
 	a.workspaceSvc = s
 }
 
+// switchWorkspace returns the command that switches to teamID. Every
+// switch goes through here, because it first saves a theme a cycle
+// left pending. The command reads the target workspace's theme, and
+// the target can be the workspace that pending theme belongs to.
+func (a *App) switchWorkspace(teamID string) tea.Cmd {
+	a.SavePendingTheme()
+	switcher := a.workspaceSvc
+	return func() tea.Msg {
+		return switcher.Switch(teamID)
+	}
+}
+
 // SetThemeItems sets the available themes for the switcher.
 func (a *App) SetThemeItems(names []string) {
 	a.themeSwitcher.SetItems(names)
@@ -3346,21 +3353,6 @@ func (a *App) SetPresenceService(s core.PresenceService) {
 // SetThemeOverrides stores the config theme overrides for applying on switch.
 func (a *App) SetThemeOverrides(overrides core.Theme) {
 	a.themeOverrides = overrides
-}
-
-// applyTheme switches the process-wide theme and brings every component
-// that does not re-read it per frame up to date: render caches are
-// invalidated, and components holding a style snapshot get a fresh one.
-// Every in-App theme change goes through here, so a component that
-// snapshots styles is pushed in one place.
-func (a *App) applyTheme(name string) {
-	styles.Apply(name, a.themeOverrides)
-	a.invalidateAllWinModelCaches()
-	a.threadPanel.InvalidateCache()
-	a.sidebar.InvalidateCache()
-	a.compose.RefreshStyles()
-	a.threadCompose.RefreshStyles()
-	a.confirmPrompt.SetStyles(confirmPromptStyles())
 }
 
 // SetTypingEnabled controls whether typing indicators are shown and sent.
@@ -3707,10 +3699,10 @@ func (a *App) submitWithAttachments(c *compose.Model) tea.Cmd {
 	// Second line of defence: both callers sit behind handleInsertMode's
 	// upload guard, so no key reaches this while an upload is in flight.
 	if a.compose.Uploading() || a.threadCompose.Uploading() {
-		return a.uploadToastCmd("Upload in progress", 2*time.Second)
+		return toastWithClear(a, "Upload in progress", 2*time.Second)
 	}
 	if a.editing.IsActive() {
-		return a.uploadToastCmd("Cannot attach files to an edit (send a new message)", 3*time.Second)
+		return toastWithClear(a, "Cannot attach files to an edit (send a new message)", 3*time.Second)
 	}
 	attachments := c.Attachments()
 	if len(attachments) == 0 {
@@ -3727,13 +3719,13 @@ func (a *App) submitWithAttachments(c *compose.Model) tea.Cmd {
 		threadTS = ""
 	}
 	if channelID == "" || a.files == nil {
-		return a.uploadToastCmd("Cannot upload: no active channel", 2*time.Second)
+		return toastWithClear(a, "Cannot upload: no active channel", 2*time.Second)
 	}
 
 	c.SetUploading(true)
 	cmds := []tea.Cmd{
 		teaCmd(a.files.Upload(channelID, threadTS, caption, attachments)),
-		a.uploadToastCmd(fmt.Sprintf("Uploading 0/%d…", len(attachments)), 30*time.Second),
+		toastWithClear(a, fmt.Sprintf("Uploading 0/%d…", len(attachments)), 30*time.Second),
 	}
 	return tea.Batch(cmds...)
 }
@@ -3782,7 +3774,7 @@ func (a *App) tryAttachFromClipboard(target *compose.Model, pathCandidate string
 	// 1. Image bytes from the OS clipboard.
 	if imgBytes := a.desktop.ReadClipboard(core.ClipboardImage); len(imgBytes) > 0 {
 		if int64(len(imgBytes)) > maxAttachmentSize {
-			return true, a.uploadToastCmd(
+			return true, toastWithClear(a,
 				fmt.Sprintf("Image too large (%s > 10 MB limit)", humanSize(int64(len(imgBytes)))),
 				3*time.Second,
 			)
@@ -3794,7 +3786,7 @@ func (a *App) tryAttachFromClipboard(target *compose.Model, pathCandidate string
 			Mime:     "image/png",
 			Size:     int64(len(imgBytes)),
 		})
-		return true, a.uploadToastCmd(
+		return true, toastWithClear(a,
 			fmt.Sprintf("Attached: %s (%s)", filename, humanSize(int64(len(imgBytes)))),
 			2*time.Second,
 		)
@@ -3805,10 +3797,10 @@ func (a *App) tryAttachFromClipboard(target *compose.Model, pathCandidate string
 		info, err := a.desktop.Stat(path)
 		if err == nil && info.Mode().IsRegular() {
 			if info.Size() > maxAttachmentSize {
-				return true, a.uploadToastCmd("File too large (>10 MB limit)", 3*time.Second)
+				return true, toastWithClear(a, "File too large (>10 MB limit)", 3*time.Second)
 			}
 			if info.Size() == 0 {
-				return true, a.uploadToastCmd("Empty file", 2*time.Second)
+				return true, toastWithClear(a, "Empty file", 2*time.Second)
 			}
 			filename := filepath.Base(path)
 			target.AddAttachment(core.PendingAttachment{
@@ -3817,7 +3809,7 @@ func (a *App) tryAttachFromClipboard(target *compose.Model, pathCandidate string
 				Mime:     mime.TypeByExtension(filepath.Ext(path)),
 				Size:     info.Size(),
 			})
-			return true, a.uploadToastCmd(
+			return true, toastWithClear(a,
 				fmt.Sprintf("Attached: %s (%s)", filename, humanSize(info.Size())),
 				2*time.Second,
 			)
@@ -4273,20 +4265,6 @@ func resolveFilePath(text string) (string, bool) {
 		return "", false
 	}
 	return filepath.Clean(s), true
-}
-
-// uploadToastCmd builds a tea.Cmd that sets the status bar to the
-// given message and schedules a CopiedClearMsg after dur.
-func (a *App) uploadToastCmd(text string, dur time.Duration) tea.Cmd {
-	return tea.Batch(
-		func() tea.Msg {
-			a.statusbar.SetToast(text)
-			return nil
-		},
-		tea.Tick(dur, func(time.Time) tea.Msg {
-			return statusbar.CopiedClearMsg{}
-		}),
-	)
 }
 
 // scheduleChannelSearch defers a channels/search for the finder's

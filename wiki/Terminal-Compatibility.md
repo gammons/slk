@@ -145,6 +145,7 @@ config key (`auto` / `kitty` / `sixel` / `halfblock` / `off`). See
 ## Keybindings and terminal quirks
 
 - `Ctrl+O` in insert mode is the primary binding to toggle "also send to channel" for thread replies. Some terminals or outer shell configurations intercept `Ctrl+O` (readline's `operate-and-get-next`). In slk's raw terminal mode this is delivered cleanly, but `Alt+Enter` is also available as a one-shot send-with-broadcast without needing the toggle. Note that on macOS, Terminal.app and default iTerm2 profiles do not send Meta for the Option key by default; `Alt+Enter` requires enabling "Use Option as Meta key" (or Esc+) in your terminal preferences.
+- `Alt+y` / `Alt+Shift+y` (next / previous theme) need the same setting on macOS. Without it, Option+y types `¥` and Option+Shift+y types `Á`, and neither reaches slk as a key binding. Inside tmux both keys work with `extended-keys` on or off.
 
 ## Related
 

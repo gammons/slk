@@ -232,7 +232,8 @@ perceptibly distinct from the message pane. When writing a custom theme,
 set `sidebar_background` to a clearly darker (or, on near-black themes, a
 slightly lighter) shade than `background` for the same effect.
 
-Switch themes live with `Ctrl+y`.
+Switch themes live with `Ctrl+y`, or cycle through them with `Alt+y` /
+`Alt+Shift+y`.
 
 ## Data paths (XDG)
 

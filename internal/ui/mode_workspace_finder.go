@@ -33,16 +33,12 @@ func handleWorkspaceFinderMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	result := a.workspaceFinder.HandleKey(keyStr)
 	if result != nil {
 		if a.compose.Uploading() || a.threadCompose.Uploading() {
-			return a.uploadToastCmd("Upload in progress", 2*time.Second)
+			return toastWithClear(a, "Upload in progress", 2*time.Second)
 		}
 		a.workspaceFinder.Close()
 		a.SetMode(ModeNormal)
 		if a.workspaceSvc != nil && result.ID != a.workspaceRail.SelectedID() {
-			switcher := a.workspaceSvc
-			teamID := result.ID
-			return func() tea.Msg {
-				return switcher.Switch(teamID)
-			}
+			return a.switchWorkspace(result.ID)
 		}
 	}
 	if !a.workspaceFinder.IsVisible() {

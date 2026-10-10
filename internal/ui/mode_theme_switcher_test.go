@@ -37,8 +37,9 @@ func colorEqual(a, b color.Color) bool {
 
 // themeSave records one invocation of the App's theme saver.
 type themeSave struct {
-	name  string
-	scope core.ThemeScope
+	teamID string
+	name   string
+	scope  core.ThemeScope
 }
 
 // themeSwitcherItems is the picker's fixture. Order matters: the
@@ -53,7 +54,7 @@ const (
 )
 
 // TestThemeSwitcherModeKeys characterizes handleThemeSwitcherMode
-// (mode_theme_switcher.go:22).
+// (mode_theme_switcher.go).
 //
 // This is the one handler in PR 0d that mutates process-global state:
 // styles.Apply rewrites the package-level palette every other test in
@@ -97,8 +98,8 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			pinDark(t, a)
 			saves = nil
 			if withSaver {
-				a.setThemeSaverForTest(func(name string, sc core.ThemeScope) {
-					saves = append(saves, themeSave{name: name, scope: sc})
+				a.setThemeSaverForTest(func(teamID, name string, sc core.ThemeScope) {
+					saves = append(saves, themeSave{teamID: teamID, name: name, scope: sc})
 				})
 			}
 			a.SetThemeItems(themeSwitcherItems())
@@ -175,7 +176,7 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			},
 		},
 		{
-			// The three cache invalidations (mode_theme_switcher.go:44-46)
+			// The three cache invalidations (applyTheme, theme.go)
 			// are the part of this handler a refactor is most likely to
 			// drop, and dropping them shows up as stale colors, not as a
 			// crash. All three are covered here: the messages counter
@@ -208,7 +209,10 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			},
 		},
 		{
-			name:     "the picker's scope is forwarded to the saver",
+			// The workspace is the one on screen (a.activeTeamID), not
+			// whichever one the backend treats as active at save time.
+			name:     "the picker's scope and workspace are forwarded to the saver",
+			opts:     []testOpt{withActiveTeam("T1")},
 			setup:    open(themeswitcher.ScopeWorkspace, true),
 			key:      keyCode(tea.KeyEnter),
 			wantMode: ModeNormal,
@@ -218,6 +222,9 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 				}
 				if saves[0].scope != themeswitcher.ScopeWorkspace {
 					t.Errorf("saved scope = %v, want ScopeWorkspace", saves[0].scope)
+				}
+				if saves[0].teamID != "T1" {
+					t.Errorf("saved workspace = %q, want T1", saves[0].teamID)
 				}
 			},
 		},
@@ -317,9 +324,10 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			},
 		},
 		{
-			// mode_theme_switcher.go:24-35 declares five arms; the
-			// shift+down row above and these three cover four, and the
-			// alt+esc row after them the fifth.
+			// The Code switch at the top of handleThemeSwitcherMode
+			// declares five arms; the shift+down row above and these
+			// three cover four, and the alt+esc row after them the
+			// fifth.
 			name: "shift+up navigates: the Code switch strips the modifier",
 			setup: func(t *testing.T, a *App) {
 				openGlobal(t, a)
@@ -529,7 +537,7 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 }
 
 // themeVersions bundles the three render-cache counters the theme
-// handler is supposed to bump (mode_theme_switcher.go:44-46).
+// handler is supposed to bump (applyTheme, theme.go).
 type themeVersions struct {
 	sidebar int64
 	thread  int64
