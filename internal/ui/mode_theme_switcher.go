@@ -4,9 +4,10 @@
 //
 // Forwards normalised keys to the theme-switcher overlay. On a
 // result:
-//   - Applies the theme immediately via applyTheme (theme.go), which
-//     also invalidates the render caches and refreshes the compose
-//     textarea styles.
+//   - Applies the theme immediately via App.applyTheme (theme.go), which
+//     invalidates the render caches of messagepane / threadPanel /
+//     sidebar and refreshes the components holding style snapshots
+//     (compose / threadCompose, the confirm prompt).
 //   - Forwards to themeSaveFn for persistence (per-workspace vs
 //     global is encoded in result.Scope; a per-workspace save names
 //     the workspace on screen).

@@ -362,9 +362,10 @@ type Model struct {
 // provider's order and keys collapse state by section ID. Pass nil
 // to revert to config-glob behavior.
 func (m *Model) SetSectionsProvider(p SectionsProvider) {
+	key, hadKey := m.currentCursorKey()
 	m.sectionsProvider = p
 	m.rebuildFilter()
-	m.rebuildNavPreserveCursor()
+	m.rebuildNavWithCursor(key, hadKey)
 	m.cacheValid = false
 	m.dirty()
 }
@@ -573,9 +574,10 @@ func (m *Model) now() time.Time {
 
 // SetNowFunc injects a clock for tests. Pass nil to revert to time.Now.
 func (m *Model) SetNowFunc(fn func() time.Time) {
+	key, hadKey := m.currentCursorKey()
 	m.nowFn = fn
 	m.rebuildFilter()
-	m.rebuildNavPreserveCursor()
+	m.rebuildNavWithCursor(key, hadKey)
 	m.cacheValid = false
 	m.dirty()
 }
@@ -588,9 +590,10 @@ func (m *Model) SetStaleThreshold(d time.Duration) {
 	if m.staleThreshold == d {
 		return
 	}
+	key, hadKey := m.currentCursorKey()
 	m.staleThreshold = d
 	m.rebuildFilter()
-	m.rebuildNavPreserveCursor()
+	m.rebuildNavWithCursor(key, hadKey)
 	m.cacheValid = false
 	m.dirty()
 }
@@ -603,9 +606,10 @@ func (m *Model) SetActiveChannelID(id string) {
 	if m.activeID == id {
 		return
 	}
+	key, hadKey := m.currentCursorKey()
 	m.activeID = id
 	m.rebuildFilter()
-	m.rebuildNavPreserveCursor()
+	m.rebuildNavWithCursor(key, hadKey)
 	m.cacheValid = false
 	m.dirty()
 }
@@ -808,10 +812,13 @@ func (m *Model) ActivityUnreadCount() int { return m.activityUnread }
 // context change (e.g. workspace switch) should explicitly call
 // SelectThreadsRow() after SetItems.
 func (m *Model) SetItems(items []ChannelItem) {
+	// Capture identity before replacing either items or filtered indices.
+	// Looking it up after a reorder can silently select a different peer.
+	key, hadKey := m.currentCursorKey()
 	m.items = items
 	m.applyPresence()
 	m.rebuildFilter()
-	m.rebuildNavPreserveCursor()
+	m.rebuildNavWithCursor(key, hadKey)
 	m.cacheValid = false
 	m.dirty()
 }
@@ -858,6 +865,7 @@ func (m *Model) ResetPresence() {
 // staleness state may have changed) is reflected in the visible list
 // immediately.
 func (m *Model) UpsertItem(item ChannelItem) {
+	key, hadKey := m.currentCursorKey()
 	// Seed the incoming item with known live presence so a DM opened at
 	// runtime shows the right dot immediately instead of the "away"
 	// default it was built with.
@@ -873,7 +881,7 @@ func (m *Model) UpsertItem(item ChannelItem) {
 		if m.items[i].ID == item.ID {
 			m.items[i] = item
 			m.rebuildFilter()
-			m.rebuildNavPreserveCursor()
+			m.rebuildNavWithCursor(key, hadKey)
 			m.cacheValid = false
 			m.dirty()
 			return
@@ -881,7 +889,7 @@ func (m *Model) UpsertItem(item ChannelItem) {
 	}
 	m.items = append(m.items, item)
 	m.rebuildFilter()
-	m.rebuildNavPreserveCursor()
+	m.rebuildNavWithCursor(key, hadKey)
 	m.cacheValid = false
 	m.dirty()
 }
@@ -1411,6 +1419,14 @@ func (m *Model) rebuildNav() {
 // target no longer exists.
 func (m *Model) rebuildNavPreserveCursor() {
 	key, hadKey := m.currentCursorKey()
+	m.rebuildNavWithCursor(key, hadKey)
+}
+
+// rebuildNavWithCursor restores an identity captured before an item/filter
+// mutation. hadKey=false leaves normal cursor clamping in place; a removed
+// target falls back to Threads. Callers that reorder items must capture the
+// key before mutation rather than interpreting old nav indices afterward.
+func (m *Model) rebuildNavWithCursor(key cursorKey, hadKey bool) {
 	m.rebuildNav()
 	if !hadKey {
 		return

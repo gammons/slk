@@ -2,6 +2,7 @@ package slackclient
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 	"time"
 
@@ -27,6 +28,11 @@ type EventHandler interface {
 	// author also sent to the main channel. files carries any file
 	// attachments on the message (empty for plain text messages).
 	OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment, botID, username string)
+	// OnEphemeralMessage delivers a message only the current user can
+	// see (is_ephemeral): Slackbot's "not in this channel" notice, an
+	// app's slash-command reply. Slack never returns these from
+	// history, so receivers must not persist them.
+	OnEphemeralMessage(m EphemeralMessage)
 	OnMessageDeleted(channelID, ts string)
 	OnReactionAdded(channelID, ts, userID, emoji string)
 	OnReactionRemoved(channelID, ts, userID, emoji string)
@@ -141,6 +147,28 @@ type EventHandler interface {
 	OnUserDNDChange(userID string, enabled bool, endUnix int64)
 }
 
+// EphemeralMessage is a message only the current user can see. A
+// struct rather than OnMessage's positional parameters, which are easy
+// to transpose.
+type EphemeralMessage struct {
+	ChannelID string
+	UserID    string
+	BotID     string
+	Username  string
+	TS        string
+	ThreadTS  string
+	Subtype   string
+	Text      string
+
+	Blocks      slack.Blocks
+	Attachments []slack.Attachment
+	// ActionIDs[i][j] is the "id" of Attachments[i].Actions[j]. slack-go's
+	// AttachmentAction does not declare the field, and
+	// chat.attachmentAction echoes it back. nil when the frame's ids are
+	// absent or not strings.
+	ActionIDs [][]string
+}
+
 // wsEvent is the minimal structure for identifying a WebSocket event type.
 type wsEvent struct {
 	Type    string `json:"type"`
@@ -164,6 +192,7 @@ type wsMessageEvent struct {
 	Attachments     []slack.Attachment `json:"attachments"`
 	Message         *wsSubMsg          `json:"message"`          // for message_changed
 	PreviousMessage *wsSubMsg          `json:"previous_message"` // for message_changed
+	IsEphemeral     bool               `json:"is_ephemeral"`
 }
 
 // wsSubMsg is the inner message for message_changed events.
@@ -177,6 +206,54 @@ type wsSubMsg struct {
 	Files       []slack.File       `json:"files"`
 	Blocks      slack.Blocks       `json:"blocks"`
 	Attachments []slack.Attachment `json:"attachments"`
+	IsEphemeral bool               `json:"is_ephemeral"`
+}
+
+// wsActionIDs is a second, narrow decode of a message frame: the "id"
+// of every legacy attachment action, which slack-go drops.
+type wsActionIDs struct {
+	Attachments []struct {
+		Actions []struct {
+			ID string `json:"id"`
+		} `json:"actions"`
+	} `json:"attachments"`
+}
+
+// legacyActionIDs returns the action ids of a message frame, indexed
+// like its attachments and their actions. nil when there are none or
+// they are not strings -- ids are best-effort and never block delivery.
+func legacyActionIDs(data []byte) [][]string {
+	var raw wsActionIDs
+	if err := json.Unmarshal(data, &raw); err != nil || len(raw.Attachments) == 0 {
+		return nil
+	}
+	out := make([][]string, len(raw.Attachments))
+	for i, a := range raw.Attachments {
+		for _, act := range a.Actions {
+			out[i] = append(out[i], act.ID)
+		}
+	}
+	return out
+}
+
+// dispatchEphemeral routes a message only the current user can see.
+// data is the raw frame, decoded again for the action ids.
+func dispatchEphemeral(data []byte, msg wsMessageEvent, handler EventHandler) {
+	debuglog.WS("ephemeral: channel=%s user=%s ts=%s subtype=%q thread_ts=%s attachments=%d",
+		msg.Channel, msg.User, msg.TS, msg.SubType, msg.ThreadTS, len(msg.Attachments))
+	handler.OnEphemeralMessage(EphemeralMessage{
+		ChannelID:   msg.Channel,
+		UserID:      msg.User,
+		BotID:       msg.BotID,
+		Username:    msg.Username,
+		TS:          msg.TS,
+		ThreadTS:    msg.ThreadTS,
+		Subtype:     msg.SubType,
+		Text:        msg.Text,
+		Blocks:      msg.Blocks,
+		Attachments: msg.Attachments,
+		ActionIDs:   legacyActionIDs(data),
+	})
 }
 
 // wsReactionEvent represents a reaction_added or reaction_removed event.
@@ -365,6 +442,43 @@ type wsThreadSubscribedEvent struct {
 	} `json:"subscription"`
 }
 
+// topLevelFields renders a WS event's top-level keys, sorted, as
+// key=value with objects and arrays abbreviated to {…} / […]. It is for
+// the debug log only: wsMessageEvent drops every field it does not
+// declare, so this is the one place an undeclared marker (such as
+// whatever flags a Slackbot ephemeral) can be seen. Text is quoted and
+// clipped so one long message cannot flood the line.
+func topLevelFields(data []byte) string {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return "unparseable: " + err.Error()
+	}
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		v := fields[k]
+		switch {
+		case len(v) > 0 && v[0] == '{':
+			v = json.RawMessage("{…}")
+		case len(v) > 0 && v[0] == '[':
+			v = json.RawMessage("[…]")
+		case len(v) > 80:
+			v = append(v[:80:80], "…"...)
+		}
+		b.WriteString(k)
+		b.WriteByte('=')
+		b.Write(v)
+	}
+	return b.String()
+}
+
 // dispatchWebSocketEvent parses a raw JSON WebSocket message and routes it
 // to the appropriate EventHandler method.
 func dispatchWebSocketEvent(data []byte, handler EventHandler) {
@@ -379,8 +493,15 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 		if err := json.Unmarshal(data, &msg); err != nil {
 			return
 		}
+		if debuglog.Enabled() {
+			debuglog.WS("message raw fields: %s", topLevelFields(data))
+		}
 		switch msg.SubType {
 		case "", "bot_message", "thread_broadcast", "file_share":
+			if msg.IsEphemeral {
+				dispatchEphemeral(data, msg, handler)
+				break
+			}
 			// thread_broadcast is a thread reply that the author also
 			// posted to the main channel; render it like a regular
 			// message but with the subtype preserved so the UI can
@@ -391,11 +512,20 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 				msg.Channel, msg.User, msg.TS, msg.SubType, msg.ThreadTS, len(msg.Files))
 			handler.OnMessage(msg.Channel, msg.User, msg.TS, msg.Text, msg.ThreadTS, msg.SubType, false, msg.Files, msg.Blocks, msg.Attachments, msg.BotID, msg.Username)
 		case "message_changed":
-			if msg.Message != nil {
-				debuglog.WS("message_changed: channel=%s user=%s ts=%s thread_ts=%s edited=true",
-					msg.Channel, msg.Message.User, msg.Message.TS, msg.Message.ThreadTS)
-				handler.OnMessage(msg.Channel, msg.Message.User, msg.Message.TS, msg.Message.Text, msg.Message.ThreadTS, "", true, msg.Message.Files, msg.Message.Blocks, msg.Message.Attachments, msg.Message.BotID, msg.Message.Username)
+			if msg.Message == nil {
+				break
 			}
+			if msg.IsEphemeral || msg.Message.IsEphemeral {
+				// An app replacing its ephemeral (e.g. /giphy's Shuffle).
+				// OnMessage would cache it; Part A has nowhere to apply
+				// it, so it is dropped.
+				debuglog.WS("message_changed: channel=%s ts=%s ephemeral=true decision=dropped",
+					msg.Channel, msg.Message.TS)
+				break
+			}
+			debuglog.WS("message_changed: channel=%s user=%s ts=%s thread_ts=%s edited=true",
+				msg.Channel, msg.Message.User, msg.Message.TS, msg.Message.ThreadTS)
+			handler.OnMessage(msg.Channel, msg.Message.User, msg.Message.TS, msg.Message.Text, msg.Message.ThreadTS, "", true, msg.Message.Files, msg.Message.Blocks, msg.Message.Attachments, msg.Message.BotID, msg.Message.Username)
 		case "message_deleted":
 			debuglog.WS("message_deleted: channel=%s deleted_ts=%s", msg.Channel, msg.DeletedTS)
 			handler.OnMessageDeleted(msg.Channel, msg.DeletedTS)

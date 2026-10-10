@@ -16,6 +16,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/gammons/slk/internal/bubbles/confirmprompt"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	"github.com/gammons/slk/internal/emoji"
@@ -26,7 +27,6 @@ import (
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/channelpicker"
 	"github.com/gammons/slk/internal/ui/compose"
-	"github.com/gammons/slk/internal/ui/confirmprompt"
 	"github.com/gammons/slk/internal/ui/emojipicker"
 	"github.com/gammons/slk/internal/ui/help"
 	"github.com/gammons/slk/internal/ui/imgrender"
@@ -421,7 +421,7 @@ type App struct {
 	// Reaction picker
 	reactionPicker *reactionpicker.Model
 	reactionsView  *reactionsview.Model
-	confirmPrompt  *confirmprompt.Model
+	confirmPrompt  confirmprompt.Model
 	// userProfile is the K-opened read-only "who is this person?"
 	// modal (see internal/ui/userprofile). profileSvc fetches the
 	// full profile; defaulted to noopProfileService in NewApp so the
@@ -1040,6 +1040,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if changed {
 			a.forceSixelRepaint = true
 		}
+		a.confirmPrompt.SetWidth(msg.Width)
 		return a, nil
 
 	case scrollFlushMsg:
@@ -1499,24 +1500,23 @@ func (a *App) copyPermalinkOfSelected() tea.Cmd {
 // open the link picker modal. All opens converge on OpenLinkMsg,
 // the single routing point in reducer_links.go.
 func (a *App) openLinksOfSelected() tea.Cmd {
-	var text string
+	var links []messages.Link
 	switch a.focusedPanel {
 	case PanelMessages:
 		msg, ok := a.messagepane.SelectedMessage()
 		if !ok {
 			return nil
 		}
-		text = msg.Text
+		links = messages.MessageLinks(msg)
 	case PanelThread:
 		reply := a.threadPanel.SelectedReply()
 		if reply == nil {
 			return nil
 		}
-		text = reply.Text
+		links = messages.MessageLinks(*reply)
 	default:
 		return nil
 	}
-	links := messages.ExtractLinks(text)
 	switch len(links) {
 	case 0:
 		return func() tea.Msg { return ToastMsg{Text: "No links in message"} }
@@ -1952,12 +1952,11 @@ func (a *App) maybeFetchOlderHistory(atTop bool) tea.Cmd {
 // both lowercase `q` and Ctrl+C (the latter intercepted globally so an
 // accidental Ctrl+C in any mode never silently kills the app).
 func (a *App) openQuitConfirm() {
-	a.confirmPrompt.Open(
+	a.openConfirmPrompt(
 		"Quit slk?",
 		"All workspace connections will close.",
 		func() tea.Msg { return tea.Quit() },
 	)
-	a.SetMode(ModeConfirm)
 }
 
 func (a *App) handleEnter() tea.Cmd {
@@ -2110,14 +2109,26 @@ func (a *App) openThreadPanel(parent messages.MessageItem, channelID, threadTS s
 	chID := ids.ChannelID(channelID)
 	tTS := ids.ThreadTS(threadTS)
 	var batch []tea.Cmd
-	if cached := threads.CacheRead(chID, tTS); len(cached) > 1 {
-		replies := cached[1:] // strip parent; reducer expects replies-only
-		batch = append(batch, func() tea.Msg {
-			return ThreadRepliesLoadedMsg{ThreadTS: threadTS, Replies: replies}
-		})
+	if cmd := cachedThreadRepliesCmd(threads, chID, tTS); cmd != nil {
+		batch = append(batch, cmd)
 	}
 	batch = append(batch, func() tea.Msg { return threads.Fetch(chID, tTS) })
 	return tea.Batch(batch...)
+}
+
+// cachedThreadRepliesCmd reads the thread from cache now and returns a
+// cmd delivering its replies as a FromCache ThreadRepliesLoadedMsg, or
+// nil when the cache holds no replies. Every thread open pairs it with
+// the network fetch, which alone marks the thread read.
+func cachedThreadRepliesCmd(threads core.ThreadService, chID ids.ChannelID, threadTS ids.ThreadTS) tea.Cmd {
+	cached := threads.CacheRead(chID, threadTS)
+	if len(cached) <= 1 {
+		return nil
+	}
+	replies := cached[1:] // strip parent; reducer expects replies-only
+	return func() tea.Msg {
+		return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS), Replies: replies, FromCache: true}
+	}
 }
 
 func (a *App) SetMode(mode Mode) {
@@ -2355,11 +2366,8 @@ func (a *App) openSelectedThreadCmd(debounce bool) tea.Cmd {
 	tThreadTS := ids.ThreadTS(threadTS)
 	if !debounce {
 		var batch []tea.Cmd
-		if cached := threads.CacheRead(tChID, tThreadTS); len(cached) > 1 {
-			replies := cached[1:] // strip parent; reducer expects replies-only
-			batch = append(batch, func() tea.Msg {
-				return ThreadRepliesLoadedMsg{ThreadTS: threadTS, Replies: replies}
-			})
+		if cmd := cachedThreadRepliesCmd(threads, tChID, tThreadTS); cmd != nil {
+			batch = append(batch, cmd)
 		}
 		batch = append(batch, func() tea.Msg { return threads.Fetch(tChID, tThreadTS) })
 		return tea.Batch(batch...)
@@ -4072,14 +4080,13 @@ func (a *App) beginDeleteOfSelected() tea.Cmd {
 		preview = string(runes[:maxPreview]) + "…"
 	}
 
-	a.confirmPrompt.Open(
+	a.openConfirmPrompt(
 		"Delete message?",
 		preview,
 		func() tea.Msg {
 			return DeleteMessageMsg{ChannelID: channelID, TS: ts}
 		},
 	)
-	a.SetMode(ModeConfirm)
 	return nil
 }
 

@@ -386,8 +386,8 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	pres, dndEnabled, dndEnd, _ := a.presence.Status(a.activeTeamID)
 	a.statusbar.SetStatus(pres, dndEnabled, dndEnd)
 	// Apply per-workspace theme. Must run on Update goroutine so
-	// applyTheme's cache invalidations and compose-style refreshes
-	// take effect on the next render.
+	// applyTheme's cache invalidations and style refreshes take
+	// effect on the next render.
 	if m.Theme != "" {
 		a.applyTheme(m.Theme)
 	}

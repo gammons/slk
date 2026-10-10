@@ -37,8 +37,10 @@ type pendingThemeSave struct {
 
 // applyTheme applies the named theme with the config overrides, then
 // invalidates the render caches of messagepane / threadPanel / sidebar
-// and refreshes the compose textarea styles so the next View rebuilds
-// with the new theme colors. It also clears a cycle's "Theme: …" toast
+// and refreshes components holding style snapshots (compose textareas
+// and the confirm prompt) so the next View uses the new theme colors.
+// Every in-App theme change goes through here; add style pushes for new
+// components here, not at each call site. It also clears a cycle's "Theme: …" toast
 // that is still showing, because that toast names the theme this call
 // replaces. A toast shown after it stays.
 func (a *App) applyTheme(name string) {
@@ -48,6 +50,7 @@ func (a *App) applyTheme(name string) {
 	a.sidebar.InvalidateCache()
 	a.compose.RefreshStyles()
 	a.threadCompose.RefreshStyles()
+	a.confirmPrompt.SetStyles(confirmPromptStyles())
 	if a.themeToastSeq != 0 && a.statusbar.ToastSeq() == a.themeToastSeq {
 		a.statusbar.SetToast("")
 	}
