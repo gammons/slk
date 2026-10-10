@@ -77,6 +77,7 @@ func resolveUser(client *slackclient.Client, userID string, userNames *userNameS
 				db.UpsertUser(cache.User{
 					ID:          userID,
 					WorkspaceID: client.TeamID(),
+					HomeTeamID:  u.TeamID,
 					Name:        u.Name,
 					DisplayName: name,
 					AvatarURL:   u.Profile.Image32,
@@ -107,6 +108,7 @@ func resolveUser(client *slackclient.Client, userID string, userNames *userNameS
 		db.UpsertUser(cache.User{
 			ID:          userID,
 			WorkspaceID: client.TeamID(),
+			HomeTeamID:  u.TeamID,
 			Name:        u.Name,
 			DisplayName: name,
 			AvatarURL:   u.Profile.Image32,
