@@ -185,12 +185,15 @@ func resolveDMNames(wctx *WorkspaceContext, db *cache.DB, avatarCache *avatar.Ca
 		if isBot {
 			wctx.MarkBotUser(dm.UserID)
 		}
-		if resolved != dm.UserID && send != nil {
-			send(ui.DMNameResolvedMsg{
-				ChannelID:   dm.ChannelID,
-				DisplayName: resolved,
-				IsBot:       isBot,
-			})
+		if resolved != dm.UserID {
+			wctx.UserResolver.queueResolvedPeer(dm.UserID)
+			if send != nil {
+				send(ui.DMNameResolvedMsg{
+					ChannelID:   dm.ChannelID,
+					DisplayName: resolved,
+					IsBot:       isBot,
+				})
+			}
 		}
 	}
 }

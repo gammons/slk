@@ -78,6 +78,60 @@ func TestResolvedPeerDrainSkipsUsersWithoutDMRows(t *testing.T) {
 	}
 }
 
+func TestDMSweepFallbackWithoutResolver(t *testing.T) {
+	srv := newFakeSlack(t, map[string]string{
+		"/api/auth.test":  `{"ok":true,"url":"","team":"T1","team_id":"T1","user_id":"USELF"}`,
+		"/api/users.info": `{"ok":true,"user":{"id":"U1","name":"buildbot","is_bot":true,"profile":{"display_name":"Build Bot"}}}`,
+	})
+	client := newTestClient(t, srv.Server)
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	db := newTestDB(t)
+	wctx := &WorkspaceContext{TeamID: "T1", Client: client, UserNames: newUserNameStore(nil),
+		UnresolvedDMs: []UnresolvedDM{{ChannelID: "D1", UserID: "U1"}},
+	}
+	resolveDMNames(wctx, db, nil, nil)
+	if name, _ := wctx.UserNames.Get("U1"); name != "Build Bot" || !wctx.IsBotUser("U1") {
+		t.Fatalf("nil-resolver fallback: name=%q, bot=%v", name, wctx.IsBotUser("U1"))
+	}
+}
+
+func TestDMSweepFallbackRepairsInactiveWorkspace(t *testing.T) {
+	srv := newFakeSlack(t, map[string]string{
+		"/api/auth.test":  `{"ok":true,"url":"","team":"T1","team_id":"T1","user_id":"USELF"}`,
+		"/api/users.info": `{"ok":true,"user":{"id":"U1","name":"buildbot","is_bot":true,"profile":{"display_name":"Build Bot","status_text":"Ready"}}}`,
+	})
+	client := newTestClient(t, srv.Server)
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	db := newTestDB(t)
+	r := newUserResolver("T1", nil, db, nil, nil, &fakeBatcher{}, nil)
+	wctx := &WorkspaceContext{TeamID: "T1", Client: client, UserResolver: r, UserNames: newUserNameStore(nil),
+		UnresolvedDMs: []UnresolvedDM{{ChannelID: "D1", UserID: "U1"}},
+		Channels:      []sidebar.ChannelItem{{ID: "D1", Name: "U1", Type: "dm", DMUserID: "U1"}},
+		FinderItems:   []core.ChannelFinderItem{{ID: "D1", Name: "U1", Type: "dm", Joined: true}},
+	}
+	h := &rtmEventHandler{wsCtx: wctx, db: db, isActive: func() bool { return false }}
+	resolveDMNames(wctx, db, nil, nil) // edge misses; per-user fallback resolves
+	if wctx.Channels[0].Name != "U1" || wctx.FinderItems[0].Name != "U1" {
+		t.Fatal("background sweep mutated conversation snapshots")
+	}
+	select {
+	case <-h.PendingEvents():
+	case <-time.After(5 * time.Second):
+		t.Fatal("sweep fallback did not queue a repair without a UI sender")
+	}
+	h.OnPendingEvents()
+	if item := wctx.Channels[0]; item.Name != "Build Bot" || item.Type != "app" || item.Status.Text != "Ready" {
+		t.Fatalf("inactive sidebar = %+v", item)
+	}
+	if item := wctx.FinderItems[0]; item.Name != "Build Bot" || item.Type != "app" {
+		t.Fatalf("inactive finder = %+v", item)
+	}
+}
+
 func TestUserResolverRequestsUnnamedCachedPeer(t *testing.T) {
 	db := newTestDB(t)
 	if err := db.UpsertUser(cache.User{ID: "U1", WorkspaceID: "T1"}); err != nil {
