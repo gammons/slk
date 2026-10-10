@@ -1285,6 +1285,49 @@ func run() error {
 			activityHydrateFunc(router),
 		))
 
+		app.SetMarksPersistStore(ui.NewMarksPersistStore(ui.MarksPersistStoreFuncs{
+			Upsert: func(teamID, letter string, m ui.Mark) error {
+				return db.UpsertMark(teamID, letter, cache.Mark{
+					ChannelID:   string(m.ChannelID),
+					MessageTS:   string(m.MessageTS),
+					ThreadTS:    string(m.ThreadTS),
+					ChannelName: m.ChannelName,
+					AuthorName:  m.AuthorName,
+					Excerpt:     m.Excerpt,
+				})
+			},
+			List: func(teamID string) ([]ui.Mark, error) {
+				rows, err := db.ListMarks(teamID)
+				if err != nil {
+					return nil, err
+				}
+				out := make([]ui.Mark, 0, len(rows))
+				for _, r := range rows {
+					out = append(out, ui.Mark{
+						Location: ui.Location{
+							TeamID:    ids.TeamID(r.WorkspaceID),
+							ChannelID: ids.ChannelID(r.ChannelID),
+							MessageTS: ids.MessageTS(r.MessageTS),
+							ThreadTS:  ids.ThreadTS(r.ThreadTS),
+						},
+						Letter:      r.Letter,
+						ChannelName: r.ChannelName,
+						AuthorName:  r.AuthorName,
+						Excerpt:     r.Excerpt,
+					})
+				}
+				return out, nil
+			},
+			Delete: func(teamID, letter string) error {
+				return db.DeleteMark(teamID, letter)
+			},
+		}))
+		// [marks] options: persist_all (default off) and
+		// show_jump_overlay (default on, resolved from the *bool so an
+		// explicit false is distinguishable from unset).
+		app.SetMarksPersistAll(cfg.Marks.PersistAll)
+		app.SetShowJumpOverlay(cfg.EffectiveShowJumpOverlay())
+
 		app.SetReactionService(core.NewReactionService(
 			func(channelID ids.ChannelID, messageTS ids.MessageTS, emojiName string) error {
 				wctx := router.Active()

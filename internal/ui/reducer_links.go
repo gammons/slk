@@ -15,6 +15,8 @@
 package ui
 
 import (
+	"time"
+
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/gammons/slk/internal/ids"
@@ -24,11 +26,10 @@ import (
 
 // pendingLinkNav is the not-yet-completed tail of an in-app permalink
 // navigation. Thread targets survive until both cache and fetch complete.
+// The embedded Location is the target (ThreadTS non-empty: select within
+// the thread panel); the rest is load-tracking state.
 type pendingLinkNav struct {
-	channelID    string
-	messageTS    string
-	threadTS     string // non-empty: select within the thread panel
-	teamID       string
+	Location
 	threadOpened bool
 	loadsDone    int
 	fetchApplied bool
@@ -81,25 +82,83 @@ func (a *App) routeLink(rawURL string) tea.Cmd {
 	if domain == "" || pl.Subdomain != domain {
 		return a.browserOpener(rawURL)
 	}
-	name, chType, found := a.channels.Lookup(pl.ChannelID)
+	cmd, ok := a.applyLocation(Location{
+		TeamID:    ids.TeamID(a.activeTeamID),
+		ChannelID: pl.ChannelID,
+		MessageTS: pl.MessageTS,
+		ThreadTS:  pl.ThreadTS,
+	}, false)
+	if ok {
+		return cmd
+	}
+	return a.browserOpener(rawURL)
+}
+
+// applyLocation is the single applier every in-app jump flows through
+// — a permalink, a mark, or a history walk. It records loc as the
+// pending navigation and dispatches the channel switch, so
+// completePendingLinkNav can finish once the target channel's messages
+// land (or immediately when the channel is already active). ok=false
+// means loc's channel could not be resolved and nothing was started;
+// while an upload is in flight nothing is started either, and the
+// returned cmd is the "Upload in progress" toast with ok=true;
+// callers that need a fallback (routeLink's browser opener, a mark-jump
+// toast) branch on ok. A nil cmd with ok=true is a completed navigation
+// (e.g. SelectByTS selected the message in the already-active channel),
+// not a failure.
+//
+// fromHistory marks the synthesized ChannelSelectedMsg so the reducer
+// does not record the walk as a new visit — history walks must not
+// grow the stack. It also forces the ChannelSelectedMsg path even when
+// the target channel is already active: a walk is a navigation between
+// recorded positions, not an in-place jump, so it always goes through
+// the channel-switch pipeline (a same-channel walk is reachable in
+// production when stale entries between two same-channel entries are
+// skipped and dropped). Direct jumps (permalinks, marks) keep the
+// in-place completion so re-selecting the current channel does not
+// reload it.
+func (a *App) applyLocation(loc Location, fromHistory bool) (tea.Cmd, bool) {
+	if a.compose.Uploading() || a.threadCompose.Uploading() {
+		return a.uploadToastCmd("Upload in progress", 2*time.Second), true
+	}
+	name, chType, found := a.channels.Lookup(loc.ChannelID)
 	if !found {
-		return a.browserOpener(rawURL)
+		return nil, false
 	}
-	a.pendingLinkNav = &pendingLinkNav{
-		channelID: string(pl.ChannelID),
-		messageTS: string(pl.MessageTS),
-		threadTS:  string(pl.ThreadTS),
-		teamID:    a.activeTeamID,
+	a.pendingLinkNav = &pendingLinkNav{Location: loc}
+	if !fromHistory && string(loc.ChannelID) == a.activeChannelID {
+		// Already viewing the channel; unless its fetch is still
+		// running (below), the loaded buffer is as good as it gets,
+		// so complete authoritatively right now.
+		//
+		// This path skips ChannelSelectedMsg, and with it the view and
+		// focus reset that arm performs (reducer_channels.go). Without
+		// doing it here, a jump taken from the Threads list or with the
+		// thread panel focused moves the selection in a pane the user
+		// is not looking at, and reads as "nothing happened". A
+		// thread-bearing location re-focuses the thread panel below,
+		// via openThreadForPermalink.
+		a.view = ViewChannels
+		if a.threadVisible {
+			// ChannelSelectedMsg closes the thread panel on every
+			// channel switch, and the in-place path has to as well —
+			// otherwise a channel-level jump lands the selection in
+			// the messages pane while the thread the user was reading
+			// stays open beside it. A thread-bearing location reopens
+			// the correct thread below, via openThreadForPermalink.
+			a.CloseThread()
+		}
+		a.focusedPanel = PanelMessages
+		// With the channel's fetch still running, the cached buffer
+		// is not final: select now, and keep the target so the
+		// MessagesLoadedMsg arm re-applies it after the load.
+		authoritative := a.channelFetchInFlight != a.activeChannelID
+		return a.completePendingLinkNav(a.activeChannelID, authoritative), true
 	}
-	if string(pl.ChannelID) == a.activeChannelID {
-		// Already viewing the channel; the loaded buffer is as good
-		// as it gets, so complete authoritatively right now.
-		return a.completePendingLinkNav(a.activeChannelID, true)
-	}
-	id, n, t := string(pl.ChannelID), name, chType
+	id, n, t, team := string(loc.ChannelID), name, chType, a.activeTeamID
 	return func() tea.Msg {
-		return ChannelSelectedMsg{ID: id, Name: n, Type: t}
-	}
+		return ChannelSelectedMsg{ID: id, Name: n, Type: t, FromHistory: fromHistory, TeamID: team}
+	}, true
 }
 
 // completePendingLinkNav finishes (or drops) the pending permalink
@@ -108,7 +167,7 @@ func (a *App) routeLink(rawURL string) tea.Cmd {
 // the buffer, dispatch ChannelService.FetchAround to load a history
 // window centered on the target instead of waiting.
 //
-// Called from: routeLink (already-active channel, authoritative),
+// Called from: applyLocation (already-active channel, authoritative),
 // reduceChannels' ChannelSelectedMsg arm (cache render, best-effort),
 // and reduceChannels' MessagesLoadedMsg arm (authoritative).
 func (a *App) completePendingLinkNav(channelID string, authoritative bool) tea.Cmd {
@@ -116,7 +175,7 @@ func (a *App) completePendingLinkNav(channelID string, authoritative bool) tea.C
 	if p == nil {
 		return nil
 	}
-	if p.channelID != channelID || (p.teamID != "" && p.teamID != a.activeTeamID) {
+	if string(p.ChannelID) != channelID || (p.TeamID != "" && string(p.TeamID) != a.activeTeamID) {
 		// The user navigated somewhere unrelated before the link
 		// target finished loading; the pending nav is stale.
 		a.pendingLinkNav = nil
@@ -127,26 +186,46 @@ func (a *App) completePendingLinkNav(channelID string, authoritative bool) tea.C
 		// its own cache/fetch commands are still completing.
 		return nil
 	}
+	if p.MessageTS == "" && p.ThreadTS == "" {
+		// Channel-only location: the channel is already (being)
+		// opened and there is nothing to select or open on top of it.
+		// Permalinks and search hits always carry a message ts, so
+		// only history walks produce this — and FetchAround with an
+		// empty ts would be a bogus request.
+		a.pendingLinkNav = nil
+		return nil
+	}
 	a.view = ViewChannels
 	a.sidebar.SetThreadsActive(false)
 	a.lastOpenedChannelID = ""
 	a.lastOpenedThreadTS = ""
 	a.focusedPanel = PanelMessages
-	if p.threadTS != "" {
-		p.teamID = a.activeTeamID
+	if p.ThreadTS != "" {
+		p.TeamID = ids.TeamID(a.activeTeamID)
 		p.threadOpened = true
-		return p.wrapThreadLoad(a.openThreadForPermalink(p.channelID, p.threadTS), true, 1)
+		return p.wrapThreadLoad(a.openThreadForPermalink(string(p.ChannelID), string(p.ThreadTS)), true, 1)
 	}
-	if a.messagepane.SelectByTS(p.messageTS) {
-		a.pendingLinkNav = nil
+	if a.messagepane.SelectByTS(string(p.MessageTS)) {
+		// Only forget the target once this is the freshest data we
+		// will get. On a best-effort pass (the cache render, with a
+		// network fetch still in flight) the selection is real but
+		// temporary: the MessagesLoadedMsg arm calls SetMessages,
+		// which resets the selection to the newest message. Clearing
+		// here left nothing to re-apply, so the first jump into a
+		// channel visibly landed on the target and then snapped to the
+		// bottom a moment later. Keeping the pending makes the
+		// authoritative pass re-select; it is idempotent.
+		if authoritative {
+			a.pendingLinkNav = nil
+		}
 		return nil
 	}
 	if authoritative {
 		a.pendingLinkNav = nil
 		channels := a.channels
-		chID, ts := p.channelID, p.messageTS
+		chID, ts := p.ChannelID, p.MessageTS
 		return func() tea.Msg {
-			return channels.FetchAround(ids.ChannelID(chID), ids.MessageTS(ts))
+			return channels.FetchAround(chID, ts)
 		}
 	}
 	return nil

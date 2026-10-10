@@ -17,7 +17,7 @@ func TestNewDB(t *testing.T) {
 	defer db.Close()
 
 	// Verify tables exist by querying them
-	tables := []string{"workspaces", "users", "channels", "messages", "reactions", "files", "channel_visits"}
+	tables := []string{"workspaces", "users", "channels", "messages", "reactions", "files", "channel_visits", "marks"}
 	for _, table := range tables {
 		var count int
 		err := db.conn.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count)

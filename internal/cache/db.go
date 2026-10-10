@@ -171,6 +171,18 @@ func (db *DB) migrate() error {
 		PRIMARY KEY (workspace_id, channel_id, thread_ts)
 	);
 
+	CREATE TABLE IF NOT EXISTS marks (
+		workspace_id TEXT NOT NULL,
+		letter       TEXT NOT NULL,
+		channel_id   TEXT NOT NULL,
+		message_ts   TEXT NOT NULL DEFAULT '',
+		thread_ts    TEXT NOT NULL DEFAULT '',
+		channel_name TEXT NOT NULL DEFAULT '',
+		author_name  TEXT NOT NULL DEFAULT '',
+		excerpt      TEXT NOT NULL DEFAULT '',
+		PRIMARY KEY (workspace_id, letter)
+	);
+
 	CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id, ts);
 	CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_ts, channel_id);
 	CREATE INDEX IF NOT EXISTS idx_channels_workspace ON channels(workspace_id);

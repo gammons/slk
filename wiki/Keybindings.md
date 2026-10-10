@@ -24,8 +24,15 @@
 | `/` | Normal | Search in channel (vim-style; searches cached history of the current channel) |
 | `n` / `N` | Normal | Next / previous search match (wraps) |
 | `a` / `A` | Normal | Jump to next / previous unread channel (wraps) |
-| `Ctrl+h` / `Ctrl+l` | Normal | Navigate back / forward through visited channels (`Ctrl+k` also works) |
+| `Ctrl+h` / `Ctrl+l` | Normal | Navigate back / forward through visited channels, returning to the message you were reading when you left (`Ctrl+k` also works) |
 | `Esc` | Normal (search active) | Clear active search |
+| `m{a-z}` | Normal (message) | Set a session mark on the selected message — lost when slk exits |
+| `m{A-Z}` | Normal (message) | Set a persistent mark — survives a restart |
+| `'{letter}` / `` `{letter} `` | Normal | Jump to a mark: opens the channel, loads history if needed, opens the thread and selects the reply |
+| `''` / ` `` ` | Normal | Back-jump to where you jumped from; press again to return |
+| `:marks` | Normal | List every mark in the workspace with its channel and message preview |
+| `:delmarks abc` | Normal | Delete marks by letter (`:delmarks a b c` works too) |
+| `Backspace` | Marks overlay | Delete the selected mark |
 | `Ctrl+f` | Any | Search workspace (Slack server-side; supports modifiers like `from:@user`, `in:#channel`, `before:YYYY-MM-DD`) |
 | `Ctrl+b` | Any | Toggle sidebar |
 | `Ctrl+]` | Any | Toggle thread panel |

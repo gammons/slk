@@ -37,11 +37,12 @@ func handleWorkspaceSearchMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		a.searchResults.Close()
 		a.SetMode(ModeNormal)
 		if item.ChannelID == a.activeChannelID {
-			a.pendingLinkNav = &pendingLinkNav{
-				channelID: item.ChannelID,
-				messageTS: item.TS,
-				threadTS:  item.ThreadTS,
-			}
+			a.pendingLinkNav = &pendingLinkNav{Location: Location{
+				TeamID:    ids.TeamID(a.activeTeamID),
+				ChannelID: ids.ChannelID(item.ChannelID),
+				MessageTS: ids.MessageTS(item.TS),
+				ThreadTS:  ids.ThreadTS(item.ThreadTS),
+			}}
 			return a.completePendingLinkNav(a.activeChannelID, true)
 		}
 		// Slack search also returns hits in public channels the user
@@ -56,11 +57,12 @@ func handleWorkspaceSearchMode(a *App, msg tea.KeyMsg) tea.Cmd {
 				return ToastMsg{Text: "Not a member of #" + chName + " — join via ctrl+t to view"}
 			}
 		}
-		a.pendingLinkNav = &pendingLinkNav{
-			channelID: item.ChannelID,
-			messageTS: item.TS,
-			threadTS:  item.ThreadTS,
-		}
+		a.pendingLinkNav = &pendingLinkNav{Location: Location{
+			TeamID:    ids.TeamID(a.activeTeamID),
+			ChannelID: ids.ChannelID(item.ChannelID),
+			MessageTS: ids.MessageTS(item.TS),
+			ThreadTS:  ids.ThreadTS(item.ThreadTS),
+		}}
 		return func() tea.Msg {
 			return ChannelSelectedMsg{ID: item.ChannelID, Name: name, Type: chType}
 		}
