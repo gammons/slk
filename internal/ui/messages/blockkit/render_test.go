@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/slack-go/slack"
 )
@@ -369,6 +370,26 @@ func TestRenderActionsBlockWrapsAtWidth(t *testing.T) {
 	}}, Context{}, 30)
 	if r.Height < 2 {
 		t.Errorf("Height = %d, want >= 2 (wrapped)", r.Height)
+	}
+}
+
+// A single control wider than the row cannot wrap onto a row of its
+// own; it must be shortened, or it runs past the pane.
+func TestRenderActionsBlockTruncatesControlWiderThanRow(t *testing.T) {
+	const width = 12
+	r := Render([]Block{ActionsBlock{
+		Elements: []ActionElement{
+			{Kind: "button", Label: "Don't Show Again"},
+			{Kind: "button", Label: "OK"},
+		},
+	}}, Context{}, width)
+	for i, line := range r.Lines {
+		if w := lipgloss.Width(line); w > width {
+			t.Errorf("line %d is %d cols wide, want <= %d: %q", i, w, width, ansi.Strip(line))
+		}
+	}
+	if plain := ansi.Strip(strings.Join(r.Lines, "\n")); !strings.Contains(plain, "[ Don't") || !strings.Contains(plain, "…") {
+		t.Errorf("want the wide button shortened with an ellipsis, got %q", plain)
 	}
 }
 

@@ -192,6 +192,17 @@ func appendLegacyAttachment(out *RenderResult, a LegacyAttachment, ctx Context, 
 			perf.imageTotal += time.Since(t0)
 		}
 	}
+	// Buttons from the legacy `actions` array, after any image and
+	// before the footer. Drawn by the Block Kit actions renderer so both
+	// kinds of button look the same.
+	if len(a.Actions) > 0 {
+		var acts RenderResult
+		appendActions(&acts, legacyActionsBlock(a.Actions), contentW)
+		body = append(body, acts.Lines...)
+		if acts.Interactive {
+			out.Interactive = true
+		}
+	}
 	// Footer.
 	if a.Footer != "" || a.TS != 0 {
 		var t0 time.Time
@@ -286,6 +297,21 @@ func renderLegacyFields(fields []LegacyField, ctx Context, width int) []string {
 		i++
 	}
 	return out
+}
+
+// legacyActionsBlock adapts legacy attachment actions to the Block Kit
+// actions block appendActions draws. A legacy "select" draws as a
+// static select labelled with its text.
+func legacyActionsBlock(actions []LegacyAction) ActionsBlock {
+	b := ActionsBlock{Elements: make([]ActionElement, 0, len(actions))}
+	for _, a := range actions {
+		kind := "button"
+		if a.Type == "select" {
+			kind = "static_select"
+		}
+		b.Elements = append(b.Elements, ActionElement{Kind: kind, Label: a.Text})
+	}
+	return b
 }
 
 // renderLegacyField renders a single attachment field's title +

@@ -170,6 +170,14 @@ type LegacyAttachment struct {
 	// Title/Text/Fields are empty. Rendered inside the colored
 	// stripe after the classic fields. nil when absent.
 	Blocks []Block
+	// ID is the attachment's numeric id, echoed back as attachment_id
+	// when one of its Actions is pressed.
+	ID int
+	// CallbackID identifies the interaction to the app that posted it.
+	CallbackID string
+	// Actions are the legacy interactive buttons (and menus) on the
+	// attachment. nil when absent.
+	Actions []LegacyAction
 }
 
 // LegacyField is one entry in a LegacyAttachment's Fields slice.
@@ -179,4 +187,29 @@ type LegacyField struct {
 	Title string
 	Value string
 	Short bool
+}
+
+// LegacyAction is one button (or menu) in a legacy attachment's
+// `actions` array. Pressing it echoes the action back to Slack as
+// received, so every field Slack sent is kept.
+type LegacyAction struct {
+	// ID is the action's "id". slack-go does not decode it; the
+	// WebSocket path fills it from the raw frame.
+	ID    string
+	Name  string
+	Text  string // the button's label
+	Type  string // "button" or "select"
+	Value string
+	Style string // "", "default", "primary" or "danger"
+	// URL, when set, makes the button a link rather than a Slack call.
+	URL     string
+	Confirm *ActionConfirm
+}
+
+// ActionConfirm is a legacy action's confirmation dialog.
+type ActionConfirm struct {
+	Title       string
+	Text        string
+	OKText      string
+	DismissText string
 }

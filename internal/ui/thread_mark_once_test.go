@@ -137,3 +137,52 @@ func TestThreadOpen_FetchFailureMarksAtCachedNewestReply(t *testing.T) {
 		t.Errorf("Mark calls = %v, want exactly %v", *marks, want)
 	}
 }
+
+// An ephemeral reply that lands while the fetch is in flight sits in the
+// panel when the fetch fails. It must not become the read cursor: Slack
+// never returns it, so a mark there sits behind a ghost.
+func TestThreadOpen_FetchFailureIgnoresEphemeralReply(t *testing.T) {
+	const ephemeralTS = "1700000030.000000"
+	cases := []struct {
+		name   string
+		cached bool // the cache has a real reply on screen
+		want   []string
+	}{
+		{"behind a real reply", true, []string{"C1/" + markOnceParent + "/" + markOnceStale}},
+		{"the only reply on screen", false, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app, marks := markOnceApp(t, func() []messages.MessageItem { return nil })
+			if !tc.cached {
+				threads := app.threads
+				app.SetThreadService(core.NewThreadService(core.ThreadServiceFuncs{
+					CacheRead: func(ids.ChannelID, ids.ThreadTS) []messages.MessageItem { return nil },
+					Fetch:     func(c ids.ChannelID, th ids.ThreadTS) core.Msg { return threads.Fetch(c, th) },
+					Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) core.Cmd {
+						*marks = append(*marks, fmt.Sprintf("%s/%s/%s", channelID, threadTS, ts))
+						return nil
+					},
+				}))
+			}
+			app.focusedPanel = PanelMessages
+			_, cmd := app.Update(keyCode(tea.KeyEnter))
+			for _, m := range drainBatch(cmd) {
+				loaded, ok := m.(ThreadRepliesLoadedMsg)
+				if !ok {
+					continue
+				}
+				if !loaded.FromCache {
+					app.Update(NewMessageMsg{ChannelID: "C1", Message: messages.MessageItem{
+						TS: ephemeralTS, ThreadTS: markOnceParent, UserID: "USLACKBOT", Ephemeral: true,
+					}})
+				}
+				app.Update(loaded)
+			}
+
+			if fmt.Sprint(*marks) != fmt.Sprint(tc.want) {
+				t.Errorf("Mark calls = %v, want exactly %v", *marks, tc.want)
+			}
+		})
+	}
+}

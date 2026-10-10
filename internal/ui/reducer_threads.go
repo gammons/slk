@@ -159,7 +159,7 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// is looking at; with no cached replies on screen there is
 		// nothing they have seen to mark.
 		if m.Replies == nil {
-			if replies := a.threadPanel.Replies(); len(replies) > 0 {
+			if replies := a.threadPanel.Replies(); newestMarkableReplyTS(replies) != "" {
 				return a.markOpenThreadRead(channelID, m.ThreadTS, replies), true
 			}
 			return nil, true
@@ -180,7 +180,10 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 				}
 			}
 		}
-		a.threadPanel.SetThread(parentMsg, m.Replies, channelID, m.ThreadTS)
+		// Ephemeral replies already on screen are carried over: the
+		// fetch never contains them, and opening a thread clears the
+		// panel first, so any still shown belong to this thread.
+		a.threadPanel.SetThread(parentMsg, keepEphemerals(m.Replies, a.threadPanel.Replies()), channelID, m.ThreadTS)
 		if linkNav != nil {
 			if linkNav.messageTS == m.ThreadTS {
 				a.threadPanel.GoToTop()
@@ -438,6 +441,19 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	return nil, false
 }
 
+// newestMarkableReplyTS returns the ts of the newest reply a read
+// cursor may land on, or "" when there is none. Ephemeral replies are
+// skipped: Slack never returns them from conversations.replies, so a
+// cursor on one would sit behind a message Slack does not know.
+func newestMarkableReplyTS(replies []messages.MessageItem) string {
+	for i := len(replies) - 1; i >= 0; i-- {
+		if !replies[i].Ephemeral && replies[i].TS != "" {
+			return replies[i].TS
+		}
+	}
+	return ""
+}
+
 // markOpenThreadRead marks the open thread read up to the newest of
 // replies, the replies the user has now seen. Server-side:
 // subscriptions.thread.mark with the latest reply ts (or the parent ts
@@ -448,10 +464,8 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 // path (messages pane or threads view) opened the thread.
 func (a *App) markOpenThreadRead(channelID, threadTS string, replies []messages.MessageItem) tea.Cmd {
 	latestTS := threadTS
-	if n := len(replies); n > 0 {
-		if t := replies[n-1].TS; t != "" {
-			latestTS = t
-		}
+	if t := newestMarkableReplyTS(replies); t != "" {
+		latestTS = t
 	}
 	var cmd tea.Cmd
 	if channelID != "" && threadTS != "" {

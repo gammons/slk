@@ -45,6 +45,11 @@ type MessageItem struct {
 	// `attachments` field (color stripe + title + fields style bot
 	// cards). Rendered after Blocks.
 	LegacyAttachments []blocks.LegacyAttachment
+
+	// Ephemeral is set for a message only the current user can see
+	// (Slack's is_ephemeral). It is never cached and never a
+	// read-marking target; Slack does not return it from history.
+	Ephemeral bool
 }
 
 // Attachment represents a file or image attached to a message.

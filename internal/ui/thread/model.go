@@ -1430,7 +1430,13 @@ func (m *Model) View(height, width int) string {
 	// Adding to the predicate is preferred when the state changes
 	// infrequently — chrome is rebuilt rarely, so the comparison cost is
 	// negligible and invalidation discipline is easier to get wrong.
-	chromeReplyCount := len(m.replies)
+	// An ephemeral reply is not a reply: the header counts the rest.
+	chromeReplyCount := 0
+	for _, r := range m.replies {
+		if !r.Ephemeral {
+			chromeReplyCount++
+		}
+	}
 	// Chrome no longer contains the parent message -- the parent now lives
 	// at the top of m.viewContent so it scrolls with the replies (a long
 	// parent must not pin and block the reply area). Chrome is only the
@@ -2040,6 +2046,12 @@ func (m *Model) blockkitContext(msg messages.MessageItem, userNames, channelName
 func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNames map[string]string, channelNames map[string]string, isSelected bool) (string, []func(io.Writer) error, []reactionEntryHit, string, int) {
 	line := styles.Username(msg.UserID, m.coloredUsernames).Render(msg.UserName) + messages.AuthorStatusSuffix(m.userStatuses, msg.UserID, time.Now()) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.Timestamp)
 
+	// Label rows above the author line; mirrors the messages pane.
+	labelRows, labelRowCount := "", 0
+	if msg.Ephemeral {
+		labelRows, labelRowCount = messages.EphemeralLabel()+"\n", 1
+	}
+
 	contentWidth := width - 4
 	if contentWidth < 20 {
 		contentWidth = 20
@@ -2271,8 +2283,9 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 
 	// Translate per-pill specs into reactionEntryHit rects. Row layout
 	// of the reply content (pre-border, pre-tint):
-	//   row 0: username + timestamp line
-	//   rows [1 .. 1+textRows): wrapped body text
+	//   rows [0 .. labelRowCount): label rows (ephemeral)
+	//   next row: username + timestamp line
+	//   rows [labelRowCount+1 .. +textRows): wrapped body text
 	//   rows [.. +bkLineCount): block kit + legacy attachment content
 	//   rows [.. +attachmentLineCount): file attachments
 	//   rows [reactionRowBase ..): reaction lines
@@ -2281,7 +2294,7 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 	var reactionHits []reactionEntryHit
 	if len(pillSpecs) > 0 && reactionLineCount > 0 {
 		const contentColBase = 1 // thick left border occupies col 0 of linesNormal
-		reactionRowBase := 1 + bodyRows + bkLineCount + attachmentLineCount
+		reactionRowBase := labelRowCount + 1 + bodyRows + bkLineCount + attachmentLineCount
 		for _, ps := range pillSpecs {
 			row := reactionRowBase + ps.lineIdx
 			reactionHits = append(reactionHits, reactionEntryHit{
@@ -2297,5 +2310,5 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 	// Header width budget for messages.SelectedHeader: the body's wrap
 	// width, capped at the columns the row really has (width-1 after the
 	// thick left border) because contentWidth is floored at 20.
-	return line + bodyRow + bkBlock + attachmentLines + reactionLine, flushes, reactionHits, line, min(contentWidth, width-1)
+	return labelRows + line + bodyRow + bkBlock + attachmentLines + reactionLine, flushes, reactionHits, line, min(contentWidth, width-1)
 }
