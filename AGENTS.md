@@ -153,6 +153,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Theme colors and styles | `ui/styles` (`Username`, `SelectionStyle`, `SearchHighlightStyle`, `MentionBadgeStyle`, `UserColor`) |
 | Change the theme inside the App | `App.applyTheme(name)` (`internal/ui/app.go`): applies it, invalidates render caches and pushes fresh styles to components that snapshot them. A component that holds a style snapshot (anything in `internal/bubbles`) gets its push added there, not at each call site |
 | Window tree geometry | `ui/wintree` |
+| Sidebar selection across item/filter reorders | Capture `sidebar.Model.currentCursorKey()` **before** mutation, then `rebuildNavWithCursor`; `rebuildNavPreserveCursor` is only safe while old nav indices still identify the same items |
 | Modal geometry / row hit-testing | `boxedOverlay`, `clickableOverlay` (list rows), `pointClickable` (a single glyph, e.g. the profile dialog's 📋) in `internal/ui/reducer_modal_click.go` |
 | Channel/DM destination picker for forwarding | `channelfinder.Model.OpenForForwarding()` (joined conversations only); `Open()` restores the normal switcher |
 | Refresh a workspace finder entry without losing visit recency | `rtmEventHandler.upsertFinderItem(item)` on the serialized event owner; returns the stored item, preserves existing `LastVisited`, seeds a new row from `LastVisitedByChannel` |
