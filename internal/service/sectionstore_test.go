@@ -22,7 +22,7 @@ func (f *fakeSectionsClient) GetChannelSections(ctx context.Context) ([]slk.Side
 	return f.sections, nil
 }
 
-func (f *fakeSectionsClient) GetStarredChannels(ctx context.Context) ([]string, error) {
+func (f *fakeSectionsClient) GetStarredConversations(ctx context.Context) ([]string, error) {
 	if f.starErr != nil {
 		return nil, f.starErr
 	}
@@ -470,8 +470,8 @@ func (cc *countingClient) GetChannelSections(ctx context.Context) ([]slk.Sidebar
 	return cc.inner.GetChannelSections(ctx)
 }
 
-func (cc *countingClient) GetStarredChannels(ctx context.Context) ([]string, error) {
-	return cc.inner.GetStarredChannels(ctx)
+func (cc *countingClient) GetStarredConversations(ctx context.Context) ([]string, error) {
+	return cc.inner.GetStarredConversations(ctx)
 }
 
 // TestSectionForChannel_HidesNonRenderableSections regresses a sidebar

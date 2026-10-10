@@ -351,6 +351,18 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	// userBoot's is_open. bootConversations already applies this, so
 	// the call is redundant on the fallback path and harmless there.
 	channels = dropClosedMPIMs(channels, res.IsOpen)
+	// Section membership alone cannot create a row. Recover accessible starred
+	// IMs omitted by either source before the shared item/cache/name flow below.
+	known := make([]string, 0, len(channels))
+	for _, ch := range channels {
+		known = append(known, ch.ID)
+	}
+	if wctx.SectionStore != nil {
+		starCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		channels = append(channels, missingStarredConversations(starCtx, known,
+			wctx.SectionStore.StarredConversationIDs(), res.IMs, client.GetConversationInfo)...)
+		cancel()
+	}
 	if len(channels) == 0 {
 		log.Printf("workspace %s: no conversations from either users.conversations or client.userBoot; the sidebar will be empty", token.TeamName)
 	}
@@ -466,18 +478,23 @@ func (h *rtmEventHandler) OnConnect() {
 	// thunder; a real long-disconnect-then-reconnect refreshes section
 	// state we may have missed during the gap.
 	//
-	// Run synchronously on the WS read goroutine. This briefly blocks
+	// Run synchronously on the event owner. This briefly blocks
 	// inbound event delivery during the bootstrap HTTP call, but that
 	// cost is bounded — at most one call per 30s per workspace — and
 	// avoids racing wsCtx.Channels mutations against the same loop's
 	// next event (which could be an OnConversationOpened that also
 	// touches wsCtx.Channels).
 	if h.wsCtx != nil && h.wsCtx.SectionStore != nil && h.wsCtx.Client != nil {
-		if err := h.wsCtx.SectionStore.MaybeRebootstrap(context.Background(), h.wsCtx.Client); err != nil {
+		// Bound section refresh and missing-row hydration together so a slow
+		// workspace cannot indefinitely stall serialized WebSocket delivery.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := h.wsCtx.SectionStore.MaybeRebootstrap(ctx, h.wsCtx.Client); err != nil {
 			log.Printf("section store rebootstrap for %s failed: %v", h.wsCtx.TeamName, err)
 		} else {
+			h.reconcileStarredConversations(ctx)
 			h.refreshSectionsForActive()
 		}
+		cancel()
 	}
 
 	// Bounded reconnect catch-up: client.counts, the channel on

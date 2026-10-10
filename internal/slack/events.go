@@ -20,6 +20,15 @@ import (
 // It is NOT a read/unread signal. See OnThreadMarked.
 type Subscribed bool
 
+// PendingEventHandler optionally supplies local work to the WebSocket event
+// owner. Producers signal PendingEvents (which must not be closed); the owner
+// calls OnPendingEvents serially with all EventHandler callbacks, even when no
+// incoming Slack frame arrives. A nil channel disables local work.
+type PendingEventHandler interface {
+	PendingEvents() <-chan struct{}
+	OnPendingEvents()
+}
+
 // EventHandler processes real-time events from Slack.
 type EventHandler interface {
 	// OnMessage delivers a new or edited message. subtype mirrors

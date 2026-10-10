@@ -1077,11 +1077,11 @@ func TestGetChannelSections_UsesAPIBaseURL(t *testing.T) {
 	}
 }
 
-// TestGetStarredChannels_ParsesItems verifies GetStarredChannels extracts
-// channel-typed starred items from stars.list. Slack's channelSections.list
+// TestGetStarredConversations_ParsesItems verifies GetStarredConversations extracts
+// channel and IM conversation items from stars.list. Slack's channelSections.list
 // returns the stars section with an empty channel_ids array; stars.list is
-// the authoritative source for which channels the user has starred.
-func TestGetStarredChannels_ParsesItems(t *testing.T) {
+// the authoritative source for which conversations the user has starred.
+func TestGetStarredConversations_ParsesItems(t *testing.T) {
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -1092,7 +1092,14 @@ func TestGetStarredChannels_ParsesItems(t *testing.T) {
 				{"type": "channel", "channel": "C1", "date_create": 1700000001},
 				{"type": "channel", "channel": "C2", "date_create": 1700000002},
 				{"type": "message", "channel": "C9", "message": {"ts": "1.1"}, "date_create": 1700000003},
-				{"type": "im", "channel": "D1", "date_create": 1700000004}
+				{"type": "im", "channel": "D1", "date_create": 1700000004},
+				{"type": "channel", "channel": "C1"},
+				{"type": "im", "channel": "D1"},
+				{"type": "im", "channel": ""},
+				{"type": "channel", "channel": ""},
+				{"type": "file", "channel": "C8"},
+				{"type": "file_comment", "channel": "C7"},
+				{"type": "unknown", "channel": "D9"}
 			],
 			"paging": {"count": 4, "total": 4}
 		}`))
@@ -1104,15 +1111,15 @@ func TestGetStarredChannels_ParsesItems(t *testing.T) {
 		cookie:     "d-cookie",
 		apiBaseURL: srv.URL + "/api/",
 	}
-	got, err := c.GetStarredChannels(context.Background())
+	got, err := c.GetStarredConversations(context.Background())
 	if err != nil {
-		t.Fatalf("GetStarredChannels: %v", err)
+		t.Fatalf("GetStarredConversations: %v", err)
 	}
 	if gotPath != "/api/stars.list" {
 		t.Errorf("path = %q, want %q", gotPath, "/api/stars.list")
 	}
-	// Only type=="channel" items count; message/im stars are not sidebar channels.
-	want := []string{"C1", "C2"}
+	// Conversation IDs are unique and retain first-seen order.
+	want := []string{"C1", "C2", "D1"}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -1123,9 +1130,9 @@ func TestGetStarredChannels_ParsesItems(t *testing.T) {
 	}
 }
 
-// TestGetStarredChannels_APIError verifies the client surfaces Slack's
+// TestGetStarredConversations_APIError verifies the client surfaces Slack's
 // ok=false responses as errors rather than returning an empty list silently.
-func TestGetStarredChannels_APIError(t *testing.T) {
+func TestGetStarredConversations_APIError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ok": false, "error": "not_authed"}`))
@@ -1137,7 +1144,7 @@ func TestGetStarredChannels_APIError(t *testing.T) {
 		cookie:     "d-cookie",
 		apiBaseURL: srv.URL + "/api/",
 	}
-	if _, err := c.GetStarredChannels(context.Background()); err == nil {
+	if _, err := c.GetStarredConversations(context.Background()); err == nil {
 		t.Errorf("expected error on ok=false response")
 	}
 }
@@ -3124,7 +3131,7 @@ func TestPostForm_NonOKStatusIsAnError(t *testing.T) {
 // guard for three endpoints that used to build their own http.Client
 // via newCookieHTTPClient instead of reusing c.httpClient:
 // client.counts (GetUnreadCounts), users.channelSections.list
-// (callChannelSectionsList) and stars.list (GetStarredChannels).
+// (callChannelSectionsList) and stars.list (GetStarredConversations).
 //
 // Two things were wrong with that, and this test fails on both:
 //
@@ -3166,11 +3173,11 @@ func TestHandRolledEndpoints_RouteThroughSharedClient(t *testing.T) {
 			},
 		},
 		{
-			name:     "GetStarredChannels",
+			name:     "GetStarredConversations",
 			respBody: `{"ok":true,"items":[],"paging":{"count":0,"total":0}}`,
 			call: func(t *testing.T, c *Client) {
-				if _, err := c.GetStarredChannels(context.Background()); err != nil {
-					t.Fatalf("GetStarredChannels: %v", err)
+				if _, err := c.GetStarredConversations(context.Background()); err != nil {
+					t.Fatalf("GetStarredConversations: %v", err)
 				}
 			},
 		},

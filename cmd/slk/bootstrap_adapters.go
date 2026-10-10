@@ -394,11 +394,11 @@ func applyBootUsers(wctx *WorkspaceContext, res *bootstrap.Result) {
 //
 // IsMember is true for every channels[] entry because userBoot returns
 // the user's OWN conversation list -- there is no is_member on the
-// entries and none is needed. IMs are filtered to the open ones, since
-// a closed DM does not belong in the sidebar; both the per-IM is_open
-// flag and userBoot's top-level is_open list are consulted, because
-// either alone would silently empty the DM list if that response shape
-// varies.
+// entries and none is needed. Ordinary IMs are filtered to the open ones;
+// missingStarredConversations separately recovers accessible closed starred
+// IMs. Both the per-IM is_open flag and userBoot's top-level is_open list
+// are consulted, because either alone would silently empty the DM list if
+// that response shape varies.
 //
 // MPIMs get the same treatment via the top-level is_open list only:
 // userBoot is asked for return_all_relevant_mpdms=true, so channels[]
@@ -448,19 +448,27 @@ func bootConversations(res *bootstrap.Result) []slack.Channel {
 		if !im.IsOpen && !open[im.ID] {
 			continue
 		}
-		out = append(out, slack.Channel{
-			GroupConversation: slack.GroupConversation{
-				Conversation: slack.Conversation{
-					ID:          im.ID,
-					IsIM:        true,
-					User:        im.UserID,
-					IsOrgShared: im.IsOrgShared,
-				},
-			},
-			IsMember: true,
-		})
+		out = append(out, bootIMConversation(im))
 	}
 	return out
+}
+
+// bootIMConversation maps userBoot IM metadata into the conversation shape
+// consumed by buildChannelItem. Eligibility (open, starred, archived) belongs
+// to the caller; sharing this mapping keeps ordinary and starred DMs identical.
+func bootIMConversation(im boot.IM) slack.Channel {
+	return slack.Channel{
+		GroupConversation: slack.GroupConversation{
+			Conversation: slack.Conversation{
+				ID:          im.ID,
+				IsIM:        true,
+				User:        im.UserID,
+				IsOrgShared: im.IsOrgShared,
+			},
+			IsArchived: im.IsArchived,
+		},
+		IsMember: true,
+	}
 }
 
 // dropClosedMPIMs removes group DMs (MPIMs) that are not in userBoot's
@@ -604,6 +612,7 @@ func hydrateFirstSight(db *cache.DB, workspaceID string, res *bootstrap.Result) 
 		if err := db.UpsertUser(cache.User{
 			ID:          u.ID,
 			WorkspaceID: workspaceID,
+			HomeTeamID:  u.TeamID,
 			Name:        u.Name,
 			DisplayName: bootUserDisplayName(u),
 			AvatarURL:   u.Profile.ImageOriginal,

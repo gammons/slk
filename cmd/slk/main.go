@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -1350,18 +1351,10 @@ func run() error {
 		// outer cfg, for the same reason.
 		router.Set(wctx)
 
-		// Build external-user set from cached records so the mention
-		// picker reflects Slack Connect / shared-channel guest status
-		// for the workspace we're switching into. Best-effort: empty
-		// map on error.
-		external := map[string]bool{}
-		if users, err := db.ListUsers(wctx.TeamID); err == nil {
-			for _, u := range users {
-				if u.IsExternal {
-					external[u.ID] = true
-				}
-			}
-		}
+		// Profiles are cached globally; classification is relative to the
+		// workspace being displayed, not the profile's first cache owner.
+		// Best-effort: nil on error (the picker shows no external flags).
+		external, _ := db.ExternalUsers(wctx.TeamID)
 
 		// Statuses are re-read from the cache, which live changes keep
 		// current, rather than the connect-time items. DND is not
@@ -1579,22 +1572,11 @@ func run() error {
 			}
 			wctx.RTMHandler = handler
 			wctx.ConnMgr = slackclient.NewConnectionManager(wctx.Client, handler)
-			go wctx.ConnMgr.Run(ctx)
 
-			// Build external-user set from cached records so the
-			// mention picker can flag Slack Connect / shared-channel
-			// guests on first render, without waiting for fresh
-			// userResolver lookups. Best-effort: empty map on error
-			// (the picker just won't flag anyone until live resolution
-			// fires).
-			external := map[string]bool{}
-			if users, err := db.ListUsers(wctx.TeamID); err == nil {
-				for _, u := range users {
-					if u.IsExternal {
-						external[u.ID] = true
-					}
-				}
-			}
+			// Use the same workspace-relative cache projection as switching,
+			// including profiles first cached by a different workspace.
+			// Best-effort: nil on error, until live resolution fills the flags.
+			external, _ := db.ExternalUsers(wctx.TeamID)
 
 			readyStatuses := cachedPeerStatuses(db, wctx.TeamID)
 			wctx.PeerStatus.SeedHuddles(readyStatuses)
@@ -1607,8 +1589,9 @@ func run() error {
 				Domain:       wctx.Client.TeamSubdomain(),
 				Theme:        cfgSnap.ResolveTheme(wctx.TeamID),
 				SidebarWidth: cfgSnap.ResolveWidth(wctx.TeamID),
-				Channels:     wctx.Channels,
-				FinderItems:  wctx.FinderItems,
+				// Detach both UI snapshots before the event owner starts.
+				Channels:    slices.Clone(wctx.Channels),
+				FinderItems: slices.Clone(wctx.FinderItems),
 				// A private copy: the UI must never share a map with
 				// the engine's goroutines (see userNameStore).
 				UserNames:        readyNames,
@@ -1626,6 +1609,10 @@ func run() error {
 			// the Ready message; anything the notifier sends is
 			// processed after it.
 			wctx.UserNames.NotifyFrom(readySeq, uiNameNotifier(wctx.TeamID, p.Send))
+
+			// Live repairs may mutate workspace slices. Start their owner only
+			// after cloning and handing off the startup snapshots above.
+			go wctx.ConnMgr.Run(ctx)
 
 			// Fetch the workspace's custom emoji in the background. When
 			// done, a follow-up message makes rendering and the emoji

@@ -77,6 +77,7 @@ func resolveUser(client *slackclient.Client, userID string, userNames *userNameS
 				db.UpsertUser(cache.User{
 					ID:          userID,
 					WorkspaceID: client.TeamID(),
+					HomeTeamID:  u.TeamID,
 					Name:        u.Name,
 					DisplayName: name,
 					AvatarURL:   u.Profile.Image32,
@@ -107,6 +108,7 @@ func resolveUser(client *slackclient.Client, userID string, userNames *userNameS
 		db.UpsertUser(cache.User{
 			ID:          userID,
 			WorkspaceID: client.TeamID(),
+			HomeTeamID:  u.TeamID,
 			Name:        u.Name,
 			DisplayName: name,
 			AvatarURL:   u.Profile.Image32,
@@ -176,20 +178,22 @@ func resolveDMNames(wctx *WorkspaceContext, db *cache.DB, avatarCache *avatar.Ca
 			}
 			// An edge record with all three name fields empty is no
 			// resolution at all — and applyEdgeUser has already
-			// upserted its empty-DisplayName row, which satisfies
-			// Request's cache-skip gate. Fall through to the per-user
+			// upserted its empty-DisplayName row. Fall through to the per-user
 			// path, which re-fetches and repairs the row.
 		}
 		resolved, isBot := resolveUser(wctx.Client, dm.UserID, wctx.UserNames, db, avatarCache, send)
 		if isBot {
 			wctx.MarkBotUser(dm.UserID)
 		}
-		if resolved != dm.UserID && send != nil {
-			send(ui.DMNameResolvedMsg{
-				ChannelID:   dm.ChannelID,
-				DisplayName: resolved,
-				IsBot:       isBot,
-			})
+		if resolved != dm.UserID {
+			wctx.UserResolver.queueResolvedPeer(dm.UserID)
+			if send != nil {
+				send(ui.DMNameResolvedMsg{
+					ChannelID:   dm.ChannelID,
+					DisplayName: resolved,
+					IsBot:       isBot,
+				})
+			}
 		}
 	}
 }
