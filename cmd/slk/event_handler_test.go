@@ -13,7 +13,9 @@ import (
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/core"
+	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/ui"
+	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/slack-go/slack"
 )
@@ -833,4 +835,107 @@ func TestMuteRefreshMsg(t *testing.T) {
 	if rs.WorkspaceID != "T1" {
 		t.Errorf("inactive: WorkspaceID = %q, want T1", rs.WorkspaceID)
 	}
+}
+
+// capturedMentionAttachmentsJSON: the attachments of Slackbot's "not in
+// this channel" ephemeral, captured from the web client (placeholder IDs).
+const capturedMentionAttachmentsJSON = `[{"callback_id":"consistentephemeralmentions_U0EXAMPLE01_1791541429559219_0",
+ "fallback":"You may want to invite them.","id":1,"actions":[
+ {"id":"1","name":"invite","text":"Add Them","type":"button","value":"invite","style":""},
+ {"id":"2","name":"ignore","text":"Dismiss","type":"button","value":"ignore","style":""},
+ {"id":"3","name":"dont-show-again","text":"Don't Show Again","type":"button","value":"dont-show-again","style":""}]}]`
+
+func ephemeralFixture(t *testing.T) slackclient.EphemeralMessage {
+	t.Helper()
+	var atts []slack.Attachment
+	if err := json.Unmarshal([]byte(capturedMentionAttachmentsJSON), &atts); err != nil {
+		t.Fatal(err)
+	}
+	return slackclient.EphemeralMessage{
+		ChannelID: "C1", UserID: "USLACKBOT", BotID: "B01", Username: "slackbot",
+		TS: "1791541429.559220", Subtype: "bot_message",
+		Text:        "You mentioned <@U0EXAMPLE01>, but they’re not in this private channel.",
+		Attachments: atts,
+		ActionIDs:   [][]string{{"1", "2", "3"}},
+	}
+}
+
+// Slack never returns an ephemeral from history: a cached copy would be
+// a ghost row, and a moved watermark or unread flag would point at a
+// message Slack does not know. It goes to the UI and nowhere else.
+func TestOnEphemeralMessage_DisplaysButTouchesNoDurableState(t *testing.T) {
+	db := newTestDB(t)
+	_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
+	var sent []ui.NewMessageMsg
+	h := &rtmEventHandler{
+		program: sendFunc(func(msg tea.Msg) {
+			if m, ok := msg.(ui.NewMessageMsg); ok {
+				sent = append(sent, m)
+			}
+		}),
+		db:              db,
+		wsCtx:           &WorkspaceContext{},
+		workspaceID:     "T1",
+		currentUserID:   "USELF",
+		isActive:        func() bool { return true },
+		activeChannelID: func() string { return "C1" },
+		channelNames:    map[string]string{},
+		channelTypes:    map[string]string{},
+	}
+
+	h.OnEphemeralMessage(ephemeralFixture(t))
+
+	if _, err := db.GetMessage("C1", "1791541429.559220"); err == nil {
+		t.Error("the ephemeral was cached")
+	}
+	if ts := db.GetChannelLatestSyncedTS("C1"); ts != "" {
+		t.Errorf("latest_synced_ts = %q, want it untouched", ts)
+	}
+	if s, _ := db.GetChannelReadState("C1"); s.HasUnread {
+		t.Error("has_unread set by an ephemeral")
+	}
+	if len(sent) != 1 {
+		t.Fatalf("sent %d NewMessageMsg, want 1", len(sent))
+	}
+	item := sent[0].Message
+	if sent[0].ChannelID != "C1" || !item.Ephemeral || item.TS != "1791541429.559220" {
+		t.Errorf("sent %+v, want an ephemeral item for C1", sent[0])
+	}
+	if len(item.LegacyAttachments) != 1 || len(item.LegacyAttachments[0].Actions) != 3 {
+		t.Fatalf("legacy attachments = %+v", item.LegacyAttachments)
+	}
+	if got := item.LegacyAttachments[0].Actions[1]; got.ID != "2" || got.Name != "ignore" {
+		t.Errorf("Actions[1] = %+v, want id 2 from the raw frame", got)
+	}
+}
+
+func TestOnEphemeralMessage_InactiveWorkspaceDrops(t *testing.T) {
+	sent := 0
+	h := &rtmEventHandler{
+		program:  sendFunc(func(tea.Msg) { sent++ }),
+		wsCtx:    &WorkspaceContext{},
+		isActive: func() bool { return false },
+	}
+	h.OnEphemeralMessage(ephemeralFixture(t))
+	if sent != 0 {
+		t.Errorf("sent %d messages for an inactive workspace, want 0", sent)
+	}
+}
+
+// Ids are positional and best-effort: a frame with fewer or more ids
+// than parsed actions must not panic or shift ids onto the wrong button.
+func TestApplyActionIDs_Misaligned(t *testing.T) {
+	atts := []blockkit.LegacyAttachment{
+		{Actions: []blockkit.LegacyAction{{Name: "a"}, {Name: "b"}}},
+		{Actions: []blockkit.LegacyAction{{Name: "c"}}},
+	}
+	applyActionIDs(atts, [][]string{{"1"}})
+	if atts[0].Actions[0].ID != "1" || atts[0].Actions[1].ID != "" || atts[1].Actions[0].ID != "" {
+		t.Errorf("short ids: %+v", atts)
+	}
+	applyActionIDs(atts, [][]string{{"1", "2", "3"}, {"4", "5"}, {"6"}})
+	if atts[0].Actions[1].ID != "2" || atts[1].Actions[0].ID != "4" {
+		t.Errorf("long ids: %+v", atts)
+	}
+	applyActionIDs(nil, [][]string{{"1"}}) // must not panic
 }

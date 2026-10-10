@@ -117,3 +117,17 @@ func TestView_BreadcrumbAuthorFallsBackToUserNames(t *testing.T) {
 		t.Errorf("header = %q, want the author resolved from userNames", got)
 	}
 }
+
+func TestView_BreadcrumbIgnoresEphemeralReplies(t *testing.T) {
+	m := New()
+	m.SetThread(
+		messages.MessageItem{TS: "1.0", UserName: "zed", Text: "parent"},
+		[]messages.MessageItem{{TS: "2.0", UserName: "bob", Text: "real reply"}},
+		"C1", "1.0",
+	)
+	m.AddReply(messages.MessageItem{TS: "3.0", UserName: "slackbot", Text: "only you", Ephemeral: true})
+	got := ansi.Strip(firstLine(m.View(20, 60)))
+	if !strings.HasPrefix(got, "Thread from zed · 1 reply") || strings.Contains(got, "2 replies") {
+		t.Errorf("header = %q, want \"1 reply\": an ephemeral is not a reply", got)
+	}
+}

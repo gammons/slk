@@ -18,7 +18,15 @@ type Token struct {
 	Domain      string `json:"domain"`       // workspace subdomain (to re-mint)
 	TeamID      string `json:"team_id"`
 	TeamName    string `json:"team_name"`
+	// Source is TokenSourceBrowser for a token signed in from a browser
+	// session, empty for one read from the Slack desktop app.
+	Source string `json:"source,omitempty"`
 }
+
+// TokenSourceBrowser marks a token the user signed in from a browser session
+// (slk --add-workspace --browser). Startup re-minting leaves it alone: the
+// desktop app may be signed in to the same workspace as someone else.
+const TokenSourceBrowser = "browser"
 
 // TokenStore persists Slack tokens as JSON files in a directory,
 // one file per workspace ({teamID}.json).

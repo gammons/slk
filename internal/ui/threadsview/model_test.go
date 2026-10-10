@@ -646,3 +646,40 @@ func TestMarkByThreadTSReadAt_BumpsVersionOnlyOnChange(t *testing.T) {
 		t.Error("a no-op must not bump the version")
 	}
 }
+
+// PatchUserName delivers a name resolved after SetUserNames. The map is
+// usually the App's shared one, which already holds the name, so the
+// version must bump on the user being referenced, not on a map change.
+func TestPatchUserName_BumpsVersionOnlyWhenListReferencesUser(t *testing.T) {
+	shared := map[string]string{}
+	m := New(shared, "USELF")
+	m.SetSummaries([]cache.ThreadSummary{
+		{ChannelID: "C1", ThreadTS: "1.0", ParentUserID: "U1", LastReplyBy: "U2", ParentText: "hi"},
+		{ChannelID: "C2", ThreadTS: "2.0", ParentUserID: "U2", LastReplyBy: "U2", ParentText: "ping <@U3>"},
+	})
+	for _, c := range []struct {
+		uid  string
+		want bool
+	}{{"U1", true}, {"U2", true}, {"U3", true}, {"U4", false}, {"", false}} {
+		shared[c.uid] = "name-" + c.uid // the App writes the shared map first
+		v0 := m.Version()
+		m.PatchUserName(c.uid, "name-"+c.uid)
+		if bumped := m.Version() != v0; bumped != c.want {
+			t.Errorf("PatchUserName(%q) bumped=%v, want %v", c.uid, bumped, c.want)
+		}
+	}
+	if !strings.Contains(m.View(20, 60), "name-U1") {
+		t.Error("View does not show the patched name")
+	}
+}
+
+// Without a shared map (SetUserNames never called) the name must still
+// land in the model's own map.
+func TestPatchUserName_RecordsNameInOwnMap(t *testing.T) {
+	m := New(nil, "USELF")
+	m.SetSummaries([]cache.ThreadSummary{{ChannelID: "C1", ThreadTS: "1.0", ParentUserID: "U1", ParentText: "hi"}})
+	m.PatchUserName("U1", "alice")
+	if !strings.Contains(m.View(20, 60), "alice") {
+		t.Error("View does not show the patched name")
+	}
+}

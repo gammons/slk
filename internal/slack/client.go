@@ -107,6 +107,9 @@ type Client struct {
 	// the workspace subdomain for in-app permalink routing.
 	teamURL string
 
+	// teamName is the workspace's display name from auth.test's response.
+	teamName string
+
 	// httpClient is the cookie-bearing HTTP client used by both the
 	// inner slack-go client and the four hand-rolled endpoint calls.
 	// Stored so Connect() can rebuild the slack-go client with the
@@ -270,6 +273,12 @@ func (c *Client) TeamID() string {
 	return c.teamID
 }
 
+// TeamName returns the authenticated workspace's display name.
+// Empty before Connect is called.
+func (c *Client) TeamName() string {
+	return c.teamName
+}
+
 // UserID returns the authenticated user's ID.
 // Empty before Connect is called.
 func (c *Client) UserID() string {
@@ -311,6 +320,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	c.userID = resp.UserID
 	c.apiBaseURL = deriveAPIBaseURL(resp.URL)
 	c.teamURL = resp.URL
+	c.teamName = resp.Team
 
 	if c.httpClient != nil {
 		c.api = slack.New(

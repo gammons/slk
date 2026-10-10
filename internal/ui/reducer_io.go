@@ -157,18 +157,44 @@ var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return reduceEditorFinished(a, m), true
 
 	case UploadResultMsg:
-		a.compose.SetUploading(false)
-		a.threadCompose.SetUploading(false)
+		// Target from the in-flight flags, not focusedPanel: focus may
+		// have moved while the batch uploaded. submitWithAttachments
+		// prevents overlapping uploads, so at most one flag is set.
+		mainUploading := a.compose.Uploading()
+		threadUploading := a.threadCompose.Uploading()
+		if !mainUploading && !threadUploading {
+			// Stale result: nothing in flight, so nothing to clear.
+			return nil, true
+		}
+		if mainUploading {
+			a.compose.SetUploading(false)
+		}
+		if threadUploading {
+			a.threadCompose.SetUploading(false)
+		}
 		if m.Err != nil {
+			// Failure preserves the source caption + attachments so
+			// the user can retry; only the in-flight flag is cleared.
+			if a.threadCloseAfterUpload {
+				a.CloseThread()
+			}
 			return a.uploadToastCmd(
 				"Upload failed: "+truncateReason(m.Err.Error(), 40),
 				3*time.Second,
 			), true
 		}
-		a.compose.ClearAttachments()
-		a.threadCompose.ClearAttachments()
-		a.compose.Reset()
-		a.threadCompose.Reset()
+		// Success resets only the source composer.
+		if mainUploading {
+			a.compose.Reset()
+		}
+		if threadUploading {
+			a.threadCompose.Reset()
+		}
+		// After the reset, so a sent thread caption isn't stored as a
+		// draft for the deleted thread.
+		if a.threadCloseAfterUpload {
+			a.CloseThread()
+		}
 		return a.uploadToastCmd("Sent", 2*time.Second), true
 
 	case ConnectionStateMsg:
@@ -289,6 +315,11 @@ func reducePaste(a *App, m tea.PasteMsg) tea.Cmd {
 	}
 	if a.mode != ModeInsert {
 		return nil
+	}
+	if a.compose.Uploading() || a.threadCompose.Uploading() {
+		// Same in-flight draft invariant as handleInsertMode: a paste
+		// must not alter the uploading composer's caption/attachments.
+		return a.uploadToastCmd("Upload in progress", 2*time.Second)
 	}
 	if a.clipboardAvailable {
 		target := &a.compose

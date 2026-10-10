@@ -1339,22 +1339,23 @@ func (m *Model) SetCurrentUser(userID string) {
 // PatchUserName updates the in-memory userNames map (used for @mention
 // rendering) and overwrites the UserName field on every cached message
 // authored by userID. Invalidates the render cache so the next View()
-// re-renders affected rows. Idempotent: no-op when the name is
-// unchanged.
+// re-renders affected rows.
 //
 // Used by the async user-resolution path: history fetchers stash
 // MessageItem.UserName = m.UserID for unknown authors. When the
 // resolution returns asynchronously, the App calls PatchUserName to
 // replace the placeholders live without re-fetching history.
+//
+// Always applies: the map is normally the App's, shared by every pane
+// and already holding the name by the time this pane is patched, so
+// "already in the map" says nothing about this pane's rows or cache.
+// The App drops resolutions that change nothing.
 func (m *Model) PatchUserName(userID, displayName string) {
 	if userID == "" {
 		return
 	}
 	if m.userNames == nil {
 		m.userNames = map[string]string{}
-	}
-	if m.userNames[userID] == displayName {
-		return
 	}
 	m.userNames[userID] = displayName
 	// The render cache stores rows with their mentions already resolved
@@ -2239,16 +2240,20 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 	// Pre-attachment row count, so attachment rows can compute their
 	// absolute row index (used as the sixelRows key).
 	//
-	//   row 0: broadcastLabel (only when subtype=thread_broadcast)
-	//   row 0|1: username line + editedMark
+	//   rows 0..: label rows (ephemeral, then thread_broadcast), each optional
+	//   next row: username line + editedMark
 	//   row N: wrapped body text (lipgloss.Height of styled `text`);
 	//          absent when BlocksCarryBody
 	//
 	// Attachments begin immediately after the body text.
-	var broadcastLabel string
+	var labelRows string
 	preAttachmentRows := 0
+	if msg.Ephemeral {
+		labelRows += EphemeralLabel() + "\n"
+		preAttachmentRows++ // the ephemeral label occupies its own row
+	}
 	if msg.Subtype == "thread_broadcast" {
-		broadcastLabel = styles.Timestamp.Render("\u21b3 replied to a thread") + "\n"
+		labelRows += styles.Timestamp.Render("\u21b3 replied to a thread") + "\n"
 		preAttachmentRows++ // the broadcast label occupies its own row
 	}
 	preAttachmentRows++ // username + ts row
@@ -2445,12 +2450,13 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 	if hasBody {
 		bodyRow = "\n" + text
 	}
-	msgContent := broadcastLabel + line + editedMark + bodyRow + bkBlock + attachmentLines + threadLine + reactionLine
+	msgContent := labelRows + line + editedMark + bodyRow + bkBlock + attachmentLines + threadLine + reactionLine
 
 	// Translate per-pill specs into entry-relative reaction hit rects.
 	// reactionRowBase is the row index (within linesNormal) where the
 	// first reaction line lands. Row layout:
-	//   preAttachmentRows = broadcast + username + body + bk
+	//   preAttachmentRows = label rows (ephemeral and/or thread_broadcast)
+	//   + username + body + bk
 	//   + attachmentLineCount (each attachment line is 1 row)
 	//   + 1 if threadLine is present
 	// (placeAvatarBeside does not change row counts.)
@@ -3691,6 +3697,25 @@ func SetNowFunc(fn func() time.Time) {
 		return
 	}
 	nowFunc = fn
+}
+
+// FormatShortDate turns a "2006-01-02" date string into a compact
+// label for a message header: "Today", "Yesterday", a weekday within
+// the last week, "Jan 2" earlier this year, or "Jan 2, 2006" before
+// that. The thread pane prefixes the parent's time with it, because
+// the parent is the only row there with no day divider above it.
+func FormatShortDate(dateStr string) string {
+	d, err := time.Parse("2006-01-02", dateStr)
+	if err != nil {
+		return dateStr
+	}
+	if label := FormatDateSeparator(dateStr); !strings.Contains(label, ",") {
+		return label
+	}
+	if d.Year() == nowFunc().Year() {
+		return d.Format("Jan 2")
+	}
+	return d.Format("Jan 2, 2006")
 }
 
 // FormatDateSeparator turns a "2006-01-02" date string into the

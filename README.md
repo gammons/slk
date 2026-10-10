@@ -67,6 +67,11 @@ slk --add-workspace
 slk lists the workspaces you're signed in to; pick the ones you want and
 you're done.
 
+No desktop app (a server, a container, an SSH session)? `slk --add-workspace
+--browser` signs in from your browser session instead: in DevTools > Network,
+Copy as cURL any request to `/api/` on app.slack.com, and paste it. slk also
+offers this when it cannot read the desktop app's session.
+
 Full walkthrough: [Setup wiki page](https://github.com/gammons/slk/wiki/Setup).
 
 ## Debugging

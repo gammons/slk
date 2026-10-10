@@ -4122,7 +4122,7 @@ func TestCtrlHTriggersNavBack(t *testing.T) {
 	}
 }
 
-func TestCtrlKTriggersNavForward(t *testing.T) {
+func TestCtrlLTriggersNavForward(t *testing.T) {
 	app := NewApp()
 	app.activeTeamID = "T1"
 	app.setChannelLookupFuncForTest(func(channelID ids.ChannelID) (string, string, bool) {
@@ -4133,16 +4133,22 @@ func TestCtrlKTriggersNavForward(t *testing.T) {
 	_, _ = app.Update(ChannelSelectedMsg{ID: "C2", Name: "b", Type: "channel"})
 	app.navHistory.Stack("T1").cursor = 0
 
-	cmd := app.handleNormalMode(tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
+	// Go through Update, not handleNormalMode, so the reducer chain
+	// that runs before handleKey is covered too.
+	_, cmd := app.Update(tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl})
 	if cmd == nil {
-		t.Fatal("expected cmd from ctrl+k dispatch")
+		t.Fatal("expected cmd from ctrl+l dispatch")
 	}
-	got := cmd()
-	cs, ok := got.(ChannelSelectedMsg)
-	if !ok {
-		t.Fatalf("want ChannelSelectedMsg, got %T", got)
+	var selected []ChannelSelectedMsg
+	for _, m := range drainCmd(cmd) {
+		if cs, ok := m.(ChannelSelectedMsg); ok {
+			selected = append(selected, cs)
+		}
 	}
-	if cs.ID != "C2" || !cs.FromHistory {
+	if len(selected) != 1 {
+		t.Fatalf("want one ChannelSelectedMsg, got %d", len(selected))
+	}
+	if cs := selected[0]; cs.ID != "C2" || !cs.FromHistory {
 		t.Errorf("want ID=C2 FromHistory=true, got %+v", cs)
 	}
 }
@@ -4608,6 +4614,34 @@ func TestNotifyReadStateChanged_PopulatesWindowTitle(t *testing.T) {
 	app.notifyReadStateChanged()
 
 	if got, want := app.windowTitle, "slk SW (1) +1"; got != want {
+		t.Errorf("windowTitle = %q want %q", got, want)
+	}
+}
+
+// The workspace unread reader runs SQLite queries on the UI goroutine
+// (railUnreadWorkspaces in cmd/slk; ~400ms per call with 1000 subscribed
+// threads in a 2026-10-05 debug log), and notifyReadStateChanged runs on
+// every message for an unopened channel. One refresh, one read.
+func TestNotifyReadStateChanged_ReadsWorkspaceUnreadsOnce(t *testing.T) {
+	app := setupAppForTitleTest(t,
+		[]sidebar.ChannelItem{{ID: "C1", Name: "general", Type: "channel"}},
+		[]workspace.WorkspaceItem{
+			{ID: "T1", Name: "SWAP", Initials: "SW"},
+			{ID: "T2", Name: "Other", Initials: "OT"},
+		},
+		map[string]cache.ReadState{},
+		nil,
+	)
+	app.activeTeamID = "T1"
+	calls := 0
+	app.setWorkspaceUnreadReaderForTest(func() []string { calls++; return []string{"T2"} })
+
+	app.notifyReadStateChanged()
+
+	if calls != 1 {
+		t.Errorf("workspace unread reader calls = %d want 1", calls)
+	}
+	if got, want := app.windowTitle, "slk SW +1"; got != want {
 		t.Errorf("windowTitle = %q want %q", got, want)
 	}
 }

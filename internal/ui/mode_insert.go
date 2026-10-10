@@ -42,7 +42,11 @@ import (
 )
 
 func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
-	if (a.compose.Uploading() || a.threadCompose.Uploading()) && key.Matches(msg, a.keys.Escape) {
+	if a.compose.Uploading() || a.threadCompose.Uploading() {
+		// An upload is in flight: no insert-mode key may mutate the
+		// in-flight caption or send through the other composer. A
+		// single early return covers every key (Esc included),
+		// replacing the former Esc-only guard.
 		return a.uploadToastCmd("Upload in progress", 2*time.Second)
 	}
 	if a.editing.IsActive() && key.Matches(msg, a.keys.Escape) {
@@ -251,11 +255,15 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		text := a.compose.Value()
 		if text != "" {
 			text = a.compose.TranslateMentionsForSend(text)
+			// Capture the target channel before the reset/closure:
+			// a.activeChannelID may mutate before the deferred cmd
+			// runs, so the send must use this local snapshot.
+			channelID := a.activeChannelID
 			a.compose.Reset()
 			a.exitInsertAfterSend()
 			return func() tea.Msg {
 				return SendMessageMsg{
-					ChannelID: a.activeChannelID,
+					ChannelID: channelID,
 					Text:      text,
 				}
 			}

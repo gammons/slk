@@ -8,6 +8,7 @@
 package threadsview
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -147,6 +148,29 @@ func (m *Model) SetUserNames(names map[string]string) {
 	m.dirty()
 }
 
+// PatchUserName records a display name resolved after SetUserNames and
+// bumps the version when a card shows that user (as author, last
+// replier, or a <@id> mention in the preview). The map is normally the
+// App's shared one, which already holds the name, so the bump is decided
+// by the cards rather than by a map change; unrelated names, which
+// resolve in bursts, cost no re-render.
+func (m *Model) PatchUserName(userID, displayName string) {
+	if userID == "" {
+		return
+	}
+	if m.userNames == nil {
+		m.userNames = map[string]string{}
+	}
+	m.userNames[userID] = displayName
+	mention := "<@" + userID
+	for _, s := range m.summaries {
+		if s.ParentUserID == userID || s.LastReplyBy == userID || strings.Contains(s.ParentText, mention) {
+			m.dirty()
+			return
+		}
+	}
+}
+
 // stringMapsEqual reports whether two map[string]string have identical
 // contents. Used by SetUserNames and SetChannelNames to short-circuit Set*
 // calls with unchanged input so the App-level panel cache can hit on idle
@@ -215,10 +239,6 @@ func (m *Model) SetFocused(f bool) {
 // Focused reports whether the panel currently has keyboard focus.
 func (m *Model) Focused() bool { return m.focused }
 
-// SetSummaries replaces the list of thread summaries. If the previously-
-// selected (channelID, threadTS) pair is still present in the new list, the
-// selection follows it to its new position; otherwise the selection resets
-// to the top.
 // SetSubscriptionsAvailable records whether Slack's authoritative
 // subscription state could be fetched most recently. false flips the
 // "Threads list unavailable" banner on; true clears it.
@@ -230,7 +250,18 @@ func (m *Model) SetSubscriptionsAvailable(available bool) {
 	m.dirty()
 }
 
+// SetSummaries replaces the list of thread summaries. If the previously-
+// selected (channelID, threadTS) pair is still present in the new list, the
+// selection follows it to its new position; otherwise the selection resets
+// to the top.
+//
+// Identical contents are a no-op (no version bump, no re-snap): the list
+// is reloaded on every thread reply and mark-read, usually unchanged, and
+// each bump forces a full re-render of the panel.
 func (m *Model) SetSummaries(s []core.ThreadSummary) {
+	if slices.Equal(m.summaries, s) {
+		return
+	}
 	prevCh, prevTS, hadSel := m.selectedKey()
 	m.summaries = s
 
@@ -361,7 +392,7 @@ func (m *Model) ViewportAtTop() bool {
 // "Threads list unavailable" banner row, on inter-card separator rows,
 // on the blank-fill region past the last card, and for negative rowY.
 //
-// Layout reference: the body is rendered by renderRows which emits
+// Layout reference: the body is rendered by renderLines which emits
 // cardContentLines (3) rows per card with one blank separator row between
 // adjacent cards — so cardStride is 4 and card i starts at absolute line
 // i*cardStride. When subscriptionsAvailable=false, View prepends a single
@@ -546,13 +577,17 @@ func (m *Model) View(height, width int) string {
 		empty := mutedStyle().Render("no threads")
 		body = lipgloss.Place(width, bodyHeight, lipgloss.Center, lipgloss.Center, empty)
 	} else {
-		lines := m.renderRows(width)
+		// Every card is cardContentLines tall with a separator between
+		// cards, so the scroll math needs only the line count; render
+		// just the cards in the viewport. The list can hold ~1000
+		// threads, and rendering all of them made each View ~300ms.
+		totalLines := len(m.summaries)*cardStride - 1
 		if !m.hasSnapped || m.snappedSelection != m.selected {
-			m.snapToSelected(bodyHeight, len(lines))
+			m.snapToSelected(bodyHeight, totalLines)
 			m.snappedSelection = m.selected
 			m.hasSnapped = true
 		}
-		maxOffset := len(lines) - bodyHeight
+		maxOffset := totalLines - bodyHeight
 		if maxOffset < 0 {
 			maxOffset = 0
 		}
@@ -563,10 +598,10 @@ func (m *Model) View(height, width int) string {
 			m.yOffset = 0
 		}
 		end := m.yOffset + bodyHeight
-		if end > len(lines) {
-			end = len(lines)
+		if end > totalLines {
+			end = totalLines
 		}
-		visible := lines[m.yOffset:end]
+		visible := m.renderLines(m.yOffset, end, width)
 		if pad := bodyHeight - len(visible); pad > 0 {
 			filler := blankLine(width)
 			out := make([]string, 0, bodyHeight)
@@ -614,19 +649,31 @@ func (m *Model) snapToSelected(height, totalLines int) {
 	}
 }
 
-// renderRows builds the full (un-windowed) line list for the current
-// summaries, with one width-padded blank separator between cards. All
-// emitted lines are exactly `width` columns wide.
-func (m *Model) renderRows(width int) []string {
-	separator := blankLine(width)
-	var lines []string
-	for i, s := range m.summaries {
-		if i > 0 {
-			lines = append(lines, separator)
-		}
-		lines = append(lines, m.renderCard(s, width, i == m.selected)...)
+// renderLines returns lines [start, end) of the flat line list for the
+// current summaries -- cards with one width-padded blank separator
+// between them -- rendering only the cards that overlap that range.
+// All emitted lines are exactly `width` columns wide.
+func (m *Model) renderLines(start, end, width int) []string {
+	if end <= start {
+		return nil
 	}
-	return lines
+	out := make([]string, 0, end-start)
+	var separator string
+	for i := start / cardStride; i < len(m.summaries) && i*cardStride < end; i++ {
+		base := i * cardStride
+		for j, line := range m.renderCard(m.summaries[i], width, i == m.selected) {
+			if abs := base + j; abs >= start && abs < end {
+				out = append(out, line)
+			}
+		}
+		if sep := base + cardContentLines; i < len(m.summaries)-1 && sep >= start && sep < end {
+			if separator == "" {
+				separator = blankLine(width)
+			}
+			out = append(out, separator)
+		}
+	}
+	return out
 }
 
 // blankLine returns an exactly `width`-column-wide empty line, used both

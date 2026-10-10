@@ -216,7 +216,7 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		return nil, fmt.Errorf("bootstrapping %s: %w", token.TeamName, err)
 	}
 	// Order matters between these two: applyBootUsers fills
-	// bot classification, which buildChannelItem reads to bucket app DMs,
+	// the synchronized bot classification, which buildChannelItem reads to bucket app DMs,
 	// and hydrateFirstSight writes the cache rows the sidebar's
 	// channel list is later reconciled against.
 	applyBootUsers(wctx, res)

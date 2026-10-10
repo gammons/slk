@@ -16,6 +16,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/gammons/slk/internal/bubbles/confirmprompt"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	"github.com/gammons/slk/internal/emoji"
@@ -26,7 +27,6 @@ import (
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/channelpicker"
 	"github.com/gammons/slk/internal/ui/compose"
-	"github.com/gammons/slk/internal/ui/confirmprompt"
 	"github.com/gammons/slk/internal/ui/emojipicker"
 	"github.com/gammons/slk/internal/ui/help"
 	"github.com/gammons/slk/internal/ui/imgrender"
@@ -142,6 +142,10 @@ type App struct {
 	focusedPanel   Panel
 	sidebarVisible bool
 	threadVisible  bool
+	// threadCloseAfterUpload records a close that CloseThread refused
+	// while an upload was in flight (the open thread's parent was
+	// deleted). The UploadResultMsg arm runs it once the upload ends.
+	threadCloseAfterUpload bool
 	// stackFront is the content pane (PanelMessages or PanelThread)
 	// that last had focus. Recorded by Update, read by threadInFront.
 	stackFront Panel
@@ -417,7 +421,7 @@ type App struct {
 	// Reaction picker
 	reactionPicker *reactionpicker.Model
 	reactionsView  *reactionsview.Model
-	confirmPrompt  *confirmprompt.Model
+	confirmPrompt  confirmprompt.Model
 	// userProfile is the K-opened read-only "who is this person?"
 	// modal (see internal/ui/userprofile). profileSvc fetches the
 	// full profile; defaulted to noopProfileService in NewApp so the
@@ -489,7 +493,7 @@ type App struct {
 	// openURLCmd; tests inject fakes.
 	browserOpener func(url string) tea.Cmd
 
-	// navHistory owns the per-workspace ctrl+h / ctrl+k browser-style
+	// navHistory owns the per-workspace ctrl+h / ctrl+l browser-style
 	// jump list. See internal/ui/navhistory.go. Lazy-initialized on
 	// first push for each team. Cleared only when slk exits — the
 	// stacks are session-only by design.
@@ -1026,6 +1030,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if changed {
 			a.forceSixelRepaint = true
 		}
+		a.confirmPrompt.SetWidth(msg.Width)
 		return a, nil
 
 	case scrollFlushMsg:
@@ -1500,24 +1505,23 @@ func (a *App) copyPermalinkOfSelected() tea.Cmd {
 // open the link picker modal. All opens converge on OpenLinkMsg,
 // the single routing point in reducer_links.go.
 func (a *App) openLinksOfSelected() tea.Cmd {
-	var text string
+	var links []messages.Link
 	switch a.focusedPanel {
 	case PanelMessages:
 		msg, ok := a.messagepane.SelectedMessage()
 		if !ok {
 			return nil
 		}
-		text = msg.Text
+		links = messages.MessageLinks(msg)
 	case PanelThread:
 		reply := a.threadPanel.SelectedReply()
 		if reply == nil {
 			return nil
 		}
-		text = reply.Text
+		links = messages.MessageLinks(*reply)
 	default:
 		return nil
 	}
-	links := messages.ExtractLinks(text)
 	switch len(links) {
 	case 0:
 		return func() tea.Msg { return ToastMsg{Text: "No links in message"} }
@@ -1953,12 +1957,11 @@ func (a *App) maybeFetchOlderHistory(atTop bool) tea.Cmd {
 // both lowercase `q` and Ctrl+C (the latter intercepted globally so an
 // accidental Ctrl+C in any mode never silently kills the app).
 func (a *App) openQuitConfirm() {
-	a.confirmPrompt.Open(
+	a.openConfirmPrompt(
 		"Quit slk?",
 		"All workspace connections will close.",
 		func() tea.Msg { return tea.Quit() },
 	)
-	a.SetMode(ModeConfirm)
 }
 
 func (a *App) handleEnter() tea.Cmd {
@@ -2090,11 +2093,17 @@ func (a *App) applyThreadBreadcrumb(channelID, channelType string) {
 // by openThreadForSelectedMessage (parent taken from the pane buffer)
 // and openThreadForPermalink (parent reconstructed from cache/stub).
 func (a *App) openThreadPanel(parent messages.MessageItem, channelID, threadTS string) tea.Cmd {
+	if a.compose.Uploading() || a.threadCompose.Uploading() {
+		return a.uploadToastCmd("Upload in progress", 2*time.Second)
+	}
+	a.cancelEdit()
 	a.threadVisible = true
 	a.statusbar.SetInThread(true)
 	a.focusedPanel = PanelThread
 	a.threadPanel.SetThread(parent, nil, channelID, threadTS)
 	a.threadCompose.SetChannel(a.threadComposeChannelName(channelID))
+	a.threadCompose.SetActiveChannel(channelID)
+	a.threadCompose.SetDraftContext(a.activeTeamID, channelID, threadTS)
 	a.applyThreadBreadcrumb(channelID, "")
 	// A fresh thread must not inherit the previous thread's
 	// "also send to channel" toggle.
@@ -2105,14 +2114,26 @@ func (a *App) openThreadPanel(parent messages.MessageItem, channelID, threadTS s
 	chID := ids.ChannelID(channelID)
 	tTS := ids.ThreadTS(threadTS)
 	var batch []tea.Cmd
-	if cached := threads.CacheRead(chID, tTS); len(cached) > 1 {
-		replies := cached[1:] // strip parent; reducer expects replies-only
-		batch = append(batch, func() tea.Msg {
-			return ThreadRepliesLoadedMsg{ThreadTS: threadTS, Replies: replies}
-		})
+	if cmd := cachedThreadRepliesCmd(threads, chID, tTS); cmd != nil {
+		batch = append(batch, cmd)
 	}
 	batch = append(batch, func() tea.Msg { return threads.Fetch(chID, tTS) })
 	return tea.Batch(batch...)
+}
+
+// cachedThreadRepliesCmd reads the thread from cache now and returns a
+// cmd delivering its replies as a FromCache ThreadRepliesLoadedMsg, or
+// nil when the cache holds no replies. Every thread open pairs it with
+// the network fetch, which alone marks the thread read.
+func cachedThreadRepliesCmd(threads core.ThreadService, chID ids.ChannelID, threadTS ids.ThreadTS) tea.Cmd {
+	cached := threads.CacheRead(chID, threadTS)
+	if len(cached) <= 1 {
+		return nil
+	}
+	replies := cached[1:] // strip parent; reducer expects replies-only
+	return func() tea.Msg {
+		return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS), Replies: replies, FromCache: true}
+	}
 }
 
 func (a *App) SetMode(mode Mode) {
@@ -2254,6 +2275,12 @@ func (a *App) ToggleThread() {
 }
 
 func (a *App) CloseThread() {
+	if a.compose.Uploading() || a.threadCompose.Uploading() {
+		return
+	}
+	a.threadCloseAfterUpload = false
+	a.cancelEdit()
+	a.threadCompose.SetDraftContext("", "", "")
 	a.clearSelections()
 	a.threadVisible = false
 	a.statusbar.SetInThread(false)
@@ -2275,7 +2302,8 @@ func (a *App) CloseThread() {
 // has highlighted (so the right thread panel shows the parent immediately),
 // then schedules the network fetch.
 //
-// When debounce is true (j/k key handlers), the fetch is delayed by
+// When debounce is true (j/k key handlers), the panel also shows the
+// cached replies immediately, and the fetch is delayed by
 // openThreadDebounceDelay and coalesced via pendingThreadFetchGen so a
 // held-j burst produces exactly one HTTP call. When debounce is false
 // (activation, list reload, G jump), the fetch fires immediately so
@@ -2286,6 +2314,9 @@ func (a *App) CloseThread() {
 // hammering the Slack API and clobbering an in-progress read on every j/k
 // press or list reload).
 func (a *App) openSelectedThreadCmd(debounce bool) tea.Cmd {
+	if a.compose.Uploading() || a.threadCompose.Uploading() {
+		return a.uploadToastCmd("Upload in progress", 2*time.Second)
+	}
 	sum, ok := a.threadsView.SelectedSummary()
 	if !ok {
 		return nil
@@ -2293,6 +2324,7 @@ func (a *App) openSelectedThreadCmd(debounce bool) tea.Cmd {
 	if sum.ChannelID == a.lastOpenedChannelID && sum.ThreadTS == a.lastOpenedThreadTS {
 		return nil
 	}
+	a.cancelEdit()
 	a.lastOpenedChannelID = sum.ChannelID
 	a.lastOpenedThreadTS = sum.ThreadTS
 	a.threadVisible = true
@@ -2304,8 +2336,19 @@ func (a *App) openSelectedThreadCmd(debounce bool) tea.Cmd {
 		Text:     sum.ParentText,
 		ThreadTS: sum.ThreadTS,
 	}
-	a.threadPanel.SetThread(parent, nil, sum.ChannelID, sum.ThreadTS)
+	// j/k: show the cached replies with the parent now. Only the fetch,
+	// and the mark-read its result triggers, wait for the debounce, so
+	// held keys still mark nothing read on the way past.
+	var cachedReplies []messages.MessageItem
+	if debounce {
+		if cached := a.threads.CacheRead(ids.ChannelID(sum.ChannelID), ids.ThreadTS(sum.ThreadTS)); len(cached) > 1 {
+			cachedReplies = cached[1:] // strip parent
+		}
+	}
+	a.threadPanel.SetThread(parent, cachedReplies, sum.ChannelID, sum.ThreadTS)
 	a.threadCompose.SetChannel(a.threadComposeChannelName(sum.ChannelID))
+	a.threadCompose.SetActiveChannel(sum.ChannelID)
+	a.threadCompose.SetDraftContext(a.activeTeamID, sum.ChannelID, sum.ThreadTS)
 	a.applyThreadBreadcrumb(sum.ChannelID, sum.ChannelType)
 	// A fresh thread must not inherit the previous thread's
 	// "also send to channel" toggle.
@@ -2328,11 +2371,8 @@ func (a *App) openSelectedThreadCmd(debounce bool) tea.Cmd {
 	tThreadTS := ids.ThreadTS(threadTS)
 	if !debounce {
 		var batch []tea.Cmd
-		if cached := threads.CacheRead(tChID, tThreadTS); len(cached) > 1 {
-			replies := cached[1:] // strip parent; reducer expects replies-only
-			batch = append(batch, func() tea.Msg {
-				return ThreadRepliesLoadedMsg{ThreadTS: threadTS, Replies: replies}
-			})
+		if cmd := cachedThreadRepliesCmd(threads, tChID, tThreadTS); cmd != nil {
+			batch = append(batch, cmd)
 		}
 		batch = append(batch, func() tea.Msg { return threads.Fetch(tChID, tThreadTS) })
 		return tea.Batch(batch...)
@@ -3183,6 +3223,9 @@ func (a *App) SetInitialChannel(channelID, channelName string, msgs []messages.M
 	a.messagepane.SetChannel(channelName, "")
 	a.messagepane.SetMessages(msgs)
 	a.compose.SetChannel(channelName)
+	a.compose.SetActiveChannel(channelID)
+	a.compose.SetDraftContext(a.activeTeamID, channelID, "")
+	a.threadCompose.SetActiveChannel(channelID)
 	a.statusbar.SetChannel(channelName)
 }
 
@@ -3303,6 +3346,21 @@ func (a *App) SetPresenceService(s core.PresenceService) {
 // SetThemeOverrides stores the config theme overrides for applying on switch.
 func (a *App) SetThemeOverrides(overrides core.Theme) {
 	a.themeOverrides = overrides
+}
+
+// applyTheme switches the process-wide theme and brings every component
+// that does not re-read it per frame up to date: render caches are
+// invalidated, and components holding a style snapshot get a fresh one.
+// Every in-App theme change goes through here, so a component that
+// snapshots styles is pushed in one place.
+func (a *App) applyTheme(name string) {
+	styles.Apply(name, a.themeOverrides)
+	a.invalidateAllWinModelCaches()
+	a.threadPanel.InvalidateCache()
+	a.sidebar.InvalidateCache()
+	a.compose.RefreshStyles()
+	a.threadCompose.RefreshStyles()
+	a.confirmPrompt.SetStyles(confirmPromptStyles())
 }
 
 // SetTypingEnabled controls whether typing indicators are shown and sent.
@@ -3646,6 +3704,11 @@ const maxAttachmentSize = 10 * 1024 * 1024 // 10 MB cap
 // dispatch, the compose's uploading flag is set so the UI can show
 // progress; the actual UploadResultMsg arm in Update clears it.
 func (a *App) submitWithAttachments(c *compose.Model) tea.Cmd {
+	// Second line of defence: both callers sit behind handleInsertMode's
+	// upload guard, so no key reaches this while an upload is in flight.
+	if a.compose.Uploading() || a.threadCompose.Uploading() {
+		return a.uploadToastCmd("Upload in progress", 2*time.Second)
+	}
 	if a.editing.IsActive() {
 		return a.uploadToastCmd("Cannot attach files to an edit (send a new message)", 3*time.Second)
 	}
@@ -4025,14 +4088,13 @@ func (a *App) beginDeleteOfSelected() tea.Cmd {
 		preview = string(runes[:maxPreview]) + "…"
 	}
 
-	a.confirmPrompt.Open(
+	a.openConfirmPrompt(
 		"Delete message?",
 		preview,
 		func() tea.Msg {
 			return DeleteMessageMsg{ChannelID: channelID, TS: ts}
 		},
 	)
-	a.SetMode(ModeConfirm)
 	return nil
 }
 

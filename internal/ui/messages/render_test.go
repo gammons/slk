@@ -935,3 +935,23 @@ func TestRepaintBgToSelectionTintBackwardCompat(t *testing.T) {
 		t.Errorf("pass-through: got %q, want %q", got, noBg)
 	}
 }
+
+// TestEphemeralLabel: an ephemeral renders a muted "Only visible to
+// you" row above its author line; a regular message does not.
+func TestEphemeralLabel(t *testing.T) {
+	const labelText = "Only visible to you"
+	msg := MessageItem{TS: "1.0", UserName: "slackbot", Text: "You mentioned someone", Timestamp: "3:04 PM", Ephemeral: true}
+
+	m := New([]MessageItem{msg}, "general")
+	out := ansi.Strip(m.View(20, 60))
+	labelIdx, nameIdx := strings.Index(out, labelText), strings.Index(out, "slackbot")
+	if labelIdx < 0 || nameIdx < 0 || labelIdx >= nameIdx {
+		t.Errorf("want %q before the author; label@%d name@%d in:\n%s", labelText, labelIdx, nameIdx, out)
+	}
+
+	msg.Ephemeral = false
+	m = New([]MessageItem{msg}, "general")
+	if out := ansi.Strip(m.View(20, 60)); strings.Contains(out, labelText) {
+		t.Errorf("regular message rendered the ephemeral label:\n%s", out)
+	}
+}

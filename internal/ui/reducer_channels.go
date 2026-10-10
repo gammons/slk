@@ -124,8 +124,11 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			// error before returning nil. cloneMessageItems gives each
 			// window its own copy — two same-channel windows must not
 			// alias one slice (in-place model writes would cross-leak).
+			// Ephemerals already on screen are carried over: the fetch
+			// never contains them, and they belong to this channel
+			// (a channel switch clears the pane before its fetch lands).
 			if m.Messages != nil {
-				mm.SetMessages(cloneMessageItems(m.Messages))
+				mm.SetMessages(keepEphemerals(cloneMessageItems(m.Messages), mm.Messages()))
 			}
 		}
 		// Authoritative permalink completion: this is the freshest
@@ -285,7 +288,7 @@ func (a *App) retargetActiveChannel(id, name, chType string) {
 	a.typingOut.ResetThrottle() // reset typing throttle for new channel
 	a.compose.SetChannel(name)
 	a.compose.SetActiveChannel(id)
-	a.threadCompose.SetActiveChannel(id)
+	a.compose.SetDraftContext(a.activeTeamID, id, "")
 	// Fire the membership fetcher on a fresh goroutine so it can't
 	// block the Update loop. Fire-and-forget -- results arrive
 	// later via ChannelMembershipMsg. main.go's MembershipFetch

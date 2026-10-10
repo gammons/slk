@@ -60,7 +60,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/gammons/slk/internal/ids"
-	"github.com/gammons/slk/internal/ui/styles"
 )
 
 var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
@@ -122,10 +121,23 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		if m.TeamID != a.activeTeamID {
 			return nil, true
 		}
+		// SetUserNames hands every pane this one map, so check and
+		// write it here, once: a pane can't tell from the map whether
+		// it has applied a name another pane already wrote. Each pane's
+		// PatchUserName always applies.
+		if a.userNames == nil {
+			a.userNames = map[string]string{}
+		}
+		if cur, ok := a.userNames[m.UserID]; ok && cur == m.DisplayName {
+			return nil, true
+		}
+		a.userNames[m.UserID] = m.DisplayName
 		for _, mp := range a.allWinModels() {
 			mp.PatchUserName(m.UserID, m.DisplayName)
 		}
 		a.threadPanel.PatchUserName(m.UserID, m.DisplayName)
+		a.threadsView.PatchUserName(m.UserID, m.DisplayName)
+		a.activityView.PatchUserName(m.UserID, m.DisplayName)
 		// IsBot affects DM channel-type classification, but that's
 		// orchestrated by DMNameResolvedMsg; this handler is only
 		// the in-history name patch. IsBot is carried for forward
@@ -204,12 +216,7 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 		// revert to the global default on startup until the user
 		// manually switches workspaces.
 		if m.Theme != "" {
-			styles.Apply(m.Theme, a.themeOverrides)
-			a.invalidateAllWinModelCaches()
-			a.threadPanel.InvalidateCache()
-			a.sidebar.InvalidateCache()
-			a.compose.RefreshStyles()
-			a.threadCompose.RefreshStyles()
+			a.applyTheme(m.Theme)
 		}
 		if m.SidebarWidth != 0 {
 			a.sidebar.SetWidth(m.SidebarWidth)
@@ -319,6 +326,12 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 		a.lastChannelByTeam[a.activeTeamID] = a.activeChannelID
 	}
 	a.cancelEdit()
+	// Detach the main composer from the outgoing workspace's channel
+	// so its draft (text + attachments) is keyed and preserved rather
+	// than carried into the new workspace. CloseThread below detaches
+	// the thread composer; the queued ChannelSelectedMsg for the new
+	// workspace rebinds the main composer once activeTeamID is set.
+	a.compose.SetDraftContext("", "", "")
 	// Always land in ViewChannels and drop any per-workspace
 	// threads-view state so stale summaries / unread badges from
 	// the previous workspace can't leak in. The sidebar cursor is
@@ -342,7 +355,9 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	// cross-workspace channel. The queued ChannelSelectedMsg for
 	// this workspace re-populates it.
 	a.resetWindowTree()
-	a.compose.Reset()
+	// Note: the outgoing workspace's composer draft was detached above
+	// (SetDraftContext) rather than Reset, so the saved text +
+	// attachments survive a switch back.
 	a.statusbar.SetSyncing(false) // defensive: don't carry stale sync state across workspaces
 	// resetWindowTree replaced the pane with a fresh empty model;
 	// the queued ChannelSelectedMsg below paints it via the
@@ -371,15 +386,10 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	pres, dndEnabled, dndEnd, _ := a.presence.Status(a.activeTeamID)
 	a.statusbar.SetStatus(pres, dndEnabled, dndEnd)
 	// Apply per-workspace theme. Must run on Update goroutine so
-	// the component cache invalidations and compose-style refreshes
-	// below take effect on the next render.
+	// applyTheme's cache invalidations and style refreshes take
+	// effect on the next render.
 	if m.Theme != "" {
-		styles.Apply(m.Theme, a.themeOverrides)
-		a.invalidateAllWinModelCaches()
-		a.threadPanel.InvalidateCache()
-		a.sidebar.InvalidateCache()
-		a.compose.RefreshStyles()
-		a.threadCompose.RefreshStyles()
+		a.applyTheme(m.Theme)
 	}
 	if m.SidebarWidth != 0 {
 		a.sidebar.SetWidth(m.SidebarWidth)

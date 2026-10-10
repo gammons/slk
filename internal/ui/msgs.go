@@ -58,7 +58,7 @@ type (
 		// back to a default `#` glyph.
 		Type string
 		// FromHistory marks navigations synthesized by Ctrl+H /
-		// Ctrl+K. The case ChannelSelectedMsg handler suppresses
+		// Ctrl+L. The case ChannelSelectedMsg handler suppresses
 		// pushing onto navHistory when this is true so back/forward
 		// walks don't grow the stack on every step. Visit recording
 		// is unaffected — going back to a channel still updates its
@@ -138,6 +138,12 @@ type (
 	ThreadRepliesLoadedMsg struct {
 		ThreadTS string
 		Replies  []messages.MessageItem
+		// FromCache marks the instant render from SQLite that precedes
+		// the network fetch. It only renders: the cache can lag Slack
+		// (or hold rows Slack dropped), so marking the thread read from
+		// it raced the fetched result's mark with a stale cursor. The
+		// zero value is the fetched result, which alone marks.
+		FromCache bool
 	}
 	SendThreadReplyMsg struct {
 		ChannelID string
