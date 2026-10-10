@@ -249,7 +249,16 @@ All in `internal/ui`, white-box, on `newTestApp` and the existing helpers.
 ## Out of scope
 
 - Applying ephemeral `message_changed`. This is how `/giphy`'s Shuffle replaces its preview; it belongs with sub-project 2, which is the only way to trigger it.
-- Block Kit `actions` buttons (no capture of the request).
+- **Interactive Block Kit (an eventual goal; its own sub-project under #247).** Out of scope here, but this design leaves room for it. When it is taken up, there are two stages, in this order:
+  1. **Pressing Block Kit buttons.**
+     - `core.ActionElement` carries only `Kind` and `Label`. It would gain `action_id`, `block_id` and `value`, the way Part A added `LegacyAction`.
+     - The request for Slack's `blocks.actions` endpoint must be captured from the web client first, as Part A did for `chat.attachmentAction`.
+     - `InteractionService` gains a `PressBlockAction` method beside `PressAttachmentAction`.
+     - The dialog and `internal/bubbles/buttonrow` are reused unchanged.
+  2. **Modals.** Many apps answer a Block Kit button by opening a modal with `views.open`: a form with inputs, selects and date pickers, submitted with `views.submit`. This needs:
+     - a form component;
+     - a renderer for Slack "view" payloads;
+     - a way to show rendered blocks inside a dialog. `Choice.Body` is plain wrapped text today. Because `internal/bubbles` may not import `internal/ui`, the host would render the blocks with the Block Kit renderer and pass pre-styled lines in, which matches RFC #236's plan to inject Block Kit rendering as an adapter. That is an additive change to the component, not a redesign.
 - `select` menus. They render in the pane, but the dialog leaves them out.
 - Pressing buttons on non-ephemeral messages.
 - The shared modal-chrome substrate (#236's next stage).
