@@ -125,7 +125,7 @@ func (h *rtmEventHandler) reconcileStarredConversations(ctx context.Context) {
 	}
 	if h.wsCtx.UserResolver != nil && len(unresolved) > 0 && ctx.Err() == nil {
 		// Reuse the cold-boot batching path rather than serially issuing a
-		// profile request per starred peer on the WebSocket read goroutine.
+		// profile request per starred peer on the event owner.
 		h.wsCtx.UserResolver.ResolveNowContext(ctx, unresolved)
 		for _, id := range unresolved {
 			if ctx.Err() != nil {
@@ -136,16 +136,18 @@ func (h *rtmEventHandler) reconcileStarredConversations(ctx context.Context) {
 			}
 		}
 	}
-	for _, id := range peers {
-		if h.db != nil {
-			if u, err := h.db.GetUser(id); err == nil && u.IsBot {
-				h.wsCtx.MarkBotUser(id)
+	// A quiet peer cannot rely on message/membership lookups to retry. Use
+	// the background resolver's own context, including when this pass's
+	// shared budget is exhausted; success wakes the event owner for repair.
+	if h.wsCtx.UserResolver != nil {
+		for _, id := range unresolved {
+			if !peerResolved(id) {
+				h.wsCtx.UserResolver.Request(id)
 			}
 		}
-		// Repairs update both workspace snapshots and active UI publication,
-		// not just the name store. Existing rows never need another metadata
-		// request merely because an earlier profile lookup failed.
-		h.refreshDMPeerFromCache(id)
+	}
+	for _, id := range peers {
+		h.repairDMPeer(id)
 	}
 	for _, ch := range added {
 		if item, finder, ok := h.addConversation(ch); ok {

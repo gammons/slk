@@ -478,7 +478,7 @@ func (h *rtmEventHandler) OnConnect() {
 	// thunder; a real long-disconnect-then-reconnect refreshes section
 	// state we may have missed during the gap.
 	//
-	// Run synchronously on the WS read goroutine. This briefly blocks
+	// Run synchronously on the event owner. This briefly blocks
 	// inbound event delivery during the bootstrap HTTP call, but that
 	// cost is bounded — at most one call per 30s per workspace — and
 	// avoids racing wsCtx.Channels mutations against the same loop's

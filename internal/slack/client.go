@@ -285,7 +285,8 @@ func (c *Client) UserID() string {
 	return c.userID
 }
 
-// WsDone returns a channel that is closed when the WebSocket read loop exits.
+// WsDone returns a channel closed after the WebSocket event owner exits,
+// including the reader stopping and OnDisconnect completing.
 func (c *Client) WsDone() <-chan struct{} {
 	return c.wsDone
 }
@@ -455,9 +456,12 @@ func (c *Client) StartWebSocket(handler EventHandler) error {
 		return conn.WriteControl(websocket.PongMessage, []byte(msg), time.Now().Add(10*time.Second))
 	})
 
+	// Reading and dispatching are separate so local deferred work can wake
+	// the event owner while the socket is idle. The unbuffered channel keeps
+	// frame delivery bounded; only the dispatch goroutine calls the handler.
+	messages := make(chan []byte)
 	go func() {
-		defer close(c.wsDone)
-		defer handler.OnDisconnect()
+		defer close(messages)
 		for {
 			_, message, err := conn.ReadMessage()
 			if err != nil {
@@ -469,7 +473,27 @@ func (c *Client) StartWebSocket(handler EventHandler) error {
 			}
 			// Reset deadline on every successful read
 			conn.SetReadDeadline(time.Now().Add(wsTimeout))
-			dispatchWebSocketEvent(message, handler)
+			messages <- message
+		}
+	}()
+	go func() {
+		defer close(c.wsDone)
+		defer handler.OnDisconnect()
+		pendingHandler, _ := handler.(PendingEventHandler)
+		var pending <-chan struct{}
+		if pendingHandler != nil {
+			pending = pendingHandler.PendingEvents()
+		}
+		for {
+			select {
+			case message, ok := <-messages:
+				if !ok {
+					return
+				}
+				dispatchWebSocketEvent(message, handler)
+			case <-pending:
+				pendingHandler.OnPendingEvents()
+			}
 		}
 	}()
 

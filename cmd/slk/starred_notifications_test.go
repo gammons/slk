@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/gammons/slk/internal/cache"
@@ -30,26 +33,42 @@ func TestStarredPeerBatchCancellationAndRetry(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	batches := 0
+	batchErrors := make(chan error, 2)
+	allowRetry := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseRetry := func() { releaseOnce.Do(func() { close(allowRetry) }) }
+	defer releaseRetry()
 	batcher := contextUserBatcherFunc(func(batchCtx context.Context, ids map[string]int64) ([]edge.User, error) {
 		batches++
+		var err error
 		if len(ids) != 2 {
-			t.Fatalf("batch IDs = %v, want both unknown peers", ids)
+			err = fmt.Errorf("batch IDs = %v, want both unknown peers", ids)
+		} else if batches == 1 && batchCtx != ctx {
+			err = fmt.Errorf("batch lost caller's cancellation context")
+		}
+		if err != nil {
+			t.Error(err) // valid on the flush timer goroutine; never call FailNow here
+			batchErrors <- err
+			return nil, err
 		}
 		if batches == 1 {
-			if batchCtx != ctx {
-				t.Fatal("batch lost caller's cancellation context")
-			}
 			cancel() // emulate exhaustion of the shared reconnect HTTP budget
 			return nil, batchCtx.Err()
 		}
+		<-allowRetry
 		return []edge.User{
 			edgeUserRecord("U1", "alice", "Alice", "", "T1", 1, false),
 			edgeUserRecord("U2", "bob", "Bob", "", "T1", 1, true),
 		}, nil
 	})
 	wctx := &WorkspaceContext{TeamID: "T1", SectionStore: store, UserNames: newUserNameStore(nil)}
-	// A nil per-user client makes any serial profile fallback a test failure.
-	wctx.UserResolver = newUserResolver("T1", nil, db, nil, nil, batcher, nil)
+	// Give error-path fallbacks a real client so a failed batch assertion
+	// reports its cause instead of panicking on a nil client.
+	srv := newFakeSlack(t, map[string]string{
+		"/api/users.info": `{"ok":false,"error":"unexpected_fallback"}`,
+	})
+	watch := newResolvedWatch(2, nil)
+	wctx.UserResolver = newUserResolver("T1", newTestClient(t, srv.Server), db, nil, watch.send, batcher, nil)
 	wctx.UserResolver.names = wctx.UserNames
 	metadata := 0
 	h := &rtmEventHandler{workspaceID: "T1", wsCtx: wctx, db: db, resolveConversation: func(_ context.Context, id string) (*slack.Channel, error) {
@@ -60,12 +79,26 @@ func TestStarredPeerBatchCancellationAndRetry(t *testing.T) {
 	if len(wctx.Channels) != 2 || wctx.Channels[0].Name != "U1" {
 		t.Fatalf("canceled batch lost rows: %+v", wctx.Channels)
 	}
-	h.reconcileStarredConversations(context.Background())
+	releaseRetry()
+	select {
+	case <-watch.done:
+	case err := <-batchErrors:
+		t.Fatal(err) // report immediately on the test goroutine
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled budget did not schedule a background batch retry")
+	}
+	h.OnPendingEvents()
 	if metadata != 2 || batches != 2 {
-		t.Fatalf("metadata=%d batches=%d, want 2 each across both passes", metadata, batches)
+		t.Fatalf("metadata=%d batches=%d, want 2 each without another reconnect", metadata, batches)
 	}
 	if wctx.Channels[0].Name != "Alice" || wctx.FinderItems[1].Name != "Bob" || wctx.Channels[1].Type != "app" {
 		t.Fatalf("batch retry left stale rows: %+v / %+v", wctx.Channels, wctx.FinderItems)
+	}
+	srv.mu.Lock()
+	fallbacks := len(srv.reqs)
+	srv.mu.Unlock()
+	if fallbacks != 0 {
+		t.Fatalf("per-user fallbacks = %d, want none", fallbacks)
 	}
 }
 

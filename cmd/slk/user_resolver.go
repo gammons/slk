@@ -59,6 +59,11 @@ type userResolver struct {
 	avatars  *avatar.Cache
 	send     func(tea.Msg)
 	inflight sync.Map // userID -> struct{}
+	// Successful lookups queue peer IDs for the serialized event owner.
+	// Coalesce repeat resolutions without blocking background or synchronous
+	// callers; neither may mutate conversation slices here.
+	resolvedPeers sync.Map // userID -> struct{}
+	resolvedWake  chan struct{}
 	// sem bounds concurrent round trips on the per-user users.info
 	// path (resolveOne). Buffered, so acquiring it happens inside the
 	// request goroutine and Request itself never blocks -- it is
@@ -97,15 +102,16 @@ func newUserResolver(
 	degraded func() bool,
 ) *userResolver {
 	return &userResolver{
-		teamID:   teamID,
-		client:   client,
-		db:       db,
-		avatars:  avatars,
-		send:     send,
-		sem:      make(chan struct{}, userResolverConcurrency),
-		batcher:  batcher,
-		degraded: degraded,
-		pending:  map[string]struct{}{},
+		teamID:       teamID,
+		client:       client,
+		db:           db,
+		avatars:      avatars,
+		send:         send,
+		sem:          make(chan struct{}, userResolverConcurrency),
+		resolvedWake: make(chan struct{}, 1),
+		batcher:      batcher,
+		degraded:     degraded,
+		pending:      map[string]struct{}{},
 	}
 }
 
@@ -119,7 +125,8 @@ func (r *userResolver) Request(userID string) {
 	if _, exists := r.inflight.LoadOrStore(userID, struct{}{}); exists {
 		return
 	}
-	// Skip if already resolved (in cache.User). This is the hot path
+	// Skip if already named (in cache.User); unnamed placeholder rows still
+	// need a first successful profile lookup. This is the hot path
 	// for membership.Manager which calls Request for every channel
 	// member returned by conversations.members; without this, every
 	// channel-switch refetches users.info for each member, which is
@@ -134,7 +141,7 @@ func (r *userResolver) Request(userID string) {
 	// both miss the cache, both then LoadOrStore (one wins, the loser
 	// silently returns). Store-first + check-second means at most one
 	// goroutine ever passes the cache check.
-	if _, err := r.db.GetUser(userID); err == nil {
+	if u, err := r.db.GetUser(userID); err == nil && (u.DisplayName != "" || u.Name != "") {
 		r.inflight.Delete(userID)
 		return
 	}
@@ -227,6 +234,7 @@ func (r *userResolver) resolveOneContext(ctx context.Context, userID string) {
 	// switch snapshot even if the UserResolvedMsg below is dropped
 	// because the workspace is not the active one.
 	r.names.Set(userID, name)
+	r.queueResolvedPeer(userID)
 	if r.send != nil {
 		// Status has already been persisted and sent by applyProfileStatus.
 		r.send(ui.UserResolvedMsg{
@@ -349,7 +357,7 @@ func (r *userResolver) flush() {
 	updated := make(map[string]int64, len(ids))
 	for _, id := range ids {
 		// 0 is the conditional protocol's "never seen, send the full
-		// record" — the resolver only ever queues cache misses.
+		// record" — queued users are missing or unnamed placeholders.
 		updated[id] = 0
 	}
 	users, err := r.batcher.UsersInfo(context.Background(), updated)
@@ -468,6 +476,7 @@ func (r *userResolver) applyEdgeUser(u edge.User) {
 		Version:          u.Version,
 	})
 	r.names.Set(u.ID, name) // see resolveOne
+	r.queueResolvedPeer(u.ID)
 	if r.send != nil {
 		// Status before UserResolvedMsg, as in resolveOne.
 		r.send(ui.UserStatusChangeMsg{

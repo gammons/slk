@@ -80,6 +80,18 @@ func (h *rtmEventHandler) upsertFinderItem(item core.ChannelFinderItem) (core.Ch
 	return item, true
 }
 
+// repairDMPeer imports cached bot classification and repairs both DM snapshots.
+// Only the serialized event owner may call it, including before a newly
+// recovered conversation is inserted so its initial type is correct.
+func (h *rtmEventHandler) repairDMPeer(userID string) {
+	if h.db != nil {
+		if u, err := h.db.GetUser(userID); err == nil && u.IsBot {
+			h.wsCtx.MarkBotUser(userID)
+		}
+	}
+	h.refreshDMPeerFromCache(userID)
+}
+
 // refreshDMPeerFromCache repairs existing DM rows after a deferred profile
 // resolves. It preserves section/order/visit metadata, updates both workspace
 // snapshots independently, and publishes through the normal active-workspace

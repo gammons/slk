@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/gammons/slk/internal/cache"
@@ -25,6 +26,9 @@ func TestStarredRecoveredPeerRetries(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			var calls atomic.Int32
+			allowRetry := make(chan struct{})
+			var releaseOnce sync.Once
+			releaseRetry := func() { releaseOnce.Do(func() { close(allowRetry) }) }
 			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				n := calls.Add(1)
 				w.Header().Set("Content-Type", "application/json")
@@ -35,16 +39,24 @@ func TestStarredRecoveredPeerRetries(t *testing.T) {
 					_, _ = w.Write([]byte(`{"ok":false,"error":"temporarily_unavailable"}`))
 					return
 				}
+				<-allowRetry
 				_, _ = w.Write([]byte(`{"ok":true,"user":{"id":"U1","name":"alice","is_bot":true,"profile":{"display_name":"Alice"}}}`))
 			}))
 			defer srv.Close()
+			defer releaseRetry()
 			store := service.NewSectionStore()
 			if err := store.Bootstrap(context.Background(), &fakeSectionsClient{sections: []slk.SidebarSection{{ID: "ST", Type: "stars"}}, starIDs: []string{"D1"}}); err != nil {
 				t.Fatal(err)
 			}
 			wctx := &WorkspaceContext{TeamID: "T1", SectionStore: store, UserNames: newUserNameStore(nil)}
-			wctx.UserResolver = newUserResolver("T1", newTestClient(t, srv), db, nil, nil, nil, nil)
+			watch := newResolvedWatch(1, nil)
+			wctx.UserResolver = newUserResolver("T1", newTestClient(t, srv), db, nil, watch.send, nil, nil)
 			wctx.UserResolver.names = wctx.UserNames
+			if mode == "cache later filled" || mode == "inactive workspace" {
+				// Model a lookup already owned by another producer. Reconnect
+				// must not schedule a duplicate while that producer fills cache.
+				wctx.UserResolver.inflight.Store("U1", struct{}{})
+			}
 			sender := &captureSender{}
 			h := &rtmEventHandler{workspaceID: "T1", wsCtx: wctx, db: db, program: sender, isActive: func() bool { return mode != "inactive workspace" }}
 			metadataCalls := 0
@@ -69,6 +81,15 @@ func TestStarredRecoveredPeerRetries(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			releaseRetry()
+			if mode == "transient failure" || mode == "shared context canceled" {
+				select {
+				case <-watch.done:
+				case <-time.After(5 * time.Second):
+					t.Fatal("scheduled profile retry did not finish")
+				}
+			}
+			wctx.UserResolver.inflight.Delete("U1")
 			h.reconcileStarredConversations(context.Background())
 			if metadataCalls != 1 || len(wctx.Channels) != 1 || len(wctx.FinderItems) != 1 {
 				t.Fatalf("retry duplicated/looked up row: metadata=%d", metadataCalls)
