@@ -50,7 +50,8 @@ type userBatcher interface {
 // back to the per-user Web API users.info path (see resolveOne).
 // Deduplicates concurrent requests for the same userID; failures are
 // silent (the row stays rendered as its user ID). Bound to a single
-// workspace because user IDs are workspace-scoped.
+// workspace because notifications and external classification are scoped to it;
+// cached profiles can be shared across workspaces by user ID.
 type userResolver struct {
 	teamID   string
 	client   *slackclient.Client
@@ -58,6 +59,11 @@ type userResolver struct {
 	avatars  *avatar.Cache
 	send     func(tea.Msg)
 	inflight sync.Map // userID -> struct{}
+	// Successful lookups queue peer IDs for the serialized event owner.
+	// Coalesce repeat resolutions without blocking background or synchronous
+	// callers; neither may mutate conversation slices here.
+	resolvedPeers sync.Map // userID -> struct{}
+	resolvedWake  chan struct{}
 	// sem bounds concurrent round trips on the per-user users.info
 	// path (resolveOne). Buffered, so acquiring it happens inside the
 	// request goroutine and Request itself never blocks -- it is
@@ -96,15 +102,16 @@ func newUserResolver(
 	degraded func() bool,
 ) *userResolver {
 	return &userResolver{
-		teamID:   teamID,
-		client:   client,
-		db:       db,
-		avatars:  avatars,
-		send:     send,
-		sem:      make(chan struct{}, userResolverConcurrency),
-		batcher:  batcher,
-		degraded: degraded,
-		pending:  map[string]struct{}{},
+		teamID:       teamID,
+		client:       client,
+		db:           db,
+		avatars:      avatars,
+		send:         send,
+		sem:          make(chan struct{}, userResolverConcurrency),
+		resolvedWake: make(chan struct{}, 1),
+		batcher:      batcher,
+		degraded:     degraded,
+		pending:      map[string]struct{}{},
 	}
 }
 
@@ -118,7 +125,8 @@ func (r *userResolver) Request(userID string) {
 	if _, exists := r.inflight.LoadOrStore(userID, struct{}{}); exists {
 		return
 	}
-	// Skip if already resolved (in cache.User). This is the hot path
+	// Skip if already named (in cache.User); unnamed placeholder rows still
+	// need a first successful profile lookup. This is the hot path
 	// for membership.Manager which calls Request for every channel
 	// member returned by conversations.members; without this, every
 	// channel-switch refetches users.info for each member, which is
@@ -133,7 +141,7 @@ func (r *userResolver) Request(userID string) {
 	// both miss the cache, both then LoadOrStore (one wins, the loser
 	// silently returns). Store-first + check-second means at most one
 	// goroutine ever passes the cache check.
-	if _, err := r.db.GetUser(userID); err == nil {
+	if u, err := r.db.GetUser(userID); err == nil && (u.DisplayName != "" || u.Name != "") {
 		r.inflight.Delete(userID)
 		return
 	}
@@ -155,11 +163,26 @@ func (r *userResolver) Request(userID string) {
 // is degraded. Callers run it on its own goroutine.
 func (r *userResolver) resolveOne(userID string) {
 	defer r.inflight.Delete(userID)
+	r.resolveOneContext(context.Background(), userID)
+}
+
+// resolveOneContext is the synchronous, context-bounded variant of resolveOne.
+// Reconnect hydration uses it before publishing a DM row so peer names and bot
+// classification also survive inactive-workspace switches. It uses the same
+// cache writes and notifications as background resolution, without touching
+// workspace conversation slices. Cancellation also bounds the semaphore wait.
+// This direct path does not own a Request inflight slot; background callers
+// release their own claim in resolveOne rather than clearing a racing request.
+func (r *userResolver) resolveOneContext(ctx context.Context, userID string) {
 	if r.sem != nil {
-		r.sem <- struct{}{}
-		defer func() { <-r.sem }()
+		select {
+		case r.sem <- struct{}{}:
+			defer func() { <-r.sem }()
+		case <-ctx.Done():
+			return
+		}
 	}
-	u, err := r.client.GetUserProfile(userID)
+	u, err := r.client.GetUserProfileContext(ctx, userID)
 	if err != nil {
 		debuglog.Cache("userResolver: GetUserProfile team=%s user=%s err=%v",
 			r.teamID, userID, err)
@@ -190,6 +213,7 @@ func (r *userResolver) resolveOne(userID string) {
 	_ = r.db.UpsertUser(cache.User{
 		ID:               userID,
 		WorkspaceID:      r.teamID,
+		HomeTeamID:       u.TeamID,
 		Name:             u.Name,
 		DisplayName:      name,
 		AvatarURL:        u.Profile.Image32,
@@ -210,6 +234,7 @@ func (r *userResolver) resolveOne(userID string) {
 	// switch snapshot even if the UserResolvedMsg below is dropped
 	// because the workspace is not the active one.
 	r.names.Set(userID, name)
+	r.queueResolvedPeer(userID)
 	if r.send != nil {
 		// Status has already been persisted and sent by applyProfileStatus.
 		r.send(ui.UserResolvedMsg{
@@ -332,7 +357,7 @@ func (r *userResolver) flush() {
 	updated := make(map[string]int64, len(ids))
 	for _, id := range ids {
 		// 0 is the conditional protocol's "never seen, send the full
-		// record" — the resolver only ever queues cache misses.
+		// record" — queued users are missing or unnamed placeholders.
 		updated[id] = 0
 	}
 	users, err := r.batcher.UsersInfo(context.Background(), updated)
@@ -387,6 +412,14 @@ func (r *userResolver) flush() {
 // flush then re-fetches once. The upserts are idempotent, so no
 // guard is taken.
 func (r *userResolver) ResolveNow(ids []string) []edge.User {
+	return r.ResolveNowContext(context.Background(), ids)
+}
+
+// ResolveNowContext is ResolveNow with a caller-owned deadline/cancellation.
+// Reconnect hydration batches unknown peers without exceeding its shared HTTP
+// budget. Returned records have already reached the normal cache/name/notice
+// path; absent or empty-name records still require the per-user fallback.
+func (r *userResolver) ResolveNowContext(ctx context.Context, ids []string) []edge.User {
 	if r == nil || r.batcher == nil || len(ids) == 0 {
 		return nil
 	}
@@ -402,7 +435,7 @@ func (r *userResolver) ResolveNow(ids []string) []edge.User {
 	if len(updated) == 0 {
 		return nil
 	}
-	users, err := r.batcher.UsersInfo(context.Background(), updated)
+	users, err := r.batcher.UsersInfo(ctx, updated)
 	if err != nil {
 		debuglog.Cache("userResolver: ResolveNow edge users/info for %d users team=%s: %v (caller falls back per-user)", len(updated), r.teamID, err)
 		return nil
@@ -429,6 +462,7 @@ func (r *userResolver) applyEdgeUser(u edge.User) {
 	r.avatars.Preload(u.ID, u.Profile.ImageOriginal)
 	_ = r.db.UpsertUserFromEdge(r.teamID, cache.EdgeUserUpdate{
 		ID:               u.ID,
+		HomeTeamID:       u.TeamID,
 		Name:             u.Name,
 		DisplayName:      name,
 		AvatarURL:        u.Profile.ImageOriginal,
@@ -442,6 +476,7 @@ func (r *userResolver) applyEdgeUser(u edge.User) {
 		Version:          u.Version,
 	})
 	r.names.Set(u.ID, name) // see resolveOne
+	r.queueResolvedPeer(u.ID)
 	if r.send != nil {
 		// Status before UserResolvedMsg, as in resolveOne.
 		r.send(ui.UserStatusChangeMsg{

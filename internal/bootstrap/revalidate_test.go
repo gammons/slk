@@ -200,7 +200,7 @@ func wantUserUpdates() []cache.EdgeUserUpdate {
 		{
 			ID: "U_ALICE", Name: "alice-renamed", DisplayName: "alice-display-renamed",
 			AvatarURL: "https://example.invalid/alice-new.png", IsBot: true, IsExternal: false,
-			Version: 1783337599010,
+			HomeTeamID: "T_HOME", WorkspaceID: "T_HOME", Version: 1783337599010,
 		},
 		{
 			// display_name is empty on the wire, so the real name
@@ -209,7 +209,7 @@ func wantUserUpdates() []cache.EdgeUserUpdate {
 			// the workspace, so external.
 			ID: "U_AUTHOR_ONLY", Name: "author-only-renamed", DisplayName: "Author Only Real Renamed",
 			AvatarURL: "", IsBot: false, IsExternal: true,
-			Version: 1783337599011,
+			HomeTeamID: "T_OTHER", WorkspaceID: "T_HOME", Version: 1783337599011,
 		},
 	}
 }

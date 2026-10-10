@@ -363,8 +363,7 @@ func TestUserResolver_EdgeMissFallsBackToPerUser(t *testing.T) {
 func TestUserResolver_EmptyNameEdgeRecordFallsBackToPerUser(t *testing.T) {
 	// Unobserved in captures, but symmetric to the sweep's guard: an
 	// edge record with all three name fields empty must not be
-	// cached (its empty DisplayName would satisfy Request's
-	// cache-skip gate permanently) nor emitted (an empty
+	// treated as a successful resolution or emitted (an empty
 	// UserResolvedMsg would blank a rendered in-history name).
 	db := newTestDB(t)
 	batcher := &fakeBatcher{res: []edge.User{
