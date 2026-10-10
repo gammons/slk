@@ -316,6 +316,10 @@ All stdlib `testing`, white-box, per AGENTS.md.
 
 ## Part B — the action dialog (blocked on #237)
 
+> **Superseded** by `docs/superpowers/specs/2026-10-10-ephemeral-action-dialog-design.md`,
+> the design against the `confirmprompt` component #302 landed. The section
+> below is kept as the record of what was agreed before that component existed.
+
 Recorded so the agreed behavior survives until #237 lands. Part B gets its own
 plan then; nothing below is built in Part A.
 
