@@ -65,6 +65,24 @@ func extractLegacyAttachments(a []slack.Attachment) []blockkit.LegacyAttachment 
 	return blockkit.ParseAttachments(a)
 }
 
+// applyActionIDs copies legacy action ids -- captured from the raw
+// WebSocket frame, since slack-go's AttachmentAction does not declare
+// the field -- onto parsed attachments by position: ids[i][j] belongs to
+// atts[i].Actions[j]. Missing ids leave ID empty; extra ids are ignored.
+func applyActionIDs(atts []blockkit.LegacyAttachment, ids [][]string) {
+	for i := range atts {
+		if i >= len(ids) {
+			return
+		}
+		for j := range atts[i].Actions {
+			if j >= len(ids[i]) {
+				break
+			}
+			atts[i].Actions[j].ID = ids[i][j]
+		}
+	}
+}
+
 // collectThumbs builds a slice of ThumbSpec from a slack.File's thumb_*
 // fields. Tiers with an empty URL or non-positive dimensions are skipped.
 // The slice is ordered smallest-to-largest, matching the order Slack

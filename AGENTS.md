@@ -39,7 +39,12 @@ internal/core/          the ports (service interfaces) the TUI calls, and the
                         values the TUI and cmd/slk exchange through them
 internal/ui/            bubbletea App: reducers, mode key handlers, view regions
 internal/ui/<widget>/   self-contained sub-models (messages, thread, sidebar,
-                        compose, and 14 modal packages)
+                        compose, and 13 modal packages)
+internal/bubbles/       self-contained components and the substrate they
+                        share (RFC #236), e.g. ansi. Never imports
+                        internal/ui; the TUI's I/O ban applies here too.
+                        Widgets move here from internal/ui/<widget>/ one at
+                        a time; confirmprompt is the first
 internal/slack/         Slack Web API + browser-protocol WebSocket client
 internal/slack/edge/    edgeapi: conditional revalidation, server-side search
 internal/bootstrap/     startup fetch orchestration
@@ -65,7 +70,10 @@ that no longer exists. Do not trust it.** Current structural documentation:
   ports in `internal/core`, which `cmd/slk` wires. No `internal/slack`,
   `slackhttp`, `cache`, `config`, `filedl`, `export`, `editor`, `net/http` or
   `os/exec`; `slack-go` only in `blockkit`, as the data it renders. `internal/ui/boundary_test.go`
-  enforces this. The boundary is deliberate; do not breach it.
+  enforces this. The boundary is deliberate; do not breach it. The same
+  rules cover `internal/bubbles`, with no `slack-go` exemption, and it may not
+  import `internal/ui` or anything under it: components are the app's building
+  blocks, not part of it (`TestBubblesReachTheAppOnlyThroughCore`, same file).
 - **`App.Update` routes through a reducer chain**, not a switch. Add behavior by
   adding to a `reducer_*.go` file, not by extending `Update`. The only step
   outside the chain is the thin `Update` wrapper that records `stackFront`
@@ -102,18 +110,23 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Case/accent-insensitive fold for matching | `text.Fold(s)` |
 | Slack mrkdwn → plain text | `messages.FlattenMrkdwn`, `messages.FlattenMrkdwnWithUserGroups` |
 | Search-term highlighting (ANSI/OSC-safe) | `messages.HighlightSearchTerms`, `messages.SearchHighlightSGR` |
+| Re-assert a background (or background+foreground) after every SGR reset, so nested lipgloss renders don't drop it | `bubbles/ansi.ReapplyAfterResets(text, style)` — the one implementation; `messages.ReapplyBgAfterResets` delegates to it for existing callers. The theme's sequences come from `messages.BgANSI()` / `messages.FgANSI()` |
 | Extract links from message text | `messages.ExtractLinks` |
+| Every link a message offers to `o` (text links + permalinks of messages it shares, from attachment `from_url`) | `messages.MessageLinks(msg)` |
 | Does message text mention the current user? | `mention.InText(text, selfUserID)` |
 | Reaction pill rendering | `messages.ReactionPillText` |
 | Date label from a Slack ts | `messages.DateFromTS`, `messages.FormatDateSeparator`, `messages.FormatShortDate` (compact form for a message header: "Today", "Jan 2") |
 | Date-qualified timestamp for the selected message header | `messages.LongTimestamp(ts, short)`, `messages.SelectedHeader(rendered, header, ts, short, maxWidth)`; any other header timestamp swap that must fit the width budget: `messages.ReplaceHeaderTimestamp(rendered, header, short, replacement, maxWidth)` |
 | mpdm channel name → human name | `slackfmt.FormatMPDMName` |
 | Channel-type glyph (`#` / `◆` / `●`) | `messages.ChannelGlyph(chType)` |
+| Marker row for a message only the current user can see | `messages.EphemeralLabel()` — drawn above the author line in both panes |
+| Replace a pane's list with fetched history without erasing ephemerals already shown | `keepEphemerals(fetched, shown)` (`internal/ui/ephemeral_keep.go`); only for a fetch of the conversation already on screen |
 | Slack permalink parsing | `slackurl.Parse` |
 | Slack ts → `time.Time` (whole seconds, any timezone) | `export.TimeFromTS` |
 | A since/until/overlap date range in a timezone, and "is this ts in it?" | `export.NewWindow`, `export.Window.Contains` |
 | Sleep out a slack-go rate-limit error (ctx-aware) | `slackclient.WaitOutRateLimit` |
 | Page through all channel history in a ts range / a thread's replies in a ts range | `(*slackclient.Client).WalkHistory`, `GetRepliesBetween` |
+| Press a legacy attachment button (`chat.attachmentAction`, payload byte-identical to the web client's) | `(*slackclient.Client).AttachmentAction(ctx, AttachmentActionRequest)` |
 | Emoji shortcode → glyph | `emoji.Sprint`, `emoji.CodeMap`, `emoji.StripSkinTone` |
 | Does Block Kit already render the message body? | `blockkit.RendersBody(blocks)`, `messages.BlocksCarryBody(msg)` |
 | Current DND state from a Slack API result | `slack.DNDStateFromStatus` |
@@ -125,6 +138,8 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | A workspace's user ID → display name, from any goroutine in `cmd/slk` | `wctx.UserNames` (`*userNameStore`: `Get`/`Set`, `MentionedNames(text)` for one message; `lookupUserCached` / `resolveUserCached` add the SQLite fallback). Just `Set`: hand the UI the map from `SnapshotForUI()` and pass only its version to `NotifyFrom`, which makes every later new or changed name reach the UI as `UserResolvedMsg`. Never keep or read the map you handed over |
 | User IDs mentioned in message text | `slackfmt.MentionedUserIDs(text)` |
 | Workspace-relative cached external-user flags | `cache.DB.ExternalUsers(workspaceID)` returns a caller-owned map, derived from `User.HomeTeamID`; the legacy boolean is only a fallback within the row's original workspace |
+| A WebSocket message's author ID and its UI `MessageItem` (bot-ID fallback, display-name resolution, file/block/attachment conversion) | `(*rtmEventHandler).messageAuthor`, `(*rtmEventHandler).messageItemFromEvent` (`cmd/slk/rtm_handler.go`); shared by `OnMessage` and `OnEphemeralMessage` |
+| Legacy attachment action ids slack-go drops | `slackclient.EphemeralMessage.ActionIDs` (decoded from the raw frame), applied with `cmd/slk/applyActionIDs` |
 | Slack original-avatar URL → sized CDN URL (e.g. 72px) | `avatar.SizedURL(orig, px)`; returns non-Slack-original URLs unchanged |
 | Copy text to the clipboard | `App.clipboardWrite` / `SetClipboardWriter`; `cmd/slk/newClipboardWriter` selects local macOS `pbcopy` or terminal OSC 52 |
 
@@ -134,11 +149,15 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 |---|---|
 | Scrollbar gutter on a rendered pane | `ui/scrollbar.Overlay`, `ui/scrollbar.Visible` |
 | Centered modal over a dimmed backdrop | `ui/overlay.DimmedOverlay` |
+| Yes/no confirmation modal (title, one-line preview, confirm/cancel keys) | `bubbles/confirmprompt` (`New`, `Open`, `Update`, `View`, `SetStyles`, `SetWidth`; options `WithStyles`/`WithKeyMap`/`WithWidth`; `KeyMap` field). In the App, open it with `App.openConfirmPrompt` (`internal/ui/confirm.go`), which also maps the theme onto its styles and composites it |
 | Text selection ranges and anchors | `ui/selection` (`Range`, `Anchor`, `LessOrEqual`) |
 | Theme colors and styles | `ui/styles` (`Username`, `SelectionStyle`, `SearchHighlightStyle`, `MentionBadgeStyle`, `UserColor`) |
+| Change the theme inside the App | `App.applyTheme(name)` (`internal/ui/app.go`): applies it, invalidates render caches and pushes fresh styles to components that snapshot them. A component that holds a style snapshot (anything in `internal/bubbles`) gets its push added there, not at each call site |
 | Window tree geometry | `ui/wintree` |
+| Sidebar selection across item/filter reorders | Capture `sidebar.Model.currentCursorKey()` **before** mutation, then `rebuildNavWithCursor`; `rebuildNavPreserveCursor` is only safe while old nav indices still identify the same items |
 | Modal geometry / row hit-testing | `boxedOverlay`, `clickableOverlay` (list rows), `pointClickable` (a single glyph, e.g. the profile dialog's 📋) in `internal/ui/reducer_modal_click.go` |
 | Channel/DM destination picker for forwarding | `channelfinder.Model.OpenForForwarding()` (joined conversations only); `Open()` restores the normal switcher |
+| Refresh a workspace finder entry without losing visit recency | `rtmEventHandler.upsertFinderItem(item)` on the serialized event owner; returns the stored item, preserves existing `LastVisited`, seeds a new row from `LastVisitedByChannel` |
 | Render a thread from cache on open, before the fetch lands | `cachedThreadRepliesCmd(threads, chID, threadTS)` (`internal/ui/app.go`); yields a `FromCache` `ThreadRepliesLoadedMsg`, which renders but never marks the thread read — only the fetched result does |
 | Bind a composer to the conversation its draft belongs to | `(*compose.Model).SetDraftContext(teamID, channelID, threadTS)` — an empty channel detaches (saves the prior conversation's draft, clears the visible input). `SetActiveChannel` sets only mention context; it does not move draft storage |
 
@@ -187,9 +206,12 @@ greppable by name; no line numbers, because these files move.
 These are tracked in the refactor plan and are being consolidated. Do not copy
 them as templates:
 
-- **11 `renderBox` implementations** and **7 `visibleWindow`** across the 14
-  modal packages. If you are building a modal, expect a shared chrome package to
-  land (Phase 4); coordinate rather than adding a twelfth copy.
+- **11 `renderBox` implementations** — 10 across the 13 `internal/ui` modal
+  packages, plus confirmprompt's `View` in `internal/bubbles/confirmprompt` —
+  and **7 `visibleWindow`** in the modal packages. If you are building or
+  migrating a modal, expect a shared chrome package in `internal/bubbles` to land
+  first (RFC #236 stages it ahead of the remaining modals); coordinate rather
+  than adding a twelfth copy.
 - **`messages.Model` and `thread.Model`** share 377 verbatim lines and 45
   identically-named methods. `internal/ui/thread/lockstep_test.go` pins *render*
   parity in **one static state only**: 80×20 (`lockstepWidth`/`lockstepHeight`),

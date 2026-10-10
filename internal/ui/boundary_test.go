@@ -13,7 +13,8 @@ import (
 
 // The TUI reaches Slack, SQLite, the network, the filesystem and the OS
 // only through the ports in internal/core. These tests fail when a
-// non-test file under internal/ui (or core itself) reaches past them.
+// non-test file under internal/ui, internal/bubbles (or core itself)
+// reaches past them.
 
 // tuiBannedImports are packages whose presence in the TUI would mean
 // it's doing the application's I/O itself.
@@ -62,8 +63,31 @@ var tuiBannedCalls = map[string][]string{
 }
 
 func TestTUIReachesTheAppOnlyThroughCore(t *testing.T) {
-	walkGoFiles(t, ".", func(rel string, f *ast.File, fset *token.FileSet) {
+	checkTUIBoundary(t, ".", "", slackGoAllowed, nil)
+}
+
+// bubblesBannedTrees are import-path trees internal/bubbles must not reach:
+// its components are the app's building blocks, so depending on the app
+// would make them part of it.
+var bubblesBannedTrees = []string{"github.com/gammons/slk/internal/ui"}
+
+// TestBubblesReachTheAppOnlyThroughCore holds internal/bubbles to the TUI's
+// rules (it is TUI code that happens to live outside internal/ui, where the
+// walk above cannot see it), with no slack-go exemption, and additionally
+// forbids importing internal/ui or anything under it.
+func TestBubblesReachTheAppOnlyThroughCore(t *testing.T) {
+	checkTUIBoundary(t, "../bubbles", "bubbles/", nil, bubblesBannedTrees)
+}
+
+// checkTUIBoundary applies the TUI's import and call bans to every non-test
+// file under root. slackGoOK lists the root-relative directories that may
+// import slack-go; bannedTrees are import paths that may not be imported,
+// nor anything beneath them. label prefixes root-relative paths in failures.
+func checkTUIBoundary(t *testing.T, root, label string, slackGoOK map[string]bool, bannedTrees []string) {
+	t.Helper()
+	walkGoFiles(t, root, func(rel string, f *ast.File, fset *token.FileSet) {
 		dir := filepath.ToSlash(filepath.Dir(rel))
+		rel = label + filepath.ToSlash(rel)
 		names := map[string]string{} // local name -> import path
 		for _, imp := range f.Imports {
 			path, _ := strconv.Unquote(imp.Path.Value)
@@ -72,7 +96,12 @@ func TestTUIReachesTheAppOnlyThroughCore(t *testing.T) {
 					t.Errorf("%s imports %s; go through an internal/core port", rel, path)
 				}
 			}
-			if path == slackGo && !slackGoAllowed[dir] {
+			for _, tree := range bannedTrees {
+				if path == tree || strings.HasPrefix(path, tree+"/") {
+					t.Errorf("%s imports %s; nothing under %s may be imported here", rel, path, tree)
+				}
+			}
+			if path == slackGo && !slackGoOK[dir] {
 				t.Errorf("%s imports %s outside the Block Kit renderer", rel, path)
 			}
 			name := path[strings.LastIndex(path, "/")+1:]

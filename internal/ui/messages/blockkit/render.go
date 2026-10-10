@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/styles"
@@ -247,6 +248,11 @@ func appendActions(out *RenderResult, a ActionsBlock, width int) {
 	currentW := 0
 	for _, el := range a.Elements {
 		label := renderControlLabel(el.Kind, el.Label)
+		// A control wider than the row can't wrap onto a row of its
+		// own; shorten it so it stays inside the pane.
+		if width > 0 && lipgloss.Width(label) > width {
+			label = ansi.Truncate(label, width, "…")
+		}
 		labelW := lipgloss.Width(label)
 		var candidateW int
 		var candidate string

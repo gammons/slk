@@ -16,6 +16,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/gammons/slk/internal/bubbles/confirmprompt"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	"github.com/gammons/slk/internal/emoji"
@@ -26,7 +27,6 @@ import (
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/channelpicker"
 	"github.com/gammons/slk/internal/ui/compose"
-	"github.com/gammons/slk/internal/ui/confirmprompt"
 	"github.com/gammons/slk/internal/ui/emojipicker"
 	"github.com/gammons/slk/internal/ui/help"
 	"github.com/gammons/slk/internal/ui/imgrender"
@@ -421,7 +421,7 @@ type App struct {
 	// Reaction picker
 	reactionPicker *reactionpicker.Model
 	reactionsView  *reactionsview.Model
-	confirmPrompt  *confirmprompt.Model
+	confirmPrompt  confirmprompt.Model
 	// userProfile is the K-opened read-only "who is this person?"
 	// modal (see internal/ui/userprofile). profileSvc fetches the
 	// full profile; defaulted to noopProfileService in NewApp so the
@@ -1030,6 +1030,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if changed {
 			a.forceSixelRepaint = true
 		}
+		a.confirmPrompt.SetWidth(msg.Width)
 		return a, nil
 
 	case scrollFlushMsg:
@@ -1504,24 +1505,23 @@ func (a *App) copyPermalinkOfSelected() tea.Cmd {
 // open the link picker modal. All opens converge on OpenLinkMsg,
 // the single routing point in reducer_links.go.
 func (a *App) openLinksOfSelected() tea.Cmd {
-	var text string
+	var links []messages.Link
 	switch a.focusedPanel {
 	case PanelMessages:
 		msg, ok := a.messagepane.SelectedMessage()
 		if !ok {
 			return nil
 		}
-		text = msg.Text
+		links = messages.MessageLinks(msg)
 	case PanelThread:
 		reply := a.threadPanel.SelectedReply()
 		if reply == nil {
 			return nil
 		}
-		text = reply.Text
+		links = messages.MessageLinks(*reply)
 	default:
 		return nil
 	}
-	links := messages.ExtractLinks(text)
 	switch len(links) {
 	case 0:
 		return func() tea.Msg { return ToastMsg{Text: "No links in message"} }
@@ -1957,12 +1957,11 @@ func (a *App) maybeFetchOlderHistory(atTop bool) tea.Cmd {
 // both lowercase `q` and Ctrl+C (the latter intercepted globally so an
 // accidental Ctrl+C in any mode never silently kills the app).
 func (a *App) openQuitConfirm() {
-	a.confirmPrompt.Open(
+	a.openConfirmPrompt(
 		"Quit slk?",
 		"All workspace connections will close.",
 		func() tea.Msg { return tea.Quit() },
 	)
-	a.SetMode(ModeConfirm)
 }
 
 func (a *App) handleEnter() tea.Cmd {
@@ -3349,6 +3348,21 @@ func (a *App) SetThemeOverrides(overrides core.Theme) {
 	a.themeOverrides = overrides
 }
 
+// applyTheme switches the process-wide theme and brings every component
+// that does not re-read it per frame up to date: render caches are
+// invalidated, and components holding a style snapshot get a fresh one.
+// Every in-App theme change goes through here, so a component that
+// snapshots styles is pushed in one place.
+func (a *App) applyTheme(name string) {
+	styles.Apply(name, a.themeOverrides)
+	a.invalidateAllWinModelCaches()
+	a.threadPanel.InvalidateCache()
+	a.sidebar.InvalidateCache()
+	a.compose.RefreshStyles()
+	a.threadCompose.RefreshStyles()
+	a.confirmPrompt.SetStyles(confirmPromptStyles())
+}
+
 // SetTypingEnabled controls whether typing indicators are shown and sent.
 func (a *App) SetTypingEnabled(enabled bool) {
 	a.typing.SetEnabled(enabled)
@@ -4074,14 +4088,13 @@ func (a *App) beginDeleteOfSelected() tea.Cmd {
 		preview = string(runes[:maxPreview]) + "…"
 	}
 
-	a.confirmPrompt.Open(
+	a.openConfirmPrompt(
 		"Delete message?",
 		preview,
 		func() tea.Msg {
 			return DeleteMessageMsg{ChannelID: channelID, TS: ts}
 		},
 	)
-	a.SetMode(ModeConfirm)
 	return nil
 }
 

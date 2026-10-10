@@ -328,3 +328,32 @@ func TestRenderMessagePlainRichTextProducesMultipleLines(t *testing.T) {
 		t.Errorf("expected >=3 lines containing 'PR #' (one per PR), got %d. Full output:\n%s", prLines, plain)
 	}
 }
+
+// TestBuildCache_EphemeralLabelReactionHitRow: the label row must enter
+// the row arithmetic, or every hit below it lands one row high.
+func TestBuildCache_EphemeralLabelReactionHitRow(t *testing.T) {
+	msg := MessageItem{
+		TS: "1700000000.000000", UserName: "slackbot", UserID: "USLACKBOT",
+		Text: "not in channel", Timestamp: "9:02 AM", Ephemeral: true,
+		Reactions: []ReactionItem{{Emoji: "tada", Count: 1}},
+	}
+	m := New([]MessageItem{msg}, "general")
+	m.buildCache(100)
+	for _, e := range m.cache {
+		if e.msgIdx != 0 {
+			continue
+		}
+		if len(e.reactionHits) == 0 {
+			t.Fatal("no reaction hits recorded")
+		}
+		row := e.reactionHits[0].rowStartInEntry
+		if row < 0 || row >= len(e.linesNormal) {
+			t.Fatalf("reaction hit row %d outside the entry's %d lines", row, len(e.linesNormal))
+		}
+		if got := ansi.Strip(e.linesNormal[row]); !strings.Contains(got, "1") || strings.Contains(got, "not in channel") {
+			t.Errorf("reaction hit row %d is %q, want the reaction line", row, got)
+		}
+		return
+	}
+	t.Fatal("no entry with msgIdx 0 in cache")
+}
