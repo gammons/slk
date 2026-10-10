@@ -159,6 +159,11 @@ type LegacyAttachment struct {
 	Footer     string
 	FooterIcon string // tiny inline image rendered before Footer
 	TS         int64  // unix seconds; 0 means absent
+	// FromURL is the source URL of an unfurl or share. For a message
+	// shared via Slack's "Share message"/forward it is the original's
+	// permalink, which appears nowhere in the sharing message's text.
+	FromURL    string
+	AuthorName string
 	// Blocks holds Block Kit blocks nested inside the attachment.
 	// Slack's newer link-unfurl shape (Linear/Jira/GitHub issue
 	// cards, etc.) carries all visible content here while

@@ -8,6 +8,8 @@ package messages
 import (
 	"sort"
 	"strings"
+
+	"github.com/gammons/slk/internal/slackurl"
 )
 
 // Link is one link found in a message's text.
@@ -49,6 +51,41 @@ func ExtractLinks(text string) []Link {
 		}
 		seen[f.link.URL] = true
 		out = append(out, f.link)
+	}
+	return out
+}
+
+// MessageLinks returns the links the "open link" keybinding offers
+// for msg: ExtractLinks of its text, then the permalink of each
+// message it shares. A message shared via Slack's "Share message" /
+// forward action shows as an embedded preview whose permalink exists
+// only in the attachment's from_url, never in the text. Non-Slack
+// from_urls (ordinary unfurls) are skipped; their URL is already in
+// the text. Deduplicated by URL, first occurrence wins.
+func MessageLinks(msg MessageItem) []Link {
+	out := ExtractLinks(msg.Text)
+	for _, att := range msg.LegacyAttachments {
+		if att.FromURL == "" {
+			continue
+		}
+		if _, ok := slackurl.Parse(att.FromURL); !ok {
+			continue
+		}
+		dup := false
+		for _, l := range out {
+			if l.URL == att.FromURL {
+				dup = true
+				break
+			}
+		}
+		if dup {
+			continue
+		}
+		label := "Shared message"
+		if att.AuthorName != "" {
+			label = "Message from " + att.AuthorName
+		}
+		out = append(out, Link{URL: att.FromURL, Label: label})
 	}
 	return out
 }
