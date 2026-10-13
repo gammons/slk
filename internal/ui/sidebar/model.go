@@ -1972,7 +1972,7 @@ func (m *Model) buildCache(width int) {
 			m.cacheRows = append(m.cacheRows, renderRow{height: 1, navIdx: -1})
 		}
 		group := sectionMap[name]
-		headerLabel, headerLabelSelected := m.renderSectionHeaderLabel(name, cursorSelected, dotStyle, bgAnsi)
+		headerLabel, headerLabelSelected := m.renderSectionHeaderLabel(name, cursorSelected, dotStyle, bgAnsi, width)
 		ni, ok := headerNavIdx[name]
 		if !ok {
 			ni = -1
@@ -2027,30 +2027,74 @@ func (m *Model) sectionDisplayMeta(sectionKey string) (name, emoji string) {
 // user-visible name and (if any) emoji shortcode from the provider and
 // prepend the resolved emoji.
 //
-// Known, pre-existing, NOT introduced here: this function takes no
-// width and truncates nothing. buildCache renders the result through
-// styles.SectionHeader.Width(width-2), and lipgloss WRAPS overlong
-// content rather than truncating it, while the renderRow it lands in
-// hardcodes height 1. A section header whose name plus aggregates
-// exceeds the sidebar width therefore emits a multi-line string into a
-// slot counted as one line. Reproducible today without any mention
-// badge — a 36-character section name wraps to three lines at width 20.
-// The mention badge widens the header by at most 6 columns (separator
-// plus a padded "99+"), so it reaches that threshold sooner but does
-// not create it. Filed separately; do not fix it inline here.
-func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.Style, bgAnsi string) (string, string) {
+// Fixed: previously this function took no width and truncated nothing.
+// buildCache renders the result through styles.SectionHeader.Width(width-2),
+// and lipgloss WRAPS overlong content rather than truncating it, while the
+// renderRow it lands in hardcodes height 1. A section header whose name plus
+// aggregates exceeded the sidebar width therefore emitted a multi-line
+// string into a slot counted as one line -- the extra wrapped line(s) threw
+// off every row below it, visibly shifting the sidebar's right border
+// ("|") and the adjoining message-list layout. The mention badge widens the
+// header by at most 6 columns (separator plus a padded "99+"), so it
+// reached that threshold sooner but did not create it.
+//
+// Fix: truncate displayName (with a "…" tail) so glyph + emojiPrefix +
+// displayName + aggregates never exceeds the available width, matching the
+// truncation already done for channel row names above.
+func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.Style, bgAnsi string, width int) (string, string) {
 	displayName, emojiCode := m.sectionDisplayMeta(name)
 	emojiPrefix := ""
 	if emojiCode != "" {
+		// Slack's channel-section emoji field uses the same
+		// "<base>::skin-tone-N" convention as reactions (e.g.
+		// "male-construction-worker::skin-tone-2"). The resolved
+		// skin-tone-modified sequence is a multi-cluster grapheme
+		// whose terminal-rendered width is unpredictable and routinely
+		// disagrees with lipgloss's measurement, which is exactly what
+		// desyncs this header's Width(width-2) padding from every
+		// other row and visibly shifts the sidebar's right border.
+		// Strip the modifier first, matching StripSkinTone's existing
+		// use for reaction pills, trading skin-tone fidelity for
+		// reliable column alignment.
+		emojiCode = emojiutil.StripSkinTone(emojiCode)
 		// kyokomi/emoji.Sprint resolves :shortcode: to unicode; on
 		// unknown shortcodes it returns the input unchanged (which
 		// keeps the colons, giving a graceful textual fallback).
 		token := ":" + emojiCode + ":"
 		rendered := emojiutil.Sprint(token)
-		if rendered != token {
-			emojiPrefix = rendered + " "
-		} else {
+		// Skin-tone is the most common multi-codepoint offender, but it
+		// isn't the only one: base+VS16 (a literal heart is base+VS16)
+		// and ZWJ sequences (construction-worker-with-gender, teacher,
+		// heart-on-fire, etc.) are also multi-codepoint and just as
+		// unreliable to measure. Mirror the render_message.go
+		// reaction-pill pattern: only accept the resolved glyph whole
+		// when it's a single codepoint (per ShouldRenderUnicode).
+		//
+		// Unlike reaction pills, a header renders on every frame whether
+		// or not the user is looking at reactions, so falling all the
+		// way back to literal ":heart_on_fire:" text is a worse everyday
+		// experience here. ZWJ sequences are BASE(+VS16)+ZWJ+MODIFIER(+VS16)
+		// -- e.g. heart_on_fire is \u2764\ufe0f\u200d\U0001F525 (heart,
+		// ZWJ, fire). Before giving up, try each \u200d-delimited segment
+		// (VS16 trimmed) in order and keep the first that is itself a
+		// single codepoint: still exactly the width guarantee
+		// ShouldRenderUnicode exists for, just applied per-segment
+		// instead of to the whole cluster, so the row keeps *an* emoji
+		// rather than degrading straight to shortcode text.
+		switch {
+		case rendered == token:
 			emojiPrefix = token + " "
+		case emojiutil.ShouldRenderUnicode(rendered):
+			emojiPrefix = rendered + " "
+		default:
+			emojiPrefix = token + " "
+			for _, seg := range strings.Split(strings.TrimRight(rendered, " "), "\u200d") {
+				seg = strings.TrimSuffix(seg, "\ufe0f")
+				if emojiutil.ShouldRenderUnicode(seg) {
+					emojiPrefix = seg + " "
+					break
+				}
+			}
 		}
 	}
 
@@ -2082,6 +2126,47 @@ func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.
 			// (`name + " " + unreadDot`); the pill's own Padding(0, 1)
 			// supplies the rest of the gap.
 			aggregates += " " + mentionBadgeStyleFor(mentionsAllMuted).Render(badgeText)
+		}
+	}
+
+	// Budget against the same width buildCache renders the header through
+	// (styles.SectionHeader.Width(width-2)). " " + glyph + " " accounts for
+	// the leading space/cursor column and the glyph's trailing space; the
+	// cursor variant's leading rune occupies the same single column so the
+	// budget holds for both. styles.SectionHeader also carries its own
+	// Padding(0, 1), which eats 2 more columns inside that box before any
+	// content renders. lipgloss.Width is ANSI-aware so the already
+	// rendered (possibly styled) aggregates measure correctly.
+	const headerChromeExcludingName = 3 + 2 // leading col(1) + glyph(1) + space(1) + style Padding(0,1)
+	if width > 0 {
+		budget := (width - 2) - headerChromeExcludingName - lipgloss.Width(aggregates)
+		if budget < 3 {
+			budget = 3
+		}
+		// emojiPrefix is normally a short resolved glyph, but the
+		// ShouldRenderUnicode fallback above can leave it as the raw
+		// ":shortcode:" text (e.g. ":male-construction-worker:", 27
+		// cols) for an unresolved or multi-codepoint custom emoji. Left
+		// unchecked, that alone can exceed the header's width budget and
+		// reintroduce the same lipgloss wrap this function exists to
+		// prevent -- so it gets the same truncation treatment as
+		// displayName, and claims its share of the budget first since a
+		// header with no name but a readable emoji/shortcode is more
+		// useful than the reverse.
+		if pw := lipgloss.Width(emojiPrefix); pw > budget {
+			trimmed := strings.TrimSuffix(emojiPrefix, " ")
+			emojiPrefix = truncate.StringWithTail(trimmed, uint(budget), "…") + " "
+			budget = 0
+		} else {
+			budget -= pw
+		}
+		maxNameLen := budget
+		if lipgloss.Width(displayName) > maxNameLen {
+			if maxNameLen <= 0 {
+				displayName = ""
+			} else {
+				displayName = truncate.StringWithTail(displayName, uint(maxNameLen), "…")
+			}
 		}
 	}
 
