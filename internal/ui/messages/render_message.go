@@ -16,17 +16,33 @@ import (
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
-// IsSystemNoticeSubtype reports whether subtype is a membership-change
-// system message (join/leave), as opposed to an authored chat message.
+// IsSystemNoticeSubtype reports whether subtype is a system message --
+// join/leave, a huddle starting (huddle_thread), a canvas update
+// (tabbed_canvas_updated) -- as opposed to an authored chat message.
 // Shared with cmd/slk (unread/mention/notification gating) so the
 // subtype list stays in one place; both panes render it through
-// RenderMessage.
+// RenderMessage. slackclient.IsNoticeSubtype (live delivery) must list
+// the same subtypes; a test in cmd/slk keeps them in step.
 func IsSystemNoticeSubtype(subtype string) bool {
 	switch subtype {
-	case "channel_join", "channel_leave", "group_join", "group_leave":
+	case "channel_join", "channel_leave", "group_join", "group_leave",
+		"huddle_thread", "tabbed_canvas_updated":
 		return true
 	}
 	return false
+}
+
+// noticeFallbackText is the notice body for a system message whose text
+// and blocks yield nothing readable. Only fixed labels: who started a
+// huddle, or for how long, is not on this data path.
+func noticeFallbackText(subtype string) string {
+	switch subtype {
+	case "huddle_thread":
+		return "A huddle started"
+	case "tabbed_canvas_updated":
+		return "A canvas was updated"
+	}
+	return ""
 }
 
 // RenderContext is what rendering a message reads besides the message.
@@ -156,7 +172,20 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		// The body's own wrap is undone so the line wraps once, with the
 		// timestamp, instead of breaking twice.
 		plain := strings.Join(strings.Fields(ansi.Strip(body)), " ")
+		if plain == "" {
+			plain = noticeFallbackText(msg.Subtype)
+		}
 		out.Content = styles.Timestamp.Render(WordWrap(msg.Timestamp+"  "+plain, noticeWidth))
+		// A huddle message is a thread parent: keep the reply count line
+		// (the channel pane's affordance) so the thread stays reachable.
+		if opt.ReplyAffordance && msg.ReplyCount > 0 {
+			word := "replies"
+			if msg.ReplyCount == 1 {
+				word = "reply"
+			}
+			out.Content += "\n" + styles.ThreadIndicator.Render(
+				fmt.Sprintf("[%d %s ->]", msg.ReplyCount, word))
+		}
 		return out
 	}
 	avatarStr := opt.Avatar
