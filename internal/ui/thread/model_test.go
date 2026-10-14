@@ -67,6 +67,30 @@ func TestThreadViewUpdatesAuthorStatus(t *testing.T) {
 	}
 }
 
+// A channel_join reply must render as a muted notice, matching the
+// main pane -- selecting one and pressing Enter opens it here.
+func TestThreadChannelJoinRendersAsSystemNotice(t *testing.T) {
+	m := New()
+	m.SetThread(
+		messages.MessageItem{TS: "1.0", UserID: "U1", UserName: "alice", Text: "parent"},
+		[]messages.MessageItem{{
+			TS: "2.0", UserID: "USLACKBOT", UserName: "Slackbot",
+			Text: "<@U3> has joined the channel", Timestamp: "10:30 AM", Subtype: "channel_join",
+		}},
+		"C1",
+		"1.0",
+	)
+	m.SetUserNames(map[string]string{"U3": "carol"})
+
+	got := ansi.Strip(m.View(20, 60))
+	if strings.Contains(got, "Slackbot") {
+		t.Errorf("channel_join reply shows the system bot's display name instead of a muted notice:\n%s", got)
+	}
+	if !strings.Contains(got, "carol") {
+		t.Errorf("channel_join reply text should still resolve the @mention to a display name:\n%s", got)
+	}
+}
+
 func TestClear(t *testing.T) {
 	m := New()
 	parent := messages.MessageItem{TS: "1700000001.000000", UserName: "alice", Text: "hi"}

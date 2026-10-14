@@ -60,6 +60,69 @@ func TestMessagePaneViewUpdatesAuthorStatus(t *testing.T) {
 	}
 }
 
+// channel_join must render as a muted notice, not a normal chat
+// bubble under the system bot's name, and the @mention in its text
+// must still resolve.
+func TestChannelJoinRendersAsSystemNotice(t *testing.T) {
+	m := New([]MessageItem{{
+		UserID:    "USLACKBOT",
+		UserName:  "Slackbot",
+		Text:      "<@U2> has joined the channel",
+		Timestamp: "10:30 AM",
+		Subtype:   "channel_join",
+	}}, "general")
+	m.SetUserNames(map[string]string{"U2": "alice"})
+
+	got := ansi.Strip(m.View(20, 60))
+	if strings.Contains(got, "Slackbot") {
+		t.Errorf("channel_join message shows the system bot's display name instead of a muted notice:\n%s", got)
+	}
+	if !strings.Contains(got, "alice") {
+		t.Errorf("channel_join message text should still resolve the @mention to a display name:\n%s", got)
+	}
+	if !strings.Contains(got, "has joined the channel") {
+		t.Errorf("channel_join message body missing from render:\n%s", got)
+	}
+}
+
+// The notice's mention/link handling re-applies TextPrimary after its
+// own color, which -- unstripped -- would un-mute everything past the
+// first @mention. Every channel_join/leave message starts with one.
+func TestChannelJoinNoticeStaysMutedThroughMention(t *testing.T) {
+	m := New(nil, "general")
+	m.SetUserNames(map[string]string{"U2": "alice"})
+	msg := MessageItem{
+		UserID:    "USLACKBOT",
+		UserName:  "Slackbot",
+		Text:      "<@U2> has joined the channel",
+		Timestamp: "10:30 AM",
+		Subtype:   "channel_join",
+	}
+
+	content := RenderMessage(msg, 60, &RenderContext{UserNames: m.userNames, ChannelNames: m.channelNames}, RenderOptions{}).Content
+	plain := ansi.Strip(content)
+	if want := styles.Timestamp.Render(plain); content != want {
+		t.Errorf("notice is not uniformly muted-styled:\nraw:  %q\nwant: %q", content, want)
+	}
+}
+
+func TestIsSystemNoticeSubtype(t *testing.T) {
+	cases := map[string]bool{
+		"channel_join":     true,
+		"channel_leave":    true,
+		"group_join":       true,
+		"group_leave":      true,
+		"":                 false,
+		"bot_message":      false,
+		"thread_broadcast": false,
+	}
+	for subtype, want := range cases {
+		if got := IsSystemNoticeSubtype(subtype); got != want {
+			t.Errorf("IsSystemNoticeSubtype(%q) = %v, want %v", subtype, got, want)
+		}
+	}
+}
+
 func TestMessagePaneNavigation(t *testing.T) {
 	msgs := []MessageItem{
 		{TS: "1.0", UserName: "alice", Text: "msg 1"},
