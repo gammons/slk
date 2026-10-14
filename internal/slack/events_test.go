@@ -374,6 +374,25 @@ func TestDispatchWebSocketThreadBroadcastEvent(t *testing.T) {
 	}
 }
 
+// channel_join/channel_leave (public channels) and group_join/
+// group_leave (private channels/mpims) must forward like any other
+// message, not get dropped by the subtype switch.
+func TestDispatchWebSocketChannelJoinLeaveEvents(t *testing.T) {
+	for _, subtype := range []string{"channel_join", "channel_leave", "group_join", "group_leave"} {
+		handler := &mockEventHandler{}
+
+		data := []byte(`{"type":"message","subtype":"` + subtype + `","channel":"C1","user":"U1","text":"<@U1> has joined the channel","ts":"200.0"}`)
+		dispatchWebSocketEvent(data, handler)
+
+		if len(handler.messages) != 1 {
+			t.Fatalf("subtype %q: expected 1 message, got %d", subtype, len(handler.messages))
+		}
+		if handler.subtypes[0] != subtype {
+			t.Errorf("subtype %q: expected subtype preserved, got %q", subtype, handler.subtypes[0])
+		}
+	}
+}
+
 func TestDispatchWebSocketUserTypingEvent(t *testing.T) {
 	handler := &mockEventHandler{}
 

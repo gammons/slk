@@ -379,6 +379,27 @@ func TestOnMessage_ChangeEcho_DoesNotNotify(t *testing.T) {
 	}
 }
 
+// A channel_join/leave notice doesn't make the channel unread on Slack
+// either. Before this exclusion, every join or leave in any channel
+// you're in lit the sidebar dot.
+func TestOnMessage_SystemNotice_DoesNotSetHasUnread(t *testing.T) {
+	db := newTestDB(t)
+	_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
+	h := &rtmEventHandler{
+		db:              db,
+		wsCtx:           &WorkspaceContext{},
+		isActive:        func() bool { return true },
+		activeChannelID: func() string { return "C2" },
+		currentUserID:   "USELF",
+	}
+	h.OnMessage("C1", "U1", "1.001", "<@U1> has joined the channel", "", "channel_join", false, nil, slack.Blocks{}, nil, "", "")
+
+	s, _ := db.GetChannelReadState("C1")
+	if s.HasUnread {
+		t.Error("HasUnread = true, want false: a join/leave notice does not make a channel unread")
+	}
+}
+
 func TestOnMessage_InactiveWorkspace_StillSetsHasUnread(t *testing.T) {
 	db := newTestDB(t)
 	_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
