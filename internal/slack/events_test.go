@@ -393,6 +393,34 @@ func TestDispatchWebSocketChannelJoinLeaveEvents(t *testing.T) {
 	}
 }
 
+// A huddle starting and a canvas update arrive as top-level messages from
+// the system bot with empty text; they must reach OnMessage with the
+// subtype, and a message_changed edit of one must keep it.
+func TestDispatchWebSocketHuddleAndCanvasEvents(t *testing.T) {
+	for _, subtype := range []string{"huddle_thread", "tabbed_canvas_updated"} {
+		handler := &mockEventHandler{}
+		data := []byte(`{"type":"message","subtype":"` + subtype + `","channel":"C000","user":"USLACKBOT","text":"","ts":"200.0"}`)
+		dispatchWebSocketEvent(data, handler)
+		if len(handler.messages) != 1 || handler.subtypes[0] != subtype {
+			t.Fatalf("subtype %q: messages=%d subtypes=%v, want one delivery with the subtype", subtype, len(handler.messages), handler.subtypes)
+		}
+
+		handler = &mockEventHandler{}
+		data = []byte(`{"type":"message","subtype":"message_changed","channel":"C000","message":{"subtype":"` + subtype + `","user":"USLACKBOT","text":"","ts":"200.0"}}`)
+		dispatchWebSocketEvent(data, handler)
+		if len(handler.messages) != 1 || handler.subtypes[0] != subtype {
+			t.Errorf("subtype %q edit: subtypes=%v, want the subtype kept", subtype, handler.subtypes)
+		}
+	}
+
+	// An ordinary edit still reports no subtype.
+	handler := &mockEventHandler{}
+	dispatchWebSocketEvent([]byte(`{"type":"message","subtype":"message_changed","channel":"C000","message":{"subtype":"thread_broadcast","user":"U000","text":"x","ts":"1.0"}}`), handler)
+	if len(handler.subtypes) != 1 || handler.subtypes[0] != "" {
+		t.Errorf("ordinary edit subtypes = %v, want [\"\"]", handler.subtypes)
+	}
+}
+
 func TestDispatchWebSocketUserTypingEvent(t *testing.T) {
 	handler := &mockEventHandler{}
 
