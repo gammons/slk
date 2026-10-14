@@ -1593,9 +1593,7 @@ func (m *Model) buildCache(width int, keepPosition bool) {
 		if msgDate != "" && msgDate != lastDate {
 			label := FormatDateSeparator(msgDate)
 			sepStr := "── " + label + " ──"
-			sep := lipgloss.NewStyle().Background(styles.Background).Foreground(styles.TextMuted).Bold(true).
-				Width(width).Align(lipgloss.Center).
-				Render(sepStr)
+			sep := DividerStyle(width).Render(sepStr)
 			appendSeparator(sep)
 			lastDate = msgDate
 		}
@@ -2152,6 +2150,15 @@ func FormatShortDate(dateStr string) string {
 		return d.Format("Jan 2")
 	}
 	return d.Format("Jan 2, 2006")
+}
+
+// DividerStyle is the style of a day-divider row: muted, bold, centred in
+// width columns on the theme background. System notices use it too, so
+// they read like the date separators. Build it per draw (it reads the
+// current theme).
+func DividerStyle(width int) lipgloss.Style {
+	return lipgloss.NewStyle().Background(styles.Background).Foreground(styles.TextMuted).Bold(true).
+		Width(width).Align(lipgloss.Center)
 }
 
 // FormatDateSeparator turns a "2006-01-02" date string into the
