@@ -33,6 +33,15 @@ func IsSystemNoticeSubtype(subtype string) bool {
 	return false
 }
 
+// CanOpenThread reports whether msg may be opened as a thread (and so
+// replied to). A system notice with no replies cannot: there is nothing
+// to reply to. A notice that already has replies (a huddle whose notes
+// live in its thread) stays openable. Every path that opens the thread
+// panel on a message goes through this.
+func CanOpenThread(msg MessageItem) bool {
+	return !IsSystemNoticeSubtype(msg.Subtype) || msg.ReplyCount > 0
+}
+
 // noticeFallbackText is the notice body for a system message whose text
 // and blocks yield nothing readable. Only fixed labels: who started a
 // huddle, or for how long, is not on this data path.
