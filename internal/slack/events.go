@@ -536,7 +536,7 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			debuglog.WS("message raw fields: %s", topLevelFields(data))
 		}
 		switch msg.SubType {
-		case "", "bot_message", "thread_broadcast", "file_share", "me_message":
+		case "", "bot_message", "thread_broadcast", "file_share", "me_message", "channel_join", "channel_leave", "group_join", "group_leave":
 			if msg.IsEphemeral {
 				dispatchEphemeral(data, msg, handler)
 				break
@@ -547,7 +547,9 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			// label it. file_share is a regular message that has one
 			// or more files attached (Slack's V2 upload flow uses
 			// this subtype). me_message is a /me line; the UI renders it
-			// in italics.
+			// in italics. channel_join/channel_leave (public channels)
+			// and group_join/group_leave (private channels/mpims) render
+			// as system notices, keyed off subtype.
 			debuglog.WS("message: channel=%s user=%s ts=%s subtype=%q thread_ts=%s files=%d",
 				msg.Channel, msg.User, msg.TS, msg.SubType, msg.ThreadTS, len(msg.Files))
 			handler.OnMessage(msg.Channel, msg.User, msg.TS, msg.Text, msg.ThreadTS, msg.SubType, false, msg.Files, msg.Blocks, msg.Attachments, msg.BotID, msg.Username)

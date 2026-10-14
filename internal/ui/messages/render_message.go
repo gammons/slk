@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/bubbles/entrylist"
 	emojiutil "github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/imgrender"
@@ -14,6 +15,19 @@ import (
 	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/styles"
 )
+
+// IsSystemNoticeSubtype reports whether subtype is a membership-change
+// system message (join/leave), as opposed to an authored chat message.
+// Shared with cmd/slk (unread/mention/notification gating) so the
+// subtype list stays in one place; both panes render it through
+// RenderMessage.
+func IsSystemNoticeSubtype(subtype string) bool {
+	switch subtype {
+	case "channel_join", "channel_leave", "group_join", "group_leave":
+		return true
+	}
+	return false
+}
 
 // RenderContext is what rendering a message reads besides the message.
 // Each pane builds one from its own fields when it rebuilds its cache.
@@ -121,6 +135,30 @@ func BlockkitContext(msg MessageItem, rc *RenderContext) blockkit.Context {
 // columns.
 func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOptions) RenderedMessage {
 	var out RenderedMessage
+	// Render as a muted system notice, not a chat bubble -- Slack's
+	// author for these is a system bot, indistinguishable otherwise.
+	// Both panes go through here, so the thread pane matches.
+	if IsSystemNoticeSubtype(msg.Subtype) {
+		noticeWidth := width - 4
+		if noticeWidth < 20 {
+			noticeWidth = 20
+		}
+		body := RenderSlackMarkdownWith(MessageTextSource(msg), RenderSlackMarkdownOpts{
+			UserNames:    rc.UserNames,
+			ChannelNames: rc.ChannelNames,
+			UserGroups:   rc.UserGroups,
+			Width:        noticeWidth,
+		})
+		// Stripped to plain text before styling: RenderSlackMarkdownWith
+		// re-applies TextPrimary after a mention/link span, and every
+		// join/leave message starts with one -- left unstripped, only
+		// the timestamp would actually render muted.
+		// The body's own wrap is undone so the line wraps once, with the
+		// timestamp, instead of breaking twice.
+		plain := strings.Join(strings.Fields(ansi.Strip(body)), " ")
+		out.Content = styles.Timestamp.Render(WordWrap(msg.Timestamp+"  "+plain, noticeWidth))
+		return out
+	}
 	avatarStr := opt.Avatar
 	stats := opt.stats
 	line := styles.Username(msg.UserID, rc.ColoredUsernames).Render(msg.UserName) + AuthorStatusSuffix(rc.UserStatuses, msg.UserID, time.Now()) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.Timestamp)

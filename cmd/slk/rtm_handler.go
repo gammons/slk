@@ -181,8 +181,11 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 
 	// Check if this message should trigger a desktop notification.
 	// Do this before the active workspace check so inactive workspaces
-	// can still trigger notifications.
-	if h.notifier != nil && h.notifyCfg.Enabled {
+	// can still trigger notifications. A join/leave notice is never
+	// notification-worthy -- Slack doesn't notify on them either, and
+	// an invitation join's text mentions the inviter, which would
+	// otherwise false-positive OnMention for whoever did the inviting.
+	if h.notifier != nil && h.notifyCfg.Enabled && !messages.IsSystemNoticeSubtype(subtype) {
 		isActiveWS := h.isActive != nil && h.isActive()
 		activeChID := ""
 		if h.activeChannelID != nil {
@@ -284,7 +287,11 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// (internal/slack/events.go:307): a re-delivery of a message the
 	// channel already accounted for. Editing it does not make the
 	// channel unread on Slack.
-	shouldMarkChannel := channelEligible && !isSelfMessage && !edited
+	//
+	// A join/leave notice doesn't make the channel unread on Slack
+	// either -- excluded here so the mention-badge check below (nested
+	// in this same gate) inherits it for free, same as isSelfMessage.
+	shouldMarkChannel := channelEligible && !isSelfMessage && !edited && !messages.IsSystemNoticeSubtype(subtype)
 	if h.db != nil && shouldMarkChannel {
 		if err := h.db.UpdateChannelReadState(channelID, "", true); err != nil {
 			log.Printf("Warning: failed to set has_unread for %s: %v", channelID, err)
