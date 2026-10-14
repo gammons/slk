@@ -124,6 +124,35 @@ func TestThreadHuddleRendersAsSystemNotice(t *testing.T) {
 	}
 }
 
+// A notice in the thread pane is centred and bold like a date separator.
+func TestThreadNoticeCentredAndBold(t *testing.T) {
+	m := New()
+	m.SetThread(
+		messages.MessageItem{TS: "1.0", UserID: "U000", UserName: "alice", Text: "parent"},
+		[]messages.MessageItem{{
+			TS: "2.0", UserID: "USLACKBOT", UserName: "Slackbot", Timestamp: "10:30 AM",
+			Subtype: "channel_join", Text: "<@U2> has joined the channel",
+		}},
+		"C1",
+		"1.0",
+	)
+	for _, line := range strings.Split(m.View(20, 60), "\n") {
+		plain := ansi.Strip(line)
+		i := strings.Index(plain, "has joined the channel")
+		if i < 0 {
+			continue
+		}
+		if i < 15 {
+			t.Errorf("notice starts at column %d, want it centred: %q", i, plain)
+		}
+		if !strings.Contains(line, "\x1b[1;") {
+			t.Errorf("notice is not bold: %q", line)
+		}
+		return
+	}
+	t.Fatal("notice row not found")
+}
+
 func TestClear(t *testing.T) {
 	m := New()
 	parent := messages.MessageItem{TS: "1700000001.000000", UserName: "alice", Text: "hi"}

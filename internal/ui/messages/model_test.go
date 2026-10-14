@@ -101,7 +101,7 @@ func TestChannelJoinNoticeStaysMutedThroughMention(t *testing.T) {
 
 	content := RenderMessage(msg, 60, &RenderContext{UserNames: m.userNames, ChannelNames: m.channelNames}, RenderOptions{}).Content
 	plain := ansi.Strip(content)
-	if want := styles.Timestamp.Render(plain); content != want {
+	if want := DividerStyle(59).Render(strings.TrimSpace(plain)); content != want {
 		t.Errorf("notice is not uniformly muted-styled:\nraw:  %q\nwant: %q", content, want)
 	}
 }

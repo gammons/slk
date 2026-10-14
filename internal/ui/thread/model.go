@@ -1263,12 +1263,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 			Align(lipgloss.Center).
 			Render("── new ──")
 	}
-	dateSeparatorStyle := lipgloss.NewStyle().
-		Width(width).
-		Background(styles.Background).
-		Foreground(styles.TextMuted).
-		Bold(true).
-		Align(lipgloss.Center)
+	dateSeparatorStyle := messages.DividerStyle(width)
 	decoration := func(row string) entrylist.Entry { return entrylist.Entry{Ref: -1, Lines: []string{row}} }
 	entries := make([]entrylist.Entry, 0, 2*len(m.replyEntries)+2)
 	entries = append(entries, parent)

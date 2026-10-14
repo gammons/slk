@@ -176,7 +176,10 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		if plain == "" {
 			plain = noticeFallbackText(msg.Subtype)
 		}
-		out.Content = styles.Timestamp.Render(WordWrap(msg.Timestamp+"  "+plain, noticeWidth))
+		// Centred and bold like a day divider (DividerStyle). The row is
+		// width-1 wide: WrapRows adds the one-column border after it.
+		rowWidth := width - 1
+		out.Content = DividerStyle(rowWidth).Render(WordWrap(msg.Timestamp+"  "+plain, noticeWidth))
 		// A huddle message is a thread parent: keep the reply count line
 		// (the channel pane's affordance) so the thread stays reachable.
 		if opt.ReplyAffordance && msg.ReplyCount > 0 {
@@ -184,8 +187,9 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 			if msg.ReplyCount == 1 {
 				word = "reply"
 			}
-			out.Content += "\n" + styles.ThreadIndicator.Render(
-				fmt.Sprintf("[%d %s ->]", msg.ReplyCount, word))
+			out.Content += "\n" + lipgloss.NewStyle().Background(styles.Background).
+				Width(rowWidth).Align(lipgloss.Center).Render(styles.ThreadIndicator.Render(
+				fmt.Sprintf("[%d %s ->]", msg.ReplyCount, word)))
 		}
 		return out
 	}

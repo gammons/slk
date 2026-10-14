@@ -183,6 +183,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 
 | Need | Use |
 |---|---|
+| A centred, bold, muted row like a day divider (date separators, the "new" landmark's sibling, and system notices in `RenderMessage`) | `messages.DividerStyle(width)`; build per draw (reads the theme). A notice's plain mirror drops the centring pad via `trimPlainPadding` in `WrapRows` |
 | Scrollbar gutter on a rendered pane | `bubbles/scrollbar.Overlay`, `bubbles/scrollbar.Visible` |
 | Lay out a wrapping row of labelled controls (buttons, select labels) with positions for hit-testing | `internal/bubbles/buttonrow` (`Layout`, `Rows`, `RowsFunc`); used by Block Kit actions and the confirm prompt |
 | Draw a dialog: its box, title / filter / body / footer layout, filter line, list window, selected-row marker, scrollbar gutter, and the composer popups' box and marker | `bubbles/chrome` (`Frame`, `Box`, `FilterInput`, `Window`, `List`, `Marker`, `BodyTop`, `Popup`, `PopupMarker`), drawn with `messages.ChromeStyles()` called per draw. A dialog keeps its own fields, matching and row content; see the package doc |
