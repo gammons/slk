@@ -127,6 +127,23 @@ func TestOnMessage_MentionIncrementsCount(t *testing.T) {
 			chType: "channel", author: "UOTHER",
 			text: "<!subteam^S1|@eng> ship it", want: 0,
 		},
+		{
+			// An invitation join's text names the inviter: "<@joiner>
+			// has joined the channel by invitation from <@USELF>".
+			// Inviting someone must not badge a mention on yourself.
+			name:   "channel_join invitation naming self does not count",
+			chType: "channel", author: "UOTHER",
+			text:    "<@UOTHER> has joined the channel by invitation from <@USELF>",
+			subtype: "channel_join", want: 0,
+		},
+		{
+			// messageMentionsSelf returns true unconditionally for dm
+			// Type, so an mpim's group_leave notice would otherwise
+			// badge every time someone leaves.
+			name:   "group_leave in a group dm does not count",
+			chType: "group_dm", author: "UOTHER",
+			text: "<@UOTHER> has left the group", subtype: "group_leave", want: 0,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
