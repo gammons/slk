@@ -106,6 +106,24 @@ func TestChannelJoinNoticeStaysMutedThroughMention(t *testing.T) {
 	}
 }
 
+func TestCanOpenThread(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  MessageItem
+		want bool
+	}{
+		{"normal", MessageItem{TS: "1.0"}, true},
+		{"notice no replies", MessageItem{Subtype: "channel_join"}, false},
+		{"huddle no replies", MessageItem{Subtype: "huddle_thread"}, false},
+		{"huddle with replies", MessageItem{Subtype: "huddle_thread", ReplyCount: 1}, true},
+	}
+	for _, c := range cases {
+		if got := CanOpenThread(c.msg); got != c.want {
+			t.Errorf("%s: CanOpenThread = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestIsSystemNoticeSubtype(t *testing.T) {
 	cases := map[string]bool{
 		"channel_join":     true,

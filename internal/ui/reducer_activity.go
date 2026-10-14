@@ -241,7 +241,7 @@ var reduceActivity reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// backfills). The Activity view stays visible behind the
 		// thread panel, mirroring the Threads view.
 		if it.ThreadTS != "" {
-			return a.openThreadForPermalink(it.ChannelID, it.ThreadTS), true
+			return a.openThreadForPermalink(it.ChannelID, it.ThreadTS, it.TS != "" && it.TS != it.ThreadTS), true
 		}
 		// Channel message target: reuse the in-app permalink-jump
 		// machinery. Set the pending nav so the ChannelSelectedMsg /
