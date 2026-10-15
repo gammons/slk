@@ -504,6 +504,26 @@ func (m *Model) UpdateMessageInPlace(item messages.MessageItem) bool {
 	return false
 }
 
+// SetHuddleRoom replaces the huddle room of the reply or parent with the
+// given TS. The room is treated as immutable. Returns true if found.
+func (m *Model) SetHuddleRoom(ts string, room *messages.HuddleRoom) bool {
+	found := false
+	for i := range m.replies {
+		if m.replies[i].TS == ts {
+			m.replies[i].HuddleRoom = room
+			found = true
+		}
+	}
+	if m.parent.TS == ts {
+		m.parent.HuddleRoom = room
+		found = true
+	}
+	if found {
+		m.InvalidateCache()
+	}
+	return found
+}
+
 // RemoveMessageByTS removes a reply by TS, adjusting the selected
 // index so it remains valid. Returns true if found.
 func (m *Model) RemoveMessageByTS(ts string) bool {
