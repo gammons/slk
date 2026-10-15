@@ -33,7 +33,7 @@ func formatMessage(msg messages.MessageItem, userNames, channelNames map[string]
 	b.WriteString(msg.DateStr + " " + msg.Timestamp)
 	b.WriteByte('\n')
 
-	body := messages.SlackMrkdwnToCommonMark(messages.MessageTextSource(msg), userNames, channelNames)
+	body := messages.SlackMrkdwnToCommonMark(messages.MessageCopyText(msg), userNames, channelNames)
 	b.WriteString(body)
 	b.WriteByte('\n')
 
