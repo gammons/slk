@@ -140,6 +140,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Huddle deep link for a conversation (`https://app.slack.com/huddle/<TEAM>/<CHANNEL>`) | `slackurl.HuddleURL` |
 | Enter insert mode with a compose box focused (the shared body of `i` and a click on a compose region) | `(*App).beginInsertMode(toThread bool)` (`internal/ui/mode_command.go`); the compose regions' tops are recorded per frame in `panelLayout` |
 | The channel a user's huddle is in (users.info) | `slackclient.UserProfile.HuddleStateChannelID` (wraps `*slack.User`; `GetUserProfile`/`GetUserProfileContext` are hand-rolled POSTs because slack-go's `UserProfile` drops that field) |
+| The `room` object of a `huddle_thread` message (slack-go drops it): captured from history/replies responses by the client's `roomTap` (`(*slackclient.Client).HuddleRoom(channel, ts)`), and from WebSocket frames via the optional `slackclient.RoomObserver`; stored in `raw_json` (`slackclient.MergeRoom`; `UpsertMessage` keeps a stored room when a typed write lacks one); decoded with `core.ParseHuddleRoom` into `core.HuddleRoom` on `MessageItem.HuddleRoom`; read back from a cached row by `cmd/slk roomFromRawJSON` |
 | Slack ts → `time.Time` (whole seconds, any timezone) | `export.TimeFromTS` |
 | A since/until/overlap date range in a timezone, and "is this ts in it?" | `export.NewWindow`, `export.Window.Contains` |
 | Sleep out a slack-go rate-limit error (ctx-aware) | `slackclient.WaitOutRateLimit` |

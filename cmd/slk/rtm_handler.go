@@ -77,7 +77,35 @@ type rtmEventHandler struct {
 	// lookupRetryAt holds when a refused or rate-limited discovery
 	// lookup may run again. WebSocket goroutine only.
 	lookupRetryAt map[string]time.Time
+
+	// pendingRooms holds the `room` object of a message frame between
+	// OnMessageRoom (called just before OnMessage by the dispatcher) and
+	// the OnMessage that consumes it, keyed by channel/ts. WebSocket
+	// goroutine only.
+	pendingRooms map[string]json.RawMessage
 }
+
+// maxPendingRooms bounds pendingRooms against frames whose OnMessage never
+// follows (a message_changed dropped as ephemeral, say).
+const maxPendingRooms = 32
+
+// OnMessageRoom implements slackclient.RoomObserver.
+func (h *rtmEventHandler) OnMessageRoom(channelID, ts string, room json.RawMessage) {
+	if h.pendingRooms == nil || len(h.pendingRooms) >= maxPendingRooms {
+		h.pendingRooms = map[string]json.RawMessage{}
+	}
+	h.pendingRooms[channelID+"/"+ts] = room
+}
+
+// takeRoom returns and forgets the room OnMessageRoom stored for a message.
+func (h *rtmEventHandler) takeRoom(channelID, ts string) json.RawMessage {
+	k := channelID + "/" + ts
+	room := h.pendingRooms[k]
+	delete(h.pendingRooms, k)
+	return room
+}
+
+var _ slackclient.RoomObserver = (*rtmEventHandler)(nil)
 
 const discoveryRetryAfter = time.Minute
 
@@ -135,6 +163,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// Key the row on the bot_id and resolve its avatar/name via bots.info,
 	// mirroring the fetch path's messageAuthor (cmd/slk/users.go).
 	authorID := h.messageAuthor(userID, botID, username)
+	room := h.takeRoom(channelID, ts)
 	// Synchronous, so the channel's row and type exist before the writes
 	// below. The UI hears of it only after the unread write.
 	discovered, discoveredFinder, isNew := h.discoverConversation(channelID)
@@ -163,6 +192,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 				Attachments:     attachments,
 			}}
 			rawBytes, _ := json.Marshal(synthetic)
+			rawBytes = slackclient.MergeRoom(rawBytes, room)
 			h.db.UpsertMessage(cache.Message{
 				TS:          ts,
 				ChannelID:   channelID,
@@ -389,6 +419,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	}
 
 	item := h.messageItemFromEvent(authorID, userID, username, ts, text, threadTS, subtype, edited, files, blocks, attachments)
+	item.HuddleRoom = core.ParseHuddleRoom(room)
 	debuglog.Cache("OnMessage: team=%s channel=%s ts=%s subtype=%q thread_ts=%s decision=dispatched_to_app",
 		h.workspaceID, channelID, ts, subtype, threadTS)
 	if h.program != nil {
