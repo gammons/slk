@@ -191,7 +191,9 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		// Channel search still matches a notice's text, so highlight it
 		// the way a message body is (the timestamp is left alone).
 		if len(rc.SearchTerms) > 0 {
-			if hlStart, hlEnd, ok := SearchHighlightSGR(); ok {
+			// The close re-asserts the notice's own style (bold, muted,
+			// background), not the body's.
+			if hlStart, hlEnd, ok := searchHighlightSGRRestoring(noticeRestoreSGR()); ok {
 				plain = HighlightSearchTerms(plain, rc.SearchTerms, hlStart, hlEnd)
 			}
 		}

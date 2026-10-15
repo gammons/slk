@@ -2185,8 +2185,21 @@ func FormatShortDate(dateStr string) string {
 // they read like the date separators. Build it per draw (it reads the
 // current theme).
 func DividerStyle(width int) lipgloss.Style {
-	return lipgloss.NewStyle().Background(styles.Background).Foreground(styles.TextMuted).Bold(true).
-		Width(width).Align(lipgloss.Center)
+	return dividerBaseStyle().Width(width).Align(lipgloss.Center)
+}
+
+// dividerBaseStyle is DividerStyle without its layout (Width, Align): the
+// attributes a divider or notice is drawn with. noticeRestoreSGR derives
+// from it, so the style and what is re-asserted after a highlight cannot
+// drift apart.
+func dividerBaseStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(styles.Background).Foreground(styles.TextMuted).Bold(true)
+}
+
+// noticeRestoreSGR is the opening SGR sequence of dividerBaseStyle, found by
+// rendering a sentinel and taking what precedes it.
+func noticeRestoreSGR() string {
+	return strings.SplitN(dividerBaseStyle().Render("\x00"), "\x00", 2)[0]
 }
 
 // FormatDateSeparator turns a "2006-01-02" date string into the
