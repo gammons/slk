@@ -1426,7 +1426,7 @@ func (a *App) copyMessageOfSelected() tea.Cmd {
 		return nil
 	}
 
-	text := messages.MessageTextSource(msg)
+	text := messages.MessageCopyText(msg)
 	if text == "" {
 		return func() tea.Msg { return ToastMsg{Text: "Message has no text"} }
 	}
