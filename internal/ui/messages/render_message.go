@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/bubbles/entrylist"
 	emojiutil "github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/imgrender"
@@ -14,6 +15,44 @@ import (
 	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/styles"
 )
+
+// IsSystemNoticeSubtype reports whether subtype is a system message --
+// join/leave, a huddle starting (huddle_thread), a canvas update
+// (tabbed_canvas_updated) -- as opposed to an authored chat message.
+// Shared with cmd/slk (unread/mention/notification gating) so the
+// subtype list stays in one place; both panes render it through
+// RenderMessage. slackclient.IsNoticeSubtype (live delivery) must list
+// the same subtypes; a test in cmd/slk keeps them in step.
+func IsSystemNoticeSubtype(subtype string) bool {
+	switch subtype {
+	case "channel_join", "channel_leave", "group_join", "group_leave",
+		"huddle_thread", "tabbed_canvas_updated":
+		return true
+	}
+	return false
+}
+
+// CanOpenThread reports whether msg may be opened as a thread (and so
+// replied to). A system notice with no replies cannot: there is nothing
+// to reply to. A notice that already has replies (a huddle whose notes
+// live in its thread) stays openable. Every path that opens the thread
+// panel on a message goes through this.
+func CanOpenThread(msg MessageItem) bool {
+	return !IsSystemNoticeSubtype(msg.Subtype) || msg.ReplyCount > 0
+}
+
+// noticeFallbackText is the notice body for a system message whose text
+// and blocks yield nothing readable. Only fixed labels: who started a
+// huddle, or for how long, is not on this data path.
+func noticeFallbackText(subtype string) string {
+	switch subtype {
+	case "huddle_thread":
+		return "A huddle started"
+	case "tabbed_canvas_updated":
+		return "A canvas was updated"
+	}
+	return ""
+}
 
 // RenderContext is what rendering a message reads besides the message.
 // Each pane builds one from its own fields when it rebuilds its cache.
@@ -121,6 +160,59 @@ func BlockkitContext(msg MessageItem, rc *RenderContext) blockkit.Context {
 // columns.
 func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOptions) RenderedMessage {
 	var out RenderedMessage
+	// Render as a muted system notice, not a chat bubble -- Slack's
+	// author for these is a system bot, indistinguishable otherwise.
+	// Both panes go through here, so the thread pane matches.
+	if IsSystemNoticeSubtype(msg.Subtype) {
+		noticeWidth := width - 4
+		if noticeWidth < 20 {
+			noticeWidth = 20
+		}
+		body := RenderSlackMarkdownWith(MessageTextSource(msg), RenderSlackMarkdownOpts{
+			UserNames:    rc.UserNames,
+			ChannelNames: rc.ChannelNames,
+			UserGroups:   rc.UserGroups,
+			Width:        noticeWidth,
+		})
+		// Stripped to plain text before styling: RenderSlackMarkdownWith
+		// re-applies TextPrimary after a mention/link span, and every
+		// join/leave message starts with one -- left unstripped, only
+		// the timestamp would actually render muted.
+		// The body's own wrap is undone so the line wraps once, with the
+		// timestamp, instead of breaking twice.
+		plain := strings.Join(strings.Fields(ansi.Strip(body)), " ")
+		if text := huddleNoticeText(msg, rc.UserNames); text != "" {
+			plain = text
+		}
+		if plain == "" {
+			plain = noticeFallbackText(msg.Subtype)
+		}
+		// Channel search still matches a notice's text, so highlight it
+		// the way a message body is (the timestamp is left alone).
+		if len(rc.SearchTerms) > 0 {
+			// The close re-asserts the notice's own style (bold, muted,
+			// background), not the body's.
+			if hlStart, hlEnd, ok := searchHighlightSGRRestoring(noticeRestoreSGR()); ok {
+				plain = HighlightSearchTerms(plain, rc.SearchTerms, hlStart, hlEnd)
+			}
+		}
+		// Centred and bold like a day divider (DividerStyle). The row is
+		// width-1 wide: WrapRows adds the one-column border after it.
+		rowWidth := width - 1
+		out.Content = DividerStyle(rowWidth).Render(WordWrap(msg.Timestamp+"  "+plain, noticeWidth))
+		// A huddle message is a thread parent: keep the reply count line
+		// (the channel pane's affordance) so the thread stays reachable.
+		if opt.ReplyAffordance && msg.ReplyCount > 0 {
+			word := "replies"
+			if msg.ReplyCount == 1 {
+				word = "reply"
+			}
+			out.Content += "\n" + lipgloss.NewStyle().Background(styles.Background).
+				Width(rowWidth).Align(lipgloss.Center).Render(styles.ThreadIndicator.Render(
+				fmt.Sprintf("[%d %s ->]", msg.ReplyCount, word)))
+		}
+		return out
+	}
 	avatarStr := opt.Avatar
 	stats := opt.stats
 	line := styles.Username(msg.UserID, rc.ColoredUsernames).Render(msg.UserName) + AuthorStatusSuffix(rc.UserStatuses, msg.UserID, time.Now()) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.Timestamp)

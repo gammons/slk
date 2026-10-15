@@ -60,6 +60,87 @@ func TestMessagePaneViewUpdatesAuthorStatus(t *testing.T) {
 	}
 }
 
+// channel_join must render as a muted notice, not a normal chat
+// bubble under the system bot's name, and the @mention in its text
+// must still resolve.
+func TestChannelJoinRendersAsSystemNotice(t *testing.T) {
+	m := New([]MessageItem{{
+		UserID:    "USLACKBOT",
+		UserName:  "Slackbot",
+		Text:      "<@U2> has joined the channel",
+		Timestamp: "10:30 AM",
+		Subtype:   "channel_join",
+	}}, "general")
+	m.SetUserNames(map[string]string{"U2": "alice"})
+
+	got := ansi.Strip(m.View(20, 60))
+	if strings.Contains(got, "Slackbot") {
+		t.Errorf("channel_join message shows the system bot's display name instead of a muted notice:\n%s", got)
+	}
+	if !strings.Contains(got, "alice") {
+		t.Errorf("channel_join message text should still resolve the @mention to a display name:\n%s", got)
+	}
+	if !strings.Contains(got, "has joined the channel") {
+		t.Errorf("channel_join message body missing from render:\n%s", got)
+	}
+}
+
+// The notice's mention/link handling re-applies TextPrimary after its
+// own color, which -- unstripped -- would un-mute everything past the
+// first @mention. Every channel_join/leave message starts with one.
+func TestChannelJoinNoticeStaysMutedThroughMention(t *testing.T) {
+	m := New(nil, "general")
+	m.SetUserNames(map[string]string{"U2": "alice"})
+	msg := MessageItem{
+		UserID:    "USLACKBOT",
+		UserName:  "Slackbot",
+		Text:      "<@U2> has joined the channel",
+		Timestamp: "10:30 AM",
+		Subtype:   "channel_join",
+	}
+
+	content := RenderMessage(msg, 60, &RenderContext{UserNames: m.userNames, ChannelNames: m.channelNames}, RenderOptions{}).Content
+	plain := ansi.Strip(content)
+	if want := DividerStyle(59).Render(strings.TrimSpace(plain)); content != want {
+		t.Errorf("notice is not uniformly muted-styled:\nraw:  %q\nwant: %q", content, want)
+	}
+}
+
+func TestCanOpenThread(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  MessageItem
+		want bool
+	}{
+		{"normal", MessageItem{TS: "1.0"}, true},
+		{"notice no replies", MessageItem{Subtype: "channel_join"}, false},
+		{"huddle no replies", MessageItem{Subtype: "huddle_thread"}, false},
+		{"huddle with replies", MessageItem{Subtype: "huddle_thread", ReplyCount: 1}, true},
+	}
+	for _, c := range cases {
+		if got := CanOpenThread(c.msg); got != c.want {
+			t.Errorf("%s: CanOpenThread = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestIsSystemNoticeSubtype(t *testing.T) {
+	cases := map[string]bool{
+		"channel_join":     true,
+		"channel_leave":    true,
+		"group_join":       true,
+		"group_leave":      true,
+		"":                 false,
+		"bot_message":      false,
+		"thread_broadcast": false,
+	}
+	for subtype, want := range cases {
+		if got := IsSystemNoticeSubtype(subtype); got != want {
+			t.Errorf("IsSystemNoticeSubtype(%q) = %v, want %v", subtype, got, want)
+		}
+	}
+}
+
 func TestMessagePaneNavigation(t *testing.T) {
 	msgs := []MessageItem{
 		{TS: "1.0", UserName: "alice", Text: "msg 1"},
@@ -1009,6 +1090,25 @@ func TestModel_HandleAvatarReady_EmptyUserIDNoOp(t *testing.T) {
 	m.HandleAvatarReady("")
 	if m.Version() != beforeVersion {
 		t.Error("HandleAvatarReady(\"\") should not dirty the version")
+	}
+}
+
+// A huddle with replies is drawn as its starter's message, so the starter's
+// avatar arriving must repaint it even though the stored author is Slackbot.
+func TestModel_HandleAvatarReady_MarksHuddleStarterEntry(t *testing.T) {
+	msgs := []MessageItem{
+		{TS: "1700000001.000000", UserID: "USLACKBOT", UserName: "Slackbot", Subtype: "huddle_thread", ReplyCount: 1,
+			HuddleRoom: &HuddleRoom{CreatedBy: "UFAKE0002"}, Timestamp: "10:30 AM"},
+		{TS: "1700000002.000000", UserID: "UFAKE0003", UserName: "carol", Text: "other", Timestamp: "10:31 AM"},
+	}
+	m := New(msgs, "C")
+	_ = m.View(20, 60)
+	m.HandleAvatarReady("UFAKE0002")
+	if _, ok := m.staleEntries["1700000001.000000"]; !ok {
+		t.Error("huddle starter's avatar must mark the huddle entry stale")
+	}
+	if _, ok := m.staleEntries["1700000002.000000"]; ok {
+		t.Error("an unrelated entry must not be marked stale")
 	}
 }
 

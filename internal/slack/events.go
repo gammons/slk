@@ -204,6 +204,20 @@ type wsEvent struct {
 	SubType string `json:"subtype"`
 }
 
+// IsNoticeSubtype reports whether a message subtype is a system notice
+// the UI draws as a muted line: join/leave, a huddle starting, a canvas
+// update. It must list the same subtypes as messages.IsSystemNoticeSubtype
+// (internal/ui/messages), which this package cannot import;
+// TestNoticeSubtypesMatchRenderer in cmd/slk keeps the two in step.
+func IsNoticeSubtype(subtype string) bool {
+	switch subtype {
+	case "channel_join", "channel_leave", "group_join", "group_leave",
+		"huddle_thread", "tabbed_canvas_updated":
+		return true
+	}
+	return false
+}
+
 // wsMessageEvent represents a message event from the WebSocket.
 type wsMessageEvent struct {
 	Type            string             `json:"type"`
@@ -219,6 +233,7 @@ type wsMessageEvent struct {
 	Files           []slack.File       `json:"files"`
 	Blocks          slack.Blocks       `json:"blocks"`
 	Attachments     []slack.Attachment `json:"attachments"`
+	Room            json.RawMessage    `json:"room"`             // huddle_thread; slack-go drops it
 	Message         *wsSubMsg          `json:"message"`          // for message_changed
 	PreviousMessage *wsSubMsg          `json:"previous_message"` // for message_changed
 	IsEphemeral     bool               `json:"is_ephemeral"`
@@ -226,6 +241,7 @@ type wsMessageEvent struct {
 
 // wsSubMsg is the inner message for message_changed events.
 type wsSubMsg struct {
+	SubType     string             `json:"subtype"`
 	User        string             `json:"user"`
 	BotID       string             `json:"bot_id"`
 	Username    string             `json:"username"`
@@ -236,6 +252,7 @@ type wsSubMsg struct {
 	Blocks      slack.Blocks       `json:"blocks"`
 	Attachments []slack.Attachment `json:"attachments"`
 	IsEphemeral bool               `json:"is_ephemeral"`
+	Room        json.RawMessage    `json:"room"`
 }
 
 // wsActionIDs is a second, narrow decode of a message frame: the "id"
@@ -518,6 +535,21 @@ func topLevelFields(data []byte) string {
 	return b.String()
 }
 
+// offerRoom hands a frame's `room` object to a handler that implements
+// RoomObserver. A frame without one, or a handler without the interface,
+// is a no-op.
+func offerRoom(handler EventHandler, channelID, ts string, room json.RawMessage) {
+	if !isJSONObject(room) {
+		return
+	}
+	obs, ok := handler.(RoomObserver)
+	if !ok {
+		return
+	}
+	LogHuddleRoom(ts, room)
+	obs.OnMessageRoom(channelID, ts, room)
+}
+
 // dispatchWebSocketEvent parses a raw JSON WebSocket message and routes it
 // to the appropriate EventHandler method.
 func dispatchWebSocketEvent(data []byte, handler EventHandler) {
@@ -535,7 +567,13 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 		if debuglog.Enabled() {
 			debuglog.WS("message raw fields: %s", topLevelFields(data))
 		}
-		switch msg.SubType {
+		// A system notice is delivered like an ordinary message, with its
+		// subtype preserved; fold it onto "" for the switch below.
+		kind := msg.SubType
+		if IsNoticeSubtype(kind) {
+			kind = ""
+		}
+		switch kind {
 		case "", "bot_message", "thread_broadcast", "file_share", "me_message":
 			if msg.IsEphemeral {
 				dispatchEphemeral(data, msg, handler)
@@ -547,9 +585,11 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			// label it. file_share is a regular message that has one
 			// or more files attached (Slack's V2 upload flow uses
 			// this subtype). me_message is a /me line; the UI renders it
-			// in italics.
+			// in italics. A system notice (see IsNoticeSubtype) renders
+			// as a muted line, keyed off subtype.
 			debuglog.WS("message: channel=%s user=%s ts=%s subtype=%q thread_ts=%s files=%d",
 				msg.Channel, msg.User, msg.TS, msg.SubType, msg.ThreadTS, len(msg.Files))
+			offerRoom(handler, msg.Channel, msg.TS, msg.Room)
 			handler.OnMessage(msg.Channel, msg.User, msg.TS, msg.Text, msg.ThreadTS, msg.SubType, false, msg.Files, msg.Blocks, msg.Attachments, msg.BotID, msg.Username)
 		case "message_changed":
 			if msg.Message == nil {
@@ -565,7 +605,19 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			}
 			debuglog.WS("message_changed: channel=%s user=%s ts=%s thread_ts=%s edited=true",
 				msg.Channel, msg.Message.User, msg.Message.TS, msg.Message.ThreadTS)
-			handler.OnMessage(msg.Channel, msg.Message.User, msg.Message.TS, msg.Message.Text, msg.Message.ThreadTS, "", true, msg.Message.Files, msg.Message.Blocks, msg.Message.Attachments, msg.Message.BotID, msg.Message.Username)
+			// An edited system notice (a huddle message is edited when the
+			// huddle ends) keeps its subtype, or the cached row would turn
+			// back into a chat bubble. Other edits keep reporting "".
+			editSubtype := ""
+			if IsNoticeSubtype(msg.Message.SubType) {
+				editSubtype = msg.Message.SubType
+			}
+			room := msg.Message.Room
+			if !isJSONObject(room) {
+				room = msg.Room
+			}
+			offerRoom(handler, msg.Channel, msg.Message.TS, room)
+			handler.OnMessage(msg.Channel, msg.Message.User, msg.Message.TS, msg.Message.Text, msg.Message.ThreadTS, editSubtype, true, msg.Message.Files, msg.Message.Blocks, msg.Message.Attachments, msg.Message.BotID, msg.Message.Username)
 		case "message_deleted":
 			debuglog.WS("message_deleted: channel=%s deleted_ts=%s", msg.Channel, msg.DeletedTS)
 			handler.OnMessageDeleted(msg.Channel, msg.DeletedTS)

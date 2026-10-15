@@ -17,8 +17,10 @@ import (
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/imgrender"
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/slack-go/slack"
 )
 
 func TestSetThread(t *testing.T) {
@@ -65,6 +67,90 @@ func TestThreadViewUpdatesAuthorStatus(t *testing.T) {
 	if got := ansi.Strip(m.View(20, 60)); !strings.Contains(got, "bob "+peerstatus.HuddleGlyph) {
 		t.Fatalf("thread reply header does not replace the status with the huddle glyph:\n%s", got)
 	}
+}
+
+// A channel_join reply must render as a muted notice, matching the
+// main pane -- selecting one and pressing Enter opens it here.
+func TestThreadChannelJoinRendersAsSystemNotice(t *testing.T) {
+	m := New()
+	m.SetThread(
+		messages.MessageItem{TS: "1.0", UserID: "U1", UserName: "alice", Text: "parent"},
+		[]messages.MessageItem{{
+			TS: "2.0", UserID: "USLACKBOT", UserName: "Slackbot",
+			Text: "<@U3> has joined the channel", Timestamp: "10:30 AM", Subtype: "channel_join",
+		}},
+		"C1",
+		"1.0",
+	)
+	m.SetUserNames(map[string]string{"U3": "carol"})
+
+	got := ansi.Strip(m.View(20, 60))
+	if strings.Contains(got, "Slackbot") {
+		t.Errorf("channel_join reply shows the system bot's display name instead of a muted notice:\n%s", got)
+	}
+	if !strings.Contains(got, "carol") {
+		t.Errorf("channel_join reply text should still resolve the @mention to a display name:\n%s", got)
+	}
+}
+
+// A huddle message with empty text renders as a notice from its block
+// text in the thread pane too.
+func TestThreadHuddleRendersAsSystemNotice(t *testing.T) {
+	m := New()
+	m.SetThread(
+		messages.MessageItem{TS: "1.0", UserID: "U000", UserName: "alice", Text: "parent"},
+		[]messages.MessageItem{{
+			TS: "2.0", UserID: "USLACKBOT", UserName: "Slackbot", Timestamp: "10:30 AM",
+			Subtype: "huddle_thread",
+			Blocks: []blockkit.Block{blockkit.RichTextBlock{Elements: []slack.RichTextElement{
+				&slack.RichTextSection{
+					Type: slack.RTESection,
+					Elements: []slack.RichTextSectionElement{
+						&slack.RichTextSectionTextElement{Type: slack.RTSEText, Text: "A huddle started"},
+					},
+				},
+			}}},
+		}},
+		"C1",
+		"1.0",
+	)
+
+	got := ansi.Strip(m.View(20, 60))
+	if strings.Contains(got, "Slackbot") {
+		t.Errorf("huddle reply shows the system bot's name instead of a notice:\n%s", got)
+	}
+	if !strings.Contains(got, "A huddle started") {
+		t.Errorf("huddle notice text missing:\n%s", got)
+	}
+}
+
+// A notice in the thread pane is centred and bold like a date separator.
+func TestThreadNoticeCentredAndBold(t *testing.T) {
+	m := New()
+	m.SetThread(
+		messages.MessageItem{TS: "1.0", UserID: "U000", UserName: "alice", Text: "parent"},
+		[]messages.MessageItem{{
+			TS: "2.0", UserID: "USLACKBOT", UserName: "Slackbot", Timestamp: "10:30 AM",
+			Subtype: "channel_join", Text: "<@U2> has joined the channel",
+		}},
+		"C1",
+		"1.0",
+	)
+	for _, line := range strings.Split(m.View(20, 60), "\n") {
+		plain := ansi.Strip(line)
+		i := strings.Index(plain, "has joined the channel")
+		if i < 0 {
+			continue
+		}
+		if i < 15 {
+			t.Errorf("notice starts at column %d, want it centred: %q", i, plain)
+		}
+		if !strings.Contains(line, "\x1b[1;") {
+			t.Errorf("notice is not bold: %q", line)
+		}
+		return
+	}
+	t.Fatal("notice row not found")
 }
 
 func TestClear(t *testing.T) {

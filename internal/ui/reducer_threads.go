@@ -172,11 +172,20 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// Threads-view opens build the parent from the list summary,
 		// which has text but no formatted time — take just that field.
 		if parentMsg.Text == "" || parentMsg.Timestamp == "" || parentMsg.TS != m.ThreadTS {
-			if cached := a.threads.CacheRead(ids.ChannelID(channelID), ids.ThreadTS(m.ThreadTS)); len(cached) > 0 && cached[0].Text != "" {
+			if cached := a.threads.CacheRead(ids.ChannelID(channelID), ids.ThreadTS(m.ThreadTS)); len(cached) > 0 && (cached[0].Text != "" || cached[0].Subtype != "" || len(cached[0].Blocks) > 0) {
 				if parentMsg.Text == "" || parentMsg.TS != m.ThreadTS {
+					count := parentMsg.ReplyCount
 					parentMsg = cached[0]
+					if parentMsg.TS == m.ThreadTS {
+						parentMsg.ReplyCount = max(parentMsg.ReplyCount, count)
+					}
 				} else if parentMsg.Timestamp == "" {
 					parentMsg.Timestamp = cached[0].Timestamp
+					// The summary a threads-list parent is built from has
+					// no huddle room either.
+					if parentMsg.HuddleRoom == nil && cached[0].TS == parentMsg.TS {
+						parentMsg.HuddleRoom = cloneHuddleRoom(cached[0].HuddleRoom)
+					}
 				}
 			}
 		}

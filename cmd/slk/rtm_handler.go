@@ -76,7 +76,35 @@ type rtmEventHandler struct {
 	// lookupRetryAt holds when a refused or rate-limited discovery
 	// lookup may run again. WebSocket goroutine only.
 	lookupRetryAt map[string]time.Time
+
+	// pendingRooms holds the `room` object of a message frame between
+	// OnMessageRoom (called just before OnMessage by the dispatcher) and
+	// the OnMessage that consumes it, keyed by channel/ts. WebSocket
+	// goroutine only.
+	pendingRooms map[string]json.RawMessage
 }
+
+// maxPendingRooms bounds pendingRooms against frames whose OnMessage never
+// follows (a message_changed dropped as ephemeral, say).
+const maxPendingRooms = 32
+
+// OnMessageRoom implements slackclient.RoomObserver.
+func (h *rtmEventHandler) OnMessageRoom(channelID, ts string, room json.RawMessage) {
+	if h.pendingRooms == nil || len(h.pendingRooms) >= maxPendingRooms {
+		h.pendingRooms = map[string]json.RawMessage{}
+	}
+	h.pendingRooms[channelID+"/"+ts] = room
+}
+
+// takeRoom returns and forgets the room OnMessageRoom stored for a message.
+func (h *rtmEventHandler) takeRoom(channelID, ts string) json.RawMessage {
+	k := channelID + "/" + ts
+	room := h.pendingRooms[k]
+	delete(h.pendingRooms, k)
+	return room
+}
+
+var _ slackclient.RoomObserver = (*rtmEventHandler)(nil)
 
 const discoveryRetryAfter = time.Minute
 
@@ -134,6 +162,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// Key the row on the bot_id and resolve its avatar/name via bots.info,
 	// mirroring the fetch path's messageAuthor (cmd/slk/users.go).
 	authorID := h.messageAuthor(userID, botID, username)
+	room := h.takeRoom(channelID, ts)
 	// Synchronous, so the channel's row and type exist before the writes
 	// below. The UI hears of it only after the unread write.
 	discovered, discoveredFinder, isNew := h.discoverConversation(channelID)
@@ -153,7 +182,20 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 			Attachments:     attachments,
 		}}
 		rawBytes, _ := json.Marshal(synthetic)
+		rawBytes = slackclient.MergeRoom(rawBytes, room)
+		// This write carries no reply count (a message_changed frame has
+		// none, and live replies are never written back), so an edit keeps
+		// the stored one: zeroing it would make a huddle with replies look
+		// reply-less to the open-thread gate. History fetches write the
+		// real count and stay authoritative.
+		replyCount := 0
+		if edited {
+			if prev, err := h.db.GetMessage(channelID, ts); err == nil {
+				replyCount = prev.ReplyCount
+			}
+		}
 		h.db.UpsertMessage(cache.Message{
+			ReplyCount:  replyCount,
 			TS:          ts,
 			ChannelID:   channelID,
 			WorkspaceID: h.workspaceID,
@@ -181,8 +223,11 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 
 	// Check if this message should trigger a desktop notification.
 	// Do this before the active workspace check so inactive workspaces
-	// can still trigger notifications.
-	if h.notifier != nil && h.notifyCfg.Enabled {
+	// can still trigger notifications. A join/leave notice is never
+	// notification-worthy -- Slack doesn't notify on them either, and
+	// an invitation join's text mentions the inviter, which would
+	// otherwise false-positive OnMention for whoever did the inviting.
+	if h.notifier != nil && h.notifyCfg.Enabled && !messages.IsSystemNoticeSubtype(subtype) {
 		isActiveWS := h.isActive != nil && h.isActive()
 		activeChID := ""
 		if h.activeChannelID != nil {
@@ -284,7 +329,11 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// (internal/slack/events.go:307): a re-delivery of a message the
 	// channel already accounted for. Editing it does not make the
 	// channel unread on Slack.
-	shouldMarkChannel := channelEligible && !isSelfMessage && !edited
+	//
+	// A join/leave notice doesn't make the channel unread on Slack
+	// either -- excluded here so the mention-badge check below (nested
+	// in this same gate) inherits it for free, same as isSelfMessage.
+	shouldMarkChannel := channelEligible && !isSelfMessage && !edited && !messages.IsSystemNoticeSubtype(subtype)
 	if h.db != nil && shouldMarkChannel {
 		if err := h.db.UpdateChannelReadState(channelID, "", true); err != nil {
 			log.Printf("Warning: failed to set has_unread for %s: %v", channelID, err)
@@ -368,6 +417,11 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	}
 
 	item := h.messageItemFromEvent(authorID, userID, username, ts, text, threadTS, subtype, edited, files, blocks, attachments)
+	var request func(string)
+	if h.wsCtx != nil && h.wsCtx.UserResolver != nil {
+		request = h.wsCtx.UserResolver.Request
+	}
+	item.HuddleRoom = resolveHuddleUsers(core.ParseHuddleRoom(room), h.userNames, h.db, request)
 	debuglog.Cache("OnMessage: team=%s channel=%s ts=%s subtype=%q thread_ts=%s decision=dispatched_to_app",
 		h.workspaceID, channelID, ts, subtype, threadTS)
 	if h.program != nil {
