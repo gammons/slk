@@ -38,7 +38,15 @@ func (db *DB) UpsertMessage(m Message) error {
 			reply_count=excluded.reply_count,
 			edited_at=excluded.edited_at,
 			is_deleted=excluded.is_deleted,
-			raw_json=excluded.raw_json,
+			-- A typed (slack-go) write drops a huddle message's top-level
+			-- room object; keep the stored one rather than erase it.
+			raw_json=CASE
+				WHEN json_valid(excluded.raw_json) AND json_valid(messages.raw_json)
+					AND json_type(excluded.raw_json, '$.room') IS NULL
+					AND json_type(messages.raw_json, '$.room') = 'object'
+				THEN json_set(excluded.raw_json, '$.room', json(json_extract(messages.raw_json, '$.room')))
+				ELSE excluded.raw_json
+			END,
 			subtype=excluded.subtype
 	`, m.TS, m.ChannelID, m.WorkspaceID, m.UserID, m.Text, m.ThreadTS,
 		m.ReplyCount, m.EditedAt, boolToInt(m.IsDeleted), m.RawJSON, m.CreatedAt, m.Subtype)

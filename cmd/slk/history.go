@@ -10,6 +10,7 @@ import (
 
 	"github.com/gammons/slk/internal/avatar"
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/ui/messages"
@@ -70,7 +71,7 @@ func convertAndCacheHistory(client *slackclient.Client, channelID string, histor
 	var msgItems []messages.MessageItem
 	resolver := messageUserResolver(router, client.TeamID())
 	for _, m := range history {
-		rawBytes, _ := json.Marshal(m)
+		rawBytes, huddleRoom := marshalWithRoom(client, channelID, m)
 		debuglog.Cache("convertAndCacheHistory: upsert channel=%s ts=%s subtype=%q reply_count=%d files=%d",
 			channelID, m.Timestamp, m.SubType, m.ReplyCount, len(m.Files))
 		authorID, userName := messageAuthor(m, userNames, db, router)
@@ -120,6 +121,7 @@ func convertAndCacheHistory(client *slackclient.Client, channelID string, histor
 			Attachments:       extractAttachments(m.Files),
 			Blocks:            extractBlocks(m.Blocks),
 			LegacyAttachments: extractLegacyAttachments(m.Attachments),
+			HuddleRoom:        huddleRoom,
 		}
 		resolveMessageMentions(item, userNames, db, resolver)
 		msgItems = append(msgItems, item)
@@ -412,9 +414,41 @@ func enrichCachedRow(
 		Attachments:       attachments,
 		Blocks:            blocks,
 		LegacyAttachments: legacy,
+		HuddleRoom:        roomFromRawJSON(m.RawJSON),
 	}
 	resolveMessageMentions(item, userNames, db, messageUserResolver(router, m.WorkspaceID))
 	return item
+}
+
+// marshalWithRoom is json.Marshal(m) for the cache's raw_json, plus the
+// `room` object slack-go dropped from a huddle_thread message, as captured
+// from the response by the client's tap. The decoded room is returned for
+// the MessageItem. Without a captured room the raw JSON is just m's, and
+// UpsertMessage keeps any room already stored.
+func marshalWithRoom(client *slackclient.Client, channelID string, m slack.Message) ([]byte, *core.HuddleRoom) {
+	raw, _ := json.Marshal(m)
+	if m.SubType != "huddle_thread" {
+		return raw, nil
+	}
+	room := client.HuddleRoom(channelID, m.Timestamp)
+	if room == nil {
+		return raw, nil
+	}
+	return slackclient.MergeRoom(raw, room), core.ParseHuddleRoom(room)
+}
+
+// roomFromRawJSON reads the `room` object back out of a cached raw_json.
+func roomFromRawJSON(raw string) *core.HuddleRoom {
+	if !strings.Contains(raw, `"room"`) {
+		return nil
+	}
+	var r struct {
+		Room json.RawMessage `json:"room"`
+	}
+	if json.Unmarshal([]byte(raw), &r) != nil {
+		return nil
+	}
+	return core.ParseHuddleRoom(r.Room)
 }
 
 // loadCachedThreadReplies reads cached parent + replies for a thread
@@ -485,7 +519,7 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 	msgItems := make([]messages.MessageItem, 0, len(history))
 	resolver := messageUserResolver(router, client.TeamID())
 	for _, m := range history {
-		rawBytes, _ := json.Marshal(m)
+		rawBytes, huddleRoom := marshalWithRoom(client, channelID, m)
 		debuglog.Cache("fetchChannelMessages: upsert channel=%s ts=%s subtype=%q reply_count=%d files=%d",
 			channelID, m.Timestamp, m.SubType, m.ReplyCount, len(m.Files))
 		authorID, userName := messageAuthor(m, userNames, db, router)
@@ -535,6 +569,7 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 			Attachments:       extractAttachments(m.Files),
 			Blocks:            extractBlocks(m.Blocks),
 			LegacyAttachments: extractLegacyAttachments(m.Attachments),
+			HuddleRoom:        huddleRoom,
 		}
 		resolveMessageMentions(item, userNames, db, resolver)
 		msgItems = append(msgItems, item)
@@ -587,7 +622,7 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 	msgItems := make([]messages.MessageItem, 0, len(history))
 	resolver := messageUserResolver(router, client.TeamID())
 	for _, m := range history {
-		rawBytes, _ := json.Marshal(m)
+		rawBytes, huddleRoom := marshalWithRoom(client, channelID, m)
 		debuglog.Cache("fetchThreadReplies: upsert channel=%s ts=%s subtype=%q reply_count=%d files=%d",
 			channelID, m.Timestamp, m.SubType, m.ReplyCount, len(m.Files))
 		authorID, userName := messageAuthor(m, userNames, db, router)
@@ -637,6 +672,7 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 			Attachments:       extractAttachments(m.Files),
 			Blocks:            extractBlocks(m.Blocks),
 			LegacyAttachments: extractLegacyAttachments(m.Attachments),
+			HuddleRoom:        huddleRoom,
 		}
 		resolveMessageMentions(item, userNames, db, resolver)
 		msgItems = append(msgItems, item)
