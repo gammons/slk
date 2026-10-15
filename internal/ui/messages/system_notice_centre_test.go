@@ -6,7 +6,9 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/bubbles/entrylist"
+	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 func centreNotice() MessageItem {
@@ -36,6 +38,34 @@ func TestNoticeIsCentredAndBoldLikeDateSeparator(t *testing.T) {
 	}
 	if !strings.Contains(content, "\x1b[1;") {
 		t.Errorf("notice is not bold: %q", content)
+	}
+}
+
+// A search term that matches a notice is highlighted like a message body's;
+// with no terms the notice renders as before.
+func TestNoticeHighlightsSearchTerms(t *testing.T) {
+	styles.Apply("dark", config.Theme{})
+	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
+	names := map[string]string{"U2": "alice"}
+	plainRC := &RenderContext{UserNames: names}
+	base := RenderMessage(centreNotice(), 60, plainRC, RenderOptions{}).Content
+
+	rc := &RenderContext{UserNames: names, SearchTerms: []string{"joined"}}
+	got := RenderMessage(centreNotice(), 60, rc, RenderOptions{}).Content
+	hlStart, hlEnd, ok := SearchHighlightSGR()
+	if !ok {
+		t.Fatal("no search highlight SGR")
+	}
+	if !strings.Contains(got, hlStart+"joined"+hlEnd) {
+		t.Errorf("matching word not highlighted: %q", got)
+	}
+	if ansi.Strip(got) != ansi.Strip(base) {
+		t.Errorf("highlight changed text or width:\n%q\n%q", ansi.Strip(got), ansi.Strip(base))
+	}
+
+	empty := RenderMessage(centreNotice(), 60, &RenderContext{UserNames: names, SearchTerms: []string{}}, RenderOptions{}).Content
+	if empty != base {
+		t.Errorf("empty terms changed the notice:\n%q\n%q", empty, base)
 	}
 }
 
