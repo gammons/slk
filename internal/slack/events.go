@@ -246,6 +246,7 @@ type wsMessageEvent struct {
 	Files           []slack.File       `json:"files"`
 	Blocks          slack.Blocks       `json:"blocks"`
 	Attachments     []slack.Attachment `json:"attachments"`
+	Room            json.RawMessage    `json:"room"`             // huddle_thread; slack-go drops it
 	Message         *wsSubMsg          `json:"message"`          // for message_changed
 	PreviousMessage *wsSubMsg          `json:"previous_message"` // for message_changed
 	IsEphemeral     bool               `json:"is_ephemeral"`
@@ -267,7 +268,8 @@ type wsSubMsg struct {
 	// Edited is Slack's `edited` object, present once a human edited the
 	// message. A message_changed for an unfurl or a removed preview
 	// does not carry it.
-	Edited *slack.Edited `json:"edited"`
+	Edited *slack.Edited   `json:"edited"`
+	Room   json.RawMessage `json:"room"`
 }
 
 // wsActionIDs is a second, narrow decode of a message frame: the "id"
@@ -550,6 +552,21 @@ func topLevelFields(data []byte) string {
 	return b.String()
 }
 
+// offerRoom hands a frame's `room` object to a handler that implements
+// RoomObserver. A frame without one, or a handler without the interface,
+// is a no-op.
+func offerRoom(handler EventHandler, channelID, ts string, room json.RawMessage) {
+	if !isJSONObject(room) {
+		return
+	}
+	obs, ok := handler.(RoomObserver)
+	if !ok {
+		return
+	}
+	LogHuddleRoom(ts, room)
+	obs.OnMessageRoom(channelID, ts, room)
+}
+
 // dispatchWebSocketEvent parses a raw JSON WebSocket message and routes it
 // to the appropriate EventHandler method.
 func dispatchWebSocketEvent(data []byte, handler EventHandler) {
@@ -589,6 +606,7 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			// as a muted line, keyed off subtype.
 			debuglog.WS("message: channel=%s user=%s ts=%s subtype=%q thread_ts=%s files=%d",
 				msg.Channel, msg.User, msg.TS, msg.SubType, msg.ThreadTS, len(msg.Files))
+			offerRoom(handler, msg.Channel, msg.TS, msg.Room)
 			handler.OnMessage(msg.Channel, msg.User, msg.TS, msg.Text, msg.ThreadTS, msg.SubType, false, false, msg.Files, msg.Blocks, msg.Attachments, msg.BotID, msg.Username)
 		case "message_changed":
 			if msg.Message == nil {
@@ -612,6 +630,11 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			if IsNoticeSubtype(msg.Message.SubType) {
 				editSubtype = msg.Message.SubType
 			}
+			room := msg.Message.Room
+			if !isJSONObject(room) {
+				room = msg.Room
+			}
+			offerRoom(handler, msg.Channel, msg.Message.TS, room)
 			handler.OnMessage(msg.Channel, msg.Message.User, msg.Message.TS, msg.Message.Text, msg.Message.ThreadTS, editSubtype, true, edited, msg.Message.Files, msg.Message.Blocks, msg.Message.Attachments, msg.Message.BotID, msg.Message.Username)
 		case "message_deleted":
 			debuglog.WS("message_deleted: channel=%s deleted_ts=%s", msg.Channel, msg.DeletedTS)
