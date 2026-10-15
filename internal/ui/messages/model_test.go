@@ -1129,6 +1129,25 @@ func TestModel_HandleAvatarReady_EmptyUserIDNoOp(t *testing.T) {
 	}
 }
 
+// A huddle with replies is drawn as its starter's message, so the starter's
+// avatar arriving must repaint it even though the stored author is Slackbot.
+func TestModel_HandleAvatarReady_MarksHuddleStarterEntry(t *testing.T) {
+	msgs := []MessageItem{
+		{TS: "1700000001.000000", UserID: "USLACKBOT", UserName: "Slackbot", Subtype: "huddle_thread", ReplyCount: 1,
+			HuddleRoom: &HuddleRoom{CreatedBy: "UFAKE0002"}, Timestamp: "10:30 AM"},
+		{TS: "1700000002.000000", UserID: "UFAKE0003", UserName: "carol", Text: "other", Timestamp: "10:31 AM"},
+	}
+	m := New(msgs, "C")
+	_ = m.View(20, 60)
+	m.HandleAvatarReady("UFAKE0002")
+	if _, ok := m.staleEntries["1700000001.000000"]; !ok {
+		t.Error("huddle starter's avatar must mark the huddle entry stale")
+	}
+	if _, ok := m.staleEntries["1700000002.000000"]; ok {
+		t.Error("an unrelated entry must not be marked stale")
+	}
+}
+
 func equalLines(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

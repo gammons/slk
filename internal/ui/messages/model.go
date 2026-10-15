@@ -354,7 +354,9 @@ func (m *Model) HandleAvatarReady(userID string) {
 	}
 	var marked bool
 	for _, msg := range m.messages {
-		if msg.UserID != userID {
+		// A huddle with replies is drawn as its starter's message, so the
+		// starter's avatar is the one it asks for, not the stored author's.
+		if msg.UserID != userID && !(msg.Subtype == "huddle_thread" && HuddleStarter(msg) == userID) {
 			continue
 		}
 		if m.staleEntries == nil {
@@ -1479,7 +1481,9 @@ func (m *Model) renderContext() *RenderContext {
 // renderMessageEntry does that itself so the count always matches the
 // number of entries produced.
 func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles, stats *entryPerfStats) (entrylist.Entry, EntryPayload) {
-	msg := m.messages[i]
+	// The render copy: a huddle with replies is drawn as its starter's
+	// message. The stored item (m.messages[i]) is never changed.
+	msg := HuddleView(m.messages[i], m.userNames)
 	opt := RenderOptions{
 		IsSelected:      i == m.selected,
 		ReplyAffordance: true,
@@ -1601,7 +1605,7 @@ func (m *Model) buildCache(width int, keepPosition bool) {
 		// A system notice is itself a centred divider-style row, so right
 		// under another divider it needs the blank row a notice gets
 		// everywhere else (the previous message's trailing spacer).
-		if afterDivider && IsSystemNoticeSubtype(msg.Subtype) {
+		if afterDivider && IsSystemNoticeSubtype(HuddleView(msg, m.userNames).Subtype) {
 			appendSeparator(strings.Join(cs.spacerLines, "\n"))
 		}
 
