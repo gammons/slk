@@ -63,7 +63,7 @@ func ExtractLinks(text string) []Link {
 // from_urls (ordinary unfurls) are skipped; their URL is already in
 // the text. Deduplicated by URL, first occurrence wins.
 func MessageLinks(msg MessageItem) []Link {
-	out := ExtractLinks(msg.Text)
+	out := ExtractLinks(MessageCopyText(msg))
 	for _, att := range msg.LegacyAttachments {
 		if att.FromURL == "" {
 			continue
