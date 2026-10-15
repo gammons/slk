@@ -180,17 +180,11 @@ func boxWidth(termWidth int) int {
 	return w
 }
 
-// visibleWindow returns the [start, end) slice of the displayed list
-// currently shown, using the same scroll math as the renderer.
-func (m *Model) visibleWindow() (int, int) {
-	return chrome.Window(m.selected, len(m.displayedList()), maxVisibleRows)
-}
-
 // BoxSize returns the rendered modal box's outer dimensions. termHeight is
 // accepted for interface symmetry; this modal's height depends only on its
 // row count.
 func (m *Model) BoxSize(termWidth, termHeight int) (int, int) {
-	start, end := m.visibleWindow()
+	start, end := chrome.Window(m.selected, len(m.displayedList()), maxVisibleRows)
 	nRows := end - start
 	if nRows < 1 {
 		nRows = 1
@@ -205,7 +199,7 @@ func (m *Model) ClickRow(termWidth, termHeight, localY int) bool {
 	if row < 0 {
 		return false
 	}
-	start, end := m.visibleWindow()
+	start, end := chrome.Window(m.selected, len(m.displayedList()), maxVisibleRows)
 	if row >= end-start {
 		return false
 	}
@@ -346,7 +340,7 @@ func (m *Model) renderBox(termWidth int) string {
 	innerWidth := overlayWidth - 4 // border + padding
 
 	list := m.displayedList()
-	start, end := m.visibleWindow()
+	start, end := chrome.Window(m.selected, len(m.displayedList()), maxVisibleRows)
 	win := chrome.List{Start: start, End: end, Total: len(list)}
 	width := win.ContentWidth(innerWidth)
 

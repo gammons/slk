@@ -121,12 +121,6 @@ func boxWidth(termWidth int) int {
 	return w
 }
 
-// visibleWindow returns the [start, end) slice of m.filtered currently
-// shown, using the same scroll math as renderResultRows.
-func (m *Model) visibleWindow() (int, int) {
-	return chrome.Window(m.highlight, len(m.filtered), maxVisibleRows)
-}
-
 // ClickRow moves the highlight cursor to the result row at box-local
 // localY and returns true when the click lands on a visible row. Unlike
 // the single-select finders this only moves the cursor; the caller
@@ -136,7 +130,7 @@ func (m *Model) ClickRow(termWidth, termHeight, localY int) bool {
 	if row < 0 {
 		return false
 	}
-	start, end := m.visibleWindow()
+	start, end := chrome.Window(m.highlight, len(m.filtered), maxVisibleRows)
 	if row >= end-start {
 		return false
 	}

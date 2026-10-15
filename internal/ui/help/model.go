@@ -220,12 +220,6 @@ func maxVisibleRows(termHeight int) int {
 	return mv
 }
 
-// visibleWindow returns the [start, end) slice of m.filtered shown for a
-// given terminal height, using the same scroll math as the renderer.
-func (m *Model) visibleWindow(termHeight int) (int, int) {
-	return chrome.Window(m.selected, len(m.filtered), maxVisibleRows(termHeight))
-}
-
 // BoxSize returns the rendered modal box's outer dimensions. The help box
 // height depends on the terminal height and its footer can wrap, so we
 // measure the actual render (which has no side effects).
@@ -243,7 +237,7 @@ func (m *Model) ClickRow(termWidth, termHeight, localY int) bool {
 	if row < 0 {
 		return false
 	}
-	start, end := m.visibleWindow(termHeight)
+	start, end := chrome.Window(m.selected, len(m.filtered), maxVisibleRows(termHeight))
 	if row >= end-start {
 		return false
 	}
@@ -292,7 +286,7 @@ func (m Model) renderBox(termWidth, termHeight int) string {
 		inputLine = s.Footer.Render("Press / to search")
 	}
 
-	start, end := m.visibleWindow(termHeight)
+	start, end := chrome.Window(m.selected, len(m.filtered), maxVisibleRows(termHeight))
 	list := chrome.List{Start: start, End: end, Total: len(m.filtered)}
 	// rowWidth includes the marker column: key, a space and the
 	// description share rowWidth-1 columns.
