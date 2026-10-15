@@ -133,6 +133,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Open the action dialog for an ephemeral's buttons | `(*App).openActionPrompt(actionPromptRef)` (`internal/ui/action_prompt.go`); queueing and the interruption rule are `enqueueActionPrompt` / `tryOpenActionPrompt` |
 | Replace a pane's list with fetched history without erasing ephemerals already shown | `keepEphemerals(fetched, shown)` (`internal/ui/ephemeral_keep.go`); only for a fetch of the conversation already on screen |
 | Slack permalink parsing | `slackurl.Parse` |
+| The `room` object of a `huddle_thread` message (slack-go drops it): captured from history/replies responses by the client's `roomTap` (`(*slackclient.Client).HuddleRoom(channel, ts)`), and from WebSocket frames via the optional `slackclient.RoomObserver`; stored in `raw_json` (`slackclient.MergeRoom`; `UpsertMessage` keeps a stored room when a typed write lacks one); decoded with `core.ParseHuddleRoom` into `core.HuddleRoom` on `MessageItem.HuddleRoom`; read back from a cached row by `cmd/slk roomFromRawJSON` |
 | Slack ts → `time.Time` (whole seconds, any timezone) | `export.TimeFromTS` |
 | A since/until/overlap date range in a timezone, and "is this ts in it?" | `export.NewWindow`, `export.Window.Contains` |
 | Sleep out a slack-go rate-limit error (ctx-aware) | `slackclient.WaitOutRateLimit` |

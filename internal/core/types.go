@@ -55,6 +55,11 @@ type MessageItem struct {
 	// BotID is the Slack bot_id of the app that posted the message. Set for
 	// ephemerals; sent as service_id when one of their buttons is pressed.
 	BotID string
+
+	// HuddleRoom is the room object of a huddle_thread message (nil
+	// for every other message, and for a huddle message whose room was
+	// never captured).
+	HuddleRoom *HuddleRoom
 }
 
 // Attachment represents a file or image attached to a message.

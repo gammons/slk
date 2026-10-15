@@ -129,6 +129,11 @@ type Client struct {
 	// (e.g. &Client{api: mock}); BrowserTransport treats a nil Env as
 	// "send no envelope params", so those clients still work.
 	envelope *slackhttp.Envelope
+
+	// rooms holds the `room` of huddle_thread messages seen in history and
+	// replies responses (see roomTap). Nil for clients built directly in
+	// tests; HuddleRoom treats nil as "none captured".
+	rooms *roomStore
 }
 
 // NewClient creates a new Slack client using browser cookie auth.
@@ -137,6 +142,12 @@ type Client struct {
 func NewClient(xoxcToken, dCookie string) *Client {
 	env := slackhttp.NewEnvelope()
 	httpClient := newCookieHTTPClient(dCookie, env)
+	rooms := newRoomStore()
+	// The tap sits under BrowserTransport (as its Inner) so
+	// httpClient.Transport stays a *slackhttp.BrowserTransport.
+	if bt, ok := httpClient.Transport.(*slackhttp.BrowserTransport); ok {
+		bt.Inner = rooms.wrap(bt.Inner)
+	}
 
 	api := slack.New(
 		xoxcToken,
@@ -151,6 +162,7 @@ func NewClient(xoxcToken, dCookie string) *Client {
 		wsBaseURL:  defaultWSBaseURL,
 		httpClient: httpClient,
 		envelope:   env,
+		rooms:      rooms,
 	}
 }
 
