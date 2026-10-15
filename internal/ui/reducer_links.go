@@ -267,7 +267,11 @@ func (a *App) openThreadForPermalink(channelID, threadTS string, knownReply bool
 	}
 	if parent.Text == "" {
 		if cached := a.threads.CacheRead(ids.ChannelID(channelID), ids.ThreadTS(threadTS)); len(cached) > 0 {
+			// Live replies raise only the pane's count, never the cache's,
+			// so keep the larger of the two.
+			count := parent.ReplyCount
 			parent = cached[0]
+			parent.ReplyCount = max(parent.ReplyCount, count)
 		}
 	}
 	if knownReply && parent.ReplyCount < 1 {
