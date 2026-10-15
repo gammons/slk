@@ -73,13 +73,62 @@ func (m Model) bodyLimit(l layout) int {
 	return min(maxBodyLines, m.height-frame-len(l.title)-buttonRows-2)
 }
 
+// labelPart is a button's resolved hint and label, as the cache key sees it.
+type labelPart struct{ hint, label string }
+
+// renderCache is the last rendered box and every input that shaped it. The
+// styles are not part of the key (lipgloss styles are not comparable):
+// SetStyles drops the cache instead. Everything else is compared on each
+// View, which allocates nothing.
+type renderCache struct {
+	valid     bool
+	width     int
+	height    int
+	highlight int
+	title     string
+	body      string
+	parts     []labelPart // replaced, never mutated: copies of the Model share it
+	out       string
+}
+
+// matches reports whether the cache was rendered from m's current inputs.
+func (c *renderCache) matches(m *Model) bool {
+	if !c.valid || c.width != m.width || c.height != m.height || c.highlight != m.highlight ||
+		c.title != m.choice.Title || c.body != m.choice.Body || len(c.parts) != len(m.choice.Buttons) {
+		return false
+	}
+	for i, p := range c.parts {
+		if hint, label := m.labelParts(i); hint != p.hint || label != p.label {
+			return false
+		}
+	}
+	return true
+}
+
 // View renders the prompt box, or "" when hidden: the title, a blank line,
 // the body and a blank line (both omitted with no body), then the button
-// rows.
-func (m Model) View() string {
+// rows. The box is cached, so a frame that changes nothing it depends on
+// returns the previous string without rendering.
+func (m *Model) View() string {
 	if !m.visible {
 		return ""
 	}
+	if m.cache.matches(m) {
+		return m.cache.out
+	}
+	out := m.render()
+	parts := make([]labelPart, len(m.choice.Buttons))
+	for i := range parts {
+		parts[i].hint, parts[i].label = m.labelParts(i)
+	}
+	m.cache = renderCache{
+		valid: true, width: m.width, height: m.height, highlight: m.highlight,
+		title: m.choice.Title, body: m.choice.Body, parts: parts, out: out,
+	}
+	return out
+}
+
+func (m Model) render() string {
 	width := boxWidth(m.width)
 	l := m.layoutAt(width - frameWidth)
 	sections := []string{m.styles.Title.Render(strings.Join(l.title, "\n"))}

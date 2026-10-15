@@ -130,14 +130,16 @@ func TestUpdateHonorsCustomKeyMap(t *testing.T) {
 
 func TestViewHiddenIsEmpty(t *testing.T) {
 	t.Parallel()
-	if New().View() != "" {
+	hidden := New()
+	if hidden.View() != "" {
 		t.Error("hidden prompt should render nothing")
 	}
 }
 
 func TestViewShowsTitleBodyAndHelp(t *testing.T) {
 	t.Parallel()
-	out := opened(t, nil).View()
+	m := opened(t, nil)
+	out := m.View()
 	for _, want := range []string{"Delete message?", "hello world", "[y] confirm", "[n/Esc] cancel"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("view missing %q:\n%s", want, out)

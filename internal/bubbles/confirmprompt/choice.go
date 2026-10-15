@@ -58,15 +58,22 @@ func (m Model) button(i int) Button {
 
 // label is button i as drawn: "[hint] label", or "[label]" with no hint.
 func (m Model) label(i int) string {
+	hint, label := m.labelParts(i)
+	if hint == "" {
+		return "[" + label + "]"
+	}
+	return "[" + hint + "] " + label
+}
+
+// labelParts is the resolved hint and label of button i. It does not
+// allocate, so View can compare it with the cached render's on every frame.
+func (m Model) labelParts(i int) (hint, label string) {
 	b := m.button(i)
-	hint := b.Hint
+	hint = b.Hint
 	if hint == "" {
 		if ks := b.Keys.Keys(); len(ks) > 0 {
 			hint = ks[0]
 		}
 	}
-	if hint == "" {
-		return "[" + b.Label + "]"
-	}
-	return "[" + hint + "] " + b.Label
+	return hint, b.Label
 }

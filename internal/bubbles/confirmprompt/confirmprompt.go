@@ -27,6 +27,7 @@ type Model struct {
 	choice    Choice
 	preset    bool // opened with Open: keys and labels follow KeyMap
 	highlight int  // highlighted button; -1 = none
+	cache     renderCache
 }
 
 var _ chrome.Dialog = (*Model)(nil)
@@ -121,7 +122,10 @@ func (m *Model) SetHeight(height int) { m.height = height }
 func (m Model) Styles() Styles { return m.styles }
 
 // SetStyles replaces the prompt's styles.
-func (m *Model) SetStyles(s Styles) { m.styles = s }
+func (m *Model) SetStyles(s Styles) {
+	m.styles = s
+	m.cache = renderCache{}
+}
 
 // Init does nothing; the prompt has no startup work.
 func (m Model) Init() tea.Cmd { return nil }
