@@ -181,6 +181,9 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		// The body's own wrap is undone so the line wraps once, with the
 		// timestamp, instead of breaking twice.
 		plain := strings.Join(strings.Fields(ansi.Strip(body)), " ")
+		if text := huddleNoticeText(msg, rc.UserNames); text != "" {
+			plain = text
+		}
 		if plain == "" {
 			plain = noticeFallbackText(msg.Subtype)
 		}

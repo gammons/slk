@@ -301,8 +301,9 @@ func (m *Model) SetBreadcrumb(channelName, channelType string) {
 // breadcrumbAuthor is the parent's display name: the parent's own
 // UserName, else the userNames entry for its UserID.
 func (m *Model) breadcrumbAuthor() string {
-	if m.parent.UserName != "" {
-		return m.parent.UserName
+	// A huddle with replies is its starter's message (messages.HuddleView).
+	if p := m.huddleView(m.parent); p.UserName != "" {
+		return p.UserName
 	}
 	return m.userNames[m.parent.UserID]
 }
@@ -1390,5 +1391,15 @@ func (m *Model) renderContext() *messages.RenderContext {
 // affordance and no sixel rows (plan decision P3). Image hits are
 // recorded so a click opens the preview, as in the channel pane.
 func (m *Model) renderMessage(msg messages.MessageItem, width int, isSelected bool) messages.RenderedMessage {
-	return messages.RenderMessage(msg, width, m.renderContext(), messages.RenderOptions{IsSelected: isSelected, ImageHits: true})
+	return messages.RenderMessage(m.huddleView(msg), width, m.renderContext(), messages.RenderOptions{IsSelected: isSelected, ImageHits: true})
+}
+
+// huddleView is the render copy of a huddle announcement: a message by
+// its starter when the thread has replies (the parent's own ReplyCount may
+// lag behind the loaded replies), else unchanged. See messages.HuddleView.
+func (m *Model) huddleView(msg messages.MessageItem) messages.MessageItem {
+	if msg.TS == m.parent.TS && len(m.replies) > msg.ReplyCount {
+		msg.ReplyCount = len(m.replies)
+	}
+	return messages.HuddleView(msg, m.userNames)
 }
