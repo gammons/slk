@@ -252,10 +252,17 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 		a.previewRemovalEchoed(m.ChannelID, m.Message)
 		for _, mm := range a.modelsForChannel(m.ChannelID) {
 			mm.UpdateMessageInPlace(m.Message)
+			// An edit that carries no room keeps the one already held.
+			if m.Message.HuddleRoom != nil {
+				mm.SetHuddleRoom(m.Message.TS, cloneHuddleRoom(m.Message.HuddleRoom))
+			}
 		}
 		if m.ChannelID == a.threadPanel.ChannelID() {
 			a.threadPanel.UpdateMessageInPlace(m.Message)
 			a.threadPanel.UpdateParentInPlace(m.Message)
+			if m.Message.HuddleRoom != nil {
+				a.threadPanel.SetHuddleRoom(m.Message.TS, cloneHuddleRoom(m.Message.HuddleRoom))
+			}
 		}
 		return nil
 	}

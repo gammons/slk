@@ -419,7 +419,11 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	}
 
 	item := h.messageItemFromEvent(authorID, userID, username, ts, text, threadTS, subtype, edited, files, blocks, attachments)
-	item.HuddleRoom = core.ParseHuddleRoom(room)
+	var request func(string)
+	if h.wsCtx != nil && h.wsCtx.UserResolver != nil {
+		request = h.wsCtx.UserResolver.Request
+	}
+	item.HuddleRoom = resolveHuddleUsers(core.ParseHuddleRoom(room), h.userNames, h.db, request)
 	debuglog.Cache("OnMessage: team=%s channel=%s ts=%s subtype=%q thread_ts=%s decision=dispatched_to_app",
 		h.workspaceID, channelID, ts, subtype, threadTS)
 	if h.program != nil {

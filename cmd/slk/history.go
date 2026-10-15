@@ -121,7 +121,7 @@ func convertAndCacheHistory(client *slackclient.Client, channelID string, histor
 			Attachments:       extractAttachments(m.Files),
 			Blocks:            extractBlocks(m.Blocks),
 			LegacyAttachments: extractLegacyAttachments(m.Attachments),
-			HuddleRoom:        huddleRoom,
+			HuddleRoom:        resolveHuddleUsers(huddleRoom, userNames, db, activeUserRequester(router)),
 		}
 		resolveMessageMentions(item, userNames, db, resolver)
 		msgItems = append(msgItems, item)
@@ -414,7 +414,7 @@ func enrichCachedRow(
 		Attachments:       attachments,
 		Blocks:            blocks,
 		LegacyAttachments: legacy,
-		HuddleRoom:        roomFromRawJSON(m.RawJSON),
+		HuddleRoom:        resolveHuddleUsers(roomFromRawJSON(m.RawJSON), userNames, db, activeUserRequester(router)),
 	}
 	resolveMessageMentions(item, userNames, db, messageUserResolver(router, m.WorkspaceID))
 	return item
@@ -569,7 +569,7 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 			Attachments:       extractAttachments(m.Files),
 			Blocks:            extractBlocks(m.Blocks),
 			LegacyAttachments: extractLegacyAttachments(m.Attachments),
-			HuddleRoom:        huddleRoom,
+			HuddleRoom:        resolveHuddleUsers(huddleRoom, userNames, db, activeUserRequester(router)),
 		}
 		resolveMessageMentions(item, userNames, db, resolver)
 		msgItems = append(msgItems, item)
@@ -672,7 +672,7 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 			Attachments:       extractAttachments(m.Files),
 			Blocks:            extractBlocks(m.Blocks),
 			LegacyAttachments: extractLegacyAttachments(m.Attachments),
-			HuddleRoom:        huddleRoom,
+			HuddleRoom:        resolveHuddleUsers(huddleRoom, userNames, db, activeUserRequester(router)),
 		}
 		resolveMessageMentions(item, userNames, db, resolver)
 		msgItems = append(msgItems, item)

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui"
 	"github.com/slack-go/slack"
 )
@@ -63,6 +64,50 @@ func TestMarshalWithRoom_NilClientAndNonHuddle(t *testing.T) {
 	raw, room = marshalWithRoom(nil, "CFAKE0001", slack.Message{Msg: slack.Msg{Timestamp: "1.1", SubType: "huddle_thread"}})
 	if room != nil || len(raw) == 0 {
 		t.Errorf("huddle without capture: raw=%s room=%v", raw, room)
+	}
+}
+
+func TestOnMessage_EditKeepsReplyCountHistoryOverwrites(t *testing.T) {
+	db := newTestDB(t)
+	_ = db.UpsertChannel(cache.Channel{ID: "CFAKE0001", WorkspaceID: "T1", Name: "general", Type: "channel"})
+	h := &rtmEventHandler{
+		db: db, program: &captureSender{}, workspaceID: "T1",
+		userNames: newUserNameStore(nil), wsCtx: &WorkspaceContext{},
+		isActive: func() bool { return true }, activeChannelID: func() string { return "CFAKE0001" },
+	}
+	// A history fetch writes the real count.
+	db.UpsertMessage(cache.Message{TS: "1.000100", ChannelID: "CFAKE0001", WorkspaceID: "T1", Subtype: "huddle_thread", ReplyCount: 2, RawJSON: `{}`})
+
+	// The edit (huddle ended) must not zero it.
+	h.OnMessage("CFAKE0001", "USLACKBOT", "1.000100", "huddle", "1.000100", "huddle_thread", true, nil, slack.Blocks{}, nil, "", "")
+	if row, _ := db.GetMessage("CFAKE0001", "1.000100"); row.ReplyCount != 2 {
+		t.Errorf("edit write reply_count = %d, want 2 kept", row.ReplyCount)
+	}
+	// A new (non-edit) message still writes 0, and history stays authoritative.
+	h.OnMessage("CFAKE0001", "USLACKBOT", "1.000200", "x", "", "", false, nil, slack.Blocks{}, nil, "", "")
+	if row, _ := db.GetMessage("CFAKE0001", "1.000200"); row.ReplyCount != 0 {
+		t.Errorf("new message reply_count = %d", row.ReplyCount)
+	}
+	db.UpsertMessage(cache.Message{TS: "1.000100", ChannelID: "CFAKE0001", WorkspaceID: "T1", Subtype: "huddle_thread", ReplyCount: 0, RawJSON: `{}`})
+	if row, _ := db.GetMessage("CFAKE0001", "1.000100"); row.ReplyCount != 0 {
+		t.Errorf("history write reply_count = %d, want 0", row.ReplyCount)
+	}
+}
+
+func TestResolveHuddleUsers_RequestsOnlyUnknown(t *testing.T) {
+	names := newUserNameStore(nil)
+	names.Set("UFAKE0001", "alice")
+	room := core.ParseHuddleRoom(json.RawMessage(`{"created_by":"UFAKE0001","participants":["UFAKE0001","UFAKE0002"]}`))
+	var asked []string
+	got := resolveHuddleUsers(room, names, newTestDB(t), func(id string) { asked = append(asked, id) })
+	if got != room {
+		t.Error("room not returned")
+	}
+	if len(asked) != 1 || asked[0] != "UFAKE0002" {
+		t.Errorf("requested %v, want only the unknown UFAKE0002", asked)
+	}
+	if resolveHuddleUsers(nil, names, nil, nil) != nil {
+		t.Error("nil room")
 	}
 }
 
