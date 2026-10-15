@@ -282,6 +282,12 @@ type ChannelService interface {
 	// the finder showing local matches only, which is what it showed
 	// before this existed.
 	SearchRemote(query string) []ChannelFinderItem
+
+	// MessagingCapability probes whether channelID can be sent a
+	// message at all. Returns a Cmd whose resolved Msg is
+	// ChannelMessagingCapabilityMsg. Costs a round trip, so only call
+	// it for a channel already known to be an app/bot DM.
+	MessagingCapability(channelID ids.ChannelID) Cmd
 }
 
 // SearchService runs message searches. SearchChannel queries the local

@@ -842,6 +842,17 @@ func run() error {
 					}
 				}
 			},
+			MessagingCapability: func(channelID ids.ChannelID) core.Cmd {
+				wctx := router.Active()
+				if wctx == nil || wctx.Client == nil {
+					return nil
+				}
+				client := wctx.Client
+				chIDStr := string(channelID)
+				return func() core.Msg {
+					return probeMessagingCapability(ctx, client.PostForm, chIDStr)
+				}
+			},
 			Fetch: func(channelID ids.ChannelID, channelName string) core.Msg {
 				chIDStr := string(channelID)
 				wctx := router.Active()

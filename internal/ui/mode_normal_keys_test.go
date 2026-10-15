@@ -386,6 +386,41 @@ func TestNormalModeKeys(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "i on a channel with compose disabled toasts instead of entering insert mode",
+			opts: normalOpts(),
+			setup: func(t *testing.T, a *App) {
+				a.composeDisabled = true
+			},
+			key:      keyPress('i'),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if got := statusbarText(a); !strings.Contains(got, "You can't send messages to this app") {
+					t.Errorf("statusbar = %q, want the compose-disabled toast", got)
+				}
+			},
+		},
+		{
+			// composeDisabled reflects the active channel, not the
+			// thread panel -- a thread reply targets a possibly
+			// different channel's thread and must not be blocked.
+			name: "i on a channel with compose disabled still opens the thread compose",
+			opts: normalOpts(),
+			setup: func(t *testing.T, a *App) {
+				a.composeDisabled = true
+				focusThreadPanel(t, a)
+			},
+			key:      keyPress('i'),
+			wantMode: ModeInsert,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if a.focusedPanel != PanelThread {
+					t.Errorf("focusedPanel = %v, want PanelThread", a.focusedPanel)
+				}
+				if cmd == nil {
+					t.Error("cmd = nil, want threadCompose.Focus()'s cmd")
+				}
+			},
+		},
 
 		// -------------------------------------------------------------
 		// Arm 2: CommandMode `:` (mode_normal.go:70)

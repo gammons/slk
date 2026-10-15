@@ -191,6 +191,16 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 			return cmd
 		}
 		if isSend {
+			// A channel a send was refused in as read-only, or whose
+			// probe found it unsendable, takes no thread replies either.
+			if chID := a.threadPanel.ChannelID(); !a.editing.IsActive() {
+				if a.readOnlyChannels[chID] {
+					return toastWithClear(a, readOnlyToast, 2*time.Second)
+				}
+				if a.unsendableChannels[chID] {
+					return toastWithClear(a, appUnsendableToast, 2*time.Second)
+				}
+			}
 			if cmd, ok := a.trySlashCommand(PanelThread, &a.threadCompose, a.threadPanel.ChannelID(), a.threadPanel.ThreadTS()); ok {
 				return cmd
 			}
@@ -245,6 +255,11 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		return cmd
 	}
 	if isSend {
+		// Backstop: the channel cannot receive messages (the probe may
+		// land after insert mode was entered by a path other than `i`).
+		if a.composeDisabled && !a.editing.IsActive() {
+			return toastWithClear(a, a.composeBlockedText(), 2*time.Second)
+		}
 		if cmd, ok := a.trySlashCommand(PanelMessages, &a.compose, a.activeChannelID, ""); ok {
 			return cmd
 		}

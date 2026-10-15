@@ -807,6 +807,16 @@ type NewMessageFailedMsg struct {
 	Err       error
 }
 
+// ChannelMessagingCapabilityMsg carries the result of a
+// ChannelService.MessagingCapability probe. CanSend defaults true on
+// a failed probe, so a network failure never hides compose for a
+// channel that can actually be messaged. Applied only when ChannelID
+// still matches the active channel.
+type ChannelMessagingCapabilityMsg struct {
+	ChannelID string
+	CanSend   bool
+}
+
 // channelSearchDebounceMsg is delivered after the channel finder's
 // query stops changing for channelSearchDebounceDelay. Carries the
 // query and the generation at scheduling time; if the App's

@@ -294,6 +294,21 @@ type ViewResponseMetadata struct {
 	NextCursor string `json:"next_cursor"`
 }
 
+// AppHome is the `app_home` object of conversations.view and
+// conversations.info (return_app_home=true), present only for a DM with
+// an app. MessagesTabEnabled and MessagesTabReadOnlyEnabled are the
+// only signal for whether the app can be sent a message at all; see
+// CanReceiveMessages. The other fields are decoded but not consumed.
+type AppHome struct {
+	AppID                      string `json:"app_id"`
+	AppInstalledTeamID         string `json:"app_installed_team_id"`
+	ConversationID             string `json:"conversation_id"`
+	HomeTabEnabled             bool   `json:"home_tab_enabled"`
+	MessagesTabEnabled         bool   `json:"messages_tab_enabled"`
+	MessagesTabReadOnlyEnabled bool   `json:"messages_tab_read_only_enabled"`
+	HomeViewID                 string `json:"home_view_id"`
+}
+
 // ViewResult is everything one conversations.view call learned.
 //
 // The point of the endpoint is that these sections arrive together:
@@ -354,7 +369,21 @@ type ViewResult struct {
 	// and therefore whether the probe worked or it must fall back.
 	Channel ViewChannel `json:"channel"`
 
+	// AppHome is set only for a DM with an app.
+	AppHome *AppHome `json:"app_home"`
+
 	ResponseMetadata ViewResponseMetadata `json:"response_metadata"`
+}
+
+// CanReceiveMessages reports whether the user can post in the DM:
+// MessagesTabEnabled && !MessagesTabReadOnlyEnabled. Shared by
+// conversations.view and conversations.info results; a nil receiver (a
+// conversation with no app_home) is true.
+func (h *AppHome) CanReceiveMessages() bool {
+	if h == nil {
+		return true
+	}
+	return h.MessagesTabEnabled && !h.MessagesTabReadOnlyEnabled
 }
 
 // viewResponse is ViewResult plus the two envelope fields every Slack
@@ -491,4 +520,43 @@ func ConversationsView(ctx context.Context, post PostFunc, channelID string) (*V
 
 	out := resp.ViewResult
 	return &out, nil
+}
+
+// InfoMethod is conversations.info. Unlike conversations.view it
+// carries _x_reason and _x_mode; the caller sets the web client's reason
+// with slackhttp.WithReason.
+const InfoMethod = "conversations.info"
+
+type infoResponse struct {
+	OK      bool     `json:"ok"`
+	Error   string   `json:"error"`
+	AppHome *AppHome `json:"app_home"`
+}
+
+// ConversationsInfo calls conversations.info with the web client's
+// app-home request (channel + return_app_home=true) and returns its
+// app_home object, nil when the response has none. Only ok, error and
+// app_home are decoded. As with ConversationsView, this sets no _x_
+// param: slackhttp adds the envelope.
+func ConversationsInfo(ctx context.Context, post PostFunc, channelID string) (*AppHome, error) {
+	form := url.Values{
+		"channel":         {channelID},
+		"return_app_home": {"true"},
+	}
+	raw, err := post(ctx, InfoMethod, form)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", InfoMethod, err)
+	}
+	var resp infoResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("%s: decoding response: %w (body: %s)", InfoMethod, err, truncate(raw))
+	}
+	if !resp.OK {
+		apiErr := resp.Error
+		if apiErr == "" {
+			apiErr = "ok=false with no error field"
+		}
+		return nil, fmt.Errorf("%s: API error: %s", InfoMethod, apiErr)
+	}
+	return resp.AppHome, nil
 }

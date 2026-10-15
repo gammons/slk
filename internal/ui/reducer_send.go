@@ -118,6 +118,9 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 				mm.RemoveLocalSent(m.LocalTS)
 			}
 		}
+		if cmd := a.sendFailedCmd(m.ChannelID, m.Reason); cmd != nil {
+			return cmd, true
+		}
 		reason := m.Reason
 		return func() tea.Msg {
 			return statusbar.SendFailedMsg{Reason: reason}
