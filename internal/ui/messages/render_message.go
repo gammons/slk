@@ -188,6 +188,13 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		if plain == "" {
 			plain = noticeFallbackText(msg.Subtype)
 		}
+		// Channel search still matches a notice's text, so highlight it
+		// the way a message body is (the timestamp is left alone).
+		if len(rc.SearchTerms) > 0 {
+			if hlStart, hlEnd, ok := SearchHighlightSGR(); ok {
+				plain = HighlightSearchTerms(plain, rc.SearchTerms, hlStart, hlEnd)
+			}
+		}
 		// Centred and bold like a day divider (DividerStyle). The row is
 		// width-1 wide: WrapRows adds the one-column border after it.
 		rowWidth := width - 1
