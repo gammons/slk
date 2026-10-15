@@ -105,7 +105,7 @@ func (m Model) renderInputRow(innerWidth int, bg color.Color) string {
 // scrollbar when the list overflows. Highlighted row gets a left bar
 // and the Primary foreground.
 func (m Model) renderResultRows(s chrome.Styles, innerWidth int, bg color.Color) []string {
-	start, end := m.visibleWindow()
+	start, end := chrome.Window(m.highlight, len(m.filtered), maxVisibleRows)
 	list := chrome.List{Start: start, End: end, Total: len(m.filtered)}
 	width := list.ContentWidth(innerWidth)
 	lines := make([]string, 0, end-start)

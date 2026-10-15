@@ -232,19 +232,12 @@ func boxWidth(termWidth int) int {
 	return w
 }
 
-// visibleWindow returns the [start, end) slice of m.filtered currently
-// shown in the results list, applying the same scroll-window math the
-// renderer uses so hit-testing and rendering agree.
-func (m *Model) visibleWindow() (int, int) {
-	return chrome.Window(m.selected, len(m.filtered), maxVisibleRows)
-}
-
 // BoxSize returns the outer dimensions of the rendered modal box for the
 // given terminal size. termHeight is unused (this modal's height depends
 // only on its row count) but kept for interface symmetry with overlays
 // whose height is terminal-dependent.
 func (m *Model) BoxSize(termWidth, termHeight int) (int, int) {
-	start, end := m.visibleWindow()
+	start, end := chrome.Window(m.selected, len(m.filtered), maxVisibleRows)
 	nRows := end - start
 	if nRows < 1 {
 		nRows = 1 // empty list still renders one (message/placeholder) row
@@ -263,7 +256,7 @@ func (m *Model) ClickRow(termWidth, termHeight, localY int) bool {
 	if row < 0 {
 		return false
 	}
-	start, end := m.visibleWindow()
+	start, end := chrome.Window(m.selected, len(m.filtered), maxVisibleRows)
 	if row >= end-start {
 		return false
 	}
@@ -571,7 +564,7 @@ func (m Model) renderBox(termWidth int) string {
 		titleText = "Forward message to…"
 	}
 
-	start, end := m.visibleWindow()
+	start, end := chrome.Window(m.selected, len(m.filtered), maxVisibleRows)
 	list := chrome.List{Start: start, End: end, Total: len(m.filtered)}
 	contentWidth := list.ContentWidth(innerWidth)
 

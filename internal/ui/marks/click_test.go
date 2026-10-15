@@ -6,6 +6,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/gammons/slk/internal/bubbles/chrome"
 )
 
 func clickRows() []Row {
@@ -80,7 +81,7 @@ func TestClickRowScrolledWindow(t *testing.T) {
 	for range maxVisibleRows + 2 {
 		m.HandleKey("down")
 	}
-	start, _ := m.visibleWindow(24)
+	start, _ := chrome.Window(m.selected, len(m.rows), listRows(24))
 	if start == 0 {
 		t.Fatal("fixture should scroll the window")
 	}
@@ -128,7 +129,7 @@ func TestShortTerminalKeepsSelectionOnScreen(t *testing.T) {
 		if !strings.Contains(ansi.Strip(box), "▌"+last+"  #c") {
 			t.Errorf("height %d: the selected row %q is not drawn:\n%s", termHeight, last, box)
 		}
-		start, end := m.visibleWindow(termHeight)
+		start, end := chrome.Window(m.selected, len(m.rows), listRows(termHeight))
 		if !m.ClickRow(80, termHeight, listTopOffset()+end-start-1) || m.selected != end-1 {
 			t.Errorf("height %d: a click on the last drawn row selected %d, want %d", termHeight, m.selected, end-1)
 		}

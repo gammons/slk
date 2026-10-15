@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+	"github.com/gammons/slk/internal/bubbles/chrome"
 )
 
 // TestBoxSizeMatchesRender locks BoxSize to the actual rendered box so the
@@ -135,7 +136,7 @@ func TestShortTerminalClampsRows(t *testing.T) {
 	}
 
 	// ClickRow agrees with the clamped window.
-	start, end := m.visibleWindow(termH)
+	start, end := chrome.Window(m.selected, len(m.items), m.visibleRowCap(termH))
 	rows := end - start
 	if rows < 1 {
 		t.Fatalf("clamped window is empty: [%d,%d)", start, end)
@@ -156,7 +157,7 @@ func TestTinyTerminalKeepsOneRow(t *testing.T) {
 	submitQuery(&m, "deploy")
 	m.SetResults(manyItems(50), 80)
 
-	start, end := m.visibleWindow(5)
+	start, end := chrome.Window(m.selected, len(m.items), m.visibleRowCap(5))
 	if end-start != 1 {
 		t.Errorf("tiny-terminal window = [%d,%d), want exactly 1 row", start, end)
 	}

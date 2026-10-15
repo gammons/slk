@@ -7,6 +7,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/gammons/slk/internal/bubbles/chrome"
 )
 
 func items() []Item {
@@ -443,7 +444,7 @@ func TestScrollWindowEdges(t *testing.T) {
 	if m.selected != 14 {
 		t.Fatalf("selected = %d, want 14", m.selected)
 	}
-	if start, end := m.visibleWindow(30); start != 12 || end != 15 {
+	if start, end := chrome.Window(m.selected, len(m.items), m.visibleRowCap(30)); start != 12 || end != 15 {
 		t.Fatalf("bottom window = [%d,%d), want [12,15)", start, end)
 	}
 
@@ -454,7 +455,7 @@ func TestScrollWindowEdges(t *testing.T) {
 	if m.selected != 0 {
 		t.Fatalf("selected = %d, want 0", m.selected)
 	}
-	if start, end := m.visibleWindow(30); start != 0 || end != 3 {
+	if start, end := chrome.Window(m.selected, len(m.items), m.visibleRowCap(30)); start != 0 || end != 3 {
 		t.Fatalf("top window = [%d,%d), want [0,3)", start, end)
 	}
 }
