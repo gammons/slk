@@ -1590,12 +1590,14 @@ func (m *Model) buildCache(width int, keepPosition bool) {
 	newMsgLandmarkInserted := false
 	for i, msg := range m.messages {
 		msgDate := DateFromTS(msg.TS)
+		afterDivider := false
 		if msgDate != "" && msgDate != lastDate {
 			label := FormatDateSeparator(msgDate)
 			sepStr := "── " + label + " ──"
 			sep := DividerStyle(width).Render(sepStr)
 			appendSeparator(sep)
 			lastDate = msgDate
+			afterDivider = true
 		}
 
 		// New message landmark: insert before the first unread message
@@ -1606,6 +1608,14 @@ func (m *Model) buildCache(width int, keepPosition bool) {
 				Render(newStr)
 			appendSeparator(label)
 			newMsgLandmarkInserted = true
+			afterDivider = true
+		}
+
+		// A system notice is itself a centred divider-style row, so right
+		// under another divider it needs the blank row a notice gets
+		// everywhere else (the previous message's trailing spacer).
+		if afterDivider && IsSystemNoticeSubtype(msg.Subtype) {
+			appendSeparator(strings.Join(cs.spacerLines, "\n"))
 		}
 
 		e, p := m.renderMessageEntry(i, width, cs, stats)
