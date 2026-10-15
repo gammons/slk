@@ -9,6 +9,7 @@ package scrollbar
 
 import (
 	"image/color"
+	"strings"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -55,6 +56,7 @@ func Overlay(visible []string, width, total, yOffset, visibleHeight int, bg, tra
 		rowLimit = len(visible)
 	}
 
+	var padState padCache
 	for i := 0; i < rowLimit; i++ {
 		// Truncate this row to the gutter column. ansi.Cut preserves
 		// SGR state; rows shorter than gutterCol are padded by appending
@@ -69,8 +71,7 @@ func Overlay(visible []string, width, total, yOffset, visibleHeight int, bg, tra
 		case w == gutterCol:
 			prefix = line
 		default:
-			pad := lipgloss.NewStyle().Background(bg).Width(gutterCol - w).Render("")
-			prefix = line + pad
+			prefix = line + padCells(&padState, bg, gutterCol-w)
 		}
 
 		var glyph string
@@ -82,6 +83,31 @@ func Overlay(visible []string, width, total, yOffset, visibleHeight int, bg, tra
 		visible[i] = prefix + glyph
 	}
 	return visible
+}
+
+// padCache holds the SGR prefix and suffix around one background-colored
+// cell, rendered once per Overlay call.
+type padCache struct {
+	pre, suf string
+	ok, done bool
+}
+
+// padCells returns n background-colored spaces. The styled render of one
+// cell is split around its space once, and each pad is that prefix, n
+// spaces and that suffix. When the one-cell render is not a single space
+// with its wrapping (no colour, say), it renders the pad directly.
+func padCells(c *padCache, bg color.Color, n int) string {
+	if !c.done {
+		c.done = true
+		one := lipgloss.NewStyle().Background(bg).Width(1).Render("")
+		if i := strings.IndexByte(one, ' '); i >= 0 && strings.Count(one, " ") == 1 {
+			c.pre, c.suf, c.ok = one[:i], one[i+1:], true
+		}
+	}
+	if !c.ok {
+		return lipgloss.NewStyle().Background(bg).Width(n).Render("")
+	}
+	return c.pre + strings.Repeat(" ", n) + c.suf
 }
 
 // Thumb returns the [start, end) rows of the thumb within a window of
