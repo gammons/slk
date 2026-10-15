@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gammons/slk/internal/core"
+	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/slack-go/slack"
 )
 
@@ -30,7 +31,7 @@ func TestToCoreProfile_MapsFields(t *testing.T) {
 		},
 	}
 	at := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
-	got := toCoreProfile(u, at)
+	got := toCoreProfile(&slackclient.UserProfile{User: u}, at)
 
 	want := core.UserProfile{
 		UserID:      "U1",
@@ -54,10 +55,22 @@ func TestToCoreProfile_MapsFields(t *testing.T) {
 }
 
 func TestToCoreProfile_IsBotFromIsAppUser(t *testing.T) {
-	u := &slack.User{ID: "U2", IsAppUser: true}
-	got := toCoreProfile(u, time.Now())
+	got := toCoreProfile(&slackclient.UserProfile{User: &slack.User{ID: "U2", IsAppUser: true}}, time.Now())
 	if !got.IsBot {
 		t.Error("IsAppUser should map to IsBot=true")
+	}
+}
+
+func TestToCoreProfile_HuddleChannelID(t *testing.T) {
+	u := &slackclient.UserProfile{
+		User:                 &slack.User{ID: "U3", TeamID: "T1"},
+		HuddleStateChannelID: "C9",
+	}
+	if got := toCoreProfile(u, time.Now()).HuddleChannelID; got != "C9" {
+		t.Errorf("HuddleChannelID = %q, want C9", got)
+	}
+	if got := toCoreProfile(&slackclient.UserProfile{User: &slack.User{ID: "U3"}}, time.Now()).HuddleChannelID; got != "" {
+		t.Errorf("HuddleChannelID = %q, want empty without the field", got)
 	}
 }
 
@@ -162,8 +175,8 @@ func TestProfileCache_KeyedByTeam(t *testing.T) {
 }
 
 func TestProfileFetch_RateLimitWrapped(t *testing.T) {
-	lookup := func(teamID string) (func(context.Context, string) (*slack.User, error), bool) {
-		return func(ctx context.Context, userID string) (*slack.User, error) {
+	lookup := func(teamID string) (func(context.Context, string) (*slackclient.UserProfile, error), bool) {
+		return func(ctx context.Context, userID string) (*slackclient.UserProfile, error) {
 			return nil, &slack.RateLimitedError{RetryAfter: 30 * time.Second}
 		}, true
 	}
@@ -180,7 +193,7 @@ func TestProfileFetch_RateLimitWrapped(t *testing.T) {
 }
 
 func TestProfileFetch_UnknownWorkspace(t *testing.T) {
-	lookup := func(teamID string) (func(context.Context, string) (*slack.User, error), bool) {
+	lookup := func(teamID string) (func(context.Context, string) (*slackclient.UserProfile, error), bool) {
 		return nil, false
 	}
 	fetch := newProfileFetch(lookup)
@@ -192,8 +205,8 @@ func TestProfileFetch_UnknownWorkspace(t *testing.T) {
 }
 
 func TestProfileFetch_DeadlineExceededPassesThrough(t *testing.T) {
-	lookup := func(teamID string) (func(context.Context, string) (*slack.User, error), bool) {
-		return func(ctx context.Context, userID string) (*slack.User, error) {
+	lookup := func(teamID string) (func(context.Context, string) (*slackclient.UserProfile, error), bool) {
+		return func(ctx context.Context, userID string) (*slackclient.UserProfile, error) {
 			return nil, context.DeadlineExceeded
 		}, true
 	}
@@ -202,5 +215,57 @@ func TestProfileFetch_DeadlineExceededPassesThrough(t *testing.T) {
 
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("errors.Is(err, context.DeadlineExceeded) = false; err = %v", err)
+	}
+}
+
+// Fresh bypasses the TTL, and what it fetched is what Cached serves.
+func TestProfileCache_FreshRefreshesWhatCachedServes(t *testing.T) {
+	channel := ""
+	fetch := func(ctx context.Context, teamID, userID string) (core.UserProfile, error) {
+		return core.UserProfile{UserID: userID, HuddleChannelID: channel}, nil
+	}
+	now := time.Now()
+	c := newProfileCache(5*time.Minute, func() time.Time { return now }, fetch)
+
+	if _, ok := c.Cached("T1", "U1"); ok {
+		t.Fatal("Cached before any fetch = hit, want miss")
+	}
+	if _, err := c.Fresh(context.Background(), "T1", "U1"); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := c.Cached("T1", "U1"); !ok || got.HuddleChannelID != "" {
+		t.Fatalf("Cached = %+v, %v; want the no-huddle profile", got, ok)
+	}
+
+	channel = "C9" // a huddle starts inside the TTL
+	if got, _ := c.Fresh(context.Background(), "T1", "U1"); got.HuddleChannelID != "C9" {
+		t.Errorf("Fresh served %q, want the live C9", got.HuddleChannelID)
+	}
+	if got, _ := c.Cached("T1", "U1"); got.HuddleChannelID != "C9" {
+		t.Errorf("Cached after Fresh = %q, want C9", got.HuddleChannelID)
+	}
+
+	now = now.Add(6 * time.Minute)
+	if _, ok := c.Cached("T1", "U1"); ok {
+		t.Error("Cached past the TTL = hit, want miss")
+	}
+}
+
+func TestProfileCache_FreshErrorKeepsTheCachedEntry(t *testing.T) {
+	fail := false
+	fetch := func(ctx context.Context, teamID, userID string) (core.UserProfile, error) {
+		if fail {
+			return core.UserProfile{}, errors.New("boom")
+		}
+		return core.UserProfile{UserID: userID}, nil
+	}
+	c := newProfileCache(5*time.Minute, time.Now, fetch)
+	_, _ = c.Fresh(context.Background(), "T1", "U1")
+	fail = true
+	if _, err := c.Fresh(context.Background(), "T1", "U1"); err == nil {
+		t.Fatal("want the error")
+	}
+	if _, ok := c.Cached("T1", "U1"); !ok {
+		t.Error("a failed refresh dropped the cached entry")
 	}
 }

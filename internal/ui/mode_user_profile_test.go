@@ -236,3 +236,32 @@ func TestUserProfileCmd_TenSecondDeadline(t *testing.T) {
 		t.Errorf("loaded = {TeamID:%q UserID:%q}, want {T1 U1}", loaded.TeamID, loaded.UserID)
 	}
 }
+
+// A cached profile is on screen the moment the dialog opens, and the
+// fetch still runs behind it and replaces it.
+func TestOpenUserProfile_ServesCachedThenRefreshes(t *testing.T) {
+	a := newTestApp(t, normalOpts()...)
+	a.activeTeamID = "T1"
+	focusMessages(t, a)
+
+	a.SetProfileService(core.NewProfileService(core.ProfileServiceFuncs{
+		Profile: func(ctx context.Context, teamID, userID string) (core.UserProfile, error) {
+			return core.UserProfile{UserID: userID, TeamID: teamID, HuddleChannelID: "C2"}, nil
+		},
+		Cached: func(teamID, userID string) (core.UserProfile, bool) {
+			return core.UserProfile{UserID: userID, TeamID: teamID, HuddleChannelID: "C1"}, true
+		},
+	}))
+
+	cmd := a.openUserProfile()
+	if got := a.userProfile.HuddleURL(); got != "https://app.slack.com/huddle/T1/C1" {
+		t.Fatalf("HuddleURL on open = %q, want the cached C1 link at once", got)
+	}
+	if cmd == nil {
+		t.Fatal("cmd = nil, want the refresh fetch")
+	}
+	a.Update(cmd())
+	if got := a.userProfile.HuddleURL(); got != "https://app.slack.com/huddle/T1/C2" {
+		t.Errorf("HuddleURL after refresh = %q, want the fresh C2 link", got)
+	}
+}

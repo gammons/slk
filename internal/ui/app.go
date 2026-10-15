@@ -1348,6 +1348,12 @@ func (a *App) openUserProfile() tea.Cmd {
 	a.SetMode(ModeUserProfile)
 
 	svc := a.profileSvc
+	// Show the last fetch at once, then refresh behind it: a cached
+	// profile can be minutes old, and the huddle a person is in is
+	// worth more fresh than the dialog is worth skipping one request.
+	if cached, ok := svc.Cached(teamID, userID); ok {
+		a.userProfile.SetProfile(teamID, userID, cached)
+	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()

@@ -82,3 +82,20 @@ func TestRateLimitedError_As(t *testing.T) {
 		t.Errorf("Error() = %q, want %q", got, want)
 	}
 }
+
+func TestProfileService_CachedNilFuncIsAMiss(t *testing.T) {
+	svc := NewProfileService(ProfileServiceFuncs{})
+	if _, ok := svc.Cached("T1", "U1"); ok {
+		t.Error("Cached with no func = hit, want miss")
+	}
+}
+
+func TestProfileService_CachedDelegates(t *testing.T) {
+	want := UserProfile{UserID: "U1", HuddleChannelID: "C9"}
+	svc := NewProfileService(ProfileServiceFuncs{
+		Cached: func(teamID, userID string) (UserProfile, bool) { return want, teamID == "T1" && userID == "U1" },
+	})
+	if got, ok := svc.Cached("T1", "U1"); !ok || got != want {
+		t.Errorf("Cached = %+v, %v; want %+v, true", got, ok, want)
+	}
+}

@@ -30,7 +30,7 @@ type exportSource interface {
 // exportProfileSource is the part of the Slack client that resolves a
 // user ID the cache does not know.
 type exportProfileSource interface {
-	GetUserProfile(userID string) (*slack.User, error)
+	GetUserProfile(userID string) (*slackclient.UserProfile, error)
 }
 
 // rawConversation is a conversation as Slack returned it, before
@@ -299,7 +299,7 @@ func fetchUserName(ctx context.Context, profiles exportProfileSource, id string)
 
 // profileDisplayName picks the name slk shows for a user: display
 // name, then real name, then handle.
-func profileDisplayName(u *slack.User) string {
+func profileDisplayName(u *slackclient.UserProfile) string {
 	for _, name := range []string{u.Profile.DisplayName, u.RealName, u.Name} {
 		if name != "" {
 			return name

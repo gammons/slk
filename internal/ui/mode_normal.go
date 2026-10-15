@@ -315,6 +315,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, a.keys.UserProfile):
 		return a.openUserProfile()
 
+	case key.Matches(msg, a.keys.Huddle):
+		return cmdHuddle(a, commandArgs{})
+
 	case key.Matches(msg, a.keys.SaveThread):
 		return a.saveThreadToFile()
 

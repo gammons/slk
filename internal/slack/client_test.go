@@ -190,14 +190,6 @@ func (m *mockSlackAPI) GetConversationReplies(params *slack.GetConversationRepli
 	}, false, "", nil
 }
 
-func (m *mockSlackAPI) GetUserInfo(user string) (*slack.User, error) {
-	return nil, fmt.Errorf("user not found")
-}
-
-func (m *mockSlackAPI) GetUserInfoContext(ctx context.Context, user string) (*slack.User, error) {
-	return nil, fmt.Errorf("user not found")
-}
-
 func (m *mockSlackAPI) GetBotInfoContext(ctx context.Context, parameters slack.GetBotInfoParameters) (*slack.Bot, error) {
 	return nil, fmt.Errorf("bot not found")
 }
@@ -1692,6 +1684,86 @@ func TestGetMutedChannels_ApiError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid_auth") {
 		t.Errorf("error = %v, want it to mention invalid_auth", err)
+	}
+}
+
+func TestGetUserProfile_DecodesHuddleChannelID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true,"user":{"id":"U1","name":"alice","team_id":"T1","profile":{"display_name":"Alice","huddle_state":"in_a_huddle","huddle_state_expiration_ts":1700000900,"huddle_state_channel_id":"C9"}}}`))
+	}))
+	defer srv.Close()
+	c := newTestClient(srv)
+
+	u, err := c.GetUserProfile("U1")
+	if err != nil {
+		t.Fatalf("GetUserProfile: %v", err)
+	}
+	if u.ID != "U1" || u.Profile.DisplayName != "Alice" {
+		t.Errorf("user = %s/%s; want U1/Alice", u.ID, u.Profile.DisplayName)
+	}
+	if u.HuddleStateChannelID != "C9" {
+		t.Errorf("HuddleStateChannelID = %q, want C9", u.HuddleStateChannelID)
+	}
+	if u.Profile.HuddleState != "in_a_huddle" {
+		t.Errorf("HuddleState = %q, want in_a_huddle", u.Profile.HuddleState)
+	}
+	if u.TeamID != "T1" {
+		t.Errorf("TeamID = %q, want T1", u.TeamID)
+	}
+}
+
+func TestGetUserProfile_NoHuddleFieldIsNotAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true,"user":{"id":"U1","name":"alice","profile":{"display_name":"Alice","huddle_state":"default_unset"}}}`))
+	}))
+	defer srv.Close()
+	c := newTestClient(srv)
+
+	u, err := c.GetUserProfile("U1")
+	if err != nil {
+		t.Fatalf("GetUserProfile: %v", err)
+	}
+	if u.HuddleStateChannelID != "" {
+		t.Errorf("HuddleStateChannelID = %q, want empty", u.HuddleStateChannelID)
+	}
+}
+
+func TestGetUserProfile_PostsTheUserID(t *testing.T) {
+	var gotPath, gotUser string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		form, _ := url.ParseQuery(string(body))
+		gotUser = form.Get("user")
+		_, _ = w.Write([]byte(`{"ok":true,"user":{"id":"U1","name":"alice"}}`))
+	}))
+	defer srv.Close()
+	c := newTestClient(srv)
+
+	if _, err := c.GetUserProfile("U42"); err != nil {
+		t.Fatalf("GetUserProfile: %v", err)
+	}
+	if gotPath != "/api/users.info" {
+		t.Errorf("path = %q, want /api/users.info", gotPath)
+	}
+	if gotUser != "U42" {
+		t.Errorf("form user = %q, want U42", gotUser)
+	}
+}
+
+func TestGetUserProfile_ApiError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":false,"error":"user_not_found"}`))
+	}))
+	defer srv.Close()
+	c := newTestClient(srv)
+
+	_, err := c.GetUserProfile("U1")
+	if err == nil {
+		t.Fatal("expected error for ok=false response")
+	}
+	if !strings.Contains(err.Error(), "user_not_found") {
+		t.Errorf("error = %v, want it to mention user_not_found", err)
 	}
 }
 

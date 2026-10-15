@@ -29,14 +29,14 @@ type SlackAPI interface {
 	GetConversationReplies(params *slack.GetConversationRepliesParameters) ([]slack.Message, bool, string, error)
 	SearchMessagesContext(ctx context.Context, query string, params slack.SearchParameters) (*slack.SearchMessages, error)
 	// Deliberately absent: GetConversations (conversations.list) and
-	// GetUsersContext (users.list). See
-	// TestSlackAPI_DeclaresNoWorkspaceEnumeration — the whole
-	// directory is never fetched, only individual users on demand via
-	// GetUserInfo.
+	// GetUsersContext (users.list), which enumerate the whole workspace.
+	// See TestSlackAPI_DeclaresNoWorkspaceEnumeration. Users arrive from
+	// conversations.view's users array (the opened channel's authors),
+	// edge.UsersInfo revalidation of the cache, and on-demand users.info
+	// — fetched by GetUserProfile below, hand-rolled so it can decode
+	// the huddle fields slack-go's UserProfile does not model.
 	GetUserGroupsContext(ctx context.Context, options ...slack.GetUserGroupsOption) ([]slack.UserGroup, error)
 	GetUsersInConversationContext(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error)
-	GetUserInfo(user string) (*slack.User, error)
-	GetUserInfoContext(ctx context.Context, user string) (*slack.User, error)
 	GetBotInfoContext(ctx context.Context, parameters slack.GetBotInfoParameters) (*slack.Bot, error)
 	GetEmojiContext(ctx context.Context) (map[string]string, error)
 	PostMessage(channelID string, options ...slack.MsgOption) (string, string, error)
@@ -653,21 +653,100 @@ func (c *Client) JoinChannel(ctx context.Context, channelID string) error {
 	return nil
 }
 
+// UserProfile is a users.info result: slack-go's User with the huddle
+// fields Slack sends in the profile that slack-go's UserProfile struct
+// does not model (v0.23.0 stops at huddle_state and
+// huddle_state_expiration_ts). Embedding keeps every field access on
+// the embedded User unchanged.
+type UserProfile struct {
+	*slack.User
+	// HuddleStateChannelID is profile.huddle_state_channel_id, the
+	// conversation the user's huddle is in. Empty when they are not in
+	// a huddle — the key is absent from profiles with
+	// huddle_state "default_unset" — or when Slack did not send it,
+	// which is why empty means "no huddle link to build" and never
+	// "the user left their huddle": huddle_state itself is that signal.
+	// A capture with an active huddle should pin this field the way
+	// HuddleState was pinned (see the edge users/info fixture).
+	HuddleStateChannelID string
+}
+
 // GetUserProfile fetches a single user's profile by ID.
-func (c *Client) GetUserProfile(userID string) (*slack.User, error) {
-	user, err := c.api.GetUserInfo(userID)
+func (c *Client) GetUserProfile(userID string) (*UserProfile, error) {
+	u, err := c.GetUserProfileContext(context.Background(), userID)
 	if err != nil {
 		return nil, fmt.Errorf("getting user info: %w", err)
 	}
-	return user, nil
+	return u, nil
 }
 
 // GetUserProfileContext fetches a single user's full profile by ID
 // (users.info), for the user profile dialog. Unlike GetUserProfile,
 // errors are returned unwrapped so callers can type-assert
 // *slack.RateLimitedError.
-func (c *Client) GetUserProfileContext(ctx context.Context, userID string) (*slack.User, error) {
-	return c.api.GetUserInfoContext(ctx, userID)
+//
+// This is a hand-rolled POST rather than slack-go's GetUserInfo because
+// slack-go's UserProfile struct drops profile.huddle_state_channel_id,
+// which the huddle deep link is built from. The wire shape is the one
+// slack-go uses for every Web API call: a form POST with the token in
+// the body, decorated with the same browser headers the rest of this
+// client sends.
+func (c *Client) GetUserProfileContext(ctx context.Context, userID string) (*UserProfile, error) {
+	raw, err := c.postForm(ctx, "users.info", url.Values{"user": {userID}})
+	if err != nil {
+		var rl *rateLimitError
+		if errors.As(err, &rl) {
+			return nil, &slack.RateLimitedError{RetryAfter: rl.retryAfter}
+		}
+		return nil, err
+	}
+	return decodeUserProfile(raw)
+}
+
+// decodeUserProfile parses a users.info response body. The user record
+// is decoded twice on purpose: once wholesale into slack-go's User, and
+// once into the small huddle struct that picks the profile field
+// slack-go's struct does not hold. Both reads see the same bytes, so
+// they cannot disagree.
+func decodeUserProfile(raw []byte) (*UserProfile, error) {
+	var resp struct {
+		Ok    bool        `json:"ok"`
+		Error string      `json:"error"`
+		User  *slack.User `json:"user"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("decoding users.info response: %w", err)
+	}
+	if !resp.Ok {
+		code := resp.Error
+		if code == "" {
+			code = "unknown_error"
+		}
+		return nil, fmt.Errorf("users.info: %s", code)
+	}
+	if resp.User == nil {
+		return nil, fmt.Errorf("users.info: response carried no user")
+	}
+	var huddle struct {
+		User struct {
+			Profile huddleProfileFields `json:"profile"`
+		} `json:"user"`
+	}
+	// Absent or malformed huddle fields are not an error: the caller
+	// renders the profile without a huddle link.
+	if err := json.Unmarshal(raw, &huddle); err != nil {
+		return &UserProfile{User: resp.User}, nil
+	}
+	return &UserProfile{
+		User:                 resp.User,
+		HuddleStateChannelID: huddle.User.Profile.HuddleStateChannelID,
+	}, nil
+}
+
+// huddleProfileFields is the slice of a users.info profile that
+// slack-go's UserProfile struct does not model.
+type huddleProfileFields struct {
+	HuddleStateChannelID string `json:"huddle_state_channel_id"`
 }
 
 // GetBotInfo fetches a bot's name and icon by bot ID (the `bot_id` on a

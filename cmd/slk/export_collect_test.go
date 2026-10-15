@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gammons/slk/internal/export"
+	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/slack-go/slack"
 )
@@ -321,12 +322,12 @@ func TestExportMessageItem_BotAndUnknownAuthors(t *testing.T) {
 
 // fakeProfiles resolves users from a fixed table and scripts failures.
 type fakeProfiles struct {
-	users map[string]*slack.User
+	users map[string]*slackclient.UserProfile
 	errs  map[string][]error
 	calls []string
 }
 
-func (f *fakeProfiles) GetUserProfile(userID string) (*slack.User, error) {
+func (f *fakeProfiles) GetUserProfile(userID string) (*slackclient.UserProfile, error) {
 	f.calls = append(f.calls, userID)
 	if queue := f.errs[userID]; len(queue) > 0 {
 		f.errs[userID] = queue[1:]
@@ -339,10 +340,10 @@ func (f *fakeProfiles) GetUserProfile(userID string) (*slack.User, error) {
 }
 
 // slackUser builds a user with the given name fields.
-func slackUser(display, realName, handle string) *slack.User {
+func slackUser(display, realName, handle string) *slackclient.UserProfile {
 	u := &slack.User{Name: handle, RealName: realName}
 	u.Profile.DisplayName = display
-	return u
+	return &slackclient.UserProfile{User: u}
 }
 
 func TestResolveExportNames_AuthorsAndMentions(t *testing.T) {
@@ -354,7 +355,7 @@ func TestResolveExportNames_AuthorsAndMentions(t *testing.T) {
 		},
 	}}
 	store := newUserNameStore(map[string]string{"U3": "carol"})
-	profiles := &fakeProfiles{users: map[string]*slack.User{
+	profiles := &fakeProfiles{users: map[string]*slackclient.UserProfile{
 		"U1": slackUser("alice", "Alice A", "aa"),
 		"U2": slackUser("", "Bob B", "bb"),
 	}}
@@ -387,7 +388,7 @@ func TestResolveExportNames_RetriesAfterRateLimit(t *testing.T) {
 	convs := []export.Conversation{{Parent: messages.MessageItem{UserID: "U1", UserName: "U1"}}}
 	names := newUserNameStore(nil)
 	profiles := &fakeProfiles{
-		users: map[string]*slack.User{"U1": slackUser("alice", "", "")},
+		users: map[string]*slackclient.UserProfile{"U1": slackUser("alice", "", "")},
 		errs:  map[string][]error{"U1": {fmt.Errorf("getting user info: %w", &slack.RateLimitedError{RetryAfter: time.Millisecond})}},
 	}
 
@@ -422,7 +423,7 @@ func TestResolveExportNames_WarnsAndKeepsIDWhenLookupFails(t *testing.T) {
 	}}
 	names := newUserNameStore(nil)
 	profiles := &fakeProfiles{
-		users: map[string]*slack.User{"U2": slackUser("bob", "", "")},
+		users: map[string]*slackclient.UserProfile{"U2": slackUser("bob", "", "")},
 		errs:  map[string][]error{"U1": {errors.New("getting user info: dial tcp: lookup slack.com: no such host")}},
 	}
 
@@ -440,7 +441,7 @@ func TestResolveExportNames_WarnsAndKeepsIDWhenLookupFails(t *testing.T) {
 
 func TestProfileDisplayName(t *testing.T) {
 	cases := []struct {
-		user *slack.User
+		user *slackclient.UserProfile
 		want string
 	}{
 		{slackUser("alice", "Alice A", "aa"), "alice"},

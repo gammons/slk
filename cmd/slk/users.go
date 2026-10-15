@@ -86,7 +86,7 @@ func resolveUser(client *slackclient.Client, userID string, userNames *userNameS
 					IsExternal:  isExternal,
 				})
 				// UpsertUser doesn't touch status on an existing row.
-				applyProfileStatus(client.TeamID(), userID, u.Profile, db, send)
+				applyProfileStatus(client.TeamID(), userID, u, db, send)
 				return name, isBot
 			}
 		}
@@ -116,7 +116,7 @@ func resolveUser(client *slackclient.Client, userID string, userNames *userNameS
 			IsBot:       isBot,
 			IsExternal:  isExternal,
 		})
-		applyProfileStatus(client.TeamID(), userID, u.Profile, db, send)
+		applyProfileStatus(client.TeamID(), userID, u, db, send)
 		if send != nil {
 			send(ui.UserResolvedMsg{
 				TeamID:      client.TeamID(),

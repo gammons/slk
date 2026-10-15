@@ -72,7 +72,7 @@ func newTestPeerStatus(known ...string) (p *peerStatusRefresher, sender *capture
 			}
 			return out, nil
 		},
-		func(id string) (*slack.User, error) {
+		func(id string) (*slackclient.UserProfile, error) {
 			return nil, errors.New("newTestPeerStatus: no fallback profile fixture; tests exercising it build their own refresher")
 		},
 		nil, // db; tests exercising the fallback path build their own refresher
@@ -163,12 +163,12 @@ func newFallbackTestPeerStatus(t *testing.T, sender *captureSender, resolveEdge 
 		func(string) bool { return true },
 		resolveEdge,
 		func(context.Context, []string) (map[string]slack.DNDStatus, error) { return nil, nil },
-		func(id string) (*slack.User, error) {
+		func(id string) (*slackclient.UserProfile, error) {
 			*profileCalls = append(*profileCalls, id)
 			u := &slack.User{ID: id}
 			u.Profile.StatusEmoji = ":palm_tree:"
 			u.Profile.StatusText = "Vacation (fallback)"
-			return u, nil
+			return &slackclient.UserProfile{User: u}, nil
 		},
 		db,
 		sender.Send,
@@ -395,7 +395,7 @@ func TestPeerStatus_FlushRefreshesDNDBeforeProfileFallback(t *testing.T) {
 	p, _, _, dndAsked := newTestPeerStatus("U1", "U2")
 	p.resolveNow = func([]string) []edge.User { return nil }
 	var dndAlreadyAsked []bool
-	p.getUserProfile = func(string) (*slack.User, error) {
+	p.getUserProfile = func(string) (*slackclient.UserProfile, error) {
 		dndAlreadyAsked = append(dndAlreadyAsked, len(*dndAsked) > 0)
 		return nil, errors.New("unavailable")
 	}

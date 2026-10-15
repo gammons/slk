@@ -232,6 +232,11 @@ type UserProfile struct {
 	TZAbbrev                                      string // "PDT"; "" when none or numeric
 	TZOffset                                      int    // seconds east of UTC
 	IsBot, Deleted                                bool
+	// HuddleChannelID is the conversation the user's huddle is in,
+	// from users.info's huddle_state_channel_id. Empty when they are
+	// not in a huddle or Slack did not send it; the huddle state
+	// itself decides whether a link may be offered, never this field.
+	HuddleChannelID string
 }
 
 // RateLimitedError is how adapters report Slack rate limiting, so the
