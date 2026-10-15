@@ -243,10 +243,17 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 		// be silently dropped (the TS is still in selfSentTSes).
 		for _, mm := range a.modelsForChannel(m.ChannelID) {
 			mm.UpdateMessageInPlace(m.Message.TS, m.Message.Text)
+			// An edit that carries no room keeps the one already held.
+			if m.Message.HuddleRoom != nil {
+				mm.SetHuddleRoom(m.Message.TS, cloneHuddleRoom(m.Message.HuddleRoom))
+			}
 		}
 		if m.ChannelID == a.threadPanel.ChannelID() {
 			a.threadPanel.UpdateMessageInPlace(m.Message.TS, m.Message.Text)
 			a.threadPanel.UpdateParentInPlace(m.Message.TS, m.Message.Text)
+			if m.Message.HuddleRoom != nil {
+				a.threadPanel.SetHuddleRoom(m.Message.TS, cloneHuddleRoom(m.Message.HuddleRoom))
+			}
 		}
 		return nil
 	}

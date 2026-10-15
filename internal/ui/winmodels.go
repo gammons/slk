@@ -84,7 +84,21 @@ func cloneMessageItem(item messages.MessageItem) messages.MessageItem {
 	if len(item.Reactions) > 0 {
 		item.Reactions = append([]messages.ReactionItem(nil), item.Reactions...)
 	}
+	item.HuddleRoom = cloneHuddleRoom(item.HuddleRoom)
 	return item
+}
+
+// cloneHuddleRoom copies a room so each model owns its Participants and
+// Raw; the room is never mutated after capture, but a copy keeps that a
+// property of the data rather than of every reader. nil stays nil.
+func cloneHuddleRoom(r *messages.HuddleRoom) *messages.HuddleRoom {
+	if r == nil {
+		return nil
+	}
+	c := *r
+	c.Participants = append([]string(nil), r.Participants...)
+	c.Raw = append([]byte(nil), r.Raw...)
+	return &c
 }
 
 // cloneMessageItems deep-copies a message slice for handing to a

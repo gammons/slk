@@ -183,7 +183,19 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 		}}
 		rawBytes, _ := json.Marshal(synthetic)
 		rawBytes = slackclient.MergeRoom(rawBytes, room)
+		// This write carries no reply count (a message_changed frame has
+		// none, and live replies are never written back), so an edit keeps
+		// the stored one: zeroing it would make a huddle with replies look
+		// reply-less to the open-thread gate. History fetches write the
+		// real count and stay authoritative.
+		replyCount := 0
+		if edited {
+			if prev, err := h.db.GetMessage(channelID, ts); err == nil {
+				replyCount = prev.ReplyCount
+			}
+		}
 		h.db.UpsertMessage(cache.Message{
+			ReplyCount:  replyCount,
 			TS:          ts,
 			ChannelID:   channelID,
 			WorkspaceID: h.workspaceID,
@@ -405,7 +417,11 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	}
 
 	item := h.messageItemFromEvent(authorID, userID, username, ts, text, threadTS, subtype, edited, files, blocks, attachments)
-	item.HuddleRoom = core.ParseHuddleRoom(room)
+	var request func(string)
+	if h.wsCtx != nil && h.wsCtx.UserResolver != nil {
+		request = h.wsCtx.UserResolver.Request
+	}
+	item.HuddleRoom = resolveHuddleUsers(core.ParseHuddleRoom(room), h.userNames, h.db, request)
 	debuglog.Cache("OnMessage: team=%s channel=%s ts=%s subtype=%q thread_ts=%s decision=dispatched_to_app",
 		h.workspaceID, channelID, ts, subtype, threadTS)
 	if h.program != nil {

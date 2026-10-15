@@ -28,6 +28,7 @@ type (
 	Attachment   = core.Attachment
 	ThumbSpec    = core.ThumbSpec
 	ReactionItem = core.ReactionItem
+	HuddleRoom   = core.HuddleRoom
 )
 
 // AvatarFunc returns the rendered half-block avatar for a user ID, or empty string.
@@ -1012,6 +1013,21 @@ func (m *Model) UpdateMessageInPlace(ts, newText string) bool {
 		if msg.TS == ts {
 			m.messages[i].Text = newText
 			m.messages[i].IsEdited = true
+			m.dropCache()
+			m.dirty()
+			return true
+		}
+	}
+	return false
+}
+
+// SetHuddleRoom replaces the huddle room of the message with the given
+// TS (a message_changed that carries a newer room, e.g. the huddle
+// ended). The room is treated as immutable. Returns true if found.
+func (m *Model) SetHuddleRoom(ts string, room *HuddleRoom) bool {
+	for i, msg := range m.messages {
+		if msg.TS == ts {
+			m.messages[i].HuddleRoom = room
 			m.dropCache()
 			m.dirty()
 			return true
