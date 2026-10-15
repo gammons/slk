@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/bubbles/entrylist"
 	"github.com/gammons/slk/internal/config"
@@ -52,12 +53,33 @@ func TestNoticeHighlightsSearchTerms(t *testing.T) {
 
 	rc := &RenderContext{UserNames: names, SearchTerms: []string{"joined"}}
 	got := RenderMessage(centreNotice(), 60, rc, RenderOptions{}).Content
-	hlStart, hlEnd, ok := SearchHighlightSGR()
+	hlStart, _, ok := SearchHighlightSGR()
 	if !ok {
 		t.Fatal("no search highlight SGR")
 	}
-	if !strings.Contains(got, hlStart+"joined"+hlEnd) {
-		t.Errorf("matching word not highlighted: %q", got)
+	// After the highlight's reset, the notice's own style (bold, muted, bg)
+	// is re-asserted, and the next word follows with no reset in between.
+	_, afterMatch, found := strings.Cut(got, hlStart+"joined")
+	if !found {
+		t.Fatalf("matching word not highlighted: %q", got)
+	}
+	between, _, found := strings.Cut(afterMatch, " the")
+	if !found {
+		t.Fatalf("word after the match missing: %q", got)
+	}
+	opening, _, _ := strings.Cut(lipgloss.NewStyle().Background(styles.Background).Foreground(styles.TextMuted).Bold(true).Render("\x00"), "\x00")
+	if !strings.Contains(opening, "1;") && !strings.Contains(opening, "[1m") {
+		t.Fatalf("divider opening %q has no bold; test cannot tell", opening)
+	}
+	if !strings.HasPrefix(between, "\x1b[m") && !strings.HasPrefix(between, "\x1b[0m") {
+		t.Errorf("highlight close does not start with a reset: %q", between)
+	}
+	restored := strings.TrimPrefix(strings.TrimPrefix(between, "\x1b[m"), "\x1b[0m")
+	if !strings.HasSuffix(restored, opening) {
+		t.Errorf("notice style (bold, muted, bg) not re-asserted after the match: %q, want suffix %q", restored, opening)
+	}
+	if strings.Contains(restored, "\x1b[m") || strings.Contains(restored, "\x1b[0m") {
+		t.Errorf("reset between the restore and the next word: %q", restored)
 	}
 	if ansi.Strip(got) != ansi.Strip(base) {
 		t.Errorf("highlight changed text or width:\n%q\n%q", ansi.Strip(got), ansi.Strip(base))

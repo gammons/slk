@@ -22,11 +22,18 @@ import (
 // to the close sequence itself, targeting exactly the resets the
 // highlighter introduces.
 func SearchHighlightSGR() (start, end string, ok bool) {
+	return searchHighlightSGRRestoring(BgANSI() + FgANSI())
+}
+
+// searchHighlightSGRRestoring is SearchHighlightSGR with the sequence that
+// follows the close (what re-establishes the surrounding style) supplied by
+// the caller.
+func searchHighlightSGRRestoring(restore string) (start, end string, ok bool) {
 	parts := strings.SplitN(styles.SearchHighlightStyle().Render("\x00"), "\x00", 2)
 	if len(parts) != 2 || parts[0] == "" {
 		return "", "", false
 	}
-	return parts[0], parts[1] + BgANSI() + FgANSI(), true
+	return parts[0], parts[1] + restore, true
 }
 
 // HighlightSearchTerms wraps case- and accent-insensitive word-prefix
