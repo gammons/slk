@@ -15,6 +15,7 @@ import (
 	"github.com/gammons/slk/internal/debuglog"
 	emojiutil "github.com/gammons/slk/internal/emoji"
 	imgpkg "github.com/gammons/slk/internal/image"
+	"github.com/gammons/slk/internal/slackurl"
 	"github.com/gammons/slk/internal/ui/imgrender"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/peerstatus"
@@ -414,6 +415,65 @@ func MessageTextSource(msg MessageItem) string {
 		}
 	}
 	return msg.Text
+}
+
+// MessageCopyText is MessageTextSource with one more fallback: a
+// forwarded message carries its shared content in a legacy
+// attachment, with an empty top-level Text and no rich_text block --
+// exactly what renderMessagePlain's LegacyAttachments branch draws on
+// screen. Callers that report a message's text to the user (copy,
+// export, link extraction) need this fallback so a forwarded message
+// isn't reported as textless; the render path doesn't, since it
+// renders LegacyAttachments itself, separately from the body row.
+//
+// Multiple attachments (e.g. forwarding several messages at once, or a
+// forward alongside an unrelated link unfurl) return the first one
+// with any extractable text -- there's no field distinguishing "the
+// forward" from "an unfurl" to prefer one over the other, and no
+// signal for what "combine them" should even mean here.
+//
+// A forward sent with a comment has both: the comment is the top-level
+// text and the shared message an attachment whose FromURL is a Slack
+// permalink (the same test MessageLinks uses). The shared text is then
+// appended after the comment; ordinary link unfurls are never appended
+// to typed text.
+func MessageCopyText(msg MessageItem) string {
+	if text := MessageTextSource(msg); text != "" {
+		for _, la := range msg.LegacyAttachments {
+			if _, ok := slackurl.Parse(la.FromURL); !ok {
+				continue
+			}
+			if shared := legacyAttachmentText(la); shared != "" {
+				text += "\n\n" + shared
+			}
+		}
+		return text
+	}
+	for _, la := range msg.LegacyAttachments {
+		if text := legacyAttachmentText(la); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+// legacyAttachmentText extracts the best available text from one
+// legacy attachment: Text (the classic shape -- a forwarded message),
+// then a rich_text block (Slack's newer link-unfurl shape, where
+// Title/Text/Fields are empty and the content lives in Blocks; see
+// LegacyAttachment's doc comment), then Title as a last resort.
+func legacyAttachmentText(la blockkit.LegacyAttachment) string {
+	if la.Text != "" {
+		return la.Text
+	}
+	for _, b := range la.Blocks {
+		if rt, ok := b.(blockkit.RichTextBlock); ok {
+			if reconstructed := blockkit.RichTextToMrkdwn(rt); reconstructed != "" {
+				return reconstructed
+			}
+		}
+	}
+	return la.Title
 }
 
 // BlocksCarryBody reports whether msg's blocks already render its body,
