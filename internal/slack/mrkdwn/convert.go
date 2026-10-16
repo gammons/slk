@@ -1,13 +1,41 @@
 package mrkdwn
 
 import (
+	"regexp"
 	"strings"
+
+	"github.com/gammons/slk/internal/linkscheme"
 
 	"github.com/slack-go/slack"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/text"
 )
+
+// typedURLRegexp tells Linkify what a bare typed URL is: an allowed scheme
+// from linkscheme followed by anything up to whitespace, minus trailing
+// punctuation. goldmark's default needs a dotted host with a TLD, which
+// drops IP hosts, localhost and file: URLs. www. matches stay with goldmark.
+var typedURLRegexp = regexp.MustCompile(`^(?:` + linkscheme.Alternation + `)[^\s<>]*[^\s<>.,;:!?)\]'"*_~]`)
+
+// typedURLProtocols lists the "scheme:" prefixes Linkify may start a match
+// at, expanded from linkscheme.Alternation so the list stays in one place.
+// mailto: is left to Linkify's email matcher.
+var typedURLProtocols = func() []string {
+	var out []string
+	for _, alt := range strings.Split(linkscheme.Alternation, "|") {
+		name, _, _ := strings.Cut(alt, ":")
+		if name == "mailto" {
+			continue
+		}
+		if opt, ok := strings.CutSuffix(name, "?"); ok {
+			out = append(out, opt[:len(opt)-1]+":")
+			name = opt
+		}
+		out = append(out, name+":")
+	}
+	return out
+}()
 
 // Convert parses CommonMark in input and returns the Slack-compatible
 // payload pair: a mrkdwn fallback string and a rich_text block.
@@ -28,7 +56,8 @@ func Convert(input string) (string, *slack.RichTextBlock) {
 	md := goldmark.New(
 		goldmark.WithExtensions(
 			extension.Strikethrough,
-			extension.Linkify,
+			extension.NewLinkify(extension.WithLinkifyURLRegexp(typedURLRegexp),
+				extension.WithLinkifyAllowedProtocols(typedURLProtocols)),
 		),
 	)
 	doc := md.Parser().Parse(text.NewReader([]byte(tokenized)))

@@ -720,6 +720,52 @@ func TestConvert_BareHTTPAutolinked(t *testing.T) {
 	}
 }
 
+func TestConvert_TypedURLSchemes(t *testing.T) {
+	cases := []struct {
+		name, in string
+		want     []string // link URLs, in order; empty means no link
+	}{
+		{"ip host with port", "see http://192.0.2.3:8080/browse/X-1 ok", []string{"http://192.0.2.3:8080/browse/X-1"}},
+		{"https ip host", "https://192.0.2.3:8443/a", []string{"https://192.0.2.3:8443/a"}},
+		{"localhost", "http://localhost:3000/x", []string{"http://localhost:3000/x"}},
+		{"file url", "open file:///tmp/a.txt now", []string{"file:///tmp/a.txt"}},
+		{"ftp", "ftp://example.com/f", []string{"ftp://example.com/f"}},
+		{"ssh", "ssh://192.0.2.3", []string{"ssh://192.0.2.3"}},
+		{"tel", "call tel:+15550100", []string{"tel:+15550100"}},
+		{"trailing period", "see http://192.0.2.3/a.", []string{"http://192.0.2.3/a"}},
+		{"trailing comma", "http://192.0.2.3/a, then", []string{"http://192.0.2.3/a"}},
+		{"trailing paren", "(http://192.0.2.3/a)", []string{"http://192.0.2.3/a"}},
+		{"trailing semicolon bang question", "http://192.0.2.3/a; http://192.0.2.4/b! http://192.0.2.5/c?",
+			[]string{"http://192.0.2.3/a", "http://192.0.2.4/b", "http://192.0.2.5/c"}},
+		{"code span", "`http://192.0.2.3/a`", nil},
+		{"code block", "```\nhttp://192.0.2.3/a\n```", nil},
+		{"markdown link", "[x](http://192.0.2.3/a)", []string{"http://192.0.2.3/a"}},
+		{"javascript", "javascript:alert(1)", nil},
+		{"data", "data:text/html,hi", nil},
+		{"vbscript", "vbscript:msgbox", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, blk := Convert(c.in)
+			var got []string
+			for _, e := range blk.Elements {
+				s, ok := e.(*slack.RichTextSection)
+				if !ok {
+					continue
+				}
+				for _, el := range s.Elements {
+					if l, ok := el.(*slack.RichTextSectionLinkElement); ok {
+						got = append(got, l.URL)
+					}
+				}
+			}
+			if strings.Join(got, "|") != strings.Join(c.want, "|") {
+				t.Errorf("links = %q, want %q; block=%s", got, c.want, blockJSON(blk))
+			}
+		})
+	}
+}
+
 func TestConvert_BareWWWAutolinked(t *testing.T) {
 	// goldmark's Linkify prepends "http://" to www-only matches.
 	_, blk := Convert("visit www.example.com")
