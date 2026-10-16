@@ -46,6 +46,8 @@ func parseOne(b slack.Block) Block {
 		return parseActions(v)
 	case *slack.RichTextBlock:
 		return RichTextBlock{Elements: v.Elements}
+	case *slack.TableBlock:
+		return parseTable(v)
 	default:
 		return UnknownBlock{Type: string(b.BlockType())}
 	}
@@ -147,6 +149,23 @@ func actionElementOf(e slack.BlockElement) ActionElement {
 	default:
 		return ActionElement{Kind: "unknown"}
 	}
+}
+
+func parseTable(t *slack.TableBlock) TableBlock {
+	out := TableBlock{Rows: make([][]string, 0, len(t.Rows))}
+	for _, row := range t.Rows {
+		cells := make([]string, len(row))
+		for i, c := range row {
+			if c != nil {
+				cells[i] = RichTextToPlain(RichTextBlock{Elements: c.Elements})
+			}
+		}
+		out.Rows = append(out.Rows, cells)
+	}
+	for _, cs := range t.ColumnSettings {
+		out.Align = append(out.Align, string(cs.Align))
+	}
+	return out
 }
 
 // textOf returns the .Text of a TextBlockObject, or "" if nil.

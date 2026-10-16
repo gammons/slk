@@ -93,6 +93,10 @@ func appendBlock(out *RenderResult, b Block, ctx Context, width int) {
 		// block renderer itself emits zero lines to avoid
 		// double-rendering.
 		return
+	case TableBlock:
+		// Rendered in the message body with the rich_text around it,
+		// for the same reason (see messages.MessageTextSource).
+		return
 	case UnknownBlock:
 		out.Lines = append(out.Lines, renderUnsupported(v.Type, width))
 	default:
