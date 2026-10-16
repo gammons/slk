@@ -33,6 +33,10 @@
 - CommonMark in compose: type `**bold**`, `~~strike~~`, `[label](url)`, `- list items`, `1. numbered`, or fenced ```code blocks``` and slk converts them on send to Slack's mrkdwn + rich_text format. Already-mrkdwn syntax (`*bold*`, `_italic_`, `~strike~`) passes through unchanged and receives the corresponding rich-text styling.
 - Unsent drafts stay with their conversation. Text and attachments are kept separately for each workspace, channel, DM and thread, and come back when you switch to it again. Drafts are in-session only — nothing is written to disk and nothing is synced to Slack — and a draft's attachments stay in memory until you send or remove them. While a file upload is in progress, navigation that would switch the composer is refused, so the upload's caption and attachments stay with the conversation they were sent from.
 
+## Tables
+
+- Slack `table` blocks render as aligned columns with a header rule, honouring each column's left/center/right alignment, in their place within the message. Bots that post Markdown tables (Slack turns them into `table` blocks) show the full message, including the text after the table
+
 ## Images
 
 - Inline image attachments render automatically in the messages pane: kitty graphics protocol on capable terminals (kitty, ghostty, recent WezTerm), sixel on foot/mlterm and on any terminal that advertises sixel in its DA1 reply (xterm with sixel support, DomTerm, toyterm, …), half-block (`▀`) fallback everywhere else

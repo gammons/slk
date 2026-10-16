@@ -67,7 +67,7 @@ Last updated: 2026-05-03
 - [x] Mark-as-read synced to Slack via conversations.mark API on channel entry
 - [x] Typing indicators (show who's typing, broadcast your own typing)
 - [x] Desktop notifications (mentions, DMs, keywords via beeep)
-- [x] Block Kit & legacy attachment rendering -- bot messages render with structure (sections, fields, color stripes), with disabled controls visible and an "↗ open in Slack to interact" hint
+- [x] Block Kit & legacy attachment rendering -- bot messages render with structure (sections, fields, color stripes), with disabled controls visible and an "↗ open in Slack to interact" hint; `table` blocks (including the ones Slack makes from a Markdown table in a bot's `markdown` block) render as aligned columns in place, between the rich text around them
 
 ### Threads
 - [x] Thread panel -- opens beside the channel (at least 80 columns wide) for
