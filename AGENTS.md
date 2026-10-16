@@ -117,6 +117,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Re-assert a background (or background+foreground) after every SGR reset, so nested lipgloss renders don't drop it | `bubbles/ansi.ReapplyAfterResets(text, style)` — the one implementation; `messages.ReapplyBgAfterResets` delegates to it for existing callers. The theme's sequences come from `messages.BgANSI()` / `messages.FgANSI()` |
 | Extract links from message text | `messages.ExtractLinks` |
 | Every link a message offers to `o` (text links + Block Kit blocks + links in legacy attachment `text` (a forwarded message's shared text)/`pretext`/`title_link`/fields/nested blocks + permalinks of messages it shares, from attachment `from_url`) | `messages.MessageLinks(msg)` (the action-prompt body, `actionBody` in `action_prompt.go`, follows a different rule) |
+| Which URL schemes count as a link in Slack's `<url>` / `<url\|label>` forms (http, https, ftp, ftps, sftp, ssh, file, mailto, tel; never javascript:/data:) | `linkscheme.Alternation` (`internal/linkscheme`); the render, `slackfmt` and `mrkdwn` tokenizer regexes all embed it |
 | Does message text mention the current user? | `mention.InText(text, selfUserID)` |
 | Reaction pill rendering | `messages.ReactionPillText` |
 | The link previews a message's author can remove (legacy attachments with `FromURL` or `OriginalURL`; id = `ID`, or the 1-based position when 0), and what a prompt calls one | `messages.RemovablePreviews(msg)`, `RemovablePreview.Label()` |

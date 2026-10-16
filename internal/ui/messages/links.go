@@ -1,6 +1,6 @@
 // internal/ui/messages/links.go
 //
-// ExtractLinks pulls http(s)/mailto links out of a message's mrkdwn
+// ExtractLinks pulls links (schemes in internal/linkscheme) out of a message's mrkdwn
 // text using the same regexes the renderer uses (render.go), so the
 // "open link" keybinding sees exactly the links the user sees.
 package messages

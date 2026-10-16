@@ -13,6 +13,7 @@ import (
 	bubblesansi "github.com/gammons/slk/internal/bubbles/ansi"
 	"github.com/gammons/slk/internal/bubbles/entrylist"
 	emojiutil "github.com/gammons/slk/internal/emoji"
+	"github.com/gammons/slk/internal/linkscheme"
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
@@ -27,14 +28,15 @@ var (
 	codeBlockRe     = regexp.MustCompile("(?s)```(.+?)```")
 
 	// Slack link patterns: <url|label> or <url>.
-	// linkWithLabelRe matches both http(s) URLs and mailto: addresses
-	// (Slack auto-linkifies typed emails into <mailto:X|X> form). The
-	// scheme restriction means we do NOT match channel mentions
-	// <#CHANNEL_ID|name>, group mentions <!subteam^...|@team>, or
+	// linkWithLabelRe matches URLs whose scheme is in linkscheme (http(s),
+	// ftp(s), sftp, ssh, file, tel, and mailto: addresses, which Slack
+	// auto-linkifies from typed emails into <mailto:X|X> form). The scheme
+	// allowlist means we do NOT match javascript:/data: targets, channel
+	// mentions <#CHANNEL_ID|name>, group mentions <!subteam^...|@team>, or
 	// other Slack-internal angle-bracket forms — those are handled by
 	// dedicated regexes below.
-	linkWithLabelRe = regexp.MustCompile(`<((?:https?://|mailto:)[^|>]+)\|([^>]+)>`)
-	linkBareRe      = regexp.MustCompile(`<((?:https?://|mailto:)[^>]+)>`)
+	linkWithLabelRe = regexp.MustCompile(`<((?:` + linkscheme.Alternation + `)[^|>]+)\|([^>]+)>`)
+	linkBareRe      = regexp.MustCompile(`<((?:` + linkscheme.Alternation + `)[^>]+)>`)
 
 	// Slack user/channel mentions: <@U1234> <#C1234|channel-name>
 	userMentionRe = regexp.MustCompile(`<@([A-Z0-9]+)>`)

@@ -80,6 +80,23 @@ func TestTokenize_LinkBare(t *testing.T) {
 	}
 }
 
+func TestTokenize_LinkSchemes(t *testing.T) {
+	for _, u := range []string{"http://a.example", "ftp://a.example/f", "file:///tmp/a", "mailto:a@b.co", "tel:+15550100", "ssh://h.example"} {
+		_, table := tokenize("<" + u + "|x>")
+		if len(table) != 1 || table[0].kind != tokLink || table[0].id != u {
+			t.Errorf("%s: table = %+v", u, table)
+		}
+	}
+	for _, in := range []string{"<javascript:alert(1)>", "<data:text/html,x>", "<vbscript:x>", "<#CFAKE0001|general>", "<@UFAKE0001>"} {
+		_, table := tokenize(in)
+		for _, e := range table {
+			if e.kind == tokLink {
+				t.Errorf("%s tokenized as link: %+v", in, e)
+			}
+		}
+	}
+}
+
 func TestTokenize_Multiple(t *testing.T) {
 	got, table := tokenize("hi <@U1> and <@U2>")
 	want := "hi \uE000" + "0" + "\uE001 and \uE000" + "1" + "\uE001"

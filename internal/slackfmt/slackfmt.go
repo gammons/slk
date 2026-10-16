@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/gammons/slk/internal/linkscheme"
 	"github.com/gammons/slk/internal/usergroups"
 )
 
@@ -24,12 +25,12 @@ var (
 	// caller's workspace-scoped usergroup map.
 	subteamMentionRe = regexp.MustCompile(`<!subteam\^([A-Z0-9]+)(?:\|([^>]+))?>`)
 	broadcastRe      = regexp.MustCompile(`<!(here|channel|everyone)>`)
-	// Match both http(s) URLs and mailto: addresses; Slack auto-linkifies
-	// typed emails into <mailto:X|X>. Bare-link substitution keeps the URL
-	// as-is for http(s) but strips the mailto: prefix so the text reads as
-	// just the address.
-	linkWithLabelRe = regexp.MustCompile(`<((?:https?://|mailto:)[^|>]+)\|([^>]+)>`)
-	linkBareRe      = regexp.MustCompile(`<((?:https?://|mailto:)[^>]+)>`)
+	// Match URLs with an allowed scheme (linkscheme) including mailto:
+	// addresses; Slack auto-linkifies typed emails into <mailto:X|X>.
+	// Bare-link substitution keeps the URL as-is but strips the mailto:
+	// prefix so the text reads as just the address.
+	linkWithLabelRe = regexp.MustCompile(`<((?:` + linkscheme.Alternation + `)[^|>]+)\|([^>]+)>`)
+	linkBareRe      = regexp.MustCompile(`<((?:` + linkscheme.Alternation + `)[^>]+)>`)
 )
 
 // MentionedUserIDs returns the user IDs of every <@U…> mention in text,
