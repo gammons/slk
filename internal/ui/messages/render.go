@@ -693,7 +693,17 @@ func RenderSlackMarkdownWith(text string, opts RenderSlackMarkdownOpts) string {
 		if strings.HasPrefix(line, "&gt; ") || strings.HasPrefix(line, "> ") {
 			quoted := strings.TrimPrefix(line, "&gt; ")
 			quoted = strings.TrimPrefix(quoted, "> ")
+			quoted = renderInlineFormattingWith(quoted, opts)
 			quoted = slackEntityDecoder.Replace(quoted)
+			// Inline spans end in a reset that would drop the rest of
+			// the quote out of its muted color.
+			quoted = ReapplyBgAfterResets(quoted, fgANSIFor(styles.TextMuted))
+			// Wrap before drawing the bar so every wrapped row gets one;
+			// the body wrap that runs later would continue the quote
+			// without it. The bar and its padding take two columns.
+			if w := opts.Width; w > 2 {
+				quoted = WordWrap(quoted, w-2)
+			}
 			line = blockquoteStyle().Render(quoted)
 		} else {
 			line = renderInlineFormattingWith(line, opts)
