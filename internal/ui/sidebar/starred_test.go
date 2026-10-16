@@ -49,6 +49,21 @@ func TestStarredOrderUsesSectionType(t *testing.T) {
 	}
 }
 
+func TestStarredOrderDoesNotCrossMissingSectionRank(t *testing.T) {
+	m := New([]ChannelItem{
+		{ID: "D1", Name: "Alice", Type: "dm", Section: "missing"},
+		{ID: "C1", Name: "general", Type: "channel", Section: "ST"},
+	})
+	m.SetSectionsProvider(&fakeProvider{ready: true, sections: []SectionMeta{{ID: "ST", Type: "stars"}}})
+	var got []string
+	for _, idx := range m.filtered {
+		got = append(got, m.items[idx].ID)
+	}
+	if want := []string{"D1", "C1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("order = %v, want %v", got, want)
+	}
+}
+
 func TestStarredOrderBeforeChannelOrder(t *testing.T) {
 	items := starredItems()
 	items[0].ChannelOrder = 1

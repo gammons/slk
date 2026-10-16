@@ -4,16 +4,145 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/gammons/slk/internal/bootstrap"
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/service"
 	slk "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slack/boot"
+	"github.com/gammons/slk/internal/ui"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/slack-go/slack"
 )
+
+func TestOnConnectPresenceIncludesRecoveredStarredPeers(t *testing.T) {
+	for _, reconnect := range []bool{false, true} {
+		name := "initial"
+		if reconnect {
+			name = "reconnect"
+		}
+		t.Run(name, func(t *testing.T) {
+			store := service.NewSectionStore()
+			if err := store.Bootstrap(context.Background(), &fakeSectionsClient{
+				sections: []slk.SidebarSection{{ID: "ST", Type: "stars"}},
+				starIDs:  []string{"D2", "DBOT"},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			srv := newFakeSlack(t, map[string]string{
+				"/api/users.getPresence": `{"ok":true,"presence":"active"}`,
+				"/api/dnd.info":          `{"ok":true,"dnd_enabled":false}`,
+			})
+			dndIDs := make(chan []string, 1)
+			done := make(chan struct{})
+			wctx := &WorkspaceContext{
+				Client: newTestClient(t, srv.Server), TeamID: "T1", UserID: "USELF",
+				SectionStore: store,
+				UserNames:    newUserNameStore(map[string]string{"U2": "Alice", "UBOT": "Bot"}),
+				Channels:     []sidebar.ChannelItem{{ID: "D1", Type: "dm", DMUserID: "U1"}},
+				PeerStatus: &peerStatusRefresher{
+					selfID: "USELF", now: time.Now,
+					dndTeamInfo: func(_ context.Context, ids []string) (map[string]slack.DNDStatus, error) {
+						dndIDs <- slices.Clone(ids)
+						return nil, nil
+					},
+				},
+			}
+			wctx.MarkBotUser("UBOT")
+			h := &rtmEventHandler{
+				wsCtx: wctx, workspaceID: "T1", connected: reconnect,
+				program: sendFunc(func(msg tea.Msg) {
+					if _, ok := msg.(ui.StatusChangeMsg); ok {
+						close(done)
+					}
+				}),
+				resolveConversation: func(_ context.Context, id string) (*slack.Channel, error) {
+					peer := "U2"
+					if id == "DBOT" {
+						peer = "UBOT"
+					}
+					return &slack.Channel{GroupConversation: slack.GroupConversation{
+						Conversation: slack.Conversation{ID: id, IsIM: true, User: peer},
+					}}, nil
+				},
+			}
+			h.OnConnect()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("presence bootstrap did not finish")
+			}
+			if len(wctx.Channels) != 3 {
+				t.Fatalf("recovered channels = %+v, want existing DM, recovered human and bot", wctx.Channels)
+			}
+			select {
+			case got := <-dndIDs:
+				if want := []string{"U1", "U2"}; !slices.Equal(got, want) {
+					t.Fatalf("DND peer IDs = %v, want existing and recovered human peers %v", got, want)
+				}
+			default:
+				t.Fatal("peer DND refresh did not run")
+			}
+		})
+	}
+}
+
+func TestOnConnectDebouncesStarredReconciliation(t *testing.T) {
+	store := service.NewSectionStore()
+	if err := store.Bootstrap(context.Background(), &fakeSectionsClient{
+		sections: []slk.SidebarSection{{ID: "ST", Type: "stars"}},
+		starIDs:  []string{"D2"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := newFakeSlack(t, map[string]string{
+		"/api/users.getPresence": `{"ok":true,"presence":"active"}`,
+		"/api/dnd.info":          `{"ok":true,"dnd_enabled":false}`,
+	})
+	done := make(chan struct{}, 2)
+	calls := 0
+	h := &rtmEventHandler{
+		wsCtx: &WorkspaceContext{
+			Client: newTestClient(t, srv.Server), TeamID: "T1", UserID: "USELF",
+			SectionStore: store,
+		},
+		program: sendFunc(func(msg tea.Msg) {
+			if _, ok := msg.(ui.StatusChangeMsg); ok {
+				done <- struct{}{}
+			}
+		}),
+		resolveConversation: func(context.Context, string) (*slack.Channel, error) {
+			calls++
+			return nil, errors.New("temporarily unavailable")
+		},
+	}
+	for range 2 {
+		h.OnConnect()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("presence bootstrap did not finish")
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("starred metadata lookups during connection flap = %d, want 1", calls)
+	}
+	h.sectionRefreshAt = time.Now().Add(-30 * time.Second)
+	h.OnConnect()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("presence bootstrap did not finish after debounce expired")
+	}
+	if calls != 2 {
+		t.Fatalf("starred metadata lookups after debounce expired = %d, want 2", calls)
+	}
+}
 
 func TestMissingStarredConversations_BootClosedIM(t *testing.T) {
 	res := &bootstrap.Result{IMs: []boot.IM{
@@ -61,6 +190,7 @@ func TestMissingStarredConversations_InvalidOrUnavailable(t *testing.T) {
 		{"closed mpim", &slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "D1", IsMpIM: true}, Name: "mpdm-a--b-1"}, IsMember: true}, nil},
 		{"not joined", &slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "D1"}, Name: "not joined"}, IsChannel: true}, nil},
 		{"malformed", &slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "D1"}}}, nil},
+		{"missing type flags", &slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "D1"}, Name: "named"}, IsMember: true}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := missingStarredConversations(context.Background(), nil, []string{"D1"}, nil,

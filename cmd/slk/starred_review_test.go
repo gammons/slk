@@ -19,6 +19,39 @@ import (
 	"github.com/slack-go/slack"
 )
 
+func TestMissingStarredConversations_CancellationAfterSuccessfulLookup(t *testing.T) {
+	for _, tc := range []struct {
+		cancelID, wantCalls, wantAdded string
+	}{
+		{"D1", "D1", ""},
+		{"D2", "D1,D2", "D1"},
+	} {
+		t.Run(tc.cancelID, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var calls []string
+			got := missingStarredConversations(ctx, nil, []string{"D1", "D2", "D3"}, nil,
+				func(lookupCtx context.Context, id string) (*slack.Channel, error) {
+					if err := lookupCtx.Err(); err != nil {
+						t.Fatalf("lookup after cancellation: %v", err)
+					}
+					calls = append(calls, id)
+					if id == tc.cancelID {
+						cancel()
+					}
+					return &slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: id, IsIM: true, User: "U" + id}}}, nil
+				})
+			var added []string
+			for _, ch := range got {
+				added = append(added, ch.ID)
+			}
+			if strings.Join(calls, ",") != tc.wantCalls || strings.Join(added, ",") != tc.wantAdded {
+				t.Fatalf("calls = %v, added = %v; want %q / %q", calls, added, tc.wantCalls, tc.wantAdded)
+			}
+		})
+	}
+}
+
 func TestStarredRecoveredPeerRetries(t *testing.T) {
 	for _, mode := range []string{"transient failure", "shared context canceled", "cache later filled", "delayed bot classification", "inactive workspace"} {
 		t.Run(mode, func(t *testing.T) {

@@ -470,13 +470,10 @@ func (h *rtmEventHandler) OnConnect() {
 	firstConnect := !h.connected
 	h.connected = true
 	h.program.Send(ui.ConnectionStateMsg{State: int(statusbar.StateConnected)})
-	if h.wsCtx != nil {
-		go bootstrapPresenceAndDND(context.Background(), h.wsCtx, h.program)
-	}
-	// Refresh Slack-native section state on reconnect. MaybeRebootstrap
-	// is debounced to once per 30s (Task 6) so a rapid flap doesn't
-	// thunder; a real long-disconnect-then-reconnect refreshes section
-	// state we may have missed during the gap.
+	// Refresh Slack-native section state and reconcile starred rows on connect.
+	// The whole block is debounced to once per 30s so a rapid flap doesn't
+	// repeat missing-row lookups even when MaybeRebootstrap skips its fetch.
+	// A real long-disconnect-then-reconnect refreshes missed section state.
 	//
 	// Run synchronously on the event owner. This briefly blocks
 	// inbound event delivery during the bootstrap HTTP call, but that
@@ -484,7 +481,9 @@ func (h *rtmEventHandler) OnConnect() {
 	// avoids racing wsCtx.Channels mutations against the same loop's
 	// next event (which could be an OnConversationOpened that also
 	// touches wsCtx.Channels).
-	if h.wsCtx != nil && h.wsCtx.SectionStore != nil && h.wsCtx.Client != nil {
+	if h.wsCtx != nil && h.wsCtx.SectionStore != nil && h.wsCtx.Client != nil &&
+		(h.sectionRefreshAt.IsZero() || time.Since(h.sectionRefreshAt) >= 30*time.Second) {
+		h.sectionRefreshAt = time.Now()
 		// Bound section refresh and missing-row hydration together so a slow
 		// workspace cannot indefinitely stall serialized WebSocket delivery.
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -495,6 +494,10 @@ func (h *rtmEventHandler) OnConnect() {
 			h.refreshSectionsForActive()
 		}
 		cancel()
+	}
+	if h.wsCtx != nil {
+		peerIDs := workspacePresenceIDs(h.wsCtx)
+		go bootstrapPresenceAndDND(context.Background(), h.wsCtx, h.program, peerIDs)
 	}
 
 	// Bounded reconnect catch-up: client.counts, the channel on

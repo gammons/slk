@@ -133,12 +133,12 @@ func (m *Model) extractSynthetic() []core.ChannelFinderItem {
 // outside of a full SetItems refresh (e.g. a live im_created/mpim_open WS
 // event or a Ctrl+N-initiated DM), so it shows up in Ctrl+P immediately
 // instead of waiting for the next workspace activation to pick up
-// WorkspaceContext.FinderItems. LastVisited is preserved from the existing
-// entry when the incoming item doesn't specify one.
+// WorkspaceContext.FinderItems. LastVisited keeps the newer of the existing
+// and incoming visit times.
 func (m *Model) Upsert(item core.ChannelFinderItem) {
 	for i := range m.items {
 		if m.items[i].ID == item.ID {
-			if item.LastVisited == 0 {
+			if item.LastVisited < m.items[i].LastVisited {
 				item.LastVisited = m.items[i].LastVisited
 			}
 			item.Synthetic = m.items[i].Synthetic

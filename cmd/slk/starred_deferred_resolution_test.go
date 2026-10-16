@@ -15,6 +15,7 @@ import (
 	slk "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slack/edge"
 	"github.com/gammons/slk/internal/ui"
+	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/slack-go/slack"
 )
@@ -223,6 +224,9 @@ func TestStarredDeferredResolutionRepairsRowsWithoutReconnect(t *testing.T) {
 						t.Fatal("recovered row unexpectedly belongs to the startup sweep")
 					}
 					wctx.FinderItems[0].LastVisited = 99
+					uiFinder := channelfinder.New()
+					uiFinder.SetItems(wctx.FinderItems)
+					uiFinder.UpdateLastVisited("D1", 500)
 					before := wctx.Channels[0]
 					sender.sent = nil
 					// Production must schedule the retry for this quiet peer itself:
@@ -270,6 +274,10 @@ func TestStarredDeferredResolutionRepairsRowsWithoutReconnect(t *testing.T) {
 						msg, ok := sender.sent[0].(ui.ConversationOpenedMsg)
 						if !ok || msg.TeamID != "T1" || msg.Item != item || msg.FinderItem != finder {
 							t.Fatalf("repair publication = %+v", sender.sent[0])
+						}
+						uiFinder.Upsert(msg.FinderItem)
+						if got := uiFinder.Items()[0]; got.Name != "Build Bot" || got.LastVisited != 500 {
+							t.Fatalf("UI finder after repair = %+v, want updated name and this session's visit 500", got)
 						}
 					}
 					pending.OnPendingEvents()
