@@ -65,7 +65,10 @@ func (a *App) forwardToChannel(destination channelfinder.ChannelResult) tea.Cmd 
 			return ToastMsg{Text: "Failed to forward message: " + err.Error()}
 		}
 		// Match Slack's link mrkdwn so the local fallback is clickable too.
-		item.TS, item.Text = string(result.TS), "<"+result.Text+">"
+		item.TS, item.Text = string(result.TS), "Forwarded message"
+		if result.Text != "" { // permalink is best effort; echo is a stand-in for the share
+			item.Text = "<" + result.Text + ">"
+		}
 		return messageForwardedMsg{
 			teamID: source.teamID, channelID: destination.ID, destination: name, message: item,
 		}
