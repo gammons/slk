@@ -113,7 +113,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Search-term highlighting (ANSI/OSC-safe) | `messages.HighlightSearchTerms`, `messages.SearchHighlightSGR` |
 | Re-assert a background (or background+foreground) after every SGR reset, so nested lipgloss renders don't drop it | `bubbles/ansi.ReapplyAfterResets(text, style)` — the one implementation; `messages.ReapplyBgAfterResets` delegates to it for existing callers. The theme's sequences come from `messages.BgANSI()` / `messages.FgANSI()` |
 | Extract links from message text | `messages.ExtractLinks` |
-| Every link a message offers to `o` (text links + permalinks of messages it shares, from attachment `from_url`) | `messages.MessageLinks(msg)` |
+| Every link a message offers to `o` (text links + Block Kit blocks + links in legacy attachment `text`/`pretext`/`title_link`/fields/nested blocks + permalinks of messages it shares, from attachment `from_url`) | `messages.MessageLinks(msg)` |
 | Does message text mention the current user? | `mention.InText(text, selfUserID)` |
 | Reaction pill rendering | `messages.ReactionPillText` |
 | Render one `MessageItem` (author line, body, Block Kit, attachments, reactions, hits) for a content pane | `messages.RenderMessage(msg, width, rc, opt)` with a `RenderContext` the pane builds (`renderContext()` in each pane) and `RenderOptions` for its differences; `messages.BlockkitContext(msg, rc)` for the Block Kit host context. Both panes; the thread pane's options are `thread.(*Model).renderMessage` |
