@@ -57,7 +57,7 @@ type ChannelItem struct {
 	// ChannelOrder is the per-channel sort position within a section,
 	// sourced from the SectionDef "<pattern>:<N>" suffix syntax. >0
 	// means the channel sorts ahead of un-annotated peers (which fall
-	// back to input order); among annotated channels, lower wins.
+	// back to alphabetical order); among annotated channels, lower wins.
 	// Always 0 in Slack-native sections mode (config-glob feature only).
 	ChannelOrder int
 	IsStarred    bool
@@ -1322,9 +1322,8 @@ func (m *Model) rebuildFilter() {
 	// people/app/group conversations. Within each block (and other sections):
 	//   1. Channels with ChannelOrder > 0 come first, sorted ascending
 	//      (from SectionDef "<pattern>:<N>" suffixes; config-mode only).
-	//   2. Channels with ChannelOrder == 0 follow, in input order
-	//      (preserves Slack-provided order in Slack mode, and
-	//      bootstrap-order in config mode without ":N" suffixes).
+	//   2. Channels with equal ChannelOrder sort alphabetically by name.
+	//      Section order is preserved; unread status does not affect sorting.
 	// Snapshot star identities once per rebuild, not inside the comparator.
 	// Names are presentation only: a custom section named Starred is ordinary.
 	stars := make(map[string]bool)
@@ -1355,8 +1354,7 @@ func (m *Model) rebuildFilter() {
 			}
 		}
 		// Within a section: annotated (ChannelOrder > 0) before
-		// un-annotated; among annotated, lower wins; among
-		// un-annotated, preserve input order via stable sort.
+		// un-annotated; among annotated, lower wins.
 		oa, ob := m.items[ia].ChannelOrder, m.items[ib].ChannelOrder
 		if (oa > 0) != (ob > 0) {
 			return oa > 0
@@ -1364,7 +1362,7 @@ func (m *Model) rebuildFilter() {
 		if oa != ob {
 			return oa < ob
 		}
-		return ia < ib
+		return text.Fold(m.items[ia].Name) < text.Fold(m.items[ib].Name)
 	})
 }
 

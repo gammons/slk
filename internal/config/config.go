@@ -43,7 +43,7 @@ type Compose struct {
 // ascending. Example: channels = ["general:1", "alerts:2", "random"].
 // The ":N" syntax is only honored when use_slack_sections = false
 // (or as a fallback when Slack's section endpoint is unreachable);
-// in Slack-native mode, channel order is taken from Slack.
+// in Slack-native mode, channels sort alphabetically within Slack's sections.
 type SectionDef struct {
 	Channels []string `toml:"channels"`
 	Order    int      `toml:"order"` // lower = higher in sidebar

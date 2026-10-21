@@ -26,12 +26,12 @@ func TestStarredOrderUsesSectionType(t *testing.T) {
 		ready, provider          bool
 		want                     []string
 	}{
-		{"stars", "stars", "Starred", true, true, []string{"C1", "C2", "D1", "D2"}},
-		{"empty label", "stars", "", true, true, []string{"C1", "C2", "D1", "D2"}},
-		{"renamed", "stars", "Favorites", true, true, []string{"C1", "C2", "D1", "D2"}},
-		{"custom Starred", "standard", "Starred", true, true, []string{"D1", "C1", "D2", "C2"}},
-		{"not ready", "stars", "Starred", false, true, []string{"D1", "C1", "D2", "C2"}},
-		{"config only", "", "", false, false, []string{"D1", "C1", "D2", "C2"}},
+		{"stars", "stars", "Starred", true, true, []string{"C2", "C1", "D2", "D1"}},
+		{"empty label", "stars", "", true, true, []string{"C2", "C1", "D2", "D1"}},
+		{"renamed", "stars", "Favorites", true, true, []string{"C2", "C1", "D2", "D1"}},
+		{"custom Starred", "standard", "Starred", true, true, []string{"D2", "C2", "C1", "D1"}},
+		{"not ready", "stars", "Starred", false, true, []string{"D2", "C2", "C1", "D1"}},
+		{"config only", "", "", false, false, []string{"D2", "C2", "C1", "D1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := New(starredItems())
@@ -52,7 +52,7 @@ func TestStarredOrderUsesSectionType(t *testing.T) {
 func TestStarredOrderBeforeChannelOrder(t *testing.T) {
 	items := starredItems()
 	items[0].ChannelOrder = 1
-	items[2].ChannelOrder = 1 // equal priority must preserve Slack order
+	items[2].ChannelOrder = 1 // equal priority sorts alphabetically
 	items[1].ChannelOrder = 9
 	items[3].ChannelOrder = 3
 	items = append(items, ChannelItem{ID: "A1", Name: "app", Type: "app", Section: "ST"}, ChannelItem{ID: "G1", Name: "group", Type: "group_dm", Section: "ST"})
@@ -62,7 +62,7 @@ func TestStarredOrderBeforeChannelOrder(t *testing.T) {
 	for _, idx := range m.filtered {
 		got = append(got, m.items[idx].ID)
 	}
-	want := []string{"C2", "C1", "D1", "D2", "A1", "G1"}
+	want := []string{"C2", "C1", "D2", "D1", "A1", "G1"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("order = %v, want %v", got, want)
 	}
@@ -71,7 +71,7 @@ func TestStarredOrderBeforeChannelOrder(t *testing.T) {
 func TestStarredRenderingNavigationAndRefresh(t *testing.T) {
 	m := New(starredItems())
 	m.SetSectionsProvider(&fakeProvider{ready: true, sections: []SectionMeta{{ID: "ST", Type: "stars"}}})
-	want := []string{"C1", "C2", "D1", "D2"}
+	want := []string{"C2", "C1", "D2", "D1"}
 	var got []string
 	for i := 0; i < len(m.nav)-1; i++ {
 		m.MoveDown()
@@ -152,7 +152,7 @@ func TestStarredUnreadMouseAndStaleness(t *testing.T) {
 		}
 	})
 	m.SetStaleThreshold(24 * time.Hour)
-	want := []string{"C1", "C2", "D1", "D2"}
+	want := []string{"C2", "C1", "D2", "D1"}
 	if len(m.filtered) != len(want) {
 		t.Fatalf("staleness hid starred rows: %v", m.filtered)
 	}
@@ -161,8 +161,8 @@ func TestStarredUnreadMouseAndStaleness(t *testing.T) {
 		dir   int
 		want  string
 	}{
-		{"", 1, "C1"}, {"C1", 1, "C2"}, {"C2", 1, "D1"},
-		{"D1", 1, "C1"}, {"D1", -1, "C2"},
+		{"", 1, "C2"}, {"C2", 1, "C1"}, {"C1", 1, "D1"},
+		{"D1", 1, "C2"}, {"D1", -1, "C1"},
 	} {
 		if id, _, _, ok := m.NextUnread(tc.after, tc.dir); !ok || id != tc.want {
 			t.Fatalf("NextUnread(%s,%d) = %s,%v, want %s", tc.after, tc.dir, id, ok, tc.want)

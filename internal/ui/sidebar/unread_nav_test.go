@@ -7,9 +7,8 @@ import (
 )
 
 // items C1..C4; C2 and C4 are unread, C3 is unread-but-muted (excluded),
-// C1 is read. NextUnread walks m.filtered (visible section order); a
-// single explicit Section on every item keeps that order == input order
-// so these assertions read cleanly.
+// C1 is read. NextUnread walks m.filtered (visible section order):
+// C4 (four), C3 (muted), C1 (one), C2 (two).
 func unreadNavModel() Model {
 	m := New([]ChannelItem{
 		{ID: "C1", Name: "one", Type: "channel", Section: "Eng"},
@@ -34,26 +33,26 @@ func TestNextUnread_ForwardSkipsCurrentAndMuted(t *testing.T) {
 	if id, _, _, ok := m.NextUnread("C1", 1); !ok || id != "C2" {
 		t.Fatalf("from C1 want C2, got id=%q ok=%v", id, ok)
 	}
-	// From C2: skip muted C3, land on C4.
+	// From C2: wrap around to C4.
 	if id, _, _, ok := m.NextUnread("C2", 1); !ok || id != "C4" {
-		t.Fatalf("from C2 want C4 (muted C3 skipped), got id=%q ok=%v", id, ok)
+		t.Fatalf("from C2 want wrap to C4, got id=%q ok=%v", id, ok)
 	}
-	// From C4: wrap around to C2.
+	// From C4: skip muted C3 and read C1, land on C2.
 	if id, _, _, ok := m.NextUnread("C4", 1); !ok || id != "C2" {
-		t.Fatalf("from C4 want wrap to C2, got id=%q ok=%v", id, ok)
+		t.Fatalf("from C4 want C2 (muted C3 skipped), got id=%q ok=%v", id, ok)
 	}
 }
 
 func TestPrevUnread_Backward(t *testing.T) {
 	m := unreadNavModel()
 
-	// From C4: previous unread is C2 (C3 muted).
+	// From C4: wrap backward to C2.
 	if id, _, _, ok := m.NextUnread("C4", -1); !ok || id != "C2" {
 		t.Fatalf("prev from C4 want C2, got id=%q ok=%v", id, ok)
 	}
-	// From C2: wrap backward to C4.
+	// From C2: skip read C1 and muted C3, land on C4.
 	if id, _, _, ok := m.NextUnread("C2", -1); !ok || id != "C4" {
-		t.Fatalf("prev from C2 want wrap to C4, got id=%q ok=%v", id, ok)
+		t.Fatalf("prev from C2 want C4, got id=%q ok=%v", id, ok)
 	}
 }
 
@@ -91,8 +90,8 @@ func TestNextUnread_NoOtherUnread(t *testing.T) {
 // afterID not present (nothing open yet) still finds the first unread.
 func TestNextUnread_UnknownAfterID(t *testing.T) {
 	m := unreadNavModel()
-	if id, _, _, ok := m.NextUnread("", 1); !ok || id != "C2" {
-		t.Fatalf("from empty want first unread C2, got id=%q ok=%v", id, ok)
+	if id, _, _, ok := m.NextUnread("", 1); !ok || id != "C4" {
+		t.Fatalf("from empty want first unread C4, got id=%q ok=%v", id, ok)
 	}
 }
 
