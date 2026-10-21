@@ -83,6 +83,21 @@ func TestResolveEmojiToTokens_Shortcodes(t *testing.T) {
 			[]Token{emoji(":+1::skin-tone-2:", CDNBaseURL+"1f44d-1f3fb.png"), emoji(":rocket:", rocketURL)},
 		},
 		{
+			"emoji with a tone per person is one image",
+			":handshake::skin-tone-2-5::rocket:",
+			[]Token{emoji(":handshake::skin-tone-2-5:", CDNBaseURL+"1faf1-1f3fb-200d-1faf2-1f3fe.png"), emoji(":rocket:", rocketURL)},
+		},
+		{
+			"tone per person with no image draws the base alone",
+			":handshake::skin-tone-2-2::rocket:",
+			[]Token{emoji(":handshake::skin-tone-2-2:", CDNBaseURL+"1f91d.png"), emoji(":rocket:", rocketURL)},
+		},
+		{
+			"custom emoji with a tone per person keeps its image alone",
+			":wave::skin-tone-2-5:",
+			[]Token{emoji(":wave::skin-tone-2-5:", customWave)},
+		},
+		{
 			"skin tone on an emoji that takes none stays a swatch",
 			":rocket::skin-tone-2:",
 			[]Token{emoji(":rocket:", rocketURL), emoji(":skin-tone-2:", CDNBaseURL+"1f3fb.png")},

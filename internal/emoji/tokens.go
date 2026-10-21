@@ -82,28 +82,36 @@ func ResolveEmojiToTokens(text string, customs map[string]string) []Token {
 		// (a) Shortcode pass.
 		if text[i] == ':' {
 			if end, name, ok := tryShortcodeAt(text, i); ok {
+				source := ":" + name + ":"
 				// A skin-toned emoji arrives as two shortcodes,
 				// ":+1::skin-tone-2:" (RichTextToMrkdwn writes it so);
 				// Slack draws one toned emoji, not the base and a swatch.
 				if toneEnd, tone, ok := tryShortcodeAt(text, end); ok && strings.HasPrefix(tone, "skin-tone-") {
 					if _, custom := customs[name]; !custom {
-						if cps, ok := ComposeSkinTonedCodepoints(name + "::" + tone); ok {
+						if url, ok := skinTonedURL(name + "::" + tone); ok {
 							flushText()
 							tokens = append(tokens, Token{
 								Kind: TokenEmoji,
-								Text: ":" + name + "::" + tone + ":",
-								URL:  BuildStandardEmojiURL(cps),
+								Text: source + ":" + tone + ":",
+								URL:  url,
 							})
 							i = toneEnd
 							continue
 						}
+					}
+					// A tone per person has no swatch to fall back on,
+					// so a pair with no image draws as the base alone
+					// rather than leaving ":skin-tone-2-5:" as text.
+					if _, _, ok := tonePerPerson(tone); ok {
+						source += ":" + tone + ":"
+						end = toneEnd
 					}
 				}
 				if url, urlOK := URLForShortcode(name, customs); urlOK {
 					flushText()
 					tokens = append(tokens, Token{
 						Kind: TokenEmoji,
-						Text: ":" + name + ":",
+						Text: source,
 						URL:  url,
 					})
 					i = end

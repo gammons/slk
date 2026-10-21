@@ -256,6 +256,40 @@ func TestRichTextToMrkdwn_EmojiWithSkinTone(t *testing.T) {
 	}
 }
 
+func TestRichTextToMrkdwn_EmojiWithTonePerPerson(t *testing.T) {
+	// A two-person emoji with a tone per person has no skin_tone; the
+	// tones are only in unicode. Slack's text field writes it as
+	// :name::skin-tone-A-B:, even when A and B match. Elements are as
+	// Slack sent them.
+	cases := []struct {
+		name string
+		el   slack.RichTextSectionEmojiElement
+		want string
+	}{
+		{"two tones",
+			slack.RichTextSectionEmojiElement{Name: "people_holding_hands", Unicode: "1f9d1-1f3fb-200d-1f91d-200d-1f9d1-1f3ff"},
+			":people_holding_hands::skin-tone-2-6:"},
+		{"same tone twice",
+			slack.RichTextSectionEmojiElement{Name: "people_holding_hands", Unicode: "1f9d1-1f3fb-200d-1f91d-200d-1f9d1-1f3fb"},
+			":people_holding_hands::skin-tone-2-2:"},
+		{"handshake",
+			slack.RichTextSectionEmojiElement{Name: "handshake", Unicode: "1faf1-1f3fb-200d-1faf2-1f3fe"},
+			":handshake::skin-tone-2-5:"},
+		{"skin_tone wins",
+			slack.RichTextSectionEmojiElement{Name: "handshake", SkinTone: 2, Unicode: "1f91d-1f3fb"},
+			":handshake::skin-tone-2:"},
+		{"untoned", slack.RichTextSectionEmojiElement{Name: "tada", Unicode: "1f389"}, ":tada:"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			c.el.Type = slack.RTSEEmoji
+			if got := RichTextToMrkdwn(rtSection(&c.el)); got != c.want {
+				t.Errorf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
 func TestRichTextToMrkdwn_MultipleSectionsJoinedByNewline(t *testing.T) {
 	// Two adjacent rich_text_section blocks render as two visual
 	// paragraphs, so a newline boundary is required between them.

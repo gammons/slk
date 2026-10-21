@@ -285,6 +285,34 @@ func TestBlocksCarryBody_RichTextBodyKeepsBodyRow(t *testing.T) {
 	}
 }
 
+// TestRichTextTonePerPersonEmojiKeepsNextEmoji: a two-tone 🤝 from
+// Slack's composer becomes ":handshake::skin-tone-2-5:" in the body, and
+// the 🎉 after it must survive the glyph render and the Markdown export.
+func TestRichTextTonePerPersonEmojiKeepsNextEmoji(t *testing.T) {
+	rt := blockkit.RichTextBlock{Elements: []slack.RichTextElement{
+		&slack.RichTextSection{
+			Type: slack.RTESection,
+			Elements: []slack.RichTextSectionElement{
+				&slack.RichTextSectionEmojiElement{Type: slack.RTSEEmoji, Name: "handshake", Unicode: "1faf1-1f3fb-200d-1faf2-1f3fe"},
+				&slack.RichTextSectionEmojiElement{Type: slack.RTSEEmoji, Name: "tada", Unicode: "1f389"},
+			},
+		},
+	}}
+	msg := MessageItem{
+		TS:        "1700000000.000000",
+		UserName:  "alice",
+		Timestamp: "1:23 PM",
+		Text:      ":handshake::skin-tone-2-5::tada:",
+		Blocks:    []blockkit.Block{rt},
+	}
+	if got := renderedFor(t, msg, 80); !strings.Contains(got, "🤝") || !strings.Contains(got, "🎉") {
+		t.Errorf("rendered %q, want 🤝 and 🎉", got)
+	}
+	if got, want := SlackMrkdwnToCommonMark(MessageTextSource(msg), nil, nil), "🤝🎉"; got != want {
+		t.Errorf("export body = %q, want %q", got, want)
+	}
+}
+
 // TestRenderMessagePlainRichTextProducesMultipleLines: integration
 // test for the bug — a rendered rich_text-bodied message must
 // produce multiple body lines, not one squashed line. Mirrors the

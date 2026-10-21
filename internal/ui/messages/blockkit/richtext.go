@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/slack-go/slack"
+
+	"github.com/gammons/slk/internal/emoji"
 )
 
 // RichTextToMrkdwn reconstructs Slack mrkdwn from a parsed rich_text
@@ -68,7 +70,7 @@ func inlineToMrkdwn(e slack.RichTextSectionElement) string {
 	case *slack.RichTextSectionBroadcastElement:
 		return "<!" + v.Range + ">"
 	case *slack.RichTextSectionEmojiElement:
-		return emojiToMrkdwn(v.Name, v.SkinTone)
+		return emojiToMrkdwn(v.Name, v.SkinTone, v.Unicode)
 	case *slack.RichTextSectionTeamElement:
 		// Team mentions are rare in chat surface; emit the Slack
 		// wire form so the downstream renderer can do whatever it
@@ -135,10 +137,28 @@ func linkToMrkdwn(url, label string) string {
 // shortcodes. A non-zero SkinTone is emitted as a sibling
 // :skin-tone-N: shortcode — Slack web does the same, and the
 // downstream emoji renderer composes them at display time.
-func emojiToMrkdwn(name string, skinTone int) string {
+//
+// A two-person emoji with a tone per person has no SkinTone; its two
+// modifiers are only in unicode ("1f9d1-1f3fb-200d-1f91d-200d-1f9d1-1f3ff").
+// It is emitted as :skin-tone-A-B:, the form Slack's text field uses,
+// even when A and B match.
+func emojiToMrkdwn(name string, skinTone int, unicode string) string {
 	out := ":" + name + ":"
 	if skinTone > 0 {
-		out += ":skin-tone-" + strconv.Itoa(skinTone) + ":"
+		return out + ":skin-tone-" + strconv.Itoa(skinTone) + ":"
+	}
+	var tones []string
+	for _, cp := range strings.Split(unicode, "-") {
+		n, err := strconv.ParseInt(cp, 16, 32)
+		if err != nil {
+			continue
+		}
+		if tone, ok := emoji.SlackSkinToneNumber(rune(n)); ok {
+			tones = append(tones, strconv.Itoa(tone))
+		}
+	}
+	if len(tones) == 2 {
+		out += ":skin-tone-" + tones[0] + "-" + tones[1] + ":"
 	}
 	return out
 }

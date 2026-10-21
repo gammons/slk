@@ -42,9 +42,13 @@ type entry struct {
 	ShortName  string   `json:"short_name"`
 	ShortNames []string `json:"short_names"`
 	SortOrder  int      `json:"sort_order"`
-	// Keyed by the modifier codepoints ("1F3FB", or "1F3FB-1F3FC" for
-	// a two-person emoji); only presence matters here.
-	SkinVariations map[string]json.RawMessage `json:"skin_variations"`
+	// Keyed by the modifier codepoints: "1F3FB", or "1F3FB-1F3FC" for a
+	// two-person emoji with a tone per person.
+	SkinVariations map[string]skinVariation `json:"skin_variations"`
+}
+
+type skinVariation struct {
+	Image string `json:"image"` // CDN file name, e.g. "1f44d-1f3fb.png"
 }
 
 // unifiedToGlyph converts an iamcal "unified" codepoint string (uppercase
@@ -90,6 +94,7 @@ func main() {
 	nameToCanonical := map[string]string{} // alias -> canonical short_name
 	codeMap := map[string]string{}         // ":name:" -> glyph (all aliases)
 	toneBases := map[string]string{}       // glyph -> canonical short_name
+	perPerson := map[string]string{}       // glyph + two modifiers -> image stem
 
 	for _, e := range entries {
 		if e.ShortName == "" {
@@ -98,6 +103,11 @@ func main() {
 		glyph := unifiedToGlyph(e.Unified)
 		if hasSingleTone(e.SkinVariations) && glyph != "" {
 			toneBases[glyph] = e.ShortName
+		}
+		for mods, v := range e.SkinVariations {
+			if strings.Contains(mods, "-") && glyph != "" {
+				perPerson[glyph+unifiedToGlyph(mods)] = strings.TrimSuffix(v.Image, ".png")
+			}
 		}
 		for _, n := range e.ShortNames {
 			if _, ok := nameToCanonical[n]; !ok {
@@ -125,6 +135,11 @@ func main() {
 	fmt.Fprintf(&buf, "// image to its canonical short_name. For an emoji not listed, one\n")
 	fmt.Fprintf(&buf, "// skin tone modifier names no image on Slack's CDN.\n")
 	writeMap(&buf, "slackSkinToneBases", toneBases)
+	fmt.Fprintf(&buf, "\n// slackTonePerPersonImages maps an emoji's glyph followed by two skin\n")
+	fmt.Fprintf(&buf, "// tone modifiers, one per person, to its image's file name on Slack's\n")
+	fmt.Fprintf(&buf, "// CDN without \".png\". These can't be composed from the base glyph:\n")
+	fmt.Fprintf(&buf, "// the toned handshake is 1FAF1 and 1FAF2, not 1F91D.\n")
+	writeMap(&buf, "slackTonePerPersonImages", perPerson)
 
 	src, err := format.Source(buf.Bytes())
 	if err != nil {
@@ -134,14 +149,14 @@ func main() {
 		log.Fatalf("writing slacknames_gen.go: %v", err)
 	}
 
-	log.Printf("wrote slacknames_gen.go: %d names, %d shortcodes, %d skin-tone bases", len(nameToCanonical), len(codeMap), len(toneBases))
+	log.Printf("wrote slacknames_gen.go: %d names, %d shortcodes, %d skin-tone bases, %d per-person images", len(nameToCanonical), len(codeMap), len(toneBases), len(perPerson))
 }
 
 // hasSingleTone reports whether an emoji has an image for one skin tone
 // modifier. A few two-person emoji (people_holding_hands, the couple
 // and kiss pairs) list only a tone per person, "1F3FB-1F3FC", so a
 // single modifier names no image.
-func hasSingleTone(variations map[string]json.RawMessage) bool {
+func hasSingleTone(variations map[string]skinVariation) bool {
 	for k := range variations {
 		if !strings.Contains(k, "-") {
 			return true
