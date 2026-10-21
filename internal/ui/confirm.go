@@ -52,6 +52,14 @@ func (a *App) openConfirmPrompt(title, body string, onConfirm confirmprompt.Conf
 	a.SetMode(ModeConfirm)
 }
 
+// openConfirmChoice raises the prompt with c (any buttons) and switches
+// to ModeConfirm.
+func (a *App) openConfirmChoice(c confirmprompt.Choice) {
+	a.prepareConfirmPrompt()
+	a.confirmPrompt.OpenChoice(c)
+	a.SetMode(ModeConfirm)
+}
+
 // confirmPromptOverlay composites the prompt over background, clamped to
 // height lines so wide runes cannot scroll the terminal.
 func (a *App) confirmPromptOverlay(background string) string {

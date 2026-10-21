@@ -131,6 +131,11 @@ type (
 	NewMessageMsg struct {
 		ChannelID string
 		Message   messages.MessageItem
+		// Changed marks a message_changed echo of a message already
+		// shown: the panes update it in place instead of appending. It
+		// is not Message.IsEdited, which only says Slack stamped the
+		// message "edited" (an unfurl is a change nobody edited).
+		Changed bool
 	}
 	SendMessageMsg struct {
 		ChannelID string
@@ -612,6 +617,19 @@ type MessageEditedMsg struct {
 type MessageDeletedMsg struct {
 	ChannelID string
 	TS        string
+	Err       error
+}
+
+// AttachmentRemovedMsg carries the result of the chat.deleteAttachment
+// API call (removing a link preview). On success nothing is done with it:
+// the message_changed echo updates the message. TS is the message's.
+// Seq names the removal it answers; the UI sets it (adapters leave it 0).
+// Err is *core.AttachmentRefusedError when the preview was certainly not
+// removed; any other Err leaves it unknown whether Slack acted.
+type AttachmentRemovedMsg struct {
+	ChannelID string
+	TS        string
+	Seq       uint64
 	Err       error
 }
 

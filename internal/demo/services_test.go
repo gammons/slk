@@ -202,6 +202,11 @@ func TestUnsupportedOperationsSaySo(t *testing.T) {
 	if msg := s.messages.Delete(chGeneral, "1.0").(ui.MessageDeletedMsg); !errors.Is(msg.Err, errUnavailable) {
 		t.Errorf("Delete = %#v", msg)
 	}
+	// A refusal, not a plain error: that would hold the removal pending.
+	var refused *core.AttachmentRefusedError
+	if msg := s.messages.RemoveAttachment("T1", chGeneral, "1.0", 1).(ui.AttachmentRemovedMsg); !errors.As(msg.Err, &refused) || refused.Reason != errUnavailable.Error() {
+		t.Errorf("RemoveAttachment = %#v", msg)
+	}
 	if _, err := s.files.Download(ctx, "https://example.com/f", "f"); !errors.Is(err, errUnavailable) {
 		t.Errorf("Download err = %v", err)
 	}

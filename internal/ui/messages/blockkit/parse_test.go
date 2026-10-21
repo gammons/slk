@@ -299,6 +299,15 @@ func TestParseAttachmentSharedMessageSource(t *testing.T) {
 	}
 }
 
+// TestParseAttachmentOriginalURL: some unfurls carry original_url
+// instead of from_url; either makes the preview removable.
+func TestParseAttachmentOriginalURL(t *testing.T) {
+	a := ParseAttachments([]slack.Attachment{{OriginalURL: "https://example.com/post"}})[0]
+	if a.OriginalURL != "https://example.com/post" {
+		t.Errorf("OriginalURL = %q", a.OriginalURL)
+	}
+}
+
 func TestParseAttachmentImageAndThumb(t *testing.T) {
 	in := []slack.Attachment{{
 		ImageURL: "https://example.com/img.png",

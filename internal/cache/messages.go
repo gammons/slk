@@ -1,6 +1,8 @@
 package cache
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 
 	"github.com/gammons/slk/internal/debuglog"
@@ -47,6 +49,76 @@ func (db *DB) UpsertMessage(m Message) error {
 	debuglog.Cache("UpsertMessage: channel=%s ts=%s thread_ts=%s subtype=%q deleted=%v edited=%q",
 		m.ChannelID, m.TS, m.ThreadTS, m.Subtype, m.IsDeleted, m.EditedAt)
 	return nil
+}
+
+// MessageChange is the content a message_changed echo carries: the
+// message's text and its files, blocks and legacy attachments, each a
+// JSON array as slack-go marshals it. An empty one (nil, `null` or
+// `[]`) means the message has none. ThreadTS is the echo's thread_ts,
+// used only to fill a row that has none.
+type MessageChange struct {
+	Text        string
+	ThreadTS    string
+	Files       json.RawMessage
+	Blocks      json.RawMessage
+	Attachments json.RawMessage
+}
+
+// ApplyMessageChange replaces the content of a cached message (an edit,
+// an unfurl landing, a link preview removed) and keeps everything the
+// change does not carry: reply_count, subtype, user_id, edited_at, and
+// every other key of raw_json. UpsertMessage would overwrite them with
+// the echo's blanks. thread_ts is kept too, unless the row has none: a
+// thread parent first cached from the WebSocket has none until a fetch,
+// and without it GetThreadReplies leaves the parent out.
+//
+// raw_json is merged with json_patch (RFC 7396) in the same statement,
+// so nothing written to the row between a read and a write can be
+// lost, as it could be with a merge in Go. The patch sets "text" and
+// sets "files", "blocks" and "attachments" to the change's arrays, or
+// removes them when it has none. A row without a valid raw_json (cached before the
+// column existed) gets one with just the patch.
+//
+// Reports whether a row was changed. A message that is not cached, or
+// was deleted, is left alone: a row built from the echo alone would be
+// the partial row this exists to avoid, and the next fetch that reaches
+// the message caches it whole.
+func (db *DB) ApplyMessageChange(channelID, ts string, c MessageChange) (bool, error) {
+	patch, err := json.Marshal(map[string]any{
+		"text":        c.Text,
+		"files":       contentOrNull(c.Files),
+		"blocks":      contentOrNull(c.Blocks),
+		"attachments": contentOrNull(c.Attachments),
+	})
+	if err != nil {
+		return false, fmt.Errorf("applying message change: %w", err)
+	}
+	res, err := db.conn.Exec(`
+		UPDATE messages SET
+			text = ?,
+			thread_ts = CASE WHEN thread_ts = '' THEN ? ELSE thread_ts END,
+			raw_json = json_patch(CASE WHEN json_valid(raw_json) THEN raw_json ELSE '{}' END, ?)
+		WHERE channel_id = ? AND ts = ? AND is_deleted = 0
+	`, c.Text, c.ThreadTS, string(patch), channelID, ts)
+	if err != nil {
+		debuglog.Cache("ApplyMessageChange: channel=%s ts=%s ERR=%v", channelID, ts, err)
+		return false, fmt.Errorf("applying message change: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("applying message change: %w", err)
+	}
+	return n > 0, nil
+}
+
+// contentOrNull is a change's array as a json_patch value: JSON null,
+// which removes the key, when the message has none.
+func contentOrNull(arr json.RawMessage) json.RawMessage {
+	switch string(bytes.TrimSpace(arr)) {
+	case "", "null", "[]":
+		return json.RawMessage("null")
+	}
+	return arr
 }
 
 // GetMessages returns the NEWEST `limit` messages for a channel,

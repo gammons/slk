@@ -29,6 +29,9 @@ type contentPane interface {
 	ScrollHintForDrag(y int) int
 	ScrollUp(n int)
 	ScrollDown(n int)
+	// UpdateMessageInPlace applies a message_changed echo to the message
+	// with the item's TS; false when the pane does not hold it.
+	UpdateMessageInPlace(item messages.MessageItem) bool
 }
 
 var (

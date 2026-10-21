@@ -1004,14 +1004,14 @@ func (m *Model) IncrementReplyCount(parentTS, replyTS string) {
 	}
 }
 
-// UpdateMessageInPlace finds a message by TS, replaces its text, and
-// marks it as edited. Returns true if the message was found.
-// Invalidates the render cache.
-func (m *Model) UpdateMessageInPlace(ts, newText string) bool {
+// UpdateMessageInPlace finds the message with item's TS and applies a
+// message_changed echo to it (MessageItem.ApplyChange: text, edited
+// mark, blocks, attachments; reactions and the rest are kept). Returns
+// true if the message was found. Invalidates the render cache.
+func (m *Model) UpdateMessageInPlace(item MessageItem) bool {
 	for i, msg := range m.messages {
-		if msg.TS == ts {
-			m.messages[i].Text = newText
-			m.messages[i].IsEdited = true
+		if msg.TS == item.TS {
+			m.messages[i].ApplyChange(item)
 			m.dropCache()
 			m.dirty()
 			return true

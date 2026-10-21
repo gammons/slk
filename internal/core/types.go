@@ -57,6 +57,19 @@ type MessageItem struct {
 	BotID string
 }
 
+// ApplyChange takes the content fields of c, a message_changed echo of
+// this message: Text, IsEdited, Blocks, LegacyAttachments and
+// Attachments. Everything else (reactions, reply count, author, time) is
+// kept, because the echo does not carry it. The one place that decides
+// which fields a change replaces; both panes call it.
+func (m *MessageItem) ApplyChange(c MessageItem) {
+	m.Text = c.Text
+	m.IsEdited = c.IsEdited
+	m.Blocks = c.Blocks
+	m.LegacyAttachments = c.LegacyAttachments
+	m.Attachments = c.Attachments
+}
+
 // Attachment represents a file or image attached to a message.
 // Kind is "image" for image/* mimetypes, "file" otherwise.
 // URL is the user-facing permalink (preferred) or fallback to url_private.
@@ -257,6 +270,18 @@ type CommandError struct {
 }
 
 func (e *CommandError) Error() string { return e.Code }
+
+// AttachmentRefusedError is how adapters report that a link preview was
+// certainly not removed: Slack refused (an ok:false that leaves nothing
+// done), rate limited the call, or the call was never sent. Reason is
+// Slack's error code, or a few words when there is none. Any other error
+// from MessageService.RemoveAttachment leaves it unknown whether Slack
+// acted.
+type AttachmentRefusedError struct {
+	Reason string
+}
+
+func (e *AttachmentRefusedError) Error() string { return e.Reason }
 
 // Theme holds the user's color overrides from config.
 type Theme struct {

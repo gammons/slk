@@ -172,20 +172,21 @@ func ParseAttachments(in []slack.Attachment) []LegacyAttachment {
 
 func parseAttachment(a slack.Attachment) LegacyAttachment {
 	la := LegacyAttachment{
-		Color:      a.Color,
-		Pretext:    a.Pretext,
-		Title:      a.Title,
-		TitleLink:  a.TitleLink,
-		Text:       a.Text,
-		ImageURL:   a.ImageURL,
-		ThumbURL:   a.ThumbURL,
-		Footer:     a.Footer,
-		FooterIcon: a.FooterIcon,
-		FromURL:    a.FromURL,
-		AuthorName: a.AuthorName,
-		Blocks:     Parse(a.Blocks),
-		ID:         a.ID,
-		CallbackID: a.CallbackID,
+		Color:       a.Color,
+		Pretext:     a.Pretext,
+		Title:       a.Title,
+		TitleLink:   a.TitleLink,
+		Text:        a.Text,
+		ImageURL:    a.ImageURL,
+		ThumbURL:    a.ThumbURL,
+		Footer:      a.Footer,
+		FooterIcon:  a.FooterIcon,
+		FromURL:     a.FromURL,
+		OriginalURL: a.OriginalURL,
+		AuthorName:  a.AuthorName,
+		Blocks:      Parse(a.Blocks),
+		ID:          a.ID,
+		CallbackID:  a.CallbackID,
 	}
 	for _, f := range a.Fields {
 		la.Fields = append(la.Fields, LegacyField{

@@ -10,12 +10,12 @@
 //     (page), G (bottom), Tab/h/l (focus next/prev), Ctrl-h/l
 //     (nav back/forward through visited channels; Ctrl-k is an
 //     alias for forward)
-//   - layout toggles: s (sidebar), t (thread)
+//   - layout toggles: ctrl+b (sidebar), ctrl+] (thread)
 //   - theme cycle: Alt-Y / Alt-Shift-Y apply the next / previous
 //     theme, wrapping around (saved per workspace, like Ctrl-Y)
 //   - message ops: y (copy message), Y/C (copy permalink), E (edit), D (delete),
-//     U (mark unread), m (set mark), ' (jump to mark), O/v (open image
-//     preview)
+//     x (remove link preview), U (mark unread), m (set mark),
+//     ' (jump to mark), O/v (open image preview)
 //   - reaction nav sub-state: r enters; arrows + Enter select
 //     (delegated to handleReactionNav, for either content pane)
 //   - window commands: Ctrl-W prefix arms a pending sub-state; the
@@ -345,6 +345,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 
 	case key.Matches(msg, a.keys.Delete):
 		return a.beginDeleteOfSelected()
+
+	case key.Matches(msg, a.keys.RemovePreview):
+		return a.removePreviewOfSelected()
 
 	case key.Matches(msg, a.keys.OpenPreview):
 		return a.openImagePreviewOfSelected()

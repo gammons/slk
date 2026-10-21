@@ -37,6 +37,7 @@ type KeyMap struct {
 	ReactionNav         key.Binding
 	Edit                key.Binding
 	Delete              key.Binding
+	RemovePreview       key.Binding
 	CopyMessage         key.Binding
 	CopyPermalink       key.Binding
 	ForwardMessage      key.Binding
@@ -115,6 +116,7 @@ func DefaultKeyMap() KeyMap {
 		ReactionNav:     key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "navigate reactions")),
 		Edit:            key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "edit message")),
 		Delete:          key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete message")),
+		RemovePreview:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "remove link preview")),
 		CopyMessage:     key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy message")),
 		CopyPermalink:   key.NewBinding(key.WithKeys("Y", "C"), key.WithHelp("Y/C", "copy permalink")),
 		ForwardMessage:  key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "forward message")),

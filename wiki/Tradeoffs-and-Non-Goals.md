@@ -13,7 +13,8 @@ slk is intentionally not a 1:1 port of the desktop client. Some Slack features a
 
 - Joining or starting huddles (slk only shows who is in one, and can copy a conversation's huddle link — opening that link happens in Slack's own clients), Slack Connect, Workflow Builder
 - Bot/app management, custom emoji management
-- Animated reactions, link unfurls, in-app toasts
+- Animated reactions, in-app toasts
+- Anything beyond showing the link previews Slack attaches and removing them from your own messages (`x`): slk does not add, edit or re-fetch an unfurl
 
 ## Markdown caveats
 

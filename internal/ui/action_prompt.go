@@ -37,10 +37,15 @@ type actionPressedMsg struct {
 type actionPromptRecheckMsg struct{}
 
 // findActionMessage looks ref's message up in the pane showing it: the
-// open thread for a reply, otherwise any window on the channel.
+// open thread for a reply or for its parent selected there, otherwise any
+// window on the channel. The thread pane may be the only one holding the
+// parent (a thread opened from Activity, a parent older than the loaded
+// history).
 func (a *App) findActionMessage(ref actionPromptRef) (messages.MessageItem, bool) {
+	threadShown := ref.threadTS != "" && a.threadVisible &&
+		a.threadPanel.ChannelID() == ref.channelID && a.threadPanel.ThreadTS() == ref.threadTS
 	if ref.threadTS != "" && ref.threadTS != ref.ts {
-		if a.threadVisible && a.threadPanel.ChannelID() == ref.channelID && a.threadPanel.ThreadTS() == ref.threadTS {
+		if threadShown {
 			for _, r := range a.threadPanel.Replies() {
 				if r.TS == ref.ts {
 					return r, true
@@ -48,6 +53,11 @@ func (a *App) findActionMessage(ref actionPromptRef) (messages.MessageItem, bool
 			}
 		}
 		return messages.MessageItem{}, false
+	}
+	if threadShown {
+		if p := a.threadPanel.ParentMsg(); p.TS == ref.ts {
+			return p, true
+		}
 	}
 	for _, mm := range a.modelsForChannel(ref.channelID) {
 		for _, m := range mm.Messages() {
@@ -314,7 +324,7 @@ func (a *App) respondToSelected() tea.Cmd {
 func (a *App) isMessageOpKey(msg tea.KeyMsg) bool {
 	k := a.keys
 	for _, b := range []key.Binding{k.Enter, k.Reaction, k.ReactionNav, k.ListReactions,
-		k.CopyPermalink, k.ForwardMessage, k.MarkUnread, k.SaveThread} {
+		k.CopyPermalink, k.ForwardMessage, k.MarkUnread, k.SaveThread, k.RemovePreview} {
 		if key.Matches(msg, b) {
 			return true
 		}

@@ -482,17 +482,24 @@ type App struct {
 	// "press b" toast, so it appears once per message.
 	actionQueue   []actionPromptRef
 	promptToasted map[string]bool
+	// previewRemovals holds the link-preview removals in flight, by
+	// channel and ts (see remove_preview.go). Written on the Update
+	// goroutine only. Each removal's seq comes from previewRemovalSeq,
+	// which never resets.
+	previewRemovals   map[string]previewRemoval
+	previewRemovalSeq uint64
 	// userProfile is the K-opened read-only "who is this person?"
 	// modal (see internal/ui/userprofile). profileSvc fetches the
 	// full profile; defaulted to noopProfileService in NewApp so the
 	// cmd built by openUserProfile never calls a nil interface.
 	userProfile *userprofile.Model
 	profileSvc  core.ProfileService
-	// now is the clock used by the user-profile dialog's "local time"
-	// and status-expiry math. Defaults to time.Now; goldens pin it to
-	// goldenClock so the rendered frame is deterministic. Only this
-	// feature reads it -- other App code still calls time.Now
-	// directly.
+	// now is the clock read by the user-profile dialog (its "local
+	// time" and status-expiry math) and by the link-preview removal
+	// timeout (remove_preview.go). Defaults to time.Now; goldens pin it
+	// to goldenClock so the rendered frame is deterministic, and tests
+	// move it to cross the removal timeout. Other App code still calls
+	// time.Now directly.
 	now func() time.Time
 	// reactions is the App's ReactionService collaborator (add/remove
 	// reactions on Slack + load/record frecent emoji history). See
@@ -1067,6 +1074,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		reduceActivity,
 		reduceFocus,
 		reduceSend,
+		reduceRemovePreview,
 		reduceActionPrompt,
 		reduceSlashCommand,
 		reduceChannels,

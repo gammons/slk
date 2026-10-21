@@ -237,12 +237,14 @@ func (a activityAdapter) SetRead(teamID ids.TeamID, item ActivityItem, read bool
 // NewMessageService. Nil Forward returns an unsupported error; other nil
 // fields make the resulting service no-op that operation.
 type MessageServiceFuncs struct {
-	Send       MessageSendFunc
-	Forward    MessageForwardFunc
-	Edit       MessageEditFunc
-	Delete     MessageDeleteFunc
-	MarkUnread MarkUnreadFunc
-	Permalink  PermalinkFetchFunc
+	Send    MessageSendFunc
+	Forward MessageForwardFunc
+	Edit    MessageEditFunc
+	Delete  MessageDeleteFunc
+	// RemoveAttachment may be nil: the service then no-ops.
+	RemoveAttachment MessageRemoveAttachmentFunc
+	MarkUnread       MarkUnreadFunc
+	Permalink        PermalinkFetchFunc
 }
 
 // NewMessageService builds a MessageService from a MessageServiceFuncs
@@ -281,6 +283,13 @@ func (m messageAdapter) Delete(channelID ids.ChannelID, ts ids.MessageTS) Msg {
 		return nil
 	}
 	return m.fns.Delete(channelID, ts)
+}
+
+func (m messageAdapter) RemoveAttachment(teamID string, channelID ids.ChannelID, ts ids.MessageTS, attachmentID int) Msg {
+	if m.fns.RemoveAttachment == nil {
+		return nil
+	}
+	return m.fns.RemoveAttachment(teamID, channelID, ts, attachmentID)
 }
 
 func (m messageAdapter) MarkUnread(channelID ids.ChannelID, threadTS ids.ThreadTS, boundaryTS ids.MessageTS, unreadCount int) Msg {
@@ -726,6 +735,11 @@ type MessageEditFunc func(channelID ids.ChannelID, ts ids.MessageTS, newText str
 // MessageDeleteFunc performs the chat.delete API call. Returns a Msg
 // (typically MessageDeletedMsg) describing the result.
 type MessageDeleteFunc func(channelID ids.ChannelID, ts ids.MessageTS) Msg
+
+// MessageRemoveAttachmentFunc performs the chat.deleteAttachment API
+// call against workspace teamID's client. Returns a Msg (typically
+// AttachmentRemovedMsg) describing the result.
+type MessageRemoveAttachmentFunc func(teamID string, channelID ids.ChannelID, ts ids.MessageTS, attachmentID int) Msg
 
 // MarkUnreadFunc performs the conversations.mark or
 // subscriptions.thread.mark HTTP call (with the rolled-back ts /

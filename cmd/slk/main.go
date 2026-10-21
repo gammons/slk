@@ -1026,6 +1026,14 @@ func run() error {
 				}
 				return ui.MessageDeletedMsg{ChannelID: chIDStr, TS: tsStr, Err: err}
 			},
+			RemoveAttachment: func(teamID string, channelID ids.ChannelID, ts ids.MessageTS, attachmentID int) core.Msg {
+				// The user may have switched workspaces since pressing the key.
+				var client attachmentRemover
+				if wctx := router.ByID(teamID); wctx != nil && wctx.Client != nil {
+					client = wctx.Client
+				}
+				return removeAttachment(context.Background(), client, teamID, channelID, ts, attachmentID)
+			},
 			MarkUnread: func(channelID ids.ChannelID, threadTS ids.ThreadTS, boundaryTS ids.MessageTS, unreadCount int) core.Msg {
 				chIDStr := string(channelID)
 				threadTSStr := string(threadTS)

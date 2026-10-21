@@ -31,12 +31,19 @@ type PendingEventHandler interface {
 
 // EventHandler processes real-time events from Slack.
 type EventHandler interface {
-	// OnMessage delivers a new or edited message. subtype mirrors
+	// OnMessage delivers a new or changed message. subtype mirrors
 	// Slack's `subtype` field; "" for normal messages, "bot_message"
 	// for bot posts, "thread_broadcast" for thread replies that the
 	// author also sent to the main channel. files carries any file
 	// attachments on the message (empty for plain text messages).
-	OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment, botID, username string)
+	//
+	// changed and edited are different facts. changed: this event is a
+	// message_changed, a re-delivery of a message already accounted for
+	// (an edit, an unfurl added, a preview removed), so it never counts
+	// as unread, a mention or a notification. edited: Slack says a human
+	// edited the message (the inner message's `edited` object), the only
+	// source of the "(edited)" mark. A changed event need not be edited.
+	OnMessage(channelID, userID, ts, text, threadTS, subtype string, changed, edited bool, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment, botID, username string)
 	// OnEphemeralMessage delivers a message only the current user can
 	// see (is_ephemeral): Slackbot's "not in this channel" notice, an
 	// app's slash-command reply. Slack never returns these from
@@ -236,6 +243,10 @@ type wsSubMsg struct {
 	Blocks      slack.Blocks       `json:"blocks"`
 	Attachments []slack.Attachment `json:"attachments"`
 	IsEphemeral bool               `json:"is_ephemeral"`
+	// Edited is Slack's `edited` object, present once a human edited the
+	// message. A message_changed for an unfurl or a removed preview
+	// does not carry it.
+	Edited *slack.Edited `json:"edited"`
 }
 
 // wsActionIDs is a second, narrow decode of a message frame: the "id"
@@ -550,7 +561,7 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			// in italics.
 			debuglog.WS("message: channel=%s user=%s ts=%s subtype=%q thread_ts=%s files=%d",
 				msg.Channel, msg.User, msg.TS, msg.SubType, msg.ThreadTS, len(msg.Files))
-			handler.OnMessage(msg.Channel, msg.User, msg.TS, msg.Text, msg.ThreadTS, msg.SubType, false, msg.Files, msg.Blocks, msg.Attachments, msg.BotID, msg.Username)
+			handler.OnMessage(msg.Channel, msg.User, msg.TS, msg.Text, msg.ThreadTS, msg.SubType, false, false, msg.Files, msg.Blocks, msg.Attachments, msg.BotID, msg.Username)
 		case "message_changed":
 			if msg.Message == nil {
 				break
@@ -563,9 +574,10 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 					msg.Channel, msg.Message.TS)
 				break
 			}
-			debuglog.WS("message_changed: channel=%s user=%s ts=%s thread_ts=%s edited=true",
-				msg.Channel, msg.Message.User, msg.Message.TS, msg.Message.ThreadTS)
-			handler.OnMessage(msg.Channel, msg.Message.User, msg.Message.TS, msg.Message.Text, msg.Message.ThreadTS, "", true, msg.Message.Files, msg.Message.Blocks, msg.Message.Attachments, msg.Message.BotID, msg.Message.Username)
+			edited := msg.Message.Edited != nil
+			debuglog.WS("message_changed: channel=%s user=%s ts=%s thread_ts=%s edited=%v",
+				msg.Channel, msg.Message.User, msg.Message.TS, msg.Message.ThreadTS, edited)
+			handler.OnMessage(msg.Channel, msg.Message.User, msg.Message.TS, msg.Message.Text, msg.Message.ThreadTS, "", true, edited, msg.Message.Files, msg.Message.Blocks, msg.Message.Attachments, msg.Message.BotID, msg.Message.Username)
 		case "message_deleted":
 			debuglog.WS("message_deleted: channel=%s deleted_ts=%s", msg.Channel, msg.DeletedTS)
 			handler.OnMessageDeleted(msg.Channel, msg.DeletedTS)

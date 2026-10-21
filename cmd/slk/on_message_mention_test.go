@@ -132,7 +132,7 @@ func TestOnMessage_MentionIncrementsCount(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			h, db := onMessageMentionFixture(t, tt.chType, tt.active)
 			h.OnMessage("C1", tt.author, "1.0001", tt.text, tt.threadTS, tt.subtype,
-				false, nil, slack.Blocks{}, nil, "", "")
+				false, false, nil, slack.Blocks{}, nil, "", "")
 			if got := mentionCount(t, db, "C1"); got != tt.want {
 				t.Errorf("MentionCount = %d, want %d", got, tt.want)
 			}
@@ -147,8 +147,8 @@ func TestOnMessage_MentionIncrementsCount(t *testing.T) {
 // under the SQL increment the cache actually uses.
 func TestOnMessage_MentionsAccumulate(t *testing.T) {
 	h, db := onMessageMentionFixture(t, "channel", "")
-	h.OnMessage("C1", "UOTHER", "1.0001", "<@USELF> first", "", "", false, nil, slack.Blocks{}, nil, "", "")
-	h.OnMessage("C1", "UOTHER", "1.0002", "<!channel> second", "", "", false, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("C1", "UOTHER", "1.0001", "<@USELF> first", "", "", false, false, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("C1", "UOTHER", "1.0002", "<!channel> second", "", "", false, false, nil, slack.Blocks{}, nil, "", "")
 	if got := mentionCount(t, db, "C1"); got != 2 {
 		t.Errorf("MentionCount = %d, want 2", got)
 	}

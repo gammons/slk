@@ -378,7 +378,7 @@ func TestUpdateMessageInPlace_Found(t *testing.T) {
 		{TS: "2.0", UserName: "bob", Text: "hello"},
 	}
 	m := New(msgs, "general")
-	got := m.UpdateMessageInPlace("2.0", "hello edited")
+	got := m.UpdateMessageInPlace(MessageItem{TS: "2.0", Text: "hello edited", IsEdited: true})
 	if !got {
 		t.Fatalf("expected UpdateMessageInPlace to return true for existing TS")
 	}
@@ -396,7 +396,7 @@ func TestUpdateMessageInPlace_Found(t *testing.T) {
 
 func TestUpdateMessageInPlace_NotFound(t *testing.T) {
 	m := New([]MessageItem{{TS: "1.0", Text: "a"}}, "general")
-	got := m.UpdateMessageInPlace("does-not-exist", "x")
+	got := m.UpdateMessageInPlace(MessageItem{TS: "does-not-exist", Text: "x"})
 	if got {
 		t.Error("expected false when TS missing")
 	}

@@ -481,13 +481,14 @@ func (m *Model) UserNames() map[string]string { return m.userNames }
 // ChannelNames returns the channel-ID-to-name map used for rendering channel mentions.
 func (m *Model) ChannelNames() map[string]string { return m.channelNames }
 
-// UpdateMessageInPlace finds a reply by TS and replaces its text,
-// marking it edited. Returns true if found.
-func (m *Model) UpdateMessageInPlace(ts, newText string) bool {
+// UpdateMessageInPlace finds the reply with item's TS and applies a
+// message_changed echo to it (MessageItem.ApplyChange: text, edited
+// mark, blocks, attachments; reactions and the rest are kept). Returns
+// true if found.
+func (m *Model) UpdateMessageInPlace(item messages.MessageItem) bool {
 	for i, r := range m.replies {
-		if r.TS == ts {
-			m.replies[i].Text = newText
-			m.replies[i].IsEdited = true
+		if r.TS == item.TS {
+			m.replies[i].ApplyChange(item)
 			m.InvalidateCache()
 			return true
 		}
@@ -518,14 +519,14 @@ func (m *Model) RemoveMessageByTS(ts string) bool {
 	return false
 }
 
-// UpdateParentInPlace updates the thread parent's text and marks it
-// edited if its TS matches. Returns true if updated.
-func (m *Model) UpdateParentInPlace(ts, newText string) bool {
-	if m.parent.TS != ts {
+// UpdateParentInPlace applies a message_changed echo to the thread
+// parent if its TS matches item's (see UpdateMessageInPlace). Returns
+// true if updated.
+func (m *Model) UpdateParentInPlace(item messages.MessageItem) bool {
+	if m.parent.TS != item.TS {
 		return false
 	}
-	m.parent.Text = newText
-	m.parent.IsEdited = true
+	m.parent.ApplyChange(item)
 	m.InvalidateCache()
 	return true
 }

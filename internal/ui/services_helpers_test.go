@@ -231,6 +231,12 @@ func (a *App) setProfileFetcherForTest(fn func(ctx context.Context, teamID, user
 	a.SetProfileService(core.NewProfileService(core.ProfileServiceFuncs{Profile: fn}))
 }
 
+// setAttachmentRemoverForTest wires a MessageService whose only function
+// is chat.deleteAttachment's.
+func (a *App) setAttachmentRemoverForTest(fn core.MessageRemoveAttachmentFunc) {
+	a.SetMessageService(core.NewMessageService(core.MessageServiceFuncs{RemoveAttachment: fn}))
+}
+
 func (a *App) setInteractionPressForTest(fn func(ids.ChannelID, ids.MessageTS, int, string, string, blocks.LegacyAction, bool) error) {
 	a.SetInteractionService(core.NewInteractionService(core.InteractionServiceFuncs{PressAttachmentAction: fn}))
 }

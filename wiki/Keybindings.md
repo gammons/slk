@@ -48,6 +48,7 @@
 | `R` | Normal (message) | Quick-toggle existing reactions |
 | `E` | Normal (message) | Edit your own message |
 | `D` | Normal (message) | Delete your own message (with confirmation) |
+| `x` | Normal (message) | Remove a link preview from your own message (with confirmation; a choice of previews when there are several) |
 | `U` | Normal (message) | Mark selected message and everything newer as unread |
 | `S` | Normal (thread) | Save thread to markdown file (`~/.local/share/slk/exports/` or `$XDG_DATA_HOME/slk/exports/`) |
 | `y` | Normal (message) | Copy message text |
