@@ -41,3 +41,24 @@ func TestModalFooterUsesGivenVersion(t *testing.T) {
 		t.Errorf("expected 'slk dev' in %q", got)
 	}
 }
+
+func TestLine(t *testing.T) {
+	got := Line("v1.2.3", "abc1234", "2026-01-02T03:04:05Z")
+	want := "slk v1.2.3 (commit abc1234, built 2026-01-02T03:04:05Z)"
+	if got != want {
+		t.Errorf("Line() = %q, want %q", got, want)
+	}
+}
+
+func TestShort(t *testing.T) {
+	for _, tc := range []struct{ commit, want string }{
+		{"0123456789abcdef0123456789abcdef01234567", "v1.2.3 · 0123456"},
+		{"abc1234", "v1.2.3 · abc1234"},
+		{"none", "v1.2.3"},
+		{"", "v1.2.3"},
+	} {
+		if got := Short("v1.2.3", tc.commit); got != tc.want {
+			t.Errorf("Short(%q) = %q, want %q", tc.commit, got, tc.want)
+		}
+	}
+}

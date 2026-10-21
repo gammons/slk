@@ -11,6 +11,9 @@
 | `i` | Normal | Enter insert mode |
 | `Esc` | Insert / Command | Return to normal mode |
 | `:` | Normal | Command prompt (`:ws`, `:marks`, `:sp`, … — see [[Commands]]) |
+| `?` / `:help` | Normal | Show every keybinding and `:` command; `/` filters the list |
+| `:version` | Normal | Show the running build's version and commit (`slk --version` also prints the build date) |
+| `Tab` / `Shift+Tab` | Command | Complete the command name; press again to cycle through the matches, which the status bar lists beside the prompt |
 | `Enter` | Insert | Send message |
 | `Shift+Enter` | Insert | Newline |
 | `Ctrl+V` | Insert | Smart paste — image / file path / text (use `Ctrl+V`, not the terminal's `Ctrl+Shift+V`) |
@@ -43,6 +46,12 @@
 | `U` | Normal (activity) | Toggle the selected Activity item read/unread |
 | `Ctrl+t` / `Ctrl+p` | Any | Fuzzy channel finder |
 | `:ws` | Normal | Workspace picker |
+| `Ctrl+w s` / `:sp` | Normal | Split the focused window into two, one above the other |
+| `Ctrl+w v` / `:vsp` | Normal | Split the focused window into two, side by side |
+| `Ctrl+w h/j/k/l` | Normal | Focus the window in that direction |
+| `Ctrl+w w` | Normal | Cycle through windows |
+| `Ctrl+w q` / `:q` | Normal | Close the focused window (not the last one) |
+| `Ctrl+w o` / `:only` (`:on`) | Normal | Close every other window |
 | `1`–`9` | Normal | Jump to workspace N |
 | `r` | Normal (message) | Open reaction picker |
 | `R` | Normal (message) | Quick-toggle existing reactions |

@@ -7,14 +7,17 @@ slk has two kinds of commands:
 - **Slash commands**, typed in a composer, are Slack's: `/away`, `/remind`,
   `/msg`, app commands and the rest.
 
-Everything else is a key. See [[Keybindings]] for those, or press `?` in
-slk for the keybindings overlay.
+Everything else is a key. See [[Keybindings]] for those, or press `?` (or
+run `:help`) in slk for the keybindings overlay, which lists the `:`
+commands too.
 
 ## `:` commands
 
 Press `:` in Normal mode. A `:` prompt opens in the status bar. Type the
 command and press `Enter` to run it. `Esc` cancels, and so does `Backspace`
-on an empty prompt.
+on an empty prompt. `Tab` completes the command name; press it again for the
+next match, or `Shift+Tab` for the previous one. The matches are listed in
+the status bar beside the prompt, with the current one highlighted.
 
 | Command | Same as | What it does |
 |---|---|---|
@@ -27,10 +30,12 @@ on an empty prompt.
 | `:vsp` | `Ctrl+w v` | Split the focused window side by side |
 | `:q` | `Ctrl+w q` | Close the focused window. This never quits slk: on the last window it says "Cannot close last window" |
 | `:only` (or `:on`) | `Ctrl+w o` | Close every window except the focused one |
+| `:help` | `?` | Open the keybindings overlay, which also lists every `:` command |
+| `:version` | `slk --version` from the shell, which also prints the build date | Show the running build's version and short commit in the status bar |
 
-Names must match exactly. There is no prefix matching, so `:act` is not
-`:activity`; the only short form is `:on`. Anything else says
-`Unknown command: <name>` in the status bar.
+Names must match exactly when you press `Enter`, so `:act` is not
+`:activity` (`Tab` completes it); the only short form is `:on`. Anything
+else says `Unknown command: <name>` in the status bar.
 
 Windows also have `Ctrl+w h` / `j` / `k` / `l` to move focus to the window
 in that direction and `Ctrl+w w` to cycle through them. A split says "Not
@@ -43,7 +48,6 @@ These aren't `:` commands, but slk does them:
 
 | You tried | Use |
 |---|---|
-| `:help` | `?` opens the keybindings overlay; this page and [[Keybindings]] cover the rest |
 | `:search` | `/` searches the current channel; `Ctrl+f` searches the whole workspace on Slack's servers |
 | `:join`, `:goto`, `:chan` | `Ctrl+t` or `Ctrl+p` opens the channel finder; `/open #channel` in a composer joins and opens a channel by name |
 | `:i` | `i` starts writing a message (Insert mode) |
