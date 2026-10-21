@@ -469,3 +469,176 @@ func TestReplaceEntries(t *testing.T) {
 		t.Fatalf("a partial rebuild moved the window: %d -> %d", y, m.YOffset())
 	}
 }
+
+// grown is n messages of h rows each, the one at index i extra rows
+// taller: an entry that grew in place.
+func grown(n, h, i, extra int) []Entry {
+	es := make([]Entry, n)
+	for k := range es {
+		rh := h
+		if k == i {
+			rh += extra
+		}
+		es[k] = msg(fmt.Sprintf("m%02d", k), k, rh, 0)
+	}
+	return es
+}
+
+func TestHoldBottomKeepsAGrowingLastEntryInView(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts []Option
+	}{
+		{"lazy", nil},
+		{"eager", []Option{WithEagerClamp()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := list(t, 20, 2, tc.opts...)
+			m.Layout(19, nil) // at the bottom: y=30, total 40
+			m.HoldBottom()
+			m.SetEntries(grown(20, 2, 19, 3), 20, false)
+			m.Layout(19, nil)
+			if m.Total() != 43 || m.YOffset() != 33 {
+				t.Fatalf("total %d y %d, want 43 and 33 (the grown entry's last row on the last line)", m.Total(), m.YOffset())
+			}
+		})
+	}
+}
+
+func TestHoldBottomPinsWhenAnEntryAboveTheWindowGrows(t *testing.T) {
+	m := list(t, 20, 2, WithEagerClamp())
+	m.Layout(19, nil)
+	m.HoldBottom()
+	m.SetEntries(grown(20, 2, 0, 5), 20, false) // the thread parent, say
+	m.Layout(19, nil)
+	if m.YOffset() != 35 {
+		t.Fatalf("y %d, want 35", m.YOffset())
+	}
+}
+
+func TestHoldBottomIsANoOpAwayFromTheBottom(t *testing.T) {
+	m := list(t, 20, 2)
+	m.Layout(19, nil)
+	m.ScrollUp(5, 19)
+	m.Layout(19, nil)
+	m.HoldBottom()
+	m.SetEntries(grown(20, 2, 19, 3), 20, false)
+	m.Layout(19, nil)
+	if m.YOffset() != 25 {
+		t.Fatalf("y %d, want 25 (a window off the bottom keeps its offset)", m.YOffset())
+	}
+}
+
+func TestHoldBottomCancelledByAnExplicitPosition(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		cancel func(m *Model)
+		want   int
+	}{
+		{"ScrollUp", func(m *Model) { m.ScrollUp(4, 19) }, 26},
+		{"SetYOffset", func(m *Model) { m.SetYOffset(12) }, 12},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := list(t, 20, 2)
+			m.Layout(19, nil)
+			m.HoldBottom()
+			tc.cancel(m)
+			m.SetEntries(grown(20, 2, 19, 3), 20, false)
+			m.Layout(19, nil)
+			if m.YOffset() != tc.want {
+				t.Fatalf("y %d, want %d", m.YOffset(), tc.want)
+			}
+		})
+	}
+}
+
+func TestHoldBottomYieldsToAResnap(t *testing.T) {
+	// A pending ResetSnap (new content) positions by the cursor, whether
+	// it came before the hold or after it.
+	for _, order := range []string{"reset-then-hold", "hold-then-reset"} {
+		t.Run(order, func(t *testing.T) {
+			m := list(t, 20, 2)
+			m.Layout(19, nil)
+			if order == "reset-then-hold" {
+				m.ResetSnap()
+				m.HoldBottom()
+			} else {
+				m.HoldBottom()
+				m.ResetSnap()
+			}
+			m.SetEntries(grown(20, 2, 19, 3), 20, false)
+			// The cursor on m18, rows [36, 38): in view both at the old
+			// offset (30) and at a pinned one (33), so only a hold that
+			// was wrongly kept moves the window.
+			m.Layout(18, nil)
+			if m.YOffset() != 30 {
+				t.Fatalf("y %d, want 30 (positioned by the cursor, not pinned)", m.YOffset())
+			}
+		})
+	}
+}
+
+func TestHoldBottomThenACursorMove(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		opts   []Option
+		cursor int
+		want   int
+	}{
+		// m10, rows [20, 22), is above the pinned window: the move snaps
+		// up to it from the bottom.
+		{"off-screen lazy", nil, 10, 20},
+		{"off-screen eager", []Option{WithEagerClamp()}, 10, 20},
+		// m18, rows [36, 38), is in the pinned window (33) and was in the
+		// old one (30): the pin stands and the move does not undo it.
+		{"on-screen lazy", nil, 18, 33},
+		{"on-screen eager", []Option{WithEagerClamp()}, 18, 33},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := list(t, 20, 2, tc.opts...)
+			m.Layout(19, nil)
+			m.HoldBottom()
+			m.SetEntries(grown(20, 2, 19, 3), 20, false)
+			m.Layout(tc.cursor, nil)
+			if m.YOffset() != tc.want {
+				t.Fatalf("y %d, want %d", m.YOffset(), tc.want)
+			}
+		})
+	}
+}
+
+func TestHoldBottomIsSpentByOneLayout(t *testing.T) {
+	m := list(t, 20, 2)
+	m.Layout(19, nil)
+	m.HoldBottom()
+	m.Layout(19, nil)
+	m.SetEntries(grown(20, 2, 19, 3), 20, false)
+	m.Layout(19, nil)
+	if m.YOffset() != 30 {
+		t.Fatalf("y %d, want 30 (the hold was spent by the first layout)", m.YOffset())
+	}
+}
+
+func TestStaticDropsAHold(t *testing.T) {
+	m := list(t, 20, 2, WithEagerClamp())
+	m.Layout(19, nil)
+	m.HoldBottom()
+	m.Static()
+	m.SetEntries(grown(20, 2, 19, 3), 20, false)
+	m.Layout(19, nil)
+	if m.YOffset() != 30 {
+		t.Fatalf("y %d, want 30 (Static spent the hold)", m.YOffset())
+	}
+}
+
+func TestHoldBottomSurvivesAScrollDown(t *testing.T) {
+	m := list(t, 20, 2)
+	m.Layout(19, nil)
+	m.HoldBottom()
+	m.ScrollDown(1, 19) // the wheel at the bottom
+	m.SetEntries(grown(20, 2, 19, 3), 20, false)
+	m.Layout(19, nil)
+	if m.YOffset() != 33 {
+		t.Fatalf("y %d, want 33", m.YOffset())
+	}
+}

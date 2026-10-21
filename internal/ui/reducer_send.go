@@ -7,7 +7,7 @@
 // lives in reducer_threads.go):
 //
 //	NewMessageMsg            - inbound WS event for any channel:
-//	                           edit-echo update, self-send dedup
+//	                           change-echo update, self-send dedup
 //	                           (recorded + early-arrival in-flight
 //	                           guards), append-to-pane, staging a
 //	                           focus-gated read-cursor advance or
@@ -226,7 +226,7 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 }
 
 // reduceNewMessage handles NewMessageMsg. Extracted because the
-// arm is ~100 lines covering six decision branches (edit echo,
+// arm is ~100 lines covering six decision branches (change echo,
 // self-send dedup, early-arrival in-flight guard, the ephemeral
 // display-only return, the read-state decision for the channel and
 // thread cursors, threads-list dirty bump). The ephemeral branch
@@ -234,22 +234,23 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 	debuglog.Cache("NewMessageMsg: channel=%s ts=%s thread_ts=%s active=%s",
 		m.ChannelID, m.Message.TS, m.Message.ThreadTS, a.activeChannelID)
-	if m.Message.IsEdited {
-		debuglog.Cache("NewMessageMsg: channel=%s ts=%s decision=skipped_edit_echo",
+	if m.Changed {
+		debuglog.Cache("NewMessageMsg: channel=%s ts=%s decision=applied_change_echo",
 			m.ChannelID, m.Message.TS)
-		// Edit echo: update existing message in place rather than
+		// Change echo (message_changed: an edit, an unfurl, a removed
+		// preview): update the existing message in place rather than
 		// appending. Fan out to every window viewing the channel;
 		// gate on the thread panel's channel for the thread cache
 		// -- avoids touching panes showing a different channel.
 		// This branch must run BEFORE the isSelfSent dedup below,
-		// since edits to messages we recently sent would otherwise
+		// since changes to messages we recently sent would otherwise
 		// be silently dropped (the TS is still in selfSentTSes).
 		for _, mm := range a.modelsForChannel(m.ChannelID) {
-			mm.UpdateMessageInPlace(m.Message.TS, m.Message.Text)
+			mm.UpdateMessageInPlace(m.Message)
 		}
 		if m.ChannelID == a.threadPanel.ChannelID() {
-			a.threadPanel.UpdateMessageInPlace(m.Message.TS, m.Message.Text)
-			a.threadPanel.UpdateParentInPlace(m.Message.TS, m.Message.Text)
+			a.threadPanel.UpdateMessageInPlace(m.Message)
+			a.threadPanel.UpdateParentInPlace(m.Message)
 		}
 		return nil
 	}

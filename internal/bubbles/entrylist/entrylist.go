@@ -169,6 +169,7 @@ type Model struct {
 	yOffset            int
 	snapped            int
 	hasSnapped         bool
+	holdBottom         bool
 	selStart, selEnd   int
 
 	sel    selection.Range
@@ -224,8 +225,11 @@ func (m *Model) Height() int { return m.height }
 func (m *Model) YOffset() int { return m.yOffset }
 
 // SetYOffset assigns the first visible line (clamped when eager). It does
-// not bump Version, matching viewport.SetYOffset.
-func (m *Model) SetYOffset(n int) { m.setY(n) }
+// not bump Version, matching viewport.SetYOffset. It cancels HoldBottom.
+func (m *Model) SetYOffset(n int) {
+	m.holdBottom = false
+	m.setY(n)
+}
 
 // IndexOf returns the index of the entry with id.
 func (m *Model) IndexOf(id string) (int, bool) {
@@ -234,8 +238,31 @@ func (m *Model) IndexOf(id string) (int, bool) {
 }
 
 // ResetSnap makes the next Layout snap the window to the cursor even if
-// the cursor has not moved (used when the content is replaced).
-func (m *Model) ResetSnap() { m.hasSnapped = false }
+// the cursor has not moved (used when the content is replaced). It
+// cancels HoldBottom.
+func (m *Model) ResetSnap() { m.hasSnapped, m.holdBottom = false, false }
+
+// HoldBottom keeps a window that shows the last line now on the last
+// line at the next Layout, however the entries change in between. An
+// owner calls it before an entry grows (or shrinks) in place: an unfurl,
+// an edit, a first reaction. Without it the offset stays and the new rows
+// land below the window, since Layout snaps only when the cursor moves.
+//
+// "Now" is the screen as last laid out. While a re-snap is pending
+// (ResetSnap) that screen is stale and the cursor positions the next
+// frame, so HoldBottom does nothing. ScrollUp, SetYOffset, ResetSnap
+// and Static cancel it (ScrollDown does not: from the bottom it can only
+// ask for the bottom); a cursor move still snaps after it.
+func (m *Model) HoldBottom() {
+	if m.hasSnapped && m.atBottom() {
+		m.holdBottom = true
+	}
+}
+
+// atBottom reports whether the window reaches the last line.
+func (m *Model) atBottom() bool {
+	return m.total > 0 && m.height > 0 && m.yOffset+m.height >= m.total
+}
 
 // HasSnapped reports whether a Layout has snapped since the last
 // ResetSnap.
@@ -341,6 +368,7 @@ func (m *Model) ScrollUp(n, sel int) {
 	if n <= 0 {
 		return
 	}
+	m.holdBottom = false
 	if m.eager {
 		if m.yOffset > 0 && m.total > 0 {
 			m.setY(m.yOffset - n)

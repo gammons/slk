@@ -1550,6 +1550,7 @@ func TestNewMessageMsg_EditedUpdatesInPlace(t *testing.T) {
 			Text:     "edited",
 			IsEdited: true,
 		},
+		Changed: true,
 	})
 
 	// Access internal slice directly (same package).
@@ -1991,6 +1992,7 @@ func TestNewMessageMsg_EditedIgnoresOtherChannel(t *testing.T) {
 			Text:     "edit from other channel",
 			IsEdited: true,
 		},
+		Changed: true,
 	})
 
 	msgs := app.messagepane.Messages()

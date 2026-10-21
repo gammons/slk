@@ -131,6 +131,11 @@ type (
 	NewMessageMsg struct {
 		ChannelID string
 		Message   messages.MessageItem
+		// Changed marks a message_changed echo of a message already
+		// shown: the panes update it in place instead of appending. It
+		// is not Message.IsEdited, which only says Slack stamped the
+		// message "edited" (an unfurl is a change nobody edited).
+		Changed bool
 	}
 	SendMessageMsg struct {
 		ChannelID string

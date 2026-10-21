@@ -30,15 +30,20 @@ type Frame struct {
 	MoreBelow bool
 }
 
-// Layout positions the window for this frame. It locates the cursor's
-// entry (the selectable entry whose Ref is cursor), snaps the offset to it
-// if the cursor moved since the last snap, clamps, lets the cursor follow
-// the scroll when enabled, then slices the visible rows and translates the
+// Layout positions the window for this frame. It puts the window on the
+// last line if HoldBottom asked for it, locates the cursor's entry (the
+// selectable entry whose Ref is cursor), snaps the offset to it if the
+// cursor moved since the last snap, clamps, lets the cursor follow the
+// scroll when enabled, then slices the visible rows and translates the
 // visible entries' hits.
 //
 // lines(i) returns the rows to draw for the cursor's entry i; a nil lines
 // draws Entry.Selected, or Lines when that is nil.
 func (m *Model) Layout(cursor int, lines func(i int) []string) *Frame {
+	if m.holdBottom {
+		m.holdBottom = false
+		m.setY(m.maxOffset())
+	}
 	m.locate(cursor)
 	if !m.hasSnapped || m.snapped != cursor {
 		if m.selEnd > m.yOffset+m.height {
@@ -61,9 +66,10 @@ func (m *Model) Layout(cursor int, lines func(i int) []string) *Frame {
 
 // Static slices the window at the current offset with no snapping, no
 // clamping beyond the eager clamp and no cursor. It translates the
-// window's hits like Layout, replacing the last frame's. The thread
-// pane's zero-reply state uses it.
+// window's hits like Layout, replacing the last frame's, and cancels
+// HoldBottom. The thread pane's zero-reply state uses it.
 func (m *Model) Static() *Frame {
+	m.holdBottom = false
 	f := &Frame{Cursor: NoCursor, MoreBelow: m.yOffset+m.height < m.total}
 	m.hits = m.hits[:0]
 	f.Rows, f.Visible = m.slice(NoCursor, nil, true)

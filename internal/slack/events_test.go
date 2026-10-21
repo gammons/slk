@@ -20,6 +20,8 @@ type mockEventHandler struct {
 	messages            []string
 	ephemerals          []EphemeralMessage
 	subtypes            []string
+	changed             []bool
+	edited              []bool
 	deletedMessages     []string
 	reactions           []string
 	presenceChanges     []string
@@ -96,8 +98,10 @@ type threadSubChangeRecord struct {
 	active                        bool
 }
 
-func (m *mockEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment, botID, username string) {
+func (m *mockEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, changed, edited bool, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment, botID, username string) {
 	m.messages = append(m.messages, text)
+	m.changed = append(m.changed, changed)
+	m.edited = append(m.edited, edited)
 	m.subtypes = append(m.subtypes, subtype)
 	m.lastBlocks = blocks
 	m.lastAttachments = attachments
@@ -199,7 +203,7 @@ func TestEventHandlerInterface(t *testing.T) {
 	handler := &mockEventHandler{}
 	var _ EventHandler = handler
 
-	handler.OnMessage("C1", "U1", "123.456", "hello", "", "", false, nil, slack.Blocks{}, nil, "", "")
+	handler.OnMessage("C1", "U1", "123.456", "hello", "", "", false, false, nil, slack.Blocks{}, nil, "", "")
 	if len(handler.messages) != 1 || handler.messages[0] != "hello" {
 		t.Error("expected message to be recorded")
 	}
@@ -316,6 +320,32 @@ func TestDispatchWebSocketMessageChangedEvent(t *testing.T) {
 	}
 	if handler.messages[0] != "edited text" {
 		t.Errorf("expected 'edited text', got %q", handler.messages[0])
+	}
+	// No `edited` object: Slack sends this for an unfurl or a removed
+	// preview. It is a change, but nobody edited the text.
+	if !handler.changed[0] || handler.edited[0] {
+		t.Errorf("changed=%v edited=%v, want changed only", handler.changed[0], handler.edited[0])
+	}
+}
+
+func TestDispatchWebSocketMessageChangedWithEditedObject(t *testing.T) {
+	handler := &mockEventHandler{}
+
+	data := []byte(`{"type":"message","subtype":"message_changed","channel":"C1","message":{"user":"U1","text":"edited text","ts":"123.456","edited":{"user":"U1","ts":"124.000"}}}`)
+	dispatchWebSocketEvent(data, handler)
+
+	if len(handler.changed) != 1 || !handler.changed[0] || !handler.edited[0] {
+		t.Errorf("changed=%v edited=%v, want both true", handler.changed, handler.edited)
+	}
+}
+
+func TestDispatchWebSocketPlainMessageIsNeitherChangedNorEdited(t *testing.T) {
+	handler := &mockEventHandler{}
+
+	dispatchWebSocketEvent([]byte(`{"type":"message","channel":"C1","user":"U1","text":"hi","ts":"123.456"}`), handler)
+
+	if len(handler.changed) != 1 || handler.changed[0] || handler.edited[0] {
+		t.Errorf("changed=%v edited=%v, want both false", handler.changed, handler.edited)
 	}
 }
 

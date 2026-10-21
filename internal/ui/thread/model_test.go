@@ -244,7 +244,7 @@ func TestUpdateMessageInPlace_Found(t *testing.T) {
 	}
 	m.SetThread(parent, replies, "C1", "P1")
 
-	if !m.UpdateMessageInPlace("R1", "new reply") {
+	if !m.UpdateMessageInPlace(messages.MessageItem{TS: "R1", Text: "new reply", IsEdited: true}) {
 		t.Fatal("expected true updating R1")
 	}
 	if m.replies[0].Text != "new reply" {
@@ -263,7 +263,7 @@ func TestUpdateMessageInPlace_NotFound(t *testing.T) {
 	m.SetThread(messages.MessageItem{TS: "P1"}, []messages.MessageItem{
 		{TS: "R1", Text: "a"},
 	}, "C1", "P1")
-	if m.UpdateMessageInPlace("nope", "x") {
+	if m.UpdateMessageInPlace(messages.MessageItem{TS: "nope", Text: "x"}) {
 		t.Error("expected false for missing TS")
 	}
 }
@@ -342,7 +342,7 @@ func TestUpdateParentInPlace_Match(t *testing.T) {
 	m := New()
 	parent := messages.MessageItem{TS: "P1", Text: "parent original"}
 	m.SetThread(parent, nil, "C1", "P1")
-	if !m.UpdateParentInPlace("P1", "parent edited") {
+	if !m.UpdateParentInPlace(messages.MessageItem{TS: "P1", Text: "parent edited", IsEdited: true}) {
 		t.Fatal("expected true")
 	}
 	if m.ParentMsg().Text != "parent edited" {
@@ -356,7 +356,7 @@ func TestUpdateParentInPlace_Match(t *testing.T) {
 func TestUpdateParentInPlace_NoMatch(t *testing.T) {
 	m := New()
 	m.SetThread(messages.MessageItem{TS: "P1", Text: "parent"}, nil, "C1", "P1")
-	if m.UpdateParentInPlace("OTHER", "x") {
+	if m.UpdateParentInPlace(messages.MessageItem{TS: "OTHER", Text: "x"}) {
 		t.Error("expected false when TS does not match parent")
 	}
 	if m.ParentMsg().Text != "parent" {
