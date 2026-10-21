@@ -61,6 +61,9 @@ const (
 	// HitImage is an inline image; Key is the file ID, Aux the
 	// attachment index.
 	HitImage
+	// HitFile is a "[File] <name>" attachment line; Aux is the
+	// attachment index.
+	HitFile
 )
 
 // Hit is a clickable rectangle relative to an Entry's Lines.

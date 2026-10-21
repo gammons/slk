@@ -38,7 +38,7 @@ type RenderOptions struct {
 	ReplyAffordance bool   // "[N replies ->]" under a parent (channel pane)
 	EditedMark      bool   // "(edited)" after the timestamp (channel pane)
 	BroadcastLabel  bool   // "↳ replied to a thread" label (channel pane)
-	ImageHits       bool   // record image hit rects (both panes)
+	ImageHits       bool   // record image and file hit rects (both panes)
 	SixelRows       bool   // record sixel rows (channel pane)
 	stats           *entryPerfStats
 }
@@ -48,7 +48,7 @@ type RenderedMessage struct {
 	Content      string
 	Header       string // the author line (with "(edited)"), for SelectedHeader
 	HeaderBudget int
-	Hits         []entrylist.Hit // image hits (when ImageHits), then reaction pills
+	Hits         []entrylist.Hit // image and file hits (when ImageHits), then reaction pills
 	SixelRows    map[int]sixelEntry
 	// Kitty uploads by source: each pane keeps its own upload order.
 	BodyFlushes, BlockFlushes, ReactionFlushes, AttachmentFlushes []func(io.Writer) error
@@ -539,6 +539,15 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 						RowStart: h.RowStartInEntry, RowEnd: h.RowEndInEntry,
 						ColStart: h.ColStart, ColEnd: h.ColEnd,
 						Kind: entrylist.HitImage, Key: h.FileID, Aux: h.AttIdx,
+					})
+				} else if att.Kind == "file" && att.DownloadURL != "" && len(res.Lines) > 0 {
+					// A "[File] <name>" line: clicking it downloads
+					// the file, like `d`.
+					imageHits = append(imageHits, entrylist.Hit{
+						RowStart: rowCursor, RowEnd: rowCursor + res.Height,
+						ColStart: contentColBase,
+						ColEnd:   contentColBase + lipgloss.Width(res.Lines[0]),
+						Kind:     entrylist.HitFile, Aux: attIdx,
 					})
 				}
 			}

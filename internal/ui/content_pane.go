@@ -21,6 +21,7 @@ type contentPane interface {
 	ChromeHeight() int
 	HitTestReaction(row, col int) (idx int, emoji string, ok bool)
 	HitTestImage(row, col int) (ts string, attIdx int, ok bool)
+	HitTestFile(row, col int) (ts string, attIdx int, ok bool)
 	BeginSelectionAt(y, x int)
 	ExtendSelectionAt(y, x int)
 	EndSelection() (string, bool)

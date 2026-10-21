@@ -1790,6 +1790,17 @@ func (m *Model) HitTestImage(row, col int) (ts string, attIdx int, ok bool) {
 	return m.messages[msgIdx].TS, attIdx, true
 }
 
+// HitTestFile returns the ts of the message and the attachment index
+// of the "[File]" line at (row, col), or ok=false. Coordinate frame
+// mirrors HitTest.
+func (m *Model) HitTestFile(row, col int) (ts string, attIdx int, ok bool) {
+	h, ok := m.list.HitTest(entrylist.HitFile, row, col)
+	if !ok || h.Ref < 0 || h.Ref >= len(m.messages) {
+		return "", 0, false
+	}
+	return m.messages[h.Ref].TS, h.Aux, true
+}
+
 // HitTestReaction returns the (message index, reaction emoji name) at
 // (row, col) within the messages-pane content area, or ok=false when
 // no reaction pill covers that cell. Coordinate frame mirrors HitTest.

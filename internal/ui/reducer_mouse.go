@@ -307,6 +307,9 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		if cmd, hit := a.openImagePreviewAt(a.messagepane, a.activeChannelID, px, py); hit {
 			return cmd
 		}
+		if cmd, hit := a.downloadFileAt(a.messagepane, a.activeChannelID, px, py); hit {
+			return cmd
+		}
 		a.drag.Begin(PanelMessages, px, py)
 		a.messagepane.BeginSelectionAt(py, px)
 		// Remember whether this press actually landed on a message
@@ -328,6 +331,9 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 			return cmd
 		}
 		if cmd, hit := a.openImagePreviewAt(a.threadPanel, a.threadPanel.ChannelID(), px, py); hit {
+			return cmd
+		}
+		if cmd, hit := a.downloadFileAt(a.threadPanel, a.threadPanel.ChannelID(), px, py); hit {
 			return cmd
 		}
 		a.drag.Begin(PanelThread, px, py)
@@ -366,4 +372,23 @@ func (a *App) openImagePreviewAt(p contentPane, channelID string, px, py int) (t
 	return func() tea.Msg {
 		return messages.OpenImagePreviewMsg{Channel: channelID, TS: ts, AttIdx: attIdx}
 	}, true
+}
+
+// downloadFileAt downloads and opens the file whose "[File]" line is
+// at pane-local (px, py) in p, if there is one: the click form of `d`.
+func (a *App) downloadFileAt(p contentPane, channelID string, px, py int) (tea.Cmd, bool) {
+	contentY := py - p.ChromeHeight()
+	if contentY < 0 {
+		return nil, false
+	}
+	ts, attIdx, hit := p.HitTestFile(contentY, px)
+	if !hit {
+		return nil, false
+	}
+	msg, ok := a.findMessageInActiveChannel(channelID, ts)
+	if !ok || attIdx < 0 || attIdx >= len(msg.Attachments) {
+		return nil, false
+	}
+	att := msg.Attachments[attIdx]
+	return func() tea.Msg { return DownloadFileMsg{Attachment: att} }, true
 }
