@@ -33,7 +33,8 @@ type actionPressedMsg struct {
 
 // actionPromptRecheckMsg asks for waiting action dialogs to be reconsidered.
 // dispatchModeKey sends it after the command of a key that closed a modal,
-// so any navigation that command performs has landed first.
+// and handleInsertMode after an app shortcut that left insert mode, so any
+// navigation or modal that command brings has landed first.
 type actionPromptRecheckMsg struct{}
 
 // findActionMessage looks ref's message up in the pane showing it: the
@@ -47,6 +48,11 @@ func (a *App) findActionMessage(ref actionPromptRef) (messages.MessageItem, bool
 				}
 			}
 		}
+		return messages.MessageItem{}, false
+	}
+	if a.view != ViewChannels {
+		// Another view (Activity, Threads) fills the messages pane: the
+		// channel's model is kept, but its messages are not on screen.
 		return messages.MessageItem{}, false
 	}
 	for _, mm := range a.modelsForChannel(ref.channelID) {

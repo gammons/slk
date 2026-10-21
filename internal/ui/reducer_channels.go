@@ -407,7 +407,12 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 	a.sidebar.SetActivityActive(false)
 	a.lastOpenedChannelID = ""
 	a.lastOpenedThreadTS = ""
-	// Close thread panel when switching channels.
+	// Close thread panel when switching channels. A switch made from
+	// the thread composer in insert mode (a slash command such as
+	// /open, with stay_in_insert_after_send on) carries insert mode to
+	// the channel composer, the only one left; retargetActiveChannel
+	// below drops it again if that composer is disabled.
+	threadInsert := a.mode == ModeInsert && a.focusedPanel == PanelThread && a.threadVisible
 	a.CloseThread()
 	a.clearSelections()
 	// Search state is per-channel: drop highlights, match list, and
@@ -451,7 +456,11 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 	a.compose.CloseMention()
 	a.threadCompose.CloseMention()
 
-	retargetCmd := a.retargetActiveChannel(m.ID, m.Name, m.Type)
+	var insertFocus tea.Cmd
+	if threadInsert {
+		insertFocus = a.compose.Focus()
+	}
+	retargetCmd := tea.Batch(insertFocus, a.retargetActiveChannel(m.ID, m.Name, m.Type))
 	// Record the applied selection on the focused window so window
 	// focus changes can retarget to it (see internal/ui/windows.go).
 	a.setFocusedWindowChannel(m.ID, m.Name, m.Type)

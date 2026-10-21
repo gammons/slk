@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -62,6 +63,147 @@ func TestTypingDefersDialogWithOneToast(t *testing.T) {
 	}
 	if a.compose.Value() != "half a thought" {
 		t.Error("the draft must survive")
+	}
+}
+
+// A dialog deferred while typing opens once the composer is emptied and an
+// app shortcut leaves insert mode through it, as it does on Esc. A shortcut
+// that opens a modal of its own keeps the dialog waiting until that closes.
+func TestEmptyComposerShortcutOpensWaitingDialog(t *testing.T) {
+	a, _ := actionApp(t, nil)
+	a.SetStayInInsertAfterSend(true)
+	a.SetMode(ModeInsert)
+	a.compose.SetValue("x")
+	arrive(t, a, mentionEphemeral(ephTS))
+	if a.confirmPrompt.IsVisible() {
+		t.Fatal("precondition: the dialog must wait while typing")
+	}
+
+	pressKey(t, a, keyMod('u', tea.ModCtrl)) // clear the composer
+	pressKey(t, a, keyMod('b', tea.ModCtrl)) // toggle sidebar: leaves insert
+	if !dialogShows(a, "[2] Dismiss") {
+		t.Errorf("leaving insert mode through a shortcut should open the waiting dialog; mode %v, %d queued", a.mode, len(a.actionQueue))
+	}
+}
+
+func TestEmptyComposerModalShortcutKeepsDialogWaiting(t *testing.T) {
+	a, _ := actionApp(t, nil)
+	a.SetStayInInsertAfterSend(true)
+	a.SetMode(ModeInsert)
+	a.compose.SetValue("x")
+	arrive(t, a, mentionEphemeral(ephTS))
+
+	pressKey(t, a, keyMod('u', tea.ModCtrl))
+	pressKey(t, a, keyMod('p', tea.ModCtrl)) // channel finder
+	if a.mode != ModeChannelFinder {
+		t.Fatalf("mode = %v, want the channel finder on top", a.mode)
+	}
+	pressKey(t, a, keyCode(tea.KeyEscape))
+	if !dialogShows(a, "[2] Dismiss") {
+		t.Error("the dialog should open once the finder closes")
+	}
+}
+
+// ctrl+n opens its picker from the message it returns, so the waiting
+// dialog must not open ahead of it and end up drawn under the picker,
+// dead once the picker closes.
+func TestEmptyComposerNewMessageShortcutKeepsDialogWaiting(t *testing.T) {
+	a, _ := actionApp(t, nil)
+	a.SetStayInInsertAfterSend(true)
+	a.SetMode(ModeInsert)
+	a.compose.SetValue("x")
+	arrive(t, a, mentionEphemeral(ephTS))
+
+	pressKey(t, a, keyMod('u', tea.ModCtrl))
+	pressKeyWorstOrder(t, a, keyMod('n', tea.ModCtrl)) // new-message picker
+	if a.mode != ModeNewMessage {
+		t.Fatalf("mode = %v, want the new-message picker on top", a.mode)
+	}
+	if a.confirmPrompt.IsVisible() {
+		t.Fatal("the dialog opened under the new-message picker")
+	}
+	pressKey(t, a, keyCode(tea.KeyEscape))
+	if a.mode != ModeConfirm || !dialogShows(a, "[2] Dismiss") {
+		t.Errorf("mode = %v; the dialog should open, and take keys, once the picker closes", a.mode)
+	}
+}
+
+// pressKeyWorstOrder is pressKey with the commands of every tea.Batch run
+// last first: the runtime starts them concurrently, so any order can
+// happen. tea.Sequence keeps its order. A test that depends on one
+// command's message landing before another's fails here unless the code
+// sequences them.
+func pressKeyWorstOrder(t *testing.T, a *App, k tea.KeyMsg) {
+	t.Helper()
+	_, cmd := a.Update(k)
+	for _, m := range drainWorstOrder(cmd) {
+		if m != nil {
+			a.Update(m)
+		}
+	}
+}
+
+func drainWorstOrder(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	cmds, ok := cmdListOf(msg)
+	if !ok {
+		return []tea.Msg{msg}
+	}
+	if _, batch := msg.(tea.BatchMsg); batch {
+		slices.Reverse(cmds)
+	}
+	var out []tea.Msg
+	for _, c := range cmds {
+		out = append(out, drainWorstOrder(c)...)
+	}
+	return out
+}
+
+// A waiting dialog belongs to a channel message. Ctrl+A from an empty
+// composer swaps the channel for the Activity view, so the dialog must
+// not open over it.
+func TestEmptyComposerActivityShortcutDropsChannelDialog(t *testing.T) {
+	a, _ := actionApp(t, nil)
+	a.SetStayInInsertAfterSend(true)
+	a.SetMode(ModeInsert)
+	a.compose.SetValue("x")
+	arrive(t, a, mentionEphemeral(ephTS))
+
+	pressKey(t, a, keyMod('u', tea.ModCtrl))
+	pressKey(t, a, keyMod('a', tea.ModCtrl)) // Activity view
+	if a.view != ViewActivity {
+		t.Fatalf("view = %v, want the Activity view", a.view)
+	}
+	if a.confirmPrompt.IsVisible() || a.mode == ModeConfirm {
+		t.Errorf("mode = %v; the channel's dialog opened over the Activity view", a.mode)
+	}
+}
+
+// A send that keeps insert mode opens a waiting dialog over the composer.
+// When Slack refuses that send as read-only while the dialog is up,
+// closing the dialog must not hand the user back to the now disabled
+// composer.
+func TestDialogCloseSkipsInsertIntoReadOnlyComposer(t *testing.T) {
+	a, _ := actionApp(t, nil)
+	a.SetStayInInsertAfterSend(true)
+	a.SetMode(ModeInsert)
+	a.compose.SetValue("hello")
+	arrive(t, a, mentionEphemeral(ephTS))
+
+	pressKey(t, a, keyCode(tea.KeyEnter))
+	if !dialogShows(a, "[2] Dismiss") || !a.shownPromptInsert {
+		t.Fatalf("precondition: the send should open the dialog over insert mode; mode %v", a.mode)
+	}
+	failSend(a, "C1", readOnlyReason)
+	if !a.composeDisabled {
+		t.Fatal("precondition: the refusal should disable the composer")
+	}
+	pressKey(t, a, keyCode(tea.KeyEscape))
+	if a.mode == ModeInsert {
+		t.Error("closing the dialog put the user back into a disabled composer")
 	}
 }
 
@@ -394,5 +536,35 @@ func TestChannelSwitchClosesOpenActionDialog(t *testing.T) {
 	}
 	if a.shownPrompt != nil {
 		t.Errorf("shownPrompt = %+v, want nil", a.shownPrompt)
+	}
+}
+
+// A dialog that opened over the thread composer must not hand insert mode
+// back to it once a channel switch has closed the thread: the channel
+// composer, the one on screen, takes the keys.
+func TestDialogCloseAfterThreadClosedFocusesChannelComposer(t *testing.T) {
+	a, _ := actionApp(t, nil)
+	a.SetStayInInsertAfterSend(true)
+	a.SetMode(ModeInsert)
+	showThread(t, a)
+	a.threadCompose.SetValue("x")
+	arrive(t, a, mentionEphemeral(ephTS))
+	pressKey(t, a, keyMod('u', tea.ModCtrl)) // empty the thread composer
+	a.threadCompose.SetValue("hi")
+	pressKey(t, a, keyCode(tea.KeyEnter)) // send: the dialog opens over the thread composer
+	if !dialogShows(a, "[2] Dismiss") || !a.shownPromptThread {
+		t.Fatalf("precondition: the dialog should open over the thread composer; mode %v", a.mode)
+	}
+
+	a.Update(ChannelSelectedMsg{ID: "C2", Name: "random", Type: "channel"})
+	if a.threadVisible {
+		t.Fatal("precondition: the channel switch should close the thread")
+	}
+	if a.confirmPrompt.IsVisible() {
+		pressKey(t, a, keyCode(tea.KeyEscape))
+	}
+	a.Update(keyPress('y'))
+	if a.mode != ModeInsert || a.compose.Value() != "y" {
+		t.Errorf("mode = %v, compose = %q, thread compose = %q; want the typed y in the channel composer", a.mode, a.compose.Value(), a.threadCompose.Value())
 	}
 }

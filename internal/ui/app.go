@@ -564,6 +564,11 @@ type App struct {
 	// option does not affect the :marks command, which always shows it.
 	showJumpOverlay bool
 
+	// stayInInsertAfterSend is the [compose] stay_in_insert_after_send
+	// option: whether Enter leaves the composer focused in insert mode
+	// after a send. Set by main.go from config; off by default.
+	stayInInsertAfterSend bool
+
 	// search is the active in-channel search (nil = none).
 	// searchInput is the prompt buffer while in ModeSearch.
 	// searchGen is a monotonic generation counter: bumped on every
@@ -2176,15 +2181,30 @@ func (a *App) SetMode(mode Mode) {
 	a.statusbar.SetMode(mode)
 }
 
-// exitInsertAfterSend mirrors the Esc-from-insert handler so that
-// submitting a message returns the user to ModeNormal — matching the
-// vim convention where finishing an action drops you back to command
-// mode. Used by every send branch in handleInsertMode that actually
-// dispatches a message (plain-text and attachment, channel and
-// thread). Edits intentionally bypass this and instead exit insert
-// mode via cancelEdit on MessageEditedMsg, so a transient edit
+// exitInsertAfterSend drops the user back to ModeNormal after a send,
+// unless the [compose] stay_in_insert_after_send option is on, in which
+// case it does nothing: the composer keeps focus (the send path already
+// reset its text) so several messages can be typed in a row. Used by
+// the plain-text send branches of handleInsertMode (channel and thread)
+// and by trySlashCommand; the two upload branches call exitInsert
+// directly instead, since an in-flight upload always leaves insert mode.
+// Edits intentionally bypass this and instead exit
+// insert mode via cancelEdit on MessageEditedMsg, so a transient edit
 // failure doesn't strand the user one keystroke away from resuming.
 func (a *App) exitInsertAfterSend() {
+	if a.stayInInsertAfterSend {
+		return
+	}
+	a.exitInsert()
+}
+
+// exitInsert mirrors the Esc-from-insert handler: ModeNormal, both
+// composers blurred. This is the unconditioned exit that
+// exitInsertAfterSend applies when the option is off, and that the
+// upload branches of handleInsertMode apply whatever the option says,
+// since the composer is busy for the duration of an upload and must not
+// keep taking keystrokes as if it were still accepting text.
+func (a *App) exitInsert() {
 	a.SetMode(ModeNormal)
 	a.compose.Blur()
 	a.threadCompose.Blur()
@@ -2716,6 +2736,13 @@ func (a *App) SetClipboardAvailable(ok bool) {
 // SetComposeEditor sets Ctrl+E's resolved editor argv (see editor.go).
 func (a *App) SetComposeEditor(editor []string) {
 	a.composeEditor = editor
+}
+
+// SetStayInInsertAfterSend sets the [compose] stay_in_insert_after_send
+// option: whether Enter leaves the composer focused in insert mode
+// after a send. Off by default.
+func (a *App) SetStayInInsertAfterSend(b bool) {
+	a.stayInInsertAfterSend = b
 }
 
 // SetEditorService wires Ctrl+E's temp file and editor process. nil

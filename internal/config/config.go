@@ -30,6 +30,11 @@ type Config struct {
 type Compose struct {
 	// Editor is the Ctrl+E fallback when $VISUAL/$EDITOR are unset.
 	Editor string `toml:"editor"`
+	// StayInInsertAfterSend keeps the composer focused and in insert
+	// mode after Enter sends a message, so several messages can be
+	// typed in a row without pressing `i` before each one. Default off:
+	// sending drops back to normal mode, the vim convention.
+	StayInInsertAfterSend bool `toml:"stay_in_insert_after_send"`
 }
 
 // SectionDef defines a sidebar section with channel name patterns.

@@ -81,6 +81,24 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		a.cancelEdit()
 		return nil
 	}
+	if a.stayInInsertAfterSend && a.insertComposerEmpty() && a.isAppHotkey(msg) {
+		// Every app Ctrl shortcut doubles as a textarea editing key
+		// (ctrl+p previous line, ctrl+a line start, ...). With
+		// stay_in_insert_after_send on, insert mode is where a send
+		// leaves you, so with nothing in the composer the shortcut
+		// means what it means in normal mode. Leaving insert mode
+		// this way rechecks waiting dialogs, as Esc does, sequenced
+		// after the shortcut's command so a modal or view that
+		// command opens (ctrl+n's picker comes from the message it
+		// returns) is in place first; a dialog under a modal waits
+		// for it to close.
+		a.exitInsert()
+		cmd := handleNormalMode(a, msg)
+		if cmd == nil {
+			return a.tryOpenActionPrompt()
+		}
+		return tea.Sequence(cmd, func() tea.Msg { return actionPromptRecheckMsg{} })
+	}
 	if key.Matches(msg, a.keys.Escape) {
 		// If a picker is active, close it instead of exiting insert mode.
 		if a.focusedPanel == PanelThread && a.threadVisible {
@@ -207,7 +225,10 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 			if len(a.threadCompose.Attachments()) > 0 {
 				cmd := a.submitWithAttachments(&a.threadCompose)
 				if a.threadCompose.Uploading() {
-					a.exitInsertAfterSend()
+					// An upload keeps the composer busy until its
+					// result lands, so leave insert mode whatever
+					// stay_in_insert_after_send says.
+					a.exitInsert()
 				}
 				return cmd
 			}
@@ -266,7 +287,9 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		if len(a.compose.Attachments()) > 0 {
 			cmd := a.submitWithAttachments(&a.compose)
 			if a.compose.Uploading() {
-				a.exitInsertAfterSend()
+				// Same as the thread branch: an in-flight upload
+				// leaves insert mode regardless of the option.
+				a.exitInsert()
 			}
 			return cmd
 		}
@@ -297,4 +320,38 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	a.compose, cmd = a.compose.Update(msg)
 	a.typingOut.MaybeSend(a.activeChannelID)
 	return cmd
+}
+
+// insertComposerEmpty reports whether the composer insert mode is typing
+// into holds nothing: no text, no attachments, and no edit in progress.
+// The thread composer is the target when the thread pane is focused and
+// visible, matching the Esc handling above.
+func (a *App) insertComposerEmpty() bool {
+	if a.editing.IsActive() {
+		return false
+	}
+	c := &a.compose
+	if a.focusedPanel == PanelThread && a.threadVisible {
+		c = &a.threadCompose
+	}
+	return c.Value() == "" && len(c.Attachments()) == 0
+}
+
+// isAppHotkey reports whether msg is one of the app's Ctrl shortcuts that
+// insert mode hands to the normal-mode handler when the composer is empty
+// (see insertComposerEmpty). Keys people repeat to delete text stay out,
+// so one press too many cannot change mode: Ctrl+W (delete word, the
+// window prefix), Ctrl+H (backspace, back) and Ctrl+K (delete to line
+// end, forward), and with Ctrl+K its forward twin Ctrl+L. So do Ctrl+E
+// (external editor) and Ctrl+O (broadcast), which are composer keys, and
+// Ctrl+U / Ctrl+D, which scroll a pane and would leave insert mode for
+// no gain. The rest work again after Esc.
+func (a *App) isAppHotkey(msg tea.KeyMsg) bool {
+	return key.Matches(msg,
+		a.keys.FuzzyFinder, a.keys.FuzzyFinderAlt,
+		a.keys.NewMessage, a.keys.ActivityView,
+		a.keys.WorkspaceSearch, a.keys.PresenceMenu,
+		a.keys.ToggleSidebar, a.keys.ToggleThread,
+		a.keys.ThemeSwitcher, a.keys.ThemeSwitcherGlobal,
+	)
 }

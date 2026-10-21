@@ -483,6 +483,31 @@ func TestConfig_MarksShowJumpOverlayFalseDistinguishableFromUnset(t *testing.T) 
 	}
 }
 
+// An unset [compose].stay_in_insert_after_send is off: sending drops back
+// to normal mode unless the user asks otherwise.
+func TestConfig_ComposeStayInInsertDefault(t *testing.T) {
+	if loadConfigString(t, "").Compose.StayInInsertAfterSend {
+		t.Error("unset stay_in_insert_after_send must be off")
+	}
+}
+
+func TestConfig_ComposeStayInInsertExplicit(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"on", "[compose]\nstay_in_insert_after_send = true\n", true},
+		{"off", "[compose]\nstay_in_insert_after_send = false\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := loadConfigString(t, tc.body).Compose.StayInInsertAfterSend; got != tc.want {
+				t.Fatalf("StayInInsertAfterSend = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestResolveThemeWorkspaceWins(t *testing.T) {
 	c := Config{
 		Appearance: Appearance{Theme: "dark"},

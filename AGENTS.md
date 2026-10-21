@@ -209,6 +209,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Add a command | `:` commands: an entry in `commands` (`internal/ui/command.go`); slash built-ins slk runs itself: an entry in `slashCommands` (`internal/ui/slash_command.go`). Both are `commandFunc(a, commandArgs{Fields, Rest, Origin})`, dispatched by `dispatchCommand` (a slash command by `splitCommandLine` + `runCommand`, so `Origin` can be set); a slash name not in the table runs through `chat.command` |
 | An app's "working" status on a thread (Slack's `ai_assistant_status`, from `assistant.threads.setStatus`) | Arrives as `BotStatusMsg`; state on `a.typing` (`internal/ui/typing.go`): `SetBotStatus` (empty clears), `ClearBot` (the app replied), read with `WorkingBots(channel)` for the channel typing row and `ThreadBotStatuses(channel, thread)` for the thread pane. Lapses after `botStatusExpiry` (2 min, Slack's timeout) on the typing tick |
 | Can the user post in an app DM? (`app_home.messages_tab_enabled` / `messages_tab_read_only_enabled`) | `boot.ConversationsInfo` (`return_app_home=true`) or `ConversationsView`, then `(*boot.AppHome).CanReceiveMessages()` (nil is true); `cmd/slk/probeMessagingCapability` wires both, fail-open, behind `core.ChannelService.MessagingCapability`. A send refused with `restricted_action_read_only*` marks the conversation (`App.readOnlyChannels`, `sendFailedCmd` in `internal/ui/read_only.go`); both set `App.composeDisabled` |
+| Leave insert mode from code | `(*App).exitInsertAfterSend()` after a send (honours `[compose] stay_in_insert_after_send`); `(*App).exitInsert()` to leave whatever the option says (`ModeNormal`, both composers blurred) (`internal/ui/app.go`). Neither rechecks waiting action dialogs: a path that leaves insert mode at the user's request, as Esc does, follows with `tryOpenActionPrompt()` |
 
 ### Test helpers
 
@@ -255,6 +256,7 @@ greppable by name; no line numbers, because these files move.
 | Slackbot's "not in this channel" ephemeral with Add Them / Dismiss / Don't Show Again buttons | `mentionEphemeral(ts)` (`internal/ui/action_prompt_test.go`) |
 | Deliver a message to the App through the real `Update` chain and get the messages its commands produced | `arrive(t, a, msg)` (`internal/ui/action_prompt_queue_test.go`) |
 | Send a key and feed every resulting command's message back through `Update` | `pressKey(t, a, k)` (`internal/ui/action_prompt_test.go`) |
+| The same, with each `tea.Batch`'s commands run last first, to catch code that relies on batch order instead of `tea.Sequence` | `pressKeyWorstOrder(t, a, k)` (`internal/ui/action_prompt_queue_test.go`) |
 | The toast text among such messages | `toastText(msgs)` (`internal/ui/action_prompt_test.go`) |
 | Is the confirm prompt visible and does its view contain some text? | `dialogShows(a, text)` (`internal/ui/action_prompt_queue_test.go`) |
 | Click the cell where some text is drawn inside the open confirm prompt | `clickConfirmText(t, a, text)` (`internal/ui/confirm_click_test.go`) |

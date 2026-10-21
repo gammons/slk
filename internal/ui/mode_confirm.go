@@ -20,6 +20,12 @@ func (a *App) afterConfirmPrompt(cmd tea.Cmd) tea.Cmd {
 	if !a.confirmPrompt.IsVisible() {
 		restore, thread := a.shownPromptInsert, a.shownPromptThread
 		a.clearShownPrompt()
+		if restore && thread && !a.threadVisible {
+			// A channel switch closed the thread while the dialog was
+			// up: the channel composer is the one left to type in.
+			thread = false
+			a.focusedPanel = PanelMessages
+		}
 		if restore {
 			a.SetMode(ModeInsert)
 			var focus tea.Cmd
@@ -27,6 +33,12 @@ func (a *App) afterConfirmPrompt(cmd tea.Cmd) tea.Cmd {
 				focus = a.threadCompose.Focus()
 			} else {
 				focus = a.compose.Focus()
+			}
+			// A read-only refusal that landed while the dialog was
+			// up disabled the channel composer without leaving insert
+			// mode (it wasn't in it): don't hand the user back into it.
+			if drop := a.dropInsertIfComposeDisabled(); drop != nil {
+				return tea.Batch(cmd, drop, a.tryOpenActionPrompt())
 			}
 			return tea.Batch(cmd, focus, a.tryOpenActionPrompt())
 		}

@@ -570,14 +570,7 @@ func run() error {
 	for _, it := range wsItems {
 		railTeamIDs = append(railTeamIDs, it.ID)
 	}
-	applyUISettings(app, uiSettings{
-		TimestampFormat:  tsFormat,
-		TypingIndicators: cfg.Animations.TypingIndicators,
-		StaleAfter:       time.Duration(cfg.Sidebar.HideInactiveAfterDays) * 24 * time.Hour,
-		MouseWheelLines:  cfg.Appearance.MouseWheelLines,
-		ColoredUsernames: cfg.Appearance.ColoredUsernames,
-		ThemeOverrides:   cfg.Theme,
-	})
+	applyUISettings(app, uiSettingsFromConfig(cfg))
 	app.SetEditorService(core.NewEditorService(editor.WriteDraft, editor.Edit, editor.TakeDraft))
 	if editor, ok := ui.ResolveEditor(cfg.Compose.Editor); ok {
 		app.SetComposeEditor(editor)
