@@ -278,6 +278,7 @@ greppable by name; no line numbers, because these files move.
 | The draft of a conversation in T1, read by switching the composer to it (changes the composer's draft context) | `draftIn(a, channelID)` (`internal/ui/slash_builtins_test.go`) |
 | Compare a request this repo builds with a scrubbed web-client capture (`{method, form, response}` JSON in `testdata/`) | `capturedForm(t, name)` (the capture's form minus `token` and the `_x_*` envelope) and `assertFormMatchesCapture(t, got, name)` (same fields and values, nothing extra; `client_token` checked for shape) (`internal/slack/command_test.go`, `package slackclient`) |
 | Load a config from a TOML string | `loadConfigString(t, body)` (`internal/config/config_test.go`, `package config`) |
+| A private `dbus-daemon` for one test (skips when not installed; no service directories, so an unowned name is never activated), a connection to it, and a spec-only Secret Service served on it | `startTestBus(t)`, `connectTestBus(t, addr)`, `serveSecretService(t, addr, svc)` with `specOnlyService()` (`internal/slackdesktop/password_linux_test.go`, `package slackdesktop`, Linux only) |
 
 ### Known duplication — do not add to it
 
