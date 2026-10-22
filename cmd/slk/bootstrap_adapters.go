@@ -74,7 +74,64 @@ func newBootstrapDeps(c *slackclient.Client, db *cache.DB, accessToken, openChan
 type bootAdapter struct{ c *slackclient.Client }
 
 func (a bootAdapter) UserBoot(ctx context.Context) (*boot.Result, error) {
-	return boot.UserBoot(ctx, a.c.PostForm)
+	res, err := boot.UserBoot(ctx, a.c.PostForm)
+	if err == nil {
+		return res, nil
+	}
+	// A cancelled context must not become a synthesized boot: the
+	// calls gridMemberBoot makes would fail on the same context, and
+	// connectWorkspace would carry on with an empty workspace instead
+	// of returning the cancellation. Everything else that is not a
+	// grid member keeps the failure for the same reason Run does.
+	if ctx.Err() != nil || !a.c.IsGridMember() {
+		return nil, err
+	}
+	// A Grid member-workspace token is the one session Slack will not
+	// let call client.userBoot, so the boot result is synthesized from
+	// the calls the grid does serve it. See gridMemberBoot for what is
+	// filled and what is knowingly left zero.
+	debuglog.General("userBoot rejected for grid member workspace %s (%v); booting without it", a.c.TeamName(), err)
+	return gridMemberBoot(ctx, a.c), nil
+}
+
+// gridMemberBoot builds the boot.Result a Grid member workspace starts
+// from when client.userBoot is rejected: the team record (auth.test
+// already returned it) and the mute prefs via users.prefs.get, which
+// the grid does serve member tokens. Everything else stays zero:
+//
+//   - Channels/IMs/IsOpen: the sidebar is built from users.conversations
+//     in connectWorkspace on every workspace - userBoot is only that
+//     call's fallback source - and an empty IsOpen makes
+//     dropClosedMPIMs a no-op, so closed group DMs stay listed rather
+//     than being dropped.
+//   - Counts: client.counts is rejected for member tokens too
+//     (team_is_restricted); bootstrap.Run already treats a counts
+//     failure as non-fatal, and the read state keeps updating from
+//     WebSocket events afterwards, so only the boot-time snapshot is
+//     lost.
+//   - Self/DND/ChannelsPriority/EmojiCacheTS: nothing reads them off
+//     the boot result.
+//
+// The result is returned unconditionally rather than as an error: the
+// caller already knows userBoot failed, and a prefs fetch that fails
+// here costs only the mute set, which pref_change events can still
+// deliver mid-session.
+func gridMemberBoot(ctx context.Context, c *slackclient.Client) *boot.Result {
+	out := &boot.Result{
+		Team: boot.Team{
+			ID:   c.TeamID(),
+			Name: c.TeamName(),
+		},
+	}
+	if raw, err := c.GetMutedChannelsRaw(ctx); err == nil {
+		var parsed struct {
+			Prefs boot.Prefs `json:"prefs"`
+		}
+		if err := json.Unmarshal(raw, &parsed); err == nil {
+			out.Prefs = parsed.Prefs
+		}
+	}
+	return out
 }
 
 // viewAdapter satisfies bootstrap.Viewer. Same pass-through as

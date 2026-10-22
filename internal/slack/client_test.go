@@ -3598,3 +3598,52 @@ func TestMarkChannel_NonJSONBody_ReturnsError(t *testing.T) {
 		t.Fatal("MarkChannel: want error for non-JSON 200 body, got nil")
 	}
 }
+
+func TestConnect_RecordsEnterpriseID(t *testing.T) {
+	// The member-workspace shape: team_id and enterprise_id differ.
+	// This is the session class the grid serves users.conversations to
+	// while rejecting client.userBoot - the pair IsGridMember exists
+	// to name.
+	mock := &mockSlackAPI{
+		authTestFn: func() (*slack.AuthTestResponse, error) {
+			return &slack.AuthTestResponse{
+				URL:          "https://redhat-external.slack.com/",
+				Team:         "External Red Hat",
+				TeamID:       "T03ENH66XEK",
+				UserID:       "U1",
+				EnterpriseID: "E030G10V24F",
+			}, nil
+		},
+	}
+	c := &Client{api: mock}
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if !c.IsGridMember() {
+		t.Error("IsGridMember() = false; auth.test returned enterprise_id != team_id")
+	}
+}
+
+func TestIsGridMember(t *testing.T) {
+	cases := []struct {
+		name         string
+		teamID       string
+		enterpriseID string
+		want         bool
+	}{
+		// The org-level session a grid signs in first: the two ids
+		// match, and it is the grid itself, not a member workspace.
+		{name: "org-level session", teamID: "E1", enterpriseID: "E1", want: false},
+		{name: "member workspace", teamID: "T1", enterpriseID: "E1", want: true},
+		{name: "not on a grid", teamID: "T1", enterpriseID: "", want: false},
+		{name: "unconnected client", teamID: "", enterpriseID: "", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Client{teamID: tc.teamID, enterpriseID: tc.enterpriseID}
+			if got := c.IsGridMember(); got != tc.want {
+				t.Errorf("IsGridMember() = %v; want %v", got, tc.want)
+			}
+		})
+	}
+}
