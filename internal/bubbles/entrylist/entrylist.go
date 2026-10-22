@@ -61,6 +61,11 @@ const (
 	// HitImage is an inline image; Key is the file ID, Aux the
 	// attachment index.
 	HitImage
+	// HitLink is a hyperlink span in rendered text; Key is the URL.
+	HitLink
+	// HitFile is a file-attachment line; Key is the file ID, Aux the
+	// attachment index.
+	HitFile
 )
 
 // Hit is a clickable rectangle relative to an Entry's Lines.

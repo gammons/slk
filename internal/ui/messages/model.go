@@ -764,9 +764,16 @@ type HitRect struct {
 // must use HitTest. Returns a freshly-allocated slice so callers
 // cannot mutate the internal cache.
 func (m *Model) LastHitsForTest() []HitRect {
+	return m.LastHitsForKindForTest(entrylist.HitImage)
+}
+
+// LastHitsForKindForTest is LastHitsForTest for one hit kind; Key
+// carries the URL for links and the file's URL for file lines.
+// Test-only; production code must use HitTest.
+func (m *Model) LastHitsForKindForTest(kind entrylist.HitKind) []HitRect {
 	out := []HitRect{}
 	for _, h := range m.list.Hits() {
-		if h.Kind != entrylist.HitImage {
+		if h.Kind != kind {
 			continue
 		}
 		out = append(out, HitRect{
@@ -1536,7 +1543,7 @@ func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles, stats *entr
 		Plain:      linesP,
 		ColOffset:  1, // thick left border ▌ occupies column 0 of Lines
 		Trail:      trail,
-		Hits:       r.Hits,
+		Hits:       append(r.Hits, w.LinkHits...),
 	}
 	return entry, EntryPayload{ShortSrc: w.ShortSrc, Flushes: flushes, sixelRows: r.SixelRows}
 }
@@ -1788,6 +1795,32 @@ func (m *Model) HitTestImage(row, col int) (ts string, attIdx int, ok bool) {
 		return "", 0, false
 	}
 	return m.messages[msgIdx].TS, attIdx, true
+}
+
+// HitTestLink returns the URL of the hyperlink at (row, col) within the
+// messages-pane content area, or ok=false when no link span covers that
+// cell. Coordinate frame mirrors HitTest.
+func (m *Model) HitTestLink(row, col int) (url string, ok bool) {
+	h, ok := m.list.HitTest(entrylist.HitLink, row, col)
+	if !ok || h.Key == "" {
+		return "", false
+	}
+	return h.Key, true
+}
+
+// HitTestFile returns the attachment whose file line sits at (row, col)
+// within the messages-pane content area, or ok=false. Coordinate frame
+// mirrors HitTest.
+func (m *Model) HitTestFile(row, col int) (Attachment, bool) {
+	h, ok := m.list.HitTest(entrylist.HitFile, row, col)
+	if !ok || h.Ref < 0 || h.Ref >= len(m.messages) {
+		return Attachment{}, false
+	}
+	atts := m.messages[h.Ref].Attachments
+	if h.Aux < 0 || h.Aux >= len(atts) {
+		return Attachment{}, false
+	}
+	return atts[h.Aux], true
 }
 
 // HitTestReaction returns the (message index, reaction emoji name) at

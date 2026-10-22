@@ -532,8 +532,12 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 			if opt.ImageHits {
 				// Only record hits for actual image-block renders (the
 				// fallback-to-link path returns a zero Hit, which we
-				// skip — clicking a single-line "[Image] <url>" doesn't
-				// open the preview overlay; that's a hyperlink.).
+				// skip for images — clicking a single-line "[Image]
+				// <url>" doesn't open the preview overlay; that's a
+				// hyperlink.). File lines are not registered here:
+				// their rows can still wrap in WrapRows, so their hit
+				// rects are classified from the final rows there, by
+				// URL, via HitsFromSpans.
 				if h := res.Hit; h.RowEndInEntry > h.RowStartInEntry {
 					imageHits = append(imageHits, entrylist.Hit{
 						RowStart: h.RowStartInEntry, RowEnd: h.RowEndInEntry,
