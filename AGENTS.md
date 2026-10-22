@@ -136,6 +136,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Slack ts → `time.Time` (whole seconds, any timezone) | `export.TimeFromTS` |
 | A since/until/overlap date range in a timezone, and "is this ts in it?" | `export.NewWindow`, `export.Window.Contains` |
 | Sleep out a slack-go rate-limit error (ctx-aware) | `slackclient.WaitOutRateLimit` |
+| Is this session an Enterprise Grid member workspace, not the org-level one? | `(*slackclient.Client).IsGridMember()`; member tokens cannot call `client.userBoot` or `client.counts`, so `cmd/slk`'s `bootAdapter` synthesizes their boot result (`gridMemberBoot`) |
 | Page through all channel history in a ts range / a thread's replies in a ts range | `(*slackclient.Client).WalkHistory`, `GetRepliesBetween` |
 | Press a legacy attachment button (`chat.attachmentAction`, payload byte-identical to the web client's) | `(*slackclient.Client).AttachmentAction(ctx, AttachmentActionRequest)`, with `service_id` = the posting app's bot ID |
 | Press a legacy attachment button from the UI | `core.InteractionService.PressAttachmentAction` (App field `a.interactions`); wired in `cmd/slk` via `pressAttachmentAction` to the active workspace's `Client.AttachmentAction` |
