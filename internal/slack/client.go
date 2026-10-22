@@ -84,9 +84,12 @@ type Client struct {
 	wsMu   sync.Mutex
 	wsDone chan struct{}
 	teamID string
-	userID string
-	token  string
-	cookie string
+	// enterpriseID is the Enterprise Grid id auth.test reported, ""
+	// off a grid. See IsGridMember for why it is kept.
+	enterpriseID string
+	userID       string
+	token        string
+	cookie       string
 
 	// apiBaseURL is the workspace-specific Web API root, e.g.
 	// "https://slack.com/api/" for non-grid workspaces or
@@ -274,6 +277,29 @@ func (c *Client) TeamID() string {
 	return c.teamID
 }
 
+// IsGridMember reports whether this session belongs to a member
+// workspace of an Enterprise Grid: auth.test returned an enterprise_id
+// that differs from the team_id. The org-level session, where the two
+// match, is the grid itself and is NOT a member workspace.
+//
+// The org-level half of the rule - that the org-level session's
+// auth.test answers team_id == enterprise_id - is an observation of a
+// live grid (Red Hat's), not documented behavior. If some grid answered
+// a T… team id for its org-level token this would report true there
+// too, which costs nothing while userBoot succeeds for that token and
+// only downgrades a simultaneous userBoot outage.
+//
+// The distinction matters because Slack serves the two sessions
+// different methods: the grid token may call client.userBoot and
+// client.counts but not users.conversations, while a member-workspace
+// token may call users.conversations and users.prefs.get but neither
+// boot method (client.userBoot fails with internal_error, and
+// client.counts / conversations.view / users.channelSections.list with
+// team_is_restricted).
+func (c *Client) IsGridMember() bool {
+	return c.enterpriseID != "" && c.enterpriseID != c.teamID
+}
+
 // TeamName returns the authenticated workspace's display name.
 // Empty before Connect is called.
 func (c *Client) TeamName() string {
@@ -312,6 +338,7 @@ func (c *Client) Connect(ctx context.Context) error {
 		return fmt.Errorf("auth test failed: %w", err)
 	}
 	c.teamID = resp.TeamID
+	c.enterpriseID = resp.EnterpriseID
 	// Moves the envelope into its post-boot phase: from here on every
 	// request carries _x_csid and slack_route, as the official client's
 	// do once it knows the workspace. Nil for Clients built directly in
