@@ -307,6 +307,9 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		if cmd, hit := a.openImagePreviewAt(a.messagepane, a.activeChannelID, px, py); hit {
 			return cmd
 		}
+		if cmd, hit := a.clickAttachmentAt(a.messagepane, px, py); hit {
+			return cmd
+		}
 		a.drag.Begin(PanelMessages, px, py)
 		a.messagepane.BeginSelectionAt(py, px)
 		// Remember whether this press actually landed on a message
@@ -330,12 +333,36 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		if cmd, hit := a.openImagePreviewAt(a.threadPanel, a.threadPanel.ChannelID(), px, py); hit {
 			return cmd
 		}
+		if cmd, hit := a.clickAttachmentAt(a.threadPanel, px, py); hit {
+			return cmd
+		}
 		a.drag.Begin(PanelThread, px, py)
 		a.threadPanel.BeginSelectionAt(py, px)
 		a.threadPanel.ClickAt(py)
 		return nil
 	}
 	return nil
+}
+
+// clickAttachmentAt handles a click that lands on a file line or a
+// hyperlink at pane-local (px, py) in p. A file line downloads its
+// attachment (the mouse equivalent of `d`, scoped to the one file);
+// a link span opens it exactly as `o` would. Both take precedence over
+// the drag-to-copy selection, and a file line wins over the OSC 8 link
+// span the same line carries, since downloading is the more specific
+// intent for it.
+func (a *App) clickAttachmentAt(p contentPane, px, py int) (tea.Cmd, bool) {
+	contentY := py - p.ChromeHeight()
+	if contentY < 0 {
+		return nil, false
+	}
+	if att, ok := p.HitTestFile(contentY, px); ok && att.DownloadURL != "" {
+		return func() tea.Msg { return DownloadFileMsg{Attachment: att} }, true
+	}
+	if url, ok := p.HitTestLink(contentY, px); ok {
+		return func() tea.Msg { return OpenLinkMsg{URL: url} }, true
+	}
+	return nil, false
 }
 
 // toggleReactionAt toggles the reaction whose pill is at pane-local

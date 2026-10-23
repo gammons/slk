@@ -63,6 +63,12 @@ type WrappedRows struct {
 	// built from (EntryPayload.SelectedLines); empty when Selected
 	// already carries the short form.
 	ShortSrc string
+	// LinkHits are the clickable spans of Lines, in display columns,
+	// ready to append to the entry's Hits (the renderer's own hits
+	// carry image and reaction rects; links and file lines can only be
+	// located after the final wrap, hence here). A span whose URL is
+	// one of msg's file attachments is a HitFile; the rest HitLink.
+	LinkHits []entrylist.Hit
 }
 
 // WrapRows fills and borders a rendered message for a content pane's
@@ -107,10 +113,12 @@ func WrapRows(msg MessageItem, r RenderedMessage, width int, s WrapStyles) Wrapp
 		s.stats.plainLinesTotal += time.Since(plT0)
 	}
 
+	lines := strings.Split(normal, "\n")
 	return WrappedRows{
-		Lines:    strings.Split(normal, "\n"),
+		Lines:    lines,
 		Selected: selected,
 		Plain:    plain,
 		ShortSrc: shortSrc,
+		LinkHits: HitsFromSpans(ScanOsc8Spans(lines), msg),
 	}
 }
