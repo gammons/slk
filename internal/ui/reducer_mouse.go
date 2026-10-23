@@ -322,6 +322,28 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		if !ok || panel != PanelThread || py < 0 {
 			return nil
 		}
+		// The breadcrumb's channel label: clicking it closes the thread and
+		// returns to the channel, the mouse equivalent of the hint's esc and
+		// the up-level navigation the breadcrumb names. Checked before the
+		// content hit tests: the breadcrumb row is chrome above every reply.
+		if a.threadPanel.HitTestBreadcrumbChannel(py, px) {
+			// An upload in flight refuses the close (CloseThread drops
+			// it), so refuse the whole sequence: switching mode first
+			// would drop the user out of insert mode with the thread
+			// still open. Mirrors the upload guards on every other
+			// thread-closing path.
+			if a.compose.Uploading() || a.threadCompose.Uploading() {
+				return toastWithClear(a, "Upload in progress", 2*time.Second)
+			}
+			// Same tail as esc out of insert mode: CloseThread handles
+			// cancelEdit, and a queued action prompt opens on the way
+			// back to normal.
+			a.SetMode(ModeNormal)
+			a.compose.Blur()
+			a.CloseThread()
+			return a.tryOpenActionPrompt()
+		}
+
 		// Hit-test reactions and inline images first on the thread
 		// pane too.
 		if cmd, hit := a.toggleReactionAt(a.threadPanel, a.threadPanel.ChannelID(), a.threadPanel.Replies(), px, py); hit {

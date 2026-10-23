@@ -92,6 +92,7 @@ type Model struct {
 	chromeCrumbChannel string
 	chromeCrumbType    string
 	chromeAuthor       string
+	crumbChannelCols   int
 
 	// userNamesV / channelNamesV are bumped every time SetUserNames /
 	// SetChannelNames replaces the map. Used by chromeCache (and any other
@@ -1044,7 +1045,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 		m.chromeCrumbChannel != m.crumbChannel ||
 		m.chromeCrumbType != m.crumbType ||
 		m.chromeAuthor != author {
-		header := renderBreadcrumb(width, m.crumbChannel, m.crumbType, author, chromeReplyCount)
+		header, channelCols := renderBreadcrumb(width, m.crumbChannel, m.crumbType, author, chromeReplyCount)
 		separator := lipgloss.NewStyle().
 			Width(width).
 			Background(styles.Background).
@@ -1060,6 +1061,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 		m.chromeCrumbChannel = m.crumbChannel
 		m.chromeCrumbType = m.crumbType
 		m.chromeAuthor = author
+		m.crumbChannelCols = channelCols
 	}
 	chrome := m.chromeCache
 	chromeHeight := m.chromeHeight
@@ -1303,6 +1305,15 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	rows := m.list.Compose(frame, "", "", applySelection)
 	m.layoutValid = true
 	return fitHeight(chrome+"\n"+strings.Join(rows, "\n"), height)
+}
+
+// HitTestBreadcrumbChannel reports whether pane-local (row, col) lands on
+// the breadcrumb's channel label - the span the click router turns into
+// closing the thread and returning to the channel, the mouse equivalent
+// of the hint's esc. Row 0 is the breadcrumb row, the first row under the
+// pane's top border; the span covers the label only, not the separator.
+func (m *Model) HitTestBreadcrumbChannel(row, col int) bool {
+	return row == 0 && col >= 0 && m.crumbChannelCols > 0 && col < m.crumbChannelCols
 }
 
 // HitTestReaction returns the (reply index, reaction emoji name) at
