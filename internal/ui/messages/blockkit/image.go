@@ -166,6 +166,11 @@ func fetchOrPlaceholder(url string, target image.Point, ctx Context, rowStart in
 				fetchStart := time.Now()
 				_, err := fetcher.Fetch(context.Background(), imgpkg.FetchRequest{
 					Key: key, URL: url, Target: pixelTarget, ReqID: reqID,
+					// The cell target lets the fetch worker
+					// prerender for this exact footprint, so the
+					// render below hits Prerendered instead of
+					// encoding on the UI goroutine.
+					CellTarget: target,
 				})
 				inflightURLMu.Lock()
 				delete(inflightURL, key)
@@ -198,9 +203,21 @@ func fetchOrPlaceholder(url string, target image.Point, ctx Context, rowStart in
 		return ph, nil, nil, hit, true
 	}
 
-	// Cached: render via active protocol. For kitty we go through the
-	// renderer's keyed path so the upload escape is emitted exactly
-	// once per (key, target) pair across the session.
+	// Fast path: prerendered output baked off the UI thread by the
+	// fetch worker (Fetcher.Prerendered). Same contract as the
+	// RenderImage call below, minus the protocol encode.
+	if pr, ok := ctx.Fetcher.Prerendered(key, target, ctx.Protocol); ok {
+		var fl []func(io.Writer) error
+		if pr.OnFlush != nil {
+			fl = []func(io.Writer) error{pr.OnFlush}
+		}
+		return pr.Lines, fl, nil, hit, true
+	}
+	// Kitty slow path: the worker did not prerender (its keyed source
+	// lives under "F-"+key, see maybePrerender), so register and encode
+	// here under the UI's "BK-"+key. Reached only on the first render
+	// of an image whose fetch raced the view, or when prerendering is
+	// not configured.
 	if ctx.Protocol == imgpkg.ProtoKitty && ctx.KittyRender != nil {
 		var kT0 time.Time
 		if perf != nil {

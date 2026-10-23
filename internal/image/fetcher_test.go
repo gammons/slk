@@ -455,3 +455,38 @@ func TestFetcher_HTTPErrorPropagates(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestConfigurePrerender_SameProtocolKeepsCache(t *testing.T) {
+	// SetImageContext runs ConfigurePrerender for every window model it
+	// configures, and a workspace switch builds a fresh window model,
+	// so the same-protocol re-configure is the common case: it must not
+	// drop entries the fetch goroutine already encoded, or every
+	// switch re-encodes each visible image on the UI thread.
+	f := NewFetcher(nil, nil)
+	f.ConfigurePrerender(ProtoSixel)
+	key := prerenderKey("F123-480", image.Pt(60, 12), ProtoSixel)
+	f.prerendered.Store(key, Render{Cells: image.Pt(60, 12)})
+
+	f.ConfigurePrerender(ProtoSixel)
+
+	if _, ok := f.Prerendered("F123-480", image.Pt(60, 12), ProtoSixel); !ok {
+		t.Error("re-configure with the same protocol dropped the cached render")
+	}
+}
+
+func TestConfigurePrerender_ProtocolChangeResetsCache(t *testing.T) {
+	// The encoded output is protocol-specific, so switching protocol
+	// (terminal capability re-probe) must drop it.
+	f := NewFetcher(nil, nil)
+	f.ConfigurePrerender(ProtoSixel)
+	f.prerendered.Store(prerenderKey("F123-480", image.Pt(60, 12), ProtoSixel), Render{Cells: image.Pt(60, 12)})
+
+	f.ConfigurePrerender(ProtoHalfBlock)
+
+	if _, ok := f.Prerendered("F123-480", image.Pt(60, 12), ProtoSixel); ok {
+		t.Error("protocol change kept a render encoded for the old protocol")
+	}
+	if _, ok := f.Prerendered("F123-480", image.Pt(60, 12), ProtoHalfBlock); ok {
+		t.Error("protocol change kept an entry under the new protocol that was never stored for it")
+	}
+}
