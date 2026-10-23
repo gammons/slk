@@ -67,6 +67,13 @@ func (a *App) renderThreadRegion(frame panelLayoutFrame, themeVer int64) string 
 	if threadContentHeight < 3 {
 		threadContentHeight = 3
 	}
+	// Row layout within the pane: 0 top border, 1..threadContentHeight
+	// replies, then the compose region through to the bottom border at
+	// contentHeight-1 (no typing row is reserved in the thread pane).
+	// Recorded after the minimum clamp and in PanelAt's paneY frame
+	// (top border subtracted), mirroring the channel pane's compose
+	// top.
+	a.layout.SetThreadComposeTop(threadContentHeight)
 
 	// Cached top region.
 	threadTopVersion := a.threadPanel.Version()

@@ -242,6 +242,15 @@ func (a *App) renderChannelMessagesPanel(msgWidth, msgBorder, contentHeight int,
 	if msgContentHeight < 3 {
 		msgContentHeight = 3
 	}
+	// Row layout within the pane: 0 top border, 1..msgContentHeight
+	// messages, +1 typing row, then the compose region (the spacer
+	// line above the box included in composeHeight) through to the
+	// bottom border at contentHeight-1. Recorded AFTER the minimum
+	// clamp above so a short terminal that draws three content rows
+	// keeps them clickable, and in the frame PanelAt reports (its
+	// paneY has the top border already subtracted), so the first
+	// compose row passes the mouse router's >= check.
+	a.layout.SetMsgComposeTop(msgContentHeight + 1)
 
 	// Cached top region: messages + top edge + side edges. The cache
 	// stores the SELECTION-FREE bordered output (see ViewBare +

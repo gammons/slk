@@ -43,7 +43,31 @@ type panelLayout struct {
 	sidebarHeight int
 	msgHeight     int
 	threadHeight  int
+
+	// Compose-region tops, in pane rows (row 0 is the pane's top
+	// border), set by whichever pane renderer draws a compose box and
+	// reset at the top of every View. 0 means "not drawn this frame";
+	// the mouse router turns a click at or below the top into insert
+	// mode, the click equivalent of `i`.
+	msgComposeTop    int
+	threadComposeTop int
 }
+
+// ResetComposeRegions clears both compose-region tops. App.View calls
+// it before rendering so a pane that stops drawing its compose (the
+// threads view replaces the channel pane) leaves no stale region
+// behind.
+func (l *panelLayout) ResetComposeRegions() {
+	l.msgComposeTop, l.threadComposeTop = 0, 0
+}
+
+// SetMsgComposeTop records where the channel pane's compose region
+// begins this frame. row is in pane rows, 1-based past the top border.
+func (l *panelLayout) SetMsgComposeTop(row int) { l.msgComposeTop = row }
+
+// SetThreadComposeTop records where the thread pane's compose region
+// begins this frame, in the same frame as SetMsgComposeTop.
+func (l *panelLayout) SetThreadComposeTop(row int) { l.threadComposeTop = row }
 
 func newPanelLayout() *panelLayout { return &panelLayout{} }
 

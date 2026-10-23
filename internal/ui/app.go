@@ -3440,6 +3440,13 @@ func (a *App) renderTypingLine() string {
 }
 
 func (a *App) View() tea.View {
+	// Compose regions are recorded per frame by the pane renderers;
+	// clear last frame's before any pane decides not to draw one (the
+	// threads view replaces the channel pane's compose). First
+	// statement so the early-fallback path cannot leave a stale
+	// region behind either.
+	a.layout.ResetComposeRegions()
+
 	if v, handled := a.renderEarlyFallback(); handled {
 		return a.finalizeSixelView(v, nil)
 	}

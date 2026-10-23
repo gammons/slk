@@ -13,8 +13,29 @@
 package ui
 
 import (
+	"time"
+
 	tea "charm.land/bubbletea/v2"
 )
+
+// beginInsertMode enters insert mode with a compose box focused - the
+// shared body of `i` and of a click on a compose region. toThread picks
+// which compose: the thread panel's when true, else the channel's.
+// composeDisabled reflects the active CHANNEL's send capability, not
+// the thread panel's -- a thread reply targets whatever thread is
+// open, which need not be in that channel.
+func (a *App) beginInsertMode(toThread bool) tea.Cmd {
+	if a.composeDisabled && !toThread {
+		return toastWithClear(a, a.composeBlockedText(), 2*time.Second)
+	}
+	a.SetMode(ModeInsert)
+	if toThread {
+		a.focusedPanel = PanelThread
+		return a.threadCompose.Focus()
+	}
+	a.focusedPanel = PanelMessages
+	return a.compose.Focus()
+}
 
 // enterCommandMode switches to ModeCommand with an empty buffer
 // and shows the bare ':' prompt in the status bar.

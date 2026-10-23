@@ -100,19 +100,7 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		// user can see it, not in a channel compose hidden behind
 		// the thread.
 		toThread := a.focusedPanel == PanelThread || (a.view == ViewThreads && a.threadVisible) || a.threadDrawnAlone()
-		// composeDisabled reflects the active CHANNEL's send capability,
-		// not the thread panel's -- a thread reply targets whatever
-		// thread is open, which need not be in that channel.
-		if a.composeDisabled && !toThread {
-			return toastWithClear(a, a.composeBlockedText(), 2*time.Second)
-		}
-		a.SetMode(ModeInsert)
-		if toThread {
-			a.focusedPanel = PanelThread
-			return a.threadCompose.Focus()
-		}
-		a.focusedPanel = PanelMessages
-		return a.compose.Focus()
+		return a.beginInsertMode(toThread)
 
 	case key.Matches(msg, a.keys.CommandMode):
 		a.enterCommandMode()

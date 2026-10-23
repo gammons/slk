@@ -132,6 +132,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Replace a pane's list with fetched history without erasing ephemerals already shown | `keepEphemerals(fetched, shown)` (`internal/ui/ephemeral_keep.go`); only for a fetch of the conversation already on screen |
 | Slack permalink parsing | `slackurl.Parse` |
 | Huddle deep link for a conversation (`https://app.slack.com/huddle/<TEAM>/<CHANNEL>`) | `slackurl.HuddleURL` |
+| Enter insert mode with a compose box focused (the shared body of `i` and a click on a compose region) | `(*App).beginInsertMode(toThread bool)` (`internal/ui/mode_command.go`); the compose regions' tops are recorded per frame in `panelLayout` |
 | The channel a user's huddle is in (users.info) | `slackclient.UserProfile.HuddleStateChannelID` (wraps `*slack.User`; `GetUserProfile`/`GetUserProfileContext` are hand-rolled POSTs because slack-go's `UserProfile` drops that field) |
 | Slack ts → `time.Time` (whole seconds, any timezone) | `export.TimeFromTS` |
 | A since/until/overlap date range in a timezone, and "is this ts in it?" | `export.NewWindow`, `export.Window.Contains` |
