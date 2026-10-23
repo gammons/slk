@@ -107,7 +107,8 @@ func appendSection(out *RenderResult, s SectionBlock, ctx Context, width int) {
 	bodyW := width
 	var accessoryLines []string
 	var accessoryW int
-	var accessoryHit *HitRect // populated for image accessories
+	var accessoryHit *HitRect           // populated for image accessories
+	var accessorySxl map[int]SixelEntry // keyed at fetchOrPlaceholder's rowStart=0; translated after the layout decision below
 
 	switch acc := s.Accessory.(type) {
 	case LabelAccessory:
@@ -128,14 +129,7 @@ func appendSection(out *RenderResult, s SectionBlock, ctx Context, width int) {
 				accessoryLines = lines
 				accessoryW = accCols
 				out.Flushes = append(out.Flushes, flushes...)
-				if sxl != nil {
-					if out.SixelRows == nil {
-						out.SixelRows = map[int]SixelEntry{}
-					}
-					for k, v := range sxl {
-						out.SixelRows[k] = v
-					}
-				}
+				accessorySxl = sxl
 				h := hit // copy
 				accessoryHit = &h
 			} else {
@@ -189,6 +183,28 @@ func appendSection(out *RenderResult, s SectionBlock, ctx Context, width int) {
 			accessoryHit.ColEnd = accessoryW
 		}
 		out.Hits = append(out.Hits, *accessoryHit)
+	}
+
+	// The accessory's sixel placement gets the same translation as its
+	// hit: fetchOrPlaceholder keyed it at row 0 because the section's
+	// layout is not known until here. The fallback rows stay bare -
+	// Col alone says where the image sits, and every place that
+	// splices a fallback grafts it at Col over the row's own body
+	// text, so a partially visible accessory keeps the text beside it.
+	if accessorySxl != nil {
+		if out.SixelRows == nil {
+			out.SixelRows = map[int]SixelEntry{}
+		}
+		for k, v := range accessorySxl {
+			row := startRow + k
+			if sideBySide {
+				v.Col = bodyW + 2
+			} else {
+				row = startRow + len(bodyLines) + k
+				v.Col = 0
+			}
+			out.SixelRows[row] = v
+		}
 	}
 
 	if len(s.Fields) > 0 {

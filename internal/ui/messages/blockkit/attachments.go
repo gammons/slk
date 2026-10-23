@@ -156,6 +156,11 @@ func appendLegacyAttachment(out *RenderResult, a LegacyAttachment, ctx Context, 
 	// is configured or the protocol is off.
 	// TODO(blockkit): render thumb_url alongside text via joinSideBySide.
 	var imageHitInBody *HitRect
+	// Sixel rows from the image_url path, keyed relative to body;
+	// merged into out.SixelRows after the stripe loop, where the
+	// body-to-out.Lines row offset is known (same translation the hit
+	// below gets).
+	var bodySxl map[int]SixelEntry
 	if a.ImageURL != "" {
 		var t0 time.Time
 		if perf != nil {
@@ -171,14 +176,7 @@ func appendLegacyAttachment(out *RenderResult, a LegacyAttachment, ctx Context, 
 				if ok {
 					body = append(body, lines...)
 					out.Flushes = append(out.Flushes, flushes...)
-					if sxl != nil {
-						if out.SixelRows == nil {
-							out.SixelRows = map[int]SixelEntry{}
-						}
-						for k, v := range sxl {
-							out.SixelRows[k] = v
-						}
-					}
+					bodySxl = sxl
 					h := hit
 					imageHitInBody = &h
 				} else {
@@ -242,13 +240,27 @@ func appendLegacyAttachment(out *RenderResult, a LegacyAttachment, ctx Context, 
 	}
 
 	// Adjust the image hit so its rows are absolute within out.Lines
-	// and its cols account for the stripe-prefix offset.
+	// and its cols account for the stripe-prefix offset. The image's
+	// sixel rows get the same translation: fetchOrPlaceholder keys
+	// them relative to body, and out.Lines carries the pretext rows
+	// above the body. The fallback rows stay bare - Col alone says
+	// where the image sits, and every place that splices a fallback
+	// grafts it at Col over the row's own stripe - so the painted
+	// image, its click target and its fallback all land inside the
+	// striped body.
 	if imageHitInBody != nil {
 		imageHitInBody.RowStart += startRow
 		imageHitInBody.RowEnd += startRow
 		imageHitInBody.ColStart += stripeCol
 		imageHitInBody.ColEnd += stripeCol
 		out.Hits = append(out.Hits, *imageHitInBody)
+	}
+	for k, v := range bodySxl {
+		if out.SixelRows == nil {
+			out.SixelRows = map[int]SixelEntry{}
+		}
+		v.Col += stripeCol
+		out.SixelRows[k+startRow] = v
 	}
 
 	// Merge nested-block image artifacts. Sub-render coordinates are
@@ -262,6 +274,7 @@ func appendLegacyAttachment(out *RenderResult, a LegacyAttachment, ctx Context, 
 			if out.SixelRows == nil {
 				out.SixelRows = map[int]SixelEntry{}
 			}
+			v.Col += stripeCol
 			out.SixelRows[k+rowOffset] = v
 		}
 		for _, h := range nested.Hits {
