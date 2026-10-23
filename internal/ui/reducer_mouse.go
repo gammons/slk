@@ -292,6 +292,12 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		if !ok || panel != PanelMessages || py < 0 {
 			return nil
 		}
+		// The compose region: a click there starts composing, the
+		// mouse equivalent of `i`. Checked before the content hit
+		// tests because the compose rows sit below every message row.
+		if a.layout.msgComposeTop > 0 && py >= a.layout.msgComposeTop {
+			return a.beginInsertMode(false)
+		}
 		// Hit-test reactions and inline images first: a click
 		// that lands inside a pill toggles the user's reaction;
 		// a click inside an image footprint opens the full-screen
@@ -321,6 +327,11 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		panel, px, py, ok := a.panelAt(m.X, m.Y)
 		if !ok || panel != PanelThread || py < 0 {
 			return nil
+		}
+		// The thread pane's own compose region, same as the channel
+		// pane's above but targeting the thread compose.
+		if a.layout.threadComposeTop > 0 && py >= a.layout.threadComposeTop {
+			return a.beginInsertMode(true)
 		}
 		// Hit-test reactions and inline images first on the thread
 		// pane too.
