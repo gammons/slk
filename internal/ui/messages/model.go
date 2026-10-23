@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/bubbles/entrylist"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
@@ -1854,6 +1855,22 @@ func (m *Model) selectedLines(i int) []string {
 	})
 }
 
+// composeFallbackRow grafts a halfblock fallback row onto the
+// placeholder row it replaces. The placeholder carries the row's left
+// border, avatar gutter and background fill; a bare fallback row
+// would shift the image left under the gutter (one column, six with
+// an avatar), drop the border, and leave the row short so stale
+// pixels stayed visible right of the image on panes without a
+// scrollbar pass to re-pad. Keep the placeholder's first col cells,
+// then the fallback, then the placeholder's own tail: cut from the
+// row being replaced rather than re-filling from a themed spacer, so
+// the tail carries whatever background that row had - the selection
+// tint included - instead of the unselected background.
+func composeFallbackRow(placeholder, fb string, col int) string {
+	end := col + ansi.StringWidth(fb)
+	return ansi.Cut(placeholder, 0, col) + fb + ansi.Cut(placeholder, end, ansi.StringWidth(placeholder))
+}
+
 // viewInternal is the body shared by View and ViewBare. When
 // applySelection is true, the selection-highlight overlay is applied
 // to the inner content before the scrollbar overlay. When false, the
@@ -2032,7 +2049,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 					if sixelFallback == nil {
 						sixelFallback = make(map[int]string)
 					}
-					sixelFallback[row] = sx.fallback[k]
+					sixelFallback[row] = composeFallbackRow(frame.Rows[row], sx.fallback[k], sx.col)
 				}
 			}
 		}

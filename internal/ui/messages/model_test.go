@@ -743,6 +743,42 @@ func TestView_SixelPartialVisibility_UsesFallback(t *testing.T) {
 	}
 }
 
+// A spliced fallback row replaces a fully composed pane row, so it
+// must keep that row's left border and background fill: a bare
+// halfblock row shifts the image one column left under the border and
+// leaves the row short.
+func TestView_SixelPartialVisibility_FallbackKeepsBorderAndWidth(t *testing.T) {
+	m := setupImageMessageModel(t, imgpkg.ProtoSixel)
+	_ = m.View(60, 80)
+	var entryHeight int
+	for _, e := range m.list.Entries() {
+		if e.Ref == 0 {
+			entryHeight = len(e.Lines)
+			break
+		}
+	}
+	if entryHeight == 0 {
+		t.Fatal("could not measure entry height")
+	}
+	clipped := m.View(entryHeight/2+m.chromeHeight, 80)
+
+	for _, line := range strings.Split(clipped, "\n") {
+		plain := ansi.Strip(line)
+		if !strings.ContainsAny(plain, "▀▄") {
+			continue // not a fallback row
+		}
+		if !strings.HasPrefix(plain, "▌") {
+			t.Errorf("fallback row lost its left border: %q", plain[:min(12, len(plain))])
+		}
+		// The halfblock glyphs must sit right of the border column, and
+		// the row must fill the pane width so no stale pixels show
+		// right of the image.
+		if w := ansi.StringWidth(line); w != 80 {
+			t.Errorf("fallback row width = %d, want 80 (full pane width)", w)
+		}
+	}
+}
+
 // TestView_KittyEmitsUploadEscape asserts that when a kitty-rendered
 // image is in the visible window, View() emits the kitty
 // transmit-and-display escape (begins with "\x1b_G") via the captured
@@ -1836,3 +1872,43 @@ func reactionHitsOf(e entrylist.Entry) []entrylist.Hit {
 
 func cursorStart(m *Model) int { s, _ := m.list.CursorSpan(); return s }
 func cursorEnd(m *Model) int   { _, e := m.list.CursorSpan(); return e }
+
+// composeFallbackRow is unit-tested directly because the View-level
+// width assertion cannot see a missing tail fill: clipping a message
+// makes its content overflow, so scrollbar.Overlay pads short rows
+// before View returns. The direct test checks the composed row before
+// any scrollbar runs, and that the tail keeps the placeholder's own
+// background - the selection tint, not the unselected spacer.
+func TestComposeFallbackRow(t *testing.T) {
+	// 20-cell placeholder: border, one gutter cell, then 18 fill cells.
+	// The fill carries a tinted background to stand in for a selected
+	// row's tail, distinct from everything in the prefix.
+	const tint = "\x1b[48;2;90;90;120m"
+	plain := "\x1b[38;2;46;52;64;48;2;46;52;64m"
+	ph := plain + "▌ " + tint + strings.Repeat(" ", 18) + "\x1b[m"
+	fb := strings.Repeat("▀", 10)
+
+	row := composeFallbackRow(ph, fb, 2)
+
+	if w := ansi.StringWidth(row); w != 20 {
+		t.Errorf("composed row width = %d, want 20 (full placeholder width)", w)
+	}
+	plainRow := ansi.Strip(row)
+	if want := "▌ " + fb + strings.Repeat(" ", 8); plainRow != want {
+		t.Errorf("composed row = %q, want %q", plainRow, want)
+	}
+	// The tail right of the image must carry the placeholder's tint,
+	// not a plain-background fill: a selected row keeps its selection
+	// background past the clipped image.
+	tail := row[strings.LastIndex(row, fb)+len(fb):]
+	if !strings.Contains(tail, tint) {
+		t.Errorf("tail after the fallback lost the placeholder's background: %q", tail)
+	}
+
+	// A fallback wider than the remaining row simply extends it; no
+	// negative-width tail, no panic.
+	wide := composeFallbackRow(ph, strings.Repeat("▀", 30), 2)
+	if w := ansi.StringWidth(wide); w != 32 {
+		t.Errorf("wide fallback row width = %d, want 32", w)
+	}
+}
