@@ -144,6 +144,9 @@ const (
 	PresenceSnooze       // SnoozeMinutes is set
 	PresenceCustomSnooze // opens the custom-snooze input; never reaches the engine
 	PresenceEndDND
+	PresenceSetWFH      // custom status preset: "Working from home"
+	PresenceSetVacation // custom status preset: "On vacation"
+	PresenceClearStatus // clears the profile status text/emoji; leaves presence/DND alone
 )
 
 // ThemeScope identifies whether a theme selection should be saved to

@@ -30,12 +30,120 @@ func TestModel_SelectAway(t *testing.T) {
 func TestModel_SnoozeOption(t *testing.T) {
 	m := New()
 	m.OpenWith("Workspace", "active", false, time.Time{})
-	// Active(0), Away(1), Snooze 20m(2) — third item.
-	m.HandleKey("j")
-	m.HandleKey("j")
+	// Filter to the unique "20 minutes" row rather than a hardcoded
+	// cursor offset, so adding/removing preset rows above it can't
+	// silently change which row this test exercises.
+	for _, r := range "20 min" {
+		m.HandleKey(string(r))
+	}
 	r := m.HandleKey("enter")
 	if r == nil || r.Action != ActionSnooze || r.SnoozeMinutes != 20 {
 		t.Fatalf("expected 20m snooze, got %+v", r)
+	}
+}
+
+func TestModel_SelectWFH(t *testing.T) {
+	m := New()
+	m.OpenWith("Workspace", "active", false, time.Time{})
+	m.HandleKey("h")
+	m.HandleKey("o")
+	m.HandleKey("m")
+	r := m.HandleKey("enter")
+	if r == nil || r.Action != ActionSetWFH {
+		t.Fatalf("expected ActionSetWFH, got %+v", r)
+	}
+}
+
+func TestModel_SelectVacation(t *testing.T) {
+	m := New()
+	m.OpenWith("Workspace", "active", false, time.Time{})
+	m.HandleKey("v")
+	m.HandleKey("a")
+	m.HandleKey("c")
+	r := m.HandleKey("enter")
+	if r == nil || r.Action != ActionSetVacation {
+		t.Fatalf("expected ActionSetVacation, got %+v", r)
+	}
+}
+
+// TestModel_SetCurrentCustomStatus_MarksMatchingRowCurrent pins
+// SetCurrentCustomStatus + OpenWith wiring the checkmark onto whichever
+// preset row matches the status text currently applied. Presence and
+// custom status are independent in real Slack, so Active stays
+// checkmarked too — this is not a single-selection menu.
+func TestModel_SetCurrentCustomStatus_MarksMatchingRowCurrent(t *testing.T) {
+	m := New()
+	m.SetCurrentCustomStatus("Working from home", "🏠")
+	m.OpenWith("Workspace", "active", false, time.Time{})
+
+	labels := m.currentItemLabels()
+	if !containsLabel(labels, "Working from home") {
+		t.Fatalf("expected \"Working from home\" marked current, got %v", labels)
+	}
+	if !containsLabel(labels, "Active") {
+		t.Fatalf("expected \"Active\" to remain marked current alongside the status, got %v", labels)
+	}
+}
+
+func TestModel_NoCustomStatus_NeitherPresetRowCurrent(t *testing.T) {
+	m := New()
+	m.OpenWith("Workspace", "active", false, time.Time{})
+
+	labels := m.currentItemLabels()
+	if containsLabel(labels, "Working from home") || containsLabel(labels, "On vacation") {
+		t.Fatalf("expected no status preset marked current, got %v", labels)
+	}
+}
+
+func containsLabel(labels []string, want string) bool {
+	for _, l := range labels {
+		if l == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestModel_ClearStatusOnlyVisibleWhenStatusSet(t *testing.T) {
+	m := New()
+	m.OpenWith("Workspace", "active", false, time.Time{})
+	if m.hasClearStatusItem() {
+		t.Error("Clear status should not appear when no status is set")
+	}
+
+	m2 := New()
+	m2.SetCurrentCustomStatus("On vacation", "🌴")
+	m2.OpenWith("Workspace", "active", false, time.Time{})
+	if !m2.hasClearStatusItem() {
+		t.Error("Clear status should appear when a status is set")
+	}
+}
+
+// TestModel_ClearStatusVisibleForEmojiOnlyStatus pins a real bug found
+// in review: Slack allows a status with only an emoji, no text (set
+// from the real Slack client, say). Clear status must still appear so
+// the user has a way to remove it from slk.
+func TestModel_ClearStatusVisibleForEmojiOnlyStatus(t *testing.T) {
+	m := New()
+	m.SetCurrentCustomStatus("", "🎉")
+	m.OpenWith("Workspace", "active", false, time.Time{})
+	if !m.hasClearStatusItem() {
+		t.Error("Clear status should appear for an emoji-only status")
+	}
+}
+
+func TestModel_ClearStatusAction(t *testing.T) {
+	m := New()
+	m.SetCurrentCustomStatus("On vacation", "🌴")
+	m.OpenWith("Workspace", "active", false, time.Time{})
+	m.HandleKey("c")
+	m.HandleKey("l")
+	m.HandleKey("e")
+	m.HandleKey("a")
+	m.HandleKey("r")
+	r := m.HandleKey("enter")
+	if r == nil || r.Action != ActionClearStatus {
+		t.Fatalf("expected ActionClearStatus, got %+v", r)
 	}
 }
 
@@ -56,9 +164,8 @@ func TestModel_EndDNDOnlyVisibleWhenSnoozed(t *testing.T) {
 func TestModel_CustomSnoozeAction(t *testing.T) {
 	m := New()
 	m.OpenWith("Workspace", "active", false, time.Time{})
-	// Walk down past Active, Away, and the 7 snooze durations to "Snooze custom..."
-	for i := 0; i < 9; i++ {
-		m.HandleKey("j")
+	for _, r := range "custom" {
+		m.HandleKey(string(r))
 	}
 	r := m.HandleKey("enter")
 	if r == nil || r.Action != ActionCustomSnooze {

@@ -142,6 +142,7 @@ type mockSlackAPI struct {
 	getEmojiFn                      func() (map[string]string, error)
 	getPermalinkContextFn           func(ctx context.Context, params *slack.PermalinkParameters) (string, error)
 	setUserPresenceContextFn        func(ctx context.Context, presence string) error
+	setUserCustomStatusContextFn    func(ctx context.Context, statusText, statusEmoji string, statusExpiration int64) error
 	getUserPresenceContextFn        func(ctx context.Context, user string) (*slack.UserPresence, error)
 	setSnoozeContextFn              func(ctx context.Context, minutes int) (*slack.DNDStatus, error)
 	endSnoozeContextFn              func(ctx context.Context) (*slack.DNDStatus, error)
@@ -246,6 +247,13 @@ func (m *mockSlackAPI) GetPermalinkContext(ctx context.Context, params *slack.Pe
 func (m *mockSlackAPI) SetUserPresenceContext(ctx context.Context, presence string) error {
 	if m.setUserPresenceContextFn != nil {
 		return m.setUserPresenceContextFn(ctx, presence)
+	}
+	return nil
+}
+
+func (m *mockSlackAPI) SetUserCustomStatusContext(ctx context.Context, statusText, statusEmoji string, statusExpiration int64) error {
+	if m.setUserCustomStatusContextFn != nil {
+		return m.setUserCustomStatusContextFn(ctx, statusText, statusEmoji, statusExpiration)
 	}
 	return nil
 }
@@ -404,6 +412,50 @@ func TestClient_SetUserPresence(t *testing.T) {
 	}
 	if gotPresence != "away" {
 		t.Errorf("expected presence 'away', got %q", gotPresence)
+	}
+}
+
+func TestClient_SetCustomStatus(t *testing.T) {
+	var calls int
+	var gotText, gotEmoji string
+	var gotExpiration int64
+	mock := &mockSlackAPI{
+		setUserCustomStatusContextFn: func(ctx context.Context, statusText, statusEmoji string, statusExpiration int64) error {
+			calls++
+			gotText, gotEmoji, gotExpiration = statusText, statusEmoji, statusExpiration
+			return nil
+		},
+	}
+	c := &Client{api: mock}
+	if err := c.SetCustomStatus(context.Background(), "Working from home", ":house:", 12345); err != nil {
+		t.Fatalf("SetCustomStatus: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("expected 1 SetCustomStatus call, got %d", calls)
+	}
+	if gotText != "Working from home" || gotEmoji != ":house:" || gotExpiration != 12345 {
+		t.Errorf("got (%q, %q, %d), want (%q, %q, %d)",
+			gotText, gotEmoji, gotExpiration, "Working from home", ":house:", int64(12345))
+	}
+}
+
+func TestClient_SetCustomStatus_Error(t *testing.T) {
+	wantErr := errors.New("api boom")
+	mock := &mockSlackAPI{
+		setUserCustomStatusContextFn: func(ctx context.Context, statusText, statusEmoji string, statusExpiration int64) error {
+			return wantErr
+		},
+	}
+	c := &Client{api: mock}
+	err := c.SetCustomStatus(context.Background(), "On vacation", ":palm_tree:", 0)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Errorf("expected wrapped wantErr, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "setting custom status") {
+		t.Errorf("expected 'setting custom status' prefix, got %q", err.Error())
 	}
 }
 

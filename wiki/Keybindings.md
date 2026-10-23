@@ -62,7 +62,7 @@
 | Click | Any (on image) | Open full-screen preview |
 | `Ctrl+y` | Any | Switch theme |
 | `Alt+y` / `Alt+Shift+y` | Normal | Next / previous theme (wraps; saved per workspace) |
-| `Ctrl+s` | Any | Set status (Active / Away / DND snooze) |
+| `Ctrl+s` | Any | Set status (Active / Away / DND snooze / Working from home / On vacation / Clear status) |
 | `q` | Normal | Close the thread pane (does nothing when none is open) |
 | `Q` | Normal | Quit (with confirmation) |
 | `Ctrl+c` | Any | Quit (with confirmation) |

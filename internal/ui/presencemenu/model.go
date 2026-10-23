@@ -22,6 +22,9 @@ const (
 	ActionSnooze       = core.PresenceSnooze
 	ActionCustomSnooze = core.PresenceCustomSnooze
 	ActionEndDND       = core.PresenceEndDND
+	ActionSetWFH       = core.PresenceSetWFH
+	ActionSetVacation  = core.PresenceSetVacation
+	ActionClearStatus  = core.PresenceClearStatus
 )
 
 // Result is returned when the user commits a selection.
@@ -48,6 +51,15 @@ type Model struct {
 	workspaceName string
 	currentPres   string // "active" / "away" / ""
 	dndActive     bool
+
+	// currentStatusText/currentStatusEmoji are the profile status
+	// currently applied (e.g. "Working from home" / "🏠"), set via
+	// SetCurrentCustomStatus before OpenWith so the matching preset row
+	// renders with a checkmark and the Clear-status row appears. Slack
+	// allows an emoji-only status with no text, so Clear-status
+	// visibility must check both, not text alone.
+	currentStatusText  string
+	currentStatusEmoji string
 }
 
 var _ interface {
@@ -70,8 +82,17 @@ func (m *Model) OpenWith(workspaceName, presence string, dndEnabled bool, dndEnd
 	m.workspaceName = workspaceName
 	m.currentPres = presence
 	m.dndActive = dndEnabled && (dndEnd.IsZero() || time.Now().Before(dndEnd))
-	m.items = buildItems(presence, m.dndActive)
+	m.items = buildItems(presence, m.dndActive, m.currentStatusText, m.currentStatusEmoji)
 	m.filter()
+}
+
+// SetCurrentCustomStatus records the profile status currently applied
+// (from presenceController's cache), so the next OpenWith call marks
+// the matching preset row as current and shows the Clear-status row.
+// Call before OpenWith.
+func (m *Model) SetCurrentCustomStatus(text, emoji string) {
+	m.currentStatusText = text
+	m.currentStatusEmoji = emoji
 }
 
 // hasEndDNDItem reports whether the End-DND row is present. Exposed for tests.
@@ -84,16 +105,43 @@ func (m Model) hasEndDNDItem() bool {
 	return false
 }
 
+// hasClearStatusItem reports whether the Clear-status row is present.
+// Exposed for tests.
+func (m Model) hasClearStatusItem() bool {
+	for _, it := range m.items {
+		if it.action == ActionClearStatus {
+			return true
+		}
+	}
+	return false
+}
+
+// currentItemLabels returns the labels of every item flagged current.
+// Presence (Active/Away) and a custom status preset are independent in
+// real Slack, so both can be current at once — this is not a
+// single-selection concept. Exposed for tests.
+func (m Model) currentItemLabels() []string {
+	var labels []string
+	for _, it := range m.items {
+		if it.current {
+			labels = append(labels, it.label)
+		}
+	}
+	return labels
+}
+
 // buildItems composes the menu rows based on current state.
 //
 // Labels are plain ASCII (no leading emoji glyphs) so that lipgloss's
 // width measurement and the terminal's actual cell width agree. Mixed
 // emoji width — particularly the moon — caused the modal's right
 // border to not draw correctly in some terminals.
-func buildItems(presence string, dndActive bool) []item {
+func buildItems(presence string, dndActive bool, statusText, statusEmoji string) []item {
 	rows := []item{
 		{label: "Active", action: ActionSetActive, current: presence == "active" && !dndActive},
 		{label: "Away", action: ActionSetAway, current: presence == "away" && !dndActive},
+		{label: "Working from home", action: ActionSetWFH, current: statusText == "Working from home"},
+		{label: "On vacation", action: ActionSetVacation, current: statusText == "On vacation"},
 		{label: "Snooze for 20 minutes", action: ActionSnooze, minutes: 20},
 		{label: "Snooze for 1 hour", action: ActionSnooze, minutes: 60},
 		{label: "Snooze for 2 hours", action: ActionSnooze, minutes: 120},
@@ -102,6 +150,9 @@ func buildItems(presence string, dndActive bool) []item {
 		{label: "Snooze for 24 hours", action: ActionSnooze, minutes: 1440},
 		{label: "Snooze until tomorrow morning", action: ActionSnooze, minutes: minutesUntilTomorrowMorning(time.Now())},
 		{label: "Snooze custom...", action: ActionCustomSnooze},
+	}
+	if statusText != "" || statusEmoji != "" {
+		rows = append(rows, item{label: "Clear status", action: ActionClearStatus})
 	}
 	if dndActive {
 		rows = append(rows, item{label: "End snooze / DND", action: ActionEndDND})

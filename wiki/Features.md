@@ -132,6 +132,7 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
 
 - Set self presence (Active / Away) and DND/snooze from `Ctrl+S`
 - Standard snooze durations (20m / 1h / 2h / 4h / 8h / 24h / until tomorrow morning) plus custom minutes
+- Workspace status presets (Working from home / On vacation) and Clear status, independent of presence — picking Active/Away never clears an existing status. Per-workspace, like presence and DND.
 - Live status segment in the status bar with snooze countdown
 - Reflects external state changes — set from the official Slack client or via your own API scripts — in real time over the WebSocket
 - Shows other people's state too: their custom status emoji (🎧 instead while they are in a huddle) follows their name on DM rows, message authors and channel-finder rows, `⊘` replaces the presence dot while they are in DND, and an open DM's header shows the full status text and when their DND ends

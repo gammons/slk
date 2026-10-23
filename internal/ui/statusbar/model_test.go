@@ -160,6 +160,182 @@ func TestStatusBar_DNDNoEndTimestamp(t *testing.T) {
 	}
 }
 
+func TestStatusBar_CustomStatusSegment(t *testing.T) {
+	m := New()
+	m.SetCustomStatus("Working from home", "🏠")
+	out := stripANSI(m.View(120))
+	if !strings.Contains(out, "🏠 Working from home") {
+		t.Errorf("expected '🏠 Working from home', got: %q", out)
+	}
+}
+
+// TestStatusBar_CustomStatusSegment_EmojiOnly pins a real bug found in
+// review: Slack allows a status with only an emoji, no text (e.g. set
+// from the real Slack client). The segment must still show it, and
+// without a stray leading/trailing space from the empty text half.
+func TestStatusBar_CustomStatusSegment_EmojiOnly(t *testing.T) {
+	m := New()
+	m.SetCustomStatus("", "🎉")
+	m.SetConnectionState(StateConnected)
+	out := stripANSI(m.View(120))
+	if !strings.Contains(out, "🎉") {
+		t.Errorf("expected emoji-only status to render, got: %q", out)
+	}
+	// A stray leading/trailing space from the empty text half would
+	// double up with the normal inter-segment separator, e.g.
+	// "🎉  ● Connected" instead of "🎉 ● Connected".
+	if strings.Contains(out, "🎉  ") {
+		t.Errorf("stray space after emoji-only status, got: %q", out)
+	}
+}
+
+func TestStatusBar_NoCustomStatus_NoSegment(t *testing.T) {
+	m := New()
+	// Default state — no SetCustomStatus call.
+	out := stripANSI(m.View(120))
+	if strings.Contains(out, "Working from home") || strings.Contains(out, "On vacation") {
+		t.Errorf("expected no custom-status segment when unset, got: %q", out)
+	}
+}
+
+func TestModel_SetCustomStatus_BumpsVersionOnChange(t *testing.T) {
+	m := New()
+	v0 := m.Version()
+	m.SetCustomStatus("On vacation", "🌴")
+	if m.Version() == v0 {
+		t.Fatal("SetCustomStatus must bump Version() on change")
+	}
+	v1 := m.Version()
+	m.SetCustomStatus("On vacation", "🌴") // same value
+	if m.Version() != v1 {
+		t.Fatal("SetCustomStatus with unchanged value must be a no-op")
+	}
+}
+
+// TestStatusBar_LongCustomStatusTruncatesToFitWidth pins a real bug
+// found in review: the architecture now shows ANY status set from the
+// real Slack client, not just the two short fixed presets this PR
+// shipped — and Slack allows up to 100 characters of status text. A
+// long status must not push the exact-width invariant over budget or
+// hide the connection indicator; it must be cut to fit.
+func TestStatusBar_LongCustomStatusTruncatesToFitWidth(t *testing.T) {
+	m := New()
+	m.SetMode(testMode("NORMAL"))
+	m.SetChannel("general")
+	m.SetWorkspace("Acme")
+	m.SetConnectionState(StateConnected)
+	m.SetCustomStatus(strings.Repeat("a very long status indeed ", 5), "🏠")
+
+	const width = 60
+	view := m.View(width)
+	if got := lipgloss.Width(view); got != width {
+		t.Fatalf("View(%d) is %d columns wide, want %d", width, got, width)
+	}
+	if !strings.Contains(stripANSI(view), "Connected") {
+		t.Errorf("connection indicator must still render, got: %q", stripANSI(view))
+	}
+}
+
+// TestStatusBar_StatusSegmentDropsWhenNoRoom: at an extremely narrow
+// width even an emoji-only segment may not fit; the bar must still
+// hold its exact width and keep the connection indicator rather than
+// silently exceeding width.
+func TestStatusBar_StatusSegmentDropsWhenNoRoom(t *testing.T) {
+	m := New()
+	m.SetMode(testMode("NORMAL"))
+	m.SetChannel("general")
+	m.SetWorkspace("Acme")
+	m.SetConnectionState(StateConnected)
+	m.SetCustomStatus("Working from home", "🏠")
+
+	const width = 44 // exactly fits mode+channel+workspace+connection with no room for any status
+	view := m.View(width)
+	if got := lipgloss.Width(view); got != width {
+		t.Fatalf("View(%d) is %d columns wide, want %d", width, got, width)
+	}
+	if !strings.Contains(stripANSI(view), "Connected") {
+		t.Errorf("connection indicator must still render even when the status segment is dropped, got: %q", stripANSI(view))
+	}
+}
+
+// TestStatusBar_TruncationMiddleCase pins the degrade-in-steps middle
+// step specifically (full and emoji-alone were the only two extremes
+// the earlier tests exercised): a status too long to show in full, but
+// with enough room for the emoji plus some truncated text and an
+// ellipsis — not dropped to emoji-alone.
+func TestStatusBar_TruncationMiddleCase(t *testing.T) {
+	m := New()
+	m.SetMode(testMode("NORMAL"))
+	m.SetChannel("general")
+	m.SetWorkspace("Acme")
+	m.SetConnectionState(StateConnected)
+	m.SetCustomStatus("a moderately long status message here", "🏠")
+
+	const width = 70
+	out := stripANSI(m.View(width))
+	if !strings.Contains(out, "🏠") {
+		t.Fatalf("expected emoji to render, got: %q", out)
+	}
+	if !strings.Contains(out, "…") {
+		t.Fatalf("expected an ellipsis marking truncated text, got: %q", out)
+	}
+	// Some actual text must precede the ellipsis — not just a bare
+	// "emoji …" with nothing truncated.
+	if strings.Contains(out, "🏠 …") {
+		t.Errorf("ellipsis with no preceding text: should fall back to emoji alone instead, got: %q", out)
+	}
+	if lipgloss.Width(m.View(width)) != width {
+		t.Errorf("View(%d) is %d columns wide, want %d", width, lipgloss.Width(m.View(width)), width)
+	}
+}
+
+// TestStatusBar_InteriorInsertionDoesNotOverSubtractBudget pins a real
+// bug found in review: when the status segment is inserted BETWEEN two
+// existing segments (something before it, something after it — here,
+// unread present, toast absent, connection present), the budget
+// calculation double-counted a separator that was already included in
+// otherWidth, undercounting the true available budget by one column.
+// An emoji-only status that needs exactly the remaining room was
+// dropped even though it would actually have fit.
+func TestStatusBar_InteriorInsertionDoesNotOverSubtractBudget(t *testing.T) {
+	m := New()
+	m.SetMode(testMode("NORMAL"))
+	m.SetChannel("general")
+	m.SetWorkspace("Acme")
+	m.SetUnreadCount(3)
+	m.SetConnectionState(StateConnected)
+	m.SetCustomStatus("", "🎉")
+
+	// 57 is the minimum width that fits every other segment with zero
+	// slack (empirically: narrower widths don't shrink it further, the
+	// bar just can't go below it). The emoji (width 2) plus one
+	// separator needs exactly 2 more columns — 60 total. The old,
+	// over-subtracting budget math needed 61: one column more than
+	// actually required.
+	const width = 60
+	out := stripANSI(m.View(width))
+	if !strings.Contains(out, "🎉") {
+		t.Errorf("emoji-only status should fit exactly at this width, got: %q", out)
+	}
+	if got := lipgloss.Width(m.View(width)); got != width {
+		t.Errorf("View(%d) is %d columns wide, want %d", width, got, width)
+	}
+}
+
+func TestStatusBar_CustomStatusDoesNotBreakExactWidth(t *testing.T) {
+	m := New()
+	m.SetMode(testMode("NORMAL"))
+	m.SetChannel("general")
+	m.SetWorkspace("Acme")
+	m.SetCustomStatus("Working from home", "🏠")
+
+	for _, width := range []int{80, 120, 240} {
+		if got := lipgloss.Width(m.View(width)); got != width {
+			t.Errorf("View(%d) is %d columns wide, want %d", width, got, width)
+		}
+	}
+}
+
 func TestStatusBar_PresenceUnknown_NoSegment(t *testing.T) {
 	m := New()
 	// Default state — no SetStatus call. Status segment should not appear.

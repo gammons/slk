@@ -8,6 +8,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/muesli/reflow/truncate"
 )
 
 // ConnectionState represents the WebSocket connection status.
@@ -32,6 +33,8 @@ type Model struct {
 	presence    string // "active", "away", or "" (unknown — segment hidden)
 	dndEnabled  bool
 	dndEndTS    time.Time // zero if not in DND
+	statusText  string    // profile status preset text (e.g. "Working from home"); "" hides the segment
+	statusEmoji string    // display glyph for statusText
 	syncing     bool      // true while a background cache-verify fetch is in flight
 	helpHint    string    // muted text rendered in the gap area; empty disables
 	commandLine string    // "" == inactive; otherwise the :prompt shown in place of channel/workspace
@@ -121,6 +124,17 @@ func (m *Model) SetStatus(presence string, dndEnabled bool, dndEndTS time.Time) 
 	m.presence = presence
 	m.dndEnabled = dndEnabled
 	m.dndEndTS = dndEndTS
+	m.dirty()
+}
+
+// SetCustomStatus updates the profile status preset segment (e.g.
+// "Working from home"). Empty text hides the segment.
+func (m *Model) SetCustomStatus(text, emoji string) {
+	if m.statusText == text && m.statusEmoji == emoji {
+		return
+	}
+	m.statusText = text
+	m.statusEmoji = emoji
 	m.dirty()
 }
 
@@ -259,6 +273,12 @@ func (m Model) View(width int) string {
 				Render(m.toast))
 	}
 
+	// The custom-status segment is sized to fit below, once the width
+	// left over by every other segment is known; statusInsertIdx marks
+	// where it belongs in the visual order (between toast and
+	// presence/DND) without needing those segments built around it.
+	statusInsertIdx := len(rightParts)
+
 	// Presence + DND segment (hidden when presence is "" and not in DND)
 	if m.dndEnabled {
 		rightParts = append(rightParts,
@@ -310,15 +330,6 @@ func (m Model) View(width int) string {
 	sep := lipgloss.NewStyle().Background(styles.SurfaceDark).Render(" ")
 	trailing := lipgloss.NewStyle().Background(styles.SurfaceDark).Render("  ")
 
-	rightContent := ""
-	for i, p := range rightParts {
-		if i > 0 {
-			rightContent += sep
-		}
-		rightContent += p
-	}
-	rightContent += trailing // trailing padding (extra space for unicode width variance)
-
 	// Right-align so the rightmost segment ends at column (width-1),
 	// matching the inner right edge of the message-pane / thread-pane
 	// compose box (which ends 1 column before the screen edge -- the
@@ -326,6 +337,34 @@ func (m Model) View(width int) string {
 	// content rows above). Without this gap, the connection indicator
 	// overhangs visually past the compose box.
 	const rightGutter = 1
+
+	// Size the custom-status segment to whatever room is left after
+	// every other segment. Slack allows up to 100 characters of status
+	// text — unlike this feature's own two short presets, a status set
+	// from the real Slack client has no length slk controls, so it
+	// must degrade (truncate, then emoji-only, then dropped) rather
+	// than push the bar over width.
+	if m.statusText != "" || m.statusEmoji != "" {
+		// otherWidth already counts len(rightParts)-1 separators (the
+		// ones between the existing parts). Inserting one more part —
+		// anywhere among them, not just at an end — always turns that
+		// into len(rightParts) separators total: exactly one more than
+		// otherWidth already has, never two, regardless of where it
+		// lands.
+		otherWidth := lipgloss.Width(joinRightParts(rightParts, sep))
+		extraSep := 0
+		if len(rightParts) > 0 {
+			extraSep = 1
+		}
+		budget := width - rightGutter - lipgloss.Width(left) - otherWidth - lipgloss.Width(trailing) - extraSep*lipgloss.Width(sep)
+		if seg := fitStatusSegment(m.statusEmoji, m.statusText, budget); seg != "" {
+			rightParts = append(rightParts[:statusInsertIdx:statusInsertIdx],
+				append([]string{seg}, rightParts[statusInsertIdx:]...)...)
+		}
+	}
+
+	rightContent := joinRightParts(rightParts, sep) + trailing // trailing padding (extra space for unicode width variance)
+
 	gap := width - rightGutter - lipgloss.Width(left) - lipgloss.Width(rightContent)
 	if gap < 0 {
 		gap = 0
@@ -360,6 +399,68 @@ func (m Model) View(width int) string {
 	rightPad := spacer.Render(strings.Repeat(" ", rightGutter))
 
 	return lipgloss.JoinHorizontal(lipgloss.Center, left, filler, rightContent, rightPad)
+}
+
+// joinRightParts joins the right-side segments with sep between each,
+// matching how they're visually separated in the rendered bar.
+func joinRightParts(parts []string, sep string) string {
+	s := ""
+	for i, p := range parts {
+		if i > 0 {
+			s += sep
+		}
+		s += p
+	}
+	return s
+}
+
+// fitStatusSegment returns the styled custom-status segment sized to
+// fit within maxWidth columns, degrading in steps: the full "emoji
+// text", then emoji plus as much text as fits with a trailing
+// ellipsis, then emoji alone, then "" if nothing fits. Needed because
+// Slack allows up to 100 characters of status text — far longer than
+// this feature's own two short presets — so a status set from the
+// real Slack client must not be allowed to push the status bar over
+// its exact-width budget.
+func fitStatusSegment(emoji, text string, maxWidth int) string {
+	style := lipgloss.NewStyle().Foreground(styles.Accent).Background(styles.SurfaceDark)
+	full := strings.TrimSpace(emoji + " " + text)
+	if full == "" || maxWidth <= 0 {
+		return ""
+	}
+	if lipgloss.Width(full) <= maxWidth {
+		return style.Render(full)
+	}
+	emojiAlone := func() string {
+		if emoji != "" && lipgloss.Width(emoji) <= maxWidth {
+			return style.Render(emoji)
+		}
+		return ""
+	}
+	if text == "" {
+		return emojiAlone()
+	}
+	prefix := emoji
+	if prefix != "" {
+		prefix += " "
+	}
+	prefixWidth := lipgloss.Width(prefix)
+	if prefixWidth >= maxWidth {
+		return emojiAlone()
+	}
+	// truncate.StringWithTail is the same width-aware truncator already
+	// used elsewhere in this codebase (internal/ui/presencemenu,
+	// internal/ui/thread/breadcrumb.go, ...) — reused here rather than
+	// hand-rolling rune-by-rune width summation, which can mismeasure
+	// combined grapheme clusters (variation selectors, ZWJ sequences)
+	// in the status text and let a segment exceed maxWidth.
+	truncated := truncate.StringWithTail(text, uint(maxWidth-prefixWidth), "…")
+	if truncated == "" || truncated == "…" {
+		// Not even one character of text fit: an ellipsis with nothing
+		// preceding it reads as broken, so fall back to emoji alone.
+		return emojiAlone()
+	}
+	return style.Render(prefix + truncated)
 }
 
 // formatDND renders the DND segment with an optional countdown to the

@@ -50,6 +50,7 @@ type SlackAPI interface {
 	JoinConversation(channelID string) (*slack.Channel, string, []string, error)
 	SetUserPresenceContext(ctx context.Context, presence string) error
 	GetUserPresenceContext(ctx context.Context, user string) (*slack.UserPresence, error)
+	SetUserCustomStatusContext(ctx context.Context, statusText, statusEmoji string, statusExpiration int64) error
 	SetSnoozeContext(ctx context.Context, minutes int) (*slack.DNDStatus, error)
 	EndSnoozeContext(ctx context.Context) (*slack.DNDStatus, error)
 	EndDNDContext(ctx context.Context) error
@@ -1311,6 +1312,15 @@ func (c *Client) GetUserPresence(ctx context.Context, userID string) (*slack.Use
 		return nil, fmt.Errorf("getting presence: %w", err)
 	}
 	return p, nil
+}
+
+// SetCustomStatus sets the authenticated user's profile status text,
+// emoji, and expiration (Unix seconds; 0 means it never auto-clears).
+func (c *Client) SetCustomStatus(ctx context.Context, statusText, statusEmoji string, statusExpiration int64) error {
+	if err := c.api.SetUserCustomStatusContext(ctx, statusText, statusEmoji, statusExpiration); err != nil {
+		return fmt.Errorf("setting custom status: %w", err)
+	}
+	return nil
 }
 
 // SetSnooze enables Do-Not-Disturb for `minutes` minutes.
