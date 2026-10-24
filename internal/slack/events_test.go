@@ -1,6 +1,7 @@
 package slackclient
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1052,5 +1053,58 @@ func TestDispatchMeMessage_CapturedFrame(t *testing.T) {
 	dispatchWebSocketEvent(data, h)
 	if len(h.messages) != 1 || h.messages[0] != "waves" || h.subtypes[0] != "me_message" {
 		t.Fatalf("messages = %v subtypes = %v, want [waves] [me_message]", h.messages, h.subtypes)
+	}
+}
+func TestMessageFrameDrivesOnMessage_MatchesDispatcher(t *testing.T) {
+	// The lockstep guard AGENTS.md asks for: the predicate and the
+	// message arm of dispatchWebSocketEvent must agree on which frames
+	// reach OnMessage. Each case builds a frame, runs it through the
+	// dispatcher with a recording handler, and checks OnMessage fired
+	// exactly when the predicate says it should.
+	cases := []struct {
+		name          string
+		frame         string
+		wantOnMessage bool
+	}{
+		{"plain", `{"type":"message","channel":"C1","ts":"1.1","text":"hi"}`, true},
+		{"bot_message", `{"type":"message","subtype":"bot_message","channel":"C1","ts":"1.1"}`, true},
+		{"thread_broadcast", `{"type":"message","subtype":"thread_broadcast","channel":"C1","ts":"1.1"}`, true},
+		{"file_share", `{"type":"message","subtype":"file_share","channel":"C1","ts":"1.1"}`, true},
+		{"me_message", `{"type":"message","subtype":"me_message","channel":"C1","ts":"1.1"}`, true},
+		{"ephemeral plain", `{"type":"message","channel":"C1","ts":"1.1","is_ephemeral":true}`, false},
+		{"ephemeral bot", `{"type":"message","subtype":"bot_message","channel":"C1","ts":"1.1","is_ephemeral":true}`, false},
+		{"changed", `{"type":"message","subtype":"message_changed","channel":"C1","message":{"ts":"1.0","text":"new"}}`, true},
+		{"changed no embedded", `{"type":"message","subtype":"message_changed","channel":"C1"}`, false},
+		{"changed frame ephemeral", `{"type":"message","subtype":"message_changed","channel":"C1","is_ephemeral":true,"message":{"ts":"1.0"}}`, false},
+		{"changed embedded ephemeral", `{"type":"message","subtype":"message_changed","channel":"C1","message":{"ts":"1.0","is_ephemeral":true}}`, false},
+		{"deleted", `{"type":"message","subtype":"message_deleted","channel":"C1","deleted_ts":"1.0"}`, false},
+		{"unknown subtype", `{"type":"message","subtype":"channel_join","channel":"C1"}`, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := &mockEventHandler{}
+			dispatchWebSocketEvent([]byte(tc.frame), handler)
+			got := len(handler.messages) > 0
+			var evt struct {
+				Type        string `json:"type"`
+				SubType     string `json:"subtype"`
+				IsEphemeral bool   `json:"is_ephemeral"`
+				Message     *struct {
+					IsEphemeral bool `json:"is_ephemeral"`
+				} `json:"message"`
+			}
+			if err := json.Unmarshal([]byte(tc.frame), &evt); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			want := MessageFrameDrivesOnMessage(evt.SubType, evt.IsEphemeral,
+				evt.Message != nil, evt.Message != nil && evt.Message.IsEphemeral)
+			if got != tc.wantOnMessage {
+				t.Errorf("OnMessage fired = %v; the case expects %v", got, tc.wantOnMessage)
+			}
+			if got != want {
+				t.Errorf("OnMessage fired = %v; predicate says %v", got, want)
+			}
+		})
 	}
 }

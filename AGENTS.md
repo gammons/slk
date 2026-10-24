@@ -138,6 +138,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | A since/until/overlap date range in a timezone, and "is this ts in it?" | `export.NewWindow`, `export.Window.Contains` |
 | Sleep out a slack-go rate-limit error (ctx-aware) | `slackclient.WaitOutRateLimit` |
 | Is this session an Enterprise Grid member workspace, not the org-level one? | `(*slackclient.Client).IsGridMember()`; member tokens cannot call `client.userBoot` or `client.counts`, so `cmd/slk`'s `bootAdapter` synthesizes their boot result (`gridMemberBoot`) |
+| Does a message frame reach `EventHandler.OnMessage` (shared by the dispatcher and the grid gate's discovery hook)? | `slackclient.MessageFrameDrivesOnMessage(subtype, frameEphemeral, hasEmbedded, embeddedEphemeral)` (`internal/slack/events.go`); pinned to the dispatcher by `TestMessageFrameDrivesOnMessage_MatchesDispatcher` |
 | Page through all channel history in a ts range / a thread's replies in a ts range | `(*slackclient.Client).WalkHistory`, `GetRepliesBetween` |
 | Press a legacy attachment button (`chat.attachmentAction`, payload byte-identical to the web client's) | `(*slackclient.Client).AttachmentAction(ctx, AttachmentActionRequest)`, with `service_id` = the posting app's bot ID |
 | Press a legacy attachment button from the UI | `core.InteractionService.PressAttachmentAction` (App field `a.interactions`); wired in `cmd/slk` via `pressAttachmentAction` to the active workspace's `Client.AttachmentAction` |
