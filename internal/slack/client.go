@@ -90,6 +90,15 @@ type Client struct {
 	token        string
 	cookie       string
 
+	// wsEventGate, when non-nil, is consulted with every raw WebSocket
+	// frame before it is parsed and dispatched; returning false drops
+	// the frame. Installed by cmd/slk on the sessions of one Enterprise
+	// Grid so a frame a sibling session already delivered is processed
+	// once instead of once per socket. Must be set before StartWebSocket
+	// (the dispatch goroutine reads it without a lock; every setter
+	// call after the socket is live is a race).
+	wsEventGate func([]byte) bool
+
 	// apiBaseURL is the workspace-specific Web API root, e.g.
 	// "https://slack.com/api/" for non-grid workspaces or
 	// "https://hackclub.enterprise.slack.com/api/" for enterprise grids.
@@ -270,10 +279,24 @@ func (c *Client) Envelope() *slackhttp.Envelope {
 	return c.envelope
 }
 
+// SetWSEventGate installs a predicate every raw WebSocket frame is
+// offered to before dispatch; a false return drops the frame. See the
+// wsEventGate field for why it exists and the before-StartWebSocket
+// ordering requirement.
+func (c *Client) SetWSEventGate(gate func([]byte) bool) {
+	c.wsEventGate = gate
+}
+
 // TeamID returns the authenticated workspace's team ID.
 // Empty before Connect is called.
 func (c *Client) TeamID() string {
 	return c.teamID
+}
+
+// EnterpriseID returns the Enterprise Grid id auth.test reported, ""
+// off a grid. Empty before Connect is called.
+func (c *Client) EnterpriseID() string {
+	return c.enterpriseID
 }
 
 // IsGridMember reports whether this session belongs to a member
@@ -516,6 +539,9 @@ func (c *Client) StartWebSocket(handler EventHandler) error {
 			case message, ok := <-messages:
 				if !ok {
 					return
+				}
+				if c.wsEventGate != nil && !c.wsEventGate(message) {
+					continue
 				}
 				dispatchWebSocketEvent(message, handler)
 			case <-pending:
