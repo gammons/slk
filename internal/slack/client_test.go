@@ -1,6 +1,7 @@
 package slackclient
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -3605,5 +3606,144 @@ func TestIsGridMember(t *testing.T) {
 				t.Errorf("IsGridMember() = %v; want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestStartWebSocket_EventGateDropsFrames drives the wsEventGate on the
+// live socket path: the server sends three frames, the gate refuses the
+// second, and the handler sees exactly the two that passed. This is
+// what a grid's sibling sessions rely on - see cmd/slk's gridFrameGate.
+func TestStartWebSocket_EventGateDropsFrames(t *testing.T) {
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool { return true },
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		for _, f := range []string{
+			`{"type":"user_invalidated","user":{"id":"U1"}}`,
+			`{"type":"user_invalidated","user":{"id":"U1"}}`, // gate drops this one
+			`{"type":"dnd_invalidated","user":{"id":"W1"}}`,
+		} {
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(f)); err != nil {
+				return
+			}
+		}
+		// Closing the socket ends the client's read loop, which is
+		// what WsDone below waits for.
+	}))
+	defer srv.Close()
+
+	c := &Client{
+		token:     "xoxc-test",
+		cookie:    "d-cookie",
+		teamID:    "T12345",
+		wsBaseURL: "ws://" + srv.Listener.Addr().String(),
+	}
+	seen := map[string]bool{}
+	c.SetWSEventGate(func(frame []byte) bool {
+		if seen[string(frame)] {
+			return false
+		}
+		seen[string(frame)] = true
+		return true
+	})
+	// The dispatch goroutine calls the handler; the recording has to
+	// cross goroutines, so it goes through a channel rather than a
+	// slice the test would read unsynchronized.
+	got := make(chan string, 4)
+	handler := &gatedEventHandler{mockEventHandler: &mockEventHandler{}, ch: got}
+	if err := c.StartWebSocket(handler); err != nil {
+		t.Fatalf("StartWebSocket: %v", err)
+	}
+	defer func() { <-c.WsDone() }()
+
+	want := []string{"U1", "W1"}
+	for i, w := range want {
+		select {
+		case g := <-got:
+			if g != w {
+				t.Errorf("handler call %d = %q; want %q", i, g, w)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("handler call %d never arrived; the gate dropped too much", i)
+		}
+	}
+	select {
+	case extra := <-got:
+		t.Errorf("an extra handler call arrived: %q; the gate did not drop the duplicate", extra)
+	default:
+	}
+}
+
+// gatedEventHandler records user/dnd invalidations on a channel so a
+// test can observe the dispatch goroutine without sharing memory. Every
+// other EventHandler method is the mock's.
+type gatedEventHandler struct {
+	*mockEventHandler
+	ch chan string
+}
+
+func (g *gatedEventHandler) OnUserInvalidated(userID string) { g.ch <- userID }
+func (g *gatedEventHandler) OnDNDInvalidated(userID string)  { g.ch <- userID }
+
+// TestStartWebSocket_UnfurlDeliveredDespiteGate pins the order of the
+// two pre-dispatch checks in the WebSocket read loop: unfurl chip
+// waiters are handed their frame BEFORE the grid event gate sees it.
+// unfurl_preview_updated is a shared frame under the gate, so on a
+// grid a sibling socket may have claimed it; the chip waiter is keyed
+// by client_msg_id and lives only on the client that sent the message,
+// so that client still needs the frame. With the gate first, its
+// lookupLinkChip would time out and the link would go out plain.
+func TestStartWebSocket_UnfurlDeliveredDespiteGate(t *testing.T) {
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool { return true },
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		frame := `{"type":"unfurl_preview_updated","channel":"C1","client_msg_id":"cmid-1",` +
+			`"attachments":{"https://example.com/issue":{"is_app_unfurl":true,"is_preview_pending":true,` +
+			`"work_object_entity":{"entity_id":"E1","app_id":"A1","layouts":{"expanded":{"title":{"text":"The issue"}}}}}}}`
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(frame)); err != nil {
+			return
+		}
+		// Closing the socket ends the client's read loop, which is
+		// what WsDone below waits for.
+	}))
+	defer srv.Close()
+
+	c := &Client{
+		token:     "xoxc-test",
+		cookie:    "d-cookie",
+		teamID:    "T12345",
+		wsBaseURL: "ws://" + srv.Listener.Addr().String(),
+	}
+	// A gate that drops the frame, as a grid dedupe would once a
+	// sibling socket has already delivered it.
+	c.SetWSEventGate(func(frame []byte) bool {
+		return !bytes.Contains(frame, []byte(`"unfurl_preview_updated"`))
+	})
+	frames := c.unfurls.wait("cmid-1")
+	defer c.unfurls.cancel("cmid-1")
+	if err := c.StartWebSocket(&mockEventHandler{}); err != nil {
+		t.Fatalf("StartWebSocket: %v", err)
+	}
+	defer func() { <-c.WsDone() }()
+
+	select {
+	case frame := <-frames:
+		chip, ok := parseUnfurlPreview(frame, "https://example.com/issue")
+		if !ok || chip.Title != "The issue" {
+			t.Errorf("waiter got the frame but it did not parse back as the chip: %+v ok=%v", chip, ok)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the unfurl frame never reached the waiter; the gate ran before unfurls.deliver")
 	}
 }
