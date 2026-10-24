@@ -138,6 +138,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | A since/until/overlap date range in a timezone, and "is this ts in it?" | `export.NewWindow`, `export.Window.Contains` |
 | Sleep out a slack-go rate-limit error (ctx-aware) | `slackclient.WaitOutRateLimit` |
 | Is this session an Enterprise Grid member workspace, not the org-level one? | `(*slackclient.Client).IsGridMember()`; member tokens cannot call `client.userBoot` or `client.counts`, so `cmd/slk`'s `bootAdapter` synthesizes their boot result (`gridMemberBoot`) |
+| Which Enterprise Grid is this session on ("" off a grid)? | `(*slackclient.Client).EnterpriseID()`; `cmd/slk` keys its per-grid event dedupe and grid detection on it (`gridEventGates`, `gridFrameGate`, `rtmEventHandler.gridSiblings`) |
 | Fire an effect once per key, process-wide (duplicate suppression across grid sessions)? | `onceMap` (`cmd/slk/notify_once.go`): `notifyOnce` for desktop notifications, `mentionBumpedOnce` for the mention badge, both keyed by (channel, ts) |
 | Does a message frame reach `EventHandler.OnMessage` (shared by the dispatcher and the grid gate's discovery hook)? | `slackclient.MessageFrameDrivesOnMessage(subtype, frameEphemeral, hasEmbedded, embeddedEphemeral)` (`internal/slack/events.go`); pinned to the dispatcher by `TestMessageFrameDrivesOnMessage_MatchesDispatcher` |
 | Gate a Client's WebSocket frames before dispatch (grid event dedupe)? | `(*slackclient.Client).SetWSEventGate(func([]byte) bool)` (`internal/slack/client.go`); must be set before `StartWebSocket` |
