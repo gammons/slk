@@ -1526,6 +1526,15 @@ func run() error {
 	// active workspace yet and both set InitialActive=true.
 	var firstReady sync.Once
 
+	// One event dedupe per Enterprise Grid, shared by every session of
+	// that grid: the grid delivers each event to every connected
+	// session, so without this a user with the org workspace plus
+	// member workspaces processes each grid event once per socket.
+	// Five seconds covers cross-socket delivery skew (observed in the
+	// low milliseconds) while staying far under the reconnect backfill
+	// window, where a redelivered frame is a duplicate by definition.
+	gridGates := newGridEventGates(5 * time.Second)
+
 	// Start the TUI immediately (shows loading overlay). All output —
 	// every protocol — flows through the frame-correlated writer: it is
 	// a serialized pass-through for non-sixel frames (no marker present)
@@ -1618,15 +1627,38 @@ func run() error {
 				channelTypes[ch.ID] = ch.Type
 			}
 
-			// Start WebSocket for this workspace
+			// Start WebSocket for this workspace. On a grid, gate the
+			// socket's frames through the shared dedupe (installed
+			// after the handler is built, just above the connection
+			// manager, so a dropped message frame can still run that
+			// handler's message-driven conversation discovery).
 			teamID := wctx.TeamID
+			gridEnt := wctx.Client.EnterpriseID()
 			handler := &rtmEventHandler{
-				program:         p,
-				userNames:       wctx.UserNames,
-				tsFormat:        tsFormat,
-				db:              db,
-				workspaceID:     teamID,
-				isActive:        func() bool { a := router.Active(); return a != nil && a.TeamID == teamID },
+				program:     p,
+				userNames:   wctx.UserNames,
+				tsFormat:    tsFormat,
+				db:          db,
+				workspaceID: teamID,
+				isActive:    func() bool { a := router.Active(); return a != nil && a.TeamID == teamID },
+				// Every session of this handler's grid, read at event
+				// time so late-connecting siblings are included:
+				// OnMessage uses it to tell whether it is on a grid
+				// with another session (its rail refresh is a single
+				// message, not a per-sibling fan-out).
+				gridSiblings: func() []string {
+					ent := wctx.Client.EnterpriseID()
+					if ent == "" {
+						return nil
+					}
+					var ids []string
+					for _, w := range router.All() {
+						if w.Client != nil && w.Client.EnterpriseID() == ent {
+							ids = append(ids, w.TeamID)
+						}
+					}
+					return ids
+				},
 				notifier:        notifier,
 				notifyCfg:       cfgSnap.Notifications,
 				currentUserID:   wctx.UserID,
@@ -1662,6 +1694,17 @@ func run() error {
 				resolveConversation: wctx.Client.GetConversationInfo,
 			}
 			wctx.RTMHandler = handler
+			// The grid gate, installed here so it can reach the
+			// handler: sibling sessions of the same grid receive the
+			// same events, the active workspace is the only handler
+			// that renders them (gridFrameGate keeps its delivery
+			// ungated), and a message frame dropped on THIS session
+			// still runs its conversation discovery through the
+			// handler's serialized owner.
+			if gridEnt != "" {
+				isActive := func() bool { a := router.Active(); return a != nil && a.TeamID == teamID }
+				wctx.Client.SetWSEventGate(gridFrameGate(gridGates.forGrid(gridEnt), isActive, handler.discoverAndPublish))
+			}
 			wctx.ConnMgr = slackclient.NewConnectionManager(wctx.Client, handler)
 
 			// Use the same workspace-relative cache projection as switching,
