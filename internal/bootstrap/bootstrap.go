@@ -349,7 +349,11 @@ type Deps struct {
 // Only two things: a nil required dependency, and client.userBoot.
 // userBoot is fatal because every step below it is keyed by what it
 // returned — there is no workspace without a self, a team and a
-// conversation list, so there is nothing to degrade to.
+// conversation list, so there is nothing to degrade to. The one
+// degradation lives upstream of Run rather than inside it: an
+// Enterprise Grid member-workspace token cannot call userBoot at all,
+// and cmd/slk's bootAdapter synthesizes a result for that session
+// shape before the failure reaches here (see gridMemberBoot there).
 //
 // Everything else degrades and is logged:
 //

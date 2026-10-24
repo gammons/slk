@@ -83,9 +83,21 @@ type Client struct {
 	wsMu   sync.Mutex
 	wsDone chan struct{}
 	teamID string
-	userID string
-	token  string
-	cookie string
+	// enterpriseID is the Enterprise Grid id auth.test reported, ""
+	// off a grid. See IsGridMember for why it is kept.
+	enterpriseID string
+	userID       string
+	token        string
+	cookie       string
+
+	// wsEventGate, when non-nil, is consulted with every raw WebSocket
+	// frame before it is parsed and dispatched; returning false drops
+	// the frame. Installed by cmd/slk on the sessions of one Enterprise
+	// Grid so a frame a sibling session already delivered is processed
+	// once instead of once per socket. Must be set before StartWebSocket
+	// (the dispatch goroutine reads it without a lock; every setter
+	// call after the socket is live is a race).
+	wsEventGate func([]byte) bool
 
 	// apiBaseURL is the workspace-specific Web API root, e.g.
 	// "https://slack.com/api/" for non-grid workspaces or
@@ -267,10 +279,47 @@ func (c *Client) Envelope() *slackhttp.Envelope {
 	return c.envelope
 }
 
+// SetWSEventGate installs a predicate every raw WebSocket frame is
+// offered to before dispatch; a false return drops the frame. See the
+// wsEventGate field for why it exists and the before-StartWebSocket
+// ordering requirement.
+func (c *Client) SetWSEventGate(gate func([]byte) bool) {
+	c.wsEventGate = gate
+}
+
 // TeamID returns the authenticated workspace's team ID.
 // Empty before Connect is called.
 func (c *Client) TeamID() string {
 	return c.teamID
+}
+
+// EnterpriseID returns the Enterprise Grid id auth.test reported, ""
+// off a grid. Empty before Connect is called.
+func (c *Client) EnterpriseID() string {
+	return c.enterpriseID
+}
+
+// IsGridMember reports whether this session belongs to a member
+// workspace of an Enterprise Grid: auth.test returned an enterprise_id
+// that differs from the team_id. The org-level session, where the two
+// match, is the grid itself and is NOT a member workspace.
+//
+// The org-level half of the rule - that the org-level session's
+// auth.test answers team_id == enterprise_id - is an observation of a
+// live grid (Red Hat's), not documented behavior. If some grid answered
+// a T… team id for its org-level token this would report true there
+// too, which costs nothing while userBoot succeeds for that token and
+// only downgrades a simultaneous userBoot outage.
+//
+// The distinction matters because Slack serves the two sessions
+// different methods: the grid token may call client.userBoot and
+// client.counts but not users.conversations, while a member-workspace
+// token may call users.conversations and users.prefs.get but neither
+// boot method (client.userBoot fails with internal_error, and
+// client.counts / conversations.view / users.channelSections.list with
+// team_is_restricted).
+func (c *Client) IsGridMember() bool {
+	return c.enterpriseID != "" && c.enterpriseID != c.teamID
 }
 
 // TeamName returns the authenticated workspace's display name.
@@ -311,6 +360,7 @@ func (c *Client) Connect(ctx context.Context) error {
 		return fmt.Errorf("auth test failed: %w", err)
 	}
 	c.teamID = resp.TeamID
+	c.enterpriseID = resp.EnterpriseID
 	// Moves the envelope into its post-boot phase: from here on every
 	// request carries _x_csid and slack_route, as the official client's
 	// do once it knows the workspace. Nil for Clients built directly in
@@ -489,6 +539,9 @@ func (c *Client) StartWebSocket(handler EventHandler) error {
 			case message, ok := <-messages:
 				if !ok {
 					return
+				}
+				if c.wsEventGate != nil && !c.wsEventGate(message) {
+					continue
 				}
 				dispatchWebSocketEvent(message, handler)
 			case <-pending:
