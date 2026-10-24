@@ -518,6 +518,26 @@ func topLevelFields(data []byte) string {
 	return b.String()
 }
 
+// MessageFrameDrivesOnMessage reports whether a message frame with
+// this subtype and ephemeral flags reaches EventHandler.OnMessage in
+// dispatchWebSocketEvent: the plain and renderable subtypes when not
+// ephemeral, and message_changed when neither the frame nor the
+// embedded message is ephemeral. message_deleted and ephemerals do
+// not. The message arm of dispatchWebSocketEvent below enumerates the
+// same rules; consumers that must mirror the dispatcher's reach (the
+// grid event gate's discovery hook) use this predicate so the two
+// cannot drift silently - when a subtype is added here, it moves there
+// too.
+func MessageFrameDrivesOnMessage(subtype string, frameEphemeral, hasEmbedded, embeddedEphemeral bool) bool {
+	switch subtype {
+	case "", "bot_message", "thread_broadcast", "file_share", "me_message":
+		return !frameEphemeral
+	case "message_changed":
+		return hasEmbedded && !frameEphemeral && !embeddedEphemeral
+	}
+	return false
+}
+
 // dispatchWebSocketEvent parses a raw JSON WebSocket message and routes it
 // to the appropriate EventHandler method.
 func dispatchWebSocketEvent(data []byte, handler EventHandler) {
