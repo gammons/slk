@@ -221,12 +221,18 @@ func TestGridFrameGate_InactiveFirstActiveStillRenders(t *testing.T) {
 
 func TestGridEventGates_SharedPerGrid(t *testing.T) {
 	g := newGridEventGates(5 * time.Second)
-	a := g.forGrid("E1")
-	b := g.forGrid("E1")
+	a := g.forGrid("E1", "U1")
+	b := g.forGrid("E1", "U1")
 	if a != b {
-		t.Error("two lookups of the same grid must return the same dedupe")
+		t.Error("two lookups of the same grid and user must return the same dedupe")
 	}
-	if g.forGrid("E2") == a {
+	if g.forGrid("E2", "U1") == a {
 		t.Error("a different grid must get its own dedupe")
+	}
+	// Different accounts on the same grid (browser and desktop
+	// credentials): a shared tracker would let one account's socket
+	// claim the other's frames, suppressing its notifications.
+	if g.forGrid("E1", "U2") == a {
+		t.Error("a different user on the same grid must get its own dedupe")
 	}
 }

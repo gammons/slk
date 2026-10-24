@@ -227,14 +227,21 @@ func newGridEventGates(ttl time.Duration) *gridEventGates {
 	}
 }
 
-// forGrid returns the shared dedupe for one enterprise id.
-func (g *gridEventGates) forGrid(enterpriseID string) *gridEventDedupe {
+// forGrid returns the shared dedupe for one enterprise id AND one
+// authenticated user. The user is part of the key because browser and
+// desktop credentials can belong to different accounts on the same
+// grid: sharing one tracker across accounts lets account A's socket
+// claim a frame a message from A sent to account B (a shared-channel
+// mention), suppressing B's own delivery - and B's notification - to
+// conversation discovery only.
+func (g *gridEventGates) forGrid(enterpriseID, userID string) *gridEventDedupe {
+	key := enterpriseID + "\x00" + userID
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if d, ok := g.gates[enterpriseID]; ok {
+	if d, ok := g.gates[key]; ok {
 		return d
 	}
 	d := newGridEventDedupe(g.ttl)
-	g.gates[enterpriseID] = d
+	g.gates[key] = d
 	return d
 }
