@@ -149,3 +149,28 @@ func diff(a, b []string) []string {
 	}
 	return out
 }
+
+func TestNotifyOnce(t *testing.T) {
+	notifyOnceMap.reset()
+	mentionOnceMap.reset()
+	if !notifyOnce("C1", "1.001") {
+		t.Fatal("first notification for a message must pass")
+	}
+	if notifyOnce("C1", "1.001") {
+		t.Error("a second notification for the same message must be suppressed")
+	}
+	if !notifyOnce("C1", "1.002") {
+		t.Error("a different message in the same channel must pass")
+	}
+	if !notifyOnce("C2", "1.001") {
+		t.Error("the same ts in a different channel must pass")
+	}
+	// The mention map is independent: a notification firing first must
+	// not silence the badge bump, and vice versa.
+	if !mentionBumpedOnce("C1", "1.001") {
+		t.Error("the mention bump for a message that already notified must still fire")
+	}
+	if mentionBumpedOnce("C1", "1.001") {
+		t.Error("a second mention bump for the same message must be suppressed")
+	}
+}
