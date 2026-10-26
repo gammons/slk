@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/messages/blockkit"
 )
 
 const testTZ = "America/New_York"
@@ -497,6 +498,7 @@ func TestSnippet(t *testing.T) {
 		{"first non-blank line", messages.MessageItem{Text: "\n\n  hello  \nworld"}, "hello"},
 		{"entities flattened", messages.MessageItem{Text: "<https://example.com|docs> &amp; <@U1>"}, "docs & @alice"},
 		{"no text", messages.MessageItem{}, "(no text)"},
+		{"forwarded shared text", messages.MessageItem{LegacyAttachments: []blockkit.LegacyAttachment{{Text: "shared: check this out"}}}, "shared: check this out"},
 		{"truncated by runes", messages.MessageItem{Text: strings.Repeat("é", 100)}, strings.Repeat("é", 80) + "..."},
 	}
 	for _, tc := range cases {
@@ -505,6 +507,20 @@ func TestSnippet(t *testing.T) {
 				t.Errorf("snippet = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// The index line for a forwarded message (no top-level text, content in
+// a legacy attachment) shows the shared text, not "(no text)".
+func TestIndexEntry_ForwardedMessageShowsSharedText(t *testing.T) {
+	conv := Conversation{Parent: messages.MessageItem{
+		UserName:          "alice",
+		Timestamp:         "09:00",
+		LegacyAttachments: []blockkit.LegacyAttachment{{Text: "shared: check this out"}},
+	}}
+	got := indexEntry(conv, "f.md", nil, nil)
+	if want := "- [09:00 alice: shared: check this out](f.md)\n"; got != want {
+		t.Errorf("entry = %q, want %q", got, want)
 	}
 }
 
