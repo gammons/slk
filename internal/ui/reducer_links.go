@@ -215,8 +215,14 @@ func (a *App) completePendingLinkNav(channelID string, authoritative bool) tea.C
 			// Refused (a notice with no replies, an upload in progress):
 			// leave the pending nav armed so the authoritative pass, which
 			// carries the real reply count, can try again.
-			if authoritative {
-				a.pendingLinkNav = nil
+			if !authoritative {
+				return cmd
+			}
+			// Authoritative refusal: keep the refusal's own command (the
+			// toast) and still land the channel on the linked row.
+			a.pendingLinkNav = nil
+			if p.MessageTS != "" {
+				a.messagepane.SelectByTS(string(p.MessageTS))
 			}
 			return cmd
 		}
