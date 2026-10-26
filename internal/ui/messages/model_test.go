@@ -95,7 +95,7 @@ func TestMessageCopyText_CommentPlusForwardIncludesSharedText(t *testing.T) {
 }
 
 // A rich_text message's links come from its own text, unchanged by
-// MessageLinks reading through MessageCopyText.
+// MessageLinks reading its body row through MessageTextSource.
 func TestMessageLinks_RichTextLinksUnchanged(t *testing.T) {
 	msg := MessageItem{
 		Text: "see the docs",

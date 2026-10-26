@@ -80,7 +80,7 @@ func ExtractLinks(text string) []Link {
 func MessageLinks(msg MessageItem) []Link {
 	var out []Link
 	if !BlocksCarryBody(msg) {
-		out = ExtractLinks(MessageCopyText(msg))
+		out = ExtractLinks(MessageTextSource(msg))
 	}
 	out = append(out, linksFromBlocks(msg.Blocks)...)
 	for _, att := range msg.LegacyAttachments {
