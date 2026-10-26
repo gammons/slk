@@ -98,6 +98,7 @@ func TestMessageCopyText_CommentPlusForwardIncludesSharedText(t *testing.T) {
 // MessageLinks reading through MessageCopyText.
 func TestMessageLinks_RichTextLinksUnchanged(t *testing.T) {
 	msg := MessageItem{
+		Text: "see the docs",
 		Blocks: []blockkit.Block{
 			blockkit.RichTextBlock{
 				Elements: []slack.RichTextElement{

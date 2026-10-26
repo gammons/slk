@@ -480,7 +480,7 @@ func legacyAttachmentText(la blockkit.LegacyAttachment) string {
 // in which case the host adds no row for msg.Text. A non-empty rich_text
 // block is the exception: it renders through MessageTextSource and must
 // retain the host body row. This decision affects rendering only;
-// copying still uses msg.Text.
+// copying uses MessageCopyText.
 func BlocksCarryBody(msg MessageItem) bool {
 	for _, b := range msg.Blocks {
 		if rt, ok := b.(blockkit.RichTextBlock); ok && blockkit.RichTextToMrkdwn(rt) != "" {
