@@ -203,7 +203,14 @@ func (a *App) completePendingLinkNav(channelID string, authoritative bool) tea.C
 	if p.ThreadTS != "" {
 		p.TeamID = ids.TeamID(a.activeTeamID)
 		knownReply := p.MessageTS != "" && string(p.MessageTS) != string(p.ThreadTS)
-		cmd := a.openThreadForPermalink(string(p.ChannelID), string(p.ThreadTS), knownReply)
+		parent := a.permalinkThreadParent(string(p.ChannelID), string(p.ThreadTS), knownReply)
+		if !authoritative && !messages.CanOpenThread(parent) {
+			// A cache-only pass can see a stale reply count (0 for a
+			// huddle). Stay armed without the "Can't reply to a system
+			// message" toast; the authoritative pass decides.
+			return nil
+		}
+		cmd := a.openThreadPanel(parent, string(p.ChannelID), string(p.ThreadTS))
 		if !a.threadVisible || a.threadPanel.ThreadTS() != string(p.ThreadTS) {
 			// Refused (a notice with no replies, an upload in progress):
 			// leave the pending nav armed so the authoritative pass, which
@@ -256,6 +263,14 @@ func (a *App) completePendingLinkNav(channelID string, authoritative bool) tea.C
 // 0 for a huddle (an edit or a live reply never updates it), and the
 // open-thread gate would otherwise refuse the thread.
 func (a *App) openThreadForPermalink(channelID, threadTS string, knownReply bool) tea.Cmd {
+	return a.openThreadPanel(a.permalinkThreadParent(channelID, threadTS, knownReply), channelID, threadTS)
+}
+
+// permalinkThreadParent builds the parent row openThreadForPermalink opens
+// (see there for the sources and the knownReply rule). Split out so a
+// best-effort pass can ask messages.CanOpenThread before committing to the
+// open, which toasts on refusal.
+func (a *App) permalinkThreadParent(channelID, threadTS string, knownReply bool) messages.MessageItem {
 	parent := messages.MessageItem{TS: threadTS, ThreadTS: threadTS}
 	if channelID == a.activeChannelID {
 		for _, m := range a.messagepane.Messages() {
@@ -278,5 +293,5 @@ func (a *App) openThreadForPermalink(channelID, threadTS string, knownReply bool
 		parent.ReplyCount = 1
 	}
 
-	return a.openThreadPanel(parent, channelID, threadTS)
+	return parent
 }
