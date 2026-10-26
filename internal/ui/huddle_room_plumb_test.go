@@ -134,6 +134,35 @@ func TestCloneMessageItem_CopiesHuddleRoom(t *testing.T) {
 	}
 }
 
+// A Threads-view open builds the parent from the list summary: it has text
+// but no subtype, formatted time or room. The cache backfill must restore
+// the huddle subtype too, or the starter/duration view never applies.
+func TestHuddleThread_ThreadsViewParentKeepsSubtype(t *testing.T) {
+	a := newWideTestApp(t)
+	_, _ = a.Update(ChannelSelectedMsg{ID: "C1", Name: "general", Type: "channel"})
+	cachedParent := huddleItem("1.0", fakeRoom())
+	cachedParent.ThreadTS = "1.0"
+	a.SetThreadService(core.NewThreadService(core.ThreadServiceFuncs{
+		CacheRead: func(ids.ChannelID, ids.ThreadTS) []messages.MessageItem {
+			return []messages.MessageItem{cachedParent}
+		},
+	}))
+	a.threadVisible = true
+	summary := messages.MessageItem{TS: "1.0", ThreadTS: "1.0", UserID: "UFAKE0001", Text: "A huddle started"}
+	a.threadPanel.SetThread(summary, nil, "C1", "1.0")
+
+	reply := messages.MessageItem{TS: "1.5", ThreadTS: "1.0", UserID: "UFAKE0002", Text: "note", Timestamp: "1:02 PM"}
+	_, _ = a.Update(ThreadRepliesLoadedMsg{ThreadTS: "1.0", Replies: []messages.MessageItem{reply}})
+
+	p := a.threadPanel.ParentMsg()
+	if p.Subtype != "huddle_thread" || p.HuddleRoom == nil || p.HuddleRoom.CreatedBy != "UFAKE0001" {
+		t.Errorf("summary parent lost the huddle subtype or room: %+v", p)
+	}
+	if got := messages.HuddleStarter(p); got != "UFAKE0001" {
+		t.Errorf("starter = %q, want UFAKE0001", got)
+	}
+}
+
 // A thread opened from a stub parent (permalink, first open) is backfilled
 // from the cache even when the huddle parent has no text.
 func TestHuddleThread_StubParentBackfillsFromCache(t *testing.T) {
