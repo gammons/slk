@@ -228,6 +228,12 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// never notification-worthy either -- Slack doesn't notify on them,
 	// and an invitation join's text mentions the inviter, which would
 	// otherwise false-positive OnMention for whoever did the inviting.
+	//
+	// Not unit-tested here: *notify.Notifier is a concrete type whose only
+	// effect is an OS notification or a shell command, and OnMessage needs a
+	// full handler (db, caches, program), so faking the gate is
+	// disproportionate. The subtype list itself is pinned by the notice
+	// tests in messages and slackclient.
 	if !changed && h.notifier != nil && h.notifyCfg.Enabled && !messages.IsSystemNoticeSubtype(subtype) {
 		isActiveWS := h.isActive != nil && h.isActive()
 		activeChID := ""
