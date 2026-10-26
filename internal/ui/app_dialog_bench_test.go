@@ -6,12 +6,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/core"
-	"github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/help"
-	"github.com/gammons/slk/internal/ui/messages"
-	"github.com/gammons/slk/internal/ui/styles"
 )
 
 // dialogBenchChannelCount is the size of the channel finder's item list: a
@@ -43,10 +39,7 @@ func dialogBenchFinderItems() []core.ChannelFinderItem {
 // ends.
 func dialogBenchApp(b *testing.B, w, h int) *App {
 	b.Helper()
-	styles.Apply("dark", config.Theme{})
-	emoji.SetImageMode(false, 2)
-	messages.SetNowFunc(goldenClock)
-	b.Cleanup(resetRenderGlobals)
+	pinRenderGlobals(b)
 
 	a := newTestApp(b,
 		withWindowSize(w, h),
@@ -62,7 +55,8 @@ func dialogBenchApp(b *testing.B, w, h int) *App {
 
 // BenchmarkAppViewDialog measures one App.View() per op with a dialog open
 // over the standard fixture, at two terminal sizes. "none" is the same App
-// with no dialog (compare BenchmarkAppViewIdle). The View is repeated with
+// with no dialog (its fixture differs from BenchmarkAppViewIdle's, so do not
+// compare the two). The View is repeated with
 // nothing changing, so any cost beyond "none" is the dialog's own render, the
 // DimmedOverlay composite, or panes re-rendering underneath it.
 func BenchmarkAppViewDialog(b *testing.B) {
