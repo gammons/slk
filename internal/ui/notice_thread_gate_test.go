@@ -143,6 +143,29 @@ func TestPendingNavRetriesAfterRefusedCachePass(t *testing.T) {
 	}
 }
 
+// An authoritative refusal still lands the channel on the linked row and
+// clears the nav, keeping the refusal's toast command.
+func TestPendingNavAuthoritativeRefusalSelectsLinkedRow(t *testing.T) {
+	a, _ := noticeApp(t, 0)
+	a.messagepane.SelectByIndex(0)
+	a.pendingLinkNav = &pendingLinkNav{Location: Location{
+		ChannelID: "C1", MessageTS: "2.000000", ThreadTS: "2.000000",
+	}}
+	cmd := a.completePendingLinkNav("C1", true)
+	if a.threadVisible {
+		t.Fatal("reply-less notice opened on the authoritative pass")
+	}
+	if a.pendingLinkNav != nil {
+		t.Errorf("authoritative refusal must clear the nav: %+v", a.pendingLinkNav)
+	}
+	if cmd == nil {
+		t.Error("refusal toast command was dropped")
+	}
+	if sel, ok := a.messagepane.SelectedMessage(); !ok || sel.TS != "2.000000" {
+		t.Errorf("selected = %q (ok=%v), want the linked row 2.000000", sel.TS, ok)
+	}
+}
+
 // The refused cache-only pass is silent: the toast belongs to the
 // authoritative pass, which may still open the thread.
 func TestPendingNavRefusedCachePassDoesNotToast(t *testing.T) {
