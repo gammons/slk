@@ -237,6 +237,35 @@ func TestUserProfileCmd_TenSecondDeadline(t *testing.T) {
 	}
 }
 
+// K on a huddle announcement opens the profile of whoever started the
+// huddle, not the stored author (Slackbot).
+func TestOpenUserProfile_HuddleOpensStarter(t *testing.T) {
+	huddle := messages.MessageItem{
+		TS: "1.000000", UserID: "USLACKBOT", UserName: "Slackbot", Subtype: "huddle_thread",
+		ReplyCount: 2, HuddleRoom: &core.HuddleRoom{CreatedBy: "U9"},
+	}
+	opts := append(normalOpts(), withMessages(huddle))
+	a := newTestApp(t, opts...)
+	a.activeTeamID = "T1"
+	focusMessages(t, a)
+	var asked string
+	a.SetProfileService(core.NewProfileService(core.ProfileServiceFuncs{
+		Profile: func(ctx context.Context, teamID, userID string) (core.UserProfile, error) {
+			asked = userID
+			return core.UserProfile{UserID: userID, TeamID: teamID}, nil
+		},
+	}))
+
+	cmd := a.openUserProfile()
+	if cmd == nil {
+		t.Fatal("cmd = nil, want the profile fetch for the starter")
+	}
+	cmd()
+	if asked != "U9" {
+		t.Errorf("profile fetched for %q, want the huddle starter U9", asked)
+	}
+}
+
 // A cached profile is on screen the moment the dialog opens, and the
 // fetch still runs behind it and replaces it.
 func TestOpenUserProfile_ServesCachedThenRefreshes(t *testing.T) {
