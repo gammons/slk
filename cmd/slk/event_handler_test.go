@@ -393,7 +393,7 @@ func TestOnMessage_SystemNotice_DoesNotSetHasUnread(t *testing.T) {
 		activeChannelID: func() string { return "C2" },
 		currentUserID:   "USELF",
 	}
-	h.OnMessage("C1", "U1", "1.001", "<@U1> has joined the channel", "", "channel_join", false, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("C1", "U1", "1.001", "<@U1> has joined the channel", "", "channel_join", false, false, nil, slack.Blocks{}, nil, "", "")
 
 	s, _ := db.GetChannelReadState("C1")
 	if s.HasUnread {
@@ -416,7 +416,7 @@ func TestOnMessage_HuddleAndCanvasNotices_DoNotSetHasUnread(t *testing.T) {
 			activeChannelID: func() string { return "C2" },
 			currentUserID:   "USELF",
 		}
-		h.OnMessage("C1", "USLACKBOT", "1.001", "", "", subtype, false, nil, slack.Blocks{}, nil, "", "")
+		h.OnMessage("C1", "USLACKBOT", "1.001", "", "", subtype, false, false, nil, slack.Blocks{}, nil, "", "")
 
 		s, _ := db.GetChannelReadState("C1")
 		if s.HasUnread {
@@ -442,8 +442,8 @@ func TestOnMessage_EditedHuddleKeepsSubtypeInCache(t *testing.T) {
 		activeChannelID: func() string { return "C1" },
 		currentUserID:   "USELF",
 	}
-	h.OnMessage("C1", "USLACKBOT", "1.001", "", "", "huddle_thread", false, nil, slack.Blocks{}, nil, "", "")
-	h.OnMessage("C1", "USLACKBOT", "1.001", "", "", "huddle_thread", true, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("C1", "USLACKBOT", "1.001", "", "", "huddle_thread", false, false, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("C1", "USLACKBOT", "1.001", "", "", "huddle_thread", true, false, nil, slack.Blocks{}, nil, "", "")
 
 	rows, err := db.GetMessages("C1", 10, "")
 	if err != nil || len(rows) != 1 {
@@ -451,6 +451,39 @@ func TestOnMessage_EditedHuddleKeepsSubtypeInCache(t *testing.T) {
 	}
 	if rows[0].Subtype != "huddle_thread" {
 		t.Errorf("cached subtype = %q, want huddle_thread", rows[0].Subtype)
+	}
+}
+
+// A message_changed echo of a join or huddle message (an unfurl, or the
+// huddle ending) is still a system notice: it keeps its cached subtype and
+// neither lights the unread dot nor badges a mention.
+func TestOnMessage_NoticeChangeEcho_StaysNoticeAndSkipsUnread(t *testing.T) {
+	for _, subtype := range []string{"channel_join", "huddle_thread"} {
+		db := newTestDB(t)
+		_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
+		h := &rtmEventHandler{
+			db:              db,
+			wsCtx:           &WorkspaceContext{},
+			workspaceID:     "T1",
+			channelTypes:    map[string]string{"C1": "channel"},
+			isActive:        func() bool { return true },
+			activeChannelID: func() string { return "C2" },
+			currentUserID:   "USELF",
+		}
+		h.OnMessage("C1", "U1", "1.001", "<@USELF> joined", "", subtype, false, false, nil, slack.Blocks{}, nil, "", "")
+		h.OnMessage("C1", "U1", "1.001", "<@USELF> joined", "", subtype, true, true, nil, slack.Blocks{}, nil, "", "")
+
+		rows, err := db.GetMessages("C1", 10, "")
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("%s: GetMessages = %d rows, err %v; want 1", subtype, len(rows), err)
+		}
+		if rows[0].Subtype != subtype {
+			t.Errorf("cached subtype = %q, want %q", rows[0].Subtype, subtype)
+		}
+		s, _ := db.GetChannelReadState("C1")
+		if s.HasUnread || s.MentionCount != 0 {
+			t.Errorf("%s: HasUnread=%v MentionCount=%d, want false and 0", subtype, s.HasUnread, s.MentionCount)
+		}
 	}
 }
 

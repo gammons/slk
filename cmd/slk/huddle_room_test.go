@@ -26,7 +26,7 @@ func TestOnMessage_HuddleRoomReachesCacheAndItem(t *testing.T) {
 		activeChannelID: func() string { return "CFAKE0001" },
 	}
 	h.OnMessageRoom("CFAKE0001", "1.000100", json.RawMessage(fakeHuddleRoom))
-	h.OnMessage("CFAKE0001", "USLACKBOT", "1.000100", "huddle", "", "huddle_thread", false, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("CFAKE0001", "USLACKBOT", "1.000100", "huddle", "", "huddle_thread", false, false, nil, slack.Blocks{}, nil, "", "")
 
 	var item *ui.NewMessageMsg
 	for _, m := range sender.sent {
@@ -79,12 +79,12 @@ func TestOnMessage_EditKeepsReplyCountHistoryOverwrites(t *testing.T) {
 	db.UpsertMessage(cache.Message{TS: "1.000100", ChannelID: "CFAKE0001", WorkspaceID: "T1", Subtype: "huddle_thread", ReplyCount: 2, RawJSON: `{}`})
 
 	// The edit (huddle ended) must not zero it.
-	h.OnMessage("CFAKE0001", "USLACKBOT", "1.000100", "huddle", "1.000100", "huddle_thread", true, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("CFAKE0001", "USLACKBOT", "1.000100", "huddle", "1.000100", "huddle_thread", true, false, nil, slack.Blocks{}, nil, "", "")
 	if row, _ := db.GetMessage("CFAKE0001", "1.000100"); row.ReplyCount != 2 {
 		t.Errorf("edit write reply_count = %d, want 2 kept", row.ReplyCount)
 	}
 	// A new (non-edit) message still writes 0, and history stays authoritative.
-	h.OnMessage("CFAKE0001", "USLACKBOT", "1.000200", "x", "", "", false, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("CFAKE0001", "USLACKBOT", "1.000200", "x", "", "", false, false, nil, slack.Blocks{}, nil, "", "")
 	if row, _ := db.GetMessage("CFAKE0001", "1.000200"); row.ReplyCount != 0 {
 		t.Errorf("new message reply_count = %d", row.ReplyCount)
 	}
