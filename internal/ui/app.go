@@ -1382,6 +1382,17 @@ const noProfileToast = "No profile for this message"
 // full profile under a 10s timeout.
 func (a *App) openUserProfile() tea.Cmd {
 	_, _, _, userID, _, ok := a.selectedMessageContext()
+	if ok {
+		// A huddle announcement is stored under Slackbot; the person to
+		// show is whoever started the huddle.
+		if p, _, focused := a.focusedContentPane(); focused {
+			if msg, sel := p.SelectedMessage(); sel {
+				if starter := messages.HuddleStarter(msg); starter != "" && msg.Subtype == "huddle_thread" {
+					userID = starter
+				}
+			}
+		}
+	}
 	if !ok || userID == "" || strings.HasPrefix(userID, "B") {
 		return toastWithClear(a, noProfileToast, 2*time.Second)
 	}
