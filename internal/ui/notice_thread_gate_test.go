@@ -143,6 +143,23 @@ func TestPendingNavRetriesAfterRefusedCachePass(t *testing.T) {
 	}
 }
 
+// The refused cache-only pass is silent: the toast belongs to the
+// authoritative pass, which may still open the thread.
+func TestPendingNavRefusedCachePassDoesNotToast(t *testing.T) {
+	a, _ := noticeApp(t, 0)
+	a.pendingLinkNav = &pendingLinkNav{Location: Location{
+		ChannelID: "C1", MessageTS: "2.000000", ThreadTS: "2.000000",
+	}}
+	if cmd := a.completePendingLinkNav("C1", false); cmd != nil {
+		if msg := cmd(); msg != nil {
+			t.Errorf("cache pass returned %#v, want no toast", msg)
+		}
+	}
+	if got := statusbarText(a); strings.Contains(got, noticeToast) {
+		t.Errorf("statusbar = %q: toast fired on the cache pass", got)
+	}
+}
+
 func TestPendingNavToReplyOfStaleHuddleOpensOnCachePass(t *testing.T) {
 	a, _ := noticeApp(t, 0)
 	a.pendingLinkNav = &pendingLinkNav{Location: Location{
