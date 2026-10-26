@@ -170,6 +170,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | A workspace's DM rows with peers' current status and presence, not the connect-time values on `wctx.Channels` (the workspace switch does this) | `cmd/slk/withCachedPresence(db, withPeerStatuses(channels, cachedPeerStatuses(db, teamID)))`; both return copies, so `wctx.Channels` is never written |
 | Peer custom status, DND and huddle rendering | `ui/peerstatus` (`Status`, glyph/expiry/summary methods); `messages.AuthorStatusSuffix` for author headers |
 | Workspace app/bot classification, from any goroutine | `WorkspaceContext.IsBotUser` / `MarkBotUser`; private synchronized set, never directly read/write a plain bot-ID map |
+| Lazy user lookup for the workspace a fetch or cached row belongs to (not the active one) | `userRequesterFor(router, teamID)` in `cmd/slk/users.go` |
 | Usergroup map helpers | `usergroups.Copy`, `usergroups.Equal`, `usergroups.Display` |
 | A workspace's user ID → display name, from any goroutine in `cmd/slk` | `wctx.UserNames` (`*userNameStore`: `Get`/`Set`, `MentionedNames(text)` for one message; `lookupUserCached` / `resolveUserCached` add the SQLite fallback). Just `Set`: hand the UI the map from `SnapshotForUI()` and pass only its version to `NotifyFrom`, which makes every later new or changed name reach the UI as `UserResolvedMsg`. Never keep or read the map you handed over |
 | User IDs mentioned in message text | `slackfmt.MentionedUserIDs(text)` |
