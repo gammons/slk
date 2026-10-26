@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/slack/edge"
 	"github.com/gammons/slk/internal/ui"
 	"github.com/slack-go/slack"
 )
@@ -108,6 +111,43 @@ func TestResolveHuddleUsers_RequestsOnlyUnknown(t *testing.T) {
 	}
 	if resolveHuddleUsers(nil, names, nil, nil) != nil {
 		t.Error("nil room")
+	}
+}
+
+// noopBatcher makes Request queue misses instead of taking the network path.
+type noopBatcher struct{}
+
+func (noopBatcher) UsersInfo(context.Context, map[string]int64) ([]edge.User, error) {
+	return nil, nil
+}
+
+// A huddle's unknown names are requested on the resolver of the workspace
+// the row belongs to, even when another workspace is active.
+func TestEnrichCachedRow_HuddleNamesRequestedOnOwningWorkspace(t *testing.T) {
+	db := newTestDB(t)
+	router := newWorkspaceRouter()
+	mk := func(team string) *WorkspaceContext {
+		r := newUserResolver(team, nil, db, nil, nil, noopBatcher{}, nil)
+		// A running flush timer keeps Request from scheduling a network flush.
+		r.flushTimer = time.NewTimer(time.Hour)
+		return &WorkspaceContext{TeamID: team, UserResolver: r}
+	}
+	active, owner := mk("T1"), mk("T2")
+	router.Add(active)
+	router.Add(owner)
+	router.Set(active)
+
+	row := cache.Message{
+		TS: "1.000100", ChannelID: "CFAKE0001", WorkspaceID: "T2", Subtype: "huddle_thread",
+		RawJSON: `{"room":` + fakeHuddleRoom + `}`,
+	}
+	enrichCachedRow(db, "USELF", "CFAKE0001", row, newUserNameStore(nil), "3:04 PM", "test", router, &enrichPerfStats{})
+
+	if _, ok := owner.UserResolver.pending["UFAKE0001"]; !ok {
+		t.Error("starter not requested on the owning workspace T2")
+	}
+	if _, ok := active.UserResolver.pending["UFAKE0001"]; ok {
+		t.Error("starter requested on the active workspace T1")
 	}
 }
 

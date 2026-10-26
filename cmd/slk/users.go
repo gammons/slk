@@ -219,13 +219,15 @@ func resolveHuddleUsers(room *core.HuddleRoom, userNames *userNameStore, db *cac
 	return room
 }
 
-// activeUserRequester returns the active workspace's lazy user lookup, or
-// nil when there is none.
-func activeUserRequester(router *workspaceRouter) func(string) {
-	if router == nil {
+// userRequesterFor returns the lazy user lookup of the workspace teamID, or
+// nil when that workspace is not connected. A fetch belongs to one
+// workspace whichever is active when its result is converted, so a name
+// must be requested on that workspace's resolver, not the active one.
+func userRequesterFor(router *workspaceRouter, teamID string) func(string) {
+	if router == nil || teamID == "" {
 		return nil
 	}
-	if wctx := router.Active(); wctx != nil && wctx.UserResolver != nil {
+	if wctx := router.ByID(teamID); wctx != nil && wctx.UserResolver != nil {
 		return wctx.UserResolver.Request
 	}
 	return nil
