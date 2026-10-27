@@ -19,6 +19,11 @@ import (
 // the test.
 func onMessageMentionFixture(t *testing.T, chType, activeChannelID string) (*rtmEventHandler, *cache.DB) {
 	t.Helper()
+	// The mention bump is once-per-message process-wide (grid sibling
+	// suppression), and these tests reuse channel/ts keys across
+	// cases, so each fixture starts from a clean map.
+	mentionOnceMap.reset()
+	notifyOnceMap.reset()
 	db := newTestDB(t)
 	if err := db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: chType}); err != nil {
 		t.Fatalf("UpsertChannel: %v", err)

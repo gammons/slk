@@ -3598,3 +3598,133 @@ func TestMarkChannel_NonJSONBody_ReturnsError(t *testing.T) {
 		t.Fatal("MarkChannel: want error for non-JSON 200 body, got nil")
 	}
 }
+
+func TestConnect_RecordsEnterpriseID(t *testing.T) {
+	// The member-workspace shape: team_id and enterprise_id differ.
+	// This is the session class the grid serves users.conversations to
+	// while rejecting client.userBoot - the pair IsGridMember exists
+	// to name.
+	mock := &mockSlackAPI{
+		authTestFn: func() (*slack.AuthTestResponse, error) {
+			return &slack.AuthTestResponse{
+				URL:          "https://redhat-external.slack.com/",
+				Team:         "External Red Hat",
+				TeamID:       "T03ENH66XEK",
+				UserID:       "U1",
+				EnterpriseID: "E030G10V24F",
+			}, nil
+		},
+	}
+	c := &Client{api: mock}
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if !c.IsGridMember() {
+		t.Error("IsGridMember() = false; auth.test returned enterprise_id != team_id")
+	}
+}
+
+func TestIsGridMember(t *testing.T) {
+	cases := []struct {
+		name         string
+		teamID       string
+		enterpriseID string
+		want         bool
+	}{
+		// The org-level session a grid signs in first: the two ids
+		// match, and it is the grid itself, not a member workspace.
+		{name: "org-level session", teamID: "E1", enterpriseID: "E1", want: false},
+		{name: "member workspace", teamID: "T1", enterpriseID: "E1", want: true},
+		{name: "not on a grid", teamID: "T1", enterpriseID: "", want: false},
+		{name: "unconnected client", teamID: "", enterpriseID: "", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Client{teamID: tc.teamID, enterpriseID: tc.enterpriseID}
+			if got := c.IsGridMember(); got != tc.want {
+				t.Errorf("IsGridMember() = %v; want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestStartWebSocket_EventGateDropsFrames drives the wsEventGate on the
+// live socket path: the server sends three frames, the gate refuses the
+// second, and the handler sees exactly the two that passed. This is
+// what a grid's sibling sessions rely on - see cmd/slk's gridFrameGate.
+func TestStartWebSocket_EventGateDropsFrames(t *testing.T) {
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool { return true },
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		for _, f := range []string{
+			`{"type":"user_invalidated","user":{"id":"U1"}}`,
+			`{"type":"user_invalidated","user":{"id":"U1"}}`, // gate drops this one
+			`{"type":"dnd_invalidated","user":{"id":"W1"}}`,
+		} {
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(f)); err != nil {
+				return
+			}
+		}
+		// Closing the socket ends the client's read loop, which is
+		// what WsDone below waits for.
+	}))
+	defer srv.Close()
+
+	c := &Client{
+		token:     "xoxc-test",
+		cookie:    "d-cookie",
+		teamID:    "T12345",
+		wsBaseURL: "ws://" + srv.Listener.Addr().String(),
+	}
+	seen := map[string]bool{}
+	c.SetWSEventGate(func(frame []byte) bool {
+		if seen[string(frame)] {
+			return false
+		}
+		seen[string(frame)] = true
+		return true
+	})
+	// The dispatch goroutine calls the handler; the recording has to
+	// cross goroutines, so it goes through a channel rather than a
+	// slice the test would read unsynchronized.
+	got := make(chan string, 4)
+	handler := &gatedEventHandler{mockEventHandler: &mockEventHandler{}, ch: got}
+	if err := c.StartWebSocket(handler); err != nil {
+		t.Fatalf("StartWebSocket: %v", err)
+	}
+	defer func() { <-c.WsDone() }()
+
+	want := []string{"U1", "W1"}
+	for i, w := range want {
+		select {
+		case g := <-got:
+			if g != w {
+				t.Errorf("handler call %d = %q; want %q", i, g, w)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("handler call %d never arrived; the gate dropped too much", i)
+		}
+	}
+	select {
+	case extra := <-got:
+		t.Errorf("an extra handler call arrived: %q; the gate did not drop the duplicate", extra)
+	default:
+	}
+}
+
+// gatedEventHandler records user/dnd invalidations on a channel so a
+// test can observe the dispatch goroutine without sharing memory. Every
+// other EventHandler method is the mock's.
+type gatedEventHandler struct {
+	*mockEventHandler
+	ch chan string
+}
+
+func (g *gatedEventHandler) OnUserInvalidated(userID string) { g.ch <- userID }
+func (g *gatedEventHandler) OnDNDInvalidated(userID string)  { g.ch <- userID }

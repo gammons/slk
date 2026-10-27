@@ -981,3 +981,133 @@ func TestCountsAdapter_CarriesServerMentionCounts(t *testing.T) {
 		t.Errorf("D1 MentionCount = %d, want 0 for an absent mention_count", got["D1"])
 	}
 }
+
+// ---------------------------------------------------------------------
+// bootAdapter, Enterprise Grid member workspaces
+// ---------------------------------------------------------------------
+
+// gridMemberAuthTest is the auth.test answer of a Grid member
+// workspace: team_id and enterprise_id differ. It is the session class
+// whose client.userBoot the grid rejects with internal_error.
+const gridMemberAuthTest = `{
+  "ok": true,
+  "url": "https://redhat-external.slack.com/",
+  "team": "External Red Hat",
+  "user": "u1",
+  "team_id": "T03ENH66XEK",
+  "user_id": "U1",
+  "enterprise_id": "E030G10V24F"
+}`
+
+const userBootRejected = `{"ok": false, "error": "internal_error"}`
+
+const memberPrefsBody = `{
+  "ok": true,
+  "prefs": {"all_notifications_prefs": "{\"channels\":{\"C1\":{\"muted\":true},\"C9\":{\"muted\":true}}}"}
+}`
+
+func TestBootAdapter_GridMemberBootsWithoutUserBoot(t *testing.T) {
+	srv := newFakeSlack(t, map[string]string{
+		"/api/auth.test":       gridMemberAuthTest,
+		"/api/client.userBoot": userBootRejected,
+		"/api/users.prefs.get": memberPrefsBody,
+	})
+	c := newTestClient(t, srv.Server)
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	res, err := bootAdapter{c}.UserBoot(context.Background())
+	if err != nil {
+		t.Fatalf("UserBoot: %v; a grid member whose userBoot is rejected should boot without it", err)
+	}
+	// The team record comes from auth.test: hydrateFirstSight writes
+	// the workspace's parent row from it.
+	if res.Team.ID != "T03ENH66XEK" || res.Team.Name != "External Red Hat" {
+		t.Errorf("team = %q/%q; want T03ENH66XEK/External Red Hat", res.Team.ID, res.Team.Name)
+	}
+	// Mutes come from users.prefs.get, which the grid does serve
+	// member tokens; the muted set is what the mute store reads.
+	got := slackclient.ParseMutedFromAllNotificationsPrefs(res.Prefs.AllNotificationsPrefs)
+	sort.Strings(got)
+	if !reflect.DeepEqual(got, []string{"C1", "C9"}) {
+		t.Errorf("muted = %v; want [C1 C9]", got)
+	}
+	// The conversation lists stay empty on purpose: connectWorkspace
+	// builds the sidebar from users.conversations on every workspace.
+	if len(res.Channels) != 0 || len(res.IMs) != 0 {
+		t.Errorf("channels = %d, ims = %d; both want 0 (the sidebar is users.conversations' job)", len(res.Channels), len(res.IMs))
+	}
+	srv.requestTo(t, "/api/users.prefs.get")
+}
+
+func TestBootAdapter_GridMemberPrefsFailureCostsOnlyMutes(t *testing.T) {
+	// users.prefs.get failing costs only the mute set: the boot still
+	// proceeds, and pref_change events can rebuild the set mid-session.
+	srv := newFakeSlack(t, map[string]string{
+		"/api/auth.test":       gridMemberAuthTest,
+		"/api/client.userBoot": userBootRejected,
+		"/api/users.prefs.get": `{"ok": false, "error": "team_is_restricted"}`,
+	})
+	c := newTestClient(t, srv.Server)
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	res, err := bootAdapter{c}.UserBoot(context.Background())
+	if err != nil {
+		t.Fatalf("UserBoot: %v; a prefs failure should not fail the boot", err)
+	}
+	if res.Prefs.AllNotificationsPrefs != "" {
+		t.Errorf("AllNotificationsPrefs = %q; want empty", res.Prefs.AllNotificationsPrefs)
+	}
+}
+
+func TestBootAdapter_NonGridWorkspaceKeepsUserBootError(t *testing.T) {
+	// Off a grid there is no member-workspace session class, so a
+	// userBoot failure is a real failure and must reach the caller:
+	// swallowing it would turn every boot error into an empty
+	// workspace that looks connected.
+	srv := newFakeSlack(t, map[string]string{
+		"/api/auth.test": `{
+		  "ok": true,
+		  "url": "https://acme.slack.com/",
+		  "team": "Acme",
+		  "user": "u1",
+		  "team_id": "T1",
+		  "user_id": "U1"
+		}`,
+		"/api/client.userBoot": userBootRejected,
+	})
+	c := newTestClient(t, srv.Server)
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	adapter := bootAdapter{c}
+	if _, err := adapter.UserBoot(context.Background()); err == nil {
+		t.Error("UserBoot error = nil; a non-grid workspace must not boot past a userBoot failure")
+	}
+}
+
+func TestBootAdapter_GridMemberCancellationPropagates(t *testing.T) {
+	// A cancelled context fails userBoot like anything else. Falling
+	// back would turn the cancellation into a workspace that looks
+	// connected with an empty sidebar, so it must reach the caller.
+	srv := newFakeSlack(t, map[string]string{
+		"/api/auth.test":       gridMemberAuthTest,
+		"/api/client.userBoot": userBootRejected,
+		"/api/users.prefs.get": memberPrefsBody,
+	})
+	c := newTestClient(t, srv.Server)
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	adapter := bootAdapter{c}
+	if _, err := adapter.UserBoot(ctx); err == nil {
+		t.Error("UserBoot error = nil; a cancelled context must propagate, not fall back")
+	}
+}
