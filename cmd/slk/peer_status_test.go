@@ -459,6 +459,57 @@ func TestWithPeerStatuses_AppliesToDMsAndLeavesInputAlone(t *testing.T) {
 	}
 }
 
+// A workspace switch rebuilds the sidebar from wctx.Channels, whose
+// Presence is from connect time. A peer who came online after connect,
+// then sent a message (re-upserting their profile), must still show
+// online on the next switch.
+func TestWithCachedPresence_SwitchShowsPresenceSinceConnect(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertWorkspace(cache.Workspace{ID: "T1", Name: "T1"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range []cache.User{
+		{ID: "U1", WorkspaceID: "T1", Name: "albert", Presence: "away"},
+		{ID: "U2", WorkspaceID: "T1", Name: "kate", Presence: "away"},
+	} {
+		if err := db.UpsertUser(u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	channels := []sidebar.ChannelItem{
+		{ID: "D1", Type: "dm", DMUserID: "U1", Presence: "away"},
+		{ID: "D2", Type: "dm", DMUserID: "U2", Presence: "away"},
+		{ID: "D3", Type: "dm", DMUserID: "U_UNCACHED", Presence: "active"},
+		{ID: "C1", Type: "channel"},
+	}
+
+	if err := db.UpdatePresence("U1", "active"); err != nil { // presence_change
+		t.Fatal(err)
+	}
+	// U1's reply resolves their profile again, with the placeholder.
+	if err := db.UpsertUser(cache.User{ID: "U1", WorkspaceID: "T1", Name: "albert", DisplayName: "Albert", Presence: "away"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := withCachedPresence(db, channels)
+
+	if got[0].Presence != "active" {
+		t.Errorf("D1 presence = %q; want active from the cache", got[0].Presence)
+	}
+	if got[1].Presence != "away" {
+		t.Errorf("D2 presence = %q; want away", got[1].Presence)
+	}
+	if got[2].Presence != "active" {
+		t.Errorf("D3 presence = %q; an uncached peer keeps its item's value", got[2].Presence)
+	}
+	if got[3].Presence != "" {
+		t.Errorf("non-DM row got presence %q", got[3].Presence)
+	}
+	if channels[0].Presence != "away" {
+		t.Error("withCachedPresence modified its input, which is shared with another goroutine")
+	}
+}
+
 // Slack does not reliably send user_invalidated when a huddle ends, so
 // users seen in a huddle are refetched until a result says they left.
 func TestPeerStatus_RechecksHuddlersUntilTheHuddleEnds(t *testing.T) {
