@@ -12,15 +12,16 @@ import (
 	"fmt"
 	"strings"
 
-	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/gammons/slk/internal/ids"
 )
 
 func handleSearchMode(a *App, msg tea.KeyMsg) tea.Cmd {
-	switch {
-	case key.Matches(msg, a.keys.Escape):
+	// Match on the key code, as the other prompt handlers do, so a held
+	// modifier (shift+enter, shift+esc) still submits or cancels (#186).
+	switch msg.Key().Code {
+	case tea.KeyEscape:
 		a.searchInput = ""
 		// If a search is still active (the user re-entered `/` on
 		// top of existing results and bailed), restore its i/N
@@ -32,7 +33,7 @@ func handleSearchMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		}
 		a.SetMode(ModeNormal)
 		return nil
-	case key.Matches(msg, a.keys.Enter):
+	case tea.KeyEnter:
 		query := strings.TrimSpace(a.searchInput)
 		a.searchInput = ""
 		a.SetMode(ModeNormal)

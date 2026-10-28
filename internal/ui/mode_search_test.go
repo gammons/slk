@@ -13,8 +13,8 @@ import (
 // ---------------------------------------------------------------------
 // handleSearchMode (mode_search.go:21) -- the in-channel `/` prompt.
 //
-// Two guards run first, both through key.Matches (i.e. against
-// msg.String()): Escape cancels, Enter dispatches. Everything else
+// Two guards run first, both on the key code, so modifiers do not
+// matter: Escape cancels, Enter dispatches. Everything else
 // falls through to a three-arm text editor keyed on
 // normalizeFinderKey's output.
 //
@@ -131,30 +131,19 @@ func TestSearchModeKeys(t *testing.T) {
 			},
 		},
 		{
-			// key.Matches compares msg.String(), which prefixes the
-			// modifier, so shift+esc misses the Escape binding and
-			// lands in the text editor -- where normalizeFinderKey has
-			// already rewritten it to "esc", a 3-rune string the
-			// single-rune filter drops. Net effect: nothing but a
-			// segment redraw, and the prompt stays open.
-			//
-			// BUG?: a user holding shift cannot cancel the prompt.
-			// Recorded, not fixed. Tracked as
-			// https://github.com/gammons/slk/issues/186.
-			// WHEN THAT BUG IS FIXED: shift+esc cancels, so wantMode
-			// becomes ModeNormal and the search segment clears.
-			// Re-pin this row to that; do not delete it.
-			name:     "shift+esc does not cancel: key.Matches sees the modifier, the rune filter drops it",
+			// The handler matches on the key code, so a held shift
+			// still cancels (#186).
+			name:     "shift+esc cancels like esc",
 			opts:     searchOpts(),
 			setup:    typeSearch("part"),
 			key:      keyMod(tea.KeyEscape, tea.ModShift),
-			wantMode: ModeSearch,
+			wantMode: ModeNormal,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
-				if a.searchInput != "part" {
-					t.Errorf("searchInput = %q, want %q unchanged", a.searchInput, "part")
+				if a.searchInput != "" {
+					t.Errorf("searchInput = %q, want empty", a.searchInput)
 				}
-				if got, want := a.statusbar.Search(), "/part"; got != want {
-					t.Errorf("status search segment = %q, want %q", got, want)
+				if got := a.statusbar.Search(); got != "" {
+					t.Errorf("status search segment = %q, want empty", got)
 				}
 			},
 		},
@@ -260,26 +249,19 @@ func TestSearchModeKeys(t *testing.T) {
 			},
 		},
 		{
-			// Mirror of the shift+esc row: shift+enter misses the Enter
-			// binding, then normalizeFinderKey turns it into "enter",
-			// which the rune filter drops.
-			//
-			// BUG?: shift+enter neither submits nor types. Recorded.
-			// Same issue, https://github.com/gammons/slk/issues/186.
-			// WHEN THAT BUG IS FIXED: shift+enter submits, so wantMode
-			// becomes ModeNormal and cmd is non-nil. Re-pin, do not
-			// delete.
-			name:     "shift+enter does not submit: key.Matches sees the modifier, the rune filter drops it",
+			// Mirror of the shift+esc row: a held shift still
+			// submits (#186).
+			name:     "shift+enter submits like enter",
 			opts:     searchOpts(),
 			setup:    typeSearch("hello"),
 			key:      keyMod(tea.KeyEnter, tea.ModShift),
-			wantMode: ModeSearch,
+			wantMode: ModeNormal,
 			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
-				if cmd != nil {
-					t.Errorf("cmd = %v, want nil", cmd)
+				if cmd == nil {
+					t.Error("cmd = nil, want the search dispatch")
 				}
-				if a.searchInput != "hello" {
-					t.Errorf("searchInput = %q, want %q unchanged", a.searchInput, "hello")
+				if a.searchInput != "" {
+					t.Errorf("searchInput = %q, want empty after dispatch", a.searchInput)
 				}
 			},
 		},
