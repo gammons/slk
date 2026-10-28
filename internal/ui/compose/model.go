@@ -218,6 +218,7 @@ func (m *Model) RefreshStyles() {
 	s.Focused.Placeholder = bg.Foreground(styles.TextMuted)
 	s.Blurred.Placeholder = bg.Foreground(styles.TextMuted)
 	m.input.SetStyles(s)
+	m.dirty()
 }
 
 func (m *Model) SetChannel(name string) {
