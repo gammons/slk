@@ -2,14 +2,56 @@ package messages
 
 import (
 	"encoding/json"
+	goimage "image"
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/slack-go/slack"
 
+	"github.com/gammons/slk/internal/core/blocks"
+	emojiutil "github.com/gammons/slk/internal/emoji"
+	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
 )
+
+// TestRenderMessage_BlockKitEmojiFlushesCollected: a warm emoji in Block
+// Kit text must hand its kitty upload back in BlockFlushes, or its
+// placeholders are drawn but never resolved (#384).
+func TestRenderMessage_BlockKitEmojiFlushesCollected(t *testing.T) {
+	emojiutil.SetImageMode(true, 2)
+	t.Cleanup(func() { emojiutil.SetImageMode(false, 2) })
+
+	thumbURL := emojiutil.CDNBaseURL + "1f44d.png"
+	ff := newFakePlaceFetcher()
+	ff.setPrerendered(emojiutil.EmojiCacheKey(thumbURL), goimage.Pt(2, 1), imgpkg.Render{
+		Cells:   goimage.Pt(2, 1),
+		Lines:   []string{"\U0010EEEE\U0010EEEE"},
+		OnFlush: func(io.Writer) error { return nil },
+	})
+
+	base := MessageItem{TS: "1700000000.000000", UserName: "github", UserID: "U-BOT", Timestamp: "1:23 PM"}
+	section := base
+	section.Text = "PR opened"
+	section.Blocks = []blockkit.Block{blockkit.SectionBlock{Text: "New PR :thumbsup: 171"}}
+	legacy := base
+	legacy.LegacyAttachments = []blocks.LegacyAttachment{{Text: "New PR :thumbsup: 171"}}
+
+	for name, msg := range map[string]MessageItem{"section block": section, "legacy attachment": legacy} {
+		t.Run(name, func(t *testing.T) {
+			m := New([]MessageItem{msg}, "general")
+			m.SetEmojiContext(EmojiContext{PlaceCtx: emojiutil.PlaceContext{Fetcher: ff}, Cells: 2})
+			r := RenderMessage(msg, 80, m.renderContext(), RenderOptions{})
+			if !strings.Contains(r.Content, "\U0010EEEE") {
+				t.Fatal("block text drew no emoji placeholder; the setup does not reach the warm path")
+			}
+			if len(r.BlockFlushes) != 1 {
+				t.Errorf("BlockFlushes = %d, want 1 (the emoji's upload)", len(r.BlockFlushes))
+			}
+		})
+	}
+}
 
 // renderedFor builds a model with a single message, runs buildCache
 // at the given width, and returns the joined plain-text rendering of
