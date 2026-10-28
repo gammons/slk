@@ -3,6 +3,8 @@ package themeswitcher
 import (
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/bubbles/chrome"
@@ -176,7 +178,8 @@ func (m *Model) HandleKey(keyStr string) *ThemeResult {
 
 	case "backspace":
 		if len(m.query) > 0 {
-			m.query = m.query[:len(m.query)-1]
+			_, n := utf8.DecodeLastRuneInString(m.query)
+			m.query = m.query[:len(m.query)-n]
 			m.selected = 0
 			m.filter()
 		}
@@ -184,7 +187,7 @@ func (m *Model) HandleKey(keyStr string) *ThemeResult {
 	}
 
 	// Single printable rune — add to query
-	if len(keyStr) == 1 && keyStr[0] >= 32 && keyStr[0] <= 126 {
+	if r := []rune(keyStr); len(r) == 1 && unicode.IsPrint(r[0]) {
 		m.query += keyStr
 		m.selected = 0
 		m.filter()
