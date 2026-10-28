@@ -18,6 +18,7 @@ type uiSettings struct {
 	TimestampFormat  string
 	TypingIndicators bool
 	StaleAfter       time.Duration
+	DMPane           bool
 	MouseWheelLines  int
 	ColoredUsernames bool
 	ThemeOverrides   core.Theme
@@ -32,6 +33,7 @@ func uiSettingsFromConfig(cfg config.Config) uiSettings {
 		TimestampFormat:       cfg.Appearance.TimestampFormat,
 		TypingIndicators:      cfg.Animations.TypingIndicators,
 		StaleAfter:            time.Duration(cfg.Sidebar.HideInactiveAfterDays) * 24 * time.Hour,
+		DMPane:                cfg.Sidebar.DMPane,
 		MouseWheelLines:       cfg.Appearance.MouseWheelLines,
 		ColoredUsernames:      cfg.Appearance.ColoredUsernames,
 		ThemeOverrides:        cfg.Theme,
@@ -51,6 +53,7 @@ func applyUISettings(app *ui.App, s uiSettings) {
 	})
 	app.SetTypingEnabled(s.TypingIndicators)
 	app.SetSidebarStaleThreshold(s.StaleAfter)
+	app.SetSidebarDMPane(s.DMPane)
 	app.SetMouseWheelLines(s.MouseWheelLines)
 	app.SetColoredUsernames(s.ColoredUsernames)
 	app.SetThemeItems(styles.ThemeNames())

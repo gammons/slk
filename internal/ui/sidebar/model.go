@@ -321,6 +321,23 @@ type Model struct {
 	// scroll before deciding where the cursor lands.
 	lastHeight int
 
+	// dmPane ([sidebar] dm_pane) orders the DM section last and lets the
+	// App draw its rows, cacheRows[dmStart:], in a box of their own with
+	// a separate scroll offset. dmStart is -1 when there is no DM section.
+	dmPane       bool
+	dmStart      int
+	dmYOffset    int
+	lastDMHeight int
+	// split records that the last render was ViewSplit, not View.
+	split bool
+	// dmNavStart is the nav index of the DM section header (-1 if none).
+	// With the split drawn, cursor movement stays within the box holding
+	// the cursor, and each box remembers its selection (mainKey, dmKey)
+	// across FocusDMPane / FocusChannelPane.
+	dmNavStart        int
+	mainKey, dmKey    cursorKey
+	hasMain, hasDMKey bool
+
 	// version increments on every state change that could alter the rendered
 	// View() output. The App layer caches the WRAPPED panel output (border +
 	// exactSize) keyed on version + layout, so on compose keystrokes (where
@@ -524,18 +541,29 @@ func (m *Model) sectionFor(item ChannelItem) string {
 // returning IDs of sections that have at least one filtered item OR
 // are standard-typed. Config mode: legacy algorithm.
 func (m *Model) modelOrderedSections(filtered []int) []string {
+	var out []string
 	if !m.useSlackSections() {
-		return orderedSectionsLegacy(m.items, filtered)
+		out = orderedSectionsLegacy(m.items, filtered)
+	} else {
+		metas := m.sectionsProvider.OrderedSlackSections()
+		hasItem := map[string]bool{}
+		for _, idx := range filtered {
+			hasItem[m.sectionFor(m.items[idx])] = true
+		}
+		out = make([]string, 0, len(metas))
+		for _, meta := range metas {
+			if meta.Type == "standard" || hasItem[meta.ID] {
+				out = append(out, meta.ID)
+			}
+		}
 	}
-	metas := m.sectionsProvider.OrderedSlackSections()
-	hasItem := map[string]bool{}
-	for _, idx := range filtered {
-		hasItem[m.sectionFor(m.items[idx])] = true
-	}
-	out := make([]string, 0, len(metas))
-	for _, meta := range metas {
-		if meta.Type == "standard" || hasItem[meta.ID] {
-			out = append(out, meta.ID)
+	if m.dmPane {
+		dm := m.dmSectionKey()
+		for i, key := range out {
+			if key == dm {
+				out = append(append(out[:i:i], out[i+1:]...), dm)
+				break
+			}
 		}
 	}
 	return out
@@ -596,6 +624,35 @@ func (m *Model) SetStaleThreshold(d time.Duration) {
 	m.rebuildNavWithCursor(key, hadKey)
 	m.cacheValid = false
 	m.dirty()
+}
+
+// SetDMPane turns on the separate Direct Messages box ([sidebar] dm_pane):
+// the DM section moves to the end of the list, and ViewSplit renders its
+// rows apart from the rest.
+func (m *Model) SetDMPane(enabled bool) {
+	if m.dmPane == enabled {
+		return
+	}
+	key, hadKey := m.currentCursorKey()
+	m.dmPane = enabled
+	m.rebuildFilter()
+	m.rebuildNavWithCursor(key, hadKey)
+	m.cacheValid = false
+	m.dirty()
+}
+
+// dmSectionKey is the section the DM box shows: the Slack direct_messages
+// section, or defaultDMSection in config mode.
+func (m *Model) dmSectionKey() string {
+	if !m.useSlackSections() {
+		return defaultDMSection
+	}
+	for _, meta := range m.sectionsProvider.OrderedSlackSections() {
+		if meta.Type == "direct_messages" {
+			return meta.ID
+		}
+	}
+	return ""
 }
 
 // SetActiveChannelID names the channel currently shown in the message
@@ -936,17 +993,74 @@ func (m *Model) SelectedItem() (ChannelItem, bool) {
 }
 
 func (m *Model) MoveDown() {
-	if m.cursor+1 < len(m.nav) {
+	if _, hi := m.navBounds(); m.cursor < hi {
 		m.cursor++
 		m.dirty()
 	}
 }
 
 func (m *Model) MoveUp() {
-	if m.cursor > 0 {
+	if lo, _ := m.navBounds(); m.cursor > lo {
 		m.cursor--
 		m.dirty()
 	}
+}
+
+// navBounds is the nav range the cursor moves in: the box holding it when
+// the DM split is drawn, otherwise all of nav.
+func (m *Model) navBounds() (lo, hi int) {
+	hi = len(m.nav) - 1
+	if !m.SplitActive() || m.dmNavStart < 0 {
+		return 0, hi
+	}
+	if m.cursor >= m.dmNavStart {
+		return m.dmNavStart, hi
+	}
+	return 0, m.dmNavStart - 1
+}
+
+// SplitActive reports whether the last render drew the DM box apart.
+func (m *Model) SplitActive() bool {
+	return m.dmPane && m.split && m.dmStart >= 0
+}
+
+// FocusDMPane moves the cursor into the DM box, back onto the DM it last
+// held, or onto the first DM. Reports false when no DM box is drawn.
+func (m *Model) FocusDMPane() bool {
+	if !m.SplitActive() || m.dmNavStart < 0 {
+		return false
+	}
+	if m.cursor >= m.dmNavStart {
+		return true
+	}
+	m.mainKey, m.hasMain = m.currentCursorKey()
+	target := min(m.dmNavStart+1, len(m.nav)-1)
+	if m.hasDMKey {
+		if i := m.navIndexForKey(m.dmKey); i >= m.dmNavStart {
+			target = i
+		}
+	}
+	m.cursor = target
+	m.dirty()
+	return true
+}
+
+// FocusChannelPane is FocusDMPane's mirror: back to the row the channel
+// box last held, or the Threads row.
+func (m *Model) FocusChannelPane() bool {
+	if !m.SplitActive() || m.dmNavStart < 0 || m.cursor < m.dmNavStart {
+		return false
+	}
+	m.dmKey, m.hasDMKey = m.currentCursorKey()
+	target := 0
+	if m.hasMain {
+		if i := m.navIndexForKey(m.mainKey); i >= 0 && i < m.dmNavStart {
+			target = i
+		}
+	}
+	m.cursor = target
+	m.dirty()
+	return true
 }
 
 // ScrollUp moves the viewport up by n rows without changing the selection.
@@ -972,6 +1086,29 @@ func (m *Model) ScrollUp(n int) {
 func (m *Model) ScrollDown(n int) {
 	if n > 0 {
 		m.yOffset += n
+		m.snappedSelection = m.cursor
+		m.hasSnapped = true
+		m.dirty()
+	}
+}
+
+// ScrollDMUp and ScrollDMDown are ScrollUp/ScrollDown for the DM box.
+func (m *Model) ScrollDMUp(n int) {
+	if n <= 0 {
+		return
+	}
+	m.dmYOffset -= n
+	if m.dmYOffset < 0 {
+		m.dmYOffset = 0
+	}
+	m.snappedSelection = m.cursor
+	m.hasSnapped = true
+	m.dirty()
+}
+
+func (m *Model) ScrollDMDown(n int) {
+	if n > 0 {
+		m.dmYOffset += n
 		m.snappedSelection = m.cursor
 		m.hasSnapped = true
 		m.dirty()
@@ -1007,7 +1144,17 @@ func (m *Model) pageBy(delta int) {
 
 	// Without a rendered layout (a key before the first frame) there is
 	// no row geometry to keep; step the cursor by nav items instead.
-	if !m.cacheValid || len(m.cacheRows) == 0 || m.lastHeight <= 0 {
+	// A split sidebar pages within the box holding the cursor.
+	lo, hi, off, height := 0, len(m.cacheRows), &m.yOffset, m.lastHeight
+	if m.split && m.dmStart >= 0 && m.cacheValid {
+		if m.cursorLine() >= m.dmStart {
+			lo, off, height = m.dmStart, &m.dmYOffset, m.lastDMHeight
+		} else {
+			hi = m.dmStart
+		}
+	}
+
+	if !m.cacheValid || len(m.cacheRows) == 0 || height <= 0 {
 		m.cursor += delta
 		if m.cursor < 0 {
 			m.cursor = 0
@@ -1019,11 +1166,11 @@ func (m *Model) pageBy(delta int) {
 		return
 	}
 
-	maxOffset := len(m.cacheRows) - m.lastHeight
+	maxOffset := hi - lo - height
 	if maxOffset < 0 {
 		maxOffset = 0
 	}
-	newOffset := m.yOffset + delta
+	newOffset := *off + delta
 	if newOffset < 0 {
 		newOffset = 0
 	}
@@ -1032,38 +1179,32 @@ func (m *Model) pageBy(delta int) {
 	}
 
 	var targetLine int
-	if newOffset == m.yOffset {
+	if newOffset == *off {
 		// Nothing left to scroll: jump the cursor to the end.
 		if dir > 0 {
-			targetLine = len(m.cacheRows) - 1
+			targetLine = hi - 1
 		} else {
-			targetLine = 0
+			targetLine = lo
 		}
 	} else {
 		// Keep the cursor's screen row: shift it by exactly what the
 		// viewport moved.
-		line := -1
-		for i, r := range m.cacheRows {
-			if r.navIdx == m.cursor {
-				line = i
-				break
-			}
-		}
+		line := m.cursorLine()
 		if line < 0 {
 			return
 		}
-		targetLine = line + (newOffset - m.yOffset)
+		targetLine = line + (newOffset - *off)
 	}
 
 	// Land on a navigable row: continue in the scroll direction past
 	// blank separators, and fall back to the other direction at the
 	// list's edge.
-	newCursor := m.nearestNavigable(targetLine, dir)
+	newCursor := m.nearestNavigable(targetLine, dir, lo, hi)
 	if newCursor < 0 {
-		newCursor = m.nearestNavigable(targetLine, -dir)
+		newCursor = m.nearestNavigable(targetLine, -dir, lo, hi)
 	}
 
-	m.yOffset = newOffset
+	*off = newOffset
 	if newCursor >= 0 {
 		m.cursor = newCursor
 	}
@@ -1073,9 +1214,10 @@ func (m *Model) pageBy(delta int) {
 }
 
 // nearestNavigable returns the nav index of the first navigable cacheRow
-// at or beyond line in direction dir (+1 down, -1 up), or -1 if none.
-func (m *Model) nearestNavigable(line, dir int) int {
-	for i := line; i >= 0 && i < len(m.cacheRows); i += dir {
+// in [lo, hi) at or beyond line in direction dir (+1 down, -1 up), or -1
+// if none.
+func (m *Model) nearestNavigable(line, dir, lo, hi int) int {
+	for i := line; i >= lo && i < hi; i += dir {
 		if m.cacheRows[i].navIdx >= 0 {
 			return m.cacheRows[i].navIdx
 		}
@@ -1084,14 +1226,14 @@ func (m *Model) nearestNavigable(line, dir int) int {
 }
 
 func (m *Model) GoToTop() {
-	if m.cursor != 0 && len(m.nav) > 0 {
-		m.cursor = 0
+	if lo, _ := m.navBounds(); m.cursor != lo && len(m.nav) > 0 {
+		m.cursor = lo
 		m.dirty()
 	}
 }
 
 func (m *Model) GoToBottom() {
-	if last := len(m.nav) - 1; last >= 0 && m.cursor != last {
+	if _, last := m.navBounds(); last >= 0 && m.cursor != last {
 		m.cursor = last
 		m.dirty()
 	}
@@ -1414,7 +1556,15 @@ func (m *Model) rebuildNav() {
 	nav := make([]navItem, 0, 2+len(sectionOrder))
 	nav = append(nav, navItem{kind: navThreads})
 	nav = append(nav, navItem{kind: navActivity})
+	m.dmNavStart = -1
+	dmKey := ""
+	if m.dmPane {
+		dmKey = m.dmSectionKey()
+	}
 	for _, name := range sectionOrder {
+		if dmKey != "" && name == dmKey {
+			m.dmNavStart = len(nav)
+		}
 		nav = append(nav, navItem{kind: navHeader, header: name})
 		if m.IsCollapsed(name) {
 			continue
@@ -1447,27 +1597,28 @@ func (m *Model) rebuildNavWithCursor(key cursorKey, hadKey bool) {
 	if !hadKey {
 		return
 	}
+	// Previous target gone (e.g. the channel was filtered out, or its
+	// section now collapsed): fall back to the Threads row.
+	m.cursor = max(m.navIndexForKey(key), 0)
+}
+
+// navIndexForKey returns the nav index of the target key names, or -1.
+func (m *Model) navIndexForKey(key cursorKey) int {
 	for i, n := range m.nav {
 		switch {
 		case key.kind == navThreads && n.kind == navThreads:
-			m.cursor = i
-			return
+			return i
 		case key.kind == navActivity && n.kind == navActivity:
-			m.cursor = i
-			return
+			return i
 		case key.kind == navHeader && n.kind == navHeader && n.header == key.header:
-			m.cursor = i
-			return
+			return i
 		case key.kind == navChannel && n.kind == navChannel:
 			if n.fi >= 0 && n.fi < len(m.filtered) && m.items[m.filtered[n.fi]].ID == key.id {
-				m.cursor = i
-				return
+				return i
 			}
 		}
 	}
-	// Previous target gone (e.g. the channel was filtered out, or its
-	// section now collapsed). Fall back to the Threads row.
-	m.cursor = 0
+	return -1
 }
 
 // aggregateForSection returns the two figures a collapsed section
@@ -1584,6 +1735,7 @@ func (m *Model) buildCache(width int) {
 	m.cacheValid = true
 	m.cacheWidth = width
 	m.cacheRows = m.cacheRows[:0]
+	m.dmStart = -1
 	m.cacheFiller = lipgloss.NewStyle().Width(width).Background(styles.SidebarBackground).Render("")
 
 	// Per-channel read state for the active workspace. The DB is the
@@ -1965,8 +2117,16 @@ func (m *Model) buildCache(width int) {
 
 	// Flatten into a single row list with section headers.
 	// Add a blank line between sections for visual separation.
+	// With the DM pane, the DM section (ordered last) starts its own box.
+	m.dmStart = -1
+	dmKey := ""
+	if m.dmPane {
+		dmKey = m.dmSectionKey()
+	}
 	for i, name := range sectionOrder {
-		if i > 0 {
+		if dmKey != "" && name == dmKey {
+			m.dmStart = len(m.cacheRows)
+		} else if i > 0 {
 			m.cacheRows = append(m.cacheRows, renderRow{height: 1, navIdx: -1})
 		}
 		group := sectionMap[name]
@@ -2098,40 +2258,95 @@ func (m *Model) View(height, width int) string {
 		m.buildCache(width)
 	}
 	m.lastHeight = height
+	m.split = false
+	return strings.Join(m.window(0, len(m.cacheRows), &m.yOffset, height), "\n")
+}
 
+// ViewSplit renders the DM section's rows, cacheRows[dmStart:], in a
+// dmHeight-line window with their own scroll offset, and the rows above
+// them in the mainHeight-line window View uses. Without a DM section the
+// second string is empty and the first is View's.
+func (m *Model) ViewSplit(mainHeight, dmHeight, width int) (string, string) {
+	if !m.cacheValid || m.cacheWidth != width {
+		m.buildCache(width)
+	}
+	if m.dmStart < 0 {
+		return m.View(mainHeight, width), ""
+	}
+	m.lastHeight, m.lastDMHeight = mainHeight, dmHeight
+	m.split = true
+	main := m.window(0, m.dmStart, &m.yOffset, mainHeight)
+	dm := m.window(m.dmStart, len(m.cacheRows), &m.dmYOffset, dmHeight)
+	return strings.Join(main, "\n"), strings.Join(dm, "\n")
+}
+
+// DMPaneRows is how many rows the DM box shows at width: 0 unless the DM
+// pane is on and there is a DM section.
+func (m *Model) DMPaneRows(width int) int {
+	if !m.dmPane {
+		return 0
+	}
+	if !m.cacheValid || m.cacheWidth != width {
+		m.buildCache(width)
+	}
+	if m.dmStart < 0 {
+		return 0
+	}
+	return len(m.cacheRows) - m.dmStart
+}
+
+// CursorInDMPane reports whether the selection is one of the DM box's rows.
+func (m *Model) CursorInDMPane() bool {
+	return m.dmPane && m.dmStart >= 0 && m.cursorLine() >= m.dmStart
+}
+
+// cursorLine is the cacheRows index of the selected row, or -1.
+func (m *Model) cursorLine() int {
+	for i, r := range m.cacheRows {
+		if r.navIdx == m.cursor {
+			return i
+		}
+	}
+	return -1
+}
+
+// window renders cacheRows[lo:hi] through a height-line viewport at
+// *off. The region holding the cursor snaps to it when it moved, and drags
+// it along when a scroll pushed it out of the window.
+func (m *Model) window(lo, hi int, off *int, height int) []string {
 	// Each cacheRow is exactly one rendered line, so the line index of a
 	// row is just its slice index. Find the selected row by matching the
 	// cursor's nav index against renderRow.navIdx.
 	selectedLine := -1
-	for i, r := range m.cacheRows {
-		if r.navIdx == m.cursor {
-			selectedLine = i
+	for i := lo; i < hi; i++ {
+		if m.cacheRows[i].navIdx == m.cursor {
+			selectedLine = i - lo
 			break
 		}
 	}
 
-	// Snap yOffset to keep the selected row visible only when the
+	// Snap the offset to keep the selected row visible only when the
 	// cursor has actually changed since the last snap. This preserves
 	// mouse-wheel / programmatic scroll positions across renders.
 	if selectedLine >= 0 && (!m.hasSnapped || m.snappedSelection != m.cursor) {
-		if selectedLine >= m.yOffset+height {
-			m.yOffset = selectedLine - height + 1
+		if selectedLine >= *off+height {
+			*off = selectedLine - height + 1
 		}
-		if selectedLine < m.yOffset {
-			m.yOffset = selectedLine
+		if selectedLine < *off {
+			*off = selectedLine
 		}
 		m.snappedSelection = m.cursor
 		m.hasSnapped = true
 	}
-	if m.yOffset < 0 {
-		m.yOffset = 0
+	if *off < 0 {
+		*off = 0
 	}
-	maxOffset := len(m.cacheRows) - height
+	maxOffset := hi - lo - height
 	if maxOffset < 0 {
 		maxOffset = 0
 	}
-	if m.yOffset > maxOffset {
-		m.yOffset = maxOffset
+	if *off > maxOffset {
+		*off = maxOffset
 	}
 
 	// Clamp the cursor to the visible window so it follows scrolling
@@ -2143,13 +2358,13 @@ func (m *Model) View(height, width int) string {
 	// is unaffected. Rows with navIdx < 0 (blank separators, the "No
 	// channels" placeholder) are never selectable and are skipped.
 	if selectedLine >= 0 {
-		visibleTop := m.yOffset
-		visibleBottom := m.yOffset + height
+		visibleTop := *off
+		visibleBottom := *off + height
 		selectionAbove := selectedLine < visibleTop
 		selectionBelow := selectedLine >= visibleBottom
 		if selectionAbove || selectionBelow {
 			newCursor := -1
-			for i := visibleTop; i < visibleBottom && i < len(m.cacheRows); i++ {
+			for i := lo + visibleTop; i < lo+visibleBottom && i < hi; i++ {
 				if m.cacheRows[i].navIdx < 0 {
 					continue
 				}
@@ -2167,13 +2382,13 @@ func (m *Model) View(height, width int) string {
 	}
 
 	// Build visible window by slicing cacheRows. No lipgloss work per frame.
-	end := m.yOffset + height
-	if end > len(m.cacheRows) {
-		end = len(m.cacheRows)
+	end := lo + *off + height
+	if end > hi {
+		end = hi
 	}
 
 	visible := make([]string, 0, height)
-	for i := m.yOffset; i < end; i++ {
+	for i := lo + *off; i < end; i++ {
 		r := m.cacheRows[i]
 		switch {
 		case r.navIdx >= 0 && r.navIdx == m.cursor:
@@ -2202,8 +2417,7 @@ func (m *Model) View(height, width int) string {
 	for len(visible) < height {
 		visible = append(visible, m.cacheFiller)
 	}
-
-	return strings.Join(visible, "\n")
+	return visible
 }
 
 // ClickAt handles a mouse click at the given y-coordinate (relative to
@@ -2213,8 +2427,24 @@ func (m *Model) View(height, width int) string {
 // return (zero, false). Callers consult IsThreadsSelected /
 // IsSectionHeaderSelected after this call when ok == false.
 func (m *Model) ClickAt(y int) (ChannelItem, bool) {
-	absoluteY := y + m.yOffset
-	if absoluteY < 0 || absoluteY >= len(m.cacheRows) {
+	hi := len(m.cacheRows)
+	if m.split && m.dmStart >= 0 {
+		hi = m.dmStart
+	}
+	return m.clickRow(y+m.yOffset, 0, hi)
+}
+
+// ClickAtDM is ClickAt for the DM box drawn by ViewSplit; y is relative to
+// that box's content top.
+func (m *Model) ClickAtDM(y int) (ChannelItem, bool) {
+	if !m.split || m.dmStart < 0 || y < 0 {
+		return ChannelItem{}, false
+	}
+	return m.clickRow(m.dmStart+m.dmYOffset+y, m.dmStart, len(m.cacheRows))
+}
+
+func (m *Model) clickRow(absoluteY, lo, hi int) (ChannelItem, bool) {
+	if absoluteY < lo || absoluteY >= hi {
 		return ChannelItem{}, false
 	}
 	r := m.cacheRows[absoluteY]

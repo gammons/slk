@@ -167,6 +167,9 @@ type Sidebar struct {
 	// hidden regardless of this setting.
 	HideInactiveAfterDays int `toml:"hide_inactive_after_days"`
 	Width                 int `toml:"width"`
+	// DMPane pins the Direct Messages section in its own box at the
+	// bottom of the sidebar, always visible.
+	DMPane bool `toml:"dm_pane"`
 }
 
 // Marks holds preferences for vim-style marks.

@@ -36,6 +36,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/sidebar"
 )
 
 var reduceMouse reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
@@ -100,6 +101,15 @@ func reduceMouseWheel(a *App, m tea.MouseWheelMsg) tea.Cmd {
 		// Workspace rail: no scroll here.
 		return nil
 	case a.sidebarVisible && x < a.layout.SidebarEnd():
+		frame := a.computeFrame()
+		if mainRows, _, split := a.sidebarSplit(frame.SidebarWidth, frame.ContentHeight); split && m.Y >= mainRows+2 {
+			if up {
+				a.sidebar.ScrollDMUp(wheelLinesPerNotch)
+			} else {
+				a.sidebar.ScrollDMDown(wheelLinesPerNotch)
+			}
+			return nil
+		}
 		if up {
 			a.sidebar.ScrollUp(wheelLinesPerNotch)
 		} else {
@@ -217,11 +227,20 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 
 	case a.sidebarVisible && x < a.layout.SidebarEnd():
 		a.focusedPanel = PanelSidebar
-		sidebarY := m.Y - 1 // account for top border
-		if sidebarY < 0 {
-			return nil
+		var item sidebar.ChannelItem
+		var ok bool
+		frame := a.computeFrame()
+		if mainRows, _, split := a.sidebarSplit(frame.SidebarWidth, frame.ContentHeight); split && m.Y >= mainRows+2 {
+			// The Direct Messages box: its top border sits at mainRows+2.
+			item, ok = a.sidebar.ClickAtDM(m.Y - mainRows - 3)
+		} else {
+			sidebarY := m.Y - 1 // account for top border
+			if sidebarY < 0 {
+				return nil
+			}
+			item, ok = a.sidebar.ClickAt(sidebarY)
 		}
-		if item, ok := a.sidebar.ClickAt(sidebarY); ok {
+		if ok {
 			return func() tea.Msg {
 				return ChannelSelectedMsg{ID: item.ID, Name: item.Name, Type: item.Type}
 			}

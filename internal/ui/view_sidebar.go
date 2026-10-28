@@ -41,30 +41,57 @@ func (a *App) renderSidebar(sidebarWidth, sidebarBorder, contentHeight int, them
 	// flip and the cache key includes that version.
 	a.sidebar.SetFocused(sbFocused)
 	sbLayoutKey := themeVer<<1 | boolToInt(sbFocused)
-	a.layout.SetSidebarHeight(contentHeight - 2)
+	mainRows, dmRows, split := a.sidebarSplit(sidebarWidth, contentHeight)
+	if split {
+		a.layout.SetSidebarHeight(mainRows)
+	} else {
+		a.layout.SetSidebarHeight(contentHeight - 2)
+	}
 
 	c := &a.renderCache.sidebar
 	if c.hit(a.sidebar.Version(), sidebarWidth, contentHeight, sbLayoutKey) {
 		return c.output
 	}
 
-	borderStyle := lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(styles.Border).
-		BorderBackground(styles.SidebarBackground).
-		Background(styles.SidebarBackground).
-		Width(sidebarWidth)
-	if sbFocused {
-		borderStyle = lipgloss.NewStyle().
-			BorderStyle(lipgloss.ThickBorder()).
-			BorderForeground(styles.Primary).
+	box := func(focused bool) lipgloss.Style {
+		if focused {
+			return lipgloss.NewStyle().
+				BorderStyle(lipgloss.ThickBorder()).
+				BorderForeground(styles.Primary).
+				BorderBackground(styles.SidebarBackground).
+				Background(styles.SidebarBackground).
+				Width(sidebarWidth)
+		}
+		return lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(styles.Border).
 			BorderBackground(styles.SidebarBackground).
 			Background(styles.SidebarBackground).
 			Width(sidebarWidth)
 	}
-	sidebarView := a.sidebar.View(contentHeight-2, sidebarWidth)
-	sidebarView = borderStyle.Render(sidebarView)
+	var sidebarView string
+	if split {
+		top, dms := a.sidebar.ViewSplit(mainRows, dmRows, sidebarWidth)
+		inDMs := a.sidebar.CursorInDMPane()
+		sidebarView = box(sbFocused && !inDMs).Render(top) + "\n" + box(sbFocused && inDMs).Render(dms)
+	} else {
+		sidebarView = box(sbFocused).Render(a.sidebar.View(contentHeight-2, sidebarWidth))
+	}
 	out := exactSizeBg(sidebarView, sidebarWidth+sidebarBorder, contentHeight, styles.SidebarBackground)
 	c.store(out, a.sidebar.Version(), sidebarWidth, contentHeight, sbLayoutKey)
 	return out
+}
+
+// sidebarSplit returns the content heights of the channel box and the
+// Direct Messages box when [sidebar] dm_pane is on, there are DMs to show
+// and the column is tall enough for both; ok is false otherwise. The DM
+// box fits its rows, between 3 and two fifths of the column.
+func (a *App) sidebarSplit(sidebarWidth, contentHeight int) (mainRows, dmRows int, ok bool) {
+	rows := a.sidebar.DMPaneRows(sidebarWidth)
+	inner := contentHeight - 4 // two boxes, two border rows each
+	if rows == 0 || inner < 8 {
+		return 0, 0, false
+	}
+	dmRows = min(rows, max(3, inner*2/5))
+	return inner - dmRows, dmRows, true
 }

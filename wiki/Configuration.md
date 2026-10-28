@@ -20,6 +20,9 @@ image_protocol = "auto"   # auto | kitty | sixel | halfblock | off
 max_image_rows = 20       # cap inline image height in terminal rows
 colored_usernames = false # color each user's name by ID hash (Slack-style)
 
+[sidebar]
+dm_pane = false           # true pins Direct Messages in their own box at the bottom of the sidebar
+
 [animations]
 enabled = true
 smooth_scrolling = true

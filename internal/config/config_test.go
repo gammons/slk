@@ -1046,6 +1046,32 @@ team_id = "T04T4TH8W"
 	}
 }
 
+func TestConfig_SidebarDMPane(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Sidebar.DMPane {
+		t.Error("expected dm_pane off by default")
+	}
+
+	if err := os.WriteFile(path, []byte("[sidebar]\ndm_pane = true\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Sidebar.DMPane {
+		t.Error("expected dm_pane = true to turn the DM pane on")
+	}
+}
+
 func TestConfig_ShowAvatars(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")

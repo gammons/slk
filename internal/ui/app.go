@@ -2265,17 +2265,24 @@ func (a *App) FocusNext() {
 		}
 		return
 	}
+	// With [sidebar] dm_pane drawn, the Direct Messages box is a stop of
+	// its own between the channel box and the messages pane.
 	switch a.focusedPanel {
 	case PanelSidebar:
+		if !a.sidebar.CursorInDMPane() && a.sidebar.FocusDMPane() {
+			return
+		}
 		a.focusedPanel = PanelMessages
 	case PanelMessages:
 		if a.threadVisible {
 			a.focusedPanel = PanelThread
 		} else {
 			a.focusedPanel = PanelSidebar
+			a.sidebar.FocusChannelPane()
 		}
 	case PanelThread:
 		a.focusedPanel = PanelSidebar
+		a.sidebar.FocusChannelPane()
 	}
 }
 
@@ -2294,6 +2301,9 @@ func (a *App) FocusPrev() {
 	}
 	switch a.focusedPanel {
 	case PanelSidebar:
+		if a.sidebar.FocusChannelPane() {
+			return
+		}
 		if a.threadVisible {
 			a.focusedPanel = PanelThread
 		} else {
@@ -2301,6 +2311,7 @@ func (a *App) FocusPrev() {
 		}
 	case PanelMessages:
 		a.focusedPanel = PanelSidebar
+		a.sidebar.FocusDMPane()
 	case PanelThread:
 		a.focusedPanel = PanelMessages
 	}
@@ -3470,6 +3481,12 @@ func (a *App) SetMouseWheelLines(n int) {
 // before a channel is hidden; pass 0 to disable.
 func (a *App) SetSidebarStaleThreshold(d time.Duration) {
 	a.sidebar.SetStaleThreshold(d)
+}
+
+// SetSidebarDMPane draws the Direct Messages section in its own box at the
+// bottom of the sidebar ([sidebar] dm_pane).
+func (a *App) SetSidebarDMPane(enabled bool) {
+	a.sidebar.SetDMPane(enabled)
 }
 
 // renderTypingLine returns the styled typing indicator for the current
