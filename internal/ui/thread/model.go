@@ -36,6 +36,7 @@ type Model struct {
 	selected         int
 	focused          bool
 	coloredUsernames bool
+	showAvatars      bool
 	avatarFn         messages.AvatarFunc
 	userNames        map[string]string
 	userStatuses     map[string]peerstatus.Status
@@ -579,6 +580,13 @@ func (m *Model) SetUserNames(names map[string]string) {
 // with the new coloring.
 func (m *Model) SetColoredUsernames(enabled bool) {
 	m.coloredUsernames = enabled
+	m.InvalidateCache()
+}
+
+// SetShowAvatars draws the avatar from SetAvatarFunc beside each message
+// ([appearance] thread_avatars). Invalidates the render cache.
+func (m *Model) SetShowAvatars(enabled bool) {
+	m.showAvatars = enabled
 	m.InvalidateCache()
 }
 
@@ -1411,10 +1419,14 @@ func (m *Model) renderContext() *messages.RenderContext {
 	}
 }
 
-// renderMessage renders msg with the thread pane's options: no avatar
-// (even with SetAvatarFunc), no "(edited)", no broadcast label, no reply
+// renderMessage renders msg with the thread pane's options: an avatar
+// only with SetShowAvatars, no "(edited)", no broadcast label, no reply
 // affordance and no sixel rows (plan decision P3). Image hits are
 // recorded so a click opens the preview, as in the channel pane.
 func (m *Model) renderMessage(msg messages.MessageItem, width int, isSelected bool) messages.RenderedMessage {
-	return messages.RenderMessage(msg, width, m.renderContext(), messages.RenderOptions{IsSelected: isSelected, ImageHits: true})
+	opt := messages.RenderOptions{IsSelected: isSelected, ImageHits: true}
+	if m.showAvatars && m.avatarFn != nil {
+		opt.Avatar = m.avatarFn(msg.UserID)
+	}
+	return messages.RenderMessage(msg, width, m.renderContext(), opt)
 }

@@ -21,6 +21,27 @@ import (
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
+// TestThreadAvatars_OptIn: the thread pane draws authors' avatars only
+// after SetShowAvatars(true) (#388).
+func TestThreadAvatars_OptIn(t *testing.T) {
+	m := New()
+	m.SetAvatarFunc(func(userID string) string { return "<" + userID + ">" })
+	parent := messages.MessageItem{TS: "1700000001.000000", UserID: "U1", UserName: "alice", Text: "parent message"}
+	replies := []messages.MessageItem{{TS: "1700000002.000000", UserID: "U2", UserName: "bob", Text: "reply 1"}}
+	m.SetThread(parent, replies, "C123", "1700000001.000000")
+
+	if out := ansi.Strip(m.View(30, 80)); strings.Contains(out, "<U1>") || strings.Contains(out, "<U2>") {
+		t.Fatalf("avatar drawn with thread avatars off:\n%s", out)
+	}
+	m.SetShowAvatars(true)
+	out := ansi.Strip(m.View(30, 80))
+	for _, want := range []string{"<U1>", "<U2>"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %s with thread avatars on:\n%s", want, out)
+		}
+	}
+}
+
 func TestSetThread(t *testing.T) {
 	m := New()
 
