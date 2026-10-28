@@ -598,3 +598,25 @@ func TestApplyJoinKeepsCachedMembersNotYetLoaded(t *testing.T) {
 		t.Errorf("join pushed %+v; want one push of U1, U2 and U3", pushes)
 	}
 }
+
+// TestBackgroundFetchDBWriteFailureRecordsFailure is #191: a failed
+// ReplaceChannelMembers is recorded like a failed API call, so the
+// backoff suppresses the immediate refetch, and nothing is pushed.
+func TestBackgroundFetchDBWriteFailureRecordsFailure(t *testing.T) {
+	mgr, api, sink, db := newManagerForTest(t)
+	api.result = []string{"U1"}
+	db.Close() // every write now fails
+
+	mgr.backgroundFetch(context.Background(), "C1")
+	if _, ok := failureRecordedAt(mgr, "C1"); !ok {
+		t.Fatal("DB write failure was not recorded in lastFailed")
+	}
+	if pushes := sink.snapshot(); len(pushes) != 0 {
+		t.Errorf("pushes = %+v, want none", pushes)
+	}
+
+	mgr.backgroundFetch(context.Background(), "C1")
+	if got := api.callCount(); got != 1 {
+		t.Errorf("API calls = %d, want 1: the backoff should suppress the refetch", got)
+	}
+}

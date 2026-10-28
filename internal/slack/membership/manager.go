@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/debuglog"
 )
 
 // TTL bounds how stale cached membership can be before EnsureFresh
@@ -219,6 +220,12 @@ func (m *Manager) backgroundFetch(ctx context.Context, channelID string) {
 	// resolution when a row is actually rendered.
 	now := time.Now().Unix()
 	if err := m.db.ReplaceChannelMembers(m.workspaceID, channelID, ids, now); err != nil {
+		// Same as a failed API call: record it so the backoff holds,
+		// rather than letting the next EnsureFresh refetch at once (#191).
+		debuglog.Cache("ReplaceChannelMembers: channel=%s ERR=%v", channelID, err)
+		m.mu.Lock()
+		m.lastFailed[channelID] = time.Now()
+		m.mu.Unlock()
 		return
 	}
 	set := make(map[string]struct{}, len(ids))
