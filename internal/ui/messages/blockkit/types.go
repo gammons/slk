@@ -38,6 +38,7 @@ type (
 	ActionsBlock     = blocks.ActionsBlock
 	UnknownBlock     = blocks.UnknownBlock
 	RichTextBlock    = blocks.RichTextBlock
+	TableBlock       = blocks.TableBlock
 	AccessoryElement = blocks.AccessoryElement
 	ImageAccessory   = blocks.ImageAccessory
 	LabelAccessory   = blocks.LabelAccessory

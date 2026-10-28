@@ -402,29 +402,55 @@ func (m *Model) Version() int64 { return m.version + m.list.Version() }
 // we reconstruct a newline-faithful mrkdwn from the parsed block when
 // one is available. See blockkit.RichTextToMrkdwn.
 //
-// When no RichTextBlock is present (the overwhelmingly common case
-// for user-typed messages) this is a zero-cost passthrough of
-// msg.Text.
+// Every rich_text block contributes, in order, and so does every table
+// block, laid out as an aligned code block (blockkit.TableToText) in
+// its place among them: Slack splits a `markdown` block holding a
+// Markdown table into rich_text, table, rich_text.
+//
+// When no RichTextBlock or TableBlock is present (the overwhelmingly
+// common case for user-typed messages) this is a zero-cost passthrough
+// of msg.Text.
 func MessageTextSource(msg MessageItem) string {
+	var parts []string
 	for _, b := range msg.Blocks {
-		if rt, ok := b.(blockkit.RichTextBlock); ok {
-			if reconstructed := blockkit.RichTextToMrkdwn(rt); reconstructed != "" {
-				return reconstructed
+		switch v := b.(type) {
+		case blockkit.RichTextBlock:
+			if s := blockkit.RichTextToMrkdwn(v); s != "" {
+				parts = append(parts, s)
+			}
+		case blockkit.TableBlock:
+			if s := blockkit.TableToText(v); s != "" {
+				// The fence opens on its own line; the text before it
+				// keeps one trailing blank line at most.
+				if n := len(parts); n > 0 {
+					parts[n-1] = strings.TrimRight(parts[n-1], "\n")
+				}
+				parts = append(parts, "```\n"+s+"\n```")
 			}
 		}
 	}
-	return msg.Text
+	if len(parts) == 0 {
+		return msg.Text
+	}
+	return strings.Join(parts, "\n")
 }
 
 // BlocksCarryBody reports whether msg's blocks already render its body,
 // in which case the host adds no row for msg.Text. A non-empty rich_text
-// block is the exception: it renders through MessageTextSource and must
-// retain the host body row. This decision affects rendering only;
-// copying still uses msg.Text.
+// or table block is the exception: it renders through MessageTextSource
+// and must retain the host body row. This decision affects rendering
+// only; copying still uses msg.Text.
 func BlocksCarryBody(msg MessageItem) bool {
 	for _, b := range msg.Blocks {
-		if rt, ok := b.(blockkit.RichTextBlock); ok && blockkit.RichTextToMrkdwn(rt) != "" {
-			return false
+		switch v := b.(type) {
+		case blockkit.RichTextBlock:
+			if blockkit.RichTextToMrkdwn(v) != "" {
+				return false
+			}
+		case blockkit.TableBlock:
+			if len(v.Rows) > 0 {
+				return false
+			}
 		}
 	}
 	return blockkit.RendersBody(msg.Blocks)
