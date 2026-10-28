@@ -137,6 +137,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Slack permalink parsing | `slackurl.Parse` |
 | Huddle deep link for a conversation (`https://app.slack.com/huddle/<TEAM>/<CHANNEL>`) | `slackurl.HuddleURL` |
 | Enter insert mode with a compose box focused (the shared body of `i` and a click on a compose region) | `(*App).beginInsertMode(toThread bool)` (`internal/ui/mode_command.go`); the compose regions' tops are recorded per frame in `panelLayout` |
+| The OSC 8 hyperlink spans of final rendered message rows (display columns, same frame HitTest takes) | `messages.ScanOsc8Spans` + `messages.HitsFromSpans` (classifies a span as a file-attachment rect when its URL is one of the message's file attachments; used by WrapRows and the thread parent) |
 | The channel a user's huddle is in (users.info) | `slackclient.UserProfile.HuddleStateChannelID` (wraps `*slack.User`; `GetUserProfile`/`GetUserProfileContext` are hand-rolled POSTs because slack-go's `UserProfile` drops that field) |
 | Slack ts → `time.Time` (whole seconds, any timezone) | `export.TimeFromTS` |
 | A since/until/overlap date range in a timezone, and "is this ts in it?" | `export.NewWindow`, `export.Window.Contains` |

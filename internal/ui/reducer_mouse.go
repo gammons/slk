@@ -258,6 +258,15 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		if a.wins.Len() > 1 {
 			return nil
 		}
+		// The full-screen image preview replaces the messages pane, but
+		// the pane's last hit rects stay cached (View skips the region
+		// while the preview is open). A click on the preview image would
+		// otherwise hit-test against those hidden rects and open a link
+		// or download a file underneath it. The rail and sidebar sit
+		// outside the preview and keep working.
+		if a.preview.Active() {
+			return nil
+		}
 		a.focusedPanel = PanelMessages
 		// In the threads-list view, the messages-pane region
 		// renders threadsView, not the channel messages. Route
@@ -316,6 +325,9 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		if cmd, hit := a.downloadFileAt(a.messagepane, a.activeChannelID, px, py); hit {
 			return cmd
 		}
+		if cmd, hit := a.openLinkAt(a.messagepane, px, py); hit {
+			return cmd
+		}
 		a.drag.Begin(PanelMessages, px, py)
 		a.messagepane.BeginSelectionAt(py, px)
 		// Remember whether this press actually landed on a message
@@ -326,6 +338,12 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		return nil
 
 	case a.threadVisible && x < a.layout.ThreadEnd():
+		// Same preview guard as the messages branch: the preview covers
+		// the thread region too, and its cached hit rects must not
+		// react to clicks on the preview image.
+		if a.preview.Active() {
+			return nil
+		}
 		a.focusedPanel = PanelThread
 		panel, px, py, ok := a.panelAt(m.X, m.Y)
 		if !ok || panel != PanelThread || py < 0 {
@@ -369,12 +387,31 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		if cmd, hit := a.downloadFileAt(a.threadPanel, a.threadPanel.ChannelID(), px, py); hit {
 			return cmd
 		}
+		if cmd, hit := a.openLinkAt(a.threadPanel, px, py); hit {
+			return cmd
+		}
 		a.drag.Begin(PanelThread, px, py)
 		a.threadPanel.BeginSelectionAt(py, px)
 		a.threadPanel.ClickAt(py)
 		return nil
 	}
 	return nil
+}
+
+// openLinkAt opens the hyperlink at pane-local (px, py) in p, if there
+// is one - the mouse equivalent of `o`. Takes precedence over the
+// drag-to-copy selection. A file line wins over it: downloadFileAt runs
+// first at the call site, since downloading is the more specific intent
+// for the line's own span.
+func (a *App) openLinkAt(p contentPane, px, py int) (tea.Cmd, bool) {
+	contentY := py - p.ChromeHeight()
+	if contentY < 0 {
+		return nil, false
+	}
+	if url, ok := p.HitTestLink(contentY, px); ok {
+		return func() tea.Msg { return OpenLinkMsg{URL: url} }, true
+	}
+	return nil, false
 }
 
 // toggleReactionAt toggles the reaction whose pill is at pane-local
@@ -423,5 +460,12 @@ func (a *App) downloadFileAt(p contentPane, channelID string, px, py int) (tea.C
 		return nil, false
 	}
 	att := msg.Attachments[attIdx]
+	// The span classifier keys a [File] line by its permalink, not by
+	// whether a download URL exists, so a file attachment without one
+	// can reach here. Refuse rather than dispatch a download that can
+	// only fail; the click then falls through to the link handler.
+	if att.DownloadURL == "" {
+		return nil, false
+	}
 	return func() tea.Msg { return DownloadFileMsg{Attachment: att} }, true
 }

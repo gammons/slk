@@ -1151,6 +1151,12 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 				parent.Hits = append(parent.Hits, h)
 			}
 		}
+		// The parent's lines are assembled here rather than through
+		// WrapRows, so its clickable spans are scanned from the final
+		// rendered rows directly; HitsFromSpans classifies its own
+		// file attachments against their URLs, as WrapRows does.
+		parent.Hits = append(parent.Hits,
+			messages.HitsFromSpans(messages.ScanOsc8Spans(parent.Lines), m.parent)...)
 	}
 
 	if len(m.replies) == 0 {
@@ -1228,7 +1234,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 				Selected:   w.Selected,
 				Plain:      w.Plain,
 				ColOffset:  1,
-				Hits:       r.Hits,
+				Hits:       append(r.Hits, w.LinkHits...),
 			})
 			m.cache = append(m.cache, messages.EntryPayload{ShortSrc: w.ShortSrc, Flushes: flushes})
 			m.replyIDToIdx[reply.TS] = i
@@ -1341,6 +1347,17 @@ func (m *Model) HitTestReaction(row, col int) (replyIdx int, emoji string, ok bo
 		return 0, "", false
 	}
 	return h.Ref, h.Key, true
+}
+
+// HitTestLink returns the URL of the hyperlink at (row, col) within
+// the thread's content area, or ok=false when no link span covers that
+// cell. Coordinate frame mirrors HitTestReaction.
+func (m *Model) HitTestLink(row, col int) (url string, ok bool) {
+	h, ok := m.list.HitTest(entrylist.HitLink, row, col)
+	if !ok || h.Key == "" {
+		return "", false
+	}
+	return h.Key, true
 }
 
 // HitTestImage returns the ts of the message (the parent or a reply)
