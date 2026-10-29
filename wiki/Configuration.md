@@ -61,6 +61,9 @@ quiet_hours = "22:00-08:00"   # planned
 # matching Slack. (This is a behavior change: previously a mention or keyword
 # in a muted channel would still notify.)
 
+[sidebar]
+right_align_badges = false  # true: mention badges at the right end of the row (Slack)
+
 [compose]
 editor = "nvim"   # Ctrl+E editor, used when $VISUAL and $EDITOR are unset
 # Keep typing after Enter sends (default false: return to normal mode like
@@ -251,6 +254,13 @@ sidebar_background = "#19171D"
 sidebar_text       = "#D1D2D3"
 sidebar_text_muted = "#9A9B9E"
 rail_background    = "#19171D"
+
+# Optional, for a Slack-like look. Unset keeps slk's defaults.
+username            = "#1D1C1D" # author names (default: primary)
+sidebar_selected_bg = "#333133" # selected sidebar row as a filled pill, no ▌
+sidebar_selected_fg = "#F8F8F8" # its text (default: sidebar_text)
+mention_badge_bg    = "#C01343" # mention-count badge (default: selection colours)
+mention_badge_fg    = "#FFFFFF"
 ```
 
 Every built-in theme now sets a channels-panel (sidebar) background that is

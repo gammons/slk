@@ -166,7 +166,10 @@ type Sidebar struct {
 	// unread messages, and the currently-selected channel are never
 	// hidden regardless of this setting.
 	HideInactiveAfterDays int `toml:"hide_inactive_after_days"`
-	Width                 int `toml:"width"`
+	// RightAlignBadges puts mention badges at the right end of their
+	// rows, as Slack does. Default off.
+	RightAlignBadges bool `toml:"right_align_badges"`
+	Width            int  `toml:"width"`
 }
 
 // Marks holds preferences for vim-style marks.

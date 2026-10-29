@@ -3472,6 +3472,12 @@ func (a *App) SetSidebarStaleThreshold(d time.Duration) {
 	a.sidebar.SetStaleThreshold(d)
 }
 
+// SetRightAlignBadges puts the sidebar's mention badges at the right end
+// of their rows ([sidebar] right_align_badges).
+func (a *App) SetRightAlignBadges(enabled bool) {
+	a.sidebar.SetRightAlignBadges(enabled)
+}
+
 // renderTypingLine returns the styled typing indicator for the current
 // channel (people typing, apps working), or an empty string if there is
 // neither. Stays on App because it pulls in messagepane name resolution

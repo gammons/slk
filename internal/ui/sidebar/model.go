@@ -288,6 +288,10 @@ type Model struct {
 	// Populated lazily; lookups treat nil as empty. Used in Task 9.
 	collapseByID map[string]bool
 
+	// rightAlignBadges puts mention badges at the row's right end
+	// ([sidebar] right_align_badges).
+	rightAlignBadges bool
+
 	// Staleness filter: items whose last_read_ts (from the read-state
 	// DB, fetched via readStateReader in rebuildFilter) is older than
 	// staleThreshold are dropped from `filtered` (i.e. hidden from the
@@ -594,6 +598,13 @@ func (m *Model) SetStaleThreshold(d time.Duration) {
 	m.staleThreshold = d
 	m.rebuildFilter()
 	m.rebuildNavWithCursor(key, hadKey)
+	m.cacheValid = false
+	m.dirty()
+}
+
+// SetRightAlignBadges puts mention badges at the right end of their rows.
+func (m *Model) SetRightAlignBadges(enabled bool) {
+	m.rightAlignBadges = enabled
 	m.cacheValid = false
 	m.dirty()
 }
@@ -1630,6 +1641,10 @@ func (m *Model) buildCache(width int) {
 
 	cursorSelected := cursorStyle.Render("▌")
 	activeBorder := activeBorderStyle.Render("▌")
+	pillAttrs := messages.SidebarSelectedANSI()
+	if pillAttrs != "" {
+		pillAttrs += "\x1b[1m"
+	}
 	unreadDotStr := dotStyle.Render("●")
 	privatePrefix := privateStyle.Render("◆ ")
 	// Read private channels use a *plain* "◆ " glyph (no inline ANSI
@@ -1676,6 +1691,7 @@ func (m *Model) buildCache(width int) {
 	if m.threadsUnread > 0 {
 		threadsAttrs += "\x1b[1m"
 	}
+	threadsPill := threadsLabel
 	threadsLabel = messages.ReapplyBgAfterResets(threadsLabel, threadsAttrs)
 	threadsCursor = messages.ReapplyBgAfterResets(threadsCursor, threadsAttrs)
 	threadsActiveLabel = messages.ReapplyBgAfterResets(threadsActiveLabel, threadsAttrs)
@@ -1685,6 +1701,9 @@ func (m *Model) buildCache(width int) {
 	}
 	threadsNormal := threadsBaseStyle.Width(width - 2).Render(threadsLabel)
 	threadsSelectedRow := styles.ChannelSelected.Width(width - 2).Render(threadsCursor)
+	if pillAttrs != "" {
+		threadsSelectedRow = pillRow(threadsPill, width, pillAttrs)
+	}
 	threadsActiveRow := styles.ChannelSelected.Width(width - 2).Render(threadsActiveLabel)
 	m.cacheRows = append(m.cacheRows, renderRow{
 		normal:       threadsNormal,
@@ -1711,6 +1730,7 @@ func (m *Model) buildCache(width int) {
 	if m.activityUnread > 0 {
 		activityAttrs += "\x1b[1m"
 	}
+	activityPill := activityLabel
 	activityLabel = messages.ReapplyBgAfterResets(activityLabel, activityAttrs)
 	activityCursor = messages.ReapplyBgAfterResets(activityCursor, activityAttrs)
 	activityActiveLabel = messages.ReapplyBgAfterResets(activityActiveLabel, activityAttrs)
@@ -1720,6 +1740,9 @@ func (m *Model) buildCache(width int) {
 	}
 	activityNormal := activityBaseStyle.Width(width - 2).Render(activityLabel)
 	activitySelectedRow := styles.ChannelSelected.Width(width - 2).Render(activityCursor)
+	if pillAttrs != "" {
+		activitySelectedRow = pillRow(activityPill, width, pillAttrs)
+	}
 	activityActiveRow := styles.ChannelSelected.Width(width - 2).Render(activityActiveLabel)
 	m.cacheRows = append(m.cacheRows, renderRow{
 		normal:        activityNormal,
@@ -1791,9 +1814,11 @@ func (m *Model) buildCache(width int) {
 		// reason. (lipgloss does split Padding(0, 1) into separate
 		// spans around the text, but the text itself stays contiguous.)
 		unreadDot := " "
+		hasBadge := false
 		trailerCells := 2 // worst-case cost of the dot glyph
 		if badgeText := formatMentionBadge(item.MentionBadge(readState[item.ID])); badgeText != "" {
 			unreadDot = mentionBadgeStyleFor(item.IsMuted).Render(badgeText)
+			hasBadge = true
 			// Exact, not worst-case. The 2-cell padding above is a
 			// hedge against East-Asian-Ambiguous glyphs, whose column
 			// count lipgloss cannot predict. badgeText has no such
@@ -1877,9 +1902,13 @@ func (m *Model) buildCache(width int) {
 		// View() picks: selected if cursor is on this row, else active
 		// if this row's channelID matches activeID, else normal. The
 		// cursor takes precedence so j/k feedback stays unambiguous.
-		labelNormal := " " + prefix + name + " " + unreadDot
-		labelSelected := cursorSelected + prefix + name + " " + unreadDot
-		labelActive := activeBorder + prefix + name + " " + unreadDot
+		gap := " "
+		if hasBadge && m.rightAlignBadges {
+			gap = badgeGap(width, " "+prefix+name, unreadDot)
+		}
+		labelNormal := " " + prefix + name + gap + unreadDot
+		labelSelected := cursorSelected + prefix + name + gap + unreadDot
+		labelActive := activeBorder + prefix + name + gap + unreadDot
 
 		// Re-apply theme attrs after ANSI resets emitted by inline styled
 		// glyphs (cursor, prefix, unread dot) so the outer lipgloss
@@ -1931,6 +1960,9 @@ func (m *Model) buildCache(width int) {
 
 		rowNormal := baseStyle.Width(width - 2).Render(labelNormal)
 		rowSelected := styles.ChannelSelected.Width(width - 2).Render(labelSelected)
+		if pillAttrs != "" {
+			rowSelected = pillRow(" "+prefix+name+gap+unreadDot, width, pillAttrs)
+		}
 		// Active uses the same bright/bold treatment as Selected so the
 		// entered channel reads as "current" even when its unread count
 		// is zero (which is the common case after MarkChannel runs).
@@ -2087,6 +2119,25 @@ func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.
 	selected := cursor + glyph + " " + emojiPrefix + displayName + aggregates
 	return messages.ReapplyBgAfterResets(label, bgAnsi),
 		messages.ReapplyBgAfterResets(selected, bgAnsi)
+}
+
+// badgeGap is the run of spaces that pushes badge to the right end of a
+// row starting with left, keeping one spare cell for an ambiguous-width
+// glyph a terminal draws two cells wide.
+func badgeGap(width int, left, badge string) string {
+	n := (width - 4) - lipgloss.Width(left) - lipgloss.Width(badge) - 1
+	return strings.Repeat(" ", max(n, 1))
+}
+
+// pillRow renders a cursor row as the theme's sidebar_selected_bg pill,
+// inset one column from each edge so its text lines up with the other
+// rows. label starts with the cursor slot; attrs is re-applied after
+// every ANSI reset inside it.
+func pillRow(label string, width int, attrs string) string {
+	edge := lipgloss.NewStyle().Background(styles.SidebarBackground).Render(" ")
+	pill := lipgloss.NewStyle().Background(styles.SidebarSelectedBg).
+		Foreground(styles.SidebarSelectedFg).Bold(true).Width(width - 4)
+	return edge + pill.Render(messages.ReapplyBgAfterResets(label, attrs)) + edge
 }
 
 func (m *Model) View(height, width int) string {
