@@ -3465,6 +3465,12 @@ func (a *App) SetMouseWheelLines(n int) {
 	a.mouseWheelLines = n
 }
 
+// SetMentionPills shows Slack's "Unread mentions" pills on the sidebar
+// edges ([sidebar] mention_pills).
+func (a *App) SetMentionPills(enabled bool) {
+	a.sidebar.SetMentionPills(enabled)
+}
+
 // SetSidebarStaleThreshold configures auto-hiding of inactive
 // channels in the sidebar. d is the maximum age (since LastReadTS)
 // before a channel is hidden; pass 0 to disable.

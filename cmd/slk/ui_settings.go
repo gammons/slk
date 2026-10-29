@@ -16,6 +16,7 @@ import (
 // config.
 type uiSettings struct {
 	TimestampFormat  string
+	MentionPills     bool
 	TypingIndicators bool
 	StaleAfter       time.Duration
 	MouseWheelLines  int
@@ -30,6 +31,7 @@ type uiSettings struct {
 func uiSettingsFromConfig(cfg config.Config) uiSettings {
 	return uiSettings{
 		TimestampFormat:       cfg.Appearance.TimestampFormat,
+		MentionPills:          cfg.Sidebar.MentionPills,
 		TypingIndicators:      cfg.Animations.TypingIndicators,
 		StaleAfter:            time.Duration(cfg.Sidebar.HideInactiveAfterDays) * 24 * time.Hour,
 		MouseWheelLines:       cfg.Appearance.MouseWheelLines,
@@ -51,6 +53,7 @@ func applyUISettings(app *ui.App, s uiSettings) {
 	})
 	app.SetTypingEnabled(s.TypingIndicators)
 	app.SetSidebarStaleThreshold(s.StaleAfter)
+	app.SetMentionPills(s.MentionPills)
 	app.SetMouseWheelLines(s.MouseWheelLines)
 	app.SetColoredUsernames(s.ColoredUsernames)
 	app.SetThemeItems(styles.ThemeNames())

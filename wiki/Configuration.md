@@ -68,6 +68,10 @@ editor = "nvim"   # Ctrl+E editor, used when $VISUAL and $EDITOR are unset
 # work from an empty composer; Ctrl+W, Ctrl+H and Ctrl+K keep deleting text.
 stay_in_insert_after_send = true
 
+[sidebar]
+mention_pills = false   # true: "↑/↓ Unread mentions" pills while a mentioned
+                        # channel is scrolled out of view (click to reach it)
+
 [cache]
 message_retention_days = 30
 max_db_size_mb = 500

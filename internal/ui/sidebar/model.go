@@ -315,6 +315,14 @@ type Model struct {
 	// preserved.
 	snappedSelection int
 	hasSnapped       bool
+	// mentionPills enables the "Unread mentions" pills
+	// ([sidebar] mention_pills).
+	mentionPills bool
+	// mentionAbove/Below index the nearest cacheRows row with an
+	// unread mention above/below the window View() last drew, -1 for
+	// none. Their pills cover window rows pillTop and pillBottom.
+	mentionAbove, mentionBelow int
+	pillTop, pillBottom        int
 
 	// lastHeight is the viewport height of the most recent View() call.
 	// PageDown/PageUp need it to know whether the viewport can still
@@ -582,6 +590,12 @@ func (m *Model) SetNowFunc(fn func() time.Time) {
 	m.dirty()
 }
 
+// SetMentionPills turns the "Unread mentions" pills on or off.
+func (m *Model) SetMentionPills(enabled bool) {
+	m.mentionPills = enabled
+	m.dirty()
+}
+
 // SetStaleThreshold sets the maximum age for a channel's LastReadTS
 // before the channel is auto-hidden from the sidebar. Pass 0 (or
 // negative) to disable. Re-runs the filter immediately so the change
@@ -645,7 +659,7 @@ func (m *Model) Version() int64 { return m.version }
 func (m *Model) dirty() { m.version++ }
 
 func New(items []ChannelItem) Model {
-	m := Model{items: items}
+	m := Model{items: items, mentionAbove: -1, mentionBelow: -1}
 	// Default collapse state: the firehose "Channels" section and the
 	// "Apps" section start collapsed so the sidebar opens on a tidy
 	// view of pinned sections + human DMs. Custom sections and DMs
@@ -1556,6 +1570,10 @@ type renderRow struct {
 	// the `active` variant whenever m.threadsActive is true (mirroring
 	// the channelID-based check used for channels).
 	isThreadsRow bool
+	// mention marks a row carrying an unread-mention badge (a channel,
+	// or a collapsed header summing them), for the "Unread mentions"
+	// pills View() floats over the edges when one is scrolled away.
+	mention bool
 	// isActivityRow flags the synthetic Activity row so View() can swap
 	// in the `active` variant whenever m.activityActive is true.
 	isActivityRow bool
@@ -1947,6 +1965,7 @@ func (m *Model) buildCache(width int) {
 			height:    1, // every channel row is exactly one line
 			navIdx:    ni,
 			channelID: item.ID,
+			mention:   item.MentionBadge(readState[item.ID]) > 0,
 		})
 	}
 
@@ -1970,7 +1989,7 @@ func (m *Model) buildCache(width int) {
 			m.cacheRows = append(m.cacheRows, renderRow{height: 1, navIdx: -1})
 		}
 		group := sectionMap[name]
-		headerLabel, headerLabelSelected := m.renderSectionHeaderLabel(name, cursorSelected, dotStyle, bgAnsi)
+		headerLabel, headerLabelSelected, headerMentions := m.renderSectionHeaderLabel(name, cursorSelected, dotStyle, bgAnsi)
 		ni, ok := headerNavIdx[name]
 		if !ok {
 			ni = -1
@@ -1980,6 +1999,7 @@ func (m *Model) buildCache(width int) {
 			selected: styles.SectionHeader.Width(width - 2).Render(headerLabelSelected),
 			height:   1,
 			navIdx:   ni,
+			mention:  headerMentions > 0,
 		})
 		m.cacheRows = append(m.cacheRows, group.rows...)
 	}
@@ -2036,7 +2056,7 @@ func (m *Model) sectionDisplayMeta(sectionKey string) (name, emoji string) {
 // The mention badge widens the header by at most 6 columns (separator
 // plus a padded "99+"), so it reaches that threshold sooner but does
 // not create it. Filed separately; do not fix it inline here.
-func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.Style, bgAnsi string) (string, string) {
+func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.Style, bgAnsi string) (string, string, int) {
 	displayName, emojiCode := m.sectionDisplayMeta(name)
 	emojiPrefix := ""
 	if emojiCode != "" {
@@ -2067,8 +2087,11 @@ func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.
 	// drift apart, and the cursor landing on a header must not change
 	// what the header reports.
 	aggregates := ""
+	mentions := 0
 	if m.IsCollapsed(name) {
-		unread, mentions, mentionsAllMuted := m.aggregateForSection(name)
+		var unread int
+		var mentionsAllMuted bool
+		unread, mentions, mentionsAllMuted = m.aggregateForSection(name)
 		if unread > 0 {
 			aggregates += " " + dotStyle.Render("•"+fmt.Sprintf("%d", unread))
 		}
@@ -2086,7 +2109,7 @@ func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.
 	label := " " + glyph + " " + emojiPrefix + displayName + aggregates
 	selected := cursor + glyph + " " + emojiPrefix + displayName + aggregates
 	return messages.ReapplyBgAfterResets(label, bgAnsi),
-		messages.ReapplyBgAfterResets(selected, bgAnsi)
+		messages.ReapplyBgAfterResets(selected, bgAnsi), mentions
 }
 
 func (m *Model) View(height, width int) string {
@@ -2173,10 +2196,12 @@ func (m *Model) View(height, width int) string {
 	}
 
 	visible := make([]string, 0, height)
+	cursorLine := -1
 	for i := m.yOffset; i < end; i++ {
 		r := m.cacheRows[i]
 		switch {
 		case r.navIdx >= 0 && r.navIdx == m.cursor:
+			cursorLine = len(visible)
 			visible = append(visible, r.selected)
 		case r.channelID != "" && r.channelID == m.activeID && r.active != "":
 			// This row is the channel the user is currently viewing in
@@ -2203,7 +2228,50 @@ func (m *Model) View(height, width int) string {
 		visible = append(visible, m.cacheFiller)
 	}
 
+	m.mentionAbove, m.mentionBelow = -1, -1
+	if m.mentionPills && height >= 3 {
+		for i := min(m.yOffset, len(m.cacheRows)) - 1; i >= 0; i-- {
+			if m.cacheRows[i].mention {
+				m.mentionAbove = i
+				break
+			}
+		}
+		for i := end; i < len(m.cacheRows); i++ {
+			if m.cacheRows[i].mention {
+				m.mentionBelow = i
+				break
+			}
+		}
+	}
+	// The pills never cover the cursor row: j/k scrolling keeps it on
+	// the window's edge.
+	m.pillTop, m.pillBottom = 0, height-1
+	if cursorLine == m.pillTop {
+		m.pillTop++
+	}
+	if cursorLine == m.pillBottom {
+		m.pillBottom--
+	}
+	if m.mentionAbove >= 0 {
+		visible[m.pillTop] = mentionPill("↑", width)
+	}
+	if m.mentionBelow >= 0 {
+		visible[m.pillBottom] = mentionPill("↓", width)
+	}
+
 	return strings.Join(visible, "\n")
+}
+
+// mentionPill is Slack's "Unread mentions" pill, centred on a sidebar row,
+// pointing at a mentioned channel scrolled out of view.
+func mentionPill(arrow string, width int) string {
+	badge := styles.MentionBadgeStyle().Bold(true)
+	pill := badge.Render(arrow + " Unread mentions")
+	if lipgloss.Width(pill) > width-2 {
+		pill = badge.Render(arrow + " Mentions")
+	}
+	return lipgloss.PlaceHorizontal(width-2, lipgloss.Center, pill,
+		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(styles.SidebarBackground)))
 }
 
 // ClickAt handles a mouse click at the given y-coordinate (relative to
@@ -2213,6 +2281,22 @@ func (m *Model) View(height, width int) string {
 // return (zero, false). Callers consult IsThreadsSelected /
 // IsSectionHeaderSelected after this call when ok == false.
 func (m *Model) ClickAt(y int) (ChannelItem, bool) {
+	// A click on an "Unread mentions" pill selects the nearest mentioned
+	// row that way; View() scrolls it into sight.
+	target := -1
+	switch {
+	case y == m.pillTop && m.mentionAbove >= 0:
+		target = m.mentionAbove
+	case y == m.pillBottom && m.mentionBelow >= 0:
+		target = m.mentionBelow
+	}
+	if target >= 0 {
+		if ni := m.cacheRows[target].navIdx; ni >= 0 && ni != m.cursor {
+			m.cursor = ni
+			m.dirty()
+		}
+		return ChannelItem{}, false
+	}
 	absoluteY := y + m.yOffset
 	if absoluteY < 0 || absoluteY >= len(m.cacheRows) {
 		return ChannelItem{}, false

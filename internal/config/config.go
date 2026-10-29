@@ -160,6 +160,10 @@ type CacheConfig struct {
 // Sidebar holds preferences governing what appears in the channel
 // sidebar.
 type Sidebar struct {
+	// MentionPills floats Slack's "Unread mentions" pills on the
+	// sidebar's top/bottom row while a channel with an unread mention
+	// is scrolled out of view. Default off.
+	MentionPills bool `toml:"mention_pills"`
 	// HideInactiveAfterDays auto-hides channels (of any type) whose
 	// last_read_ts is older than this many days. Set to 0 to disable.
 	// Channels matching a custom [sections.*] glob, channels with
