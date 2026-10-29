@@ -4272,9 +4272,11 @@ func (a *App) markUnreadOfSelected() tea.Cmd {
 }
 
 // openImagePreviewOfSelected dispatches OpenImagePreviewMsg for the
-// first image attachment on the currently-selected message in the
-// focused pane (messages or thread). Returns nil if no message is
-// selected or the selected message has no image attachment.
+// first previewable image attachment on the currently-selected message in
+// the focused pane (messages or thread). An image Slack made no thumbnail
+// for (SVG) has nothing to preview, so it is downloaded and opened in the
+// system viewer instead, through DownloadFileMsg. Returns nil if no message
+// is selected or the selected message has no image attachment.
 func (a *App) openImagePreviewOfSelected() tea.Cmd {
 	channelID, ts, _, _, _, ok := a.selectedMessageContext()
 	if !ok {
@@ -4284,21 +4286,44 @@ func (a *App) openImagePreviewOfSelected() tea.Cmd {
 	if !found {
 		return nil
 	}
+	fallback := -1
 	for i, att := range msgItem.Attachments {
-		if att.Kind == "image" && att.FileID != "" {
-			channel := channelID
-			messageTS := ts
-			idx := i
-			return func() tea.Msg {
-				return messages.OpenImagePreviewMsg{
-					Channel: channel,
-					TS:      messageTS,
-					AttIdx:  idx,
-				}
+		if att.Kind != "image" || att.FileID == "" {
+			continue
+		}
+		if !hasPreviewThumb(att) {
+			if fallback < 0 && att.DownloadURL != "" {
+				fallback = i
+			}
+			continue
+		}
+		channel := channelID
+		messageTS := ts
+		idx := i
+		return func() tea.Msg {
+			return messages.OpenImagePreviewMsg{
+				Channel: channel,
+				TS:      messageTS,
+				AttIdx:  idx,
 			}
 		}
 	}
+	if fallback >= 0 {
+		att := msgItem.Attachments[fallback]
+		return func() tea.Msg { return DownloadFileMsg{Attachment: att} }
+	}
 	return nil
+}
+
+// hasPreviewThumb reports whether att has a thumbnail previewFetchCmd can
+// load.
+func hasPreviewThumb(att messages.Attachment) bool {
+	for _, t := range att.Thumbs {
+		if t.URL != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // submitEdit emits an EditMessageMsg if the edit text is non-empty.
