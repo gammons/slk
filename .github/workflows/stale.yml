@@ -23,7 +23,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Warn about and close inactive pull requests
-        uses: actions/stale@v11
+        uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11
         with:
           # Pull requests only; issues are never marked stale or closed.
           days-before-issue-stale: -1
