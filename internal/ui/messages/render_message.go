@@ -516,7 +516,13 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		// avatar gutter that placeAvatarBeside prepends to every line
 		// afterwards, so the run at the start of the content has no
 		// preceding reset here to attach a background to.
-		bkBlock = "\n" + WithBackground(bkLines, BgANSI())
+		// The gutter's reset clears the text colour too; an image sets its own.
+		fg := FgANSI()
+		lines := make([]string, len(bkLines))
+		for i, l := range bkLines {
+			lines[i] = fg + l
+		}
+		bkBlock = "\n" + WithBackground(lines, BgANSI())
 	}
 
 	if len(msg.Attachments) > 0 {
