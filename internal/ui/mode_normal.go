@@ -366,6 +366,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		a.statusbar.SetHelpHint("m…")
 		return nil
 
+	case key.Matches(msg, a.keys.JumpToParent):
+		return a.jumpToThreadParent()
+
 	case key.Matches(msg, a.keys.JumpMark):
 		// With the jump overlay enabled (the default), ' opens the
 		// marks list; a letter then jumps immediately from there, so

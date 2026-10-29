@@ -47,6 +47,7 @@ type KeyMap struct {
 	MarkUnread          key.Binding
 	MarkSet             key.Binding
 	JumpMark            key.Binding
+	JumpToParent        key.Binding
 	MarkBackJump        key.Binding
 	MarksList           key.Binding
 	MarksDelete         key.Binding
@@ -128,6 +129,7 @@ func DefaultKeyMap() KeyMap {
 		MarkUnread:      key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "mark unread")),
 		MarkSet:         key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "set mark")),
 		JumpMark:        key.NewBinding(key.WithKeys("'", "`"), key.WithHelp("'/`", "jump to mark")),
+		JumpToParent:    key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "go to the open thread's message in its channel")),
 		// Keyless help-only entries (same trick as WorkspaceFinder
 		// below). The back-jump is the doubled apostrophe consumed
 		// inside the ' chord, and the two commands are dispatched from

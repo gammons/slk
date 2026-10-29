@@ -59,10 +59,15 @@ func (a *App) currentLocation() (Location, bool) {
 		}
 		return a.channelPaneLocation()
 	}
-	reply := a.threadPanel.SelectedReply()
-	if reply == nil {
+	if a.threadPanel.SelectedReply() == nil {
 		return Location{}, false
 	}
+	return a.threadPanelLocation(), true
+}
+
+// threadPanelLocation names the open thread whatever has focus: its
+// selected reply, or the parent when no reply is selected.
+func (a *App) threadPanelLocation() Location {
 	// The thread's own channel, NOT activeChannelID. In the Threads
 	// view the panel shows a thread from any channel while
 	// activeChannelID still names whichever channel was last
@@ -73,12 +78,17 @@ func (a *App) currentLocation() (Location, bool) {
 	if channelID == "" {
 		channelID = a.activeChannelID
 	}
+	threadTS := a.threadPanel.ThreadTS()
+	ts := threadTS
+	if reply := a.threadPanel.SelectedReply(); reply != nil {
+		ts = reply.TS
+	}
 	return Location{
 		TeamID:    ids.TeamID(a.activeTeamID),
 		ChannelID: ids.ChannelID(channelID),
-		MessageTS: ids.MessageTS(reply.TS),
-		ThreadTS:  ids.ThreadTS(a.threadPanel.ThreadTS()),
-	}, true
+		MessageTS: ids.MessageTS(ts),
+		ThreadTS:  ids.ThreadTS(threadTS),
+	}
 }
 
 // channelPaneLocation names the messages pane's selection in the
