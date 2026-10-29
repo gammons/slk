@@ -1286,3 +1286,17 @@ func TestBroadcastHintWrapping(t *testing.T) {
 		}
 	}
 }
+
+func TestComposeCursorUsesThemeText(t *testing.T) {
+	styles.Apply("light", config.Theme{})
+	defer styles.Apply("dark", config.Theme{})
+	m := New("general")
+	if got := m.input.Styles().Cursor.Color; got != styles.TextPrimary {
+		t.Fatalf("cursor colour = %v, want the theme text colour %v", got, styles.TextPrimary)
+	}
+	styles.Apply("dark", config.Theme{})
+	m.RefreshStyles()
+	if got := m.input.Styles().Cursor.Color; got != styles.TextPrimary {
+		t.Fatalf("after a theme switch cursor colour = %v, want %v", got, styles.TextPrimary)
+	}
+}

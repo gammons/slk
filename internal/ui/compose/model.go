@@ -191,6 +191,7 @@ func New(channelName string) Model {
 	s.Blurred.Prompt = bg
 	s.Focused.Placeholder = bg.Foreground(styles.TextMuted)
 	s.Blurred.Placeholder = bg.Foreground(styles.TextMuted)
+	s.Cursor.Color = styles.TextPrimary
 	ta.SetStyles(s)
 
 	return Model{
@@ -217,6 +218,7 @@ func (m *Model) RefreshStyles() {
 	s.Blurred.Prompt = bg
 	s.Focused.Placeholder = bg.Foreground(styles.TextMuted)
 	s.Blurred.Placeholder = bg.Foreground(styles.TextMuted)
+	s.Cursor.Color = styles.TextPrimary
 	m.input.SetStyles(s)
 }
 
