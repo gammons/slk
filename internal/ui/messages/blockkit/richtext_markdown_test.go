@@ -160,3 +160,25 @@ func TestRichTextToMarkdown_LiteralMentionDoesNotPingOnSave(t *testing.T) {
 		}
 	}
 }
+
+// Editing a message keeps its links to other messages; they go back out
+// as links on save.
+func TestRichTextToMarkdown_MessageMention(t *testing.T) {
+	const url = "https://example.slack.com/archives/C0000TEST1/p1700000000000100"
+	for _, tc := range []struct {
+		name, label, want string
+	}{
+		{"label is url", url, url},
+		{"other label", "earlier", "[earlier](" + url + ")"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := richTextFromJSON(t, `{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[`+
+				`{"type":"text","text":"see "},`+
+				`{"type":"message_mention","message_ts":"1700000000.000100","channel_id":"C0000TEST1",`+
+				`"text":"`+tc.label+`","url":"`+url+`"}]}]}`)
+			if got, want := RichTextToMarkdown(rt), "see "+tc.want; got != want {
+				t.Errorf("got %q, want %q", got, want)
+			}
+		})
+	}
+}

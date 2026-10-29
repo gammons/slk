@@ -429,6 +429,105 @@ func TestRichTextToMrkdwn_UnknownElementSkippedSafely(t *testing.T) {
 	}
 }
 
+func TestRichTextToMrkdwn_MessageMentionFixture(t *testing.T) {
+	// End-to-end check on the shape Slack really sends for a message
+	// that links to another message. The fixture is parsed through
+	// slack-go's own rich-text decoder, so the test exercises the
+	// RichTextSectionUnknownElement path rather than a hand-built
+	// struct: slack-go has no type for `message_mention` and hands the
+	// element back raw.
+	p := loadFixture(t, "message_mention.json")
+	blocks := Parse(p.Blocks)
+	if len(blocks) == 0 {
+		t.Fatal("fixture produced zero blocks")
+	}
+	rt, ok := blocks[0].(RichTextBlock)
+	if !ok {
+		t.Fatalf("first block = %T, want RichTextBlock", blocks[0])
+	}
+	sec, ok := rt.Elements[0].(*slack.RichTextSection)
+	if !ok {
+		t.Fatalf("first element = %T, want *slack.RichTextSection", rt.Elements[0])
+	}
+	if len(sec.Elements) != 4 {
+		t.Fatalf("section has %d elements, want 4", len(sec.Elements))
+	}
+	if _, ok := sec.Elements[2].(*slack.RichTextSectionUnknownElement); !ok {
+		t.Fatalf("third inline element = %T, want *slack.RichTextSectionUnknownElement", sec.Elements[2])
+	}
+
+	want := "<!subteam^S0000TEST1> <https://example.slack.com/archives/C0000TEST1/p1700000000000100> - see the earlier message"
+	if got := RichTextToMrkdwn(rt); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestRichTextToMrkdwn_MessageMentionVariants(t *testing.T) {
+	mention := func(raw string) *slack.RichTextSectionUnknownElement {
+		return &slack.RichTextSectionUnknownElement{Type: "message_mention", Raw: raw}
+	}
+	cases := []struct {
+		name string
+		elem slack.RichTextSectionElement
+		want string
+	}{
+		{
+			name: "url with different label",
+			elem: mention(`{"type":"message_mention","url":"https://x.slack.com/archives/C1/p1","text":"the other message"}`),
+			want: "<https://x.slack.com/archives/C1/p1|the other message>",
+		},
+		{
+			name: "url without label",
+			elem: mention(`{"type":"message_mention","url":"https://x.slack.com/archives/C1/p1"}`),
+			want: "<https://x.slack.com/archives/C1/p1>",
+		},
+		{
+			name: "thread permalink labelled with itself",
+			elem: mention(`{"type":"message_mention","url":"https://x.slack.com/archives/C1/p2?thread_ts=1.0&cid=C1","text":"https://x.slack.com/archives/C1/p2?thread_ts=1.0&cid=C1"}`),
+			want: "<https://x.slack.com/archives/C1/p2?thread_ts=1.0&cid=C1>",
+		},
+		{
+			name: "label escaped",
+			elem: mention(`{"type":"message_mention","url":"https://x.slack.com/archives/C1/p1","text":"A -> B & <C>"}`),
+			want: "<https://x.slack.com/archives/C1/p1|A -&gt; B &amp; &lt;C&gt;>",
+		},
+		{
+			name: "label without url",
+			elem: mention(`{"type":"message_mention","text":"just a label"}`),
+			want: "",
+		},
+		{
+			name: "malformed raw json",
+			elem: mention(`{not json`),
+			want: "",
+		},
+		{
+			name: "other unknown type",
+			elem: &slack.RichTextSectionUnknownElement{
+				Type: "something_else",
+				Raw:  `{"type":"something_else","url":"https://x.slack.com/archives/C1/p1"}`,
+			},
+			want: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := RichTextToMrkdwn(rtSection(tc.elem)); got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRichTextToMrkdwn_MessageMentionInPreformatted(t *testing.T) {
+	rt := richTextFromJSON(t, `{"type":"rich_text","elements":[{"type":"rich_text_preformatted","elements":[`+
+		`{"type":"message_mention","url":"https://x.slack.com/archives/C1/p1","text":"the other message"}]}]}`)
+	want := "```\nhttps://x.slack.com/archives/C1/p1\n```"
+	if got := RichTextToMrkdwn(rt); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 func TestRichTextToMrkdwn_GitHubPendingReviewFixture(t *testing.T) {
 	// End-to-end check using a real GitHub "Pending review on …"
 	// message captured from cache.db. The full reconstructed

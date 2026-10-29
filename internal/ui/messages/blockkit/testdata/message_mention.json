@@ -1,0 +1,25 @@
+{
+  "blocks": [
+    {
+      "type": "rich_text",
+      "block_id": "mm1",
+      "elements": [
+        {
+          "type": "rich_text_section",
+          "elements": [
+            {"type": "usergroup", "usergroup_id": "S0000TEST1"},
+            {"type": "text", "text": " "},
+            {
+              "type": "message_mention",
+              "message_ts": "1700000000.000100",
+              "channel_id": "C0000TEST1",
+              "text": "https://example.slack.com/archives/C0000TEST1/p1700000000000100",
+              "url": "https://example.slack.com/archives/C0000TEST1/p1700000000000100"
+            },
+            {"type": "text", "text": " - see the earlier message"}
+          ]
+        }
+      ]
+    }
+  ]
+}
