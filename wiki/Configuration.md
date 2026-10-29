@@ -18,6 +18,8 @@ timestamp_format = "3:04 PM"
 show_avatars = true      # false hides the avatars beside messages
 image_protocol = "auto"   # auto | kitty | sixel | halfblock | off
 max_image_rows = 20       # cap inline image height in terminal rows
+reply_avatars = false     # true: Slack-style reply row, repliers' avatars + "N replies"
+                          # (avatars need show_avatars and kitty graphics)
 colored_usernames = false # color each user's name by ID hash (Slack-style)
 
 [animations]

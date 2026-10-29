@@ -104,18 +104,19 @@ type Model struct {
 	// by the App's out-of-band painter. See imgpkg.SixelPaint.
 	sixelPaints []imgpkg.SixelPaint
 
-	messages     []MessageItem
-	selected     int
-	channelName  string
-	channelTopic string
-	channelType  string // "channel", "private", "dm", "group_dm" -- drives header glyph
-	loading      bool
-	spinnerFrame int                          // braille-spinner frame index for "Loading messages..." animation
-	avatarFn     AvatarFunc                   // optional: returns half-block avatar for a userID
-	userNames    map[string]string            // user ID -> display name for mention resolution
-	userStatuses map[string]peerstatus.Status // user ID -> custom status shown after author names
-	channelNames map[string]string            // channel ID -> name for bare <#CID> resolution
-	userGroups   map[string]string            // usergroup ID -> handle for bare subteam resolution
+	messages      []MessageItem
+	selected      int
+	channelName   string
+	channelTopic  string
+	channelType   string // "channel", "private", "dm", "group_dm" -- drives header glyph
+	loading       bool
+	spinnerFrame  int                          // braille-spinner frame index for "Loading messages..." animation
+	avatarFn      AvatarFunc                   // optional: returns half-block avatar for a userID
+	replyAvatarFn AvatarFunc                   // optional: small avatar for the reply row
+	userNames     map[string]string            // user ID -> display name for mention resolution
+	userStatuses  map[string]peerstatus.Status // user ID -> custom status shown after author names
+	channelNames  map[string]string            // channel ID -> name for bare <#CID> resolution
+	userGroups    map[string]string            // usergroup ID -> handle for bare subteam resolution
 
 	// searchTerms are folded word-prefix terms of the active in-channel
 	// search; non-empty enables highlight rendering. nil = no search.
@@ -353,7 +354,7 @@ func (m *Model) HandleAvatarReady(userID string) {
 	}
 	var marked bool
 	for _, msg := range m.messages {
-		if msg.UserID != userID {
+		if msg.UserID != userID && !slices.Contains(msg.ReplyUsers, userID) {
 			continue
 		}
 		if m.staleEntries == nil {
@@ -956,12 +957,13 @@ func (m *Model) ClampReactionNav() {
 	m.dirty()
 }
 
-// IncrementReplyCount finds a message by TS and increments its ReplyCount.
+// IncrementReplyCount finds a message by TS, increments its ReplyCount and
+// adds userID to its ReplyUsers.
 // Idempotent on (parentTS, replyTS): the optimistic ThreadReplySentMsg path
 // and the WS echo NewMessageMsg path can both fire for the same reply --
 // pass the reply's own TS to dedup. An empty replyTS skips dedup (legacy
 // callers that don't yet pass it).
-func (m *Model) IncrementReplyCount(parentTS, replyTS string) {
+func (m *Model) IncrementReplyCount(parentTS, replyTS, userID string) {
 	if replyTS != "" {
 		if m.countedReplies == nil {
 			m.countedReplies = make(map[string]map[string]struct{})
@@ -983,6 +985,9 @@ func (m *Model) IncrementReplyCount(parentTS, replyTS string) {
 			// the bottom of the pane under the fold.
 			m.list.HoldBottom()
 			m.messages[i].ReplyCount++
+			if userID != "" && !slices.Contains(msg.ReplyUsers, userID) {
+				m.messages[i].ReplyUsers = append(slices.Clip(msg.ReplyUsers), userID)
+			}
 			m.dropCache()
 			m.dirty()
 			return
@@ -1080,6 +1085,14 @@ func (m *Model) SetSpinnerFrame(f int) {
 
 func (m *Model) SetAvatarFunc(fn AvatarFunc) {
 	m.avatarFn = fn
+}
+
+// SetReplyAvatarFunc switches the reply row to Slack's look (repliers'
+// avatars, then "N replies"); nil keeps "[N replies ->]".
+func (m *Model) SetReplyAvatarFunc(fn AvatarFunc) {
+	m.replyAvatarFn = fn
+	m.dropCache()
+	m.dirty()
 }
 
 // ResolveUserName returns the display name for a user ID, or empty string if unknown.
@@ -1441,6 +1454,7 @@ func (m *Model) renderContext() *RenderContext {
 		ImageChannel:     m.channelName,
 		SearchTerms:      m.searchTerms,
 		Nav:              m.nav,
+		ReplyAvatar:      m.replyAvatarFn,
 	}
 }
 

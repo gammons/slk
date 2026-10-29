@@ -692,18 +692,26 @@ func (w workspaceAdapter) Switch(teamID string) Msg {
 	return w.switchTo(teamID)
 }
 
-// NewAvatarService builds an AvatarService from a closure.
-func NewAvatarService(avatar func(userID string) string) AvatarService {
-	return avatarAdapter{avatar: avatar}
+// NewAvatarService builds an AvatarService from closures; replyAvatar
+// may be nil.
+func NewAvatarService(avatar, replyAvatar func(userID string) string) AvatarService {
+	return avatarAdapter{avatar: avatar, replyAvatar: replyAvatar}
 }
 
-type avatarAdapter struct{ avatar func(userID string) string }
+type avatarAdapter struct{ avatar, replyAvatar func(userID string) string }
 
 func (a avatarAdapter) Avatar(userID string) string {
 	if a.avatar == nil {
 		return ""
 	}
 	return a.avatar(userID)
+}
+
+func (a avatarAdapter) ReplyAvatar(userID string) string {
+	if a.replyAvatar == nil {
+		return ""
+	}
+	return a.replyAvatar(userID)
 }
 
 // Closure types accepted by the service constructors.

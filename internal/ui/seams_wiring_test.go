@@ -50,7 +50,7 @@ func wireStatusReporter(a *App, fn func(unread, otherUnread int, workspace, titl
 }
 
 func wireAvatars(a *App, fn func(userID string) string) {
-	a.SetAvatarService(core.NewAvatarService(fn))
+	a.SetAvatarService(core.NewAvatarService(fn, nil))
 }
 
 // wireClipboard makes the clipboard hold text and/or PNG bytes.

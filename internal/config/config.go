@@ -118,6 +118,10 @@ type Appearance struct {
 	// by hashing their user ID — mirroring how Slack clients assign stable
 	// per-user colors. Default off.
 	ColoredUsernames bool `toml:"colored_usernames"`
+	// ReplyAvatars draws the reply row under a thread parent as Slack
+	// does: the repliers' avatars (kitty graphics only), then "N
+	// replies". Needs ShowAvatars. Default off.
+	ReplyAvatars bool `toml:"reply_avatars"`
 }
 
 type Animations struct {

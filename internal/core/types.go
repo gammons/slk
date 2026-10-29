@@ -21,14 +21,17 @@ type ForwardResult struct {
 
 // MessageItem is one message as the TUI displays it.
 type MessageItem struct {
-	TS          string
-	UserName    string
-	UserID      string
-	Text        string
-	Timestamp   string // formatted display time (e.g. "3:04 PM")
-	DateStr     string // date string for grouping (e.g. "2026-04-23")
-	ThreadTS    string
-	ReplyCount  int
+	TS         string
+	UserName   string
+	UserID     string
+	Text       string
+	Timestamp  string // formatted display time (e.g. "3:04 PM")
+	DateStr    string // date string for grouping (e.g. "2026-04-23")
+	ThreadTS   string
+	ReplyCount int
+	// ReplyUsers are the thread's repliers (Slack's reply_users), drawn
+	// as small avatars on the channel pane's reply row.
+	ReplyUsers  []string
 	Reactions   []ReactionItem
 	Attachments []Attachment
 	IsEdited    bool

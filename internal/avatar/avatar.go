@@ -25,6 +25,9 @@ const (
 	// rows per cell row; kitty fits the source image to AvatarCols×AvatarRows
 	// cells and the terminal scales pixels appropriately.
 	AvatarRows = 2
+	// SmallCols×SmallRows is the reply-row avatar (kitty only).
+	SmallCols = 2
+	SmallRows = 1
 )
 
 // avatarPreloadWorkers caps the number of avatar Preload jobs that
@@ -67,6 +70,7 @@ type Cache struct {
 
 	mu      sync.RWMutex
 	renders map[string]string // userID -> rendered ANSI string
+	small   map[string]string // userID -> SmallCols×SmallRows render
 
 	// inflight tracks userIDs whose Preload is currently in-flight (or
 	// already rendered). Acts as a dedup gate so a hot render path
@@ -119,6 +123,7 @@ func newCacheForTest(fetcher *imgpkg.Fetcher, kitty *imgpkg.KittyRenderer, useKi
 		kitty:     kitty,
 		useKitty:  useKitty && kitty != nil,
 		renders:   make(map[string]string),
+		small:     make(map[string]string),
 		preloadCh: make(chan preloadJob, queueSize),
 		sizeURL:   func(u string) string { return SizedURL(u, sizedAvatarPx) },
 	}
@@ -243,6 +248,37 @@ func (c *Cache) Get(userID string) string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.renders[userID]
+}
+
+// GetSmall returns the reply-row avatar, rendering it on first use, or
+// empty if the avatar is not loaded yet or not on kitty (a 2×1
+// half-block avatar is unreadable).
+func (c *Cache) GetSmall(userID string) string {
+	c.mu.RLock()
+	small, loaded := c.small[userID], c.renders[userID] != ""
+	c.mu.RUnlock()
+	if small != "" || !loaded {
+		return small
+	}
+	if small = c.renderSmall(userID); small != "" {
+		c.mu.Lock()
+		c.small[userID] = small
+		c.mu.Unlock()
+	}
+	return small
+}
+
+// renderSmall renders the source renderAvatar registered at the reply-row
+// size and uploads it, as renderAvatar does. "" off kitty.
+func (c *Cache) renderSmall(userID string) string {
+	if !c.useKitty {
+		return ""
+	}
+	out := c.kitty.RenderKey("avatar-"+userID, image.Pt(SmallCols, SmallRows))
+	if out.OnFlush != nil {
+		_ = out.OnFlush(imgpkg.KittyOutput)
+	}
+	return joinLines(out.Lines)
 }
 
 // renderAvatar produces the avatar's rendered string for the active

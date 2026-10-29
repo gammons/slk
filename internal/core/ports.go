@@ -431,6 +431,9 @@ type AvatarService interface {
 	// Avatar returns the rendered half-block avatar for userID, or ""
 	// while it isn't available yet.
 	Avatar(userID string) string
+	// ReplyAvatar is the small avatar of a thread's reply row, or ""
+	// while it isn't available (or the protocol can't draw one).
+	ReplyAvatar(userID string) string
 }
 
 // ImageFetcher downloads and caches remote images for inline rendering

@@ -184,7 +184,7 @@ func (d *Demo) services() services {
 				UserStatuses: s.statuses, UserID: s.selfID,
 			}
 		}),
-		avatars:  core.NewAvatarService(func(userID string) string { return d.avatars[userID] }),
+		avatars:  core.NewAvatarService(func(userID string) string { return d.avatars[userID] }, nil),
 		settings: core.NewSettingsService(nil, nil),
 		presence: core.NewPresenceService(nil, nil),
 		profiles: core.NewProfileService(core.ProfileServiceFuncs{

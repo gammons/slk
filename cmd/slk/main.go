@@ -612,6 +612,12 @@ func run() error {
 	if cfg.Appearance.ShowAvatars {
 		app.SetAvatarService(core.NewAvatarService(func(userID string) string {
 			return lazyAvatar(router.Active(), avatarCache, userID)
+		}, func(userID string) string {
+			if small := avatarCache.GetSmall(userID); small != "" {
+				return small
+			}
+			lazyAvatar(router.Active(), avatarCache, userID)
+			return ""
 		}))
 	}
 
