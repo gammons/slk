@@ -204,3 +204,52 @@ func TestIsThreadsSelected_FalseOnSectionHeader(t *testing.T) {
 		t.Errorf("SelectedItem should return ok=false when cursor is on a section header")
 	}
 }
+
+func TestShowUnreadInCollapsed(t *testing.T) {
+	state := map[string]cache.ReadState{}
+	newModel := func(show bool) Model {
+		m := New([]ChannelItem{
+			{ID: "C1", Name: "general", Type: "channel"},
+			{ID: "C2", Name: "deploys", Type: "channel"},
+			{ID: "C3", Name: "quiet", Type: "channel", IsMuted: true},
+		})
+		m.SetReadStateReader(func() map[string]cache.ReadState { return state })
+		m.SetShowUnreadInCollapsed(show)
+		return m
+	}
+	state["C2"] = cache.ReadState{HasUnread: true}
+	state["C3"] = cache.ReadState{HasUnread: true}
+
+	off := newModel(false)
+	if view := off.View(20, 30); strings.Contains(view, "deploys") {
+		t.Errorf("option off: collapsed section should hide unread 'deploys':\n%s", view)
+	}
+
+	m := newModel(true)
+	view := m.View(20, 30)
+	if !strings.Contains(view, "deploys") {
+		t.Errorf("unread 'deploys' should show in collapsed Channels:\n%s", view)
+	}
+	if strings.Contains(view, "general") || strings.Contains(view, "quiet") {
+		t.Errorf("read and muted channels should stay hidden:\n%s", view)
+	}
+	// The row is navigable, and selecting it does not expand the section.
+	m.SelectByID("C2")
+	if m.SelectedID() != "C2" || !m.IsCollapsed("Channels") {
+		t.Errorf("SelectByID: selected=%q collapsed=%v", m.SelectedID(), m.IsCollapsed("Channels"))
+	}
+
+	// Read state flips arrive through Invalidate; the row follows them.
+	state["C1"] = cache.ReadState{HasUnread: true}
+	state["C2"] = cache.ReadState{}
+	m.SetActiveChannelID("C2") // being read: stays shown
+	m.Invalidate()
+	view = m.View(20, 30)
+	if !strings.Contains(view, "general") || !strings.Contains(view, "deploys") {
+		t.Errorf("new unread 'general' and active 'deploys' should show:\n%s", view)
+	}
+	m.SetActiveChannelID("C1")
+	if view = m.View(20, 30); strings.Contains(view, "deploys") {
+		t.Errorf("read, inactive 'deploys' should hide again:\n%s", view)
+	}
+}

@@ -290,6 +290,9 @@ type Model struct {
 	// Renames preserve collapse state because the ID is stable.
 	// Populated lazily; lookups treat nil as empty. Used in Task 9.
 	collapseByID map[string]bool
+	// showUnreadInCollapsed keeps unread rows (and the active channel)
+	// of a collapsed section visible ([sidebar] show_unread_in_collapsed).
+	showUnreadInCollapsed bool
 
 	// rightAlignBadges puts mention badges at the row's right end
 	// ([sidebar] right_align_badges).
@@ -520,6 +523,10 @@ func (m *Model) Invalidate() {
 			m.rebuildNavWithCursor(key, hadKey)
 		}
 	}
+	if m.showUnreadInCollapsed {
+		// Read state decides which collapsed rows show.
+		m.rebuildNavPreserveCursor()
+	}
 	m.cacheValid = false
 	m.dirty()
 	// active_only: a dormant channel that gets a new message comes back.
@@ -559,6 +566,31 @@ func (m *Model) revealUnreadHidden(state map[string]core.ReadState) bool {
 		revealed = true
 	}
 	return revealed
+}
+
+// SetShowUnreadInCollapsed sets whether a collapsed section still shows
+// its unread channels and the active channel.
+func (m *Model) SetShowUnreadInCollapsed(on bool) {
+	if m.showUnreadInCollapsed == on {
+		return
+	}
+	m.showUnreadInCollapsed = on
+	m.rebuildNavPreserveCursor()
+	m.cacheValid = false
+	m.dirty()
+}
+
+// hiddenByCollapse reports whether item's row is left out because its
+// section is collapsed. rebuildNav and buildCache must agree on it.
+func (m *Model) hiddenByCollapse(section string, item ChannelItem, readState map[string]core.ReadState) bool {
+	if !m.IsCollapsed(section) {
+		return false
+	}
+	if !m.showUnreadInCollapsed {
+		return true
+	}
+	state := readState[item.ID]
+	return item.ID != m.activeID && !item.IsVisiblyUnread(state) && item.MentionBadge(state) == 0
 }
 
 // useSlackSections reports whether Slack-mode rendering is active.
@@ -1588,15 +1620,20 @@ func (m *Model) rebuildNav() {
 		bucket[key] = append(bucket[key], fi)
 	}
 
+	var readState map[string]core.ReadState
+	if m.showUnreadInCollapsed && m.readStateReader != nil {
+		readState = m.readStateReader()
+	}
+
 	nav := make([]navItem, 0, 2+len(sectionOrder))
 	nav = append(nav, navItem{kind: navThreads})
 	nav = append(nav, navItem{kind: navActivity})
 	for _, name := range sectionOrder {
 		nav = append(nav, navItem{kind: navHeader, header: name})
-		if m.IsCollapsed(name) {
-			continue
-		}
 		for _, fi := range bucket[name] {
+			if m.hiddenByCollapse(name, m.items[m.filtered[fi]], readState) {
+				continue
+			}
 			nav = append(nav, navItem{kind: navChannel, fi: fi})
 		}
 	}
@@ -1947,7 +1984,7 @@ func (m *Model) buildCache(width int) {
 	for fi, idx := range m.filtered {
 		item := m.items[idx]
 		sectionName := m.sectionFor(item)
-		if m.IsCollapsed(sectionName) {
+		if m.hiddenByCollapse(sectionName, item, readState) {
 			continue
 		}
 		// Defense-in-depth: if sectionFor returns a section name that

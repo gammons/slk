@@ -3667,6 +3667,12 @@ func (a *App) SetSidebarStyle(s SidebarStyle) {
 	a.sidebarMouseResize = s.MouseResize
 }
 
+// SetSidebarShowUnreadInCollapsed keeps unread channels of collapsed
+// sidebar sections visible.
+func (a *App) SetSidebarShowUnreadInCollapsed(on bool) {
+	a.sidebar.SetShowUnreadInCollapsed(on)
+}
+
 // renderTypingLine returns the styled typing indicator for the current
 // channel (people typing, apps working), or an empty string if there is
 // neither. Stays on App because it pulls in messagepane name resolution

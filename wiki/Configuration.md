@@ -83,6 +83,8 @@ active_only = false         # true: hide conversations with no activity in 30 da
                             # every section (Slack's "Active only"; unread ones stay)
 mouse_resize = false        # true: drag the sidebar's right border to resize it
                             # ([ and ] also resize; the width is saved per workspace)
+show_unread_in_collapsed = false  # true: a collapsed section still lists its
+                                  # unread channels (and the open one)
 
 [compose]
 editor = "nvim"   # Ctrl+E editor, used when $VISUAL and $EDITOR are unset
