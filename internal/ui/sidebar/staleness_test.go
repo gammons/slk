@@ -1,6 +1,7 @@
 package sidebar
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -259,5 +260,117 @@ func TestSidebar_HidesStaleChannels(t *testing.T) {
 	got = visibleIDs()
 	if len(got) != len(items) {
 		t.Errorf("threshold=0 should show all %d items, got %d: %v", len(items), len(got), got)
+	}
+}
+
+// TestSidebar_RevealsHiddenDMWhenItTurnsUnread covers a DM someone opens
+// mid-session: im_created upserts it before its first message, with no
+// last_read, so the staleness filter hides it. The message then marks it
+// unread and the App calls Invalidate, which must bring the row back.
+func TestSidebar_RevealsHiddenDMWhenItTurnsUnread(t *testing.T) {
+	readState := map[string]cache.ReadState{}
+	m := New([]ChannelItem{{ID: "C-general", Name: "general", Type: "channel"}})
+	m.SetReadStateReader(func() map[string]cache.ReadState { return readState })
+	m.SetStaleThreshold(30 * 24 * time.Hour)
+
+	visible := func(id string) bool {
+		for _, it := range m.VisibleItems() {
+			if it.ID == id {
+				return true
+			}
+		}
+		return false
+	}
+
+	m.UpsertItem(ChannelItem{ID: "D-new", Name: "newcomer", Type: "dm"})
+	if visible("D-new") {
+		t.Fatal("a DM with no last_read and nothing unread should start hidden")
+	}
+
+	readState["D-new"] = cache.ReadState{HasUnread: true}
+	m.Invalidate()
+	if !visible("D-new") {
+		t.Fatal("the DM stayed hidden after it turned unread")
+	}
+	m.SelectByID("D-new")
+	if got := m.SelectedID(); got != "D-new" {
+		t.Errorf("the revealed DM can't be selected: SelectedID() = %q", got)
+	}
+}
+
+// TestSidebar_RevealKeepsAgedSelectedRow: revealing a DM must not run the
+// staleness filter over the rows already shown. A selected row that has
+// aged past the threshold since the last rebuild stays, and stays
+// selected, until the next full rebuild.
+func TestSidebar_RevealKeepsAgedSelectedRow(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	threshold := 30 * 24 * time.Hour
+	readState := map[string]cache.ReadState{
+		"D-old": {LastReadTS: formatSlackTS(now.Add(-threshold + time.Hour))},
+	}
+	m := New([]ChannelItem{
+		{ID: "C-general", Name: "general", Type: "channel"},
+		{ID: "D-old", Name: "zed", Type: "dm"},
+	})
+	m.SetReadStateReader(func() map[string]cache.ReadState { return readState })
+	m.SetNowFunc(func() time.Time { return now })
+	m.SetStaleThreshold(threshold)
+	m.UpsertItem(ChannelItem{ID: "D-new", Name: "amy", Type: "dm"})
+	m.SelectByID("D-old")
+	if got := m.SelectedID(); got != "D-old" {
+		t.Fatalf("setup: SelectedID() = %q, want D-old", got)
+	}
+
+	now = now.Add(2 * time.Hour) // D-old is now past the threshold
+	readState["D-new"] = cache.ReadState{HasUnread: true}
+	m.Invalidate()
+
+	if got := m.SelectedID(); got != "D-old" {
+		t.Errorf("SelectedID() = %q after the reveal, want D-old", got)
+	}
+	var ids []string
+	for _, it := range m.VisibleItems() {
+		ids = append(ids, it.ID)
+	}
+	// The revealed row is sorted into place (amy before zed), not
+	// appended at the end.
+	if want := []string{"D-new", "D-old", "C-general"}; !slices.Equal(ids, want) {
+		t.Errorf("visible = %v, want %v", ids, want)
+	}
+}
+
+// TestSidebar_RevealOnlyAddsHiddenUnreadMatches: Invalidate reveals a
+// hidden item only when it is unread and matches the name filter, and
+// never adds a row that is already shown, however often it runs.
+func TestSidebar_RevealOnlyAddsHiddenUnreadMatches(t *testing.T) {
+	readState := map[string]cache.ReadState{}
+	m := New([]ChannelItem{
+		{ID: "D-shown", Name: "alex", Type: "dm"},
+		{ID: "D-read", Name: "alma", Type: "dm"},
+		{ID: "D-match", Name: "alva", Type: "dm"},
+		{ID: "D-other", Name: "zoe", Type: "dm"},
+	})
+	m.SetReadStateReader(func() map[string]cache.ReadState { return readState })
+	m.SetStaleThreshold(30 * 24 * time.Hour)
+	readState["D-shown"] = cache.ReadState{HasUnread: true}
+	m.SetFilter("al")
+
+	visible := func() []string {
+		var ids []string
+		for _, it := range m.VisibleItems() {
+			ids = append(ids, it.ID)
+		}
+		return ids
+	}
+	if got, want := visible(), []string{"D-shown"}; !slices.Equal(got, want) {
+		t.Fatalf("setup: visible = %v, want %v", got, want)
+	}
+
+	readState["D-match"] = cache.ReadState{HasUnread: true}
+	readState["D-other"] = cache.ReadState{HasUnread: true}
+	m.Invalidate()
+	m.Invalidate()
+	if got, want := visible(), []string{"D-shown", "D-match"}; !slices.Equal(got, want) {
+		t.Errorf("visible = %v, want %v", got, want)
 	}
 }
