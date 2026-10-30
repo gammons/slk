@@ -233,7 +233,7 @@ func unresolvedUserIDs(convs []export.Conversation, names *userNameStore) []stri
 			if msg.UserID != "" && msg.UserName == msg.UserID {
 				rec.ids[msg.UserID] = true
 			}
-			messages.FlattenMrkdwn(messages.MessageTextSource(msg), rec.record, nil)
+			messages.FlattenMrkdwn(messages.MessageCopyText(msg), rec.record, nil)
 		}
 	}
 	var ids []string
