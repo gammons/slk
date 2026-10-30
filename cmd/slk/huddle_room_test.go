@@ -158,3 +158,33 @@ func TestRoomFromRawJSON_Malformed(t *testing.T) {
 		}
 	}
 }
+
+func TestOnMessage_ChangeEchoCachesEndedRoomAndKeepsItWhenAbsent(t *testing.T) {
+	db := newTestDB(t)
+	_ = db.UpsertChannel(cache.Channel{ID: "CFAKE0001", WorkspaceID: "T1", Name: "general", Type: "channel"})
+	h := &rtmEventHandler{
+		db: db, program: &captureSender{}, workspaceID: "T1",
+		userNames: newUserNameStore(nil), wsCtx: &WorkspaceContext{},
+		isActive: func() bool { return true }, activeChannelID: func() string { return "CFAKE0001" },
+	}
+	h.OnMessageRoom("CFAKE0001", "1.000100", json.RawMessage(fakeHuddleRoom))
+	h.OnMessage("CFAKE0001", "USLACKBOT", "1.000100", "huddle", "", "huddle_thread", false, false, nil, slack.Blocks{}, nil, "", "")
+
+	ended := `{"created_by":"UFAKE0001","date_start":1700000000,"date_end":1700001380,"has_ended":true}`
+	h.OnMessageRoom("CFAKE0001", "1.000100", json.RawMessage(ended))
+	h.OnMessage("CFAKE0001", "USLACKBOT", "1.000100", "huddle", "", "", true, false, nil, slack.Blocks{}, nil, "", "")
+	row, err := db.GetMessage("CFAKE0001", "1.000100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := roomFromRawJSON(row.RawJSON); r == nil || !r.HasEnded {
+		t.Fatalf("ended room not cached by change echo: %s", row.RawJSON)
+	}
+
+	// A room-less echo (an unfurl, say) keeps the stored room.
+	h.OnMessage("CFAKE0001", "USLACKBOT", "1.000100", "huddle again", "", "", true, false, nil, slack.Blocks{}, nil, "", "")
+	row, _ = db.GetMessage("CFAKE0001", "1.000100")
+	if r := roomFromRawJSON(row.RawJSON); r == nil || !r.HasEnded {
+		t.Errorf("room lost on room-less change echo: %s", row.RawJSON)
+	}
+}

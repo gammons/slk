@@ -178,7 +178,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 		// stale would make it look fresh, and the next open would
 		// skip the fetch of what was missed.
 		if changed {
-			h.cacheChange(channelID, ts, text, threadTS, files, blocks, attachments)
+			h.cacheChange(channelID, ts, text, threadTS, files, blocks, attachments, room)
 		} else {
 			synthetic := slack.Message{Msg: slack.Msg{
 				Type:            "message",
@@ -447,8 +447,8 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 //
 // A change for a message the cache does not hold is not written: the
 // next fetch that reaches it caches the whole message.
-func (h *rtmEventHandler) cacheChange(channelID, ts, text, threadTS string, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment) {
-	change := cache.MessageChange{Text: text, ThreadTS: threadTS}
+func (h *rtmEventHandler) cacheChange(channelID, ts, text, threadTS string, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment, room json.RawMessage) {
+	change := cache.MessageChange{Text: text, ThreadTS: threadTS, Room: room}
 	if len(files) > 0 {
 		change.Files, _ = json.Marshal(files)
 	}
