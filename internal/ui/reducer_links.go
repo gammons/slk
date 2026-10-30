@@ -202,8 +202,32 @@ func (a *App) completePendingLinkNav(channelID string, authoritative bool) tea.C
 	a.focusedPanel = PanelMessages
 	if p.ThreadTS != "" {
 		p.TeamID = ids.TeamID(a.activeTeamID)
+		knownReply := p.MessageTS != "" && string(p.MessageTS) != string(p.ThreadTS)
+		parent := a.permalinkThreadParent(string(p.ChannelID), string(p.ThreadTS), knownReply)
+		if !authoritative && !messages.CanOpenThread(parent) {
+			// A cache-only pass can see a stale reply count (0 for a
+			// huddle). Stay armed without the "Can't reply to a system
+			// message" toast; the authoritative pass decides.
+			return nil
+		}
+		cmd := a.openThreadPanel(parent, string(p.ChannelID), string(p.ThreadTS))
+		if !a.threadVisible || a.threadPanel.ThreadTS() != string(p.ThreadTS) {
+			// Refused (a notice with no replies, an upload in progress):
+			// leave the pending nav armed so the authoritative pass, which
+			// carries the real reply count, can try again.
+			if !authoritative {
+				return cmd
+			}
+			// Authoritative refusal: keep the refusal's own command (the
+			// toast) and still land the channel on the linked row.
+			a.pendingLinkNav = nil
+			if p.MessageTS != "" {
+				a.messagepane.SelectByTS(string(p.MessageTS))
+			}
+			return cmd
+		}
 		p.threadOpened = true
-		return p.wrapThreadLoad(a.openThreadForPermalink(string(p.ChannelID), string(p.ThreadTS)), true, 1)
+		return p.wrapThreadLoad(cmd, true, 1)
 	}
 	if a.messagepane.SelectByTS(string(p.MessageTS)) {
 		// Only forget the target once this is the freshest data we
@@ -238,7 +262,21 @@ func (a *App) completePendingLinkNav(channelID string, authoritative bool) tea.C
 // the parent row is taken from the loaded buffer or the thread cache
 // when available, else a minimal stub that the ThreadRepliesLoadedMsg
 // handler backfills from cache once the fetch lands.
-func (a *App) openThreadForPermalink(channelID, threadTS string) tea.Cmd {
+//
+// knownReply is true when the caller's target is itself a reply of the
+// thread (its ts differs from threadTS), which proves the thread has
+// replies whatever a cached parent's reply_count says: that count is often
+// 0 for a huddle (an edit or a live reply never updates it), and the
+// open-thread gate would otherwise refuse the thread.
+func (a *App) openThreadForPermalink(channelID, threadTS string, knownReply bool) tea.Cmd {
+	return a.openThreadPanel(a.permalinkThreadParent(channelID, threadTS, knownReply), channelID, threadTS)
+}
+
+// permalinkThreadParent builds the parent row openThreadForPermalink opens
+// (see there for the sources and the knownReply rule). Split out so a
+// best-effort pass can ask messages.CanOpenThread before committing to the
+// open, which toasts on refusal.
+func (a *App) permalinkThreadParent(channelID, threadTS string, knownReply bool) messages.MessageItem {
 	parent := messages.MessageItem{TS: threadTS, ThreadTS: threadTS}
 	if channelID == a.activeChannelID {
 		for _, m := range a.messagepane.Messages() {
@@ -249,10 +287,17 @@ func (a *App) openThreadForPermalink(channelID, threadTS string) tea.Cmd {
 		}
 	}
 	if parent.Text == "" {
-		if cached := a.threads.CacheRead(ids.ChannelID(channelID), ids.ThreadTS(threadTS)); len(cached) > 0 {
+		if cached := a.threads.CacheRead(ids.ChannelID(channelID), ids.ThreadTS(threadTS)); len(cached) > 0 && cached[0].TS == threadTS {
+			// Live replies raise only the pane's count, never the cache's,
+			// so keep the larger of the two.
+			count := parent.ReplyCount
 			parent = cached[0]
+			parent.ReplyCount = max(parent.ReplyCount, count)
 		}
 	}
+	if knownReply && parent.ReplyCount < 1 {
+		parent.ReplyCount = 1
+	}
 
-	return a.openThreadPanel(parent, channelID, threadTS)
+	return parent
 }

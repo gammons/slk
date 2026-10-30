@@ -301,8 +301,9 @@ func (m *Model) SetBreadcrumb(channelName, channelType string) {
 // breadcrumbAuthor is the parent's display name: the parent's own
 // UserName, else the userNames entry for its UserID.
 func (m *Model) breadcrumbAuthor() string {
-	if m.parent.UserName != "" {
-		return m.parent.UserName
+	// A huddle with replies is its starter's message (messages.HuddleView).
+	if p := m.huddleView(m.parent); p.UserName != "" {
+		return p.UserName
 	}
 	return m.userNames[m.parent.UserID]
 }
@@ -502,6 +503,26 @@ func (m *Model) UpdateMessageInPlace(item messages.MessageItem) bool {
 		}
 	}
 	return false
+}
+
+// SetHuddleRoom replaces the huddle room of the reply or parent with the
+// given TS. The room is treated as immutable. Returns true if found.
+func (m *Model) SetHuddleRoom(ts string, room *messages.HuddleRoom) bool {
+	found := false
+	for i := range m.replies {
+		if m.replies[i].TS == ts {
+			m.replies[i].HuddleRoom = room
+			found = true
+		}
+	}
+	if m.parent.TS == ts {
+		m.parent.HuddleRoom = room
+		found = true
+	}
+	if found {
+		m.InvalidateCache()
+	}
+	return found
 }
 
 // RemoveMessageByTS removes a reply by TS, adjusting the selected
@@ -1263,12 +1284,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 			Align(lipgloss.Center).
 			Render("── new ──")
 	}
-	dateSeparatorStyle := lipgloss.NewStyle().
-		Width(width).
-		Background(styles.Background).
-		Foreground(styles.TextMuted).
-		Bold(true).
-		Align(lipgloss.Center)
+	dateSeparatorStyle := messages.DividerStyle(width)
 	decoration := func(row string) entrylist.Entry { return entrylist.Entry{Ref: -1, Lines: []string{row}} }
 	entries := make([]entrylist.Entry, 0, 2*len(m.replyEntries)+2)
 	entries = append(entries, parent)
@@ -1416,5 +1432,15 @@ func (m *Model) renderContext() *messages.RenderContext {
 // affordance and no sixel rows (plan decision P3). Image hits are
 // recorded so a click opens the preview, as in the channel pane.
 func (m *Model) renderMessage(msg messages.MessageItem, width int, isSelected bool) messages.RenderedMessage {
-	return messages.RenderMessage(msg, width, m.renderContext(), messages.RenderOptions{IsSelected: isSelected, ImageHits: true})
+	return messages.RenderMessage(m.huddleView(msg), width, m.renderContext(), messages.RenderOptions{IsSelected: isSelected, ImageHits: true})
+}
+
+// huddleView is the render copy of a huddle announcement: a message by
+// its starter when the thread has replies (the parent's own ReplyCount may
+// lag behind the loaded replies), else unchanged. See messages.HuddleView.
+func (m *Model) huddleView(msg messages.MessageItem) messages.MessageItem {
+	if msg.TS == m.parent.TS && len(m.replies) > msg.ReplyCount {
+		msg.ReplyCount = len(m.replies)
+	}
+	return messages.HuddleView(msg, m.userNames)
 }

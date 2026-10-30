@@ -77,7 +77,35 @@ type rtmEventHandler struct {
 	// lookupRetryAt holds when a refused or rate-limited discovery
 	// lookup may run again. WebSocket goroutine only.
 	lookupRetryAt map[string]time.Time
+
+	// pendingRooms holds the `room` object of a message frame between
+	// OnMessageRoom (called just before OnMessage by the dispatcher) and
+	// the OnMessage that consumes it, keyed by channel/ts. WebSocket
+	// goroutine only.
+	pendingRooms map[string]json.RawMessage
 }
+
+// maxPendingRooms bounds pendingRooms against frames whose OnMessage never
+// follows (a message_changed dropped as ephemeral, say).
+const maxPendingRooms = 32
+
+// OnMessageRoom implements slackclient.RoomObserver.
+func (h *rtmEventHandler) OnMessageRoom(channelID, ts string, room json.RawMessage) {
+	if h.pendingRooms == nil || len(h.pendingRooms) >= maxPendingRooms {
+		h.pendingRooms = map[string]json.RawMessage{}
+	}
+	h.pendingRooms[channelID+"/"+ts] = room
+}
+
+// takeRoom returns and forgets the room OnMessageRoom stored for a message.
+func (h *rtmEventHandler) takeRoom(channelID, ts string) json.RawMessage {
+	k := channelID + "/" + ts
+	room := h.pendingRooms[k]
+	delete(h.pendingRooms, k)
+	return room
+}
+
+var _ slackclient.RoomObserver = (*rtmEventHandler)(nil)
 
 const discoveryRetryAfter = time.Minute
 
@@ -135,6 +163,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// Key the row on the bot_id and resolve its avatar/name via bots.info,
 	// mirroring the fetch path's messageAuthor (cmd/slk/users.go).
 	authorID := h.messageAuthor(userID, botID, username)
+	room := h.takeRoom(channelID, ts)
 	// Synchronous, so the channel's row and type exist before the writes
 	// below. The UI hears of it only after the unread write.
 	discovered, discoveredFinder, isNew := h.discoverConversation(channelID)
@@ -149,7 +178,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 		// stale would make it look fresh, and the next open would
 		// skip the fetch of what was missed.
 		if changed {
-			h.cacheChange(channelID, ts, text, threadTS, files, blocks, attachments)
+			h.cacheChange(channelID, ts, text, threadTS, files, blocks, attachments, room)
 		} else {
 			synthetic := slack.Message{Msg: slack.Msg{
 				Type:            "message",
@@ -163,6 +192,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 				Attachments:     attachments,
 			}}
 			rawBytes, _ := json.Marshal(synthetic)
+			rawBytes = slackclient.MergeRoom(rawBytes, room)
 			h.db.UpsertMessage(cache.Message{
 				TS:          ts,
 				ChannelID:   channelID,
@@ -194,8 +224,17 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// Do this before the active workspace check so inactive workspaces
 	// can still trigger notifications. A change echo (an edit, an unfurl
 	// arriving, a preview removed) re-delivers a message that already
-	// had its chance to notify, so it never does.
-	if !changed && h.notifier != nil && h.notifyCfg.Enabled {
+	// had its chance to notify, so it never does. A join/leave notice is
+	// never notification-worthy either -- Slack doesn't notify on them,
+	// and an invitation join's text mentions the inviter, which would
+	// otherwise false-positive OnMention for whoever did the inviting.
+	//
+	// Not unit-tested here: *notify.Notifier is a concrete type whose only
+	// effect is an OS notification or a shell command, and OnMessage needs a
+	// full handler (db, caches, program), so faking the gate is
+	// disproportionate. The subtype list itself is pinned by the notice
+	// tests in messages and slackclient.
+	if !changed && h.notifier != nil && h.notifyCfg.Enabled && !messages.IsSystemNoticeSubtype(subtype) {
 		isActiveWS := h.isActive != nil && h.isActive()
 		activeChID := ""
 		if h.activeChannelID != nil {
@@ -298,7 +337,11 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// Editing it, or an unfurl landing on it, does not make the channel
 	// unread on Slack. It is not `edited`: an unfurl is a change nobody
 	// edited, and would otherwise mark the channel unread again.
-	shouldMarkChannel := channelEligible && !isSelfMessage && !changed
+	//
+	// A join/leave notice doesn't make the channel unread on Slack
+	// either -- excluded here so the mention-badge check below (nested
+	// in this same gate) inherits it for free, same as isSelfMessage.
+	shouldMarkChannel := channelEligible && !isSelfMessage && !changed && !messages.IsSystemNoticeSubtype(subtype)
 	if h.db != nil && shouldMarkChannel {
 		if err := h.db.UpdateChannelReadState(channelID, "", true); err != nil {
 			log.Printf("Warning: failed to set has_unread for %s: %v", channelID, err)
@@ -382,6 +425,11 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	}
 
 	item := h.messageItemFromEvent(authorID, userID, username, ts, text, threadTS, subtype, edited, files, blocks, attachments)
+	var request func(string)
+	if h.wsCtx != nil && h.wsCtx.UserResolver != nil {
+		request = h.wsCtx.UserResolver.Request
+	}
+	item.HuddleRoom = resolveHuddleUsers(core.ParseHuddleRoom(room), h.userNames, h.db, request)
 	debuglog.Cache("OnMessage: team=%s channel=%s ts=%s subtype=%q thread_ts=%s decision=dispatched_to_app",
 		h.workspaceID, channelID, ts, subtype, threadTS)
 	if h.program != nil {
@@ -399,8 +447,8 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 //
 // A change for a message the cache does not hold is not written: the
 // next fetch that reaches it caches the whole message.
-func (h *rtmEventHandler) cacheChange(channelID, ts, text, threadTS string, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment) {
-	change := cache.MessageChange{Text: text, ThreadTS: threadTS}
+func (h *rtmEventHandler) cacheChange(channelID, ts, text, threadTS string, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment, room json.RawMessage) {
+	change := cache.MessageChange{Text: text, ThreadTS: threadTS, Room: room}
 	if len(files) > 0 {
 		change.Files, _ = json.Marshal(files)
 	}

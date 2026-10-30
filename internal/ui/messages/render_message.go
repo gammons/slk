@@ -8,13 +8,51 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/bubbles/entrylist"
-	emojiutil "github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/imgrender"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/styles"
 )
+
+// IsSystemNoticeSubtype reports whether subtype is a system message --
+// join/leave, a huddle starting (huddle_thread), a canvas update
+// (tabbed_canvas_updated) -- as opposed to an authored chat message.
+// Shared with cmd/slk (unread/mention/notification gating) so the
+// subtype list stays in one place; both panes render it through
+// RenderMessage. slackclient.IsNoticeSubtype (live delivery) must list
+// the same subtypes; a test in cmd/slk keeps them in step.
+func IsSystemNoticeSubtype(subtype string) bool {
+	switch subtype {
+	case "channel_join", "channel_leave", "group_join", "group_leave",
+		"huddle_thread", "tabbed_canvas_updated":
+		return true
+	}
+	return false
+}
+
+// CanOpenThread reports whether msg may be opened as a thread (and so
+// replied to). A system notice with no replies cannot: there is nothing
+// to reply to. A notice that already has replies (a huddle whose notes
+// live in its thread) stays openable. Every path that opens the thread
+// panel on a message goes through this.
+func CanOpenThread(msg MessageItem) bool {
+	return !IsSystemNoticeSubtype(msg.Subtype) || msg.ReplyCount > 0
+}
+
+// noticeFallbackText is the notice body for a system message whose text
+// and blocks yield nothing readable. Only fixed labels: who started a
+// huddle, or for how long, is not on this data path.
+func noticeFallbackText(subtype string) string {
+	switch subtype {
+	case "huddle_thread":
+		return "A huddle started"
+	case "tabbed_canvas_updated":
+		return "A canvas was updated"
+	}
+	return ""
+}
 
 // RenderContext is what rendering a message reads besides the message.
 // Each pane builds one from its own fields when it rebuilds its cache.
@@ -122,6 +160,67 @@ func BlockkitContext(msg MessageItem, rc *RenderContext) blockkit.Context {
 // columns.
 func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOptions) RenderedMessage {
 	var out RenderedMessage
+	// Render as a muted system notice, not a chat bubble -- Slack's
+	// author for these is a system bot, indistinguishable otherwise.
+	// Both panes go through here, so the thread pane matches.
+	if IsSystemNoticeSubtype(msg.Subtype) {
+		noticeWidth := width - 4
+		if noticeWidth < 20 {
+			noticeWidth = 20
+		}
+		body := RenderSlackMarkdownWith(MessageTextSource(msg), RenderSlackMarkdownOpts{
+			UserNames:    rc.UserNames,
+			ChannelNames: rc.ChannelNames,
+			UserGroups:   rc.UserGroups,
+			Width:        noticeWidth,
+		})
+		// Stripped to plain text before styling: RenderSlackMarkdownWith
+		// re-applies TextPrimary after a mention/link span, and every
+		// join/leave message starts with one -- left unstripped, only
+		// the timestamp would actually render muted.
+		// The body's own wrap is undone so the line wraps once, with the
+		// timestamp, instead of breaking twice.
+		plain := strings.Join(strings.Fields(ansi.Strip(body)), " ")
+		if text := huddleNoticeText(msg, rc.UserNames); text != "" {
+			plain = text
+		}
+		if plain == "" {
+			plain = noticeFallbackText(msg.Subtype)
+		}
+		// Channel search still matches a notice's text, so highlight it
+		// the way a message body is (the timestamp is left alone).
+		if len(rc.SearchTerms) > 0 {
+			// The close re-asserts the notice's own style (bold, muted,
+			// background), not the body's.
+			if hlStart, hlEnd, ok := searchHighlightSGRRestoring(noticeRestoreSGR()); ok {
+				plain = HighlightSearchTerms(plain, rc.SearchTerms, hlStart, hlEnd)
+			}
+		}
+		// Centred and bold like a day divider (DividerStyle). The row is
+		// width-1 wide: WrapRows adds the one-column border after it.
+		rowWidth := width - 1
+		out.Content = DividerStyle(rowWidth).Render(WordWrap(msg.Timestamp+"  "+plain, noticeWidth))
+		// A huddle message is a thread parent: keep the reply count line
+		// (the channel pane's affordance) so the thread stays reachable.
+		if opt.ReplyAffordance && msg.ReplyCount > 0 {
+			word := "replies"
+			if msg.ReplyCount == 1 {
+				word = "reply"
+			}
+			out.Content += "\n" + lipgloss.NewStyle().Background(styles.Background).
+				Width(rowWidth).Align(lipgloss.Center).Render(styles.ThreadIndicator.Render(
+				fmt.Sprintf("[%d %s ->]", msg.ReplyCount, word)))
+		}
+		// Reactions on a notice (people do react to "joined the channel"):
+		// the same pills and hit rects as a chat message, left-aligned
+		// under the notice, whose rows start at column 1 (after the border).
+		if block, n, specs := renderReactionPills(msg, rc, opt, noticeWidth, &out); n > 0 {
+			rowBase := lipgloss.Height(out.Content)
+			out.Content += block
+			out.Hits = reactionHits(specs, rowBase, 1)
+		}
+		return out
+	}
 	avatarStr := opt.Avatar
 	stats := opt.stats
 	line := styles.Username(msg.UserID, rc.ColoredUsernames).Render(msg.UserName) + AuthorStatusSuffix(rc.UserStatuses, msg.UserID, time.Now()) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.Timestamp)
@@ -190,153 +289,10 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 			fmt.Sprintf("[%d %s ->]", msg.ReplyCount, word))
 	}
 
-	var reactionLine string
-	// reactionLineCount is the number of rendered reaction rows below
-	// the body / attachments. Used downstream (after the row layout is
-	// known) to translate per-pill specs into absolute row indices.
-	reactionLineCount := 0
-	// pillSpecs captures one entry per real (non-"+") reaction pill in
-	// rendering order, with line index and column extents relative to
-	// the reaction-line block. Converted into absolute entrylist.Hit
-	// rects below (once we know the row offset of the reaction block).
-	type pillSpec struct {
-		lineIdx  int
-		colStart int
-		colEnd   int
-		emoji    string
-	}
-	var pillSpecs []pillSpec
-	var reactT0 time.Time
-	if stats != nil && len(msg.Reactions) > 0 {
-		reactT0 = time.Now()
-	}
-	if len(msg.Reactions) > 0 {
-		var pills []string
-		// pillEmojis parallels pills; empty string marks the trailing
-		// "+" pill that appears only in reaction nav mode (no toggle
-		// target). Tracked separately because the index in pills can
-		// exceed len(msg.Reactions).
-		var pillEmojis []string
-		// Image-aware emoji-as-image path is active only when the
-		// process-global ImageMode is on AND a fetcher has been
-		// installed via SetEmojiContext. Otherwise the legacy
-		// glyph/shortcode-text branch renders.
-		imageOK := emojiutil.ImageModeActive() && rc.Emoji.PlaceCtx.Fetcher != nil
-		pillCells := rc.Emoji.Cells
-		if pillCells <= 0 {
-			pillCells = 2
-		}
-		for i, r := range msg.Reactions {
-			// Image path: pass r.Emoji directly (including any skin-tone
-			// suffix) — URLForShortcode composes the per-tone CDN URL
-			// natively. Stripping skin tone was a workaround for
-			// glyph-rendering width inconsistencies that no longer apply
-			// at the kitty-image cell footprint.
-			//
-			// Legacy path: still strip the suffix because the glyph
-			// renderer suffers the original width-inconsistency problem
-			// (multi-codepoint ZWJ / skin-tone sequences render at
-			// terminal-dependent widths and break border alignment).
-			// See internal/emoji/shouldrender.go for the rule.
-			var emojiStr string
-			var placedFlush func(io.Writer) error
-			if imageOK {
-				if url, ok := emojiutil.URLForShortcode(r.Emoji, rc.Emoji.Customs); ok {
-					if placement, flush, ok := emojiutil.Place(rc.Emoji.PlaceCtx, url, pillCells); ok {
-						emojiStr = placement
-						placedFlush = flush
-					}
-				}
-			}
-			if emojiStr == "" {
-				// Legacy fallback path (image mode off, no URL, or
-				// Place returned false). Strip skin tone here only —
-				// the glyph renderer still needs the workaround.
-				legacyName := emojiutil.StripSkinTone(r.Emoji)
-				resolved := emojiutil.Sprint(":" + legacyName + ":")
-				if emojiutil.ShouldRenderUnicode(resolved) {
-					emojiStr = resolved
-				} else {
-					emojiStr = ":" + legacyName + ":"
-				}
-			}
-			var style lipgloss.Style
-			if opt.IsSelected && rc.Nav.Active && i == rc.Nav.Index {
-				style = styles.ReactionPillSelected
-			} else if r.HasReacted {
-				style = styles.ReactionPillOwn
-			} else {
-				style = styles.ReactionPillOther
-			}
-			pillText := ReactionPillText(emojiStr, r.Count, style, placedFlush != nil)
-			pills = append(pills, style.Render(pillText))
-			pillEmojis = append(pillEmojis, r.Emoji)
-			// Image emoji in reaction pills upload once per visible
-			// frame, like body text and inline image attachments.
-			if placedFlush != nil {
-				out.ReactionFlushes = append(out.ReactionFlushes, placedFlush)
-			}
-		}
-		if opt.IsSelected && rc.Nav.Active {
-			plusStyle := styles.ReactionPillPlus
-			if rc.Nav.Index >= len(msg.Reactions) {
-				plusStyle = styles.ReactionPillSelected
-			}
-			pills = append(pills, plusStyle.Render("+"))
-			pillEmojis = append(pillEmojis, "")
-		}
-		// Join pills with wrapping. emojiutil.Width() consults the
-		// terminal-probed width cache so wrapping decisions match what
-		// the user's terminal will actually render.
-		bgSpace := lipgloss.NewStyle().Background(styles.Background).Render(" ")
-		var reactionLines []string
-		currentLine := ""
-		lineIdx := 0
-		for i, pill := range pills {
-			candidate := currentLine
-			sepWidth := 0
-			if i > 0 {
-				candidate += bgSpace
-				sepWidth = 1
-			}
-			candidate += pill
-			pillW := emojiutil.Width(pill)
-			if emojiutil.Width(candidate) > contentWidth && currentLine != "" {
-				reactionLines = append(reactionLines, currentLine)
-				lineIdx++
-				currentLine = pill
-				// After wrap the pill starts at col 0 of the new line.
-				if pillEmojis[i] != "" {
-					pillSpecs = append(pillSpecs, pillSpec{
-						lineIdx:  lineIdx,
-						colStart: 0,
-						colEnd:   pillW,
-						emoji:    pillEmojis[i],
-					})
-				}
-			} else {
-				colStart := emojiutil.Width(currentLine) + sepWidth
-				if pillEmojis[i] != "" {
-					pillSpecs = append(pillSpecs, pillSpec{
-						lineIdx:  lineIdx,
-						colStart: colStart,
-						colEnd:   colStart + pillW,
-						emoji:    pillEmojis[i],
-					})
-				}
-				currentLine = candidate
-			}
-		}
-		if currentLine != "" {
-			reactionLines = append(reactionLines, currentLine)
-		}
-		reactionLine = "\n" + strings.Join(reactionLines, "\n")
-		reactionLineCount = len(reactionLines)
-	}
-	if stats != nil && len(msg.Reactions) > 0 {
-		stats.reactionsTotal += time.Since(reactT0)
-		stats.reactionsCount++
-	}
+	// reactionLineCount is the number of rendered reaction rows below the
+	// body / attachments; pillSpecs become absolute hit rects below once
+	// the row layout is known.
+	reactionLine, reactionLineCount, pillSpecs := renderReactionPills(msg, rc, opt, contentWidth, &out)
 
 	var editedMark string
 	if opt.EditedMark && msg.IsEdited {
@@ -629,15 +585,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		if threadLine != "" {
 			reactionRowBase++
 		}
-		for _, ps := range pillSpecs {
-			row := reactionRowBase + ps.lineIdx
-			out.Hits = append(out.Hits, entrylist.Hit{
-				RowStart: row, RowEnd: row + 1,
-				ColStart: contentColBase + ps.colStart,
-				ColEnd:   contentColBase + ps.colEnd,
-				Kind:     entrylist.HitReaction, Key: ps.emoji,
-			})
-		}
+		out.Hits = append(out.Hits, reactionHits(pillSpecs, reactionRowBase, contentColBase)...)
 	}
 
 	// Place avatar next to message content (avatar is side-by-side, no

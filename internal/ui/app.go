@@ -1382,6 +1382,17 @@ const noProfileToast = "No profile for this message"
 // full profile under a 10s timeout.
 func (a *App) openUserProfile() tea.Cmd {
 	_, _, _, userID, _, ok := a.selectedMessageContext()
+	if ok {
+		// A huddle announcement is stored under Slackbot; the person to
+		// show is whoever started the huddle.
+		if p, _, focused := a.focusedContentPane(); focused {
+			if msg, sel := p.SelectedMessage(); sel {
+				if starter := messages.HuddleStarter(msg); starter != "" && msg.Subtype == "huddle_thread" {
+					userID = starter
+				}
+			}
+		}
+	}
 	if !ok || userID == "" || strings.HasPrefix(userID, "B") {
 		return toastWithClear(a, noProfileToast, 2*time.Second)
 	}
@@ -2069,15 +2080,24 @@ func (a *App) openThreadForSelectedMessage() tea.Cmd {
 	if cmd, blocked := ephemeralGuard(msg); blocked {
 		return cmd
 	}
+	if !messages.CanOpenThread(msg) {
+		return a.cantReplyToNotice()
+	}
 	// Use the message's own TS as the thread parent. If it's a thread
 	// reply (a thread_broadcast row in the channel feed), the selected
 	// row is NOT the parent: resolve the real parent from the pane
 	// buffer / thread cache via the permalink path, else the reply
 	// would render twice — once as the "parent" and once as a reply.
 	if msg.ThreadTS != "" && msg.ThreadTS != msg.TS {
-		return a.openThreadForPermalink(a.activeChannelID, msg.ThreadTS)
+		return a.openThreadForPermalink(a.activeChannelID, msg.ThreadTS, true)
 	}
 	return a.openThreadPanel(msg, a.activeChannelID, msg.TS)
+}
+
+// cantReplyToNotice is the toast for a refused thread-open on a
+// reply-less system notice.
+func (a *App) cantReplyToNotice() tea.Cmd {
+	return toastWithClear(a, "Can't reply to a system message", 2*time.Second)
 }
 
 // threadComposeChannelName resolves the display name for the thread's
@@ -2115,6 +2135,12 @@ func (a *App) applyThreadBreadcrumb(channelID, channelType string) {
 // by openThreadForSelectedMessage (parent taken from the pane buffer)
 // and openThreadForPermalink (parent reconstructed from cache/stub).
 func (a *App) openThreadPanel(parent messages.MessageItem, channelID, threadTS string) tea.Cmd {
+	// The one sink every opener (Enter, click, permalink, history, jump,
+	// search, notification) reaches: a reply-less system notice never
+	// gets a panel, and an open panel is left on its own thread.
+	if !messages.CanOpenThread(parent) {
+		return a.cantReplyToNotice()
+	}
 	if a.compose.Uploading() || a.threadCompose.Uploading() {
 		return toastWithClear(a, "Upload in progress", 2*time.Second)
 	}

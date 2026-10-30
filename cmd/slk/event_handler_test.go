@@ -20,6 +20,7 @@ import (
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slack/edge"
 	"github.com/gammons/slk/internal/ui"
+	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/slack-go/slack"
@@ -376,6 +377,128 @@ func TestOnMessage_ChangeEcho_DoesNotNotify(t *testing.T) {
 	}
 	if strings.Contains(body, "changed") {
 		t.Errorf("a change echo notified: %q", body)
+	}
+}
+
+// A channel_join/leave notice doesn't make the channel unread on Slack
+// either. Before this exclusion, every join or leave in any channel
+// you're in lit the sidebar dot.
+func TestOnMessage_SystemNotice_DoesNotSetHasUnread(t *testing.T) {
+	db := newTestDB(t)
+	_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
+	h := &rtmEventHandler{
+		db:              db,
+		wsCtx:           &WorkspaceContext{},
+		isActive:        func() bool { return true },
+		activeChannelID: func() string { return "C2" },
+		currentUserID:   "USELF",
+	}
+	h.OnMessage("C1", "U1", "1.001", "<@U1> has joined the channel", "", "channel_join", false, false, nil, slack.Blocks{}, nil, "", "")
+
+	s, _ := db.GetChannelReadState("C1")
+	if s.HasUnread {
+		t.Error("HasUnread = true, want false: a join/leave notice does not make a channel unread")
+	}
+}
+
+// Huddle and canvas system messages are Slackbot-authored but are not
+// chat: like join/leave they neither light the unread dot nor badge a
+// mention, whatever their text says.
+func TestOnMessage_HuddleAndCanvasNotices_DoNotSetHasUnread(t *testing.T) {
+	for _, subtype := range []string{"huddle_thread", "tabbed_canvas_updated"} {
+		db := newTestDB(t)
+		_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
+		h := &rtmEventHandler{
+			db:              db,
+			wsCtx:           &WorkspaceContext{},
+			channelTypes:    map[string]string{"C1": "channel"},
+			isActive:        func() bool { return true },
+			activeChannelID: func() string { return "C2" },
+			currentUserID:   "USELF",
+		}
+		h.OnMessage("C1", "USLACKBOT", "1.001", "", "", subtype, false, false, nil, slack.Blocks{}, nil, "", "")
+
+		s, _ := db.GetChannelReadState("C1")
+		if s.HasUnread {
+			t.Errorf("%s: HasUnread = true, want false", subtype)
+		}
+		if s.MentionCount != 0 {
+			t.Errorf("%s: MentionCount = %d, want 0", subtype, s.MentionCount)
+		}
+	}
+}
+
+// A huddle message is edited when the huddle ends (message_changed). The
+// edit must not drop the subtype from the cached row, or after a restart
+// the notice comes back as a Slackbot bubble.
+func TestOnMessage_EditedHuddleKeepsSubtypeInCache(t *testing.T) {
+	db := newTestDB(t)
+	_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
+	h := &rtmEventHandler{
+		db:              db,
+		wsCtx:           &WorkspaceContext{},
+		workspaceID:     "T1",
+		isActive:        func() bool { return true },
+		activeChannelID: func() string { return "C1" },
+		currentUserID:   "USELF",
+	}
+	h.OnMessage("C1", "USLACKBOT", "1.001", "", "", "huddle_thread", false, false, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("C1", "USLACKBOT", "1.001", "", "", "huddle_thread", true, false, nil, slack.Blocks{}, nil, "", "")
+
+	rows, err := db.GetMessages("C1", 10, "")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("GetMessages = %v rows, err %v; want exactly 1 (same ts dedupes)", len(rows), err)
+	}
+	if rows[0].Subtype != "huddle_thread" {
+		t.Errorf("cached subtype = %q, want huddle_thread", rows[0].Subtype)
+	}
+}
+
+// A message_changed echo of a join or huddle message (an unfurl, or the
+// huddle ending) is still a system notice: it keeps its cached subtype and
+// neither lights the unread dot nor badges a mention.
+func TestOnMessage_NoticeChangeEcho_StaysNoticeAndSkipsUnread(t *testing.T) {
+	for _, subtype := range []string{"channel_join", "huddle_thread"} {
+		db := newTestDB(t)
+		_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
+		h := &rtmEventHandler{
+			db:              db,
+			wsCtx:           &WorkspaceContext{},
+			workspaceID:     "T1",
+			channelTypes:    map[string]string{"C1": "channel"},
+			isActive:        func() bool { return true },
+			activeChannelID: func() string { return "C2" },
+			currentUserID:   "USELF",
+		}
+		h.OnMessage("C1", "U1", "1.001", "<@USELF> joined", "", subtype, false, false, nil, slack.Blocks{}, nil, "", "")
+		h.OnMessage("C1", "U1", "1.001", "<@USELF> joined", "", subtype, true, true, nil, slack.Blocks{}, nil, "", "")
+
+		rows, err := db.GetMessages("C1", 10, "")
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("%s: GetMessages = %d rows, err %v; want 1", subtype, len(rows), err)
+		}
+		if rows[0].Subtype != subtype {
+			t.Errorf("cached subtype = %q, want %q", rows[0].Subtype, subtype)
+		}
+		s, _ := db.GetChannelReadState("C1")
+		if s.HasUnread || s.MentionCount != 0 {
+			t.Errorf("%s: HasUnread=%v MentionCount=%d, want false and 0", subtype, s.HasUnread, s.MentionCount)
+		}
+	}
+}
+
+// slackclient (live delivery) and messages (rendering) each list the
+// system-notice subtypes; they cannot share one list across the import
+// boundary, so this keeps them identical.
+func TestNoticeSubtypesMatchRenderer(t *testing.T) {
+	for _, s := range []string{
+		"", "bot_message", "thread_broadcast", "file_share", "me_message",
+		"message_changed", "channel_topic", "channel_join", "channel_leave",
+		"group_join", "group_leave", "huddle_thread", "tabbed_canvas_updated",
+	} {
+		if got, want := slackclient.IsNoticeSubtype(s), messages.IsSystemNoticeSubtype(s); got != want {
+			t.Errorf("subtype %q: slackclient.IsNoticeSubtype = %v, messages.IsSystemNoticeSubtype = %v", s, got, want)
+		}
 	}
 }
 

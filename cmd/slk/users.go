@@ -4,6 +4,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/gammons/slk/internal/avatar"
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/core"
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slack/edge"
 	"github.com/gammons/slk/internal/ui"
@@ -196,6 +197,40 @@ func resolveDMNames(wctx *WorkspaceContext, db *cache.DB, avatarCache *avatar.Ca
 			}
 		}
 	}
+}
+
+// resolveHuddleUsers makes the names of a huddle's starter and participants
+// reach the UI: nothing else asks for them (they are neither the message's
+// author nor a mention). Each is resolved from local sources, which records
+// it in the store for the UI; an unknown one is requested through request
+// (nil skips that). Returns room so it can wrap a struct field.
+func resolveHuddleUsers(room *core.HuddleRoom, userNames *userNameStore, db *cache.DB, request func(userID string)) *core.HuddleRoom {
+	if room == nil {
+		return nil
+	}
+	for _, id := range append([]string{room.CreatedBy}, room.Participants...) {
+		if id == "" {
+			continue
+		}
+		if _, ok := resolveUserCached(id, userNames, db); !ok && request != nil {
+			request(id)
+		}
+	}
+	return room
+}
+
+// userRequesterFor returns the lazy user lookup of the workspace teamID, or
+// nil when that workspace is not connected. A fetch belongs to one
+// workspace whichever is active when its result is converted, so a name
+// must be requested on that workspace's resolver, not the active one.
+func userRequesterFor(router *workspaceRouter, teamID string) func(string) {
+	if router == nil || teamID == "" {
+		return nil
+	}
+	if wctx := router.ByID(teamID); wctx != nil && wctx.UserResolver != nil {
+		return wctx.UserResolver.Request
+	}
+	return nil
 }
 
 // messageAuthor resolves the display identity for a fetched message.

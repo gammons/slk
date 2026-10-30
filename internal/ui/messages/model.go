@@ -29,6 +29,7 @@ type (
 	Attachment   = core.Attachment
 	ThumbSpec    = core.ThumbSpec
 	ReactionItem = core.ReactionItem
+	HuddleRoom   = core.HuddleRoom
 )
 
 // AvatarFunc returns the rendered half-block avatar for a user ID, or empty string.
@@ -353,7 +354,9 @@ func (m *Model) HandleAvatarReady(userID string) {
 	}
 	var marked bool
 	for _, msg := range m.messages {
-		if msg.UserID != userID {
+		// A huddle with replies is drawn as its starter's message, so the
+		// starter's avatar is the one it asks for, not the stored author's.
+		if msg.UserID != userID && !(msg.Subtype == "huddle_thread" && HuddleStarter(msg) == userID) {
 			continue
 		}
 		if m.staleEntries == nil {
@@ -1009,6 +1012,21 @@ func (m *Model) UpdateMessageInPlace(item MessageItem) bool {
 	return false
 }
 
+// SetHuddleRoom replaces the huddle room of the message with the given
+// TS (a message_changed that carries a newer room, e.g. the huddle
+// ended). The room is treated as immutable. Returns true if found.
+func (m *Model) SetHuddleRoom(ts string, room *HuddleRoom) bool {
+	for i, msg := range m.messages {
+		if msg.TS == ts {
+			m.messages[i].HuddleRoom = room
+			m.dropCache()
+			m.dirty()
+			return true
+		}
+	}
+	return false
+}
+
 // RemoveMessageByTS removes a message with the given TS, adjusting the
 // selected index so it remains valid. Returns true if the message was
 // found and removed. Invalidates the render cache.
@@ -1463,7 +1481,9 @@ func (m *Model) renderContext() *RenderContext {
 // renderMessageEntry does that itself so the count always matches the
 // number of entries produced.
 func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles, stats *entryPerfStats) (entrylist.Entry, EntryPayload) {
-	msg := m.messages[i]
+	// The render copy: a huddle with replies is drawn as its starter's
+	// message. The stored item (m.messages[i]) is never changed.
+	msg := HuddleView(m.messages[i], m.userNames)
 	opt := RenderOptions{
 		IsSelected:      i == m.selected,
 		ReplyAffordance: true,
@@ -1561,14 +1581,14 @@ func (m *Model) buildCache(width int, keepPosition bool) {
 	newMsgLandmarkInserted := false
 	for i, msg := range m.messages {
 		msgDate := DateFromTS(msg.TS)
+		afterDivider := false
 		if msgDate != "" && msgDate != lastDate {
 			label := FormatDateSeparator(msgDate)
 			sepStr := "── " + label + " ──"
-			sep := lipgloss.NewStyle().Background(styles.Background).Foreground(styles.TextMuted).Bold(true).
-				Width(width).Align(lipgloss.Center).
-				Render(sepStr)
+			sep := DividerStyle(width).Render(sepStr)
 			appendSeparator(sep)
 			lastDate = msgDate
+			afterDivider = true
 		}
 
 		// New message landmark: insert before the first unread message
@@ -1579,6 +1599,14 @@ func (m *Model) buildCache(width int, keepPosition bool) {
 				Render(newStr)
 			appendSeparator(label)
 			newMsgLandmarkInserted = true
+			afterDivider = true
+		}
+
+		// A system notice is itself a centred divider-style row, so right
+		// under another divider it needs the blank row a notice gets
+		// everywhere else (the previous message's trailing spacer).
+		if afterDivider && IsSystemNoticeSubtype(HuddleView(msg, m.userNames).Subtype) {
+			appendSeparator(strings.Join(cs.spacerLines, "\n"))
 		}
 
 		e, p := m.renderMessageEntry(i, width, cs, stats)
@@ -2150,6 +2178,28 @@ func FormatShortDate(dateStr string) string {
 		return d.Format("Jan 2")
 	}
 	return d.Format("Jan 2, 2006")
+}
+
+// DividerStyle is the style of a day-divider row: muted, bold, centred in
+// width columns on the theme background. System notices use it too, so
+// they read like the date separators. Build it per draw (it reads the
+// current theme).
+func DividerStyle(width int) lipgloss.Style {
+	return dividerBaseStyle().Width(width).Align(lipgloss.Center)
+}
+
+// dividerBaseStyle is DividerStyle without its layout (Width, Align): the
+// attributes a divider or notice is drawn with. noticeRestoreSGR derives
+// from it, so the style and what is re-asserted after a highlight cannot
+// drift apart.
+func dividerBaseStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(styles.Background).Foreground(styles.TextMuted).Bold(true)
+}
+
+// noticeRestoreSGR is the opening SGR sequence of dividerBaseStyle, found by
+// rendering a sentinel and taking what precedes it.
+func noticeRestoreSGR() string {
+	return strings.SplitN(dividerBaseStyle().Render("\x00"), "\x00", 2)[0]
 }
 
 // FormatDateSeparator turns a "2006-01-02" date string into the
