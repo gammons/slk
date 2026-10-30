@@ -63,13 +63,16 @@ func (db *DB) UpsertMessage(m Message) error {
 // message's text and its files, blocks and legacy attachments, each a
 // JSON array as slack-go marshals it. An empty one (nil, `null` or
 // `[]`) means the message has none. ThreadTS is the echo's thread_ts,
-// used only to fill a row that has none.
+// used only to fill a row that has none. Room is a huddle's room object
+// as the echo carries it (an ended huddle's has date_end); empty keeps
+// the stored room.
 type MessageChange struct {
 	Text        string
 	ThreadTS    string
 	Files       json.RawMessage
 	Blocks      json.RawMessage
 	Attachments json.RawMessage
+	Room        json.RawMessage
 }
 
 // ApplyMessageChange replaces the content of a cached message (an edit,
@@ -84,7 +87,8 @@ type MessageChange struct {
 // so nothing written to the row between a read and a write can be
 // lost, as it could be with a merge in Go. The patch sets "text" and
 // sets "files", "blocks" and "attachments" to the change's arrays, or
-// removes them when it has none. A row without a valid raw_json (cached before the
+// removes them when it has none, and sets "room" only when the change
+// has one. A row without a valid raw_json (cached before the
 // column existed) gets one with just the patch.
 //
 // Reports whether a row was changed. A message that is not cached, or
@@ -92,12 +96,17 @@ type MessageChange struct {
 // the partial row this exists to avoid, and the next fetch that reaches
 // the message caches it whole.
 func (db *DB) ApplyMessageChange(channelID, ts string, c MessageChange) (bool, error) {
-	patch, err := json.Marshal(map[string]any{
+	fields := map[string]any{
 		"text":        c.Text,
 		"files":       contentOrNull(c.Files),
 		"blocks":      contentOrNull(c.Blocks),
 		"attachments": contentOrNull(c.Attachments),
-	})
+	}
+	// Only a room the echo carries: a null would delete the stored one.
+	if r := bytes.TrimSpace(c.Room); len(r) > 0 && string(r) != "null" {
+		fields["room"] = json.RawMessage(r)
+	}
+	patch, err := json.Marshal(fields)
 	if err != nil {
 		return false, fmt.Errorf("applying message change: %w", err)
 	}
