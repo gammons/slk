@@ -251,6 +251,7 @@ greppable by name; no line numbers, because these files move.
 | Compare or bless a full-screen frame against `testdata/golden/<name>.ansi` | `compareGolden(t, name, got)` (`internal/ui/golden_test.go`) |
 | Prove two ANSI screens look identical even when their bytes differ (re-encoded SGR), or that every golden is cell-identical to a baseline directory | `cellDiff(want, got)` and `SLK_GOLDEN_BASELINE=<dir> go test ./internal/ui -run TestGoldenCellsMatchBaseline` (`internal/ui/goldencells_test.go`) |
 | Re-bless goldens | the package-local `-update` flag: `go test ./internal/ui -run TestGolden -update`. It is not defined repo-wide, so `go test ./... -update` fails |
+| Pin the render globals (dark theme, emoji images off, fixed clock) with auto-restore, for a `testing.TB` (tests and benchmarks) | `pinRenderGlobals(tb)` (`internal/ui/golden_test.go`) |
 | An `App` with every render nondeterminism pinned (theme, emoji mode, clock) | `newGoldenApp(t, opts...)`, with `goldenMessages()` / `goldenChannels()` as the fixtures |
 | Drive a message through the real `Update` chain and render one frame | `updateAndRender(t, a, msg)` (`internal/ui/thread_breadcrumb_test.go`) |
 | Run a command the way the runtime does (batch members concurrently, ticks on their real timers) and take the message it delivers | `deliveredMsgs[T](t, cmds...)` (`internal/ui/cmdmsgs_test.go`). Use it, not a hand-built tick message, to show what a real tick carries |

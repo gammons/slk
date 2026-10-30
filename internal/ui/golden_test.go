@@ -342,6 +342,17 @@ func goldenClock() time.Time {
 	return time.Date(2026, 3, 15, 12, 0, 0, 0, time.Local)
 }
 
+// pinRenderGlobals pins the package-level render globals (dark theme, emoji
+// images off, fixed day-divider clock) and registers their revert on tb. It
+// takes a testing.TB so benchmarks share it with newGoldenApp.
+func pinRenderGlobals(tb testing.TB) {
+	tb.Helper()
+	styles.Apply("dark", config.Theme{})
+	emoji.SetImageMode(false, 2)
+	messages.SetNowFunc(goldenClock)
+	tb.Cleanup(resetRenderGlobals)
+}
+
 // newGoldenApp is newTestApp plus every global the render path reads,
 // pinned and reverted. A golden is only meaningful if these are fixed;
 // anything not pinned here shows up later as golden flakiness.
@@ -371,10 +382,7 @@ func newGoldenApp(t *testing.T, opts ...testOpt) *App {
 
 	// Package-level globals, pinned before construction so that any
 	// render triggered during construction already sees them.
-	styles.Apply("dark", config.Theme{})
-	emoji.SetImageMode(false, 2)
-	messages.SetNowFunc(goldenClock)
-	t.Cleanup(resetRenderGlobals)
+	pinRenderGlobals(t)
 
 	// withRender() renders inside buildTestApp, i.e. BEFORE the per-App
 	// pins below get a chance to run. Options only record intent into a
