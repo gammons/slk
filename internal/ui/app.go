@@ -615,6 +615,11 @@ type App struct {
 	// stacks are session-only by design.
 	navHistory *navHistoryStore
 
+	// sidebarMouseResize enables dragging the sidebar's right border;
+	// sidebarResizeFrom is the width a drag started at, 0 when none is on.
+	sidebarMouseResize bool
+	sidebarResizeFrom  int
+
 	// settings persists the theme choice and sidebar width. Nil until wired.
 	settings       core.SettingsService
 	themeOverrides core.Theme
@@ -1090,6 +1095,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if cmd, handled := dispatchReducers(a, msg,
 		a.presence,
 		a.preview,
+		reduceSidebarResize,
 		a.drag,
 		a.typing,
 		a.bootstrap,
@@ -3470,6 +3476,34 @@ func (a *App) SetMouseWheelLines(n int) {
 // before a channel is hidden; pass 0 to disable.
 func (a *App) SetSidebarStaleThreshold(d time.Duration) {
 	a.sidebar.SetStaleThreshold(d)
+}
+
+// SetRightAlignBadges puts the sidebar's mention badges at the right end
+// of their rows ([sidebar] right_align_badges).
+func (a *App) SetRightAlignBadges(enabled bool) {
+	a.sidebar.SetRightAlignBadges(enabled)
+}
+
+// SetChannelIndent indents the sidebar rows under each section header
+// ([sidebar] channel_indent).
+func (a *App) SetChannelIndent(n int) {
+	a.sidebar.SetChannelIndent(n)
+}
+
+// SidebarStyle is the [sidebar] look and behaviour switches.
+type SidebarStyle struct {
+	Slack        bool   // slack_style
+	PrivateGlyph string // private_glyph
+	ActiveOnly   bool   // active_only
+	MouseResize  bool   // mouse_resize
+}
+
+// SetSidebarStyle applies the [sidebar] switches.
+func (a *App) SetSidebarStyle(s SidebarStyle) {
+	a.sidebar.SetSlackStyle(s.Slack)
+	a.sidebar.SetPrivateGlyph(s.PrivateGlyph)
+	a.sidebar.SetActiveOnly(s.ActiveOnly)
+	a.sidebarMouseResize = s.MouseResize
 }
 
 // renderTypingLine returns the styled typing indicator for the current

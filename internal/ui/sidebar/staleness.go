@@ -5,6 +5,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+
+	"github.com/gammons/slk/internal/core"
 )
 
 // IsStale reports whether a channel should be auto-hidden from the
@@ -62,6 +65,30 @@ func IsStale(item ChannelItem, hasUnread bool, lastReadTS string, threshold time
 		return false
 	}
 	return now.Sub(lastRead) > threshold
+}
+
+// activeOnlyWindow is the inactivity span of Slack's "Active only"
+// sidebar filter.
+const activeOnlyWindow = 30 * 24 * time.Hour
+
+// isInactive applies Slack's "Active only" rule to any conversation,
+// sectioned or not. Slack goes by the newest message; with no unread,
+// that is at or before the last read, the closest signal slk keeps, so
+// this hides a subset of what Slack hides, never more.
+func isInactive(item ChannelItem, state core.ReadState, now time.Time) bool {
+	item.Section = ""
+	return IsStale(item, state.HasUnread, state.LastReadTS, activeOnlyWindow, now)
+}
+
+// slackSortKey is name without punctuation, so "eng_announcements" sorts
+// before "eng-gazette" as in Slack.
+func slackSortKey(name string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return r
+		}
+		return -1
+	}, name)
 }
 
 // parseSlackTS converts a Slack timestamp string ("1700000001.000000")

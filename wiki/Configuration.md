@@ -61,6 +61,18 @@ quiet_hours = "22:00-08:00"   # planned
 # matching Slack. (This is a behavior change: previously a mention or keyword
 # in a muted channel would still notify.)
 
+[sidebar]
+right_align_badges = false  # true: mention badges at the right end of the row (Slack)
+channel_indent = 0          # cells to indent the rows under each section header (0-6)
+slack_style = false         # true: Slack's look: no ▾ on open sections, plain headers,
+                            # no unread dot (bold only), names sorted ignoring punctuation
+private_glyph = "◆"         # glyph before private channels, e.g. a lock your font has
+                            # (sidebar only: the finder and pane header keep ◆)
+active_only = false         # true: hide conversations with no activity in 30 days, in
+                            # every section (Slack's "Active only"; unread ones stay)
+mouse_resize = false        # true: drag the sidebar's right border to resize it
+                            # ([ and ] also resize; the width is saved per workspace)
+
 [compose]
 editor = "nvim"   # Ctrl+E editor, used when $VISUAL and $EDITOR are unset
 # Keep typing after Enter sends (default false: return to normal mode like
@@ -251,6 +263,13 @@ sidebar_background = "#19171D"
 sidebar_text       = "#D1D2D3"
 sidebar_text_muted = "#9A9B9E"
 rail_background    = "#19171D"
+
+# Optional, for a Slack-like look. Unset keeps slk's defaults.
+username            = "#1D1C1D" # author names (default: primary)
+sidebar_selected_bg = "#333133" # selected sidebar row as a filled pill, no ▌
+sidebar_selected_fg = "#F8F8F8" # its text (default: sidebar_text)
+mention_badge_bg    = "#C01343" # mention-count badge (default: selection colours)
+mention_badge_fg    = "#FFFFFF"
 ```
 
 Every built-in theme now sets a channels-panel (sidebar) background that is

@@ -166,7 +166,25 @@ type Sidebar struct {
 	// unread messages, and the currently-selected channel are never
 	// hidden regardless of this setting.
 	HideInactiveAfterDays int `toml:"hide_inactive_after_days"`
-	Width                 int `toml:"width"`
+	// RightAlignBadges puts mention badges at the right end of their
+	// rows, as Slack does. Default off.
+	RightAlignBadges bool `toml:"right_align_badges"`
+	Width            int  `toml:"width"`
+	// ChannelIndent indents the rows under each section header by this
+	// many cells, as Slack does (0-6). Default 0.
+	ChannelIndent int `toml:"channel_indent"`
+	// SlackStyle draws the sidebar as Slack does: no "▾" on expanded
+	// headers, regular-weight headers, no unread dot, and names sorted
+	// ignoring punctuation. Default off.
+	SlackStyle bool `toml:"slack_style"`
+	// PrivateGlyph replaces "◆" before private channels (e.g. a lock).
+	PrivateGlyph string `toml:"private_glyph"`
+	// ActiveOnly hides conversations with no activity in 30 days, in
+	// every section, like Slack's "Active only" filter. Default off.
+	ActiveOnly bool `toml:"active_only"`
+	// MouseResize lets a drag of the sidebar's right border resize it.
+	// Default off.
+	MouseResize bool `toml:"mouse_resize"`
 }
 
 // Marks holds preferences for vim-style marks.
