@@ -82,6 +82,10 @@ func main() {
 			fmt.Println("Uses Slack's internal browser protocol; may violate Slack's TOS. Use at your own risk.")
 			return
 		case "--help", "-h", "help":
+			if len(os.Args) > 2 {
+				// slk help <command>: the CLI's help for one command.
+				os.Exit(cliMain(append([]string{"help"}, os.Args[2:]...)))
+			}
 			printHelp()
 			return
 		case "--add-workspace", "--browser":
