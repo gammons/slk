@@ -327,9 +327,8 @@ type ViewResult struct {
 	// Bots is []json.RawMessage because it was `[]` in BOTH captures,
 	// so there is no evidence whatsoever for what an entry looks like.
 	// A struct here would be an invented contract; raw bytes claim
-	// nothing and lose nothing. Same reasoning as boot.Subteams.Self
-	// and boot.Result.Starred. Give it a real type when a capture with
-	// a non-empty bots list exists.
+	// nothing and lose nothing. Same reasoning as boot.Subteams.Self.
+	// Give it a real type when a capture with a non-empty bots list exists.
 	//
 	// It plausibly mirrors Users for bot authors — plausibly is not
 	// evidence.

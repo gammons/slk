@@ -106,7 +106,7 @@ func cannedBootResult() *boot.Result {
 			},
 		},
 		IsOpen:  []string{"C_GENERAL", "D_ALICE"},
-		Starred: []json.RawMessage{json.RawMessage(`{"type":"channel","channel":"C_GENERAL"}`)},
+		Starred: []string{"C_GENERAL"},
 		Subteams: boot.Subteams{
 			Self: []json.RawMessage{json.RawMessage(`{"id":"S_TEAM"}`)},
 		},

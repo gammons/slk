@@ -56,6 +56,21 @@ func newTestClient(t *testing.T, srv *httptest.Server) *slackclient.Client {
 	return c
 }
 
+// handlerTransport dispatches requests in-process so tests using synctest can
+// advance virtual time without socket I/O keeping a goroutine busy.
+type handlerTransport struct {
+	handler http.Handler
+}
+
+func (tr handlerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Body != nil {
+		defer req.Body.Close()
+	}
+	recorder := httptest.NewRecorder()
+	tr.handler.ServeHTTP(recorder, req)
+	return recorder.Result(), nil
+}
+
 // recordedRequest is one request the fake Slack captured.
 type recordedRequest struct {
 	path   string

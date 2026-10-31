@@ -9,7 +9,7 @@ import (
 )
 
 // missingStarredConversations returns eligible starred conversations absent
-// from knownIDs, in stars.list order. Boot IM metadata avoids a network request
+// from knownIDs, in boot-snapshot order. Boot IM metadata avoids a network request
 // and admits closed 1:1 DMs; resolve is the read-only conversations.info path.
 // Errors are best-effort and cancellation stops further work, retaining any
 // additions already resolved. Nothing is opened remotely or fabricated.

@@ -299,22 +299,26 @@ Things no task touched, but the diff was large.
 
 ---
 
-## 11. Unblock the two capture-dependent items (optional, ~10 minutes)
+## 11. Unblock the remaining capture-dependent item (optional, ~10 minutes)
 
-`usergroups.list` and `stars.list` could both be dropped — `client.userBoot`
-already returns the data — but `boot.Result.Subteams` and `boot.Result.Starred`
-are `[]json.RawMessage` because **both existing captures show empty lists**.
-There is no evidence for what a populated entry looks like, and guessing is how
-this project has been burned twice.
+**Starred follow-up (2026-10-31).** A non-empty Enterprise Grid response
+verified conversation ID strings in `userBoot.starred`. Startup now reuses
+that boot snapshot and reconnect fetches a fresh one instead of calling
+`stars.list`. Unknown starred variants are ignored without inferring an
+object schema or rejecting the workspace boot. The recorded QA results and
+request tallies below and above predate this change.
 
-To unblock, capture a `client.userBoot` response from a workspace that actually
-has usergroups and starred channels:
+Only `usergroups.list` remains capture-dependent. `boot.Result.Subteams.Self`
+is still `[]json.RawMessage` because both original captures showed an empty
+`subteams.self` array. A populated entry's shape remains unverified.
 
-1. Open Slack in a browser on a workspace where you have starred channels and
-   which has usergroups (`@team-handles`).
+To unblock, capture a `client.userBoot` response from a workspace that has
+usergroups:
+
+1. Open Slack in a browser on a workspace with usergroups (`@team-handles`).
 2. DevTools → Network → filter `userBoot` → hard reload.
 3. Save the **response** for `client.userBoot`.
-4. Check the `subteams.self` and `starred` arrays are non-empty.
+4. Check that the `subteams.self` array is non-empty.
 
 **That file contains your session token and real content — treat it like the
 existing HAR captures: worktree root, gitignored, never committed, never

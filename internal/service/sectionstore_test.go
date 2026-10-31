@@ -180,10 +180,8 @@ func TestSectionStore_SectionForChannel_StarsClaimed(t *testing.T) {
 	}
 }
 
-// Slack's users.channelSections.list returns the stars section with an
-// empty channel_ids array. PopulateStars fills it from stars.list, the
-// authoritative source for starred channels. Without this call, a
-// bootstrapped stars section stays empty and includeInSidebar hides it.
+// The section-list endpoint leaves stars membership empty. PopulateStars fills
+// it with the conversation IDs supplied by client.userBoot.
 func TestSectionStore_PopulateStars_FillsEmptyStarsSection(t *testing.T) {
 	sections := []slk.SidebarSection{
 		{ID: "ST", Type: "stars", Name: "", Next: "U", LastUpdate: 1},
@@ -258,15 +256,8 @@ func TestSectionStore_PopulateStars_ReplacesPreviousStarList(t *testing.T) {
 	}
 }
 
-// TestBootstrap_PopulatesStars regresses a bug where the Starred header
-// disappeared after a WebSocket reconnect. Bootstrap atomically replaces
-// store state; channelSections.list returns the stars section with an
-// empty channel_ids array (built-in types aren't populated). Without
-// Bootstrap also fetching stars.list, a reconnect-triggered re-bootstrap
-// wiped the star list that PopulateStars had filled at startup and
-// includeInSidebar hid the header. Bootstrap now fetches stars.list
-// itself, so a single Bootstrap leaves stars populated — and any future
-// Bootstrap call site is automatically covered.
+// TestBootstrap_PopulatesStars guards against losing the Starred header after
+// reconnect: every section bootstrap also restores its boot-snapshot membership.
 func TestBootstrap_PopulatesStars(t *testing.T) {
 	c := &fakeSectionsClient{
 		sections: []slk.SidebarSection{
@@ -292,7 +283,7 @@ func TestBootstrap_PopulatesStars(t *testing.T) {
 	}
 }
 
-// TestBootstrap_StarsFetchErrorIsBestEffort verifies that a stars.list
+// TestBootstrap_StarsFetchErrorIsBestEffort verifies that a membership lookup
 // failure does not fail Bootstrap itself — sections still load and the
 // store becomes Ready; the stars section just stays hidden until the
 // next successful bootstrap.
@@ -305,7 +296,7 @@ func TestBootstrap_StarsFetchErrorIsBestEffort(t *testing.T) {
 	}
 	store := NewSectionStore()
 	if err := store.Bootstrap(context.Background(), c); err != nil {
-		t.Fatalf("Bootstrap should succeed despite stars.list error: %v", err)
+		t.Fatalf("Bootstrap should succeed despite starred lookup error: %v", err)
 	}
 	if !store.Ready() {
 		t.Fatalf("Ready=false; sections should still be loaded")

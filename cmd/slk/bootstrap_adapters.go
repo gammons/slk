@@ -77,6 +77,17 @@ func (a bootAdapter) UserBoot(ctx context.Context) (*boot.Result, error) {
 	return boot.UserBoot(ctx, a.c.PostForm)
 }
 
+// bootSectionsClient reuses the starred list already fetched by bootstrap.Run.
+// Reconnects use the ordinary client to fetch a fresh userBoot snapshot instead.
+type bootSectionsClient struct {
+	*slackclient.Client
+	starred []string
+}
+
+func (a bootSectionsClient) GetStarredConversations(context.Context) ([]string, error) {
+	return a.starred, nil
+}
+
 // viewAdapter satisfies bootstrap.Viewer. Same pass-through as
 // bootAdapter; channelID may be "", which boot.ConversationsView turns
 // into an absent `channel` param rather than an empty one.

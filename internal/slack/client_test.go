@@ -1121,59 +1121,6 @@ func TestGetChannelSections_UsesAPIBaseURL(t *testing.T) {
 	}
 }
 
-// TestGetStarredConversations_ParsesItems verifies GetStarredConversations extracts
-// channel and IM conversation items from stars.list. Slack's channelSections.list
-// returns the stars section with an empty channel_ids array; stars.list is
-// the authoritative source for which conversations the user has starred.
-func TestGetStarredConversations_ParsesItems(t *testing.T) {
-	var gotPath string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"ok": true,
-			"items": [
-				{"type": "channel", "channel": "C1", "date_create": 1700000001},
-				{"type": "channel", "channel": "C2", "date_create": 1700000002},
-				{"type": "message", "channel": "C9", "message": {"ts": "1.1"}, "date_create": 1700000003},
-				{"type": "im", "channel": "D1", "date_create": 1700000004},
-				{"type": "channel", "channel": "C1"},
-				{"type": "im", "channel": "D1"},
-				{"type": "im", "channel": ""},
-				{"type": "channel", "channel": ""},
-				{"type": "file", "channel": "C8"},
-				{"type": "file_comment", "channel": "C7"},
-				{"type": "unknown", "channel": "D9"}
-			],
-			"paging": {"count": 4, "total": 4}
-		}`))
-	}))
-	defer srv.Close()
-
-	c := &Client{
-		token:      "xoxc-test",
-		cookie:     "d-cookie",
-		apiBaseURL: srv.URL + "/api/",
-	}
-	got, err := c.GetStarredConversations(context.Background())
-	if err != nil {
-		t.Fatalf("GetStarredConversations: %v", err)
-	}
-	if gotPath != "/api/stars.list" {
-		t.Errorf("path = %q, want %q", gotPath, "/api/stars.list")
-	}
-	// Conversation IDs are unique and retain first-seen order.
-	want := []string{"C1", "C2", "D1"}
-	if len(got) != len(want) {
-		t.Fatalf("got %v, want %v", got, want)
-	}
-	for i, w := range want {
-		if got[i] != w {
-			t.Errorf("[%d] = %q, want %q", i, got[i], w)
-		}
-	}
-}
-
 // TestGetStarredConversations_APIError verifies the client surfaces Slack's
 // ok=false responses as errors rather than returning an empty list silently.
 func TestGetStarredConversations_APIError(t *testing.T) {
@@ -3251,11 +3198,9 @@ func TestPostForm_NonOKStatusIsAnError(t *testing.T) {
 	}
 }
 
-// TestHandRolledEndpoints_RouteThroughSharedClient is the regression
-// guard for three endpoints that used to build their own http.Client
-// via newCookieHTTPClient instead of reusing c.httpClient:
-// client.counts (GetUnreadCounts), users.channelSections.list
-// (callChannelSectionsList) and stars.list (GetStarredConversations).
+// TestHandRolledEndpoints_RouteThroughSharedClient guards the endpoints that
+// used to build their own http.Client via newCookieHTTPClient instead of
+// reusing c.httpClient: client.counts and users.channelSections.list.
 //
 // Two things were wrong with that, and this test fails on both:
 //
@@ -3293,15 +3238,6 @@ func TestHandRolledEndpoints_RouteThroughSharedClient(t *testing.T) {
 			call: func(t *testing.T, c *Client) {
 				if _, err := c.GetChannelSections(context.Background()); err != nil {
 					t.Fatalf("GetChannelSections: %v", err)
-				}
-			},
-		},
-		{
-			name:     "GetStarredConversations",
-			respBody: `{"ok":true,"items":[],"paging":{"count":0,"total":0}}`,
-			call: func(t *testing.T, c *Client) {
-				if _, err := c.GetStarredConversations(context.Background()); err != nil {
-					t.Fatalf("GetStarredConversations: %v", err)
 				}
 			},
 		},
