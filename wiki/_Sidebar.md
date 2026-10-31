@@ -11,6 +11,7 @@
 - [[Features]]
 - [[Keybindings]]
 - [[Commands]]
+- [[CLI: scripts and AI agents|CLI]]
 - [[Terminal Compatibility|Terminal-Compatibility]]
 - [[Clipboard and OSC 52|Clipboard-and-OSC-52]]
 
