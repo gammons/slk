@@ -20,6 +20,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/gammons/slk/internal/avatar"
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/cli"
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/core/blocks"
@@ -136,6 +137,16 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		default:
+			// slk <noun> <verb> ...: a scriptable command (cmd/slk/cli.go).
+			// It runs here, before the config pre-load and the emoji
+			// width probe below, which only the TUI needs. An unknown
+			// word ends here too, with exit 2, rather than starting the
+			// TUI: a mistyped command must not open a full-screen
+			// program that waits for input.
+			if cli.Handles(os.Args[1:]) {
+				os.Exit(cliMain(os.Args[1:]))
+			}
 		}
 	}
 
