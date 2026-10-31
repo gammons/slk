@@ -105,11 +105,8 @@ func main() {
 			}
 			return
 		case "--list-workspaces":
-			if err := listWorkspaces(); err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
-			}
-			os.Exit(0)
+			// Same table as before; slk workspace list prints it now.
+			os.Exit(cliMain([]string{"workspace", "list"}))
 		case "export":
 			if err := exportChannel(os.Args[2:]); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
