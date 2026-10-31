@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/gammons/slk/internal/atomicfile"
+	"github.com/slack-go/slack"
 )
 
 // Token holds browser session credentials for a single Slack workspace.
@@ -29,6 +30,26 @@ type Token struct {
 // (slk --add-workspace --browser). Startup re-minting leaves it alone: the
 // desktop app may be signed in to the same workspace as someone else.
 const TokenSourceBrowser = "browser"
+
+// authErrorCodes are the Slack error strings that refuse the login
+// itself rather than one request.
+var authErrorCodes = map[string]bool{
+	"invalid_auth":     true,
+	"not_authed":       true,
+	"token_expired":    true,
+	"token_revoked":    true,
+	"account_inactive": true,
+}
+
+// IsAuthError reports whether err is Slack refusing the session's
+// login (invalid_auth, not_authed, token_expired, token_revoked or
+// account_inactive), as opposed to refusing one request. A re-minted
+// token can cure the first four; account_inactive means the account
+// was deactivated, which nothing slk does can cure.
+func IsAuthError(err error) bool {
+	var se slack.SlackErrorResponse
+	return errors.As(err, &se) && authErrorCodes[se.Err]
+}
 
 // TokenStore persists Slack tokens as JSON files in a directory,
 // one file per workspace ({teamID}.json).

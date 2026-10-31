@@ -1,10 +1,13 @@
 package slackclient
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/slack-go/slack"
 )
 
 func TestSaveAndLoadToken(t *testing.T) {
@@ -121,5 +124,30 @@ func TestTokenStore_ListNeverSeesPartialSave(t *testing.T) {
 	stop.Store(true)
 	if err := <-saveErr; err != nil {
 		t.Fatalf("Save: %v", err)
+	}
+}
+
+// TestIsAuthError separates Slack refusing the login (which a fresh
+// token can cure, and which the CLI reports as exit 3) from Slack
+// refusing one request.
+func TestIsAuthError(t *testing.T) {
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{slack.SlackErrorResponse{Err: "invalid_auth"}, true},
+		{fmt.Errorf("auth test failed: %w", slack.SlackErrorResponse{Err: "not_authed"}), true},
+		{slack.SlackErrorResponse{Err: "token_expired"}, true},
+		{slack.SlackErrorResponse{Err: "token_revoked"}, true},
+		{slack.SlackErrorResponse{Err: "account_inactive"}, true},
+		{slack.SlackErrorResponse{Err: "channel_not_found"}, false},
+		{&slack.RateLimitedError{}, false},
+		{errors.New("invalid_auth"), false}, // only Slack's own answer counts
+		{nil, false},
+	}
+	for _, tc := range cases {
+		if got := IsAuthError(tc.err); got != tc.want {
+			t.Errorf("IsAuthError(%v) = %v, want %v", tc.err, got, tc.want)
+		}
 	}
 }
