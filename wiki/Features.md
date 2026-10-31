@@ -9,6 +9,7 @@
 - Remove a link preview from your own message (`x`): the "x" on Slack's preview card. A confirmation names the preview (one button per preview when the message has several); the card disappears when Slack confirms the change. Works from the messages pane and from a thread reply. Slack decides what it allows, so removing the card of a message you forwarded can be refused.
 - Live message updates: an edit, a link preview Slack adds a moment after you post, or a preview you remove all update the message in place. Only a real edit adds the "(edited)" mark.
 - Slack markdown rendering (bold, italic, strikethrough, code, blockquotes, links, mentions)
+- User mentions in channel and thread content, including forwarded/shared previews, resolve to display names from the workspace cache or in the background and refresh in place. Unresolved users retain their Slack ID; literal `@ID` text is left unchanged.
 - Emoji shortcodes (`:rocket:` → 🚀)
 - Day separators (Today, Yesterday, Monday, full date)
 - Infinite scroll backfill into SQLite cache

@@ -44,7 +44,7 @@ type userBatcher interface {
 	UsersInfo(ctx context.Context, updatedIDs map[string]int64) ([]edge.User, error)
 }
 
-// userResolver resolves unknown message authors in the background.
+// userResolver resolves unknown message authors and mentioned users in the background.
 // Misses coalesce into batched edge users/info calls (see flush); ids
 // edge cannot resolve, a failed batch, and degraded workspaces fall
 // back to the per-user Web API users.info path (see resolveOne).
