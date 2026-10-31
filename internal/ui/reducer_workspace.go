@@ -20,7 +20,7 @@
 //	                          emoji, apply theme, restore the last
 //	                          channel viewed for this workspace.
 //	ConversationOpenedMsg   - WS event: a conversation just opened.
-//	                          Upsert into the active sidebar and finder.
+//	                          Upsert sidebar/finder and refresh mentions.
 //	SectionsRefreshedMsg    - cache notice: sidebar sections were
 //	                          reorganized. Re-push channel items
 //	                          for the active workspace.
@@ -30,6 +30,8 @@
 //	UserResolvedMsg         - per-user display-name resolved:
 //	                          patch any in-history references in
 //	                          both messages pane and thread panel.
+//	ChannelResolvedMsg      - channel mention name resolved:
+//	                          refresh every pane without joining it.
 //	UserExternalMsg         - per-user external/internal flag
 //	                          resolved: update the cache + re-push
 //	                          SetUserNames so styling refreshes.
@@ -55,6 +57,7 @@
 package ui
 
 import (
+	"maps"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -73,6 +76,7 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	case ConversationOpenedMsg:
 		if m.TeamID == a.activeTeamID {
 			a.sidebar.UpsertItem(m.Item)
+			a.SetChannels(a.sidebar.Items())
 			// FinderItem is populated by today's one sender
 			// (cmd/slk's rtmEventHandler); guard against a future
 			// sender that forgets to set it, which would otherwise
@@ -115,6 +119,30 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			break
 		}
 		a.SetChannels(items)
+		return nil, true
+
+	case ChannelResolvedMsg:
+		if m.TeamID != a.activeTeamID {
+			return nil, true
+		}
+		name := m.Name
+		// Sidebar names are authoritative for joined conversations, even
+		// if a delayed lookup returns an older cached name.
+		for _, ch := range a.sidebar.Items() {
+			if ch.ID == m.ChannelID && ch.Name != "" {
+				name = ch.Name
+				break
+			}
+		}
+		if cur, ok := a.channelNames[m.ChannelID]; ok && cur == name {
+			return nil, true
+		}
+		names := maps.Clone(a.channelNames)
+		if names == nil {
+			names = make(map[string]string, 1)
+		}
+		names[m.ChannelID] = name
+		a.setChannelNames(names)
 		return nil, true
 
 	case UserResolvedMsg:
@@ -225,7 +253,7 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 			a.sidebar.SetWidth(m.SidebarWidth)
 		}
 		a.sidebar.SetSectionsProvider(m.SectionsProvider)
-		a.SetChannels(m.Channels)
+		a.setChannels(m.Channels, m.ChannelNames)
 		a.channelFinder.SetItems(m.FinderItems)
 		// SetExternalUsers re-pushes user-names; calling
 		// SetUserNames last is the canonical state.
@@ -387,7 +415,7 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	// by a stale peer from the workspace we're leaving. The new
 	// workspace's own presence_change events repopulate it.
 	a.sidebar.ResetPresence()
-	a.SetChannels(m.Channels)
+	a.setChannels(m.Channels, m.ChannelNames)
 	a.channelFinder.SetItems(m.FinderItems)
 	// SetExternalUsers re-pushes user-names; calling SetUserNames
 	// last is the canonical state.

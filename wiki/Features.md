@@ -9,6 +9,7 @@
 - Remove a link preview from your own message (`x`): the "x" on Slack's preview card. A confirmation names the preview (one button per preview when the message has several); the card disappears when Slack confirms the change. Works from the messages pane and from a thread reply. Slack decides what it allows, so removing the card of a message you forwarded can be refused.
 - Live message updates: an edit, a link preview Slack adds a moment after you post, or a preview you remove all update the message in place. Only a real edit adds the "(edited)" mark.
 - Slack markdown rendering (bold, italic, strikethrough, code, blockquotes, links, mentions)
+- Channel mentions in channel and thread content, including forwarded/shared previews, resolve from workspace metadata or in the background—even for accessible public channels you haven't joined—and refresh in place. Resolving a mention does not join the channel or add it to the sidebar. Channels whose names cannot be resolved still show `#unknown`. Failed lookups cool down for 30 seconds before a later request can retry; known names and cache hits bypass the cooldown. Cooldown state stays in memory, with expired records pruned on subsequent lookup failures.
 - Emoji shortcodes (`:rocket:` → 🚀)
 - Day separators (Today, Yesterday, Monday, full date)
 - Infinite scroll backfill into SQLite cache

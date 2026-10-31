@@ -136,9 +136,12 @@ func (h *rtmEventHandler) refreshDMPeerFromCache(userID string) {
 	}
 }
 
-// rememberConversation mirrors the latest name/type into notifier lookup maps.
-// It shares addConversation's serialized-event-owner requirement.
+// rememberConversation mirrors the latest name/type into notifier lookup maps
+// and the mention-name store. Only the serialized event owner may call it.
 func (h *rtmEventHandler) rememberConversation(item sidebar.ChannelItem) {
+	if h.wsCtx != nil && (item.Type == "channel" || item.Type == "private") && item.Name != "" {
+		h.wsCtx.ChannelResolver.nameStore().Set(item.ID, item.Name)
+	}
 	if h.channelNames != nil {
 		h.channelNames[item.ID] = item.Name
 	}
