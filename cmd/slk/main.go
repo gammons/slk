@@ -212,12 +212,13 @@ Usage:
   slk --version          Print version and exit
   slk --help             Show this help
 
+%s
 Config:  ~/.config/slk/config.toml
 Data:    ~/.local/share/slk/
 Cache:   ~/.cache/slk/
 
 Docs:    https://github.com/gammons/slk
-`, version)
+`, version, cli.Overview())
 }
 
 // newImageHTTPClient builds the HTTP client the avatar/thumbnail
