@@ -438,7 +438,7 @@ type App struct {
 	imageCtx      imgrender.ImageContext
 	emojiCtx      messages.EmojiContext
 	emojiCustoms  map[string]string
-	channelNames  map[string]string
+	channelNames  map[string]string // UI-owned mention names, independent of sidebar membership
 	userGroups    map[string]string
 
 	// buildInfo is the build identity :version shows: version and short
@@ -2830,17 +2830,22 @@ func (a *App) SetWorkspaces(items []workspace.WorkspaceItem) {
 	a.workspaceFinder.SetItems(finderItems)
 }
 
-// SetChannels updates the sidebar's channel list, pushes the same set
-// into both compose boxes for #-channel autocomplete, and seeds the
-// renderers' channel-id -> name map so inbound <#CHANNELID> mentions
-// resolve to the user-facing name. Centralizing these updates ensures
-// the picker's channel set, the sidebar, and the renderer's resolution
-// map never drift from each other (e.g., after a workspace switch, a
-// channel join, or a display-name resolution for a DM).
+// SetChannels updates sidebar membership and #-channel autocomplete.
+// Mention names also include learned non-member channels, which survive
+// membership refreshes; known sidebar names take precedence over them.
 func (a *App) SetChannels(items []sidebar.ChannelItem) {
+	a.setChannels(items, a.channelNames)
+}
+
+// setChannels merges membership into a copied mention snapshot. Workspace
+// activation supplies only the incoming snapshot, discarding outgoing names.
+func (a *App) setChannels(items []sidebar.ChannelItem, knownNames map[string]string) {
 	a.sidebar.SetItems(items)
 	a.channelPickItems = items
-	names := make(map[string]string, len(items))
+	names := maps.Clone(knownNames)
+	if names == nil {
+		names = make(map[string]string, len(items))
+	}
 	types := make(map[string]string, len(items))
 	for _, ch := range items {
 		// Skip entries with empty names (defensive -- they'd never
@@ -2852,6 +2857,13 @@ func (a *App) SetChannels(items []sidebar.ChannelItem) {
 		types[ch.ID] = ch.Type
 	}
 	a.pushChannelPicks()
+	a.setChannelNames(names)
+	a.activityView.SetChannelTypes(types)
+}
+
+// setChannelNames fans out a UI-owned snapshot. Callers must not mutate a
+// previously published map: list setters compare contents to invalidate caches.
+func (a *App) setChannelNames(names map[string]string) {
 	a.channelNames = names
 	for _, m := range a.allWinModels() {
 		m.SetChannelNames(names)
@@ -2859,7 +2871,6 @@ func (a *App) SetChannels(items []sidebar.ChannelItem) {
 	a.threadPanel.SetChannelNames(names)
 	a.threadsView.SetChannelNames(names)
 	a.activityView.SetChannelNames(names)
-	a.activityView.SetChannelTypes(types)
 }
 
 // pushChannelPicks gives both composers the "#" autocomplete list built

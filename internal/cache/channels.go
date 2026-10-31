@@ -35,6 +35,26 @@ func (db *DB) UpsertChannel(ch Channel) error {
 	return nil
 }
 
+// UpsertChannelMetadata caches a conversations.info result without changing an
+// existing row's membership or star. A workspace never rewrites another's row.
+func (db *DB) UpsertChannelMetadata(ch Channel) error {
+	_, err := db.conn.Exec(`
+		INSERT INTO channels (id, workspace_id, name, type, topic, is_member, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			name=excluded.name,
+			type=excluded.type,
+			topic=excluded.topic,
+			updated_at=excluded.updated_at
+		WHERE channels.workspace_id = excluded.workspace_id
+	`, ch.ID, ch.WorkspaceID, ch.Name, ch.Type, ch.Topic,
+		boolToInt(ch.IsMember), ch.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("upserting channel metadata: %w", err)
+	}
+	return nil
+}
+
 func (db *DB) GetChannel(id string) (Channel, error) {
 	var ch Channel
 	var isMember, isStarred int

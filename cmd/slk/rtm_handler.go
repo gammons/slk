@@ -516,10 +516,12 @@ func (h *rtmEventHandler) messageItemFromEvent(authorID, userID, username, ts, t
 		LegacyAttachments: extractLegacyAttachments(attachments),
 	}
 	var resolver *userResolver
+	var channels *channelResolver
 	if h.wsCtx != nil {
 		resolver = h.wsCtx.UserResolver
+		channels = h.wsCtx.ChannelResolver
 	}
-	resolveMessageMentions(item, h.userNames, h.db, resolver)
+	resolveMessageMentions(item, h.userNames, h.db, resolver, channels)
 	return item
 }
 

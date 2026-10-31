@@ -322,6 +322,13 @@ type (
 		DisplayName string
 		IsBot       bool
 	}
+	// ChannelResolvedMsg learns a mention name without joining the channel
+	// or adding it to the sidebar and compose pickers.
+	ChannelResolvedMsg struct {
+		TeamID    string
+		ChannelID string
+		Name      string
+	}
 	// UserExternalMsg flags a single user as external (Slack Connect /
 	// shared-channel guest). Emitted by the user-resolution path when a
 	// users.info response shows team_id != workspace TeamID. The App
@@ -357,6 +364,8 @@ type (
 		Theme        string // resolved theme name (per-workspace or global default)
 		SidebarWidth int    // resolved sidebar width (per-workspace or global default)
 		Channels     []sidebar.ChannelItem
+		// ChannelNames includes known non-member channels for mention rendering.
+		ChannelNames map[string]string
 		FinderItems  []core.ChannelFinderItem
 		UserNames    map[string]string
 		// UserStatuses is every cached user's custom status, for author
@@ -446,6 +455,8 @@ type (
 		Theme        string // resolved theme name (per-workspace or global default)
 		SidebarWidth int    // resolved sidebar width (per-workspace or global default)
 		Channels     []sidebar.ChannelItem
+		// ChannelNames includes known non-member channels for mention rendering.
+		ChannelNames map[string]string
 		FinderItems  []core.ChannelFinderItem
 		UserNames    map[string]string
 		// UserStatuses is every cached user's custom status, for author
