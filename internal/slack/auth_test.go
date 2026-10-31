@@ -1,6 +1,9 @@
 package slackclient
 
 import (
+	"fmt"
+	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -73,5 +76,50 @@ func TestTokenRoundTripIncludesDomain(t *testing.T) {
 	}
 	if got.Domain != "acme" {
 		t.Errorf("Domain = %q, want acme", got.Domain)
+	}
+}
+
+// TestTokenStore_ListNeverSeesPartialSave is the regression guard for
+// non-atomic token saves. List silently skips a token file it cannot
+// parse, so a TUI that starts while another slk process (a CLI command
+// that refreshed a login, or slk export) rewrites a token would come
+// up without that workspace. The reader below stands in for that TUI:
+// every List must return both workspaces, whole.
+func TestTokenStore_ListNeverSeesPartialSave(t *testing.T) {
+	store := NewTokenStore(t.TempDir())
+	// A long name widens the truncate-then-write window enough that a
+	// reader lands in it reliably; a real token file is a few hundred
+	// bytes, which makes the race real but rare.
+	long := strings.Repeat("padding ", 64*1024)
+	if err := store.Save(Token{AccessToken: "xoxc-1", TeamID: "T1", TeamName: long}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(Token{AccessToken: "xoxc-2", TeamID: "T2", TeamName: "Other"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stop atomic.Bool
+	saveErr := make(chan error, 1)
+	go func() {
+		defer close(saveErr)
+		for i := 0; !stop.Load(); i++ {
+			if err := store.Save(Token{AccessToken: fmt.Sprintf("xoxc-%d", i), TeamID: "T1", TeamName: long}); err != nil {
+				saveErr <- err
+				return
+			}
+		}
+	}()
+
+	for i := 0; i < 300; i++ {
+		tokens, err := store.List()
+		if err != nil || len(tokens) != 2 {
+			stop.Store(true)
+			<-saveErr
+			t.Fatalf("read %d: List() returned %d tokens, err %v; want both workspaces", i, len(tokens), err)
+		}
+	}
+	stop.Store(true)
+	if err := <-saveErr; err != nil {
+		t.Fatalf("Save: %v", err)
 	}
 }

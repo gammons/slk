@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/gammons/slk/internal/atomicfile"
 )
 
 // Token holds browser session credentials for a single Slack workspace.
@@ -40,7 +42,12 @@ func NewTokenStore(dir string) *TokenStore {
 }
 
 // Save writes a token to disk, creating the directory if needed.
-// File permissions are restricted to owner-only (0600).
+// A new file is owner-only (0600).
+//
+// The write is atomic (atomicfile.Write): another slk process that
+// lists the store meanwhile (a TUI starting while a CLI command saves
+// a refreshed login) sees the old token or the new one, never a
+// half-written file, which List would skip as corrupt.
 func (s *TokenStore) Save(token Token) error {
 	if err := os.MkdirAll(s.dir, 0700); err != nil {
 		return fmt.Errorf("creating token dir: %w", err)
@@ -52,7 +59,7 @@ func (s *TokenStore) Save(token Token) error {
 	}
 
 	path := filepath.Join(s.dir, token.TeamID+".json")
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if err := atomicfile.Write(path, data, 0600); err != nil {
 		return fmt.Errorf("writing token: %w", err)
 	}
 	return nil
