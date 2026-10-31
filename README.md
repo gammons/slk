@@ -74,6 +74,23 @@ offers this when it cannot read the desktop app's session.
 
 Full walkthrough: [Setup wiki page](https://github.com/gammons/slk/wiki/Setup).
 
+## Scripting and agents
+
+slk also runs as plain commands, for shell scripts and AI agents. They use
+the same login as the TUI, never ask for input, and print JSON with `--json`.
+(When a command refreshes an expired login from the Slack desktop app, your
+OS can ask you to allow keychain access, as it can when the TUI starts.)
+
+```bash
+slk workspace whoami --json   # check the login: exit code 3 means it failed
+slk workspace list --json     # the configured workspaces
+slk skill                     # a SKILL.md that teaches an AI agent the commands
+```
+
+Exit codes and the JSON shapes are stable, so scripts can rely on them. See
+the [CLI wiki page](https://github.com/gammons/slk/wiki/CLI); `slk help` lists
+every command in your build.
+
 ## Debugging
 
 Set `SLK_DEBUG=1` to enable a comprehensive debug log written to
@@ -92,6 +109,7 @@ Everything lives in the [**wiki**](https://github.com/gammons/slk/wiki):
 - [Features](https://github.com/gammons/slk/wiki/Features) — full feature breakdown
 - [Keybindings](https://github.com/gammons/slk/wiki/Keybindings) — every key, every mode
 - [Commands](https://github.com/gammons/slk/wiki/Commands) — `:` commands and slash commands
+- [CLI](https://github.com/gammons/slk/wiki/CLI) — `slk <noun> <verb>` commands for scripts and AI agents, with JSON output
 - [Configuration](https://github.com/gammons/slk/wiki/Configuration) — `config.toml`, custom themes, XDG paths
 - [Terminal Compatibility](https://github.com/gammons/slk/wiki/Terminal-Compatibility) — what each terminal supports, including tmux setup (inline images, unread-title forwarding)
 - [Clipboard and OSC 52](https://github.com/gammons/slk/wiki/Clipboard-and-OSC-52) — copy/paste setup notes
