@@ -46,6 +46,10 @@ internal/bubbles/       self-contained components and the substrate they
                         imports internal/ui; the TUI's I/O ban applies here too.
                         Widgets move here from internal/ui/<widget>/ one at
                         a time; confirmprompt is the first
+internal/cli/           the scriptable `slk <noun> <verb>` commands (#107):
+                        command table, dispatch, help, JSON output, exit
+                        codes, SKILL.md; reaches the token store and Slack
+                        only through cli.Env, which cmd/slk/cli.go builds
 internal/slack/         Slack Web API + browser-protocol WebSocket client
 internal/slack/edge/    edgeapi: conditional revalidation, server-side search
 internal/bootstrap/     startup fetch orchestration
@@ -228,6 +232,20 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Can the user post in an app DM? (`app_home.messages_tab_enabled` / `messages_tab_read_only_enabled`) | `boot.ConversationsInfo` (`return_app_home=true`) or `ConversationsView`, then `(*boot.AppHome).CanReceiveMessages()` (nil is true); `cmd/slk/probeMessagingCapability` wires both, fail-open, behind `core.ChannelService.MessagingCapability`. A send refused with `restricted_action_read_only*` marks the conversation (`App.readOnlyChannels`, `sendFailedCmd` in `internal/ui/read_only.go`); both set `App.composeDisabled` |
 | Leave insert mode from code | `(*App).exitInsertAfterSend()` after a send (honours `[compose] stay_in_insert_after_send`); `(*App).exitInsert()` to leave whatever the option says (`ModeNormal`, both composers blurred) (`internal/ui/app.go`). Neither rechecks waiting action dialogs: a path that leaves insert mode at the user's request, as Esc does, follows with `tryOpenActionPrompt()` |
 | Record that the user used an emoji (a reaction added, a pill toggled on, a `:shortcode:` in a sent message, reply or upload caption), or hand the emoji history to every picker | `(*App).recordEmojiUse(names...)`, `(*App).recordEmojiInText(text)`, `(*App).refreshEmojiFrecency()` (`internal/ui/emoji_frecency.go`); the history is `core.ReactionService.LoadFrecent` / `RecordFrecent` (the `frecent_emoji` cache table) |
+
+### Command line, sign-in and files
+
+| Need | Use |
+|---|---|
+| Add a scriptable command (`slk <noun> <verb>`) | A row in `commands` (`internal/cli/registry.go`), a line in `nouns` for a new noun, and a line in `internal/cli/SKILL.md`, which `TestSkillListsEveryCommand` enforces. `slk help` and the command block of `slk --help` (`cli.Overview`) are generated from the table. The command reads its flags through the closure its `Setup` returns, signs in with `inv.Session(ctx)` (only when it calls Slack) and writes through `inv.out.result(doc, text)`, a JSON object or text. A failure with a code of its own is a `*cli.Error` (`usageError(...)` for a bad command line); a new code goes in `errorExits` and in `SKILL.md` (`TestSkillListsEveryErrorCode`). Pin each JSON shape with a golden file |
+| Pick the workspace a one-shot command acts on (slug, team ID, name or domain, any case; else the `Default` one, else the only one) | `cli.SelectWorkspace(list, ref)`; `slk export` reaches it through `selectExportToken`. The CLI's order (`--workspace`, `$SLK_WORKSPACE`, `[general] default_workspace`) is `(*cli.Invocation).Session` |
+| Replace a file so that another slk process reading it never sees it half-written (temp file + rename, mode kept) | `atomicfile.Write(path, data, defaultPerm)`; `writeConfigAtomic` (config savers) and `TokenStore.Save` use it |
+| Is this error Slack refusing the login itself (`invalid_auth`, `not_authed`, `token_expired`, `token_revoked`, `account_inactive`), not one request? | `slackclient.IsAuthError(err)`; the CLI reports it as exit 3 |
+| The context for a one-shot command: Ctrl-C or SIGTERM cancels it, and a second Ctrl-C still kills the process | `signalContext()` (`cmd/slk/signal.go`); `slk export` and `cliMain` |
+| Refresh one stored token from the desktop app and save it (unchanged on failure; a browser sign-in returns before any desktop or keychain read) | `remintToken(ctx, store, tok)` (`cmd/slk/remint.go`), `remintTokenWith` with the reads injected for tests; `remintTokens` refreshes every token at TUI launch |
+| Parse a CLI argument list whose flags may come before, between or after the positionals (a flag's value is never a positional, whatever it looks like; `--` makes every later argument positional) | `parseInterspersed(fs, args)` (`internal/cli/args.go`); a command's `run`, `slk help` and the arguments after a bare noun all parse with it. It and `jsonRequested` read the arguments through one scanner, `splitArgs`, so they cannot disagree |
+| Decide, before parsing, whether a CLI command line asked for JSON, so a parse error comes out in that format (reads the arguments as the parse does; reads past an unknown flag; an invalid `--json=x` changes nothing) | `jsonRequested(fs, args)` (`internal/cli/cli.go`), with the command's flag set once it is known |
+| Sign in for a one-shot command, reminting only when Slack refuses the login (no keychain read on the common path) | `connectWithRemint(ctx, tok, connect, remint)` (`cmd/slk/cli.go`) |
 
 ### Test helpers
 
