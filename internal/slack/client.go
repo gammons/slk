@@ -557,6 +557,23 @@ func (c *Client) SubscribePresence(userIDs []string) error {
 	return c.wsConn.WriteJSON(msg)
 }
 
+// QueryPresence asks Slack for the current presence of the given user
+// IDs; the answers arrive as ordinary presence_change events. The socket
+// is opened with no_query_on_subscribe=1, so presence_sub alone reports
+// only later transitions and a peer who stays online is never reported.
+func (c *Client) QueryPresence(userIDs []string) error {
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	if c.wsConn == nil {
+		return fmt.Errorf("websocket not connected")
+	}
+	msg := map[string]interface{}{
+		"type": "presence_query",
+		"ids":  userIDs,
+	}
+	return c.wsConn.WriteJSON(msg)
+}
+
 // GetChannels retrieves conversations the user is a member of (channels, DMs,
 // group DMs), paginating automatically. Uses users.conversations which returns
 // only joined channels — much faster than conversations.list for large workspaces.

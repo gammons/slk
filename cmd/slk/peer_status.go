@@ -359,6 +359,28 @@ func withPeerStatuses(channels []sidebar.ChannelItem, statuses map[string]peerst
 	return outChannels
 }
 
+// withCachedPresence returns a copy of channels with each DM's Presence
+// read from the cache, which presence_change events keep current. The
+// items' own Presence is from connect time, and a workspace switch drops
+// the sidebar's live presence, so without this every switch showed peers
+// as they were when slk connected. Does not modify its input.
+func withCachedPresence(db *cache.DB, channels []sidebar.ChannelItem) []sidebar.ChannelItem {
+	outChannels := slices.Clone(channels)
+	if db == nil {
+		return outChannels
+	}
+	for i := range outChannels {
+		uid := outChannels[i].DMUserID
+		if uid == "" {
+			continue
+		}
+		if u, err := db.GetUser(uid); err == nil && u.Presence != "" {
+			outChannels[i].Presence = u.Presence
+		}
+	}
+	return outChannels
+}
+
 func (p *peerStatusRefresher) emit(msg tea.Msg) {
 	if p.send != nil {
 		p.send(msg)

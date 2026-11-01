@@ -87,3 +87,33 @@ func TestUpdatePresence(t *testing.T) {
 		t.Errorf("expected 'away', got %q", got.Presence)
 	}
 }
+
+// A profile refresh (a message from the user, an avatar fetch) re-upserts
+// the row with the "away" placeholder. It must not overwrite the presence
+// the WebSocket recorded: the sidebar reseeds DM dots from this column on
+// every workspace switch.
+func TestUpsertUserPreservesPresence(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	defer db.Close()
+
+	if err := db.UpsertUser(User{ID: "U1", WorkspaceID: "T1", Name: "alice", Presence: "away"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpdatePresence("U1", "active"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertUser(User{ID: "U1", WorkspaceID: "T1", Name: "alice", DisplayName: "Alice", Presence: "away"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := db.GetUser("U1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Presence != "active" {
+		t.Errorf("presence = %q; want the live \"active\" kept", got.Presence)
+	}
+	if got.DisplayName != "Alice" {
+		t.Errorf("display_name = %q; profile columns should still update", got.DisplayName)
+	}
+}

@@ -618,8 +618,9 @@ func hydrateFirstSight(db *cache.DB, workspaceID string, res *bootstrap.Result) 
 			DisplayName: bootUserDisplayName(u),
 			AvatarURL:   u.Profile.ImageOriginal,
 			// "away" is what every other first-sight write in slk
-			// records: a view result carries no presence, and the
-			// presence subscription corrects it on the first render.
+			// records: a view result carries no presence. UpsertUser
+			// keeps an existing row's presence, and the connect-time
+			// presence_query corrects a new one.
 			Presence:         "away",
 			IsBot:            u.IsBot || u.IsAppUser,
 			IsExternal:       u.TeamID != "" && u.TeamID != workspaceID,
