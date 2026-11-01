@@ -91,6 +91,8 @@ type Appearance struct {
 	Theme           string `toml:"theme"`
 	TimestampFormat string `toml:"timestamp_format"`
 	ShowAvatars     bool   `toml:"show_avatars"`
+	// ThreadAvatars also draws avatars in the thread pane (needs ShowAvatars).
+	ThreadAvatars bool `toml:"thread_avatars"`
 	// ImageProtocol controls how inline images are rendered.
 	// One of: "auto", "kitty", "sixel", "halfblock", "off".
 	ImageProtocol string `toml:"image_protocol"`

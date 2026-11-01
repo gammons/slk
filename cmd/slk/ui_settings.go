@@ -20,6 +20,7 @@ type uiSettings struct {
 	StaleAfter       time.Duration
 	MouseWheelLines  int
 	ColoredUsernames bool
+	ThreadAvatars    bool
 	ThemeOverrides   core.Theme
 	// StayInInsertAfterSend is [compose] stay_in_insert_after_send
 	// (default off).
@@ -34,6 +35,7 @@ func uiSettingsFromConfig(cfg config.Config) uiSettings {
 		StaleAfter:            time.Duration(cfg.Sidebar.HideInactiveAfterDays) * 24 * time.Hour,
 		MouseWheelLines:       cfg.Appearance.MouseWheelLines,
 		ColoredUsernames:      cfg.Appearance.ColoredUsernames,
+		ThreadAvatars:         cfg.Appearance.ThreadAvatars,
 		ThemeOverrides:        cfg.Theme,
 		StayInInsertAfterSend: cfg.Compose.StayInInsertAfterSend,
 	}
@@ -53,6 +55,7 @@ func applyUISettings(app *ui.App, s uiSettings) {
 	app.SetSidebarStaleThreshold(s.StaleAfter)
 	app.SetMouseWheelLines(s.MouseWheelLines)
 	app.SetColoredUsernames(s.ColoredUsernames)
+	app.SetThreadAvatars(s.ThreadAvatars)
 	app.SetThemeItems(styles.ThemeNames())
 	app.SetThemeOverrides(s.ThemeOverrides)
 	app.SetStayInInsertAfterSend(s.StayInInsertAfterSend)

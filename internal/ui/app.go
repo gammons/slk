@@ -2858,6 +2858,12 @@ func (a *App) SetColoredUsernames(enabled bool) {
 	a.threadPanel.SetColoredUsernames(enabled)
 }
 
+// SetThreadAvatars draws avatars in the thread panel too, when the avatar
+// service is set ([appearance] thread_avatars).
+func (a *App) SetThreadAvatars(enabled bool) {
+	a.threadPanel.SetShowAvatars(enabled)
+}
+
 // SetImageContext configures the inline-image rendering pipeline on the
 // messages pane. Should be called once at startup, before the first
 // View(). Pass a zero-valued ImageContext to disable inline rendering.

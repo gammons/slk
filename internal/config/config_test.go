@@ -1071,3 +1071,29 @@ func TestConfig_ShowAvatars(t *testing.T) {
 		t.Error("expected show_avatars = false to turn avatars off")
 	}
 }
+
+func TestConfig_ThreadAvatars(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Appearance.ThreadAvatars {
+		t.Error("expected thread_avatars off by default")
+	}
+
+	if err := os.WriteFile(path, []byte("[appearance]\nthread_avatars = true\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Appearance.ThreadAvatars {
+		t.Error("expected thread_avatars = true to turn thread avatars on")
+	}
+}
