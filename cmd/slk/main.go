@@ -402,8 +402,8 @@ func run() error {
 	// (Slack Connect) auth independently of the image fetcher.
 	// Destination directory is configurable via [general].download_dir
 	// (default "~/Downloads", expanded by config.Load).
-	fileDownloader := filedl.New(slackhttp.NewAuthResolver(auths),
-		cfg.General.DownloadDir)
+	fileAuth := slackhttp.NewAuthResolver(auths)
+	fileDownloader := filedl.New(fileAuth, cfg.General.DownloadDir)
 
 	// Migrate old avatar cache (one-time, idempotent).
 	oldAvatarDir := filepath.Join(cacheDir, "avatars")
@@ -1696,6 +1696,14 @@ func run() error {
 			}
 			wctx.RTMHandler = handler
 			wctx.ConnMgr = slackclient.NewConnectionManager(wctx.Client, handler)
+			// When Slack refuses the login mid-session, reconnect with
+			// the login every slk process shares (login.go) instead of
+			// retrying the refused one until slk restarts. Only a login
+			// of the account this workspace was built for is used.
+			wctx.ConnMgr.Relogin = workspaceRelogin(tok,
+				newLoginRefresher(tokenStore, sameAccountAs(wctx.TeamID, wctx.UserID, identifyLogin)),
+				func(fresh slackclient.Token) { applyLogin(wctx, fresh, imageFetcher, fileAuth) },
+				func(text string) { p.Send(ui.ToastMsg{Text: text}) })
 
 			// Use the same workspace-relative cache projection as switching,
 			// including profiles first cached by a different workspace.
