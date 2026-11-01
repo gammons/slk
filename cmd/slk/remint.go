@@ -16,6 +16,16 @@ func remintToken(ctx context.Context, store *slackclient.TokenStore, tok slackcl
 	return remintTokenWith(ctx, tok, slackdesktop.Cookie, slackdesktop.Tokens, slackclient.MintToken, store.Save)
 }
 
+// desktopLogin reads the login that the desktop app holds for tok's
+// workspace, as remintToken does, but saves nothing. loginRefresher
+// saves a login only after Slack accepted it as the account its caller
+// wants, so a login it rejects never reaches the token store that the
+// other slk processes read.
+func desktopLogin(ctx context.Context, tok slackclient.Token) slackclient.Token {
+	noSave := func(slackclient.Token) error { return nil }
+	return remintTokenWith(ctx, tok, slackdesktop.Cookie, slackdesktop.Tokens, slackclient.MintToken, noSave)
+}
+
 // remintTokenWith is remintToken with the desktop reads, the mint and
 // the save injected, for tests.
 //
