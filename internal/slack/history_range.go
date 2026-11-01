@@ -57,7 +57,7 @@ func (c *Client) WalkHistory(ctx context.Context, channelID, oldest, latest stri
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		resp, err := c.api.GetConversationHistory(&slack.GetConversationHistoryParameters{
+		resp, err := c.webAPI().GetConversationHistory(&slack.GetConversationHistoryParameters{
 			ChannelID: channelID,
 			Oldest:    oldest,
 			Latest:    latest,
@@ -98,7 +98,7 @@ func (c *Client) GetRepliesBetween(ctx context.Context, channelID, threadTS, old
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		msgs, hasMore, nextCursor, err := c.api.GetConversationReplies(&slack.GetConversationRepliesParameters{
+		msgs, hasMore, nextCursor, err := c.webAPI().GetConversationReplies(&slack.GetConversationRepliesParameters{
 			ChannelID: channelID,
 			Timestamp: threadTS,
 			Oldest:    oldest,

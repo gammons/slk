@@ -48,6 +48,9 @@ type SlackAPI interface {
 	RemoveReaction(name string, item slack.ItemRef) error
 	GetPermalinkContext(ctx context.Context, params *slack.PermalinkParameters) (string, error)
 	AuthTest() (*slack.AuthTestResponse, error)
+	// AuthTestContext is auth.test with a context, for CheckLogin: the
+	// reconnect loop must not wait forever on a hung request.
+	AuthTestContext(ctx context.Context) (*slack.AuthTestResponse, error)
 	JoinConversation(channelID string) (*slack.Channel, string, []string, error)
 	SetUserPresenceContext(ctx context.Context, presence string) error
 	GetUserPresenceContext(ctx context.Context, user string) (*slack.UserPresence, error)
@@ -80,6 +83,8 @@ const defaultWSBaseURL = "wss://wss-primary.slack.com"
 // and a simplified Web API surface for the service layer.
 // Uses browser cookie auth (xoxc token + d cookie).
 type Client struct {
+	// api is the slack-go client. It holds the token, so SetLogin
+	// replaces it; read it through webAPI.
 	api    SlackAPI
 	wsConn *websocket.Conn
 	wsMu   sync.Mutex
@@ -89,8 +94,15 @@ type Client struct {
 	// userName is the signed-in user's handle from auth.test's "user"
 	// field; only `slk workspace whoami` reads it.
 	userName string
-	token    string
-	cookie   string
+
+	// loginMu guards the login: token and cookie (the xoxc token and
+	// the d cookie every request carries) and api, the slack-go client
+	// built with the token. SetLogin changes them, and the d cookie in
+	// httpClient's jar (which has its own lock), while requests run;
+	// read them through login and webAPI.
+	loginMu sync.RWMutex
+	token   string
+	cookie  string
 
 	// apiBaseURL is the workspace-specific Web API root, e.g.
 	// "https://slack.com/api/" for non-grid workspaces or
@@ -170,7 +182,15 @@ func NewClient(xoxcToken, dCookie string) *Client {
 // newCookieJar creates a cookie jar with the Slack 'd' cookie set.
 func newCookieJar(dCookie string) http.CookieJar {
 	jar, _ := cookiejar.New(nil)
+	setDCookie(jar, dCookie)
+	return jar
+}
 
+// setDCookie puts the Slack 'd' cookie in jar for every *.slack.com
+// request. It replaces a d cookie already there, so SetLogin uses it to
+// change the cookie of a jar that requests are using (cookiejar.Jar is
+// safe for concurrent use).
+func setDCookie(jar http.CookieJar, dCookie string) {
 	slackURL, _ := url.Parse("https://slack.com")
 	jar.SetCookies(slackURL, []*http.Cookie{
 		{
@@ -181,8 +201,72 @@ func newCookieJar(dCookie string) http.CookieJar {
 			Secure: true,
 		},
 	})
+}
 
-	return jar
+// login returns the token and the d cookie that a request starting now
+// must carry.
+func (c *Client) login() (token, cookie string) {
+	c.loginMu.RLock()
+	defer c.loginMu.RUnlock()
+	return c.token, c.cookie
+}
+
+// webAPI returns the slack-go client for the current login.
+func (c *Client) webAPI() SlackAPI {
+	c.loginMu.RLock()
+	defer c.loginMu.RUnlock()
+	return c.api
+}
+
+// newWebAPI builds the slack-go client for token. It sends every request
+// through c.httpClient (the BrowserTransport and the d cookie) to the
+// workspace's API host, which Connect discovers.
+func (c *Client) newWebAPI(token string) SlackAPI {
+	return slack.New(
+		token,
+		slack.OptionHTTPClient(c.httpClient),
+		slack.OptionAPIURL(c.apiBaseURL),
+	)
+}
+
+// SetLogin replaces the client's login, the xoxc token and the d cookie,
+// while the client is in use. cmd/slk calls it when Slack refused the
+// old login and a newer one was found (ConnectionManager.Relogin), so
+// the workspace keeps its client, and everything wired to it, instead of
+// needing a restart.
+//
+// Every request that starts afterwards carries the new login: the
+// slack-go client is rebuilt with the new token, and the jar that
+// httpClient (and the edge client, which shares it) sends cookies from
+// gets the new d cookie. The next StartWebSocket dials with both. A
+// request already sent, and an open WebSocket, keep the login they
+// started with.
+func (c *Client) SetLogin(token, cookie string) {
+	c.loginMu.Lock()
+	defer c.loginMu.Unlock()
+	c.token, c.cookie = token, cookie
+	// httpClient is nil only for Clients built directly in tests
+	// (&Client{api: mock}): no jar to change, and a mock api holds no
+	// token to replace.
+	if c.httpClient != nil {
+		if c.httpClient.Jar != nil {
+			setDCookie(c.httpClient.Jar, cookie)
+		}
+		c.api = c.newWebAPI(token)
+	}
+}
+
+// CheckLogin asks Slack whether it still accepts the client's login
+// (auth.test), and returns the team and the user that Slack accepts it
+// as. Unlike Connect, it changes nothing in the client. IsAuthError
+// tells a refused login apart from a request that failed for another
+// reason, such as no network.
+func (c *Client) CheckLogin(ctx context.Context) (teamID, userID string, err error) {
+	resp, err := c.webAPI().AuthTestContext(ctx)
+	if err != nil || resp == nil {
+		return "", "", err
+	}
+	return resp.TeamID, resp.UserID, nil
 }
 
 // newCookieHTTPClient creates an http.Client with the Slack 'd' cookie set
@@ -234,7 +318,8 @@ func (c *Client) apiHTTPClient() *http.Client {
 	if c.httpClient != nil {
 		return c.httpClient
 	}
-	return newCookieHTTPClient(c.cookie, c.envelope)
+	_, cookie := c.login()
+	return newCookieHTTPClient(cookie, c.envelope)
 }
 
 // HTTPClient returns the HTTP client this Client sends every request
@@ -325,7 +410,7 @@ func (c *Client) WsDone() <-chan struct{} {
 // slack-go calls also target the workspace host. If a test injected a
 // mock api directly, leave it alone.
 func (c *Client) Connect(ctx context.Context) error {
-	resp, err := c.api.AuthTest()
+	resp, err := c.webAPI().AuthTest()
 	if err != nil {
 		return fmt.Errorf("auth test failed: %w", err)
 	}
@@ -344,11 +429,9 @@ func (c *Client) Connect(ctx context.Context) error {
 	c.teamName = resp.Team
 
 	if c.httpClient != nil {
-		c.api = slack.New(
-			c.token,
-			slack.OptionHTTPClient(c.httpClient),
-			slack.OptionAPIURL(c.apiBaseURL),
-		)
+		c.loginMu.Lock()
+		c.api = c.newWebAPI(c.token)
+		c.loginMu.Unlock()
 	}
 
 	return nil
@@ -441,15 +524,16 @@ func (c *Client) StartWebSocket(handler EventHandler) error {
 		"?agent=client&org_wide_aware=true&agent_version=%s&eac_cache_ts=true&cache_ts=0&name_tagging=true&only_self_subteams=true&connect_only=true&ms_latest=true",
 		agentVersion,
 	)
+	token, cookie := c.login()
 	wsURL := fmt.Sprintf(
 		"%s/?token=%s&sync_desync=1&slack_client=desktop&start_args=%s&no_query_on_subscribe=1&flannel=3&lazy_channels=1&gateway_server=%s-1&batch_presence_aware=1",
 		c.wsBaseURL,
-		url.QueryEscape(c.token),
+		url.QueryEscape(token),
 		url.QueryEscape(startArgs),
 		c.teamID,
 	)
 
-	jar := newCookieJar(c.cookie)
+	jar := newCookieJar(cookie)
 	dialer := &websocket.Dialer{Jar: jar}
 
 	conn, _, err := dialer.Dial(wsURL, wsUpgradeHeaders())
@@ -582,7 +666,7 @@ func (c *Client) GetChannels(ctx context.Context) ([]slack.Channel, error) {
 			ExcludeArchived: true,
 		}
 
-		channels, nextCursor, err := c.api.GetConversationsForUser(params)
+		channels, nextCursor, err := c.webAPI().GetConversationsForUser(params)
 		if err != nil {
 			// Handle rate limits gracefully
 			if rlErr, ok := err.(*slack.RateLimitedError); ok {
@@ -613,7 +697,7 @@ func (c *Client) GetChannels(ctx context.Context) ([]slack.Channel, error) {
 
 // GetConversationInfo fetches one conversation (conversations.info).
 func (c *Client) GetConversationInfo(ctx context.Context, channelID string) (*slack.Channel, error) {
-	ch, err := c.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: channelID})
+	ch, err := c.webAPI().GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: channelID})
 	if err != nil {
 		return nil, fmt.Errorf("getting conversation %s: %w", channelID, err)
 	}
@@ -643,7 +727,7 @@ func (c *Client) GetUsersInConversation(ctx context.Context, channelID string) (
 			Limit:     1000,
 		}
 
-		users, next, err := c.api.GetUsersInConversationContext(ctx, params)
+		users, next, err := c.webAPI().GetUsersInConversationContext(ctx, params)
 		if err != nil {
 			if rlErr, ok := err.(*slack.RateLimitedError); ok {
 				wait := rlErr.RetryAfter
@@ -673,7 +757,7 @@ func (c *Client) GetUsersInConversation(ctx context.Context, channelID string) (
 // success. Idempotent: joining a channel you're already in is a no-op on
 // Slack's side and returns no error here.
 func (c *Client) JoinChannel(ctx context.Context, channelID string) error {
-	_, _, _, err := c.api.JoinConversation(channelID)
+	_, _, _, err := c.webAPI().JoinConversation(channelID)
 	if err != nil {
 		return fmt.Errorf("joining channel %s: %w", channelID, err)
 	}
@@ -780,7 +864,7 @@ type huddleProfileFields struct {
 // bot_message). Used to resolve the display name and avatar for messages
 // posted by bots/apps, which carry no `user` field.
 func (c *Client) GetBotInfo(ctx context.Context, botID string) (*slack.Bot, error) {
-	bot, err := c.api.GetBotInfoContext(ctx, slack.GetBotInfoParameters{Bot: botID})
+	bot, err := c.webAPI().GetBotInfoContext(ctx, slack.GetBotInfoParameters{Bot: botID})
 	if err != nil {
 		return nil, fmt.Errorf("getting bot info: %w", err)
 	}
@@ -798,7 +882,7 @@ func (c *Client) GetHistory(ctx context.Context, channelID string, limit int, ol
 		params.Oldest = oldest
 	}
 
-	resp, err := c.api.GetConversationHistory(params)
+	resp, err := c.webAPI().GetConversationHistory(params)
 	if err != nil {
 		return nil, fmt.Errorf("getting history: %w", err)
 	}
@@ -814,7 +898,7 @@ func (c *Client) GetOlderHistory(ctx context.Context, channelID string, limit in
 		Latest:    latest,
 	}
 
-	resp, err := c.api.GetConversationHistory(params)
+	resp, err := c.webAPI().GetConversationHistory(params)
 	if err != nil {
 		return nil, fmt.Errorf("getting older history: %w", err)
 	}
@@ -835,7 +919,7 @@ func (c *Client) GetOlderHistory(ctx context.Context, channelID string, limit in
 // by jump-to-message navigation (search results, permalinks) when the
 // target is outside the loaded buffer.
 func (c *Client) GetHistoryAround(ctx context.Context, channelID, ts string, limit int) ([]slack.Message, error) {
-	older, err := c.api.GetConversationHistory(&slack.GetConversationHistoryParameters{
+	older, err := c.webAPI().GetConversationHistory(&slack.GetConversationHistoryParameters{
 		ChannelID: channelID,
 		Latest:    ts,
 		Inclusive: true,
@@ -847,7 +931,7 @@ func (c *Client) GetHistoryAround(ctx context.Context, channelID, ts string, lim
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("getting history around %s: %w", ts, err)
 	}
-	newer, err := c.api.GetConversationHistory(&slack.GetConversationHistoryParameters{
+	newer, err := c.webAPI().GetConversationHistory(&slack.GetConversationHistoryParameters{
 		ChannelID: channelID,
 		Oldest:    ts,
 		Inclusive: false,
@@ -878,7 +962,7 @@ func (c *Client) SearchMessages(ctx context.Context, query string, count int) (*
 	if count > 0 {
 		params.Count = count
 	}
-	res, err := c.api.SearchMessagesContext(ctx, query, params)
+	res, err := c.webAPI().SearchMessagesContext(ctx, query, params)
 	if err != nil {
 		return nil, fmt.Errorf("searching messages: %w", err)
 	}
@@ -930,7 +1014,7 @@ func (c *Client) GetHistorySince(ctx context.Context, channelID, oldest string, 
 			ChannelID: channelID,
 			Limit:     200,
 		}
-		resp, err := c.api.GetConversationHistory(params)
+		resp, err := c.webAPI().GetConversationHistory(params)
 		if err != nil {
 			return HistorySinceResult{}, fmt.Errorf("get history (no oldest): %w", err)
 		}
@@ -952,7 +1036,7 @@ func (c *Client) GetHistorySince(ctx context.Context, channelID, oldest string, 
 			Limit:     200,
 			Cursor:    cursor,
 		}
-		resp, err := c.api.GetConversationHistory(params)
+		resp, err := c.webAPI().GetConversationHistory(params)
 		if err != nil {
 			// Rate-limit retry mirrors GetChannels' pattern.
 			if rlErr, ok := err.(*slack.RateLimitedError); ok {
@@ -984,7 +1068,7 @@ func (c *Client) GetHistorySince(ctx context.Context, channelID, oldest string, 
 // GetUserGroups retrieves the workspace's usergroups (the @team
 // handles behind <!subteam^S…> mentions) via usergroups.list.
 func (c *Client) GetUserGroups(ctx context.Context) ([]slack.UserGroup, error) {
-	groups, err := c.api.GetUserGroupsContext(ctx)
+	groups, err := c.webAPI().GetUserGroupsContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("getting usergroups: %w", err)
 	}
@@ -1000,7 +1084,7 @@ func (c *Client) ListCustomEmoji(ctx context.Context) (map[string]string, error)
 	// a shutdown could not cancel this. Harmless while the call only
 	// ran on the rare conversations.history fallback; it now runs on
 	// every workspace connect.
-	emojis, err := c.api.GetEmojiContext(ctx)
+	emojis, err := c.webAPI().GetEmojiContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing custom emoji: %w", err)
 	}
@@ -1040,7 +1124,7 @@ func (c *Client) postMessage(ctx context.Context, channelID, threadTS, text stri
 	if broadcast {
 		opts = append(opts, slack.MsgOptionBroadcast())
 	}
-	_, ts, err := c.api.PostMessage(channelID, opts...)
+	_, ts, err := c.webAPI().PostMessage(channelID, opts...)
 	if err != nil {
 		return "", "", err
 	}
@@ -1061,7 +1145,7 @@ func (c *Client) OpenConversation(ctx context.Context, userIDs []string) (string
 	if len(userIDs) > 8 {
 		return "", false, fmt.Errorf("opening conversation: at most 8 user IDs allowed (got %d)", len(userIDs))
 	}
-	ch, _, alreadyOpen, err := c.api.OpenConversationContext(ctx, &slack.OpenConversationParameters{
+	ch, _, alreadyOpen, err := c.webAPI().OpenConversationContext(ctx, &slack.OpenConversationParameters{
 		Users:    userIDs,
 		ReturnIM: true,
 	})
@@ -1104,7 +1188,7 @@ func (c *Client) UploadFile(
 	if caption != "" {
 		params.InitialComment = caption
 	}
-	f, err := c.api.UploadFileContext(ctx, params)
+	f, err := c.webAPI().UploadFileContext(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("uploading file %q: %w", filename, err)
 	}
@@ -1156,7 +1240,8 @@ type ThreadsAggregate struct {
 // total unread activity (see sumActivityV2).
 func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, int, error) {
 	reqURL := c.apiBaseURL + "client.counts"
-	form := url.Values{"token": {c.token}}
+	token, _ := c.login()
+	form := url.Values{"token": {token}}
 	req, err := http.NewRequest("POST", reqURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, ThreadsAggregate{}, 0, fmt.Errorf("creating request: %w", err)
@@ -1296,7 +1381,7 @@ func (c *Client) GetReplies(ctx context.Context, channelID, threadTS string) ([]
 	cursor := ""
 
 	for {
-		msgs, hasMore, nextCursor, err := c.api.GetConversationReplies(&slack.GetConversationRepliesParameters{
+		msgs, hasMore, nextCursor, err := c.webAPI().GetConversationReplies(&slack.GetConversationRepliesParameters{
 			ChannelID: channelID,
 			Timestamp: threadTS,
 			Cursor:    cursor,
@@ -1324,7 +1409,7 @@ func (c *Client) EditMessage(ctx context.Context, channelID, ts, text string) (s
 	if block != nil {
 		opts = append(opts, slack.MsgOptionBlocks(block))
 	}
-	_, _, _, err := c.api.UpdateMessage(channelID, ts, opts...)
+	_, _, _, err := c.webAPI().UpdateMessage(channelID, ts, opts...)
 	if err != nil {
 		return "", fmt.Errorf("editing message: %w", err)
 	}
@@ -1333,7 +1418,7 @@ func (c *Client) EditMessage(ctx context.Context, channelID, ts, text string) (s
 
 // RemoveMessage deletes a message from the channel.
 func (c *Client) RemoveMessage(ctx context.Context, channelID, ts string) error {
-	_, _, err := c.api.DeleteMessage(channelID, ts)
+	_, _, err := c.webAPI().DeleteMessage(channelID, ts)
 	if err != nil {
 		return fmt.Errorf("deleting message: %w", err)
 	}
@@ -1342,12 +1427,12 @@ func (c *Client) RemoveMessage(ctx context.Context, channelID, ts string) error 
 
 // AddReaction adds an emoji reaction to a message.
 func (c *Client) AddReaction(ctx context.Context, channelID, ts, emoji string) error {
-	return c.api.AddReaction(emoji, slack.ItemRef{Channel: channelID, Timestamp: ts})
+	return c.webAPI().AddReaction(emoji, slack.ItemRef{Channel: channelID, Timestamp: ts})
 }
 
 // RemoveReaction removes an emoji reaction from a message.
 func (c *Client) RemoveReaction(ctx context.Context, channelID, ts, emoji string) error {
-	return c.api.RemoveReaction(emoji, slack.ItemRef{Channel: channelID, Timestamp: ts})
+	return c.webAPI().RemoveReaction(emoji, slack.ItemRef{Channel: channelID, Timestamp: ts})
 }
 
 // SetUserPresence sets the authenticated user's presence. Accepts "auto"
@@ -1355,7 +1440,7 @@ func (c *Client) RemoveReaction(ctx context.Context, channelID, ts, emoji string
 // vocabulary differs from the read side — GetUserPresence and the
 // presence_change WebSocket event return "active" or "away".
 func (c *Client) SetUserPresence(ctx context.Context, presence string) error {
-	if err := c.api.SetUserPresenceContext(ctx, presence); err != nil {
+	if err := c.webAPI().SetUserPresenceContext(ctx, presence); err != nil {
 		return fmt.Errorf("setting presence: %w", err)
 	}
 	return nil
@@ -1364,7 +1449,7 @@ func (c *Client) SetUserPresence(ctx context.Context, presence string) error {
 // GetUserPresence fetches a user's current presence ("active" or "away").
 // Pass the authenticated user's ID to read your own state.
 func (c *Client) GetUserPresence(ctx context.Context, userID string) (*slack.UserPresence, error) {
-	p, err := c.api.GetUserPresenceContext(ctx, userID)
+	p, err := c.webAPI().GetUserPresenceContext(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("getting presence: %w", err)
 	}
@@ -1374,7 +1459,7 @@ func (c *Client) GetUserPresence(ctx context.Context, userID string) (*slack.Use
 // SetCustomStatus sets the authenticated user's profile status text,
 // emoji, and expiration (Unix seconds; 0 means it never auto-clears).
 func (c *Client) SetCustomStatus(ctx context.Context, statusText, statusEmoji string, statusExpiration int64) error {
-	if err := c.api.SetUserCustomStatusContext(ctx, statusText, statusEmoji, statusExpiration); err != nil {
+	if err := c.webAPI().SetUserCustomStatusContext(ctx, statusText, statusEmoji, statusExpiration); err != nil {
 		return fmt.Errorf("setting custom status: %w", err)
 	}
 	return nil
@@ -1382,7 +1467,7 @@ func (c *Client) SetCustomStatus(ctx context.Context, statusText, statusEmoji st
 
 // SetSnooze enables Do-Not-Disturb for `minutes` minutes.
 func (c *Client) SetSnooze(ctx context.Context, minutes int) (*slack.DNDStatus, error) {
-	st, err := c.api.SetSnoozeContext(ctx, minutes)
+	st, err := c.webAPI().SetSnoozeContext(ctx, minutes)
 	if err != nil {
 		return nil, fmt.Errorf("setting snooze: %w", err)
 	}
@@ -1391,7 +1476,7 @@ func (c *Client) SetSnooze(ctx context.Context, minutes int) (*slack.DNDStatus, 
 
 // EndSnooze ends the current snooze window. Does NOT end admin-scheduled DND.
 func (c *Client) EndSnooze(ctx context.Context) (*slack.DNDStatus, error) {
-	st, err := c.api.EndSnoozeContext(ctx)
+	st, err := c.webAPI().EndSnoozeContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("ending snooze: %w", err)
 	}
@@ -1400,7 +1485,7 @@ func (c *Client) EndSnooze(ctx context.Context) (*slack.DNDStatus, error) {
 
 // EndDND ends the user's current scheduled DND session.
 func (c *Client) EndDND(ctx context.Context) error {
-	if err := c.api.EndDNDContext(ctx); err != nil {
+	if err := c.webAPI().EndDNDContext(ctx); err != nil {
 		return fmt.Errorf("ending DND: %w", err)
 	}
 	return nil
@@ -1409,7 +1494,7 @@ func (c *Client) EndDND(ctx context.Context) error {
 // GetDNDInfo fetches DND/snooze status for a user.
 func (c *Client) GetDNDInfo(ctx context.Context, userID string) (*slack.DNDStatus, error) {
 	u := userID
-	st, err := c.api.GetDNDInfoContext(ctx, &u)
+	st, err := c.webAPI().GetDNDInfoContext(ctx, &u)
 	if err != nil {
 		return nil, fmt.Errorf("getting DND info: %w", err)
 	}
@@ -1422,7 +1507,7 @@ func (c *Client) GetDNDTeamInfo(ctx context.Context, userIDs []string) (map[stri
 	if len(userIDs) == 0 {
 		return nil, nil
 	}
-	st, err := c.api.GetDNDTeamInfoContext(ctx, userIDs)
+	st, err := c.webAPI().GetDNDTeamInfoContext(ctx, userIDs)
 	if err != nil {
 		return nil, fmt.Errorf("getting team DND info: %w", err)
 	}
@@ -1433,7 +1518,7 @@ func (c *Client) GetDNDTeamInfo(ctx context.Context, userIDs []string) (map[stri
 // pass the reply's ts; Slack returns a thread-aware URL with thread_ts and cid
 // query parameters.
 func (c *Client) GetPermalink(ctx context.Context, channelID, ts string) (string, error) {
-	url, err := c.api.GetPermalinkContext(ctx, &slack.PermalinkParameters{
+	url, err := c.webAPI().GetPermalinkContext(ctx, &slack.PermalinkParameters{
 		Channel: channelID,
 		Ts:      ts,
 	})
@@ -1727,7 +1812,8 @@ func (c *Client) postForm(ctx context.Context, method string, form url.Values) (
 	//
 	// Copy the caller's map so we don't mutate it across retries or
 	// concurrent calls.
-	body := url.Values{"token": {c.token}}
+	token, _ := c.login()
+	body := url.Values{"token": {token}}
 	for k, vs := range form {
 		body[k] = vs
 	}
@@ -1785,7 +1871,8 @@ func truncateForLog(b []byte) string {
 func (c *Client) callChannelSectionsList(ctx context.Context, cursor string) ([]byte, error) {
 	endpoint := c.apiBaseURL + "users.channelSections.list"
 
-	form := url.Values{"token": {c.token}}
+	token, _ := c.login()
+	form := url.Values{"token": {token}}
 	if cursor != "" {
 		form.Set("cursor", cursor)
 	}
@@ -1840,7 +1927,8 @@ type starsListPaging struct {
 // Errors propagate to the caller, which may treat stars as best-effort. The
 // existing limit=1000 request is not paginated; large-list support is separate.
 func (c *Client) GetStarredConversations(ctx context.Context) ([]string, error) {
-	form := url.Values{"token": {c.token}, "limit": {"1000"}}
+	token, _ := c.login()
+	form := url.Values{"token": {token}, "limit": {"1000"}}
 	body := strings.NewReader(form.Encode())
 	endpoint := c.apiBaseURL + "stars.list"
 	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, body)

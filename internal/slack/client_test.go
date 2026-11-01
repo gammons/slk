@@ -233,6 +233,10 @@ func (m *mockSlackAPI) AuthTest() (*slack.AuthTestResponse, error) {
 	return nil, nil
 }
 
+func (m *mockSlackAPI) AuthTestContext(ctx context.Context) (*slack.AuthTestResponse, error) {
+	return m.AuthTest()
+}
+
 func (m *mockSlackAPI) JoinConversation(channelID string) (*slack.Channel, string, []string, error) {
 	return &slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: channelID}}}, "", nil, nil
 }
