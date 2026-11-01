@@ -19,6 +19,7 @@ type uiSettings struct {
 	MentionPills     bool
 	TypingIndicators bool
 	StaleAfter       time.Duration
+	RightAlignBadges bool
 	MouseWheelLines  int
 	ColoredUsernames bool
 	ThreadAvatars    bool
@@ -35,6 +36,7 @@ func uiSettingsFromConfig(cfg config.Config) uiSettings {
 		MentionPills:          cfg.Sidebar.MentionPills,
 		TypingIndicators:      cfg.Animations.TypingIndicators,
 		StaleAfter:            time.Duration(cfg.Sidebar.HideInactiveAfterDays) * 24 * time.Hour,
+		RightAlignBadges:      cfg.Sidebar.RightAlignBadges,
 		MouseWheelLines:       cfg.Appearance.MouseWheelLines,
 		ColoredUsernames:      cfg.Appearance.ColoredUsernames,
 		ThreadAvatars:         cfg.Appearance.ThreadAvatars,
@@ -54,6 +56,7 @@ func applyUISettings(app *ui.App, s uiSettings) {
 		return time.Now().Format(s.TimestampFormat)
 	})
 	app.SetTypingEnabled(s.TypingIndicators)
+	app.SetRightAlignBadges(s.RightAlignBadges)
 	app.SetSidebarStaleThreshold(s.StaleAfter)
 	app.SetMentionPills(s.MentionPills)
 	app.SetMouseWheelLines(s.MouseWheelLines)

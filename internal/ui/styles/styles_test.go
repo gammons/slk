@@ -236,6 +236,54 @@ func TestUsernameColoredToggle(t *testing.T) {
 	}
 }
 
+func TestApply_UsernameAndSidebarSelectedFromTheme(t *testing.T) {
+	RegisterCustomTheme("slacklike", ThemeColors{
+		Primary: "#1264A3", Accent: "#007A5A", Warning: "#ECB22E",
+		Error: "#C01343", Background: "#FFFFFF", Surface: "#F8F8F8",
+		SurfaceDark: "#F2F2F2", Text: "#1D1C1D", TextMuted: "#616061",
+		Border: "#DDDDDD", SidebarText: "#1D1C1D",
+		Username: "#1D1C1D", SidebarSelectedBg: "#333133",
+	})
+	Apply("slacklike", config.Theme{})
+	if !colorEqual(Username("U123", false).GetForeground(), lipgloss.Color("#1D1C1D")) {
+		t.Fatal("username role not applied")
+	}
+	if !colorEqual(SidebarSelectedBg, lipgloss.Color("#333133")) {
+		t.Fatal("sidebar_selected_bg not applied")
+	}
+	if !colorEqual(SidebarSelectedFg, SidebarText) {
+		t.Fatal("sidebar_selected_fg must default to SidebarText")
+	}
+
+	if bg := MentionBadgeStyle().GetBackground(); !colorEqual(bg, SelectionBackground) {
+		t.Fatal("badge must keep the selection colors when mention_badge_bg is unset")
+	}
+
+	Apply("dark", config.Theme{})
+	if SidebarSelectedBg != nil || !colorEqual(UsernameColor, Primary) {
+		t.Fatal("username / sidebar_selected_bg leaked into a theme without them")
+	}
+}
+
+func TestMentionBadgeStyle_ThemeRole(t *testing.T) {
+	RegisterCustomTheme("badgetest", ThemeColors{
+		Primary: "#1264A3", Accent: "#007A5A", Warning: "#ECB22E",
+		Error: "#C01343", Background: "#FFFFFF", Surface: "#F8F8F8",
+		SurfaceDark: "#F2F2F2", Text: "#1D1C1D", TextMuted: "#616061",
+		Border: "#DDDDDD", MentionBadgeBg: "#C01343", MentionBadgeFg: "#FFFFFF",
+	})
+	defer Apply("dark", config.Theme{})
+	Apply("badgetest", config.Theme{})
+	s := MentionBadgeStyle()
+	if !colorEqual(s.GetBackground(), lipgloss.Color("#C01343")) || !colorEqual(s.GetForeground(), lipgloss.Color("#FFFFFF")) {
+		t.Fatalf("badge = %v on %v, want #FFFFFF on #C01343", s.GetForeground(), s.GetBackground())
+	}
+	Apply("dark", config.Theme{})
+	if MentionBadgeBg != nil || !colorEqual(MentionBadgeStyle().GetBackground(), SelectionBackground) {
+		t.Fatal("mention_badge_bg leaked into a theme without it")
+	}
+}
+
 // The mention badge uses the theme's highlight pair rather than a
 // hardcoded color, so it stays legible on every theme. Apply() derives
 // Primary-on-Background when a theme omits the pair, so the style is
