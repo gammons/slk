@@ -283,6 +283,9 @@ type Model struct {
 	// SetReadStateReader. May be nil — nil means "treat everything as
 	// no-unread" (used during early construction).
 	readStateReader func() map[string]core.ReadState
+	// revealShown is revealUnreadHidden's scratch membership slice,
+	// kept to avoid an allocation per Invalidate.
+	revealShown []bool
 	// collapseByID parallels `collapsed` for Slack-mode (ID-keyed).
 	// Renames preserve collapse state because the ID is stable.
 	// Populated lazily; lookups treat nil as empty. Used in Task 9.
@@ -464,9 +467,52 @@ func (m *Model) NextUnread(afterID string, dir int) (id, name, chType string, ok
 
 // Invalidate forces the next View() call to re-read read state from
 // the installed reader. Called by App.Update on ReadStateChangedMsg.
+//
+// It also reveals hidden items that have turned unread. The staleness
+// filter otherwise runs only when items, settings, the name filter or
+// the active channel change, so a DM that arrived hidden -- e.g. upserted
+// by im_created before its first message, with no last_read yet --
+// stayed hidden after that message made it unread. The reveal only adds
+// rows: an item that has gone stale stays put until the next full
+// rebuild, rather than vanishing from under the cursor.
 func (m *Model) Invalidate() {
+	if m.readStateReader != nil && len(m.filtered) < len(m.items) {
+		key, hadKey := m.currentCursorKey()
+		if m.revealUnreadHidden(m.readStateReader()) {
+			m.sortFiltered()
+			m.rebuildNavWithCursor(key, hadKey)
+		}
+	}
 	m.cacheValid = false
 	m.dirty()
+}
+
+// revealUnreadHidden appends to m.filtered every hidden item that has
+// unread messages, which exempts it from the staleness filter, and
+// reports whether it added any. Items the name filter excludes stay
+// hidden. The caller re-sorts m.filtered.
+func (m *Model) revealUnreadHidden(state map[string]core.ReadState) bool {
+	if cap(m.revealShown) < len(m.items) {
+		m.revealShown = make([]bool, len(m.items))
+	}
+	shown := m.revealShown[:len(m.items)]
+	clear(shown)
+	for _, idx := range m.filtered {
+		shown[idx] = true
+	}
+	lower := text.Fold(m.filter)
+	revealed := false
+	for i, item := range m.items {
+		if shown[i] || !state[item.ID].HasUnread {
+			continue
+		}
+		if m.filter != "" && !strings.Contains(text.Fold(item.Name), lower) {
+			continue
+		}
+		m.filtered = append(m.filtered, i)
+		revealed = true
+	}
+	return revealed
 }
 
 // useSlackSections reports whether Slack-mode rendering is active.
@@ -1315,7 +1361,11 @@ func (m *Model) rebuildFilter() {
 		}
 		m.filtered = append(m.filtered, i)
 	}
+	m.sortFiltered()
+}
 
+// sortFiltered sorts m.filtered into the order the sidebar renders.
+func (m *Model) sortFiltered() {
 	// Sort filtered indices to match the visual section display order so that
 	// j/k navigation traverses items in the same order they're rendered.
 	// Within the real Slack stars section, channels form one block before
