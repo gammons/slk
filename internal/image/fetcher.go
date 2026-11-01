@@ -150,6 +150,13 @@ func (f *Fetcher) SetAuths(auths []TeamAuth) {
 	f.resolver = slackhttp.NewAuthResolver(auths)
 }
 
+// SetTeamAuth replaces one workspace's credentials after its login was
+// refreshed while slk runs (slackhttp.AuthResolver.SetTeamAuth). Unlike
+// SetAuths, it is safe to call while fetches run.
+func (f *Fetcher) SetTeamAuth(auth TeamAuth) {
+	f.resolver.SetTeamAuth(auth)
+}
+
 // ConfigurePrerender enables eager protocol encoding in the fetch
 // goroutine. After every successful Fetch whose request carries a
 // non-zero CellTarget, the decoded image is run through
