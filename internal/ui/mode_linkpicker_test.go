@@ -6,6 +6,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/messages/blockkit"
 )
 
 // Named mode_linkpicker_test.go, not mode_link_picker_test.go: the
@@ -53,6 +54,32 @@ func openFilePicker(t *testing.T, a *App) {
 	if a.pickerKind != "files" || len(a.pickerFiles) != 2 {
 		t.Fatalf("precondition: pickerKind = %q with %d files, want \"files\" with 2",
 			a.pickerKind, len(a.pickerFiles))
+	}
+}
+
+// A forwarded message's links live in the shared attachment's text,
+// not msg.Text -- the same gap the copy-message fix closed. `o` must
+// find them there too instead of reporting no links.
+func TestOpenLinksOfSelected_ForwardedMessage(t *testing.T) {
+	a := NewApp()
+	a.focusedPanel = PanelMessages
+	a.messagepane.SetMessages([]messages.MessageItem{{
+		TS: "1.0",
+		LegacyAttachments: []blockkit.LegacyAttachment{
+			{Text: "shared: <https://example.com/shared|check this out>"},
+		},
+	}})
+
+	cmd := a.openLinksOfSelected()
+	if cmd == nil {
+		t.Fatal("cmd = nil, want OpenLinkMsg")
+	}
+	msg, ok := cmd().(OpenLinkMsg)
+	if !ok {
+		t.Fatalf("cmd() = %#v, want OpenLinkMsg", cmd())
+	}
+	if msg.URL != "https://example.com/shared" {
+		t.Errorf("URL = %q, want %q", msg.URL, "https://example.com/shared")
 	}
 }
 

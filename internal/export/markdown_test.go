@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/messages/blockkit"
 )
 
 func TestThreadToMarkdown_ParentOnly(t *testing.T) {
@@ -43,6 +44,22 @@ func TestThreadToMarkdown_Attachments(t *testing.T) {
 	}
 	if !strings.Contains(got, "[File](https://files.slack.com/doc.pdf)") {
 		t.Errorf("missing unnamed file attachment, got:\n%s", got)
+	}
+}
+
+// A forwarded message carries its shared content in a legacy
+// attachment's Text, with an empty top-level Text. The exported
+// markdown must include it instead of an empty body line.
+func TestThreadToMarkdown_ForwardedMessage(t *testing.T) {
+	parent := messages.MessageItem{
+		UserName: "alice", DateStr: "2026-05-18", Timestamp: "3:04 PM",
+		LegacyAttachments: []blockkit.LegacyAttachment{
+			{Text: "shared: check this out"},
+		},
+	}
+	got := ThreadToMarkdown(parent, nil, nil, nil)
+	if !strings.Contains(got, "shared: check this out") {
+		t.Errorf("missing forwarded attachment text, got:\n%s", got)
 	}
 }
 

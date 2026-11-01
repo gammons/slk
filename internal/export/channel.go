@@ -344,7 +344,7 @@ func indexEntry(conv Conversation, filename string, userNames, channelNames map[
 // snippet returns the first non-blank line of msg's body as plain
 // text, shortened to snippetRunes.
 func snippet(msg messages.MessageItem, userNames, channelNames map[string]string) string {
-	flat := messages.FlattenMrkdwn(messages.MessageTextSource(msg), nameMap(userNames).lookup, nameMap(channelNames).lookup)
+	flat := messages.FlattenMrkdwn(messages.MessageCopyText(msg), nameMap(userNames).lookup, nameMap(channelNames).lookup)
 	for line := range strings.SplitSeq(flat, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
