@@ -10,7 +10,8 @@
 - Live message updates: an edit, a link preview Slack adds a moment after you post, or a preview you remove all update the message in place. Only a real edit adds the "(edited)" mark.
 - Slack markdown rendering (bold, italic, strikethrough, code, blockquotes, links, mentions)
 - User mentions in channel and thread content, including forwarded/shared previews, resolve to display names from the workspace cache or in the background and refresh in place. Unresolved users retain their Slack ID; literal `@ID` text is left unchanged.
-- Emoji shortcodes (`:rocket:` → 🚀)
+- Emoji shortcodes (`:rocket:` → 🚀), including Block Kit headers/text and button/accessory labels (`:white_check_mark: Resolve` → `✅ Resolve`); plain headers and control labels are not interpreted as markdown. Long headers clip to display width without breaking emoji image placements.
+- In image-emoji mode, workspace custom definitions take precedence over built-in names, including when following emoji aliases. Author-status emoji in channel and thread message headers use the same image renderer as the message body. If a status image fails to load, its existing glyph fallback remains visible.
 - Day separators (Today, Yesterday, Monday, full date)
 - Infinite scroll backfill into SQLite cache
 - Search: vim-style in-channel search (`/`, `n`/`N`) over cached history, plus server-side workspace search (`Ctrl+f`) with `from:` / `in:` / `before:` modifiers
@@ -61,6 +62,7 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
   The header is a breadcrumb naming the channel, the thread's author, and the
   reply count (e.g. `# general › Thread from alice · 2 replies`).
 - Live thread reply routing, real-time updates
+- Emoji images in the thread parent render even when there are no replies; they do not depend on another message having uploaded the image first.
 - Also send to channel: `Ctrl+O` while composing a thread reply toggles Slack's
   "Also send to #channel" broadcast (`reply_broadcast=true`), and `Alt+Enter`
   sends with broadcast in a single keystroke. An accent-colored

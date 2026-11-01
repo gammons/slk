@@ -91,6 +91,7 @@ type RenderedMessage struct {
 	Hits         []entrylist.Hit // image and file hits (when ImageHits), then reaction pills
 	SixelRows    map[int]sixelEntry
 	// Kitty uploads by source: each pane keeps its own upload order.
+	// BodyFlushes also carries the author-status emoji's upload.
 	BodyFlushes, BlockFlushes, ReactionFlushes, AttachmentFlushes []func(io.Writer) error
 }
 
@@ -102,7 +103,15 @@ type RenderedMessage struct {
 func BlockkitContext(msg MessageItem, rc *RenderContext, emojiFlushes *[]func(io.Writer) error) blockkit.Context {
 	imgCtx := rc.Images.Context()
 	send := imgCtx.SendMsg
-	channelNames := rc.ChannelNames
+	textOpts := RenderSlackMarkdownOpts{
+		UserNames:    rc.UserNames,
+		ChannelNames: rc.ChannelNames,
+		UserGroups:   rc.UserGroups,
+		PlaceCtx:     rc.Emoji.PlaceCtx,
+		EmojiCells:   rc.Emoji.Cells,
+		Customs:      rc.Emoji.Customs,
+		EmojiFlushes: emojiFlushes,
+	}
 	return blockkit.Context{
 		Protocol:    imgCtx.Protocol,
 		Fetcher:     imgCtx.Fetcher,
@@ -113,19 +122,15 @@ func BlockkitContext(msg MessageItem, rc *RenderContext, emojiFlushes *[]func(io
 		UserNames:   rc.UserNames,
 		MessageTS:   msg.TS,
 		Channel:     rc.ImageChannel,
-		// Capture channelNames in a closure so blockkit's two-arg
-		// RenderText signature stays stable; channel-name resolution
-		// is a host concern.
+		// Mention resolution belongs to the host; plain control labels
+		// share its emoji rendering without interpreting mrkdwn.
 		RenderText: func(s string, un map[string]string) string {
-			return RenderSlackMarkdownWith(s, RenderSlackMarkdownOpts{
-				UserNames:    un,
-				ChannelNames: channelNames,
-				UserGroups:   rc.UserGroups,
-				PlaceCtx:     rc.Emoji.PlaceCtx,
-				EmojiCells:   rc.Emoji.Cells,
-				Customs:      rc.Emoji.Customs,
-				EmojiFlushes: emojiFlushes,
-			})
+			opts := textOpts
+			opts.UserNames = un
+			return RenderSlackMarkdownWith(s, opts)
+		},
+		RenderPlainText: func(s string) string {
+			return renderEmojiWith(s, textOpts)
 		},
 		WrapText: WordWrap,
 		SendMsg: func(v any) {
@@ -218,9 +223,6 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	}
 	avatarStr := opt.Avatar
 	stats := opt.stats
-	headerTimestamp := styles.Timestamp.Render(msg.Timestamp)
-	headerGap := lipgloss.NewStyle().Background(styles.Background).Render("  ")
-	line := styles.Username(msg.UserID, rc.ColoredUsernames).Render(msg.UserName) + AuthorStatusSuffix(rc.UserStatuses, msg.UserID, time.Now()) + headerGap + headerTimestamp
 
 	// If we have an avatar, reserve space on the left for it
 	contentWidth := width - 4
@@ -231,10 +233,6 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		contentWidth = 20
 	}
 
-	var bodyT0 time.Time
-	if stats != nil {
-		bodyT0 = time.Now()
-	}
 	// Emoji-image opts pass through the active EmojiContext; when
 	// image mode is off (or PlaceCtx.Fetcher is nil) RenderSlackMarkdownWith
 	// falls through to the legacy glyph/shortcode-text path. Warm-path
@@ -248,6 +246,16 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		Customs:      rc.Emoji.Customs,
 		EmojiFlushes: &out.BodyFlushes,
 		Width:        contentWidth,
+	}
+	headerTimestamp := styles.Timestamp.Render(msg.Timestamp)
+	headerGap := lipgloss.NewStyle().Background(styles.Background).Render("  ")
+	line := styles.Username(msg.UserID, rc.ColoredUsernames).Render(msg.UserName) +
+		AuthorStatusSuffix(rc.UserStatuses, msg.UserID, time.Now(), &bodyOpts) +
+		headerGap + headerTimestamp
+
+	var bodyT0 time.Time
+	if stats != nil {
+		bodyT0 = time.Now()
 	}
 	// Blocks that render the body suppress Slack's notification-fallback
 	// text and its row. See BlocksCarryBody.

@@ -783,6 +783,7 @@ func TestRenderEmojiTokensInline_ImageModeOn_WarmPath(t *testing.T) {
 // internal/emoji's place_test.go is separate.)
 type fakePlaceFetcher struct {
 	prerender map[string]imgpkg.Render
+	err       error
 }
 
 func newFakePlaceFetcher() *fakePlaceFetcher {
@@ -799,7 +800,7 @@ func (f *fakePlaceFetcher) Prerendered(key string, t goimage.Point, proto imgpkg
 }
 
 func (f *fakePlaceFetcher) Fetch(ctx context.Context, req imgpkg.FetchRequest) (imgpkg.FetchResult, error) {
-	return imgpkg.FetchResult{}, nil
+	return imgpkg.FetchResult{}, f.err
 }
 
 // TestBgANSIForBasicColor asserts that bgANSIFor emits native ANSI 16

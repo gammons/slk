@@ -3,6 +3,7 @@ package thread
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"math"
 	"slices"
 	"strings"
@@ -177,7 +178,7 @@ func (m *Model) SetImageContext(ctx imgrender.ImageContext) {
 	m.InvalidateCache()
 }
 
-// SetEmojiContext configures emoji-image rendering for thread replies.
+// SetEmojiContext configures emoji-image rendering for the parent and replies.
 // Should be called once at startup (cmd/slk/main.go) and again after
 // CustomEmojisLoadedMsg arrives (via SetEmojiCustoms). Mirrors
 // messages.Model.SetEmojiContext.
@@ -1116,11 +1117,23 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// The parent is rendered every frame for its current state (selected
 	// or not, focused or not) and is entry 0 of the list: its rows, then
 	// the rule under it. The rule is not selectable text (Plain stops
-	// before it). We discard the parent's image flushes and reaction hits
-	// in v1, as before; its image hits are kept so a click on its image
-	// opens the preview.
+	// before it). Its image hits are kept for previews; reaction hits
+	// remain omitted.
 	parentIsSelected := m.selected == parentSelected
 	parentRendered := m.renderMessage(m.parent, width, parentIsSelected)
+	// The parent bypasses the reply cache and its upload loop. Flush its
+	// groups in draw order even when the thread has no replies. Kitty
+	// callbacks guard retransmission and emit each transfer atomically.
+	for _, flushes := range [4][]func(io.Writer) error{
+		parentRendered.BodyFlushes, parentRendered.BlockFlushes,
+		parentRendered.ReactionFlushes, parentRendered.AttachmentFlushes,
+	} {
+		for _, flush := range flushes {
+			if flush != nil {
+				_ = flush(imgpkg.KittyOutput)
+			}
+		}
+	}
 	parentContent, parentHeader, parentHeaderBudget := parentRendered.Content, parentRendered.Header, parentRendered.HeaderBudget
 	// Replies only get a day divider when their day differs from the
 	// parent's, so the parent header carries its own date; otherwise a
