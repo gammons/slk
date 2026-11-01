@@ -48,7 +48,7 @@ func normalMessages() []messages.MessageItem {
 	}
 	msgs[4].Attachments = []messages.Attachment{
 		{Kind: "file", Name: "report.pdf", DownloadURL: "https://files/report.pdf", Size: 2048},
-		{Kind: "image", Name: "pic.png", FileID: "F1"},
+		{Kind: "image", Name: "pic.png", FileID: "F1", Thumbs: []messages.ThumbSpec{{URL: "https://files/pic-720.png", W: 720, H: 720}}},
 	}
 	return msgs
 }
