@@ -75,11 +75,14 @@ existed, `slk <anything>` started the TUI.
 ## Signing in
 
 The commands use the logins `slk --add-workspace` saved. When Slack refuses one
-(an expired session), slk refreshes it once from the Slack desktop app, the way
-the TUI does when it starts, and tries again. That refresh reads the desktop
-app's key from your keychain (or keyring), so your OS can ask you to allow it,
-and the command waits until you answer. A login that works is never refreshed,
-so this happens only after one expired.
+(an expired session), slk first takes a newer login that another slk process
+(the TUI, another command) saved since, if Slack accepts it. If there is none,
+it refreshes the login once from the Slack desktop app, the way the TUI does
+when it starts, and tries again. That refresh reads the desktop app's key from
+your keychain (or keyring), so your OS can ask you to allow it, and the command
+waits until you answer. A login that works is never refreshed, so this happens
+only after one expired. The refreshed login is saved, so a running TUI whose
+login Slack also refused reconnects with it.
 
 A login added with `--add-workspace --browser` cannot be refreshed that way, and
 slk does not touch the keychain for it: add it again when it expires.

@@ -96,12 +96,22 @@ and per-workspace settings in [[Configuration]].
 ## Token expiry
 
 You don't need to do anything when a token expires. slk re-mints tokens
-automatically from the Slack desktop app on each launch (and mid-session if
-needed), so sessions stay fresh on their own.
+automatically from the Slack desktop app on each launch, and again while it
+runs if Slack refuses a login, so sessions stay fresh on their own.
 
-If you ever sign out of the desktop app, just sign back in — slk will pick the
-session back up the next time it needs to re-mint. See the auth caveat in
-[[Tradeoffs and Non-Goals|Tradeoffs-and-Non-Goals]].
+Every slk process (the TUI, and each `slk` command) shares the logins saved in
+`~/.local/share/slk/tokens/`. When Slack refuses a login, slk first takes a
+newer one that another slk process saved there, if Slack accepts it. Only when
+there is none does it ask the desktop app, which can show a keychain prompt. A
+running TUI asks the desktop app once per refused login, not on every reconnect
+attempt. It also takes only a login of the account it is signed in as: if the
+workspace was added again as someone else, it asks you to restart slk to
+switch.
+
+If you ever sign out of the desktop app, just sign back in — slk picks the
+session back up the next time it re-mints: at the next launch, or when any
+`slk` command refreshes the login, which a running TUI then takes over. See the
+auth caveat in [[Tradeoffs and Non-Goals|Tradeoffs-and-Non-Goals]].
 
 ## Enterprise Grid
 
