@@ -247,6 +247,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Decide, before parsing, whether a CLI command line asked for JSON, so a parse error comes out in that format (reads the arguments as the parse does; reads past an unknown flag; an invalid `--json=x` changes nothing) | `jsonRequested(fs, args)` (`internal/cli/cli.go`), with the command's flag set once it is known |
 | Sign in for a one-shot command, reminting only when Slack refuses the login (no keychain read on the common path) | `connectWithRemint(ctx, tok, connect, remint)` (`cmd/slk/cli.go`) |
 | Does Slack still accept a client's login, and as which team and user? | `(*slackclient.Client).CheckLogin(ctx)` (auth.test; changes nothing in the client) with `slackclient.IsAuthError`. For a login no client holds yet: `identifyLogin(ctx, tok)` (`cmd/slk/login.go`), the same on a client of its own |
+| Call slack-go, or read the token or d cookie, inside a `*slackclient.Client` method | `c.webAPI()` and `c.login()`, never `c.api`, `c.token` or `c.cookie`: `SetLogin` replaces them under `loginMu` while requests run. `TestClient_ReadsTheLoginOnlyThroughItsAccessors` enforces it |
 
 ### Test helpers
 
