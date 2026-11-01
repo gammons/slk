@@ -35,6 +35,7 @@
 | `m{A-Z}` | Normal (message) | Set a persistent mark — survives a restart |
 | `'{letter}` / `` `{letter} `` | Normal | Jump to a mark: opens the channel, loads history if needed, opens the thread and selects the reply |
 | `''` / ` `` ` | Normal | Back-jump to where you jumped from; press again to return |
+| `p` | Normal (thread open) | Go to the open thread's message in its channel (closes the thread; `''` returns to it) |
 | `:marks` | Normal | List every mark in the workspace with its channel and message preview |
 | `:delmarks abc` | Normal | Delete marks by letter (`:delmarks a b c` works too) |
 | `Backspace` | Marks overlay | Delete the selected mark |
