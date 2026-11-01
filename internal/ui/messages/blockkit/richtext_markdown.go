@@ -87,7 +87,7 @@ func inlineToMarkdown(e slack.RichTextSectionElement) string {
 	case *slack.RichTextSectionLinkElement:
 		return emphasize(LinkToMarkdown(v.URL, v.Text), v.Style)
 	case *slack.RichTextSectionUnknownElement:
-		if m, ok := attachmentMention(v); ok {
+		if m, ok := linkMention(v); ok {
 			return LinkToMarkdown(m.URL, m.Text)
 		}
 		return ""

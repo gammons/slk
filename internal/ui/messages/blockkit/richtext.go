@@ -87,29 +87,42 @@ func inlineToMrkdwn(e slack.RichTextSectionElement) string {
 	case *slack.RichTextSectionColorElement:
 		return v.Value
 	case *slack.RichTextSectionUnknownElement:
-		if m, ok := attachmentMention(v); ok {
+		if m, ok := linkMention(v); ok {
+			// A message_mention's label is usually its own URL; compare
+			// before escaping, or a thread permalink's "&cid=" would
+			// stop matching and turn into a label.
+			if m.Text == m.URL {
+				return linkToMrkdwn(m.URL, "")
+			}
 			return linkToMrkdwn(m.URL, mrkdwnEscaper.Replace(m.Text))
 		}
 	}
 	return ""
 }
 
-// attachmentMentionElement is the part of a rich_text "attachment_mention"
-// element slk renders. Slack's web client writes one when a pasted link
-// turns into an app's chip (a Work Object, e.g. a Linear issue): url is
-// the link and text the title the chip shows. slack-go has no type for
-// it, so it arrives as a RichTextSectionUnknownElement with its raw JSON.
-type attachmentMentionElement struct {
+// linkMentionElement is the part of a rich_text link mention slk
+// renders: url is the link and text its label. Slack writes two kinds:
+//   - "attachment_mention", when a pasted link turns into an app's chip
+//     (a Work Object, e.g. a Linear issue); text is the chip's title.
+//   - "message_mention", when a message links to another Slack message;
+//     url is the permalink and text usually that same permalink.
+//
+// slack-go has no type for either, so they arrive as a
+// RichTextSectionUnknownElement with their raw JSON.
+type linkMentionElement struct {
 	URL  string `json:"url"`
 	Text string `json:"text"`
 }
 
-// attachmentMention decodes e when it is an attachment_mention with a
-// URL; anything else (another unknown kind, bad JSON, no URL) reports
-// false and is dropped like any other unknown element.
-func attachmentMention(e *slack.RichTextSectionUnknownElement) (attachmentMentionElement, bool) {
-	var m attachmentMentionElement
-	if e.Type != "attachment_mention" || json.Unmarshal([]byte(e.Raw), &m) != nil || m.URL == "" {
+// linkMention decodes e when it is a link mention with a URL; anything
+// else (another unknown kind, bad JSON, no URL) reports false and is
+// dropped like any other unknown element.
+func linkMention(e *slack.RichTextSectionUnknownElement) (linkMentionElement, bool) {
+	var m linkMentionElement
+	if e.Type != "attachment_mention" && e.Type != "message_mention" {
+		return m, false
+	}
+	if json.Unmarshal([]byte(e.Raw), &m) != nil || m.URL == "" {
 		return m, false
 	}
 	return m, true
@@ -231,7 +244,7 @@ func preformattedToMrkdwn(elements []slack.RichTextSectionElement) string {
 		case *slack.RichTextSectionLinkElement:
 			b.WriteString(v.URL)
 		case *slack.RichTextSectionUnknownElement:
-			if m, ok := attachmentMention(v); ok {
+			if m, ok := linkMention(v); ok {
 				b.WriteString(m.URL)
 			}
 		}
