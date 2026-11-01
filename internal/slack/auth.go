@@ -68,12 +68,41 @@ func NewTokenStore(dir string) *TokenStore {
 // The write is atomic (atomicfile.Write): another slk process that
 // lists the store meanwhile (a TUI starting while a CLI command saves
 // a refreshed login) sees the old token or the new one, never a
-// half-written file, which List would skip as corrupt.
+// half-written file, which List would skip as corrupt. It also holds
+// the store's lock (lockTokenDir), so it never lands between the
+// check and the write of another process's SaveIf.
 func (s *TokenStore) Save(token Token) error {
-	if err := os.MkdirAll(s.dir, 0700); err != nil {
-		return fmt.Errorf("creating token dir: %w", err)
-	}
+	return s.withLock(func() error { return s.write(token) })
+}
 
+// SaveIf saves token only if the store still holds expected for
+// token.TeamID: the entry the caller read before it decided to save. It
+// reports whether it saved. A slk process that refreshes a login while
+// it runs saves with it, so that a change another process made
+// meanwhile (the workspace added again, perhaps as another user) is
+// kept, not overwritten. The read, the comparison and the write run
+// under the store's lock, which Save and Delete take too, so no other
+// slk process can change the entry between them. An entry that is gone,
+// or that cannot be read, never matches: a workspace removed meanwhile
+// stays removed.
+func (s *TokenStore) SaveIf(token, expected Token) (bool, error) {
+	saved := false
+	err := s.withLock(func() error {
+		current, err := s.Load(token.TeamID)
+		if err != nil || current != expected {
+			return nil
+		}
+		if err := s.write(token); err != nil {
+			return err
+		}
+		saved = true
+		return nil
+	})
+	return saved, err
+}
+
+// write is Save without the lock.
+func (s *TokenStore) write(token Token) error {
 	data, err := json.MarshalIndent(token, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshaling token: %w", err)
@@ -84,6 +113,20 @@ func (s *TokenStore) Save(token Token) error {
 		return fmt.Errorf("writing token: %w", err)
 	}
 	return nil
+}
+
+// withLock runs fn while it holds the store's lock. It creates the
+// directory first: the lock file lives in it.
+func (s *TokenStore) withLock(fn func() error) error {
+	if err := os.MkdirAll(s.dir, 0700); err != nil {
+		return fmt.Errorf("creating token dir: %w", err)
+	}
+	unlock, err := lockTokenDir(s.dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return fn()
 }
 
 // Load reads a token for the given team ID from disk.
@@ -132,11 +175,38 @@ func (s *TokenStore) List() ([]Token, error) {
 }
 
 // Delete removes a token file for the given team ID.
-// Returns nil if the file does not exist.
+// Returns nil if the file does not exist. It holds the store's lock,
+// so a SaveIf in another process cannot bring the file back.
 func (s *TokenStore) Delete(teamID string) error {
-	path := filepath.Join(s.dir, teamID+".json")
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("deleting token: %w", err)
+	return s.withLock(func() error {
+		path := filepath.Join(s.dir, teamID+".json")
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("deleting token: %w", err)
+		}
+		return nil
+	})
+}
+
+// tokenLockFile is the file in the token directory whose lock orders
+// every change to the store across slk processes. List reads only
+// .json files, so it never sees it.
+const tokenLockFile = ".lock"
+
+// lockTokenDir takes the token store's lock, waiting while another slk
+// process holds it, and returns the function that releases it. The lock
+// is the OS's (lockFile): the OS releases it when its process ends, so
+// a crash cannot leave the store locked.
+func lockTokenDir(dir string) (unlock func(), err error) {
+	f, err := os.OpenFile(filepath.Join(dir, tokenLockFile), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, fmt.Errorf("opening the token store's lock: %w", err)
 	}
-	return nil
+	if err := lockFile(f); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("locking the token store: %w", err)
+	}
+	return func() {
+		_ = unlockFile(f)
+		f.Close()
+	}, nil
 }
