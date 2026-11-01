@@ -11,7 +11,20 @@ type ConnectionManager struct {
 	client  *Client
 	handler EventHandler
 	cancel  context.CancelFunc
+
+	// Relogin, when set, gives the client a new login after Slack
+	// refused the one it has. Run calls it when a connect fails and
+	// CheckLogin says that Slack refuses the login itself (IsAuthError),
+	// not that the network is down. It returns true when it changed the
+	// client's login (Client.SetLogin); Run then connects again at once
+	// instead of waiting out the backoff. Set it before Run; Run calls
+	// it from its own goroutine only, one call at a time.
+	Relogin func(ctx context.Context) bool
 }
+
+// loginCheckTimeout bounds the auth.test that classifies a failed
+// connect, so a hung request cannot stop the reconnect loop.
+const loginCheckTimeout = 15 * time.Second
 
 // NewConnectionManager creates a new connection manager.
 func NewConnectionManager(client *Client, handler EventHandler) *ConnectionManager {
@@ -39,6 +52,10 @@ func (cm *ConnectionManager) Run(ctx context.Context) {
 		err := cm.client.StartWebSocket(cm.handler)
 		if err != nil {
 			cm.handler.OnDisconnect()
+			if cm.loginReplaced(ctx) {
+				backoff = 1 * time.Second
+				continue
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -68,6 +85,24 @@ func (cm *ConnectionManager) Run(ctx context.Context) {
 		}
 		backoff = nextBackoff(backoff, maxBackoff)
 	}
+}
+
+// loginReplaced runs after a failed connect. It reports whether Slack
+// refused the login itself and Relogin gave the client a new one. A
+// connect also fails while the network is down; auth.test then fails
+// without a refusal, and Run waits and tries again, as it always did.
+//
+// It assumes that Slack refuses the WebSocket handshake of a refused
+// login. A socket that opens and then closes is not checked here; the
+// connect attempt after it is.
+func (cm *ConnectionManager) loginReplaced(ctx context.Context) bool {
+	if cm.Relogin == nil {
+		return false
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, loginCheckTimeout)
+	_, _, err := cm.client.CheckLogin(checkCtx)
+	cancel()
+	return IsAuthError(err) && cm.Relogin(ctx)
 }
 
 // Stop cancels the connection loop and closes the WebSocket.
