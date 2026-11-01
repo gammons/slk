@@ -59,7 +59,8 @@ type RenderedMessage struct {
 // from the pane's image context, theme, and per-message identity.
 // Built per message rather than once so it picks up runtime changes to
 // the image context (e.g., when image_protocol is reconfigured).
-func BlockkitContext(msg MessageItem, rc *RenderContext) blockkit.Context {
+// Warm-path emoji uploads in block text are appended to emojiFlushes.
+func BlockkitContext(msg MessageItem, rc *RenderContext, emojiFlushes *[]func(io.Writer) error) blockkit.Context {
 	imgCtx := rc.Images.Context()
 	send := imgCtx.SendMsg
 	channelNames := rc.ChannelNames
@@ -76,15 +77,6 @@ func BlockkitContext(msg MessageItem, rc *RenderContext) blockkit.Context {
 		// Capture channelNames in a closure so blockkit's two-arg
 		// RenderText signature stays stable; channel-name resolution
 		// is a host concern.
-		//
-		// blockkit's RenderText is called from inside block rendering
-		// where the per-call flush accumulator isn't accessible. Pass
-		// the emoji opts but no flush collector: warm-path emoji
-		// flushes inside rich-text blocks are best-effort in v1
-		// (they'll be re-collected on the next render when the
-		// per-message buildCache walks the entry again). Worst case:
-		// one extra frame of cold-cache spacing for a block-kit
-		// emoji on first reveal. Acceptable.
 		RenderText: func(s string, un map[string]string) string {
 			return RenderSlackMarkdownWith(s, RenderSlackMarkdownOpts{
 				UserNames:    un,
@@ -93,7 +85,7 @@ func BlockkitContext(msg MessageItem, rc *RenderContext) blockkit.Context {
 				PlaceCtx:     rc.Emoji.PlaceCtx,
 				EmojiCells:   rc.Emoji.Cells,
 				Customs:      rc.Emoji.Customs,
-				EmojiFlushes: nil,
+				EmojiFlushes: emojiFlushes,
 			})
 		},
 		WrapText: WordWrap,
@@ -391,7 +383,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	allSixel := map[int]sixelEntry{}
 
 	// Block Kit blocks render between the body text and file attachments.
-	bkCtx := BlockkitContext(msg, rc)
+	bkCtx := BlockkitContext(msg, rc, &out.BlockFlushes)
 	var bkLines []string
 	bkInteractive := false
 	if len(msg.Blocks) > 0 {
