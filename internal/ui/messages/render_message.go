@@ -48,7 +48,7 @@ type RenderOptions struct {
 // RenderedMessage is one message, rendered, before the pane's border and fill.
 type RenderedMessage struct {
 	Content      string
-	Header       string // the author line (with "(edited)"), for SelectedHeader
+	Header       string // the wrapped author header (with "(edited)"), for SelectedHeader
 	HeaderBudget int
 	Hits         []entrylist.Hit // image and file hits (when ImageHits), then reaction pills
 	SixelRows    map[int]sixelEntry
@@ -117,7 +117,9 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	var out RenderedMessage
 	avatarStr := opt.Avatar
 	stats := opt.stats
-	line := styles.Username(msg.UserID, rc.ColoredUsernames).Render(msg.UserName) + AuthorStatusSuffix(rc.UserStatuses, msg.UserID, time.Now()) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.Timestamp)
+	headerTimestamp := styles.Timestamp.Render(msg.Timestamp)
+	headerGap := lipgloss.NewStyle().Background(styles.Background).Render("  ")
+	line := styles.Username(msg.UserID, rc.ColoredUsernames).Render(msg.UserName) + AuthorStatusSuffix(rc.UserStatuses, msg.UserID, time.Now()) + headerGap + headerTimestamp
 
 	// If we have an avatar, reserve space on the left for it
 	contentWidth := width - 4
@@ -345,7 +347,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	// absolute row index (used as the sixelRows key).
 	//
 	//   rows 0..: label rows (ephemeral, then thread_broadcast), each optional
-	//   next row: username line + editedMark
+	//   next rows: wrapped author header + editedMark
 	//   row N: wrapped body text (lipgloss.Height of styled `text`);
 	//          absent when BlocksCarryBody
 	//
@@ -360,7 +362,6 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		labelRows += styles.Timestamp.Render("\u21b3 replied to a thread") + "\n"
 		preAttachmentRows++ // the broadcast label occupies its own row
 	}
-	preAttachmentRows++ // username + ts row
 	if hasBody {
 		preAttachmentRows += lipgloss.Height(text) // wrapped body text
 	}
@@ -383,6 +384,49 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	if avatarStr != "" {
 		contentColBase += 5
 	}
+	// Wrap before adding the avatar's fixed two-row gutter. Each wrapped
+	// line must restore its own styles after that gutter resets the pen.
+	headerBudget := max(1, min(contentWidth, width-contentColBase))
+	header := line + editedMark
+	if lipgloss.Width(header) > headerBudget {
+		author := line[:len(line)-len(headerGap)-len(headerTimestamp)]
+		author = WordWrap(author, headerBudget)
+		var wrapped strings.Builder
+		wrapped.WriteString(author)
+		lastWidth := lipgloss.Width(author[strings.LastIndexByte(author, '\n')+1:])
+		// Timestamp spaces belong to one metadata unit, not the name's prose.
+		// Wrap within a unit only when it cannot fit on a header line by itself.
+		for _, part := range [2]struct{ text, gap string }{
+			{headerTimestamp, headerGap},
+			{strings.TrimPrefix(editedMark, " "), " "},
+		} {
+			if part.text == "" {
+				continue
+			}
+			partWidth, gapWidth := lipgloss.Width(part.text), lipgloss.Width(part.gap)
+			if wrapped.Len() > 0 && lastWidth+gapWidth+partWidth <= headerBudget {
+				wrapped.WriteString(part.gap)
+				wrapped.WriteString(part.text)
+				lastWidth += gapWidth + partWidth
+				continue
+			}
+			if wrapped.Len() > 0 {
+				wrapped.WriteByte('\n')
+			}
+			if partWidth > headerBudget {
+				part.text = WordWrap(part.text, headerBudget)
+				partWidth = lipgloss.Width(part.text[strings.LastIndexByte(part.text, '\n')+1:])
+			}
+			wrapped.WriteString(part.text)
+			lastWidth = partWidth
+		}
+		var buf strings.Builder
+		writer := lipgloss.NewWrapWriter(&buf)
+		_, _ = io.WriteString(writer, wrapped.String())
+		_ = writer.Close()
+		header = buf.String()
+	}
+	preAttachmentRows += lipgloss.Height(header)
 
 	var attachLineSlices [][]string
 	var imageHits []entrylist.Hit
@@ -611,7 +655,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	if hasBody {
 		bodyRow = "\n" + text
 	}
-	msgContent := labelRows + line + editedMark + bodyRow + bkBlock + attachmentLines + threadLine + reactionLine
+	msgContent := labelRows + header + bodyRow + bkBlock + attachmentLines + threadLine + reactionLine
 
 	// Translate per-pill specs into entry-relative reaction hit rects.
 	// reactionRowBase is the row index (within linesNormal) where the
@@ -662,13 +706,11 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 			allSixel[k] = v
 		}
 	}
-	// The header row is the only row SelectedHeader may lengthen. It
-	// must fit both the width the body wraps to and the columns the row
-	// really has: contentWidth is floored at 20, which at narrow widths
-	// exceeds width-1 (the fill) minus the avatar gutter.
+	// Timestamp substitution may lengthen a header line, but must not
+	// introduce another row after the avatar and hit rects are composed.
 	out.Content = msgContent
-	out.Header = line + editedMark
-	out.HeaderBudget = min(contentWidth, width-1-(contentColBase-1))
+	out.Header = header
+	out.HeaderBudget = headerBudget
 	out.SixelRows = allSixel
 	return out
 }
