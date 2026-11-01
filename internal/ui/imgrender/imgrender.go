@@ -11,6 +11,7 @@ package imgrender
 import (
 	"bytes"
 	"context"
+	"github.com/muesli/reflow/truncate"
 	"image"
 	"io"
 	"strings"
@@ -309,17 +310,17 @@ func (r *Renderer) RenderBlock(att Block, channel, ts string, availWidth, baseRo
 	// or shouldn't render inline.
 	if att.Kind != "image" || r.ctx.Protocol == imgpkg.ProtoOff || r.ctx.Fetcher == nil {
 		debuglog.ImgRender("RenderBlock: file_id=%s decision=legacy_text reason=non_image_or_off", att.FileID)
-		return BlockResult{Lines: []string{renderLegacyLine(att)}, Height: 1}
+		return BlockResult{Lines: []string{renderLegacyLine(att, availWidth)}, Height: 1}
 	}
 	if att.FileID == "" {
 		debuglog.ImgRender("RenderBlock: decision=legacy_text reason=no_file_id name=%q", att.Name)
-		return BlockResult{Lines: []string{renderLegacyLine(att)}, Height: 1}
+		return BlockResult{Lines: []string{renderLegacyLine(att, availWidth)}, Height: 1}
 	}
 
 	target := computeImageTarget(att.Thumbs, r.ctx, availWidth)
 	if target.X <= 0 || target.Y <= 0 {
 		debuglog.ImgRender("RenderBlock: file_id=%s decision=legacy_text reason=zero_target", att.FileID)
-		return BlockResult{Lines: []string{renderLegacyLine(att)}, Height: 1}
+		return BlockResult{Lines: []string{renderLegacyLine(att, availWidth)}, Height: 1}
 	}
 
 	pixelTarget := image.Pt(target.X*r.ctx.CellPixels.X, target.Y*r.ctx.CellPixels.Y)
@@ -330,7 +331,7 @@ func (r *Renderer) RenderBlock(att Block, channel, ts string, availWidth, baseRo
 	url, suffix := imgpkg.PickThumb(imgThumbs, pixelTarget)
 	if url == "" {
 		debuglog.ImgRender("RenderBlock: file_id=%s decision=legacy_text reason=no_thumb_url", att.FileID)
-		return BlockResult{Lines: []string{renderLegacyLine(att)}, Height: 1}
+		return BlockResult{Lines: []string{renderLegacyLine(att, availWidth)}, Height: 1}
 	}
 	key := att.FileID + "-" + suffix
 
@@ -446,7 +447,7 @@ func (r *Renderer) RenderBlock(att Block, channel, ts string, availWidth, baseRo
 // style, OSC 8 wrapping the entire body, URL as label when name is
 // empty), but takes an imgrender.Block to keep imgrender independent
 // of the messages package.
-func renderLegacyLine(att Block) string {
+func renderLegacyLine(att Block, availWidth int) string {
 	markerStyle := lipgloss.NewStyle().Foreground(styles.TextMuted).Bold(true)
 	urlStyle := lipgloss.NewStyle().Foreground(styles.Primary).Underline(true)
 	marker := "[File]"
@@ -456,6 +457,18 @@ func renderLegacyLine(att Block) string {
 	label := att.Name
 	if label == "" {
 		label = att.URL
+	}
+	// Truncate the label so the line never wraps: Height is 1, and a
+	// wrap would shift every later attachment's rows in the entry and
+	// leave this one's click span open across rows (ScanOsc8Spans
+	// only registers same-row spans, so a wrapped line would not be
+	// clickable at all). availWidth is the content width the caller
+	// already wraps bodies to; the marker plus one space come off it.
+	if availWidth > 0 {
+		budget := availWidth - len(marker) - 1
+		if budget > 0 && lipgloss.Width(label) > budget {
+			label = truncate.StringWithTail(label, uint(budget), "…")
+		}
 	}
 	body := markerStyle.Render(marker) + " " + urlStyle.Render(label)
 	// OSC 8 hyperlink: ESC ] 8 ;; URL ESC \ LABEL ESC ] 8 ;; ESC \
