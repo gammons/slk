@@ -96,7 +96,7 @@ func TestIncrementReplyCountKeepsBottom(t *testing.T) {
 	m := p3Messages(t, 40, 0)
 	_ = m.View(20, 80)
 	y0 := m.YOffset()
-	m.IncrementReplyCount(m.Messages()[39].TS, "1800000000.000000")
+	m.IncrementReplyCount(m.Messages()[39].TS, "1800000000.000000", "U1")
 	assertAtBottom(t, m.View(20, 80), "1 reply")
 	if m.YOffset() <= y0 {
 		t.Errorf("YOffset %d, want more than %d (the reply row)", m.YOffset(), y0)

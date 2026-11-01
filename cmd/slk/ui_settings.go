@@ -27,6 +27,8 @@ type uiSettings struct {
 	// StayInInsertAfterSend is [compose] stay_in_insert_after_send
 	// (default off).
 	StayInInsertAfterSend bool
+	// ReplyAvatars is [appearance] reply_avatars (default off).
+	ReplyAvatars bool
 }
 
 // uiSettingsFromConfig is run()'s uiSettings, read from the loaded config.
@@ -42,6 +44,7 @@ func uiSettingsFromConfig(cfg config.Config) uiSettings {
 		ThreadAvatars:         cfg.Appearance.ThreadAvatars,
 		ThemeOverrides:        cfg.Theme,
 		StayInInsertAfterSend: cfg.Compose.StayInInsertAfterSend,
+		ReplyAvatars:          cfg.Appearance.ReplyAvatars,
 	}
 }
 
@@ -65,4 +68,5 @@ func applyUISettings(app *ui.App, s uiSettings) {
 	app.SetThemeItems(styles.ThemeNames())
 	app.SetThemeOverrides(s.ThemeOverrides)
 	app.SetStayInInsertAfterSend(s.StayInInsertAfterSend)
+	app.SetReplyAvatars(s.ReplyAvatars)
 }

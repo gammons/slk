@@ -307,7 +307,7 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 			mm.AppendMessage(cloneMessageItem(m.Message))
 		}
 		if m.Message.ThreadTS != "" && m.Message.ThreadTS != m.Message.TS && !m.Message.Ephemeral {
-			mm.IncrementReplyCount(m.Message.ThreadTS, m.Message.TS)
+			mm.IncrementReplyCount(m.Message.ThreadTS, m.Message.TS, m.Message.UserID)
 		}
 	}
 	// Route thread replies to the open thread panel keyed on the

@@ -415,7 +415,7 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			}
 		}
 		for _, mm := range a.modelsForChannel(m.ChannelID) {
-			mm.IncrementReplyCount(m.ThreadTS, m.Message.TS)
+			mm.IncrementReplyCount(m.ThreadTS, m.Message.TS, m.Message.UserID)
 		}
 		if c := a.scheduleThreadsDirty(); c != nil {
 			return c, true

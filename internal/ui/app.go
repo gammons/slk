@@ -422,12 +422,14 @@ type App struct {
 	// values pushed through the App-level Set* forwarders, kept so
 	// newWindowModel can configure late-created window models
 	// identically to the root model. See internal/ui/winmodels.go.
-	avatarFn     messages.AvatarFunc
-	imageCtx     imgrender.ImageContext
-	emojiCtx     messages.EmojiContext
-	emojiCustoms map[string]string
-	channelNames map[string]string
-	userGroups   map[string]string
+	avatarFn      messages.AvatarFunc
+	replyAvatarFn messages.AvatarFunc
+	replyAvatars  bool
+	imageCtx      imgrender.ImageContext
+	emojiCtx      messages.EmojiContext
+	emojiCustoms  map[string]string
+	channelNames  map[string]string
+	userGroups    map[string]string
 
 	// buildInfo is the build identity :version shows: version and short
 	// commit (version.Short). Set once at startup by main.
@@ -2838,15 +2840,35 @@ func (a *App) SetChannelFinderItems(items []core.ChannelFinderItem) {
 
 // SetAvatarService wires the rendered avatars shown beside messages.
 func (a *App) SetAvatarService(s core.AvatarService) {
-	var fn messages.AvatarFunc
+	var fn, replyFn messages.AvatarFunc
 	if s != nil {
-		fn = s.Avatar
+		fn, replyFn = s.Avatar, s.ReplyAvatar
 	}
-	a.avatarFn = fn
+	a.avatarFn, a.replyAvatarFn = fn, replyFn
 	for _, m := range a.allWinModels() {
 		m.SetAvatarFunc(fn)
+		m.SetReplyAvatarFunc(a.replyAvatarFunc())
 	}
 	a.threadPanel.SetAvatarFunc(fn)
+}
+
+// SetReplyAvatars switches the reply row under thread parents to Slack's
+// look: the repliers' avatars, then "N replies" ([appearance]
+// reply_avatars). Needs the avatar service.
+func (a *App) SetReplyAvatars(enabled bool) {
+	a.replyAvatars = enabled
+	for _, m := range a.allWinModels() {
+		m.SetReplyAvatarFunc(a.replyAvatarFunc())
+	}
+}
+
+// replyAvatarFunc is the reply-row avatar source, nil when reply_avatars
+// is off or there is no avatar service.
+func (a *App) replyAvatarFunc() messages.AvatarFunc {
+	if !a.replyAvatars {
+		return nil
+	}
+	return a.replyAvatarFn
 }
 
 // SetColoredUsernames enables or disables deterministic per-user coloring
