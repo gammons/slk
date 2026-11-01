@@ -899,6 +899,10 @@ func renderEmojiTokensInline(
 				placement, flush, ok := emojiutil.Place(placeCtx, tok.URL, cells)
 				if ok {
 					b.WriteString(placement)
+					// The image ends in "default foreground", not a reset.
+					if strings.HasSuffix(placement, "\x1b[39m") {
+						b.WriteString(FgANSI())
+					}
 					if flush != nil && flushes != nil {
 						*flushes = append(*flushes, flush)
 					}

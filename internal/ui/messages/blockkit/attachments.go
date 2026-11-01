@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	imgpkg "github.com/gammons/slk/internal/image"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 // stripeGlyph is the leading character on every line inside the
@@ -230,7 +232,8 @@ func appendLegacyAttachment(out *RenderResult, a LegacyAttachment, ctx Context, 
 	if perf != nil {
 		stripeT0 = time.Now()
 	}
-	stripe := stripeStyle.Render(stripeGlyph) + " "
+	// The stripe's reset clears the text colour too: start the body in it.
+	stripe := stripeStyle.Render(stripeGlyph) + " " + ansi.Style{}.ForegroundColor(styles.TextPrimary).String()
 	startRow := len(out.Lines)
 	for _, line := range body {
 		out.Lines = append(out.Lines, stripe+line)
