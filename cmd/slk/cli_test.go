@@ -31,11 +31,11 @@ func (f *fakeSignIn) connect(_ context.Context, tok slackclient.Token) (*slackcl
 }
 
 // remintTo returns a remint that hands out tok as the refreshed token.
-func (f *fakeSignIn) remintTo(access string) func(context.Context, slackclient.Token) slackclient.Token {
-	return func(_ context.Context, tok slackclient.Token) slackclient.Token {
+func (f *fakeSignIn) remintTo(access string) func(context.Context, slackclient.Token) (slackclient.Token, error) {
+	return func(_ context.Context, tok slackclient.Token) (slackclient.Token, error) {
 		f.remints++
 		tok.AccessToken = access
-		return tok
+		return tok, nil
 	}
 }
 

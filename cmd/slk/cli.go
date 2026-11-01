@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -49,10 +50,11 @@ func newCLIEnv() cli.Env {
 			if err != nil {
 				return nil, err
 			}
-			remint := func(ctx context.Context, tok slackclient.Token) slackclient.Token {
-				return remintToken(ctx, store, tok)
-			}
-			client, err := connectWithRemint(ctx, tok, connectClient, remint)
+			// The path the TUI takes too (login.go): a login another
+			// slk process saved, else the desktop app, each checked
+			// with Slack before it is used.
+			refresher := newLoginRefresher(store, acceptedLogin)
+			client, err := connectWithRemint(ctx, tok, connectClient, refresher.refresh)
 			if err != nil {
 				return nil, err
 			}
@@ -100,18 +102,31 @@ func connectClient(ctx context.Context, tok slackclient.Token) (*slackclient.Cli
 // agent runs many commands. A remint that leaves the token as it was (a
 // browser sign-in, which remint never touches, or a failed refresh) is
 // not worth a second sign-in, so the first refusal is returned.
+// newCLIEnv passes loginRefresher.refresh, the path the TUI takes too: a
+// login that another slk process saved since comes before the desktop
+// app, and Slack checks each before it is returned, so the one retry
+// here is not spent on a login that Slack refuses.
+//
+// remint's error says why it has no newer login. errNoNewerLogin leaves
+// the refusal as the answer (exit 3). Any other error is returned in its
+// place, because it is why the refresh stopped: a cancelled command, no
+// network, a timeout. Reporting the refusal then would tell the user to
+// sign in again for a login that was never checked.
 func connectWithRemint(
 	ctx context.Context,
 	tok slackclient.Token,
 	connect func(context.Context, slackclient.Token) (*slackclient.Client, error),
-	remint func(context.Context, slackclient.Token) slackclient.Token,
+	remint func(context.Context, slackclient.Token) (slackclient.Token, error),
 ) (*slackclient.Client, error) {
 	client, err := connect(ctx, tok)
 	if err == nil || !slackclient.IsAuthError(err) {
 		return client, err
 	}
-	fresh := remint(ctx, tok)
-	if fresh.AccessToken == tok.AccessToken && fresh.Cookie == tok.Cookie {
+	fresh, remintErr := remint(ctx, tok)
+	if remintErr != nil && !errors.Is(remintErr, errNoNewerLogin) {
+		return nil, remintErr
+	}
+	if remintErr != nil || (fresh.AccessToken == tok.AccessToken && fresh.Cookie == tok.Cookie) {
 		return nil, err
 	}
 	return connect(ctx, fresh)
