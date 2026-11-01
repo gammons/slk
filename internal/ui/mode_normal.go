@@ -2,32 +2,25 @@
 //
 // Normal-mode key handler (Phase 5k).
 //
-// The bulk of slk's keybinding surface lives here:
-//   - mode entry: i (insert), Ctrl-T (channel finder), : (command
-//     prompt), Ctrl-Y (theme switcher), ? (help),
-//     S (presence menu), R (reaction picker)
-//   - navigation: j/k (selection), Ctrl-D/U (half-page), C-f/b
-//     (page), G (bottom), Tab/h/l (focus next/prev), Ctrl-h/l
-//     (nav back/forward through visited channels; Ctrl-k is an
-//     alias for forward)
-//   - layout toggles: ctrl+b (sidebar), ctrl+] (thread)
-//   - theme cycle: Alt-Y / Alt-Shift-Y apply the next / previous
-//     theme, wrapping around (saved per workspace, like Ctrl-Y)
-//   - message ops: y (copy message), Y/C (copy permalink), E (edit), D (delete),
-//     x (remove link preview), U (mark unread), m (set mark),
-//     ' (jump to mark), O/v (open image preview)
-//   - reaction nav sub-state: r enters; arrows + Enter select
-//     (delegated to handleReactionNav, for either content pane)
-//   - window commands: Ctrl-W prefix arms a pending sub-state; the
-//     next key is a window chord (s/v split, h/j/k/l focus, w cycle,
-//     q/c close, o only — delegated to handleWindowChord)
-//   - workspace switch: 1-9 number keys (handled in default arm)
-//   - quit confirm: q (close thread if visible, else no-op),
-//     Q (quit confirm)
+// Most of slk's keybindings are dispatched here. Which key does what
+// lives in keys.go (DefaultKeyMap) and is shown to the user by the `?`
+// help overlay; it is not repeated here, where a copy drifts (#189).
 //
-// Reaction-nav sub-state is intercepted FIRST: while in it, only
-// a narrow set of keys (arrows / Enter / r / Esc) is handled,
-// everything else falls back to normal key handling.
+// Before the main switch, these sub-states claim the key, in order:
+//   - after ctrl+w (WindowPrefix): the key is a window chord
+//     (handleWindowChord)
+//   - after g (Top): a second g jumps to the top; esc cancels; any
+//     other key cancels the chord and is then handled normally
+//   - after m (MarkSet) / '/` (JumpMark): the key names the mark to set
+//     or jump to (handleMarkChord / handleJumpChord)
+//   - reaction nav, while the focused content pane has it active
+//     (entered with R, ReactionNav): handleReactionNav takes every
+//     key. Left/Right move, Enter toggles the reaction (or opens the
+//     picker on the "+" pill), r opens the picker, Esc exits, and any
+//     other key is ignored.
+//
+// Number keys 1-9 have no binding in keys.go; the default arm uses
+// them to switch workspaces.
 package ui
 
 import (
