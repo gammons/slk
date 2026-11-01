@@ -1003,6 +1003,18 @@ func TestMatchSectionAndOrder_WorkspaceOverride(t *testing.T) {
 	}
 }
 
+func TestConfig_MentionPills(t *testing.T) {
+	for _, tc := range []struct {
+		toml string
+		want bool
+	}{{"", false}, {"[sidebar]\nmention_pills = true\n", true}} {
+		cfg := loadConfigString(t, tc.toml)
+		if cfg.Sidebar.MentionPills != tc.want {
+			t.Errorf("%q: mention_pills = %v, want %v", tc.toml, cfg.Sidebar.MentionPills, tc.want)
+		}
+	}
+}
+
 func TestWorkspaceVersionTSRoundTrips(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
