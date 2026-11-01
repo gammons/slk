@@ -4,6 +4,8 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
 	"github.com/muesli/reflow/truncate"
@@ -284,13 +286,14 @@ func (m *Model) HandleKey(keyStr string) *ReactionResult {
 
 	case "backspace":
 		if len(m.query) > 0 {
-			m.query = m.query[:len(m.query)-1]
+			_, n := utf8.DecodeLastRuneInString(m.query)
+			m.query = m.query[:len(m.query)-n]
 			m.filter()
 		}
 		return nil
 
 	default:
-		if len(keyStr) == 1 && keyStr[0] >= 32 && keyStr[0] <= 126 {
+		if r := []rune(keyStr); len(r) == 1 && unicode.IsPrint(r[0]) {
 			m.query += keyStr
 			m.filter()
 		}

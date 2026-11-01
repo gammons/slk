@@ -318,3 +318,20 @@ func TestViewOverlayContainsTitle(t *testing.T) {
 		t.Error("rendered overlay should contain title 'Keybindings'")
 	}
 }
+
+// A CJK IME commit arrives as one key per rune: each must reach the
+// query, and backspace must drop a whole rune.
+func TestHandleKey_NonASCIIQuery(t *testing.T) {
+	m := New()
+	m.Open()
+	m.HandleKey("/")
+	m.HandleKey("中")
+	m.HandleKey("文")
+	if m.query != "中文" {
+		t.Fatalf("query = %q, want %q", m.query, "中文")
+	}
+	m.HandleKey("backspace")
+	if m.query != "中" {
+		t.Errorf("after backspace query = %q, want %q", m.query, "中")
+	}
+}
