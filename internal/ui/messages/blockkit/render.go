@@ -21,12 +21,35 @@ const narrowBreakpoint = 60
 // Render produces a RenderResult for a slice of blocks at the given
 // content width. Width is the available content width AFTER the
 // caller has subtracted avatar gutter and border columns.
+//
+// A table is drawn here, in its place among the other blocks, when
+// those blocks render the body (RendersBody); otherwise the host draws
+// it in the message body with the rich_text around it (see
+// TablesInBody).
 func Render(blocks []Block, ctx Context, width int) RenderResult {
+	return render(blocks, ctx, width, !TablesInBody(blocks))
+}
+
+// TablesInBody reports whether the host draws blocks' tables in the
+// message body, in order with their rich_text blocks, rather than
+// Render drawing them among the other blocks. It is true exactly when
+// the blocks do not render the body themselves, so the body row the
+// host keeps for rich_text carries the tables too.
+func TablesInBody(blocks []Block) bool { return !RendersBody(blocks) }
+
+// render is Render with the table decision made by the caller. Blocks
+// nested in a legacy attachment have no host body, so their tables are
+// always drawn here.
+func render(blocks []Block, ctx Context, width int, drawTables bool) RenderResult {
 	if len(blocks) == 0 || width <= 0 {
 		return RenderResult{}
 	}
 	var out RenderResult
 	for _, b := range blocks {
+		if t, ok := b.(TableBlock); ok && drawTables {
+			appendTable(&out, t, ctx, width)
+			continue
+		}
 		appendBlock(&out, b, ctx, width)
 	}
 	out.Height = len(out.Lines)
@@ -94,8 +117,8 @@ func appendBlock(out *RenderResult, b Block, ctx Context, width int) {
 		// double-rendering.
 		return
 	case TableBlock:
-		// Rendered in the message body with the rich_text around it,
-		// for the same reason (see messages.MessageTextSource).
+		// Drawn in the message body with the rich_text around it (see
+		// TablesInBody); render draws it itself when it is not.
 		return
 	case UnknownBlock:
 		out.Lines = append(out.Lines, renderUnsupported(v.Type, width))

@@ -73,13 +73,127 @@ func TestBlocksCarryBody_TableOnly(t *testing.T) {
 }
 
 // Sections render through the block renderer, which hides the body row;
-// a table among them must keep the body row, or it is lost.
+// a table among them is drawn there too, in its place, not in a body
+// row above them.
 func TestBlocksCarryBody_TableWithSections(t *testing.T) {
 	msg := MessageItem{Blocks: []blockkit.Block{
 		blockkit.SectionBlock{Text: "summary"},
 		blockkit.TableBlock{Rows: [][]string{{"a"}}},
 	}}
-	if BlocksCarryBody(msg) {
-		t.Error("BlocksCarryBody = true; the table would not render")
+	if !BlocksCarryBody(msg) {
+		t.Error("BlocksCarryBody = false; the table would be drawn above the section")
+	}
+}
+
+// renderedRows renders msg through RenderMessage, as both panes do, and
+// returns its plain rows.
+func renderedRows(t *testing.T, msg MessageItem, width int) []string {
+	t.Helper()
+	msg.TS, msg.UserID, msg.UserName, msg.Timestamp = "1.0", "U1", "bot", "3:40 PM"
+	m := New([]MessageItem{msg}, "general")
+	r := RenderMessage(msg, width, m.renderContext(), RenderOptions{})
+	return strings.Split(ansi.Strip(r.Content), "\n")
+}
+
+// tableRows returns the rows that hold a column separator.
+func tableRows(rows []string) []string {
+	var out []string
+	for _, r := range rows {
+		if strings.ContainsAny(r, "│┼") {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// separatorColumns returns the display column of each │ or ┼ in row.
+func separatorColumns(row string) []int {
+	var cols []int
+	col := 0
+	for _, r := range row {
+		if r == '│' || r == '┼' {
+			cols = append(cols, col)
+		}
+		col += ansi.StringWidth(string(r))
+	}
+	return cols
+}
+
+// Emoji, mrkdwn markers and a ``` inside cells must not change a cell's
+// drawn width: every │ lines up with the header's.
+func TestRenderMessage_TableColumnsAlignWithEmojiAndMarkup(t *testing.T) {
+	emojiCell := slack.NewRichTextBlock("", slack.NewRichTextSection(
+		slack.NewRichTextSectionEmojiElement("white_check_mark", 0, nil),
+		slack.NewRichTextSectionTextElement(" done", nil),
+	))
+	tb := &slack.TableBlock{
+		Type: slack.MBTTable,
+		Rows: [][]*slack.RichTextBlock{
+			{richSection("status"), richSection("note")},
+			{emojiCell, richSection("a *b* _c_ ~d~")},
+			{richSection("todo"), richSection("x ``` y")},
+		},
+	}
+	msg := MessageItem{Blocks: blockkit.Parse(slack.Blocks{BlockSet: []slack.Block{richSection("Report:"), tb, richSection("End.")}})}
+	rows := renderedRows(t, msg, 60)
+	got := tableRows(rows)
+	if len(got) != 4 {
+		t.Fatalf("got %d table rows, want 4:\n%s", len(got), strings.Join(rows, "\n"))
+	}
+	want := separatorColumns(got[0])
+	for _, r := range got[1:] {
+		if cols := separatorColumns(r); len(cols) != len(want) || cols[0] != want[0] {
+			t.Errorf("separators at %v in %q, want %v:\n%s", cols, r, want, strings.Join(got, "\n"))
+		}
+	}
+	joined := strings.Join(rows, "\n")
+	for _, s := range []string{"✅ done", "a *b* _c_ ~d~", "x ``` y", "End."} {
+		if !strings.Contains(joined, s) {
+			t.Errorf("rendered message lacks %q:\n%s", s, joined)
+		}
+	}
+}
+
+// A table after a header and a section is drawn after them, once.
+func TestRenderMessage_TableAfterSectionKeepsOrder(t *testing.T) {
+	for name, blocks := range map[string][]blockkit.Block{
+		"header": {
+			blockkit.HeaderBlock{Text: "Weekly numbers"},
+			blockkit.TableBlock{Rows: [][]string{{"k", "v"}, {"a", "1"}}},
+		},
+		"section": {
+			blockkit.SectionBlock{Text: "Weekly numbers"},
+			blockkit.TableBlock{Rows: [][]string{{"k", "v"}, {"a", "1"}}},
+		},
+		"rich_text, section, table": {
+			blockkit.Parse(slack.Blocks{BlockSet: []slack.Block{richSection("Intro")}})[0],
+			blockkit.SectionBlock{Text: "Weekly numbers"},
+			blockkit.TableBlock{Rows: [][]string{{"k", "v"}, {"a", "1"}}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rows := renderedRows(t, MessageItem{Blocks: blocks}, 60)
+			joined := strings.Join(rows, "\n")
+			heading, table := strings.Index(joined, "Weekly numbers"), strings.Index(joined, "k │ v")
+			if heading < 0 || table < 0 || heading > table {
+				t.Errorf("want heading above table:\n%s", joined)
+			}
+			if n := strings.Count(joined, "a │ 1"); n != 1 {
+				t.Errorf("table drawn %d times:\n%s", n, joined)
+			}
+			if intro := strings.Index(joined, "Intro"); name == "rich_text, section, table" && (intro < 0 || intro > heading) {
+				t.Errorf("want rich_text above the section:\n%s", joined)
+			}
+		})
+	}
+}
+
+// For a message with no other Block Kit, the body row draws the table
+// exactly as the fenced code block it used to be.
+func TestRenderMessageBody_MatchesFencedCodeBlock(t *testing.T) {
+	msg := tableMessage()
+	opts := RenderSlackMarkdownOpts{Width: 40}
+	if got, want := renderMessageBody(msg, opts), RenderSlackMarkdownWith(MessageTextSource(msg), opts); got != want {
+		t.Errorf("renderMessageBody =\n%q\nwant\n%q", got, want)
 	}
 }

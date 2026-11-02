@@ -39,7 +39,7 @@
 
 ## Tables
 
-- Slack `table` blocks render as aligned columns with a header rule, honouring each column's left/center/right alignment, in their place within the message. Bots that post Markdown tables (Slack turns them into `table` blocks) show the full message, including the text after the table
+- Slack `table` blocks render as aligned columns with a header rule, honouring each column's left/center/right alignment, in their place within the message. Bots that post Markdown tables (Slack turns them into `table` blocks) show the full message, including the text after the table. A table that follows a header or section is drawn after it, and tables inside link-unfurl attachments render too. Emoji in cells show as glyphs; bold, italics and links show as plain text
 
 ## Images
 

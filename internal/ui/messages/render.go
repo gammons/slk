@@ -665,6 +665,20 @@ func RenderSlackMarkdown(text string, userNames map[string]string, channelNames 
 	})
 }
 
+// renderCodeBlock styles code as a code block. A width above 2 makes
+// the block exactly width columns wide: the code is hard-wrapped before
+// styling so WordWrap never reflows it as prose (breaking at word
+// boundaries would move code tokens), and the width, which includes one
+// padding column on each side, extends the surface background across
+// the line. Width 0 sizes the block to its longest line.
+func renderCodeBlock(code string, width int) string {
+	if width > 2 {
+		code = ansi.Hardwrap(code, width-2, false)
+		return codeBlockStyle().Width(width).Render(code)
+	}
+	return codeBlockStyle().Render(code)
+}
+
 // RenderSlackMarkdownWith is the full-featured entry point. See
 // RenderSlackMarkdownOpts for the per-call configuration. With a zero
 // opts struct it is byte-identical to RenderSlackMarkdown.
@@ -685,15 +699,7 @@ func RenderSlackMarkdownWith(text string, opts RenderSlackMarkdownOpts) string {
 		} else {
 			inner = strings.TrimSuffix(inner, "\n")
 		}
-		// Hard-wrap before styling so WordWrap never reflows code as
-		// prose. Width includes one padding column on each side; setting
-		// it on the style extends the surface background across the line.
-		// Breaking at word boundaries would move code tokens.
-		if w := opts.Width; w > 2 {
-			inner = ansi.Hardwrap(inner, w-2, false)
-			return "\n" + codeBlockStyle().Width(w).Render(inner) + "\n"
-		}
-		return "\n" + codeBlockStyle().Render(inner) + "\n"
+		return "\n" + renderCodeBlock(inner, opts.Width) + "\n"
 	})
 
 	// Process line by line for blockquotes

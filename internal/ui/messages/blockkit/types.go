@@ -156,6 +156,14 @@ type Context struct {
 	// raw text passes through unchanged.
 	RenderText func(s string, userNames map[string]string) string
 
+	// RenderCode draws preformatted text (a table laid out by
+	// TableToText) as the host's code block, exactly width display
+	// columns wide and hard-wrapped to fit. The host wires this to the
+	// same code-block renderer the message body uses. The text must not
+	// be read as mrkdwn. When nil, the text is drawn plain, hard-wrapped
+	// to width.
+	RenderCode func(code string, width int) string
+
 	// WrapText word-wraps an ANSI-styled string to the given display
 	// width. The host wires this to internal/ui/messages.WordWrap.
 	// When nil, text passes through unchanged.
