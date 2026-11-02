@@ -454,12 +454,44 @@ func bootConversations(res *bootstrap.Result) []slack.Channel {
 		})
 	}
 	for _, im := range res.IMs {
-		if im.IsArchived {
+		if !bootIMOpen(im, open) {
 			continue
 		}
-		if !im.IsOpen && !open[im.ID] {
+		out = append(out, bootIMConversation(im))
+	}
+	return out
+}
+
+// bootIMOpen reports whether a userBoot DM is one the official client
+// shows: open (its own flag or the top-level is_open list) and not
+// archived. open is that list as a set.
+func bootIMOpen(im boot.IM, open map[string]bool) bool {
+	return !im.IsArchived && (im.IsOpen || open[im.ID])
+}
+
+// missingOpenIMs returns the open userBoot DMs that knownIDs (the
+// users.conversations list) does not have, in userBoot order.
+// users.conversations leaves out some open DMs, a DM with a deactivated
+// person among them, while the official client still has them. A DM with
+// no peer ID is skipped: it could not be named.
+func missingOpenIMs(knownIDs []string, res *bootstrap.Result) []slack.Channel {
+	if res == nil {
+		return nil
+	}
+	open := make(map[string]bool, len(res.IsOpen))
+	for _, id := range res.IsOpen {
+		open[id] = true
+	}
+	seen := make(map[string]bool, len(knownIDs))
+	for _, id := range knownIDs {
+		seen[id] = true
+	}
+	var out []slack.Channel
+	for _, im := range res.IMs {
+		if seen[im.ID] || im.UserID == "" || !bootIMOpen(im, open) {
 			continue
 		}
+		seen[im.ID] = true
 		out = append(out, bootIMConversation(im))
 	}
 	return out

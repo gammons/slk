@@ -355,12 +355,21 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	// userBoot's is_open. bootConversations already applies this, so
 	// the call is redundant on the fallback path and harmless there.
 	channels = dropClosedMPIMs(channels, res.IsOpen)
-	// Section membership alone cannot create a row. Recover accessible starred
-	// IMs omitted by either source before the shared item/cache/name flow below.
+	// users.conversations also leaves out some open DMs that userBoot has,
+	// such as one with a deactivated person. Add them before the starred
+	// recovery, so neither adds a DM twice. On the fallback path every one
+	// is already there.
 	known := make([]string, 0, len(channels))
 	for _, ch := range channels {
 		known = append(known, ch.ID)
 	}
+	recovered := missingOpenIMs(known, res)
+	for _, ch := range recovered {
+		known = append(known, ch.ID)
+	}
+	channels = append(channels, recovered...)
+	// Section membership alone cannot create a row. Recover accessible starred
+	// IMs omitted by either source before the shared item/cache/name flow below.
 	if wctx.SectionStore != nil {
 		starCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		channels = append(channels, missingStarredConversations(starCtx, known,
