@@ -5,6 +5,8 @@ import (
 	"slices"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/sidebar"
@@ -280,6 +282,35 @@ func TestWorkspaceMessagesCarryDeactivatedUsersIntoTheLists(t *testing.T) {
 
 // Opening a hidden deactivated DM from the finder puts the sidebar cursor
 // on it: the row only becomes visible once it is the active conversation.
+// During an upload the switch is refused, so the sidebar must not move:
+// the hidden DM stays hidden and the cursor stays where it was.
+func TestOpeningFromTheFinderDuringAnUploadLeavesTheSidebar(t *testing.T) {
+	a := deactivatedApp()
+	a.SetDeactivatedUsers(map[string]bool{"U2": true}, 0)
+	a.Update(ChannelSelectedMsg{ID: "C1", Name: "general", Type: "channel"})
+	a.sidebar.SelectByID("C1")
+	a.setUploaderForTest(func(_, _, _ string, _ []core.PendingAttachment) tea.Cmd { return nil })
+	a.compose.AddAttachment(core.PendingAttachment{Filename: "shot.png", Bytes: []byte("x")})
+	a.submitWithAttachments(&a.compose)
+	if !a.compose.Uploading() {
+		t.Fatal("precondition: compose not uploading")
+	}
+
+	cmd := a.openChannel(channelfinder.ChannelResult{ID: "D2", Name: "Gone", Type: "dm", Joined: true})
+	if cmd != nil {
+		a.Update(cmd())
+	}
+	if a.activeChannelID != "C1" {
+		t.Fatalf("active channel = %q, want the switch refused", a.activeChannelID)
+	}
+	if got := a.sidebar.SelectedID(); got != "C1" {
+		t.Errorf("sidebar cursor on %q, want C1", got)
+	}
+	if offered(a).has("D2") {
+		t.Error("the refused switch made the deactivated DM the sidebar's active row")
+	}
+}
+
 func TestOpeningAHiddenDMFromTheFinderSelectsItsRow(t *testing.T) {
 	a := deactivatedApp()
 	a.SetDeactivatedUsers(map[string]bool{"U2": true}, 0)

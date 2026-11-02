@@ -19,9 +19,13 @@ func (a *App) openChannel(r channelfinder.ChannelResult) tea.Cmd {
 	if r.Joined {
 		// Active first: a row the sidebar hides (a deactivated peer's
 		// DM, a stale one) is only shown, and so selectable, while it
-		// is the active conversation.
-		a.sidebar.SetActiveChannelID(r.ID)
-		a.sidebar.SelectByID(r.ID)
+		// is the active conversation. Not during an upload:
+		// reduceChannelSelected refuses the switch then (and says so),
+		// and the conversation on screen must stay the active row.
+		if !a.compose.Uploading() && !a.threadCompose.Uploading() {
+			a.sidebar.SetActiveChannelID(r.ID)
+			a.sidebar.SelectByID(r.ID)
+		}
 		return func() tea.Msg {
 			return ChannelSelectedMsg{ID: r.ID, Name: r.Name, Type: r.Type}
 		}
