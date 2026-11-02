@@ -720,6 +720,13 @@ func TestConvert_BareHTTPAutolinked(t *testing.T) {
 	}
 }
 
+func TestTypedURLProtocols(t *testing.T) {
+	want := "http:,https:,ftp:,ftps:,sftp:,ssh:,file:,tel:"
+	if got := strings.Join(typedURLProtocols, ","); got != want {
+		t.Errorf("typedURLProtocols = %q, want %q", got, want)
+	}
+}
+
 func TestConvert_TypedURLSchemes(t *testing.T) {
 	cases := []struct {
 		name, in string

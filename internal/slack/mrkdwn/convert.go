@@ -21,21 +21,15 @@ import (
 // www. matches stay with goldmark.
 var typedURLRegexp = regexp.MustCompile(`^(?:` + linkscheme.Alternation + `)[!-;=?-{}~]*[#-&(+\-/-9=@-\[\\^` + "`" + `a-{}]`)
 
-// typedURLProtocols lists the "scheme:" prefixes Linkify may start a match
-// at, expanded from linkscheme.Alternation so the list stays in one place.
-// mailto: is left to Linkify's email matcher.
+// typedURLProtocols lists the "scheme:" names Linkify may start a match at,
+// taken from linkscheme.Prefixes. mailto: is left to Linkify's email matcher.
 var typedURLProtocols = func() []string {
 	var out []string
-	for _, alt := range strings.Split(linkscheme.Alternation, "|") {
-		name, _, _ := strings.Cut(alt, ":")
-		if name == "mailto" {
-			continue
+	for _, p := range linkscheme.Prefixes {
+		name, _, _ := strings.Cut(p, ":")
+		if name != "mailto" {
+			out = append(out, name+":")
 		}
-		if opt, ok := strings.CutSuffix(name, "?"); ok {
-			out = append(out, opt[:len(opt)-1]+":")
-			name = opt
-		}
-		out = append(out, name+":")
 	}
 	return out
 }()
