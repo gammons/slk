@@ -50,6 +50,21 @@ type Model struct {
 	// channel ID (see SetStatus). Pruned to the current item set on
 	// every SetItems.
 	statuses map[string]peerstatus.Status
+
+	// deactivated is the set of user IDs whose DMs the finder does not
+	// offer. The App owns it: it is published whole and never written
+	// here, and nil offers everyone (the option is off).
+	deactivated map[string]bool
+}
+
+// SetDeactivatedUsers sets the user IDs whose DMs are not offered; nil
+// offers everyone. The map is kept, not copied, so the caller must not
+// write it afterwards. An open overlay is refiltered.
+func (m *Model) SetDeactivatedUsers(users map[string]bool) {
+	m.deactivated = users
+	if m.visible {
+		m.filter()
+	}
 }
 
 var _ interface {
@@ -380,6 +395,9 @@ func (m *Model) filter() {
 	idxs := make([]int, 0, len(m.items))
 	for i, item := range m.items {
 		if m.forwarding && (!item.Joined || item.Synthetic) {
+			continue
+		}
+		if core.IsHiddenPeerConversation(item.Type, item.DMUserID, m.deactivated) {
 			continue
 		}
 		idxs = append(idxs, i)

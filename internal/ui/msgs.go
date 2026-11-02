@@ -332,6 +332,16 @@ type (
 		UserID     string
 		IsExternal bool
 	}
+	// UserDeactivatedMsg reports that a user's deactivated state changed or
+	// was freshly observed: true when Slack says the account is
+	// deactivated, false when a profile shows it active again. Unlike
+	// UserExternalMsg it carries no TeamID, because an account is
+	// deactivated everywhere; the App updates its one global set and
+	// refilters every surface.
+	UserDeactivatedMsg struct {
+		UserID      string
+		Deactivated bool
+	}
 	WorkspaceSwitchedMsg struct {
 		TeamID   string
 		TeamName string
@@ -355,9 +365,14 @@ type (
 		// fire. Order matters: the App handler applies this BEFORE
 		// SetUserNames so the picker rebuild sees the external flags.
 		ExternalUsers map[string]bool
-		UserID        string
-		CustomEmoji   map[string]string
-		UserGroups    map[string]string
+		// DeactivatedUsers is the global set of deactivated user IDs (the
+		// cache's, plus this workspace's IM peers Slack flagged). Merged
+		// into the App's set BEFORE SetChannels, the finder items and
+		// SetUserNames, so those are filtered on first build.
+		DeactivatedUsers map[string]bool
+		UserID           string
+		CustomEmoji      map[string]string
+		UserGroups       map[string]string
 		// SectionsProvider supplies Slack-native sidebar sections for this
 		// workspace. Nil means "use config-glob behavior" (the App's
 		// sidebar reverts to its existing name-keyed buckets).
@@ -434,9 +449,14 @@ type (
 		// matters: the App handler applies this BEFORE SetUserNames so
 		// the picker rebuild sees the external flags.
 		ExternalUsers map[string]bool
-		UserID        string
-		CustomEmoji   map[string]string
-		UserGroups    map[string]string
+		// DeactivatedUsers is the global set of deactivated user IDs (the
+		// cache's, plus this workspace's IM peers Slack flagged). Merged
+		// into the App's set BEFORE SetChannels, the finder items and
+		// SetUserNames, so those are filtered on first build.
+		DeactivatedUsers map[string]bool
+		UserID           string
+		CustomEmoji      map[string]string
+		UserGroups       map[string]string
 		// SectionsProvider supplies Slack-native sidebar sections for this
 		// workspace. Nil means "use config-glob behavior" (the App's
 		// sidebar reverts to its existing name-keyed buckets).

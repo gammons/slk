@@ -316,6 +316,11 @@ type Model struct {
 	// is injectable for deterministic tests; defaults to time.Now.
 	staleThreshold time.Duration
 	activeID       string
+	// deactivated is the set of user IDs whose DM and app rows are hidden.
+	// The App owns it: it is published whole and never written here, and
+	// nil shows everyone (the option is off). The active conversation is
+	// exempt, like staleness.
+	deactivated map[string]bool
 	// threadsActive reports that the Threads view is the currently
 	// displayed view in the message pane. When true (and the cursor
 	// is on a different row), the synthetic Threads row renders with
@@ -534,6 +539,11 @@ func (m *Model) revealUnreadHidden(state map[string]core.ReadState) bool {
 		if shown[i] || !state[item.ID].HasUnread {
 			continue
 		}
+		// A deactivated peer's DM is hidden on purpose, not as stale: an
+		// unread message (an old one, usually) does not bring it back.
+		if item.ID != m.activeID && core.IsHiddenPeerConversation(item.Type, item.DMUserID, m.deactivated) {
+			continue
+		}
 		if m.filter != "" && !strings.Contains(text.Fold(item.Name), lower) {
 			continue
 		}
@@ -718,6 +728,14 @@ func (m *Model) SetPrivateGlyph(glyph string) {
 // sidebar filter does.
 func (m *Model) SetActiveOnly(enabled bool) {
 	m.activeOnly = enabled
+	m.refilter()
+}
+
+// SetDeactivatedUsers sets the user IDs whose DM and app rows are hidden;
+// nil shows everyone. The map is kept, not copied, so the caller must not
+// write it afterwards. Keeps the cursor on the same item.
+func (m *Model) SetDeactivatedUsers(users map[string]bool) {
+	m.deactivated = users
 	m.refilter()
 }
 
@@ -1436,6 +1454,12 @@ func (m *Model) rebuildFilter() {
 	}
 	for i, item := range m.items {
 		if m.filter != "" && !strings.Contains(text.Fold(item.Name), lower) {
+			continue
+		}
+		// Deactivated peers are hidden before staleness so they stay
+		// hidden whatever their read state, starred or not. The active
+		// conversation is the only exemption.
+		if item.ID != m.activeID && core.IsHiddenPeerConversation(item.Type, item.DMUserID, m.deactivated) {
 			continue
 		}
 		// Staleness filter: drop items the user hasn't read in a long

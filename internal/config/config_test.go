@@ -1162,3 +1162,12 @@ func TestConfig_HideDeactivatedUsers(t *testing.T) {
 		t.Error("explicit hide_deactivated_users = true must be honoured")
 	}
 }
+
+// A [general] block without the key, the common case (default_workspace is
+// set there), keeps the option on.
+func TestHideDeactivatedUsersPartialGeneralBlockKeepsDefault(t *testing.T) {
+	cfg := loadConfigString(t, "[general]\ndefault_workspace = \"work\"\n")
+	if !cfg.General.HideDeactivatedUsers {
+		t.Fatal("a [general] block without hide_deactivated_users turned the option off")
+	}
+}
