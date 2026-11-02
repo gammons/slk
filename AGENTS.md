@@ -108,6 +108,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Word wrap to a width | `messages.WordWrap(s, limit)` |
 | Plain-text line segmentation (grapheme-correct) | `entrylist.PlainLines`, `entrylist.DisplayWidth`, `entrylist.SliceColumns` (`bubbles/entrylist`; `messages.PlainLines`/`DisplayWidthOfPlain`/`SliceColumns` delegate for existing callers) |
 | Display width of a string (emoji-aware) | `emoji.Width(s)` |
+| Truncate plain text to a cell budget ending in "…", never inside a grapheme cluster, measured as both lipgloss and `emoji.Width` see it | `truncateHeaderName(s, budget)` and `headerCells(s)` (`internal/ui/sidebar`, unexported; section headers). Lift them into a shared package when a second surface needs it (DM display names, per `2026-11-02-sidebar-status-emoji-images-design.md`) |
 | Case/accent-insensitive fold for matching | `text.Fold(s)` |
 | Slack mrkdwn → plain text | `messages.FlattenMrkdwn`, `messages.FlattenMrkdwnWithUserGroups` |
 | A sent message's mentions (`<@U…>`, `<#C…>`, `<!here>`, `<!subteam^S…>`) as the `@name` / `#name` a person types, for putting it back in a composer (`E`) | `(*compose.Model).MentionsForEdit(text)`, the inverse of `TranslateMentionsForSend`; a token that would not translate back to the same mention stays in wire form |

@@ -15,6 +15,7 @@ import (
 	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/muesli/reflow/truncate"
+	"github.com/rivo/uniseg"
 )
 
 // Default section names used when an item has no custom Section assigned.
@@ -2156,7 +2157,7 @@ func (m *Model) buildCache(width int) {
 			m.cacheRows = append(m.cacheRows, renderRow{height: 1, navIdx: -1})
 		}
 		group := sectionMap[name]
-		headerLabel, headerLabelSelected, headerMentions := m.renderSectionHeaderLabel(name, cursorSelected, dotStyle, bgAnsi)
+		headerLabel, headerLabelSelected, headerMentions := m.renderSectionHeaderLabel(name, width, cursorSelected, dotStyle, bgAnsi)
 		ni, ok := headerNavIdx[name]
 		if !ok {
 			ni = -1
@@ -2212,30 +2213,27 @@ func (m *Model) sectionDisplayMeta(sectionKey string) (name, emoji string) {
 // user-visible name and (if any) emoji shortcode from the provider and
 // prepend the resolved emoji.
 //
-// Known, pre-existing, NOT introduced here: this function takes no
-// width and truncates nothing. buildCache renders the result through
-// styles.SectionHeader.Width(width-2), and lipgloss WRAPS overlong
-// content rather than truncating it, while the renderRow it lands in
-// hardcodes height 1. A section header whose name plus aggregates
-// exceeds the sidebar width therefore emits a multi-line string into a
-// slot counted as one line. Reproducible today without any mention
-// badge — a 36-character section name wraps to three lines at width 20.
-// The mention badge widens the header by at most 6 columns (separator
-// plus a padded "99+"), so it reaches that threshold sooner but does
-// not create it. Filed separately; do not fix it inline here.
-func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.Style, bgAnsi string) (string, string, int) {
+// The label fits one line of a sidebar `width` wide: see
+// fitSectionHeader for what gives way when it does not.
+func (m *Model) renderSectionHeaderLabel(name string, width int, cursor string, dotStyle lipgloss.Style, bgAnsi string) (string, string, int) {
 	displayName, emojiCode := m.sectionDisplayMeta(name)
+	// lipgloss expands a tab and breaks the line at a newline after the
+	// label was measured, so neither may reach it.
+	displayName = headerSpaceReplacer.Replace(displayName)
 	emojiPrefix := ""
+	textFallback := false
 	if emojiCode != "" {
-		// kyokomi/emoji.Sprint resolves :shortcode: to unicode; on
-		// unknown shortcodes it returns the input unchanged (which
-		// keeps the colons, giving a graceful textual fallback).
+		// emojiutil.Sprint resolves :shortcode: to the glyph and
+		// appends a space; on unknown shortcodes it returns the input
+		// unchanged (which keeps the colons, giving a graceful textual
+		// fallback).
 		token := ":" + emojiCode + ":"
 		rendered := emojiutil.Sprint(token)
 		if rendered != token {
 			emojiPrefix = rendered + " "
 		} else {
 			emojiPrefix = token + " "
+			textFallback = true
 		}
 	}
 
@@ -2276,10 +2274,106 @@ func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.
 		}
 	}
 
+	emojiCells := headerCells(emojiPrefix)
+	aggregateCells := headerCells(aggregates)
+	// The ":code:" text (an unknown emoji, or a custom one) tells the
+	// user less than the name, so it gives way before the name is cut.
+	// A glyph stays.
+	if textFallback && headerCells(displayName) > sectionHeaderNameBudget(width, emojiCells, aggregateCells) {
+		emojiPrefix = ""
+		emojiCells = 0
+	}
+	var keepEmoji, keepAggregates bool
+	displayName, keepEmoji, keepAggregates = fitSectionHeader(width, displayName, emojiCells, aggregateCells)
+	if !keepEmoji {
+		emojiPrefix = ""
+	}
+	if !keepAggregates {
+		aggregates = ""
+	}
+
 	label := " " + glyph + " " + emojiPrefix + displayName + aggregates
 	selected := cursor + glyph + " " + emojiPrefix + displayName + aggregates
 	return messages.ReapplyBgAfterResets(label, bgAnsi),
 		messages.ReapplyBgAfterResets(selected, bgAnsi), mentions
+}
+
+// headerSpaceReplacer turns the characters lipgloss would not keep on
+// one line into spaces.
+var headerSpaceReplacer = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ", "\t", " ")
+
+// sectionHeaderChromeCells is what a header label spends before the
+// emoji: the cursor "▌" or a space (2, since "▌" is East Asian
+// Ambiguous and may draw 2 wide, hedged as the channel rows hedge it),
+// then the triangle and its space (2).
+const sectionHeaderChromeCells = 4
+
+// fitSectionHeader fits a section header into one line of a sidebar
+// `width` wide. buildCache draws the label through
+// styles.SectionHeader.Width(width-2), whose Padding(0, 1) leaves
+// width-4 columns, and lipgloss wraps whatever does not fit into a
+// second line of a row counted as one.
+//
+// emojiCells and aggregateCells are the widths of the emoji prefix and
+// the collapsed aggregates. Neither is ever cut. When the header does
+// not fit, the name is truncated with "…"; with no column left for it,
+// it is dropped, then the emoji, then the aggregates. A header that
+// fits returns its name unchanged.
+func fitSectionHeader(width int, name string, emojiCells, aggregateCells int) (fitted string, keepEmoji, keepAggregates bool) {
+	avail := width - 4
+	nameBudget := sectionHeaderNameBudget(width, emojiCells, aggregateCells)
+	if headerCells(name) <= nameBudget {
+		return name, true, true
+	}
+	if nameBudget >= 1 {
+		return truncateHeaderName(name, nameBudget), true, true
+	}
+	used := sectionHeaderChromeCells + emojiCells + aggregateCells
+	if used <= avail {
+		return "", true, true
+	}
+	used -= emojiCells
+	return "", false, used <= avail
+}
+
+// sectionHeaderNameBudget is the cells left for a section header's
+// name in a sidebar `width` wide, after the chrome, the emoji and the
+// aggregates (see fitSectionHeader). It may be negative.
+func sectionHeaderNameBudget(width, emojiCells, aggregateCells int) int {
+	return width - 4 - sectionHeaderChromeCells - emojiCells - aggregateCells
+}
+
+// headerCells measures header text the way both its readers need: as
+// lipgloss does, which decides the wrap, and as emoji.Width does, which
+// knows an emoji image's footprint. The larger wins, so neither
+// overflows.
+func headerCells(s string) int {
+	return max(lipgloss.Width(s), emojiutil.Width(s))
+}
+
+// truncateHeaderName cuts name to at most budget cells, ending in "…"
+// (which takes one of them). It cuts between grapheme clusters, never
+// inside one, so a ZWJ emoji or a combining mark is kept or dropped
+// whole.
+func truncateHeaderName(name string, budget int) string {
+	if budget <= 0 {
+		return ""
+	}
+	var b strings.Builder
+	used := 0
+	rest := name
+	state := -1
+	for len(rest) > 0 {
+		var cluster string
+		cluster, rest, _, state = uniseg.FirstGraphemeClusterInString(rest, state)
+		w := headerCells(cluster)
+		if used+w > budget-1 {
+			break
+		}
+		b.WriteString(cluster)
+		used += w
+	}
+	return b.String() + "…"
 }
 
 // badgeGap is the run of spaces that pushes badge to the right end of a
