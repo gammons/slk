@@ -112,6 +112,11 @@ Out of scope:
 - Refiltering an `@` / `#` dropdown that is open at the moment the set
   changes. The next keystroke's list is filtered, and a deactivated name
   picked from the old list still becomes a mention.
+- The workspace rail's dot and the "+N" in the window title for other
+  workspaces still count a hidden deactivated DM with unreads
+  (`railRowLights` in `cmd/slk` knows nothing of the set, and reading it
+  from SQLite on every rail read would block the UI goroutine). The
+  active workspace's own count skips it.
 
 ## Design
 
