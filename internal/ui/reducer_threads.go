@@ -195,6 +195,14 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 				}
 			}
 		}
+		// The open gate saw only a stub for an uncached parent. Now that
+		// the real parent is known, a system notice with no replies (an
+		// authoritative result that carries none) closes the panel again.
+		// Loaded replies prove the thread, whatever the stale count says.
+		if !m.FromCache && len(m.Replies) == 0 && !messages.CanOpenThread(parentMsg) {
+			a.CloseThread()
+			return a.cantReplyToNotice(), true
+		}
 		// Ephemeral replies already on screen are carried over: the
 		// fetch never contains them, and opening a thread clears the
 		// panel first, so any still shown belong to this thread.

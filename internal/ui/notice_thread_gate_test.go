@@ -193,3 +193,27 @@ func TestPendingNavToReplyOfStaleHuddleOpensOnCachePass(t *testing.T) {
 		t.Errorf("threadVisible=%v ts=%q", a.threadVisible, a.threadPanel.ThreadTS())
 	}
 }
+
+// A permalink to an uncached notice opens on a stub that passes the gate;
+// the authoritative fetch then shows it is a reply-less notice, so the
+// panel closes again.
+func TestLoadedRepliesOfReplylessNoticeCloseThePanel(t *testing.T) {
+	a, _ := noticeApp(t, 0)
+	var cached []messages.MessageItem
+	a.SetThreadService(core.NewThreadService(core.ThreadServiceFuncs{
+		CacheRead: func(ids.ChannelID, ids.ThreadTS) []core.MessageItem { return cached },
+	}))
+	a.openThreadForPermalink("C1", "9.000000", false)
+	if !a.threadVisible {
+		t.Fatal("stub parent should pass the open gate")
+	}
+	// The fetch has written the thread to the cache by the time it lands.
+	cached = []messages.MessageItem{noticeMsg("9.000000", 0)}
+	a.Update(ThreadRepliesLoadedMsg{ThreadTS: "9.000000", Replies: []messages.MessageItem{}})
+	if a.threadVisible {
+		t.Error("panel must close on a reply-less notice")
+	}
+	if got := statusbarText(a); !strings.Contains(got, noticeToast) {
+		t.Errorf("toast = %q, want %q", got, noticeToast)
+	}
+}
