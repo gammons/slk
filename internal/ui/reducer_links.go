@@ -22,8 +22,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/rivo/uniseg"
 
-	"github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/slackurl"
 	"github.com/gammons/slk/internal/ui/messages"
@@ -78,15 +78,23 @@ var reduceLinks reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// file:, ssh: and the like hand the target to the OS launcher, and
 		// the sender chose the label, so show the real target first.
 		url := m.URL
-		budget := a.linkBudget()
-		if budget < minDisplayBudget {
-			// No room to show where the link goes, so do not offer to open it.
-			return toastWithClear(a, "Terminal too small to confirm this link", 3*time.Second), true
-		}
+		budget, lines, width := a.linkBudget()
 		// Hard-wrap the line to the body width so the prompt's word wrap
-		// moves nothing and the budget is exact.
-		_, width := a.confirmPrompt.BodyRoom("Open link?")
-		body := xansi.Hardwrap("Open "+displayTarget(url, budget)+"?", width, true)
+		// moves nothing and the budget is exact. As a safety net against any
+		// difference between displayTarget's measure and the renderer's, shrink
+		// the budget until the wrapped body fits the room it has.
+		var body string
+		for tries := 0; ; tries++ {
+			if budget < minDisplayBudget || tries > 8 {
+				// No room to show where the link goes, so do not offer to open it.
+				return toastWithClear(a, "Terminal too small to confirm this link", 3*time.Second), true
+			}
+			body = xansi.Hardwrap("Open "+displayTarget(url, budget)+"?", width, true)
+			if strings.Count(body, "\n")+1 <= lines {
+				break
+			}
+			budget -= max(1, budget/10)
+		}
 		a.openConfirmPrompt("Open link?", body, func() tea.Msg {
 			return OpenLinkMsg{URL: url, Confirmed: true}
 		})
@@ -99,18 +107,20 @@ var reduceLinks reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 const maxDisplayBudget = 200
 
 // minDisplayBudget is the least room worth confirming in: below it the
-// prompt could not show a scheme, a host and a file name together. A body of
-// one line or none (lines <= 1) always falls below it, so it refuses too.
+// prompt could not show a scheme, a host and a file name together. Only a body
+// of no lines (lines <= 0) falls below it; one line gives a budget of about 29
+// cells.
 const minDisplayBudget = 16
 
 // linkBudget is how many cells of the target fit in the confirm prompt at
 // the current terminal size: its real body lines and width, less room for
 // "Open " and "?" and one cell a line that a wide rune can leave unused when
-// the line is hard-wrapped (see reduceLinks).
-func (a *App) linkBudget() int {
+// the line is hard-wrapped (see reduceLinks). It also returns the lines and
+// width it was computed from.
+func (a *App) linkBudget() (budget, lines, width int) {
 	a.prepareConfirmPrompt()
-	lines, width := a.confirmPrompt.BodyRoom("Open link?")
-	return min(maxDisplayBudget, lines*width-6-lines)
+	lines, width = a.confirmPrompt.BodyRoom("Open link?")
+	return min(maxDisplayBudget, lines*width-6-lines), lines, width
 }
 
 // displayTarget is what the confirm prompt shows for a link target. Every
@@ -119,19 +129,28 @@ func (a *App) linkBudget() int {
 // A target wider than displayBudget keeps its head (scheme and host) and its
 // tail (file name) with the middle elided. The opener still gets the exact URL.
 func displayTarget(rawURL string, budget int) string {
+	// Escape first so format runes (ZWJ, bidi) are ASCII before clusters are
+	// formed, then measure whole grapheme clusters the way the prompt draws
+	// them (a base rune plus VS16 is two cells, not one).
+	var esc strings.Builder
+	for _, r := range rawURL {
+		if !unicode.IsPrint(r) && r != ' ' {
+			q := strconv.QuoteToASCII(string(r))
+			esc.WriteString(q[1 : len(q)-1])
+			continue
+		}
+		esc.WriteRune(r)
+	}
 	var parts []string
 	var widths []int
 	total := 0
-	for _, r := range rawURL {
-		s := string(r)
-		if !unicode.IsPrint(r) && r != ' ' {
-			q := strconv.QuoteToASCII(s)
-			s = q[1 : len(q)-1]
-		}
-		w := emoji.Width(s)
-		parts = append(parts, s)
+	for rest := esc.String(); rest != ""; {
+		cluster, tail, _, _ := uniseg.FirstGraphemeClusterInString(rest, -1)
+		w := xansi.StringWidth(cluster)
+		parts = append(parts, cluster)
 		widths = append(widths, w)
 		total += w
+		rest = tail
 	}
 	if total <= budget {
 		return strings.Join(parts, "")
