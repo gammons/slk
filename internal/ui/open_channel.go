@@ -17,6 +17,10 @@ import (
 // selects it.
 func (a *App) openChannel(r channelfinder.ChannelResult) tea.Cmd {
 	if r.Joined {
+		// Active first: a row the sidebar hides (a deactivated peer's
+		// DM, a stale one) is only shown, and so selectable, while it
+		// is the active conversation.
+		a.sidebar.SetActiveChannelID(r.ID)
 		a.sidebar.SelectByID(r.ID)
 		return func() tea.Msg {
 			return ChannelSelectedMsg{ID: r.ID, Name: r.Name, Type: r.Type}

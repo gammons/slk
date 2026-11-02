@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/sidebar"
 )
 
@@ -233,5 +234,20 @@ func TestWorkspaceMessagesCarryDeactivatedUsersIntoTheLists(t *testing.T) {
 				t.Fatalf("an active DM is missing: %+v", got)
 			}
 		})
+	}
+}
+
+// Opening a hidden deactivated DM from the finder puts the sidebar cursor
+// on it: the row only becomes visible once it is the active conversation.
+func TestOpeningAHiddenDMFromTheFinderSelectsItsRow(t *testing.T) {
+	a := deactivatedApp()
+	a.SetDeactivatedUsers(map[string]bool{"U2": true})
+	a.sidebar.SelectByID("C1")
+	cmd := a.openChannel(channelfinder.ChannelResult{ID: "D2", Name: "Gone", Type: "dm", Joined: true})
+	if cmd != nil {
+		a.Update(cmd())
+	}
+	if got := a.sidebar.SelectedID(); got != "D2" {
+		t.Fatalf("sidebar cursor on %q, want the opened DM D2", got)
 	}
 }

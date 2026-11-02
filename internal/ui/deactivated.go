@@ -1,6 +1,10 @@
 package ui
 
-import "maps"
+import (
+	"maps"
+
+	"github.com/gammons/slk/internal/core"
+)
 
 // The deactivated-user set is global and immutable once published: every
 // change builds a new map and hands it to the sidebar and channel finder,
@@ -68,6 +72,28 @@ func (a *App) SetHideDeactivatedUsers(hide bool) {
 func (a *App) publishDeactivatedUsers(set map[string]bool) {
 	a.deactivatedUsers = set
 	a.refilterDeactivated()
+	// Slack takes no messages for a deactivated account, whatever the
+	// option says.
+	a.syncComposeDisabled("deactivated_users")
+}
+
+// peerDeactivated reports whether channelID is a DM or app DM whose peer
+// is deactivated. The peer comes from the finder's rows, which hold the
+// conversation picked there, else from the sidebar's items (a DM just
+// opened can reach the sidebar first). Both hold hidden rows too.
+func (a *App) peerDeactivated(channelID string) bool {
+	if channelID == "" || len(a.deactivatedUsers) == 0 {
+		return false
+	}
+	if item, ok := a.findChannelByID(channelID); ok && item.DMUserID != "" {
+		return core.IsHiddenPeerConversation(item.Type, item.DMUserID, a.deactivatedUsers)
+	}
+	for _, item := range a.sidebar.Items() {
+		if item.ID == channelID {
+			return core.IsHiddenPeerConversation(item.Type, item.DMUserID, a.deactivatedUsers)
+		}
+	}
+	return false
 }
 
 // refilterDeactivated pushes the current filter to every surface that

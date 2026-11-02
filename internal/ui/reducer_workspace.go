@@ -83,6 +83,11 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			if m.FinderItem.ID != "" {
 				a.channelFinder.Upsert(m.FinderItem)
 			}
+			// The row can name the peer of the conversation on screen
+			// after its deactivation arrived (addConversation sends
+			// that first).
+			a.syncComposeDisabled("conversation_opened")
+			return a.dropInsertIfComposeDisabled(), true
 		}
 		// Inactive-workspace events update WorkspaceContext.Channels
 		// and FinderItems from the rtmEventHandler in cmd/slk;
@@ -168,7 +173,7 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// Global, so no TeamID check: the account is deactivated in every
 		// workspace and each one's view is refiltered.
 		a.setUserDeactivated(m.UserID, m.Deactivated)
-		return nil, true
+		return a.dropInsertIfComposeDisabled(), true
 
 	case ReadStateChangedMsg:
 		_ = m
