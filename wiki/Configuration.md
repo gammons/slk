@@ -11,6 +11,11 @@ use_slack_sections = true       # use real Slack sidebar sections (default).
                                 # set false to use [sections.*] globs instead.
 download_dir = "~/Downloads"    # where file attachments (`d` keybinding) are
                                 # saved. "~" is expanded to your home directory.
+hide_deactivated_users = true   # hide deactivated people, as the Slack desktop
+                                # client does: their DMs leave the sidebar and
+                                # they are not offered in the channel finder,
+                                # the new-message picker or @ / # autocomplete.
+                                # Set false to show them again. See below.
 
 [appearance]
 theme = "dracula"
@@ -154,6 +159,31 @@ accent = "#50C878"
 background = "#1A1A2E"
 text = "#E0E0E0"
 ```
+
+## Deactivated users
+
+`[general] hide_deactivated_users` (default `true`) hides people whose Slack
+account is deactivated, matching the Slack desktop client. It applies to:
+
+- DM and app rows in the sidebar (including starred ones and ones with unread
+  messages; the conversation you have open is never hidden, so a permalink or
+  history jump to it still works)
+- the channel finder's list before you type (`Ctrl+t` / `Ctrl+p`) and the
+  forward picker. Type part of the person's name to find the old DM on
+  purpose: it shows dimmed, tagged `deactivated`, below every other match,
+  and opens to its history
+- the new-message picker (`Ctrl+n`)
+- `@` mention autocomplete and `#` autocomplete in both composers
+
+Group DMs that include a deactivated person are kept, as in Slack, and their
+messages still show who wrote them. slk learns who is deactivated from the
+conversation list and from each user's profile. On startup it refreshes the
+people in your open DMs and the authors in the channel it opens first, so
+someone else may only be hidden from `@` autocomplete once their profile is
+next fetched. Set the option to `false` to show everyone again.
+
+You can't send messages to a deactivated account, so the composer of such a DM
+is disabled, whether the option is on or off.
 
 ## Section resolution
 
