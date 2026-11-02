@@ -1303,15 +1303,17 @@ func (m *Model) hasAuthor(userID string) bool {
 	return false
 }
 
-// AuthorStatusSuffix is what follows an author's name in a message
-// header: a space and their status emoji on the pane background, or ""
-// when they have no live custom status. Shared with the thread pane.
-func AuthorStatusSuffix(statuses map[string]peerstatus.Status, userID string, now time.Time) string {
-	g := statuses[userID].Glyph(now)
-	if g == "" {
-		return ""
+// AuthorStatusEmoji is the status emoji that follows an author's name
+// in a message header, for both panes: an image when emoji can place it
+// (image mode, custom emoji included), with image true and the upload
+// it needs, else the glyph, and "" when the author has no live status.
+// A cold image is the spaces it reserves (image true, nil upload).
+func AuthorStatusEmoji(statuses map[string]peerstatus.Status, userID string, now time.Time, emoji EmojiContext) (s string, image bool, flush func(io.Writer) error) {
+	st := statuses[userID]
+	if placed, flush, ok := emoji.PlaceShortcode(st.GlyphShortcode(now)); ok {
+		return placed, true, flush
 	}
-	return lipgloss.NewStyle().Background(styles.Background).Render(" " + g)
+	return st.Glyph(now), false, nil
 }
 
 // SetChannelNames sets the channel ID -> name map used to resolve bare
@@ -1343,6 +1345,23 @@ type EmojiContext struct {
 	PlaceCtx emojiutil.PlaceContext
 	Cells    int               // 1 or 2; 0 falls back to 2
 	Customs  map[string]string // workspace custom emoji map; nil = empty
+}
+
+// ImageCells is how many cells an emoji image takes: Cells when it is
+// 1 or 2, else 2.
+func (c EmojiContext) ImageCells() int {
+	if c.Cells == 1 {
+		return 1
+	}
+	return 2
+}
+
+// PlaceShortcode is emojiutil.PlaceShortcode with c's place context,
+// custom emoji and ImageCells. ok is false when the shortcode can't be
+// placed (image mode off, no fetcher, empty or unknown name, failed
+// fetch), so the caller draws its glyph instead.
+func (c EmojiContext) PlaceShortcode(name string) (string, func(io.Writer) error, bool) {
+	return emojiutil.PlaceShortcode(c.PlaceCtx, name, c.Customs, c.ImageCells())
 }
 
 // SetEmojiContext configures the emoji-image rendering path. Should

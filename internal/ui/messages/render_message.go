@@ -220,7 +220,19 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	stats := opt.stats
 	headerTimestamp := styles.Timestamp.Render(msg.Timestamp)
 	headerGap := lipgloss.NewStyle().Background(styles.Background).Render("  ")
-	line := styles.Username(msg.UserID, rc.ColoredUsernames).Render(msg.UserName) + AuthorStatusSuffix(rc.UserStatuses, msg.UserID, time.Now()) + headerGap + headerTimestamp
+	// The status image's upload joins the body's: both panes fire
+	// BodyFlushes for visible entries.
+	headerBg := lipgloss.NewStyle().Background(styles.Background)
+	statusEmoji, statusImage, statusFlush := AuthorStatusEmoji(rc.UserStatuses, msg.UserID, time.Now(), rc.Emoji)
+	if statusFlush != nil {
+		out.BodyFlushes = append(out.BodyFlushes, statusFlush)
+	}
+	statusSuffix := ""
+	if statusEmoji != "" {
+		statusSuffix = headerBg.Render(" " + statusEmoji)
+	}
+	authorName := styles.Username(msg.UserID, rc.ColoredUsernames).Render(msg.UserName)
+	line := authorName + statusSuffix + headerGap + headerTimestamp
 
 	// If we have an avatar, reserve space on the left for it
 	contentWidth := width - 4
@@ -347,14 +359,24 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	headerBudget := max(1, min(contentWidth, width-contentColBase))
 	header := line + editedMark
 	if lipgloss.Width(header) > headerBudget {
-		author := line[:len(line)-len(headerGap)-len(headerTimestamp)]
+		// A status glyph reflows with the name. A status image is its
+		// own unit, like the timestamp: reflowing it with the name would
+		// drop the spaces a cold image reserves, and the header would
+		// change shape when the image lands.
+		author := authorName + statusSuffix
+		statusPart := ""
+		if statusImage {
+			author = authorName
+			statusPart = headerBg.Render(statusEmoji)
+		}
 		author = WordWrap(author, headerBudget)
 		var wrapped strings.Builder
 		wrapped.WriteString(author)
 		lastWidth := lipgloss.Width(author[strings.LastIndexByte(author, '\n')+1:])
 		// Timestamp spaces belong to one metadata unit, not the name's prose.
 		// Wrap within a unit only when it cannot fit on a header line by itself.
-		for _, part := range [2]struct{ text, gap string }{
+		for _, part := range [3]struct{ text, gap string }{
+			{statusPart, headerBg.Render(" ")},
 			{headerTimestamp, headerGap},
 			{strings.TrimPrefix(editedMark, " "), " "},
 		} {

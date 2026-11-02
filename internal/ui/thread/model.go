@@ -3,6 +3,7 @@ package thread
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"math"
 	"slices"
 	"strings"
@@ -1116,11 +1117,12 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// The parent is rendered every frame for its current state (selected
 	// or not, focused or not) and is entry 0 of the list: its rows, then
 	// the rule under it. The rule is not selectable text (Plain stops
-	// before it). We discard the parent's image flushes and reaction hits
-	// in v1, as before; its image hits are kept so a click on its image
-	// opens the preview.
+	// before it). Its image uploads go out with the replies' below. We
+	// discard its reaction hits in v1, as before; its image hits are kept
+	// so a click on its image opens the preview.
 	parentIsSelected := m.selected == parentSelected
 	parentRendered := m.renderMessage(m.parent, width, parentIsSelected)
+	parentFlushes := slices.Concat(parentRendered.BodyFlushes, parentRendered.BlockFlushes, parentRendered.ReactionFlushes, parentRendered.AttachmentFlushes)
 	parentContent, parentHeader, parentHeaderBudget := parentRendered.Content, parentRendered.Header, parentRendered.HeaderBudget
 	// Replies only get a day divider when their day differs from the
 	// parent's, so the parent header carries its own date; otherwise a
@@ -1203,6 +1205,9 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 			Render("No replies yet")
 		m.list.SetEntries([]entrylist.Entry{parent, {Ref: -1, Lines: strings.Split(empty, "\n")}}, width, false)
 		rows := m.list.Compose(m.list.Static(), "", "", false)
+		// Nothing here is cached, so the parent's uploads go out every
+		// frame; each one writes only the first time.
+		writeKittyFlushes(parentFlushes)
 		return fitHeight(chrome+"\n"+strings.Join(rows, "\n"), height)
 	}
 
@@ -1320,24 +1325,18 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	}
 	m.list.SetEntries(entries, width, keepPosition)
 
-	// Kitty uploads for every reply (the thread cache is small, so no
-	// visibility scoping), written straight to the terminal output: APC
-	// sequences embedded in line content get mangled by the renderer.
-	// Re-emitted only when the layout changes, as before.
+	// Kitty uploads for the parent and every reply (the thread cache is
+	// small, so no visibility scoping), written straight to the terminal
+	// output: APC sequences embedded in line content get mangled by the
+	// renderer. Re-emitted only when the layout changes, as before.
 	key := m.flushKey
 	key.selected, key.width, key.height, key.hasSelection = m.selected, width, replyAreaHeight, m.list.HasSelection()
 	if key != m.flushKey || !m.layoutValid {
-		var kittyFlushBuf bytes.Buffer
+		groups := [][]func(io.Writer) error{parentFlushes}
 		for _, p := range m.cache {
-			for _, fl := range p.Flushes {
-				if fl != nil {
-					_ = fl(&kittyFlushBuf)
-				}
-			}
+			groups = append(groups, p.Flushes)
 		}
-		if kittyFlushBuf.Len() > 0 {
-			_, _ = imgpkg.KittyOutput.Write(kittyFlushBuf.Bytes())
-		}
+		writeKittyFlushes(groups...)
 		m.flushKey = key
 	}
 
@@ -1473,4 +1472,20 @@ func (m *Model) huddleView(msg messages.MessageItem) messages.MessageItem {
 		msg.ReplyCount = len(m.replies)
 	}
 	return messages.HuddleView(msg, m.userNames)
+}
+
+// writeKittyFlushes runs the kitty uploads and writes what they produce
+// to the terminal in one write.
+func writeKittyFlushes(groups ...[]func(io.Writer) error) {
+	var buf bytes.Buffer
+	for _, flushes := range groups {
+		for _, fl := range flushes {
+			if fl != nil {
+				_ = fl(&buf)
+			}
+		}
+	}
+	if buf.Len() > 0 {
+		_, _ = imgpkg.KittyOutput.Write(buf.Bytes())
+	}
 }
