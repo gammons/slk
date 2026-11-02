@@ -197,3 +197,42 @@ func TestRenderMessageBody_MatchesFencedCodeBlock(t *testing.T) {
 		t.Errorf("renderMessageBody =\n%q\nwant\n%q", got, want)
 	}
 }
+
+// Export and copy read MessageTextSource. A cell holding ``` gets a
+// longer fence there, so the table stays one code block in the
+// CommonMark export, with the text after it outside the block and the
+// right-aligned header keeping its leading padding.
+func TestMessageTextSource_FenceOutlastsBackticksInCells(t *testing.T) {
+	tb := &slack.TableBlock{
+		Type:           slack.MBTTable,
+		Rows:           [][]*slack.RichTextBlock{{richSection("id"), richSection("snippet")}, {richSection("1"), richSection("x ``` y")}},
+		ColumnSettings: []slack.ColumnSetting{{Align: slack.ColumnAlignmentRight}},
+	}
+	msg := MessageItem{Blocks: blockkit.Parse(slack.Blocks{BlockSet: []slack.Block{richSection("Before *bold*"), tb, richSection("After *bold*")}})}
+	src := MessageTextSource(msg)
+	table := "id │ snippet\n───┼────────\n 1 │ x ``` y"
+	if want := "Before *bold*\n````\n" + table + "\n````\nAfter *bold*"; src != want {
+		t.Errorf("MessageTextSource =\n%q\nwant\n%q", src, want)
+	}
+	if got, want := SlackMrkdwnToCommonMark(src, nil, nil), "Before **bold**\n````\n"+table+"\n````\nAfter **bold**"; got != want {
+		t.Errorf("CommonMark export =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// Without backticks in cells the fence stays three long, and the export
+// keeps a right-aligned header's leading padding.
+func TestMessageTextSource_ExportKeepsHeaderPadding(t *testing.T) {
+	got := SlackMrkdwnToCommonMark(MessageTextSource(tableMessage()), nil, nil)
+	want := "Before the table:\n```\n eps │ Coverage\n─────┼─────────\n0.19 │    84.0%\n```\nAfter the table."
+	if got != want {
+		t.Errorf("CommonMark export =\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestCodeFence(t *testing.T) {
+	for in, want := range map[string]string{"": "```", "a`b``c": "```", "x ``` y": "````", "`````": "``````"} {
+		if got := codeFence(in); got != want {
+			t.Errorf("codeFence(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

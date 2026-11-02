@@ -151,6 +151,8 @@ func actionElementOf(e slack.BlockElement) ActionElement {
 	}
 }
 
+// parseTable keeps each cell's plain text (RichTextToPlain) and each
+// column's alignment; a nil cell becomes "".
 func parseTable(t *slack.TableBlock) TableBlock {
 	out := TableBlock{Rows: make([][]string, 0, len(t.Rows))}
 	for _, row := range t.Rows {

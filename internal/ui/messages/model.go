@@ -410,9 +410,10 @@ func (m *Model) Version() int64 { return m.version + m.list.Version() }
 // Every rich_text block contributes, in order, and so does every table
 // block, laid out as an aligned code block (blockkit.TableToText) in
 // its place among them: Slack splits a `markdown` block holding a
-// Markdown table into rich_text, table, rich_text. This is the text
-// export, copy and the action prompt read; RenderMessage draws the same
-// parts but keeps the tables out of the mrkdwn pass (renderMessageBody).
+// Markdown table into rich_text, table, rich_text. Export, copy and the
+// action prompt read this text. Each table gets a fence longer than any
+// backtick run in it (codeFence). RenderMessage draws the same parts but
+// keeps the tables out of the mrkdwn pass (renderMessageBody).
 //
 // When no RichTextBlock or TableBlock is present (the overwhelmingly
 // common case for user-typed messages) this is a zero-cost passthrough
@@ -431,10 +432,23 @@ func partsSource(msg MessageItem, parts []bodyPart) string {
 	for i, p := range parts {
 		src[i] = p.text
 		if p.table {
-			src[i] = "```\n" + p.text + "\n```"
+			fence := codeFence(p.text)
+			src[i] = fence + "\n" + p.text + "\n" + fence
 		}
 	}
 	return strings.Join(src, "\n")
+}
+
+// codeFence returns a code fence for code: three backticks, or one more
+// than the longest backtick run in code, so a cell holding ``` cannot
+// close it (the CommonMark rule; SlackMrkdwnToCommonMark keeps such a
+// fence whole).
+func codeFence(code string) string {
+	longest := 0
+	for run := range strings.FieldsFuncSeq(code, func(r rune) bool { return r != '`' }) {
+		longest = max(longest, len(run))
+	}
+	return strings.Repeat("`", max(3, longest+1))
 }
 
 // bodyPart is one rich_text block's mrkdwn, or one table laid out as
@@ -471,14 +485,13 @@ func bodyParts(msg MessageItem, withTables bool) []bodyPart {
 	return parts
 }
 
-// renderMessageBody renders msg's visible body: what MessageTextSource returns,
-// except that each table is drawn as a code block directly instead of
-// going through RenderSlackMarkdownWith inside a fence, so inline
-// formatting and emoji resolution never touch its cells (a `*` or a
-// :shortcode: there would change a cell's width and break the column
-// alignment, and a cell holding ``` would end the fence). Tables are
-// left out when Block Kit draws them among the other blocks
-// (blockkit.TablesInBody).
+// renderMessageBody renders msg's visible body: what MessageTextSource
+// returns, except that each table is drawn as a code block directly
+// instead of going through RenderSlackMarkdownWith inside a fence, so
+// inline formatting and emoji resolution never touch its cells (a `*`
+// or a :shortcode: there would change a cell's width and break the
+// column alignment). Tables are left out when Block Kit draws them
+// among the other blocks (blockkit.TablesInBody).
 func renderMessageBody(msg MessageItem, opts RenderSlackMarkdownOpts) string {
 	parts := bodyParts(msg, blockkit.TablesInBody(msg.Blocks))
 	hasTable := false

@@ -25,6 +25,7 @@ var (
 	strikethroughRe = regexp.MustCompile(`~([^~\n]+)~`)
 	inlineCodeRe    = regexp.MustCompile("`([^`\n]+)`")
 	codeBlockRe     = regexp.MustCompile("(?s)```(.+?)```")
+	longFenceRe     = regexp.MustCompile("`{4,}")
 
 	// Slack link patterns: <url|label> or <url>.
 	// linkWithLabelRe matches both http(s) URLs and mailto: addresses
@@ -944,10 +945,13 @@ func SlackMrkdwnToCommonMark(text string, userNames map[string]string, channelNa
 // a workspace-scoped Slack usergroup map for resolving bare subteam IDs.
 func SlackMrkdwnToCommonMarkWithUserGroups(text string, userNames map[string]string, channelNames map[string]string, userGroups map[string]string) string {
 	// Protect code blocks: extract, convert, and replace with placeholders.
+	// Fences longer than three backticks go first, kept whole with their
+	// own length, so a ``` inside one (MessageTextSource fences a table
+	// cell holding ``` this way) neither closes it nor opens a block.
 	var codeBlocks []string
+	text = protectLongFences(text, &codeBlocks)
 	text = codeBlockRe.ReplaceAllStringFunc(text, func(match string) string {
-		inner := codeBlockRe.FindStringSubmatch(match)[1]
-		inner = strings.TrimSpace(inner)
+		inner := trimCodeBlock(codeBlockRe.FindStringSubmatch(match)[1])
 		placeholder := fmt.Sprintf("\x00CB%d\x00", len(codeBlocks))
 		codeBlocks = append(codeBlocks, "```\n"+inner+"\n```")
 		return placeholder
@@ -990,6 +994,60 @@ func SlackMrkdwnToCommonMarkWithUserGroups(text string, userNames map[string]str
 	}
 
 	return output
+}
+
+// trimCodeBlock drops the blank lines around a code block's content and
+// any spaces after the opening fence, but keeps the indentation of its
+// first line when that line starts after a newline: a table's
+// right-aligned header row begins with spaces.
+func trimCodeBlock(inner string) string {
+	inner = strings.TrimRight(inner, " \t\r\n")
+	dropped := false
+	for {
+		line, rest, ok := strings.Cut(inner, "\n")
+		if !ok || strings.TrimSpace(line) != "" {
+			break
+		}
+		inner, dropped = rest, true
+	}
+	if !dropped {
+		inner = strings.TrimLeft(inner, " \t")
+	}
+	return inner
+}
+
+// protectLongFences replaces each code block fenced by four or more
+// backticks, up to the next backtick run at least as long (the CommonMark
+// rule), with a \x00CBn\x00 placeholder whose block it appends to
+// blocks. An unclosed fence is left as text.
+func protectLongFences(text string, blocks *[]string) string {
+	var b strings.Builder
+	for {
+		open := longFenceRe.FindStringIndex(text)
+		if open == nil {
+			break
+		}
+		n := open[1] - open[0]
+		rest := text[open[1]:]
+		closeAt, closeEnd := -1, -1
+		for _, m := range longFenceRe.FindAllStringIndex(rest, -1) {
+			if m[1]-m[0] >= n {
+				closeAt, closeEnd = m[0], m[1]
+				break
+			}
+		}
+		if closeAt < 0 {
+			break
+		}
+		fence := strings.Repeat("`", n)
+		inner := trimCodeBlock(rest[:closeAt])
+		b.WriteString(text[:open[0]])
+		fmt.Fprintf(&b, "\x00CB%d\x00", len(*blocks))
+		*blocks = append(*blocks, fence+"\n"+inner+"\n"+fence)
+		text = rest[closeEnd:]
+	}
+	b.WriteString(text)
+	return b.String()
 }
 
 // slackMrkdwnToCommonMarkInline converts inline Slack formatting tokens

@@ -47,6 +47,7 @@ func RichTextToPlain(rt RichTextBlock) string {
 	return strings.Join(strings.Fields(b.String()), " ")
 }
 
+// inlineToPlain is inlineToMrkdwn without markup, for RichTextToPlain.
 func inlineToPlain(e slack.RichTextSectionElement) string {
 	switch v := e.(type) {
 	case *slack.RichTextSectionTextElement:
