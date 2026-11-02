@@ -50,19 +50,15 @@ func TestLinkToMarkdown_BareOnlyWhenWholeURLSurvives(t *testing.T) {
 			t.Fatal(err)
 		}
 		var targets []string
-		var walk func(els []slack.RichTextElement)
-		walk = func(els []slack.RichTextElement) {
-			for _, e := range els {
-				if s, ok := e.(*slack.RichTextSection); ok {
-					for _, se := range s.Elements {
-						if l, ok := se.(*slack.RichTextSectionLinkElement); ok {
-							targets = append(targets, l.URL)
-						}
+		for _, e := range back.Elements {
+			if s, ok := e.(*slack.RichTextSection); ok {
+				for _, se := range s.Elements {
+					if l, ok := se.(*slack.RichTextSectionLinkElement); ok {
+						targets = append(targets, l.URL)
 					}
 				}
 			}
 		}
-		walk(back.Elements)
 		if len(targets) != 1 || targets[0] != tc.url {
 			t.Errorf("round trip of %q gave targets %q", tc.url, targets)
 		}
