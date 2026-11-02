@@ -2,6 +2,7 @@ package main
 
 import (
 	"sync"
+	"sync/atomic"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/gammons/slk/internal/cache"
@@ -23,7 +24,21 @@ import (
 // in every workspace at once, so a reactivation has to clear it everywhere.
 // Positive entries only. An entry matters only while the cache has no row
 // for the user: once a row exists the cache decides.
+//
+// Package-level rather than on a workspace context for the same reason:
+// every workspace's handler reads and writes the one set. Tests empty it
+// with isolateRememberedPeers.
 var rememberedPeers sync.Map // user ID -> struct{}
+
+// deactivatedSeq orders what the UI hears about deactivated users. Every
+// UserDeactivatedMsg takes the next value, after the cache write it reports,
+// and a workspace snapshot carries the value read before it reads the cache.
+// A snapshot can then have an old number and fresh data, but never a fresh
+// number and old data, so the UI drops a user from a snapshot whose number
+// is lower than the last live update it applied for them. Without it, a
+// snapshot read just before another workspace's reactivation lands after it
+// and hides the user again until restart. Process-wide, like the set.
+var deactivatedSeq atomic.Uint64
 
 // knownDeleted reports whether userID is known deactivated, from the cache
 // or from rememberedPeers. Read it before a profile writer overwrites the
@@ -55,7 +70,7 @@ func announceUserDeleted(send func(tea.Msg), userID string, was, now bool) {
 	if send == nil || (!now && !was) {
 		return
 	}
-	send(ui.UserDeactivatedMsg{UserID: userID, Deactivated: now})
+	send(ui.UserDeactivatedMsg{UserID: userID, Deactivated: now, Seq: deactivatedSeq.Add(1)})
 }
 
 // announceRevalidated reports what bootstrap revalidation changed in the
@@ -127,13 +142,17 @@ func recordDeactivatedPeer(ch slack.Channel, db *cache.DB) bool {
 
 // deactivatedUsers is the set sent with WorkspaceReadyMsg and
 // WorkspaceSwitchedMsg: every user the cache has as deactivated plus the
-// remembered ones the cache has no row for. The caller owns the map.
+// remembered ones the cache has no row for, and the deactivatedSeq value
+// read before either, which the message carries as DeactivatedSeq. The
+// caller owns the map.
 //
 // A remembered user counts only while the cache has no row for them. Once a
 // row exists the cache is the answer: it was marked when the row was there,
 // and a later profile overwrites it, so a reactivation is not undone by the
 // remembered flag on the next workspace switch.
-func deactivatedUsers(db *cache.DB) map[string]bool {
+func deactivatedUsers(db *cache.DB) (map[string]bool, uint64) {
+	// First: a change written after this read has a higher number.
+	seq := deactivatedSeq.Load()
 	set := map[string]bool{}
 	if db != nil {
 		if cached, err := db.DeactivatedUsers(); err == nil {
@@ -150,5 +169,5 @@ func deactivatedUsers(db *cache.DB) map[string]bool {
 		set[id] = true
 		return true
 	})
-	return set
+	return set, seq
 }

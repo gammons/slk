@@ -35,7 +35,7 @@ func (h *rtmEventHandler) addConversation(ch slack.Channel) (sidebar.ChannelItem
 	// about to receive. The set is global, so this goes out whether or not
 	// the workspace is the active one.
 	if recordDeactivatedPeer(ch, h.db) && h.program != nil {
-		h.program.Send(ui.UserDeactivatedMsg{UserID: ch.User, Deactivated: true})
+		announceUserDeleted(h.program.Send, ch.User, true, true)
 	}
 	if h.db != nil {
 		upsertChannelInDB(h.db, ch, item.Type, h.workspaceID)

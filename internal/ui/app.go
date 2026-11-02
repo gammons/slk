@@ -445,6 +445,10 @@ type App struct {
 	// replaced whole on every change and never written, so the sidebar and
 	// finder may keep the map they are handed (see deactivated.go).
 	deactivatedUsers map[string]bool
+	// deactivatedSeq is, per user, the Seq of the last UserDeactivatedMsg
+	// applied, so an older workspace snapshot cannot undo it. Only the App
+	// reads or writes it.
+	deactivatedSeq map[string]uint64
 	// hideDeactivatedUsers is general.hide_deactivated_users. With it off
 	// the set is kept but no surface is filtered by it.
 	hideDeactivatedUsers bool

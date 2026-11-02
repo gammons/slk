@@ -22,16 +22,19 @@ func (a *App) hiddenUsers() map[string]bool {
 	return a.deactivatedUsers
 }
 
-// SetDeactivatedUsers merges users into the App's global set. It only
-// adds: a snapshot taken at connect time must not undo a deactivation
-// another source already reported. A reactivation arrives as a
-// UserDeactivatedMsg instead. Call it before SetChannels, the finder items
-// and SetUserNames when applying a workspace, so those build filtered.
-func (a *App) SetDeactivatedUsers(users map[string]bool) {
+// SetDeactivatedUsers merges a workspace snapshot into the App's global
+// set. It only adds: a snapshot taken at connect time must not undo a
+// deactivation another source already reported. A reactivation arrives as a
+// UserDeactivatedMsg instead. seq is the snapshot's DeactivatedSeq: a user
+// whose last live update is newer was read before that update and is
+// skipped, so an old snapshot cannot hide a reactivated user again. Call it
+// before SetChannels, the finder items and SetUserNames when applying a
+// workspace, so those build filtered.
+func (a *App) SetDeactivatedUsers(users map[string]bool, seq uint64) {
 	merged := make(map[string]bool, len(a.deactivatedUsers)+len(users))
 	maps.Copy(merged, a.deactivatedUsers)
 	for id, deactivated := range users {
-		if deactivated {
+		if deactivated && a.deactivatedSeq[id] <= seq {
 			merged[id] = true
 		}
 	}
@@ -43,8 +46,18 @@ func (a *App) SetDeactivatedUsers(users map[string]bool) {
 	a.publishDeactivatedUsers(merged)
 }
 
-// setUserDeactivated records one user's state, in either direction.
-func (a *App) setUserDeactivated(userID string, deactivated bool) {
+// setUserDeactivated records one user's live state, in either direction,
+// and the update's seq for SetDeactivatedUsers. An update older than one
+// already applied for the user is dropped: sends from different goroutines
+// can arrive out of order.
+func (a *App) setUserDeactivated(userID string, deactivated bool, seq uint64) {
+	if seq < a.deactivatedSeq[userID] {
+		return
+	}
+	if a.deactivatedSeq == nil {
+		a.deactivatedSeq = map[string]uint64{}
+	}
+	a.deactivatedSeq[userID] = seq
 	if a.deactivatedUsers[userID] == deactivated {
 		return
 	}

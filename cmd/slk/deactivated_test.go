@@ -128,7 +128,7 @@ func TestOpeningADeactivatedDMMarksTheUserAndTellsTheUI(t *testing.T) {
 	if !set["U1"] {
 		t.Fatalf("the cache does not know U1 is deactivated: %v", set)
 	}
-	if !deactivatedUsers(db)["U1"] {
+	if !deactivatedSet(db)["U1"] {
 		t.Fatal("the workspace does not report U1 deactivated")
 	}
 	if len(sender.sent) != 2 {
@@ -174,7 +174,7 @@ func TestADeactivatedPeerWithNoRowIsStillReported(t *testing.T) {
 	if recordDeactivatedPeer(deletedIM("D2", "U8", false), db) {
 		t.Fatal("an unflagged IM was recorded")
 	}
-	set := deactivatedUsers(db)
+	set := deactivatedSet(db)
 	if !set["U9"] || set["U8"] || len(set) != 1 {
 		t.Fatalf("DeactivatedUsers = %v, want only U9", set)
 	}
@@ -190,19 +190,19 @@ func TestAProfileOverridesARememberedDeactivatedPeer(t *testing.T) {
 	isolateRememberedPeers(t)
 	db := newTestDB(t)
 	recordDeactivatedPeer(deletedIM("D1", "U1", true), db)
-	if !deactivatedUsers(db)["U1"] {
+	if !deactivatedSet(db)["U1"] {
 		t.Fatal("a row-less flagged peer must be in the set")
 	}
 	if err := db.UpsertUser(cache.User{ID: "U1", WorkspaceID: "T1", Deleted: false}); err != nil {
 		t.Fatal(err)
 	}
-	if deactivatedUsers(db)["U1"] {
+	if deactivatedSet(db)["U1"] {
 		t.Fatal("the remembered flag overrode a profile that shows the user active")
 	}
 	if err := db.UpsertUser(cache.User{ID: "U1", WorkspaceID: "T1", Deleted: true}); err != nil {
 		t.Fatal(err)
 	}
-	if !deactivatedUsers(db)["U1"] {
+	if !deactivatedSet(db)["U1"] {
 		t.Fatal("a profile that shows the user deactivated must keep them in the set")
 	}
 }
@@ -214,15 +214,15 @@ func TestDeactivatedUsersUnionsTheCacheAndPeersAndIsCallerOwned(t *testing.T) {
 		t.Fatal(err)
 	}
 	recordDeactivatedPeer(deletedIM("D2", "U2", true), db)
-	set := deactivatedUsers(db)
+	set := deactivatedSet(db)
 	if !set["U1"] || !set["U2"] || len(set) != 2 {
 		t.Fatalf("set = %v", set)
 	}
 	delete(set, "U1")
-	if !deactivatedUsers(db)["U1"] {
+	if !deactivatedSet(db)["U1"] {
 		t.Fatal("the set was not caller-owned")
 	}
-	if got := deactivatedUsers(nil); got == nil {
+	if got := deactivatedSet(nil); got == nil {
 		t.Fatal("no database must still yield a usable set")
 	}
 }
@@ -409,7 +409,7 @@ func TestAProfileReactivatesARowlessRememberedPeer(t *testing.T) {
 			if len(msgs) != 1 || msgs[0].UserID != "U1" || msgs[0].Deactivated {
 				t.Fatalf("sent %+v, want one reactivation of U1", sender.sent)
 			}
-			if deactivatedUsers(db)["U1"] {
+			if deactivatedSet(db)["U1"] {
 				t.Fatal("the remembered peer stayed in the set")
 			}
 			if _, ok := rememberedPeers.Load("U1"); ok {
@@ -425,11 +425,11 @@ func TestADeactivatedProfileWithNoRowIsRemembered(t *testing.T) {
 	isolateRememberedPeers(t)
 	db := newTestDB(t)
 	recordUserDeleted(db, nil, "U7", true)
-	if !deactivatedUsers(db)["U7"] {
+	if !deactivatedSet(db)["U7"] {
 		t.Fatal("a row-less deactivated profile was not kept")
 	}
 	recordUserDeleted(db, nil, "U7", false)
-	if deactivatedUsers(db)["U7"] {
+	if deactivatedSet(db)["U7"] {
 		t.Fatal("a later active profile did not clear it")
 	}
 }
@@ -461,4 +461,40 @@ func TestAnnounceRevalidatedChanges(t *testing.T) {
 	if len(sender.sent) != 0 {
 		t.Fatalf("sent %+v with no before set", sender.sent)
 	}
+}
+
+func TestUpdatesAreNumberedAfterTheSnapshotTheyChange(t *testing.T) {
+	isolateRememberedPeers(t)
+	db := newTestDB(t)
+	if err := db.UpsertUser(cache.User{ID: "U1", WorkspaceID: "T1", Name: "gone", Deleted: true}); err != nil {
+		t.Fatal(err)
+	}
+	set, before := deactivatedUsers(db)
+	if !set["U1"] {
+		t.Fatalf("snapshot %v, want U1", set)
+	}
+
+	sender := &captureSender{}
+	recordUserDeleted(db, sender.Send, "U1", false)
+	h := &rtmEventHandler{workspaceID: "T1", wsCtx: &WorkspaceContext{UserNames: newUserNameStore(nil)}, db: db, program: sender}
+	h.OnConversationOpened(deletedIM("D2", "U2", true))
+	msgs := deactivatedMsgs(sender.sent)
+	if len(msgs) != 2 {
+		t.Fatalf("sent %+v, want U1's reactivation and U2's deactivation", sender.sent)
+	}
+	// Every update outranks the snapshot read before it, in send order,
+	// and a snapshot read after them all is numbered as the last one.
+	if msgs[0].Seq <= before || msgs[1].Seq <= msgs[0].Seq {
+		t.Errorf("seqs %d, %d after snapshot %d, want increasing", msgs[0].Seq, msgs[1].Seq, before)
+	}
+	set, after := deactivatedUsers(db)
+	if set["U1"] || !set["U2"] || after != msgs[1].Seq {
+		t.Errorf("later snapshot %v at %d, want U2 only at %d", set, after, msgs[1].Seq)
+	}
+}
+
+// deactivatedSet is deactivatedUsers without its sequence number.
+func deactivatedSet(db *cache.DB) map[string]bool {
+	set, _ := deactivatedUsers(db)
+	return set
 }

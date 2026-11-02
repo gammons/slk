@@ -75,7 +75,7 @@ func (s surfaces) has(id string) bool {
 
 func TestDeactivatedUsersAreHiddenEverywhere(t *testing.T) {
 	a := deactivatedApp()
-	a.SetDeactivatedUsers(map[string]bool{"U2": true, "U3": true})
+	a.SetDeactivatedUsers(map[string]bool{"U2": true, "U3": true}, 0)
 	got := offered(a)
 
 	for name, ids := range map[string][]string{"sidebar": got.sidebar, "finder": got.finder, "# picks": got.picks} {
@@ -110,7 +110,7 @@ func TestDeactivatedUsersAreHiddenEverywhere(t *testing.T) {
 
 func TestHideDeactivatedUsersOptionOffShowsEveryone(t *testing.T) {
 	a := deactivatedApp()
-	a.SetDeactivatedUsers(map[string]bool{"U2": true, "U3": true})
+	a.SetDeactivatedUsers(map[string]bool{"U2": true, "U3": true}, 0)
 	a.SetHideDeactivatedUsers(false)
 	got := offered(a)
 	for _, id := range []string{"D2", "A1", "U2", "U3"} {
@@ -130,16 +130,57 @@ func TestHideDeactivatedUsersOptionOffShowsEveryone(t *testing.T) {
 
 func TestSetDeactivatedUsersOnlyAdds(t *testing.T) {
 	a := deactivatedApp()
-	a.SetDeactivatedUsers(map[string]bool{"U2": true})
-	a.SetDeactivatedUsers(map[string]bool{"U3": true})
-	a.SetDeactivatedUsers(nil)
+	a.SetDeactivatedUsers(map[string]bool{"U2": true}, 0)
+	a.SetDeactivatedUsers(map[string]bool{"U3": true}, 0)
+	a.SetDeactivatedUsers(nil, 0)
 	if !a.deactivatedUsers["U2"] || !a.deactivatedUsers["U3"] {
 		t.Fatalf("a later snapshot undid a deactivation: %v", a.deactivatedUsers)
 	}
 	// A false entry is not a deactivation.
-	a.SetDeactivatedUsers(map[string]bool{"U1": false})
+	a.SetDeactivatedUsers(map[string]bool{"U1": false}, 0)
 	if a.deactivatedUsers["U1"] {
 		t.Fatal("a false entry marked the user deactivated")
+	}
+}
+
+// A workspace snapshot read before a live reactivation can arrive after
+// it. It must not hide the reactivated user again, and the other users it
+// carries still count.
+func TestAnOlderSnapshotDoesNotUndoAReactivation(t *testing.T) {
+	a := deactivatedApp()
+	a.SetDeactivatedUsers(map[string]bool{"U2": true}, 1)
+	a.Update(UserDeactivatedMsg{UserID: "U2", Deactivated: false, Seq: 5})
+	a.Update(WorkspaceReadyMsg{
+		TeamID:           "T1",
+		InitialActive:    true,
+		DeactivatedUsers: map[string]bool{"U2": true, "U3": true},
+		DeactivatedSeq:   4,
+	})
+	if a.deactivatedUsers["U2"] {
+		t.Error("a snapshot older than the reactivation hid U2 again")
+	}
+	if !a.deactivatedUsers["U3"] {
+		t.Error("the older snapshot's other deactivation was dropped")
+	}
+	// A switch snapshot read after the update is not older than it.
+	a.Update(WorkspaceSwitchedMsg{TeamID: "T1", DeactivatedUsers: map[string]bool{"U2": true}, DeactivatedSeq: 5})
+	if !a.deactivatedUsers["U2"] {
+		t.Error("a snapshot as new as the update was ignored")
+	}
+}
+
+// Sends from different goroutines can arrive out of order: an update older
+// than the one applied for the user is dropped.
+func TestAnOlderLiveUpdateIsDropped(t *testing.T) {
+	a := deactivatedApp()
+	a.Update(UserDeactivatedMsg{UserID: "U2", Deactivated: false, Seq: 5})
+	a.Update(UserDeactivatedMsg{UserID: "U2", Deactivated: true, Seq: 3})
+	if a.deactivatedUsers["U2"] {
+		t.Error("an older deactivation overrode a newer reactivation")
+	}
+	a.Update(UserDeactivatedMsg{UserID: "U2", Deactivated: true, Seq: 6})
+	if !a.deactivatedUsers["U2"] {
+		t.Error("a newer deactivation was dropped")
 	}
 }
 
@@ -147,15 +188,15 @@ func TestSetDeactivatedUsersOnlyAdds(t *testing.T) {
 // message carries the whole cache set, almost always already known.
 func TestSetDeactivatedUsersWithNothingNewDoesNotRepublish(t *testing.T) {
 	a := deactivatedApp()
-	a.SetDeactivatedUsers(map[string]bool{"U2": true})
+	a.SetDeactivatedUsers(map[string]bool{"U2": true}, 0)
 	before := reflect.ValueOf(a.deactivatedUsers).Pointer()
 	for _, users := range []map[string]bool{{"U2": true}, nil, {"U1": false}} {
-		a.SetDeactivatedUsers(users)
+		a.SetDeactivatedUsers(users, 0)
 		if reflect.ValueOf(a.deactivatedUsers).Pointer() != before {
 			t.Fatalf("SetDeactivatedUsers(%v) republished an unchanged set", users)
 		}
 	}
-	a.SetDeactivatedUsers(map[string]bool{"U3": true})
+	a.SetDeactivatedUsers(map[string]bool{"U3": true}, 0)
 	if reflect.ValueOf(a.deactivatedUsers).Pointer() == before || !a.deactivatedUsers["U3"] {
 		t.Fatal("a new deactivation was not published")
 	}
@@ -163,10 +204,10 @@ func TestSetDeactivatedUsersWithNothingNewDoesNotRepublish(t *testing.T) {
 
 func TestSetDeactivatedUsersNeverWritesAMapItPublished(t *testing.T) {
 	a := deactivatedApp()
-	a.SetDeactivatedUsers(map[string]bool{"U2": true})
+	a.SetDeactivatedUsers(map[string]bool{"U2": true}, 0)
 	held := a.deactivatedUsers // what the sidebar and finder keep
-	a.setUserDeactivated("U3", true)
-	a.setUserDeactivated("U2", false)
+	a.setUserDeactivated("U3", true, 0)
+	a.setUserDeactivated("U2", false, 0)
 	if !held["U2"] || held["U3"] {
 		t.Fatalf("a published map was written: %v", held)
 	}
@@ -196,7 +237,7 @@ func TestUserDeactivatedMsgHidesAndReactivationRestores(t *testing.T) {
 func TestDeactivatedActiveConversationStaysInSidebar(t *testing.T) {
 	a := deactivatedApp()
 	a.sidebar.SetActiveChannelID("D2")
-	a.SetDeactivatedUsers(map[string]bool{"U2": true})
+	a.SetDeactivatedUsers(map[string]bool{"U2": true}, 0)
 	if !slices.Contains(offered(a).sidebar, "D2") {
 		t.Fatal("the open conversation left the sidebar")
 	}
@@ -241,7 +282,7 @@ func TestWorkspaceMessagesCarryDeactivatedUsersIntoTheLists(t *testing.T) {
 // on it: the row only becomes visible once it is the active conversation.
 func TestOpeningAHiddenDMFromTheFinderSelectsItsRow(t *testing.T) {
 	a := deactivatedApp()
-	a.SetDeactivatedUsers(map[string]bool{"U2": true})
+	a.SetDeactivatedUsers(map[string]bool{"U2": true}, 0)
 	a.sidebar.SelectByID("C1")
 	cmd := a.openChannel(channelfinder.ChannelResult{ID: "D2", Name: "Gone", Type: "dm", Joined: true})
 	if cmd != nil {

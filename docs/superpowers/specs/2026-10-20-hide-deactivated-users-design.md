@@ -181,20 +181,32 @@ still subject to the staleness filter.
 
 - `(*cache.DB).DeactivatedUsers() map[string]bool`, caller-owned.
   `deactivatedUsers(db)` is that plus the remembered peers the cache has
-  no row for.
-- `WorkspaceReadyMsg` and `WorkspaceSwitchedMsg` carry `DeactivatedUsers`.
-  `App.SetDeactivatedUsers(map)` only adds to the App's set.
+  no row for, and the `deactivatedSeq` value read before both.
+- `WorkspaceReadyMsg` and `WorkspaceSwitchedMsg` carry `DeactivatedUsers`
+  and that `DeactivatedSeq`. `App.SetDeactivatedUsers(map, seq)` only adds
+  to the App's set.
 - Revalidation writes `users.deleted` with no sender of its own, and a
   non-initial `WorkspaceReadyMsg` does not apply its set. So
   `connectWorkspace` reads `DeactivatedUsers()` before and after
   `bootstrap.Run` and announces the difference (`announceRevalidated`),
   both ways. Without it, a user reactivated while slk was off stays hidden
   when another workspace's message hid them first.
-- Live change: `UserDeactivatedMsg{UserID, Deactivated}`, sent for every
-  deactivation a profile shows, and for a reactivation only of a user
-  known as deleted (`knownDeleted` before the write,
+- Live change: `UserDeactivatedMsg{UserID, Deactivated, Seq}`, sent for
+  every deactivation a profile shows, and for a reactivation only of a
+  user known as deleted (`knownDeleted` before the write,
   `announceUserDeleted` after). Once a cache row exists the cache decides,
   so a remembered flag does not undo a reactivation on the next switch.
+- Ordering. Workspaces connect in parallel, so a snapshot read before
+  another workspace's reactivation can reach the App after it, and adding
+  the user back would last until restart (the cache says active, so no
+  later profile reports a change). `deactivatedSeq` is one process-wide
+  counter: each `UserDeactivatedMsg` takes the next value after its cache
+  write, and a snapshot reads it before reading the cache. A snapshot can
+  have an old number with fresh data, never a fresh number with old data.
+  The App keeps the `Seq` of the last live update per user and skips a
+  user in a snapshot with a lower number; the rest of the snapshot still
+  applies. A live update older than the last one applied for the user is
+  dropped too.
 - The App replaces its set whole on every change and never writes a
   published map, because the sidebar and finder keep the map they are
   given. An unchanged set is not republished. `App.hiddenUsers()` is nil

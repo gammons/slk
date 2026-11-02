@@ -19,7 +19,7 @@ func selectDM(a *App, id string) {
 
 func TestDeactivatedDMDisablesComposer(t *testing.T) {
 	a := deactivatedApp()
-	a.SetDeactivatedUsers(map[string]bool{"U2": true})
+	a.SetDeactivatedUsers(map[string]bool{"U2": true}, 0)
 	selectDM(a, "D2")
 
 	if !a.composeDisabled {
@@ -53,7 +53,7 @@ func TestDeactivatedDMDisablesComposer(t *testing.T) {
 func TestDeactivatedDMComposerNotice(t *testing.T) {
 	a := newTestApp(t, withSize(140, 30))
 	a.SetChannels(deactivatedApp().sidebar.Items())
-	a.SetDeactivatedUsers(map[string]bool{"U2": true})
+	a.SetDeactivatedUsers(map[string]bool{"U2": true}, 0)
 	selectDM(a, "D2")
 	if got := stripANSI(a.View().Content); !strings.Contains(got, deactivatedNotice+".") {
 		t.Errorf("composer area does not show the deactivated notice:\n%s", got)
@@ -88,7 +88,7 @@ func TestLiveDeactivationOfTheOpenDM(t *testing.T) {
 
 func TestDeactivatedDMRefusesThreadReply(t *testing.T) {
 	a := deactivatedApp()
-	a.SetDeactivatedUsers(map[string]bool{"U2": true})
+	a.SetDeactivatedUsers(map[string]bool{"U2": true}, 0)
 	selectDM(a, "D1")
 	// The thread is in D2 while the channel pane shows D1.
 	a.threadPanel.SetThread(
@@ -131,7 +131,7 @@ func TestDeactivationBeforeTheConversationRow(t *testing.T) {
 func TestDeactivatedAppDMOutranksAWritableProbe(t *testing.T) {
 	// A1 is only in the sidebar, so its peer comes from there.
 	a := deactivatedApp()
-	a.SetDeactivatedUsers(map[string]bool{"U3": true})
+	a.SetDeactivatedUsers(map[string]bool{"U3": true}, 0)
 	a.Update(ChannelSelectedMsg{ID: "A1", Name: "A1", Type: "app"})
 	a.Update(ChannelMessagingCapabilityMsg{ChannelID: "A1", CanSend: true})
 	if !a.composeDisabled {

@@ -341,6 +341,10 @@ type (
 	UserDeactivatedMsg struct {
 		UserID      string
 		Deactivated bool
+		// Seq orders this update against workspace snapshots (their
+		// DeactivatedSeq): a snapshot with a lower number was read
+		// before this change and does not hide the user again.
+		Seq uint64
 	}
 	WorkspaceSwitchedMsg struct {
 		TeamID   string
@@ -370,9 +374,13 @@ type (
 		// into the App's set BEFORE SetChannels, the finder items and
 		// SetUserNames, so those are filtered on first build.
 		DeactivatedUsers map[string]bool
-		UserID           string
-		CustomEmoji      map[string]string
-		UserGroups       map[string]string
+		// DeactivatedSeq is the UserDeactivatedMsg.Seq the engine had
+		// reached when it read DeactivatedUsers. A user whose last live
+		// update has a higher Seq is skipped: the snapshot predates it.
+		DeactivatedSeq uint64
+		UserID         string
+		CustomEmoji    map[string]string
+		UserGroups     map[string]string
 		// SectionsProvider supplies Slack-native sidebar sections for this
 		// workspace. Nil means "use config-glob behavior" (the App's
 		// sidebar reverts to its existing name-keyed buckets).
@@ -454,9 +462,13 @@ type (
 		// into the App's set BEFORE SetChannels, the finder items and
 		// SetUserNames, so those are filtered on first build.
 		DeactivatedUsers map[string]bool
-		UserID           string
-		CustomEmoji      map[string]string
-		UserGroups       map[string]string
+		// DeactivatedSeq is the UserDeactivatedMsg.Seq the engine had
+		// reached when it read DeactivatedUsers. A user whose last live
+		// update has a higher Seq is skipped: the snapshot predates it.
+		DeactivatedSeq uint64
+		UserID         string
+		CustomEmoji    map[string]string
+		UserGroups     map[string]string
 		// SectionsProvider supplies Slack-native sidebar sections for this
 		// workspace. Nil means "use config-glob behavior" (the App's
 		// sidebar reverts to its existing name-keyed buckets).

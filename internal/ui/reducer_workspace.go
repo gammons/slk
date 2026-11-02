@@ -172,7 +172,7 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	case UserDeactivatedMsg:
 		// Global, so no TeamID check: the account is deactivated in every
 		// workspace and each one's view is refiltered.
-		a.setUserDeactivated(m.UserID, m.Deactivated)
+		a.setUserDeactivated(m.UserID, m.Deactivated, m.Seq)
 		return a.dropInsertIfComposeDisabled(), true
 
 	case ReadStateChangedMsg:
@@ -240,7 +240,7 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 		}
 		a.sidebar.SetSectionsProvider(m.SectionsProvider)
 		// Before the lists below, so they are filtered on first build.
-		a.SetDeactivatedUsers(m.DeactivatedUsers)
+		a.SetDeactivatedUsers(m.DeactivatedUsers, m.DeactivatedSeq)
 		a.SetChannels(m.Channels)
 		a.channelFinder.SetItems(m.FinderItems)
 		// SetExternalUsers re-pushes user-names; calling
@@ -404,7 +404,7 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	// workspace's own presence_change events repopulate it.
 	a.sidebar.ResetPresence()
 	// Before the lists below, so they are filtered on first build.
-	a.SetDeactivatedUsers(m.DeactivatedUsers)
+	a.SetDeactivatedUsers(m.DeactivatedUsers, m.DeactivatedSeq)
 	a.SetChannels(m.Channels)
 	a.channelFinder.SetItems(m.FinderItems)
 	// SetExternalUsers re-pushes user-names; calling SetUserNames
