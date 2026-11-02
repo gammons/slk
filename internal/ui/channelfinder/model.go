@@ -10,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/bubbles/chrome"
 	"github.com/gammons/slk/internal/core"
+	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/text"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/overlay"
@@ -50,6 +51,22 @@ type Model struct {
 	// channel ID (see SetStatus). Pruned to the current item set on
 	// every SetItems.
 	statuses map[string]peerstatus.Status
+
+	// emojiCtx draws a DM peer's status emoji as an image when image
+	// mode is on (SetEmojiContext, SetEmojiCustoms).
+	emojiCtx messages.EmojiContext
+}
+
+// SetEmojiContext configures drawing DM status emoji as images. The
+// finder caches no rows, so the next View uses it.
+func (m *Model) SetEmojiContext(ctx messages.EmojiContext) {
+	m.emojiCtx = ctx
+}
+
+// SetEmojiCustoms replaces only the workspace custom emoji map, so a
+// custom status emoji that arrives after startup shows its artwork.
+func (m *Model) SetEmojiCustoms(customs map[string]string) {
+	m.emojiCtx.Customs = customs
 }
 
 var _ interface {
@@ -584,6 +601,10 @@ func (m Model) renderBox(termWidth int) string {
 		// ANSI reset (\x1b[0m) would drop the outer foreground / faint
 		// attributes for everything after it, defeating the dim treatment.
 		var prefix, name string
+		// image is the status emoji placement, imageStyle the name's
+		// style it is drawn in (for the row background under it).
+		var image string
+		var imageStyle lipgloss.Style
 		if item.Joined {
 			prefix = channelPrefix(item, st)
 			nameStyle := lipgloss.NewStyle().Background(bg).Foreground(styles.TextPrimary)
@@ -593,11 +614,22 @@ func (m Model) renderBox(termWidth int) string {
 			// Charge the status glyph to the name's own truncation
 			// budget (like the sidebar's buildCache) so a long name
 			// truncates before the glyph is lost.
+			// In image mode the emoji is drawn as an image, charged its
+			// cell footprint and appended after every truncation below,
+			// so truncation never cuts it. Its upload fires here: the
+			// finder renders every frame and caches nothing.
 			label := item.Name
 			glyph := st.Glyph(time.Now())
 			glyphCells := 0
 			if glyph != "" {
 				glyphCells = 1 + st.GlyphWidth(time.Now())
+				if placed, flush, ok := m.emojiCtx.PlaceShortcode(st.GlyphShortcode(time.Now())); ok {
+					image = placed
+					glyphCells = 1 + m.emojiCtx.ImageCells()
+					if flush != nil {
+						_ = flush(imgpkg.KittyOutput)
+					}
+				}
 			}
 			nameBudget := contentWidth - lipgloss.Width(prefix) - 1 - glyphCells
 			if nameBudget < 1 {
@@ -606,10 +638,11 @@ func (m Model) renderBox(termWidth int) string {
 			if lipgloss.Width(label) > nameBudget {
 				label = truncate.StringWithTail(label, uint(nameBudget), "…")
 			}
-			if glyph != "" {
+			if glyph != "" && image == "" {
 				label += " " + glyph
 			}
 			name = nameStyle.Render(label)
+			imageStyle = nameStyle
 		} else {
 			// Non-joined: dim grey for everything, including the prefix.
 			dim := lipgloss.NewStyle().Background(bg).Foreground(nonJoinedColor)
@@ -619,9 +652,17 @@ func (m Model) renderBox(termWidth int) string {
 
 		line := prefix + " " + name
 		// Backstop for the non-joined branch; the joined branch above
-		// already budgets to fit.
-		if lipgloss.Width(line) > contentWidth {
-			line = truncate.StringWithTail(line, uint(contentWidth), "…")
+		// already budgets to fit. An image is appended after it, in
+		// the room left for it.
+		lineWidth := contentWidth
+		if image != "" {
+			lineWidth = max(contentWidth-1-m.emojiCtx.ImageCells(), 0)
+		}
+		if lipgloss.Width(line) > lineWidth {
+			line = truncate.StringWithTail(line, uint(lineWidth), "…")
+		}
+		if image != "" {
+			line += imageStyle.Render(" " + image)
 		}
 		// Right-pad with spaces to fill the row.
 		if pad := contentWidth - lipgloss.Width(line); pad > 0 {
