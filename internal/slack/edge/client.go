@@ -23,16 +23,38 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 )
 
 const defaultBaseURL = "https://edgeapi.slack.com"
 
 // Client calls edgeapi.slack.com for one workspace.
 type Client struct {
+	// mu guards token, which SetToken replaces while requests run.
+	mu      sync.RWMutex
 	token   string
 	teamID  string
 	http    *http.Client
 	baseURL string
+}
+
+// SetToken replaces the xoxc token the client sends, after the
+// workspace's login was refreshed while slk runs (cmd/slk's
+// applyLogin). The d cookie needs no call here: it is in the jar of the
+// http.Client this client shares with slack.Client, and
+// slack.Client.SetLogin changes it. Safe to call while requests run; a
+// request already sent keeps the old token.
+func (c *Client) SetToken(token string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.token = token
+}
+
+// currentToken returns the token that a request starting now carries.
+func (c *Client) currentToken() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.token
 }
 
 // New returns a Client. httpClient must be one built with
@@ -74,7 +96,7 @@ func (c *Client) call(ctx context.Context, teamID, endpoint string, payload map[
 	// any caller payload carrying a "token" key silently replace it.
 	// No edgeapi payload uses that key today, so this is defensive —
 	// but the collision is impossible by construction this way.
-	body["token"] = c.token
+	body["token"] = c.currentToken()
 
 	encoded, err := json.Marshal(body)
 	if err != nil {

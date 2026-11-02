@@ -1,0 +1,17 @@
+{
+  "error": {
+    "code": "not_found",
+    "message": "workspace \"nope\" not found; see 'slk --list-workspaces'",
+    "slack_error": "",
+    "candidates": [
+      {
+        "id": "T0ACME01",
+        "name": "Acme Inc"
+      },
+      {
+        "id": "T0SIDE02",
+        "name": "Side Project"
+      }
+    ]
+  }
+}

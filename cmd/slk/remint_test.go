@@ -115,3 +115,45 @@ func TestRemintTokensLeavesBrowserSessionsAlone(t *testing.T) {
 		t.Errorf("minted for %v, want only the desktop workspace", mintedFor)
 	}
 }
+
+// A refused browser sign-in must not touch the desktop app's credentials
+// at all: remint never replaces one, and the cookie and token reads go
+// through the OS keychain, which can show an authorization dialog to a
+// script. remintTokens alone reads both before it skips the token.
+func TestRemintTokenWithSkipsBrowserSessionsBeforeAnyDesktopRead(t *testing.T) {
+	browser := slackclient.Token{
+		AccessToken: "xoxc-browser", Cookie: "c-browser", Domain: "acme",
+		TeamID: "T1", TeamName: "Acme", Source: slackclient.TokenSourceBrowser,
+	}
+	got := remintTokenWith(context.Background(), browser,
+		func() (string, error) { t.Error("read the desktop cookie"); return "c-desktop", nil },
+		func() (map[string]string, error) { t.Error("read the desktop tokens"); return nil, nil },
+		func(context.Context, string, string) (string, error) {
+			t.Error("minted a token")
+			return "xoxc-minted", nil
+		},
+		func(slackclient.Token) error { t.Error("saved a token"); return nil },
+	)
+	if got != browser {
+		t.Errorf("browser session changed: %+v", got)
+	}
+}
+
+// The early return is for browser sign-ins only: a desktop sign-in still
+// gets the desktop app's token, saved.
+func TestRemintTokenWithRefreshesDesktopSessions(t *testing.T) {
+	in := slackclient.Token{AccessToken: "old1", Cookie: "c-old", Domain: "acme", TeamID: "T1", TeamName: "Acme"}
+	saved := map[string]slackclient.Token{}
+	got := remintTokenWith(context.Background(), in,
+		func() (string, error) { return "c-new", nil },
+		func() (map[string]string, error) { return map[string]string{"T1": "xoxc-desktop"}, nil },
+		func(context.Context, string, string) (string, error) {
+			t.Error("minted despite a desktop token")
+			return "", nil
+		},
+		func(tok slackclient.Token) error { saved[tok.TeamID] = tok; return nil },
+	)
+	if got.AccessToken != "xoxc-desktop" || got.Cookie != "c-new" || saved["T1"] != got {
+		t.Errorf("got %+v, saved %+v; want the desktop token, saved", got, saved["T1"])
+	}
+}

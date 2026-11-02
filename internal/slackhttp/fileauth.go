@@ -2,6 +2,7 @@ package slackhttp
 
 import (
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -18,10 +19,16 @@ type TeamAuth struct {
 // to a files.slack.com request. Shared by the image fetcher and the
 // file downloader. Safe for concurrent use.
 type AuthResolver struct {
-	mu           sync.RWMutex
-	authsByTeam  map[string]TeamAuth
-	fallbacks    []TeamAuth // ordered; tried in sequence for foreign teams
-	learnedAuths map[string]TeamAuth
+	mu          sync.RWMutex
+	authsByTeam map[string]TeamAuth
+	fallbacks   []TeamAuth // ordered; tried in sequence for foreign teams
+	// learnedFrom maps a foreign team (Slack Connect) to the registered
+	// workspace whose auth worked for it. It holds the workspace's team
+	// ID, not a copy of its auth, so AuthsForURL always hands out the
+	// workspace's current auth: a login refreshed by SetTeamAuth reaches
+	// a foreign team at once, even one that a download learns after the
+	// refresh with the auth it started with.
+	learnedFrom map[string]string
 }
 
 // NewAuthResolver builds a resolver from per-workspace credentials.
@@ -38,9 +45,9 @@ func NewAuthResolver(auths []TeamAuth) *AuthResolver {
 		fallbacks = append(fallbacks, a)
 	}
 	return &AuthResolver{
-		authsByTeam:  byTeam,
-		fallbacks:    fallbacks,
-		learnedAuths: map[string]TeamAuth{},
+		authsByTeam: byTeam,
+		fallbacks:   fallbacks,
+		learnedFrom: map[string]string{},
 	}
 }
 
@@ -58,16 +65,18 @@ func (r *AuthResolver) AuthsForURL(rawURL string) []TeamAuth {
 	if a, ok := r.authsByTeam[teamID]; ok {
 		return []TeamAuth{a}
 	}
-	if a, ok := r.learnedAuths[teamID]; ok {
-		return []TeamAuth{a}
+	if from, ok := r.learnedFrom[teamID]; ok {
+		return []TeamAuth{r.authsByTeam[from]}
 	}
 	return r.fallbacks
 }
 
 // Learn records that auth worked for teamID, so future AuthsForURL
-// calls for that foreign team skip the fallback search. No-op when
-// teamID is empty, auth is unusable, or teamID is already registered
-// or learned.
+// calls for that foreign team skip the fallback search. It records the
+// registered workspace auth belongs to (auth.TeamID), not auth itself,
+// so the foreign team gets that workspace's current auth (learnedFrom).
+// No-op when teamID is empty, auth is unusable or is not a registered
+// workspace's, or teamID is already registered or learned.
 func (r *AuthResolver) Learn(teamID string, auth TeamAuth) {
 	if teamID == "" || auth.TeamID == "" {
 		return
@@ -77,10 +86,41 @@ func (r *AuthResolver) Learn(teamID string, auth TeamAuth) {
 	if _, ok := r.authsByTeam[teamID]; ok {
 		return
 	}
-	if _, ok := r.learnedAuths[teamID]; ok {
+	if _, ok := r.learnedFrom[teamID]; ok {
 		return
 	}
-	r.learnedAuths[teamID] = auth
+	if _, ok := r.authsByTeam[auth.TeamID]; !ok {
+		return
+	}
+	r.learnedFrom[teamID] = auth.TeamID
+}
+
+// SetTeamAuth replaces a registered workspace's credentials after its
+// login was refreshed while slk runs (cmd/slk's applyLogin): for the
+// workspace's own files, in the fallback list, and, through
+// learnedFrom, for the foreign teams that learned it. It ignores a team
+// that is not registered, and an auth with no TeamID or Token, the
+// entries NewAuthResolver skips.
+func (r *AuthResolver) SetTeamAuth(auth TeamAuth) {
+	if auth.TeamID == "" || auth.Token == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.authsByTeam[auth.TeamID]; !ok {
+		return
+	}
+	r.authsByTeam[auth.TeamID] = auth
+	// AuthsForURL hands out r.fallbacks itself, and its callers read it
+	// after the lock is released, so the list is replaced, never
+	// changed in place.
+	fallbacks := slices.Clone(r.fallbacks)
+	for i := range fallbacks {
+		if fallbacks[i].TeamID == auth.TeamID {
+			fallbacks[i] = auth
+		}
+	}
+	r.fallbacks = fallbacks
 }
 
 // TeamIDFromFilesURL extracts the team ID embedded in a Slack file URL.

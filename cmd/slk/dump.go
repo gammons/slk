@@ -7,55 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
-	"github.com/gammons/slk/internal/config"
 	slackclient "github.com/gammons/slk/internal/slack"
 )
-
-// listWorkspaces prints the configured workspaces with their TeamID and
-// Name, one per line. Useful for users who want to hand-edit per-workspace
-// settings in config.toml.
-func listWorkspaces() error {
-	tokenDir := filepath.Join(xdgData(), "tokens")
-	store := slackclient.NewTokenStore(tokenDir)
-	tokens, err := store.List()
-	if err != nil {
-		return fmt.Errorf("list tokens: %w", err)
-	}
-	if len(tokens) == 0 {
-		fmt.Println("No workspaces configured. Run 'slk --add-workspace' first.")
-		return nil
-	}
-	configPath := filepath.Join(xdgConfig(), "config.toml")
-	cfg, _ := config.Load(configPath) // best-effort
-
-	// Print in the same order the rail would use, so the digit-key
-	// mapping is obvious from the output.
-	orderedTokens := config.OrderTokens(tokens, cfg)
-
-	idW, slugW, nameW := len("TEAM ID"), len("SLUG"), len("NAME")
-	for _, ot := range orderedTokens {
-		if len(ot.Token.TeamID) > idW {
-			idW = len(ot.Token.TeamID)
-		}
-		if len(ot.Slug) > slugW {
-			slugW = len(ot.Slug)
-		}
-		if len(ot.Token.TeamName) > nameW {
-			nameW = len(ot.Token.TeamName)
-		}
-	}
-	fmt.Printf("%-*s  %-*s  %s\n", idW, "TEAM ID", slugW, "SLUG", "NAME")
-	fmt.Printf("%s  %s  %s\n",
-		strings.Repeat("-", idW),
-		strings.Repeat("-", slugW),
-		strings.Repeat("-", nameW))
-	for _, ot := range orderedTokens {
-		fmt.Printf("%-*s  %-*s  %s\n", idW, ot.Token.TeamID, slugW, ot.Slug, ot.Token.TeamName)
-	}
-	return nil
-}
 
 // dumpPrefs is a diagnostic command that calls users.prefs.get for
 // every configured workspace and prints the raw JSON response. Use

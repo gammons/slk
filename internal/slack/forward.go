@@ -20,7 +20,7 @@ func (c *Client) ForwardMessage(ctx context.Context, sourceChannelID, ts, destin
 		return "", "", fmt.Errorf("forwarding message: empty permalink")
 	}
 
-	_, postedTS, err = c.api.PostMessageContext(ctx, destinationChannelID,
+	_, postedTS, err = c.webAPI().PostMessageContext(ctx, destinationChannelID,
 		slack.MsgOptionText(permalink, false),
 		// slack-go has no enable-media-unfurl option. Set both flags
 		// explicitly, then restore the SDK's configured post endpoint

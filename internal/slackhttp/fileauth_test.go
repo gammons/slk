@@ -1,6 +1,9 @@
 package slackhttp
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestTeamIDFromFilesURL(t *testing.T) {
 	cases := []struct{ name, url, want string }{
@@ -57,6 +60,83 @@ func TestAuthResolverSkipsEmptyAndNonSlack(t *testing.T) {
 	}
 	if got := r.AuthsForURL("https://example.com/x.png"); got != nil {
 		t.Fatalf("non-Slack URL should get nil auths, got %#v", got)
+	}
+}
+
+// TestAuthResolverSetTeamAuthReplacesTheTeamEverywhere covers a login
+// refreshed while slk runs: the team's own files, a foreign team that
+// learned the team's auth, and the fallback list all get the new auth.
+// A fallback list handed out before keeps what it had, because its
+// reader holds it outside the lock.
+func TestAuthResolverSetTeamAuthReplacesTheTeamEverywhere(t *testing.T) {
+	t1 := TeamAuth{TeamID: "T1", Token: "xoxc-1", DCookie: "d1"}
+	t2 := TeamAuth{TeamID: "T2", Token: "xoxc-2", DCookie: "d2"}
+	r := NewAuthResolver([]TeamAuth{t1, t2})
+	r.Learn("T9", t1)
+	before := r.AuthsForURL("https://files.slack.com/files-pri/T8-F/x")
+
+	fresh := TeamAuth{TeamID: "T1", Token: "xoxc-1b", DCookie: "d1b"}
+	r.SetTeamAuth(fresh)
+
+	for _, tc := range []struct {
+		name, url string
+		want      []TeamAuth
+	}{
+		{"own files", "https://files.slack.com/files-pri/T1-F/x", []TeamAuth{fresh}},
+		{"learned foreign team", "https://files.slack.com/files-pri/T9-F/x", []TeamAuth{fresh}},
+		{"fallback list", "https://files.slack.com/files-pri/T8-F/x", []TeamAuth{fresh, t2}},
+		{"other workspace", "https://files.slack.com/files-pri/T2-F/x", []TeamAuth{t2}},
+	} {
+		if got := r.AuthsForURL(tc.url); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: AuthsForURL = %#v, want %#v", tc.name, got, tc.want)
+		}
+	}
+	if !slices.Equal(before, []TeamAuth{t1, t2}) {
+		t.Errorf("a fallback list handed out before SetTeamAuth changed under its reader: %#v", before)
+	}
+}
+
+func TestAuthResolverSetTeamAuthIgnoresUnknownTeamsAndEmptyTokens(t *testing.T) {
+	t1 := TeamAuth{TeamID: "T1", Token: "xoxc-1", DCookie: "d1"}
+	r := NewAuthResolver([]TeamAuth{t1})
+	r.SetTeamAuth(TeamAuth{TeamID: "T7", Token: "xoxc-7"})
+	r.SetTeamAuth(TeamAuth{TeamID: "T1", Token: ""})
+	if got := r.AuthsForURL("https://files.slack.com/files-pri/T7-F/x"); !slices.Equal(got, []TeamAuth{t1}) {
+		t.Errorf("an unknown team was registered: AuthsForURL = %#v", got)
+	}
+	if got := r.AuthsForURL("https://files.slack.com/files-pri/T1-F/x"); !slices.Equal(got, []TeamAuth{t1}) {
+		t.Errorf("an empty token replaced T1's auth: AuthsForURL = %#v", got)
+	}
+}
+
+// TestAuthResolverLearnAfterSetTeamAuthKeepsTheFreshAuth: a download
+// that started with a workspace's old auth can finish, and learn that
+// auth, after the workspace's login was refreshed. The foreign team
+// must still get the fresh auth.
+func TestAuthResolverLearnAfterSetTeamAuthKeepsTheFreshAuth(t *testing.T) {
+	t1 := TeamAuth{TeamID: "T1", Token: "xoxc-1", DCookie: "d1"}
+	r := NewAuthResolver([]TeamAuth{t1})
+	foreign := "https://files.slack.com/files-pri/T9-F/x"
+	old := r.AuthsForURL(foreign)[0] // a download starts with T1's auth
+
+	fresh := TeamAuth{TeamID: "T1", Token: "xoxc-1b", DCookie: "d1b"}
+	r.SetTeamAuth(fresh) // T1's login is refreshed meanwhile
+	r.Learn("T9", old)   // the download ends and learns the auth it used
+
+	if got := r.AuthsForURL(foreign); !slices.Equal(got, []TeamAuth{fresh}) {
+		t.Errorf("AuthsForURL after a late Learn = %#v, want [%#v]", got, fresh)
+	}
+}
+
+// TestAuthResolverLearnIgnoresAnUnregisteredWorkspace: a learned team
+// resolves through a registered workspace, so an auth of any other team
+// teaches nothing.
+func TestAuthResolverLearnIgnoresAnUnregisteredWorkspace(t *testing.T) {
+	t1 := TeamAuth{TeamID: "T1", Token: "xoxc-1", DCookie: "d1"}
+	r := NewAuthResolver([]TeamAuth{t1})
+	r.Learn("T9", TeamAuth{TeamID: "TX", Token: "xoxc-x", DCookie: "dx"})
+	if got := r.AuthsForURL("https://files.slack.com/files-pri/T9-F/x"); !slices.Equal(got, []TeamAuth{t1}) {
+		t.Errorf("AuthsForURL = %#v, want the fallback list [%#v]", got, t1)
 	}
 }
 

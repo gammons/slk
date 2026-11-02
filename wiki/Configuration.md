@@ -6,7 +6,9 @@ Config lives at `~/.config/slk/config.toml`.
 
 ```toml
 [general]
-default_workspace = "work"      # the slug, not the team ID
+default_workspace = "work"      # the slug, not the team ID. Also the
+                                # workspace CLI commands use when none is
+                                # chosen (see the CLI page).
 use_slack_sections = true       # use real Slack sidebar sections (default).
                                 # set false to use [sections.*] globs instead.
 download_dir = "~/Downloads"    # where file attachments (`d` keybinding) are
