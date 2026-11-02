@@ -580,8 +580,8 @@ func (m *Model) SetShowUnreadInCollapsed(on bool) {
 	m.dirty()
 }
 
-// hiddenByCollapse reports whether item's row is left out because its
-// section is collapsed. rebuildNav and buildCache must agree on it.
+// hiddenByCollapse reports whether item's row is left out of nav because
+// its section is collapsed. buildCache draws what nav holds.
 func (m *Model) hiddenByCollapse(section string, item ChannelItem, readState map[string]core.ReadState) bool {
 	if !m.IsCollapsed(section) {
 		return false
@@ -1679,9 +1679,26 @@ func (m *Model) rebuildNavWithCursor(key cursorKey, hadKey bool) {
 			}
 		}
 	}
-	// Previous target gone (e.g. the channel was filtered out, or its
-	// section now collapsed). Fall back to the Threads row.
+	// Previous target gone. A channel still in m.filtered was hidden by
+	// its collapsed section: fall back to that section's header. Anything
+	// else (e.g. filtered out) falls back to the Threads row.
 	m.cursor = 0
+	if key.kind != navChannel {
+		return
+	}
+	for _, idx := range m.filtered {
+		if m.items[idx].ID != key.id {
+			continue
+		}
+		section := m.sectionFor(m.items[idx])
+		for i, n := range m.nav {
+			if n.kind == navHeader && n.header == section {
+				m.cursor = i
+				return
+			}
+		}
+		return
+	}
 }
 
 // aggregateForSection returns the two figures a collapsed section
@@ -1984,7 +2001,8 @@ func (m *Model) buildCache(width int) {
 	for fi, idx := range m.filtered {
 		item := m.items[idx]
 		sectionName := m.sectionFor(item)
-		if m.hiddenByCollapse(sectionName, item, readState) {
+		// Draw only what nav holds, so a row is never shown unselectable.
+		if _, inNav := channelNavIdx[fi]; m.IsCollapsed(sectionName) && !inNav {
 			continue
 		}
 		// Defense-in-depth: if sectionFor returns a section name that

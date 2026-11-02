@@ -253,3 +253,43 @@ func TestShowUnreadInCollapsed(t *testing.T) {
 		t.Errorf("read, inactive 'deploys' should hide again:\n%s", view)
 	}
 }
+
+// A redraw that sees read state nav has not caught up with yet must not
+// draw a row the user cannot select.
+func TestShowUnreadInCollapsed_DrawsOnlyNavRows(t *testing.T) {
+	state := map[string]cache.ReadState{}
+	m := New([]ChannelItem{{ID: "C1", Name: "general", Type: "channel"}})
+	m.SetReadStateReader(func() map[string]cache.ReadState { return state })
+	m.SetShowUnreadInCollapsed(true)
+	_ = m.View(20, 30)
+
+	state["C1"] = cache.ReadState{HasUnread: true}
+	m.InvalidateCache() // a redraw for another reason, before Invalidate
+	if view := m.View(20, 30); strings.Contains(view, "general") {
+		t.Errorf("row not in nav should not be drawn yet:\n%s", view)
+	}
+	m.Invalidate()
+	if view := m.View(20, 30); !strings.Contains(view, "general") {
+		t.Errorf("row should show once nav is rebuilt:\n%s", view)
+	}
+}
+
+func TestShowUnreadInCollapsed_CursorFallsBackToHeader(t *testing.T) {
+	state := map[string]cache.ReadState{"C2": {HasUnread: true}}
+	m := New([]ChannelItem{
+		{ID: "C1", Name: "general", Type: "channel"},
+		{ID: "C2", Name: "deploys", Type: "channel"},
+	})
+	m.SetReadStateReader(func() map[string]cache.ReadState { return state })
+	m.SetShowUnreadInCollapsed(true)
+	m.SelectByID("C2")
+	if m.SelectedID() != "C2" {
+		t.Fatalf("precondition: C2 selected, got %q", m.SelectedID())
+	}
+
+	state["C2"] = cache.ReadState{} // read elsewhere
+	m.Invalidate()
+	if name, ok := m.IsSectionHeaderSelected(); !ok || name != "Channels" {
+		t.Errorf("cursor should fall back to the Channels header, got name=%q ok=%v", name, ok)
+	}
+}
