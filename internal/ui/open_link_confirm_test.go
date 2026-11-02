@@ -126,6 +126,33 @@ func TestOpenLink_ShortTerminalKeepsBothEndsOfALongTarget(t *testing.T) {
 	}
 }
 
+// Word wrap moves a whole word to the next line, so segments about half the
+// box width, separated by a hyphen or a space, waste almost a line each. The
+// file name at the end of the target must still be on screen.
+func TestOpenLink_WordWrapWasteKeepsTheFileName(t *testing.T) {
+	seg := strings.Repeat("a", 18)
+	for name, sep := range map[string]string{"hyphen": "-", "space": " "} {
+		for _, n := range []int{10, 14, 40} {
+			url := "file://host.example/" + strings.Repeat(seg+sep, n) + "evil.exe"
+			for _, h := range []int{12, 24} {
+				a, opened := confirmLinkApp(t, "see <"+url+"|Q3 report>")
+				a.width, a.height = 80, h
+				sendAndDrain(a, a.handleNormalMode(tea.KeyPressMsg{Code: 'o', Text: "o"})())
+				if a.mode != ModeConfirm {
+					t.Fatalf("%s n=%d h=%d: mode = %v, want a confirm prompt", name, n, h, a.mode)
+				}
+				if !dialogShows(a, "file://host") || !dialogShows(a, "evil.exe") {
+					t.Fatalf("%s n=%d h=%d: prompt must show both ends:\n%s", name, n, h, a.confirmPrompt.View())
+				}
+				sendAndDrain(a, tea.KeyPressMsg{Code: 'y', Text: "y"})
+				if len(*opened) != 1 || (*opened)[0] != url {
+					t.Errorf("%s n=%d h=%d: opener got %v, want the exact URL", name, n, h, *opened)
+				}
+			}
+		}
+	}
+}
+
 func TestOpenLink_PromptEscapesControlAndBidiRunes(t *testing.T) {
 	url := "file:///tmp/\x1b[8mhidden\u202eexe.txt"
 	a, opened := confirmLinkApp(t, "see <"+url+"|label>")
