@@ -9,6 +9,21 @@ import (
 	"github.com/gammons/slk/internal/slack/mrkdwn"
 )
 
+func TestLinkToMarkdown_BareForEveryLinkScheme(t *testing.T) {
+	for _, tc := range []struct{ url, label, want string }{
+		{"https://x.example/a", "", "https://x.example/a"},
+		{"ftp://x.example/a", "ftp://x.example/a", "ftp://x.example/a"},
+		{"file:///tmp/a", "", "file:///tmp/a"},
+		{"mailto:a@x.example", "a@x.example", "a@x.example"},
+		{"javascript:x", "", "[javascript:x](javascript:x)"},
+		{"file:///tmp/a", "label", "[label](file:///tmp/a)"},
+	} {
+		if got := LinkToMarkdown(tc.url, tc.label); got != tc.want {
+			t.Errorf("LinkToMarkdown(%q, %q) = %q, want %q", tc.url, tc.label, got, tc.want)
+		}
+	}
+}
+
 // received sends composer text through the send path (mrkdwn.Convert)
 // and back through JSON, the way the block arrives from Slack.
 func received(t *testing.T, composed string) RichTextBlock {
