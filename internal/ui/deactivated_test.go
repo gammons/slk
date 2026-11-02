@@ -15,17 +15,19 @@ import (
 // deactivatedApp is an App in workspace T1 holding a person (U1), a
 // deactivated person (U2) with a DM, a deactivated app (U3), a group DM
 // and a channel.
-func deactivatedApp() *App {
-	a := NewApp()
-	a.activeTeamID = "T1"
+func deactivatedApp(t *testing.T, opts ...testOpt) *App {
+	t.Helper()
+	a := newTestApp(t, append([]testOpt{
+		withActiveTeam("T1"),
+		withChannels(
+			sidebar.ChannelItem{ID: "C1", Name: "general", Type: "channel"},
+			sidebar.ChannelItem{ID: "D1", Name: "Alice", Type: "dm", DMUserID: "U1"},
+			sidebar.ChannelItem{ID: "D2", Name: "Gone", Type: "dm", DMUserID: "U2"},
+			sidebar.ChannelItem{ID: "A1", Name: "Gonebot", Type: "app", DMUserID: "U3"},
+			sidebar.ChannelItem{ID: "G1", Name: "gone, alice", Type: "group_dm"},
+		),
+	}, opts...)...)
 	a.currentUserID = "USELF"
-	a.SetChannels([]sidebar.ChannelItem{
-		{ID: "C1", Name: "general", Type: "channel"},
-		{ID: "D1", Name: "Alice", Type: "dm", DMUserID: "U1"},
-		{ID: "D2", Name: "Gone", Type: "dm", DMUserID: "U2"},
-		{ID: "A1", Name: "Gonebot", Type: "app", DMUserID: "U3"},
-		{ID: "G1", Name: "gone, alice", Type: "group_dm"},
-	})
 	a.channelFinder.SetItems([]core.ChannelFinderItem{
 		{ID: "C1", Name: "general", Type: "channel", Joined: true},
 		{ID: "D1", Name: "Alice", Type: "dm", DMUserID: "U1", Joined: true},
@@ -76,7 +78,7 @@ func (s surfaces) has(id string) bool {
 }
 
 func TestDeactivatedUsersAreHiddenEverywhere(t *testing.T) {
-	a := deactivatedApp()
+	a := deactivatedApp(t)
 	a.SetDeactivatedUsers(map[string]bool{"U2": true, "U3": true}, 0)
 	got := offered(a)
 
@@ -111,7 +113,7 @@ func TestDeactivatedUsersAreHiddenEverywhere(t *testing.T) {
 }
 
 func TestHideDeactivatedUsersOptionOffShowsEveryone(t *testing.T) {
-	a := deactivatedApp()
+	a := deactivatedApp(t)
 	a.SetDeactivatedUsers(map[string]bool{"U2": true, "U3": true}, 0)
 	a.SetHideDeactivatedUsers(false)
 	got := offered(a)
@@ -131,7 +133,7 @@ func TestHideDeactivatedUsersOptionOffShowsEveryone(t *testing.T) {
 }
 
 func TestSetDeactivatedUsersOnlyAdds(t *testing.T) {
-	a := deactivatedApp()
+	a := deactivatedApp(t)
 	a.SetDeactivatedUsers(map[string]bool{"U2": true}, 0)
 	a.SetDeactivatedUsers(map[string]bool{"U3": true}, 0)
 	a.SetDeactivatedUsers(nil, 0)
@@ -149,7 +151,7 @@ func TestSetDeactivatedUsersOnlyAdds(t *testing.T) {
 // it. It must not hide the reactivated user again, and the other users it
 // carries still count.
 func TestAnOlderSnapshotDoesNotUndoAReactivation(t *testing.T) {
-	a := deactivatedApp()
+	a := deactivatedApp(t)
 	a.SetDeactivatedUsers(map[string]bool{"U2": true}, 1)
 	a.Update(UserDeactivatedMsg{UserID: "U2", Deactivated: false, Seq: 5})
 	a.Update(WorkspaceReadyMsg{
@@ -174,7 +176,7 @@ func TestAnOlderSnapshotDoesNotUndoAReactivation(t *testing.T) {
 // Sends from different goroutines can arrive out of order: an update older
 // than the one applied for the user is dropped.
 func TestAnOlderLiveUpdateIsDropped(t *testing.T) {
-	a := deactivatedApp()
+	a := deactivatedApp(t)
 	a.Update(UserDeactivatedMsg{UserID: "U2", Deactivated: false, Seq: 5})
 	a.Update(UserDeactivatedMsg{UserID: "U2", Deactivated: true, Seq: 3})
 	if a.deactivatedUsers["U2"] {
@@ -189,7 +191,7 @@ func TestAnOlderLiveUpdateIsDropped(t *testing.T) {
 // A snapshot that adds nothing must not refilter every list: each workspace
 // message carries the whole cache set, almost always already known.
 func TestSetDeactivatedUsersWithNothingNewDoesNotRepublish(t *testing.T) {
-	a := deactivatedApp()
+	a := deactivatedApp(t)
 	a.SetDeactivatedUsers(map[string]bool{"U2": true}, 0)
 	before := reflect.ValueOf(a.deactivatedUsers).Pointer()
 	for _, users := range []map[string]bool{{"U2": true}, nil, {"U1": false}} {
@@ -205,7 +207,7 @@ func TestSetDeactivatedUsersWithNothingNewDoesNotRepublish(t *testing.T) {
 }
 
 func TestSetDeactivatedUsersNeverWritesAMapItPublished(t *testing.T) {
-	a := deactivatedApp()
+	a := deactivatedApp(t)
 	a.SetDeactivatedUsers(map[string]bool{"U2": true}, 0)
 	held := a.deactivatedUsers // what the sidebar and finder keep
 	a.setUserDeactivated("U3", true, 0)
@@ -218,7 +220,7 @@ func TestSetDeactivatedUsersNeverWritesAMapItPublished(t *testing.T) {
 func TestUserDeactivatedMsgHidesAndReactivationRestores(t *testing.T) {
 	// The message names no workspace: the account is deactivated in all of
 	// them, so it applies to whichever one is on screen.
-	a := deactivatedApp()
+	a := deactivatedApp(t)
 	a.Update(UserDeactivatedMsg{UserID: "U2", Deactivated: true})
 	got := offered(a)
 	if got.has("D2") || got.has("U2") {
@@ -237,7 +239,7 @@ func TestUserDeactivatedMsgHidesAndReactivationRestores(t *testing.T) {
 }
 
 func TestDeactivatedActiveConversationStaysInSidebar(t *testing.T) {
-	a := deactivatedApp()
+	a := deactivatedApp(t)
 	a.sidebar.SetActiveChannelID("D2")
 	a.SetDeactivatedUsers(map[string]bool{"U2": true}, 0)
 	if !slices.Contains(offered(a).sidebar, "D2") {
@@ -285,7 +287,7 @@ func TestWorkspaceMessagesCarryDeactivatedUsersIntoTheLists(t *testing.T) {
 // During an upload the switch is refused, so the sidebar must not move:
 // the hidden DM stays hidden and the cursor stays where it was.
 func TestOpeningFromTheFinderDuringAnUploadLeavesTheSidebar(t *testing.T) {
-	a := deactivatedApp()
+	a := deactivatedApp(t)
 	a.SetDeactivatedUsers(map[string]bool{"U2": true}, 0)
 	a.Update(ChannelSelectedMsg{ID: "C1", Name: "general", Type: "channel"})
 	a.sidebar.SelectByID("C1")
@@ -312,7 +314,7 @@ func TestOpeningFromTheFinderDuringAnUploadLeavesTheSidebar(t *testing.T) {
 }
 
 func TestOpeningAHiddenDMFromTheFinderSelectsItsRow(t *testing.T) {
-	a := deactivatedApp()
+	a := deactivatedApp(t)
 	a.SetDeactivatedUsers(map[string]bool{"U2": true}, 0)
 	a.sidebar.SelectByID("C1")
 	cmd := a.openChannel(channelfinder.ChannelResult{ID: "D2", Name: "Gone", Type: "dm", Joined: true})
@@ -325,7 +327,7 @@ func TestOpeningAHiddenDMFromTheFinderSelectsItsRow(t *testing.T) {
 }
 
 func TestForwardPickerSkipsADeactivatedDMWithTheOptionOff(t *testing.T) {
-	a := deactivatedApp()
+	a := deactivatedApp(t)
 	a.SetDeactivatedUsers(map[string]bool{"U2": true}, 0)
 	a.SetHideDeactivatedUsers(false)
 	a.channelFinder.OpenForForwarding()
