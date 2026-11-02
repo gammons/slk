@@ -2294,8 +2294,18 @@ func (m *Model) renderSectionHeaderLabel(name string, width int, cursor string, 
 
 	label := " " + glyph + " " + emojiPrefix + displayName + aggregates
 	selected := cursor + glyph + " " + emojiPrefix + displayName + aggregates
+	// The selected variant re-applies bold after the cursor glyph's
+	// reset, as the channel rows do: SectionHeader is bold, and bgAnsi
+	// alone would draw the rest of the header regular. Not on the normal
+	// variant: there it would also land inside the mention badge's
+	// padding resets and make its digits bold. Slack style headers are
+	// never bold.
+	selectedAttrs := bgAnsi
+	if !m.slackStyle {
+		selectedAttrs += "\x1b[1m"
+	}
 	return messages.ReapplyBgAfterResets(label, bgAnsi),
-		messages.ReapplyBgAfterResets(selected, bgAnsi), mentions
+		messages.ReapplyBgAfterResets(selected, selectedAttrs), mentions
 }
 
 // headerSpaceReplacer turns the characters lipgloss would not keep on

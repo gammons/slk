@@ -7,6 +7,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/ui/messages"
 )
 
 // A section header must fit the one line its row is counted as. These
@@ -236,5 +237,28 @@ func TestHeaderFit_EveryVariantOneLine(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// SectionHeader is bold. After the cursor glyph's reset the selected
+// header re-applies bold along with its colours, as channel rows do.
+func TestHeaderFit_SelectedHeaderStaysBold(t *testing.T) {
+	m := sectionModel("")
+	selectHeader(t, &m)
+	row := rowFor(t, m.View(10, 30), "Docs")
+	want := messages.SidebarBgANSI() + messages.SidebarFgANSI() + "\x1b[1m▾ Docs"
+	if !strings.Contains(row, want) {
+		t.Errorf("selected header is not bold after the cursor:\n%q", row)
+	}
+}
+
+// Slack style draws headers in regular weight, selected or not.
+func TestHeaderFit_SlackStyleSelectedHeaderNotBold(t *testing.T) {
+	m := sectionModel("")
+	m.SetSlackStyle(true)
+	selectHeader(t, &m)
+	row := rowFor(t, m.View(10, 30), "Docs")
+	if strings.Contains(row, "\x1b[1m") || strings.Contains(row, "\x1b[1;") {
+		t.Errorf("Slack-style selected header is bold:\n%q", row)
 	}
 }
