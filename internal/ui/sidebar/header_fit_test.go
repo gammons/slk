@@ -206,11 +206,13 @@ func TestHeaderFit_TabsAndLineBreaksStayOneLine(t *testing.T) {
 // Every header variant stays one line at every width the sidebar
 // allows: normal and selected, expanded and collapsed with each badge
 // size, Slack style or not, for each kind of emoji code (none, a glyph,
-// a VS16 code, a ZWJ sequence, a long unknown custom one).
+// a skin-toned code, a VS16 code, a ZWJ sequence, a long unknown custom
+// one).
 func TestHeaderFit_EveryVariantOneLine(t *testing.T) {
 	codes := []string{
 		"",
 		"orange_book",
+		"male-construction-worker::skin-tone-2",
 		"hammer_and_wrench",
 		"heart_on_fire",
 		"a_very_long_custom_party_parrot_emoji",
@@ -260,5 +262,32 @@ func TestHeaderFit_SlackStyleSelectedHeaderNotBold(t *testing.T) {
 	row := rowFor(t, m.View(10, 30), "Docs")
 	if strings.Contains(row, "\x1b[1m") || strings.Contains(row, "\x1b[1;") {
 		t.Errorf("Slack-style selected header is bold:\n%q", row)
+	}
+}
+
+// A section emoji is drawn as a glyph only when it is one codepoint, as
+// message bodies and reaction pills draw it: terminals draw VS16, ZWJ
+// and skin-toned sequences at widths lipgloss does not predict
+// (gammons/slk#301). Anything else is its ":code:" text, skin tone
+// stripped first.
+func TestHeaderEmoji_OnlySingleCodepointGlyphs(t *testing.T) {
+	cases := []struct{ code, want string }{
+		{"orange_book", "▾ 📙  Docs"},
+		{"hammer_and_wrench", "▾ :hammer_and_wrench: Docs"},
+		{"mountain", "▾ :mountain: Docs"},
+		{"heart_on_fire", "▾ :heart_on_fire: Docs"},
+		{"wave::skin-tone-3", "▾ 👋  Docs"},
+		{"male-construction-worker::skin-tone-2", "▾ :male-construction-worker: Docs"},
+		{"partyparrot::skin-tone-2", "▾ :partyparrot: Docs"},
+	}
+	for _, tc := range cases {
+		m := sectionModel(tc.code)
+		got := headerFor(t, m.View(10, 50), "Docs")
+		if got != tc.want {
+			t.Errorf("%s: header = %q, want %q", tc.code, got, tc.want)
+		}
+		if strings.ContainsRune(got, '\ufe0f') {
+			t.Errorf("%s: header keeps a variation selector: %q", tc.code, got)
+		}
 	}
 }

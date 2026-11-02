@@ -2223,16 +2223,16 @@ func (m *Model) renderSectionHeaderLabel(name string, width int, cursor string, 
 	emojiPrefix := ""
 	textFallback := false
 	if emojiCode != "" {
-		// emojiutil.Sprint resolves :shortcode: to the glyph and
-		// appends a space; on unknown shortcodes it returns the input
-		// unchanged (which keeps the colons, giving a graceful textual
-		// fallback).
-		token := ":" + emojiCode + ":"
-		rendered := emojiutil.Sprint(token)
-		if rendered != token {
-			emojiPrefix = rendered + " "
+		// The glyph only when it is one codepoint, as reaction pills
+		// and message bodies draw it: terminals draw VS16, ZWJ and
+		// skin-toned sequences at widths lipgloss does not predict,
+		// which shifts the row. Anything else (those, and unknown or
+		// custom emoji) is its ":code:" text, skin tone stripped.
+		code := emojiutil.StripSkinTone(emojiCode)
+		if glyph := emojiutil.CodeMap()[":"+code+":"]; emojiutil.ShouldRenderUnicode(glyph) {
+			emojiPrefix = glyph + "  "
 		} else {
-			emojiPrefix = token + " "
+			emojiPrefix = ":" + code + ": "
 			textFallback = true
 		}
 	}
@@ -2276,8 +2276,7 @@ func (m *Model) renderSectionHeaderLabel(name string, width int, cursor string, 
 
 	emojiCells := headerCells(emojiPrefix)
 	aggregateCells := headerCells(aggregates)
-	// The ":code:" text (an unknown emoji, or a custom one) tells the
-	// user less than the name, so it gives way before the name is cut.
+	// The ":code:" text tells the user less than the name, so it gives way before the name is cut.
 	// A glyph stays.
 	if textFallback && headerCells(displayName) > sectionHeaderNameBudget(width, emojiCells, aggregateCells) {
 		emojiPrefix = ""
