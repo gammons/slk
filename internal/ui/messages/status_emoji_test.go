@@ -8,11 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	bubblesansi "github.com/gammons/slk/internal/bubbles/ansi"
 	emojiutil "github.com/gammons/slk/internal/emoji"
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/peerstatus"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 // statusEmojiImages turns image mode on for one test and points the
@@ -212,6 +215,161 @@ func TestAuthorStatus_WrappedHeaderKeepsTheImageCells(t *testing.T) {
 	}
 	if lineOf(cold, "10:00 AM") != lineOf(warm, "10:00 AM") {
 		t.Errorf("the timestamp moved when the image landed: the cold reservation was lost in the wrap\ncold:\n%s\nwarm:\n%s", cold, warm)
+	}
+}
+
+func dmHeaderPane(f *fakePlaceFetcher) *Model {
+	m := New(nil, "alice")
+	m.SetChannelType("dm")
+	if f != nil {
+		m.SetEmojiContext(EmojiContext{PlaceCtx: emojiutil.PlaceContext{Fetcher: f}, Cells: 2})
+	}
+	return m
+}
+
+var dmTopicNow = time.Unix(1700000000, 0)
+
+func TestDMTopic_EmojiAsImagesWithTheTopicColourRestored(t *testing.T) {
+	kitty := statusEmojiImages(t)
+	f := newFakePlaceFetcher()
+	huddle := serveStatusEmoji(t, f, "headphones", nil, "81", "<upload headphones>")
+	cal := serveStatusEmoji(t, f, "calendar", nil, "82", "<upload calendar>")
+
+	m := dmHeaderPane(f)
+	m.SetDMTopic(peerstatus.Status{Emoji: ":calendar:", Text: "Meeting", Huddle: peerstatus.HuddleActive}, dmTopicNow, "15:04")
+	out := m.View(10, 80)
+	restore := bubblesansi.ForegroundSGR(styles.Timestamp.GetForeground())
+	if !strings.Contains(out, huddle+restore+" In a huddle") {
+		t.Errorf("huddle not drawn as an image with the topic colour restored after it:\n%q", out)
+	}
+	if !strings.Contains(out, cal+restore+" Meeting") {
+		t.Errorf("status not drawn as an image with the topic colour restored after it:\n%q", out)
+	}
+	if strings.Contains(out, peerstatus.HuddleGlyph) || strings.Contains(out, "📆") {
+		t.Errorf("header still draws a glyph:\n%q", out)
+	}
+	for _, u := range []string{"<upload headphones>", "<upload calendar>"} {
+		if n := strings.Count(kitty.String(), u); n != 1 {
+			t.Errorf("%s fired %d times from View, want 1", u, n)
+		}
+	}
+	// Every chrome line is exactly the pane width (ui.borderedTopPane
+	// assembles the border by concatenation).
+	for i, l := range strings.Split(m.chromeCache, "\n") {
+		if w := lipgloss.Width(l); w != 80 {
+			t.Errorf("chrome line %d is %d cells, want 80", i, w)
+		}
+	}
+}
+
+// A cold image keeps its blank cells: nothing trims them, so the line
+// does not shift when the image arrives.
+func TestDMTopic_ColdReservationKept(t *testing.T) {
+	statusEmojiImages(t)
+	f := newFakePlaceFetcher() // nothing warm
+	m := dmHeaderPane(f)
+	m.SetDMTopic(peerstatus.Status{Emoji: ":hourglass_flowing_sand:"}, dmTopicNow, "15:04")
+	_ = m.View(10, 80)
+	topicLine := strings.Split(m.chromeCache, "\n")[1]
+	if got := ansi.Strip(topicLine); !strings.HasPrefix(got, "  ") || strings.TrimSpace(got) != "" {
+		t.Errorf("cold topic = %q, want a 2-cell blank reservation", got)
+	}
+}
+
+// A status text too long for the pane wraps the topic. The images stay
+// as wide through the wrap as they are drawn: the cold header is the
+// warm one with blanks where the images are, so nothing moves when they
+// land, and every chrome line keeps the pane width.
+func TestDMTopic_WrappedTopicKeepsTheImageCells(t *testing.T) {
+	statusEmojiImages(t)
+	st := peerstatus.Status{Emoji: ":calendar:", Text: "abcdefghijklmnopqrs", Huddle: peerstatus.HuddleActive}
+	render := func(f *fakePlaceFetcher) *Model {
+		m := dmHeaderPane(f)
+		m.SetDMTopic(st, dmTopicNow, "15:04")
+		_ = m.View(10, 20)
+		return m
+	}
+	f := newFakePlaceFetcher()
+	cold := render(f)
+	huddle := serveStatusEmoji(t, f, "headphones", nil, "83", "")
+	cal := serveStatusEmoji(t, f, "calendar", nil, "84", "")
+	warm := render(f)
+	if !strings.Contains(warm.chromeCache, huddle) || !strings.Contains(warm.chromeCache, cal) {
+		t.Fatalf("warm topic has no images:\n%q", warm.chromeCache)
+	}
+	blanked := strings.NewReplacer(huddle, "  ", cal, "  ").Replace(warm.chromeCache)
+	if c, w := ansi.Strip(cold.chromeCache), ansi.Strip(blanked); c != w {
+		t.Errorf("cold header is not the warm one with blank images:\ncold:\n%s\nwarm:\n%s", c, w)
+	}
+	for name, m := range map[string]*Model{"cold": cold, "warm": warm} {
+		for i, l := range strings.Split(m.chromeCache, "\n") {
+			if w := lipgloss.Width(l); w != 20 {
+				t.Errorf("%s: chrome line %d is %d cells, want 20: %q", name, i, w, l)
+			}
+		}
+	}
+}
+
+// The header is rebuilt when an emoji fetch lands, when custom emoji
+// arrive, and when the status changes even though its text does not
+// (two custom emoji draw the same fallback glyph).
+func TestDMTopic_HeaderRebuilds(t *testing.T) {
+	statusEmojiImages(t)
+	customs := map[string]string{
+		"logo-a": "https://emoji.slack-edge.com/T1/logo-a/a.png",
+		"logo-b": "https://emoji.slack-edge.com/T1/logo-b/b.png",
+	}
+	f := newFakePlaceFetcher()
+	a := serveStatusEmoji(t, f, "logo-a", customs, "83", "")
+	b := serveStatusEmoji(t, f, "logo-b", customs, "84", "")
+
+	m := dmHeaderPane(f)
+	m.SetDMTopic(peerstatus.Status{Emoji: ":logo-a:", Text: "Busy"}, dmTopicNow, "15:04")
+	if out := m.View(10, 80); !strings.Contains(out, peerstatus.FallbackGlyph+" Busy") {
+		t.Fatalf("before customs load the header should draw the fallback glyph:\n%q", out)
+	}
+	m.SetEmojiCustoms(customs)
+	if out := m.View(10, 80); !strings.Contains(out, a) {
+		t.Errorf("SetEmojiCustoms did not rebuild the header with the image:\n%q", out)
+	}
+
+	m.SetDMTopic(peerstatus.Status{Emoji: ":logo-b:", Text: "Busy"}, dmTopicNow, "15:04")
+	if out := m.View(10, 80); !strings.Contains(out, b) {
+		t.Errorf("a new status with the same text did not rebuild the header:\n%q", out)
+	}
+
+	// A fetch that lands (here: a different placement now warm for the
+	// same URL) reaches the header through HandleEmojiImageReady.
+	b2 := serveStatusEmoji(t, f, "logo-b", customs, "85", "")
+	_ = m.View(10, 80)
+	m.HandleEmojiImageReady("")
+	if out := m.View(10, 80); !strings.Contains(out, b2) {
+		t.Errorf("HandleEmojiImageReady did not rebuild the header:\n%q", out)
+	}
+}
+
+// With image mode off, or for a plain topic, the header is what
+// SetChannelTopic draws.
+func TestDMTopic_ImageModeOffIsThePlainTopic(t *testing.T) {
+	st := peerstatus.Status{Emoji: ":calendar:", Text: "Meeting", Huddle: peerstatus.HuddleActive, DND: true}
+	f := newFakePlaceFetcher()
+	serveStatusEmoji(t, f, "calendar", nil, "86", "")
+
+	plain := dmHeaderPane(nil)
+	plain.SetChannelTopic(st.Summary(dmTopicNow, "15:04"))
+	want := plain.View(10, 80)
+
+	m := dmHeaderPane(f)
+	m.SetDMTopic(st, dmTopicNow, "15:04")
+	if got := m.View(10, 80); got != want {
+		t.Errorf("image mode off changed the DM header:\n got %q\nwant %q", got, want)
+	}
+
+	// SetChannelTopic drops the kept status: a plain topic never draws images.
+	statusEmojiImages(t)
+	m.SetChannelTopic("Release day")
+	if got := m.View(10, 80); strings.Contains(got, "\U0010EEEE") {
+		t.Errorf("plain topic drew an image:\n%q", got)
 	}
 }
 

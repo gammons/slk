@@ -128,6 +128,14 @@ func (s Status) GlyphShortcode(now time.Time) string {
 	if s.InHuddle(now) {
 		return huddleShortcode
 	}
+	return s.StatusShortcode(now)
+}
+
+// StatusShortcode names the emoji StatusGlyph(now) stands for, without
+// colons: the status shortcode as Slack sent it, "speech_balloon" for a
+// status with text but no emoji, "" when there is no live status. Like
+// StatusGlyph, it ignores huddle state.
+func (s Status) StatusShortcode(now time.Time) string {
 	if !s.HasStatus(now) {
 		return ""
 	}
@@ -150,12 +158,36 @@ func (s Status) GlyphWidth(now time.Time) int {
 // text, then DND with its end time when known, formatted with layout.
 // It is "" when there is nothing to show.
 func (s Status) Summary(now time.Time, layout string) string {
+	return s.SummaryWith(now, layout, nil)
+}
+
+// SummaryWith is Summary with the huddle and status emoji drawn by
+// emoji, which is given the emoji's shortcode (no colons) and its glyph
+// and returns what to draw, e.g. an image placement. A nil emoji draws
+// the glyph, which is Summary. The DND glyph is always drawn as is.
+//
+// A part emoji draws is emoji's result, then " " and the status text
+// when there is text: it is never trimmed, so a blank reservation for
+// an image still loading keeps its cells.
+func (s Status) SummaryWith(now time.Time, layout string, emoji func(shortcode, glyph string) string) string {
 	var parts []string
 	if s.InHuddle(now) {
-		parts = append(parts, HuddleGlyph+" In a huddle")
+		g := HuddleGlyph
+		if emoji != nil {
+			g = emoji(huddleShortcode, g)
+		}
+		parts = append(parts, g+" In a huddle")
 	}
 	if s.HasStatus(now) {
-		parts = append(parts, strings.TrimSpace(s.StatusGlyph(now)+" "+s.Text))
+		if emoji == nil {
+			parts = append(parts, strings.TrimSpace(s.StatusGlyph(now)+" "+s.Text))
+		} else {
+			part := emoji(s.StatusShortcode(now), s.StatusGlyph(now))
+			if s.Text != "" {
+				part += " " + s.Text
+			}
+			parts = append(parts, part)
+		}
 	}
 	if s.InDND(now) {
 		dnd := DNDGlyph + " Do not disturb"
