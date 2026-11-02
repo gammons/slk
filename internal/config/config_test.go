@@ -1148,3 +1148,17 @@ func TestConfig_ThreadAvatars(t *testing.T) {
 		t.Error("expected thread_avatars = true to turn thread avatars on")
 	}
 }
+
+// hide_deactivated_users is a plain bool that defaults to on: Load decodes
+// over Default(), so an explicit false must still read back.
+func TestConfig_HideDeactivatedUsers(t *testing.T) {
+	if !loadConfigString(t, "").General.HideDeactivatedUsers {
+		t.Error("hide_deactivated_users must default to on")
+	}
+	if loadConfigString(t, "[general]\nhide_deactivated_users = false\n").General.HideDeactivatedUsers {
+		t.Error("explicit hide_deactivated_users = false must be honoured")
+	}
+	if !loadConfigString(t, "[general]\nhide_deactivated_users = true\n").General.HideDeactivatedUsers {
+		t.Error("explicit hide_deactivated_users = true must be honoured")
+	}
+}
