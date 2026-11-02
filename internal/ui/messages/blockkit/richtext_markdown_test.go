@@ -66,6 +66,8 @@ func TestRichTextToMarkdown_RoundTrip(t *testing.T) {
 		"**[bold link](https://example.com/b)** and _[italic link](https://example.com/i)_",
 		"**https://example.com/bare-bold**",
 		"hi <@U123> in <#C456> <!here>",
+		"read https://en.wikipedia.org/wiki/Mercury_(planet) today",
+		"https://en.wikipedia.org/wiki/Mercury_(planet)",
 		"before\n\n```\nfn main() {}\n```\n\nafter",
 		"a list\n- item\n\nand a paragraph after it",
 		"wave :wave::skin-tone-3: done",

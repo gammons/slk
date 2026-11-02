@@ -19,7 +19,7 @@ import (
 // default, so a match never swallows the tokenizer's private-use sentinels
 // (a mention, channel or emoji next to the URL) or adjacent CJK text.
 // www. matches stay with goldmark.
-var typedURLRegexp = regexp.MustCompile(`^(?:` + linkscheme.Alternation + `)[!-;=?-{}~]*[#-&(+\-/-9=@-\[\\^` + "`" + `a-{}]`)
+var typedURLRegexp = regexp.MustCompile(`^(?:` + linkscheme.Alternation + `)[!-;=?-{}~]*[#-&()+\-/-9=@-\[\\^` + "`" + `a-{}]`)
 
 // typedURLProtocols lists the "scheme:" names Linkify may start a match at,
 // taken from linkscheme.Prefixes. mailto: is left to Linkify's email matcher.
