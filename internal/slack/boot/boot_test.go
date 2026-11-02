@@ -10,15 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	// internal/slack is package slackclient. Importing it here is a
-	// test-only dependency and does NOT cycle: nothing outside this
-	// directory imports boot yet, and internal/slack's own imports are
-	// debuglog, slack/mrkdwn and slackhttp. Phase 2b reverses the
-	// direction (slackclient will import boot); at that point this
-	// import must move to an external boot_test package or the two-line
-	// parse must be inlined. boot.go itself deliberately imports
-	// nothing from this repo.
-	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slackhttp"
 )
 
@@ -59,11 +50,8 @@ func stubPost(rec *recordedCall, body string, err error) PostFunc {
 // properties, …) exactly as the capture does — decoding must ignore
 // them, because Slack adds fields to this response without notice.
 //
-// Two shapes here are honest guesses and are marked as such:
-// subteams.self and starred were BOTH empty arrays in both captures,
-// so their element shape is unverified. This package models them as
-// []json.RawMessage precisely so it claims nothing about them, and
-// the tests below only assert that whatever bytes arrive survive.
+// subteams.self was empty in both original captures, so its element shape
+// remains unverified. Starred IDs were verified in a non-empty Grid response.
 //
 // One value is deliberately un-lifelike: slack_route is a 9-character
 // string in the capture and is very plausibly the same team id as
@@ -615,6 +603,31 @@ func TestUserBoot_DecodesChannelIDLists(t *testing.T) {
 	}
 }
 
+func TestUserBoot_IgnoresUnknownStarredVariants(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		starred string
+		want    []string
+	}{
+		{
+			name:    "mixed entries",
+			starred: `["C1", null, 42, true, {"channel":"C2"}, ["D3"], "D1"]`,
+			want:    []string{"C1", "D1"},
+		},
+		{
+			name:    "unknown container",
+			starred: `{"channel":"C2"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, _ := mustBoot(t, `{"ok":true,"starred":`+tc.starred+`}`)
+			if !slices.Equal(res.Starred, tc.want) {
+				t.Errorf("Starred = %q; want %q", res.Starred, tc.want)
+			}
+		})
+	}
+}
+
 // TestUserBoot_EmptyArraysDecodeToEmptyNotMissing covers the two
 // arrays the capture showed empty: starred (this workspace has no
 // stars) and non_threadable_channels.
@@ -809,9 +822,8 @@ func TestUserBoot_DecodesTeam(t *testing.T) {
 
 // ---------------------------------------------------------------- mute
 
-// TestUserBoot_ExposesRawMutePrefs pins the two pref strings this
-// package pulls out by name, and proves the important one is usable by
-// its existing consumer.
+// TestUserBoot_ExposesRawMutePrefs pins the two pref strings this package
+// pulls out by name, including the JSON-encoded all_notifications_prefs value.
 //
 // The plan's spec claims prefs carries a flat `muted_channels` list. It
 // does not: all 702 keys of the captured response were checked and
@@ -832,15 +844,6 @@ func TestUserBoot_ExposesRawMutePrefs(t *testing.T) {
 	}
 	if got, want := res.Prefs.MutedChannels, "CLEGACY01,CLEGACY02"; got != want {
 		t.Errorf("Prefs.MutedChannels = %q; want %q", got, want)
-	}
-
-	// The string is not merely preserved, it is the shape the existing
-	// parser expects. C04T4TH9N carries "muted": false and must not
-	// appear.
-	muted := slackclient.ParseMutedFromAllNotificationsPrefs(res.Prefs.AllNotificationsPrefs)
-	slices.Sort(muted)
-	if want := []string{"C2QPK1V44", "C94H848UB"}; !slices.Equal(muted, want) {
-		t.Errorf("ParseMutedFromAllNotificationsPrefs(AllNotificationsPrefs) = %v; want %v", muted, want)
 	}
 }
 

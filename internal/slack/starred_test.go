@@ -8,20 +8,23 @@ import (
 	"testing"
 )
 
-func TestGetStarredConversations_OnlyPeopleAndEmpty(t *testing.T) {
+func TestGetStarredConversations_UsesBootConversationIDs(t *testing.T) {
 	for _, tc := range []struct {
-		name, items string
-		want        []string
+		name, starred string
+		want          []string
 	}{
-		{"people only", `[{"type":"im","channel":"D2"},{"type":"im","channel":"D1"},{"type":"im","channel":"D2"}]`, []string{"D2", "D1"}},
-		{"empty list", `[]`, nil},
-		{"empty IDs", `[{"type":"im"},{"type":"channel","channel":""}]`, nil},
-		{"non-conversations", `[{"type":"message","channel":"D1"},{"type":"file","channel":"D2"},{"type":"file_comment","channel":"D3"},{"type":"mpim","channel":"D4"}]`, nil},
+		{"channels", `["C1","C2"]`, []string{"C1", "C2"}},
+		{"people and duplicates", `["D2","D1","D2",""]`, []string{"D2", "D1"}},
+		{"empty", `[]`, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(`{"ok":true,"items":` + tc.items + `}`))
+				if r.URL.Path != "/api/client.userBoot" {
+					_, _ = w.Write([]byte(`{"ok":false,"error":"enterprise_is_restricted"}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"ok":true,"starred":` + tc.starred + `}`))
 			}))
 			defer srv.Close()
 			c := &Client{token: "xoxc-test", apiBaseURL: srv.URL + "/api/"}

@@ -202,9 +202,12 @@ section and the `:<N>` suffix is ignored along with the rest of the
 ### Limitations of Slack-native sections
 
 Slack-native sections are read-only — section editing still happens in the official client; slk
-reflects the results. The `stars` section type (Slack's "Starred" feature) is rendered
-when non-empty, with the header `Starred`. Sections of type `slack_connect`,
-`salesforce_records`, and `agents` are hidden. Sections with more than 10 channels may be returned
+reflects the results. Starred conversation membership comes from `client.userBoot`,
+including on Enterprise Grid where the `stars.list` endpoint can be restricted.
+The initial boot list is reused at startup and refreshed on section rebootstrap
+after reconnect. The `stars` section is shown when non-empty, with the header
+`Starred`. Sections of type `slack_connect`, `salesforce_records`, and `agents`
+are hidden. Sections with more than 10 channels may be returned
 only partially by Slack's API on initial load; the missing channels
 temporarily fall into the catch-all bucket and migrate into their correct
 section as WebSocket events fire or the workspace reconnects. A debug-log

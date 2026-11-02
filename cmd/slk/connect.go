@@ -244,14 +244,11 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	// already sees a Ready store.
 	if cfg.EffectiveUseSlackSections(client.TeamID()) {
 		store := service.NewSectionStore()
-		if err := store.Bootstrap(ctx, client); err != nil {
+		if err := store.Bootstrap(ctx, bootSectionsClient{client, res.Starred}); err != nil {
 			log.Printf("section store bootstrap for %s failed: %v (falling back to config sections)", token.TeamName, err)
 		} else {
-			// Bootstrap repopulates the stars section from stars.list
-			// itself (channelSections.list returns built-in section
-			// types with empty channel_ids), so the Starred header is
-			// live at first render and survives reconnect-triggered
-			// re-bootstraps without caller help.
+			// The section list omits built-in stars membership. Reuse the
+			// authoritative IDs from the boot response without another RPC.
 			wctx.SectionStore = store
 			// One-time info log when the user has both Slack sections
 			// active AND a non-empty [sections.*] config — the latter
@@ -485,12 +482,12 @@ func (h *rtmEventHandler) OnConnect() {
 	// repeat missing-row lookups even when MaybeRebootstrap skips its fetch.
 	// A real long-disconnect-then-reconnect refreshes missed section state.
 	//
-	// Run synchronously on the event owner. This briefly blocks
-	// inbound event delivery during the bootstrap HTTP call, but that
-	// cost is bounded — at most one call per 30s per workspace — and
-	// avoids racing wsCtx.Channels mutations against the same loop's
-	// next event (which could be an OnConversationOpened that also
-	// touches wsCtx.Channels).
+	// Run synchronously on the event owner, blocking inbound event delivery
+	// while sections and starred membership refresh. Membership now needs a
+	// full client.userBoot response rather than the smaller stars.list result;
+	// the cost is bounded by one refresh pass per 30s per workspace and the
+	// deadline below. Keeping it here avoids racing wsCtx.Channels mutations
+	// against the same loop's next event (such as OnConversationOpened).
 	if h.wsCtx != nil && h.wsCtx.SectionStore != nil && h.wsCtx.Client != nil &&
 		(h.sectionRefreshAt.IsZero() || time.Since(h.sectionRefreshAt) >= 30*time.Second) {
 		h.sectionRefreshAt = time.Now()

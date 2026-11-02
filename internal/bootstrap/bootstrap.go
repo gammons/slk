@@ -220,6 +220,10 @@ type Result struct {
 	// sidebar, channels and DMs mixed.
 	IsOpen []string
 
+	// Starred is the authoritative conversation-ID list from client.userBoot.
+	// Carry it to section bootstrap instead of issuing a restricted stars.list.
+	Starred []string
+
 	DND boot.DND
 
 	// ChannelsPriority is Slack's per-channel affinity score.
@@ -408,6 +412,7 @@ func Run(ctx context.Context, deps Deps) (*Result, error) {
 		Channels:         bootRes.Channels,
 		IMs:              bootRes.IMs,
 		IsOpen:           bootRes.IsOpen,
+		Starred:          bootRes.Starred,
 		DND:              bootRes.DND,
 		ChannelsPriority: bootRes.ChannelsPriority,
 		EmojiCacheTS:     bootRes.EmojiCacheTS,

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gammons/slk/internal/debuglog"
+	"github.com/gammons/slk/internal/slack/boot"
 	"github.com/gammons/slk/internal/slack/mrkdwn"
 	"github.com/gammons/slk/internal/slackhttp"
 	"github.com/gorilla/websocket"
@@ -1819,66 +1820,22 @@ func (c *Client) GetChannelSectionsRaw(ctx context.Context) ([]byte, error) {
 	return c.callChannelSectionsList(ctx, "")
 }
 
-// starsListResponse is the JSON shape returned by stars.list. Channel and
-// IM entries identify sidebar conversations; message/file/comment stars do not.
-type starsListResponse struct {
-	OK     bool            `json:"ok"`
-	Error  string          `json:"error"`
-	Items  []starsListItem `json:"items"`
-	Paging starsListPaging `json:"paging"`
-}
-
-type starsListItem struct {
-	Type    string `json:"type"`
-	Channel string `json:"channel"` // populated when Type == "channel" or "im"
-}
-
-type starsListPaging struct {
-	Count int `json:"count"`
-	Total int `json:"total"`
-}
-
-// GetStarredConversations calls stars.list and returns unique conversation
-// IDs in first-seen order. Both channel and IM stars carry conversation IDs
-// (not user IDs); other star types are ignored even when they carry a channel.
-// Slack's channelSections.list leaves built-in membership empty, so this is
-// the authoritative source for the Starred sidebar section.
-//
-// Errors propagate to the caller, which may treat stars as best-effort. The
-// existing limit=1000 request is not paginated; large-list support is separate.
+// GetStarredConversations returns the current starred conversation IDs from
+// client.userBoot. On Enterprise Grid, stars.list can be restricted or return
+// an empty list even when the boot snapshot contains stars.
+// Initial bootstrap reuses its existing userBoot result; this fetch is for
+// section rebootstrap after reconnect.
 func (c *Client) GetStarredConversations(ctx context.Context) ([]string, error) {
-	form := url.Values{"token": {c.token}, "limit": {"1000"}}
-	body := strings.NewReader(form.Encode())
-	endpoint := c.apiBaseURL + "stars.list"
-	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, body)
+	result, err := boot.UserBoot(ctx, c.PostForm)
 	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := c.apiHTTPClient().Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("calling stars.list: %w", err)
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading stars.list response: %w", err)
-	}
-	var slr starsListResponse
-	if err := json.Unmarshal(raw, &slr); err != nil {
-		return nil, fmt.Errorf("parsing stars.list response: %w", err)
-	}
-	if !slr.OK {
-		return nil, fmt.Errorf("stars.list API error: %s", slr.Error)
+		return nil, err
 	}
 	var ids []string
-	seen := make(map[string]bool)
-	for _, it := range slr.Items {
-		if (it.Type == "channel" || it.Type == "im") && it.Channel != "" && !seen[it.Channel] {
-			seen[it.Channel] = true
-			ids = append(ids, it.Channel)
+	seen := make(map[string]bool, len(result.Starred))
+	for _, id := range result.Starred {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
 		}
 	}
 	return ids, nil
