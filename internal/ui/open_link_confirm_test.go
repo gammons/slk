@@ -1,0 +1,115 @@
+package ui
+
+import (
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/ui/messages"
+)
+
+// confirmLinkApp is an App focused on a message with the given text, whose
+// desktop opener records what it is asked to launch.
+func confirmLinkApp(t *testing.T, text string) (*App, *[]string) {
+	t.Helper()
+	a := newTestApp(t, withSize(0, 0), withActiveTeam("T1"))
+	a.focusedPanel = PanelMessages
+	a.messagepane.SetMessages([]messages.MessageItem{{TS: "1.0", Text: text}})
+	opened := &[]string{}
+	a.setDesktopForTest(func(d *core.DesktopServiceFuncs) {
+		d.Open = func(target string) error {
+			*opened = append(*opened, target)
+			return nil
+		}
+	})
+	return a, opened
+}
+
+// sendAndDrain runs msg through Update and every command it yields.
+func sendAndDrain(a *App, msg tea.Msg) {
+	_, cmd := a.Update(msg)
+	for _, m := range drainCmd(cmd) {
+		sendAndDrain(a, m)
+	}
+}
+
+func TestOpenLink_NonWebSchemeAsksFirst(t *testing.T) {
+	for _, url := range []string{
+		"file:///tmp/x", "ssh://host.example/x", "sftp://host.example/x", "ftp://host.example/x",
+	} {
+		a, opened := confirmLinkApp(t, "see <"+url+"|Q3 report>")
+		sendAndDrain(a, a.handleNormalMode(tea.KeyPressMsg{Code: 'o', Text: "o"})())
+		if a.mode != ModeConfirm || !dialogShows(a, url) {
+			t.Fatalf("%s: mode = %v, want a confirm prompt showing the full target", url, a.mode)
+		}
+		if dialogShows(a, "Q3 report") {
+			t.Errorf("%s: prompt shows the label", url)
+		}
+		if len(*opened) != 0 {
+			t.Fatalf("%s: opened before confirmation: %v", url, *opened)
+		}
+	}
+}
+
+func TestOpenLink_NonWebSchemeConfirmOpens(t *testing.T) {
+	a, opened := confirmLinkApp(t, "see <file:///tmp/x|label>")
+	sendAndDrain(a, a.handleNormalMode(tea.KeyPressMsg{Code: 'o', Text: "o"})())
+	sendAndDrain(a, tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if len(*opened) != 1 || (*opened)[0] != "file:///tmp/x" {
+		t.Errorf("opened = %v, want [file:///tmp/x]", *opened)
+	}
+	if a.mode == ModeConfirm {
+		t.Error("prompt still open after confirming")
+	}
+}
+
+func TestOpenLink_NonWebSchemeCancelDoesNotOpen(t *testing.T) {
+	a, opened := confirmLinkApp(t, "see <file:///tmp/x|label>")
+	sendAndDrain(a, a.handleNormalMode(tea.KeyPressMsg{Code: 'o', Text: "o"})())
+	sendAndDrain(a, tea.KeyPressMsg{Code: 'n', Text: "n"})
+	if len(*opened) != 0 {
+		t.Errorf("opened = %v after cancel", *opened)
+	}
+	if a.mode == ModeConfirm {
+		t.Error("prompt still open after cancelling")
+	}
+}
+
+func TestOpenLink_WebSchemesOpenWithoutPrompt(t *testing.T) {
+	for _, url := range []string{
+		"https://example.com/a", "http://example.com/a", "mailto:a@example.com", "tel:+15555550100",
+	} {
+		a, opened := confirmLinkApp(t, "see <"+url+"|label>")
+		sendAndDrain(a, a.handleNormalMode(tea.KeyPressMsg{Code: 'o', Text: "o"})())
+		if a.mode == ModeConfirm {
+			t.Errorf("%s: prompted", url)
+		}
+		if len(*opened) != 1 || (*opened)[0] != url {
+			t.Errorf("%s: opened = %v", url, *opened)
+		}
+	}
+}
+
+func TestOpenLink_LinkPickerNonWebSchemeAsksFirst(t *testing.T) {
+	a, opened := confirmLinkApp(t, "<https://a.example/1> <file:///tmp/x|label>")
+	a.handleNormalMode(tea.KeyPressMsg{Code: 'o', Text: "o"})
+	if a.mode != ModeLinkPicker {
+		t.Fatalf("mode = %v, want ModeLinkPicker", a.mode)
+	}
+	a.handleKey(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	cmd := a.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	for _, m := range drainCmd(cmd) {
+		sendAndDrain(a, m)
+	}
+	if a.mode != ModeConfirm || !dialogShows(a, "file:///tmp/x") {
+		t.Fatalf("mode = %v, want a confirm prompt for the picked link", a.mode)
+	}
+	if len(*opened) != 0 {
+		t.Fatalf("opened before confirmation: %v", *opened)
+	}
+	sendAndDrain(a, tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if len(*opened) != 1 || (*opened)[0] != "file:///tmp/x" {
+		t.Errorf("opened = %v after confirm", *opened)
+	}
+}

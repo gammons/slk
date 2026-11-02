@@ -15,6 +15,7 @@
 package ui
 
 import (
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -69,7 +70,30 @@ var reduceLinks reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	if !ok {
 		return nil, false
 	}
+	if !m.Confirmed && !opensWithoutConfirm(m.URL) {
+		// file:, ssh: and the like hand the target to the OS launcher, and
+		// the sender chose the label, so show the real target first.
+		url := m.URL
+		a.openConfirmPrompt("Open link?", "Open "+url+" ?", func() tea.Msg {
+			return OpenLinkMsg{URL: url, Confirmed: true}
+		})
+		return nil, true
+	}
 	return a.routeLink(m.URL), true
+}
+
+// opensWithoutConfirm reports whether rawURL has a scheme that opens a
+// browser or mail/phone app: http, https, mailto or tel.
+func opensWithoutConfirm(rawURL string) bool {
+	scheme, _, ok := strings.Cut(rawURL, ":")
+	if !ok {
+		return false
+	}
+	switch strings.ToLower(scheme) {
+	case "http", "https", "mailto", "tel":
+		return true
+	}
+	return false
 }
 
 // routeLink decides between in-app navigation and the browser.
