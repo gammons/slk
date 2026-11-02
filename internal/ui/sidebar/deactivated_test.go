@@ -174,3 +174,28 @@ func TestDeactivatedDMStaysHiddenWithActiveOnly(t *testing.T) {
 		t.Fatalf("visible after Invalidate = %v, want the deactivated DM hidden", got)
 	}
 }
+
+// The window title's count matches the dots drawn: a hidden deactivated
+// DM with unreads has no row, so it is not counted, unless it is the
+// conversation on screen.
+func TestUnreadCountSkipsHiddenDeactivatedDMs(t *testing.T) {
+	m := New(deactivatedFixture())
+	m.SetReadStateReader(func() map[string]core.ReadState {
+		return map[string]core.ReadState{
+			"D1": {HasUnread: true},
+			"D2": {HasUnread: true},
+			"A1": {HasUnread: true},
+		}
+	})
+	if got := m.UnreadChannelCount(); got != 3 {
+		t.Fatalf("before any deactivation: count = %d, want 3", got)
+	}
+	m.SetDeactivatedUsers(map[string]bool{"U2": true, "U3": true})
+	if got := m.UnreadChannelCount(); got != 1 {
+		t.Errorf("count = %d, want 1 (only Alice's DM is shown)", got)
+	}
+	m.SetActiveChannelID("D2")
+	if got := m.UnreadChannelCount(); got != 2 {
+		t.Errorf("with D2 open: count = %d, want 2", got)
+	}
+}

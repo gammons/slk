@@ -59,6 +59,10 @@ Sidebar rules:
   for rows hidden as stale, not on purpose. The Active only filter runs
   after the deactivated check in `rebuildFilter`, so its refilter on every
   read-state change keeps them hidden too.
+- The window title's unread count (`UnreadChannelCount`) skips them as
+  well, so it matches the dots on screen. A stale row is different: it is
+  never hidden while unread, so it always counts. This count,
+  `rebuildFilter` and `revealUnreadHidden` share one check, `hidesPeer`.
 
 Channel finder, like the Slack desktop quick switcher: the person stays out
 of sight until you look for them on purpose.
@@ -107,8 +111,6 @@ Out of scope:
 - Refiltering an `@` / `#` dropdown that is open at the moment the set
   changes. The next keystroke's list is filtered, and a deactivated name
   picked from the old list still becomes a mention.
-- The unread count in the window title still counts a hidden DM with
-  unreads, as it does for rows hidden as stale.
 
 ## Design
 

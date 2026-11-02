@@ -424,11 +424,19 @@ func (m *Model) UnreadChannelCount() int {
 	state := m.readStateReader()
 	count := 0
 	for _, item := range m.items {
-		if item.IsVisiblyUnread(state[item.ID]) {
+		// A hidden deactivated DM has no row to show the dot on.
+		if item.IsVisiblyUnread(state[item.ID]) && !m.hidesPeer(item) {
 			count++
 		}
 	}
 	return count
+}
+
+// hidesPeer reports whether item is a DM or app row whose peer is
+// deactivated and so stays hidden, whatever its read state. The active
+// conversation is the one exemption.
+func (m *Model) hidesPeer(item ChannelItem) bool {
+	return item.ID != m.activeID && core.IsHiddenPeerConversation(item.Type, item.DMUserID, m.deactivated)
 }
 
 // NextUnread returns the visibly-unread channel (HasUnread && !IsMuted)
@@ -541,7 +549,7 @@ func (m *Model) revealUnreadHidden(state map[string]core.ReadState) bool {
 		}
 		// A deactivated peer's DM is hidden on purpose, not as stale: an
 		// unread message (an old one, usually) does not bring it back.
-		if item.ID != m.activeID && core.IsHiddenPeerConversation(item.Type, item.DMUserID, m.deactivated) {
+		if m.hidesPeer(item) {
 			continue
 		}
 		if m.filter != "" && !strings.Contains(text.Fold(item.Name), lower) {
@@ -1459,7 +1467,7 @@ func (m *Model) rebuildFilter() {
 		// Deactivated peers are hidden before staleness so they stay
 		// hidden whatever their read state, starred or not. The active
 		// conversation is the only exemption.
-		if item.ID != m.activeID && core.IsHiddenPeerConversation(item.Type, item.DMUserID, m.deactivated) {
+		if m.hidesPeer(item) {
 			continue
 		}
 		// Staleness filter: drop items the user hasn't read in a long
