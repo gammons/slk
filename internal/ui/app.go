@@ -2943,13 +2943,15 @@ func (a *App) SetSixelFrameStore(frames *imgpkg.SixelFrameStore) {
 // Subsequent CustomEmojisLoadedMsg dispatches update the customs map
 // via App.SetCustomEmoji which calls back into both panes' emojiCtx.
 //
-// Phase 8 extends this to the picker; Phase 9 to autocomplete.
+// Phase 8 extends this to the picker; Phase 9 to autocomplete. The
+// sidebar takes it for section header and DM status emoji.
 func (a *App) SetEmojiContext(ctx messages.EmojiContext) {
 	a.emojiCtx = ctx
 	for _, m := range a.allWinModels() {
 		m.SetEmojiContext(ctx)
 	}
 	a.threadPanel.SetEmojiContext(ctx)
+	a.sidebar.SetEmojiContext(ctx)
 	a.reactionPicker.SetEmojiContext(reactionpicker.EmojiContext{
 		PlaceCtx: ctx.PlaceCtx,
 		Cells:    ctx.Cells,
@@ -3327,6 +3329,7 @@ func (a *App) SetCustomEmoji(customs map[string]string) {
 		m.SetEmojiCustoms(customs)
 	}
 	a.threadPanel.SetEmojiCustoms(customs)
+	a.sidebar.SetEmojiCustoms(customs)
 	a.reactionPicker.SetEmojiCustoms(customs)
 	// Compose autocomplete dropdowns (main + thread) also need the
 	// customs map for View()-time URL resolution; without this, custom

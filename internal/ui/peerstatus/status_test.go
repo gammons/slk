@@ -118,3 +118,43 @@ func TestStatusGlyph(t *testing.T) {
 		}
 	}
 }
+
+func TestGlyphShortcode_NamesTheEmojiGlyphStandsFor(t *testing.T) {
+	inHuddle := Status{Emoji: ":calendar:", Huddle: HuddleActive}
+	cases := []struct {
+		name string
+		st   Status
+		want string
+	}{
+		{"standard shortcode", Status{Emoji: ":calendar:"}, "calendar"},
+		{"skin tone is kept for the image", Status{Emoji: ":+1::skin-tone-3:"}, "+1::skin-tone-3"},
+		{"custom workspace emoji", Status{Emoji: ":company-logo:"}, "company-logo"},
+		{"text without emoji", Status{Text: "Heads down"}, fallbackShortcode},
+		{"huddle wins over status", inHuddle, huddleShortcode},
+		{"nothing set", Status{}, ""},
+		{"expired", Status{Emoji: ":calendar:", Expires: testNow}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.st.GlyphShortcode(testNow); got != c.want {
+				t.Errorf("GlyphShortcode = %q, want %q", got, c.want)
+			}
+			// Whenever there is no glyph there is nothing to place.
+			if (c.st.Glyph(testNow) == "") != (c.want == "") {
+				t.Errorf("Glyph %q and GlyphShortcode %q disagree on whether anything shows",
+					c.st.Glyph(testNow), c.want)
+			}
+		})
+	}
+}
+
+// The image placed for a huddle or a text-only status must be the same
+// emoji as the glyph shown when it can't be placed.
+func TestGlyphShortcode_FixedNamesMatchTheirGlyphs(t *testing.T) {
+	if got := emoji.CodeMap()[":"+huddleShortcode+":"]; got != HuddleGlyph {
+		t.Errorf(":%s: is %q, want HuddleGlyph %q", huddleShortcode, got, HuddleGlyph)
+	}
+	if got := emoji.CodeMap()[":"+fallbackShortcode+":"]; got != FallbackGlyph {
+		t.Errorf(":%s: is %q, want FallbackGlyph %q", fallbackShortcode, got, FallbackGlyph)
+	}
+}

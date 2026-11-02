@@ -2,14 +2,17 @@ package sidebar
 
 import (
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
 
 	"charm.land/lipgloss/v2"
+	bubblesansi "github.com/gammons/slk/internal/bubbles/ansi"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	emojiutil "github.com/gammons/slk/internal/emoji"
+	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/text"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/peerstatus"
@@ -383,6 +386,87 @@ type Model struct {
 	// compete visually with the focused panel. Set by SetFocused() from
 	// the App layer.
 	focused bool
+
+	// emojiCtx draws section header and DM status emoji as images when
+	// image mode is on (SetEmojiContext, SetEmojiCustoms).
+	// pendingFlushes holds the kitty uploads the placements of the last
+	// buildCache need; View fires them right after that build.
+	emojiCtx       messages.EmojiContext
+	pendingFlushes []func(io.Writer) error
+	// emojiCold reports that the last buildCache placed at least one
+	// emoji image that is still loading (its cells reserved), so an
+	// emoji fetch landing may change what the sidebar draws.
+	emojiCold bool
+}
+
+// SetEmojiContext configures emoji-image rendering for section headers
+// and DM status emoji. Invalidates the row cache.
+func (m *Model) SetEmojiContext(ctx messages.EmojiContext) {
+	if ctx.Cells != 1 && ctx.Cells != 2 {
+		ctx.Cells = 2
+	}
+	m.emojiCtx = ctx
+	m.cacheValid = false
+	m.dirty()
+}
+
+// SetEmojiCustoms replaces only the workspace custom emoji map, so
+// custom emoji that arrive after startup (CustomEmojisLoadedMsg) resolve
+// to their artwork. Invalidates the row cache.
+func (m *Model) SetEmojiCustoms(customs map[string]string) {
+	m.emojiCtx.Customs = customs
+	m.cacheValid = false
+	m.dirty()
+}
+
+// HandleEmojiImageReady rebuilds the cached rows after an emoji image
+// fetch finished (or failed), so a cold reservation becomes the image,
+// or the glyph fallback. The URL is unused: every row is rebuilt, but
+// only when the rows hold a cold reservation. Any surface's fetch lands
+// here, and a warm image cannot change (new custom emoji go through
+// SetEmojiCustoms).
+func (m *Model) HandleEmojiImageReady(string) {
+	if !m.emojiCold {
+		return
+	}
+	m.cacheValid = false
+	m.dirty()
+}
+
+// placeEmoji places the emoji a shortcode names as an image, collecting
+// its upload for View. ok is false when it can't be placed (image mode
+// off, no fetcher, unknown name, failed fetch); the caller then uses
+// its glyph or text form. The placement is emojiCells() wide.
+func (m *Model) placeEmoji(name string) (string, bool) {
+	placement, flush, ok := emojiutil.PlaceShortcode(m.emojiCtx.PlaceCtx, name, m.emojiCtx.Customs, m.emojiCells())
+	if !ok {
+		return "", false
+	}
+	if strings.TrimSpace(placement) == "" {
+		m.emojiCold = true
+	}
+	if flush != nil {
+		m.pendingFlushes = append(m.pendingFlushes, flush)
+	}
+	return placement, true
+}
+
+func (m *Model) emojiCells() int {
+	if m.emojiCtx.Cells == 1 {
+		return 1
+	}
+	return 2
+}
+
+// flushEmojiUploads sends the kitty uploads the last buildCache's
+// placements need. Each upload runs at most once however often it is
+// fired, and uploading an image for a row scrolled out of view is
+// harmless, so every one is sent.
+func (m *Model) flushEmojiUploads() {
+	for _, fl := range m.pendingFlushes {
+		_ = fl(imgpkg.KittyOutput)
+	}
+	m.pendingFlushes = nil
 }
 
 // SetSectionsProvider injects a Slack-native sections data source.
@@ -1734,6 +1818,8 @@ func (m *Model) buildCache(width int) {
 	m.cacheValid = true
 	m.cacheWidth = width
 	m.cacheRows = m.cacheRows[:0]
+	m.pendingFlushes = nil
+	m.emojiCold = false
 	m.cacheFiller = lipgloss.NewStyle().Width(width).Background(styles.SidebarBackground).Render("")
 
 	// Per-channel read state for the active workspace. The DB is the
@@ -2027,10 +2113,21 @@ func (m *Model) buildCache(width int) {
 		// A DM peer's status emoji follows the name after a space. It is
 		// charged to the name's budget so a long name truncates instead
 		// of pushing the emoji or the trailer off the row.
+		// In image mode the emoji is drawn as an image, charged its
+		// cell footprint. It is appended after the name is truncated,
+		// so truncation never cuts it. A glyph is charged the wider of
+		// lipgloss's count and GlyphWidth: in image mode emoji.Width
+		// counts an emoji as the image footprint, which with 1-cell
+		// images is narrower than the glyph a failed fetch falls back
+		// to.
 		statusGlyph := item.Status.Glyph(statusNow)
 		statusCells := 0
 		if statusGlyph != "" {
-			statusCells = 1 + item.Status.GlyphWidth(statusNow)
+			statusCells = 1 + max(item.Status.GlyphWidth(statusNow), lipgloss.Width(statusGlyph))
+			if placed, ok := m.placeEmoji(item.Status.GlyphShortcode(statusNow)); ok {
+				statusGlyph = placed
+				statusCells = 1 + m.emojiCells()
+			}
 		}
 		// The indent and a prefix wider than the default 2 cells (a custom
 		// private_glyph) come out of the name's budget, so the prefix's
@@ -2211,7 +2308,8 @@ func (m *Model) sectionDisplayMeta(sectionKey string) (name, emoji string) {
 //
 // In Slack mode, the `name` parameter is a section ID — we look up the
 // user-visible name and (if any) emoji shortcode from the provider and
-// prepend the resolved emoji.
+// prepend the resolved emoji: an image in image mode (custom emoji
+// included), else the glyph, else the ":code:" text.
 //
 // The label fits one line of a sidebar `width` wide: see
 // fitSectionHeader for what gives way when it does not.
@@ -2221,8 +2319,21 @@ func (m *Model) renderSectionHeaderLabel(name string, width int, cursor string, 
 	// label was measured, so neither may reach it.
 	displayName = headerSpaceReplacer.Replace(displayName)
 	emojiPrefix := ""
+	emojiPrefixSelected := ""
+	emojiCells := 0
 	textFallback := false
-	if emojiCode != "" {
+	if placed, ok := m.placeEmoji(emojiCode); ok {
+		// A placement ends by resetting the foreground ("\x1b[39m"),
+		// which ReapplyBgAfterResets does not catch, so re-assert the
+		// foreground each variant had before the image (as
+		// messages.ReactionPillText does for a pill's count): the
+		// header's own on the normal label; on the selected one, what
+		// ReapplyBgAfterResets put back after the cursor glyph's reset.
+		emojiPrefix = placed + bubblesansi.ForegroundSGR(styles.SectionHeader.GetForeground()) + " "
+		emojiPrefixSelected = placed + bgAnsi + " "
+		// Charged the footprint it was placed with, never measured.
+		emojiCells = m.emojiCells() + 1
+	} else if emojiCode != "" {
 		// The glyph only when it is one codepoint, as reaction pills
 		// and message bodies draw it: terminals draw VS16, ZWJ and
 		// skin-toned sequences at widths lipgloss does not predict,
@@ -2235,6 +2346,8 @@ func (m *Model) renderSectionHeaderLabel(name string, width int, cursor string, 
 			emojiPrefix = ":" + code + ": "
 			textFallback = true
 		}
+		emojiPrefixSelected = emojiPrefix
+		emojiCells = headerCells(emojiPrefix)
 	}
 
 	glyph := "▾" // expanded
@@ -2274,25 +2387,24 @@ func (m *Model) renderSectionHeaderLabel(name string, width int, cursor string, 
 		}
 	}
 
-	emojiCells := headerCells(emojiPrefix)
 	aggregateCells := headerCells(aggregates)
 	// The ":code:" text tells the user less than the name, so it gives way before the name is cut.
 	// A glyph stays.
 	if textFallback && headerCells(displayName) > sectionHeaderNameBudget(width, emojiCells, aggregateCells) {
-		emojiPrefix = ""
+		emojiPrefix, emojiPrefixSelected = "", ""
 		emojiCells = 0
 	}
 	var keepEmoji, keepAggregates bool
 	displayName, keepEmoji, keepAggregates = fitSectionHeader(width, displayName, emojiCells, aggregateCells)
 	if !keepEmoji {
-		emojiPrefix = ""
+		emojiPrefix, emojiPrefixSelected = "", ""
 	}
 	if !keepAggregates {
 		aggregates = ""
 	}
 
 	label := " " + glyph + " " + emojiPrefix + displayName + aggregates
-	selected := cursor + glyph + " " + emojiPrefix + displayName + aggregates
+	selected := cursor + glyph + " " + emojiPrefixSelected + displayName + aggregates
 	// The selected variant re-applies bold after the cursor glyph's
 	// reset, as the channel rows do: SectionHeader is bold, and bgAnsi
 	// alone would draw the rest of the header regular. Not on the normal
@@ -2411,6 +2523,7 @@ func (m *Model) View(height, width int) string {
 	// emitting a muted "No channels" placeholder below the Threads row.
 	if !m.cacheValid || m.cacheWidth != width {
 		m.buildCache(width)
+		m.flushEmojiUploads()
 	}
 	m.lastHeight = height
 

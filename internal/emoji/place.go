@@ -162,6 +162,25 @@ func Place(ctx PlaceContext, url string, cells int) (string, func(io.Writer) err
 	return strings.Repeat(" ", cells), nil, true
 }
 
+// PlaceShortcode places the emoji a Slack shortcode names (no colons,
+// e.g. "orange_book", a workspace custom emoji, an alias, a skin-toned
+// name) as an image: URLForShortcode, then Place. It returns what Place
+// returns.
+//
+// ok is false when image mode is off, ctx has no fetcher, the name has
+// no URL, or Place declines (including a URL whose fetch failed
+// before), so the caller falls back to its glyph or text form.
+func PlaceShortcode(ctx PlaceContext, name string, customs map[string]string, cells int) (string, func(io.Writer) error, bool) {
+	if !ImageModeActive() || ctx.Fetcher == nil || name == "" {
+		return "", nil, false
+	}
+	url, ok := URLForShortcode(name, customs)
+	if !ok {
+		return "", nil, false
+	}
+	return Place(ctx, url, cells)
+}
+
 // spawnEmojiFetch starts (at most) one fetch goroutine per URL. On
 // success, dispatches EmojiImageReadyMsg via ctx.SendMsg so the host
 // can re-render. The fetch's CellTarget triggers the fetcher's

@@ -23,6 +23,13 @@ const FallbackGlyph = "💬"
 // place, as the headphones do in Slack.
 const HuddleGlyph = "🎧"
 
+// huddleShortcode and fallbackShortcode name HuddleGlyph and
+// FallbackGlyph for GlyphShortcode.
+const (
+	huddleShortcode   = "headphones"
+	fallbackShortcode = "speech_balloon"
+)
+
 // Status is a user's custom status and DND state.
 type Status struct {
 	// Emoji is Slack's shortcode, colons included, e.g. ":calendar:".
@@ -109,6 +116,25 @@ func (s Status) StatusGlyph(now time.Time) string {
 		return g
 	}
 	return FallbackGlyph
+}
+
+// GlyphShortcode names the emoji Glyph(now) stands for, without colons,
+// so a surface can draw it as an image: "headphones" in a huddle, the
+// status shortcode as Slack sent it (custom emoji and skin tones
+// included), "speech_balloon" for a status with text but no emoji, and
+// "" when Glyph(now) is "". A surface that cannot place it shows
+// Glyph(now) instead.
+func (s Status) GlyphShortcode(now time.Time) string {
+	if s.InHuddle(now) {
+		return huddleShortcode
+	}
+	if !s.HasStatus(now) {
+		return ""
+	}
+	if name := strings.Trim(s.Emoji, ":"); name != "" {
+		return name
+	}
+	return fallbackShortcode
 }
 
 // GlyphWidth is the cell width of Glyph(now), 0 when there is none.
