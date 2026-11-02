@@ -153,6 +153,30 @@ func TestOpenLink_WordWrapWasteKeepsTheFileName(t *testing.T) {
 	}
 }
 
+// A base rune followed by VS16 is one cell as a bare rune but two as a
+// grapheme cluster, which is how the prompt draws it. The budget must use the
+// drawn width, or the wrapped body outgrows the prompt and hides the tail.
+func TestOpenLink_ClusterWiderThanItsRunesKeepsTheFileName(t *testing.T) {
+	for _, n := range []int{130, 200} {
+		url := "file://host.example/" + strings.Repeat("❤️", n) + "/evil.exe"
+		for _, h := range []int{12, 24} {
+			a, opened := confirmLinkApp(t, "see <"+url+"|Q3 report>")
+			a.width, a.height = 80, h
+			sendAndDrain(a, a.handleNormalMode(tea.KeyPressMsg{Code: 'o', Text: "o"})())
+			if a.mode != ModeConfirm {
+				t.Fatalf("n=%d h=%d: mode = %v, want a confirm prompt", n, h, a.mode)
+			}
+			if !dialogShows(a, "file://host") || !dialogShows(a, "evil.exe") {
+				t.Fatalf("n=%d h=%d: prompt must show both ends:\n%s", n, h, a.confirmPrompt.View())
+			}
+			sendAndDrain(a, tea.KeyPressMsg{Code: 'y', Text: "y"})
+			if len(*opened) != 1 || (*opened)[0] != url {
+				t.Errorf("n=%d h=%d: opener got %v, want the exact URL", n, h, *opened)
+			}
+		}
+	}
+}
+
 func TestOpenLink_PromptEscapesControlAndBidiRunes(t *testing.T) {
 	url := "file:///tmp/\x1b[8mhidden\u202eexe.txt"
 	a, opened := confirmLinkApp(t, "see <"+url+"|label>")
