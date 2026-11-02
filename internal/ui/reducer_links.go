@@ -15,11 +15,14 @@
 package ui
 
 import (
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/slackurl"
 	"github.com/gammons/slk/internal/ui/messages"
@@ -74,12 +77,53 @@ var reduceLinks reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// file:, ssh: and the like hand the target to the OS launcher, and
 		// the sender chose the label, so show the real target first.
 		url := m.URL
-		a.openConfirmPrompt("Open link?", "Open "+url+" ?", func() tea.Msg {
+		a.openConfirmPrompt("Open link?", "Open "+displayTarget(url)+"?", func() tea.Msg {
 			return OpenLinkMsg{URL: url, Confirmed: true}
 		})
 		return nil, true
 	}
 	return a.routeLink(m.URL), true
+}
+
+// displayBudget is how many terminal cells of a link target the confirm
+// prompt shows (its body holds at most 8 lines of 36+ cells, with no getter).
+const displayBudget = 200
+
+// displayTarget is what the confirm prompt shows for a link target. Every
+// non-printable rune (controls, DEL, bidi and other format runes) becomes a
+// visible escape, so the sender cannot hide or reorder part of the target.
+// A target wider than displayBudget keeps its head (scheme and host) and its
+// tail (file name) with the middle elided. The opener still gets the exact URL.
+func displayTarget(rawURL string) string {
+	var parts []string
+	var widths []int
+	total := 0
+	for _, r := range rawURL {
+		s := string(r)
+		if !unicode.IsPrint(r) && r != ' ' {
+			q := strconv.QuoteToASCII(s)
+			s = q[1 : len(q)-1]
+		}
+		w := emoji.Width(s)
+		parts = append(parts, s)
+		widths = append(widths, w)
+		total += w
+	}
+	if total <= displayBudget {
+		return strings.Join(parts, "")
+	}
+	const headBudget, tailBudget = 110, 80
+	head, hw := 0, 0
+	for head < len(parts) && hw+widths[head] <= headBudget {
+		hw += widths[head]
+		head++
+	}
+	tail, tw := len(parts), 0
+	for tail > head && tw+widths[tail-1] <= tailBudget {
+		tw += widths[tail-1]
+		tail--
+	}
+	return strings.Join(parts[:head], "") + "…" + strings.Join(parts[tail:], "")
 }
 
 // opensWithoutConfirm reports whether rawURL has a scheme that opens a

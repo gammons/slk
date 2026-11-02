@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -88,6 +89,39 @@ func TestOpenLink_WebSchemesOpenWithoutPrompt(t *testing.T) {
 		if len(*opened) != 1 || (*opened)[0] != url {
 			t.Errorf("%s: opened = %v", url, *opened)
 		}
+	}
+}
+
+func TestOpenLink_PromptKeepsTheEndOfALongTarget(t *testing.T) {
+	url := "file:///C:/Users/Public/" + strings.Repeat("./", 200) + "x.exe"
+	a, opened := confirmLinkApp(t, "see <"+url+"|Q3 report>")
+	sendAndDrain(a, a.handleNormalMode(tea.KeyPressMsg{Code: 'o', Text: "o"})())
+	if a.mode != ModeConfirm || !dialogShows(a, "file:///") || !dialogShows(a, "x.exe") {
+		t.Fatalf("prompt must show both the scheme and the file name:\n%s", a.confirmPrompt.View())
+	}
+	sendAndDrain(a, tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if len(*opened) != 1 || (*opened)[0] != url {
+		t.Errorf("opener got %v, want the exact URL", *opened)
+	}
+}
+
+func TestOpenLink_PromptEscapesControlAndBidiRunes(t *testing.T) {
+	url := "file:///tmp/\x1b[8mhidden\u202eexe.txt"
+	a, opened := confirmLinkApp(t, "see <"+url+"|label>")
+	sendAndDrain(a, a.handleNormalMode(tea.KeyPressMsg{Code: 'o', Text: "o"})())
+	if a.mode != ModeConfirm {
+		t.Fatalf("mode = %v, want a confirm prompt", a.mode)
+	}
+	view := a.confirmPrompt.View()
+	if strings.Contains(view, "\x1b[8m") || strings.Contains(view, "\u202e") {
+		t.Errorf("prompt shows a raw control or bidi rune: %q", view)
+	}
+	if !dialogShows(a, `\x1b`) || !dialogShows(a, `\u202e`) {
+		t.Errorf("prompt should show visible escapes:\n%s", view)
+	}
+	sendAndDrain(a, tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if len(*opened) != 1 || (*opened)[0] != url {
+		t.Errorf("opener got %q, want the exact original URL", *opened)
 	}
 }
 
