@@ -1851,6 +1851,10 @@ func (a *App) handleGoToTop() tea.Cmd {
 			// gg is a one-shot jump — fire the fetch immediately.
 			return a.openSelectedThreadCmd(false)
 		}
+		if a.view == ViewActivity {
+			a.activityView.GoToTop()
+			return nil
+		}
 		a.messagepane.GoToTop()
 		return a.maybeFetchOlderHistory(a.messagepane.AtTop())
 	case PanelThread:
