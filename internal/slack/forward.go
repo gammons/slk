@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net/url"
 
-	"github.com/google/uuid"
-
 	"github.com/gammons/slk/internal/debuglog"
 	"github.com/gammons/slk/internal/slackhttp"
 )
@@ -21,7 +19,7 @@ import (
 func (c *Client) ForwardMessage(ctx context.Context, sourceChannelID, ts, destinationChannelID string) (postedTS string, permalink string, err error) {
 	// The _x_reason the web client sends on chat.shareMessage.
 	shareCtx := slackhttp.WithReason(ctx, "sendShareMessage")
-	raw, err := c.postForm(shareCtx, "chat.shareMessage", shareMessageForm(sourceChannelID, ts, destinationChannelID, uuid.NewString()))
+	raw, err := c.postForm(shareCtx, "chat.shareMessage", shareMessageForm(sourceChannelID, ts, destinationChannelID, newClientMsgID()))
 	if err != nil {
 		return "", "", fmt.Errorf("forwarding message: %w", err)
 	}

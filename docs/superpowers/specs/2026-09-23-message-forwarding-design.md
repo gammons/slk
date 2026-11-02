@@ -36,8 +36,13 @@ failure) for the local echo, which shows the permalink, or "Forwarded
 message" without one. A workspace-scoped completion appends this
 message idempotently to any destination panes without touching compose state.
 This covers an existing self-send suppression window that could otherwise
-drop a forwarded message's WebSocket echo. Normal WebSocket/cache updates
-remain authoritative; no optimistic placeholder is created for forwarding.
+drop a forwarded message's WebSocket echo. The App remembers the forwarded
+timestamps (a small capped set); when the real echo for one arrives it
+replaces the local stand-in in every pane showing the destination
+(`UpsertSelfSent`) and is exempt from the in-flight self-send guard, so the
+shared attachment is never lost to the stand-in. Other WebSocket/cache
+updates remain authoritative; no optimistic placeholder is created for
+forwarding.
 
 ## Tests
 

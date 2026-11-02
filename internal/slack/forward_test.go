@@ -51,6 +51,9 @@ func TestForwardMessage(t *testing.T) {
 				gotPath = r.URL.Path
 				_ = r.ParseForm()
 				gotForm = r.PostForm
+				if reason := r.PostForm.Get("_x_reason"); reason != "sendShareMessage" {
+					t.Errorf("_x_reason = %q, want sendShareMessage", reason)
+				}
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = w.Write([]byte(tc.body))
 			}))

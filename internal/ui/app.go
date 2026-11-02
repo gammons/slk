@@ -127,6 +127,7 @@ type App struct {
 	statusbar        statusbar.Model
 	channelFinder    channelfinder.Model
 	pendingForward   *forwardSource
+	forwardStandIns  []string // TSes of forward stand-ins awaiting their real echo; capped
 	searchResults    searchresults.Model
 	newMessagePicker newmessagepicker.Model
 	workspaceFinder  workspacefinder.Model
