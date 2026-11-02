@@ -2230,7 +2230,7 @@ func (m *Model) renderSectionHeaderLabel(name string, width int, cursor string, 
 		// custom emoji) is its ":code:" text, skin tone stripped.
 		code := emojiutil.StripSkinTone(emojiCode)
 		if glyph := emojiutil.CodeMap()[":"+code+":"]; emojiutil.ShouldRenderUnicode(glyph) {
-			emojiPrefix = glyph + "  "
+			emojiPrefix = glyph + " "
 		} else {
 			emojiPrefix = ":" + code + ": "
 			textFallback = true

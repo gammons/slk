@@ -148,9 +148,9 @@ func TestHeaderFit_NameThenEmojiThenAggregatesGiveWay(t *testing.T) {
 		width int
 		want  string
 	}{
-		// 15 columns: chrome 4, the glyph prefix "📙  " 4 and the
+		// 14 columns: chrome 4, the glyph prefix "📙 " 3 and the
 		// aggregates 7 fit exactly; the name has none left.
-		{19, "▸ 📙   •1  3"},
+		{18, "▸ 📙  •1  3"},
 		// 11 columns: without the emoji, chrome 4 + aggregates 7 fit.
 		{15, "▸  •1  3"},
 		// 8 columns: only the triangle.
@@ -171,7 +171,7 @@ func TestHeaderFit_NameThenEmojiThenAggregatesGiveWay(t *testing.T) {
 func TestHeaderFit_FittingHeaderUnchanged(t *testing.T) {
 	m := namedSectionModel("Docs", "orange_book", cache.ReadState{HasUnread: true, MentionCount: 3})
 	m.ToggleCollapse("S1")
-	if got, want := headerFor(t, m.View(10, 30), "Docs"), "▸ 📙  Docs •1  3"; got != want {
+	if got, want := headerFor(t, m.View(10, 30), "Docs"), "▸ 📙 Docs •1  3"; got != want {
 		t.Errorf("header = %q, want %q", got, want)
 	}
 }
@@ -272,11 +272,11 @@ func TestHeaderFit_SlackStyleSelectedHeaderNotBold(t *testing.T) {
 // stripped first.
 func TestHeaderEmoji_OnlySingleCodepointGlyphs(t *testing.T) {
 	cases := []struct{ code, want string }{
-		{"orange_book", "▾ 📙  Docs"},
+		{"orange_book", "▾ 📙 Docs"},
 		{"hammer_and_wrench", "▾ :hammer_and_wrench: Docs"},
 		{"mountain", "▾ :mountain: Docs"},
 		{"heart_on_fire", "▾ :heart_on_fire: Docs"},
-		{"wave::skin-tone-3", "▾ 👋  Docs"},
+		{"wave::skin-tone-3", "▾ 👋 Docs"},
 		{"male-construction-worker::skin-tone-2", "▾ :male-construction-worker: Docs"},
 		{"partyparrot::skin-tone-2", "▾ :partyparrot: Docs"},
 	}
