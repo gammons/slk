@@ -21,6 +21,7 @@ import (
 	"unicode"
 
 	tea "charm.land/bubbletea/v2"
+	xansi "github.com/charmbracelet/x/ansi"
 
 	"github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ids"
@@ -82,7 +83,11 @@ var reduceLinks reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			// No room to show where the link goes, so do not offer to open it.
 			return toastWithClear(a, "Terminal too small to confirm this link", 3*time.Second), true
 		}
-		a.openConfirmPrompt("Open link?", "Open "+displayTarget(url, budget)+"?", func() tea.Msg {
+		// Hard-wrap the line to the body width so the prompt's word wrap
+		// moves nothing and the budget is exact.
+		_, width := a.confirmPrompt.BodyRoom("Open link?")
+		body := xansi.Hardwrap("Open "+displayTarget(url, budget)+"?", width, true)
+		a.openConfirmPrompt("Open link?", body, func() tea.Msg {
 			return OpenLinkMsg{URL: url, Confirmed: true}
 		})
 		return nil, true
@@ -94,16 +99,18 @@ var reduceLinks reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 const maxDisplayBudget = 200
 
 // minDisplayBudget is the least room worth confirming in: below it the
-// prompt could not show a scheme, a host and a file name together.
+// prompt could not show a scheme, a host and a file name together. A body of
+// one line or none (lines <= 1) always falls below it, so it refuses too.
 const minDisplayBudget = 16
 
 // linkBudget is how many cells of the target fit in the confirm prompt at
-// the current terminal size: its real body lines and width, less a line of
-// slack for word wrapping and room for "Open " and "?".
+// the current terminal size: its real body lines and width, less room for
+// "Open " and "?" and one cell a line that a wide rune can leave unused when
+// the line is hard-wrapped (see reduceLinks).
 func (a *App) linkBudget() int {
 	a.prepareConfirmPrompt()
 	lines, width := a.confirmPrompt.BodyRoom("Open link?")
-	return min(maxDisplayBudget, (lines-1)*width-8)
+	return min(maxDisplayBudget, lines*width-6-lines)
 }
 
 // displayTarget is what the confirm prompt shows for a link target. Every
