@@ -173,7 +173,9 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		// the timestamp would actually render muted.
 		// The body's own wrap is undone so the line wraps once, with the
 		// timestamp, instead of breaking twice.
-		plain := strings.Join(strings.Fields(ansi.Strip(body)), " ")
+		// Hyperlinks (OSC 8) are kept: WrapRows reads the notice's mouse
+		// link rectangles off the rendered lines.
+		plain := strings.Join(strings.Fields(stripKeepingLinks(body)), " ")
 		if text := huddleNoticeText(msg, rc.UserNames); text != "" {
 			plain = text
 		}
@@ -692,6 +694,25 @@ func replyAvatars(userIDs []string, avatar AvatarFunc, room int) string {
 		b.WriteString(av + gap)
 		used += w
 		drawn++
+	}
+	return b.String()
+}
+
+// stripKeepingLinks is ansi.Strip that leaves OSC 8 hyperlink markers in
+// place, so a link in a stripped body stays a clickable span.
+func stripKeepingLinks(s string) string {
+	parts := strings.Split(s, osc8Open)
+	var b strings.Builder
+	b.WriteString(ansi.Strip(parts[0]))
+	for _, p := range parts[1:] {
+		st := strings.Index(p, "\x1b\\")
+		if st < 0 {
+			// Malformed marker: drop it, as ansi.Strip would.
+			b.WriteString(ansi.Strip(p))
+			continue
+		}
+		b.WriteString(osc8Open + p[:st+2])
+		b.WriteString(ansi.Strip(p[st+2:]))
 	}
 	return b.String()
 }
