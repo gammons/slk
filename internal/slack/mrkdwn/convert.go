@@ -13,10 +13,13 @@ import (
 )
 
 // typedURLRegexp tells Linkify what a bare typed URL is: an allowed scheme
-// from linkscheme followed by anything up to whitespace, minus trailing
-// punctuation. goldmark's default needs a dotted host with a TLD, which
-// drops IP hosts, localhost and file: URLs. www. matches stay with goldmark.
-var typedURLRegexp = regexp.MustCompile(`^(?:` + linkscheme.Alternation + `)[^\s<>]*[^\s<>.,;:!?)\]'"*_~]`)
+// from linkscheme followed by printable ASCII minus < > and |, minus
+// trailing punctuation. goldmark's default needs a dotted host with a TLD,
+// which drops IP hosts, localhost and file: URLs. ASCII only, like goldmark's
+// default, so a match never swallows the tokenizer's private-use sentinels
+// (a mention, channel or emoji next to the URL) or adjacent CJK text.
+// www. matches stay with goldmark.
+var typedURLRegexp = regexp.MustCompile(`^(?:` + linkscheme.Alternation + `)[!-;=?-{}~]*[#-&(+\-/-9=@-\[\\^` + "`" + `a-{}]`)
 
 // typedURLProtocols lists the "scheme:" prefixes Linkify may start a match
 // at, expanded from linkscheme.Alternation so the list stays in one place.

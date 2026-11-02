@@ -743,6 +743,18 @@ func TestConvert_TypedURLSchemes(t *testing.T) {
 		{"javascript", "javascript:alert(1)", nil},
 		{"data", "data:text/html,hi", nil},
 		{"vbscript", "vbscript:msgbox", nil},
+		{"followed by a mention", "http://localhost:3000/a,<@UFAKE0001>", []string{"http://localhost:3000/a"}},
+		{"followed by a channel", "http://localhost:3000/a<#CFAKE0001|general>", []string{"http://localhost:3000/a"}},
+		{"followed by an emoji", "http://example.com/x:tada:", []string{"http://example.com/x"}},
+		{"followed by CJK text", "https://example.com/aを確認してください", []string{"https://example.com/a"}},
+		{"followed by full-width paren", "https://example.com/a）", []string{"https://example.com/a"}},
+		{"pipe ends the url", "http://a.example|other", []string{"http://a.example"}},
+		// Host-less targets: nothing to open, so no link (http:///, file:foo
+		// do link, like any scheme followed by a path).
+		{"http scheme only", "http://", nil},
+		{"http scheme then space", "http:// x", nil},
+		{"bare file", "file:", nil},
+		{"bare tel", "tel:", nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -756,6 +768,9 @@ func TestConvert_TypedURLSchemes(t *testing.T) {
 				for _, el := range s.Elements {
 					if l, ok := el.(*slack.RichTextSectionLinkElement); ok {
 						got = append(got, l.URL)
+						if strings.ContainsAny(l.URL, "") {
+							t.Errorf("link URL %q holds a tokenizer sentinel", l.URL)
+						}
 					}
 				}
 			}
