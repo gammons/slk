@@ -14,6 +14,7 @@ import (
 
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/core/blocks"
 	"github.com/gammons/slk/internal/ui/messages"
 )
 
@@ -68,6 +69,48 @@ func TestUserResolved_ReachesThreadPanel(t *testing.T) {
 	_, _ = a.Update(UserResolvedMsg{UserID: "U9", DisplayName: "zed"})
 	if got := a.threadPanel.Replies()[0].UserName; got != "zed" {
 		t.Errorf("thread reply UserName = %q, want zed", got)
+	}
+}
+
+func TestUserResolved_RefreshesForwardedMentions(t *testing.T) {
+	a := newTestApp(t, withSize(160, 40), withActiveTeam("T1"))
+	a.SetUserNames(map[string]string{"UAUTHOR": "Author"})
+	parent := messages.MessageItem{
+		TS: "1.0", UserID: "UAUTHOR", UserName: "Author", Timestamp: "1:00 PM",
+		LegacyAttachments: []blocks.LegacyAttachment{{Text: "Parent: hi <@U123>"}},
+	}
+	reply := messages.MessageItem{
+		TS: "2.0", UserID: "UAUTHOR", UserName: "Author", Timestamp: "1:01 PM",
+		LegacyAttachments: []blocks.LegacyAttachment{{Text: "Reply: hi <@U123>"}},
+	}
+	a.messagepane.SetMessages([]messages.MessageItem{parent})
+	a.threadPanel.SetThread(parent, []messages.MessageItem{reply}, "C1", parent.TS)
+
+	// Render both surfaces before resolution so the event must refresh
+	// already-cached attachment content, not just an author's name.
+	if got := screenText(a); !strings.Contains(got, "Parent: hi @U123") {
+		t.Fatalf("precondition: channel should show the unresolved forwarded mention:\n%s", got)
+	}
+	beforeThread := ansi.Strip(a.threadPanel.View(20, 80))
+	for _, label := range []string{"Parent", "Reply"} {
+		if !strings.Contains(beforeThread, label+": hi @U123") {
+			t.Fatalf("precondition: thread %s should show the unresolved forwarded mention:\n%s", label, beforeThread)
+		}
+	}
+
+	_, _ = a.Update(UserResolvedMsg{TeamID: "T1", UserID: "U123", DisplayName: "Alice"})
+
+	if got := screenText(a); !strings.Contains(got, "Parent: hi @Alice") || strings.Contains(got, "hi @U123") {
+		t.Errorf("channel should refresh the forwarded mention without reloading messages:\n%s", got)
+	}
+	afterThread := ansi.Strip(a.threadPanel.View(20, 80))
+	for _, label := range []string{"Parent", "Reply"} {
+		if !strings.Contains(afterThread, label+": hi @Alice") {
+			t.Errorf("thread %s should refresh the forwarded mention without reloading messages:\n%s", label, afterThread)
+		}
+	}
+	if strings.Contains(afterThread, "hi @U123") {
+		t.Errorf("thread still shows an unresolved forwarded mention:\n%s", afterThread)
 	}
 }
 

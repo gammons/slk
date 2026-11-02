@@ -142,8 +142,8 @@ type WorkspaceContext struct {
 	// updated on every ChannelSelectedMsg via the visit recorder.
 	// Used to populate core.ChannelFinderItem.LastVisited for sort.
 	LastVisitedByChannel map[string]int64
-	// UserResolver dispatches background users.info lookups for
-	// unknown message authors. Set in connectWorkspace once the
+	// UserResolver dispatches background users.info lookups for unknown
+	// message authors and mentioned users. Set in connectWorkspace once the
 	// in-memory UserNames store and the *tea.Program are both available.
 	// Hot-path message processors call resolveUserCached first and
 	// fall back to UserResolver.Request(userID) to enqueue an async
