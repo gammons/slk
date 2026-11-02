@@ -68,6 +68,7 @@ func fetchMessagesAround(client *slackclient.Client, channelID, targetTS string,
 // throughout slk.
 func convertAndCacheHistory(client *slackclient.Client, channelID string, history []slack.Message, db *cache.DB, userNames *userNameStore, tsFormat string, router *workspaceRouter) []messages.MessageItem {
 	var msgItems []messages.MessageItem
+	channels := messageChannelResolver(router, client.TeamID())
 	for _, m := range history {
 		rawBytes, _ := json.Marshal(m)
 		debuglog.Cache("convertAndCacheHistory: upsert channel=%s ts=%s subtype=%q reply_count=%d files=%d",
@@ -105,7 +106,7 @@ func convertAndCacheHistory(client *slackclient.Client, channelID string, histor
 			_ = db.UpsertReaction(m.Timestamp, channelID, r.Name, r.Users, r.Count)
 		}
 
-		msgItems = append(msgItems, messages.MessageItem{
+		item := messages.MessageItem{
 			TS:                m.Timestamp,
 			UserID:            authorID,
 			UserName:          userName,
@@ -119,7 +120,9 @@ func convertAndCacheHistory(client *slackclient.Client, channelID string, histor
 			Attachments:       extractAttachments(m.Files),
 			Blocks:            extractBlocks(m.Blocks),
 			LegacyAttachments: extractLegacyAttachments(m.Attachments),
-		})
+		}
+		resolveMessageMentions(item, channels)
+		msgItems = append(msgItems, item)
 	}
 
 	// Reverse: Slack returns newest first
@@ -167,6 +170,9 @@ func summarizeCachedRows(rows []cache.Message) string {
 // triggering a fresh GetUserProfile RPC. Resolving them on-demand would
 // defeat the cache-first goal (and is what fetchChannelMessages already
 // does on the network path, populating the name store for next time).
+//
+// Visible channel mentions may queue metadata resolution through the source
+// workspace's channel resolver. The cache read never waits for that network work.
 //
 // raw_json unmarshal failures on a single row degrade gracefully: that
 // row renders as text-only (no attachments / blocks / legacy
@@ -395,7 +401,7 @@ func enrichCachedRow(
 		}
 	}
 
-	return messages.MessageItem{
+	item := messages.MessageItem{
 		TS:                m.TS,
 		UserID:            effUserID,
 		UserName:          userName,
@@ -410,11 +416,14 @@ func enrichCachedRow(
 		Blocks:            blocks,
 		LegacyAttachments: legacy,
 	}
+	resolveMessageMentions(item, messageChannelResolver(router, m.WorkspaceID))
+	return item
 }
 
 // loadCachedThreadReplies reads cached parent + replies for a thread
 // from SQLite and reconstructs []messages.MessageItem with the same
-// fidelity as fetchThreadReplies. Offline-pure (no network).
+// fidelity as fetchThreadReplies. Displays local data immediately and may queue
+// background channel-name resolution when a source-workspace resolver is available.
 //
 // The returned slice includes the parent message at index 0 followed
 // by replies in chronological order, matching db.GetThreadReplies'
@@ -477,6 +486,7 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 	}
 
 	msgItems := make([]messages.MessageItem, 0, len(history))
+	channels := messageChannelResolver(router, client.TeamID())
 	for _, m := range history {
 		rawBytes, _ := json.Marshal(m)
 		debuglog.Cache("fetchChannelMessages: upsert channel=%s ts=%s subtype=%q reply_count=%d files=%d",
@@ -514,7 +524,7 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 			_ = db.UpsertReaction(m.Timestamp, channelID, r.Name, r.Users, r.Count)
 		}
 
-		msgItems = append(msgItems, messages.MessageItem{
+		item := messages.MessageItem{
 			TS:                m.Timestamp,
 			UserID:            authorID,
 			UserName:          userName,
@@ -528,7 +538,9 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 			Attachments:       extractAttachments(m.Files),
 			Blocks:            extractBlocks(m.Blocks),
 			LegacyAttachments: extractLegacyAttachments(m.Attachments),
-		})
+		}
+		resolveMessageMentions(item, channels)
+		msgItems = append(msgItems, item)
 	}
 
 	// Reverse: Slack returns newest first
@@ -576,6 +588,7 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 	}
 
 	msgItems := make([]messages.MessageItem, 0, len(history))
+	channels := messageChannelResolver(router, client.TeamID())
 	for _, m := range history {
 		rawBytes, _ := json.Marshal(m)
 		debuglog.Cache("fetchThreadReplies: upsert channel=%s ts=%s subtype=%q reply_count=%d files=%d",
@@ -613,7 +626,7 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 			_ = db.UpsertReaction(m.Timestamp, channelID, r.Name, r.Users, r.Count)
 		}
 
-		msgItems = append(msgItems, messages.MessageItem{
+		item := messages.MessageItem{
 			TS:                m.Timestamp,
 			UserID:            authorID,
 			UserName:          userName,
@@ -627,7 +640,9 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 			Attachments:       extractAttachments(m.Files),
 			Blocks:            extractBlocks(m.Blocks),
 			LegacyAttachments: extractLegacyAttachments(m.Attachments),
-		})
+		}
+		resolveMessageMentions(item, channels)
+		msgItems = append(msgItems, item)
 	}
 
 	// First message from GetConversationReplies is the parent -- skip it for the replies list.

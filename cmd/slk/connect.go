@@ -143,6 +143,10 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	)
 	wctx.UserResolver.names = wctx.UserNames
 
+	// Channel names include cached unjoined public channels, but resolving a
+	// mention only updates this store and metadata, never workspace rows.
+	wctx.ChannelResolver = newChannelResolver(wctx.TeamID, db, client.GetConversationInfo)
+
 	// Refetches other users' custom status and DND on the socket's
 	// ID-only user_invalidated / dnd_invalidated events. known reads the
 	// cache on the WS goroutine, the same read Request makes there.
@@ -370,6 +374,9 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	for _, ch := range channels {
 		item, finderItem := buildChannelItem(ch, wctx, cfg, client.TeamID())
 		upsertChannelInDB(db, ch, item.Type, client.TeamID())
+		if (item.Type == "channel" || item.Type == "private") && item.Name != "" {
+			wctx.ChannelResolver.nameStore().Set(item.ID, item.Name)
+		}
 
 		if ch.IsIM {
 			if _, ok := wctx.UserNames.Get(ch.User); !ok {

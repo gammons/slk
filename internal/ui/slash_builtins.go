@@ -80,7 +80,9 @@ func slashOpen(name string) commandFunc {
 			if item, ok := a.findChannelByID(mentioned[0].ID); ok {
 				return a.openChannel(channelResultOf(item))
 			}
-			channel = mentioned[0].Label
+			if mentioned[0].Label != "" {
+				channel = mentioned[0].Label
+			}
 		}
 		if item, ok := matchChannelByName(a.channelFinder.Items(), channel); ok {
 			return a.openChannel(channelResultOf(item))

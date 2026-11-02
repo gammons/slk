@@ -7,8 +7,8 @@ import (
 )
 
 func TestMentionedChannelIDs(t *testing.T) {
-	got := MentionedChannelIDs("see <#C0EXAMPLE01|general> and <#G0EXAMPLE02|secret>, not <#bad> or <@U1>")
-	want := []string{"C0EXAMPLE01", "G0EXAMPLE02"}
+	got := MentionedChannelIDs("see <#C0EXAMPLE01|general>, <#C0BARE01> and <#G0EXAMPLE02|secret>, then <#C0BARE01> again; not <#bad>, &lt;#C0ESCAPED&gt; or <@U1>")
+	want := []string{"C0EXAMPLE01", "C0BARE01", "G0EXAMPLE02", "C0BARE01"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("MentionedChannelIDs = %v, want %v", got, want)
 	}
@@ -18,9 +18,9 @@ func TestMentionedChannelIDs(t *testing.T) {
 }
 
 func TestMentionedChannels(t *testing.T) {
-	got := MentionedChannels("see <#C0EXAMPLE01|general> and <#G0EXAMPLE02|secret>, not <#bad> or <@U1>")
-	want := []ChannelMention{{ID: "C0EXAMPLE01", Label: "general"}, {ID: "G0EXAMPLE02", Label: "secret"}}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+	got := MentionedChannels("see <#C0EXAMPLE01|general>, <#C0BARE01> and <#G0EXAMPLE02|secret>, not <#bad> or <@U1>")
+	want := []ChannelMention{{ID: "C0EXAMPLE01", Label: "general"}, {ID: "C0BARE01"}, {ID: "G0EXAMPLE02", Label: "secret"}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 		t.Errorf("MentionedChannels = %v, want %v", got, want)
 	}
 	if got := MentionedChannels("no mentions"); len(got) != 0 {
@@ -30,8 +30,8 @@ func TestMentionedChannels(t *testing.T) {
 
 func TestStripMarkup_ResolvesAndStrips(t *testing.T) {
 	names := map[string]string{"U1": "alice"}
-	got := StripMarkup("<@U1> hi <#C1|general> *bold* <!here> <https://x.io|link>", names)
-	for _, want := range []string{"@alice", "#general", "bold", "@here", "link"} {
+	got := StripMarkup("<@U1> hi <#C1|general> *bold* <!here> <https://x.io|link> and <#C9>", names)
+	for _, want := range []string{"@alice", "#general", "bold", "@here", "link", "<#C9>"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("want %q in %q", want, got)
 		}

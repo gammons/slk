@@ -150,6 +150,11 @@ type WorkspaceContext struct {
 	// fetch; the goroutine emits ui.UserResolvedMsg back into the
 	// program, which patches in-history rows live.
 	UserResolver *userResolver
+	// ChannelResolver hydrates bare channel mentions without joining or
+	// inserting conversations. Its channel-ID names store is synchronized;
+	// the UI receives only its own versioned snapshot and name notices.
+	// Nil disables optional channel resolution; use nameStore() for store access.
+	ChannelResolver *channelResolver
 	// PeerStatus refetches other users' custom status and DND when the
 	// socket invalidates them. Nil-safe: a nil refresher drops
 	// invalidations.
