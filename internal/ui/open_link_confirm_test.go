@@ -105,6 +105,27 @@ func TestOpenLink_PromptKeepsTheEndOfALongTarget(t *testing.T) {
 	}
 }
 
+// On a short terminal the prompt's body has fewer lines than the usual 8;
+// the budget follows the room it really has, so both ends stay visible.
+func TestOpenLink_ShortTerminalKeepsBothEndsOfALongTarget(t *testing.T) {
+	url := "file://host.example/" + strings.Repeat("d/", 200) + "x.exe"
+	for _, h := range []int{10, 11, 12, 24} {
+		a, opened := confirmLinkApp(t, "see <"+url+"|Q3 report>")
+		a.width, a.height = 80, h
+		sendAndDrain(a, a.handleNormalMode(tea.KeyPressMsg{Code: 'o', Text: "o"})())
+		if a.mode != ModeConfirm {
+			t.Fatalf("h=%d: mode = %v, want a confirm prompt", h, a.mode)
+		}
+		if !dialogShows(a, "file://host") || !dialogShows(a, "x.exe") {
+			t.Fatalf("h=%d: prompt must show both ends:\n%s", h, a.confirmPrompt.View())
+		}
+		sendAndDrain(a, tea.KeyPressMsg{Code: 'y', Text: "y"})
+		if len(*opened) != 1 || (*opened)[0] != url {
+			t.Errorf("h=%d: opener got %v, want the exact URL", h, *opened)
+		}
+	}
+}
+
 func TestOpenLink_PromptEscapesControlAndBidiRunes(t *testing.T) {
 	url := "file:///tmp/\x1b[8mhidden\u202eexe.txt"
 	a, opened := confirmLinkApp(t, "see <"+url+"|label>")

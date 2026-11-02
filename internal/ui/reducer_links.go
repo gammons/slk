@@ -77,7 +77,12 @@ var reduceLinks reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// file:, ssh: and the like hand the target to the OS launcher, and
 		// the sender chose the label, so show the real target first.
 		url := m.URL
-		a.openConfirmPrompt("Open link?", "Open "+displayTarget(url)+"?", func() tea.Msg {
+		budget := a.linkBudget()
+		if budget < minDisplayBudget {
+			// No room to show where the link goes, so do not offer to open it.
+			return toastWithClear(a, "Terminal too small to confirm this link", 3*time.Second), true
+		}
+		a.openConfirmPrompt("Open link?", "Open "+displayTarget(url, budget)+"?", func() tea.Msg {
 			return OpenLinkMsg{URL: url, Confirmed: true}
 		})
 		return nil, true
@@ -85,16 +90,28 @@ var reduceLinks reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	return a.routeLink(m.URL), true
 }
 
-// displayBudget is how many terminal cells of a link target the confirm
-// prompt shows (its body holds at most 8 lines of 36+ cells, with no getter).
-const displayBudget = 200
+// maxDisplayBudget caps how many cells of a link target the prompt shows.
+const maxDisplayBudget = 200
+
+// minDisplayBudget is the least room worth confirming in: below it the
+// prompt could not show a scheme, a host and a file name together.
+const minDisplayBudget = 16
+
+// linkBudget is how many cells of the target fit in the confirm prompt at
+// the current terminal size: its real body lines and width, less a line of
+// slack for word wrapping and room for "Open " and "?".
+func (a *App) linkBudget() int {
+	a.prepareConfirmPrompt()
+	lines, width := a.confirmPrompt.BodyRoom("Open link?")
+	return min(maxDisplayBudget, (lines-1)*width-8)
+}
 
 // displayTarget is what the confirm prompt shows for a link target. Every
 // non-printable rune (controls, DEL, bidi and other format runes) becomes a
 // visible escape, so the sender cannot hide or reorder part of the target.
 // A target wider than displayBudget keeps its head (scheme and host) and its
 // tail (file name) with the middle elided. The opener still gets the exact URL.
-func displayTarget(rawURL string) string {
+func displayTarget(rawURL string, budget int) string {
 	var parts []string
 	var widths []int
 	total := 0
@@ -109,10 +126,10 @@ func displayTarget(rawURL string) string {
 		widths = append(widths, w)
 		total += w
 	}
-	if total <= displayBudget {
+	if total <= budget {
 		return strings.Join(parts, "")
 	}
-	const headBudget, tailBudget = 110, 80
+	headBudget, tailBudget := budget*11/20, budget*8/20
 	head, hw := 0, 0
 	for head < len(parts) && hw+widths[head] <= headBudget {
 		hw += widths[head]
