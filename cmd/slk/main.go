@@ -1135,7 +1135,16 @@ func run() error {
 			if wctx == nil || wctx.Client == nil {
 				return nil, false
 			}
-			return wctx.Client.GetUserProfileContext, true
+			// The dialog's fetch bypasses the full-profile writers, so the
+			// deactivated flag is recorded here. p is nil until the program
+			// starts and the fetch only runs from the UI, hence the closure.
+			return func(ctx context.Context, userID string) (*slackclient.UserProfile, error) {
+				u, err := wctx.Client.GetUserProfileContext(ctx, userID)
+				if err == nil {
+					recordUserDeleted(db, func(msg tea.Msg) { p.Send(msg) }, userID, u.Deleted)
+				}
+				return u, err
+			}, true
 		})
 		profiles := newProfileCache(5*time.Minute, time.Now, profileFetch)
 		app.SetProfileService(core.NewProfileService(core.ProfileServiceFuncs{
@@ -1472,6 +1481,9 @@ func run() error {
 		// workspace being displayed, not the profile's first cache owner.
 		// Best-effort: nil on error (the picker shows no external flags).
 		external, _ := db.ExternalUsers(wctx.TeamID)
+		// Global, not per workspace: the cache's whole set plus this
+		// workspace's IM peers Slack flagged.
+		deactivated := deactivatedUsers(db)
 
 		// Statuses and presence are re-read from the cache, which live
 		// changes keep current, rather than the connect-time items. DND
@@ -1499,6 +1511,7 @@ func run() error {
 			UserNames:        switchNames,
 			UserStatuses:     statuses,
 			ExternalUsers:    external,
+			DeactivatedUsers: deactivated,
 			UserID:           wctx.UserID,
 			CustomEmoji:      wctx.CustomEmoji(),
 			UserGroups:       wctx.UserGroups(),
@@ -1694,6 +1707,9 @@ func run() error {
 			// including profiles first cached by a different workspace.
 			// Best-effort: nil on error, until live resolution fills the flags.
 			external, _ := db.ExternalUsers(wctx.TeamID)
+			// Bootstrap revalidation has already refreshed the cache's
+			// deactivated flags by now.
+			deactivated := deactivatedUsers(db)
 
 			readyStatuses := cachedPeerStatuses(db, wctx.TeamID)
 			wctx.PeerStatus.SeedHuddles(readyStatuses)
@@ -1714,6 +1730,7 @@ func run() error {
 				UserNames:        readyNames,
 				UserStatuses:     readyStatuses,
 				ExternalUsers:    external,
+				DeactivatedUsers: deactivated,
 				UserID:           wctx.UserID,
 				CustomEmoji:      wctx.CustomEmoji(), // bootstrap subset; replaced by the goroutine below
 				UserGroups:       wctx.UserGroups(),  // empty at this point; filled by the goroutine below

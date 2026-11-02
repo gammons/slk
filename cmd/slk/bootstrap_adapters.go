@@ -634,6 +634,7 @@ func hydrateFirstSight(db *cache.DB, workspaceID string, res *bootstrap.Result) 
 			// presence_query corrects a new one.
 			Presence:         "away",
 			IsBot:            u.IsBot || u.IsAppUser,
+			Deleted:          u.Deleted,
 			IsExternal:       u.TeamID != "" && u.TeamID != workspaceID,
 			StatusEmoji:      u.Profile.StatusEmoji,
 			StatusText:       u.Profile.StatusText,

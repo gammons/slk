@@ -210,10 +210,17 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	// the tasks that follow, each next to the call that replaces it,
 	// so no intermediate commit leaves slk unable to boot. Until then
 	// slk does both, and the request tally goes UP.
+	// Revalidation inside bootstrap.Run can change users.deleted; the diff
+	// is announced after it.
+	deactivatedBefore, _ := db.DeactivatedUsers()
 	res, err := bootstrap.Run(ctx, newBootstrapDeps(client, db, token.AccessToken,
 		mostRecentlyVisitedChannel(wctx.LastVisitedByChannel), wctx.EdgeHealth))
 	if err != nil {
 		return nil, fmt.Errorf("bootstrapping %s: %w", token.TeamName, err)
+	}
+	deactivatedAfter, _ := db.DeactivatedUsers()
+	if p != nil {
+		announceRevalidated(func(msg tea.Msg) { p.Send(msg) }, deactivatedBefore, deactivatedAfter)
 	}
 	// Order matters between these two: applyBootUsers fills
 	// the synchronized bot classification, which buildChannelItem reads to bucket app DMs,
@@ -367,6 +374,8 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	for _, ch := range channels {
 		item, finderItem := buildChannelItem(ch, wctx, cfg, client.TeamID())
 		upsertChannelInDB(db, ch, item.Type, client.TeamID())
+		// No UI message: the ready message carries the workspace's set.
+		recordDeactivatedPeer(ch, db)
 
 		if ch.IsIM {
 			if _, ok := wctx.UserNames.Get(ch.User); !ok {

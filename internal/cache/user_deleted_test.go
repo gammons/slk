@@ -70,6 +70,26 @@ func TestMarkUserDeletedNeverCreatesARow(t *testing.T) {
 	}
 }
 
+func TestClearUserDeletedNeverCreatesARow(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	defer db.Close()
+	if err := db.ClearUserDeleted("U404"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.GetUser("U404"); err == nil {
+		t.Fatal("ClearUserDeleted created a row")
+	}
+	if err := db.UpsertUser(User{ID: "U1", WorkspaceID: "T1", Deleted: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ClearUserDeleted("U1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := getUserRow(t, db, "U1"); got.Deleted {
+		t.Fatalf("flag not cleared: %+v", got)
+	}
+}
+
 func TestDeactivatedUsersIsGlobalAndCallerOwned(t *testing.T) {
 	db := setupDBWithWorkspace(t)
 	defer db.Close()

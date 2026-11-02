@@ -194,6 +194,17 @@ func (db *DB) MarkUserDeleted(id string) error {
 	return nil
 }
 
+// ClearUserDeleted records that a profile shows id active again. Like
+// MarkUserDeleted it never creates a row; the full-profile writers clear
+// the flag themselves, so this is for profile observations that bypass them.
+func (db *DB) ClearUserDeleted(id string) error {
+	_, err := db.conn.Exec(`UPDATE users SET deleted = 0 WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("clearing deleted for user %s: %w", id, err)
+	}
+	return nil
+}
+
 func (db *DB) UpdatePresence(userID, presence string) error {
 	_, err := db.conn.Exec(`UPDATE users SET presence = ? WHERE id = ?`, presence, userID)
 	if err != nil {

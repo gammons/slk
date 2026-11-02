@@ -193,6 +193,7 @@ func (p *peerStatusRefresher) fallbackResolve(userID string, now time.Time) {
 	logHuddleState("users.info fallback", u.Profile.HuddleState, int64(u.Profile.HuddleStateExpirationTS), now)
 	p.noteHuddle(userID, u.Profile.HuddleState)
 	applyProfileStatus(p.teamID, userID, u, p.db, p.send)
+	recordUserDeleted(p.db, p.send, userID, u.Deleted)
 }
 
 // applyProfileStatus persists a users.info profile's custom status and

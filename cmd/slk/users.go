@@ -75,6 +75,7 @@ func resolveUser(client *slackclient.Client, userID string, userNames *userNameS
 				isBot := u.IsBot || u.IsAppUser
 				isExternal := u.TeamID != "" && u.TeamID != client.TeamID()
 				avatarCache.Preload(userID, u.Profile.Image32)
+				wasDeleted := knownDeleted(db, userID)
 				db.UpsertUser(cache.User{
 					ID:          userID,
 					WorkspaceID: client.TeamID(),
@@ -84,8 +85,10 @@ func resolveUser(client *slackclient.Client, userID string, userNames *userNameS
 					AvatarURL:   u.Profile.Image32,
 					Presence:    "away",
 					IsBot:       isBot,
+					Deleted:     u.Deleted,
 					IsExternal:  isExternal,
 				})
+				announceUserDeleted(send, userID, wasDeleted, u.Deleted)
 				// UpsertUser doesn't touch status on an existing row.
 				applyProfileStatus(client.TeamID(), userID, u, db, send)
 				return name, isBot
@@ -106,6 +109,7 @@ func resolveUser(client *slackclient.Client, userID string, userNames *userNameS
 		isExternal := u.TeamID != "" && u.TeamID != client.TeamID()
 		userNames.Set(userID, name)
 		avatarCache.Preload(userID, u.Profile.Image32)
+		wasDeleted := knownDeleted(db, userID)
 		db.UpsertUser(cache.User{
 			ID:          userID,
 			WorkspaceID: client.TeamID(),
@@ -115,8 +119,10 @@ func resolveUser(client *slackclient.Client, userID string, userNames *userNameS
 			AvatarURL:   u.Profile.Image32,
 			Presence:    "away",
 			IsBot:       isBot,
+			Deleted:     u.Deleted,
 			IsExternal:  isExternal,
 		})
+		announceUserDeleted(send, userID, wasDeleted, u.Deleted)
 		applyProfileStatus(client.TeamID(), userID, u, db, send)
 		if send != nil {
 			send(ui.UserResolvedMsg{
