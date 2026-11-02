@@ -116,6 +116,7 @@ func (a *App) refilterDeactivated() {
 	hidden := a.hiddenUsers()
 	a.sidebar.SetDeactivatedUsers(hidden)
 	a.channelFinder.SetDeactivatedUsers(hidden)
+	a.channelFinder.SetUnsendableUsers(a.deactivatedUsers)
 	a.pushChannelPicks()
 	// The roster is rebuilt from the full name map, as UserResolvedMsg does.
 	if len(a.userNames) > 0 {

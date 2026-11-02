@@ -323,3 +323,18 @@ func TestOpeningAHiddenDMFromTheFinderSelectsItsRow(t *testing.T) {
 		t.Fatalf("sidebar cursor on %q, want the opened DM D2", got)
 	}
 }
+
+func TestForwardPickerSkipsADeactivatedDMWithTheOptionOff(t *testing.T) {
+	a := deactivatedApp()
+	a.SetDeactivatedUsers(map[string]bool{"U2": true}, 0)
+	a.SetHideDeactivatedUsers(false)
+	a.channelFinder.OpenForForwarding()
+	for _, r := range "gone" {
+		a.channelFinder.HandleKey(string(r))
+	}
+	for _, it := range a.channelFinder.FilteredItems() {
+		if it.ID == "D2" {
+			t.Fatal("the forward picker offers a deactivated person's DM with the option off")
+		}
+	}
+}

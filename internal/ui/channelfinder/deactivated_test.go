@@ -45,6 +45,7 @@ func TestDeactivatedUsersAreFoundOnlyBySearch(t *testing.T) {
 		m := New()
 		m.SetItems(deactivatedItems())
 		m.SetDeactivatedUsers(map[string]bool{"U2": true})
+		m.SetUnsendableUsers(map[string]bool{"U2": true})
 		if tc.forwarding {
 			m.OpenForForwarding()
 		} else {
@@ -60,6 +61,26 @@ func TestDeactivatedUsersAreFoundOnlyBySearch(t *testing.T) {
 		if !slices.Equal(got, tc.want) {
 			t.Errorf("forwarding=%v query=%q: offered %v, want %v", tc.forwarding, tc.query, got, tc.want)
 		}
+	}
+}
+
+// With the option off the finder treats the DM as any other, but
+// forwarding still never offers it: Slack refuses the post either way.
+func TestForwardingSkipsADeactivatedDMWithTheOptionOff(t *testing.T) {
+	m := New()
+	m.SetItems(deactivatedItems())
+	m.SetUnsendableUsers(map[string]bool{"U2": true})
+	m.Open()
+	if got := filteredIDs(&m); !slices.Contains(got, "D2") {
+		t.Errorf("finder with the option off: offered %v, want D2 among them", got)
+	}
+	m.Close()
+	m.OpenForForwarding()
+	for _, r := range "gone" {
+		m.HandleKey(string(r))
+	}
+	if got := filteredIDs(&m); slices.Contains(got, "D2") {
+		t.Errorf("forwarding with the option off: offered %v, want no D2", got)
 	}
 }
 

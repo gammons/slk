@@ -59,6 +59,10 @@ type Model struct {
 	// for forwarding. The App owns it: it is published whole and never
 	// written here, and nil treats everyone the same (the option is off).
 	deactivated map[string]bool
+	// unsendable is every deactivated user, whatever the option says:
+	// their DMs are never a forwarding destination, as Slack takes no
+	// messages there. Owned by the App, like deactivated.
+	unsendable map[string]bool
 }
 
 // SetDeactivatedUsers sets the user IDs whose DMs are offered only to a
@@ -67,6 +71,16 @@ type Model struct {
 // refiltered.
 func (m *Model) SetDeactivatedUsers(users map[string]bool) {
 	m.deactivated = users
+	if m.visible {
+		m.filter()
+	}
+}
+
+// SetUnsendableUsers sets the user IDs whose DMs forwarding never offers:
+// every deactivated user, also with the option off. The map is kept, not
+// copied, like SetDeactivatedUsers'. An open overlay is refiltered.
+func (m *Model) SetUnsendableUsers(users map[string]bool) {
+	m.unsendable = users
 	if m.visible {
 		m.filter()
 	}
@@ -405,8 +419,12 @@ func (m *Model) filter() {
 			continue
 		}
 		// A deactivated DM is found only by searching for it, and is
-		// never a forwarding destination: Slack takes no messages there.
-		if (strings.TrimSpace(q) == "" || m.forwarding) && m.isDeactivated(item) {
+		// never a forwarding destination: Slack takes no messages there,
+		// whether or not the option hides it.
+		if strings.TrimSpace(q) == "" && m.isDeactivated(item) {
+			continue
+		}
+		if m.forwarding && core.IsHiddenPeerConversation(item.Type, item.DMUserID, m.unsendable) {
 			continue
 		}
 		idxs = append(idxs, i)

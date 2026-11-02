@@ -96,7 +96,8 @@ conversations. This does not depend on the option: hiding is a display
 preference, the account is deactivated either way.
 
 With the option off nothing is hidden or marked, and the finder shows the
-DM as a normal row. The composer stays disabled.
+DM as a normal row. The composer stays disabled, and forwarding still does
+not offer the DM, for the same reason.
 
 Out of scope:
 
@@ -213,6 +214,8 @@ still subject to the staleness filter.
   published map, because the sidebar and finder keep the map they are
   given. An unchanged set is not republished. `App.hiddenUsers()` is nil
   when the option is off, so the surfaces know nothing about the option.
+  The finder also gets the full set (`SetUnsendableUsers`), only for the
+  forwarding check.
 - The option reaches the App through `uiSettings` and
   `App.SetHideDeactivatedUsers(bool)`. `NewApp` starts with it on, like
   `config.Default()`.
@@ -226,7 +229,8 @@ still subject to the staleness filter.
   `upsertFinderItem`.
 - Sidebar setters keep the cursor on its row (`refilter`).
 - Finder `filter()`: the check runs after the query check. With an empty
-  query or in forwarding mode the row is skipped; with a query it goes
+  query the row is skipped, and in forwarding mode a DM of anyone
+  deactivated is skipped whatever the option says; with a query it goes
   into matching, and the sort puts deactivated last, ahead of `Joined`.
   `channels/search` returns channels only, so the server search cannot
   bring back an unmarked DM.
