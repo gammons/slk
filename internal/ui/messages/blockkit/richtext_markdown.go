@@ -8,6 +8,7 @@ import (
 	"github.com/slack-go/slack"
 
 	"github.com/gammons/slk/internal/linkscheme"
+	"github.com/gammons/slk/internal/slack/mrkdwn"
 )
 
 // RichTextToMarkdown rebuilds the CommonMark a person would type into
@@ -185,8 +186,11 @@ func codeSpan(s string) string {
 // also sends as a link.
 func LinkToMarkdown(url, label string) string {
 	if label == "" || label == url || url == "mailto:"+label {
-		if linkscheme.HasPrefix(url) {
+		if strings.HasPrefix(url, "mailto:") {
 			return strings.TrimPrefix(url, "mailto:")
+		}
+		if linkscheme.HasPrefix(url) && mrkdwn.TypesAsBareURL(url) {
+			return url
 		}
 		label = url
 	}

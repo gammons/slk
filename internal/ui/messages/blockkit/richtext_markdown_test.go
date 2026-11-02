@@ -24,6 +24,51 @@ func TestLinkToMarkdown_BareForEveryLinkScheme(t *testing.T) {
 	}
 }
 
+// A bare URL the typed-URL matcher would cut (non-ASCII, a space) stays
+// explicit, and the round trip keeps the whole target.
+func TestLinkToMarkdown_BareOnlyWhenWholeURLSurvives(t *testing.T) {
+	for _, tc := range []struct {
+		url      string
+		wantBare bool
+	}{
+		{"file:///tmp/a.txt", true},
+		{"file:///tmp/résumé.txt", false},
+		{"file:///tmp/my file.txt", false},
+		{"ftp://x.example/日本.txt", false},
+	} {
+		got := LinkToMarkdown(tc.url, "")
+		if bare := got == tc.url; bare != tc.wantBare {
+			t.Errorf("LinkToMarkdown(%q) = %q, bare=%v want %v", tc.url, got, bare, tc.wantBare)
+		}
+		_, block := mrkdwn.Convert(got)
+		if block == nil {
+			t.Fatalf("no block for %q", got)
+		}
+		raw, _ := json.Marshal(block)
+		var back slack.RichTextBlock
+		if err := json.Unmarshal(raw, &back); err != nil {
+			t.Fatal(err)
+		}
+		var targets []string
+		var walk func(els []slack.RichTextElement)
+		walk = func(els []slack.RichTextElement) {
+			for _, e := range els {
+				if s, ok := e.(*slack.RichTextSection); ok {
+					for _, se := range s.Elements {
+						if l, ok := se.(*slack.RichTextSectionLinkElement); ok {
+							targets = append(targets, l.URL)
+						}
+					}
+				}
+			}
+		}
+		walk(back.Elements)
+		if len(targets) != 1 || targets[0] != tc.url {
+			t.Errorf("round trip of %q gave targets %q", tc.url, targets)
+		}
+	}
+}
+
 // received sends composer text through the send path (mrkdwn.Convert)
 // and back through JSON, the way the block arrives from Slack.
 func received(t *testing.T, composed string) RichTextBlock {

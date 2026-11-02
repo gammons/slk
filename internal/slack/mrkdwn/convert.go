@@ -21,6 +21,13 @@ import (
 // www. matches stay with goldmark.
 var typedURLRegexp = regexp.MustCompile(`^(?:` + linkscheme.Alternation + `)[!-;=?-{}~]*[#-&()+\-/-9=@-\[\\^` + "`" + `a-{}]`)
 
+// TypesAsBareURL reports whether Convert turns url, typed bare, into one
+// link whose target is all of url. A URL with a space or a non-ASCII
+// character fails: the matcher stops there and the link would be cut.
+func TypesAsBareURL(url string) bool {
+	return typedURLRegexp.FindString(url) == url
+}
+
 // typedURLProtocols lists the "scheme:" names Linkify may start a match at,
 // taken from linkscheme.Prefixes. mailto: is left to Linkify's email matcher.
 var typedURLProtocols = func() []string {
