@@ -39,7 +39,7 @@
 ## Images
 
 - Inline image attachments render automatically in the messages pane: kitty graphics protocol on capable terminals (kitty, ghostty, recent WezTerm), sixel on foot/mlterm and on any terminal that advertises sixel in its DA1 reply (xterm with sixel support, DomTerm, toyterm, …), half-block (`▀`) fallback everywhere else
-- User avatars use the same kitty graphics path on capable terminals for sharper pixels; sixel and other terminals fall back to half-block
+- User avatars use the same kitty graphics path on capable terminals for sharper pixels; sixel and other terminals fall back to half-block. Long author names wrap in full beside the avatar when the pane narrows; the avatar's two rows stay contiguous, and the message body starts below the complete header. Timestamps stay whole when they fit on a header line, so selection can add the date when space allows without changing the row count.
 - Click any inline image (or press `O` on the selected message) for a full-screen in-app preview
 - `Enter` from the preview launches the OS image viewer
 - Lazy-loaded: images download only as they scroll into view
