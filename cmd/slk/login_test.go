@@ -126,6 +126,55 @@ func TestLoginRefresher_ARefusedStoredLoginFallsBackToTheDesktopApp(t *testing.T
 	}
 }
 
+func TestLoginRefresher_ProtectedStoredLoginNeverFallsBackToDesktop(t *testing.T) {
+	for _, source := range []string{slackclient.TokenSourceImported, slackclient.TokenSourceBrowser, "future-source"} {
+		for _, state := range []string{"same-pair", "already-refused", "refused-on-check"} {
+			t.Run(source+"/"+state, func(t *testing.T) {
+				failed := testLogin("xoxc-old", "d-old")
+				stored := testLogin("xoxc-saved", "d-saved")
+				if state == "same-pair" {
+					stored = failed
+				}
+				stored.Source = source
+				f := &fakeLogins{
+					stored:  stored,
+					desktop: testLogin("xoxc-desk", "d-desk"),
+					verdict: map[string]error{stored.AccessToken: errInvalidAuth},
+				}
+				r := f.refresher()
+				if state == "already-refused" {
+					r.refused[keyOf(stored)] = true
+				}
+				for range 2 {
+					got, err := r.refresh(context.Background(), failed)
+					if !errors.Is(err, errNoNewerLogin) || got != failed {
+						t.Fatalf("refresh = %s, %v; want the failed login and errNoNewerLogin", got.AccessToken, err)
+					}
+				}
+				var wantChecked []string
+				if state == "refused-on-check" {
+					wantChecked = []string{stored.AccessToken}
+				}
+				if !slices.Equal(f.checked, wantChecked) {
+					t.Errorf("checked %q, want %q", f.checked, wantChecked)
+				}
+				if len(f.remintedFor) != 0 || len(f.saved) != 0 || f.stored != stored {
+					t.Error("desktop fallback read or replaced a protected stored login")
+				}
+				f.stored = testLogin("xoxc-reimported", "d-reimported")
+				f.stored.Source = source
+				got, err := r.refresh(context.Background(), failed)
+				if err != nil || got != f.stored || f.loads != 3 {
+					t.Errorf("refresh = %s, %v, loads = %d; want the newer protected login", got.AccessToken, err, f.loads)
+				}
+				if !slices.Equal(f.checked, append(wantChecked, "xoxc-reimported")) || len(f.remintedFor) != 0 || len(f.saved) != 0 {
+					t.Error("the newer protected login was not checked without desktop fallback")
+				}
+			})
+		}
+	}
+}
+
 // TestConnectWithRemint_ARefusedStoredLoginFallsBackToTheDesktopApp is the
 // same through the CLI's sign-in: A is refused, the store has B, Slack
 // refuses B, the desktop app has C, and the command signs in with C.
@@ -469,6 +518,71 @@ func TestLoginRefresher_KeepsTheCheckedLoginWhenTheReplacementCannotBeChecked(t 
 	}
 	if stored, err := store.Load("T1"); err != nil || stored != c {
 		t.Errorf("the token store holds %+v (%v), want the replacement, %+v", stored, err, c)
+	}
+}
+
+func TestLoginRefresher_ReconsiderRespectsReplacementSource(t *testing.T) {
+	offline := errors.New("dial tcp: no route to host")
+	for _, source := range []string{"", slackclient.TokenSourceImported, slackclient.TokenSourceBrowser, "future-source"} {
+		for _, tc := range []struct {
+			name     string
+			verdict  error
+			refused  bool
+			samePair bool
+		}{
+			{name: "accepted"},
+			{name: "refused", verdict: errInvalidAuth},
+			{name: "unreachable", verdict: offline},
+			{name: "already-refused", refused: true},
+			{name: "same-refused-pair", samePair: true},
+		} {
+			t.Run(source+"/"+tc.name, func(t *testing.T) {
+				failed := testLogin("xoxc-old", "d-old")
+				stored := testLogin("xoxc-replaced", "d-replaced")
+				if tc.samePair {
+					stored = failed
+				}
+				stored.Source, stored.UserID = source, "UREPLACED"
+				f := &fakeLogins{stored: failed, desktop: testLogin("xoxc-desk", "d-desk")}
+				f.check = func(_ context.Context, tok slackclient.Token) error {
+					if keyOf(tok) == keyOf(f.desktop) {
+						f.stored = stored
+						return nil
+					}
+					if tok != stored {
+						t.Error("checked an unexpected login")
+					}
+					return tc.verdict
+				}
+				r := f.refresher()
+				if tc.refused {
+					r.refused[keyOf(stored)] = true
+				}
+				want, wantErr := f.desktop, error(nil)
+				wantChecked := []string{f.desktop.AccessToken}
+				if !tc.refused && !tc.samePair {
+					wantChecked = append(wantChecked, stored.AccessToken)
+				}
+				if !tc.refused && !tc.samePair && tc.verdict == nil {
+					want = stored
+				} else if !stored.UsesDesktopLogin() {
+					want, wantErr = failed, tc.verdict
+					if wantErr == nil || slackclient.IsAuthError(wantErr) {
+						wantErr = errNoNewerLogin
+					}
+				}
+				got, err := r.refresh(context.Background(), failed)
+				if got != want || !errors.Is(err, wantErr) {
+					t.Errorf("refresh = %s, %v; want %s, %v", got.AccessToken, err, want.AccessToken, wantErr)
+				}
+				if f.stored != stored || len(f.saved) != 0 {
+					t.Error("the concurrently replaced login was overwritten")
+				}
+				if f.loads != 2 || !slices.Equal(f.checked, wantChecked) || !slices.Equal(f.remintedFor, []string{failed.AccessToken}) {
+					t.Errorf("loads = %d, checked %q, reminted for %q; want a single reconsideration", f.loads, f.checked, f.remintedFor)
+				}
+			})
+		}
 	}
 }
 

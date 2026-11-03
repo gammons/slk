@@ -43,10 +43,10 @@ func keyOf(tok slackclient.Token) loginKey {
 //  1. The token store. Another slk process (a TUI launch, a CLI command,
 //     another TUI's reconnect) can have saved a newer login there; taking
 //     it needs no keychain read.
-//  2. The Slack desktop app (desktopLogin). It is asked at most once per
-//     refused login that Slack answered about: reading it can show a
-//     keychain prompt, and a login that Slack keeps refusing must not ask
-//     again on every reconnect.
+//  2. The Slack desktop app (desktopLogin), only for desktop-backed logins.
+//     It is asked at most once per refused login that Slack answered about:
+//     reading it can show a keychain prompt, and a login that Slack keeps
+//     refusing must not ask again on every reconnect.
 //
 // Every candidate passes check (auth.test on a client of its own) before
 // refresh returns it, so a caller never installs or sends a login that
@@ -118,11 +118,11 @@ func (r *loginRefresher) refresh(ctx context.Context, failed slackclient.Token) 
 			return stored, nil
 		}
 	}
-	if r.asked[keyOf(failed)] {
+	if r.asked[keyOf(failed)] || (loadErr == nil && !stored.UsesDesktopLogin()) {
 		return failed, errNoNewerLogin
 	}
 	// remint gives failed back when the desktop app has nothing newer, and
-	// for a browser sign-in, which it never touches.
+	// for a protected sign-in, which it never touches.
 	fresh := r.remint(ctx, failed)
 	if r.refused[keyOf(fresh)] {
 		r.asked[keyOf(failed)] = true
@@ -169,13 +169,19 @@ func (r *loginRefresher) refresh(ctx context.Context, failed slackclient.Token) 
 //   - The caller gave up during its check (cancelled, deadline): that
 //     cause is returned, not a login.
 //   - Anything else (Slack refuses it, or could not be asked about it):
-//     the caller keeps fresh, which passed. fresh is neither saved nor
-//     remembered anywhere else, so ending the search here would lose it.
+//     only a desktop-backed entry lets the caller keep fresh, which passed.
+//     A protected entry ends the search with that error or errNoNewerLogin.
 //
 // The store keeps the new entry in every case.
 func (r *loginRefresher) reconsider(ctx context.Context, failed, fresh slackclient.Token) (slackclient.Token, error) {
 	now, err := r.load(failed.TeamID)
-	if err != nil || keyOf(now) == keyOf(fresh) || r.refused[keyOf(now)] {
+	if err != nil || keyOf(now) == keyOf(fresh) {
+		return fresh, nil
+	}
+	if r.refused[keyOf(now)] {
+		if !now.UsesDesktopLogin() {
+			return failed, errNoNewerLogin
+		}
 		return fresh, nil
 	}
 	accepted, err := r.try(ctx, now)
@@ -184,8 +190,10 @@ func (r *loginRefresher) reconsider(ctx context.Context, failed, fresh slackclie
 		return now, nil
 	case errors.Is(err, errOtherAccount):
 		return failed, err
-	case err != nil && ctx.Err() != nil:
+	case err != nil && (!now.UsesDesktopLogin() || ctx.Err() != nil):
 		return failed, err
+	case !now.UsesDesktopLogin():
+		return failed, errNoNewerLogin
 	}
 	return fresh, nil
 }
