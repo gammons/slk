@@ -196,12 +196,10 @@ through `messages.Model.SetDMTopic` and builds the topic in `View`.
 
 Two changes from the fork:
 
-- **Thread parent.** `thread.Model.View` discards the parent's flushes
-  (`thread/model.go`, "in v1, as before"). With a glyph that cost
-  nothing; with an image, a custom status only the parent shows would
-  stay blank. The thread pane fires the parent's flushes in `View`, as
-  it does for the replies. This also uploads body emoji only the parent
-  shows, which is the same fix.
+- **Thread parent.** `thread.Model.View` used to discard the parent's
+  flushes, so a custom status only the parent shows would stay blank.
+  Upstream (#418) now fires them every frame, so this PR needs no change
+  there.
 - **DM header wrap.** A long status text makes the topic wrap, and
   `wrapLine`'s `strings.Fields` drops a cold reservation's spaces, so
   the text moves (or the header changes height) when the image lands.
@@ -216,9 +214,6 @@ Two changes from the fork:
   header takes `authorStatusEmoji`, the half of upstream's
   `AuthorStatusSuffix` (#418) that returns the bare emoji and whether
   it is an image; its upload goes through the body's collector.
-- **Thread with no replies.** Upstream (#418) now flushes the parent's
-  uploads every frame, before "No replies yet" returns, so this PR
-  needs no change there.
 
 ## Commits
 
@@ -235,7 +230,8 @@ Fixes first, so they stand without the feature:
 6. `feat(sidebar): section header and DM status emoji as images` (and
    the 1-cell fallback glyph charge, see below)
 7. `feat(messages): author status emoji as an image` (with the thread
-   parent's uploads and the header wrap)
+   parent's uploads and the header wrap; the merge with upstream main
+   replaced its helper and parent uploads with #418's)
 8. `feat(channelfinder): DM status emoji as an image`
 9. `feat(messages): DM header status emoji as images` (with the topic
    wrap)
