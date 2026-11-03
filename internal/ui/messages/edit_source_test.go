@@ -6,6 +6,7 @@ import (
 	"github.com/slack-go/slack"
 
 	"github.com/gammons/slk/internal/core/blocks"
+	"github.com/gammons/slk/internal/slack/mrkdwn"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
 )
 
@@ -18,6 +19,9 @@ func TestEditSource_TextOnly(t *testing.T) {
 		{"see <https://x.com/a?b=1&amp;c=2|the docs> now", "see [the docs](https://x.com/a?b=1&c=2) now"},
 		{"bare <https://x.com/>", "bare https://x.com/"},
 		{"mail <mailto:a@b.com|a@b.com>", "mail a@b.com"},
+		{"get <ftp://x.example/f|label>", "get [label](ftp://x.example/f)"},
+		{"open <file:///tmp/a|label>", "open [label](file:///tmp/a)"},
+		{"bare <file:///tmp/a>", "bare file:///tmp/a"},
 		{"hi <@U1> in <#C2>", "hi <@U1> in <#C2>"},
 		{"&lt;https://x.com/|not a link&gt;", "<https://x.com/|not a link>"},
 		{"&lt;!here&gt; is text, <!here> is not", "&lt;!here&gt; is text, <!here> is not"},
@@ -25,6 +29,33 @@ func TestEditSource_TextOnly(t *testing.T) {
 	} {
 		if got := EditSource(MessageItem{Text: tc.text}); got != tc.want {
 			t.Errorf("EditSource(%q) = %q, want %q", tc.text, got, tc.want)
+		}
+	}
+}
+
+// A rich_text link whose target a bare typed URL would cut short (non-ASCII
+// or a space) is seeded in explicit form, so saving keeps the whole target.
+func TestEditSource_LinkWithUnbareableTargetSurvivesSave(t *testing.T) {
+	for _, url := range []string{"file:///tmp/résumé.txt", "file:///tmp/my file.txt"} {
+		msg := MessageItem{Blocks: []blocks.Block{blockkit.RichTextBlock{Elements: []slack.RichTextElement{
+			&slack.RichTextSection{Type: slack.RTESection, Elements: []slack.RichTextSectionElement{
+				&slack.RichTextSectionLinkElement{Type: slack.RTSELink, URL: url},
+			}},
+		}}}}
+		src := EditSource(msg)
+		_, block := mrkdwn.Convert(src)
+		if block == nil || len(block.Elements) != 1 {
+			t.Fatalf("Convert(%q) gave %v", src, block)
+		}
+		sec, _ := block.Elements[0].(*slack.RichTextSection)
+		var got []string
+		for _, e := range sec.Elements {
+			if l, ok := e.(*slack.RichTextSectionLinkElement); ok {
+				got = append(got, l.URL)
+			}
+		}
+		if len(got) != 1 || got[0] != url {
+			t.Errorf("seed %q saved targets %q, want %q", src, got, url)
 		}
 	}
 }

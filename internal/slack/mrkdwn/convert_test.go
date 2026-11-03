@@ -720,6 +720,77 @@ func TestConvert_BareHTTPAutolinked(t *testing.T) {
 	}
 }
 
+func TestTypedURLProtocols(t *testing.T) {
+	want := "http:,https:,ftp:,ftps:,sftp:,ssh:,file:,tel:"
+	if got := strings.Join(typedURLProtocols, ","); got != want {
+		t.Errorf("typedURLProtocols = %q, want %q", got, want)
+	}
+}
+
+func TestConvert_TypedURLSchemes(t *testing.T) {
+	cases := []struct {
+		name, in string
+		want     []string // link URLs, in order; empty means no link
+	}{
+		{"ip host with port", "see http://192.0.2.3:8080/browse/X-1 ok", []string{"http://192.0.2.3:8080/browse/X-1"}},
+		{"https ip host", "https://192.0.2.3:8443/a", []string{"https://192.0.2.3:8443/a"}},
+		{"localhost", "http://localhost:3000/x", []string{"http://localhost:3000/x"}},
+		{"file url", "open file:///tmp/a.txt now", []string{"file:///tmp/a.txt"}},
+		{"ftp", "ftp://example.com/f", []string{"ftp://example.com/f"}},
+		{"ssh", "ssh://192.0.2.3", []string{"ssh://192.0.2.3"}},
+		{"tel", "call tel:+15550100", []string{"tel:+15550100"}},
+		{"trailing period", "see http://192.0.2.3/a.", []string{"http://192.0.2.3/a"}},
+		{"trailing comma", "http://192.0.2.3/a, then", []string{"http://192.0.2.3/a"}},
+		{"trailing paren", "(http://192.0.2.3/a)", []string{"http://192.0.2.3/a"}},
+		{"balanced trailing paren", "https://en.wikipedia.org/wiki/Mercury_(planet)", []string{"https://en.wikipedia.org/wiki/Mercury_(planet)"}},
+		{"balanced paren inside parens", "(see https://en.wikipedia.org/wiki/Mercury_(planet))", []string{"https://en.wikipedia.org/wiki/Mercury_(planet)"}},
+		{"query and fragment", "https://example.com/a?x=1&y=2#frag", []string{"https://example.com/a?x=1&y=2#frag"}},
+		{"trailing semicolon bang question", "http://192.0.2.3/a; http://192.0.2.4/b! http://192.0.2.5/c?",
+			[]string{"http://192.0.2.3/a", "http://192.0.2.4/b", "http://192.0.2.5/c"}},
+		{"code span", "`http://192.0.2.3/a`", nil},
+		{"code block", "```\nhttp://192.0.2.3/a\n```", nil},
+		{"markdown link", "[x](http://192.0.2.3/a)", []string{"http://192.0.2.3/a"}},
+		{"javascript", "javascript:alert(1)", nil},
+		{"data", "data:text/html,hi", nil},
+		{"vbscript", "vbscript:msgbox", nil},
+		{"followed by a mention", "http://localhost:3000/a,<@UFAKE0001>", []string{"http://localhost:3000/a"}},
+		{"followed by a channel", "http://localhost:3000/a<#CFAKE0001|general>", []string{"http://localhost:3000/a"}},
+		{"followed by an emoji", "http://example.com/x:tada:", []string{"http://example.com/x"}},
+		{"followed by CJK text", "https://example.com/aを確認してください", []string{"https://example.com/a"}},
+		{"followed by full-width paren", "https://example.com/a）", []string{"https://example.com/a"}},
+		{"pipe ends the url", "http://a.example|other", []string{"http://a.example"}},
+		// Host-less targets: nothing to open, so no link (http:///, file:foo
+		// do link, like any scheme followed by a path).
+		{"http scheme only", "http://", nil},
+		{"http scheme then space", "http:// x", nil},
+		{"bare file", "file:", nil},
+		{"bare tel", "tel:", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, blk := Convert(c.in)
+			var got []string
+			for _, e := range blk.Elements {
+				s, ok := e.(*slack.RichTextSection)
+				if !ok {
+					continue
+				}
+				for _, el := range s.Elements {
+					if l, ok := el.(*slack.RichTextSectionLinkElement); ok {
+						got = append(got, l.URL)
+						if strings.ContainsAny(l.URL, "") {
+							t.Errorf("link URL %q holds a tokenizer sentinel", l.URL)
+						}
+					}
+				}
+			}
+			if strings.Join(got, "|") != strings.Join(c.want, "|") {
+				t.Errorf("links = %q, want %q; block=%s", got, c.want, blockJSON(blk))
+			}
+		})
+	}
+}
+
 func TestConvert_BareWWWAutolinked(t *testing.T) {
 	// goldmark's Linkify prepends "http://" to www-only matches.
 	_, blk := Convert("visit www.example.com")

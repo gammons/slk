@@ -64,14 +64,27 @@ func New(opts ...Option) Model {
 // Open shows the yes/no preset: Confirm (KeyMap.Confirm) runs onConfirm,
 // Cancel (KeyMap.Cancel) and any other key close. onConfirm may be nil.
 func (m *Model) Open(title, body string, onConfirm ConfirmFunc) {
-	m.open(Choice{
+	m.open(presetChoice(title, body, onConfirm))
+	m.preset = true
+}
+
+func presetChoice(title, body string, onConfirm ConfirmFunc) Choice {
+	return Choice{
 		Title:             title,
 		Body:              body,
 		Buttons:           []Button{presetConfirm: {Action: onConfirm}, presetCancel: {}},
 		Default:           presetConfirm,
 		CancelOnOtherKeys: true,
-	})
-	m.preset = true
+	}
+}
+
+// BodyRoom reports how many body lines, each how many cells wide, the yes/no
+// prompt Open(title, ...) has at the current size, so a caller can fit its
+// body before opening. lines <= 0 means the body would be dropped.
+func (m Model) BodyRoom(title string) (lines, width int) {
+	m.choice = presetChoice(title, "", nil)
+	width = boxWidth(m.width) - frameWidth
+	return m.bodyLimit(m.layoutAt(width)), width
 }
 
 // OpenChoice shows c.

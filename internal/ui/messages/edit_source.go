@@ -4,11 +4,12 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/gammons/slk/internal/linkscheme"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
 )
 
 // wireLinkRe matches a Slack link token, <url> or <url|label>.
-var wireLinkRe = regexp.MustCompile(`<((?:https?://|mailto:)[^|>]+)(?:\|([^>]+))?>`)
+var wireLinkRe = regexp.MustCompile(`<((?:` + linkscheme.Alternation + `)[^|>]+)(?:\|([^>]+))?>`)
 
 // wireTokenRe matches any Slack token: a mention, broadcast or link.
 var wireTokenRe = regexp.MustCompile(`<[^<>]*>`)
