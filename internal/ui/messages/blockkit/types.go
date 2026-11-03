@@ -38,6 +38,7 @@ type (
 	ActionsBlock     = blocks.ActionsBlock
 	UnknownBlock     = blocks.UnknownBlock
 	RichTextBlock    = blocks.RichTextBlock
+	TableBlock       = blocks.TableBlock
 	AccessoryElement = blocks.AccessoryElement
 	ImageAccessory   = blocks.ImageAccessory
 	LabelAccessory   = blocks.LabelAccessory
@@ -154,6 +155,14 @@ type Context struct {
 	// internal/ui/messages.RenderSlackMarkdown. May be nil; when nil,
 	// raw text passes through unchanged.
 	RenderText func(s string, userNames map[string]string) string
+
+	// RenderCode draws preformatted text (a table laid out by
+	// TableToText) as the host's code block, exactly width display
+	// columns wide and hard-wrapped to fit. The host wires this to the
+	// same code-block renderer the message body uses. The text must not
+	// be read as mrkdwn. When nil, the text is drawn plain, hard-wrapped
+	// to width.
+	RenderCode func(code string, width int) string
 
 	// WrapText word-wraps an ANSI-styled string to the given display
 	// width. The host wires this to internal/ui/messages.WordWrap.

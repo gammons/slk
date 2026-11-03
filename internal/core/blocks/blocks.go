@@ -88,6 +88,22 @@ type UnknownBlock struct {
 
 func (b UnknownBlock) blockType() string { return b.Type }
 
+// TableBlock is the Slack `table` block, which Slack also produces
+// when a `markdown` block contains a Markdown table. Rows holds each
+// cell's plain text, row 0 being the header; Align holds each column's
+// "left" / "center" / "right" (missing or "" means left). When it is
+// the first block or follows rich_text (or another such table) in a
+// message the host draws a body row for, it renders, like
+// RichTextBlock, through that body, keeping its place among the
+// rich_text; otherwise blockkit.Render draws it in place (see
+// blockkit.TablesInBody).
+type TableBlock struct {
+	Rows  [][]string
+	Align []string
+}
+
+func (TableBlock) blockType() string { return "table" }
+
 // RichTextBlock is the Slack `rich_text` block: an ordered list of
 // rich_text_section / rich_text_list / rich_text_preformatted /
 // rich_text_quote elements that together describe a fully-styled

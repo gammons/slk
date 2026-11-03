@@ -113,6 +113,9 @@ func BlockkitContext(msg MessageItem, rc *RenderContext, emojiFlushes *[]func(io
 		UserNames:   rc.UserNames,
 		MessageTS:   msg.TS,
 		Channel:     rc.ImageChannel,
+		// Tables Block Kit draws in place get the body's code-block
+		// look.
+		RenderCode: renderCodeBlock,
 		// Capture channelNames in a closure so blockkit's two-arg
 		// RenderText signature stays stable; channel-name resolution
 		// is a host concern.
@@ -252,11 +255,10 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	// Blocks that render the body suppress Slack's notification-fallback
 	// text and its row. See BlocksCarryBody.
 	hasBody := !BlocksCarryBody(msg)
-	bodySrc := MessageTextSource(msg)
-	if !hasBody {
-		bodySrc = ""
+	rendered := RenderSlackMarkdownWith("", bodyOpts)
+	if hasBody {
+		rendered = renderMessageBody(msg, bodyOpts)
 	}
-	rendered := RenderSlackMarkdownWith(bodySrc, bodyOpts)
 	if len(rc.SearchTerms) > 0 {
 		// SearchHighlightSGR's close sequence restores the theme bg/fg
 		// after the highlight's reset so plain body text doesn't bleed
