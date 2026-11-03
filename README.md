@@ -72,7 +72,10 @@ No desktop app (a server, a container, an SSH session)? `slk --add-workspace
 Copy as cURL any request to `/api/` on app.slack.com, and paste it. slk also
 offers this when it cannot read the desktop app's session.
 
-Full walkthrough: [Setup wiki page](https://github.com/gammons/slk/wiki/Setup).
+Already signed in on another machine? `slk auth export` / `slk auth import`
+transfer one workspace login over SSH. The file is a plaintext credential;
+see the [Setup wiki page](https://github.com/gammons/slk/wiki/Setup) for the
+two-machine walkthrough and cleanup steps.
 
 ## Scripting and agents
 

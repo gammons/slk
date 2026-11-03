@@ -1,6 +1,14 @@
 # Auth Export / Import Implementation Plan
 
-**Status:** Proposed; no implementation changes yet.
+**Status:** Implemented on `feat_auth-transfer`, stacked on the shared-login
+branch. Automated checks pass; live two-machine acceptance remains manual.
+
+**Validation (2026-11-02):** `go test ./... -race`, `go build ./...`,
+`go vet ./...`, `git diff --check`, empty `gofmt -l .`, and golangci-lint
+v2.14.0 (via `go run`, zero issues). Linux/Windows full builds and Slack-package
+test cross-compilation pass. Tests run with `umask 0022`: an existing config
+permission test also fails on the base branch with this environment's `0077`.
+No real credentials or Slack services were used by automated tests.
 
 **Goal:** Move a single workspace login between machines without installing the
 Slack desktop app or repeating browser credential extraction on the destination.
@@ -112,14 +120,17 @@ Validation before any store write:
    an existing JSON validator before adding one. Do not let decoder errors quote
    untrusted field names or document contents into diagnostics.
 3. Require a nonempty `xoxc-` token and cookie, with sensible bounded lengths and
-   no whitespace/control characters. Preserve the cookie's existing encoding;
-   do not unescape, trim, or re-encode either secret.
+   no whitespace/control characters. Require cookie bytes that HTTP transmits
+   unchanged, rejecting quotes, commas, semicolons and non-ASCII octets.
+   Preserve the cookie's existing encoding; do not unescape, trim, or re-encode
+   either secret.
 4. Require a conservative Slack workspace ID shape (`T` followed by uppercase
    ASCII letters/digits), checked before constructing any token-store path.
    Test traversal attempts, separators, absolute paths and control characters.
 5. Bound workspace display metadata and reject terminal control characters.
-   Domain is optional; when present require a subdomain label, not a URL or host
-   path. Metadata is a label, never a destination for sending credentials.
+   Domain is optional; when present require a subdomain label, optionally with
+   the `.enterprise` suffix existing Enterprise Grid onboarding records use,
+   never a URL or path. Metadata is a label, not a credential destination.
 6. Call `identifyLogin(ctx, candidate)` on a client created from exactly this
    token/cookie. Require a nonempty user ID and a returned team ID matching the
    document. An auth refusal, mismatch, timeout or network error saves nothing.
@@ -173,7 +184,9 @@ safety, not a general refresh refactor.
 
 - Load the selected stored token once and validate its structural fields before
   encoding. Copy nothing else from the token directory.
-- Require an existing parent directory. Open the requested destination with
+- Normalize the output path once and use that same path for parent validation,
+  creation and cleanup, so symlink/`..` combinations cannot bypass the checks.
+  Require an existing parent directory. Open the destination with
   `O_CREATE | O_EXCL | O_WRONLY`, mode `0600`; never truncate or overwrite it,
   including an existing symlink. No export `--force` flag in v1.
 - Write fully, sync, and close; remove only the file this invocation created on
@@ -194,8 +207,8 @@ safety, not a general refresh refactor.
   network check. Without `--replace`, an existing entry is a conflict even if
   the credentials appear identical. Corrupt/unreadable entries are errors, not
   absence, and are never automatically replaced.
-- Add a narrow `TokenStore.ImportIf(candidate Token, expected *Token)
-  (bool, error)` using `withLock` and `write`. A nil expectation means the path
+- Add a narrow `TokenStore.ImportIf(ctx context.Context, candidate Token,
+  expected *Token) (bool, error)` using `withLock` and `write`. A nil expectation means the path
   must still be absent; otherwise require the exact snapshot, as `SaveIf` does.
   A false result means a concurrent change; report conflict and never retry
   against a newer snapshot automatically. Any corrupt existing entry is an
@@ -209,13 +222,18 @@ safety, not a general refresh refactor.
 - Validate the token directory before reading a snapshot or opening `.lock`:
   reject a symlink directory, unexpected owner, or POSIX group/world-writable
   directory. Require trusted parent directories for token storage and export;
-  inspect existing writable ancestors up to the user-owned private boundary.
+  inspect the entire ancestor chain, not just the first private directory.
+  Sticky writable ancestors are allowed only with an existing trusted immediate
+  child; macOS's root-owned `/var` and `/tmp` system aliases are recognized.
   Refuse an unsafe or symlink lock file too. Do not silently repair permissions.
   These checks protect against other local users, not a malicious process
   running as the same user. Windows relies on private-user-directory ACLs;
   document that boundary instead of claiming mode bits secure it.
 - Keep the lock only around local comparison/write, never the Slack request.
-  Recheck context cancellation before committing. Success leaves unrelated
+  Recheck context cancellation after acquiring the lock and before committing.
+  Lock acquisition remains the existing blocking OS lock; cancellation while
+  waiting prevents the eventual write once the lock is acquired (a second Ctrl-C
+  still terminates the command). Success leaves unrelated
   workspace files, config and cache untouched.
 
 `--replace` must not switch accounts: persisted messages and marks are scoped
