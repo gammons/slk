@@ -142,7 +142,7 @@ func appendLegacyAttachment(out *RenderResult, a LegacyAttachment, ctx Context, 
 		if perf != nil {
 			t0 = time.Now()
 		}
-		nested = render(a.Blocks, ctx, contentW, true)
+		nested = render(a.Blocks, ctx, contentW, nil)
 		nestedRowStartInBody = len(body)
 		body = append(body, nested.Lines...)
 		if nested.Interactive {

@@ -22,31 +22,69 @@ const narrowBreakpoint = 60
 // content width. Width is the available content width AFTER the
 // caller has subtracted avatar gutter and border columns.
 //
-// A table is drawn here, in its place among the other blocks, when
-// those blocks render the body (RendersBody); otherwise the host draws
-// it in the message body with the rich_text around it (see
-// TablesInBody).
+// A table is drawn here, in its place among the other blocks, unless
+// the host draws it in the message body with the rich_text around it
+// (see TablesInBody).
 func Render(blocks []Block, ctx Context, width int) RenderResult {
-	return render(blocks, ctx, width, !TablesInBody(blocks))
+	return render(blocks, ctx, width, TablesInBody(blocks))
 }
 
-// TablesInBody reports whether the host draws blocks' tables in the
-// message body, in order with their rich_text blocks, rather than
-// Render drawing them among the other blocks. It is true exactly when
-// the blocks do not render the body themselves, so the body row the
-// host keeps for rich_text carries the tables too.
-func TablesInBody(blocks []Block) bool { return !RendersBody(blocks) }
+// HostBody reports whether the host draws a message body row for
+// blocks: they hold a non-empty rich_text block (which renders through
+// the body row), or they do not render the body themselves
+// (RendersBody), so the text fallback keeps its row.
+func HostBody(blocks []Block) bool {
+	for _, b := range blocks {
+		if rt, ok := b.(RichTextBlock); ok && RichTextToMrkdwn(rt) != "" {
+			return true
+		}
+	}
+	return !RendersBody(blocks)
+}
 
-// render is Render with the table decision made by the caller. Blocks
-// nested in a legacy attachment have no host body, so their tables are
-// always drawn here.
-func render(blocks []Block, ctx Context, width int, drawTables bool) RenderResult {
+// TablesInBody reports, for each block, whether it is a table the host
+// draws in the message body, in order with the rich_text blocks, rather
+// than Render drawing it among the other blocks. A table goes in the
+// body when the host draws one (HostBody) and the table is the first
+// block or follows a rich_text block or another body table: the body is
+// drawn above every other block, so only such a table keeps its place
+// there. Any other table is drawn in place, so text the body draws
+// never jumps above it. The body and Render both read this, so each
+// table is drawn exactly once.
+func TablesInBody(blocks []Block) []bool {
+	in := make([]bool, len(blocks))
+	if !HostBody(blocks) {
+		return in
+	}
+	for i, b := range blocks {
+		if _, ok := b.(TableBlock); !ok {
+			continue
+		}
+		if i == 0 {
+			in[i] = true
+			continue
+		}
+		switch blocks[i-1].(type) {
+		case RichTextBlock:
+			in[i] = true
+		case TableBlock:
+			in[i] = in[i-1]
+		}
+	}
+	return in
+}
+
+// render is Render with the table decision made by the caller: the
+// tables marked in inBody are left to the host body. Blocks nested in a
+// legacy attachment have no host body, so their caller passes nil and
+// every table is drawn here.
+func render(blocks []Block, ctx Context, width int, inBody []bool) RenderResult {
 	if len(blocks) == 0 || width <= 0 {
 		return RenderResult{}
 	}
 	var out RenderResult
-	for _, b := range blocks {
-		if t, ok := b.(TableBlock); ok && drawTables {
+	for i, b := range blocks {
+		if t, ok := b.(TableBlock); ok && !(i < len(inBody) && inBody[i]) {
 			appendTable(&out, t, ctx, width)
 			continue
 		}

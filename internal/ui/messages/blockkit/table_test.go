@@ -6,6 +6,8 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/slack-go/slack"
+
+	"github.com/gammons/slk/internal/emoji"
 )
 
 func cell(s string) *slack.RichTextBlock {
@@ -172,5 +174,59 @@ func TestRenderLegacy_NestedTable(t *testing.T) {
 	text := ansi.Strip(strings.Join(out.Lines, "\n"))
 	if !strings.Contains(text, "k │ v") || !strings.Contains(text, "a │ 1") {
 		t.Errorf("nested table missing:\n%s", text)
+	}
+}
+
+// With emoji drawn as one-cell images, a table still draws its emoji as
+// glyphs, so the columns must be measured by glyph width: every │ lines
+// up with the header's.
+func TestTableToText_EmojiAlignInImageMode(t *testing.T) {
+	emoji.SetImageMode(true, 1)
+	t.Cleanup(func() { emoji.SetImageMode(false, 2) })
+	got := TableToText(TableBlock{Rows: [][]string{{"status", "note"}, {"✅ done", "x"}, {"🚀", "y"}}})
+	lines := strings.Split(got, "\n")
+	sep := func(line string) int {
+		before, _, ok := strings.Cut(line, "│")
+		if !ok {
+			before, _, _ = strings.Cut(line, "┼")
+		}
+		return ansi.StringWidth(before)
+	}
+	want := sep(lines[0])
+	for _, l := range lines[1:] {
+		if c := sep(l); c != want {
+			t.Errorf("separator at column %d in %q, want %d:\n%s", c, l, want, got)
+		}
+	}
+}
+
+// A table stays in the body only while it follows the body's text:
+// first block, after rich_text, or after another body table. Any other
+// table is drawn in place, and none goes in a body the host does not
+// draw.
+func TestTablesInBody(t *testing.T) {
+	rt := Parse(slack.Blocks{BlockSet: []slack.Block{slack.NewRichTextBlock("", slack.NewRichTextSection(slack.NewRichTextSectionTextElement("x", nil)))}})[0]
+	tb := TableBlock{Rows: [][]string{{"a"}}}
+	ctx := ContextBlock{Elements: []ContextElement{{Text: "footer"}}}
+	sec := SectionBlock{Text: "s"}
+	for name, c := range map[string]struct {
+		blocks []Block
+		want   []bool
+	}{
+		"rich_text, table, rich_text, context":    {[]Block{rt, tb, rt, ctx}, []bool{false, true, false, false}},
+		"table, table, context, table":            {[]Block{tb, tb, ctx, tb}, []bool{false, false, false, false}},
+		"rich_text, table, table, section, table": {[]Block{rt, tb, tb, sec, tb}, []bool{false, true, true, false, false}},
+		"table only": {[]Block{tb}, []bool{true}},
+	} {
+		got := TablesInBody(c.blocks)
+		if len(got) != len(c.want) {
+			t.Fatalf("%s: got %v, want %v", name, got, c.want)
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("%s: got %v, want %v", name, got, c.want)
+				break
+			}
+		}
 	}
 }

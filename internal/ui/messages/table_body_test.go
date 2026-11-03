@@ -188,6 +188,34 @@ func TestRenderMessage_TableAfterSectionKeepsOrder(t *testing.T) {
 	}
 }
 
+// A footer after the text that follows a table must not pull the table
+// out of the body: intro, table, outro and footer stay in block order,
+// and the table is drawn once.
+func TestRenderMessage_TableBeforeFooterKeepsOrder(t *testing.T) {
+	for name, footer := range map[string]blockkit.Block{
+		"context": blockkit.ContextBlock{Elements: []blockkit.ContextElement{{Text: "Sent by footer-bot"}}},
+		"actions": blockkit.ActionsBlock{Elements: []blockkit.ActionElement{{Kind: "button", Label: "Sent by footer-bot"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			blocks := blockkit.Parse(slack.Blocks{BlockSet: []slack.Block{
+				richSection("Intro"),
+				&slack.TableBlock{Type: slack.MBTTable, Rows: [][]*slack.RichTextBlock{{richSection("k"), richSection("v")}, {richSection("a"), richSection("1")}}},
+				richSection("Outro"),
+			}})
+			blocks = append(blocks, footer)
+			joined := strings.Join(renderedRows(t, MessageItem{Blocks: blocks}, 60), "\n")
+			at := func(s string) int { return strings.Index(joined, s) }
+			intro, table, outro, foot := at("Intro"), at("k │ v"), at("Outro"), at("Sent by footer-bot")
+			if intro < 0 || table < 0 || outro < 0 || foot < 0 || intro >= table || table >= outro || outro >= foot {
+				t.Errorf("want intro, table, outro, footer in that order:\n%s", joined)
+			}
+			if n := strings.Count(joined, "a │ 1"); n != 1 {
+				t.Errorf("table drawn %d times:\n%s", n, joined)
+			}
+		})
+	}
+}
+
 // For a message with no other Block Kit, the body row draws the table
 // exactly as the fenced code block it used to be.
 func TestRenderMessageBody_MatchesFencedCodeBlock(t *testing.T) {

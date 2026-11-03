@@ -419,7 +419,7 @@ func (m *Model) Version() int64 { return m.version + m.list.Version() }
 // common case for user-typed messages) this is a zero-cost passthrough
 // of msg.Text.
 func MessageTextSource(msg MessageItem) string {
-	return partsSource(msg, bodyParts(msg, true))
+	return partsSource(msg, bodyParts(msg, nil))
 }
 
 // partsSource joins parts as mrkdwn, each table fenced as a code block;
@@ -458,20 +458,20 @@ type bodyPart struct {
 	table bool
 }
 
-// bodyParts returns the rich_text blocks of msg as mrkdwn and, when
-// withTables is set, its tables as text, in block order. The text
-// before a table loses its trailing newlines: the table starts on its
-// own line.
-func bodyParts(msg MessageItem, withTables bool) []bodyPart {
+// bodyParts returns the rich_text blocks of msg as mrkdwn and its
+// tables as text, in block order; when inBody is non-nil, only the
+// tables it marks (blockkit.TablesInBody). The text before a table
+// loses its trailing newlines: the table starts on its own line.
+func bodyParts(msg MessageItem, inBody []bool) []bodyPart {
 	var parts []bodyPart
-	for _, b := range msg.Blocks {
+	for i, b := range msg.Blocks {
 		switch v := b.(type) {
 		case blockkit.RichTextBlock:
 			if s := blockkit.RichTextToMrkdwn(v); s != "" {
 				parts = append(parts, bodyPart{text: s})
 			}
 		case blockkit.TableBlock:
-			if !withTables {
+			if inBody != nil && !inBody[i] {
 				continue
 			}
 			if s := blockkit.TableToText(v); s != "" {
@@ -490,8 +490,8 @@ func bodyParts(msg MessageItem, withTables bool) []bodyPart {
 // instead of going through RenderSlackMarkdownWith inside a fence, so
 // inline formatting and emoji resolution never touch its cells (a `*`
 // or a :shortcode: there would change a cell's width and break the
-// column alignment). Tables are left out when Block Kit draws them
-// among the other blocks (blockkit.TablesInBody).
+// column alignment). Only the tables blockkit.TablesInBody marks are
+// drawn here; Block Kit draws the others in their place.
 func renderMessageBody(msg MessageItem, opts RenderSlackMarkdownOpts) string {
 	parts := bodyParts(msg, blockkit.TablesInBody(msg.Blocks))
 	hasTable := false
@@ -576,17 +576,11 @@ func legacyAttachmentText(la blockkit.LegacyAttachment) string {
 // BlocksCarryBody reports whether msg's blocks already render its body,
 // in which case the host adds no row for msg.Text. A non-empty rich_text
 // block is the exception: it renders through MessageTextSource and must
-// retain the host body row. A table needs no case of its own: when the
-// other blocks render the body, Block Kit draws the table among them;
-// otherwise the body row this returns false for carries it. This
-// decision affects rendering only; copying uses MessageCopyText.
+// retain the host body row. The rule is blockkit.HostBody, which also
+// decides which tables the body row carries (blockkit.TablesInBody).
+// This decision affects rendering only; copying uses MessageCopyText.
 func BlocksCarryBody(msg MessageItem) bool {
-	for _, b := range msg.Blocks {
-		if rt, ok := b.(blockkit.RichTextBlock); ok && blockkit.RichTextToMrkdwn(rt) != "" {
-			return false
-		}
-	}
-	return blockkit.RendersBody(msg.Blocks)
+	return !blockkit.HostBody(msg.Blocks)
 }
 
 // dirty bumps the render-version counter.

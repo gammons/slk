@@ -223,7 +223,7 @@ func TestMessageLinks(t *testing.T) {
 			want: nil,
 		},
 		{
-			name: "top-level rich_text: only the first non-empty block renders, later links invisible",
+			name: "top-level rich_text: every non-empty block renders in the body row, before the section",
 			msg: MessageItem{Blocks: []blocks.Block{
 				blocks.RichTextBlock{Elements: []slack.RichTextElement{
 					&slack.RichTextSection{Elements: []slack.RichTextSectionElement{
@@ -243,6 +243,7 @@ func TestMessageLinks(t *testing.T) {
 			}},
 			want: []Link{
 				{URL: "https://example.com/first", Label: "first"},
+				{URL: "https://example.com/second", Label: "second"},
 				{URL: "https://example.com/section", Label: "section"},
 			},
 		},

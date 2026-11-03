@@ -3,6 +3,7 @@ package blockkit
 import (
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/slack-go/slack"
 
@@ -72,7 +73,10 @@ func inlineToPlain(e slack.RichTextSectionElement) string {
 
 // TableToText lays t out as aligned monospace rows, columns separated
 // by " │ " and the header row (row 0) underlined with ─┼─. Short rows
-// are padded with empty cells. Widths are measured with emoji.Width.
+// are padded with empty cells. Widths are measured with lipgloss.Width:
+// the table is drawn as plain glyphs, so an emoji takes its glyph's
+// columns even when emoji are drawn as images elsewhere (emoji.Width
+// would count those image cells instead).
 // Returns "" for a table with no rows.
 //
 // The result is plain text meant to be drawn verbatim: never pass it
@@ -92,7 +96,7 @@ func TableToText(t TableBlock) string {
 	widths := make([]int, cols)
 	for _, r := range t.Rows {
 		for i, c := range r {
-			widths[i] = max(widths[i], emoji.Width(c))
+			widths[i] = max(widths[i], lipgloss.Width(c))
 		}
 	}
 	lines := make([]string, 0, len(t.Rows)+1)
@@ -123,7 +127,7 @@ func TableToText(t TableBlock) string {
 
 // pad aligns s within width display columns.
 func pad(s string, width int, align string) string {
-	gap := max(width-emoji.Width(s), 0)
+	gap := max(width-lipgloss.Width(s), 0)
 	switch align {
 	case "right":
 		return strings.Repeat(" ", gap) + s
