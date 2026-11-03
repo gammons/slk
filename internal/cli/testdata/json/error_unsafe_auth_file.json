@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "unsafe_auth_file",
+    "message": "auth file permissions must be 0600",
+    "slack_error": "",
+    "candidates": []
+  }
+}

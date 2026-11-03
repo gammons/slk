@@ -31,6 +31,9 @@ const (
 	codeSlackError        = "slack_error"
 	codeCancelled         = "cancelled"
 	codeFailed            = "failed"
+	codeInvalidAuthBundle = "invalid_auth_bundle"
+	codeAuthConflict      = "auth_conflict"
+	codeUnsafeAuthFile    = "unsafe_auth_file"
 )
 
 // errorExits maps every error code to its exit code.
@@ -43,6 +46,9 @@ var errorExits = map[string]int{
 	codeSlackError:        exitFailure,
 	codeCancelled:         exitFailure,
 	codeFailed:            exitFailure,
+	codeInvalidAuthBundle: exitUsage,
+	codeAuthConflict:      exitFailure,
+	codeUnsafeAuthFile:    exitFailure,
 }
 
 // Error is a failure with a stable code. Under --json it is written to

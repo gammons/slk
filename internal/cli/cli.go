@@ -25,8 +25,9 @@ import (
 // globalFlags are the flags every command accepts, before the command
 // words or after them.
 type globalFlags struct {
-	json      bool
-	workspace string
+	json              bool
+	workspace         string
+	workspaceExplicit bool
 }
 
 // jsonFlag is the name of the flag that asks for JSON output;
@@ -155,6 +156,11 @@ func run(ctx context.Context, env Env, out *printer, cmd *Command, args []string
 	if len(positionals) > 0 {
 		return out.fail(usageError("unexpected argument %q; run 'slk help %s'", positionals[0], path))
 	}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "workspace" {
+			g.workspaceExplicit = true
+		}
+	})
 	out.json = g.json
 	if err := runCmd(ctx, &Invocation{env: env, out: out, global: g}); err != nil {
 		return out.fail(err)

@@ -28,6 +28,8 @@ type fakeEnv struct {
 	listErr    error
 	vars       map[string]string
 	connect    func(ctx context.Context, ws Workspace) (*Session, error)
+	exportAuth func(context.Context, Workspace, string) (AuthExportResult, error)
+	importAuth func(context.Context, string, bool) (AuthImportResult, error)
 	stdout     io.Writer // nil: runCLI captures stdout
 }
 
@@ -48,6 +50,14 @@ func withEnv(key, value string) envOpt {
 // workspace as testUserID / testUserName.
 func withConnect(fn func(ctx context.Context, ws Workspace) (*Session, error)) envOpt {
 	return func(e *fakeEnv) { e.connect = fn }
+}
+
+func withExportAuth(fn func(context.Context, Workspace, string) (AuthExportResult, error)) envOpt {
+	return func(e *fakeEnv) { e.exportAuth = fn }
+}
+
+func withImportAuth(fn func(context.Context, string, bool) (AuthImportResult, error)) envOpt {
+	return func(e *fakeEnv) { e.importAuth = fn }
 }
 
 // withListError makes Workspaces fail with err.
@@ -93,6 +103,18 @@ func runCLI(t *testing.T, args []string, opts ...envOpt) (stdout, stderr string,
 	e.connect = func(ctx context.Context, ws Workspace) (*Session, error) {
 		return &Session{Workspace: ws, UserID: testUserID, UserName: testUserName}, nil
 	}
+	e.exportAuth = func(_ context.Context, ws Workspace, output string) (AuthExportResult, error) {
+		return AuthExportResult{
+			Workspace: AuthWorkspace{TeamID: ws.TeamID, Name: ws.Name, Domain: ws.Domain},
+			Output:    output, Plaintext: true,
+		}, nil
+	}
+	e.importAuth = func(_ context.Context, _ string, replace bool) (AuthImportResult, error) {
+		return AuthImportResult{
+			Workspace: AuthWorkspace{TeamID: acme.TeamID, Name: acme.Name, Domain: acme.Domain},
+			User:      AuthUser{ID: testUserID}, Replaced: replace,
+		}, nil
+	}
 	for _, opt := range opts {
 		opt(e)
 	}
@@ -104,7 +126,9 @@ func runCLI(t *testing.T, args []string, opts ...envOpt) (stdout, stderr string,
 		Workspaces: func() ([]Workspace, error) {
 			return e.workspaces, e.listErr
 		},
-		Connect: e.connect,
+		Connect:    e.connect,
+		ExportAuth: e.exportAuth,
+		ImportAuth: e.importAuth,
 	}
 	if e.stdout != nil {
 		env.Stdout = e.stdout

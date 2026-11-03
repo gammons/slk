@@ -24,6 +24,9 @@ func TestErrorFrom_MapsCodes(t *testing.T) {
 		slackCode string
 	}{
 		{"usage", usageError("bad"), codeUsage, exitUsage, ""},
+		{"invalid auth bundle", &Error{Code: "invalid_auth_bundle", Message: "bad document"}, codeInvalidAuthBundle, exitUsage, ""},
+		{"auth conflict", &Error{Code: "auth_conflict", Message: "existing login"}, codeAuthConflict, exitFailure, ""},
+		{"unsafe auth file", &Error{Code: "unsafe_auth_file", Message: "unsafe permissions"}, codeUnsafeAuthFile, exitFailure, ""},
 		{"wrapped *Error", fmt.Errorf("ctx: %w", &Error{Code: codeNotFound, Message: "x"}), codeNotFound, exitNotFound, ""},
 		{"cancelled", fmt.Errorf("walk: %w", context.Canceled), codeCancelled, exitFailure, ""},
 		{"invalid_auth", fmt.Errorf("auth test failed: %w", slack.SlackErrorResponse{Err: "invalid_auth"}), codeAuthFailed, exitAuth, "invalid_auth"},
@@ -47,7 +50,7 @@ func TestErrorFrom_MapsCodes(t *testing.T) {
 // in step: a code without an exit would silently exit 1.
 func TestErrorExits_CoverEveryCode(t *testing.T) {
 	for _, code := range []string{codeUsage, codeWorkspaceRequired, codeNoWorkspace, codeAuthFailed,
-		codeNotFound, codeSlackError, codeCancelled, codeFailed} {
+		codeNotFound, codeSlackError, codeCancelled, codeFailed, codeInvalidAuthBundle, codeAuthConflict, codeUnsafeAuthFile} {
 		if _, ok := errorExits[code]; !ok {
 			t.Errorf("code %q has no exit code in errorExits", code)
 		}

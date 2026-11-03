@@ -1,0 +1,11 @@
+{
+  "workspace": {
+    "team_id": "T0ACME01",
+    "name": "Acme Inc",
+    "domain": "acme"
+  },
+  "user": {
+    "id": "U0SELF01"
+  },
+  "replaced": false
+}

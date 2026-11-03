@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "invalid_auth_bundle",
+    "message": "invalid auth bundle",
+    "slack_error": "",
+    "candidates": []
+  }
+}

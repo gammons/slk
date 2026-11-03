@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "auth_conflict",
+    "message": "workspace already exists; use --replace for the same account",
+    "slack_error": "",
+    "candidates": []
+  }
+}

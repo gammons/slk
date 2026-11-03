@@ -48,11 +48,22 @@ var commands = []Command{
 		Summary: "Sign in, and show the workspace and the user that commands act as",
 		Setup:   setupWorkspaceWhoami,
 	},
+	{
+		Path:    []string{"auth", "export"},
+		Summary: "Export a saved login offline to a new plaintext file",
+		Setup:   setupAuthExport,
+	},
+	{
+		Path:    []string{"auth", "import"},
+		Summary: "Validate and import a plaintext login file; restart running slk afterward",
+		Setup:   setupAuthImport,
+	},
 }
 
 // nouns gives every noun (the first word of a multi-word path) its line
 // in `slk help`.
 var nouns = map[string]string{
+	"auth":      "Transfer a saved login between machines using a plaintext file",
 	"workspace": "Configured workspaces and the signed-in user",
 }
 

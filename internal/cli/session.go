@@ -9,8 +9,8 @@ import (
 )
 
 // Env is everything the CLI gets from outside: the process's streams
-// and environment, the configured workspaces and a way to sign in to
-// one. cmd/slk/cli.go builds the real one from the token store, the
+// and environment, configured workspaces, sign-in and credential transfer.
+// cmd/slk/cli.go builds the real one from the token store, the
 // config and the Slack client; tests build it from fakes. Nothing in
 // this package reads a file or opens a connection except through Env.
 type Env struct {
@@ -23,7 +23,9 @@ type Env struct {
 	// Connect signs in to ws (auth.test) and returns the session. A
 	// login Slack refuses is refreshed once before Connect gives up
 	// (connectWithRemint in cmd/slk).
-	Connect func(ctx context.Context, ws Workspace) (*Session, error)
+	Connect    func(ctx context.Context, ws Workspace) (*Session, error)
+	ExportAuth func(ctx context.Context, ws Workspace, output string) (AuthExportResult, error)
+	ImportAuth func(ctx context.Context, input string, replace bool) (AuthImportResult, error)
 }
 
 // Workspace is one configured workspace. It is also the JSON shape
@@ -101,17 +103,10 @@ func workspaceCandidates(list []Workspace) []Candidate {
 	return out
 }
 
-// Session signs in to the workspace the command line chose, once per
-// invocation: --workspace, else $SLK_WORKSPACE, else the default or
-// only workspace (SelectWorkspace). Commands that need no Slack call
-// never call it, so they work without a network.
-func (inv *Invocation) Session(ctx context.Context) (*Session, error) {
-	if inv.session != nil {
-		return inv.session, nil
-	}
+func (inv *Invocation) workspace() (Workspace, error) {
 	list, err := inv.env.Workspaces()
 	if err != nil {
-		return nil, err
+		return Workspace{}, err
 	}
 	ref := inv.global.workspace
 	if ref == "" {
@@ -125,6 +120,20 @@ func (inv *Invocation) Session(ctx context.Context) (*Session, error) {
 		if errors.As(err, &e) && e.Code == codeWorkspaceRequired {
 			e.Message = "more than one workspace is configured; choose one with --workspace or SLK_WORKSPACE, or set default_workspace under [general] in config.toml"
 		}
+		return Workspace{}, err
+	}
+	return ws, nil
+}
+
+// Session signs in to the workspace the command line chose, once per
+// invocation. Commands that need no Slack call never call it, so they
+// work without a network.
+func (inv *Invocation) Session(ctx context.Context) (*Session, error) {
+	if inv.session != nil {
+		return inv.session, nil
+	}
+	ws, err := inv.workspace()
+	if err != nil {
 		return nil, err
 	}
 	s, err := inv.env.Connect(ctx, ws)
