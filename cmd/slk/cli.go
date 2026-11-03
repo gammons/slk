@@ -34,6 +34,12 @@ func newCLIEnv() cli.Env {
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
 		Getenv: os.Getenv,
+		ExportAuth: func(ctx context.Context, ws cli.Workspace, output string) (cli.AuthExportResult, error) {
+			return exportAuth(ctx, store, ws, output)
+		},
+		ImportAuth: func(ctx context.Context, input string, replace bool) (cli.AuthImportResult, error) {
+			return importAuth(ctx, store, input, replace, identifyLogin)
+		},
 		Workspaces: func() ([]cli.Workspace, error) {
 			tokens, err := store.List()
 			if err != nil {
