@@ -42,6 +42,13 @@ type rtmEventHandler struct {
 	workspaceName   string
 	activeChannelID func() string
 
+	// suppressed reports whether a message by authorID (messageAuthor's
+	// answer: the user, else the bot ID) in channelID is hidden by one
+	// of this workspace's rules (suppressStore.Hides). A hidden message
+	// is cached but neither notifies nor marks its channel unread. nil
+	// hides nothing.
+	suppressed func(channelID, authorID string) bool
+
 	// cfg is the loaded user config; used by OnConversationOpened to
 	// resolve sidebar section + section order via buildChannelItem.
 	cfg config.Config
@@ -171,6 +178,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// Synchronous, so the channel's row and type exist before the writes
 	// below. The UI hears of it only after the unread write.
 	discovered, discoveredFinder, isNew := h.discoverConversation(channelID)
+	hidden := h.suppressed != nil && h.suppressed(channelID, authorID)
 	// Cache every message to SQLite, regardless of active workspace.
 	// Guard against nil db so handlers constructed in tests (without
 	// real persistence) don't panic.
@@ -238,7 +246,9 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// full handler (db, caches, program), so faking the gate is
 	// disproportionate. The subtype list itself is pinned by the notice
 	// tests in messages and slackclient.
-	if !changed && h.notifier != nil && h.notifyCfg.Enabled && !core.IsSystemNoticeSubtype(subtype) {
+	//
+	// A suppressed author's message never notifies, mention or not.
+	if !changed && !hidden && h.notifier != nil && h.notifyCfg.Enabled && !core.IsSystemNoticeSubtype(subtype) {
 		isActiveWS := h.isActive != nil && h.isActive()
 		activeChID := ""
 		if h.activeChannelID != nil {
@@ -345,7 +355,10 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// A join/leave notice doesn't make the channel unread on Slack
 	// either -- excluded here so the mention-badge check below (nested
 	// in this same gate) inherits it for free, same as isSelfMessage.
-	shouldMarkChannel := channelEligible && !isSelfMessage && !changed && !core.IsSystemNoticeSubtype(subtype)
+	//
+	// Nor does a suppressed author's message: the user asked not to
+	// see it, so it must not draw them to the channel either.
+	shouldMarkChannel := channelEligible && !isSelfMessage && !changed && !hidden && !core.IsSystemNoticeSubtype(subtype)
 	if h.db != nil && shouldMarkChannel {
 		if err := h.db.UpdateChannelReadState(channelID, "", true); err != nil {
 			log.Printf("Warning: failed to set has_unread for %s: %v", channelID, err)

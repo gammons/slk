@@ -394,6 +394,46 @@ thread with nothing selected); the mark is kept either way. Marks
 are only removed when you remove them, with `:delmarks` or `Backspace`
 in the `:marks` overlay.
 
+## Hiding authors
+
+`:suppress` on a message hides its author's messages, in that
+conversation or in the whole workspace; `:suppressed` lists who is
+hidden and `Backspace` there stops hiding them. Both edit
+`config.toml`, where the rules are kept, one block each in the
+workspace's section. You can write them by hand too:
+
+```toml
+[workspaces.acme]
+team_id = "T01ACME"
+
+[[workspaces.acme.suppress]]
+author = "B01DEPLOYBOT"     # required: a user ID (U…/W…) or a bot ID (B…)
+note = "DeployBot"          # optional, for you; slk ignores it
+
+[[workspaces.acme.suppress]]
+author = "U02ALICE"
+channel = "C03RANDOM"       # omit to hide them everywhere in the workspace
+```
+
+IDs, not names, because names change: `:suppress` writes the right ID
+(and a `note`) for you. An author is the ID slk shows the message as
+from: a person's user ID, a bot that posts as a user by that user ID,
+and a bot that posts without one by its bot ID.
+
+A hidden author's messages and thread replies are not drawn, do not
+notify (even when they mention you), and do not mark their channel
+unread. They are still cached, and opening a channel still marks it read
+up to its newest message, hidden ones included. Search, the Activity
+view and reply counts are not filtered. Your own messages are never
+hidden.
+
+A channel that Slack already reported unread when slk connected stays
+unread until you open it, even if its only new messages are hidden.
+
+slk adds a rule by appending a block to the end of the file and removes
+one by deleting its block, leaving everything else as written. A rule
+written another way (an inline table) can only be removed by hand.
+
 ## Data paths (XDG)
 
 | Path | Contents |

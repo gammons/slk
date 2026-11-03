@@ -395,6 +395,17 @@ type SettingsService interface {
 	SaveSidebarWidth(width int)
 }
 
+// SuppressionService holds the rules that hide authors' messages
+// (see SuppressRule), per workspace. Rules is a local read, called
+// whenever a pane takes messages. Add and Remove persist the change
+// (config.toml) and make it effective for notifications and unread
+// marking; on error nothing changed.
+type SuppressionService interface {
+	Rules(teamID string) *Suppression
+	Add(teamID string, rule SuppressRule) error
+	Remove(teamID string, rule SuppressRule) error
+}
+
 // UnreadService reads the unread state the sidebar and workspace rail
 // render. Both methods are local reads, called at render time.
 type UnreadService interface {

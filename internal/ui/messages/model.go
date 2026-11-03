@@ -106,6 +106,12 @@ type OpenImagePreviewMsg struct {
 }
 
 type Model struct {
+	// hide drops a suppressed author's messages as they arrive (SetHide).
+	hide func(MessageItem) bool
+	// hiddenOldest is the oldest TS among hidden messages older than
+	// the buffer, so OldestTS (the older-history cursor) moves past a
+	// page that was all hidden instead of fetching it forever.
+	hiddenOldest string
 	// sixelPaints is the placement set produced by the last View, consumed
 	// by the App's out-of-band painter. See imgpkg.SixelPaint.
 	sixelPaints []imgpkg.SixelPaint
@@ -734,6 +740,7 @@ func (m *Model) SetMessages(msgs []MessageItem) {
 		debuglog.Cache("messages.Model.SetMessages: channel=%q before=[%s] after=[%s]",
 			m.channelName, oldSummary, newSummary)
 	}
+	msgs, m.hiddenOldest = Visible(m.hide, msgs)
 	m.messages = msgs
 	m.ClearSelection()
 	m.dropCache()
@@ -752,6 +759,9 @@ func (m *Model) SetMessages(msgs []MessageItem) {
 }
 
 func (m *Model) AppendMessage(msg MessageItem) {
+	if m.hide != nil && m.hide(msg) {
+		return
+	}
 	// Idempotent on TS. Self-sent messages take an optimistic path
 	// (MessageSentMsg from the chat.postMessage HTTP response) AND
 	// arrive again as a WebSocket echo (NewMessageMsg). The order of
@@ -1072,6 +1082,11 @@ func (m *Model) PrependMessages(msgs []MessageItem) {
 			return
 		}
 		msgs = kept
+	}
+	msgs, hiddenOldest := Visible(m.hide, msgs)
+	m.keepOlderHidden(hiddenOldest)
+	if len(msgs) == 0 {
+		return
 	}
 	count := len(msgs)
 	if debuglog.Enabled() {
@@ -1611,11 +1626,17 @@ func (m *Model) LastReadTS() string {
 	return m.lastReadTS
 }
 
+// OldestTS is the cursor for fetching older history: the oldest message
+// the pane holds, or a hidden one it was given that is older still.
 func (m *Model) OldestTS() string {
-	if len(m.messages) == 0 {
-		return ""
+	oldest := ""
+	if len(m.messages) > 0 {
+		oldest = m.messages[0].TS
 	}
-	return m.messages[0].TS
+	if m.hiddenOldest != "" && (oldest == "" || m.hiddenOldest < oldest) {
+		return m.hiddenOldest
+	}
+	return oldest
 }
 
 // cacheStyles bundles the lipgloss styles and pre-rendered strings that

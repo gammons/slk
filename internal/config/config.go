@@ -294,6 +294,30 @@ type Workspace struct {
 	// boot". Persisted so the second and later runs start with a
 	// current value rather than a stale compiled-in one.
 	VersionTS string `toml:"version_ts"`
+	// Suppress hides authors' messages in this workspace, from
+	// [[workspaces.<key>.suppress]] blocks. slk appends and removes
+	// these blocks itself (the :suppress and :suppressed commands).
+	Suppress []SuppressRule `toml:"suppress"`
+}
+
+// SuppressRule is one [[workspaces.<key>.suppress]] block: hide
+// Author's messages in Channel, or in the whole workspace when Channel
+// is empty. Both are Slack IDs (an author is a user ID, or a bot ID
+// for a bot that posts without a user). Note is free text for people
+// reading the file.
+type SuppressRule struct {
+	Author  string `toml:"author"`
+	Channel string `toml:"channel"`
+	Note    string `toml:"note"`
+}
+
+// SuppressRules converts w's rules to the set the app matches against.
+func (w Workspace) SuppressRules() *core.Suppression {
+	rules := make([]core.SuppressRule, 0, len(w.Suppress))
+	for _, r := range w.Suppress {
+		rules = append(rules, core.SuppressRule{AuthorID: r.Author, ChannelID: r.Channel, Note: r.Note})
+	}
+	return core.NewSuppression(rules)
 }
 
 // Theme is defined in internal/core, which the TUI shares.
@@ -362,6 +386,13 @@ func Load(path string) (Config, error) {
 		return cfg, err
 	}
 	cfg.Workspaces = resolved
+	for key, w := range cfg.Workspaces {
+		for i, r := range w.Suppress {
+			if strings.TrimSpace(r.Author) == "" {
+				return cfg, fmt.Errorf("workspace %q: suppress rule %d has no author", key, i+1)
+			}
+		}
+	}
 
 	// Clamp MouseWheelLines: 0 (unset, after a user supplied a partial
 	// [appearance] block without this key) and negative values both fall
