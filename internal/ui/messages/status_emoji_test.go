@@ -116,9 +116,11 @@ func TestAuthorStatus_CustomEmojiAfterSetEmojiCustoms(t *testing.T) {
 	f := newFakePlaceFetcher()
 	placement := serveStatusEmoji(t, f, "company-logo", customs, "53", "")
 
+	fallback := serveStatusEmoji(t, f, "speech_balloon", nil, "56", "")
+
 	m := statusPane(peerstatus.Status{Emoji: ":company-logo:"}, f)
-	if out := m.View(20, 80); strings.Contains(out, placement) {
-		t.Fatalf("before customs load the header should not draw the custom artwork:\n%q", out)
+	if out := m.View(20, 80); !strings.Contains(out, fallback) || strings.Contains(out, placement) {
+		t.Fatalf("before customs load the header should draw the fallback image, not the custom artwork:\n%q", out)
 	}
 	m.SetEmojiCustoms(customs)
 	if out := m.View(20, 80); !strings.Contains(out, placement) {
