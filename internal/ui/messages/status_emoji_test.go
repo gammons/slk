@@ -107,8 +107,9 @@ func TestAuthorStatus_SelectedRowKeepsTheImage(t *testing.T) {
 	}
 }
 
-// A custom status emoji shows the generic glyph until the workspace's
-// custom emoji arrive, then its artwork.
+// A custom status emoji shows the generic glyph (drawn through the image
+// path, like every status emoji) until the workspace's custom emoji
+// arrive, then its artwork.
 func TestAuthorStatus_CustomEmojiAfterSetEmojiCustoms(t *testing.T) {
 	statusEmojiImages(t)
 	customs := map[string]string{"company-logo": "https://emoji.slack-edge.com/T1/company-logo/abc.png"}
@@ -116,8 +117,8 @@ func TestAuthorStatus_CustomEmojiAfterSetEmojiCustoms(t *testing.T) {
 	placement := serveStatusEmoji(t, f, "company-logo", customs, "53", "")
 
 	m := statusPane(peerstatus.Status{Emoji: ":company-logo:"}, f)
-	if out := m.View(20, 80); !strings.Contains(out, peerstatus.FallbackGlyph) {
-		t.Fatalf("before customs load the header should draw the fallback glyph:\n%q", out)
+	if out := m.View(20, 80); strings.Contains(out, placement) {
+		t.Fatalf("before customs load the header should not draw the custom artwork:\n%q", out)
 	}
 	m.SetEmojiCustoms(customs)
 	if out := m.View(20, 80); !strings.Contains(out, placement) {
@@ -130,14 +131,21 @@ func TestAuthorStatusEmoji(t *testing.T) {
 	statusOf := func(st peerstatus.Status) map[string]peerstatus.Status {
 		return map[string]peerstatus.Status{"U1": st}
 	}
+	// call returns the emoji, whether it is an image, and how many
+	// uploads it queued on the body's collector.
+	call := func(statuses map[string]peerstatus.Status, f emojiutil.PlaceFetcher) (string, bool, int) {
+		var flushes []func(io.Writer) error
+		opts := &RenderSlackMarkdownOpts{PlaceCtx: emojiutil.PlaceContext{Fetcher: f}, EmojiCells: 2, EmojiFlushes: &flushes}
+		got, image := authorStatusEmoji(statuses, "U1", now, opts)
+		return got, image, len(flushes)
+	}
 
 	t.Run("image mode off is the glyph", func(t *testing.T) {
 		f := newFakePlaceFetcher()
 		serveStatusEmoji(t, f, "calendar", nil, "54", "")
 		for _, st := range []peerstatus.Status{{Emoji: ":calendar:"}, {Huddle: peerstatus.HuddleActive}, {Text: "Lunch"}, {}} {
-			got, _, flush := AuthorStatusEmoji(statusOf(st), "U1", now, EmojiContext{PlaceCtx: emojiutil.PlaceContext{Fetcher: f}, Cells: 2})
-			if got != st.Glyph(now) || flush != nil {
-				t.Errorf("%+v: AuthorStatusEmoji = %q (flush %v), want %q", st, got, flush != nil, st.Glyph(now))
+			if got, image, n := call(statusOf(st), f); got != st.Glyph(now) || image || n != 0 {
+				t.Errorf("%+v: authorStatusEmoji = %q (image %v, %d uploads), want %q", st, got, image, n, st.Glyph(now))
 			}
 		}
 	})
@@ -145,8 +153,8 @@ func TestAuthorStatusEmoji(t *testing.T) {
 	t.Run("no fetcher is the glyph", func(t *testing.T) {
 		statusEmojiImages(t)
 		st := peerstatus.Status{Emoji: ":calendar:"}
-		if got, _, _ := AuthorStatusEmoji(statusOf(st), "U1", now, EmojiContext{}); got != st.Glyph(now) {
-			t.Errorf("AuthorStatusEmoji = %q, want %q", got, st.Glyph(now))
+		if got, image, _ := call(statusOf(st), nil); got != st.Glyph(now) || image {
+			t.Errorf("authorStatusEmoji = %q (image %v), want %q", got, image, st.Glyph(now))
 		}
 	})
 
@@ -154,26 +162,23 @@ func TestAuthorStatusEmoji(t *testing.T) {
 		statusEmojiImages(t)
 		f := newFakePlaceFetcher()
 		placement := serveStatusEmoji(t, f, "headphones", nil, "55", "")
-		got, _, flush := AuthorStatusEmoji(statusOf(peerstatus.Status{Huddle: peerstatus.HuddleActive}), "U1", now, EmojiContext{PlaceCtx: emojiutil.PlaceContext{Fetcher: f}, Cells: 2})
-		if got != placement || flush == nil {
-			t.Errorf("AuthorStatusEmoji = %q (flush %v), want %q", got, flush != nil, placement)
+		if got, image, n := call(statusOf(peerstatus.Status{Huddle: peerstatus.HuddleActive}), f); !strings.HasPrefix(got, placement) || !image || n == 0 {
+			t.Errorf("authorStatusEmoji = %q (image %v, %d uploads), want it to start with %q", got, image, n, placement)
 		}
 	})
 
 	t.Run("cold image reserves its cells", func(t *testing.T) {
 		statusEmojiImages(t)
 		f := newFakePlaceFetcher() // nothing warm: Place reserves blanks and fetches
-		got, _, flush := AuthorStatusEmoji(statusOf(peerstatus.Status{Emoji: ":hourglass_flowing_sand:"}), "U1", now, EmojiContext{PlaceCtx: emojiutil.PlaceContext{Fetcher: f}, Cells: 2})
-		if got != "  " || flush != nil {
-			t.Errorf("AuthorStatusEmoji = %q (flush %v), want two reserved cells", got, flush != nil)
+		if got, image, n := call(statusOf(peerstatus.Status{Emoji: ":hourglass_flowing_sand:"}), f); got != "  " || !image || n != 0 {
+			t.Errorf("authorStatusEmoji = %q (image %v, %d uploads), want two reserved cells", got, image, n)
 		}
 	})
 
 	t.Run("no status", func(t *testing.T) {
 		statusEmojiImages(t)
-		f := newFakePlaceFetcher()
-		if got, _, flush := AuthorStatusEmoji(nil, "U1", now, EmojiContext{PlaceCtx: emojiutil.PlaceContext{Fetcher: f}}); got != "" || flush != nil {
-			t.Errorf("AuthorStatusEmoji = %q (flush %v), want empty", got, flush != nil)
+		if got, image, n := call(nil, newFakePlaceFetcher()); got != "" || image || n != 0 {
+			t.Errorf("authorStatusEmoji = %q (image %v, %d uploads), want empty", got, image, n)
 		}
 	})
 }

@@ -213,12 +213,12 @@ Two changes from the fork:
   not fit. A status image wraps as its own unit, like the timestamp,
   instead of with the name's prose, so a cold reservation survives. A
   glyph reflows with the name as before, so text mode is unchanged. The
-  header takes `messages.AuthorStatusEmoji` (the bare emoji, whether it
-  is an image, and its upload); `AuthorStatusSuffix`, which only the
-  header used, is gone.
-- **Thread with no replies.** "No replies yet" returns before the reply
-  uploads; it fires the parent's uploads itself, every frame (each
-  writes only once).
+  header takes `authorStatusEmoji`, the half of upstream's
+  `AuthorStatusSuffix` (#418) that returns the bare emoji and whether
+  it is an image; its upload goes through the body's collector.
+- **Thread with no replies.** Upstream (#418) now flushes the parent's
+  uploads every frame, before "No replies yet" returns, so this PR
+  needs no change there.
 
 ## Commits
 

@@ -197,7 +197,7 @@ func appendLegacyAttachment(out *RenderResult, a LegacyAttachment, ctx Context, 
 	// kinds of button look the same.
 	if len(a.Actions) > 0 {
 		var acts RenderResult
-		appendActions(&acts, legacyActionsBlock(a.Actions), contentW)
+		appendActions(&acts, legacyActionsBlock(a.Actions), ctx, contentW)
 		body = append(body, acts.Lines...)
 		if acts.Interactive {
 			out.Interactive = true

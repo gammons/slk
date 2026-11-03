@@ -178,7 +178,7 @@ func (m *Model) SetImageContext(ctx imgrender.ImageContext) {
 	m.InvalidateCache()
 }
 
-// SetEmojiContext configures emoji-image rendering for thread replies.
+// SetEmojiContext configures emoji-image rendering for the parent and replies.
 // Should be called once at startup (cmd/slk/main.go) and again after
 // CustomEmojisLoadedMsg arrives (via SetEmojiCustoms). Mirrors
 // messages.Model.SetEmojiContext.
@@ -1117,12 +1117,23 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// The parent is rendered every frame for its current state (selected
 	// or not, focused or not) and is entry 0 of the list: its rows, then
 	// the rule under it. The rule is not selectable text (Plain stops
-	// before it). Its image uploads go out with the replies' below. We
-	// discard its reaction hits in v1, as before; its image hits are kept
-	// so a click on its image opens the preview.
+	// before it). Its image hits are kept for previews; reaction hits
+	// remain omitted.
 	parentIsSelected := m.selected == parentSelected
 	parentRendered := m.renderMessage(m.parent, width, parentIsSelected)
-	parentFlushes := slices.Concat(parentRendered.BodyFlushes, parentRendered.BlockFlushes, parentRendered.ReactionFlushes, parentRendered.AttachmentFlushes)
+	// The parent bypasses the reply cache and its upload loop. Flush its
+	// groups in draw order even when the thread has no replies. Kitty
+	// callbacks guard retransmission and emit each transfer atomically.
+	for _, flushes := range [4][]func(io.Writer) error{
+		parentRendered.BodyFlushes, parentRendered.BlockFlushes,
+		parentRendered.ReactionFlushes, parentRendered.AttachmentFlushes,
+	} {
+		for _, flush := range flushes {
+			if flush != nil {
+				_ = flush(imgpkg.KittyOutput)
+			}
+		}
+	}
 	parentContent, parentHeader, parentHeaderBudget := parentRendered.Content, parentRendered.Header, parentRendered.HeaderBudget
 	// Replies only get a day divider when their day differs from the
 	// parent's, so the parent header carries its own date; otherwise a
@@ -1205,9 +1216,6 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 			Render("No replies yet")
 		m.list.SetEntries([]entrylist.Entry{parent, {Ref: -1, Lines: strings.Split(empty, "\n")}}, width, false)
 		rows := m.list.Compose(m.list.Static(), "", "", false)
-		// Nothing here is cached, so the parent's uploads go out every
-		// frame; each one writes only the first time.
-		writeKittyFlushes(parentFlushes)
 		return fitHeight(chrome+"\n"+strings.Join(rows, "\n"), height)
 	}
 
@@ -1325,18 +1333,24 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	}
 	m.list.SetEntries(entries, width, keepPosition)
 
-	// Kitty uploads for the parent and every reply (the thread cache is
-	// small, so no visibility scoping), written straight to the terminal
-	// output: APC sequences embedded in line content get mangled by the
-	// renderer. Re-emitted only when the layout changes, as before.
+	// Kitty uploads for every reply (the thread cache is small, so no
+	// visibility scoping), written straight to the terminal output: APC
+	// sequences embedded in line content get mangled by the renderer.
+	// Re-emitted only when the layout changes, as before.
 	key := m.flushKey
 	key.selected, key.width, key.height, key.hasSelection = m.selected, width, replyAreaHeight, m.list.HasSelection()
 	if key != m.flushKey || !m.layoutValid {
-		groups := [][]func(io.Writer) error{parentFlushes}
+		var kittyFlushBuf bytes.Buffer
 		for _, p := range m.cache {
-			groups = append(groups, p.Flushes)
+			for _, fl := range p.Flushes {
+				if fl != nil {
+					_ = fl(&kittyFlushBuf)
+				}
+			}
 		}
-		writeKittyFlushes(groups...)
+		if kittyFlushBuf.Len() > 0 {
+			_, _ = imgpkg.KittyOutput.Write(kittyFlushBuf.Bytes())
+		}
 		m.flushKey = key
 	}
 
@@ -1472,20 +1486,4 @@ func (m *Model) huddleView(msg messages.MessageItem) messages.MessageItem {
 		msg.ReplyCount = len(m.replies)
 	}
 	return messages.HuddleView(msg, m.userNames)
-}
-
-// writeKittyFlushes runs the kitty uploads and writes what they produce
-// to the terminal in one write.
-func writeKittyFlushes(groups ...[]func(io.Writer) error) {
-	var buf bytes.Buffer
-	for _, flushes := range groups {
-		for _, fl := range flushes {
-			if fl != nil {
-				_ = fl(&buf)
-			}
-		}
-	}
-	if buf.Len() > 0 {
-		_, _ = imgpkg.KittyOutput.Write(buf.Bytes())
-	}
 }

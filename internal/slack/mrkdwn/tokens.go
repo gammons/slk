@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/gammons/slk/internal/linkscheme"
 )
 
 // Sentinel runes from the Unicode Private Use Area. Treated as opaque
@@ -48,7 +50,7 @@ var (
 	reUser      = regexp.MustCompile(`<@([UW][A-Z0-9]+)>`)
 	reChannel   = regexp.MustCompile(`<#([CG][A-Z0-9]+)(?:\|([^>]*))?>`)
 	reBroadcast = regexp.MustCompile(`<!([a-z]+(?:\^[A-Za-z0-9]+)?)(?:\|([^>]*))?>`)
-	reLink      = regexp.MustCompile(`<(https?://[^|>]+)(?:\|([^>]*))?>`)
+	reLink      = regexp.MustCompile(`<((?:` + linkscheme.Alternation + `)[^|>]+)(?:\|([^>]*))?>`)
 	// Slack emoji shortcode. Matches the canonical wire form
 	// :name: where name uses lowercase ASCII letters, digits,
 	// underscores, plus, or hyphen. Skin-tone modifiers like

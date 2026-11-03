@@ -9,6 +9,62 @@ import (
 	"github.com/gammons/slk/internal/slack/mrkdwn"
 )
 
+func TestLinkToMarkdown_BareForEveryLinkScheme(t *testing.T) {
+	for _, tc := range []struct{ url, label, want string }{
+		{"https://x.example/a", "", "https://x.example/a"},
+		{"ftp://x.example/a", "ftp://x.example/a", "ftp://x.example/a"},
+		{"file:///tmp/a", "", "file:///tmp/a"},
+		{"mailto:a@x.example", "a@x.example", "a@x.example"},
+		{"javascript:x", "", "[javascript:x](javascript:x)"},
+		{"file:///tmp/a", "label", "[label](file:///tmp/a)"},
+	} {
+		if got := LinkToMarkdown(tc.url, tc.label); got != tc.want {
+			t.Errorf("LinkToMarkdown(%q, %q) = %q, want %q", tc.url, tc.label, got, tc.want)
+		}
+	}
+}
+
+// A bare URL the typed-URL matcher would cut (non-ASCII, a space) stays
+// explicit, and the round trip keeps the whole target.
+func TestLinkToMarkdown_BareOnlyWhenWholeURLSurvives(t *testing.T) {
+	for _, tc := range []struct {
+		url      string
+		wantBare bool
+	}{
+		{"file:///tmp/a.txt", true},
+		{"file:///tmp/résumé.txt", false},
+		{"file:///tmp/my file.txt", false},
+		{"ftp://x.example/日本.txt", false},
+	} {
+		got := LinkToMarkdown(tc.url, "")
+		if bare := got == tc.url; bare != tc.wantBare {
+			t.Errorf("LinkToMarkdown(%q) = %q, bare=%v want %v", tc.url, got, bare, tc.wantBare)
+		}
+		_, block := mrkdwn.Convert(got)
+		if block == nil {
+			t.Fatalf("no block for %q", got)
+		}
+		raw, _ := json.Marshal(block)
+		var back slack.RichTextBlock
+		if err := json.Unmarshal(raw, &back); err != nil {
+			t.Fatal(err)
+		}
+		var targets []string
+		for _, e := range back.Elements {
+			if s, ok := e.(*slack.RichTextSection); ok {
+				for _, se := range s.Elements {
+					if l, ok := se.(*slack.RichTextSectionLinkElement); ok {
+						targets = append(targets, l.URL)
+					}
+				}
+			}
+		}
+		if len(targets) != 1 || targets[0] != tc.url {
+			t.Errorf("round trip of %q gave targets %q", tc.url, targets)
+		}
+	}
+}
+
 // received sends composer text through the send path (mrkdwn.Convert)
 // and back through JSON, the way the block arrives from Slack.
 func received(t *testing.T, composed string) RichTextBlock {
@@ -51,6 +107,8 @@ func TestRichTextToMarkdown_RoundTrip(t *testing.T) {
 		"**[bold link](https://example.com/b)** and _[italic link](https://example.com/i)_",
 		"**https://example.com/bare-bold**",
 		"hi <@U123> in <#C456> <!here>",
+		"read https://en.wikipedia.org/wiki/Mercury_(planet) today",
+		"https://en.wikipedia.org/wiki/Mercury_(planet)",
 		"before\n\n```\nfn main() {}\n```\n\nafter",
 		"a list\n- item\n\nand a paragraph after it",
 		"wave :wave::skin-tone-3: done",

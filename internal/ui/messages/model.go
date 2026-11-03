@@ -1394,17 +1394,46 @@ func (m *Model) hasAuthor(userID string) bool {
 	return false
 }
 
-// AuthorStatusEmoji is the status emoji that follows an author's name
-// in a message header, for both panes: an image when emoji can place it
-// (image mode, custom emoji included), with image true and the upload
-// it needs, else the glyph, and "" when the author has no live status.
-// A cold image is the spaces it reserves (image true, nil upload).
-func AuthorStatusEmoji(statuses map[string]peerstatus.Status, userID string, now time.Time, emoji EmojiContext) (s string, image bool, flush func(io.Writer) error) {
-	st := statuses[userID]
-	if placed, flush, ok := emoji.PlaceShortcode(st.GlyphShortcode(now)); ok {
-		return placed, true, flush
+// AuthorStatusSuffix is what follows an author's name in a message
+// header: a space and their status emoji on the pane background, or ""
+// when they have no live custom status. Shared with the thread pane.
+// Emoji images use the same placement options and upload collector as the body.
+// Nil opts keeps glyph rendering, even when image mode is enabled.
+func AuthorStatusSuffix(statuses map[string]peerstatus.Status, userID string, now time.Time, opts *RenderSlackMarkdownOpts) string {
+	g, _ := authorStatusEmoji(statuses, userID, now, opts)
+	if g == "" {
+		return ""
 	}
-	return st.Glyph(now), false, nil
+	return lipgloss.NewStyle().Background(styles.Background).Render(" " + g)
+}
+
+// authorStatusEmoji is AuthorStatusSuffix's emoji alone, and whether it
+// is an image (warm, or the cells a cold one reserves) rather than the
+// glyph. RenderMessage wraps an image as its own unit.
+func authorStatusEmoji(statuses map[string]peerstatus.Status, userID string, now time.Time, opts *RenderSlackMarkdownOpts) (string, bool) {
+	status := statuses[userID]
+	g := status.Glyph(now)
+	if g == "" {
+		return "", false
+	}
+	if opts != nil && emojiutil.ImageModeActive() && opts.PlaceCtx.Fetcher != nil {
+		var tokens []emojiutil.Token
+		if !status.InHuddle(now) && status.Emoji != "" {
+			tokens = emojiutil.ResolveEmojiToTokens(status.Emoji, opts.Customs)
+		}
+		if len(tokens) != 1 || tokens[0].Kind != emojiutil.TokenEmoji {
+			// Keep the shared huddle, expiry and unknown-status policy,
+			// while drawing its fallback glyph through the image path too.
+			tokens = emojiutil.ResolveEmojiToTokens(g, opts.Customs)
+		} else {
+			// Preserve the status policy's glyph when its image cannot be placed.
+			tokens[0].Text = g
+		}
+		if placed := renderEmojiTokensInline(tokens, opts.PlaceCtx, opts.EmojiCells, opts.EmojiFlushes); placed != g {
+			return placed, true
+		}
+	}
+	return g, false
 }
 
 // SetChannelNames sets the channel ID -> name map used to resolve bare

@@ -127,6 +127,7 @@ type App struct {
 	statusbar        statusbar.Model
 	channelFinder    channelfinder.Model
 	pendingForward   *forwardSource
+	forwardStandIns  []string // TSes of forward stand-ins awaiting their real echo; capped
 	searchResults    searchresults.Model
 	newMessagePicker newmessagepicker.Model
 	workspaceFinder  workspacefinder.Model
@@ -1850,6 +1851,10 @@ func (a *App) handleGoToTop() tea.Cmd {
 			a.threadsView.GoToTop()
 			// gg is a one-shot jump — fire the fetch immediately.
 			return a.openSelectedThreadCmd(false)
+		}
+		if a.view == ViewActivity {
+			a.activityView.GoToTop()
+			return nil
 		}
 		a.messagepane.GoToTop()
 		return a.maybeFetchOlderHistory(a.messagepane.AtTop())

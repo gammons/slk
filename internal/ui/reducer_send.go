@@ -72,6 +72,7 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// A concurrent compose send can suppress the forward's self-authored
 		// WS echo. Reconcile the HTTP result without touching drafts or
 		// placeholders. AppendMessage deduplicates echoes that arrived first.
+		a.noteForwardStandIn(m.message.TS)
 		for _, mm := range a.modelsForChannel(m.channelID) {
 			mm.AppendMessage(cloneMessageItem(m.message))
 		}
@@ -288,7 +289,10 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 	// Slack client while slk is open) do NOT update
 	// lastSelfSendByChannel, so they pass through this guard.
 	// An ephemeral is never an echo of chat.postMessage, so it is exempt.
-	if !m.Message.Ephemeral && m.Message.UserID != "" && m.Message.UserID == a.currentUserID && a.selfSend.InFlight(m.ChannelID) {
+	// A forward's echo is never an echo of a compose send, so it is exempt
+	// from the in-flight guard; it must reach the stand-in swap below.
+	standIn := a.takeForwardStandIn(m.Message.TS)
+	if !standIn && !m.Message.Ephemeral && m.Message.UserID != "" && m.Message.UserID == a.currentUserID && a.selfSend.InFlight(m.ChannelID) {
 		debuglog.Cache("NewMessageMsg: channel=%s ts=%s decision=skipped_self_send_in_flight",
 			m.ChannelID, m.Message.TS)
 		return nil
@@ -310,7 +314,11 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 		// sibling models would corrupt on the first in-place
 		// UpdateReaction — clone is the cheap insurance.
 		isBroadcast := m.Message.Subtype == "thread_broadcast"
-		if m.Message.ThreadTS == "" || m.Message.ThreadTS == m.Message.TS || isBroadcast {
+		if standIn {
+			// The real shared message replaces the forward's local
+			// stand-in (AppendMessage would keep the stand-in).
+			mm.UpsertSelfSent(cloneMessageItem(m.Message))
+		} else if m.Message.ThreadTS == "" || m.Message.ThreadTS == m.Message.TS || isBroadcast {
 			mm.AppendMessage(cloneMessageItem(m.Message))
 		}
 		if m.Message.ThreadTS != "" && m.Message.ThreadTS != m.Message.TS && !m.Message.Ephemeral {
