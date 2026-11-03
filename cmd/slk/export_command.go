@@ -179,9 +179,12 @@ func exportChannel(args []string) error {
 
 	ctx, stop := signalContext()
 	defer stop()
-	// xoxc tokens expire; refresh from the desktop app as the TUI does
-	// at launch. remintToken keeps the stored token on any failure.
-	tok = remintToken(ctx, store, tok)
+	// Refresh desktop-backed logins as the TUI does, using conditional saves.
+	// A removed/unreadable winning entry must stop export before connecting.
+	tok, err = remintToken(ctx, store, tok)
+	if err != nil {
+		return err
+	}
 	client := slackclient.NewClient(tok.AccessToken, tok.Cookie)
 	if err := client.Connect(ctx); err != nil {
 		return fmt.Errorf("connecting to %s: %w", tok.TeamName, err)

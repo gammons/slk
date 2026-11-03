@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"flag"
 	"strings"
@@ -194,5 +195,57 @@ func TestExportChannelLabel(t *testing.T) {
 	}
 	if got := exportChannelLabel(exportTestChannel("D1", "")); got != "D1" {
 		t.Errorf("DM label = %q, want its ID", got)
+	}
+}
+
+func TestExportStartupRefreshUsesConcurrentImport(t *testing.T) {
+	dir := t.TempDir()
+	store := slackclient.NewTokenStore(dir)
+	original := testLogin("xoxc-old", "d-old")
+	if err := store.Save(original); err != nil {
+		t.Fatal(err)
+	}
+	imported := testLogin("xoxc-imported", "d-imported")
+	imported.Source, imported.UserID = slackclient.TokenSourceImported, "UIMPORTED"
+	got, err := remintTokenWithStore(context.Background(), store, original,
+		func() (string, error) {
+			saveMeanwhile(t, imported)(dir)
+			return "d-desktop", nil
+		},
+		func() (map[string]string, error) { return map[string]string{"T1": "xoxc-desktop"}, nil },
+		func(context.Context, string, string) (string, error) { t.Fatal("unexpected mint"); return "", nil },
+	)
+	if err != nil || got != imported {
+		t.Fatalf("export must connect with the winning import, err=%v", err)
+	}
+	stored, err := store.Load("T1")
+	if err != nil || stored != imported {
+		t.Fatalf("export overwrote the winning import, err=%v", err)
+	}
+}
+
+func TestExportStartupRefreshRespectsDeletion(t *testing.T) {
+	store := slackclient.NewTokenStore(t.TempDir())
+	original := testLogin("xoxc-old", "d-old")
+	if err := store.Save(original); err != nil {
+		t.Fatal(err)
+	}
+	reads := 0
+	got, err := remintTokenWithStore(context.Background(), store, original,
+		func() (string, error) {
+			reads++
+			if err := store.Delete(original.TeamID); err != nil {
+				t.Fatal(err)
+			}
+			return "d-desktop", nil
+		},
+		func() (map[string]string, error) { return map[string]string{"T1": "xoxc-desktop"}, nil },
+		func(context.Context, string, string) (string, error) { t.Fatal("unexpected mint"); return "", nil },
+	)
+	if err == nil || got != (slackclient.Token{}) || reads != 1 {
+		t.Fatal("export must fail without stale credentials or retries when its workspace was removed")
+	}
+	if _, err := store.Load("T1"); err == nil {
+		t.Fatal("export brought back the deleted workspace")
 	}
 }

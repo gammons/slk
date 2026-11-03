@@ -34,7 +34,6 @@ import (
 	"github.com/gammons/slk/internal/notify"
 	"github.com/gammons/slk/internal/service"
 	slackclient "github.com/gammons/slk/internal/slack"
-	"github.com/gammons/slk/internal/slackdesktop"
 	"github.com/gammons/slk/internal/slackhttp"
 	"github.com/gammons/slk/internal/text"
 	"github.com/gammons/slk/internal/ui"
@@ -315,15 +314,13 @@ func run() error {
 		}
 	}
 
-	// Re-mint tokens from the live desktop cookie so every launch starts
-	// with fresh xoxc tokens (they expire; the desktop cookie is the source
-	// of truth). Falls back to cached tokens when offline / desktop absent.
-	tokens = remintTokens(context.Background(), tokens,
-		slackdesktop.Cookie,
-		slackdesktop.Tokens,
-		slackclient.MintToken,
-		tokenStore.Save,
-	)
+	// Refresh desktop-backed logins without overwriting a session another
+	// process imported meanwhile. Protected sources never read the desktop app;
+	// offline desktop refreshes keep cached credentials.
+	tokens, err = remintStoredTokens(context.Background(), tokenStore, tokens)
+	if err != nil {
+		return err
+	}
 
 	// Initialize services
 	wsMgr := service.NewWorkspaceManager(db)

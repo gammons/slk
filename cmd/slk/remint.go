@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"slices"
 
@@ -9,12 +10,64 @@ import (
 	"github.com/gammons/slk/internal/slackdesktop"
 )
 
-// remintToken refreshes one stored token from the live desktop session
-// and saves it to store, as remintTokens does for every token at TUI
-// launch. It returns the token unchanged on any failure, and always for
-// a browser sign-in.
-func remintToken(ctx context.Context, store *slackclient.TokenStore, tok slackclient.Token) slackclient.Token {
-	return remintTokenWith(ctx, tok, slackdesktop.Cookie, slackdesktop.Tokens, slackclient.MintToken, store.Save)
+// remintToken refreshes one desktop-backed login at channel export startup.
+// Desktop read/mint failures keep the cached login; persistence conflicts use
+// the current stored login instead. A failed reread returns no credentials.
+func remintToken(ctx context.Context, store *slackclient.TokenStore, tok slackclient.Token) (slackclient.Token, error) {
+	return remintTokenWithStore(ctx, store, tok, slackdesktop.Cookie, slackdesktop.Tokens, slackclient.MintToken)
+}
+
+func remintTokenWithStore(
+	ctx context.Context,
+	store *slackclient.TokenStore,
+	tok slackclient.Token,
+	cookieFn func() (string, error),
+	tokensFn func() (map[string]string, error),
+	mintFn minter,
+) (slackclient.Token, error) {
+	out, err := remintStoredTokensWith(ctx, store, []slackclient.Token{tok}, cookieFn, tokensFn, mintFn)
+	if err != nil {
+		return slackclient.Token{}, err
+	}
+	return out[0], nil
+}
+
+func remintStoredTokens(ctx context.Context, store *slackclient.TokenStore, tokens []slackclient.Token) ([]slackclient.Token, error) {
+	return remintStoredTokensWith(ctx, store, tokens, slackdesktop.Cookie, slackdesktop.Tokens, slackclient.MintToken)
+}
+
+func remintStoredTokensWith(
+	ctx context.Context,
+	store *slackclient.TokenStore,
+	tokens []slackclient.Token,
+	cookieFn func() (string, error),
+	tokensFn func() (map[string]string, error),
+	mintFn minter,
+) ([]slackclient.Token, error) {
+	expected := make(map[string]slackclient.Token, len(tokens))
+	for _, tok := range tokens {
+		expected[tok.TeamID] = tok
+	}
+	var persistErr error
+	out := remintTokens(ctx, tokens, cookieFn, tokensFn, mintFn, func(tok slackclient.Token) error {
+		if _, err := store.SaveIf(tok, expected[tok.TeamID]); err != nil {
+			persistErr = errors.New("saving refreshed workspace login failed; restart to retry")
+			return persistErr
+		}
+		return nil
+	})
+	if persistErr != nil {
+		return nil, persistErr
+	}
+	out = slices.Clone(out)
+	for i := range out {
+		current, err := store.Load(out[i].TeamID)
+		if err != nil {
+			return nil, errors.New("workspace login changed during startup and could not be reloaded; restart to retry")
+		}
+		out[i] = current
+	}
+	return out, nil
 }
 
 // desktopLogin reads the login that the desktop app holds for tok's

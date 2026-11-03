@@ -2,7 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	slackclient "github.com/gammons/slk/internal/slack"
@@ -234,6 +241,119 @@ func TestRemintTokensMixedSourcesRefreshesOnlyDesktop(t *testing.T) {
 	}
 }
 
+func TestStartupRefreshUsesConditionalStore(t *testing.T) {
+	for _, tc := range []struct{ file, entry, refresh string }{
+		{"main.go", "run", "remintStoredTokens"},
+		{"export_command.go", "exportChannel", "remintToken"},
+	} {
+		t.Run(tc.entry, func(t *testing.T) {
+			file, err := parser.ParseFile(token.NewFileSet(), tc.file, nil, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, decl := range file.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Name.Name != tc.entry {
+					continue
+				}
+				ast.Inspect(fn.Body, func(node ast.Node) bool {
+					call, ok := node.(*ast.CallExpr)
+					if !ok {
+						return true
+					}
+					if name, ok := call.Fun.(*ast.Ident); ok && name.Name == tc.refresh {
+						found = true
+					}
+					if name, ok := call.Fun.(*ast.Ident); ok && name.Name == "remintTokens" {
+						t.Error("startup bypasses conditional token persistence")
+					}
+					return true
+				})
+			}
+			if !found {
+				t.Fatalf("%s must use %s", tc.entry, tc.refresh)
+			}
+		})
+	}
+}
+
+func TestRemintStoredTokensKeepsConcurrentReplacement(t *testing.T) {
+	for _, samePair := range []bool{false, true} {
+		t.Run(map[bool]string{false: "new-desktop-pair", true: "unchanged-desktop-pair"}[samePair], func(t *testing.T) {
+			dir := t.TempDir()
+			store := slackclient.NewTokenStore(dir)
+			original := testLogin("xoxc-old", "d-old")
+			if err := store.Save(original); err != nil {
+				t.Fatal(err)
+			}
+			imported := testLogin("xoxc-imported", "d-imported")
+			imported.Source, imported.UserID = slackclient.TokenSourceImported, "UIMPORTED"
+			desktop := testLogin("xoxc-desktop", "d-desktop")
+			if samePair {
+				desktop = original
+			}
+			out, err := remintStoredTokensWith(context.Background(), store, []slackclient.Token{original},
+				func() (string, error) {
+					saveMeanwhile(t, imported)(dir)
+					return desktop.Cookie, nil
+				},
+				func() (map[string]string, error) { return map[string]string{"T1": desktop.AccessToken}, nil },
+				func(context.Context, string, string) (string, error) { t.Fatal("unexpected mint"); return "", nil },
+			)
+			if err != nil || len(out) != 1 || out[0] != imported {
+				t.Fatalf("startup must use the concurrent import, err=%v", err)
+			}
+			stored, err := store.Load("T1")
+			if err != nil || stored != imported {
+				t.Fatalf("startup overwrote the concurrent import, err=%v", err)
+			}
+		})
+	}
+}
+
+func TestRemintStoredTokensFailsClosedWhenEntryDisappears(t *testing.T) {
+	store := slackclient.NewTokenStore(t.TempDir())
+	original := testLogin("xoxc-old", "d-old")
+	if err := store.Save(original); err != nil {
+		t.Fatal(err)
+	}
+	reads := 0
+	out, err := remintStoredTokensWith(context.Background(), store, []slackclient.Token{original},
+		func() (string, error) {
+			reads++
+			if err := store.Delete("T1"); err != nil {
+				t.Fatal(err)
+			}
+			return "d-desktop", nil
+		},
+		func() (map[string]string, error) { return map[string]string{"T1": "xoxc-desktop"}, nil },
+		func(context.Context, string, string) (string, error) { t.Fatal("unexpected mint"); return "", nil },
+	)
+	if err == nil || len(out) != 0 || reads != 1 {
+		t.Fatal("deleted startup login must fail without returning stale credentials or retrying")
+	}
+	if _, err := store.Load("T1"); err == nil {
+		t.Fatal("startup brought back a deleted workspace")
+	}
+}
+
+func TestRemintStoredTokensRefreshFailureKeepsOfflineLogin(t *testing.T) {
+	store := slackclient.NewTokenStore(t.TempDir())
+	original := testLogin("xoxc-old", "d-old")
+	if err := store.Save(original); err != nil {
+		t.Fatal(err)
+	}
+	out, err := remintStoredTokensWith(context.Background(), store, []slackclient.Token{original},
+		func() (string, error) { return "", errors.New("desktop unavailable") },
+		func() (map[string]string, error) { t.Fatal("unexpected desktop read"); return nil, nil },
+		func(context.Context, string, string) (string, error) { t.Fatal("unexpected mint"); return "", nil },
+	)
+	if err != nil || len(out) != 1 || out[0] != original {
+		t.Fatalf("offline refresh must retain its cached login, err=%v", err)
+	}
+}
+
 func TestRemintTokensClearsIdentityOfRefreshedPair(t *testing.T) {
 	for _, levelDB := range []bool{false, true} {
 		t.Run(map[bool]string{false: "mint", true: "desktop-token"}[levelDB], func(t *testing.T) {
@@ -272,5 +392,177 @@ func TestRemintTokensFailurePreservesIdentity(t *testing.T) {
 	)
 	if len(out) != 1 || out[0] != original {
 		t.Fatal("failed refresh changed the verified cached identity")
+	}
+}
+
+func TestRemintStoredTokensFailsClosedOnSaveError(t *testing.T) {
+	dir := t.TempDir()
+	store := slackclient.NewTokenStore(dir)
+	original := testLogin("xoxc-old", "d-old")
+	if err := store.Save(original); err != nil {
+		t.Fatal(err)
+	}
+	out, err := remintStoredTokensWith(context.Background(), store, []slackclient.Token{original},
+		func() (string, error) {
+			if err := os.Rename(dir, dir+"-moved"); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.RemoveAll(dir + "-moved") })
+			if err := os.WriteFile(dir, []byte("not a directory"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			return "d-desktop", nil
+		},
+		func() (map[string]string, error) { return map[string]string{"T1": "xoxc-desktop"}, nil },
+		func(context.Context, string, string) (string, error) { t.Fatal("unexpected mint"); return "", nil },
+	)
+	if err == nil || len(out) != 0 {
+		t.Fatal("failed persistence must return no startup credentials")
+	}
+}
+
+func TestRemintStoredTokensFailsClosedOnUnreadableWinner(t *testing.T) {
+	dir := t.TempDir()
+	store := slackclient.NewTokenStore(dir)
+	original := testLogin("xoxc-old", "d-old")
+	if err := store.Save(original); err != nil {
+		t.Fatal(err)
+	}
+	out, err := remintStoredTokensWith(context.Background(), store, []slackclient.Token{original},
+		func() (string, error) {
+			if err := os.WriteFile(filepath.Join(dir, "T1.json"), []byte(`{"secret-marker":`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			return "d-desktop", nil
+		},
+		func() (map[string]string, error) { return map[string]string{"T1": "xoxc-desktop"}, nil },
+		func(context.Context, string, string) (string, error) { t.Fatal("unexpected mint"); return "", nil },
+	)
+	if err == nil || len(out) != 0 {
+		t.Fatal("unreadable winning login must return no startup credentials")
+	}
+	if strings.Contains(err.Error(), "secret-marker") {
+		t.Fatal("startup error disclosed token file contents")
+	}
+}
+
+func TestRemintUnsavedTokensReconcileStoredLogin(t *testing.T) {
+	for _, path := range []string{"startup", "channel-export"} {
+		for _, failure := range []string{"cookie-failure", "mint-failure", "missing-domain", "protected-source"} {
+			for _, change := range []string{"import", "deletion", "unreadable-winner", "unchanged"} {
+				t.Run(path+"/"+failure+"/"+change, func(t *testing.T) {
+					dir := t.TempDir()
+					store := slackclient.NewTokenStore(dir)
+					original := testLogin("xoxc-old", "d-old")
+					original.Domain, original.UserID = "acme", "UOLD"
+					if failure == "missing-domain" {
+						original.Domain = ""
+					}
+					if failure == "protected-source" {
+						original.Source = slackclient.TokenSourceImported
+					}
+					if err := store.Save(original); err != nil {
+						t.Fatal(err)
+					}
+					imported := testLogin("xoxc-imported", "d-imported")
+					imported.Source, imported.UserID = slackclient.TokenSourceImported, "UIMPORTED"
+					changes := 0
+					changeStore := func() {
+						changes++
+						switch change {
+						case "import":
+							saveMeanwhile(t, imported)(dir)
+						case "deletion":
+							if err := store.Delete(original.TeamID); err != nil {
+								t.Fatal(err)
+							}
+						case "unreadable-winner":
+							if err := os.WriteFile(filepath.Join(dir, "T1.json"), []byte(`{"secret-marker":`), 0600); err != nil {
+								t.Fatal(err)
+							}
+						}
+					}
+					var cookies, reads, mints int
+					cookieFn := func() (string, error) {
+						cookies++
+						if failure == "cookie-failure" {
+							changeStore()
+							return "", errors.New("desktop unavailable")
+						}
+						return "d-desktop", nil
+					}
+					tokensFn := func() (map[string]string, error) {
+						reads++
+						if failure == "missing-domain" {
+							changeStore()
+						}
+						return nil, nil
+					}
+					mintFn := func(context.Context, string, string) (string, error) {
+						mints++
+						if failure != "mint-failure" {
+							t.Fatal("unexpected mint")
+						}
+						changeStore()
+						return "", errors.New("mint unavailable")
+					}
+					if failure == "protected-source" {
+						changeStore()
+					}
+					in := []slackclient.Token{original}
+					var out []slackclient.Token
+					var err error
+					if path == "startup" {
+						out, err = remintStoredTokensWith(context.Background(), store, in, cookieFn, tokensFn, mintFn)
+					} else {
+						var got slackclient.Token
+						got, err = remintTokenWithStore(context.Background(), store, original, cookieFn, tokensFn, mintFn)
+						if err == nil {
+							out = []slackclient.Token{got}
+						} else if got != (slackclient.Token{}) {
+							t.Error("failed channel export refresh returned credentials")
+						}
+					}
+					wantCookies, wantReads, wantMints := 1, 1, 0
+					switch failure {
+					case "cookie-failure":
+						wantReads = 0
+					case "mint-failure":
+						wantMints = 1
+					case "protected-source":
+						wantCookies, wantReads = 0, 0
+					}
+					if changes != 1 || cookies != wantCookies || reads != wantReads || mints != wantMints {
+						t.Errorf("changes/cookies/reads/mints = %d/%d/%d/%d, want 1/%d/%d/%d", changes, cookies, reads, mints, wantCookies, wantReads, wantMints)
+					}
+					if len(in) != 1 || in[0] != original {
+						t.Error("reconciliation mutated the caller's snapshot")
+					}
+					stored, loadErr := store.Load(original.TeamID)
+					if change == "deletion" || change == "unreadable-winner" {
+						if err == nil || len(out) != 0 {
+							t.Error("missing or unreadable login must fail without returning stale credentials")
+						}
+						if err != nil && strings.Contains(err.Error(), "secret-marker") {
+							t.Error("reconciliation error disclosed token file contents")
+						}
+						if loadErr == nil {
+							t.Error("refresh restored a deleted or unreadable login")
+						}
+						return
+					}
+					want := original
+					if change == "import" {
+						want = imported
+					}
+					if err != nil || len(out) != 1 || out[0] != want {
+						t.Errorf("refresh must use the current stored login, err=%v", err)
+					}
+					if loadErr != nil || stored != want {
+						t.Errorf("refresh changed the winning stored login, err=%v", loadErr)
+					}
+				})
+			}
+		}
 	}
 }
