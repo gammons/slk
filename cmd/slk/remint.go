@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"slices"
 
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slackdesktop"
@@ -26,14 +27,8 @@ func desktopLogin(ctx context.Context, tok slackclient.Token) slackclient.Token 
 	return remintTokenWith(ctx, tok, slackdesktop.Cookie, slackdesktop.Tokens, slackclient.MintToken, noSave)
 }
 
-// remintTokenWith is remintToken with the desktop reads, the mint and
-// the save injected, for tests.
-//
-// A browser sign-in returns at once. remintTokens never replaces one,
-// but it reads the desktop app's cookie and tokens before it gets to
-// that check, and those reads go through the OS keychain, which costs
-// time and can show an authorization dialog. For a single token that
-// is known to be skipped, that is all cost and no use.
+// remintTokenWith refreshes one login with injected desktop reads, mint and
+// save. Protected sources return before any desktop/keychain access.
 func remintTokenWith(
 	ctx context.Context,
 	tok slackclient.Token,
@@ -42,15 +37,16 @@ func remintTokenWith(
 	mintFn func(ctx context.Context, domain, cookie string) (string, error),
 	saveFn func(slackclient.Token) error,
 ) slackclient.Token {
-	if tok.Source == slackclient.TokenSourceBrowser {
+	if !tok.UsesDesktopLogin() {
 		return tok
 	}
 	return remintTokens(ctx, []slackclient.Token{tok}, cookieFn, tokensFn, mintFn, saveFn)[0]
 }
 
-// remintTokens refreshes every token's xoxc from the live desktop cookie. On
-// any failure for a given token it keeps the cached token (offline-friendly).
-// cookieFn is read once up front; mintFn/saveFn are injected for testing.
+// remintTokens refreshes desktop-backed logins from the live desktop cookie.
+// Protected sources never change; an all-protected batch skips desktop/keychain
+// reads entirely. Read/mint failures keep cached logins (offline-friendly).
+// cookieFn is read once per eligible batch; mintFn/saveFn are injected for tests.
 func remintTokens(
 	ctx context.Context,
 	tokens []slackclient.Token,
@@ -59,6 +55,9 @@ func remintTokens(
 	mintFn func(ctx context.Context, domain, cookie string) (string, error),
 	saveFn func(slackclient.Token) error,
 ) []slackclient.Token {
+	if !slices.ContainsFunc(tokens, slackclient.Token.UsesDesktopLogin) {
+		return tokens
+	}
 	cookie, err := cookieFn()
 	if err != nil {
 		log.Printf("remint: could not read desktop cookie, using cached tokens: %v", err)
@@ -73,10 +72,7 @@ func remintTokens(
 	out := make([]slackclient.Token, len(tokens))
 	copy(out, tokens)
 	for i := range out {
-		if out[i].Source == slackclient.TokenSourceBrowser {
-			// Signed in from a browser session on purpose. The desktop
-			// app can hold the same workspace under another account, and
-			// its credentials would silently replace the chosen ones.
+		if !out[i].UsesDesktopLogin() {
 			continue
 		}
 		newTok := desktopTokens[out[i].TeamID]
@@ -93,6 +89,7 @@ func remintTokens(
 		}
 		out[i].AccessToken = newTok
 		out[i].Cookie = cookie
+		out[i].UserID = ""
 		if err := saveFn(out[i]); err != nil {
 			log.Printf("remint: %s: save failed: %v", out[i].TeamName, err)
 		}

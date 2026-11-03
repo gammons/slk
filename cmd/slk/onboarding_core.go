@@ -48,24 +48,30 @@ type workspaceChoice struct {
 	label, teamID string
 }
 
-// desktopChoices builds the picker's rows and its pre-selection. Every
-// workspace is pre-selected, except one that saved already holds as a
-// browser-session token: selecting it replaces that session with the desktop
-// app's, which may be another account, so that must be a deliberate tick, not
-// a side effect of adding some other workspace.
+// desktopChoices builds the picker's rows and its pre-selection. A saved
+// non-desktop session is not preselected: replacing it with the desktop app's
+// possibly different account must be deliberate, not a side effect of adding
+// another workspace. Imported and browser sessions are labelled explicitly.
 func desktopChoices(ws []slackdesktop.Workspace, saved []slackclient.Token) ([]workspaceChoice, []string) {
-	browser := map[string]bool{}
+	protected := map[string]string{}
 	for _, tok := range saved {
-		if tok.Source == slackclient.TokenSourceBrowser {
-			browser[tok.TeamID] = true
+		if !tok.UsesDesktopLogin() {
+			label := "saved session"
+			switch tok.Source {
+			case slackclient.TokenSourceBrowser:
+				label = "browser session"
+			case slackclient.TokenSourceImported:
+				label = "imported session"
+			}
+			protected[tok.TeamID] = label
 		}
 	}
 	choices := make([]workspaceChoice, 0, len(ws))
 	chosen := make([]string, 0, len(ws))
 	for _, w := range ws {
 		label := fmt.Sprintf("%s  (%s.slack.com)", w.Name, w.Domain)
-		if browser[w.TeamID] {
-			label += "  browser session, select to replace it"
+		if session, ok := protected[w.TeamID]; ok {
+			label += "  " + session + ", select to replace it"
 		} else {
 			chosen = append(chosen, w.TeamID)
 		}
