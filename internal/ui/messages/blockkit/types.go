@@ -155,6 +155,10 @@ type Context struct {
 	// raw text passes through unchanged.
 	RenderText func(s string, userNames map[string]string) string
 
+	// RenderPlainText expands emoji in headers and control labels without
+	// interpreting mrkdwn or mentions. May be nil; then text stays unchanged.
+	RenderPlainText func(s string) string
+
 	// WrapText word-wraps an ANSI-styled string to the given display
 	// width. The host wires this to internal/ui/messages.WordWrap.
 	// When nil, text passes through unchanged.

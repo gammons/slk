@@ -867,14 +867,16 @@ func renderInlineFormattingWith(text string, opts RenderSlackMarkdownOpts) strin
 	// routes them to the correct per-tone Slack CDN asset. The
 	// old StripSkinToneFromText call was a glyph-rendering width
 	// workaround that doesn't apply to kitty-image placements.
+	return renderEmojiWith(text, opts)
+}
+
+// renderEmojiWith shares emoji placement between mrkdwn and plain-text labels.
+func renderEmojiWith(text string, opts RenderSlackMarkdownOpts) string {
 	if emojiutil.ImageModeActive() && opts.PlaceCtx.Fetcher != nil {
 		tokens := emojiutil.ResolveEmojiToTokens(text, opts.Customs)
-		text = renderEmojiTokensInline(tokens, opts.PlaceCtx, opts.EmojiCells, opts.EmojiFlushes)
-	} else {
-		text = emojiutil.ResolveShortcodesInText(emojiutil.StripSkinToneFromText(text))
+		return renderEmojiTokensInline(tokens, opts.PlaceCtx, opts.EmojiCells, opts.EmojiFlushes)
 	}
-
-	return text
+	return emojiutil.ResolveShortcodesInText(emojiutil.StripSkinToneFromText(text))
 }
 
 // renderEmojiTokensInline walks a Token stream and returns the
