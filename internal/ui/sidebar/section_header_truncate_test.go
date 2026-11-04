@@ -6,6 +6,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
+	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
@@ -90,5 +91,31 @@ func TestSectionHeader_EmojiPathsStayOneLine(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Collapsed header (unread aggregate) with a long unknown emoji shortcode
+// must still fit in one line: the emoji prefix's separator space counts
+// against the budget.
+func TestSectionHeader_CollapsedLongEmojiStaysOneLine(t *testing.T) {
+	const width = 20
+	items := []ChannelItem{{ID: "C1", Name: "ch1", Type: "channel", Section: "A"}}
+	m := New(items)
+	m.SetSectionsProvider(&fakeProvider{
+		ready:    true,
+		sections: []SectionMeta{{ID: "A", Name: "Alerts", Emoji: "some-very-long-unknown-custom-emoji-shortcode", Type: "standard"}},
+	})
+	m.SetReadStateReader(func() map[string]cache.ReadState {
+		return map[string]cache.ReadState{"C1": {HasUnread: true}}
+	})
+	if !m.IsCollapsed("A") {
+		m.ToggleCollapse("A")
+	}
+	normal, selected, _ := m.renderSectionHeaderLabel("A", "▌", lipgloss.NewStyle(), "", width)
+	for _, label := range []string{normal, selected} {
+		out := styles.SectionHeader.Width(width - 2).Render(label)
+		if strings.Contains(out, "\n") {
+			t.Errorf("header wrapped at width %d: %q", width, out)
+		}
 	}
 }

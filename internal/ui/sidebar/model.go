@@ -2348,8 +2348,13 @@ func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.
 		// header with no name but a readable emoji/shortcode is more
 		// useful than the reverse.
 		if pw := lipgloss.Width(emojiPrefix); pw > budget {
+			// Reserve one column for the separator space re-added below.
 			trimmed := strings.TrimSuffix(emojiPrefix, " ")
-			emojiPrefix = truncate.StringWithTail(trimmed, uint(budget), "…") + " "
+			if budget >= 2 {
+				emojiPrefix = truncate.StringWithTail(trimmed, uint(budget-1), "…") + " "
+			} else {
+				emojiPrefix = ""
+			}
 			budget = 0
 		} else {
 			budget -= pw
