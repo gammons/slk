@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 // Regression test for the section-header wrap bug: buildCache renders
@@ -54,5 +56,39 @@ func TestSectionHeader_LongNameDoesNotWrap(t *testing.T) {
 	lines := strings.Split(view, "\n")
 	if len(lines) != 15 {
 		t.Errorf("expected exactly 15 rendered lines (height), got %d:\n%s", len(lines), view)
+	}
+}
+
+// Provider-backed cases exercising the emoji paths: skin tones, joined
+// (ZWJ) emoji, long unknown shortcodes, and a long name. Both the normal
+// and selected header labels must render as a single line at width 20.
+func TestSectionHeader_EmojiPathsStayOneLine(t *testing.T) {
+	cases := map[string]string{
+		"skin tone":    "wave::skin-tone-3",
+		"joined emoji": "male-construction-worker::skin-tone-2",
+		"unknown long": "some-very-long-unknown-custom-emoji-shortcode",
+		"plain":        "rocket",
+		"no emoji":     "",
+	}
+	const width = 20
+	for name, emojiCode := range cases {
+		t.Run(name, func(t *testing.T) {
+			items := []ChannelItem{{ID: "C1", Name: "ch1", Type: "channel", Section: "A"}}
+			m := New(items)
+			m.SetSectionsProvider(&fakeProvider{
+				ready:    true,
+				sections: []SectionMeta{{ID: "A", Name: "A Very Long Section Name Here", Emoji: emojiCode, Type: "standard"}},
+			})
+			normal, selected, _ := m.renderSectionHeaderLabel("A", "▌", lipgloss.NewStyle(), "", width)
+			for _, label := range []string{normal, selected} {
+				out := styles.SectionHeader.Width(width - 2).Render(label)
+				if strings.Contains(out, "\n") {
+					t.Errorf("header wrapped at width %d: %q", width, out)
+				}
+				if w := lipgloss.Width(out); w > width {
+					t.Errorf("header width %d > %d: %q", w, width, out)
+				}
+			}
+		})
 	}
 }

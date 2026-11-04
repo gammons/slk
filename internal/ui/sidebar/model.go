@@ -2331,8 +2331,11 @@ func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.
 	const headerChromeExcludingName = 3 + 2 // leading col(1) + glyph(1) + space(1) + style Padding(0,1)
 	if width > 0 {
 		budget := (width - 2) - headerChromeExcludingName - lipgloss.Width(aggregates)
-		if budget < 3 {
-			budget = 3
+		// Keep the true remaining budget (floored at 0): a larger
+		// floor lets the name exceed the width and wrap, which buildCache
+		// counts as a single row.
+		if budget < 0 {
+			budget = 0
 		}
 		// emojiPrefix is normally a short resolved glyph, but the
 		// ShouldRenderUnicode fallback above can leave it as the raw
