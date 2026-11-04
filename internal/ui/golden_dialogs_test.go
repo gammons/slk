@@ -8,9 +8,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/bubbles/channelpicker"
 	"github.com/gammons/slk/internal/bubbles/linkpicker"
 	"github.com/gammons/slk/internal/core"
-	"github.com/gammons/slk/internal/ui/channelpicker"
 	"github.com/gammons/slk/internal/ui/help"
 	"github.com/gammons/slk/internal/ui/marks"
 	"github.com/gammons/slk/internal/ui/mentionpicker"

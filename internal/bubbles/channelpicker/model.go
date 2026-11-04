@@ -21,8 +21,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/bubbles/chrome"
 	"github.com/gammons/slk/internal/text"
-	"github.com/gammons/slk/internal/ui/messages"
-	"github.com/gammons/slk/internal/ui/styles"
 )
 
 var _ chrome.Dialog = (*Model)(nil)
@@ -46,17 +44,47 @@ type ChannelResult struct {
 	Name      string
 }
 
+// Styles is everything the picker draws with. The composer maps the theme
+// onto it and pushes it at construction and on every theme change.
+type Styles struct {
+	// Chrome is the shared popup styling (box, rows, marker).
+	Chrome chrome.Styles
+	// Name styles a row's glyph and name; the selected row is also bold.
+	Name lipgloss.Style
+}
+
+// Option configures a Model at construction.
+type Option func(*Model)
+
+// WithStyles sets the initial styles.
+func WithStyles(s Styles) Option { return func(m *Model) { m.styles = s } }
+
+// WithWidth sets the popup width.
+func WithWidth(w int) Option { return func(m *Model) { m.width = w } }
+
 type Model struct {
 	channels []Channel
 	filtered []Channel
 	query    string
 	selected int
 	visible  bool
+	styles   Styles
+	width    int
 }
 
-func New() Model {
-	return Model{}
+func New(opts ...Option) Model {
+	m := Model{}
+	for _, o := range opts {
+		o(&m)
+	}
+	return m
 }
+
+// SetStyles replaces the picker's styles.
+func (m *Model) SetStyles(s Styles) { m.styles = s }
+
+// SetWidth sets the popup width the composer allots.
+func (m *Model) SetWidth(w int) { m.width = w }
 
 func (m *Model) SetChannels(channels []Channel) {
 	m.channels = channels
@@ -152,20 +180,22 @@ func glyphFor(ch Channel) string {
 	}
 }
 
-func (m *Model) View(width int) string {
+// View renders the popup at the width set by SetWidth/WithWidth, or ""
+// when the picker is hidden or has no matches.
+func (m *Model) View() string {
 	if !m.visible || len(m.filtered) == 0 {
 		return ""
 	}
 
-	s := messages.ChromeStyles()
+	s := m.styles.Chrome
 	rows := make([]string, 0, len(m.filtered))
 	for i, c := range m.filtered {
-		nameStyle := lipgloss.NewStyle().Foreground(styles.TextPrimary)
+		nameStyle := m.styles.Name
 		if i == m.selected {
 			nameStyle = nameStyle.Bold(true)
 		}
 		label := fmt.Sprintf("%s %s", glyphFor(c), c.Name)
 		rows = append(rows, chrome.PopupMarker(s, i == m.selected)+nameStyle.Render(label))
 	}
-	return chrome.Popup(s, rows, width)
+	return chrome.Popup(s, rows, m.width)
 }

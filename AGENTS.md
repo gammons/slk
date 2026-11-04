@@ -45,8 +45,8 @@ internal/bubbles/       self-contained components and the substrate they
                         chrome, the substrate every dialog draws through. Never
                         imports internal/ui; the TUI's I/O ban applies here too.
                         Widgets move here from internal/ui/<widget>/ one at
-                        a time; confirmprompt and linkpicker
-                        are the first two
+                        a time; confirmprompt, linkpicker and channelpicker
+                        are the first three
 internal/slack/         Slack Web API + browser-protocol WebSocket client
 internal/slack/edge/    edgeapi: conditional revalidation, server-side search
 internal/bootstrap/     startup fetch orchestration
@@ -210,6 +210,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Need | Use |
 |---|---|
 | A centred, bold, muted row like a day divider (date separators, the "new" landmark's sibling, and system notices in `RenderMessage`) | `messages.DividerStyle(width)`; build per draw (reads the theme). A notice's plain mirror drops the centring pad via `trimPlainPadding` in `WrapRows` |
+| The inline `#channel` autocomplete popup in the composer | `bubbles/channelpicker` (`New`, `SetChannels`, `Open`, `SetQuery`, `MoveUp`/`MoveDown`, `Select`, `View`, `SetStyles`, `SetWidth`; options `WithStyles`/`WithWidth`). Its consumer is `internal/ui/compose`, which maps the theme in `channelPickerStyles`, pushes it at construction and in `RefreshStyles` (called by `applyTheme`), and pushes the popup width before each `ChannelPickerView` |
 | Scrollbar gutter on a rendered pane | `bubbles/scrollbar.Overlay`, `bubbles/scrollbar.Visible` |
 | Lay out a wrapping row of labelled controls (buttons, select labels) with positions for hit-testing | `internal/bubbles/buttonrow` (`Layout`, `Rows`, `RowsFunc`); used by Block Kit actions and the confirm prompt |
 | Draw a dialog: its box, title / filter / body / footer layout, filter line, list window, selected-row marker, scrollbar gutter, and the composer popups' box and marker | `bubbles/chrome` (`Frame`, `Box`, `FilterInput`, `Window`, `List`, `Marker`, `BodyTop`, `Popup`, `PopupMarker`), drawn with `messages.ChromeStyles()` called per draw. A dialog keeps its own fields, matching and row content; see the package doc |

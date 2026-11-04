@@ -1,6 +1,54 @@
 package channelpicker
 
-import "testing"
+import (
+	"testing"
+
+	"charm.land/lipgloss/v2"
+	"github.com/gammons/slk/internal/bubbles/chrome"
+)
+
+func testStyles(fg string) Styles {
+	return Styles{Name: lipgloss.NewStyle().Foreground(lipgloss.Color(fg))}
+}
+
+func TestViewEmptyWhenHiddenOrNoMatches(t *testing.T) {
+	m := New(WithStyles(testStyles("#ff0000")), WithWidth(30))
+	m.SetChannels([]Channel{{ID: "C1", Name: "general", Type: "channel"}})
+	if m.View() != "" {
+		t.Error("hidden picker should render empty")
+	}
+	m.Open()
+	if m.View() == "" {
+		t.Error("open picker with matches should render")
+	}
+	m.SetQuery("zzz")
+	if m.View() != "" {
+		t.Error("picker with no matches should render empty")
+	}
+}
+
+func TestSetStylesChangesOutput(t *testing.T) {
+	m := New(WithStyles(testStyles("#ff0000")), WithWidth(30))
+	m.SetChannels([]Channel{{ID: "C1", Name: "general", Type: "channel"}})
+	m.Open()
+	before := m.View()
+	m.SetStyles(testStyles("#00ff00"))
+	if m.View() == before {
+		t.Error("SetStyles did not change the rendered output")
+	}
+}
+
+func TestWidthIsRespected(t *testing.T) {
+	m := New(WithStyles(Styles{Chrome: chrome.Styles{}}), WithWidth(20))
+	m.SetChannels([]Channel{{ID: "C1", Name: "general", Type: "channel"}})
+	m.Open()
+	narrow := m.View()
+	m.SetWidth(40)
+	wide := m.View()
+	if lipgloss.Width(wide) <= lipgloss.Width(narrow) {
+		t.Errorf("width 40 (%d) not wider than width 20 (%d)", lipgloss.Width(wide), lipgloss.Width(narrow))
+	}
+}
 
 func TestFilterByNamePrefix(t *testing.T) {
 	m := New()
