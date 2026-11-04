@@ -173,7 +173,8 @@ type MessageService interface {
 	// not read from the active workspace when this synchronous call executes.
 	// Callers run it off the Update loop; it does not produce send/compose events.
 	// On success, returns the actual posted timestamp and permalink text.
-	Forward(ctx context.Context, teamID string, sourceChannelID ids.ChannelID, ts ids.MessageTS, destinationChannelID ids.ChannelID) (ForwardResult, error)
+	// threadTS is the source's thread when it is a reply (see Permalink).
+	Forward(ctx context.Context, teamID string, sourceChannelID ids.ChannelID, ts ids.MessageTS, threadTS ids.ThreadTS, destinationChannelID ids.ChannelID) (ForwardResult, error)
 
 	// Edit dispatches chat.update for the message identified by
 	// (channelID, ts), replacing its text with newText.
@@ -203,9 +204,12 @@ type MessageService interface {
 
 	// Permalink resolves the Slack permalink URL for the message
 	// identified by (channelID, ts). Used by the copy-permalink
-	// keybind. Synchronous (HTTP); callers wrap in a goroutine to
-	// avoid blocking the Update loop.
-	Permalink(ctx context.Context, channelID ids.ChannelID, ts ids.MessageTS) (string, error)
+	// keybind. threadTS is the message's thread when it is a reply
+	// (empty, or ts itself, for a channel message): where Slack refuses
+	// the API call (Enterprise Grid) the link is built locally, and a
+	// reply's link needs its thread. Synchronous (HTTP); callers wrap in a
+	// goroutine to avoid blocking the Update loop.
+	Permalink(ctx context.Context, channelID ids.ChannelID, ts ids.MessageTS, threadTS ids.ThreadTS) (string, error)
 }
 
 // ChannelService is the App's interface to the Slack channels API,

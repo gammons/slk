@@ -1533,12 +1533,13 @@ func (a *App) copyPermalinkOfSelected() tea.Cmd {
 	messageSvc := a.messageSvc
 	cID := ids.ChannelID(channelID)
 	mTS := ids.MessageTS(ts)
+	tTS := a.selectedThreadTS()
 
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		url, err := messageSvc.Permalink(ctx, cID, mTS)
+		url, err := messageSvc.Permalink(ctx, cID, mTS, tTS)
 		if err != nil {
 			log.Printf("copy permalink: %v", err)
 			return statusbar.PermalinkCopyFailedMsg{}
