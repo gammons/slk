@@ -5,41 +5,29 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/bubbles/chrome"
-	"github.com/gammons/slk/internal/ui/messages"
-	"github.com/gammons/slk/internal/ui/overlay"
-	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/muesli/reflow/truncate"
 )
 
-// ViewOverlay renders the picker centered on a dimmed copy of
-// background. Returns background unchanged when not visible.
-func (m *Model) ViewOverlay(termWidth, termHeight int, background string) string {
+// View renders the picker's box, or "" when it is hidden. The caller
+// composites it over its background.
+func (m *Model) View() string {
 	if !m.visible {
-		return background
+		return ""
 	}
-	box := m.renderBox(termWidth)
-	if box == "" {
-		return background
-	}
-	return overlay.DimmedOverlay(termWidth, termHeight, background, box, 0.5)
-}
-
-func (m *Model) renderBox(termWidth int) string {
-	s := messages.ChromeStyles()
-	overlayWidth := termWidth * 6 / 10
+	s := m.styles.Chrome
+	overlayWidth := m.width * 6 / 10
 	if overlayWidth < 40 {
 		overlayWidth = 40
 	}
 	if overlayWidth > 80 {
 		overlayWidth = 80
 	}
-	if overlayWidth > termWidth-2 {
-		overlayWidth = termWidth - 2
+	if overlayWidth > m.width-2 {
+		overlayWidth = m.width - 2
 	}
 	innerWidth := overlayWidth - 4 // border + padding
 
 	list := chrome.List{Start: 0, End: len(m.items), Total: len(m.items)}
-	badgeStyle := s.Row.Foreground(styles.Accent)
 
 	rows := make([]string, 0, len(m.items))
 	for i, it := range m.items {
@@ -63,13 +51,13 @@ func (m *Model) renderBox(termWidth int) string {
 			budget = 1
 		}
 		if lipgloss.Width(text) > budget {
-			text = truncate.StringWithTail(text, uint(budget), "\u2026")
+			text = truncate.StringWithTail(text, uint(budget), "…")
 		}
 		style := s.Row
 		if i == m.selected {
 			style = s.RowSelected
 		}
-		rows = append(rows, style.Width(budget).Render(text)+badgeStyle.Render(badge))
+		rows = append(rows, style.Width(budget).Render(text)+m.styles.Badge.Render(badge))
 	}
 
 	return chrome.Frame{

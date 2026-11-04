@@ -45,7 +45,8 @@ internal/bubbles/       self-contained components and the substrate they
                         chrome, the substrate every dialog draws through. Never
                         imports internal/ui; the TUI's I/O ban applies here too.
                         Widgets move here from internal/ui/<widget>/ one at
-                        a time; confirmprompt is the first
+                        a time; confirmprompt and linkpicker
+                        are the first two
 internal/slack/         Slack Web API + browser-protocol WebSocket client
 internal/slack/edge/    edgeapi: conditional revalidation, server-side search
 internal/bootstrap/     startup fetch orchestration
@@ -203,6 +204,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Draw a dialog: its box, title / filter / body / footer layout, filter line, list window, selected-row marker, scrollbar gutter, and the composer popups' box and marker | `bubbles/chrome` (`Frame`, `Box`, `FilterInput`, `Window`, `List`, `Marker`, `BodyTop`, `Popup`, `PopupMarker`), drawn with `messages.ChromeStyles()` called per draw. A dialog keeps its own fields, matching and row content; see the package doc |
 | A scrollbar thumb's rows, for a gutter you draw yourself | `bubbles/scrollbar.Thumb` (the one formula; `Overlay` and `chrome.List` use it) |
 | Centered modal over a dimmed backdrop | `ui/overlay.DimmedOverlay` |
+| Pick one item from a message (the `o` link picker, the `d` file picker) | `bubbles/linkpicker` (`New`, `Open`, `HandleKey`, `View`, `SetStyles`, `SetWidth`; options `WithStyles`/`WithWidth`). The App maps the theme in `linkPickerStyles` and opens it with `App.openLinkPicker` (`internal/ui/link_picker.go`); `applyTheme` re-pushes the styles and `view_overlays.go` composites `View()` with `overlay.DimmedOverlay` |
 | Prompt modal with N buttons (title, wrapped body of up to 8 lines, buttons; yes/no is `Open`, any buttons via `OpenChoice(confirmprompt.Choice)`, `Button.Then` for a follow-up step) | `bubbles/confirmprompt` (`New`, `Open`, `OpenChoice`, `Update`, `PressHighlighted`, `View`, `SetStyles`, `SetWidth`; options `WithStyles`/`WithKeyMap`/`WithWidth`; `KeyMap` field). In the App, open it with `App.openConfirmPrompt` (yes/no) or `App.openConfirmChoice` (any buttons) (`internal/ui/confirm.go`), which also map the theme onto its styles and composite it |
 | Text selection ranges and anchors | `bubbles/selection` (`Range`, `Anchor`, `LessOrEqual`) |
 | A scrollable, selectable list of pre-rendered rows: line offsets, scroll offset and snapping, the visible window, text selection and copy, clickable-rect translation, the scrollbar | `bubbles/entrylist` (`New` with options, `SetHeight`, `SetEntries`, `Layout`, `Compose`). The channel and thread panes are its two owners; each divergence between them is an `entrylist` option, documented on the option |

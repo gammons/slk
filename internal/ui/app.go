@@ -17,6 +17,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/bubbles/confirmprompt"
+	"github.com/gammons/slk/internal/bubbles/linkpicker"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	"github.com/gammons/slk/internal/emoji"
@@ -30,7 +31,6 @@ import (
 	"github.com/gammons/slk/internal/ui/emojipicker"
 	"github.com/gammons/slk/internal/ui/help"
 	"github.com/gammons/slk/internal/ui/imgrender"
-	"github.com/gammons/slk/internal/ui/linkpicker"
 	"github.com/gammons/slk/internal/ui/marks"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
 	"github.com/gammons/slk/internal/ui/messages"
@@ -1583,7 +1583,7 @@ func (a *App) openLinksOfSelected() tea.Cmd {
 			items[i] = linkpicker.Item{URL: l.URL, Label: l.Label, InApp: a.linkOpensInApp(l.URL)}
 		}
 		a.pickerKind = "links"
-		a.linkPicker.Open("Open link", items)
+		a.openLinkPicker("Open link", items)
 		a.SetMode(ModeLinkPicker)
 		return nil
 	}
@@ -1628,7 +1628,7 @@ func (a *App) downloadFilesOfSelected() tea.Cmd {
 		}
 		a.pickerKind = "files"
 		a.pickerFiles = files
-		a.linkPicker.Open("Download file", items)
+		a.openLinkPicker("Download file", items)
 		a.SetMode(ModeLinkPicker)
 		return nil
 	}

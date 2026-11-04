@@ -8,10 +8,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/bubbles/linkpicker"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/channelpicker"
 	"github.com/gammons/slk/internal/ui/help"
-	"github.com/gammons/slk/internal/ui/linkpicker"
 	"github.com/gammons/slk/internal/ui/marks"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
 	"github.com/gammons/slk/internal/ui/newmessagepicker"
@@ -144,7 +144,7 @@ func dialogGoldens() []dialogGolden {
 		a.SetMode(ModeHelp)
 	}
 	openLinks := func(t *testing.T, a *App) {
-		a.linkPicker.Open("Open link", []linkpicker.Item{
+		a.openLinkPicker("Open link", []linkpicker.Item{
 			{URL: "https://example.com/a", Label: "Example"},
 			{URL: "https://example.com/a/very/long/path/that/will/not/fit/inside/the/link/picker/box?query=1"},
 			{URL: "https://slack.com/archives/C1/p1", InApp: true},

@@ -51,6 +51,7 @@ func (a *App) applyTheme(name string) {
 	a.compose.RefreshStyles()
 	a.threadCompose.RefreshStyles()
 	a.confirmPrompt.SetStyles(confirmPromptStyles())
+	a.linkPicker.SetStyles(linkPickerStyles())
 	if a.themeToastSeq != 0 && a.statusbar.ToastSeq() == a.themeToastSeq {
 		a.statusbar.SetToast("")
 	}
