@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -52,6 +53,8 @@ type mockEventHandler struct {
 
 	prefChanges []prefChangeRecord
 
+	emojiChanges []emojiChangeRecord
+
 	memberJoined []memberEventRecord
 	memberLeft   []memberEventRecord
 
@@ -71,6 +74,12 @@ type userDNDRecord struct {
 	userID  string
 	enabled bool
 	endUnix int64
+}
+
+type emojiChangeRecord struct {
+	subtype, name string
+	names         []string
+	value         string
 }
 
 type prefChangeRecord struct {
@@ -182,6 +191,10 @@ func (m *mockEventHandler) OnChannelSectionChannelsRemoved(sectionID string, cha
 }
 func (m *mockEventHandler) OnPrefChange(name, value string) {
 	m.prefChanges = append(m.prefChanges, prefChangeRecord{name, value})
+}
+
+func (m *mockEventHandler) OnEmojiChanged(subtype, name string, names []string, value string) {
+	m.emojiChanges = append(m.emojiChanges, emojiChangeRecord{subtype, name, names, value})
 }
 
 func (m *mockEventHandler) OnMemberJoined(channelID, userID string) {
@@ -938,6 +951,43 @@ func TestDispatch_PrefChange_EmptyValue(t *testing.T) {
 	}
 	if h.prefChanges[0].value != "" {
 		t.Errorf("value = %q, want empty", h.prefChanges[0].value)
+	}
+}
+
+func TestDispatch_EmojiChanged(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want emojiChangeRecord
+	}{
+		{
+			"add",
+			`{"type":"emoji_changed","subtype":"add","name":"parrot","value":"https://example.test/p.gif","event_ts":"1.2"}`,
+			emojiChangeRecord{subtype: "add", name: "parrot", value: "https://example.test/p.gif"},
+		},
+		{
+			"remove",
+			`{"type":"emoji_changed","subtype":"remove","names":["a","b"],"event_ts":"1.2"}`,
+			emojiChangeRecord{subtype: "remove", names: []string{"a", "b"}},
+		},
+		{
+			"unknown subtype still reaches the handler",
+			`{"type":"emoji_changed","subtype":"rename","old_name":"a","new_name":"b","value":"https://example.test/b.png"}`,
+			emojiChangeRecord{subtype: "rename", value: "https://example.test/b.png"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := &mockEventHandler{}
+			dispatchWebSocketEvent([]byte(tt.data), h)
+			if len(h.emojiChanges) != 1 {
+				t.Fatalf("emojiChanges len = %d, want 1", len(h.emojiChanges))
+			}
+			got := h.emojiChanges[0]
+			if got.subtype != tt.want.subtype || got.name != tt.want.name || got.value != tt.want.value || !slices.Equal(got.names, tt.want.names) {
+				t.Errorf("got %+v, want %+v", got, tt.want)
+			}
+		})
 	}
 }
 
