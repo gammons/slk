@@ -158,10 +158,10 @@ func (m *Model) filter() {
 	for _, c := range m.channels {
 		if q == "" || strings.HasPrefix(text.Fold(c.Name), q) {
 			results = append(results, c)
+			if len(results) == MaxVisible {
+				break
+			}
 		}
-	}
-	if len(results) > MaxVisible {
-		results = results[:MaxVisible]
 	}
 	m.filtered = results
 }
