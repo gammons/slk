@@ -525,6 +525,11 @@ func (h *rtmEventHandler) OnConnect() {
 		debuglog.Backfill("team=%s first connect: skipping catch-up, bootstrap.Run already covered it", h.workspaceID)
 	} else {
 		h.syncOnReconnect("reconnect")
+		// emoji_changed events sent while the socket was down are lost;
+		// mark the cache stale so the next launch fetches the list.
+		if h.wsCtx != nil && h.db != nil {
+			h.staleCustomEmoji()
+		}
 	}
 
 	// Force-stale the active channel's membership cache and re-fetch.

@@ -560,3 +560,70 @@ func TestOnEmojiChanged_RefetchSupersedesAFetchInFlight(t *testing.T) {
 		t.Errorf("cache = %v, want %v", got, newer)
 	}
 }
+
+// A burst of refetch-triggering events shares one refetch instead of
+// each starting its own.
+func TestOnEmojiChanged_CoalescesRefetches(t *testing.T) {
+	h, _, _ := newEmojiHandler(t, map[string]string{"old": "u1"})
+	results := make([]map[string]string, 20)
+	for i := range results {
+		results[i] = map[string]string{"renamed": "u1"}
+	}
+	api := &gatedEmojiLister{results: results, started: make(chan struct{}), release: make(chan struct{})}
+	h.emojiLister = api
+
+	h.OnEmojiChanged("rename", "", nil, "")
+	<-api.started
+	for range 5 {
+		h.OnEmojiChanged("rename", "", nil, "")
+	}
+	close(api.release)
+
+	w := h.wsCtx
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		w.emojiMu.Lock()
+		running := w.emojiRefetching
+		w.emojiMu.Unlock()
+		if !running {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	api.mu.Lock()
+	calls := api.calls
+	api.mu.Unlock()
+	// The held call is discarded (the burst bumped emojiSeq), one retry
+	// publishes, and the pending flag runs one more fetch.
+	if calls > 3 {
+		t.Errorf("ListCustomEmoji calls = %d, want at most 3 for a burst of 6", calls)
+	}
+	if got := w.CustomEmoji(); !maps.Equal(got, results[0]) {
+		t.Errorf("published = %v, want the refetched set", got)
+	}
+}
+
+// A reconnect may have missed emoji_changed events, so it marks the
+// cache stale; the first connect does not.
+func TestOnConnect_ReconnectMarksEmojiCacheStale(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		connected bool
+		wantFresh bool
+	}{
+		{"first connect", false, true},
+		{"reconnect", true, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			h, _, db := newEmojiHandler(t, nil)
+			if err := db.ReplaceCustomEmoji("T1", map[string]string{"a": "u1"}, time.Now().Unix()); err != nil {
+				t.Fatal(err)
+			}
+			h.connected = tt.connected
+			h.OnConnect()
+			if _, _, fresh := reloadEmojiCache(t, db); fresh != tt.wantFresh {
+				t.Errorf("fresh after OnConnect = %v, want %v", fresh, tt.wantFresh)
+			}
+		})
+	}
+}

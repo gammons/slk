@@ -139,6 +139,8 @@ func fetchWorkspaceEmoji(ctx context.Context, wctx *WorkspaceContext, client cus
 // rename, which it doesn't document) marks the cache stale and refetches.
 // Deltas hold emojiMu, as fetchWorkspaceEmoji does when it publishes, so
 // neither can publish a map built from one the other has replaced.
+// Refetches are coalesced, so a burst of events costs a few emoji.list
+// calls rather than a few per event.
 func (h *rtmEventHandler) OnEmojiChanged(subtype, name string, names []string, value string) {
 	if h.wsCtx == nil {
 		return
@@ -147,14 +149,31 @@ func (h *rtmEventHandler) OnEmojiChanged(subtype, name string, names []string, v
 	if !isAdd && !(subtype == "remove" && len(names) > 0) {
 		// Bump emojiSeq so a fetch already in flight, whose list may
 		// predate this change, is discarded rather than published.
-		h.wsCtx.emojiMu.Lock()
-		h.wsCtx.emojiSeq++
+		w := h.wsCtx
+		w.emojiMu.Lock()
+		w.emojiSeq++
 		h.staleCustomEmoji()
-		h.wsCtx.emojiMu.Unlock()
+		if w.emojiRefetching {
+			w.emojiRefetchPending = true
+			w.emojiMu.Unlock()
+			return
+		}
+		w.emojiRefetching = true
+		w.emojiMu.Unlock()
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), emojiRefetchTimeout)
-			defer cancel()
-			fetchWorkspaceEmoji(ctx, h.wsCtx, h.emojiLister, h.db, h.program, h.workspaceID)
+			for {
+				ctx, cancel := context.WithTimeout(context.Background(), emojiRefetchTimeout)
+				fetchWorkspaceEmoji(ctx, w, h.emojiLister, h.db, h.program, h.workspaceID)
+				cancel()
+				w.emojiMu.Lock()
+				if !w.emojiRefetchPending {
+					w.emojiRefetching = false
+					w.emojiMu.Unlock()
+					return
+				}
+				w.emojiRefetchPending = false
+				w.emojiMu.Unlock()
+			}
 		}()
 		return
 	}

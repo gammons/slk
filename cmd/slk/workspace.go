@@ -128,6 +128,11 @@ type WorkspaceContext struct {
 	// fetch can tell its list may predate one. Readers need neither.
 	emojiMu  sync.Mutex
 	emojiSeq uint64
+	// emojiRefetching and emojiRefetchPending, under emojiMu, coalesce
+	// emoji_changed refetches: one goroutine runs, and events landing
+	// meanwhile make it fetch once more instead of starting their own.
+	emojiRefetching     bool
+	emojiRefetchPending bool
 	// userGroups holds this workspace's usergroup ID -> handle map.
 	// Access it via UserGroups/SetUserGroups, never directly.
 	//
