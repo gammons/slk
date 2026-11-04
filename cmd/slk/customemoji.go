@@ -145,7 +145,12 @@ func (h *rtmEventHandler) OnEmojiChanged(subtype, name string, names []string, v
 	}
 	isAdd := subtype == "add" && name != "" && value != ""
 	if !isAdd && !(subtype == "remove" && len(names) > 0) {
+		// Bump emojiSeq so a fetch already in flight, whose list may
+		// predate this change, is discarded rather than published.
+		h.wsCtx.emojiMu.Lock()
+		h.wsCtx.emojiSeq++
 		h.staleCustomEmoji()
+		h.wsCtx.emojiMu.Unlock()
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), emojiRefetchTimeout)
 			defer cancel()

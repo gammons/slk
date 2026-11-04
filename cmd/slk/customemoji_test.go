@@ -526,3 +526,37 @@ func TestOnEmojiChanged_FailedWriteMarksCacheStale(t *testing.T) {
 		t.Errorf("published new = %q, want the delta applied in memory anyway", got)
 	}
 }
+
+// A refetch-triggering event during an in-flight fetch must win: the
+// in-flight list may predate the change, so it is fetched again rather
+// than published over the event's newer list.
+func TestOnEmojiChanged_RefetchSupersedesAFetchInFlight(t *testing.T) {
+	h, sender, db := newEmojiHandler(t, map[string]string{"old": "u1"})
+	newer := map[string]string{"renamed": "u1"}
+	api := &gatedEmojiLister{
+		results: []map[string]string{{"old": "u1"}, newer, newer},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	h.emojiLister = api
+	done := make(chan struct{})
+	go func() {
+		fetchWorkspaceEmoji(context.Background(), h.wsCtx, api, db, h.program, "T1")
+		close(done)
+	}()
+	<-api.started
+	h.OnEmojiChanged("rename", "", nil, "")
+	deadline := time.Now().Add(5 * time.Second)
+	for len(sender.snapshot()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	close(api.release)
+	<-done
+
+	if got := h.wsCtx.CustomEmoji(); !maps.Equal(got, newer) {
+		t.Errorf("published = %v, want %v", got, newer)
+	}
+	if got, _ := db.CustomEmoji("T1"); !maps.Equal(got, newer) {
+		t.Errorf("cache = %v, want %v", got, newer)
+	}
+}
