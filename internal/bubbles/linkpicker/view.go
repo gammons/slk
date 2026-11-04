@@ -8,6 +8,10 @@ import (
 	"github.com/muesli/reflow/truncate"
 )
 
+// maxVisibleRows is how many rows the picker shows at once; a longer list
+// scrolls with the selection (chrome.Window) and gets a scrollbar.
+const maxVisibleRows = 10
+
 // View renders the picker's box, or "" when it is hidden. The caller
 // composites it over its background.
 func (m *Model) View() string {
@@ -27,10 +31,12 @@ func (m *Model) View() string {
 	}
 	innerWidth := overlayWidth - 4 // border + padding
 
-	list := chrome.List{Start: 0, End: len(m.items), Total: len(m.items)}
+	start, end := chrome.Window(m.selected, len(m.items), maxVisibleRows)
+	list := chrome.List{Start: start, End: end, Total: len(m.items)}
 
-	rows := make([]string, 0, len(m.items))
-	for i, it := range m.items {
+	rows := make([]string, 0, end-start)
+	for i := start; i < end; i++ {
+		it := m.items[i]
 		var parts []string
 		if it.Label != "" {
 			parts = append(parts, it.Label)
