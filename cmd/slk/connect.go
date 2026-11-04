@@ -526,9 +526,14 @@ func (h *rtmEventHandler) OnConnect() {
 	} else {
 		h.syncOnReconnect("reconnect")
 		// emoji_changed events sent while the socket was down are lost;
-		// mark the cache stale so the next launch fetches the list.
+		// mark the cache stale so the next launch fetches the list, and
+		// bump emojiSeq so a fetch begun before the drop can't save its
+		// list as fresh.
 		if h.wsCtx != nil && h.db != nil {
+			h.wsCtx.emojiMu.Lock()
+			h.wsCtx.emojiSeq++
 			h.staleCustomEmoji()
+			h.wsCtx.emojiMu.Unlock()
 		}
 	}
 

@@ -627,3 +627,33 @@ func TestOnConnect_ReconnectMarksEmojiCacheStale(t *testing.T) {
 		})
 	}
 }
+
+// A fetch begun before a disconnect may hold a list that missed events
+// sent while the socket was down; after a reconnect it is fetched again
+// rather than saved as fresh.
+func TestOnConnect_ReconnectSupersedesAFetchInFlight(t *testing.T) {
+	h, _, db := newEmojiHandler(t, map[string]string{"old": "u1"})
+	h.connected = true
+	newer := map[string]string{"old": "u1", "missed": "u2"}
+	api := &gatedEmojiLister{
+		results: []map[string]string{{"old": "u1"}, newer},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	done := make(chan struct{})
+	go func() {
+		fetchWorkspaceEmoji(context.Background(), h.wsCtx, api, db, h.program, "T1")
+		close(done)
+	}()
+	<-api.started
+	h.OnConnect()
+	close(api.release)
+	<-done
+
+	if api.calls != 2 {
+		t.Errorf("ListCustomEmoji calls = %d, want 2", api.calls)
+	}
+	if got, _ := db.CustomEmoji("T1"); !maps.Equal(got, newer) {
+		t.Errorf("cache = %v, want %v", got, newer)
+	}
+}
