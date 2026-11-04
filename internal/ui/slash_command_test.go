@@ -110,6 +110,30 @@ func TestSlashCommand_RunsInTheWorkspaceItWasTypedIn(t *testing.T) {
 	}
 }
 
+// With stay_in_insert_after_send on, a slash command leaves the composer
+// focused in insert mode like a plain send, in either composer.
+func TestSlashCommand_StaysInInsertWhenOptionOn(t *testing.T) {
+	for _, thread := range []bool{false, true} {
+		a, calls := slashApp(t, nil)
+		a.SetStayInInsertAfterSend(true)
+		c := &a.compose
+		if thread {
+			showThread(t, a)
+			c = &a.threadCompose
+		}
+		c.SetValue("/giphy cats")
+
+		cmd := pressEnter(a)
+		_ = deliveredMsgs[commandRanMsg](t, cmd)
+		if len(*calls) != 1 {
+			t.Fatalf("thread=%v: Run calls = %+v, want one", thread, *calls)
+		}
+		if a.mode != ModeInsert || c.Value() != "" {
+			t.Errorf("thread=%v: mode = %v, compose = %q; want ModeInsert and an emptied composer", thread, a.mode, c.Value())
+		}
+	}
+}
+
 func TestSlashCommand_ThreadComposerRunsInThread(t *testing.T) {
 	a, calls := slashApp(t, nil)
 	showThread(t, a)

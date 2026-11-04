@@ -1,6 +1,7 @@
 package thread
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	stdimage "image"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/bubbles/entrylist"
 	"github.com/gammons/slk/internal/config"
@@ -17,9 +19,32 @@ import (
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/imgrender"
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/slack-go/slack"
 )
+
+// TestThreadAvatars_OptIn: the thread pane draws authors' avatars only
+// after SetShowAvatars(true) (#388).
+func TestThreadAvatars_OptIn(t *testing.T) {
+	m := New()
+	m.SetAvatarFunc(func(userID string) string { return "<" + userID + ">" })
+	parent := messages.MessageItem{TS: "1700000001.000000", UserID: "U1", UserName: "alice", Text: "parent message"}
+	replies := []messages.MessageItem{{TS: "1700000002.000000", UserID: "U2", UserName: "bob", Text: "reply 1"}}
+	m.SetThread(parent, replies, "C123", "1700000001.000000")
+
+	if out := ansi.Strip(m.View(30, 80)); strings.Contains(out, "<U1>") || strings.Contains(out, "<U2>") {
+		t.Fatalf("avatar drawn with thread avatars off:\n%s", out)
+	}
+	m.SetShowAvatars(true)
+	out := ansi.Strip(m.View(30, 80))
+	for _, want := range []string{"<U1>", "<U2>"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %s with thread avatars on:\n%s", want, out)
+		}
+	}
+}
 
 func TestSetThread(t *testing.T) {
 	m := New()
@@ -65,6 +90,90 @@ func TestThreadViewUpdatesAuthorStatus(t *testing.T) {
 	if got := ansi.Strip(m.View(20, 60)); !strings.Contains(got, "bob "+peerstatus.HuddleGlyph) {
 		t.Fatalf("thread reply header does not replace the status with the huddle glyph:\n%s", got)
 	}
+}
+
+// A channel_join reply must render as a muted notice, matching the
+// main pane -- selecting one and pressing Enter opens it here.
+func TestThreadChannelJoinRendersAsSystemNotice(t *testing.T) {
+	m := New()
+	m.SetThread(
+		messages.MessageItem{TS: "1.0", UserID: "U1", UserName: "alice", Text: "parent"},
+		[]messages.MessageItem{{
+			TS: "2.0", UserID: "USLACKBOT", UserName: "Slackbot",
+			Text: "<@U3> has joined the channel", Timestamp: "10:30 AM", Subtype: "channel_join",
+		}},
+		"C1",
+		"1.0",
+	)
+	m.SetUserNames(map[string]string{"U3": "carol"})
+
+	got := ansi.Strip(m.View(20, 60))
+	if strings.Contains(got, "Slackbot") {
+		t.Errorf("channel_join reply shows the system bot's display name instead of a muted notice:\n%s", got)
+	}
+	if !strings.Contains(got, "carol") {
+		t.Errorf("channel_join reply text should still resolve the @mention to a display name:\n%s", got)
+	}
+}
+
+// A huddle message with empty text renders as a notice from its block
+// text in the thread pane too.
+func TestThreadHuddleRendersAsSystemNotice(t *testing.T) {
+	m := New()
+	m.SetThread(
+		messages.MessageItem{TS: "1.0", UserID: "U000", UserName: "alice", Text: "parent"},
+		[]messages.MessageItem{{
+			TS: "2.0", UserID: "USLACKBOT", UserName: "Slackbot", Timestamp: "10:30 AM",
+			Subtype: "huddle_thread",
+			Blocks: []blockkit.Block{blockkit.RichTextBlock{Elements: []slack.RichTextElement{
+				&slack.RichTextSection{
+					Type: slack.RTESection,
+					Elements: []slack.RichTextSectionElement{
+						&slack.RichTextSectionTextElement{Type: slack.RTSEText, Text: "A huddle started"},
+					},
+				},
+			}}},
+		}},
+		"C1",
+		"1.0",
+	)
+
+	got := ansi.Strip(m.View(20, 60))
+	if strings.Contains(got, "Slackbot") {
+		t.Errorf("huddle reply shows the system bot's name instead of a notice:\n%s", got)
+	}
+	if !strings.Contains(got, "A huddle started") {
+		t.Errorf("huddle notice text missing:\n%s", got)
+	}
+}
+
+// A notice in the thread pane is centred and bold like a date separator.
+func TestThreadNoticeCentredAndBold(t *testing.T) {
+	m := New()
+	m.SetThread(
+		messages.MessageItem{TS: "1.0", UserID: "U000", UserName: "alice", Text: "parent"},
+		[]messages.MessageItem{{
+			TS: "2.0", UserID: "USLACKBOT", UserName: "Slackbot", Timestamp: "10:30 AM",
+			Subtype: "channel_join", Text: "<@U2> has joined the channel",
+		}},
+		"C1",
+		"1.0",
+	)
+	for _, line := range strings.Split(m.View(20, 60), "\n") {
+		plain := ansi.Strip(line)
+		i := strings.Index(plain, "has joined the channel")
+		if i < 0 {
+			continue
+		}
+		if i < 15 {
+			t.Errorf("notice starts at column %d, want it centred: %q", i, plain)
+		}
+		if !strings.Contains(line, "\x1b[1;") {
+			t.Errorf("notice is not bold: %q", line)
+		}
+		return
+	}
+	t.Fatal("notice row not found")
 }
 
 func TestClear(t *testing.T) {
@@ -244,7 +353,7 @@ func TestUpdateMessageInPlace_Found(t *testing.T) {
 	}
 	m.SetThread(parent, replies, "C1", "P1")
 
-	if !m.UpdateMessageInPlace("R1", "new reply") {
+	if !m.UpdateMessageInPlace(messages.MessageItem{TS: "R1", Text: "new reply", IsEdited: true}) {
 		t.Fatal("expected true updating R1")
 	}
 	if m.replies[0].Text != "new reply" {
@@ -263,7 +372,7 @@ func TestUpdateMessageInPlace_NotFound(t *testing.T) {
 	m.SetThread(messages.MessageItem{TS: "P1"}, []messages.MessageItem{
 		{TS: "R1", Text: "a"},
 	}, "C1", "P1")
-	if m.UpdateMessageInPlace("nope", "x") {
+	if m.UpdateMessageInPlace(messages.MessageItem{TS: "nope", Text: "x"}) {
 		t.Error("expected false for missing TS")
 	}
 }
@@ -342,7 +451,7 @@ func TestUpdateParentInPlace_Match(t *testing.T) {
 	m := New()
 	parent := messages.MessageItem{TS: "P1", Text: "parent original"}
 	m.SetThread(parent, nil, "C1", "P1")
-	if !m.UpdateParentInPlace("P1", "parent edited") {
+	if !m.UpdateParentInPlace(messages.MessageItem{TS: "P1", Text: "parent edited", IsEdited: true}) {
 		t.Fatal("expected true")
 	}
 	if m.ParentMsg().Text != "parent edited" {
@@ -356,7 +465,7 @@ func TestUpdateParentInPlace_Match(t *testing.T) {
 func TestUpdateParentInPlace_NoMatch(t *testing.T) {
 	m := New()
 	m.SetThread(messages.MessageItem{TS: "P1", Text: "parent"}, nil, "C1", "P1")
-	if m.UpdateParentInPlace("OTHER", "x") {
+	if m.UpdateParentInPlace(messages.MessageItem{TS: "OTHER", Text: "x"}) {
 		t.Error("expected false when TS does not match parent")
 	}
 	if m.ParentMsg().Text != "parent" {
@@ -866,6 +975,89 @@ func TestThreadModel_RenderReplyWithImageEmoji_WarmCache(t *testing.T) {
 	}
 }
 
+func TestThreadView_ParentStatusImageUploads(t *testing.T) {
+	t.Setenv("TMUX", "")
+	emojiutil.SetImageMode(true, 2)
+	t.Cleanup(func() { emojiutil.SetImageMode(false, 2) })
+	for _, tc := range []struct {
+		name, replyUser string
+	}{
+		{"no replies", ""},
+		{"unrelated reply", "U_OTHER"},
+		{"same status in reply", "U_PARENT"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const imageURL = "https://example.test/parent-status.png"
+			key := emojiutil.EmojiCacheKey(imageURL)
+			kitty := imgpkg.NewKittyRenderer(imgpkg.NewRegistry())
+			kitty.SetSource(key, stdimage.NewRGBA(stdimage.Rect(0, 0, 2, 2)))
+			placed := kitty.RenderKey(key, stdimage.Pt(2, 1))
+			fetcher := newFakePlaceFetcher()
+			fetcher.setPrerendered(key, stdimage.Pt(2, 1), placed)
+			parent := messages.MessageItem{
+				TS: "1700000001.000000", UserID: "U_PARENT",
+				UserName: "parent-author", Text: "Parent body",
+			}
+			var replies []messages.MessageItem
+			if tc.replyUser != "" {
+				replies = []messages.MessageItem{{
+					TS: "1700000002.000000", UserID: tc.replyUser,
+					UserName: "reply-author", Text: "Plain reply",
+				}}
+			}
+			m := New()
+			m.SetThread(parent, replies, "C_FIXTURE", parent.TS)
+			m.SetUserStatuses(map[string]peerstatus.Status{
+				parent.UserID: {Emoji: ":pager:", Text: "On call"},
+			})
+			m.SetEmojiContext(messages.EmojiContext{
+				PlaceCtx: emojiutil.PlaceContext{Fetcher: fetcher}, Cells: 2,
+				Customs: map[string]string{"pager": imageURL},
+			})
+			var uploads bytes.Buffer
+			oldOutput := imgpkg.KittyOutput
+			imgpkg.KittyOutput = imgpkg.SerializeOutput(&uploads)
+			t.Cleanup(func() { imgpkg.KittyOutput = oldOutput })
+			const width, height = 80, 24
+			frame := m.View(height, width)
+			canvas := lipgloss.NewCanvas(width, height)
+			canvas.Compose(lipgloss.NewLayer(frame))
+			parentCells := 0
+			for y, line := range strings.Split(frame, "\n") {
+				if !strings.Contains(ansi.Strip(line), parent.UserName) {
+					continue
+				}
+				for x := range width {
+					cell := canvas.CellAt(x, y)
+					if cell == nil || !strings.HasPrefix(cell.Content, string(imgpkg.PlaceholderRune)) {
+						continue
+					}
+					parentCells++
+					if cell.Style.Fg == nil {
+						t.Fatal("parent status placement lost its image ID")
+					}
+					r, g, b, _ := cell.Style.Fg.RGBA()
+					if got := (r>>8)<<16 | (g>>8)<<8 | b>>8; got != placed.ID {
+						t.Fatalf("parent status references image %d, want %d", got, placed.ID)
+					}
+				}
+			}
+			if parentCells != 2 {
+				t.Fatalf("parent status has %d image cells, want both cells", parentCells)
+			}
+			marker := fmt.Sprintf("\x1b_Ga=T,f=100,t=d,i=%d,", placed.ID)
+			if count := strings.Count(uploads.String(), marker); count != 1 {
+				t.Errorf("parent status image %d uploaded %d times, want once before drawing", placed.ID, count)
+			}
+			uploads.Reset()
+			_ = m.View(height, width)
+			if uploads.Len() != 0 {
+				t.Errorf("unchanged frame retransmitted an already uploaded status: %q", uploads.String())
+			}
+		})
+	}
+}
+
 // fakePlaceFetcher is a test fake for emojiutil.PlaceFetcher. v1
 // duplicates the one in internal/ui/messages/render_test.go (rather
 // than factoring into a shared testutil) — see polish list for the
@@ -1035,9 +1227,8 @@ func TestScrollAnchorBottomPreservedAcrossWidthResize(t *testing.T) {
 
 // TestScrollAnchorAtTopOfThreadPreservedAcrossWidthResize asserts the
 // YOffset==0 boundary specifically: it stays 0 (there is nowhere lower to
-// clamp to). This does NOT exercise the general "scrolled inside the parent
-// prefix" case -- see TestScrollAnchorInsideParentPrefixNotPreservedAcrossWidthResize
-// for that, and gammons/slk#254 for why it isn't fixed yet.
+// clamp to). The general "scrolled inside the parent" case is
+// TestScrollAnchorInsideParentPreservedAcrossWidthResize.
 func TestScrollAnchorAtTopOfThreadPreservedAcrossWidthResize(t *testing.T) {
 	parent := messages.MessageItem{TS: "100.0", UserName: "alice", Text: "the parent message"}
 	m := New()
@@ -1052,15 +1243,11 @@ func TestScrollAnchorAtTopOfThreadPreservedAcrossWidthResize(t *testing.T) {
 	}
 }
 
-// TestScrollAnchorInsideParentPrefixNotPreservedAcrossWidthResize pins the
-// CURRENT, known-limited behavior (gammons/slk#254): the thread's
-// entrylist.ReanchorPolicy (AnchorRefsOnly) finds no reply entry to anchor
-// on for a line inside the parent-message prefix, so the pre-resize
-// YOffset carries through unchanged into the rewrapped content -- landing on
-// whatever reply now falls at that stale line number. This documents the
-// gap rather than asserting the desired behavior; flip it to assert
-// preservation once #254 is fixed.
-func TestScrollAnchorInsideParentPrefixNotPreservedAcrossWidthResize(t *testing.T) {
+// TestScrollAnchorInsideParentPreservedAcrossWidthResize is #254: a
+// viewport scrolled inside a long parent message stays inside the parent
+// when a wider pane rewraps it to far fewer lines, instead of carrying the
+// stale offset into the reply list.
+func TestScrollAnchorInsideParentPreservedAcrossWidthResize(t *testing.T) {
 	parent := messages.MessageItem{TS: "100.0", UserName: "alice", Text: strings.Repeat("word ", 300)}
 	m := New()
 	m.SetThread(parent, markedReplies(40), "C1", "100.0")
@@ -1071,24 +1258,15 @@ func TestScrollAnchorInsideParentPrefixNotPreservedAcrossWidthResize(t *testing.
 	if threadMarkRE.MatchString(before) {
 		t.Fatalf("test setup: viewport should be inside the parent, not a reply:\n%s", before)
 	}
-
 	raw := m.list.YOffset()
 
-	after := m.View(20, 200) // widen: parent shrinks to far fewer lines
-	if !threadMarkRE.MatchString(after) {
-		t.Fatalf("expected the known limitation (jump into a reply) to still reproduce; if this now fails, #254 was fixed -- replace this test with a real preservation assertion")
+	_ = m.View(20, 200) // widen: parent shrinks to far fewer lines
+	parentLines := len(m.list.Entries()[0].Lines)
+	if raw < parentLines {
+		t.Fatalf("test setup: raw offset %d is still inside the %d-line widened parent, so it cannot tell anchoring from keeping the raw offset", raw, parentLines)
 	}
-
-	// AnchorRefsOnly finds no anchor in the parent prefix, so the raw
-	// pre-resize offset carries through, bounded only by the new extent.
-	// Anchoring on the parent instead would clamp the offset to the
-	// rewrapped parent's last row, far above raw.
-	want := min(raw, max(0, m.list.Total()-m.list.Height()))
-	if parentLines := len(m.list.Entries()[0].Lines); want < parentLines {
-		t.Fatalf("test setup: expected offset %d is still inside the %d-line parent, so the anchor policies cannot differ", want, parentLines)
-	}
-	if got := m.list.YOffset(); got != want {
-		t.Errorf("YOffset after widening = %d, want the raw pre-resize offset %d bounded by the new extent (%d); #254 pin", got, raw, want)
+	if got := m.list.YOffset(); got >= parentLines {
+		t.Errorf("YOffset after widening = %d, want it inside the %d-line parent", got, parentLines)
 	}
 }
 

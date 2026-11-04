@@ -3,10 +3,15 @@
 ## Messaging
 
 - Real-time messages, edits, deletes, reactions, and typing indicators over WebSocket
+- Apps' "working" status: "Atlas is working..." under the channel, and the app's own status text ("Atlas Thinking...") in the open thread it is working on
 - Edit your own messages (`E`) — reuses the compose box with stash/restore for any in-progress draft
 - Delete your own messages (`D`) — centered confirmation overlay with message preview
+- Remove a link preview from your own message (`x`): the "x" on Slack's preview card. A confirmation names the preview (one button per preview when the message has several); the card disappears when Slack confirms the change. Works from the messages pane and from a thread reply. Slack decides what it allows, so removing the card of a message you forwarded can be refused.
+- Live message updates: an edit, a link preview Slack adds a moment after you post, or a preview you remove all update the message in place. Only a real edit adds the "(edited)" mark.
 - Slack markdown rendering (bold, italic, strikethrough, code, blockquotes, links, mentions)
-- Emoji shortcodes (`:rocket:` → 🚀)
+- User mentions in channel and thread content, including forwarded/shared previews, resolve to display names from the workspace cache or in the background and refresh in place. Unresolved users retain their Slack ID; literal `@ID` text is left unchanged.
+- Emoji shortcodes (`:rocket:` → 🚀), including Block Kit headers/text and button/accessory labels (`:white_check_mark: Resolve` → `✅ Resolve`); plain headers and control labels are not interpreted as markdown. Long headers clip to display width without breaking emoji image placements.
+- In image-emoji mode, workspace custom definitions take precedence over built-in names, including when following emoji aliases. Author-status emoji in channel and thread message headers use the same image renderer as the message body. If a status image fails to load, its existing glyph fallback remains visible.
 - Day separators (Today, Yesterday, Monday, full date)
 - Infinite scroll backfill into SQLite cache
 - Search: vim-style in-channel search (`/`, `n`/`N`) over cached history, plus server-side workspace search (`Ctrl+f`) with `from:` / `in:` / `before:` modifiers
@@ -17,6 +22,7 @@
 - ANSI-aware wrapping and truncation (no broken color codes mid-line)
 - Drag-to-copy: drag the mouse across messages to highlight them; release to copy plain text to the system clipboard via OSC 52
 - Copy message text (`y`) and copy permalink (`Y` / `C`) to the system clipboard via OSC 52
+- Copy huddle link (`H` or `:huddle`) — the `https://app.slack.com/huddle/<TEAM>/<CHANNEL>` deep link Slack's own "Copy huddle link" produces, for the active conversation (channels, DMs and group DMs; a thread copies its parent's). Opening it joins the live huddle or shows Slack's huddle panel for that conversation. The profile dialog (`K`) also offers `c` / a click on the 📋 on the "🎧 In a huddle" row when Slack reported which channel the person's huddle is in.
 - Forward a message or thread reply (`F`) — the same fuzzy picker as `Ctrl+t`, limited to joined channels and existing DMs in the current workspace. Enter shares the original permalink with Slack preview unfurling enabled; Esc cancels. Keeps your current channel and draft unchanged. Slack controls preview availability and access to the original message. Pressing Enter on the forwarded message navigates to the original.
 
 ## Compose
@@ -35,7 +41,7 @@
 ## Images
 
 - Inline image attachments render automatically in the messages pane: kitty graphics protocol on capable terminals (kitty, ghostty, recent WezTerm), sixel on foot/mlterm and on any terminal that advertises sixel in its DA1 reply (xterm with sixel support, DomTerm, toyterm, …), half-block (`▀`) fallback everywhere else
-- User avatars use the same kitty graphics path on capable terminals for sharper pixels; sixel and other terminals fall back to half-block
+- User avatars use the same kitty graphics path on capable terminals for sharper pixels; sixel and other terminals fall back to half-block. Long author names wrap in full beside the avatar when the pane narrows; the avatar's two rows stay contiguous, and the message body starts below the complete header. Timestamps stay whole when they fit on a header line, so selection can add the date when space allows without changing the row count.
 - Click any inline image (or press `O` on the selected message) for a full-screen in-app preview
 - `Enter` from the preview launches the OS image viewer
 - Lazy-loaded: images download only as they scroll into view
@@ -56,6 +62,7 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
   The header is a breadcrumb naming the channel, the thread's author, and the
   reply count (e.g. `# general › Thread from alice · 2 replies`).
 - Live thread reply routing, real-time updates
+- Emoji images in the thread parent render even when there are no replies; they do not depend on another message having uploaded the image first.
 - Also send to channel: `Ctrl+O` while composing a thread reply toggles Slack's
   "Also send to #channel" broadcast (`reply_broadcast=true`), and `Alt+Enter`
   sends with broadcast in a single keystroke. An accent-colored
@@ -109,6 +116,7 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
 - Glob-based config sections (`[sections.*]` in `config.toml`) — used when `use_slack_sections = false` or as a fallback when Slack's API is unreachable. Channel patterns can carry an optional `":<N>"` suffix (e.g. `"eng-general:1"`) to pin order within a section; see [Configuration › Ordering channels within a section](Configuration.md#ordering-channels-within-a-section).
 - Fuzzy channel finder (`Ctrl+t` / `Ctrl+p`) — auto-expands a collapsed section when you open a channel inside it; ranks 1:1 DMs above group DMs when searching by person name
 - Workspace picker (`:ws`) and direct jump (`1`–`9`)
+- `:` command line with Tab completion (`Shift+Tab` goes back) and the matching names listed in the status bar; `:help` (same as `?`) lists every key and command, `:version` shows the running build
 - All workspaces stay connected in parallel for live unread badges
 
 ## Marks & Navigation
@@ -130,6 +138,7 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
 
 - Set self presence (Active / Away) and DND/snooze from `Ctrl+S`
 - Standard snooze durations (20m / 1h / 2h / 4h / 8h / 24h / until tomorrow morning) plus custom minutes
+- Workspace status presets (Working from home / On vacation) and Clear status, independent of presence — picking Active/Away never clears an existing status. Per-workspace, like presence and DND.
 - Live status segment in the status bar with snooze countdown
 - Reflects external state changes — set from the official Slack client or via your own API scripts — in real time over the WebSocket
 - Shows other people's state too: their custom status emoji (🎧 instead while they are in a huddle) follows their name on DM rows, message authors and channel-finder rows, `⊘` replaces the presence dot while they are in DND, and an open DM's header shows the full status text and when their DND ends

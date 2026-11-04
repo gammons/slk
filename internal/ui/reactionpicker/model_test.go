@@ -169,6 +169,68 @@ func TestFrecentShownWhenQueryEmpty(t *testing.T) {
 	}
 }
 
+func TestFrecentLeadsTheFullListWhenQueryEmpty(t *testing.T) {
+	m := withEmoji("a", "b", "rocket", "tada", "zap")
+	m.SetFrecentEmoji([]core.EmojiEntry{{Name: "zap"}, {Name: "rocket"}})
+	m.Open("C1", "1.2", nil)
+
+	var got []string
+	for _, e := range m.displayedList() {
+		got = append(got, e.Name)
+	}
+	if want := "zap rocket a b tada"; strings.Join(got, " ") != want {
+		t.Errorf("list = %v, want %s", got, want)
+	}
+}
+
+func TestNoHistoryStillListsEmojiWhenQueryEmpty(t *testing.T) {
+	m := New()
+	m.Open("C1", "1.2", nil)
+	if got := len(m.displayedList()); got != maxResults {
+		t.Errorf("empty picker lists %d emoji, want %d", got, maxResults)
+	}
+	if r := m.HandleKey("enter"); r == nil {
+		t.Error("enter with no history picked nothing")
+	}
+}
+
+func TestFrecentRankFirstInSearch(t *testing.T) {
+	m := New()
+	// "fire" sorts first alphabetically among the "fire" matches;
+	// the user has only used "fireworks" and "heart_on_fire".
+	m.SetFrecentEmoji([]core.EmojiEntry{{Name: "heart_on_fire"}, {Name: "fireworks"}})
+	m.Open("C1", "1.2", nil)
+	for _, k := range "fire" {
+		m.HandleKey(string(k))
+	}
+	list := m.displayedList()
+	if len(list) < 3 {
+		t.Fatalf("got %d matches for fire, want at least 3", len(list))
+	}
+	got := []string{list[0].Name, list[1].Name, list[2].Name}
+	// The used prefix match, then the used substring match, then the
+	// rest from the top of the alphabet.
+	if want := "fireworks heart_on_fire fire"; strings.Join(got, " ") != want {
+		t.Errorf("first matches = %v, want %s", got, want)
+	}
+}
+
+func TestFrecentAliasCountsInSearch(t *testing.T) {
+	m := New()
+	m.SetFrecentEmoji([]core.EmojiEntry{{Name: "+1"}})
+	m.Open("C1", "1.2", nil)
+	for _, k := range "thumbs" {
+		m.HandleKey(string(k))
+	}
+	list := m.displayedList()
+	if len(list) == 0 || list[0].Name != "thumbsup" {
+		t.Fatalf("first match for thumbs = %v, want thumbsup (recorded as +1)", list)
+	}
+	if r := m.HandleKey("enter"); r == nil || r.Emoji != "+1" {
+		t.Errorf("enter = %+v, want +1", r)
+	}
+}
+
 func TestCustomEmojiAppearsInSearch(t *testing.T) {
 	m := New()
 	// A workspace returns a mix of URL-backed and alias-backed customs
@@ -297,5 +359,21 @@ func TestPicker_View_ImageMode_UsesPlacement(t *testing.T) {
 	out := m.View(80)
 	if !strings.Contains(out, "\U0010EEEE") {
 		t.Errorf("picker View does not contain kitty placeholder runes\noutput=%q", out)
+	}
+}
+
+// A CJK IME commit arrives as one key per rune: each must reach the
+// query, and backspace must drop a whole rune.
+func TestHandleKey_NonASCIIQuery(t *testing.T) {
+	m := New()
+	m.Open("C1", "1.0", nil)
+	m.HandleKey("中")
+	m.HandleKey("文")
+	if m.query != "中文" {
+		t.Fatalf("query = %q, want %q", m.query, "中文")
+	}
+	m.HandleKey("backspace")
+	if m.query != "中" {
+		t.Errorf("after backspace query = %q, want %q", m.query, "中")
 	}
 }

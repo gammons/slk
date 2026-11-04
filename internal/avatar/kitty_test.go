@@ -90,3 +90,43 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// TestGetSmall_RenderedOnFirstUse: preloading uploads only the full
+// avatar; the reply-row size is built and uploaded by the first GetSmall.
+func TestGetSmall_RenderedOnFirstUse(t *testing.T) {
+	t.Setenv("TMUX", "")
+	var buf bytes.Buffer
+	imgpng.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 32, 32)))
+	pngBytes := buf.Bytes()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(pngBytes)
+	}))
+	defer srv.Close()
+	cache, err := imgpkg.NewCache(t.TempDir(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := imgpkg.KittyOutput
+	defer func() { imgpkg.KittyOutput = saved }()
+	var sideCh bytes.Buffer
+	imgpkg.KittyOutput = &sideCh
+
+	c := NewCache(imgpkg.NewFetcher(cache, http.DefaultClient), imgpkg.NewKittyRenderer(imgpkg.NewRegistry()), true)
+	if got := c.GetSmall("U1"); got != "" {
+		t.Fatalf("GetSmall before the avatar loaded = %q, want empty", got)
+	}
+	c.PreloadSync("U1", srv.URL)
+	if len(c.small) != 0 {
+		t.Fatal("preload built the small avatar")
+	}
+	afterPreload := sideCh.Len()
+	small := c.GetSmall("U1")
+	if !strings.ContainsRune(small, '\U0010EEEE') || sideCh.Len() == afterPreload {
+		t.Fatalf("first GetSmall = %q with %d new upload bytes, want placeholders and an upload", small, sideCh.Len()-afterPreload)
+	}
+	afterFirst := sideCh.Len()
+	if again := c.GetSmall("U1"); again != small || sideCh.Len() != afterFirst {
+		t.Errorf("second GetSmall re-rendered or re-uploaded")
+	}
+}

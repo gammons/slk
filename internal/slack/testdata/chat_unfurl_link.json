@@ -1,0 +1,48 @@
+{
+ "method": "chat.unfurlLink",
+ "form": [
+  [
+   "token",
+   "xoxc-REDACTED"
+  ],
+  [
+   "url",
+   "https://linear.app/example/issue/ENG-42/fix-the-flaky-login-test"
+  ],
+  [
+   "channel",
+   "D0EXAMPLE01"
+  ],
+  [
+   "client_msg_id",
+   "11111111-2222-4333-8444-555555555555"
+  ],
+  [
+   "_x_reason",
+   "fetch-unfurl-preview"
+  ],
+  [
+   "_x_mode",
+   "online"
+  ],
+  [
+   "_x_app_name",
+   "client"
+  ],
+  [
+   "_x_sonic",
+   "true"
+  ]
+ ],
+ "response": {
+  "ok": true,
+  "attachments": {
+   "https://linear.app/example/issue/ENG-42/fix-the-flaky-login-test": {
+    "is_preview_pending": true,
+    "is_app_unfurl": true,
+    "app_unfurl_url": "https://linear.app/example/issue/ENG-42/fix-the-flaky-login-test",
+    "app_id": "A0EXAMPLE01"
+   }
+  }
+ }
+}

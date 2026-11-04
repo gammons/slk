@@ -15,14 +15,18 @@ download_dir = "~/Downloads"    # where file attachments (`d` keybinding) are
 [appearance]
 theme = "dracula"
 timestamp_format = "3:04 PM"
+show_avatars = true      # false hides the avatars beside messages
+thread_avatars = false   # true also shows them in the thread pane (needs show_avatars)
 image_protocol = "auto"   # auto | kitty | sixel | halfblock | off
 max_image_rows = 20       # cap inline image height in terminal rows
+reply_avatars = false     # true: Slack-style reply row, repliers' avatars + "N replies"
+                          # (avatars need show_avatars and kitty graphics)
 colored_usernames = false # color each user's name by ID hash (Slack-style)
 
 [animations]
 enabled = true
 smooth_scrolling = true
-typing_indicators = true
+typing_indicators = true  # also apps' "working" status (e.g. "Atlas is working...")
 
 [notifications]
 enabled = true
@@ -60,8 +64,28 @@ quiet_hours = "22:00-08:00"   # planned
 # matching Slack. (This is a behavior change: previously a mention or keyword
 # in a muted channel would still notify.)
 
+[sidebar]
+right_align_badges = false  # true: mention badges at the right end of the row (Slack)
+channel_indent = 0          # cells to indent the rows under each section header (0-6)
+slack_style = false         # true: Slack's look: no ▾ on open sections, plain headers,
+                            # no unread dot (bold only), names sorted ignoring punctuation
+private_glyph = "◆"         # glyph before private channels, e.g. a lock your font has
+                            # (sidebar only: the finder and pane header keep ◆)
+active_only = false         # true: hide conversations with no activity in 30 days, in
+                            # every section (Slack's "Active only"; unread ones stay)
+mouse_resize = false        # true: drag the sidebar's right border to resize it
+                            # ([ and ] also resize; the width is saved per workspace)
+
 [compose]
 editor = "nvim"   # Ctrl+E editor, used when $VISUAL and $EDITOR are unset
+# Keep typing after Enter sends (default false: return to normal mode like
+# vim). While it's on, app Ctrl shortcuts (Ctrl+P, Ctrl+N, Ctrl+A, ...) also
+# work from an empty composer; Ctrl+W, Ctrl+H and Ctrl+K keep deleting text.
+stay_in_insert_after_send = true
+
+[sidebar]
+mention_pills = false   # true: "↑/↓ Unread mentions" pills while a mentioned
+                        # channel is scrolled out of view (click to reach it)
 
 [cache]
 message_retention_days = 30
@@ -93,9 +117,9 @@ order = 1
 
 # Channels can carry an optional ":<N>" suffix to pin their order
 # within the section. Lower numbers sort higher. Entries without a
-# suffix fall after annotated ones, in the order they appear.
+# suffix fall after annotated ones, alphabetically.
 # This syntax is only honored when use_slack_sections = false;
-# in Slack-native mode, channel order comes from Slack.
+# in Slack-native mode, channels sort alphabetically within each section.
 [sections.Engineering]
 channels = ["eng-general:1", "eng-alerts:2", "eng-*"]
 order = 2
@@ -148,11 +172,16 @@ sections of their own fall back to the global table.
 
 ### Ordering channels within a section
 
+Channels sort alphabetically within each section, regardless of unread status.
+Slack-native section order is preserved, so Starred stays where you placed it.
+Within Starred, channels stay ahead of people and apps, with each group sorted
+alphabetically.
+
 Each entry in a section's `channels` list may carry an optional `:<N>`
 suffix where `N` is a non-negative integer. Channels matched by an
 annotated pattern sort ahead of channels matched by un-annotated
 patterns; among annotated channels, lower `N` wins; un-annotated
-channels keep the order Slack returned them in.
+channels sort alphabetically.
 
 ```toml
 [sections.Engineering]
@@ -162,20 +191,23 @@ order = 2
 
 In the example above, `#eng-general` is pinned to the top of the
 Engineering section, followed by `#eng-alerts`, followed by every
-other `eng-*` channel in Slack-API order.
+other `eng-*` channel in alphabetical order.
 
 This syntax is only honored when `use_slack_sections = false` (or
 when Slack's section endpoint is unreachable and slk falls back to
-glob mode). In Slack-native mode, channel order within a section
-comes from Slack and the `:<N>` suffix is ignored along with the
-rest of the `[sections.*]` block.
+glob mode). In Slack-native mode, channels sort alphabetically within each
+section and the `:<N>` suffix is ignored along with the rest of the
+`[sections.*]` block.
 
 ### Limitations of Slack-native sections
 
 Slack-native sections are read-only — section editing still happens in the official client; slk
-reflects the results. The `stars` section type (Slack's "Starred" feature) is rendered
-when non-empty, with the header `Starred`. Sections of type `slack_connect`,
-`salesforce_records`, and `agents` are hidden. Sections with more than 10 channels may be returned
+reflects the results. Starred conversation membership comes from `client.userBoot`,
+including on Enterprise Grid where the `stars.list` endpoint can be restricted.
+The initial boot list is reused at startup and refreshed on section rebootstrap
+after reconnect. The `stars` section is shown when non-empty, with the header
+`Starred`. Sections of type `slack_connect`, `salesforce_records`, and `agents`
+are hidden. Sections with more than 10 channels may be returned
 only partially by Slack's API on initial load; the missing channels
 temporarily fall into the catch-all bucket and migrate into their correct
 section as WebSocket events fire or the workspace reconnects. A debug-log
@@ -241,6 +273,13 @@ sidebar_background = "#19171D"
 sidebar_text       = "#D1D2D3"
 sidebar_text_muted = "#9A9B9E"
 rail_background    = "#19171D"
+
+# Optional, for a Slack-like look. Unset keeps slk's defaults.
+username            = "#1D1C1D" # author names (default: primary)
+sidebar_selected_bg = "#333133" # selected sidebar row as a filled pill, no ▌
+sidebar_selected_fg = "#F8F8F8" # its text (default: sidebar_text)
+mention_badge_bg    = "#C01343" # mention-count badge (default: selection colours)
+mention_badge_fg    = "#FFFFFF"
 ```
 
 Every built-in theme now sets a channels-panel (sidebar) background that is

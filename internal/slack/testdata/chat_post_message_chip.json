@@ -1,0 +1,65 @@
+{
+ "method": "chat.postMessage",
+ "form": [
+  [
+   "token",
+   "xoxc-REDACTED"
+  ],
+  [
+   "channel",
+   "D0EXAMPLE01"
+  ],
+  [
+   "ts",
+   "1793057435.xxxxx2"
+  ],
+  [
+   "type",
+   "message"
+  ],
+  [
+   "xArgs",
+   "{\"draft_id\":\"Dr0EXAMPLE01\"}"
+  ],
+  [
+   "client_context_team_id",
+   "T0EXAMPLE01"
+  ],
+  [
+   "draft_id",
+   "Dr0EXAMPLE01"
+  ],
+  [
+   "unfurl",
+   "[{\"url\":\"https://linear.app/example/issue/ENG-42/fix-the-flaky-login-test\"}]"
+  ],
+  [
+   "include_channel_perm_error",
+   "true"
+  ],
+  [
+   "client_msg_id",
+   "66666666-7777-4888-9999-aaaaaaaaaaaa"
+  ],
+  [
+   "blocks",
+   "[{\"type\":\"rich_text\",\"elements\":[{\"type\":\"rich_text_section\",\"elements\":[{\"type\":\"attachment_mention\",\"url\":\"https://linear.app/example/issue/ENG-42/fix-the-flaky-login-test\",\"text\":\"Fix the flaky login test\",\"entity_id\":\"W:A0EXAMPLE01:lin1:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000002~issue\",\"app_id\":\"A0EXAMPLE01\",\"icon_url\":\"https://avatars.slack-edge.com/2024-04-02/0000000000000_00000000000000000000_36.png\",\"icon_name\":\"brand-linear-filled\",\"product_name\":\"Linear\"}]}]}]"
+  ],
+  [
+   "_x_reason",
+   "webapp_message_send"
+  ],
+  [
+   "_x_mode",
+   "online"
+  ],
+  [
+   "_x_app_name",
+   "client"
+  ],
+  [
+   "_x_sonic",
+   "true"
+  ]
+ ]
+}

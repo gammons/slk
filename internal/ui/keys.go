@@ -37,6 +37,7 @@ type KeyMap struct {
 	ReactionNav         key.Binding
 	Edit                key.Binding
 	Delete              key.Binding
+	RemovePreview       key.Binding
 	CopyMessage         key.Binding
 	CopyPermalink       key.Binding
 	ForwardMessage      key.Binding
@@ -46,6 +47,7 @@ type KeyMap struct {
 	MarkUnread          key.Binding
 	MarkSet             key.Binding
 	JumpMark            key.Binding
+	JumpToParent        key.Binding
 	MarkBackJump        key.Binding
 	MarksList           key.Binding
 	MarksDelete         key.Binding
@@ -64,10 +66,13 @@ type KeyMap struct {
 	NavBack             key.Binding
 	NavForward          key.Binding
 	Help                key.Binding
+	HelpCommand         key.Binding
+	Version             key.Binding
 	SaveThread          key.Binding
 	RespondButtons      key.Binding
 	ListReactions       key.Binding
 	UserProfile         key.Binding
+	Huddle              key.Binding
 	WindowPrefix        key.Binding
 	WinSplit            key.Binding
 	WinVSplit           key.Binding
@@ -114,6 +119,7 @@ func DefaultKeyMap() KeyMap {
 		ReactionNav:     key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "navigate reactions")),
 		Edit:            key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "edit message")),
 		Delete:          key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete message")),
+		RemovePreview:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "remove link preview")),
 		CopyMessage:     key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy message")),
 		CopyPermalink:   key.NewBinding(key.WithKeys("Y", "C"), key.WithHelp("Y/C", "copy permalink")),
 		ForwardMessage:  key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "forward message")),
@@ -123,6 +129,7 @@ func DefaultKeyMap() KeyMap {
 		MarkUnread:      key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "mark unread")),
 		MarkSet:         key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "set mark")),
 		JumpMark:        key.NewBinding(key.WithKeys("'", "`"), key.WithHelp("'/`", "jump to mark")),
+		JumpToParent:    key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "go to the open thread's message in its channel")),
 		// Keyless help-only entries (same trick as WorkspaceFinder
 		// below). The back-jump is the doubled apostrophe consumed
 		// inside the ' chord, and the two commands are dispatched from
@@ -133,7 +140,7 @@ func DefaultKeyMap() KeyMap {
 		MarksDelete:    key.NewBinding(key.WithHelp(":delmarks", "delete marks by letter")),
 		NextUnread:     key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "next unread channel")),
 		PrevUnread:     key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "prev unread channel")),
-		ActivityView:   key.NewBinding(key.WithKeys("ctrl+a"), key.WithHelp("ctrl+a", "open activity")),
+		ActivityView:   key.NewBinding(key.WithKeys("ctrl+a"), key.WithHelp("ctrl+a / :activity", "open activity")),
 		ActivityUnread: key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "Activity: toggle unread-only")),
 		// Keyless: ctrl+w is reserved as the window-command prefix
 		// (window-management design §4). The keyless binding never
@@ -150,12 +157,18 @@ func DefaultKeyMap() KeyMap {
 		NavBack:             key.NewBinding(key.WithKeys("ctrl+h"), key.WithHelp("ctrl+h", "navigate back")),
 		// ctrl+k was the original forward key. It stays bound for
 		// existing users but is left out of the help overlay.
-		NavForward:     key.NewBinding(key.WithKeys("ctrl+l", "ctrl+k"), key.WithHelp("ctrl+l", "navigate forward")),
-		Help:           key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "show keybindings")),
+		NavForward: key.NewBinding(key.WithKeys("ctrl+l", "ctrl+k"), key.WithHelp("ctrl+l", "navigate forward")),
+		Help:       key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "show keybindings")),
+		// Keyless, like MarksList: :help is dispatched from the
+		// command registry. Kept apart from Help so the status-bar
+		// hint, built from Help's key, stays "? for keybindings".
+		HelpCommand:    key.NewBinding(key.WithHelp(":help", "show keybindings and : commands")),
+		Version:        key.NewBinding(key.WithHelp(":version", "show the running build's version")),
 		SaveThread:     key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "save thread")),
 		RespondButtons: key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "respond to message buttons")),
 		ListReactions:  key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "list reactions")),
 		UserProfile:    key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "show author's profile")),
+		Huddle:         key.NewBinding(key.WithKeys("H"), key.WithHelp("H / :huddle", "copy huddle link")),
 		// Window commands (design §4). WindowPrefix is the only real
 		// binding; the Win* entries are keyless help-only bindings
 		// (same trick as WorkspaceFinder above) — actual dispatch of

@@ -63,6 +63,35 @@ type WrappedRows struct {
 	// built from (EntryPayload.SelectedLines); empty when Selected
 	// already carries the short form.
 	ShortSrc string
+	// LinkHits are the clickable spans of Lines, in display columns,
+	// ready to append to the entry's Hits (the renderer's own hits
+	// carry image and reaction rects; links and file lines can only be
+	// located after the final wrap, hence here). A span whose URL is
+	// one of msg's file attachments is a HitFile; the rest HitLink.
+	LinkHits []entrylist.Hit
+}
+
+// trimPlainPadding drops the leading and trailing spaces of a centred
+// row's plain mirror from its Text, so copied text is the notice alone,
+// while keeping one Bytes entry per display column: the padding columns
+// map to the text's ends, so column-based selection and mouse mapping are
+// unchanged.
+func trimPlainPadding(p entrylist.PlainLine) entrylist.PlainLine {
+	text := p.Text
+	lead := len(text) - len(strings.TrimLeft(text, " "))
+	trimmed := strings.TrimRight(text[lead:], " ")
+	b := make([]int, len(p.Bytes))
+	for i, off := range p.Bytes {
+		off -= lead
+		if off < 0 {
+			off = 0
+		}
+		if off > len(trimmed) {
+			off = len(trimmed)
+		}
+		b[i] = off
+	}
+	return entrylist.PlainLine{Text: trimmed, Bytes: b}
 }
 
 // WrapRows fills and borders a rendered message for a content pane's
@@ -103,14 +132,21 @@ func WrapRows(msg MessageItem, r RenderedMessage, width int, s WrapStyles) Wrapp
 		plT0 = time.Now()
 	}
 	plain := entrylist.PlainLines(filledNormal)
+	if IsSystemNoticeSubtype(msg.Subtype) {
+		for i := range plain {
+			plain[i] = trimPlainPadding(plain[i])
+		}
+	}
 	if s.stats != nil {
 		s.stats.plainLinesTotal += time.Since(plT0)
 	}
 
+	lines := strings.Split(normal, "\n")
 	return WrappedRows{
-		Lines:    strings.Split(normal, "\n"),
+		Lines:    lines,
 		Selected: selected,
 		Plain:    plain,
 		ShortSrc: shortSrc,
+		LinkHits: HitsFromSpans(ScanOsc8Spans(lines), msg),
 	}
 }

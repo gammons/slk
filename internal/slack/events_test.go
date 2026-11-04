@@ -20,12 +20,16 @@ type mockEventHandler struct {
 	messages            []string
 	ephemerals          []EphemeralMessage
 	subtypes            []string
+	changed             []bool
+	edited              []bool
 	deletedMessages     []string
 	reactions           []string
 	presenceChanges     []string
 	typingEvents        []string
+	assistantStatuses   []AssistantStatus
 	selfPresenceChanges []string
 	dndChanges          []dndChangeRecord
+	badgeCounts         []int
 	lastBlocks          slack.Blocks
 	lastAttachments     []slack.Attachment
 	lastUserID          string
@@ -95,8 +99,10 @@ type threadSubChangeRecord struct {
 	active                        bool
 }
 
-func (m *mockEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment, botID, username string) {
+func (m *mockEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, changed, edited bool, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment, botID, username string) {
 	m.messages = append(m.messages, text)
+	m.changed = append(m.changed, changed)
+	m.edited = append(m.edited, edited)
 	m.subtypes = append(m.subtypes, subtype)
 	m.lastBlocks = blocks
 	m.lastAttachments = attachments
@@ -128,6 +134,9 @@ func (m *mockEventHandler) OnPresenceChange(userID, presence string) {
 func (m *mockEventHandler) OnUserTyping(channelID, userID string) {
 	m.typingEvents = append(m.typingEvents, channelID+":"+userID)
 }
+func (m *mockEventHandler) OnAssistantStatus(s AssistantStatus) {
+	m.assistantStatuses = append(m.assistantStatuses, s)
+}
 func (m *mockEventHandler) OnConnect()    {}
 func (m *mockEventHandler) OnDisconnect() {}
 func (m *mockEventHandler) OnSelfPresenceChange(presence string) {
@@ -135,6 +144,9 @@ func (m *mockEventHandler) OnSelfPresenceChange(presence string) {
 }
 func (m *mockEventHandler) OnDNDChange(enabled bool, endUnix int64) {
 	m.dndChanges = append(m.dndChanges, dndChangeRecord{enabled, endUnix})
+}
+func (m *mockEventHandler) OnBadgeCountsUpdated(activityTotal int) {
+	m.badgeCounts = append(m.badgeCounts, activityTotal)
 }
 
 func (m *mockEventHandler) OnChannelMarked(channelID, ts string, unreadCount, mentionCount int) {
@@ -195,7 +207,7 @@ func TestEventHandlerInterface(t *testing.T) {
 	handler := &mockEventHandler{}
 	var _ EventHandler = handler
 
-	handler.OnMessage("C1", "U1", "123.456", "hello", "", "", false, nil, slack.Blocks{}, nil, "", "")
+	handler.OnMessage("C1", "U1", "123.456", "hello", "", "", false, false, nil, slack.Blocks{}, nil, "", "")
 	if len(handler.messages) != 1 || handler.messages[0] != "hello" {
 		t.Error("expected message to be recorded")
 	}
@@ -313,6 +325,32 @@ func TestDispatchWebSocketMessageChangedEvent(t *testing.T) {
 	if handler.messages[0] != "edited text" {
 		t.Errorf("expected 'edited text', got %q", handler.messages[0])
 	}
+	// No `edited` object: Slack sends this for an unfurl or a removed
+	// preview. It is a change, but nobody edited the text.
+	if !handler.changed[0] || handler.edited[0] {
+		t.Errorf("changed=%v edited=%v, want changed only", handler.changed[0], handler.edited[0])
+	}
+}
+
+func TestDispatchWebSocketMessageChangedWithEditedObject(t *testing.T) {
+	handler := &mockEventHandler{}
+
+	data := []byte(`{"type":"message","subtype":"message_changed","channel":"C1","message":{"user":"U1","text":"edited text","ts":"123.456","edited":{"user":"U1","ts":"124.000"}}}`)
+	dispatchWebSocketEvent(data, handler)
+
+	if len(handler.changed) != 1 || !handler.changed[0] || !handler.edited[0] {
+		t.Errorf("changed=%v edited=%v, want both true", handler.changed, handler.edited)
+	}
+}
+
+func TestDispatchWebSocketPlainMessageIsNeitherChangedNorEdited(t *testing.T) {
+	handler := &mockEventHandler{}
+
+	dispatchWebSocketEvent([]byte(`{"type":"message","channel":"C1","user":"U1","text":"hi","ts":"123.456"}`), handler)
+
+	if len(handler.changed) != 1 || handler.changed[0] || handler.edited[0] {
+		t.Errorf("changed=%v edited=%v, want both false", handler.changed, handler.edited)
+	}
 }
 
 // TestDispatchWebSocketThreadBroadcastEvent asserts that a
@@ -336,6 +374,53 @@ func TestDispatchWebSocketThreadBroadcastEvent(t *testing.T) {
 	}
 }
 
+// channel_join/channel_leave (public channels) and group_join/
+// group_leave (private channels/mpims) must forward like any other
+// message, not get dropped by the subtype switch.
+func TestDispatchWebSocketChannelJoinLeaveEvents(t *testing.T) {
+	for _, subtype := range []string{"channel_join", "channel_leave", "group_join", "group_leave"} {
+		handler := &mockEventHandler{}
+
+		data := []byte(`{"type":"message","subtype":"` + subtype + `","channel":"C1","user":"U1","text":"<@U1> has joined the channel","ts":"200.0"}`)
+		dispatchWebSocketEvent(data, handler)
+
+		if len(handler.messages) != 1 {
+			t.Fatalf("subtype %q: expected 1 message, got %d", subtype, len(handler.messages))
+		}
+		if handler.subtypes[0] != subtype {
+			t.Errorf("subtype %q: expected subtype preserved, got %q", subtype, handler.subtypes[0])
+		}
+	}
+}
+
+// A huddle starting and a canvas update arrive as top-level messages from
+// the system bot with empty text; they must reach OnMessage with the
+// subtype, and a message_changed edit of one must keep it.
+func TestDispatchWebSocketHuddleAndCanvasEvents(t *testing.T) {
+	for _, subtype := range []string{"huddle_thread", "tabbed_canvas_updated"} {
+		handler := &mockEventHandler{}
+		data := []byte(`{"type":"message","subtype":"` + subtype + `","channel":"C000","user":"USLACKBOT","text":"","ts":"200.0"}`)
+		dispatchWebSocketEvent(data, handler)
+		if len(handler.messages) != 1 || handler.subtypes[0] != subtype {
+			t.Fatalf("subtype %q: messages=%d subtypes=%v, want one delivery with the subtype", subtype, len(handler.messages), handler.subtypes)
+		}
+
+		handler = &mockEventHandler{}
+		data = []byte(`{"type":"message","subtype":"message_changed","channel":"C000","message":{"subtype":"` + subtype + `","user":"USLACKBOT","text":"","ts":"200.0"}}`)
+		dispatchWebSocketEvent(data, handler)
+		if len(handler.messages) != 1 || handler.subtypes[0] != subtype {
+			t.Errorf("subtype %q edit: subtypes=%v, want the subtype kept", subtype, handler.subtypes)
+		}
+	}
+
+	// An ordinary edit still reports no subtype.
+	handler := &mockEventHandler{}
+	dispatchWebSocketEvent([]byte(`{"type":"message","subtype":"message_changed","channel":"C000","message":{"subtype":"thread_broadcast","user":"U000","text":"x","ts":"1.0"}}`), handler)
+	if len(handler.subtypes) != 1 || handler.subtypes[0] != "" {
+		t.Errorf("ordinary edit subtypes = %v, want [\"\"]", handler.subtypes)
+	}
+}
+
 func TestDispatchWebSocketUserTypingEvent(t *testing.T) {
 	handler := &mockEventHandler{}
 
@@ -350,6 +435,32 @@ func TestDispatchWebSocketUserTypingEvent(t *testing.T) {
 	}
 }
 
+// The two frames a bot's "working" indicator produced on a real
+// workspace (2026-10-13 capture): Atlas set "Thinking..." on the thread
+// under the user's mention, then cleared it with an empty status just
+// before posting its reply.
+func TestDispatchWebSocketAIAssistantStatusEvent(t *testing.T) {
+	handler := &mockEventHandler{}
+
+	set := []byte(`{"type":"ai_assistant_status","channel_id":"C0B1PMJJULE","status":"Thinking...","bot_user_id":"U0AQYKDUF5G","thread_ts":"1791884373.622309","status_type":"banner","event_ts":"1791884374.000700","ts":"1791884374.000700"}`)
+	clear := []byte(`{"type":"ai_assistant_status","channel_id":"C0B1PMJJULE","status":"","bot_user_id":"U0AQYKDUF5G","thread_ts":"1791884373.622309","status_type":"banner","event_ts":"1791884378.000800","ts":"1791884378.000800"}`)
+	dispatchWebSocketEvent(set, handler)
+	dispatchWebSocketEvent(clear, handler)
+
+	want := []AssistantStatus{
+		{ChannelID: "C0B1PMJJULE", ThreadTS: "1791884373.622309", BotUserID: "U0AQYKDUF5G", Status: "Thinking..."},
+		{ChannelID: "C0B1PMJJULE", ThreadTS: "1791884373.622309", BotUserID: "U0AQYKDUF5G", Status: ""},
+	}
+	if len(handler.assistantStatuses) != len(want) {
+		t.Fatalf("got %d assistant statuses, want %d: %+v", len(handler.assistantStatuses), len(want), handler.assistantStatuses)
+	}
+	for i := range want {
+		if handler.assistantStatuses[i] != want[i] {
+			t.Errorf("status %d = %+v, want %+v", i, handler.assistantStatuses[i], want[i])
+		}
+	}
+}
+
 func TestDispatchWebSocketManualPresenceChangeEvent(t *testing.T) {
 	handler := &mockEventHandler{}
 	data := []byte(`{"type":"manual_presence_change","presence":"away"}`)
@@ -359,6 +470,33 @@ func TestDispatchWebSocketManualPresenceChangeEvent(t *testing.T) {
 	}
 	if handler.selfPresenceChanges[0] != "away" {
 		t.Errorf("expected 'away', got %q", handler.selfPresenceChanges[0])
+	}
+}
+
+func TestDispatchWebSocketBadgeCountsUpdatedEvent(t *testing.T) {
+	handler := &mockEventHandler{}
+	data := []byte(`{"type":"badge_counts_updated","activity_v2":{"at_user":2,"at_channel":4,"thread_v2":1},"event_ts":"1792759813.009500"}`)
+	dispatchWebSocketEvent(data, handler)
+	if len(handler.badgeCounts) != 1 {
+		t.Fatalf("expected 1 badge count update, got %d", len(handler.badgeCounts))
+	}
+	if handler.badgeCounts[0] != 7 {
+		t.Errorf("expected summed activity total 7, got %d", handler.badgeCounts[0])
+	}
+}
+
+func TestSumActivityV2Map(t *testing.T) {
+	if got := sumActivityV2(nil); got != 0 {
+		t.Errorf("sumActivityV2(nil) = %d, want 0", got)
+	}
+	if got := sumActivityV2(map[string]int{}); got != 0 {
+		t.Errorf("sumActivityV2(empty) = %d, want 0", got)
+	}
+	// The live capture's shape: several categories, some zero. Every
+	// value sums as-is rather than being clamped - the map is Slack's
+	// own accounting.
+	if got := sumActivityV2(map[string]int{"at_channel": 44, "bot_dm_bundle": 4, "at_user": 2, "thread_v2": 2, "channel": 1, "saved_reminder": 0}); got != 53 {
+		t.Errorf("sumActivityV2 = %d, want 53", got)
 	}
 }
 

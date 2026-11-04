@@ -90,7 +90,7 @@ func (a *App) setActivityItemRead(it core.ActivityItem, read bool) tea.Cmd {
 		return nil
 	}
 	a.activityView.SetItemRead(it.Key, read)
-	a.sidebar.SetActivityUnreadCount(a.activityView.UnreadCount())
+	a.adjustActivityBadge(a.activeTeamID, read)
 
 	k := activityReadKey(a.activeTeamID, it.Key)
 	r := a.activityReads[k]
@@ -106,6 +106,27 @@ func (a *App) setActivityItemRead(it core.ActivityItem, read bool) tea.Cmd {
 		return nil
 	}
 	return a.sendActivityRead(r)
+}
+
+// adjustActivityBadge nudges teamID's Activity badge by one item in the
+// direction of read: the badge shows the workspace's total unread
+// activity, so reading an item must drop it by one (and un-reading
+// restore it) without waiting for the server's badge_counts_updated
+// recalculation to echo the new total. Workspaces with no stored total
+// (grid-restricted members, whose counts call fails) keep their zero
+// badge: there is no number to adjust.
+func (a *App) adjustActivityBadge(teamID string, read bool) {
+	if _, ok := a.activityBadgeTotals[teamID]; !ok {
+		return
+	}
+	if read {
+		a.activityBadgeTotals[teamID]--
+	} else {
+		a.activityBadgeTotals[teamID]++
+	}
+	if teamID == a.activeTeamID {
+		a.sidebar.SetActivityUnreadCount(a.activityBadgeTotals[teamID])
+	}
 }
 
 // sendActivityRead starts r's request for its wanted state, in r's own
@@ -173,7 +194,11 @@ var reduceActivity reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			return nil, true
 		}
 		a.activityView.SetItems(m.Items)
-		a.sidebar.SetActivityUnreadCount(a.activityView.UnreadCount())
+		// No badge write here: the badge is the workspace's total
+		// unread activity (ActivityBadgeUpdatedMsg), not the loaded
+		// page's unread count - the page holds only the newest items,
+		// so its count undercounts and jumps whenever the unread
+		// filter re-fetches with a different page.
 		// activity.feed returns refs only. Kick a second fetch to hydrate
 		// the message bodies (mention text, reply, reacted-to message, DM)
 		// so rows show what the activity actually was.
@@ -184,6 +209,16 @@ var reduceActivity reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		activity := a.activity
 		team := ids.TeamID(a.activeTeamID)
 		return func() tea.Msg { return activity.Hydrate(team, refs) }, true
+
+	case ActivityBadgeUpdatedMsg:
+		if a.activityBadgeTotals == nil {
+			a.activityBadgeTotals = make(map[string]int)
+		}
+		a.activityBadgeTotals[m.TeamID] = m.Total
+		if m.TeamID == a.activeTeamID {
+			a.sidebar.SetActivityUnreadCount(m.Total)
+		}
+		return nil, true
 
 	case ActivityBodiesLoadedMsg:
 		if m.TeamID != a.activeTeamID {
@@ -212,13 +247,21 @@ var reduceActivity reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			return a.sendActivityRead(r), true
 		}
 		delete(a.activityReads, k)
+		// The badge rollback runs for EVERY workspace's failure: the
+		// optimistic change adjusted that workspace's stored total, and
+		// a failed request changes nothing on the server, so no
+		// badge_counts_updated will ever correct it. Leaving it to the
+		// active-workspace check below would strand a switched-away
+		// workspace's total one off until some other event recomputed
+		// it. adjustActivityBadge only touches the sidebar for the
+		// workspace on screen, so this is safe either way.
+		a.adjustActivityBadge(m.TeamID, r.confirmed)
 		// Another workspace's view is not on screen, so there is no dot
 		// to undo; its feed reloads from Slack when the user returns.
 		if m.TeamID != a.activeTeamID {
 			return nil, true
 		}
 		a.activityView.SetItemRead(m.Key, r.confirmed)
-		a.sidebar.SetActivityUnreadCount(a.activityView.UnreadCount())
 		state := "unread"
 		if m.Read {
 			state = "read"
@@ -241,7 +284,7 @@ var reduceActivity reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// backfills). The Activity view stays visible behind the
 		// thread panel, mirroring the Threads view.
 		if it.ThreadTS != "" {
-			return a.openThreadForPermalink(it.ChannelID, it.ThreadTS), true
+			return a.openThreadForPermalink(it.ChannelID, it.ThreadTS, it.TS != "" && it.TS != it.ThreadTS), true
 		}
 		// Channel message target: reuse the in-app permalink-jump
 		// machinery. Set the pending nav so the ChannelSelectedMsg /

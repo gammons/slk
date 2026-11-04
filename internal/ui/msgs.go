@@ -131,6 +131,11 @@ type (
 	NewMessageMsg struct {
 		ChannelID string
 		Message   messages.MessageItem
+		// Changed marks a message_changed echo of a message already
+		// shown: the panes update it in place instead of appending. It
+		// is not Message.IsEdited, which only says Slack stamped the
+		// message "edited" (an unfurl is a change nobody edited).
+		Changed bool
 	}
 	SendMessageMsg struct {
 		ChannelID string
@@ -244,6 +249,17 @@ type (
 	// the filtering). Dispatched by the unread-toggle key while the
 	// Activity view is focused.
 	ActivityToggleUnreadMsg struct{}
+	// ActivityBadgeUpdatedMsg carries a workspace's total unread
+	// activity - the number the sidebar's Activity badge shows. Sent
+	// once per workspace at boot (from client.counts) and again
+	// whenever the server pushes badge_counts_updated. The total is
+	// absolute; the badge never derives itself from the loaded feed
+	// page, whose unread count undercounts (the page holds only the
+	// newest items) and moves when the unread filter re-fetches.
+	ActivityBadgeUpdatedMsg struct {
+		TeamID string
+		Total  int
+	}
 	// ActivityReadSetMsg reports the result of asking Slack to mark one
 	// Activity item read (Read=true) or unread. The App changed the
 	// item before asking; a non-nil Err makes it undo that change.
@@ -484,6 +500,15 @@ type (
 		UserID      string
 		WorkspaceID string
 	}
+	// BotStatusMsg is an app's "working" indicator on a thread (Slack's
+	// ai_assistant_status). An empty Status clears it.
+	BotStatusMsg struct {
+		WorkspaceID string
+		ChannelID   string
+		ThreadTS    string
+		BotUserID   string
+		Status      string
+	}
 	TypingExpiredMsg  struct{}
 	PresenceChangeMsg struct {
 		UserID   string
@@ -606,13 +631,30 @@ type MessageDeletedMsg struct {
 	Err       error
 }
 
+// AttachmentRemovedMsg carries the result of the chat.deleteAttachment
+// API call (removing a link preview). On success nothing is done with it:
+// the message_changed echo updates the message. TS is the message's.
+// Seq names the removal it answers; the UI sets it (adapters leave it 0).
+// Err is *core.AttachmentRefusedError when the preview was certainly not
+// removed; any other Err leaves it unknown whether Slack acted.
+type AttachmentRemovedMsg struct {
+	ChannelID string
+	TS        string
+	Seq       uint64
+	Err       error
+}
+
 // OpenLinkMsg requests that a URL be opened. This is the single
 // routing point for all link opens (issue #62): the reduceLinks
 // reducer either navigates in-app (Slack archive permalinks for the
 // active workspace) or launches the OS browser. Dispatched by the
 // `o` keybinding (directly for single-link messages) and by the link
-// picker modal.
-type OpenLinkMsg struct{ URL string }
+// picker modal. A link whose scheme is not http(s), mailto or tel is
+// confirmed first; Confirmed marks the message the prompt sends back.
+type OpenLinkMsg struct {
+	URL       string
+	Confirmed bool
+}
 
 // DownloadFileMsg requests download + OS-open of a file attachment.
 // Dispatched by the `d` keybinding (directly for single-file messages)
@@ -796,6 +838,16 @@ type NewMessageOpenedMsg struct {
 type NewMessageFailedMsg struct {
 	RequestID uint64
 	Err       error
+}
+
+// ChannelMessagingCapabilityMsg carries the result of a
+// ChannelService.MessagingCapability probe. CanSend defaults true on
+// a failed probe, so a network failure never hides compose for a
+// channel that can actually be messaged. Applied only when ChannelID
+// still matches the active channel.
+type ChannelMessagingCapabilityMsg struct {
+	ChannelID string
+	CanSend   bool
 }
 
 // channelSearchDebounceMsg is delivered after the channel finder's

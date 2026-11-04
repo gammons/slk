@@ -208,7 +208,10 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 		a.sidebar.SetActivityActive(false)
 		a.activityView.SetItems(nil)
 		a.activityView.SetBodies(nil)
-		a.sidebar.SetActivityUnreadCount(0)
+		// Same as the switch arm: the workspace's stored activity
+		// total, which connectWorkspace sent (or a
+		// badge_counts_updated event set) before this landed.
+		a.sidebar.SetActivityUnreadCount(a.activityBadgeTotals[m.TeamID])
 		a.lastOpenedChannelID = ""
 		a.lastOpenedThreadTS = ""
 		// Apply the resolved theme for the initial active
@@ -241,6 +244,7 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 		a.backJump = nil
 		pres, dndEnabled, dndEnd, _ := a.presence.Status(a.activeTeamID)
 		a.statusbar.SetStatus(pres, dndEnabled, dndEnd)
+		a.statusbar.SetCustomStatus(a.presence.CustomStatus(a.currentUserID))
 		a.workspaceRail.SelectByID(m.TeamID)
 		if len(m.Channels) > 0 {
 			// Restore the last-visited channel across restarts (persisted in
@@ -352,7 +356,11 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	a.sidebar.SetThreadsUnreadCount(0)
 	a.activityView.SetItems(nil)
 	a.activityView.SetBodies(nil)
-	a.sidebar.SetActivityUnreadCount(0)
+	// The incoming workspace's badge is its stored activity total, not
+	// zero: the boot counts call (or badge_counts_updated since) left
+	// the real number in activityBadgeTotals. A workspace with no entry
+	// - a grid-restricted member - keeps zero.
+	a.sidebar.SetActivityUnreadCount(a.activityBadgeTotals[m.TeamID])
 	a.lastOpenedChannelID = ""
 	a.lastOpenedThreadTS = ""
 	a.CloseThread()
@@ -409,7 +417,11 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 
 	var batch []tea.Cmd
 	// After resetWindowTree above, so the fresh panes get the statuses.
+	// Must run before SetCustomStatus below: self-status is read from
+	// this same peers store, so it has to be seeded for the new
+	// workspace first.
 	batch = append(batch, a.presence.SetPeers(a, m.UserStatuses))
+	a.statusbar.SetCustomStatus(a.presence.CustomStatus(a.currentUserID))
 	// Restore the last-viewed channel for this workspace if we
 	// have one and it still exists; otherwise fall back to the
 	// first channel in the sidebar. Move the sidebar cursor to

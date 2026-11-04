@@ -3,6 +3,7 @@ package thread
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"math"
 	"slices"
 	"strings"
@@ -36,6 +37,7 @@ type Model struct {
 	selected         int
 	focused          bool
 	coloredUsernames bool
+	showAvatars      bool
 	avatarFn         messages.AvatarFunc
 	userNames        map[string]string
 	userStatuses     map[string]peerstatus.Status
@@ -92,6 +94,7 @@ type Model struct {
 	chromeCrumbChannel string
 	chromeCrumbType    string
 	chromeAuthor       string
+	crumbChannelCols   int
 
 	// userNamesV / channelNamesV are bumped every time SetUserNames /
 	// SetChannelNames replaces the map. Used by chromeCache (and any other
@@ -143,9 +146,9 @@ func New() *Model {
 
 // newThreadList configures the substrate for the thread pane (spec §5):
 // the offset clamps eagerly, as bubbles/viewport did (U6); every drag
-// step bumps Version (U4); a width change anchors only on replies, so a
-// first visible line inside the parent keeps its raw offset (#254) and
-// "at the bottom" is measured with the previous frame's height (U5). The
+// step bumps Version (U4); a width change anchors on the entry under the
+// first visible line, the parent included (#254), and "at the bottom" is
+// measured with the previous frame's height (U5). The
 // cursor does not follow the scroll (U1), a shrinking pane is not pinned
 // (U2) and a press on a separator anchors nothing (8c): the defaults.
 func newThreadList() *entrylist.Model {
@@ -153,7 +156,6 @@ func newThreadList() *entrylist.Model {
 		entrylist.WithStyles(messages.ThemeListStyles()),
 		entrylist.WithEagerClamp(),
 		entrylist.WithDirtyOnDrag(),
-		entrylist.WithReanchor(entrylist.ReanchorPolicy{AnchorRefsOnly: true}),
 	)
 }
 
@@ -176,7 +178,7 @@ func (m *Model) SetImageContext(ctx imgrender.ImageContext) {
 	m.InvalidateCache()
 }
 
-// SetEmojiContext configures emoji-image rendering for thread replies.
+// SetEmojiContext configures emoji-image rendering for the parent and replies.
 // Should be called once at startup (cmd/slk/main.go) and again after
 // CustomEmojisLoadedMsg arrives (via SetEmojiCustoms). Mirrors
 // messages.Model.SetEmojiContext.
@@ -301,8 +303,9 @@ func (m *Model) SetBreadcrumb(channelName, channelType string) {
 // breadcrumbAuthor is the parent's display name: the parent's own
 // UserName, else the userNames entry for its UserID.
 func (m *Model) breadcrumbAuthor() string {
-	if m.parent.UserName != "" {
-		return m.parent.UserName
+	// A huddle with replies is its starter's message (messages.HuddleView).
+	if p := m.huddleView(m.parent); p.UserName != "" {
+		return p.UserName
 	}
 	return m.userNames[m.parent.UserID]
 }
@@ -339,13 +342,17 @@ func (m *Model) AddReply(msg messages.MessageItem) {
 // pressed Enter on a thread reply, before chat.postMessage returned
 // the real Slack TS) with the authoritative msg. Returns true if a
 // row matching localTS was found and swapped, false otherwise.
-// Mirrors messages.Model.SwapLocalSent.
+// Mirrors messages.Model.SwapLocalSent, except that a pane at the bottom
+// stays there (HoldBottom) instead of re-snapping to the reply: the
+// authoritative copy may be taller (an unfurl), and a re-snap shows the
+// top of a reply taller than the pane.
 func (m *Model) SwapLocalSentReply(localTS string, msg messages.MessageItem) bool {
 	if localTS == "" {
 		return false
 	}
 	for i := len(m.replies) - 1; i >= 0; i-- {
 		if m.replies[i].TS == localTS {
+			m.list.HoldBottom()
 			m.replies[i] = msg
 			m.InvalidateCache()
 			return true
@@ -383,11 +390,13 @@ func (m *Model) RemoveLocalSentReply(localTS string) bool {
 //
 // Mirrors messages.Model.UpsertSelfSent — see that method for the
 // motivating bug (Slack's WS-echo Text may flatten paragraph breaks
-// for rich_text_block messages).
+// for rich_text_block messages). A replacement keeps a pane at the
+// bottom there, as SwapLocalSentReply does.
 func (m *Model) UpsertSelfSentReply(msg messages.MessageItem) {
 	if msg.TS != "" {
 		for i := len(m.replies) - 1; i >= 0; i-- {
 			if m.replies[i].TS == msg.TS {
+				m.list.HoldBottom()
 				m.replies[i] = msg
 				m.InvalidateCache()
 				return
@@ -481,18 +490,41 @@ func (m *Model) UserNames() map[string]string { return m.userNames }
 // ChannelNames returns the channel-ID-to-name map used for rendering channel mentions.
 func (m *Model) ChannelNames() map[string]string { return m.channelNames }
 
-// UpdateMessageInPlace finds a reply by TS and replaces its text,
-// marking it edited. Returns true if found.
-func (m *Model) UpdateMessageInPlace(ts, newText string) bool {
+// UpdateMessageInPlace finds the reply with item's TS and applies a
+// message_changed echo to it (MessageItem.ApplyChange: text, edited
+// mark, blocks, attachments; reactions and the rest are kept). Returns
+// true if found. A pane at the bottom stays there (HoldBottom), so an
+// unfurl or an edit does not push the reply's new rows under the fold.
+func (m *Model) UpdateMessageInPlace(item messages.MessageItem) bool {
 	for i, r := range m.replies {
-		if r.TS == ts {
-			m.replies[i].Text = newText
-			m.replies[i].IsEdited = true
+		if r.TS == item.TS {
+			m.list.HoldBottom()
+			m.replies[i].ApplyChange(item)
 			m.InvalidateCache()
 			return true
 		}
 	}
 	return false
+}
+
+// SetHuddleRoom replaces the huddle room of the reply or parent with the
+// given TS. The room is treated as immutable. Returns true if found.
+func (m *Model) SetHuddleRoom(ts string, room *messages.HuddleRoom) bool {
+	found := false
+	for i := range m.replies {
+		if m.replies[i].TS == ts {
+			m.replies[i].HuddleRoom = room
+			found = true
+		}
+	}
+	if m.parent.TS == ts {
+		m.parent.HuddleRoom = room
+		found = true
+	}
+	if found {
+		m.InvalidateCache()
+	}
+	return found
 }
 
 // RemoveMessageByTS removes a reply by TS, adjusting the selected
@@ -518,14 +550,16 @@ func (m *Model) RemoveMessageByTS(ts string) bool {
 	return false
 }
 
-// UpdateParentInPlace updates the thread parent's text and marks it
-// edited if its TS matches. Returns true if updated.
-func (m *Model) UpdateParentInPlace(ts, newText string) bool {
-	if m.parent.TS != ts {
+// UpdateParentInPlace applies a message_changed echo to the thread
+// parent if its TS matches item's (see UpdateMessageInPlace). Returns
+// true if updated. The parent is the list's first entry, so its growth
+// pushes every reply down; a pane at the bottom stays there.
+func (m *Model) UpdateParentInPlace(item messages.MessageItem) bool {
+	if m.parent.TS != item.TS {
 		return false
 	}
-	m.parent.Text = newText
-	m.parent.IsEdited = true
+	m.list.HoldBottom()
+	m.parent.ApplyChange(item)
 	m.InvalidateCache()
 	return true
 }
@@ -568,6 +602,13 @@ func (m *Model) SetUserNames(names map[string]string) {
 // with the new coloring.
 func (m *Model) SetColoredUsernames(enabled bool) {
 	m.coloredUsernames = enabled
+	m.InvalidateCache()
+}
+
+// SetShowAvatars draws the avatar from SetAvatarFunc beside each message
+// ([appearance] thread_avatars). Invalidates the render cache.
+func (m *Model) SetShowAvatars(enabled bool) {
+	m.showAvatars = enabled
 	m.InvalidateCache()
 }
 
@@ -884,6 +925,9 @@ func (m *Model) UpdateReaction(messageTS, emojiName, userID string, remove bool)
 		return
 	}
 
+	// A first pill row must not push the bottom of the pane under the
+	// fold (as in messages.Model.UpdateReaction).
+	m.list.HoldBottom()
 	messages.ApplyReaction(msg, emojiName, userID, m.currentUserID, remove)
 	m.InvalidateCache()
 	if m.nav.Active {
@@ -1044,12 +1088,12 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 		m.chromeCrumbChannel != m.crumbChannel ||
 		m.chromeCrumbType != m.crumbType ||
 		m.chromeAuthor != author {
-		header := renderBreadcrumb(width, m.crumbChannel, m.crumbType, author, chromeReplyCount)
+		header, channelCols := renderBreadcrumb(width, m.crumbChannel, m.crumbType, author, chromeReplyCount)
 		separator := lipgloss.NewStyle().
 			Width(width).
 			Background(styles.Background).
 			Foreground(styles.Border).
-			Render(strings.Repeat("-", width))
+			Render(strings.Repeat("─", width))
 		m.chromeCache = header + "\n" + separator
 		m.chromeHeight = lipgloss.Height(m.chromeCache)
 		m.chromeCacheValid = true
@@ -1060,6 +1104,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 		m.chromeCrumbChannel = m.crumbChannel
 		m.chromeCrumbType = m.crumbType
 		m.chromeAuthor = author
+		m.crumbChannelCols = channelCols
 	}
 	chrome := m.chromeCache
 	chromeHeight := m.chromeHeight
@@ -1072,11 +1117,23 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// The parent is rendered every frame for its current state (selected
 	// or not, focused or not) and is entry 0 of the list: its rows, then
 	// the rule under it. The rule is not selectable text (Plain stops
-	// before it). We discard the parent's image flushes and reaction hits
-	// in v1, as before; its image hits are kept so a click on its image
-	// opens the preview.
+	// before it). Its image hits are kept for previews; reaction hits
+	// remain omitted.
 	parentIsSelected := m.selected == parentSelected
 	parentRendered := m.renderMessage(m.parent, width, parentIsSelected)
+	// The parent bypasses the reply cache and its upload loop. Flush its
+	// groups in draw order even when the thread has no replies. Kitty
+	// callbacks guard retransmission and emit each transfer atomically.
+	for _, flushes := range [4][]func(io.Writer) error{
+		parentRendered.BodyFlushes, parentRendered.BlockFlushes,
+		parentRendered.ReactionFlushes, parentRendered.AttachmentFlushes,
+	} {
+		for _, flush := range flushes {
+			if flush != nil {
+				_ = flush(imgpkg.KittyOutput)
+			}
+		}
+	}
 	parentContent, parentHeader, parentHeaderBudget := parentRendered.Content, parentRendered.Header, parentRendered.HeaderBudget
 	// Replies only get a day divider when their day differs from the
 	// parent's, so the parent header carries its own date; otherwise a
@@ -1132,10 +1189,16 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 		// A parent without a ts cannot be clicked or text-selected.
 		parent.Plain = parentPlain
 		for _, h := range parentRendered.Hits {
-			if h.Kind == entrylist.HitImage {
+			if h.Kind == entrylist.HitImage || h.Kind == entrylist.HitFile {
 				parent.Hits = append(parent.Hits, h)
 			}
 		}
+		// The parent's lines are assembled here rather than through
+		// WrapRows, so its clickable spans are scanned from the final
+		// rendered rows directly; HitsFromSpans classifies its own
+		// file attachments against their URLs, as WrapRows does.
+		parent.Hits = append(parent.Hits,
+			messages.HitsFromSpans(messages.ScanOsc8Spans(parent.Lines), m.parent)...)
 	}
 
 	if len(m.replies) == 0 {
@@ -1213,7 +1276,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 				Selected:   w.Selected,
 				Plain:      w.Plain,
 				ColOffset:  1,
-				Hits:       r.Hits,
+				Hits:       append(r.Hits, w.LinkHits...),
 			})
 			m.cache = append(m.cache, messages.EntryPayload{ShortSrc: w.ShortSrc, Flushes: flushes})
 			m.replyIDToIdx[reply.TS] = i
@@ -1248,12 +1311,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 			Align(lipgloss.Center).
 			Render("── new ──")
 	}
-	dateSeparatorStyle := lipgloss.NewStyle().
-		Width(width).
-		Background(styles.Background).
-		Foreground(styles.TextMuted).
-		Bold(true).
-		Align(lipgloss.Center)
+	dateSeparatorStyle := messages.DividerStyle(width)
 	decoration := func(row string) entrylist.Entry { return entrylist.Entry{Ref: -1, Lines: []string{row}} }
 	entries := make([]entrylist.Entry, 0, 2*len(m.replyEntries)+2)
 	entries = append(entries, parent)
@@ -1305,6 +1363,15 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	return fitHeight(chrome+"\n"+strings.Join(rows, "\n"), height)
 }
 
+// HitTestBreadcrumbChannel reports whether pane-local (row, col) lands on
+// the breadcrumb's channel label - the span the click router turns into
+// closing the thread and returning to the channel, the mouse equivalent
+// of the hint's esc. Row 0 is the breadcrumb row, the first row under the
+// pane's top border; the span covers the label only, not the separator.
+func (m *Model) HitTestBreadcrumbChannel(row, col int) bool {
+	return row == 0 && col >= 0 && m.crumbChannelCols > 0 && col < m.crumbChannelCols
+}
+
 // HitTestReaction returns the (reply index, reaction emoji name) at
 // (row, col) within the thread's content area, or ok=false when no
 // reaction pill covers that cell. Coordinate frame: row 0 is the first
@@ -1319,6 +1386,17 @@ func (m *Model) HitTestReaction(row, col int) (replyIdx int, emoji string, ok bo
 	return h.Ref, h.Key, true
 }
 
+// HitTestLink returns the URL of the hyperlink at (row, col) within
+// the thread's content area, or ok=false when no link span covers that
+// cell. Coordinate frame mirrors HitTestReaction.
+func (m *Model) HitTestLink(row, col int) (url string, ok bool) {
+	h, ok := m.list.HitTest(entrylist.HitLink, row, col)
+	if !ok || h.Key == "" {
+		return "", false
+	}
+	return h.Key, true
+}
+
 // HitTestImage returns the ts of the message (the parent or a reply)
 // and the attachment index of the inline image at (row, col) within the
 // thread's content area, or ok=false when no image footprint covers
@@ -1326,6 +1404,23 @@ func (m *Model) HitTestReaction(row, col int) (replyIdx int, emoji string, ok bo
 func (m *Model) HitTestImage(row, col int) (ts string, attIdx int, ok bool) {
 	h, ok := m.list.HitTest(entrylist.HitImage, row, col)
 	if !ok || h.Key == "" {
+		return "", 0, false
+	}
+	switch {
+	case h.Ref == parentSelected:
+		return m.parent.TS, h.Aux, m.parent.TS != ""
+	case h.Ref >= 0 && h.Ref < len(m.replies):
+		return m.replies[h.Ref].TS, h.Aux, true
+	}
+	return "", 0, false
+}
+
+// HitTestFile returns the ts of the message (the parent or a reply)
+// and the attachment index of the "[File]" line at (row, col), or
+// ok=false. Coordinate frame mirrors HitTestReaction.
+func (m *Model) HitTestFile(row, col int) (ts string, attIdx int, ok bool) {
+	h, ok := m.list.HitTest(entrylist.HitFile, row, col)
+	if !ok {
 		return "", 0, false
 	}
 	switch {
@@ -1370,10 +1465,25 @@ func (m *Model) renderContext() *messages.RenderContext {
 	}
 }
 
-// renderMessage renders msg with the thread pane's options: no avatar
-// (even with SetAvatarFunc), no "(edited)", no broadcast label, no reply
+// renderMessage renders msg with the thread pane's options: an avatar
+// only with SetShowAvatars, no "(edited)", no broadcast label, no reply
 // affordance and no sixel rows (plan decision P3). Image hits are
 // recorded so a click opens the preview, as in the channel pane.
 func (m *Model) renderMessage(msg messages.MessageItem, width int, isSelected bool) messages.RenderedMessage {
-	return messages.RenderMessage(msg, width, m.renderContext(), messages.RenderOptions{IsSelected: isSelected, ImageHits: true})
+	msg = m.huddleView(msg)
+	opt := messages.RenderOptions{IsSelected: isSelected, ImageHits: true}
+	if m.showAvatars && m.avatarFn != nil {
+		opt.Avatar = m.avatarFn(msg.UserID)
+	}
+	return messages.RenderMessage(msg, width, m.renderContext(), opt)
+}
+
+// huddleView is the render copy of a huddle announcement: a message by
+// its starter when the thread has replies (the parent's own ReplyCount may
+// lag behind the loaded replies), else unchanged. See messages.HuddleView.
+func (m *Model) huddleView(msg messages.MessageItem) messages.MessageItem {
+	if msg.TS == m.parent.TS && len(m.replies) > msg.ReplyCount {
+		msg.ReplyCount = len(m.replies)
+	}
+	return messages.HuddleView(msg, m.userNames)
 }

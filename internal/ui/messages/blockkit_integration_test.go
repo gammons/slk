@@ -1,14 +1,61 @@
 package messages
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	goimage "image"
+	"image/png"
+	"io"
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/slack-go/slack"
 
+	"github.com/gammons/slk/internal/core/blocks"
+	emojiutil "github.com/gammons/slk/internal/emoji"
+	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
 )
+
+// TestRenderMessage_BlockKitEmojiFlushesCollected: a warm emoji in Block
+// Kit text must hand its kitty upload back in BlockFlushes, or its
+// placeholders are drawn but never resolved (#384).
+func TestRenderMessage_BlockKitEmojiFlushesCollected(t *testing.T) {
+	emojiutil.SetImageMode(true, 2)
+	t.Cleanup(func() { emojiutil.SetImageMode(false, 2) })
+
+	thumbURL := emojiutil.CDNBaseURL + "1f44d.png"
+	ff := newFakePlaceFetcher()
+	ff.setPrerendered(emojiutil.EmojiCacheKey(thumbURL), goimage.Pt(2, 1), imgpkg.Render{
+		Cells:   goimage.Pt(2, 1),
+		Lines:   []string{"\U0010EEEE\U0010EEEE"},
+		OnFlush: func(io.Writer) error { return nil },
+	})
+
+	base := MessageItem{TS: "1700000000.000000", UserName: "github", UserID: "U-BOT", Timestamp: "1:23 PM"}
+	section := base
+	section.Text = "PR opened"
+	section.Blocks = []blockkit.Block{blockkit.SectionBlock{Text: "New PR :thumbsup: 171"}}
+	legacy := base
+	legacy.LegacyAttachments = []blocks.LegacyAttachment{{Text: "New PR :thumbsup: 171"}}
+
+	for name, msg := range map[string]MessageItem{"section block": section, "legacy attachment": legacy} {
+		t.Run(name, func(t *testing.T) {
+			m := New([]MessageItem{msg}, "general")
+			m.SetEmojiContext(EmojiContext{PlaceCtx: emojiutil.PlaceContext{Fetcher: ff}, Cells: 2})
+			r := RenderMessage(msg, 80, m.renderContext(), RenderOptions{})
+			if !strings.Contains(r.Content, "\U0010EEEE") {
+				t.Fatal("block text drew no emoji placeholder; the setup does not reach the warm path")
+			}
+			if len(r.BlockFlushes) != 1 {
+				t.Errorf("BlockFlushes = %d, want 1 (the emoji's upload)", len(r.BlockFlushes))
+			}
+		})
+	}
+}
 
 // renderedFor builds a model with a single message, runs buildCache
 // at the given width, and returns the joined plain-text rendering of
@@ -160,6 +207,192 @@ func TestRenderMessagePlainAppendsHintWhenInteractive(t *testing.T) {
 	}
 }
 
+func TestRenderMessageActionLabelRendersEmoji(t *testing.T) {
+	const label = ":white_check_mark: *Resolve* <@U1>"
+	for _, tc := range []struct {
+		name string
+		msg  MessageItem
+	}{
+		{"actions", MessageItem{Blocks: []blockkit.Block{
+			blockkit.ActionsBlock{Elements: []blockkit.ActionElement{{Kind: "button", Label: label}}},
+		}}},
+		{"accessory", MessageItem{Blocks: []blockkit.Block{
+			blockkit.SectionBlock{Text: "Incident", Accessory: blockkit.LabelAccessory{Kind: "button", Label: label}},
+		}}},
+		{"legacy", MessageItem{LegacyAttachments: []blockkit.LegacyAttachment{{
+			Actions: []blockkit.LegacyAction{{Type: "button", Text: label}},
+		}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.msg.TS, tc.msg.UserName = "1.0", "alert-bot"
+			plain := renderedFor(t, tc.msg, 100)
+			if !strings.Contains(plain, "✅") || strings.Contains(plain, ":white_check_mark:") {
+				t.Fatalf("button emoji did not render: %q", plain)
+			}
+			if !strings.Contains(plain, "*Resolve* <@U1>") {
+				t.Fatalf("plain-text label was interpreted as mrkdwn: %q", plain)
+			}
+		})
+	}
+}
+
+func TestRenderMessageHeaderEmojiRendersLikeBody(t *testing.T) {
+	msg := MessageItem{
+		TS:       "1.0",
+		UserName: "fixture-bot",
+		Blocks: []blockkit.Block{
+			blockkit.HeaderBlock{Text: ":white_check_mark: *Ready*"},
+			blockkit.SectionBlock{Text: ":white_check_mark: Ready"},
+		},
+	}
+	plain := renderedFor(t, msg, 100)
+	if strings.Contains(plain, ":white_check_mark:") || strings.Count(plain, "✅") != 2 {
+		t.Fatalf("header and body did not both expand the checkmark: %q", plain)
+	}
+	if !strings.Contains(plain, "*Ready*") {
+		t.Fatalf("plain header text was interpreted as mrkdwn: %q", plain)
+	}
+}
+
+func TestBlockkitHeaderImageTruncationPreservesTextAndImageID(t *testing.T) {
+	t.Setenv("TMUX", "")
+	emojiutil.SetImageMode(true, 2)
+	t.Cleanup(func() { emojiutil.SetImageMode(false, 2) })
+	const url = "https://example.test/header-truncation.png"
+	key := emojiutil.EmojiCacheKey(url)
+	src, err := png.Decode(bytes.NewReader(makeTestPNG(2, 2)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	kitty := imgpkg.NewKittyRenderer(imgpkg.NewRegistry())
+	kitty.SetSource(key, src)
+	placed := kitty.RenderKey(key, goimage.Pt(2, 1))
+	fetcher := newFakePlaceFetcher()
+	fetcher.setPrerendered(key, goimage.Pt(2, 1), placed)
+	msg := MessageItem{TS: "1.0", UserName: "fixture", Blocks: []blockkit.Block{
+		blockkit.HeaderBlock{Text: ":header_fixture: abcdefghijklmnopqrstuvwxyz"},
+	}}
+	m := New([]MessageItem{msg}, "fixture")
+	m.SetEmojiContext(EmojiContext{
+		PlaceCtx: emojiutil.PlaceContext{Fetcher: fetcher}, Cells: 2,
+		Customs: map[string]string{"header_fixture": url},
+	})
+	const width = 12
+	rendered := blockkit.Render(msg.Blocks, BlockkitContext(msg, m.renderContext(), nil), width)
+	header := rendered.Lines[0]
+	if plain := ansi.Strip(header); !strings.HasSuffix(plain, " abcdefgh…") {
+		t.Errorf("truncated header lost visible text: %q", plain)
+	}
+	if got := lipgloss.Width(header); got > width {
+		t.Errorf("header width = %d, exceeds %d", got, width)
+	}
+	canvas := lipgloss.NewCanvas(width, 1)
+	canvas.Compose(lipgloss.NewLayer(header))
+	imageCells := 0
+	for x := range width {
+		cell := canvas.CellAt(x, 0)
+		if cell == nil || !strings.HasPrefix(cell.Content, string(imgpkg.PlaceholderRune)) {
+			continue
+		}
+		imageCells++
+		if cell.Style.Fg == nil {
+			t.Fatal("truncated header lost the emoji image ID")
+		}
+		r, g, b, _ := cell.Style.Fg.RGBA()
+		if got := (r>>8)<<16 | (g>>8)<<8 | b>>8; got != placed.ID {
+			t.Errorf("truncated header references image %d, want %d", got, placed.ID)
+		}
+	}
+	if imageCells != 2 {
+		t.Errorf("truncated header has %d emoji cells, want both cells", imageCells)
+	}
+}
+
+func TestRenderMessageBlockEmojiUploadsReferencedImage(t *testing.T) {
+	t.Setenv("TMUX", "")
+	emojiutil.SetImageMode(true, 2)
+	t.Cleanup(func() { emojiutil.SetImageMode(false, 2) })
+	const url = "https://example.test/custom-emoji.png"
+	for _, tc := range []struct {
+		name string
+		msg  MessageItem
+	}{
+		{"header", MessageItem{Blocks: []blockkit.Block{
+			blockkit.HeaderBlock{Text: ":custom_fixture:"},
+		}}},
+		{"section", MessageItem{Blocks: []blockkit.Block{
+			blockkit.SectionBlock{Text: ":custom_fixture:"},
+		}}},
+		{"context", MessageItem{Blocks: []blockkit.Block{
+			blockkit.ContextBlock{Elements: []blockkit.ContextElement{{Text: ":custom_fixture:"}}},
+		}}},
+		{"accessory", MessageItem{Blocks: []blockkit.Block{
+			blockkit.SectionBlock{Text: "Incident", Accessory: blockkit.LabelAccessory{Kind: "button", Label: ":custom_fixture: Resolve"}},
+		}}},
+		{"actions", MessageItem{Blocks: []blockkit.Block{
+			blockkit.ActionsBlock{Elements: []blockkit.ActionElement{{Kind: "button", Label: ":custom_fixture: Resolve"}}},
+		}}},
+		{"legacy", MessageItem{LegacyAttachments: []blockkit.LegacyAttachment{{
+			Text:    ":custom_fixture:",
+			Actions: []blockkit.LegacyAction{{Type: "button", Text: ":custom_fixture: Resolve"}},
+		}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			key := emojiutil.EmojiCacheKey(url)
+			src, err := png.Decode(bytes.NewReader(makeTestPNG(2, 2)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			kitty := imgpkg.NewKittyRenderer(imgpkg.NewRegistry())
+			kitty.SetSource(key, src)
+			placed := kitty.RenderKey(key, goimage.Pt(2, 1))
+			fetcher := newFakePlaceFetcher()
+			fetcher.setPrerendered(key, goimage.Pt(2, 1), placed)
+			tc.msg.TS, tc.msg.UserName = "1.0", "alert-bot"
+			m := New([]MessageItem{tc.msg}, "general")
+			m.SetEmojiContext(EmojiContext{
+				PlaceCtx: emojiutil.PlaceContext{Fetcher: fetcher},
+				Cells:    2,
+				Customs:  map[string]string{"custom_fixture": url},
+			})
+			rendered := RenderMessage(tc.msg, 100, m.renderContext(), RenderOptions{})
+			height := lipgloss.Height(rendered.Content)
+			canvas := lipgloss.NewCanvas(100, height)
+			canvas.Compose(lipgloss.NewLayer(rendered.Content))
+			found := false
+			for y := range height {
+				for x := range 100 {
+					cell := canvas.CellAt(x, y)
+					if cell == nil || !strings.HasPrefix(cell.Content, string(imgpkg.PlaceholderRune)) {
+						continue
+					}
+					found = true
+					if cell.Style.Fg == nil {
+						t.Fatal("emoji placement lost its image ID")
+					}
+					r, g, b, _ := cell.Style.Fg.RGBA()
+					if gotID := (r>>8)<<16 | (g>>8)<<8 | b>>8; gotID != placed.ID {
+						t.Fatalf("emoji references image %d, want %d", gotID, placed.ID)
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("emoji did not create an image placement: %q", rendered.Content)
+			}
+			var uploads bytes.Buffer
+			for _, flush := range rendered.BlockFlushes {
+				if err := flush(&uploads); err != nil {
+					t.Fatal(err)
+				}
+			}
+			wantUpload := fmt.Sprintf("\x1b_Ga=T,f=100,t=d,i=%d,", placed.ID)
+			if !strings.Contains(uploads.String(), wantUpload) {
+				t.Fatalf("block references image %d without uploading it: %q", placed.ID, uploads.String())
+			}
+		})
+	}
+}
+
 func TestRenderMessagePlainOmitsHintWhenNotInteractive(t *testing.T) {
 	msg := MessageItem{
 		TS:        "1700000000.000000",
@@ -285,6 +518,34 @@ func TestBlocksCarryBody_RichTextBodyKeepsBodyRow(t *testing.T) {
 	}
 }
 
+// TestRichTextTonePerPersonEmojiKeepsNextEmoji: a two-tone 🤝 from
+// Slack's composer becomes ":handshake::skin-tone-2-5:" in the body, and
+// the 🎉 after it must survive the glyph render and the Markdown export.
+func TestRichTextTonePerPersonEmojiKeepsNextEmoji(t *testing.T) {
+	rt := blockkit.RichTextBlock{Elements: []slack.RichTextElement{
+		&slack.RichTextSection{
+			Type: slack.RTESection,
+			Elements: []slack.RichTextSectionElement{
+				&slack.RichTextSectionEmojiElement{Type: slack.RTSEEmoji, Name: "handshake", Unicode: "1faf1-1f3fb-200d-1faf2-1f3fe"},
+				&slack.RichTextSectionEmojiElement{Type: slack.RTSEEmoji, Name: "tada", Unicode: "1f389"},
+			},
+		},
+	}}
+	msg := MessageItem{
+		TS:        "1700000000.000000",
+		UserName:  "alice",
+		Timestamp: "1:23 PM",
+		Text:      ":handshake::skin-tone-2-5::tada:",
+		Blocks:    []blockkit.Block{rt},
+	}
+	if got := renderedFor(t, msg, 80); !strings.Contains(got, "🤝") || !strings.Contains(got, "🎉") {
+		t.Errorf("rendered %q, want 🤝 and 🎉", got)
+	}
+	if got, want := SlackMrkdwnToCommonMark(MessageTextSource(msg), nil, nil), "🤝🎉"; got != want {
+		t.Errorf("export body = %q, want %q", got, want)
+	}
+}
+
 // TestRenderMessagePlainRichTextProducesMultipleLines: integration
 // test for the bug — a rendered rich_text-bodied message must
 // produce multiple body lines, not one squashed line. Mirrors the
@@ -373,5 +634,60 @@ func TestEphemeralButtonsHintSaysPressB(t *testing.T) {
 	msg.Ephemeral = false
 	if plain := renderedFor(t, msg, 100); !strings.Contains(plain, "↗ open in Slack to interact") {
 		t.Errorf("a non-ephemeral keeps the Slack hint: %q", plain)
+	}
+}
+
+// TestRenderMessage_AttachmentMentionShowsTitle: a link Slack's web client
+// sent as an app chip (a rich_text attachment_mention, e.g. a Linear
+// issue) shows the chip's title in place of the URL, the way the official
+// client does, and `o` still offers the URL with the title as its label.
+func TestRenderMessage_AttachmentMentionShowsTitle(t *testing.T) {
+	const url = "https://linear.app/acme/issue/ENG-42/fix-the-thing"
+	var blocks slack.Blocks
+	raw := `[{"type":"rich_text","block_id":"b1","elements":[{"type":"rich_text_section","elements":[` +
+		`{"type":"text","text":"see "},` +
+		`{"type":"attachment_mention","url":"` + url + `","text":"Fix the thing","app_id":"A0123456789","product_name":"Linear"}` +
+		`]}]}]`
+	if err := json.Unmarshal([]byte(raw), &blocks); err != nil {
+		t.Fatalf("unmarshal blocks: %v", err)
+	}
+	msg := MessageItem{
+		TS:        "1700000000.000100",
+		UserName:  "grant",
+		UserID:    "U1",
+		Timestamp: "10:00 AM",
+		Text:      "see <" + url + ">",
+		Blocks:    blockkit.Parse(blocks),
+	}
+	got := renderedFor(t, msg, 100)
+	if !strings.Contains(got, "see Fix the thing") {
+		t.Errorf("rendered body should show the chip title; got:\n%s", got)
+	}
+	if strings.Contains(got, "linear.app") {
+		t.Errorf("rendered body should not show the raw URL; got:\n%s", got)
+	}
+	links := MessageLinks(msg)
+	if len(links) == 0 || links[0].URL != url || links[0].Label != "Fix the thing" {
+		t.Errorf("MessageLinks = %+v, want first link %q labelled %q", links, url, "Fix the thing")
+	}
+}
+
+// TestMessageLinks_AttachmentMentionTitleUnescaped: the chip title is
+// entity-escaped inside <url|title>; the link picker shows it decoded,
+// the same as the pane does.
+func TestMessageLinks_AttachmentMentionTitleUnescaped(t *testing.T) {
+	var blocks slack.Blocks
+	raw := `[{"type":"rich_text","block_id":"b1","elements":[{"type":"rich_text_section","elements":[` +
+		`{"type":"attachment_mention","url":"https://example.com/x","text":"A -> B & <C>"}]}]}]`
+	if err := json.Unmarshal([]byte(raw), &blocks); err != nil {
+		t.Fatalf("unmarshal blocks: %v", err)
+	}
+	msg := MessageItem{TS: "1700000000.000100", Text: "<https://example.com/x>", Blocks: blockkit.Parse(blocks)}
+	links := MessageLinks(msg)
+	if len(links) != 1 || links[0].Label != "A -> B & <C>" {
+		t.Errorf("MessageLinks = %+v, want one link labelled %q", links, "A -> B & <C>")
+	}
+	if got := renderedFor(t, msg, 100); !strings.Contains(got, "A -> B & <C>") {
+		t.Errorf("rendered body should show the decoded title; got:\n%s", got)
 	}
 }

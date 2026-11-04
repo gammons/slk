@@ -40,7 +40,7 @@ func TestSidebarNavigation(t *testing.T) {
 	// Expand the Channels section so j/k can reach the channel rows.
 	m.ToggleCollapse("Channels")
 
-	// Nav order: Threads → Activity → "Channels" header → C1 → C2 → C3.
+	// Nav order: Threads → Activity → "Channels" header → C3 → C1 → C2.
 	m.MoveDown() // onto the Activity row
 	m.MoveDown() // onto the "Channels" section header
 	if name, ok := m.IsSectionHeaderSelected(); !ok || name != "Channels" {
@@ -48,24 +48,24 @@ func TestSidebarNavigation(t *testing.T) {
 	}
 
 	m.MoveDown()
-	if m.SelectedID() != "C1" {
-		t.Errorf("expected C1, got %q", m.SelectedID())
-	}
-
-	m.MoveDown()
-	if m.SelectedID() != "C2" {
-		t.Errorf("expected C2 after move down, got %q", m.SelectedID())
-	}
-
-	m.MoveDown()
-	m.MoveDown() // should stop at bottom (C3)
 	if m.SelectedID() != "C3" {
-		t.Errorf("expected C3 at bottom, got %q", m.SelectedID())
+		t.Errorf("expected C3, got %q", m.SelectedID())
+	}
+
+	m.MoveDown()
+	if m.SelectedID() != "C1" {
+		t.Errorf("expected C1 after move down, got %q", m.SelectedID())
+	}
+
+	m.MoveDown()
+	m.MoveDown() // should stop at bottom (C2)
+	if m.SelectedID() != "C2" {
+		t.Errorf("expected C2 at bottom, got %q", m.SelectedID())
 	}
 
 	m.MoveUp()
-	if m.SelectedID() != "C2" {
-		t.Errorf("expected C2 after move up, got %q", m.SelectedID())
+	if m.SelectedID() != "C1" {
+		t.Errorf("expected C1 after move up, got %q", m.SelectedID())
 	}
 }
 
@@ -92,7 +92,7 @@ func TestThreadsItem_MoveDownLeavesIt(t *testing.T) {
 		t.Errorf("MoveDown should leave the Threads entry")
 	}
 	item, ok := m.SelectedItem()
-	if !ok || item.ID != "C1" {
+	if !ok || item.ID != "C2" {
 		t.Errorf("first channel should be selected, got %+v ok=%v", item, ok)
 	}
 }
@@ -705,7 +705,7 @@ func TestView_RendersDotFromReadStateReader(t *testing.T) {
 
 // TestRebuildFilter_OrdersChannelsWithinSectionByChannelOrder verifies
 // that within a section, channels with an explicit ChannelOrder > 0
-// sort ahead of un-annotated channels (input order), and that
+// sort ahead of un-annotated channels (alphabetical order), and that
 // annotated channels are themselves sorted by ChannelOrder ascending.
 // This is the config-mode (use_slack_sections=false) behavior driven
 // by the SectionDef "<pattern>:<N>" suffix syntax.
@@ -714,9 +714,9 @@ func TestRebuildFilter_OrdersChannelsWithinSectionByChannelOrder(t *testing.T) {
 	// same custom section "Eng" so the section-rank tie-breaker is
 	// what's being tested.
 	items := []ChannelItem{
-		{ID: "C1", Name: "alpha", Type: "channel", Section: "Eng", SectionOrder: 1, ChannelOrder: 0},
+		{ID: "C1", Name: "gamma", Type: "channel", Section: "Eng", SectionOrder: 1, ChannelOrder: 0},
 		{ID: "C2", Name: "beta", Type: "channel", Section: "Eng", SectionOrder: 1, ChannelOrder: 2},
-		{ID: "C3", Name: "gamma", Type: "channel", Section: "Eng", SectionOrder: 1, ChannelOrder: 0},
+		{ID: "C3", Name: "alpha", Type: "channel", Section: "Eng", SectionOrder: 1, ChannelOrder: 0},
 		{ID: "C4", Name: "delta", Type: "channel", Section: "Eng", SectionOrder: 1, ChannelOrder: 1},
 	}
 	m := New(items)
@@ -728,8 +728,8 @@ func TestRebuildFilter_OrdersChannelsWithinSectionByChannelOrder(t *testing.T) {
 	}
 
 	// Expected: annotated first (C4 order=1, C2 order=2), then
-	// un-annotated in input order (C1, C3).
-	want := []string{"C4", "C2", "C1", "C3"}
+	// un-annotated in alphabetical order (C3, C1).
+	want := []string{"C4", "C2", "C3", "C1"}
 	if len(got) != len(want) {
 		t.Fatalf("filtered len = %d, want %d (got=%v)", len(got), len(want), got)
 	}
@@ -740,21 +740,22 @@ func TestRebuildFilter_OrdersChannelsWithinSectionByChannelOrder(t *testing.T) {
 	}
 }
 
-// TestRebuildFilter_NoChannelOrderPreservesInputOrder is a regression
-// guard: when every item has ChannelOrder == 0 (the default), the
-// existing input-order behavior must be preserved bit-for-bit.
-func TestRebuildFilter_NoChannelOrderPreservesInputOrder(t *testing.T) {
+func TestRebuildFilter_NoChannelOrderSortsAlphabetically(t *testing.T) {
 	items := []ChannelItem{
-		{ID: "C1", Name: "alpha", Type: "channel", Section: "Eng", SectionOrder: 1},
-		{ID: "C2", Name: "beta", Type: "channel", Section: "Eng", SectionOrder: 1},
-		{ID: "C3", Name: "gamma", Type: "channel", Section: "Eng", SectionOrder: 1},
+		{ID: "C1", Name: "ui_ux", Type: "channel", Section: "Eng", SectionOrder: 1},
+		{ID: "C2", Name: "Zulu", Type: "channel", Section: "Eng", SectionOrder: 1},
+		{ID: "C3", Name: "alpha", Type: "private", Section: "Eng", SectionOrder: 1},
+		{ID: "C4", Name: "Éclair", Type: "channel", Section: "Eng", SectionOrder: 1},
+		{ID: "C5", Name: "café", Type: "channel", Section: "Eng", SectionOrder: 1},
+		{ID: "C6", Name: "cafe", Type: "channel", Section: "Eng", SectionOrder: 1},
 	}
 	m := New(items)
 	var got []string
 	for _, idx := range m.filtered {
 		got = append(got, m.items[idx].ID)
 	}
-	want := []string{"C1", "C2", "C3"}
+	// Éclair sorts before Zulu; café and cafe retain input order when folded names tie.
+	want := []string{"C3", "C5", "C6", "C4", "C1", "C2"}
 	if len(got) != len(want) {
 		t.Fatalf("filtered len = %d, want %d (got=%v)", len(got), len(want), got)
 	}
@@ -762,6 +763,38 @@ func TestRebuildFilter_NoChannelOrderPreservesInputOrder(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("position %d: got %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+func TestRebuildFilter_AlphabeticalChannelsPreserveSlackSectionOrder(t *testing.T) {
+	m := New([]ChannelItem{
+		{ID: "C1", Name: "ui_ux", Type: "channel"},
+		{ID: "S1", Name: "zebra", Type: "channel", Section: "ST"},
+		{ID: "C2", Name: "general", Type: "private"},
+		{ID: "S2", Name: "support", Type: "channel", Section: "ST"},
+		{ID: "C3", Name: "announcements", Type: "channel"},
+	})
+	m.SetReadStateReader(func() map[string]cache.ReadState {
+		return map[string]cache.ReadState{"C1": {HasUnread: true}}
+	})
+	m.SetSectionsProvider(&fakeProvider{
+		ready: true,
+		sections: []SectionMeta{
+			{ID: "ST", Name: "Starred", Type: "stars"},
+			{ID: "CH", Name: "Channels", Type: "channels"},
+		},
+	})
+	if got := strings.Join(slackModeNavHeaders(&m), ","); got != "ST,CH" {
+		t.Fatalf("section order = %s, want ST,CH", got)
+	}
+	var got []string
+	for _, idx := range m.filtered {
+		got = append(got, m.items[idx].ID)
+	}
+	// Starred stays first even though its channels sort after announcements.
+	// ui_ux stays last in Channels despite being unread.
+	if order := strings.Join(got, ","); order != "S2,S1,C3,C2,C1" {
+		t.Fatalf("channel order = %s, want S2,S1,C3,C2,C1", order)
 	}
 }
 

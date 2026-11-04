@@ -44,7 +44,7 @@ type userBatcher interface {
 	UsersInfo(ctx context.Context, updatedIDs map[string]int64) ([]edge.User, error)
 }
 
-// userResolver resolves unknown message authors in the background.
+// userResolver resolves unknown message authors and mentioned users in the background.
 // Misses coalesce into batched edge users/info calls (see flush); ids
 // edge cannot resolve, a failed batch, and degraded workspaces fall
 // back to the per-user Web API users.info path (see resolveOne).
@@ -229,7 +229,7 @@ func (r *userResolver) resolveOneContext(ctx context.Context, userID string) {
 	// UpsertUser intentionally preserves existing status for placeholder
 	// callers. This is a full profile: persist changes and clears before
 	// UserResolvedMsg can trigger a row repair that re-reads the cache.
-	applyProfileStatus(r.teamID, userID, u.Profile, r.db, r.send)
+	applyProfileStatus(r.teamID, userID, u, r.db, r.send)
 	// In the store too, so the name survives for this workspace's next
 	// switch snapshot even if the UserResolvedMsg below is dropped
 	// because the workspace is not the active one.

@@ -142,6 +142,7 @@ type mockSlackAPI struct {
 	getEmojiFn                      func() (map[string]string, error)
 	getPermalinkContextFn           func(ctx context.Context, params *slack.PermalinkParameters) (string, error)
 	setUserPresenceContextFn        func(ctx context.Context, presence string) error
+	setUserCustomStatusContextFn    func(ctx context.Context, statusText, statusEmoji string, statusExpiration int64) error
 	getUserPresenceContextFn        func(ctx context.Context, user string) (*slack.UserPresence, error)
 	setSnoozeContextFn              func(ctx context.Context, minutes int) (*slack.DNDStatus, error)
 	endSnoozeContextFn              func(ctx context.Context) (*slack.DNDStatus, error)
@@ -188,14 +189,6 @@ func (m *mockSlackAPI) GetConversationReplies(params *slack.GetConversationRepli
 		{Msg: slack.Msg{Timestamp: "1700000001.000000", Text: "parent msg", User: "U1"}},
 		{Msg: slack.Msg{Timestamp: "1700000002.000000", Text: "reply 1", User: "U2"}},
 	}, false, "", nil
-}
-
-func (m *mockSlackAPI) GetUserInfo(user string) (*slack.User, error) {
-	return nil, fmt.Errorf("user not found")
-}
-
-func (m *mockSlackAPI) GetUserInfoContext(ctx context.Context, user string) (*slack.User, error) {
-	return nil, fmt.Errorf("user not found")
 }
 
 func (m *mockSlackAPI) GetBotInfoContext(ctx context.Context, parameters slack.GetBotInfoParameters) (*slack.Bot, error) {
@@ -254,6 +247,13 @@ func (m *mockSlackAPI) GetPermalinkContext(ctx context.Context, params *slack.Pe
 func (m *mockSlackAPI) SetUserPresenceContext(ctx context.Context, presence string) error {
 	if m.setUserPresenceContextFn != nil {
 		return m.setUserPresenceContextFn(ctx, presence)
+	}
+	return nil
+}
+
+func (m *mockSlackAPI) SetUserCustomStatusContext(ctx context.Context, statusText, statusEmoji string, statusExpiration int64) error {
+	if m.setUserCustomStatusContextFn != nil {
+		return m.setUserCustomStatusContextFn(ctx, statusText, statusEmoji, statusExpiration)
 	}
 	return nil
 }
@@ -412,6 +412,50 @@ func TestClient_SetUserPresence(t *testing.T) {
 	}
 	if gotPresence != "away" {
 		t.Errorf("expected presence 'away', got %q", gotPresence)
+	}
+}
+
+func TestClient_SetCustomStatus(t *testing.T) {
+	var calls int
+	var gotText, gotEmoji string
+	var gotExpiration int64
+	mock := &mockSlackAPI{
+		setUserCustomStatusContextFn: func(ctx context.Context, statusText, statusEmoji string, statusExpiration int64) error {
+			calls++
+			gotText, gotEmoji, gotExpiration = statusText, statusEmoji, statusExpiration
+			return nil
+		},
+	}
+	c := &Client{api: mock}
+	if err := c.SetCustomStatus(context.Background(), "Working from home", ":house:", 12345); err != nil {
+		t.Fatalf("SetCustomStatus: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("expected 1 SetCustomStatus call, got %d", calls)
+	}
+	if gotText != "Working from home" || gotEmoji != ":house:" || gotExpiration != 12345 {
+		t.Errorf("got (%q, %q, %d), want (%q, %q, %d)",
+			gotText, gotEmoji, gotExpiration, "Working from home", ":house:", int64(12345))
+	}
+}
+
+func TestClient_SetCustomStatus_Error(t *testing.T) {
+	wantErr := errors.New("api boom")
+	mock := &mockSlackAPI{
+		setUserCustomStatusContextFn: func(ctx context.Context, statusText, statusEmoji string, statusExpiration int64) error {
+			return wantErr
+		},
+	}
+	c := &Client{api: mock}
+	err := c.SetCustomStatus(context.Background(), "On vacation", ":palm_tree:", 0)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Errorf("expected wrapped wantErr, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "setting custom status") {
+		t.Errorf("expected 'setting custom status' prefix, got %q", err.Error())
 	}
 }
 
@@ -1020,7 +1064,7 @@ func TestGetUnreadCounts_UsesAPIBaseURL(t *testing.T) {
 		cookie:     "d-cookie",
 		apiBaseURL: srv.URL + "/api/",
 	}
-	if _, _, err := c.GetUnreadCounts(); err != nil {
+	if _, _, _, err := c.GetUnreadCounts(); err != nil {
 		t.Fatalf("GetUnreadCounts: %v", err)
 	}
 	if gotPath != "/api/client.counts" {
@@ -1077,59 +1121,6 @@ func TestGetChannelSections_UsesAPIBaseURL(t *testing.T) {
 	}
 }
 
-// TestGetStarredConversations_ParsesItems verifies GetStarredConversations extracts
-// channel and IM conversation items from stars.list. Slack's channelSections.list
-// returns the stars section with an empty channel_ids array; stars.list is
-// the authoritative source for which conversations the user has starred.
-func TestGetStarredConversations_ParsesItems(t *testing.T) {
-	var gotPath string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"ok": true,
-			"items": [
-				{"type": "channel", "channel": "C1", "date_create": 1700000001},
-				{"type": "channel", "channel": "C2", "date_create": 1700000002},
-				{"type": "message", "channel": "C9", "message": {"ts": "1.1"}, "date_create": 1700000003},
-				{"type": "im", "channel": "D1", "date_create": 1700000004},
-				{"type": "channel", "channel": "C1"},
-				{"type": "im", "channel": "D1"},
-				{"type": "im", "channel": ""},
-				{"type": "channel", "channel": ""},
-				{"type": "file", "channel": "C8"},
-				{"type": "file_comment", "channel": "C7"},
-				{"type": "unknown", "channel": "D9"}
-			],
-			"paging": {"count": 4, "total": 4}
-		}`))
-	}))
-	defer srv.Close()
-
-	c := &Client{
-		token:      "xoxc-test",
-		cookie:     "d-cookie",
-		apiBaseURL: srv.URL + "/api/",
-	}
-	got, err := c.GetStarredConversations(context.Background())
-	if err != nil {
-		t.Fatalf("GetStarredConversations: %v", err)
-	}
-	if gotPath != "/api/stars.list" {
-		t.Errorf("path = %q, want %q", gotPath, "/api/stars.list")
-	}
-	// Conversation IDs are unique and retain first-seen order.
-	want := []string{"C1", "C2", "D1"}
-	if len(got) != len(want) {
-		t.Fatalf("got %v, want %v", got, want)
-	}
-	for i, w := range want {
-		if got[i] != w {
-			t.Errorf("[%d] = %q, want %q", i, got[i], w)
-		}
-	}
-}
-
 // TestGetStarredConversations_APIError verifies the client surfaces Slack's
 // ok=false responses as errors rather than returning an empty list silently.
 func TestGetStarredConversations_APIError(t *testing.T) {
@@ -1177,7 +1168,7 @@ func TestHandRolledEndpoints_FormBodyTokenNoBearer(t *testing.T) {
 			name:     "GetUnreadCounts",
 			respBody: `{"ok":true,"channels":[],"mpims":[],"ims":[],"threads":{"has_unreads":false}}`,
 			call: func(t *testing.T, c *Client) {
-				if _, _, err := c.GetUnreadCounts(); err != nil {
+				if _, _, _, err := c.GetUnreadCounts(); err != nil {
 					t.Fatalf("GetUnreadCounts: %v", err)
 				}
 			},
@@ -1692,6 +1683,86 @@ func TestGetMutedChannels_ApiError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid_auth") {
 		t.Errorf("error = %v, want it to mention invalid_auth", err)
+	}
+}
+
+func TestGetUserProfile_DecodesHuddleChannelID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true,"user":{"id":"U1","name":"alice","team_id":"T1","profile":{"display_name":"Alice","huddle_state":"in_a_huddle","huddle_state_expiration_ts":1700000900,"huddle_state_channel_id":"C9"}}}`))
+	}))
+	defer srv.Close()
+	c := newTestClient(srv)
+
+	u, err := c.GetUserProfile("U1")
+	if err != nil {
+		t.Fatalf("GetUserProfile: %v", err)
+	}
+	if u.ID != "U1" || u.Profile.DisplayName != "Alice" {
+		t.Errorf("user = %s/%s; want U1/Alice", u.ID, u.Profile.DisplayName)
+	}
+	if u.HuddleStateChannelID != "C9" {
+		t.Errorf("HuddleStateChannelID = %q, want C9", u.HuddleStateChannelID)
+	}
+	if u.Profile.HuddleState != "in_a_huddle" {
+		t.Errorf("HuddleState = %q, want in_a_huddle", u.Profile.HuddleState)
+	}
+	if u.TeamID != "T1" {
+		t.Errorf("TeamID = %q, want T1", u.TeamID)
+	}
+}
+
+func TestGetUserProfile_NoHuddleFieldIsNotAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true,"user":{"id":"U1","name":"alice","profile":{"display_name":"Alice","huddle_state":"default_unset"}}}`))
+	}))
+	defer srv.Close()
+	c := newTestClient(srv)
+
+	u, err := c.GetUserProfile("U1")
+	if err != nil {
+		t.Fatalf("GetUserProfile: %v", err)
+	}
+	if u.HuddleStateChannelID != "" {
+		t.Errorf("HuddleStateChannelID = %q, want empty", u.HuddleStateChannelID)
+	}
+}
+
+func TestGetUserProfile_PostsTheUserID(t *testing.T) {
+	var gotPath, gotUser string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		form, _ := url.ParseQuery(string(body))
+		gotUser = form.Get("user")
+		_, _ = w.Write([]byte(`{"ok":true,"user":{"id":"U1","name":"alice"}}`))
+	}))
+	defer srv.Close()
+	c := newTestClient(srv)
+
+	if _, err := c.GetUserProfile("U42"); err != nil {
+		t.Fatalf("GetUserProfile: %v", err)
+	}
+	if gotPath != "/api/users.info" {
+		t.Errorf("path = %q, want /api/users.info", gotPath)
+	}
+	if gotUser != "U42" {
+		t.Errorf("form user = %q, want U42", gotUser)
+	}
+}
+
+func TestGetUserProfile_ApiError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":false,"error":"user_not_found"}`))
+	}))
+	defer srv.Close()
+	c := newTestClient(srv)
+
+	_, err := c.GetUserProfile("U1")
+	if err == nil {
+		t.Fatal("expected error for ok=false response")
+	}
+	if !strings.Contains(err.Error(), "user_not_found") {
+		t.Errorf("error = %v, want it to mention user_not_found", err)
 	}
 }
 
@@ -3127,11 +3198,9 @@ func TestPostForm_NonOKStatusIsAnError(t *testing.T) {
 	}
 }
 
-// TestHandRolledEndpoints_RouteThroughSharedClient is the regression
-// guard for three endpoints that used to build their own http.Client
-// via newCookieHTTPClient instead of reusing c.httpClient:
-// client.counts (GetUnreadCounts), users.channelSections.list
-// (callChannelSectionsList) and stars.list (GetStarredConversations).
+// TestHandRolledEndpoints_RouteThroughSharedClient guards the endpoints that
+// used to build their own http.Client via newCookieHTTPClient instead of
+// reusing c.httpClient: client.counts and users.channelSections.list.
 //
 // Two things were wrong with that, and this test fails on both:
 //
@@ -3158,7 +3227,7 @@ func TestHandRolledEndpoints_RouteThroughSharedClient(t *testing.T) {
 			name:     "GetUnreadCounts",
 			respBody: `{"ok":true,"channels":[],"mpims":[],"ims":[],"threads":{"has_unreads":false}}`,
 			call: func(t *testing.T, c *Client) {
-				if _, _, err := c.GetUnreadCounts(); err != nil {
+				if _, _, _, err := c.GetUnreadCounts(); err != nil {
 					t.Fatalf("GetUnreadCounts: %v", err)
 				}
 			},
@@ -3169,15 +3238,6 @@ func TestHandRolledEndpoints_RouteThroughSharedClient(t *testing.T) {
 			call: func(t *testing.T, c *Client) {
 				if _, err := c.GetChannelSections(context.Background()); err != nil {
 					t.Fatalf("GetChannelSections: %v", err)
-				}
-			},
-		},
-		{
-			name:     "GetStarredConversations",
-			respBody: `{"ok":true,"items":[],"paging":{"count":0,"total":0}}`,
-			call: func(t *testing.T, c *Client) {
-				if _, err := c.GetStarredConversations(context.Background()); err != nil {
-					t.Fatalf("GetStarredConversations: %v", err)
 				}
 			},
 		},
@@ -3349,7 +3409,7 @@ func TestGetUnreadCounts_ParsesMentionCounts(t *testing.T) {
 	defer srv.Close()
 	c := newTestClient(srv)
 
-	unreads, _, err := c.GetUnreadCounts()
+	unreads, _, _, err := c.GetUnreadCounts()
 	if err != nil {
 		t.Fatalf("GetUnreadCounts: %v", err)
 	}

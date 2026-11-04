@@ -20,7 +20,7 @@
 
 ## Highlights
 
-- Real-time messages, edits, deletes, reactions, typing indicators
+- Real-time messages, edits, deletes, reactions, typing indicators, apps' "working" status
 - Inline images (kitty graphics / sixel / half-block fallback) with full-screen preview
 - Threads side panel + a workspace-wide threads view
 - Activity feed: mentions, thread replies, reactions, and DMs in one list, like Slack's Activity tab
@@ -91,6 +91,7 @@ Everything lives in the [**wiki**](https://github.com/gammons/slk/wiki):
 - [Setup](https://github.com/gammons/slk/wiki/Setup) — desktop-app auth, adding workspaces
 - [Features](https://github.com/gammons/slk/wiki/Features) — full feature breakdown
 - [Keybindings](https://github.com/gammons/slk/wiki/Keybindings) — every key, every mode
+- [Commands](https://github.com/gammons/slk/wiki/Commands) — `:` commands and slash commands
 - [Configuration](https://github.com/gammons/slk/wiki/Configuration) — `config.toml`, custom themes, XDG paths
 - [Terminal Compatibility](https://github.com/gammons/slk/wiki/Terminal-Compatibility) — what each terminal supports, including tmux setup (inline images, unread-title forwarding)
 - [Clipboard and OSC 52](https://github.com/gammons/slk/wiki/Clipboard-and-OSC-52) — copy/paste setup notes
@@ -117,6 +118,10 @@ Contributions are welcome. A few ground rules:
 - Whether human- or AI-written, **you are responsible for your PR.**
   Understand the diff, make sure it builds and passes `go vet ./...` and
   `go test ./...`, and be ready to explain your choices in review.
+- **Inactive PRs are closed.** A pull request with no activity for 14
+ days gets a warning, and it's closed 7 days later (21 days in total)
+ unless there's a push, comment or review in the meantime. You can
+ reopen it whenever you pick it back up.
 
 ## Disclaimer
 

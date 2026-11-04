@@ -48,7 +48,7 @@ func normalMessages() []messages.MessageItem {
 	}
 	msgs[4].Attachments = []messages.Attachment{
 		{Kind: "file", Name: "report.pdf", DownloadURL: "https://files/report.pdf", Size: 2048},
-		{Kind: "image", Name: "pic.png", FileID: "F1"},
+		{Kind: "image", Name: "pic.png", FileID: "F1", Thumbs: []messages.ThumbSpec{{URL: "https://files/pic-720.png", W: 720, H: 720}}},
 	}
 	return msgs
 }
@@ -87,15 +87,15 @@ func normalOpts() []testOpt {
 //
 // Section is set explicitly on every item: the staleness filter in
 // rebuildFilter (sidebar/model.go:985) exempts sectioned items
-// outright (staleness.go:49-51), so the walk order is the input order
+// outright (staleness.go:49-51), so the walk order is alphabetical
 // and cannot drift with the clock.
 func unreadOpts() []testOpt {
 	return []testOpt{
 		withChannels(
 			sidebar.ChannelItem{ID: "C1", Name: "general", Type: "channel", Section: "Eng"},
-			sidebar.ChannelItem{ID: "C2", Name: "random", Type: "channel", Section: "Eng"},
+			sidebar.ChannelItem{ID: "C2", Name: "ops", Type: "channel", Section: "Eng"},
 			sidebar.ChannelItem{ID: "C3", Name: "design", Type: "channel", Section: "Eng"},
-			sidebar.ChannelItem{ID: "C4", Name: "ops", Type: "channel", Section: "Eng"},
+			sidebar.ChannelItem{ID: "C4", Name: "random", Type: "channel", Section: "Eng"},
 		),
 		withMessages(normalMessages()...),
 		withActiveChannel("C1"),
@@ -113,7 +113,7 @@ func unreadOpts() []testOpt {
 // SetReadStateReader does not rebuild the sidebar's filtered list
 // (sidebar/model.go:301-305), which is fine here: unreadOpts' items are
 // sectioned, so the list built at SetChannels time already contains all
-// four in input order.
+// four in alphabetical order.
 func seedUnreads(t *testing.T, a *App) {
 	t.Helper()
 	a.setReadStateReaderForTest(func() map[string]cache.ReadState {
@@ -373,6 +373,41 @@ func TestNormalModeKeys(t *testing.T) {
 			name: "i with the thread panel focused focuses the thread compose",
 			opts: normalOpts(),
 			setup: func(t *testing.T, a *App) {
+				focusThreadPanel(t, a)
+			},
+			key:      keyPress('i'),
+			wantMode: ModeInsert,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if a.focusedPanel != PanelThread {
+					t.Errorf("focusedPanel = %v, want PanelThread", a.focusedPanel)
+				}
+				if cmd == nil {
+					t.Error("cmd = nil, want threadCompose.Focus()'s cmd")
+				}
+			},
+		},
+		{
+			name: "i on a channel with compose disabled toasts instead of entering insert mode",
+			opts: normalOpts(),
+			setup: func(t *testing.T, a *App) {
+				a.composeDisabled = true
+			},
+			key:      keyPress('i'),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if got := statusbarText(a); !strings.Contains(got, "You can't send messages to this app") {
+					t.Errorf("statusbar = %q, want the compose-disabled toast", got)
+				}
+			},
+		},
+		{
+			// composeDisabled reflects the active channel, not the
+			// thread panel -- a thread reply targets a possibly
+			// different channel's thread and must not be blocked.
+			name: "i on a channel with compose disabled still opens the thread compose",
+			opts: normalOpts(),
+			setup: func(t *testing.T, a *App) {
+				a.composeDisabled = true
 				focusThreadPanel(t, a)
 			},
 			key:      keyPress('i'),
@@ -1889,7 +1924,7 @@ func TestNormalModeKeys(t *testing.T) {
 				if !ok {
 					t.Fatalf("cmd() = %#v, want ChannelSelectedMsg", cmd())
 				}
-				want := ChannelSelectedMsg{ID: "C2", Name: "random", Type: "channel"}
+				want := ChannelSelectedMsg{ID: "C2", Name: "ops", Type: "channel"}
 				if msg != want {
 					t.Errorf("cmd() = %+v, want %+v", msg, want)
 				}
@@ -1914,7 +1949,7 @@ func TestNormalModeKeys(t *testing.T) {
 				if !ok {
 					t.Fatalf("cmd() = %#v, want ChannelSelectedMsg", cmd())
 				}
-				want := ChannelSelectedMsg{ID: "C4", Name: "ops", Type: "channel"}
+				want := ChannelSelectedMsg{ID: "C4", Name: "random", Type: "channel"}
 				if msg != want {
 					t.Errorf("cmd() = %+v, want %+v", msg, want)
 				}
@@ -2431,5 +2466,36 @@ func seedNavHistory(t *testing.T, a *App) {
 	if len(stack.entries) != 2 || stack.cursor != 1 {
 		t.Fatalf("precondition: nav stack = %v cursor=%d, want [C1 C2] cursor=1",
 			stack.entries, stack.cursor)
+	}
+}
+
+// TestChord_GGActivityViewJumpsToTop pins the Activity-view arm of the
+// `gg` chord (https://github.com/gammons/slk/issues/421): handleGoToBottom
+// routed G at the activity view, but handleGoToTop had no ViewActivity
+// case, so gg — which works everywhere else — was inert in the Activity
+// feed and the only way back to the newest row was scrolling by hand.
+func TestChord_GGActivityViewJumpsToTop(t *testing.T) {
+	a := newTestApp(t, withSize(120, 30), withActiveTeam("T1"), withView(ViewActivity))
+	a.Update(ActivityViewActivatedMsg{})
+	a.Update(ActivityListLoadedMsg{TeamID: "T1", Items: []core.ActivityItem{
+		{Key: "k1", Type: "message_reaction", ChannelID: "C1", TS: "1.1"},
+		{Key: "k2", Type: "message_reaction", ChannelID: "C1", TS: "2.2"},
+		{Key: "k3", Type: "message_reaction", ChannelID: "C1", TS: "3.3"},
+	}})
+
+	// G lands on the last (oldest) row — the working half of the pair.
+	_ = dispatchModeKey(a, keyPress('G'))
+	if got := a.activityView.SelectedIndex(); got != 2 {
+		t.Fatalf("selected index after G = %d, want 2: precondition failed, G did not reach the activity view", got)
+	}
+
+	// gg must mirror it back to the first (newest) row.
+	_ = dispatchModeKey(a, keyPress('g'))
+	_ = dispatchModeKey(a, keyPress('g'))
+	if a.pendingTop {
+		t.Error("pendingTop still armed after the chord completed")
+	}
+	if got := a.activityView.SelectedIndex(); got != 0 {
+		t.Errorf("selected index after gg = %d, want 0", got)
 	}
 }

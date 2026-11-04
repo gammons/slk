@@ -19,7 +19,10 @@
 package ui
 
 import (
+	"strings"
+
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/styles"
@@ -53,12 +56,24 @@ func (a *App) renderThreadRegion(frame panelLayoutFrame, themeVer int64) string 
 	}
 	threadComposeSpacer := lipgloss.NewStyle().Background(styles.Background).Width(threadWidth - 2).Render("")
 	threadComposeView = threadComposeSpacer + "\n" + threadComposeView
+	// Unlike the channel pane's typing row, no row is reserved for
+	// this: it appears only while an app is working on this thread.
+	if statusLine := a.renderThreadBotStatusLine(threadWidth - 2); statusLine != "" {
+		threadComposeView = statusLine + "\n" + threadComposeView
+	}
 	threadComposeHeight := lipgloss.Height(threadComposeView)
 	threadContentHeight := contentHeight - 2 - threadComposeHeight
 	a.layout.SetThreadHeight(threadContentHeight)
 	if threadContentHeight < 3 {
 		threadContentHeight = 3
 	}
+	// Row layout within the pane: 0 top border, 1..threadContentHeight
+	// replies, then the compose region through to the bottom border at
+	// contentHeight-1 (no typing row is reserved in the thread pane).
+	// Recorded after the minimum clamp and in PanelAt's paneY frame
+	// (top border subtracted), mirroring the channel pane's compose
+	// top.
+	a.layout.SetThreadComposeTop(threadContentHeight)
 
 	// Cached top region.
 	threadTopVersion := a.threadPanel.Version()
@@ -83,6 +98,27 @@ func (a *App) renderThreadRegion(frame panelLayoutFrame, themeVer int64) string 
 	)
 
 	return threadTopBordered + "\n" + threadBottomBordered
+}
+
+// renderThreadBotStatusLine is the open thread's app statuses, each as
+// "<app name> <status>" the way Slack draws them, cut to one row of
+// width cells. "" when no app is working on the thread.
+func (a *App) renderThreadBotStatusLine(width int) string {
+	if !a.typing.Enabled() {
+		return ""
+	}
+	statuses := a.typing.ThreadBotStatuses(a.threadPanel.ChannelID(), a.threadPanel.ThreadTS())
+	if len(statuses) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(statuses))
+	for _, s := range statuses {
+		// Fields: the app's line breaks would otherwise be rows.
+		parts = append(parts, a.userNameFor(s.botUserID)+" "+strings.Join(strings.Fields(s.text), " "))
+	}
+	style := styles.TypingIndicator
+	text := ansi.Truncate(strings.Join(parts, " · "), width-style.GetHorizontalFrameSize(), "…")
+	return style.Width(width).Render(text)
 }
 
 // renderThreadTop is the cached top region of the thread panel

@@ -15,10 +15,11 @@ func handleLinkPickerMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	item, chosen := a.linkPicker.HandleKey(msg.String())
 	if chosen {
 		a.SetMode(ModeNormal)
-		if a.pickerKind == "files" {
-			files := a.pickerFiles
-			a.pickerFiles = nil
-			a.pickerKind = ""
+		// The modal is closed, so clear what it was choosing on every
+		// commit, links included (#194).
+		kind, files := a.pickerKind, a.pickerFiles
+		a.pickerKind, a.pickerFiles = "", nil
+		if kind == "files" {
 			if item.Index < 0 || item.Index >= len(files) {
 				return nil
 			}

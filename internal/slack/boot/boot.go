@@ -293,15 +293,10 @@ type Result struct {
 	// IsOpen holds the conversation ids currently shown in the
 	// sidebar — channels and DMs mixed.
 	IsOpen []string `json:"is_open"`
-	// Starred replaces the stars.list call.
-	//
-	// []json.RawMessage for the same reason as Subteams.Self: the
-	// captured value was `[]` on this workspace, so the element shape
-	// is unverified. stars.list items are {type, channel, …}, but
-	// there is no evidence userBoot uses that same shape and guessing
-	// would be inventing a contract. Give it a real type when a
-	// capture with a non-empty starred list exists.
-	Starred []json.RawMessage `json:"starred"`
+	// Starred contains recognized conversation IDs from client.userBoot,
+	// including on Enterprise Grid where stars.list is restricted. String
+	// entries were verified on 2026-10-31; unknown wire variants are ignored.
+	Starred []string `json:"starred"`
 	// Subteams replaces the usergroups.list call.
 	Subteams Subteams `json:"subteams"`
 	// DND replaces the dnd.info call.
@@ -331,6 +326,30 @@ type Result struct {
 	HasMoreMPDMs     bool   `json:"has_more_mpdms"`
 }
 
+// starredIDs decodes only the observed string entries. Starred membership is
+// optional: an unknown container or element must not prevent a workspace boot.
+type starredIDs []string
+
+func (ids *starredIDs) UnmarshalJSON(raw []byte) error {
+	var entries []json.RawMessage
+	if err := json.Unmarshal(raw, &entries); err != nil || entries == nil {
+		*ids = nil
+		return nil
+	}
+	out := make(starredIDs, 0, len(entries))
+	for _, entry := range entries {
+		if len(entry) == 0 || entry[0] != '"' {
+			continue
+		}
+		var id string
+		if err := json.Unmarshal(entry, &id); err == nil {
+			out = append(out, id)
+		}
+	}
+	*ids = out
+	return nil
+}
+
 // response is Result plus the two envelope fields every Slack Web API
 // answer carries. They are kept off Result because a caller never sees
 // a Result unless ok was true, so exposing them would only invite a
@@ -339,6 +358,9 @@ type response struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error"`
 	Result
+	// Override Result.Starred's promoted JSON field with a lenient wire
+	// decoder while keeping the caller-facing result a []string.
+	StarredIDs starredIDs `json:"starred"`
 }
 
 // UserBoot calls client.userBoot through post and returns the parsed
@@ -388,6 +410,7 @@ func UserBoot(ctx context.Context, post PostFunc) (*Result, error) {
 	}
 
 	out := resp.Result
+	out.Starred = resp.StarredIDs
 	return &out, nil
 }
 

@@ -42,6 +42,16 @@ type ThemeColors struct {
 	ComposeInsertBG      string `toml:"compose_insert_bg"`
 	SelectionBgFocused   string `toml:"selection_bg_focused"`
 	SelectionBgUnfocused string `toml:"selection_bg_unfocused"`
+	// Username colors author names when colored_usernames is off
+	// (default Primary). SidebarSelectedBg/Fg paint the sidebar cursor
+	// row as a filled pill instead of the "▌" marker. MentionBadgeBg/Fg
+	// color the sidebar's mention-count badge (default: the selection
+	// pair).
+	Username          string `toml:"username"`
+	SidebarSelectedBg string `toml:"sidebar_selected_bg"`
+	SidebarSelectedFg string `toml:"sidebar_selected_fg"`
+	MentionBadgeBg    string `toml:"mention_badge_bg"`
+	MentionBadgeFg    string `toml:"mention_badge_fg"`
 }
 
 // builtinThemes maps lowercase theme names to their display name and colors.

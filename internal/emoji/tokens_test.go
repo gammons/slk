@@ -37,9 +37,11 @@ func TestResolveEmojiToTokens_Shortcodes(t *testing.T) {
 	heartURL := CDNBaseURL + "2764-fe0f.png" // :heart: (VS16 preserved)
 	rocketURL := CDNBaseURL + "1f680.png"    // :rocket:
 	customParrot := "https://emoji.slack-edge.com/T01/party_parrot/abc.gif"
+	customWave := "https://emoji.slack-edge.com/T01/wave/def.png"
 	customs := map[string]string{
 		"party_parrot":     customParrot,
 		"alias_for_rocket": "alias:rocket",
+		"wave":             customWave,
 	}
 
 	cases := []struct {
@@ -71,6 +73,44 @@ func TestResolveEmojiToTokens_Shortcodes(t *testing.T) {
 			"adjacent shortcodes (no separator)",
 			":heart::rocket:",
 			[]Token{emoji(":heart:", heartURL), emoji(":rocket:", rocketURL)},
+		},
+		{
+			// RichTextToMrkdwn writes a skin-toned emoji element as
+			// the base shortcode and a :skin-tone-N: shortcode; Slack
+			// draws one toned emoji, not the base and a swatch.
+			"skin-toned emoji is one toned image",
+			":+1::skin-tone-2::rocket:",
+			[]Token{emoji(":+1::skin-tone-2:", CDNBaseURL+"1f44d-1f3fb.png"), emoji(":rocket:", rocketURL)},
+		},
+		{
+			"emoji with a tone per person is one image",
+			":handshake::skin-tone-2-5::rocket:",
+			[]Token{emoji(":handshake::skin-tone-2-5:", CDNBaseURL+"1faf1-1f3fb-200d-1faf2-1f3fe.png"), emoji(":rocket:", rocketURL)},
+		},
+		{
+			"tone per person with no image draws the base alone",
+			":handshake::skin-tone-2-2::rocket:",
+			[]Token{emoji(":handshake::skin-tone-2-2:", CDNBaseURL+"1f91d.png"), emoji(":rocket:", rocketURL)},
+		},
+		{
+			"custom emoji with a tone per person keeps its image alone",
+			":wave::skin-tone-2-5:",
+			[]Token{emoji(":wave::skin-tone-2-5:", customWave)},
+		},
+		{
+			"skin tone on an emoji that takes none stays a swatch",
+			":rocket::skin-tone-2:",
+			[]Token{emoji(":rocket:", rocketURL), emoji(":skin-tone-2:", CDNBaseURL+"1f3fb.png")},
+		},
+		{
+			"custom emoji shadowing a standard name keeps its image",
+			":wave::skin-tone-3:",
+			[]Token{emoji(":wave:", customWave), emoji(":skin-tone-3:", CDNBaseURL+"1f3fc.png")},
+		},
+		{
+			"swatch on its own",
+			"tone :skin-tone-4:",
+			[]Token{text("tone "), emoji(":skin-tone-4:", CDNBaseURL+"1f3fd.png")},
 		},
 		{
 			"unknown shortcode passes through as text",

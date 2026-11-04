@@ -21,14 +21,17 @@ type ForwardResult struct {
 
 // MessageItem is one message as the TUI displays it.
 type MessageItem struct {
-	TS          string
-	UserName    string
-	UserID      string
-	Text        string
-	Timestamp   string // formatted display time (e.g. "3:04 PM")
-	DateStr     string // date string for grouping (e.g. "2026-04-23")
-	ThreadTS    string
-	ReplyCount  int
+	TS         string
+	UserName   string
+	UserID     string
+	Text       string
+	Timestamp  string // formatted display time (e.g. "3:04 PM")
+	DateStr    string // date string for grouping (e.g. "2026-04-23")
+	ThreadTS   string
+	ReplyCount int
+	// ReplyUsers are the thread's repliers (Slack's reply_users), drawn
+	// as small avatars on the channel pane's reply row.
+	ReplyUsers  []string
 	Reactions   []ReactionItem
 	Attachments []Attachment
 	IsEdited    bool
@@ -55,6 +58,24 @@ type MessageItem struct {
 	// BotID is the Slack bot_id of the app that posted the message. Set for
 	// ephemerals; sent as service_id when one of their buttons is pressed.
 	BotID string
+
+	// HuddleRoom is the room object of a huddle_thread message (nil
+	// for every other message, and for a huddle message whose room was
+	// never captured).
+	HuddleRoom *HuddleRoom
+}
+
+// ApplyChange takes the content fields of c, a message_changed echo of
+// this message: Text, IsEdited, Blocks, LegacyAttachments and
+// Attachments. Everything else (reactions, reply count, author, time) is
+// kept, because the echo does not carry it. The one place that decides
+// which fields a change replaces; both panes call it.
+func (m *MessageItem) ApplyChange(c MessageItem) {
+	m.Text = c.Text
+	m.IsEdited = c.IsEdited
+	m.Blocks = c.Blocks
+	m.LegacyAttachments = c.LegacyAttachments
+	m.Attachments = c.Attachments
 }
 
 // Attachment represents a file or image attached to a message.
@@ -144,6 +165,9 @@ const (
 	PresenceSnooze       // SnoozeMinutes is set
 	PresenceCustomSnooze // opens the custom-snooze input; never reaches the engine
 	PresenceEndDND
+	PresenceSetWFH      // custom status preset: "Working from home"
+	PresenceSetVacation // custom status preset: "On vacation"
+	PresenceClearStatus // clears the profile status text/emoji; leaves presence/DND alone
 )
 
 // ThemeScope identifies whether a theme selection should be saved to
@@ -232,6 +256,11 @@ type UserProfile struct {
 	TZAbbrev                                      string // "PDT"; "" when none or numeric
 	TZOffset                                      int    // seconds east of UTC
 	IsBot, Deleted                                bool
+	// HuddleChannelID is the conversation the user's huddle is in,
+	// from users.info's huddle_state_channel_id. Empty when they are
+	// not in a huddle or Slack did not send it; the huddle state
+	// itself decides whether a link may be offered, never this field.
+	HuddleChannelID string
 }
 
 // RateLimitedError is how adapters report Slack rate limiting, so the
@@ -252,6 +281,18 @@ type CommandError struct {
 }
 
 func (e *CommandError) Error() string { return e.Code }
+
+// AttachmentRefusedError is how adapters report that a link preview was
+// certainly not removed: Slack refused (an ok:false that leaves nothing
+// done), rate limited the call, or the call was never sent. Reason is
+// Slack's error code, or a few words when there is none. Any other error
+// from MessageService.RemoveAttachment leaves it unknown whether Slack
+// acted.
+type AttachmentRefusedError struct {
+	Reason string
+}
+
+func (e *AttachmentRefusedError) Error() string { return e.Reason }
 
 // Theme holds the user's color overrides from config.
 type Theme struct {

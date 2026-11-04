@@ -15,9 +15,14 @@
 package ui
 
 import (
+	"strconv"
+	"strings"
 	"time"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
+	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/rivo/uniseg"
 
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/slackurl"
@@ -69,7 +74,113 @@ var reduceLinks reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	if !ok {
 		return nil, false
 	}
+	if !m.Confirmed && !opensWithoutConfirm(m.URL) {
+		// file:, ssh: and the like hand the target to the OS launcher, and
+		// the sender chose the label, so show the real target first.
+		url := m.URL
+		budget, lines, width := a.linkBudget()
+		// Hard-wrap the line to the body width so the prompt's word wrap
+		// moves nothing and the budget is exact. As a safety net against any
+		// difference between displayTarget's measure and the renderer's, shrink
+		// the budget until the wrapped body fits the room it has.
+		var body string
+		for tries := 0; ; tries++ {
+			if budget < minDisplayBudget || tries > 8 {
+				// No room to show where the link goes, so do not offer to open it.
+				return toastWithClear(a, "Terminal too small to confirm this link", 3*time.Second), true
+			}
+			body = xansi.Hardwrap("Open "+displayTarget(url, budget)+"?", width, true)
+			if strings.Count(body, "\n")+1 <= lines {
+				break
+			}
+			budget -= max(1, budget/10)
+		}
+		a.openConfirmPrompt("Open link?", body, func() tea.Msg {
+			return OpenLinkMsg{URL: url, Confirmed: true}
+		})
+		return nil, true
+	}
 	return a.routeLink(m.URL), true
+}
+
+// maxDisplayBudget caps how many cells of a link target the prompt shows.
+const maxDisplayBudget = 200
+
+// minDisplayBudget is the least room worth confirming in: below it the
+// prompt could not show a scheme, a host and a file name together. Only a body
+// of no lines (lines <= 0) falls below it; one line gives a budget of about 29
+// cells.
+const minDisplayBudget = 16
+
+// linkBudget is how many cells of the target fit in the confirm prompt at
+// the current terminal size: its real body lines and width, less room for
+// "Open " and "?" and one cell a line that a wide rune can leave unused when
+// the line is hard-wrapped (see reduceLinks). It also returns the lines and
+// width it was computed from.
+func (a *App) linkBudget() (budget, lines, width int) {
+	a.prepareConfirmPrompt()
+	lines, width = a.confirmPrompt.BodyRoom("Open link?")
+	return min(maxDisplayBudget, lines*width-6-lines), lines, width
+}
+
+// displayTarget is what the confirm prompt shows for a link target. Every
+// non-printable rune (controls, DEL, bidi and other format runes) becomes a
+// visible escape, so the sender cannot hide or reorder part of the target.
+// A target wider than displayBudget keeps its head (scheme and host) and its
+// tail (file name) with the middle elided. The opener still gets the exact URL.
+func displayTarget(rawURL string, budget int) string {
+	// Escape first so format runes (ZWJ, bidi) are ASCII before clusters are
+	// formed, then measure whole grapheme clusters the way the prompt draws
+	// them (a base rune plus VS16 is two cells, not one).
+	var esc strings.Builder
+	for _, r := range rawURL {
+		if !unicode.IsPrint(r) && r != ' ' {
+			q := strconv.QuoteToASCII(string(r))
+			esc.WriteString(q[1 : len(q)-1])
+			continue
+		}
+		esc.WriteRune(r)
+	}
+	var parts []string
+	var widths []int
+	total := 0
+	for rest := esc.String(); rest != ""; {
+		cluster, tail, _, _ := uniseg.FirstGraphemeClusterInString(rest, -1)
+		w := xansi.StringWidth(cluster)
+		parts = append(parts, cluster)
+		widths = append(widths, w)
+		total += w
+		rest = tail
+	}
+	if total <= budget {
+		return strings.Join(parts, "")
+	}
+	headBudget, tailBudget := budget*11/20, budget*8/20
+	head, hw := 0, 0
+	for head < len(parts) && hw+widths[head] <= headBudget {
+		hw += widths[head]
+		head++
+	}
+	tail, tw := len(parts), 0
+	for tail > head && tw+widths[tail-1] <= tailBudget {
+		tw += widths[tail-1]
+		tail--
+	}
+	return strings.Join(parts[:head], "") + "…" + strings.Join(parts[tail:], "")
+}
+
+// opensWithoutConfirm reports whether rawURL has a scheme that opens a
+// browser or mail/phone app: http, https, mailto or tel.
+func opensWithoutConfirm(rawURL string) bool {
+	scheme, _, ok := strings.Cut(rawURL, ":")
+	if !ok {
+		return false
+	}
+	switch strings.ToLower(scheme) {
+	case "http", "https", "mailto", "tel":
+		return true
+	}
+	return false
 }
 
 // routeLink decides between in-app navigation and the browser.
@@ -202,8 +313,32 @@ func (a *App) completePendingLinkNav(channelID string, authoritative bool) tea.C
 	a.focusedPanel = PanelMessages
 	if p.ThreadTS != "" {
 		p.TeamID = ids.TeamID(a.activeTeamID)
+		knownReply := p.MessageTS != "" && string(p.MessageTS) != string(p.ThreadTS)
+		parent := a.permalinkThreadParent(string(p.ChannelID), string(p.ThreadTS), knownReply)
+		if !authoritative && !messages.CanOpenThread(parent) {
+			// A cache-only pass can see a stale reply count (0 for a
+			// huddle). Stay armed without the "Can't reply to a system
+			// message" toast; the authoritative pass decides.
+			return nil
+		}
+		cmd := a.openThreadPanel(parent, string(p.ChannelID), string(p.ThreadTS))
+		if !a.threadVisible || a.threadPanel.ThreadTS() != string(p.ThreadTS) {
+			// Refused (a notice with no replies, an upload in progress):
+			// leave the pending nav armed so the authoritative pass, which
+			// carries the real reply count, can try again.
+			if !authoritative {
+				return cmd
+			}
+			// Authoritative refusal: keep the refusal's own command (the
+			// toast) and still land the channel on the linked row.
+			a.pendingLinkNav = nil
+			if p.MessageTS != "" {
+				a.messagepane.SelectByTS(string(p.MessageTS))
+			}
+			return cmd
+		}
 		p.threadOpened = true
-		return p.wrapThreadLoad(a.openThreadForPermalink(string(p.ChannelID), string(p.ThreadTS)), true, 1)
+		return p.wrapThreadLoad(cmd, true, 1)
 	}
 	if a.messagepane.SelectByTS(string(p.MessageTS)) {
 		// Only forget the target once this is the freshest data we
@@ -238,7 +373,21 @@ func (a *App) completePendingLinkNav(channelID string, authoritative bool) tea.C
 // the parent row is taken from the loaded buffer or the thread cache
 // when available, else a minimal stub that the ThreadRepliesLoadedMsg
 // handler backfills from cache once the fetch lands.
-func (a *App) openThreadForPermalink(channelID, threadTS string) tea.Cmd {
+//
+// knownReply is true when the caller's target is itself a reply of the
+// thread (its ts differs from threadTS), which proves the thread has
+// replies whatever a cached parent's reply_count says: that count is often
+// 0 for a huddle (an edit or a live reply never updates it), and the
+// open-thread gate would otherwise refuse the thread.
+func (a *App) openThreadForPermalink(channelID, threadTS string, knownReply bool) tea.Cmd {
+	return a.openThreadPanel(a.permalinkThreadParent(channelID, threadTS, knownReply), channelID, threadTS)
+}
+
+// permalinkThreadParent builds the parent row openThreadForPermalink opens
+// (see there for the sources and the knownReply rule). Split out so a
+// best-effort pass can ask messages.CanOpenThread before committing to the
+// open, which toasts on refusal.
+func (a *App) permalinkThreadParent(channelID, threadTS string, knownReply bool) messages.MessageItem {
 	parent := messages.MessageItem{TS: threadTS, ThreadTS: threadTS}
 	if channelID == a.activeChannelID {
 		for _, m := range a.messagepane.Messages() {
@@ -249,10 +398,17 @@ func (a *App) openThreadForPermalink(channelID, threadTS string) tea.Cmd {
 		}
 	}
 	if parent.Text == "" {
-		if cached := a.threads.CacheRead(ids.ChannelID(channelID), ids.ThreadTS(threadTS)); len(cached) > 0 {
+		if cached := a.threads.CacheRead(ids.ChannelID(channelID), ids.ThreadTS(threadTS)); len(cached) > 0 && cached[0].TS == threadTS {
+			// Live replies raise only the pane's count, never the cache's,
+			// so keep the larger of the two.
+			count := parent.ReplyCount
 			parent = cached[0]
+			parent.ReplyCount = max(parent.ReplyCount, count)
 		}
 	}
+	if knownReply && parent.ReplyCount < 1 {
+		parent.ReplyCount = 1
+	}
 
-	return a.openThreadPanel(parent, channelID, threadTS)
+	return parent
 }

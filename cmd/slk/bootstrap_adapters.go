@@ -77,6 +77,17 @@ func (a bootAdapter) UserBoot(ctx context.Context) (*boot.Result, error) {
 	return boot.UserBoot(ctx, a.c.PostForm)
 }
 
+// bootSectionsClient reuses the starred list already fetched by bootstrap.Run.
+// Reconnects use the ordinary client to fetch a fresh userBoot snapshot instead.
+type bootSectionsClient struct {
+	*slackclient.Client
+	starred []string
+}
+
+func (a bootSectionsClient) GetStarredConversations(context.Context) ([]string, error) {
+	return a.starred, nil
+}
+
 // viewAdapter satisfies bootstrap.Viewer. Same pass-through as
 // bootAdapter; channelID may be "", which boot.ConversationsView turns
 // into an absent `channel` param rather than an empty one.
@@ -97,7 +108,7 @@ func (a viewAdapter) ConversationsView(ctx context.Context, channelID string) (*
 type countsAdapter struct{ c *slackclient.Client }
 
 func (a countsAdapter) Counts(_ context.Context) (bootstrap.Counts, error) {
-	unreads, threads, err := a.c.GetUnreadCounts()
+	unreads, threads, activity, err := a.c.GetUnreadCounts()
 	if err != nil {
 		// Zero value, not a partially-filled one: bootstrap treats a
 		// counts failure as non-fatal and logs it, and handing back
@@ -112,6 +123,7 @@ func (a countsAdapter) Counts(_ context.Context) (bootstrap.Counts, error) {
 			UnreadCount:  threads.UnreadCount,
 			MentionCount: threads.MentionCount,
 		},
+		ActivityTotal: activity,
 	}
 	for _, u := range unreads {
 		out.Unreads = append(out.Unreads, bootstrap.Unread{
@@ -617,8 +629,9 @@ func hydrateFirstSight(db *cache.DB, workspaceID string, res *bootstrap.Result) 
 			DisplayName: bootUserDisplayName(u),
 			AvatarURL:   u.Profile.ImageOriginal,
 			// "away" is what every other first-sight write in slk
-			// records: a view result carries no presence, and the
-			// presence subscription corrects it on the first render.
+			// records: a view result carries no presence. UpsertUser
+			// keeps an existing row's presence, and the connect-time
+			// presence_query corrects a new one.
 			Presence:         "away",
 			IsBot:            u.IsBot || u.IsAppUser,
 			IsExternal:       u.TeamID != "" && u.TeamID != workspaceID,

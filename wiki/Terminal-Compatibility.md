@@ -37,8 +37,8 @@ explicitly if the terminal answers DA1 without advertising sixel.
 
 ## Inside tmux
 
-Kitty graphics work inside tmux on kitty-capable terminals (kitty, Ghostty,
-WezTerm) as long as tmux passthrough is enabled:
+Kitty graphics work inside tmux on kitty and Ghostty as long as tmux
+passthrough is enabled:
 
 ```tmux
 set -g allow-passthrough on
@@ -48,6 +48,10 @@ Reload tmux for the setting to take effect (`tmux kill-server`, then
 reattach). Verify with `tmux show -gv allow-passthrough` — expected: `on`
 (or `all`). If passthrough is off, slk detects this at startup and falls
 back to half-block automatically.
+
+WezTerm under tmux uses half-block, even with `term = "wezterm"` set.
+slk's kitty renderer relies on kitty's unicode-placeholder extension,
+which WezTerm does not implement.
 
 Sixel stays off inside tmux by policy — pixel-protocol pass-through inside
 tmux is unreliable — regardless of the outer terminal.

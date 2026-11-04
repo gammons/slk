@@ -56,3 +56,16 @@ func TestParse_Rejects(t *testing.T) {
 		}
 	}
 }
+
+func TestHuddleURL(t *testing.T) {
+	cases := []struct{ teamID, channelID, want string }{
+		{"T04T4TH8W", "C054JFCBN69", "https://app.slack.com/huddle/T04T4TH8W/C054JFCBN69"},
+		{"E01ABCDEF", "D0123456789", "https://app.slack.com/huddle/E01ABCDEF/D0123456789"},
+		{"T1", "G123", "https://app.slack.com/huddle/T1/G123"},
+	}
+	for _, c := range cases {
+		if got := HuddleURL(c.teamID, c.channelID); got != c.want {
+			t.Errorf("HuddleURL(%q, %q) = %q, want %q", c.teamID, c.channelID, got, c.want)
+		}
+	}
+}

@@ -66,7 +66,7 @@ type peerStatusRefresher struct {
 	resolveNow func(ids []string) []edge.User
 	// getUserProfile is the per-user users.info fallback for ids
 	// resolveNow didn't return.
-	getUserProfile func(userID string) (*slack.User, error)
+	getUserProfile func(userID string) (*slackclient.UserProfile, error)
 	// db persists the fallback path's status/huddle fields.
 	db *cache.DB
 	// dndTeamInfo is dnd.teamInfo.
@@ -92,7 +92,7 @@ func newPeerStatusRefresher(
 	known func(userID string) bool,
 	resolveNow func(ids []string) []edge.User,
 	dndTeamInfo func(ctx context.Context, ids []string) (map[string]slack.DNDStatus, error),
-	getUserProfile func(userID string) (*slack.User, error),
+	getUserProfile func(userID string) (*slackclient.UserProfile, error),
 	db *cache.DB,
 	send func(tea.Msg),
 ) *peerStatusRefresher {
@@ -192,26 +192,26 @@ func (p *peerStatusRefresher) fallbackResolve(userID string, now time.Time) {
 	}
 	logHuddleState("users.info fallback", u.Profile.HuddleState, int64(u.Profile.HuddleStateExpirationTS), now)
 	p.noteHuddle(userID, u.Profile.HuddleState)
-	applyProfileStatus(p.teamID, userID, u.Profile, p.db, p.send)
+	applyProfileStatus(p.teamID, userID, u, p.db, p.send)
 }
 
 // applyProfileStatus persists a users.info profile's custom status and
 // huddle state via db.UpdateUserStatus, and emits the resulting
 // UserStatusChangeMsg.
-func applyProfileStatus(teamID, userID string, profile slack.UserProfile, db *cache.DB, send func(tea.Msg)) {
+func applyProfileStatus(teamID, userID string, u *slackclient.UserProfile, db *cache.DB, send func(tea.Msg)) {
 	if db != nil {
-		_ = db.UpdateUserStatus(userID, profile.StatusEmoji, profile.StatusText,
-			int64(profile.StatusExpiration), profile.HuddleState, int64(profile.HuddleStateExpirationTS))
+		_ = db.UpdateUserStatus(userID, u.Profile.StatusEmoji, u.Profile.StatusText,
+			int64(u.Profile.StatusExpiration), u.Profile.HuddleState, int64(u.Profile.HuddleStateExpirationTS))
 	}
 	if send != nil {
 		send(ui.UserStatusChangeMsg{
 			TeamID:        teamID,
 			UserID:        userID,
-			Emoji:         profile.StatusEmoji,
-			Text:          profile.StatusText,
-			Expires:       statusExpiry(int64(profile.StatusExpiration)),
-			Huddle:        profile.HuddleState,
-			HuddleExpires: statusExpiry(int64(profile.HuddleStateExpirationTS)),
+			Emoji:         u.Profile.StatusEmoji,
+			Text:          u.Profile.StatusText,
+			Expires:       statusExpiry(int64(u.Profile.StatusExpiration)),
+			Huddle:        u.Profile.HuddleState,
+			HuddleExpires: statusExpiry(int64(u.Profile.HuddleStateExpirationTS)),
 		})
 	}
 }
@@ -354,6 +354,28 @@ func withPeerStatuses(channels []sidebar.ChannelItem, statuses map[string]peerst
 	for i := range outChannels {
 		if uid := outChannels[i].DMUserID; uid != "" {
 			outChannels[i].Status = statuses[uid]
+		}
+	}
+	return outChannels
+}
+
+// withCachedPresence returns a copy of channels with each DM's Presence
+// read from the cache, which presence_change events keep current. The
+// items' own Presence is from connect time, and a workspace switch drops
+// the sidebar's live presence, so without this every switch showed peers
+// as they were when slk connected. Does not modify its input.
+func withCachedPresence(db *cache.DB, channels []sidebar.ChannelItem) []sidebar.ChannelItem {
+	outChannels := slices.Clone(channels)
+	if db == nil {
+		return outChannels
+	}
+	for i := range outChannels {
+		uid := outChannels[i].DMUserID
+		if uid == "" {
+			continue
+		}
+		if u, err := db.GetUser(uid); err == nil && u.Presence != "" {
+			outChannels[i].Presence = u.Presence
 		}
 	}
 	return outChannels

@@ -3,6 +3,10 @@ package ui
 import (
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/messages"
 )
 
@@ -122,5 +126,113 @@ func TestMessagesAroundLoaded_TargetMissingToasts(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected ToastMsg when TargetTS is missing from the loaded window")
+	}
+}
+
+// Selecting an app/bot DM fires a MessagingCapability probe.
+func TestChannelSelected_ProbesMessagingCapabilityForAppDMs(t *testing.T) {
+	app := NewApp()
+	var probed ids.ChannelID
+	setChannelFuncsForTest(app, core.ChannelServiceFuncs{
+		MessagingCapability: func(channelID ids.ChannelID) core.Cmd {
+			probed = channelID
+			return nil
+		},
+	})
+
+	app.Update(ChannelSelectedMsg{ID: "D1", Name: "some-bot", Type: "app"})
+
+	if probed != "D1" {
+		t.Errorf("MessagingCapability probed channel = %q, want %q", probed, "D1")
+	}
+}
+
+func TestChannelSelected_DoesNotProbeNonAppChannels(t *testing.T) {
+	app := NewApp()
+	var probed []ids.ChannelID
+	setChannelFuncsForTest(app, core.ChannelServiceFuncs{
+		MessagingCapability: func(channelID ids.ChannelID) core.Cmd {
+			probed = append(probed, channelID)
+			return nil
+		},
+	})
+
+	for _, typ := range []string{"group_dm", "private", "channel"} {
+		app.Update(ChannelSelectedMsg{ID: "C1", Name: "general", Type: typ})
+	}
+	if len(probed) != 0 {
+		t.Errorf("MessagingCapability probed a non-app channel type: %v", probed)
+	}
+}
+
+// A stale composeDisabled must not leak into the next channel.
+func TestChannelSelected_ResetsComposeDisabled(t *testing.T) {
+	app := NewApp()
+	app.composeDisabled = true
+
+	app.Update(ChannelSelectedMsg{ID: "C1", Name: "general", Type: "channel"})
+
+	if app.composeDisabled {
+		t.Error("composeDisabled not reset to false on channel switch")
+	}
+}
+
+func TestChannelMessagingCapability_DisablesComposeForActiveChannel(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "D1"
+
+	app.Update(ChannelMessagingCapabilityMsg{ChannelID: "D1", CanSend: false})
+
+	if !app.composeDisabled {
+		t.Error("composeDisabled not set for a CanSend:false result on the active channel")
+	}
+}
+
+// The probe lands after the user already entered insert mode: the
+// composer must be left, and Enter must not send.
+func TestChannelMessagingCapability_LandsInInsertMode(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "D1"
+	app.SetMode(ModeInsert)
+	app.focusedPanel = PanelMessages
+	app.compose.Focus()
+
+	app.Update(ChannelMessagingCapabilityMsg{ChannelID: "D1", CanSend: false})
+
+	if app.mode != ModeNormal {
+		t.Fatalf("mode = %v, want ModeNormal after an unsendable probe lands in insert mode", app.mode)
+	}
+
+	// Backstop: even forced back into insert mode, Enter must not send.
+	app.SetMode(ModeInsert)
+	app.compose.SetValue("hello")
+	_, cmd := app.Update(keyCode(tea.KeyEnter))
+	for _, m := range drainCmd(cmd) {
+		if _, ok := m.(SendMessageMsg); ok {
+			t.Fatal("Enter sent a message to an app DM that cannot receive messages")
+		}
+	}
+}
+
+func TestChannelMessagingCapability_IgnoresStaleChannel(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "D2"
+
+	app.Update(ChannelMessagingCapabilityMsg{ChannelID: "D1", CanSend: false})
+
+	if app.composeDisabled {
+		t.Error("composeDisabled set from a result for a channel that is no longer active")
+	}
+}
+
+func TestChannelMessagingCapability_CanSendTrueLeavesComposeEnabled(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "D1"
+	app.composeDisabled = true // disabled by an earlier probe
+
+	app.Update(ChannelMessagingCapabilityMsg{ChannelID: "D1", CanSend: true})
+
+	if app.composeDisabled {
+		t.Error("composeDisabled left true after a CanSend:true result for the active channel")
 	}
 }

@@ -79,6 +79,11 @@ type WorkspaceContext struct {
 	// us the workspace has zero unread threads, we trust that and
 	// suppress the heuristic-derived flags entirely.
 	ThreadsHasUnreads bool
+	// BadgeEvents stamps the arrival time of the workspace's last
+	// badge_counts_updated, so the reconnect catch-up can drop a
+	// client.counts snapshot that an event superseded mid-request. See
+	// badgeEventClock.
+	BadgeEvents *badgeEventClock
 	// ThreadSubsGate throttles the workspace's
 	// subscriptions.thread.getView fetches to one per
 	// threadSubsSyncInterval. Fired on workspace-ready, on Threads
@@ -137,8 +142,8 @@ type WorkspaceContext struct {
 	// updated on every ChannelSelectedMsg via the visit recorder.
 	// Used to populate core.ChannelFinderItem.LastVisited for sort.
 	LastVisitedByChannel map[string]int64
-	// UserResolver dispatches background users.info lookups for
-	// unknown message authors. Set in connectWorkspace once the
+	// UserResolver dispatches background users.info lookups for unknown
+	// message authors and mentioned users. Set in connectWorkspace once the
 	// in-memory UserNames store and the *tea.Program are both available.
 	// Hot-path message processors call resolveUserCached first and
 	// fall back to UserResolver.Request(userID) to enqueue an async

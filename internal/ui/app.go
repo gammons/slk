@@ -127,6 +127,7 @@ type App struct {
 	statusbar        statusbar.Model
 	channelFinder    channelfinder.Model
 	pendingForward   *forwardSource
+	forwardStandIns  []string // TSes of forward stand-ins awaiting their real echo; capped
 	searchResults    searchresults.Model
 	newMessagePicker newmessagepicker.Model
 	workspaceFinder  workspacefinder.Model
@@ -159,6 +160,12 @@ type App struct {
 	// while in ModeCommand. Owned by mode_command.go; always "" in
 	// every other mode.
 	cmdline string
+
+	// cmdComplete is the Tab-completion cycle in progress at that same
+	// prompt. Owned by mode_command.go; zero outside a Tab cycle — every
+	// plain edit to cmdline and every path that clears it resets this,
+	// so it can never outlive the command line it was built from.
+	cmdComplete cmdCompletion
 
 	// wins is the vim-style window tree subdividing the messages
 	// region; focusedWin is the active window within it. Phase 2:
@@ -214,6 +221,22 @@ type App struct {
 	// Current context
 	activeChannelID string
 	activeTeamID    string // workspace whose data is currently loaded into the side panels
+
+	// composeDisabled is true while the active channel cannot be sent
+	// to: a MessagingCapability probe said so, or a send there was
+	// refused as read-only. Recomputed on every channel switch.
+	composeDisabled bool
+
+	// readOnlyChannels holds channels a send was refused in with
+	// restricted_action_read_only*. Session-lifetime, touched only on
+	// the Update goroutine (never captured by a tea.Cmd).
+	readOnlyChannels map[string]bool
+
+	// unsendableChannels holds the latest MessagingCapability probe
+	// verdict per channel (true = the app DM cannot be messaged), so a
+	// thread reply is refused there too. Touched only on the Update
+	// goroutine.
+	unsendableChannels map[string]bool
 
 	// windowTitle is the cached terminal-window-title string, recomputed
 	// by notifyReadStateChanged on every read-state mutation and read by
@@ -276,6 +299,15 @@ type App struct {
 	// to Slack under way, keyed by activityReadKey. Update goroutine
 	// only.
 	activityReads map[string]*activityRead
+
+	// activityBadgeTotals holds each workspace's total unread activity
+	// (from client.counts at boot and badge_counts_updated events
+	// after), keyed by team id. The sidebar's Activity badge shows the
+	// active workspace's value; it is never derived from the loaded
+	// feed page, whose unread count undercounts and moves when the
+	// unread filter re-fetches. A workspace with no entry (a
+	// grid-restricted member, whose counts call fails) shows zero.
+	activityBadgeTotals map[string]int
 
 	threadsDirtyDebounce time.Duration
 
@@ -391,12 +423,18 @@ type App struct {
 	// values pushed through the App-level Set* forwarders, kept so
 	// newWindowModel can configure late-created window models
 	// identically to the root model. See internal/ui/winmodels.go.
-	avatarFn     messages.AvatarFunc
-	imageCtx     imgrender.ImageContext
-	emojiCtx     messages.EmojiContext
-	emojiCustoms map[string]string
-	channelNames map[string]string
-	userGroups   map[string]string
+	avatarFn      messages.AvatarFunc
+	replyAvatarFn messages.AvatarFunc
+	replyAvatars  bool
+	imageCtx      imgrender.ImageContext
+	emojiCtx      messages.EmojiContext
+	emojiCustoms  map[string]string
+	channelNames  map[string]string
+	userGroups    map[string]string
+
+	// buildInfo is the build identity :version shows: version and short
+	// commit (version.Short). Set once at startup by main.
+	buildInfo string
 
 	// externalUsers tracks which user IDs are Slack Connect / shared-channel
 	// guests. Populated by main.go via SetExternalUsers as users are
@@ -466,17 +504,24 @@ type App struct {
 	// "press b" toast, so it appears once per message.
 	actionQueue   []actionPromptRef
 	promptToasted map[string]bool
+	// previewRemovals holds the link-preview removals in flight, by
+	// channel and ts (see remove_preview.go). Written on the Update
+	// goroutine only. Each removal's seq comes from previewRemovalSeq,
+	// which never resets.
+	previewRemovals   map[string]previewRemoval
+	previewRemovalSeq uint64
 	// userProfile is the K-opened read-only "who is this person?"
 	// modal (see internal/ui/userprofile). profileSvc fetches the
 	// full profile; defaulted to noopProfileService in NewApp so the
 	// cmd built by openUserProfile never calls a nil interface.
 	userProfile *userprofile.Model
 	profileSvc  core.ProfileService
-	// now is the clock used by the user-profile dialog's "local time"
-	// and status-expiry math. Defaults to time.Now; goldens pin it to
-	// goldenClock so the rendered frame is deterministic. Only this
-	// feature reads it -- other App code still calls time.Now
-	// directly.
+	// now is the clock read by the user-profile dialog (its "local
+	// time" and status-expiry math) and by the link-preview removal
+	// timeout (remove_preview.go). Defaults to time.Now; goldens pin it
+	// to goldenClock so the rendered frame is deterministic, and tests
+	// move it to cross the removal timeout. Other App code still calls
+	// time.Now directly.
 	now func() time.Time
 	// reactions is the App's ReactionService collaborator (add/remove
 	// reactions on Slack + load/record frecent emoji history). See
@@ -548,6 +593,11 @@ type App struct {
 	// option does not affect the :marks command, which always shows it.
 	showJumpOverlay bool
 
+	// stayInInsertAfterSend is the [compose] stay_in_insert_after_send
+	// option: whether Enter leaves the composer focused in insert mode
+	// after a send. Set by main.go from config; off by default.
+	stayInInsertAfterSend bool
+
 	// search is the active in-channel search (nil = none).
 	// searchInput is the prompt buffer while in ModeSearch.
 	// searchGen is a monotonic generation counter: bumped on every
@@ -567,6 +617,11 @@ type App struct {
 	// first push for each team. Cleared only when slk exits — the
 	// stacks are session-only by design.
 	navHistory *navHistoryStore
+
+	// sidebarMouseResize enables dragging the sidebar's right border;
+	// sidebarResizeFrom is the width a drag started at, 0 when none is on.
+	sidebarMouseResize bool
+	sidebarResizeFrom  int
 
 	// settings persists the theme choice and sidebar width. Nil until wired.
 	settings       core.SettingsService
@@ -1043,6 +1098,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if cmd, handled := dispatchReducers(a, msg,
 		a.presence,
 		a.preview,
+		reduceSidebarResize,
 		a.drag,
 		a.typing,
 		a.bootstrap,
@@ -1051,6 +1107,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		reduceActivity,
 		reduceFocus,
 		reduceSend,
+		reduceRemovePreview,
 		reduceActionPrompt,
 		reduceSlashCommand,
 		reduceChannels,
@@ -1291,7 +1348,7 @@ func (a *App) openReactionPicker(p contentPane, channelID string) tea.Cmd {
 		}
 	}
 	p.ExitReactionNav()
-	a.reactionPicker.SetFrecentEmoji(a.reactions.LoadFrecent(10))
+	a.refreshEmojiFrecency()
 	a.reactionPicker.Open(channelID, msg.TS, existing)
 	a.SetMode(ModeReactionPicker)
 	return nil
@@ -1334,6 +1391,17 @@ const noProfileToast = "No profile for this message"
 // full profile under a 10s timeout.
 func (a *App) openUserProfile() tea.Cmd {
 	_, _, _, userID, _, ok := a.selectedMessageContext()
+	if ok {
+		// A huddle announcement is stored under Slackbot; the person to
+		// show is whoever started the huddle.
+		if p, _, focused := a.focusedContentPane(); focused {
+			if msg, sel := p.SelectedMessage(); sel {
+				if starter := messages.HuddleStarter(msg); starter != "" && msg.Subtype == "huddle_thread" {
+					userID = starter
+				}
+			}
+		}
+	}
 	if !ok || userID == "" || strings.HasPrefix(userID, "B") {
 		return toastWithClear(a, noProfileToast, 2*time.Second)
 	}
@@ -1348,6 +1416,12 @@ func (a *App) openUserProfile() tea.Cmd {
 	a.SetMode(ModeUserProfile)
 
 	svc := a.profileSvc
+	// Show the last fetch at once, then refresh behind it: a cached
+	// profile can be minutes old, and the huddle a person is in is
+	// worth more fresh than the dialog is worth skipping one request.
+	if cached, ok := svc.Cached(teamID, userID); ok {
+		a.userProfile.SetProfile(teamID, userID, cached)
+	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -1398,6 +1472,9 @@ func (a *App) toggleReactionOnMessageItem(channelIDStr string, msg messages.Mess
 			break
 		}
 	}
+	if !remove {
+		a.recordEmojiUse(emojiName)
+	}
 	a.updateReactionOnMessage(channelIDStr, msg.TS, emojiName, a.currentUserID, remove)
 	channelID := ids.ChannelID(channelIDStr)
 	ts := ids.MessageTS(msg.TS)
@@ -1426,7 +1503,7 @@ func (a *App) copyMessageOfSelected() tea.Cmd {
 		return nil
 	}
 
-	text := messages.MessageTextSource(msg)
+	text := messages.MessageCopyText(msg)
 	if text == "" {
 		return func() tea.Msg { return ToastMsg{Text: "Message has no text"} }
 	}
@@ -1775,6 +1852,10 @@ func (a *App) handleGoToTop() tea.Cmd {
 			// gg is a one-shot jump — fire the fetch immediately.
 			return a.openSelectedThreadCmd(false)
 		}
+		if a.view == ViewActivity {
+			a.activityView.GoToTop()
+			return nil
+		}
 		a.messagepane.GoToTop()
 		return a.maybeFetchOlderHistory(a.messagepane.AtTop())
 	case PanelThread:
@@ -2012,15 +2093,24 @@ func (a *App) openThreadForSelectedMessage() tea.Cmd {
 	if cmd, blocked := ephemeralGuard(msg); blocked {
 		return cmd
 	}
+	if !messages.CanOpenThread(msg) {
+		return a.cantReplyToNotice()
+	}
 	// Use the message's own TS as the thread parent. If it's a thread
 	// reply (a thread_broadcast row in the channel feed), the selected
 	// row is NOT the parent: resolve the real parent from the pane
 	// buffer / thread cache via the permalink path, else the reply
 	// would render twice — once as the "parent" and once as a reply.
 	if msg.ThreadTS != "" && msg.ThreadTS != msg.TS {
-		return a.openThreadForPermalink(a.activeChannelID, msg.ThreadTS)
+		return a.openThreadForPermalink(a.activeChannelID, msg.ThreadTS, true)
 	}
 	return a.openThreadPanel(msg, a.activeChannelID, msg.TS)
+}
+
+// cantReplyToNotice is the toast for a refused thread-open on a
+// reply-less system notice.
+func (a *App) cantReplyToNotice() tea.Cmd {
+	return toastWithClear(a, "Can't reply to a system message", 2*time.Second)
 }
 
 // threadComposeChannelName resolves the display name for the thread's
@@ -2058,6 +2148,12 @@ func (a *App) applyThreadBreadcrumb(channelID, channelType string) {
 // by openThreadForSelectedMessage (parent taken from the pane buffer)
 // and openThreadForPermalink (parent reconstructed from cache/stub).
 func (a *App) openThreadPanel(parent messages.MessageItem, channelID, threadTS string) tea.Cmd {
+	// The one sink every opener (Enter, click, permalink, history, jump,
+	// search, notification) reaches: a reply-less system notice never
+	// gets a panel, and an open panel is left on its own thread.
+	if !messages.CanOpenThread(parent) {
+		return a.cantReplyToNotice()
+	}
 	if a.compose.Uploading() || a.threadCompose.Uploading() {
 		return toastWithClear(a, "Upload in progress", 2*time.Second)
 	}
@@ -2141,8 +2237,7 @@ func (a *App) SetMode(mode Mode) {
 	// empty outside ModeCommand" invariant true; idempotent with
 	// exitCommandMode, which clears before calling here.
 	if a.mode == ModeCommand && mode != ModeCommand {
-		a.cmdline = ""
-		a.statusbar.SetCommandLine("")
+		a.clearCmdline()
 	}
 	// Same for the marks list: a global intercept (ctrl+c) leaves
 	// ModeMarks without going through handleMarksMode, and the list
@@ -2154,15 +2249,30 @@ func (a *App) SetMode(mode Mode) {
 	a.statusbar.SetMode(mode)
 }
 
-// exitInsertAfterSend mirrors the Esc-from-insert handler so that
-// submitting a message returns the user to ModeNormal — matching the
-// vim convention where finishing an action drops you back to command
-// mode. Used by every send branch in handleInsertMode that actually
-// dispatches a message (plain-text and attachment, channel and
-// thread). Edits intentionally bypass this and instead exit insert
-// mode via cancelEdit on MessageEditedMsg, so a transient edit
+// exitInsertAfterSend drops the user back to ModeNormal after a send,
+// unless the [compose] stay_in_insert_after_send option is on, in which
+// case it does nothing: the composer keeps focus (the send path already
+// reset its text) so several messages can be typed in a row. Used by
+// the plain-text send branches of handleInsertMode (channel and thread)
+// and by trySlashCommand; the two upload branches call exitInsert
+// directly instead, since an in-flight upload always leaves insert mode.
+// Edits intentionally bypass this and instead exit
+// insert mode via cancelEdit on MessageEditedMsg, so a transient edit
 // failure doesn't strand the user one keystroke away from resuming.
 func (a *App) exitInsertAfterSend() {
+	if a.stayInInsertAfterSend {
+		return
+	}
+	a.exitInsert()
+}
+
+// exitInsert mirrors the Esc-from-insert handler: ModeNormal, both
+// composers blurred. This is the unconditioned exit that
+// exitInsertAfterSend applies when the option is off, and that the
+// upload branches of handleInsertMode apply whatever the option says,
+// since the composer is busy for the duration of an upload and must not
+// keep taking keystrokes as if it were still accepting text.
+func (a *App) exitInsert() {
 	a.SetMode(ModeNormal)
 	a.compose.Blur()
 	a.threadCompose.Blur()
@@ -2696,6 +2806,13 @@ func (a *App) SetComposeEditor(editor []string) {
 	a.composeEditor = editor
 }
 
+// SetStayInInsertAfterSend sets the [compose] stay_in_insert_after_send
+// option: whether Enter leaves the composer focused in insert mode
+// after a send. Off by default.
+func (a *App) SetStayInInsertAfterSend(b bool) {
+	a.stayInInsertAfterSend = b
+}
+
 // SetEditorService wires Ctrl+E's temp file and editor process. nil
 // restores the no-op.
 func (a *App) SetEditorService(s core.EditorService) {
@@ -2760,15 +2877,35 @@ func (a *App) SetChannelFinderItems(items []core.ChannelFinderItem) {
 
 // SetAvatarService wires the rendered avatars shown beside messages.
 func (a *App) SetAvatarService(s core.AvatarService) {
-	var fn messages.AvatarFunc
+	var fn, replyFn messages.AvatarFunc
 	if s != nil {
-		fn = s.Avatar
+		fn, replyFn = s.Avatar, s.ReplyAvatar
 	}
-	a.avatarFn = fn
+	a.avatarFn, a.replyAvatarFn = fn, replyFn
 	for _, m := range a.allWinModels() {
 		m.SetAvatarFunc(fn)
+		m.SetReplyAvatarFunc(a.replyAvatarFunc())
 	}
 	a.threadPanel.SetAvatarFunc(fn)
+}
+
+// SetReplyAvatars switches the reply row under thread parents to Slack's
+// look: the repliers' avatars, then "N replies" ([appearance]
+// reply_avatars). Needs the avatar service.
+func (a *App) SetReplyAvatars(enabled bool) {
+	a.replyAvatars = enabled
+	for _, m := range a.allWinModels() {
+		m.SetReplyAvatarFunc(a.replyAvatarFunc())
+	}
+}
+
+// replyAvatarFunc is the reply-row avatar source, nil when reply_avatars
+// is off or there is no avatar service.
+func (a *App) replyAvatarFunc() messages.AvatarFunc {
+	if !a.replyAvatars {
+		return nil
+	}
+	return a.replyAvatarFn
 }
 
 // SetColoredUsernames enables or disables deterministic per-user coloring
@@ -2778,6 +2915,12 @@ func (a *App) SetColoredUsernames(enabled bool) {
 		m.SetColoredUsernames(enabled)
 	}
 	a.threadPanel.SetColoredUsernames(enabled)
+}
+
+// SetThreadAvatars draws avatars in the thread panel too, when the avatar
+// service is set ([appearance] thread_avatars).
+func (a *App) SetThreadAvatars(enabled bool) {
+	a.threadPanel.SetShowAvatars(enabled)
 }
 
 // SetImageContext configures the inline-image rendering pipeline on the
@@ -3219,6 +3362,7 @@ func (a *App) SetReactionService(r core.ReactionService) {
 		r = noopReactionService
 	}
 	a.reactions = r
+	a.refreshEmojiFrecency()
 }
 
 // SetInteractionService wires the service the action dialog presses
@@ -3372,6 +3516,11 @@ func (a *App) SetHelpFooter(s string) {
 	a.help.SetFooter(s)
 }
 
+// SetBuildInfo sets the build identity :version shows.
+func (a *App) SetBuildInfo(s string) {
+	a.buildInfo = s
+}
+
 // SetMouseWheelLines configures the number of lines the viewport scrolls per
 // mouse-wheel notch. Values < 1 are coerced to 1 to guarantee scroll progress.
 func (a *App) SetMouseWheelLines(n int) {
@@ -3381,6 +3530,12 @@ func (a *App) SetMouseWheelLines(n int) {
 	a.mouseWheelLines = n
 }
 
+// SetMentionPills shows Slack's "Unread mentions" pills on the sidebar
+// edges ([sidebar] mention_pills).
+func (a *App) SetMentionPills(enabled bool) {
+	a.sidebar.SetMentionPills(enabled)
+}
+
 // SetSidebarStaleThreshold configures auto-hiding of inactive
 // channels in the sidebar. d is the maximum age (since LastReadTS)
 // before a channel is hidden; pass 0 to disable.
@@ -3388,16 +3543,45 @@ func (a *App) SetSidebarStaleThreshold(d time.Duration) {
 	a.sidebar.SetStaleThreshold(d)
 }
 
+// SetRightAlignBadges puts the sidebar's mention badges at the right end
+// of their rows ([sidebar] right_align_badges).
+func (a *App) SetRightAlignBadges(enabled bool) {
+	a.sidebar.SetRightAlignBadges(enabled)
+}
+
+// SetChannelIndent indents the sidebar rows under each section header
+// ([sidebar] channel_indent).
+func (a *App) SetChannelIndent(n int) {
+	a.sidebar.SetChannelIndent(n)
+}
+
+// SidebarStyle is the [sidebar] look and behaviour switches.
+type SidebarStyle struct {
+	Slack        bool   // slack_style
+	PrivateGlyph string // private_glyph
+	ActiveOnly   bool   // active_only
+	MouseResize  bool   // mouse_resize
+}
+
+// SetSidebarStyle applies the [sidebar] switches.
+func (a *App) SetSidebarStyle(s SidebarStyle) {
+	a.sidebar.SetSlackStyle(s.Slack)
+	a.sidebar.SetPrivateGlyph(s.PrivateGlyph)
+	a.sidebar.SetActiveOnly(s.ActiveOnly)
+	a.sidebarMouseResize = s.MouseResize
+}
+
 // renderTypingLine returns the styled typing indicator for the current
-// channel, or an empty string if no one is typing. Stays on App because
-// it pulls in messagepane name resolution and styles. State and
-// formatting live in internal/ui/typing.go.
+// channel (people typing, apps working), or an empty string if there is
+// neither. Stays on App because it pulls in messagepane name resolution
+// and styles. State and formatting live in internal/ui/typing.go.
 func (a *App) renderTypingLine() string {
 	if !a.typing.Enabled() {
 		return ""
 	}
 	userIDs := a.typing.UsersExcluding(a.activeChannelID, a.currentUserID)
-	if len(userIDs) == 0 {
+	botIDs := a.typing.WorkingBots(a.activeChannelID)
+	if len(userIDs) == 0 && len(botIDs) == 0 {
 		return ""
 	}
 	// Resolve user IDs to display names
@@ -3409,10 +3593,21 @@ func (a *App) renderTypingLine() string {
 		}
 		names = append(names, name)
 	}
-	return styles.TypingIndicator.Render(typingIndicatorText(names))
+	botNames := make([]string, 0, len(botIDs))
+	for _, id := range botIDs {
+		botNames = append(botNames, a.userNameFor(id))
+	}
+	return styles.TypingIndicator.Render(typingRowText(names, botNames))
 }
 
 func (a *App) View() tea.View {
+	// Compose regions are recorded per frame by the pane renderers;
+	// clear last frame's before any pane decides not to draw one (the
+	// threads view replaces the channel pane's compose). First
+	// statement so the early-fallback path cannot leave a stale
+	// region behind either.
+	a.layout.ResetComposeRegions()
+
 	if v, handled := a.renderEarlyFallback(); handled {
 		return a.finalizeSixelView(v, nil)
 	}
@@ -3722,6 +3917,7 @@ func (a *App) submitWithAttachments(c *compose.Model) tea.Cmd {
 	}
 
 	c.SetUploading(true)
+	a.recordEmojiInText(caption)
 	cmds := []tea.Cmd{
 		teaCmd(a.files.Upload(channelID, threadTS, caption, attachments)),
 		toastWithClear(a, fmt.Sprintf("Uploading 0/%d…", len(attachments)), 30*time.Second),
@@ -3822,28 +4018,32 @@ func (a *App) tryAttachFromClipboard(target *compose.Model, pathCandidate string
 // in the focused pane. Returns a no-op + status toast if not owned;
 // returns nil if no message is selected.
 func (a *App) beginEditOfSelected() tea.Cmd {
-	channelID, ts, text, userID, panel, ok := a.selectedMessageContext()
+	p, channelID, focused := a.focusedContentPane()
+	if !focused {
+		return nil
+	}
+	msg, ok := p.SelectedMessage()
 	if !ok {
 		return nil
 	}
-	// Build a synthetic MessageItem just for the ownership check;
-	// avoids fetching the full struct twice.
-	if !a.isOwnMessage(messages.MessageItem{UserID: userID}) {
+	if !a.isOwnMessage(msg) {
 		return func() tea.Msg { return statusbar.EditNotOwnMsg{} }
 	}
+	ts, panel := msg.TS, a.focusedPanel
 	if channelID == "" || ts == "" {
 		return nil
 	}
 
+	text := messages.EditSource(msg)
 	var stashed string
 	switch panel {
 	case PanelMessages:
 		stashed = a.compose.Value()
-		a.compose.SetValue(text)
+		a.compose.SetValue(a.compose.MentionsForEdit(text))
 		a.compose.SetPlaceholderOverride("Editing message — Enter to save, Esc to cancel")
 	case PanelThread:
 		stashed = a.threadCompose.Value()
-		a.threadCompose.SetValue(text)
+		a.threadCompose.SetValue(a.threadCompose.MentionsForEdit(text))
 		a.threadCompose.SetPlaceholderOverride("Editing message — Enter to save, Esc to cancel")
 	}
 
@@ -4171,9 +4371,11 @@ func (a *App) markUnreadOfSelected() tea.Cmd {
 }
 
 // openImagePreviewOfSelected dispatches OpenImagePreviewMsg for the
-// first image attachment on the currently-selected message in the
-// focused pane (messages or thread). Returns nil if no message is
-// selected or the selected message has no image attachment.
+// first previewable image attachment on the currently-selected message in
+// the focused pane (messages or thread). An image Slack made no thumbnail
+// for (SVG) has nothing to preview, so it is downloaded and opened in the
+// system viewer instead, through DownloadFileMsg. Returns nil if no message
+// is selected or the selected message has no image attachment.
 func (a *App) openImagePreviewOfSelected() tea.Cmd {
 	channelID, ts, _, _, _, ok := a.selectedMessageContext()
 	if !ok {
@@ -4183,21 +4385,44 @@ func (a *App) openImagePreviewOfSelected() tea.Cmd {
 	if !found {
 		return nil
 	}
+	fallback := -1
 	for i, att := range msgItem.Attachments {
-		if att.Kind == "image" && att.FileID != "" {
-			channel := channelID
-			messageTS := ts
-			idx := i
-			return func() tea.Msg {
-				return messages.OpenImagePreviewMsg{
-					Channel: channel,
-					TS:      messageTS,
-					AttIdx:  idx,
-				}
+		if att.Kind != "image" || att.FileID == "" {
+			continue
+		}
+		if !hasPreviewThumb(att) {
+			if fallback < 0 && att.DownloadURL != "" {
+				fallback = i
+			}
+			continue
+		}
+		channel := channelID
+		messageTS := ts
+		idx := i
+		return func() tea.Msg {
+			return messages.OpenImagePreviewMsg{
+				Channel: channel,
+				TS:      messageTS,
+				AttIdx:  idx,
 			}
 		}
 	}
+	if fallback >= 0 {
+		att := msgItem.Attachments[fallback]
+		return func() tea.Msg { return DownloadFileMsg{Attachment: att} }
+	}
 	return nil
+}
+
+// hasPreviewThumb reports whether att has a thumbnail previewFetchCmd can
+// load.
+func hasPreviewThumb(att messages.Attachment) bool {
+	for _, t := range att.Thumbs {
+		if t.URL != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // submitEdit emits an EditMessageMsg if the edit text is non-empty.

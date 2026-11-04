@@ -244,14 +244,11 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	// already sees a Ready store.
 	if cfg.EffectiveUseSlackSections(client.TeamID()) {
 		store := service.NewSectionStore()
-		if err := store.Bootstrap(ctx, client); err != nil {
+		if err := store.Bootstrap(ctx, bootSectionsClient{client, res.Starred}); err != nil {
 			log.Printf("section store bootstrap for %s failed: %v (falling back to config sections)", token.TeamName, err)
 		} else {
-			// Bootstrap repopulates the stars section from stars.list
-			// itself (channelSections.list returns built-in section
-			// types with empty channel_ids), so the Starred header is
-			// live at first render and survives reconnect-triggered
-			// re-bootstraps without caller help.
+			// The section list omits built-in stars membership. Reuse the
+			// authoritative IDs from the boot response without another RPC.
 			wctx.SectionStore = store
 			// One-time info log when the user has both Slack sections
 			// active AND a non-empty [sections.*] config — the latter
@@ -398,6 +395,16 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		debuglog.Cache("workspace_unread_bootstrap: team=%s client.counts failed during bootstrap; leaving read state as cached", token.TeamName)
 	}
 	wctx.ThreadsHasUnreads = res.Counts.Threads.HasUnreads
+	wctx.BadgeEvents = &badgeEventClock{}
+	// The Activity badge rides the same call: the total unread
+	// activity, delivered to the UI before this workspace's WebSocket
+	// goes live so the first frame already shows the real number. The
+	// badge_counts_updated events that keep it current arrive on the
+	// socket; member tokens whose counts the grid restricts never send
+	// this and keep a zero badge.
+	if ucOK {
+		p.Send(ui.ActivityBadgeUpdatedMsg{TeamID: client.TeamID(), Total: res.Counts.ActivityTotal})
+	}
 	// Boot applies an authoritative FULL snapshot: reset every channel
 	// in the workspace to read, then set the ones client.counts reports
 	// unread. This runs BEFORE the WebSocket goes live (ConnMgr.Run is
@@ -470,21 +477,20 @@ func (h *rtmEventHandler) OnConnect() {
 	firstConnect := !h.connected
 	h.connected = true
 	h.program.Send(ui.ConnectionStateMsg{State: int(statusbar.StateConnected)})
-	if h.wsCtx != nil {
-		go bootstrapPresenceAndDND(context.Background(), h.wsCtx, h.program)
-	}
-	// Refresh Slack-native section state on reconnect. MaybeRebootstrap
-	// is debounced to once per 30s (Task 6) so a rapid flap doesn't
-	// thunder; a real long-disconnect-then-reconnect refreshes section
-	// state we may have missed during the gap.
+	// Refresh Slack-native section state and reconcile starred rows on connect.
+	// The whole block is debounced to once per 30s so a rapid flap doesn't
+	// repeat missing-row lookups even when MaybeRebootstrap skips its fetch.
+	// A real long-disconnect-then-reconnect refreshes missed section state.
 	//
-	// Run synchronously on the event owner. This briefly blocks
-	// inbound event delivery during the bootstrap HTTP call, but that
-	// cost is bounded — at most one call per 30s per workspace — and
-	// avoids racing wsCtx.Channels mutations against the same loop's
-	// next event (which could be an OnConversationOpened that also
-	// touches wsCtx.Channels).
-	if h.wsCtx != nil && h.wsCtx.SectionStore != nil && h.wsCtx.Client != nil {
+	// Run synchronously on the event owner, blocking inbound event delivery
+	// while sections and starred membership refresh. Membership now needs a
+	// full client.userBoot response rather than the smaller stars.list result;
+	// the cost is bounded by one refresh pass per 30s per workspace and the
+	// deadline below. Keeping it here avoids racing wsCtx.Channels mutations
+	// against the same loop's next event (such as OnConversationOpened).
+	if h.wsCtx != nil && h.wsCtx.SectionStore != nil && h.wsCtx.Client != nil &&
+		(h.sectionRefreshAt.IsZero() || time.Since(h.sectionRefreshAt) >= 30*time.Second) {
+		h.sectionRefreshAt = time.Now()
 		// Bound section refresh and missing-row hydration together so a slow
 		// workspace cannot indefinitely stall serialized WebSocket delivery.
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -495,6 +501,10 @@ func (h *rtmEventHandler) OnConnect() {
 			h.refreshSectionsForActive()
 		}
 		cancel()
+	}
+	if h.wsCtx != nil {
+		peerIDs := workspacePresenceIDs(h.wsCtx)
+		go bootstrapPresenceAndDND(context.Background(), h.wsCtx, h.program, peerIDs)
 	}
 
 	// Bounded reconnect catch-up: client.counts, the channel on
@@ -584,6 +594,7 @@ func (h *rtmEventHandler) syncOnReconnect(trigger string) bool {
 		program:        h.program,
 		activeChannel:  h.activeChannelID,
 		refreshChannel: h.refreshChannel,
+		badgeEvents:    h.wsCtx.BadgeEvents,
 	}
 	go func() {
 		if err := sync.run(context.Background()); err != nil {

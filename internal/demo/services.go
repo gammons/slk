@@ -125,6 +125,10 @@ func (d *Demo) services() services {
 			Delete: func(channelID ids.ChannelID, ts ids.MessageTS) core.Msg {
 				return ui.MessageDeletedMsg{ChannelID: string(channelID), TS: string(ts), Err: errUnavailable}
 			},
+			RemoveAttachment: func(_ string, channelID ids.ChannelID, ts ids.MessageTS, _ int) core.Msg {
+				// A refusal, so the demo does not hold the removal pending.
+				return ui.AttachmentRemovedMsg{ChannelID: string(channelID), TS: string(ts), Err: &core.AttachmentRefusedError{Reason: errUnavailable.Error()}}
+			},
 			MarkUnread: func(channelID ids.ChannelID, threadTS ids.ThreadTS, boundaryTS ids.MessageTS, unread int) core.Msg {
 				if threadTS == "" {
 					w.setLastRead(string(channelID), string(boundaryTS))
@@ -180,7 +184,7 @@ func (d *Demo) services() services {
 				UserStatuses: s.statuses, UserID: s.selfID,
 			}
 		}),
-		avatars:  core.NewAvatarService(func(userID string) string { return d.avatars[userID] }),
+		avatars:  core.NewAvatarService(func(userID string) string { return d.avatars[userID] }, nil),
 		settings: core.NewSettingsService(nil, nil),
 		presence: core.NewPresenceService(nil, nil),
 		profiles: core.NewProfileService(core.ProfileServiceFuncs{

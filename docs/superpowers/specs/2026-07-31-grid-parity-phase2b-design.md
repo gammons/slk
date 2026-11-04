@@ -71,8 +71,16 @@ Settled before design, recorded so they are not relitigated:
 
 - **One plan, one PR.** 2b lands on `feat/grid-parity` alongside Phases 1 and 2a.
 - **Users go lazy.** Delete the `users.list` sweep outright and match the official client: seed from cache, revalidate via `edge.UsersInfo`, fill from `conversations.view`'s `users`, resolve misses on demand, and back the mention picker with local-cache-first plus debounced `edge.UsersSearch`.
-- **`stars.list` and `usergroups.list` stay**, as documented residual divergences. Neither appears in any capture, but `userBoot`'s `starred` and `subteams.self` were `[]` in 2/2 captures so their element shapes are unknown, and modelling an unobserved shape is the failure mode this project exists to correct. No fresh capture is being taken.
+- **July design-time decision: retain `stars.list` and `usergroups.list`** as documented residual divergences. Neither appeared in the captures available then, and `userBoot`'s `starred` and `subteams.self` were `[]` in 2/2 captures, so their populated element shapes were unknown. Modelling an unobserved shape was already a known failure mode; no fresh capture was being taken for that phase.
 - **`conversations.view`'s `channel` param is probed at runtime**, not assumed, and falls back to `HistoryWithVersions`.
+
+**Starred follow-up (2026-10-31).** A non-empty Enterprise Grid response
+verified that `userBoot.starred` contains conversation ID strings. This
+supersedes the `stars.list` retention above: startup reuses its boot snapshot,
+and reconnect refreshes membership from a fresh `client.userBoot` response.
+Unknown starred containers or entries are ignored rather than rejecting the
+workspace boot; no object schema is inferred. The populated `subteams.self`
+shape is still unverified, so `usergroups.list` remains.
 
 ## Architecture
 
@@ -118,7 +126,8 @@ cycle. Mute parsing therefore stays at the caller via
 | 4 | `conversations.view` | initial `conversations.history` + per-author `users.info` fan-out + `emoji.list` |
 | 5 | `edge.ChannelsInfo` + `edge.UsersInfo` | the `users.list` sweep |
 
-Plus the two retained divergences (`stars.list`, `usergroups.list`).
+At this phase, the two retained divergences were `stars.list` and
+`usergroups.list`; the starred follow-up above supersedes the former.
 
 **Step 4 probes.** `conversations.view` is sent with a `channel` param, which no
 captured request carried. The response's `channel.id` is compared to the

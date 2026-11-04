@@ -12,9 +12,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gammons/slk/internal/debuglog"
+	"github.com/gammons/slk/internal/slack/boot"
 	"github.com/gammons/slk/internal/slack/mrkdwn"
 	"github.com/gammons/slk/internal/slackhttp"
 	"github.com/gorilla/websocket"
@@ -29,14 +31,14 @@ type SlackAPI interface {
 	GetConversationReplies(params *slack.GetConversationRepliesParameters) ([]slack.Message, bool, string, error)
 	SearchMessagesContext(ctx context.Context, query string, params slack.SearchParameters) (*slack.SearchMessages, error)
 	// Deliberately absent: GetConversations (conversations.list) and
-	// GetUsersContext (users.list). See
-	// TestSlackAPI_DeclaresNoWorkspaceEnumeration — the whole
-	// directory is never fetched, only individual users on demand via
-	// GetUserInfo.
+	// GetUsersContext (users.list), which enumerate the whole workspace.
+	// See TestSlackAPI_DeclaresNoWorkspaceEnumeration. Users arrive from
+	// conversations.view's users array (the opened channel's authors),
+	// edge.UsersInfo revalidation of the cache, and on-demand users.info
+	// — fetched by GetUserProfile below, hand-rolled so it can decode
+	// the huddle fields slack-go's UserProfile does not model.
 	GetUserGroupsContext(ctx context.Context, options ...slack.GetUserGroupsOption) ([]slack.UserGroup, error)
 	GetUsersInConversationContext(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error)
-	GetUserInfo(user string) (*slack.User, error)
-	GetUserInfoContext(ctx context.Context, user string) (*slack.User, error)
 	GetBotInfoContext(ctx context.Context, parameters slack.GetBotInfoParameters) (*slack.Bot, error)
 	GetEmojiContext(ctx context.Context) (map[string]string, error)
 	PostMessage(channelID string, options ...slack.MsgOption) (string, string, error)
@@ -50,6 +52,7 @@ type SlackAPI interface {
 	JoinConversation(channelID string) (*slack.Channel, string, []string, error)
 	SetUserPresenceContext(ctx context.Context, presence string) error
 	GetUserPresenceContext(ctx context.Context, user string) (*slack.UserPresence, error)
+	SetUserCustomStatusContext(ctx context.Context, statusText, statusEmoji string, statusExpiration int64) error
 	SetSnoozeContext(ctx context.Context, minutes int) (*slack.DNDStatus, error)
 	EndSnoozeContext(ctx context.Context) (*slack.DNDStatus, error)
 	EndDNDContext(ctx context.Context) error
@@ -129,6 +132,19 @@ type Client struct {
 	// (e.g. &Client{api: mock}); BrowserTransport treats a nil Env as
 	// "send no envelope params", so those clients still work.
 	envelope *slackhttp.Envelope
+
+	// wsLive is true while the WebSocket event owner runs. A send only
+	// looks its links up for chips (link_chips.go) when it is, because
+	// the answer comes over the socket.
+	wsLive atomic.Bool
+
+	// unfurls routes unfurl_preview_updated frames to those lookups.
+	unfurls unfurlWaiters
+
+	// rooms holds the `room` of huddle_thread messages seen in history and
+	// replies responses (see roomTap). Nil for clients built directly in
+	// tests; HuddleRoom treats nil as "none captured".
+	rooms *roomStore
 }
 
 // NewClient creates a new Slack client using browser cookie auth.
@@ -137,6 +153,12 @@ type Client struct {
 func NewClient(xoxcToken, dCookie string) *Client {
 	env := slackhttp.NewEnvelope()
 	httpClient := newCookieHTTPClient(dCookie, env)
+	rooms := newRoomStore()
+	// The tap sits under BrowserTransport (as its Inner) so
+	// httpClient.Transport stays a *slackhttp.BrowserTransport.
+	if bt, ok := httpClient.Transport.(*slackhttp.BrowserTransport); ok {
+		bt.Inner = rooms.wrap(bt.Inner)
+	}
 
 	api := slack.New(
 		xoxcToken,
@@ -151,6 +173,7 @@ func NewClient(xoxcToken, dCookie string) *Client {
 		wsBaseURL:  defaultWSBaseURL,
 		httpClient: httpClient,
 		envelope:   env,
+		rooms:      rooms,
 	}
 }
 
@@ -476,9 +499,13 @@ func (c *Client) StartWebSocket(handler EventHandler) error {
 			messages <- message
 		}
 	}()
+	c.wsLive.Store(true)
 	go func() {
 		defer close(c.wsDone)
 		defer handler.OnDisconnect()
+		// Deferred last so it runs first: before OnDisconnect, which is
+		// what reconnects, so it cannot clear the next socket's flag.
+		defer c.wsLive.Store(false)
 		pendingHandler, _ := handler.(PendingEventHandler)
 		var pending <-chan struct{}
 		if pendingHandler != nil {
@@ -489,6 +516,9 @@ func (c *Client) StartWebSocket(handler EventHandler) error {
 			case message, ok := <-messages:
 				if !ok {
 					return
+				}
+				if c.unfurls.deliver(message) {
+					continue
 				}
 				dispatchWebSocketEvent(message, handler)
 			case <-pending:
@@ -535,6 +565,23 @@ func (c *Client) SubscribePresence(userIDs []string) error {
 	}
 	msg := map[string]interface{}{
 		"type": "presence_sub",
+		"ids":  userIDs,
+	}
+	return c.wsConn.WriteJSON(msg)
+}
+
+// QueryPresence asks Slack for the current presence of the given user
+// IDs; the answers arrive as ordinary presence_change events. The socket
+// is opened with no_query_on_subscribe=1, so presence_sub alone reports
+// only later transitions and a peer who stays online is never reported.
+func (c *Client) QueryPresence(userIDs []string) error {
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	if c.wsConn == nil {
+		return fmt.Errorf("websocket not connected")
+	}
+	msg := map[string]interface{}{
+		"type": "presence_query",
 		"ids":  userIDs,
 	}
 	return c.wsConn.WriteJSON(msg)
@@ -653,21 +700,100 @@ func (c *Client) JoinChannel(ctx context.Context, channelID string) error {
 	return nil
 }
 
+// UserProfile is a users.info result: slack-go's User with the huddle
+// fields Slack sends in the profile that slack-go's UserProfile struct
+// does not model (v0.23.0 stops at huddle_state and
+// huddle_state_expiration_ts). Embedding keeps every field access on
+// the embedded User unchanged.
+type UserProfile struct {
+	*slack.User
+	// HuddleStateChannelID is profile.huddle_state_channel_id, the
+	// conversation the user's huddle is in. Empty when they are not in
+	// a huddle — the key is absent from profiles with
+	// huddle_state "default_unset" — or when Slack did not send it,
+	// which is why empty means "no huddle link to build" and never
+	// "the user left their huddle": huddle_state itself is that signal.
+	// A capture with an active huddle should pin this field the way
+	// HuddleState was pinned (see the edge users/info fixture).
+	HuddleStateChannelID string
+}
+
 // GetUserProfile fetches a single user's profile by ID.
-func (c *Client) GetUserProfile(userID string) (*slack.User, error) {
-	user, err := c.api.GetUserInfo(userID)
+func (c *Client) GetUserProfile(userID string) (*UserProfile, error) {
+	u, err := c.GetUserProfileContext(context.Background(), userID)
 	if err != nil {
 		return nil, fmt.Errorf("getting user info: %w", err)
 	}
-	return user, nil
+	return u, nil
 }
 
 // GetUserProfileContext fetches a single user's full profile by ID
 // (users.info), for the user profile dialog. Unlike GetUserProfile,
 // errors are returned unwrapped so callers can type-assert
 // *slack.RateLimitedError.
-func (c *Client) GetUserProfileContext(ctx context.Context, userID string) (*slack.User, error) {
-	return c.api.GetUserInfoContext(ctx, userID)
+//
+// This is a hand-rolled POST rather than slack-go's GetUserInfo because
+// slack-go's UserProfile struct drops profile.huddle_state_channel_id,
+// which the huddle deep link is built from. The wire shape is the one
+// slack-go uses for every Web API call: a form POST with the token in
+// the body, decorated with the same browser headers the rest of this
+// client sends.
+func (c *Client) GetUserProfileContext(ctx context.Context, userID string) (*UserProfile, error) {
+	raw, err := c.postForm(ctx, "users.info", url.Values{"user": {userID}})
+	if err != nil {
+		var rl *rateLimitError
+		if errors.As(err, &rl) {
+			return nil, &slack.RateLimitedError{RetryAfter: rl.retryAfter}
+		}
+		return nil, err
+	}
+	return decodeUserProfile(raw)
+}
+
+// decodeUserProfile parses a users.info response body. The user record
+// is decoded twice on purpose: once wholesale into slack-go's User, and
+// once into the small huddle struct that picks the profile field
+// slack-go's struct does not hold. Both reads see the same bytes, so
+// they cannot disagree.
+func decodeUserProfile(raw []byte) (*UserProfile, error) {
+	var resp struct {
+		Ok    bool        `json:"ok"`
+		Error string      `json:"error"`
+		User  *slack.User `json:"user"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("decoding users.info response: %w", err)
+	}
+	if !resp.Ok {
+		code := resp.Error
+		if code == "" {
+			code = "unknown_error"
+		}
+		return nil, fmt.Errorf("users.info: %s", code)
+	}
+	if resp.User == nil {
+		return nil, fmt.Errorf("users.info: response carried no user")
+	}
+	var huddle struct {
+		User struct {
+			Profile huddleProfileFields `json:"profile"`
+		} `json:"user"`
+	}
+	// Absent or malformed huddle fields are not an error: the caller
+	// renders the profile without a huddle link.
+	if err := json.Unmarshal(raw, &huddle); err != nil {
+		return &UserProfile{User: resp.User}, nil
+	}
+	return &UserProfile{
+		User:                 resp.User,
+		HuddleStateChannelID: huddle.User.Profile.HuddleStateChannelID,
+	}, nil
+}
+
+// huddleProfileFields is the slice of a users.info profile that
+// slack-go's UserProfile struct does not model.
+type huddleProfileFields struct {
+	HuddleStateChannelID string `json:"huddle_state_channel_id"`
 }
 
 // GetBotInfo fetches a bot's name and icon by bot ID (the `bot_id` on a
@@ -907,16 +1033,36 @@ func (c *Client) ListCustomEmoji(ctx context.Context) (map[string]string, error)
 // SendMessage posts a new message to the specified channel. Returns
 // the timestamp and the converted mrkdwn text actually sent (callers
 // use this for optimistic display so it matches what other Slack
-// clients will render).
+// clients will render). Links an app publishes a Work Object for go out
+// as chips; see link_chips.go.
 func (c *Client) SendMessage(ctx context.Context, channelID, text string) (string, string, error) {
+	ts, mr, err := c.postMessage(ctx, channelID, "", text, false)
+	if err != nil {
+		return "", "", fmt.Errorf("sending message: %w", err)
+	}
+	return ts, mr, nil
+}
+
+// postMessage is SendMessage and SendReply: chat.postMessage with the
+// text converted to mrkdwn and a rich_text block, chips first.
+func (c *Client) postMessage(ctx context.Context, channelID, threadTS, text string, broadcast bool) (string, string, error) {
 	mr, block := mrkdwn.Convert(text)
+	if ts, sentMr, sent, err := c.sendWithChips(ctx, channelID, threadTS, text, broadcast, block); sent {
+		return ts, sentMr, err
+	}
 	opts := []slack.MsgOption{slack.MsgOptionText(mr, false)}
+	if threadTS != "" {
+		opts = append(opts, slack.MsgOptionTS(threadTS))
+	}
 	if block != nil {
 		opts = append(opts, slack.MsgOptionBlocks(block))
 	}
+	if broadcast {
+		opts = append(opts, slack.MsgOptionBroadcast())
+	}
 	_, ts, err := c.api.PostMessage(channelID, opts...)
 	if err != nil {
-		return "", "", fmt.Errorf("sending message: %w", err)
+		return "", "", err
 	}
 	return ts, mr, nil
 }
@@ -1026,25 +1172,26 @@ type ThreadsAggregate struct {
 // Also returns the threads aggregate (HasUnreads / counts) for the
 // workspace; the threads block in client.counts is the only place
 // Slack tells us whether per-thread unreads exist without us having to
-// hit subscriptions.thread.* directly.
-func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
+// hit subscriptions.thread.* directly. The int is the workspace's
+// total unread activity (see sumActivityV2).
+func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, int, error) {
 	reqURL := c.apiBaseURL + "client.counts"
 	form := url.Values{"token": {c.token}}
 	req, err := http.NewRequest("POST", reqURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return nil, ThreadsAggregate{}, fmt.Errorf("creating request: %w", err)
+		return nil, ThreadsAggregate{}, 0, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := c.apiHTTPClient().Do(req)
 	if err != nil {
-		return nil, ThreadsAggregate{}, fmt.Errorf("fetching unread counts: %w", err)
+		return nil, ThreadsAggregate{}, 0, fmt.Errorf("fetching unread counts: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, ThreadsAggregate{}, fmt.Errorf("reading response: %w", err)
+		return nil, ThreadsAggregate{}, 0, fmt.Errorf("reading response: %w", err)
 	}
 
 	var result struct {
@@ -1078,14 +1225,19 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
 			UnreadCount  int  `json:"unread_count"`
 			MentionCount int  `json:"mention_count"`
 		} `json:"threads"`
+		// ActivityV2 is the unread-activity rollup the desktop client
+		// shows on its Activity badge: one count per category
+		// (mentions, thread replies, reactions, DMs, invites, ...),
+		// workspace-wide. Absent for tokens the grid restricts.
+		ActivityV2 map[string]int `json:"activity_v2"`
 	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, ThreadsAggregate{}, fmt.Errorf("parsing response: %w", err)
+		return nil, ThreadsAggregate{}, 0, fmt.Errorf("parsing response: %w", err)
 	}
 
 	if !result.OK {
-		return nil, ThreadsAggregate{}, fmt.Errorf("client.counts API returned ok=false")
+		return nil, ThreadsAggregate{}, 0, fmt.Errorf("client.counts API returned ok=false")
 	}
 
 	var unreads []UnreadInfo
@@ -1124,7 +1276,23 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
 		UnreadCount:  result.Threads.UnreadCount,
 		MentionCount: result.Threads.MentionCount,
 	}
-	return unreads, threads, nil
+	return unreads, threads, sumActivityV2(result.ActivityV2), nil
+}
+
+// sumActivityV2 totals an activity_v2 map - the per-category unread
+// activity counts client.counts and the badge_counts_updated event
+// both carry - into the single number the desktop client shows on its
+// Activity badge. Every category counts: the map is Slack's own
+// "these are your unread activity items" split, and the badge is its
+// sum. An absent or empty map (restricted tokens never see one) sums
+// to 0, which callers must treat as "unknown" when they care about
+// the distinction.
+func sumActivityV2(m map[string]int) int {
+	total := 0
+	for _, n := range m {
+		total += n
+	}
+	return total
 }
 
 // SendReply posts a threaded reply to the specified message. When
@@ -1134,18 +1302,7 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
 // thread_broadcast subtype. Returns the timestamp and the converted
 // mrkdwn text actually sent.
 func (c *Client) SendReply(ctx context.Context, channelID, threadTS, text string, broadcast bool) (string, string, error) {
-	mr, block := mrkdwn.Convert(text)
-	opts := []slack.MsgOption{
-		slack.MsgOptionText(mr, false),
-		slack.MsgOptionTS(threadTS),
-	}
-	if block != nil {
-		opts = append(opts, slack.MsgOptionBlocks(block))
-	}
-	if broadcast {
-		opts = append(opts, slack.MsgOptionBroadcast())
-	}
-	_, ts, err := c.api.PostMessage(channelID, opts...)
+	ts, mr, err := c.postMessage(ctx, channelID, threadTS, text, broadcast)
 	if err != nil {
 		return "", "", fmt.Errorf("sending reply: %w", err)
 	}
@@ -1232,6 +1389,15 @@ func (c *Client) GetUserPresence(ctx context.Context, userID string) (*slack.Use
 		return nil, fmt.Errorf("getting presence: %w", err)
 	}
 	return p, nil
+}
+
+// SetCustomStatus sets the authenticated user's profile status text,
+// emoji, and expiration (Unix seconds; 0 means it never auto-clears).
+func (c *Client) SetCustomStatus(ctx context.Context, statusText, statusEmoji string, statusExpiration int64) error {
+	if err := c.api.SetUserCustomStatusContext(ctx, statusText, statusEmoji, statusExpiration); err != nil {
+		return fmt.Errorf("setting custom status: %w", err)
+	}
+	return nil
 }
 
 // SetSnooze enables Do-Not-Disturb for `minutes` minutes.
@@ -1666,66 +1832,22 @@ func (c *Client) GetChannelSectionsRaw(ctx context.Context) ([]byte, error) {
 	return c.callChannelSectionsList(ctx, "")
 }
 
-// starsListResponse is the JSON shape returned by stars.list. Channel and
-// IM entries identify sidebar conversations; message/file/comment stars do not.
-type starsListResponse struct {
-	OK     bool            `json:"ok"`
-	Error  string          `json:"error"`
-	Items  []starsListItem `json:"items"`
-	Paging starsListPaging `json:"paging"`
-}
-
-type starsListItem struct {
-	Type    string `json:"type"`
-	Channel string `json:"channel"` // populated when Type == "channel" or "im"
-}
-
-type starsListPaging struct {
-	Count int `json:"count"`
-	Total int `json:"total"`
-}
-
-// GetStarredConversations calls stars.list and returns unique conversation
-// IDs in first-seen order. Both channel and IM stars carry conversation IDs
-// (not user IDs); other star types are ignored even when they carry a channel.
-// Slack's channelSections.list leaves built-in membership empty, so this is
-// the authoritative source for the Starred sidebar section.
-//
-// Errors propagate to the caller, which may treat stars as best-effort. The
-// existing limit=1000 request is not paginated; large-list support is separate.
+// GetStarredConversations returns the current starred conversation IDs from
+// client.userBoot. On Enterprise Grid, stars.list can be restricted or return
+// an empty list even when the boot snapshot contains stars.
+// Initial bootstrap reuses its existing userBoot result; this fetch is for
+// section rebootstrap after reconnect.
 func (c *Client) GetStarredConversations(ctx context.Context) ([]string, error) {
-	form := url.Values{"token": {c.token}, "limit": {"1000"}}
-	body := strings.NewReader(form.Encode())
-	endpoint := c.apiBaseURL + "stars.list"
-	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, body)
+	result, err := boot.UserBoot(ctx, c.PostForm)
 	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := c.apiHTTPClient().Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("calling stars.list: %w", err)
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading stars.list response: %w", err)
-	}
-	var slr starsListResponse
-	if err := json.Unmarshal(raw, &slr); err != nil {
-		return nil, fmt.Errorf("parsing stars.list response: %w", err)
-	}
-	if !slr.OK {
-		return nil, fmt.Errorf("stars.list API error: %s", slr.Error)
+		return nil, err
 	}
 	var ids []string
-	seen := make(map[string]bool)
-	for _, it := range slr.Items {
-		if (it.Type == "channel" || it.Type == "im") && it.Channel != "" && !seen[it.Channel] {
-			seen[it.Channel] = true
-			ids = append(ids, it.Channel)
+	seen := make(map[string]bool, len(result.Starred))
+	for _, id := range result.Starred {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
 		}
 	}
 	return ids, nil

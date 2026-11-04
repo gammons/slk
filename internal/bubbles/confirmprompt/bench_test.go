@@ -1,9 +1,10 @@
 // Update runs per keystroke, View once per frame while the prompt is open.
 // Both report allocations so a later change to either path is visible.
 //
-// View holds no render cache, so every frame pays a full render: lipgloss
-// measuring and padding a bordered box, unchanged from the pre-move
-// implementation at 053d2a2.
+// View caches the rendered box, so a frame that changes nothing pays only a
+// key comparison. The benchmarks below that change an input every iteration
+// (BenchmarkViewCold) measure the full render: lipgloss measuring and padding
+// a bordered box.
 //
 // Update is slower than the string switch it replaced -- key.Matches formats
 // the key name, where the caller used to pass a normalised string. One call
@@ -39,6 +40,18 @@ func BenchmarkView(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
+		_ = m.View()
+	}
+}
+
+// BenchmarkViewCold changes the highlight every frame, so each View renders.
+func BenchmarkViewCold(b *testing.B) {
+	m := benchModel(benchBody)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := range b.N {
+		m.Highlight(i % 2)
 		_ = m.View()
 	}
 }

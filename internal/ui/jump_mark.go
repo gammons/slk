@@ -104,3 +104,28 @@ func (a *App) takeBackJump() tea.Cmd {
 	a.backJump = &departing
 	return cmd
 }
+
+// jumpToThreadParent (p) opens the open thread's channel with its parent
+// message selected, closing the thread, the way a mark or permalink jump
+// does. Like those, it records the departure for the back-jump: the
+// thread, whichever pane has focus. With no thread open it is a silent
+// no-op.
+func (a *App) jumpToThreadParent() tea.Cmd {
+	if !a.threadVisible || a.threadPanel.ThreadTS() == "" {
+		return nil
+	}
+	if a.compose.Uploading() || a.threadCompose.Uploading() {
+		return toastWithClear(a, "Upload in progress", 2*time.Second)
+	}
+	departing := a.threadPanelLocation()
+	cmd, ok := a.applyLocation(Location{
+		TeamID:    ids.TeamID(a.activeTeamID),
+		ChannelID: ids.ChannelID(a.threadPanel.ChannelID()),
+		MessageTS: ids.MessageTS(a.threadPanel.ThreadTS()),
+	}, false)
+	if !ok {
+		return toastWithClear(a, "Channel for this thread is unavailable", 3*time.Second)
+	}
+	a.backJump = &departing
+	return cmd
+}

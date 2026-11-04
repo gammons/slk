@@ -2,32 +2,25 @@
 //
 // Normal-mode key handler (Phase 5k).
 //
-// The bulk of slk's keybinding surface lives here:
-//   - mode entry: i (insert), Ctrl-T (channel finder), : (command
-//     prompt), Ctrl-Y (theme switcher), ? (help),
-//     S (presence menu), R (reaction picker)
-//   - navigation: j/k (selection), Ctrl-D/U (half-page), C-f/b
-//     (page), G (bottom), Tab/h/l (focus next/prev), Ctrl-h/l
-//     (nav back/forward through visited channels; Ctrl-k is an
-//     alias for forward)
-//   - layout toggles: s (sidebar), t (thread)
-//   - theme cycle: Alt-Y / Alt-Shift-Y apply the next / previous
-//     theme, wrapping around (saved per workspace, like Ctrl-Y)
-//   - message ops: y (copy message), Y/C (copy permalink), E (edit), D (delete),
-//     U (mark unread), m (set mark), ' (jump to mark), O/v (open image
-//     preview)
-//   - reaction nav sub-state: r enters; arrows + Enter select
-//     (delegated to handleReactionNav, for either content pane)
-//   - window commands: Ctrl-W prefix arms a pending sub-state; the
-//     next key is a window chord (s/v split, h/j/k/l focus, w cycle,
-//     q/c close, o only — delegated to handleWindowChord)
-//   - workspace switch: 1-9 number keys (handled in default arm)
-//   - quit confirm: q (close thread if visible, else no-op),
-//     Q (quit confirm)
+// Most of slk's keybindings are dispatched here. Which key does what
+// lives in keys.go (DefaultKeyMap) and is shown to the user by the `?`
+// help overlay; it is not repeated here, where a copy drifts (#189).
 //
-// Reaction-nav sub-state is intercepted FIRST: while in it, only
-// a narrow set of keys (arrows / Enter / r / Esc) is handled,
-// everything else falls back to normal key handling.
+// Before the main switch, these sub-states claim the key, in order:
+//   - after ctrl+w (WindowPrefix): the key is a window chord
+//     (handleWindowChord)
+//   - after g (Top): a second g jumps to the top; esc cancels; any
+//     other key cancels the chord and is then handled normally
+//   - after m (MarkSet) / '/` (JumpMark): the key names the mark to set
+//     or jump to (handleMarkChord / handleJumpChord)
+//   - reaction nav, while the focused content pane has it active
+//     (entered with R, ReactionNav): handleReactionNav takes every
+//     key. Left/Right move, Enter toggles the reaction (or opens the
+//     picker on the "+" pill), r opens the picker, Esc exits, and any
+//     other key is ignored.
+//
+// Number keys 1-9 have no binding in keys.go; the default arm uses
+// them to switch workspaces.
 package ui
 
 import (
@@ -36,7 +29,6 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/gammons/slk/internal/ui/help"
 	"github.com/gammons/slk/internal/ui/themeswitcher"
 )
 
@@ -91,7 +83,6 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 
 	switch {
 	case key.Matches(msg, a.keys.InsertMode):
-		a.SetMode(ModeInsert)
 		// In the Threads view there is no main compose box -- the
 		// only way to type is into the right-side thread panel's
 		// compose. Force focus there even when the threads list
@@ -100,12 +91,8 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		// (e.g. focus on the sidebar): typing must land where the
 		// user can see it, not in a channel compose hidden behind
 		// the thread.
-		if a.focusedPanel == PanelThread || (a.view == ViewThreads && a.threadVisible) || a.threadDrawnAlone() {
-			a.focusedPanel = PanelThread
-			return a.threadCompose.Focus()
-		}
-		a.focusedPanel = PanelMessages
-		return a.compose.Focus()
+		toThread := a.focusedPanel == PanelThread || (a.view == ViewThreads && a.threadVisible) || a.threadDrawnAlone()
+		return a.beginInsertMode(toThread)
 
 	case key.Matches(msg, a.keys.CommandMode):
 		a.enterCommandMode()
@@ -266,9 +253,7 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		return a.scrollFocusedPanel(a.halfPageSize())
 
 	case key.Matches(msg, a.keys.Help):
-		a.help.SetEntries(help.FromKeyMap(a.keys))
-		a.help.Open()
-		a.SetMode(ModeHelp)
+		a.openHelpOverlay()
 
 	case key.Matches(msg, a.keys.ThemeSwitcher):
 		// Per-workspace scope. Header text shows the current
@@ -289,6 +274,8 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, a.keys.PresenceMenu):
 		header := a.workspaceNameForActive()
 		pres, dndEnabled, dndEnd, _ := a.presence.Status(a.activeTeamID)
+		statusText, statusEmoji := a.presence.CustomStatus(a.currentUserID)
+		a.presenceMenu.SetCurrentCustomStatus(statusText, statusEmoji)
 		a.presenceMenu.OpenWith(header, pres, dndEnabled, dndEnd)
 		a.SetMode(ModePresenceMenu)
 
@@ -315,6 +302,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, a.keys.UserProfile):
 		return a.openUserProfile()
 
+	case key.Matches(msg, a.keys.Huddle):
+		return cmdHuddle(a, commandArgs{})
+
 	case key.Matches(msg, a.keys.SaveThread):
 		return a.saveThreadToFile()
 
@@ -335,6 +325,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 
 	case key.Matches(msg, a.keys.Delete):
 		return a.beginDeleteOfSelected()
+
+	case key.Matches(msg, a.keys.RemovePreview):
+		return a.removePreviewOfSelected()
 
 	case key.Matches(msg, a.keys.OpenPreview):
 		return a.openImagePreviewOfSelected()
@@ -365,6 +358,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		a.pendingMark = true
 		a.statusbar.SetHelpHint("m…")
 		return nil
+
+	case key.Matches(msg, a.keys.JumpToParent):
+		return a.jumpToThreadParent()
 
 	case key.Matches(msg, a.keys.JumpMark):
 		// With the jump overlay enabled (the default), ' opens the

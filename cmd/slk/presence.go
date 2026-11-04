@@ -13,7 +13,7 @@ import (
 // state from Slack, populates the WorkspaceContext, and sends an initial
 // StatusChangeMsg. Also subscribes to presence_change events for the self
 // user and every DM peer so external state changes arrive over the WS.
-func bootstrapPresenceAndDND(ctx context.Context, wctx *WorkspaceContext, program teaSender) {
+func bootstrapPresenceAndDND(ctx context.Context, wctx *WorkspaceContext, program teaSender, peerIDs []string) {
 	if wctx == nil || wctx.Client == nil {
 		return
 	}
@@ -26,7 +26,7 @@ func bootstrapPresenceAndDND(ctx context.Context, wctx *WorkspaceContext, progra
 	// This runs from OnConnect, which fires on the initial connect AND on
 	// every reconnect. Re-subscribing per connection is required because
 	// the subscription is connection-scoped.
-	subscribeWorkspacePresence(wctx)
+	subscribeWorkspacePresence(wctx, peerIDs)
 
 	// Initial presence fetch
 	if p, err := wctx.Client.GetUserPresence(ctx, wctx.UserID); err == nil && p != nil {
@@ -48,7 +48,7 @@ func bootstrapPresenceAndDND(ctx context.Context, wctx *WorkspaceContext, progra
 	// DM peers' DND, which the sidebar marks. Later changes arrive as
 	// dnd_invalidated and go through the same refresher. Runs on every
 	// connect because the socket does not replay missed invalidations.
-	wctx.PeerStatus.RefreshDND(ctx, workspacePresenceIDs(wctx))
+	wctx.PeerStatus.RefreshDND(ctx, peerIDs)
 
 	if program != nil {
 		program.Send(ui.StatusChangeMsg{
@@ -66,15 +66,15 @@ func bootstrapPresenceAndDND(ctx context.Context, wctx *WorkspaceContext, progra
 // subscription set and is connection-scoped, so this sends self + all DM
 // peers in a single call and must be re-run on each (re)connect.
 //
-// Note: the WS is opened with no_query_on_subscribe=1, so Slack does not
-// reply with each peer's current presence at subscribe time — DM rows are
-// seeded from the local cache at build time and then updated live by
-// presence_change events. Safe to call repeatedly.
-func subscribeWorkspacePresence(wctx *WorkspaceContext) {
+// The WS is opened with no_query_on_subscribe=1, so Slack does not reply
+// to presence_sub with each peer's current presence. A presence_query for
+// the same IDs follows it; without one, a peer who stayed online since
+// before slk connected showed whatever the cache last held. Safe to call
+// repeatedly.
+func subscribeWorkspacePresence(wctx *WorkspaceContext, ids []string) {
 	if wctx == nil || wctx.Client == nil {
 		return
 	}
-	ids := workspacePresenceIDs(wctx)
 	if len(ids) == 0 {
 		debuglog.General("subscribeWorkspacePresence: no ids to subscribe")
 		return
@@ -84,6 +84,9 @@ func subscribeWorkspacePresence(wctx *WorkspaceContext) {
 		return
 	}
 	debuglog.General("subscribeWorkspacePresence: sent presence_sub for %d ids (self+%d dm peers)", len(ids), len(ids)-1)
+	if err := wctx.Client.QueryPresence(ids); err != nil {
+		debuglog.General("subscribeWorkspacePresence: presence_query (%d ids) FAILED: %v", len(ids), err)
+	}
 }
 
 // workspacePresenceIDs returns the deduped list of user IDs to subscribe
@@ -159,4 +162,20 @@ func (h *rtmEventHandler) OnDNDChange(enabled bool, endUnix int64) {
 		DNDEnabled: h.wsCtx.DNDEnabled,
 		DNDEndTS:   h.wsCtx.DNDEndTS,
 	})
+}
+
+// OnBadgeCountsUpdated forwards the server's Activity-badge
+// recalculation to the UI. The total is absolute, so the UI can apply
+// it without knowing what changed. The arrival is also stamped on the
+// workspace's badge event clock, so a reconnect's client.counts
+// snapshot in flight when the event landed knows it is stale and must
+// not overwrite the newer total.
+func (h *rtmEventHandler) OnBadgeCountsUpdated(activityTotal int) {
+	if h.wsCtx != nil && h.wsCtx.BadgeEvents != nil {
+		h.wsCtx.BadgeEvents.stamp()
+	}
+	if h.program == nil {
+		return
+	}
+	h.program.Send(ui.ActivityBadgeUpdatedMsg{TeamID: h.workspaceID, Total: activityTotal})
 }

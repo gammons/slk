@@ -10,7 +10,12 @@
 | `Enter` | Normal (message) | Open thread |
 | `i` | Normal | Enter insert mode |
 | `Esc` | Insert / Command | Return to normal mode |
-| `Enter` | Insert | Send message |
+| `:` | Normal | Command prompt (`:ws`, `:marks`, `:sp`, … — see [[Commands]]) |
+| `?` / `:help` | Normal | Show every keybinding and `:` command; `/` filters the list |
+| `:version` | Normal | Show the running build's version and commit (`slk --version` also prints the build date) |
+| `Tab` / `Shift+Tab` | Command | Complete the command name; press again to cycle through the matches, which the status bar lists beside the prompt |
+| `Enter` | Insert | Send message (`[compose] stay_in_insert_after_send = true` keeps insert mode for the next one, except after sending an attachment, which returns to normal mode while it uploads) |
+| `Ctrl+P`, `Ctrl+N`, `Ctrl+A`, … | Insert (empty composer) | With `[compose] stay_in_insert_after_send` on and no text, no attachment and no edit in progress, the app's Ctrl shortcuts leave insert mode and act as in normal mode; otherwise they edit the text as before. `Ctrl+W`, `Ctrl+H` and `Ctrl+K` always edit the text, so repeating them to delete never changes mode |
 | `Shift+Enter` | Insert | Newline |
 | `Ctrl+V` | Insert | Smart paste — image / file path / text (use `Ctrl+V`, not the terminal's `Ctrl+Shift+V`) |
 | `Ctrl+U` | Insert | Clear compose (text + pending attachments) |
@@ -30,6 +35,7 @@
 | `m{A-Z}` | Normal (message) | Set a persistent mark — survives a restart |
 | `'{letter}` / `` `{letter} `` | Normal | Jump to a mark: opens the channel, loads history if needed, opens the thread and selects the reply |
 | `''` / ` `` ` | Normal | Back-jump to where you jumped from; press again to return |
+| `p` | Normal (thread open) | Go to the open thread's message in its channel (closes the thread; `''` returns to it) |
 | `:marks` | Normal | List every mark in the workspace with its channel and message preview |
 | `:delmarks abc` | Normal | Delete marks by letter (`:delmarks a b c` works too) |
 | `Backspace` | Marks overlay | Delete the selected mark |
@@ -42,17 +48,25 @@
 | `U` | Normal (activity) | Toggle the selected Activity item read/unread |
 | `Ctrl+t` / `Ctrl+p` | Any | Fuzzy channel finder |
 | `:ws` | Normal | Workspace picker |
+| `Ctrl+w s` / `:sp` | Normal | Split the focused window into two, one above the other |
+| `Ctrl+w v` / `:vsp` | Normal | Split the focused window into two, side by side |
+| `Ctrl+w h/j/k/l` | Normal | Focus the window in that direction |
+| `Ctrl+w w` | Normal | Cycle through windows |
+| `Ctrl+w q` / `:q` | Normal | Close the focused window (not the last one) |
+| `Ctrl+w o` / `:only` (`:on`) | Normal | Close every other window |
 | `1`–`9` | Normal | Jump to workspace N |
 | `r` | Normal (message) | Open reaction picker |
 | `R` | Normal (message) | Quick-toggle existing reactions |
 | `E` | Normal (message) | Edit your own message |
 | `D` | Normal (message) | Delete your own message (with confirmation) |
+| `x` | Normal (message) | Remove a link preview from your own message (with confirmation; a choice of previews when there are several) |
 | `U` | Normal (message) | Mark selected message and everything newer as unread |
 | `S` | Normal (thread) | Save thread to markdown file (`~/.local/share/slk/exports/` or `$XDG_DATA_HOME/slk/exports/`) |
 | `y` | Normal (message) | Copy message text |
 | `Y` / `C` | Normal (message) | Copy message permalink |
+| `H` / `:huddle` | Normal | Copy the huddle link of the conversation on screen (channels, DMs, group DMs; the focused thread pane, or the highlighted Threads/Activity row, names the channel) |
 | `F` | Normal (message / thread) | Forward selected message using the channel finder; Enter sends, Esc cancels |
-| `O` / `v` | Normal (message) | Open full-screen image preview |
+| `O` / `v` | Normal (message) | Open full-screen image preview. An image Slack made no thumbnail for (SVG) is downloaded and opened in the system viewer instead |
 | `Esc` / `q` | Preview | Close preview |
 | `Enter` | Preview | Open in system image viewer |
 | `h` / `←` | Preview | Previous image (when message has multiple) |
@@ -60,9 +74,15 @@
 | Click | Any (on image) | Open full-screen preview |
 | `Ctrl+y` | Any | Switch theme |
 | `Alt+y` / `Alt+Shift+y` | Normal | Next / previous theme (wraps; saved per workspace) |
-| `Ctrl+s` | Any | Set status (Active / Away / DND snooze) |
-| `q` | Normal | Quit (with confirmation) |
-| `Q` | Normal | Quit immediately |
+| `Ctrl+s` | Any | Set status (Active / Away / DND snooze / Working from home / On vacation / Clear status) |
+| `q` | Normal | Close the thread pane (does nothing when none is open) |
+| `Q` | Normal | Quit (with confirmation) |
 | `Ctrl+c` | Any | Quit (with confirmation) |
+| `K` | Normal (message) | Show the selected message author's profile |
+| `e` | Profile dialog | Copy the email shown in the dialog (or click its 📋) |
+| `c` | Profile dialog | Copy the person's huddle link while they are in a huddle Slack named a channel for (or click the 📋 on the "In a huddle" row) |
+| `K` / `Esc` / `q` | Profile dialog | Close |
+
+For `:` commands and slash commands, see [[Commands]].
 
 Custom keybinding overrides are on the roadmap — see [[Tradeoffs and Non-Goals|Tradeoffs-and-Non-Goals]].

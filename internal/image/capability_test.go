@@ -72,8 +72,6 @@ func TestDetect_TmuxRecoversKittyViaClientTerm(t *testing.T) {
 	}{
 		{"xterm-kitty", "kitty"},
 		{"xterm-ghostty", "ghostty"},
-		{"wezterm", "wezterm"},
-		{"WezTerm", "wezterm capitalized"},
 	}
 	tmuxEnv := Env{TMUX: "/tmp/tmux", Term: "tmux-256color", TermProgram: "tmux"}
 	for _, tc := range cases {
@@ -81,6 +79,28 @@ func TestDetect_TmuxRecoversKittyViaClientTerm(t *testing.T) {
 			withTmuxClientTerm(t, tc.clientTerm)
 			if got := Detect(tmuxEnv, "auto"); got != ProtoKitty {
 				t.Errorf("tmux client=%q: want kitty, got %v", tc.clientTerm, got)
+			}
+		})
+	}
+}
+
+// WezTerm as the tmux client is not a kitty host for slk: it lacks the
+// unicode-placeholder extension the kitty renderer draws with, so it
+// falls through to halfblock like any unknown outer terminal.
+func TestDetect_TmuxWezTermClientIsHalfBlock(t *testing.T) {
+	cases := []struct {
+		clientTerm string
+		desc       string
+	}{
+		{"wezterm", "wezterm"},
+		{"WezTerm", "wezterm capitalized"},
+	}
+	tmuxEnv := Env{TMUX: "/tmp/tmux", Term: "tmux-256color", TermProgram: "tmux"}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			withTmuxClientTerm(t, tc.clientTerm)
+			if got := Detect(tmuxEnv, "auto"); got != ProtoHalfBlock {
+				t.Errorf("tmux client=%q: want halfblock, got %v", tc.clientTerm, got)
 			}
 		})
 	}

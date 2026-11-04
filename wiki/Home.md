@@ -15,6 +15,7 @@ Marketing site: [getslk.sh](https://getslk.sh) · Source: [github.com/gammons/sl
 
 - **[[Features]]** — full feature breakdown (messaging, compose, images, threads, reactions, channels, notifications, status, connectivity, customization).
 - **[[Keybindings]]** — every key, every mode.
+- **[[Commands]]** — `:` commands (workspaces, marks, windows) and slash commands.
 - **[[Terminal Compatibility|Terminal-Compatibility]]** — which terminals do what (kitty graphics, sixel, half-block, OSC 52).
 - **[[Clipboard and OSC 52|Clipboard-and-OSC-52]]** — getting copy/paste working under tmux, screen, and stricter terminals.
 

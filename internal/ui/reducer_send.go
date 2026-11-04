@@ -7,7 +7,7 @@
 // lives in reducer_threads.go):
 //
 //	NewMessageMsg            - inbound WS event for any channel:
-//	                           edit-echo update, self-send dedup
+//	                           change-echo update, self-send dedup
 //	                           (recorded + early-arrival in-flight
 //	                           guards), append-to-pane, staging a
 //	                           focus-gated read-cursor advance or
@@ -72,6 +72,7 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// A concurrent compose send can suppress the forward's self-authored
 		// WS echo. Reconcile the HTTP result without touching drafts or
 		// placeholders. AppendMessage deduplicates echoes that arrived first.
+		a.noteForwardStandIn(m.message.TS)
 		for _, mm := range a.modelsForChannel(m.channelID) {
 			mm.AppendMessage(cloneMessageItem(m.message))
 		}
@@ -93,6 +94,7 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// UpsertSelfSent replaces it with our converted-mrkdwn
 		// text. See internal/ui/messages/model.go for both
 		// methods' contracts.
+		a.selfSend.EndSend(m.ChannelID)
 		if m.Message.TS == "" {
 			return nil, true
 		}
@@ -113,10 +115,14 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// The chat.postMessage HTTP call failed; roll back the
 		// optimistic placeholder so the user can see the send
 		// didn't go through. A toast surfaces the reason.
+		a.selfSend.EndSend(m.ChannelID)
 		if m.LocalTS != "" {
 			for _, mm := range a.modelsForChannel(m.ChannelID) {
 				mm.RemoveLocalSent(m.LocalTS)
 			}
+		}
+		if cmd := a.sendFailedCmd(m.ChannelID, m.Reason); cmd != nil {
+			return cmd, true
 		}
 		reason := m.Reason
 		return func() tea.Msg {
@@ -223,7 +229,7 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 }
 
 // reduceNewMessage handles NewMessageMsg. Extracted because the
-// arm is ~100 lines covering six decision branches (edit echo,
+// arm is ~100 lines covering six decision branches (change echo,
 // self-send dedup, early-arrival in-flight guard, the ephemeral
 // display-only return, the read-state decision for the channel and
 // thread cursors, threads-list dirty bump). The ephemeral branch
@@ -231,22 +237,33 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 	debuglog.Cache("NewMessageMsg: channel=%s ts=%s thread_ts=%s active=%s",
 		m.ChannelID, m.Message.TS, m.Message.ThreadTS, a.activeChannelID)
-	if m.Message.IsEdited {
-		debuglog.Cache("NewMessageMsg: channel=%s ts=%s decision=skipped_edit_echo",
+	if m.Changed {
+		debuglog.Cache("NewMessageMsg: channel=%s ts=%s decision=applied_change_echo",
 			m.ChannelID, m.Message.TS)
-		// Edit echo: update existing message in place rather than
+		// Change echo (message_changed: an edit, an unfurl, a removed
+		// preview): update the existing message in place rather than
 		// appending. Fan out to every window viewing the channel;
 		// gate on the thread panel's channel for the thread cache
 		// -- avoids touching panes showing a different channel.
 		// This branch must run BEFORE the isSelfSent dedup below,
-		// since edits to messages we recently sent would otherwise
+		// since changes to messages we recently sent would otherwise
 		// be silently dropped (the TS is still in selfSentTSes).
+		// An echo that no longer shows the preview being removed ends
+		// that removal.
+		a.previewRemovalEchoed(m.ChannelID, m.Message)
 		for _, mm := range a.modelsForChannel(m.ChannelID) {
-			mm.UpdateMessageInPlace(m.Message.TS, m.Message.Text)
+			mm.UpdateMessageInPlace(m.Message)
+			// An edit that carries no room keeps the one already held.
+			if m.Message.HuddleRoom != nil {
+				mm.SetHuddleRoom(m.Message.TS, cloneHuddleRoom(m.Message.HuddleRoom))
+			}
 		}
 		if m.ChannelID == a.threadPanel.ChannelID() {
-			a.threadPanel.UpdateMessageInPlace(m.Message.TS, m.Message.Text)
-			a.threadPanel.UpdateParentInPlace(m.Message.TS, m.Message.Text)
+			a.threadPanel.UpdateMessageInPlace(m.Message)
+			a.threadPanel.UpdateParentInPlace(m.Message)
+			if m.Message.HuddleRoom != nil {
+				a.threadPanel.SetHuddleRoom(m.Message.TS, cloneHuddleRoom(m.Message.HuddleRoom))
+			}
 		}
 		return nil
 	}
@@ -272,10 +289,18 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 	// Slack client while slk is open) do NOT update
 	// lastSelfSendByChannel, so they pass through this guard.
 	// An ephemeral is never an echo of chat.postMessage, so it is exempt.
-	if !m.Message.Ephemeral && m.Message.UserID != "" && m.Message.UserID == a.currentUserID && a.selfSend.InFlight(m.ChannelID) {
+	// A forward's echo is never an echo of a compose send, so it is exempt
+	// from the in-flight guard; it must reach the stand-in swap below.
+	standIn := a.takeForwardStandIn(m.Message.TS)
+	if !standIn && !m.Message.Ephemeral && m.Message.UserID != "" && m.Message.UserID == a.currentUserID && a.selfSend.InFlight(m.ChannelID) {
 		debuglog.Cache("NewMessageMsg: channel=%s ts=%s decision=skipped_self_send_in_flight",
 			m.ChannelID, m.Message.TS)
 		return nil
+	}
+	// An app's message ends its "working" status in this channel even
+	// when the clearing ai_assistant_status never arrives.
+	if m.Message.UserID != "" {
+		a.typing.ClearBot(m.ChannelID, m.Message.UserID)
 	}
 	// Model writes fan out to EVERY window viewing the channel,
 	// focused or not (Phase 3): visible-but-unfocused windows show
@@ -289,11 +314,15 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 		// sibling models would corrupt on the first in-place
 		// UpdateReaction — clone is the cheap insurance.
 		isBroadcast := m.Message.Subtype == "thread_broadcast"
-		if m.Message.ThreadTS == "" || m.Message.ThreadTS == m.Message.TS || isBroadcast {
+		if standIn {
+			// The real shared message replaces the forward's local
+			// stand-in (AppendMessage would keep the stand-in).
+			mm.UpsertSelfSent(cloneMessageItem(m.Message))
+		} else if m.Message.ThreadTS == "" || m.Message.ThreadTS == m.Message.TS || isBroadcast {
 			mm.AppendMessage(cloneMessageItem(m.Message))
 		}
 		if m.Message.ThreadTS != "" && m.Message.ThreadTS != m.Message.TS && !m.Message.Ephemeral {
-			mm.IncrementReplyCount(m.Message.ThreadTS, m.Message.TS)
+			mm.IncrementReplyCount(m.Message.ThreadTS, m.Message.TS, m.Message.UserID)
 		}
 	}
 	// Route thread replies to the open thread panel keyed on the
@@ -426,8 +455,10 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 func reduceSendMessage(a *App, m SendMessageMsg) tea.Cmd {
 	// Mark in-flight regardless of whether a sender is wired --
 	// the user's send intent is what controls WS-echo suppression
-	// for self-user messages on this channel.
-	a.selfSend.MarkInFlight(m.ChannelID)
+	// for self-user messages on this channel. BeginSend keeps that
+	// going until the answer lands, however long the send takes.
+	a.selfSend.BeginSend(m.ChannelID)
+	a.recordEmojiInText(m.Text)
 	// Instant-display: append an optimistic placeholder for the
 	// active channel immediately, before the chat.postMessage HTTP
 	// round-trip. The placeholder carries a "local:<n>" TS so the

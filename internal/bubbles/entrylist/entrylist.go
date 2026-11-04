@@ -61,6 +61,11 @@ const (
 	// HitImage is an inline image; Key is the file ID, Aux the
 	// attachment index.
 	HitImage
+	// HitLink is a hyperlink span in rendered text; Key is the URL.
+	HitLink
+	// HitFile is a "[File] <name>" attachment line; Aux is the
+	// attachment index.
+	HitFile
 )
 
 // Hit is a clickable rectangle relative to an Entry's Lines.
@@ -114,9 +119,6 @@ type ReanchorPolicy struct {
 	// BottomUsesNewHeight measures "was at the bottom" with this frame's
 	// height instead of the previous frame's.
 	BottomUsesNewHeight bool
-	// AnchorRefsOnly anchors only on entries with Ref >= 0. A first
-	// visible line above the first such entry keeps the raw offset.
-	AnchorRefsOnly bool
 }
 
 // Option configures a Model.
@@ -169,6 +171,7 @@ type Model struct {
 	yOffset            int
 	snapped            int
 	hasSnapped         bool
+	holdBottom         bool
 	selStart, selEnd   int
 
 	sel    selection.Range
@@ -224,8 +227,11 @@ func (m *Model) Height() int { return m.height }
 func (m *Model) YOffset() int { return m.yOffset }
 
 // SetYOffset assigns the first visible line (clamped when eager). It does
-// not bump Version, matching viewport.SetYOffset.
-func (m *Model) SetYOffset(n int) { m.setY(n) }
+// not bump Version, matching viewport.SetYOffset. It cancels HoldBottom.
+func (m *Model) SetYOffset(n int) {
+	m.holdBottom = false
+	m.setY(n)
+}
 
 // IndexOf returns the index of the entry with id.
 func (m *Model) IndexOf(id string) (int, bool) {
@@ -234,8 +240,31 @@ func (m *Model) IndexOf(id string) (int, bool) {
 }
 
 // ResetSnap makes the next Layout snap the window to the cursor even if
-// the cursor has not moved (used when the content is replaced).
-func (m *Model) ResetSnap() { m.hasSnapped = false }
+// the cursor has not moved (used when the content is replaced). It
+// cancels HoldBottom.
+func (m *Model) ResetSnap() { m.hasSnapped, m.holdBottom = false, false }
+
+// HoldBottom keeps a window that shows the last line now on the last
+// line at the next Layout, however the entries change in between. An
+// owner calls it before an entry grows (or shrinks) in place: an unfurl,
+// an edit, a first reaction. Without it the offset stays and the new rows
+// land below the window, since Layout snaps only when the cursor moves.
+//
+// "Now" is the screen as last laid out. While a re-snap is pending
+// (ResetSnap) that screen is stale and the cursor positions the next
+// frame, so HoldBottom does nothing. ScrollUp, SetYOffset, ResetSnap
+// and Static cancel it (ScrollDown does not: from the bottom it can only
+// ask for the bottom); a cursor move still snaps after it.
+func (m *Model) HoldBottom() {
+	if m.hasSnapped && m.atBottom() {
+		m.holdBottom = true
+	}
+}
+
+// atBottom reports whether the window reaches the last line.
+func (m *Model) atBottom() bool {
+	return m.total > 0 && m.height > 0 && m.yOffset+m.height >= m.total
+}
 
 // HasSnapped reports whether a Layout has snapped since the last
 // ResetSnap.
@@ -272,14 +301,14 @@ func (m *Model) SetHeight(h, sel int) {
 func (m *Model) SetEntries(es []Entry, width int, keepPosition bool) {
 	reanchor := keepPosition && m.width != width
 	var bottom, anchored bool
-	var ord, within int
+	var anchor, within int
 	if reanchor {
 		h := m.prevHeight
 		if m.reanchor.BottomUsesNewHeight {
 			h = m.height
 		}
 		bottom = m.total > 0 && m.yOffset+h >= m.total
-		ord, within, anchored = m.lineAnchor(m.yOffset)
+		anchor, within, anchored = m.lineAnchor(m.yOffset)
 	}
 	m.entries, m.width, m.live = es, width, -1
 	m.recompute()
@@ -292,12 +321,10 @@ func (m *Model) SetEntries(es []Entry, width int, keepPosition bool) {
 	switch {
 	case bottom:
 		m.setY(m.total)
-	case anchored:
-		if i, ok := m.nthAnchor(ord); ok {
-			h := len(m.entries[i].Lines)
-			within = max(min(within, h-1), 0)
-			m.setY(m.offsets[i] + within)
-		}
+	case anchored && anchor < len(m.entries):
+		h := len(m.entries[anchor].Lines)
+		within = max(min(within, h-1), 0)
+		m.setY(m.offsets[anchor] + within)
 	}
 }
 
@@ -341,6 +368,7 @@ func (m *Model) ScrollUp(n, sel int) {
 	if n <= 0 {
 		return
 	}
+	m.holdBottom = false
 	if m.eager {
 		if m.yOffset > 0 && m.total > 0 {
 			m.setY(m.yOffset - n)
@@ -423,37 +451,18 @@ func (m *Model) recomputeOffsets() {
 	m.total = off
 }
 
-// lineAnchor maps an absolute line to the anchor candidate covering it:
-// its ordinal among candidates and the line's offset from its start.
-func (m *Model) lineAnchor(line int) (ord, within int, ok bool) {
-	best, n := -1, 0
+// lineAnchor maps an absolute line to the index of the entry covering it
+// and the line's offset from that entry's start.
+func (m *Model) lineAnchor(line int) (i, within int, ok bool) {
+	best := -1
 	for i := range m.entries {
-		if m.reanchor.AnchorRefsOnly && m.entries[i].Ref < 0 {
-			continue
-		}
 		if m.offsets[i] > line {
 			break
 		}
-		best, ord = i, n
-		n++
+		best = i
 	}
 	if best < 0 {
 		return 0, 0, false
 	}
-	return ord, line - m.offsets[best], true
-}
-
-// nthAnchor returns the index of the ord-th anchor candidate.
-func (m *Model) nthAnchor(ord int) (int, bool) {
-	n := 0
-	for i := range m.entries {
-		if m.reanchor.AnchorRefsOnly && m.entries[i].Ref < 0 {
-			continue
-		}
-		if n == ord {
-			return i, true
-		}
-		n++
-	}
-	return 0, false
+	return best, line - m.offsets[best], true
 }

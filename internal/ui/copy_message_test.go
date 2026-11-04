@@ -165,6 +165,39 @@ func TestCopyMessage_EmptyTextMessage(t *testing.T) {
 	}
 }
 
+// A forwarded message carries its shared content in a legacy
+// attachment's Text, with an empty top-level Text -- exactly what
+// renders on screen for it. y must copy that, not report "no text".
+func TestCopyMessage_ForwardedMessageCopiesAttachmentText(t *testing.T) {
+	app := NewApp()
+	var copied string
+	app.SetClipboardWriter(func(text string) tea.Cmd {
+		copied = text
+		return nil
+	})
+	app.activeChannelID = "C123"
+	app.focusedPanel = PanelMessages
+	app.messagepane.SetMessages([]messages.MessageItem{{
+		TS:       "1700000003.000400",
+		UserName: "alice",
+		LegacyAttachments: []blockkit.LegacyAttachment{
+			{Text: "shared: check this out"},
+		},
+	}})
+
+	cmd := app.handleNormalMode(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd from y key")
+	}
+	msg := cmd()
+	if _, found := drainForCopiedMsg(msg); !found {
+		t.Fatalf("expected statusbar.CopiedMsg in batch, got %#v", msg)
+	}
+	if copied != "shared: check this out" {
+		t.Errorf("clipboard = %q, want the forwarded attachment's text", copied)
+	}
+}
+
 func TestCopyMessage_RichTextBlockReconstructsMrkdwn(t *testing.T) {
 	app := NewApp()
 	var copied string

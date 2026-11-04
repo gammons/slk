@@ -1,10 +1,13 @@
 package blockkit
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 
 	"github.com/slack-go/slack"
+
+	"github.com/gammons/slk/internal/emoji"
 )
 
 // RichTextToMrkdwn reconstructs Slack mrkdwn from a parsed rich_text
@@ -15,7 +18,9 @@ import (
 //
 // The output is Slack mrkdwn wire form — *bold*, _italic_, ~strike~,
 // `code`, <url|label>, <@U…>, <#C…>, <!subteam^S…>, <!here>, :emoji: —
-// which the host can pass to RenderSlackMarkdown unchanged.
+// which the host can pass to RenderSlackMarkdown unchanged. An app's
+// link chip (attachment_mention) becomes <url|title>, so it shows its
+// title in place of the URL as Slack's client does.
 func RichTextToMrkdwn(rt RichTextBlock) string {
 	if len(rt.Elements) == 0 {
 		return ""
@@ -68,7 +73,7 @@ func inlineToMrkdwn(e slack.RichTextSectionElement) string {
 	case *slack.RichTextSectionBroadcastElement:
 		return "<!" + v.Range + ">"
 	case *slack.RichTextSectionEmojiElement:
-		return emojiToMrkdwn(v.Name, v.SkinTone)
+		return emojiToMrkdwn(v.Name, v.SkinTone, v.Unicode)
 	case *slack.RichTextSectionTeamElement:
 		// Team mentions are rare in chat surface; emit the Slack
 		// wire form so the downstream renderer can do whatever it
@@ -81,9 +86,52 @@ func inlineToMrkdwn(e slack.RichTextSectionElement) string {
 		return strconv.FormatInt(int64(v.Timestamp), 10)
 	case *slack.RichTextSectionColorElement:
 		return v.Value
+	case *slack.RichTextSectionUnknownElement:
+		if m, ok := linkMention(v); ok {
+			// A message_mention's label is usually its own URL; compare
+			// before escaping, or a thread permalink's "&cid=" would
+			// stop matching and turn into a label.
+			if m.Text == m.URL {
+				return linkToMrkdwn(m.URL, "")
+			}
+			return linkToMrkdwn(m.URL, mrkdwnEscaper.Replace(m.Text))
+		}
 	}
 	return ""
 }
+
+// linkMentionElement is the part of a rich_text link mention slk
+// renders: url is the link and text its label. Slack writes two kinds:
+//   - "attachment_mention", when a pasted link turns into an app's chip
+//     (a Work Object, e.g. a Linear issue); text is the chip's title.
+//   - "message_mention", when a message links to another Slack message;
+//     url is the permalink and text usually that same permalink.
+//
+// slack-go has no type for either, so they arrive as a
+// RichTextSectionUnknownElement with their raw JSON.
+type linkMentionElement struct {
+	URL  string `json:"url"`
+	Text string `json:"text"`
+}
+
+// linkMention decodes e when it is a link mention with a URL; anything
+// else (another unknown kind, bad JSON, no URL) reports false and is
+// dropped like any other unknown element.
+func linkMention(e *slack.RichTextSectionUnknownElement) (linkMentionElement, bool) {
+	var m linkMentionElement
+	if e.Type != "attachment_mention" && e.Type != "message_mention" {
+		return m, false
+	}
+	if json.Unmarshal([]byte(e.Raw), &m) != nil || m.URL == "" {
+		return m, false
+	}
+	return m, true
+}
+
+// mrkdwnEscaper entity-escapes text placed inside Slack markup, the way
+// Slack escapes its own text field; the renderers decode it after
+// matching <url|label>, so a ">" in the label cannot end the link early.
+var mrkdwnEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
 
 // textToMrkdwn applies style flags around a literal text run. Bare
 // "\n" text elements (used by Slack to separate sibling paragraphs
@@ -135,10 +183,28 @@ func linkToMrkdwn(url, label string) string {
 // shortcodes. A non-zero SkinTone is emitted as a sibling
 // :skin-tone-N: shortcode — Slack web does the same, and the
 // downstream emoji renderer composes them at display time.
-func emojiToMrkdwn(name string, skinTone int) string {
+//
+// A two-person emoji with a tone per person has no SkinTone; its two
+// modifiers are only in unicode ("1f9d1-1f3fb-200d-1f91d-200d-1f9d1-1f3ff").
+// It is emitted as :skin-tone-A-B:, the form Slack's text field uses,
+// even when A and B match.
+func emojiToMrkdwn(name string, skinTone int, unicode string) string {
 	out := ":" + name + ":"
 	if skinTone > 0 {
-		out += ":skin-tone-" + strconv.Itoa(skinTone) + ":"
+		return out + ":skin-tone-" + strconv.Itoa(skinTone) + ":"
+	}
+	var tones []string
+	for _, cp := range strings.Split(unicode, "-") {
+		n, err := strconv.ParseInt(cp, 16, 32)
+		if err != nil {
+			continue
+		}
+		if tone, ok := emoji.SlackSkinToneNumber(rune(n)); ok {
+			tones = append(tones, strconv.Itoa(tone))
+		}
+	}
+	if len(tones) == 2 {
+		out += ":skin-tone-" + tones[0] + "-" + tones[1] + ":"
 	}
 	return out
 }
@@ -177,6 +243,10 @@ func preformattedToMrkdwn(elements []slack.RichTextSectionElement) string {
 			b.WriteString(v.Text)
 		case *slack.RichTextSectionLinkElement:
 			b.WriteString(v.URL)
+		case *slack.RichTextSectionUnknownElement:
+			if m, ok := linkMention(v); ok {
+				b.WriteString(m.URL)
+			}
 		}
 	}
 	return "```\n" + b.String() + "\n```"

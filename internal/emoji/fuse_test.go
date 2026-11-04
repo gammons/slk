@@ -100,6 +100,35 @@ func TestStripSkinToneFromText(t *testing.T) {
 			want: ":heart: vs :heart: vs :+1: vs :+1:",
 		},
 
+		// Adjacent shortcodes, as RichTextToMrkdwn emits them: a match
+		// must stop at the end of one shortcode, or the toned one's
+		// strip cuts off everything after it.
+		{
+			name: "emoji after a slack-toned emoji",
+			in:   ":+1::skin-tone-5::tada:",
+			want: ":+1::tada:",
+		},
+		{
+			name: "two slack-toned emoji in a row",
+			in:   ":wave::skin-tone-2::wave::skin-tone-3:",
+			want: ":wave::wave:",
+		},
+		{
+			name: "emoji after a kyokomi-toned emoji",
+			in:   ":thumbsup_tone3::tada:",
+			want: ":thumbsup::tada:",
+		},
+		{
+			name: "two-person emoji with two tones",
+			in:   ":handshake::skin-tone-2-5::tada:",
+			want: ":handshake::tada:",
+		},
+		{
+			name: "clock time right before a toned emoji",
+			in:   "Meet at 12:30:+1::skin-tone-5:",
+			want: "Meet at 12:30:+1:",
+		},
+
 		// Plain text — no change.
 		{
 			name: "plain text no shortcodes",

@@ -53,7 +53,7 @@ func TestRenderBreadcrumb(t *testing.T) {
 			if w := ansi.StringWidth(tt.want); w != tt.width {
 				t.Fatalf("bad row: want is %d cells, width is %d", w, tt.width)
 			}
-			got := renderBreadcrumb(tt.width, tt.channel, tt.chType, tt.author, tt.replies)
+			got, _ := renderBreadcrumb(tt.width, tt.channel, tt.chType, tt.author, tt.replies)
 			if w := ansi.StringWidth(got); w != tt.width {
 				t.Errorf("width = %d, want %d", w, tt.width)
 			}
@@ -129,5 +129,20 @@ func TestView_BreadcrumbIgnoresEphemeralReplies(t *testing.T) {
 	got := ansi.Strip(firstLine(m.View(20, 60)))
 	if !strings.HasPrefix(got, "Thread from zed · 1 reply") || strings.Contains(got, "2 replies") {
 		t.Errorf("header = %q, want \"1 reply\": an ephemeral is not a reply", got)
+	}
+}
+func TestRenderBreadcrumb_ChannelCols(t *testing.T) {
+	// The channel span the click router turns into the up-level target:
+	// the glyph plus name in cells, 0 when the channel is omitted.
+	row, cols := renderBreadcrumb(40, "general", "channel", "alice", 2)
+	if cols != 2+1+6 {
+		t.Errorf("cols = %d; want glyph+space+name = 9", cols)
+	}
+	if !strings.HasPrefix(ansi.Strip(row), "# general ") {
+		t.Errorf("row starts with %q; want the channel label first", ansi.Strip(row)[:12])
+	}
+	_, cols = renderBreadcrumb(40, "", "channel", "alice", 2)
+	if cols != 0 {
+		t.Errorf("cols = %d; want 0 when the channel is omitted", cols)
 	}
 }

@@ -9,6 +9,9 @@
 package newmessagepicker
 
 import (
+	"unicode"
+	"unicode/utf8"
+
 	"github.com/gammons/slk/internal/bubbles/chrome"
 	"github.com/gammons/slk/internal/ui/messages"
 )
@@ -121,12 +124,6 @@ func boxWidth(termWidth int) int {
 	return w
 }
 
-// visibleWindow returns the [start, end) slice of m.filtered currently
-// shown, using the same scroll math as renderResultRows.
-func (m *Model) visibleWindow() (int, int) {
-	return chrome.Window(m.highlight, len(m.filtered), maxVisibleRows)
-}
-
 // ClickRow moves the highlight cursor to the result row at box-local
 // localY and returns true when the click lands on a visible row. Unlike
 // the single-select finders this only moves the cursor; the caller
@@ -136,7 +133,7 @@ func (m *Model) ClickRow(termWidth, termHeight, localY int) bool {
 	if row < 0 {
 		return false
 	}
-	start, end := m.visibleWindow()
+	start, end := chrome.Window(m.highlight, len(m.filtered), maxVisibleRows)
 	if row >= end-start {
 		return false
 	}
@@ -155,7 +152,7 @@ func (m *Model) setQuery(q string) {
 // HandleKey processes a single key event. The string form mirrors the
 // other picker packages (channelfinder, mentionpicker): "up", "down",
 // "ctrl+n", "ctrl+p", "backspace", "esc", "enter", "tab", " ", or
-// any single printable ASCII character.
+// any single printable character.
 //
 // Returns a non-nil Result when the user submits the picker; the
 // caller (the mode handler) closes the picker and dispatches the
@@ -188,8 +185,9 @@ func (m *Model) HandleKey(keyStr string) *Result {
 		return nil
 	}
 
-	// Single printable ASCII rune -> append to query.
-	if len(keyStr) == 1 && keyStr[0] >= 33 && keyStr[0] <= 126 {
+	// Single printable rune -> append to query. Space never gets here:
+	// the switch above takes it as toggle-selection.
+	if r := []rune(keyStr); len(r) == 1 && unicode.IsPrint(r[0]) {
 		m.query += keyStr
 		m.highlight = 0
 		m.filter()
@@ -230,7 +228,8 @@ func (m *Model) toggleHighlightedSelection() {
 // reaching for the mouse.
 func (m *Model) handleBackspace() {
 	if len(m.query) > 0 {
-		m.query = m.query[:len(m.query)-1]
+		_, n := utf8.DecodeLastRuneInString(m.query)
+		m.query = m.query[:len(m.query)-n]
 		m.highlight = 0
 		m.filter()
 		return

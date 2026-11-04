@@ -35,14 +35,14 @@ jobs:
       PUSH_TOKEN: ${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.NIX_HASH_PUSH_TOKEN || '' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           token: ${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.NIX_HASH_PUSH_TOKEN || github.token }}
 
       - name: Install Nix
-        uses: cachix/install-nix-action@v31.11.1
+        uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31.11.2
 
       - name: Build the flake
         id: build
@@ -106,7 +106,7 @@ jobs:
 
       - name: Upload the patch
         if: steps.refresh.outcome == 'success' && steps.push.outcome == 'skipped'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: vendor-hash-patch
           path: vendor-hash.patch

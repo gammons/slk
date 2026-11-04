@@ -25,7 +25,11 @@ func TestCanonicalSlackName(t *testing.T) {
 		{"tada", nil, "tada"},
 
 		// Skin tones re-emit Slack's "::skin-tone-N" form on the canonical base.
-		{"thumbsup_tone3", nil, "+1::skin-tone-3"},
+		// kyokomi numbers tones 1-5 and Slack 2-6, so _tone3 is
+		// skin-tone-4.
+		{"thumbsup_tone3", nil, "+1::skin-tone-4"},
+		{"thumbsup::skin-tone-2", nil, "+1::skin-tone-2"},
+		{"+1::skin-tone-6", nil, "+1::skin-tone-6"},
 
 		// Unknown names are sent verbatim.
 		{"some_workspace_custom_emoji", nil, "some_workspace_custom_emoji"},

@@ -62,7 +62,7 @@ func handleReactionPickerMode(a *App, msg tea.KeyMsg) tea.Cmd {
 
 	// Record frecent usage on add (not remove).
 	if !result.Remove {
-		a.reactions.RecordFrecent(emojiName)
+		a.recordEmojiUse(emojiName)
 	}
 
 	// Optimistic update.

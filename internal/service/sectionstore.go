@@ -14,10 +14,9 @@ import (
 // Defined as an interface so tests can pass fakes.
 type SectionsClient interface {
 	GetChannelSections(ctx context.Context) ([]slk.SidebarSection, error)
-	// GetStarredConversations backs the stars section membership.
-	// channelSections.list returns built-in section types (stars,
-	// recent_apps) with an empty channel_ids array; stars.list is the
-	// authoritative source Bootstrap uses to fill them.
+	// GetStarredConversations backs the built-in stars section membership.
+	// Initial bootstrap reuses client.userBoot's ID list; reconnect refreshes
+	// fetch a fresh boot snapshot rather than the restricted stars.list API.
 	GetStarredConversations(ctx context.Context) ([]string, error)
 }
 
@@ -91,32 +90,23 @@ func (s *SectionStore) Bootstrap(ctx context.Context, client SectionsClient) err
 	s.lastBootstrap = time.Now()
 	s.mu.Unlock()
 
-	// Slack's users.channelSections.list returns the stars section with
-	// an empty channel_ids array (it doesn't populate built-in section
-	// types). stars.list is the authoritative source for starred
-	// conversations; fetch and inject here so EVERY Bootstrap — including
-	// reconnect-triggered re-bootstraps via MaybeRebootstrap — leaves
-	// the Starred header populated. Without this, a reconnect Bootstrap
-	// atomically replaced the store state and wiped the ChannelIDs that
-	// PopulateStars had filled, making includeInSidebar hide the header.
-	// Best-effort: on error the stars section stays empty and
-	// includeInSidebar hides it until the next bootstrap.
-	//
-	// PopulateStars re-locks internally; safe to call after unlock now
-	// that ready==true.
+	// Slack's section-list endpoint leaves built-in membership empty.
+	// The client's boot snapshot supplies starred conversation IDs, including
+	// on Enterprise Grid where stars.list is restricted. Initial bootstrap
+	// reuses its already-fetched snapshot; reconnect fetches a fresh one.
+	// PopulateStars re-locks internally now that ready==true.
+	// Lookup errors are best-effort; the next bootstrap can retry.
 	if stars, sErr := client.GetStarredConversations(ctx); sErr != nil {
-		log.Printf("section store: stars.list failed: %v (starred conversations hidden until next bootstrap)", sErr)
+		log.Printf("section store: starred membership lookup failed: %v (starred conversations hidden until next bootstrap)", sErr)
 	} else if len(stars) > 0 {
 		s.PopulateStars(stars)
 	}
 	return nil
 }
 
-// PopulateStars fills the stars section's ChannelIDs from stars.list,
-// the authoritative source for starred conversations (channels and IMs). Slack's
-// users.channelSections.list returns the stars section with an empty
-// channel_ids array (it doesn't populate built-in section types); without
-// this call the stars section stays empty and includeInSidebar hides it.
+// PopulateStars fills the stars section's ChannelIDs from client.userBoot's
+// starred conversation IDs (channels and IMs). The section-list endpoint
+// leaves built-in membership empty; without this call stars stays hidden.
 //
 // Safe to call repeatedly — each call replaces the previous star list
 // and remaps the channelToSection index accordingly. No-op when the

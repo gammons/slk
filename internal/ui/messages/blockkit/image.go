@@ -15,6 +15,7 @@
 package blockkit
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
@@ -109,13 +110,15 @@ func computeBlockImageTarget(b ImageBlock, ctx Context, width int) image.Point {
 // blocks (Task 10), section image accessories (Task 11), and legacy
 // attachment image_url (Task 13).
 //
-// Returns rendered lines + flushes + (currently always-nil) sixelRows
-// + the hit rect for click handling; ok is true if the function did
-// the work (lines returned), false if the caller should fall back —
-// e.g., empty URL.
+// Returns rendered lines + side-channel output + the hit rect for
+// click handling; ok is true if the function did the work (lines
+// returned), false if the caller should fall back — e.g., empty URL.
+// The side-channel output is a kitty flush for kitty, a sixel
+// placement row for sixel (see sideChannelOutput).
 //
 // rowStart is the row index within the caller's RenderResult.Lines
-// where this image will land — used to populate HitRect.RowStart.
+// where this image will land — used to populate HitRect.RowStart and
+// the sixel placement row.
 func fetchOrPlaceholder(url string, target image.Point, ctx Context, rowStart int) (
 	[]string, []func(io.Writer) error, map[int]SixelEntry, HitRect, bool,
 ) {
@@ -166,6 +169,11 @@ func fetchOrPlaceholder(url string, target image.Point, ctx Context, rowStart in
 				fetchStart := time.Now()
 				_, err := fetcher.Fetch(context.Background(), imgpkg.FetchRequest{
 					Key: key, URL: url, Target: pixelTarget, ReqID: reqID,
+					// The cell target lets the fetch worker
+					// prerender for this exact footprint, so the
+					// render below hits Prerendered instead of
+					// encoding on the UI goroutine.
+					CellTarget: target,
 				})
 				inflightURLMu.Lock()
 				delete(inflightURL, key)
@@ -198,9 +206,18 @@ func fetchOrPlaceholder(url string, target image.Point, ctx Context, rowStart in
 		return ph, nil, nil, hit, true
 	}
 
-	// Cached: render via active protocol. For kitty we go through the
-	// renderer's keyed path so the upload escape is emitted exactly
-	// once per (key, target) pair across the session.
+	// Fast path: prerendered output baked off the UI thread by the
+	// fetch worker (Fetcher.Prerendered). Same contract as the
+	// RenderImage call below, minus the protocol encode.
+	if pr, ok := ctx.Fetcher.Prerendered(key, target, ctx.Protocol); ok {
+		fl, sxl := sideChannelOutput(key, ctx.Protocol, pr.OnFlush, pr.Fallback, rowStart, target)
+		return pr.Lines, fl, sxl, hit, true
+	}
+	// Kitty slow path: the worker did not prerender (its keyed source
+	// lives under "F-"+key, see maybePrerender), so register and encode
+	// here under the UI's "BK-"+key. Reached only on the first render
+	// of an image whose fetch raced the view, or when prerendering is
+	// not configured.
 	if ctx.Protocol == imgpkg.ProtoKitty && ctx.KittyRender != nil {
 		var kT0 time.Time
 		if perf != nil {
@@ -228,11 +245,55 @@ func fetchOrPlaceholder(url string, target image.Point, ctx Context, rowStart in
 		perf.imgRenderImageTotal += time.Since(riT0)
 		perf.imgRenderImageCount++
 	}
-	var fl []func(io.Writer) error
-	if out.OnFlush != nil {
-		fl = []func(io.Writer) error{out.OnFlush}
+	fl, sxl := sideChannelOutput(key, ctx.Protocol, out.OnFlush, out.Fallback, rowStart, target)
+	return out.Lines, fl, sxl, hit, true
+}
+
+// sideChannelOutput splits a Render's optional OnFlush side effect
+// into the form the caller should ship to the terminal.
+//
+// Kitty uploads are position-independent APC commands: emitting them
+// from View via the side-channel writer is correct, and re-emitting
+// the same image id is a harmless no-op. Sixel is the opposite: the
+// flush writes the raw DCS pixel stream, which the terminal paints at
+// the CURRENT cursor position, and nothing tracks the result for
+// erase. Running that flush from every View smeared image pixels over
+// whatever row the cursor last touched - the screen corruption seen
+// while scrolling image-heavy channels. So sixel rides the placement
+// pipeline instead: the bytes and the halfblock fallback come back as
+// a SixelRows entry keyed at rowStart, and the pane's painter
+// positions, repaints and erases it like any other image (the same
+// split imgrender.RenderBlock applies to legacy file attachments).
+//
+// key is the fetcher's cache key for the image (the "BK-" URL hash).
+// It flows into the placement's identity so the painter detects a
+// different image in the same slot without hashing the payload - the
+// block payloads are often hundreds of KB, and the identity is
+// recomputed every frame.
+//
+// Returns (nil, nil) when onFlush is nil or fails: the image then
+// renders as its reserved placeholder rows, never as a stray paint.
+func sideChannelOutput(
+	key string,
+	proto imgpkg.Protocol,
+	onFlush func(io.Writer) error,
+	fallback []string,
+	rowStart int,
+	target image.Point,
+) ([]func(io.Writer) error, map[int]SixelEntry) {
+	if onFlush == nil {
+		return nil, nil
 	}
-	return out.Lines, fl, nil, hit, true
+	if proto != imgpkg.ProtoSixel {
+		return []func(io.Writer) error{onFlush}, nil
+	}
+	var bb bytes.Buffer
+	if err := onFlush(&bb); err != nil {
+		return nil, nil
+	}
+	return nil, map[int]SixelEntry{
+		rowStart: {Key: key, Bytes: bb.Bytes(), Fallback: fallback, Height: target.Y, Width: target.X},
+	}
 }
 
 // blockPlaceholder produces a target.Y-row block of theme-surface-

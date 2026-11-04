@@ -182,7 +182,8 @@ func TestChoiceDefaultHighlights(t *testing.T) {
 
 func TestChoiceViewShowsButtons(t *testing.T) {
 	t.Parallel()
-	out := openChoice(t, slackChoice()).View()
+	m := openChoice(t, slackChoice())
+	out := m.View()
 	for _, want := range []string{"Slackbot", "[1] Add Them", "[2] Dismiss", "[3] Don't Show Again"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("view missing %q:\n%s", want, out)
@@ -194,7 +195,8 @@ func TestChoiceButtonWithoutKeysShowsBareLabel(t *testing.T) {
 	t.Parallel()
 	c := slackChoice()
 	c.Buttons[2].Keys = key.Binding{}
-	if out := openChoice(t, c).View(); !strings.Contains(out, "[Don't Show Again]") {
+	m := openChoice(t, c)
+	if out := m.View(); !strings.Contains(out, "[Don't Show Again]") {
 		t.Errorf("a button with no keys should render as [label]:\n%s", out)
 	}
 }

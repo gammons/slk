@@ -21,6 +21,8 @@ type contentPane interface {
 	ChromeHeight() int
 	HitTestReaction(row, col int) (idx int, emoji string, ok bool)
 	HitTestImage(row, col int) (ts string, attIdx int, ok bool)
+	HitTestFile(row, col int) (ts string, attIdx int, ok bool)
+	HitTestLink(row, col int) (url string, ok bool)
 	BeginSelectionAt(y, x int)
 	ExtendSelectionAt(y, x int)
 	EndSelection() (string, bool)
@@ -29,6 +31,9 @@ type contentPane interface {
 	ScrollHintForDrag(y int) int
 	ScrollUp(n int)
 	ScrollDown(n int)
+	// UpdateMessageInPlace applies a message_changed echo to the message
+	// with the item's TS; false when the pane does not hold it.
+	UpdateMessageInPlace(item messages.MessageItem) bool
 }
 
 var (

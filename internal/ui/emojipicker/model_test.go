@@ -245,3 +245,21 @@ func TestDropdown_ResolvesCustomEmojiURL_AfterSetEmojiCustoms(t *testing.T) {
 		t.Logf("rendered view (first 200 chars): %q", view[:min(200, len(view))])
 	}
 }
+
+func TestFrecentMatchesComeFirst(t *testing.T) {
+	m := New()
+	m.SetEntries(sampleEntries())
+	m.Open("ro")
+	m.SetFrecency(emoji.NewFrecency([]string{"rose", "rocket"}))
+
+	var got []string
+	for _, e := range m.Filtered() {
+		got = append(got, e.Name)
+	}
+	if want := "rose rocket rock"; strings.Join(got, " ") != want {
+		t.Errorf("filtered = %v, want %s", got, want)
+	}
+	if e, ok := m.SelectedEntry(); !ok || e.Name != "rose" {
+		t.Errorf("selected = %v, want the most frecent match rose", e)
+	}
+}

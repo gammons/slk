@@ -216,7 +216,7 @@ func (m *Model) ClickRow(termWidth, termHeight, localY int) bool {
 		return false
 	}
 	row := line / rowLines
-	start, end := m.visibleWindow(termHeight)
+	start, end := chrome.Window(m.selected, len(m.items), m.visibleRowCap(termHeight))
 	if row >= end-start {
 		return false
 	}
@@ -259,7 +259,7 @@ func boxWidth(termWidth int) int {
 // terminal of termHeight lines: as many rows as fit the box's height
 // budget — 70% of the terminal, clamped to termHeight-2 — once the
 // chrome (and optional footer) is spent, but never below 1 row.
-// Single source of truth for visibleWindow, so the renderer, BoxSize,
+// Single source of truth for the chrome.Window call, so the renderer, BoxSize,
 // and ClickRow all clamp identically (the rows*rowLines + chrome ≤
 // budget invariant).
 func (m Model) visibleRowCap(termHeight int) int {
@@ -281,16 +281,9 @@ func (m Model) visibleRowCap(termHeight int) int {
 	return n
 }
 
-// visibleWindow returns the [start, end) slice of m.items currently
-// shown in the results list for a terminal of termHeight lines,
-// applying the same scroll-window math the renderer uses.
-func (m *Model) visibleWindow(termHeight int) (int, int) {
-	return chrome.Window(m.selected, len(m.items), m.visibleRowCap(termHeight))
-}
-
 // BoxSize returns the outer dimensions of the rendered modal box for the
 // given terminal size. termHeight clamps the visible result rows so the
-// outer box fits within the terminal (see visibleWindow).
+// outer box fits within the terminal (see visibleRowCap).
 func (m *Model) BoxSize(termWidth, termHeight int) (int, int) {
 	nRows := len(m.bodyLines(boxWidth(termWidth)-4, termHeight))
 	if nRows < 1 {
@@ -355,7 +348,7 @@ func (m Model) renderBox(termWidth, termHeight int) string {
 // a spinner line while loading, the error line, a "No results"
 // placeholder, or the result rows plus an optional "showing K of N"
 // footer. innerWidth is the usable content width inside the box;
-// termHeight clamps the result-row window (see visibleWindow).
+// termHeight clamps the result-row window (see visibleRowCap).
 func (m Model) bodyLines(innerWidth, termHeight int) []string {
 	s := messages.ChromeStyles()
 
@@ -411,7 +404,7 @@ func splitAtWidth(s string, w int) (head, tail string) {
 func (m Model) resultRows(innerWidth, termHeight int) []string {
 	s := messages.ChromeStyles()
 	bg := styles.Background
-	start, end := m.visibleWindow(termHeight)
+	start, end := chrome.Window(m.selected, len(m.items), m.visibleRowCap(termHeight))
 	list := chrome.List{Start: start, End: end, Total: len(m.items)}
 	contentWidth := list.ContentWidth(innerWidth)
 

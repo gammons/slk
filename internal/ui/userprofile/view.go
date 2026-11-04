@@ -29,12 +29,20 @@ const CopyIcon = "\U0001F4CB" // 📋
 // copyFooter is the footer while there is an email to copy.
 const copyFooter = "e copy email \u00b7 K / esc / q close"
 
-// boxLayout is one rendered box and where its copy icon landed, in
-// box-local cells (border included); iconRow is -1 when no icon was
-// drawn (no email, still loading, or the details were dropped).
+// huddleFooter is the footer while there is a huddle link to copy but
+// no email.
+const huddleFooter = "c huddle link \u00b7 K / esc / q close"
+
+// boxLayout is one rendered box and where its point hot spots landed,
+// in box-local cells (border included); a row of -1 means that hot spot
+// was not drawn (no email, no huddle link, still loading, or the rows
+// were dropped for height).
 type boxLayout struct {
-	box              string
+	box string
+	// iconRow/iconCol is the email's 📋.
 	iconRow, iconCol int
+	// huddleRow/huddleCol is the huddle row's 📋.
+	huddleRow, huddleCol int
 }
 
 // BoxSize returns the outer dimensions of the box the last frame drew,
@@ -51,17 +59,25 @@ func (m *Model) BoxSize(termW, termH int) (int, int) {
 	return lipgloss.Width(l.box), lipgloss.Height(l.box)
 }
 
-// ClickAt reports whether the box-local cell (x, y) is on the email's
-// copy icon as the last frame drew it.
+// ClickAt reports whether the box-local cell (x, y) is on a point hot
+// spot — the email's 📋 or, when the huddle row carries one, its 📋 —
+// as the last frame drew it. Which one it was is LastClickTarget; a
+// miss clears it.
 func (m *Model) ClickAt(termW, termH, x, y int) bool {
 	if !m.visible {
 		return false
 	}
 	l := m.layout(termW, termH, m.lastLive)
-	if l.iconRow < 0 || y != l.iconRow {
-		return false
+	if y == l.iconRow && l.iconRow >= 0 && x >= l.iconCol && x < l.iconCol+drawnWidth(CopyIcon) {
+		m.lastClickTarget = ClickTargetEmail
+		return true
 	}
-	return x >= l.iconCol && x < l.iconCol+drawnWidth(CopyIcon)
+	if y == l.huddleRow && l.huddleRow >= 0 && x >= l.huddleCol && x < l.huddleCol+drawnWidth(CopyIcon) {
+		m.lastClickTarget = ClickTargetHuddle
+		return true
+	}
+	m.lastClickTarget = ""
+	return false
 }
 
 // drawnWidth is the width the terminal draws s at. The copy icon is
@@ -130,12 +146,18 @@ func (m *Model) layout(termW, termH int, live Live) boxLayout {
 
 	nameRows := m.nameRows(innerW, live)
 	titleRow := m.titleRow(innerW)
-	statusRows := m.statusRows(innerW, live)
+	statusRows, huddleIdx, huddleIconCol := m.statusRows(innerW, live)
 	detailRows, emailIdx, emailIconCol := m.detailRows(innerW, live)
+	huddleIcon := huddleIconCol >= 0
 
 	footerText := "K / esc / q close"
-	if emailIdx >= 0 {
+	switch {
+	case emailIdx >= 0 && huddleIcon:
+		footerText = "e copy email \u00b7 c huddle link \u00b7 K / esc / q close"
+	case emailIdx >= 0:
 		footerText = copyFooter
+	case huddleIcon:
+		footerText = huddleFooter
 	}
 	footer := lipgloss.NewStyle().
 		Background(bg).
@@ -148,13 +170,14 @@ func (m *Model) layout(termW, termH int, live Live) boxLayout {
 	type section struct {
 		rows    []string
 		details bool
+		status  bool
 	}
 	sections := []section{}
 	if titleRow != "" {
 		sections = append(sections, section{rows: []string{titleRow}})
 	}
 	if len(statusRows) > 0 {
-		sections = append(sections, section{rows: statusRows})
+		sections = append(sections, section{rows: statusRows, status: true})
 	}
 	if len(detailRows) > 0 {
 		sections = append(sections, section{rows: detailRows, details: true})
@@ -182,6 +205,7 @@ func (m *Model) layout(termW, termH int, live Live) boxLayout {
 
 	body := append([]string{}, nameRows...)
 	iconBodyIdx := -1
+	huddleBodyIdx := -1
 	for _, sec := range sections {
 		// Sections are never empty, so the separator is the only
 		// blank row that can precede them; collapse it when the body
@@ -192,6 +216,9 @@ func (m *Model) layout(termW, termH int, live Live) boxLayout {
 		if sec.details && emailIdx >= 0 {
 			iconBodyIdx = len(body) + emailIdx
 		}
+		if sec.status && huddleIdx >= 0 {
+			huddleBodyIdx = len(body) + huddleIdx
+		}
 		body = append(body, sec.rows...)
 	}
 
@@ -199,12 +226,16 @@ func (m *Model) layout(termW, termH int, live Live) boxLayout {
 	s.Box = s.Box.Padding(0, 1) // the card's own padding
 	box := chrome.Frame{Title: "Profile", Body: body, Footer: footer}.Render(s, boxW)
 
-	l := boxLayout{box: box, iconRow: -1}
+	l := boxLayout{box: box, iconRow: -1, huddleRow: -1}
 	if iconBodyIdx >= 0 {
 		// Box rows: the frame's chrome, then the body.
 		l.iconRow = chrome.BodyTop(s, false) + iconBodyIdx
 		// Box columns: left border, left padding, then the row.
 		l.iconCol = 2 + emailIconCol
+	}
+	if huddleBodyIdx >= 0 && huddleIconCol >= 0 {
+		l.huddleRow = chrome.BodyTop(s, false) + huddleBodyIdx
+		l.huddleCol = 2 + huddleIconCol
 	}
 	return l
 }
@@ -303,15 +334,35 @@ func (m *Model) titleRow(innerW int) string {
 // statusRows renders the custom-status/DND/huddle block, one line per
 // active facet (Slack's own ordering: huddle, then status, then DND),
 // "" rows omitted and the whole block omitted when nothing applies.
-func (m *Model) statusRows(innerW int, live Live) []string {
+// huddleIdx is the index of the huddle row in rows, -1 when there is
+// none, and huddleIconCol the inner-row column a 📋 on it starts at,
+// -1 when the huddle row has no icon — which is whenever the loaded
+// profile did not name the huddle's channel, the case a copy of the
+// huddle link cannot be built for.
+func (m *Model) statusRows(innerW int, live Live) (rows []string, huddleIdx, huddleIconCol int) {
 	st := live.Status
 	now := live.Now
 	bg := styles.Background
 	style := lipgloss.NewStyle().Background(bg).Foreground(styles.TextPrimary)
 
-	var rows []string
+	huddleIdx = -1
+	huddleIconCol = -1
 	if st.InHuddle(now) {
-		rows = append(rows, style.Render(padLeftTo(fit(peerstatus.HuddleGlyph+" In a huddle", innerW), innerW)))
+		huddleIdx = len(rows)
+		line := peerstatus.HuddleGlyph + " In a huddle"
+		if m.state == stateLoaded && m.profile.HuddleChannelID != "" {
+			head := fit(line, innerW-1-drawnWidth(CopyIcon))
+			if head != "" {
+				pad := strings.Repeat(" ", max(0, innerW-drawnWidth(head)-1-drawnWidth(CopyIcon)))
+				huddleIconCol = drawnWidth(head) + 1
+				rows = append(rows, style.Render(head+" "+CopyIcon+pad))
+			} else {
+				// Too narrow for the icon: plain row, nothing to click.
+				rows = append(rows, style.Render(padLeftTo(fit(line, innerW), innerW)))
+			}
+		} else {
+			rows = append(rows, style.Render(padLeftTo(fit(line, innerW), innerW)))
+		}
 	}
 	if st.HasStatus(now) {
 		line := strings.TrimSpace(st.StatusGlyph(now) + " " + st.Text)
@@ -324,7 +375,7 @@ func (m *Model) statusRows(innerW int, live Live) []string {
 		}
 		rows = append(rows, style.Render(padLeftTo(fit(line, innerW), innerW)))
 	}
-	return rows
+	return rows, huddleIdx, huddleIconCol
 }
 
 // detailRows renders local time, email and phone, one row per non-empty

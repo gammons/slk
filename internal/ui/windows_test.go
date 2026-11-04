@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/wintree"
 )
 
@@ -74,6 +76,48 @@ func TestChannelSelected_UpdatesFocusedWindowChannel(t *testing.T) {
 	ch, ok := a.wins.Channel(a.focusedWin)
 	if !ok || ch.ID != "C9" || ch.Name != "incidents" {
 		t.Fatalf("focused window channel = %+v, want C9/incidents", ch)
+	}
+}
+
+// composeDisabled is per-active-channel state, not per-window; a window
+// focus switch must not leak an app DM's disabled compose into an
+// unrelated window's normal channel, and must restore it when focus
+// returns to the app DM.
+func TestFocusWindow_ComposeDisabledDoesNotLeakAcrossWindows(t *testing.T) {
+	a := newWideTestApp(t)
+	setChannelFuncsForTest(a, core.ChannelServiceFuncs{
+		MessagingCapability: func(channelID ids.ChannelID) core.Cmd {
+			return func() core.Msg {
+				return ChannelMessagingCapabilityMsg{ChannelID: string(channelID), CanSend: false}
+			}
+		},
+	})
+
+	a.Update(ChannelSelectedMsg{ID: "C1", Name: "general", Type: "channel"})
+	first := a.focusedWin
+
+	_ = a.splitWindow(wintree.SplitSideBySide)
+	second := a.focusedWin
+	_, cmd := a.Update(ChannelSelectedMsg{ID: "D1", Name: "some-bot", Type: "app"})
+	for _, msg := range drainCmd(cmd) {
+		a.Update(msg)
+	}
+	if !a.composeDisabled {
+		t.Fatal("test setup: expected composeDisabled after selecting an unsendable app DM")
+	}
+
+	for _, msg := range drainCmd(a.focusWindow(first)) {
+		a.Update(msg)
+	}
+	if a.composeDisabled {
+		t.Error("composeDisabled leaked into window 1's normal channel after a focus switch")
+	}
+
+	for _, msg := range drainCmd(a.focusWindow(second)) {
+		a.Update(msg)
+	}
+	if !a.composeDisabled {
+		t.Error("composeDisabled not restored after refocusing the app-DM window")
 	}
 }
 

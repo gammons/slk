@@ -9,7 +9,6 @@ import (
 	"github.com/gammons/slk/internal/bubbles/chrome"
 	"github.com/gammons/slk/internal/emoji"
 	imgpkg "github.com/gammons/slk/internal/image"
-	"github.com/gammons/slk/internal/text"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/styles"
 )
@@ -27,15 +26,15 @@ type Model struct {
 	selected int
 	visible  bool
 	emojiCtx EmojiContext
+	frecency emoji.Frecency
 }
 
 // EmojiContext bundles the emoji-image rendering dependencies for
 // the compose autocomplete dropdown. Mirrors the picker's version
-// in shape and purpose. The Customs field is unused here because the
-// entries the dropdown searches already include workspace customs
-// (see emoji.BuildEntries); it's kept for shape parity with the
-// other emoji-context types so all callers use the same setter
-// signature.
+// in shape and purpose. Customs resolves custom emoji URLs at View()
+// time and tells a custom emoji from a standard one of the same name
+// when ranking by frecency (the entries the dropdown searches already
+// include workspace customs; see emoji.BuildEntries).
 type EmojiContext struct {
 	PlaceCtx emoji.PlaceContext
 	Cells    int
@@ -132,21 +131,23 @@ func (m *Model) SelectedEntry() (emoji.EmojiEntry, bool) {
 	return m.filtered[m.selected], true
 }
 
-// filter walks entries in input order and keeps the first MaxVisible
-// matches. Callers must pass alphabetically-sorted entries
-// (emoji.BuildEntries already does); the picker preserves that order.
-func (m *Model) filter() {
-	q := text.Fold(m.query)
-	var results []emoji.EmojiEntry
-	for _, e := range m.entries {
-		if q == "" || strings.HasPrefix(text.Fold(e.Name), q) {
-			results = append(results, e)
-			if len(results) >= MaxVisible {
-				break
-			}
-		}
+// SetFrecency sets the user's frequently/recently used emoji, which
+// lead the matches for a query. If the picker is visible, the filtered
+// list is recomputed.
+func (m *Model) SetFrecency(f emoji.Frecency) {
+	m.frecency = f
+	if m.visible {
+		m.filter()
 	}
-	m.filtered = results
+}
+
+// filter keeps the first MaxVisible entries whose name starts with the
+// query, the user's frecent ones first (see emoji.Match). Callers must
+// pass alphabetically-sorted entries (emoji.BuildEntries already does);
+// the rest keep that order.
+func (m *Model) filter() {
+	m.filtered = emoji.Match(m.entries, func(e emoji.EmojiEntry) string { return e.Name }, m.query,
+		emoji.MatchOptions{Limit: MaxVisible, Frecency: m.frecency, Customs: m.emojiCtx.Customs})
 	if m.selected >= len(m.filtered) {
 		m.selected = 0
 		if len(m.filtered) > 0 {

@@ -72,7 +72,7 @@ func newTestPeerStatus(known ...string) (p *peerStatusRefresher, sender *capture
 			}
 			return out, nil
 		},
-		func(id string) (*slack.User, error) {
+		func(id string) (*slackclient.UserProfile, error) {
 			return nil, errors.New("newTestPeerStatus: no fallback profile fixture; tests exercising it build their own refresher")
 		},
 		nil, // db; tests exercising the fallback path build their own refresher
@@ -163,12 +163,12 @@ func newFallbackTestPeerStatus(t *testing.T, sender *captureSender, resolveEdge 
 		func(string) bool { return true },
 		resolveEdge,
 		func(context.Context, []string) (map[string]slack.DNDStatus, error) { return nil, nil },
-		func(id string) (*slack.User, error) {
+		func(id string) (*slackclient.UserProfile, error) {
 			*profileCalls = append(*profileCalls, id)
 			u := &slack.User{ID: id}
 			u.Profile.StatusEmoji = ":palm_tree:"
 			u.Profile.StatusText = "Vacation (fallback)"
-			return u, nil
+			return &slackclient.UserProfile{User: u}, nil
 		},
 		db,
 		sender.Send,
@@ -395,7 +395,7 @@ func TestPeerStatus_FlushRefreshesDNDBeforeProfileFallback(t *testing.T) {
 	p, _, _, dndAsked := newTestPeerStatus("U1", "U2")
 	p.resolveNow = func([]string) []edge.User { return nil }
 	var dndAlreadyAsked []bool
-	p.getUserProfile = func(string) (*slack.User, error) {
+	p.getUserProfile = func(string) (*slackclient.UserProfile, error) {
 		dndAlreadyAsked = append(dndAlreadyAsked, len(*dndAsked) > 0)
 		return nil, errors.New("unavailable")
 	}
@@ -456,6 +456,57 @@ func TestWithPeerStatuses_AppliesToDMsAndLeavesInputAlone(t *testing.T) {
 	}
 	if channels[0].Status != stale {
 		t.Error("withPeerStatuses modified its input, which is shared with another goroutine")
+	}
+}
+
+// A workspace switch rebuilds the sidebar from wctx.Channels, whose
+// Presence is from connect time. A peer who came online after connect,
+// then sent a message (re-upserting their profile), must still show
+// online on the next switch.
+func TestWithCachedPresence_SwitchShowsPresenceSinceConnect(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertWorkspace(cache.Workspace{ID: "T1", Name: "T1"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range []cache.User{
+		{ID: "U1", WorkspaceID: "T1", Name: "albert", Presence: "away"},
+		{ID: "U2", WorkspaceID: "T1", Name: "kate", Presence: "away"},
+	} {
+		if err := db.UpsertUser(u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	channels := []sidebar.ChannelItem{
+		{ID: "D1", Type: "dm", DMUserID: "U1", Presence: "away"},
+		{ID: "D2", Type: "dm", DMUserID: "U2", Presence: "away"},
+		{ID: "D3", Type: "dm", DMUserID: "U_UNCACHED", Presence: "active"},
+		{ID: "C1", Type: "channel"},
+	}
+
+	if err := db.UpdatePresence("U1", "active"); err != nil { // presence_change
+		t.Fatal(err)
+	}
+	// U1's reply resolves their profile again, with the placeholder.
+	if err := db.UpsertUser(cache.User{ID: "U1", WorkspaceID: "T1", Name: "albert", DisplayName: "Albert", Presence: "away"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := withCachedPresence(db, channels)
+
+	if got[0].Presence != "active" {
+		t.Errorf("D1 presence = %q; want active from the cache", got[0].Presence)
+	}
+	if got[1].Presence != "away" {
+		t.Errorf("D2 presence = %q; want away", got[1].Presence)
+	}
+	if got[2].Presence != "active" {
+		t.Errorf("D3 presence = %q; an uncached peer keeps its item's value", got[2].Presence)
+	}
+	if got[3].Presence != "" {
+		t.Errorf("non-DM row got presence %q", got[3].Presence)
+	}
+	if channels[0].Presence != "away" {
+		t.Error("withCachedPresence modified its input, which is shared with another goroutine")
 	}
 }
 

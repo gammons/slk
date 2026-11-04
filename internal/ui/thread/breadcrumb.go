@@ -28,9 +28,9 @@ const breadcrumbHintGap = 2
 // empty channelName omits the channel and its separator; an empty
 // author omits "from". "Thread · N replies" is always kept and is only
 // hard-truncated when width is narrower than it.
-func renderBreadcrumb(width int, channelName, channelType, author string, replyCount int) string {
+func renderBreadcrumb(width int, channelName, channelType, author string, replyCount int) (string, int) {
 	if width <= 0 {
-		return ""
+		return "", 0
 	}
 	label := "replies"
 	if replyCount == 1 {
@@ -70,6 +70,8 @@ func renderBreadcrumb(width int, channelName, channelType, author string, replyC
 		}
 	}
 
+	// channelCols is the channel label's width in cells, measured after all truncation - the click router turns the span [0, channelCols) on the breadcrumb row into the go-up-a-level target. 0 when the channel is omitted.
+	channelCols := emojiutil.Width(channel)
 	bg := lipgloss.NewStyle().Background(styles.Background)
 	var b strings.Builder
 	if channel != "" {
@@ -88,7 +90,7 @@ func renderBreadcrumb(width int, channelName, channelType, author string, replyC
 	if showHint {
 		gap := width - used - emojiutil.Width(breadcrumbHint)
 		return left + bg.Render(strings.Repeat(" ", gap)) +
-			bg.Foreground(styles.TextMuted).Render(breadcrumbHint)
+			bg.Foreground(styles.TextMuted).Render(breadcrumbHint), channelCols
 	}
-	return left + bg.Render(strings.Repeat(" ", width-used))
+	return left + bg.Render(strings.Repeat(" ", width-used)), channelCols
 }

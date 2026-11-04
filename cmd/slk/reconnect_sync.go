@@ -33,8 +33,9 @@ import (
 // TestReconnect_ClientSurfaceCannotEnumerate fails if it grows.
 type reconnectClient interface {
 	// GetUnreadCounts is client.counts: one request that returns
-	// unread state for every conversation in the workspace.
-	GetUnreadCounts() ([]slackclient.UnreadInfo, slackclient.ThreadsAggregate, error)
+	// unread state for every conversation in the workspace, plus the
+	// total unread activity that drives the Activity badge.
+	GetUnreadCounts() ([]slackclient.UnreadInfo, slackclient.ThreadsAggregate, int, error)
 }
 
 // teaSender is the subset of *tea.Program the reconnect path and the
@@ -83,6 +84,11 @@ type reconnectSync struct {
 	// normal open path and pushes the result into the UI. Required;
 	// tests substitute a recorder.
 	refreshChannel func(ctx context.Context, channelID string)
+
+	// badgeEvents is the workspace's badge_counts_updated clock, used
+	// to drop a counts snapshot an event superseded mid-request. Nil
+	// (tests) means no clock: the badge send always runs.
+	badgeEvents *badgeEventClock
 }
 
 // run performs one catch-up pass.
@@ -126,10 +132,27 @@ func (r *reconnectSync) run(ctx context.Context) error {
 // Failure is logged and swallowed: unread badges are cosmetic next to
 // the messages themselves, and the next boot refreshes them anyway.
 func (r *reconnectSync) refreshUnreadState() {
-	unreads, _, err := r.client.GetUnreadCounts()
+	// Snapshot the badge event clock before the request: a
+	// badge_counts_updated that arrives while the HTTP call is in
+	// flight is newer than the response, and the event already
+	// delivered its total to the UI. Sending the snapshot's (older)
+	// total on top would roll the badge back until the next event.
+	badgeBefore := int64(0)
+	if r.badgeEvents != nil {
+		badgeBefore = r.badgeEvents.current()
+	}
+	unreads, _, activityTotal, err := r.client.GetUnreadCounts()
 	if err != nil {
 		debuglog.Backfill("team=%s reconnect-sync counts err=%v (unread badges stay stale)", r.workspaceID, err)
 		return
+	}
+	if r.badgeEvents != nil && r.badgeEvents.current() != badgeBefore {
+		debuglog.Backfill("team=%s reconnect-sync counts snapshot superseded by a badge event mid-request; badge keeps the event's total", r.workspaceID)
+	} else {
+		// The Activity badge always refreshes: it is a single absolute
+		// number, so there is no "empty result" ambiguity to guard on
+		// (a zero total legitimately clears the badge).
+		r.program.Send(ui.ActivityBadgeUpdatedMsg{TeamID: r.workspaceID, Total: activityTotal})
 	}
 	if len(unreads) == 0 {
 		return

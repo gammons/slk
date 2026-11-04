@@ -2,6 +2,8 @@ package workspacefinder
 
 import (
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/bubbles/chrome"
@@ -67,16 +69,10 @@ func boxWidth(termWidth int) int {
 	return w
 }
 
-// visibleWindow returns the [start, end) slice of m.filtered currently
-// shown, using the same scroll math as the renderer.
-func (m *Model) visibleWindow() (int, int) {
-	return chrome.Window(m.selected, len(m.filtered), maxVisibleRows)
-}
-
 // BoxSize returns the rendered modal box's outer dimensions. termHeight is
 // unused (height depends only on row count) but kept for symmetry.
 func (m *Model) BoxSize(termWidth, termHeight int) (int, int) {
-	start, end := m.visibleWindow()
+	start, end := chrome.Window(m.selected, len(m.filtered), maxVisibleRows)
 	nRows := end - start
 	if nRows < 1 {
 		nRows = 1
@@ -91,7 +87,7 @@ func (m *Model) ClickRow(termWidth, termHeight, localY int) bool {
 	if row < 0 {
 		return false
 	}
-	start, end := m.visibleWindow()
+	start, end := chrome.Window(m.selected, len(m.filtered), maxVisibleRows)
 	if row >= end-start {
 		return false
 	}
@@ -149,7 +145,8 @@ func (m *Model) HandleKey(keyStr string) *WorkspaceResult {
 
 	case "backspace":
 		if len(m.query) > 0 {
-			m.query = m.query[:len(m.query)-1]
+			_, n := utf8.DecodeLastRuneInString(m.query)
+			m.query = m.query[:len(m.query)-n]
 			m.selected = 0
 			m.filter()
 		}
@@ -157,7 +154,7 @@ func (m *Model) HandleKey(keyStr string) *WorkspaceResult {
 	}
 
 	// If it's a single printable rune, add to query
-	if len(keyStr) == 1 && keyStr[0] >= 32 && keyStr[0] <= 126 {
+	if r := []rune(keyStr); len(r) == 1 && unicode.IsPrint(r[0]) {
 		m.query += keyStr
 		m.selected = 0
 		m.filter()
@@ -218,7 +215,7 @@ func (m Model) renderBox(termWidth int) string {
 	overlayWidth := boxWidth(termWidth)
 	innerWidth := overlayWidth - 4 // border + padding
 
-	start, end := m.visibleWindow()
+	start, end := chrome.Window(m.selected, len(m.filtered), maxVisibleRows)
 	list := chrome.List{Start: start, End: end, Total: len(m.filtered)}
 	width := list.ContentWidth(innerWidth)
 	rows := make([]string, 0, end-start)

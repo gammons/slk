@@ -158,10 +158,21 @@ func (f *Fetcher) SetAuths(auths []TeamAuth) {
 //
 // Safe to call at startup or whenever the active protocol changes
 // (theme switch / terminal capability re-probe). Resets the prerender
-// cache.
+// cache when the protocol changes; a re-configure with the SAME
+// protocol keeps it.
 func (f *Fetcher) ConfigurePrerender(proto Protocol) {
 	f.prerenderMu.Lock()
 	defer f.prerenderMu.Unlock()
+	if proto == f.prerenderProto && f.prerendered != nil {
+		// Same protocol: the encoded output in the cache is still
+		// valid, and dropping it would force the UI thread to
+		// re-encode every visible image. SetImageContext runs
+		// ConfigurePrerender on every window model it configures,
+		// and reduceWorkspaceSwitched builds a fresh window model
+		// per switch, so a switch would otherwise wipe the cache
+		// and cost a synchronous multi-hundred-ms encode per image.
+		return
+	}
 	f.prerenderProto = proto
 	f.prerendered = &sync.Map{}
 }

@@ -43,8 +43,8 @@ import (
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/gammons/slk/internal/ui/themeswitcher"
 	"github.com/gammons/slk/internal/ui/workspace"
+	versionpkg "github.com/gammons/slk/internal/version"
 	"github.com/gammons/slk/internal/wake"
-	"github.com/slack-go/slack"
 	"golang.design/x/clipboard"
 	"golang.org/x/term"
 )
@@ -76,7 +76,7 @@ func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "--version", "-v", "version":
-			fmt.Printf("slk %s (commit %s, built %s)\n", version, commit, date)
+			fmt.Println(versionpkg.Line(version, commit, date))
 			fmt.Println("Unofficial Slack client. Not affiliated with Slack Technologies, LLC.")
 			fmt.Println("Uses Slack's internal browser protocol; may violate Slack's TOS. Use at your own risk.")
 			return
@@ -571,14 +571,7 @@ func run() error {
 	for _, it := range wsItems {
 		railTeamIDs = append(railTeamIDs, it.ID)
 	}
-	applyUISettings(app, uiSettings{
-		TimestampFormat:  tsFormat,
-		TypingIndicators: cfg.Animations.TypingIndicators,
-		StaleAfter:       time.Duration(cfg.Sidebar.HideInactiveAfterDays) * 24 * time.Hour,
-		MouseWheelLines:  cfg.Appearance.MouseWheelLines,
-		ColoredUsernames: cfg.Appearance.ColoredUsernames,
-		ThemeOverrides:   cfg.Theme,
-	})
+	applyUISettings(app, uiSettingsFromConfig(cfg))
 	app.SetEditorService(core.NewEditorService(editor.WriteDraft, editor.Edit, editor.TakeDraft))
 	if editor, ok := ui.ResolveEditor(cfg.Compose.Editor); ok {
 		app.SetComposeEditor(editor)
@@ -614,9 +607,19 @@ func run() error {
 	// thousands of users) wrote ~100MB of kitty graphics APC escape
 	// data to stdout at startup and produced a multi-minute hang on
 	// terminals that decode kitty graphics (kitty, ghostty).
-	app.SetAvatarService(core.NewAvatarService(func(userID string) string {
-		return lazyAvatar(router.Active(), avatarCache, userID)
-	}))
+	// show_avatars = false leaves the service unset, so messages render
+	// through the no-avatar path and no avatar fetches are started.
+	if cfg.Appearance.ShowAvatars {
+		app.SetAvatarService(core.NewAvatarService(func(userID string) string {
+			return lazyAvatar(router.Active(), avatarCache, userID)
+		}, func(userID string) string {
+			if small := avatarCache.GetSmall(userID); small != "" {
+				return small
+			}
+			lazyAvatar(router.Active(), avatarCache, userID)
+			return ""
+		}))
+	}
 
 	// Wire theme switcher: dispatch to the appropriate saver based on scope.
 	// A workspace save names its workspace instead of reading
@@ -663,6 +666,14 @@ func run() error {
 	}
 	app.SetSettingsService(core.NewSettingsService(saveTheme, saveSidebarWidth))
 
+	// endOfDayUnix returns 23:59:59 local time on now's date, as a Unix
+	// timestamp, so a WFH status auto-clears at the end of the day
+	// instead of lingering indefinitely.
+	endOfDayUnix := func(now time.Time) int64 {
+		y, m, d := now.Date()
+		return time.Date(y, m, d, 23, 59, 59, 0, now.Location()).Unix()
+	}
+
 	// Wire presence/DND status setter. Resolves the active team ID
 	// through the router at invocation so the closure always targets
 	// the currently-active workspace context.
@@ -682,6 +693,12 @@ func run() error {
 				err = wctx.Client.SetUserPresence(ctx, "away")
 			case presencemenu.ActionSnooze:
 				_, err = wctx.Client.SetSnooze(ctx, snoozeMinutes)
+			case presencemenu.ActionSetWFH:
+				err = wctx.Client.SetCustomStatus(ctx, "Working from home", ":house:", endOfDayUnix(time.Now()))
+			case presencemenu.ActionSetVacation:
+				err = wctx.Client.SetCustomStatus(ctx, "On vacation", ":palm_tree:", 0)
+			case presencemenu.ActionClearStatus:
+				err = wctx.Client.SetCustomStatus(ctx, "", "", 0)
 			case presencemenu.ActionEndDND:
 				// End any active manual snooze AND any active scheduled
 				// DND session. Either may be a no-op depending on the
@@ -840,6 +857,17 @@ func run() error {
 						UserIDs:     userIDs,
 						RequestID:   requestID,
 					}
+				}
+			},
+			MessagingCapability: func(channelID ids.ChannelID) core.Cmd {
+				wctx := router.Active()
+				if wctx == nil || wctx.Client == nil {
+					return nil
+				}
+				client := wctx.Client
+				chIDStr := string(channelID)
+				return func() core.Msg {
+					return probeMessagingCapability(ctx, client.PostForm, chIDStr)
 				}
 			},
 			Fetch: func(channelID ids.ChannelID, channelName string) core.Msg {
@@ -1016,6 +1044,14 @@ func run() error {
 				}
 				return ui.MessageDeletedMsg{ChannelID: chIDStr, TS: tsStr, Err: err}
 			},
+			RemoveAttachment: func(teamID string, channelID ids.ChannelID, ts ids.MessageTS, attachmentID int) core.Msg {
+				// The user may have switched workspaces since pressing the key.
+				var client attachmentRemover
+				if wctx := router.ByID(teamID); wctx != nil && wctx.Client != nil {
+					client = wctx.Client
+				}
+				return removeAttachment(context.Background(), client, teamID, channelID, ts, attachmentID)
+			},
 			MarkUnread: func(channelID ids.ChannelID, threadTS ids.ThreadTS, boundaryTS ids.MessageTS, unreadCount int) core.Msg {
 				chIDStr := string(channelID)
 				threadTSStr := string(threadTS)
@@ -1094,15 +1130,19 @@ func run() error {
 			},
 		}))
 
-		profileFetch := newProfileFetch(func(teamID string) (func(context.Context, string) (*slack.User, error), bool) {
+		profileFetch := newProfileFetch(func(teamID string) (func(context.Context, string) (*slackclient.UserProfile, error), bool) {
 			wctx := router.ByID(teamID)
 			if wctx == nil || wctx.Client == nil {
 				return nil, false
 			}
 			return wctx.Client.GetUserProfileContext, true
 		})
+		profiles := newProfileCache(5*time.Minute, time.Now, profileFetch)
 		app.SetProfileService(core.NewProfileService(core.ProfileServiceFuncs{
-			Profile: newProfileCache(5*time.Minute, time.Now, profileFetch).Profile,
+			// Profile always fetches; Cached lets the dialog show the last
+			// result instantly while that refresh runs.
+			Profile: profiles.Fresh,
+			Cached:  profiles.Cached,
 		}))
 
 		upload := func(channelID, threadTS, caption string, attachments []core.PendingAttachment) core.Cmd {
@@ -1433,14 +1473,14 @@ func run() error {
 		// Best-effort: nil on error (the picker shows no external flags).
 		external, _ := db.ExternalUsers(wctx.TeamID)
 
-		// Statuses are re-read from the cache, which live changes keep
-		// current, rather than the connect-time items. DND is not
-		// cached; RefreshPeerDND below fetches it after the switch
+		// Statuses and presence are re-read from the cache, which live
+		// changes keep current, rather than the connect-time items. DND
+		// is not cached; RefreshPeerDND below fetches it after the switch
 		// applies, so the switch itself returns without waiting on the
 		// network.
 		statuses := cachedPeerStatuses(db, wctx.TeamID)
 		wctx.PeerStatus.SeedHuddles(statuses)
-		channels := withPeerStatuses(wctx.Channels, statuses)
+		channels := withCachedPresence(db, withPeerStatuses(wctx.Channels, statuses))
 
 		snap := workspacesStore.Snapshot()
 		// switchNames goes to the UI, which owns (and writes) it from

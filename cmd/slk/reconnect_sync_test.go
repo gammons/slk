@@ -70,14 +70,14 @@ type fakeCounts struct {
 	err     error
 }
 
-func (f *fakeCounts) GetUnreadCounts() ([]slackclient.UnreadInfo, slackclient.ThreadsAggregate, error) {
+func (f *fakeCounts) GetUnreadCounts() ([]slackclient.UnreadInfo, slackclient.ThreadsAggregate, int, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, "client.counts")
 	f.mu.Unlock()
 	if f.err != nil {
-		return nil, slackclient.ThreadsAggregate{}, f.err
+		return nil, slackclient.ThreadsAggregate{}, 0, f.err
 	}
-	return f.unreads, slackclient.ThreadsAggregate{}, nil
+	return f.unreads, slackclient.ThreadsAggregate{}, 0, nil
 }
 
 func (f *fakeCounts) snapshot() []string {
@@ -513,5 +513,82 @@ func TestReconnect_CarriesServerMentionCountsIntoTheCache(t *testing.T) {
 		if !state.HasUnread {
 			t.Errorf("%s has_unread = false; want true", id)
 		}
+	}
+}
+
+// A badge_counts_updated that arrives while the reconnect's
+// client.counts request is in flight is newer than the response: the
+// event already delivered its total to the UI, so the response's
+// snapshot must not overwrite it. The clock detects the mid-request
+// event and the badge send is skipped.
+func TestReconnect_BadgeEventMidRequestSupersedesSnapshot(t *testing.T) {
+	db := newTestDB(t)
+	seedWorkspaceChannels(t, db, 1)
+
+	sender := &captureSender{}
+	clock := &badgeEventClock{}
+	r := &reconnectSync{
+		client: &stampingCounts{inner: &fakeCounts{unreads: nil}, clock: clock},
+		db:     db, workspaceID: "T1", program: sender,
+		activeChannel:  func() string { return "" },
+		refreshChannel: func(context.Context, string) {},
+		badgeEvents:    clock,
+	}
+	r.refreshUnreadState()
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	for _, m := range sender.sent {
+		if _, ok := m.(ui.ActivityBadgeUpdatedMsg); ok {
+			t.Fatal("badge snapshot was sent despite a mid-request badge event superseding it")
+		}
+	}
+}
+
+// stampingCounts wraps a fakeCounts and stamps the clock during the
+// GetUnreadCounts call, simulating a badge_counts_updated arriving on
+// the socket while the HTTP request is in flight.
+type stampingCounts struct {
+	inner *fakeCounts
+	clock *badgeEventClock
+}
+
+func (s *stampingCounts) GetUnreadCounts() ([]slackclient.UnreadInfo, slackclient.ThreadsAggregate, int, error) {
+	s.clock.stamp()
+	return s.inner.GetUnreadCounts()
+}
+
+// Without a mid-request event the snapshot still sends: the clock is
+// the guard, not a blanket suppression.
+func TestReconnect_BadgeSnapshotSendsWithoutEvent(t *testing.T) {
+	db := newTestDB(t)
+	seedWorkspaceChannels(t, db, 1)
+
+	sender := &captureSender{}
+	clock := &badgeEventClock{}
+	r := &reconnectSync{
+		client:         &fakeCounts{unreads: nil},
+		db:             db,
+		workspaceID:    "T1",
+		program:        sender,
+		activeChannel:  func() string { return "" },
+		refreshChannel: func(context.Context, string) {},
+		badgeEvents:    clock,
+	}
+	r.refreshUnreadState()
+
+	found := false
+	sender.mu.Lock()
+	for _, m := range sender.sent {
+		if b, ok := m.(ui.ActivityBadgeUpdatedMsg); ok {
+			found = true
+			if b.TeamID != "T1" {
+				t.Errorf("badge msg team = %q, want T1", b.TeamID)
+			}
+		}
+	}
+	sender.mu.Unlock()
+	if !found {
+		t.Fatal("badge snapshot was not sent without a competing event")
 	}
 }

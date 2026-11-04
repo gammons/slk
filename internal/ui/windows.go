@@ -155,7 +155,7 @@ func (a *App) focusWindow(id wintree.LeafID) tea.Cmd {
 		a.CloseThread() // spec §7: thread follows focused window
 	}
 	if ch, ok := a.wins.Channel(id); ok && ch.ID != "" && ch.ID != a.activeChannelID {
-		a.retargetActiveChannel(ch.ID, ch.Name, ch.Type)
+		return a.retargetActiveChannel(ch.ID, ch.Name, ch.Type)
 	}
 	return nil
 }

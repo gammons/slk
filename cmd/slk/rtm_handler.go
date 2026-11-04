@@ -24,13 +24,14 @@ import (
 type rtmEventHandler struct {
 	// program is the running *tea.Program, narrowed to teaSender so
 	// tests can capture what the handler dispatches.
-	program     teaSender
-	userNames   *userNameStore
-	tsFormat    string
-	db          *cache.DB
-	workspaceID string
-	connected   bool
-	isActive    func() bool
+	program          teaSender
+	userNames        *userNameStore
+	tsFormat         string
+	db               *cache.DB
+	workspaceID      string
+	connected        bool
+	sectionRefreshAt time.Time
+	isActive         func() bool
 
 	// Notifications
 	notifier        *notify.Notifier
@@ -76,7 +77,35 @@ type rtmEventHandler struct {
 	// lookupRetryAt holds when a refused or rate-limited discovery
 	// lookup may run again. WebSocket goroutine only.
 	lookupRetryAt map[string]time.Time
+
+	// pendingRooms holds the `room` object of a message frame between
+	// OnMessageRoom (called just before OnMessage by the dispatcher) and
+	// the OnMessage that consumes it, keyed by channel/ts. WebSocket
+	// goroutine only.
+	pendingRooms map[string]json.RawMessage
 }
+
+// maxPendingRooms bounds pendingRooms against frames whose OnMessage never
+// follows (a message_changed dropped as ephemeral, say).
+const maxPendingRooms = 32
+
+// OnMessageRoom implements slackclient.RoomObserver.
+func (h *rtmEventHandler) OnMessageRoom(channelID, ts string, room json.RawMessage) {
+	if h.pendingRooms == nil || len(h.pendingRooms) >= maxPendingRooms {
+		h.pendingRooms = map[string]json.RawMessage{}
+	}
+	h.pendingRooms[channelID+"/"+ts] = room
+}
+
+// takeRoom returns and forgets the room OnMessageRoom stored for a message.
+func (h *rtmEventHandler) takeRoom(channelID, ts string) json.RawMessage {
+	k := channelID + "/" + ts
+	room := h.pendingRooms[k]
+	delete(h.pendingRooms, k)
+	return room
+}
+
+var _ slackclient.RoomObserver = (*rtmEventHandler)(nil)
 
 const discoveryRetryAfter = time.Minute
 
@@ -129,11 +158,12 @@ func (h *rtmEventHandler) discoverConversation(channelID string) (sidebar.Channe
 	return h.addConversation(*ch)
 }
 
-func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment, botID, username string) {
+func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, changed, edited bool, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment, botID, username string) {
 	// Bot messages (bot_message) carry no user, only a bot_id + username.
 	// Key the row on the bot_id and resolve its avatar/name via bots.info,
 	// mirroring the fetch path's messageAuthor (cmd/slk/users.go).
 	authorID := h.messageAuthor(userID, botID, username)
+	room := h.takeRoom(channelID, ts)
 	// Synchronous, so the channel's row and type exist before the writes
 	// below. The UI hears of it only after the unread write.
 	discovered, discoveredFinder, isNew := h.discoverConversation(channelID)
@@ -141,48 +171,70 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// Guard against nil db so handlers constructed in tests (without
 	// real persistence) don't panic.
 	if h.db != nil {
-		synthetic := slack.Message{Msg: slack.Msg{
-			Type:            "message",
-			Timestamp:       ts,
-			User:            authorID,
-			Text:            text,
-			ThreadTimestamp: threadTS,
-			SubType:         subtype,
-			Files:           files,
-			Blocks:          blocks,
-			Attachments:     attachments,
-		}}
-		rawBytes, _ := json.Marshal(synthetic)
-		h.db.UpsertMessage(cache.Message{
-			TS:          ts,
-			ChannelID:   channelID,
-			WorkspaceID: h.workspaceID,
-			UserID:      authorID,
-			Text:        text,
-			ThreadTS:    threadTS,
-			Subtype:     subtype,
-			RawJSON:     string(rawBytes),
-			CreatedAt:   time.Now().Unix(),
-		})
-		if err := h.db.SetChannelSyncedAt(channelID, time.Now().Unix()); err != nil {
-			debuglog.Cache("OnMessage: SetChannelSyncedAt %s: %v", channelID, err)
-		}
-		// Advance the per-channel ts watermark used by reconnect
-		// backfill. Slack delivers WS messages in order, so receipt
-		// of a message with ts=X implies we have no missing messages
-		// with ts <= X on this channel — that is exactly the
-		// invariant latest_synced_ts encodes. AdvanceChannelLatestSyncedTS
-		// is no-regress, so out-of-order replay (e.g., a delayed
-		// duplicate after reconnect) won't move the cursor backward.
-		if _, err := h.db.AdvanceChannelLatestSyncedTS(channelID, ts); err != nil {
-			debuglog.Cache("OnMessage: AdvanceChannelLatestSyncedTS %s ts=%s: %v", channelID, ts, err)
+		// A change echo carries only content; caching it whole would
+		// reset the reply count and subtype (see cacheChange). Nor is
+		// it a new arrival, so it leaves the sync state alone: a
+		// change of an old message in a channel reconnect marked
+		// stale would make it look fresh, and the next open would
+		// skip the fetch of what was missed.
+		if changed {
+			h.cacheChange(channelID, ts, text, threadTS, files, blocks, attachments, room)
+		} else {
+			synthetic := slack.Message{Msg: slack.Msg{
+				Type:            "message",
+				Timestamp:       ts,
+				User:            authorID,
+				Text:            text,
+				ThreadTimestamp: threadTS,
+				SubType:         subtype,
+				Files:           files,
+				Blocks:          blocks,
+				Attachments:     attachments,
+			}}
+			rawBytes, _ := json.Marshal(synthetic)
+			rawBytes = slackclient.MergeRoom(rawBytes, room)
+			h.db.UpsertMessage(cache.Message{
+				TS:          ts,
+				ChannelID:   channelID,
+				WorkspaceID: h.workspaceID,
+				UserID:      authorID,
+				Text:        text,
+				ThreadTS:    threadTS,
+				Subtype:     subtype,
+				RawJSON:     string(rawBytes),
+				CreatedAt:   time.Now().Unix(),
+			})
+			if err := h.db.SetChannelSyncedAt(channelID, time.Now().Unix()); err != nil {
+				debuglog.Cache("OnMessage: SetChannelSyncedAt %s: %v", channelID, err)
+			}
+			// Advance the per-channel ts watermark used by reconnect
+			// backfill. Slack delivers WS messages in order, so receipt
+			// of a message with ts=X implies we have no missing messages
+			// with ts <= X on this channel: that is exactly the
+			// invariant latest_synced_ts encodes. AdvanceChannelLatestSyncedTS
+			// is no-regress, so out-of-order replay (e.g., a delayed
+			// duplicate after reconnect) won't move the cursor backward.
+			if _, err := h.db.AdvanceChannelLatestSyncedTS(channelID, ts); err != nil {
+				debuglog.Cache("OnMessage: AdvanceChannelLatestSyncedTS %s ts=%s: %v", channelID, ts, err)
+			}
 		}
 	}
 
 	// Check if this message should trigger a desktop notification.
 	// Do this before the active workspace check so inactive workspaces
-	// can still trigger notifications.
-	if h.notifier != nil && h.notifyCfg.Enabled {
+	// can still trigger notifications. A change echo (an edit, an unfurl
+	// arriving, a preview removed) re-delivers a message that already
+	// had its chance to notify, so it never does. A join/leave notice is
+	// never notification-worthy either -- Slack doesn't notify on them,
+	// and an invitation join's text mentions the inviter, which would
+	// otherwise false-positive OnMention for whoever did the inviting.
+	//
+	// Not unit-tested here: *notify.Notifier is a concrete type whose only
+	// effect is an OS notification or a shell command, and OnMessage needs a
+	// full handler (db, caches, program), so faking the gate is
+	// disproportionate. The subtype list itself is pinned by the notice
+	// tests in messages and slackclient.
+	if !changed && h.notifier != nil && h.notifyCfg.Enabled && !messages.IsSystemNoticeSubtype(subtype) {
 		isActiveWS := h.isActive != nil && h.isActive()
 		activeChID := ""
 		if h.activeChannelID != nil {
@@ -250,9 +302,9 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	isThreadReply := threadTS != "" && threadTS != ts
 	isBroadcast := subtype == "thread_broadcast"
 	channelEligible := !isThreadReply || isBroadcast
-	// Self-sends and edit echoes are excluded because reduceNewMessage
+	// Self-sends and change echoes are excluded because reduceNewMessage
 	// returns BEFORE its read-state tail for both (reducer_send.go, the
-	// IsEdited and IsSelfSent arms). Nothing on the UI side would ever
+	// Changed and IsSelfSent arms). Nothing on the UI side would ever
 	// clear a flag set here, so it would stick until the next channel
 	// entry — the dot would appear on the channel you just posted in.
 	//
@@ -280,11 +332,16 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// U-prefixed user ID — the choice is about intent, not a
 	// behavioral difference.
 	isSelfMessage := userID != "" && userID == h.currentUserID
-	// edited is true only for message_changed
-	// (internal/slack/events.go:307): a re-delivery of a message the
-	// channel already accounted for. Editing it does not make the
-	// channel unread on Slack.
-	shouldMarkChannel := channelEligible && !isSelfMessage && !edited
+	// changed is true only for message_changed (dispatchWebSocketEvent):
+	// a re-delivery of a message the channel already accounted for.
+	// Editing it, or an unfurl landing on it, does not make the channel
+	// unread on Slack. It is not `edited`: an unfurl is a change nobody
+	// edited, and would otherwise mark the channel unread again.
+	//
+	// A join/leave notice doesn't make the channel unread on Slack
+	// either -- excluded here so the mention-badge check below (nested
+	// in this same gate) inherits it for free, same as isSelfMessage.
+	shouldMarkChannel := channelEligible && !isSelfMessage && !changed && !messages.IsSystemNoticeSubtype(subtype)
 	if h.db != nil && shouldMarkChannel {
 		if err := h.db.UpdateChannelReadState(channelID, "", true); err != nil {
 			log.Printf("Warning: failed to set has_unread for %s: %v", channelID, err)
@@ -295,7 +352,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 		// badge can never disagree about whether a message "arrived
 		// unread". Everything shouldMarkChannel excludes -- thread
 		// replies that are not broadcasts, self-authored messages, and
-		// edits -- is excluded from the badge for free.
+		// changes -- is excluded from the badge for free.
 		//
 		// That an edit cannot badge is inherited, not incidental: a
 		// message_changed re-delivery does not make a channel unread on
@@ -355,7 +412,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 			debuglog.Cache("OnMessage: team=%s channel=%s ts=%s subtype=%q thread_ts=%s decision=skipped_thread_reply_inactive",
 				h.workspaceID, channelID, ts, subtype, threadTS)
 		default:
-			debuglog.Cache("OnMessage: team=%s channel=%s ts=%s subtype=%q thread_ts=%s decision=skipped_self_or_edit_inactive",
+			debuglog.Cache("OnMessage: team=%s channel=%s ts=%s subtype=%q thread_ts=%s decision=skipped_self_or_change_inactive",
 				h.workspaceID, channelID, ts, subtype, threadTS)
 		}
 		if h.program != nil {
@@ -368,10 +425,45 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	}
 
 	item := h.messageItemFromEvent(authorID, userID, username, ts, text, threadTS, subtype, edited, files, blocks, attachments)
+	var request func(string)
+	if h.wsCtx != nil && h.wsCtx.UserResolver != nil {
+		request = h.wsCtx.UserResolver.Request
+	}
+	item.HuddleRoom = resolveHuddleUsers(core.ParseHuddleRoom(room), h.userNames, h.db, request)
 	debuglog.Cache("OnMessage: team=%s channel=%s ts=%s subtype=%q thread_ts=%s decision=dispatched_to_app",
 		h.workspaceID, channelID, ts, subtype, threadTS)
 	if h.program != nil {
-		h.program.Send(ui.NewMessageMsg{ChannelID: channelID, Message: item})
+		h.program.Send(ui.NewMessageMsg{ChannelID: channelID, Message: item, Changed: changed})
+	}
+}
+
+// cacheChange writes a message_changed echo (an edit, an unfurl
+// landing, a preview removed) to the cache. What reaches OnMessage of
+// it is partial: no reply count, and the dispatcher passes no subtype. So it
+// changes only the content of the cached row (ApplyMessageChange) and
+// keeps the reply count of a thread parent and the subtype of a
+// broadcast, which a reload from cache reads back. The echo's thread_ts
+// only fills a row that has none.
+//
+// A change for a message the cache does not hold is not written: the
+// next fetch that reaches it caches the whole message.
+func (h *rtmEventHandler) cacheChange(channelID, ts, text, threadTS string, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment, room json.RawMessage) {
+	change := cache.MessageChange{Text: text, ThreadTS: threadTS, Room: room}
+	if len(files) > 0 {
+		change.Files, _ = json.Marshal(files)
+	}
+	if len(blocks.BlockSet) > 0 {
+		change.Blocks, _ = json.Marshal(blocks)
+	}
+	if len(attachments) > 0 {
+		change.Attachments, _ = json.Marshal(attachments)
+	}
+	found, err := h.db.ApplyMessageChange(channelID, ts, change)
+	switch {
+	case err != nil:
+		debuglog.Cache("OnMessage: team=%s channel=%s ts=%s change not cached: %v", h.workspaceID, channelID, ts, err)
+	case !found:
+		debuglog.Cache("OnMessage: team=%s channel=%s ts=%s change for no live cached row, not cached", h.workspaceID, channelID, ts)
 	}
 }
 
@@ -406,7 +498,7 @@ func (h *rtmEventHandler) messageItemFromEvent(authorID, userID, username, ts, t
 			userName = username
 		}
 	}
-	return messages.MessageItem{
+	item := messages.MessageItem{
 		TS:                ts,
 		UserID:            authorID,
 		UserName:          userName,
@@ -419,6 +511,12 @@ func (h *rtmEventHandler) messageItemFromEvent(authorID, userID, username, ts, t
 		Blocks:            extractBlocks(blocks),
 		LegacyAttachments: extractLegacyAttachments(attachments),
 	}
+	var resolver *userResolver
+	if h.wsCtx != nil {
+		resolver = h.wsCtx.UserResolver
+	}
+	resolveMessageMentions(item, h.userNames, h.db, resolver)
+	return item
 }
 
 // OnEphemeralMessage handles a message only the current user can see:
@@ -545,5 +643,25 @@ func (h *rtmEventHandler) OnUserTyping(channelID, userID string) {
 		ChannelID:   channelID,
 		UserID:      userID,
 		WorkspaceID: h.workspaceID,
+	})
+}
+
+func (h *rtmEventHandler) OnAssistantStatus(s slackclient.AssistantStatus) {
+	// The status names the app; one slk has not seen yet is fetched,
+	// as an unknown message author is, so it does not stay a raw ID.
+	if s.Status != "" {
+		if _, ok := resolveUserCached(s.BotUserID, h.userNames, h.db); !ok && h.wsCtx != nil && h.wsCtx.UserResolver != nil {
+			h.wsCtx.UserResolver.Request(s.BotUserID)
+		}
+	}
+	if h.program == nil {
+		return
+	}
+	h.program.Send(ui.BotStatusMsg{
+		WorkspaceID: h.workspaceID,
+		ChannelID:   s.ChannelID,
+		ThreadTS:    s.ThreadTS,
+		BotUserID:   s.BotUserID,
+		Status:      s.Status,
 	})
 }

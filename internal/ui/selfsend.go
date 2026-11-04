@@ -39,6 +39,14 @@ import (
 // the visible flicker between WS echo and HTTP response.
 const selfSendWindow = 3 * time.Second
 
+// selfSendPendingLimit bounds how long a send that has not answered yet
+// keeps self-user echoes on its channel suppressed (BeginSend). A message
+// with links first waits up to 3s for the apps' previews (internal/slack
+// linkChipWait) before chat.postMessage even starts, so its echo can land
+// well past selfSendWindow; the limit stops a send whose answer never
+// arrives from hiding the channel's self-user messages for good.
+const selfSendPendingLimit = 15 * time.Second
+
 // selfSendDedup tracks self-originated sends. See package comment.
 type selfSendDedup struct {
 	// sentTSes records authoritative TSes the App has just observed
@@ -61,12 +69,21 @@ type selfSendDedup struct {
 	// placeholder for the authoritative Slack-assigned TS once the
 	// chat.postMessage HTTP response arrives.
 	localTSCounter uint64
+
+	// pendingByChannel counts the sends per channel that BeginSend
+	// started and EndSend has not yet ended.
+	pendingByChannel map[string]int
+
+	// now is time.Now, replaced in tests.
+	now func() time.Time
 }
 
 func newSelfSendDedup() *selfSendDedup {
 	return &selfSendDedup{
 		sentTSes:          make(map[string]time.Time),
 		lastSendByChannel: make(map[string]time.Time),
+		pendingByChannel:  make(map[string]int),
+		now:               time.Now,
 	}
 }
 
@@ -80,19 +97,46 @@ func (d *selfSendDedup) MarkInFlight(channelID string) {
 	if channelID == "" {
 		return
 	}
-	d.lastSendByChannel[channelID] = time.Now()
+	d.lastSendByChannel[channelID] = d.now()
+}
+
+// BeginSend is MarkInFlight for a new message or reply, whose answer
+// (MessageSentMsg / MessageSendFailedMsg, ThreadReplySentMsg /
+// ThreadReplySendFailedMsg) calls EndSend. Until then the channel stays
+// in flight past selfSendWindow, up to selfSendPendingLimit; afterwards
+// IsSelfSent covers the echo, and other self-user messages show again.
+func (d *selfSendDedup) BeginSend(channelID string) {
+	if channelID == "" {
+		return
+	}
+	d.MarkInFlight(channelID)
+	d.pendingByChannel[channelID]++
+}
+
+// EndSend records that one of channelID's sends has answered.
+func (d *selfSendDedup) EndSend(channelID string) {
+	if d.pendingByChannel[channelID] > 1 {
+		d.pendingByChannel[channelID]--
+		return
+	}
+	delete(d.pendingByChannel, channelID)
 }
 
 // InFlight reports whether the user submitted an slk-originated send
-// for channelID within the last selfSendWindow. Cross-session sends
-// (e.g. from the official Slack client) never update the map, so
-// their WS echoes are not suppressed.
+// for channelID within the last selfSendWindow, or one that has not
+// answered yet within selfSendPendingLimit. Cross-session sends (e.g.
+// from the official Slack client) never update the maps, so their WS
+// echoes are not suppressed outside those windows.
 func (d *selfSendDedup) InFlight(channelID string) bool {
 	t, ok := d.lastSendByChannel[channelID]
 	if !ok {
 		return false
 	}
-	return time.Since(t) < selfSendWindow
+	since := d.now().Sub(t)
+	if since < selfSendWindow {
+		return true
+	}
+	return d.pendingByChannel[channelID] > 0 && since < selfSendPendingLimit
 }
 
 // RecordSent marks a message TS as one the user just posted from this
@@ -103,11 +147,11 @@ func (d *selfSendDedup) RecordSent(ts string) {
 	if ts == "" {
 		return
 	}
-	d.sentTSes[ts] = time.Now()
+	d.sentTSes[ts] = d.now()
 	// Opportunistic cleanup: drop entries older than 5 minutes. WS
 	// echoes arrive within seconds; anything older is stale.
 	if len(d.sentTSes) > 64 {
-		cutoff := time.Now().Add(-5 * time.Minute)
+		cutoff := d.now().Add(-5 * time.Minute)
 		for k, v := range d.sentTSes {
 			if v.Before(cutoff) {
 				delete(d.sentTSes, k)

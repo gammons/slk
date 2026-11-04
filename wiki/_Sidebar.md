@@ -10,6 +10,7 @@
 **Using slk**
 - [[Features]]
 - [[Keybindings]]
+- [[Commands]]
 - [[Terminal Compatibility|Terminal-Compatibility]]
 - [[Clipboard and OSC 52|Clipboard-and-OSC-52]]
 

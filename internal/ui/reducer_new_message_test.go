@@ -81,6 +81,55 @@ func TestReducer_NewMessageOpenedMsg_SwitchesChannelAndEntersInsertMode(t *testi
 	}
 }
 
+// Reopening a DM already known to be read-only or unsendable must not
+// leave insert mode active over the hidden composer.
+func TestReducer_NewMessageOpenedMsg_DisabledDMDropsInsertMode(t *testing.T) {
+	cases := []struct {
+		name     string
+		mark     func(a *App)
+		wantMode Mode
+	}{
+		{"read-only", func(a *App) { a.readOnlyChannels = map[string]bool{"D000": true} }, ModeNormal},
+		{"unsendable", func(a *App) { a.unsendableChannels = map[string]bool{"D000": true} }, ModeNormal},
+		{"control sendable", func(a *App) {}, ModeInsert},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app, _ := newApp_WithOpenConvCapture(t)
+			tc.mark(app)
+			_, _ = app.Update(EnterNewMessageMsg{})
+			app.newMessageInFlightID = 7
+
+			_, cmd := app.Update(NewMessageOpenedMsg{
+				ChannelID:   "D000",
+				AlreadyOpen: true,
+				UserIDs:     []string{"U1"},
+				RequestID:   7,
+			})
+			if cmd == nil {
+				t.Fatal("expected a cmd")
+			}
+			sel, ok := findChannelSelected(cmd())
+			if !ok {
+				t.Fatal("expected ChannelSelectedMsg")
+			}
+			_, _ = app.Update(sel)
+
+			if app.mode != tc.wantMode {
+				t.Fatalf("mode = %v, want %v", app.mode, tc.wantMode)
+			}
+			if tc.wantMode == ModeInsert {
+				return
+			}
+			before := app.compose.Value()
+			_, _ = app.Update(keyPress('x'))
+			if got := app.compose.Value(); got != before {
+				t.Errorf("hidden draft changed from %q to %q", before, got)
+			}
+		})
+	}
+}
+
 // findChannelSelected walks a tea.Cmd result (which may be a
 // tea.BatchMsg) and returns the first ChannelSelectedMsg it finds.
 func findChannelSelected(msg tea.Msg) (ChannelSelectedMsg, bool) {

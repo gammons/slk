@@ -59,4 +59,23 @@ func TestStarredConversationIDs_MembershipAndCopy(t *testing.T) {
 	if got := store.StarredConversationIDs(); got != nil {
 		t.Fatalf("IDs without stars section = %v", got)
 	}
+	t.Run("redacted populated stars", func(t *testing.T) {
+		store := NewSectionStore()
+		client := &fakeSectionsClient{
+			sections: []slk.SidebarSection{{ID: "ST", Type: "stars", IsRedacted: true}},
+			starIDs:  []string{"D1"},
+		}
+		if err := store.Bootstrap(context.Background(), client); err != nil {
+			t.Fatal(err)
+		}
+		if got := store.StarredConversationIDs(); got != nil {
+			t.Fatalf("redacted IDs = %v", got)
+		}
+		if got := store.OrderedSections(); len(got) != 0 {
+			t.Fatalf("redacted sections = %+v", got)
+		}
+		if section, ok := store.SectionForChannel("D1"); ok {
+			t.Fatalf("redacted membership = %q", section)
+		}
+	})
 }

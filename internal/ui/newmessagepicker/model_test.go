@@ -518,3 +518,19 @@ func TestHandleKey_SpaceDoesNotClearQueryOnRemove(t *testing.T) {
 		t.Errorf("expected query preserved after remove, got %q", m.query)
 	}
 }
+
+// TestHandleKey_NonASCIIQuery: a multi-byte rune is typed into the
+// query, and backspace removes the whole rune, not its last byte (#187).
+func TestHandleKey_NonASCIIQuery(t *testing.T) {
+	m := New()
+	m.Open()
+	m.HandleKey("中")
+	m.HandleKey("文")
+	if m.query != "中文" {
+		t.Fatalf("query = %q, want %q", m.query, "中文")
+	}
+	m.HandleKey("backspace")
+	if m.query != "中" {
+		t.Errorf("after backspace query = %q, want %q", m.query, "中")
+	}
+}

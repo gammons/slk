@@ -237,12 +237,14 @@ func (a activityAdapter) SetRead(teamID ids.TeamID, item ActivityItem, read bool
 // NewMessageService. Nil Forward returns an unsupported error; other nil
 // fields make the resulting service no-op that operation.
 type MessageServiceFuncs struct {
-	Send       MessageSendFunc
-	Forward    MessageForwardFunc
-	Edit       MessageEditFunc
-	Delete     MessageDeleteFunc
-	MarkUnread MarkUnreadFunc
-	Permalink  PermalinkFetchFunc
+	Send    MessageSendFunc
+	Forward MessageForwardFunc
+	Edit    MessageEditFunc
+	Delete  MessageDeleteFunc
+	// RemoveAttachment may be nil: the service then no-ops.
+	RemoveAttachment MessageRemoveAttachmentFunc
+	MarkUnread       MarkUnreadFunc
+	Permalink        PermalinkFetchFunc
 }
 
 // NewMessageService builds a MessageService from a MessageServiceFuncs
@@ -283,6 +285,13 @@ func (m messageAdapter) Delete(channelID ids.ChannelID, ts ids.MessageTS) Msg {
 	return m.fns.Delete(channelID, ts)
 }
 
+func (m messageAdapter) RemoveAttachment(teamID string, channelID ids.ChannelID, ts ids.MessageTS, attachmentID int) Msg {
+	if m.fns.RemoveAttachment == nil {
+		return nil
+	}
+	return m.fns.RemoveAttachment(teamID, channelID, ts, attachmentID)
+}
+
 func (m messageAdapter) MarkUnread(channelID ids.ChannelID, threadTS ids.ThreadTS, boundaryTS ids.MessageTS, unreadCount int) Msg {
 	if m.fns.MarkUnread == nil {
 		return nil
@@ -301,18 +310,19 @@ func (m messageAdapter) Permalink(ctx context.Context, channelID ids.ChannelID, 
 // NewChannelService. Any field may be nil; the resulting service
 // no-ops that operation.
 type ChannelServiceFuncs struct {
-	Fetch            ChannelFetchFunc
-	FetchOlder       OlderMessagesFetchFunc
-	FetchAround      func(channelID ids.ChannelID, ts ids.MessageTS) Msg
-	ReadCache        ChannelCacheReadFunc
-	SyncedAt         func(channelID ids.ChannelID) int64
-	MarkRead         func(channelID ids.ChannelID, ts ids.MessageTS) Msg
-	Lookup           ChannelLookupFunc
-	Join             JoinChannelFunc
-	RecordVisit      ChannelVisitRecorder
-	MembershipFetch  func(channelID ids.ChannelID)
-	OpenConversation func(userIDs []string, requestID uint64) Cmd
-	SearchRemote     func(query string) []ChannelFinderItem
+	Fetch               ChannelFetchFunc
+	FetchOlder          OlderMessagesFetchFunc
+	FetchAround         func(channelID ids.ChannelID, ts ids.MessageTS) Msg
+	ReadCache           ChannelCacheReadFunc
+	SyncedAt            func(channelID ids.ChannelID) int64
+	MarkRead            func(channelID ids.ChannelID, ts ids.MessageTS) Msg
+	Lookup              ChannelLookupFunc
+	Join                JoinChannelFunc
+	RecordVisit         ChannelVisitRecorder
+	MembershipFetch     func(channelID ids.ChannelID)
+	OpenConversation    func(userIDs []string, requestID uint64) Cmd
+	SearchRemote        func(query string) []ChannelFinderItem
+	MessagingCapability func(channelID ids.ChannelID) Cmd
 }
 
 // NewChannelService builds a ChannelService from a
@@ -407,6 +417,13 @@ func (c channelAdapter) OpenConversation(userIDs []string, requestID uint64) Cmd
 		return nil
 	}
 	return c.fns.OpenConversation(userIDs, requestID)
+}
+
+func (c channelAdapter) MessagingCapability(channelID ids.ChannelID) Cmd {
+	if c.fns.MessagingCapability == nil {
+		return nil
+	}
+	return c.fns.MessagingCapability(channelID)
 }
 
 // SearchServiceFuncs is the closure bundle accepted by
@@ -632,9 +649,11 @@ func (u unreadAdapter) UnreadWorkspaces() []string {
 }
 
 // ProfileServiceFuncs is the closure bundle accepted by
-// NewProfileService. A nil Profile func returns errors.ErrUnsupported.
+// NewProfileService. A nil Profile func returns errors.ErrUnsupported;
+// a nil Cached func never has a cached profile.
 type ProfileServiceFuncs struct {
 	Profile func(ctx context.Context, teamID, userID string) (UserProfile, error)
+	Cached  func(teamID, userID string) (UserProfile, bool)
 }
 
 // NewProfileService builds a ProfileService from a ProfileServiceFuncs
@@ -652,6 +671,13 @@ func (p profileAdapter) Profile(ctx context.Context, teamID, userID string) (Use
 	return p.fns.Profile(ctx, teamID, userID)
 }
 
+func (p profileAdapter) Cached(teamID, userID string) (UserProfile, bool) {
+	if p.fns.Cached == nil {
+		return UserProfile{}, false
+	}
+	return p.fns.Cached(teamID, userID)
+}
+
 // NewWorkspaceService builds a WorkspaceService from a closure.
 func NewWorkspaceService(switchTo func(teamID string) Msg) WorkspaceService {
 	return workspaceAdapter{switchTo: switchTo}
@@ -666,18 +692,26 @@ func (w workspaceAdapter) Switch(teamID string) Msg {
 	return w.switchTo(teamID)
 }
 
-// NewAvatarService builds an AvatarService from a closure.
-func NewAvatarService(avatar func(userID string) string) AvatarService {
-	return avatarAdapter{avatar: avatar}
+// NewAvatarService builds an AvatarService from closures; replyAvatar
+// may be nil.
+func NewAvatarService(avatar, replyAvatar func(userID string) string) AvatarService {
+	return avatarAdapter{avatar: avatar, replyAvatar: replyAvatar}
 }
 
-type avatarAdapter struct{ avatar func(userID string) string }
+type avatarAdapter struct{ avatar, replyAvatar func(userID string) string }
 
 func (a avatarAdapter) Avatar(userID string) string {
 	if a.avatar == nil {
 		return ""
 	}
 	return a.avatar(userID)
+}
+
+func (a avatarAdapter) ReplyAvatar(userID string) string {
+	if a.replyAvatar == nil {
+		return ""
+	}
+	return a.replyAvatar(userID)
 }
 
 // Closure types accepted by the service constructors.
@@ -709,6 +743,11 @@ type MessageEditFunc func(channelID ids.ChannelID, ts ids.MessageTS, newText str
 // MessageDeleteFunc performs the chat.delete API call. Returns a Msg
 // (typically MessageDeletedMsg) describing the result.
 type MessageDeleteFunc func(channelID ids.ChannelID, ts ids.MessageTS) Msg
+
+// MessageRemoveAttachmentFunc performs the chat.deleteAttachment API
+// call against workspace teamID's client. Returns a Msg (typically
+// AttachmentRemovedMsg) describing the result.
+type MessageRemoveAttachmentFunc func(teamID string, channelID ids.ChannelID, ts ids.MessageTS, attachmentID int) Msg
 
 // MarkUnreadFunc performs the conversations.mark or
 // subscriptions.thread.mark HTTP call (with the rolled-back ts /

@@ -4,6 +4,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/bubbles/chrome"
@@ -133,12 +135,12 @@ func (m *Model) extractSynthetic() []core.ChannelFinderItem {
 // outside of a full SetItems refresh (e.g. a live im_created/mpim_open WS
 // event or a Ctrl+N-initiated DM), so it shows up in Ctrl+P immediately
 // instead of waiting for the next workspace activation to pick up
-// WorkspaceContext.FinderItems. LastVisited is preserved from the existing
-// entry when the incoming item doesn't specify one.
+// WorkspaceContext.FinderItems. LastVisited keeps the newer of the existing
+// and incoming visit times.
 func (m *Model) Upsert(item core.ChannelFinderItem) {
 	for i := range m.items {
 		if m.items[i].ID == item.ID {
-			if item.LastVisited == 0 {
+			if item.LastVisited < m.items[i].LastVisited {
 				item.LastVisited = m.items[i].LastVisited
 			}
 			item.Synthetic = m.items[i].Synthetic
@@ -232,19 +234,12 @@ func boxWidth(termWidth int) int {
 	return w
 }
 
-// visibleWindow returns the [start, end) slice of m.filtered currently
-// shown in the results list, applying the same scroll-window math the
-// renderer uses so hit-testing and rendering agree.
-func (m *Model) visibleWindow() (int, int) {
-	return chrome.Window(m.selected, len(m.filtered), maxVisibleRows)
-}
-
 // BoxSize returns the outer dimensions of the rendered modal box for the
 // given terminal size. termHeight is unused (this modal's height depends
 // only on its row count) but kept for interface symmetry with overlays
 // whose height is terminal-dependent.
 func (m *Model) BoxSize(termWidth, termHeight int) (int, int) {
-	start, end := m.visibleWindow()
+	start, end := chrome.Window(m.selected, len(m.filtered), maxVisibleRows)
 	nRows := end - start
 	if nRows < 1 {
 		nRows = 1 // empty list still renders one (message/placeholder) row
@@ -263,7 +258,7 @@ func (m *Model) ClickRow(termWidth, termHeight, localY int) bool {
 	if row < 0 {
 		return false
 	}
-	start, end := m.visibleWindow()
+	start, end := chrome.Window(m.selected, len(m.filtered), maxVisibleRows)
 	if row >= end-start {
 		return false
 	}
@@ -336,7 +331,8 @@ func (m *Model) HandleKey(keyStr string) *ChannelResult {
 
 	case "backspace":
 		if len(m.query) > 0 {
-			m.query = m.query[:len(m.query)-1]
+			_, n := utf8.DecodeLastRuneInString(m.query)
+			m.query = m.query[:len(m.query)-n]
 			m.selected = 0
 			m.filter()
 		}
@@ -344,7 +340,7 @@ func (m *Model) HandleKey(keyStr string) *ChannelResult {
 	}
 
 	// If it's a single printable rune, add to query
-	if len(keyStr) == 1 && keyStr[0] >= 32 && keyStr[0] <= 126 {
+	if r := []rune(keyStr); len(r) == 1 && unicode.IsPrint(r[0]) {
 		m.query += keyStr
 		m.selected = 0
 		m.filter()
@@ -571,7 +567,7 @@ func (m Model) renderBox(termWidth int) string {
 		titleText = "Forward message to…"
 	}
 
-	start, end := m.visibleWindow()
+	start, end := chrome.Window(m.selected, len(m.filtered), maxVisibleRows)
 	list := chrome.List{Start: start, End: end, Total: len(m.filtered)}
 	contentWidth := list.ContentWidth(innerWidth)
 

@@ -402,6 +402,8 @@ type styleGlobals struct {
 	primary, warning, accent, textMuted         color.Color
 	sidebarBg, sidebarText, sidebarTextMuted    color.Color
 	selectionBg, selectionFg                    color.Color
+	sidebarSelectedBg, sidebarSelectedFg        color.Color
+	mentionBadgeBg, mentionBadgeFg              color.Color
 	chSelected, chNormal, chUnread, chMuted     lipgloss.Style
 	sectionHeader, presenceOnline, presenceAway lipgloss.Style
 }
@@ -411,10 +413,14 @@ func snapshotStyleGlobals() styleGlobals {
 		primary: styles.Primary, warning: styles.Warning,
 		accent: styles.Accent, textMuted: styles.TextMuted,
 		sidebarBg: styles.SidebarBackground, sidebarText: styles.SidebarText,
-		sidebarTextMuted: styles.SidebarTextMuted,
-		selectionBg:      styles.SelectionBackground,
-		selectionFg:      styles.SelectionForeground,
-		chSelected:       styles.ChannelSelected, chNormal: styles.ChannelNormal,
+		sidebarTextMuted:  styles.SidebarTextMuted,
+		selectionBg:       styles.SelectionBackground,
+		selectionFg:       styles.SelectionForeground,
+		sidebarSelectedBg: styles.SidebarSelectedBg,
+		sidebarSelectedFg: styles.SidebarSelectedFg,
+		mentionBadgeBg:    styles.MentionBadgeBg,
+		mentionBadgeFg:    styles.MentionBadgeFg,
+		chSelected:        styles.ChannelSelected, chNormal: styles.ChannelNormal,
 		chUnread: styles.ChannelUnread, chMuted: styles.ChannelMuted,
 		sectionHeader:  styles.SectionHeader,
 		presenceOnline: styles.PresenceOnline, presenceAway: styles.PresenceAway,
@@ -439,6 +445,8 @@ func (g styleGlobals) restore() {
 	styles.SidebarBackground, styles.SidebarText = g.sidebarBg, g.sidebarText
 	styles.SidebarTextMuted = g.sidebarTextMuted
 	styles.SelectionBackground, styles.SelectionForeground = g.selectionBg, g.selectionFg
+	styles.SidebarSelectedBg, styles.SidebarSelectedFg = g.sidebarSelectedBg, g.sidebarSelectedFg
+	styles.MentionBadgeBg, styles.MentionBadgeFg = g.mentionBadgeBg, g.mentionBadgeFg
 	styles.ChannelSelected, styles.ChannelNormal = g.chSelected, g.chNormal
 	styles.ChannelUnread, styles.ChannelMuted = g.chUnread, g.chMuted
 	styles.SectionHeader = g.sectionHeader

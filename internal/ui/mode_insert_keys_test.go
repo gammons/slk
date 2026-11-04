@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"golang.design/x/clipboard"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
 	"github.com/gammons/slk/internal/ui/messages"
@@ -1008,6 +1009,123 @@ func TestInsertModeKeys(t *testing.T) {
 			},
 		},
 		{
+			// With [compose].stay_in_insert_after_send on, a channel
+			// send leaves the user in insert mode with the composer
+			// focused and emptied, so the next message needs no `i`.
+			// This is the whole point of the option and fails on the
+			// old code, which always ran exitInsertAfterSend's
+			// ModeNormal + Blur.
+			name: "enter sends and stays in insert mode in the channel compose when stay_in_insert_after_send is on",
+			opts: insertOpts(),
+			setup: func(t *testing.T, a *App) {
+				a.SetStayInInsertAfterSend(true)
+				typeInto(t, &a.compose, "hello")
+				noPickerActive(t, "compose", &a.compose)
+			},
+			key:      keyCode(tea.KeyEnter),
+			wantMode: ModeInsert,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if cmd == nil {
+					t.Fatal("cmd = nil, want SendMessageMsg")
+				}
+				sent, ok := cmd().(SendMessageMsg)
+				if !ok {
+					t.Fatalf("cmd() = %T, want SendMessageMsg", cmd())
+				}
+				if sent.ChannelID != "C1" || sent.Text != "hello" {
+					t.Errorf("SendMessageMsg = %+v, want {ChannelID:C1 Text:hello}", sent)
+				}
+				if got := a.compose.Value(); got != "" {
+					t.Errorf("compose value = %q, want empty (the send reset it)", got)
+				}
+				// No Focused() getter exists, so focus is observed
+				// through the textarea itself: a blurred textarea
+				// drops the keystroke (textarea.go:1252), leaving
+				// the value empty.
+				if got := afterKeyValue(&a.compose, 'x'); got != "x" {
+					t.Errorf("value after a follow-up key = %q, want %q: the composer lost focus", got, "x")
+				}
+			},
+		},
+		{
+			// Thread-compose mirror: the thread reply send must honour
+			// the option too, and must leave the THREAD compose
+			// focused (the channel one was never focused here).
+			name: "enter sends and stays in insert mode in the THREAD compose when stay_in_insert_after_send is on",
+			opts: insertOpts(),
+			setup: func(t *testing.T, a *App) {
+				a.SetStayInInsertAfterSend(true)
+				showThread(t, a)
+				typeInto(t, &a.threadCompose, "reply")
+				noPickerActive(t, "threadCompose", &a.threadCompose)
+			},
+			key:      keyCode(tea.KeyEnter),
+			wantMode: ModeInsert,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if cmd == nil {
+					t.Fatal("cmd = nil, want SendThreadReplyMsg")
+				}
+				reply, ok := cmd().(SendThreadReplyMsg)
+				if !ok {
+					t.Fatalf("cmd() = %T, want SendThreadReplyMsg", cmd())
+				}
+				if reply.ChannelID != "C1" || reply.ThreadTS != "10.0" || reply.Text != "reply" {
+					t.Errorf("SendThreadReplyMsg = %+v, want {ChannelID:C1 ThreadTS:10.0 Text:reply}", reply)
+				}
+				if got := a.threadCompose.Value(); got != "" {
+					t.Errorf("thread compose value = %q, want empty (the send reset it)", got)
+				}
+				if got := afterKeyValue(&a.threadCompose, 'x'); got != "x" {
+					t.Errorf("thread value after a follow-up key = %q, want %q: the composer lost focus", got, "x")
+				}
+			},
+		},
+		{
+			// The two upload branches are the deliberate exception: an
+			// in-flight upload owns the composer until its result
+			// lands, so Enter leaves insert mode even with
+			// stay_in_insert_after_send on.
+			name: "enter on a channel attachment leaves insert mode even when stay_in_insert_after_send is on",
+			opts: insertOpts(),
+			setup: func(t *testing.T, a *App) {
+				a.SetStayInInsertAfterSend(true)
+				a.compose.AddAttachment(core.PendingAttachment{
+					Filename: "a.png", Bytes: []byte("png"), Size: 3,
+				})
+				a.setUploaderForTest(func(_, _, _ string, _ []core.PendingAttachment) tea.Cmd {
+					return func() tea.Msg { return UploadResultMsg{Err: nil} }
+				})
+			},
+			key:      keyCode(tea.KeyEnter),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if !a.compose.Uploading() {
+					t.Fatal("setup: expected the uploader to have been invoked")
+				}
+			},
+		},
+		{
+			name: "enter on a THREAD attachment leaves insert mode even when stay_in_insert_after_send is on",
+			opts: insertOpts(),
+			setup: func(t *testing.T, a *App) {
+				a.SetStayInInsertAfterSend(true)
+				showThread(t, a)
+				a.threadCompose.AddAttachment(core.PendingAttachment{
+					Filename: "a.png", Bytes: []byte("png"), Size: 3,
+				})
+				a.setUploaderForTest(func(_, _, _ string, _ []core.PendingAttachment) tea.Cmd {
+					return func() tea.Msg { return UploadResultMsg{Err: nil} }
+				})
+			},
+			key:      keyCode(tea.KeyEnter),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if !a.threadCompose.Uploading() {
+					t.Fatal("setup: expected the uploader to have been invoked for the thread compose")
+				}
+			},
+		},
+		{
 			// An empty thread compose swallows Enter: no cmd, no mode
 			// change, nothing sent.
 			name:     "enter on an empty THREAD compose sends nothing and stays in insert mode",
@@ -1223,6 +1341,162 @@ func TestInsertModeKeys(t *testing.T) {
 					t.Errorf("thread compose value = %q, want empty", got)
 				}
 			},
+		},
+	})
+}
+
+// TestInsertModeHotkeysOnEmptyComposer pins the [compose]
+// stay_in_insert_after_send follow-up: every app Ctrl shortcut is also a
+// textarea editing key (ctrl+p previous line, ctrl+h backspace, ctrl+a
+// line start, ...), so in insert mode the composer used to swallow them.
+// With nothing to edit -- no text, no attachments -- the shortcut means
+// what it means in normal mode; with text, the composer keeps it.
+func TestInsertModeHotkeysOnEmptyComposer(t *testing.T) {
+	ctrl := func(r rune) tea.KeyMsg { return keyMod(r, tea.ModCtrl) }
+	// The handoff exists for stay_in_insert_after_send, so every row
+	// turns it on unless it says otherwise.
+	stay := func(a *App) { a.SetStayInInsertAfterSend(true) }
+	runKeyCases(t, ModeInsert, []keyCase{
+		{
+			name: "ctrl+p on an empty channel composer opens the channel finder",
+			opts: insertOpts(),
+			setup: func(t *testing.T, a *App) {
+				stay(a)
+				_ = a.compose.Focus()
+			},
+			key:      ctrl('p'),
+			wantMode: ModeChannelFinder,
+		},
+		{
+			name: "ctrl+p on an empty THREAD composer opens the channel finder",
+			opts: insertOpts(),
+			setup: func(t *testing.T, a *App) {
+				stay(a)
+				showThread(t, a)
+			},
+			key:      ctrl('p'),
+			wantMode: ModeChannelFinder,
+		},
+		{
+			name: "ctrl+n on an empty composer leaves insert and starts a new message",
+			opts: insertOpts(),
+			setup: func(t *testing.T, a *App) {
+				stay(a)
+				_ = a.compose.Focus()
+			},
+			key:      ctrl('n'),
+			wantMode: ModeNormal,
+			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
+				if cmd == nil {
+					t.Fatal("cmd = nil, want EnterNewMessageMsg")
+				}
+				var found bool
+				for _, m := range drainBatch(cmd) {
+					_, ok := m.(EnterNewMessageMsg)
+					found = found || ok
+				}
+				if !found {
+					t.Error("cmd produced no EnterNewMessageMsg")
+				}
+			},
+		},
+		{
+			name: "ctrl+p with text stays in the composer",
+			opts: insertOpts(),
+			setup: func(t *testing.T, a *App) {
+				stay(a)
+				typeInto(t, &a.compose, "hi")
+			},
+			key:      ctrl('p'),
+			wantMode: ModeInsert,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if got := a.compose.Value(); got != "hi" {
+					t.Errorf("compose value = %q, want %q", got, "hi")
+				}
+			},
+		},
+		{
+			name: "ctrl+h with text is still backspace",
+			opts: insertOpts(),
+			setup: func(t *testing.T, a *App) {
+				stay(a)
+				typeInto(t, &a.compose, "hi")
+			},
+			key:      ctrl('h'),
+			wantMode: ModeInsert,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if got := a.compose.Value(); got != "h" {
+					t.Errorf("compose value = %q, want %q (ctrl+h deletes backward)", got, "h")
+				}
+			},
+		},
+		{
+			name: "ctrl+p with only an attachment stays in the composer",
+			opts: insertOpts(),
+			setup: func(t *testing.T, a *App) {
+				stay(a)
+				_ = a.compose.Focus()
+				a.compose.AddAttachment(core.PendingAttachment{
+					Filename: "a.png", Bytes: []byte("png"), Size: 3,
+				})
+			},
+			key:      ctrl('p'),
+			wantMode: ModeInsert,
+		},
+		{
+			name: "ctrl+w on an empty composer stays in insert (delete word, not the window prefix)",
+			opts: insertOpts(),
+			setup: func(t *testing.T, a *App) {
+				stay(a)
+				_ = a.compose.Focus()
+			},
+			key:      ctrl('w'),
+			wantMode: ModeInsert,
+			assert: func(t *testing.T, a *App, _ tea.Cmd) {
+				if a.pendingWinCmd {
+					t.Error("ctrl+w armed the window chord from the composer")
+				}
+			},
+		},
+		{
+			name: "ctrl+h on an empty composer stays in insert (backspace, not back)",
+			opts: insertOpts(),
+			setup: func(t *testing.T, a *App) {
+				stay(a)
+				_ = a.compose.Focus()
+			},
+			key:      ctrl('h'),
+			wantMode: ModeInsert,
+		},
+		{
+			name: "ctrl+k on an empty composer stays in insert (delete to line end, not forward)",
+			opts: insertOpts(),
+			setup: func(t *testing.T, a *App) {
+				stay(a)
+				_ = a.compose.Focus()
+			},
+			key:      ctrl('k'),
+			wantMode: ModeInsert,
+		},
+		{
+			name: "ctrl+p on an empty composer with the option off stays in the composer",
+			opts: insertOpts(),
+			setup: func(t *testing.T, a *App) {
+				_ = a.compose.Focus()
+			},
+			key:      ctrl('p'),
+			wantMode: ModeInsert,
+		},
+		{
+			name: "ctrl+p while editing a message whose text was cleared stays in the composer",
+			opts: insertOpts(),
+			setup: func(t *testing.T, a *App) {
+				stay(a)
+				a.editing.Begin("C1", "1.0", PanelMessages, "")
+				_ = a.compose.Focus()
+			},
+			key:      ctrl('p'),
+			wantMode: ModeInsert,
 		},
 	})
 }

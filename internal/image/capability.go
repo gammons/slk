@@ -79,6 +79,13 @@ func IsAutoProtocol(cfg string) bool {
 // acknowledges the upload — if allow-passthrough is off, the probe
 // times out and the caller downgrades to halfblock.
 //
+// Only kitty and ghostty outer terminals get kitty under tmux. WezTerm
+// is left out on purpose: it acknowledges kitty graphics uploads but
+// has no unicode-placeholder support (U+10EEEE cells, a=T,U=1), which
+// the kitty renderer depends on, so the upload is drawn at the cursor
+// and the placeholders print as tofu. A "wezterm" client_termname
+// falls through to halfblock like any other unknown outer terminal.
+//
 // Sixel under tmux is treated more conservatively: sixel has no
 // equivalent of the kitty graphics ;OK reply, so we can't probe-verify
 // it, and re-emitting sixel per redraw under tmux passthrough is
@@ -107,9 +114,11 @@ func Detect(env Env, cfg string) Protocol {
 		raw := tmuxClientTerm()
 		outer := strings.ToLower(raw)
 		debuglog.ImgRender("tmux client_termname=%q", raw)
+		// WezTerm is deliberately not matched: it speaks kitty graphics
+		// but not the unicode-placeholder extension the kitty renderer
+		// draws with (see the doc above).
 		if strings.Contains(outer, "kitty") ||
-			strings.Contains(outer, "ghostty") ||
-			strings.Contains(outer, "wezterm") {
+			strings.Contains(outer, "ghostty") {
 			return ProtoKitty
 		}
 		// No kitty-capable outer terminal detected; stay conservative.

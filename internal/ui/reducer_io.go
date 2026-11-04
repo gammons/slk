@@ -67,13 +67,18 @@ import (
 	"github.com/gammons/slk/internal/ui/statusbar"
 )
 
+// toastTick schedules a toast's clear. A variable so a test can swap in a
+// tick that never fires and read the toast, instead of waiting out a real
+// timer.
+var toastTick = tea.Tick
+
 // copiedClearAfter schedules a CopiedClearMsg `d` from now for the
 // toast now in the status bar, so call it right after setting that
 // toast. The CopiedClearMsg handler clears the slot only if no other
 // toast replaced this one in the meantime (statusbar ToastSeq).
 func copiedClearAfter(a *App, d time.Duration) tea.Cmd {
 	seq := a.statusbar.ToastSeq()
-	return tea.Tick(d, func(time.Time) tea.Msg {
+	return toastTick(d, func(time.Time) tea.Msg {
 		return statusbar.CopiedClearMsg{Seq: seq}
 	})
 }

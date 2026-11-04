@@ -166,6 +166,12 @@ type Threads struct {
 type Counts struct {
 	Unreads []Unread
 	Threads Threads
+	// ActivityTotal is the workspace's total unread activity (the sum
+	// of the activity_v2 map): what the desktop client shows on its
+	// Activity badge. Zero both when nothing is unread and when the
+	// token cannot call client.counts (grid-restricted members);
+	// CountsOK is the discriminator.
+	ActivityTotal int
 }
 
 // History is what a conversations.history fallback returned — a
@@ -213,6 +219,10 @@ type Result struct {
 	// IsOpen holds the conversation ids currently shown in the
 	// sidebar, channels and DMs mixed.
 	IsOpen []string
+
+	// Starred is the authoritative conversation-ID list from client.userBoot.
+	// Carry it to section bootstrap instead of issuing a restricted stars.list.
+	Starred []string
 
 	DND boot.DND
 
@@ -402,6 +412,7 @@ func Run(ctx context.Context, deps Deps) (*Result, error) {
 		Channels:         bootRes.Channels,
 		IMs:              bootRes.IMs,
 		IsOpen:           bootRes.IsOpen,
+		Starred:          bootRes.Starred,
 		DND:              bootRes.DND,
 		ChannelsPriority: bootRes.ChannelsPriority,
 		EmojiCacheTS:     bootRes.EmojiCacheTS,

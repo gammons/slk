@@ -8,6 +8,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/bubbles/buttonrow"
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/styles"
@@ -77,13 +78,17 @@ func appendBlock(out *RenderResult, b Block, ctx Context, width int) {
 	case DividerBlock:
 		out.Lines = append(out.Lines, renderDivider(width))
 	case HeaderBlock:
-		out.Lines = append(out.Lines, renderHeader(v.Text, width))
+		text := v.Text
+		if ctx.RenderPlainText != nil {
+			text = ctx.RenderPlainText(text)
+		}
+		out.Lines = append(out.Lines, renderHeader(text, width))
 	case SectionBlock:
 		appendSection(out, v, ctx, width)
 	case ContextBlock:
 		appendContext(out, v, ctx, width)
 	case ActionsBlock:
-		appendActions(out, v, width)
+		appendActions(out, v, ctx, width)
 	case ImageBlock:
 		appendImageBlock(out, v, ctx, width)
 	case RichTextBlock:
@@ -107,11 +112,12 @@ func appendSection(out *RenderResult, s SectionBlock, ctx Context, width int) {
 	bodyW := width
 	var accessoryLines []string
 	var accessoryW int
-	var accessoryHit *HitRect // populated for image accessories
+	var accessoryHit *HitRect           // populated for image accessories
+	var accessorySxl map[int]SixelEntry // keyed at fetchOrPlaceholder's rowStart=0; translated after the layout decision below
 
 	switch acc := s.Accessory.(type) {
 	case LabelAccessory:
-		label := renderControlLabel(acc.Kind, acc.Label)
+		label := renderControlLabel(acc.Kind, acc.Label, ctx.RenderPlainText)
 		accessoryW = lipgloss.Width(label)
 		accessoryLines = []string{label}
 		out.Interactive = true
@@ -128,14 +134,7 @@ func appendSection(out *RenderResult, s SectionBlock, ctx Context, width int) {
 				accessoryLines = lines
 				accessoryW = accCols
 				out.Flushes = append(out.Flushes, flushes...)
-				if sxl != nil {
-					if out.SixelRows == nil {
-						out.SixelRows = map[int]SixelEntry{}
-					}
-					for k, v := range sxl {
-						out.SixelRows[k] = v
-					}
-				}
+				accessorySxl = sxl
 				h := hit // copy
 				accessoryHit = &h
 			} else {
@@ -191,6 +190,28 @@ func appendSection(out *RenderResult, s SectionBlock, ctx Context, width int) {
 		out.Hits = append(out.Hits, *accessoryHit)
 	}
 
+	// The accessory's sixel placement gets the same translation as its
+	// hit: fetchOrPlaceholder keyed it at row 0 because the section's
+	// layout is not known until here. The fallback rows stay bare -
+	// Col alone says where the image sits, and every place that
+	// splices a fallback grafts it at Col over the row's own body
+	// text, so a partially visible accessory keeps the text beside it.
+	if accessorySxl != nil {
+		if out.SixelRows == nil {
+			out.SixelRows = map[int]SixelEntry{}
+		}
+		for k, v := range accessorySxl {
+			row := startRow + k
+			if sideBySide {
+				v.Col = bodyW + 2
+			} else {
+				row = startRow + len(bodyLines) + k
+				v.Col = 0
+			}
+			out.SixelRows[row] = v
+		}
+	}
+
 	if len(s.Fields) > 0 {
 		out.Lines = append(out.Lines, renderFieldsGrid(s.Fields, ctx, width)...)
 	}
@@ -234,7 +255,7 @@ func appendContext(out *RenderResult, c ContextBlock, ctx Context, width int) {
 	}
 }
 
-func appendActions(out *RenderResult, a ActionsBlock, width int) {
+func appendActions(out *RenderResult, a ActionsBlock, ctx Context, width int) {
 	if len(a.Elements) == 0 {
 		return
 	}
@@ -243,7 +264,7 @@ func appendActions(out *RenderResult, a ActionsBlock, width int) {
 	const gapW = 2
 	labels := make([]string, len(a.Elements))
 	for i, el := range a.Elements {
-		labels[i] = renderControlLabel(el.Kind, el.Label)
+		labels[i] = renderControlLabel(el.Kind, el.Label, ctx.RenderPlainText)
 	}
 	out.Lines = append(out.Lines, buttonrow.Rows(buttonrow.Layout(labels, width, gapW), gapW)...)
 }
@@ -305,7 +326,10 @@ func appendImageBlock(out *RenderResult, b ImageBlock, ctx Context, width int) {
 // section accessory or actions element. The shape depends on the
 // element kind. Used by both Task 7 (accessories) and Task 9
 // (actions block elements).
-func renderControlLabel(kind, label string) string {
+func renderControlLabel(kind, label string, renderPlainText func(string) string) string {
+	if label != "" && renderPlainText != nil {
+		label = renderPlainText(label)
+	}
 	switch kind {
 	case "button", "workflow_button":
 		text := label
@@ -442,32 +466,11 @@ func renderUnsupported(typeName string, width int) string {
 	return mutedStyle().Render(label)
 }
 
-// truncateToWidth returns s truncated by display columns to at most
-// width. If truncation occurs and width >= 1, the last visible col
-// is replaced with '…'.
+// truncateToWidth clips to display columns without breaking ANSI escapes or
+// graphemes. If truncation occurs, the last visible column is replaced with '…'.
 func truncateToWidth(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	if lipgloss.Width(s) <= width {
-		return s
-	}
-	target := width - 1
-	if target < 0 {
-		target = 0
-	}
-	var b strings.Builder
-	used := 0
-	for _, r := range s {
-		w := lipgloss.Width(string(r))
-		if used+w > target {
-			break
-		}
-		b.WriteRune(r)
-		used += w
-	}
-	if width >= 1 {
-		b.WriteRune('…')
-	}
-	return b.String()
+	return ansi.Truncate(s, width, "…")
 }

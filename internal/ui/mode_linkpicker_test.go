@@ -6,6 +6,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/messages/blockkit"
 )
 
 // Named mode_linkpicker_test.go, not mode_link_picker_test.go: the
@@ -56,6 +57,32 @@ func openFilePicker(t *testing.T, a *App) {
 	}
 }
 
+// A forwarded message's links live in the shared attachment's text,
+// not msg.Text -- the same gap the copy-message fix closed. `o` must
+// find them there too instead of reporting no links.
+func TestOpenLinksOfSelected_ForwardedMessage(t *testing.T) {
+	a := NewApp()
+	a.focusedPanel = PanelMessages
+	a.messagepane.SetMessages([]messages.MessageItem{{
+		TS: "1.0",
+		LegacyAttachments: []blockkit.LegacyAttachment{
+			{Text: "shared: <https://example.com/shared|check this out>"},
+		},
+	}})
+
+	cmd := a.openLinksOfSelected()
+	if cmd == nil {
+		t.Fatal("cmd = nil, want OpenLinkMsg")
+	}
+	msg, ok := cmd().(OpenLinkMsg)
+	if !ok {
+		t.Fatalf("cmd() = %#v, want OpenLinkMsg", cmd())
+	}
+	if msg.URL != "https://example.com/shared" {
+		t.Errorf("URL = %q, want %q", msg.URL, "https://example.com/shared")
+	}
+}
+
 // TestLinkPickerModeKeys characterizes handleLinkPickerMode
 // (mode_linkpicker.go:14). Unlike the other eight this one forwards
 // msg.String() with no normalisation at all, relying on bubbletea's
@@ -81,18 +108,10 @@ func TestLinkPickerModeKeys(t *testing.T) {
 				if msg.URL != "https://a.example/1" {
 					t.Errorf("URL = %q, want %q", msg.URL, "https://a.example/1")
 				}
-				// BUG?: the "links" arm never clears pickerKind, while
-				// the "files" arm clears both pickerKind and
-				// pickerFiles. The stale "links" is harmless today
-				// because the next open always reassigns it, but the
-				// asymmetry is unexplained. Filed as
-				// https://github.com/gammons/slk/issues/194.
-				//
-				// WHEN THAT BUG IS FIXED: the links arm clears too, so
-				// flip this to want "" (and consider extending it to
-				// a.pickerFiles == nil, which the arm also leaves).
-				if a.pickerKind != "links" {
-					t.Errorf("pickerKind = %q; the links arm is expected to leave it set", a.pickerKind)
+				// The links arm clears the picker state like the files
+				// and esc arms do (#194).
+				if a.pickerKind != "" || a.pickerFiles != nil {
+					t.Errorf("pickerKind = %q, pickerFiles = %v; want both cleared", a.pickerKind, a.pickerFiles)
 				}
 			},
 		},

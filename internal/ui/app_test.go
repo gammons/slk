@@ -1550,6 +1550,7 @@ func TestNewMessageMsg_EditedUpdatesInPlace(t *testing.T) {
 			Text:     "edited",
 			IsEdited: true,
 		},
+		Changed: true,
 	})
 
 	// Access internal slice directly (same package).
@@ -1667,6 +1668,24 @@ func TestBeginEditOfSelected_Own_EntersEditMode(t *testing.T) {
 	}
 	if app.mode != ModeInsert {
 		t.Errorf("expected ModeInsert, got %v", app.mode)
+	}
+}
+
+// The message text carries Slack's <#CID> form; the box shows the
+// #name a person types, which TranslateMentionsForSend turns back.
+func TestBeginEditOfSelected_ShowsChannelMentionByName(t *testing.T) {
+	app := newTestApp(t,
+		withActiveChannel("C1"),
+		withChannels(sidebar.ChannelItem{ID: "CUJL4QPU0", Name: "general", Type: "channel"}),
+		withMessages(messages.MessageItem{TS: "1.0", UserID: "U_ME", Text: "see <#CUJL4QPU0>"}),
+	)
+	app.SetCurrentUserID("U_ME")
+	app.focusedPanel = PanelMessages
+
+	app.beginEditOfSelected()
+
+	if got := app.compose.Value(); got != "see #general" {
+		t.Errorf("compose = %q, want %q", got, "see #general")
 	}
 }
 
@@ -1991,6 +2010,7 @@ func TestNewMessageMsg_EditedIgnoresOtherChannel(t *testing.T) {
 			Text:     "edit from other channel",
 			IsEdited: true,
 		},
+		Changed: true,
 	})
 
 	msgs := app.messagepane.Messages()

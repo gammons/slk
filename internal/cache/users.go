@@ -37,10 +37,12 @@ type User struct {
 	UpdatedAt        int64
 }
 
-// UpsertUser writes the status and huddle columns on insert only.
-// Several callers upsert a placeholder record built without a profile,
-// so writing them on conflict would blank real values; changes go
-// through UpdateUserStatus and the edge revalidation writes instead.
+// UpsertUser writes the presence, status and huddle columns on insert
+// only. Several callers upsert a placeholder record built without a
+// profile (presence is always the "away" placeholder: no profile source
+// carries it), so writing them on conflict would blank real values;
+// changes go through UpdatePresence, UpdateUserStatus and the edge
+// revalidation writes instead.
 // The original workspace association is retained on conflict; another
 // workspace may refresh the profile/home team but not its legacy external flag.
 func (db *DB) UpsertUser(u User) error {
@@ -51,7 +53,6 @@ func (db *DB) UpsertUser(u User) error {
 			name=excluded.name,
 			display_name=excluded.display_name,
 			avatar_url=excluded.avatar_url,
-			presence=excluded.presence,
 			is_bot=excluded.is_bot,
 			home_team_id=COALESCE(NULLIF(excluded.home_team_id, ''), users.home_team_id),
 			is_external=CASE WHEN users.workspace_id=excluded.workspace_id

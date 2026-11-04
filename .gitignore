@@ -12,3 +12,7 @@ slk-debug.log
 # credentials and real message content, so they must never be
 # committed. Sanitized extracts belong in testdata/ instead.
 *.har
+
+# Editor swap files (vim sessions over PTY leave these behind; one was
+# committed by a `git add -A` that swept it in).
+*.swp

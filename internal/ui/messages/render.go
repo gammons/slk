@@ -13,6 +13,7 @@ import (
 	bubblesansi "github.com/gammons/slk/internal/bubbles/ansi"
 	"github.com/gammons/slk/internal/bubbles/entrylist"
 	emojiutil "github.com/gammons/slk/internal/emoji"
+	"github.com/gammons/slk/internal/linkscheme"
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
@@ -27,14 +28,15 @@ var (
 	codeBlockRe     = regexp.MustCompile("(?s)```(.+?)```")
 
 	// Slack link patterns: <url|label> or <url>.
-	// linkWithLabelRe matches both http(s) URLs and mailto: addresses
-	// (Slack auto-linkifies typed emails into <mailto:X|X> form). The
-	// scheme restriction means we do NOT match channel mentions
-	// <#CHANNEL_ID|name>, group mentions <!subteam^...|@team>, or
+	// linkWithLabelRe matches URLs whose scheme is in linkscheme (http(s),
+	// ftp(s), sftp, ssh, file, tel, and mailto: addresses, which Slack
+	// auto-linkifies from typed emails into <mailto:X|X> form). The scheme
+	// allowlist means we do NOT match javascript:/data: targets, channel
+	// mentions <#CHANNEL_ID|name>, group mentions <!subteam^...|@team>, or
 	// other Slack-internal angle-bracket forms — those are handled by
 	// dedicated regexes below.
-	linkWithLabelRe = regexp.MustCompile(`<((?:https?://|mailto:)[^|>]+)\|([^>]+)>`)
-	linkBareRe      = regexp.MustCompile(`<((?:https?://|mailto:)[^>]+)>`)
+	linkWithLabelRe = regexp.MustCompile(`<((?:` + linkscheme.Alternation + `)[^|>]+)\|([^>]+)>`)
+	linkBareRe      = regexp.MustCompile(`<((?:` + linkscheme.Alternation + `)[^>]+)>`)
 
 	// Slack user/channel mentions: <@U1234> <#C1234|channel-name>
 	userMentionRe = regexp.MustCompile(`<@([A-Z0-9]+)>`)
@@ -607,6 +609,15 @@ func SidebarMutedFgANSI() string {
 	return cachedSidebarMutedFgANSI
 }
 
+// SidebarSelectedANSI is the bg+fg escape of the sidebar's selected pill,
+// "" when the theme sets no sidebar_selected_bg.
+func SidebarSelectedANSI() string {
+	if styles.SidebarSelectedBg == nil {
+		return ""
+	}
+	return bgANSIFor(styles.SidebarSelectedBg) + fgANSIFor(styles.SidebarSelectedFg)
+}
+
 // RenderSlackMarkdownOpts extends the legacy 3-arg RenderSlackMarkdown
 // signature with optional emoji-image rendering. When PlaceCtx.Fetcher
 // is non-nil AND emoji.ImageModeActive() returns true, emoji are
@@ -628,12 +639,13 @@ type RenderSlackMarkdownOpts struct {
 	Customs      map[string]string        // workspace custom emoji map; may be nil
 	EmojiFlushes *[]func(io.Writer) error // append-only; may be nil
 
-	// Width is the content width the result will be wrapped to, and is
-	// used only by the code-block path: a fenced block is hard-wrapped
-	// and padded to exactly this width so every one of its lines
-	// carries the surface background edge to edge, the way Slack draws
-	// one. 0 leaves the old behaviour (block as wide as its longest
-	// line, ragged right edge).
+	// Width is the content width the result will be wrapped to. A
+	// fenced code block is hard-wrapped and padded to exactly this width
+	// so every one of its lines carries the surface background edge to
+	// edge, the way Slack draws one. A quoted line is word-wrapped to the
+	// width left after its bar, so every wrapped row gets a bar. 0 leaves
+	// both unwrapped (the code block as wide as its longest line, the
+	// quote as one row).
 	Width int
 }
 
@@ -693,7 +705,17 @@ func RenderSlackMarkdownWith(text string, opts RenderSlackMarkdownOpts) string {
 		if strings.HasPrefix(line, "&gt; ") || strings.HasPrefix(line, "> ") {
 			quoted := strings.TrimPrefix(line, "&gt; ")
 			quoted = strings.TrimPrefix(quoted, "> ")
+			quoted = renderInlineFormattingWith(quoted, opts)
 			quoted = slackEntityDecoder.Replace(quoted)
+			// Inline spans end in a reset that would drop the rest of
+			// the quote out of its muted color.
+			quoted = ReapplyBgAfterResets(quoted, fgANSIFor(styles.TextMuted))
+			// Wrap before drawing the bar so every wrapped row gets one;
+			// the body wrap that runs later would continue the quote
+			// without it. The bar and its padding take two columns.
+			if w := opts.Width; w > 2 {
+				quoted = WordWrap(quoted, w-2)
+			}
 			line = blockquoteStyle().Render(quoted)
 		} else {
 			line = renderInlineFormattingWith(line, opts)
@@ -754,7 +776,10 @@ func renderInlineFormattingWith(text string, opts RenderSlackMarkdownOpts) strin
 	// duplicated noise on every labeled link.
 	text = linkWithLabelRe.ReplaceAllStringFunc(text, func(match string) string {
 		parts := linkWithLabelRe.FindStringSubmatch(match)
-		url, label := parts[1], parts[2]
+		// Decode the label's entities here: linkStyle underlines each
+		// rune separately, so the line-level slackEntityDecoder pass
+		// below can no longer see "&amp;" once it is styled.
+		url, label := parts[1], slackEntityDecoder.Replace(parts[2])
 		return osc8Hyperlink(url, linkStyle().Render(label))
 	})
 
@@ -844,14 +869,16 @@ func renderInlineFormattingWith(text string, opts RenderSlackMarkdownOpts) strin
 	// routes them to the correct per-tone Slack CDN asset. The
 	// old StripSkinToneFromText call was a glyph-rendering width
 	// workaround that doesn't apply to kitty-image placements.
+	return renderEmojiWith(text, opts)
+}
+
+// renderEmojiWith shares emoji placement between mrkdwn and plain-text labels.
+func renderEmojiWith(text string, opts RenderSlackMarkdownOpts) string {
 	if emojiutil.ImageModeActive() && opts.PlaceCtx.Fetcher != nil {
 		tokens := emojiutil.ResolveEmojiToTokens(text, opts.Customs)
-		text = renderEmojiTokensInline(tokens, opts.PlaceCtx, opts.EmojiCells, opts.EmojiFlushes)
-	} else {
-		text = emojiutil.ResolveShortcodesInText(emojiutil.StripSkinToneFromText(text))
+		return renderEmojiTokensInline(tokens, opts.PlaceCtx, opts.EmojiCells, opts.EmojiFlushes)
 	}
-
-	return text
+	return emojiutil.ResolveShortcodesInText(emojiutil.StripSkinToneFromText(text))
 }
 
 // renderEmojiTokensInline walks a Token stream and returns the
@@ -885,6 +912,10 @@ func renderEmojiTokensInline(
 				placement, flush, ok := emojiutil.Place(placeCtx, tok.URL, cells)
 				if ok {
 					b.WriteString(placement)
+					// The image ends in "default foreground", not a reset.
+					if strings.HasSuffix(placement, "\x1b[39m") {
+						b.WriteString(FgANSI())
+					}
 					if flush != nil && flushes != nil {
 						*flushes = append(*flushes, flush)
 					}
@@ -935,6 +966,7 @@ func SlackMrkdwnToCommonMarkWithUserGroups(text string, userNames map[string]str
 		if strings.HasPrefix(line, "&gt; ") || strings.HasPrefix(line, "> ") {
 			quoted := strings.TrimPrefix(line, "&gt; ")
 			quoted = strings.TrimPrefix(quoted, "> ")
+			quoted = slackMrkdwnToCommonMarkInline(quoted, userNames, channelNames, userGroups)
 			quoted = slackEntityDecoder.Replace(quoted)
 			line = "> " + quoted
 		} else {

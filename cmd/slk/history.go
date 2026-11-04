@@ -10,6 +10,7 @@ import (
 
 	"github.com/gammons/slk/internal/avatar"
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/ui/messages"
@@ -68,8 +69,9 @@ func fetchMessagesAround(client *slackclient.Client, channelID, targetTS string,
 // throughout slk.
 func convertAndCacheHistory(client *slackclient.Client, channelID string, history []slack.Message, db *cache.DB, userNames *userNameStore, tsFormat string, router *workspaceRouter) []messages.MessageItem {
 	var msgItems []messages.MessageItem
+	resolver := messageUserResolver(router, client.TeamID())
 	for _, m := range history {
-		rawBytes, _ := json.Marshal(m)
+		rawBytes, huddleRoom := marshalWithRoom(client, channelID, m)
 		debuglog.Cache("convertAndCacheHistory: upsert channel=%s ts=%s subtype=%q reply_count=%d files=%d",
 			channelID, m.Timestamp, m.SubType, m.ReplyCount, len(m.Files))
 		authorID, userName := messageAuthor(m, userNames, db, router)
@@ -105,7 +107,7 @@ func convertAndCacheHistory(client *slackclient.Client, channelID string, histor
 			_ = db.UpsertReaction(m.Timestamp, channelID, r.Name, r.Users, r.Count)
 		}
 
-		msgItems = append(msgItems, messages.MessageItem{
+		item := messages.MessageItem{
 			TS:                m.Timestamp,
 			UserID:            authorID,
 			UserName:          userName,
@@ -113,12 +115,16 @@ func convertAndCacheHistory(client *slackclient.Client, channelID string, histor
 			Timestamp:         formatTimestamp(m.Timestamp, tsFormat),
 			ThreadTS:          m.ThreadTimestamp,
 			ReplyCount:        m.ReplyCount,
+			ReplyUsers:        m.ReplyUsers,
 			Subtype:           m.SubType,
 			Reactions:         reactions,
 			Attachments:       extractAttachments(m.Files),
 			Blocks:            extractBlocks(m.Blocks),
 			LegacyAttachments: extractLegacyAttachments(m.Attachments),
-		})
+			HuddleRoom:        resolveHuddleUsers(huddleRoom, userNames, db, userRequesterFor(router, client.TeamID())),
+		}
+		resolveMessageMentions(item, userNames, db, resolver)
+		msgItems = append(msgItems, item)
 	}
 
 	// Reverse: Slack returns newest first
@@ -160,12 +166,10 @@ func summarizeCachedRows(rows []cache.Message) string {
 // Returns nil on cache miss (no rows for the channel) or any DB error;
 // callers treat nil as "fall through to the network fetch path".
 //
-// selfUserID is used to compute ReactionItem.HasReacted; it is NOT used
-// to drive any network call. Cache reads must remain offline-capable —
-// unknown user IDs render with their userID as a fallback rather than
-// triggering a fresh GetUserProfile RPC. Resolving them on-demand would
-// defeat the cache-first goal (and is what fetchChannelMessages already
-// does on the network path, populating the name store for next time).
+// selfUserID is used only to compute ReactionItem.HasReacted. Names are
+// hydrated locally; unknown authors and visible mentions may queue background
+// resolution when a resolver is available. Cache display never waits for a
+// profile RPC, and a nil router keeps the read local-only.
 //
 // raw_json unmarshal failures on a single row degrade gracefully: that
 // row renders as text-only (no attachments / blocks / legacy
@@ -246,6 +250,8 @@ func loadCachedMessages(
 //
 // userNames may be nil — username resolution still works via the
 // cached users table or the userID fallback, but nothing is recorded.
+// With a resolver available, unknown authors and visible mentions may queue
+// background network lookups; enrichment never waits for those lookups.
 //
 // raw_json unmarshal failures degrade the row to text-only without
 // failing the caller. logPrefix tags the per-row log lines so callers
@@ -371,6 +377,7 @@ func enrichCachedRow(
 	var attachments []messages.Attachment
 	var blocks []blockkit.Block
 	var legacy []blockkit.LegacyAttachment
+	var replyUsers []string
 	if m.RawJSON != "" {
 		var raw slack.Message
 		var unmarshalT0 time.Time
@@ -389,10 +396,11 @@ func enrichCachedRow(
 			attachments = extractAttachments(raw.Files)
 			blocks = extractBlocks(raw.Blocks)
 			legacy = extractLegacyAttachments(raw.Attachments)
+			replyUsers = raw.ReplyUsers
 		}
 	}
 
-	return messages.MessageItem{
+	item := messages.MessageItem{
 		TS:                m.TS,
 		UserID:            effUserID,
 		UserName:          userName,
@@ -400,17 +408,53 @@ func enrichCachedRow(
 		Timestamp:         formatTimestamp(m.TS, tsFormat),
 		ThreadTS:          m.ThreadTS,
 		ReplyCount:        m.ReplyCount,
+		ReplyUsers:        replyUsers,
 		Subtype:           m.Subtype,
 		Reactions:         reactions,
 		Attachments:       attachments,
 		Blocks:            blocks,
 		LegacyAttachments: legacy,
+		HuddleRoom:        resolveHuddleUsers(roomFromRawJSON(m.RawJSON), userNames, db, userRequesterFor(router, m.WorkspaceID)),
 	}
+	resolveMessageMentions(item, userNames, db, messageUserResolver(router, m.WorkspaceID))
+	return item
+}
+
+// marshalWithRoom is json.Marshal(m) for the cache's raw_json, plus the
+// `room` object slack-go dropped from a huddle_thread message, as captured
+// from the response by the client's tap. The decoded room is returned for
+// the MessageItem. Without a captured room the raw JSON is just m's, and
+// UpsertMessage keeps any room already stored.
+func marshalWithRoom(client *slackclient.Client, channelID string, m slack.Message) ([]byte, *core.HuddleRoom) {
+	raw, _ := json.Marshal(m)
+	if m.SubType != "huddle_thread" {
+		return raw, nil
+	}
+	room := client.HuddleRoom(channelID, m.Timestamp)
+	if room == nil {
+		return raw, nil
+	}
+	return slackclient.MergeRoom(raw, room), core.ParseHuddleRoom(room)
+}
+
+// roomFromRawJSON reads the `room` object back out of a cached raw_json.
+func roomFromRawJSON(raw string) *core.HuddleRoom {
+	if !strings.Contains(raw, `"room"`) {
+		return nil
+	}
+	var r struct {
+		Room json.RawMessage `json:"room"`
+	}
+	if json.Unmarshal([]byte(raw), &r) != nil {
+		return nil
+	}
+	return core.ParseHuddleRoom(r.Room)
 }
 
 // loadCachedThreadReplies reads cached parent + replies for a thread
 // from SQLite and reconstructs []messages.MessageItem with the same
-// fidelity as fetchThreadReplies. Offline-pure (no network).
+// fidelity as fetchThreadReplies. Like loadCachedMessages, displays local data
+// immediately and may queue background name resolution.
 //
 // The returned slice includes the parent message at index 0 followed
 // by replies in chronological order, matching db.GetThreadReplies'
@@ -473,8 +517,9 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 	}
 
 	msgItems := make([]messages.MessageItem, 0, len(history))
+	resolver := messageUserResolver(router, client.TeamID())
 	for _, m := range history {
-		rawBytes, _ := json.Marshal(m)
+		rawBytes, huddleRoom := marshalWithRoom(client, channelID, m)
 		debuglog.Cache("fetchChannelMessages: upsert channel=%s ts=%s subtype=%q reply_count=%d files=%d",
 			channelID, m.Timestamp, m.SubType, m.ReplyCount, len(m.Files))
 		authorID, userName := messageAuthor(m, userNames, db, router)
@@ -510,7 +555,7 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 			_ = db.UpsertReaction(m.Timestamp, channelID, r.Name, r.Users, r.Count)
 		}
 
-		msgItems = append(msgItems, messages.MessageItem{
+		item := messages.MessageItem{
 			TS:                m.Timestamp,
 			UserID:            authorID,
 			UserName:          userName,
@@ -518,12 +563,16 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 			Timestamp:         formatTimestamp(m.Timestamp, tsFormat),
 			ThreadTS:          m.ThreadTimestamp,
 			ReplyCount:        m.ReplyCount,
+			ReplyUsers:        m.ReplyUsers,
 			Subtype:           m.SubType,
 			Reactions:         reactions,
 			Attachments:       extractAttachments(m.Files),
 			Blocks:            extractBlocks(m.Blocks),
 			LegacyAttachments: extractLegacyAttachments(m.Attachments),
-		})
+			HuddleRoom:        resolveHuddleUsers(huddleRoom, userNames, db, userRequesterFor(router, client.TeamID())),
+		}
+		resolveMessageMentions(item, userNames, db, resolver)
+		msgItems = append(msgItems, item)
 	}
 
 	// Reverse: Slack returns newest first
@@ -571,8 +620,9 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 	}
 
 	msgItems := make([]messages.MessageItem, 0, len(history))
+	resolver := messageUserResolver(router, client.TeamID())
 	for _, m := range history {
-		rawBytes, _ := json.Marshal(m)
+		rawBytes, huddleRoom := marshalWithRoom(client, channelID, m)
 		debuglog.Cache("fetchThreadReplies: upsert channel=%s ts=%s subtype=%q reply_count=%d files=%d",
 			channelID, m.Timestamp, m.SubType, m.ReplyCount, len(m.Files))
 		authorID, userName := messageAuthor(m, userNames, db, router)
@@ -608,7 +658,7 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 			_ = db.UpsertReaction(m.Timestamp, channelID, r.Name, r.Users, r.Count)
 		}
 
-		msgItems = append(msgItems, messages.MessageItem{
+		item := messages.MessageItem{
 			TS:                m.Timestamp,
 			UserID:            authorID,
 			UserName:          userName,
@@ -616,12 +666,16 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 			Timestamp:         formatTimestamp(m.Timestamp, tsFormat),
 			ThreadTS:          m.ThreadTimestamp,
 			ReplyCount:        m.ReplyCount,
+			ReplyUsers:        m.ReplyUsers,
 			Subtype:           m.SubType,
 			Reactions:         reactions,
 			Attachments:       extractAttachments(m.Files),
 			Blocks:            extractBlocks(m.Blocks),
 			LegacyAttachments: extractLegacyAttachments(m.Attachments),
-		})
+			HuddleRoom:        resolveHuddleUsers(huddleRoom, userNames, db, userRequesterFor(router, client.TeamID())),
+		}
+		resolveMessageMentions(item, userNames, db, resolver)
+		msgItems = append(msgItems, item)
 	}
 
 	// First message from GetConversationReplies is the parent -- skip it for the replies list.

@@ -37,6 +37,16 @@ func activityReadApp(t *testing.T, err error, items ...core.ActivityItem) (*App,
 	a.SetActivityService(core.NewActivityService(core.ActivityServiceFuncs{SetRead: fakeSetRead(calls, err)}))
 	a.Update(ActivityViewActivatedMsg{})
 	a.Update(ActivityListLoadedMsg{TeamID: "T1", Items: items})
+	// The badge comes from the workspace's activity total, not the
+	// loaded page: seed it the way connectWorkspace does at boot, with
+	// one unread item per unread fixture.
+	unread := 0
+	for _, it := range items {
+		if it.IsUnread {
+			unread++
+		}
+	}
+	a.Update(ActivityBadgeUpdatedMsg{TeamID: "T1", Total: unread})
 	return a, calls
 }
 

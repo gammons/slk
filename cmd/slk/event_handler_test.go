@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,8 +16,11 @@ import (
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/notify"
 	slackclient "github.com/gammons/slk/internal/slack"
+	"github.com/gammons/slk/internal/slack/edge"
 	"github.com/gammons/slk/internal/ui"
+	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/slack-go/slack"
@@ -199,7 +205,7 @@ func TestOnMessage_InactiveChannel_SetsHasUnread(t *testing.T) {
 		isActive:        func() bool { return true },
 		activeChannelID: func() string { return "C2" }, // viewing a different channel
 	}
-	h.OnMessage("C1", "U1", "1.001", "hi", "", "", false, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("C1", "U1", "1.001", "hi", "", "", false, false, nil, slack.Blocks{}, nil, "", "")
 
 	s, _ := db.GetChannelReadState("C1")
 	if !s.HasUnread {
@@ -220,7 +226,7 @@ func TestOnMessage_ActiveChannel_StillSetsHasUnread(t *testing.T) {
 		isActive:        func() bool { return true },
 		activeChannelID: func() string { return "C1" },
 	}
-	h.OnMessage("C1", "U1", "1.001", "hi", "", "", false, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("C1", "U1", "1.001", "hi", "", "", false, false, nil, slack.Blocks{}, nil, "", "")
 
 	s, _ := db.GetChannelReadState("C1")
 	if !s.HasUnread {
@@ -243,7 +249,7 @@ func TestOnMessage_SelfMessage_DoesNotSetHasUnread(t *testing.T) {
 		activeChannelID: func() string { return "C1" },
 		currentUserID:   "USELF",
 	}
-	h.OnMessage("C1", "USELF", "1.001", "hi", "", "", false, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("C1", "USELF", "1.001", "hi", "", "", false, false, nil, slack.Blocks{}, nil, "", "")
 
 	s, _ := db.GetChannelReadState("C1")
 	if s.HasUnread {
@@ -265,7 +271,7 @@ func TestOnMessage_BotMessage_WithUnsetCurrentUser_SetsHasUnread(t *testing.T) {
 		activeChannelID: func() string { return "C2" },
 		// currentUserID deliberately left empty, as it is pre-bootstrap
 	}
-	h.OnMessage("C1", "", "1.001", "beep", "", "", false, nil, slack.Blocks{}, nil, "B1", "buildbot")
+	h.OnMessage("C1", "", "1.001", "beep", "", "", false, false, nil, slack.Blocks{}, nil, "B1", "buildbot")
 
 	s, _ := db.GetChannelReadState("C1")
 	if !s.HasUnread {
@@ -273,10 +279,111 @@ func TestOnMessage_BotMessage_WithUnsetCurrentUser_SetsHasUnread(t *testing.T) {
 	}
 }
 
-// An edit echo (message_changed) re-delivers a message the channel has
-// already accounted for. reduceNewMessage returns at its IsEdited arm
-// before the read-state tail, so a flag set here would never clear.
-func TestOnMessage_EditEcho_DoesNotSetHasUnread(t *testing.T) {
+// A change echo (message_changed) re-delivers a message the channel has
+// already accounted for. reduceNewMessage returns at its Changed arm
+// before the read-state tail, so a flag set here would never clear. It
+// holds whether or not Slack says the text was edited: an unfurl landing
+// on someone else's message is a change nobody edited.
+func TestOnMessage_ChangeEcho_DoesNotSetHasUnread(t *testing.T) {
+	for _, edited := range []bool{true, false} {
+		t.Run(fmt.Sprintf("edited=%v", edited), func(t *testing.T) {
+			db := newTestDB(t)
+			_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
+			h := &rtmEventHandler{
+				db:              db,
+				wsCtx:           &WorkspaceContext{},
+				isActive:        func() bool { return true },
+				activeChannelID: func() string { return "C2" },
+				currentUserID:   "USELF",
+				channelTypes:    map[string]string{"C1": "channel"},
+			}
+			// changed=true, from someone else, so only the changed gate
+			// can suppress the write.
+			h.OnMessage("C1", "U1", "1.001", "hi <@USELF>", "", "", true, edited, nil, slack.Blocks{}, nil, "", "")
+
+			s, _ := db.GetChannelReadState("C1")
+			if s.HasUnread {
+				t.Error("HasUnread = true, want false: a change does not make a channel unread")
+			}
+			if n := mentionCount(t, db, "C1"); n != 0 {
+				t.Errorf("MentionCount = %d, want 0: a change does not badge a mention", n)
+			}
+		})
+	}
+}
+
+// IsEdited on the dispatched item comes from Slack's `edited`, not from
+// the message being a change.
+func TestOnMessage_DispatchesChangedAndEditedSeparately(t *testing.T) {
+	for _, tc := range []struct{ changed, edited bool }{{true, false}, {true, true}, {false, false}} {
+		var got []ui.NewMessageMsg
+		h := &rtmEventHandler{
+			wsCtx:     &WorkspaceContext{},
+			userNames: newUserNameStore(nil),
+			program: sendFunc(func(msg tea.Msg) {
+				if m, ok := msg.(ui.NewMessageMsg); ok {
+					got = append(got, m)
+				}
+			}),
+		}
+		h.OnMessage("C1", "U1", "1.001", "hi", "", "", tc.changed, tc.edited, nil, slack.Blocks{}, nil, "", "")
+		if len(got) != 1 {
+			t.Fatalf("changed=%v edited=%v: dispatched %d messages, want 1", tc.changed, tc.edited, len(got))
+		}
+		if got[0].Changed != tc.changed || got[0].Message.IsEdited != tc.edited {
+			t.Errorf("changed=%v edited=%v: dispatched Changed=%v IsEdited=%v",
+				tc.changed, tc.edited, got[0].Changed, got[0].Message.IsEdited)
+		}
+	}
+}
+
+// A change echo does not notify again, even for a message that mentions
+// the user; the same message as a fresh event does. The notifier runs a
+// command that appends the body to a file, so the test can see it. The
+// file's path reaches the command through the environment, so a temp dir
+// with spaces in it still works.
+func TestOnMessage_ChangeEcho_DoesNotNotify(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "notified")
+	t.Setenv("SLK_TEST_NOTIFY_OUT", out)
+	h := &rtmEventHandler{
+		workspaceID:     "T1",
+		currentUserID:   "USELF",
+		userNames:       newUserNameStore(nil),
+		channelTypes:    map[string]string{"C1": "channel"},
+		channelNames:    map[string]string{"C1": "general"},
+		isActive:        func() bool { return false },
+		activeChannelID: func() string { return "C2" },
+		wsCtx:           &WorkspaceContext{},
+		notifier:        notify.New(true, `printf '%s\n' "$SLK_BODY" >> "$SLK_TEST_NOTIFY_OUT"`),
+		notifyCfg:       config.Notifications{Enabled: true, OnMention: true},
+	}
+	h.OnMessage("C1", "U1", "1.001", "<!here> changed", "", "", true, false, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("C1", "U1", "1.002", "<!here> fresh", "", "", false, false, nil, slack.Blocks{}, nil, "", "")
+
+	var body string
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		b, _ := os.ReadFile(out)
+		if body = string(b); strings.Contains(body, "fresh") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond) // let a wrongly started notification land
+	b, _ := os.ReadFile(out)
+	body = string(b)
+	if !strings.Contains(body, "fresh") {
+		t.Fatalf("a fresh mention did not notify; notified: %q", body)
+	}
+	if strings.Contains(body, "changed") {
+		t.Errorf("a change echo notified: %q", body)
+	}
+}
+
+// A channel_join/leave notice doesn't make the channel unread on Slack
+// either. Before this exclusion, every join or leave in any channel
+// you're in lit the sidebar dot.
+func TestOnMessage_SystemNotice_DoesNotSetHasUnread(t *testing.T) {
 	db := newTestDB(t)
 	_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
 	h := &rtmEventHandler{
@@ -286,13 +393,112 @@ func TestOnMessage_EditEcho_DoesNotSetHasUnread(t *testing.T) {
 		activeChannelID: func() string { return "C2" },
 		currentUserID:   "USELF",
 	}
-	// edited=true, and from someone else, so only the edit gate can
-	// suppress the write.
-	h.OnMessage("C1", "U1", "1.001", "hi (edited)", "", "", true, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("C1", "U1", "1.001", "<@U1> has joined the channel", "", "channel_join", false, false, nil, slack.Blocks{}, nil, "", "")
 
 	s, _ := db.GetChannelReadState("C1")
 	if s.HasUnread {
-		t.Error("HasUnread = true, want false: editing a message does not make a channel unread")
+		t.Error("HasUnread = true, want false: a join/leave notice does not make a channel unread")
+	}
+}
+
+// Huddle and canvas system messages are Slackbot-authored but are not
+// chat: like join/leave they neither light the unread dot nor badge a
+// mention, whatever their text says.
+func TestOnMessage_HuddleAndCanvasNotices_DoNotSetHasUnread(t *testing.T) {
+	for _, subtype := range []string{"huddle_thread", "tabbed_canvas_updated"} {
+		db := newTestDB(t)
+		_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
+		h := &rtmEventHandler{
+			db:              db,
+			wsCtx:           &WorkspaceContext{},
+			channelTypes:    map[string]string{"C1": "channel"},
+			isActive:        func() bool { return true },
+			activeChannelID: func() string { return "C2" },
+			currentUserID:   "USELF",
+		}
+		h.OnMessage("C1", "USLACKBOT", "1.001", "", "", subtype, false, false, nil, slack.Blocks{}, nil, "", "")
+
+		s, _ := db.GetChannelReadState("C1")
+		if s.HasUnread {
+			t.Errorf("%s: HasUnread = true, want false", subtype)
+		}
+		if s.MentionCount != 0 {
+			t.Errorf("%s: MentionCount = %d, want 0", subtype, s.MentionCount)
+		}
+	}
+}
+
+// A huddle message is edited when the huddle ends (message_changed). The
+// edit must not drop the subtype from the cached row, or after a restart
+// the notice comes back as a Slackbot bubble.
+func TestOnMessage_EditedHuddleKeepsSubtypeInCache(t *testing.T) {
+	db := newTestDB(t)
+	_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
+	h := &rtmEventHandler{
+		db:              db,
+		wsCtx:           &WorkspaceContext{},
+		workspaceID:     "T1",
+		isActive:        func() bool { return true },
+		activeChannelID: func() string { return "C1" },
+		currentUserID:   "USELF",
+	}
+	h.OnMessage("C1", "USLACKBOT", "1.001", "", "", "huddle_thread", false, false, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("C1", "USLACKBOT", "1.001", "", "", "huddle_thread", true, false, nil, slack.Blocks{}, nil, "", "")
+
+	rows, err := db.GetMessages("C1", 10, "")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("GetMessages = %v rows, err %v; want exactly 1 (same ts dedupes)", len(rows), err)
+	}
+	if rows[0].Subtype != "huddle_thread" {
+		t.Errorf("cached subtype = %q, want huddle_thread", rows[0].Subtype)
+	}
+}
+
+// A message_changed echo of a join or huddle message (an unfurl, or the
+// huddle ending) is still a system notice: it keeps its cached subtype and
+// neither lights the unread dot nor badges a mention.
+func TestOnMessage_NoticeChangeEcho_StaysNoticeAndSkipsUnread(t *testing.T) {
+	for _, subtype := range []string{"channel_join", "huddle_thread"} {
+		db := newTestDB(t)
+		_ = db.UpsertChannel(cache.Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel"})
+		h := &rtmEventHandler{
+			db:              db,
+			wsCtx:           &WorkspaceContext{},
+			workspaceID:     "T1",
+			channelTypes:    map[string]string{"C1": "channel"},
+			isActive:        func() bool { return true },
+			activeChannelID: func() string { return "C2" },
+			currentUserID:   "USELF",
+		}
+		h.OnMessage("C1", "U1", "1.001", "<@USELF> joined", "", subtype, false, false, nil, slack.Blocks{}, nil, "", "")
+		h.OnMessage("C1", "U1", "1.001", "<@USELF> joined", "", subtype, true, true, nil, slack.Blocks{}, nil, "", "")
+
+		rows, err := db.GetMessages("C1", 10, "")
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("%s: GetMessages = %d rows, err %v; want 1", subtype, len(rows), err)
+		}
+		if rows[0].Subtype != subtype {
+			t.Errorf("cached subtype = %q, want %q", rows[0].Subtype, subtype)
+		}
+		s, _ := db.GetChannelReadState("C1")
+		if s.HasUnread || s.MentionCount != 0 {
+			t.Errorf("%s: HasUnread=%v MentionCount=%d, want false and 0", subtype, s.HasUnread, s.MentionCount)
+		}
+	}
+}
+
+// slackclient (live delivery) and messages (rendering) each list the
+// system-notice subtypes; they cannot share one list across the import
+// boundary, so this keeps them identical.
+func TestNoticeSubtypesMatchRenderer(t *testing.T) {
+	for _, s := range []string{
+		"", "bot_message", "thread_broadcast", "file_share", "me_message",
+		"message_changed", "channel_topic", "channel_join", "channel_leave",
+		"group_join", "group_leave", "huddle_thread", "tabbed_canvas_updated",
+	} {
+		if got, want := slackclient.IsNoticeSubtype(s), messages.IsSystemNoticeSubtype(s); got != want {
+			t.Errorf("subtype %q: slackclient.IsNoticeSubtype = %v, messages.IsSystemNoticeSubtype = %v", s, got, want)
+		}
 	}
 }
 
@@ -306,7 +512,7 @@ func TestOnMessage_InactiveWorkspace_StillSetsHasUnread(t *testing.T) {
 		activeChannelID: func() string { return "" },
 		workspaceID:     "T1",
 	}
-	h.OnMessage("C1", "U1", "1.001", "hi", "", "", false, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("C1", "U1", "1.001", "hi", "", "", false, false, nil, slack.Blocks{}, nil, "", "")
 
 	s, _ := db.GetChannelReadState("C1")
 	if !s.HasUnread {
@@ -324,7 +530,7 @@ func TestOnMessage_ThreadReply_DoesNotSetHasUnread(t *testing.T) {
 		activeChannelID: func() string { return "C2" },
 	}
 	// threadTS != ts and not a broadcast subtype = non-broadcast thread reply.
-	h.OnMessage("C1", "U1", "1.002", "reply", "1.001", "", false, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("C1", "U1", "1.002", "reply", "1.001", "", false, false, nil, slack.Blocks{}, nil, "", "")
 
 	s, _ := db.GetChannelReadState("C1")
 	if s.HasUnread {
@@ -341,7 +547,7 @@ func TestOnMessage_ThreadBroadcast_SetsHasUnread(t *testing.T) {
 		isActive:        func() bool { return true },
 		activeChannelID: func() string { return "C2" },
 	}
-	h.OnMessage("C1", "U1", "1.002", "ALL", "1.001", "thread_broadcast", false, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("C1", "U1", "1.002", "ALL", "1.001", "thread_broadcast", false, false, nil, slack.Blocks{}, nil, "", "")
 
 	s, _ := db.GetChannelReadState("C1")
 	if !s.HasUnread {
@@ -406,8 +612,8 @@ func TestOnMessage_UnknownConversation_AddsItUnread(t *testing.T) {
 		},
 	}
 
-	h.OnMessage("G9", "U2", "1.001", "hi", "", "", false, nil, slack.Blocks{}, nil, "", "")
-	h.OnMessage("G9", "U2", "1.002", "again", "", "", false, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("G9", "U2", "1.001", "hi", "", "", false, false, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("G9", "U2", "1.002", "again", "", "", false, false, nil, slack.Blocks{}, nil, "", "")
 
 	if lookups != 1 {
 		t.Errorf("lookups = %d, want 1", lookups)
@@ -453,7 +659,7 @@ func TestOnMessage_UnknownConversation_RetryDependsOnFailure(t *testing.T) {
 				},
 			}
 			msg := func(ts string) {
-				h.OnMessage("D9", "U2", ts, "hi", "", "", false, nil, slack.Blocks{}, nil, "", "")
+				h.OnMessage("D9", "U2", ts, "hi", "", "", false, false, nil, slack.Blocks{}, nil, "", "")
 			}
 
 			msg("1.001")
@@ -909,6 +1115,70 @@ func TestOnEphemeralMessage_DisplaysButTouchesNoDurableState(t *testing.T) {
 	}
 	if got := item.LegacyAttachments[0].Actions[1]; got.ID != "2" || got.Name != "ignore" {
 		t.Errorf("Actions[1] = %+v, want id 2 from the raw frame", got)
+	}
+}
+
+// A bot's working indicator reaches the UI tagged with the workspace
+// it came from, the empty status that clears it included.
+func TestOnAssistantStatus_SendsBotStatus(t *testing.T) {
+	var sent []tea.Msg
+	h := &rtmEventHandler{
+		program:     sendFunc(func(msg tea.Msg) { sent = append(sent, msg) }),
+		workspaceID: "T1",
+	}
+	h.OnAssistantStatus(slackclient.AssistantStatus{ChannelID: "C1", ThreadTS: "100.1", BotUserID: "UBOT", Status: "Thinking..."})
+	h.OnAssistantStatus(slackclient.AssistantStatus{ChannelID: "C1", ThreadTS: "100.1", BotUserID: "UBOT"})
+
+	want := []tea.Msg{
+		ui.BotStatusMsg{WorkspaceID: "T1", ChannelID: "C1", ThreadTS: "100.1", BotUserID: "UBOT", Status: "Thinking..."},
+		ui.BotStatusMsg{WorkspaceID: "T1", ChannelID: "C1", ThreadTS: "100.1", BotUserID: "UBOT"},
+	}
+	if len(sent) != len(want) {
+		t.Fatalf("sent %d messages, want %d: %+v", len(sent), len(want), sent)
+	}
+	for i := range want {
+		if sent[i] != want[i] {
+			t.Errorf("sent[%d] = %#v, want %#v", i, sent[i], want[i])
+		}
+	}
+}
+
+// An app slk has never seen must not stay "U… is working...": its
+// status asks for its name, which reaches the UI as UserResolvedMsg.
+func TestOnAssistantStatus_ResolvesAnUnknownApp(t *testing.T) {
+	db := newTestDB(t)
+	watch := newResolvedWatch(1, func(m ui.UserResolvedMsg) bool { return m.UserID == "UBOT" })
+	batcher := &fakeBatcher{res: []edge.User{edgeUserRecord("UBOT", "atlas", "Atlas", "", "T1", 1, true)}}
+	wctx := &WorkspaceContext{TeamID: "T1", UserNames: newUserNameStore(nil)}
+	wctx.UserResolver = newUserResolver("T1", nil, db, nil, watch.send, batcher, nil)
+	wctx.UserResolver.names = wctx.UserNames
+	h := &rtmEventHandler{workspaceID: "T1", wsCtx: wctx, db: db, userNames: wctx.UserNames}
+
+	h.OnAssistantStatus(slackclient.AssistantStatus{ChannelID: "C1", ThreadTS: "100.1", BotUserID: "UBOT", Status: "Thinking..."})
+
+	<-watch.done // no timeout: a resolver never asked hangs, and go test names the test
+	for _, m := range watch.messages() {
+		if u, ok := m.(ui.UserResolvedMsg); ok && u.UserID == "UBOT" && u.DisplayName != "Atlas" {
+			t.Errorf("UBOT resolved as %q, want Atlas", u.DisplayName)
+		}
+	}
+}
+
+func TestOnAssistantStatus_KnownAppIsNotLookedUp(t *testing.T) {
+	db := newTestDB(t)
+	batcher := &fakeBatcher{}
+	wctx := &WorkspaceContext{TeamID: "T1", UserNames: newUserNameStore(map[string]string{"UBOT": "Atlas"})}
+	wctx.UserResolver = newUserResolver("T1", nil, db, nil, nil, batcher, nil)
+	h := &rtmEventHandler{workspaceID: "T1", wsCtx: wctx, db: db, userNames: wctx.UserNames}
+
+	h.OnAssistantStatus(slackclient.AssistantStatus{ChannelID: "C1", ThreadTS: "100.1", BotUserID: "UBOT", Status: "Thinking..."})
+
+	r := wctx.UserResolver
+	r.pendingMu.Lock()
+	queued, armed := len(r.pending), r.flushTimer != nil
+	r.pendingMu.Unlock()
+	if queued != 0 || armed {
+		t.Errorf("a named app queued %d lookup(s) (flush armed: %v), want none", queued, armed)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gammons/slk/internal/core"
+	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/slack-go/slack"
 )
 
@@ -15,23 +16,24 @@ import (
 // core.UserProfile the profile dialog renders. at is the time used to
 // resolve the user's timezone abbreviation (America/Los_Angeles at a
 // given instant may be PST or PDT).
-func toCoreProfile(u *slack.User, at time.Time) core.UserProfile {
+func toCoreProfile(u *slackclient.UserProfile, at time.Time) core.UserProfile {
 	teamID := u.TeamID
 	return core.UserProfile{
-		UserID:      u.ID,
-		TeamID:      teamID,
-		Handle:      u.Name,
-		RealName:    u.RealName,
-		DisplayName: u.Profile.DisplayName,
-		Title:       u.Profile.Title,
-		Pronouns:    u.Profile.Pronouns,
-		Email:       u.Profile.Email,
-		Phone:       u.Profile.Phone,
-		TZ:          u.TZ,
-		TZAbbrev:    zoneAbbrev(u.TZ, at),
-		TZOffset:    u.TZOffset,
-		IsBot:       u.IsBot || u.IsAppUser,
-		Deleted:     u.Deleted,
+		UserID:          u.ID,
+		TeamID:          teamID,
+		Handle:          u.Name,
+		RealName:        u.RealName,
+		DisplayName:     u.Profile.DisplayName,
+		Title:           u.Profile.Title,
+		Pronouns:        u.Profile.Pronouns,
+		Email:           u.Profile.Email,
+		Phone:           u.Profile.Phone,
+		TZ:              u.TZ,
+		TZAbbrev:        zoneAbbrev(u.TZ, at),
+		TZOffset:        u.TZOffset,
+		IsBot:           u.IsBot || u.IsAppUser,
+		Deleted:         u.Deleted,
+		HuddleChannelID: u.HuddleStateChannelID,
 	}
 }
 
@@ -91,36 +93,37 @@ func newProfileCache(ttl time.Duration, now func() time.Time, fetch func(ctx con
 	}
 }
 
-// Profile returns userID's profile in workspace teamID, from cache if
-// fresh, otherwise from a live fetch. Successful fetches are cached
-// for ttl; errors are not cached.
-func (c *profileCache) Profile(ctx context.Context, teamID, userID string) (core.UserProfile, error) {
-	key := teamID + "/" + userID
-
+// Cached returns userID's profile if a fetch within ttl is on hand,
+// without fetching.
+func (c *profileCache) Cached(teamID, userID string) (core.UserProfile, bool) {
 	c.mu.Lock()
-	entry, ok := c.entries[key]
+	entry, ok := c.entries[teamID+"/"+userID]
 	c.mu.Unlock()
 	if ok && c.now().Sub(entry.fetchedAt) < c.ttl {
-		return entry.profile, nil
+		return entry.profile, true
 	}
+	return core.UserProfile{}, false
+}
 
+// Fresh always fetches live and, on success, refreshes the cached entry
+// Cached serves. The dialog uses it as its refresh behind a cached
+// render, so the huddle a person is in is never older than the open.
+func (c *profileCache) Fresh(ctx context.Context, teamID, userID string) (core.UserProfile, error) {
 	profile, err := c.fetch(ctx, teamID, userID)
 	if err != nil {
 		return core.UserProfile{}, err
 	}
-
 	c.mu.Lock()
-	c.entries[key] = profileCacheEntry{profile: profile, fetchedAt: c.now()}
+	c.entries[teamID+"/"+userID] = profileCacheEntry{profile: profile, fetchedAt: c.now()}
 	c.mu.Unlock()
-
 	return profile, nil
 }
 
 // newProfileFetch builds the per-workspace profile fetch function used
 // by ProfileService, from a lookup that resolves a workspace's
-// GetUserInfoContext-shaped function by team ID. Separated from the
-// live *workspaceRouter so it can be tested without a live *slack.Client.
-func newProfileFetch(lookup func(teamID string) (getUser func(ctx context.Context, userID string) (*slack.User, error), ok bool)) func(ctx context.Context, teamID, userID string) (core.UserProfile, error) {
+// users.info function by team ID. Separated from the live
+// *workspaceRouter so it can be tested without a live *slack.Client.
+func newProfileFetch(lookup func(teamID string) (getUser func(ctx context.Context, userID string) (*slackclient.UserProfile, error), ok bool)) func(ctx context.Context, teamID, userID string) (core.UserProfile, error) {
 	return func(ctx context.Context, teamID, userID string) (core.UserProfile, error) {
 		getUser, ok := lookup(teamID)
 		if !ok {

@@ -30,6 +30,11 @@ type Config struct {
 type Compose struct {
 	// Editor is the Ctrl+E fallback when $VISUAL/$EDITOR are unset.
 	Editor string `toml:"editor"`
+	// StayInInsertAfterSend keeps the composer focused and in insert
+	// mode after Enter sends a message, so several messages can be
+	// typed in a row without pressing `i` before each one. Default off:
+	// sending drops back to normal mode, the vim convention.
+	StayInInsertAfterSend bool `toml:"stay_in_insert_after_send"`
 }
 
 // SectionDef defines a sidebar section with channel name patterns.
@@ -43,7 +48,7 @@ type Compose struct {
 // ascending. Example: channels = ["general:1", "alerts:2", "random"].
 // The ":N" syntax is only honored when use_slack_sections = false
 // (or as a fallback when Slack's section endpoint is unreachable);
-// in Slack-native mode, channel order is taken from Slack.
+// in Slack-native mode, channels sort alphabetically within Slack's sections.
 type SectionDef struct {
 	Channels []string `toml:"channels"`
 	Order    int      `toml:"order"` // lower = higher in sidebar
@@ -86,6 +91,8 @@ type Appearance struct {
 	Theme           string `toml:"theme"`
 	TimestampFormat string `toml:"timestamp_format"`
 	ShowAvatars     bool   `toml:"show_avatars"`
+	// ThreadAvatars also draws avatars in the thread pane (needs ShowAvatars).
+	ThreadAvatars bool `toml:"thread_avatars"`
 	// ImageProtocol controls how inline images are rendered.
 	// One of: "auto", "kitty", "sixel", "halfblock", "off".
 	ImageProtocol string `toml:"image_protocol"`
@@ -113,6 +120,10 @@ type Appearance struct {
 	// by hashing their user ID — mirroring how Slack clients assign stable
 	// per-user colors. Default off.
 	ColoredUsernames bool `toml:"colored_usernames"`
+	// ReplyAvatars draws the reply row under a thread parent as Slack
+	// does: the repliers' avatars (kitty graphics only), then "N
+	// replies". Needs ShowAvatars. Default off.
+	ReplyAvatars bool `toml:"reply_avatars"`
 }
 
 type Animations struct {
@@ -155,13 +166,35 @@ type CacheConfig struct {
 // Sidebar holds preferences governing what appears in the channel
 // sidebar.
 type Sidebar struct {
+	// MentionPills floats Slack's "Unread mentions" pills on the
+	// sidebar's top/bottom row while a channel with an unread mention
+	// is scrolled out of view. Default off.
+	MentionPills bool `toml:"mention_pills"`
 	// HideInactiveAfterDays auto-hides channels (of any type) whose
 	// last_read_ts is older than this many days. Set to 0 to disable.
 	// Channels matching a custom [sections.*] glob, channels with
 	// unread messages, and the currently-selected channel are never
 	// hidden regardless of this setting.
 	HideInactiveAfterDays int `toml:"hide_inactive_after_days"`
-	Width                 int `toml:"width"`
+	// RightAlignBadges puts mention badges at the right end of their
+	// rows, as Slack does. Default off.
+	RightAlignBadges bool `toml:"right_align_badges"`
+	Width            int  `toml:"width"`
+	// ChannelIndent indents the rows under each section header by this
+	// many cells, as Slack does (0-6). Default 0.
+	ChannelIndent int `toml:"channel_indent"`
+	// SlackStyle draws the sidebar as Slack does: no "▾" on expanded
+	// headers, regular-weight headers, no unread dot, and names sorted
+	// ignoring punctuation. Default off.
+	SlackStyle bool `toml:"slack_style"`
+	// PrivateGlyph replaces "◆" before private channels (e.g. a lock).
+	PrivateGlyph string `toml:"private_glyph"`
+	// ActiveOnly hides conversations with no activity in 30 days, in
+	// every section, like Slack's "Active only" filter. Default off.
+	ActiveOnly bool `toml:"active_only"`
+	// MouseResize lets a drag of the sidebar's right border resize it.
+	// Default off.
+	MouseResize bool `toml:"mouse_resize"`
 }
 
 // Marks holds preferences for vim-style marks.
@@ -224,6 +257,7 @@ func Default() Config {
 		Appearance: Appearance{
 			Theme:           "nord",
 			TimestampFormat: "3:04 PM",
+			ShowAvatars:     true,
 			ImageProtocol:   "auto",
 			MaxImageRows:    20,
 			MaxImageCols:    60,

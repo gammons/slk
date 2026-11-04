@@ -1,0 +1,70 @@
+{
+ "type": "unfurl_preview_updated",
+ "client_msg_id": "11111111-2222-4333-8444-555555555555",
+ "attachments": {
+  "https:\/\/linear.app\/example\/issue\/ENG-42\/fix-the-flaky-login-test": {
+   "fallback": "ENG-42 Fix the flaky login test",
+   "from_url": "https:\/\/linear.app\/example\/issue\/ENG-42\/fix-the-flaky-login-test",
+   "id": 1,
+   "color": "#e2e2e2",
+   "preview": {
+    "type": "app",
+    "title": {
+     "type": "mrkdwn",
+     "text": "<https:\/\/linear.app\/example\/issue\/ENG-42\/fix-the-flaky-login-test|ENG-42 Fix the flaky login test>",
+     "verbatim": true
+    },
+    "icon_url": "https:\/\/avatars.slack-edge.com\/2024-04-02\/0000000000000_00000000000000000000_192.png",
+    "can_remove": true
+   },
+   "app_id": "A0EXAMPLE01",
+   "is_app_unfurl": true,
+   "app_unfurl_url": "https:\/\/linear.app\/example\/issue\/ENG-42\/fix-the-flaky-login-test",
+   "bot_id": "B0EXAMPLE01",
+   "bot_team_id": "T0EXAMPLE01",
+   "work_object_entity": {
+    "work_object_type": "external",
+    "external_url": "https:\/\/linear.app\/example\/issue\/ENG-42\/fix-the-flaky-login-test",
+    "entity_id": "W:A0EXAMPLE01:lin1:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000002~issue",
+    "app_id": "A0EXAMPLE01",
+    "app_name": "Linear",
+    "app_icons": {
+     "image_36": {
+      "type": "image",
+      "image_url": "https:\/\/avatars.slack-edge.com\/2024-04-02\/0000000000000_00000000000000000000_36.png",
+      "alt_text": "Linear",
+      "image_width": 36,
+      "image_height": 36
+     },
+     "image_128": {
+      "type": "image",
+      "image_url": "https:\/\/avatars.slack-edge.com\/2024-04-02\/0000000000000_00000000000000000000_128.png",
+      "alt_text": "Linear",
+      "image_width": 128,
+      "image_height": 128
+     }
+    },
+    "product_name": "Linear",
+    "slug_icon_name": "brand-linear-filled",
+    "display_type": "Issue",
+    "layouts": {
+     "expanded": {
+      "layout_type": "expanded",
+      "title": {
+       "text": "Fix the flaky login test"
+      },
+      "subtitle": {
+       "text": "Issue ENG-42 in Linear"
+      },
+      "header_title": {
+       "text": "Linear"
+      }
+     }
+    }
+   },
+   "work_object_entity_type": "slack#\/entities\/task",
+   "status": "published"
+  }
+ },
+ "event_ts": "1793057351.001800"
+}

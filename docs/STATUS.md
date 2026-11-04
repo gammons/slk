@@ -123,7 +123,7 @@ Last updated: 2026-05-03
 
 - [ ] Quiet hours for notifications
 - [ ] Custom keybinding overrides in config
-- [ ] Message link previews / unfurling
+- [x] Message link previews / unfurling -- shown as cards (legacy attachments), updated live when Slack adds or removes one, and removable from your own messages with `x` (`chat.deleteAttachment`, an undocumented method; request shape taken from emacs-slack, not yet captured from the web client)
 
 ## Architecture Overview
 

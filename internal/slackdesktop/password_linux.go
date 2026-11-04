@@ -3,12 +3,42 @@
 package slackdesktop
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"strings"
+	"time"
 
-	"r00t2.io/gosecret"
+	"github.com/godbus/dbus/v5"
 )
 
-type searchSecretItemsFunc func(map[string]string) (unlocked, locked []*gosecret.Item, err error)
+const (
+	secretServiceName  = "org.freedesktop.secrets"
+	secretServicePath  = dbus.ObjectPath("/org/freedesktop/secrets")
+	secretServiceIface = "org.freedesktop.Secret.Service"
+	secretSessionIface = "org.freedesktop.Secret.Session"
+	secretItemIface    = "org.freedesktop.Secret.Item"
+
+	// A Secret Service can block on an unlock prompt; don't hang the
+	// terminal on it. Applied per call, like kwalletCallTimeout.
+	secretCallTimeout = 10 * time.Second
+)
+
+// secretServiceConn is the part of org.freedesktop.Secret we need, as an
+// interface so the lookup is testable without a session bus. Mirrors
+// kwalletConn.
+type secretServiceConn interface {
+	SearchItems(attrs map[string]string) (unlocked, locked []dbus.ObjectPath, err error)
+	GetSecret(item dbus.ObjectPath) ([]byte, error)
+}
+
+// dbusSecret is the Secret Service "Secret" struct, signature (oayays).
+type dbusSecret struct {
+	Session     dbus.ObjectPath
+	Parameters  []byte
+	Value       []byte
+	ContentType string
+}
 
 var slackSecretQueries = []map[string]string{
 	{
@@ -90,35 +120,165 @@ func collectKeyringPasswords(sources ...func() ([][]byte, error)) ([][]byte, err
 //
 // The queries are attribute-qualified, so unlike macOS there is no ambiguity:
 // a single candidate is returned.
+//
+// This talks to the Secret Service over D-Bus directly and only calls methods
+// in the freedesktop spec (OpenSession, SearchItems, Item.GetSecret). Client
+// libraries that eagerly load every item property also read the
+// gnome-keyring-only Item.Type property, which spec-only providers such as
+// oo7-daemon reject with "Unknown property 'Type'".
 func secretServicePasswords() ([][]byte, error) {
-	service, err := gosecret.NewService()
+	// Shared connection owned by the library; not ours to close. No bus means
+	// no keyring to reach, same as kwalletPasswords.
+	conn, err := dbus.SessionBus()
 	if err != nil {
 		return nil, ErrNoSecretService
 	}
+	return readSecretServicePasswords(conn)
+}
+
+// readSecretServicePasswords is secretServicePasswords on a given connection,
+// so a test can point it at its own bus.
+func readSecretServicePasswords(conn *dbus.Conn) ([][]byte, error) {
+	service, err := openSecretService(conn)
+	switch {
+	case err == nil:
+	case secretServiceAbsent(err):
+		return nil, ErrNoSecretService
+	default:
+		// A daemon that is there but won't answer (hung, refusing "plain",
+		// denied by a sandbox) is not "no keyring found": keep the detail so
+		// the user is sent to the right place.
+		return nil, fmt.Errorf("secret service: %w", err)
+	}
 	defer service.Close()
 
-	pw, err := findKeyringPassword(service.SearchItems)
+	pw, err := findKeyringPassword(service)
 	if err != nil {
 		return nil, err
 	}
 	return [][]byte{pw}, nil
 }
 
-func findKeyringPassword(searchItems searchSecretItemsFunc) ([]byte, error) {
-	foundLocked := false
+// secretServiceAbsent reports whether err from a call to org.freedesktop.secrets
+// says nobody provides it: no owner and nothing to activate, or an activation
+// file whose daemon failed to start. The bus's own error name is the signal;
+// the text varies between bus implementations.
+func secretServiceAbsent(err error) bool {
+	var dbusErr dbus.Error
+	if !errors.As(err, &dbusErr) {
+		return false
+	}
+	switch dbusErr.Name {
+	case "org.freedesktop.DBus.Error.ServiceUnknown",
+		"org.freedesktop.DBus.Error.NameHasNoOwner":
+		return true
+	}
+	return strings.HasPrefix(dbusErr.Name, "org.freedesktop.DBus.Error.Spawn.")
+}
+
+// findKeyringPassword runs each query in order and returns the first
+// non-empty secret. A matching item that can't be read, or holds an empty
+// value, doesn't stop the search: a later item or query may still have the
+// key. Locked matches are only counted, since unlocking would raise a prompt.
+//
+// When nothing was found the precedence matches collectKeyringPasswords: a
+// locked store the user can unlock, then an unexpected error, then not found.
+func findKeyringPassword(c secretServiceConn) ([]byte, error) {
+	var (
+		foundLocked bool
+		lastErr     error
+	)
 	for _, attrs := range slackSecretQueries {
-		unlocked, locked, err := searchItems(attrs)
+		unlocked, locked, err := c.SearchItems(attrs)
 		if err != nil {
-			return nil, err
-		}
-		if len(unlocked) > 0 {
-			return unlocked[0].Secret.Value, nil
+			lastErr = err
+			continue
 		}
 		foundLocked = foundLocked || len(locked) > 0
+
+		for _, item := range unlocked {
+			pw, err := c.GetSecret(item)
+			switch {
+			case err != nil:
+				lastErr = err
+			case len(pw) == 0:
+				// An empty key would only fail later, at decrypt time, as
+				// invalid_auth. Same rule as readKWalletPassword.
+			default:
+				return pw, nil
+			}
+		}
 	}
 
-	if foundLocked {
+	switch {
+	case foundLocked:
 		return nil, ErrKeyringLocked
+	case lastErr != nil:
+		return nil, lastErr
+	default:
+		return nil, ErrSecretNotFound
 	}
-	return nil, ErrSecretNotFound
+}
+
+// dbusSecretService implements secretServiceConn over a session opened with
+// the "plain" algorithm. The spec only says plain is "almost always
+// supported"; a provider that refuses it answers OpenSession with
+// org.freedesktop.DBus.Error.NotSupported, which reaches the user as is.
+type dbusSecretService struct {
+	conn    *dbus.Conn
+	service dbus.BusObject
+	session dbus.ObjectPath
+}
+
+func openSecretService(conn *dbus.Conn) (*dbusSecretService, error) {
+	s := &dbusSecretService{
+		conn:    conn,
+		service: conn.Object(secretServiceName, secretServicePath),
+	}
+	var algorithmOutput dbus.Variant
+	err := s.call(s.service, secretServiceIface+".OpenSession",
+		[]any{&algorithmOutput, &s.session}, "plain", dbus.MakeVariant(""))
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *dbusSecretService) SearchItems(attrs map[string]string) (unlocked, locked []dbus.ObjectPath, err error) {
+	err = s.call(s.service, secretServiceIface+".SearchItems", []any{&unlocked, &locked}, attrs)
+	return unlocked, locked, err
+}
+
+func (s *dbusSecretService) GetSecret(item dbus.ObjectPath) ([]byte, error) {
+	var secret dbusSecret
+	obj := s.conn.Object(secretServiceName, item)
+	if err := s.call(obj, secretItemIface+".GetSecret", []any{&secret}, s.session); err != nil {
+		return nil, err
+	}
+	return secret.Value, nil
+}
+
+// Close ends the session. It gets its own timeout, so a slow lookup that used
+// up its budget can't leave the session open on the shared connection.
+//
+// An OpenSession or Close that itself times out does leave the session to the
+// daemon, which drops it when this connection goes away (spec, "Sessions").
+// Neither call prompts, so that only happens with a wedged daemon, where one
+// stray session is the least of it; not worth a private connection here.
+func (s *dbusSecretService) Close() {
+	_ = s.call(s.conn.Object(secretServiceName, s.session), secretSessionIface+".Close", nil)
+}
+
+func (s *dbusSecretService) call(obj dbus.BusObject, method string, out []any, args ...any) error {
+	ctx, cancel := context.WithTimeout(context.Background(), secretCallTimeout)
+	defer cancel()
+
+	call := obj.CallWithContext(ctx, method, 0, args...)
+	if call.Err != nil {
+		return call.Err
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return call.Store(out...)
 }
