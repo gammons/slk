@@ -101,14 +101,17 @@ type panelLayoutFrame struct {
 //
 // Border bits are 2 cols on each non-rail pane (1 col left + 1 col
 // right rounded border).
-func (l *panelLayout) Compute(width, height, railWidth, sidebarWidth int, sidebarVisible, threadVisible, threadFront bool) panelLayoutFrame {
+func (l *panelLayout) Compute(width, height, railWidth, sidebarWidth int, sidebarVisible, threadVisible, threadFront, compact bool) panelLayoutFrame {
 	const (
 		statusHeight = 1
-		paneBorder   = 2 // left + right border cols
 		minMsgWidth  = 40
 		minThreadW   = 80
 		floorPaneW   = 10
 	)
+	paneBorder := 2
+	if compact {
+		paneBorder = 0
+	}
 	contentHeight := height - statusHeight
 
 	sbWidth := 0
@@ -119,24 +122,26 @@ func (l *panelLayout) Compute(width, height, railWidth, sidebarWidth int, sideba
 	}
 	msgAreaWidth := width - railWidth - sbWidth - sbBorder
 
+	var hasMsg, hasThread bool
 	var msgWidth, msgBorder, threadWidth, threadBorder int
 	switch {
 	case !threadVisible:
-		msgWidth, msgBorder = msgAreaWidth-paneBorder, paneBorder
+		msgWidth, msgBorder, hasMsg = msgAreaWidth-paneBorder, paneBorder, true
 	case msgAreaWidth-2*paneBorder >= minMsgWidth+minThreadW:
 		threadWidth = max(msgAreaWidth*35/100, minThreadW)
 		threadWidth = min(threadWidth, msgAreaWidth-2*paneBorder-minMsgWidth)
 		threadBorder, msgBorder = paneBorder, paneBorder
+		hasThread, hasMsg = true, true
 		msgWidth = msgAreaWidth - msgBorder - threadWidth - threadBorder
 	case threadFront:
-		threadWidth, threadBorder = msgAreaWidth-paneBorder, paneBorder
+		threadWidth, threadBorder, hasThread = msgAreaWidth-paneBorder, paneBorder, true
 	default:
-		msgWidth, msgBorder = msgAreaWidth-paneBorder, paneBorder
+		msgWidth, msgBorder, hasMsg = msgAreaWidth-paneBorder, paneBorder, true
 	}
-	if msgBorder > 0 {
+	if hasMsg {
 		msgWidth = max(msgWidth, floorPaneW)
 	}
-	if threadBorder > 0 {
+	if hasThread {
 		threadWidth = max(threadWidth, floorPaneW)
 	}
 
