@@ -37,6 +37,7 @@ type Model struct {
 	selected         int
 	focused          bool
 	coloredUsernames bool
+	compact          bool
 	showAvatars      bool
 	avatarFn         messages.AvatarFunc
 	userNames        map[string]string
@@ -602,6 +603,12 @@ func (m *Model) SetUserNames(names map[string]string) {
 // with the new coloring.
 func (m *Model) SetColoredUsernames(enabled bool) {
 	m.coloredUsernames = enabled
+	m.InvalidateCache()
+}
+
+// SetCompact enables or disables the compact message view.
+func (m *Model) SetCompact(enabled bool) {
+	m.compact = enabled
 	m.InvalidateCache()
 }
 

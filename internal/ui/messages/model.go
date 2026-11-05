@@ -206,6 +206,11 @@ type Model struct {
 	// SetColoredUsernames; invalidates the render cache so existing rows
 	// pick up the new coloring.
 	coloredUsernames bool
+
+	// Compresses the vertical space as much as possible: remove avatars,
+	// put the username on the same line as the message, remove vertical
+	// separation between messages.
+	compact bool
 }
 
 // SetFocused records whether the messages pane currently holds user focus
@@ -1201,6 +1206,13 @@ func (m *Model) SetUserNames(names map[string]string) {
 // with the new coloring.
 func (m *Model) SetColoredUsernames(enabled bool) {
 	m.coloredUsernames = enabled
+	m.dropCache()
+	m.dirty()
+}
+
+// SetCompact enables or disables the compact message view.
+func (m *Model) SetCompact(enabled bool) {
+	m.compact = enabled
 	m.dropCache()
 	m.dirty()
 }
