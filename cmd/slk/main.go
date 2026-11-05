@@ -245,6 +245,8 @@ func run() error {
 	// the active TeamID up front (workspaces connect in goroutines).
 	styles.Apply(cfg.Appearance.Theme, cfg.Theme)
 
+	styles.ApplyCompact(cfg.Appearance.Compact)
+
 	notifier := notify.New(cfg.Notifications.Enabled, cfg.Notifications.NotifyCommand)
 
 	// Initialize the OS clipboard for paste-to-upload.

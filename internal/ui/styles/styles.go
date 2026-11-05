@@ -440,6 +440,18 @@ func Apply(themeName string, overrides core.Theme) {
 	buildStyles()
 }
 
+// Set whether the style should be compact or not.
+// Currently this only impacts the compose box padding.
+// All other changes are handled elsewhere.
+func ApplyCompact(compact bool) {
+	if compact {
+		ComposePadding = 0
+	} else {
+		ComposePadding = 1
+	}
+	buildStyles()
+}
+
 // SelectionBorderColor returns the foreground color used for the cursor /
 // selected-row marker (the thick left "▌") in the sidebar, messages pane,
 // and thread panel. When the panel has focus we use the bright Accent
