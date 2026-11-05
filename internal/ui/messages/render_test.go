@@ -462,6 +462,62 @@ func TestBlockquoteWrapsUnderTheBar(t *testing.T) {
 	}
 }
 
+func TestCompactMessageHasMetadata(t *testing.T) {
+	item := MessageItem{TS: "1.0", UserID: "U1", UserName: "albert", Text: "hello", Timestamp: "10:06 PM"}
+	items := []MessageItem{item}
+	m := New(items, "general")
+	rc := m.renderContext()
+	rc.Compact = true
+	r := RenderMessage(items[0], 60, rc, RenderOptions{})
+	if !strings.Contains(r.Content, item.Timestamp) {
+		t.Fatalf("compact message should contain the timestamp (%s):\n%s", item.Timestamp, r.Content)
+	}
+	if !strings.Contains(r.Content, item.UserName) {
+		t.Fatalf("compact message should contain the username (%s):\n%s", item.UserName, r.Content)
+	}
+}
+func TestCompactMessageIsCompact(t *testing.T) {
+	items := []MessageItem{{TS: "1.0", UserID: "U1", UserName: "albert", Text: "hello", Timestamp: "10:06 PM"}}
+	m := New(items, "general")
+	rc := m.renderContext()
+	rc.Compact = true
+	r := RenderMessage(items[0], 60, rc, RenderOptions{})
+
+	lines := strings.Split(ansi.Strip(r.Content), "\n")
+
+	if len(lines) > 1 {
+		t.Fatalf("compact message should only contain one line, instead contains %d:\n%s", len(lines), r.Content)
+	}
+}
+
+func TestCompactMessageHeaderWrapsCorrectly(t *testing.T) {
+	item := MessageItem{TS: "1.0", UserID: "U1", UserName: "albert123123", Text: "> this somewhat weird message\n> \n> is a quote", Timestamp: "10:06 PM"}
+	items := []MessageItem{item}
+	m := New(items, "general")
+	rc := m.renderContext()
+	rc.Compact = true
+	r := RenderMessage(items[0], 6, rc, RenderOptions{})
+	unwrappedHeader := strings.ReplaceAll(ansi.Strip(r.Header), "\n", " ")
+	if !strings.HasPrefix(unwrappedHeader, item.Timestamp) {
+		t.Fatalf("wrapped header in compact mode should start with the timestamp:\n%s", unwrappedHeader)
+	}
+}
+func TestCompactMessageBlockQuoteHasBars(t *testing.T) {
+	items := []MessageItem{{TS: "1.0", UserID: "U1", UserName: "albert123123", Text: "> this somewhat weird message\n> \n> is a quote", Timestamp: "10:06 PM"}}
+	m := New(items, "general")
+	rc := m.renderContext()
+	rc.Compact = true
+	r := RenderMessage(items[0], 6, rc, RenderOptions{})
+
+	lines := strings.Split(ansi.Strip(r.Content[len(r.Header)+1:]), "\n")
+
+	for _, line := range lines {
+		if !strings.Contains(line, blockquoteStyle().GetBorderStyle().Left) {
+			t.Fatalf("blockquote in compact mode should wrap correctly but doesn't:\n%s\nall lines:\n%s", line, r.Content[len(r.Header)+1:])
+		}
+	}
+}
+
 // TestBlockquoteInlineFormatting: code, links and mentions inside a
 // quote render as they do outside one, instead of as raw mrkdwn.
 func TestBlockquoteInlineFormatting(t *testing.T) {
