@@ -122,4 +122,10 @@ func (a *App) refilterDeactivated() {
 	if len(a.userNames) > 0 {
 		a.SetUserNames(a.userNames)
 	}
+	// The unread count skips hidden rows, so the title and $SLK_UNREAD
+	// change with the set too. Before a workspace is ready there is no
+	// count to report, and WorkspaceReadyMsg reports the first one.
+	if a.activeTeamID != "" {
+		a.notifyReadStateChanged()
+	}
 }

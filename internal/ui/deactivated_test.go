@@ -10,6 +10,7 @@ import (
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/sidebar"
+	"github.com/gammons/slk/internal/ui/workspace"
 )
 
 // deactivatedApp is an App in workspace T1 holding a person (U1), a
@@ -129,6 +130,46 @@ func TestHideDeactivatedUsersOptionOffShowsEveryone(t *testing.T) {
 		if got.has(id) {
 			t.Errorf("option back on: %s is offered", id)
 		}
+	}
+}
+
+// The window title counts the unread rows the sidebar shows, so it follows
+// a live deactivation and the option, not only the next read-state change.
+func TestWindowTitleFollowsTheHiddenSet(t *testing.T) {
+	a := deactivatedApp(t, withWorkspaces(workspace.WorkspaceItem{ID: "T1", Name: "SWAP", Initials: "SW"}))
+	a.setReadStateReaderForTest(func() map[string]core.ReadState {
+		return map[string]core.ReadState{"D1": {HasUnread: true}, "D2": {HasUnread: true}}
+	})
+	a.setWorkspaceUnreadReaderForTest(func() []string { return nil })
+	a.notifyReadStateChanged()
+	if got, want := a.windowTitle, "slk SW (2)"; got != want {
+		t.Fatalf("before: windowTitle = %q, want %q", got, want)
+	}
+	a.Update(UserDeactivatedMsg{UserID: "U2", Deactivated: true})
+	if got, want := a.windowTitle, "slk SW (1)"; got != want {
+		t.Errorf("after a deactivation: windowTitle = %q, want %q", got, want)
+	}
+	a.SetHideDeactivatedUsers(false)
+	if got, want := a.windowTitle, "slk SW (2)"; got != want {
+		t.Errorf("option off: windowTitle = %q, want %q", got, want)
+	}
+	a.SetHideDeactivatedUsers(true)
+	if got, want := a.windowTitle, "slk SW (1)"; got != want {
+		t.Errorf("option back on: windowTitle = %q, want %q", got, want)
+	}
+}
+
+// The option is applied at startup, before any workspace connects. That
+// has no count to report, so the status command keeps its last value
+// until WorkspaceReadyMsg sends the first one.
+func TestTogglingTheOptionBeforeAWorkspaceReportsNothing(t *testing.T) {
+	a := newTestApp(t)
+	reports := 0
+	a.setStatusReporterForTest(func(int, int, string, string) { reports++ })
+	a.SetHideDeactivatedUsers(false)
+	a.SetHideDeactivatedUsers(true)
+	if reports != 0 {
+		t.Errorf("status reported %d times before a workspace was ready, want 0", reports)
 	}
 }
 

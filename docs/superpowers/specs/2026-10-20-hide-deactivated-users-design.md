@@ -60,7 +60,9 @@ Sidebar rules:
   after the deactivated check in `rebuildFilter`, so its refilter on every
   read-state change keeps them hidden too.
 - The window title's unread count (`UnreadChannelCount`) skips them as
-  well, so it matches the dots on screen. A stale row is different: it is
+  well, so it matches the dots on screen. `refilterDeactivated` recounts
+  it, so the title and `$SLK_UNREAD` change with the set and the option
+  instead of waiting for the next read-state change. A stale row is different: it is
   never hidden while unread, so it always counts. This count,
   `rebuildFilter` and `revealUnreadHidden` share one check, `hidesPeer`.
 
