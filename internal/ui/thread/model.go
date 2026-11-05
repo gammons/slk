@@ -1018,7 +1018,7 @@ func (m *Model) selectedLines(i int) []string {
 		return e.Lines
 	}
 	return m.cache[e.Ref].SelectedLines(e, m.list.HasSelection(), func(src string) []string {
-		return messages.NewWrapStyles(m.focused).SelectedVariant(src, m.cacheWidth)
+		return messages.NewWrapStyles(m.focused, m.compact).SelectedVariant(src, m.cacheWidth)
 	})
 }
 
@@ -1266,7 +1266,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 		// thick left border ▌ is applied at cache-build time so View()
 		// picks a slice (normal vs selected) instead of running lipgloss
 		// for every visible reply on every j/k.
-		wrap := messages.NewWrapStyles(m.focused)
+		wrap := messages.NewWrapStyles(m.focused, m.compact)
 		for i, reply := range m.replies {
 			// renderMessage's last arg ("isSelected") drives reaction-
 			// nav pill highlighting, so it MUST be i == m.selected.
@@ -1461,6 +1461,7 @@ func (m *Model) renderContext() *messages.RenderContext {
 	}
 	return &messages.RenderContext{
 		ColoredUsernames: m.coloredUsernames,
+		Compact:          m.compact,
 		UserStatuses:     m.userStatuses,
 		UserNames:        m.userNames,
 		ChannelNames:     m.channelNames,
@@ -1479,7 +1480,7 @@ func (m *Model) renderContext() *messages.RenderContext {
 func (m *Model) renderMessage(msg messages.MessageItem, width int, isSelected bool) messages.RenderedMessage {
 	msg = m.huddleView(msg)
 	opt := messages.RenderOptions{IsSelected: isSelected, ImageHits: true}
-	if m.showAvatars && m.avatarFn != nil {
+	if !m.compact && m.showAvatars && m.avatarFn != nil {
 		opt.Avatar = m.avatarFn(msg.UserID)
 	}
 	return messages.RenderMessage(msg, width, m.renderContext(), opt)

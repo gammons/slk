@@ -1480,7 +1480,7 @@ func (m *Model) buildCacheStyles(width int) cacheStyles {
 	// the scrollbar pass and break TestSelection_HighlightDoesNotCorrupt...
 	m.cacheMoreBelow = hintStyle.Render("  -- more below --")
 	return cacheStyles{
-		wrap:        NewWrapStyles(m.focused),
+		wrap:        NewWrapStyles(m.focused, m.compact),
 		spacerLines: []string{m.cacheSpacer},
 	}
 }
@@ -1560,6 +1560,7 @@ func (m *Model) renderContext() *RenderContext {
 	}
 	return &RenderContext{
 		ColoredUsernames: m.coloredUsernames,
+		Compact:          m.compact,
 		UserStatuses:     m.userStatuses,
 		UserNames:        m.userNames,
 		ChannelNames:     m.channelNames,
@@ -1604,7 +1605,7 @@ func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles, stats *entr
 		SixelRows:       true,
 		stats:           stats,
 	}
-	if m.avatarFn != nil {
+	if !m.compact && m.avatarFn != nil {
 		opt.Avatar = m.avatarFn(msg.UserID)
 	}
 	r := RenderMessage(msg, width, m.renderContext(), opt)
@@ -1623,7 +1624,7 @@ func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles, stats *entr
 	// extraction trims trailing whitespace, and no real content lives
 	// in the spacer row.
 	trail := 0
-	if i < len(m.messages)-1 {
+	if !m.compact && i < len(m.messages)-1 {
 		linesN = append(linesN, cs.spacerLines...)
 		linesS = append(linesS, cs.spacerLines...)
 		linesP = append(linesP, plainLine{Text: "", Bytes: []int{0}})
@@ -1982,7 +1983,7 @@ func (m *Model) ScrollHintForDrag(viewportY int) int {
 func (m *Model) selectedLines(i int) []string {
 	e := &m.list.Entries()[i]
 	return m.cache[i].SelectedLines(e, m.list.HasSelection(), func(src string) []string {
-		return NewWrapStyles(m.focused).SelectedVariant(src, m.cacheWidth)
+		return NewWrapStyles(m.focused, m.compact).SelectedVariant(src, m.cacheWidth)
 	})
 }
 
