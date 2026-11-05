@@ -20,7 +20,6 @@ import (
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slack/edge"
 	"github.com/gammons/slk/internal/ui"
-	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/slack-go/slack"
@@ -483,21 +482,6 @@ func TestOnMessage_NoticeChangeEcho_StaysNoticeAndSkipsUnread(t *testing.T) {
 		s, _ := db.GetChannelReadState("C1")
 		if s.HasUnread || s.MentionCount != 0 {
 			t.Errorf("%s: HasUnread=%v MentionCount=%d, want false and 0", subtype, s.HasUnread, s.MentionCount)
-		}
-	}
-}
-
-// slackclient (live delivery) and messages (rendering) each list the
-// system-notice subtypes; they cannot share one list across the import
-// boundary, so this keeps them identical.
-func TestNoticeSubtypesMatchRenderer(t *testing.T) {
-	for _, s := range []string{
-		"", "bot_message", "thread_broadcast", "file_share", "me_message",
-		"message_changed", "channel_topic", "channel_join", "channel_leave",
-		"group_join", "group_leave", "huddle_thread", "tabbed_canvas_updated",
-	} {
-		if got, want := slackclient.IsNoticeSubtype(s), messages.IsSystemNoticeSubtype(s); got != want {
-			t.Errorf("subtype %q: slackclient.IsNoticeSubtype = %v, messages.IsSystemNoticeSubtype = %v", s, got, want)
 		}
 	}
 }

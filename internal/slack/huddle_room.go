@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 )
 
@@ -144,7 +145,7 @@ func (t *roomTap) record(channelID string, body []byte) {
 		return
 	}
 	for _, m := range env.Messages {
-		if m.Subtype != "huddle_thread" || m.TS == "" || !isJSONObject(m.Room) {
+		if m.Subtype != core.SubtypeHuddleThread || m.TS == "" || !isJSONObject(m.Room) {
 			continue
 		}
 		t.store.put(channelID, m.TS, m.Room)
