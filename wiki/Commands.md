@@ -11,6 +11,10 @@ Everything else is a key. See [[Keybindings]] for those, or press `?` (or
 run `:help`) in slk for the keybindings overlay, which lists the `:`
 commands too.
 
+Commands you run from a shell, a script or an AI agent instead
+(`slk workspace whoami`, `slk workspace list --json`, ...) are on the [[CLI]]
+page.
+
 ## `:` commands
 
 Press `:` in Normal mode. A `:` prompt opens in the status bar. Type the

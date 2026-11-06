@@ -9,6 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/gammons/slk/internal/atomicfile"
+	"github.com/slack-go/slack"
 )
 
 // Token holds browser session credentials for a single Slack workspace.
@@ -28,6 +31,26 @@ type Token struct {
 // desktop app may be signed in to the same workspace as someone else.
 const TokenSourceBrowser = "browser"
 
+// authErrorCodes are the Slack error strings that refuse the login
+// itself rather than one request.
+var authErrorCodes = map[string]bool{
+	"invalid_auth":     true,
+	"not_authed":       true,
+	"token_expired":    true,
+	"token_revoked":    true,
+	"account_inactive": true,
+}
+
+// IsAuthError reports whether err is Slack refusing the session's
+// login (invalid_auth, not_authed, token_expired, token_revoked or
+// account_inactive), as opposed to refusing one request. A re-minted
+// token can cure the first four; account_inactive means the account
+// was deactivated, which nothing slk does can cure.
+func IsAuthError(err error) bool {
+	var se slack.SlackErrorResponse
+	return errors.As(err, &se) && authErrorCodes[se.Err]
+}
+
 // TokenStore persists Slack tokens as JSON files in a directory,
 // one file per workspace ({teamID}.json).
 type TokenStore struct {
@@ -40,7 +63,12 @@ func NewTokenStore(dir string) *TokenStore {
 }
 
 // Save writes a token to disk, creating the directory if needed.
-// File permissions are restricted to owner-only (0600).
+// A new file is owner-only (0600).
+//
+// The write is atomic (atomicfile.Write): another slk process that
+// lists the store meanwhile (a TUI starting while a CLI command saves
+// a refreshed login) sees the old token or the new one, never a
+// half-written file, which List would skip as corrupt.
 func (s *TokenStore) Save(token Token) error {
 	if err := os.MkdirAll(s.dir, 0700); err != nil {
 		return fmt.Errorf("creating token dir: %w", err)
@@ -52,7 +80,7 @@ func (s *TokenStore) Save(token Token) error {
 	}
 
 	path := filepath.Join(s.dir, token.TeamID+".json")
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if err := atomicfile.Write(path, data, 0600); err != nil {
 		return fmt.Errorf("writing token: %w", err)
 	}
 	return nil

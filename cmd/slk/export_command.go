@@ -13,17 +13,16 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/cli"
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/export"
 	slackclient "github.com/gammons/slk/internal/slack"
-	"github.com/gammons/slk/internal/slackdesktop"
 	"github.com/slack-go/slack"
 )
 
@@ -77,25 +76,20 @@ func parseExportArgs(args []string, output io.Writer) (exportOptions, error) {
 // selectExportToken picks the token for the requested workspace,
 // matched case-insensitively against the config slug, team ID, team
 // name and domain. An empty workspace is allowed only when exactly one
-// workspace is configured.
+// workspace is configured. The rule is cli.SelectWorkspace's, so export
+// and the CLI cannot drift apart; no workspace is marked Default here,
+// so export ignores [general] default_workspace, as it always has.
 func selectExportToken(tokens []config.OrderedToken, workspace string) (slackclient.Token, error) {
-	if len(tokens) == 0 {
-		return slackclient.Token{}, errors.New("no workspaces configured; run 'slk --add-workspace' first")
+	list := make([]cli.Workspace, len(tokens))
+	for i, ot := range tokens {
+		list[i] = cli.Workspace{TeamID: ot.Token.TeamID, Slug: ot.Slug, Name: ot.Token.TeamName, Domain: ot.Token.Domain}
 	}
-	if workspace == "" {
-		if len(tokens) == 1 {
-			return tokens[0].Token, nil
-		}
-		return slackclient.Token{}, errors.New("--workspace is required when more than one workspace is configured; see 'slk --list-workspaces'")
+	ws, err := cli.SelectWorkspace(list, workspace)
+	if err != nil {
+		return slackclient.Token{}, err
 	}
-	for _, ot := range tokens {
-		for _, candidate := range []string{ot.Slug, ot.Token.TeamID, ot.Token.TeamName, ot.Token.Domain} {
-			if candidate != "" && strings.EqualFold(candidate, workspace) {
-				return ot.Token, nil
-			}
-		}
-	}
-	return slackclient.Token{}, fmt.Errorf("workspace %q not found; see 'slk --list-workspaces'", workspace)
+	i := slices.IndexFunc(list, func(w cli.Workspace) bool { return w.TeamID == ws.TeamID })
+	return tokens[i].Token, nil
 }
 
 // findExportChannel matches want, a channel name (with or without a
@@ -177,22 +171,17 @@ func exportChannel(args []string) error {
 	if err != nil {
 		return fmt.Errorf("list tokens: %w", err)
 	}
-	cfg, _ := config.Load(filepath.Join(xdgConfig(), "config.toml")) // best-effort, as in listWorkspaces
+	cfg, _ := config.Load(filepath.Join(xdgConfig(), "config.toml")) // best-effort, as in newCLIEnv
 	tok, err := selectExportToken(config.OrderTokens(tokens, cfg), opts.Workspace)
 	if err != nil {
 		return err
 	}
 
-	// Ctrl-C or SIGTERM cancels ctx, which the history walks, reply
-	// fetches and rate-limit waits all watch. Once it fires, default
-	// signal handling is restored so a second Ctrl-C still kills the
-	// process during any step that does not watch ctx.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signalContext()
 	defer stop()
-	context.AfterFunc(ctx, stop)
 	// xoxc tokens expire; refresh from the desktop app as the TUI does
-	// at launch. remintTokens keeps the stored token on any failure.
-	tok = remintTokens(ctx, []slackclient.Token{tok}, slackdesktop.Cookie, slackdesktop.Tokens, slackclient.MintToken, store.Save)[0]
+	// at launch. remintToken keeps the stored token on any failure.
+	tok = remintToken(ctx, store, tok)
 	client := slackclient.NewClient(tok.AccessToken, tok.Cookie)
 	if err := client.Connect(ctx); err != nil {
 		return fmt.Errorf("connecting to %s: %w", tok.TeamName, err)

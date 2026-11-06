@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/gammons/slk/internal/atomicfile"
 )
 
 // configWriteMu serializes the read-modify-write cycles the save*
@@ -21,8 +23,9 @@ var configWriteMu sync.Mutex
 // does not exist yet. An existing file keeps its own mode.
 const defaultConfigPerm os.FileMode = 0644
 
-// writeConfigAtomic replaces configPath's contents with data by writing
-// a temp file in the same directory and renaming it over the target.
+// writeConfigAtomic replaces configPath's contents with data through
+// atomicfile.Write: a temp file in the same directory, renamed over
+// the target.
 //
 // configWriteMu serialises writers inside one process, but nothing
 // stops two slk instances sharing one config.toml. With a plain
@@ -34,50 +37,12 @@ const defaultConfigPerm os.FileMode = 0644
 // every boot, once per workspace, rather than only on rare user
 // actions.
 //
-// Rename is atomic within a filesystem, so a reader sees either the
-// whole old file or the whole new one. That is why the temp file must
-// be created in the target's own directory rather than os.TempDir().
-//
 // This does not make the read-modify-write cycle itself atomic across
 // processes — two instances can still lose one another's *update*.
 // Preventing that needs file locking; this fixes the destructive half,
 // where a partial read is persisted as the whole file.
 func writeConfigAtomic(configPath string, data []byte) error {
-	perm := defaultConfigPerm
-	if fi, err := os.Stat(configPath); err == nil {
-		perm = fi.Mode().Perm()
-	}
-
-	f, err := os.CreateTemp(filepath.Dir(configPath), ".config-*.toml.tmp")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	// No-op once the rename below succeeds; on any earlier return it
-	// keeps a failed save from littering the config directory.
-	defer os.Remove(tmp)
-
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return err
-	}
-	// Without this a crash between rename and writeback can leave a
-	// zero-length config, which is the same data loss by another route.
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	// CreateTemp makes the file 0600. Restore the mode the config
-	// actually had, so a save doesn't silently tighten permissions the
-	// user chose.
-	if err := f.Chmod(perm); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp, configPath)
+	return atomicfile.Write(configPath, data, defaultConfigPerm)
 }
 
 // tomlString returns s as a properly escaped TOML basic string,

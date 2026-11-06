@@ -5,7 +5,38 @@ import (
 	"log"
 
 	slackclient "github.com/gammons/slk/internal/slack"
+	"github.com/gammons/slk/internal/slackdesktop"
 )
+
+// remintToken refreshes one stored token from the live desktop session
+// and saves it to store, as remintTokens does for every token at TUI
+// launch. It returns the token unchanged on any failure, and always for
+// a browser sign-in.
+func remintToken(ctx context.Context, store *slackclient.TokenStore, tok slackclient.Token) slackclient.Token {
+	return remintTokenWith(ctx, tok, slackdesktop.Cookie, slackdesktop.Tokens, slackclient.MintToken, store.Save)
+}
+
+// remintTokenWith is remintToken with the desktop reads, the mint and
+// the save injected, for tests.
+//
+// A browser sign-in returns at once. remintTokens never replaces one,
+// but it reads the desktop app's cookie and tokens before it gets to
+// that check, and those reads go through the OS keychain, which costs
+// time and can show an authorization dialog. For a single token that
+// is known to be skipped, that is all cost and no use.
+func remintTokenWith(
+	ctx context.Context,
+	tok slackclient.Token,
+	cookieFn func() (string, error),
+	tokensFn func() (map[string]string, error),
+	mintFn func(ctx context.Context, domain, cookie string) (string, error),
+	saveFn func(slackclient.Token) error,
+) slackclient.Token {
+	if tok.Source == slackclient.TokenSourceBrowser {
+		return tok
+	}
+	return remintTokens(ctx, []slackclient.Token{tok}, cookieFn, tokensFn, mintFn, saveFn)[0]
+}
 
 // remintTokens refreshes every token's xoxc from the live desktop cookie. On
 // any failure for a given token it keeps the cached token (offline-friendly).

@@ -20,6 +20,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/gammons/slk/internal/avatar"
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/cli"
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/core/blocks"
@@ -81,6 +82,10 @@ func main() {
 			fmt.Println("Uses Slack's internal browser protocol; may violate Slack's TOS. Use at your own risk.")
 			return
 		case "--help", "-h", "help":
+			if len(os.Args) > 2 {
+				// slk help <command>: the CLI's help for one command.
+				os.Exit(cliMain(append([]string{"help"}, os.Args[2:]...)))
+			}
 			printHelp()
 			return
 		case "--add-workspace", "--browser":
@@ -100,11 +105,8 @@ func main() {
 			}
 			return
 		case "--list-workspaces":
-			if err := listWorkspaces(); err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
-			}
-			os.Exit(0)
+			// Same table as before; slk workspace list prints it now.
+			os.Exit(cliMain([]string{"workspace", "list"}))
 		case "export":
 			if err := exportChannel(os.Args[2:]); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -136,6 +138,16 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		default:
+			// slk <noun> <verb> ...: a scriptable command (cmd/slk/cli.go).
+			// It runs here, before the config pre-load and the emoji
+			// width probe below, which only the TUI needs. An unknown
+			// word ends here too, with exit 2, rather than starting the
+			// TUI: a mistyped command must not open a full-screen
+			// program that waits for input.
+			if cli.Handles(os.Args[1:]) {
+				os.Exit(cliMain(os.Args[1:]))
+			}
 		}
 	}
 
@@ -197,12 +209,13 @@ Usage:
   slk --version          Print version and exit
   slk --help             Show this help
 
+%s
 Config:  ~/.config/slk/config.toml
 Data:    ~/.local/share/slk/
 Cache:   ~/.cache/slk/
 
 Docs:    https://github.com/gammons/slk
-`, version)
+`, version, cli.Overview())
 }
 
 // newImageHTTPClient builds the HTTP client the avatar/thumbnail
