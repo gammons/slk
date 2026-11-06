@@ -16,9 +16,11 @@ import (
 	"time"
 
 	"github.com/gammons/slk/internal/debuglog"
+	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/slack/boot"
 	"github.com/gammons/slk/internal/slack/mrkdwn"
 	"github.com/gammons/slk/internal/slackhttp"
+	"github.com/gammons/slk/internal/slackurl"
 	"github.com/gorilla/websocket"
 	"github.com/slack-go/slack"
 )
@@ -1449,18 +1451,40 @@ func (c *Client) GetDNDTeamInfo(ctx context.Context, userIDs []string) (map[stri
 	return st, nil
 }
 
-// GetPermalink returns the Slack permalink for a message. For a thread reply,
-// pass the reply's ts; Slack returns a thread-aware URL with thread_ts and cid
-// query parameters.
-func (c *Client) GetPermalink(ctx context.Context, channelID, ts string) (string, error) {
+// GetPermalink returns the Slack permalink for a message. For a thread
+// reply, pass the reply's ts and its thread's threadTS (empty for a
+// channel message); Slack returns a thread-aware URL with thread_ts and
+// cid query parameters.
+//
+// Enterprise Grid can refuse chat.getPermalink with
+// enterprise_is_restricted, while Slack's own client, which builds the
+// link from the workspace URL without asking, copies it fine. On that
+// refusal the link is built the same way (slackurl.Build, from
+// auth.test's URL), and threadTS is what makes a reply's link open its
+// thread.
+func (c *Client) GetPermalink(ctx context.Context, channelID, ts, threadTS string) (string, error) {
 	url, err := c.api.GetPermalinkContext(ctx, &slack.PermalinkParameters{
 		Channel: channelID,
 		Ts:      ts,
 	})
 	if err != nil {
+		if isEnterpriseRestricted(err) {
+			if link, ok := slackurl.Build(c.teamURL, ids.ChannelID(channelID), ids.MessageTS(ts), ids.ThreadTS(threadTS)); ok {
+				debuglog.General("permalink: chat.getPermalink is restricted here; built %s/%s locally", channelID, ts)
+				return link, nil
+			}
+		}
 		return "", fmt.Errorf("getting permalink: %w", err)
 	}
 	return url, nil
+}
+
+// isEnterpriseRestricted reports whether err is Slack refusing a method
+// with enterprise_is_restricted, which Grid answers for a method its
+// policy keeps from a session token.
+func isEnterpriseRestricted(err error) bool {
+	var se slack.SlackErrorResponse
+	return errors.As(err, &se) && se.Err == "enterprise_is_restricted"
 }
 
 // parseOKResponse checks a Slack Web API response envelope. Slack

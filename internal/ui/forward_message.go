@@ -15,6 +15,9 @@ type forwardSource struct {
 	teamID    string
 	channelID ids.ChannelID
 	ts        ids.MessageTS
+	// threadTS is the source's thread when it is a reply, so a permalink
+	// built without chat.getPermalink (Enterprise Grid) opens the thread.
+	threadTS ids.ThreadTS
 }
 
 type messageForwardedMsg struct {
@@ -34,6 +37,7 @@ func (a *App) beginForwardOfSelected() tea.Cmd {
 	}
 	a.pendingForward = &forwardSource{
 		teamID: a.activeTeamID, channelID: ids.ChannelID(channelID), ts: ids.MessageTS(ts),
+		threadTS: a.selectedThreadTS(),
 	}
 	// Invalidate any search queued by a previous channel-switching session.
 	// Forwarding only offers joined conversations, all available locally.
@@ -88,7 +92,7 @@ func (a *App) forwardToChannel(destination channelfinder.ChannelResult) tea.Cmd 
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		result, err := service.Forward(ctx, source.teamID, source.channelID, source.ts, ids.ChannelID(destination.ID))
+		result, err := service.Forward(ctx, source.teamID, source.channelID, source.ts, source.threadTS, ids.ChannelID(destination.ID))
 		if err != nil {
 			return ToastMsg{Text: "Failed to forward message: " + err.Error()}
 		}

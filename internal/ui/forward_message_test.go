@@ -22,9 +22,10 @@ func TestForwardMessageSelected(t *testing.T) {
 				withMessages(messages.MessageItem{TS: "1.0", Text: "original", UserID: "OTHER"}))
 			focusMessages(t, a)
 			wantTS := ids.MessageTS("1.0")
+			var wantThread ids.ThreadTS
 			if pane == "thread" {
 				focusThreadPanel(t, a)
-				wantTS = "12.0"
+				wantTS, wantThread = "12.0", "10.0"
 				// The thread's channel must win over the active channel.
 				a.activeChannelID = "COTHER"
 			}
@@ -37,10 +38,10 @@ func TestForwardMessageSelected(t *testing.T) {
 			})
 			calls := 0
 			a.SetMessageService(core.NewMessageService(core.MessageServiceFuncs{
-				Forward: func(ctx context.Context, team string, source ids.ChannelID, ts ids.MessageTS, dest ids.ChannelID) (core.ForwardResult, error) {
+				Forward: func(ctx context.Context, team string, source ids.ChannelID, ts ids.MessageTS, threadTS ids.ThreadTS, dest ids.ChannelID) (core.ForwardResult, error) {
 					calls++
-					if team != "T1" || source != "C1" || ts != wantTS || dest != "C2" {
-						t.Errorf("forward arguments = %q %q %q %q", team, source, ts, dest)
+					if team != "T1" || source != "C1" || ts != wantTS || threadTS != wantThread || dest != "C2" {
+						t.Errorf("forward arguments = %q %q %q %q %q", team, source, ts, threadTS, dest)
 					}
 					if _, ok := ctx.Deadline(); !ok {
 						t.Error("forward request has no deadline")
@@ -222,7 +223,7 @@ func TestForwardMessageWithoutPermalinkSaysForwarded(t *testing.T) {
 	focusMessages(t, a)
 	a.SetChannelFinderItems([]core.ChannelFinderItem{{ID: "D2", Name: "alice", Type: "dm", Joined: true}})
 	a.SetMessageService(core.NewMessageService(core.MessageServiceFuncs{
-		Forward: func(context.Context, string, ids.ChannelID, ids.MessageTS, ids.ChannelID) (core.ForwardResult, error) {
+		Forward: func(context.Context, string, ids.ChannelID, ids.MessageTS, ids.ThreadTS, ids.ChannelID) (core.ForwardResult, error) {
 			return core.ForwardResult{TS: "20.0"}, nil
 		},
 	}))
@@ -253,7 +254,7 @@ func TestForwardMessageClickAndFailure(t *testing.T) {
 	a.SetChannelFinderItems([]core.ChannelFinderItem{{ID: "D2", Name: "alice", Type: "dm", Joined: true}})
 	calls := 0
 	a.SetMessageService(core.NewMessageService(core.MessageServiceFuncs{
-		Forward: func(_ context.Context, _ string, _ ids.ChannelID, _ ids.MessageTS, dest ids.ChannelID) (core.ForwardResult, error) {
+		Forward: func(_ context.Context, _ string, _ ids.ChannelID, _ ids.MessageTS, _ ids.ThreadTS, dest ids.ChannelID) (core.ForwardResult, error) {
 			calls++
 			if dest != "D2" {
 				t.Errorf("destination = %s, want D2", dest)

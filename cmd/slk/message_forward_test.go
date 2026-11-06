@@ -45,12 +45,12 @@ func TestMessageForwardWiring(t *testing.T) {
 	if bundles != 1 || forward == nil {
 		t.Fatalf("want one message service bundle with Forward wired; bundles=%d, forward=%v", bundles, forward)
 	}
-	want, err := parser.ParseExpr(`func(ctx context.Context, teamID string, sourceChannelID ids.ChannelID, ts ids.MessageTS, destinationChannelID ids.ChannelID) (core.ForwardResult, error) {
+	want, err := parser.ParseExpr(`func(ctx context.Context, teamID string, sourceChannelID ids.ChannelID, ts ids.MessageTS, threadTS ids.ThreadTS, destinationChannelID ids.ChannelID) (core.ForwardResult, error) {
 		wctx := router.ByID(teamID)
 		if wctx == nil || wctx.Client == nil {
 			return core.ForwardResult{}, fmt.Errorf("forwarding message: workspace %q is unavailable", teamID)
 		}
-		postedTS, permalink, err := wctx.Client.ForwardMessage(ctx, string(sourceChannelID), string(ts), string(destinationChannelID))
+		postedTS, permalink, err := wctx.Client.ForwardMessage(ctx, string(sourceChannelID), string(ts), string(threadTS), string(destinationChannelID))
 		if err != nil {
 			return core.ForwardResult{}, err
 		}

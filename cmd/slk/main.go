@@ -971,13 +971,13 @@ func run() error {
 		}))
 
 		app.SetMessageService(core.NewMessageService(core.MessageServiceFuncs{
-			Forward: func(ctx context.Context, teamID string, sourceChannelID ids.ChannelID, ts ids.MessageTS, destinationChannelID ids.ChannelID) (core.ForwardResult, error) {
+			Forward: func(ctx context.Context, teamID string, sourceChannelID ids.ChannelID, ts ids.MessageTS, threadTS ids.ThreadTS, destinationChannelID ids.ChannelID) (core.ForwardResult, error) {
 				// The user may have switched workspaces since starting the action.
 				wctx := router.ByID(teamID)
 				if wctx == nil || wctx.Client == nil {
 					return core.ForwardResult{}, fmt.Errorf("forwarding message: workspace %q is unavailable", teamID)
 				}
-				postedTS, permalink, err := wctx.Client.ForwardMessage(ctx, string(sourceChannelID), string(ts), string(destinationChannelID))
+				postedTS, permalink, err := wctx.Client.ForwardMessage(ctx, string(sourceChannelID), string(ts), string(threadTS), string(destinationChannelID))
 				if err != nil {
 					return core.ForwardResult{}, err
 				}
@@ -1121,12 +1121,12 @@ func run() error {
 					Err:         err,
 				}
 			},
-			Permalink: func(ctx context.Context, channelID ids.ChannelID, ts ids.MessageTS) (string, error) {
+			Permalink: func(ctx context.Context, channelID ids.ChannelID, ts ids.MessageTS, threadTS ids.ThreadTS) (string, error) {
 				wctx := router.Active()
 				if wctx == nil {
 					return "", nil
 				}
-				return wctx.Client.GetPermalink(ctx, string(channelID), string(ts))
+				return wctx.Client.GetPermalink(ctx, string(channelID), string(ts), string(threadTS))
 			},
 		}))
 

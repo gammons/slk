@@ -18,15 +18,15 @@ func TestMessageServiceForward(t *testing.T) {
 		if wantErr == nil {
 			wantResult = ForwardResult{TS: "124.000000", Text: "https://example.slack.com/archives/Csource/p123456"}
 		}
-		var forward MessageForwardFunc = func(gotCtx context.Context, teamID string, source ids.ChannelID, ts ids.MessageTS, destination ids.ChannelID) (ForwardResult, error) {
+		var forward MessageForwardFunc = func(gotCtx context.Context, teamID string, source ids.ChannelID, ts ids.MessageTS, threadTS ids.ThreadTS, destination ids.ChannelID) (ForwardResult, error) {
 			called = true
-			if gotCtx != ctx || teamID != "T1" || source != "Csource" || ts != "123.456" || destination != "Cdestination" {
-				t.Errorf("unexpected forwarding arguments: %v, %q, %q, %q, %q", gotCtx, teamID, source, ts, destination)
+			if gotCtx != ctx || teamID != "T1" || source != "Csource" || ts != "123.456" || threadTS != "122.000000" || destination != "Cdestination" {
+				t.Errorf("unexpected forwarding arguments: %v, %q, %q, %q, %q, %q", gotCtx, teamID, source, ts, threadTS, destination)
 			}
 			return wantResult, wantErr
 		}
 		svc := NewMessageService(MessageServiceFuncs{Forward: forward})
-		result, err := svc.Forward(ctx, "T1", "Csource", "123.456", "Cdestination")
+		result, err := svc.Forward(ctx, "T1", "Csource", "123.456", "122.000000", "Cdestination")
 		if result != wantResult {
 			t.Errorf("Forward result = %+v, want %+v", result, wantResult)
 		}
@@ -41,7 +41,7 @@ func TestMessageServiceForward(t *testing.T) {
 
 func TestMessageServiceForwardUnsupported(t *testing.T) {
 	svc := NewMessageService(MessageServiceFuncs{})
-	result, err := svc.Forward(context.Background(), "T1", "Csource", "123.456", "Cdestination")
+	result, err := svc.Forward(context.Background(), "T1", "Csource", "123.456", "", "Cdestination")
 	if result != (ForwardResult{}) {
 		t.Errorf("unsupported Forward result = %+v, want zero value", result)
 	}
