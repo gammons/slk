@@ -1652,6 +1652,7 @@ func run() error {
 				tsFormat:        tsFormat,
 				db:              db,
 				workspaceID:     teamID,
+				emojiLister:     wctx.Client,
 				isActive:        func() bool { a := router.Active(); return a != nil && a.TeamID == teamID },
 				notifier:        notifier,
 				notifyCfg:       cfgSnap.Notifications,
@@ -1715,7 +1716,7 @@ func run() error {
 				UserStatuses:     readyStatuses,
 				ExternalUsers:    external,
 				UserID:           wctx.UserID,
-				CustomEmoji:      wctx.CustomEmoji(), // bootstrap subset; replaced by the goroutine below
+				CustomEmoji:      wctx.CustomEmoji(), // cached set plus bootstrap subset; replaced below unless fresh
 				UserGroups:       wctx.UserGroups(),  // empty at this point; filled by the goroutine below
 				SectionsProvider: sectionsProviderAdapter{store: wctx.SectionStore},
 				InitialActive:    isInitial,
@@ -1731,12 +1732,13 @@ func run() error {
 			// after cloning and handing off the startup snapshots above.
 			go wctx.ConnMgr.Run(ctx)
 
-			// Fetch the workspace's custom emoji in the background. When
-			// done, a follow-up message makes rendering and the emoji
-			// picker pick up the full set. Runs unconditionally — see
-			// fetchWorkspaceEmoji for why the bootstrap subset must not
-			// be treated as an answer.
-			go fetchWorkspaceEmoji(ctx, wctx, wctx.Client, p, wctx.TeamID)
+			// Fetch the workspace's custom emoji in the background: now,
+			// or when the persisted set goes stale, then once per TTL.
+			// When done, a follow-up message makes rendering and the
+			// emoji picker pick up the full set. See fetchWorkspaceEmoji
+			// for why the bootstrap subset alone must not be treated as
+			// an answer.
+			go refreshWorkspaceEmoji(ctx, wctx, wctx.Client, db, p, wctx.TeamID, wctx.customEmojiFreshFor)
 
 			// Fetch workspace usergroups in the background. When done,
 			// send a follow-up so render caches and compose pickers can

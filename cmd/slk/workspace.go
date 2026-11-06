@@ -119,6 +119,20 @@ type WorkspaceContext struct {
 	// rare conversations.history fallback; that stopped being true once
 	// emoji.list was restored to the normal path.
 	customEmoji atomic.Pointer[map[string]string]
+	// customEmojiFreshFor is how long emoji.list can wait after connect,
+	// from bootCustomEmoji. Read once, on the goroutine that called
+	// connectWorkspace.
+	customEmojiFreshFor time.Duration
+	// emojiMu serializes publishing customEmoji between emoji.list
+	// fetches and emoji_changed deltas; emojiSeq counts the deltas so a
+	// fetch can tell its list may predate one. Readers need neither.
+	emojiMu  sync.Mutex
+	emojiSeq uint64
+	// emojiRefetching and emojiRefetchPending, under emojiMu, coalesce
+	// emoji_changed refetches: one goroutine runs, and events landing
+	// meanwhile make it fetch once more instead of starting their own.
+	emojiRefetching     bool
+	emojiRefetchPending bool
 	// userGroups holds this workspace's usergroup ID -> handle map.
 	// Access it via UserGroups/SetUserGroups, never directly.
 	//
