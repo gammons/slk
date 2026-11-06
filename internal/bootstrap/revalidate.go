@@ -362,6 +362,7 @@ func revalidateUsers(ctx context.Context, deps Deps, out *Result, logf func(stri
 			// "preserve the stored avatar" for exactly that reason.
 			AvatarURL:  u.Profile.ImageOriginal,
 			IsBot:      u.IsBot,
+			Deleted:    u.Deleted,
 			IsExternal: isExternal(u, deps.WorkspaceID),
 			// Always written, empty included: users/info carries
 			// the status keys empty when no status is set.

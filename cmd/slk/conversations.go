@@ -31,6 +31,12 @@ func (h *rtmEventHandler) addConversation(ch slack.Channel) (sidebar.ChannelItem
 	if ch.IsIM {
 		seedDMFromCache(h.db, ch.User, &item, &finderItem)
 	}
+	// Before the conversation is published, so the UI hides the row it is
+	// about to receive. The set is global, so this goes out whether or not
+	// the workspace is the active one.
+	if recordDeactivatedPeer(ch, h.db) && h.program != nil {
+		announceUserDeleted(h.program.Send, ch.User, true, true)
+	}
 	if h.db != nil {
 		upsertChannelInDB(h.db, ch, item.Type, h.workspaceID)
 	}
@@ -68,6 +74,9 @@ func (h *rtmEventHandler) upsertFinderItem(item core.ChannelFinderItem) (core.Ch
 	for i, existing := range h.wsCtx.FinderItems {
 		if existing.ID == item.ID {
 			item.LastVisited = existing.LastVisited
+			if item.DMUserID == "" {
+				item.DMUserID = existing.DMUserID
+			}
 			if item == existing {
 				return item, false
 			}
@@ -114,7 +123,7 @@ func (h *rtmEventHandler) refreshDMPeerFromCache(userID string) {
 		}
 		finder := core.ChannelFinderItem{
 			ID: item.ID, Name: updated.Name, Type: updated.Type,
-			Presence: updated.Presence, Joined: true,
+			Presence: updated.Presence, Joined: true, DMUserID: userID,
 		}
 		seedDMFromCache(h.db, userID, &updated, &finder)
 		finder, finderChanged := h.upsertFinderItem(finder)

@@ -441,6 +441,21 @@ type App struct {
 	// resolved. Read by SetUserNames when building the mention-picker User
 	// slice so IsExternal is set on each entry.
 	externalUsers map[string]bool
+	// deactivatedUsers is the one global set of deactivated user IDs, not
+	// one per workspace: an account is deactivated everywhere. It is
+	// replaced whole on every change and never written, so the sidebar and
+	// finder may keep the map they are handed (see deactivated.go).
+	deactivatedUsers map[string]bool
+	// deactivatedSeq is, per user, the Seq of the last UserDeactivatedMsg
+	// applied, so an older workspace snapshot cannot undo it. Only the App
+	// reads or writes it.
+	deactivatedSeq map[string]uint64
+	// hideDeactivatedUsers is general.hide_deactivated_users. With it off
+	// the set is kept but no surface is filtered by it.
+	hideDeactivatedUsers bool
+	// channelPickItems is the last channel list SetChannels saw, so the
+	// "#" autocomplete can be rebuilt when the deactivated set changes.
+	channelPickItems []sidebar.ChannelItem
 	// Last (channelID, threadTS) auto-opened from the threads view.
 	// openSelectedThreadCmd compares against these to dedup repeat calls
 	// (j/k keystrokes and ThreadsListLoadedMsg refreshes both fire
@@ -941,6 +956,7 @@ func NewApp() *App {
 		channelSearchDebounce: channelSearchDebounceDelay,
 		fetchingOlder:         map[string]bool{},
 		mouseWheelLines:       3,
+		hideDeactivatedUsers:  true, // config.Default()'s value
 		userNames:             map[string]string{},
 		externalUsers:         map[string]bool{},
 		presence:              newPresenceController(),
@@ -2755,7 +2771,7 @@ func (a *App) SetWorkspaces(items []workspace.WorkspaceItem) {
 // channel join, or a display-name resolution for a DM).
 func (a *App) SetChannels(items []sidebar.ChannelItem) {
 	a.sidebar.SetItems(items)
-	picks := make([]channelpicker.Channel, 0, len(items))
+	a.channelPickItems = items
 	names := make(map[string]string, len(items))
 	types := make(map[string]string, len(items))
 	for _, ch := range items {
@@ -2764,16 +2780,10 @@ func (a *App) SetChannels(items []sidebar.ChannelItem) {
 		if ch.Name == "" {
 			continue
 		}
-		picks = append(picks, channelpicker.Channel{
-			ID:   ch.ID,
-			Name: ch.Name,
-			Type: ch.Type,
-		})
 		names[ch.ID] = ch.Name
 		types[ch.ID] = ch.Type
 	}
-	a.compose.SetChannels(picks)
-	a.threadCompose.SetChannels(picks)
+	a.pushChannelPicks()
 	a.channelNames = names
 	for _, m := range a.allWinModels() {
 		m.SetChannelNames(names)
@@ -2782,6 +2792,26 @@ func (a *App) SetChannels(items []sidebar.ChannelItem) {
 	a.threadsView.SetChannelNames(names)
 	a.activityView.SetChannelNames(names)
 	a.activityView.SetChannelTypes(types)
+}
+
+// pushChannelPicks gives both composers the "#" autocomplete list built
+// from channelPickItems. Only the suggestions are filtered: the name map
+// the panes render with keeps every conversation.
+func (a *App) pushChannelPicks() {
+	hidden := a.hiddenUsers()
+	picks := make([]channelpicker.Channel, 0, len(a.channelPickItems))
+	for _, ch := range a.channelPickItems {
+		if ch.Name == "" || core.IsHiddenPeerConversation(ch.Type, ch.DMUserID, hidden) {
+			continue
+		}
+		picks = append(picks, channelpicker.Channel{
+			ID:   ch.ID,
+			Name: ch.Name,
+			Type: ch.Type,
+		})
+	}
+	a.compose.SetChannels(picks)
+	a.threadCompose.SetChannels(picks)
 }
 
 // SetChannelService wires the App's ChannelService collaborator
@@ -3270,7 +3300,11 @@ func (a *App) SetUserNames(names map[string]string) {
 	}
 	a.threadPanel.SetUserNames(names)
 
-	// Build user list for mention picker
+	// Build user list for mention picker. Deactivated users are marked,
+	// not dropped: compose leaves them out of the suggestions but still
+	// translates a hand-typed "@Name", and names keeps them so old
+	// messages still render their authors.
+	hidden := a.hiddenUsers()
 	users := make([]mentionpicker.User, 0, len(names))
 	for id, displayName := range names {
 		users = append(users, mentionpicker.User{
@@ -3278,6 +3312,7 @@ func (a *App) SetUserNames(names map[string]string) {
 			DisplayName: displayName,
 			Username:    "",
 			IsExternal:  a.externalUsers[id],
+			Deactivated: hidden[id],
 		})
 	}
 	a.compose.SetUsers(users)
@@ -3312,12 +3347,15 @@ func (a *App) SetUserGroups(groups map[string]string) {
 //   - Recency is left at 0 (alphabetical order; recency wiring is a
 //     follow-up that needs WorkspaceContext.LastVisitedByChannel
 //     plumbed in).
+//   - Deactivated users are excluded while the option is on. The picker
+//     is seeded on open, so it needs no live refilter.
 //   - Self (a.currentUserID) is excluded both at slice-build time
 //     and via SetCurrentUserID (belt-and-suspenders).
 func (a *App) seedNewMessagePicker() {
 	users := make([]newmessagepicker.User, 0, len(a.userNames))
+	hidden := a.hiddenUsers()
 	for id, name := range a.userNames {
-		if id == a.currentUserID {
+		if id == a.currentUserID || hidden[id] {
 			continue
 		}
 		users = append(users, newmessagepicker.User{

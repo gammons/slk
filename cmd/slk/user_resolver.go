@@ -210,6 +210,7 @@ func (r *userResolver) resolveOneContext(ctx context.Context, userID string) {
 	// just upserted, so we don't re-fetch on every miss in the small
 	// window before UserResolvedMsg lands.
 	r.avatars.Preload(userID, u.Profile.Image32)
+	wasDeleted := knownDeleted(r.db, userID)
 	_ = r.db.UpsertUser(cache.User{
 		ID:               userID,
 		WorkspaceID:      r.teamID,
@@ -219,6 +220,7 @@ func (r *userResolver) resolveOneContext(ctx context.Context, userID string) {
 		AvatarURL:        u.Profile.Image32,
 		Presence:         "away",
 		IsBot:            isBot,
+		Deleted:          u.Deleted,
 		IsExternal:       isExternal,
 		StatusEmoji:      u.Profile.StatusEmoji,
 		StatusText:       u.Profile.StatusText,
@@ -226,6 +228,7 @@ func (r *userResolver) resolveOneContext(ctx context.Context, userID string) {
 		HuddleState:      u.Profile.HuddleState,
 		HuddleExpiration: int64(u.Profile.HuddleStateExpirationTS),
 	})
+	announceUserDeleted(r.send, userID, wasDeleted, u.Deleted)
 	// UpsertUser intentionally preserves existing status for placeholder
 	// callers. This is a full profile: persist changes and clears before
 	// UserResolvedMsg can trigger a row repair that re-reads the cache.
@@ -313,6 +316,9 @@ func (r *userResolver) backfillAvatar(userID string) {
 		debuglog.Cache("userResolver: avatar backfill team=%s user=%s err=%v", r.teamID, userID, err)
 		return
 	}
+	// This profile bypasses the full-profile writers, so the flag is
+	// recorded here even when it has no image to backfill.
+	recordUserDeleted(r.db, r.send, userID, u.Deleted)
 	var url string
 	for _, candidate := range []string{u.Profile.Image72, u.Profile.Image48, u.Profile.Image32} {
 		if candidate != "" {
@@ -460,6 +466,7 @@ func (r *userResolver) applyEdgeUser(u edge.User) {
 	}
 	isExternal := u.TeamID != "" && u.TeamID != r.teamID
 	r.avatars.Preload(u.ID, u.Profile.ImageOriginal)
+	wasDeleted := knownDeleted(r.db, u.ID)
 	_ = r.db.UpsertUserFromEdge(r.teamID, cache.EdgeUserUpdate{
 		ID:               u.ID,
 		HomeTeamID:       u.TeamID,
@@ -467,6 +474,7 @@ func (r *userResolver) applyEdgeUser(u edge.User) {
 		DisplayName:      name,
 		AvatarURL:        u.Profile.ImageOriginal,
 		IsBot:            u.IsBot,
+		Deleted:          u.Deleted,
 		IsExternal:       isExternal,
 		StatusEmoji:      u.Profile.StatusEmoji,
 		StatusText:       u.Profile.StatusText,
@@ -475,6 +483,7 @@ func (r *userResolver) applyEdgeUser(u edge.User) {
 		HuddleExpiration: u.Profile.HuddleStateExpirationTS,
 		Version:          u.Version,
 	})
+	announceUserDeleted(r.send, u.ID, wasDeleted, u.Deleted)
 	r.names.Set(u.ID, name) // see resolveOne
 	r.queueResolvedPeer(u.ID)
 	if r.send != nil {

@@ -592,8 +592,11 @@ func TestHydrateFirstSight_InsertsRowsTheCacheHasNeverSeen(t *testing.T) {
 			{ID: "C2", Name: "secret", IsPrivate: true},
 			{ID: "C3", Name: "mpdm", IsPrivate: true, IsMPIM: true},
 		},
-		IMs:   []boot.IM{{ID: "D1", UserID: "U2", IsIM: true}},
-		Users: []boot.User{{ID: "U2", Name: "pat", Profile: boot.UserProfile{DisplayName: "Pat"}}},
+		IMs: []boot.IM{{ID: "D1", UserID: "U2", IsIM: true}},
+		Users: []boot.User{
+			{ID: "U2", Name: "pat", Profile: boot.UserProfile{DisplayName: "Pat"}},
+			{ID: "U3", Name: "gone", Deleted: true},
+		},
 	}
 	hydrateFirstSight(db, "T1", res)
 
@@ -624,6 +627,9 @@ func TestHydrateFirstSight_InsertsRowsTheCacheHasNeverSeen(t *testing.T) {
 	}
 	if u.DisplayName != "Pat" || u.WorkspaceID != "T1" {
 		t.Errorf("user = %+v; want Pat in T1", u)
+	}
+	if set, _ := db.DeactivatedUsers(); len(set) != 1 || !set["U3"] {
+		t.Errorf("deactivated users = %v; want only U3, whose flag the view result carries", set)
 	}
 }
 

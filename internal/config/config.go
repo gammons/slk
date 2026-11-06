@@ -85,6 +85,12 @@ type General struct {
 	// is expanded against the user's home directory at load time;
 	// other paths (absolute or relative) are used as-is.
 	DownloadDir string `toml:"download_dir"`
+	// HideDeactivatedUsers hides deactivated people from the sidebar's DM
+	// rows, the channel finder, the new-message picker and the @ and #
+	// autocompletes, as the Slack desktop client does. A plain bool:
+	// Load decodes over Default(), which sets it to true, so an explicit
+	// false reads back correctly.
+	HideDeactivatedUsers bool `toml:"hide_deactivated_users"`
 }
 
 type Appearance struct {
@@ -252,7 +258,8 @@ type Theme = core.Theme
 func Default() Config {
 	return Config{
 		General: General{
-			DownloadDir: "~/Downloads",
+			DownloadDir:          "~/Downloads",
+			HideDeactivatedUsers: true,
 		},
 		Appearance: Appearance{
 			Theme:           "nord",

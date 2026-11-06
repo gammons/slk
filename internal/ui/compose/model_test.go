@@ -1298,3 +1298,21 @@ func TestRefreshStylesBumpsVersion(t *testing.T) {
 		t.Errorf("Version() = %d after RefreshStyles, want it bumped", m.Version())
 	}
 }
+
+// A deactivated user is not suggested, but "@Name" typed by hand still
+// becomes a mention on send, as it did before the user was hidden.
+func TestDeactivatedUserIsNotSuggestedButStillTranslated(t *testing.T) {
+	m := New("general")
+	m.SetUsers([]mentionpicker.User{
+		{ID: "U1234", DisplayName: "Alice"},
+		{ID: "U9999", DisplayName: "Gone", Deactivated: true},
+	})
+	for _, u := range m.MentionUsers() {
+		if u.ID == "U9999" {
+			t.Errorf("deactivated user offered as a mention suggestion")
+		}
+	}
+	if got, want := m.TranslateMentionsForSend("ping @Gone"), "ping <@U9999>"; got != want {
+		t.Errorf("TranslateMentionsForSend = %q, want %q", got, want)
+	}
+}

@@ -285,6 +285,22 @@ func (db *DB) migrate() error {
 		"ALTER TABLE users ADD COLUMN home_team_id TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	// Deactivated flag, used to hide DMs and people pickers. Same one-time
+	// version reset as the columns below, so revalidation refetches the
+	// users bootstrap asks about and fills it.
+	hadDeleted, err := db.hasColumn("users", "deleted")
+	if err != nil {
+		return err
+	}
+	if !hadDeleted {
+		if _, err := db.conn.Exec(`UPDATE users SET version = 0`); err != nil {
+			return fmt.Errorf("resetting user versions for deleted backfill: %w", err)
+		}
+	}
+	if err := db.addColumnIfMissing("users", "deleted",
+		"ALTER TABLE users ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 	// Custom status, rendered next to other users' names. Conditional
 	// revalidation only returns users whose version moved, so a user
 	// cached before these columns existed would never be refetched to
