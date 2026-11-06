@@ -10,27 +10,12 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/bubbles/entrylist"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/imgrender"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/styles"
 )
-
-// IsSystemNoticeSubtype reports whether subtype is a system message --
-// join/leave, a huddle starting (huddle_thread), a canvas update
-// (tabbed_canvas_updated) -- as opposed to an authored chat message.
-// Shared with cmd/slk (unread/mention/notification gating) so the
-// subtype list stays in one place; both panes render it through
-// RenderMessage. slackclient.IsNoticeSubtype (live delivery) must list
-// the same subtypes; a test in cmd/slk keeps them in step.
-func IsSystemNoticeSubtype(subtype string) bool {
-	switch subtype {
-	case "channel_join", "channel_leave", "group_join", "group_leave",
-		"huddle_thread", "tabbed_canvas_updated":
-		return true
-	}
-	return false
-}
 
 // CanOpenThread reports whether msg may be opened as a thread (and so
 // replied to). A system notice with no replies cannot: there is nothing
@@ -38,7 +23,7 @@ func IsSystemNoticeSubtype(subtype string) bool {
 // live in its thread) stays openable. Every path that opens the thread
 // panel on a message goes through this.
 func CanOpenThread(msg MessageItem) bool {
-	return !IsSystemNoticeSubtype(msg.Subtype) || msg.ReplyCount > 0
+	return !core.IsSystemNoticeSubtype(msg.Subtype) || msg.ReplyCount > 0
 }
 
 // noticeFallbackText is the notice body for a system message whose text
@@ -46,7 +31,7 @@ func CanOpenThread(msg MessageItem) bool {
 // huddle, or for how long, is not on this data path.
 func noticeFallbackText(subtype string) string {
 	switch subtype {
-	case "huddle_thread":
+	case core.SubtypeHuddleThread:
 		return "A huddle started"
 	case "tabbed_canvas_updated":
 		return "A canvas was updated"
@@ -161,7 +146,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	// Render as a muted system notice, not a chat bubble -- Slack's
 	// author for these is a system bot, indistinguishable otherwise.
 	// Both panes go through here, so the thread pane matches.
-	if IsSystemNoticeSubtype(msg.Subtype) {
+	if core.IsSystemNoticeSubtype(msg.Subtype) {
 		noticeWidth := width - 4
 		if noticeWidth < 20 {
 			noticeWidth = 20

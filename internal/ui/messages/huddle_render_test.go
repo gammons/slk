@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/gammons/slk/internal/core"
 )
 
 var huddleNames = map[string]string{
@@ -210,7 +211,7 @@ func TestChannelHuddleSelectedMessageFormKeepsStoredAuthor(t *testing.T) {
 	m := New([]MessageItem{huddleItem(endedRoom(60), 2)}, "general")
 	m.SetUserNames(huddleNames)
 	sel, ok := m.SelectedMessage()
-	if !ok || sel.UserID != "USLACKBOT" || !IsSystemNoticeSubtype(sel.Subtype) || !CanOpenThread(sel) {
+	if !ok || sel.UserID != "USLACKBOT" || !core.IsSystemNoticeSubtype(sel.Subtype) || !CanOpenThread(sel) {
 		t.Errorf("selected stored item = %+v", sel)
 	}
 	if out := ansi.Strip(m.View(20, 80)); !strings.Contains(out, "Alice") {

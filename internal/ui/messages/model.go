@@ -358,7 +358,7 @@ func (m *Model) HandleAvatarReady(userID string) {
 	for _, msg := range m.messages {
 		// A huddle with replies is drawn as its starter's message, so the
 		// starter's avatar is the one it asks for, not the stored author's.
-		if msg.UserID != userID && !slices.Contains(msg.ReplyUsers, userID) && !(msg.Subtype == "huddle_thread" && HuddleStarter(msg) == userID) {
+		if msg.UserID != userID && !slices.Contains(msg.ReplyUsers, userID) && !(msg.Subtype == core.SubtypeHuddleThread && HuddleStarter(msg) == userID) {
 			continue
 		}
 		if m.staleEntries == nil {
@@ -1704,7 +1704,7 @@ func (m *Model) buildCache(width int, keepPosition bool) {
 		// A system notice is itself a centred divider-style row, so right
 		// under another divider it needs the blank row a notice gets
 		// everywhere else (the previous message's trailing spacer).
-		if afterDivider && IsSystemNoticeSubtype(HuddleView(msg, m.userNames).Subtype) {
+		if afterDivider && core.IsSystemNoticeSubtype(HuddleView(msg, m.userNames).Subtype) {
 			appendSeparator(strings.Join(cs.spacerLines, "\n"))
 		}
 

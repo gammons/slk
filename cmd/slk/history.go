@@ -427,7 +427,7 @@ func enrichCachedRow(
 // UpsertMessage keeps any room already stored.
 func marshalWithRoom(client *slackclient.Client, channelID string, m slack.Message) ([]byte, *core.HuddleRoom) {
 	raw, _ := json.Marshal(m)
-	if m.SubType != "huddle_thread" {
+	if m.SubType != core.SubtypeHuddleThread {
 		return raw, nil
 	}
 	room := client.HuddleRoom(channelID, m.Timestamp)

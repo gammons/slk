@@ -263,23 +263,6 @@ func TestCanOpenThread(t *testing.T) {
 	}
 }
 
-func TestIsSystemNoticeSubtype(t *testing.T) {
-	cases := map[string]bool{
-		"channel_join":     true,
-		"channel_leave":    true,
-		"group_join":       true,
-		"group_leave":      true,
-		"":                 false,
-		"bot_message":      false,
-		"thread_broadcast": false,
-	}
-	for subtype, want := range cases {
-		if got := IsSystemNoticeSubtype(subtype); got != want {
-			t.Errorf("IsSystemNoticeSubtype(%q) = %v, want %v", subtype, got, want)
-		}
-	}
-}
-
 func TestMessagePaneNavigation(t *testing.T) {
 	msgs := []MessageItem{
 		{TS: "1.0", UserName: "alice", Text: "msg 1"},
