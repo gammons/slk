@@ -240,9 +240,6 @@ homebrew_casks:
     commit_msg_template: "slk: brew cask update for {{ .ProjectName }} version {{ .Tag }}"
     homepage: https://github.com/gammons/slk
     description: A blazingly fast, keyboard-driven Slack TUI
-    # Helps `brew audit` when the homepage and the download domain differ.
-    url:
-      verified: github.com/gammons/slk
     # Skip the prerelease tags goreleaser auto-flags so the tap only
     # tracks stable releases.
     skip_upload: auto
@@ -251,10 +248,12 @@ homebrew_casks:
     # slk's binaries are not signed or notarized, so macOS quarantines
     # them on download and Gatekeeper refuses to run them. Stripping the
     # attribute at install time is what goreleaser's migration guide
-    # prescribes for unsigned casks.
+    # prescribes for unsigned casks. install_steps (goreleaser 2.19+)
+    # writes Homebrew's declarative postflight_steps stanza; the raw-Ruby
+    # `install` option writes the deprecated `postflight` one.
     hooks:
       post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/slk"]
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/slk"]
           end
