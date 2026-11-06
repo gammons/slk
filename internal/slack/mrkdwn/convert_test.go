@@ -80,6 +80,20 @@ func TestConvert_TwoParagraphs(t *testing.T) {
 	if len(blk.Elements) != 2 {
 		t.Fatalf("got %d elements, want 2 (one section per paragraph)", len(blk.Elements))
 	}
+	sec, ok := blk.Elements[0].(*slack.RichTextSection)
+	if !ok {
+		t.Fatalf("element[0] is %T, want *RichTextSection", blk.Elements[0])
+	}
+	if len(sec.Elements) != 1 {
+		t.Fatalf("section has %d elements, want 1", len(sec.Elements))
+	}
+	te, ok := sec.Elements[0].(*slack.RichTextSectionTextElement)
+	if !ok {
+		t.Fatalf("section element is %T, want *RichTextSectionTextElement", sec.Elements[0])
+	}
+	if !strings.HasSuffix(te.Text, "\n") {
+		t.Fatalf("paragraph section does not end in a newline: %s", te.Text)
+	}
 }
 
 func TestConvert_HTMLBlockPreserved(t *testing.T) {
