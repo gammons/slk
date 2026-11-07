@@ -484,9 +484,8 @@ func run() error {
 	// Cell pixel metrics for image encoding. Sixel uses them for its
 	// absolute raster dimensions; kitty places by cell but uses them to
 	// transmit enough source pixels for the terminal's native cell
-	// resolution. SetCellPixels retains its 8x16 fallback when the
-	// terminal reports no usable geometry.
-	pxW, pxH := imgpkg.CellPixels(int(os.Stdout.Fd()))
+	// resolution. See startupCellPixels for where the size comes from.
+	pxW, pxH := startupCellPixels(proto)
 	debuglog.ImgRender("cell pixels: %dx%d", pxW, pxH)
 	imgpkg.SetCellPixels(pxW, pxH)
 

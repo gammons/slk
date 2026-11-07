@@ -13,6 +13,7 @@ something from the top of the list for the richest experience.
 | **iTerm2 ≥ 3.5**      | half-block           | half-block         | yes         | yes              | Implements kitty graphics but not unicode placeholders, so slk falls back to half-block. |
 | **Alacritty**         | half-block           | half-block         | yes (≥0.11) | yes              | Fast and reliable, but no inline images.                    |
 | **gnome-terminal** (recent) | half-block     | half-block         | yes         | yes              |                                                             |
+| **Windows Terminal** (≥ 1.22) | sixel        | half-block         | yes         | yes              | Detected at startup via DA1; the cell size comes from the terminal (`CSI 16 t`). |
 | **mlterm**            | sixel                | half-block         | partial     | partial          |                                                             |
 | **xterm** (`-ti vt340`) | sixel              | half-block         | yes         | yes              | Detected at startup via DA1; plain `xterm` without the sixel-capable emulation is half-block. |
 | **other sixel terminals** | sixel            | half-block         | varies      | varies           | DomTerm, toyterm, contour, WezTerm and friends are picked up by the startup DA1 probe. |
@@ -34,6 +35,17 @@ If your terminal renders images as chunky half-block mosaics but
 `img2sixel` works in it, run slk with `SLK_DEBUG=1` and look for the
 `sixel probe:` line in the debug log. Set `image_protocol = "sixel"`
 explicitly if the terminal answers DA1 without advertising sixel.
+
+## Cell size
+
+Sixel and kitty images are drawn in pixels, so slk needs the size of one
+terminal cell to make an image fill the rows it is given. It uses, in
+order: `COLORTERM_CELL_WIDTH` and `COLORTERM_CELL_HEIGHT` when both are
+set; the size the terminal reports to the kernel (`TIOCGWINSZ`, not on
+Windows); the terminal's answer to the `CSI 16 t` query at startup; and
+otherwise 8×16 pixels. The size is read once, so after changing font or
+zoom, restart slk. Images that look too small or overlap the text below
+them mean the size is wrong; set the two variables to override it.
 
 ## Inside tmux
 

@@ -99,6 +99,94 @@ func ProbeSixel(w io.Writer, r io.Reader, timeout time.Duration) bool {
 	return probeViaGoroutineScan(r, timeout, scanForSixelDA)
 }
 
+// ProbeCellSize asks the terminal for its cell size in pixels with the
+// XTWINOPS query CSI 16 t, answered CSI 6 ; height ; width t. It is how
+// the cell size is learnt where TIOCGWINSZ reports none: on Windows,
+// which has no such call at all (Windows Terminal answers this query),
+// and on a unix terminal that leaves the pixel fields zero. A terminal
+// that does not support the query ignores it, so a timeout means "no
+// answer" and ok is false.
+//
+// Inputs and timing match ProbeSixel: run in raw mode before bubbletea
+// starts reading.
+func ProbeCellSize(w io.Writer, r io.Reader, timeout time.Duration) (pxW, pxH int, ok bool) {
+	if _, err := io.WriteString(w, "\x1b[16t"); err != nil {
+		return 0, 0, false
+	}
+	var got []byte
+	scan := func(buf []byte) (bool, bool) {
+		matched, ok := scanForCellSize(buf)
+		if matched {
+			got = append(got[:0], buf...)
+		}
+		return matched, ok
+	}
+
+	start := time.Now()
+	var replied bool
+	if f, isFile := r.(*os.File); isFile {
+		var bytesRead int
+		var reason string
+		replied, bytesRead, reason = pollProbe(int(f.Fd()), timeout, scan)
+		debuglog.ImgRender("cell size probe: ok=%v reason=%s bytes_read=%d elapsed_ms=%d",
+			replied, reason, bytesRead, time.Since(start).Milliseconds())
+	} else {
+		// Test fallback for non-*os.File readers.
+		replied = probeViaGoroutineScan(r, timeout, scan)
+	}
+	if !replied {
+		return 0, 0, false
+	}
+	pxW, pxH, ok = parseCellSize(got)
+	return pxW, pxH, ok
+}
+
+// scanForCellSize returns (matched, ok): matched once a complete reply
+// to CSI 16 t (CSI 6 ; H ; W t) is in buf, ok when it carries a usable
+// size. Other replies the terminal sends meanwhile are skipped over.
+func scanForCellSize(buf []byte) (matched, ok bool) {
+	if _, found := findCellSize(buf); !found {
+		return false, false
+	}
+	_, _, ok = parseCellSize(buf)
+	return true, ok
+}
+
+// parseCellSize extracts (width, height) from the first complete
+// CSI 6 ; H ; W t in buf. ok is false when there is none or either value
+// is not a positive number of pixels.
+func parseCellSize(buf []byte) (pxW, pxH int, ok bool) {
+	body, found := findCellSize(buf)
+	if !found {
+		return 0, 0, false
+	}
+	parts := bytes.Split(body, []byte(";"))
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	h, okH := atoi(string(parts[0]))
+	w, okW := atoi(string(parts[1]))
+	if !okH || !okW {
+		return 0, 0, false
+	}
+	return w, h, true
+}
+
+// findCellSize returns the "H;W" between "\x1b[6;" and the next 't'.
+func findCellSize(buf []byte) (body []byte, found bool) {
+	const prefix = "\x1b[6;"
+	i := bytes.Index(buf, []byte(prefix))
+	if i < 0 {
+		return nil, false
+	}
+	tail := buf[i+len(prefix):]
+	j := bytes.IndexByte(tail, 't')
+	if j < 0 {
+		return nil, false
+	}
+	return tail[:j], true
+}
+
 // probeViaGoroutineScan is the generic goroutine-based probe used for
 // non-*os.File readers (tests only — see probeViaGoroutine). It reads
 // byte by byte, re-running scan over everything collected so far, and
