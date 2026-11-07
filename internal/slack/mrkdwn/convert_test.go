@@ -696,10 +696,25 @@ func TestConvert_BlockquoteKeepsInlineContent(t *testing.T) {
 	}
 }
 
+// A blank quote line between paragraphs is kept on both sides, as it was
+// when quotes went out verbatim.
 func TestConvert_BlockquoteParagraphs(t *testing.T) {
-	mr, _ := Convert("> one\n>\n> two")
-	if want := "> one\n> two"; mr != want {
+	mr, blk := Convert("> one\n>\n> two")
+	if want := "> one\n>\n> two"; mr != want {
 		t.Errorf("mrkdwn = %q, want %q", mr, want)
+	}
+	q, ok := blk.Elements[0].(*slack.RichTextQuote)
+	if !ok {
+		t.Fatalf("element is %T, want *RichTextQuote; block=%s", blk.Elements[0], blockJSON(blk))
+	}
+	var text strings.Builder
+	for _, e := range q.Elements {
+		if te, ok := e.(*slack.RichTextSectionTextElement); ok {
+			text.WriteString(te.Text)
+		}
+	}
+	if want := "one\n\ntwo"; text.String() != want {
+		t.Errorf("quote text = %q, want %q; block=%s", text.String(), want, blockJSON(blk))
 	}
 }
 

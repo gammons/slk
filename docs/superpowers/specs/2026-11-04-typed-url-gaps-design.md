@@ -14,9 +14,9 @@ A URL typed without markup has to go out as a link element: Slack's clients rend
 `typedURLRegexp` stays the one rule for what a typed URL is; nothing here widens it (ASCII only, case-sensitive schemes from `linkscheme`).
 
 - `afterPunctURL` (`internal/slack/mrkdwn/typedurl.go`), an inline parser on `"`, `'` and `:`: when a typed URL follows, it takes the mark as text, and goldmark offers Linkify the next position as the start of a run. Linkify then links the URL as it would anywhere else.
-- The tokenizer does not read `:name:` as an emoji when the closing colon is followed by `//`, i.e. is a scheme's. An emoji after a URL (`x/a:tada:`) is still an emoji and still ends it.
+- The tokenizer does not read `:name:` as an emoji when a typed URL starts at `name:`, i.e. the closing colon is a scheme's (`see:https://x`, `call:tel:+15550100`). An emoji after a URL (`x/a:tada:`) is still an emoji and still ends it.
 - Headings stay verbatim, but `appendRawText` emits their typed URLs as links, finding them with `typedURLLen`: `typedURLRegexp` plus Linkify's closing-paren balancing, so a URL ends where it would in a paragraph (`TestTypedURLLenMatchesLinkify`).
-- Blockquotes become a `rich_text_quote`, their paragraphs walked inline like any other, with `> ` on each line of the mrkdwn fallback.
+- Blockquotes become a `rich_text_quote`, their paragraphs walked inline like any other, with `> ` on each line of the mrkdwn fallback. A blank quote line between paragraphs is kept. A nested quote is collected as raw text that keeps its line breaks, so URLs on adjacent lines stay two links.
 
 ## Not in scope
 

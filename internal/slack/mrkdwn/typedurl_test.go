@@ -54,6 +54,13 @@ func TestConvert_TypedURLGaps(t *testing.T) {
 		{"# see (https://example.com/x)", "# see (<https://example.com/x>)", []string{"https://example.com/x"}},
 		{"> quote https://example.com", "> quote <https://example.com>", []string{"https://example.com"}},
 		{"> > nested https://example.com", "> nested <https://example.com>", []string{"https://example.com"}},
+		// A scheme with no "//" after a colon is a link, not an emoji.
+		{"call:tel:+15550100", "call:<tel:+15550100>", []string{"tel:+15550100"}},
+		// Each line of a quote is its own text: URLs on adjacent lines
+		// stay two links, at any depth.
+		{"> https://one.example\n> https://two.example", "> <https://one.example>\n> <https://two.example>", []string{"https://one.example", "https://two.example"}},
+		{"> > https://one.example\n> > https://two.example", "> <https://one.example>\n> <https://two.example>", []string{"https://one.example", "https://two.example"}},
+		{"> > https://one.example\n> >\n> > https://two.example", "> <https://one.example>\n>\n> <https://two.example>", []string{"https://one.example", "https://two.example"}},
 		// Still not links.
 		{"foo:bar", "foo:bar", nil},
 		{"say \"hi\"", "say \"hi\"", nil},

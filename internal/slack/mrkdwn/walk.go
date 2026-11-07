@@ -526,7 +526,8 @@ func (w *walker) walkBlockquote(n *ast.Blockquote) {
 	w.curSection = slack.NewRichTextSection()
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
 		if c != n.FirstChild() {
-			w.appendText("\n")
+			// A blank quote line separates paragraphs; keep it.
+			w.appendText("\n\n")
 		}
 		if p, ok := c.(*ast.Paragraph); ok {
 			w.walkInlineChildren(p)
@@ -544,6 +545,10 @@ func (w *walker) walkBlockquote(n *ast.Blockquote) {
 		return
 	}
 	for _, line := range strings.Split(body, "\n") {
+		if line == "" {
+			w.mrkdwn.WriteString(">\n")
+			continue
+		}
 		w.mrkdwn.WriteString("> ")
 		w.mrkdwn.WriteString(line)
 		w.mrkdwn.WriteString("\n")
@@ -553,10 +558,16 @@ func (w *walker) walkBlockquote(n *ast.Blockquote) {
 }
 
 // collectRawInline appends the source bytes of all *ast.Text and
-// *ast.AutoLink descendants of n to b.
+// *ast.AutoLink descendants of n to b, keeping line breaks: a line ends
+// where a text carries one, and blocks (the paragraphs of a nested
+// quote) are separated by a blank line. Without them the URLs ending
+// one line and starting the next would be read as one link.
 func collectRawInline(b *strings.Builder, n ast.Node, source []byte) {
 	if t, ok := n.(*ast.Text); ok {
 		b.Write(source[t.Segment.Start:t.Segment.Stop])
+		if t.SoftLineBreak() || t.HardLineBreak() {
+			b.WriteByte('\n')
+		}
 		return
 	}
 	if a, ok := n.(*ast.AutoLink); ok {
@@ -565,6 +576,9 @@ func collectRawInline(b *strings.Builder, n ast.Node, source []byte) {
 		return
 	}
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		if c != n.FirstChild() && c.Type() == ast.TypeBlock {
+			b.WriteString("\n\n")
+		}
 		collectRawInline(b, c, source)
 	}
 }
