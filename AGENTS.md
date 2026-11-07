@@ -140,6 +140,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Open the action dialog for an ephemeral's buttons | `(*App).openActionPrompt(actionPromptRef)` (`internal/ui/action_prompt.go`); queueing and the interruption rule are `enqueueActionPrompt` / `tryOpenActionPrompt` |
 | Replace a pane's list with fetched history without erasing ephemerals already shown | `keepEphemerals(fetched, shown)` (`internal/ui/ephemeral_keep.go`); only for a fetch of the conversation already on screen |
 | Would a URL typed bare be sent as one link with that whole target (no space or non-ASCII char the typed-URL matcher stops at)? | `mrkdwn.TypesAsBareURL(url)`; `blockkit.LinkToMarkdown` keeps `[label](url)` / `<url\|label>` form when it is false |
+| Where a typed URL starts and ends outside goldmark (text kept as typed, like a heading), by the same rule Linkify applies | `mrkdwn.typedURLLen(s)`, `bareURLSpans(s)`; `(*walker).appendRawText` emits such text with its URLs as links (`internal/slack/mrkdwn/typedurl.go`) |
 | Slack permalink parsing | `slackurl.Parse` |
 | Huddle deep link for a conversation (`https://app.slack.com/huddle/<TEAM>/<CHANNEL>`) | `slackurl.HuddleURL` |
 | Enter insert mode with a compose box focused (the shared body of `i` and a click on a compose region) | `(*App).beginInsertMode(toThread bool)` (`internal/ui/mode_command.go`); the compose regions' tops are recorded per frame in `panelLayout` |
