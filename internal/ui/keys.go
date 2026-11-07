@@ -61,6 +61,7 @@ type KeyMap struct {
 	ThemeSwitcherGlobal key.Binding
 	ThemeNext           key.Binding
 	ThemePrev           key.Binding // alt+Y: tmux extended-keys; alt+shift+Y: xterm modifyOtherKeys
+	Compact             key.Binding
 	PresenceMenu        key.Binding
 	ToggleSection       key.Binding
 	NavBack             key.Binding
@@ -152,6 +153,7 @@ func DefaultKeyMap() KeyMap {
 		ThemeSwitcherGlobal: key.NewBinding(key.WithKeys("ctrl+shift+y"), key.WithHelp("ctrl+shift+y", "set default theme")),
 		ThemeNext:           key.NewBinding(key.WithKeys("alt+y"), key.WithHelp("alt+y", "next theme (per workspace)")),
 		ThemePrev:           key.NewBinding(key.WithKeys("alt+shift+y", "alt+Y", "alt+shift+Y"), key.WithHelp("alt+shift+y", "prev theme (per workspace)")),
+		Compact:             key.NewBinding(key.WithHelp(":compact", "Toggle compact (IRC-like) style")),
 		PresenceMenu:        key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "set status")),
 		ToggleSection:       key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "toggle section")),
 		NavBack:             key.NewBinding(key.WithKeys("ctrl+h"), key.WithHelp("ctrl+h", "navigate back")),

@@ -189,6 +189,7 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
 - Drop-in custom themes (`~/.config/slk/themes/*.toml`)
 - Live theme switcher (`Ctrl+y`); `Alt+y` / `Alt+Shift+y` cycle to the next / previous theme
 - TOML config for appearance, animations, notifications, and channel sections
+- Opt-in IRC-like "compact" style with less padding, no avatars, and same-line usernames via `appearance.compact`
 - Deterministic per-user username coloring, opt-in via `colored_usernames`
 
 See [[Configuration]] for the full `config.toml` reference and [[Keybindings]] for the key map.

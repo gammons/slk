@@ -124,6 +124,10 @@ type Appearance struct {
 	// does: the repliers' avatars (kitty graphics only), then "N
 	// replies". Needs ShowAvatars. Default off.
 	ReplyAvatars bool `toml:"reply_avatars"`
+	// Compact makes everything more compact: hides avatars, renders
+	// user name on the same line as the message, disables extra space
+	// between messages, and reduces padding wherever possible.
+	Compact bool `toml:"compact"`
 }
 
 type Animations struct {

@@ -96,7 +96,7 @@ func TestNoticeHighlightsSearchTerms(t *testing.T) {
 func TestNoticePlainMirrorHasNoPadding(t *testing.T) {
 	msg := centreNotice()
 	r := RenderMessage(msg, 60, &RenderContext{}, RenderOptions{})
-	rows := WrapRows(msg, r, 60, NewWrapStyles(true))
+	rows := WrapRows(msg, r, 60, NewWrapStyles(true, false))
 	if len(rows.Plain) != 1 {
 		t.Fatalf("plain rows = %d, want 1", len(rows.Plain))
 	}
