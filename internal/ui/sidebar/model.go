@@ -290,9 +290,15 @@ type Model struct {
 	// Renames preserve collapse state because the ID is stable.
 	// Populated lazily; lookups treat nil as empty. Used in Task 9.
 	collapseByID map[string]bool
+	// startCollapsed is the state of a section never toggled
+	// ([sidebar] start_collapsed).
+	startCollapsed bool
 	// showUnreadInCollapsed keeps unread rows (and the active channel)
 	// of a collapsed section visible ([sidebar] show_unread_in_collapsed).
 	showUnreadInCollapsed bool
+	// revealID is a channel SelectByID showed inside a collapsed
+	// section before it became active; SetActiveChannelID clears it.
+	revealID string
 
 	// rightAlignBadges puts mention badges at the row's right end
 	// ([sidebar] right_align_badges).
@@ -461,7 +467,7 @@ func (m *Model) hidesPeer(item ChannelItem) bool {
 // includes unread channels inside collapsed sections, even though those
 // rows aren't currently visible -- and since the default layout collapses
 // the "Channels" firehose, a/A will jump into it and the caller's
-// SelectByID expands that section to reveal the target. This matches the
+// SelectByID shows the target under the collapsed header. This matches the
 // desktop client, which also surfaces unread channels regardless of
 // section collapse; it's an intentional "catch up on all unreads" skim,
 // not just "what's on screen".
@@ -583,14 +589,14 @@ func (m *Model) SetShowUnreadInCollapsed(on bool) {
 // hiddenByCollapse reports whether item's row is left out of nav because
 // its section is collapsed. buildCache draws what nav holds.
 func (m *Model) hiddenByCollapse(section string, item ChannelItem, readState map[string]core.ReadState) bool {
-	if !m.IsCollapsed(section) {
+	if !m.IsCollapsed(section) || item.ID == m.activeID || item.ID == m.revealID {
 		return false
 	}
 	if !m.showUnreadInCollapsed {
 		return true
 	}
 	state := readState[item.ID]
-	return item.ID != m.activeID && !item.IsVisiblyUnread(state) && item.MentionBadge(state) == 0
+	return !item.IsVisiblyUnread(state) && item.MentionBadge(state) == 0
 }
 
 // useSlackSections reports whether Slack-mode rendering is active.
@@ -798,6 +804,7 @@ func (m *Model) SetActiveChannelID(id string) {
 	}
 	key, hadKey := m.currentCursorKey()
 	m.activeID = id
+	m.revealID = "" // the active channel shows itself now
 	m.rebuildFilter()
 	m.rebuildNavWithCursor(key, hadKey)
 	m.cacheValid = false
@@ -913,18 +920,39 @@ func (m *Model) IsSectionHeaderSelected() (name string, ok bool) {
 // IsCollapsed reports whether the named section is currently collapsed.
 // In Slack mode, the section parameter is a section ID and lookup uses
 // collapseByID (so renames preserve state). In config mode, it's a
-// section name and lookup uses collapsed.
+// section name and lookup uses collapsed. A section never toggled is
+// collapsed iff [sidebar] start_collapsed is on.
 func (m *Model) IsCollapsed(section string) bool {
+	if c, ok := m.collapseState()[section]; ok {
+		return c
+	}
+	return m.startCollapsed
+}
+
+// collapseState is the toggled-state map for the current mode.
+func (m *Model) collapseState() map[string]bool {
 	if m.useSlackSections() {
 		if m.collapseByID == nil {
-			return false
+			m.collapseByID = map[string]bool{}
 		}
-		return m.collapseByID[section]
+		return m.collapseByID
 	}
 	if m.collapsed == nil {
-		return false
+		m.collapsed = map[string]bool{}
 	}
-	return m.collapsed[section]
+	return m.collapsed
+}
+
+// SetStartCollapsed sets whether sections the user has not toggled
+// start collapsed ([sidebar] start_collapsed).
+func (m *Model) SetStartCollapsed(on bool) {
+	if m.startCollapsed == on {
+		return
+	}
+	m.startCollapsed = on
+	m.rebuildNavPreserveCursor()
+	m.cacheValid = false
+	m.dirty()
 }
 
 // ToggleCollapse flips the collapsed state of the named section. The
@@ -932,17 +960,8 @@ func (m *Model) IsCollapsed(section string) bool {
 // subsequent toggle just expands again. Dispatches to collapseByID in
 // Slack mode (ID-keyed; survives renames), collapsed in config mode.
 func (m *Model) ToggleCollapse(section string) {
-	if m.useSlackSections() {
-		if m.collapseByID == nil {
-			m.collapseByID = map[string]bool{}
-		}
-		m.collapseByID[section] = !m.collapseByID[section]
-	} else {
-		if m.collapsed == nil {
-			m.collapsed = map[string]bool{}
-		}
-		m.collapsed[section] = !m.collapsed[section]
-	}
+	collapsed := m.IsCollapsed(section)
+	m.collapseState()[section] = !collapsed
 	// Rebuild nav since the set of selectable rows changed. Preserve
 	// the cursor's logical target (header / threads / channel ID) so
 	// the user keeps their place.
@@ -1439,18 +1458,17 @@ func (m *Model) SelectByID(id string) {
 		}
 	}
 	// Slow path: the channel is in m.filtered but its section is
-	// collapsed and was therefore omitted from nav. Expand the section
-	// (so the channel becomes navigable) and re-select.
+	// collapsed and was therefore omitted from nav. Reveal just that
+	// row under the header (the rest stays collapsed) and re-select.
 	for fi, idx := range m.filtered {
 		if m.items[idx].ID != id {
 			continue
 		}
-		section := m.sectionFor(m.items[idx])
-		if m.IsCollapsed(section) {
-			// ToggleCollapse handles both name-keyed (config mode) and
-			// ID-keyed (Slack mode) maps and rebuilds nav + invalidates
-			// cache as a side effect.
-			m.ToggleCollapse(section)
+		if m.IsCollapsed(m.sectionFor(m.items[idx])) {
+			m.revealID = id
+			m.rebuildNavPreserveCursor()
+			m.cacheValid = false
+			m.dirty()
 		}
 		// Now find the channel in the freshly-rebuilt nav.
 		for i, n := range m.nav {

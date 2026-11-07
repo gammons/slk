@@ -3667,6 +3667,11 @@ func (a *App) SetSidebarStyle(s SidebarStyle) {
 	a.sidebarMouseResize = s.MouseResize
 }
 
+// SetSidebarStartCollapsed starts every sidebar section collapsed.
+func (a *App) SetSidebarStartCollapsed(on bool) {
+	a.sidebar.SetStartCollapsed(on)
+}
+
 // SetSidebarShowUnreadInCollapsed keeps unread channels of collapsed
 // sidebar sections visible.
 func (a *App) SetSidebarShowUnreadInCollapsed(on bool) {

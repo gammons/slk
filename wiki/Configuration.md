@@ -83,6 +83,8 @@ active_only = false         # true: hide conversations with no activity in 30 da
                             # every section (Slack's "Active only"; unread ones stay)
 mouse_resize = false        # true: drag the sidebar's right border to resize it
                             # ([ and ] also resize; the width is saved per workspace)
+start_collapsed = false     # true: every section starts collapsed (Space/Enter
+                            # on a header expands it until slk restarts)
 show_unread_in_collapsed = false  # true: a collapsed section still lists its
                                   # unread channels (and the open one)
 
