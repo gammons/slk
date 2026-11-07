@@ -64,6 +64,7 @@ func TestProbeCellSize_NoReply(t *testing.T) {
 // The production path on a real *os.File: the answer, and no reader left
 // behind to take bytes meant for bubbletea.
 func TestProbeCellSize_PollPathOnRealPipe(t *testing.T) {
+	skipPipeProbeOnWindows(t)
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)
