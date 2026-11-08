@@ -10,15 +10,18 @@ import (
 // be lit. It is the reader wireCallbacks installs through
 // App.SetUnreadService; OtherUnreadCount (the title's "+N" and
 // $SLK_OTHER_UNREAD) reads through the same reader, so the surfaces
-// cannot disagree.
+// cannot disagree. One exception: the active workspace's sidebar and
+// UnreadChannelCount skip a hidden deactivated peer's DM
+// (sidebar.Model.hidesPeer), and this predicate does not, so an unread
+// one still lights its workspace's dot and the "+N".
 //
 // A workspace is lit when its own sidebar would show something unread,
 // and the sidebar has two such signals:
 //
 //   - channels: some channel in wctx.Channels is
 //     ChannelItem.IsVisiblyUnread, the predicate the sidebar dot,
-//     UnreadChannelCount and $SLK_UNREAD share, so a muted channel
-//     never lights the rail.
+//     UnreadChannelCount and $SLK_UNREAD share (less the deactivated
+//     exception above), so a muted channel never lights the rail.
 //   - threads: threadsUnread(teamID, selfUserID) reports whether
 //     cache.ListSubscribedThreads has an Unread row, which is what the
 //     Threads badge counts. A thread reply never sets the channel's

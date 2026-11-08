@@ -166,12 +166,17 @@ func poisonedChannelsInfo() edge.ChannelsInfoResult {
 // of the two conditionals in the mapping: U_ALICE has a display name,
 // an avatar, is a bot and is local; U_AUTHOR_ONLY has neither display
 // name nor avatar, is not a bot, and is external.
+//
+// U_AUTHOR_ONLY is also deactivated, so a mapping that drops the deleted
+// flag differs from wantUserUpdates; U_ALICE is active.
 func cannedUsersInfo() []edge.User {
+	deactivated := edgeUser("U_AUTHOR_ONLY", "author-only-renamed", "", "Author Only Real Renamed",
+		"", "T_OTHER", 1783337599011, false)
+	deactivated.Deleted = true
 	return []edge.User{
 		edgeUser("U_ALICE", "alice-renamed", "alice-display-renamed", "Alice Real Renamed",
 			"https://example.invalid/alice-new.png", "T_HOME", 1783337599010, true),
-		edgeUser("U_AUTHOR_ONLY", "author-only-renamed", "", "Author Only Real Renamed",
-			"", "T_OTHER", 1783337599011, false),
+		deactivated,
 	}
 }
 
@@ -208,7 +213,7 @@ func wantUserUpdates() []cache.EdgeUserUpdate {
 			// reads as "preserve what is stored"; team_id differs from
 			// the workspace, so external.
 			ID: "U_AUTHOR_ONLY", Name: "author-only-renamed", DisplayName: "Author Only Real Renamed",
-			AvatarURL: "", IsBot: false, IsExternal: true,
+			AvatarURL: "", IsBot: false, Deleted: true, IsExternal: true,
 			HomeTeamID: "T_OTHER", WorkspaceID: "T_HOME", Version: 1783337599011,
 		},
 	}

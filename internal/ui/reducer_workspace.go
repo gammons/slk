@@ -33,6 +33,9 @@
 //	UserExternalMsg         - per-user external/internal flag
 //	                          resolved: update the cache + re-push
 //	                          SetUserNames so styling refreshes.
+//	UserDeactivatedMsg      - a user's deactivated state was observed:
+//	                          update the global set and refilter the
+//	                          sidebar, finder and autocompletes.
 //	ReadStateChangedMsg     - persistent read-state changed in the
 //	                          cache: refresh sidebar + workspace rail.
 //	CustomEmojisLoadedMsg   - per-workspace emoji list arrived.
@@ -80,6 +83,11 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			if m.FinderItem.ID != "" {
 				a.channelFinder.Upsert(m.FinderItem)
 			}
+			// The row can name the peer of the conversation on screen
+			// after its deactivation arrived (addConversation sends
+			// that first).
+			a.syncComposeDisabled("conversation_opened")
+			return a.dropInsertIfComposeDisabled(), true
 		}
 		// Inactive-workspace events update WorkspaceContext.Channels
 		// and FinderItems from the rtmEventHandler in cmd/slk;
@@ -161,6 +169,12 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}
 		return nil, true
 
+	case UserDeactivatedMsg:
+		// Global, so no TeamID check: the account is deactivated in every
+		// workspace and each one's view is refiltered.
+		a.setUserDeactivated(m.UserID, m.Deactivated, m.Seq)
+		return a.dropInsertIfComposeDisabled(), true
+
 	case ReadStateChangedMsg:
 		_ = m
 		// Persistent read state changed in the cache. Invalidate
@@ -225,6 +239,8 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 			a.sidebar.SetWidth(m.SidebarWidth)
 		}
 		a.sidebar.SetSectionsProvider(m.SectionsProvider)
+		// Before the lists below, so they are filtered on first build.
+		a.SetDeactivatedUsers(m.DeactivatedUsers, m.DeactivatedSeq)
 		a.SetChannels(m.Channels)
 		a.channelFinder.SetItems(m.FinderItems)
 		// SetExternalUsers re-pushes user-names; calling
@@ -387,6 +403,8 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	// by a stale peer from the workspace we're leaving. The new
 	// workspace's own presence_change events repopulate it.
 	a.sidebar.ResetPresence()
+	// Before the lists below, so they are filtered on first build.
+	a.SetDeactivatedUsers(m.DeactivatedUsers, m.DeactivatedSeq)
 	a.SetChannels(m.Channels)
 	a.channelFinder.SetItems(m.FinderItems)
 	// SetExternalUsers re-pushes user-names; calling SetUserNames

@@ -18,6 +18,10 @@ type User struct {
 	// the "Apps" sidebar section so they don't clutter the human DM
 	// list.
 	IsBot bool
+	// Deleted is Slack's deactivated flag. It is a property of the
+	// account, not of a workspace membership, and a full profile
+	// overwrites it like IsBot, so a reactivated user leaves the set.
+	Deleted bool
 	// IsExternal is relative to WorkspaceID, never a global user attribute.
 	// Reads derive it from HomeTeamID when known. The stored flag is only
 	// a legacy fallback for the workspace that first cached the profile.
@@ -45,20 +49,24 @@ type User struct {
 // revalidation writes instead.
 // The original workspace association is retained on conflict; another
 // workspace may refresh the profile/home team but not its legacy external flag.
+// deleted, unlike status, IS written on conflict: every caller passes a full
+// profile's Deleted. A future caller that upserts a placeholder must read the
+// row's flag first, or it will un-delete a deactivated user.
 func (db *DB) UpsertUser(u User) error {
 	_, err := db.conn.Exec(`
-		INSERT INTO users (id, workspace_id, home_team_id, name, display_name, avatar_url, presence, is_bot, is_external, status_emoji, status_text, status_expiration, huddle_state, huddle_expiration, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO users (id, workspace_id, home_team_id, name, display_name, avatar_url, presence, is_bot, deleted, is_external, status_emoji, status_text, status_expiration, huddle_state, huddle_expiration, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name=excluded.name,
 			display_name=excluded.display_name,
 			avatar_url=excluded.avatar_url,
 			is_bot=excluded.is_bot,
+			deleted=excluded.deleted,
 			home_team_id=COALESCE(NULLIF(excluded.home_team_id, ''), users.home_team_id),
 			is_external=CASE WHEN users.workspace_id=excluded.workspace_id
 				THEN excluded.is_external ELSE users.is_external END,
 			updated_at=excluded.updated_at
-	`, u.ID, u.WorkspaceID, u.HomeTeamID, u.Name, u.DisplayName, u.AvatarURL, u.Presence, u.IsBot, u.IsExternal,
+	`, u.ID, u.WorkspaceID, u.HomeTeamID, u.Name, u.DisplayName, u.AvatarURL, u.Presence, u.IsBot, u.Deleted, u.IsExternal,
 		u.StatusEmoji, u.StatusText, u.StatusExpiration, u.HuddleState, u.HuddleExpiration, u.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("upserting user: %w", err)
@@ -83,11 +91,11 @@ func (db *DB) FillUserAvatarURL(id, url string) error {
 func (db *DB) GetUser(id string) (User, error) {
 	var u User
 	err := db.conn.QueryRow(`
-		SELECT id, workspace_id, home_team_id, name, display_name, avatar_url, presence, is_bot,
+		SELECT id, workspace_id, home_team_id, name, display_name, avatar_url, presence, is_bot, deleted,
 			CASE WHEN home_team_id != '' THEN home_team_id != workspace_id ELSE is_external END,
 			status_emoji, status_text, status_expiration, huddle_state, huddle_expiration, updated_at
 		FROM users WHERE id = ?
-	`, id).Scan(&u.ID, &u.WorkspaceID, &u.HomeTeamID, &u.Name, &u.DisplayName, &u.AvatarURL, &u.Presence, &u.IsBot, &u.IsExternal,
+	`, id).Scan(&u.ID, &u.WorkspaceID, &u.HomeTeamID, &u.Name, &u.DisplayName, &u.AvatarURL, &u.Presence, &u.IsBot, &u.Deleted, &u.IsExternal,
 		&u.StatusEmoji, &u.StatusText, &u.StatusExpiration, &u.HuddleState, &u.HuddleExpiration, &u.UpdatedAt)
 	if err != nil {
 		return u, fmt.Errorf("getting user: %w", err)
@@ -97,7 +105,7 @@ func (db *DB) GetUser(id string) (User, error) {
 
 func (db *DB) ListUsers(workspaceID string) ([]User, error) {
 	rows, err := db.conn.Query(`
-		SELECT id, workspace_id, home_team_id, name, display_name, avatar_url, presence, is_bot,
+		SELECT id, workspace_id, home_team_id, name, display_name, avatar_url, presence, is_bot, deleted,
 			CASE WHEN home_team_id != '' THEN home_team_id != workspace_id ELSE is_external END,
 			status_emoji, status_text, status_expiration, huddle_state, huddle_expiration, updated_at
 		FROM users WHERE workspace_id = ? ORDER BY display_name, name
@@ -110,7 +118,7 @@ func (db *DB) ListUsers(workspaceID string) ([]User, error) {
 	var users []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.WorkspaceID, &u.HomeTeamID, &u.Name, &u.DisplayName, &u.AvatarURL, &u.Presence, &u.IsBot, &u.IsExternal,
+		if err := rows.Scan(&u.ID, &u.WorkspaceID, &u.HomeTeamID, &u.Name, &u.DisplayName, &u.AvatarURL, &u.Presence, &u.IsBot, &u.Deleted, &u.IsExternal,
 			&u.StatusEmoji, &u.StatusText, &u.StatusExpiration, &u.HuddleState, &u.HuddleExpiration, &u.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scanning user: %w", err)
 		}
@@ -147,6 +155,54 @@ func (db *DB) ExternalUsers(workspaceID string) (map[string]bool, error) {
 		return nil, fmt.Errorf("listing external users: %w", err)
 	}
 	return external, nil
+}
+
+// DeactivatedUsers returns a caller-owned set of every cached user Slack
+// reports as deactivated. It is global, not per workspace: an account is
+// deactivated everywhere, and a profile is keyed by user ID alone, so the
+// workspace that first cached the row says nothing about who may see it.
+func (db *DB) DeactivatedUsers() (map[string]bool, error) {
+	rows, err := db.conn.Query(`SELECT id FROM users WHERE deleted = 1`)
+	if err != nil {
+		return nil, fmt.Errorf("listing deactivated users: %w", err)
+	}
+	defer rows.Close()
+
+	deactivated := make(map[string]bool)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning deactivated user: %w", err)
+		}
+		deactivated[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("listing deactivated users: %w", err)
+	}
+	return deactivated, nil
+}
+
+// MarkUserDeleted records that id is deactivated, from a source that
+// carries no profile (an IM's is_user_deleted). It never creates a row, so
+// it cannot invent a placeholder profile; a peer with no row is known to
+// the running process only. Only a profile can clear the flag again.
+func (db *DB) MarkUserDeleted(id string) error {
+	_, err := db.conn.Exec(`UPDATE users SET deleted = 1 WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("marking user %s deleted: %w", id, err)
+	}
+	return nil
+}
+
+// ClearUserDeleted records that a profile shows id active again. Like
+// MarkUserDeleted it never creates a row; the full-profile writers clear
+// the flag themselves, so this is for profile observations that bypass them.
+func (db *DB) ClearUserDeleted(id string) error {
+	_, err := db.conn.Exec(`UPDATE users SET deleted = 0 WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("clearing deleted for user %s: %w", id, err)
+	}
+	return nil
 }
 
 func (db *DB) UpdatePresence(userID, presence string) error {

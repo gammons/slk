@@ -196,6 +196,9 @@ type EdgeUserUpdate struct {
 	// means "this response says nothing", so the column is preserved.
 	AvatarURL string
 	IsBot     bool
+	// Deleted is Slack's deactivated flag. Every full profile carries it,
+	// so it is always written, like IsBot.
+	Deleted bool
 	// HomeTeamID has User.HomeTeamID's preserve-on-empty contract.
 	HomeTeamID string
 	// WorkspaceID scopes the legacy IsExternal flag in UpdateUserFromEdge.
@@ -228,26 +231,26 @@ func (db *DB) UpdateUserFromEdge(u EdgeUserUpdate) error {
 	if u.AvatarURL != "" {
 		_, err = db.conn.Exec(`
 			UPDATE users
-			SET name = ?, display_name = ?, avatar_url = ?, is_bot = ?,
+			SET name = ?, display_name = ?, avatar_url = ?, is_bot = ?, deleted = ?,
 				home_team_id = COALESCE(NULLIF(?, ''), home_team_id),
 				is_external = CASE WHEN ? = '' OR workspace_id = ? THEN ? ELSE is_external END,
 				status_emoji = ?, status_text = ?, status_expiration = ?,
 				huddle_state = ?, huddle_expiration = ?, version = ?
 			WHERE id = ?`,
-			u.Name, u.DisplayName, u.AvatarURL, boolToInt(u.IsBot), u.HomeTeamID,
+			u.Name, u.DisplayName, u.AvatarURL, boolToInt(u.IsBot), boolToInt(u.Deleted), u.HomeTeamID,
 			u.WorkspaceID, u.WorkspaceID, boolToInt(u.IsExternal),
 			u.StatusEmoji, u.StatusText, u.StatusExpiration,
 			u.HuddleState, u.HuddleExpiration, u.Version, u.ID)
 	} else {
 		_, err = db.conn.Exec(`
 			UPDATE users
-			SET name = ?, display_name = ?, is_bot = ?,
+			SET name = ?, display_name = ?, is_bot = ?, deleted = ?,
 				home_team_id = COALESCE(NULLIF(?, ''), home_team_id),
 				is_external = CASE WHEN ? = '' OR workspace_id = ? THEN ? ELSE is_external END,
 				status_emoji = ?, status_text = ?, status_expiration = ?,
 				huddle_state = ?, huddle_expiration = ?, version = ?
 			WHERE id = ?`,
-			u.Name, u.DisplayName, boolToInt(u.IsBot), u.HomeTeamID,
+			u.Name, u.DisplayName, boolToInt(u.IsBot), boolToInt(u.Deleted), u.HomeTeamID,
 			u.WorkspaceID, u.WorkspaceID, boolToInt(u.IsExternal),
 			u.StatusEmoji, u.StatusText, u.StatusExpiration,
 			u.HuddleState, u.HuddleExpiration, u.Version, u.ID)
@@ -274,13 +277,14 @@ func (db *DB) UpsertUserFromEdge(workspaceID string, u EdgeUserUpdate) error {
 	var err error
 	if u.AvatarURL != "" {
 		_, err = db.conn.Exec(`
-			INSERT INTO users (id, workspace_id, home_team_id, name, display_name, avatar_url, is_bot, is_external, status_emoji, status_text, status_expiration, huddle_state, huddle_expiration, version)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO users (id, workspace_id, home_team_id, name, display_name, avatar_url, is_bot, deleted, is_external, status_emoji, status_text, status_expiration, huddle_state, huddle_expiration, version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
 				name=excluded.name,
 				display_name=excluded.display_name,
 				avatar_url=excluded.avatar_url,
 				is_bot=excluded.is_bot,
+				deleted=excluded.deleted,
 				home_team_id=COALESCE(NULLIF(excluded.home_team_id, ''), users.home_team_id),
 				is_external=CASE WHEN users.workspace_id=excluded.workspace_id
 					THEN excluded.is_external ELSE users.is_external END,
@@ -290,16 +294,17 @@ func (db *DB) UpsertUserFromEdge(workspaceID string, u EdgeUserUpdate) error {
 				huddle_state=excluded.huddle_state,
 				huddle_expiration=excluded.huddle_expiration,
 				version=excluded.version
-		`, u.ID, workspaceID, u.HomeTeamID, u.Name, u.DisplayName, u.AvatarURL, boolToInt(u.IsBot), boolToInt(u.IsExternal),
+		`, u.ID, workspaceID, u.HomeTeamID, u.Name, u.DisplayName, u.AvatarURL, boolToInt(u.IsBot), boolToInt(u.Deleted), boolToInt(u.IsExternal),
 			u.StatusEmoji, u.StatusText, u.StatusExpiration, u.HuddleState, u.HuddleExpiration, u.Version)
 	} else {
 		_, err = db.conn.Exec(`
-			INSERT INTO users (id, workspace_id, home_team_id, name, display_name, is_bot, is_external, status_emoji, status_text, status_expiration, huddle_state, huddle_expiration, version)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO users (id, workspace_id, home_team_id, name, display_name, is_bot, deleted, is_external, status_emoji, status_text, status_expiration, huddle_state, huddle_expiration, version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
 				name=excluded.name,
 				display_name=excluded.display_name,
 				is_bot=excluded.is_bot,
+				deleted=excluded.deleted,
 				home_team_id=COALESCE(NULLIF(excluded.home_team_id, ''), users.home_team_id),
 				is_external=CASE WHEN users.workspace_id=excluded.workspace_id
 					THEN excluded.is_external ELSE users.is_external END,
@@ -309,7 +314,7 @@ func (db *DB) UpsertUserFromEdge(workspaceID string, u EdgeUserUpdate) error {
 				huddle_state=excluded.huddle_state,
 				huddle_expiration=excluded.huddle_expiration,
 				version=excluded.version
-		`, u.ID, workspaceID, u.HomeTeamID, u.Name, u.DisplayName, boolToInt(u.IsBot), boolToInt(u.IsExternal),
+		`, u.ID, workspaceID, u.HomeTeamID, u.Name, u.DisplayName, boolToInt(u.IsBot), boolToInt(u.Deleted), boolToInt(u.IsExternal),
 			u.StatusEmoji, u.StatusText, u.StatusExpiration, u.HuddleState, u.HuddleExpiration, u.Version)
 	}
 	if err != nil {
