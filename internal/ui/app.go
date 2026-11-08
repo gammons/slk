@@ -755,6 +755,9 @@ type App struct {
 	scrollPending        int
 	scrollPanel          Panel
 	scrollFlushScheduled bool
+
+	// Whether the app layout should be compact
+	compact bool
 }
 
 // pendingChannelMarkState is App.pendingChannelMark's slot: the newest
@@ -1071,7 +1074,7 @@ func (a *App) threadDrawnAlone() bool {
 	}
 	var scratch panelLayout
 	frame := scratch.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),
-		a.sidebarVisible, a.threadVisible, a.threadInFront())
+		a.sidebarVisible, a.threadVisible, a.threadInFront(), a.compact)
 	return frame.MsgWidth == 0
 }
 
@@ -1080,7 +1083,7 @@ func (a *App) threadDrawnAlone() bool {
 // assembled; tests call it instead of repeating Compute's arguments.
 func (a *App) computeFrame() panelLayoutFrame {
 	return a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),
-		a.sidebarVisible, a.threadVisible, a.threadInFront())
+		a.sidebarVisible, a.threadVisible, a.threadInFront(), a.compact)
 }
 
 func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -2955,6 +2958,21 @@ func (a *App) SetColoredUsernames(enabled bool) {
 		m.SetColoredUsernames(enabled)
 	}
 	a.threadPanel.SetColoredUsernames(enabled)
+}
+
+// SetCompact enables or disables the compact view
+func (a *App) SetCompact(enabled bool) {
+	a.compact = enabled
+	styles.ApplyCompact(enabled)
+	for _, m := range a.allWinModels() {
+		m.SetCompact(enabled)
+	}
+	a.threadPanel.SetCompact(enabled)
+	a.invalidateAllWinModelCaches()
+	a.threadPanel.InvalidateCache()
+	a.sidebar.InvalidateCache()
+	a.compose.RefreshStyles()
+	a.threadCompose.RefreshStyles()
 }
 
 // SetThreadAvatars draws avatars in the thread panel too, when the avatar

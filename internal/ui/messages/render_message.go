@@ -43,6 +43,7 @@ func noticeFallbackText(subtype string) string {
 // Each pane builds one from its own fields when it rebuilds its cache.
 type RenderContext struct {
 	ColoredUsernames bool
+	Compact          bool
 	UserStatuses     map[string]peerstatus.Status
 	UserNames        map[string]string
 	ChannelNames     map[string]string
@@ -143,6 +144,7 @@ func BlockkitContext(msg MessageItem, rc *RenderContext, emojiFlushes *[]func(io
 // columns.
 func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOptions) RenderedMessage {
 	var out RenderedMessage
+	preAttachmentRows := 0
 	// Render as a muted system notice, not a chat bubble -- Slack's
 	// author for these is a system bot, indistinguishable otherwise.
 	// Both panes go through here, so the thread pane matches.
@@ -218,105 +220,6 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		contentWidth = 20
 	}
 
-	// Emoji-image opts pass through the active EmojiContext; when
-	// image mode is off (or PlaceCtx.Fetcher is nil) RenderSlackMarkdownWith
-	// falls through to the legacy glyph/shortcode-text path. Warm-path
-	// emoji flushes land in out.BodyFlushes.
-	bodyOpts := RenderSlackMarkdownOpts{
-		UserNames:    rc.UserNames,
-		ChannelNames: rc.ChannelNames,
-		UserGroups:   rc.UserGroups,
-		PlaceCtx:     rc.Emoji.PlaceCtx,
-		EmojiCells:   rc.Emoji.Cells,
-		Customs:      rc.Emoji.Customs,
-		EmojiFlushes: &out.BodyFlushes,
-		Width:        contentWidth,
-	}
-	headerTimestamp := styles.Timestamp.Render(msg.Timestamp)
-	headerGap := lipgloss.NewStyle().Background(styles.Background).Render("  ")
-	line := styles.Username(msg.UserID, rc.ColoredUsernames).Render(msg.UserName) +
-		AuthorStatusSuffix(rc.UserStatuses, msg.UserID, time.Now(), &bodyOpts) +
-		headerGap + headerTimestamp
-
-	var bodyT0 time.Time
-	if stats != nil {
-		bodyT0 = time.Now()
-	}
-	// Blocks that render the body suppress Slack's notification-fallback
-	// text and its row. See BlocksCarryBody.
-	hasBody := !BlocksCarryBody(msg)
-	bodySrc := MessageTextSource(msg)
-	if !hasBody {
-		bodySrc = ""
-	}
-	rendered := RenderSlackMarkdownWith(bodySrc, bodyOpts)
-	if len(rc.SearchTerms) > 0 {
-		// SearchHighlightSGR's close sequence restores the theme bg/fg
-		// after the highlight's reset so plain body text doesn't bleed
-		// terminal-default colors. One derivation per RenderMessage
-		// call (i.e. per cache miss), not per line.
-		if hlStart, hlEnd, ok := SearchHighlightSGR(); ok {
-			rendered = HighlightSearchTerms(rendered, rc.SearchTerms, hlStart, hlEnd)
-		}
-	}
-	bodyStyle := styles.MessageText
-	if msg.Subtype == "me_message" {
-		// A /me line, italic as in Slack's own clients.
-		bodyStyle = bodyStyle.Italic(true)
-	}
-	text := bodyStyle.Render(WordWrap(rendered, contentWidth))
-	if stats != nil {
-		stats.bodyTotal += time.Since(bodyT0)
-	}
-
-	var threadLine string
-	if opt.ReplyAffordance && msg.ReplyCount > 0 {
-		word := "replies"
-		if msg.ReplyCount == 1 {
-			word = "reply"
-		}
-		if rc.ReplyAvatar != nil {
-			label := styles.ThreadIndicator.Italic(false).Bold(true).Render(fmt.Sprintf("%d %s", msg.ReplyCount, word))
-			threadLine = "\n" + replyAvatars(msg.ReplyUsers, rc.ReplyAvatar, contentWidth-lipgloss.Width(label)) + label
-		} else {
-			threadLine = "\n" + styles.ThreadIndicator.Render(
-				fmt.Sprintf("[%d %s ->]", msg.ReplyCount, word))
-		}
-	}
-
-	// reactionLineCount is the number of rendered reaction rows below the
-	// body / attachments; pillSpecs become absolute hit rects below once
-	// the row layout is known.
-	reactionLine, reactionLineCount, pillSpecs := renderReactionPills(msg, rc, opt, contentWidth, &out)
-
-	var editedMark string
-	if opt.EditedMark && msg.IsEdited {
-		editedMark = " " + styles.Timestamp.Render("(edited)")
-	}
-
-	// Pre-attachment row count, so attachment rows can compute their
-	// absolute row index (used as the sixelRows key).
-	//
-	//   rows 0..: label rows (ephemeral, then thread_broadcast), each optional
-	//   next rows: wrapped author header + editedMark
-	//   row N: wrapped body text (lipgloss.Height of styled `text`);
-	//          absent when BlocksCarryBody
-	//
-	// Attachments begin immediately after the body text.
-	var labelRows string
-	preAttachmentRows := 0
-	if msg.Ephemeral {
-		labelRows += EphemeralLabel() + "\n"
-		preAttachmentRows++ // the ephemeral label occupies its own row
-	}
-	if opt.BroadcastLabel && msg.Subtype == "thread_broadcast" {
-		labelRows += styles.Timestamp.Render("\u21b3 replied to a thread") + "\n"
-		preAttachmentRows++ // the broadcast label occupies its own row
-	}
-	if hasBody {
-		preAttachmentRows += lipgloss.Height(text) // wrapped body text
-	}
-
 	// contentColBase is the display column at which message content
 	// begins inside the cached entry's linesNormal. buildCache wraps
 	// the rendered content with a thick-left-border (▌, 1 col) at
@@ -335,22 +238,74 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	if avatarStr != "" {
 		contentColBase += 5
 	}
+
+	// Emoji-image opts pass through the active EmojiContext; when
+	// image mode is off (or PlaceCtx.Fetcher is nil) RenderSlackMarkdownWith
+	// falls through to the legacy glyph/shortcode-text path. Warm-path
+	// emoji flushes land in out.BodyFlushes.
+	bodyOpts := RenderSlackMarkdownOpts{
+		UserNames:    rc.UserNames,
+		ChannelNames: rc.ChannelNames,
+		UserGroups:   rc.UserGroups,
+		PlaceCtx:     rc.Emoji.PlaceCtx,
+		EmojiCells:   rc.Emoji.Cells,
+		Customs:      rc.Emoji.Customs,
+		EmojiFlushes: &out.BodyFlushes,
+		Width:        contentWidth,
+	}
+	headerTimestamp := styles.Timestamp.Render(msg.Timestamp)
+	headerGapText := "  "
+	if rc.Compact {
+		headerGapText = " "
+	}
+	headerGap := lipgloss.NewStyle().Background(styles.Background).Render(headerGapText)
+
+	author := styles.Username(msg.UserID, rc.ColoredUsernames).Render(msg.UserName) +
+		AuthorStatusSuffix(rc.UserStatuses, msg.UserID, time.Now(), &bodyOpts)
+
+	line := author + headerGap + headerTimestamp
+	if rc.Compact {
+		line = headerTimestamp + headerGap + author
+	}
+
+	var editedMark string
+	if opt.EditedMark && msg.IsEdited {
+		editedMark = " " + styles.Timestamp.Render("(edited)")
+	}
 	// Wrap before adding the avatar's fixed two-row gutter. Each wrapped
 	// line must restore its own styles after that gutter resets the pen.
 	headerBudget := max(1, min(contentWidth, width-contentColBase))
 	header := line + editedMark
-	if lipgloss.Width(header) > headerBudget {
-		author := line[:len(line)-len(headerGap)-len(headerTimestamp)]
-		author = WordWrap(author, headerBudget)
+
+	// Blocks that render the body suppress Slack's notification-fallback
+	// text and its row. See BlocksCarryBody.
+	hasBody := !BlocksCarryBody(msg)
+	bodySrc := MessageTextSource(msg)
+	if !hasBody {
+		bodySrc = ""
+	}
+	startsWithBlockQuote := strings.HasPrefix(bodySrc, "&gt; ") || strings.HasPrefix(bodySrc, "> ")
+	headerOnSeparateLine := !rc.Compact || startsWithBlockQuote || !hasBody
+
+	if headerOnSeparateLine && lipgloss.Width(header) > headerBudget {
 		var wrapped strings.Builder
-		wrapped.WriteString(author)
-		lastWidth := lipgloss.Width(author[strings.LastIndexByte(author, '\n')+1:])
-		// Timestamp spaces belong to one metadata unit, not the name's prose.
-		// Wrap within a unit only when it cannot fit on a header line by itself.
-		for _, part := range [2]struct{ text, gap string }{
+		lastWidth := 0
+		headerOrder := [3]struct{ text, gap string }{
+			{author, ""},
 			{headerTimestamp, headerGap},
 			{strings.TrimPrefix(editedMark, " "), " "},
-		} {
+		}
+		if rc.Compact {
+			headerOrder = [3]struct{ text, gap string }{
+				{headerTimestamp, ""},
+				{author, headerGap},
+				{strings.TrimPrefix(editedMark, " "), " "},
+			}
+		}
+
+		// Timestamp spaces belong to one metadata unit, not the name's prose.
+		// Wrap within a unit only when it cannot fit on a header line by itself.
+		for _, part := range headerOrder {
 			if part.text == "" {
 				continue
 			}
@@ -377,7 +332,91 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		_ = writer.Close()
 		header = buf.String()
 	}
+
 	preAttachmentRows += lipgloss.Height(header)
+
+	var bodyT0 time.Time
+	if stats != nil {
+		bodyT0 = time.Now()
+	}
+	rendered := RenderSlackMarkdownWith(bodySrc, bodyOpts)
+	if len(rc.SearchTerms) > 0 {
+		// SearchHighlightSGR's close sequence restores the theme bg/fg
+		// after the highlight's reset so plain body text doesn't bleed
+		// terminal-default colors. One derivation per RenderMessage
+		// call (i.e. per cache miss), not per line.
+		if hlStart, hlEnd, ok := SearchHighlightSGR(); ok {
+			rendered = HighlightSearchTerms(rendered, rc.SearchTerms, hlStart, hlEnd)
+		}
+	}
+	bodyStyle := styles.MessageText
+	if msg.Subtype == "me_message" {
+		// A /me line, italic as in Slack's own clients.
+		bodyStyle = bodyStyle.Italic(true)
+	}
+
+	bodyRow := ""
+
+	if !headerOnSeparateLine {
+		// The header is prepended to the text here because they need to be word-wrapped together.
+		rendered = bodyStyle.Render(header) + bodyStyle.Render(": ") + bodyStyle.Render(rendered)
+		// We reset the header row to empty to avoid duplication
+		preAttachmentRows -= lipgloss.Height(header)
+		header = ""
+	}
+
+	text := bodyStyle.Render(WordWrap(rendered, contentWidth))
+
+	if hasBody {
+		preAttachmentRows += lipgloss.Height(text) // wrapped body text
+		if headerOnSeparateLine {
+			bodyRow = "\n"
+		}
+		bodyRow = bodyRow + text
+	}
+
+	if stats != nil {
+		stats.bodyTotal += time.Since(bodyT0)
+	}
+
+	var threadLine string
+	if opt.ReplyAffordance && msg.ReplyCount > 0 {
+		word := "replies"
+		if msg.ReplyCount == 1 {
+			word = "reply"
+		}
+		if rc.ReplyAvatar != nil {
+			label := styles.ThreadIndicator.Italic(false).Bold(true).Render(fmt.Sprintf("%d %s", msg.ReplyCount, word))
+			threadLine = "\n" + replyAvatars(msg.ReplyUsers, rc.ReplyAvatar, contentWidth-lipgloss.Width(label)) + label
+		} else {
+			threadLine = "\n" + styles.ThreadIndicator.Render(
+				fmt.Sprintf("[%d %s ->]", msg.ReplyCount, word))
+		}
+	}
+
+	// reactionLineCount is the number of rendered reaction rows below the
+	// body / attachments; pillSpecs become absolute hit rects below once
+	// the row layout is known.
+	reactionLine, reactionLineCount, pillSpecs := renderReactionPills(msg, rc, opt, contentWidth, &out)
+
+	// Pre-attachment row count, so attachment rows can compute their
+	// absolute row index (used as the sixelRows key).
+	//
+	//   rows 0..: label rows (ephemeral, then thread_broadcast), each optional
+	//   next rows: wrapped author header + editedMark
+	//   row N: wrapped body text (lipgloss.Height of styled `text`);
+	//          absent when BlocksCarryBody
+	//
+	// Attachments begin immediately after the body text.
+	var labelRows string
+	if msg.Ephemeral {
+		labelRows += EphemeralLabel() + "\n"
+		preAttachmentRows++ // the ephemeral label occupies its own row
+	}
+	if opt.BroadcastLabel && msg.Subtype == "thread_broadcast" {
+		labelRows += styles.Timestamp.Render("\u21b3 replied to a thread") + "\n"
+		preAttachmentRows++ // the broadcast label occupies its own row
+	}
 
 	var attachLineSlices [][]string
 	var imageHits []entrylist.Hit
@@ -602,10 +641,6 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		attachmentLineCount = len(flat)
 	}
 
-	bodyRow := ""
-	if hasBody {
-		bodyRow = "\n" + text
-	}
 	msgContent := labelRows + header + bodyRow + bkBlock + attachmentLines + threadLine + reactionLine
 
 	// Translate per-pill specs into entry-relative reaction hit rects.

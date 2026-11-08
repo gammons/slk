@@ -22,6 +22,8 @@ max_image_rows = 20       # cap inline image height in terminal rows
 reply_avatars = false     # true: Slack-style reply row, repliers' avatars + "N replies"
                           # (avatars need show_avatars and kitty graphics)
 colored_usernames = false # color each user's name by ID hash (Slack-style)
+compact = false           # compact, IRC-like style (less padding, username on same line as messages, no avatars except repliers)
+                          # Similar to Slack's "Compact Theme"
 
 [animations]
 enabled = true

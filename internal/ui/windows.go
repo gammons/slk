@@ -52,7 +52,7 @@ func (a *App) handleWindowChord(msg tea.KeyMsg) tea.Cmd {
 func (a *App) windowBounds() wintree.Rect {
 	var scratch panelLayout
 	frame := scratch.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),
-		a.sidebarVisible, a.threadVisible, false)
+		a.sidebarVisible, a.threadVisible, false, a.compact)
 	return wintree.Rect{X: 0, Y: 0, W: frame.MsgWidth + frame.MsgBorder, H: frame.ContentHeight}
 }
 
