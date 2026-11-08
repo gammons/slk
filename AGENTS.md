@@ -46,6 +46,10 @@ internal/bubbles/       self-contained components and the substrate they
                         imports internal/ui; the TUI's I/O ban applies here too.
                         Widgets move here from internal/ui/<widget>/ one at
                         a time; confirmprompt is the first
+internal/cli/           the scriptable `slk <noun> <verb>` commands (#107):
+                        command table, dispatch, help, JSON output, exit
+                        codes, SKILL.md; reaches the token store and Slack
+                        only through cli.Env, which cmd/slk/cli.go builds
 internal/slack/         Slack Web API + browser-protocol WebSocket client
 internal/slack/edge/    edgeapi: conditional revalidation, server-side search
 internal/bootstrap/     startup fetch orchestration
@@ -249,6 +253,20 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Leave insert mode from code | `(*App).exitInsertAfterSend()` after a send (honours `[compose] stay_in_insert_after_send`); `(*App).exitInsert()` to leave whatever the option says (`ModeNormal`, both composers blurred) (`internal/ui/app.go`). Neither rechecks waiting action dialogs: a path that leaves insert mode at the user's request, as Esc does, follows with `tryOpenActionPrompt()` |
 | Record that the user used an emoji (a reaction added, a pill toggled on, a `:shortcode:` in a sent message, reply or upload caption), or hand the emoji history to every picker | `(*App).recordEmojiUse(names...)`, `(*App).recordEmojiInText(text)`, `(*App).refreshEmojiFrecency()` (`internal/ui/emoji_frecency.go`); the history is `core.ReactionService.LoadFrecent` / `RecordFrecent` (the `frecent_emoji` cache table) |
 
+### Command line, sign-in and files
+
+| Need | Use |
+|---|---|
+| Add a scriptable command (`slk <noun> <verb>`) | A row in `commands` (`internal/cli/registry.go`), a line in `nouns` for a new noun, and a line in `internal/cli/SKILL.md`, which `TestSkillListsEveryCommand` enforces. `slk help` and the command block of `slk --help` (`cli.Overview`) are generated from the table. The command reads its flags through the closure its `Setup` returns, signs in with `inv.Session(ctx)` (only when it calls Slack) and writes through `inv.out.result(doc, text)`, a JSON object or text. A failure with a code of its own is a `*cli.Error` (`usageError(...)` for a bad command line); a new code goes in `errorExits` and in `SKILL.md` (`TestSkillListsEveryErrorCode`). Pin each JSON shape with a golden file |
+| Pick the workspace a one-shot command acts on (slug, team ID, name or domain, any case; else the `Default` one, else the only one) | `cli.SelectWorkspace(list, ref)`; `slk export` reaches it through `selectExportToken`. The CLI's order (`--workspace`, `$SLK_WORKSPACE`, `[general] default_workspace`) is `(*cli.Invocation).Session` |
+| Replace a file so that another slk process reading it never sees it half-written (temp file + rename, mode kept) | `atomicfile.Write(path, data, defaultPerm)`; `writeConfigAtomic` (config savers) and `TokenStore.Save` use it |
+| Is this error Slack refusing the login itself (`invalid_auth`, `not_authed`, `token_expired`, `token_revoked`, `account_inactive`), not one request? | `slackclient.IsAuthError(err)`; the CLI reports it as exit 3 |
+| The context for a one-shot command: Ctrl-C or SIGTERM cancels it, and a second Ctrl-C still kills the process | `signalContext()` (`cmd/slk/signal.go`); `slk export` and `cliMain` |
+| Refresh one stored token from the desktop app and save it (unchanged on failure; a browser sign-in returns before any desktop or keychain read) | `remintToken(ctx, store, tok)` (`cmd/slk/remint.go`), `remintTokenWith` with the reads injected for tests; `remintTokens` refreshes every token at TUI launch |
+| Parse a CLI argument list whose flags may come before, between or after the positionals (a flag's value is never a positional, whatever it looks like; `--` makes every later argument positional) | `parseInterspersed(fs, args)` (`internal/cli/args.go`); a command's `run`, `slk help` and the arguments after a bare noun all parse with it. It and `jsonRequested` read the arguments through one scanner, `splitArgs`, so they cannot disagree |
+| Decide, before parsing, whether a CLI command line asked for JSON, so a parse error comes out in that format (reads the arguments as the parse does; reads past an unknown flag; an invalid `--json=x` changes nothing) | `jsonRequested(fs, args)` (`internal/cli/cli.go`), with the command's flag set once it is known |
+| Sign in for a one-shot command, reminting only when Slack refuses the login (no keychain read on the common path) | `connectWithRemint(ctx, tok, connect, remint)` (`cmd/slk/cli.go`) |
+
 ### Test helpers
 
 Everything here is unexported and lives in a `_test.go` file, so it is
@@ -324,6 +342,8 @@ greppable by name; no line numbers, because these files move.
 | Fixture bytes for the inline-image disk cache (a w×h PNG, no network) | `makeTestPNG(w, h)` (`internal/ui/messages/blockkit/image_sixel_test.go`, `package blockkit`); unexported twins: `makeTestPNG` in `internal/ui/messages/model_test.go`, `makeTestPNGBytes` in `internal/ui/app_imagepreview_test.go` |
 | Inline emoji image placements or failed fetches without network I/O | `newFakePlaceFetcher()` (`internal/ui/messages/render_test.go`, `package messages`): `setPrerendered` seeds warm images; `err` supplies a fetch failure. Give failure cases unique URLs because `emoji.Place` negatively caches them for the process |
 | Load a config from a TOML string | `loadConfigString(t, body)` (`internal/config/config_test.go`, `package config`) |
+| Run a CLI command line against a fake environment and get stdout, stderr and the exit code; with a literal `--json` or `-json` in the arguments it also checks the JSON contract (one object, an error object on stderr for a failure, no `null`; help excepted). The check reads the arguments itself, not through `jsonRequested`, so a bug there cannot switch it off | `runCLI(t, args, opts...)` with `withWorkspaces(ws...)`, `withEnv(k, v)`, `withConnect(fn)`, `withListError(err)`, `withStdout(w)` (`failingWriter{}` for a stdout that cannot be written); the fixtures `acme` (the default workspace) and `side` (`internal/cli/helpers_test.go`, `package cli`) |
+| Compare a CLI command's JSON with `internal/cli/testdata/json/<name>.json`, or bless it | `compareGoldenJSON(t, name, got)`; bless with the package-local flag: `go test ./internal/cli -run TestGolden -update` (`internal/cli/helpers_test.go`, `package cli`) |
 | Press Tab or Shift+Tab at the `:` prompt; check the buffer and its status-bar mirror together; is no Tab cycle in progress? | `pressTab(a, shift)`, `assertPrompt(t, a, want)`, `cmdCompletionZero(c)` (`internal/ui/mode_command_test.go`) |
 | What the status bar draws after the `:` prompt (the completion list) | `afterPrompt(plain, line)` (`internal/ui/mode_command_test.go`) |
 | A private `dbus-daemon` for one test (skips when not installed; no service directories, so an unowned name is never activated), a connection to it, and a spec-only Secret Service served on it | `startTestBus(t)`, `connectTestBus(t, addr)`, `serveSecretService(t, addr, svc)` with `specOnlyService()` (`internal/slackdesktop/password_linux_test.go`, `package slackdesktop`, Linux only) |

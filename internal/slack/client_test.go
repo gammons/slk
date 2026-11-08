@@ -981,6 +981,26 @@ func TestConnect_DiscoversStandardWorkspaceAPIBaseURL(t *testing.T) {
 	}
 }
 
+// TestConnect_KeepsUserName checks that Connect keeps auth.test's
+// "user" (the handle), which `slk workspace whoami` reports.
+func TestConnect_KeepsUserName(t *testing.T) {
+	mock := &mockSlackAPI{
+		authTestFn: func() (*slack.AuthTestResponse, error) {
+			return &slack.AuthTestResponse{TeamID: "T1", UserID: "U1", User: "alice"}, nil
+		},
+	}
+	c := &Client{api: mock}
+	if got := c.UserName(); got != "" {
+		t.Errorf("UserName() before Connect = %q, want empty", got)
+	}
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if got := c.UserName(); got != "alice" {
+		t.Errorf("UserName() = %q, want %q", got, "alice")
+	}
+}
+
 func TestConnect_FallsBackWhenAuthTestURLIsEmpty(t *testing.T) {
 	mock := &mockSlackAPI{
 		authTestFn: func() (*slack.AuthTestResponse, error) {
