@@ -1396,7 +1396,7 @@ func (a *App) openUserProfile() tea.Cmd {
 		// show is whoever started the huddle.
 		if p, _, focused := a.focusedContentPane(); focused {
 			if msg, sel := p.SelectedMessage(); sel {
-				if starter := messages.HuddleStarter(msg); starter != "" && msg.Subtype == "huddle_thread" {
+				if starter := messages.HuddleStarter(msg); starter != "" && msg.Subtype == core.SubtypeHuddleThread {
 					userID = starter
 				}
 			}

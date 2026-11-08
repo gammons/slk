@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/gammons/slk/internal/core"
 )
 
 // HuddleStarter returns the user ID that started the huddle a huddle_thread
@@ -20,7 +22,7 @@ func HuddleStarter(msg MessageItem) string {
 // message is not a huddle announcement, has no room or starter, or the
 // starter does not resolve. Callers fall back to today's rendering then.
 func huddleStarterName(msg MessageItem, names map[string]string) (id, name string) {
-	if msg.Subtype != "huddle_thread" {
+	if msg.Subtype != core.SubtypeHuddleThread {
 		return "", ""
 	}
 	id = HuddleStarter(msg)
