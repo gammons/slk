@@ -156,6 +156,10 @@ type Context struct {
 	// raw text passes through unchanged.
 	RenderText func(s string, userNames map[string]string) string
 
+	// RenderPlainText expands emoji in headers and control labels without
+	// interpreting mrkdwn or mentions. May be nil; then text stays unchanged.
+	RenderPlainText func(s string) string
+
 	// RenderCode draws preformatted text (a table laid out by
 	// TableToText) as the host's code block, exactly width display
 	// columns wide and hard-wrapped to fit. The host wires this to the

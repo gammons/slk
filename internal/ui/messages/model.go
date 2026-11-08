@@ -358,7 +358,7 @@ func (m *Model) HandleAvatarReady(userID string) {
 	for _, msg := range m.messages {
 		// A huddle with replies is drawn as its starter's message, so the
 		// starter's avatar is the one it asks for, not the stored author's.
-		if msg.UserID != userID && !slices.Contains(msg.ReplyUsers, userID) && !(msg.Subtype == "huddle_thread" && HuddleStarter(msg) == userID) {
+		if msg.UserID != userID && !slices.Contains(msg.ReplyUsers, userID) && !(msg.Subtype == core.SubtypeHuddleThread && HuddleStarter(msg) == userID) {
 			continue
 		}
 		if m.staleEntries == nil {
@@ -1395,10 +1395,28 @@ func (m *Model) hasAuthor(userID string) bool {
 // AuthorStatusSuffix is what follows an author's name in a message
 // header: a space and their status emoji on the pane background, or ""
 // when they have no live custom status. Shared with the thread pane.
-func AuthorStatusSuffix(statuses map[string]peerstatus.Status, userID string, now time.Time) string {
-	g := statuses[userID].Glyph(now)
+// Emoji images use the same placement options and upload collector as the body.
+// Nil opts keeps glyph rendering, even when image mode is enabled.
+func AuthorStatusSuffix(statuses map[string]peerstatus.Status, userID string, now time.Time, opts *RenderSlackMarkdownOpts) string {
+	status := statuses[userID]
+	g := status.Glyph(now)
 	if g == "" {
 		return ""
+	}
+	if opts != nil && emojiutil.ImageModeActive() && opts.PlaceCtx.Fetcher != nil {
+		var tokens []emojiutil.Token
+		if !status.InHuddle(now) && status.Emoji != "" {
+			tokens = emojiutil.ResolveEmojiToTokens(status.Emoji, opts.Customs)
+		}
+		if len(tokens) != 1 || tokens[0].Kind != emojiutil.TokenEmoji {
+			// Keep the shared huddle, expiry and unknown-status policy,
+			// while drawing its fallback glyph through the image path too.
+			tokens = emojiutil.ResolveEmojiToTokens(g, opts.Customs)
+		} else {
+			// Preserve the status policy's glyph when its image cannot be placed.
+			tokens[0].Text = g
+		}
+		g = renderEmojiTokensInline(tokens, opts.PlaceCtx, opts.EmojiCells, opts.EmojiFlushes)
 	}
 	return lipgloss.NewStyle().Background(styles.Background).Render(" " + g)
 }
@@ -1775,7 +1793,7 @@ func (m *Model) buildCache(width int, keepPosition bool) {
 		// A system notice is itself a centred divider-style row, so right
 		// under another divider it needs the blank row a notice gets
 		// everywhere else (the previous message's trailing spacer).
-		if afterDivider && IsSystemNoticeSubtype(HuddleView(msg, m.userNames).Subtype) {
+		if afterDivider && core.IsSystemNoticeSubtype(HuddleView(msg, m.userNames).Subtype) {
 			appendSeparator(strings.Join(cs.spacerLines, "\n"))
 		}
 

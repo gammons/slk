@@ -1,12 +1,16 @@
 package messages
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	goimage "image"
+	"image/png"
 	"io"
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/slack-go/slack"
 
@@ -200,6 +204,192 @@ func TestRenderMessagePlainAppendsHintWhenInteractive(t *testing.T) {
 	plain := renderedFor(t, msg, 100)
 	if !strings.Contains(plain, "↗ open in Slack to interact") {
 		t.Errorf("expected hint line, got %q", plain)
+	}
+}
+
+func TestRenderMessageActionLabelRendersEmoji(t *testing.T) {
+	const label = ":white_check_mark: *Resolve* <@U1>"
+	for _, tc := range []struct {
+		name string
+		msg  MessageItem
+	}{
+		{"actions", MessageItem{Blocks: []blockkit.Block{
+			blockkit.ActionsBlock{Elements: []blockkit.ActionElement{{Kind: "button", Label: label}}},
+		}}},
+		{"accessory", MessageItem{Blocks: []blockkit.Block{
+			blockkit.SectionBlock{Text: "Incident", Accessory: blockkit.LabelAccessory{Kind: "button", Label: label}},
+		}}},
+		{"legacy", MessageItem{LegacyAttachments: []blockkit.LegacyAttachment{{
+			Actions: []blockkit.LegacyAction{{Type: "button", Text: label}},
+		}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.msg.TS, tc.msg.UserName = "1.0", "alert-bot"
+			plain := renderedFor(t, tc.msg, 100)
+			if !strings.Contains(plain, "✅") || strings.Contains(plain, ":white_check_mark:") {
+				t.Fatalf("button emoji did not render: %q", plain)
+			}
+			if !strings.Contains(plain, "*Resolve* <@U1>") {
+				t.Fatalf("plain-text label was interpreted as mrkdwn: %q", plain)
+			}
+		})
+	}
+}
+
+func TestRenderMessageHeaderEmojiRendersLikeBody(t *testing.T) {
+	msg := MessageItem{
+		TS:       "1.0",
+		UserName: "fixture-bot",
+		Blocks: []blockkit.Block{
+			blockkit.HeaderBlock{Text: ":white_check_mark: *Ready*"},
+			blockkit.SectionBlock{Text: ":white_check_mark: Ready"},
+		},
+	}
+	plain := renderedFor(t, msg, 100)
+	if strings.Contains(plain, ":white_check_mark:") || strings.Count(plain, "✅") != 2 {
+		t.Fatalf("header and body did not both expand the checkmark: %q", plain)
+	}
+	if !strings.Contains(plain, "*Ready*") {
+		t.Fatalf("plain header text was interpreted as mrkdwn: %q", plain)
+	}
+}
+
+func TestBlockkitHeaderImageTruncationPreservesTextAndImageID(t *testing.T) {
+	t.Setenv("TMUX", "")
+	emojiutil.SetImageMode(true, 2)
+	t.Cleanup(func() { emojiutil.SetImageMode(false, 2) })
+	const url = "https://example.test/header-truncation.png"
+	key := emojiutil.EmojiCacheKey(url)
+	src, err := png.Decode(bytes.NewReader(makeTestPNG(2, 2)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	kitty := imgpkg.NewKittyRenderer(imgpkg.NewRegistry())
+	kitty.SetSource(key, src)
+	placed := kitty.RenderKey(key, goimage.Pt(2, 1))
+	fetcher := newFakePlaceFetcher()
+	fetcher.setPrerendered(key, goimage.Pt(2, 1), placed)
+	msg := MessageItem{TS: "1.0", UserName: "fixture", Blocks: []blockkit.Block{
+		blockkit.HeaderBlock{Text: ":header_fixture: abcdefghijklmnopqrstuvwxyz"},
+	}}
+	m := New([]MessageItem{msg}, "fixture")
+	m.SetEmojiContext(EmojiContext{
+		PlaceCtx: emojiutil.PlaceContext{Fetcher: fetcher}, Cells: 2,
+		Customs: map[string]string{"header_fixture": url},
+	})
+	const width = 12
+	rendered := blockkit.Render(msg.Blocks, BlockkitContext(msg, m.renderContext(), nil), width)
+	header := rendered.Lines[0]
+	if plain := ansi.Strip(header); !strings.HasSuffix(plain, " abcdefgh…") {
+		t.Errorf("truncated header lost visible text: %q", plain)
+	}
+	if got := lipgloss.Width(header); got > width {
+		t.Errorf("header width = %d, exceeds %d", got, width)
+	}
+	canvas := lipgloss.NewCanvas(width, 1)
+	canvas.Compose(lipgloss.NewLayer(header))
+	imageCells := 0
+	for x := range width {
+		cell := canvas.CellAt(x, 0)
+		if cell == nil || !strings.HasPrefix(cell.Content, string(imgpkg.PlaceholderRune)) {
+			continue
+		}
+		imageCells++
+		if cell.Style.Fg == nil {
+			t.Fatal("truncated header lost the emoji image ID")
+		}
+		r, g, b, _ := cell.Style.Fg.RGBA()
+		if got := (r>>8)<<16 | (g>>8)<<8 | b>>8; got != placed.ID {
+			t.Errorf("truncated header references image %d, want %d", got, placed.ID)
+		}
+	}
+	if imageCells != 2 {
+		t.Errorf("truncated header has %d emoji cells, want both cells", imageCells)
+	}
+}
+
+func TestRenderMessageBlockEmojiUploadsReferencedImage(t *testing.T) {
+	t.Setenv("TMUX", "")
+	emojiutil.SetImageMode(true, 2)
+	t.Cleanup(func() { emojiutil.SetImageMode(false, 2) })
+	const url = "https://example.test/custom-emoji.png"
+	for _, tc := range []struct {
+		name string
+		msg  MessageItem
+	}{
+		{"header", MessageItem{Blocks: []blockkit.Block{
+			blockkit.HeaderBlock{Text: ":custom_fixture:"},
+		}}},
+		{"section", MessageItem{Blocks: []blockkit.Block{
+			blockkit.SectionBlock{Text: ":custom_fixture:"},
+		}}},
+		{"context", MessageItem{Blocks: []blockkit.Block{
+			blockkit.ContextBlock{Elements: []blockkit.ContextElement{{Text: ":custom_fixture:"}}},
+		}}},
+		{"accessory", MessageItem{Blocks: []blockkit.Block{
+			blockkit.SectionBlock{Text: "Incident", Accessory: blockkit.LabelAccessory{Kind: "button", Label: ":custom_fixture: Resolve"}},
+		}}},
+		{"actions", MessageItem{Blocks: []blockkit.Block{
+			blockkit.ActionsBlock{Elements: []blockkit.ActionElement{{Kind: "button", Label: ":custom_fixture: Resolve"}}},
+		}}},
+		{"legacy", MessageItem{LegacyAttachments: []blockkit.LegacyAttachment{{
+			Text:    ":custom_fixture:",
+			Actions: []blockkit.LegacyAction{{Type: "button", Text: ":custom_fixture: Resolve"}},
+		}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			key := emojiutil.EmojiCacheKey(url)
+			src, err := png.Decode(bytes.NewReader(makeTestPNG(2, 2)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			kitty := imgpkg.NewKittyRenderer(imgpkg.NewRegistry())
+			kitty.SetSource(key, src)
+			placed := kitty.RenderKey(key, goimage.Pt(2, 1))
+			fetcher := newFakePlaceFetcher()
+			fetcher.setPrerendered(key, goimage.Pt(2, 1), placed)
+			tc.msg.TS, tc.msg.UserName = "1.0", "alert-bot"
+			m := New([]MessageItem{tc.msg}, "general")
+			m.SetEmojiContext(EmojiContext{
+				PlaceCtx: emojiutil.PlaceContext{Fetcher: fetcher},
+				Cells:    2,
+				Customs:  map[string]string{"custom_fixture": url},
+			})
+			rendered := RenderMessage(tc.msg, 100, m.renderContext(), RenderOptions{})
+			height := lipgloss.Height(rendered.Content)
+			canvas := lipgloss.NewCanvas(100, height)
+			canvas.Compose(lipgloss.NewLayer(rendered.Content))
+			found := false
+			for y := range height {
+				for x := range 100 {
+					cell := canvas.CellAt(x, y)
+					if cell == nil || !strings.HasPrefix(cell.Content, string(imgpkg.PlaceholderRune)) {
+						continue
+					}
+					found = true
+					if cell.Style.Fg == nil {
+						t.Fatal("emoji placement lost its image ID")
+					}
+					r, g, b, _ := cell.Style.Fg.RGBA()
+					if gotID := (r>>8)<<16 | (g>>8)<<8 | b>>8; gotID != placed.ID {
+						t.Fatalf("emoji references image %d, want %d", gotID, placed.ID)
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("emoji did not create an image placement: %q", rendered.Content)
+			}
+			var uploads bytes.Buffer
+			for _, flush := range rendered.BlockFlushes {
+				if err := flush(&uploads); err != nil {
+					t.Fatal(err)
+				}
+			}
+			wantUpload := fmt.Sprintf("\x1b_Ga=T,f=100,t=d,i=%d,", placed.ID)
+			if !strings.Contains(uploads.String(), wantUpload) {
+				t.Fatalf("block references image %d without uploading it: %q", placed.ID, uploads.String())
+			}
+		})
 	}
 }
 

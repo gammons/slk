@@ -54,9 +54,12 @@ func (w *walker) walkBlock(n ast.Node) {
 		w.flushSection()
 		w.curSection = slack.NewRichTextSection()
 		w.walkInlineChildren(n)
+		if n.NextSibling() != nil {
+			w.appendText("\n")
+			// CommonMark uses two newlines as a paragraph separator - append an extra one
+			w.mrkdwn.WriteString("\n")
+		}
 		w.flushSection()
-		// Paragraph separator in mrkdwn is a blank line.
-		w.mrkdwn.WriteString("\n\n")
 	case *ast.HTMLBlock:
 		w.walkRawHTMLBlock(n)
 	case *ast.List:

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	"github.com/slack-go/slack"
 )
@@ -215,20 +216,6 @@ type AssistantStatus struct {
 type wsEvent struct {
 	Type    string `json:"type"`
 	SubType string `json:"subtype"`
-}
-
-// IsNoticeSubtype reports whether a message subtype is a system notice
-// the UI draws as a muted line: join/leave, a huddle starting, a canvas
-// update. It must list the same subtypes as messages.IsSystemNoticeSubtype
-// (internal/ui/messages), which this package cannot import;
-// TestNoticeSubtypesMatchRenderer in cmd/slk keeps the two in step.
-func IsNoticeSubtype(subtype string) bool {
-	switch subtype {
-	case "channel_join", "channel_leave", "group_join", "group_leave",
-		"huddle_thread", "tabbed_canvas_updated":
-		return true
-	}
-	return false
 }
 
 // wsMessageEvent represents a message event from the WebSocket.
@@ -587,7 +574,7 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 		// A system notice is delivered like an ordinary message, with its
 		// subtype preserved; fold it onto "" for the switch below.
 		kind := msg.SubType
-		if IsNoticeSubtype(kind) {
+		if core.IsSystemNoticeSubtype(kind) {
 			kind = ""
 		}
 		switch kind {
@@ -602,7 +589,7 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			// label it. file_share is a regular message that has one
 			// or more files attached (Slack's V2 upload flow uses
 			// this subtype). me_message is a /me line; the UI renders it
-			// in italics. A system notice (see IsNoticeSubtype) renders
+			// in italics. A system notice (see core.IsSystemNoticeSubtype) renders
 			// as a muted line, keyed off subtype.
 			debuglog.WS("message: channel=%s user=%s ts=%s subtype=%q thread_ts=%s files=%d",
 				msg.Channel, msg.User, msg.TS, msg.SubType, msg.ThreadTS, len(msg.Files))
@@ -627,7 +614,7 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			// huddle ends) keeps its subtype, or the cached row would turn
 			// back into a chat bubble. Other edits keep reporting "".
 			editSubtype := ""
-			if IsNoticeSubtype(msg.Message.SubType) {
+			if core.IsSystemNoticeSubtype(msg.Message.SubType) {
 				editSubtype = msg.Message.SubType
 			}
 			room := msg.Message.Room

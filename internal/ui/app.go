@@ -127,6 +127,7 @@ type App struct {
 	statusbar        statusbar.Model
 	channelFinder    channelfinder.Model
 	pendingForward   *forwardSource
+	forwardStandIns  []string // TSes of forward stand-ins awaiting their real echo; capped
 	searchResults    searchresults.Model
 	newMessagePicker newmessagepicker.Model
 	workspaceFinder  workspacefinder.Model
@@ -1395,7 +1396,7 @@ func (a *App) openUserProfile() tea.Cmd {
 		// show is whoever started the huddle.
 		if p, _, focused := a.focusedContentPane(); focused {
 			if msg, sel := p.SelectedMessage(); sel {
-				if starter := messages.HuddleStarter(msg); starter != "" && msg.Subtype == "huddle_thread" {
+				if starter := messages.HuddleStarter(msg); starter != "" && msg.Subtype == core.SubtypeHuddleThread {
 					userID = starter
 				}
 			}
@@ -1851,6 +1852,10 @@ func (a *App) handleGoToTop() tea.Cmd {
 			// gg is a one-shot jump — fire the fetch immediately.
 			return a.openSelectedThreadCmd(false)
 		}
+		if a.view == ViewActivity {
+			a.activityView.GoToTop()
+			return nil
+		}
 		a.messagepane.GoToTop()
 		return a.maybeFetchOlderHistory(a.messagepane.AtTop())
 	case PanelThread:
@@ -2234,14 +2239,53 @@ func (a *App) SetMode(mode Mode) {
 	if a.mode == ModeCommand && mode != ModeCommand {
 		a.clearCmdline()
 	}
-	// Same for the marks list: a global intercept (ctrl+c) leaves
-	// ModeMarks without going through handleMarksMode, and the list
-	// would stay drawn over the screen, and over the quit prompt.
-	if a.mode == ModeMarks && mode != ModeMarks {
-		a.marksOverlay.Close()
+	// Same for a modal: a global intercept (ctrl+c) leaves its mode
+	// without going through its key handler, and it would stay drawn
+	// over the screen, and over the quit prompt.
+	if a.mode != mode {
+		a.closeModal(a.mode)
 	}
 	a.mode = mode
 	a.statusbar.SetMode(mode)
+}
+
+// closeModal closes the modal that mode owns, the way Esc does. A key handler
+// that needs a modal's state after leaving its mode reads it before SetMode.
+// TestQuitPromptClosesEveryModal fails on a modal mode missing here.
+func (a *App) closeModal(mode Mode) {
+	switch mode {
+	case ModeChannelFinder:
+		a.channelFinder.Close()
+	case ModeReactionPicker:
+		a.reactionPicker.Close()
+	case ModeWorkspaceFinder:
+		a.workspaceFinder.Close()
+	case ModeThemeSwitcher:
+		a.themeSwitcher.Close()
+	case ModePresenceMenu:
+		a.presenceMenu.Close()
+	case ModeHelp:
+		a.help.Close()
+	case ModeNewMessage:
+		a.newMessagePicker.Close()
+		// Mark any in-flight submit as cancelled so its eventual
+		// result is dropped.
+		if a.newMessageInFlightID != 0 {
+			a.newMessageCancelled = true
+			a.abandonMsgPrefill()
+		}
+	case ModeReactionsView:
+		a.reactionsView.Close()
+	case ModeLinkPicker:
+		a.linkPicker.Close()
+		a.pickerKind, a.pickerFiles = "", nil
+	case ModeWorkspaceSearch:
+		a.searchResults.Close()
+	case ModeUserProfile:
+		a.userProfile.Close()
+	case ModeMarks:
+		a.marksOverlay.Close()
+	}
 }
 
 // exitInsertAfterSend drops the user back to ModeNormal after a send,

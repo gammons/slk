@@ -119,6 +119,24 @@ func TestItalicPreservedAtWordBoundaries(t *testing.T) {
 	}
 }
 
+// TestNonHTTPSLinksRenderOSC8 asserts http and file links are
+// hyperlinked, while javascript: targets are not.
+func TestNonHTTPSLinksRenderOSC8(t *testing.T) {
+	for _, target := range []string{"http://example.com/a", "file:///tmp/notes.txt", "ftp://example.com/f"} {
+		out := RenderSlackMarkdown("see <"+target+"|label>", nil, nil)
+		if !strings.Contains(out, "\x1b]8;;"+target) {
+			t.Errorf("expected OSC 8 for %s, got %q", target, out)
+		}
+		if strings.Contains(ansi.Strip(out), "<") {
+			t.Errorf("raw angle brackets left for %s: %q", target, ansi.Strip(out))
+		}
+	}
+	out := RenderSlackMarkdown("<javascript:alert(1)|x>", nil, nil)
+	if strings.Contains(out, "\x1b]8;;") {
+		t.Errorf("javascript: must not be hyperlinked, got %q", out)
+	}
+}
+
 // TestLabeledMailtoLinkRendersJustEmail asserts that Slack's wire form
 // for an emailed link — <mailto:user@host|user@host> — renders as just
 // the email address, not the literal angle-bracket text. Slack
@@ -783,6 +801,7 @@ func TestRenderEmojiTokensInline_ImageModeOn_WarmPath(t *testing.T) {
 // internal/emoji's place_test.go is separate.)
 type fakePlaceFetcher struct {
 	prerender map[string]imgpkg.Render
+	err       error
 }
 
 func newFakePlaceFetcher() *fakePlaceFetcher {
@@ -799,7 +818,7 @@ func (f *fakePlaceFetcher) Prerendered(key string, t goimage.Point, proto imgpkg
 }
 
 func (f *fakePlaceFetcher) Fetch(ctx context.Context, req imgpkg.FetchRequest) (imgpkg.FetchResult, error) {
-	return imgpkg.FetchResult{}, nil
+	return imgpkg.FetchResult{}, f.err
 }
 
 // TestBgANSIForBasicColor asserts that bgANSIFor emits native ANSI 16

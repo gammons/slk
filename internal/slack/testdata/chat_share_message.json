@@ -1,0 +1,22 @@
+{
+ "method": "chat.shareMessage",
+ "form": [
+  ["token", "xoxc-REDACTED"],
+  ["timestamp", "1700000000.000100"],
+  ["channel", "CFAKE0001"],
+  ["share_channel", "CFAKE0002"],
+  ["client_msg_id", "00000000-0000-4000-8000-000000000000"],
+  ["text", ""],
+  ["pending_slug_urls", "[]"],
+  ["skip_dlp_user_warning", "false"],
+  ["_x_reason", "sendShareMessage"],
+  ["_x_mode", "online"],
+  ["_x_sonic", "true"],
+  ["_x_app_name", "client"]
+ ],
+ "response": {
+  "ok": true,
+  "channel": "CFAKE0002",
+  "ts": "1700000001.000200"
+ }
+}

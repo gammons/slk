@@ -137,6 +137,18 @@ func TestBuildCustomEmojiURL(t *testing.T) {
 	}
 }
 
+func TestURLForShortcodeAliasRespectsCustomTarget(t *testing.T) {
+	const customURL = "https://example.test/workspace-check.png"
+	customs := map[string]string{
+		"resolve":          "alias:white_check_mark",
+		"white_check_mark": customURL,
+	}
+	url, ok := URLForShortcode("resolve", customs)
+	if !ok || url != customURL {
+		t.Fatalf("custom alias resolved to (%q, %t), want workspace image %q", url, ok, customURL)
+	}
+}
+
 func TestComposeSkinTonedCodepoints(t *testing.T) {
 	cases := []struct {
 		name string

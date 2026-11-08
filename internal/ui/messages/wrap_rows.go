@@ -6,6 +6,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/bubbles/entrylist"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
@@ -132,7 +133,7 @@ func WrapRows(msg MessageItem, r RenderedMessage, width int, s WrapStyles) Wrapp
 		plT0 = time.Now()
 	}
 	plain := entrylist.PlainLines(filledNormal)
-	if IsSystemNoticeSubtype(msg.Subtype) {
+	if core.IsSystemNoticeSubtype(msg.Subtype) {
 		for i := range plain {
 			plain[i] = trimPlainPadding(plain[i])
 		}
