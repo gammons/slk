@@ -659,16 +659,76 @@ func TestConvert_HeadingPlainText(t *testing.T) {
 	}
 }
 
-func TestConvert_BlockquotePassthrough(t *testing.T) {
+func TestConvert_Blockquote(t *testing.T) {
 	mr, blk := Convert("> a quoted line")
 	want := "> a quoted line"
 	if mr != want {
 		t.Errorf("mrkdwn = %q, want %q", mr, want)
 	}
-	sec := blk.Elements[0].(*slack.RichTextSection)
-	te := sec.Elements[0].(*slack.RichTextSectionTextElement)
-	if te.Text != "> a quoted line" {
+	q, ok := blk.Elements[0].(*slack.RichTextQuote)
+	if !ok {
+		t.Fatalf("element is %T, want *RichTextQuote; block=%s", blk.Elements[0], blockJSON(blk))
+	}
+	te := q.Elements[0].(*slack.RichTextSectionTextElement)
+	if te.Text != "a quoted line" {
 		t.Errorf("text = %q", te.Text)
+	}
+}
+
+// A quote keeps its line breaks and its inline content: formatting, code
+// and links. It used to go out as flattened plain text, with a URL in it
+// dropped altogether.
+func TestConvert_BlockquoteKeepsInlineContent(t *testing.T) {
+	mr, blk := Convert("> first *bold*\n> see https://example.com/x `code`\n\nafter")
+	want := "> first *bold*\n> see <https://example.com/x> `code`\n\nafter"
+	if mr != want {
+		t.Errorf("mrkdwn = %q, want %q", mr, want)
+	}
+	q, ok := blk.Elements[0].(*slack.RichTextQuote)
+	if !ok {
+		t.Fatalf("element is %T, want *RichTextQuote; block=%s", blk.Elements[0], blockJSON(blk))
+	}
+	var link *slack.RichTextSectionLinkElement
+	var bold, code bool
+	for _, el := range q.Elements {
+		switch e := el.(type) {
+		case *slack.RichTextSectionLinkElement:
+			link = e
+		case *slack.RichTextSectionTextElement:
+			bold = bold || (e.Style != nil && e.Style.Bold && e.Text == "bold")
+			code = code || (e.Style != nil && e.Style.Code && e.Text == "code")
+		}
+	}
+	if link == nil || link.URL != "https://example.com/x" {
+		t.Errorf("link = %+v, want https://example.com/x; block=%s", link, blockJSON(blk))
+	}
+	if !bold || !code {
+		t.Errorf("bold=%v code=%v, want both; block=%s", bold, code, blockJSON(blk))
+	}
+	if _, ok := blk.Elements[1].(*slack.RichTextSection); !ok || len(blk.Elements) != 2 {
+		t.Errorf("want the quote then one section; block=%s", blockJSON(blk))
+	}
+}
+
+// A blank quote line between paragraphs is kept on both sides, as it was
+// when quotes went out verbatim.
+func TestConvert_BlockquoteParagraphs(t *testing.T) {
+	mr, blk := Convert("> one\n>\n> two")
+	if want := "> one\n>\n> two"; mr != want {
+		t.Errorf("mrkdwn = %q, want %q", mr, want)
+	}
+	q, ok := blk.Elements[0].(*slack.RichTextQuote)
+	if !ok {
+		t.Fatalf("element is %T, want *RichTextQuote; block=%s", blk.Elements[0], blockJSON(blk))
+	}
+	var text strings.Builder
+	for _, e := range q.Elements {
+		if te, ok := e.(*slack.RichTextSectionTextElement); ok {
+			text.WriteString(te.Text)
+		}
+	}
+	if want := "one\n\ntwo"; text.String() != want {
+		t.Errorf("quote text = %q, want %q; block=%s", text.String(), want, blockJSON(blk))
 	}
 }
 
