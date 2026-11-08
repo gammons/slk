@@ -1,6 +1,10 @@
 package slackurl
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/gammons/slk/internal/ids"
+)
 
 func TestParse_Valid(t *testing.T) {
 	pl, ok := Parse("https://truelist-workspace.slack.com/archives/C054JFCBN69/p1779284733270139")
@@ -67,5 +71,49 @@ func TestHuddleURL(t *testing.T) {
 		if got := HuddleURL(c.teamID, c.channelID); got != c.want {
 			t.Errorf("HuddleURL(%q, %q) = %q, want %q", c.teamID, c.channelID, got, c.want)
 		}
+	}
+}
+
+func TestBuild(t *testing.T) {
+	cases := []struct {
+		name     string
+		teamURL  string
+		channel  ids.ChannelID
+		ts       ids.MessageTS
+		threadTS ids.ThreadTS
+		want     string
+		ok       bool
+	}{
+		{"channel message", "https://acme.slack.com/", "C123", "1700000001.000200", "", "https://acme.slack.com/archives/C123/p1700000001000200", true},
+		{"enterprise grid", "https://acme.enterprise.slack.com/", "C123", "1700000001.000200", "", "https://acme.enterprise.slack.com/archives/C123/p1700000001000200", true},
+		{"thread reply", "https://acme.slack.com/", "C999", "1700000050.000400", "1700000000.000100",
+			"https://acme.slack.com/archives/C999/p1700000050000400?thread_ts=1700000000.000100&cid=C999", true},
+		// A thread parent carries its own ts as thread_ts: no query.
+		{"thread parent", "https://acme.slack.com/", "C999", "1700000000.000100", "1700000000.000100", "https://acme.slack.com/archives/C999/p1700000000000100", true},
+		{"no trailing slash", "https://acme.slack.com", "C1", "1700000001.000200", "", "https://acme.slack.com/archives/C1/p1700000001000200", true},
+		{"not slack", "https://evil.example/", "C1", "1700000001.000200", "", "", false},
+		{"lookalike", "https://slack.com.evil.example/", "C1", "1700000001.000200", "", "", false},
+		{"bare slack.com", "https://slack.com/", "C1", "1700000001.000200", "", "", false},
+		{"http", "http://acme.slack.com/", "C1", "1700000001.000200", "", "", false},
+		{"empty url", "", "C1", "1700000001.000200", "", "", false},
+		{"no channel", "https://acme.slack.com/", "", "1700000001.000200", "", "", false},
+		{"bad ts", "https://acme.slack.com/", "C1", "1.0", "", "", false},
+		{"bad thread ts is left off", "https://acme.slack.com/", "C1", "1700000001.000200", "x", "https://acme.slack.com/archives/C1/p1700000001000200", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := Build(c.teamURL, c.channel, c.ts, c.threadTS)
+			if got != c.want || ok != c.ok {
+				t.Errorf("Build = (%q, %v), want (%q, %v)", got, ok, c.want, c.ok)
+			}
+			if !ok {
+				return
+			}
+			// Parse reads back what Build wrote.
+			p, ok := Parse(got)
+			if !ok || p.ChannelID != c.channel || p.MessageTS != c.ts {
+				t.Errorf("Parse(%q) = %+v, %v", got, p, ok)
+			}
+		})
 	}
 }

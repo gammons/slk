@@ -264,11 +264,11 @@ func (m messageAdapter) Send(channelID ids.ChannelID, text string) Msg {
 	return m.fns.Send(channelID, text)
 }
 
-func (m messageAdapter) Forward(ctx context.Context, teamID string, sourceChannelID ids.ChannelID, ts ids.MessageTS, destinationChannelID ids.ChannelID) (ForwardResult, error) {
+func (m messageAdapter) Forward(ctx context.Context, teamID string, sourceChannelID ids.ChannelID, ts ids.MessageTS, threadTS ids.ThreadTS, destinationChannelID ids.ChannelID) (ForwardResult, error) {
 	if m.fns.Forward == nil {
 		return ForwardResult{}, errors.New("message forwarding is unsupported")
 	}
-	return m.fns.Forward(ctx, teamID, sourceChannelID, ts, destinationChannelID)
+	return m.fns.Forward(ctx, teamID, sourceChannelID, ts, threadTS, destinationChannelID)
 }
 
 func (m messageAdapter) Edit(channelID ids.ChannelID, ts ids.MessageTS, newText string) Msg {
@@ -299,11 +299,11 @@ func (m messageAdapter) MarkUnread(channelID ids.ChannelID, threadTS ids.ThreadT
 	return m.fns.MarkUnread(channelID, threadTS, boundaryTS, unreadCount)
 }
 
-func (m messageAdapter) Permalink(ctx context.Context, channelID ids.ChannelID, ts ids.MessageTS) (string, error) {
+func (m messageAdapter) Permalink(ctx context.Context, channelID ids.ChannelID, ts ids.MessageTS, threadTS ids.ThreadTS) (string, error) {
 	if m.fns.Permalink == nil {
 		return "", nil
 	}
-	return m.fns.Permalink(ctx, channelID, ts)
+	return m.fns.Permalink(ctx, channelID, ts, threadTS)
 }
 
 // ChannelServiceFuncs is the closure bundle accepted by
@@ -734,7 +734,7 @@ type MessageSendFunc func(channelID ids.ChannelID, text string) Msg
 
 // MessageForwardFunc forwards a message within the captured workspace,
 // without producing normal send/compose events.
-type MessageForwardFunc func(ctx context.Context, teamID string, sourceChannelID ids.ChannelID, ts ids.MessageTS, destinationChannelID ids.ChannelID) (ForwardResult, error)
+type MessageForwardFunc func(ctx context.Context, teamID string, sourceChannelID ids.ChannelID, ts ids.MessageTS, threadTS ids.ThreadTS, destinationChannelID ids.ChannelID) (ForwardResult, error)
 
 // MessageEditFunc performs the chat.update API call. Returns a Msg
 // (typically MessageEditedMsg) describing the result.
@@ -798,7 +798,7 @@ type ReactionRemoveFunc func(channelID ids.ChannelID, messageTS ids.MessageTS, e
 
 // PermalinkFetchFunc is called to fetch the Slack permalink for a message.
 // For thread replies, pass the reply's ts; Slack returns a thread-aware URL.
-type PermalinkFetchFunc func(ctx context.Context, channelID ids.ChannelID, ts ids.MessageTS) (string, error)
+type PermalinkFetchFunc func(ctx context.Context, channelID ids.ChannelID, ts ids.MessageTS, threadTS ids.ThreadTS) (string, error)
 type FrecentLoadFunc func(limit int) []EmojiEntry
 type FrecentRecordFunc func(emoji string)
 

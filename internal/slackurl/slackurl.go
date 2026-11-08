@@ -76,3 +76,47 @@ func Parse(rawURL string) (Permalink, bool) {
 func HuddleURL(teamID, channelID string) string {
 	return "https://app.slack.com/huddle/" + teamID + "/" + channelID
 }
+
+// Build makes the archive permalink of a message on the workspace at
+// teamURL (auth.test's url, e.g. "https://acme.enterprise.slack.com/"),
+// in the form chat.getPermalink returns and Parse reads:
+// https://<host>/archives/<CHANNEL>/p<ts without the dot>, plus
+// ?thread_ts=<parent>&cid=<CHANNEL> for a thread reply (threadTS set and
+// not the message's own ts). It is how Slack's own client makes a link,
+// with no API call, and what slk falls back to where Enterprise Grid
+// refuses chat.getPermalink.
+//
+// ok is false when teamURL is not https on a *.slack.com host, or ts is
+// not a Slack timestamp, so a link is never built for another host.
+func Build(teamURL string, channelID ids.ChannelID, ts ids.MessageTS, threadTS ids.ThreadTS) (string, bool) {
+	u, err := url.Parse(teamURL)
+	if err != nil || u.Scheme != "https" || !strings.HasSuffix(u.Host, ".slack.com") || u.Host == ".slack.com" {
+		return "", false
+	}
+	p, ok := pValue(string(ts))
+	if !ok || channelID == "" {
+		return "", false
+	}
+	link := "https://" + u.Host + "/archives/" + url.PathEscape(string(channelID)) + "/" + p
+	if threadTS != "" && string(threadTS) != string(ts) {
+		if _, ok := pValue(string(threadTS)); ok {
+			link += "?thread_ts=" + url.QueryEscape(string(threadTS)) + "&cid=" + url.QueryEscape(string(channelID))
+		}
+	}
+	return link, true
+}
+
+// pValue turns "1700000001.000200" into "p1700000001000200": the
+// seconds, then exactly six digits of microseconds.
+func pValue(ts string) (string, bool) {
+	sec, micro, found := strings.Cut(ts, ".")
+	if !found || sec == "" || len(micro) != 6 {
+		return "", false
+	}
+	for _, c := range sec + micro {
+		if c < '0' || c > '9' {
+			return "", false
+		}
+	}
+	return "p" + sec + micro, true
+}
