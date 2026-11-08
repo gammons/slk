@@ -176,6 +176,10 @@ type EventHandler interface {
 	// a user. Never observed on the socket; handled so that another
 	// user's DND can never be mistaken for the authenticated user's.
 	OnUserDNDChange(userID string, enabled bool, endUnix int64)
+	// OnEmojiChanged is delivered for emoji_changed. Slack documents
+	// subtype "add" (name, value) and "remove" (names); the receiver
+	// must treat anything else as "the list changed somehow".
+	OnEmojiChanged(subtype, name string, names []string, value string)
 }
 
 // EphemeralMessage is a message only the current user can see. A
@@ -848,6 +852,18 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			return
 		}
 		handler.OnPrefChange(evt.Name, evt.stringValue())
+
+	case "emoji_changed":
+		var evt struct {
+			Subtype string   `json:"subtype"`
+			Name    string   `json:"name"`
+			Names   []string `json:"names"`
+			Value   string   `json:"value"`
+		}
+		if err := json.Unmarshal(data, &evt); err != nil {
+			return
+		}
+		handler.OnEmojiChanged(evt.Subtype, evt.Name, evt.Names, evt.Value)
 
 	case "badge_counts_updated":
 		// The server's own Activity-badge recalculation: Slack pushes

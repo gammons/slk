@@ -49,6 +49,10 @@ type rtmEventHandler struct {
 	// Back-reference for self-presence/DND state mutation.
 	wsCtx *WorkspaceContext
 
+	// emojiLister refetches emoji.list for an emoji_changed event that
+	// can't be applied as a delta.
+	emojiLister customEmojiLister
+
 	// backfillGate enforces a 30 s minimum between reconnect-driven
 	// catch-up passes. Per-handler so each workspace has its own gate.
 	// Initialized at construction with window = 30 * time.Second.
