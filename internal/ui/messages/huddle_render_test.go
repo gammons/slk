@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/gammons/slk/internal/core"
 )
 
 var huddleNames = map[string]string{
@@ -168,7 +169,7 @@ func TestHuddleNoticeCopyMirrorAndSelected(t *testing.T) {
 	msg := huddleItem(endedRoom(23*60), 0)
 	v := HuddleView(msg, huddleNames)
 	r := RenderMessage(v, 80, &RenderContext{UserNames: huddleNames}, RenderOptions{})
-	rows := WrapRows(v, r, 80, NewWrapStyles(true))
+	rows := WrapRows(v, r, 80, NewWrapStyles(true, false))
 	if len(rows.Plain) != 1 || rows.Plain[0].Text != strings.TrimSpace(rows.Plain[0].Text) ||
 		!strings.Contains(rows.Plain[0].Text, "Alice started a huddle · lasted 23 min") {
 		t.Errorf("plain mirror = %+v", rows.Plain)
@@ -210,7 +211,7 @@ func TestChannelHuddleSelectedMessageFormKeepsStoredAuthor(t *testing.T) {
 	m := New([]MessageItem{huddleItem(endedRoom(60), 2)}, "general")
 	m.SetUserNames(huddleNames)
 	sel, ok := m.SelectedMessage()
-	if !ok || sel.UserID != "USLACKBOT" || !IsSystemNoticeSubtype(sel.Subtype) || !CanOpenThread(sel) {
+	if !ok || sel.UserID != "USLACKBOT" || !core.IsSystemNoticeSubtype(sel.Subtype) || !CanOpenThread(sel) {
 		t.Errorf("selected stored item = %+v", sel)
 	}
 	if out := ansi.Strip(m.View(20, 80)); !strings.Contains(out, "Alice") {

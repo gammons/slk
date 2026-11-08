@@ -681,8 +681,12 @@ type AttachmentRemovedMsg struct {
 // reducer either navigates in-app (Slack archive permalinks for the
 // active workspace) or launches the OS browser. Dispatched by the
 // `o` keybinding (directly for single-link messages) and by the link
-// picker modal.
-type OpenLinkMsg struct{ URL string }
+// picker modal. A link whose scheme is not http(s), mailto or tel is
+// confirmed first; Confirmed marks the message the prompt sends back.
+type OpenLinkMsg struct {
+	URL       string
+	Confirmed bool
+}
 
 // DownloadFileMsg requests download + OS-open of a file attachment.
 // Dispatched by the `d` keybinding (directly for single-file messages)

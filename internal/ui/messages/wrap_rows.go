@@ -6,6 +6,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/bubbles/entrylist"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
@@ -17,6 +18,7 @@ type WrapStyles struct {
 	fill     lipgloss.Style
 	invis    lipgloss.Style
 	selected lipgloss.Style
+	compact  bool
 	focused  bool
 
 	// stats, when non-nil, collects per-sub-step durations (channel
@@ -26,7 +28,7 @@ type WrapStyles struct {
 
 // NewWrapStyles returns the styles for the current theme; focused picks
 // the selection colours.
-func NewWrapStyles(focused bool) WrapStyles {
+func NewWrapStyles(focused bool, compact bool) WrapStyles {
 	return WrapStyles{
 		fill: lipgloss.NewStyle().Background(styles.Background),
 		invis: lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).
@@ -36,6 +38,7 @@ func NewWrapStyles(focused bool) WrapStyles {
 			BorderBackground(styles.SelectionTintColor(focused)).
 			Background(styles.SelectionTintColor(focused)),
 		focused: focused,
+		compact: compact,
 	}
 }
 
@@ -103,7 +106,10 @@ func trimPlainPadding(p entrylist.PlainLine) entrylist.PlainLine {
 // demand.
 func WrapRows(msg MessageItem, r RenderedMessage, width int, s WrapStyles) WrappedRows {
 	rendered := r.Content
-	renderedSel := SelectedHeader(rendered, r.Header, msg.TS, msg.Timestamp, r.HeaderBudget)
+	renderedSel := rendered
+	if !s.compact {
+		renderedSel = SelectedHeader(rendered, r.Header, msg.TS, msg.Timestamp, r.HeaderBudget)
+	}
 
 	// Two filled variants: the theme background for the unselected row
 	// and the selection tint for the selected one. Without per-variant
@@ -132,7 +138,7 @@ func WrapRows(msg MessageItem, r RenderedMessage, width int, s WrapStyles) Wrapp
 		plT0 = time.Now()
 	}
 	plain := entrylist.PlainLines(filledNormal)
-	if IsSystemNoticeSubtype(msg.Subtype) {
+	if core.IsSystemNoticeSubtype(msg.Subtype) {
 		for i := range plain {
 			plain[i] = trimPlainPadding(plain[i])
 		}

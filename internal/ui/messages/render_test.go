@@ -119,6 +119,24 @@ func TestItalicPreservedAtWordBoundaries(t *testing.T) {
 	}
 }
 
+// TestNonHTTPSLinksRenderOSC8 asserts http and file links are
+// hyperlinked, while javascript: targets are not.
+func TestNonHTTPSLinksRenderOSC8(t *testing.T) {
+	for _, target := range []string{"http://example.com/a", "file:///tmp/notes.txt", "ftp://example.com/f"} {
+		out := RenderSlackMarkdown("see <"+target+"|label>", nil, nil)
+		if !strings.Contains(out, "\x1b]8;;"+target) {
+			t.Errorf("expected OSC 8 for %s, got %q", target, out)
+		}
+		if strings.Contains(ansi.Strip(out), "<") {
+			t.Errorf("raw angle brackets left for %s: %q", target, ansi.Strip(out))
+		}
+	}
+	out := RenderSlackMarkdown("<javascript:alert(1)|x>", nil, nil)
+	if strings.Contains(out, "\x1b]8;;") {
+		t.Errorf("javascript: must not be hyperlinked, got %q", out)
+	}
+}
+
 // TestLabeledMailtoLinkRendersJustEmail asserts that Slack's wire form
 // for an emailed link — <mailto:user@host|user@host> — renders as just
 // the email address, not the literal angle-bracket text. Slack
@@ -441,6 +459,62 @@ func TestBlockquoteWrapsUnderTheBar(t *testing.T) {
 	}
 	if quotedRows < 2 {
 		t.Fatalf("quote did not wrap (%d rows); the test no longer exercises wrapping:\n%s", quotedRows, strings.Join(lines, "\n"))
+	}
+}
+
+func TestCompactMessageHasMetadata(t *testing.T) {
+	item := MessageItem{TS: "1.0", UserID: "U1", UserName: "albert", Text: "hello", Timestamp: "10:06 PM"}
+	items := []MessageItem{item}
+	m := New(items, "general")
+	rc := m.renderContext()
+	rc.Compact = true
+	r := RenderMessage(items[0], 60, rc, RenderOptions{})
+	if !strings.Contains(r.Content, item.Timestamp) {
+		t.Fatalf("compact message should contain the timestamp (%s):\n%s", item.Timestamp, r.Content)
+	}
+	if !strings.Contains(r.Content, item.UserName) {
+		t.Fatalf("compact message should contain the username (%s):\n%s", item.UserName, r.Content)
+	}
+}
+func TestCompactMessageIsCompact(t *testing.T) {
+	items := []MessageItem{{TS: "1.0", UserID: "U1", UserName: "albert", Text: "hello", Timestamp: "10:06 PM"}}
+	m := New(items, "general")
+	rc := m.renderContext()
+	rc.Compact = true
+	r := RenderMessage(items[0], 60, rc, RenderOptions{})
+
+	lines := strings.Split(ansi.Strip(r.Content), "\n")
+
+	if len(lines) > 1 {
+		t.Fatalf("compact message should only contain one line, instead contains %d:\n%s", len(lines), r.Content)
+	}
+}
+
+func TestCompactMessageHeaderWrapsCorrectly(t *testing.T) {
+	item := MessageItem{TS: "1.0", UserID: "U1", UserName: "albert123123", Text: "> this somewhat weird message\n> \n> is a quote", Timestamp: "10:06 PM"}
+	items := []MessageItem{item}
+	m := New(items, "general")
+	rc := m.renderContext()
+	rc.Compact = true
+	r := RenderMessage(items[0], 6, rc, RenderOptions{})
+	unwrappedHeader := strings.ReplaceAll(ansi.Strip(r.Header), "\n", " ")
+	if !strings.HasPrefix(unwrappedHeader, item.Timestamp) {
+		t.Fatalf("wrapped header in compact mode should start with the timestamp:\n%s", unwrappedHeader)
+	}
+}
+func TestCompactMessageBlockQuoteHasBars(t *testing.T) {
+	items := []MessageItem{{TS: "1.0", UserID: "U1", UserName: "albert123123", Text: "> this somewhat weird message\n> \n> is a quote", Timestamp: "10:06 PM"}}
+	m := New(items, "general")
+	rc := m.renderContext()
+	rc.Compact = true
+	r := RenderMessage(items[0], 6, rc, RenderOptions{})
+
+	lines := strings.Split(ansi.Strip(r.Content[len(r.Header)+1:]), "\n")
+
+	for _, line := range lines {
+		if !strings.Contains(line, blockquoteStyle().GetBorderStyle().Left) {
+			t.Fatalf("blockquote in compact mode should wrap correctly but doesn't:\n%s\nall lines:\n%s", line, r.Content[len(r.Header)+1:])
+		}
 	}
 }
 
@@ -783,6 +857,7 @@ func TestRenderEmojiTokensInline_ImageModeOn_WarmPath(t *testing.T) {
 // internal/emoji's place_test.go is separate.)
 type fakePlaceFetcher struct {
 	prerender map[string]imgpkg.Render
+	err       error
 }
 
 func newFakePlaceFetcher() *fakePlaceFetcher {
@@ -799,7 +874,7 @@ func (f *fakePlaceFetcher) Prerendered(key string, t goimage.Point, proto imgpkg
 }
 
 func (f *fakePlaceFetcher) Fetch(ctx context.Context, req imgpkg.FetchRequest) (imgpkg.FetchResult, error) {
-	return imgpkg.FetchResult{}, nil
+	return imgpkg.FetchResult{}, f.err
 }
 
 // TestBgANSIForBasicColor asserts that bgANSIFor emits native ANSI 16

@@ -4,8 +4,9 @@
 // newmessagepicker overlay. When the picker returns a Result, the
 // handler dispatches a new submit via ChannelService.OpenConversation
 // (with a monotonic RequestID) and tracks the in-flight state on App.
-// On Esc, marks the in-flight as cancelled so a late result is
-// dropped (see reducer_new_message.go for the dropping logic).
+// Leaving the mode (Esc, ctrl+c) marks the in-flight as cancelled so a
+// late result is dropped (see closeModal in app.go, and
+// reducer_new_message.go for the dropping logic).
 package ui
 
 import (
@@ -36,14 +37,9 @@ func handleNewMessageMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		return a.openConversation(result.UserIDs, msgPrefill{})
 	}
 
-	// Picker closed itself (Esc). Mark any in-flight submit as
-	// cancelled so its eventual result is dropped. Switch back to
-	// ModeNormal.
+	// Picker closed itself (Esc). Leaving the mode cancels any
+	// in-flight submit (closeModal).
 	if !a.newMessagePicker.IsVisible() {
-		if a.newMessageInFlightID != 0 {
-			a.newMessageCancelled = true
-			a.abandonMsgPrefill()
-		}
 		a.SetMode(ModeNormal)
 	}
 	return nil

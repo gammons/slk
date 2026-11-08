@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/gammons/slk/internal/linkscheme"
 )
 
 // Sentinel runes from the Unicode Private Use Area. Treated as opaque
@@ -48,7 +50,7 @@ var (
 	reUser      = regexp.MustCompile(`<@([UW][A-Z0-9]+)>`)
 	reChannel   = regexp.MustCompile(`<#([CG][A-Z0-9]+)(?:\|([^>]*))?>`)
 	reBroadcast = regexp.MustCompile(`<!([a-z]+(?:\^[A-Za-z0-9]+)?)(?:\|([^>]*))?>`)
-	reLink      = regexp.MustCompile(`<(https?://[^|>]+)(?:\|([^>]*))?>`)
+	reLink      = regexp.MustCompile(`<((?:` + linkscheme.Alternation + `)[^|>]+)(?:\|([^>]*))?>`)
 	// Slack emoji shortcode. Matches the canonical wire form
 	// :name: where name uses lowercase ASCII letters, digits,
 	// underscores, plus, or hyphen. Skin-tone modifiers like
@@ -123,7 +125,10 @@ func tokenize(s string) (string, []token) {
 			}
 		case ':':
 			loc := reEmoji.FindStringSubmatchIndex(s[i:])
-			if loc != nil && loc[0] == 0 {
+			// "see:https://x" is text and a URL, not the emoji :https:
+			// (the closing colon is the scheme's). An emoji inside or
+			// after a URL is still one: "x/a:tada:" ends the URL.
+			if loc != nil && loc[0] == 0 && typedURLLen(s[i+1:]) == 0 {
 				full := s[i : i+loc[1]]
 				tok := token{kind: tokEmoji, id: s[i+loc[2] : i+loc[3]]}
 				table = append(table, tok)

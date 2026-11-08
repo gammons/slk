@@ -8,6 +8,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/bubbles/buttonrow"
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/styles"
@@ -77,13 +78,17 @@ func appendBlock(out *RenderResult, b Block, ctx Context, width int) {
 	case DividerBlock:
 		out.Lines = append(out.Lines, renderDivider(width))
 	case HeaderBlock:
-		out.Lines = append(out.Lines, renderHeader(v.Text, width))
+		text := v.Text
+		if ctx.RenderPlainText != nil {
+			text = ctx.RenderPlainText(text)
+		}
+		out.Lines = append(out.Lines, renderHeader(text, width))
 	case SectionBlock:
 		appendSection(out, v, ctx, width)
 	case ContextBlock:
 		appendContext(out, v, ctx, width)
 	case ActionsBlock:
-		appendActions(out, v, width)
+		appendActions(out, v, ctx, width)
 	case ImageBlock:
 		appendImageBlock(out, v, ctx, width)
 	case RichTextBlock:
@@ -112,7 +117,7 @@ func appendSection(out *RenderResult, s SectionBlock, ctx Context, width int) {
 
 	switch acc := s.Accessory.(type) {
 	case LabelAccessory:
-		label := renderControlLabel(acc.Kind, acc.Label)
+		label := renderControlLabel(acc.Kind, acc.Label, ctx.RenderPlainText)
 		accessoryW = lipgloss.Width(label)
 		accessoryLines = []string{label}
 		out.Interactive = true
@@ -250,7 +255,7 @@ func appendContext(out *RenderResult, c ContextBlock, ctx Context, width int) {
 	}
 }
 
-func appendActions(out *RenderResult, a ActionsBlock, width int) {
+func appendActions(out *RenderResult, a ActionsBlock, ctx Context, width int) {
 	if len(a.Elements) == 0 {
 		return
 	}
@@ -259,7 +264,7 @@ func appendActions(out *RenderResult, a ActionsBlock, width int) {
 	const gapW = 2
 	labels := make([]string, len(a.Elements))
 	for i, el := range a.Elements {
-		labels[i] = renderControlLabel(el.Kind, el.Label)
+		labels[i] = renderControlLabel(el.Kind, el.Label, ctx.RenderPlainText)
 	}
 	out.Lines = append(out.Lines, buttonrow.Rows(buttonrow.Layout(labels, width, gapW), gapW)...)
 }
@@ -321,7 +326,10 @@ func appendImageBlock(out *RenderResult, b ImageBlock, ctx Context, width int) {
 // section accessory or actions element. The shape depends on the
 // element kind. Used by both Task 7 (accessories) and Task 9
 // (actions block elements).
-func renderControlLabel(kind, label string) string {
+func renderControlLabel(kind, label string, renderPlainText func(string) string) string {
+	if label != "" && renderPlainText != nil {
+		label = renderPlainText(label)
+	}
 	switch kind {
 	case "button", "workflow_button":
 		text := label
@@ -458,32 +466,11 @@ func renderUnsupported(typeName string, width int) string {
 	return mutedStyle().Render(label)
 }
 
-// truncateToWidth returns s truncated by display columns to at most
-// width. If truncation occurs and width >= 1, the last visible col
-// is replaced with '…'.
+// truncateToWidth clips to display columns without breaking ANSI escapes or
+// graphemes. If truncation occurs, the last visible column is replaced with '…'.
 func truncateToWidth(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	if lipgloss.Width(s) <= width {
-		return s
-	}
-	target := width - 1
-	if target < 0 {
-		target = 0
-	}
-	var b strings.Builder
-	used := 0
-	for _, r := range s {
-		w := lipgloss.Width(string(r))
-		if used+w > target {
-			break
-		}
-		b.WriteRune(r)
-		used += w
-	}
-	if width >= 1 {
-		b.WriteRune('…')
-	}
-	return b.String()
+	return ansi.Truncate(s, width, "…")
 }

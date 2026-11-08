@@ -1856,10 +1856,7 @@ func (m *Model) buildCache(width int) {
 	threadsCursor := cursorSelected + "⚑ Threads"
 	threadsActiveLabel := activeBorder + "⚑ Threads"
 	if m.threadsUnread > 0 {
-		// Render "•N" as a single styled span so the dot glyph and the digits
-		// stay adjacent in the output (no ANSI reset splits them). Tests rely
-		// on the literal substring "•N" being searchable in View() output.
-		badge := " " + dotStyle.Render("•"+fmt.Sprintf("%d", m.threadsUnread))
+		badge := m.countBadge(threadsLabel, m.threadsUnread, width, dotStyle)
 		threadsLabel += badge
 		threadsCursor += badge
 		threadsActiveLabel += badge
@@ -1898,7 +1895,7 @@ func (m *Model) buildCache(width int) {
 	activityCursor := cursorSelected + "◉ Activity"
 	activityActiveLabel := activeBorder + "◉ Activity"
 	if m.activityUnread > 0 {
-		badge := " " + dotStyle.Render("•"+fmt.Sprintf("%d", m.activityUnread))
+		badge := m.countBadge(activityLabel, m.activityUnread, width, dotStyle)
 		activityLabel += badge
 		activityCursor += badge
 		activityActiveLabel += badge
@@ -2312,6 +2309,17 @@ func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.
 	selected := cursor + glyph + " " + emojiPrefix + displayName + aggregates
 	return messages.ReapplyBgAfterResets(label, bgAnsi),
 		messages.ReapplyBgAfterResets(selected, bgAnsi), mentions
+}
+
+// countBadge is the Threads or Activity count after left: "•N" (one
+// span, so tests find it), or the mention badge at the row's end under
+// right_align_badges, as Slack draws it.
+func (m *Model) countBadge(left string, n, width int, dotStyle lipgloss.Style) string {
+	if !m.rightAlignBadges {
+		return " " + dotStyle.Render("•"+fmt.Sprintf("%d", n))
+	}
+	badge := styles.MentionBadgeStyle().Render(formatMentionBadge(n))
+	return badgeGap(width, left, badge) + badge
 }
 
 // badgeGap is the run of spaces that pushes badge to the right end of a

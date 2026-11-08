@@ -2468,3 +2468,34 @@ func seedNavHistory(t *testing.T, a *App) {
 			stack.entries, stack.cursor)
 	}
 }
+
+// TestChord_GGActivityViewJumpsToTop pins the Activity-view arm of the
+// `gg` chord (https://github.com/gammons/slk/issues/421): handleGoToBottom
+// routed G at the activity view, but handleGoToTop had no ViewActivity
+// case, so gg — which works everywhere else — was inert in the Activity
+// feed and the only way back to the newest row was scrolling by hand.
+func TestChord_GGActivityViewJumpsToTop(t *testing.T) {
+	a := newTestApp(t, withSize(120, 30), withActiveTeam("T1"), withView(ViewActivity))
+	a.Update(ActivityViewActivatedMsg{})
+	a.Update(ActivityListLoadedMsg{TeamID: "T1", Items: []core.ActivityItem{
+		{Key: "k1", Type: "message_reaction", ChannelID: "C1", TS: "1.1"},
+		{Key: "k2", Type: "message_reaction", ChannelID: "C1", TS: "2.2"},
+		{Key: "k3", Type: "message_reaction", ChannelID: "C1", TS: "3.3"},
+	}})
+
+	// G lands on the last (oldest) row — the working half of the pair.
+	_ = dispatchModeKey(a, keyPress('G'))
+	if got := a.activityView.SelectedIndex(); got != 2 {
+		t.Fatalf("selected index after G = %d, want 2: precondition failed, G did not reach the activity view", got)
+	}
+
+	// gg must mirror it back to the first (newest) row.
+	_ = dispatchModeKey(a, keyPress('g'))
+	_ = dispatchModeKey(a, keyPress('g'))
+	if a.pendingTop {
+		t.Error("pendingTop still armed after the chord completed")
+	}
+	if got := a.activityView.SelectedIndex(); got != 0 {
+		t.Errorf("selected index after gg = %d, want 0", got)
+	}
+}

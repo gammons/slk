@@ -234,14 +234,16 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	// channel other than the restored one rendering its custom emoji as
 	// literal `:name:`.
 	//
-	// So it is published as a head start, not an answer: the first
-	// channel's emoji resolve without waiting on a round trip, and the
-	// emoji.list fetch in run() replaces this with the full set as soon
-	// as it lands. Empty on the conversations.history fallback and when
-	// no channel was opened; emoji.list covers those the same way.
-	if len(res.Emojis) > 0 {
-		wctx.SetCustomEmoji(res.Emojis)
+	// So it is published as a head start, not an answer: it goes on top
+	// of the persisted set, and unless that set is fresh the emoji.list
+	// fetch in run() replaces the result as soon as it lands. Empty on
+	// the conversations.history fallback and when no channel was
+	// opened; emoji.list covers those the same way.
+	emojis, freshFor := bootCustomEmoji(db, client.TeamID(), res.Emojis, time.Now())
+	if len(emojis) > 0 {
+		wctx.SetCustomEmoji(emojis)
 	}
+	wctx.customEmojiFreshFor = freshFor
 	hydrateFirstSight(db, client.TeamID(), res)
 
 	// Initialize Slack-native section store if enabled. Bootstrap is
@@ -541,6 +543,16 @@ func (h *rtmEventHandler) OnConnect() {
 		debuglog.Backfill("team=%s first connect: skipping catch-up, bootstrap.Run already covered it", h.workspaceID)
 	} else {
 		h.syncOnReconnect("reconnect")
+		// emoji_changed events sent while the socket was down are lost;
+		// mark the cache stale so the next launch fetches the list, and
+		// bump emojiSeq so a fetch begun before the drop can't save its
+		// list as fresh.
+		if h.wsCtx != nil && h.db != nil {
+			h.wsCtx.emojiMu.Lock()
+			h.wsCtx.emojiSeq++
+			h.staleCustomEmoji()
+			h.wsCtx.emojiMu.Unlock()
+		}
 	}
 
 	// Force-stale the active channel's membership cache and re-fetch.

@@ -116,7 +116,7 @@ func (d *Demo) services() services {
 				dir.observe(Event{Kind: EventMessageSent, TeamID: w.teamOf(ch), ChannelID: ch})
 				return ui.MessageSentMsg{ChannelID: ch, Message: m}
 			},
-			Forward: func(context.Context, string, ids.ChannelID, ids.MessageTS, ids.ChannelID) (core.ForwardResult, error) {
+			Forward: func(context.Context, string, ids.ChannelID, ids.MessageTS, ids.ThreadTS, ids.ChannelID) (core.ForwardResult, error) {
 				return core.ForwardResult{}, errUnavailable
 			},
 			Edit: func(channelID ids.ChannelID, ts ids.MessageTS, _ string) core.Msg {
@@ -135,7 +135,7 @@ func (d *Demo) services() services {
 				}
 				return ui.MessageMarkedUnreadMsg{ChannelID: string(channelID), ThreadTS: string(threadTS), BoundaryTS: string(boundaryTS), UnreadCount: unread}
 			},
-			Permalink: func(context.Context, ids.ChannelID, ids.MessageTS) (string, error) {
+			Permalink: func(context.Context, ids.ChannelID, ids.MessageTS, ids.ThreadTS) (string, error) {
 				return "", errUnavailable
 			},
 		}),

@@ -1,6 +1,9 @@
 package messages
 
 import (
+	"bytes"
+	"fmt"
+	goimage "image"
 	"strings"
 	"testing"
 	"time"
@@ -8,6 +11,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/bubbles/entrylist"
+	emojiutil "github.com/gammons/slk/internal/emoji"
+	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/peerstatus"
 )
 
@@ -17,7 +22,7 @@ func TestWrapRows_LongTimestampOnlyOnSelected(t *testing.T) {
 	m := New(items, "general")
 	const width = 40
 	r := RenderMessage(items[0], width, m.renderContext(), RenderOptions{})
-	w := WrapRows(items[0], r, width, NewWrapStyles(true))
+	w := WrapRows(items[0], r, width, NewWrapStyles(true, false))
 
 	if len(w.Lines) != len(w.Selected) || len(w.Lines) != len(w.Plain) {
 		t.Fatalf("variants differ in height: lines=%d selected=%d plain=%d", len(w.Lines), len(w.Selected), len(w.Plain))
@@ -36,9 +41,22 @@ func TestWrapRows_LongTimestampOnlyOnSelected(t *testing.T) {
 			t.Errorf("plain row %d carries the border column: %q", i, p.Text)
 		}
 	}
-	short := NewWrapStyles(true).SelectedVariant(w.ShortSrc, width)
+	short := NewWrapStyles(true, false).SelectedVariant(w.ShortSrc, width)
 	if len(short) != len(w.Selected) {
 		t.Errorf("short variant height %d != selected %d", len(short), len(w.Selected))
+	}
+}
+
+func TestWrapRows_OnlyShortTimestampWhenCompact(t *testing.T) {
+	pinLongTSClock(t)
+	items := longTSItems()
+	m := New(items, "general")
+	const width = 40
+	r := RenderMessage(items[0], width, m.renderContext(), RenderOptions{})
+	w := WrapRows(items[0], r, width, NewWrapStyles(true, true))
+
+	if got := ansi.Strip(strings.Join(w.Selected, "\n")); strings.Contains(got, "Tue Sep 29") {
+		t.Errorf("selected rows carry the long timestamp in compact mode:\n%s", got)
 	}
 }
 
@@ -47,7 +65,7 @@ func TestWrapRows_NoShortSrcWithoutLongTimestamp(t *testing.T) {
 	items := []MessageItem{{TS: "", UserID: "U1", UserName: "priya", Text: "hi", Timestamp: "3:40 PM"}}
 	m := New(items, "general")
 	r := RenderMessage(items[0], 40, m.renderContext(), RenderOptions{})
-	if w := WrapRows(items[0], r, 40, NewWrapStyles(false)); w.ShortSrc != "" {
+	if w := WrapRows(items[0], r, 40, NewWrapStyles(false, false)); w.ShortSrc != "" {
 		t.Errorf("ShortSrc = %q, want empty when the selected header is unchanged", w.ShortSrc)
 	}
 }
@@ -71,7 +89,7 @@ func TestWrapRows_LongAuthorKeepsAvatarRowsAdjacent(t *testing.T) {
 	if headerRows < 2 {
 		t.Fatalf("long author header did not wrap: %q", header)
 	}
-	wrapped := WrapRows(msg, rendered, width, NewWrapStyles(true))
+	wrapped := WrapRows(msg, rendered, width, NewWrapStyles(true, false))
 	for _, tc := range []struct {
 		name string
 		rows []string
@@ -119,7 +137,7 @@ func TestWrapRows_WrappedHeaderKeepsTimestampWholeForSelection(t *testing.T) {
 	if header := ansi.Strip(rendered.Header); !strings.Contains(header, msg.Timestamp) {
 		t.Errorf("formatted timestamp split across header rows: %q", header)
 	}
-	wrapped := WrapRows(msg, rendered, width, NewWrapStyles(true))
+	wrapped := WrapRows(msg, rendered, width, NewWrapStyles(true, false))
 	selected := ansi.Strip(strings.Join(wrapped.Selected, "\n"))
 	if !strings.Contains(selected, LongTimestamp(msg.TS, msg.Timestamp)) {
 		t.Errorf("selected header lost its fitting date-qualified timestamp:\n%s", selected)
@@ -159,6 +177,120 @@ func TestWrapRows_WrappedHeaderKeepsTimestampWholeForSelection(t *testing.T) {
 	}
 }
 
+func TestWrapRows_WrappedAvatarHeaderKeepsStatusImageAndTimestamp(t *testing.T) {
+	pinLongTSClock(t)
+	t.Setenv("TMUX", "")
+	wasActive, wasCells := emojiutil.ImageModeActive(), emojiutil.ImageModeCells()
+	emojiutil.SetImageMode(true, 2)
+	t.Cleanup(func() { emojiutil.SetImageMode(wasActive, wasCells) })
+
+	const width = 27
+	const imageURL = "https://example.test/wrapped-header-status.png"
+	key := emojiutil.EmojiCacheKey(imageURL)
+	kitty := imgpkg.NewKittyRenderer(imgpkg.NewRegistry())
+	kitty.SetSource(key, goimage.NewRGBA(goimage.Rect(0, 0, 2, 2)))
+	placed := kitty.RenderKey(key, goimage.Pt(2, 1))
+	fetcher := newFakePlaceFetcher()
+	fetcher.setPrerendered(key, goimage.Pt(2, 1), placed)
+	msg := MessageItem{
+		TS:        longTSAt(time.Date(2026, 9, 29, 2, 12, 0, 0, time.Local)),
+		UserID:    "U_FIXTURE",
+		UserName:  "Long Display Name (weekdays, 11am-8pm Pacific Time)",
+		Timestamp: "2:12 AM",
+		Text:      "body",
+	}
+	m := New([]MessageItem{msg}, "fixture")
+	m.SetUserStatuses(map[string]peerstatus.Status{msg.UserID: {Emoji: ":pager:", Text: "On call"}})
+	m.SetEmojiContext(EmojiContext{
+		PlaceCtx: emojiutil.PlaceContext{Fetcher: fetcher}, Cells: 2,
+		Customs: map[string]string{"pager": imageURL},
+	})
+	rendered := RenderMessage(msg, width, m.renderContext(), RenderOptions{Avatar: "TOP!\nLOW!"})
+	if header := ansi.Strip(rendered.Header); !strings.Contains(header, msg.Timestamp) {
+		t.Fatalf("formatted timestamp split across header rows: %q", header)
+	}
+	wrapped := WrapRows(msg, rendered, width, NewWrapStyles(true, false))
+	if len(wrapped.Lines) != len(wrapped.Selected) {
+		t.Fatalf("selection changed message height: normal=%d selected=%d", len(wrapped.Lines), len(wrapped.Selected))
+	}
+	headerRows := lipgloss.Height(rendered.Header)
+	longTimestamp := LongTimestamp(msg.TS, msg.Timestamp)
+	for _, tc := range []struct {
+		name     string
+		rows     []string
+		selected bool
+	}{
+		{"normal", wrapped.Lines, false},
+		{"selected", wrapped.Selected, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			frame := strings.Join(tc.rows, "\n")
+			plain := ansi.Strip(frame)
+			if strings.Contains(plain, longTimestamp) != tc.selected {
+				t.Fatalf("date-qualified timestamp selected=%v:\n%s", tc.selected, plain)
+			}
+			top, bottom := ansi.Strip(tc.rows[0]), ansi.Strip(tc.rows[1])
+			topCol := strings.Index(top, "TOP!")
+			if topCol < 0 || strings.Index(bottom, "LOW!") != topCol {
+				t.Fatalf("wrapped header split the avatar:\n%s", plain)
+			}
+			if headerRows >= len(tc.rows) || !strings.Contains(ansi.Strip(tc.rows[headerRows]), msg.Text) {
+				t.Fatalf("body did not follow the complete header:\n%s", plain)
+			}
+			for _, row := range tc.rows {
+				if lipgloss.Width(row) > width {
+					t.Fatalf("message row exceeded pane width: %q", ansi.Strip(row))
+				}
+			}
+			canvas := lipgloss.NewCanvas(width, len(tc.rows))
+			canvas.Compose(lipgloss.NewLayer(frame))
+			var author strings.Builder
+			var statusCells []goimage.Point
+			for y := range headerRows {
+				for x := 6; x < width; x++ {
+					cell := canvas.CellAt(x, y)
+					if cell == nil {
+						continue
+					}
+					author.WriteString(cell.Content)
+					if !strings.HasPrefix(cell.Content, string(imgpkg.PlaceholderRune)) {
+						continue
+					}
+					statusCells = append(statusCells, goimage.Pt(x, y))
+					if cell.Style.Fg == nil {
+						t.Fatal("status image lost its image ID")
+					}
+					r, g, b, _ := cell.Style.Fg.RGBA()
+					if got := (r>>8)<<16 | (g>>8)<<8 | b>>8; got != placed.ID {
+						t.Fatalf("status references image %d, want %d", got, placed.ID)
+					}
+				}
+				author.WriteByte(' ')
+			}
+			name := strings.Join(strings.Fields(author.String()), " ")
+			if !strings.Contains(name, msg.UserName) || strings.Contains(name, "…") {
+				t.Fatalf("wrapped author was shortened: %q", name)
+			}
+			if strings.Contains(plain, "📟") {
+				t.Fatal("warm status image fell back to the pager glyph")
+			}
+			if len(statusCells) != 2 || statusCells[0].Y == 0 ||
+				statusCells[1] != statusCells[0].Add(goimage.Pt(1, 0)) {
+				t.Fatalf("status must retain two adjacent cells on a continuation row: %v", statusCells)
+			}
+		})
+	}
+	var uploads bytes.Buffer
+	for _, flush := range rendered.BodyFlushes {
+		if err := flush(&uploads); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if want := fmt.Sprintf("\x1b_Ga=T,f=100,t=d,i=%d,", placed.ID); !strings.Contains(uploads.String(), want) {
+		t.Fatalf("status image was not uploaded for its placement: %q", uploads.String())
+	}
+}
+
 func TestWrapRows_OverlongTimestampStaysWithinHeaderBudget(t *testing.T) {
 	const width = 24
 	msg := MessageItem{
@@ -180,7 +312,7 @@ func TestWrapRows_OverlongTimestampStaysWithinHeaderBudget(t *testing.T) {
 			t.Errorf("overlong timestamp exceeded header budget: %q", ansi.Strip(row))
 		}
 	}
-	wrapped := WrapRows(msg, rendered, width, NewWrapStyles(true))
+	wrapped := WrapRows(msg, rendered, width, NewWrapStyles(true, false))
 	if len(wrapped.Lines) != len(wrapped.Selected) {
 		t.Fatal("selection changed the overlong timestamp's row count")
 	}
@@ -224,7 +356,7 @@ func TestWrapRows_LongAuthorKeepsHeaderMetadata(t *testing.T) {
 			t.Fatalf("author header row exceeds its width budget: %q", header)
 		}
 	}
-	wrapped := WrapRows(msg, rendered, width, NewWrapStyles(true))
+	wrapped := WrapRows(msg, rendered, width, NewWrapStyles(true, false))
 	for _, rows := range [][]string{wrapped.Lines, wrapped.Selected} {
 		if !strings.Contains(ansi.Strip(rows[lipgloss.Height(rendered.Header)]), "body") {
 			t.Fatalf("body did not follow the wrapped header: %q", ansi.Strip(strings.Join(rows, "\n")))
@@ -256,7 +388,7 @@ func TestWrapRows_WrappedHeaderKeepsActionRowsAligned(t *testing.T) {
 	rendered := RenderMessage(msg, width, m.renderContext(), RenderOptions{
 		Avatar: "TOP!\nLOW!", ImageHits: true, ReplyAffordance: true,
 	})
-	wrapped := WrapRows(msg, rendered, width, NewWrapStyles(true))
+	wrapped := WrapRows(msg, rendered, width, NewWrapStyles(true, false))
 	foundFile, foundReaction := false, false
 	for _, hits := range [][]entrylist.Hit{rendered.Hits, wrapped.LinkHits} {
 		for _, hit := range hits {

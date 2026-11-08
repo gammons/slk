@@ -10,7 +10,8 @@
 - Live message updates: an edit, a link preview Slack adds a moment after you post, or a preview you remove all update the message in place. Only a real edit adds the "(edited)" mark.
 - Slack markdown rendering (bold, italic, strikethrough, code, blockquotes, links, mentions)
 - User mentions in channel and thread content, including forwarded/shared previews, resolve to display names from the workspace cache or in the background and refresh in place. Unresolved users retain their Slack ID; literal `@ID` text is left unchanged.
-- Emoji shortcodes (`:rocket:` → 🚀)
+- Emoji shortcodes (`:rocket:` → 🚀), including Block Kit headers/text and button/accessory labels (`:white_check_mark: Resolve` → `✅ Resolve`); plain headers and control labels are not interpreted as markdown. Long headers clip to display width without breaking emoji image placements.
+- In image-emoji mode, workspace custom definitions take precedence over built-in names, including when following emoji aliases. Author-status emoji in channel and thread message headers use the same image renderer as the message body. If a status image fails to load, its existing glyph fallback remains visible.
 - Day separators (Today, Yesterday, Monday, full date)
 - Infinite scroll backfill into SQLite cache
 - Search: vim-style in-channel search (`/`, `n`/`N`) over cached history, plus server-side workspace search (`Ctrl+f`) with `from:` / `in:` / `before:` modifiers
@@ -20,7 +21,7 @@
 - Edited / threaded message indicators
 - ANSI-aware wrapping and truncation (no broken color codes mid-line)
 - Drag-to-copy: drag the mouse across messages to highlight them; release to copy plain text to the system clipboard via OSC 52
-- Copy message text (`y`) and copy permalink (`Y` / `C`) to the system clipboard via OSC 52
+- Copy message text (`y`) and copy permalink (`Y` / `C`) to the system clipboard via OSC 52. On an Enterprise Grid workspace that refuses Slack's permalink API, slk builds the link itself, as Slack's own client does, so copying still works
 - Copy huddle link (`H` or `:huddle`) — the `https://app.slack.com/huddle/<TEAM>/<CHANNEL>` deep link Slack's own "Copy huddle link" produces, for the active conversation (channels, DMs and group DMs; a thread copies its parent's). Opening it joins the live huddle or shows Slack's huddle panel for that conversation. The profile dialog (`K`) also offers `c` / a click on the 📋 on the "🎧 In a huddle" row when Slack reported which channel the person's huddle is in.
 - Forward a message or thread reply (`F`) — the same fuzzy picker as `Ctrl+t`, limited to joined channels and existing DMs in the current workspace. Enter shares the original permalink with Slack preview unfurling enabled; Esc cancels. Keeps your current channel and draft unchanged. Slack controls preview availability and access to the original message. Pressing Enter on the forwarded message navigates to the original.
 
@@ -61,6 +62,7 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
   The header is a breadcrumb naming the channel, the thread's author, and the
   reply count (e.g. `# general › Thread from alice · 2 replies`).
 - Live thread reply routing, real-time updates
+- Emoji images in the thread parent render even when there are no replies; they do not depend on another message having uploaded the image first.
 - Also send to channel: `Ctrl+O` while composing a thread reply toggles Slack's
   "Also send to #channel" broadcast (`reply_broadcast=true`), and `Alt+Enter`
   sends with broadcast in a single keystroke. An accent-colored
@@ -188,6 +190,7 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
 - Drop-in custom themes (`~/.config/slk/themes/*.toml`)
 - Live theme switcher (`Ctrl+y`); `Alt+y` / `Alt+Shift+y` cycle to the next / previous theme
 - TOML config for appearance, animations, notifications, and channel sections
+- Opt-in IRC-like "compact" style with less padding, no avatars, and same-line usernames via `appearance.compact`
 - Deterministic per-user username coloring, opt-in via `colored_usernames`
 
 See [[Configuration]] for the full `config.toml` reference and [[Keybindings]] for the key map.

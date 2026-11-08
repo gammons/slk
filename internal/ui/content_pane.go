@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/thread"
 )
@@ -63,4 +64,26 @@ func (a *App) focusedContentPane() (contentPane, string, bool) {
 		return a.threadPanel, a.threadPanel.ChannelID(), true
 	}
 	return nil, "", false
+}
+
+// selectedThreadTS is the thread the selected message belongs to, for a
+// permalink: the thread pane's parent when that pane has focus, else the
+// channel message's own thread_ts (set on a parent, where it equals its
+// ts, and on a reply also sent to the channel). Empty when nothing is
+// selected or the message is in no thread.
+func (a *App) selectedThreadTS() ids.ThreadTS {
+	p, _, ok := a.focusedContentPane()
+	if !ok {
+		return ""
+	}
+	msg, ok := p.SelectedMessage()
+	if !ok {
+		return ""
+	}
+	if a.focusedPanel == PanelThread {
+		if ts := a.threadPanel.ThreadTS(); ts != "" {
+			return ids.ThreadTS(ts)
+		}
+	}
+	return ids.ThreadTS(msg.ThreadTS)
 }

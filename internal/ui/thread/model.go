@@ -3,6 +3,7 @@ package thread
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"math"
 	"slices"
 	"strings"
@@ -36,6 +37,7 @@ type Model struct {
 	selected         int
 	focused          bool
 	coloredUsernames bool
+	compact          bool
 	showAvatars      bool
 	avatarFn         messages.AvatarFunc
 	userNames        map[string]string
@@ -177,7 +179,7 @@ func (m *Model) SetImageContext(ctx imgrender.ImageContext) {
 	m.InvalidateCache()
 }
 
-// SetEmojiContext configures emoji-image rendering for thread replies.
+// SetEmojiContext configures emoji-image rendering for the parent and replies.
 // Should be called once at startup (cmd/slk/main.go) and again after
 // CustomEmojisLoadedMsg arrives (via SetEmojiCustoms). Mirrors
 // messages.Model.SetEmojiContext.
@@ -604,6 +606,12 @@ func (m *Model) SetColoredUsernames(enabled bool) {
 	m.InvalidateCache()
 }
 
+// SetCompact enables or disables the compact message view.
+func (m *Model) SetCompact(enabled bool) {
+	m.compact = enabled
+	m.InvalidateCache()
+}
+
 // SetShowAvatars draws the avatar from SetAvatarFunc beside each message
 // ([appearance] thread_avatars). Invalidates the render cache.
 func (m *Model) SetShowAvatars(enabled bool) {
@@ -1010,7 +1018,7 @@ func (m *Model) selectedLines(i int) []string {
 		return e.Lines
 	}
 	return m.cache[e.Ref].SelectedLines(e, m.list.HasSelection(), func(src string) []string {
-		return messages.NewWrapStyles(m.focused).SelectedVariant(src, m.cacheWidth)
+		return messages.NewWrapStyles(m.focused, m.compact).SelectedVariant(src, m.cacheWidth)
 	})
 }
 
@@ -1116,11 +1124,23 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// The parent is rendered every frame for its current state (selected
 	// or not, focused or not) and is entry 0 of the list: its rows, then
 	// the rule under it. The rule is not selectable text (Plain stops
-	// before it). We discard the parent's image flushes and reaction hits
-	// in v1, as before; its image hits are kept so a click on its image
-	// opens the preview.
+	// before it). Its image hits are kept for previews; reaction hits
+	// remain omitted.
 	parentIsSelected := m.selected == parentSelected
 	parentRendered := m.renderMessage(m.parent, width, parentIsSelected)
+	// The parent bypasses the reply cache and its upload loop. Flush its
+	// groups in draw order even when the thread has no replies. Kitty
+	// callbacks guard retransmission and emit each transfer atomically.
+	for _, flushes := range [4][]func(io.Writer) error{
+		parentRendered.BodyFlushes, parentRendered.BlockFlushes,
+		parentRendered.ReactionFlushes, parentRendered.AttachmentFlushes,
+	} {
+		for _, flush := range flushes {
+			if flush != nil {
+				_ = flush(imgpkg.KittyOutput)
+			}
+		}
+	}
 	parentContent, parentHeader, parentHeaderBudget := parentRendered.Content, parentRendered.Header, parentRendered.HeaderBudget
 	// Replies only get a day divider when their day differs from the
 	// parent's, so the parent header carries its own date; otherwise a
@@ -1246,7 +1266,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 		// thick left border ▌ is applied at cache-build time so View()
 		// picks a slice (normal vs selected) instead of running lipgloss
 		// for every visible reply on every j/k.
-		wrap := messages.NewWrapStyles(m.focused)
+		wrap := messages.NewWrapStyles(m.focused, m.compact)
 		for i, reply := range m.replies {
 			// renderMessage's last arg ("isSelected") drives reaction-
 			// nav pill highlighting, so it MUST be i == m.selected.
@@ -1441,6 +1461,7 @@ func (m *Model) renderContext() *messages.RenderContext {
 	}
 	return &messages.RenderContext{
 		ColoredUsernames: m.coloredUsernames,
+		Compact:          m.compact,
 		UserStatuses:     m.userStatuses,
 		UserNames:        m.userNames,
 		ChannelNames:     m.channelNames,
@@ -1459,7 +1480,7 @@ func (m *Model) renderContext() *messages.RenderContext {
 func (m *Model) renderMessage(msg messages.MessageItem, width int, isSelected bool) messages.RenderedMessage {
 	msg = m.huddleView(msg)
 	opt := messages.RenderOptions{IsSelected: isSelected, ImageHits: true}
-	if m.showAvatars && m.avatarFn != nil {
+	if !m.compact && m.showAvatars && m.avatarFn != nil {
 		opt.Avatar = m.avatarFn(msg.UserID)
 	}
 	return messages.RenderMessage(msg, width, m.renderContext(), opt)

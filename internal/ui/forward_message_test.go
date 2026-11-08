@@ -3,12 +3,14 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/core/blocks"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/messages"
 )
@@ -20,9 +22,10 @@ func TestForwardMessageSelected(t *testing.T) {
 				withMessages(messages.MessageItem{TS: "1.0", Text: "original", UserID: "OTHER"}))
 			focusMessages(t, a)
 			wantTS := ids.MessageTS("1.0")
+			var wantThread ids.ThreadTS
 			if pane == "thread" {
 				focusThreadPanel(t, a)
-				wantTS = "12.0"
+				wantTS, wantThread = "12.0", "10.0"
 				// The thread's channel must win over the active channel.
 				a.activeChannelID = "COTHER"
 			}
@@ -35,10 +38,10 @@ func TestForwardMessageSelected(t *testing.T) {
 			})
 			calls := 0
 			a.SetMessageService(core.NewMessageService(core.MessageServiceFuncs{
-				Forward: func(ctx context.Context, team string, source ids.ChannelID, ts ids.MessageTS, dest ids.ChannelID) (core.ForwardResult, error) {
+				Forward: func(ctx context.Context, team string, source ids.ChannelID, ts ids.MessageTS, threadTS ids.ThreadTS, dest ids.ChannelID) (core.ForwardResult, error) {
 					calls++
-					if team != "T1" || source != "C1" || ts != wantTS || dest != "C2" {
-						t.Errorf("forward arguments = %q %q %q %q", team, source, ts, dest)
+					if team != "T1" || source != "C1" || ts != wantTS || threadTS != wantThread || dest != "C2" {
+						t.Errorf("forward arguments = %q %q %q %q %q", team, source, ts, threadTS, dest)
 					}
 					if _, ok := ctx.Deadline(); !ok {
 						t.Error("forward request has no deadline")
@@ -177,6 +180,64 @@ func TestForwardMessageCompletionReconcilesSuppressedEcho(t *testing.T) {
 	}
 }
 
+// The share's own echo carries the shared attachment; in a destination pane
+// that is on screen it must replace the local stand-in, not be dropped.
+func TestForwardMessageEchoReplacesStandIn(t *testing.T) {
+	for _, order := range []string{"plain", "compose send in flight"} {
+		t.Run(order, func(t *testing.T) {
+			a := newTestApp(t, withActiveTeam("T1"), withActiveChannel("C1"))
+			a.SetCurrentUserID("SELF")
+			standIn := messages.MessageItem{TS: "20.0", Text: "<https://example.slack.com/archives/C2/p1000000>", UserID: "SELF"}
+			a.Update(messageForwardedMsg{teamID: "T1", channelID: "C1", destination: "#general", message: standIn})
+			if order == "compose send in flight" {
+				a.selfSend.MarkInFlight("C1")
+			}
+			echo := messages.MessageItem{
+				TS: "20.0", UserID: "SELF",
+				LegacyAttachments: []blocks.LegacyAttachment{{}},
+			}
+			a.Update(NewMessageMsg{ChannelID: "C1", Message: echo})
+			got := a.messagepane.Messages()
+			if len(got) != 1 || len(got[0].LegacyAttachments) != 1 {
+				t.Fatalf("pane = %+v, want the echo with its attachment replacing the stand-in", got)
+			}
+			if len(a.forwardStandIns) != 0 {
+				t.Errorf("stand-in not forgotten: %v", a.forwardStandIns)
+			}
+		})
+	}
+}
+
+func TestForwardStandInsAreBounded(t *testing.T) {
+	a := newTestApp(t)
+	for i := 0; i < 3*maxForwardStandIns; i++ {
+		a.noteForwardStandIn(fmt.Sprintf("%d.0", i))
+	}
+	if len(a.forwardStandIns) != maxForwardStandIns {
+		t.Fatalf("stand-ins = %d, want %d", len(a.forwardStandIns), maxForwardStandIns)
+	}
+}
+
+func TestForwardMessageWithoutPermalinkSaysForwarded(t *testing.T) {
+	a := newTestApp(t, withActiveTeam("T1"), withActiveChannel("C1"), withMessages(testMessageItems(1)...))
+	focusMessages(t, a)
+	a.SetChannelFinderItems([]core.ChannelFinderItem{{ID: "D2", Name: "alice", Type: "dm", Joined: true}})
+	a.SetMessageService(core.NewMessageService(core.MessageServiceFuncs{
+		Forward: func(context.Context, string, ids.ChannelID, ids.MessageTS, ids.ThreadTS, ids.ChannelID) (core.ForwardResult, error) {
+			return core.ForwardResult{TS: "20.0"}, nil
+		},
+	}))
+	dispatchModeKey(a, keyPress('F'))
+	cmd := dispatchModeKey(a, keyCode(tea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("forward not dispatched")
+	}
+	forwarded, ok := cmd().(messageForwardedMsg)
+	if !ok || forwarded.message.TS != "20.0" || forwarded.message.Text != "Forwarded message" {
+		t.Fatalf("forward result = %#v, want the \"Forwarded message\" fallback", forwarded)
+	}
+}
+
 func TestForwardMessageNoSelection(t *testing.T) {
 	a := newTestApp(t, withActiveTeam("T1"), withActiveChannel("C1"))
 	for _, panel := range []Panel{PanelMessages, PanelThread, PanelSidebar} {
@@ -193,7 +254,7 @@ func TestForwardMessageClickAndFailure(t *testing.T) {
 	a.SetChannelFinderItems([]core.ChannelFinderItem{{ID: "D2", Name: "alice", Type: "dm", Joined: true}})
 	calls := 0
 	a.SetMessageService(core.NewMessageService(core.MessageServiceFuncs{
-		Forward: func(_ context.Context, _ string, _ ids.ChannelID, _ ids.MessageTS, dest ids.ChannelID) (core.ForwardResult, error) {
+		Forward: func(_ context.Context, _ string, _ ids.ChannelID, _ ids.MessageTS, _ ids.ThreadTS, dest ids.ChannelID) (core.ForwardResult, error) {
 			calls++
 			if dest != "D2" {
 				t.Errorf("destination = %s, want D2", dest)
