@@ -30,6 +30,7 @@ package ui
 import (
 	"charm.land/lipgloss/v2"
 
+	"github.com/gammons/slk/internal/ui/overlay"
 	"github.com/gammons/slk/internal/ui/presencemenu"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/gammons/slk/internal/ui/userprofile"
@@ -69,7 +70,10 @@ func (a *App) applyOverlays(screen string) string {
 		screen = a.reactionsView.ViewOverlay(a.width, a.height, screen)
 	}
 	if a.linkPicker.IsVisible() {
-		screen = a.linkPicker.ViewOverlay(a.width, a.height, screen)
+		a.linkPicker.SetWidth(a.width)
+		if box := a.linkPicker.View(); box != "" {
+			screen = overlay.DimmedOverlay(a.width, a.height, screen, box, 0.5)
+		}
 	}
 	if a.userProfile.IsVisible() {
 		screen = a.userProfile.ViewOverlay(a.width, a.height, screen, a.userProfileLive())
