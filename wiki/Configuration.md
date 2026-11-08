@@ -67,7 +67,8 @@ quiet_hours = "22:00-08:00"   # planned
 # in a muted channel would still notify.)
 
 [sidebar]
-right_align_badges = false  # true: mention badges at the right end of the row (Slack)
+right_align_badges = false  # true: mention badges at the right end of the row (Slack),
+                            # and the Threads and Activity counts as red badges there
 channel_indent = 0          # cells to indent the rows under each section header (0-6)
 slack_style = false         # true: Slack's look: no ▾ on open sections, plain headers,
                             # no unread dot (bold only), names sorted ignoring punctuation

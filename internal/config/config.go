@@ -180,8 +180,9 @@ type Sidebar struct {
 	// unread messages, and the currently-selected channel are never
 	// hidden regardless of this setting.
 	HideInactiveAfterDays int `toml:"hide_inactive_after_days"`
-	// RightAlignBadges puts mention badges at the right end of their
-	// rows, as Slack does. Default off.
+	// RightAlignBadges puts mention badges, and the Threads and Activity
+	// counts drawn as badges, at the right end of their rows, as Slack
+	// does. Default off.
 	RightAlignBadges bool `toml:"right_align_badges"`
 	Width            int  `toml:"width"`
 	// ChannelIndent indents the rows under each section header by this
