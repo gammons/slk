@@ -21,7 +21,7 @@ type walker struct {
 	source []byte
 	table  []token
 
-	mrkdwn     strings.Builder
+	mrkdwn     *strings.Builder
 	block      *slack.RichTextBlock
 	curSection *slack.RichTextSection
 
@@ -35,6 +35,7 @@ func newWalker(source []byte, table []token) *walker {
 	return &walker{
 		source: source,
 		table:  table,
+		mrkdwn: &strings.Builder{},
 		block:  slack.NewRichTextBlock(""),
 	}
 }
@@ -71,7 +72,7 @@ func (w *walker) walkBlock(n ast.Node) {
 	case *ast.Heading:
 		w.walkRawBlock(n)
 	case *ast.Blockquote:
-		w.walkRawBlock(n)
+		w.walkBlockquote(n)
 	default:
 		// Other block types (List, FencedCodeBlock, Heading, Blockquote)
 		// will be handled in later tasks. For now, walk children as
@@ -300,6 +301,12 @@ func (w *walker) handleAutoLink(n *ast.AutoLink) {
 		url = "mailto:" + url
 	}
 
+	w.appendLink(url, label)
+}
+
+// appendLink emits a link as <url> (or <url|label> when the label is not
+// the URL itself) and as a link element.
+func (w *walker) appendLink(url, label string) {
 	w.mrkdwn.WriteString("<")
 	w.mrkdwn.WriteString(url)
 	if label != "" && label != url {
@@ -395,7 +402,7 @@ func (w *walker) walkList(n *ast.List, indent int) {
 	}
 	// Trim the trailing newline added by the last item so that the
 	// list doesn't add an extra blank line before the next block.
-	trimTrailingNewline(&w.mrkdwn)
+	trimTrailingNewline(w.mrkdwn)
 
 	w.block.Elements = append(w.block.Elements, list)
 	for _, nl := range nested {
@@ -486,56 +493,95 @@ func (w *walker) walkCodeBlock(n ast.Node) {
 	w.block.Elements = append(w.block.Elements, pre)
 }
 
-// walkRawBlock emits the original source of a heading or blockquote
-// verbatim. Slack mrkdwn has no headings, and `>` is already a valid
-// blockquote marker on the wire, so we don't translate either type.
-func (w *walker) walkRawBlock(n ast.Node) {
+// walkRawBlock emits a heading's source verbatim: Slack mrkdwn has no
+// headings, so "# Title" goes out as typed. A typed URL in it is still a
+// link.
+func (w *walker) walkRawBlock(n *ast.Heading) {
 	w.flushSection()
-
-	prefix := ""
-	body := ""
-
-	if h, ok := n.(*ast.Heading); ok {
-		// Heading source segments contain the inline content WITHOUT
-		// the leading "# " marker (goldmark consumes it).
-		var b strings.Builder
-		for i := 0; i < n.Lines().Len(); i++ {
-			seg := n.Lines().At(i)
-			b.Write(w.source[seg.Start:seg.Stop])
-		}
-		body = strings.TrimRight(b.String(), "\n")
-		prefix = strings.Repeat("#", h.Level) + " "
-	} else if _, ok := n.(*ast.Blockquote); ok {
-		// Blockquote segments aren't directly populated; walk
-		// children to gather inline text.
-		var sb strings.Builder
-		for c := n.FirstChild(); c != nil; c = c.NextSibling() {
-			collectRawInline(&sb, c, w.source)
-		}
-		body = sb.String()
-		prefix = "> "
+	// Heading source segments contain the inline content WITHOUT the
+	// leading "# " marker (goldmark consumes it).
+	var b strings.Builder
+	for i := 0; i < n.Lines().Len(); i++ {
+		seg := n.Lines().At(i)
+		b.Write(w.source[seg.Start:seg.Stop])
 	}
+	body := strings.TrimRight(b.String(), "\n")
 
-	w.mrkdwn.WriteString(prefix)
-	w.mrkdwn.WriteString(body)
+	w.curSection = slack.NewRichTextSection()
+	w.appendRawText(strings.Repeat("#", n.Level) + " " + body)
+	w.flushSection()
 	w.mrkdwn.WriteString("\n\n")
-
-	if w.curSection == nil {
-		w.curSection = slack.NewRichTextSection()
-	}
-	te := slack.NewRichTextSectionTextElement(detokenizeText(prefix+body, w.table), nil)
-	w.curSection.Elements = append(w.curSection.Elements, te)
-	w.flushSection()
 }
 
-// collectRawInline appends the source bytes of all *ast.Text descendants
-// of n to b.
+// walkBlockquote emits a blockquote as a rich_text_quote, its content
+// walked like a paragraph's (formatting, mentions and links intact), and
+// as "> " lines in the mrkdwn fallback, which is Slack's own quote marker.
+// Paragraphs inside it are separated by a line break. A block other than a
+// paragraph (a list or code block in the quote) goes in as its text.
+//
+// It used to be emitted as one flattened text element: line breaks,
+// formatting and code markers were lost, and a link, having no Text node,
+// was dropped from the message.
+func (w *walker) walkBlockquote(n *ast.Blockquote) {
+	w.flushSection()
+	outer := w.mrkdwn
+	w.mrkdwn = &strings.Builder{}
+	w.curSection = slack.NewRichTextSection()
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		if c != n.FirstChild() {
+			// A blank quote line separates paragraphs; keep it.
+			w.appendText("\n\n")
+		}
+		if p, ok := c.(*ast.Paragraph); ok {
+			w.walkInlineChildren(p)
+			continue
+		}
+		var sb strings.Builder
+		collectRawInline(&sb, c, w.source)
+		w.appendRawText(sb.String())
+	}
+	body := strings.TrimRight(w.mrkdwn.String(), "\n")
+	w.mrkdwn = outer
+	elements := w.curSection.Elements
+	w.curSection = nil
+	if body == "" {
+		return
+	}
+	for _, line := range strings.Split(body, "\n") {
+		if line == "" {
+			w.mrkdwn.WriteString(">\n")
+			continue
+		}
+		w.mrkdwn.WriteString("> ")
+		w.mrkdwn.WriteString(line)
+		w.mrkdwn.WriteString("\n")
+	}
+	w.mrkdwn.WriteString("\n")
+	w.block.Elements = append(w.block.Elements, &slack.RichTextQuote{Type: slack.RTEQuote, Elements: elements})
+}
+
+// collectRawInline appends the source bytes of all *ast.Text and
+// *ast.AutoLink descendants of n to b, keeping line breaks: a line ends
+// where a text carries one, and blocks (the paragraphs of a nested
+// quote) are separated by a blank line. Without them the URLs ending
+// one line and starting the next would be read as one link.
 func collectRawInline(b *strings.Builder, n ast.Node, source []byte) {
 	if t, ok := n.(*ast.Text); ok {
 		b.Write(source[t.Segment.Start:t.Segment.Stop])
+		if t.SoftLineBreak() || t.HardLineBreak() {
+			b.WriteByte('\n')
+		}
+		return
+	}
+	if a, ok := n.(*ast.AutoLink); ok {
+		// A link's text, which appendRawText links again.
+		b.Write(a.Label(source))
 		return
 	}
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		if c != n.FirstChild() && c.Type() == ast.TypeBlock {
+			b.WriteString("\n\n")
+		}
 		collectRawInline(b, c, source)
 	}
 }

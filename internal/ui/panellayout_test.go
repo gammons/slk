@@ -40,7 +40,7 @@ func TestPanelLayoutCompute(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			l := newPanelLayout()
-			f := l.Compute(tt.width, 30, testRailW, testSidebarW, tt.sidebar, tt.thread, tt.threadFront)
+			f := l.Compute(tt.width, 30, testRailW, testSidebarW, tt.sidebar, tt.thread, tt.threadFront, false)
 			got := want{f.MsgWidth, f.MsgBorder, f.ThreadWidth, f.ThreadBorder}
 			if got != tt.want {
 				t.Fatalf("widths = %+v, want %+v", got, tt.want)
@@ -67,7 +67,7 @@ func TestPanelLayoutCompute_Sweep(t *testing.T) {
 			for _, thread := range []bool{true, false} {
 				for _, front := range []bool{true, false} {
 					l := newPanelLayout()
-					f := l.Compute(width, 30, testRailW, testSidebarW, sidebar, thread, front)
+					f := l.Compute(width, 30, testRailW, testSidebarW, sidebar, thread, front, false)
 					area := width - testRailW
 					if sidebar {
 						area -= testSidebarW + 2

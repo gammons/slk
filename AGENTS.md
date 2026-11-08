@@ -45,7 +45,8 @@ internal/bubbles/       self-contained components and the substrate they
                         chrome, the substrate every dialog draws through. Never
                         imports internal/ui; the TUI's I/O ban applies here too.
                         Widgets move here from internal/ui/<widget>/ one at
-                        a time; confirmprompt is the first
+                        a time; confirmprompt and linkpicker
+                        are the first two
 internal/slack/         Slack Web API + browser-protocol WebSocket client
 internal/slack/edge/    edgeapi: conditional revalidation, server-side search
 internal/bootstrap/     startup fetch orchestration
@@ -140,7 +141,9 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Open the action dialog for an ephemeral's buttons | `(*App).openActionPrompt(actionPromptRef)` (`internal/ui/action_prompt.go`); queueing and the interruption rule are `enqueueActionPrompt` / `tryOpenActionPrompt` |
 | Replace a pane's list with fetched history without erasing ephemerals already shown | `keepEphemerals(fetched, shown)` (`internal/ui/ephemeral_keep.go`); only for a fetch of the conversation already on screen |
 | Would a URL typed bare be sent as one link with that whole target (no space or non-ASCII char the typed-URL matcher stops at)? | `mrkdwn.TypesAsBareURL(url)`; `blockkit.LinkToMarkdown` keeps `[label](url)` / `<url\|label>` form when it is false |
+| Where a typed URL starts and ends outside goldmark (text kept as typed, like a heading), by the same rule Linkify applies | `mrkdwn.typedURLLen(s)`, `bareURLSpans(s)`; `(*walker).appendRawText` emits such text with its URLs as links (`internal/slack/mrkdwn/typedurl.go`) |
 | Slack permalink parsing | `slackurl.Parse` |
+| A message's permalink without an API call (the inverse of `Parse`; how Slack's client makes one, and the fallback where Enterprise Grid refuses `chat.getPermalink` with `enterprise_is_restricted`) | `slackurl.Build(teamURL, channelID, ts, threadTS)`; used by `(*slackclient.Client).GetPermalink`, which `Y` and `F` (for its local echo) share. The selected message's thread for it: `(*App).selectedThreadTS()` |
 | Huddle deep link for a conversation (`https://app.slack.com/huddle/<TEAM>/<CHANNEL>`) | `slackurl.HuddleURL` |
 | Enter insert mode with a compose box focused (the shared body of `i` and a click on a compose region) | `(*App).beginInsertMode(toThread bool)` (`internal/ui/mode_command.go`); the compose regions' tops are recorded per frame in `panelLayout` |
 | The OSC 8 hyperlink spans of final rendered message rows (display columns, same frame HitTest takes) | `messages.ScanOsc8Spans` + `messages.HitsFromSpans` (classifies a span as a file-attachment rect when its URL is one of the message's file attachments; used by WrapRows and the thread parent) |
@@ -167,6 +170,8 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Slack's skin-tone number (2–6) for a modifier codepoint (U+1F3FB–U+1F3FF) | `emoji.SlackSkinToneNumber` |
 | Does Block Kit already render the message body? | `blockkit.RendersBody(blocks)`, `messages.BlocksCarryBody(msg)`; whether the host draws a body row at all: `blockkit.HostBody(blocks)` (the rule `BlocksCarryBody` negates) |
 | Splice sixel halfblock fallback rows into rendered Block Kit / legacy / file-attachment lines (panes without the sixel placement pipeline, i.e. the thread pane) | `blockkit.SpliceSixelFallbacks(lines, rows)` — grafts each row at the entry's `Col`, keeping the line's own surroundings; the only splice loop |
+| Ask the terminal, before bubbletea starts, whether it draws kitty graphics or sixel, or what its cell size is in pixels (CSI 16 t) | `image.ProbeKittyGraphics`, `image.ProbeSixel`, `image.ProbeCellSize` (`internal/image/probe.go`); all take a writer, a reader and a timeout, run in raw mode, and read Windows console input through `pollProbe` (`probe_windows.go`) |
+| A terminal cell's size in pixels for image encoding | `image.MeasureCellPixels(fd)` (env override, then TIOCGWINSZ; `ok` false when neither knows), `image.CellPixels(fd)` (the same with an 8x16 fallback); at startup `startupCellPixels` (`cmd/slk/cellpixels.go`) adds the CSI 16 t probe between the two |
 | Rich text → plain text with no mrkdwn markers (emoji as glyphs, list items space-separated, one line) | `blockkit.RichTextToPlain(rt)` |
 | Lay out a Slack `table` block as aligned ` │ ` columns (header rule, per-column alignment, glyph widths via `lipgloss.Width`, not `emoji.Width`: tables draw emoji as glyphs even in image mode) | `blockkit.TableToText(t)` — plain text: draw it verbatim (code-block style via `blockkit.Context.RenderCode`), never through the mrkdwn renderer. Whether the body or `blockkit.Render` draws each of a message's tables: `blockkit.TablesInBody(blocks)` (per block; the body takes a table only when it is first or follows rich_text or another body table) |
 | Current DND state from a Slack API result | `slack.DNDStateFromStatus` |
@@ -205,6 +210,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Draw a dialog: its box, title / filter / body / footer layout, filter line, list window, selected-row marker, scrollbar gutter, and the composer popups' box and marker | `bubbles/chrome` (`Frame`, `Box`, `FilterInput`, `Window`, `List`, `Marker`, `BodyTop`, `Popup`, `PopupMarker`), drawn with `messages.ChromeStyles()` called per draw. A dialog keeps its own fields, matching and row content; see the package doc |
 | A scrollbar thumb's rows, for a gutter you draw yourself | `bubbles/scrollbar.Thumb` (the one formula; `Overlay` and `chrome.List` use it) |
 | Centered modal over a dimmed backdrop | `ui/overlay.DimmedOverlay` |
+| Pick one item from a message (the `o` link picker, the `d` file picker) | `bubbles/linkpicker` (`New`, `Open`, `HandleKey`, `View`, `SetStyles`, `SetWidth`; options `WithStyles`/`WithWidth`). The App maps the theme in `linkPickerStyles` and opens it with `App.openLinkPicker` (`internal/ui/link_picker.go`); `applyTheme` re-pushes the styles and `view_overlays.go` composites `View()` with `overlay.DimmedOverlay` |
 | Prompt modal with N buttons (title, wrapped body of up to 8 lines, buttons; yes/no is `Open`, any buttons via `OpenChoice(confirmprompt.Choice)`, `Button.Then` for a follow-up step) | `bubbles/confirmprompt` (`New`, `Open`, `OpenChoice`, `Update`, `PressHighlighted`, `View`, `SetStyles`, `SetWidth`; options `WithStyles`/`WithKeyMap`/`WithWidth`; `KeyMap` field). In the App, open it with `App.openConfirmPrompt` (yes/no) or `App.openConfirmChoice` (any buttons) (`internal/ui/confirm.go`), which also map the theme onto its styles and composite it |
 | Text selection ranges and anchors | `bubbles/selection` (`Range`, `Anchor`, `LessOrEqual`) |
 | A scrollable, selectable list of pre-rendered rows: line offsets, scroll offset and snapping, the visible window, text selection and copy, clickable-rect translation, the scrollbar | `bubbles/entrylist` (`New` with options, `SetHeight`, `SetEntries`, `Layout`, `Compose`). The channel and thread panes are its two owners; each divergence between them is an `entrylist` option, documented on the option |

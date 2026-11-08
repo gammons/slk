@@ -245,6 +245,8 @@ func run() error {
 	// the active TeamID up front (workspaces connect in goroutines).
 	styles.Apply(cfg.Appearance.Theme, cfg.Theme)
 
+	styles.ApplyCompact(cfg.Appearance.Compact)
+
 	notifier := notify.New(cfg.Notifications.Enabled, cfg.Notifications.NotifyCommand)
 
 	// Initialize the OS clipboard for paste-to-upload.
@@ -484,9 +486,8 @@ func run() error {
 	// Cell pixel metrics for image encoding. Sixel uses them for its
 	// absolute raster dimensions; kitty places by cell but uses them to
 	// transmit enough source pixels for the terminal's native cell
-	// resolution. SetCellPixels retains its 8x16 fallback when the
-	// terminal reports no usable geometry.
-	pxW, pxH := imgpkg.CellPixels(int(os.Stdout.Fd()))
+	// resolution. See startupCellPixels for where the size comes from.
+	pxW, pxH := startupCellPixels(proto)
 	debuglog.ImgRender("cell pixels: %dx%d", pxW, pxH)
 	imgpkg.SetCellPixels(pxW, pxH)
 
@@ -971,13 +972,13 @@ func run() error {
 		}))
 
 		app.SetMessageService(core.NewMessageService(core.MessageServiceFuncs{
-			Forward: func(ctx context.Context, teamID string, sourceChannelID ids.ChannelID, ts ids.MessageTS, destinationChannelID ids.ChannelID) (core.ForwardResult, error) {
+			Forward: func(ctx context.Context, teamID string, sourceChannelID ids.ChannelID, ts ids.MessageTS, threadTS ids.ThreadTS, destinationChannelID ids.ChannelID) (core.ForwardResult, error) {
 				// The user may have switched workspaces since starting the action.
 				wctx := router.ByID(teamID)
 				if wctx == nil || wctx.Client == nil {
 					return core.ForwardResult{}, fmt.Errorf("forwarding message: workspace %q is unavailable", teamID)
 				}
-				postedTS, permalink, err := wctx.Client.ForwardMessage(ctx, string(sourceChannelID), string(ts), string(destinationChannelID))
+				postedTS, permalink, err := wctx.Client.ForwardMessage(ctx, string(sourceChannelID), string(ts), string(threadTS), string(destinationChannelID))
 				if err != nil {
 					return core.ForwardResult{}, err
 				}
@@ -1121,12 +1122,12 @@ func run() error {
 					Err:         err,
 				}
 			},
-			Permalink: func(ctx context.Context, channelID ids.ChannelID, ts ids.MessageTS) (string, error) {
+			Permalink: func(ctx context.Context, channelID ids.ChannelID, ts ids.MessageTS, threadTS ids.ThreadTS) (string, error) {
 				wctx := router.Active()
 				if wctx == nil {
 					return "", nil
 				}
-				return wctx.Client.GetPermalink(ctx, string(channelID), string(ts))
+				return wctx.Client.GetPermalink(ctx, string(channelID), string(ts), string(threadTS))
 			},
 		}))
 

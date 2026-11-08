@@ -20,9 +20,11 @@ Type@150ms "nord"
 Sleep 500ms
 Enter
 Sleep 1.5s
-Ctrl+Y
-Sleep 600ms
-Type@120ms "catppuccin mocha"
+Type@150ms ":compact"
+Sleep 500ms
+Enter
+Sleep 2s
+Type@150ms ":compact"
 Sleep 500ms
 Enter
 Sleep 2s

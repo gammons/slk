@@ -21,7 +21,7 @@
 - Edited / threaded message indicators
 - ANSI-aware wrapping and truncation (no broken color codes mid-line)
 - Drag-to-copy: drag the mouse across messages to highlight them; release to copy plain text to the system clipboard via OSC 52
-- Copy message text (`y`) and copy permalink (`Y` / `C`) to the system clipboard via OSC 52
+- Copy message text (`y`) and copy permalink (`Y` / `C`) to the system clipboard via OSC 52. On an Enterprise Grid workspace that refuses Slack's permalink API, slk builds the link itself, as Slack's own client does, so copying still works
 - Copy huddle link (`H` or `:huddle`) — the `https://app.slack.com/huddle/<TEAM>/<CHANNEL>` deep link Slack's own "Copy huddle link" produces, for the active conversation (channels, DMs and group DMs; a thread copies its parent's). Opening it joins the live huddle or shows Slack's huddle panel for that conversation. The profile dialog (`K`) also offers `c` / a click on the 📋 on the "🎧 In a huddle" row when Slack reported which channel the person's huddle is in.
 - Forward a message or thread reply (`F`) — the same fuzzy picker as `Ctrl+t`, limited to joined channels and existing DMs in the current workspace. Enter shares the original permalink with Slack preview unfurling enabled; Esc cancels. Keeps your current channel and draft unchanged. Slack controls preview availability and access to the original message. Pressing Enter on the forwarded message navigates to the original.
 
@@ -193,6 +193,7 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
 - Drop-in custom themes (`~/.config/slk/themes/*.toml`)
 - Live theme switcher (`Ctrl+y`); `Alt+y` / `Alt+Shift+y` cycle to the next / previous theme
 - TOML config for appearance, animations, notifications, and channel sections
+- Opt-in IRC-like "compact" style with less padding, no avatars, and same-line usernames via `appearance.compact`
 - Deterministic per-user username coloring, opt-in via `colored_usernames`
 
 See [[Configuration]] for the full `config.toml` reference and [[Keybindings]] for the key map.

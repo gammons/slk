@@ -27,6 +27,7 @@ func (a *App) newWindowModel(chName string) *messages.Model {
 	m.SetChannelNames(a.channelNames)
 	m.SetUserGroups(a.userGroups)
 	m.SetEmojiContext(a.emojiCtx)
+	m.SetCompact(a.compact)
 	if a.emojiCustoms != nil {
 		// SetCustomEmoji ran after SetEmojiContext: its customs map
 		// supersedes the one captured inside emojiCtx.

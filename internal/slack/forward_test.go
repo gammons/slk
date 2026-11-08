@@ -64,7 +64,7 @@ func TestForwardMessage(t *testing.T) {
 				return permalink, nil
 			}}
 
-			ts, link, err := c.ForwardMessage(context.Background(), "CFAKE0001", "1700000000.000100", "CFAKE0002")
+			ts, link, err := c.ForwardMessage(context.Background(), "CFAKE0001", "1700000000.000100", "", "CFAKE0002")
 			if gotPath != "/api/chat.shareMessage" {
 				t.Errorf("path = %q, want /api/chat.shareMessage", gotPath)
 			}
@@ -111,8 +111,29 @@ func TestForwardMessage_PermalinkFailureIsNotAnError(t *testing.T) {
 	c.api = &mockSlackAPI{getPermalinkContextFn: func(context.Context, *slack.PermalinkParameters) (string, error) {
 		return "", errors.New("boom")
 	}}
-	ts, link, err := c.ForwardMessage(context.Background(), "CFAKE0001", "1700000000.000100", "CFAKE0002")
+	ts, link, err := c.ForwardMessage(context.Background(), "CFAKE0001", "1700000000.000100", "", "CFAKE0002")
 	if err != nil || ts != "1700000001.000200" || link != "" {
 		t.Errorf("result = (%q, %q, %v), want ts and empty permalink", ts, link, err)
+	}
+}
+
+// Where Enterprise Grid refuses chat.getPermalink, the local echo's link is
+// built from the workspace URL instead (GetPermalink), carrying the reply's
+// thread, so the forwarded stand-in is still a working link.
+func TestForwardMessage_RestrictedPermalinkIsBuiltLocally(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true,"channel":"CFAKE0002","ts":"1700000099.000100"}`))
+	}))
+	defer srv.Close()
+	c := NewClient("xoxc-test", "d-cookie")
+	pointClientAtTestServer(t, c, srv)
+	c.teamURL = "https://acme.enterprise.slack.com/"
+	c.api = &mockSlackAPI{getPermalinkContextFn: func(context.Context, *slack.PermalinkParameters) (string, error) {
+		return "", slack.SlackErrorResponse{Err: "enterprise_is_restricted"}
+	}}
+	_, link, err := c.ForwardMessage(context.Background(), "CFAKE0001", "1700000050.000400", "1700000000.000100", "CFAKE0002")
+	want := "https://acme.enterprise.slack.com/archives/CFAKE0001/p1700000050000400?thread_ts=1700000000.000100&cid=CFAKE0001"
+	if err != nil || link != want {
+		t.Errorf("link = %q, err = %v; want %q", link, err, want)
 	}
 }

@@ -50,6 +50,7 @@ var commands = map[string]commandFunc{
 	"activity": cmdActivity,
 	"huddle":   cmdHuddle,
 	"help":     cmdHelp,
+	"compact":  cmdCompact,
 	"version":  cmdVersion,
 }
 
@@ -68,6 +69,11 @@ func cmdVersion(a *App, _ commandArgs) tea.Cmd {
 // the ":" commands too, so this is where to look for what ":" takes.
 func cmdHelp(a *App, _ commandArgs) tea.Cmd {
 	a.openHelpOverlay()
+	return nil
+}
+
+func cmdCompact(a *App, _ commandArgs) tea.Cmd {
+	a.SetCompact(!a.compact)
 	return nil
 }
 

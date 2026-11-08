@@ -9,7 +9,9 @@ import (
 	"github.com/slack-go/slack"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 )
 
 // typedURLRegexp tells Linkify what a bare typed URL is: an allowed scheme
@@ -63,6 +65,11 @@ func Convert(input string) (string, *slack.RichTextBlock) {
 			extension.NewLinkify(extension.WithLinkifyURLRegexp(typedURLRegexp),
 				extension.WithLinkifyAllowedProtocols(typedURLProtocols)),
 		),
+		goldmark.WithParserOptions(parser.WithInlineParsers(
+			// After the default parsers, so code spans and links claim
+			// their punctuation first (typedurl.go).
+			util.Prioritized(afterPunctURL{}, 900),
+		)),
 	)
 	doc := md.Parser().Parse(text.NewReader([]byte(tokenized)))
 

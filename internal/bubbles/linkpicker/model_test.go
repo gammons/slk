@@ -1,6 +1,55 @@
 package linkpicker
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"charm.land/lipgloss/v2"
+	"github.com/gammons/slk/internal/bubbles/chrome"
+)
+
+func TestViewHiddenIsEmpty(t *testing.T) {
+	m := New(WithWidth(100))
+	if v := m.View(); v != "" {
+		t.Errorf("hidden View = %q, want empty", v)
+	}
+}
+
+func TestViewWidthClamping(t *testing.T) {
+	cases := []struct{ termWidth, want int }{
+		{200, 80}, // capped at 80
+		{100, 60}, // 60%
+		{50, 40},  // floor 40 (fits: 48 available)
+		{30, 28},  // at most width-2
+	}
+	for _, c := range cases {
+		m := New(WithWidth(c.termWidth))
+		m.Open("t", items3())
+		if got := lipgloss.Width(m.View()); got != c.want {
+			t.Errorf("width %d: box width = %d, want %d", c.termWidth, got, c.want)
+		}
+	}
+	m := New()
+	m.Open("t", items3())
+	m.SetWidth(100)
+	if got := lipgloss.Width(m.View()); got != 60 {
+		t.Errorf("SetWidth(100): box width = %d, want 60", got)
+	}
+}
+
+func TestSetStylesChangesOutput(t *testing.T) {
+	m := New(WithWidth(100))
+	m.Open("t", items3())
+	plain := m.View()
+	badge := lipgloss.NewStyle().Foreground(lipgloss.Color("#ff0000"))
+	m.SetStyles(Styles{Chrome: chrome.Styles{}, Badge: badge})
+	if m.View() == plain {
+		t.Error("SetStyles did not change the rendered output")
+	}
+	if !strings.Contains(m.View(), "[slk]") {
+		t.Error("badge text missing")
+	}
+}
 
 func items3() []Item {
 	return []Item{

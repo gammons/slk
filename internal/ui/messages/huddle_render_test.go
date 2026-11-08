@@ -169,7 +169,7 @@ func TestHuddleNoticeCopyMirrorAndSelected(t *testing.T) {
 	msg := huddleItem(endedRoom(23*60), 0)
 	v := HuddleView(msg, huddleNames)
 	r := RenderMessage(v, 80, &RenderContext{UserNames: huddleNames}, RenderOptions{})
-	rows := WrapRows(v, r, 80, NewWrapStyles(true))
+	rows := WrapRows(v, r, 80, NewWrapStyles(true, false))
 	if len(rows.Plain) != 1 || rows.Plain[0].Text != strings.TrimSpace(rows.Plain[0].Text) ||
 		!strings.Contains(rows.Plain[0].Text, "Alice started a huddle · lasted 23 min") {
 		t.Errorf("plain mirror = %+v", rows.Plain)

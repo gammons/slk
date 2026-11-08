@@ -837,7 +837,7 @@ func TestGetPermalink(t *testing.T) {
 	}
 	client := &Client{api: mock}
 
-	url, err := client.GetPermalink(context.Background(), "C123", "1700000001.000200")
+	url, err := client.GetPermalink(context.Background(), "C123", "1700000001.000200", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -861,7 +861,7 @@ func TestGetPermalinkPropagatesError(t *testing.T) {
 	}
 	client := &Client{api: mock}
 
-	_, err := client.GetPermalink(context.Background(), "C123", "1.0")
+	_, err := client.GetPermalink(context.Background(), "C123", "1.0", "")
 	if !errors.Is(err, wantErr) {
 		t.Errorf("err = %v, want wraps %v", err, wantErr)
 	}

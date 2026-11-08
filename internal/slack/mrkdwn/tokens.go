@@ -125,7 +125,10 @@ func tokenize(s string) (string, []token) {
 			}
 		case ':':
 			loc := reEmoji.FindStringSubmatchIndex(s[i:])
-			if loc != nil && loc[0] == 0 {
+			// "see:https://x" is text and a URL, not the emoji :https:
+			// (the closing colon is the scheme's). An emoji inside or
+			// after a URL is still one: "x/a:tada:" ends the URL.
+			if loc != nil && loc[0] == 0 && typedURLLen(s[i+1:]) == 0 {
 				full := s[i : i+loc[1]]
 				tok := token{kind: tokEmoji, id: s[i+loc[2] : i+loc[3]]}
 				table = append(table, tok)
