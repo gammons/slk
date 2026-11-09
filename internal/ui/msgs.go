@@ -584,6 +584,8 @@ type (
 	// 3 seconds via a CopiedClearMsg tick scheduled by the App.
 	ToastMsg struct{ Text string }
 
+	// downloadFileResultMsg carries a completed download from downloadFileCmd
+	// to reduceFiles.
 	downloadFileResultMsg struct {
 		Name string
 		Text string
