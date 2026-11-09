@@ -45,8 +45,8 @@ func TestDownloadFileMsg_OverlappingDownloadsKeepProgressVisible(t *testing.T) {
 	if got := statusbarText(app); !strings.Contains(got, "Downloading b.csv") {
 		t.Errorf("status bar = %q, want remaining download progress after a.csv completes", got)
 	}
-	if got := statusbarText(app); !strings.Contains(got, "Downloaded a.csv") {
-		t.Errorf("status bar = %q, want completed download result to remain visible", got)
+	if got := statusbarText(app); strings.Contains(got, "Downloaded a.csv") {
+		t.Errorf("status bar = %q, want only the remaining download progress", got)
 	}
 
 	app.Update(second())

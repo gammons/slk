@@ -21,9 +21,9 @@ var reduceFiles reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	case downloadFileResultMsg:
 		removePendingDownload(a, m.Name)
 		if len(a.pendingDownloads) > 0 {
-			// Keep progress visible while another download is in flight, while
-			// preserving the result of the download that just completed.
-			toastUntilReplaced(a, downloadProgressText(a)+" · "+m.Text)
+			// Keep the toast to active progress; combining filenames and results
+			// can overflow the status row.
+			toastUntilReplaced(a, downloadProgressText(a))
 			return nil, true
 		}
 		return toastWithClear(a, m.Text, 3*time.Second), true
