@@ -29,7 +29,7 @@
 
 1. **Content wider than the pane** (a 200-char URL with no break, a fenced code line, CJK and emoji glyphs): every preview row is exactly the box width and the pane border stays intact. Test in Task 5 (`TestDraftPreviewRowsFitWidth`).
 2. **A short terminal** (80x12) with a 40-line draft: the preview shrinks or disappears, the messages area keeps 3 rows, nothing panics. Test in Task 5 (`TestDraftPreviewShortTerminal`).
-3. **Whitespace-only draft** (`"  \n\n "`): shows `nothing to preview`, not a blank pane. Test in Task 5 (`TestDraftPreviewNotes`).
+3. **Whitespace-only draft** (spaces and blank lines only): shows `nothing to preview`, not a blank pane. Test in Task 5 (`TestDraftPreviewNotes`).
 4. **Theme switch while open**: the preview redraws in the new theme, not from a stale cache. Test in Task 5 (`TestDraftPreviewFollowsTheme`).
 5. **Editing a message whose text starts with `/`**: rendered as a message (edits never run commands), not the slash note. Test in Task 5 (`TestDraftPreviewNotes`, case `edit starting with slash`).
 
@@ -52,7 +52,7 @@ A refactor with no behaviour change: `sendMentions` rebuilds and sorts every use
 
 `TestSendMentionsBuiltOncePerChange`: call `m.sendMentions()` twice with no setter between; assert the two slices share the backing array (`&a[0] == &b[0]`). After `SetUsers`, the next call returns a different backing array.
 
-`BenchmarkTranslateMentionsForSend`: 20,000 users `person.<i>` / `U%05d`, draft = 25 × `"- ship **v0.28** on Tuesday with @person.42 and [the notes](https://example.com/x)\n"`, `b.Loop()` over `TranslateMentionsForSend(draft)`.
+`BenchmarkTranslateMentionsForSend`: 20,000 users `person.<i>` / `U%05d`, draft = 25 copies of the line `- ship **v0.28** on Tuesday with @person.42 and [the notes](https://example.com/x)`, each ending in a newline, `b.Loop()` over `TranslateMentionsForSend(draft)`.
 
 - [ ] **Step 2: Run them**
 
@@ -139,7 +139,7 @@ git commit -m "feat(compose): draft preview state and a cached send-faithful bod
 
 - [ ] **Step 1: Write the failing tests**
 
-`TestRenderMessageBodyOnly` (package `messages`), with `rc := &RenderContext{Images: imgrender.NewRenderer(), UserNames: map[string]string{"U2": "bob"}}` and `msg := MessageItem{UserName: "alice", Timestamp: "3:04 PM", Text: "• ship *v0.28*\n<@U2>"}` at width 60:
+`TestRenderMessageBodyOnly` (package `messages`), with `rc := &RenderContext{Images: imgrender.NewRenderer(), UserNames: map[string]string{"U2": "bob"}}` and `msg := MessageItem{UserName: "alice", Timestamp: "3:04 PM", Text: t}` at width 60, where `t` is the two lines `• ship *v0.28*` and `<@U2>`:
 - `ansi.Strip(RenderMessage(msg, 60, rc, RenderOptions{BodyOnly: true}).Content)` contains `ship v0.28` and `@bob`, and contains neither `alice` nor `3:04 PM`.
 - With `rc.Compact = true` the same holds.
 - The full render (every option off, `Compact` false), stripped, with its first line (the header) dropped, equals the stripped `BodyOnly` content: the body rows are the same rendering.
@@ -236,8 +236,8 @@ git commit -m "feat: ctrl+r shows or hides the draft preview; sending closes it"
 - [ ] **Step 1: Write the failing tests**
 
 Helper in the test file: `previewRows(t, a) []string`, the stripped frame rows from the one containing `draft preview` down to the row before the compose box (find the box by the draft's first line).
-- `TestDraftPreviewShowsRenderedDraft`: draft `"Release plan:\n- ship **v0.28** on Tuesday\n- read [the notes](https://example.com)"`, preview on → rows contain `• ship v0.28 on Tuesday` and `• read the notes`, and no `**`, `[` or `](`.
-- `TestDraftPreviewNotes` (table): `""` and `"  \n\n "` → `nothing to preview`; `"/remind me"` → `slash command, not a message`; an attachment with caption `"**x**"` → `caption is sent as typed`; edit in progress with text `"/not a command"` → no slash note, and the row shows `/not a command`.
+- `TestDraftPreviewShowsRenderedDraft`: a three-line draft, `Release plan:`, `- ship **v0.28** on Tuesday` and `- read [the notes](https://example.com)`, preview on → rows contain `• ship v0.28 on Tuesday` and `• read the notes`, and no `**`, `[` or `](`.
+- `TestDraftPreviewNotes` (table): `""` and a draft of two spaces, two empty lines and a space → `nothing to preview`; `"/remind me"` → `slash command, not a message`; an attachment with caption `"**x**"` → `caption is sent as typed`; edit in progress with text `"/not a command"` → no slash note, and the row shows `/not a command`.
 - `TestDraftPreviewMentionsUseNames`: compose users `{U2 bob}`, draft `"hi @bob"`; the pane's names lack `U2` → rows contain `@U2` (the renderer's unresolved form) and not `Bob Smith`; then `a.messagepane.SetUserNames(map[string]string{"U2": "Bob Smith"})` and render again → rows contain `@Bob Smith`.
 - `TestDraftPreviewCapShowsTheEnd`: 120x80, a 40-line draft `line 1` … `line 40`. The box itself takes 23 rows here (20 text rows, padding, spacer), so the cap binds, not the room: preview rows (title included) = `max(3, inner/3)`, with `inner` read from the frame as the rows strictly between the messages pane's top and bottom border rows; the first body row is `…`; the last is `line 40`.
 - `TestDraftPreviewYieldsToMessages`: 120x40, the same draft. The room binds: either no `draft preview` row, or the `a.layout` message height is exactly 3 (the preview took only what was left). It is never below 3.
