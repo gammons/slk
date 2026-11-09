@@ -148,6 +148,9 @@ type App struct {
 	// while an upload was in flight (the open thread's parent was
 	// deleted). The UploadResultMsg arm runs it once the upload ends.
 	threadCloseAfterUpload bool
+	// pendingDownloads tracks download names on the Update goroutine so one
+	// completion cannot clear another download's progress.
+	pendingDownloads []string
 	// stackFront is the content pane (PanelMessages or PanelThread)
 	// that last had focus. Recorded by Update, read by threadInFront.
 	stackFront Panel
@@ -3294,18 +3297,18 @@ func (a *App) openURLCmd(url string) tea.Cmd {
 func (a *App) downloadFileCmd(att messages.Attachment) tea.Cmd {
 	return func() tea.Msg {
 		if a.files == nil {
-			return ToastMsg{Text: "File downloads unavailable"}
+			return downloadFileResultMsg{Name: att.Name, Text: "File downloads unavailable"}
 		}
 		path, err := a.files.Download(context.Background(), att.DownloadURL, att.Name)
 		if err != nil {
 			log.Printf("file download failed: %v", err)
-			return ToastMsg{Text: "Download failed: " + att.Name}
+			return downloadFileResultMsg{Name: att.Name, Text: "Download failed: " + att.Name}
 		}
 		if err := a.desktop.Open(path); err != nil {
 			log.Printf("file open failed: %v", err)
-			return ToastMsg{Text: "Failed to open " + att.Name}
+			return downloadFileResultMsg{Name: att.Name, Text: "Failed to open " + att.Name}
 		}
-		return ToastMsg{Text: "Downloaded " + att.Name}
+		return downloadFileResultMsg{Name: att.Name, Text: "Downloaded " + att.Name}
 	}
 }
 

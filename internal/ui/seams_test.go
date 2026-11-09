@@ -581,8 +581,8 @@ func TestSeam_DownloadUnwiredToasts(t *testing.T) {
 
 	msg := a.downloadFileCmd(messages.Attachment{Name: "doc.pdf", DownloadURL: "https://files.example/doc.pdf"})()
 
-	if msg != (ToastMsg{Text: "File downloads unavailable"}) {
-		t.Errorf("cmd() = %#v, want the unavailable toast", msg)
+	if msg != (downloadFileResultMsg{Name: "doc.pdf", Text: "File downloads unavailable"}) {
+		t.Errorf("cmd() = %#v, want the unavailable download result", msg)
 	}
 }
 

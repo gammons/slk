@@ -583,6 +583,11 @@ type (
 	// for short error notices (e.g. failed status change). Auto-clears after
 	// 3 seconds via a CopiedClearMsg tick scheduled by the App.
 	ToastMsg struct{ Text string }
+
+	downloadFileResultMsg struct {
+		Name string
+		Text string
+	}
 )
 
 // autoScrollTickMsg is dispatched by tea.Tick while a drag is held near
