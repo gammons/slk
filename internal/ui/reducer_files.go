@@ -20,13 +20,29 @@ var reduceFiles reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 
 	case downloadFileResultMsg:
 		removePendingDownload(a, m.Name)
+		if m.Failed {
+			a.pendingDownloadFailures = append(a.pendingDownloadFailures, m.Text)
+		}
 		if len(a.pendingDownloads) > 0 {
 			// Keep the toast to active progress; combining filenames and results
 			// can overflow the status row.
 			toastUntilReplaced(a, downloadProgressText(a))
 			return nil, true
 		}
+		if len(a.pendingDownloadFailures) > 0 {
+			return nextDownloadFailure(a), true
+		}
 		return toastWithClear(a, m.Text, 3*time.Second), true
+
+	case downloadFailureClearMsg:
+		if m.Seq != a.statusbar.ToastSeq() {
+			return nil, true
+		}
+		if len(a.pendingDownloads) == 0 && len(a.pendingDownloadFailures) > 0 {
+			return nextDownloadFailure(a), true
+		}
+		a.statusbar.ClearCopied()
+		return nil, true
 
 	default:
 		return nil, false
@@ -35,6 +51,16 @@ var reduceFiles reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 
 func downloadProgressText(a *App) string {
 	return "Downloading " + a.pendingDownloads[len(a.pendingDownloads)-1] + "…"
+}
+
+func nextDownloadFailure(a *App) tea.Cmd {
+	text := a.pendingDownloadFailures[0]
+	a.pendingDownloadFailures = a.pendingDownloadFailures[1:]
+	toastUntilReplaced(a, text)
+	seq := a.statusbar.ToastSeq()
+	return toastTick(3*time.Second, func(time.Time) tea.Msg {
+		return downloadFailureClearMsg{Seq: seq}
+	})
 }
 
 func removePendingDownload(a *App, name string) {

@@ -587,9 +587,13 @@ type (
 	// downloadFileResultMsg carries a completed download from downloadFileCmd
 	// to reduceFiles.
 	downloadFileResultMsg struct {
-		Name string
-		Text string
+		Name   string
+		Text   string
+		Failed bool
 	}
+	// downloadFailureClearMsg expires one queued failure toast without routing
+	// download state through the generic toast-clear reducer.
+	downloadFailureClearMsg struct{ Seq uint64 }
 )
 
 // autoScrollTickMsg is dispatched by tea.Tick while a drag is held near

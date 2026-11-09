@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -21,6 +22,9 @@ func TestDownloadFileMsg_NoDownloader_Toasts(t *testing.T) {
 		t.Fatalf("expected downloadFileResultMsg, got %#v", cmd())
 	}
 	app.Update(msg)
+	if !msg.Failed {
+		t.Fatal("unavailable downloader result must be marked failed")
+	}
 	if got := statusbarText(app); !strings.Contains(got, "File downloads unavailable") {
 		t.Errorf("toast = %q", got)
 	}
@@ -55,6 +59,54 @@ func TestDownloadFileMsg_OverlappingDownloadsKeepProgressVisible(t *testing.T) {
 	}
 	if len(app.pendingDownloads) != 0 {
 		t.Errorf("pending downloads = %v, want none", app.pendingDownloads)
+	}
+}
+
+func TestDownloadFileMsg_OverlappingFailuresAreShownAfterDownloadsFinish(t *testing.T) {
+	app := newTestApp(t)
+	app.SetFileService(core.NewFileService(nil, func(context.Context, string, string) (string, error) {
+		return "", errors.New("download failed")
+	}))
+	app.SetDesktopService(core.NewDesktopService(core.DesktopServiceFuncs{
+		Open: func(string) error { return nil },
+	}))
+
+	_, first := app.Update(DownloadFileMsg{Attachment: messages.Attachment{Name: "a.csv", DownloadURL: "https://x/a"}})
+	_, second := app.Update(DownloadFileMsg{Attachment: messages.Attachment{Name: "b.csv", DownloadURL: "https://x/b"}})
+	if first == nil || second == nil {
+		t.Fatal("expected both download commands")
+	}
+
+	app.Update(first())
+	if got := statusbarText(app); !strings.Contains(got, "Downloading b.csv") {
+		t.Fatalf("status bar = %q, want remaining download progress", got)
+	}
+	if got := statusbarText(app); strings.Contains(got, "Download failed") {
+		t.Fatalf("status bar = %q, want failure deferred until downloads finish", got)
+	}
+
+	_, clearFirst := app.Update(second())
+	if got := statusbarText(app); !strings.Contains(got, "Download failed: a.csv") {
+		t.Fatalf("status bar = %q, want first failure after downloads finish", got)
+	}
+	if got := statusbarText(app); strings.Contains(got, "Download failed: b.csv") {
+		t.Fatalf("status bar = %q, want failures shown one at a time", got)
+	}
+	if clearFirst == nil {
+		t.Fatal("expected first failure clear command")
+	}
+
+	_, clearSecond := app.Update(clearFirst())
+	if got := statusbarText(app); !strings.Contains(got, "Download failed: b.csv") {
+		t.Fatalf("status bar = %q, want second failure after first clears", got)
+	}
+	if clearSecond == nil {
+		t.Fatal("expected second failure clear command")
+	}
+
+	app.Update(clearSecond())
+	if got := statusbarText(app); strings.Contains(got, "Download failed") {
+		t.Errorf("status bar = %q, want failure queue drained", got)
 	}
 }
 
