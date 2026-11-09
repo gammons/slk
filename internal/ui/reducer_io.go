@@ -102,9 +102,9 @@ func toastWithClear(a *App, text string, d time.Duration) tea.Cmd {
 	return copiedClearAfter(a, d)
 }
 
-// toastUntilReplaced shows a toast with no expiry of its own, for a
-// toast that a later one replaces on purpose, as an upload's result
-// replaces its progress. Every other toast goes through toastWithClear.
+// toastUntilReplaced shows a toast with no expiry of its own, for progress
+// that a later result replaces, as upload and download results replace their
+// in-progress messages. Every other toast goes through toastWithClear.
 func toastUntilReplaced(a *App, text string) {
 	a.statusbar.SetToast(text)
 }

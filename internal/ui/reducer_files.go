@@ -1,8 +1,8 @@
 // internal/ui/reducer_files.go
 //
 // File-download routing: DownloadFileMsg (dispatched by the `d`
-// keybinding or the picker modal) starts an async download + OS open
-// via App.downloadFileCmd.
+// keybinding, picker modal, or file-line click) starts an async
+// download + OS open via App.downloadFileCmd.
 package ui
 
 import (
@@ -14,5 +14,6 @@ var reduceFiles reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	if !ok {
 		return nil, false
 	}
+	toastUntilReplaced(a, "Downloading "+m.Attachment.Name+"…")
 	return a.downloadFileCmd(m.Attachment), true
 }
