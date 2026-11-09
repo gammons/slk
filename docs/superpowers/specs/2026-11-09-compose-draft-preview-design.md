@@ -186,8 +186,9 @@ is sent: bullets for list items, bold as bold, a link as its label,
   full user/group/channel list (`sendMentions`) on every call, which
   today is once per Enter. The preview must not do that per keystroke on
   a large workspace. Allowed fixes, in order of preference: render the
-  preview from `View` with a cache keyed on the draft text, width and
-  theme, so it runs at most once per drawn frame for a changed draft;
+  preview from `View` with a cache keyed on the draft text, width,
+  theme and the names it uses (below), so it runs at most once per
+  drawn frame for a changed draft;
   and cache the sorted mention list in `compose.Model`, cleared by
   `SetUsers` / `SetUserGroups` / `SetChannels` (and whatever else feeds
   it), with a test that the translated text is unchanged. Debouncing the
@@ -199,8 +200,13 @@ is sent: bullets for list items, bold as bold, a link as its label,
   or the view code calling the renderer with the composer's text), so
   long as it obeys the constraints above.
 - Caching details, within the "Speed" call above. Key on the draft
-  text, width and theme, not on compose `Version()`: `Update` bumps the
-  version on every call, and no production code reads it. Add a
+  text, width and theme, plus something that changes whenever the names
+  the preview uses change: the composer's mention data (`SetUsers`,
+  `SetUserGroups`, `SetChannels`) and the pane's user, channel and
+  user-group names used to draw mentions. Otherwise a name that
+  resolves while the draft sits unchanged leaves a stale preview while
+  the send uses the new name. Don't key on compose `Version()`: `Update`
+  bumps the version on every call, and no production code reads it. Add a
   benchmark of the full preview path (translation, conversion, render)
   on a long draft and a large user list.
 - The exact styling of the rule and dim lines, from existing styles
