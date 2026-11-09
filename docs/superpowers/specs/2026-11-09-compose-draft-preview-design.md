@@ -1,6 +1,7 @@
 # Draft preview above the compose box
 
-Task: SLK-908. Status: design, awaiting Grant's approval. No code yet.
+Task: SLK-908. Status: approved by Grant, 2026-11-09. Build plan:
+`docs/superpowers/plans/2026-11-09-compose-draft-preview.md`.
 
 "Preview" already means two other things in slk: a link preview (an
 unfurl, which `x` removes) and the image preview overlay. This feature
