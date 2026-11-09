@@ -91,10 +91,11 @@ func demoImageProtocol(value string) (imgpkg.Protocol, error) {
 func newDemoApp(d *demo.Demo) *ui.App {
 	app := ui.NewApp()
 	applyUISettings(app, uiSettings{
-		TimestampFormat:  demo.TimestampFormat,
-		TypingIndicators: true,
-		MouseWheelLines:  3,
-		ColoredUsernames: true,
+		TimestampFormat:      demo.TimestampFormat,
+		TypingIndicators:     true,
+		HideDeactivatedUsers: true,
+		MouseWheelLines:      3,
+		ColoredUsernames:     true,
 	})
 	d.Install(app)
 	return app

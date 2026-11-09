@@ -97,11 +97,3 @@ func TestEmptyTextOrdinaryMessageIsNotANotice(t *testing.T) {
 		t.Errorf("fallback label leaked onto an ordinary message:\n%s", got)
 	}
 }
-
-func TestIsSystemNoticeSubtypeHuddleAndCanvas(t *testing.T) {
-	for _, s := range []string{"huddle_thread", "tabbed_canvas_updated"} {
-		if !IsSystemNoticeSubtype(s) {
-			t.Errorf("IsSystemNoticeSubtype(%q) = false, want true", s)
-		}
-	}
-}

@@ -14,11 +14,10 @@ import (
 func handleLinkPickerMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	item, chosen := a.linkPicker.HandleKey(msg.String())
 	if chosen {
-		a.SetMode(ModeNormal)
-		// The modal is closed, so clear what it was choosing on every
-		// commit, links included (#194).
+		// Read what it was choosing first: leaving the mode clears it on
+		// every commit, links included (#194).
 		kind, files := a.pickerKind, a.pickerFiles
-		a.pickerKind, a.pickerFiles = "", nil
+		a.SetMode(ModeNormal)
 		if kind == "files" {
 			if item.Index < 0 || item.Index >= len(files) {
 				return nil
@@ -32,8 +31,6 @@ func handleLinkPickerMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	if !a.linkPicker.IsVisible() {
 		// esc/q closed the picker.
 		a.SetMode(ModeNormal)
-		a.pickerFiles = nil
-		a.pickerKind = ""
 	}
 	return nil
 }

@@ -85,6 +85,12 @@ type General struct {
 	// is expanded against the user's home directory at load time;
 	// other paths (absolute or relative) are used as-is.
 	DownloadDir string `toml:"download_dir"`
+	// HideDeactivatedUsers hides deactivated people from the sidebar's DM
+	// rows, the channel finder, the new-message picker and the @ and #
+	// autocompletes, as the Slack desktop client does. A plain bool:
+	// Load decodes over Default(), which sets it to true, so an explicit
+	// false reads back correctly.
+	HideDeactivatedUsers bool `toml:"hide_deactivated_users"`
 }
 
 type Appearance struct {
@@ -124,6 +130,10 @@ type Appearance struct {
 	// does: the repliers' avatars (kitty graphics only), then "N
 	// replies". Needs ShowAvatars. Default off.
 	ReplyAvatars bool `toml:"reply_avatars"`
+	// Compact makes everything more compact: hides avatars, renders
+	// user name on the same line as the message, disables extra space
+	// between messages, and reduces padding wherever possible.
+	Compact bool `toml:"compact"`
 }
 
 type Animations struct {
@@ -176,8 +186,9 @@ type Sidebar struct {
 	// unread messages, and the currently-selected channel are never
 	// hidden regardless of this setting.
 	HideInactiveAfterDays int `toml:"hide_inactive_after_days"`
-	// RightAlignBadges puts mention badges at the right end of their
-	// rows, as Slack does. Default off.
+	// RightAlignBadges puts mention badges, and the Threads and Activity
+	// counts drawn as badges, at the right end of their rows, as Slack
+	// does. Default off.
 	RightAlignBadges bool `toml:"right_align_badges"`
 	Width            int  `toml:"width"`
 	// ChannelIndent indents the rows under each section header by this
@@ -252,7 +263,8 @@ type Theme = core.Theme
 func Default() Config {
 	return Config{
 		General: General{
-			DownloadDir: "~/Downloads",
+			DownloadDir:          "~/Downloads",
+			HideDeactivatedUsers: true,
 		},
 		Appearance: Appearance{
 			Theme:           "nord",

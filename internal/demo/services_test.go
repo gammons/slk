@@ -190,10 +190,10 @@ func TestSearchAndThreadsList(t *testing.T) {
 func TestUnsupportedOperationsSaySo(t *testing.T) {
 	s := testDemo(t).services()
 	ctx := context.Background()
-	if _, err := s.messages.Forward(ctx, teamLumen, chGeneral, "1.0", chRandom); !errors.Is(err, errUnavailable) {
+	if _, err := s.messages.Forward(ctx, teamLumen, chGeneral, "1.0", "", chRandom); !errors.Is(err, errUnavailable) {
 		t.Errorf("Forward err = %v", err)
 	}
-	if _, err := s.messages.Permalink(ctx, chGeneral, "1.0"); !errors.Is(err, errUnavailable) {
+	if _, err := s.messages.Permalink(ctx, chGeneral, "1.0", ""); !errors.Is(err, errUnavailable) {
 		t.Errorf("Permalink err = %v", err)
 	}
 	if msg := s.messages.Edit(chGeneral, "1.0", "x").(ui.MessageEditedMsg); !errors.Is(msg.Err, errUnavailable) {

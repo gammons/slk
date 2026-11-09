@@ -49,6 +49,10 @@ type rtmEventHandler struct {
 	// Back-reference for self-presence/DND state mutation.
 	wsCtx *WorkspaceContext
 
+	// emojiLister refetches emoji.list for an emoji_changed event that
+	// can't be applied as a delta.
+	emojiLister customEmojiLister
+
 	// backfillGate enforces a 30 s minimum between reconnect-driven
 	// catch-up passes. Per-handler so each workspace has its own gate.
 	// Initialized at construction with window = 30 * time.Second.
@@ -234,7 +238,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// full handler (db, caches, program), so faking the gate is
 	// disproportionate. The subtype list itself is pinned by the notice
 	// tests in messages and slackclient.
-	if !changed && h.notifier != nil && h.notifyCfg.Enabled && !messages.IsSystemNoticeSubtype(subtype) {
+	if !changed && h.notifier != nil && h.notifyCfg.Enabled && !core.IsSystemNoticeSubtype(subtype) {
 		isActiveWS := h.isActive != nil && h.isActive()
 		activeChID := ""
 		if h.activeChannelID != nil {
@@ -341,7 +345,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// A join/leave notice doesn't make the channel unread on Slack
 	// either -- excluded here so the mention-badge check below (nested
 	// in this same gate) inherits it for free, same as isSelfMessage.
-	shouldMarkChannel := channelEligible && !isSelfMessage && !changed && !messages.IsSystemNoticeSubtype(subtype)
+	shouldMarkChannel := channelEligible && !isSelfMessage && !changed && !core.IsSystemNoticeSubtype(subtype)
 	if h.db != nil && shouldMarkChannel {
 		if err := h.db.UpdateChannelReadState(channelID, "", true); err != nil {
 			log.Printf("Warning: failed to set has_unread for %s: %v", channelID, err)

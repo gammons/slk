@@ -210,10 +210,17 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	// the tasks that follow, each next to the call that replaces it,
 	// so no intermediate commit leaves slk unable to boot. Until then
 	// slk does both, and the request tally goes UP.
+	// Revalidation inside bootstrap.Run can change users.deleted; the diff
+	// is announced after it.
+	deactivatedBefore, _ := db.DeactivatedUsers()
 	res, err := bootstrap.Run(ctx, newBootstrapDeps(client, db, token.AccessToken,
 		mostRecentlyVisitedChannel(wctx.LastVisitedByChannel), wctx.EdgeHealth))
 	if err != nil {
 		return nil, fmt.Errorf("bootstrapping %s: %w", token.TeamName, err)
+	}
+	deactivatedAfter, _ := db.DeactivatedUsers()
+	if p != nil {
+		announceRevalidated(func(msg tea.Msg) { p.Send(msg) }, deactivatedBefore, deactivatedAfter)
 	}
 	// Order matters between these two: applyBootUsers fills
 	// the synchronized bot classification, which buildChannelItem reads to bucket app DMs,
@@ -227,14 +234,16 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	// channel other than the restored one rendering its custom emoji as
 	// literal `:name:`.
 	//
-	// So it is published as a head start, not an answer: the first
-	// channel's emoji resolve without waiting on a round trip, and the
-	// emoji.list fetch in run() replaces this with the full set as soon
-	// as it lands. Empty on the conversations.history fallback and when
-	// no channel was opened; emoji.list covers those the same way.
-	if len(res.Emojis) > 0 {
-		wctx.SetCustomEmoji(res.Emojis)
+	// So it is published as a head start, not an answer: it goes on top
+	// of the persisted set, and unless that set is fresh the emoji.list
+	// fetch in run() replaces the result as soon as it lands. Empty on
+	// the conversations.history fallback and when no channel was
+	// opened; emoji.list covers those the same way.
+	emojis, freshFor := bootCustomEmoji(db, client.TeamID(), res.Emojis, time.Now())
+	if len(emojis) > 0 {
+		wctx.SetCustomEmoji(emojis)
 	}
+	wctx.customEmojiFreshFor = freshFor
 	hydrateFirstSight(db, client.TeamID(), res)
 
 	// Initialize Slack-native section store if enabled. Bootstrap is
@@ -348,12 +357,21 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	// userBoot's is_open. bootConversations already applies this, so
 	// the call is redundant on the fallback path and harmless there.
 	channels = dropClosedMPIMs(channels, res.IsOpen)
-	// Section membership alone cannot create a row. Recover accessible starred
-	// IMs omitted by either source before the shared item/cache/name flow below.
+	// users.conversations also leaves out some open DMs that userBoot has,
+	// such as one with a deactivated person. Add them before the starred
+	// recovery, so neither adds a DM twice. On the fallback path every one
+	// is already there.
 	known := make([]string, 0, len(channels))
 	for _, ch := range channels {
 		known = append(known, ch.ID)
 	}
+	recovered := missingOpenIMs(known, res)
+	for _, ch := range recovered {
+		known = append(known, ch.ID)
+	}
+	channels = append(channels, recovered...)
+	// Section membership alone cannot create a row. Recover accessible starred
+	// IMs omitted by either source before the shared item/cache/name flow below.
 	if wctx.SectionStore != nil {
 		starCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		channels = append(channels, missingStarredConversations(starCtx, known,
@@ -367,6 +385,8 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	for _, ch := range channels {
 		item, finderItem := buildChannelItem(ch, wctx, cfg, client.TeamID())
 		upsertChannelInDB(db, ch, item.Type, client.TeamID())
+		// No UI message: the ready message carries the workspace's set.
+		recordDeactivatedPeer(ch, db)
 
 		if ch.IsIM {
 			if _, ok := wctx.UserNames.Get(ch.User); !ok {
@@ -523,6 +543,16 @@ func (h *rtmEventHandler) OnConnect() {
 		debuglog.Backfill("team=%s first connect: skipping catch-up, bootstrap.Run already covered it", h.workspaceID)
 	} else {
 		h.syncOnReconnect("reconnect")
+		// emoji_changed events sent while the socket was down are lost;
+		// mark the cache stale so the next launch fetches the list, and
+		// bump emojiSeq so a fetch begun before the drop can't save its
+		// list as fresh.
+		if h.wsCtx != nil && h.db != nil {
+			h.wsCtx.emojiMu.Lock()
+			h.wsCtx.emojiSeq++
+			h.staleCustomEmoji()
+			h.wsCtx.emojiMu.Unlock()
+		}
 	}
 
 	// Force-stale the active channel's membership cache and re-fetch.

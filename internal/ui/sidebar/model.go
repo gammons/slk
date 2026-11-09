@@ -320,6 +320,11 @@ type Model struct {
 	// is injectable for deterministic tests; defaults to time.Now.
 	staleThreshold time.Duration
 	activeID       string
+	// deactivated is the set of user IDs whose DM and app rows are hidden.
+	// The App owns it: it is published whole and never written here, and
+	// nil shows everyone (the option is off). The active conversation is
+	// exempt, like staleness.
+	deactivated map[string]bool
 	// threadsActive reports that the Threads view is the currently
 	// displayed view in the message pane. When true (and the cursor
 	// is on a different row), the synthetic Threads row renders with
@@ -504,11 +509,19 @@ func (m *Model) UnreadChannelCount() int {
 	state := m.readStateReader()
 	count := 0
 	for _, item := range m.items {
-		if item.IsVisiblyUnread(state[item.ID]) {
+		// A hidden deactivated DM has no row to show the dot on.
+		if item.IsVisiblyUnread(state[item.ID]) && !m.hidesPeer(item) {
 			count++
 		}
 	}
 	return count
+}
+
+// hidesPeer reports whether item is a DM or app row whose peer is
+// deactivated and so stays hidden, whatever its read state. The active
+// conversation is the one exemption.
+func (m *Model) hidesPeer(item ChannelItem) bool {
+	return item.ID != m.activeID && core.IsHiddenPeerConversation(item.Type, item.DMUserID, m.deactivated)
 }
 
 // NextUnread returns the visibly-unread channel (HasUnread && !IsMuted)
@@ -617,6 +630,11 @@ func (m *Model) revealUnreadHidden(state map[string]core.ReadState) bool {
 	revealed := false
 	for i, item := range m.items {
 		if shown[i] || !state[item.ID].HasUnread {
+			continue
+		}
+		// A deactivated peer's DM is hidden on purpose, not as stale: an
+		// unread message (an old one, usually) does not bring it back.
+		if m.hidesPeer(item) {
 			continue
 		}
 		if m.filter != "" && !strings.Contains(text.Fold(item.Name), lower) {
@@ -803,6 +821,14 @@ func (m *Model) SetPrivateGlyph(glyph string) {
 // sidebar filter does.
 func (m *Model) SetActiveOnly(enabled bool) {
 	m.activeOnly = enabled
+	m.refilter()
+}
+
+// SetDeactivatedUsers sets the user IDs whose DM and app rows are hidden;
+// nil shows everyone. The map is kept, not copied, so the caller must not
+// write it afterwards. Keeps the cursor on the same item.
+func (m *Model) SetDeactivatedUsers(users map[string]bool) {
+	m.deactivated = users
 	m.refilter()
 }
 
@@ -1523,6 +1549,12 @@ func (m *Model) rebuildFilter() {
 		if m.filter != "" && !strings.Contains(text.Fold(item.Name), lower) {
 			continue
 		}
+		// Deactivated peers are hidden before staleness so they stay
+		// hidden whatever their read state, starred or not. The active
+		// conversation is the only exemption.
+		if m.hidesPeer(item) {
+			continue
+		}
 		// Staleness filter: drop items the user hasn't read in a long
 		// time, with the active channel always exempt so it can't
 		// disappear out from under them.
@@ -1911,10 +1943,7 @@ func (m *Model) buildCache(width int) {
 	threadsCursor := cursorSelected + "⚑ Threads"
 	threadsActiveLabel := activeBorder + "⚑ Threads"
 	if m.threadsUnread > 0 {
-		// Render "•N" as a single styled span so the dot glyph and the digits
-		// stay adjacent in the output (no ANSI reset splits them). Tests rely
-		// on the literal substring "•N" being searchable in View() output.
-		badge := " " + dotStyle.Render("•"+fmt.Sprintf("%d", m.threadsUnread))
+		badge := m.countBadge(threadsLabel, m.threadsUnread, width, dotStyle)
 		threadsLabel += badge
 		threadsCursor += badge
 		threadsActiveLabel += badge
@@ -1953,7 +1982,7 @@ func (m *Model) buildCache(width int) {
 	activityCursor := cursorSelected + "◉ Activity"
 	activityActiveLabel := activeBorder + "◉ Activity"
 	if m.activityUnread > 0 {
-		badge := " " + dotStyle.Render("•"+fmt.Sprintf("%d", m.activityUnread))
+		badge := m.countBadge(activityLabel, m.activityUnread, width, dotStyle)
 		activityLabel += badge
 		activityCursor += badge
 		activityActiveLabel += badge
@@ -2495,6 +2524,17 @@ func truncateHeaderName(name string, budget int) string {
 		used += w
 	}
 	return b.String() + "…"
+}
+
+// countBadge is the Threads or Activity count after left: "•N" (one
+// span, so tests find it), or the mention badge at the row's end under
+// right_align_badges, as Slack draws it.
+func (m *Model) countBadge(left string, n, width int, dotStyle lipgloss.Style) string {
+	if !m.rightAlignBadges {
+		return " " + dotStyle.Render("•"+fmt.Sprintf("%d", n))
+	}
+	badge := styles.MentionBadgeStyle().Render(formatMentionBadge(n))
+	return badgeGap(width, left, badge) + badge
 }
 
 // badgeGap is the run of spaces that pushes badge to the right end of a

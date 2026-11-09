@@ -1148,3 +1148,26 @@ func TestConfig_ThreadAvatars(t *testing.T) {
 		t.Error("expected thread_avatars = true to turn thread avatars on")
 	}
 }
+
+// hide_deactivated_users is a plain bool that defaults to on: Load decodes
+// over Default(), so an explicit false must still read back.
+func TestConfig_HideDeactivatedUsers(t *testing.T) {
+	if !loadConfigString(t, "").General.HideDeactivatedUsers {
+		t.Error("hide_deactivated_users must default to on")
+	}
+	if loadConfigString(t, "[general]\nhide_deactivated_users = false\n").General.HideDeactivatedUsers {
+		t.Error("explicit hide_deactivated_users = false must be honoured")
+	}
+	if !loadConfigString(t, "[general]\nhide_deactivated_users = true\n").General.HideDeactivatedUsers {
+		t.Error("explicit hide_deactivated_users = true must be honoured")
+	}
+}
+
+// A [general] block without the key, the common case (default_workspace is
+// set there), keeps the option on.
+func TestHideDeactivatedUsersPartialGeneralBlockKeepsDefault(t *testing.T) {
+	cfg := loadConfigString(t, "[general]\ndefault_workspace = \"work\"\n")
+	if !cfg.General.HideDeactivatedUsers {
+		t.Fatal("a [general] block without hide_deactivated_users turned the option off")
+	}
+}

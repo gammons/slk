@@ -19,6 +19,9 @@ import (
 	"github.com/muesli/reflow/truncate"
 )
 
+// deactivatedTag follows the name of a DM with a deactivated user.
+const deactivatedTag = "deactivated"
+
 // nonJoinedColor is a hard-coded dim grey used for channels the user is not a
 // member of, so the dim treatment is unmistakable across all themes and does
 // not rely on terminal Faint support (which many emulators render weakly or
@@ -55,6 +58,27 @@ type Model struct {
 	// emojiCtx draws a DM peer's status emoji as an image when image
 	// mode is on (SetEmojiContext, SetEmojiCustoms).
 	emojiCtx messages.EmojiContext
+
+	// deactivated is the set of user IDs whose DMs the finder offers
+	// only to a search, marked and below every other match, and never
+	// for forwarding. The App owns it: it is published whole and never
+	// written here, and nil treats everyone the same (the option is off).
+	deactivated map[string]bool
+	// unsendable is every deactivated user, whatever the option says:
+	// their DMs are never a forwarding destination, as Slack takes no
+	// messages there. Owned by the App, like deactivated.
+	unsendable map[string]bool
+}
+
+// SetDeactivatedUsers sets the user IDs whose DMs are offered only to a
+// search; nil offers everyone the same way. The map is kept, not copied,
+// so the caller must not write it afterwards. An open overlay is
+// refiltered.
+func (m *Model) SetDeactivatedUsers(users map[string]bool) {
+	m.deactivated = users
+	if m.visible {
+		m.filter()
+	}
 }
 
 // SetEmojiContext configures drawing DM status emoji as images. The
@@ -67,6 +91,16 @@ func (m *Model) SetEmojiContext(ctx messages.EmojiContext) {
 // custom status emoji that arrives after startup shows its artwork.
 func (m *Model) SetEmojiCustoms(customs map[string]string) {
 	m.emojiCtx.Customs = customs
+}
+
+// SetUnsendableUsers sets the user IDs whose DMs forwarding never offers:
+// every deactivated user, also with the option off. The map is kept, not
+// copied, like SetDeactivatedUsers'. An open overlay is refiltered.
+func (m *Model) SetUnsendableUsers(users map[string]bool) {
+	m.unsendable = users
+	if m.visible {
+		m.filter()
+	}
 }
 
 var _ interface {
@@ -369,6 +403,8 @@ func (m *Model) HandleKey(keyStr string) *ChannelResult {
 // filter rebuilds the filtered list based on the current query.
 //
 // Ranking precedence (most significant first):
+//  0. A DM with a deactivated user is left out under empty-query and, with
+//     a query, comes after every other match.
 //  1. Synthetic destinations (e.g. Threads view) under empty-query — pinned
 //     to the top so non-channel views are always discoverable. With a query,
 //     synthetic items rank by name match like everything else.
@@ -397,6 +433,15 @@ func (m *Model) filter() {
 	idxs := make([]int, 0, len(m.items))
 	for i, item := range m.items {
 		if m.forwarding && (!item.Joined || item.Synthetic) {
+			continue
+		}
+		// A deactivated DM is found only by searching for it, and is
+		// never a forwarding destination: Slack takes no messages there,
+		// whether or not the option hides it.
+		if strings.TrimSpace(q) == "" && m.isDeactivated(item) {
+			continue
+		}
+		if m.forwarding && core.IsHiddenPeerConversation(item.Type, item.DMUserID, m.unsendable) {
 			continue
 		}
 		idxs = append(idxs, i)
@@ -434,6 +479,10 @@ func (m *Model) filter() {
 	sort.SliceStable(matches, func(i, j int) bool {
 		ai, bi := matches[i].idx, matches[j].idx
 		a, b := m.items[ai], m.items[bi]
+		// 0. A deactivated DM after every other match.
+		if ad, bd := m.isDeactivated(a), m.isDeactivated(b); ad != bd {
+			return bd
+		}
 		// 1. Joined first.
 		if a.Joined != b.Joined {
 			return a.Joined
@@ -462,6 +511,11 @@ func (m *Model) filter() {
 	for i, mm := range matches {
 		m.filtered[i] = mm.idx
 	}
+}
+
+// isDeactivated reports whether item is a DM with a deactivated user.
+func (m *Model) isDeactivated(item core.ChannelFinderItem) bool {
+	return core.IsHiddenPeerConversation(item.Type, item.DMUserID, m.deactivated)
 }
 
 // typeRank returns a sort key for an item: lower comes first. 1:1 DMs
@@ -605,7 +659,20 @@ func (m Model) renderBox(termWidth int) string {
 		// style it is drawn in (for the row background under it).
 		var image string
 		var imageStyle lipgloss.Style
-		if item.Joined {
+		switch {
+		case m.isDeactivated(item):
+			// Dim like a non-joined channel, with no presence or
+			// status, and a tag after the name. The tag is charged to
+			// the name's budget so a long name truncates first.
+			dim := lipgloss.NewStyle().Background(bg).Foreground(nonJoinedColor)
+			prefix = dim.Render("○")
+			label := item.Name
+			nameBudget := max(contentWidth-lipgloss.Width(prefix)-1-len(deactivatedTag)-1, 1)
+			if lipgloss.Width(label) > nameBudget {
+				label = truncate.StringWithTail(label, uint(nameBudget), "…")
+			}
+			name = dim.Render(label) + dim.Render(" ") + dim.Italic(true).Render(deactivatedTag)
+		case item.Joined:
 			prefix = channelPrefix(item, st)
 			nameStyle := lipgloss.NewStyle().Background(bg).Foreground(styles.TextPrimary)
 			if isSelected {
@@ -643,7 +710,7 @@ func (m Model) renderBox(termWidth int) string {
 			}
 			name = nameStyle.Render(label)
 			imageStyle = nameStyle
-		} else {
+		default:
 			// Non-joined: dim grey for everything, including the prefix.
 			dim := lipgloss.NewStyle().Background(bg).Foreground(nonJoinedColor)
 			prefix = dim.Render("#")

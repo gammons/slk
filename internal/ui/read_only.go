@@ -19,6 +19,7 @@ import (
 
 const (
 	readOnlyToast      = "This conversation is read-only"
+	deactivatedToast   = "You can't send messages to a deactivated account"
 	appUnsendableToast = "You can't send messages to this app"
 )
 
@@ -37,11 +38,33 @@ func (a *App) setComposeDisabled(v bool, why string) {
 	a.composeDisabled = v
 }
 
+// sendBlockedReason is why the conversation takes no messages from the
+// user, as the toast says it, or "" when it does: a failed send marked
+// it read-only, it is a DM with a deactivated account, or the app-home
+// probe found the app unsendable.
+func (a *App) sendBlockedReason(channelID string) string {
+	switch {
+	case a.readOnlyChannels[channelID]:
+		return readOnlyToast
+	case a.peerDeactivated(channelID):
+		return deactivatedToast
+	case a.unsendableChannels[channelID]:
+		return appUnsendableToast
+	}
+	return ""
+}
+
+// syncComposeDisabled points composeDisabled at the active channel's
+// sendBlockedReason.
+func (a *App) syncComposeDisabled(why string) {
+	a.setComposeDisabled(a.sendBlockedReason(a.activeChannelID) != "", why)
+}
+
 // composeBlockedText is the toast for a refused compose attempt on the
 // active channel.
 func (a *App) composeBlockedText() string {
-	if a.readOnlyChannels[a.activeChannelID] {
-		return readOnlyToast
+	if r := a.sendBlockedReason(a.activeChannelID); r != "" {
+		return r
 	}
 	return appUnsendableToast
 }

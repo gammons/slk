@@ -33,6 +33,11 @@ type User struct {
 	// whose home team_id differs from the workspace TeamID. Drives
 	// the "(ext)" suffix in the picker.
 	IsExternal bool
+	// Deactivated marks a deactivated account hidden from suggestions
+	// (general.hide_deactivated_users). Compose leaves it out of the
+	// picker but keeps it for send-time "@Name" translation, so a name
+	// typed by hand still becomes a mention.
+	Deactivated bool
 }
 
 type MentionResult struct {

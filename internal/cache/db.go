@@ -208,6 +208,18 @@ func (db *DB) migrate() error {
 
 	CREATE INDEX IF NOT EXISTS idx_channel_members_channel
 		ON channel_members(workspace_id, channel_id);
+
+	CREATE TABLE IF NOT EXISTS custom_emoji (
+		workspace_id TEXT NOT NULL,
+		name         TEXT NOT NULL,
+		value        TEXT NOT NULL,
+		PRIMARY KEY (workspace_id, name)
+	);
+
+	CREATE TABLE IF NOT EXISTS custom_emoji_meta (
+		workspace_id TEXT PRIMARY KEY,
+		fetched_at   INTEGER NOT NULL
+	);
 	`
 
 	if _, err := db.conn.Exec(schema); err != nil {
@@ -283,6 +295,22 @@ func (db *DB) migrate() error {
 	}
 	if err := db.addColumnIfMissing("users", "home_team_id",
 		"ALTER TABLE users ADD COLUMN home_team_id TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// Deactivated flag, used to hide DMs and people pickers. Same one-time
+	// version reset as the columns below, so revalidation refetches the
+	// users bootstrap asks about and fills it.
+	hadDeleted, err := db.hasColumn("users", "deleted")
+	if err != nil {
+		return err
+	}
+	if !hadDeleted {
+		if _, err := db.conn.Exec(`UPDATE users SET version = 0`); err != nil {
+			return fmt.Errorf("resetting user versions for deleted backfill: %w", err)
+		}
+	}
+	if err := db.addColumnIfMissing("users", "deleted",
+		"ALTER TABLE users ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
 	// Custom status, rendered next to other users' names. Conditional

@@ -191,6 +191,7 @@ func New(channelName string) Model {
 	s.Blurred.Prompt = bg
 	s.Focused.Placeholder = bg.Foreground(styles.TextMuted)
 	s.Blurred.Placeholder = bg.Foreground(styles.TextMuted)
+	s.Cursor.Color = styles.TextPrimary
 	ta.SetStyles(s)
 
 	return Model{
@@ -217,6 +218,7 @@ func (m *Model) RefreshStyles() {
 	s.Blurred.Prompt = bg
 	s.Focused.Placeholder = bg.Foreground(styles.TextMuted)
 	s.Blurred.Placeholder = bg.Foreground(styles.TextMuted)
+	s.Cursor.Color = styles.TextPrimary
 	m.input.SetStyles(s)
 	m.dirty()
 }
@@ -1044,6 +1046,12 @@ func (m *Model) MentionUsers() []mentionpicker.User {
 	return m.mentionPicker.Users()
 }
 
+// ChannelPicks returns the channel list most recently handed to SetChannels,
+// which is what "#" autocomplete offers. Intended for tests.
+func (m *Model) ChannelPicks() []channelpicker.Channel {
+	return m.channels
+}
+
 // rebuildMentionUsers recomputes the derived []mentionpicker.User
 // for the active channel and pushes it to the embedded picker.
 //
@@ -1066,6 +1074,9 @@ func (m *Model) rebuildMentionUsers() {
 			_, inCh = members[u.ID]
 		}
 		if u.IsExternal && !inCh {
+			continue
+		}
+		if u.Deactivated {
 			continue
 		}
 		u.InChannel = inCh

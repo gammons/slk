@@ -245,6 +245,8 @@ func run() error {
 	// the active TeamID up front (workspaces connect in goroutines).
 	styles.Apply(cfg.Appearance.Theme, cfg.Theme)
 
+	styles.ApplyCompact(cfg.Appearance.Compact)
+
 	notifier := notify.New(cfg.Notifications.Enabled, cfg.Notifications.NotifyCommand)
 
 	// Initialize the OS clipboard for paste-to-upload.
@@ -484,9 +486,8 @@ func run() error {
 	// Cell pixel metrics for image encoding. Sixel uses them for its
 	// absolute raster dimensions; kitty places by cell but uses them to
 	// transmit enough source pixels for the terminal's native cell
-	// resolution. SetCellPixels retains its 8x16 fallback when the
-	// terminal reports no usable geometry.
-	pxW, pxH := imgpkg.CellPixels(int(os.Stdout.Fd()))
+	// resolution. See startupCellPixels for where the size comes from.
+	pxW, pxH := startupCellPixels(proto)
 	debuglog.ImgRender("cell pixels: %dx%d", pxW, pxH)
 	imgpkg.SetCellPixels(pxW, pxH)
 
@@ -971,13 +972,13 @@ func run() error {
 		}))
 
 		app.SetMessageService(core.NewMessageService(core.MessageServiceFuncs{
-			Forward: func(ctx context.Context, teamID string, sourceChannelID ids.ChannelID, ts ids.MessageTS, destinationChannelID ids.ChannelID) (core.ForwardResult, error) {
+			Forward: func(ctx context.Context, teamID string, sourceChannelID ids.ChannelID, ts ids.MessageTS, threadTS ids.ThreadTS, destinationChannelID ids.ChannelID) (core.ForwardResult, error) {
 				// The user may have switched workspaces since starting the action.
 				wctx := router.ByID(teamID)
 				if wctx == nil || wctx.Client == nil {
 					return core.ForwardResult{}, fmt.Errorf("forwarding message: workspace %q is unavailable", teamID)
 				}
-				postedTS, permalink, err := wctx.Client.ForwardMessage(ctx, string(sourceChannelID), string(ts), string(destinationChannelID))
+				postedTS, permalink, err := wctx.Client.ForwardMessage(ctx, string(sourceChannelID), string(ts), string(threadTS), string(destinationChannelID))
 				if err != nil {
 					return core.ForwardResult{}, err
 				}
@@ -1121,12 +1122,12 @@ func run() error {
 					Err:         err,
 				}
 			},
-			Permalink: func(ctx context.Context, channelID ids.ChannelID, ts ids.MessageTS) (string, error) {
+			Permalink: func(ctx context.Context, channelID ids.ChannelID, ts ids.MessageTS, threadTS ids.ThreadTS) (string, error) {
 				wctx := router.Active()
 				if wctx == nil {
 					return "", nil
 				}
-				return wctx.Client.GetPermalink(ctx, string(channelID), string(ts))
+				return wctx.Client.GetPermalink(ctx, string(channelID), string(ts), string(threadTS))
 			},
 		}))
 
@@ -1135,7 +1136,16 @@ func run() error {
 			if wctx == nil || wctx.Client == nil {
 				return nil, false
 			}
-			return wctx.Client.GetUserProfileContext, true
+			// The dialog's fetch bypasses the full-profile writers, so the
+			// deactivated flag is recorded here. p is nil until the program
+			// starts and the fetch only runs from the UI, hence the closure.
+			return func(ctx context.Context, userID string) (*slackclient.UserProfile, error) {
+				u, err := wctx.Client.GetUserProfileContext(ctx, userID)
+				if err == nil {
+					recordUserDeleted(db, func(msg tea.Msg) { p.Send(msg) }, userID, u.Deleted)
+				}
+				return u, err
+			}, true
 		})
 		profiles := newProfileCache(5*time.Minute, time.Now, profileFetch)
 		app.SetProfileService(core.NewProfileService(core.ProfileServiceFuncs{
@@ -1472,6 +1482,9 @@ func run() error {
 		// workspace being displayed, not the profile's first cache owner.
 		// Best-effort: nil on error (the picker shows no external flags).
 		external, _ := db.ExternalUsers(wctx.TeamID)
+		// Global, not per workspace: the cache's whole set plus this
+		// workspace's IM peers Slack flagged.
+		deactivated, deactivatedAsOf := deactivatedUsers(db)
 
 		// Statuses and presence are re-read from the cache, which live
 		// changes keep current, rather than the connect-time items. DND
@@ -1499,6 +1512,8 @@ func run() error {
 			UserNames:        switchNames,
 			UserStatuses:     statuses,
 			ExternalUsers:    external,
+			DeactivatedUsers: deactivated,
+			DeactivatedSeq:   deactivatedAsOf,
 			UserID:           wctx.UserID,
 			CustomEmoji:      wctx.CustomEmoji(),
 			UserGroups:       wctx.UserGroups(),
@@ -1652,6 +1667,7 @@ func run() error {
 				tsFormat:        tsFormat,
 				db:              db,
 				workspaceID:     teamID,
+				emojiLister:     wctx.Client,
 				isActive:        func() bool { a := router.Active(); return a != nil && a.TeamID == teamID },
 				notifier:        notifier,
 				notifyCfg:       cfgSnap.Notifications,
@@ -1694,6 +1710,9 @@ func run() error {
 			// including profiles first cached by a different workspace.
 			// Best-effort: nil on error, until live resolution fills the flags.
 			external, _ := db.ExternalUsers(wctx.TeamID)
+			// Bootstrap revalidation has already refreshed the cache's
+			// deactivated flags by now.
+			deactivated, deactivatedAsOf := deactivatedUsers(db)
 
 			readyStatuses := cachedPeerStatuses(db, wctx.TeamID)
 			wctx.PeerStatus.SeedHuddles(readyStatuses)
@@ -1714,8 +1733,10 @@ func run() error {
 				UserNames:        readyNames,
 				UserStatuses:     readyStatuses,
 				ExternalUsers:    external,
+				DeactivatedUsers: deactivated,
+				DeactivatedSeq:   deactivatedAsOf,
 				UserID:           wctx.UserID,
-				CustomEmoji:      wctx.CustomEmoji(), // bootstrap subset; replaced by the goroutine below
+				CustomEmoji:      wctx.CustomEmoji(), // cached set plus bootstrap subset; replaced below unless fresh
 				UserGroups:       wctx.UserGroups(),  // empty at this point; filled by the goroutine below
 				SectionsProvider: sectionsProviderAdapter{store: wctx.SectionStore},
 				InitialActive:    isInitial,
@@ -1731,12 +1752,13 @@ func run() error {
 			// after cloning and handing off the startup snapshots above.
 			go wctx.ConnMgr.Run(ctx)
 
-			// Fetch the workspace's custom emoji in the background. When
-			// done, a follow-up message makes rendering and the emoji
-			// picker pick up the full set. Runs unconditionally — see
-			// fetchWorkspaceEmoji for why the bootstrap subset must not
-			// be treated as an answer.
-			go fetchWorkspaceEmoji(ctx, wctx, wctx.Client, p, wctx.TeamID)
+			// Fetch the workspace's custom emoji in the background: now,
+			// or when the persisted set goes stale, then once per TTL.
+			// When done, a follow-up message makes rendering and the
+			// emoji picker pick up the full set. See fetchWorkspaceEmoji
+			// for why the bootstrap subset alone must not be treated as
+			// an answer.
+			go refreshWorkspaceEmoji(ctx, wctx, wctx.Client, db, p, wctx.TeamID, wctx.customEmojiFreshFor)
 
 			// Fetch workspace usergroups in the background. When done,
 			// send a follow-up so render caches and compose pickers can

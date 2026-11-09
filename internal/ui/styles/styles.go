@@ -10,6 +10,9 @@ import (
 )
 
 var (
+	// Vertical padding for the ComposeBox
+	ComposePadding = 1
+
 	// Colors
 	Primary     color.Color = lipgloss.Color("#4A9EFF")
 	Secondary   color.Color = lipgloss.Color("#666666")
@@ -204,7 +207,7 @@ var (
 			BorderBackground(SurfaceDark).
 			Background(SurfaceDark).
 			Foreground(TextPrimary).
-			Padding(1, 1, 1, 1)
+			Padding(ComposePadding, 1, ComposePadding, 1)
 
 	ComposeFocused = lipgloss.NewStyle().
 			BorderStyle(thickLeftBorder).
@@ -213,7 +216,7 @@ var (
 			BorderBackground(SurfaceDark).
 			Background(SurfaceDark).
 			Foreground(TextPrimary).
-			Padding(1, 1, 1, 1)
+			Padding(ComposePadding, 1, ComposePadding, 1)
 
 	ComposeInsert = lipgloss.NewStyle().
 			BorderStyle(thickLeftBorder).
@@ -222,7 +225,7 @@ var (
 			BorderBackground(ComposeInsertBG).
 			Background(ComposeInsertBG).
 			Foreground(TextPrimary).
-			Padding(1, 1, 1, 1)
+			Padding(ComposePadding, 1, ComposePadding, 1)
 
 	// Presence indicators. Foreground only — the background is inherited
 	// from the surrounding context (sidebar row, workspace tile, etc.) so
@@ -437,6 +440,18 @@ func Apply(themeName string, overrides core.Theme) {
 	buildStyles()
 }
 
+// Set whether the style should be compact or not.
+// Currently this only impacts the compose box padding.
+// All other changes are handled elsewhere.
+func ApplyCompact(compact bool) {
+	if compact {
+		ComposePadding = 0
+	} else {
+		ComposePadding = 1
+	}
+	buildStyles()
+}
+
 // SelectionBorderColor returns the foreground color used for the cursor /
 // selected-row marker (the thick left "▌") in the sidebar, messages pane,
 // and thread panel. When the panel has focus we use the bright Accent
@@ -518,13 +533,13 @@ func buildStyles() {
 		Background(SurfaceDark).Foreground(TextMuted)
 	ComposeBox = lipgloss.NewStyle().
 		BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(Border).BorderBackground(SurfaceDark).
-		Background(SurfaceDark).Foreground(TextPrimary).Padding(1, 1, 1, 1)
+		Background(SurfaceDark).Foreground(TextPrimary).Padding(ComposePadding, 1, ComposePadding, 1)
 	ComposeFocused = lipgloss.NewStyle().
 		BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(Primary).BorderBackground(SurfaceDark).
-		Background(SurfaceDark).Foreground(TextPrimary).Padding(1, 1, 1, 1)
+		Background(SurfaceDark).Foreground(TextPrimary).Padding(ComposePadding, 1, ComposePadding, 1)
 	ComposeInsert = lipgloss.NewStyle().
 		BorderStyle(thickLeftBorder).BorderLeft(true).BorderForeground(Accent).BorderBackground(ComposeInsertBG).
-		Background(ComposeInsertBG).Foreground(TextPrimary).Padding(1, 1, 1, 1)
+		Background(ComposeInsertBG).Foreground(TextPrimary).Padding(ComposePadding, 1, ComposePadding, 1)
 	PresenceOnline = lipgloss.NewStyle().Foreground(Accent)
 	PresenceAway = lipgloss.NewStyle().Foreground(TextMuted)
 	ReactionPillOwn = lipgloss.NewStyle().

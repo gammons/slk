@@ -17,6 +17,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/bubbles/confirmprompt"
+	"github.com/gammons/slk/internal/bubbles/linkpicker"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	"github.com/gammons/slk/internal/emoji"
@@ -30,7 +31,6 @@ import (
 	"github.com/gammons/slk/internal/ui/emojipicker"
 	"github.com/gammons/slk/internal/ui/help"
 	"github.com/gammons/slk/internal/ui/imgrender"
-	"github.com/gammons/slk/internal/ui/linkpicker"
 	"github.com/gammons/slk/internal/ui/marks"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
 	"github.com/gammons/slk/internal/ui/messages"
@@ -441,6 +441,21 @@ type App struct {
 	// resolved. Read by SetUserNames when building the mention-picker User
 	// slice so IsExternal is set on each entry.
 	externalUsers map[string]bool
+	// deactivatedUsers is the one global set of deactivated user IDs, not
+	// one per workspace: an account is deactivated everywhere. It is
+	// replaced whole on every change and never written, so the sidebar and
+	// finder may keep the map they are handed (see deactivated.go).
+	deactivatedUsers map[string]bool
+	// deactivatedSeq is, per user, the Seq of the last UserDeactivatedMsg
+	// applied, so an older workspace snapshot cannot undo it. Only the App
+	// reads or writes it.
+	deactivatedSeq map[string]uint64
+	// hideDeactivatedUsers is general.hide_deactivated_users. With it off
+	// the set is kept but no surface is filtered by it.
+	hideDeactivatedUsers bool
+	// channelPickItems is the last channel list SetChannels saw, so the
+	// "#" autocomplete can be rebuilt when the deactivated set changes.
+	channelPickItems []sidebar.ChannelItem
 	// Last (channelID, threadTS) auto-opened from the threads view.
 	// openSelectedThreadCmd compares against these to dedup repeat calls
 	// (j/k keystrokes and ThreadsListLoadedMsg refreshes both fire
@@ -755,6 +770,9 @@ type App struct {
 	scrollPending        int
 	scrollPanel          Panel
 	scrollFlushScheduled bool
+
+	// Whether the app layout should be compact
+	compact bool
 }
 
 // pendingChannelMarkState is App.pendingChannelMark's slot: the newest
@@ -941,6 +959,7 @@ func NewApp() *App {
 		channelSearchDebounce: channelSearchDebounceDelay,
 		fetchingOlder:         map[string]bool{},
 		mouseWheelLines:       3,
+		hideDeactivatedUsers:  true, // config.Default()'s value
 		userNames:             map[string]string{},
 		externalUsers:         map[string]bool{},
 		presence:              newPresenceController(),
@@ -1071,7 +1090,7 @@ func (a *App) threadDrawnAlone() bool {
 	}
 	var scratch panelLayout
 	frame := scratch.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),
-		a.sidebarVisible, a.threadVisible, a.threadInFront())
+		a.sidebarVisible, a.threadVisible, a.threadInFront(), a.compact)
 	return frame.MsgWidth == 0
 }
 
@@ -1080,7 +1099,7 @@ func (a *App) threadDrawnAlone() bool {
 // assembled; tests call it instead of repeating Compute's arguments.
 func (a *App) computeFrame() panelLayoutFrame {
 	return a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),
-		a.sidebarVisible, a.threadVisible, a.threadInFront())
+		a.sidebarVisible, a.threadVisible, a.threadInFront(), a.compact)
 }
 
 func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1396,7 +1415,7 @@ func (a *App) openUserProfile() tea.Cmd {
 		// show is whoever started the huddle.
 		if p, _, focused := a.focusedContentPane(); focused {
 			if msg, sel := p.SelectedMessage(); sel {
-				if starter := messages.HuddleStarter(msg); starter != "" && msg.Subtype == "huddle_thread" {
+				if starter := messages.HuddleStarter(msg); starter != "" && msg.Subtype == core.SubtypeHuddleThread {
 					userID = starter
 				}
 			}
@@ -1533,12 +1552,13 @@ func (a *App) copyPermalinkOfSelected() tea.Cmd {
 	messageSvc := a.messageSvc
 	cID := ids.ChannelID(channelID)
 	mTS := ids.MessageTS(ts)
+	tTS := a.selectedThreadTS()
 
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		url, err := messageSvc.Permalink(ctx, cID, mTS)
+		url, err := messageSvc.Permalink(ctx, cID, mTS, tTS)
 		if err != nil {
 			log.Printf("copy permalink: %v", err)
 			return statusbar.PermalinkCopyFailedMsg{}
@@ -1583,7 +1603,7 @@ func (a *App) openLinksOfSelected() tea.Cmd {
 			items[i] = linkpicker.Item{URL: l.URL, Label: l.Label, InApp: a.linkOpensInApp(l.URL)}
 		}
 		a.pickerKind = "links"
-		a.linkPicker.Open("Open link", items)
+		a.openLinkPicker("Open link", items)
 		a.SetMode(ModeLinkPicker)
 		return nil
 	}
@@ -1628,7 +1648,7 @@ func (a *App) downloadFilesOfSelected() tea.Cmd {
 		}
 		a.pickerKind = "files"
 		a.pickerFiles = files
-		a.linkPicker.Open("Download file", items)
+		a.openLinkPicker("Download file", items)
 		a.SetMode(ModeLinkPicker)
 		return nil
 	}
@@ -2239,14 +2259,53 @@ func (a *App) SetMode(mode Mode) {
 	if a.mode == ModeCommand && mode != ModeCommand {
 		a.clearCmdline()
 	}
-	// Same for the marks list: a global intercept (ctrl+c) leaves
-	// ModeMarks without going through handleMarksMode, and the list
-	// would stay drawn over the screen, and over the quit prompt.
-	if a.mode == ModeMarks && mode != ModeMarks {
-		a.marksOverlay.Close()
+	// Same for a modal: a global intercept (ctrl+c) leaves its mode
+	// without going through its key handler, and it would stay drawn
+	// over the screen, and over the quit prompt.
+	if a.mode != mode {
+		a.closeModal(a.mode)
 	}
 	a.mode = mode
 	a.statusbar.SetMode(mode)
+}
+
+// closeModal closes the modal that mode owns, the way Esc does. A key handler
+// that needs a modal's state after leaving its mode reads it before SetMode.
+// TestQuitPromptClosesEveryModal fails on a modal mode missing here.
+func (a *App) closeModal(mode Mode) {
+	switch mode {
+	case ModeChannelFinder:
+		a.channelFinder.Close()
+	case ModeReactionPicker:
+		a.reactionPicker.Close()
+	case ModeWorkspaceFinder:
+		a.workspaceFinder.Close()
+	case ModeThemeSwitcher:
+		a.themeSwitcher.Close()
+	case ModePresenceMenu:
+		a.presenceMenu.Close()
+	case ModeHelp:
+		a.help.Close()
+	case ModeNewMessage:
+		a.newMessagePicker.Close()
+		// Mark any in-flight submit as cancelled so its eventual
+		// result is dropped.
+		if a.newMessageInFlightID != 0 {
+			a.newMessageCancelled = true
+			a.abandonMsgPrefill()
+		}
+	case ModeReactionsView:
+		a.reactionsView.Close()
+	case ModeLinkPicker:
+		a.linkPicker.Close()
+		a.pickerKind, a.pickerFiles = "", nil
+	case ModeWorkspaceSearch:
+		a.searchResults.Close()
+	case ModeUserProfile:
+		a.userProfile.Close()
+	case ModeMarks:
+		a.marksOverlay.Close()
+	}
 }
 
 // exitInsertAfterSend drops the user back to ModeNormal after a send,
@@ -2716,7 +2775,7 @@ func (a *App) SetWorkspaces(items []workspace.WorkspaceItem) {
 // channel join, or a display-name resolution for a DM).
 func (a *App) SetChannels(items []sidebar.ChannelItem) {
 	a.sidebar.SetItems(items)
-	picks := make([]channelpicker.Channel, 0, len(items))
+	a.channelPickItems = items
 	names := make(map[string]string, len(items))
 	types := make(map[string]string, len(items))
 	for _, ch := range items {
@@ -2725,16 +2784,10 @@ func (a *App) SetChannels(items []sidebar.ChannelItem) {
 		if ch.Name == "" {
 			continue
 		}
-		picks = append(picks, channelpicker.Channel{
-			ID:   ch.ID,
-			Name: ch.Name,
-			Type: ch.Type,
-		})
 		names[ch.ID] = ch.Name
 		types[ch.ID] = ch.Type
 	}
-	a.compose.SetChannels(picks)
-	a.threadCompose.SetChannels(picks)
+	a.pushChannelPicks()
 	a.channelNames = names
 	for _, m := range a.allWinModels() {
 		m.SetChannelNames(names)
@@ -2743,6 +2796,26 @@ func (a *App) SetChannels(items []sidebar.ChannelItem) {
 	a.threadsView.SetChannelNames(names)
 	a.activityView.SetChannelNames(names)
 	a.activityView.SetChannelTypes(types)
+}
+
+// pushChannelPicks gives both composers the "#" autocomplete list built
+// from channelPickItems. Only the suggestions are filtered: the name map
+// the panes render with keeps every conversation.
+func (a *App) pushChannelPicks() {
+	hidden := a.hiddenUsers()
+	picks := make([]channelpicker.Channel, 0, len(a.channelPickItems))
+	for _, ch := range a.channelPickItems {
+		if ch.Name == "" || core.IsHiddenPeerConversation(ch.Type, ch.DMUserID, hidden) {
+			continue
+		}
+		picks = append(picks, channelpicker.Channel{
+			ID:   ch.ID,
+			Name: ch.Name,
+			Type: ch.Type,
+		})
+	}
+	a.compose.SetChannels(picks)
+	a.threadCompose.SetChannels(picks)
 }
 
 // SetChannelService wires the App's ChannelService collaborator
@@ -2915,6 +2988,21 @@ func (a *App) SetColoredUsernames(enabled bool) {
 		m.SetColoredUsernames(enabled)
 	}
 	a.threadPanel.SetColoredUsernames(enabled)
+}
+
+// SetCompact enables or disables the compact view
+func (a *App) SetCompact(enabled bool) {
+	a.compact = enabled
+	styles.ApplyCompact(enabled)
+	for _, m := range a.allWinModels() {
+		m.SetCompact(enabled)
+	}
+	a.threadPanel.SetCompact(enabled)
+	a.invalidateAllWinModelCaches()
+	a.threadPanel.InvalidateCache()
+	a.sidebar.InvalidateCache()
+	a.compose.RefreshStyles()
+	a.threadCompose.RefreshStyles()
 }
 
 // SetThreadAvatars draws avatars in the thread panel too, when the avatar
@@ -3235,7 +3323,11 @@ func (a *App) SetUserNames(names map[string]string) {
 	}
 	a.threadPanel.SetUserNames(names)
 
-	// Build user list for mention picker
+	// Build user list for mention picker. Deactivated users are marked,
+	// not dropped: compose leaves them out of the suggestions but still
+	// translates a hand-typed "@Name", and names keeps them so old
+	// messages still render their authors.
+	hidden := a.hiddenUsers()
 	users := make([]mentionpicker.User, 0, len(names))
 	for id, displayName := range names {
 		users = append(users, mentionpicker.User{
@@ -3243,6 +3335,7 @@ func (a *App) SetUserNames(names map[string]string) {
 			DisplayName: displayName,
 			Username:    "",
 			IsExternal:  a.externalUsers[id],
+			Deactivated: hidden[id],
 		})
 	}
 	a.compose.SetUsers(users)
@@ -3277,12 +3370,15 @@ func (a *App) SetUserGroups(groups map[string]string) {
 //   - Recency is left at 0 (alphabetical order; recency wiring is a
 //     follow-up that needs WorkspaceContext.LastVisitedByChannel
 //     plumbed in).
+//   - Deactivated users are excluded while the option is on. The picker
+//     is seeded on open, so it needs no live refilter.
 //   - Self (a.currentUserID) is excluded both at slice-build time
 //     and via SetCurrentUserID (belt-and-suspenders).
 func (a *App) seedNewMessagePicker() {
 	users := make([]newmessagepicker.User, 0, len(a.userNames))
+	hidden := a.hiddenUsers()
 	for id, name := range a.userNames {
-		if id == a.currentUserID {
+		if id == a.currentUserID || hidden[id] {
 			continue
 		}
 		users = append(users, newmessagepicker.User{

@@ -123,6 +123,9 @@ type ChannelFinderItem struct {
 	Type     string // channel, dm, group_dm, private, threads
 	Presence string // for DMs: active, away
 	Joined   bool   // true if the user is already a member; false for browseable public channels
+	// DMUserID is the peer's user ID for a one-to-one DM or app DM, empty
+	// for everything else. Hiding deactivated users matches on it.
+	DMUserID string
 	// LastVisited is the unix timestamp (seconds) of the user's most
 	// recent visit to this channel; 0 means never visited. Drives the
 	// recency-based sort used by filter(): empty-query order is by

@@ -116,6 +116,7 @@ func buildChannelItem(ch slack.Channel, wctx *WorkspaceContext, cfg config.Confi
 		Type:     chType,
 		Presence: item.Presence,
 		Joined:   true,
+		DMUserID: item.DMUserID,
 	}
 	return item, finderItem
 }

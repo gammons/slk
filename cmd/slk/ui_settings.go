@@ -24,8 +24,12 @@ type uiSettings struct {
 	SidebarStyle     ui.SidebarStyle
 	MouseWheelLines  int
 	ColoredUsernames bool
+	Compact          bool
 	ThreadAvatars    bool
 	ThemeOverrides   core.Theme
+	// HideDeactivatedUsers is [general] hide_deactivated_users (default
+	// on).
+	HideDeactivatedUsers bool
 	// StayInInsertAfterSend is [compose] stay_in_insert_after_send
 	// (default off).
 	StayInInsertAfterSend bool
@@ -55,10 +59,12 @@ func uiSettingsFromConfig(cfg config.Config) uiSettings {
 		SidebarStyle:          sidebarStyleFromConfig(cfg.Sidebar),
 		MouseWheelLines:       cfg.Appearance.MouseWheelLines,
 		ColoredUsernames:      cfg.Appearance.ColoredUsernames,
+		Compact:               cfg.Appearance.Compact,
 		ThreadAvatars:         cfg.Appearance.ThreadAvatars,
 		ThemeOverrides:        cfg.Theme,
 		StayInInsertAfterSend: cfg.Compose.StayInInsertAfterSend,
 		ReplyAvatars:          cfg.Appearance.ReplyAvatars,
+		HideDeactivatedUsers:  cfg.General.HideDeactivatedUsers,
 	}
 }
 
@@ -78,8 +84,10 @@ func applyUISettings(app *ui.App, s uiSettings) {
 	app.SetSidebarStyle(s.SidebarStyle)
 	app.SetSidebarStaleThreshold(s.StaleAfter)
 	app.SetMentionPills(s.MentionPills)
+	app.SetHideDeactivatedUsers(s.HideDeactivatedUsers)
 	app.SetMouseWheelLines(s.MouseWheelLines)
 	app.SetColoredUsernames(s.ColoredUsernames)
+	app.SetCompact(s.Compact)
 	app.SetThreadAvatars(s.ThreadAvatars)
 	app.SetThemeItems(styles.ThemeNames())
 	app.SetThemeOverrides(s.ThemeOverrides)
