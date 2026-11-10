@@ -340,6 +340,8 @@ greppable by name; no line numbers, because these files move.
 | A private `dbus-daemon` for one test (skips when not installed; no service directories, so an unowned name is never activated), a connection to it, and a spec-only Secret Service served on it | `startTestBus(t)`, `connectTestBus(t, addr)`, `serveSecretService(t, addr, svc)` with `specOnlyService()` (`internal/slackdesktop/password_linux_test.go`, `package slackdesktop`, Linux only) |
 | An `App` whose emoji history is in memory (most recent first), returning the history; what the channel composer's emoji autocomplete lists after typing some text | `emojiHistoryApp(t, opts...)`, `autocompleteRows(t, a, s)` (`internal/ui/emoji_frecency_test.go`) |
 | The emoji name on the reaction picker's highlighted row; move down n rows, commit and return the emoji | `highlightedEmoji(t, a)`, `commitAfterDowns(t, a, calls, n)` (`internal/ui/mode_reaction_picker_test.go`); a reaction picker whose whole emoji list is given names: `withEmoji(names...)` (`internal/ui/reactionpicker/click_test.go`, `package reactionpicker`) |
+| An `App` in insert mode on C1 with a draft in the channel box and its draft preview on; a frame's rows; where the draft preview is in a frame, and its plain rows | `draftApp(t, w, h, draft)`, `frameRows(a)`, `previewSpan(rows, width)`, `previewRows(t, a)` (`internal/ui/draft_preview_test.go`) |
+| An `App` in insert mode on C1 for draft preview key tests (keys go through `a.Update`, so the upload gate runs); send one key; ctrl+r that fails unless it showed the box's preview | `previewKeysApp(t)`, `send(a, k)`, `previewOnWithCtrlR(t, a, c)` (`internal/ui/draft_preview_keys_test.go`) |
 
 ### Known duplication — do not add to it
 
