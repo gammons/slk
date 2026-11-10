@@ -2325,8 +2325,9 @@ func (a *App) exitInsertAfterSend() {
 	a.exitInsert()
 }
 
-// exitInsert mirrors the Esc-from-insert handler: ModeNormal, both
-// composers blurred. This is the unconditioned exit that
+// exitInsert is the Esc-from-insert exit: ModeNormal, both composers
+// blurred, and their draft previews closed, since leaving the box puts
+// the preview away (SLK-908). This is the unconditioned exit that
 // exitInsertAfterSend applies when the option is off, and that the
 // upload branches of handleInsertMode apply whatever the option says,
 // since the composer is busy for the duration of an upload and must not
@@ -2335,6 +2336,8 @@ func (a *App) exitInsert() {
 	a.SetMode(ModeNormal)
 	a.compose.Blur()
 	a.threadCompose.Blur()
+	a.compose.SetPreview(false)
+	a.threadCompose.SetPreview(false)
 }
 
 // clearSelections drops any active mouse selection from every
@@ -3941,13 +3944,17 @@ func (a *App) cancelEdit() {
 		return
 	}
 	stashed := a.editing.StashedDraft()
+	// Saving or cancelling an edit puts back the stashed draft, a
+	// different draft from the one the preview was showing: close it.
 	switch a.editing.Panel() {
 	case PanelMessages:
 		a.compose.SetValue(stashed)
 		a.compose.SetPlaceholderOverride("")
+		a.compose.SetPreview(false)
 	case PanelThread:
 		a.threadCompose.SetValue(stashed)
 		a.threadCompose.SetPlaceholderOverride("")
+		a.threadCompose.SetPreview(false)
 	}
 	a.editing.Clear()
 	a.SetMode(ModeNormal)
