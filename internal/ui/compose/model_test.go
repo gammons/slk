@@ -2,6 +2,7 @@
 package compose
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/emoji"
+	"github.com/gammons/slk/internal/ui/channelpicker"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
 	"github.com/gammons/slk/internal/ui/styles"
 )
@@ -1328,5 +1330,57 @@ func TestComposeCursorUsesThemeText(t *testing.T) {
 	m.RefreshStyles()
 	if got := m.input.Styles().Cursor.Color; got != styles.TextPrimary {
 		t.Fatalf("after a theme switch cursor colour = %v, want %v", got, styles.TextPrimary)
+	}
+}
+
+// Every setter that feeds translation must reach the next send: the
+// mention list is cached, so this is the guard on its invalidation.
+func TestTranslateSeesMentionDataChanges(t *testing.T) {
+	m := New("general")
+	const draft = "hi @bob #ops @team"
+	if got := m.TranslateMentionsForSend(draft); got != draft {
+		t.Fatalf("no mention data: got %q, want it unchanged", got)
+	}
+	m.SetUsers([]mentionpicker.User{{ID: "U2", DisplayName: "bob"}})
+	if got, want := m.TranslateMentionsForSend(draft), "hi <@U2> #ops @team"; got != want {
+		t.Fatalf("after SetUsers: got %q, want %q", got, want)
+	}
+	m.SetChannels([]channelpicker.Channel{{ID: "C9", Name: "ops"}})
+	if got, want := m.TranslateMentionsForSend(draft), "hi <@U2> <#C9|ops> @team"; got != want {
+		t.Fatalf("after SetChannels: got %q, want %q", got, want)
+	}
+	m.SetUserGroups(map[string]string{"S1": "team"})
+	if got, want := m.TranslateMentionsForSend(draft), "hi <@U2> <#C9|ops> <!subteam^S1|@team>"; got != want {
+		t.Fatalf("after SetUserGroups: got %q, want %q", got, want)
+	}
+	m.SetUsers(nil)
+	if got, want := m.TranslateMentionsForSend(draft), "hi @bob <#C9|ops> <!subteam^S1|@team>"; got != want {
+		t.Fatalf("after SetUsers(nil): got %q, want %q", got, want)
+	}
+}
+
+func TestSendMentionsBuiltOncePerChange(t *testing.T) {
+	m := New("general")
+	m.SetUsers([]mentionpicker.User{{ID: "U2", DisplayName: "bob"}})
+	a, b := m.sendMentions(), m.sendMentions()
+	if &a[0] != &b[0] {
+		t.Fatal("sendMentions rebuilt the list with no change in mention data")
+	}
+	m.SetUsers([]mentionpicker.User{{ID: "U3", DisplayName: "carol"}})
+	if c := m.sendMentions(); &c[0] == &a[0] {
+		t.Fatal("sendMentions kept the old list after SetUsers")
+	}
+}
+
+func BenchmarkTranslateMentionsForSend(b *testing.B) {
+	m := New("general")
+	users := make([]mentionpicker.User, 20000)
+	for i := range users {
+		users[i] = mentionpicker.User{ID: fmt.Sprintf("U%05d", i), DisplayName: fmt.Sprintf("person.%d", i)}
+	}
+	m.SetUsers(users)
+	draft := strings.Repeat("- ship **v0.28** on Tuesday with @person.42 and [the notes](https://example.com/x)\n", 25)
+	for b.Loop() {
+		m.TranslateMentionsForSend(draft)
 	}
 }
