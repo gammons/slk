@@ -367,3 +367,44 @@ func BenchmarkDraftPreview(b *testing.B) {
 		})
 	}
 }
+
+// With room for only one body row, the preview shows the draft's last
+// line, not a cut marker and nothing else.
+func TestDraftPreviewTwoRowsShowTheLastLine(t *testing.T) {
+	a := draftApp(t, 120, 40, "first\nsecond\nthird")
+	plain := func(maxRows int) []string {
+		out := a.draftPreview(&a.compose, a.messagepane, PanelMessages, 40, maxRows, compose.RenderKey{})
+		rows := strings.Split(ansi.Strip(out), "\n")
+		for i := range rows {
+			rows[i] = strings.TrimSpace(rows[i])
+		}
+		return rows
+	}
+	if got := plain(2); len(got) != 2 || got[1] != "third" {
+		t.Errorf("2 rows: %q, want the title and third", got)
+	}
+	if got := plain(3); len(got) != 3 || got[1] != "…" || got[2] != "third" {
+		t.Errorf("3 rows: %q, want the title, … and third", got)
+	}
+}
+
+// A sent message wraps 3 cells narrower when the pane draws an avatar
+// beside it; the preview wraps where the sent message will.
+func TestDraftPreviewWrapsLikeASentMessage(t *testing.T) {
+	words := strings.TrimSpace(strings.Repeat("aaaa ", 11)) // 54 cells
+	bodyRows := func(a *App) int {
+		out := a.draftPreview(&a.compose, a.messagepane, PanelMessages, 60, 20, compose.RenderKey{})
+		return len(strings.Split(out, "\n")) - 1
+	}
+	a := draftApp(t, 120, 40, words)
+	a.SetCurrentUserID("U1")
+	if n := bodyRows(a); n != 1 {
+		t.Fatalf("no avatars: %d body rows, want 1 (the pane wraps at 56)", n)
+	}
+	a = draftApp(t, 120, 40, words)
+	a.SetCurrentUserID("U1")
+	a.messagepane.SetAvatarFunc(func(string) string { return "████\n████" })
+	if n := bodyRows(a); n != 2 {
+		t.Fatalf("with avatars: %d body rows, want 2 (the pane wraps at 53 beside an avatar)", n)
+	}
+}

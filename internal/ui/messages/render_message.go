@@ -70,7 +70,8 @@ type RenderOptions struct {
 
 	// BodyOnly draws only the message body (the draft preview): no
 	// labels, header, reply line, blocks, attachments or reactions;
-	// the header never joins the body, even in compact mode.
+	// the header never joins the body, even in compact mode. Avatar is
+	// not drawn, but still narrows the body as it would beside one.
 	BodyOnly bool
 }
 

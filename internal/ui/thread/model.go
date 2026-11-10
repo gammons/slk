@@ -1485,6 +1485,16 @@ func (m *Model) DraftRenderContext() *messages.RenderContext {
 	return rc
 }
 
+// DraftRenderOptions are the draft preview's render options; see
+// messages.(*Model).DraftRenderOptions.
+func (m *Model) DraftRenderOptions(userID string) messages.RenderOptions {
+	opt := messages.RenderOptions{BodyOnly: true}
+	if !m.compact && m.showAvatars && m.avatarFn != nil {
+		opt.Avatar = m.avatarFn(userID)
+	}
+	return opt
+}
+
 // renderMessage renders msg with the thread pane's options: an avatar
 // only with SetShowAvatars, no "(edited)", no broadcast label, no reply
 // affordance and no sixel rows (plan decision P3). Image hits are

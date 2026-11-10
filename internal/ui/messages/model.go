@@ -1587,6 +1587,18 @@ func (m *Model) DraftRenderContext() *RenderContext {
 	return rc
 }
 
+// DraftRenderOptions are the draft preview's render options: the body
+// alone, with the avatar this pane would draw beside userID's message
+// (only its width counts), so the preview wraps where the sent message
+// will.
+func (m *Model) DraftRenderOptions(userID string) RenderOptions {
+	opt := RenderOptions{BodyOnly: true}
+	if !m.compact && m.avatarFn != nil {
+		opt.Avatar = m.avatarFn(userID)
+	}
+	return opt
+}
+
 // renderMessageEntry builds a single entry and its EntryPayload for m.messages[i] using
 // the shared cacheStyles. The returned entry is fully populated with
 // both the unselected and selected pre-bordered line slices, the

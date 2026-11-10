@@ -29,3 +29,15 @@ func TestDraftRenderContextHasNoImages(t *testing.T) {
 		t.Error("draft render context carries search terms or a reply avatar")
 	}
 }
+
+func TestDraftRenderOptionsWrapLikeAReply(t *testing.T) {
+	m := New()
+	m.SetAvatarFunc(func(string) string { return "████" })
+	if opt := m.DraftRenderOptions("U1"); !opt.BodyOnly || opt.Avatar != "" {
+		t.Fatalf("avatars off: %+v, want body only and no avatar", opt)
+	}
+	m.SetShowAvatars(true)
+	if opt := m.DraftRenderOptions("U1"); !opt.BodyOnly || opt.Avatar == "" {
+		t.Fatalf("avatars on: %+v, want body only beside the reply's avatar", opt)
+	}
+}

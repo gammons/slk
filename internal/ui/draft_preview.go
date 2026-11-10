@@ -36,7 +36,10 @@ func draftPreviewRows(inner, room int) int {
 // draftPreview returns the draft preview's rows for compose box c, or
 // "" when it is off or maxRows is under 2: a title rule, then either
 // one dim note or the draft's rendered body, drawn with pane's names.
-// Past maxRows the body keeps its end, under a dim "…" row. Every row
+// Past maxRows the body keeps its end, under a dim "…" row when there
+// is room for one besides a line. It wraps where the sent message will:
+// the pane's render options add the avatar it would draw for the
+// current user, which narrows the body. Every row
 // is exactly width cells, even where the body renderer's 20-cell floor
 // is wider than the pane.
 func (a *App) draftPreview(c *compose.Model, pane contentPane, panel Panel, width, maxRows int, key compose.RenderKey) string {
@@ -53,15 +56,19 @@ func (a *App) draftPreview(c *compose.Model, pane contentPane, panel Panel, widt
 		return rows[0] + "\n" + draftPreviewRow(muted.Render("  "+note), width)
 	}
 	body := strings.Split(c.PreviewBody(width, key, func(mrkdwn string, width int) string {
-		rendered := messages.RenderMessage(messages.MessageItem{Text: mrkdwn}, width,
-			pane.DraftRenderContext(), messages.RenderOptions{BodyOnly: true})
+		rendered := messages.RenderMessage(messages.MessageItem{Text: mrkdwn, UserID: a.currentUserID}, width,
+			pane.DraftRenderContext(), pane.DraftRenderOptions(a.currentUserID))
 		lines := strings.Split(rendered.Content, "\n")
 		for i, line := range lines {
 			lines[i] = draftPreviewRow("  "+line, width)
 		}
 		return strings.Join(lines, "\n")
 	}), "\n")
-	if len(body) > maxRows-1 {
+	switch {
+	case len(body) <= maxRows-1:
+	case maxRows == 2:
+		body = body[len(body)-1:]
+	default:
 		body = append([]string{draftPreviewRow(muted.Render("  …"), width)}, body[len(body)-(maxRows-2):]...)
 	}
 	return strings.Join(append(rows, body...), "\n")

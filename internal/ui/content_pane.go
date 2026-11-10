@@ -38,6 +38,9 @@ type contentPane interface {
 	// DraftRenderContext is the render context the draft preview above
 	// this pane's compose box draws with: the pane's names, no images.
 	DraftRenderContext() *messages.RenderContext
+	// DraftRenderOptions are the options it draws with: the body alone,
+	// wrapped as this pane wraps userID's messages (avatar or not).
+	DraftRenderOptions(userID string) messages.RenderOptions
 }
 
 var (
