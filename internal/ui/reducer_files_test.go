@@ -137,6 +137,54 @@ func TestDownloadFileMsg_OverlappingFailuresAreShownAfterDownloadsFinish(t *test
 	}
 }
 
+func TestDownloadFailureQueueDoesNotReplaceUploadProgress(t *testing.T) {
+	oldToastTick := toastTick
+	toastTick = func(_ time.Duration, tick func(time.Time) tea.Msg) tea.Cmd {
+		return func() tea.Msg { return tick(time.Time{}) }
+	}
+	t.Cleanup(func() { toastTick = oldToastTick })
+
+	app := newTestApp(t)
+	app.pendingDownloadFailures = []string{"Download failed: b.csv"}
+	toastUntilReplaced(app, "Download failed: a.csv")
+	clearFirst := downloadFailureClearAfter(app)
+
+	app.compose.SetUploading(true)
+	app.Update(UploadProgressMsg{Done: 1, Total: 2})
+	_, retry := app.Update(clearFirst())
+	if retry == nil {
+		t.Fatal("expected failure queue timer to remain scheduled during upload")
+	}
+	if got := statusbarText(app); !strings.Contains(got, "Uploading 1/2") {
+		t.Fatalf("status bar = %q, want upload progress", got)
+	}
+
+	_, retryDuringUpload := app.Update(retry())
+	if retryDuringUpload == nil {
+		t.Fatal("expected failure queue timer to re-arm during upload")
+	}
+	if got := statusbarText(app); !strings.Contains(got, "Uploading 1/2") {
+		t.Fatalf("status bar = %q, failure replaced active upload progress", got)
+	}
+
+	app.Update(UploadResultMsg{})
+	if got := statusbarText(app); !strings.Contains(got, "Sent") {
+		t.Fatalf("status bar = %q, want upload result toast", got)
+	}
+	_, retryAfterResult := app.Update(retryDuringUpload())
+	if retryAfterResult == nil {
+		t.Fatal("expected failure timer to re-arm against upload result toast")
+	}
+	if got := statusbarText(app); !strings.Contains(got, "Sent") {
+		t.Fatalf("status bar = %q, failure replaced upload result before expiry", got)
+	}
+
+	app.Update(retryAfterResult())
+	if got := statusbarText(app); !strings.Contains(got, "Download failed: b.csv") {
+		t.Errorf("status bar = %q, want queued download failure after upload result", got)
+	}
+}
+
 func TestDownloadFileMsg_ShowsProgressUntilResult(t *testing.T) {
 	app := newTestApp(t)
 	app.SetFileService(core.NewFileService(nil, func(context.Context, string, string) (string, error) {

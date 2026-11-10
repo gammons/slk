@@ -35,17 +35,19 @@ var reduceFiles reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return toastWithClear(a, m.Text, 3*time.Second), true
 
 	case downloadFailureClearMsg:
-		if m.Seq != a.statusbar.ToastSeq() {
-			if len(a.pendingDownloads) == 0 && len(a.pendingDownloadFailures) > 0 {
-				return downloadFailureClearAfter(a), true
+		if len(a.pendingDownloads) > 0 {
+			return nil, true
+		}
+		if len(a.pendingDownloadFailures) == 0 {
+			if m.Seq == a.statusbar.ToastSeq() {
+				a.statusbar.ClearCopied()
 			}
 			return nil, true
 		}
-		if len(a.pendingDownloads) == 0 && len(a.pendingDownloadFailures) > 0 {
-			return nextDownloadFailure(a), true
+		if shouldDeferDownloadFailureToast(a, m.Seq) {
+			return downloadFailureClearAfter(a), true
 		}
-		a.statusbar.ClearCopied()
-		return nil, true
+		return nextDownloadFailure(a), true
 
 	default:
 		return nil, false
@@ -54,6 +56,10 @@ var reduceFiles reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 
 func downloadProgressText(a *App) string {
 	return "Downloading " + a.pendingDownloads[len(a.pendingDownloads)-1] + "…"
+}
+
+func shouldDeferDownloadFailureToast(a *App, seq uint64) bool {
+	return a.compose.Uploading() || a.threadCompose.Uploading() || seq != a.statusbar.ToastSeq()
 }
 
 func nextDownloadFailure(a *App) tea.Cmd {
