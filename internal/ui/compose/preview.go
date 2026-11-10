@@ -27,9 +27,13 @@ func (m *Model) SetPreview(on bool) {
 type PreviewRender func(mrkdwn string, width int) string
 
 // RenderKey is everything a PreviewRender reads besides the mrkdwn and
-// the width (the theme, the pane's names, its window). The caller
-// changes a field whenever what it stands for changes.
-type RenderKey struct{ Theme, Pane, Window int64 }
+// the width (the theme, the pane's names, its window, whether the body
+// wraps beside an avatar). The caller changes a field whenever what it
+// stands for changes.
+type RenderKey struct {
+	Theme, Pane, Window int64
+	Avatar              bool
+}
 
 // previewTextCache holds the draft's send-path mrkdwn for the draft
 // text and mention data it was made from.

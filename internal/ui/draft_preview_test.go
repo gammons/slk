@@ -348,7 +348,7 @@ func BenchmarkDraftPreview(b *testing.B) {
 	for _, on := range []bool{true, false} {
 		b.Run(map[bool]string{true: "on", false: "off"}[on], func(b *testing.B) {
 			pinRenderGlobals(b)
-			a := buildTestApp(withSize(160, 50))
+			a := newTestApp(b, withSize(160, 50))
 			users := make([]mentionpicker.User, 20000)
 			for i := range users {
 				users[i] = mentionpicker.User{ID: fmt.Sprintf("U%05d", i), DisplayName: fmt.Sprintf("person.%d", i)}
@@ -406,5 +406,32 @@ func TestDraftPreviewWrapsLikeASentMessage(t *testing.T) {
 	a.messagepane.SetAvatarFunc(func(string) string { return "████\n████" })
 	if n := bodyRows(a); n != 2 {
 		t.Fatalf("with avatars: %d body rows, want 2 (the pane wraps at 53 beside an avatar)", n)
+	}
+}
+
+// Your avatar can arrive while the draft sits unchanged and the pane's
+// version stays put; the preview must re-wrap for it, not keep the
+// cached wider body.
+func TestDraftPreviewRewrapsWhenAvatarArrives(t *testing.T) {
+	words := strings.TrimSpace(strings.Repeat("aaaa ", 11)) // 54 cells
+	a := draftApp(t, 120, 40, words)
+	a.SetCurrentUserID("U1")
+	loaded := false
+	a.messagepane.SetAvatarFunc(func(string) string {
+		if loaded {
+			return "████\n████"
+		}
+		return ""
+	})
+	bodyRows := func() int {
+		out := a.draftPreview(&a.compose, a.messagepane, PanelMessages, 60, 20, compose.RenderKey{})
+		return len(strings.Split(out, "\n")) - 1
+	}
+	if n := bodyRows(); n != 1 {
+		t.Fatalf("avatar not loaded: %d body rows, want 1", n)
+	}
+	loaded = true
+	if n := bodyRows(); n != 2 {
+		t.Fatalf("avatar loaded: %d body rows, want 2 (the sent message wraps beside it)", n)
 	}
 }

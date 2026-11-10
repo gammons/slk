@@ -55,9 +55,13 @@ func (a *App) draftPreview(c *compose.Model, pane contentPane, panel Panel, widt
 	if note := a.draftPreviewNote(c, panel); note != "" {
 		return rows[0] + "\n" + draftPreviewRow(muted.Render("  "+note), width)
 	}
+	// An avatar can arrive without a pane version change, so whether
+	// the body wraps beside one is part of the key.
+	opt := pane.DraftRenderOptions(a.currentUserID)
+	key.Avatar = opt.Avatar != ""
 	body := strings.Split(c.PreviewBody(width, key, func(mrkdwn string, width int) string {
 		rendered := messages.RenderMessage(messages.MessageItem{Text: mrkdwn, UserID: a.currentUserID}, width,
-			pane.DraftRenderContext(), pane.DraftRenderOptions(a.currentUserID))
+			pane.DraftRenderContext(), opt)
 		lines := strings.Split(rendered.Content, "\n")
 		for i, line := range lines {
 			lines[i] = draftPreviewRow("  "+line, width)
