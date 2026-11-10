@@ -104,6 +104,25 @@ func TestDraftPreviewShowsRenderedDraft(t *testing.T) {
 	}
 }
 
+// A line after a list stays on its own line (Grant's draft on SLK-908
+// showed "• threeand another line").
+func TestDraftPreviewLineAfterList(t *testing.T) {
+	draft := strings.Join([]string{"bug with rendering lists:", "", "- one", "- two", "- three", "", "and another line"}, "\n")
+	a := draftApp(t, 120, 40, draft)
+	var three, after = -1, -1
+	for i, r := range previewRows(t, a) {
+		switch strings.TrimSpace(r) {
+		case "• three":
+			three = i
+		case "and another line":
+			after = i
+		}
+	}
+	if three < 0 || after <= three {
+		t.Fatalf("want \"• three\" and then \"and another line\" as their own rows:\n%s", strings.Join(previewRows(t, a), "\n"))
+	}
+}
+
 func TestDraftPreviewNotes(t *testing.T) {
 	cases := []struct {
 		name, draft string

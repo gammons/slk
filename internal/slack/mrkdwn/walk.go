@@ -65,6 +65,11 @@ func (w *walker) walkBlock(n ast.Node) {
 		w.walkRawHTMLBlock(n)
 	case *ast.List:
 		w.walkList(n, 0)
+		if n.NextSibling() != nil {
+			// walkList trims its last newline; the next block still
+			// needs its own line, and the blank line a list ends with.
+			w.mrkdwn.WriteString("\n\n")
+		}
 	case *ast.FencedCodeBlock:
 		w.walkCodeBlock(n)
 	case *ast.CodeBlock:
