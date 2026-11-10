@@ -83,6 +83,7 @@ type KeyMap struct {
 	WinOnly             key.Binding
 	ToggleBroadcast     key.Binding
 	OpenInEditor        key.Binding
+	DraftPreview        key.Binding
 }
 
 func DefaultKeyMap() KeyMap {
@@ -188,5 +189,8 @@ func DefaultKeyMap() KeyMap {
 		ToggleBroadcast: key.NewBinding(key.WithKeys("ctrl+o"), key.WithHelp("ctrl+o / alt+enter", "also send reply to channel")),
 		// Shadows the textarea's own ctrl+e (LineEnd); "End" still works.
 		OpenInEditor: key.NewBinding(key.WithKeys("ctrl+e"), key.WithHelp("ctrl+e", "edit message in $EDITOR")),
+		// Insert mode, either compose box: shows or hides the draft
+		// preview above the box being typed in.
+		DraftPreview: key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "show / hide the draft preview")),
 	}
 }

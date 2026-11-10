@@ -3941,13 +3941,17 @@ func (a *App) cancelEdit() {
 		return
 	}
 	stashed := a.editing.StashedDraft()
+	// Saving or cancelling an edit puts back the stashed draft, a
+	// different draft from the one the preview was showing: close it.
 	switch a.editing.Panel() {
 	case PanelMessages:
 		a.compose.SetValue(stashed)
 		a.compose.SetPlaceholderOverride("")
+		a.compose.SetPreview(false)
 	case PanelThread:
 		a.threadCompose.SetValue(stashed)
 		a.threadCompose.SetPlaceholderOverride("")
+		a.threadCompose.SetPreview(false)
 	}
 	a.editing.Clear()
 	a.SetMode(ModeNormal)
