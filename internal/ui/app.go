@@ -151,8 +151,8 @@ type App struct {
 	// pendingDownloads tracks download names on the Update goroutine so one
 	// completion cannot clear another download's progress.
 	pendingDownloads []string
-	// pendingDownloadFailures holds failures until no downloads remain, then
-	// drains them through transient status-bar toasts.
+	// pendingDownloadFailures holds failures until no downloads or uploads are
+	// active and the toast slot is available, then drains them as transient toasts.
 	pendingDownloadFailures []string
 	// stackFront is the content pane (PanelMessages or PanelThread)
 	// that last had focus. Recorded by Update, read by threadInFront.
