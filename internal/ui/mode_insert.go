@@ -12,7 +12,7 @@
 //   - Esc with active edit       -> close any open compose picker
 //     first, else cancel the edit.
 //   - Esc otherwise              -> close any open compose picker
-//     first, else exit insert mode.
+//     first, else exit insert mode (closing the draft preview).
 //   - App Ctrl hotkey with stay_in_insert_after_send on and an empty
 //     composer -> exit insert mode and run it as in normal mode.
 //   - Ctrl+V                     -> smartPaste (clipboard image /
@@ -133,9 +133,7 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 				return nil
 			}
 		}
-		a.SetMode(ModeNormal)
-		a.compose.Blur()
-		a.threadCompose.Blur()
+		a.exitInsert()
 		return a.tryOpenActionPrompt()
 	}
 

@@ -157,8 +157,9 @@ is sent: bullets for list items, bold as bold, a link as its label,
 - **What else closes it:** sending (decision 2), and moving the box to a
   different conversation (switching channels, opening another thread),
   since the preview belongs to the draft you turned it on for. Leaving
-  insert mode with Esc does not close it: the pane stays while you look
-  around, and is there when you press `i` again.
+  insert mode with Esc closes it too, and `i` opens the box without it
+  (changed after the build, from Grant on SLK-908, 2026-11-10; this
+  first said the pane stayed). Esc that only closes a picker leaves it.
 - **Edits (`E`).** The preview works while editing a message in the box,
   since `EditMessage` converts the same way. Saving the edit closes it,
   like a send, and so does cancelling it (Esc during an edit puts the

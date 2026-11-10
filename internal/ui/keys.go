@@ -190,7 +190,8 @@ func DefaultKeyMap() KeyMap {
 		// Shadows the textarea's own ctrl+e (LineEnd); "End" still works.
 		OpenInEditor: key.NewBinding(key.WithKeys("ctrl+e"), key.WithHelp("ctrl+e", "edit message in $EDITOR")),
 		// Insert mode, either compose box: shows or hides the draft
-		// preview above the box being typed in.
+		// preview above the box being typed in. Sending or leaving
+		// insert mode closes it.
 		DraftPreview: key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "show / hide the draft preview")),
 	}
 }

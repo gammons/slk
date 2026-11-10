@@ -7,6 +7,7 @@ import (
 
 	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/help"
+	"github.com/gammons/slk/internal/ui/mentionpicker"
 )
 
 // Keys for the draft preview go through a.Update, not runKeyCases, so
@@ -99,19 +100,50 @@ func TestSendClosesPreview(t *testing.T) {
 	}
 }
 
-func TestEscKeepsPreview(t *testing.T) {
-	a := previewKeysApp(t)
-	send(a, ctrlR)
-	send(a, keyCode(tea.KeyEscape))
-	if a.mode != ModeNormal {
-		t.Fatalf("precondition: Esc left mode %v", a.mode)
+// Esc out of the box closes its draft preview, and i again opens the
+// box without it (Grant on SLK-908).
+func TestEscClosesPreview(t *testing.T) {
+	for _, thread := range []bool{false, true} {
+		a := previewKeysApp(t)
+		c := &a.compose
+		if thread {
+			focusThreadPanel(t, a)
+			c = &a.threadCompose
+		}
+		previewOnWithCtrlR(t, a, c)
+		send(a, keyCode(tea.KeyEscape))
+		if a.mode != ModeNormal {
+			t.Fatalf("thread=%v: precondition: Esc left mode %v", thread, a.mode)
+		}
+		if c.PreviewOn() {
+			t.Fatalf("thread=%v: Esc out of insert mode left the draft preview open", thread)
+		}
+		send(a, keyPress('i'))
+		if a.mode != ModeInsert {
+			t.Fatalf("thread=%v: precondition: i left mode %v", thread, a.mode)
+		}
+		if c.PreviewOn() {
+			t.Fatalf("thread=%v: i again reopened the draft preview", thread)
+		}
 	}
-	send(a, keyPress('i'))
-	if a.mode != ModeInsert {
-		t.Fatalf("precondition: i left mode %v", a.mode)
+}
+
+// Esc with a picker open only closes the picker: you are still in the
+// box, so the preview stays.
+func TestEscClosingPickerKeepsPreview(t *testing.T) {
+	a := previewKeysApp(t)
+	a.compose.SetUsers([]mentionpicker.User{{ID: "U2", DisplayName: "bob"}})
+	previewOnWithCtrlR(t, a, &a.compose)
+	send(a, keyPress('@'))
+	if !a.compose.IsMentionActive() {
+		t.Fatal("precondition: @ did not open the mention picker")
+	}
+	send(a, keyCode(tea.KeyEscape))
+	if a.mode != ModeInsert || a.compose.IsMentionActive() {
+		t.Fatalf("precondition: Esc should only close the picker (mode %v, picker %v)", a.mode, a.compose.IsMentionActive())
 	}
 	if !a.compose.PreviewOn() {
-		t.Fatal("Esc and i again closed the draft preview")
+		t.Fatal("Esc closing the picker closed the draft preview")
 	}
 }
 

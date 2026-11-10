@@ -130,7 +130,8 @@ type Model struct {
 
 	// preview is the draft preview's on/off state (ctrl+r), per box and
 	// off by default. clearVisibleDraft turns it off, so a send, a
-	// cleared box and a move to another conversation all close it.
+	// cleared box and a move to another conversation all close it;
+	// the app also closes it when you leave insert mode.
 	// previewText and previewBody cache its two steps (preview.go).
 	preview     bool
 	previewText previewTextCache
