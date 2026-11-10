@@ -128,6 +128,14 @@ type Model struct {
 	// opens, so a high-visibility broadcast never silently repeats.
 	broadcast bool
 
+	// preview is the draft preview's on/off state (ctrl+r), per box and
+	// off by default. clearVisibleDraft turns it off, so a send, a
+	// cleared box and a move to another conversation all close it.
+	// previewText and previewBody cache its two steps (preview.go).
+	preview     bool
+	previewText previewTextCache
+	previewBody previewBodyCache
+
 	// editingExternally is true while Ctrl+E's editor is open. Update()
 	// refuses all key input while set.
 	editingExternally bool
@@ -977,6 +985,7 @@ func (m *Model) clearVisibleDraft() {
 	m.pending = nil
 	m.uploading = false
 	m.broadcast = false
+	m.preview = false
 	m.dirty()
 }
 
