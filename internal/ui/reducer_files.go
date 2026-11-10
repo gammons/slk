@@ -36,6 +36,9 @@ var reduceFiles reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 
 	case downloadFailureClearMsg:
 		if m.Seq != a.statusbar.ToastSeq() {
+			if len(a.pendingDownloads) == 0 && len(a.pendingDownloadFailures) > 0 {
+				return downloadFailureClearAfter(a), true
+			}
 			return nil, true
 		}
 		if len(a.pendingDownloads) == 0 && len(a.pendingDownloadFailures) > 0 {
@@ -57,6 +60,10 @@ func nextDownloadFailure(a *App) tea.Cmd {
 	text := a.pendingDownloadFailures[0]
 	a.pendingDownloadFailures = a.pendingDownloadFailures[1:]
 	toastUntilReplaced(a, text)
+	return downloadFailureClearAfter(a)
+}
+
+func downloadFailureClearAfter(a *App) tea.Cmd {
 	seq := a.statusbar.ToastSeq()
 	return toastTick(3*time.Second, func(time.Time) tea.Msg {
 		return downloadFailureClearMsg{Seq: seq}

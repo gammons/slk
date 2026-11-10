@@ -5,9 +5,13 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/statusbar"
 )
 
 func TestDownloadFileMsg_NoDownloader_Toasts(t *testing.T) {
@@ -63,6 +67,12 @@ func TestDownloadFileMsg_OverlappingDownloadsKeepProgressVisible(t *testing.T) {
 }
 
 func TestDownloadFileMsg_OverlappingFailuresAreShownAfterDownloadsFinish(t *testing.T) {
+	oldToastTick := toastTick
+	toastTick = func(_ time.Duration, tick func(time.Time) tea.Msg) tea.Cmd {
+		return func() tea.Msg { return tick(time.Time{}) }
+	}
+	t.Cleanup(func() { toastTick = oldToastTick })
+
 	app := newTestApp(t)
 	app.SetFileService(core.NewFileService(nil, func(context.Context, string, string) (string, error) {
 		return "", errors.New("download failed")
@@ -96,9 +106,26 @@ func TestDownloadFileMsg_OverlappingFailuresAreShownAfterDownloadsFinish(t *test
 		t.Fatal("expected first failure clear command")
 	}
 
-	_, clearSecond := app.Update(clearFirst())
+	_, copyClear := app.Update(statusbar.CopiedMsg{N: 1})
+	if got := statusbarText(app); !strings.Contains(got, "Copied 1 chars") {
+		t.Fatalf("status bar = %q, want newer copy toast", got)
+	}
+	_, retryFirst := app.Update(clearFirst())
+	if retryFirst == nil {
+		t.Fatal("stale failure timer should re-arm behind the newer toast")
+	}
+	if got := statusbarText(app); !strings.Contains(got, "Copied 1 chars") {
+		t.Fatalf("status bar = %q, stale failure timer replaced the newer toast", got)
+	}
+
+	app.Update(copyClear())
+	_, retryAfterCopy := app.Update(retryFirst())
+	if retryAfterCopy == nil {
+		t.Fatal("failure timer should re-arm after the newer toast clears")
+	}
+	_, clearSecond := app.Update(retryAfterCopy())
 	if got := statusbarText(app); !strings.Contains(got, "Download failed: b.csv") {
-		t.Fatalf("status bar = %q, want second failure after first clears", got)
+		t.Fatalf("status bar = %q, want second failure after re-armed timer", got)
 	}
 	if clearSecond == nil {
 		t.Fatal("expected second failure clear command")
