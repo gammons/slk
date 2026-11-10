@@ -1574,6 +1574,19 @@ func (m *Model) renderContext() *RenderContext {
 	}
 }
 
+// DraftRenderContext is the render context for the draft preview: the
+// pane's names, theme options and emoji glyphs, with no emoji image
+// placement (the compose region is outside the image pipeline), no
+// search highlighting, reaction cursor or reply avatar.
+func (m *Model) DraftRenderContext() *RenderContext {
+	rc := m.renderContext()
+	rc.Emoji.PlaceCtx = emojiutil.PlaceContext{}
+	rc.SearchTerms = nil
+	rc.Nav = ReactionNav{}
+	rc.ReplyAvatar = nil
+	return rc
+}
+
 // renderMessageEntry builds a single entry and its EntryPayload for m.messages[i] using
 // the shared cacheStyles. The returned entry is fully populated with
 // both the unselected and selected pre-bordered line slices, the

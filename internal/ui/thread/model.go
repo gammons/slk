@@ -13,6 +13,7 @@ import (
 	"github.com/gammons/slk/internal/debuglog"
 
 	"github.com/gammons/slk/internal/bubbles/entrylist"
+	emojiutil "github.com/gammons/slk/internal/emoji"
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/imgrender"
 	"github.com/gammons/slk/internal/ui/messages"
@@ -1471,6 +1472,17 @@ func (m *Model) renderContext() *messages.RenderContext {
 		ImageChannel:     m.channelID,
 		Nav:              m.nav,
 	}
+}
+
+// DraftRenderContext is the render context for the draft preview; see
+// messages.(*Model).DraftRenderContext.
+func (m *Model) DraftRenderContext() *messages.RenderContext {
+	rc := m.renderContext()
+	rc.Emoji.PlaceCtx = emojiutil.PlaceContext{}
+	rc.SearchTerms = nil
+	rc.Nav = messages.ReactionNav{}
+	rc.ReplyAvatar = nil
+	return rc
 }
 
 // renderMessage renders msg with the thread pane's options: an avatar

@@ -35,6 +35,9 @@ type contentPane interface {
 	// UpdateMessageInPlace applies a message_changed echo to the message
 	// with the item's TS; false when the pane does not hold it.
 	UpdateMessageInPlace(item messages.MessageItem) bool
+	// DraftRenderContext is the render context the draft preview above
+	// this pane's compose box draws with: the pane's names, no images.
+	DraftRenderContext() *messages.RenderContext
 }
 
 var (
