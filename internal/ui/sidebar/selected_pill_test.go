@@ -24,6 +24,7 @@ func TestSelectedPill_ThemedCursorRowIsAFilledPill(t *testing.T) {
 		{ID: "C1", Name: "deploys", Type: "channel"},
 		{ID: "C2", Name: "general", Type: "channel"},
 	})
+	m.ToggleCollapse(defaultChannelsSection) // expand, so both rows draw
 	m.SelectByID("C1")
 	view := m.View(10, 30)
 

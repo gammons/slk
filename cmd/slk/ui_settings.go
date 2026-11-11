@@ -30,6 +30,10 @@ type uiSettings struct {
 	// HideDeactivatedUsers is [general] hide_deactivated_users (default
 	// on).
 	HideDeactivatedUsers bool
+	// StartCollapsed is [sidebar] start_collapsed.
+	StartCollapsed bool
+	// ShowUnreadInCollapsed is [sidebar] show_unread_in_collapsed.
+	ShowUnreadInCollapsed bool
 	// StayInInsertAfterSend is [compose] stay_in_insert_after_send
 	// (default off).
 	StayInInsertAfterSend bool
@@ -57,6 +61,8 @@ func uiSettingsFromConfig(cfg config.Config) uiSettings {
 		RightAlignBadges:      cfg.Sidebar.RightAlignBadges,
 		ChannelIndent:         cfg.Sidebar.ChannelIndent,
 		SidebarStyle:          sidebarStyleFromConfig(cfg.Sidebar),
+		StartCollapsed:        cfg.Sidebar.StartCollapsed,
+		ShowUnreadInCollapsed: cfg.Sidebar.ShowUnreadInCollapsed,
 		MouseWheelLines:       cfg.Appearance.MouseWheelLines,
 		ColoredUsernames:      cfg.Appearance.ColoredUsernames,
 		Compact:               cfg.Appearance.Compact,
@@ -85,6 +91,8 @@ func applyUISettings(app *ui.App, s uiSettings) {
 	app.SetSidebarStaleThreshold(s.StaleAfter)
 	app.SetMentionPills(s.MentionPills)
 	app.SetHideDeactivatedUsers(s.HideDeactivatedUsers)
+	app.SetSidebarStartCollapsed(s.StartCollapsed)
+	app.SetSidebarShowUnreadInCollapsed(s.ShowUnreadInCollapsed)
 	app.SetMouseWheelLines(s.MouseWheelLines)
 	app.SetColoredUsernames(s.ColoredUsernames)
 	app.SetCompact(s.Compact)
