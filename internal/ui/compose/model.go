@@ -12,11 +12,12 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/gammons/slk/internal/bubbles/channelpicker"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/emoji"
-	"github.com/gammons/slk/internal/ui/channelpicker"
 	"github.com/gammons/slk/internal/ui/emojipicker"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
+	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/gammons/slk/internal/usergroups"
 )
@@ -215,6 +216,8 @@ func New(channelName string) Model {
 		input:       ta,
 		channelName: channelName,
 		drafts:      make(map[draftKey]draft),
+		channelPicker: channelpicker.New(
+			channelpicker.WithStyles(channelPickerStyles())),
 	}
 }
 
@@ -237,6 +240,7 @@ func (m *Model) RefreshStyles() {
 	s.Blurred.Placeholder = bg.Foreground(styles.TextMuted)
 	s.Cursor.Color = styles.TextPrimary
 	m.input.SetStyles(s)
+	m.channelPicker.SetStyles(channelPickerStyles())
 	m.dirty()
 }
 
@@ -853,7 +857,17 @@ func (m Model) ChannelPickerView(width int) string {
 	if !m.channelActive {
 		return ""
 	}
-	return m.channelPicker.View(width)
+	// m is a copy; the width is the popup width the caller allots this frame.
+	m.channelPicker.SetWidth(width)
+	return m.channelPicker.View()
+}
+
+// channelPickerStyles maps the current theme onto the channel picker.
+func channelPickerStyles() channelpicker.Styles {
+	return channelpicker.Styles{
+		Chrome: messages.ChromeStyles(),
+		Name:   lipgloss.NewStyle().Foreground(styles.TextPrimary),
+	}
 }
 
 // SetUsers provides the list of workspace users for mention autocomplete.

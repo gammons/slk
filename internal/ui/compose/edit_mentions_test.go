@@ -3,7 +3,7 @@ package compose
 import (
 	"testing"
 
-	"github.com/gammons/slk/internal/ui/channelpicker"
+	"github.com/gammons/slk/internal/bubbles/channelpicker"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
 )
 
