@@ -67,6 +67,12 @@ type RenderOptions struct {
 	ImageHits       bool   // record image and file hit rects (both panes)
 	SixelRows       bool   // record sixel rows (channel pane)
 	stats           *entryPerfStats
+
+	// BodyOnly draws only the message body (the draft preview): no
+	// labels, header, reply line, blocks, attachments or reactions;
+	// the header never joins the body, even in compact mode. Avatar is
+	// not drawn, but still narrows the body as it would beside one.
+	BodyOnly bool
 }
 
 // RenderedMessage is one message, rendered, before the pane's border and fill.
@@ -293,7 +299,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		bodySrc = ""
 	}
 	startsWithBlockQuote := strings.HasPrefix(bodySrc, "&gt; ") || strings.HasPrefix(bodySrc, "> ")
-	headerOnSeparateLine := !rc.Compact || startsWithBlockQuote || !hasBody
+	headerOnSeparateLine := opt.BodyOnly || !rc.Compact || startsWithBlockQuote || !hasBody
 
 	if headerOnSeparateLine && lipgloss.Width(header) > headerBudget {
 		var wrapped strings.Builder
@@ -385,6 +391,10 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	}
 
 	text := bodyStyle.Render(WordWrap(rendered, contentWidth))
+	if opt.BodyOnly {
+		out.Content = text
+		return out
+	}
 
 	if hasBody {
 		preAttachmentRows += lipgloss.Height(text) // wrapped body text

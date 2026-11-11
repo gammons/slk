@@ -12,13 +12,15 @@
 //   - Esc with active edit       -> close any open compose picker
 //     first, else cancel the edit.
 //   - Esc otherwise              -> close any open compose picker
-//     first, else exit insert mode.
+//     first, else exit insert mode (closing the draft preview).
 //   - App Ctrl hotkey with stay_in_insert_after_send on and an empty
 //     composer -> exit insert mode and run it as in normal mode.
 //   - Ctrl+V                     -> smartPaste (clipboard image /
 //     file path / verbatim text).
 //   - Ctrl+U                     -> clear compose (text +
-//     attachments + uploading flag).
+//     attachments + uploading flag); the draft preview stays.
+//   - Ctrl+R                     -> show / hide the draft preview
+//     above the active compose (works with a picker open).
 //   - Ctrl+O (thread compose)    -> toggle "also send to channel" for
 //     the next thread reply.
 //   - Ctrl+E                     -> edit the draft in $VISUAL/$EDITOR
@@ -131,9 +133,7 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 				return nil
 			}
 		}
-		a.SetMode(ModeNormal)
-		a.compose.Blur()
-		a.threadCompose.Blur()
+		a.exitInsert()
 		return a.tryOpenActionPrompt()
 	}
 
@@ -158,8 +158,15 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	if a.focusedPanel == PanelThread && a.threadVisible {
 		target = &a.threadCompose
 	}
+	if key.Matches(msg, a.keys.DraftPreview) {
+		target.TogglePreview()
+		return nil
+	}
 	if code == 'u' && mod == tea.ModCtrl {
+		// Clearing the box is not a send: the draft preview stays.
+		preview := target.PreviewOn()
 		target.Reset()
+		target.SetPreview(preview)
 		return nil
 	}
 	// If a compose-overlay picker (emoji / @mention / #channel)

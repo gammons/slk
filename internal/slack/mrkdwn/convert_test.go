@@ -603,6 +603,27 @@ func TestConvert_NestedList(t *testing.T) {
 	}
 }
 
+// A block after a list starts on its own line in the mrkdwn fallback,
+// with the blank line the source had. The block side is already right:
+// the next block is its own element.
+func TestConvert_BlockAfterList(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"paragraph", "intro:\n\n- one\n- two\n\nand another line", "intro:\n\n• one\n• two\n\nand another line"},
+		{"ordered then paragraph", "1. one\n2. two\n\nafter", "1. one\n2. two\n\nafter"},
+		{"nested then paragraph", "- a\n    - b\n\nafter", "• a\n  • b\n\nafter"},
+		{"two lists", "- a\n\n1. b", "• a\n\n1. b"},
+		{"code block", "- a\n\n```\nx\n```", "• a\n\n```\nx\n```"},
+		{"quote", "- a\n\n> q", "• a\n\n> q"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if mr, _ := Convert(c.in); mr != c.want {
+				t.Errorf("mrkdwn = %q, want %q", mr, c.want)
+			}
+		})
+	}
+}
+
 func TestConvert_FencedCodeBlock(t *testing.T) {
 	in := "```\nfoo\nbar\n```"
 	mr, blk := Convert(in)

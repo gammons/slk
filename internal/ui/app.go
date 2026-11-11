@@ -16,6 +16,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/gammons/slk/internal/bubbles/channelpicker"
 	"github.com/gammons/slk/internal/bubbles/confirmprompt"
 	"github.com/gammons/slk/internal/bubbles/linkpicker"
 	"github.com/gammons/slk/internal/core"
@@ -26,7 +27,6 @@ import (
 	"github.com/gammons/slk/internal/slackurl"
 	"github.com/gammons/slk/internal/ui/activityview"
 	"github.com/gammons/slk/internal/ui/channelfinder"
-	"github.com/gammons/slk/internal/ui/channelpicker"
 	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/emojipicker"
 	"github.com/gammons/slk/internal/ui/help"
@@ -148,6 +148,12 @@ type App struct {
 	// while an upload was in flight (the open thread's parent was
 	// deleted). The UploadResultMsg arm runs it once the upload ends.
 	threadCloseAfterUpload bool
+	// pendingDownloads tracks download names on the Update goroutine so one
+	// completion cannot clear another download's progress.
+	pendingDownloads []string
+	// pendingDownloadFailures holds failures until no downloads or uploads are
+	// active and the toast slot is available, then drains them as transient toasts.
+	pendingDownloadFailures []string
 	// stackFront is the content pane (PanelMessages or PanelThread)
 	// that last had focus. Recorded by Update, read by threadInFront.
 	stackFront Panel
@@ -2325,8 +2331,9 @@ func (a *App) exitInsertAfterSend() {
 	a.exitInsert()
 }
 
-// exitInsert mirrors the Esc-from-insert handler: ModeNormal, both
-// composers blurred. This is the unconditioned exit that
+// exitInsert is the Esc-from-insert exit: ModeNormal, both composers
+// blurred, and their draft previews closed, since leaving the box puts
+// the preview away (SLK-908). This is the unconditioned exit that
 // exitInsertAfterSend applies when the option is off, and that the
 // upload branches of handleInsertMode apply whatever the option says,
 // since the composer is busy for the duration of an upload and must not
@@ -2335,6 +2342,8 @@ func (a *App) exitInsert() {
 	a.SetMode(ModeNormal)
 	a.compose.Blur()
 	a.threadCompose.Blur()
+	a.compose.SetPreview(false)
+	a.threadCompose.SetPreview(false)
 }
 
 // clearSelections drops any active mouse selection from every
@@ -3298,18 +3307,18 @@ func (a *App) openURLCmd(url string) tea.Cmd {
 func (a *App) downloadFileCmd(att messages.Attachment) tea.Cmd {
 	return func() tea.Msg {
 		if a.files == nil {
-			return ToastMsg{Text: "File downloads unavailable"}
+			return downloadFileResultMsg{Name: att.Name, Text: "File downloads unavailable", Failed: true}
 		}
 		path, err := a.files.Download(context.Background(), att.DownloadURL, att.Name)
 		if err != nil {
 			log.Printf("file download failed: %v", err)
-			return ToastMsg{Text: "Download failed: " + att.Name}
+			return downloadFileResultMsg{Name: att.Name, Text: "Download failed: " + att.Name, Failed: true}
 		}
 		if err := a.desktop.Open(path); err != nil {
 			log.Printf("file open failed: %v", err)
-			return ToastMsg{Text: "Failed to open " + att.Name}
+			return downloadFileResultMsg{Name: att.Name, Text: "Failed to open " + att.Name, Failed: true}
 		}
-		return ToastMsg{Text: "Downloaded " + att.Name}
+		return downloadFileResultMsg{Name: att.Name, Text: "Downloaded " + att.Name}
 	}
 }
 
@@ -3947,13 +3956,17 @@ func (a *App) cancelEdit() {
 		return
 	}
 	stashed := a.editing.StashedDraft()
+	// Saving or cancelling an edit puts back the stashed draft, a
+	// different draft from the one the preview was showing: close it.
 	switch a.editing.Panel() {
 	case PanelMessages:
 		a.compose.SetValue(stashed)
 		a.compose.SetPlaceholderOverride("")
+		a.compose.SetPreview(false)
 	case PanelThread:
 		a.threadCompose.SetValue(stashed)
 		a.threadCompose.SetPlaceholderOverride("")
+		a.threadCompose.SetPreview(false)
 	}
 	a.editing.Clear()
 	a.SetMode(ModeNormal)

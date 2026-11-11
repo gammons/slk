@@ -12,11 +12,12 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/gammons/slk/internal/bubbles/channelpicker"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/emoji"
-	"github.com/gammons/slk/internal/ui/channelpicker"
 	"github.com/gammons/slk/internal/ui/emojipicker"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
+	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/gammons/slk/internal/usergroups"
 )
@@ -56,6 +57,14 @@ type Model struct {
 	users           []mentionpicker.User
 	reverseNames    map[string]string // displayName -> userID
 	userGroups      map[string]string // usergroup ID -> handle for active workspace
+
+	// sendEntries caches sendMentions' sorted list; nil means rebuild.
+	// mentionGen counts changes to the data it is built from
+	// (reverseNames, userGroups, reverseChannels), so a cache of
+	// translated text can tell when to translate again. Every write of
+	// that data goes through mentionDataChanged.
+	sendEntries []sendMention
+	mentionGen  uint64
 
 	// activeChannelID is the channel currently shown in the messages
 	// pane. Drives the InChannel computation when rebuilding the
@@ -119,6 +128,15 @@ type Model struct {
 	// Non-sticky: cleared on send / Reset() and when a different thread
 	// opens, so a high-visibility broadcast never silently repeats.
 	broadcast bool
+
+	// preview is the draft preview's on/off state (ctrl+r), per box and
+	// off by default. clearVisibleDraft turns it off, so a send, a
+	// cleared box and a move to another conversation all close it;
+	// the app also closes it when you leave insert mode.
+	// previewText and previewBody cache its two steps (preview.go).
+	preview     bool
+	previewText previewTextCache
+	previewBody previewBodyCache
 
 	// editingExternally is true while Ctrl+E's editor is open. Update()
 	// refuses all key input while set.
@@ -198,6 +216,8 @@ func New(channelName string) Model {
 		input:       ta,
 		channelName: channelName,
 		drafts:      make(map[draftKey]draft),
+		channelPicker: channelpicker.New(
+			channelpicker.WithStyles(channelPickerStyles())),
 	}
 }
 
@@ -220,6 +240,7 @@ func (m *Model) RefreshStyles() {
 	s.Blurred.Placeholder = bg.Foreground(styles.TextMuted)
 	s.Cursor.Color = styles.TextPrimary
 	m.input.SetStyles(s)
+	m.channelPicker.SetStyles(channelPickerStyles())
 	m.dirty()
 }
 
@@ -819,6 +840,7 @@ func (m *Model) SetChannels(channels []channelpicker.Channel) {
 			m.reverseChannels[c.Name] = c.ID
 		}
 	}
+	m.mentionDataChanged()
 }
 
 // IsChannelActive returns whether the channel picker is currently showing.
@@ -835,7 +857,17 @@ func (m Model) ChannelPickerView(width int) string {
 	if !m.channelActive {
 		return ""
 	}
-	return m.channelPicker.View(width)
+	// m is a copy; the width is the popup width the caller allots this frame.
+	m.channelPicker.SetWidth(width)
+	return m.channelPicker.View()
+}
+
+// channelPickerStyles maps the current theme onto the channel picker.
+func channelPickerStyles() channelpicker.Styles {
+	return channelpicker.Styles{
+		Chrome: messages.ChromeStyles(),
+		Name:   lipgloss.NewStyle().Foreground(styles.TextPrimary),
+	}
 }
 
 // SetUsers provides the list of workspace users for mention autocomplete.
@@ -851,6 +883,7 @@ func (m *Model) SetUsers(users []mentionpicker.User) {
 			m.reverseNames[u.DisplayName] = u.ID
 		}
 	}
+	m.mentionDataChanged()
 	m.rebuildMentionUsers()
 }
 
@@ -858,6 +891,7 @@ func (m *Model) SetUsers(users []mentionpicker.User) {
 // @handle autocomplete and send-time <!subteam^SID|@handle> translation.
 func (m *Model) SetUserGroups(groups map[string]string) {
 	m.userGroups = usergroups.Copy(groups)
+	m.mentionDataChanged()
 	m.rebuildMentionUsers()
 }
 
@@ -966,6 +1000,7 @@ func (m *Model) clearVisibleDraft() {
 	m.pending = nil
 	m.uploading = false
 	m.broadcast = false
+	m.preview = false
 	m.dirty()
 }
 
@@ -1123,9 +1158,21 @@ type sendMention struct {
 	rank        int
 }
 
+// mentionDataChanged drops the cached mention list after a write of
+// the data sendMentions builds it from.
+func (m *Model) mentionDataChanged() {
+	m.sendEntries = nil
+	m.mentionGen++
+}
+
 // sendMentions returns every mention the box translates, in the order
-// TranslateMentionsForSend tries them.
-func (m Model) sendMentions() []sendMention {
+// TranslateMentionsForSend tries them. The list is built once per
+// change of mention data (sorting a large workspace's users costs
+// milliseconds) and shared: callers must not modify it.
+func (m *Model) sendMentions() []sendMention {
+	if m.sendEntries != nil {
+		return m.sendEntries
+	}
 	const (
 		rankSpecial = iota
 		rankUser
@@ -1193,6 +1240,7 @@ func (m Model) sendMentions() []sendMention {
 		}
 		return a.replacement < b.replacement
 	})
+	m.sendEntries = entries
 	return entries
 }
 
@@ -1212,7 +1260,7 @@ func endsMention(text string, end int) bool {
 // and longest-first sorting concerns -- e.g., a longer channel name
 // must be tried before a shorter one with the same prefix, and a user
 // named "here" (if such a thing existed) must not match inside @heretic.
-func (m Model) TranslateMentionsForSend(text string) string {
+func (m *Model) TranslateMentionsForSend(text string) string {
 	for _, e := range m.sendMentions() {
 		mention := string(e.trigger) + e.name
 		searchFrom := 0
@@ -1247,7 +1295,7 @@ var wireMentionRe = regexp.MustCompile(`<@([A-Z0-9]+)(?:\|[^>]*)?>|<#([A-Z0-9]+)
 // into the same mention; an ID the box doesn't know, a name another
 // mention wins, or a name glued to the text after it stays in wire
 // form, which Slack still accepts.
-func (m Model) MentionsForEdit(text string) string {
+func (m *Model) MentionsForEdit(text string) string {
 	locs := wireMentionRe.FindAllStringSubmatchIndex(text, -1)
 	if len(locs) == 0 {
 		return text

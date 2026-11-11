@@ -24,6 +24,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/styles"
 )
@@ -58,7 +59,19 @@ func (a *App) renderThreadRegion(frame panelLayoutFrame, themeVer int64) string 
 	threadComposeView = threadComposeSpacer + "\n" + threadComposeView
 	// Unlike the channel pane's typing row, no row is reserved for
 	// this: it appears only while an app is working on this thread.
-	if statusLine := a.renderThreadBotStatusLine(threadWidth - 2); statusLine != "" {
+	statusLine := a.renderThreadBotStatusLine(threadWidth - 2)
+	// The draft preview goes between the status line and the spacer,
+	// sized as in the channel pane (no typing row here).
+	inner := contentHeight - 2
+	room := inner - lipgloss.Height(threadComposeView) - 3
+	if statusLine != "" {
+		room -= lipgloss.Height(statusLine)
+	}
+	key := compose.RenderKey{Theme: themeVer, Pane: a.threadPanel.Version()}
+	if preview := a.draftPreview(&a.threadCompose, a.threadPanel, PanelThread, threadWidth-2, draftPreviewRows(inner, room), key); preview != "" {
+		threadComposeView = preview + "\n" + threadComposeView
+	}
+	if statusLine != "" {
 		threadComposeView = statusLine + "\n" + threadComposeView
 	}
 	threadComposeHeight := lipgloss.Height(threadComposeView)

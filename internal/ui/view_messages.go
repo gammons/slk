@@ -50,6 +50,7 @@ package ui
 import (
 	"charm.land/lipgloss/v2"
 
+	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/styles"
 )
@@ -198,7 +199,8 @@ func (a *App) renderActivityViewPanel(msgWidth, msgBorder, contentHeight int, ms
 // these the entire panel renders without any border at all.
 func (a *App) renderChannelMessagesPanel(msgWidth, msgBorder, contentHeight int, msgFocused, composeFocused bool, msgLayoutKey int64) string {
 	var composeView string
-	if a.composeDisabled && !a.editing.IsActive() {
+	readOnly := a.composeDisabled && !a.editing.IsActive()
+	if readOnly {
 		composeView = lipgloss.NewStyle().
 			Background(styles.Background).Foreground(styles.TextMuted).Italic(true).
 			Width(msgWidth - 2).
@@ -221,6 +223,19 @@ func (a *App) renderChannelMessagesPanel(msgWidth, msgBorder, contentHeight int,
 	// cells).
 	composeSpacer := lipgloss.NewStyle().Background(styles.Background).Width(msgWidth - 2).Render("")
 	composeView = composeSpacer + "\n" + composeView
+	// The draft preview stacks on top: preview, spacer, picker, box.
+	// It gets what is left above the messages area's 3-row minimum
+	// (inner, less the typing row, this region and those 3 rows), up
+	// to its cap. Measured into composeHeight below, so a click on it
+	// lands in the compose region.
+	if !readOnly {
+		inner := contentHeight - 2
+		room := inner - 1 - lipgloss.Height(composeView) - 3
+		key := compose.RenderKey{Theme: styles.Version(), Pane: a.messagepane.Version(), Window: int64(a.focusedWin)}
+		if preview := a.draftPreview(&a.compose, a.messagepane, PanelMessages, msgWidth-2, draftPreviewRows(inner, room), key); preview != "" {
+			composeView = preview + "\n" + composeView
+		}
+	}
 	composeHeight := lipgloss.Height(composeView)
 	// Always reserve one row above the compose box for the
 	// typing indicator. When nobody is typing we render a blank
