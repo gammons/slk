@@ -183,6 +183,29 @@ func (blockingReader) Read(p []byte) (int, error) {
 	return 0, nil
 }
 
+// The emulated-placement probe is a query: WezTerm answers it, and it
+// stores and draws nothing, unlike ProbeKittyGraphics' a=T upload.
+func TestProbeKittyQuery_SendsQuery(t *testing.T) {
+	t.Setenv("TMUX", "")
+	var w bytes.Buffer
+	if ProbeKittyQuery(&w, blockingReader{}, 50*time.Millisecond) {
+		t.Error("expected probe to fail on timeout")
+	}
+	got := w.String()
+	if !strings.HasPrefix(got, "\x1b_Ga=q,") || strings.Contains(got, "a=T") {
+		t.Errorf("want an a=q query, got %q", got)
+	}
+}
+
+func TestProbeKittyQuery_AcceptsOK(t *testing.T) {
+	t.Setenv("TMUX", "")
+	var w bytes.Buffer
+	reply := strings.NewReader("\x1b_Gi=9999;OK\x1b\\")
+	if !ProbeKittyQuery(&w, reply, time.Second) {
+		t.Error("expected the OK reply to pass the probe")
+	}
+}
+
 // skipPipeProbeOnWindows skips a test that hands a probe an os.Pipe. On
 // Windows the poll path reads console input records (ReadConsoleInputW
 // in probe_windows.go), which a pipe handle does not have, so the probe

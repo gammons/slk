@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/binary"
 	"hash/fnv"
 	"strconv"
 	"strings"
@@ -100,22 +101,43 @@ func (a *App) absolutePreviewSixelPlacement(p imgpkg.SixelPaint) (imgpkg.SixelPl
 	}, true
 }
 
-// frameGuard fingerprints the rows of the frame that sit under a
-// placement, starting at 0-based screen row top.
+// stampFrameGuards sets each placement's Guard to a fingerprint of the
+// frame rows under it, starting at its 0-based screen row Row-1.
 //
-// A change here means bubbletea rewrote those lines and painted over the
-// image, so the painter must repaint even though the placement is
-// otherwise identical. Hashing a handful of lines per frame is cheap
-// next to re-emitting 60KB of sixel.
-func frameGuard(screen string, top, rows int) string {
-	if screen == "" {
-		return ""
+// A change there means bubbletea rewrote those lines and painted over
+// the image, so the painter must repaint even though the placement is
+// otherwise identical. The screen is split once and every row hashed
+// at most once, however many placements share it: a frame can carry
+// hundreds of emoji, and splitting the whole screen per placement made
+// this O(placements x screen).
+func stampFrameGuards(screen string, placements []imgpkg.SixelPlacement) {
+	if screen == "" || len(placements) == 0 {
+		return
 	}
 	lines := strings.Split(screen, "\n")
-	h := fnv.New64a()
-	for r := top; r < top+rows && r < len(lines); r++ {
-		h.Write([]byte(lines[r]))
-		h.Write([]byte{0})
+	rowHash := make(map[int]uint64, len(placements))
+	hashRow := func(r int) uint64 {
+		if h, ok := rowHash[r]; ok {
+			return h
+		}
+		f := fnv.New64a()
+		f.Write([]byte(lines[r]))
+		h := f.Sum64()
+		rowHash[r] = h
+		return h
 	}
-	return strconv.FormatUint(h.Sum64(), 36)
+	for i := range placements {
+		top, rows := placements[i].Row-1, placements[i].Rows
+		f := fnv.New64a()
+		var b [8]byte
+		for r := top; r < top+rows && r < len(lines); r++ {
+			if r < 0 {
+				continue
+			}
+			binary.LittleEndian.PutUint64(b[:], hashRow(r))
+			f.Write(b[:])
+			f.Write([]byte{0})
+		}
+		placements[i].Guard = strconv.FormatUint(f.Sum64(), 36)
+	}
 }

@@ -137,6 +137,28 @@ type KittyRenderer struct {
 	// Acceptable; if it ever becomes a concern, an LRU eviction can
 	// be added without changing the contract.
 	payloads map[placeholderKey]string
+
+	// geometry records, per image ID, the cell footprint and the pixel
+	// size of the payload that was encoded for it. KittyEmulated needs
+	// it to crop a partly visible image: the crop is in source pixels,
+	// and the cell size may have changed since the upload (font zoom).
+	geometry map[uint32]ImageGeometry
+}
+
+// ImageGeometry is an uploaded kitty image's cell footprint and pixel
+// size.
+type ImageGeometry struct {
+	Cols, Rows int
+	PxW, PxH   int
+}
+
+// Geometry returns what was recorded for id when its payload was
+// encoded, or false if this renderer never encoded it.
+func (k *KittyRenderer) Geometry(id uint32) (ImageGeometry, bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	g, ok := k.geometry[id]
+	return g, ok
 }
 
 // placeholderKey scopes the buildPlaceholderLines memo by the inputs
@@ -157,6 +179,7 @@ func NewKittyRenderer(reg *Registry) *KittyRenderer {
 		sources:      map[string]image.Image{},
 		placeholders: map[placeholderKey][]string{},
 		payloads:     map[placeholderKey]string{},
+		geometry:     map[uint32]ImageGeometry{},
 	}
 }
 
@@ -248,6 +271,7 @@ func (k *KittyRenderer) RenderKey(key string, target image.Point) Render {
 				payload = base64.StdEncoding.EncodeToString(pngBuf.Bytes())
 				k.mu.Lock()
 				k.payloads[payloadKey] = payload
+				k.geometry[id] = ImageGeometry{Cols: target.X, Rows: target.Y, PxW: pxW, PxH: pxH}
 				k.mu.Unlock()
 			} else {
 				// Encode failed; without a payload we can't build an
@@ -311,10 +335,22 @@ func (k *KittyRenderer) RenderKey(key string, target image.Point) Render {
 // The whole upload must be emitted in one Write. Continuation chunks
 // carry no image id, while KittyOutput serializes individual Write
 // calls rather than complete uploads.
+//
+// Under KittyEmulated the upload only transmits (a=t): there is no
+// virtual placement to create, and the App paints direct placements
+// itself. It also skips the a=d,d=I prefix, because on WezTerm that
+// deletes every placement of the id already on screen, which the
+// painter believes are still there. Re-transmitting an id replaces its
+// data without touching its placements, and the registry can hand out
+// a fresh upload for an id more than once (one closure per RenderKey
+// call, until MarkUploaded).
 func emitKittyUpload(w io.Writer, id uint32, payload string, cols, rows int) error {
 	const chunk = 4096
+	emulated := KittyPlacementMode() == KittyEmulated
 	var sb strings.Builder
-	sb.WriteString(forTerminal(fmt.Sprintf("\x1b_Ga=d,d=I,i=%d,q=2\x1b\\", id)))
+	if !emulated {
+		sb.WriteString(forTerminal(fmt.Sprintf("\x1b_Ga=d,d=I,i=%d,q=2\x1b\\", id)))
+	}
 	for i := 0; i < len(payload); i += chunk {
 		end := i + chunk
 		more := 1
@@ -323,9 +359,12 @@ func emitKittyUpload(w io.Writer, id uint32, payload string, cols, rows int) err
 			more = 0
 		}
 		var hdr string
-		if i == 0 {
+		switch {
+		case i == 0 && emulated:
+			hdr = fmt.Sprintf("a=t,f=100,t=d,i=%d,q=2,m=%d", id, more)
+		case i == 0:
 			hdr = fmt.Sprintf("a=T,f=100,t=d,i=%d,U=1,c=%d,r=%d,q=2,m=%d", id, cols, rows, more)
-		} else {
+		default:
 			hdr = fmt.Sprintf("m=%d", more)
 		}
 		sb.WriteString(forTerminal(fmt.Sprintf("\x1b_G%s;%s\x1b\\", hdr, payload[i:end])))

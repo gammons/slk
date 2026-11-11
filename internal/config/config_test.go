@@ -1085,6 +1085,23 @@ team_id = "T04T4TH8W"
 	}
 }
 
+func TestKittyPlacement_DefaultsAndClamp(t *testing.T) {
+	if got := Default().Appearance.KittyPlacement; got != "auto" {
+		t.Errorf("Default() kitty_placement = %q, want auto", got)
+	}
+	for body, want := range map[string]string{
+		"": "auto",
+		"[appearance]\nkitty_placement = \"emulated\"":   "emulated",
+		"[appearance]\nkitty_placement = \"native\"":     "native",
+		"[appearance]\nkitty_placement = \"sideways\"":   "auto",
+		"[appearance]\nkitty_placement = \" Emulated \"": "emulated",
+	} {
+		if got := loadConfigString(t, body).Appearance.KittyPlacement; got != want {
+			t.Errorf("config %q: kitty_placement = %q, want %q", body, got, want)
+		}
+	}
+}
+
 func TestConfig_ReplyAvatars(t *testing.T) {
 	for _, tc := range []struct {
 		toml string

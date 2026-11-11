@@ -736,6 +736,15 @@ type App struct {
 	// publication.
 	forceSixelRepaint bool
 
+	// kittyFrame memoizes the last frame resolved for kitty emulated
+	// placement (kitty_emulated.go).
+	kittyFrame kittyFrameMemo
+
+	// graphemeWidth records that the terminal reported unicode core
+	// mode (2027), so bubbletea lays frames out with grapheme widths.
+	// Set by reduceTerminalModes; read when resolving kitty frames.
+	graphemeWidth bool
+
 	// Compositor memo (Stage A perf). bubbletea v2 calls View() after
 	// EVERY message -- every keystroke, key-repeat, mouse-motion, and
 	// tick -- synchronously in the event loop (tea.go render-on-update).
@@ -1145,6 +1154,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		reduceUserProfile,
 		reduceIO,
 		reduceMouse,
+		reduceTerminalModes,
 	); handled {
 		if cmd != nil {
 			cmds = append(cmds, cmd)
@@ -3886,18 +3896,30 @@ func (a *App) collectSixelPlacements(frame panelLayoutFrame) []imgpkg.SixelPlace
 //
 // It never writes to the terminal; painting happens later in
 // FrameOutput after the text diff for the same frame.
+//
+// Under kitty emulated placement it also resolves the frame's kitty
+// placeholder cells (resolveKittyFrame): the content bubbletea gets has
+// spaces where the images go, and the published placements are kitty
+// direct placements. Those come from the finished frame itself, so
+// they are not gated on overlayActive like the sixel placements are:
+// DimmedOverlay already blanks the placeholders under a backdrop, and
+// the ones inside a modal (the reaction picker's emoji) must stay.
 func (a *App) finalizeSixelView(v tea.View, placements []imgpkg.SixelPlacement) tea.View {
-	if a.imgProtocol != imgpkg.ProtoSixel || a.sixelFrames == nil {
+	emulated := a.kittyEmulated()
+	if (a.imgProtocol != imgpkg.ProtoSixel && !emulated) || a.sixelFrames == nil {
 		v.WindowTitle = a.windowTitle
 		return v
 	}
-	for i := range placements {
-		placements[i].Guard = frameGuard(v.Content, placements[i].Row-1, placements[i].Rows)
+	if emulated {
+		v.Content, placements = a.resolveKittyFrame(v.Content)
+	} else {
+		stampFrameGuards(v.Content, placements)
 	}
 	id := a.sixelFrames.Publish(imgpkg.SixelFrame{
-		Placements: placements,
-		EraseSGR:   messages.BgANSI(),
-		Force:      a.forceSixelRepaint,
+		Placements:      placements,
+		EraseSGR:        messages.BgANSI(),
+		Force:           a.forceSixelRepaint,
+		RepaintOnScroll: emulated,
 	})
 	a.forceSixelRepaint = false
 	v.WindowTitle = imgpkg.FrameTitle(a.windowTitle, id)

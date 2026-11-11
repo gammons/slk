@@ -21,9 +21,12 @@ import (
 // is sized in cells), only on a terminal, and never inside a
 // multiplexer, which may answer for itself or not at all. Must run
 // before bubbletea takes over stdin.
-func startupCellPixels(proto imgpkg.Protocol) (int, int) {
+//
+// measured is false when the size is the 8x16 fallback. Kitty emulated
+// placement needs a size the terminal knows, so it is off then.
+func startupCellPixels(proto imgpkg.Protocol) (pxW, pxH int, measured bool) {
 	if w, h, ok := imgpkg.MeasureCellPixels(int(os.Stdout.Fd())); ok {
-		return w, h
+		return w, h, true
 	}
 	if shouldProbeCellSize(proto, os.Getenv("TMUX"), os.Getenv("ZELLIJ"), term.IsTerminal(int(os.Stdin.Fd()))) {
 		if state, err := term.MakeRaw(int(os.Stdin.Fd())); err != nil {
@@ -35,11 +38,12 @@ func startupCellPixels(proto imgpkg.Protocol) (int, int) {
 			}
 			if ok {
 				debuglog.ImgRender("CellPixels: cell_w=%d cell_h=%d source=csi_16t", w, h)
-				return w, h
+				return w, h, true
 			}
 		}
 	}
-	return imgpkg.CellPixels(-1)
+	w, h := imgpkg.CellPixels(-1)
+	return w, h, false
 }
 
 // shouldProbeCellSize says whether startupCellPixels asks the terminal.
@@ -48,4 +52,20 @@ func shouldProbeCellSize(proto imgpkg.Protocol, tmux, zellij string, isTerminal 
 		return false
 	}
 	return tmux == "" && zellij == "" && isTerminal
+}
+
+// emulatedPlacementIfMeasured is the protocol and placement for a
+// session that picked kitty emulated placement: kept when the cell size
+// was measured. Otherwise emulation is off and the protocol is what such
+// a terminal (WezTerm) had before: sixel in auto mode, half-block when
+// image_protocol forced kitty.
+func emulatedPlacementIfMeasured(measured, autoProtocol bool) (imgpkg.Protocol, imgpkg.KittyPlacement) {
+	switch {
+	case measured:
+		return imgpkg.ProtoKitty, imgpkg.KittyEmulated
+	case autoProtocol:
+		return imgpkg.ProtoSixel, imgpkg.KittyNative
+	default:
+		return imgpkg.ProtoHalfBlock, imgpkg.KittyNative
+	}
 }

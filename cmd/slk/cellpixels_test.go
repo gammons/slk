@@ -28,3 +28,24 @@ func TestShouldProbeCellSize(t *testing.T) {
 		}
 	}
 }
+
+func TestEmulatedPlacementIfMeasured(t *testing.T) {
+	cases := []struct {
+		name          string
+		measured      bool
+		auto          bool
+		wantProto     imgpkg.Protocol
+		wantPlacement imgpkg.KittyPlacement
+	}{
+		{"measured", true, true, imgpkg.ProtoKitty, imgpkg.KittyEmulated},
+		{"measured, kitty forced", true, false, imgpkg.ProtoKitty, imgpkg.KittyEmulated},
+		{"unmeasured falls back to sixel", false, true, imgpkg.ProtoSixel, imgpkg.KittyNative},
+		{"unmeasured, kitty forced", false, false, imgpkg.ProtoHalfBlock, imgpkg.KittyNative},
+	}
+	for _, c := range cases {
+		proto, placement := emulatedPlacementIfMeasured(c.measured, c.auto)
+		if proto != c.wantProto || placement != c.wantPlacement {
+			t.Errorf("%s: got (%s, %s), want (%s, %s)", c.name, proto, placement, c.wantProto, c.wantPlacement)
+		}
+	}
+}
