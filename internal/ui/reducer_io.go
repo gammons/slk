@@ -47,9 +47,9 @@
 //
 // Every toast goes through one of two helpers (the toast rule in
 // AGENTS.md): toastWithClear shows a toast and schedules its clear
-// (copiedClearAfter), and toastUntilReplaced shows one that a later
-// toast replaces on purpose (upload progress). toastWithClear also
-// collapses the `cmds = append(cmds, tea.Tick(Ns, ... CopiedClearMsg))`
+// (copiedClearAfter), and toastUntilReplaced shows one without a generic
+// expiry, for progress or when its owning reducer schedules a custom clear.
+// toastWithClear also collapses the `cmds = append(cmds, tea.Tick(Ns, ... CopiedClearMsg))`
 // idiom that recurred ~11 times in the original switch.
 package ui
 
@@ -102,9 +102,9 @@ func toastWithClear(a *App, text string, d time.Duration) tea.Cmd {
 	return copiedClearAfter(a, d)
 }
 
-// toastUntilReplaced shows a toast with no expiry of its own, for a
-// toast that a later one replaces on purpose, as an upload's result
-// replaces its progress. Every other toast goes through toastWithClear.
+// toastUntilReplaced shows a toast without a generic expiry. The owning
+// reducer must replace it or schedule its own clear, as for progress and
+// queued download-failure notifications.
 func toastUntilReplaced(a *App, text string) {
 	a.statusbar.SetToast(text)
 }

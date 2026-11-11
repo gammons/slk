@@ -583,6 +583,17 @@ type (
 	// for short error notices (e.g. failed status change). Auto-clears after
 	// 3 seconds via a CopiedClearMsg tick scheduled by the App.
 	ToastMsg struct{ Text string }
+
+	// downloadFileResultMsg carries a completed download from downloadFileCmd
+	// to reduceFiles.
+	downloadFileResultMsg struct {
+		Name   string
+		Text   string
+		Failed bool
+	}
+	// downloadFailureClearMsg expires one queued failure toast without routing
+	// download state through the generic toast-clear reducer.
+	downloadFailureClearMsg struct{ Seq uint64 }
 )
 
 // autoScrollTickMsg is dispatched by tea.Tick while a drag is held near

@@ -1,18 +1,86 @@
 // internal/ui/reducer_files.go
 //
 // File-download routing: DownloadFileMsg (dispatched by the `d`
-// keybinding or the picker modal) starts an async download + OS open
-// via App.downloadFileCmd.
+// keybinding, picker modal, or file-line click) starts an async
+// download + OS open via App.downloadFileCmd.
 package ui
 
 import (
+	"time"
+
 	tea "charm.land/bubbletea/v2"
 )
 
 var reduceFiles reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
-	m, ok := msg.(DownloadFileMsg)
-	if !ok {
+	switch m := msg.(type) {
+	case DownloadFileMsg:
+		a.pendingDownloads = append(a.pendingDownloads, m.Attachment.Name)
+		toastUntilReplaced(a, downloadProgressText(a))
+		return a.downloadFileCmd(m.Attachment), true
+
+	case downloadFileResultMsg:
+		removePendingDownload(a, m.Name)
+		if m.Failed {
+			a.pendingDownloadFailures = append(a.pendingDownloadFailures, m.Text)
+		}
+		if len(a.pendingDownloads) > 0 {
+			// Keep the toast to active progress; combining filenames and results
+			// can overflow the status row.
+			toastUntilReplaced(a, downloadProgressText(a))
+			return nil, true
+		}
+		if len(a.pendingDownloadFailures) > 0 {
+			return nextDownloadFailure(a), true
+		}
+		return toastWithClear(a, m.Text, 3*time.Second), true
+
+	case downloadFailureClearMsg:
+		if len(a.pendingDownloads) > 0 {
+			return nil, true
+		}
+		if len(a.pendingDownloadFailures) == 0 {
+			if m.Seq == a.statusbar.ToastSeq() {
+				a.statusbar.ClearCopied()
+			}
+			return nil, true
+		}
+		if shouldDeferDownloadFailureToast(a, m.Seq) {
+			return downloadFailureClearAfter(a), true
+		}
+		return nextDownloadFailure(a), true
+
+	default:
 		return nil, false
 	}
-	return a.downloadFileCmd(m.Attachment), true
+}
+
+func downloadProgressText(a *App) string {
+	return "Downloading " + a.pendingDownloads[len(a.pendingDownloads)-1] + "…"
+}
+
+func shouldDeferDownloadFailureToast(a *App, seq uint64) bool {
+	return a.compose.Uploading() || a.threadCompose.Uploading() || seq != a.statusbar.ToastSeq()
+}
+
+func nextDownloadFailure(a *App) tea.Cmd {
+	text := a.pendingDownloadFailures[0]
+	a.pendingDownloadFailures = a.pendingDownloadFailures[1:]
+	toastUntilReplaced(a, text)
+	return downloadFailureClearAfter(a)
+}
+
+func downloadFailureClearAfter(a *App) tea.Cmd {
+	seq := a.statusbar.ToastSeq()
+	return toastTick(3*time.Second, func(time.Time) tea.Msg {
+		return downloadFailureClearMsg{Seq: seq}
+	})
+}
+
+func removePendingDownload(a *App, name string) {
+	for i, pending := range a.pendingDownloads {
+		if pending == name {
+			a.pendingDownloads = append(a.pendingDownloads[:i], a.pendingDownloads[i+1:]...)
+			return
+		}
+	}
 }
