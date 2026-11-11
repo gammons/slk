@@ -614,7 +614,7 @@ func (m Model) renderBox(termWidth int) string {
 
 	// All inner spans share the modal bg so the dimmed app behind the
 	// overlay doesn't bleed through where individual styled fragments end.
-	bg := styles.Background
+	bg := styles.ThemeBackground()
 
 	titleText := "Switch Channel"
 	if m.forwarding {

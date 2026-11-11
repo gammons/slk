@@ -36,12 +36,12 @@ var (
 func SelectionTintColor(focused bool) color.Color {
 	if focused {
 		if selectionBgFocused == nil {
-			selectionBgFocused = mixColors(Accent, Background, defaultTintAlpha)
+			selectionBgFocused = mixColors(Accent, ThemeBackground(), defaultTintAlpha)
 		}
 		return selectionBgFocused
 	}
 	if selectionBgUnfocused == nil {
-		selectionBgUnfocused = mixColors(TextMuted, Background, defaultTintAlpha)
+		selectionBgUnfocused = mixColors(TextMuted, ThemeBackground(), defaultTintAlpha)
 	}
 	return selectionBgUnfocused
 }

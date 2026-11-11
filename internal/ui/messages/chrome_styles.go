@@ -13,7 +13,7 @@ import (
 // pushes nothing. Each style is exactly the one the dialogs built inline
 // before Phase 4 (TestChromeStyles_MatchTheInlineStyles).
 func ChromeStyles() chrome.Styles {
-	bg := styles.Background
+	bg := styles.ThemeBackground()
 	on := func() lipgloss.Style { return lipgloss.NewStyle().Background(bg) }
 	return chrome.Styles{
 		Box: lipgloss.NewStyle().
@@ -44,6 +44,18 @@ func ChromeStyles() chrome.Styles {
 		Footer:      on().Foreground(styles.TextMuted),
 		Thumb:       on().Foreground(styles.Primary),
 		Track:       on().Foreground(styles.Border),
-		BaseANSI:    BgANSI() + FgANSI(),
+		BaseANSI:    SolidBgANSI() + FgANSI(),
+		PopupANSI:   popupANSI(),
 	}
+}
+
+// popupANSI keeps the composer popups solid with the transparent
+// background on: the composer area re-asserts BgANSI after resets, and
+// that is the default background then, so the popup re-asserts its own
+// colour after it. Off, it's empty and the popups render as before.
+func popupANSI() string {
+	if !styles.TransparentBackground() {
+		return ""
+	}
+	return bgANSIFor(styles.SurfaceDark)
 }

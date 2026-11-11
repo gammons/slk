@@ -177,7 +177,7 @@ func (m *Model) renderBox(termWidth, termHeight int) string {
 	}
 	innerWidth := overlayWidth - 4 // border + padding
 
-	bg := styles.Background
+	bg := styles.ThemeBackground()
 
 	all := m.contentLines(bg, innerWidth)
 

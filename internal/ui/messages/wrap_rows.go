@@ -31,7 +31,7 @@ type WrapStyles struct {
 func NewWrapStyles(focused bool, compact bool) WrapStyles {
 	return WrapStyles{
 		fill: lipgloss.NewStyle().Background(styles.Background),
-		invis: lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).
+		invis: lipgloss.NewStyle().BorderStyle(styles.InvisibleLeftBorder()).BorderLeft(true).
 			BorderForeground(styles.Background).BorderBackground(styles.Background),
 		selected: lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).
 			BorderForeground(styles.SelectionBorderColor(focused)).

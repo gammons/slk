@@ -356,7 +356,7 @@ func (m Model) bodyLines(innerWidth, termHeight int) []string {
 	case stateLoading:
 		return []string{s.Empty.Render("Searching…")}
 	case stateError:
-		errLine := lipgloss.NewStyle().Background(styles.Background).Foreground(styles.Error).Render(m.errMsg)
+		errLine := lipgloss.NewStyle().Background(styles.ThemeBackground()).Foreground(styles.Error).Render(m.errMsg)
 		if lipgloss.Width(errLine) > innerWidth {
 			errLine = truncate.StringWithTail(errLine, uint(innerWidth), "…")
 		}
@@ -403,7 +403,7 @@ func splitAtWidth(s string, w int) (head, tail string) {
 // continuity.
 func (m Model) resultRows(innerWidth, termHeight int) []string {
 	s := messages.ChromeStyles()
-	bg := styles.Background
+	bg := styles.ThemeBackground()
 	start, end := chrome.Window(m.selected, len(m.items), m.visibleRowCap(termHeight))
 	list := chrome.List{Start: start, End: end, Total: len(m.items)}
 	contentWidth := list.ContentWidth(innerWidth)
@@ -415,7 +415,7 @@ func (m Model) resultRows(innerWidth, termHeight int) []string {
 	// colours.
 	var hlStart, hlEnd string
 	if len(m.highlightTerms) > 0 {
-		if sgrOpen, sgrClose, ok := messages.SearchHighlightSGR(); ok {
+		if sgrOpen, sgrClose, ok := messages.DialogSearchHighlightSGR(); ok {
 			hlStart, hlEnd = sgrOpen, sgrClose
 		}
 	}
