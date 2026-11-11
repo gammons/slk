@@ -8,7 +8,7 @@ something from the top of the list for the richest experience.
 |-----------------------|----------------------|--------------------|-------------|------------------|-------------------------------------------------------------|
 | **kitty**             | kitty graphics       | yes                | yes         | yes              | Best overall experience. Older versions may need `clipboard_control write-clipboard`. |
 | **ghostty**           | kitty graphics       | yes                | yes         | yes              | Recommended.                                                |
-| **WezTerm** (recent)  | kitty graphics       | yes                | yes         | yes              |                                                             |
+| **WezTerm**           | kitty graphics       | yes                | yes         | yes              | No unicode placeholders, so slk places the images itself. See [below](#wezterm-emulated-kitty-placement). |
 | **foot** (Wayland)    | sixel                | half-block         | yes         | yes              | Best Wayland-native option.                                 |
 | **iTerm2 ≥ 3.5**      | half-block           | half-block         | yes         | yes              | Implements kitty graphics but not unicode placeholders, so slk falls back to half-block. |
 | **Alacritty**         | half-block           | half-block         | yes (≥0.11) | yes              | Fast and reliable, but no inline images.                    |
@@ -16,25 +16,56 @@ something from the top of the list for the richest experience.
 | **Windows Terminal** (≥ 1.22) | sixel        | half-block         | yes         | yes              | Detected at startup via DA1; the cell size comes from the terminal (`CSI 16 t`). |
 | **mlterm**            | sixel                | half-block         | partial     | partial          |                                                             |
 | **xterm** (`-ti vt340`) | sixel              | half-block         | yes         | yes              | Detected at startup via DA1; plain `xterm` without the sixel-capable emulation is half-block. |
-| **other sixel terminals** | sixel            | half-block         | varies      | varies           | DomTerm, toyterm, contour, WezTerm and friends are picked up by the startup DA1 probe. |
+| **other sixel terminals** | sixel            | half-block         | varies      | varies           | DomTerm, toyterm, contour and friends are picked up by the startup DA1 probe. |
 | **screen**            | half-block           | half-block         | no          | no               | No working OSC 52 path; consider switching to tmux.         |
 
 ## How the image protocol is picked
 
 With `image_protocol = "auto"` (the default) slk checks, in order:
 
-1. kitty graphics, when the terminal announces itself as kitty/ghostty —
-   confirmed at startup with a graphics-protocol probe.
-2. sixel, for terminals slk recognizes by name (foot, mlterm, WezTerm,
-   iTerm2) **or** that answer the startup DA1 query (`CSI c`) with
-   attribute `4`. This catches sixel terminals slk has never heard of,
-   including xterm built with sixel support, DomTerm and toyterm.
+1. kitty graphics, when the terminal announces itself as kitty, Ghostty
+   or WezTerm, confirmed at startup with a graphics-protocol probe.
+2. sixel, for terminals slk recognizes by name (foot, mlterm, iTerm2)
+   **or** that answer the startup DA1 query (`CSI c`) with attribute
+   `4`. This catches sixel terminals slk has never heard of, including
+   xterm built with sixel support, DomTerm and toyterm, and WezTerm when
+   its kitty graphics are turned off.
 3. half-block (`▀`) otherwise.
 
 If your terminal renders images as chunky half-block mosaics but
 `img2sixel` works in it, run slk with `SLK_DEBUG=1` and look for the
 `sixel probe:` line in the debug log. Set `image_protocol = "sixel"`
 explicitly if the terminal answers DA1 without advertising sixel.
+
+## WezTerm: emulated kitty placement
+
+WezTerm speaks the kitty graphics protocol but not its unicode-placeholder
+extension, which slk's kitty renderer is built on (it is how kitty and
+Ghostty know where each image goes). So on WezTerm slk does that part
+itself: it finds the image cells in every frame it draws, leaves blank
+cells there, and places each image over them with an absolute kitty
+placement. Emoji (including workspace custom emoji), avatars and inline
+images all render as real images this way.
+
+This is chosen automatically (`kitty_placement = "auto"` under
+`[appearance]`, see [[Configuration]]). It needs:
+
+- kitty graphics enabled in WezTerm. That is the default; with
+  `config.enable_kitty_graphics = false` slk's startup probe gets no
+  answer and slk uses sixel instead.
+- a known cell size in pixels, from any source in [Cell size](#cell-size)
+  except the 8×16 fallback. WezTerm reports it locally. Over a mux or
+  ssh domain it may not, and then slk uses sixel.
+- no multiplexer between slk and WezTerm (see tmux below).
+
+Run with `SLK_DEBUG=1` and look for the `kitty placement:` lines in the
+debug log to see what was picked. `kitty_placement = "native"` turns it
+off; `"emulated"` forces it on another terminal with the same behaviour.
+
+Text that still shows emoji as glyphs (the compose box, or
+`emoji_images = "off"`) uses WezTerm's own width rules, where
+`unicode_version` defaults to 9 and `❤️` is one cell wide. Setting
+`config.unicode_version = 14` in WezTerm matches slk's widths.
 
 ## Cell size
 
