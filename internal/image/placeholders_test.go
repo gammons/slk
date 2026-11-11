@@ -308,6 +308,9 @@ func TestPlaceholderResolver_ReuseMatchesFresh(t *testing.T) {
 		w, h   int
 	}{
 		{"ab" + placeholderRow(5, 2, 1, 0) + "\n" + placeholderRow(6, 2, 1, 0), 8, 2},
+		// Same size, fewer and shorter placeholders: the buffer is
+		// reused as is, so cells left from the first frame would show.
+		{"c" + placeholderRow(5, 1, 1, 0), 8, 2},
 		{"x", 8, 2},
 		{placeholderRow(7, 3, 1, 0), 5, 3},
 	}
