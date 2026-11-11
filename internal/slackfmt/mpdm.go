@@ -6,7 +6,7 @@ import "strings"
 
 // FormatMPDMName converts Slack's raw multi-party DM channel name
 // (e.g. "mpdm-grant--myles--ray-1") into a human-readable participant
-// list ("Grant Ammons, Myles Williamson, Ray Bradbury").
+// list ("Myles Williamson, Ray Bradbury" when the user is grant).
 //
 // Slack's mpdm naming convention is:
 //
@@ -17,6 +17,10 @@ import "strings"
 // double-dash (`--`) is the delimiter; a single dash is a legitimate
 // character within a handle.
 //
+// self is the current user's handle. It is left out of the list,
+// since the user is in every group DM they can see, unless no other
+// participant is left. Pass "" to keep every participant.
+//
 // lookup is called for each parsed handle and should return the
 // corresponding display name. If lookup is nil or returns an empty
 // string for a handle, the handle itself is used as a fallback.
@@ -24,7 +28,7 @@ import "strings"
 // If name does not match the mpdm format (no "mpdm-" prefix, empty
 // body, etc.), the original string is returned unchanged so callers
 // can use this unconditionally.
-func FormatMPDMName(name string, lookup func(handle string) string) string {
+func FormatMPDMName(name, self string, lookup func(handle string) string) string {
 	const prefix = "mpdm-"
 	if !strings.HasPrefix(name, prefix) {
 		return name
@@ -44,6 +48,17 @@ func FormatMPDMName(name string, lookup func(handle string) string) string {
 	handles := strings.Split(body, "--")
 	if len(handles) == 0 {
 		return name
+	}
+	if self != "" {
+		others := make([]string, 0, len(handles))
+		for _, h := range handles {
+			if h != "" && h != self {
+				others = append(others, h)
+			}
+		}
+		if len(others) > 0 {
+			handles = others
+		}
 	}
 
 	displays := make([]string, 0, len(handles))
