@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/term"
@@ -52,6 +53,14 @@ func shouldProbeCellSize(proto imgpkg.Protocol, tmux, zellij string, isTerminal 
 		return false
 	}
 	return tmux == "" && zellij == "" && isTerminal
+}
+
+// emulationAllowed says whether a terminal that picked emulated
+// placement may use it. On Windows WezTerm runs behind ConPTY, where
+// direct placements are untested, so there it stays on what it had
+// before (sixel) unless kitty_placement = "emulated" asks for it.
+func emulationAllowed(goos, cfg string) bool {
+	return goos != "windows" || strings.EqualFold(strings.TrimSpace(cfg), "emulated")
 }
 
 // emulatedPlacementIfMeasured is the protocol and placement for a

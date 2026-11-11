@@ -424,9 +424,13 @@ func run() error {
 		if placement == imgpkg.KittyEmulated {
 			var measured bool
 			pxW, pxH, measured = startupCellPixels(proto)
-			proto, placement = emulatedPlacementIfMeasured(measured, imgpkg.IsAutoProtocol(cfg.Appearance.ImageProtocol))
-			if !measured {
+			usable := measured && emulationAllowed(runtime.GOOS, cfg.Appearance.KittyPlacement)
+			proto, placement = emulatedPlacementIfMeasured(usable, imgpkg.IsAutoProtocol(cfg.Appearance.ImageProtocol))
+			switch {
+			case !measured:
 				debuglog.ImgRender("kitty emulated placement needs a measured cell size; using %s", proto)
+			case !usable:
+				debuglog.ImgRender("kitty emulated placement is not tried on %s unless set; using %s", runtime.GOOS, proto)
 			}
 		}
 		debuglog.ImgRender("kitty placement: cfg=%q result=%s", cfg.Appearance.KittyPlacement, placement)

@@ -49,3 +49,21 @@ func TestEmulatedPlacementIfMeasured(t *testing.T) {
 		}
 	}
 }
+
+func TestEmulationAllowed(t *testing.T) {
+	cases := []struct {
+		goos, cfg string
+		want      bool
+	}{
+		{"linux", "", true},
+		{"darwin", "auto", true},
+		{"windows", "", false},
+		{"windows", "auto", false},
+		{"windows", " Emulated ", true},
+	}
+	for _, c := range cases {
+		if got := emulationAllowed(c.goos, c.cfg); got != c.want {
+			t.Errorf("emulationAllowed(%q, %q) = %v, want %v", c.goos, c.cfg, got, c.want)
+		}
+	}
+}

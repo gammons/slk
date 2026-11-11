@@ -57,6 +57,9 @@ This is chosen automatically (`kitty_placement = "auto"` under
   except the 8×16 fallback. WezTerm reports it locally. Over a mux or
   ssh domain it may not, and then slk uses sixel.
 - no multiplexer between slk and WezTerm (see tmux below).
+- not Windows. WezTerm on Windows runs slk behind ConPTY, where this is
+  untested, so auto keeps sixel there. `kitty_placement = "emulated"`
+  still turns it on.
 
 Run with `SLK_DEBUG=1` and look for the `kitty placement:` lines in the
 debug log to see what was picked. `kitty_placement = "native"` turns it

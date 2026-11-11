@@ -420,6 +420,9 @@ testing it on WezTerm nightly `20261010-e2a98e1b`:
    (`auto`, `native`, `emulated`). Without a measured cell size,
    emulated mode is not used and auto falls back to sixel, which is what
    WezTerm got before. WezTerm under zellij also stays on sixel.
+   On Windows (WezTerm behind ConPTY, untested) auto also stays on
+   sixel; only an explicit `kitty_placement = "emulated"` turns it on
+   there (`emulationAllowed`).
    "Measured" is `startupCellPixels` (`cmd/slk/cellpixels.go`) saying
    so: the env override, `TIOCGWINSZ`, or the terminal's answer to
    `CSI 16 t`, not the 8x16 fallback. In emulated mode it runs before
