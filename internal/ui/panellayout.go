@@ -171,12 +171,16 @@ func (l *panelLayout) Compute(width, height, railWidth, sidebarWidth int, sideba
 // pane (PanelSidebar, PanelMessages or PanelThread) is the only one
 // drawn, across the whole width, with no workspace rail. The other
 // bands collapse to zero width so PanelAt routes every click to pane.
-func (l *panelLayout) ComputeFullscreen(width, height int, pane Panel) panelLayoutFrame {
+// compact drops the border allowance, as in Compute.
+func (l *panelLayout) ComputeFullscreen(width, height int, pane Panel, compact bool) panelLayoutFrame {
 	const (
 		statusHeight = 1
-		paneBorder   = 2
 		floorPaneW   = 10
 	)
+	paneBorder := 2
+	if compact {
+		paneBorder = 0
+	}
 	f := panelLayoutFrame{ContentHeight: height - statusHeight}
 	paneW := max(width-paneBorder, floorPaneW)
 	switch pane {

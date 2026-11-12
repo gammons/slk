@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/gammons/slk/internal/ui/wintree"
 )
 
@@ -198,6 +199,38 @@ func TestFullscreen_InsertModeKeepsFullscreen(t *testing.T) {
 		t.Fatalf("Esc: mode=%v, want normal", a.mode)
 	}
 	assertFullscreen(t, a, PanelThread)
+}
+
+// compactApp is stackedApp in compact mode (no pane borders). Compact
+// also sets a global style, put back when the test ends.
+func compactApp(t *testing.T, w int) *App {
+	t.Helper()
+	a := stackedApp(t, w)
+	a.SetCompact(true)
+	t.Cleanup(func() { styles.ApplyCompact(false) })
+	_ = a.View()
+	return a
+}
+
+// Compact gives every pane a zero border, so View must decide what to
+// draw from the widths, not the borders.
+func TestFullscreen_CompactWithFullscreenOffDrawsTheSidebar(t *testing.T) {
+	a := compactApp(t, 120)
+	if got := a.layout.sidebarEnd - a.layout.railWidth; got != testSidebarW {
+		t.Fatalf("sidebar band = %d, want %d", got, testSidebarW)
+	}
+	if screen := ansi.Strip(a.View().Content); !strings.Contains(screen, "Threads") {
+		t.Fatalf("compact sidebar not drawn:\n%s", screen)
+	}
+}
+
+func TestFullscreen_CompactPaneFillsTheWidth(t *testing.T) {
+	a := compactApp(t, 120)
+	updateAndRender(t, a, keyPress('f'))
+	assertFullscreen(t, a, PanelMessages)
+	if f := a.computeFrame(); f.MsgWidth != a.width || f.MsgBorder != 0 {
+		t.Fatalf("compact full-screen channel = %d + %d border, want %d + 0", f.MsgWidth, f.MsgBorder, a.width)
+	}
 }
 
 // The keybindings modal sorts by description, so f sits with the other

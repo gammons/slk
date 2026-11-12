@@ -1127,7 +1127,7 @@ func (a *App) computeFrame() panelLayoutFrame {
 // scratch layout for queries that must not disturb the stored bands.
 func (a *App) frameInto(l *panelLayout) panelLayoutFrame {
 	if a.fullscreen {
-		return l.ComputeFullscreen(a.width, a.height, a.fullscreenPanel())
+		return l.ComputeFullscreen(a.width, a.height, a.fullscreenPanel(), a.compact)
 	}
 	return l.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),
 		a.sidebarVisible, a.threadVisible, a.threadInFront(), a.compact)
@@ -3793,12 +3793,13 @@ func (a *App) View() tea.View {
 	previewActive := a.preview.Active()
 
 	// A full-screen frame (ComputeFullscreen) gives the rail and the
-	// sidebar zero width when they are not the pane shown.
+	// sidebar zero width when they are not the pane shown. Gate on
+	// width, not border: compact panes have a zero border.
 	var panels []string
 	if frame.RailWidth > 0 {
 		panels = append(panels, a.renderRail(frame.RailWidth, frame.ContentHeight, themeVer))
 	}
-	if frame.SidebarBorder > 0 {
+	if frame.SidebarWidth > 0 {
 		panels = append(panels, a.renderSidebar(frame.SidebarWidth, frame.SidebarBorder, frame.ContentHeight, themeVer))
 	}
 	if frame.MsgWidth > 0 {

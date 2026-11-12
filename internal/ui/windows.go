@@ -53,7 +53,7 @@ func (a *App) handleWindowChord(msg tea.KeyMsg) tea.Cmd {
 func (a *App) windowBounds() wintree.Rect {
 	var scratch panelLayout
 	if a.fullscreen {
-		frame := scratch.ComputeFullscreen(a.width, a.height, PanelMessages)
+		frame := scratch.ComputeFullscreen(a.width, a.height, PanelMessages, a.compact)
 		return wintree.Rect{X: 0, Y: 0, W: frame.MsgWidth + frame.MsgBorder, H: frame.ContentHeight}
 	}
 	frame := scratch.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),

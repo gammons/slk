@@ -65,17 +65,23 @@ func TestPanelLayoutComputeFullscreen(t *testing.T) {
 	type bands struct{ rail, sidebarEnd, msgEnd, threadEnd int }
 	tests := []struct {
 		pane      Panel
+		compact   bool
 		wantFrame frame
 		wantBands bands
 	}{
-		{PanelSidebar, frame{0, 118, 2, 0, 0, 0, 0}, bands{0, 120, 120, 120}},
-		{PanelMessages, frame{0, 0, 0, 118, 2, 0, 0}, bands{0, 0, 120, 120}},
-		{PanelThread, frame{0, 0, 0, 0, 0, 118, 2}, bands{0, 0, 0, 120}},
+		{PanelSidebar, false, frame{0, 118, 2, 0, 0, 0, 0}, bands{0, 120, 120, 120}},
+		{PanelMessages, false, frame{0, 0, 0, 118, 2, 0, 0}, bands{0, 0, 120, 120}},
+		{PanelThread, false, frame{0, 0, 0, 0, 0, 118, 2}, bands{0, 0, 0, 120}},
+		// Compact panes have no 2-column border allowance (as in
+		// Compute), so the pane itself takes the whole width.
+		{PanelSidebar, true, frame{0, 120, 0, 0, 0, 0, 0}, bands{0, 120, 120, 120}},
+		{PanelMessages, true, frame{0, 0, 0, 120, 0, 0, 0}, bands{0, 0, 120, 120}},
+		{PanelThread, true, frame{0, 0, 0, 0, 0, 120, 0}, bands{0, 0, 0, 120}},
 	}
 	for _, tt := range tests {
-		t.Run(fmt.Sprint(tt.pane), func(t *testing.T) {
+		t.Run(fmt.Sprintf("%v compact=%v", tt.pane, tt.compact), func(t *testing.T) {
 			l := newPanelLayout()
-			f := l.ComputeFullscreen(120, 30, tt.pane)
+			f := l.ComputeFullscreen(120, 30, tt.pane, tt.compact)
 			got := frame{f.RailWidth, f.SidebarWidth, f.SidebarBorder, f.MsgWidth, f.MsgBorder, f.ThreadWidth, f.ThreadBorder}
 			if got != tt.wantFrame {
 				t.Errorf("frame = %+v, want %+v", got, tt.wantFrame)
