@@ -233,6 +233,6 @@ func (b *workspaceBootstrap) Render(width, height int, spinnerGlyph string) stri
 	return lipgloss.Place(width, height,
 		lipgloss.Center, lipgloss.Center,
 		box,
-		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(styles.SurfaceDark)),
+		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(styles.SplashBackground)),
 	)
 }

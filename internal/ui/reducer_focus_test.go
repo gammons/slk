@@ -84,6 +84,13 @@ func TestReduceFocus_ClaimsOnlyItsOwnMessages(t *testing.T) {
 func markCapture(t *testing.T) (*App, *[]string) {
 	t.Helper()
 	app := NewApp()
+	return app, wireMarkCapture(t, app)
+}
+
+// wireMarkCapture is markCapture's wiring for an App built elsewhere
+// (a sized one, say, whose layout decides which panes are drawn).
+func wireMarkCapture(t *testing.T, app *App) *[]string {
+	t.Helper()
 	app.inTmux = false
 	app.markFlushDebounce = time.Millisecond
 	calls := &[]string{}
@@ -111,7 +118,16 @@ func markCapture(t *testing.T) (*App, *[]string) {
 			}
 		},
 	}))
-	return app, calls
+	return calls
+}
+
+// openThreadOnScreen marks the thread panel open and sizes app wide
+// enough to draw it beside the channel. An unsized App stacks the
+// panes with the channel in front, so its open thread is off screen
+// and a reply arriving there is not marked read (contentPanesDrawn).
+func openThreadOnScreen(app *App) {
+	app.threadVisible = true
+	app.width, app.height = 200, 30
 }
 
 // feed runs cmd to completion and pushes every resulting message back
@@ -478,7 +494,7 @@ func TestOutOfOrderArrivalDoesNotRollCursorBack(t *testing.T) {
 func TestThreadBurstCoalescesToNewestTS(t *testing.T) {
 	app, calls := markCapture(t)
 	app.activeChannelID = "C1"
-	app.threadVisible = true
+	openThreadOnScreen(app)
 	app.threadPanel.SetThread(messages.MessageItem{TS: "1.000000"}, nil, "C1", "1.000000")
 
 	var cmds []tea.Cmd
@@ -541,7 +557,7 @@ func TestBroadcastReplyMarksChannel(t *testing.T) {
 func TestFocusedReplyInOpenThreadMarksThread(t *testing.T) {
 	app, calls := markCapture(t)
 	app.activeChannelID = "C1"
-	app.threadVisible = true
+	openThreadOnScreen(app)
 	app.threadPanel.SetThread(messages.MessageItem{TS: "1.000000"}, nil, "C1", "1.000000")
 
 	_, cmd := app.Update(NewMessageMsg{
@@ -563,7 +579,7 @@ func TestThreadReplyArrival_ArmsFlushAndThreadsDirty(t *testing.T) {
 	app.activeChannelID = "C1"
 	app.activeTeamID = "T1" // scheduleThreadsDirty returns nil without one
 	app.threadsDirtyDebounce = time.Millisecond
-	app.threadVisible = true
+	openThreadOnScreen(app)
 	app.threadPanel.SetThread(messages.MessageItem{TS: "1.000000"}, nil, "C1", "1.000000")
 
 	_, cmd := app.Update(NewMessageMsg{
@@ -607,7 +623,7 @@ func TestReplyInClosedThreadDoesNotMark(t *testing.T) {
 func TestBlurredReplyInOpenThreadDoesNotMarkUntilFocusReturns(t *testing.T) {
 	app, calls := markCapture(t)
 	app.activeChannelID = "C1"
-	app.threadVisible = true
+	openThreadOnScreen(app)
 	app.threadPanel.SetThread(messages.MessageItem{TS: "1.000000"}, nil, "C1", "1.000000")
 	_, _ = app.Update(tea.BlurMsg{})
 
@@ -739,7 +755,7 @@ func TestForeignMarkEcho_MovesDivider(t *testing.T) {
 func TestSelfIssuedThreadMarkEcho_HoldsPanelLandmark(t *testing.T) {
 	app, calls := markCapture(t)
 	app.activeChannelID = "C1"
-	app.threadVisible = true
+	openThreadOnScreen(app)
 	app.threadPanel.SetThread(
 		messages.MessageItem{TS: "P1", UserID: "U1", Text: "parent"},
 		[]messages.MessageItem{{TS: "R1", UserID: "U1", Text: "r1"}},

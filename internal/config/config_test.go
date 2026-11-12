@@ -1191,3 +1191,15 @@ func TestSidebarShowUnreadInCollapsed(t *testing.T) {
 		t.Error("show_unread_in_collapsed = true did not load")
 	}
 }
+
+func TestConfig_TransparentBackground(t *testing.T) {
+	if Default().Appearance.TransparentBackground {
+		t.Error("Default() transparent_background = true, want false")
+	}
+	if loadConfigString(t, "[appearance]\ntheme = \"dark\"\n").Appearance.TransparentBackground {
+		t.Error("unset transparent_background read back true, want false")
+	}
+	if !loadConfigString(t, "[appearance]\ntransparent_background = true\n").Appearance.TransparentBackground {
+		t.Error("transparent_background = true read back false")
+	}
+}

@@ -94,9 +94,15 @@ type General struct {
 }
 
 type Appearance struct {
-	Theme           string `toml:"theme"`
-	TimestampFormat string `toml:"timestamp_format"`
-	ShowAvatars     bool   `toml:"show_avatars"`
+	Theme string `toml:"theme"`
+	// TransparentBackground drops the background colour of the base
+	// surfaces (panes, sidebar, rail, status bar, startup splash), so the
+	// terminal's own background, and its opacity and blur, show through.
+	// Selection, badges, the composer and dialogs keep their colours.
+	// Default off.
+	TransparentBackground bool   `toml:"transparent_background"`
+	TimestampFormat       string `toml:"timestamp_format"`
+	ShowAvatars           bool   `toml:"show_avatars"`
 	// ThreadAvatars also draws avatars in the thread pane (needs
 	// ShowAvatars). Default on.
 	ThreadAvatars bool `toml:"thread_avatars"`

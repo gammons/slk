@@ -367,7 +367,7 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 			// back to normal.
 			a.SetMode(ModeNormal)
 			a.compose.Blur()
-			a.CloseThread()
+			a.closeThreadByUser()
 			return a.tryOpenActionPrompt()
 		}
 

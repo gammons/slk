@@ -61,6 +61,8 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
   — `Tab` / `Shift+Tab` switch between them, `Esc` or `q` closes the thread.
   The header is a breadcrumb naming the channel, the thread's author, and the
   reply count (e.g. `# general › Thread from alice · 2 replies`).
+- Full screen: `f` gives the focused pane (the thread, the channel or the
+  channel list) the whole terminal; `f` again returns to the panes.
 - Live thread reply routing, real-time updates
 - Emoji images in the thread parent render even when there are no replies; they do not depend on another message having uploaded the image first.
 - Also send to channel: `Ctrl+O` while composing a thread reply toggles Slack's

@@ -65,7 +65,7 @@ var thickLeftBorder = lipgloss.Border{Left: "▌"}
 
 func borderInvisStyle() lipgloss.Style {
 	return lipgloss.NewStyle().
-		BorderStyle(thickLeftBorder).BorderLeft(true).
+		BorderStyle(styles.InvisibleLeftBorder()).BorderLeft(true).
 		BorderForeground(styles.Background).
 		BorderBackground(styles.Background)
 }

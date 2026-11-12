@@ -24,7 +24,7 @@ import (
 // per-workspace theme with no mode gate, so a quit prompt raised while a
 // workspace connects is still visible when the theme changes.
 func confirmPromptStyles() confirmprompt.Styles {
-	bg := styles.Background
+	bg := styles.ThemeBackground()
 	cs := messages.ChromeStyles()
 	return confirmprompt.Styles{
 		Box:          cs.Box,

@@ -12,7 +12,7 @@ import (
 	"strconv"
 
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
+	bubblesansi "github.com/gammons/slk/internal/bubbles/ansi"
 )
 
 // ReactionPillText builds a pill's inner text: the emoji followed by
@@ -31,7 +31,7 @@ import (
 // Every pill style sets a foreground anyway.
 func ReactionPillText(emojiStr string, count int, style lipgloss.Style, placedAsImage bool) string {
 	if placedAsImage {
-		return emojiStr + ansi.Style{}.ForegroundColor(style.GetForeground()).String() + strconv.Itoa(count)
+		return emojiStr + bubblesansi.ForegroundSGR(style.GetForeground()) + strconv.Itoa(count)
 	}
 	return emojiStr + strconv.Itoa(count)
 }

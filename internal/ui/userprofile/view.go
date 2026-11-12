@@ -142,7 +142,7 @@ func (m *Model) layout(termW, termH int, live Live) boxLayout {
 		innerW = 1
 	}
 
-	bg := styles.Background
+	bg := styles.ThemeBackground()
 
 	nameRows := m.nameRows(innerW, live)
 	titleRow := m.titleRow(innerW)
@@ -244,7 +244,7 @@ func (m *Model) layout(termW, termH int, live Live) boxLayout {
 // pronouns, badges) rows. Always exactly 2 rows so avatar placement
 // stays predictable, mirroring the spec's two-line header.
 func (m *Model) nameRows(innerW int, live Live) []string {
-	bg := styles.Background
+	bg := styles.ThemeBackground()
 	name := m.headerName()
 
 	nameStyle := lipgloss.NewStyle().Background(bg).Foreground(styles.TextPrimary).Bold(true)
@@ -326,7 +326,7 @@ func (m *Model) titleRow(innerW int) string {
 	if m.state == stateLoading || m.profile.Title == "" {
 		return ""
 	}
-	bg := styles.Background
+	bg := styles.ThemeBackground()
 	return lipgloss.NewStyle().Background(bg).Foreground(styles.TextPrimary).
 		Render(padLeftTo(fit(m.profile.Title, innerW), innerW))
 }
@@ -342,7 +342,7 @@ func (m *Model) titleRow(innerW int) string {
 func (m *Model) statusRows(innerW int, live Live) (rows []string, huddleIdx, huddleIconCol int) {
 	st := live.Status
 	now := live.Now
-	bg := styles.Background
+	bg := styles.ThemeBackground()
 	style := lipgloss.NewStyle().Background(bg).Foreground(styles.TextPrimary)
 
 	huddleIdx = -1
@@ -384,7 +384,7 @@ func (m *Model) statusRows(innerW int, live Live) (rows []string, huddleIdx, hud
 // copy icon starts at; emailIdx is -1 otherwise. The email is truncated
 // first, so the icon always fits.
 func (m *Model) detailRows(innerW int, live Live) (rows []string, emailIdx, iconCol int) {
-	bg := styles.Background
+	bg := styles.ThemeBackground()
 	valueStyle := lipgloss.NewStyle().Background(bg).Foreground(styles.TextPrimary)
 	mutedStyle := lipgloss.NewStyle().Background(bg).Foreground(styles.TextMuted)
 

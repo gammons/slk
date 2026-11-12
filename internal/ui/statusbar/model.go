@@ -298,7 +298,7 @@ func (m Model) View(width int) string {
 		rightParts = append(rightParts,
 			lipgloss.NewStyle().
 				Foreground(styles.Accent).
-				Background(styles.SurfaceDark).
+				Background(styles.StatusBarBackground).
 				Bold(true).
 				Render(m.toast))
 	}
@@ -314,41 +314,41 @@ func (m Model) View(width int) string {
 		rightParts = append(rightParts,
 			lipgloss.NewStyle().
 				Foreground(styles.Warning).
-				Background(styles.SurfaceDark).
+				Background(styles.StatusBarBackground).
 				Render(formatDND(m.dndEndTS)))
 	} else if m.presence == "active" {
 		rightParts = append(rightParts,
 			lipgloss.NewStyle().
 				Foreground(styles.Accent).
-				Background(styles.SurfaceDark).
+				Background(styles.StatusBarBackground).
 				Render("● Active"))
 	} else if m.presence == "away" {
 		rightParts = append(rightParts,
 			lipgloss.NewStyle().
 				Foreground(styles.TextMuted).
-				Background(styles.SurfaceDark).
+				Background(styles.StatusBarBackground).
 				Render("○ Away"))
 	}
 
 	switch m.connState {
 	case StateConnected:
 		rightParts = append(rightParts,
-			lipgloss.NewStyle().Foreground(styles.Accent).Background(styles.SurfaceDark).Render("● Connected"))
+			lipgloss.NewStyle().Foreground(styles.Accent).Background(styles.StatusBarBackground).Render("● Connected"))
 	case StateConnecting:
 		rightParts = append(rightParts,
-			lipgloss.NewStyle().Foreground(styles.Warning).Background(styles.SurfaceDark).Render("● Connecting"))
+			lipgloss.NewStyle().Foreground(styles.Warning).Background(styles.StatusBarBackground).Render("● Connecting"))
 	case StateDisconnected:
 		rightParts = append(rightParts,
-			lipgloss.NewStyle().Foreground(styles.Error).Background(styles.SurfaceDark).Render("● Disconnected"))
+			lipgloss.NewStyle().Foreground(styles.Error).Background(styles.StatusBarBackground).Render("● Disconnected"))
 	}
 
-	// Render separators and trailing padding with the SurfaceDark background so
+	// Render separators and trailing padding with the status bar background so
 	// the right-side pills read as one continuous bar even when the terminal's
 	// default background differs from the theme's surface_dark color (e.g. a
 	// dark terminal running a light slk theme, which previously left a stray
 	// dark cell between segments).
-	sep := lipgloss.NewStyle().Background(styles.SurfaceDark).Render(" ")
-	trailing := lipgloss.NewStyle().Background(styles.SurfaceDark).Render("  ")
+	sep := lipgloss.NewStyle().Background(styles.StatusBarBackground).Render(" ")
+	trailing := lipgloss.NewStyle().Background(styles.StatusBarBackground).Render("  ")
 
 	// Right-align so the rightmost segment ends at column (width-1),
 	// matching the inner right edge of the message-pane / thread-pane
@@ -418,7 +418,7 @@ func (m Model) View(width int) string {
 	// Spacers must render exactly the width they're asked for, so they
 	// can't go through styles.StatusBar -- it carries Padding(0, 1) and
 	// would add 2 columns to each one.
-	spacer := lipgloss.NewStyle().Background(styles.SurfaceDark)
+	spacer := lipgloss.NewStyle().Background(styles.StatusBarBackground)
 
 	// Render the help hint into the gap when there's room for it plus a
 	// small breathing margin. Drops silently when narrow.
@@ -531,7 +531,7 @@ func (m Model) commandCandidatesView(room int) string {
 	// The gap between entries carries the bar's background explicitly, the
 	// way the right-side separators do: a bare "  " would leave the
 	// terminal's default colour showing through on a themed bar.
-	gap := lipgloss.NewStyle().Background(styles.SurfaceDark).Render("  ")
+	gap := lipgloss.NewStyle().Background(styles.StatusBarBackground).Render("  ")
 	joined := strings.Join(rendered[start:end], gap)
 	if start > 0 {
 		joined = plain.Render(marker) + joined
@@ -564,7 +564,7 @@ func joinRightParts(parts []string, sep string) string {
 // real Slack client must not be allowed to push the status bar over
 // its exact-width budget.
 func fitStatusSegment(emoji, text string, maxWidth int) string {
-	style := lipgloss.NewStyle().Foreground(styles.Accent).Background(styles.SurfaceDark)
+	style := lipgloss.NewStyle().Foreground(styles.Accent).Background(styles.StatusBarBackground)
 	full := strings.TrimSpace(emoji + " " + text)
 	if full == "" || maxWidth <= 0 {
 		return ""

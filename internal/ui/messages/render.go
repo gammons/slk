@@ -277,6 +277,8 @@ func ReapplyBgAfterResets(text string, style string) string {
 var (
 	cachedBgANSI              string
 	cachedBgColor             color.Color
+	cachedSolidBgANSI         string
+	cachedSolidBgColor        color.Color
 	cachedSidebarBgANSI       string
 	cachedSidebarBgColor      color.Color
 	cachedFgANSI              string
@@ -285,6 +287,10 @@ var (
 	cachedSidebarFgColor      color.Color
 	cachedSidebarMutedFgANSI  string
 	cachedSidebarMutedFgColor color.Color
+
+	// cachedBgTransparent is the transparent switch the three bg caches
+	// above were filled under: bgANSIFor(NoColor) depends on it.
+	cachedBgTransparent bool
 
 	// Selection-tint ANSI cache, focused/unfocused. Recomputed when
 	// the underlying SelectionTintColor changes (via Apply()).
@@ -340,13 +346,23 @@ func SelectionTintBgANSI(focused bool) string {
 // makes ANSI 16 bg params like "40" safe to substitute — a naive
 // substring replacement would collide with literal digits in content
 // and with 256-color sub-arguments such as "38;5;40".
+//
+// With the transparent background on, the base spans carry no bg token
+// at all, and a reset drops the row back to the default background. So
+// the default-bg escape ("49", from BgANSI) is swapped for the tint, and
+// the tint is also put at the start and after every reset.
 func RepaintBgToSelectionTint(s string, focused bool) string {
 	from := bgSGRParams(BgANSI())
-	to := bgSGRParams(SelectionTintBgANSI(focused))
+	tint := SelectionTintBgANSI(focused)
+	to := bgSGRParams(tint)
 	if from == "" || from == to {
 		return s
 	}
-	return substituteBgSGR(s, from, to)
+	s = substituteBgSGR(s, from, to)
+	if styles.TransparentBackground() {
+		s = tint + bubblesansi.ReapplyAfterResets(s, tint)
+	}
+	return s
 }
 
 // bgSGRParams strips the "\x1b[" prefix and "m" suffix from a bg ANSI
@@ -486,10 +502,11 @@ func splitSGRParams(params string) []sgrParam {
 }
 
 // isBasicBgParam reports whether s is a single SGR parameter representing
-// a basic 16-color background: "40"–"47" or "100"–"107".
+// a basic 16-color background ("40"–"47" or "100"–"107") or the default
+// background ("49", what BgANSI is with the transparent background on).
 func isBasicBgParam(s string) bool {
 	switch s {
-	case "40", "41", "42", "43", "44", "45", "46", "47",
+	case "40", "41", "42", "43", "44", "45", "46", "47", "49",
 		"100", "101", "102", "103", "104", "105", "106", "107":
 		return true
 	}
@@ -501,7 +518,16 @@ func isBasicBgParam(s string) bool {
 // \x1b[100m–\x1b[107m) so the user's terminal palette is honored.
 // For ansi.IndexedColor it emits the 256-color form (\x1b[48;5;Nm).
 // Otherwise it falls back to truecolor (\x1b[48;2;R;G;Bm).
+//
+// With the transparent background on, lipgloss.NoColor (what the base
+// colours are then) is the default background, \x1b[49m. Without that
+// check it would fall through to RGBA, which is all zeros, and paint
+// black. With the option off it does fall through, as before, so a
+// theme colour that doesn't parse renders the same as it always did.
 func bgANSIFor(c color.Color) string {
+	if _, ok := c.(lipgloss.NoColor); ok && styles.TransparentBackground() {
+		return "\x1b[49m"
+	}
 	switch v := c.(type) {
 	case ansi.BasicColor:
 		if v < 8 {
@@ -540,6 +566,7 @@ func fgANSIFor(c color.Color) string {
 // Exported so sidebar and other packages can use it.
 // The result is cached and only recomputed when the background color changes.
 func BgANSI() string {
+	syncBgCaches()
 	bg := styles.Background
 	if bg == cachedBgColor && cachedBgANSI != "" {
 		return cachedBgANSI
@@ -549,6 +576,29 @@ func BgANSI() string {
 	return cachedBgANSI
 }
 
+// syncBgCaches drops the bg escape caches when the transparent switch
+// changed since they were filled, since the escape for a NoColor
+// background depends on it.
+func syncBgCaches() {
+	if on := styles.TransparentBackground(); on != cachedBgTransparent {
+		cachedBgANSI, cachedSolidBgANSI, cachedSidebarBgANSI = "", "", ""
+		cachedBgTransparent = on
+	}
+}
+
+// SolidBgANSI is BgANSI for surfaces that keep the theme's background
+// with the transparent background on (dialogs). Same as BgANSI when off.
+func SolidBgANSI() string {
+	syncBgCaches()
+	bg := styles.ThemeBackground()
+	if bg == cachedSolidBgColor && cachedSolidBgANSI != "" {
+		return cachedSolidBgANSI
+	}
+	cachedSolidBgANSI = bgANSIFor(bg)
+	cachedSolidBgColor = bg
+	return cachedSolidBgANSI
+}
+
 // SidebarBgANSI returns the ANSI escape sequence for the current theme's
 // sidebar background. The sidebar uses this instead of BgANSI so that
 // inline-styled glyphs (private/DM prefixes, cursor, unread dots) re-apply
@@ -556,6 +606,7 @@ func BgANSI() string {
 // the message-pane background through (most visible on themes like
 // Slack Default where the sidebar bg differs from the message bg).
 func SidebarBgANSI() string {
+	syncBgCaches()
 	bg := styles.SidebarBackground
 	if bg == cachedSidebarBgColor && cachedSidebarBgANSI != "" {
 		return cachedSidebarBgANSI

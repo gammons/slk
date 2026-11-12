@@ -10,8 +10,9 @@
 //
 // The first two are emitted only once App.View sets ReportFocus, and
 // only by terminals that support focus reporting. markFlushMsg lives
-// here because whether a staged mark may be issued is purely a
-// question of focus.
+// here because whether a staged mark may be issued is a question of
+// focus (and, at the FocusMsg catch-up, of whether its pane is still
+// drawn: dropMarksForHiddenPanes).
 //
 // Why the App tracks this at all: a channel being *selected* does not
 // mean the user can see it. slk may be sitting in a background
@@ -40,6 +41,7 @@ var reduceFocus reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// staged inside tmux before arming, go out now. Without this,
 		// a user who alt-tabs back, reads everything, and never
 		// switches channels leaves the channel unread on Slack.
+		a.dropMarksForHiddenPanes()
 		return a.flushPendingMarks(), true
 
 	case tea.BlurMsg:
@@ -60,4 +62,27 @@ var reduceFocus reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return a.flushPendingMarks(), true
 	}
 	return nil, false
+}
+
+// dropMarksForHiddenPanes discards staged marks whose pane is not drawn
+// now, and re-reads read state so the unread dot shows. Only the
+// FocusMsg catch-up calls it: its marks may have been staged while
+// blurred, unseen, and the layout can change before the user returns
+// (a resize stacking the panes). The debounce tick is not gated: its
+// marks were staged for arrivals the user saw, and hiding the pane
+// within the debounce must not make a read message unread.
+func (a *App) dropMarksForHiddenPanes() {
+	channelDrawn, threadDrawn := a.contentPanesDrawn()
+	dropped := false
+	if !channelDrawn && a.pendingChannelMark.ts != "" {
+		a.pendingChannelMark = pendingChannelMarkState{}
+		dropped = true
+	}
+	if !threadDrawn && a.pendingThreadMark.ts != "" {
+		a.pendingThreadMark = pendingThreadMarkState{}
+		dropped = true
+	}
+	if dropped {
+		a.notifyReadStateChanged()
+	}
 }
