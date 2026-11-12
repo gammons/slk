@@ -48,7 +48,7 @@ func (m Model) renderBox(termWidth int) string {
 	s := messages.ChromeStyles()
 	overlayWidth := boxWidth(termWidth)
 	innerWidth := overlayWidth - 4
-	bg := styles.Background
+	bg := styles.ThemeBackground()
 
 	f := chrome.Frame{
 		Title:  "New message",
@@ -74,7 +74,7 @@ func (m Model) renderInputRow(innerWidth int, bg color.Color) string {
 
 	pillStyle := lipgloss.NewStyle().
 		Background(styles.Primary).
-		Foreground(styles.Background).
+		Foreground(styles.ThemeBackground()).
 		Padding(0, 1)
 
 	for _, u := range m.users {

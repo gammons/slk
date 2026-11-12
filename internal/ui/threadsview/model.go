@@ -57,7 +57,7 @@ var thickLeftBorder = lipgloss.Border{Left: "▌"}
 
 func borderInvisStyle() lipgloss.Style {
 	return lipgloss.NewStyle().
-		BorderStyle(thickLeftBorder).BorderLeft(true).
+		BorderStyle(styles.InvisibleLeftBorder()).BorderLeft(true).
 		BorderForeground(styles.Background).
 		BorderBackground(styles.Background)
 }
@@ -748,6 +748,16 @@ func (m *Model) renderCard(s core.ThreadSummary, width int, selected bool) []str
 			Width(contentWidth)
 	}
 
+	if selected && styles.TransparentBackground() {
+		// With the transparent background a reset drops the row to the
+		// default background, a hole in the tint. Swap the renderer's
+		// background escapes for the tint and put the tint back after
+		// every reset. The opaque card has the same gap (theme
+		// background), left as it is so the off path stays unchanged.
+		tint := messages.SelectionTintBgANSI(m.focused)
+		header = messages.ReapplyBgAfterResets(header, tint)
+		previewLine = messages.RepaintBgToSelectionTint(previewLine, m.focused)
+	}
 	headerOut := borderStyle.Render(fill.Render(header))
 	previewOut := borderStyle.Render(fill.Render(previewLine))
 	footerOut := borderStyle.Render(fill.Foreground(styles.TextMuted).Render(footerText))

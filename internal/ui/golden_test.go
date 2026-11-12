@@ -348,6 +348,7 @@ func goldenClock() time.Time {
 // takes a testing.TB so benchmarks share it with newGoldenApp.
 func pinRenderGlobals(tb testing.TB) {
 	tb.Helper()
+	styles.SetTransparentBackground(false)
 	styles.Apply("dark", config.Theme{})
 	emoji.SetImageMode(false, 2)
 	messages.SetNowFunc(goldenClock)
@@ -755,6 +756,7 @@ func goldenFixtureOpts() []testOpt {
 // "restore" means "re-apply dark" and not "restore the pristine
 // zero value".
 func resetRenderGlobals() {
+	styles.SetTransparentBackground(false)
 	styles.Apply("dark", config.Theme{})
 	emoji.SetImageMode(false, 2)
 	messages.SetNowFunc(nil)

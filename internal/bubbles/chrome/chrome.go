@@ -38,6 +38,9 @@ type Styles struct {
 	// resets nested renders emit cannot drop the box's background.
 	// Empty disables it.
 	BaseANSI string
+	// PopupANSI is BaseANSI for Popup: re-asserted after every reset in
+	// the popup's rows. Empty disables it.
+	PopupANSI string
 }
 
 // Box draws content inside s.Box at the given outer width, with
@@ -109,7 +112,7 @@ func Popup(s Styles, rows []string, width int) string {
 	if len(rows) == 0 {
 		return ""
 	}
-	return s.Popup.Width(width - 2).Render(strings.Join(rows, "\n"))
+	return s.Popup.Width(width - 2).Render(ansi.ReapplyAfterResets(strings.Join(rows, "\n"), s.PopupANSI))
 }
 
 // PopupMarker is the two-column marker in front of a popup row: "▌ " in
