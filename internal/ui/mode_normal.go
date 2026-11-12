@@ -186,6 +186,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, a.keys.ToggleThread):
 		a.ToggleThread()
 
+	case key.Matches(msg, a.keys.ToggleFullscreen):
+		a.fullscreen = !a.fullscreen
+
 	case key.Matches(msg, a.keys.NavBack):
 		if cmd := a.navigateBack(); cmd != nil {
 			return cmd

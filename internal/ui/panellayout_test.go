@@ -60,6 +60,36 @@ func TestPanelLayoutCompute(t *testing.T) {
 	}
 }
 
+func TestPanelLayoutComputeFullscreen(t *testing.T) {
+	type frame struct{ rail, sbW, sbB, msgW, msgB, thrW, thrB int }
+	type bands struct{ rail, sidebarEnd, msgEnd, threadEnd int }
+	tests := []struct {
+		pane      Panel
+		wantFrame frame
+		wantBands bands
+	}{
+		{PanelSidebar, frame{0, 118, 2, 0, 0, 0, 0}, bands{0, 120, 120, 120}},
+		{PanelMessages, frame{0, 0, 0, 118, 2, 0, 0}, bands{0, 0, 120, 120}},
+		{PanelThread, frame{0, 0, 0, 0, 0, 118, 2}, bands{0, 0, 0, 120}},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprint(tt.pane), func(t *testing.T) {
+			l := newPanelLayout()
+			f := l.ComputeFullscreen(120, 30, tt.pane)
+			got := frame{f.RailWidth, f.SidebarWidth, f.SidebarBorder, f.MsgWidth, f.MsgBorder, f.ThreadWidth, f.ThreadBorder}
+			if got != tt.wantFrame {
+				t.Errorf("frame = %+v, want %+v", got, tt.wantFrame)
+			}
+			if b := (bands{l.railWidth, l.sidebarEnd, l.msgEnd, l.threadEnd}); b != tt.wantBands {
+				t.Errorf("bands = %+v, want %+v", b, tt.wantBands)
+			}
+			if f.ContentHeight != 29 {
+				t.Errorf("ContentHeight = %d, want 29", f.ContentHeight)
+			}
+		})
+	}
+}
+
 func TestPanelLayoutCompute_Sweep(t *testing.T) {
 	const floorPaneW = 10
 	for width := 20; width <= 300; width++ {

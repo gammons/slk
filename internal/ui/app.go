@@ -157,6 +157,9 @@ type App struct {
 	// stackFront is the content pane (PanelMessages or PanelThread)
 	// that last had focus. Recorded by Update, read by threadInFront.
 	stackFront Panel
+	// fullscreen draws one pane alone across the whole terminal (the
+	// `f` key); fullscreenPanel picks which, following focus.
+	fullscreen bool
 	view       View
 	width      int
 	height     int
@@ -1100,10 +1103,26 @@ func (a *App) threadDrawnAlone() bool {
 	return frame.MsgWidth == 0
 }
 
+// fullscreenPanel is the pane drawn while a.fullscreen is set: the
+// focused one. With focus on neither content pane, the one that would
+// be in front when stacked (threadInFront).
+func (a *App) fullscreenPanel() Panel {
+	switch {
+	case a.focusedPanel == PanelSidebar && a.sidebarVisible:
+		return PanelSidebar
+	case a.threadInFront():
+		return PanelThread
+	}
+	return PanelMessages
+}
+
 // computeFrame resolves this frame's layout from the App's state and
 // stores the hit-test bands. The one place View's layout inputs are
 // assembled; tests call it instead of repeating Compute's arguments.
 func (a *App) computeFrame() panelLayoutFrame {
+	if a.fullscreen {
+		return a.layout.ComputeFullscreen(a.width, a.height, a.fullscreenPanel())
+	}
 	return a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),
 		a.sidebarVisible, a.threadVisible, a.threadInFront(), a.compact)
 }
@@ -2442,6 +2461,11 @@ func (a *App) CloseThread() {
 		return
 	}
 	a.threadCloseAfterUpload = false
+	// A full-screen thread goes back to the panes rather than leaving
+	// the channel full screen in its place.
+	if a.fullscreen && a.fullscreenPanel() == PanelThread {
+		a.fullscreen = false
+	}
 	a.cancelEdit()
 	a.threadCompose.SetDraftContext("", "", "")
 	a.clearSelections()
@@ -3752,9 +3776,13 @@ func (a *App) View() tea.View {
 	// still render normally so the user can see context.
 	previewActive := a.preview.Active()
 
+	// A full-screen frame (ComputeFullscreen) gives the rail and the
+	// sidebar zero width when they are not the pane shown.
 	var panels []string
-	panels = append(panels, a.renderRail(frame.RailWidth, frame.ContentHeight, themeVer))
-	if a.sidebarVisible {
+	if frame.RailWidth > 0 {
+		panels = append(panels, a.renderRail(frame.RailWidth, frame.ContentHeight, themeVer))
+	}
+	if frame.SidebarBorder > 0 {
 		panels = append(panels, a.renderSidebar(frame.SidebarWidth, frame.SidebarBorder, frame.ContentHeight, themeVer))
 	}
 	if frame.MsgWidth > 0 {
