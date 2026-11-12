@@ -43,17 +43,69 @@ func urlCacheKey(url string) string {
 	return "BK-" + hex.EncodeToString(sum[:8])
 }
 
+// fitFallbackLine returns the first of forms that fits availWidth, else
+// the last form truncated to it. An availWidth of 0 or less means the
+// caller does not know the width, and the first form is returned as is.
+//
+// Every fallback line here is counted by its caller as exactly one row:
+// RenderMessage advances its row cursor by len(bkLines)
+// (preAttachmentRows, render_message.go), but the pane re-wraps the
+// finished message through a lipgloss width in WrapRows. A line wider
+// than the pane therefore becomes two visual rows that nothing counted,
+// and every later file image, click target and sixel placement in that
+// message is shifted up a row. Fitting the line is what keeps the count
+// and the output agreeing.
+//
+// Truncating rather than wrapping is deliberate: these lines are OSC 8
+// hyperlinks, and ScanOsc8Spans only registers a span that starts and
+// ends on one row, so a wrapped link would lose its click target. The
+// label is cut before the hyperlink is wrapped around it, so the
+// closing sequence always survives, and the full URL stays the link's
+// target however short the visible label gets.
+func fitFallbackLine(availWidth int, forms ...string) string {
+	if availWidth <= 0 {
+		return forms[0]
+	}
+	for _, f := range forms {
+		if lipgloss.Width(f) <= availWidth {
+			return f
+		}
+	}
+	return truncateToWidth(forms[len(forms)-1], availWidth)
+}
+
 // renderImageFallback returns a single OSC-8 hyperlinked line for an
 // image we cannot render inline (no fetcher, ProtoOff, empty URL, or
-// missing cell metrics). Format: "[image] <url>".
-func renderImageFallback(url string) string {
+// missing cell metrics). Format: "[image] <url>", fitted to availWidth.
+func renderImageFallback(url string, availWidth int) string {
 	if url == "" {
-		return mutedStyle().Render("[image] (no url)")
+		return mutedStyle().Render(fitFallbackLine(availWidth, "[image] (no url)", "[image]"))
 	}
-	label := "[image] " + url
+	label := fitFallbackLine(availWidth, "[image] "+url, "[image]")
 	// OSC-8 hyperlink: \x1b]8;;URL\x1b\\LABEL\x1b]8;;\x1b\\
 	hyper := "\x1b]8;;" + url + "\x1b\\" + label + "\x1b]8;;\x1b\\"
 	return mutedStyle().Render(hyper)
+}
+
+// imageFallback is the line drawn for an image fetchOrPlaceholder did not
+// draw: "not loaded" when the user may allow it (the I key), else the
+// plain link. Both are fitted to availWidth; the shorter forms keep the
+// I hint visible in a pane too narrow for the whole sentence, as
+// imgrender's renderNotLoadedLine does for a file thumbnail.
+func imageFallback(ctx Context, url string, availWidth int) string {
+	if url != "" && ctx.Policy.Decide(url) == imgpkg.Ask {
+		return mutedStyle().Render(fitFallbackLine(availWidth,
+			NotLoadedLabel(imgpkg.HostOf(url)),
+			"[not loaded · I]",
+			"[I]"))
+	}
+	return renderImageFallback(url, availWidth)
+}
+
+// NotLoadedLabel is the line drawn in place of an image the load policy
+// is waiting on the user for.
+func NotLoadedLabel(host string) string {
+	return "[image from " + host + " not loaded · I to load]"
 }
 
 // inflightURL tracks per-URL fetches so each URL only has one
@@ -122,7 +174,7 @@ func computeBlockImageTarget(b ImageBlock, ctx Context, width int) image.Point {
 func fetchOrPlaceholder(url string, target image.Point, ctx Context, rowStart int) (
 	[]string, []func(io.Writer) error, map[int]SixelEntry, HitRect, bool,
 ) {
-	if url == "" {
+	if url == "" || ctx.Policy.Decide(url) != imgpkg.Load {
 		return nil, nil, nil, HitRect{}, false
 	}
 	perf := ctx.Perf // local alias; nil disables timing
@@ -169,6 +221,7 @@ func fetchOrPlaceholder(url string, target image.Point, ctx Context, rowStart in
 				fetchStart := time.Now()
 				_, err := fetcher.Fetch(context.Background(), imgpkg.FetchRequest{
 					Key: key, URL: url, Target: pixelTarget, ReqID: reqID,
+					Gated: true,
 					// The cell target lets the fetch worker
 					// prerender for this exact footprint, so the
 					// render below hits Prerendered instead of

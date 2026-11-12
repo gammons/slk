@@ -48,6 +48,8 @@
 - Lazy-loaded: images download only as they scroll into view
 - LRU cache at `~/.cache/slk/images/` (default 200 MB cap)
 - Inside tmux, slk falls back to half-block to avoid pixel-protocol pass-through pitfalls
+- Images from outside Slack are not fetched until you allow them: a link-preview or Block Kit image hosted anywhere but Slack's own CDN shows `[image from <host> not loaded · I to load]`, and `I` asks before contacting the host (which would learn your IP address and when you read the message). `[general] image_loading = "confirm"` asks for every image, `"off"` never loads message images; `trusted_image_hosts` adds hosts to load without asking
+- Image decoding is bounded (32 MB download, 25 megapixels), so an image that declares a huge canvas cannot exhaust memory
 - Configurable via `[appearance] image_protocol` (`auto` / `kitty` / `sixel` / `halfblock` / `off`) and `max_image_rows`
 
 See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your terminal supports.

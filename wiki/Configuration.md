@@ -16,6 +16,14 @@ hide_deactivated_users = true   # hide deactivated people, as the Slack desktop
                                 # they are not offered in the channel finder,
                                 # the new-message picker or @ / # autocomplete.
                                 # Set false to show them again. See below.
+image_loading = "trusted" # which message images load without asking:
+                          #   trusted: Slack-hosted (files.slack.com, *.slack-edge.com)
+                          #            and trusted_image_hosts load; others wait for I
+                          #   confirm: every message image waits for I
+                          #   off:     never load message images; they stay links
+                          # Avatars and custom emoji are not affected.
+trusted_image_hosts = []  # extra hosts (and their subdomains) to load in "trusted"
+                          # mode, https only, e.g. ["githubassets.com"]
 
 [appearance]
 theme = "dracula"

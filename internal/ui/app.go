@@ -1181,6 +1181,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		reduceFocus,
 		reduceSend,
 		reduceRemovePreview,
+		reduceLoadImages,
 		reduceActionPrompt,
 		reduceSlashCommand,
 		reduceChannels,
@@ -3204,6 +3205,16 @@ func (a *App) cycleImagePreviewCmd(channel, ts string, currentIdx, delta int) te
 	}
 	pos = (pos + delta + len(imageIdxs)) % len(imageIdxs)
 	nextAttIdx := imageIdxs[pos]
+	// A sibling the load policy holds back is not fetched silently. The
+	// gated fetch would be refused, and previewErrorMsg only dismisses a
+	// *loading* overlay, so the image already on screen would stay up
+	// with no explanation. Ask instead, as the first open does
+	// (imagepreview.go), closing the preview first so the prompt is not
+	// drawn underneath it.
+	if previewHeld(a.imageCtx.Policy, msgItem, nextAttIdx) {
+		a.preview.Close()
+		return a.promptLoadImages(msgItem)
+	}
 	return a.previewFetchCmd(channel, ts, nextAttIdx, true)
 }
 
@@ -3259,6 +3270,7 @@ func (a *App) previewFetchCmd(channel, ts string, attIdx int, cycle bool) tea.Cm
 			Key:    fileID + "-preview",
 			URL:    url,
 			Target: target,
+			Gated:  true,
 		})
 		if err != nil {
 			return previewErrorMsg{Err: err}

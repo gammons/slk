@@ -111,6 +111,7 @@ func BlockkitContext(msg MessageItem, rc *RenderContext, emojiFlushes *[]func(io
 		CellPixels:  imgCtx.CellPixels,
 		MaxRows:     imgCtx.MaxRows,
 		MaxCols:     imgCtx.MaxCols,
+		Policy:      imgCtx.Policy,
 		UserNames:   rc.UserNames,
 		MessageTS:   msg.TS,
 		Channel:     rc.ImageChannel,

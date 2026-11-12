@@ -127,6 +127,11 @@ func (p *imagePreviewController) Handle(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// this fast path the UI felt hung on slow-fetching previews
 		// (Slack Connect channels where multi-auth retry can take
 		// seconds).
+		// An image the load policy holds back is not fetched for the
+		// preview either: ask first, as I does.
+		if msgItem, ok := a.findMessageInActiveChannel(m.Channel, m.TS); ok && previewHeld(a.imageCtx.Policy, msgItem, m.AttIdx) {
+			return a.promptLoadImages(msgItem), true
+		}
 		cmd := a.openImagePreviewCmd(m.Channel, m.TS, m.AttIdx)
 		if cmd == nil {
 			return nil, true

@@ -257,3 +257,87 @@ func TestMouseClick_OnThreadImageDispatchesOpenPreview(t *testing.T) {
 		t.Errorf("OpenImagePreviewMsg = %+v, want {Channel:%q TS:%q AttIdx:0}", op, channelID, reply.TS)
 	}
 }
+
+// heldSiblingApp puts a two-image message on C123 where the first
+// image is Slack-hosted (the policy loads it) and the second is not (in
+// "trusted" mode the policy holds it back), with the preview already
+// open on the first.
+func heldSiblingApp(t *testing.T) (*App, string) {
+	t.Helper()
+	const ts = "1700000000.000100"
+	msg := messages.MessageItem{
+		TS: ts, UserID: "U1", UserName: "alice",
+		Attachments: []messages.Attachment{
+			{
+				Kind: "image", Name: "slack.png", FileID: "F0SLACK", Mime: "image/png",
+				Thumbs: []messages.ThumbSpec{{URL: "https://files.slack.com/a-720.png", W: 720, H: 720}},
+			},
+			{
+				Kind: "image", Name: "elsewhere.png", FileID: "F0ELSE", Mime: "image/png",
+				Thumbs: []messages.ThumbSpec{{URL: "https://images.example.com/b-720.png", W: 720, H: 720}},
+			},
+		},
+	}
+
+	app := NewApp()
+	app.activeChannelID = "C123"
+	app.focusedPanel = PanelMessages
+	app.messagepane.SetMessages([]messages.MessageItem{msg})
+	app.SetImageFetcher(stubPreviewFetcher{})
+	app.imageCtx.Policy = imgpkg.NewLoadPolicy(imgpkg.LoadTrusted, nil)
+
+	// Preview already open on the Slack-hosted sibling.
+	overlay := imgpkg.NewLoadingPreview("slack.png", 2, 0)
+	app.preview.Open(&overlay, "C123", ts, 0)
+	return app, ts
+}
+
+// TestCyclePreview_HeldSiblingAsksInsteadOfFailingSilently covers the
+// second bug Greptile found on PR #467. Only the initial open consulted
+// previewHeld, so cycling onto a sibling the policy holds back issued a
+// Gated fetch that was refused; previewErrorMsg dismisses only a
+// *loading* overlay, so the image already on screen stayed up and the
+// keypress looked like it did nothing.
+func TestCyclePreview_HeldSiblingAsksInsteadOfFailingSilently(t *testing.T) {
+	app, ts := heldSiblingApp(t)
+
+	cmd := app.cycleImagePreviewCmd("C123", ts, 0, +1)
+
+	if app.preview.Active() {
+		t.Error("cycling onto a held sibling left the preview open; it should close before prompting")
+	}
+	if !dialogShows(app, "Load images?") {
+		t.Error("cycling onto a held sibling did not open the load prompt")
+	}
+	if cmd != nil {
+		// promptLoadImages returns nil once it has opened the dialog;
+		// a non-nil cmd here would mean a fetch was still issued.
+		if _, isFetch := cmd().(previewLoadedMsg); isFetch {
+			t.Error("a held sibling was fetched anyway")
+		}
+	}
+}
+
+// TestCyclePreview_AllowedSiblingStillFetches guards the fix against
+// over-reach: a sibling the policy permits must still cycle normally,
+// with the preview left open.
+func TestCyclePreview_AllowedSiblingStillFetches(t *testing.T) {
+	app, ts := heldSiblingApp(t)
+	// Allow the second image's host for this session, as `I` would.
+	app.imageCtx.Policy.AllowHosts("images.example.com")
+
+	cmd := app.cycleImagePreviewCmd("C123", ts, 0, +1)
+
+	if !app.preview.Active() {
+		t.Error("cycling onto an allowed sibling closed the preview")
+	}
+	if dialogShows(app, "Load images?") {
+		t.Error("cycling onto an allowed sibling opened the load prompt")
+	}
+	if cmd == nil {
+		t.Fatal("cycling onto an allowed sibling issued no fetch")
+	}
+	if _, ok := cmd().(previewLoadedMsg); !ok {
+		t.Errorf("got %#v, want previewLoadedMsg", cmd())
+	}
+}

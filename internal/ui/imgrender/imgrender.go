@@ -41,6 +41,9 @@ type ImageContext struct {
 	// 0 disables the column cap (width-only bounded by the message
 	// pane).
 	MaxCols int
+	// Policy decides which image URLs load ([general]
+	// image_loading). Nil loads every URL.
+	Policy  *imgpkg.LoadPolicy
 	SendMsg func(tea.Msg)
 }
 
@@ -333,6 +336,14 @@ func (r *Renderer) RenderBlock(att Block, channel, ts string, availWidth, baseRo
 		debuglog.ImgRender("RenderBlock: file_id=%s decision=legacy_text reason=no_thumb_url", att.FileID)
 		return BlockResult{Lines: []string{renderLegacyLine(att, availWidth)}, Height: 1}
 	}
+	switch r.ctx.Policy.Decide(url) {
+	case imgpkg.Block:
+		debuglog.ImgRender("RenderBlock: file_id=%s decision=legacy_text reason=policy_block", att.FileID)
+		return BlockResult{Lines: []string{renderLegacyLine(att, availWidth)}, Height: 1}
+	case imgpkg.Ask:
+		debuglog.ImgRender("RenderBlock: file_id=%s decision=not_loaded reason=policy_ask", att.FileID)
+		return BlockResult{Lines: []string{renderNotLoadedLine(att, availWidth)}, Height: 1}
+	}
 	key := att.FileID + "-" + suffix
 
 	hit := Hit{
@@ -367,6 +378,7 @@ func (r *Renderer) RenderBlock(att Block, channel, ts string, availWidth, baseRo
 				Target:     pixelTarget,
 				CellTarget: target,
 				ReqID:      reqID,
+				Gated:      true,
 			})
 			if ctx.SendMsg == nil {
 				debuglog.ImgFetch("dispatch: key=%s req_id=%d total_ms=%d kind=skipped (SendMsg=nil)",
@@ -448,29 +460,79 @@ func (r *Renderer) RenderBlock(att Block, channel, ts string, availWidth, baseRo
 // empty), but takes an imgrender.Block to keep imgrender independent
 // of the messages package.
 func renderLegacyLine(att Block, availWidth int) string {
-	markerStyle := lipgloss.NewStyle().Foreground(styles.TextMuted).Bold(true)
-	urlStyle := lipgloss.NewStyle().Foreground(styles.Primary).Underline(true)
 	marker := "[File]"
 	if att.Kind == "image" {
 		marker = "[Image]"
 	}
+	return markedLine(att, availWidth, marker)
+}
+
+// renderNotLoadedLine is the one-line form of an image the load policy
+// is waiting on the user for (the I key).
+//
+// Three marker forms, widest first: the full hint, a short one for a
+// narrow pane, and a last resort that still names the key. The full
+// marker is 30 cells, so on a narrow pane it leaves no room for the file
+// name and once overflowed availWidth on its own; see markedLine for why
+// that matters.
+func renderNotLoadedLine(att Block, availWidth int) string {
+	return markedLine(att, availWidth,
+		"[Image not loaded · I to load]",
+		"[not loaded · I]",
+		"[I]")
+}
+
+// markedLine draws a marker and att's name (or URL) as one hyperlinked,
+// never-wrapping line. markers are the marker forms in preference order,
+// widest first; the widest one that still leaves room for the label wins.
+//
+// The line must fit availWidth: the caller reports Height 1, so a wrap
+// would shift every later attachment's rows in the entry and spread this
+// one's click span over two rows, which ScanOsc8Spans cannot register
+// (it only sees same-row spans), leaving it unclickable. availWidth is
+// the content width the caller already wraps bodies to.
+func markedLine(att Block, availWidth int, markers ...string) string {
+	markerStyle := lipgloss.NewStyle().Foreground(styles.TextMuted).Bold(true)
+	urlStyle := lipgloss.NewStyle().Foreground(styles.Primary).Underline(true)
 	label := att.Name
 	if label == "" {
 		label = att.URL
 	}
-	// Truncate the label so the line never wraps: Height is 1, and a
-	// wrap would shift every later attachment's rows in the entry and
-	// leave this one's click span open across rows (ScanOsc8Spans
-	// only registers same-row spans, so a wrapped line would not be
-	// clickable at all). availWidth is the content width the caller
-	// already wraps bodies to; the marker plus one space come off it.
+
+	marker := markers[0]
 	if availWidth > 0 {
-		budget := availWidth - len(marker) - 1
-		if budget > 0 && lipgloss.Width(label) > budget {
-			label = truncate.StringWithTail(label, uint(budget), "…")
-		}
+		marker, label = fitMarkedLine(markers, label, availWidth)
 	}
-	body := markerStyle.Render(marker) + " " + urlStyle.Render(label)
+
+	body := markerStyle.Render(marker)
+	if label != "" {
+		body += " " + urlStyle.Render(label)
+	}
 	// OSC 8 hyperlink: ESC ] 8 ;; URL ESC \ LABEL ESC ] 8 ;; ESC \
 	return "\x1b]8;;" + att.URL + "\x1b\\" + body + "\x1b]8;;\x1b\\"
+}
+
+// fitMarkedLine picks the widest marker form that still leaves at least
+// one cell for the label and truncates the label to what is left, so
+// marker + " " + label never exceeds availWidth.
+//
+// When no form leaves room for a label, the narrowest is drawn alone,
+// itself truncated if even that overflows. Returning an empty label is
+// how the caller knows to drop the separating space.
+func fitMarkedLine(markers []string, label string, availWidth int) (string, string) {
+	for _, m := range markers {
+		budget := availWidth - lipgloss.Width(m) - 1 // -1: the separating space
+		if budget <= 0 {
+			continue
+		}
+		if lipgloss.Width(label) > budget {
+			label = truncate.StringWithTail(label, uint(budget), "…")
+		}
+		return m, label
+	}
+	m := markers[len(markers)-1]
+	if lipgloss.Width(m) > availWidth {
+		m = truncate.StringWithTail(m, uint(availWidth), "…")
+	}
+	return m, ""
 }

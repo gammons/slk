@@ -69,6 +69,7 @@
 | `H` / `:huddle` | Normal | Copy the huddle link of the conversation on screen (channels, DMs, group DMs; the focused thread pane, or the highlighted Threads/Activity row, names the channel) |
 | `F` | Normal (message / thread) | Forward selected message using the channel finder; Enter sends, Esc cancels |
 | `O` / `v` | Normal (message) | Open full-screen image preview. An image Slack made no thumbnail for (SVG) is downloaded and opened in the system viewer instead |
+| `I` | Normal (message) | Load images on the selected message that `image_loading` held back: shows the hosts it would contact, then `y` loads them, `a` trusts those hosts for the session |
 | `Esc` / `q` | Preview | Close preview |
 | `Enter` | Preview | Open in system image viewer |
 | `h` / `←` | Preview | Previous image (when message has multiple) |

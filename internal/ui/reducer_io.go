@@ -64,6 +64,7 @@ import (
 	"github.com/gammons/slk/internal/debuglog"
 	"github.com/gammons/slk/internal/ui/imgrender"
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/statusbar"
 )
 
@@ -239,12 +240,27 @@ var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		for _, mp := range a.allWinModels() {
 			mp.HandleImageReady(m.Channel, m.TS, m.Key)
 		}
-		// Thread panel: v1 uses coarse cache invalidation. If any
-		// reply in the open thread has a matching TS, blow the
-		// thread cache so the reply renderer runs again with the
-		// now-cached image bytes. HasReply guards against churning
-		// the thread cache on every messages-pane image arrival.
-		if a.threadPanel.HasReply(m.TS) {
+		// Thread panel: coarse cache invalidation. If the open thread
+		// draws this message — as a reply or as its parent — blow the
+		// thread cache so the renderer runs again with the now-cached
+		// image bytes. threadShowsMessage guards against churning the
+		// thread cache on every messages-pane image arrival.
+		if a.threadShowsMessage(m.Channel, m.TS) {
+			a.threadPanel.InvalidateCache()
+		}
+		return nil, true
+
+	case blockkit.BlockImageReadyMsg:
+		// A Block Kit or link-preview image landed. Same per-message
+		// invalidation as an attachment image; the URL stands in for
+		// the key (these fetches are not tracked by imgrender, so
+		// clearing it is a no-op).
+		for _, mp := range a.allWinModels() {
+			mp.HandleImageReady(m.Channel, m.TS, m.URL)
+		}
+		// By TS alone, deliberately: m.Channel is not comparable with
+		// the thread's channel ID. See threadShowsTS.
+		if a.threadShowsTS(m.TS) {
 			a.threadPanel.InvalidateCache()
 		}
 		return nil, true
@@ -363,4 +379,51 @@ func reducePaste(a *App, m tea.PasteMsg) tea.Cmd {
 	var cmd tea.Cmd
 	a.compose, cmd = a.compose.Update(m)
 	return cmd
+}
+
+// threadShowsMessage reports whether the open thread pane draws the
+// message (channel, ts) — as a reply or as the thread parent — so an
+// image that lands for it needs the thread's render cache dropped.
+// Only for imgrender.ImageReadyMsg: each pane owns its own
+// imgrender.Renderer, so the thread's own fetch always reports the
+// channel ID this compares against. A Block Kit or link-preview image
+// is threadShowsTS instead.
+//
+// The two image-ready arms above used threadPanel.HasReply alone, which
+// only indexes replies: a Block Kit, link-preview or attachment image on
+// an open thread's PARENT kept its loading placeholder until something
+// else redrew the thread. The channel comparison is the other half:
+// HasReply matched a bare TS, so an image arriving for another channel
+// could drop an unrelated thread's cache.
+func (a *App) threadShowsMessage(channel, ts string) bool {
+	if a.threadPanel == nil || a.threadPanel.ChannelID() != channel {
+		return false
+	}
+	return a.threadShowsTS(ts)
+}
+
+// threadShowsTS is threadShowsMessage without the channel comparison,
+// for blockkit.BlockImageReadyMsg. Its Channel is not comparable with
+// the thread's channel ID: the two panes key image fetches differently
+// (the channel pane stamps the channel NAME, the thread pane the ID —
+// plan decision P3), and blockkit dedupes in-flight fetches by URL
+// across every pane, so whichever pane asks first sends the only
+// message. A Block Kit image on a thread parent that the channel pane
+// also draws — a permalink jump opening both panes, say — therefore
+// arrives stamped with the name, and comparing it against the ID left
+// the placeholder up.
+//
+// Matching on the TS alone can only over-invalidate, which costs one
+// redundant thread render, and needs two channels to share a TS to do
+// even that. Unifying the two keys is the fix that would let the
+// comparison back in; it changes how the channel pane's windows
+// self-gate in HandleImageReady, so it is not this change.
+func (a *App) threadShowsTS(ts string) bool {
+	if a.threadPanel == nil {
+		return false
+	}
+	if a.threadPanel.HasReply(ts) {
+		return true
+	}
+	return a.threadPanel.ParentMsg().TS == ts
 }
