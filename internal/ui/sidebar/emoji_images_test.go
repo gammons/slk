@@ -549,3 +549,60 @@ func TestEmojiImages_ColdIsWarmWithBlanks(t *testing.T) {
 		}
 	}
 }
+
+// A section collapsed by [sidebar] start_collapsed that still shows its
+// unread rows ([sidebar] show_unread_in_collapsed) stays one line per row
+// with emoji images. The header keeps its image and badges, and the
+// unread DM row under it keeps its status image. Checked at every width,
+// normal and selected.
+func TestEmojiImages_StartCollapsedWithUnreadRowsOneLine(t *testing.T) {
+	for _, cells := range []int{1, 2} {
+		withEmojiImageCells(t, cells)
+		for _, selected := range []bool{false, true} {
+			for width := minWidth; width <= 40; width++ {
+				ff := newFakeEmojiFetcher()
+				ff.serve(mustEmojiURL(t, "orange_book", nil), 80, nil)
+				ff.serve(mustEmojiURL(t, "calendar", nil), 81, nil)
+				// A placement names its image ID in its foreground colour.
+				header, status := "\x1b[38;2;0;0;80m", "\x1b[38;2;0;0;81m"
+				m := New([]ChannelItem{
+					{ID: "C1", Name: "handbook", Type: "channel", Section: "S1"},
+					{ID: "D1", Name: "alice-with-a-long-name", Type: "dm", DMUserID: "U1", Section: "S1",
+						Status: peerstatus.Status{Emoji: ":calendar:"}},
+				})
+				m.SetSectionsProvider(&fakeProvider{ready: true, sections: []SectionMeta{{ID: "S1", Name: longSectionName, Emoji: "orange_book", Type: "standard"}}})
+				m.SetReadStateReader(func() map[string]cache.ReadState {
+					return map[string]cache.ReadState{"D1": {HasUnread: true, MentionCount: 150}}
+				})
+				m.SetEmojiContext(messages.EmojiContext{PlaceCtx: emoji.PlaceContext{Fetcher: ff}, Cells: cells})
+				m.SetStartCollapsed(true)
+				m.SetShowUnreadInCollapsed(true)
+				if selected {
+					selectHeader(t, &m)
+				}
+				view := m.View(12, width)
+				name := fmt.Sprintf("cells%d/s%v/w%d", cells, selected, width)
+				t.Run(name, func(t *testing.T) {
+					if !m.IsCollapsed("S1") {
+						t.Fatal("section not collapsed")
+					}
+					assertOneLinePerRow(t, view, 12, width)
+					if !strings.Contains(view, header) {
+						t.Errorf("collapsed header lost its emoji image:\n%s", view)
+					}
+					if strings.Contains(view, "handbook") {
+						t.Errorf("read channel shown in a collapsed section:\n%s", view)
+					}
+					if width >= 30 {
+						if !strings.Contains(view, status) {
+							t.Errorf("unread DM row lost its status image:\n%s", view)
+						}
+						if !strings.Contains(ansiRe.ReplaceAllString(view, ""), "99+") {
+							t.Errorf("collapsed header lost its mention badge:\n%s", view)
+						}
+					}
+				})
+			}
+		}
+	}
+}
