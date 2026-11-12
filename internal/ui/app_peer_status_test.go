@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/wintree"
@@ -118,7 +119,7 @@ func TestPeerStatusTick_ClearsExpiredAndStopsWhenNothingPends(t *testing.T) {
 	}
 }
 
-func TestDMTopicFor(t *testing.T) {
+func TestSetChannelHeader(t *testing.T) {
 	a := newPeerStatusTestApp(t)
 	a.presence.Handle(a, UserStatusChangeMsg{UserID: "U1", Emoji: ":calendar:", Text: "In a meeting"})
 
@@ -126,11 +127,14 @@ func TestDMTopicFor(t *testing.T) {
 	if want == "" {
 		t.Fatal("fixture has no summary")
 	}
-	if got := a.presence.dmTopicFor(a, "D1"); got != want {
-		t.Errorf("dmTopicFor(D1) = %q; want %q", got, want)
+	mp := messages.New(nil, "")
+	a.presence.setChannelHeader(a, mp, "alice", "D1")
+	if got := mp.View(10, 80); !strings.Contains(got, want) {
+		t.Errorf("DM header lacks the summary %q:\n%s", want, got)
 	}
-	if got := a.presence.dmTopicFor(a, "C1"); got != "" {
-		t.Errorf("dmTopicFor(C1) = %q; want empty for a channel", got)
+	a.presence.setChannelHeader(a, mp, "general", "C1")
+	if got := mp.View(10, 80); strings.Contains(got, "In a meeting") {
+		t.Errorf("a channel's header kept the DM topic:\n%s", got)
 	}
 }
 

@@ -71,7 +71,7 @@ func (a *App) splitWindow(dir wintree.Dir) tea.Cmd {
 		return toastWithClear(a, "Not enough room", 2*time.Second)
 	}
 	m := a.newWindowModel(srcCh.Name)
-	m.SetChannel(srcCh.Name, a.presence.dmTopicFor(a, srcCh.ID))
+	a.presence.setChannelHeader(a, m, srcCh.Name, srcCh.ID)
 	m.SetChannelType(srcCh.Type)
 	if src != nil {
 		// Messages() exposes the source's internal slice; the seed

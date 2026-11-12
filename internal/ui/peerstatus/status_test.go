@@ -118,3 +118,107 @@ func TestStatusGlyph(t *testing.T) {
 		}
 	}
 }
+
+func TestGlyphShortcode_NamesTheEmojiGlyphStandsFor(t *testing.T) {
+	inHuddle := Status{Emoji: ":calendar:", Huddle: HuddleActive}
+	cases := []struct {
+		name string
+		st   Status
+		want string
+	}{
+		{"standard shortcode", Status{Emoji: ":calendar:"}, "calendar"},
+		{"skin tone is kept for the image", Status{Emoji: ":+1::skin-tone-3:"}, "+1::skin-tone-3"},
+		{"custom workspace emoji", Status{Emoji: ":company-logo:"}, "company-logo"},
+		{"text without emoji", Status{Text: "Heads down"}, fallbackShortcode},
+		{"huddle wins over status", inHuddle, huddleShortcode},
+		{"nothing set", Status{}, ""},
+		{"expired", Status{Emoji: ":calendar:", Expires: testNow}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.st.GlyphShortcode(testNow); got != c.want {
+				t.Errorf("GlyphShortcode = %q, want %q", got, c.want)
+			}
+			// Whenever there is no glyph there is nothing to place.
+			if (c.st.Glyph(testNow) == "") != (c.want == "") {
+				t.Errorf("Glyph %q and GlyphShortcode %q disagree on whether anything shows",
+					c.st.Glyph(testNow), c.want)
+			}
+		})
+	}
+}
+
+// The image placed for a huddle or a text-only status must be the same
+// emoji as the glyph shown when it can't be placed.
+func TestGlyphShortcode_FixedNamesMatchTheirGlyphs(t *testing.T) {
+	if got := emoji.CodeMap()[":"+huddleShortcode+":"]; got != HuddleGlyph {
+		t.Errorf(":%s: is %q, want HuddleGlyph %q", huddleShortcode, got, HuddleGlyph)
+	}
+	if got := emoji.CodeMap()[":"+fallbackShortcode+":"]; got != FallbackGlyph {
+		t.Errorf(":%s: is %q, want FallbackGlyph %q", fallbackShortcode, got, FallbackGlyph)
+	}
+}
+
+func TestStatusShortcode_IgnoresHuddle(t *testing.T) {
+	cases := []struct {
+		name string
+		st   Status
+		want string
+	}{
+		{"standard shortcode", Status{Emoji: ":calendar:"}, "calendar"},
+		{"custom workspace emoji", Status{Emoji: ":company-logo:"}, "company-logo"},
+		{"text without emoji", Status{Text: "Heads down"}, fallbackShortcode},
+		{"huddle is ignored", Status{Emoji: ":calendar:", Huddle: HuddleActive}, "calendar"},
+		{"huddle alone", Status{Huddle: HuddleActive}, ""},
+		{"nothing set", Status{}, ""},
+		{"expired", Status{Emoji: ":calendar:", Expires: testNow}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.st.StatusShortcode(testNow); got != c.want {
+				t.Errorf("StatusShortcode = %q, want %q", got, c.want)
+			}
+			if (c.st.StatusGlyph(testNow) == "") != (c.want == "") {
+				t.Errorf("StatusGlyph %q and StatusShortcode %q disagree on whether anything shows",
+					c.st.StatusGlyph(testNow), c.want)
+			}
+		})
+	}
+}
+
+func TestSummaryWith(t *testing.T) {
+	end := testNow.Add(time.Hour)
+	all := Status{Emoji: ":company-logo:", Text: "Busy", Huddle: HuddleActive, DND: true, DNDEnd: end}
+	mark := func(shortcode, glyph string) string { return "<" + shortcode + "|" + glyph + ">" }
+	cases := []struct {
+		name string
+		st   Status
+		want string
+	}{
+		{"every part", all, "<headphones|" + HuddleGlyph + "> In a huddle · <company-logo|" + FallbackGlyph + "> Busy · " +
+			DNDGlyph + " Do not disturb until " + end.Local().Format("15:04")},
+		{"emoji without text keeps no trailing space", Status{Emoji: ":calendar:"}, "<calendar|📆>"},
+		{"text without emoji", Status{Text: "Lunch"}, "<speech_balloon|" + FallbackGlyph + "> Lunch"},
+		{"nothing", Status{}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.st.SummaryWith(testNow, "15:04", mark); got != c.want {
+				t.Errorf("SummaryWith = %q, want %q", got, c.want)
+			}
+		})
+	}
+
+	// A blank reservation (an image still loading) is kept, not trimmed.
+	blank := func(string, string) string { return "  " }
+	if got := (Status{Emoji: ":calendar:"}).SummaryWith(testNow, "15:04", blank); got != "  " {
+		t.Errorf("blank reservation = %q, want two spaces", got)
+	}
+
+	// A nil emoji is Summary.
+	for _, st := range []Status{all, {Emoji: ":calendar:"}, {Text: "Lunch"}, {Emoji: ":calendar:", Text: "Out"}, {}} {
+		if got, want := st.SummaryWith(testNow, "15:04", nil), st.Summary(testNow, "15:04"); got != want {
+			t.Errorf("SummaryWith(nil) = %q, Summary = %q", got, want)
+		}
+	}
+}

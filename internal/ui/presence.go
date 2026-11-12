@@ -18,6 +18,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/presencemenu"
 	"github.com/gammons/slk/internal/ui/statusbar"
@@ -365,22 +366,25 @@ func (p *presenceController) pushDMStatus(a *App, userID string, now time.Time) 
 			continue
 		}
 		a.channelFinder.SetStatus(item.ID, item.Status)
-		topic := item.Status.Summary(now, dmTopicLayout)
 		for _, mp := range a.modelsForChannel(item.ID) {
-			mp.SetChannelTopic(topic)
+			mp.SetDMTopic(item.Status, now, dmTopicLayout)
 		}
 	}
 }
 
-// dmTopicFor is the header topic for channelID: its DM peer's status
-// summary, or "" for a channel that is not a DM.
-func (p *presenceController) dmTopicFor(a *App, channelID string) string {
+// setChannelHeader names mp's header for channelID. A DM's header
+// also carries its peer's status (SetDMTopic: the summary, with its
+// emoji as images in image mode); any other channel's has no topic.
+func (p *presenceController) setChannelHeader(a *App, mp *messages.Model, name, channelID string) {
 	for _, item := range a.sidebar.Items() {
 		if item.ID == channelID && item.DMUserID != "" {
-			return item.Status.Summary(time.Now(), dmTopicLayout)
+			now := time.Now()
+			mp.SetChannel(name, item.Status.Summary(now, dmTopicLayout))
+			mp.SetDMTopic(item.Status, now, dmTopicLayout)
+			return
 		}
 	}
-	return ""
+	mp.SetChannel(name, "")
 }
 
 // expirePeers is the peerStatusTickMsg arm: it clears every status and
