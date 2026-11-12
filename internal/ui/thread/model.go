@@ -1308,14 +1308,13 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// The list: the parent, then for each reply its day divider (when
 	// its local day differs from the previous one, seeded with the
 	// parent's), the "── new ──" landmark before the first reply past
-	// the unread boundary, the reply, and a full-width rule between
-	// replies. Dividers, landmark and rules are decorations: not
-	// selectable, not text-selectable.
-	ruleStyle := lipgloss.NewStyle().
+	// the unread boundary, the reply, and a blank row between replies
+	// (the channel pane's spacing). Dividers, landmark and spacers are
+	// decorations: not selectable, not text-selectable.
+	replySeparator := lipgloss.NewStyle().
 		Width(width).
 		Background(styles.Background).
-		Foreground(styles.Border)
-	replySeparator := ruleStyle.Render(strings.Repeat("─", width))
+		Render("")
 	var newLandmark string
 	if m.unreadBoundaryTS != "" {
 		newLandmark = lipgloss.NewStyle().

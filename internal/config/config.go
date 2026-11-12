@@ -103,7 +103,8 @@ type Appearance struct {
 	TransparentBackground bool   `toml:"transparent_background"`
 	TimestampFormat       string `toml:"timestamp_format"`
 	ShowAvatars           bool   `toml:"show_avatars"`
-	// ThreadAvatars also draws avatars in the thread pane (needs ShowAvatars).
+	// ThreadAvatars also draws avatars in the thread pane (needs
+	// ShowAvatars). Default on.
 	ThreadAvatars bool `toml:"thread_avatars"`
 	// ImageProtocol controls how inline images are rendered.
 	// One of: "auto", "kitty", "sixel", "halfblock", "off".
@@ -281,6 +282,7 @@ func Default() Config {
 			Theme:           "nord",
 			TimestampFormat: "3:04 PM",
 			ShowAvatars:     true,
+			ThreadAvatars:   true,
 			ImageProtocol:   "auto",
 			MaxImageRows:    20,
 			MaxImageCols:    60,

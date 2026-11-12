@@ -1133,19 +1133,19 @@ func TestConfig_ThreadAvatars(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Appearance.ThreadAvatars {
-		t.Error("expected thread_avatars off by default")
+	if !cfg.Appearance.ThreadAvatars {
+		t.Error("expected thread_avatars on by default")
 	}
 
-	if err := os.WriteFile(path, []byte("[appearance]\nthread_avatars = true\n"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("[appearance]\nthread_avatars = false\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err = Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Appearance.ThreadAvatars {
-		t.Error("expected thread_avatars = true to turn thread avatars on")
+	if cfg.Appearance.ThreadAvatars {
+		t.Error("expected thread_avatars = false to turn thread avatars off")
 	}
 }
 
