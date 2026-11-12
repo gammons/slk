@@ -62,8 +62,10 @@ This is chosen automatically (`kitty_placement = "auto"` under
   still turns it on.
 
 Run with `SLK_DEBUG=1` and look for the `kitty placement:` lines in the
-debug log to see what was picked. `kitty_placement = "native"` turns it
-off; `"emulated"` forces it on another terminal with the same behaviour.
+debug log to see what was picked. `image_protocol = "sixel"` turns it
+off. `kitty_placement = "native"` does too, but only after the kitty
+probe times out (200 ms). `"emulated"` forces it on another terminal
+with the same behaviour.
 
 Text that still shows emoji as glyphs (the compose box, or
 `emoji_images = "off"`) uses WezTerm's own width rules, where
