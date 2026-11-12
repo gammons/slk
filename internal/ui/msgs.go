@@ -596,7 +596,7 @@ type (
 	// download state through the generic toast-clear reducer.
 	downloadFailureClearMsg struct{ Seq uint64 }
 	// CustomThemesReloadedMsg carries the custom theme files read again
-	// after something rewrote them (Noctalia's template hook signals slk).
+	// after something rewrote them (a palette generator signals slk).
 	// The App registers them and reapplies the selected theme.
 	CustomThemesReloadedMsg struct{ Themes []styles.CustomTheme }
 )

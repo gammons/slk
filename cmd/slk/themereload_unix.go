@@ -8,8 +8,8 @@ import (
 	"syscall"
 )
 
-// watchThemeReloadSignal catches SIGUSR1, which a theme generator
-// (Noctalia's template hook) sends after rewriting a custom theme file:
+// watchThemeReloadSignal catches SIGUSR1, which a palette generator (or a
+// script) sends after rewriting a custom theme file:
 // `pkill -USR1 -x slk`. Call it before the theme files are first read:
 // the channel keeps a signal that arrives before the returned start runs,
 // so a file rewritten during startup is still reloaded. start runs reload

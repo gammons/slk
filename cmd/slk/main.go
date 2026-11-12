@@ -1576,9 +1576,9 @@ func run() error {
 	// and the sixel paint site for marked frames.
 	p = tea.NewProgram(app, tea.WithOutput(terminalOutput))
 
-	// A rewritten custom theme file (Noctalia regenerates its theme when
-	// the wallpaper or dark/light mode changes) is read here, off the UI
-	// goroutine, and registered there: the theme registry is UI state.
+	// A palette generator may rewrite a custom theme file. Read the files
+	// here, off the UI goroutine, and register them there: the theme
+	// registry is UI state.
 	startThemeReload(func() {
 		p.Send(ui.CustomThemesReloadedMsg{Themes: styles.ParseCustomThemes(os.DirFS(themesDir))})
 	})

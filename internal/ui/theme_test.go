@@ -691,7 +691,7 @@ func reloadTestColors(bg string) styles.ThemeColors {
 	}
 }
 
-// A reload of the custom themes (Noctalia rewrote its theme file) repaints
+// A reload of the custom themes (a palette generator rewrote a theme file) repaints
 // with the theme on screen and lists themes that are new. This package
 // cannot remove a registered theme, so the names are this test's own.
 func TestCustomThemesReloadRepaintsTheThemeOnScreen(t *testing.T) {
