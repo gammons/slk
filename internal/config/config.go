@@ -95,6 +95,21 @@ type General struct {
 	// j/k move the highlight and / starts the name filter, as in the
 	// help overlay. Default off: typing filters straight away.
 	WorkspacePickerVimKeys bool `toml:"workspace_picker_vim_keys"`
+	// ImageLoading decides which message images (file thumbnails, Block
+	// Kit images, link-preview images) load without asking:
+	//   "trusted" (default) images Slack serves (files.slack.com,
+	//             *.slack-edge.com) and trusted_image_hosts load; any
+	//             other host shows a "not loaded" line until allowed
+	//             with I
+	//   "confirm" every message image waits for I
+	//   "off"     no message image loads; each stays a link
+	// Avatars and custom emoji are not affected (Slack assigns their
+	// URLs). An unrecognised value is treated as "confirm".
+	ImageLoading string `toml:"image_loading"`
+	// TrustedImageHosts are extra hosts whose images load in "trusted"
+	// mode, each also covering its subdomains (e.g. "githubassets.com").
+	// Only https URLs load without asking.
+	TrustedImageHosts []string `toml:"trusted_image_hosts"`
 }
 
 type Appearance struct {
@@ -304,6 +319,7 @@ func Default() Config {
 		General: General{
 			DownloadDir:          "~/Downloads",
 			HideDeactivatedUsers: true,
+			ImageLoading:         "trusted",
 		},
 		Appearance: Appearance{
 			Theme:            "nord",
@@ -390,6 +406,18 @@ func Load(path string) (Config, error) {
 		cfg.Appearance.KittyPlacement = p
 	default:
 		cfg.Appearance.KittyPlacement = "auto"
+	}
+
+	// Normalise ImageLoading. Unset means the default; an unknown value
+	// (a typo of "off", say) takes the strict side, so a mistake shows
+	// prompts instead of silently loading images.
+	switch il := strings.ToLower(strings.TrimSpace(cfg.General.ImageLoading)); il {
+	case "":
+		cfg.General.ImageLoading = "trusted"
+	case "trusted", "confirm", "off":
+		cfg.General.ImageLoading = il
+	default:
+		cfg.General.ImageLoading = "confirm"
 	}
 
 	// Expand a leading "~" in download_dir against the real home
