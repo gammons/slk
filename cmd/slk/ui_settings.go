@@ -27,6 +27,8 @@ type uiSettings struct {
 	Compact          bool
 	ThreadAvatars    bool
 	ThemeOverrides   core.Theme
+	// Theme is [appearance] theme, the theme startup applies.
+	Theme string
 	// HideDeactivatedUsers is [general] hide_deactivated_users (default
 	// on).
 	HideDeactivatedUsers bool
@@ -68,6 +70,7 @@ func uiSettingsFromConfig(cfg config.Config) uiSettings {
 		Compact:               cfg.Appearance.Compact,
 		ThreadAvatars:         cfg.Appearance.ThreadAvatars,
 		ThemeOverrides:        cfg.Theme,
+		Theme:                 cfg.Appearance.Theme,
 		StayInInsertAfterSend: cfg.Compose.StayInInsertAfterSend,
 		ReplyAvatars:          cfg.Appearance.ReplyAvatars,
 		HideDeactivatedUsers:  cfg.General.HideDeactivatedUsers,
@@ -99,6 +102,7 @@ func applyUISettings(app *ui.App, s uiSettings) {
 	app.SetThreadAvatars(s.ThreadAvatars)
 	app.SetThemeItems(styles.ThemeNames())
 	app.SetThemeOverrides(s.ThemeOverrides)
+	app.SetThemeName(s.Theme)
 	app.SetStayInInsertAfterSend(s.StayInInsertAfterSend)
 	app.SetReplyAvatars(s.ReplyAvatars)
 }

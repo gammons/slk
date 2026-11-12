@@ -44,6 +44,7 @@ type pendingThemeSave struct {
 // that is still showing, because that toast names the theme this call
 // replaces. A toast shown after it stays.
 func (a *App) applyTheme(name string) {
+	a.themeName = name
 	styles.Apply(name, a.themeOverrides)
 	a.invalidateAllWinModelCaches()
 	a.threadPanel.InvalidateCache()

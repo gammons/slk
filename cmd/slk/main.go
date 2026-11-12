@@ -237,6 +237,7 @@ func run() error {
 
 	// Load custom themes and apply the active theme
 	themesDir := filepath.Join(configDir, "themes")
+	startThemeReload := watchThemeReloadSignal()
 	styles.LoadCustomThemes(os.DirFS(themesDir))
 	// Before the first Apply: every Apply reads it, theme switches too.
 	styles.SetTransparentBackground(cfg.Appearance.TransparentBackground)
@@ -1574,6 +1575,13 @@ func run() error {
 	// a serialized pass-through for non-sixel frames (no marker present)
 	// and the sixel paint site for marked frames.
 	p = tea.NewProgram(app, tea.WithOutput(terminalOutput))
+
+	// A rewritten custom theme file (Noctalia regenerates its theme when
+	// the wallpaper or dark/light mode changes) is read here, off the UI
+	// goroutine, and registered there: the theme registry is UI state.
+	startThemeReload(func() {
+		p.Send(ui.CustomThemesReloadedMsg{Themes: styles.ParseCustomThemes(os.DirFS(themesDir))})
+	})
 
 	// A changed thread-unread answer re-runs the rail refresh, which
 	// then reads the new answer from the cache.

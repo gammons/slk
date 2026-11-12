@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -677,4 +679,88 @@ func TestThemeCycleToast(t *testing.T) {
 			t.Errorf("status bar = %q, want the later toast kept", got)
 		}
 	})
+}
+
+// reloadTestColors is a complete palette, as ParseCustomThemes would
+// fill one, with the given background.
+func reloadTestColors(bg string) styles.ThemeColors {
+	return styles.ThemeColors{
+		Primary: "#4A9EFF", Accent: "#50C878", Warning: "#E0A030", Error: "#E04040",
+		Background: bg, Surface: "#16162B", SurfaceDark: "#0F0F23",
+		Text: "#E0E0E0", TextMuted: "#888888", Border: "#333333",
+	}
+}
+
+// A reload of the custom themes (Noctalia rewrote its theme file) repaints
+// with the theme on screen and lists themes that are new. This package
+// cannot remove a registered theme, so the names are this test's own.
+func TestCustomThemesReloadRepaintsTheThemeOnScreen(t *testing.T) {
+	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
+	a := newTestApp(t)
+	styles.RegisterCustomTheme("Reload Test", reloadTestColors("#101010"))
+	a.applyTheme("Reload Test")
+
+	a.Update(CustomThemesReloadedMsg{Themes: []styles.CustomTheme{
+		{Name: "Reload Test", Colors: reloadTestColors("#202020")},
+		{Name: "Reload Test New", Colors: reloadTestColors("#303030")},
+	}})
+
+	if got := styles.CurrentTheme(); got != "Reload Test" {
+		t.Errorf("theme on screen = %q, want Reload Test", got)
+	}
+	if !colorEqual(styles.Background, lipgloss.Color("#202020")) {
+		t.Errorf("Background = %v, want the reloaded #202020", styles.Background)
+	}
+	if got := a.themeSwitcher.Neighbor("Reload Test", 1); got != "Reload Test New" {
+		t.Errorf("switcher after Reload Test = %q, want the new Reload Test New", got)
+	}
+}
+
+// unregisteredThemeName returns a theme name no earlier test registered.
+// The registry can't drop a theme, so a test that needs one missing
+// (and may run again with -count) takes a fresh name each run.
+var themeNameSeq atomic.Int64
+
+func unregisteredThemeName(base string) string {
+	return fmt.Sprintf("%s %d", base, themeNameSeq.Add(1))
+}
+
+// A configured custom theme whose file is missing at startup shows Dark.
+// When the file appears and slk is told to reload, the configured theme
+// applies, not Dark again.
+func TestCustomThemesReloadAppliesAThemeThatWasMissing(t *testing.T) {
+	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
+	a := newTestApp(t)
+	name := unregisteredThemeName("Reload Late")
+	a.applyTheme(name)
+	if got := styles.CurrentTheme(); got != "Dark" {
+		t.Fatalf("before the file exists: theme on screen = %q, want Dark", got)
+	}
+
+	a.Update(CustomThemesReloadedMsg{Themes: []styles.CustomTheme{
+		{Name: name, Colors: reloadTestColors("#404040")},
+	}})
+
+	if got := styles.CurrentTheme(); got != name {
+		t.Errorf("after the reload: theme on screen = %q, want %s", got, name)
+	}
+}
+
+// Startup applies the configured theme with styles.Apply, before any
+// workspace is ready. A reload in that window still applies the
+// configured theme once its file appears, not Dark.
+func TestCustomThemesReloadBeforeAWorkspaceIsReady(t *testing.T) {
+	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
+	a := newTestApp(t)
+	name := unregisteredThemeName("Reload Startup")
+	styles.Apply(name, config.Theme{})
+	a.SetThemeName(name)
+
+	a.Update(CustomThemesReloadedMsg{Themes: []styles.CustomTheme{
+		{Name: name, Colors: reloadTestColors("#505050")},
+	}})
+
+	if got := styles.CurrentTheme(); got != name {
+		t.Errorf("after the reload: theme on screen = %q, want %s", got, name)
+	}
 }

@@ -339,6 +339,11 @@ slightly lighter) shade than `background` for the same effect.
 Switch themes live with `Ctrl+y`, or cycle through them with `Alt+y` /
 `Alt+Shift+y`.
 
+slk reads the theme files at startup. To have a running slk read them again
+(say a palette generator such as Noctalia or matugen rewrote one), send it
+`SIGUSR1`: `pkill -USR1 -x slk`. It picks up new and changed themes and
+reapplies your selected theme. Not on Windows.
+
 ## Marks
 
 `m` followed by a letter records the selected message; `'` followed by

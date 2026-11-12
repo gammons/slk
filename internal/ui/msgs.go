@@ -25,6 +25,7 @@ import (
 	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/searchresults"
 	"github.com/gammons/slk/internal/ui/sidebar"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 // EmojiImageReadyMsg re-exports emoji.EmojiImageReadyMsg so reducers
@@ -594,6 +595,10 @@ type (
 	// downloadFailureClearMsg expires one queued failure toast without routing
 	// download state through the generic toast-clear reducer.
 	downloadFailureClearMsg struct{ Seq uint64 }
+	// CustomThemesReloadedMsg carries the custom theme files read again
+	// after something rewrote them (Noctalia's template hook signals slk).
+	// The App registers them and reapplies the selected theme.
+	CustomThemesReloadedMsg struct{ Themes []styles.CustomTheme }
 )
 
 // autoScrollTickMsg is dispatched by tea.Tick while a drag is held near
