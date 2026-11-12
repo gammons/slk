@@ -1,6 +1,11 @@
 package ansi
 
-import "testing"
+import (
+	"image/color"
+	"testing"
+
+	xansi "github.com/charmbracelet/x/ansi"
+)
 
 func TestReapplyAfterResets(t *testing.T) {
 	t.Parallel()
@@ -22,6 +27,26 @@ func TestReapplyAfterResets(t *testing.T) {
 			t.Parallel()
 			if got := ReapplyAfterResets(c.text, c.style); got != c.want {
 				t.Errorf("ReapplyAfterResets(%q, %q) = %q, want %q", c.text, c.style, got, c.want)
+			}
+		})
+	}
+}
+
+func TestForegroundSGR(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		c    color.Color
+		want string
+	}{
+		{"truecolor", color.RGBA{R: 1, G: 2, B: 3, A: 255}, "\x1b[38;2;1;2;3m"},
+		{"basic", xansi.Red, "\x1b[31m"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if got := ForegroundSGR(c.c); got != c.want {
+				t.Errorf("ForegroundSGR(%v) = %q, want %q", c.c, got, c.want)
 			}
 		})
 	}

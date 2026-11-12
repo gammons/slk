@@ -79,6 +79,7 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		TeamID:               client.TeamID(),
 		TeamName:             token.TeamName,
 		UserID:               client.UserID(),
+		UserHandle:           client.UserName(),
 		UserNames:            newUserNameStore(nil),
 		AvatarURLs:           &sync.Map{},
 		UserNamesByHandle:    make(map[string]string),

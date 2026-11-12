@@ -891,6 +891,7 @@ func TestNormalModeKeys(t *testing.T) {
 			name: "j moves the sidebar cursor down",
 			opts: normalOpts(),
 			setup: func(t *testing.T, a *App) {
+				a.sidebar.ToggleCollapse("Channels") // expand: rows below C1
 				a.sidebar.SelectByID("C1")
 				if got := a.sidebar.SelectedID(); got != "C1" {
 					t.Fatalf("precondition: sidebar SelectedID = %q, want %q", got, "C1")

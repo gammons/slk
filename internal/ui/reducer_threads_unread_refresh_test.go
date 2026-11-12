@@ -129,7 +129,7 @@ func TestThreadsListDirty_InactiveWorkspace_RefreshesRail(t *testing.T) {
 // the dot on.
 func TestThreadReply_OnScreenAndFocused_DoesNotRefreshRail(t *testing.T) {
 	app := railRefreshApp(t)
-	app.threadVisible = true
+	openThreadOnScreen(app)
 	app.threadPanel.SetThread(messages.MessageItem{TS: "1.0", UserID: "U2", Text: "parent"}, nil, "C1", "1.0")
 	app.terminalFocused = true
 	app.Update(NewMessageMsg{

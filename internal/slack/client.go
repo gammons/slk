@@ -89,8 +89,11 @@ type Client struct {
 	wsDone chan struct{}
 	teamID string
 	userID string
-	token  string
-	cookie string
+	// userName is the authenticated user's handle (the Slack `name`
+	// field, without an @), from auth.test.
+	userName string
+	token    string
+	cookie   string
 
 	// apiBaseURL is the workspace-specific Web API root, e.g.
 	// "https://slack.com/api/" for non-grid workspaces or
@@ -310,6 +313,12 @@ func (c *Client) UserID() string {
 	return c.userID
 }
 
+// UserName returns the authenticated user's handle (the Slack `name`
+// field, without an @). Empty before Connect is called.
+func (c *Client) UserName() string {
+	return c.userName
+}
+
 // WsDone returns a channel closed after the WebSocket event owner exits,
 // including the reader stopping and OnDisconnect completing.
 func (c *Client) WsDone() <-chan struct{} {
@@ -344,6 +353,7 @@ func (c *Client) Connect(ctx context.Context) error {
 		c.envelope.SetTeamID(c.teamID)
 	}
 	c.userID = resp.UserID
+	c.userName = resp.User
 	c.apiBaseURL = deriveAPIBaseURL(resp.URL)
 	c.teamURL = resp.URL
 	c.teamName = resp.Team

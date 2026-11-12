@@ -23,6 +23,13 @@ const FallbackGlyph = "💬"
 // place, as the headphones do in Slack.
 const HuddleGlyph = "🎧"
 
+// huddleShortcode and fallbackShortcode name HuddleGlyph and
+// FallbackGlyph for GlyphShortcode.
+const (
+	huddleShortcode   = "headphones"
+	fallbackShortcode = "speech_balloon"
+)
+
 // Status is a user's custom status and DND state.
 type Status struct {
 	// Emoji is Slack's shortcode, colons included, e.g. ":calendar:".
@@ -111,6 +118,33 @@ func (s Status) StatusGlyph(now time.Time) string {
 	return FallbackGlyph
 }
 
+// GlyphShortcode names the emoji Glyph(now) stands for, without colons,
+// so a surface can draw it as an image: "headphones" in a huddle, the
+// status shortcode as Slack sent it (custom emoji and skin tones
+// included), "speech_balloon" for a status with text but no emoji, and
+// "" when Glyph(now) is "". A surface that cannot place it shows
+// Glyph(now) instead.
+func (s Status) GlyphShortcode(now time.Time) string {
+	if s.InHuddle(now) {
+		return huddleShortcode
+	}
+	return s.StatusShortcode(now)
+}
+
+// StatusShortcode names the emoji StatusGlyph(now) stands for, without
+// colons: the status shortcode as Slack sent it, "speech_balloon" for a
+// status with text but no emoji, "" when there is no live status. Like
+// StatusGlyph, it ignores huddle state.
+func (s Status) StatusShortcode(now time.Time) string {
+	if !s.HasStatus(now) {
+		return ""
+	}
+	if name := strings.Trim(s.Emoji, ":"); name != "" {
+		return name
+	}
+	return fallbackShortcode
+}
+
 // GlyphWidth is the cell width of Glyph(now), 0 when there is none.
 func (s Status) GlyphWidth(now time.Time) int {
 	g := s.Glyph(now)
@@ -124,12 +158,36 @@ func (s Status) GlyphWidth(now time.Time) int {
 // text, then DND with its end time when known, formatted with layout.
 // It is "" when there is nothing to show.
 func (s Status) Summary(now time.Time, layout string) string {
+	return s.SummaryWith(now, layout, nil)
+}
+
+// SummaryWith is Summary with the huddle and status emoji drawn by
+// emoji, which is given the emoji's shortcode (no colons) and its glyph
+// and returns what to draw, e.g. an image placement. A nil emoji draws
+// the glyph, which is Summary. The DND glyph is always drawn as is.
+//
+// A part emoji draws is emoji's result, then " " and the status text
+// when there is text: it is never trimmed, so a blank reservation for
+// an image still loading keeps its cells.
+func (s Status) SummaryWith(now time.Time, layout string, emoji func(shortcode, glyph string) string) string {
 	var parts []string
 	if s.InHuddle(now) {
-		parts = append(parts, HuddleGlyph+" In a huddle")
+		g := HuddleGlyph
+		if emoji != nil {
+			g = emoji(huddleShortcode, g)
+		}
+		parts = append(parts, g+" In a huddle")
 	}
 	if s.HasStatus(now) {
-		parts = append(parts, strings.TrimSpace(s.StatusGlyph(now)+" "+s.Text))
+		if emoji == nil {
+			parts = append(parts, strings.TrimSpace(s.StatusGlyph(now)+" "+s.Text))
+		} else {
+			part := emoji(s.StatusShortcode(now), s.StatusGlyph(now))
+			if s.Text != "" {
+				part += " " + s.Text
+			}
+			parts = append(parts, part)
+		}
 	}
 	if s.InDND(now) {
 		dnd := DNDGlyph + " Do not disturb"

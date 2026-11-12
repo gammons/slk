@@ -336,15 +336,21 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 	//
 	// Shared with the thread read-cursor gate below, which must not
 	// drift from this one: the message is staged for a read-cursor
-	// advance exactly when it is rendered into the open panel. Whether
-	// that advance is actually issued is decided later, at flush time,
-	// by terminal focus.
+	// advance exactly when it is rendered into the open panel AND that
+	// panel is drawn this frame (threadReplySeen). Whether that
+	// advance is actually issued is decided later, at flush time, by
+	// terminal focus.
 	inOpenThreadPanel := a.threadVisible &&
 		m.ChannelID == a.threadPanel.ChannelID() &&
 		m.Message.ThreadTS == a.threadPanel.ThreadTS()
 	if inOpenThreadPanel {
 		a.threadPanel.AddReply(m.Message)
 	}
+	// Full screen or the stacked layout can leave the channel or the
+	// open thread off screen; an arrival there is unseen and stays
+	// unread.
+	channelDrawn, threadDrawn := a.contentPanesDrawn()
+	threadReplySeen := inOpenThreadPanel && threadDrawn
 	if m.Message.Ephemeral {
 		// Only the current user can see it, and Slack does not know it
 		// as a message in the conversation: no read cursor may land on
@@ -371,7 +377,7 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 	// slk-internal focus". Terminal focus is NOT checked here; it
 	// gates the flush (scheduleMarkFlush), so a blurred reply stays
 	// staged until the FocusMsg catch-up.
-	if isThreadReply && inOpenThreadPanel {
+	if isThreadReply && threadReplySeen {
 		a.recordThreadMark(m.ChannelID, m.Message.ThreadTS, m.Message.TS)
 	}
 
@@ -384,6 +390,16 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 			// already happened in the WS handler; force the sidebar and
 			// workspace rail to re-read it.
 			debuglog.Cache("NewMessageMsg: channel=%s ts=%s decision=mark_unread",
+				m.ChannelID, m.Message.TS)
+			a.notifyReadStateChanged()
+		case !channelDrawn:
+			// Selected, but full screen or the stacked layout has
+			// another pane on screen. Unseen: stage nothing, so no
+			// later flush marks it read, and show the dot from the
+			// has_unread the WS handler just wrote. It is cleared by the
+			// next channel entry, or by a later arrival the user sees
+			// (a channel mark covers everything before it).
+			debuglog.Cache("NewMessageMsg: channel=%s ts=%s decision=active_hidden_stay_unread",
 				m.ChannelID, m.Message.TS)
 			a.notifyReadStateChanged()
 		case a.terminalFocused:
@@ -411,7 +427,7 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 			a.recordChannelMark(m.ChannelID, m.Message.TS)
 			a.notifyReadStateChanged()
 		}
-	} else if inOpenThreadPanel && a.terminalFocused {
+	} else if threadReplySeen && a.terminalFocused {
 		// On screen and visible: the thread mark staged above clears
 		// it before anything would repaint the dot, the same reason
 		// the channel arm skips the notification.

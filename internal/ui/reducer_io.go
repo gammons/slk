@@ -279,6 +279,7 @@ var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			mp.HandleEmojiImageReady("")
 		}
 		a.threadPanel.HandleEmojiImageReady("")
+		a.sidebar.HandleEmojiImageReady("")
 		a.reactionPicker.HandleEmojiImageReady("") // no-op in v1; future caching may use it
 		// Autocomplete dropdowns have no cache; the no-op hooks on
 		// a.compose.emojiPicker / a.threadCompose.emojiPicker keep

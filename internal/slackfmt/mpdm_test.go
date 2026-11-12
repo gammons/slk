@@ -52,7 +52,7 @@ func TestFormatMPDMName(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := FormatMPDMName(tc.in, lookup)
+			got := FormatMPDMName(tc.in, "", lookup)
 			if got != tc.want {
 				t.Errorf("FormatMPDMName(%q) = %q, want %q", tc.in, got, tc.want)
 			}
@@ -73,7 +73,7 @@ func TestFormatMPDMName_FallsBackOnUnparseable(t *testing.T) {
 	}
 	for _, in := range cases {
 		t.Run(in, func(t *testing.T) {
-			got := FormatMPDMName(in, lookup)
+			got := FormatMPDMName(in, "", lookup)
 			if got != in {
 				t.Errorf("FormatMPDMName(%q) = %q, want unchanged %q", in, got, in)
 			}
@@ -84,9 +84,73 @@ func TestFormatMPDMName_FallsBackOnUnparseable(t *testing.T) {
 // TestFormatMPDMName_NilLookup uses the handles as display names when
 // no lookup is provided.
 func TestFormatMPDMName_NilLookup(t *testing.T) {
-	got := FormatMPDMName("mpdm-grant--myles--ray-1", nil)
+	got := FormatMPDMName("mpdm-grant--myles--ray-1", "", nil)
 	want := "grant, myles, ray"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatMPDMName_DropsSelf leaves the current user out of the
+// list: they are in every group DM they can see, so their name says
+// nothing about which group DM it is.
+func TestFormatMPDMName_DropsSelf(t *testing.T) {
+	display := map[string]string{
+		"grant": "Grant Ammons",
+		"myles": "Myles Williamson",
+		"ray":   "Ray Bradbury",
+	}
+	lookup := func(handle string) string { return display[handle] }
+
+	cases := []struct {
+		name string
+		in   string
+		self string
+		want string
+	}{
+		{
+			name: "self first",
+			in:   "mpdm-grant--myles--ray-1",
+			self: "grant",
+			want: "Myles Williamson, Ray Bradbury",
+		},
+		{
+			name: "self in the middle",
+			in:   "mpdm-myles--grant--ray-1",
+			self: "grant",
+			want: "Myles Williamson, Ray Bradbury",
+		},
+		{
+			name: "self last",
+			in:   "mpdm-myles--ray--grant-1",
+			self: "grant",
+			want: "Myles Williamson, Ray Bradbury",
+		},
+		{
+			name: "self not a participant",
+			in:   "mpdm-myles--ray-1",
+			self: "grant",
+			want: "Myles Williamson, Ray Bradbury",
+		},
+		{
+			name: "self is a prefix of another handle",
+			in:   "mpdm-grant--grantm--ray-1",
+			self: "grant",
+			want: "grantm, Ray Bradbury",
+		},
+		{
+			name: "self is the only participant left",
+			in:   "mpdm-grant-1",
+			self: "grant",
+			want: "Grant Ammons",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := FormatMPDMName(tc.in, tc.self, lookup)
+			if got != tc.want {
+				t.Errorf("FormatMPDMName(%q, %q) = %q, want %q", tc.in, tc.self, got, tc.want)
+			}
+		})
 	}
 }

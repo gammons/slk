@@ -2,19 +2,23 @@ package sidebar
 
 import (
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
 
 	"charm.land/lipgloss/v2"
+	bubblesansi "github.com/gammons/slk/internal/bubbles/ansi"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	emojiutil "github.com/gammons/slk/internal/emoji"
+	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/text"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/muesli/reflow/truncate"
+	"github.com/rivo/uniseg"
 )
 
 // Default section names used when an item has no custom Section assigned.
@@ -290,6 +294,15 @@ type Model struct {
 	// Renames preserve collapse state because the ID is stable.
 	// Populated lazily; lookups treat nil as empty. Used in Task 9.
 	collapseByID map[string]bool
+	// startCollapsed is the state of a section never toggled
+	// ([sidebar] start_collapsed).
+	startCollapsed bool
+	// showUnreadInCollapsed keeps unread rows (and the active channel)
+	// of a collapsed section visible ([sidebar] show_unread_in_collapsed).
+	showUnreadInCollapsed bool
+	// revealID is a channel SelectByID showed inside a collapsed
+	// section before it became active; SetActiveChannelID clears it.
+	revealID string
 
 	// rightAlignBadges puts mention badges at the row's right end
 	// ([sidebar] right_align_badges).
@@ -387,6 +400,87 @@ type Model struct {
 	// compete visually with the focused panel. Set by SetFocused() from
 	// the App layer.
 	focused bool
+
+	// emojiCtx draws section header and DM status emoji as images when
+	// image mode is on (SetEmojiContext, SetEmojiCustoms).
+	// pendingFlushes holds the kitty uploads the placements of the last
+	// buildCache need; View fires them right after that build.
+	emojiCtx       messages.EmojiContext
+	pendingFlushes []func(io.Writer) error
+	// emojiCold reports that the last buildCache placed at least one
+	// emoji image that is still loading (its cells reserved), so an
+	// emoji fetch landing may change what the sidebar draws.
+	emojiCold bool
+}
+
+// SetEmojiContext configures emoji-image rendering for section headers
+// and DM status emoji. Invalidates the row cache.
+func (m *Model) SetEmojiContext(ctx messages.EmojiContext) {
+	if ctx.Cells != 1 && ctx.Cells != 2 {
+		ctx.Cells = 2
+	}
+	m.emojiCtx = ctx
+	m.cacheValid = false
+	m.dirty()
+}
+
+// SetEmojiCustoms replaces only the workspace custom emoji map, so
+// custom emoji that arrive after startup (CustomEmojisLoadedMsg) resolve
+// to their artwork. Invalidates the row cache.
+func (m *Model) SetEmojiCustoms(customs map[string]string) {
+	m.emojiCtx.Customs = customs
+	m.cacheValid = false
+	m.dirty()
+}
+
+// HandleEmojiImageReady rebuilds the cached rows after an emoji image
+// fetch finished (or failed), so a cold reservation becomes the image,
+// or the glyph fallback. The URL is unused: every row is rebuilt, but
+// only when the rows hold a cold reservation. Any surface's fetch lands
+// here, and a warm image cannot change (new custom emoji go through
+// SetEmojiCustoms).
+func (m *Model) HandleEmojiImageReady(string) {
+	if !m.emojiCold {
+		return
+	}
+	m.cacheValid = false
+	m.dirty()
+}
+
+// placeEmoji places the emoji a shortcode names as an image, collecting
+// its upload for View. ok is false when it can't be placed (image mode
+// off, no fetcher, unknown name, failed fetch); the caller then uses
+// its glyph or text form. The placement is emojiCells() wide.
+func (m *Model) placeEmoji(name string) (string, bool) {
+	placement, flush, ok := emojiutil.PlaceShortcode(m.emojiCtx.PlaceCtx, name, m.emojiCtx.Customs, m.emojiCells())
+	if !ok {
+		return "", false
+	}
+	if strings.TrimSpace(placement) == "" {
+		m.emojiCold = true
+	}
+	if flush != nil {
+		m.pendingFlushes = append(m.pendingFlushes, flush)
+	}
+	return placement, true
+}
+
+func (m *Model) emojiCells() int {
+	if m.emojiCtx.Cells == 1 {
+		return 1
+	}
+	return 2
+}
+
+// flushEmojiUploads sends the kitty uploads the last buildCache's
+// placements need. Each upload runs at most once however often it is
+// fired, and uploading an image for a row scrolled out of view is
+// harmless, so every one is sent.
+func (m *Model) flushEmojiUploads() {
+	for _, fl := range m.pendingFlushes {
+		_ = fl(imgpkg.KittyOutput)
+	}
+	m.pendingFlushes = nil
 }
 
 // SetSectionsProvider injects a Slack-native sections data source.
@@ -458,7 +552,7 @@ func (m *Model) hidesPeer(item ChannelItem) bool {
 // includes unread channels inside collapsed sections, even though those
 // rows aren't currently visible -- and since the default layout collapses
 // the "Channels" firehose, a/A will jump into it and the caller's
-// SelectByID expands that section to reveal the target. This matches the
+// SelectByID shows the target under the collapsed header. This matches the
 // desktop client, which also surfaces unread channels regardless of
 // section collapse; it's an intentional "catch up on all unreads" skim,
 // not just "what's on screen".
@@ -520,6 +614,10 @@ func (m *Model) Invalidate() {
 			m.rebuildNavWithCursor(key, hadKey)
 		}
 	}
+	if m.showUnreadInCollapsed {
+		// Read state decides which collapsed rows show.
+		m.rebuildNavPreserveCursor()
+	}
 	m.cacheValid = false
 	m.dirty()
 	// active_only: a dormant channel that gets a new message comes back.
@@ -559,6 +657,31 @@ func (m *Model) revealUnreadHidden(state map[string]core.ReadState) bool {
 		revealed = true
 	}
 	return revealed
+}
+
+// SetShowUnreadInCollapsed sets whether a collapsed section still shows
+// its unread channels and the active channel.
+func (m *Model) SetShowUnreadInCollapsed(on bool) {
+	if m.showUnreadInCollapsed == on {
+		return
+	}
+	m.showUnreadInCollapsed = on
+	m.rebuildNavPreserveCursor()
+	m.cacheValid = false
+	m.dirty()
+}
+
+// hiddenByCollapse reports whether item's row is left out of nav because
+// its section is collapsed. buildCache draws what nav holds.
+func (m *Model) hiddenByCollapse(section string, item ChannelItem, readState map[string]core.ReadState) bool {
+	if !m.IsCollapsed(section) || item.ID == m.activeID || item.ID == m.revealID {
+		return false
+	}
+	if !m.showUnreadInCollapsed {
+		return true
+	}
+	state := readState[item.ID]
+	return !item.IsVisiblyUnread(state) && item.MentionBadge(state) == 0
 }
 
 // useSlackSections reports whether Slack-mode rendering is active.
@@ -766,6 +889,7 @@ func (m *Model) SetActiveChannelID(id string) {
 	}
 	key, hadKey := m.currentCursorKey()
 	m.activeID = id
+	m.revealID = "" // the active channel shows itself now
 	m.rebuildFilter()
 	m.rebuildNavWithCursor(key, hadKey)
 	m.cacheValid = false
@@ -881,18 +1005,39 @@ func (m *Model) IsSectionHeaderSelected() (name string, ok bool) {
 // IsCollapsed reports whether the named section is currently collapsed.
 // In Slack mode, the section parameter is a section ID and lookup uses
 // collapseByID (so renames preserve state). In config mode, it's a
-// section name and lookup uses collapsed.
+// section name and lookup uses collapsed. A section never toggled is
+// collapsed iff [sidebar] start_collapsed is on.
 func (m *Model) IsCollapsed(section string) bool {
+	if c, ok := m.collapseState()[section]; ok {
+		return c
+	}
+	return m.startCollapsed
+}
+
+// collapseState is the toggled-state map for the current mode.
+func (m *Model) collapseState() map[string]bool {
 	if m.useSlackSections() {
 		if m.collapseByID == nil {
-			return false
+			m.collapseByID = map[string]bool{}
 		}
-		return m.collapseByID[section]
+		return m.collapseByID
 	}
 	if m.collapsed == nil {
-		return false
+		m.collapsed = map[string]bool{}
 	}
-	return m.collapsed[section]
+	return m.collapsed
+}
+
+// SetStartCollapsed sets whether sections the user has not toggled
+// start collapsed ([sidebar] start_collapsed).
+func (m *Model) SetStartCollapsed(on bool) {
+	if m.startCollapsed == on {
+		return
+	}
+	m.startCollapsed = on
+	m.rebuildNavPreserveCursor()
+	m.cacheValid = false
+	m.dirty()
 }
 
 // ToggleCollapse flips the collapsed state of the named section. The
@@ -900,17 +1045,8 @@ func (m *Model) IsCollapsed(section string) bool {
 // subsequent toggle just expands again. Dispatches to collapseByID in
 // Slack mode (ID-keyed; survives renames), collapsed in config mode.
 func (m *Model) ToggleCollapse(section string) {
-	if m.useSlackSections() {
-		if m.collapseByID == nil {
-			m.collapseByID = map[string]bool{}
-		}
-		m.collapseByID[section] = !m.collapseByID[section]
-	} else {
-		if m.collapsed == nil {
-			m.collapsed = map[string]bool{}
-		}
-		m.collapsed[section] = !m.collapsed[section]
-	}
+	collapsed := m.IsCollapsed(section)
+	m.collapseState()[section] = !collapsed
 	// Rebuild nav since the set of selectable rows changed. Preserve
 	// the cursor's logical target (header / threads / channel ID) so
 	// the user keeps their place.
@@ -1407,18 +1543,17 @@ func (m *Model) SelectByID(id string) {
 		}
 	}
 	// Slow path: the channel is in m.filtered but its section is
-	// collapsed and was therefore omitted from nav. Expand the section
-	// (so the channel becomes navigable) and re-select.
+	// collapsed and was therefore omitted from nav. Reveal just that
+	// row under the header (the rest stays collapsed) and re-select.
 	for fi, idx := range m.filtered {
 		if m.items[idx].ID != id {
 			continue
 		}
-		section := m.sectionFor(m.items[idx])
-		if m.IsCollapsed(section) {
-			// ToggleCollapse handles both name-keyed (config mode) and
-			// ID-keyed (Slack mode) maps and rebuilds nav + invalidates
-			// cache as a side effect.
-			m.ToggleCollapse(section)
+		if m.IsCollapsed(m.sectionFor(m.items[idx])) {
+			m.revealID = id
+			m.rebuildNavPreserveCursor()
+			m.cacheValid = false
+			m.dirty()
 		}
 		// Now find the channel in the freshly-rebuilt nav.
 		for i, n := range m.nav {
@@ -1588,15 +1723,20 @@ func (m *Model) rebuildNav() {
 		bucket[key] = append(bucket[key], fi)
 	}
 
+	var readState map[string]core.ReadState
+	if m.showUnreadInCollapsed && m.readStateReader != nil {
+		readState = m.readStateReader()
+	}
+
 	nav := make([]navItem, 0, 2+len(sectionOrder))
 	nav = append(nav, navItem{kind: navThreads})
 	nav = append(nav, navItem{kind: navActivity})
 	for _, name := range sectionOrder {
 		nav = append(nav, navItem{kind: navHeader, header: name})
-		if m.IsCollapsed(name) {
-			continue
-		}
 		for _, fi := range bucket[name] {
+			if m.hiddenByCollapse(name, m.items[m.filtered[fi]], readState) {
+				continue
+			}
 			nav = append(nav, navItem{kind: navChannel, fi: fi})
 		}
 	}
@@ -1642,9 +1782,26 @@ func (m *Model) rebuildNavWithCursor(key cursorKey, hadKey bool) {
 			}
 		}
 	}
-	// Previous target gone (e.g. the channel was filtered out, or its
-	// section now collapsed). Fall back to the Threads row.
+	// Previous target gone. A channel still in m.filtered was hidden by
+	// its collapsed section: fall back to that section's header. Anything
+	// else (e.g. filtered out) falls back to the Threads row.
 	m.cursor = 0
+	if key.kind != navChannel {
+		return
+	}
+	for _, idx := range m.filtered {
+		if m.items[idx].ID != key.id {
+			continue
+		}
+		section := m.sectionFor(m.items[idx])
+		for i, n := range m.nav {
+			if n.kind == navHeader && n.header == section {
+				m.cursor = i
+				return
+			}
+		}
+		return
+	}
 }
 
 // aggregateForSection returns the two figures a collapsed section
@@ -1765,6 +1922,8 @@ func (m *Model) buildCache(width int) {
 	m.cacheValid = true
 	m.cacheWidth = width
 	m.cacheRows = m.cacheRows[:0]
+	m.pendingFlushes = nil
+	m.emojiCold = false
 	m.cacheFiller = lipgloss.NewStyle().Width(width).Background(styles.SidebarBackground).Render("")
 
 	// Per-channel read state for the active workspace. The DB is the
@@ -1947,7 +2106,8 @@ func (m *Model) buildCache(width int) {
 	for fi, idx := range m.filtered {
 		item := m.items[idx]
 		sectionName := m.sectionFor(item)
-		if m.IsCollapsed(sectionName) {
+		// Draw only what nav holds, so a row is never shown unselectable.
+		if _, inNav := channelNavIdx[fi]; m.IsCollapsed(sectionName) && !inNav {
 			continue
 		}
 		// Defense-in-depth: if sectionFor returns a section name that
@@ -2055,10 +2215,21 @@ func (m *Model) buildCache(width int) {
 		// A DM peer's status emoji follows the name after a space. It is
 		// charged to the name's budget so a long name truncates instead
 		// of pushing the emoji or the trailer off the row.
+		// In image mode the emoji is drawn as an image, charged its
+		// cell footprint. It is appended after the name is truncated,
+		// so truncation never cuts it. A glyph is charged the wider of
+		// lipgloss's count and GlyphWidth: in image mode emoji.Width
+		// counts an emoji as the image footprint, which with 1-cell
+		// images is narrower than the glyph a failed fetch falls back
+		// to.
 		statusGlyph := item.Status.Glyph(statusNow)
 		statusCells := 0
 		if statusGlyph != "" {
-			statusCells = 1 + item.Status.GlyphWidth(statusNow)
+			statusCells = 1 + max(item.Status.GlyphWidth(statusNow), lipgloss.Width(statusGlyph))
+			if placed, ok := m.placeEmoji(item.Status.GlyphShortcode(statusNow)); ok {
+				statusGlyph = placed
+				statusCells = 1 + m.emojiCells()
+			}
 		}
 		// The indent and a prefix wider than the default 2 cells (a custom
 		// private_glyph) come out of the name's budget, so the prefix's
@@ -2185,7 +2356,7 @@ func (m *Model) buildCache(width int) {
 			m.cacheRows = append(m.cacheRows, renderRow{height: 1, navIdx: -1})
 		}
 		group := sectionMap[name]
-		headerLabel, headerLabelSelected, headerMentions := m.renderSectionHeaderLabel(name, cursorSelected, dotStyle, bgAnsi)
+		headerLabel, headerLabelSelected, headerMentions := m.renderSectionHeaderLabel(name, width, cursorSelected, dotStyle, bgAnsi)
 		ni, ok := headerNavIdx[name]
 		if !ok {
 			ni = -1
@@ -2239,33 +2410,46 @@ func (m *Model) sectionDisplayMeta(sectionKey string) (name, emoji string) {
 //
 // In Slack mode, the `name` parameter is a section ID — we look up the
 // user-visible name and (if any) emoji shortcode from the provider and
-// prepend the resolved emoji.
+// prepend the resolved emoji: an image in image mode (custom emoji
+// included), else the glyph, else the ":code:" text.
 //
-// Known, pre-existing, NOT introduced here: this function takes no
-// width and truncates nothing. buildCache renders the result through
-// styles.SectionHeader.Width(width-2), and lipgloss WRAPS overlong
-// content rather than truncating it, while the renderRow it lands in
-// hardcodes height 1. A section header whose name plus aggregates
-// exceeds the sidebar width therefore emits a multi-line string into a
-// slot counted as one line. Reproducible today without any mention
-// badge — a 36-character section name wraps to three lines at width 20.
-// The mention badge widens the header by at most 6 columns (separator
-// plus a padded "99+"), so it reaches that threshold sooner but does
-// not create it. Filed separately; do not fix it inline here.
-func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.Style, bgAnsi string) (string, string, int) {
+// The label fits one line of a sidebar `width` wide: see
+// fitSectionHeader for what gives way when it does not.
+func (m *Model) renderSectionHeaderLabel(name string, width int, cursor string, dotStyle lipgloss.Style, bgAnsi string) (string, string, int) {
 	displayName, emojiCode := m.sectionDisplayMeta(name)
+	// lipgloss expands a tab and breaks the line at a newline after the
+	// label was measured, so neither may reach it.
+	displayName = headerSpaceReplacer.Replace(displayName)
 	emojiPrefix := ""
-	if emojiCode != "" {
-		// kyokomi/emoji.Sprint resolves :shortcode: to unicode; on
-		// unknown shortcodes it returns the input unchanged (which
-		// keeps the colons, giving a graceful textual fallback).
-		token := ":" + emojiCode + ":"
-		rendered := emojiutil.Sprint(token)
-		if rendered != token {
-			emojiPrefix = rendered + " "
+	emojiPrefixSelected := ""
+	emojiCells := 0
+	textFallback := false
+	if placed, ok := m.placeEmoji(emojiCode); ok {
+		// A placement ends by resetting the foreground ("\x1b[39m"),
+		// which ReapplyBgAfterResets does not catch, so re-assert the
+		// foreground each variant had before the image (as
+		// messages.ReactionPillText does for a pill's count): the
+		// header's own on the normal label; on the selected one, what
+		// ReapplyBgAfterResets put back after the cursor glyph's reset.
+		emojiPrefix = placed + bubblesansi.ForegroundSGR(styles.SectionHeader.GetForeground()) + " "
+		emojiPrefixSelected = placed + bgAnsi + " "
+		// Charged the footprint it was placed with, never measured.
+		emojiCells = m.emojiCells() + 1
+	} else if emojiCode != "" {
+		// The glyph only when it is one codepoint, as reaction pills
+		// and message bodies draw it: terminals draw VS16, ZWJ and
+		// skin-toned sequences at widths lipgloss does not predict,
+		// which shifts the row. Anything else (those, and unknown or
+		// custom emoji) is its ":code:" text, skin tone stripped.
+		code := emojiutil.StripSkinTone(emojiCode)
+		if glyph := emojiutil.CodeMap()[":"+code+":"]; emojiutil.ShouldRenderUnicode(glyph) {
+			emojiPrefix = glyph + " "
 		} else {
-			emojiPrefix = token + " "
+			emojiPrefix = ":" + code + ": "
+			textFallback = true
 		}
+		emojiPrefixSelected = emojiPrefix
+		emojiCells = headerCells(emojiPrefix)
 	}
 
 	glyph := "▾" // expanded
@@ -2305,10 +2489,114 @@ func (m *Model) renderSectionHeaderLabel(name, cursor string, dotStyle lipgloss.
 		}
 	}
 
+	aggregateCells := headerCells(aggregates)
+	// The ":code:" text tells the user less than the name, so it gives way before the name is cut.
+	// A glyph stays.
+	if textFallback && headerCells(displayName) > sectionHeaderNameBudget(width, emojiCells, aggregateCells) {
+		emojiPrefix, emojiPrefixSelected = "", ""
+		emojiCells = 0
+	}
+	var keepEmoji, keepAggregates bool
+	displayName, keepEmoji, keepAggregates = fitSectionHeader(width, displayName, emojiCells, aggregateCells)
+	if !keepEmoji {
+		emojiPrefix, emojiPrefixSelected = "", ""
+	}
+	if !keepAggregates {
+		aggregates = ""
+	}
+
 	label := " " + glyph + " " + emojiPrefix + displayName + aggregates
-	selected := cursor + glyph + " " + emojiPrefix + displayName + aggregates
+	selected := cursor + glyph + " " + emojiPrefixSelected + displayName + aggregates
+	// The selected variant re-applies bold after the cursor glyph's
+	// reset, as the channel rows do: SectionHeader is bold, and bgAnsi
+	// alone would draw the rest of the header regular. Not on the normal
+	// variant: there it would also land inside the mention badge's
+	// padding resets and make its digits bold. Slack style headers are
+	// never bold.
+	selectedAttrs := bgAnsi
+	if !m.slackStyle {
+		selectedAttrs += "\x1b[1m"
+	}
 	return messages.ReapplyBgAfterResets(label, bgAnsi),
-		messages.ReapplyBgAfterResets(selected, bgAnsi), mentions
+		messages.ReapplyBgAfterResets(selected, selectedAttrs), mentions
+}
+
+// headerSpaceReplacer turns the characters lipgloss would not keep on
+// one line into spaces.
+var headerSpaceReplacer = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ", "\t", " ")
+
+// sectionHeaderChromeCells is what a header label spends before the
+// emoji: the cursor "▌" or a space (2, since "▌" is East Asian
+// Ambiguous and may draw 2 wide, hedged as the channel rows hedge it),
+// then the triangle and its space (2).
+const sectionHeaderChromeCells = 4
+
+// fitSectionHeader fits a section header into one line of a sidebar
+// `width` wide. buildCache draws the label through
+// styles.SectionHeader.Width(width-2), whose Padding(0, 1) leaves
+// width-4 columns, and lipgloss wraps whatever does not fit into a
+// second line of a row counted as one.
+//
+// emojiCells and aggregateCells are the widths of the emoji prefix and
+// the collapsed aggregates. Neither is ever cut. When the header does
+// not fit, the name is truncated with "…"; with no column left for it,
+// it is dropped, then the emoji, then the aggregates. A header that
+// fits returns its name unchanged.
+func fitSectionHeader(width int, name string, emojiCells, aggregateCells int) (fitted string, keepEmoji, keepAggregates bool) {
+	avail := width - 4
+	nameBudget := sectionHeaderNameBudget(width, emojiCells, aggregateCells)
+	if headerCells(name) <= nameBudget {
+		return name, true, true
+	}
+	if nameBudget >= 1 {
+		return truncateHeaderName(name, nameBudget), true, true
+	}
+	used := sectionHeaderChromeCells + emojiCells + aggregateCells
+	if used <= avail {
+		return "", true, true
+	}
+	used -= emojiCells
+	return "", false, used <= avail
+}
+
+// sectionHeaderNameBudget is the cells left for a section header's
+// name in a sidebar `width` wide, after the chrome, the emoji and the
+// aggregates (see fitSectionHeader). It may be negative.
+func sectionHeaderNameBudget(width, emojiCells, aggregateCells int) int {
+	return width - 4 - sectionHeaderChromeCells - emojiCells - aggregateCells
+}
+
+// headerCells measures header text the way both its readers need: as
+// lipgloss does, which decides the wrap, and as emoji.Width does, which
+// knows an emoji image's footprint. The larger wins, so neither
+// overflows.
+func headerCells(s string) int {
+	return max(lipgloss.Width(s), emojiutil.Width(s))
+}
+
+// truncateHeaderName cuts name to at most budget cells, ending in "…"
+// (which takes one of them). It cuts between grapheme clusters, never
+// inside one, so a ZWJ emoji or a combining mark is kept or dropped
+// whole.
+func truncateHeaderName(name string, budget int) string {
+	if budget <= 0 {
+		return ""
+	}
+	var b strings.Builder
+	used := 0
+	rest := name
+	state := -1
+	for len(rest) > 0 {
+		var cluster string
+		cluster, rest, _, state = uniseg.FirstGraphemeClusterInString(rest, state)
+		w := headerCells(cluster)
+		if used+w > budget-1 {
+			break
+		}
+		b.WriteString(cluster)
+		used += w
+	}
+	return b.String() + "…"
 }
 
 // countBadge is the Threads or Activity count after left: "•N" (one
@@ -2348,6 +2636,7 @@ func (m *Model) View(height, width int) string {
 	// emitting a muted "No channels" placeholder below the Threads row.
 	if !m.cacheValid || m.cacheWidth != width {
 		m.buildCache(width)
+		m.flushEmojiUploads()
 	}
 	m.lastHeight = height
 

@@ -348,6 +348,7 @@ func goldenClock() time.Time {
 // takes a testing.TB so benchmarks share it with newGoldenApp.
 func pinRenderGlobals(tb testing.TB) {
 	tb.Helper()
+	styles.SetTransparentBackground(false)
 	styles.Apply("dark", config.Theme{})
 	emoji.SetImageMode(false, 2)
 	messages.SetNowFunc(goldenClock)
@@ -755,6 +756,7 @@ func goldenFixtureOpts() []testOpt {
 // "restore" means "re-apply dark" and not "restore the pristine
 // zero value".
 func resetRenderGlobals() {
+	styles.SetTransparentBackground(false)
 	styles.Apply("dark", config.Theme{})
 	emoji.SetImageMode(false, 2)
 	messages.SetNowFunc(nil)
@@ -1498,6 +1500,18 @@ func goldenScenarios() []goldenScenario {
 			// Wide enough for both: the thread is lifted to 80 columns.
 			name: "wide", w: 200, h: 50, layout: goldenSideBySide,
 			build: func(t *testing.T) *App { return goldenThreadScenario(t, 200, 50) },
+		},
+		{
+			// wide's geometry, thread focused and `f` pressed: the
+			// thread alone across the whole terminal, no rail.
+			name: "thread_fullscreen", w: 200, h: 50, layout: goldenStackedThread,
+			build: func(t *testing.T) *App {
+				a := goldenThreadApp(t, 200, 50)
+				a.focusedPanel = PanelThread
+				a.Update(keyPress('f'))
+				_ = a.View()
+				return a
+			},
 		},
 		{
 			// 80x24 with the thread focused: a 40-column stacked

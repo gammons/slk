@@ -25,6 +25,12 @@ func SearchHighlightSGR() (start, end string, ok bool) {
 	return searchHighlightSGRRestoring(BgANSI() + FgANSI())
 }
 
+// DialogSearchHighlightSGR is SearchHighlightSGR for text inside a dialog,
+// which keeps the theme background with the transparent background on.
+func DialogSearchHighlightSGR() (start, end string, ok bool) {
+	return searchHighlightSGRRestoring(SolidBgANSI() + FgANSI())
+}
+
 // searchHighlightSGRRestoring is SearchHighlightSGR with the sequence that
 // follows the close (what re-establishes the surrounding style) supplied by
 // the caller.

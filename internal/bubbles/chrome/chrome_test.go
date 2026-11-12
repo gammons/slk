@@ -133,3 +133,14 @@ func TestPopup(t *testing.T) {
 	}
 	equalLines(t, inner(box), []string{"", "▌ a", "b", ""})
 }
+
+func TestPopupReassertsPopupANSIAfterResets(t *testing.T) {
+	s := Styles{PopupANSI: "\x1b[48;5;17m"}
+	out := Popup(s, []string{"\x1b[1ma\x1b[m b"}, 10)
+	if !strings.Contains(out, "\x1b[m\x1b[48;5;17m") {
+		t.Errorf("Popup did not re-assert PopupANSI after the reset: %q", out)
+	}
+	if got := Popup(Styles{}, []string{"\x1b[1ma\x1b[m b"}, 10); strings.Contains(got, "\x1b[48;5;17m") {
+		t.Errorf("empty PopupANSI changed the rows: %q", got)
+	}
+}

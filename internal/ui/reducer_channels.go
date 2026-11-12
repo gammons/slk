@@ -445,7 +445,7 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 	// Tell the sidebar which channel is active so the staleness
 	// filter never hides it out from under the user.
 	a.sidebar.SetActiveChannelID(m.ID)
-	a.messagepane.SetChannel(m.Name, a.presence.dmTopicFor(a, m.ID))
+	a.presence.setChannelHeader(a, a.messagepane, m.Name, m.ID)
 	a.messagepane.SetChannelType(m.Type)
 
 	// Close any open mention picker before switching channels.

@@ -22,6 +22,8 @@ import (
 // the recording mode behind the hidden --demo flag: no config, tokens,
 // cache, network or config writes. See
 // docs/superpowers/specs/2026-09-27-demo-mode-design.md.
+// SLK_DEMO_TRANSPARENT=1 turns on the transparent background, which a
+// user sets as [appearance] transparent_background.
 func runDemo(scenario string) error {
 	d, err := demo.New(scenario, time.Now())
 	if err != nil {
@@ -31,6 +33,7 @@ func runDemo(scenario string) error {
 	if err != nil {
 		return err
 	}
+	styles.SetTransparentBackground(os.Getenv("SLK_DEMO_TRANSPARENT") == "1")
 	styles.Apply(d.InitialTheme(), core.Theme{})
 	emojiwidth.SetImageMode(false, 2)
 

@@ -266,8 +266,16 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	}
 	headerGap := lipgloss.NewStyle().Background(styles.Background).Render(headerGapText)
 
-	author := styles.Username(msg.UserID, rc.ColoredUsernames).Render(msg.UserName) +
-		AuthorStatusSuffix(rc.UserStatuses, msg.UserID, time.Now(), &bodyOpts)
+	// The status image's upload joins the body's (bodyOpts.EmojiFlushes):
+	// both panes fire BodyFlushes for visible entries.
+	headerBg := lipgloss.NewStyle().Background(styles.Background)
+	statusEmoji, statusImage := authorStatusEmoji(rc.UserStatuses, msg.UserID, time.Now(), &bodyOpts)
+	statusSuffix := ""
+	if statusEmoji != "" {
+		statusSuffix = headerBg.Render(" " + statusEmoji)
+	}
+	authorName := styles.Username(msg.UserID, rc.ColoredUsernames).Render(msg.UserName)
+	author := authorName + statusSuffix
 
 	line := author + headerGap + headerTimestamp
 	if rc.Compact {
@@ -296,15 +304,26 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	if headerOnSeparateLine && lipgloss.Width(header) > headerBudget {
 		var wrapped strings.Builder
 		lastWidth := 0
-		headerOrder := [3]struct{ text, gap string }{
+		// A status glyph reflows with the name. A status image is its
+		// own unit, like the timestamp: reflowing it with the name would
+		// drop the spaces a cold image reserves, and the header would
+		// change shape when the image lands.
+		statusPart := ""
+		if statusImage {
+			author = authorName
+			statusPart = headerBg.Render(statusEmoji)
+		}
+		headerOrder := [4]struct{ text, gap string }{
 			{author, ""},
+			{statusPart, headerBg.Render(" ")},
 			{headerTimestamp, headerGap},
 			{strings.TrimPrefix(editedMark, " "), " "},
 		}
 		if rc.Compact {
-			headerOrder = [3]struct{ text, gap string }{
+			headerOrder = [4]struct{ text, gap string }{
 				{headerTimestamp, ""},
 				{author, headerGap},
+				{statusPart, headerBg.Render(" ")},
 				{strings.TrimPrefix(editedMark, " "), " "},
 			}
 		}
