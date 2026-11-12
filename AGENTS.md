@@ -133,7 +133,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Date label from a Slack ts | `messages.DateFromTS`, `messages.FormatDateSeparator`, `messages.FormatShortDate` (compact form for a message header: "Today", "Jan 2") |
 | Date-qualified timestamp for the selected message header | `messages.LongTimestamp(ts, short)`, `messages.SelectedHeader(rendered, header, ts, short, maxWidth)`; any other header timestamp swap that must fit the width budget: `messages.ReplaceHeaderTimestamp(rendered, header, short, replacement, maxWidth)` |
 | Clock layout `<!date` tokens render `{time}`/`{time_secs}` with | `messages.SetDateTokenTimeLayout(layout)` — seeded once at startup from `appearance.timestamp_format` (`cmd/slk/main.go`); empty keeps the default `"3:04 PM"`. Package-level (like theme state) so every render path agrees |
-| mpdm channel name → human name | `slackfmt.FormatMPDMName` |
+| mpdm channel name → human name | `slackfmt.FormatMPDMName(name, self, lookup)`; pass `WorkspaceContext.UserHandle` (auth.test's `user`, `Client.UserName()`) as `self` so the user is left out |
 | Channel-type glyph (`#` / `◆` / `●`) | `messages.ChannelGlyph(chType)` |
 | May a message be opened as a thread / replied to? (a system notice with no replies may not) | `messages.CanOpenThread(msg)`; enforced at the sink every opener reaches, `(*App).openThreadPanel`, and in `openThreadForSelectedMessage`; refusal toast is `(*App).cantReplyToNotice()` |
 | Marker row for a message only the current user can see | `messages.EphemeralLabel()` — drawn above the author line in both panes |

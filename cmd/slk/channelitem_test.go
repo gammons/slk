@@ -64,6 +64,32 @@ func TestBuildChannelItem_GroupDM(t *testing.T) {
 	}
 }
 
+// A group DM's name leaves out the current user: Slack's mpdm name
+// lists every participant, the user included.
+func TestBuildChannelItem_GroupDMOmitsSelf(t *testing.T) {
+	wctx := &WorkspaceContext{
+		UserHandle:        "grant",
+		UserNames:         newUserNameStore(nil),
+		UserNamesByHandle: map[string]string{"alice": "Alice", "bob": "Bob", "grant": "Grant"},
+	}
+	ch := slack.Channel{
+		GroupConversation: slack.GroupConversation{
+			Conversation: slack.Conversation{
+				ID:     "G1",
+				IsMpIM: true,
+			},
+			Name: "mpdm-alice--grant--bob-1",
+		},
+	}
+	item, finderItem := buildChannelItem(ch, wctx, config.Config{}, "T1")
+	if item.Name != "Alice, Bob" {
+		t.Errorf("Name = %q, want %q", item.Name, "Alice, Bob")
+	}
+	if finderItem.Name != "Alice, Bob" {
+		t.Errorf("finder Name = %q, want %q", finderItem.Name, "Alice, Bob")
+	}
+}
+
 func TestBuildChannelItem_Channel(t *testing.T) {
 	wctx := &WorkspaceContext{
 		UserNames:         newUserNameStore(nil),
