@@ -55,21 +55,12 @@ func TestTransparentBackground_DerivedColoursMatchOpaque(t *testing.T) {
 			Apply(theme, config.Theme{})
 			got := derived()
 			for k, w := range want {
-				if !colorEq(got[k], w) {
+				if !colorEqual(got[k], w) {
 					t.Errorf("%s = %v with the transparent background, want %v as when opaque", k, got[k], w)
 				}
 			}
 		})
 	}
-}
-
-func colorEq(a, b color.Color) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	ar, ag, ab, aa := a.RGBA()
-	br, bg, bb, ba := b.RGBA()
-	return ar == br && ag == bg && ab == bb && aa == ba
 }
 
 func TestTransparentBackground_PaintColoursAreNoColor(t *testing.T) {
@@ -105,10 +96,10 @@ func TestTransparentBackground_PaintColoursAreNoColor(t *testing.T) {
 func TestTransparentBackground_OffKeepsThemeColours(t *testing.T) {
 	SetTransparentBackground(false)
 	Apply("dark", config.Theme{})
-	if !colorEq(StatusBarBackground, SurfaceDark) {
+	if !colorEqual(StatusBarBackground, SurfaceDark) {
 		t.Errorf("StatusBarBackground = %v, want SurfaceDark %v", StatusBarBackground, SurfaceDark)
 	}
-	if !colorEq(SplashBackground, SurfaceDark) {
+	if !colorEqual(SplashBackground, SurfaceDark) {
 		t.Errorf("SplashBackground = %v, want SurfaceDark %v", SplashBackground, SurfaceDark)
 	}
 	if ThemeBackground() != Background || ThemeSidebarBackground() != SidebarBackground {
@@ -134,7 +125,7 @@ func TestTransparentBackground_SurvivesThemeSwitchAndCustomTheme(t *testing.T) {
 	if !isNoColor(Background) {
 		t.Fatal("a theme switch dropped the transparent background")
 	}
-	if !colorEq(ThemeBackground(), lipgloss.Color("#282A36")) {
+	if !colorEqual(ThemeBackground(), lipgloss.Color("#282A36")) {
 		t.Errorf("ThemeBackground() = %v, want dracula's #282A36", ThemeBackground())
 	}
 
@@ -147,7 +138,7 @@ func TestTransparentBackground_SurvivesThemeSwitchAndCustomTheme(t *testing.T) {
 	if !isNoColor(Background) || !isNoColor(StatusBarBackground) {
 		t.Fatal("a custom theme dropped the transparent background")
 	}
-	if !colorEq(ThemeBackground(), lipgloss.Color("#101820")) {
+	if !colorEqual(ThemeBackground(), lipgloss.Color("#101820")) {
 		t.Errorf("ThemeBackground() = %v, want the custom #101820", ThemeBackground())
 	}
 }
