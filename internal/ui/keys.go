@@ -22,6 +22,7 @@ type KeyMap struct {
 	SidebarGrow         key.Binding
 	SidebarShrink       key.Binding
 	ToggleThread        key.Binding
+	ToggleFullscreen    key.Binding
 	FuzzyFinder         key.Binding
 	FuzzyFinderAlt      key.Binding
 	Top                 key.Binding
@@ -193,5 +194,8 @@ func DefaultKeyMap() KeyMap {
 		// preview above the box being typed in. Sending or leaving
 		// insert mode closes it.
 		DraftPreview: key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "show / hide the draft preview")),
+		// Normal mode: the focused pane (sidebar, channel or thread)
+		// fills the terminal; f again returns to the panes.
+		ToggleFullscreen: key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "toggle fullscreen for focused pane")),
 	}
 }

@@ -48,9 +48,14 @@ func (a *App) handleWindowChord(msg tea.KeyMsg) tea.Cmd {
 // subdivides. Windows are only drawn when the channel is in front, so
 // the rectangle is always the channel-in-front layout, even while a
 // stacked thread is in front. A scratch layout keeps the bands View
-// stored for mouse hit-testing intact.
+// stored for mouse hit-testing intact. In full screen the windows fill
+// the whole terminal whenever the channel is the pane shown.
 func (a *App) windowBounds() wintree.Rect {
 	var scratch panelLayout
+	if a.fullscreen {
+		frame := scratch.ComputeFullscreen(a.width, a.height, PanelMessages, a.compact)
+		return wintree.Rect{X: 0, Y: 0, W: frame.MsgWidth + frame.MsgBorder, H: frame.ContentHeight}
+	}
 	frame := scratch.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),
 		a.sidebarVisible, a.threadVisible, false, a.compact)
 	return wintree.Rect{X: 0, Y: 0, W: frame.MsgWidth + frame.MsgBorder, H: frame.ContentHeight}

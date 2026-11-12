@@ -157,6 +157,9 @@ type App struct {
 	// stackFront is the content pane (PanelMessages or PanelThread)
 	// that last had focus. Recorded by Update, read by threadInFront.
 	stackFront Panel
+	// fullscreen draws one pane alone across the whole terminal (the
+	// `f` key); fullscreenPanel picks which, following focus.
+	fullscreen bool
 	view       View
 	width      int
 	height     int
@@ -1100,12 +1103,44 @@ func (a *App) threadDrawnAlone() bool {
 	return frame.MsgWidth == 0
 }
 
+// fullscreenPanel is the pane drawn while a.fullscreen is set: the
+// focused one. With focus on neither content pane, the one that would
+// be in front when stacked (threadInFront).
+func (a *App) fullscreenPanel() Panel {
+	switch {
+	case a.focusedPanel == PanelSidebar && a.sidebarVisible:
+		return PanelSidebar
+	case a.threadInFront():
+		return PanelThread
+	}
+	return PanelMessages
+}
+
 // computeFrame resolves this frame's layout from the App's state and
 // stores the hit-test bands. The one place View's layout inputs are
 // assembled; tests call it instead of repeating Compute's arguments.
 func (a *App) computeFrame() panelLayoutFrame {
-	return a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),
+	return a.frameInto(a.layout)
+}
+
+// frameInto resolves this frame's layout into l: a.layout for View, a
+// scratch layout for queries that must not disturb the stored bands.
+func (a *App) frameInto(l *panelLayout) panelLayoutFrame {
+	if a.fullscreen {
+		return l.ComputeFullscreen(a.width, a.height, a.fullscreenPanel(), a.compact)
+	}
+	return l.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),
 		a.sidebarVisible, a.threadVisible, a.threadInFront(), a.compact)
+}
+
+// contentPanesDrawn reports whether this frame draws the channel pane
+// and the open thread. Full screen and the stacked layout can leave
+// either one open but off screen; a message arriving there is unseen,
+// so it must not be marked read (reduceNewMessage).
+func (a *App) contentPanesDrawn() (channel, thread bool) {
+	var scratch panelLayout
+	f := a.frameInto(&scratch)
+	return f.MsgWidth > 0, a.threadVisible && f.ThreadWidth > 0
 }
 
 func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -2432,9 +2467,25 @@ func (a *App) ToggleSidebar() {
 func (a *App) ToggleThread() {
 	a.clearSelections()
 	if a.threadVisible {
-		a.CloseThread()
+		a.closeThreadByUser()
 	}
 	// Don't open on toggle if no thread is loaded -- use Enter for that
+}
+
+// closeThreadByUser is CloseThread for the ways the user closes the
+// thread on purpose: Esc, q, ctrl+] and a click on the breadcrumb's
+// channel. Closed that way, a full-screen thread goes back to the
+// panes. Any other close (channel switch, jump, workspace switch,
+// deleted parent) keeps full screen, which follows focus to the
+// channel, as it does from a full-screen channel.
+func (a *App) closeThreadByUser() {
+	wasFullscreenThread := a.fullscreen && a.fullscreenPanel() == PanelThread
+	a.CloseThread()
+	// CloseThread refuses during an upload; then the thread stays, and
+	// so does full screen.
+	if wasFullscreenThread && !a.threadVisible {
+		a.fullscreen = false
+	}
 }
 
 func (a *App) CloseThread() {
@@ -3758,9 +3809,14 @@ func (a *App) View() tea.View {
 	// still render normally so the user can see context.
 	previewActive := a.preview.Active()
 
+	// A full-screen frame (ComputeFullscreen) gives the rail and the
+	// sidebar zero width when they are not the pane shown. Gate on
+	// width, not border: compact panes have a zero border.
 	var panels []string
-	panels = append(panels, a.renderRail(frame.RailWidth, frame.ContentHeight, themeVer))
-	if a.sidebarVisible {
+	if frame.RailWidth > 0 {
+		panels = append(panels, a.renderRail(frame.RailWidth, frame.ContentHeight, themeVer))
+	}
+	if frame.SidebarWidth > 0 {
 		panels = append(panels, a.renderSidebar(frame.SidebarWidth, frame.SidebarBorder, frame.ContentHeight, themeVer))
 	}
 	if frame.MsgWidth > 0 {

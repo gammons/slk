@@ -24,6 +24,9 @@
 // drawn. Otherwise the two stack: only one is drawn, across the whole
 // content area, and the caller's threadFront decides which. Compute is
 // pure geometry; App.threadInFront owns the focus rule.
+//
+// Full screen: ComputeFullscreen draws one pane across the whole terminal, rail
+// included; App.fullscreenPanel picks which.
 package ui
 
 // panelLayout owns the per-frame layout state.
@@ -162,6 +165,38 @@ func (l *panelLayout) Compute(width, height, railWidth, sidebarWidth int, sideba
 		ThreadBorder:  threadBorder,
 		ContentHeight: contentHeight,
 	}
+}
+
+// ComputeFullscreen is Compute for the full-screen layout (the `f` key):
+// pane (PanelSidebar, PanelMessages or PanelThread) is the only one
+// drawn, across the whole width, with no workspace rail. The other
+// bands collapse to zero width so PanelAt routes every click to pane.
+// compact drops the border allowance, as in Compute.
+func (l *panelLayout) ComputeFullscreen(width, height int, pane Panel, compact bool) panelLayoutFrame {
+	const (
+		statusHeight = 1
+		floorPaneW   = 10
+	)
+	paneBorder := 2
+	if compact {
+		paneBorder = 0
+	}
+	f := panelLayoutFrame{ContentHeight: height - statusHeight}
+	paneW := max(width-paneBorder, floorPaneW)
+	switch pane {
+	case PanelSidebar:
+		f.SidebarWidth, f.SidebarBorder = paneW, paneBorder
+	case PanelThread:
+		f.ThreadWidth, f.ThreadBorder = paneW, paneBorder
+	default:
+		f.MsgWidth, f.MsgBorder = paneW, paneBorder
+	}
+
+	l.railWidth = 0
+	l.sidebarEnd = f.SidebarWidth + f.SidebarBorder
+	l.msgEnd = l.sidebarEnd + f.MsgWidth + f.MsgBorder
+	l.threadEnd = l.msgEnd + f.ThreadWidth + f.ThreadBorder
+	return f
 }
 
 // PanelAt classifies the (x, y) coordinate into the panel under the
