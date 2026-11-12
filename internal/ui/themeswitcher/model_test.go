@@ -163,3 +163,18 @@ func TestHandleKey_NonASCIIQuery(t *testing.T) {
 		t.Errorf("after backspace query = %q, want %q", m.query, "中")
 	}
 }
+
+// A theme reload can change the items while the switcher is open: the
+// list is refiltered and the highlighted theme stays highlighted.
+func TestSetItemsWhileOpenKeepsTheHighlightedTheme(t *testing.T) {
+	m := New()
+	m.SetItems([]string{"Dark", "Dracula", "Nord"})
+	m.Open()
+	m.HandleKey("d")
+	m.HandleKey("down") // Dracula
+	m.SetItems([]string{"Aurora", "Dark", "Dracula", "Dusk", "Nord"})
+	result := m.HandleKey("enter")
+	if result == nil || result.Name != "Dracula" {
+		t.Errorf("after SetItems: enter picked %v, want Dracula", result)
+	}
+}
