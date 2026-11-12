@@ -200,6 +200,25 @@ func TestFullscreen_InsertModeKeepsFullscreen(t *testing.T) {
 	assertFullscreen(t, a, PanelThread)
 }
 
+// The keybindings modal sorts by description, so f sits with the other
+// toggles; searching the one-word "fullscreen" must still find it.
+func TestFullscreen_KeybindingsModalSearchFindsF(t *testing.T) {
+	a := stackedApp(t, 120)
+	updateAndRender(t, a, keyPress('?'))
+	if a.mode != ModeHelp {
+		t.Fatalf("?: mode=%v, want help", a.mode)
+	}
+	for _, r := range "/fullscreen" {
+		updateAndRender(t, a, keyPress(r))
+	}
+	for _, e := range a.help.VisibleEntries() {
+		if e.Key == "f" {
+			return
+		}
+	}
+	t.Fatalf("searching \"fullscreen\" shows %+v, want the f entry", a.help.VisibleEntries())
+}
+
 func TestFullscreen_TypingFInTheComposerTypesF(t *testing.T) {
 	a := fullscreenThreadApp(t)
 	updateAndRender(t, a, keyPress('i'))

@@ -43,7 +43,7 @@
 | `Ctrl+f` | Any | Search workspace (Slack server-side; supports modifiers like `from:@user`, `in:#channel`, `before:YYYY-MM-DD`) |
 | `Ctrl+b` | Any | Toggle sidebar |
 | `Ctrl+]` | Any | Toggle thread panel |
-| `f` | Normal | Toggle full screen for the focused pane (channel list, messages or thread); while full screen, moving focus (`Tab`, `h`/`l`, `Enter`) shows the newly focused pane full screen, and closing a full-screen thread returns to the panes |
+| `f` | Normal | Toggle fullscreen for the focused pane (channel list, messages or thread); while fullscreen, moving focus (`Tab`, `h`/`l`, `Enter`) shows the newly focused pane fullscreen, and closing a fullscreen thread returns to the panes |
 | `Ctrl+a` | Normal | Toggle the Activity view (mentions, thread replies, reactions, DMs) |
 | `:activity` | Normal | Open the Activity view |
 | `u` | Normal (activity) | Toggle the Activity view's unread-only filter |

@@ -196,6 +196,6 @@ func DefaultKeyMap() KeyMap {
 		DraftPreview: key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "show / hide the draft preview")),
 		// Normal mode: the focused pane (sidebar, channel or thread)
 		// fills the terminal; f again returns to the panes.
-		ToggleFullscreen: key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "toggle full screen for the focused pane")),
+		ToggleFullscreen: key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "toggle fullscreen for focused pane")),
 	}
 }
