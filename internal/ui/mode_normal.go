@@ -113,7 +113,7 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		a.SetMode(ModeNormal)
 		a.compose.Blur()
 		if a.threadVisible {
-			a.CloseThread()
+			a.closeThreadByUser()
 		}
 
 	case key.Matches(msg, a.keys.WindowPrefix):
@@ -390,7 +390,7 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		// are the quit keys). The vim-style pairing: q closes the
 		// transient pane, Q closes the whole app.
 		if a.threadVisible {
-			a.CloseThread()
+			a.closeThreadByUser()
 		}
 		return nil
 

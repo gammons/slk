@@ -172,6 +172,48 @@ func TestFullscreen_ClosingAFullscreenThreadLeavesFullscreen(t *testing.T) {
 	assertPaned(t, a)
 }
 
+// Only closing the thread yourself (Esc, q, ctrl+]) leaves full screen.
+// Anything else that closes it -- a channel switch here; jumps,
+// workspace switches and a deleted parent go the same way -- keeps
+// full screen, which follows focus to the channel, as it does when you
+// switch from a full-screen channel.
+func TestFullscreen_ChannelSwitchFromAFullscreenThreadStaysFullscreen(t *testing.T) {
+	a := fullscreenThreadApp(t)
+	updateAndRender(t, a, keyPress('f'))
+
+	updateAndRender(t, a, ChannelSelectedMsg{ID: "C2", Name: "random", Type: "channel"})
+	if a.threadVisible {
+		t.Fatal("switching channel left the thread open")
+	}
+	assertFullscreen(t, a, PanelMessages)
+}
+
+func TestFullscreen_CtrlBracketClosesAFullscreenThreadToThePanes(t *testing.T) {
+	a := fullscreenThreadApp(t)
+	updateAndRender(t, a, keyPress('f'))
+
+	updateAndRender(t, a, keyMod(']', tea.ModCtrl))
+	if a.threadVisible {
+		t.Fatal("ctrl+] did not close the thread")
+	}
+	assertPaned(t, a)
+}
+
+// Clicking the breadcrumb's channel label is the mouse's Esc.
+func TestFullscreen_BreadcrumbClickClosesAFullscreenThreadToThePanes(t *testing.T) {
+	a := fullscreenThreadApp(t)
+	updateAndRender(t, a, keyPress('f'))
+	assertFullscreen(t, a, PanelThread)
+
+	// The thread pane starts at column 0; its first row is the
+	// breadcrumb, "# general › Thread from …", inside the border.
+	updateAndRender(t, a, tea.MouseClickMsg{X: 3, Y: 1, Button: tea.MouseLeft})
+	if a.threadVisible {
+		t.Fatal("clicking the breadcrumb's channel did not close the thread")
+	}
+	assertPaned(t, a)
+}
+
 func TestFullscreen_ClosingAThreadBehindAFullscreenChannelStaysFullscreen(t *testing.T) {
 	a := fullscreenThreadApp(t)
 	updateAndRender(t, a, keyMod(tea.KeyTab, tea.ModShift)) // thread → channel

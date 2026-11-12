@@ -2467,9 +2467,25 @@ func (a *App) ToggleSidebar() {
 func (a *App) ToggleThread() {
 	a.clearSelections()
 	if a.threadVisible {
-		a.CloseThread()
+		a.closeThreadByUser()
 	}
 	// Don't open on toggle if no thread is loaded -- use Enter for that
+}
+
+// closeThreadByUser is CloseThread for the ways the user closes the
+// thread on purpose: Esc, q, ctrl+] and a click on the breadcrumb's
+// channel. Closed that way, a full-screen thread goes back to the
+// panes. Any other close (channel switch, jump, workspace switch,
+// deleted parent) keeps full screen, which follows focus to the
+// channel, as it does from a full-screen channel.
+func (a *App) closeThreadByUser() {
+	wasFullscreenThread := a.fullscreen && a.fullscreenPanel() == PanelThread
+	a.CloseThread()
+	// CloseThread refuses during an upload; then the thread stays, and
+	// so does full screen.
+	if wasFullscreenThread && !a.threadVisible {
+		a.fullscreen = false
+	}
 }
 
 func (a *App) CloseThread() {
@@ -2477,11 +2493,6 @@ func (a *App) CloseThread() {
 		return
 	}
 	a.threadCloseAfterUpload = false
-	// A full-screen thread goes back to the panes rather than leaving
-	// the channel full screen in its place.
-	if a.fullscreen && a.fullscreenPanel() == PanelThread {
-		a.fullscreen = false
-	}
 	a.cancelEdit()
 	a.threadCompose.SetDraftContext("", "", "")
 	a.clearSelections()
