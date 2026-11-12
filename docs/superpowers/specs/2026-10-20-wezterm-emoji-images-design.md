@@ -367,9 +367,9 @@ terminal, so later:
   emoji-heavy channel, opening and closing modals, `ctrl+e` and back,
   resize, font zoom, theme switch.
 
-The probe scripts used for the table above are in
-`docs/superpowers/specs/2026-10-20-wezterm-emoji-images-probes/`. Run
-them inside WezTerm with `python3 probeN.py <seconds>`.
+The probe scripts behind the table were removed before merge. They are in
+commit `85a8fdd`, under
+`docs/superpowers/specs/2026-10-20-wezterm-emoji-images-probes/`.
 
 ## Implementation notes
 
