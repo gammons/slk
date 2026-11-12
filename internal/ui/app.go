@@ -1120,11 +1120,27 @@ func (a *App) fullscreenPanel() Panel {
 // stores the hit-test bands. The one place View's layout inputs are
 // assembled; tests call it instead of repeating Compute's arguments.
 func (a *App) computeFrame() panelLayoutFrame {
+	return a.frameInto(a.layout)
+}
+
+// frameInto resolves this frame's layout into l: a.layout for View, a
+// scratch layout for queries that must not disturb the stored bands.
+func (a *App) frameInto(l *panelLayout) panelLayoutFrame {
 	if a.fullscreen {
-		return a.layout.ComputeFullscreen(a.width, a.height, a.fullscreenPanel())
+		return l.ComputeFullscreen(a.width, a.height, a.fullscreenPanel())
 	}
-	return a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),
+	return l.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),
 		a.sidebarVisible, a.threadVisible, a.threadInFront(), a.compact)
+}
+
+// contentPanesDrawn reports whether this frame draws the channel pane
+// and the open thread. Full screen and the stacked layout can leave
+// either one open but off screen; a message arriving there is unseen,
+// so it must not be marked read (reduceNewMessage).
+func (a *App) contentPanesDrawn() (channel, thread bool) {
+	var scratch panelLayout
+	f := a.frameInto(&scratch)
+	return f.MsgWidth > 0, a.threadVisible && f.ThreadWidth > 0
 }
 
 func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
