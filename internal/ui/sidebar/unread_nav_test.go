@@ -130,10 +130,10 @@ func TestNextUnread_UnknownAnchor_LandsOnNearestEnd(t *testing.T) {
 
 // The walk intentionally includes unread channels inside collapsed
 // sections (m.filtered ignores collapse), and selecting the target
-// expands the section -- the documented "catch up on all unreads"
+// shows it under the still-collapsed header -- the documented "catch up on all unreads"
 // behavior. C1 has no Section, so it lands in the default "Channels"
 // section, which New() collapses.
-func TestNextUnread_ReachesCollapsedSectionAndExpands(t *testing.T) {
+func TestNextUnread_ReachesCollapsedSection(t *testing.T) {
 	m := New([]ChannelItem{
 		{ID: "C1", Name: "hidden", Type: "channel"},
 	})
@@ -148,8 +148,9 @@ func TestNextUnread_ReachesCollapsedSectionAndExpands(t *testing.T) {
 		t.Fatalf("unread inside a collapsed section must be reachable; got id=%q ok=%v", id, ok)
 	}
 	m.SelectByID(id)
-	if m.IsCollapsed(defaultChannelsSection) {
-		t.Fatalf("SelectByID should expand the collapsed section holding the target")
+	if m.SelectedID() != "C1" || !m.IsCollapsed(defaultChannelsSection) {
+		t.Fatalf("SelectByID should select C1 under the collapsed header; selected=%q collapsed=%v",
+			m.SelectedID(), m.IsCollapsed(defaultChannelsSection))
 	}
 }
 

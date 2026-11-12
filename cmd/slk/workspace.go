@@ -103,10 +103,13 @@ type WorkspaceContext struct {
 	// the user has joined. Channels they have not joined are not held
 	// here at all — they arrive per query from the finder's debounced
 	// channels/search and live only in the finder component.
-	FinderItems   []core.ChannelFinderItem
-	TeamID        string
-	TeamName      string
-	UserID        string
+	FinderItems []core.ChannelFinderItem
+	TeamID      string
+	TeamName    string
+	UserID      string
+	// UserHandle is the current user's handle (auth.test's `user`),
+	// which group DM names leave out of their participant list.
+	UserHandle    string
 	UnresolvedDMs []UnresolvedDM
 	// customEmoji holds this workspace's emoji name -> URL (or
 	// "alias:target") map. Access it via CustomEmoji/SetCustomEmoji,

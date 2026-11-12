@@ -962,6 +962,7 @@ func TestConnect_DiscoversStandardWorkspaceAPIBaseURL(t *testing.T) {
 				Team:   "My Team",
 				TeamID: "T1",
 				UserID: "U1",
+				User:   "grant",
 			}, nil
 		},
 	}
@@ -978,6 +979,9 @@ func TestConnect_DiscoversStandardWorkspaceAPIBaseURL(t *testing.T) {
 	}
 	if got := c.TeamSubdomain(); got != "myteam" {
 		t.Errorf("TeamSubdomain() = %q, want %q", got, "myteam")
+	}
+	if got := c.UserName(); got != "grant" {
+		t.Errorf("UserName() = %q, want %q", got, "grant")
 	}
 }
 

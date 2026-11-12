@@ -1171,3 +1171,23 @@ func TestHideDeactivatedUsersPartialGeneralBlockKeepsDefault(t *testing.T) {
 		t.Fatal("a [general] block without hide_deactivated_users turned the option off")
 	}
 }
+
+func TestSidebarStartCollapsed(t *testing.T) {
+	if Default().Sidebar.StartCollapsed {
+		t.Error("default should be off")
+	}
+	cfg := loadConfigString(t, "[sidebar]\nstart_collapsed = true\n")
+	if !cfg.Sidebar.StartCollapsed {
+		t.Error("start_collapsed = true did not load")
+	}
+}
+
+func TestSidebarShowUnreadInCollapsed(t *testing.T) {
+	if Default().Sidebar.ShowUnreadInCollapsed {
+		t.Error("default should be off")
+	}
+	cfg := loadConfigString(t, "[sidebar]\nshow_unread_in_collapsed = true\n")
+	if !cfg.Sidebar.ShowUnreadInCollapsed {
+		t.Error("show_unread_in_collapsed = true did not load")
+	}
+}
