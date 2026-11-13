@@ -431,9 +431,11 @@ func Apply(themeName string, overrides core.Theme) {
 		SearchHighlightFg = Background
 	}
 
-	// Compose-insert background: explicit theme override wins, otherwise
-	// derive from Accent + Background at defaultTintAlpha.
-	if colors.ComposeInsertBG != "" {
+	// Compose-insert background: an explicit theme color is kept for
+	// InsertFill. Otherwise ComposeInsertBG stays the derived Accent mix
+	// and InsertFill uses the selected-message gray.
+	composeInsertBGExplicit = colors.ComposeInsertBG != ""
+	if composeInsertBGExplicit {
 		ComposeInsertBG = lipgloss.Color(colors.ComposeInsertBG)
 	} else {
 		ComposeInsertBG = mixColors(Accent, Background, defaultTintAlpha)

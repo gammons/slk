@@ -13,11 +13,23 @@ import (
 // readable on every built-in theme without overpowering message text.
 const defaultTintAlpha = 0.15
 
-// ComposeInsertBG is the background of the compose box in insert mode.
-// Apply() sets it from a theme's colors.compose_insert_bg, or by mixing
-// Accent into Background at defaultTintAlpha. The left ▌ and this fill
-// together are the insert-mode highlight.
-var ComposeInsertBG color.Color
+// ComposeInsertBG is the theme's compose_insert_bg when one is set, and
+// otherwise the derived Accent mix. InsertFill is what the compose box
+// paints: the explicit color, or the selected-message gray when the
+// theme did not set one. The derived mix reads as green, which is not
+// the default fill.
+var (
+	ComposeInsertBG         color.Color
+	composeInsertBGExplicit bool
+)
+
+// InsertFill is the compose box background in insert mode.
+func InsertFill() color.Color {
+	if composeInsertBGExplicit && ComposeInsertBG != nil {
+		return ComposeInsertBG
+	}
+	return SelectionTintColor(true)
+}
 
 // selectionBgFocused / selectionBgUnfocused hold the resolved tint colors
 // for the selected-message row. They are populated by Apply() and read

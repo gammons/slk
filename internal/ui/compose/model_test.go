@@ -983,7 +983,7 @@ func TestView_FocusedFillsTextAreaWithInsertBackground(t *testing.T) {
 	m.SetValue("hello")
 	out := m.View(60, true /* focused */)
 
-	r, g, b, _ := styles.SelectionTintColor(true).RGBA()
+	r, g, b, _ := styles.InsertFill().RGBA()
 	tint := fmtRGBBg(uint8(r>>8), uint8(g>>8), uint8(b>>8))
 	if !strings.Contains(out, tint) {
 		t.Fatalf("focused compose output missing selection tint %q\nraw=%q", tint, out)
@@ -1002,6 +1002,28 @@ func TestView_FocusedFillsTextAreaWithInsertBackground(t *testing.T) {
 		if strings.Contains(line, dark) {
 			t.Fatalf("typed text sits on the unfocused fill %s\n%q", dark, line)
 		}
+	}
+}
+
+// TestView_FocusedHonorsComposeInsertBGOverride: a theme that sets
+// colors.compose_insert_bg still paints that color. The gray default
+// is only for themes that leave it unset.
+func TestView_FocusedHonorsComposeInsertBGOverride(t *testing.T) {
+	styles.RegisterCustomTheme("compose-insert-override", styles.ThemeColors{
+		Primary: "#001122", Accent: "#334455", Warning: "#556677",
+		Error: "#778899", Background: "#1A1A2E", Surface: "#16162B",
+		SurfaceDark: "#0F0F23", Text: "#FFFFFF", TextMuted: "#888888",
+		Border:          "#222222",
+		ComposeInsertBG: "#ABCDEF",
+	})
+	styles.Apply("compose-insert-override", config.Theme{})
+	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
+
+	m := New("general")
+	m.SetValue("hello")
+	out := m.View(60, true)
+	if !strings.Contains(out, "48;2;171;205;239") {
+		t.Fatalf("explicit compose_insert_bg #ABCDEF missing from focused box\n%q", out)
 	}
 }
 
@@ -1057,7 +1079,7 @@ func TestComposeInsertHighlightsTheWholeBox(t *testing.T) {
 	accent := sgrChannel("38", styles.Accent)
 	border := sgrChannel("38", styles.Border)
 	fill := sgrChannel("48", styles.SurfaceDark)
-	tint := sgrChannel("48", styles.SelectionTintColor(true))
+	tint := sgrChannel("48", styles.InsertFill())
 	for i := range fLines {
 		fh, uh := borderHead(fLines[i]), borderHead(uLines[i])
 		if fh == "" || uh == "" {

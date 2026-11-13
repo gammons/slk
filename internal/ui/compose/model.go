@@ -1660,12 +1660,12 @@ func (m Model) View(width int, focused bool) string {
 		innerWidth = 1
 	}
 
-	// Insert mode paints the box with the same light gray as a selected
-	// message. ComposeInsertBG is the accent mix, which reads as green.
+	// Insert mode paints the box with InsertFill: the selected-message
+	// gray, or colors.compose_insert_bg when a theme sets it.
 	style := styles.ComposeBox
 	innerBG := styles.SurfaceDark
 	if focused {
-		innerBG = styles.SelectionTintColor(true)
+		innerBG = styles.InsertFill()
 		style = style.
 			BorderForeground(styles.SelectionBorderColor(true)).
 			BorderBackground(innerBG).
