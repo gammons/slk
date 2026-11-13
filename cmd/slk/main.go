@@ -1502,6 +1502,7 @@ func run() error {
 		// switchNames goes to the UI, which owns (and writes) it from
 		// then on; only switchSeq is kept for AfterSwitch.
 		switchNames, switchSeq := wctx.UserNames.SnapshotForUI()
+		switchChannels, switchChannelSeq := wctx.ChannelResolver.nameStore().SnapshotForUI()
 		return ui.WorkspaceSwitchedMsg{
 			TeamID:       wctx.TeamID,
 			TeamName:     wctx.TeamName,
@@ -1513,6 +1514,7 @@ func run() error {
 			// A private copy: the UI must never share a map with the
 			// engine's goroutines (see userNameStore).
 			UserNames:        switchNames,
+			ChannelNames:     switchChannels,
 			UserStatuses:     statuses,
 			ExternalUsers:    external,
 			DeactivatedUsers: deactivated,
@@ -1536,6 +1538,7 @@ func run() error {
 			// reporting. Run by the reducer after the switch applies.
 			AfterSwitch: func() tea.Msg {
 				wctx.UserNames.NotifyFrom(switchSeq, uiNameNotifier(wctx.TeamID, p.Send))
+				wctx.ChannelResolver.nameStore().NotifyFrom(switchChannelSeq, uiChannelNameNotifier(wctx.TeamID, p.Send))
 				return nil
 			},
 		}
@@ -1729,6 +1732,7 @@ func run() error {
 			// readyNames goes to the UI, which owns (and writes) it from
 			// then on; only readySeq is kept for NotifyFrom below.
 			readyNames, readySeq := wctx.UserNames.SnapshotForUI()
+			readyChannels, readyChannelSeq := wctx.ChannelResolver.nameStore().SnapshotForUI()
 			p.Send(ui.WorkspaceReadyMsg{
 				TeamID:       wctx.TeamID,
 				TeamName:     wctx.TeamName,
@@ -1741,6 +1745,7 @@ func run() error {
 				// A private copy: the UI must never share a map with
 				// the engine's goroutines (see userNameStore).
 				UserNames:        readyNames,
+				ChannelNames:     readyChannels,
 				UserStatuses:     readyStatuses,
 				ExternalUsers:    external,
 				DeactivatedUsers: deactivated,
@@ -1757,6 +1762,7 @@ func run() error {
 			// the Ready message; anything the notifier sends is
 			// processed after it.
 			wctx.UserNames.NotifyFrom(readySeq, uiNameNotifier(wctx.TeamID, p.Send))
+			wctx.ChannelResolver.nameStore().NotifyFrom(readyChannelSeq, uiChannelNameNotifier(wctx.TeamID, p.Send))
 
 			// Live repairs may mutate workspace slices. Start their owner only
 			// after cloning and handing off the startup snapshots above.
