@@ -230,6 +230,11 @@ type Sidebar struct {
 	// ShowUnreadInCollapsed keeps a collapsed section's unread channels
 	// (and the open channel) visible under its header. Default off.
 	ShowUnreadInCollapsed bool `toml:"show_unread_in_collapsed"`
+	// EnterKeepsFocus leaves focus where it is when Enter opens a
+	// conversation, the Threads or Activity row, or (in the workspace
+	// rail) a workspace, so j/k and Enter can skim them; l moves on.
+	// Default off: focus moves to the messages pane.
+	EnterKeepsFocus bool `toml:"enter_keeps_focus"`
 }
 
 // Marks holds preferences for vim-style marks.

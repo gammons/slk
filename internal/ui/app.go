@@ -621,6 +621,9 @@ type App struct {
 	// option: whether Enter leaves the composer focused in insert mode
 	// after a send. Set by main.go from config; off by default.
 	stayInInsertAfterSend bool
+	// enterKeepsFocus is the [sidebar] enter_keeps_focus option; see
+	// SetEnterKeepsFocus.
+	enterKeepsFocus bool
 
 	// search is the active in-channel search (nil = none).
 	// searchInput is the prompt buffer while in ModeSearch.
@@ -2096,23 +2099,41 @@ func (a *App) handleEnter() tea.Cmd {
 	if a.focusedPanel == PanelWorkspace {
 		// Switch to the workspace under the rail cursor. Focus goes to
 		// the messages pane, where every switch (1-9, :ws, a click)
-		// leaves it once the workspace's last channel opens. A refused
+		// leaves it once the workspace's last channel opens, unless
+		// [sidebar] enter_keeps_focus keeps it in the rail. A refused
 		// switch (upload in progress) leaves focus in the rail.
 		if a.compose.Uploading() || a.threadCompose.Uploading() {
 			return toastWithClear(a, "Upload in progress", 2*time.Second)
 		}
-		a.focusedPanel = PanelMessages
+		if !a.enterKeepsFocus {
+			a.focusedPanel = PanelMessages
+		}
 		if id := a.workspaceRail.CursorID(); id != "" && a.workspaceSvc != nil && id != a.workspaceRail.SelectedID() {
-			return a.switchWorkspace(id)
+			cmd := a.switchWorkspace(id)
+			if !a.enterKeepsFocus {
+				return cmd
+			}
+			// Mark this switch's own result, so its last-channel restore
+			// (and no other switch's) keeps focus in the rail, however
+			// many switches are in flight.
+			return func() tea.Msg {
+				msg := cmd()
+				if sw, ok := msg.(WorkspaceSwitchedMsg); ok {
+					sw.KeepFocus = true
+					return sw
+				}
+				return msg
+			}
 		}
 		return nil
 	}
 	if a.focusedPanel == PanelSidebar {
+		keep := a.enterKeepsFocus
 		if a.sidebar.IsThreadsSelected() {
-			return func() tea.Msg { return ThreadsViewActivatedMsg{} }
+			return func() tea.Msg { return ThreadsViewActivatedMsg{KeepFocus: keep} }
 		}
 		if a.sidebar.IsActivitySelected() {
-			return func() tea.Msg { return ActivityViewActivatedMsg{} }
+			return func() tea.Msg { return ActivityViewActivatedMsg{KeepFocus: keep} }
 		}
 		// A section header? Toggle its collapse state and stay in
 		// place. Section headers are also navigable via j/k so the
@@ -2124,7 +2145,7 @@ func (a *App) handleEnter() tea.Cmd {
 		item, ok := a.sidebar.SelectedItem()
 		if ok {
 			return func() tea.Msg {
-				return ChannelSelectedMsg{ID: item.ID, Name: item.Name, Type: item.Type}
+				return ChannelSelectedMsg{ID: item.ID, Name: item.Name, Type: item.Type, KeepFocus: keep}
 			}
 		}
 	}
@@ -3034,6 +3055,13 @@ func (a *App) SetComposeEditor(editor []string) {
 // after a send. Off by default.
 func (a *App) SetStayInInsertAfterSend(b bool) {
 	a.stayInInsertAfterSend = b
+}
+
+// SetEnterKeepsFocus sets the [sidebar] enter_keeps_focus option: Enter
+// in the sidebar or the workspace rail opens the row but leaves focus
+// there, instead of moving it to the messages pane.
+func (a *App) SetEnterKeepsFocus(b bool) {
+	a.enterKeepsFocus = b
 }
 
 // SetWorkspacePickerVimKeys sets the [general] workspace_picker_vim_keys

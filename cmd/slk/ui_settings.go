@@ -44,6 +44,8 @@ type uiSettings struct {
 	// WorkspacePickerVimKeys is [general] workspace_picker_vim_keys
 	// (default off).
 	WorkspacePickerVimKeys bool
+	// EnterKeepsFocus is [sidebar] enter_keeps_focus (default off).
+	EnterKeepsFocus bool
 }
 
 // sidebarStyleFromConfig is the [sidebar] look and behaviour switches.
@@ -78,6 +80,7 @@ func uiSettingsFromConfig(cfg config.Config) uiSettings {
 		ReplyAvatars:           cfg.Appearance.ReplyAvatars,
 		HideDeactivatedUsers:   cfg.General.HideDeactivatedUsers,
 		WorkspacePickerVimKeys: cfg.General.WorkspacePickerVimKeys,
+		EnterKeepsFocus:        cfg.Sidebar.EnterKeepsFocus,
 	}
 }
 
@@ -110,4 +113,5 @@ func applyUISettings(app *ui.App, s uiSettings) {
 	app.SetStayInInsertAfterSend(s.StayInInsertAfterSend)
 	app.SetReplyAvatars(s.ReplyAvatars)
 	app.SetWorkspacePickerVimKeys(s.WorkspacePickerVimKeys)
+	app.SetEnterKeepsFocus(s.EnterKeepsFocus)
 }

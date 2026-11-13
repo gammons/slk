@@ -18,6 +18,7 @@ func TestUISettingsFromConfig_NavigationOptions(t *testing.T) {
 	}{
 		{"unset", "", uiSettings{}},
 		{"workspace picker vim keys", "[general]\nworkspace_picker_vim_keys = true\n", uiSettings{WorkspacePickerVimKeys: true}},
+		{"enter keeps focus", "[sidebar]\nenter_keeps_focus = true\n", uiSettings{EnterKeepsFocus: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.toml")
@@ -31,6 +32,9 @@ func TestUISettingsFromConfig_NavigationOptions(t *testing.T) {
 			got := uiSettingsFromConfig(cfg)
 			if got.WorkspacePickerVimKeys != tc.want.WorkspacePickerVimKeys {
 				t.Errorf("WorkspacePickerVimKeys = %v, want %v", got.WorkspacePickerVimKeys, tc.want.WorkspacePickerVimKeys)
+			}
+			if got.EnterKeepsFocus != tc.want.EnterKeepsFocus {
+				t.Errorf("EnterKeepsFocus = %v, want %v", got.EnterKeepsFocus, tc.want.EnterKeepsFocus)
 			}
 		})
 	}

@@ -71,6 +71,12 @@ type (
 		// workspace's channel in another. Empty means "the active
 		// workspace", which is what every other sender means.
 		TeamID string
+		// KeepFocus leaves focus where it is instead of moving it to
+		// the messages pane: Enter in the sidebar, and the channel
+		// restore after Enter in the workspace rail
+		// (WorkspaceSwitchedMsg.KeepFocus), set it under [sidebar]
+		// enter_keeps_focus.
+		KeepFocus bool
 	}
 	MessagesLoadedMsg struct {
 		ChannelID  string
@@ -192,7 +198,9 @@ type (
 	// ThreadsViewActivatedMsg is dispatched when the user picks the
 	// synthetic Threads sidebar row. The App switches the message pane to
 	// the threads-list view and (re)fetches the involved-threads list.
-	ThreadsViewActivatedMsg struct{}
+	ThreadsViewActivatedMsg struct {
+		KeepFocus bool // as on ChannelSelectedMsg
+	}
 	// ThreadsListLoadedMsg carries a freshly loaded list of involved-thread
 	// summaries for the named workspace. The App ignores it if it doesn't
 	// match the active team.
@@ -219,7 +227,9 @@ type (
 	// synthetic Activity sidebar row (or runs :activity). The App
 	// switches the message pane to the Activity view and fetches the
 	// feed. Mirrors ThreadsViewActivatedMsg.
-	ActivityViewActivatedMsg struct{}
+	ActivityViewActivatedMsg struct {
+		KeepFocus bool // as on ChannelSelectedMsg
+	}
 	// ActivityListLoadedMsg carries a freshly loaded page of Activity
 	// feed items for the named workspace. The App ignores it if it
 	// doesn't match the active team. Mirrors ThreadsListLoadedMsg.
@@ -405,6 +415,10 @@ type (
 		// names as UserResolvedMsg; any sent before the switch applied
 		// would be dropped as belonging to an inactive workspace.
 		AfterSwitch tea.Cmd
+		// KeepFocus is set on the result of a switch made by Enter in
+		// the workspace rail under [sidebar] enter_keeps_focus, so the
+		// last-channel restore leaves focus in the rail.
+		KeepFocus bool
 	}
 	// ReadStateChangedMsg is sent whenever the persistent read state changes,
 	// so panels that read from cache.GetWorkspaceReadState re-render.

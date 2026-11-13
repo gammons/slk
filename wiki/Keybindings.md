@@ -5,7 +5,7 @@
 | `j` / `k` | Normal | Move down/up in channel list or messages |
 | `h` / `l` | Normal | Switch focus between panels; `h` from the sidebar focuses the workspace rail |
 | `Tab` / `Shift+Tab` | Normal | Cycle focus |
-| `Enter` | Normal (sidebar) | Open selected channel, or toggle a section header |
+| `Enter` | Normal (sidebar) | Open selected channel (focus moves to the messages pane; `[sidebar] enter_keeps_focus = true` keeps it in the sidebar), or toggle a section header |
 | `j` / `k`, `Enter` | Normal (workspace rail) | Move the rail cursor; switch to that workspace |
 | `Space` | Normal (sidebar) | Toggle the selected section header (collapse/expand) |
 | `Enter` | Normal (message) | Open thread |
