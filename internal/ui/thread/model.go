@@ -37,6 +37,7 @@ type Model struct {
 	threadTS         string
 	selected         int
 	focused          bool
+	hideCursor       bool // selected-row tint and bar hidden; the cursor index stays
 	coloredUsernames bool
 	compact          bool
 	showAvatars      bool
@@ -566,18 +567,30 @@ func (m *Model) UpdateParentInPlace(item messages.MessageItem) bool {
 	return true
 }
 
-// SetFocused sets whether the thread panel has focus. When the value flips
-// the layout is invalidated so the selected reply's "▌" border
-// re-renders with the appropriate color (Accent when focused, TextMuted when
-// not — see styles.SelectionBorderColor).
+// SetFocused sets whether the thread panel has focus. The selected
+// reply's bar is baked into the reply cache, so a flip drops that cache.
+// Otherwise an unfocused thread keeps the color from when it last had
+// focus, and never shows the shadow the channel pane shows.
 func (m *Model) SetFocused(focused bool) {
-	if m.focused != focused {
-		m.focused = focused
-		m.layoutValid = false
-		m.dirty()
-		debuglog.Perf("thread.SetFocused flip focused=%v replies=%d layout=invalidated",
-			focused, len(m.replies))
+	if m.focused == focused {
+		return
 	}
+	m.focused = focused
+	m.InvalidateCache()
+	debuglog.Perf("thread.SetFocused flip focused=%v replies=%d cache=dropped",
+		focused, len(m.replies))
+}
+
+// SetCursorHighlight shows or hides the selected-row tint and bar.
+// Hiding does not move the cursor. A change bumps Version so the
+// App's pane cache does not keep the previous frame.
+func (m *Model) SetCursorHighlight(on bool) {
+	hide := !on
+	if m.hideCursor == hide {
+		return
+	}
+	m.hideCursor = hide
+	m.dirty()
 }
 
 // Focused returns whether the thread panel has focus.
@@ -1023,6 +1036,17 @@ func (m *Model) selectedLines(i int) []string {
 	})
 }
 
+// cursorLines is what Layout draws for the cursor entry: the selected
+// variant, or the plain row while the highlight is hidden. The parent
+// row is already rendered for the current flag, so its Lines are used
+// either way (see selectedLines).
+func (m *Model) cursorLines(i int) []string {
+	if m.hideCursor {
+		return m.list.Entries()[i].Lines
+	}
+	return m.selectedLines(i)
+}
+
 // ScrollHintForDrag returns -1 if the cursor is within 1 row of the top
 // edge of the scrolling content, +1 if within 1 row of the bottom, else 0.
 // The incoming viewportY is pane-local; a cursor on the chrome counts as
@@ -1127,7 +1151,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// the rule under it. The rule is not selectable text (Plain stops
 	// before it). Its image hits are kept for previews; reaction hits
 	// remain omitted.
-	parentIsSelected := m.selected == parentSelected
+	parentIsSelected := !m.hideCursor && m.selected == parentSelected
 	parentRendered := m.renderMessage(m.parent, width, parentIsSelected)
 	// The parent bypasses the reply cache and its upload loop. Flush its
 	// groups in draw order even when the thread has no replies. Kitty
@@ -1160,34 +1184,33 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// cache-build treatment (borderSelect / borderInvis below): thick
 	// left border + tint when the cursor sits on the parent, invisible
 	// border otherwise so the parent's width matches the reply rows.
+	pad := styles.Background
 	if parentIsSelected {
 		// After the plain mirror, so it keeps the short form. Skipped
 		// while a text selection exists; see selectedLines.
 		if !m.list.HasSelection() {
 			parentContent = messages.SelectedHeader(parentContent, parentHeader, m.parent.TS, m.parent.Timestamp, parentHeaderBudget)
 		}
-		if styles.TransparentBackground() {
-			// The parent's spans restore BgANSI after each reset, which is
-			// the default background here: a hole in the tint. The opaque
-			// row has the same gap (theme background), left as it is so
-			// the off path stays unchanged.
-			parentContent = messages.RepaintBgToSelectionTint(parentContent, m.focused)
-		}
+		// The header and body paint the theme background themselves.
+		// Swap it for the selection tint, the way a reply's selected
+		// row does, or only the shortfall after a short line is tinted
+		// and the rest of the message stays plain.
+		parentContent = messages.RepaintBgToSelectionTint(parentContent, m.focused)
 		parentContent = lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).
 			BorderForeground(styles.SelectionBorderColor(m.focused)).
 			BorderBackground(styles.SelectionTintColor(m.focused)).
 			Background(styles.SelectionTintColor(m.focused)).
 			Render(parentContent)
+		pad = styles.SelectionTintColor(m.focused)
 	} else {
 		parentContent = lipgloss.NewStyle().BorderStyle(styles.InvisibleLeftBorder()).BorderLeft(true).
 			BorderForeground(styles.Background).BorderBackground(styles.Background).
 			Render(parentContent)
 	}
-	// Pad every parent row to the pane width with the theme background.
-	// The outer wrapper used to do this (the parent, unlike a reply, is
-	// not width-filled when rendered); this is the same per-row padding,
-	// applied where it is needed.
-	parentContent = lipgloss.NewStyle().Width(width).Background(styles.Background).Render(parentContent)
+	// Pad every parent row to the pane width. The parent, unlike a
+	// reply, is not width-filled when rendered. A selected parent pads
+	// with the tint so the highlight reaches the right edge.
+	parentContent = lipgloss.NewStyle().Width(width).Background(pad).Render(parentContent)
 	parentSeparator := lipgloss.NewStyle().
 		Width(width).
 		Background(styles.Background).
@@ -1248,7 +1271,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// MUST call InvalidateCache() on its mutation path. EnterReactionNav /
 	// ExitReactionNav / ReactionNavLeft / ReactionNavRight all do;
 	// MoveUp/MoveDown call ExitReactionNav before mutating selected.
-	// (SetFocused does not: plan decision P2, a known stale-border bug.)
+	// SetFocused does too, so an unfocused thread picks up the shadow.
 	if m.cache == nil || m.cacheWidth != width || m.cacheReplyLen != len(m.replies) {
 		var perfReason string
 		var perfStart time.Time
@@ -1371,7 +1394,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// Snap to the cursor if it moved, slice the window, translate the
 	// reply hits (content-relative), overlay the selection, draw the
 	// scrollbar.
-	frame := m.list.Layout(m.selected, m.selectedLines)
+	frame := m.list.Layout(m.selected, m.cursorLines)
 	rows := m.list.Compose(frame, "", "", applySelection)
 	m.layoutValid = true
 	return fitHeight(chrome+"\n"+strings.Join(rows, "\n"), height)

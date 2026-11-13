@@ -100,6 +100,7 @@ func (a *App) renderUnfocusedWindow(n wintree.LayoutNode, themeVer int64) string
 		return a.renderBlankWindow(n)
 	}
 	m.SetFocused(false) // before Version read; bumps only on flip
+	m.SetCursorHighlight(a.mode != ModeInsert)
 	c := a.renderCache.getWinPane(n.ID)
 	key := themeVer << 1
 	if c.hit(m.Version(), n.Rect.W, n.Rect.H, key) {

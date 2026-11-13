@@ -229,6 +229,8 @@ var (
 			Foreground(TextPrimary).
 			Padding(ComposePadding, 1, ComposePadding, 1)
 
+	// ComposeInsert is the insert-mode box: Accent ▌ and a tinted fill,
+	// so the whole compose area reads as highlighted.
 	ComposeInsert = lipgloss.NewStyle().
 			BorderStyle(thickLeftBorder).
 			BorderLeft(true).
@@ -429,9 +431,11 @@ func Apply(themeName string, overrides core.Theme) {
 		SearchHighlightFg = Background
 	}
 
-	// Compose-insert background: explicit theme override wins, otherwise
-	// derive from Accent + Background at defaultTintAlpha.
-	if colors.ComposeInsertBG != "" {
+	// Compose-insert background: an explicit theme color is kept for
+	// InsertFill. Otherwise ComposeInsertBG stays the derived Accent mix
+	// and InsertFill uses the selected-message gray.
+	composeInsertBGExplicit = colors.ComposeInsertBG != ""
+	if composeInsertBGExplicit {
 		ComposeInsertBG = lipgloss.Color(colors.ComposeInsertBG)
 	} else {
 		ComposeInsertBG = mixColors(Accent, Background, defaultTintAlpha)
@@ -466,10 +470,9 @@ func ApplyCompact(compact bool) {
 
 // SelectionBorderColor returns the foreground color used for the cursor /
 // selected-row marker (the thick left "▌") in the sidebar, messages pane,
-// and thread panel. When the panel has focus we use the bright Accent
-// color; when it doesn't we dim to TextMuted so the cursor is still visible
-// (so the user can see where they were when they switch back) but no longer
-// competes with the focused panel for attention.
+// and thread panel. When the panel has focus we use Accent; when it
+// doesn't we dim to TextMuted. The row fill is the quieter shadow in
+// both states (see SelectionTintColor).
 func SelectionBorderColor(focused bool) color.Color {
 	if focused {
 		return Accent

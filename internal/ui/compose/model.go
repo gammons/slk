@@ -224,24 +224,31 @@ func New(channelName string) Model {
 // RefreshStyles re-applies textarea styles from current theme colors.
 // Call after theme changes.
 func (m *Model) RefreshStyles() {
-	bg := lipgloss.NewStyle().Background(styles.SurfaceDark).Foreground(styles.TextPrimary)
-	s := m.input.Styles()
-	s.Focused.Base = bg
-	s.Focused.Text = bg
-	s.Focused.CursorLine = bg
-	s.Focused.EndOfBuffer = bg
-	s.Focused.Prompt = bg
-	s.Blurred.Base = bg
-	s.Blurred.Text = bg
-	s.Blurred.CursorLine = bg
-	s.Blurred.EndOfBuffer = bg
-	s.Blurred.Prompt = bg
-	s.Focused.Placeholder = bg.Foreground(styles.TextMuted)
-	s.Blurred.Placeholder = bg.Foreground(styles.TextMuted)
-	s.Cursor.Color = styles.TextPrimary
-	m.input.SetStyles(s)
+	m.setInputBackground(styles.SurfaceDark)
 	m.channelPicker.SetStyles(channelPickerStyles())
 	m.dirty()
+}
+
+// setInputBackground paints the textarea, including its text and
+// placeholder, on bg. View uses it so insert mode can fill the text
+// area without storing that color on the model.
+func (m *Model) setInputBackground(bg color.Color) {
+	base := lipgloss.NewStyle().Background(bg).Foreground(styles.TextPrimary)
+	s := m.input.Styles()
+	s.Focused.Base = base
+	s.Focused.Text = base
+	s.Focused.CursorLine = base
+	s.Focused.EndOfBuffer = base
+	s.Focused.Prompt = base
+	s.Blurred.Base = base
+	s.Blurred.Text = base
+	s.Blurred.CursorLine = base
+	s.Blurred.EndOfBuffer = base
+	s.Blurred.Prompt = base
+	s.Focused.Placeholder = base.Foreground(styles.TextMuted)
+	s.Blurred.Placeholder = base.Foreground(styles.TextMuted)
+	s.Cursor.Color = styles.TextPrimary
+	m.input.SetStyles(s)
 }
 
 func (m *Model) SetChannel(name string) {
@@ -1653,19 +1660,24 @@ func (m Model) View(width int, focused bool) string {
 		innerWidth = 1
 	}
 
-	var style = styles.ComposeBox.Width(width - 1)
-	if focused {
-		style = styles.ComposeInsert.Width(width - 1)
-	}
-
-	// Pick the inner background to match the outer style: ComposeInsertBG
-	// when focused, SurfaceDark when not. Without this, the textarea's
-	// internal Inline(true) styles only paint behind text and the row's
-	// trailing whitespace shows the WRONG bg.
+	// Insert mode paints the box with InsertFill: the selected-message
+	// gray, or colors.compose_insert_bg when a theme sets it.
+	style := styles.ComposeBox
 	innerBG := styles.SurfaceDark
 	if focused {
-		innerBG = styles.ComposeInsertBG
+		innerBG = styles.InsertFill()
+		style = style.
+			BorderForeground(styles.SelectionBorderColor(true)).
+			BorderBackground(innerBG).
+			Background(innerBG)
 	}
+	style = style.Width(width - 1)
+	// The copy's textarea, so a focused render fills the glyphs too.
+	// The caller's model keeps the SurfaceDark styles.
+	m.setInputBackground(innerBG)
+
+	// The textarea's Inline(true) styles only paint behind text; this
+	// wrapper fills the rest of the row with the same background.
 
 	var content string
 	// If empty and unfocused, render placeholder manually with correct background.
@@ -1677,9 +1689,8 @@ func (m Model) View(width int, focused bool) string {
 			Width(innerWidth).
 			Render(m.input.Placeholder)
 	} else {
-		// Wrap textarea output with full-width tinted background.
-		// The textarea's internal styles use Inline(true) which only covers text,
-		// not the full line width. This wrapper ensures consistent background.
+		// Wrap textarea output with the box fill. The textarea's internal
+		// styles use Inline(true), which only covers text, not the full line.
 		content = lipgloss.NewStyle().
 			Background(innerBG).
 			Foreground(styles.TextPrimary).

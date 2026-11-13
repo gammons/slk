@@ -207,6 +207,11 @@ type Model struct {
 	// SetFocused must invalidate the cache.
 	focused bool
 
+	// hideCursor drops the selected-row tint and bar from what View
+	// draws. The cursor index is untouched, so clearing the flag paints
+	// the same message again. Insert mode sets it.
+	hideCursor bool
+
 	// coloredUsernames enables deterministic per-user coloring of the
 	// username in each message row. Set from config via
 	// SetColoredUsernames; invalidates the render cache so existing rows
@@ -255,6 +260,18 @@ func (m *Model) SetFocused(focused bool) {
 	m.dirty()
 	debuglog.Perf("messages.SetFocused flip focused=%v msgs=%d selected-row-marked-stale",
 		focused, len(m.messages))
+}
+
+// SetCursorHighlight shows or hides the selected-row tint and bar.
+// Hiding does not move the cursor. A change bumps Version so the
+// App's pane cache does not keep the previous frame.
+func (m *Model) SetCursorHighlight(on bool) {
+	hide := !on
+	if m.hideCursor == hide {
+		return
+	}
+	m.hideCursor = hide
+	m.dirty()
 }
 
 // HandleEmojiImageReady is invoked by the host (App.Update) when an
@@ -2144,6 +2161,15 @@ func (m *Model) selectedLines(i int) []string {
 	})
 }
 
+// cursorLines is what Layout draws for the cursor entry: the selected
+// variant, or the plain row while the highlight is hidden.
+func (m *Model) cursorLines(i int) []string {
+	if m.hideCursor {
+		return m.list.Entries()[i].Lines
+	}
+	return m.selectedLines(i)
+}
+
 // composeFallbackRow grafts a halfblock fallback row onto the
 // placeholder row it replaces. The placeholder carries the row's left
 // border, avatar gutter and background fill; a bare fallback row
@@ -2285,7 +2311,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 
 	// Snap to the selection if it moved, clamp, let the cursor follow the
 	// scroll (WithCursorFollowsScroll), and slice the visible rows.
-	frame := m.list.Layout(m.selected, m.selectedLines)
+	frame := m.list.Layout(m.selected, m.cursorLines)
 	m.selected = frame.Cursor
 
 	// Per-frame image side effects:

@@ -358,6 +358,8 @@ greppable by name; no line numbers, because these files move.
 | A messages pane showing one message by an author with a given status; a DM pane for header topic tests | `statusPane(st, f)`, `dmHeaderPane(f)` (`internal/ui/messages/status_emoji_test.go`) |
 | An `App` in insert mode on C1 with a draft in the channel box and its draft preview on; a frame's rows; where the draft preview is in a frame, and its plain rows | `draftApp(t, w, h, draft)`, `frameRows(a)`, `previewSpan(rows, width)`, `previewRows(t, a)` (`internal/ui/draft_preview_test.go`) |
 | An `App` in insert mode on C1 for draft preview key tests (keys go through `a.Update`, so the upload gate runs); send one key; ctrl+r that fails unless it showed the box's preview | `previewKeysApp(t)`, `send(a, k)`, `previewOnWithCtrlR(t, a, c)` (`internal/ui/draft_preview_keys_test.go`) |
+| The ANSI line whose plain text contains a string, so a highlight can be checked on that row; the selected-message highlight's background SGR (`48;2;R;G;B`), focused or not | `rawLineContaining(view, text)`, `selectionTintSGR(focused)` (`internal/ui/insert_mode_highlight_test.go`) |
+| The `38;2` / `48;2` SGR fragment lipgloss emits for a color, and a rendered line through its left ▌ | `sgrChannel(ground, c)`, `borderHead(line)` (`internal/ui/compose/model_test.go`, `package compose`) |
 
 ### Known duplication — do not add to it
 

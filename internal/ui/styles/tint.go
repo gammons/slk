@@ -13,11 +13,23 @@ import (
 // readable on every built-in theme without overpowering message text.
 const defaultTintAlpha = 0.15
 
-// ComposeInsertBG is the background color used by the compose box when
-// focused (insert mode). Apply() populates this either from a theme's
-// explicit colors.compose_insert_bg, or by mixing Accent into Background
-// at defaultTintAlpha.
-var ComposeInsertBG color.Color
+// ComposeInsertBG is the theme's compose_insert_bg when one is set, and
+// otherwise the derived Accent mix. InsertFill is what the compose box
+// paints: the explicit color, or the selected-message gray when the
+// theme did not set one. The derived mix reads as green, which is not
+// the default fill.
+var (
+	ComposeInsertBG         color.Color
+	composeInsertBGExplicit bool
+)
+
+// InsertFill is the compose box background in insert mode.
+func InsertFill() color.Color {
+	if composeInsertBGExplicit && ComposeInsertBG != nil {
+		return ComposeInsertBG
+	}
+	return SelectionTintColor(true)
+}
 
 // selectionBgFocused / selectionBgUnfocused hold the resolved tint colors
 // for the selected-message row. They are populated by Apply() and read
@@ -30,13 +42,14 @@ var (
 )
 
 // SelectionTintColor returns the background color used to fill the
-// selected message row. When the panel has focus we tint with Accent;
-// when it doesn't we tint with TextMuted (so the row is still visible
-// but no longer competes with the focused panel).
+// selected message row. The focused row uses the same muted mix as the
+// unfocused "shadow" (TextMuted into the background). A theme can still
+// set selection_bg_focused to something louder. The pane border, not a
+// green row, shows which pane is focused.
 func SelectionTintColor(focused bool) color.Color {
 	if focused {
 		if selectionBgFocused == nil {
-			selectionBgFocused = mixColors(Accent, ThemeBackground(), defaultTintAlpha)
+			selectionBgFocused = mixColors(TextMuted, ThemeBackground(), defaultTintAlpha)
 		}
 		return selectionBgFocused
 	}

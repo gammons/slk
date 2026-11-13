@@ -232,7 +232,9 @@ func TestThemeCycleKeys(t *testing.T) {
 					c.SetValue("hello")
 					_ = c.Focus()
 					c.RefreshStyles()
-					if v := c.View(80, true); !strings.Contains(v, darkSurfaceDarkBG) {
+					// Unfocused: the stored textarea fill is SurfaceDark.
+					// Focused View paints ComposeInsertBG on top of that.
+					if v := c.View(80, false); !strings.Contains(v, darkSurfaceDarkBG) {
 						t.Fatalf("precondition: compose does not render Dark's SurfaceDark: %q", v)
 					}
 				}
@@ -241,7 +243,7 @@ func TestThemeCycleKeys(t *testing.T) {
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
 				for i, c := range []*compose.Model{&a.compose, &a.threadCompose} {
-					v := c.View(80, true)
+					v := c.View(80, false)
 					if strings.Contains(v, darkSurfaceDarkBG) || !strings.Contains(v, draculaSurfaceDarkBG) {
 						t.Errorf("compose %d still renders Dark's SurfaceDark, want Dracula's: %q", i, v)
 					}

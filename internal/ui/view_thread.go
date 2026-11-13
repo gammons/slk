@@ -37,12 +37,17 @@ func (a *App) renderThreadRegion(frame panelLayoutFrame, themeVer int64) string 
 	threadWidth := frame.ThreadWidth
 	threadBorder := frame.ThreadBorder
 
-	threadFocused := a.focusedPanel == PanelThread && a.mode != ModeInsert
+	// The pane keeps its focused border in insert mode. The cursor
+	// highlight is hidden separately, below.
+	threadFocused := a.focusedPanel == PanelThread
 	// Push focus into the thread panel so the selected-reply "▌"
 	// border dims when unfocused. MUST happen BEFORE the
 	// panelCache hit-check (the cache key includes Version, which
 	// SetFocused bumps via dirty()).
 	a.threadPanel.SetFocused(threadFocused)
+	// Insert mode hides the cursor highlight here too, whether or not
+	// this pane is the one being typed in. The index stays.
+	a.threadPanel.SetCursorHighlight(a.mode != ModeInsert)
 	threadComposeFocused := a.mode == ModeInsert && a.focusedPanel == PanelThread
 	threadLayoutKey := themeVer<<2 | boolToInt(threadFocused)<<1 | boolToInt(threadComposeFocused)
 	a.threadCompose.SetWidth(threadWidth - 2)
