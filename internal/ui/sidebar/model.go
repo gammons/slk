@@ -526,6 +526,22 @@ func (m *Model) UnreadChannelCount() int {
 	return count
 }
 
+// UnreadChannelIDs returns the IDs of the channels UnreadChannelCount
+// counts, so other views can agree with the sidebar's unread dots.
+func (m *Model) UnreadChannelIDs() map[string]bool {
+	ids := map[string]bool{}
+	if m.readStateReader == nil {
+		return ids
+	}
+	state := m.readStateReader()
+	for _, item := range m.items {
+		if item.IsVisiblyUnread(state[item.ID]) && !m.hidesPeer(item) {
+			ids[item.ID] = true
+		}
+	}
+	return ids
+}
+
 // hidesPeer reports whether item is a DM or app row whose peer is
 // deactivated and so stays hidden, whatever its read state. The active
 // conversation is the one exemption.
