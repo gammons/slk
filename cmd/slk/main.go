@@ -408,17 +408,51 @@ func run() error {
 	// Detect image rendering protocol BEFORE constructing the avatar
 	// cache so the cache can pick the right rendering path (kitty
 	// graphics for sharp pixels, halfblock otherwise).
-	proto := imgpkg.Detect(imgpkg.CaptureEnv(), cfg.Appearance.ImageProtocol)
+	termEnv := imgpkg.CaptureEnv()
+	proto := imgpkg.Detect(termEnv, cfg.Appearance.ImageProtocol)
 	debuglog.ImgRender("image protocol detect: cfg=%q result=%s", cfg.Appearance.ImageProtocol, proto)
 
+	// Kitty placement: who turns placeholder cells into pixels. On a
+	// terminal with kitty graphics but no unicode placeholders (WezTerm)
+	// slk paints direct placements itself, which needs a cell size the
+	// terminal knows: WezTerm refuses images without one, and its last
+	// stable release can crash. So the cell size is measured here,
+	// before the kitty probe, and kept for image encoding below. Without
+	// one, fall back to the protocol such a terminal had before
+	// emulation existed (sixel in auto mode).
+	placement := imgpkg.KittyNative
+	var pxW, pxH int // set here for emulated placement, else further down
+	if proto == imgpkg.ProtoKitty {
+		placement = imgpkg.ChooseKittyPlacement(termEnv, cfg.Appearance.KittyPlacement)
+		if placement == imgpkg.KittyEmulated {
+			var measured bool
+			pxW, pxH, measured = startupCellPixels(proto)
+			usable := measured && emulationAllowed(runtime.GOOS, cfg.Appearance.KittyPlacement)
+			proto, placement = emulatedPlacementIfMeasured(usable, imgpkg.IsAutoProtocol(cfg.Appearance.ImageProtocol))
+			switch {
+			case !measured:
+				debuglog.ImgRender("kitty emulated placement needs a measured cell size; using %s", proto)
+			case !usable:
+				debuglog.ImgRender("kitty emulated placement is not tried on %s unless set; using %s", runtime.GOOS, proto)
+			}
+		}
+		debuglog.ImgRender("kitty placement: cfg=%q result=%s", cfg.Appearance.KittyPlacement, placement)
+	}
+
 	// Optional: run kitty version probe if detected as kitty AND stdin is a TTY.
-	// Must happen BEFORE bubbletea takes over the terminal.
+	// Must happen BEFORE bubbletea takes over the terminal. Emulated
+	// placement probes with a query: WezTerm does not answer the upload
+	// ProbeKittyGraphics sends.
 	if proto == imgpkg.ProtoKitty && term.IsTerminal(int(os.Stdin.Fd())) {
 		state, err := term.MakeRaw(int(os.Stdin.Fd()))
 		if err != nil {
 			debuglog.ImgRender("kitty probe skipped: cannot enter raw mode: %v", err)
 		} else {
-			ok := imgpkg.ProbeKittyGraphics(os.Stdout, os.Stdin, 200*time.Millisecond)
+			probe := imgpkg.ProbeKittyGraphics
+			if placement == imgpkg.KittyEmulated {
+				probe = imgpkg.ProbeKittyQuery
+			}
+			ok := probe(os.Stdout, os.Stdin, 200*time.Millisecond)
 			if rerr := term.Restore(int(os.Stdin.Fd()), state); rerr != nil {
 				debuglog.ImgRender("term restore after kitty probe: %v", rerr)
 			}
@@ -460,6 +494,14 @@ func run() error {
 		}
 	}
 	debuglog.ImgRender("image protocol: %s", proto)
+	// Record the placement mode before anything can upload (the avatar
+	// cache below, the first View). A probe that downgraded kitty takes
+	// emulation with it.
+	if proto != imgpkg.ProtoKitty {
+		placement = imgpkg.KittyNative
+	}
+	imgpkg.SetKittyPlacement(placement)
+	debuglog.ImgRender("kitty placement: %s", placement)
 
 	// Reconcile the emoji-as-images flag with the post-probe protocol.
 	// The pre-probe block in main() (search for emojiwidth.SetImageMode)
@@ -490,7 +532,10 @@ func run() error {
 	// absolute raster dimensions; kitty places by cell but uses them to
 	// transmit enough source pixels for the terminal's native cell
 	// resolution. See startupCellPixels for where the size comes from.
-	pxW, pxH := startupCellPixels(proto)
+	// Emulated kitty placement measured it already, above.
+	if pxW == 0 {
+		pxW, pxH, _ = startupCellPixels(proto)
+	}
 	debuglog.ImgRender("cell pixels: %dx%d", pxW, pxH)
 	imgpkg.SetCellPixels(pxW, pxH)
 

@@ -21,7 +21,9 @@ const (
 	ProtoHalfBlock
 	// ProtoSixel uses the DEC sixel protocol.
 	ProtoSixel
-	// ProtoKitty uses the kitty graphics protocol with unicode placeholders.
+	// ProtoKitty uses the kitty graphics protocol with unicode
+	// placeholders, resolved by the terminal or, on terminals without
+	// them, by slk (see KittyPlacement).
 	ProtoKitty
 )
 

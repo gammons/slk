@@ -109,6 +109,14 @@ type Appearance struct {
 	// ImageProtocol controls how inline images are rendered.
 	// One of: "auto", "kitty", "sixel", "halfblock", "off".
 	ImageProtocol string `toml:"image_protocol"`
+	// KittyPlacement says who turns kitty image placeholders into
+	// pixels when the protocol is kitty: "native" (the terminal, as on
+	// kitty and Ghostty), "emulated" (slk paints direct placements, for
+	// terminals with kitty graphics but no unicode placeholders, such
+	// as WezTerm), or "auto" (default: emulated on WezTerm, native
+	// elsewhere). Always native under tmux or zellij. Clamped to those
+	// three at load time.
+	KittyPlacement string `toml:"kitty_placement"`
 	// MaxImageRows caps the height of inline images in terminal rows.
 	MaxImageRows int `toml:"max_image_rows"`
 	// MaxImageCols caps the width of inline images in terminal columns.
@@ -284,6 +292,7 @@ func Default() Config {
 			ShowAvatars:     true,
 			ThreadAvatars:   true,
 			ImageProtocol:   "auto",
+			KittyPlacement:  "auto",
 			MaxImageRows:    20,
 			MaxImageCols:    60,
 			MouseWheelLines: 3,
@@ -351,6 +360,16 @@ func Load(path string) (Config, error) {
 	// (unset) and any unrecognized value fall back to "on".
 	if cfg.Appearance.EmojiImages != "on" && cfg.Appearance.EmojiImages != "off" {
 		cfg.Appearance.EmojiImages = "on"
+	}
+
+	// Clamp KittyPlacement to {"auto", "native", "emulated"}, ignoring
+	// case and spaces. Empty (unset) and any unrecognized value fall
+	// back to "auto".
+	switch p := strings.ToLower(strings.TrimSpace(cfg.Appearance.KittyPlacement)); p {
+	case "auto", "native", "emulated":
+		cfg.Appearance.KittyPlacement = p
+	default:
+		cfg.Appearance.KittyPlacement = "auto"
 	}
 
 	// Expand a leading "~" in download_dir against the real home

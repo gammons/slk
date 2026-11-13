@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/gammons/slk/internal/core"
 	slkemoji "github.com/gammons/slk/internal/emoji"
 	imgpkg "github.com/gammons/slk/internal/image"
@@ -191,6 +193,48 @@ func TestViewOverlayPreservesKittyPlacementSGR(t *testing.T) {
 			}
 			t.Logf("overlay 38;2 SGR found: %q", overlaid[start:end])
 			idx = end
+		}
+	}
+}
+
+// Kitty emulated placement resolves placeholders from the final frame,
+// so whatever the picker's overlay produces must decode to images at
+// the cells holding them: every placeholder pair becomes one 2x1 image
+// with the picker's image ID, and none is left in the frame.
+func TestViewOverlayPlaceholdersResolve(t *testing.T) {
+	slkemoji.SetImageMode(true, 2)
+	t.Cleanup(func() { slkemoji.SetImageMode(false, 2) })
+
+	placement := "\x1b[38;2;0;0;42m\U0010EEEE̅̅\U0010EEEE̅̍\x1b[39m"
+	thumbURL := slkemoji.CDNBaseURL + "1f44d.png"
+	ff := newFakePickerFetcher()
+	ff.setPrerendered(slkemoji.EmojiCacheKey(thumbURL), goimage.Pt(2, 1), imgpkg.Render{
+		Cells: goimage.Pt(2, 1),
+		Lines: []string{placement},
+	})
+	m := New()
+	m.Open("C123", "1234.5678", nil)
+	m.SetEmojiContext(EmojiContext{PlaceCtx: slkemoji.PlaceContext{Fetcher: ff}, Cells: 2})
+	for _, ch := range "thumbsup" {
+		m.HandleKey(string(ch))
+	}
+
+	background := strings.Repeat(strings.Repeat(" ", 120)+"\n", 30)
+	overlaid := m.ViewOverlay(120, 30, background)
+	pairs := strings.Count(overlaid, "\U0010EEEE") / 2
+	if pairs == 0 {
+		t.Fatal("overlay holds no placeholder images; the fixture is broken")
+	}
+	clean, rects := imgpkg.ResolvePlaceholders(overlaid, 120, 30, ansi.WcWidth)
+	if strings.ContainsRune(clean, imgpkg.PlaceholderRune) {
+		t.Error("placeholders left in the resolved frame")
+	}
+	if len(rects) != pairs {
+		t.Fatalf("resolved %d images, want %d (one per placeholder pair)", len(rects), pairs)
+	}
+	for _, r := range rects {
+		if r.ID != 42 || r.Cols != 2 || r.Rows != 1 || r.SrcCol != 0 || r.SrcRow != 0 {
+			t.Errorf("rect %+v, want a whole 2x1 image 42", r)
 		}
 	}
 }

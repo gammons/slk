@@ -262,3 +262,152 @@ func TestSixelPainter_ForceDoesNotResurrectVanishedPlacement(t *testing.T) {
 		t.Fatalf("force with empty want: painted=%d erased=%d, want 0/1", plan.Painted, plan.Erased)
 	}
 }
+
+// kittyPl is a placement that removes itself with its own bytes, like
+// the kitty direct placements of emulated mode.
+func kittyPl(key string, row, col int) SixelPlacement {
+	p := pl(key, row, col, 1, 2)
+	p.Erase = []byte("\x1b_Gdel-" + key + "\x1b\\")
+	return p
+}
+
+// A placement with Erase bytes is removed with them, not with ECH: on
+// WezTerm ECH does not remove a kitty image that has a placement ID,
+// and ECH would also paint the pane background over a reaction pill.
+func TestSixelPainter_ErasesWithPlacementEraseBytes(t *testing.T) {
+	p := NewSixelPainter()
+	applyPlan(t, p, []SixelPlacement{kittyPl("a", 3, 4)}, "\x1b[48;2;1;2;3m", false)
+	plan := applyPlan(t, p, nil, "\x1b[48;2;1;2;3m", false)
+	if got, want := string(plan.Erase), "\x1b_Gdel-a\x1b\\"; got != want {
+		t.Fatalf("erase = %q, want exactly the placement's Erase bytes %q", got, want)
+	}
+}
+
+func TestFrameOutput_RepaintOnScrollForcesRepaintWhenDiffMovesLines(t *testing.T) {
+	var raw bytes.Buffer
+	frames := NewSixelFrameStore()
+	out := NewFrameOutput(&raw, frames)
+	want := []SixelPlacement{kittyPl("a", 3, 4)}
+
+	publish := func(repaintOnScroll bool) uint64 {
+		return frames.Publish(SixelFrame{Placements: want, RepaintOnScroll: repaintOnScroll})
+	}
+	write := func(id uint64, body string) string {
+		t.Helper()
+		raw.Reset()
+		if _, err := out.Write(markedFlush("slk", id, body)); err != nil {
+			t.Fatal(err)
+		}
+		return raw.String()
+	}
+
+	write(publish(true), "first")
+	if got := write(publish(true), "plain diff"); strings.Contains(got, "\x1bPqa") {
+		t.Fatalf("unchanged placement repainted without a scroll: %q", got)
+	}
+	got := write(publish(true), "\x1b[2;20r\x1b[1Sscrolled\x1b[r")
+	del, scroll, paint := strings.Index(got, "\x1b_Gdel-a"), strings.Index(got, "\x1b[1S"), strings.Index(got, "\x1bPqa")
+	if del < 0 || paint < 0 || !(del < scroll && scroll < paint) {
+		t.Fatalf("scrolled frame: want delete, then the scroll, then the paint; got %q", got)
+	}
+	if got := write(publish(false), "\x1b[1Sscrolled"); strings.Contains(got, "\x1bPqa") {
+		t.Fatalf("frame without RepaintOnScroll repainted on a scroll: %q", got)
+	}
+}
+
+// A write that clears the screen or moves lines with no frame plan
+// applied (bubbletea re-entering the alternate screen after the external
+// editor, or a flush whose frame id was already taken) leaves the images
+// somewhere the painter does not know about, so the next frame repaints.
+func TestFrameOutput_RepaintOnScrollAfterMoveWithoutPlan(t *testing.T) {
+	want := []SixelPlacement{kittyPl("a", 3, 4)}
+	for _, tc := range []struct {
+		name string
+		miss func(out *FrameOutput, stale uint64) error
+	}{
+		{"unmarked alternate screen", func(out *FrameOutput, _ uint64) error {
+			_, err := out.Write([]byte("\x1b[?1049h\x1b[2J"))
+			return err
+		}},
+		{"stale frame id", func(out *FrameOutput, stale uint64) error {
+			_, err := out.Write(markedFlush("slk", stale, "\x1b[2Jredrawn"))
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var raw bytes.Buffer
+			frames := NewSixelFrameStore()
+			out := NewFrameOutput(&raw, frames)
+			first := frames.Publish(SixelFrame{Placements: want, RepaintOnScroll: true})
+			if _, err := out.Write(markedFlush("slk", first, "first")); err != nil {
+				t.Fatal(err)
+			}
+			if err := tc.miss(out, first); err != nil {
+				t.Fatal(err)
+			}
+			raw.Reset()
+			next := frames.Publish(SixelFrame{Placements: want, RepaintOnScroll: true})
+			if _, err := out.Write(markedFlush("slk", next, "plain diff")); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(raw.String(), "\x1bPqa") {
+				t.Fatalf("frame after the missed clear did not repaint: %q", raw.String())
+			}
+			raw.Reset()
+			again := frames.Publish(SixelFrame{Placements: want, RepaintOnScroll: true})
+			if _, err := out.Write(markedFlush("slk", again, "plain diff")); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(raw.String(), "\x1bPqa") {
+				t.Fatalf("repaint repeated after it was done: %q", raw.String())
+			}
+		})
+	}
+}
+
+// Without RepaintOnScroll (sixel) an unmarked clear changes nothing.
+func TestFrameOutput_NoRepaintOnScrollIgnoresMoveWithoutPlan(t *testing.T) {
+	var raw bytes.Buffer
+	frames := NewSixelFrameStore()
+	out := NewFrameOutput(&raw, frames)
+	want := []SixelPlacement{kittyPl("a", 3, 4)}
+	if _, err := out.Write(markedFlush("slk", frames.Publish(SixelFrame{Placements: want}), "first")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := out.Write([]byte("\x1b[?1049h\x1b[2J")); err != nil {
+		t.Fatal(err)
+	}
+	raw.Reset()
+	if _, err := out.Write(markedFlush("slk", frames.Publish(SixelFrame{Placements: want}), "plain diff")); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(raw.String(), "\x1bPqa") {
+		t.Fatalf("sixel frame repainted after an unmarked clear: %q", raw.String())
+	}
+}
+
+func TestDiffMovesLines(t *testing.T) {
+	cases := []struct {
+		diff string
+		want bool
+	}{
+		{"\x1b[3S", true},     // SU
+		{"\x1b[T", true},      // SD
+		{"\x1b[2L", true},     // IL
+		{"\x1b[M", true},      // DL
+		{"\x1b[5;20r", true},  // DECSTBM
+		{"\x1b[2J", true},     // ED
+		{"\x1b[?1049h", true}, // alternate screen
+		{"\x1b[?1049l", true},
+		{"\x1b[5;7H\x1b[38;2;1;2;3mtext\x1b[0m", false}, // CUP, SGR
+		{"\x1b[K\x1b[3X\x1b[2P\x1b[4@", false},          // EL, ECH, DCH, ICH stay on their line
+		{"\x1b[?2026h\x1b[?25l\x1b[?2026l", false},      // other private modes
+		{"\x1b[?1;2;3S", false},                         // XTSMGRAPHICS, not SU
+		{"no escapes at all", false},
+	}
+	for _, tc := range cases {
+		if got := diffMovesLines([]byte(tc.diff)); got != tc.want {
+			t.Errorf("diffMovesLines(%q) = %v, want %v", tc.diff, got, tc.want)
+		}
+	}
+}

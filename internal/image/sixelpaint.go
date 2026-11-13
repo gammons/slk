@@ -37,6 +37,14 @@ type SixelPlacement struct {
 	// consider the image current and never repaint it: the image
 	// disappears permanently.
 	Guard string
+
+	// Erase, when set, removes this placement from the terminal in
+	// place of the default ECH over its cells. Kitty direct placements
+	// (KittyEmulated) need it: on WezTerm an image with a placement ID
+	// survives text and ECH written over its cells, so only an explicit
+	// delete takes it away. Like ECH it is emitted before the frame's
+	// text diff.
+	Erase []byte
 }
 
 // PlacementKey derives the content identity for a placement. identity is
@@ -213,7 +221,14 @@ func writeSixelAt(w io.Writer, pl SixelPlacement) {
 // eraseSGR is applied first and reset afterwards: ECH clears to the
 // current background, so without it the cleared region shows the
 // terminal default instead of the pane colour.
+//
+// A placement that carries its own Erase bytes is removed with those
+// instead, and the cells and the cursor are left alone.
 func writeErase(w io.Writer, pl SixelPlacement, eraseSGR string) {
+	if len(pl.Erase) > 0 {
+		w.Write(pl.Erase)
+		return
+	}
 	fmt.Fprint(w, "\x1b7")
 	if eraseSGR != "" {
 		fmt.Fprint(w, eraseSGR)

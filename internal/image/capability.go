@@ -14,6 +14,7 @@ import (
 // Captured separately so tests can inject values without touching os.Getenv.
 type Env struct {
 	TMUX          string
+	Zellij        string
 	KittyWindowID string
 	Term          string
 	TermProgram   string
@@ -24,6 +25,7 @@ type Env struct {
 func CaptureEnv() Env {
 	return Env{
 		TMUX:          getenv("TMUX"),
+		Zellij:        getenv("ZELLIJ"),
 		KittyWindowID: getenv("KITTY_WINDOW_ID"),
 		Term:          getenv("TERM"),
 		TermProgram:   getenv("TERM_PROGRAM"),
@@ -80,11 +82,16 @@ func IsAutoProtocol(cfg string) bool {
 // times out and the caller downgrades to halfblock.
 //
 // Only kitty and ghostty outer terminals get kitty under tmux. WezTerm
-// is left out on purpose: it acknowledges kitty graphics uploads but
-// has no unicode-placeholder support (U+10EEEE cells, a=T,U=1), which
-// the kitty renderer depends on, so the upload is drawn at the cursor
-// and the placeholders print as tofu. A "wezterm" client_termname
-// falls through to halfblock like any other unknown outer terminal.
+// is left out on purpose: it speaks kitty graphics but has no
+// unicode-placeholder support (U+10EEEE cells, a=T,U=1), so a native
+// upload is drawn at the cursor and the placeholders print as tofu, and
+// the emulated placement slk uses for WezTerm outside tmux cannot work
+// through a multiplexer (see ChooseKittyPlacement). A "wezterm"
+// client_termname falls through to halfblock like any other unknown
+// outer terminal.
+//
+// Outside a multiplexer, auto picks kitty for TERM_PROGRAM=WezTerm, and
+// ChooseKittyPlacement then makes its placement emulated.
 //
 // Sixel under tmux is treated more conservatively: sixel has no
 // equivalent of the kitty graphics ;OK reply, so we can't probe-verify
@@ -132,17 +139,22 @@ func Detect(env Env, cfg string) Protocol {
 	if strings.HasPrefix(env.Term, "foot") || strings.HasPrefix(env.Term, "mlterm") {
 		return ProtoSixel
 	}
-	// iTerm2 and WezTerm both support kitty *graphics*, but not the
-	// unicode-placeholder extension slk's kitty renderer depends on for
-	// placement (see the U=1 note on writeKittySequence / kitty.go) —
-	// iTerm2 because its kitty implementation is partial and fails the
-	// startup probe, WezTerm because it answers the probe but then
-	// prints the placeholder codepoints as literal glyphs. Both have
-	// solid sixel support, so auto picks sixel for real pixels instead
-	// of the halfblock mosaic the failed kitty probe would otherwise
-	// fall back to.
 	switch env.TermProgram {
-	case "iTerm.app", "WezTerm":
+	case "WezTerm":
+		// WezTerm speaks kitty graphics but has no unicode placeholders,
+		// so it runs kitty with emulated placement (ChooseKittyPlacement):
+		// slk resolves the placeholder cells itself and paints direct
+		// placements. Under zellij emulation is off, so keep the sixel
+		// this case always picked there.
+		if env.Zellij != "" {
+			return ProtoSixel
+		}
+		return ProtoKitty
+	case "iTerm.app":
+		// iTerm2's kitty graphics implementation is partial and fails
+		// the startup probe, but its sixel support is solid, so auto
+		// picks sixel for real pixels instead of the halfblock mosaic
+		// the failed kitty probe would otherwise fall back to.
 		return ProtoSixel
 	}
 	return ProtoHalfBlock

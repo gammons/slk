@@ -150,13 +150,9 @@ func TestDetect_Sixel(t *testing.T) {
 		// but it does support sixel — real pixels instead of the
 		// halfblock mosaic.
 		{TermProgram: "iTerm.app"},
-		// WezTerm answers the kitty capability probe (it does support
-		// kitty *graphics*) but has no U=1 placeholder support, so the
-		// placeholder codepoints render as literal glyphs. Routing it
-		// to kitty and letting the probe downgrade it was the old
-		// behavior; that downgrade path lands on halfblock, which is
-		// what motivates going straight to sixel here instead.
-		{TermProgram: "WezTerm"},
+		// WezTerm runs kitty with emulated placement, except under
+		// zellij, where emulation is off and sixel stays.
+		{TermProgram: "WezTerm", Zellij: "0"},
 	}
 	for _, env := range cases {
 		if got := Detect(env, "auto"); got != ProtoSixel {
@@ -201,5 +197,18 @@ func TestDetect_AutoUnknownConfigDefaultsToAuto(t *testing.T) {
 	}
 	if got := Detect(Env{Term: "xterm-kitty"}, "bogus"); got != ProtoKitty {
 		t.Errorf("unknown cfg should be auto, got %v", got)
+	}
+}
+
+// WezTerm speaks kitty graphics without unicode placeholders, so auto
+// picks kitty for it and ChooseKittyPlacement makes the placement
+// emulated.
+func TestDetect_WezTermIsKitty(t *testing.T) {
+	env := Env{TermProgram: "WezTerm", Term: "xterm-256color"}
+	if got := Detect(env, "auto"); got != ProtoKitty {
+		t.Errorf("want kitty, got %v", got)
+	}
+	if got := ChooseKittyPlacement(env, "auto"); got != KittyEmulated {
+		t.Errorf("placement: want emulated, got %v", got)
 	}
 }
