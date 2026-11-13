@@ -89,7 +89,8 @@ untouched.
 ## Multiple workspaces
 
 You can add as many workspaces as you like by running `slk --add-workspace`
-again. They all stay connected in parallel for live unread badges. Use
+again. They all stay connected in parallel for live unread badges: a dot
+left of a workspace's initials, in the rail and in the `:ws` picker. Use
 `:ws` for the picker, or `1`–`9` to jump directly. Configure rail order
 and per-workspace settings in [[Configuration]].
 

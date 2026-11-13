@@ -1777,6 +1777,8 @@ func scrollFlushTickCmd() tea.Cmd {
 
 func (a *App) handleDown() tea.Cmd {
 	switch a.focusedPanel {
+	case PanelWorkspace:
+		a.workspaceRail.MoveCursor(+1)
 	case PanelSidebar:
 		a.sidebar.MoveDown()
 	case PanelMessages:
@@ -1799,6 +1801,8 @@ func (a *App) handleDown() tea.Cmd {
 
 func (a *App) handleUp() tea.Cmd {
 	switch a.focusedPanel {
+	case PanelWorkspace:
+		a.workspaceRail.MoveCursor(-1)
 	case PanelSidebar:
 		a.sidebar.MoveUp()
 	case PanelMessages:
@@ -1919,6 +1923,8 @@ func (a *App) flushScrollCoalesce() tea.Cmd {
 // the channel one fetch at a time.
 func (a *App) handleGoToTop() tea.Cmd {
 	switch a.focusedPanel {
+	case PanelWorkspace:
+		a.workspaceRail.SetCursor(0)
 	case PanelSidebar:
 		a.sidebar.GoToTop()
 	case PanelMessages:
@@ -1941,6 +1947,8 @@ func (a *App) handleGoToTop() tea.Cmd {
 
 func (a *App) handleGoToBottom() tea.Cmd {
 	switch a.focusedPanel {
+	case PanelWorkspace:
+		a.workspaceRail.SetCursor(len(a.workspaceItems) - 1)
 	case PanelSidebar:
 		a.sidebar.GoToBottom()
 	case PanelMessages:
@@ -2085,6 +2093,20 @@ func (a *App) openQuitConfirm() {
 }
 
 func (a *App) handleEnter() tea.Cmd {
+	if a.focusedPanel == PanelWorkspace {
+		// Switch to the workspace under the rail cursor. Focus goes to
+		// the messages pane, where every switch (1-9, :ws, a click)
+		// leaves it once the workspace's last channel opens. A refused
+		// switch (upload in progress) leaves focus in the rail.
+		if a.compose.Uploading() || a.threadCompose.Uploading() {
+			return toastWithClear(a, "Upload in progress", 2*time.Second)
+		}
+		a.focusedPanel = PanelMessages
+		if id := a.workspaceRail.CursorID(); id != "" && a.workspaceSvc != nil && id != a.workspaceRail.SelectedID() {
+			return a.switchWorkspace(id)
+		}
+		return nil
+	}
 	if a.focusedPanel == PanelSidebar {
 		if a.sidebar.IsThreadsSelected() {
 			return func() tea.Msg { return ThreadsViewActivatedMsg{} }
@@ -2411,6 +2433,15 @@ func (a *App) clearSelections() {
 func (a *App) FocusNext() {
 	a.cancelEdit()
 	a.clearSelections()
+	if a.focusedPanel == PanelWorkspace {
+		// Out of the rail: into the sidebar, or the messages pane when
+		// the sidebar was hidden while the rail had focus.
+		a.focusedPanel = PanelMessages
+		if a.sidebarVisible {
+			a.focusedPanel = PanelSidebar
+		}
+		return
+	}
 	if !a.sidebarVisible {
 		if a.threadVisible {
 			if a.focusedPanel == PanelMessages {
@@ -2438,6 +2469,15 @@ func (a *App) FocusNext() {
 func (a *App) FocusPrev() {
 	a.cancelEdit()
 	a.clearSelections()
+	if a.focusedPanel == PanelWorkspace {
+		// Back from the rail wraps to the right-most pane, as it does
+		// from the sidebar.
+		a.focusedPanel = PanelMessages
+		if a.threadVisible {
+			a.focusedPanel = PanelThread
+		}
+		return
+	}
 	if !a.sidebarVisible {
 		if a.threadVisible {
 			if a.focusedPanel == PanelThread {
@@ -2459,6 +2499,23 @@ func (a *App) FocusPrev() {
 		a.focusedPanel = PanelSidebar
 	case PanelThread:
 		a.focusedPanel = PanelMessages
+	}
+}
+
+// FocusLeft is h: FocusPrev, except that the workspace rail is the left
+// edge. From the sidebar h moves into the rail (its cursor on the active
+// workspace) and stops there; l or Tab leaves it. Tab/shift+tab keep
+// cycling the panes without the rail.
+func (a *App) FocusLeft() {
+	switch {
+	case a.focusedPanel == PanelWorkspace:
+	case a.focusedPanel == PanelSidebar && a.sidebarVisible && !a.fullscreen && len(a.workspaceItems) > 0:
+		a.cancelEdit()
+		a.clearSelections()
+		a.workspaceRail.ResetCursor()
+		a.focusedPanel = PanelWorkspace
+	default:
+		a.FocusPrev()
 	}
 }
 
@@ -2828,13 +2885,21 @@ func (a *App) SetWorkspaces(items []workspace.WorkspaceItem) {
 	a.workspaceRail.SetItems(items)
 	a.workspaceRail.RefreshUnreads()
 	a.workspaceItems = items
-	// Update workspace finder items
+	a.syncWorkspaceFinder()
+}
+
+// syncWorkspaceFinder rebuilds the workspace finder's items from the
+// rail, carrying its unread flags. Like the rail, the active workspace
+// never shows a dot: its unreads are already in the sidebar.
+func (a *App) syncWorkspaceFinder() {
+	active := a.workspaceRail.SelectedID()
 	var finderItems []workspacefinder.Item
-	for _, ws := range items {
+	for _, ws := range a.workspaceRail.Items() {
 		finderItems = append(finderItems, workspacefinder.Item{
-			ID:       ws.ID,
-			Name:     ws.Name,
-			Initials: ws.Initials,
+			ID:        ws.ID,
+			Name:      ws.Name,
+			Initials:  ws.Initials,
+			HasUnread: ws.HasUnread && ws.ID != active,
 		})
 	}
 	a.workspaceFinder.SetItems(finderItems)
@@ -4293,6 +4358,7 @@ func (a *App) beginEditOfSelected() tea.Cmd {
 func (a *App) notifyReadStateChanged() {
 	a.sidebar.Invalidate()
 	a.workspaceRail.RefreshUnreads()
+	a.syncWorkspaceFinder()
 	active := a.sidebar.UnreadChannelCount()
 	other := a.workspaceRail.OtherUnreadCount(a.activeTeamID)
 	name := a.workspaceRail.NameByID(a.activeTeamID)
