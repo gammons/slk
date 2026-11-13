@@ -37,6 +37,7 @@ type Model struct {
 	threadTS         string
 	selected         int
 	focused          bool
+	hideCursor       bool // selected-row tint and bar hidden; the cursor index stays
 	coloredUsernames bool
 	compact          bool
 	showAvatars      bool
@@ -580,6 +581,18 @@ func (m *Model) SetFocused(focused bool) {
 	}
 }
 
+// SetCursorHighlight shows or hides the selected-row tint and bar.
+// Hiding does not move the cursor. A change bumps Version so the
+// App's pane cache does not keep the previous frame.
+func (m *Model) SetCursorHighlight(on bool) {
+	hide := !on
+	if m.hideCursor == hide {
+		return
+	}
+	m.hideCursor = hide
+	m.dirty()
+}
+
 // Focused returns whether the thread panel has focus.
 func (m *Model) Focused() bool {
 	return m.focused
@@ -1023,6 +1036,17 @@ func (m *Model) selectedLines(i int) []string {
 	})
 }
 
+// cursorLines is what Layout draws for the cursor entry: the selected
+// variant, or the plain row while the highlight is hidden. The parent
+// row is already rendered for the current flag, so its Lines are used
+// either way (see selectedLines).
+func (m *Model) cursorLines(i int) []string {
+	if m.hideCursor {
+		return m.list.Entries()[i].Lines
+	}
+	return m.selectedLines(i)
+}
+
 // ScrollHintForDrag returns -1 if the cursor is within 1 row of the top
 // edge of the scrolling content, +1 if within 1 row of the bottom, else 0.
 // The incoming viewportY is pane-local; a cursor on the chrome counts as
@@ -1127,7 +1151,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// the rule under it. The rule is not selectable text (Plain stops
 	// before it). Its image hits are kept for previews; reaction hits
 	// remain omitted.
-	parentIsSelected := m.selected == parentSelected
+	parentIsSelected := !m.hideCursor && m.selected == parentSelected
 	parentRendered := m.renderMessage(m.parent, width, parentIsSelected)
 	// The parent bypasses the reply cache and its upload loop. Flush its
 	// groups in draw order even when the thread has no replies. Kitty
@@ -1371,7 +1395,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// Snap to the cursor if it moved, slice the window, translate the
 	// reply hits (content-relative), overlay the selection, draw the
 	// scrollbar.
-	frame := m.list.Layout(m.selected, m.selectedLines)
+	frame := m.list.Layout(m.selected, m.cursorLines)
 	rows := m.list.Compose(frame, "", "", applySelection)
 	m.layoutValid = true
 	return fitHeight(chrome+"\n"+strings.Join(rows, "\n"), height)

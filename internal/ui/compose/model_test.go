@@ -3,6 +3,7 @@ package compose
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 	"testing"
 
@@ -971,11 +972,9 @@ func composeInsertBgRGB(t *testing.T) (uint8, uint8, uint8) {
 	return uint8(r >> 8), uint8(g >> 8), uint8(b >> 8)
 }
 
-// TestView_FocusedRendersComposeInsertBackground asserts that when
-// the compose box is focused, its rendered output contains the
-// ComposeInsertBG tint as an ANSI background code. Guards against
-// regressions where ComposeInsert loses its Background() call.
-func TestView_FocusedRendersComposeInsertBackground(t *testing.T) {
+// TestView_FocusedDoesNotUseComposeInsertBackground: the focused box
+// keeps the unfocused fill. Insert mode used to paint ComposeInsertBG.
+func TestView_FocusedDoesNotUseComposeInsertBackground(t *testing.T) {
 	styles.Apply("dark", config.Theme{})
 	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
 
@@ -984,8 +983,8 @@ func TestView_FocusedRendersComposeInsertBackground(t *testing.T) {
 
 	r, g, b := composeInsertBgRGB(t)
 	expected := fmtRGBBg(r, g, b)
-	if !strings.Contains(out, expected) {
-		t.Fatalf("focused compose output missing tint bg %q\nraw=%q",
+	if strings.Contains(out, expected) {
+		t.Fatalf("focused compose output still tints with %q\nraw=%q",
 			expected, out)
 	}
 }
@@ -1005,6 +1004,69 @@ func TestView_UnfocusedDoesNotUseComposeInsertBackground(t *testing.T) {
 	if strings.Contains(out, expected) {
 		t.Fatalf("unfocused compose output unexpectedly contains tint bg %q\nraw=%q",
 			expected, out)
+	}
+}
+
+// sgrChannel is the 38;2 / 48;2 fragment lipgloss emits for c.
+func sgrChannel(ground string, c color.Color) string {
+	r, g, b, _ := c.RGBA()
+	return ground + ";2;" + itoaU8(uint8(r>>8)) + ";" + itoaU8(uint8(g>>8)) + ";" + itoaU8(uint8(b>>8))
+}
+
+// borderHead is the rendered line through its left-border ▌, SGR included.
+func borderHead(line string) string {
+	i := strings.Index(line, "▌")
+	if i < 0 {
+		return ""
+	}
+	return line[:i+len("▌")]
+}
+
+// TestComposeBorderMatchesWhenFocused: insert mode (focused) used to
+// recolor the compose border (gray ▌ to Accent) and tint the box.
+// The border, including that ▌, now matches the unfocused box. The ▌
+// stays on every line, in a foreground that is not its own background,
+// so the bar is still drawn.
+func TestComposeBorderMatchesWhenFocused(t *testing.T) {
+	styles.Apply("dark", config.Theme{})
+	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
+
+	m := New("general")
+	m.SetValue("hello")
+	focused := m.View(40, true)
+	unfocused := m.View(40, false)
+
+	fLines := strings.Split(focused, "\n")
+	uLines := strings.Split(unfocused, "\n")
+	if len(fLines) != len(uLines) {
+		t.Fatalf("focused box is %d lines, unfocused is %d", len(fLines), len(uLines))
+	}
+	for i := range fLines {
+		fh, uh := borderHead(fLines[i]), borderHead(uLines[i])
+		if fh == "" || uh == "" {
+			t.Fatalf("line %d lost its ▌\nfocused: %q\nunfocused: %q", i, fLines[i], uLines[i])
+		}
+		if fh != uh {
+			t.Fatalf("line %d border differs between modes\nfocused:   %q\nunfocused: %q", i, fh, uh)
+		}
+	}
+
+	head := borderHead(fLines[0])
+	accent := sgrChannel("38", styles.Accent)
+	border := sgrChannel("38", styles.Border)
+	if strings.Contains(head, accent) {
+		t.Fatalf("focused border uses Accent %s; want the same %s as normal mode\n%q", accent, border, head)
+	}
+	if !strings.Contains(head, border) {
+		t.Fatalf("border foreground %s missing from %q", border, head)
+	}
+	fill := sgrChannel("48", styles.SurfaceDark)
+	if !strings.Contains(head, fill) {
+		t.Fatalf("border background %s missing from %q", fill, head)
+	}
+	// The ▌ is visible only when its foreground is not the cell's background.
+	if strings.TrimPrefix(border, "38") == strings.TrimPrefix(fill, "48") {
+		t.Fatalf("left ▌ foreground and background are the same color; the bar would be invisible")
 	}
 }
 

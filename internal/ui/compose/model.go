@@ -1653,19 +1653,14 @@ func (m Model) View(width int, focused bool) string {
 		innerWidth = 1
 	}
 
+	// Same border and fill in both modes. Insert mode used to switch to
+	// ComposeInsert, which turned the ▌ Accent and filled the box with
+	// ComposeInsertBG. The ▌ stays the normal border color.
 	var style = styles.ComposeBox.Width(width - 1)
-	if focused {
-		style = styles.ComposeInsert.Width(width - 1)
-	}
 
-	// Pick the inner background to match the outer style: ComposeInsertBG
-	// when focused, SurfaceDark when not. Without this, the textarea's
-	// internal Inline(true) styles only paint behind text and the row's
-	// trailing whitespace shows the WRONG bg.
+	// SurfaceDark matches ComposeBox. The textarea's Inline(true) styles
+	// only paint behind text; this wrapper fills the rest of the row.
 	innerBG := styles.SurfaceDark
-	if focused {
-		innerBG = styles.ComposeInsertBG
-	}
 
 	var content string
 	// If empty and unfocused, render placeholder manually with correct background.
@@ -1677,9 +1672,8 @@ func (m Model) View(width int, focused bool) string {
 			Width(innerWidth).
 			Render(m.input.Placeholder)
 	} else {
-		// Wrap textarea output with full-width tinted background.
-		// The textarea's internal styles use Inline(true) which only covers text,
-		// not the full line width. This wrapper ensures consistent background.
+		// Wrap textarea output with the box fill. The textarea's internal
+		// styles use Inline(true), which only covers text, not the full line.
 		content = lipgloss.NewStyle().
 			Background(innerBG).
 			Foreground(styles.TextPrimary).

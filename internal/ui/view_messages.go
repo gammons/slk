@@ -70,6 +70,10 @@ func (a *App) renderMessagesRegion(frame panelLayoutFrame, themeVer int64, previ
 	// hit-check (the cache key includes Version, which SetFocused
 	// bumps on a flip).
 	a.messagepane.SetFocused(msgFocused)
+	// Insert mode hides the cursor highlight in this pane. The index
+	// stays, and normal mode paints it again. Unfocused normal mode
+	// still dims it, via SetFocused above.
+	a.messagepane.SetCursorHighlight(a.mode != ModeInsert)
 	composeFocused := a.mode == ModeInsert && a.focusedPanel != PanelThread
 	// Mix the view-mode bit into the layout key so a Channels<->
 	// Threads switch invalidates the cached output (the cache is

@@ -13,10 +13,11 @@ import (
 // readable on every built-in theme without overpowering message text.
 const defaultTintAlpha = 0.15
 
-// ComposeInsertBG is the background color used by the compose box when
-// focused (insert mode). Apply() populates this either from a theme's
-// explicit colors.compose_insert_bg, or by mixing Accent into Background
-// at defaultTintAlpha.
+// ComposeInsertBG is the tint insert mode used to paint behind the
+// compose box. Apply() still resolves it, from a theme's
+// colors.compose_insert_bg or by mixing Accent into Background at
+// defaultTintAlpha. The compose box no longer paints it: the box keeps
+// SurfaceDark in both modes, and the left ▌ does not change color.
 var ComposeInsertBG color.Color
 
 // selectionBgFocused / selectionBgUnfocused hold the resolved tint colors
