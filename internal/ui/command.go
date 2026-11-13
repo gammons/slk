@@ -140,6 +140,7 @@ func cmdOnlyWindow(a *App, _ commandArgs) tea.Cmd {
 // cmdWorkspaceFinder opens the workspace finder overlay —
 // the :command replacement for the finder's old ctrl+w binding.
 func cmdWorkspaceFinder(a *App, _ commandArgs) tea.Cmd {
+	a.syncWorkspaceFinder()
 	a.workspaceFinder.Open()
 	a.SetMode(ModeWorkspaceFinder)
 	return nil

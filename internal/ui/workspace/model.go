@@ -92,6 +92,10 @@ func (m *Model) Select(idx int) {
 	}
 }
 
+// Items returns the rail's workspaces with their current HasUnread
+// flags. The slice is the rail's own; callers must not modify it.
+func (m *Model) Items() []WorkspaceItem { return m.items }
+
 func (m *Model) SetItems(items []WorkspaceItem) {
 	m.items = items
 	if m.selected >= len(items) {
@@ -171,12 +175,18 @@ func (m Model) View(height int) string {
 			style = styles.WorkspaceInactive
 		}
 
-		initials := item.Initials
+		// A one-column slot on each side of the tile, the unread dot
+		// in the left one, so every row is the same width with or
+		// without a dot and centering never shifts the initials. The
+		// slots carry the rail background themselves: one after the
+		// tile follows its reset and would otherwise show the
+		// terminal's.
+		slot := styles.PresenceOnline.Background(styles.RailBackground)
+		left := slot.Render(" ")
 		if item.HasUnread && i != m.selected {
-			initials = initials + styles.PresenceOnline.Render("●")
+			left = slot.Render("●")
 		}
-		label := style.Render(initials)
-		rows = append(rows, label)
+		rows = append(rows, left+style.Render(item.Initials)+slot.Render(" "))
 	}
 
 	content := strings.Join(rows, "\n\n")

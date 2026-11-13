@@ -3,6 +3,8 @@ package workspace
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestWorkspaceRailView(t *testing.T) {
@@ -17,6 +19,30 @@ func TestWorkspaceRailView(t *testing.T) {
 	}
 	if !strings.Contains(view, "BI") {
 		t.Error("expected 'BI' in view")
+	}
+}
+
+// TestWorkspaceRailInitialsAligned: the unread dot sits left of the
+// initials and does not move their column.
+func TestWorkspaceRailInitialsAligned(t *testing.T) {
+	m := New([]WorkspaceItem{
+		{ID: "T1", Initials: "AC"},
+		{ID: "T2", Initials: "BI", HasUnread: true},
+		{ID: "T3", Initials: "CD"},
+	}, 0)
+	cols := map[string]int{}
+	for _, line := range strings.Split(ansi.Strip(m.View(10)), "\n") {
+		for _, ini := range []string{"AC", "BI", "CD"} {
+			if i := strings.Index(line, ini); i >= 0 {
+				cols[ini] = len([]rune(line[:i]))
+				if ini == "BI" && !strings.Contains(line[:i], "●") {
+					t.Errorf("unread row %q: dot is not left of the initials", line)
+				}
+			}
+		}
+	}
+	if cols["AC"] != cols["BI"] || cols["BI"] != cols["CD"] {
+		t.Errorf("initials columns differ: %v", cols)
 	}
 }
 

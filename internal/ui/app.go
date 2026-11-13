@@ -2828,13 +2828,21 @@ func (a *App) SetWorkspaces(items []workspace.WorkspaceItem) {
 	a.workspaceRail.SetItems(items)
 	a.workspaceRail.RefreshUnreads()
 	a.workspaceItems = items
-	// Update workspace finder items
+	a.syncWorkspaceFinder()
+}
+
+// syncWorkspaceFinder rebuilds the workspace finder's items from the
+// rail, carrying its unread flags. Like the rail, the active workspace
+// never shows a dot: its unreads are already in the sidebar.
+func (a *App) syncWorkspaceFinder() {
+	active := a.workspaceRail.SelectedID()
 	var finderItems []workspacefinder.Item
-	for _, ws := range items {
+	for _, ws := range a.workspaceRail.Items() {
 		finderItems = append(finderItems, workspacefinder.Item{
-			ID:       ws.ID,
-			Name:     ws.Name,
-			Initials: ws.Initials,
+			ID:        ws.ID,
+			Name:      ws.Name,
+			Initials:  ws.Initials,
+			HasUnread: ws.HasUnread && ws.ID != active,
 		})
 	}
 	a.workspaceFinder.SetItems(finderItems)
@@ -4293,6 +4301,7 @@ func (a *App) beginEditOfSelected() tea.Cmd {
 func (a *App) notifyReadStateChanged() {
 	a.sidebar.Invalidate()
 	a.workspaceRail.RefreshUnreads()
+	a.syncWorkspaceFinder()
 	active := a.sidebar.UnreadChannelCount()
 	other := a.workspaceRail.OtherUnreadCount(a.activeTeamID)
 	name := a.workspaceRail.NameByID(a.activeTeamID)
