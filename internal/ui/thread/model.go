@@ -567,18 +567,18 @@ func (m *Model) UpdateParentInPlace(item messages.MessageItem) bool {
 	return true
 }
 
-// SetFocused sets whether the thread panel has focus. When the value flips
-// the layout is invalidated so the selected reply's "▌" border
-// re-renders with the appropriate color (Accent when focused, TextMuted when
-// not — see styles.SelectionBorderColor).
+// SetFocused sets whether the thread panel has focus. The selected
+// reply's bar is baked into the reply cache, so a flip drops that cache.
+// Otherwise an unfocused thread keeps the color from when it last had
+// focus, and never shows the shadow the channel pane shows.
 func (m *Model) SetFocused(focused bool) {
-	if m.focused != focused {
-		m.focused = focused
-		m.layoutValid = false
-		m.dirty()
-		debuglog.Perf("thread.SetFocused flip focused=%v replies=%d layout=invalidated",
-			focused, len(m.replies))
+	if m.focused == focused {
+		return
 	}
+	m.focused = focused
+	m.InvalidateCache()
+	debuglog.Perf("thread.SetFocused flip focused=%v replies=%d cache=dropped",
+		focused, len(m.replies))
 }
 
 // SetCursorHighlight shows or hides the selected-row tint and bar.
@@ -1271,7 +1271,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// MUST call InvalidateCache() on its mutation path. EnterReactionNav /
 	// ExitReactionNav / ReactionNavLeft / ReactionNavRight all do;
 	// MoveUp/MoveDown call ExitReactionNav before mutating selected.
-	// (SetFocused does not: plan decision P2, a known stale-border bug.)
+	// SetFocused does too, so an unfocused thread picks up the shadow.
 	if m.cache == nil || m.cacheWidth != width || m.cacheReplyLen != len(m.replies) {
 		var perfReason string
 		var perfStart time.Time

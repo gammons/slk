@@ -48,9 +48,9 @@ func TestMixColors_AlphaOneIsForeground(t *testing.T) {
 	}
 }
 
-func TestSelectionTintColor_FocusedIsAccentMix(t *testing.T) {
+func TestSelectionTintColor_FocusedIsTheShadowMix(t *testing.T) {
 	applyTheme(t, "dark", config.Theme{})
-	expected := mixColors(Accent, Background, defaultTintAlpha)
+	expected := mixColors(TextMuted, Background, defaultTintAlpha)
 	got := SelectionTintColor(true)
 	er, eg, eb := rgb(expected)
 	gr, gg, gb := rgb(got)

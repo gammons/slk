@@ -224,24 +224,31 @@ func New(channelName string) Model {
 // RefreshStyles re-applies textarea styles from current theme colors.
 // Call after theme changes.
 func (m *Model) RefreshStyles() {
-	bg := lipgloss.NewStyle().Background(styles.SurfaceDark).Foreground(styles.TextPrimary)
-	s := m.input.Styles()
-	s.Focused.Base = bg
-	s.Focused.Text = bg
-	s.Focused.CursorLine = bg
-	s.Focused.EndOfBuffer = bg
-	s.Focused.Prompt = bg
-	s.Blurred.Base = bg
-	s.Blurred.Text = bg
-	s.Blurred.CursorLine = bg
-	s.Blurred.EndOfBuffer = bg
-	s.Blurred.Prompt = bg
-	s.Focused.Placeholder = bg.Foreground(styles.TextMuted)
-	s.Blurred.Placeholder = bg.Foreground(styles.TextMuted)
-	s.Cursor.Color = styles.TextPrimary
-	m.input.SetStyles(s)
+	m.setInputBackground(styles.SurfaceDark)
 	m.channelPicker.SetStyles(channelPickerStyles())
 	m.dirty()
+}
+
+// setInputBackground paints the textarea, including its text and
+// placeholder, on bg. View uses it so insert mode can fill the text
+// area without storing that color on the model.
+func (m *Model) setInputBackground(bg color.Color) {
+	base := lipgloss.NewStyle().Background(bg).Foreground(styles.TextPrimary)
+	s := m.input.Styles()
+	s.Focused.Base = base
+	s.Focused.Text = base
+	s.Focused.CursorLine = base
+	s.Focused.EndOfBuffer = base
+	s.Focused.Prompt = base
+	s.Blurred.Base = base
+	s.Blurred.Text = base
+	s.Blurred.CursorLine = base
+	s.Blurred.EndOfBuffer = base
+	s.Blurred.Prompt = base
+	s.Focused.Placeholder = base.Foreground(styles.TextMuted)
+	s.Blurred.Placeholder = base.Foreground(styles.TextMuted)
+	s.Cursor.Color = styles.TextPrimary
+	m.input.SetStyles(s)
 }
 
 func (m *Model) SetChannel(name string) {
@@ -1653,17 +1660,21 @@ func (m Model) View(width int, focused bool) string {
 		innerWidth = 1
 	}
 
-	// Insert mode highlights only the left ▌ (Accent). The fill stays
-	// SurfaceDark; ComposeInsert's tinted background is not used.
+	// Insert mode highlights the whole box: the left ▌ and the text
+	// area. Normal mode keeps the gray bar on SurfaceDark.
 	style := styles.ComposeBox
+	innerBG := styles.SurfaceDark
 	if focused {
-		style = style.BorderForeground(styles.Accent)
+		style = styles.ComposeInsert
+		innerBG = styles.ComposeInsertBG
 	}
 	style = style.Width(width - 1)
+	// The copy's textarea, so a focused render fills the glyphs too.
+	// The caller's model keeps the SurfaceDark styles.
+	m.setInputBackground(innerBG)
 
-	// SurfaceDark matches ComposeBox. The textarea's Inline(true) styles
-	// only paint behind text; this wrapper fills the rest of the row.
-	innerBG := styles.SurfaceDark
+	// The textarea's Inline(true) styles only paint behind text; this
+	// wrapper fills the rest of the row with the same background.
 
 	var content string
 	// If empty and unfocused, render placeholder manually with correct background.

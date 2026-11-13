@@ -972,20 +972,30 @@ func composeInsertBgRGB(t *testing.T) (uint8, uint8, uint8) {
 	return uint8(r >> 8), uint8(g >> 8), uint8(b >> 8)
 }
 
-// TestView_FocusedDoesNotUseComposeInsertBackground: the focused box
-// keeps the unfocused fill. Insert mode used to paint ComposeInsertBG.
-func TestView_FocusedDoesNotUseComposeInsertBackground(t *testing.T) {
+// TestView_FocusedFillsTextAreaWithInsertBackground: insert mode paints
+// the text area, not only the ▌, with ComposeInsertBG.
+func TestView_FocusedFillsTextAreaWithInsertBackground(t *testing.T) {
 	styles.Apply("dark", config.Theme{})
 	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
 
 	m := New("general")
+	m.SetValue("hello")
 	out := m.View(60, true /* focused */)
 
 	r, g, b := composeInsertBgRGB(t)
-	expected := fmtRGBBg(r, g, b)
-	if strings.Contains(out, expected) {
-		t.Fatalf("focused compose output still tints with %q\nraw=%q",
-			expected, out)
+	tint := fmtRGBBg(r, g, b)
+	if !strings.Contains(out, tint) {
+		t.Fatalf("focused compose output missing tint %q\nraw=%q", tint, out)
+	}
+	sr, sg, sb, _ := styles.SurfaceDark.RGBA()
+	dark := fmtRGBBg(uint8(sr>>8), uint8(sg>>8), uint8(sb>>8))
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.Contains(line, "hello") {
+			continue
+		}
+		if strings.Contains(line, dark) {
+			t.Fatalf("typed text sits on the unfocused fill %s\n%q", dark, line)
+		}
 	}
 }
 
@@ -1022,10 +1032,9 @@ func borderHead(line string) string {
 	return line[:i+len("▌")]
 }
 
-// TestComposeInsertHighlightsLeftBorderOnly: insert mode (focused)
-// turns the left ▌ Accent and leaves the box fill alone. The tinted
-// ComposeInsert background is not used.
-func TestComposeInsertHighlightsLeftBorderOnly(t *testing.T) {
+// TestComposeInsertHighlightsTheWholeBox: insert mode turns the left ▌
+// Accent and fills the text area with ComposeInsertBG.
+func TestComposeInsertHighlightsTheWholeBox(t *testing.T) {
 	styles.Apply("dark", config.Theme{})
 	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
 
@@ -1048,18 +1057,18 @@ func TestComposeInsertHighlightsLeftBorderOnly(t *testing.T) {
 		if fh == "" || uh == "" {
 			t.Fatalf("line %d lost its ▌\nfocused: %q\nunfocused: %q", i, fLines[i], uLines[i])
 		}
-		if !strings.Contains(fh, accent) || !strings.Contains(fh, fill) {
-			t.Fatalf("line %d focused ▌ = %q, want accent %s on %s", i, fh, accent, fill)
+		if !strings.Contains(fh, accent) || !strings.Contains(fh, tint) {
+			t.Fatalf("line %d focused ▌ = %q, want accent %s on tint %s", i, fh, accent, tint)
 		}
-		if strings.Contains(fh, tint) {
-			t.Fatalf("line %d focused ▌ is tinted %s: %q", i, tint, fh)
-		}
-		if !strings.Contains(uh, border) || strings.Contains(uh, accent) {
-			t.Fatalf("line %d unfocused ▌ = %q, want border %s", i, uh, border)
+		if !strings.Contains(uh, border) || strings.Contains(uh, accent) || !strings.Contains(uh, fill) {
+			t.Fatalf("line %d unfocused ▌ = %q, want border %s on %s", i, uh, border, fill)
 		}
 	}
-	if strings.Contains(focused, tint) {
-		t.Fatalf("focused compose still paints the insert tint %s", tint)
+	if !strings.Contains(focused, tint) {
+		t.Fatalf("focused compose text area missing tint %s", tint)
+	}
+	if strings.Contains(unfocused, tint) {
+		t.Fatalf("unfocused compose paints the insert tint %s", tint)
 	}
 }
 
