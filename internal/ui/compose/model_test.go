@@ -973,7 +973,8 @@ func composeInsertBgRGB(t *testing.T) (uint8, uint8, uint8) {
 }
 
 // TestView_FocusedFillsTextAreaWithInsertBackground: insert mode paints
-// the text area, not only the ▌, with ComposeInsertBG.
+// the text area with the selected-message shadow, not the green
+// ComposeInsertBG mix.
 func TestView_FocusedFillsTextAreaWithInsertBackground(t *testing.T) {
 	styles.Apply("dark", config.Theme{})
 	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
@@ -982,10 +983,15 @@ func TestView_FocusedFillsTextAreaWithInsertBackground(t *testing.T) {
 	m.SetValue("hello")
 	out := m.View(60, true /* focused */)
 
-	r, g, b := composeInsertBgRGB(t)
-	tint := fmtRGBBg(r, g, b)
+	r, g, b, _ := styles.SelectionTintColor(true).RGBA()
+	tint := fmtRGBBg(uint8(r>>8), uint8(g>>8), uint8(b>>8))
 	if !strings.Contains(out, tint) {
-		t.Fatalf("focused compose output missing tint %q\nraw=%q", tint, out)
+		t.Fatalf("focused compose output missing selection tint %q\nraw=%q", tint, out)
+	}
+	gr, gg, gb := composeInsertBgRGB(t)
+	green := fmtRGBBg(gr, gg, gb)
+	if green != tint && strings.Contains(out, green) {
+		t.Fatalf("focused compose still uses the green insert tint %s", green)
 	}
 	sr, sg, sb, _ := styles.SurfaceDark.RGBA()
 	dark := fmtRGBBg(uint8(sr>>8), uint8(sg>>8), uint8(sb>>8))
@@ -1033,7 +1039,7 @@ func borderHead(line string) string {
 }
 
 // TestComposeInsertHighlightsTheWholeBox: insert mode turns the left ▌
-// Accent and fills the text area with ComposeInsertBG.
+// Accent and fills the text area with the selected-message shadow.
 func TestComposeInsertHighlightsTheWholeBox(t *testing.T) {
 	styles.Apply("dark", config.Theme{})
 	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
@@ -1051,7 +1057,7 @@ func TestComposeInsertHighlightsTheWholeBox(t *testing.T) {
 	accent := sgrChannel("38", styles.Accent)
 	border := sgrChannel("38", styles.Border)
 	fill := sgrChannel("48", styles.SurfaceDark)
-	tint := sgrChannel("48", styles.ComposeInsertBG)
+	tint := sgrChannel("48", styles.SelectionTintColor(true))
 	for i := range fLines {
 		fh, uh := borderHead(fLines[i]), borderHead(uLines[i])
 		if fh == "" || uh == "" {

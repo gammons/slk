@@ -1660,13 +1660,16 @@ func (m Model) View(width int, focused bool) string {
 		innerWidth = 1
 	}
 
-	// Insert mode highlights the whole box: the left ▌ and the text
-	// area. Normal mode keeps the gray bar on SurfaceDark.
+	// Insert mode paints the box with the same light gray as a selected
+	// message. ComposeInsertBG is the accent mix, which reads as green.
 	style := styles.ComposeBox
 	innerBG := styles.SurfaceDark
 	if focused {
-		style = styles.ComposeInsert
-		innerBG = styles.ComposeInsertBG
+		innerBG = styles.SelectionTintColor(true)
+		style = style.
+			BorderForeground(styles.SelectionBorderColor(true)).
+			BorderBackground(innerBG).
+			Background(innerBG)
 	}
 	style = style.Width(width - 1)
 	// The copy's textarea, so a focused render fills the glyphs too.
