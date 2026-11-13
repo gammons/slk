@@ -621,6 +621,9 @@ type App struct {
 	// option: whether Enter leaves the composer focused in insert mode
 	// after a send. Set by main.go from config; off by default.
 	stayInInsertAfterSend bool
+	// enterKeepsFocus is the [sidebar] enter_keeps_focus option; see
+	// SetEnterKeepsFocus.
+	enterKeepsFocus bool
 
 	// search is the active in-channel search (nil = none).
 	// searchInput is the prompt buffer while in ModeSearch.
@@ -1777,6 +1780,8 @@ func scrollFlushTickCmd() tea.Cmd {
 
 func (a *App) handleDown() tea.Cmd {
 	switch a.focusedPanel {
+	case PanelWorkspace:
+		a.workspaceRail.MoveCursor(+1)
 	case PanelSidebar:
 		a.sidebar.MoveDown()
 	case PanelMessages:
@@ -1799,6 +1804,8 @@ func (a *App) handleDown() tea.Cmd {
 
 func (a *App) handleUp() tea.Cmd {
 	switch a.focusedPanel {
+	case PanelWorkspace:
+		a.workspaceRail.MoveCursor(-1)
 	case PanelSidebar:
 		a.sidebar.MoveUp()
 	case PanelMessages:
@@ -1919,6 +1926,8 @@ func (a *App) flushScrollCoalesce() tea.Cmd {
 // the channel one fetch at a time.
 func (a *App) handleGoToTop() tea.Cmd {
 	switch a.focusedPanel {
+	case PanelWorkspace:
+		a.workspaceRail.SetCursor(0)
 	case PanelSidebar:
 		a.sidebar.GoToTop()
 	case PanelMessages:
@@ -1941,6 +1950,8 @@ func (a *App) handleGoToTop() tea.Cmd {
 
 func (a *App) handleGoToBottom() tea.Cmd {
 	switch a.focusedPanel {
+	case PanelWorkspace:
+		a.workspaceRail.SetCursor(len(a.workspaceItems) - 1)
 	case PanelSidebar:
 		a.sidebar.GoToBottom()
 	case PanelMessages:
@@ -2085,12 +2096,44 @@ func (a *App) openQuitConfirm() {
 }
 
 func (a *App) handleEnter() tea.Cmd {
+	if a.focusedPanel == PanelWorkspace {
+		// Switch to the workspace under the rail cursor. Focus goes to
+		// the messages pane, where every switch (1-9, :ws, a click)
+		// leaves it once the workspace's last channel opens, unless
+		// [sidebar] enter_keeps_focus keeps it in the rail. A refused
+		// switch (upload in progress) leaves focus in the rail.
+		if a.compose.Uploading() || a.threadCompose.Uploading() {
+			return toastWithClear(a, "Upload in progress", 2*time.Second)
+		}
+		if !a.enterKeepsFocus {
+			a.focusedPanel = PanelMessages
+		}
+		if id := a.workspaceRail.CursorID(); id != "" && a.workspaceSvc != nil && id != a.workspaceRail.SelectedID() {
+			cmd := a.switchWorkspace(id)
+			if !a.enterKeepsFocus {
+				return cmd
+			}
+			// Mark this switch's own result, so its last-channel restore
+			// (and no other switch's) keeps focus in the rail, however
+			// many switches are in flight.
+			return func() tea.Msg {
+				msg := cmd()
+				if sw, ok := msg.(WorkspaceSwitchedMsg); ok {
+					sw.KeepFocus = true
+					return sw
+				}
+				return msg
+			}
+		}
+		return nil
+	}
 	if a.focusedPanel == PanelSidebar {
+		keep := a.enterKeepsFocus
 		if a.sidebar.IsThreadsSelected() {
-			return func() tea.Msg { return ThreadsViewActivatedMsg{} }
+			return func() tea.Msg { return ThreadsViewActivatedMsg{KeepFocus: keep} }
 		}
 		if a.sidebar.IsActivitySelected() {
-			return func() tea.Msg { return ActivityViewActivatedMsg{} }
+			return func() tea.Msg { return ActivityViewActivatedMsg{KeepFocus: keep} }
 		}
 		// A section header? Toggle its collapse state and stay in
 		// place. Section headers are also navigable via j/k so the
@@ -2102,7 +2145,7 @@ func (a *App) handleEnter() tea.Cmd {
 		item, ok := a.sidebar.SelectedItem()
 		if ok {
 			return func() tea.Msg {
-				return ChannelSelectedMsg{ID: item.ID, Name: item.Name, Type: item.Type}
+				return ChannelSelectedMsg{ID: item.ID, Name: item.Name, Type: item.Type, KeepFocus: keep}
 			}
 		}
 	}
@@ -2411,6 +2454,15 @@ func (a *App) clearSelections() {
 func (a *App) FocusNext() {
 	a.cancelEdit()
 	a.clearSelections()
+	if a.focusedPanel == PanelWorkspace {
+		// Out of the rail: into the sidebar, or the messages pane when
+		// the sidebar was hidden while the rail had focus.
+		a.focusedPanel = PanelMessages
+		if a.sidebarVisible {
+			a.focusedPanel = PanelSidebar
+		}
+		return
+	}
 	if !a.sidebarVisible {
 		if a.threadVisible {
 			if a.focusedPanel == PanelMessages {
@@ -2438,6 +2490,15 @@ func (a *App) FocusNext() {
 func (a *App) FocusPrev() {
 	a.cancelEdit()
 	a.clearSelections()
+	if a.focusedPanel == PanelWorkspace {
+		// Back from the rail wraps to the right-most pane, as it does
+		// from the sidebar.
+		a.focusedPanel = PanelMessages
+		if a.threadVisible {
+			a.focusedPanel = PanelThread
+		}
+		return
+	}
 	if !a.sidebarVisible {
 		if a.threadVisible {
 			if a.focusedPanel == PanelThread {
@@ -2459,6 +2520,23 @@ func (a *App) FocusPrev() {
 		a.focusedPanel = PanelSidebar
 	case PanelThread:
 		a.focusedPanel = PanelMessages
+	}
+}
+
+// FocusLeft is h: FocusPrev, except that the workspace rail is the left
+// edge. From the sidebar h moves into the rail (its cursor on the active
+// workspace) and stops there; l or Tab leaves it. Tab/shift+tab keep
+// cycling the panes without the rail.
+func (a *App) FocusLeft() {
+	switch {
+	case a.focusedPanel == PanelWorkspace:
+	case a.focusedPanel == PanelSidebar && a.sidebarVisible && !a.fullscreen && len(a.workspaceItems) > 0:
+		a.cancelEdit()
+		a.clearSelections()
+		a.workspaceRail.ResetCursor()
+		a.focusedPanel = PanelWorkspace
+	default:
+		a.FocusPrev()
 	}
 }
 
@@ -2828,13 +2906,21 @@ func (a *App) SetWorkspaces(items []workspace.WorkspaceItem) {
 	a.workspaceRail.SetItems(items)
 	a.workspaceRail.RefreshUnreads()
 	a.workspaceItems = items
-	// Update workspace finder items
+	a.syncWorkspaceFinder()
+}
+
+// syncWorkspaceFinder rebuilds the workspace finder's items from the
+// rail, carrying its unread flags. Like the rail, the active workspace
+// never shows a dot: its unreads are already in the sidebar.
+func (a *App) syncWorkspaceFinder() {
+	active := a.workspaceRail.SelectedID()
 	var finderItems []workspacefinder.Item
-	for _, ws := range items {
+	for _, ws := range a.workspaceRail.Items() {
 		finderItems = append(finderItems, workspacefinder.Item{
-			ID:       ws.ID,
-			Name:     ws.Name,
-			Initials: ws.Initials,
+			ID:        ws.ID,
+			Name:      ws.Name,
+			Initials:  ws.Initials,
+			HasUnread: ws.HasUnread && ws.ID != active,
 		})
 	}
 	a.workspaceFinder.SetItems(finderItems)
@@ -2969,6 +3055,19 @@ func (a *App) SetComposeEditor(editor []string) {
 // after a send. Off by default.
 func (a *App) SetStayInInsertAfterSend(b bool) {
 	a.stayInInsertAfterSend = b
+}
+
+// SetEnterKeepsFocus sets the [sidebar] enter_keeps_focus option: Enter
+// in the sidebar or the workspace rail opens the row but leaves focus
+// there, instead of moving it to the messages pane.
+func (a *App) SetEnterKeepsFocus(b bool) {
+	a.enterKeepsFocus = b
+}
+
+// SetWorkspacePickerVimKeys sets the [general] workspace_picker_vim_keys
+// option: the :ws picker opens navigating with j/k, and / filters.
+func (a *App) SetWorkspacePickerVimKeys(b bool) {
+	a.workspaceFinder.SetVimKeys(b)
 }
 
 // SetEditorService wires Ctrl+E's temp file and editor process. nil
@@ -4293,6 +4392,7 @@ func (a *App) beginEditOfSelected() tea.Cmd {
 func (a *App) notifyReadStateChanged() {
 	a.sidebar.Invalidate()
 	a.workspaceRail.RefreshUnreads()
+	a.syncWorkspaceFinder()
 	active := a.sidebar.UnreadChannelCount()
 	other := a.workspaceRail.OtherUnreadCount(a.activeTeamID)
 	name := a.workspaceRail.NameByID(a.activeTeamID)

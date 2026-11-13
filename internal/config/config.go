@@ -91,6 +91,10 @@ type General struct {
 	// Load decodes over Default(), which sets it to true, so an explicit
 	// false reads back correctly.
 	HideDeactivatedUsers bool `toml:"hide_deactivated_users"`
+	// WorkspacePickerVimKeys opens the :ws picker in navigation mode:
+	// j/k move the highlight and / starts the name filter, as in the
+	// help overlay. Default off: typing filters straight away.
+	WorkspacePickerVimKeys bool `toml:"workspace_picker_vim_keys"`
 }
 
 type Appearance struct {
@@ -226,6 +230,11 @@ type Sidebar struct {
 	// ShowUnreadInCollapsed keeps a collapsed section's unread channels
 	// (and the open channel) visible under its header. Default off.
 	ShowUnreadInCollapsed bool `toml:"show_unread_in_collapsed"`
+	// EnterKeepsFocus leaves focus where it is when Enter opens a
+	// conversation, the Threads or Activity row, or (in the workspace
+	// rail) a workspace, so j/k and Enter can skim them; l moves on.
+	// Default off: focus moves to the messages pane.
+	EnterKeepsFocus bool `toml:"enter_keeps_focus"`
 }
 
 // Marks holds preferences for vim-style marks.

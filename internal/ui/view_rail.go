@@ -23,6 +23,10 @@ import (
 // is the caller's snapshot of styles.Version() and serves as the
 // cache's layoutKey.
 func (a *App) renderRail(railWidth, contentHeight int, themeVer int64) string {
+	// Focus changes at ~30 sites; syncing it here keeps the cursor
+	// marker honest, and SetFocused bumps Version when it flips.
+	a.workspaceRail.SetFocused(a.focusedPanel == PanelWorkspace)
+	a.workspaceRail.SetHeight(contentHeight)
 	c := &a.renderCache.rail
 	if c.hit(a.workspaceRail.Version(), railWidth, contentHeight, themeVer) {
 		return c.output

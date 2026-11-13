@@ -231,10 +231,11 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return a.markOpenThreadRead(channelID, m.ThreadTS, m.Replies), true
 
 	case ThreadsViewActivatedMsg:
-		_ = m
 		a.view = ViewThreads
 		a.sidebar.SetThreadsActive(true)
-		a.focusedPanel = PanelMessages
+		if !m.KeepFocus {
+			a.focusedPanel = PanelMessages
+		}
 		var batch []tea.Cmd
 		if a.activeTeamID != "" {
 			threads := a.threads
