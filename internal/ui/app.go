@@ -1111,7 +1111,7 @@ func (a *App) threadDrawnAlone() bool {
 		return false
 	}
 	var scratch panelLayout
-	frame := scratch.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),
+	frame := scratch.Compute(a.width, a.height, a.railWidth(), a.sidebar.Width(),
 		a.sidebarVisible, a.threadVisible, a.threadInFront(), a.compact)
 	return frame.MsgWidth == 0
 }
@@ -1129,6 +1129,18 @@ func (a *App) fullscreenPanel() Panel {
 	return PanelMessages
 }
 
+// railWidth is the workspace rail's width for layout: zero when exactly
+// one workspace is configured, since a single tile conveys nothing and
+// only costs columns (#216). Before SetWorkspaces runs (no items yet)
+// the rail keeps its width, so multi-workspace setups don't see it pop
+// in once their workspaces load.
+func (a *App) railWidth() int {
+	if len(a.workspaceItems) == 1 {
+		return 0
+	}
+	return a.workspaceRail.Width()
+}
+
 // computeFrame resolves this frame's layout from the App's state and
 // stores the hit-test bands. The one place View's layout inputs are
 // assembled; tests call it instead of repeating Compute's arguments.
@@ -1142,7 +1154,7 @@ func (a *App) frameInto(l *panelLayout) panelLayoutFrame {
 	if a.fullscreen {
 		return l.ComputeFullscreen(a.width, a.height, a.fullscreenPanel(), a.compact)
 	}
-	return l.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),
+	return l.Compute(a.width, a.height, a.railWidth(), a.sidebar.Width(),
 		a.sidebarVisible, a.threadVisible, a.threadInFront(), a.compact)
 }
 
