@@ -229,9 +229,9 @@ var (
 			Foreground(TextPrimary).
 			Padding(ComposePadding, 1, ComposePadding, 1)
 
-	// ComposeInsert is unused by the compose box. Insert mode keeps
-	// ComposeBox (same ▌ color and fill). The value stays so a theme
-	// refresh still builds it; nothing reads it for drawing.
+	// ComposeInsert is the old insert-mode box (Accent ▌ and a tinted
+	// fill). The compose box no longer uses it: insert mode recolors
+	// only the ▌ and keeps ComposeBox's fill.
 	ComposeInsert = lipgloss.NewStyle().
 			BorderStyle(thickLeftBorder).
 			BorderLeft(true).

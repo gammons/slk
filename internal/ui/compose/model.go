@@ -1653,10 +1653,13 @@ func (m Model) View(width int, focused bool) string {
 		innerWidth = 1
 	}
 
-	// Same border and fill in both modes. Insert mode used to switch to
-	// ComposeInsert, which turned the ▌ Accent and filled the box with
-	// ComposeInsertBG. The ▌ stays the normal border color.
-	var style = styles.ComposeBox.Width(width - 1)
+	// Insert mode highlights only the left ▌ (Accent). The fill stays
+	// SurfaceDark; ComposeInsert's tinted background is not used.
+	style := styles.ComposeBox
+	if focused {
+		style = style.BorderForeground(styles.Accent)
+	}
+	style = style.Width(width - 1)
 
 	// SurfaceDark matches ComposeBox. The textarea's Inline(true) styles
 	// only paint behind text; this wrapper fills the rest of the row.

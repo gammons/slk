@@ -1022,12 +1022,10 @@ func borderHead(line string) string {
 	return line[:i+len("▌")]
 }
 
-// TestComposeBorderMatchesWhenFocused: insert mode (focused) used to
-// recolor the compose border (gray ▌ to Accent) and tint the box.
-// The border, including that ▌, now matches the unfocused box. The ▌
-// stays on every line, in a foreground that is not its own background,
-// so the bar is still drawn.
-func TestComposeBorderMatchesWhenFocused(t *testing.T) {
+// TestComposeInsertHighlightsLeftBorderOnly: insert mode (focused)
+// turns the left ▌ Accent and leaves the box fill alone. The tinted
+// ComposeInsert background is not used.
+func TestComposeInsertHighlightsLeftBorderOnly(t *testing.T) {
 	styles.Apply("dark", config.Theme{})
 	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
 
@@ -1041,32 +1039,27 @@ func TestComposeBorderMatchesWhenFocused(t *testing.T) {
 	if len(fLines) != len(uLines) {
 		t.Fatalf("focused box is %d lines, unfocused is %d", len(fLines), len(uLines))
 	}
+	accent := sgrChannel("38", styles.Accent)
+	border := sgrChannel("38", styles.Border)
+	fill := sgrChannel("48", styles.SurfaceDark)
+	tint := sgrChannel("48", styles.ComposeInsertBG)
 	for i := range fLines {
 		fh, uh := borderHead(fLines[i]), borderHead(uLines[i])
 		if fh == "" || uh == "" {
 			t.Fatalf("line %d lost its ▌\nfocused: %q\nunfocused: %q", i, fLines[i], uLines[i])
 		}
-		if fh != uh {
-			t.Fatalf("line %d border differs between modes\nfocused:   %q\nunfocused: %q", i, fh, uh)
+		if !strings.Contains(fh, accent) || !strings.Contains(fh, fill) {
+			t.Fatalf("line %d focused ▌ = %q, want accent %s on %s", i, fh, accent, fill)
+		}
+		if strings.Contains(fh, tint) {
+			t.Fatalf("line %d focused ▌ is tinted %s: %q", i, tint, fh)
+		}
+		if !strings.Contains(uh, border) || strings.Contains(uh, accent) {
+			t.Fatalf("line %d unfocused ▌ = %q, want border %s", i, uh, border)
 		}
 	}
-
-	head := borderHead(fLines[0])
-	accent := sgrChannel("38", styles.Accent)
-	border := sgrChannel("38", styles.Border)
-	if strings.Contains(head, accent) {
-		t.Fatalf("focused border uses Accent %s; want the same %s as normal mode\n%q", accent, border, head)
-	}
-	if !strings.Contains(head, border) {
-		t.Fatalf("border foreground %s missing from %q", border, head)
-	}
-	fill := sgrChannel("48", styles.SurfaceDark)
-	if !strings.Contains(head, fill) {
-		t.Fatalf("border background %s missing from %q", fill, head)
-	}
-	// The ▌ is visible only when its foreground is not the cell's background.
-	if strings.TrimPrefix(border, "38") == strings.TrimPrefix(fill, "48") {
-		t.Fatalf("left ▌ foreground and background are the same color; the bar would be invisible")
+	if strings.Contains(focused, tint) {
+		t.Fatalf("focused compose still paints the insert tint %s", tint)
 	}
 }
 
