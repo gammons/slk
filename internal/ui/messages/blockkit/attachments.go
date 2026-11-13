@@ -169,7 +169,7 @@ func appendLegacyAttachment(out *RenderResult, a LegacyAttachment, ctx Context, 
 			t0 = time.Now()
 		}
 		if ctx.Fetcher == nil || ctx.Protocol == imgpkg.ProtoOff {
-			body = append(body, renderImageFallback(a.ImageURL))
+			body = append(body, renderImageFallback(a.ImageURL, contentW))
 		} else {
 			target := computeBlockImageTarget(ImageBlock{URL: a.ImageURL}, ctx, contentW)
 			if target.X > 0 && target.Y > 0 {
@@ -182,10 +182,10 @@ func appendLegacyAttachment(out *RenderResult, a LegacyAttachment, ctx Context, 
 					h := hit
 					imageHitInBody = &h
 				} else {
-					body = append(body, renderImageFallback(a.ImageURL))
+					body = append(body, imageFallback(ctx, a.ImageURL, contentW))
 				}
 			} else {
-				body = append(body, renderImageFallback(a.ImageURL))
+				body = append(body, renderImageFallback(a.ImageURL, contentW))
 			}
 		}
 		if perf != nil {

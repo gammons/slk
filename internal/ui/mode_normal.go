@@ -335,6 +335,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, a.keys.OpenPreview):
 		return a.openImagePreviewOfSelected()
 
+	case key.Matches(msg, a.keys.LoadImages):
+		return a.loadImagesOfSelected()
+
 	case key.Matches(msg, a.keys.OpenLink):
 		return a.openLinksOfSelected()
 
