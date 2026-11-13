@@ -49,6 +49,101 @@ func TestAppFocusCycle(t *testing.T) {
 	}
 }
 
+// TestRailFocusKeys: h from the sidebar enters the workspace rail and stops
+// there, and j/k move its cursor (clamped). Enter is refused during an
+// upload (focus stays in the rail); otherwise it switches to the cursor's
+// workspace, after which focus is in the messages pane. l leaves the rail,
+// shift+tab from it wraps to the messages pane, and f with the sidebar
+// hidden goes full-screen on the messages pane.
+func TestRailFocusKeys(t *testing.T) {
+	a := newTestApp(t, withWorkspaces(
+		workspace.WorkspaceItem{ID: "T1", Name: "alpha", Initials: "AL"},
+		workspace.WorkspaceItem{ID: "T2", Name: "beta", Initials: "BE"},
+		workspace.WorkspaceItem{ID: "T3", Name: "gamma", Initials: "GA"},
+	))
+	a.setWorkspaceSwitcherForTest(func(teamID string) tea.Msg { return switchedTeamMsg{teamID: teamID} })
+	railShowsCursor := func() bool {
+		return strings.Contains(stripANSI(a.renderRail(6, 20, styles.Version())), "\u25c2")
+	}
+	press := func(k tea.KeyMsg) tea.Cmd { return dispatchModeKey(a, k) }
+
+	if a.focusedPanel != PanelSidebar {
+		t.Fatalf("precondition: focus = %v, want sidebar", a.focusedPanel)
+	}
+	press(keyPress('h'))
+	press(keyPress('h'))
+	if a.focusedPanel != PanelWorkspace || a.workspaceRail.CursorID() != "T1" {
+		t.Fatalf("after h h: focus = %v, cursor = %q; want rail on T1", a.focusedPanel, a.workspaceRail.CursorID())
+	}
+	if !railShowsCursor() {
+		t.Error("focused rail draws no cursor marker")
+	}
+	for _, r := range "jjjk" {
+		press(keyPress(r))
+	}
+	if got := a.workspaceRail.CursorID(); got != "T2" {
+		t.Fatalf("after j j j k: cursor = %q, want T2 (clamped at T3, then up)", got)
+	}
+	// An upload in progress refuses the switch and keeps focus in the rail.
+	a.compose.SetUploading(true)
+	press(keyCode(tea.KeyEnter))
+	if a.focusedPanel != PanelWorkspace || a.workspaceRail.SelectedID() != "T1" {
+		t.Errorf("enter during an upload: focus = %v, selected = %q; want the rail, still on T1", a.focusedPanel, a.workspaceRail.SelectedID())
+	}
+	if got := statusbarText(a); !strings.Contains(got, "Upload in progress") {
+		t.Errorf("status bar = %q, want the upload toast", got)
+	}
+	a.compose.SetUploading(false)
+
+	cmd := press(keyCode(tea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("enter on another workspace returned no switch cmd")
+	}
+	sw, ok := cmd().(switchedTeamMsg)
+	if !ok || sw.teamID != "T2" {
+		t.Fatalf("enter switched to %#v, want T2", sw)
+	}
+	// Complete the switch: it restores the workspace's last channel, and
+	// focus ends in the messages pane, as after any other switch.
+	_, swCmd := a.Update(WorkspaceSwitchedMsg{TeamID: "T2", Channels: []sidebar.ChannelItem{{ID: "C9", Name: "ops", Type: "channel"}}})
+	for _, msg := range drainSkippingTimers(swCmd) {
+		if sel, ok := msg.(ChannelSelectedMsg); ok {
+			a.Update(sel)
+		}
+	}
+	if a.activeChannelID != "C9" || a.focusedPanel != PanelMessages {
+		t.Errorf("after the switch: channel = %q, focus = %v; want C9 with focus in messages", a.activeChannelID, a.focusedPanel)
+	}
+	if railShowsCursor() {
+		t.Error("rail still draws its cursor after focus left it")
+	}
+
+	press(keyPress('h'))
+	press(keyPress('h'))
+	press(keyPress('l'))
+	if a.focusedPanel != PanelSidebar {
+		t.Errorf("after h h l from messages: focus = %v, want sidebar", a.focusedPanel)
+	}
+	press(keyPress('h'))
+	press(keyMod(tea.KeyTab, tea.ModShift))
+	if a.focusedPanel != PanelMessages {
+		t.Errorf("shift+tab from the rail: focus = %v, want it to wrap to the messages pane", a.focusedPanel)
+	}
+
+	// Full-screen from the rail with the sidebar hidden lands on the
+	// messages pane, not the hidden sidebar.
+	press(keyPress('h'))
+	press(keyPress('h'))
+	press(keyMod('b', tea.ModCtrl))
+	if a.focusedPanel != PanelWorkspace || a.sidebarVisible {
+		t.Fatalf("precondition: focus = %v, sidebar visible = %v; want the rail with the sidebar hidden", a.focusedPanel, a.sidebarVisible)
+	}
+	press(keyPress('f'))
+	if !a.fullscreen || a.focusedPanel != PanelMessages {
+		t.Errorf("f from the rail with the sidebar hidden: fullscreen = %v, focus = %v; want full-screen messages", a.fullscreen, a.focusedPanel)
+	}
+}
+
 func TestAppToggleSidebar(t *testing.T) {
 	app := NewApp()
 
