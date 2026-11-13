@@ -3036,6 +3036,12 @@ func (a *App) SetStayInInsertAfterSend(b bool) {
 	a.stayInInsertAfterSend = b
 }
 
+// SetWorkspacePickerVimKeys sets the [general] workspace_picker_vim_keys
+// option: the :ws picker opens navigating with j/k, and / filters.
+func (a *App) SetWorkspacePickerVimKeys(b bool) {
+	a.workspaceFinder.SetVimKeys(b)
+}
+
 // SetEditorService wires Ctrl+E's temp file and editor process. nil
 // restores the no-op.
 func (a *App) SetEditorService(s core.EditorService) {

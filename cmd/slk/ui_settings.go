@@ -41,6 +41,9 @@ type uiSettings struct {
 	StayInInsertAfterSend bool
 	// ReplyAvatars is [appearance] reply_avatars (default off).
 	ReplyAvatars bool
+	// WorkspacePickerVimKeys is [general] workspace_picker_vim_keys
+	// (default off).
+	WorkspacePickerVimKeys bool
 }
 
 // sidebarStyleFromConfig is the [sidebar] look and behaviour switches.
@@ -56,24 +59,25 @@ func sidebarStyleFromConfig(s config.Sidebar) ui.SidebarStyle {
 // uiSettingsFromConfig is run()'s uiSettings, read from the loaded config.
 func uiSettingsFromConfig(cfg config.Config) uiSettings {
 	return uiSettings{
-		TimestampFormat:       cfg.Appearance.TimestampFormat,
-		MentionPills:          cfg.Sidebar.MentionPills,
-		TypingIndicators:      cfg.Animations.TypingIndicators,
-		StaleAfter:            time.Duration(cfg.Sidebar.HideInactiveAfterDays) * 24 * time.Hour,
-		RightAlignBadges:      cfg.Sidebar.RightAlignBadges,
-		ChannelIndent:         cfg.Sidebar.ChannelIndent,
-		SidebarStyle:          sidebarStyleFromConfig(cfg.Sidebar),
-		StartCollapsed:        cfg.Sidebar.StartCollapsed,
-		ShowUnreadInCollapsed: cfg.Sidebar.ShowUnreadInCollapsed,
-		MouseWheelLines:       cfg.Appearance.MouseWheelLines,
-		ColoredUsernames:      cfg.Appearance.ColoredUsernames,
-		Compact:               cfg.Appearance.Compact,
-		ThreadAvatars:         cfg.Appearance.ThreadAvatars,
-		ThemeOverrides:        cfg.Theme,
-		Theme:                 cfg.Appearance.Theme,
-		StayInInsertAfterSend: cfg.Compose.StayInInsertAfterSend,
-		ReplyAvatars:          cfg.Appearance.ReplyAvatars,
-		HideDeactivatedUsers:  cfg.General.HideDeactivatedUsers,
+		TimestampFormat:        cfg.Appearance.TimestampFormat,
+		MentionPills:           cfg.Sidebar.MentionPills,
+		TypingIndicators:       cfg.Animations.TypingIndicators,
+		StaleAfter:             time.Duration(cfg.Sidebar.HideInactiveAfterDays) * 24 * time.Hour,
+		RightAlignBadges:       cfg.Sidebar.RightAlignBadges,
+		ChannelIndent:          cfg.Sidebar.ChannelIndent,
+		SidebarStyle:           sidebarStyleFromConfig(cfg.Sidebar),
+		StartCollapsed:         cfg.Sidebar.StartCollapsed,
+		ShowUnreadInCollapsed:  cfg.Sidebar.ShowUnreadInCollapsed,
+		MouseWheelLines:        cfg.Appearance.MouseWheelLines,
+		ColoredUsernames:       cfg.Appearance.ColoredUsernames,
+		Compact:                cfg.Appearance.Compact,
+		ThreadAvatars:          cfg.Appearance.ThreadAvatars,
+		ThemeOverrides:         cfg.Theme,
+		Theme:                  cfg.Appearance.Theme,
+		StayInInsertAfterSend:  cfg.Compose.StayInInsertAfterSend,
+		ReplyAvatars:           cfg.Appearance.ReplyAvatars,
+		HideDeactivatedUsers:   cfg.General.HideDeactivatedUsers,
+		WorkspacePickerVimKeys: cfg.General.WorkspacePickerVimKeys,
 	}
 }
 
@@ -105,4 +109,5 @@ func applyUISettings(app *ui.App, s uiSettings) {
 	app.SetThemeName(s.Theme)
 	app.SetStayInInsertAfterSend(s.StayInInsertAfterSend)
 	app.SetReplyAvatars(s.ReplyAvatars)
+	app.SetWorkspacePickerVimKeys(s.WorkspacePickerVimKeys)
 }

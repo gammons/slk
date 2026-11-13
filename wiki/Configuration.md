@@ -16,6 +16,8 @@ hide_deactivated_users = true   # hide deactivated people, as the Slack desktop
                                 # they are not offered in the channel finder,
                                 # the new-message picker or @ / # autocomplete.
                                 # Set false to show them again. See below.
+workspace_picker_vim_keys = false  # true: :ws opens navigating: j/k move,
+                                   # / starts filtering (esc clears it)
 
 [appearance]
 theme = "dracula"

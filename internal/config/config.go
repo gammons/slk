@@ -91,6 +91,10 @@ type General struct {
 	// Load decodes over Default(), which sets it to true, so an explicit
 	// false reads back correctly.
 	HideDeactivatedUsers bool `toml:"hide_deactivated_users"`
+	// WorkspacePickerVimKeys opens the :ws picker in navigation mode:
+	// j/k move the highlight and / starts the name filter, as in the
+	// help overlay. Default off: typing filters straight away.
+	WorkspacePickerVimKeys bool `toml:"workspace_picker_vim_keys"`
 }
 
 type Appearance struct {
