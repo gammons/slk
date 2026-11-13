@@ -436,18 +436,111 @@ func (m *Model) Version() int64 { return m.version + m.list.Version() }
 // we reconstruct a newline-faithful mrkdwn from the parsed block when
 // one is available. See blockkit.RichTextToMrkdwn.
 //
-// When no RichTextBlock is present (the overwhelmingly common case
-// for user-typed messages) this is a zero-cost passthrough of
-// msg.Text.
+// Every rich_text block contributes, in order, and so does every table
+// block, laid out as an aligned code block (blockkit.TableToText) in
+// its place among them: Slack splits a `markdown` block holding a
+// Markdown table into rich_text, table, rich_text. Export, copy and the
+// action prompt read this text. Each table gets a fence longer than any
+// backtick run in it (codeFence). RenderMessage draws the same parts but
+// keeps the tables out of the mrkdwn pass (renderMessageBody).
+//
+// When no RichTextBlock or TableBlock is present (the overwhelmingly
+// common case for user-typed messages) this is a zero-cost passthrough
+// of msg.Text.
 func MessageTextSource(msg MessageItem) string {
-	for _, b := range msg.Blocks {
-		if rt, ok := b.(blockkit.RichTextBlock); ok {
-			if reconstructed := blockkit.RichTextToMrkdwn(rt); reconstructed != "" {
-				return reconstructed
+	return partsSource(msg, bodyParts(msg, nil))
+}
+
+// partsSource joins parts as mrkdwn, each table fenced as a code block;
+// msg.Text when there are none.
+func partsSource(msg MessageItem, parts []bodyPart) string {
+	if len(parts) == 0 {
+		return msg.Text
+	}
+	src := make([]string, len(parts))
+	for i, p := range parts {
+		src[i] = p.text
+		if p.table {
+			fence := codeFence(p.text)
+			src[i] = fence + "\n" + p.text + "\n" + fence
+		}
+	}
+	return strings.Join(src, "\n")
+}
+
+// codeFence returns a code fence for code: three backticks, or one more
+// than the longest backtick run in code, so a cell holding ``` cannot
+// close it (the CommonMark rule; SlackMrkdwnToCommonMark keeps such a
+// fence whole).
+func codeFence(code string) string {
+	longest := 0
+	for run := range strings.FieldsFuncSeq(code, func(r rune) bool { return r != '`' }) {
+		longest = max(longest, len(run))
+	}
+	return strings.Repeat("`", max(3, longest+1))
+}
+
+// bodyPart is one rich_text block's mrkdwn, or one table laid out as
+// plain text (table set).
+type bodyPart struct {
+	text  string
+	table bool
+}
+
+// bodyParts returns the rich_text blocks of msg as mrkdwn and its
+// tables as text, in block order; when inBody is non-nil, only the
+// tables it marks (blockkit.TablesInBody). The text before a table
+// loses its trailing newlines: the table starts on its own line.
+func bodyParts(msg MessageItem, inBody []bool) []bodyPart {
+	var parts []bodyPart
+	for i, b := range msg.Blocks {
+		switch v := b.(type) {
+		case blockkit.RichTextBlock:
+			if s := blockkit.RichTextToMrkdwn(v); s != "" {
+				parts = append(parts, bodyPart{text: s})
+			}
+		case blockkit.TableBlock:
+			if inBody != nil && !inBody[i] {
+				continue
+			}
+			if s := blockkit.TableToText(v); s != "" {
+				if n := len(parts); n > 0 {
+					parts[n-1].text = strings.TrimRight(parts[n-1].text, "\n")
+				}
+				parts = append(parts, bodyPart{text: s, table: true})
 			}
 		}
 	}
-	return msg.Text
+	return parts
+}
+
+// renderMessageBody renders msg's visible body: what MessageTextSource
+// returns, except that each table is drawn as a code block directly
+// instead of going through RenderSlackMarkdownWith inside a fence, so
+// inline formatting and emoji resolution never touch its cells (a `*`
+// or a :shortcode: there would change a cell's width and break the
+// column alignment). Only the tables blockkit.TablesInBody marks are
+// drawn here; Block Kit draws the others in their place.
+func renderMessageBody(msg MessageItem, opts RenderSlackMarkdownOpts) string {
+	parts := bodyParts(msg, blockkit.TablesInBody(msg.Blocks))
+	hasTable := false
+	for _, p := range parts {
+		hasTable = hasTable || p.table
+	}
+	if !hasTable {
+		return RenderSlackMarkdownWith(partsSource(msg, parts), opts)
+	}
+	out := make([]string, len(parts))
+	for i, p := range parts {
+		if p.table {
+			// The same shape RenderSlackMarkdownWith gives a fenced
+			// block: a blank row above and below the block.
+			out[i] = "\n" + ReapplyBgAfterResets(renderCodeBlock(p.text, opts.Width), BgANSI()+FgANSI()) + "\n"
+		} else {
+			out[i] = RenderSlackMarkdownWith(p.text, opts)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // MessageCopyText is MessageTextSource with one more fallback: a
@@ -512,15 +605,11 @@ func legacyAttachmentText(la blockkit.LegacyAttachment) string {
 // BlocksCarryBody reports whether msg's blocks already render its body,
 // in which case the host adds no row for msg.Text. A non-empty rich_text
 // block is the exception: it renders through MessageTextSource and must
-// retain the host body row. This decision affects rendering only;
-// copying uses MessageCopyText.
+// retain the host body row. The rule is blockkit.HostBody, which also
+// decides which tables the body row carries (blockkit.TablesInBody).
+// This decision affects rendering only; copying uses MessageCopyText.
 func BlocksCarryBody(msg MessageItem) bool {
-	for _, b := range msg.Blocks {
-		if rt, ok := b.(blockkit.RichTextBlock); ok && blockkit.RichTextToMrkdwn(rt) != "" {
-			return false
-		}
-	}
-	return blockkit.RendersBody(msg.Blocks)
+	return !blockkit.HostBody(msg.Blocks)
 }
 
 // dirty bumps the render-version counter.

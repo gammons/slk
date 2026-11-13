@@ -114,6 +114,9 @@ func BlockkitContext(msg MessageItem, rc *RenderContext, emojiFlushes *[]func(io
 		UserNames:   rc.UserNames,
 		MessageTS:   msg.TS,
 		Channel:     rc.ImageChannel,
+		// Tables Block Kit draws in place get the body's code-block
+		// look.
+		RenderCode: renderCodeBlock,
 		// Mention resolution belongs to the host; plain control labels
 		// share its emoji rendering without interpreting mrkdwn.
 		RenderText: func(s string, un map[string]string) string {
@@ -364,7 +367,10 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	if stats != nil {
 		bodyT0 = time.Now()
 	}
-	rendered := RenderSlackMarkdownWith(bodySrc, bodyOpts)
+	rendered := RenderSlackMarkdownWith("", bodyOpts)
+	if hasBody {
+		rendered = renderMessageBody(msg, bodyOpts)
+	}
 	if len(rc.SearchTerms) > 0 {
 		// SearchHighlightSGR's close sequence restores the theme bg/fg
 		// after the highlight's reset so plain body text doesn't bleed

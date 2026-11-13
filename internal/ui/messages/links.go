@@ -66,8 +66,8 @@ func ExtractLinks(text string) []Link {
 // empty), then the permalink of each message it shares. The body row
 // is drawn only when the blocks do not already carry the body
 // (render_message.go: hasBody := !BlocksCarryBody(msg)); its content
-// is MessageTextSource — the first non-empty rich_text reconstruction
-// when one exists, else msg.Text. When the blocks carry the body,
+// is MessageTextSource — every non-empty rich_text reconstruction, in
+// block order, when one exists, else msg.Text. When the blocks carry the body,
 // msg.Text is not drawn at all, so its links stay out of the picker
 // (a hidden fallback label must not shadow a visible block link's
 // label in the dedup). A message shared via Slack's "Share message" /
