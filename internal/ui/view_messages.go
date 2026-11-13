@@ -64,7 +64,9 @@ func (a *App) renderMessagesRegion(frame panelLayoutFrame, themeVer int64, previ
 	msgWidth := frame.MsgWidth
 	msgBorder := frame.MsgBorder
 
-	msgFocused := a.focusedPanel == PanelMessages && a.mode != ModeInsert
+	// The pane keeps its focused border in insert mode. The cursor
+	// highlight is hidden separately, below.
+	msgFocused := a.focusedPanel == PanelMessages
 	// Push focus into the messages pane so the selected-message "▌"
 	// border dims when unfocused. MUST happen BEFORE the cache
 	// hit-check (the cache key includes Version, which SetFocused

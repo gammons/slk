@@ -9,6 +9,50 @@ import (
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
+// paneBorderStays is the focused pane's thick left border. Insert mode
+// must not swap it for the unfocused rounded border.
+func paneBorderStays(t *testing.T, view string) {
+	t.Helper()
+	if !strings.Contains(view, "┃") {
+		t.Fatalf("focused pane lost its border:\n%s", ansi.Strip(view))
+	}
+}
+
+// TestInsertModeKeepsTheFocusedPaneBorder: pressing i hides the message
+// highlight and leaves the pane's border in place.
+func TestInsertModeKeepsTheFocusedPaneBorder(t *testing.T) {
+	pinRenderGlobals(t)
+	for _, tc := range []struct {
+		name string
+		pane Panel
+	}{
+		{"channel", PanelMessages},
+		{"thread", PanelThread},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pane := tc.pane
+			a := newTestApp(t,
+				withSize(200, 40),
+				withMessages(testMessageItems(3)...),
+				withActiveChannel("C1"),
+			)
+			focusThreadPanel(t, a)
+			a.focusedPanel = pane
+			normal := a.View().Content
+			paneBorderStays(t, normal)
+
+			a.SetMode(ModeInsert)
+			if pane == PanelThread {
+				_ = a.threadCompose.Focus()
+			} else {
+				_ = a.compose.Focus()
+			}
+			insert := a.View().Content
+			paneBorderStays(t, insert)
+		})
+	}
+}
+
 // selectionTintSGR is the background SGR of the selected-message highlight.
 func selectionTintSGR(focused bool) string {
 	r, g, b, _ := styles.SelectionTintColor(focused).RGBA()

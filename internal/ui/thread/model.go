@@ -1184,34 +1184,33 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// cache-build treatment (borderSelect / borderInvis below): thick
 	// left border + tint when the cursor sits on the parent, invisible
 	// border otherwise so the parent's width matches the reply rows.
+	pad := styles.Background
 	if parentIsSelected {
 		// After the plain mirror, so it keeps the short form. Skipped
 		// while a text selection exists; see selectedLines.
 		if !m.list.HasSelection() {
 			parentContent = messages.SelectedHeader(parentContent, parentHeader, m.parent.TS, m.parent.Timestamp, parentHeaderBudget)
 		}
-		if styles.TransparentBackground() {
-			// The parent's spans restore BgANSI after each reset, which is
-			// the default background here: a hole in the tint. The opaque
-			// row has the same gap (theme background), left as it is so
-			// the off path stays unchanged.
-			parentContent = messages.RepaintBgToSelectionTint(parentContent, m.focused)
-		}
+		// The header and body paint the theme background themselves.
+		// Swap it for the selection tint, the way a reply's selected
+		// row does, or only the shortfall after a short line is tinted
+		// and the rest of the message stays plain.
+		parentContent = messages.RepaintBgToSelectionTint(parentContent, m.focused)
 		parentContent = lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).
 			BorderForeground(styles.SelectionBorderColor(m.focused)).
 			BorderBackground(styles.SelectionTintColor(m.focused)).
 			Background(styles.SelectionTintColor(m.focused)).
 			Render(parentContent)
+		pad = styles.SelectionTintColor(m.focused)
 	} else {
 		parentContent = lipgloss.NewStyle().BorderStyle(styles.InvisibleLeftBorder()).BorderLeft(true).
 			BorderForeground(styles.Background).BorderBackground(styles.Background).
 			Render(parentContent)
 	}
-	// Pad every parent row to the pane width with the theme background.
-	// The outer wrapper used to do this (the parent, unlike a reply, is
-	// not width-filled when rendered); this is the same per-row padding,
-	// applied where it is needed.
-	parentContent = lipgloss.NewStyle().Width(width).Background(styles.Background).Render(parentContent)
+	// Pad every parent row to the pane width. The parent, unlike a
+	// reply, is not width-filled when rendered. A selected parent pads
+	// with the tint so the highlight reaches the right edge.
+	parentContent = lipgloss.NewStyle().Width(width).Background(pad).Render(parentContent)
 	parentSeparator := lipgloss.NewStyle().
 		Width(width).
 		Background(styles.Background).
