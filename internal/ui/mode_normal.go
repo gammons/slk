@@ -188,6 +188,14 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 
 	case key.Matches(msg, a.keys.ToggleFullscreen):
 		a.fullscreen = !a.fullscreen
+		if a.fullscreen && a.focusedPanel == PanelWorkspace {
+			// The rail is not drawn full-screen: move to the sidebar,
+			// or the messages pane when the sidebar is hidden.
+			a.focusedPanel = PanelMessages
+			if a.sidebarVisible {
+				a.focusedPanel = PanelSidebar
+			}
+		}
 
 	case key.Matches(msg, a.keys.NavBack):
 		if cmd := a.navigateBack(); cmd != nil {
@@ -210,7 +218,7 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		}
 
 	case key.Matches(msg, a.keys.Left):
-		a.FocusPrev()
+		a.FocusLeft()
 
 	case key.Matches(msg, a.keys.Right):
 		a.FocusNext()

@@ -25,6 +25,8 @@ type Item struct {
 	ID       string
 	Name     string
 	Initials string
+	// HasUnread draws an unread dot left of the initials.
+	HasUnread bool
 }
 
 // Model is the fuzzy workspace finder overlay.
@@ -245,7 +247,13 @@ func (m Model) renderBox(termWidth int) string {
 	return f.Render(s, overlayWidth)
 }
 
-// workspacePrefix returns the display prefix for a workspace (initials in a styled block).
+// workspacePrefix returns the display prefix for a workspace: a one-column
+// unread slot (the rail's dot, or a space so the initials stay aligned)
+// followed by the initials in a styled block.
 func workspacePrefix(item Item) string {
-	return styles.WorkspaceActive.Render(item.Initials)
+	dot := " "
+	if item.HasUnread {
+		dot = styles.PresenceOnline.Render("●")
+	}
+	return dot + " " + styles.WorkspaceActive.Render(item.Initials)
 }

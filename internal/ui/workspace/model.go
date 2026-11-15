@@ -19,6 +19,17 @@ type Model struct {
 	items    []WorkspaceItem
 	selected int
 	version  int64
+	// cursor is the keyboard highlight while the rail has focus (h from
+	// the sidebar); it starts on the selected workspace and Enter
+	// switches to it. focused draws it.
+	cursor  int
+	focused bool
+	// height is the rail's drawn height (SetHeight, every render) and
+	// offset the first item drawn: when the items don't fit, the rail
+	// scrolls to keep the cursor (focused) or the selected workspace
+	// on screen.
+	height int
+	offset int
 	// unreadReader returns the set of workspace IDs whose dot should
 	// be lit: those with at least one channel their own sidebar would
 	// show as unread (mute-filtered) or one unread subscribed thread
@@ -89,15 +100,24 @@ func (m *Model) Select(idx int) {
 	if idx >= 0 && idx < len(m.items) && m.selected != idx {
 		m.selected = idx
 		m.dirty()
+		m.scroll()
 	}
 }
+
+// Items returns the rail's workspaces with their current HasUnread
+// flags. The slice is the rail's own; callers must not modify it.
+func (m *Model) Items() []WorkspaceItem { return m.items }
 
 func (m *Model) SetItems(items []WorkspaceItem) {
 	m.items = items
 	if m.selected >= len(items) {
 		m.selected = 0
 	}
+	if m.cursor >= len(items) {
+		m.cursor = 0
+	}
 	m.dirty()
+	m.scroll()
 }
 
 func (m *Model) SelectByID(teamID string) {
@@ -106,6 +126,7 @@ func (m *Model) SelectByID(teamID string) {
 			if m.selected != i {
 				m.selected = i
 				m.dirty()
+				m.scroll()
 			}
 			return
 		}
@@ -122,6 +143,82 @@ func (m *Model) SetUnread(teamID string, hasUnread bool) {
 			return
 		}
 	}
+}
+
+// SetFocused sets whether the rail has keyboard focus, which draws the
+// cursor marker.
+func (m *Model) SetFocused(focused bool) {
+	if m.focused != focused {
+		m.focused = focused
+		m.dirty()
+		m.scroll()
+	}
+}
+
+// SetHeight records the rail's drawn height (View's height), which
+// decides how many items fit and so where the rail scrolls to.
+func (m *Model) SetHeight(height int) {
+	if m.height != height {
+		m.height = height
+		m.dirty()
+		m.scroll()
+	}
+}
+
+// fit is how many items the rail draws: View pads one row above and
+// below and puts a blank row between items. 0 before SetHeight, meaning
+// all of them.
+func (m *Model) fit() int {
+	if m.height <= 0 {
+		return len(m.items)
+	}
+	return max(1, (m.height-2+1)/2)
+}
+
+// scroll moves offset the least that keeps the cursor (while focused)
+// or the selected workspace among the drawn items.
+func (m *Model) scroll() {
+	target := m.selected
+	if m.focused {
+		target = m.cursor
+	}
+	n := m.fit()
+	off := m.offset
+	if target < off {
+		off = target
+	}
+	if target >= off+n {
+		off = target - n + 1
+	}
+	off = max(0, min(off, len(m.items)-n))
+	if off != m.offset {
+		m.offset = off
+		m.dirty()
+	}
+}
+
+// ResetCursor puts the cursor on the selected workspace.
+func (m *Model) ResetCursor() { m.SetCursor(m.selected) }
+
+// SetCursor moves the cursor to idx, clamped to the items.
+func (m *Model) SetCursor(idx int) {
+	idx = max(0, min(idx, len(m.items)-1))
+	if idx >= 0 && m.cursor != idx {
+		m.cursor = idx
+		m.dirty()
+		m.scroll()
+	}
+}
+
+// MoveCursor moves the cursor by delta, clamped to the items.
+func (m *Model) MoveCursor(delta int) { m.SetCursor(m.cursor + delta) }
+
+// CursorID returns the workspace under the cursor, or "" with no items.
+func (m *Model) CursorID() string {
+	if m.cursor < 0 || m.cursor >= len(m.items) {
+		return ""
+	}
+	return m.items[m.cursor].ID
 }
 
 // SetUnreadReader installs the callback used by RefreshUnreads.
@@ -163,7 +260,9 @@ func (m Model) View(height int) string {
 	}
 
 	var rows []string
-	for i, item := range m.items {
+	end := min(len(m.items), m.offset+m.fit())
+	for i := m.offset; i < end; i++ {
+		item := m.items[i]
 		var style lipgloss.Style
 		if i == m.selected {
 			style = styles.WorkspaceActive
@@ -171,12 +270,22 @@ func (m Model) View(height int) string {
 			style = styles.WorkspaceInactive
 		}
 
-		initials := item.Initials
+		// A one-column slot on each side of the tile, the unread dot
+		// in the left one and the keyboard cursor in the right, so
+		// every row is the same width with or without them and
+		// centering never shifts the initials. The slots carry the
+		// rail background themselves: one after the tile follows its
+		// reset and would otherwise show the terminal's.
+		slot := styles.PresenceOnline.Background(styles.RailBackground)
+		left := slot.Render(" ")
 		if item.HasUnread && i != m.selected {
-			initials = initials + styles.PresenceOnline.Render("●")
+			left = slot.Render("●")
 		}
-		label := style.Render(initials)
-		rows = append(rows, label)
+		right := slot.Render(" ")
+		if m.focused && i == m.cursor {
+			right = slot.Render("◂")
+		}
+		rows = append(rows, left+style.Render(item.Initials)+right)
 	}
 
 	content := strings.Join(rows, "\n\n")
@@ -203,7 +312,8 @@ func (m Model) View(height int) string {
 //
 // Row layout mirrors View(): Padding(1,0) puts blank padding at row 0,
 // and items are "\n\n"-joined so they occupy rows 1, 3, 5, ... with
-// blank gap rows at 2, 4, 6, .... There is no horizontal column check
+// blank gap rows at 2, 4, 6, ..., starting from the first item drawn
+// (offset) when the rail is scrolled. There is no horizontal column check
 // because the rail has no border and uses its full 6-col width as the
 // click target.
 func (m Model) ClickAt(y int) (WorkspaceItem, bool) {
@@ -214,7 +324,10 @@ func (m Model) ClickAt(y int) (WorkspaceItem, bool) {
 	if rel%2 != 0 {
 		return WorkspaceItem{}, false // gap between items
 	}
-	idx := rel / 2
+	if rel/2 >= m.fit() {
+		return WorkspaceItem{}, false // below the last item drawn
+	}
+	idx := m.offset + rel/2
 	if idx < 0 || idx >= len(m.items) {
 		return WorkspaceItem{}, false
 	}

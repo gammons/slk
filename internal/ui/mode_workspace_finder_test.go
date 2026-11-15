@@ -447,3 +447,46 @@ func moveFinderDown(t *testing.T, a *App, want string) {
 		t.Fatalf("precondition: highlighted row = %q, want it to contain %q", got, want)
 	}
 }
+
+// TestWorkspaceFinderUnreadDots checks that :ws marks workspaces with
+// unreads the way the rail does (never the active one), puts the dot left
+// of the initials without shifting their column, and follows read-state
+// changes while open.
+func TestWorkspaceFinderUnreadDots(t *testing.T) {
+	a := newTestApp(t, workspaceFinderOpts()...)
+	unread := []string{"T1", "T2"} // T1 is active: no dot
+	a.workspaceRail.SetUnreadReader(func() []string { return unread })
+	a.notifyReadStateChanged()
+
+	a.enterCommandMode()
+	typeCommand(a, "ws")
+	_ = handleCommandMode(a, tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	rows := func() map[string]string {
+		got := map[string]string{}
+		for _, line := range strings.Split(stripANSI(a.workspaceFinder.View(120)), "\n") {
+			for _, name := range []string{"alpha", "beta", "gamma"} {
+				if strings.Contains(line, " "+name) {
+					got[name] = line
+				}
+			}
+		}
+		return got
+	}
+	r := rows()
+	for name, want := range map[string]bool{"alpha": false, "beta": true, "gamma": false} {
+		if got := strings.Contains(r[name], "●"); got != want {
+			t.Errorf("%s row %q: dot = %v, want %v", name, r[name], got, want)
+		}
+	}
+	col := func(line, initials string) int { return len([]rune(line[:strings.Index(line, initials)])) }
+	if a, b, g := col(r["alpha"], "AL"), col(r["beta"], "BE"), col(r["gamma"], "GA"); a != b || b != g {
+		t.Errorf("initials columns differ: AL=%d BE=%d GA=%d\n%q\n%q\n%q", a, b, g, r["alpha"], r["beta"], r["gamma"])
+	}
+
+	unread = nil
+	a.notifyReadStateChanged()
+	if line := rows()["beta"]; strings.Contains(line, "●") {
+		t.Errorf("beta row %q still has a dot after it was read", line)
+	}
+}
