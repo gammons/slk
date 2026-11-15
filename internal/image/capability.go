@@ -112,7 +112,7 @@ func Detect(env Env, cfg string) Protocol {
 	if env.KittyWindowID != "" || env.Term == "xterm-kitty" {
 		return ProtoKitty
 	}
-	if env.TermProgram == "ghostty" {
+	if env.TermProgram == "ghostty" || env.TermProgram == "Nash" {
 		return ProtoKitty
 	}
 	if env.TMUX != "" {
