@@ -157,10 +157,11 @@ func (a *App) activateUnopenableActivity(it core.ActivityItem) tea.Cmd {
 var reduceActivity reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	switch m := msg.(type) {
 	case ActivityViewActivatedMsg:
-		_ = m
 		a.view = ViewActivity
 		a.sidebar.SetActivityActive(true)
-		a.focusedPanel = PanelMessages
+		if !m.KeepFocus {
+			a.focusedPanel = PanelMessages
+		}
 		if a.activeTeamID == "" {
 			return nil, true
 		}

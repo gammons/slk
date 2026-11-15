@@ -132,7 +132,14 @@ func reduceModalClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 
 	// Outside the box -> dismiss.
 	if m.X < startX || m.X >= startX+w || m.Y < startY || m.Y >= startY+h {
-		return esc()
+		cmd := esc()
+		// :ws with workspace_picker_vim_keys: Esc while filtering only
+		// leaves the filter, so a second Esc closes it. Both go through
+		// the mode handler, which also rechecks waiting action dialogs.
+		if a.mode == ModeWorkspaceFinder {
+			return esc()
+		}
+		return cmd
 	}
 
 	// Inside the box on a point hot spot -> its press, or its activation.

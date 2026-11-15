@@ -16,6 +16,8 @@ hide_deactivated_users = true   # hide deactivated people, as the Slack desktop
                                 # they are not offered in the channel finder,
                                 # the new-message picker or @ / # autocomplete.
                                 # Set false to show them again. See below.
+workspace_picker_vim_keys = false  # true: :ws opens navigating: j/k move,
+                                   # / starts filtering (esc clears it)
 
 [appearance]
 theme = "dracula"
@@ -102,6 +104,9 @@ start_collapsed = false     # true: every section starts collapsed (Space/Enter
                             # on a header expands it until slk restarts)
 show_unread_in_collapsed = false  # true: a collapsed section still lists its
                                   # unread channels (and the open one)
+enter_keeps_focus = false   # true: Enter opens a conversation (or Threads,
+                            # Activity, or a workspace in the rail) but keeps
+                            # focus in the list, to skim with j/k; l moves on
 
 [compose]
 editor = "nvim"   # Ctrl+E editor, used when $VISUAL and $EDITOR are unset

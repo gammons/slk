@@ -144,6 +144,87 @@ func TestRailFocusKeys(t *testing.T) {
 	}
 }
 
+// TestEnterKeepsFocus: Enter on a sidebar conversation or the Threads
+// row opens it; focus moves to the messages pane by default and stays in
+// the sidebar with [sidebar] enter_keeps_focus. With the option, Enter in
+// the workspace rail also stays there through the completed switch.
+func TestEnterKeepsFocus(t *testing.T) {
+	for _, keep := range []bool{false, true} {
+		a := newTestApp(t, withChannels(
+			sidebar.ChannelItem{ID: "C1", Name: "general", Type: "channel"},
+			sidebar.ChannelItem{ID: "C2", Name: "random", Type: "channel"},
+		))
+		a.SetEnterKeepsFocus(keep)
+		want := PanelMessages
+		if keep {
+			want = PanelSidebar
+		}
+		enter := func() {
+			for _, msg := range drainSkippingTimers(dispatchModeKey(a, keyCode(tea.KeyEnter))) {
+				a.Update(msg)
+			}
+		}
+		a.sidebar.SelectByID("C2")
+		enter()
+		if a.activeChannelID != "C2" || a.focusedPanel != want {
+			t.Errorf("keep=%v, enter on #random: channel = %q, focus = %v; want C2, %v", keep, a.activeChannelID, a.focusedPanel, want)
+		}
+		a.focusedPanel = PanelSidebar
+		a.sidebar.SelectThreadsRow()
+		enter()
+		if a.view != ViewThreads || a.focusedPanel != want {
+			t.Errorf("keep=%v, enter on Threads: view = %v, focus = %v; want the threads view, %v", keep, a.view, a.focusedPanel, want)
+		}
+	}
+
+	a := newTestApp(t, withWorkspaces(
+		workspace.WorkspaceItem{ID: "T1", Name: "alpha", Initials: "AL"},
+		workspace.WorkspaceItem{ID: "T2", Name: "beta", Initials: "BE"},
+	))
+	a.SetEnterKeepsFocus(true)
+	// A switch to T<n> restores channel C<n>.
+	a.setWorkspaceSwitcherForTest(func(teamID string) tea.Msg {
+		id := "C" + teamID[1:]
+		return WorkspaceSwitchedMsg{TeamID: teamID, Channels: []sidebar.ChannelItem{{ID: id, Name: id, Type: "channel"}}}
+	})
+	// finish delivers each switch result, then the channel restore it asks for.
+	finish := func(cmds ...tea.Cmd) {
+		for _, c := range cmds {
+			_, swCmd := a.Update(c())
+			for _, msg := range drainSkippingTimers(swCmd) {
+				if sel, ok := msg.(ChannelSelectedMsg); ok {
+					a.Update(sel)
+				}
+			}
+		}
+	}
+	for _, k := range []tea.KeyMsg{keyPress('h'), keyPress('j')} {
+		_ = dispatchModeKey(a, k)
+	}
+	// Enter twice before the first switch completes starts two switches;
+	// both restores keep focus in the rail.
+	first := dispatchModeKey(a, keyCode(tea.KeyEnter))
+	second := dispatchModeKey(a, keyCode(tea.KeyEnter))
+	if first == nil || second == nil {
+		t.Fatal("enter in the rail returned no switch cmd")
+	}
+	finish(first, second)
+	if a.activeChannelID != "C2" || a.focusedPanel != PanelWorkspace {
+		t.Errorf("rail enter (twice) with the option: channel = %q, focus = %v; want C2 with focus still in the rail", a.activeChannelID, a.focusedPanel)
+	}
+
+	// Any other switch made while the rail has focus (here a digit) still
+	// moves focus to the messages pane.
+	digit := dispatchModeKey(a, keyPress('1'))
+	if digit == nil {
+		t.Fatal("1 in the rail returned no switch cmd")
+	}
+	finish(digit)
+	if a.activeChannelID != "C1" || a.focusedPanel != PanelMessages {
+		t.Errorf("digit switch from the rail: channel = %q, focus = %v; want C1 with focus in messages", a.activeChannelID, a.focusedPanel)
+	}
+}
+
 func TestAppToggleSidebar(t *testing.T) {
 	app := NewApp()
 

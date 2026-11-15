@@ -484,8 +484,10 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 			}
 		}
 		a.sidebar.SelectByID(target.ID)
+		// Enter in the rail with enter_keeps_focus left focus there.
+		keep := m.KeepFocus
 		batch = append(batch, func() tea.Msg {
-			return ChannelSelectedMsg{ID: target.ID, Name: target.Name, Type: target.Type}
+			return ChannelSelectedMsg{ID: target.ID, Name: target.Name, Type: target.Type, KeepFocus: keep}
 		})
 	} else {
 		a.sidebar.SelectThreadsRow()

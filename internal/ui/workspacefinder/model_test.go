@@ -192,3 +192,65 @@ func TestHandleKey_NonASCIIQuery(t *testing.T) {
 		t.Errorf("after backspace query = %q, want %q", m.query, "中")
 	}
 }
+
+// TestVimKeysNavigateThenSearch: with vimKeys the finder opens
+// navigating, where j/k move the highlight and letters do not filter; /
+// starts the filter, where j is just a letter; esc leaves the filter
+// (clearing it) before it closes; enter selects from either state.
+func TestVimKeysNavigateThenSearch(t *testing.T) {
+	m := New()
+	m.SetVimKeys(true)
+	m.SetItems(testItems())
+	m.Open()
+
+	for _, k := range []string{"j", "j", "k"} {
+		m.HandleKey(k)
+	}
+	if m.selected != 1 || m.query != "" {
+		t.Fatalf("after j j k: selected = %d, query = %q; want 1, \"\"", m.selected, m.query)
+	}
+	m.HandleKey("c")
+	if m.query != "" || len(m.filtered) != 4 {
+		t.Fatalf("a letter filtered before /: query = %q, %d rows", m.query, len(m.filtered))
+	}
+
+	m.HandleKey("/")
+	for _, k := range []string{"c", "j", "k"} {
+		m.HandleKey(k)
+	}
+	if m.query != "cjk" {
+		t.Fatalf("query = %q, want %q: j/k must type while searching", m.query, "cjk")
+	}
+	m.HandleKey("esc")
+	if !m.IsVisible() || m.query != "" || len(m.filtered) != 4 {
+		t.Fatalf("first esc: visible = %v, query = %q, %d rows; want open, cleared, 4 rows", m.IsVisible(), m.query, len(m.filtered))
+	}
+	m.HandleKey("esc")
+	if m.IsVisible() {
+		t.Fatal("second esc should close the finder")
+	}
+
+	m.Open() // reopening starts navigating again
+	for _, k := range []string{"/", "b", "e"} {
+		m.HandleKey(k)
+	}
+	if r := m.HandleKey("enter"); r == nil || r.ID != "T2" {
+		t.Fatalf("enter while searching = %+v, want T2", r)
+	}
+}
+
+// TestDefaultKeysFilterAtOnce: without vimKeys, j is a letter of the
+// query and esc closes, as before the option existed.
+func TestDefaultKeysFilterAtOnce(t *testing.T) {
+	m := New()
+	m.SetItems(testItems())
+	m.Open()
+	m.HandleKey("j")
+	if m.query != "j" {
+		t.Fatalf("query = %q, want %q", m.query, "j")
+	}
+	m.HandleKey("esc")
+	if m.IsVisible() {
+		t.Fatal("esc should close the finder")
+	}
+}
