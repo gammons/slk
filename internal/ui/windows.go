@@ -56,7 +56,7 @@ func (a *App) windowBounds() wintree.Rect {
 		frame := scratch.ComputeFullscreen(a.width, a.height, PanelMessages, a.compact)
 		return wintree.Rect{X: 0, Y: 0, W: frame.MsgWidth + frame.MsgBorder, H: frame.ContentHeight}
 	}
-	frame := scratch.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),
+	frame := scratch.Compute(a.width, a.height, a.railWidth(), a.sidebar.Width(),
 		a.sidebarVisible, a.threadVisible, false, a.compact)
 	return wintree.Rect{X: 0, Y: 0, W: frame.MsgWidth + frame.MsgBorder, H: frame.ContentHeight}
 }
