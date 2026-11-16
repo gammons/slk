@@ -186,11 +186,7 @@ func opensWithoutConfirm(rawURL string) bool {
 // routeLink decides between in-app navigation and the browser.
 func (a *App) routeLink(rawURL string) tea.Cmd {
 	pl, ok := slackurl.Parse(rawURL)
-	if !ok {
-		return a.browserOpener(rawURL)
-	}
-	domain := a.activeWorkspaceDomain()
-	if domain == "" || pl.Subdomain != domain {
+	if !ok || !a.permalinkBelongsToActiveWorkspace(pl) {
 		return a.browserOpener(rawURL)
 	}
 	cmd, ok := a.applyLocation(Location{

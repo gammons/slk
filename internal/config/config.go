@@ -268,6 +268,11 @@ type Marks struct {
 type Workspace struct {
 	TeamID string `toml:"team_id"`
 	Theme  string `toml:"theme"`
+	// PermalinkDomains are additional Slack workspace subdomains whose
+	// archive permalinks belong to this workspace. This is needed on
+	// Enterprise Grid, where a permalink can use a different domain from
+	// auth.test's workspace URL.
+	PermalinkDomains []string `toml:"permalink_domains"`
 	// Order controls the workspace's position in the rail and the
 	// digit-key mapping (1-9). Positive values are explicit positions
 	// ascending; 0 or unset means "unordered" (sorts after ordered
@@ -533,6 +538,16 @@ func (c Config) EffectiveShowJumpOverlay() bool {
 		return *c.Marks.ShowJumpOverlay
 	}
 	return true
+}
+
+// PermalinkDomains returns a caller-owned list of additional Slack
+// subdomains whose archive permalinks should route to teamID.
+func (c Config) PermalinkDomains(teamID string) []string {
+	ws, ok := c.WorkspaceByTeamID(teamID)
+	if !ok {
+		return nil
+	}
+	return append([]string(nil), ws.PermalinkDomains...)
 }
 
 // ResolveWidth returns the sidebar width to use for the given workspace,

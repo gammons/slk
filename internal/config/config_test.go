@@ -85,6 +85,25 @@ message_retention_days = 7
 // general.download_dir: the default (and any user-supplied "~"-prefixed
 // value) is expanded against the real home directory, while an absolute
 // path passes through unchanged.
+func TestPermalinkDomains(t *testing.T) {
+	cfg := loadConfigString(t, `
+[workspaces.example]
+team_id = "T0123ABCD"
+permalink_domains = ["legacy"]
+`)
+	got := cfg.PermalinkDomains("T0123ABCD")
+	if len(got) != 1 || got[0] != "legacy" {
+		t.Fatalf("PermalinkDomains(T0123ABCD) = %q, want [legacy]", got)
+	}
+	got[0] = "mutated"
+	if next := cfg.PermalinkDomains("T0123ABCD"); next[0] != "legacy" {
+		t.Fatalf("PermalinkDomains returned shared slice: %q", next)
+	}
+	if got := cfg.PermalinkDomains("missing"); got != nil {
+		t.Errorf("PermalinkDomains(missing) = %q, want nil", got)
+	}
+}
+
 func TestLoadConfig_DownloadDirExpansion(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {

@@ -370,10 +370,11 @@ type (
 		// Domain is the workspace's slack.com subdomain (e.g.
 		// "truelist-workspace"), from auth.test. Used to decide
 		// whether an archive permalink belongs to this workspace.
-		Domain       string
-		Theme        string // resolved theme name (per-workspace or global default)
-		SidebarWidth int    // resolved sidebar width (per-workspace or global default)
-		Channels     []sidebar.ChannelItem
+		Domain           string
+		PermalinkDomains []string // configured aliases for archive permalink routing
+		Theme            string   // resolved theme name (per-workspace or global default)
+		SidebarWidth     int      // resolved sidebar width (per-workspace or global default)
+		Channels         []sidebar.ChannelItem
 		// ChannelNames includes known non-member channels for mention rendering.
 		ChannelNames map[string]string
 		FinderItems  []core.ChannelFinderItem
@@ -465,10 +466,11 @@ type (
 		// Domain is the workspace's slack.com subdomain (e.g.
 		// "truelist-workspace"), from auth.test. Used to decide
 		// whether an archive permalink belongs to this workspace.
-		Domain       string
-		Theme        string // resolved theme name (per-workspace or global default)
-		SidebarWidth int    // resolved sidebar width (per-workspace or global default)
-		Channels     []sidebar.ChannelItem
+		Domain           string
+		PermalinkDomains []string // configured aliases for archive permalink routing
+		Theme            string   // resolved theme name (per-workspace or global default)
+		SidebarWidth     int      // resolved sidebar width (per-workspace or global default)
+		Channels         []sidebar.ChannelItem
 		// ChannelNames includes known non-member channels for mention rendering.
 		ChannelNames map[string]string
 		FinderItems  []core.ChannelFinderItem

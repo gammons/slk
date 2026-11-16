@@ -590,10 +590,12 @@ type App struct {
 	// channel is no longer in the list.
 	lastChannelByTeam map[string]string
 
-	// workspaceDomains maps teamID -> slack.com subdomain, recorded
-	// from WorkspaceReadyMsg / WorkspaceSwitchedMsg. Read by the link
-	// router to match permalink hosts against the active workspace.
+	// workspaceDomains maps teamID -> auth.test's slack.com subdomain.
+	// permalinkDomains adds configured aliases for Enterprise Grid archive
+	// links. Both are recorded from WorkspaceReadyMsg / WorkspaceSwitchedMsg
+	// and read only on the Update goroutine.
 	workspaceDomains map[string]string
+	permalinkDomains map[string][]string
 
 	// pendingLinkNav tracks an in-flight permalink navigation: the
 	// channel was (or is being) opened and the message-select /
@@ -1002,6 +1004,7 @@ func NewApp() *App {
 		searchSvc:             noopSearchService,
 		lastChannelByTeam:     map[string]string{},
 		workspaceDomains:      map[string]string{},
+		permalinkDomains:      map[string][]string{},
 		desktop:               noopDesktopService,
 		editor:                noopEditorService,
 		navHistory:            newNavHistoryStore(),
@@ -1729,11 +1732,7 @@ func (a *App) downloadFilesOfSelected() tea.Cmd {
 // guards at the top of routeLink.
 func (a *App) linkOpensInApp(rawURL string) bool {
 	pl, ok := slackurl.Parse(rawURL)
-	if !ok {
-		return false
-	}
-	domain := a.activeWorkspaceDomain()
-	if domain == "" || pl.Subdomain != domain {
+	if !ok || !a.permalinkBelongsToActiveWorkspace(pl) {
 		return false
 	}
 	_, _, found := a.channels.Lookup(pl.ChannelID)
@@ -3776,6 +3775,20 @@ func (a *App) activeTeamName() string {
 // browser for all slack.com permalinks).
 func (a *App) activeWorkspaceDomain() string {
 	return a.workspaceDomains[a.activeTeamID]
+}
+
+// permalinkBelongsToActiveWorkspace reports whether a parsed archive link
+// uses either the active workspace's auth.test domain or a configured alias.
+func (a *App) permalinkBelongsToActiveWorkspace(pl slackurl.Permalink) bool {
+	if pl.Subdomain == a.activeWorkspaceDomain() {
+		return pl.Subdomain != ""
+	}
+	for _, domain := range a.permalinkDomains[a.activeTeamID] {
+		if pl.Subdomain == domain {
+			return true
+		}
+	}
+	return false
 }
 
 // workspaceNameForActive returns the display name of the active workspace
