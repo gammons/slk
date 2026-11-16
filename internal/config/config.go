@@ -540,9 +540,6 @@ func (c Config) EffectiveShowJumpOverlay() bool {
 	return true
 }
 
-// ResolveWidth returns the sidebar width to use for the given workspace,
-// falling back to the global Sidebar.Width when no per-workspace width
-// is set, and to 30 when no global width is set either.
 // PermalinkDomains returns a caller-owned list of additional Slack
 // subdomains whose archive permalinks should route to teamID.
 func (c Config) PermalinkDomains(teamID string) []string {
@@ -553,6 +550,9 @@ func (c Config) PermalinkDomains(teamID string) []string {
 	return append([]string(nil), ws.PermalinkDomains...)
 }
 
+// ResolveWidth returns the sidebar width to use for the given workspace,
+// falling back to the global Sidebar.Width when no per-workspace width
+// is set, and to 30 when no global width is set either.
 func (c Config) ResolveWidth(teamID string) int {
 	if ws, ok := c.WorkspaceByTeamID(teamID); ok && ws.SidebarWidth != 0 {
 		return ws.SidebarWidth
