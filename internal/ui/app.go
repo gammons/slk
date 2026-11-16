@@ -8,6 +8,7 @@ import (
 	"log"
 	"maps"
 	"mime"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -4816,6 +4817,7 @@ func resolveFilePath(text string) (string, bool) {
 	if s == "" || strings.ContainsAny(s, "\n\r") || len(s) > 4096 {
 		return "", false
 	}
+	s = unshellPath(s)
 	if strings.HasPrefix(s, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -4827,6 +4829,49 @@ func resolveFilePath(text string) (string, bool) {
 		return "", false
 	}
 	return filepath.Clean(s), true
+}
+
+// unshellPath undoes the quoting a terminal applies when it pastes or
+// drops a file, so the path reaches resolveFilePath as it is on disk.
+// Terminals make a dropped path safe to paste into a shell, each in
+// its own way: Ghostty and iTerm2 escape spaces with backslashes
+// (`/a/My\ File.pdf`), others wrap the path in single quotes
+// (`'/a/My File.pdf'`, an apostrophe inside closing, escaping and
+// reopening the quotes), and some
+// paste a file URL (`file:///a/My%20File.pdf`). Text that is none of
+// these comes back unchanged.
+func unshellPath(s string) string {
+	if strings.HasPrefix(s, "file://") {
+		if u, err := url.Parse(s); err == nil && u.Path != "" && (u.Host == "" || u.Host == "localhost") {
+			return u.Path
+		}
+		return s
+	}
+	if len(s) >= 2 && s[0] == '\'' && s[len(s)-1] == '\'' {
+		return strings.ReplaceAll(s[1:len(s)-1], `'\''`, "'")
+	}
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		return unescapeBackslashes(s[1 : len(s)-1])
+	}
+	// A backslash is a path separator on Windows, never an escape.
+	if filepath.Separator == '/' && strings.Contains(s, `\`) {
+		return unescapeBackslashes(s)
+	}
+	return s
+}
+
+// unescapeBackslashes drops the backslash in front of every escaped
+// character (`\ ` → ` `, `\\` → `\`). A trailing lone backslash stays.
+func unescapeBackslashes(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			i++
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
 
 // scheduleChannelSearch defers a channels/search for the finder's
