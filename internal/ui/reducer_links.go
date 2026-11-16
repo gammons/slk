@@ -24,7 +24,6 @@ import (
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/rivo/uniseg"
 
-	"github.com/gammons/slk/internal/debuglog"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/slackurl"
 	"github.com/gammons/slk/internal/ui/messages"
@@ -187,12 +186,7 @@ func opensWithoutConfirm(rawURL string) bool {
 // routeLink decides between in-app navigation and the browser.
 func (a *App) routeLink(rawURL string) tea.Cmd {
 	pl, ok := slackurl.Parse(rawURL)
-	if !ok {
-		debuglog.General("link route: URL is not a Slack archive permalink")
-		return a.browserOpener(rawURL)
-	}
-	if !a.permalinkBelongsToActiveWorkspace(pl) {
-		debuglog.General("link route: workspace domain mismatch: link=%q active=%q team=%q", pl.Subdomain, a.activeWorkspaceDomain(), a.activeTeamID)
+	if !ok || !a.permalinkBelongsToActiveWorkspace(pl) {
 		return a.browserOpener(rawURL)
 	}
 	cmd, ok := a.applyLocation(Location{
@@ -204,7 +198,6 @@ func (a *App) routeLink(rawURL string) tea.Cmd {
 	if ok {
 		return cmd
 	}
-	debuglog.General("link route: channel %q is not known in active team %q", pl.ChannelID, a.activeTeamID)
 	return a.browserOpener(rawURL)
 }
 
