@@ -323,9 +323,11 @@ func (d *dragState) Handle(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			case PanelMessages:
 				a.messagepane.ClearSelection()
 				// Treat a click on a real message row as Enter:
-				// open that message's thread. Clicks that missed
-				// (chrome, empty space) leave the panel as-is.
-				if clickedMessage {
+				// open that message's thread, unless
+				// click_opens_thread is off (the click has already
+				// selected the row). Clicks that missed (chrome,
+				// empty space) leave the panel as-is.
+				if clickedMessage && a.clickOpensThread {
 					if cmd := a.openThreadForSelectedMessage(); cmd != nil {
 						return cmd, true
 					}

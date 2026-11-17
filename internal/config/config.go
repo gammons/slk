@@ -131,6 +131,11 @@ type Appearance struct {
 	// mouse-wheel notch. Higher = faster scroll. Defaults to 3 (typical
 	// terminal behavior). Clamped to >= 1 at load time.
 	MouseWheelLines int `toml:"mouse_wheel_lines"`
+	// ClickOpensThread makes a plain click on a message open its
+	// thread, like Enter. Off: a click only selects the message, for
+	// people who read with the cursor (#197). Default on; Load decodes
+	// over Default(), so an explicit false reads back.
+	ClickOpensThread bool `toml:"click_opens_thread"`
 	// EmojiImages controls whether emoji are rendered as PNG images
 	// (from Slack's CDN) via the kitty graphics protocol. One of:
 	// "on" (default) or "off". On non-kitty terminals this is silently
@@ -301,17 +306,18 @@ func Default() Config {
 			HideDeactivatedUsers: true,
 		},
 		Appearance: Appearance{
-			Theme:           "nord",
-			TimestampFormat: "3:04 PM",
-			ShowAvatars:     true,
-			ThreadAvatars:   true,
-			ImageProtocol:   "auto",
-			KittyPlacement:  "auto",
-			MaxImageRows:    20,
-			MaxImageCols:    60,
-			MouseWheelLines: 3,
-			EmojiImages:     "on",
-			EmojiCells:      2,
+			Theme:            "nord",
+			TimestampFormat:  "3:04 PM",
+			ShowAvatars:      true,
+			ThreadAvatars:    true,
+			ImageProtocol:    "auto",
+			KittyPlacement:   "auto",
+			MaxImageRows:     20,
+			MaxImageCols:     60,
+			MouseWheelLines:  3,
+			ClickOpensThread: true,
+			EmojiImages:      "on",
+			EmojiCells:       2,
 		},
 		Animations: Animations{
 			Enabled:          true,

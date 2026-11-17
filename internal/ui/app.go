@@ -626,6 +626,9 @@ type App struct {
 	// enterKeepsFocus is the [sidebar] enter_keeps_focus option; see
 	// SetEnterKeepsFocus.
 	enterKeepsFocus bool
+	// clickOpensThread is the [appearance] click_opens_thread option;
+	// see SetClickOpensThread. On by default.
+	clickOpensThread bool
 
 	// search is the active in-channel search (nil = none).
 	// searchInput is the prompt buffer while in ModeSearch.
@@ -986,6 +989,7 @@ func NewApp() *App {
 		channelSearchDebounce: channelSearchDebounceDelay,
 		fetchingOlder:         map[string]bool{},
 		mouseWheelLines:       3,
+		clickOpensThread:      true,
 		hideDeactivatedUsers:  true, // config.Default()'s value
 		userNames:             map[string]string{},
 		externalUsers:         map[string]bool{},
@@ -3073,6 +3077,13 @@ func (a *App) SetStayInInsertAfterSend(b bool) {
 // there, instead of moving it to the messages pane.
 func (a *App) SetEnterKeepsFocus(b bool) {
 	a.enterKeepsFocus = b
+}
+
+// SetClickOpensThread sets the [appearance] click_opens_thread option:
+// when off, a plain click on a message selects it without opening its
+// thread.
+func (a *App) SetClickOpensThread(b bool) {
+	a.clickOpensThread = b
 }
 
 // SetWorkspacePickerVimKeys sets the [general] workspace_picker_vim_keys

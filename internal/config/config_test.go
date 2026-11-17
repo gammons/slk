@@ -1239,3 +1239,14 @@ func TestConfig_TransparentBackground(t *testing.T) {
 		t.Error("transparent_background = true read back false")
 	}
 }
+
+// click_opens_thread (#197) defaults to on and an explicit false reads
+// back, since Load decodes over Default().
+func TestConfig_ClickOpensThread(t *testing.T) {
+	if !loadConfigString(t, "").Appearance.ClickOpensThread {
+		t.Error("click_opens_thread must default to on")
+	}
+	if loadConfigString(t, "[appearance]\nclick_opens_thread = false\n").Appearance.ClickOpensThread {
+		t.Error("click_opens_thread = false must read back as off")
+	}
+}
