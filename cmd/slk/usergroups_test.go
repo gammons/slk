@@ -84,3 +84,14 @@ func TestWorkspaceContextUserGroupsConcurrentAccess(t *testing.T) {
 		t.Errorf("UserGroups()[S1] = %q, want platform-team", got)
 	}
 }
+
+func TestSelfUserGroups(t *testing.T) {
+	self := selfUserGroups([]slack.UserGroup{
+		{ID: "S1", Users: []string{"U2", "U1"}},
+		{ID: "S2", Users: []string{"U2"}},
+		{ID: "S3"},
+	}, "U1")
+	if len(self) != 1 || !self["S1"] {
+		t.Errorf("selfUserGroups = %v, want only S1", self)
+	}
+}

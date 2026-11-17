@@ -402,6 +402,7 @@ type (
 		UserID         string
 		CustomEmoji    map[string]string
 		UserGroups     map[string]string
+		SelfUserGroups map[string]bool // usergroup IDs the user is in
 		// SectionsProvider supplies Slack-native sidebar sections for this
 		// workspace. Nil means "use config-glob behavior" (the App's
 		// sidebar reverts to its existing name-keyed buckets).
@@ -497,6 +498,7 @@ type (
 		UserID         string
 		CustomEmoji    map[string]string
 		UserGroups     map[string]string
+		SelfUserGroups map[string]bool // usergroup IDs the user is in
 		// SectionsProvider supplies Slack-native sidebar sections for this
 		// workspace. Nil means "use config-glob behavior" (the App's
 		// sidebar reverts to its existing name-keyed buckets).
@@ -528,8 +530,9 @@ type (
 	// fetch finishes in the background. App refreshes render caches and
 	// compose mention entries only when TeamID matches the active workspace.
 	UserGroupsLoadedMsg struct {
-		TeamID     string
-		UserGroups map[string]string
+		TeamID         string
+		UserGroups     map[string]string
+		SelfUserGroups map[string]bool
 	}
 	WorkspaceFailedMsg struct {
 		TeamName string

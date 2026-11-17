@@ -18,8 +18,13 @@ type WrapStyles struct {
 	fill     lipgloss.Style
 	invis    lipgloss.Style
 	selected lipgloss.Style
-	compact  bool
-	focused  bool
+	// mention* draw the unselected row of a message that mentions the
+	// user: its tint, the fill in that tint, and the colored left bar.
+	mentionTint   string
+	mentionFill   lipgloss.Style
+	mentionBorder lipgloss.Style
+	compact       bool
+	focused       bool
 
 	// stats, when non-nil, collects per-sub-step durations (channel
 	// pane perf instrumentation).
@@ -37,6 +42,11 @@ func NewWrapStyles(focused bool, compact bool) WrapStyles {
 			BorderForeground(styles.SelectionBorderColor(focused)).
 			BorderBackground(styles.SelectionTintColor(focused)).
 			Background(styles.SelectionTintColor(focused)),
+		mentionTint: bgANSIFor(styles.MentionHighlightBg()),
+		mentionFill: lipgloss.NewStyle().Background(styles.MentionHighlightBg()),
+		mentionBorder: lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).
+			BorderForeground(styles.MentionHighlightBar()).
+			BorderBackground(styles.MentionHighlightBg()),
 		focused: focused,
 		compact: compact,
 	}
@@ -124,6 +134,9 @@ func WrapRows(msg MessageItem, r RenderedMessage, width int, s WrapStyles) Wrapp
 	}
 	filledNormal := s.fill.Width(width - 1).Render(rendered)
 	normal := s.invis.Render(filledNormal)
+	if r.MentionsSelf {
+		normal = s.mentionBorder.Render(s.mentionFill.Width(width - 1).Render(repaintBg(rendered, s.mentionTint)))
+	}
 	selected := s.SelectedVariant(renderedSel, width)
 	var shortSrc string
 	if renderedSel != rendered {

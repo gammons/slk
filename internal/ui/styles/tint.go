@@ -97,4 +97,38 @@ func rgbHex(r, g, b uint8) string {
 func resetDerivedTints() {
 	selectionBgFocused = nil
 	selectionBgUnfocused = nil
+	selfMentionBg, selfMentionFg = nil, nil
+	mentionHighlightBg, mentionHighlightBar = nil, nil
+}
+
+// Mention colors: the theme's values when set (Apply), otherwise derived
+// on first use from Warning, the gold Slack uses for the same thing.
+var selfMentionBg, selfMentionFg, mentionHighlightBg, mentionHighlightBar color.Color
+
+// SelfMentionColors is the background and foreground of an @mention
+// that reaches the user.
+func SelfMentionColors() (bg, fg color.Color) {
+	if selfMentionBg == nil {
+		selfMentionBg = Warning
+	}
+	if selfMentionFg == nil {
+		selfMentionFg = ThemeBackground()
+	}
+	return selfMentionBg, selfMentionFg
+}
+
+// MentionHighlightBg is the background of a message that mentions the user.
+func MentionHighlightBg() color.Color {
+	if mentionHighlightBg == nil {
+		mentionHighlightBg = mixColors(Warning, ThemeBackground(), defaultTintAlpha)
+	}
+	return mentionHighlightBg
+}
+
+// MentionHighlightBar is the left bar of a message that mentions the user.
+func MentionHighlightBar() color.Color {
+	if mentionHighlightBar == nil {
+		mentionHighlightBar = Warning
+	}
+	return mentionHighlightBar
 }

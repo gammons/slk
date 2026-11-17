@@ -331,3 +331,48 @@ func TestMentionBadgeStyle_HonorsSelectionOverride(t *testing.T) {
 		t.Errorf("foreground = %v, want #ABCDEF", s.GetForeground())
 	}
 }
+
+// Mention colors default to Warning (Slack's gold) and follow the theme
+// when it sets them; switching back drops the theme's values.
+func TestMentionColors_DefaultAndThemeRole(t *testing.T) {
+	defer Apply("dark", config.Theme{})
+	Apply("dark", config.Theme{})
+	bg, fg := SelfMentionColors()
+	if !colorEqual(bg, Warning) || !colorEqual(fg, ThemeBackground()) {
+		t.Errorf("self mention = %v on %v, want Background on Warning", fg, bg)
+	}
+	if !colorEqual(MentionHighlightBar(), Warning) {
+		t.Errorf("bar = %v, want Warning", MentionHighlightBar())
+	}
+	if want := mixColors(Warning, ThemeBackground(), defaultTintAlpha); !colorEqual(MentionHighlightBg(), want) {
+		t.Errorf("highlight bg = %v, want %v", MentionHighlightBg(), want)
+	}
+
+	RegisterCustomTheme("mentiontest", ThemeColors{
+		Primary: "#1264A3", Accent: "#007A5A", Warning: "#ECB22E",
+		Error: "#C01343", Background: "#FFFFFF", Surface: "#F8F8F8",
+		SurfaceDark: "#F2F2F2", Text: "#1D1C1D", TextMuted: "#616061", Border: "#DDDDDD",
+		SelfMentionBg: "#111111", SelfMentionFg: "#222222",
+		MentionHighlightBg: "#333333", MentionHighlightBar: "#444444",
+	})
+	Apply("mentiontest", config.Theme{})
+	bg, fg = SelfMentionColors()
+	for _, c := range []struct {
+		name      string
+		got, want color.Color
+	}{
+		{"self_mention_bg", bg, lipgloss.Color("#111111")},
+		{"self_mention_fg", fg, lipgloss.Color("#222222")},
+		{"mention_highlight_bg", MentionHighlightBg(), lipgloss.Color("#333333")},
+		{"mention_highlight_bar", MentionHighlightBar(), lipgloss.Color("#444444")},
+	} {
+		if !colorEqual(c.got, c.want) {
+			t.Errorf("%s = %v, want %v", c.name, c.got, c.want)
+		}
+	}
+
+	Apply("dark", config.Theme{})
+	if !colorEqual(MentionHighlightBar(), Warning) {
+		t.Error("mention_highlight_bar leaked into a theme without it")
+	}
+}

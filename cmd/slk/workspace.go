@@ -147,6 +147,9 @@ type WorkspaceContext struct {
 	// The stored map is published once and never mutated afterwards, so
 	// readers need no further synchronization.
 	userGroups atomic.Pointer[map[string]string]
+	// selfUserGroups is the IDs of the usergroups the user is in,
+	// published alongside userGroups and read the same way.
+	selfUserGroups atomic.Pointer[map[string]bool]
 	// Self presence and DND state for this workspace. Populated on connect
 	// and updated by manual_presence_change / dnd_updated WS events plus
 	// optimistic writes from the presence menu.
@@ -217,6 +220,21 @@ func (w *WorkspaceContext) UserGroups() map[string]string {
 // workspace. The caller must not mutate the map afterwards.
 func (w *WorkspaceContext) SetUserGroups(groups map[string]string) {
 	w.userGroups.Store(&groups)
+}
+
+// SelfUserGroups returns the IDs of the usergroups the user is in, or
+// nil before usergroups.list has returned. Read-only, like UserGroups.
+func (w *WorkspaceContext) SelfUserGroups() map[string]bool {
+	if m := w.selfUserGroups.Load(); m != nil {
+		return *m
+	}
+	return nil
+}
+
+// SetSelfUserGroups publishes the user's usergroup IDs. The caller must
+// not mutate the map afterwards.
+func (w *WorkspaceContext) SetSelfUserGroups(groups map[string]bool) {
+	w.selfUserGroups.Store(&groups)
 }
 
 // CustomEmoji returns this workspace's emoji name -> URL map, or an

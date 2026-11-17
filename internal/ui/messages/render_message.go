@@ -48,6 +48,7 @@ type RenderContext struct {
 	UserNames        map[string]string
 	ChannelNames     map[string]string
 	UserGroups       map[string]string
+	Self             SelfMentions // messages mentioning the user are highlighted
 	Emoji            EmojiContext
 	Images           *imgrender.Renderer // non-nil; the pane creates it
 	ImageChannel     string              // the key image fetches and ImageReadyMsg use (P3)
@@ -80,6 +81,7 @@ type RenderedMessage struct {
 	Content      string
 	Header       string // the wrapped author header (with "(edited)"), for SelectedHeader
 	HeaderBudget int
+	MentionsSelf bool            // someone else's message that mentions the user; WrapRows highlights it
 	Hits         []entrylist.Hit // image and file hits (when ImageHits), then reaction pills
 	SixelRows    []sixelEntry
 	// Kitty uploads by source: each pane keeps its own upload order.
@@ -99,6 +101,7 @@ func BlockkitContext(msg MessageItem, rc *RenderContext, emojiFlushes *[]func(io
 		UserNames:    rc.UserNames,
 		ChannelNames: rc.ChannelNames,
 		UserGroups:   rc.UserGroups,
+		Self:         rc.Self,
 		PlaceCtx:     rc.Emoji.PlaceCtx,
 		EmojiCells:   rc.Emoji.Cells,
 		Customs:      rc.Emoji.Customs,
@@ -216,6 +219,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	}
 	avatarStr := opt.Avatar
 	stats := opt.stats
+	out.MentionsSelf = msg.UserID != rc.Self.UserID && rc.Self.InText(MessageTextSource(msg))
 
 	// If we have an avatar, reserve space on the left for it
 	contentWidth := width - 4
@@ -253,6 +257,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		UserNames:    rc.UserNames,
 		ChannelNames: rc.ChannelNames,
 		UserGroups:   rc.UserGroups,
+		Self:         rc.Self,
 		PlaceCtx:     rc.Emoji.PlaceCtx,
 		EmojiCells:   rc.Emoji.Cells,
 		Customs:      rc.Emoji.Customs,
