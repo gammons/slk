@@ -137,7 +137,10 @@ type Context struct {
 	CellPixels  image.Point
 	MaxRows     int // for full-size image blocks
 	MaxCols     int
-	UserNames   map[string]string // for resolving <@U…> mentions in mrkdwn
+	// Policy decides which image URLs load ([general]
+	// image_loading). Nil loads every URL.
+	Policy    *imgpkg.LoadPolicy
+	UserNames map[string]string // for resolving <@U…> mentions in mrkdwn
 	// SendMsg is a tea.Cmd-style callback typed as func(any) so this
 	// package does not need to import bubbletea. Used by image-block
 	// prefetchers to signal completion. May be nil; when nil, image

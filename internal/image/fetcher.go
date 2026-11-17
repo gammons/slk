@@ -2,6 +2,7 @@ package image
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -14,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gammons/slk/internal/debuglog"
@@ -42,7 +44,36 @@ type FetchRequest struct {
 	// (e.g. avatar fetches that don't participate in the per-image
 	// timeline log). Logged as req_id=N in the [imgfetch] surface.
 	ReqID uint64
+	// Gated marks a message image (file thumbnail, Block Kit image,
+	// link-preview image): one whose URL a message's sender chose. Such
+	// a fetch is refused with ErrNotAllowed unless the fetcher's
+	// LoadPolicy decides Load for the URL; one loaded because its host
+	// is trusted (not because the user allowed it) must also stay on
+	// allowed hosts through every redirect. Avatars and custom emoji, whose URLs Slack assigns,
+	// are not gated.
+	Gated bool
 }
+
+// ErrNotAllowed is returned for a gated fetch the LoadPolicy does not
+// allow, and for a gated fetch redirected somewhere it does not allow.
+var ErrNotAllowed = errors.New("image: not allowed by image_loading policy")
+
+// maxImageBytes caps a downloaded image body, and maxImagePixels the
+// width*height an image may declare before it is decoded. Both bound the
+// memory one image can make slk allocate: a few-KB PNG can declare a
+// 100k x 100k canvas, and Go aborts the whole process when an allocation
+// that large fails. Slack's largest thumbnails are far below both.
+//
+// The pixel cap is on the *declared* canvas, not on bytes, so the figure
+// has to allow for the widest pixel format: a 16-bit RGBA PNG decodes to
+// 8 bytes per pixel, so 25 MP is a ~200 MB allocation, and several
+// fetches can be in flight at once. 25 MP still clears every real case
+// — a 4K frame is 8.3 MP and a 24 MP camera original fits — while
+// halving the worst case the previous 50 MP allowed.
+const (
+	maxImageBytes  = 32 << 20
+	maxImagePixels = 25_000_000
+)
 
 // FetchResult is the decoded, downscaled image plus on-disk metadata.
 type FetchResult struct {
@@ -105,7 +136,13 @@ type Fetcher struct {
 	// files.slack.com fetch (per-team map + Slack Connect fallback
 	// retry + learned foreign-team mapping).
 	resolver *slackhttp.AuthResolver
+
+	// policy gates FetchRequest.Gated fetches; nil gates nothing.
+	policy atomic.Pointer[LoadPolicy]
 }
+
+// redirectGuardKey carries a gated fetch's policy to CheckRedirect.
+type redirectGuardKey struct{}
 
 // fetchConcurrencyLimit caps the number of in-flight HTTP fetches.
 // Slack's files.slack.com CDN rate-limits aggressive scraping (HTTP 429).
@@ -131,9 +168,25 @@ func NewFetcher(cache *Cache, client *http.Client) *Fetcher {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
+	// A copy, so the redirect guard below does not change the caller's
+	// client.
+	c := *client
+	prev := c.CheckRedirect
+	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if p, ok := req.Context().Value(redirectGuardKey{}).(*LoadPolicy); ok && p.Decide(req.URL.String()) != Load {
+			return fmt.Errorf("redirect to %s: %w", req.URL.Host, ErrNotAllowed)
+		}
+		if prev != nil {
+			return prev(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
 	return &Fetcher{
 		cache:       cache,
-		http:        client,
+		http:        &c,
 		sem:         make(chan struct{}, fetchConcurrencyLimit),
 		resolver:    slackhttp.NewAuthResolver(nil),
 		prerendered: &sync.Map{},
@@ -148,6 +201,12 @@ func NewFetcher(cache *Cache, client *http.Client) *Fetcher {
 // afterward.
 func (f *Fetcher) SetAuths(auths []TeamAuth) {
 	f.resolver = slackhttp.NewAuthResolver(auths)
+}
+
+// SetLoadPolicy installs the policy that gates FetchRequest.Gated
+// fetches. Safe to call from any goroutine.
+func (f *Fetcher) SetLoadPolicy(p *LoadPolicy) {
+	f.policy.Store(p)
 }
 
 // ConfigurePrerender enables eager protocol encoding in the fetch
@@ -211,6 +270,22 @@ func prerenderKey(key string, cellTarget image.Point, proto Protocol) string {
 // Cross-key concurrency is bounded; if the limit is full, additional
 // callers wait until a slot frees up or ctx is canceled.
 func (f *Fetcher) Fetch(ctx context.Context, req FetchRequest) (FetchResult, error) {
+	if req.Gated {
+		if p := f.policy.Load(); p != nil {
+			// Checked before the disk cache too: a cache filled before
+			// the policy existed (or under a looser one) must not
+			// decode what the policy now refuses.
+			if p.Decide(req.URL) != Load {
+				debuglog.ImgFetch("policy-refused: key=%s req_id=%d host=%s", req.Key, req.ReqID, HostOf(req.URL))
+				return FetchResult{}, ErrNotAllowed
+			}
+			// Loaded because its host is trusted, not because the user
+			// allowed it: a trusted host must not bounce it elsewhere.
+			if !p.allowedByUser(req.URL) {
+				ctx = context.WithValue(ctx, redirectGuardKey{}, p)
+			}
+		}
+	}
 	leader := false
 	v, err, shared := f.sf.Do(req.Key, func() (any, error) {
 		leader = true
@@ -278,7 +353,7 @@ func (f *Fetcher) fetchInner(ctx context.Context, req FetchRequest) (FetchResult
 	defer file.Close()
 
 	decStart := time.Now()
-	img, _, err := image.Decode(file)
+	img, err := safeDecode(file)
 	if err != nil {
 		// Cache poisoning recovery: a previously persisted file isn't
 		// decodable as an image (e.g., an HTML auth-failure response from
@@ -467,7 +542,10 @@ func (f *Fetcher) tryDownload(ctx context.Context, url string, auth TeamAuth) ([
 			url, resp.StatusCode, ct, time.Since(httpStart).Milliseconds())
 		return nil, ct, resp.StatusCode, nil
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxImageBytes+1))
+	if err == nil && len(body) > maxImageBytes {
+		err = fmt.Errorf("fetch %s: body larger than %d bytes", url, maxImageBytes)
+	}
 	if err != nil {
 		debuglog.ImgFetch("http-result: url=%s status=%d ct=%q dur_ms=%d body_read_err=%v",
 			url, resp.StatusCode, ct, time.Since(httpStart).Milliseconds(), err)
@@ -476,6 +554,29 @@ func (f *Fetcher) tryDownload(ctx context.Context, url string, auth TeamAuth) ([
 	debuglog.ImgFetch("http-result: url=%s status=%d ct=%q dur_ms=%d bytes=%d",
 		url, resp.StatusCode, ct, time.Since(httpStart).Milliseconds(), len(body))
 	return body, ct, resp.StatusCode, nil
+}
+
+// safeDecode decodes an image whose declared size is within
+// maxImagePixels. A decoder panic on malformed input is returned as an
+// error: it runs on a fetch goroutine, where a panic would end slk.
+func safeDecode(r io.ReadSeeker) (img image.Image, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			img, err = nil, fmt.Errorf("image decoder panicked: %v", p)
+		}
+	}()
+	cfg, _, err := image.DecodeConfig(r)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > maxImagePixels {
+		return nil, fmt.Errorf("image is %dx%d, over the %d pixel limit", cfg.Width, cfg.Height, maxImagePixels)
+	}
+	if _, err := r.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	img, _, err = image.Decode(r)
+	return img, err
 }
 
 // downscale fits img within target preserving the renderer's expectation;

@@ -124,7 +124,8 @@ func appendSection(out *RenderResult, s SectionBlock, ctx Context, width int) {
 	case ImageAccessory:
 		const accRows, accCols = 4, 8
 		if ctx.Fetcher == nil || ctx.Protocol == imgpkg.ProtoOff {
-			label := mutedStyle().Render("[image: " + fallbackAlt(acc.AltText) + "]")
+			label := mutedStyle().Render(fitFallbackLine(width,
+				"[image: "+fallbackAlt(acc.AltText)+"]", "[image]"))
 			accessoryW = lipgloss.Width(label)
 			accessoryLines = []string{label}
 		} else {
@@ -138,7 +139,20 @@ func appendSection(out *RenderResult, s SectionBlock, ctx Context, width int) {
 				h := hit // copy
 				accessoryHit = &h
 			} else {
-				label := mutedStyle().Render("[image: " + fallbackAlt(acc.AltText) + "]")
+				alt := fallbackAlt(acc.AltText)
+				held := ctx.Policy.Decide(acc.URL) == imgpkg.Ask
+				if held {
+					alt += " · not loaded"
+				}
+				// Fitted to the section's width: a stacked accessory is
+				// appended as its own counted row, so an over-wide
+				// label would desync every row below it. See
+				// fitFallbackLine.
+				forms := []string{"[image: " + alt + "]", "[image]"}
+				if held {
+					forms = []string{"[image: " + alt + "]", "[not loaded · I]", "[I]"}
+				}
+				label := mutedStyle().Render(fitFallbackLine(width, forms...))
 				accessoryW = lipgloss.Width(label)
 				accessoryLines = []string{label}
 			}
@@ -288,7 +302,7 @@ func appendImageBlock(out *RenderResult, b ImageBlock, ctx Context, width int) {
 
 	// If we can't render images at all, emit the fallback link.
 	if ctx.Fetcher == nil || ctx.Protocol == imgpkg.ProtoOff {
-		out.Lines = append(out.Lines, renderImageFallback(b.URL))
+		out.Lines = append(out.Lines, renderImageFallback(b.URL, width))
 		return
 	}
 
@@ -297,14 +311,14 @@ func appendImageBlock(out *RenderResult, b ImageBlock, ctx Context, width int) {
 	// to a reasonable default aspect.
 	target := computeBlockImageTarget(b, ctx, width)
 	if target.X <= 0 || target.Y <= 0 {
-		out.Lines = append(out.Lines, renderImageFallback(b.URL))
+		out.Lines = append(out.Lines, renderImageFallback(b.URL, width))
 		return
 	}
 
 	rowStart := len(out.Lines)
 	lines, flushes, sxlMap, hit, ok := fetchOrPlaceholder(b.URL, target, ctx, rowStart)
 	if !ok {
-		out.Lines = append(out.Lines, renderImageFallback(b.URL))
+		out.Lines = append(out.Lines, imageFallback(ctx, b.URL, width))
 		return
 	}
 	out.Lines = append(out.Lines, lines...)

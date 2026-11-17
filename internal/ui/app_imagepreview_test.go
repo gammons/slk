@@ -7,6 +7,7 @@ import (
 	imgcolor "image/color"
 	imgpng "image/png"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	imgpkg "github.com/gammons/slk/internal/image"
@@ -255,5 +256,281 @@ func TestMouseClick_OnThreadImageDispatchesOpenPreview(t *testing.T) {
 	}
 	if op.Channel != channelID || op.TS != reply.TS || op.AttIdx != 0 {
 		t.Errorf("OpenImagePreviewMsg = %+v, want {Channel:%q TS:%q AttIdx:0}", op, channelID, reply.TS)
+	}
+}
+
+// heldSiblingApp puts a two-image message on C123 where the first
+// image is Slack-hosted (the policy loads it) and the second is not (in
+// "trusted" mode the policy holds it back), with the preview already
+// open on the first.
+func heldSiblingApp(t *testing.T) (*App, string) {
+	t.Helper()
+	const ts = "1700000000.000100"
+	msg := messages.MessageItem{
+		TS: ts, UserID: "U1", UserName: "alice",
+		Attachments: []messages.Attachment{
+			{
+				Kind: "image", Name: "slack.png", FileID: "F0SLACK", Mime: "image/png",
+				Thumbs: []messages.ThumbSpec{{URL: "https://files.slack.com/a-720.png", W: 720, H: 720}},
+			},
+			{
+				Kind: "image", Name: "elsewhere.png", FileID: "F0ELSE", Mime: "image/png",
+				Thumbs: []messages.ThumbSpec{{URL: "https://images.example.com/b-720.png", W: 720, H: 720}},
+			},
+		},
+	}
+
+	app := NewApp()
+	app.activeChannelID = "C123"
+	app.focusedPanel = PanelMessages
+	app.messagepane.SetMessages([]messages.MessageItem{msg})
+	app.SetImageFetcher(stubPreviewFetcher{})
+	app.imageCtx.Policy = imgpkg.NewLoadPolicy(imgpkg.LoadTrusted, nil)
+
+	// Preview already open on the Slack-hosted sibling.
+	overlay := imgpkg.NewLoadingPreview("slack.png", 2, 0)
+	app.preview.Open(&overlay, "C123", ts, 0)
+	return app, ts
+}
+
+// TestCyclePreview_HeldSiblingAsksInsteadOfFailingSilently covers the
+// second bug Greptile found on PR #467. Only the initial open consulted
+// previewHeld, so cycling onto a sibling the policy holds back issued a
+// Gated fetch that was refused; previewErrorMsg dismisses only a
+// *loading* overlay, so the image already on screen stayed up and the
+// keypress looked like it did nothing.
+func TestCyclePreview_HeldSiblingAsksInsteadOfFailingSilently(t *testing.T) {
+	app, ts := heldSiblingApp(t)
+
+	cmd := app.cycleImagePreviewCmd("C123", ts, 0, +1)
+
+	if app.preview.Active() {
+		t.Error("cycling onto a held sibling left the preview open; it should close before prompting")
+	}
+	if !dialogShows(app, "Load images?") {
+		t.Error("cycling onto a held sibling did not open the load prompt")
+	}
+	if cmd != nil {
+		// promptLoadImages returns nil once it has opened the dialog;
+		// a non-nil cmd here would mean a fetch was still issued.
+		if _, isFetch := cmd().(previewLoadedMsg); isFetch {
+			t.Error("a held sibling was fetched anyway")
+		}
+	}
+}
+
+// TestCyclePreview_AllowedSiblingStillFetches guards the fix against
+// over-reach: a sibling the policy permits must still cycle normally,
+// with the preview left open.
+func TestCyclePreview_AllowedSiblingStillFetches(t *testing.T) {
+	app, ts := heldSiblingApp(t)
+	// Allow the second image's host for this session, as `I` would.
+	app.imageCtx.Policy.AllowHosts("images.example.com")
+
+	cmd := app.cycleImagePreviewCmd("C123", ts, 0, +1)
+
+	if !app.preview.Active() {
+		t.Error("cycling onto an allowed sibling closed the preview")
+	}
+	if dialogShows(app, "Load images?") {
+		t.Error("cycling onto an allowed sibling opened the load prompt")
+	}
+	if cmd == nil {
+		t.Fatal("cycling onto an allowed sibling issued no fetch")
+	}
+	if _, ok := cmd().(previewLoadedMsg); !ok {
+		t.Errorf("got %#v, want previewLoadedMsg", cmd())
+	}
+}
+
+// openPreviewMsgIn returns the reopen request among msgs, if any.
+func openPreviewMsgIn(msgs []tea.Msg) (messages.OpenImagePreviewMsg, bool) {
+	for _, m := range msgs {
+		if op, ok := m.(messages.OpenImagePreviewMsg); ok {
+			return op, true
+		}
+	}
+	return messages.OpenImagePreviewMsg{}, false
+}
+
+// TestOpenPreview_HeldImageOpensAfterApproval covers the third bug
+// Greptile found on PR #467. Opening the preview of a held image asked
+// first, but approving only recorded the policy and redrew the panes:
+// the preview the user asked for never opened, so `O` looked like it had
+// done nothing and had to be pressed again.
+func TestOpenPreview_HeldImageOpensAfterApproval(t *testing.T) {
+	app, ts := heldSiblingApp(t)
+	// The open path, not the cycle path: nothing on screen yet.
+	app.preview.Close()
+
+	app.Update(messages.OpenImagePreviewMsg{Channel: "C123", TS: ts, AttIdx: 1})
+	if app.preview.Active() {
+		t.Fatal("a held image opened its preview without asking")
+	}
+	if !dialogShows(app, "Load images?") {
+		t.Fatal("opening a held image did not open the load prompt")
+	}
+
+	out := pressKey(t, app, keyPress('y'))
+
+	op, ok := openPreviewMsgIn(out)
+	if !ok {
+		t.Fatalf("approving did not re-request the preview; msgs = %#v", out)
+	}
+	if op.Channel != "C123" || op.TS != ts || op.AttIdx != 1 {
+		t.Errorf("reopen = %+v, want {Channel:C123 TS:%s AttIdx:1}", op, ts)
+	}
+	app.Update(op)
+	if !app.preview.Active() {
+		t.Fatal("the approved preview did not open")
+	}
+	if got := app.preview.AttIdx(); got != 1 {
+		t.Errorf("preview opened on attachment %d, want 1", got)
+	}
+}
+
+// TestCyclePreview_HeldSiblingOpensAfterApproval is the same for the
+// cycle path, which closes the preview before prompting: approving must
+// bring it back on the sibling the user cycled to, not leave the screen
+// empty and make them reopen and navigate back.
+func TestCyclePreview_HeldSiblingOpensAfterApproval(t *testing.T) {
+	app, ts := heldSiblingApp(t)
+
+	app.cycleImagePreviewCmd("C123", ts, 0, +1)
+	if app.preview.Active() {
+		t.Fatal("cycling onto a held sibling left the preview open")
+	}
+
+	out := pressKey(t, app, keyPress('y'))
+
+	op, ok := openPreviewMsgIn(out)
+	if !ok {
+		t.Fatalf("approving did not re-request the preview; msgs = %#v", out)
+	}
+	if op.AttIdx != 1 {
+		t.Errorf("reopen = %+v, want the sibling AttIdx 1", op)
+	}
+	app.Update(op)
+	if !app.preview.Active() {
+		t.Fatal("the approved preview did not come back")
+	}
+	if got := app.preview.AttIdx(); got != 1 {
+		t.Errorf("preview came back on attachment %d, want the sibling 1", got)
+	}
+}
+
+// TestLoadPrompt_CancelOpensNoPreview guards the other direction: the
+// prompt's Cancel button records nothing and must not open a preview.
+func TestLoadPrompt_CancelOpensNoPreview(t *testing.T) {
+	app, ts := heldSiblingApp(t)
+	app.preview.Close()
+
+	app.Update(messages.OpenImagePreviewMsg{Channel: "C123", TS: ts, AttIdx: 1})
+	out := pressKey(t, app, keyPress('n'))
+
+	if op, ok := openPreviewMsgIn(out); ok {
+		t.Errorf("cancelling re-requested the preview: %+v", op)
+	}
+	if app.preview.Active() {
+		t.Error("cancelling opened a preview")
+	}
+}
+
+// TestLoadImagesKey_RequestsNoPreview keeps `I` (the keybinding, not a
+// preview) from opening a preview of its own on approval: it only
+// allows the message's images so the panes draw them inline.
+func TestLoadImagesKey_RequestsNoPreview(t *testing.T) {
+	app, ts := heldSiblingApp(t)
+	app.preview.Close()
+
+	app.promptLoadImages(app.messagepane.Messages()[0])
+	if !dialogShows(app, "Load images?") {
+		t.Fatalf("I did not open the load prompt (ts %s)", ts)
+	}
+
+	out := pressKey(t, app, keyPress('y'))
+
+	if op, ok := openPreviewMsgIn(out); ok {
+		t.Errorf("I opened a preview on approval: %+v", op)
+	}
+	if app.preview.Active() {
+		t.Error("I opened a preview on approval")
+	}
+}
+
+// TestOpenPreview_TrustHostAlsoOpensPreview covers the prompt's other
+// allowing button: "Trust this host this session" carries the deferred
+// preview too, so it is not a quieter way to end up with nothing shown.
+func TestOpenPreview_TrustHostAlsoOpensPreview(t *testing.T) {
+	app, ts := heldSiblingApp(t)
+	app.preview.Close()
+
+	app.Update(messages.OpenImagePreviewMsg{Channel: "C123", TS: ts, AttIdx: 1})
+
+	out := pressKey(t, app, keyPress('a'))
+
+	op, ok := openPreviewMsgIn(out)
+	if !ok {
+		t.Fatalf("trusting the host did not re-request the preview; msgs = %#v", out)
+	}
+	app.Update(op)
+	if !app.preview.Active() || app.preview.AttIdx() != 1 {
+		t.Errorf("preview active=%v attIdx=%d, want true/1", app.preview.Active(), app.preview.AttIdx())
+	}
+}
+
+// TestOpenPreview_ApprovalWaitsForAQueuedDialog covers the regression the
+// replay introduced (Greptile's fourth find on PR #467). A dialog that
+// queued behind the load prompt is opened by afterConfirmPrompt the step
+// before the replayed request lands, so the preview went up over it. The
+// preview swallows every key (app.go's pre-switch interception), so the
+// dialog stayed visible but unanswerable until it was dismissed.
+func TestOpenPreview_ApprovalWaitsForAQueuedDialog(t *testing.T) {
+	// The skip toasts; don't make the test wait out its clear tick.
+	oldTick := toastTick
+	toastTick = func(time.Duration, func(time.Time) tea.Msg) tea.Cmd { return nil }
+	t.Cleanup(func() { toastTick = oldTick })
+
+	app, ts := heldSiblingApp(t)
+	app.preview.Close()
+
+	const ephTS = "1700000000.000200"
+	app.messagepane.SetMessages([]messages.MessageItem{
+		app.messagepane.Messages()[0], mentionEphemeral(ephTS),
+	})
+
+	app.Update(messages.OpenImagePreviewMsg{Channel: "C123", TS: ts, AttIdx: 1})
+	if !dialogShows(app, "Load images?") {
+		t.Fatal("opening a held image did not open the load prompt")
+	}
+	// A message with buttons arrives while the prompt is up: it queues.
+	app.enqueueActionPrompt(actionPromptRef{channelID: "C123", ts: ephTS})
+	if app.preview.Active() {
+		t.Fatal("queueing a dialog opened a preview")
+	}
+
+	out := pressKey(t, app, keyPress('y'))
+
+	// The queued dialog is now the overlay in front of the user.
+	if !dialogShows(app, "Add Them") {
+		t.Fatal("the queued dialog did not open when the load prompt closed")
+	}
+	if op, ok := openPreviewMsgIn(out); ok {
+		t.Errorf("approving replayed the preview over the queued dialog: %+v", op)
+	}
+	// Feed anything the approval produced: still no preview on top.
+	for _, m := range out {
+		app.Update(m)
+	}
+	if app.preview.Active() {
+		t.Error("a preview opened over the queued dialog and will swallow its keys")
+	}
+	if !dialogShows(app, "Add Them") {
+		t.Error("the queued dialog was lost")
+	}
+	// The approval itself must not be lost: the image is permitted, so
+	// the pane draws it inline even though no preview opened.
+	if got := app.imageCtx.Policy.Decide("https://images.example.com/b-720.png"); got != imgpkg.Load {
+		t.Errorf("Decide = %v, want Load: the approval was dropped", got)
 	}
 }

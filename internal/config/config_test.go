@@ -1250,3 +1250,22 @@ func TestConfig_ClickOpensThread(t *testing.T) {
 		t.Error("click_opens_thread = false must read back as off")
 	}
 }
+
+func TestImageLoading(t *testing.T) {
+	for body, want := range map[string]string{
+		"":                                     "trusted",
+		"[general]\ndownload_dir = \"/\"\n":    "trusted",
+		"[general]\nimage_loading = \"off\"\n": "off",
+		"[general]\nimage_loading = \"Confirm\"\n": "confirm",
+		// A typo takes the strict side rather than loading images.
+		"[general]\nimage_loading = \"of\"\n": "confirm",
+	} {
+		if got := loadConfigString(t, body).General.ImageLoading; got != want {
+			t.Errorf("%q: image_loading = %q, want %q", body, got, want)
+		}
+	}
+	cfg := loadConfigString(t, "[general]\ntrusted_image_hosts = [\"githubassets.com\"]\n")
+	if got := cfg.General.TrustedImageHosts; len(got) != 1 || got[0] != "githubassets.com" {
+		t.Errorf("trusted_image_hosts = %v", got)
+	}
+}
