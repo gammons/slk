@@ -81,7 +81,7 @@ type RenderedMessage struct {
 	Header       string // the wrapped author header (with "(edited)"), for SelectedHeader
 	HeaderBudget int
 	Hits         []entrylist.Hit // image and file hits (when ImageHits), then reaction pills
-	SixelRows    map[int]sixelEntry
+	SixelRows    []sixelEntry
 	// Kitty uploads by source: each pane keeps its own upload order.
 	// BodyFlushes also carries the author-status emoji's upload.
 	BodyFlushes, BlockFlushes, ReactionFlushes, AttachmentFlushes []func(io.Writer) error
@@ -429,7 +429,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	reactionLine, reactionLineCount, pillSpecs := renderReactionPills(msg, rc, opt, contentWidth, &out)
 
 	// Pre-attachment row count, so attachment rows can compute their
-	// absolute row index (used as the sixelRows key).
+	// absolute row index (the sixel entry's row).
 	//
 	//   rows 0..: label rows (ephemeral, then thread_broadcast), each optional
 	//   next rows: wrapped author header + editedMark
@@ -449,7 +449,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 
 	var attachLineSlices [][]string
 	var imageHits []entrylist.Hit
-	allSixel := map[int]sixelEntry{}
+	var allSixel []sixelEntry
 
 	// Block Kit blocks render between the body text and file attachments.
 	bkCtx := BlockkitContext(msg, rc, &out.BlockFlushes)
@@ -478,9 +478,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		out.BlockFlushes = append(out.BlockFlushes, res.Flushes...)
 		if opt.SixelRows {
 			rowOffset := preAttachmentRows + startInBk
-			for k, v := range res.SixelRows {
-				allSixel[rowOffset+k] = sixelEntry{key: v.Key, bytes: v.Bytes, fallback: v.Fallback, height: v.Height, width: v.Width, col: v.Col}
-			}
+			allSixel = appendBlockSixel(allSixel, res.SixelRows, rowOffset)
 		}
 		// Note: res.Hits is intentionally NOT appended to out.Hits in
 		// v1. App-level click routing (app.go) currently uses image
@@ -532,9 +530,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		out.BlockFlushes = append(out.BlockFlushes, res.Flushes...)
 		if opt.SixelRows {
 			rowOffset := preAttachmentRows + startInBk
-			for k, v := range res.SixelRows {
-				allSixel[rowOffset+k] = sixelEntry{key: v.Key, bytes: v.Bytes, fallback: v.Fallback, height: v.Height, width: v.Width, col: v.Col}
-			}
+			allSixel = appendBlockSixel(allSixel, res.SixelRows, rowOffset)
 		}
 		// Note: res.Hits is intentionally NOT appended to out.Hits in
 		// v1. App-level click routing (app.go) currently uses image
@@ -592,18 +588,62 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 			attT0 = time.Now()
 		}
 		rowCursor := preAttachmentRows
-		for attIdx, att := range msg.Attachments {
-			imgThumbs := make([]imgrender.ThumbSpec, len(att.Thumbs))
-			for i, t := range att.Thumbs {
-				imgThumbs[i] = imgrender.ThumbSpec{URL: t.URL, W: t.W, H: t.H}
+		for attIdx := 0; attIdx < len(msg.Attachments); {
+			// inlineRun builds each block once. A run longer than one
+			// image reuses that slice; a single image reuses its one
+			// block on the RenderBlock path below.
+			blocks := inlineRun(rc.Images, msg.Attachments, attIdx, contentWidth)
+			if len(blocks) > 1 {
+				run := rc.Images.RenderImageRun(blocks, rc.ImageChannel, msg.TS, contentWidth, attIdx)
+				// joinImageLines returns its own slice, so splicing the
+				// half-block fallback here does not rewrite a cached render.
+				lines := run.Lines
+				if !opt.SixelRows {
+					for _, sx := range run.Sixels {
+						blockkit.SpliceSixelFallbacks(lines, map[int]blockkit.SixelEntry{
+							sx.Row: {
+								Key: sx.Key, Bytes: sx.Bytes, Fallback: sx.Fallback,
+								Height: sx.Height, Width: sx.Width, Col: sx.Col,
+							},
+						})
+					}
+				}
+				attachLineSlices = append(attachLineSlices, lines)
+				out.AttachmentFlushes = append(out.AttachmentFlushes, run.Flushes...)
+				if opt.SixelRows {
+					for _, sx := range run.Sixels {
+						allSixel = append(allSixel, sixelEntry{
+							row: rowCursor + sx.Row, col: sx.Col,
+							key: sx.Key, bytes: sx.Bytes, fallback: sx.Fallback,
+							height: sx.Height, width: sx.Width,
+						})
+					}
+				}
+				if opt.ImageHits {
+					for _, h := range run.Hits {
+						if h.RowEndInEntry <= h.RowStartInEntry {
+							continue
+						}
+						imageHits = append(imageHits, entrylist.Hit{
+							RowStart: rowCursor + h.RowStartInEntry,
+							RowEnd:   rowCursor + h.RowEndInEntry,
+							ColStart: contentColBase + h.ColStart,
+							ColEnd:   contentColBase + h.ColEnd,
+							Kind:     entrylist.HitImage, Key: h.FileID, Aux: h.AttIdx,
+						})
+					}
+				}
+				rowCursor += run.Height
+				attIdx += len(blocks)
+				continue
 			}
-			res := rc.Images.RenderBlock(imgrender.Block{
-				Kind:   att.Kind,
-				FileID: att.FileID,
-				Name:   att.Name,
-				URL:    att.URL,
-				Thumbs: imgThumbs,
-			}, rc.ImageChannel, msg.TS, contentWidth, rowCursor, attIdx, contentColBase)
+			var block imgrender.Block
+			if len(blocks) == 1 {
+				block = blocks[0]
+			} else {
+				block = attachmentBlock(msg.Attachments[attIdx])
+			}
+			res := rc.Images.RenderBlock(block, rc.ImageChannel, msg.TS, contentWidth, rowCursor, attIdx, contentColBase)
 			if !opt.SixelRows {
 				// Same treatment as the block branches above: a pane
 				// without the sixel pipeline keeps the image visible
@@ -631,9 +671,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 			attachLineSlices = append(attachLineSlices, res.Lines)
 			out.AttachmentFlushes = append(out.AttachmentFlushes, res.Flushes...)
 			if opt.SixelRows {
-				for k, v := range convertSixelMap(res.SixelRows) {
-					allSixel[k] = v
-				}
+				allSixel = append(allSixel, convertSixelMap(res.SixelRows)...)
 			}
 			if opt.ImageHits {
 				// Only record hits for actual image-block renders (the
@@ -653,6 +691,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 				}
 			}
 			rowCursor += res.Height
+			attIdx++
 		}
 		if stats != nil {
 			stats.attachmentsTotal += time.Since(attT0)
@@ -708,9 +747,8 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		// this the painter would place the image at the pane's
 		// content-left edge (col 0) instead of its placeholder,
 		// shifting it left under the avatar / border.
-		for k, v := range allSixel {
-			v.col = contentColBase + v.col
-			allSixel[k] = v
+		for i := range allSixel {
+			allSixel[i].col += contentColBase
 		}
 	}
 	// Timestamp substitution may lengthen a header line, but must not
@@ -720,6 +758,55 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	out.HeaderBudget = headerBudget
 	out.SixelRows = allSixel
 	return out
+}
+
+// attachmentBlock is the imgrender view of one file attachment.
+func attachmentBlock(att Attachment) imgrender.Block {
+	thumbs := make([]imgrender.ThumbSpec, len(att.Thumbs))
+	for i, t := range att.Thumbs {
+		thumbs[i] = imgrender.ThumbSpec{URL: t.URL, W: t.W, H: t.H}
+	}
+	return imgrender.Block{
+		Kind: att.Kind, FileID: att.FileID, Name: att.Name, URL: att.URL, Thumbs: thumbs,
+	}
+}
+
+// inlineRun is the consecutive inline images starting at i, each
+// converted once. Nil when atts[i] is not an inline image: the caller
+// renders that attachment with RenderBlock. A slice of one is also
+// rendered with RenderBlock, so a single image keeps its current size.
+// A longer slice shares rows.
+func inlineRun(r *imgrender.Renderer, atts []Attachment, i, width int) []imgrender.Block {
+	if r == nil || i >= len(atts) {
+		return nil
+	}
+	first := attachmentBlock(atts[i])
+	if !r.Inline(first, width) {
+		return nil
+	}
+	blocks := []imgrender.Block{first}
+	for j := i + 1; j < len(atts); j++ {
+		next := attachmentBlock(atts[j])
+		if !r.Inline(next, width) {
+			break
+		}
+		blocks = append(blocks, next)
+	}
+	return blocks
+}
+
+// appendBlockSixel records block-kit sixel placements. rowOffset is the
+// entry row of Lines[0]; each entry's key is a row within those lines
+// and Col is its column within the line.
+func appendBlockSixel(dst []sixelEntry, rows map[int]blockkit.SixelEntry, rowOffset int) []sixelEntry {
+	for k, v := range rows {
+		dst = append(dst, sixelEntry{
+			row: rowOffset + k, col: v.Col,
+			key: v.Key, bytes: v.Bytes, fallback: v.Fallback,
+			height: v.Height, width: v.Width,
+		})
+	}
+	return dst
 }
 
 // maxReplyAvatars caps the repliers drawn on a reply row.

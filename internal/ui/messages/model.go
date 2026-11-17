@@ -54,11 +54,12 @@ type EntryPayload struct {
 	// for visible entries. nil when the entry has no inline images.
 	Flushes []func(io.Writer) error
 
-	// sixelRows maps a row within the entry to the sixel image whose
-	// top-left cell is on it. View paints an image out-of-band when it
-	// is fully visible and substitutes its halfblock fallback otherwise.
-	// Only the channel pane fills it.
-	sixelRows map[int]sixelEntry
+	// sixelRows are the sixel images in this entry. Several can share a
+	// row (a message's images sit side by side), so this is not keyed
+	// by the row. View paints an image out-of-band when it is fully
+	// visible and substitutes its halfblock fallback otherwise. Only
+	// the channel pane fills it.
+	sixelRows []sixelEntry
 }
 
 // SelectedLines returns the rows to draw for a cursor entry e: its
@@ -88,6 +89,7 @@ type sixelEntry struct {
 	fallback []string // halfblock-equivalent text for partial-visibility frames
 	height   int      // image height in rows
 	width    int      // image width in cells; the erase footprint
+	row      int      // entry row of the image's top-left cell
 	col      int      // display column within the entry's rows where the image starts
 }
 
@@ -2004,15 +2006,18 @@ func placeAvatarBeside(avatar, content string) string {
 }
 
 // convertSixelMap translates imgrender.SixelEntry values into the
-// messages-pane's private sixelEntry type, preserving the row keys.
-// Returns nil for an empty/nil input so callers don't have to nil-check.
-func convertSixelMap(in map[int]imgrender.SixelEntry) map[int]sixelEntry {
+// messages-pane's private sixelEntry type. The map key is the entry
+// row of the image's top line. Returns nil for an empty input.
+func convertSixelMap(in map[int]imgrender.SixelEntry) []sixelEntry {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make(map[int]sixelEntry, len(in))
+	out := make([]sixelEntry, 0, len(in))
 	for k, v := range in {
-		out[k] = sixelEntry{key: v.Key, bytes: v.Bytes, fallback: v.Fallback, height: v.Height, width: v.Width}
+		out = append(out, sixelEntry{
+			row: k, key: v.Key, bytes: v.Bytes, fallback: v.Fallback,
+			height: v.Height, width: v.Width,
+		})
 	}
 	return out
 }
@@ -2343,11 +2348,11 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 			}
 		}
 		entryStart := offsets[v.Index]
-		for startRowInEntry, sx := range p.sixelRows {
-			absStart := entryStart + startRowInEntry
+		for _, sx := range p.sixelRows {
+			absStart := entryStart + sx.row
 			absEnd := absStart + sx.height
 			fullyVisible := absStart >= yOffset && absEnd <= yOffset+msgAreaHeight
-			windowRow := v.Row + (startRowInEntry - v.From)
+			windowRow := v.Row + (sx.row - v.From)
 			// Indicator rows replace window row 0 (loading hint) and
 			// row msgAreaHeight-1 (more below). An image whose footprint
 			// includes either is not fully paintable: the indicator is
@@ -2381,7 +2386,14 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 					if sixelFallback == nil {
 						sixelFallback = make(map[int]string)
 					}
-					sixelFallback[row] = composeFallbackRow(frame.Rows[row], sx.fallback[k], sx.col)
+					// Compose onto a fallback already grafted on this
+					// row. Two images share a row, and cutting the
+					// original frame again would wipe the first one.
+					base := frame.Rows[row]
+					if prev, ok := sixelFallback[row]; ok {
+						base = prev
+					}
+					sixelFallback[row] = composeFallbackRow(base, sx.fallback[k], sx.col)
 				}
 			}
 		}
