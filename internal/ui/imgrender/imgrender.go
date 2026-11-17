@@ -153,6 +153,108 @@ func computeImageTarget(thumbs []ThumbSpec, ctx ImageContext, availWidth int) im
 	return image.Pt(cols, rows)
 }
 
+// imageGap is the blank column between two images that share a row.
+// One cell keeps their hit rects from touching and keeps the pictures
+// from painting into each other.
+const imageGap = 1
+
+// imagePlacement is one image in a packed gallery. Col and Row are the
+// top-left cell within the gallery; Cols and Rows are the cell size to
+// render, which may be smaller than the natural size the caller passed.
+type imagePlacement struct {
+	Index int
+	Col   int
+	Row   int
+	Cols  int
+	Rows  int
+}
+
+// packImageRows lays sizes out left to right, wrapping to a new row when
+// the next image does not fit. sizes are cell footprints already capped
+// the way a single image would be (computeImageTarget); this function
+// does not apply MaxRows or MaxCols again.
+//
+// One image is returned unchanged, even when it is wider than width, so
+// a message with a single image keeps the footprint it has today.
+//
+// Two or more images are scaled down, preserving aspect, so each is at
+// most half the pane (minus the gap) and never wider than the pane.
+// Images that already fit in that slot keep their size, which lets a
+// row hold more than two small pictures. Width below 1 is treated as 1,
+// and every cell is at least 1×1.
+func packImageRows(sizes []image.Point, width int) []imagePlacement {
+	if len(sizes) == 0 {
+		return nil
+	}
+	if width < 1 {
+		width = 1
+	}
+	fitted := make([]image.Point, len(sizes))
+	if len(sizes) == 1 {
+		fitted[0] = clampCell(sizes[0])
+	} else {
+		slot := (width - imageGap) / 2
+		if slot < 1 {
+			slot = 1
+		}
+		for i, s := range sizes {
+			fitted[i] = fitImageCells(clampCell(s), slot, width)
+		}
+	}
+	out := make([]imagePlacement, 0, len(fitted))
+	x, y, rowH := 0, 0, 0
+	for i, s := range fitted {
+		if x > 0 && x+imageGap+s.X > width {
+			y += rowH
+			x = 0
+			rowH = 0
+		}
+		col := x
+		if x > 0 {
+			col = x + imageGap
+		}
+		out = append(out, imagePlacement{Index: i, Col: col, Row: y, Cols: s.X, Rows: s.Y})
+		x = col + s.X
+		if s.Y > rowH {
+			rowH = s.Y
+		}
+	}
+	return out
+}
+
+// clampCell forces a footprint to at least one cell on each axis.
+func clampCell(s image.Point) image.Point {
+	if s.X < 1 {
+		s.X = 1
+	}
+	if s.Y < 1 {
+		s.Y = 1
+	}
+	return s
+}
+
+// fitImageCells shrinks s so its width is at most the smaller of slot
+// and pane. Height follows the width, and stays at least one row.
+// A footprint that already fits is returned as it was given.
+func fitImageCells(s image.Point, slot, pane int) image.Point {
+	maxW := slot
+	if pane < maxW {
+		maxW = pane
+	}
+	if maxW < 1 {
+		maxW = 1
+	}
+	if s.X <= maxW {
+		return s
+	}
+	cols := maxW
+	rows := int(float64(s.Y) * float64(cols) / float64(s.X))
+	if rows < 1 {
+		rows = 1
+	}
+	return image.Pt(cols, rows)
+}
+
 // buildPlaceholder produces a target.Y-row block with theme-surface
 // background and a centered "⏳ Loading <name>..." indicator on the
 // middle row. Used while image bytes are being fetched.
@@ -306,33 +408,66 @@ func (r *Renderer) ResetFailed() {
 //   - Cached bytes -> render via active protocol.
 //   - Not cached -> reserved-height placeholder + async prefetch.
 func (r *Renderer) RenderBlock(att Block, channel, ts string, availWidth, baseRow, attIdx, contentColBase int) BlockResult {
-	// Fall through to the legacy text line for any attachment we can't
-	// or shouldn't render inline.
-	if att.Kind != "image" || r.ctx.Protocol == imgpkg.ProtoOff || r.ctx.Fetcher == nil {
-		debuglog.ImgRender("RenderBlock: file_id=%s decision=legacy_text reason=non_image_or_off", att.FileID)
+	target, reason := r.inlineTarget(att, availWidth)
+	if reason != "" {
+		// Keep the historical log lines. no_file_id has no file id to print.
+		if reason == "no_file_id" {
+			debuglog.ImgRender("RenderBlock: decision=legacy_text reason=no_file_id name=%q", att.Name)
+		} else {
+			debuglog.ImgRender("RenderBlock: file_id=%s decision=legacy_text reason=%s", att.FileID, reason)
+		}
 		return BlockResult{Lines: []string{renderLegacyLine(att, availWidth)}, Height: 1}
+	}
+	return r.renderAt(att, channel, ts, target, baseRow, attIdx, contentColBase)
+}
+
+// Inline reports whether RenderBlock would draw att as an image at
+// availWidth, rather than as a one-line file link. A run of Inline
+// attachments is what shares rows.
+func (r *Renderer) Inline(att Block, availWidth int) bool {
+	_, reason := r.inlineTarget(att, availWidth)
+	return reason == ""
+}
+
+// inlineTarget is the gate RenderBlock and Inline share. reason is
+// empty when att renders inline, and otherwise one of
+// non_image_or_off, no_file_id, zero_target, no_thumb_url.
+func (r *Renderer) inlineTarget(att Block, availWidth int) (image.Point, string) {
+	if att.Kind != "image" || r.ctx.Protocol == imgpkg.ProtoOff || r.ctx.Fetcher == nil {
+		return image.Point{}, "non_image_or_off"
 	}
 	if att.FileID == "" {
-		debuglog.ImgRender("RenderBlock: decision=legacy_text reason=no_file_id name=%q", att.Name)
-		return BlockResult{Lines: []string{renderLegacyLine(att, availWidth)}, Height: 1}
+		return image.Point{}, "no_file_id"
 	}
-
 	target := computeImageTarget(att.Thumbs, r.ctx, availWidth)
 	if target.X <= 0 || target.Y <= 0 {
-		debuglog.ImgRender("RenderBlock: file_id=%s decision=legacy_text reason=zero_target", att.FileID)
-		return BlockResult{Lines: []string{renderLegacyLine(att, availWidth)}, Height: 1}
+		return image.Point{}, "zero_target"
 	}
+	if url, _ := pickThumb(att.Thumbs, target, r.ctx.CellPixels); url == "" {
+		return image.Point{}, "no_thumb_url"
+	}
+	return target, ""
+}
 
-	pixelTarget := image.Pt(target.X*r.ctx.CellPixels.X, target.Y*r.ctx.CellPixels.Y)
-	imgThumbs := make([]imgpkg.ThumbSpec, len(att.Thumbs))
-	for i, t := range att.Thumbs {
+func pickThumb(thumbs []ThumbSpec, target, cellPx image.Point) (url, suffix string) {
+	pixelTarget := image.Pt(target.X*cellPx.X, target.Y*cellPx.Y)
+	imgThumbs := make([]imgpkg.ThumbSpec, len(thumbs))
+	for i, t := range thumbs {
 		imgThumbs[i] = imgpkg.ThumbSpec{URL: t.URL, W: t.W, H: t.H}
 	}
-	url, suffix := imgpkg.PickThumb(imgThumbs, pixelTarget)
+	return imgpkg.PickThumb(imgThumbs, pixelTarget)
+}
+
+// renderAt draws att at an explicit cell target. The target's aspect
+// is the caller's: a gallery passes the packed size, RenderBlock passes
+// computeImageTarget's.
+func (r *Renderer) renderAt(att Block, channel, ts string, target image.Point, baseRow, attIdx, contentColBase int) BlockResult {
+	url, suffix := pickThumb(att.Thumbs, target, r.ctx.CellPixels)
 	if url == "" {
 		debuglog.ImgRender("RenderBlock: file_id=%s decision=legacy_text reason=no_thumb_url", att.FileID)
-		return BlockResult{Lines: []string{renderLegacyLine(att, availWidth)}, Height: 1}
+		return BlockResult{Lines: []string{renderLegacyLine(att, target.X)}, Height: 1}
 	}
+	pixelTarget := image.Pt(target.X*r.ctx.CellPixels.X, target.Y*r.ctx.CellPixels.Y)
 	key := att.FileID + "-" + suffix
 
 	hit := Hit{
@@ -438,6 +573,132 @@ func (r *Renderer) RenderBlock(att Block, channel, ts string, availWidth, baseRo
 	debuglog.ImgRender("RenderBlock: key=%s decision=cached_slow proto=%v target=(%d,%d)",
 		key, r.ctx.Protocol, target.X, target.Y)
 	return BlockResult{Lines: out.Lines, Flushes: fl, SixelRows: sxlMap, Height: target.Y, Hit: hit}
+}
+
+// ImageRun is a consecutive run of inline images drawn as one gallery.
+// Lines are the gallery's rows. Hits and Sixels are relative to Lines:
+// row 0 is Lines[0] and column 0 is the first cell of a line. The caller
+// adds the entry's row offset and the message's content column.
+type ImageRun struct {
+	Lines   []string
+	Flushes []func(io.Writer) error
+	Sixels  []RunSixel
+	Hits    []Hit
+	Height  int
+}
+
+// RunSixel is one sixel image inside an ImageRun. Row is the index of
+// its top line in Lines. Col is its display column on that line.
+type RunSixel struct {
+	Row, Col int
+	Key      string
+	Bytes    []byte
+	Fallback []string
+	Height   int
+	Width    int
+}
+
+// RenderImageRun draws atts, which must all be inline images, as one
+// gallery. A single image is not scaled: its footprint is RenderBlock's.
+// Several images shrink so more than one can share a row, then wrap
+// when the next one does not fit availWidth.
+func (r *Renderer) RenderImageRun(atts []Block, channel, ts string, availWidth, attIdx0 int) ImageRun {
+	if len(atts) == 0 {
+		return ImageRun{}
+	}
+	sizes := make([]image.Point, len(atts))
+	for i, att := range atts {
+		target, reason := r.inlineTarget(att, availWidth)
+		if reason != "" {
+			sizes[i] = image.Pt(1, 1)
+			continue
+		}
+		sizes[i] = target
+	}
+	places := packImageRows(sizes, availWidth)
+	linesByIndex := make([][]string, len(atts))
+	var flushes []func(io.Writer) error
+	var sixels []RunSixel
+	hits := make([]Hit, 0, len(places))
+	for _, p := range places {
+		res := r.renderAt(atts[p.Index], channel, ts, image.Pt(p.Cols, p.Rows), 0, attIdx0+p.Index, 0)
+		linesByIndex[p.Index] = res.Lines
+		flushes = append(flushes, res.Flushes...)
+		// A text fallback (no thumb at this size) is one row and must
+		// not keep the packed image hit. Inline runs do not hit it.
+		if res.Hit.RowEndInEntry > res.Hit.RowStartInEntry {
+			hits = append(hits, Hit{
+				RowStartInEntry: p.Row,
+				RowEndInEntry:   p.Row + p.Rows,
+				ColStart:        p.Col,
+				ColEnd:          p.Col + p.Cols,
+				FileID:          atts[p.Index].FileID,
+				AttIdx:          attIdx0 + p.Index,
+			})
+		}
+		for row, sx := range res.SixelRows {
+			sixels = append(sixels, RunSixel{
+				Row: p.Row + row, Col: p.Col,
+				Key: sx.Key, Bytes: sx.Bytes, Fallback: sx.Fallback,
+				Height: sx.Height, Width: sx.Width,
+			})
+		}
+	}
+	lines := joinImageLines(places, linesByIndex)
+	debuglog.ImgRender("RenderImageRun: images=%d avail=%d rows=%d", len(atts), availWidth, len(lines))
+	return ImageRun{Lines: lines, Flushes: flushes, Sixels: sixels, Hits: hits, Height: len(lines)}
+}
+
+// joinImageLines stitches each image's rendered rows into gallery
+// lines. Images on one row are top-aligned; a shorter image is padded
+// with the message background so the next image stays in its column.
+// places are in packImageRows order: row by row, left to right.
+func joinImageLines(places []imagePlacement, lines [][]string) []string {
+	if len(places) == 0 {
+		return nil
+	}
+	pad := lipgloss.NewStyle().Background(styles.Background)
+	blank := func(n int) string {
+		if n <= 0 {
+			return ""
+		}
+		return pad.Render(strings.Repeat(" ", n))
+	}
+	var out []string
+	for i := 0; i < len(places); {
+		rowY := places[i].Row
+		j := i + 1
+		rowH := places[i].Rows
+		for j < len(places) && places[j].Row == rowY {
+			if places[j].Rows > rowH {
+				rowH = places[j].Rows
+			}
+			j++
+		}
+		for y := 0; y < rowH; y++ {
+			var b strings.Builder
+			cursor := 0
+			for k := i; k < j; k++ {
+				p := places[k]
+				if p.Col > cursor {
+					b.WriteString(blank(p.Col - cursor))
+				}
+				seg := ""
+				src := lines[p.Index]
+				if y < len(src) {
+					seg = src[y]
+				}
+				if w := lipgloss.Width(seg); w < p.Cols {
+					seg += blank(p.Cols - w)
+				}
+				b.WriteString(seg)
+				cursor = p.Col + p.Cols
+			}
+			out = append(out, b.String())
+		}
+		i = j
+	}
+	return out
 }
 
 // renderLegacyLine returns the single-line "[Image] <name>" or
