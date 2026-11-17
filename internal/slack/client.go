@@ -303,6 +303,16 @@ func (c *Client) PostForm(ctx context.Context, method string, form url.Values) (
 	return c.postForm(ctx, method, form)
 }
 
+// NewSessionClient returns a Client reporting the given session
+// identity without connecting. Wiring tests that route by session
+// identity (the Activity org-session fallback, the grid sibling gates)
+// need sessions that IsGridMember / EnterpriseID / UserID classify; a
+// zero Client reports none of them, and those fields are otherwise
+// written only by Connect. The client it returns can make no calls.
+func NewSessionClient(teamID, enterpriseID, userID string) *Client {
+	return &Client{teamID: teamID, enterpriseID: enterpriseID, userID: userID}
+}
+
 // Envelope returns the client's Slack telemetry envelope, or nil for a
 // Client constructed directly (tests). Callers use it to read or update
 // session-scoped values such as the build timestamp; the same pointer is
