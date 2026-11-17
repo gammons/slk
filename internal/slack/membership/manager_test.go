@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -470,6 +471,10 @@ func TestBackgroundFetchFailureSuppressesImmediateRefetch(t *testing.T) {
 func TestBackgroundFetchRetriesAfterBackoffExpiry(t *testing.T) {
 	mgr, api, sink, db := newManagerForTest(t)
 	defer db.Close()
+	// The clock runs offset ahead of real time; the fetch goroutine
+	// reads it, hence the atomic.
+	var offset atomic.Int64
+	mgr.now = func() time.Time { return time.Now().Add(time.Duration(offset.Load())) }
 	api.err = fmt.Errorf("channel_not_found")
 	// Hold the window between "the API was entered" and "the failure
 	// was recorded" open, so the interleaving that used to make this
@@ -479,18 +484,13 @@ func TestBackgroundFetchRetriesAfterBackoffExpiry(t *testing.T) {
 
 	mgr.EnsureFresh(context.Background(), "C1")
 
-	// Wait for the failure to be *recorded*, not merely for the API to
-	// be entered. backgroundFetch writes lastFailed after the call
-	// returns, so backdating it below on a callCount barrier alone
-	// races the write and gets clobbered — leaving the backoff live and
-	// suppressing the retry this test exists to prove.
+	// Wait for the failure to be *recorded* and the fetch goroutine to
+	// exit, not merely for the API to be entered: until then the
+	// in-flight sentinel would swallow the retry below.
 	awaitFailedFetchDone(mgr, "C1")
 
-	// Simulate a failure far enough in the past that the backoff has
-	// expired, then recover.
-	mgr.mu.Lock()
-	mgr.lastFailed["C1"] = time.Now().Add(-2 * FailureBackoff)
-	mgr.mu.Unlock()
+	// Let the backoff expire, then recover.
+	offset.Store(int64(2 * FailureBackoff))
 	api.err = nil
 	api.result = []string{"U1"}
 
