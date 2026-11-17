@@ -219,7 +219,6 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	}
 	avatarStr := opt.Avatar
 	stats := opt.stats
-	out.MentionsSelf = msg.UserID != rc.Self.UserID && rc.Self.InText(MessageTextSource(msg))
 
 	// If we have an avatar, reserve space on the left for it
 	contentWidth := width - 4
@@ -458,6 +457,15 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 
 	// Block Kit blocks render between the body text and file attachments.
 	bkCtx := BlockkitContext(msg, rc, &out.BlockFlushes)
+	// Block and legacy-attachment text all passes through RenderText,
+	// so checking each string there keeps the row highlight in step
+	// with the mention styling wherever the mention sits.
+	mentionsSelf := rc.Self.InText(MessageTextSource(msg))
+	renderText := bkCtx.RenderText
+	bkCtx.RenderText = func(s string, un map[string]string) string {
+		mentionsSelf = mentionsSelf || rc.Self.InText(s)
+		return renderText(s, un)
+	}
 	var bkLines []string
 	bkInteractive := false
 	if len(msg.Blocks) > 0 {
@@ -550,6 +558,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		hint := styles.Timestamp.Render(InteractiveHint(msg))
 		bkLines = append(bkLines, hint)
 	}
+	out.MentionsSelf = msg.UserID != rc.Self.UserID && mentionsSelf
 	preAttachmentRows += len(bkLines)
 
 	bkBlock := ""

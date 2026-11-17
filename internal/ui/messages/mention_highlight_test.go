@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
@@ -88,6 +89,21 @@ func TestWrapRows_MentionHighlight(t *testing.T) {
 		}
 		if strings.Contains(strings.Join(w.Selected, "\n"), tint) {
 			t.Errorf("item %d: selected rows carry the mention tint", i)
+		}
+	}
+}
+
+// A bot that puts the mention in a section block or a legacy
+// attachment, with only a summary in Text, still highlights the row.
+func TestRenderMessage_MentionInBlocks(t *testing.T) {
+	m := New(nil, "general")
+	m.SetCurrentUser("UME")
+	for name, msg := range map[string]MessageItem{
+		"section":    {TS: "1.1", UserID: "UBOT", Text: "Review requested", Blocks: []blockkit.Block{blockkit.SectionBlock{Text: "<@UME> please review"}}},
+		"attachment": {TS: "1.2", UserID: "UBOT", Text: "Review requested", LegacyAttachments: []blockkit.LegacyAttachment{{Text: "<@UME> please review"}}},
+	} {
+		if !RenderMessage(msg, 60, m.renderContext(), RenderOptions{}).MentionsSelf {
+			t.Errorf("%s: mention not detected", name)
 		}
 	}
 }
