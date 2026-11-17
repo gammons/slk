@@ -2551,8 +2551,8 @@ func (a *App) FocusLeft() {
 	switch {
 	case a.focusedPanel == PanelWorkspace:
 	case a.focusedPanel == PanelSidebar && a.sidebarVisible && !a.fullscreen && len(a.workspaceItems) > 0:
-		if a.railHidden {
-			return // the sidebar is the left edge
+		if a.railWidth() == 0 {
+			return // no rail drawn (hidden, or one workspace): the sidebar is the left edge
 		}
 		a.cancelEdit()
 		a.clearSelections()

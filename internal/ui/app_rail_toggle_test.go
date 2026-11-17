@@ -46,6 +46,17 @@ func TestRail_ToggleHides(t *testing.T) {
 	}
 }
 
+// With one workspace the rail is not drawn either, so h from the
+// sidebar stays put instead of focusing an invisible rail.
+func TestRail_OneWorkspaceHStaysOnSidebar(t *testing.T) {
+	a := newTestApp(t, withWorkspaces(workspace.WorkspaceItem{ID: "T1", Name: "Acme", Initials: "AC"}))
+	a.focusedPanel = PanelSidebar
+	a.FocusLeft()
+	if a.focusedPanel != PanelSidebar {
+		t.Errorf("h from the sidebar moved focus to panel %v", a.focusedPanel)
+	}
+}
+
 // show_workspace_rail = false starts with the rail hidden.
 func TestRail_HiddenByConfig(t *testing.T) {
 	a := newTestApp(t, withWorkspaces(
