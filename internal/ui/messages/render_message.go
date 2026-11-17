@@ -589,11 +589,11 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		}
 		rowCursor := preAttachmentRows
 		for attIdx := 0; attIdx < len(msg.Attachments); {
-			if end := inlineRunEnd(rc.Images, msg.Attachments, attIdx, contentWidth); end > attIdx+1 {
-				blocks := make([]imgrender.Block, 0, end-attIdx)
-				for i := attIdx; i < end; i++ {
-					blocks = append(blocks, attachmentBlock(msg.Attachments[i]))
-				}
+			// inlineRun builds each block once. A run longer than one
+			// image reuses that slice; a single image reuses its one
+			// block on the RenderBlock path below.
+			blocks := inlineRun(rc.Images, msg.Attachments, attIdx, contentWidth)
+			if len(blocks) > 1 {
 				run := rc.Images.RenderImageRun(blocks, rc.ImageChannel, msg.TS, contentWidth, attIdx)
 				// joinImageLines returns its own slice, so splicing the
 				// half-block fallback here does not rewrite a cached render.
@@ -634,11 +634,16 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 					}
 				}
 				rowCursor += run.Height
-				attIdx = end
+				attIdx += len(blocks)
 				continue
 			}
-			att := msg.Attachments[attIdx]
-			res := rc.Images.RenderBlock(attachmentBlock(att), rc.ImageChannel, msg.TS, contentWidth, rowCursor, attIdx, contentColBase)
+			var block imgrender.Block
+			if len(blocks) == 1 {
+				block = blocks[0]
+			} else {
+				block = attachmentBlock(msg.Attachments[attIdx])
+			}
+			res := rc.Images.RenderBlock(block, rc.ImageChannel, msg.TS, contentWidth, rowCursor, attIdx, contentColBase)
 			if !opt.SixelRows {
 				// Same treatment as the block branches above: a pane
 				// without the sixel pipeline keeps the image visible
@@ -766,19 +771,28 @@ func attachmentBlock(att Attachment) imgrender.Block {
 	}
 }
 
-// inlineRunEnd is the index after the consecutive inline images that
-// start at i. A run of one (or none) is rendered by RenderBlock, which
-// keeps a single image at the size it has always had. A longer run
-// shares rows.
-func inlineRunEnd(r *imgrender.Renderer, atts []Attachment, i, width int) int {
-	if r == nil || i >= len(atts) || !r.Inline(attachmentBlock(atts[i]), width) {
-		return i
+// inlineRun is the consecutive inline images starting at i, each
+// converted once. Nil when atts[i] is not an inline image: the caller
+// renders that attachment with RenderBlock. A slice of one is also
+// rendered with RenderBlock, so a single image keeps its current size.
+// A longer slice shares rows.
+func inlineRun(r *imgrender.Renderer, atts []Attachment, i, width int) []imgrender.Block {
+	if r == nil || i >= len(atts) {
+		return nil
 	}
-	j := i + 1
-	for j < len(atts) && r.Inline(attachmentBlock(atts[j]), width) {
-		j++
+	first := attachmentBlock(atts[i])
+	if !r.Inline(first, width) {
+		return nil
 	}
-	return j
+	blocks := []imgrender.Block{first}
+	for j := i + 1; j < len(atts); j++ {
+		next := attachmentBlock(atts[j])
+		if !r.Inline(next, width) {
+			break
+		}
+		blocks = append(blocks, next)
+	}
+	return blocks
 }
 
 // appendBlockSixel records block-kit sixel placements. rowOffset is the
