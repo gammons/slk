@@ -1213,9 +1213,16 @@ func run() error {
 				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 				defer cancel()
 
-				for i, att := range attachments {
-					p.Send(ui.UploadProgressMsg{Done: i, Total: len(attachments)})
-
+				// One files.completeUploadExternal for the whole batch, so
+				// Slack posts one message carrying every attachment.
+				files := make([]slackclient.FileUpload, 0, len(attachments))
+				var opened []*os.File
+				defer func() {
+					for _, f := range opened {
+						f.Close()
+					}
+				}()
+				for _, att := range attachments {
 					var reader io.Reader
 					if att.Bytes != nil {
 						reader = bytes.NewReader(att.Bytes)
@@ -1224,20 +1231,21 @@ func run() error {
 						if err != nil {
 							return ui.UploadResultMsg{Err: fmt.Errorf("opening %s: %w", att.Filename, err)}
 						}
-						defer f.Close()
+						opened = append(opened, f)
 						reader = f
 					}
-
-					currentCaption := ""
-					if i == len(attachments)-1 {
-						currentCaption = caption
-					}
-
-					if _, err := client.UploadFile(ctx, channelID, threadTS, att.Filename, reader, att.Size, currentCaption); err != nil {
-						return ui.UploadResultMsg{Err: fmt.Errorf("uploading %s (%d/%d): %w", att.Filename, i+1, len(attachments), err)}
-					}
+					files = append(files, slackclient.FileUpload{
+						Filename: att.Filename,
+						Reader:   reader,
+						Size:     att.Size,
+					})
 				}
-				p.Send(ui.UploadProgressMsg{Done: len(attachments), Total: len(attachments)})
+				err := client.UploadFiles(ctx, channelID, threadTS, caption, files, func(done, total int) {
+					p.Send(ui.UploadProgressMsg{Done: done, Total: total})
+				})
+				if err != nil {
+					return ui.UploadResultMsg{Err: err}
+				}
 				return ui.UploadResultMsg{Err: nil}
 			}
 		}

@@ -149,7 +149,9 @@ type mockSlackAPI struct {
 	endDNDContextFn                 func(ctx context.Context) error
 	getDNDInfoContextFn             func(ctx context.Context, user *string, options ...slack.ParamOption) (*slack.DNDStatus, error)
 	getDNDTeamInfoContextFn         func(ctx context.Context, users []string, options ...slack.ParamOption) (map[string]slack.DNDStatus, error)
-	uploadFileContextFn             func(ctx context.Context, params slack.UploadFileParameters) (*slack.FileSummary, error)
+	getUploadURLExternalContextFn   func(ctx context.Context, params slack.GetUploadURLExternalParameters) (*slack.GetUploadURLExternalResponse, error)
+	uploadToURLFn                   func(ctx context.Context, params slack.UploadToURLParameters) error
+	completeUploadExternalContextFn func(ctx context.Context, params slack.CompleteUploadExternalParameters) (*slack.CompleteUploadExternalResponse, error)
 	getUsersInConversationContextFn func(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error)
 	openConversationContextFn       func(ctx context.Context, params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error)
 	searchMessagesFn                func(ctx context.Context, query string, params slack.SearchParameters) (*slack.SearchMessages, error)
@@ -300,11 +302,25 @@ func (m *mockSlackAPI) GetDNDTeamInfoContext(ctx context.Context, users []string
 	return map[string]slack.DNDStatus{}, nil
 }
 
-func (m *mockSlackAPI) UploadFileContext(ctx context.Context, params slack.UploadFileParameters) (*slack.FileSummary, error) {
-	if m.uploadFileContextFn != nil {
-		return m.uploadFileContextFn(ctx, params)
+func (m *mockSlackAPI) GetUploadURLExternalContext(ctx context.Context, params slack.GetUploadURLExternalParameters) (*slack.GetUploadURLExternalResponse, error) {
+	if m.getUploadURLExternalContextFn != nil {
+		return m.getUploadURLExternalContextFn(ctx, params)
 	}
-	return &slack.FileSummary{}, nil
+	return nil, nil
+}
+
+func (m *mockSlackAPI) UploadToURL(ctx context.Context, params slack.UploadToURLParameters) error {
+	if m.uploadToURLFn != nil {
+		return m.uploadToURLFn(ctx, params)
+	}
+	return nil
+}
+
+func (m *mockSlackAPI) CompleteUploadExternalContext(ctx context.Context, params slack.CompleteUploadExternalParameters) (*slack.CompleteUploadExternalResponse, error) {
+	if m.completeUploadExternalContextFn != nil {
+		return m.completeUploadExternalContextFn(ctx, params)
+	}
+	return nil, nil
 }
 
 func (m *mockSlackAPI) GetUsersInConversationContext(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error) {
@@ -315,31 +331,30 @@ func (m *mockSlackAPI) GetUsersInConversationContext(ctx context.Context, params
 }
 
 func TestUploadFile_Success(t *testing.T) {
-	var got slack.UploadFileParameters
-	mock := &mockSlackAPI{
-		uploadFileContextFn: func(ctx context.Context, params slack.UploadFileParameters) (*slack.FileSummary, error) {
-			got = params
-			return &slack.FileSummary{ID: "F123", Title: "screenshot.png"}, nil
-		},
-	}
-	c := &Client{api: mock}
+	rec := &uploadRecorder{}
+	rec.install()
+	c := &Client{api: rec}
 
 	r := strings.NewReader("fake-png-bytes")
 	f, err := c.UploadFile(context.Background(), "C1", "", "screenshot.png", r, 14, "look at this")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if f.ID != "F123" {
-		t.Errorf("expected FileSummary ID F123, got %q", f.ID)
+	if f.ID != "F1" {
+		t.Errorf("expected FileSummary ID F1, got %q", f.ID)
 	}
+	if len(rec.completes) != 1 {
+		t.Fatalf("completeUploadExternal calls = %d, want 1", len(rec.completes))
+	}
+	got := rec.completes[0]
 	if got.Channel != "C1" {
 		t.Errorf("expected Channel=C1, got %q", got.Channel)
 	}
-	if got.Filename != "screenshot.png" {
-		t.Errorf("expected Filename=screenshot.png, got %q", got.Filename)
+	if len(got.Files) != 1 || got.Files[0].ID != "F1" {
+		t.Errorf("complete files = %+v, want one file F1", got.Files)
 	}
-	if got.FileSize != 14 {
-		t.Errorf("expected FileSize=14, got %d", got.FileSize)
+	if len(rec.gets) != 1 || rec.gets[0].FileName != "screenshot.png" || rec.gets[0].FileSize != 14 {
+		t.Errorf("getUploadURL = %+v, want screenshot.png size 14", rec.gets)
 	}
 	if got.InitialComment != "look at this" {
 		t.Errorf("expected InitialComment, got %q", got.InitialComment)
@@ -347,38 +362,40 @@ func TestUploadFile_Success(t *testing.T) {
 	if got.ThreadTimestamp != "" {
 		t.Errorf("expected empty ThreadTimestamp, got %q", got.ThreadTimestamp)
 	}
+	if len(rec.bodies) != 1 || rec.bodies[0] != "fake-png-bytes" {
+		t.Errorf("uploaded body = %q, want fake-png-bytes", rec.bodies)
+	}
 }
 
 func TestUploadFile_Thread(t *testing.T) {
-	var got slack.UploadFileParameters
-	mock := &mockSlackAPI{
-		uploadFileContextFn: func(ctx context.Context, params slack.UploadFileParameters) (*slack.FileSummary, error) {
-			got = params
-			return &slack.FileSummary{ID: "F124"}, nil
-		},
-	}
-	c := &Client{api: mock}
+	rec := &uploadRecorder{}
+	rec.install()
+	c := &Client{api: rec}
 
 	_, err := c.UploadFile(context.Background(), "C1", "1700000000.000100", "x.png",
 		strings.NewReader("x"), 1, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if len(rec.completes) != 1 {
+		t.Fatalf("completeUploadExternal calls = %d, want 1", len(rec.completes))
+	}
+	got := rec.completes[0]
 	if got.ThreadTimestamp != "1700000000.000100" {
 		t.Errorf("expected ThreadTimestamp set, got %q", got.ThreadTimestamp)
 	}
 	if got.InitialComment != "" {
 		t.Errorf("expected empty InitialComment, got %q", got.InitialComment)
 	}
+	if len(got.Files) != 1 {
+		t.Errorf("complete files = %d, want 1", len(got.Files))
+	}
 }
 
 func TestUploadFile_ErrorWraps(t *testing.T) {
-	mock := &mockSlackAPI{
-		uploadFileContextFn: func(ctx context.Context, params slack.UploadFileParameters) (*slack.FileSummary, error) {
-			return nil, errors.New("not_authorized")
-		},
-	}
-	c := &Client{api: mock}
+	rec := &uploadRecorder{getErr: errors.New("not_authorized"), getErrOn: 1}
+	rec.install()
+	c := &Client{api: rec}
 
 	_, err := c.UploadFile(context.Background(), "C1", "", "x.png",
 		strings.NewReader("x"), 1, "")
@@ -390,6 +407,9 @@ func TestUploadFile_ErrorWraps(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not_authorized") {
 		t.Errorf("expected error to wrap underlying, got %q", err.Error())
+	}
+	if len(rec.completes) != 0 {
+		t.Errorf("completeUploadExternal calls = %d, want 0", len(rec.completes))
 	}
 }
 
