@@ -340,6 +340,13 @@ sidebar_selected_bg = "#333133" # selected sidebar row as a filled pill, no ▌
 sidebar_selected_fg = "#F8F8F8" # its text (default: sidebar_text)
 mention_badge_bg    = "#C01343" # mention-count badge (default: selection colours)
 mention_badge_fg    = "#FFFFFF"
+
+# A message that mentions you (directly, @here/@channel/@everyone, or a
+# usergroup you're in). Unset derives them from warning.
+self_mention_bg       = "#ECB22E" # the @mention itself (default: warning)
+self_mention_fg       = "#1D1C1D" # (default: background)
+mention_highlight_bg  = "#FEF6DE" # the whole message (default: warning mixed into background)
+mention_highlight_bar = "#ECB22E" # its left bar (default: warning)
 ```
 
 Every built-in theme now sets a channels-panel (sidebar) background that is

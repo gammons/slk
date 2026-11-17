@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -162,6 +163,9 @@ type Model struct {
 	// set ReactionItem.HasReacted only for the current user's own
 	// reactions (not other users'). Empty until SetCurrentUser is called.
 	currentUserID string
+	// selfGroups are the usergroup IDs the current user belongs to; a
+	// mention of one highlights the message like a direct mention.
+	selfGroups map[string]bool
 
 	lastReadTS string
 
@@ -1330,7 +1334,23 @@ func (m *Model) SetCompact(enabled bool) {
 // SetCurrentUser records the authenticated user ID so UpdateReaction can
 // flag the current user's own reactions (HasReacted) correctly.
 func (m *Model) SetCurrentUser(userID string) {
+	if m.currentUserID == userID {
+		return
+	}
 	m.currentUserID = userID
+	// Rendering reads it too: mentions of the user are highlighted.
+	m.dropCache()
+	m.dirty()
+}
+
+// SetSelfUserGroups sets the usergroups the current user belongs to.
+func (m *Model) SetSelfUserGroups(groups map[string]bool) {
+	if maps.Equal(m.selfGroups, groups) {
+		return
+	}
+	m.selfGroups = maps.Clone(groups)
+	m.dropCache()
+	m.dirty()
 }
 
 // PatchUserName updates the in-memory userNames map (used for @mention
@@ -1716,6 +1736,7 @@ func (m *Model) renderContext() *RenderContext {
 		UserNames:        m.userNames,
 		ChannelNames:     m.channelNames,
 		UserGroups:       m.userGroups,
+		Self:             SelfMentions{UserID: m.currentUserID, Groups: m.selfGroups},
 		Emoji:            m.emojiCtx,
 		Images:           m.imgRenderer,
 		ImageChannel:     m.channelName,

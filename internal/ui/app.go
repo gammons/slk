@@ -440,6 +440,7 @@ type App struct {
 	emojiCustoms  map[string]string
 	channelNames  map[string]string // UI-owned mention names, independent of sidebar membership
 	userGroups    map[string]string
+	selfGroups    map[string]bool // usergroups the current user is in
 
 	// buildInfo is the build identity :version shows: version and short
 	// commit (version.Short). Set once at startup by main.
@@ -3707,8 +3708,20 @@ func (a *App) SetCurrentUserID(userID string) {
 	a.currentUserID = userID
 	a.threadsView.SetSelfUserID(userID)
 	a.activityView.SetSelfUserID(userID)
-	a.messagepane.SetCurrentUser(userID)
+	for _, m := range a.allWinModels() {
+		m.SetCurrentUser(userID)
+	}
 	a.threadPanel.SetCurrentUser(userID)
+}
+
+// SetSelfUserGroups passes the usergroups the current user belongs to
+// to the panes that highlight messages mentioning the user.
+func (a *App) SetSelfUserGroups(groups map[string]bool) {
+	a.selfGroups = maps.Clone(groups)
+	for _, m := range a.allWinModels() {
+		m.SetSelfUserGroups(a.selfGroups)
+	}
+	a.threadPanel.SetSelfUserGroups(a.selfGroups)
 }
 
 // SetNowTimestampFormatter wires the formatter used to render the

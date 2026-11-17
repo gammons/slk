@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/slack-go/slack"
@@ -23,6 +24,17 @@ func usergroupHandles(groups []slack.UserGroup) map[string]string {
 		}
 	}
 	return byID
+}
+
+// selfUserGroups returns the IDs of the groups userID is a member of.
+func selfUserGroups(groups []slack.UserGroup, userID string) map[string]bool {
+	self := map[string]bool{}
+	for _, g := range groups {
+		if slices.Contains(g.Users, userID) {
+			self[g.ID] = true
+		}
+	}
+	return self
 }
 
 // slugifyHandle turns a usergroup display name into a mention-safe

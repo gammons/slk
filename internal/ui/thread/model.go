@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -49,6 +50,9 @@ type Model struct {
 	// currentUserID is the authenticated user; UpdateReaction uses it to
 	// set HasReacted only for the current user's own reactions.
 	currentUserID string
+	// selfGroups are the usergroup IDs the current user belongs to; a
+	// mention of one highlights the message like a direct mention.
+	selfGroups map[string]bool
 
 	// Reply cache: the payload and the list entry of every reply,
 	// index-aligned with m.replies, rebuilt when the replies or the width
@@ -649,7 +653,21 @@ func (m *Model) SetUserGroups(groups map[string]string) {
 // SetCurrentUser records the authenticated user ID so UpdateReaction can
 // flag the current user's own reactions (HasReacted) correctly.
 func (m *Model) SetCurrentUser(userID string) {
+	if m.currentUserID == userID {
+		return
+	}
 	m.currentUserID = userID
+	// Rendering reads it too: mentions of the user are highlighted.
+	m.InvalidateCache()
+}
+
+// SetSelfUserGroups sets the usergroups the current user belongs to.
+func (m *Model) SetSelfUserGroups(groups map[string]bool) {
+	if maps.Equal(m.selfGroups, groups) {
+		return
+	}
+	m.selfGroups = maps.Clone(groups)
+	m.InvalidateCache()
 }
 
 // SetUserStatuses replaces the user ID -> custom status map; see
@@ -1202,6 +1220,14 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 			Background(styles.SelectionTintColor(m.focused)).
 			Render(parentContent)
 		pad = styles.SelectionTintColor(m.focused)
+	} else if parentRendered.MentionsSelf {
+		// The mention highlight a reply's unselected row gets (WrapRows).
+		parentContent = lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).
+			BorderForeground(styles.MentionHighlightBar()).
+			BorderBackground(styles.MentionHighlightBg()).
+			Background(styles.MentionHighlightBg()).
+			Render(messages.RepaintBgToMentionTint(parentContent))
+		pad = styles.MentionHighlightBg()
 	} else {
 		parentContent = lipgloss.NewStyle().BorderStyle(styles.InvisibleLeftBorder()).BorderLeft(true).
 			BorderForeground(styles.Background).BorderBackground(styles.Background).
@@ -1496,6 +1522,7 @@ func (m *Model) renderContext() *messages.RenderContext {
 		UserNames:        m.userNames,
 		ChannelNames:     m.channelNames,
 		UserGroups:       m.userGroups,
+		Self:             messages.SelfMentions{UserID: m.currentUserID, Groups: m.selfGroups},
 		Emoji:            m.emojiCtx,
 		Images:           m.imgRenderer,
 		ImageChannel:     m.channelID,

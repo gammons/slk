@@ -1576,6 +1576,7 @@ func run() error {
 			UserID:           wctx.UserID,
 			CustomEmoji:      wctx.CustomEmoji(),
 			UserGroups:       wctx.UserGroups(),
+			SelfUserGroups:   wctx.SelfUserGroups(),
 			SectionsProvider: sectionsProviderAdapter{store: wctx.SectionStore},
 			// Ordered by reduceWorkspaceSwitched to run after
 			// ResetPresence and the activeTeamID update, so its
@@ -1808,6 +1809,7 @@ func run() error {
 				UserID:           wctx.UserID,
 				CustomEmoji:      wctx.CustomEmoji(), // cached set plus bootstrap subset; replaced below unless fresh
 				UserGroups:       wctx.UserGroups(),  // empty at this point; filled by the goroutine below
+				SelfUserGroups:   wctx.SelfUserGroups(),
 				SectionsProvider: sectionsProviderAdapter{store: wctx.SectionStore},
 				InitialActive:    isInitial,
 				LastChannelID:    mostRecentlyVisitedChannel(wctx.LastVisitedByChannel),
@@ -1842,10 +1844,13 @@ func run() error {
 					return
 				}
 				byID := usergroupHandles(groups)
+				self := selfUserGroups(groups, wctx.UserID)
 				wctx.SetUserGroups(byID)
+				wctx.SetSelfUserGroups(self)
 				p.Send(ui.UserGroupsLoadedMsg{
-					TeamID:     teamID,
-					UserGroups: byID,
+					TeamID:         teamID,
+					UserGroups:     byID,
+					SelfUserGroups: self,
 				})
 			}(wctx.TeamID)
 

@@ -4492,6 +4492,34 @@ func TestUserGroupsLoadedMsgPatchesActiveWorkspace(t *testing.T) {
 	}
 }
 
+// The user's own groups re-render both panes even when the handle map
+// is unchanged: a mention of one of them is now highlighted.
+func TestUserGroupsLoadedMsgPassesSelfGroups(t *testing.T) {
+	app := NewApp()
+	app.activeTeamID = "T1"
+	groups := map[string]string{"S0TESTGRP01": "platform-team"}
+	app.SetUserGroups(groups)
+	app.SetCurrentUserID("U9")
+	messageVersion := app.messagepane.Version()
+	threadVersion := app.threadPanel.Version()
+
+	app.Update(UserGroupsLoadedMsg{
+		TeamID:         "T1",
+		UserGroups:     groups,
+		SelfUserGroups: map[string]bool{"S0TESTGRP01": true},
+	})
+
+	if !app.selfGroups["S0TESTGRP01"] {
+		t.Errorf("selfGroups = %v, want S0TESTGRP01", app.selfGroups)
+	}
+	if app.messagepane.Version() == messageVersion {
+		t.Error("message pane did not re-render for the user's groups")
+	}
+	if app.threadPanel.Version() == threadVersion {
+		t.Error("thread panel did not re-render for the user's groups")
+	}
+}
+
 func TestUserGroupsLoadedMsgDropsOtherWorkspace(t *testing.T) {
 	app := NewApp()
 	app.activeTeamID = "T1"

@@ -11,6 +11,14 @@ import (
 func TestGetUserGroups(t *testing.T) {
 	mock := &mockSlackAPI{
 		getUserGroupsContextFn: func(ctx context.Context, options ...slack.GetUserGroupsOption) ([]slack.UserGroup, error) {
+			// The members tell the UI which groups the user is in.
+			var params slack.GetUserGroupsParams
+			for _, o := range options {
+				o(&params)
+			}
+			if !params.IncludeUsers {
+				t.Error("usergroups.list called without include_users")
+			}
 			return []slack.UserGroup{
 				{ID: "S0TESTGRP01", Handle: "platform-team", Name: "Platform Team"},
 			}, nil

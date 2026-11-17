@@ -26,6 +26,8 @@ func (a *App) newWindowModel(chName string) *messages.Model {
 	m.SetUserStatuses(a.presence.peers)
 	m.SetChannelNames(a.channelNames)
 	m.SetUserGroups(a.userGroups)
+	m.SetCurrentUser(a.currentUserID)
+	m.SetSelfUserGroups(a.selfGroups)
 	m.SetEmojiContext(a.emojiCtx)
 	m.SetCompact(a.compact)
 	if a.emojiCustoms != nil {

@@ -48,6 +48,7 @@ type RenderContext struct {
 	UserNames        map[string]string
 	ChannelNames     map[string]string
 	UserGroups       map[string]string
+	Self             SelfMentions // messages mentioning the user are highlighted
 	Emoji            EmojiContext
 	Images           *imgrender.Renderer // non-nil; the pane creates it
 	ImageChannel     string              // the key image fetches and ImageReadyMsg use (P3)
@@ -80,6 +81,7 @@ type RenderedMessage struct {
 	Content      string
 	Header       string // the wrapped author header (with "(edited)"), for SelectedHeader
 	HeaderBudget int
+	MentionsSelf bool            // someone else's message that mentions the user; WrapRows highlights it
 	Hits         []entrylist.Hit // image and file hits (when ImageHits), then reaction pills
 	SixelRows    []sixelEntry
 	// Kitty uploads by source: each pane keeps its own upload order.
@@ -99,6 +101,7 @@ func BlockkitContext(msg MessageItem, rc *RenderContext, emojiFlushes *[]func(io
 		UserNames:    rc.UserNames,
 		ChannelNames: rc.ChannelNames,
 		UserGroups:   rc.UserGroups,
+		Self:         rc.Self,
 		PlaceCtx:     rc.Emoji.PlaceCtx,
 		EmojiCells:   rc.Emoji.Cells,
 		Customs:      rc.Emoji.Customs,
@@ -253,6 +256,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		UserNames:    rc.UserNames,
 		ChannelNames: rc.ChannelNames,
 		UserGroups:   rc.UserGroups,
+		Self:         rc.Self,
 		PlaceCtx:     rc.Emoji.PlaceCtx,
 		EmojiCells:   rc.Emoji.Cells,
 		Customs:      rc.Emoji.Customs,
@@ -453,6 +457,15 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 
 	// Block Kit blocks render between the body text and file attachments.
 	bkCtx := BlockkitContext(msg, rc, &out.BlockFlushes)
+	// Block and legacy-attachment text all passes through RenderText,
+	// so checking each string there keeps the row highlight in step
+	// with the mention styling wherever the mention sits.
+	mentionsSelf := rc.Self.InText(MessageTextSource(msg))
+	renderText := bkCtx.RenderText
+	bkCtx.RenderText = func(s string, un map[string]string) string {
+		mentionsSelf = mentionsSelf || rc.Self.InText(s)
+		return renderText(s, un)
+	}
 	var bkLines []string
 	bkInteractive := false
 	if len(msg.Blocks) > 0 {
@@ -545,6 +558,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		hint := styles.Timestamp.Render(InteractiveHint(msg))
 		bkLines = append(bkLines, hint)
 	}
+	out.MentionsSelf = msg.UserID != rc.Self.UserID && mentionsSelf
 	preAttachmentRows += len(bkLines)
 
 	bkBlock := ""

@@ -451,6 +451,19 @@ func Apply(themeName string, overrides core.Theme) {
 	if colors.SelectionBgUnfocused != "" {
 		selectionBgUnfocused = lipgloss.Color(colors.SelectionBgUnfocused)
 	}
+	for _, c := range []struct {
+		dst *color.Color
+		val string
+	}{
+		{&selfMentionBg, colors.SelfMentionBg},
+		{&selfMentionFg, colors.SelfMentionFg},
+		{&mentionHighlightBg, colors.MentionHighlightBg},
+		{&mentionHighlightBar, colors.MentionHighlightBar},
+	} {
+		if c.val != "" {
+			*c.dst = lipgloss.Color(c.val)
+		}
+	}
 
 	applyTransparency()
 	buildStyles()

@@ -115,6 +115,43 @@ func mentionStyle() lipgloss.Style {
 		Foreground(styles.Primary).
 		Bold(true)
 }
+
+// selfMentionStyle is mentionStyle for a mention that reaches the user.
+func selfMentionStyle() lipgloss.Style {
+	bg, fg := styles.SelfMentionColors()
+	return lipgloss.NewStyle().
+		Background(bg).
+		Foreground(fg).
+		Bold(true)
+}
+
+// SelfMentions is who "me" is when deciding whether a mention reaches
+// the user: their user ID and the usergroups they belong to. The zero
+// value (no UserID) matches nothing, so surfaces that never set it
+// render every mention alike.
+type SelfMentions struct {
+	UserID string
+	Groups map[string]bool // usergroup IDs the user is a member of
+}
+
+// InText reports whether text mentions the user directly, through
+// @here/@channel/@everyone, or through one of their usergroups. It
+// matches the forms renderInlineFormattingWith styles, so a message is
+// highlighted exactly when one of its mentions is.
+func (s SelfMentions) InText(text string) bool {
+	if s.UserID == "" {
+		return false
+	}
+	if strings.Contains(text, "<@"+s.UserID+">") || specialMentionRe.MatchString(text) {
+		return true
+	}
+	for _, m := range usergroupMentionRe.FindAllStringSubmatch(text, -1) {
+		if s.Groups[m[1]] {
+			return true
+		}
+	}
+	return false
+}
 func blockquoteStyle() lipgloss.Style {
 	return lipgloss.NewStyle().
 		Foreground(styles.TextMuted).
@@ -352,8 +389,19 @@ func SelectionTintBgANSI(focused bool) string {
 // the default-bg escape ("49", from BgANSI) is swapped for the tint, and
 // the tint is also put at the start and after every reset.
 func RepaintBgToSelectionTint(s string, focused bool) string {
+	return repaintBg(s, SelectionTintBgANSI(focused))
+}
+
+// RepaintBgToMentionTint is RepaintBgToSelectionTint for the
+// highlight of a message that mentions the user.
+func RepaintBgToMentionTint(s string) string {
+	return repaintBg(s, bgANSIFor(styles.MentionHighlightBg()))
+}
+
+// repaintBg is RepaintBgToSelectionTint for any tint, given as its bg
+// ANSI escape (bgANSIFor).
+func repaintBg(s, tint string) string {
 	from := bgSGRParams(BgANSI())
-	tint := SelectionTintBgANSI(focused)
 	to := bgSGRParams(tint)
 	if from == "" || from == to {
 		return s
@@ -683,6 +731,7 @@ type RenderSlackMarkdownOpts struct {
 	UserNames    map[string]string
 	ChannelNames map[string]string
 	UserGroups   map[string]string
+	Self         SelfMentions // mentions reaching the user get selfMentionStyle
 
 	// Emoji-image opts (zero values disable the image path).
 	PlaceCtx     emojiutil.PlaceContext
@@ -855,7 +904,11 @@ func renderInlineFormattingWith(text string, opts RenderSlackMarkdownOpts) strin
 	// with FlattenMrkdwn (flatten.go).
 	text = usergroupMentionRe.ReplaceAllStringFunc(text, func(match string) string {
 		groups := usergroupMentionRe.FindStringSubmatch(match)
-		return mentionStyle().Render(usergroupDisplay(opts.UserGroups, groups[1], groups[2]))
+		style := mentionStyle()
+		if opts.Self.UserID != "" && opts.Self.Groups[groups[1]] {
+			style = selfMentionStyle()
+		}
+		return style.Render(usergroupDisplay(opts.UserGroups, groups[1], groups[2]))
 	})
 
 	// Broadcast mentions: <!here> / <!channel> / <!everyone> (labels,
@@ -864,7 +917,11 @@ func renderInlineFormattingWith(text string, opts RenderSlackMarkdownOpts) strin
 	// FlattenMrkdwn (flatten.go). Runs after the date and subteam
 	// passes so their `<!...>` forms are already consumed.
 	text = specialMentionRe.ReplaceAllStringFunc(text, func(match string) string {
-		return mentionStyle().Render("@" + specialMentionRe.FindStringSubmatch(match)[1])
+		style := mentionStyle()
+		if opts.Self.UserID != "" {
+			style = selfMentionStyle()
+		}
+		return style.Render("@" + specialMentionRe.FindStringSubmatch(match)[1])
 	})
 
 	// Channel mentions: <#C1234|channel-name> -> #channel-name, or
@@ -897,6 +954,9 @@ func renderInlineFormattingWith(text string, opts RenderSlackMarkdownOpts) strin
 			if resolved, ok := userNames[userID]; ok {
 				name = resolved
 			}
+		}
+		if userID == opts.Self.UserID {
+			return selfMentionStyle().Render("@" + name)
 		}
 		return mentionStyle().Render("@" + name)
 	})
