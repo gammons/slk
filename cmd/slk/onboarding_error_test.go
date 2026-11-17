@@ -30,6 +30,7 @@ func TestDesktopErrorMessageKnownCauses(t *testing.T) {
 		{slackdesktop.ErrDesktopNotFound, "Slack desktop app not found"},
 		{slackdesktop.ErrNotSignedIn, "No Slack workspaces are signed in"},
 		{slackdesktop.ErrCookieDBMissing, "never signed in"},
+		{fmt.Errorf("%w: open Cookies: operation not permitted", slackdesktop.ErrCookieDBUnreadable), "operation not permitted"},
 		{slackdesktop.ErrKeyringLocked, "keyring is locked"},
 		{slackdesktop.ErrNoSecretService, "No system keyring"},
 		{errors.New("boom"), "boom"},

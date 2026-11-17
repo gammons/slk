@@ -6,9 +6,12 @@ var (
 	ErrDesktopNotFound = errors.New("slack desktop app config directory not found")
 	ErrNotSignedIn     = errors.New("no slack workspaces are signed in")
 	ErrCookieDBMissing = errors.New("slack cookie database not found")
-	ErrKeyringLocked   = errors.New("system keyring is locked")
-	ErrNoSecretService = errors.New("no system secret service available")
-	ErrSecretNotFound  = errors.New("slack secret not found in system keyring")
-	ErrDecryptFailed   = errors.New("failed to decrypt slack session cookie")
-	ErrCookieLocked    = errors.New("slack cookie database is locked")
+	// ErrCookieDBUnreadable wraps the open error: the file is there but
+	// slk may not read it (e.g. macOS TCC on the App Store build).
+	ErrCookieDBUnreadable = errors.New("slack cookie database is not readable")
+	ErrKeyringLocked      = errors.New("system keyring is locked")
+	ErrNoSecretService    = errors.New("no system secret service available")
+	ErrSecretNotFound     = errors.New("slack secret not found in system keyring")
+	ErrDecryptFailed      = errors.New("failed to decrypt slack session cookie")
+	ErrCookieLocked       = errors.New("slack cookie database is locked")
 )
