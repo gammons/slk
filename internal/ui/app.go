@@ -2580,7 +2580,10 @@ func (a *App) ToggleSidebar() {
 }
 
 // SetShowWorkspaceRail applies appearance.show_workspace_rail.
-func (a *App) SetShowWorkspaceRail(show bool) { a.railHidden = !show }
+func (a *App) SetShowWorkspaceRail(show bool) {
+	a.railHidden = !show
+	a.syncStatusWorkspace()
+}
 
 // ToggleWorkspaceRail shows or hides the workspace rail. Hiding it
 // while it has focus moves focus to the sidebar, or to the messages
@@ -2594,7 +2597,13 @@ func (a *App) ToggleWorkspaceRail() {
 			a.focusedPanel = PanelSidebar
 		}
 	}
+	a.syncStatusWorkspace()
 }
+
+// syncStatusWorkspace puts statusWorkspaceLabel in the status bar. Called
+// wherever its inputs change (rail shown/hidden, workspaces set, active
+// workspace changed) so View stays free of setters.
+func (a *App) syncStatusWorkspace() { a.statusbar.SetWorkspace(a.statusWorkspaceLabel()) }
 
 // statusWorkspaceLabel is what the status bar shows for the workspace:
 // the active workspace's initials while the user has hidden the rail
@@ -2964,6 +2973,7 @@ func (a *App) SetWorkspaces(items []workspace.WorkspaceItem) {
 	a.workspaceRail.RefreshUnreads()
 	a.workspaceItems = items
 	a.syncWorkspaceFinder()
+	a.syncStatusWorkspace()
 }
 
 // syncWorkspaceFinder rebuilds the workspace finder's items from the

@@ -293,6 +293,7 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 		a.statusbar.SetStatus(pres, dndEnabled, dndEnd)
 		a.statusbar.SetCustomStatus(a.presence.CustomStatus(a.currentUserID))
 		a.workspaceRail.SelectByID(m.TeamID)
+		a.syncStatusWorkspace()
 		if len(m.Channels) > 0 {
 			// Restore the last-visited channel across restarts (persisted in
 			// channel_visits). Falls back to the first sidebar entry when
@@ -465,6 +466,7 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 		a.sidebar.SetWidth(m.SidebarWidth)
 	}
 	a.workspaceRail.SelectByID(m.TeamID)
+	a.syncStatusWorkspace()
 
 	var batch []tea.Cmd
 	// After resetWindowTree above, so the fresh panes get the statuses.

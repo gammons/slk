@@ -57,6 +57,20 @@ func TestRail_OneWorkspaceHStaysOnSidebar(t *testing.T) {
 	}
 }
 
+// Switching workspaces with the rail hidden updates the initials in the
+// status bar.
+func TestRail_HiddenStatusFollowsSwitch(t *testing.T) {
+	a := newTestApp(t, withWorkspaces(
+		workspace.WorkspaceItem{ID: "T1", Name: "Acme", Initials: "AC"},
+		workspace.WorkspaceItem{ID: "T2", Name: "Beta", Initials: "BE"},
+	))
+	a.SetShowWorkspaceRail(false)
+	_, _ = a.Update(WorkspaceSwitchedMsg{TeamID: "T2", TeamName: "Beta", UserID: "U2"})
+	if view := a.statusbar.View(80); !strings.Contains(view, " BE ") {
+		t.Errorf("after switching to Beta the status bar lacks BE: %q", view)
+	}
+}
+
 // show_workspace_rail = false starts with the rail hidden.
 func TestRail_HiddenByConfig(t *testing.T) {
 	a := newTestApp(t, withWorkspaces(
