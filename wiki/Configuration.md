@@ -35,6 +35,8 @@ transparent_background = false  # true: panes, sidebar, rail, status bar and the
 timestamp_format = "3:04 PM"
 show_avatars = true      # false hides the avatars beside messages
 thread_avatars = true    # false hides them in the thread pane (needs show_avatars)
+show_workspace_rail = true  # false starts with the workspace rail hidden (Ctrl+g
+                            # toggles it); never drawn with one workspace
 image_protocol = "auto"   # auto | kitty | sixel | halfblock | off
 kitty_placement = "auto"  # auto | native | emulated: who places kitty images.
                           # auto = emulated on WezTerm (no unicode

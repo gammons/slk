@@ -19,6 +19,7 @@ type KeyMap struct {
 	Tab                 key.Binding
 	ShiftTab            key.Binding
 	ToggleSidebar       key.Binding
+	ToggleWorkspaceRail key.Binding
 	SidebarGrow         key.Binding
 	SidebarShrink       key.Binding
 	ToggleThread        key.Binding
@@ -157,6 +158,7 @@ func DefaultKeyMap() KeyMap {
 		ThemePrev:           key.NewBinding(key.WithKeys("alt+shift+y", "alt+Y", "alt+shift+Y"), key.WithHelp("alt+shift+y", "prev theme (per workspace)")),
 		Compact:             key.NewBinding(key.WithHelp(":compact", "Toggle compact (IRC-like) style")),
 		PresenceMenu:        key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "set status")),
+		ToggleWorkspaceRail: key.NewBinding(key.WithKeys("ctrl+g"), key.WithHelp("ctrl+g", "toggle workspace rail")),
 		ToggleSection:       key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "toggle section")),
 		NavBack:             key.NewBinding(key.WithKeys("ctrl+h"), key.WithHelp("ctrl+h", "navigate back")),
 		// ctrl+k was the original forward key. It stays bound for

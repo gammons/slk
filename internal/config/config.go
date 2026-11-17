@@ -110,6 +110,11 @@ type Appearance struct {
 	// ThreadAvatars also draws avatars in the thread pane (needs
 	// ShowAvatars). Default on.
 	ThreadAvatars bool `toml:"thread_avatars"`
+	// ShowWorkspaceRail draws the workspace rail on the left. false hides
+	// it at startup (ctrl+g toggles it), and the status bar then shows the
+	// active workspace's initials. With one workspace the rail is never
+	// drawn. Default on.
+	ShowWorkspaceRail bool `toml:"show_workspace_rail"`
 	// ImageProtocol controls how inline images are rendered.
 	// One of: "auto", "kitty", "sixel", "halfblock", "off".
 	ImageProtocol string `toml:"image_protocol"`
@@ -318,6 +323,8 @@ func Default() Config {
 			ClickOpensThread: true,
 			EmojiImages:      "on",
 			EmojiCells:       2,
+			// Hidden with one workspace regardless (#216).
+			ShowWorkspaceRail: true,
 		},
 		Animations: Animations{
 			Enabled:          true,

@@ -22,6 +22,7 @@ import (
 // source of theme freshness (App.View captures it once at the
 // top of the render path).
 func (a *App) renderStatusRow(railWidth, statusWidth int, themeVer int64) string {
+	a.statusbar.SetWorkspace(a.statusWorkspaceLabel())
 	c := &a.renderCache.status
 	if c.hit(a.statusbar.Version(), statusWidth, 1, themeVer) {
 		return c.output
