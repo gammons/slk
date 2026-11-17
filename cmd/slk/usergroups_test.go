@@ -1,10 +1,15 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"slices"
 	"sync"
 	"testing"
 
 	"github.com/slack-go/slack"
+
+	"github.com/gammons/slk/internal/slack/boot"
 )
 
 func TestUsergroupHandlesPrefersHandle(t *testing.T) {
@@ -93,5 +98,52 @@ func TestSelfUserGroups(t *testing.T) {
 	}, "U1")
 	if len(self) != 1 || !self["S1"] {
 		t.Errorf("selfUserGroups = %v, want only S1", self)
+	}
+}
+
+// Off Grid every conversation belongs to the workspace, so there are no
+// member teams; on Grid each other owning team is listed once.
+func TestGridMemberTeams(t *testing.T) {
+	if got := gridMemberTeams([]boot.Channel{{ContextTeamID: "T1"}, {}}, []boot.IM{{ContextTeamID: "T1"}}, "T1"); len(got) != 0 {
+		t.Errorf("single workspace: member teams = %v, want none", got)
+	}
+	got := gridMemberTeams(
+		[]boot.Channel{{ContextTeamID: "T2"}, {ContextTeamID: "E1"}, {ContextTeamID: "T3"}, {ContextTeamID: "T2"}},
+		[]boot.IM{{ContextTeamID: "T4"}},
+		"E1")
+	if want := []string{"T2", "T3", "T4"}; !slices.Equal(got, want) {
+		t.Errorf("grid: member teams = %v, want %v", got, want)
+	}
+}
+
+// The org-level call may fail on Grid; the member teams' groups must
+// still load. Only when every call fails is it an error.
+func TestFetchUserGroups(t *testing.T) {
+	var asked []string
+	list := func(_ context.Context, team string) ([]slack.UserGroup, error) {
+		asked = append(asked, team)
+		if team == "" {
+			return nil, errors.New("org token requires team_id")
+		}
+		return []slack.UserGroup{{ID: "S-" + team}}, nil
+	}
+	logf := func(string, ...any) {}
+	groups, err := fetchUserGroups(context.Background(), list, []string{"T2", "T3"}, logf)
+	if err != nil {
+		t.Fatalf("fetchUserGroups: %v", err)
+	}
+	if want := []string{"", "T2", "T3"}; !slices.Equal(asked, want) {
+		t.Errorf("teams asked = %q, want %q", asked, want)
+	}
+	if len(groups) != 2 || groups[0].ID != "S-T2" || groups[1].ID != "S-T3" {
+		t.Errorf("groups = %+v, want the two member teams' groups", groups)
+	}
+
+	asked = nil
+	if _, err := fetchUserGroups(context.Background(), list, nil, logf); err == nil {
+		t.Error("the only call failed but no error was returned")
+	}
+	if want := []string{""}; !slices.Equal(asked, want) {
+		t.Errorf("off Grid: teams asked = %q, want %q", asked, want)
 	}
 }

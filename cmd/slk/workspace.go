@@ -126,6 +126,11 @@ type WorkspaceContext struct {
 	// from bootCustomEmoji. Read once, on the goroutine that called
 	// connectWorkspace.
 	customEmojiFreshFor time.Duration
+
+	// gridMemberTeams are the Enterprise Grid member workspaces owning
+	// the user's conversations (gridMemberTeams); empty off Grid. Set at
+	// connect, before the usergroup fetch reads it.
+	gridMemberTeams []string
 	// emojiMu serializes publishing customEmoji between emoji.list
 	// fetches and emoji_changed deltas; emojiSeq counts the deltas so a
 	// fetch can tell its list may predate one. Readers need neither.

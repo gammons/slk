@@ -1838,7 +1838,7 @@ func run() error {
 			// refresh for the active workspace. Best-effort: failure leaves
 			// bare subteam mentions rendered as "@group".
 			go func(teamID string) {
-				groups, err := wctx.Client.GetUserGroups(ctx)
+				groups, err := fetchUserGroups(ctx, wctx.Client.GetUserGroups, wctx.gridMemberTeams, log.Printf)
 				if err != nil {
 					log.Printf("usergroups fetch for %s failed: %v (subteam mentions will render as @group)", wctx.TeamName, err)
 					return

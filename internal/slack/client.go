@@ -1020,8 +1020,15 @@ func (c *Client) GetHistorySince(ctx context.Context, channelID, oldest string, 
 // GetUserGroups retrieves the workspace's usergroups (the @team
 // handles behind <!subteam^S…> mentions) via usergroups.list, with
 // their members, so the UI can tell which groups the user is in.
-func (c *Client) GetUserGroups(ctx context.Context) ([]slack.UserGroup, error) {
-	groups, err := c.api.GetUserGroupsContext(ctx, slack.GetUserGroupsOptionIncludeUsers(true))
+// teamID scopes the call to one member workspace of an Enterprise Grid
+// org (Slack requires it for groups owned by a member workspace when the
+// session is org-level); "" leaves it out.
+func (c *Client) GetUserGroups(ctx context.Context, teamID string) ([]slack.UserGroup, error) {
+	opts := []slack.GetUserGroupsOption{slack.GetUserGroupsOptionIncludeUsers(true)}
+	if teamID != "" {
+		opts = append(opts, slack.GetUserGroupsOptionTeamID(teamID))
+	}
+	groups, err := c.api.GetUserGroupsContext(ctx, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("getting usergroups: %w", err)
 	}

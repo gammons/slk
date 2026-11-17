@@ -223,6 +223,7 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	if err != nil {
 		return nil, fmt.Errorf("bootstrapping %s: %w", token.TeamName, err)
 	}
+	wctx.gridMemberTeams = gridMemberTeams(res.Channels, res.IMs, client.TeamID())
 	deactivatedAfter, _ := db.DeactivatedUsers()
 	if p != nil {
 		announceRevalidated(func(msg tea.Msg) { p.Send(msg) }, deactivatedBefore, deactivatedAfter)

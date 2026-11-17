@@ -1,11 +1,60 @@
 package main
 
 import (
+	"context"
 	"slices"
 	"strings"
 
 	"github.com/slack-go/slack"
+
+	"github.com/gammons/slk/internal/slack/boot"
 )
+
+// gridMemberTeams returns the other teams that own the user's
+// conversations, from userBoot's context_team_id: on Enterprise Grid
+// the member workspaces of the org (gammons/slk#214), elsewhere none,
+// since every conversation belongs to the workspace itself.
+func gridMemberTeams(channels []boot.Channel, ims []boot.IM, workspaceID string) []string {
+	var teams []string
+	add := func(id string) {
+		if id != "" && id != workspaceID && !slices.Contains(teams, id) {
+			teams = append(teams, id)
+		}
+	}
+	for _, ch := range channels {
+		add(ch.ContextTeamID)
+	}
+	for _, im := range ims {
+		add(im.ContextTeamID)
+	}
+	slices.Sort(teams)
+	return teams
+}
+
+// fetchUserGroups lists the workspace's usergroups, then each Grid
+// member team's, since an org-level session only sees a member
+// workspace's groups when it names the team. A failed call is logged
+// and skipped so one team can't hide the others' groups; the error is
+// returned only when every call failed.
+func fetchUserGroups(ctx context.Context, list func(context.Context, string) ([]slack.UserGroup, error), memberTeams []string, logf func(string, ...any)) ([]slack.UserGroup, error) {
+	var all []slack.UserGroup
+	var lastErr error
+	failed := 0
+	for _, team := range append([]string{""}, memberTeams...) {
+		groups, err := list(ctx, team)
+		if err != nil {
+			logf("usergroups fetch (team %q) failed: %v", team, err)
+			lastErr = err
+			failed++
+			continue
+		}
+		all = append(all, groups...)
+	}
+	if failed == len(memberTeams)+1 {
+		return nil, lastErr
+	}
+	return all, nil
+}
 
 func usergroupHandles(groups []slack.UserGroup) map[string]string {
 	byID := make(map[string]string, len(groups))
