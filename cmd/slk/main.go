@@ -1213,9 +1213,9 @@ func run() error {
 				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 				defer cancel()
 
-				for i, att := range attachments {
-					p.Send(ui.UploadProgressMsg{Done: i, Total: len(attachments)})
-
+				p.Send(ui.UploadProgressMsg{Done: 0, Total: len(attachments)})
+				files := make([]slackclient.FileUpload, 0, len(attachments))
+				for _, att := range attachments {
 					var reader io.Reader
 					if att.Bytes != nil {
 						reader = bytes.NewReader(att.Bytes)
@@ -1227,17 +1227,14 @@ func run() error {
 						defer f.Close()
 						reader = f
 					}
-
-					currentCaption := ""
-					if i == len(attachments)-1 {
-						currentCaption = caption
-					}
-
-					if _, err := client.UploadFile(ctx, channelID, threadTS, att.Filename, reader, att.Size, currentCaption); err != nil {
-						return ui.UploadResultMsg{Err: fmt.Errorf("uploading %s (%d/%d): %w", att.Filename, i+1, len(attachments), err)}
-					}
+					files = append(files, slackclient.FileUpload{Filename: att.Filename, Reader: reader, Size: att.Size})
 				}
-				p.Send(ui.UploadProgressMsg{Done: len(attachments), Total: len(attachments)})
+				err := client.UploadFiles(ctx, channelID, threadTS, caption, files, func(done int) {
+					p.Send(ui.UploadProgressMsg{Done: done, Total: len(attachments)})
+				})
+				if err != nil {
+					return ui.UploadResultMsg{Err: err}
+				}
 				return ui.UploadResultMsg{Err: nil}
 			}
 		}
