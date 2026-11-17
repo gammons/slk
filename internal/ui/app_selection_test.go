@@ -173,6 +173,36 @@ func TestApp_PlainClickOnMessageOpensThread(t *testing.T) {
 	}
 }
 
+// With [appearance] click_opens_thread = false (#197), a plain click on
+// a message row only selects it: no thread, no fetch, focus unchanged.
+func TestApp_PlainClickOnMessageSelectsOnlyWhenClickOpensThreadOff(t *testing.T) {
+	a := newTestAppWithMessages(t)
+	a.activeChannelID = "C1"
+	a.SetClickOpensThread(false)
+
+	fetched := false
+	a.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) core.Msg {
+		fetched = true
+		return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS), Replies: nil}
+	})
+
+	// Same row as TestApp_PlainClickOnMessageOpensThread: message 0.
+	pressX, pressY := a.layout.sidebarEnd+2, 4
+	_, _ = a.Update(tea.MouseClickMsg{X: pressX, Y: pressY, Button: tea.MouseLeft})
+	_, cmd := a.Update(tea.MouseReleaseMsg{X: pressX, Y: pressY, Button: tea.MouseLeft})
+	_ = drainBatch(cmd)
+
+	if a.threadVisible || fetched {
+		t.Errorf("threadVisible = %v, fetched = %v after click; want neither with click_opens_thread off", a.threadVisible, fetched)
+	}
+	if a.focusedPanel != PanelMessages {
+		t.Errorf("focusedPanel = %v after click; want PanelMessages", a.focusedPanel)
+	}
+	if msg, ok := a.messagepane.SelectedMessage(); !ok || msg.TS != "1.0" {
+		t.Errorf("selected = %+v (ok=%v); want the clicked message 1.0", msg.TS, ok)
+	}
+}
+
 // A click that lands on the channel header chrome (above the first
 // message) must NOT open a thread -- chrome clicks are no-ops. Defends
 // the ClickAt(returns bool) plumbing.
