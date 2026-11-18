@@ -204,6 +204,7 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		if m.ChannelID == a.threadPanel.ChannelID() {
 			a.threadPanel.RemoveMessageByTS(m.TS)
 		}
+		a.suppressReload.noteDeleted(m.ChannelID, m.TS)
 		// If the deleted message is the one currently being
 		// edited, cancel the edit (the message is gone --
 		// submitting would fail).

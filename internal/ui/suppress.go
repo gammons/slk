@@ -99,11 +99,12 @@ func (a *App) reapplySuppression() {
 	}
 }
 
-// setMessagesKeepSelection replaces m's messages, keeping the selected
-// message selected when it is still shown.
+// setMessagesKeepSelection refills m (messages.Model.Refill, which keeps
+// the range of history it has loaded), keeping the selected message
+// selected when it is still shown.
 func setMessagesKeepSelection(m *messages.Model, list []messages.MessageItem) {
 	sel, hadSel := m.SelectedMessage()
-	m.SetMessages(list)
+	m.Refill(list)
 	if hadSel {
 		m.SelectByTS(sel.TS)
 	}
@@ -133,10 +134,48 @@ func (a *App) setThreadRepliesKeepSelection(replies []messages.MessageItem) {
 }
 
 // suppressionReloadedMsg carries the cache reads reloadAfterRuleRemoval
-// made off the Update goroutine.
+// made off the Update goroutine. seq names the reload; only the latest
+// one is applied.
 type suppressionReloadedMsg struct {
+	seq     uint64
 	windows []windowReload
 	thread  *threadReload
+}
+
+// suppressReloadState is the reload in flight: its seq, and the messages
+// deleted while it reads. A read can capture a message just before its
+// delete arrives, and adding that copy back would resurrect it.
+type suppressReloadState struct {
+	seq     uint64
+	deleted map[string]map[string]bool // channel ID -> deleted TSes
+}
+
+// noteDeleted records a delete that arrived while a reload is in
+// flight. Nil-safe: no reload, nothing to record.
+func (s *suppressReloadState) noteDeleted(channelID, ts string) {
+	if s == nil {
+		return
+	}
+	if s.deleted[channelID] == nil {
+		s.deleted[channelID] = make(map[string]bool)
+	}
+	s.deleted[channelID][ts] = true
+}
+
+// withoutDeleted returns cached without the messages deleted in
+// channelID while the reload ran.
+func (s *suppressReloadState) withoutDeleted(channelID string, cached []messages.MessageItem) []messages.MessageItem {
+	gone := s.deleted[channelID]
+	if len(gone) == 0 {
+		return cached
+	}
+	out := make([]messages.MessageItem, 0, len(cached))
+	for _, m := range cached {
+		if !gone[m.TS] {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // windowReload is one window's cached history from since to until, the
@@ -181,6 +220,11 @@ func (a *App) reloadAfterRuleRemoval() tea.Cmd {
 	if len(wins) == 0 && thr == nil {
 		return nil
 	}
+	seq := uint64(1)
+	if a.suppressReload != nil {
+		seq = a.suppressReload.seq + 1
+	}
+	a.suppressReload = &suppressReloadState{seq: seq, deleted: make(map[string]map[string]bool)}
 	channels, threads := a.channels, a.threads
 	return func() tea.Msg {
 		for i := range wins {
@@ -195,27 +239,38 @@ func (a *App) reloadAfterRuleRemoval() tea.Cmd {
 		if thr != nil {
 			thr.cached = threads.CacheRead(ids.ChannelID(thr.chID), ids.ThreadTS(thr.threadTS))
 		}
-		return suppressionReloadedMsg{windows: wins, thread: thr}
+		return suppressionReloadedMsg{seq: seq, windows: wins, thread: thr}
 	}
 }
 
 // applySuppressionReload adds the cached messages a reload found to each
-// pane that still shows what it showed at dispatch. It only adds:
+// pane that still holds the range it was read for. It only adds:
 // everything a pane shows stays as it is now (it may have changed since
-// the read), and the panes' predicates drop whatever is still hidden.
+// the read), messages deleted meanwhile are left out, and the panes'
+// predicates drop whatever is still hidden. A reload superseded by a
+// later one is ignored.
 func (a *App) applySuppressionReload(r suppressionReloadedMsg) {
+	st := a.suppressReload
+	if st == nil || st.seq != r.seq {
+		return
+	}
+	a.suppressReload = nil
 	for _, w := range r.windows {
 		m := a.winModels[w.id]
-		if m == nil || a.leafChannel(w.id) != w.chID || m.OldestTS() != w.since || len(w.cached) == 0 {
-			// The window moved to another channel or its buffer was
-			// replaced (a jump): the read no longer fits it.
+		if m == nil || a.leafChannel(w.id) != w.chID || len(w.cached) == 0 {
 			continue
 		}
-		setMessagesKeepSelection(m, addMissing(m.Messages(), w.cached))
+		// The window must still hold the range it was read for.
+		// Paging older or a live arrival only widens it; a jump
+		// replaces it, and the read no longer fits.
+		if w.since != "" && (m.OldestTS() > w.since || m.NewestTS() < w.until) {
+			continue
+		}
+		setMessagesKeepSelection(m, addMissing(m.Messages(), st.withoutDeleted(w.chID, w.cached)))
 	}
 	if t := r.thread; t != nil && a.threadVisible && len(t.cached) > 1 &&
 		a.threadPanel.ChannelID() == t.chID && a.threadPanel.ThreadTS() == t.threadTS {
-		a.setThreadRepliesKeepSelection(addMissing(a.threadPanel.Replies(), t.cached[1:]))
+		a.setThreadRepliesKeepSelection(addMissing(a.threadPanel.Replies(), st.withoutDeleted(t.chID, t.cached[1:])))
 	}
 }
 

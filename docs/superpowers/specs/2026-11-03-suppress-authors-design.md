@@ -72,8 +72,9 @@ message reads only that window, not everything since; the thread pane keeps its
 selection, the parent included. The cache reads (one query plus
 per-message enrichment, proportional to what the window has loaded) run
 in a Cmd, off the Update goroutine; the result only adds messages a pane
-lacks, and is dropped for a window that has since changed channel or had
-its buffer replaced. Esc closes. Modelled on the marks list (`internal/ui/marks`),
+lacks, leaves out messages deleted while the read ran, and is dropped
+for a window that has since changed channel or no longer holds the range
+it was read for (a jump; paging older only widens it). Esc closes. Modelled on the marks list (`internal/ui/marks`),
 drawn through `bubbles/chrome`.
 
 Both are in the help overlay (`TestHelpListsEveryCommand`).
@@ -138,6 +139,10 @@ slk edits the file as text, like the theme and sidebar-width savers
   pane uses its own channel. `reapplySuppression` refilters every open
   pane after an addition; `reloadAfterRuleRemoval` /
   `applySuppressionReload` reload from the cache after a removal.
+- Loaded range: refiltering after a rule change refills a pane
+  (`messages.Model.Refill`) without forgetting the hidden messages it
+  was given before, so `OldestTS`/`NewestTS` keep covering what it has
+  loaded.
 - Older history: a pane remembers the oldest message it dropped, so
   `OldestTS` (the older-history cursor) moves past an all-hidden page,
   and a pane that shows nothing only because everything it holds is

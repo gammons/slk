@@ -402,27 +402,87 @@ func TestRuleRemovalReloadsOffTheUpdateLoop(t *testing.T) {
 	msgs := deliveredMsgs[suppressionReloadedMsg](t, cmd)
 
 	// A jump replaced the buffer before the reload landed.
-	jump := []messages.MessageItem{suppressMsg("9.0", "U2")}
-	a.messagepane.SetMessages(cloneMessageItems(jump))
+	a.messagepane.SetMessages([]messages.MessageItem{suppressMsg("9.0", "U2")})
 	a.Update(msgs[0])
 	if got := shownTS(a.messagepane.Messages()); got != "9.0" {
 		t.Errorf("shown = %s, want the stale reload dropped", got)
 	}
+}
 
-	// Delivered to the buffer it was read for (here one without B1's
-	// message), it adds what is missing and keeps the pane's own,
-	// possibly newer, copies.
-	kept := []messages.MessageItem{suppressMsg("1.0", "U1"), suppressMsg("2.0", "U2"), suppressMsg("4.0", "U3")}
-	kept[1].Text = "edited"
-	a.messagepane.SetMessages(kept)
-	msgs[0].windows[0].since = a.messagepane.OldestTS()
+// reloadInto shows shown in the pane, runs a rule-removal reload whose
+// cache read answers cached, lets between change the App while the read
+// is in flight, and applies the result.
+func reloadInto(t *testing.T, shown, cached []messages.MessageItem, between func(a *App)) *App {
+	t.Helper()
+	a, _ := suppressAppWith(t, core.ChannelServiceFuncs{
+		ReadCacheRange: func(ids.ChannelID, ids.MessageTS, ids.MessageTS) []messages.MessageItem {
+			return cloneMessageItems(cached)
+		},
+	})
+	a.messagepane.SetMessages(cloneMessageItems(shown))
+	msgs := deliveredMsgs[suppressionReloadedMsg](t, a.reloadAfterRuleRemoval())
+	if between != nil {
+		between(a)
+	}
 	a.Update(msgs[0])
+	return a
+}
+
+func TestRuleRemovalReloadAddsAndKeepsPaneCopies(t *testing.T) {
+	shown := []messages.MessageItem{suppressMsg("1.0", "U1"), suppressMsg("2.0", "U2"), suppressMsg("4.0", "U3")}
+	shown[1].Text = "edited"
+	a := reloadInto(t, shown, channelHistory(), nil)
 	got := a.messagepane.Messages()
 	if shownTS(got) != "1.0,2.0,3.0,4.0" {
 		t.Fatalf("shown = %s, want B1's message added", shownTS(got))
 	}
 	if got[1].Text != "edited" {
-		t.Errorf("the pane's copy of 2.0 was replaced by the cache read")
+		t.Error("the pane's copy of 2.0 was replaced by the cache read")
+	}
+}
+
+// Review finding (Greptile, PR #492, third round): a message deleted
+// while the read ran came back from the read's copy.
+func TestRuleRemovalReloadSkipsMessagesDeletedMeanwhile(t *testing.T) {
+	shown := []messages.MessageItem{suppressMsg("1.0", "U1"), suppressMsg("4.0", "U3")}
+	a := reloadInto(t, shown, channelHistory(), func(a *App) {
+		a.Update(WSMessageDeletedMsg{ChannelID: "C1", TS: "3.0"})
+	})
+	if got := shownTS(a.messagepane.Messages()); got != "1.0,2.0,4.0" {
+		t.Errorf("shown = %s, want 3.0 (deleted during the read) left out", got)
+	}
+	if a.suppressReload != nil {
+		t.Error("the reload's state should be cleared once applied")
+	}
+}
+
+// Review finding (Greptile, PR #492, third round): paging older while
+// the read ran made the reload look stale and dropped it.
+func TestRuleRemovalReloadSurvivesPagingOlder(t *testing.T) {
+	shown := []messages.MessageItem{suppressMsg("1.0", "U1"), suppressMsg("4.0", "U3")}
+	a := reloadInto(t, shown, channelHistory(), func(a *App) {
+		a.messagepane.PrependMessages([]messages.MessageItem{suppressMsg("0.5", "U2")})
+	})
+	if got := shownTS(a.messagepane.Messages()); got != "0.5,1.0,2.0,3.0,4.0" {
+		t.Errorf("shown = %s, want the reload applied after paging", got)
+	}
+}
+
+// Review finding (Greptile, PR #492, fourth round): refiltering after a
+// rule was added reset the hidden range to what that refilter hid, so a
+// message hidden earlier and newer than anything shown fell outside the
+// range a later reload read.
+func TestAddingRuleKeepsLoadedRange(t *testing.T) {
+	a, _ := suppressApp(t, core.SuppressRule{AuthorID: "U3"}) // 4.0 hidden, the newest
+	if a.messagepane.NewestTS() != "4.0" || a.messagepane.OldestTS() != "1.0" {
+		t.Fatalf("precondition range %s..%s", a.messagepane.OldestTS(), a.messagepane.NewestTS())
+	}
+	a.addSuppression(SuppressAuthorMsg{TeamID: "T1", Name: "B1", Rule: core.SuppressRule{AuthorID: "B1"}})
+	if got := shownTS(a.messagepane.Messages()); got != "1.0,2.0" {
+		t.Fatalf("shown = %s", got)
+	}
+	if got := a.messagepane.NewestTS(); got != "4.0" {
+		t.Errorf("NewestTS = %s after adding a rule, want 4.0 kept", got)
 	}
 }
 

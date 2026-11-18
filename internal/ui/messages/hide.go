@@ -51,6 +51,20 @@ func (m *Model) keepOlderHidden(ts string) {
 	}
 }
 
+// Refill replaces the pane's messages with msgs for the same
+// conversation, as SetMessages does, but keeps the range of history the
+// pane has loaded: the hidden messages it was given before still count
+// for OldestTS and NewestTS. msgs is filtered as SetMessages filters it.
+// Refiltering after a rule change uses it, so a message hidden earlier
+// stays inside the range a later reload reads, and the older-history
+// cursor does not move back.
+func (m *Model) Refill(msgs []MessageItem) {
+	oldest, newest := m.hiddenOldest, m.hiddenNewest
+	m.SetMessages(msgs)
+	m.keepOlderHidden(oldest)
+	m.keepNewerHidden(newest)
+}
+
 // keepNewerHidden records ts as the newest hidden message the pane was
 // given, when it is newer than the one recorded.
 func (m *Model) keepNewerHidden(ts string) {
