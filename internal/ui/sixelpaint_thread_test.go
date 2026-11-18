@@ -5,6 +5,7 @@ import (
 	stdimage "image"
 	"testing"
 
+	"github.com/gammons/slk/internal/core"
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/imgrender"
 	"github.com/gammons/slk/internal/ui/messages"
@@ -116,5 +117,47 @@ func TestThreadSixelRect_StopsAtTheCompose(t *testing.T) {
 	composeRow := 1 + a.layout.PageHeight(PanelThread) // first row under the replies
 	if bottom := rect.Y + rect.H - 1; bottom != composeRow {
 		t.Errorf("thread rect bottom = %d, want the compose region's first row %d", bottom, composeRow)
+	}
+}
+
+// A sixel avatar service reaches every pane: the channel window, the
+// thread pane, and a window split off later. Each places its avatars
+// in its own band of the screen.
+func TestSetAvatarService_SixelAvatarsReachEveryPane(t *testing.T) {
+	a := buildTestApp(withSize(200, 60))
+	a.imgProtocol = imgpkg.ProtoSixel
+	a.SetThreadAvatars(true)
+	a.SetAvatarService(core.NewSixelAvatarService(
+		func(string) string { return "AVAV\nAVAV" }, nil,
+		func(userID string) (string, []byte, bool) {
+			return "avatar-" + userID, []byte("\x1bPq#0~-\x1b\\"), true
+		},
+	))
+	parent := messages.MessageItem{TS: "1700000000.000100", UserID: "U2", UserName: "bob", Text: "parent", Timestamp: "10:29 AM"}
+	reply := messages.MessageItem{TS: "1700000000.000200", UserID: "U3", UserName: "cat", Text: "reply", Timestamp: "10:30 AM"}
+	a.activeChannelID = "C123"
+	a.messagepane.SetMessages([]messages.MessageItem{parent})
+	a.threadVisible = true
+	a.threadPanel.SetThread(parent, []messages.MessageItem{reply}, "C123", parent.TS)
+	_ = a.View()
+
+	var inMessages, inThread int
+	for _, p := range a.collectSixelPlacements(a.computeFrame()) {
+		switch x := p.Col - 1; {
+		case x >= a.layout.SidebarEnd() && x < a.layout.MsgEnd():
+			inMessages++
+		case x >= a.layout.MsgEnd() && x < a.layout.ThreadEnd():
+			inThread++
+		}
+	}
+	if inMessages != 1 || inThread != 2 {
+		t.Errorf("avatar placements: %d in the messages pane (want 1), %d in the thread pane (want the parent's and the reply's 2)", inMessages, inThread)
+	}
+
+	w := a.newWindowModel("general")
+	w.SetMessages([]messages.MessageItem{parent})
+	_ = w.View(30, 100)
+	if len(w.SixelPlacements()) != 1 {
+		t.Errorf("a window split off later placed %d avatars, want 1", len(w.SixelPlacements()))
 	}
 }

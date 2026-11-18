@@ -60,13 +60,19 @@ type RenderContext struct {
 // RenderOptions are the per-pane differences in how a message renders:
 // spec §5.1 items 9, 10 and 15, and plan decision P3.
 type RenderOptions struct {
-	Avatar          string // the author's avatar block; "" for none (always, in thread)
-	IsSelected      bool   // the cursor is on this message (reaction-nav highlight)
-	ReplyAffordance bool   // "[N replies ->]" under a parent (channel pane)
-	EditedMark      bool   // "(edited)" after the timestamp (channel pane)
-	BroadcastLabel  bool   // "↳ replied to a thread" label (channel pane)
-	ImageHits       bool   // record image and file hit rects (both panes)
-	SixelRows       bool   // record sixel rows (channel pane)
+	Avatar string // the author's avatar block; "" for none
+	// AvatarSixel is the avatar as a sixel image, with its placement
+	// key AvatarSixelKey (SixelAvatar). With SixelRows and an Avatar,
+	// the avatar is recorded as a sixel image at its cells and Avatar
+	// becomes its halfblock fallback.
+	AvatarSixel     []byte
+	AvatarSixelKey  string
+	IsSelected      bool // the cursor is on this message (reaction-nav highlight)
+	ReplyAffordance bool // "[N replies ->]" under a parent (channel pane)
+	EditedMark      bool // "(edited)" after the timestamp (channel pane)
+	BroadcastLabel  bool // "↳ replied to a thread" label (channel pane)
+	ImageHits       bool // record image and file hit rects (both panes)
+	SixelRows       bool // record sixel rows (both panes)
 	stats           *entryPerfStats
 
 	// BodyOnly draws only the message body (the draft preview): no
@@ -219,6 +225,24 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	}
 	avatarStr := opt.Avatar
 	stats := opt.stats
+	// A sixel avatar: blank cells in the text, where the painter draws
+	// the image, and the halfblock avatar as the fallback for a frame
+	// that cuts it. Recorded with the other images, below.
+	var avatarImg *SixelImage
+	if opt.SixelRows && avatarStr != "" && len(opt.AvatarSixel) > 0 {
+		fallback := strings.Split(avatarStr, "\n")
+		cols := lipgloss.Width(fallback[0])
+		blank := lipgloss.NewStyle().Background(styles.Background).Render(strings.Repeat(" ", cols))
+		rows := make([]string, len(fallback))
+		for i := range rows {
+			rows[i] = blank
+		}
+		avatarStr = strings.Join(rows, "\n")
+		// Row 0 and column 1: placeAvatarBeside puts the avatar beside
+		// the first content row, right of the pane's border (col 0).
+		avatarImg = &SixelImage{key: opt.AvatarSixelKey, bytes: opt.AvatarSixel, fallback: fallback,
+			height: len(fallback), width: cols, row: 0, col: 1}
+	}
 
 	// If we have an avatar, reserve space on the left for it
 	contentWidth := width - 4
@@ -764,6 +788,9 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		for i := range allSixel {
 			allSixel[i].col += contentColBase
 		}
+	}
+	if avatarImg != nil {
+		allSixel = append(allSixel, *avatarImg)
 	}
 	// Timestamp substitution may lengthen a header line, but must not
 	// introduce another row after the avatar and hit rects are composed.

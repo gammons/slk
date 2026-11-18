@@ -700,6 +700,26 @@ func NewAvatarService(avatar, replyAvatar func(userID string) string) AvatarServ
 
 type avatarAdapter struct{ avatar, replyAvatar func(userID string) string }
 
+// NewSixelAvatarService is NewAvatarService with sixel avatars: sixel
+// returns userID's avatar as sixel bytes and their placement key, or
+// ok false while it isn't available. A nil sixel makes it the plain
+// AvatarService.
+func NewSixelAvatarService(avatar, replyAvatar func(userID string) string, sixel func(userID string) (key string, bytes []byte, ok bool)) AvatarService {
+	if sixel == nil {
+		return NewAvatarService(avatar, replyAvatar)
+	}
+	return sixelAvatarAdapter{avatarAdapter{avatar: avatar, replyAvatar: replyAvatar}, sixel}
+}
+
+type sixelAvatarAdapter struct {
+	avatarAdapter
+	sixel func(userID string) (key string, bytes []byte, ok bool)
+}
+
+func (a sixelAvatarAdapter) SixelAvatar(userID string) (string, []byte, bool) {
+	return a.sixel(userID)
+}
+
 func (a avatarAdapter) Avatar(userID string) string {
 	if a.avatar == nil {
 		return ""

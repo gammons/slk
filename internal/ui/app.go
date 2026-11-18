@@ -433,6 +433,7 @@ type App struct {
 	// newWindowModel can configure late-created window models
 	// identically to the root model. See internal/ui/winmodels.go.
 	avatarFn      messages.AvatarFunc
+	sixelAvatarFn messages.SixelAvatarFunc // nil unless the service draws sixel avatars
 	replyAvatarFn messages.AvatarFunc
 	replyAvatars  bool
 	imageCtx      imgrender.ImageContext
@@ -3156,17 +3157,24 @@ func (a *App) SetChannelFinderItems(items []core.ChannelFinderItem) {
 }
 
 // SetAvatarService wires the rendered avatars shown beside messages.
+// A core.SixelAvatarService also draws them as sixel images.
 func (a *App) SetAvatarService(s core.AvatarService) {
 	var fn, replyFn messages.AvatarFunc
+	var sixelFn messages.SixelAvatarFunc
 	if s != nil {
 		fn, replyFn = s.Avatar, s.ReplyAvatar
+		if sx, ok := s.(core.SixelAvatarService); ok {
+			sixelFn = sx.SixelAvatar
+		}
 	}
-	a.avatarFn, a.replyAvatarFn = fn, replyFn
+	a.avatarFn, a.replyAvatarFn, a.sixelAvatarFn = fn, replyFn, sixelFn
 	for _, m := range a.allWinModels() {
 		m.SetAvatarFunc(fn)
+		m.SetSixelAvatarFunc(sixelFn)
 		m.SetReplyAvatarFunc(a.replyAvatarFunc())
 	}
 	a.threadPanel.SetAvatarFunc(fn)
+	a.threadPanel.SetSixelAvatarFunc(sixelFn)
 }
 
 // SetReplyAvatars switches the reply row under thread parents to Slack's

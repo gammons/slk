@@ -43,6 +43,7 @@ type Model struct {
 	compact          bool
 	showAvatars      bool
 	avatarFn         messages.AvatarFunc
+	sixelAvatarFn    messages.SixelAvatarFunc
 	userNames        map[string]string
 	userStatuses     map[string]peerstatus.Status
 	channelNames     map[string]string
@@ -608,6 +609,13 @@ func (m *Model) Focused() bool {
 // SetAvatarFunc sets the avatar rendering function.
 func (m *Model) SetAvatarFunc(fn messages.AvatarFunc) {
 	m.avatarFn = fn
+}
+
+// SetSixelAvatarFunc draws avatars as sixel images where fn has one;
+// nil keeps them half-block. See messages.(*Model).SetSixelAvatarFunc.
+func (m *Model) SetSixelAvatarFunc(fn messages.SixelAvatarFunc) {
+	m.sixelAvatarFn = fn
+	m.InvalidateCache()
 }
 
 // SetUserNames sets the user ID -> display name map for mention resolution.
@@ -1585,6 +1593,7 @@ func (m *Model) renderMessage(msg messages.MessageItem, width int, isSelected bo
 	opt := messages.RenderOptions{IsSelected: isSelected, ImageHits: true, SixelRows: true}
 	if !m.compact && m.showAvatars && m.avatarFn != nil {
 		opt.Avatar = m.avatarFn(msg.UserID)
+		opt.AvatarSixelKey, opt.AvatarSixel = messages.SixelAvatar(m.sixelAvatarFn, msg.UserID)
 	}
 	return messages.RenderMessage(msg, width, m.renderContext(), opt)
 }

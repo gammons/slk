@@ -38,6 +38,12 @@ type (
 // AvatarFunc returns the rendered half-block avatar for a user ID, or empty string.
 type AvatarFunc func(userID string) string
 
+// SixelAvatarFunc returns a user's avatar as sixel bytes and the key
+// that identifies them to the painter, or ok false when there is none:
+// not on a sixel terminal, or not loaded yet. The pane still draws the
+// AvatarFunc avatar wherever the sixel one cannot be painted.
+type SixelAvatarFunc func(userID string) (key string, bytes []byte, ok bool)
+
 // EntryPayload is a content pane's payload for one entry of its list,
 // index-aligned with the list's entries: the parts the substrate does
 // not need. A nil cache of payloads means the render cache was discarded
@@ -124,6 +130,7 @@ type Model struct {
 	loading       bool
 	spinnerFrame  int                          // braille-spinner frame index for "Loading messages..." animation
 	avatarFn      AvatarFunc                   // optional: returns half-block avatar for a userID
+	sixelAvatarFn SixelAvatarFunc              // optional: the avatar as sixel, on a sixel terminal
 	replyAvatarFn AvatarFunc                   // optional: small avatar for the reply row
 	userNames     map[string]string            // user ID -> display name for mention resolution
 	userStatuses  map[string]peerstatus.Status // user ID -> custom status shown after author names
@@ -1293,6 +1300,13 @@ func (m *Model) SetAvatarFunc(fn AvatarFunc) {
 	m.avatarFn = fn
 }
 
+// SetSixelAvatarFunc draws avatars as sixel images where fn has one;
+// nil keeps them half-block. The half-block avatar stays the fallback.
+func (m *Model) SetSixelAvatarFunc(fn SixelAvatarFunc) {
+	m.sixelAvatarFn = fn
+	m.dropCache()
+}
+
 // SetReplyAvatarFunc switches the reply row to Slack's look (repliers'
 // avatars, then "N replies"); nil keeps "[N replies ->]".
 func (m *Model) SetReplyAvatarFunc(fn AvatarFunc) {
@@ -1806,6 +1820,7 @@ func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles, stats *entr
 	}
 	if !m.compact && m.avatarFn != nil {
 		opt.Avatar = m.avatarFn(msg.UserID)
+		opt.AvatarSixelKey, opt.AvatarSixel = SixelAvatar(m.sixelAvatarFn, msg.UserID)
 	}
 	r := RenderMessage(msg, width, m.renderContext(), opt)
 	// The channel pane's kitty upload order: blocks, attachments, then
