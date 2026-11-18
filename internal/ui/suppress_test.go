@@ -65,6 +65,9 @@ func suppressApp(t *testing.T, rules ...core.SuppressRule) (*App, *fakeSuppressi
 	t.Helper()
 	return suppressAppWith(t, core.ChannelServiceFuncs{
 		ReadCache: func(ids.ChannelID) []messages.MessageItem { return channelHistory() },
+		ReadCacheRange: func(ids.ChannelID, ids.MessageTS, ids.MessageTS) []messages.MessageItem {
+			return channelHistory()
+		},
 	}, rules...)
 }
 
@@ -380,8 +383,8 @@ func TestRuleChangeKeepsThreadParentSelected(t *testing.T) {
 
 // Review finding (Greptile, PR #492, second round): the reload after a
 // removal read the cache on the Update goroutine. It now runs in a Cmd,
-// and its result is dropped for a window whose buffer was replaced
-// while it ran.
+// and its result is dropped for a window that changed channel while it
+// ran.
 func TestRuleRemovalReloadsOffTheUpdateLoop(t *testing.T) {
 	reads := 0
 	a, _ := suppressAppWith(t, core.ChannelServiceFuncs{
@@ -401,7 +404,8 @@ func TestRuleRemovalReloadsOffTheUpdateLoop(t *testing.T) {
 	}
 	msgs := deliveredMsgs[suppressionReloadedMsg](t, cmd)
 
-	// A jump replaced the buffer before the reload landed.
+	// The window moved to another channel before the reload landed.
+	a.activeChannelID = "C2"
 	a.messagepane.SetMessages([]messages.MessageItem{suppressMsg("9.0", "U2")})
 	a.Update(msgs[0])
 	if got := shownTS(a.messagepane.Messages()); got != "9.0" {
@@ -428,62 +432,36 @@ func reloadInto(t *testing.T, shown, cached []messages.MessageItem, between func
 	return a
 }
 
-func TestRuleRemovalReloadAddsAndKeepsPaneCopies(t *testing.T) {
+// The maintainer's review (PR #492): a removal re-reads the window's
+// loaded range and replaces the pane with it, selection kept by TS.
+func TestRuleRemovalReplacesPaneKeepingSelection(t *testing.T) {
 	shown := []messages.MessageItem{suppressMsg("1.0", "U1"), suppressMsg("2.0", "U2"), suppressMsg("4.0", "U3")}
-	shown[1].Text = "edited"
-	a := reloadInto(t, shown, channelHistory(), nil)
-	got := a.messagepane.Messages()
-	if shownTS(got) != "1.0,2.0,3.0,4.0" {
-		t.Fatalf("shown = %s, want B1's message added", shownTS(got))
-	}
-	if got[1].Text != "edited" {
-		t.Error("the pane's copy of 2.0 was replaced by the cache read")
-	}
-}
-
-// Review finding (Greptile, PR #492, third round): a message deleted
-// while the read ran came back from the read's copy.
-func TestRuleRemovalReloadSkipsMessagesDeletedMeanwhile(t *testing.T) {
-	shown := []messages.MessageItem{suppressMsg("1.0", "U1"), suppressMsg("4.0", "U3")}
 	a := reloadInto(t, shown, channelHistory(), func(a *App) {
-		a.Update(WSMessageDeletedMsg{ChannelID: "C1", TS: "3.0"})
+		a.messagepane.SelectByTS("2.0")
 	})
-	if got := shownTS(a.messagepane.Messages()); got != "1.0,2.0,4.0" {
-		t.Errorf("shown = %s, want 3.0 (deleted during the read) left out", got)
+	if got := shownTS(a.messagepane.Messages()); got != "1.0,2.0,3.0,4.0" {
+		t.Fatalf("shown = %s, want the cached range", got)
 	}
-	if a.suppressReload != nil {
-		t.Error("the reload's state should be cleared once applied")
+	if sel, ok := a.messagepane.SelectedMessage(); !ok || sel.TS != "2.0" {
+		t.Errorf("selected = %q, want 2.0 kept", sel.TS)
 	}
 }
 
-// Review finding (Greptile, PR #492, third round): paging older while
-// the read ran made the reload look stale and dropped it.
-func TestRuleRemovalReloadSurvivesPagingOlder(t *testing.T) {
+// Paging older or a live arrival while the read ran lands outside the
+// range it read, and is kept.
+func TestRuleRemovalReloadKeepsMessagesOutsideTheRange(t *testing.T) {
 	shown := []messages.MessageItem{suppressMsg("1.0", "U1"), suppressMsg("4.0", "U3")}
 	a := reloadInto(t, shown, channelHistory(), func(a *App) {
 		a.messagepane.PrependMessages([]messages.MessageItem{suppressMsg("0.5", "U2")})
+		a.messagepane.AppendMessage(suppressMsg("5.0", "U2"))
 	})
-	if got := shownTS(a.messagepane.Messages()); got != "0.5,1.0,2.0,3.0,4.0" {
-		t.Errorf("shown = %s, want the reload applied after paging", got)
+	if got := shownTS(a.messagepane.Messages()); got != "0.5,1.0,2.0,3.0,4.0,5.0" {
+		t.Errorf("shown = %s, want the paged-in and arrived messages kept", got)
 	}
 }
 
-// Review finding (Greptile, PR #492, fifth review): deleting the newest
-// shown message while the read ran lowered NewestTS below the read's
-// range and the whole reload was dropped.
-func TestRuleRemovalReloadSurvivesDeletingNewest(t *testing.T) {
-	shown := []messages.MessageItem{suppressMsg("1.0", "U1"), suppressMsg("4.0", "U3")}
-	a := reloadInto(t, shown, channelHistory(), func(a *App) {
-		a.Update(WSMessageDeletedMsg{ChannelID: "C1", TS: "4.0"})
-	})
-	if got := shownTS(a.messagepane.Messages()); got != "1.0,2.0,3.0" {
-		t.Errorf("shown = %s, want the reload applied without the deleted 4.0", got)
-	}
-}
-
-// A delete seen by a reload that a second one superseded still keeps
-// the second one from bringing the message back.
-func TestSupersedingReloadKeepsEarlierDeletes(t *testing.T) {
+// Only the latest reload is applied.
+func TestSupersededReloadIsIgnored(t *testing.T) {
 	a, _ := suppressAppWith(t, core.ChannelServiceFuncs{
 		ReadCacheRange: func(ids.ChannelID, ids.MessageTS, ids.MessageTS) []messages.MessageItem {
 			return channelHistory()
@@ -491,15 +469,38 @@ func TestSupersedingReloadKeepsEarlierDeletes(t *testing.T) {
 	})
 	a.messagepane.SetMessages([]messages.MessageItem{suppressMsg("1.0", "U1"), suppressMsg("4.0", "U3")})
 	first := deliveredMsgs[suppressionReloadedMsg](t, a.reloadAfterRuleRemoval())
-	a.Update(WSMessageDeletedMsg{ChannelID: "C1", TS: "3.0"})
 	second := deliveredMsgs[suppressionReloadedMsg](t, a.reloadAfterRuleRemoval())
-	a.Update(first[0]) // superseded: ignored
+	a.Update(first[0])
 	if got := shownTS(a.messagepane.Messages()); got != "1.0,4.0" {
 		t.Fatalf("shown = %s, want the superseded reload ignored", got)
 	}
 	a.Update(second[0])
-	if got := shownTS(a.messagepane.Messages()); got != "1.0,2.0,4.0" {
-		t.Errorf("shown = %s, want 3.0 (deleted during the first read) left out", got)
+	if got := shownTS(a.messagepane.Messages()); got != "1.0,2.0,3.0,4.0" {
+		t.Errorf("shown = %s, want the latest reload applied", got)
+	}
+}
+
+// Removing a rule restores the thread's hidden replies.
+func TestRuleRemovalReloadsThread(t *testing.T) {
+	parent := suppressMsg("1.0", "U3")
+	parent.ThreadTS = "1.0"
+	replies := []messages.MessageItem{suppressMsg("1.1", "U3"), suppressMsg("1.2", "B1")}
+	a, fake := suppressApp(t, core.SuppressRule{AuthorID: "B1"})
+	a.threads = core.NewThreadService(core.ThreadServiceFuncs{
+		CacheRead: func(ids.ChannelID, ids.ThreadTS) []messages.MessageItem {
+			return append([]messages.MessageItem{parent}, cloneMessageItems(replies)...)
+		},
+	})
+	a.threadPanel.SetThread(parent, cloneMessageItems(replies), "C1", "1.0")
+	a.threadVisible = true
+	if got := shownTS(a.threadPanel.Replies()); got != "1.1" {
+		t.Fatalf("precondition replies = %s", got)
+	}
+	fake.set = fake.set.Without(core.SuppressRule{AuthorID: "B1"})
+	msgs := deliveredMsgs[suppressionReloadedMsg](t, a.reloadAfterRuleRemoval())
+	a.Update(msgs[0])
+	if got := shownTS(a.threadPanel.Replies()); got != "1.1,1.2" {
+		t.Errorf("replies = %s, want B1's reply back", got)
 	}
 }
 

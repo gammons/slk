@@ -10,7 +10,6 @@ package ui
 import (
 	"errors"
 	"log"
-	"sort"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -142,51 +141,13 @@ type suppressionReloadedMsg struct {
 	thread  *threadReload
 }
 
-// suppressReloadState is the reload in flight: its seq, and the messages
-// deleted while it reads. A read can capture a message just before its
-// delete arrives, and adding that copy back would resurrect it.
-type suppressReloadState struct {
-	seq     uint64
-	deleted map[string]map[string]bool // channel ID -> deleted TSes
-}
-
-// noteDeleted records a delete that arrived while a reload is in
-// flight. Nil-safe: no reload, nothing to record.
-func (s *suppressReloadState) noteDeleted(channelID, ts string) {
-	if s == nil {
-		return
-	}
-	if s.deleted[channelID] == nil {
-		s.deleted[channelID] = make(map[string]bool)
-	}
-	s.deleted[channelID][ts] = true
-}
-
-// withoutDeleted returns cached without the messages deleted in
-// channelID while the reload ran.
-func (s *suppressReloadState) withoutDeleted(channelID string, cached []messages.MessageItem) []messages.MessageItem {
-	gone := s.deleted[channelID]
-	if len(gone) == 0 {
-		return cached
-	}
-	out := make([]messages.MessageItem, 0, len(cached))
-	for _, m := range cached {
-		if !gone[m.TS] {
-			out = append(out, m)
-		}
-	}
-	return out
-}
-
 // windowReload is one window's cached history from since to until, the
 // oldest and newest messages it held (hidden ones included) when the
-// reload was dispatched; buffer is the window's messages.Model.Buffer
-// then.
+// reload was dispatched.
 type windowReload struct {
 	id           wintree.LeafID
 	chID         string
 	since, until string
-	buffer       uint64
 	cached       []messages.MessageItem
 }
 
@@ -196,15 +157,14 @@ type threadReload struct {
 	cached         []messages.MessageItem
 }
 
-// reloadAfterRuleRemoval brings back a removed rule's messages. Each
-// window is reloaded from the cache across exactly the range it has
-// loaded, its oldest to its newest message (hidden ones included), so
-// history the user paged back to, or opened through a message link,
-// stays, and a window opened at an old message reads only that window,
-// not everything since; a window holding nothing reads the newest
-// cached page. The reads (one cache query and per-message
+// reloadAfterRuleRemoval brings back a removed rule's messages: it
+// re-reads each window's loaded range from the cache, its oldest to its
+// newest message (hidden ones included), and the open thread, and
+// applySuppressionReload replaces the panes' messages with the result,
+// as opening the channel would. A window holding nothing reads the
+// newest cached page. The reads (one cache query and per-message
 // enrichment, proportional to what the window has loaded) run in a Cmd,
-// not on the Update goroutine; applySuppressionReload merges the result.
+// not on the Update goroutine.
 func (a *App) reloadAfterRuleRemoval() tea.Cmd {
 	var wins []windowReload
 	for _, id := range a.wins.Leaves() {
@@ -213,7 +173,7 @@ func (a *App) reloadAfterRuleRemoval() tea.Cmd {
 		if m == nil || chID == "" {
 			continue
 		}
-		wins = append(wins, windowReload{id: id, chID: chID, since: m.OldestTS(), until: m.NewestTS(), buffer: m.Buffer()})
+		wins = append(wins, windowReload{id: id, chID: chID, since: m.OldestTS(), until: m.NewestTS()})
 	}
 	var thr *threadReload
 	if a.threadVisible {
@@ -222,29 +182,15 @@ func (a *App) reloadAfterRuleRemoval() tea.Cmd {
 	if len(wins) == 0 && thr == nil {
 		return nil
 	}
-	seq := uint64(1)
-	if a.suppressReload != nil {
-		seq = a.suppressReload.seq + 1
-	}
-	next := &suppressReloadState{seq: seq, deleted: make(map[string]map[string]bool)}
-	if prev := a.suppressReload; prev != nil {
-		// The superseded reload's result will be ignored, but the
-		// deletes it saw may predate this read's snapshot too.
-		for ch, tss := range prev.deleted {
-			for ts := range tss {
-				next.noteDeleted(ch, ts)
-			}
-		}
-	}
-	a.suppressReload = next
+	a.suppressReloadSeq++
+	seq := a.suppressReloadSeq
 	channels, threads := a.channels, a.threads
 	return func() tea.Msg {
 		for i := range wins {
 			w := &wins[i]
 			if w.since != "" {
 				w.cached = channels.ReadCacheRange(ids.ChannelID(w.chID), ids.MessageTS(w.since), ids.MessageTS(w.until))
-			}
-			if len(w.cached) == 0 {
+			} else {
 				w.cached = channels.ReadCache(ids.ChannelID(w.chID))
 			}
 		}
@@ -255,56 +201,46 @@ func (a *App) reloadAfterRuleRemoval() tea.Cmd {
 	}
 }
 
-// applySuppressionReload adds the cached messages a reload found to each
-// pane whose list is still the one it was read for. It only adds:
-// everything a pane shows stays as it is now (it may have changed since
-// the read), messages deleted meanwhile are left out, and the panes'
-// predicates drop whatever is still hidden. A reload superseded by a
-// later one is ignored.
+// applySuppressionReload replaces each pane's messages with what the
+// reload read, keeping the selection on the same message. The result is
+// dropped when a newer reload was started since, and per pane when it
+// now shows another channel or thread. An empty read leaves the pane
+// alone.
 func (a *App) applySuppressionReload(r suppressionReloadedMsg) {
-	st := a.suppressReload
-	if st == nil || st.seq != r.seq {
+	if r.seq != a.suppressReloadSeq {
 		return
 	}
-	a.suppressReload = nil
 	for _, w := range r.windows {
 		m := a.winModels[w.id]
 		if m == nil || a.leafChannel(w.id) != w.chID || len(w.cached) == 0 {
 			continue
 		}
-		// The window's list must be the one the read was for: a
-		// channel load or a jump replaces it and the read no longer
-		// fits. Paging older, live arrivals and deletes change the
-		// list in place and do not.
-		if m.Buffer() != w.buffer {
-			continue
-		}
-		setMessagesKeepSelection(m, addMissing(m.Messages(), st.withoutDeleted(w.chID, w.cached)))
+		setMessagesKeepSelection(m, replaceRange(m.Messages(), w.cached, w.since, w.until))
 	}
+	// The thread read is the parent and then its replies.
 	if t := r.thread; t != nil && a.threadVisible && len(t.cached) > 1 &&
 		a.threadPanel.ChannelID() == t.chID && a.threadPanel.ThreadTS() == t.threadTS {
-		a.setThreadRepliesKeepSelection(addMissing(a.threadPanel.Replies(), st.withoutDeleted(t.chID, t.cached[1:])))
+		replies := t.cached[1:]
+		a.setThreadRepliesKeepSelection(replaceRange(a.threadPanel.Replies(), replies, "", replies[len(replies)-1].TS))
 	}
 }
 
-// addMissing returns shown plus the messages of cached whose TS shown
-// lacks, in TS order. shown wins for a TS in both: a pane's copy is kept
-// current by live edits, a cache read may be older.
-func addMissing(shown, cached []messages.MessageItem) []messages.MessageItem {
-	have := make(map[string]bool, len(shown))
+// replaceRange is shown with the messages from since to until replaced
+// by cached (oldest first, all inside that range). What shown has
+// outside the range, history paged in or messages that arrived while the
+// read ran, is kept. An empty bound is open.
+func replaceRange(shown, cached []messages.MessageItem, since, until string) []messages.MessageItem {
+	var before, after []messages.MessageItem
 	for _, m := range shown {
-		have[m.TS] = true
-	}
-	out := cloneMessageItems(shown)
-	for _, m := range cached {
-		if !have[m.TS] {
-			out = append(out, m)
+		switch {
+		case since != "" && m.TS < since:
+			before = append(before, m)
+		case until != "" && m.TS > until:
+			after = append(after, m)
 		}
 	}
-	// Slack timestamps are decimal strings of equal shape, so string
-	// order is time order.
-	sort.SliceStable(out, func(i, j int) bool { return out[i].TS < out[j].TS })
-	return out
+	out := append(before, cached...)
+	return append(out, after...)
 }
 
 // suppressPlace is how a prompt or the list names where a rule applies.

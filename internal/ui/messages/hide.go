@@ -59,20 +59,10 @@ func (m *Model) keepOlderHidden(ts string) {
 // stays inside the range a later reload reads, and the older-history
 // cursor does not move back.
 func (m *Model) Refill(msgs []MessageItem) {
-	oldest, newest, buffer := m.hiddenOldest, m.hiddenNewest, m.buffer
+	oldest, newest := m.hiddenOldest, m.hiddenNewest
 	m.SetMessages(msgs)
 	m.keepOlderHidden(oldest)
 	m.keepNewerHidden(newest)
-	m.buffer = buffer
-}
-
-// Buffer identifies the pane's current list: it changes when SetMessages
-// replaces it (a channel load, a jump to a message) and not when it is
-// added to, paged back, edited, pruned by a delete or refilled (Refill).
-// Work dispatched against the list, such as a reload read in a Cmd,
-// compares it to tell whether its result still fits.
-func (m *Model) Buffer() uint64 {
-	return m.buffer
 }
 
 // keepNewerHidden records ts as the newest hidden message the pane was

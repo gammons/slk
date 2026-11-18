@@ -661,9 +661,9 @@ type App struct {
 	settings core.SettingsService
 	// suppression holds the rules hiding authors' messages (suppress.go).
 	suppression core.SuppressionService
-	// suppressReload tracks the cache reload in flight after a rule
-	// was removed (reloadAfterRuleRemoval); nil when none is.
-	suppressReload *suppressReloadState
+	// suppressReloadSeq names the latest cache reload after a rule was
+	// removed (reloadAfterRuleRemoval); older results are dropped.
+	suppressReloadSeq uint64
 	// suppressList is the :suppressed dialog.
 	suppressList   suppresslist.Model
 	themeOverrides core.Theme

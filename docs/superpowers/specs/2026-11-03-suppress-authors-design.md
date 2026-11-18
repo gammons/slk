@@ -64,19 +64,19 @@ author's messages in every open pane at once, and toasts
 ID when unknown; `#channel` or "everywhere"). Backspace/Delete removes
 the highlighted rule; the list stays open. Removing a rule reloads the
 open panes from the cache, so the author's messages come back without a
-fetch: each channel window is reloaded across exactly the range it has
-loaded, its oldest to its newest message, hidden ones included
-(`ChannelService.ReadCacheRange`), so history the user paged back to, or
-opened through a message link, stays, and a window opened at an old
-message reads only that window, not everything since; the thread pane keeps its
-selection, the parent included. The cache reads (one query plus
-per-message enrichment, proportional to what the window has loaded) run
-in a Cmd, off the Update goroutine; the result only adds messages a pane
-lacks, leaves out messages deleted while the read ran (including during
-a reload it superseded), and is dropped for a window that has since
-changed channel or whose list was replaced (`messages.Model.Buffer`: a
-channel load or a jump; paging, arrivals and deletes change the list in
-place). Esc closes. Modelled on the marks list (`internal/ui/marks`),
+fetch: each channel window re-reads exactly the range it has loaded,
+its oldest to its newest message, hidden ones included
+(`ChannelService.ReadCacheRange`), and its messages are replaced with
+the result, as opening the channel replaces them, keeping the selection
+on the same message. History the user paged back to, or opened through
+a message link, stays, and a window opened at an old message reads only
+that window, not everything since. The thread pane is replaced the same
+way and keeps its selection, the parent included. The cache reads (one
+query plus per-message enrichment, proportional to what the window has
+loaded) run in a Cmd, off the Update goroutine; messages a pane gained
+outside the range while the read ran (older history paged in, live
+arrivals) are kept, and the result is dropped when a newer reload was
+started or for a window that has since changed channel. Esc closes. Modelled on the marks list (`internal/ui/marks`),
 drawn through `bubbles/chrome`.
 
 Both are in the help overlay (`TestHelpListsEveryCommand`).
