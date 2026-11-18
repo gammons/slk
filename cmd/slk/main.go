@@ -862,12 +862,12 @@ func run() error {
 				}
 				return loadCachedMessages(db, wctx.Client.UserID(), string(channelID), wctx.UserNames, tsFormat, router)
 			},
-			ReadCacheSince: func(channelID ids.ChannelID, sinceTS ids.MessageTS) []messages.MessageItem {
+			ReadCacheRange: func(channelID ids.ChannelID, oldestTS, newestTS ids.MessageTS) []messages.MessageItem {
 				wctx := router.Active()
 				if wctx == nil {
 					return nil
 				}
-				return loadCachedMessagesSince(db, wctx.Client.UserID(), string(channelID), string(sinceTS), wctx.UserNames, tsFormat, router)
+				return loadCachedMessagesRange(db, wctx.Client.UserID(), string(channelID), string(oldestTS), string(newestTS), wctx.UserNames, tsFormat, router)
 			},
 			SyncedAt: func(channelID ids.ChannelID) int64 {
 				return db.GetChannelSyncedAt(string(channelID))

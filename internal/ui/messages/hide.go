@@ -1,7 +1,7 @@
 package messages
 
 // Visible returns msgs without the messages hide reports true for, and
-// the oldest TS among those it dropped ("" when none). It never writes
+// the oldest and newest TS among those it dropped ("" when none). It never writes
 // msgs: callers keep using the list they passed (the mark-read target is
 // taken from it, hidden messages included), so when anything is dropped
 // the result is a new slice. A nil hide keeps everything.
@@ -9,9 +9,9 @@ package messages
 // Both panes call it from every method that takes messages, which is
 // what keeps a suppressed author's messages off the screen (see
 // docs/superpowers/specs/2026-11-03-suppress-authors-design.md).
-func Visible(hide func(MessageItem) bool, msgs []MessageItem) ([]MessageItem, string) {
+func Visible(hide func(MessageItem) bool, msgs []MessageItem) (out []MessageItem, oldest, newest string) {
 	if hide == nil {
-		return msgs, ""
+		return msgs, "", ""
 	}
 	first := -1
 	for i, msg := range msgs {
@@ -21,21 +21,19 @@ func Visible(hide func(MessageItem) bool, msgs []MessageItem) ([]MessageItem, st
 		}
 	}
 	if first < 0 {
-		return msgs, ""
+		return msgs, "", ""
 	}
-	out := make([]MessageItem, first, len(msgs)-1)
+	out = make([]MessageItem, first, len(msgs)-1)
 	copy(out, msgs[:first])
-	oldest := msgs[first].TS
+	oldest, newest = msgs[first].TS, msgs[first].TS
 	for _, msg := range msgs[first+1:] {
 		if hide(msg) {
-			if msg.TS < oldest {
-				oldest = msg.TS
-			}
+			oldest, newest = min(oldest, msg.TS), max(newest, msg.TS)
 			continue
 		}
 		out = append(out, msg)
 	}
-	return out, oldest
+	return out, oldest, newest
 }
 
 // SetHide sets the predicate for messages the pane must not show (a
@@ -51,6 +49,25 @@ func (m *Model) keepOlderHidden(ts string) {
 	if ts != "" && (m.hiddenOldest == "" || ts < m.hiddenOldest) {
 		m.hiddenOldest = ts
 	}
+}
+
+// keepNewerHidden records ts as the newest hidden message the pane was
+// given, when it is newer than the one recorded.
+func (m *Model) keepNewerHidden(ts string) {
+	if ts > m.hiddenNewest {
+		m.hiddenNewest = ts
+	}
+}
+
+// NewestTS is the newest message the pane holds, or a hidden one it was
+// given that is newer still: with OldestTS, the range of history the
+// pane has loaded.
+func (m *Model) NewestTS() string {
+	newest := m.hiddenNewest
+	if n := len(m.messages); n > 0 && m.messages[n-1].TS > newest {
+		newest = m.messages[n-1].TS
+	}
+	return newest
 }
 
 // onlyHidden reports whether the pane shows nothing because every

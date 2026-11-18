@@ -289,12 +289,12 @@ func TestOldestTSCountsHiddenMessages(t *testing.T) {
 
 func TestVisibleNeverWritesItsInput(t *testing.T) {
 	in := channelHistory()
-	out, oldest := messages.Visible(func(m messages.MessageItem) bool { return m.UserID == "U2" || m.UserID == "U3" }, in)
+	out, oldest, newest := messages.Visible(func(m messages.MessageItem) bool { return m.UserID == "U2" || m.UserID == "U3" }, in)
 	if got := shownTS(in); got != "1.0,2.0,3.0,4.0" {
 		t.Errorf("input changed: %s (the mark-read target is read from it)", got)
 	}
-	if got := shownTS(out); got != "1.0,3.0" || oldest != "2.0" {
-		t.Errorf("out = %s oldest = %s", got, oldest)
+	if got := shownTS(out); got != "1.0,3.0" || oldest != "2.0" || newest != "4.0" {
+		t.Errorf("out = %s oldest = %s newest = %s", got, oldest, newest)
 	}
 }
 
@@ -337,12 +337,12 @@ func TestAllHiddenPageStillFetchesOlderHistory(t *testing.T) {
 // paged back to.
 func TestRemovingRuleKeepsPagedBackHistory(t *testing.T) {
 	older := []messages.MessageItem{suppressMsg("0.1", "U2"), suppressMsg("0.2", "B1")}
-	var since ids.MessageTS
+	var since, until ids.MessageTS
 	a, _ := suppressAppWith(t, core.ChannelServiceFuncs{
 		// The newest page only, as the real cache read returns.
 		ReadCache: func(ids.ChannelID) []messages.MessageItem { return channelHistory() },
-		ReadCacheSince: func(_ ids.ChannelID, ts ids.MessageTS) []messages.MessageItem {
-			since = ts
+		ReadCacheRange: func(_ ids.ChannelID, from, to ids.MessageTS) []messages.MessageItem {
+			since, until = from, to
 			return append(cloneMessageItems(older), channelHistory()...)
 		},
 	}, core.SuppressRule{AuthorID: "B1"})
@@ -352,8 +352,8 @@ func TestRemovingRuleKeepsPagedBackHistory(t *testing.T) {
 	}
 	cmdSuppressed(a, commandArgs{})
 	pressKey(t, a, keyCode(tea.KeyBackspace))
-	if since != "0.1" {
-		t.Errorf("read the cache since %q, want 0.1 (the pane's oldest)", since)
+	if since != "0.1" || until != "4.0" {
+		t.Errorf("read the cache from %q to %q, want 0.1 to 4.0 (the pane's loaded range)", since, until)
 	}
 	if got := shownTS(a.messagepane.Messages()); got != "0.1,0.2,1.0,2.0,3.0,4.0" {
 		t.Errorf("shown = %s, want the paged-back history kept and B1 back", got)
@@ -386,7 +386,7 @@ func TestRuleRemovalReloadsOffTheUpdateLoop(t *testing.T) {
 	reads := 0
 	a, _ := suppressAppWith(t, core.ChannelServiceFuncs{
 		ReadCache: func(ids.ChannelID) []messages.MessageItem { reads++; return channelHistory() },
-		ReadCacheSince: func(ids.ChannelID, ids.MessageTS) []messages.MessageItem {
+		ReadCacheRange: func(ids.ChannelID, ids.MessageTS, ids.MessageTS) []messages.MessageItem {
 			reads++
 			return channelHistory()
 		},
@@ -423,5 +423,24 @@ func TestRuleRemovalReloadsOffTheUpdateLoop(t *testing.T) {
 	}
 	if got[1].Text != "edited" {
 		t.Errorf("the pane's copy of 2.0 was replaced by the cache read")
+	}
+}
+
+// NewestTS, like OldestTS, counts hidden messages, so a reload after a
+// rule removal covers a hidden message newer than anything shown.
+func TestNewestTSCountsHiddenMessages(t *testing.T) {
+	m := messages.New(nil, "c")
+	m.SetHide(func(msg messages.MessageItem) bool { return msg.UserID == "B1" })
+	m.SetMessages([]messages.MessageItem{suppressMsg("1.0", "U2"), suppressMsg("2.0", "B1")})
+	if got := m.NewestTS(); got != "2.0" {
+		t.Errorf("NewestTS = %s, want 2.0", got)
+	}
+	m.AppendMessage(suppressMsg("3.0", "B1"))
+	if got := m.NewestTS(); got != "3.0" {
+		t.Errorf("after a hidden arrival NewestTS = %s, want 3.0", got)
+	}
+	m.AppendMessage(suppressMsg("4.0", "U2"))
+	if got := m.NewestTS(); got != "4.0" {
+		t.Errorf("NewestTS = %s, want 4.0", got)
 	}
 }

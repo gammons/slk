@@ -314,7 +314,7 @@ type ChannelServiceFuncs struct {
 	FetchOlder          OlderMessagesFetchFunc
 	FetchAround         func(channelID ids.ChannelID, ts ids.MessageTS) Msg
 	ReadCache           ChannelCacheReadFunc
-	ReadCacheSince      func(channelID ids.ChannelID, sinceTS ids.MessageTS) []MessageItem
+	ReadCacheRange      func(channelID ids.ChannelID, oldestTS, newestTS ids.MessageTS) []MessageItem
 	SyncedAt            func(channelID ids.ChannelID) int64
 	MarkRead            func(channelID ids.ChannelID, ts ids.MessageTS) Msg
 	Lookup              ChannelLookupFunc
@@ -364,11 +364,11 @@ func (c channelAdapter) ReadCache(channelID ids.ChannelID) []MessageItem {
 	return c.fns.ReadCache(channelID)
 }
 
-func (c channelAdapter) ReadCacheSince(channelID ids.ChannelID, sinceTS ids.MessageTS) []MessageItem {
-	if c.fns.ReadCacheSince == nil {
+func (c channelAdapter) ReadCacheRange(channelID ids.ChannelID, oldestTS, newestTS ids.MessageTS) []MessageItem {
+	if c.fns.ReadCacheRange == nil {
 		return nil
 	}
-	return c.fns.ReadCacheSince(channelID, sinceTS)
+	return c.fns.ReadCacheRange(channelID, oldestTS, newestTS)
 }
 
 func (c channelAdapter) SyncedAt(channelID ids.ChannelID) int64 {

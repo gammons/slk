@@ -247,30 +247,30 @@ func loadCachedMessages(
 	return out
 }
 
-// loadCachedMessagesSince is loadCachedMessages for every cached
-// main-feed message at or after sinceTS rather than the newest page:
-// reloading a pane after a suppression rule is removed must cover all
-// the history the pane had paged back to.
-func loadCachedMessagesSince(
+// loadCachedMessagesRange is loadCachedMessages for the cached
+// main-feed messages with oldestTS <= ts <= newestTS (empty newestTS:
+// no upper bound) rather than the newest page: reloading a pane after a
+// suppression rule is removed covers exactly the history it has loaded.
+func loadCachedMessagesRange(
 	db *cache.DB,
 	selfUserID string,
 	channelID string,
-	sinceTS string,
+	oldestTS, newestTS string,
 	userNames *userNameStore,
 	tsFormat string,
 	router *workspaceRouter,
 ) []messages.MessageItem {
-	if db == nil || sinceTS == "" {
+	if db == nil || oldestTS == "" {
 		return nil
 	}
-	rows, err := db.GetMessagesSince(channelID, sinceTS)
+	rows, err := db.GetMessagesBetween(channelID, oldestTS, newestTS)
 	if err != nil {
-		debuglog.Cache("loadCachedMessagesSince: GetMessagesSince %s: %v", channelID, err)
+		debuglog.Cache("loadCachedMessagesRange: GetMessagesBetween %s: %v", channelID, err)
 		return nil
 	}
 	out := make([]messages.MessageItem, 0, len(rows))
 	for _, m := range rows {
-		out = append(out, enrichCachedRow(db, selfUserID, channelID, m, userNames, tsFormat, "loadCachedMessagesSince", router, nil))
+		out = append(out, enrichCachedRow(db, selfUserID, channelID, m, userNames, tsFormat, "loadCachedMessagesRange", router, nil))
 	}
 	return out
 }

@@ -139,13 +139,14 @@ type suppressionReloadedMsg struct {
 	thread  *threadReload
 }
 
-// windowReload is one window's cached history from since (the oldest
-// message the window held when the reload was dispatched) on.
+// windowReload is one window's cached history from since to until, the
+// oldest and newest messages it held (hidden ones included) when the
+// reload was dispatched.
 type windowReload struct {
-	id     wintree.LeafID
-	chID   string
-	since  string
-	cached []messages.MessageItem
+	id           wintree.LeafID
+	chID         string
+	since, until string
+	cached       []messages.MessageItem
 }
 
 // threadReload is the open thread's cached parent and replies.
@@ -155,10 +156,12 @@ type threadReload struct {
 }
 
 // reloadAfterRuleRemoval brings back a removed rule's messages. Each
-// window is reloaded from the cache back to the oldest message it holds
-// (hidden ones included), so history the user paged back to, or opened
-// through a message link, stays; a window holding nothing reads the
-// newest cached page. The reads (one cache query and per-message
+// window is reloaded from the cache across exactly the range it has
+// loaded, its oldest to its newest message (hidden ones included), so
+// history the user paged back to, or opened through a message link,
+// stays, and a window opened at an old message reads only that window,
+// not everything since; a window holding nothing reads the newest
+// cached page. The reads (one cache query and per-message
 // enrichment, proportional to what the window has loaded) run in a Cmd,
 // not on the Update goroutine; applySuppressionReload merges the result.
 func (a *App) reloadAfterRuleRemoval() tea.Cmd {
@@ -169,7 +172,7 @@ func (a *App) reloadAfterRuleRemoval() tea.Cmd {
 		if m == nil || chID == "" {
 			continue
 		}
-		wins = append(wins, windowReload{id: id, chID: chID, since: m.OldestTS()})
+		wins = append(wins, windowReload{id: id, chID: chID, since: m.OldestTS(), until: m.NewestTS()})
 	}
 	var thr *threadReload
 	if a.threadVisible {
@@ -183,7 +186,7 @@ func (a *App) reloadAfterRuleRemoval() tea.Cmd {
 		for i := range wins {
 			w := &wins[i]
 			if w.since != "" {
-				w.cached = channels.ReadCacheSince(ids.ChannelID(w.chID), ids.MessageTS(w.since))
+				w.cached = channels.ReadCacheRange(ids.ChannelID(w.chID), ids.MessageTS(w.since), ids.MessageTS(w.until))
 			}
 			if len(w.cached) == 0 {
 				w.cached = channels.ReadCache(ids.ChannelID(w.chID))

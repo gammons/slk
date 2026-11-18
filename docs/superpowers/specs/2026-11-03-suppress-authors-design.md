@@ -64,9 +64,11 @@ author's messages in every open pane at once, and toasts
 ID when unknown; `#channel` or "everywhere"). Backspace/Delete removes
 the highlighted rule; the list stays open. Removing a rule reloads the
 open panes from the cache, so the author's messages come back without a
-fetch: each channel window is reloaded back to the oldest message it
-holds (`ChannelService.ReadCacheSince`), so history the user paged back
-to, or opened through a message link, stays; the thread pane keeps its
+fetch: each channel window is reloaded across exactly the range it has
+loaded, its oldest to its newest message, hidden ones included
+(`ChannelService.ReadCacheRange`), so history the user paged back to, or
+opened through a message link, stays, and a window opened at an old
+message reads only that window, not everything since; the thread pane keeps its
 selection, the parent included. The cache reads (one query plus
 per-message enrichment, proportional to what the window has loaded) run
 in a Cmd, off the Update goroutine; the result only adds messages a pane

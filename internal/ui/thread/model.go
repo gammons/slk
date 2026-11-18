@@ -268,7 +268,7 @@ func (m *Model) SetThread(parent messages.MessageItem, replies []messages.Messag
 	// channelID first: the App's hide predicate reads the pane's channel.
 	m.channelID = channelID
 	m.threadTS = threadTS
-	replies, _ = messages.Visible(m.hide, replies)
+	replies, _, _ = messages.Visible(m.hide, replies)
 	m.replies = replies
 	// Per the doc comment, the cursor starts at the bottom (newest reply)
 	// so a long thread opens scrolled to the latest activity rather than

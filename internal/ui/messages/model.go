@@ -112,6 +112,9 @@ type Model struct {
 	// the buffer, so OldestTS (the older-history cursor) moves past a
 	// page that was all hidden instead of fetching it forever.
 	hiddenOldest string
+	// hiddenNewest is the newest TS among hidden messages, so NewestTS
+	// covers the range the pane has loaded.
+	hiddenNewest string
 	// sixelPaints is the placement set produced by the last View, consumed
 	// by the App's out-of-band painter. See imgpkg.SixelPaint.
 	sixelPaints []imgpkg.SixelPaint
@@ -740,7 +743,7 @@ func (m *Model) SetMessages(msgs []MessageItem) {
 		debuglog.Cache("messages.Model.SetMessages: channel=%q before=[%s] after=[%s]",
 			m.channelName, oldSummary, newSummary)
 	}
-	msgs, m.hiddenOldest = Visible(m.hide, msgs)
+	msgs, m.hiddenOldest, m.hiddenNewest = Visible(m.hide, msgs)
 	m.messages = msgs
 	m.ClearSelection()
 	m.dropCache()
@@ -760,6 +763,7 @@ func (m *Model) SetMessages(msgs []MessageItem) {
 
 func (m *Model) AppendMessage(msg MessageItem) {
 	if m.hide != nil && m.hide(msg) {
+		m.keepNewerHidden(msg.TS)
 		return
 	}
 	// Idempotent on TS. Self-sent messages take an optimistic path
@@ -1083,8 +1087,9 @@ func (m *Model) PrependMessages(msgs []MessageItem) {
 		}
 		msgs = kept
 	}
-	msgs, hiddenOldest := Visible(m.hide, msgs)
+	msgs, hiddenOldest, hiddenNewest := Visible(m.hide, msgs)
 	m.keepOlderHidden(hiddenOldest)
+	m.keepNewerHidden(hiddenNewest)
 	if len(msgs) == 0 {
 		return
 	}
