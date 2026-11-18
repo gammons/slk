@@ -19,6 +19,11 @@ import (
 // spaces): the user removes it by hand.
 var errSuppressRuleNotInFile = core.ErrSuppressRuleNotEditable
 
+// errSuppressAppendInvalid is Add's answer when appending a block would
+// leave config.toml unreadable, which happens when the workspace's rules
+// are written as an inline array: the user adds the rule there by hand.
+var errSuppressAppendInvalid = errors.New("config.toml lists this workspace's rules inline; add the rule there by hand")
+
 // suppressStore holds every workspace's suppression rules
 // (core.Suppression), seeded from the config and changed by the UI
 // through core.SuppressionService. It is read from the WebSocket event
@@ -182,14 +187,25 @@ func appendSuppressRule(configPath, tomlKey, teamID, teamName string, rule core.
 	}
 	lines = append(lines, suppressBlockLines(tomlKey, rule)...)
 	lines = append(lines, "")
-	return writeConfigAtomic(configPath, []byte(strings.Join(lines, "\n")))
+	out := []byte(strings.Join(lines, "\n"))
+	// An array of tables cannot extend an array the file already
+	// assigned (suppress = [...] under [workspaces.<key>], or a dotted
+	// workspaces.<key>.suppress = [...]): appending would save a file
+	// the next launch refuses to load. Check the result parses first.
+	var probe map[string]any
+	if err := toml.Unmarshal(out, &probe); err != nil {
+		return fmt.Errorf("%w (%v)", errSuppressAppendInvalid, err)
+	}
+	return writeConfigAtomic(configPath, out)
 }
 
-// removeSuppressRule deletes the first [[workspaces.<tomlKey>.suppress]]
+// removeSuppressRule deletes every [[workspaces.<tomlKey>.suppress]]
 // block whose author and channel are rule's, and reports whether it
-// found one. A block runs from its header to its last key line before
-// the next header: comments and blank lines in front of the next header
-// belong to what follows.
+// found any. A hand-written config.toml can repeat a rule; leaving a
+// copy behind would bring the rule back on the next launch. A block
+// runs from its header to its last key line before the next header:
+// comments and blank lines in front of the next header belong to what
+// follows.
 func removeSuppressRule(configPath, tomlKey string, rule core.SuppressRule) (bool, error) {
 	configWriteMu.Lock()
 	defer configWriteMu.Unlock()
@@ -199,6 +215,23 @@ func removeSuppressRule(configPath, tomlKey string, rule core.SuppressRule) (boo
 		return false, err
 	}
 	header := suppressHeader(tomlKey)
+	removed := false
+	for {
+		out, ok := removeFirstSuppressBlock(lines, header, rule)
+		if !ok {
+			break
+		}
+		lines, removed = out, true
+	}
+	if !removed {
+		return false, nil
+	}
+	return true, writeConfigAtomic(configPath, []byte(strings.Join(lines, "\n")))
+}
+
+// removeFirstSuppressBlock returns lines without the first block under
+// header that holds rule, and whether there was one.
+func removeFirstSuppressBlock(lines []string, header string, rule core.SuppressRule) ([]string, bool) {
 	for start := 0; start < len(lines); start++ {
 		if strings.TrimSpace(lines[start]) != header {
 			continue
@@ -235,8 +268,7 @@ func removeSuppressRule(configPath, tomlKey string, rule core.SuppressRule) (boo
 		} else if start > 0 && strings.TrimSpace(lines[start-1]) == "" {
 			start--
 		}
-		out := append(append([]string(nil), lines[:start]...), lines[end:]...)
-		return true, writeConfigAtomic(configPath, []byte(strings.Join(out, "\n")))
+		return append(append([]string(nil), lines[:start]...), lines[end:]...), true
 	}
-	return false, nil
+	return lines, false
 }

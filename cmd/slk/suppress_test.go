@@ -139,6 +139,61 @@ theme = "nord"
 	}
 }
 
+// Review finding (Greptile, PR #492): a rule written twice by hand was
+// removed once, so the other copy brought it back on the next launch.
+func TestRemoveSuppressRuleRemovesEveryCopy(t *testing.T) {
+	path := writeTestConfig(t, `[[workspaces.T01ACME.suppress]]
+author = "B1"
+
+[[workspaces.T01ACME.suppress]]
+author = "U2"
+
+[[workspaces.T01ACME.suppress]]
+author = "B1"
+note = "again"
+`)
+	removed, err := removeSuppressRule(path, "T01ACME", core.SuppressRule{AuthorID: "B1"})
+	if err != nil || !removed {
+		t.Fatalf("removed=%v err=%v", removed, err)
+	}
+	s := loadRules(t, path, "T01ACME")
+	if s.Len() != 1 || !s.Hides("C1", "U2") || s.Hides("C1", "B1") {
+		t.Errorf("rules = %+v, want only U2", s.Rules())
+	}
+}
+
+// Review finding (Greptile, PR #492): appending a block beside an inline
+// suppress array saved a config.toml the next launch could not load.
+func TestAppendSuppressRuleRefusesInlineArray(t *testing.T) {
+	for name, body := range map[string]string{
+		"table":  "[workspaces.T01ACME]\nsuppress = [{ author = \"B1\" }]\n",
+		"dotted": "workspaces.T01ACME.suppress = [{ author = \"B1\" }]\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := writeTestConfig(t, body)
+			cfg, err := config.Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := newSuppressStore(cfg, path, func(id string) string { return id }, func(string) string { return "" })
+			rule := core.SuppressRule{AuthorID: "U2"}
+			err = s.Add("T01ACME", rule)
+			if !errors.Is(err, errSuppressAppendInvalid) {
+				t.Fatalf("err = %v, want errSuppressAppendInvalid", err)
+			}
+			if got := readTestConfig(t, path); got != body {
+				t.Errorf("config.toml changed:\n%s", got)
+			}
+			if s.Hides("T01ACME", "C1", "U2") {
+				t.Error("a rule that was not saved must not apply")
+			}
+			if _, err := config.Load(path); err != nil {
+				t.Errorf("config no longer loads: %v", err)
+			}
+		})
+	}
+}
+
 func TestSuppressStoreAddRemove(t *testing.T) {
 	path := writeTestConfig(t, "[[workspaces.T01ACME.suppress]]\nauthor = \"B1\"\n")
 	cfg, err := config.Load(path)

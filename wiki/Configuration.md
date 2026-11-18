@@ -432,7 +432,9 @@ unread until you open it, even if its only new messages are hidden.
 
 slk adds a rule by appending a block to the end of the file and removes
 one by deleting its block, leaving everything else as written. A rule
-written another way (an inline table) can only be removed by hand.
+written another way (an inline table) can only be removed by hand, and
+while a workspace's rules are an inline list (`suppress = [...]`) new
+ones have to be added to that list by hand too.
 
 ## Data paths (XDG)
 
