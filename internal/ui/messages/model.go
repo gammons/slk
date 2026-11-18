@@ -1039,7 +1039,7 @@ func (m *Model) GoToBottom() {
 }
 
 func (m *Model) AtTop() bool {
-	return m.selected == 0 && len(m.messages) > 0
+	return (m.selected == 0 && len(m.messages) > 0) || m.onlyHidden()
 }
 
 // ViewportAtTop reports whether the viewport is scrolled to the very top of
@@ -1047,7 +1047,7 @@ func (m *Model) AtTop() bool {
 // on a wheel-up / PageUp gesture that scrolls the viewport without moving
 // selection (selection-based backfill goes through AtTop()).
 func (m *Model) ViewportAtTop() bool {
-	return m.list.YOffset() == 0 && len(m.messages) > 0
+	return (m.list.YOffset() == 0 && len(m.messages) > 0) || m.onlyHidden()
 }
 
 // YOffset returns the current viewport scroll offset (first visible line

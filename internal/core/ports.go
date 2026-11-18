@@ -245,6 +245,13 @@ type ChannelService interface {
 	// ChannelSelectedMsg's tiered render policy.
 	ReadCache(channelID ids.ChannelID) []MessageItem
 
+	// ReadCacheSince returns the local-cache snapshot of channelID's
+	// messages at or after sinceTS, oldest first, or nil. Unlike
+	// ReadCache it is not capped at the most recent page, so a pane
+	// can be reloaded across everything it has paged back to (used
+	// when a suppression rule is removed).
+	ReadCacheSince(channelID ids.ChannelID, sinceTS ids.MessageTS) []MessageItem
+
 	// SyncedAt returns the unix-seconds timestamp of the channel's
 	// last authoritative cache-from-network sync, or 0 if never
 	// synced. Used by ChannelSelectedMsg's tiered render policy to

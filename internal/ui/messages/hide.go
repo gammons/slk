@@ -52,3 +52,11 @@ func (m *Model) keepOlderHidden(ts string) {
 		m.hiddenOldest = ts
 	}
 }
+
+// onlyHidden reports whether the pane shows nothing because every
+// message it was given is hidden. Such a pane is at the top of what it
+// holds, so scrolling up must still fetch older history: a page wholly
+// from a suppressed author would otherwise block everything before it.
+func (m *Model) onlyHidden() bool {
+	return len(m.messages) == 0 && m.hiddenOldest != ""
+}

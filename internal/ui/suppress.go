@@ -96,7 +96,7 @@ func (a *App) reapplySuppression(fromCache bool) {
 		shown := m.Messages()
 		list := cloneMessageItems(shown)
 		if fromCache {
-			if cached := a.channels.ReadCache(ids.ChannelID(chID)); len(cached) > 0 {
+			if cached := a.cachedPaneHistory(chID, m); len(cached) > 0 {
 				list = keepEphemerals(cached, shown)
 			}
 		}
@@ -117,8 +117,14 @@ func (a *App) reapplySuppression(fromCache bool) {
 		}
 	}
 	sel, hadSel := tp.SelectedMessage()
+	parentSel := hadSel && sel.TS == tp.ParentMsg().TS
 	tp.SetThread(tp.ParentMsg(), replies, tp.ChannelID(), tp.ThreadTS())
-	if hadSel {
+	switch {
+	case parentSel:
+		// SetThread selects the newest reply; the parent is not one
+		// of the replies, so it is restored on its own.
+		tp.SelectParent()
+	case hadSel:
 		for i, r := range tp.Replies() {
 			if r.TS == sel.TS {
 				tp.SelectByIndex(i)
@@ -126,6 +132,19 @@ func (a *App) reapplySuppression(fromCache bool) {
 			}
 		}
 	}
+}
+
+// cachedPaneHistory reads chID's cached history back to the oldest
+// message m holds (hidden ones included), so a pane the user paged back
+// in, or opened at an older message, keeps that range. A pane holding
+// nothing falls back to the newest cached page.
+func (a *App) cachedPaneHistory(chID string, m *messages.Model) []messages.MessageItem {
+	if since := m.OldestTS(); since != "" {
+		if cached := a.channels.ReadCacheSince(ids.ChannelID(chID), ids.MessageTS(since)); len(cached) > 0 {
+			return cached
+		}
+	}
+	return a.channels.ReadCache(ids.ChannelID(chID))
 }
 
 // suppressPlace is how a prompt or the list names where a rule applies.

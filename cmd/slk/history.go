@@ -247,6 +247,34 @@ func loadCachedMessages(
 	return out
 }
 
+// loadCachedMessagesSince is loadCachedMessages for every cached
+// main-feed message at or after sinceTS rather than the newest page:
+// reloading a pane after a suppression rule is removed must cover all
+// the history the pane had paged back to.
+func loadCachedMessagesSince(
+	db *cache.DB,
+	selfUserID string,
+	channelID string,
+	sinceTS string,
+	userNames *userNameStore,
+	tsFormat string,
+	router *workspaceRouter,
+) []messages.MessageItem {
+	if db == nil || sinceTS == "" {
+		return nil
+	}
+	rows, err := db.GetMessagesSince(channelID, sinceTS)
+	if err != nil {
+		debuglog.Cache("loadCachedMessagesSince: GetMessagesSince %s: %v", channelID, err)
+		return nil
+	}
+	out := make([]messages.MessageItem, 0, len(rows))
+	for _, m := range rows {
+		out = append(out, enrichCachedRow(db, selfUserID, channelID, m, userNames, tsFormat, "loadCachedMessagesSince", router, nil))
+	}
+	return out
+}
+
 // enrichCachedRow reconstructs a single messages.MessageItem from a
 // cache.Message row using the same fidelity as the network fetchers:
 // 3-tier username fallback, per-row reactions, and raw_json

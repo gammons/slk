@@ -883,6 +883,14 @@ func (m *Model) IsAtBottom() bool {
 	return m.selected >= len(m.replies)-1
 }
 
+// SelectParent moves the selection to the thread's parent message.
+func (m *Model) SelectParent() {
+	if m.selected != parentSelected {
+		m.selected = parentSelected
+		m.InvalidateCache()
+	}
+}
+
 // GoToTop moves the selection to the first reply.
 func (m *Model) GoToTop() {
 	if m.selected != 0 {

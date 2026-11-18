@@ -64,7 +64,10 @@ author's messages in every open pane at once, and toasts
 ID when unknown; `#channel` or "everywhere"). Backspace/Delete removes
 the highlighted rule; the list stays open. Removing a rule reloads the
 open panes from the cache, so the author's messages come back without a
-fetch. Esc closes. Modelled on the marks list (`internal/ui/marks`),
+fetch: each channel window is reloaded back to the oldest message it
+holds (`ChannelService.ReadCacheSince`), so history the user paged back
+to, or opened through a message link, stays; the thread pane keeps its
+selection, the parent included. Esc closes. Modelled on the marks list (`internal/ui/marks`),
 drawn through `bubbles/chrome`.
 
 Both are in the help overlay (`TestHelpListsEveryCommand`).
@@ -96,8 +99,13 @@ slk edits the file as text, like the theme and sidebar-width savers
 
 - adding appends a `[[workspaces.<key>.suppress]]` block at the end of
   the file (`<key>` is the workspace's existing TOML key, else its team
-  ID);
-- removing deletes the block whose `author` and `channel` lines match.
+  ID). When the workspace's rules are written as an inline array
+  (`suppress = [...]`), an appended array-of-tables block would make the
+  file unloadable, so slk checks that the result parses and otherwise
+  refuses, asking the user to add the rule there by hand;
+- removing deletes every block whose `author` and `channel` lines match
+  (a hand-written file can repeat a rule; a copy left behind would bring
+  it back on the next launch).
   A rule slk cannot find as such a block (written as an inline table,
   say) is not removed; the list says to edit `config.toml`.
 
@@ -123,3 +131,9 @@ slk edits the file as text, like the theme and sidebar-width savers
   routing `modelsForChannel` uses (which now calls it), and the thread
   pane uses its own channel. `reapplySuppression` refilters every open
   pane after a change (from the cache after a removal).
+- Older history: a pane remembers the oldest message it dropped, so
+  `OldestTS` (the older-history cursor) moves past an all-hidden page,
+  and a pane that shows nothing only because everything it holds is
+  hidden counts as at the top (`AtTop`, `ViewportAtTop`), so scrolling
+  up still fetches the history behind a page wholly from a hidden
+  author.

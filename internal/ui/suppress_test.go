@@ -63,11 +63,16 @@ func channelHistory() []messages.MessageItem {
 // C1's cached history as channelHistory, shown in the pane.
 func suppressApp(t *testing.T, rules ...core.SuppressRule) (*App, *fakeSuppression) {
 	t.Helper()
+	return suppressAppWith(t, core.ChannelServiceFuncs{
+		ReadCache: func(ids.ChannelID) []messages.MessageItem { return channelHistory() },
+	}, rules...)
+}
+
+// suppressAppWith is suppressApp with the given channel service.
+func suppressAppWith(t *testing.T, fns core.ChannelServiceFuncs, rules ...core.SuppressRule) (*App, *fakeSuppression) {
+	t.Helper()
 	fake := &fakeSuppression{set: core.NewSuppression(rules)}
-	a := newTestApp(t, withActiveTeam("T1"), withActiveChannel("C1"),
-		withChannelService(core.ChannelServiceFuncs{
-			ReadCache: func(ids.ChannelID) []messages.MessageItem { return channelHistory() },
-		}))
+	a := newTestApp(t, withActiveTeam("T1"), withActiveChannel("C1"), withChannelService(fns))
 	a.currentUserID = "U1"
 	a.SetSuppressionService(fake.service())
 	a.messagepane.SetMessages(channelHistory())
@@ -290,5 +295,85 @@ func TestVisibleNeverWritesItsInput(t *testing.T) {
 	}
 	if got := shownTS(out); got != "1.0,3.0" || oldest != "2.0" {
 		t.Errorf("out = %s oldest = %s", got, oldest)
+	}
+}
+
+// Review finding (Greptile, PR #492): when every message of the first
+// page was hidden the pane was empty, AtTop was false, and scrolling up
+// never fetched the older history behind it.
+func TestAllHiddenPageStillFetchesOlderHistory(t *testing.T) {
+	asked := make(chan ids.MessageTS, 1)
+	a, _ := suppressAppWith(t, core.ChannelServiceFuncs{
+		FetchOlder: func(_ ids.ChannelID, oldest ids.MessageTS) core.Msg {
+			asked <- oldest
+			return OlderMessagesLoadedMsg{ChannelID: "C1", AnchorTS: string(oldest)}
+		},
+	}, core.SuppressRule{AuthorID: "B1"})
+	a.messagepane.SetMessages([]messages.MessageItem{suppressMsg("3.0", "B1"), suppressMsg("4.0", "B1")})
+	if len(a.messagepane.Messages()) != 0 {
+		t.Fatalf("precondition: shown = %s", shownTS(a.messagepane.Messages()))
+	}
+	if !a.messagepane.AtTop() || !a.messagepane.ViewportAtTop() {
+		t.Fatal("an all-hidden pane must count as at the top")
+	}
+	cmd := a.maybeFetchOlderHistory(a.messagepane.AtTop())
+	if cmd == nil {
+		t.Fatal("no older-history fetch")
+	}
+	deliveredMsgs[OlderMessagesLoadedMsg](t, cmd)
+	if got := <-asked; got != "3.0" {
+		t.Errorf("fetched before %s, want 3.0 (the oldest hidden message)", got)
+	}
+
+	// A pane with nothing at all (no history yet) still does not fetch.
+	empty := messages.New(nil, "c")
+	if empty.AtTop() || empty.ViewportAtTop() {
+		t.Error("an empty pane with nothing hidden must not count as at the top")
+	}
+}
+
+// Review finding (Greptile, PR #492): removing a rule reloaded the pane
+// from the newest cached page, dropping the older history the user had
+// paged back to.
+func TestRemovingRuleKeepsPagedBackHistory(t *testing.T) {
+	older := []messages.MessageItem{suppressMsg("0.1", "U2"), suppressMsg("0.2", "B1")}
+	var since ids.MessageTS
+	a, _ := suppressAppWith(t, core.ChannelServiceFuncs{
+		// The newest page only, as the real cache read returns.
+		ReadCache: func(ids.ChannelID) []messages.MessageItem { return channelHistory() },
+		ReadCacheSince: func(_ ids.ChannelID, ts ids.MessageTS) []messages.MessageItem {
+			since = ts
+			return append(cloneMessageItems(older), channelHistory()...)
+		},
+	}, core.SuppressRule{AuthorID: "B1"})
+	a.messagepane.PrependMessages(cloneMessageItems(older)) // paged back
+	if got := shownTS(a.messagepane.Messages()); got != "0.1,1.0,2.0,4.0" {
+		t.Fatalf("precondition shown = %s", got)
+	}
+	cmdSuppressed(a, commandArgs{})
+	pressKey(t, a, keyCode(tea.KeyBackspace))
+	if since != "0.1" {
+		t.Errorf("read the cache since %q, want 0.1 (the pane's oldest)", since)
+	}
+	if got := shownTS(a.messagepane.Messages()); got != "0.1,0.2,1.0,2.0,3.0,4.0" {
+		t.Errorf("shown = %s, want the paged-back history kept and B1 back", got)
+	}
+}
+
+// Review finding (Greptile, PR #492): changing a rule with the thread
+// parent selected moved the cursor to the newest reply.
+func TestRuleChangeKeepsThreadParentSelected(t *testing.T) {
+	a, _ := suppressApp(t)
+	parent := suppressMsg("1.0", "U3")
+	parent.ThreadTS = "1.0"
+	a.threadPanel.SetThread(parent, []messages.MessageItem{suppressMsg("1.1", "U3"), suppressMsg("1.2", "B1")}, "C1", "1.0")
+	a.threadVisible = true
+	a.threadPanel.SelectParent()
+	a.addSuppression(SuppressAuthorMsg{TeamID: "T1", Name: "B1", Rule: core.SuppressRule{AuthorID: "B1"}})
+	if got := shownTS(a.threadPanel.Replies()); got != "1.1" {
+		t.Fatalf("replies = %s, want 1.1", got)
+	}
+	if sel, ok := a.threadPanel.SelectedMessage(); !ok || sel.TS != "1.0" {
+		t.Errorf("selected = %q, want the parent 1.0", sel.TS)
 	}
 }
