@@ -954,6 +954,61 @@ func run() error {
 					return probeMessagingCapability(ctx, client.PostForm, chIDStr)
 				}
 			},
+			SetStarred: func(teamID ids.TeamID, channelID ids.ChannelID, starred bool) core.Cmd {
+				// Resolve by the REQUESTED workspace, not router.Active():
+				// a workspace switch runs in the background and flips
+				// the router before the UI sees WorkspaceSwitchedMsg, so
+				// Active() can answer with the workspace the user just
+				// switched TO while their click targeted the one still
+				// on screen. The requesting path passes the displayed
+				// workspace; a shared conversation then stars through
+				// its own session, not the newcomer's.
+				wctx := router.ByID(string(teamID))
+				chIDStr := string(channelID)
+				if wctx == nil || wctx.Client == nil {
+					return func() core.Msg {
+						return ui.ChannelStarSetMsg{TeamID: string(teamID), ChannelID: chIDStr, Starred: starred,
+							Err: fmt.Errorf("no connected workspace")}
+					}
+				}
+				client := wctx.Client
+				sectionStore := wctx.SectionStore
+				// The starred flag this request is made against, read
+				// off the (locked) store here at request time: the
+				// queued apply compares it against the row on the event
+				// owner, so a delayed HTTP reply whose outcome a newer
+				// star event (an unstar in another client) already
+				// superseded is skipped rather than written back.
+				prev, prevKnown := false, false
+				if sectionStore != nil {
+					prev, prevKnown = sectionStore.IsStarred(chIDStr), true
+				}
+				return func() core.Msg {
+					starCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+					defer cancel()
+					var err error
+					if starred {
+						err = client.StarsAdd(starCtx, chIDStr)
+					} else {
+						err = client.StarsRemove(starCtx, chIDStr)
+					}
+					if err != nil {
+						return ui.ChannelStarSetMsg{ChannelID: chIDStr, Starred: starred, Err: err}
+					}
+					// Slack accepted it, and its star_added echo will
+					// arrive on the event owner and finish the
+					// engine-side sync (section store, channel row,
+					// cache, sidebar refresh). Queue the whole engine
+					// half for the owner - serialized with the echoes,
+					// compare-and-skip against newer events - so a
+					// socket-down window cannot leave the workspace's
+					// rows predating the star (a switch away and back
+					// would rebuild the sidebar stale), and a slow reply
+					// cannot overwrite a newer echo.
+					wctx.RTMHandler.queueStarApply(chIDStr, starred, prev, prevKnown)
+					return ui.ChannelStarSetMsg{TeamID: string(teamID), ChannelID: chIDStr, Starred: starred}
+				}
+			},
 			Fetch: func(channelID ids.ChannelID, channelName string) core.Msg {
 				chIDStr := string(channelID)
 				wctx := router.Active()
@@ -1840,8 +1895,15 @@ func run() error {
 					ensureWorkspaceThreadSubs(context.Background(), wctx, db, p.Send, router)
 				},
 				resolveConversation: conversationResolverFor(router, wctx),
+				starWake:            make(chan struct{}, 1),
 			}
 			wctx.RTMHandler = handler
+			// The resolver's wake joins the handler's shared channel,
+			// so PendingEvents hands the dispatcher one channel that
+			// both wake sources signal.
+			if wctx.UserResolver != nil {
+				wctx.UserResolver.resolvedWake = handler.starWake
+			}
 			// The grid gate, installed here so it can reach the
 			// handler: sibling sessions of the same grid receive the
 			// same events, the active workspace is the only handler

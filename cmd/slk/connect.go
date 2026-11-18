@@ -411,6 +411,15 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		wctx.FinderItems = append(wctx.FinderItems, finderItem)
 	}
 
+	// Stars for workspaces without a usable section store (config-glob
+	// sections, or a failed sections bootstrap): userBoot's starred
+	// list is the same authority the store's stars section is built
+	// from, so seed the rows from it directly - otherwise existing
+	// stars render hollow and a click on the glyph would re-star.
+	if wctx.SectionStore == nil || !wctx.SectionStore.Ready() {
+		applyBootStars(wctx.Channels, res.Starred)
+	}
+
 	// Unread counts come from the boot response rather than a second
 	// client.counts call. bootstrap.Run has already made exactly this
 	// request; asking again asked the same server the same question,

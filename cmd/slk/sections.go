@@ -65,10 +65,28 @@ func (h *rtmEventHandler) refreshSectionsForActive() {
 		} else {
 			item.Section = ""
 		}
+		// The stars section's membership is the star state; the
+		// sidebar row and the header glyph read it off the item.
+		item.IsStarred = store.IsStarred(item.ID)
 		// SectionOrder is unused in Slack mode (linked-list order
 		// comes from the provider); reset to 0 for consistency.
 		item.SectionOrder = 0
 	}
+	if h.program == nil {
+		return
+	}
+	if h.isActive != nil && !h.isActive() {
+		return
+	}
+	h.publishChannelsForActive()
+}
+
+// publishChannelsForActive ships a copy of the workspace's channel rows
+// to the sidebar, the tail refreshSectionsForActive shares. Callers
+// that changed row state without a section store (star echoes on a
+// workspace whose Slack sections are disabled or failed to load) use
+// it directly so the sidebar still follows.
+func (h *rtmEventHandler) publishChannelsForActive() {
 	if h.program == nil {
 		return
 	}
