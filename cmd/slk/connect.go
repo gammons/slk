@@ -144,6 +144,13 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	)
 	wctx.UserResolver.names = wctx.UserNames
 
+	wctx.Subteams = newSubteamResolver(ctx, client.GetUserGroupInfo, wctx.UserGroups, wctx.MergeUserGroups,
+		func(map[string]string) {
+			if p != nil {
+				wctx.PublishUserGroups(p.Send)
+			}
+		}, log.Printf)
+
 	// Channel names include cached unjoined public channels, but resolving a
 	// mention only updates this store and metadata, never workspace rows.
 	wctx.ChannelResolver = newChannelResolver(wctx.TeamID, db, client.GetConversationInfo)

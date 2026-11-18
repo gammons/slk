@@ -5,11 +5,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/service"
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slack/edge"
 	"github.com/gammons/slk/internal/slack/membership"
+	"github.com/gammons/slk/internal/ui"
 	"github.com/gammons/slk/internal/ui/sidebar"
 )
 
@@ -147,6 +150,17 @@ type WorkspaceContext struct {
 	// The stored map is published once and never mutated afterwards, so
 	// readers need no further synchronization.
 	userGroups atomic.Pointer[map[string]string]
+	// userGroupsMu serializes MergeUserGroups so the usergroups.list
+	// fetch and the subteams.info resolver can't drop each other's
+	// entries. Readers don't take it.
+	userGroupsMu sync.Mutex
+	// userGroupsPubMu serializes PublishUserGroups, so the last
+	// UserGroupsLoadedMsg sent always carries the newest map.
+	userGroupsPubMu sync.Mutex
+	// Subteams resolves usergroups mentioned in messages that
+	// usergroups.list did not return. Nil in tests; its methods are
+	// nil-safe.
+	Subteams *subteamResolver
 	// selfUserGroups is the IDs of the usergroups the user is in,
 	// published alongside userGroups and read the same way.
 	selfUserGroups atomic.Pointer[map[string]bool]
@@ -219,7 +233,42 @@ func (w *WorkspaceContext) UserGroups() map[string]string {
 // SetUserGroups publishes a usergroup ID -> handle map for this
 // workspace. The caller must not mutate the map afterwards.
 func (w *WorkspaceContext) SetUserGroups(groups map[string]string) {
+	w.userGroupsMu.Lock()
+	defer w.userGroupsMu.Unlock()
 	w.userGroups.Store(&groups)
+}
+
+// PublishUserGroups sends the current usergroup maps to the UI. Each
+// send reads the maps under the same lock, so two writers can't leave
+// the UI on the older of their snapshots.
+func (w *WorkspaceContext) PublishUserGroups(send func(tea.Msg)) {
+	if send == nil {
+		return
+	}
+	w.userGroupsPubMu.Lock()
+	defer w.userGroupsPubMu.Unlock()
+	send(ui.UserGroupsLoadedMsg{
+		TeamID:         w.TeamID,
+		UserGroups:     w.UserGroups(),
+		SelfUserGroups: w.SelfUserGroups(),
+	})
+}
+
+// MergeUserGroups publishes the current map with add's entries on top
+// and returns the result, which the caller must treat as read-only.
+func (w *WorkspaceContext) MergeUserGroups(add map[string]string) map[string]string {
+	w.userGroupsMu.Lock()
+	defer w.userGroupsMu.Unlock()
+	cur := w.UserGroups()
+	merged := make(map[string]string, len(cur)+len(add))
+	for id, h := range cur {
+		merged[id] = h
+	}
+	for id, h := range add {
+		merged[id] = h
+	}
+	w.userGroups.Store(&merged)
+	return merged
 }
 
 // SelfUserGroups returns the IDs of the usergroups the user is in, or
