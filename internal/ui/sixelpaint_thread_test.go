@@ -37,7 +37,7 @@ func sixelThreadApp(t *testing.T, width, height int) (*App, messages.MessageItem
 	}); err != nil {
 		t.Fatalf("Fetch (memo prime): %v", err)
 	}
-	a := buildTestApp(withSize(width, height))
+	a := newTestApp(t, withSize(width, height))
 	a.imgProtocol = imgpkg.ProtoSixel
 	a.SetImageContext(imgrender.ImageContext{
 		Protocol:   imgpkg.ProtoSixel,
@@ -125,7 +125,7 @@ func TestThreadSixelRect_StopsAtTheCompose(t *testing.T) {
 // thread pane, and a window split off later. Each places its avatars
 // in its own band of the screen.
 func TestSetAvatarService_SixelAvatarsReachEveryPane(t *testing.T) {
-	a := buildTestApp(withSize(200, 60))
+	a := newTestApp(t, withSize(200, 60))
 	a.imgProtocol = imgpkg.ProtoSixel
 	a.SetThreadAvatars(true)
 	a.SetAvatarService(core.NewSixelAvatarService(
