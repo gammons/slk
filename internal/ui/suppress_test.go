@@ -377,3 +377,51 @@ func TestRuleChangeKeepsThreadParentSelected(t *testing.T) {
 		t.Errorf("selected = %q, want the parent 1.0", sel.TS)
 	}
 }
+
+// Review finding (Greptile, PR #492, second round): the reload after a
+// removal read the cache on the Update goroutine. It now runs in a Cmd,
+// and its result is dropped for a window whose buffer was replaced
+// while it ran.
+func TestRuleRemovalReloadsOffTheUpdateLoop(t *testing.T) {
+	reads := 0
+	a, _ := suppressAppWith(t, core.ChannelServiceFuncs{
+		ReadCache: func(ids.ChannelID) []messages.MessageItem { reads++; return channelHistory() },
+		ReadCacheSince: func(ids.ChannelID, ids.MessageTS) []messages.MessageItem {
+			reads++
+			return channelHistory()
+		},
+	}, core.SuppressRule{AuthorID: "B1"})
+	cmdSuppressed(a, commandArgs{})
+	_, cmd := a.Update(keyCode(tea.KeyBackspace))
+	if reads != 0 {
+		t.Fatalf("%d cache reads during Update, want none", reads)
+	}
+	if cmd == nil {
+		t.Fatal("no reload command")
+	}
+	msgs := deliveredMsgs[suppressionReloadedMsg](t, cmd)
+
+	// A jump replaced the buffer before the reload landed.
+	jump := []messages.MessageItem{suppressMsg("9.0", "U2")}
+	a.messagepane.SetMessages(cloneMessageItems(jump))
+	a.Update(msgs[0])
+	if got := shownTS(a.messagepane.Messages()); got != "9.0" {
+		t.Errorf("shown = %s, want the stale reload dropped", got)
+	}
+
+	// Delivered to the buffer it was read for (here one without B1's
+	// message), it adds what is missing and keeps the pane's own,
+	// possibly newer, copies.
+	kept := []messages.MessageItem{suppressMsg("1.0", "U1"), suppressMsg("2.0", "U2"), suppressMsg("4.0", "U3")}
+	kept[1].Text = "edited"
+	a.messagepane.SetMessages(kept)
+	msgs[0].windows[0].since = a.messagepane.OldestTS()
+	a.Update(msgs[0])
+	got := a.messagepane.Messages()
+	if shownTS(got) != "1.0,2.0,3.0,4.0" {
+		t.Fatalf("shown = %s, want B1's message added", shownTS(got))
+	}
+	if got[1].Text != "edited" {
+		t.Errorf("the pane's copy of 2.0 was replaced by the cache read")
+	}
+}

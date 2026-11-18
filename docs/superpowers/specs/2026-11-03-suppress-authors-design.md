@@ -67,7 +67,11 @@ open panes from the cache, so the author's messages come back without a
 fetch: each channel window is reloaded back to the oldest message it
 holds (`ChannelService.ReadCacheSince`), so history the user paged back
 to, or opened through a message link, stays; the thread pane keeps its
-selection, the parent included. Esc closes. Modelled on the marks list (`internal/ui/marks`),
+selection, the parent included. The cache reads (one query plus
+per-message enrichment, proportional to what the window has loaded) run
+in a Cmd, off the Update goroutine; the result only adds messages a pane
+lacks, and is dropped for a window that has since changed channel or had
+its buffer replaced. Esc closes. Modelled on the marks list (`internal/ui/marks`),
 drawn through `bubbles/chrome`.
 
 Both are in the help overlay (`TestHelpListsEveryCommand`).
@@ -130,7 +134,8 @@ slk edits the file as text, like the theme and sidebar-width savers
   the channel a model shows comes from `channelOfModel`, the same
   routing `modelsForChannel` uses (which now calls it), and the thread
   pane uses its own channel. `reapplySuppression` refilters every open
-  pane after a change (from the cache after a removal).
+  pane after an addition; `reloadAfterRuleRemoval` /
+  `applySuppressionReload` reload from the cache after a removal.
 - Older history: a pane remembers the oldest message it dropped, so
   `OldestTS` (the older-history cursor) moves past an all-hidden page,
   and a pane that shows nothing only because everything it holds is
