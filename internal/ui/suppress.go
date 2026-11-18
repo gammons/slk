@@ -202,10 +202,12 @@ func (a *App) reloadAfterRuleRemoval() tea.Cmd {
 }
 
 // applySuppressionReload replaces each pane's messages with what the
-// reload read, keeping the selection on the same message. The result is
+// reload read, keeping the selection on the same message and the pane's
+// ephemeral messages (never cached; keepEphemerals). The result is
 // dropped when a newer reload was started since, and per pane when it
-// now shows another channel or thread. An empty read leaves the pane
-// alone.
+// now shows another channel or thread, or history that no longer
+// overlaps the range read (a jump elsewhere replaced it: splicing would
+// leave a gap). An empty read leaves the pane alone.
 func (a *App) applySuppressionReload(r suppressionReloadedMsg) {
 	if r.seq != a.suppressReloadSeq {
 		return
@@ -215,31 +217,48 @@ func (a *App) applySuppressionReload(r suppressionReloadedMsg) {
 		if m == nil || a.leafChannel(w.id) != w.chID || len(w.cached) == 0 {
 			continue
 		}
-		setMessagesKeepSelection(m, replaceRange(m.Messages(), w.cached, w.since, w.until))
+		if w.since != "" && (m.OldestTS() > w.until || m.NewestTS() < w.since) {
+			continue
+		}
+		shown := m.Messages()
+		setMessagesKeepSelection(m, keepEphemerals(replaceRange(shown, w.cached, w.since, w.until), shown))
 	}
 	// The thread read is the parent and then its replies.
 	if t := r.thread; t != nil && a.threadVisible && len(t.cached) > 1 &&
 		a.threadPanel.ChannelID() == t.chID && a.threadPanel.ThreadTS() == t.threadTS {
-		replies := t.cached[1:]
-		a.setThreadRepliesKeepSelection(replaceRange(a.threadPanel.Replies(), replies, "", replies[len(replies)-1].TS))
+		replies, shown := t.cached[1:], a.threadPanel.Replies()
+		a.setThreadRepliesKeepSelection(keepEphemerals(replaceRange(shown, replies, "", replies[len(replies)-1].TS), shown))
 	}
 }
 
 // replaceRange is shown with the messages from since to until replaced
 // by cached (oldest first, all inside that range). What shown has
 // outside the range, history paged in or messages that arrived while the
-// read ran, is kept. An empty bound is open.
+// read ran, is kept. A message in both keeps shown's copy, which live
+// edits and reactions keep current where the read may predate them;
+// the one window left is an edit to a message still hidden when it
+// arrived (the pane held no copy to update) landing during the read. An
+// empty bound is open.
 func replaceRange(shown, cached []messages.MessageItem, since, until string) []messages.MessageItem {
 	var before, after []messages.MessageItem
+	live := make(map[string]messages.MessageItem, len(shown))
 	for _, m := range shown {
 		switch {
 		case since != "" && m.TS < since:
 			before = append(before, m)
 		case until != "" && m.TS > until:
 			after = append(after, m)
+		default:
+			live[m.TS] = m
 		}
 	}
-	out := append(before, cached...)
+	out := before
+	for _, m := range cached {
+		if cur, ok := live[m.TS]; ok {
+			m = cur
+		}
+		out = append(out, m)
+	}
 	return append(out, after...)
 }
 

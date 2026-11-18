@@ -460,6 +460,47 @@ func TestRuleRemovalReloadKeepsMessagesOutsideTheRange(t *testing.T) {
 	}
 }
 
+// Review finding (Greptile and maintainer, PR #492, on the replace):
+// ephemeral messages are never cached, so replacing the range with the
+// cache read dropped them.
+func TestRuleRemovalReloadKeepsEphemerals(t *testing.T) {
+	eph := suppressMsg("2.5", "USLACKBOT")
+	eph.Ephemeral = true
+	shown := []messages.MessageItem{suppressMsg("1.0", "U1"), eph, suppressMsg("4.0", "U3")}
+	a := reloadInto(t, shown, channelHistory(), nil)
+	if got := shownTS(a.messagepane.Messages()); got != "1.0,2.0,2.5,3.0,4.0" {
+		t.Errorf("shown = %s, want the ephemeral 2.5 kept", got)
+	}
+}
+
+// Review finding (Greptile, PR #492, on the replace): an edit arriving
+// while the read ran was overwritten by the read's older copy.
+func TestRuleRemovalReloadKeepsLiveEdits(t *testing.T) {
+	shown := []messages.MessageItem{suppressMsg("1.0", "U1"), suppressMsg("2.0", "U2"), suppressMsg("4.0", "U3")}
+	a := reloadInto(t, shown, channelHistory(), func(a *App) {
+		e := suppressMsg("2.0", "U2")
+		e.Text = "edited"
+		a.messagepane.UpdateMessageInPlace(e)
+	})
+	got := a.messagepane.Messages()
+	if shownTS(got) != "1.0,2.0,3.0,4.0" || got[1].Text != "edited" {
+		t.Errorf("shown = %s, 2.0 = %q, want the live edit kept", shownTS(got), got[1].Text)
+	}
+}
+
+// Review finding (Greptile and maintainer, PR #492, on the replace): a
+// jump to other history in the same channel while the read ran had the
+// stale result spliced onto the new range, leaving a gap.
+func TestRuleRemovalReloadDroppedAfterHistoryJump(t *testing.T) {
+	shown := []messages.MessageItem{suppressMsg("1.0", "U1"), suppressMsg("4.0", "U3")}
+	a := reloadInto(t, shown, channelHistory(), func(a *App) {
+		a.messagepane.SetMessages([]messages.MessageItem{suppressMsg("0.1", "U2"), suppressMsg("0.2", "U2")})
+	})
+	if got := shownTS(a.messagepane.Messages()); got != "0.1,0.2" {
+		t.Errorf("shown = %s, want the stale reload dropped after the jump", got)
+	}
+}
+
 // Only the latest reload is applied.
 func TestSupersededReloadIsIgnored(t *testing.T) {
 	a, _ := suppressAppWith(t, core.ChannelServiceFuncs{

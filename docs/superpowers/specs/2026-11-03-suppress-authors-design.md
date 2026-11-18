@@ -73,10 +73,17 @@ a message link, stays, and a window opened at an old message reads only
 that window, not everything since. The thread pane is replaced the same
 way and keeps its selection, the parent included. The cache reads (one
 query plus per-message enrichment, proportional to what the window has
-loaded) run in a Cmd, off the Update goroutine; messages a pane gained
+loaded) run in a Cmd, off the Update goroutine. Messages a pane gained
 outside the range while the read ran (older history paged in, live
-arrivals) are kept, and the result is dropped when a newer reload was
-started or for a window that has since changed channel. Esc closes. Modelled on the marks list (`internal/ui/marks`),
+arrivals) are kept, as are its ephemeral messages, which are never
+cached (`keepEphemerals`), and a message the pane already shows keeps
+the pane's copy, so an edit or reaction that arrived during the read is
+not undone. One narrow window is accepted: an edit to a message that was
+still hidden when the edit arrived, landing while the read runs, shows
+the cached copy until the next edit or reload. The result is dropped
+when a newer reload was started, or for a window that has since changed
+channel or whose history no longer overlaps the range read (a jump
+elsewhere). Esc closes. Modelled on the marks list (`internal/ui/marks`),
 drawn through `bubbles/chrome`.
 
 Both are in the help overlay (`TestHelpListsEveryCommand`).
