@@ -506,28 +506,11 @@ func (m *Model) SetReadStateReader(f func() map[string]core.ReadState) {
 	m.dirty()
 }
 
-// UnreadChannelCount returns the number of channels currently in the
-// sidebar that should render as unread (HasUnread && !IsMuted), via
-// ChannelItem.IsVisiblyUnread. Returns 0 when no reader is installed.
-// Used by the App to compute the window title's active-workspace
-// count -- guaranteed to match the dot population exactly.
-func (m *Model) UnreadChannelCount() int {
-	if m.readStateReader == nil {
-		return 0
-	}
-	state := m.readStateReader()
-	count := 0
-	for _, item := range m.items {
-		// A hidden deactivated DM has no row to show the dot on.
-		if item.IsVisiblyUnread(state[item.ID]) && !m.hidesPeer(item) {
-			count++
-		}
-	}
-	return count
-}
-
-// UnreadChannelIDs returns the IDs of the channels UnreadChannelCount
-// counts, so other views can agree with the sidebar's unread dots.
+// UnreadChannelIDs returns the IDs of the channels currently in the
+// sidebar that render as unread (HasUnread && !IsMuted, via
+// ChannelItem.IsVisiblyUnread), leaving out hidden deactivated DMs.
+// Empty when no reader is installed. The channel finder's unread group
+// uses it, so the finder matches the dots exactly.
 func (m *Model) UnreadChannelIDs() map[string]bool {
 	ids := map[string]bool{}
 	if m.readStateReader == nil {
@@ -535,11 +518,19 @@ func (m *Model) UnreadChannelIDs() map[string]bool {
 	}
 	state := m.readStateReader()
 	for _, item := range m.items {
+		// A hidden deactivated DM has no row to show the dot on.
 		if item.IsVisiblyUnread(state[item.ID]) && !m.hidesPeer(item) {
 			ids[item.ID] = true
 		}
 	}
 	return ids
+}
+
+// UnreadChannelCount is the number of UnreadChannelIDs. Used by the App
+// to compute the window title's active-workspace count, so it matches
+// the dot population exactly.
+func (m *Model) UnreadChannelCount() int {
+	return len(m.UnreadChannelIDs())
 }
 
 // hidesPeer reports whether item is a DM or app row whose peer is
