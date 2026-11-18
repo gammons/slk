@@ -4076,8 +4076,8 @@ func (a *App) View() tea.View {
 // regions entirely when active, so it takes priority; otherwise every
 // visible window leaf contributes its own placements, mapped through
 // its own rectangle (split windows sit at their own origins, not the
-// unsplit messages-pane origin). The thread pane still renders
-// halfblock.
+// unsplit messages-pane origin), and so does the thread pane wherever
+// it is drawn (threadSixelRect).
 func (a *App) collectSixelPlacements(frame panelLayoutFrame) []imgpkg.SixelPlacement {
 	if a.preview.Active() {
 		want := make([]imgpkg.SixelPlacement, 0, 1)
@@ -4099,30 +4099,51 @@ func (a *App) collectSixelPlacements(frame panelLayoutFrame) []imgpkg.SixelPlace
 	if a.overlayActive() {
 		return nil
 	}
-	if a.view != ViewChannels || frame.MsgWidth == 0 {
+	if a.view != ViewChannels {
 		return nil
 	}
-	// The same bounds renderWindowsRegion uses, so leaf rectangles
-	// match the panes actually drawn.
-	bounds := wintree.Rect{
-		X: 0,
-		Y: 0,
-		W: frame.MsgWidth + frame.MsgBorder,
-		H: frame.ContentHeight,
-	}
-	rects := a.wins.ComputeRects(bounds)
-	out := make([]imgpkg.SixelPlacement, 0, 2)
-	for _, id := range a.wins.Leaves() {
-		rect, ok := rects[id]
-		model := a.winModels[id]
-		if !ok || model == nil || rect.W < 1 || rect.H < 1 {
-			continue
+	var out []imgpkg.SixelPlacement
+	if frame.MsgWidth > 0 {
+		// The same bounds renderWindowsRegion uses, so leaf rectangles
+		// match the panes actually drawn.
+		bounds := wintree.Rect{
+			X: 0,
+			Y: 0,
+			W: frame.MsgWidth + frame.MsgBorder,
+			H: frame.ContentHeight,
 		}
+		rects := a.wins.ComputeRects(bounds)
+		for _, id := range a.wins.Leaves() {
+			rect, ok := rects[id]
+			model := a.winModels[id]
+			if !ok || model == nil || rect.W < 1 || rect.H < 1 {
+				continue
+			}
+			out = append(out, absoluteWindowSixelPlacements(
+				model.SixelPlacements(), model.ChromeHeight(), rect, a.layout.SidebarEnd(),
+			)...)
+		}
+	}
+	// The thread pane, under the condition View draws it on: beside the
+	// messages pane, in front of it when the panes stack, or full screen.
+	if a.threadVisible && frame.ThreadWidth > 0 {
 		out = append(out, absoluteWindowSixelPlacements(
-			model.SixelPlacements(), model.ChromeHeight(), rect, a.layout.SidebarEnd(),
+			a.threadPanel.SixelPlacements(), a.threadPanel.ChromeHeight(),
+			a.threadSixelRect(frame), a.layout.MsgEnd(),
 		)...)
 	}
 	return out
+}
+
+// threadSixelRect is the thread pane's replies region as a rectangle in
+// absoluteWindowSixelPlacements' frame, with X relative to the pane's
+// left edge (a.layout.MsgEnd()): the top border on row 0, the replies
+// on rows 1 to the reply height, and the compose region from the row
+// after, which is the bottom an image must not reach. The height is
+// the one renderThreadRegion drew with, so it is read after it ran.
+func (a *App) threadSixelRect(frame panelLayoutFrame) wintree.Rect {
+	replies := max(a.layout.PageHeight(PanelThread), 3) // renderThreadRegion's clamp
+	return wintree.Rect{X: 0, Y: 0, W: frame.ThreadWidth + frame.ThreadBorder, H: replies + 2}
 }
 
 // finalizeSixelView is the single exit point for every App.View path,

@@ -202,4 +202,4 @@ config key (`auto` / `kitty` / `sixel` / `halfblock` / `off`). See
 ## Related
 
 - [[Clipboard and OSC 52|Clipboard-and-OSC-52]] — getting copy/paste to land
-- [[Tradeoffs and Non-Goals|Tradeoffs-and-Non-Goals]] — image rendering caveats (animated GIFs, unfurls, threads pane sixel)
+- [[Tradeoffs and Non-Goals|Tradeoffs-and-Non-Goals]] — image rendering caveats (animated GIFs, unfurls, sixel at a pane edge)

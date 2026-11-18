@@ -83,7 +83,7 @@ type RenderedMessage struct {
 	HeaderBudget int
 	MentionsSelf bool            // someone else's message that mentions the user; WrapRows highlights it
 	Hits         []entrylist.Hit // image and file hits (when ImageHits), then reaction pills
-	SixelRows    []sixelEntry
+	SixelRows    []SixelImage
 	// Kitty uploads by source: each pane keeps its own upload order.
 	// BodyFlushes also carries the author-status emoji's upload.
 	BodyFlushes, BlockFlushes, ReactionFlushes, AttachmentFlushes []func(io.Writer) error
@@ -453,7 +453,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 
 	var attachLineSlices [][]string
 	var imageHits []entrylist.Hit
-	var allSixel []sixelEntry
+	var allSixel []SixelImage
 
 	// Block Kit blocks render between the body text and file attachments.
 	bkCtx := BlockkitContext(msg, rc, &out.BlockFlushes)
@@ -626,7 +626,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 				out.AttachmentFlushes = append(out.AttachmentFlushes, run.Flushes...)
 				if opt.SixelRows {
 					for _, sx := range run.Sixels {
-						allSixel = append(allSixel, sixelEntry{
+						allSixel = append(allSixel, SixelImage{
 							row: rowCursor + sx.Row, col: sx.Col,
 							key: sx.Key, bytes: sx.Bytes, fallback: sx.Fallback,
 							height: sx.Height, width: sx.Width,
@@ -812,9 +812,9 @@ func inlineRun(r *imgrender.Renderer, atts []Attachment, i, width int) []imgrend
 // appendBlockSixel records block-kit sixel placements. rowOffset is the
 // entry row of Lines[0]; each entry's key is a row within those lines
 // and Col is its column within the line.
-func appendBlockSixel(dst []sixelEntry, rows map[int]blockkit.SixelEntry, rowOffset int) []sixelEntry {
+func appendBlockSixel(dst []SixelImage, rows map[int]blockkit.SixelEntry, rowOffset int) []SixelImage {
 	for k, v := range rows {
-		dst = append(dst, sixelEntry{
+		dst = append(dst, SixelImage{
 			row: rowOffset + k, col: v.Col,
 			key: v.Key, bytes: v.Bytes, fallback: v.Fallback,
 			height: v.Height, width: v.Width,

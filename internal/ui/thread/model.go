@@ -57,8 +57,8 @@ type Model struct {
 	// Reply cache: the payload and the list entry of every reply,
 	// index-aligned with m.replies, rebuilt when the replies or the width
 	// change. nil means the cache was discarded and the next View
-	// rebuilds it. The thread pane captures no sixel rows (v1 scope:
-	// sixel renders its placeholder only).
+	// rebuilds it. Each payload carries its reply's sixel images, which
+	// View places with messages.PlaceSixel as the channel pane does.
 	cache         []messages.EntryPayload
 	replyEntries  []entrylist.Entry
 	cacheWidth    int
@@ -130,11 +130,14 @@ type Model struct {
 	version int64
 
 	// imgRenderer is the inline-image rendering pipeline. Configured at
-	// startup via Model.SetImageContext (mirrors messages.Model). v1
-	// renders images inline (kitty + halfblock fully supported; sixel
-	// renders placeholder-only) but does not support click-to-preview
-	// from a thread reply.
+	// startup via Model.SetImageContext (mirrors messages.Model). Images
+	// render inline under every protocol; sixel images are painted
+	// out-of-band from the placements View records (SixelPlacements).
 	imgRenderer *imgrender.Renderer
+
+	// sixelPaints is the placement set produced by the last View, in
+	// pane-local coordinates; see SixelPlacements.
+	sixelPaints []imgpkg.SixelPaint
 
 	// emojiCtx bundles the emoji-image rendering dependencies. Threaded
 	// through RenderSlackMarkdownWith for reply body text and consulted
@@ -1089,6 +1092,9 @@ func (m *Model) ApplySelectionToBordered(bordered string, topBorderRows, leftBor
 }
 
 func (m *Model) viewInternal(height, width int, applySelection bool) string {
+	// Placements are this frame's alone; every path below either sets
+	// them or leaves none, so a vanished image is never kept alive.
+	m.sixelPaints = nil
 	if m.IsEmpty() {
 		return lipgloss.NewStyle().
 			Width(width).
@@ -1279,7 +1285,15 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 			Foreground(styles.TextMuted).
 			Render("No replies yet")
 		m.list.SetEntries([]entrylist.Entry{parent, {Ref: -1, Lines: strings.Split(empty, "\n")}}, width, false)
-		rows := m.list.Compose(m.list.Static(), "", "", false)
+		frame := m.list.Static()
+		m.sixelPaints = messages.PlaceSixel(frame, m.list.Offsets(), m.list.YOffset(), replyAreaHeight,
+			func(i int) []messages.SixelImage {
+				if i == 0 {
+					return parentRendered.SixelRows
+				}
+				return nil
+			}, nil)
+		rows := m.list.Compose(frame, "", "", false)
 		return fitHeight(chrome+"\n"+strings.Join(rows, "\n"), height)
 	}
 
@@ -1342,7 +1356,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 				ColOffset:  1,
 				Hits:       append(r.Hits, w.LinkHits...),
 			})
-			m.cache = append(m.cache, messages.EntryPayload{ShortSrc: w.ShortSrc, Flushes: flushes})
+			m.cache = append(m.cache, messages.EntryPayload{ShortSrc: w.ShortSrc, Flushes: flushes, SixelRows: r.SixelRows})
 			m.replyIDToIdx[reply.TS] = i
 		}
 		m.cacheWidth = width
@@ -1378,20 +1392,28 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	decoration := func(row string) entrylist.Entry { return entrylist.Entry{Ref: -1, Lines: []string{row}} }
 	entries := make([]entrylist.Entry, 0, 2*len(m.replyEntries)+2)
 	entries = append(entries, parent)
+	// sixel is index-aligned with entries: the images of the parent and
+	// of each reply, nil for the decorations between them.
+	sixel := make([][]messages.SixelImage, 0, cap(entries))
+	sixel = append(sixel, parentRendered.SixelRows)
 	lastDate := messages.DateFromTS(m.parent.TS)
 	landmarkInserted := false
 	for i, e := range m.replyEntries {
 		if replyDate := messages.DateFromTS(m.replies[i].TS); replyDate != "" && replyDate != lastDate {
 			entries = append(entries, decoration(dateSeparatorStyle.Render("── "+messages.FormatDateSeparator(replyDate)+" ──")))
+			sixel = append(sixel, nil)
 			lastDate = replyDate
 		}
 		if !landmarkInserted && newLandmark != "" && m.replies[i].TS > m.unreadBoundaryTS {
 			entries = append(entries, decoration(newLandmark))
+			sixel = append(sixel, nil)
 			landmarkInserted = true
 		}
 		entries = append(entries, e)
+		sixel = append(sixel, m.cache[i].SixelRows)
 		if i < len(m.replyEntries)-1 {
 			entries = append(entries, decoration(replySeparator))
+			sixel = append(sixel, nil)
 		}
 	}
 	m.list.SetEntries(entries, width, keepPosition)
@@ -1421,6 +1443,8 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// reply hits (content-relative), overlay the selection, draw the
 	// scrollbar.
 	frame := m.list.Layout(m.selected, m.cursorLines)
+	m.sixelPaints = messages.PlaceSixel(frame, m.list.Offsets(), m.list.YOffset(), replyAreaHeight,
+		func(i int) []messages.SixelImage { return sixel[i] }, nil)
 	rows := m.list.Compose(frame, "", "", applySelection)
 	m.layoutValid = true
 	return fitHeight(chrome+"\n"+strings.Join(rows, "\n"), height)
@@ -1552,12 +1576,13 @@ func (m *Model) DraftRenderOptions(userID string) messages.RenderOptions {
 }
 
 // renderMessage renders msg with the thread pane's options: an avatar
-// only with SetShowAvatars, no "(edited)", no broadcast label, no reply
-// affordance and no sixel rows (plan decision P3). Image hits are
-// recorded so a click opens the preview, as in the channel pane.
+// only with SetShowAvatars, no "(edited)", no broadcast label and no
+// reply affordance. Image hits are recorded so a click opens the
+// preview, and sixel rows so View can paint sixel images, as in the
+// channel pane.
 func (m *Model) renderMessage(msg messages.MessageItem, width int, isSelected bool) messages.RenderedMessage {
 	msg = m.huddleView(msg)
-	opt := messages.RenderOptions{IsSelected: isSelected, ImageHits: true}
+	opt := messages.RenderOptions{IsSelected: isSelected, ImageHits: true, SixelRows: true}
 	if !m.compact && m.showAvatars && m.avatarFn != nil {
 		opt.Avatar = m.avatarFn(msg.UserID)
 	}
@@ -1573,3 +1598,9 @@ func (m *Model) huddleView(msg messages.MessageItem) messages.MessageItem {
 	}
 	return messages.HuddleView(msg, m.userNames)
 }
+
+// SixelPlacements returns the placements the most recent View wants
+// painted, in the pane's local frame (row 0 is the first row under the
+// chrome; see imgpkg.SixelPaint), as messages.(*Model).SixelPlacements
+// does for the channel pane. Valid until the next View call.
+func (m *Model) SixelPlacements() []imgpkg.SixelPaint { return m.sixelPaints }
