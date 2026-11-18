@@ -17,7 +17,7 @@ The channel pane's per-frame loop moves to `messages.PlaceSixel(frame, offsets, 
 
 `thread.renderMessage` sets `SixelRows`. Each reply's images ride its `EntryPayload`, the parent's (rendered every frame as entry 0) are taken from that frame's render, and View builds a slice of images index-aligned with the list's entries (nil for the dividers, landmark and spacers) for `PlaceSixel`. The zero-reply branch places the parent's images the same way. `SixelPlacements` is reset at the top of View so no path keeps a vanished image.
 
-The App adds the thread's placements under the condition View draws the thread on (`threadVisible && ThreadWidth > 0`, so side by side, stacked in front, or full screen), through the existing `absoluteWindowSixelPlacements` with `threadSixelRect`: X from `layout.MsgEnd()`, the top border on row 0, and a bottom at the compose region's first row (`1 + PageHeight(PanelThread)`, with `renderThreadRegion`'s minimum of 3), so an image is never painted over the composer.
+The App adds the thread's placements under the condition View draws the thread on (`threadVisible && ThreadWidth > 0`, so side by side, stacked in front, or full screen) and in every view: the Threads and Activity views replace the channel windows with a list, so only the windows' placements depend on the channels view, through the existing `absoluteWindowSixelPlacements` with `threadSixelRect`: X from `layout.MsgEnd()`, the top border on row 0, and a bottom at the compose region's first row (`1 + PageHeight(PanelThread)`, with `renderThreadRegion`'s minimum of 3), so an image is never painted over the composer.
 
 ### Sixel avatars
 

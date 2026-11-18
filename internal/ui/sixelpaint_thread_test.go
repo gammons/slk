@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	stdimage "image"
 	"testing"
 
@@ -159,5 +160,26 @@ func TestSetAvatarService_SixelAvatarsReachEveryPane(t *testing.T) {
 	_ = w.View(30, 100)
 	if len(w.SixelPlacements()) != 1 {
 		t.Errorf("a window split off later placed %d avatars, want 1", len(w.SixelPlacements()))
+	}
+}
+
+// The Threads and Activity views draw the thread pane exactly as the
+// channels view does, so its images are placed there too; only the
+// channel windows, which those views replace with a list, place none.
+func TestCollectSixelPlacements_ThreadPaneInEveryView(t *testing.T) {
+	for _, view := range []View{ViewThreads, ViewActivity} {
+		t.Run(fmt.Sprint(view), func(t *testing.T) {
+			a, reply := sixelThreadApp(t, 200, 60)
+			a.view = view
+			_ = a.View()
+			got := a.collectSixelPlacements(a.computeFrame())
+			if len(got) != 1 {
+				t.Fatalf("placements = %+v, want the thread image's one", got)
+			}
+			x, y := firstImageCell(t, a, reply.TS)
+			if got[0].Col-1 != x || got[0].Row-1 != y {
+				t.Errorf("placement at screen (%d,%d), want the image's top-left cell (%d,%d)", got[0].Col-1, got[0].Row-1, x, y)
+			}
+		})
 	}
 }

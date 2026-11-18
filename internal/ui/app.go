@@ -4107,11 +4107,11 @@ func (a *App) collectSixelPlacements(frame panelLayoutFrame) []imgpkg.SixelPlace
 	if a.overlayActive() {
 		return nil
 	}
-	if a.view != ViewChannels {
-		return nil
-	}
 	var out []imgpkg.SixelPlacement
-	if frame.MsgWidth > 0 {
+	// The channel windows draw messages only in the channels view; the
+	// Threads and Activity views put their lists there instead. The
+	// thread pane is drawn the same in every view, so it is not gated.
+	if a.view == ViewChannels && frame.MsgWidth > 0 {
 		// The same bounds renderWindowsRegion uses, so leaf rectangles
 		// match the panes actually drawn.
 		bounds := wintree.Rect{
