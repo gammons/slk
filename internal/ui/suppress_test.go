@@ -468,6 +468,41 @@ func TestRuleRemovalReloadSurvivesPagingOlder(t *testing.T) {
 	}
 }
 
+// Review finding (Greptile, PR #492, fifth review): deleting the newest
+// shown message while the read ran lowered NewestTS below the read's
+// range and the whole reload was dropped.
+func TestRuleRemovalReloadSurvivesDeletingNewest(t *testing.T) {
+	shown := []messages.MessageItem{suppressMsg("1.0", "U1"), suppressMsg("4.0", "U3")}
+	a := reloadInto(t, shown, channelHistory(), func(a *App) {
+		a.Update(WSMessageDeletedMsg{ChannelID: "C1", TS: "4.0"})
+	})
+	if got := shownTS(a.messagepane.Messages()); got != "1.0,2.0,3.0" {
+		t.Errorf("shown = %s, want the reload applied without the deleted 4.0", got)
+	}
+}
+
+// A delete seen by a reload that a second one superseded still keeps
+// the second one from bringing the message back.
+func TestSupersedingReloadKeepsEarlierDeletes(t *testing.T) {
+	a, _ := suppressAppWith(t, core.ChannelServiceFuncs{
+		ReadCacheRange: func(ids.ChannelID, ids.MessageTS, ids.MessageTS) []messages.MessageItem {
+			return channelHistory()
+		},
+	})
+	a.messagepane.SetMessages([]messages.MessageItem{suppressMsg("1.0", "U1"), suppressMsg("4.0", "U3")})
+	first := deliveredMsgs[suppressionReloadedMsg](t, a.reloadAfterRuleRemoval())
+	a.Update(WSMessageDeletedMsg{ChannelID: "C1", TS: "3.0"})
+	second := deliveredMsgs[suppressionReloadedMsg](t, a.reloadAfterRuleRemoval())
+	a.Update(first[0]) // superseded: ignored
+	if got := shownTS(a.messagepane.Messages()); got != "1.0,4.0" {
+		t.Fatalf("shown = %s, want the superseded reload ignored", got)
+	}
+	a.Update(second[0])
+	if got := shownTS(a.messagepane.Messages()); got != "1.0,2.0,4.0" {
+		t.Errorf("shown = %s, want 3.0 (deleted during the first read) left out", got)
+	}
+}
+
 // Review finding (Greptile, PR #492, fourth round): refiltering after a
 // rule was added reset the hidden range to what that refilter hid, so a
 // message hidden earlier and newer than anything shown fell outside the

@@ -115,6 +115,10 @@ type Model struct {
 	// hiddenNewest is the newest TS among hidden messages, so NewestTS
 	// covers the range the pane has loaded.
 	hiddenNewest string
+	// buffer counts SetMessages calls: a new value means the pane's
+	// list was replaced (a channel load, a jump), not edited in place
+	// (Refill keeps it). See Buffer.
+	buffer uint64
 	// sixelPaints is the placement set produced by the last View, consumed
 	// by the App's out-of-band painter. See imgpkg.SixelPaint.
 	sixelPaints []imgpkg.SixelPaint
@@ -743,6 +747,7 @@ func (m *Model) SetMessages(msgs []MessageItem) {
 		debuglog.Cache("messages.Model.SetMessages: channel=%q before=[%s] after=[%s]",
 			m.channelName, oldSummary, newSummary)
 	}
+	m.buffer++
 	msgs, m.hiddenOldest, m.hiddenNewest = Visible(m.hide, msgs)
 	m.messages = msgs
 	m.ClearSelection()

@@ -72,9 +72,11 @@ message reads only that window, not everything since; the thread pane keeps its
 selection, the parent included. The cache reads (one query plus
 per-message enrichment, proportional to what the window has loaded) run
 in a Cmd, off the Update goroutine; the result only adds messages a pane
-lacks, leaves out messages deleted while the read ran, and is dropped
-for a window that has since changed channel or no longer holds the range
-it was read for (a jump; paging older only widens it). Esc closes. Modelled on the marks list (`internal/ui/marks`),
+lacks, leaves out messages deleted while the read ran (including during
+a reload it superseded), and is dropped for a window that has since
+changed channel or whose list was replaced (`messages.Model.Buffer`: a
+channel load or a jump; paging, arrivals and deletes change the list in
+place). Esc closes. Modelled on the marks list (`internal/ui/marks`),
 drawn through `bubbles/chrome`.
 
 Both are in the help overlay (`TestHelpListsEveryCommand`).

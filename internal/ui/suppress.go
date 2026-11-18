@@ -180,11 +180,13 @@ func (s *suppressReloadState) withoutDeleted(channelID string, cached []messages
 
 // windowReload is one window's cached history from since to until, the
 // oldest and newest messages it held (hidden ones included) when the
-// reload was dispatched.
+// reload was dispatched; buffer is the window's messages.Model.Buffer
+// then.
 type windowReload struct {
 	id           wintree.LeafID
 	chID         string
 	since, until string
+	buffer       uint64
 	cached       []messages.MessageItem
 }
 
@@ -211,7 +213,7 @@ func (a *App) reloadAfterRuleRemoval() tea.Cmd {
 		if m == nil || chID == "" {
 			continue
 		}
-		wins = append(wins, windowReload{id: id, chID: chID, since: m.OldestTS(), until: m.NewestTS()})
+		wins = append(wins, windowReload{id: id, chID: chID, since: m.OldestTS(), until: m.NewestTS(), buffer: m.Buffer()})
 	}
 	var thr *threadReload
 	if a.threadVisible {
@@ -224,7 +226,17 @@ func (a *App) reloadAfterRuleRemoval() tea.Cmd {
 	if a.suppressReload != nil {
 		seq = a.suppressReload.seq + 1
 	}
-	a.suppressReload = &suppressReloadState{seq: seq, deleted: make(map[string]map[string]bool)}
+	next := &suppressReloadState{seq: seq, deleted: make(map[string]map[string]bool)}
+	if prev := a.suppressReload; prev != nil {
+		// The superseded reload's result will be ignored, but the
+		// deletes it saw may predate this read's snapshot too.
+		for ch, tss := range prev.deleted {
+			for ts := range tss {
+				next.noteDeleted(ch, ts)
+			}
+		}
+	}
+	a.suppressReload = next
 	channels, threads := a.channels, a.threads
 	return func() tea.Msg {
 		for i := range wins {
@@ -244,7 +256,7 @@ func (a *App) reloadAfterRuleRemoval() tea.Cmd {
 }
 
 // applySuppressionReload adds the cached messages a reload found to each
-// pane that still holds the range it was read for. It only adds:
+// pane whose list is still the one it was read for. It only adds:
 // everything a pane shows stays as it is now (it may have changed since
 // the read), messages deleted meanwhile are left out, and the panes'
 // predicates drop whatever is still hidden. A reload superseded by a
@@ -260,10 +272,11 @@ func (a *App) applySuppressionReload(r suppressionReloadedMsg) {
 		if m == nil || a.leafChannel(w.id) != w.chID || len(w.cached) == 0 {
 			continue
 		}
-		// The window must still hold the range it was read for.
-		// Paging older or a live arrival only widens it; a jump
-		// replaces it, and the read no longer fits.
-		if w.since != "" && (m.OldestTS() > w.since || m.NewestTS() < w.until) {
+		// The window's list must be the one the read was for: a
+		// channel load or a jump replaces it and the read no longer
+		// fits. Paging older, live arrivals and deletes change the
+		// list in place and do not.
+		if m.Buffer() != w.buffer {
 			continue
 		}
 		setMessagesKeepSelection(m, addMissing(m.Messages(), st.withoutDeleted(w.chID, w.cached)))
