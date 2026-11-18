@@ -147,3 +147,17 @@ func TestFetchUserGroups(t *testing.T) {
 		t.Errorf("off Grid: teams asked = %q, want %q", asked, want)
 	}
 }
+
+// Each team's call gets its own deadline, so a stalled team is skipped
+// instead of holding back the others' groups.
+func TestFetchUserGroupsDeadline(t *testing.T) {
+	list := func(ctx context.Context, _ string) ([]slack.UserGroup, error) {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Error("usergroups call has no deadline")
+		}
+		return nil, nil
+	}
+	if _, err := fetchUserGroups(context.Background(), list, []string{"T2"}, t.Logf); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/slack-go/slack"
 
@@ -31,6 +32,8 @@ func gridMemberTeams(channels []boot.Channel, ims []boot.IM, workspaceID string)
 	return teams
 }
 
+const userGroupsFetchTimeout = 30 * time.Second
+
 // fetchUserGroups lists the workspace's usergroups, then each Grid
 // member team's, since an org-level session only sees a member
 // workspace's groups when it names the team. A failed call is logged
@@ -41,7 +44,12 @@ func fetchUserGroups(ctx context.Context, list func(context.Context, string) ([]
 	var lastErr error
 	failed := 0
 	for _, team := range append([]string{""}, memberTeams...) {
-		groups, err := list(ctx, team)
+		// One deadline per team: the HTTP client has none, and a
+		// stalled team would otherwise hold back the groups already
+		// fetched for the whole session.
+		callCtx, cancel := context.WithTimeout(ctx, userGroupsFetchTimeout)
+		groups, err := list(callCtx, team)
+		cancel()
 		if err != nil {
 			logf("usergroups fetch (team %q) failed: %v", team, err)
 			lastErr = err
