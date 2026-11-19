@@ -8,6 +8,7 @@ something from the top of the list for the richest experience.
 |-----------------------|----------------------|--------------------|-------------|------------------|-------------------------------------------------------------|
 | **kitty**             | kitty graphics       | yes                | yes         | yes              | Best overall experience. Older versions may need `clipboard_control write-clipboard`. |
 | **ghostty**           | kitty graphics       | yes                | yes         | yes              | Recommended.                                                |
+| **Rex**               | kitty graphics       | yes                | yes         | yes              | Built on Ghostty's terminal engine; detected by `TERM_PROGRAM=rex`. |
 | **WezTerm**           | kitty graphics       | yes                | yes         | yes              | No unicode placeholders, so slk places the images itself. See [below](#wezterm-emulated-kitty-placement). |
 | **foot** (Wayland)    | sixel                | half-block         | yes         | yes              | Best Wayland-native option.                                 |
 | **iTerm2 ≥ 3.5**      | half-block           | half-block         | yes         | yes              | Implements kitty graphics but not unicode placeholders, so slk falls back to half-block. |
@@ -23,8 +24,8 @@ something from the top of the list for the richest experience.
 
 With `image_protocol = "auto"` (the default) slk checks, in order:
 
-1. kitty graphics, when the terminal announces itself as kitty, Ghostty
-   or WezTerm, confirmed at startup with a graphics-protocol probe.
+1. kitty graphics, when the terminal announces itself as kitty, Ghostty,
+   Rex or WezTerm, confirmed at startup with a graphics-protocol probe.
 2. sixel, for terminals slk recognizes by name (foot, mlterm, iTerm2)
    **or** that answer the startup DA1 query (`CSI c`) with attribute
    `4`. This catches sixel terminals slk has never heard of, including
