@@ -72,8 +72,10 @@ func (p *pendingLinkNav) wrapThreadLoad(cmd tea.Cmd, authoritative bool, loads i
 var reduceLinks reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	if dropped, ok := msg.(finderPermalinkDroppedMsg); ok {
 		// The workspace switch the finder asked for produced nothing.
-		// Drop the pending link and open it the way an unknown
-		// workspace does.
+		// A newer paste has its own request; leave that one waiting.
+		if dropped.Seq != a.pendingFinderPermalinkSeq {
+			return nil, true
+		}
 		a.clearFinderPermalink()
 		return a.browserOpener(dropped.URL), true
 	}

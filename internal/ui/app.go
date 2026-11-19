@@ -614,9 +614,14 @@ type App struct {
 	// pendingFinderPermalink is an archive link chosen in the channel
 	// finder whose workspace is not the one on screen. The switch is
 	// in flight; takeFinderPermalink navigates once that workspace is
-	// active. Both empty when nothing is waiting.
+	// active, and only when FinderPermalinkSeq on the switch matches
+	// pendingFinderPermalinkSeq. A newer paste replaces both. Empty
+	// when nothing is waiting. finderPermalinkSeq is the counter;
+	// zero is never a live request.
 	pendingFinderPermalink     string
 	pendingFinderPermalinkTeam string
+	pendingFinderPermalinkSeq  uint64
+	finderPermalinkSeq         uint64
 
 	// marks owns the vim-style mark storage: an in-memory per-workspace
 	// tier for lowercase marks plus the SQLite `marks` table, merged

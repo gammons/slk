@@ -11,9 +11,11 @@ import (
 
 // finderPermalinkDroppedMsg is what openFinderPermalink delivers when
 // the workspace switch it started returns nothing. The pending link is
-// cleared and the URL opens in the browser.
+// cleared and the URL opens in the browser, unless a newer paste has
+// already replaced this request.
 type finderPermalinkDroppedMsg struct {
 	URL string
+	Seq uint64
 }
 
 // openFinderPermalink navigates to a Slack archive permalink chosen in
@@ -42,18 +44,23 @@ func (a *App) openFinderPermalink(rawURL string) tea.Cmd {
 	if a.workspaceSvc == nil {
 		return a.browserOpener(rawURL)
 	}
+	a.finderPermalinkSeq++
+	seq := a.finderPermalinkSeq
 	a.pendingFinderPermalink = rawURL
 	a.pendingFinderPermalinkTeam = teamID
+	a.pendingFinderPermalinkSeq = seq
 	switchCmd := a.switchWorkspace(teamID)
 	return func() tea.Msg {
 		var msg tea.Msg
 		if switchCmd != nil {
 			msg = switchCmd()
 		}
-		if msg == nil {
-			return finderPermalinkDroppedMsg{URL: rawURL}
+		sw, ok := msg.(WorkspaceSwitchedMsg)
+		if !ok {
+			return finderPermalinkDroppedMsg{URL: rawURL, Seq: seq}
 		}
-		return msg
+		sw.FinderPermalinkSeq = seq
+		return sw
 	}
 }
 
@@ -83,12 +90,14 @@ func (a *App) teamForPermalink(pl slackurl.Permalink) (string, bool) {
 	return "", false
 }
 
-// takeFinderPermalink consumes a finder permalink aimed at teamID, which
-// has just become active. The bool is true when routeLink started an
-// in-app jump, so the caller must not also restore the last channel.
-// A non-nil command with false is the browser fallback.
-func (a *App) takeFinderPermalink(teamID string) (tea.Cmd, bool) {
-	if a.pendingFinderPermalink == "" {
+// takeFinderPermalink consumes a finder permalink aimed at teamID when
+// seq is the request still waiting. A switch that finished for an
+// older paste leaves the newer link alone. The bool is true when
+// routeLink started an in-app jump, so the caller must not also
+// restore the last channel. A non-nil command with false is the
+// browser fallback.
+func (a *App) takeFinderPermalink(teamID string, seq uint64) (tea.Cmd, bool) {
+	if a.pendingFinderPermalink == "" || seq == 0 || seq != a.pendingFinderPermalinkSeq {
 		return nil, false
 	}
 	url, team := a.pendingFinderPermalink, a.pendingFinderPermalinkTeam
@@ -96,6 +105,13 @@ func (a *App) takeFinderPermalink(teamID string) (tea.Cmd, bool) {
 	if team != teamID {
 		return nil, false
 	}
+	// resetWindowTree emptied the pane and the composer was detached,
+	// but activeChannelID still names the channel we left. A shared
+	// channel has that same ID here, and applyLocation would then skip
+	// ChannelSelectedMsg: the thread would open on an empty pane and
+	// the composer would stay detached. Forget the id so this jump
+	// loads the channel.
+	a.activeChannelID = ""
 	cmd := a.routeLink(url)
 	return cmd, a.pendingLinkNav != nil
 }
@@ -103,6 +119,7 @@ func (a *App) takeFinderPermalink(teamID string) (tea.Cmd, bool) {
 func (a *App) clearFinderPermalink() {
 	a.pendingFinderPermalink = ""
 	a.pendingFinderPermalinkTeam = ""
+	a.pendingFinderPermalinkSeq = 0
 }
 
 // pasteChannelFinder inserts a bracketed paste into the open finder.

@@ -153,6 +153,170 @@ func TestFinderPermalink_CrossWorkspaceAliasSwitchesThenNavigates(t *testing.T) 
 	}
 }
 
+func TestFinderPermalink_SharedChannelStillSelectsAfterSwitch(t *testing.T) {
+	// A Slack Connect channel has one ID in both workspaces. The switch
+	// resets the pane and detaches the composer, but activeChannelID
+	// still names that channel. The jump has to go through
+	// ChannelSelectedMsg anyway, or the thread opens against an empty
+	// pane and the composer stays detached.
+	app, opened := finderPermalinkApp(t)
+	app.activeChannelID = "CSHARED01"
+	app.compose.SetActiveChannel("CSHARED01")
+	app.workspaceDomains["T2"] = "beta"
+	app.setChannelLookupFuncForTest(func(id ids.ChannelID) (string, string, bool) {
+		if id == "CSHARED01" {
+			return "shared", "channel", true
+		}
+		return "", "", false
+	})
+	app.setThreadFetcherForTest(func(ids.ChannelID, ids.ThreadTS) core.Msg { return nil })
+	app.SetWorkspaceService(core.NewWorkspaceService(func(teamID string) core.Msg {
+		return WorkspaceSwitchedMsg{
+			TeamID: teamID,
+			Domain: "beta",
+			Channels: []sidebar.ChannelItem{
+				{ID: "CSHARED01", Name: "shared", Type: "channel"},
+			},
+		}
+	}))
+
+	const url = "https://beta.slack.com/archives/CSHARED01/p1779284733270139?thread_ts=1779284700.000100"
+	pasteFinder(t, app, url)
+	_, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	sw, ok := drainCmd(cmd)[0].(WorkspaceSwitchedMsg)
+	if !ok {
+		t.Fatalf("enter did not switch workspace")
+	}
+	_, cmd = app.Update(sw)
+	var selected []ChannelSelectedMsg
+	for _, m := range drainCmd(cmd) {
+		if cs, ok := m.(ChannelSelectedMsg); ok {
+			selected = append(selected, cs)
+		}
+	}
+	if len(selected) != 1 || selected[0].ID != "CSHARED01" || selected[0].Name != "shared" {
+		t.Fatalf("channel selection = %+v, want ChannelSelectedMsg for the shared channel", selected)
+	}
+	if app.threadVisible {
+		t.Fatal("thread opened during the switch, before the channel was selected")
+	}
+	if len(app.messagepane.Messages()) != 0 {
+		t.Fatalf("message pane = %d messages, want it empty until the channel loads", len(app.messagepane.Messages()))
+	}
+	if *opened != "" {
+		t.Fatalf("browser opened %q", *opened)
+	}
+
+	app.Update(selected[0])
+	if app.activeChannelID != "CSHARED01" || app.activeTeamID != "T2" {
+		t.Fatalf("after select: channel %q team %q", app.activeChannelID, app.activeTeamID)
+	}
+	if app.compose.ActiveChannel() != "CSHARED01" {
+		t.Fatalf("composer channel = %q, want it rebound to the shared channel", app.compose.ActiveChannel())
+	}
+	if !app.threadVisible || app.threadPanel.ThreadTS() != "1779284700.000100" {
+		t.Fatalf("thread visible=%v ts=%q", app.threadVisible, app.threadPanel.ThreadTS())
+	}
+}
+
+func TestFinderPermalink_StaleSwitchKeepsNewerLink(t *testing.T) {
+	// Submitting a link for T3 while T2's switch is still in flight must
+	// not let T2's result throw away T3's link.
+	app, opened := finderPermalinkApp(t)
+	app.workspaceDomains["T2"] = "beta"
+	app.workspaceDomains["T3"] = "gamma"
+	app.setChannelLookupFuncForTest(func(id ids.ChannelID) (string, string, bool) {
+		switch id {
+		case "CTWOLINK":
+			return "from-beta", "channel", true
+		case "CTHREELK":
+			return "from-gamma", "channel", true
+		default:
+			return "", "", false
+		}
+	})
+	app.SetWorkspaceService(core.NewWorkspaceService(func(teamID string) core.Msg {
+		switch teamID {
+		case "T2":
+			return WorkspaceSwitchedMsg{
+				TeamID: "T2",
+				Domain: "beta",
+				Channels: []sidebar.ChannelItem{
+					{ID: "CTWOONLY", Name: "only-beta", Type: "channel"},
+				},
+			}
+		case "T3":
+			return WorkspaceSwitchedMsg{
+				TeamID: "T3",
+				Domain: "gamma",
+				Channels: []sidebar.ChannelItem{
+					{ID: "CTHREE01", Name: "only-gamma", Type: "channel"},
+				},
+			}
+		default:
+			return nil
+		}
+	}))
+
+	pasteFinder(t, app, "https://beta.slack.com/archives/CTWOLINK/p1111111111111111")
+	_, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	firstMsgs := drainCmd(cmd)
+	if len(firstMsgs) != 1 {
+		t.Fatalf("first enter produced %#v", firstMsgs)
+	}
+	first, ok := firstMsgs[0].(WorkspaceSwitchedMsg)
+	if !ok || first.TeamID != "T2" {
+		t.Fatalf("first switch = %#v", firstMsgs[0])
+	}
+
+	app.channelFinder.Open()
+	app.SetMode(ModeChannelFinder)
+	pasteFinder(t, app, "https://gamma.slack.com/archives/CTHREELK/p1779284733270139")
+	_, cmd = app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	secondMsgs := drainCmd(cmd)
+	if len(secondMsgs) != 1 {
+		t.Fatalf("second enter produced %#v", secondMsgs)
+	}
+	second, ok := secondMsgs[0].(WorkspaceSwitchedMsg)
+	if !ok || second.TeamID != "T3" {
+		t.Fatalf("second switch = %#v", secondMsgs[0])
+	}
+
+	_, cmd = app.Update(first)
+	var selected []ChannelSelectedMsg
+	for _, m := range drainCmd(cmd) {
+		if cs, ok := m.(ChannelSelectedMsg); ok {
+			selected = append(selected, cs)
+		}
+	}
+	if len(selected) != 1 || selected[0].ID != "CTWOONLY" {
+		t.Fatalf("stale switch selected %+v, want T2's last channel, not the discarded link", selected)
+	}
+	if app.pendingLinkNav != nil {
+		t.Fatalf("stale switch armed a permalink jump: %+v", app.pendingLinkNav)
+	}
+	if app.pendingFinderPermalink == "" || app.pendingFinderPermalinkTeam != "T3" {
+		t.Fatalf("newer link was dropped: url=%q team=%q", app.pendingFinderPermalink, app.pendingFinderPermalinkTeam)
+	}
+
+	_, cmd = app.Update(second)
+	selected = nil
+	for _, m := range drainCmd(cmd) {
+		if cs, ok := m.(ChannelSelectedMsg); ok {
+			selected = append(selected, cs)
+		}
+	}
+	if len(selected) != 1 || selected[0].ID != "CTHREELK" || selected[0].Name != "from-gamma" {
+		t.Fatalf("newer switch selected %+v, want CTHREELK", selected)
+	}
+	if app.pendingLinkNav == nil || string(app.pendingLinkNav.ChannelID) != "CTHREELK" || string(app.pendingLinkNav.MessageTS) != "1779284733.270139" {
+		t.Fatalf("pendingLinkNav = %+v", app.pendingLinkNav)
+	}
+	if *opened != "" {
+		t.Fatalf("browser opened %q", *opened)
+	}
+}
+
 func TestFinderPermalink_UnknownChannelOpensBrowser(t *testing.T) {
 	app, opened := finderPermalinkApp(t)
 	var switched bool

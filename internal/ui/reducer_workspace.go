@@ -362,9 +362,11 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 // data, restores last-viewed channel).
 func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	if a.compose.Uploading() || a.threadCompose.Uploading() {
-		// A finder permalink may have asked for this switch. The
-		// switch is refused, so the link must not fire on a later one.
-		a.clearFinderPermalink()
+		// This switch is refused. Drop the permalink only when it is
+		// the one that asked for this switch; a newer paste stays.
+		if m.FinderPermalinkSeq != 0 && m.FinderPermalinkSeq == a.pendingFinderPermalinkSeq {
+			a.clearFinderPermalink()
+		}
 		return toastWithClear(a, "Upload in progress", 2*time.Second)
 	}
 	if a.userProfile.IsVisible() {
@@ -483,7 +485,7 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	// the same path o uses. When the channel resolves, that jump
 	// replaces the last-channel restore; when it does not, the
 	// browser fallback still runs and the last channel opens.
-	navCmd, navigated := a.takeFinderPermalink(m.TeamID)
+	navCmd, navigated := a.takeFinderPermalink(m.TeamID, m.FinderPermalinkSeq)
 	if navCmd != nil {
 		batch = append(batch, navCmd)
 	}
