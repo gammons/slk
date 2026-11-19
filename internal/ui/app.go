@@ -611,6 +611,13 @@ type App struct {
 	// walks) records its target here via applyLocation.
 	pendingLinkNav *pendingLinkNav
 
+	// pendingFinderPermalink is an archive link chosen in the channel
+	// finder whose workspace is not the one on screen. The switch is
+	// in flight; takeFinderPermalink navigates once that workspace is
+	// active. Both empty when nothing is waiting.
+	pendingFinderPermalink     string
+	pendingFinderPermalinkTeam string
+
 	// marks owns the vim-style mark storage: an in-memory per-workspace
 	// tier for lowercase marks plus the SQLite `marks` table, merged
 	// behind one set of accessors (see internal/ui/marks.go).
@@ -3868,20 +3875,22 @@ func (a *App) activeTeamName() string {
 	return "this workspace"
 }
 
-// activeWorkspaceDomain returns the slack.com subdomain of the active
-// workspace, or "" when unknown (link router then falls back to the
-// browser for all slack.com permalinks).
-func (a *App) activeWorkspaceDomain() string {
-	return a.workspaceDomains[a.activeTeamID]
-}
-
 // permalinkBelongsToActiveWorkspace reports whether a parsed archive link
 // uses either the active workspace's auth.test domain or a configured alias.
 func (a *App) permalinkBelongsToActiveWorkspace(pl slackurl.Permalink) bool {
-	if pl.Subdomain == a.activeWorkspaceDomain() {
-		return pl.Subdomain != ""
+	return a.permalinkBelongsToTeam(a.activeTeamID, pl)
+}
+
+// permalinkBelongsToTeam reports whether pl's subdomain is teamID's
+// auth.test domain or one of its configured aliases.
+func (a *App) permalinkBelongsToTeam(teamID string, pl slackurl.Permalink) bool {
+	if pl.Subdomain == "" || teamID == "" {
+		return false
 	}
-	for _, domain := range a.permalinkDomains[a.activeTeamID] {
+	if domain := a.workspaceDomains[teamID]; domain != "" && pl.Subdomain == domain {
+		return true
+	}
+	for _, domain := range a.permalinkDomains[teamID] {
 		if pl.Subdomain == domain {
 			return true
 		}

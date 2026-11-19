@@ -338,6 +338,9 @@ func reducePaste(a *App, m tea.PasteMsg) tea.Cmd {
 		a.statusbar.SetSearch("/" + a.searchInput)
 		return nil
 	}
+	if a.mode == ModeChannelFinder {
+		return a.pasteChannelFinder(m.Content)
+	}
 	if a.mode != ModeInsert {
 		return nil
 	}

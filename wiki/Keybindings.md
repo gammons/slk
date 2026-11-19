@@ -50,7 +50,7 @@
 | `:activity` | Normal | Open the Activity view |
 | `u` | Normal (activity) | Toggle the Activity view's unread-only filter |
 | `U` | Normal (activity) | Toggle the selected Activity item read/unread |
-| `Ctrl+t` / `Ctrl+p` | Any | Fuzzy channel finder |
+| `Ctrl+t` / `Ctrl+p` | Any | Fuzzy channel finder. Paste a message permalink (`https://<workspace>.slack.com/archives/…`, including `?thread_ts=` and an Enterprise Grid alias domain) and press Enter to open that message |
 | `:ws` | Normal | Workspace picker (`[general] workspace_picker_vim_keys = true` opens it with `j`/`k` to move and `/` to filter) |
 | `Ctrl+w s` / `:sp` | Normal | Split the focused window into two, one above the other |
 | `Ctrl+w v` / `:vsp` | Normal | Split the focused window into two, side by side |
