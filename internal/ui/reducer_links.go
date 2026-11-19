@@ -73,7 +73,7 @@ var reduceLinks reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	if dropped, ok := msg.(finderPermalinkDroppedMsg); ok {
 		// The workspace switch the finder asked for produced nothing.
 		// A newer paste has its own request; leave that one waiting.
-		if dropped.Seq != a.pendingFinderPermalinkSeq {
+		if a.pendingFinderPermalink == nil || dropped.Seq != a.pendingFinderPermalink.seq {
 			return nil, true
 		}
 		a.clearFinderPermalink()

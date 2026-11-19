@@ -9,6 +9,17 @@ import (
 	"github.com/gammons/slk/internal/slackurl"
 )
 
+// pendingFinderPermalink is one pasted archive link waiting for its
+// workspace switch. Nil on App means nothing is waiting. url, teamID
+// and seq always travel together: seq is what the switch message
+// carries back, so a late switch for an older paste does not consume
+// the request that replaced this one.
+type pendingFinderPermalink struct {
+	url    string
+	teamID string
+	seq    uint64
+}
+
 // finderPermalinkDroppedMsg is what openFinderPermalink delivers when
 // the workspace switch it started returns nothing. The pending link is
 // cleared and the URL opens in the browser, unless a newer paste has
@@ -46,9 +57,7 @@ func (a *App) openFinderPermalink(rawURL string) tea.Cmd {
 	}
 	a.finderPermalinkSeq++
 	seq := a.finderPermalinkSeq
-	a.pendingFinderPermalink = rawURL
-	a.pendingFinderPermalinkTeam = teamID
-	a.pendingFinderPermalinkSeq = seq
+	a.pendingFinderPermalink = &pendingFinderPermalink{url: rawURL, teamID: teamID, seq: seq}
 	switchCmd := a.switchWorkspace(teamID)
 	return func() tea.Msg {
 		var msg tea.Msg
@@ -97,10 +106,11 @@ func (a *App) teamForPermalink(pl slackurl.Permalink) (string, bool) {
 // restore the last channel. A non-nil command with false is the
 // browser fallback.
 func (a *App) takeFinderPermalink(teamID string, seq uint64) (tea.Cmd, bool) {
-	if a.pendingFinderPermalink == "" || seq == 0 || seq != a.pendingFinderPermalinkSeq {
+	p := a.pendingFinderPermalink
+	if p == nil || seq == 0 || seq != p.seq {
 		return nil, false
 	}
-	url, team := a.pendingFinderPermalink, a.pendingFinderPermalinkTeam
+	url, team := p.url, p.teamID
 	a.clearFinderPermalink()
 	if team != teamID {
 		return nil, false
@@ -117,9 +127,7 @@ func (a *App) takeFinderPermalink(teamID string, seq uint64) (tea.Cmd, bool) {
 }
 
 func (a *App) clearFinderPermalink() {
-	a.pendingFinderPermalink = ""
-	a.pendingFinderPermalinkTeam = ""
-	a.pendingFinderPermalinkSeq = 0
+	a.pendingFinderPermalink = nil
 }
 
 // pasteChannelFinder inserts a bracketed paste into the open finder.

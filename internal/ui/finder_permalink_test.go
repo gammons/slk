@@ -295,8 +295,8 @@ func TestFinderPermalink_StaleSwitchKeepsNewerLink(t *testing.T) {
 	if app.pendingLinkNav != nil {
 		t.Fatalf("stale switch armed a permalink jump: %+v", app.pendingLinkNav)
 	}
-	if app.pendingFinderPermalink == "" || app.pendingFinderPermalinkTeam != "T3" {
-		t.Fatalf("newer link was dropped: url=%q team=%q", app.pendingFinderPermalink, app.pendingFinderPermalinkTeam)
+	if app.pendingFinderPermalink == nil || app.pendingFinderPermalink.teamID != "T3" {
+		t.Fatalf("newer link was dropped: %+v", app.pendingFinderPermalink)
 	}
 
 	_, cmd = app.Update(second)

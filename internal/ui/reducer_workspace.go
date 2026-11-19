@@ -364,7 +364,7 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	if a.compose.Uploading() || a.threadCompose.Uploading() {
 		// This switch is refused. Drop the permalink only when it is
 		// the one that asked for this switch; a newer paste stays.
-		if m.FinderPermalinkSeq != 0 && m.FinderPermalinkSeq == a.pendingFinderPermalinkSeq {
+		if p := a.pendingFinderPermalink; p != nil && m.FinderPermalinkSeq != 0 && m.FinderPermalinkSeq == p.seq {
 			a.clearFinderPermalink()
 		}
 		return toastWithClear(a, "Upload in progress", 2*time.Second)
