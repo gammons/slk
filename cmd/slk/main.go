@@ -1839,7 +1839,7 @@ func run() error {
 				ensureThreadSubs: func() {
 					ensureWorkspaceThreadSubs(context.Background(), wctx, db, p.Send)
 				},
-				resolveConversation: wctx.Client.GetConversationInfo,
+				resolveConversation: conversationResolverFor(router, wctx),
 			}
 			wctx.RTMHandler = handler
 			// The grid gate, installed here so it can reach the
