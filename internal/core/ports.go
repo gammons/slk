@@ -440,6 +440,18 @@ type AvatarService interface {
 	ReplyAvatar(userID string) string
 }
 
+// SixelAvatarService is an AvatarService that can also hand out an
+// avatar as a sixel image, on a terminal that draws sixel. Optional:
+// the App checks for it, and without it avatars stay half-block there.
+type SixelAvatarService interface {
+	AvatarService
+	// SixelAvatar returns userID's avatar as sixel bytes and the key
+	// that identifies them to the painter, or ok false while it isn't
+	// available. Avatar keeps returning the half-block form, which the
+	// panes draw where the sixel image cannot be (a pane edge cuts it).
+	SixelAvatar(userID string) (key string, bytes []byte, ok bool)
+}
+
 // ImageFetcher downloads and caches remote images for inline rendering
 // and keeps pre-encoded renders of them. *image.Fetcher implements it.
 //

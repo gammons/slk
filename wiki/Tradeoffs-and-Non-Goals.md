@@ -26,7 +26,7 @@ slk is intentionally not a 1:1 port of the desktop client. Some Slack features a
 
 - iTerm2 ≥ 3.5 implements kitty graphics but does not support unicode placeholders, so it falls back to half-block.
 - Animated GIFs render as a static first frame.
-- Threads side panel renders images inline using the same pipeline as the main messages pane, on terminals that use kitty graphics or the half-block fallback. Sixel terminals see a placeholder/sentinel block in the thread panel for v1; the actual sixel byte stream is only emitted in the main messages pane. Click-to-preview and `O` / `v` from a thread reply are messages-pane only.
+- Threads side panel renders images inline using the same pipeline as the main messages pane, sixel included. As in the messages pane, a sixel image the pane cuts at its top or bottom edge shows its half-block form until it is fully in view.
 - Link unfurl image previews are not yet rendered inline.
 
 ## Auth caveat

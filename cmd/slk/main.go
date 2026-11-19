@@ -523,10 +523,12 @@ func run() error {
 	debuglog.ImgRender("emoji image mode: reconciled=%v (final proto=%s, emoji_images=%q)",
 		reconciledImageMode, proto, cfg.Appearance.EmojiImages)
 
-	// Avatars use kitty graphics when available (sharper). Sixel and
-	// half-block terminals fall back to half-block — re-emitting sixel
-	// per visible avatar per redraw would dominate the bandwidth budget.
+	// Avatars use kitty graphics when available (sharper), sixel on a
+	// sixel terminal, and half-block elsewhere. A sixel avatar is placed
+	// like an inline image, so the painter sends it once per slot rather
+	// than on every redraw.
 	avatarCache := avatar.NewCache(imageFetcher, imgpkg.KittyRendererInstance(), proto == imgpkg.ProtoKitty)
+	avatarCache.SetSixel(proto == imgpkg.ProtoSixel)
 
 	// Cell pixel metrics for image encoding. Sixel uses them for its
 	// absolute raster dimensions; kitty places by cell but uses them to
@@ -660,7 +662,13 @@ func run() error {
 	// through the no-avatar path and no avatar fetches are started.
 	app.SetShowWorkspaceRail(cfg.Appearance.ShowWorkspaceRail)
 	if cfg.Appearance.ShowAvatars {
-		app.SetAvatarService(core.NewAvatarService(func(userID string) string {
+		var sixelAvatar func(userID string) (string, []byte, bool)
+		if proto == imgpkg.ProtoSixel {
+			// Read only after Avatar has started any load it needed, so
+			// this is a lookup.
+			sixelAvatar = avatarCache.GetSixel
+		}
+		app.SetAvatarService(core.NewSixelAvatarService(func(userID string) string {
 			return lazyAvatar(router.Active(), avatarCache, userID)
 		}, func(userID string) string {
 			if small := avatarCache.GetSmall(userID); small != "" {
@@ -668,7 +676,7 @@ func run() error {
 			}
 			lazyAvatar(router.Active(), avatarCache, userID)
 			return ""
-		}))
+		}, sixelAvatar))
 	}
 
 	// Wire theme switcher: dispatch to the appropriate saver based on scope.

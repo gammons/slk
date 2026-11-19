@@ -60,13 +60,19 @@ type RenderContext struct {
 // RenderOptions are the per-pane differences in how a message renders:
 // spec §5.1 items 9, 10 and 15, and plan decision P3.
 type RenderOptions struct {
-	Avatar          string // the author's avatar block; "" for none (always, in thread)
-	IsSelected      bool   // the cursor is on this message (reaction-nav highlight)
-	ReplyAffordance bool   // "[N replies ->]" under a parent (channel pane)
-	EditedMark      bool   // "(edited)" after the timestamp (channel pane)
-	BroadcastLabel  bool   // "↳ replied to a thread" label (channel pane)
-	ImageHits       bool   // record image and file hit rects (both panes)
-	SixelRows       bool   // record sixel rows (channel pane)
+	Avatar string // the author's avatar block; "" for none
+	// AvatarSixel is the avatar as a sixel image, with its placement
+	// key AvatarSixelKey (SixelAvatar). With SixelRows and an Avatar,
+	// the avatar is recorded as a sixel image at its cells and Avatar
+	// becomes its halfblock fallback.
+	AvatarSixel     []byte
+	AvatarSixelKey  string
+	IsSelected      bool // the cursor is on this message (reaction-nav highlight)
+	ReplyAffordance bool // "[N replies ->]" under a parent (channel pane)
+	EditedMark      bool // "(edited)" after the timestamp (channel pane)
+	BroadcastLabel  bool // "↳ replied to a thread" label (channel pane)
+	ImageHits       bool // record image and file hit rects (both panes)
+	SixelRows       bool // record sixel rows (both panes)
 	stats           *entryPerfStats
 
 	// BodyOnly draws only the message body (the draft preview): no
@@ -83,7 +89,7 @@ type RenderedMessage struct {
 	HeaderBudget int
 	MentionsSelf bool            // someone else's message that mentions the user; WrapRows highlights it
 	Hits         []entrylist.Hit // image and file hits (when ImageHits), then reaction pills
-	SixelRows    []sixelEntry
+	SixelRows    []SixelImage
 	// Kitty uploads by source: each pane keeps its own upload order.
 	// BodyFlushes also carries the author-status emoji's upload.
 	BodyFlushes, BlockFlushes, ReactionFlushes, AttachmentFlushes []func(io.Writer) error
@@ -219,6 +225,24 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	}
 	avatarStr := opt.Avatar
 	stats := opt.stats
+	// A sixel avatar: blank cells in the text, where the painter draws
+	// the image, and the halfblock avatar as the fallback for a frame
+	// that cuts it. Recorded with the other images, below.
+	var avatarImg *SixelImage
+	if opt.SixelRows && avatarStr != "" && len(opt.AvatarSixel) > 0 {
+		fallback := strings.Split(avatarStr, "\n")
+		cols := lipgloss.Width(fallback[0])
+		blank := lipgloss.NewStyle().Background(styles.Background).Render(strings.Repeat(" ", cols))
+		rows := make([]string, len(fallback))
+		for i := range rows {
+			rows[i] = blank
+		}
+		avatarStr = strings.Join(rows, "\n")
+		// Row 0 and column 1: placeAvatarBeside puts the avatar beside
+		// the first content row, right of the pane's border (col 0).
+		avatarImg = &SixelImage{key: opt.AvatarSixelKey, bytes: opt.AvatarSixel, fallback: fallback,
+			height: len(fallback), width: cols, row: 0, col: 1}
+	}
 
 	// If we have an avatar, reserve space on the left for it
 	contentWidth := width - 4
@@ -453,7 +477,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 
 	var attachLineSlices [][]string
 	var imageHits []entrylist.Hit
-	var allSixel []sixelEntry
+	var allSixel []SixelImage
 
 	// Block Kit blocks render between the body text and file attachments.
 	bkCtx := BlockkitContext(msg, rc, &out.BlockFlushes)
@@ -626,7 +650,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 				out.AttachmentFlushes = append(out.AttachmentFlushes, run.Flushes...)
 				if opt.SixelRows {
 					for _, sx := range run.Sixels {
-						allSixel = append(allSixel, sixelEntry{
+						allSixel = append(allSixel, SixelImage{
 							row: rowCursor + sx.Row, col: sx.Col,
 							key: sx.Key, bytes: sx.Bytes, fallback: sx.Fallback,
 							height: sx.Height, width: sx.Width,
@@ -765,6 +789,9 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 			allSixel[i].col += contentColBase
 		}
 	}
+	if avatarImg != nil {
+		allSixel = append(allSixel, *avatarImg)
+	}
 	// Timestamp substitution may lengthen a header line, but must not
 	// introduce another row after the avatar and hit rects are composed.
 	out.Content = msgContent
@@ -812,9 +839,9 @@ func inlineRun(r *imgrender.Renderer, atts []Attachment, i, width int) []imgrend
 // appendBlockSixel records block-kit sixel placements. rowOffset is the
 // entry row of Lines[0]; each entry's key is a row within those lines
 // and Col is its column within the line.
-func appendBlockSixel(dst []sixelEntry, rows map[int]blockkit.SixelEntry, rowOffset int) []sixelEntry {
+func appendBlockSixel(dst []SixelImage, rows map[int]blockkit.SixelEntry, rowOffset int) []SixelImage {
 	for k, v := range rows {
-		dst = append(dst, sixelEntry{
+		dst = append(dst, SixelImage{
 			row: rowOffset + k, col: v.Col,
 			key: v.Key, bytes: v.Bytes, fallback: v.Fallback,
 			height: v.Height, width: v.Width,
