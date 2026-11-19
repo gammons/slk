@@ -59,6 +59,20 @@ type WorkspaceContext struct {
 	// with WS hydration and item construction, so this must not be a plain
 	// map. Use MarkBotUser/IsBotUser; sync.Map's zero value is ready for use.
 	botUserIDs sync.Map // user ID -> struct{}; positive classifications only
+	// conversationIDs holds this workspace's known conversation IDs -
+	// every entry of Channels, published at each write. Channels itself
+	// is a plain slice written on the connect goroutine and the
+	// WebSocket event owner, so readers off those goroutines (the
+	// Activity fetch's org-wide feed filter) must not touch it; this
+	// set is the race-safe projection. The set's lifetime mirrors the
+	// rows': both are grow-only during a session (a conversation the
+	// user leaves keeps its row until the next connect rebuilds the
+	// list, so it also keeps passing the filter - the filter and the
+	// sidebar agree). Use MarkConversation / HasConversation;
+	// sync.Map's zero value is ready for use, and empty means "still
+	// booting", which callers treat as no-filter-yet rather than
+	// no-conversations.
+	conversationIDs sync.Map // channel ID -> struct{}
 	// SectionStore holds the user's Slack-native sidebar sections for
 	// this workspace. Nil when use_slack_sections is disabled, the
 	// REST bootstrap failed, or this workspace hasn't connected yet.
@@ -203,6 +217,42 @@ func (w *WorkspaceContext) IsBotUser(userID string) bool {
 func (w *WorkspaceContext) MarkBotUser(userID string) {
 	if w != nil && userID != "" {
 		w.botUserIDs.Store(userID, struct{}{})
+	}
+}
+
+// HasConversation reports whether channelID is one of this workspace's
+// known conversations. Safe from any goroutine; a nil workspace or a
+// channel not (yet) known returns false.
+func (w *WorkspaceContext) HasConversation(channelID string) bool {
+	if w == nil {
+		return false
+	}
+	_, ok := w.conversationIDs.Load(channelID)
+	return ok
+}
+
+// HasAnyConversation reports whether this workspace knows any
+// conversation yet. Safe from any goroutine; false means the
+// conversation set is still empty (typically still booting), which
+// callers treat as not-enough-information rather than as an answer.
+func (w *WorkspaceContext) HasAnyConversation() bool {
+	if w == nil {
+		return false
+	}
+	found := false
+	w.conversationIDs.Range(func(_, _ any) bool {
+		found = true
+		return false
+	})
+	return found
+}
+
+// MarkConversation records a conversation as belonging to this
+// workspace, alongside every write to the Channels slice. Safe from any
+// goroutine; nil workspaces and empty IDs are ignored.
+func (w *WorkspaceContext) MarkConversation(channelID string) {
+	if w != nil && channelID != "" {
+		w.conversationIDs.Store(channelID, struct{}{})
 	}
 }
 

@@ -406,6 +406,7 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 			seedDMFromCache(db, ch.User, &item, &finderItem)
 		}
 		wctx.Channels = append(wctx.Channels, item)
+		wctx.MarkConversation(item.ID)
 		finderItem.LastVisited = wctx.LastVisitedByChannel[ch.ID]
 		wctx.FinderItems = append(wctx.FinderItems, finderItem)
 	}

@@ -58,6 +58,7 @@ func (h *rtmEventHandler) addConversation(ch slack.Channel) (sidebar.ChannelItem
 	if !replaced {
 		h.wsCtx.Channels = append(h.wsCtx.Channels, item)
 	}
+	h.wsCtx.MarkConversation(item.ID)
 	// Refresh rather than merely dedupe: a duplicate open may carry a
 	// resolved name, presence or app classification that the finder lacks.
 	finderItem, _ = h.upsertFinderItem(finderItem)
