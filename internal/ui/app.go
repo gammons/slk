@@ -144,6 +144,10 @@ type App struct {
 	focusedPanel   Panel
 	sidebarVisible bool
 	threadVisible  bool
+	// railHidden hides the workspace rail even with several workspaces
+	// (appearance.show_workspace_rail, ToggleWorkspaceRail); the status
+	// bar then names the active workspace (#89).
+	railHidden bool
 	// threadCloseAfterUpload records a close that CloseThread refused
 	// while an upload was in flight (the open thread's parent was
 	// deleted). The UploadResultMsg arm runs it once the upload ends.
@@ -1142,11 +1146,11 @@ func (a *App) fullscreenPanel() Panel {
 
 // railWidth is the workspace rail's width for layout: zero when exactly
 // one workspace is configured, since a single tile conveys nothing and
-// only costs columns (#216). Before SetWorkspaces runs (no items yet)
-// the rail keeps its width, so multi-workspace setups don't see it pop
-// in once their workspaces load.
+// only costs columns (#216), or when the user hid it (#89). Before
+// SetWorkspaces runs (no items yet) the rail keeps its width, so
+// multi-workspace setups don't see it pop in once their workspaces load.
 func (a *App) railWidth() int {
-	if len(a.workspaceItems) == 1 {
+	if a.railHidden || len(a.workspaceItems) == 1 {
 		return 0
 	}
 	return a.workspaceRail.Width()
@@ -2547,6 +2551,9 @@ func (a *App) FocusLeft() {
 	switch {
 	case a.focusedPanel == PanelWorkspace:
 	case a.focusedPanel == PanelSidebar && a.sidebarVisible && !a.fullscreen && len(a.workspaceItems) > 0:
+		if a.railWidth() == 0 {
+			return // no rail drawn (hidden, or one workspace): the sidebar is the left edge
+		}
 		a.cancelEdit()
 		a.clearSelections()
 		a.workspaceRail.ResetCursor()
@@ -2570,6 +2577,49 @@ func (a *App) ToggleSidebar() {
 			a.focusedPanel = PanelMessages
 		}
 	}
+}
+
+// SetShowWorkspaceRail applies appearance.show_workspace_rail.
+func (a *App) SetShowWorkspaceRail(show bool) {
+	a.railHidden = !show
+	a.syncStatusWorkspace()
+}
+
+// ToggleWorkspaceRail shows or hides the workspace rail. Hiding it
+// while it has focus moves focus to the sidebar, or to the messages
+// pane when the sidebar is hidden too.
+func (a *App) ToggleWorkspaceRail() {
+	a.clearSelections()
+	a.railHidden = !a.railHidden
+	if a.railHidden && a.focusedPanel == PanelWorkspace {
+		a.focusedPanel = PanelMessages
+		if a.sidebarVisible {
+			a.focusedPanel = PanelSidebar
+		}
+	}
+	a.syncStatusWorkspace()
+}
+
+// syncStatusWorkspace puts statusWorkspaceLabel in the status bar. Called
+// wherever its inputs change (rail shown/hidden, workspaces set, active
+// workspace changed) so View stays free of setters.
+func (a *App) syncStatusWorkspace() { a.statusbar.SetWorkspace(a.statusWorkspaceLabel()) }
+
+// statusWorkspaceLabel is what the status bar shows for the workspace:
+// the active workspace's initials while the user has hidden the rail
+// with several workspaces configured, so the bar says where they are;
+// otherwise nothing, since the rail already shows it.
+func (a *App) statusWorkspaceLabel() string {
+	if !a.railHidden || len(a.workspaceItems) < 2 {
+		return ""
+	}
+	active := a.workspaceRail.SelectedID()
+	for _, ws := range a.workspaceItems {
+		if ws.ID == active {
+			return ws.Initials
+		}
+	}
+	return ""
 }
 
 func (a *App) ToggleThread() {
@@ -2923,6 +2973,7 @@ func (a *App) SetWorkspaces(items []workspace.WorkspaceItem) {
 	a.workspaceRail.RefreshUnreads()
 	a.workspaceItems = items
 	a.syncWorkspaceFinder()
+	a.syncStatusWorkspace()
 }
 
 // syncWorkspaceFinder rebuilds the workspace finder's items from the

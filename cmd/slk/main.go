@@ -658,6 +658,7 @@ func run() error {
 	// terminals that decode kitty graphics (kitty, ghostty).
 	// show_avatars = false leaves the service unset, so messages render
 	// through the no-avatar path and no avatar fetches are started.
+	app.SetShowWorkspaceRail(cfg.Appearance.ShowWorkspaceRail)
 	if cfg.Appearance.ShowAvatars {
 		app.SetAvatarService(core.NewAvatarService(func(userID string) string {
 			return lazyAvatar(router.Active(), avatarCache, userID)

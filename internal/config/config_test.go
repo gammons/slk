@@ -1185,6 +1185,22 @@ func TestConfig_ThreadAvatars(t *testing.T) {
 	}
 }
 
+func TestConfig_ShowWorkspaceRail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	for body, want := range map[string]bool{"": true, "[appearance]\nshow_workspace_rail = false\n": false} {
+		if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Appearance.ShowWorkspaceRail != want {
+			t.Errorf("config %q: show_workspace_rail = %v, want %v", body, cfg.Appearance.ShowWorkspaceRail, want)
+		}
+	}
+}
+
 // hide_deactivated_users is a plain bool that defaults to on: Load decodes
 // over Default(), so an explicit false must still read back.
 func TestConfig_HideDeactivatedUsers(t *testing.T) {
