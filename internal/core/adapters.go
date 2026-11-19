@@ -314,6 +314,7 @@ type ChannelServiceFuncs struct {
 	FetchOlder          OlderMessagesFetchFunc
 	FetchAround         func(channelID ids.ChannelID, ts ids.MessageTS) Msg
 	ReadCache           ChannelCacheReadFunc
+	ReadCacheRange      func(channelID ids.ChannelID, oldestTS, newestTS ids.MessageTS) []MessageItem
 	SyncedAt            func(channelID ids.ChannelID) int64
 	MarkRead            func(channelID ids.ChannelID, ts ids.MessageTS) Msg
 	Lookup              ChannelLookupFunc
@@ -361,6 +362,13 @@ func (c channelAdapter) ReadCache(channelID ids.ChannelID) []MessageItem {
 		return nil
 	}
 	return c.fns.ReadCache(channelID)
+}
+
+func (c channelAdapter) ReadCacheRange(channelID ids.ChannelID, oldestTS, newestTS ids.MessageTS) []MessageItem {
+	if c.fns.ReadCacheRange == nil {
+		return nil
+	}
+	return c.fns.ReadCacheRange(channelID, oldestTS, newestTS)
 }
 
 func (c channelAdapter) SyncedAt(channelID ids.ChannelID) int64 {
@@ -619,6 +627,52 @@ func (s settingsAdapter) SaveSidebarWidth(width int) {
 	if s.saveSidebarWidth != nil {
 		s.saveSidebarWidth(width)
 	}
+}
+
+// NewSuppressionService builds a SuppressionService from closures. A
+// nil rules hides nothing; a nil add or remove reports
+// ErrSuppressionUnsupported.
+func NewSuppressionService(
+	rules func(teamID string) *Suppression,
+	add func(teamID string, rule SuppressRule) error,
+	remove func(teamID string, rule SuppressRule) error,
+) SuppressionService {
+	return suppressionAdapter{rules: rules, add: add, remove: remove}
+}
+
+// ErrSuppressionUnsupported is what a SuppressionService built without
+// add or remove returns from them.
+var ErrSuppressionUnsupported = errors.New("suppression rules cannot be saved")
+
+// ErrSuppressRuleNotEditable is Remove's answer for a rule its store
+// holds in a form it cannot remove (config.toml written by hand): the
+// user removes it there.
+var ErrSuppressRuleNotEditable = errors.New("rule is not in a form slk can remove; edit config.toml")
+
+type suppressionAdapter struct {
+	rules       func(teamID string) *Suppression
+	add, remove func(teamID string, rule SuppressRule) error
+}
+
+func (s suppressionAdapter) Rules(teamID string) *Suppression {
+	if s.rules == nil {
+		return nil
+	}
+	return s.rules(teamID)
+}
+
+func (s suppressionAdapter) Add(teamID string, rule SuppressRule) error {
+	if s.add == nil {
+		return ErrSuppressionUnsupported
+	}
+	return s.add(teamID, rule)
+}
+
+func (s suppressionAdapter) Remove(teamID string, rule SuppressRule) error {
+	if s.remove == nil {
+		return ErrSuppressionUnsupported
+	}
+	return s.remove(teamID, rule)
 }
 
 // NewUnreadService builds an UnreadService from closures.

@@ -247,6 +247,34 @@ func loadCachedMessages(
 	return out
 }
 
+// loadCachedMessagesRange is loadCachedMessages for the cached
+// main-feed messages with oldestTS <= ts <= newestTS (empty newestTS:
+// no upper bound) rather than the newest page: reloading a pane after a
+// suppression rule is removed covers exactly the history it has loaded.
+func loadCachedMessagesRange(
+	db *cache.DB,
+	selfUserID string,
+	channelID string,
+	oldestTS, newestTS string,
+	userNames *userNameStore,
+	tsFormat string,
+	router *workspaceRouter,
+) []messages.MessageItem {
+	if db == nil || oldestTS == "" {
+		return nil
+	}
+	rows, err := db.GetMessagesBetween(channelID, oldestTS, newestTS)
+	if err != nil {
+		debuglog.Cache("loadCachedMessagesRange: GetMessagesBetween %s: %v", channelID, err)
+		return nil
+	}
+	out := make([]messages.MessageItem, 0, len(rows))
+	for _, m := range rows {
+		out = append(out, enrichCachedRow(db, selfUserID, channelID, m, userNames, tsFormat, "loadCachedMessagesRange", router, nil))
+	}
+	return out
+}
+
 // enrichCachedRow reconstructs a single messages.MessageItem from a
 // cache.Message row using the same fidelity as the network fetchers:
 // 3-tier username fallback, per-row reactions, and raw_json

@@ -17,6 +17,7 @@ import (
 	"github.com/gammons/slk/internal/ui/newmessagepicker"
 	"github.com/gammons/slk/internal/ui/reactionsview"
 	"github.com/gammons/slk/internal/ui/searchresults"
+	"github.com/gammons/slk/internal/ui/suppresslist"
 	"github.com/gammons/slk/internal/ui/workspacefinder"
 )
 
@@ -274,6 +275,26 @@ func dialogGoldens() []dialogGolden {
 				a.marksOverlay.SetRows(nil)
 				a.marksOverlay.Open()
 				a.SetMode(ModeMarks)
+			},
+		},
+		{
+			name: "dialog_suppressed", want: "Hidden authors", shown: func(a *App) bool { return a.suppressList.IsVisible() },
+			open: func(t *testing.T, a *App) {
+				a.suppressList.SetRows([]suppresslist.Row{
+					{Key: 0, Who: "DeployBot", Where: "everywhere"},
+					{Key: 1, Who: "alice", Where: "in #random"},
+				})
+				a.suppressList.Open()
+				a.suppressList.HandleKey("down")
+				a.SetMode(ModeSuppressed)
+			},
+		},
+		{
+			name: "dialog_suppressed_empty", want: "Nobody is hidden", shown: func(a *App) bool { return a.suppressList.IsVisible() },
+			open: func(t *testing.T, a *App) {
+				a.suppressList.SetRows(nil)
+				a.suppressList.Open()
+				a.SetMode(ModeSuppressed)
 			},
 		},
 		{

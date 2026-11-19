@@ -42,6 +42,7 @@ import (
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/statusbar"
 	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/gammons/slk/internal/ui/suppresslist"
 	"github.com/gammons/slk/internal/ui/themeswitcher"
 	"github.com/gammons/slk/internal/ui/thread"
 	"github.com/gammons/slk/internal/ui/threadsview"
@@ -662,7 +663,14 @@ type App struct {
 	sidebarResizeFrom  int
 
 	// settings persists the theme choice and sidebar width. Nil until wired.
-	settings       core.SettingsService
+	settings core.SettingsService
+	// suppression holds the rules hiding authors' messages (suppress.go).
+	suppression core.SuppressionService
+	// suppressReloadSeq names the latest cache reload after a rule was
+	// removed (reloadAfterRuleRemoval); older results are dropped.
+	suppressReloadSeq uint64
+	// suppressList is the :suppressed dialog.
+	suppressList   suppresslist.Model
 	themeOverrides core.Theme
 	// themeName is the name last passed to applyTheme, which may differ
 	// from styles.CurrentTheme: a custom theme whose file is missing
@@ -1020,6 +1028,8 @@ func NewApp() *App {
 		navHistory:            newNavHistoryStore(),
 		marks:                 newMarksStore(),
 		marksOverlay:          marks.New(),
+		suppression:           noopSuppressionService,
+		suppressList:          suppresslist.New(),
 		showJumpOverlay:       true,
 		clipboardWrite:        defaultClipboardWriter,
 		userProfile:           userprofile.New(),
@@ -1033,6 +1043,8 @@ func NewApp() *App {
 	rootModel := messages.New(nil, "")
 	app.winModels = map[wintree.LeafID]*messages.Model{rootWin: rootModel}
 	app.messagepane = app.winModels[rootWin]
+	app.installChannelHide(rootModel)
+	app.installThreadHide()
 	app.editing = newEditController()
 	// typing tracker is referenced by typingOut so it must exist first;
 	// construct outside the literal because struct literals can't
@@ -1209,6 +1221,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		reduceFocus,
 		reduceSend,
 		reduceRemovePreview,
+		reduceSuppress,
 		reduceActionPrompt,
 		reduceSlashCommand,
 		reduceChannels,
@@ -2424,6 +2437,8 @@ func (a *App) closeModal(mode Mode) {
 		a.userProfile.Close()
 	case ModeMarks:
 		a.marksOverlay.Close()
+	case ModeSuppressed:
+		a.suppressList.Close()
 	}
 }
 

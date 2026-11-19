@@ -82,6 +82,9 @@ func (a *App) activeModalClickTarget() (modalClickTarget, bool) {
 		return modalClickTarget{box: &a.newMessagePicker, click: &a.newMessagePicker, activation: space}, true
 	case ModeMarks:
 		return modalClickTarget{box: &a.marksOverlay, click: &a.marksOverlay, activation: enter}, true
+	case ModeSuppressed:
+		// A click only moves the highlight: removing is a key.
+		return modalClickTarget{box: &a.suppressList, click: &a.suppressList, activation: nil}, true
 	case ModeHelp:
 		// Help has no activation: clicking a row only moves the highlight.
 		return modalClickTarget{box: &a.help, click: &a.help, activation: nil}, true

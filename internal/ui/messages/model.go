@@ -114,6 +114,15 @@ type OpenImagePreviewMsg struct {
 }
 
 type Model struct {
+	// hide drops a suppressed author's messages as they arrive (SetHide).
+	hide func(MessageItem) bool
+	// hiddenOldest is the oldest TS among hidden messages older than
+	// the buffer, so OldestTS (the older-history cursor) moves past a
+	// page that was all hidden instead of fetching it forever.
+	hiddenOldest string
+	// hiddenNewest is the newest TS among hidden messages, so NewestTS
+	// covers the range the pane has loaded.
+	hiddenNewest string
 	// sixelPaints is the placement set produced by the last View, consumed
 	// by the App's out-of-band painter. See imgpkg.SixelPaint.
 	sixelPaints []imgpkg.SixelPaint
@@ -743,6 +752,7 @@ func (m *Model) SetMessages(msgs []MessageItem) {
 		debuglog.Cache("messages.Model.SetMessages: channel=%q before=[%s] after=[%s]",
 			m.channelName, oldSummary, newSummary)
 	}
+	msgs, m.hiddenOldest, m.hiddenNewest = Visible(m.hide, msgs)
 	m.messages = msgs
 	m.ClearSelection()
 	m.dropCache()
@@ -761,6 +771,10 @@ func (m *Model) SetMessages(msgs []MessageItem) {
 }
 
 func (m *Model) AppendMessage(msg MessageItem) {
+	if m.hide != nil && m.hide(msg) {
+		m.keepNewerHidden(msg.TS)
+		return
+	}
 	// Idempotent on TS. Self-sent messages take an optimistic path
 	// (MessageSentMsg from the chat.postMessage HTTP response) AND
 	// arrive again as a WebSocket echo (NewMessageMsg). The order of
@@ -1038,7 +1052,7 @@ func (m *Model) GoToBottom() {
 }
 
 func (m *Model) AtTop() bool {
-	return m.selected == 0 && len(m.messages) > 0
+	return (m.selected == 0 && len(m.messages) > 0) || m.onlyHidden()
 }
 
 // ViewportAtTop reports whether the viewport is scrolled to the very top of
@@ -1046,7 +1060,7 @@ func (m *Model) AtTop() bool {
 // on a wheel-up / PageUp gesture that scrolls the viewport without moving
 // selection (selection-based backfill goes through AtTop()).
 func (m *Model) ViewportAtTop() bool {
-	return m.list.YOffset() == 0 && len(m.messages) > 0
+	return (m.list.YOffset() == 0 && len(m.messages) > 0) || m.onlyHidden()
 }
 
 // YOffset returns the current viewport scroll offset (first visible line
@@ -1081,6 +1095,12 @@ func (m *Model) PrependMessages(msgs []MessageItem) {
 			return
 		}
 		msgs = kept
+	}
+	msgs, hiddenOldest, hiddenNewest := Visible(m.hide, msgs)
+	m.keepOlderHidden(hiddenOldest)
+	m.keepNewerHidden(hiddenNewest)
+	if len(msgs) == 0 {
+		return
 	}
 	count := len(msgs)
 	if debuglog.Enabled() {
@@ -1627,11 +1647,17 @@ func (m *Model) LastReadTS() string {
 	return m.lastReadTS
 }
 
+// OldestTS is the cursor for fetching older history: the oldest message
+// the pane holds, or a hidden one it was given that is older still.
 func (m *Model) OldestTS() string {
-	if len(m.messages) == 0 {
-		return ""
+	oldest := ""
+	if len(m.messages) > 0 {
+		oldest = m.messages[0].TS
 	}
-	return m.messages[0].TS
+	if m.hiddenOldest != "" && (oldest == "" || m.hiddenOldest < oldest) {
+		return m.hiddenOldest
+	}
+	return oldest
 }
 
 // cacheStyles bundles the lipgloss styles and pre-rendered strings that

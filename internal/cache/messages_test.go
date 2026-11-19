@@ -399,3 +399,35 @@ func TestGetMessages_IncludesThreadParents(t *testing.T) {
 		t.Error("thread parent missing — regression of the thread_ts==ts filter bug")
 	}
 }
+
+func TestGetMessagesBetween(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	defer db.Close()
+	db.UpsertChannel(Channel{ID: "C1", WorkspaceID: "T1", Name: "general", Type: "channel", IsMember: true})
+	for i := 1; i <= 5; i++ {
+		db.UpsertMessage(Message{TS: fmt.Sprintf("170000000%d.000000", i), ChannelID: "C1", WorkspaceID: "T1", UserID: "U1"})
+	}
+	// A plain thread reply belongs to the thread pane, not the range.
+	db.UpsertMessage(Message{TS: "1700000003.500000", ChannelID: "C1", WorkspaceID: "T1", UserID: "U1", ThreadTS: "1700000003.000000"})
+
+	ts := func(rows []Message) string {
+		var s string
+		for _, r := range rows {
+			s += r.TS[9:10]
+		}
+		return s
+	}
+	for _, tc := range []struct{ from, to, want string }{
+		{"1700000002.000000", "1700000004.000000", "234"},
+		{"1700000004.000000", "", "45"},
+		{"", "1700000004.000000", ""},
+	} {
+		got, err := db.GetMessagesBetween("C1", tc.from, tc.to)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ts(got) != tc.want {
+			t.Errorf("GetMessagesBetween(%q, %q) = %s, want %s", tc.from, tc.to, ts(got), tc.want)
+		}
+	}
+}

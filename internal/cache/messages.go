@@ -208,6 +208,27 @@ func (db *DB) GetMessagesSince(channelID, sinceTS string) ([]Message, error) {
 		ORDER BY ts ASC`, channelID, sinceTS)
 }
 
+// GetMessagesBetween returns the cached main-feed messages with
+// fromTS <= ts <= toTS, oldest first; an empty toTS has no upper bound.
+// The row-shape filter matches GetMessages. Its caller reloads a pane
+// across exactly the range of history it has loaded.
+func (db *DB) GetMessagesBetween(channelID, fromTS, toTS string) ([]Message, error) {
+	if fromTS == "" {
+		return nil, nil
+	}
+	query := `
+		SELECT ts, channel_id, workspace_id, user_id, text, thread_ts, reply_count, edited_at, is_deleted, raw_json, created_at, subtype
+		FROM messages
+		WHERE channel_id = ? AND is_deleted = 0 AND ts >= ?
+		  AND (thread_ts = '' OR thread_ts = ts OR subtype = 'thread_broadcast')`
+	args := []any{channelID, fromTS}
+	if toTS != "" {
+		query += " AND ts <= ?"
+		args = append(args, toTS)
+	}
+	return db.queryMessages(query+" ORDER BY ts ASC", args...)
+}
+
 // GetMessage returns the message with the given (channel_id, ts) primary
 // key. Returns sql.ErrNoRows if no such message exists.
 func (db *DB) GetMessage(channelID, ts string) (Message, error) {

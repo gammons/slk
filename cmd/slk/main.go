@@ -724,6 +724,17 @@ func run() error {
 	}
 	app.SetSettingsService(core.NewSettingsService(saveTheme, saveSidebarWidth))
 
+	// Suppression rules (:suppress, [[workspaces.<key>.suppress]]):
+	// the store is the one copy, read by every workspace's event
+	// handler and by the UI, written through the UI's port.
+	suppressor := newSuppressStore(cfg, configPath, workspacesStore.KeyFor, func(teamID string) string {
+		if wctx := router.ByID(teamID); wctx != nil {
+			return wctx.TeamName
+		}
+		return ""
+	})
+	app.SetSuppressionService(core.NewSuppressionService(suppressor.Rules, suppressor.Add, suppressor.Remove))
+
 	// endOfDayUnix returns 23:59:59 local time on now's date, as a Unix
 	// timestamp, so a WFH status auto-clears at the end of the day
 	// instead of lingering indefinitely.
@@ -859,6 +870,13 @@ func run() error {
 					return nil
 				}
 				return loadCachedMessages(db, wctx.Client.UserID(), string(channelID), wctx.UserNames, tsFormat, router)
+			},
+			ReadCacheRange: func(channelID ids.ChannelID, oldestTS, newestTS ids.MessageTS) []messages.MessageItem {
+				wctx := router.Active()
+				if wctx == nil {
+					return nil
+				}
+				return loadCachedMessagesRange(db, wctx.Client.UserID(), string(channelID), string(oldestTS), string(newestTS), wctx.UserNames, tsFormat, router)
 			},
 			SyncedAt: func(channelID ids.ChannelID) int64 {
 				return db.GetChannelSyncedAt(string(channelID))
@@ -1785,9 +1803,12 @@ func run() error {
 				channelTypes:    channelTypes,
 				workspaceName:   wctx.TeamName,
 				activeChannelID: func() string { return app.ActiveChannelID() },
-				cfg:             cfgSnap,
-				wsCtx:           wctx,
-				backfillGate:    dedupeGate{window: 30 * time.Second},
+				suppressed: func(channelID, authorID string) bool {
+					return suppressor.Hides(teamID, channelID, authorID)
+				},
+				cfg:          cfgSnap,
+				wsCtx:        wctx,
+				backfillGate: dedupeGate{window: 30 * time.Second},
 				// The reconnect refresh, deliberately NOT the
 				// ChannelService.Fetch closure: that one also marks the
 				// channel read, which is right when the user just

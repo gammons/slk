@@ -32,6 +32,9 @@ var thickLeftBorder = lipgloss.Border{Left: "▌"}
 const parentSelected = -1
 
 type Model struct {
+	// hide drops a suppressed author's replies as they arrive
+	// (SetHide). The parent is never hidden: the user opened it.
+	hide             func(messages.MessageItem) bool
 	parent           messages.MessageItem
 	replies          []messages.MessageItem
 	channelID        string
@@ -266,9 +269,11 @@ func (m *Model) SetThread(parent messages.MessageItem, replies []messages.Messag
 	}
 	m.ClearSelection()
 	m.parent = parent
-	m.replies = replies
+	// channelID first: the App's hide predicate reads the pane's channel.
 	m.channelID = channelID
 	m.threadTS = threadTS
+	replies, _, _ = messages.Visible(m.hide, replies)
+	m.replies = replies
 	// Per the doc comment, the cursor starts at the bottom (newest reply)
 	// so a long thread opens scrolled to the latest activity rather than
 	// jammed up at the parent message. A reply-less thread selects the
@@ -284,6 +289,12 @@ func (m *Model) SetThread(parent messages.MessageItem, replies []messages.Messag
 	// the viewport scrolled to the top. Mirrors messages.Model.SetMessages.
 	m.list.ResetSnap()
 	m.InvalidateCache()
+}
+
+// SetHide sets the predicate for replies the pane must not show (a
+// suppressed author's). It applies to replies given from now on.
+func (m *Model) SetHide(hide func(messages.MessageItem) bool) {
+	m.hide = hide
 }
 
 // SetLastReadTS sets the timestamp the user has already read up to in
@@ -332,6 +343,9 @@ func (m *Model) LastReadTS() string {
 // We always advance `selected` to the new last index so the incoming
 // reply is visible regardless of where the user had scrolled.
 func (m *Model) AddReply(msg messages.MessageItem) {
+	if m.hide != nil && m.hide(msg) {
+		return
+	}
 	// Idempotent on TS -- same race-defense rationale as
 	// messages.Model.AppendMessage: optimistic add (HTTP response) and
 	// WS echo can arrive in either order, and a caller-side dedup map
@@ -878,6 +892,14 @@ func (m *Model) MoveDown() {
 
 func (m *Model) IsAtBottom() bool {
 	return m.selected >= len(m.replies)-1
+}
+
+// SelectParent moves the selection to the thread's parent message.
+func (m *Model) SelectParent() {
+	if m.selected != parentSelected {
+		m.selected = parentSelected
+		m.InvalidateCache()
+	}
 }
 
 // GoToTop moves the selection to the first reply.

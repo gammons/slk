@@ -245,6 +245,14 @@ type ChannelService interface {
 	// ChannelSelectedMsg's tiered render policy.
 	ReadCache(channelID ids.ChannelID) []MessageItem
 
+	// ReadCacheRange returns the local-cache snapshot of channelID's
+	// messages with oldestTS <= ts <= newestTS (an empty newestTS has
+	// no upper bound), oldest first, or nil. Unlike ReadCache it is not
+	// the most recent page, so a pane can be reloaded across exactly
+	// the history it has loaded (used when a suppression rule is
+	// removed). It enriches every row, so call it from a Cmd.
+	ReadCacheRange(channelID ids.ChannelID, oldestTS, newestTS ids.MessageTS) []MessageItem
+
 	// SyncedAt returns the unix-seconds timestamp of the channel's
 	// last authoritative cache-from-network sync, or 0 if never
 	// synced. Used by ChannelSelectedMsg's tiered render policy to
@@ -393,6 +401,17 @@ type SettingsService interface {
 	// changes before the UI shows a switch. ThemeScopeGlobal ignores it.
 	SaveTheme(teamID, name string, scope ThemeScope)
 	SaveSidebarWidth(width int)
+}
+
+// SuppressionService holds the rules that hide authors' messages
+// (see SuppressRule), per workspace. Rules is a local read, called
+// whenever a pane takes messages. Add and Remove persist the change
+// (config.toml) and make it effective for notifications and unread
+// marking; on error nothing changed.
+type SuppressionService interface {
+	Rules(teamID string) *Suppression
+	Add(teamID string, rule SuppressRule) error
+	Remove(teamID string, rule SuppressRule) error
 }
 
 // UnreadService reads the unread state the sidebar and workspace rail
