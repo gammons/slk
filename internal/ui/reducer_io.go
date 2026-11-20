@@ -338,6 +338,10 @@ func reducePaste(a *App, m tea.PasteMsg) tea.Cmd {
 		a.statusbar.SetSearch("/" + a.searchInput)
 		return nil
 	}
+	if a.mode == ModeOpenSlackLink {
+		a.appendSlackLinkPaste(m.Content)
+		return nil
+	}
 	if a.mode != ModeInsert {
 		return nil
 	}

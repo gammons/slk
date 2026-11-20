@@ -245,6 +245,14 @@ type ChannelService interface {
 	// ChannelSelectedMsg's tiered render policy.
 	ReadCache(channelID ids.ChannelID) []MessageItem
 
+	// ReadCacheRange returns the local-cache snapshot of channelID's
+	// messages with oldestTS <= ts <= newestTS (an empty newestTS has
+	// no upper bound), oldest first, or nil. Unlike ReadCache it is not
+	// the most recent page, so a pane can be reloaded across exactly
+	// the history it has loaded (used when a suppression rule is
+	// removed). It enriches every row, so call it from a Cmd.
+	ReadCacheRange(channelID ids.ChannelID, oldestTS, newestTS ids.MessageTS) []MessageItem
+
 	// SyncedAt returns the unix-seconds timestamp of the channel's
 	// last authoritative cache-from-network sync, or 0 if never
 	// synced. Used by ChannelSelectedMsg's tiered render policy to
@@ -395,6 +403,17 @@ type SettingsService interface {
 	SaveSidebarWidth(width int)
 }
 
+// SuppressionService holds the rules that hide authors' messages
+// (see SuppressRule), per workspace. Rules is a local read, called
+// whenever a pane takes messages. Add and Remove persist the change
+// (config.toml) and make it effective for notifications and unread
+// marking; on error nothing changed.
+type SuppressionService interface {
+	Rules(teamID string) *Suppression
+	Add(teamID string, rule SuppressRule) error
+	Remove(teamID string, rule SuppressRule) error
+}
+
 // UnreadService reads the unread state the sidebar and workspace rail
 // render. Both methods are local reads, called at render time.
 type UnreadService interface {
@@ -438,6 +457,18 @@ type AvatarService interface {
 	// ReplyAvatar is the small avatar of a thread's reply row, or ""
 	// while it isn't available (or the protocol can't draw one).
 	ReplyAvatar(userID string) string
+}
+
+// SixelAvatarService is an AvatarService that can also hand out an
+// avatar as a sixel image, on a terminal that draws sixel. Optional:
+// the App checks for it, and without it avatars stay half-block there.
+type SixelAvatarService interface {
+	AvatarService
+	// SixelAvatar returns userID's avatar as sixel bytes and the key
+	// that identifies them to the painter, or ok false while it isn't
+	// available. Avatar keeps returning the half-block form, which the
+	// panes draw where the sixel image cannot be (a pane edge cuts it).
+	SixelAvatar(userID string) (key string, bytes []byte, ok bool)
 }
 
 // ImageFetcher downloads and caches remote images for inline rendering

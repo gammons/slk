@@ -112,7 +112,9 @@ func Detect(env Env, cfg string) Protocol {
 	if env.KittyWindowID != "" || env.Term == "xterm-kitty" {
 		return ProtoKitty
 	}
-	if env.TermProgram == "ghostty" || env.TermProgram == "Nash" {
+	// Rex (Superlogical) renders with Ghostty's terminal engine, unicode
+	// placeholders included, but reports TERM_PROGRAM=rex.
+	if env.TermProgram == "ghostty" || env.TermProgram == "Nash" || env.TermProgram == "rex" {
 		return ProtoKitty
 	}
 	if env.TMUX != "" {

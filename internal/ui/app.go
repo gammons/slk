@@ -42,6 +42,7 @@ import (
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/statusbar"
 	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/gammons/slk/internal/ui/suppresslist"
 	"github.com/gammons/slk/internal/ui/themeswitcher"
 	"github.com/gammons/slk/internal/ui/thread"
 	"github.com/gammons/slk/internal/ui/threadsview"
@@ -144,6 +145,10 @@ type App struct {
 	focusedPanel   Panel
 	sidebarVisible bool
 	threadVisible  bool
+	// railHidden hides the workspace rail even with several workspaces
+	// (appearance.show_workspace_rail, ToggleWorkspaceRail); the status
+	// bar then names the active workspace (#89).
+	railHidden bool
 	// threadCloseAfterUpload records a close that CloseThread refused
 	// while an upload was in flight (the open thread's parent was
 	// deleted). The UploadResultMsg arm runs it once the upload ends.
@@ -433,6 +438,7 @@ type App struct {
 	// newWindowModel can configure late-created window models
 	// identically to the root model. See internal/ui/winmodels.go.
 	avatarFn      messages.AvatarFunc
+	sixelAvatarFn messages.SixelAvatarFunc // nil unless the service draws sixel avatars
 	replyAvatarFn messages.AvatarFunc
 	replyAvatars  bool
 	imageCtx      imgrender.ImageContext
@@ -605,6 +611,21 @@ type App struct {
 	// walks) records its target here via applyLocation.
 	pendingLinkNav *pendingLinkNav
 
+	// pendingFinderPermalink is an archive link chosen in the channel
+	// finder whose workspace is not the one on screen. Nil when
+	// nothing is waiting. takeFinderPermalink navigates once that
+	// workspace is active, and only when FinderPermalinkSeq on the
+	// switch matches the request's seq. A newer paste replaces the
+	// pointer. finderPermalinkSeq is the counter and outlives a
+	// cleared request; zero is never a live seq.
+	pendingFinderPermalink *pendingFinderPermalink
+	finderPermalinkSeq     uint64
+
+	// slackLinkInput is the Open Slack link dialog's single line.
+	// slackLinkError is the inline validation message; empty hides it.
+	slackLinkInput string
+	slackLinkError string
+
 	// marks owns the vim-style mark storage: an in-memory per-workspace
 	// tier for lowercase marks plus the SQLite `marks` table, merged
 	// behind one set of accessors (see internal/ui/marks.go).
@@ -657,7 +678,14 @@ type App struct {
 	sidebarResizeFrom  int
 
 	// settings persists the theme choice and sidebar width. Nil until wired.
-	settings       core.SettingsService
+	settings core.SettingsService
+	// suppression holds the rules hiding authors' messages (suppress.go).
+	suppression core.SuppressionService
+	// suppressReloadSeq names the latest cache reload after a rule was
+	// removed (reloadAfterRuleRemoval); older results are dropped.
+	suppressReloadSeq uint64
+	// suppressList is the :suppressed dialog.
+	suppressList   suppresslist.Model
 	themeOverrides core.Theme
 	// themeName is the name last passed to applyTheme, which may differ
 	// from styles.CurrentTheme: a custom theme whose file is missing
@@ -1015,6 +1043,8 @@ func NewApp() *App {
 		navHistory:            newNavHistoryStore(),
 		marks:                 newMarksStore(),
 		marksOverlay:          marks.New(),
+		suppression:           noopSuppressionService,
+		suppressList:          suppresslist.New(),
 		showJumpOverlay:       true,
 		clipboardWrite:        defaultClipboardWriter,
 		userProfile:           userprofile.New(),
@@ -1028,6 +1058,8 @@ func NewApp() *App {
 	rootModel := messages.New(nil, "")
 	app.winModels = map[wintree.LeafID]*messages.Model{rootWin: rootModel}
 	app.messagepane = app.winModels[rootWin]
+	app.installChannelHide(rootModel)
+	app.installThreadHide()
 	app.editing = newEditController()
 	// typing tracker is referenced by typingOut so it must exist first;
 	// construct outside the literal because struct literals can't
@@ -1142,11 +1174,11 @@ func (a *App) fullscreenPanel() Panel {
 
 // railWidth is the workspace rail's width for layout: zero when exactly
 // one workspace is configured, since a single tile conveys nothing and
-// only costs columns (#216). Before SetWorkspaces runs (no items yet)
-// the rail keeps its width, so multi-workspace setups don't see it pop
-// in once their workspaces load.
+// only costs columns (#216), or when the user hid it (#89). Before
+// SetWorkspaces runs (no items yet) the rail keeps its width, so
+// multi-workspace setups don't see it pop in once their workspaces load.
 func (a *App) railWidth() int {
-	if len(a.workspaceItems) == 1 {
+	if a.railHidden || len(a.workspaceItems) == 1 {
 		return 0
 	}
 	return a.workspaceRail.Width()
@@ -1204,6 +1236,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		reduceFocus,
 		reduceSend,
 		reduceRemovePreview,
+		reduceSuppress,
 		reduceActionPrompt,
 		reduceSlashCommand,
 		reduceChannels,
@@ -2419,6 +2452,11 @@ func (a *App) closeModal(mode Mode) {
 		a.userProfile.Close()
 	case ModeMarks:
 		a.marksOverlay.Close()
+	case ModeSuppressed:
+		a.suppressList.Close()
+	case ModeOpenSlackLink:
+		a.slackLinkInput = ""
+		a.slackLinkError = ""
 	}
 }
 
@@ -2547,6 +2585,9 @@ func (a *App) FocusLeft() {
 	switch {
 	case a.focusedPanel == PanelWorkspace:
 	case a.focusedPanel == PanelSidebar && a.sidebarVisible && !a.fullscreen && len(a.workspaceItems) > 0:
+		if a.railWidth() == 0 {
+			return // no rail drawn (hidden, or one workspace): the sidebar is the left edge
+		}
 		a.cancelEdit()
 		a.clearSelections()
 		a.workspaceRail.ResetCursor()
@@ -2570,6 +2611,49 @@ func (a *App) ToggleSidebar() {
 			a.focusedPanel = PanelMessages
 		}
 	}
+}
+
+// SetShowWorkspaceRail applies appearance.show_workspace_rail.
+func (a *App) SetShowWorkspaceRail(show bool) {
+	a.railHidden = !show
+	a.syncStatusWorkspace()
+}
+
+// ToggleWorkspaceRail shows or hides the workspace rail. Hiding it
+// while it has focus moves focus to the sidebar, or to the messages
+// pane when the sidebar is hidden too.
+func (a *App) ToggleWorkspaceRail() {
+	a.clearSelections()
+	a.railHidden = !a.railHidden
+	if a.railHidden && a.focusedPanel == PanelWorkspace {
+		a.focusedPanel = PanelMessages
+		if a.sidebarVisible {
+			a.focusedPanel = PanelSidebar
+		}
+	}
+	a.syncStatusWorkspace()
+}
+
+// syncStatusWorkspace puts statusWorkspaceLabel in the status bar. Called
+// wherever its inputs change (rail shown/hidden, workspaces set, active
+// workspace changed) so View stays free of setters.
+func (a *App) syncStatusWorkspace() { a.statusbar.SetWorkspace(a.statusWorkspaceLabel()) }
+
+// statusWorkspaceLabel is what the status bar shows for the workspace:
+// the active workspace's initials while the user has hidden the rail
+// with several workspaces configured, so the bar says where they are;
+// otherwise nothing, since the rail already shows it.
+func (a *App) statusWorkspaceLabel() string {
+	if !a.railHidden || len(a.workspaceItems) < 2 {
+		return ""
+	}
+	active := a.workspaceRail.SelectedID()
+	for _, ws := range a.workspaceItems {
+		if ws.ID == active {
+			return ws.Initials
+		}
+	}
+	return ""
 }
 
 func (a *App) ToggleThread() {
@@ -2923,6 +3007,7 @@ func (a *App) SetWorkspaces(items []workspace.WorkspaceItem) {
 	a.workspaceRail.RefreshUnreads()
 	a.workspaceItems = items
 	a.syncWorkspaceFinder()
+	a.syncStatusWorkspace()
 }
 
 // syncWorkspaceFinder rebuilds the workspace finder's items from the
@@ -3156,17 +3241,24 @@ func (a *App) SetChannelFinderItems(items []core.ChannelFinderItem) {
 }
 
 // SetAvatarService wires the rendered avatars shown beside messages.
+// A core.SixelAvatarService also draws them as sixel images.
 func (a *App) SetAvatarService(s core.AvatarService) {
 	var fn, replyFn messages.AvatarFunc
+	var sixelFn messages.SixelAvatarFunc
 	if s != nil {
 		fn, replyFn = s.Avatar, s.ReplyAvatar
+		if sx, ok := s.(core.SixelAvatarService); ok {
+			sixelFn = sx.SixelAvatar
+		}
 	}
-	a.avatarFn, a.replyAvatarFn = fn, replyFn
+	a.avatarFn, a.replyAvatarFn, a.sixelAvatarFn = fn, replyFn, sixelFn
 	for _, m := range a.allWinModels() {
 		m.SetAvatarFunc(fn)
+		m.SetSixelAvatarFunc(sixelFn)
 		m.SetReplyAvatarFunc(a.replyAvatarFunc())
 	}
 	a.threadPanel.SetAvatarFunc(fn)
+	a.threadPanel.SetSixelAvatarFunc(sixelFn)
 }
 
 // SetReplyAvatars switches the reply row under thread parents to Slack's
@@ -3794,20 +3886,22 @@ func (a *App) activeTeamName() string {
 	return "this workspace"
 }
 
-// activeWorkspaceDomain returns the slack.com subdomain of the active
-// workspace, or "" when unknown (link router then falls back to the
-// browser for all slack.com permalinks).
-func (a *App) activeWorkspaceDomain() string {
-	return a.workspaceDomains[a.activeTeamID]
-}
-
 // permalinkBelongsToActiveWorkspace reports whether a parsed archive link
 // uses either the active workspace's auth.test domain or a configured alias.
 func (a *App) permalinkBelongsToActiveWorkspace(pl slackurl.Permalink) bool {
-	if pl.Subdomain == a.activeWorkspaceDomain() {
-		return pl.Subdomain != ""
+	return a.permalinkBelongsToTeam(a.activeTeamID, pl)
+}
+
+// permalinkBelongsToTeam reports whether pl's subdomain is teamID's
+// auth.test domain or one of its configured aliases.
+func (a *App) permalinkBelongsToTeam(teamID string, pl slackurl.Permalink) bool {
+	if pl.Subdomain == "" || teamID == "" {
+		return false
 	}
-	for _, domain := range a.permalinkDomains[a.activeTeamID] {
+	if domain := a.workspaceDomains[teamID]; domain != "" && pl.Subdomain == domain {
+		return true
+	}
+	for _, domain := range a.permalinkDomains[teamID] {
 		if pl.Subdomain == domain {
 			return true
 		}
@@ -4076,8 +4170,8 @@ func (a *App) View() tea.View {
 // regions entirely when active, so it takes priority; otherwise every
 // visible window leaf contributes its own placements, mapped through
 // its own rectangle (split windows sit at their own origins, not the
-// unsplit messages-pane origin). The thread pane still renders
-// halfblock.
+// unsplit messages-pane origin), and so does the thread pane wherever
+// it is drawn (threadSixelRect).
 func (a *App) collectSixelPlacements(frame panelLayoutFrame) []imgpkg.SixelPlacement {
 	if a.preview.Active() {
 		want := make([]imgpkg.SixelPlacement, 0, 1)
@@ -4099,30 +4193,51 @@ func (a *App) collectSixelPlacements(frame panelLayoutFrame) []imgpkg.SixelPlace
 	if a.overlayActive() {
 		return nil
 	}
-	if a.view != ViewChannels || frame.MsgWidth == 0 {
-		return nil
-	}
-	// The same bounds renderWindowsRegion uses, so leaf rectangles
-	// match the panes actually drawn.
-	bounds := wintree.Rect{
-		X: 0,
-		Y: 0,
-		W: frame.MsgWidth + frame.MsgBorder,
-		H: frame.ContentHeight,
-	}
-	rects := a.wins.ComputeRects(bounds)
-	out := make([]imgpkg.SixelPlacement, 0, 2)
-	for _, id := range a.wins.Leaves() {
-		rect, ok := rects[id]
-		model := a.winModels[id]
-		if !ok || model == nil || rect.W < 1 || rect.H < 1 {
-			continue
+	var out []imgpkg.SixelPlacement
+	// The channel windows draw messages only in the channels view; the
+	// Threads and Activity views put their lists there instead. The
+	// thread pane is drawn the same in every view, so it is not gated.
+	if a.view == ViewChannels && frame.MsgWidth > 0 {
+		// The same bounds renderWindowsRegion uses, so leaf rectangles
+		// match the panes actually drawn.
+		bounds := wintree.Rect{
+			X: 0,
+			Y: 0,
+			W: frame.MsgWidth + frame.MsgBorder,
+			H: frame.ContentHeight,
 		}
+		rects := a.wins.ComputeRects(bounds)
+		for _, id := range a.wins.Leaves() {
+			rect, ok := rects[id]
+			model := a.winModels[id]
+			if !ok || model == nil || rect.W < 1 || rect.H < 1 {
+				continue
+			}
+			out = append(out, absoluteWindowSixelPlacements(
+				model.SixelPlacements(), model.ChromeHeight(), rect, a.layout.SidebarEnd(),
+			)...)
+		}
+	}
+	// The thread pane, under the condition View draws it on: beside the
+	// messages pane, in front of it when the panes stack, or full screen.
+	if a.threadVisible && frame.ThreadWidth > 0 {
 		out = append(out, absoluteWindowSixelPlacements(
-			model.SixelPlacements(), model.ChromeHeight(), rect, a.layout.SidebarEnd(),
+			a.threadPanel.SixelPlacements(), a.threadPanel.ChromeHeight(),
+			a.threadSixelRect(frame), a.layout.MsgEnd(),
 		)...)
 	}
 	return out
+}
+
+// threadSixelRect is the thread pane's replies region as a rectangle in
+// absoluteWindowSixelPlacements' frame, with X relative to the pane's
+// left edge (a.layout.MsgEnd()): the top border on row 0, the replies
+// on rows 1 to the reply height, and the compose region from the row
+// after, which is the bottom an image must not reach. The height is
+// the one renderThreadRegion drew with, so it is read after it ran.
+func (a *App) threadSixelRect(frame panelLayoutFrame) wintree.Rect {
+	replies := max(a.layout.PageHeight(PanelThread), 3) // renderThreadRegion's clamp
+	return wintree.Rect{X: 0, Y: 0, W: frame.ThreadWidth + frame.ThreadBorder, H: replies + 2}
 }
 
 // finalizeSixelView is the single exit point for every App.View path,

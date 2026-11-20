@@ -171,6 +171,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, a.keys.ToggleSidebar):
 		a.ToggleSidebar()
 
+	case key.Matches(msg, a.keys.ToggleWorkspaceRail):
+		a.ToggleWorkspaceRail()
+
 	case key.Matches(msg, a.keys.SidebarGrow):
 		a.sidebar.GrowWidth()
 		if a.settings != nil {
@@ -346,6 +349,12 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 
 	case key.Matches(msg, a.keys.OpenLink):
 		return a.openLinksOfSelected()
+
+	case key.Matches(msg, a.keys.OpenSlackLink):
+		a.slackLinkInput = ""
+		a.slackLinkError = ""
+		a.SetMode(ModeOpenSlackLink)
+		return nil
 
 	case a.view == ViewActivity && key.Matches(msg, a.keys.ActivityUnread):
 		return func() tea.Msg { return ActivityToggleUnreadMsg{} }

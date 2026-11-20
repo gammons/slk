@@ -81,8 +81,14 @@ func (a *App) applyOverlays(screen string) string {
 	if a.marksOverlay.IsVisible() {
 		screen = a.marksOverlay.ViewOverlay(a.width, a.height, screen)
 	}
+	if a.suppressList.IsVisible() {
+		screen = a.suppressList.ViewOverlay(a.width, a.height, screen)
+	}
 	if a.mode == ModePresenceCustomSnooze {
 		screen = presencemenu.CustomSnoozeView(a.width, a.height, screen, a.presence.SnoozeBuf())
+	}
+	if a.mode == ModeOpenSlackLink {
+		screen = openSlackLinkView(a.width, a.height, screen, a.slackLinkInput, a.slackLinkError)
 	}
 	if a.bootstrap.IsLoading() {
 		screen = a.bootstrap.Render(a.width, a.height, a.spinnerGlyph())
@@ -108,7 +114,9 @@ func (a *App) overlayActive() bool {
 		a.linkPicker.IsVisible() ||
 		a.userProfile.IsVisible() ||
 		a.marksOverlay.IsVisible() ||
+		a.suppressList.IsVisible() ||
 		a.mode == ModePresenceCustomSnooze ||
+		a.mode == ModeOpenSlackLink ||
 		a.bootstrap.IsLoading()
 }
 

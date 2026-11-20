@@ -421,6 +421,11 @@ type (
 		// the workspace rail under [sidebar] enter_keeps_focus, so the
 		// last-channel restore leaves focus in the rail.
 		KeepFocus bool
+		// FinderPermalinkSeq ties this switch to one pasted permalink.
+		// Zero for every other switch. A newer paste bumps the App's
+		// counter, so a switch that finishes late does not consume the
+		// link that replaced it.
+		FinderPermalinkSeq uint64
 	}
 	// ReadStateChangedMsg is sent whenever the persistent read state changes,
 	// so panels that read from cache.GetWorkspaceReadState re-render.

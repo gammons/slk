@@ -53,6 +53,13 @@ func (s *workspaceConfigStore) SaveSidebarWidth(teamID string, width int) (tomlK
 	return tomlKey
 }
 
+// KeyFor returns the TOML key of teamID's block (see tomlKeyFor).
+func (s *workspaceConfigStore) KeyFor(teamID string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tomlKeyFor(teamID)
+}
+
 // tomlKeyFor finds the existing TOML key for teamID, if any -- if no
 // block exists yet it falls back to the team ID itself (legacy
 // default; a future --add-workspace may have already written a

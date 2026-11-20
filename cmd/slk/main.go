@@ -523,10 +523,12 @@ func run() error {
 	debuglog.ImgRender("emoji image mode: reconciled=%v (final proto=%s, emoji_images=%q)",
 		reconciledImageMode, proto, cfg.Appearance.EmojiImages)
 
-	// Avatars use kitty graphics when available (sharper). Sixel and
-	// half-block terminals fall back to half-block — re-emitting sixel
-	// per visible avatar per redraw would dominate the bandwidth budget.
+	// Avatars use kitty graphics when available (sharper), sixel on a
+	// sixel terminal, and half-block elsewhere. A sixel avatar is placed
+	// like an inline image, so the painter sends it once per slot rather
+	// than on every redraw.
 	avatarCache := avatar.NewCache(imageFetcher, imgpkg.KittyRendererInstance(), proto == imgpkg.ProtoKitty)
+	avatarCache.SetSixel(proto == imgpkg.ProtoSixel)
 
 	// Cell pixel metrics for image encoding. Sixel uses them for its
 	// absolute raster dimensions; kitty places by cell but uses them to
@@ -658,8 +660,15 @@ func run() error {
 	// terminals that decode kitty graphics (kitty, ghostty).
 	// show_avatars = false leaves the service unset, so messages render
 	// through the no-avatar path and no avatar fetches are started.
+	app.SetShowWorkspaceRail(cfg.Appearance.ShowWorkspaceRail)
 	if cfg.Appearance.ShowAvatars {
-		app.SetAvatarService(core.NewAvatarService(func(userID string) string {
+		var sixelAvatar func(userID string) (string, []byte, bool)
+		if proto == imgpkg.ProtoSixel {
+			// Read only after Avatar has started any load it needed, so
+			// this is a lookup.
+			sixelAvatar = avatarCache.GetSixel
+		}
+		app.SetAvatarService(core.NewSixelAvatarService(func(userID string) string {
 			return lazyAvatar(router.Active(), avatarCache, userID)
 		}, func(userID string) string {
 			if small := avatarCache.GetSmall(userID); small != "" {
@@ -667,7 +676,7 @@ func run() error {
 			}
 			lazyAvatar(router.Active(), avatarCache, userID)
 			return ""
-		}))
+		}, sixelAvatar))
 	}
 
 	// Wire theme switcher: dispatch to the appropriate saver based on scope.
@@ -714,6 +723,17 @@ func run() error {
 		}
 	}
 	app.SetSettingsService(core.NewSettingsService(saveTheme, saveSidebarWidth))
+
+	// Suppression rules (:suppress, [[workspaces.<key>.suppress]]):
+	// the store is the one copy, read by every workspace's event
+	// handler and by the UI, written through the UI's port.
+	suppressor := newSuppressStore(cfg, configPath, workspacesStore.KeyFor, func(teamID string) string {
+		if wctx := router.ByID(teamID); wctx != nil {
+			return wctx.TeamName
+		}
+		return ""
+	})
+	app.SetSuppressionService(core.NewSuppressionService(suppressor.Rules, suppressor.Add, suppressor.Remove))
 
 	// endOfDayUnix returns 23:59:59 local time on now's date, as a Unix
 	// timestamp, so a WFH status auto-clears at the end of the day
@@ -850,6 +870,13 @@ func run() error {
 					return nil
 				}
 				return loadCachedMessages(db, wctx.Client.UserID(), string(channelID), wctx.UserNames, tsFormat, router)
+			},
+			ReadCacheRange: func(channelID ids.ChannelID, oldestTS, newestTS ids.MessageTS) []messages.MessageItem {
+				wctx := router.Active()
+				if wctx == nil {
+					return nil
+				}
+				return loadCachedMessagesRange(db, wctx.Client.UserID(), string(channelID), string(oldestTS), string(newestTS), wctx.UserNames, tsFormat, router)
 			},
 			SyncedAt: func(channelID ids.ChannelID) int64 {
 				return db.GetChannelSyncedAt(string(channelID))
@@ -1628,6 +1655,15 @@ func run() error {
 	// active workspace yet and both set InitialActive=true.
 	var firstReady sync.Once
 
+	// One event dedupe per Enterprise Grid, shared by every session of
+	// that grid: the grid delivers each event to every connected
+	// session, so without this a user with the org workspace plus
+	// member workspaces processes each grid event once per socket.
+	// Five seconds covers cross-socket delivery skew (observed in the
+	// low milliseconds) while staying far under the reconnect backfill
+	// window, where a redelivered frame is a duplicate by definition.
+	gridGates := newGridEventGates(5 * time.Second)
+
 	// Start the TUI immediately (shows loading overlay). All output —
 	// every protocol — flows through the frame-correlated writer: it is
 	// a serialized pass-through for non-sixel frames (no marker present)
@@ -1727,16 +1763,39 @@ func run() error {
 				channelTypes[ch.ID] = ch.Type
 			}
 
-			// Start WebSocket for this workspace
+			// Start WebSocket for this workspace. On a grid, gate the
+			// socket's frames through the shared dedupe (installed
+			// after the handler is built, just above the connection
+			// manager, so a dropped message frame can still run that
+			// handler's message-driven conversation discovery).
 			teamID := wctx.TeamID
+			gridEnt := wctx.Client.EnterpriseID()
 			handler := &rtmEventHandler{
-				program:         p,
-				userNames:       wctx.UserNames,
-				tsFormat:        tsFormat,
-				db:              db,
-				workspaceID:     teamID,
-				emojiLister:     wctx.Client,
-				isActive:        func() bool { a := router.Active(); return a != nil && a.TeamID == teamID },
+				program:     p,
+				userNames:   wctx.UserNames,
+				tsFormat:    tsFormat,
+				db:          db,
+				workspaceID: teamID,
+				emojiLister: wctx.Client,
+				isActive:    func() bool { a := router.Active(); return a != nil && a.TeamID == teamID },
+				// Every session of this handler's grid, read at event
+				// time so late-connecting siblings are included:
+				// OnMessage uses it to tell whether it is on a grid
+				// with another session (its rail refresh is a single
+				// message, not a per-sibling fan-out).
+				gridSiblings: func() []string {
+					ent := wctx.Client.EnterpriseID()
+					if ent == "" {
+						return nil
+					}
+					var ids []string
+					for _, w := range router.All() {
+						if w.Client != nil && w.Client.EnterpriseID() == ent {
+							ids = append(ids, w.TeamID)
+						}
+					}
+					return ids
+				},
 				notifier:        notifier,
 				notifyCfg:       cfgSnap.Notifications,
 				currentUserID:   wctx.UserID,
@@ -1744,9 +1803,12 @@ func run() error {
 				channelTypes:    channelTypes,
 				workspaceName:   wctx.TeamName,
 				activeChannelID: func() string { return app.ActiveChannelID() },
-				cfg:             cfgSnap,
-				wsCtx:           wctx,
-				backfillGate:    dedupeGate{window: 30 * time.Second},
+				suppressed: func(channelID, authorID string) bool {
+					return suppressor.Hides(teamID, channelID, authorID)
+				},
+				cfg:          cfgSnap,
+				wsCtx:        wctx,
+				backfillGate: dedupeGate{window: 30 * time.Second},
 				// The reconnect refresh, deliberately NOT the
 				// ChannelService.Fetch closure: that one also marks the
 				// channel read, which is right when the user just
@@ -1772,6 +1834,17 @@ func run() error {
 				resolveConversation: wctx.Client.GetConversationInfo,
 			}
 			wctx.RTMHandler = handler
+			// The grid gate, installed here so it can reach the
+			// handler: sibling sessions of the same grid receive the
+			// same events, the active workspace is the only handler
+			// that renders them (gridFrameGate keeps its delivery
+			// ungated), and a message frame dropped on THIS session
+			// still runs its conversation discovery through the
+			// handler's serialized owner.
+			if gridEnt != "" {
+				isActive := func() bool { a := router.Active(); return a != nil && a.TeamID == teamID }
+				wctx.Client.SetWSEventGate(gridFrameGate(gridGates.forGrid(gridEnt, wctx.Client.UserID()), isActive, handler.discoverAndPublish))
+			}
 			wctx.ConnMgr = slackclient.NewConnectionManager(wctx.Client, handler)
 
 			// Use the same workspace-relative cache projection as switching,

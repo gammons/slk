@@ -42,6 +42,13 @@ type rtmEventHandler struct {
 	workspaceName   string
 	activeChannelID func() string
 
+	// suppressed reports whether a message by authorID (messageAuthor's
+	// answer: the user, else the bot ID) in channelID is hidden by one
+	// of this workspace's rules (suppressStore.Hides). A hidden message
+	// is cached but neither notifies nor marks its channel unread. nil
+	// hides nothing.
+	suppressed func(channelID, authorID string) bool
+
 	// cfg is the loaded user config; used by OnConversationOpened to
 	// resolve sidebar section + section order via buildChannelItem.
 	cfg config.Config
@@ -52,6 +59,13 @@ type rtmEventHandler struct {
 	// emojiLister refetches emoji.list for an emoji_changed event that
 	// can't be applied as a delta.
 	emojiLister customEmojiLister
+	// gridSiblings returns the workspace IDs of every session on this
+	// handler's Enterprise Grid, its own included; empty off a grid.
+	// OnMessage consults it only to tell whether this session is on a
+	// grid with another one: the rail refresh it sends is a single
+	// ReadStateChangedMsg whose receiver refreshes every workspace's
+	// dot, so the sibling list itself is never fanned out over.
+	gridSiblings func() []string
 
 	// backfillGate enforces a 30 s minimum between reconnect-driven
 	// catch-up passes. Per-handler so each workspace has its own gate.
@@ -162,6 +176,24 @@ func (h *rtmEventHandler) discoverConversation(channelID string) (sidebar.Channe
 	return h.addConversation(*ch)
 }
 
+// discoverAndPublish runs the message-start discovery block for
+// channelID: learn a conversation this session has never seen - a
+// group DM another user created mid-session arrives only as messages,
+// never as a conversation-opened event - and publish it to the sidebar
+// and finder when it is new. OnMessage runs the same two steps inline
+// (discovery early, the publish late, after the read-state write); the
+// grid event gate calls this for a message frame it dropped, so the
+// session that lost the delivery race still learns the conversation.
+// The gate runs on the same serialized event-owner goroutine as every
+// other handler callback, and the shared unread state the publish
+// wants was already written by whichever session won the race.
+func (h *rtmEventHandler) discoverAndPublish(channelID string) {
+	discovered, discoveredFinder, isNew := h.discoverConversation(channelID)
+	if isNew {
+		h.publishConversation(discovered, discoveredFinder)
+	}
+}
+
 func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, changed, edited bool, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment, botID, username string) {
 	// Bot messages (bot_message) carry no user, only a bot_id + username.
 	// Key the row on the bot_id and resolve its avatar/name via bots.info,
@@ -171,6 +203,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// Synchronous, so the channel's row and type exist before the writes
 	// below. The UI hears of it only after the unread write.
 	discovered, discoveredFinder, isNew := h.discoverConversation(channelID)
+	hidden := h.suppressed != nil && h.suppressed(channelID, authorID)
 	// Cache every message to SQLite, regardless of active workspace.
 	// Guard against nil db so handlers constructed in tests (without
 	// real persistence) don't panic.
@@ -238,7 +271,9 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// full handler (db, caches, program), so faking the gate is
 	// disproportionate. The subtype list itself is pinned by the notice
 	// tests in messages and slackclient.
-	if !changed && h.notifier != nil && h.notifyCfg.Enabled && !core.IsSystemNoticeSubtype(subtype) {
+	//
+	// A suppressed author's message never notifies, mention or not.
+	if !changed && !hidden && h.notifier != nil && h.notifyCfg.Enabled && !core.IsSystemNoticeSubtype(subtype) {
 		isActiveWS := h.isActive != nil && h.isActive()
 		activeChID := ""
 		if h.activeChannelID != nil {
@@ -278,11 +313,18 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 			// Just the mentioned names, not a copy of the whole store:
 			// the stripper wants a plain map.
 			body := senderName + ": " + notify.StripSlackMarkupWithUserGroups(text, h.userNames.MentionedNames(text), groupNames)
-			go func() {
-				if err := h.notifier.Notify(title, body); err != nil {
-					debuglog.Notify("notification failed: %v", err)
-				}
-			}()
+			// One notification per message. On a grid an inactive
+			// sibling's copy of the frame can reach this path first,
+			// and the active socket's copy (never gated) reaches it
+			// again; notifyOnce keeps the second one silent. Keyed by
+			// (channel, ts), unique per message.
+			if notifyOnce(channelID, ts) {
+				go func() {
+					if err := h.notifier.Notify(title, body); err != nil {
+						debuglog.Notify("notification failed: %v", err)
+					}
+				}()
+			}
 		}
 	}
 
@@ -345,7 +387,10 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// A join/leave notice doesn't make the channel unread on Slack
 	// either -- excluded here so the mention-badge check below (nested
 	// in this same gate) inherits it for free, same as isSelfMessage.
-	shouldMarkChannel := channelEligible && !isSelfMessage && !changed && !core.IsSystemNoticeSubtype(subtype)
+	//
+	// Nor does a suppressed author's message: the user asked not to
+	// see it, so it must not draw them to the channel either.
+	shouldMarkChannel := channelEligible && !isSelfMessage && !changed && !hidden && !core.IsSystemNoticeSubtype(subtype)
 	if h.db != nil && shouldMarkChannel {
 		if err := h.db.UpdateChannelReadState(channelID, "", true); err != nil {
 			log.Printf("Warning: failed to set has_unread for %s: %v", channelID, err)
@@ -389,8 +434,14 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 		// mention.InText's empty-self guard makes the direct-mention
 		// probe a no-op for it while still honouring @here/@channel.
 		if messageMentionsSelf(h.channelTypes[channelID], text, h.currentUserID) {
-			if err := h.db.IncrementChannelMentionCount(channelID); err != nil {
-				log.Printf("Warning: failed to increment mention count for %s: %v", channelID, err)
+			// Once per message: a grid sibling's copy of the frame can
+			// reach this write first, and the active socket's copy
+			// (never gated) reaches it again - without the guard one
+			// @-mention badges as 2 until the next counts refresh.
+			if mentionBumpedOnce(channelID, ts) {
+				if err := h.db.IncrementChannelMentionCount(channelID); err != nil {
+					log.Printf("Warning: failed to increment mention count for %s: %v", channelID, err)
+				}
 			}
 		}
 	}
@@ -419,6 +470,10 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 			debuglog.Cache("OnMessage: team=%s channel=%s ts=%s subtype=%q thread_ts=%s decision=skipped_self_or_change_inactive",
 				h.workspaceID, channelID, ts, subtype, threadTS)
 		}
+		// One message, not one per grid sibling: the receiver ignores
+		// WorkspaceID and refreshes every rail dot each time, so a
+		// per-sibling fan-out from whichever session survived the
+		// dedupe would just repeat the same refresh N times.
 		if h.program != nil {
 			h.program.Send(ui.ReadStateChangedMsg{
 				WorkspaceID: h.workspaceID,
@@ -438,6 +493,17 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 		h.workspaceID, channelID, ts, subtype, threadTS)
 	if h.program != nil {
 		h.program.Send(ui.NewMessageMsg{ChannelID: channelID, Message: item, Changed: changed})
+		// Off a grid the active arm sends no ReadStateChangedMsg of
+		// its own (the NewMessageMsg path owns the visible update), but
+		// on a grid this may be the only handler whose copy of the
+		// frame survived the dedupe, so the rail dots refresh from
+		// here - once, for the same reason as the inactive arm above.
+		if onGrid := h.gridSiblings != nil && len(h.gridSiblings()) > 1; onGrid {
+			h.program.Send(ui.ReadStateChangedMsg{
+				WorkspaceID: h.workspaceID,
+				ChannelID:   channelID,
+			})
+		}
 	}
 }
 
@@ -578,14 +644,27 @@ func (h *rtmEventHandler) OnMessageDeleted(channelID, ts string) {
 }
 
 func (h *rtmEventHandler) OnReactionAdded(channelID, ts, userID, emojiName string) {
-	// Update cache regardless of active state
+	// Update cache regardless of active state. The append is
+	// idempotent: on a grid, an inactive sibling's copy of the frame
+	// can run this handler before the active socket's copy (never
+	// gated) runs it again, and appending twice would double the
+	// count. The UI dispatch below still runs for the active handler
+	// either way.
 	rows, err := h.db.GetReactions(ts, channelID)
 	if err == nil {
 		found := false
 		for _, r := range rows {
 			if r.Emoji == emojiName {
-				userIDs := append(r.UserIDs, userID)
-				_ = h.db.UpsertReaction(ts, channelID, emojiName, userIDs, r.Count+1)
+				for _, uid := range r.UserIDs {
+					if uid == userID {
+						found = true
+						break
+					}
+				}
+				if !found {
+					userIDs := append(r.UserIDs, userID)
+					_ = h.db.UpsertReaction(ts, channelID, emojiName, userIDs, r.Count+1)
+				}
 				found = true
 				break
 			}
@@ -614,10 +693,35 @@ func (h *rtmEventHandler) OnReactionRemoved(channelID, ts, userID, emojiName str
 		for _, r := range rows {
 			if r.Emoji == emojiName {
 				var newUserIDs []string
+				present := false
 				for _, uid := range r.UserIDs {
 					if uid != userID {
 						newUserIDs = append(newUserIDs, uid)
+					} else {
+						present = true
 					}
+				}
+				// Only write when the user was actually present: a
+				// grid sibling's copy of the frame may have already
+				// removed them, and decrementing again would double
+				// the removal. One exception: Slack truncates UserIDs
+				// on busy reactions, so an unlisted user may still
+				// hold the reaction - when the list is shorter than
+				// the count, decrement anyway, off a grid (a grid
+				// sibling cannot be told from a truncated list, so
+				// there the conservative skip stands and the count
+				// self-heals at the next history fetch).
+				if !present {
+					// The grid test is the RESULT, not the field:
+					// main.go wires a gridSiblings closure onto every
+					// handler, so the field is never nil in
+					// production - off a grid it returns nil (the
+					// same shape railRefreshTargets tests).
+					onGrid := h.gridSiblings != nil && len(h.gridSiblings()) > 0
+					if r.Count > len(r.UserIDs) && !onGrid {
+						_ = h.db.UpsertReaction(ts, channelID, emojiName, newUserIDs, r.Count-1)
+					}
+					break
 				}
 				if len(newUserIDs) == 0 {
 					_ = h.db.DeleteReaction(ts, channelID, emojiName)

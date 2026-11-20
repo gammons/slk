@@ -17,6 +17,7 @@ import (
 	"github.com/gammons/slk/internal/ui/newmessagepicker"
 	"github.com/gammons/slk/internal/ui/reactionsview"
 	"github.com/gammons/slk/internal/ui/searchresults"
+	"github.com/gammons/slk/internal/ui/suppresslist"
 	"github.com/gammons/slk/internal/ui/workspacefinder"
 )
 
@@ -222,6 +223,14 @@ func dialogGoldens() []dialogGolden {
 			},
 		},
 		{
+			name: "dialog_open_slack_link", want: "Open Slack link",
+			shown: func(a *App) bool { return a.mode == ModeOpenSlackLink },
+			open: func(t *testing.T, a *App) {
+				a.slackLinkInput = "https://acme.slack.com/archives/C1/p1700000000000000"
+				a.SetMode(ModeOpenSlackLink)
+			},
+		},
+		{
 			name: "dialog_presence_snooze", want: "Snooze for how many minutes?",
 			shown: func(a *App) bool { return a.mode == ModePresenceCustomSnooze },
 			open: func(t *testing.T, a *App) {
@@ -274,6 +283,26 @@ func dialogGoldens() []dialogGolden {
 				a.marksOverlay.SetRows(nil)
 				a.marksOverlay.Open()
 				a.SetMode(ModeMarks)
+			},
+		},
+		{
+			name: "dialog_suppressed", want: "Hidden authors", shown: func(a *App) bool { return a.suppressList.IsVisible() },
+			open: func(t *testing.T, a *App) {
+				a.suppressList.SetRows([]suppresslist.Row{
+					{Key: 0, Who: "DeployBot", Where: "everywhere"},
+					{Key: 1, Who: "alice", Where: "in #random"},
+				})
+				a.suppressList.Open()
+				a.suppressList.HandleKey("down")
+				a.SetMode(ModeSuppressed)
+			},
+		},
+		{
+			name: "dialog_suppressed_empty", want: "Nobody is hidden", shown: func(a *App) bool { return a.suppressList.IsVisible() },
+			open: func(t *testing.T, a *App) {
+				a.suppressList.SetRows(nil)
+				a.suppressList.Open()
+				a.SetMode(ModeSuppressed)
 			},
 		},
 		{

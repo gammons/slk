@@ -8,23 +8,24 @@ something from the top of the list for the richest experience.
 |-----------------------|----------------------|--------------------|-------------|------------------|-------------------------------------------------------------|
 | **kitty**             | kitty graphics       | yes                | yes         | yes              | Best overall experience. Older versions may need `clipboard_control write-clipboard`. |
 | **ghostty**           | kitty graphics       | yes                | yes         | yes              | Recommended.                                                |
+| **Rex**               | kitty graphics       | yes                | yes         | yes              | Built on Ghostty's terminal engine; detected by `TERM_PROGRAM=rex`. |
 | **WezTerm**           | kitty graphics       | yes                | yes         | yes              | No unicode placeholders, so slk places the images itself. See [below](#wezterm-emulated-kitty-placement). |
-| **foot** (Wayland)    | sixel                | half-block         | yes         | yes              | Best Wayland-native option.                                 |
+| **foot** (Wayland)    | sixel                | sixel              | yes         | yes              | Best Wayland-native option.                                 |
 | **iTerm2 ≥ 3.5**      | half-block           | half-block         | yes         | yes              | Implements kitty graphics but not unicode placeholders, so slk falls back to half-block. |
 | **Alacritty**         | half-block           | half-block         | yes (≥0.11) | yes              | Fast and reliable, but no inline images on its own. On Linux (X11/Xwayland), running slk under [termimg](https://github.com/thebanri/limoni/tree/main/apps/termimg) (`termimg slk`) shows them as sixel; termimg runs slk in a pty. |
 | **gnome-terminal** (recent) | half-block     | half-block         | yes         | yes              |                                                             |
-| **Windows Terminal** (≥ 1.22) | sixel        | half-block         | yes         | yes              | Detected at startup via DA1; the cell size comes from the terminal (`CSI 16 t`). |
-| **mlterm**            | sixel                | half-block         | partial     | partial          |                                                             |
-| **xterm** (`-ti vt340`) | sixel              | half-block         | yes         | yes              | Detected at startup via DA1; plain `xterm` without the sixel-capable emulation is half-block. |
-| **other sixel terminals** | sixel            | half-block         | varies      | varies           | DomTerm, toyterm, contour and friends are picked up by the startup DA1 probe. |
+| **Windows Terminal** (≥ 1.22) | sixel        | sixel              | yes         | yes              | Detected at startup via DA1; the cell size comes from the terminal (`CSI 16 t`). |
+| **mlterm**            | sixel                | sixel              | partial     | partial          |                                                             |
+| **xterm** (`-ti vt340`) | sixel              | sixel              | yes         | yes              | Detected at startup via DA1; plain `xterm` without the sixel-capable emulation is half-block. |
+| **other sixel terminals** | sixel            | sixel              | varies      | varies           | DomTerm, toyterm, contour and friends are picked up by the startup DA1 probe. |
 | **screen**            | half-block           | half-block         | no          | no               | No working OSC 52 path; consider switching to tmux.         |
 
 ## How the image protocol is picked
 
 With `image_protocol = "auto"` (the default) slk checks, in order:
 
-1. kitty graphics, when the terminal announces itself as kitty, Ghostty
-   or WezTerm, confirmed at startup with a graphics-protocol probe.
+1. kitty graphics, when the terminal announces itself as kitty, Ghostty,
+   Rex or WezTerm, confirmed at startup with a graphics-protocol probe.
 2. sixel, for terminals slk recognizes by name (foot, mlterm, iTerm2)
    **or** that answer the startup DA1 query (`CSI c`) with attribute
    `4`. This catches sixel terminals slk has never heard of, including
@@ -202,4 +203,4 @@ config key (`auto` / `kitty` / `sixel` / `halfblock` / `off`). See
 ## Related
 
 - [[Clipboard and OSC 52|Clipboard-and-OSC-52]] — getting copy/paste to land
-- [[Tradeoffs and Non-Goals|Tradeoffs-and-Non-Goals]] — image rendering caveats (animated GIFs, unfurls, threads pane sixel)
+- [[Tradeoffs and Non-Goals|Tradeoffs-and-Non-Goals]] — image rendering caveats (animated GIFs, unfurls, sixel at a pane edge)

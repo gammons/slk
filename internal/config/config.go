@@ -110,6 +110,11 @@ type Appearance struct {
 	// ThreadAvatars also draws avatars in the thread pane (needs
 	// ShowAvatars). Default on.
 	ThreadAvatars bool `toml:"thread_avatars"`
+	// ShowWorkspaceRail draws the workspace rail on the left. false hides
+	// it at startup (ctrl+g toggles it), and the status bar then shows the
+	// active workspace's initials. With one workspace the rail is never
+	// drawn. Default on.
+	ShowWorkspaceRail bool `toml:"show_workspace_rail"`
 	// ImageProtocol controls how inline images are rendered.
 	// One of: "auto", "kitty", "sixel", "halfblock", "off".
 	ImageProtocol string `toml:"image_protocol"`
@@ -294,6 +299,30 @@ type Workspace struct {
 	// boot". Persisted so the second and later runs start with a
 	// current value rather than a stale compiled-in one.
 	VersionTS string `toml:"version_ts"`
+	// Suppress hides authors' messages in this workspace, from
+	// [[workspaces.<key>.suppress]] blocks. slk appends and removes
+	// these blocks itself (the :suppress and :suppressed commands).
+	Suppress []SuppressRule `toml:"suppress"`
+}
+
+// SuppressRule is one [[workspaces.<key>.suppress]] block: hide
+// Author's messages in Channel, or in the whole workspace when Channel
+// is empty. Both are Slack IDs (an author is a user ID, or a bot ID
+// for a bot that posts without a user). Note is free text for people
+// reading the file.
+type SuppressRule struct {
+	Author  string `toml:"author"`
+	Channel string `toml:"channel"`
+	Note    string `toml:"note"`
+}
+
+// SuppressRules converts w's rules to the set the app matches against.
+func (w Workspace) SuppressRules() *core.Suppression {
+	rules := make([]core.SuppressRule, 0, len(w.Suppress))
+	for _, r := range w.Suppress {
+		rules = append(rules, core.SuppressRule{AuthorID: r.Author, ChannelID: r.Channel, Note: r.Note})
+	}
+	return core.NewSuppression(rules)
 }
 
 // Theme is defined in internal/core, which the TUI shares.
@@ -318,6 +347,8 @@ func Default() Config {
 			ClickOpensThread: true,
 			EmojiImages:      "on",
 			EmojiCells:       2,
+			// Hidden with one workspace regardless (#216).
+			ShowWorkspaceRail: true,
 		},
 		Animations: Animations{
 			Enabled:          true,
@@ -362,6 +393,13 @@ func Load(path string) (Config, error) {
 		return cfg, err
 	}
 	cfg.Workspaces = resolved
+	for key, w := range cfg.Workspaces {
+		for i, r := range w.Suppress {
+			if strings.TrimSpace(r.Author) == "" {
+				return cfg, fmt.Errorf("workspace %q: suppress rule %d has no author", key, i+1)
+			}
+		}
+	}
 
 	// Clamp MouseWheelLines: 0 (unset, after a user supplied a partial
 	// [appearance] block without this key) and negative values both fall

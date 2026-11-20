@@ -8,11 +8,40 @@ import (
 
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
+	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/ui"
 )
 
-// activityFetchFunc builds the ActivityService.Fetch closure: one page
-// of the workspace's activity.feed.
+// activityClient returns the client the Activity closures should run on
+// for wctx's workspace. A Grid member-workspace token is the one session
+// Slack rejects activity.feed, messages.list and activity.markRead for
+// (team_is_restricted, the same restriction client.counts hits); the
+// org-level session on the same grid serves them, and the web client's
+// Activity view is org-wide anyway. The sibling must also be the SAME
+// authenticated user: browser credentials for a second account on the
+// grid connect as sibling sessions too, and routing this workspace's
+// activity through one of those would read (and markRead) another
+// user's feed. Falls back to the workspace's own client when no
+// matching org-level sibling is connected, so the failure surfaces
+// as it does today rather than as a silent empty view with no diagnosis.
+func activityClient(router *workspaceRouter, wctx *WorkspaceContext) *slackclient.Client {
+	if !wctx.Client.IsGridMember() {
+		return wctx.Client
+	}
+	ent, user := wctx.Client.EnterpriseID(), wctx.Client.UserID()
+	for _, sibling := range router.All() {
+		if sibling.Client == nil || sibling.Client.IsGridMember() {
+			continue
+		}
+		if sibling.Client.EnterpriseID() == ent && sibling.Client.UserID() == user {
+			return sibling.Client
+		}
+	}
+	return wctx.Client
+}
+
+// activityFetchFunc builds the ActivityService.Fetch closure: the
+// workspace's activity.feed, paged until the limit is met.
 //
 // Both Activity closures resolve the workspace by the requested teamID,
 // not router.Active(): a workspace switch can land between dispatch and
@@ -26,7 +55,22 @@ func activityFetchFunc(router *workspaceRouter) core.ActivityFetchFunc {
 		}
 		fetchCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		result, err := wctx.Client.GetActivityFeed(fetchCtx, limit, "", unreadOnly)
+		client := activityClient(router, wctx)
+		// The feed came off the org session, so it is org-wide: it
+		// holds items whose conversations live in other grid
+		// workspaces, which this workspace cannot open (its channel
+		// store and its token are both workspace-scoped). Keep the
+		// items this workspace can act on.
+		var filter func([]core.ActivityItem) []core.ActivityItem
+		if client != wctx.Client {
+			filter = func(items []core.ActivityItem) []core.ActivityItem {
+				return filterActivityItemsToWorkspace(items, wctx)
+			}
+		}
+		fetchPage := func(cursor string) (slackclient.ActivityFeedResult, error) {
+			return client.GetActivityFeed(fetchCtx, limit, cursor, unreadOnly)
+		}
+		items, err := collectActivityItems(limit, fetchPage, filter)
 		if err != nil {
 			log.Printf("Warning: GetActivityFeed(%s): %v", teamIDStr, err)
 			// Return nil (no message) on failure so the existing
@@ -38,9 +82,73 @@ func activityFetchFunc(router *workspaceRouter) core.ActivityFetchFunc {
 		}
 		return ui.ActivityListLoadedMsg{
 			TeamID: teamIDStr,
-			Items:  result.Items,
+			Items:  items,
 		}
 	}
+}
+
+// collectActivityItems pages the feed until limit items survive the
+// optional per-page filter (a member workspace's org-wide feed is
+// filtered down to its own conversations, so one page may hold fewer
+// than the limit - or none at all, when the newest items all belong to
+// sibling workspaces) or the feed ends. Any page failure is the
+// caller's error, so the feed already on screen stays: the loop only
+// pages while short of the limit, so what was collected when a later
+// page fails is a partial list - possibly empty, when every earlier
+// page held only sibling items - and returning it as a success would
+// replace the loaded feed with less than a full page.
+func collectActivityItems(limit int, fetchPage func(cursor string) (slackclient.ActivityFeedResult, error), filter func([]core.ActivityItem) []core.ActivityItem) ([]core.ActivityItem, error) {
+	var items []core.ActivityItem
+	cursor := ""
+	for {
+		result, err := fetchPage(cursor)
+		if err != nil {
+			return nil, err
+		}
+		pageItems := result.Items
+		if filter != nil {
+			pageItems = filter(pageItems)
+		}
+		items = append(items, pageItems...)
+		if len(items) >= limit || result.NextCursor == "" {
+			return items, nil
+		}
+		cursor = result.NextCursor
+	}
+}
+
+// filterActivityItemsToWorkspace keeps the activity items whose
+// conversation belongs to wctx (or that have none - a Slack reminder,
+// which nothing opens anyway), dropping the ones pointing at another
+// workspace's channel. Membership comes from wctx's race-safe
+// conversation ID set, not its Channels slice (written on the connect
+// goroutine and the WebSocket event owner, while this runs on the
+// goroutine behind the fetch command) and not the cache (whose channel
+// rows are owned by whichever session cached the channel first, so a
+// shared channel the org session cached would be dropped here even
+// though this workspace can open it). A workspace whose conversations
+// are not known yet (a fetch racing the first boot) keeps every item:
+// the alternative - an empty view on a slow boot - is the bug the
+// org-session fallback exists to fix.
+//
+// unjoined_channel_mention items are kept regardless: their channel is
+// by definition not in the sidebar (the user was mentioned without
+// being a member), so membership cannot tell this workspace's from a
+// sibling's, and the fetch has no cheap ownership oracle for a channel
+// it holds no row for. Fail-open: a mention that turns out to belong
+// to another workspace costs a failed open with a toast, while hiding
+// a real mention costs the mention.
+func filterActivityItemsToWorkspace(items []core.ActivityItem, wctx *WorkspaceContext) []core.ActivityItem {
+	if len(items) == 0 || !wctx.HasAnyConversation() {
+		return items
+	}
+	out := make([]core.ActivityItem, 0, len(items))
+	for _, it := range items {
+		if it.ChannelID == "" || it.Type == "unjoined_channel_mention" || wctx.HasConversation(it.ChannelID) {
+			out = append(out, it)
+		}
+	}
+	return out
 }
 
 // activityHydrateFunc builds the ActivityService.Hydrate closure: the
@@ -54,7 +162,7 @@ func activityHydrateFunc(router *workspaceRouter) core.ActivityHydrateFunc {
 		}
 		fetchCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		bodies, err := wctx.Client.GetActivityMessages(fetchCtx, refs)
+		bodies, err := activityClient(router, wctx).GetActivityMessages(fetchCtx, refs)
 		if err != nil {
 			log.Printf("Warning: GetActivityMessages(%s): %v", teamIDStr, err)
 			// nil = keep whatever bodies we already have.
@@ -79,7 +187,7 @@ func activitySetReadFunc(router *workspaceRouter) core.ActivitySetReadFunc {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		if err := wctx.Client.SetActivityRead(ctx, item.Type, item.Key, item.FeedTS, read); err != nil {
+		if err := activityClient(router, wctx).SetActivityRead(ctx, item.Type, item.Key, item.FeedTS, read); err != nil {
 			log.Printf("Warning: SetActivityRead(%s, %s, read=%v): %v", teamIDStr, item.Key, read, err)
 			msg.Err = err
 		}

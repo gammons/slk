@@ -358,7 +358,7 @@ func (a *App) isAppHotkey(msg tea.KeyMsg) bool {
 		a.keys.FuzzyFinder, a.keys.FuzzyFinderAlt,
 		a.keys.NewMessage, a.keys.ActivityView,
 		a.keys.WorkspaceSearch, a.keys.PresenceMenu,
-		a.keys.ToggleSidebar, a.keys.ToggleThread,
+		a.keys.ToggleSidebar, a.keys.ToggleWorkspaceRail, a.keys.ToggleThread,
 		a.keys.ThemeSwitcher, a.keys.ThemeSwitcherGlobal,
 	)
 }

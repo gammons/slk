@@ -38,6 +38,12 @@ type (
 // AvatarFunc returns the rendered half-block avatar for a user ID, or empty string.
 type AvatarFunc func(userID string) string
 
+// SixelAvatarFunc returns a user's avatar as sixel bytes and the key
+// that identifies them to the painter, or ok false when there is none:
+// not on a sixel terminal, or not loaded yet. The pane still draws the
+// AvatarFunc avatar wherever the sixel one cannot be painted.
+type SixelAvatarFunc func(userID string) (key string, bytes []byte, ok bool)
+
 // EntryPayload is a content pane's payload for one entry of its list,
 // index-aligned with the list's entries: the parts the substrate does
 // not need. A nil cache of payloads means the render cache was discarded
@@ -55,12 +61,12 @@ type EntryPayload struct {
 	// for visible entries. nil when the entry has no inline images.
 	Flushes []func(io.Writer) error
 
-	// sixelRows are the sixel images in this entry. Several can share a
+	// SixelRows are the sixel images in this entry. Several can share a
 	// row (a message's images sit side by side), so this is not keyed
-	// by the row. View paints an image out-of-band when it is fully
-	// visible and substitutes its halfblock fallback otherwise. Only
-	// the channel pane fills it.
-	sixelRows []sixelEntry
+	// by the row. PlaceSixel paints an image out-of-band when it is
+	// fully visible and substitutes its halfblock fallback otherwise.
+	// Both panes fill it from RenderedMessage.SixelRows.
+	SixelRows []SixelImage
 }
 
 // SelectedLines returns the rows to draw for a cursor entry e: its
@@ -81,10 +87,12 @@ func (p *EntryPayload) SelectedLines(e *entrylist.Entry, hasSelection bool, buil
 	return p.SelectedShort
 }
 
-// sixelEntry holds the pre-computed sixel bytes for one inline image,
-// plus the halfblock fallback used when the image is only partially
-// visible (Phase 6 cannot emit a half-image with sixel).
-type sixelEntry struct {
+// SixelImage holds the pre-computed sixel bytes for one inline image
+// (or avatar), plus the halfblock fallback used when the image is only
+// partially visible (sixel cannot emit a half-image). RenderMessage
+// fills it; a pane carries it opaque in EntryPayload and hands it to
+// PlaceSixel.
+type SixelImage struct {
 	key      string // stable image cache key; empty -> payload-hash identity
 	bytes    []byte
 	fallback []string // halfblock-equivalent text for partial-visibility frames
@@ -106,6 +114,15 @@ type OpenImagePreviewMsg struct {
 }
 
 type Model struct {
+	// hide drops a suppressed author's messages as they arrive (SetHide).
+	hide func(MessageItem) bool
+	// hiddenOldest is the oldest TS among hidden messages older than
+	// the buffer, so OldestTS (the older-history cursor) moves past a
+	// page that was all hidden instead of fetching it forever.
+	hiddenOldest string
+	// hiddenNewest is the newest TS among hidden messages, so NewestTS
+	// covers the range the pane has loaded.
+	hiddenNewest string
 	// sixelPaints is the placement set produced by the last View, consumed
 	// by the App's out-of-band painter. See imgpkg.SixelPaint.
 	sixelPaints []imgpkg.SixelPaint
@@ -122,6 +139,7 @@ type Model struct {
 	loading       bool
 	spinnerFrame  int                          // braille-spinner frame index for "Loading messages..." animation
 	avatarFn      AvatarFunc                   // optional: returns half-block avatar for a userID
+	sixelAvatarFn SixelAvatarFunc              // optional: the avatar as sixel, on a sixel terminal
 	replyAvatarFn AvatarFunc                   // optional: small avatar for the reply row
 	userNames     map[string]string            // user ID -> display name for mention resolution
 	userStatuses  map[string]peerstatus.Status // user ID -> custom status shown after author names
@@ -734,6 +752,7 @@ func (m *Model) SetMessages(msgs []MessageItem) {
 		debuglog.Cache("messages.Model.SetMessages: channel=%q before=[%s] after=[%s]",
 			m.channelName, oldSummary, newSummary)
 	}
+	msgs, m.hiddenOldest, m.hiddenNewest = Visible(m.hide, msgs)
 	m.messages = msgs
 	m.ClearSelection()
 	m.dropCache()
@@ -752,6 +771,10 @@ func (m *Model) SetMessages(msgs []MessageItem) {
 }
 
 func (m *Model) AppendMessage(msg MessageItem) {
+	if m.hide != nil && m.hide(msg) {
+		m.keepNewerHidden(msg.TS)
+		return
+	}
 	// Idempotent on TS. Self-sent messages take an optimistic path
 	// (MessageSentMsg from the chat.postMessage HTTP response) AND
 	// arrive again as a WebSocket echo (NewMessageMsg). The order of
@@ -1029,7 +1052,7 @@ func (m *Model) GoToBottom() {
 }
 
 func (m *Model) AtTop() bool {
-	return m.selected == 0 && len(m.messages) > 0
+	return (m.selected == 0 && len(m.messages) > 0) || m.onlyHidden()
 }
 
 // ViewportAtTop reports whether the viewport is scrolled to the very top of
@@ -1037,7 +1060,7 @@ func (m *Model) AtTop() bool {
 // on a wheel-up / PageUp gesture that scrolls the viewport without moving
 // selection (selection-based backfill goes through AtTop()).
 func (m *Model) ViewportAtTop() bool {
-	return m.list.YOffset() == 0 && len(m.messages) > 0
+	return (m.list.YOffset() == 0 && len(m.messages) > 0) || m.onlyHidden()
 }
 
 // YOffset returns the current viewport scroll offset (first visible line
@@ -1072,6 +1095,12 @@ func (m *Model) PrependMessages(msgs []MessageItem) {
 			return
 		}
 		msgs = kept
+	}
+	msgs, hiddenOldest, hiddenNewest := Visible(m.hide, msgs)
+	m.keepOlderHidden(hiddenOldest)
+	m.keepNewerHidden(hiddenNewest)
+	if len(msgs) == 0 {
+		return
 	}
 	count := len(msgs)
 	if debuglog.Enabled() {
@@ -1289,6 +1318,13 @@ func (m *Model) SetSpinnerFrame(f int) {
 
 func (m *Model) SetAvatarFunc(fn AvatarFunc) {
 	m.avatarFn = fn
+}
+
+// SetSixelAvatarFunc draws avatars as sixel images where fn has one;
+// nil keeps them half-block. The half-block avatar stays the fallback.
+func (m *Model) SetSixelAvatarFunc(fn SixelAvatarFunc) {
+	m.sixelAvatarFn = fn
+	m.dropCache()
 }
 
 // SetReplyAvatarFunc switches the reply row to Slack's look (repliers'
@@ -1611,11 +1647,17 @@ func (m *Model) LastReadTS() string {
 	return m.lastReadTS
 }
 
+// OldestTS is the cursor for fetching older history: the oldest message
+// the pane holds, or a hidden one it was given that is older still.
 func (m *Model) OldestTS() string {
-	if len(m.messages) == 0 {
-		return ""
+	oldest := ""
+	if len(m.messages) > 0 {
+		oldest = m.messages[0].TS
 	}
-	return m.messages[0].TS
+	if m.hiddenOldest != "" && (oldest == "" || m.hiddenOldest < oldest) {
+		return m.hiddenOldest
+	}
+	return oldest
 }
 
 // cacheStyles bundles the lipgloss styles and pre-rendered strings that
@@ -1804,6 +1846,7 @@ func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles, stats *entr
 	}
 	if !m.compact && m.avatarFn != nil {
 		opt.Avatar = m.avatarFn(msg.UserID)
+		opt.AvatarSixelKey, opt.AvatarSixel = SixelAvatar(m.sixelAvatarFn, msg.UserID)
 	}
 	r := RenderMessage(msg, width, m.renderContext(), opt)
 	// The channel pane's kitty upload order: blocks, attachments, then
@@ -1838,7 +1881,7 @@ func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles, stats *entr
 		Trail:      trail,
 		Hits:       append(r.Hits, w.LinkHits...),
 	}
-	return entry, EntryPayload{ShortSrc: w.ShortSrc, Flushes: flushes, sixelRows: r.SixelRows}
+	return entry, EntryPayload{ShortSrc: w.ShortSrc, Flushes: flushes, SixelRows: r.SixelRows}
 }
 
 // buildCache pre-renders all messages and day separators, splitting each
@@ -2027,15 +2070,15 @@ func placeAvatarBeside(avatar, content string) string {
 }
 
 // convertSixelMap translates imgrender.SixelEntry values into the
-// messages-pane's private sixelEntry type. The map key is the entry
+// messages-pane's private SixelImage type. The map key is the entry
 // row of the image's top line. Returns nil for an empty input.
-func convertSixelMap(in map[int]imgrender.SixelEntry) []sixelEntry {
+func convertSixelMap(in map[int]imgrender.SixelEntry) []SixelImage {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make([]sixelEntry, 0, len(in))
+	out := make([]SixelImage, 0, len(in))
 	for k, v := range in {
-		out = append(out, sixelEntry{
+		out = append(out, SixelImage{
 			row: k, key: v.Key, bytes: v.Bytes, fallback: v.Fallback,
 			height: v.Height, width: v.Width,
 		})
@@ -2354,76 +2397,28 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// lipgloss / bubbletea v2's renderer is known to mangle APC sequences
 	// embedded in line content.
 	var kittyFlushBuf bytes.Buffer
-	var sixelFallback map[int]string
-	// Placements for this frame, pane-local. Reset every render: the App
-	// reconciles the full set against what is currently on screen, so a
-	// stale entry here would keep a vanished image alive.
-	pendingSixel := make([]imgpkg.SixelPaint, 0, 2)
-	yOffset := m.list.YOffset()
-	offsets := m.list.Offsets()
 	for _, v := range frame.Visible {
-		p := &m.cache[v.Index]
-		for _, fl := range p.Flushes {
+		for _, fl := range m.cache[v.Index].Flushes {
 			if fl != nil {
 				_ = fl(&kittyFlushBuf)
 			}
 		}
-		entryStart := offsets[v.Index]
-		for _, sx := range p.sixelRows {
-			absStart := entryStart + sx.row
-			absEnd := absStart + sx.height
-			fullyVisible := absStart >= yOffset && absEnd <= yOffset+msgAreaHeight
-			windowRow := v.Row + (sx.row - v.From)
-			// Indicator rows replace window row 0 (loading hint) and
-			// row msgAreaHeight-1 (more below). An image whose footprint
-			// includes either is not fully paintable: the indicator is
-			// authoritative and must stay visible, so the image takes
-			// the partial-visibility fallback path instead.
-			intersectsLoading := m.loading && windowRow <= 0 && windowRow+sx.height > 0
-			intersectsMoreBelow := frame.MoreBelow && windowRow <= msgAreaHeight-1 && windowRow+sx.height > msgAreaHeight-1
-			if fullyVisible && !intersectsLoading && !intersectsMoreBelow {
-				if windowRow >= 0 && windowRow < len(frame.Rows) {
-					// Record the placement instead of appending the bytes
-					// to the line; the App paints these out-of-band after
-					// the frame is flushed. See SixelPlacements.
-					pendingSixel = append(pendingSixel, imgpkg.SixelPaint{
-						Key:   imgpkg.PlacementKey(sx.key, sx.bytes, sx.width, sx.height),
-						Row:   windowRow,
-						Col:   sx.col,
-						Rows:  sx.height,
-						Cols:  sx.width,
-						Bytes: sx.bytes,
-					})
-				}
-				continue
-			}
-			for k := 0; k < sx.height; k++ {
-				abs := absStart + k
-				if abs < yOffset || abs >= yOffset+msgAreaHeight {
-					continue
-				}
-				row := abs - yOffset
-				if row >= 0 && row < len(frame.Rows) && k < len(sx.fallback) {
-					if sixelFallback == nil {
-						sixelFallback = make(map[int]string)
-					}
-					// Compose onto a fallback already grafted on this
-					// row. Two images share a row, and cutting the
-					// original frame again would wipe the first one.
-					base := frame.Rows[row]
-					if prev, ok := sixelFallback[row]; ok {
-						base = prev
-					}
-					sixelFallback[row] = composeFallbackRow(base, sx.fallback[k], sx.col)
-				}
-			}
-		}
 	}
-	for row, fb := range sixelFallback {
-		if fb != "" {
-			frame.Rows[row] = fb
-		}
-	}
+	// Placements for this frame, pane-local. Reset every render: the App
+	// reconciles the full set against what is currently on screen, so a
+	// stale entry here would keep a vanished image alive.
+	//
+	// Indicator rows replace window row 0 (loading hint) and row
+	// msgAreaHeight-1 (more below). An image whose footprint includes
+	// either is not fully paintable: the indicator is authoritative and
+	// must stay visible, so the image takes the fallback path instead.
+	pendingSixel := PlaceSixel(frame, m.list.Offsets(), m.list.YOffset(), msgAreaHeight,
+		func(i int) []SixelImage { return m.cache[i].SixelRows },
+		func(windowRow, rows int) bool {
+			intersectsLoading := m.loading && windowRow <= 0 && windowRow+rows > 0
+			intersectsMoreBelow := frame.MoreBelow && windowRow <= msgAreaHeight-1 && windowRow+rows > msgAreaHeight-1
+			return intersectsLoading || intersectsMoreBelow
+		})
 	if kittyFlushBuf.Len() > 0 {
 		_, _ = imgpkg.KittyOutput.Write(kittyFlushBuf.Bytes())
 	}
