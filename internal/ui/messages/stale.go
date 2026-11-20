@@ -75,9 +75,17 @@ func (m *Model) markAuthors(reason string, ids []string) bool {
 		set[id] = struct{}{}
 	}
 	return m.markWhere(reason, func(msg MessageItem) bool {
-		_, ok := set[msg.UserID]
+		_, ok := set[displayedAuthor(msg, m.userNames)]
 		return ok
 	})
+}
+
+// displayedAuthor is the user id whose name and status the row draws.
+// A huddle with replies is drawn as its starter once that name
+// resolves (HuddleView); the stored author stays Slackbot. Every other
+// row draws its stored author.
+func displayedAuthor(msg MessageItem, names map[string]string) string {
+	return HuddleView(msg, names).UserID
 }
 
 // messageShowsUser reports whether a rendered row displays userID: as
@@ -207,6 +215,11 @@ func walkMessageText(msg MessageItem, fn func(string)) {
 				fn(f.Value)
 			}
 		}
+		for _, a := range att.Actions {
+			if a.Text != "" {
+				fn(a.Text)
+			}
+		}
 		walkBlocks(att.Blocks, fn)
 	}
 }
@@ -221,6 +234,17 @@ func walkBlocks(bs []blockkit.Block, fn func(string)) {
 			for _, f := range v.Fields {
 				if f != "" {
 					fn(f)
+				}
+			}
+			// Button and select labels are plain text, but RenderPlainText
+			// still places emoji images in them.
+			if la, ok := v.Accessory.(blockkit.LabelAccessory); ok && la.Label != "" {
+				fn(la.Label)
+			}
+		case blockkit.ActionsBlock:
+			for _, el := range v.Elements {
+				if el.Label != "" {
+					fn(el.Label)
 				}
 			}
 		case blockkit.HeaderBlock:

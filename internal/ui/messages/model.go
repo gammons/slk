@@ -1498,7 +1498,8 @@ func (m *Model) PatchUserName(userID, displayName string) {
 	// this user — the author line, a huddle they are in, or an <@id>
 	// mention — and leave every other row alone. A resolution for
 	// someone this channel does not display must not drop the cache.
-	shown := false
+	// The draft preview reads this map and caches its body on Version,
+	// so the version still bumps when no row shows the user.
 	for i := range m.messages {
 		if m.messages[i].UserID == userID && m.messages[i].UserName != displayName {
 			m.messages[i].UserName = displayName
@@ -1506,7 +1507,6 @@ func (m *Model) PatchUserName(userID, displayName string) {
 		if !messageShowsUser(m.messages[i], userID) {
 			continue
 		}
-		shown = true
 		if m.messages[i].TS == "" {
 			// No TS to address. Finish the name updates, then rebuild.
 			m.dropCache("PatchUserName")
@@ -1514,9 +1514,7 @@ func (m *Model) PatchUserName(userID, displayName string) {
 		}
 		m.markStale(m.messages[i].TS)
 	}
-	if shown {
-		m.dirty()
-	}
+	m.dirty()
 }
 
 // SetUserStatuses replaces the user ID -> custom status map whose emoji
@@ -1585,7 +1583,7 @@ func (m *Model) ExpireStatuses(now time.Time) bool {
 
 func (m *Model) hasAuthor(userID string) bool {
 	for i := range m.messages {
-		if m.messages[i].UserID == userID {
+		if displayedAuthor(m.messages[i], m.userNames) == userID {
 			return true
 		}
 	}
