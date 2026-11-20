@@ -45,6 +45,7 @@ type KeyMap struct {
 	ForwardMessage      key.Binding
 	OpenPreview         key.Binding
 	OpenLink            key.Binding
+	OpenSlackLink       key.Binding
 	DownloadFile        key.Binding
 	MarkUnread          key.Binding
 	MarkSet             key.Binding
@@ -131,6 +132,7 @@ func DefaultKeyMap() KeyMap {
 		ForwardMessage:  key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "forward message")),
 		OpenPreview:     key.NewBinding(key.WithKeys("O", "v"), key.WithHelp("O/v", "open image preview")),
 		OpenLink:        key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open link in message")),
+		OpenSlackLink:   key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "open a pasted Slack message link")),
 		DownloadFile:    key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "download file in message")),
 		MarkUnread:      key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "mark unread")),
 		MarkSet:         key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "set mark")),

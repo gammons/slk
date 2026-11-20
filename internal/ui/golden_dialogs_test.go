@@ -223,6 +223,14 @@ func dialogGoldens() []dialogGolden {
 			},
 		},
 		{
+			name: "dialog_open_slack_link", want: "Open Slack link",
+			shown: func(a *App) bool { return a.mode == ModeOpenSlackLink },
+			open: func(t *testing.T, a *App) {
+				a.slackLinkInput = "https://acme.slack.com/archives/C1/p1700000000000000"
+				a.SetMode(ModeOpenSlackLink)
+			},
+		},
+		{
 			name: "dialog_presence_snooze", want: "Snooze for how many minutes?",
 			shown: func(a *App) bool { return a.mode == ModePresenceCustomSnooze },
 			open: func(t *testing.T, a *App) {

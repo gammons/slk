@@ -362,6 +362,11 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 // data, restores last-viewed channel).
 func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	if a.compose.Uploading() || a.threadCompose.Uploading() {
+		// This switch is refused. Drop the permalink only when it is
+		// the one that asked for this switch; a newer paste stays.
+		if p := a.pendingFinderPermalink; p != nil && m.FinderPermalinkSeq != 0 && m.FinderPermalinkSeq == p.seq {
+			a.clearFinderPermalink()
+		}
 		return toastWithClear(a, "Upload in progress", 2*time.Second)
 	}
 	if a.userProfile.IsVisible() {
@@ -475,31 +480,42 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	// workspace first.
 	batch = append(batch, a.presence.SetPeers(a, m.UserStatuses))
 	a.statusbar.SetCustomStatus(a.presence.CustomStatus(a.currentUserID))
+	// A permalink from the finder that targeted this workspace
+	// navigates now that its channels are on screen. routeLink is
+	// the same path o uses. When the channel resolves, that jump
+	// replaces the last-channel restore; when it does not, the
+	// browser fallback still runs and the last channel opens.
+	navCmd, navigated := a.takeFinderPermalink(m.TeamID, m.FinderPermalinkSeq)
+	if navCmd != nil {
+		batch = append(batch, navCmd)
+	}
 	// Restore the last-viewed channel for this workspace if we
 	// have one and it still exists; otherwise fall back to the
 	// first channel in the sidebar. Move the sidebar cursor to
 	// that channel as well so the highlight matches the messages
-	// pane.
-	if len(m.Channels) > 0 {
-		target := m.Channels[0]
-		if savedID, ok := a.lastChannelByTeam[m.TeamID]; ok && savedID != "" {
-			for _, ch := range m.Channels {
-				if ch.ID == savedID {
-					target = ch
-					break
+	// pane. Skipped when the permalink above already chose a channel.
+	if !navigated {
+		if len(m.Channels) > 0 {
+			target := m.Channels[0]
+			if savedID, ok := a.lastChannelByTeam[m.TeamID]; ok && savedID != "" {
+				for _, ch := range m.Channels {
+					if ch.ID == savedID {
+						target = ch
+						break
+					}
 				}
 			}
+			a.sidebar.SelectByID(target.ID)
+			// Enter in the rail with enter_keeps_focus left focus there.
+			keep := m.KeepFocus
+			batch = append(batch, func() tea.Msg {
+				return ChannelSelectedMsg{ID: target.ID, Name: target.Name, Type: target.Type, KeepFocus: keep}
+			})
+		} else {
+			a.sidebar.SelectThreadsRow()
+			a.messagepane.SetLoading(false)
+			a.messagepane.SetMessages(nil)
 		}
-		a.sidebar.SelectByID(target.ID)
-		// Enter in the rail with enter_keeps_focus left focus there.
-		keep := m.KeepFocus
-		batch = append(batch, func() tea.Msg {
-			return ChannelSelectedMsg{ID: target.ID, Name: target.Name, Type: target.Type, KeepFocus: keep}
-		})
-	} else {
-		a.sidebar.SelectThreadsRow()
-		a.messagepane.SetLoading(false)
-		a.messagepane.SetMessages(nil)
 	}
 	// Kick off an initial threads-list fetch so the sidebar
 	// Threads row badge populates before the user opens the view.
