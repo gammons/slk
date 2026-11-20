@@ -877,7 +877,9 @@ func run() error {
 				if wctx == nil {
 					return nil
 				}
-				return loadCachedMessages(db, wctx.Client.UserID(), string(channelID), wctx.UserNames, tsFormat, router)
+				items := loadCachedMessages(db, wctx.Client.UserID(), string(channelID), wctx.UserNames, tsFormat, router)
+				wctx.Subteams.RequestItems(items)
+				return items
 			},
 			ReadCacheRange: func(channelID ids.ChannelID, oldestTS, newestTS ids.MessageTS) []messages.MessageItem {
 				wctx := router.Active()
@@ -961,6 +963,7 @@ func run() error {
 					return nil
 				}
 				msgItems := fetchChannelMessages(wctx.Client, chIDStr, db, wctx.UserNames, tsFormat, avatarCache, router)
+				wctx.Subteams.RequestItems(msgItems)
 
 				state, _ := db.GetChannelReadState(chIDStr)
 				lastReadTS := state.LastReadTS
@@ -997,6 +1000,7 @@ func run() error {
 					return nil
 				}
 				msgItems := fetchOlderMessages(wctx.Client, chIDStr, string(oldestTS), db, wctx.UserNames, tsFormat, router)
+				wctx.Subteams.RequestItems(msgItems)
 				return ui.OlderMessagesLoadedMsg{
 					ChannelID: chIDStr,
 					AnchorTS:  string(oldestTS),
@@ -1010,6 +1014,7 @@ func run() error {
 					return nil
 				}
 				msgItems := fetchMessagesAround(wctx.Client, chIDStr, string(ts), db, wctx.UserNames, tsFormat, router)
+				wctx.Subteams.RequestItems(msgItems)
 				if msgItems == nil {
 					return ui.MessagesAroundLoadedMsg{ChannelID: chIDStr, TargetTS: string(ts), Err: errors.New("history fetch failed")}
 				}
@@ -1294,6 +1299,7 @@ func run() error {
 					return nil
 				}
 				replies := fetchThreadReplies(wctx.Client, chIDStr, threadTSStr, db, wctx.UserNames, tsFormat, avatarCache, router)
+				wctx.Subteams.RequestItems(replies)
 				return ui.ThreadRepliesLoadedMsg{
 					ThreadTS: threadTSStr,
 					Replies:  replies,
@@ -1304,7 +1310,9 @@ func run() error {
 				if wctx == nil {
 					return nil
 				}
-				return loadCachedThreadReplies(db, wctx.Client.UserID(), string(channelID), string(threadTS), wctx.UserNames, tsFormat, router)
+				items := loadCachedThreadReplies(db, wctx.Client.UserID(), string(channelID), string(threadTS), wctx.UserNames, tsFormat, router)
+				wctx.Subteams.RequestItems(items)
+				return items
 			},
 			Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) core.Cmd {
 				chIDStr, threadTSStr, tsStr := string(channelID), string(threadTS), string(ts)
@@ -1919,20 +1927,29 @@ func run() error {
 			// refresh for the active workspace. Best-effort: failure leaves
 			// bare subteam mentions rendered as "@group".
 			go func(teamID string) {
+				// Then the groups usergroups.list leaves out (a Grid
+				// member workspace's, on an org-level session) that the
+				// cached messages mention, via subteams.info.
+				defer func() {
+					texts, err := db.SubteamMentionTexts(teamID)
+					if err != nil {
+						log.Printf("scanning cached subteam mentions for %s: %v", wctx.TeamName, err)
+						return
+					}
+					var ids []string
+					for _, t := range texts {
+						ids = append(ids, subteamIDsInText(t)...)
+					}
+					wctx.Subteams.Request(ids)
+				}()
 				groups, err := wctx.Client.GetUserGroups(ctx)
 				if err != nil {
 					log.Printf("usergroups fetch for %s failed: %v (subteam mentions will render as @group)", wctx.TeamName, err)
 					return
 				}
-				byID := usergroupHandles(groups)
-				self := selfUserGroups(groups, wctx.UserID)
-				wctx.SetUserGroups(byID)
-				wctx.SetSelfUserGroups(self)
-				p.Send(ui.UserGroupsLoadedMsg{
-					TeamID:         teamID,
-					UserGroups:     byID,
-					SelfUserGroups: self,
-				})
+				wctx.MergeUserGroups(usergroupHandles(groups))
+				wctx.SetSelfUserGroups(selfUserGroups(groups, wctx.UserID))
+				wctx.PublishUserGroups(p.Send)
 			}(wctx.TeamID)
 
 			// Resolve unknown DM user names in background
