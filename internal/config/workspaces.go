@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 )
@@ -148,10 +149,15 @@ func resolveWorkspaceKeys(ws map[string]Workspace) (map[string]Workspace, error)
 }
 
 // workspaceStateOnly reports whether a team-id-keyed block carries
-// only the fields slk writes for itself. version_ts, theme and
-// sidebar_width count; order, sections, suppress rules, permalink
-// domains and use_slack_sections do not. orig is the block before
-// TeamID is synthesized from the key.
+// only the fields slk writes for itself: version_ts, theme, and
+// sidebar_width, plus a team_id that restates the key. orig is the
+// block before TeamID is synthesized from the key.
+//
+// Those three are cleared and the rest is compared to the zero
+// Workspace, so this is an allow list. A field added to Workspace
+// later is configuration until someone clears it here: a set value
+// refuses the fold instead of being dropped. TestWorkspaceStateOnlyAllowList
+// fails when the struct gains a field, which is the prompt to classify it.
 func workspaceStateOnly(key string, orig Workspace) bool {
 	if !isTeamIDKey(key) {
 		return false
@@ -159,11 +165,12 @@ func workspaceStateOnly(key string, orig Workspace) bool {
 	if orig.TeamID != "" && orig.TeamID != key {
 		return false
 	}
-	return orig.Order == 0 &&
-		orig.UseSlackSections == nil &&
-		len(orig.PermalinkDomains) == 0 &&
-		len(orig.Sections) == 0 &&
-		len(orig.Suppress) == 0
+	cleared := orig
+	cleared.TeamID = ""
+	cleared.VersionTS = ""
+	cleared.Theme = ""
+	cleared.SidebarWidth = 0
+	return reflect.DeepEqual(cleared, Workspace{})
 }
 
 // mergeWorkspaceState copies state the slug block left empty off the
