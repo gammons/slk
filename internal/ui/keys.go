@@ -45,6 +45,7 @@ type KeyMap struct {
 	ForwardMessage      key.Binding
 	OpenPreview         key.Binding
 	OpenLink            key.Binding
+	OpenSlackLink       key.Binding
 	DownloadFile        key.Binding
 	MarkUnread          key.Binding
 	MarkSet             key.Binding
@@ -110,8 +111,8 @@ func DefaultKeyMap() KeyMap {
 		SidebarGrow:     key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "widen sidebar")),
 		SidebarShrink:   key.NewBinding(key.WithKeys("["), key.WithHelp("[", "narrow sidebar")),
 		ToggleThread:    key.NewBinding(key.WithKeys("ctrl+]"), key.WithHelp("ctrl+]", "toggle thread")),
-		FuzzyFinder:     key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "switch channel or open a pasted message link")),
-		FuzzyFinderAlt:  key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "switch channel or open a pasted message link")),
+		FuzzyFinder:     key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "switch channel")),
+		FuzzyFinderAlt:  key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "switch channel")),
 		Top:             key.NewBinding(key.WithKeys("g"), key.WithHelp("gg", "top")),
 		Bottom:          key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
 		PageUp:          key.NewBinding(key.WithKeys("pgup"), key.WithHelp("PgUp", "page up")),
@@ -131,6 +132,7 @@ func DefaultKeyMap() KeyMap {
 		ForwardMessage:  key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "forward message")),
 		OpenPreview:     key.NewBinding(key.WithKeys("O", "v"), key.WithHelp("O/v", "open image preview")),
 		OpenLink:        key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open link in message")),
+		OpenSlackLink:   key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "open a pasted Slack message link")),
 		DownloadFile:    key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "download file in message")),
 		MarkUnread:      key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "mark unread")),
 		MarkSet:         key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "set mark")),

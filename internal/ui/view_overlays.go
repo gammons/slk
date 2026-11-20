@@ -87,6 +87,9 @@ func (a *App) applyOverlays(screen string) string {
 	if a.mode == ModePresenceCustomSnooze {
 		screen = presencemenu.CustomSnoozeView(a.width, a.height, screen, a.presence.SnoozeBuf())
 	}
+	if a.mode == ModeOpenSlackLink {
+		screen = openSlackLinkView(a.width, a.height, screen, a.slackLinkInput, a.slackLinkError)
+	}
 	if a.bootstrap.IsLoading() {
 		screen = a.bootstrap.Render(a.width, a.height, a.spinnerGlyph())
 	}
@@ -113,6 +116,7 @@ func (a *App) overlayActive() bool {
 		a.marksOverlay.IsVisible() ||
 		a.suppressList.IsVisible() ||
 		a.mode == ModePresenceCustomSnooze ||
+		a.mode == ModeOpenSlackLink ||
 		a.bootstrap.IsLoading()
 }
 

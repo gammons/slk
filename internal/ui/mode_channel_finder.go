@@ -4,9 +4,6 @@
 //
 // Forwards normalised keys to the channel-finder overlay. On a
 // result:
-//   - A pasted archive permalink -> openFinderPermalink, which
-//     navigates the way o does (routeLink), switching workspace
-//     first when the link belongs to another configured one.
 //   - Synthetic "threads" destination -> activate the threads
 //     view (ThreadsViewActivatedMsg).
 //   - Already-joined channel -> select it (ChannelSelectedMsg).
@@ -17,8 +14,6 @@ package ui
 
 import (
 	tea "charm.land/bubbletea/v2"
-
-	"github.com/gammons/slk/internal/ui/channelfinder"
 )
 
 func handleChannelFinderMode(a *App, msg tea.KeyMsg) tea.Cmd {
@@ -37,9 +32,6 @@ func handleChannelFinderMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		if result.Type == "threads" {
 			return func() tea.Msg { return ThreadsViewActivatedMsg{} }
 		}
-		if result.Type == channelfinder.PermalinkType {
-			return a.openFinderPermalink(result.ID)
-		}
 		return a.openChannel(*result)
 	}
 
@@ -52,8 +44,8 @@ func handleChannelFinderMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	// The local filter has already run inside HandleKey, so the list
 	// on screen is up to date before anything touches the network.
 	// Only the server query is deferred.
-	if a.channelFinder.Query() != before {
-		return a.scheduleFinderSearch(before)
+	if after := a.channelFinder.Query(); after != before && a.pendingForward == nil {
+		return a.scheduleChannelSearch(after)
 	}
 	return nil
 }

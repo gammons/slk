@@ -29,13 +29,13 @@ type finderPermalinkDroppedMsg struct {
 	Seq uint64
 }
 
-// openFinderPermalink navigates to a Slack archive permalink chosen in
-// the channel finder. A link for the workspace on screen goes through
-// routeLink, the same path o uses. A link whose domain (or configured
-// alias) is another connected workspace switches there first;
-// takeFinderPermalink calls routeLink once that workspace is active.
-// An unknown workspace, or a channel routeLink cannot resolve, opens
-// in the browser.
+// openFinderPermalink navigates to a Slack archive permalink from the
+// Open Slack link dialog. A link for the workspace on screen goes
+// through routeLink, the same path o uses. A link whose domain (or
+// configured alias) is another connected workspace switches there
+// first; takeFinderPermalink calls routeLink once that workspace is
+// active. An unknown workspace, or a channel routeLink cannot
+// resolve, opens in the browser.
 func (a *App) openFinderPermalink(rawURL string) tea.Cmd {
 	if a.compose.Uploading() || a.threadCompose.Uploading() {
 		return toastWithClear(a, "Upload in progress", 2*time.Second)
@@ -128,30 +128,4 @@ func (a *App) takeFinderPermalink(teamID string, seq uint64) (tea.Cmd, bool) {
 
 func (a *App) clearFinderPermalink() {
 	a.pendingFinderPermalink = nil
-}
-
-// pasteChannelFinder inserts a bracketed paste into the open finder.
-// Newlines are dropped so a copied link stays one query.
-func (a *App) pasteChannelFinder(content string) tea.Cmd {
-	before := a.channelFinder.Query()
-	flat := strings.NewReplacer("\r\n", "", "\r", "", "\n", "").Replace(content)
-	a.channelFinder.InsertText(flat)
-	return a.scheduleFinderSearch(before)
-}
-
-// scheduleFinderSearch queues the finder's remote channel search after
-// the query changed from before. A permalink is not a channel query, so
-// it cancels a search the previous keystroke scheduled and issues none.
-func (a *App) scheduleFinderSearch(before string) tea.Cmd {
-	if a.pendingForward != nil {
-		return nil
-	}
-	after := a.channelFinder.Query()
-	if after == before {
-		return nil
-	}
-	if a.channelFinder.PermalinkURL() != "" {
-		return a.scheduleChannelSearch("")
-	}
-	return a.scheduleChannelSearch(after)
 }

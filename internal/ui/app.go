@@ -621,6 +621,11 @@ type App struct {
 	pendingFinderPermalink *pendingFinderPermalink
 	finderPermalinkSeq     uint64
 
+	// slackLinkInput is the Open Slack link dialog's single line.
+	// slackLinkError is the inline validation message; empty hides it.
+	slackLinkInput string
+	slackLinkError string
+
 	// marks owns the vim-style mark storage: an in-memory per-workspace
 	// tier for lowercase marks plus the SQLite `marks` table, merged
 	// behind one set of accessors (see internal/ui/marks.go).
@@ -2449,6 +2454,9 @@ func (a *App) closeModal(mode Mode) {
 		a.marksOverlay.Close()
 	case ModeSuppressed:
 		a.suppressList.Close()
+	case ModeOpenSlackLink:
+		a.slackLinkInput = ""
+		a.slackLinkError = ""
 	}
 }
 

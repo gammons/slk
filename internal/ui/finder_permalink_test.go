@@ -1,13 +1,15 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+	"golang.design/x/clipboard"
 
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
-	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/sidebar"
 )
 
@@ -41,30 +43,93 @@ func finderPermalinkApp(t *testing.T) (*App, *string) {
 	return app, &opened
 }
 
-func pasteFinder(t *testing.T, app *App, text string) {
+func openSlackLinkDialog(t *testing.T, app *App) {
 	t.Helper()
+	app.SetMode(ModeNormal)
+	app.Update(keyPress('P'))
+	if app.mode != ModeOpenSlackLink {
+		t.Fatalf("mode = %v, want the Open Slack link dialog", app.mode)
+	}
+}
+
+func pasteSlackLink(t *testing.T, app *App, text string) {
+	t.Helper()
+	if app.mode != ModeOpenSlackLink {
+		openSlackLinkDialog(t, app)
+	}
 	app.Update(tea.PasteMsg{Content: text})
 }
 
-func TestFinderPermalink_PasteShowsOpenMessage(t *testing.T) {
+func dialogPlain(app *App) string {
+	return ansi.Strip(app.View().Content)
+}
+
+func TestOpenSlackLink_InvalidURLStaysOpen(t *testing.T) {
+	app, _ := finderPermalinkApp(t)
+	openSlackLinkDialog(t, app)
+	if !strings.Contains(dialogPlain(app), "Open Slack link") {
+		t.Fatalf("dialog missing title:\n%s", dialogPlain(app))
+	}
+	app.Update(keyCode(tea.KeyEnter))
+	if app.mode != ModeOpenSlackLink || app.slackLinkError != slackLinkErrorText {
+		t.Fatalf("empty enter: mode=%v err=%q", app.mode, app.slackLinkError)
+	}
+	if !strings.Contains(dialogPlain(app), slackLinkErrorText) {
+		t.Fatalf("error not shown:\n%s", dialogPlain(app))
+	}
+
+	for _, r := range "https://github.com/foo" {
+		app.Update(keyPress(r))
+	}
+	app.Update(keyCode(tea.KeyEnter))
+	if app.mode != ModeOpenSlackLink || app.slackLinkError != slackLinkErrorText {
+		t.Fatalf("bad url enter: mode=%v err=%q input=%q", app.mode, app.slackLinkError, app.slackLinkInput)
+	}
+
+	app.Update(keyCode(tea.KeyEscape))
+	if app.mode != ModeNormal || app.slackLinkInput != "" || app.slackLinkError != "" {
+		t.Fatalf("esc: mode=%v input=%q err=%q", app.mode, app.slackLinkInput, app.slackLinkError)
+	}
+}
+
+func TestOpenSlackLink_PasteStripsWhitespace(t *testing.T) {
+	app, _ := finderPermalinkApp(t)
+	const url = "https://myteam.slack.com/archives/C054JFCBN69/p1779284733270139"
+	pasteSlackLink(t, app, "  "+url+"\n\n")
+	if app.slackLinkInput != url {
+		t.Fatalf("input = %q, want the link with whitespace removed", app.slackLinkInput)
+	}
+	if app.slackLinkError != "" {
+		t.Fatalf("error = %q, want it cleared by the paste", app.slackLinkError)
+	}
+}
+
+func TestOpenSlackLink_CtrlVReadsClipboardText(t *testing.T) {
 	app, _ := finderPermalinkApp(t)
 	const url = "https://myteam.slack.com/archives/C054JFCBN69/p1779284733270139?thread_ts=1779284700.000100"
-	pasteFinder(t, app, url+"\n")
-
-	items := app.channelFinder.FilteredItems()
-	if len(items) != 1 || items[0].Name != "Open message" || items[0].Type != channelfinder.PermalinkType || items[0].ID != url {
-		t.Fatalf("filtered = %+v, want one Open message for the pasted permalink", items)
+	app.clipboardAvailable = true
+	app.setClipboardReaderForTest(func(format clipboard.Format) []byte {
+		if format == clipboard.FmtText {
+			return []byte(url + "\r\n")
+		}
+		return []byte("not text")
+	})
+	openSlackLinkDialog(t, app)
+	app.Update(keyMod('v', tea.ModCtrl))
+	if app.slackLinkInput != url {
+		t.Fatalf("input = %q, want the clipboard link", app.slackLinkInput)
 	}
-	if app.channelFinder.PermalinkURL() != url {
-		t.Fatalf("PermalinkURL = %q, want the trimmed link", app.channelFinder.PermalinkURL())
-	}
+}
 
-	// A channel name still filters channels.
-	app.channelFinder.Open()
-	pasteFinder(t, app, "eng")
-	items = app.channelFinder.FilteredItems()
-	if len(items) == 0 || items[0].ID != "C2" {
-		t.Fatalf("non-permalink paste filtered = %+v, want engineering", items)
+func TestChannelFinder_PasteDoesNotOpenAPermalink(t *testing.T) {
+	app, _ := finderPermalinkApp(t)
+	const url = "https://myteam.slack.com/archives/C054JFCBN69/p1779284733270139"
+	app.Update(tea.PasteMsg{Content: url})
+	if app.channelFinder.Query() != "" {
+		t.Fatalf("finder query = %q, want paste ignored", app.channelFinder.Query())
+	}
+	if app.mode != ModeChannelFinder {
+		t.Fatalf("mode = %v, want the finder to stay open", app.mode)
 	}
 }
 
@@ -76,7 +141,7 @@ func TestFinderPermalink_ThreadTSOpensThread(t *testing.T) {
 		return nil
 	})
 	const url = "https://myteam.slack.com/archives/C054JFCBN69/p1779284733270139?thread_ts=1779284700.000100"
-	pasteFinder(t, app, url)
+	pasteSlackLink(t, app, url)
 	_, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	drainCmd(cmd)
 
@@ -117,7 +182,7 @@ func TestFinderPermalink_CrossWorkspaceAliasSwitchesThenNavigates(t *testing.T) 
 	}))
 
 	const url = "https://beta.enterprise.slack.com/archives/CTARGET01/p1779284733270139?thread_ts=1779284700.000100"
-	pasteFinder(t, app, url)
+	pasteSlackLink(t, app, url)
 	_, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	msgs := drainCmd(cmd)
 	if len(msgs) != 1 {
@@ -181,7 +246,7 @@ func TestFinderPermalink_SharedChannelStillSelectsAfterSwitch(t *testing.T) {
 	}))
 
 	const url = "https://beta.slack.com/archives/CSHARED01/p1779284733270139?thread_ts=1779284700.000100"
-	pasteFinder(t, app, url)
+	pasteSlackLink(t, app, url)
 	_, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	sw, ok := drainCmd(cmd)[0].(WorkspaceSwitchedMsg)
 	if !ok {
@@ -258,7 +323,7 @@ func TestFinderPermalink_StaleSwitchKeepsNewerLink(t *testing.T) {
 		}
 	}))
 
-	pasteFinder(t, app, "https://beta.slack.com/archives/CTWOLINK/p1111111111111111")
+	pasteSlackLink(t, app, "https://beta.slack.com/archives/CTWOLINK/p1111111111111111")
 	_, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	firstMsgs := drainCmd(cmd)
 	if len(firstMsgs) != 1 {
@@ -271,7 +336,7 @@ func TestFinderPermalink_StaleSwitchKeepsNewerLink(t *testing.T) {
 
 	app.channelFinder.Open()
 	app.SetMode(ModeChannelFinder)
-	pasteFinder(t, app, "https://gamma.slack.com/archives/CTHREELK/p1779284733270139")
+	pasteSlackLink(t, app, "https://gamma.slack.com/archives/CTHREELK/p1779284733270139")
 	_, cmd = app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	secondMsgs := drainCmd(cmd)
 	if len(secondMsgs) != 1 {
@@ -325,7 +390,7 @@ func TestFinderPermalink_UnknownChannelOpensBrowser(t *testing.T) {
 		return nil
 	}))
 	const url = "https://myteam.slack.com/archives/CUNKNOWN1/p1779284733270139"
-	pasteFinder(t, app, url)
+	pasteSlackLink(t, app, url)
 	_, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	drainCmd(cmd)
 
@@ -351,7 +416,7 @@ func TestFinderPermalink_UnknownWorkspaceOpensBrowser(t *testing.T) {
 		return nil
 	}))
 	const url = "https://nope.slack.com/archives/C054JFCBN69/p1779284733270139"
-	pasteFinder(t, app, url)
+	pasteSlackLink(t, app, url)
 	_, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	drainCmd(cmd)
 

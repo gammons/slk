@@ -11,7 +11,6 @@ import (
 	"github.com/gammons/slk/internal/bubbles/chrome"
 	"github.com/gammons/slk/internal/core"
 	imgpkg "github.com/gammons/slk/internal/image"
-	"github.com/gammons/slk/internal/slackurl"
 	"github.com/gammons/slk/internal/text"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/overlay"
@@ -34,18 +33,11 @@ var nonJoinedColor = lipgloss.Color("#5a5a5a")
 // threads-list view instead of switching channels.
 const ThreadsViewID = "__slk_view_threads"
 
-// PermalinkType is the ChannelResult type of the single "Open message"
-// row shown when the query is a Slack archive permalink.
-const PermalinkType = "permalink"
-
-// openMessageLabel is that row's name.
-const openMessageLabel = "Open message"
-
 // ChannelResult is returned when the user selects a channel.
 type ChannelResult struct {
 	ID     string
 	Name   string
-	Type   string // channel, dm, group_dm, private, threads, permalink
+	Type   string // channel, dm, group_dm, private, threads
 	Joined bool   // false => caller should join the channel before opening it
 }
 
@@ -57,11 +49,6 @@ type Model struct {
 	selected   int // index into filtered
 	visible    bool
 	forwarding bool
-	// permalinkURL is the trimmed query when it is a Slack archive
-	// permalink. The result list is then a single "Open message" row
-	// instead of channel matches. Empty for every other query, and
-	// while forwarding (a permalink is not a destination).
-	permalinkURL string
 
 	// statuses holds each DM channel's custom status and DND, keyed by
 	// channel ID (see SetStatus). Pruned to the current item set on
@@ -303,7 +290,7 @@ func boxWidth(termWidth int) int {
 // only on its row count) but kept for interface symmetry with overlays
 // whose height is terminal-dependent.
 func (m *Model) BoxSize(termWidth, termHeight int) (int, int) {
-	start, end := chrome.Window(m.selected, m.rowCount(), maxVisibleRows)
+	start, end := chrome.Window(m.selected, len(m.filtered), maxVisibleRows)
 	nRows := end - start
 	if nRows < 1 {
 		nRows = 1 // empty list still renders one (message/placeholder) row
@@ -322,7 +309,7 @@ func (m *Model) ClickRow(termWidth, termHeight, localY int) bool {
 	if row < 0 {
 		return false
 	}
-	start, end := chrome.Window(m.selected, m.rowCount(), maxVisibleRows)
+	start, end := chrome.Window(m.selected, len(m.filtered), maxVisibleRows)
 	if row >= end-start {
 		return false
 	}
@@ -366,14 +353,6 @@ func (m Model) IsVisible() bool {
 func (m *Model) HandleKey(keyStr string) *ChannelResult {
 	switch keyStr {
 	case "enter":
-		if m.permalinkURL != "" {
-			return &ChannelResult{
-				ID:     m.permalinkURL,
-				Name:   openMessageLabel,
-				Type:   PermalinkType,
-				Joined: true,
-			}
-		}
 		if len(m.filtered) > 0 {
 			idx := m.filtered[m.selected]
 			return &ChannelResult{
@@ -421,44 +400,6 @@ func (m *Model) HandleKey(keyStr string) *ChannelResult {
 	return nil
 }
 
-// permalinkQuery reports whether q is a Slack archive permalink, and
-// the trimmed URL to navigate to. Surrounding whitespace (a pasted
-// trailing newline) is ignored. Anything slackurl.Parse rejects is
-// an ordinary finder query.
-func permalinkQuery(q string) (string, bool) {
-	raw := strings.TrimSpace(q)
-	if _, ok := slackurl.Parse(raw); !ok {
-		return "", false
-	}
-	return raw, true
-}
-
-// rowCount is the number of result rows. A permalink query is one row
-// that is not an entry in filtered.
-func (m *Model) rowCount() int {
-	if m.permalinkURL != "" {
-		return 1
-	}
-	return len(m.filtered)
-}
-
-// InsertText appends text to the query and refilters. Paste uses it;
-// keystrokes go through HandleKey. No-op when the overlay is hidden.
-func (m *Model) InsertText(text string) {
-	if text == "" || !m.visible {
-		return
-	}
-	m.query += text
-	m.selected = 0
-	m.filter()
-}
-
-// PermalinkURL is the archive permalink the query parses as, or ""
-// when the finder is showing channel matches.
-func (m Model) PermalinkURL() string {
-	return m.permalinkURL
-}
-
 // filter rebuilds the filtered list based on the current query.
 //
 // Ranking precedence (most significant first):
@@ -488,16 +429,6 @@ func (m *Model) filter() {
 		}
 	}()
 	m.filtered = nil
-	m.permalinkURL = ""
-	// A pasted archive permalink is one destination, not a channel
-	// search. Forwarding still wants a conversation, so a link there
-	// stays an ordinary query that matches nothing.
-	if !m.forwarding {
-		if raw, ok := permalinkQuery(m.query); ok {
-			m.permalinkURL = raw
-			return
-		}
-	}
 	q := text.Fold(m.query)
 	idxs := make([]int, 0, len(m.items))
 	for i, item := range m.items {
@@ -707,22 +638,12 @@ func (m Model) renderBox(termWidth int) string {
 		titleText = "Forward message to…"
 	}
 
-	// A pasted permalink is wider than the box. Show what fits so the
-	// input stays one line; the query itself is unchanged.
-	query := m.query
-	if budget := innerWidth - 1; budget > 0 && lipgloss.Width(query) > budget {
-		query = truncate.StringWithTail(query, uint(budget), "…")
-	}
-
-	start, end := chrome.Window(m.selected, m.rowCount(), maxVisibleRows)
-	list := chrome.List{Start: start, End: end, Total: m.rowCount()}
+	start, end := chrome.Window(m.selected, len(m.filtered), maxVisibleRows)
+	list := chrome.List{Start: start, End: end, Total: len(m.filtered)}
 	contentWidth := list.ContentWidth(innerWidth)
 
 	rows := make([]string, 0, end-start)
-	if m.permalinkURL != "" {
-		rows = append(rows, m.openMessageRow(contentWidth))
-	}
-	for i := start; i < end && m.permalinkURL == ""; i++ {
+	for i := start; i < end; i++ {
 		idx := m.filtered[i]
 		item := m.items[idx]
 		st := m.statuses[item.ID]
@@ -820,33 +741,13 @@ func (m Model) renderBox(termWidth int) string {
 
 	f := chrome.Frame{
 		Title: titleText,
-		Input: chrome.FilterInput(s, query, "Type to filter..."),
+		Input: chrome.FilterInput(s, m.query, "Type to filter..."),
 		Body:  list.Rows(s, m.selected, rows),
 	}
 	if m.query != "" {
 		f.Empty = "No matching channels"
 	}
 	return f.Render(s, overlayWidth)
-}
-
-// openMessageRow draws the single result a permalink query offers.
-// It is the only row, and it is the selection.
-func (m Model) openMessageRow(contentWidth int) string {
-	prefix := lipgloss.NewStyle().Foreground(styles.Accent).Render("↗")
-	nameStyle := lipgloss.NewStyle().Background(styles.ThemeBackground()).Foreground(styles.Primary).Bold(true)
-	label := openMessageLabel
-	budget := contentWidth - lipgloss.Width(prefix) - 1
-	if budget < 1 {
-		budget = 1
-	}
-	if lipgloss.Width(label) > budget {
-		label = truncate.StringWithTail(label, uint(budget), "…")
-	}
-	line := prefix + " " + nameStyle.Render(label)
-	if pad := contentWidth - lipgloss.Width(line); pad > 0 {
-		line += strings.Repeat(" ", pad)
-	}
-	return line
 }
 
 // channelPrefix returns the display prefix for a channel type. st is
@@ -919,14 +820,6 @@ func (m Model) StatusFor(channelID string) peerstatus.Status {
 // FilteredItems returns the rows matching the current query, in the
 // order they are rendered.
 func (m Model) FilteredItems() []core.ChannelFinderItem {
-	if m.permalinkURL != "" {
-		return []core.ChannelFinderItem{{
-			ID:     m.permalinkURL,
-			Name:   openMessageLabel,
-			Type:   PermalinkType,
-			Joined: true,
-		}}
-	}
 	out := make([]core.ChannelFinderItem, 0, len(m.filtered))
 	for _, idx := range m.filtered {
 		out = append(out, m.items[idx])
