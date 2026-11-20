@@ -647,6 +647,69 @@ theme = "dracula"
 	}
 }
 
+func TestLoadMergesTeamIDStateIntoNamedWorkspace(t *testing.T) {
+	// The shape #499 leaves on disk: a slug block with team_id, and a
+	// second block keyed by that team id holding only state slk wrote
+	// (version_ts, and theme / sidebar_width when those were saved the
+	// same way). Startup should fold the state into the named block.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	data := []byte(`
+[workspaces.my-company]
+team_id = "T01ABCDEF"
+theme = "nord"
+
+[workspaces.T01ABCDEF]
+version_ts = "1795162663"
+sidebar_width = 28
+theme = "dracula"
+
+[workspaces.other]
+team_id = "T02OOOOOO"
+`)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, ok := cfg.Workspaces["T01ABCDEF"]; ok {
+		t.Fatalf("team-id block still present: %+v", cfg.Workspaces)
+	}
+	ws, ok := cfg.Workspaces["my-company"]
+	if !ok {
+		t.Fatalf("named workspace missing: %+v", cfg.Workspaces)
+	}
+	if ws.TeamID != "T01ABCDEF" || ws.VersionTS != "1795162663" || ws.SidebarWidth != 28 || ws.Theme != "nord" {
+		t.Fatalf("workspace = %+v, want team T01ABCDEF, version_ts 1795162663, sidebar 28, theme nord (named wins)", ws)
+	}
+	if other := cfg.Workspaces["other"]; other.TeamID != "T02OOOOOO" {
+		t.Fatalf("other workspace = %+v", other)
+	}
+}
+
+func TestLoadRefusesTeamIDBlockThatHasUserConfig(t *testing.T) {
+	// A team-id block with something a person configures is a real
+	// conflict, not the state-only duplicate first setup writes.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	data := []byte(`
+[workspaces.my-company]
+team_id = "T01ABCDEF"
+
+[workspaces.T01ABCDEF]
+version_ts = "1795162663"
+order = 1
+`)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for a team-id block that sets order")
+	}
+}
+
 func TestLoadWorkspacesDuplicateTeamID(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")

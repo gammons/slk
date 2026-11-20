@@ -31,7 +31,11 @@ func seedVersionTS(env *slackhttp.Envelope, cfg config.Config, teamID string) {
 // block configured for teamID. Blocks are keyed either by a user-chosen
 // slug (with team_id set) or, for legacy configs, by the raw team ID.
 // When no block exists we fall back to the team ID, which is the key
-// the saveWorkspace* helpers use when they append a new block.
+// the saveWorkspace* helpers use when they append a new block. A
+// snapshot taken before onboarding appended the slug still hits that
+// fallback, even though the file already has the named block.
+// saveWorkspaceVersionTS resolves that block from the file before
+// appending another (#499).
 func workspaceTOMLKey(cfg config.Config, teamID string) string {
 	for k, w := range cfg.Workspaces {
 		if w.TeamID == teamID {
@@ -39,6 +43,61 @@ func workspaceTOMLKey(cfg config.Config, teamID string) string {
 		}
 	}
 	return teamID
+}
+
+// workspaceBlockStart is the line of the [workspaces.*] block version_ts
+// should be written into. tomlKey is the key the caller resolved. When
+// that header is absent, a block that already sets team_id is the named
+// one first setup wrote, and appending a second block keyed by the team
+// id is what makes the next launch fail (#499).
+func workspaceBlockStart(lines []string, tomlKey, teamID string) int {
+	header := fmt.Sprintf("[workspaces.%s]", tomlKey)
+	byHeader := -1
+	byTeam := -1
+	section := -1
+	for i, line := range lines {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "[") {
+			section = -1
+			if t == header {
+				byHeader = i
+			}
+			if workspaceTableHeader(t) {
+				section = i
+			}
+			continue
+		}
+		if section >= 0 && byTeam < 0 && teamID != "" && assignsTeamID(t, teamID) {
+			byTeam = section
+		}
+	}
+	if byHeader >= 0 {
+		return byHeader
+	}
+	return byTeam
+}
+
+// workspaceTableHeader reports a [workspaces.<key>] table header, not
+// an array table ([[workspaces.<key>.suppress]]) or a nested table
+// ([workspaces.<key>.sections.<name>]).
+func workspaceTableHeader(trimmed string) bool {
+	return strings.HasPrefix(trimmed, "[workspaces.") &&
+		strings.HasSuffix(trimmed, "]") &&
+		!strings.HasPrefix(trimmed, "[[") &&
+		strings.Count(trimmed, ".") == 1
+}
+
+// assignsTeamID reports whether trimmed is a team_id assignment of
+// teamID, in the quoted form appendWorkspaceConfigBlock writes.
+func assignsTeamID(trimmed, teamID string) bool {
+	if strings.HasPrefix(trimmed, "#") {
+		return false
+	}
+	key, val, ok := strings.Cut(trimmed, "=")
+	if !ok || strings.TrimSpace(key) != "team_id" {
+		return false
+	}
+	return strings.TrimSpace(val) == tomlString(teamID)
 }
 
 // saveWorkspaceVersionTS rewrites or appends a version_ts entry in
@@ -60,15 +119,7 @@ func saveWorkspaceVersionTS(configPath, tomlKey, teamID, teamName, versionTS str
 	}
 	lines := strings.Split(string(data), "\n")
 
-	header := fmt.Sprintf("[workspaces.%s]", tomlKey)
-
-	sectionStart := -1
-	for i, line := range lines {
-		if strings.TrimSpace(line) == header {
-			sectionStart = i
-			break
-		}
-	}
+	sectionStart := workspaceBlockStart(lines, tomlKey, teamID)
 
 	if sectionStart >= 0 {
 		end := len(lines)
