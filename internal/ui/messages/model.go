@@ -49,13 +49,18 @@ type SixelAvatarFunc func(userID string) (key string, bytes []byte, ok bool)
 // not need. A nil cache of payloads means the render cache was discarded
 // and the next View rebuilds it. Both panes use it.
 type EntryPayload struct {
-	// ShortSrc is the selected row's content with the short timestamp,
-	// set only when the selected variant carries a long one;
-	// SelectedShort is built from it on demand (SelectedLines) and
-	// shown while a text selection exists, because the drag overlay
-	// splices the short-form plain text into the row by column.
+	// SelSrc is the content the selected row is built from. Selected
+	// (and SelectedShort, while a text selection exists) are built on
+	// demand by SelectedLines, because only the cursor row is drawn
+	// that way. ShortSrc is the short-timestamp form of SelSrc, set
+	// only when they differ: the drag overlay splices the short-form
+	// plain text into the row by column.
+	SelSrc        string
 	ShortSrc      string
 	SelectedShort []string
+	selected      []string
+	selectedFocus bool
+	shortFocus    bool
 
 	// Flushes are per-frame kitty image uploads, invoked once per frame
 	// for visible entries. nil when the entry has no inline images.
@@ -71,20 +76,50 @@ type EntryPayload struct {
 
 // SelectedLines returns the rows to draw for a cursor entry e: its
 // selected variant, or (while a text selection exists) the short-
-// timestamp variant built once from ShortSrc by build. Rows past the
-// short variant (the channel pane's spacer) are shared by every variant.
-func (p *EntryPayload) SelectedLines(e *entrylist.Entry, hasSelection bool, build func(src string) []string) []string {
-	if !hasSelection || p.ShortSrc == "" {
-		return e.Selected
+// timestamp variant built once from ShortSrc by build. focused is part
+// of the memo, so a focus change repaints the cursor row in the new
+// colour without rebuilding the rest of the pane. Rows past the
+// message (the channel pane's spacer) are the unselected row's own
+// tail, shared by every variant.
+func (p *EntryPayload) SelectedLines(e *entrylist.Entry, hasSelection, focused bool, build func(src string) []string) []string {
+	short := hasSelection && p.ShortSrc != ""
+	src := p.SelSrc
+	if short {
+		src = p.ShortSrc
 	}
-	if p.SelectedShort == nil {
-		short := build(p.ShortSrc)
-		if len(short) > len(e.Selected) {
-			return e.Selected // unreachable: variants share a height
+	if src == "" {
+		if len(e.Selected) > 0 {
+			return e.Selected
 		}
-		p.SelectedShort = append(short, e.Selected[len(short):]...)
+		return e.Lines
 	}
-	return p.SelectedShort
+	if short {
+		if p.SelectedShort != nil && p.shortFocus == focused {
+			return p.SelectedShort
+		}
+		p.SelectedShort = withTrail(build(src), e)
+		p.shortFocus = focused
+		return p.SelectedShort
+	}
+	if p.selected != nil && p.selectedFocus == focused {
+		return p.selected
+	}
+	p.selected = withTrail(build(src), e)
+	p.selectedFocus = focused
+	return p.selected
+}
+
+// withTrail appends the entry's trailing spacer rows (the channel
+// pane's blank line) so the selected variant stays the same height as
+// Lines. The spacer is not restyled.
+func withTrail(rows []string, e *entrylist.Entry) []string {
+	if e == nil || e.Trail <= 0 || len(rows) >= len(e.Lines) || len(e.Lines) < e.Trail {
+		return rows
+	}
+	tail := e.Lines[len(e.Lines)-e.Trail:]
+	out := make([]string, 0, len(rows)+len(tail))
+	out = append(out, rows...)
+	return append(out, tail...)
 }
 
 // SixelImage holds the pre-computed sixel bytes for one inline image
@@ -153,9 +188,12 @@ type Model struct {
 	// Render cache -- invalidated when messages or width change.
 	// Each entry holds pre-bordered variants so selection movement does not
 	// re-invoke lipgloss per keypress.
-	cache          []EntryPayload
-	cacheWidth     int
-	cacheMsgLen    int
+	cache       []EntryPayload
+	cacheWidth  int
+	cacheMsgLen int
+	// dropReason names the last dropCache caller, so a cache-nil rebuild
+	// in the perf log says why the cache was discarded.
+	dropReason     string
 	cacheSpacer    string // pre-rendered blank spacer line (1 row, full width, themed background)
 	cacheMoreBelow string // pre-rendered "-- more below --" line
 
@@ -299,24 +337,26 @@ func (m *Model) SetCursorHighlight(on bool) {
 }
 
 // HandleEmojiImageReady is invoked by the host (App.Update) when an
-// emoji.EmojiImageReadyMsg lands. The same emoji can appear in any
-// visible message, reaction pill, or block-kit element — so the
-// cheapest correct invariant is a wholesale render-cache
-// invalidation. The next View() rebuilds with the now-warm emoji
-// placement (single kitty transmit + N placements per the
-// registry's dedup contract).
-//
-// v1 keeps this coarse; if heavy-emoji channels show measurable
-// invalidation churn (multiple emoji arriving in a burst), a future
-// follow-up can index per-URL → per-message-TS for targeted
-// staleEntries population. Punt for now: kitty image placements are
-// cheap, full re-render of a viewport is sub-frame on the workloads
-// tested.
+// emoji image fetch lands. Only messages that draw that URL are
+// rebuilt; an emoji that belongs to another surface (the sidebar, the
+// picker, a different channel) must not drop this pane's cache. An
+// empty URL is the legacy "something arrived, we don't know what"
+// signal and still rebuilds the whole pane. A DM header may show the
+// emoji as its topic, so that chrome is always dropped.
 func (m *Model) HandleEmojiImageReady(url string) {
-	debuglog.ImgFetch("messages.HandleEmojiImageReady: url=%s wholesale_invalidate", url)
-	m.dropCache()
+	debuglog.ImgFetch("messages.HandleEmojiImageReady: url=%s", url)
 	m.dropDMTopicChrome()
-	m.dirty()
+	if url == "" || m.cache == nil {
+		m.dropCache("HandleEmojiImageReady")
+		m.dirty()
+		return
+	}
+	marked := m.markWhere("HandleEmojiImageReady", func(msg MessageItem) bool {
+		return messageUsesEmojiURL(msg, m.userStatuses, m.emojiCtx.Customs, url)
+	})
+	if marked || m.dmTopic != (dmTopic{}) {
+		m.dirty()
+	}
 }
 
 // HandleImageReady is invoked by the host (App.Update) when an
@@ -352,7 +392,7 @@ func (m *Model) HandleImageReady(channel, ts, key string) {
 		// back to the wholesale invalidation that the new fast path
 		// is meant to avoid. Used by tests that drive transitions
 		// synchronously without a real fetch key.
-		m.dropCache()
+		m.dropCache("HandleImageReady")
 		if m.imgRenderer != nil {
 			m.imgRenderer.ResetFailed()
 		}
@@ -372,7 +412,7 @@ func (m *Model) HandleImageReady(channel, ts, key string) {
 	} else {
 		// No TS to target (or no cache to mutate): fall back to a
 		// full rebuild on the next View().
-		m.dropCache()
+		m.dropCache("HandleImageReady")
 	}
 	m.dirty()
 }
@@ -552,10 +592,31 @@ func (m *Model) dirty() { m.version++ }
 
 // dropCache discards the render cache; the next View rebuilds it. Until
 // then the entries on screen are no longer current, so clicks and
-// selections find none (the scroll extent is kept).
-func (m *Model) dropCache() {
+// selections find none (the scroll extent is kept). reason is the
+// caller, recorded for the perf log (messages.dropCache / buildCache's
+// cache-nil line). The first reason wins until that rebuild runs.
+func (m *Model) dropCache(reason string) {
+	had := m.cache != nil
 	m.cache = nil
 	m.list.KeepLookups(0)
+	if m.dropReason == "" {
+		m.dropReason = reason
+	}
+	if had {
+		debuglog.Perf("messages.dropCache reason=%s msgs=%d", reason, len(m.messages))
+	}
+}
+
+// markStale queues one message for partialRebuild. A nil cache has
+// nothing to patch; the next full build reads the current message.
+func (m *Model) markStale(ts string) {
+	if ts == "" || m.cache == nil {
+		return
+	}
+	if m.staleEntries == nil {
+		m.staleEntries = make(map[string]struct{})
+	}
+	m.staleEntries[ts] = struct{}{}
 }
 
 // newChannelList configures the substrate for the channel pane (spec
@@ -591,7 +652,7 @@ func New(msgs []MessageItem, channelName string) *Model {
 // InvalidateCache forces the render cache to be rebuilt on next View().
 // Call this after theme changes or style updates.
 func (m *Model) InvalidateCache() {
-	m.dropCache()
+	m.dropCache("InvalidateCache")
 	m.chromeCacheValid = false
 	m.dirty()
 }
@@ -755,7 +816,7 @@ func (m *Model) SetMessages(msgs []MessageItem) {
 	msgs, m.hiddenOldest, m.hiddenNewest = Visible(m.hide, msgs)
 	m.messages = msgs
 	m.ClearSelection()
-	m.dropCache()
+	m.dropCache("SetMessages")
 	// Force the next View() to re-snap yOffset to the new selection -- without
 	// this, switching to a channel that happens to have the same selected
 	// index as the previous channel would leave yOffset at its old value.
@@ -791,7 +852,7 @@ func (m *Model) AppendMessage(msg MessageItem) {
 		}
 	}
 	m.messages = append(m.messages, msg)
-	m.dropCache()
+	m.dropCache("AppendMessage")
 	m.dirty()
 
 	// Always scroll to the newest message. Advancing `selected` to the
@@ -820,7 +881,7 @@ func (m *Model) SwapLocalSent(localTS string, msg MessageItem) bool {
 	for i := len(m.messages) - 1; i >= 0; i-- {
 		if m.messages[i].TS == localTS {
 			m.messages[i] = msg
-			m.dropCache()
+			m.dropCache("SwapLocalSent")
 			m.dirty()
 			// Same rationale as UpsertSelfSent's replace branch: the
 			// authoritative entry may differ in height (e.g. server-
@@ -843,7 +904,7 @@ func (m *Model) RemoveLocalSent(localTS string) bool {
 	for i := len(m.messages) - 1; i >= 0; i-- {
 		if m.messages[i].TS == localTS {
 			m.messages = append(m.messages[:i], m.messages[i+1:]...)
-			m.dropCache()
+			m.dropCache("RemoveLocalSent")
 			m.dirty()
 			m.list.ResetSnap()
 			if m.selected >= len(m.messages) && len(m.messages) > 0 {
@@ -879,7 +940,7 @@ func (m *Model) UpsertSelfSent(msg MessageItem) {
 		for i := len(m.messages) - 1; i >= 0; i-- {
 			if m.messages[i].TS == msg.TS {
 				m.messages[i] = msg
-				m.dropCache()
+				m.dropCache("UpsertSelfSent")
 				m.dirty()
 				// Force the next View() to re-snap yOffset to the
 				// updated selected entry's range, even when m.selected
@@ -890,7 +951,7 @@ func (m *Model) UpsertSelfSent(msg MessageItem) {
 		}
 	}
 	m.messages = append(m.messages, msg)
-	m.dropCache()
+	m.dropCache("UpsertSelfSent")
 	m.dirty()
 	m.selected = len(m.messages) - 1
 }
@@ -1109,7 +1170,7 @@ func (m *Model) PrependMessages(msgs []MessageItem) {
 	}
 	m.messages = append(msgs, m.messages...)
 	m.selected += count
-	m.dropCache()
+	m.dropCache("PrependMessages")
 	m.dirty()
 }
 
@@ -1117,7 +1178,7 @@ func (m *Model) EnterReactionNav() {
 	if msg, ok := m.SelectedMessage(); ok && len(msg.Reactions) > 0 {
 		m.nav.Active = true
 		m.nav.Index = 0
-		m.dropCache()
+		m.dropCache("EnterReactionNav")
 		m.dirty()
 	}
 }
@@ -1128,7 +1189,7 @@ func (m *Model) ExitReactionNav() {
 	}
 	m.nav.Active = false
 	m.nav.Index = 0
-	m.dropCache()
+	m.dropCache("ExitReactionNav")
 	m.dirty()
 }
 
@@ -1142,7 +1203,7 @@ func (m *Model) ReactionNavLeft() {
 		return
 	}
 	m.nav.Left(len(msg.Reactions))
-	m.dropCache()
+	m.dropCache("ReactionNavLeft")
 	m.dirty()
 }
 
@@ -1152,7 +1213,7 @@ func (m *Model) ReactionNavRight() {
 		return
 	}
 	m.nav.Right(len(msg.Reactions))
-	m.dropCache()
+	m.dropCache("ReactionNavRight")
 	m.dirty()
 }
 
@@ -1171,7 +1232,7 @@ func (m *Model) ClampReactionNav() {
 		return
 	}
 	m.nav.Clamp(len(msg.Reactions))
-	m.dropCache()
+	m.dropCache("ClampReactionNav")
 	m.dirty()
 }
 
@@ -1206,7 +1267,7 @@ func (m *Model) IncrementReplyCount(parentTS, replyTS, userID string) {
 			if userID != "" && !slices.Contains(msg.ReplyUsers, userID) {
 				m.messages[i].ReplyUsers = append(slices.Clip(msg.ReplyUsers), userID)
 			}
-			m.dropCache()
+			m.dropCache("IncrementReplyCount")
 			m.dirty()
 			return
 		}
@@ -1224,7 +1285,7 @@ func (m *Model) UpdateMessageInPlace(item MessageItem) bool {
 		if msg.TS == item.TS {
 			m.list.HoldBottom()
 			m.messages[i].ApplyChange(item)
-			m.dropCache()
+			m.dropCache("UpdateMessageInPlace")
 			m.dirty()
 			return true
 		}
@@ -1239,7 +1300,7 @@ func (m *Model) SetHuddleRoom(ts string, room *HuddleRoom) bool {
 	for i, msg := range m.messages {
 		if msg.TS == ts {
 			m.messages[i].HuddleRoom = room
-			m.dropCache()
+			m.dropCache("SetHuddleRoom")
 			m.dirty()
 			return true
 		}
@@ -1264,7 +1325,7 @@ func (m *Model) RemoveMessageByTS(ts string) bool {
 					m.selected = len(m.messages) - 1
 				}
 			}
-			m.dropCache()
+			m.dropCache("RemoveMessageByTS")
 			m.dirty()
 			return true
 		}
@@ -1284,7 +1345,7 @@ func (m *Model) UpdateReaction(messageTS, emojiName, userID string, remove bool)
 			// reacted-to message anchored to the bottom of the pane.
 			m.list.HoldBottom()
 			ApplyReaction(&m.messages[i], emojiName, userID, m.currentUserID, remove)
-			m.dropCache()
+			m.dropCache("UpdateReaction")
 			m.dirty()
 			if m.nav.Active {
 				m.ClampReactionNav()
@@ -1324,14 +1385,14 @@ func (m *Model) SetAvatarFunc(fn AvatarFunc) {
 // nil keeps them half-block. The half-block avatar stays the fallback.
 func (m *Model) SetSixelAvatarFunc(fn SixelAvatarFunc) {
 	m.sixelAvatarFn = fn
-	m.dropCache()
+	m.dropCache("SetSixelAvatarFunc")
 }
 
 // SetReplyAvatarFunc switches the reply row to Slack's look (repliers'
 // avatars, then "N replies"); nil keeps "[N replies ->]".
 func (m *Model) SetReplyAvatarFunc(fn AvatarFunc) {
 	m.replyAvatarFn = fn
-	m.dropCache()
+	m.dropCache("SetReplyAvatarFunc")
 	m.dirty()
 }
 
@@ -1344,11 +1405,32 @@ func (m *Model) ResolveUserName(userID string) string {
 }
 
 // SetUserNames sets the user ID -> display name map used to resolve @mentions.
+// The same map again (user-external flags republish it) does not rebuild.
+// A few changed ids re-render the messages that show them; a wholesale
+// replacement rebuilds the pane.
 func (m *Model) SetUserNames(names map[string]string) {
+	if maps.Equal(m.userNames, names) {
+		return
+	}
+	changed := changedStringKeys(m.userNames, names)
 	m.userNames = names
-	// Drop the cache so mentions re-render with the new names.
-	m.dropCache()
+	// Always bump Version. The draft preview reads this map and is not a
+	// message row, so a name nobody in the channel has posted still has
+	// to redraw. The message cache itself is only rebuilt for rows that
+	// show one of the changed ids.
 	m.dirty()
+	if m.cache == nil || len(changed) > partialNameLimit {
+		m.dropCache("SetUserNames")
+		return
+	}
+	m.markWhere("SetUserNames", func(msg MessageItem) bool {
+		for _, id := range changed {
+			if messageShowsUser(msg, id) {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 // SetColoredUsernames enables or disables deterministic per-user coloring
@@ -1356,14 +1438,14 @@ func (m *Model) SetUserNames(names map[string]string) {
 // with the new coloring.
 func (m *Model) SetColoredUsernames(enabled bool) {
 	m.coloredUsernames = enabled
-	m.dropCache()
+	m.dropCache("SetColoredUsernames")
 	m.dirty()
 }
 
 // SetCompact enables or disables the compact message view.
 func (m *Model) SetCompact(enabled bool) {
 	m.compact = enabled
-	m.dropCache()
+	m.dropCache("SetCompact")
 	m.dirty()
 }
 
@@ -1375,7 +1457,7 @@ func (m *Model) SetCurrentUser(userID string) {
 	}
 	m.currentUserID = userID
 	// Rendering reads it too: mentions of the user are highlighted.
-	m.dropCache()
+	m.dropCache("SetCurrentUser")
 	m.dirty()
 }
 
@@ -1385,7 +1467,7 @@ func (m *Model) SetSelfUserGroups(groups map[string]bool) {
 		return
 	}
 	m.selfGroups = maps.Clone(groups)
-	m.dropCache()
+	m.dropCache("SetSelfUserGroups")
 	m.dirty()
 }
 
@@ -1399,10 +1481,11 @@ func (m *Model) SetSelfUserGroups(groups map[string]bool) {
 // resolution returns asynchronously, the App calls PatchUserName to
 // replace the placeholders live without re-fetching history.
 //
-// Always applies: the map is normally the App's, shared by every pane
-// and already holding the name by the time this pane is patched, so
-// "already in the map" says nothing about this pane's rows or cache.
-// The App drops resolutions that change nothing.
+// Always applies the name: the map is normally the App's, shared by
+// every pane and already holding the name by the time this pane is
+// patched, so "already in the map" says nothing about this pane's rows.
+// The App drops resolutions that change nothing. Only rows that display
+// the user are rebuilt.
 func (m *Model) PatchUserName(userID, displayName string) {
 	if userID == "" {
 		return
@@ -1411,29 +1494,52 @@ func (m *Model) PatchUserName(userID, displayName string) {
 		m.userNames = map[string]string{}
 	}
 	m.userNames[userID] = displayName
-	// The render cache stores rows with their mentions already resolved
-	// (RenderSlackMarkdown consults userNames at render time), so any
-	// cached row that mentioned <@userID> is now stale. Mirror
-	// SetUserNames's behavior: invalidate unconditionally on map change.
-	m.dropCache()
+	// Rows store the name as it rendered. Rebuild the ones that show
+	// this user — the author line, a huddle they are in, or an <@id>
+	// mention — and leave every other row alone. A resolution for
+	// someone this channel does not display must not drop the cache.
+	shown := false
 	for i := range m.messages {
 		if m.messages[i].UserID == userID && m.messages[i].UserName != displayName {
 			m.messages[i].UserName = displayName
 		}
+		if !messageShowsUser(m.messages[i], userID) {
+			continue
+		}
+		shown = true
+		if m.messages[i].TS == "" {
+			// No TS to address. Finish the name updates, then rebuild.
+			m.dropCache("PatchUserName")
+			continue
+		}
+		m.markStale(m.messages[i].TS)
 	}
-	m.dirty()
+	if shown {
+		m.dirty()
+	}
 }
 
 // SetUserStatuses replaces the user ID -> custom status map whose emoji
 // follows author names. The map is copied; later changes go through
 // PatchUserStatus.
 func (m *Model) SetUserStatuses(statuses map[string]peerstatus.Status) {
-	m.userStatuses = make(map[string]peerstatus.Status, len(statuses))
-	for id, st := range statuses {
-		m.userStatuses[id] = st
+	if maps.Equal(m.userStatuses, statuses) {
+		return
 	}
-	m.dropCache()
-	m.dirty()
+	next := make(map[string]peerstatus.Status, len(statuses))
+	for id, st := range statuses {
+		next[id] = st
+	}
+	changed := changedStatusKeys(m.userStatuses, next)
+	m.userStatuses = next
+	if m.cache == nil || len(changed) > partialNameLimit {
+		m.dropCache("SetUserStatuses")
+		m.dirty()
+		return
+	}
+	if m.markAuthors("SetUserStatuses", changed) {
+		m.dirty()
+	}
 }
 
 // PatchUserStatus records one user's status, invalidating the render
@@ -1447,8 +1553,7 @@ func (m *Model) PatchUserStatus(userID string, st peerstatus.Status) {
 		m.userStatuses = map[string]peerstatus.Status{}
 	}
 	m.userStatuses[userID] = st
-	if m.hasAuthor(userID) {
-		m.dropCache()
+	if m.markAuthors("PatchUserStatus", []string{userID}) {
 		m.dirty()
 	}
 }
@@ -1456,20 +1561,26 @@ func (m *Model) PatchUserStatus(userID string, st peerstatus.Status) {
 // ExpireStatuses drops statuses whose deadline has passed and reports
 // whether an author name rendered in this pane changed.
 func (m *Model) ExpireStatuses(now time.Time) bool {
-	changed := false
+	var authors []string
 	for uid, st := range m.userStatuses {
-		if st.Expired(now) {
-			m.userStatuses[uid] = st.Clear(now)
-			if m.hasAuthor(uid) {
-				changed = true
-			}
+		if !st.Expired(now) {
+			continue
+		}
+		m.userStatuses[uid] = st.Clear(now)
+		if m.hasAuthor(uid) {
+			authors = append(authors, uid)
 		}
 	}
-	if changed {
-		m.dropCache()
-		m.dirty()
+	if len(authors) == 0 {
+		return false
 	}
-	return changed
+	if m.cache == nil || len(authors) > partialNameLimit {
+		m.dropCache("ExpireStatuses")
+	} else {
+		m.markAuthors("ExpireStatuses", authors)
+	}
+	m.dirty()
+	return true
 }
 
 func (m *Model) hasAuthor(userID string) bool {
@@ -1527,9 +1638,26 @@ func authorStatusEmoji(statuses map[string]peerstatus.Status, userID string, now
 // <#CHANNELID> mentions (Slack-side messages from clients that emit
 // channel mentions without the embedded |name).
 func (m *Model) SetChannelNames(names map[string]string) {
+	if maps.Equal(m.channelNames, names) {
+		return
+	}
+	changed := changedStringKeys(m.channelNames, names)
 	m.channelNames = names
-	m.dropCache()
+	// Same as SetUserNames: the draft preview resolves channel mentions
+	// from this map, so the version bumps even when no row shows the id.
 	m.dirty()
+	if m.cache == nil || len(changed) > partialNameLimit {
+		m.dropCache("SetChannelNames")
+		return
+	}
+	m.markWhere("SetChannelNames", func(msg MessageItem) bool {
+		for _, id := range changed {
+			if messageMentionsChannel(msg, id) {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 // SetUserGroups sets the workspace-scoped usergroup ID -> handle map used
@@ -1541,7 +1669,7 @@ func (m *Model) SetUserGroups(groups map[string]string) {
 		return
 	}
 	m.userGroups = usergroups.Copy(groups)
-	m.dropCache()
+	m.dropCache("SetUserGroups")
 	m.dirty()
 }
 
@@ -1581,7 +1709,7 @@ func (m *Model) SetEmojiContext(ctx EmojiContext) {
 		ctx.Cells = 2
 	}
 	m.emojiCtx = ctx
-	m.dropCache()
+	m.dropCache("SetEmojiContext")
 	m.dropDMTopicChrome()
 	m.dirty()
 }
@@ -1603,7 +1731,7 @@ func (m *Model) dropDMTopicChrome() {
 // from the workspace bootstrap.
 func (m *Model) SetEmojiCustoms(customs map[string]string) {
 	m.emojiCtx.Customs = customs
-	m.dropCache()
+	m.dropCache("SetEmojiCustoms")
 	m.dropDMTopicChrome()
 	m.dirty()
 }
@@ -1626,7 +1754,7 @@ func (m *Model) SetImageContext(ctx imgrender.ImageContext) {
 			ctx.Fetcher.ConfigurePrerenderKitty(nil)
 		}
 	}
-	m.dropCache()
+	m.dropCache("SetImageContext")
 	m.dirty()
 }
 
@@ -1636,8 +1764,16 @@ func (m *Model) SetLastReadTS(ts string) {
 	if m.lastReadTS == ts {
 		return
 	}
+	prev := m.lastReadTS
 	m.lastReadTS = ts
-	m.dropCache()
+	// The only thing lastRead changes on screen is where the "── new ──"
+	// row sits. A mark that stays in the same gap (or still draws no
+	// row) must not rebuild every message. That is the channel_marked
+	// echo of a channel the user is already caught up on.
+	if m.cache != nil && unreadLandmarkAt(m.messages, prev) == unreadLandmarkAt(m.messages, ts) {
+		return
+	}
+	m.dropCache("SetLastReadTS")
 	m.dirty()
 }
 
@@ -1854,19 +1990,18 @@ func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles, stats *entr
 	flushes := slices.Concat(r.BlockFlushes, r.AttachmentFlushes, r.BodyFlushes, r.ReactionFlushes)
 	cs.wrap.stats = stats
 	w := WrapRows(msg, r, width, cs.wrap)
-	linesN, linesS, linesP := w.Lines, w.Selected, w.Plain
+	linesN, linesP := w.Lines, w.Plain
 	if stats != nil {
 		stats.count++
 	}
 	// Append a trailing spacer line after every message except the last.
-	// Both variants share the same spacer (it has no border styling).
-	// The plain mirror of the spacer is the empty string -- selection
-	// extraction trims trailing whitespace, and no real content lives
-	// in the spacer row.
+	// The selected variant reuses this tail (withTrail): it has no
+	// border styling. The plain mirror of the spacer is the empty
+	// string -- selection extraction trims trailing whitespace, and no
+	// real content lives in the spacer row.
 	trail := 0
 	if !m.compact && i < len(m.messages)-1 {
 		linesN = append(linesN, cs.spacerLines...)
-		linesS = append(linesS, cs.spacerLines...)
 		linesP = append(linesP, plainLine{Text: "", Bytes: []int{0}})
 		trail = len(cs.spacerLines)
 	}
@@ -1875,13 +2010,12 @@ func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles, stats *entr
 		Ref:        i,
 		Selectable: true,
 		Lines:      linesN,
-		Selected:   linesS,
 		Plain:      linesP,
 		ColOffset:  1, // thick left border ▌ occupies column 0 of Lines
 		Trail:      trail,
 		Hits:       append(r.Hits, w.LinkHits...),
 	}
-	return entry, EntryPayload{ShortSrc: w.ShortSrc, Flushes: flushes, SixelRows: r.SixelRows}
+	return entry, EntryPayload{SelSrc: w.SelSrc, ShortSrc: w.ShortSrc, Flushes: flushes, SixelRows: r.SixelRows}
 }
 
 // buildCache pre-renders all messages and day separators, splitting each
@@ -1891,6 +2025,7 @@ func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles, stats *entr
 // on a single-image arrival (HandleImageReady marks one TS stale and the
 // View()-time guard dispatches to partialRebuild instead).
 func (m *Model) buildCache(width int, keepPosition bool) {
+	m.dropReason = ""
 	m.cache = m.cache[:0]
 	m.cacheWidth = width
 	m.cacheMsgLen = len(m.messages)
@@ -2225,9 +2360,11 @@ func (m *Model) ScrollHintForDrag(viewportY int) int {
 // garbled. The short variant is memoised in m.cache[i].
 func (m *Model) selectedLines(i int) []string {
 	e := &m.list.Entries()[i]
-	return m.cache[i].SelectedLines(e, m.list.HasSelection(), func(src string) []string {
+	rows := m.cache[i].SelectedLines(e, m.list.HasSelection(), m.focused, func(src string) []string {
 		return NewWrapStyles(m.focused, m.compact).SelectedVariant(src, m.cacheWidth)
 	})
+	e.Selected = rows
+	return rows
 }
 
 // cursorLines is what Layout draws for the cursor entry: the selected
@@ -2360,6 +2497,9 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 			switch {
 			case m.cache == nil:
 				reason = "cache-nil"
+				if m.dropReason != "" {
+					reason = "cache-nil:" + m.dropReason
+				}
 			case m.cacheWidth != width:
 				reason = fmt.Sprintf("width-changed %d->%d", m.cacheWidth, width)
 			default:

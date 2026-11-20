@@ -258,7 +258,14 @@ var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// thread saturation — looks like a freeze. Debounce: schedule
 		// one tick on the first arrival; absorb every subsequent
 		// arrival into the pending batch and let them collapse to a
-		// single invalidation when the tick fires.
+		// single invalidation when the tick fires. The URLs are kept
+		// so a message pane can rebuild only the rows that draw one.
+		if m.URL != "" {
+			if a.emojiInvalidateURLs == nil {
+				a.emojiInvalidateURLs = map[string]struct{}{}
+			}
+			a.emojiInvalidateURLs[m.URL] = struct{}{}
+		}
 		if a.emojiInvalidatePending {
 			return nil, true
 		}
@@ -269,14 +276,21 @@ var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 
 	case emojiInvalidateMsg:
 		_ = m
-		// Debounce window closed. One wholesale invalidation across
-		// every emoji-rendering surface; arrivals accumulated during
-		// the window collapse to this. The URL argument is unused —
-		// the surface handlers wipe their caches wholesale regardless
-		// of URL in v1.
+		// Debounce window closed. Message panes rebuild the rows that
+		// use a URL from this window. The thread, sidebar and picker
+		// still invalidate wholesale: an emoji there is not tied to
+		// one message.
 		a.emojiInvalidatePending = false
+		urls := a.emojiInvalidateURLs
+		a.emojiInvalidateURLs = nil
 		for _, mp := range a.allWinModels() {
-			mp.HandleEmojiImageReady("")
+			if len(urls) == 0 {
+				mp.HandleEmojiImageReady("")
+				continue
+			}
+			for u := range urls {
+				mp.HandleEmojiImageReady(u)
+			}
 		}
 		a.threadPanel.HandleEmojiImageReady("")
 		a.sidebar.HandleEmojiImageReady("")

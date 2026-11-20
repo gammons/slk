@@ -43,7 +43,11 @@ func selectedEntry(t *testing.T, m *Model) entrylist.Entry {
 func assertHeightsMatch(t *testing.T, m *Model) {
 	t.Helper()
 	for i, e := range m.list.Entries() {
-		if len(e.Selected) != len(e.Lines) {
+		if e.Selectable {
+			if rows := m.selectedLines(i); len(rows) != len(e.Lines) {
+				t.Errorf("entry %d: selected height %d != lines %d", i, len(rows), len(e.Lines))
+			}
+		} else if len(e.Selected) != len(e.Lines) {
 			t.Errorf("entry %d: len(linesSelected)=%d != len(linesNormal)=%d",
 				i, len(e.Selected), len(e.Lines))
 		}

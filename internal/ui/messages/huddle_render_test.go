@@ -174,8 +174,8 @@ func TestHuddleNoticeCopyMirrorAndSelected(t *testing.T) {
 		!strings.Contains(rows.Plain[0].Text, "Alice started a huddle · lasted 23 min") {
 		t.Errorf("plain mirror = %+v", rows.Plain)
 	}
-	if len(rows.Selected) != len(rows.Lines) {
-		t.Errorf("selected rows = %d, lines = %d", len(rows.Selected), len(rows.Lines))
+	if sel := rowSelected(rows, 80, true, false); len(sel) != len(rows.Lines) {
+		t.Errorf("selected rows = %d, lines = %d", len(sel), len(rows.Lines))
 	}
 }
 

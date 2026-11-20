@@ -1082,9 +1082,11 @@ func (m *Model) selectedLines(i int) []string {
 	if e.Ref < 0 || e.Ref >= len(m.cache) {
 		return e.Lines
 	}
-	return m.cache[e.Ref].SelectedLines(e, m.list.HasSelection(), func(src string) []string {
+	rows := m.cache[e.Ref].SelectedLines(e, m.list.HasSelection(), m.focused, func(src string) []string {
 		return messages.NewWrapStyles(m.focused, m.compact).SelectedVariant(src, m.cacheWidth)
 	})
+	e.Selected = rows
+	return rows
 }
 
 // cursorLines is what Layout draws for the cursor entry: the selected
@@ -1381,12 +1383,11 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 				Ref:        i,
 				Selectable: true,
 				Lines:      w.Lines,
-				Selected:   w.Selected,
 				Plain:      w.Plain,
 				ColOffset:  1,
 				Hits:       append(r.Hits, w.LinkHits...),
 			})
-			m.cache = append(m.cache, messages.EntryPayload{ShortSrc: w.ShortSrc, Flushes: flushes, SixelRows: r.SixelRows})
+			m.cache = append(m.cache, messages.EntryPayload{SelSrc: w.SelSrc, ShortSrc: w.ShortSrc, Flushes: flushes, SixelRows: r.SixelRows})
 			m.replyIDToIdx[reply.TS] = i
 		}
 		m.cacheWidth = width
