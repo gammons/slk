@@ -689,6 +689,37 @@ team_id = "T02OOOOOO"
 	}
 }
 
+func TestLoadMergedTeamIDBlockResolvesDefaultWorkspace(t *testing.T) {
+	// default_workspace may name the team-id key the fold removes.
+	// It still has to resolve to that workspace.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	data := []byte(`
+[general]
+default_workspace = "T01ABCDEF"
+
+[workspaces.my-company]
+team_id = "T01ABCDEF"
+
+[workspaces.T01ABCDEF]
+version_ts = "1795162663"
+`)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got, err := cfg.TeamIDForDefaultWorkspace()
+	if err != nil {
+		t.Fatalf("TeamIDForDefaultWorkspace: %v", err)
+	}
+	if got != "T01ABCDEF" {
+		t.Fatalf("default team = %q, want T01ABCDEF", got)
+	}
+}
+
 func TestLoadRefusesTeamIDBlockThatHasUserConfig(t *testing.T) {
 	// A team-id block with something a person configures is a real
 	// conflict, not the state-only duplicate first setup writes.
