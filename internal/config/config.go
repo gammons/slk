@@ -482,6 +482,10 @@ func (c Config) WorkspaceByTeamID(teamID string) (Workspace, bool) {
 // or a legacy team-ID-shaped key. Returns ("", nil) if default_workspace
 // is unset, and an error if it is set but does not match any
 // configured workspace.
+//
+// A team-id key that load folded into its slug is no longer a map key.
+// When default_workspace still names that key, the team id itself
+// identifies the workspace that survived.
 func (c Config) TeamIDForDefaultWorkspace() (string, error) {
 	key := c.General.DefaultWorkspace
 	if key == "" {
@@ -489,6 +493,11 @@ func (c Config) TeamIDForDefaultWorkspace() (string, error) {
 	}
 	if ws, ok := c.Workspaces[key]; ok {
 		return ws.TeamID, nil
+	}
+	if isTeamIDKey(key) {
+		if ws, ok := c.WorkspaceByTeamID(key); ok {
+			return ws.TeamID, nil
+		}
 	}
 	return "", fmt.Errorf("default_workspace %q not found in [workspaces.*]", key)
 }

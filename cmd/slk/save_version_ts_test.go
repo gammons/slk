@@ -76,6 +76,48 @@ func TestSaveWorkspaceVersionTS_DoesNotTouchOtherWorkspaces(t *testing.T) {
 	}
 }
 
+// First setup appends [workspaces.<slug>] while run() is still holding
+// the config it loaded before onboarding. The background version_ts
+// refresh then resolves the key from that snapshot, which falls back
+// to the team id, and a second block is what makes the next launch
+// refuse to start (#499). The refresh must land in the named block.
+func TestFirstSetupVersionTSReloadsAsOneWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := appendWorkspaceConfigBlock(path, "my-company", "T01ABCDEF", "My Company"); err != nil {
+		t.Fatalf("append workspace: %v", err)
+	}
+	// The snapshot connectWorkspace saves with: loaded before the
+	// named block existed.
+	stale := config.Config{}
+	tomlKey := workspaceTOMLKey(stale, "T01ABCDEF")
+	if tomlKey != "T01ABCDEF" {
+		t.Fatalf("stale snapshot key = %q, want the team-id fallback", tomlKey)
+	}
+	if err := saveWorkspaceVersionTS(path, tomlKey, "T01ABCDEF", "My Company", "1795162663"); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	body := string(mustRead(t, path))
+	if n := strings.Count(body, "[workspaces."); n != 1 {
+		t.Fatalf("%d workspace blocks, want 1:\n%s", n, body)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("reload: %v\n%s", err, body)
+	}
+	if len(cfg.Workspaces) != 1 {
+		t.Fatalf("workspaces = %d, want 1:\n%s", len(cfg.Workspaces), body)
+	}
+	ws, ok := cfg.Workspaces["my-company"]
+	if !ok {
+		t.Fatalf("named workspace missing:\n%s", mustRead(t, path))
+	}
+	if ws.TeamID != "T01ABCDEF" || ws.VersionTS != "1795162663" {
+		t.Fatalf("workspace = %+v, want team T01ABCDEF and version_ts 1795162663", ws)
+	}
+}
+
 func TestSaveWorkspaceVersionTS_CreatesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "config.toml")

@@ -305,6 +305,14 @@ func run() error {
 		if err != nil || len(tokens) == 0 {
 			return fmt.Errorf("no workspaces configured after onboarding")
 		}
+		// Onboarding appended [workspaces.<slug>] after cfg was loaded.
+		// version_ts, theme and sidebar width resolve their TOML key
+		// from this map and otherwise fall back to the team id, which
+		// writes a second block for the same workspace (#499).
+		cfg, err = config.Load(configPath)
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
 	}
 
 	// Re-mint tokens from the live desktop cookie so every launch starts
