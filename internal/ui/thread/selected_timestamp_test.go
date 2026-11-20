@@ -49,9 +49,14 @@ func stripRows(view string) []string {
 func assertThreadHeightsMatch(t *testing.T, m *Model) {
 	t.Helper()
 	for i, e := range m.replyEntries {
-		if len(e.Selected) != len(e.Lines) {
+		// Selected rows are built for the cursor only. Ask for them here
+		// so a reply that is not the cursor is still checked.
+		rows := m.cache[i].SelectedLines(&e, m.list.HasSelection(), m.focused, func(src string) []string {
+			return messages.NewWrapStyles(m.focused, m.compact).SelectedVariant(src, m.cacheWidth)
+		})
+		if len(rows) != len(e.Lines) {
 			t.Errorf("reply %d: len(linesSelected)=%d != len(linesNormal)=%d",
-				i, len(e.Selected), len(e.Lines))
+				i, len(rows), len(e.Lines))
 		}
 		if short := m.cache[i].SelectedShort; short != nil && len(short) != len(e.Lines) {
 			t.Errorf("reply %d: len(SelectedShort)=%d != len(linesNormal)=%d",

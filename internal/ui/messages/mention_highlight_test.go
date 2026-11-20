@@ -87,7 +87,7 @@ func TestWrapRows_MentionHighlight(t *testing.T) {
 		if got := strings.Contains(lines, tint) && strings.Contains(lines, bar); got != want {
 			t.Errorf("item %d: highlighted rows = %v, want %v:\n%q", i, got, want, lines)
 		}
-		if strings.Contains(strings.Join(w.Selected, "\n"), tint) {
+		if strings.Contains(strings.Join(rowSelected(w, width, true, false), "\n"), tint) {
 			t.Errorf("item %d: selected rows carry the mention tint", i)
 		}
 	}

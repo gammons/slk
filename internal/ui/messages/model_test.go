@@ -1539,8 +1539,14 @@ func TestPatchUserName_AppliesWhenSharedMapAlreadyHasName(t *testing.T) {
 	if m.messages[0].UserName != "bob" {
 		t.Errorf("msg[0].UserName = %q, want bob", m.messages[0].UserName)
 	}
-	if m.cache != nil {
-		t.Error("PatchUserName should invalidate the cache so the <@U1> mention re-resolves")
+	if m.cache == nil {
+		t.Fatal("PatchUserName dropped the whole cache; only rows that show U1 should rebuild")
+	}
+	if _, ok := m.staleEntries["1.0"]; !ok {
+		t.Error("author row was not marked stale")
+	}
+	if _, ok := m.staleEntries["2.0"]; !ok {
+		t.Error("mention row was not marked stale")
 	}
 	if m.Version() == verBefore {
 		t.Error("Version should bump after PatchUserName")
@@ -1571,8 +1577,11 @@ func TestPatchUserName_InvalidatesCacheEvenWithNoMatchingMessages(t *testing.T) 
 		t.Fatal("expected cache populated after View(); harness assumption failed")
 	}
 	m.PatchUserName("U99", "carol")
-	if m.cache != nil {
-		t.Error("PatchUserName should have invalidated m.cache so the mention re-resolves")
+	if m.cache == nil {
+		t.Fatal("PatchUserName dropped the whole cache; only the mentioning row should rebuild")
+	}
+	if _, ok := m.staleEntries["1.0"]; !ok {
+		t.Error("the <@U99> mention was not marked stale")
 	}
 }
 

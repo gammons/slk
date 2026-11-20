@@ -507,8 +507,11 @@ type App struct {
 	// (e.g., a fresh channel with 50+ cold-cache emoji whose fetches all
 	// complete in a burst). Coalesces every arrival within the debounce
 	// window into a single cache invalidation when the emojiInvalidateMsg
-	// tick fires. See reducer_io.go's EmojiImageReadyMsg arm.
+	// tick fires. emojiInvalidateURLs is the set of URLs in that window;
+	// the message panes rebuild only the rows that draw one of them.
+	// See reducer_io.go's EmojiImageReadyMsg arm.
 	emojiInvalidatePending bool
+	emojiInvalidateURLs    map[string]struct{}
 
 	// linkPicker is the open-link choice modal (issue #62).
 	linkPicker *linkpicker.Model

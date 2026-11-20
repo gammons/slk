@@ -172,10 +172,10 @@ func TestBuildCache_BlockKitRunsKeepBackground(t *testing.T) {
 	m.SetAvatarFunc(func(string) string { return styles.MessageText.Render("  ") })
 	m.buildCache(100, false)
 
-	var lines []string
-	for _, e := range m.list.Entries() {
-		if e.Ref == 0 {
-			lines = e.Selected
+	lines := []string(nil)
+	for i, e := range m.list.Entries() {
+		if e.Ref == 0 && e.Selectable {
+			lines = m.selectedLines(i)
 			break
 		}
 	}
