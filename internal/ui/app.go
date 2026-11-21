@@ -314,6 +314,14 @@ type App struct {
 	// only.
 	activityReads map[string]*activityRead
 
+	// starSnapshots holds the sidebar row state (starred flag and
+	// section) from BEFORE a star request's optimistic move, keyed by
+	// channel; starSeqs is the per-channel request number the reply
+	// must match to still apply (a stale reply was superseded by a
+	// newer request). Update goroutine only.
+	starSnapshots map[string]starSnapshot
+	starSeqs      map[string]int
+
 	// activityBadgeTotals holds each workspace's total unread activity
 	// (from client.counts at boot and badge_counts_updated events
 	// after), keyed by team id. The sidebar's Activity badge shows the
@@ -3041,6 +3049,9 @@ func (a *App) SetChannels(items []sidebar.ChannelItem) {
 // activation supplies only the incoming snapshot, discarding outgoing names.
 func (a *App) setChannels(items []sidebar.ChannelItem, knownNames map[string]string) {
 	a.sidebar.SetItems(items)
+	// Item swaps carry star state (a star echo's section refresh, a
+	// mute refresh); the header glyph follows the active channel.
+	a.syncHeaderStar()
 	a.channelPickItems = items
 	names := maps.Clone(knownNames)
 	if names == nil {
@@ -3749,6 +3760,7 @@ func (a *App) SetCustomEmoji(customs map[string]string) {
 func (a *App) SetInitialChannel(channelID, channelName string, msgs []messages.MessageItem) {
 	a.activeChannelID = channelID
 	a.messagepane.SetChannel(channelName, "")
+	a.syncHeaderStar()
 	a.messagepane.SetMessages(msgs)
 	a.compose.SetChannel(channelName)
 	a.compose.SetActiveChannel(channelID)

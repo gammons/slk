@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -187,19 +189,103 @@ func (g *threadSubsGate) done() {
 	g.mu.Unlock()
 }
 
+// unburn rolls back an admission, for a failure that must not cost
+// the window: a grid member's sync that found no org session yet.
+// The next trigger is admitted again; the org session's arrival (or
+// any other trigger) retries the fetch.
+func (g *threadSubsGate) unburn() {
+	g.mu.Lock()
+	g.last = time.Time{}
+	g.mu.Unlock()
+}
+
 // ensureWorkspaceThreadSubs is the single construction site for the
 // throttled subscription sync, shared by every trigger: the
 // ThreadService closure (workspace-ready boot + Threads-view
 // activation) and the RTM handler's reconnect/wake catch-up.
-func ensureWorkspaceThreadSubs(ctx context.Context, wctx *WorkspaceContext, db *cache.DB, send func(tea.Msg)) {
+func ensureWorkspaceThreadSubs(ctx context.Context, wctx *WorkspaceContext, db *cache.DB, send func(tea.Msg), router *workspaceRouter) {
 	ensureThreadSubscriptions(ctx, &wctx.ThreadSubsGate,
 		&threadSubscriptionSync{
-			client:      wctx.Client,
+			client:      threadSubscriptionListerFor(router, wctx),
 			db:          db,
 			workspaceID: wctx.TeamID,
 			availableCb: func(available bool) { wctx.SubscriptionsAvailable = available },
 		},
 		func() { send(ui.ThreadsListDirtyMsg{TeamID: wctx.TeamID}) })
+}
+
+// errNoOrgSessionYet reports a grid member workspace's subscription
+// sync that failed because no same-user org-level session was
+// connected when it ran. The member token's team_is_restricted
+// refusal is expected; the org session that can answer may simply not
+// have finished connecting yet. Distinguishable so the sync gate does
+// not treat it as a burned attempt (see threadSubsGate.unburn).
+var errNoOrgSessionYet = errors.New("no same-user org session connected yet")
+
+// orgSessionRetryStep and orgSessionRetryAttempts bound the in-
+// admission retry after an errNoOrgSessionYet failure: the org
+// session usually registers within seconds (workspaces connect in
+// parallel), and 30 x 2s covers a slow connect without spinning on a
+// workspace whose org session never arrives. The step is a var so
+// tests can shrink it.
+var orgSessionRetryStep = 2 * time.Second
+
+const orgSessionRetryAttempts = 30
+
+// threadSubscriptionListerFor picks the lister a workspace's
+// subscription sync runs on: its own client, wrapped with the
+// same-user org-level session's when the workspace is a grid member.
+// subscriptions.thread.getView answers a member token with
+// team_is_restricted, and the list it would answer is user-scoped
+// across the grid anyway - the org session's list carries
+// member-workspace threads too (observed on a live grid) - so the org
+// session's answer is this workspace's list, the same one the org
+// workspace's own sync stores. The org session resolves LAZILY, at
+// list time: the wrapper is built at trigger time, when a staggered
+// first sync can predate the org session's connect by seconds.
+func threadSubscriptionListerFor(router *workspaceRouter, wctx *WorkspaceContext) threadSubscriptionLister {
+	if wctx.Client == nil || !wctx.Client.IsGridMember() {
+		return wctx.Client
+	}
+	return orgFallbackThreadLister{
+		own: wctx.Client,
+		orgFn: func() threadSubscriptionLister {
+			// Return through an explicit nil check: a nil
+			// *slackclient.Client returned straight as the interface
+			// would be a typed nil, non-nil to == and a panic when
+			// called.
+			if client := sameUserOrgClient(router, wctx); client != nil {
+				return client
+			}
+			return nil
+		},
+	}
+}
+
+// orgFallbackThreadLister retries a grid member workspace's failed
+// subscription list through the same-user org session, resolved at
+// list time. The own lister's answer still wins; only its failure
+// falls through. No org session connected at list time turns the own
+// failure into errNoOrgSessionYet: transient by construction, unburned
+// from the sync gate and retried when the org session arrives.
+type orgFallbackThreadLister struct {
+	own   threadSubscriptionLister
+	orgFn func() threadSubscriptionLister
+}
+
+func (l orgFallbackThreadLister) ListThreadSubscriptions(ctx context.Context) ([]slackclient.ThreadSubscriptionView, error) {
+	views, err := l.own.ListThreadSubscriptions(ctx)
+	if err == nil {
+		return views, nil
+	}
+	var org threadSubscriptionLister
+	if l.orgFn != nil {
+		org = l.orgFn()
+	}
+	if org == nil {
+		return nil, fmt.Errorf("%w: %v", errNoOrgSessionYet, err)
+	}
+	return org.ListThreadSubscriptions(ctx)
 }
 
 // ensureThreadSubscriptions starts a subscription sync in the
@@ -237,7 +323,36 @@ func ensureThreadSubscriptions(ctx context.Context, gate *threadSubsGate, s *thr
 				}
 			}
 		}
-		if err := s.sync(ctx); err != nil {
+		err := s.sync(ctx)
+		if errors.Is(err, errNoOrgSessionYet) {
+			// Retry within this admission: the org session typically
+			// registers moments later (workspaces connect in
+			// parallel), and an external re-ensure that arrives while
+			// this sync still holds the gate no-ops - without the
+			// retry here, the later failure would wait for the next
+			// trigger. The gate stays held (running), so nothing
+			// interleaves; the bound keeps a never-connecting org from
+			// spinning.
+			for attempt := 0; errors.Is(err, errNoOrgSessionYet) && attempt < orgSessionRetryAttempts; attempt++ {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(orgSessionRetryStep):
+				}
+				err = s.sync(ctx)
+			}
+			if errors.Is(err, errNoOrgSessionYet) {
+				// The org session never arrived within the bound: only
+				// this outcome unburns the admission, or the banner
+				// would outlive the org session's eventual arrival. A
+				// retry that resolved - succeeded, or failed for a real
+				// reason - keeps the burn the admission already set,
+				// so the next trigger honours the window like any
+				// completed sync.
+				gate.unburn()
+			}
+		}
+		if err != nil {
 			return
 		}
 		if onDone != nil {

@@ -79,7 +79,7 @@ func TestSlashAwayUpdatesTheCachedPresence(t *testing.T) {
 // (TestDispatchCommand_*). This is the guard against a built-in being
 // routed to chat.command; extend the list with each new built-in.
 func TestSlashBuiltinsAreLocal(t *testing.T) {
-	for _, name := range []string{"/away", "/active", "/status", "/open", "/join", "/msg", "/dm", "/leave", "/close", "/part"} {
+	for _, name := range []string{"/away", "/active", "/status", "/open", "/join", "/msg", "/dm", "/star", "/unstar", "/leave", "/close", "/part"} {
 		if _, ok := slashCommands[name]; !ok {
 			t.Errorf("%s is not in slashCommands, so it would run through chat.command", name)
 		}
@@ -672,5 +672,152 @@ func TestSlashOpen_FromThreadComposerIntoReadOnlyChannelLeavesInsert(t *testing.
 	}
 	if a.mode == ModeInsert {
 		t.Error("insert mode carried into a disabled channel composer")
+	}
+}
+
+// starSlashApp is slashApp whose ChannelService records SetStarred
+// calls and answers with the ChannelStarSetMsg the caller chooses.
+func starSlashApp(t *testing.T, answer func(channelID string, starred bool) core.Msg) (*App, *[]bool) {
+	t.Helper()
+	a, _ := slashApp(t, nil)
+	calls := &[]bool{}
+	fns := channelFuncsForTest(a)
+	fns.SetStarred = func(teamID ids.TeamID, channelID ids.ChannelID, starred bool) core.Cmd {
+		*calls = append(*calls, starred)
+		return func() core.Msg { return answer(string(channelID), starred) }
+	}
+	setChannelFuncsForTest(a, fns)
+	return a, calls
+}
+
+// starredC1 reports the sidebar's starred flag for C1.
+func starredC1(a *App) bool {
+	starred, ok := a.sidebar.IsItemStarred("C1")
+	if !ok {
+		return false
+	}
+	return starred
+}
+
+// TestSlashStar_MovesTheRowAndSendsIt: /star flips the sidebar row
+// optimistically and dispatches SetStarred; the answered success leaves
+// the row starred, and /unstar reverses both.
+func TestSlashStar_MovesTheRowAndSendsIt(t *testing.T) {
+	a, calls := starSlashApp(t, func(channelID string, starred bool) core.Msg {
+		return ChannelStarSetMsg{ChannelID: channelID, Starred: starred}
+	})
+	if starredC1(a) {
+		t.Fatal("precondition: C1 starts unstarred")
+	}
+
+	a.compose.SetValue("/star")
+	msgs := deliveredMsgs[ChannelStarSetMsg](t, pressEnter(a))
+	if len(*calls) != 1 || !(*calls)[0] {
+		t.Fatalf("SetStarred calls = %v; want one true", *calls)
+	}
+	if len(msgs) != 1 || msgs[0].Err != nil {
+		t.Fatalf("ChannelStarSetMsg = %+v; want one clean answer", msgs)
+	}
+	if !starredC1(a) {
+		t.Fatal("C1 is not starred after /star")
+	}
+
+	// The first Enter left insert mode (exitInsertAfterSend); put the
+	// composer back the way a second command would be typed in.
+	a.SetMode(ModeInsert)
+	a.focusedPanel = PanelMessages
+	a.compose.SetValue("/unstar")
+	msgs = deliveredMsgs[ChannelStarSetMsg](t, pressEnter(a))
+	if len(*calls) != 2 || (*calls)[1] {
+		t.Fatalf("SetStarred calls = %v; want a second false", *calls)
+	}
+	if len(msgs) != 1 || msgs[0].Err != nil {
+		t.Fatalf("ChannelStarSetMsg = %+v; want one clean answer", msgs)
+	}
+	if starredC1(a) {
+		t.Fatal("C1 is still starred after /unstar")
+	}
+}
+
+// TestSlashStar_RefusalRevertsTheRow: a star Slack refuses puts the row
+// back where it was, with a toast.
+func TestSlashStar_RefusalRevertsTheRow(t *testing.T) {
+	a, _ := starSlashApp(t, func(channelID string, starred bool) core.Msg {
+		return ChannelStarSetMsg{ChannelID: channelID, Starred: starred, Err: errors.New("star_not_allowed")}
+	})
+
+	a.compose.SetValue("/star")
+	msgs := deliveredMsgs[ChannelStarSetMsg](t, pressEnter(a))
+	if len(msgs) != 1 || msgs[0].Err == nil {
+		t.Fatalf("ChannelStarSetMsg = %+v; want the refusal", msgs)
+	}
+	for _, m := range msgs {
+		a.Update(m)
+	}
+	if starredC1(a) {
+		t.Fatal("C1 stayed starred after Slack refused the star")
+	}
+	if !strings.Contains(statusbarText(a), "star") {
+		t.Fatalf("statusbar = %q; want the refusal toast to name the star", statusbarText(a))
+	}
+}
+
+// A refusal restores the state from BEFORE the request, not the
+// opposite of the request: an /unstar on a starred channel that fails
+// leaves the channel starred (Slack never changed it).
+func TestSlashStar_RefusalRestoresPreRequestState(t *testing.T) {
+	a, _ := starSlashApp(t, func(channelID string, starred bool) core.Msg {
+		// Star succeeds; un-star refuses.
+		if starred {
+			return ChannelStarSetMsg{ChannelID: channelID, Starred: true}
+		}
+		return ChannelStarSetMsg{ChannelID: channelID, Starred: false, Err: errors.New("nope")}
+	})
+
+	a.compose.SetValue("/star")
+	for _, m := range deliveredMsgs[ChannelStarSetMsg](t, pressEnter(a)) {
+		a.Update(m)
+	}
+	if !starredC1(a) {
+		t.Fatal("precondition: C1 is not starred")
+	}
+
+	a.SetMode(ModeInsert)
+	a.focusedPanel = PanelMessages
+	a.compose.SetValue("/unstar")
+	for _, m := range deliveredMsgs[ChannelStarSetMsg](t, pressEnter(a)) {
+		a.Update(m)
+	}
+	if !starredC1(a) {
+		t.Fatal("a failed /unstar left C1 unstarred; the refusal must restore the pre-request state")
+	}
+}
+
+// A reply superseded by a newer request for the same channel is
+// ignored, whichever way the old one went.
+func TestSlashStar_SupersededReplyIgnored(t *testing.T) {
+	a, _ := starSlashApp(t, func(channelID string, starred bool) core.Msg {
+		return ChannelStarSetMsg{ChannelID: channelID, Starred: starred}
+	})
+
+	// First request (star), then a second (un-star) before the first's
+	// reply is delivered: the first's reply is stale and must not
+	// re-star the row.
+	first := a.setStarredChannel("C1", true)
+	second := a.setStarredChannel("C1", false)
+	if first == nil || second == nil {
+		t.Fatal("setStarredChannel returned nil")
+	}
+	if m, ok := first().(ChannelStarSetMsg); ok {
+		a.Update(m) // stale: superseded by the second request
+	}
+	if starredC1(a) {
+		t.Fatal("a superseded star reply re-starred C1")
+	}
+	if m, ok := second().(ChannelStarSetMsg); ok {
+		a.Update(m)
+	}
+	if starredC1(a) {
+		t.Fatal("C1 is starred after the current un-star reply")
 	}
 }

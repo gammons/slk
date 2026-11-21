@@ -64,6 +64,8 @@ var slashCommands = map[string]commandFunc{
 	"/join":   slashOpen("/join"),
 	"/msg":    slashMsg("/msg"),
 	"/dm":     slashMsg("/dm"),
+	"/star":   slashStar,
+	"/unstar": slashUnstar,
 	"/leave":  slashUnsupported("/leave"),
 	"/close":  slashUnsupported("/close"),
 	"/part":   slashUnsupported("/part"),

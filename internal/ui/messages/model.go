@@ -212,6 +212,11 @@ type Model struct {
 	chromeDMTopic     dmTopic
 	chromeChannelType string
 	chromeCacheValid  bool
+	// channelStarred is the active channel's star state, drawn as the
+	// glyph at the header line's right end and clickable to toggle
+	// (star-conversations design §Mouse). Pushed by the App whenever
+	// the active channel or its star changes.
+	channelStarred bool
 
 	nav ReactionNav
 
@@ -677,6 +682,29 @@ func (m *Model) SetChannel(name, topic string) {
 	m.channelTopic = topic
 }
 
+// SetChannelStarred records the active channel's star state for the
+// header glyph (filled when starred, hollow when not) and redraws the
+// chrome when it flips.
+func (m *Model) SetChannelStarred(starred bool) {
+	if m.channelStarred == starred {
+		return
+	}
+	m.channelStarred = starred
+	m.chromeCacheValid = false
+	m.dirty()
+}
+
+// HitTestHeaderStar reports whether pane-local (px, py) is the header's
+// star glyph: the first chrome line, at the glyph's column (with its
+// padding cell, so a click on the glyph's right edge still counts).
+// The upper bound matters for split windows: a click on ANOTHER
+// window's header translates to a px past this chrome's width, and
+// without it that click would toggle this window's star. The caller
+// owns what a hit does (toggle the star).
+func (m *Model) HitTestHeaderStar(px, py int) bool {
+	return py == 0 && m.chromeWidth >= 2 && px >= m.chromeWidth-2 && px < m.chromeWidth
+}
+
 // SetChannelTopic replaces the header's second line without changing
 // the channel. A DM uses it for the peer's status and DND.
 func (m *Model) SetChannelTopic(topic string) {
@@ -1011,6 +1039,19 @@ func (m *Model) SelectByTS(ts string) bool {
 // internally by ClickAt and BeginSelectionAt.
 func (m *Model) ChromeHeight() int {
 	return m.chromeHeight
+}
+
+// ChromeWidth is the inner width the chrome was last rendered at (the
+// pane's content width, inside the borders). Set during View(); the
+// mouse handler uses it with HitTestHeaderStar to place the star
+// glyph's column.
+func (m *Model) ChromeWidth() int {
+	return m.chromeWidth
+}
+
+// HeaderStarred reports the star state the header glyph last drew.
+func (m *Model) HeaderStarred() bool {
+	return m.channelStarred
 }
 
 // HitRect is a public, immutable snapshot of one inline-image hit
@@ -2410,13 +2451,35 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 		// looking line below it" effect that visually separated the
 		// header from the messages and made the title look like it sat
 		// outside the panel.
+		// The title renders to width-2 cells per line (Width pads every
+		// wrapped line), so the star glyph plus one cell of padding
+		// fills the FIRST line's right end: the active channel's star
+		// state, clickable to toggle it (see HitTestHeaderStar for the
+		// column range - the first line, always). A long name wraps to
+		// further lines, which get plain padding so every chrome line
+		// stays exactly `width` cells. The glyph is one display cell by
+		// the same measurement the other chrome glyphs (⚑ ◉ ◆) rely on.
 		headerStyle := lipgloss.NewStyle().
-			Width(width).
+			Width(width-2).
 			Background(styles.Background).
 			Foreground(styles.TextPrimary).
 			Bold(true).
 			Padding(0, 1)
-		header := headerStyle.Render(fmt.Sprintf("%s %s", ChannelGlyph(m.channelType), m.channelName))
+		title := headerStyle.Render(fmt.Sprintf("%s %s", ChannelGlyph(m.channelType), m.channelName))
+		starGlyph := "☆"
+		if m.channelStarred {
+			starGlyph = "★"
+		}
+		starCell := lipgloss.NewStyle().
+			Background(styles.Background).
+			Foreground(styles.TextMuted).
+			Render(starGlyph)
+		titleLines := strings.Split(title, "\n")
+		titleLines[0] += starCell + " "
+		for i := 1; i < len(titleLines); i++ {
+			titleLines[i] += "  "
+		}
+		header := strings.Join(titleLines, "\n")
 		if m.channelTopic != "" {
 			// Width(width) pads every wrapped topic line to the full pane
 			// width. This keeps the invariant that EVERY chrome line is

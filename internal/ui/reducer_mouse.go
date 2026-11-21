@@ -172,6 +172,45 @@ func scrollActiveModal(a *App, up bool) tea.Cmd {
 // reduceMouse dispatch switch because the arm is ~120 lines (four
 // panel-router branches: workspace rail, sidebar, messages pane,
 // thread panel; each with its own hit-test sequence).
+// headerStarClick resolves a click against the header's star glyph,
+// split-aware. With one window the glyph hit-tests against the pane's
+// chrome directly; with splits, only a click inside the FOCUSED
+// window's rect - translated into that window's own chrome - counts,
+// so a placeholder window PanelAt maps onto the live pane cannot fire
+// it. A hit toggles the star through the same path /star uses.
+func (a *App) headerStarClick(screenX, screenY int) (tea.Cmd, bool) {
+	if a.preview.Active() || a.view == ViewThreads || a.view == ViewActivity {
+		return nil, false
+	}
+	panel, px, py, ok := a.panelAt(screenX, screenY)
+	if !ok || panel != PanelMessages || py < 0 {
+		return nil, false
+	}
+	if a.wins.Len() > 1 {
+		rect := a.layout.focusedWinRect
+		if rect.W == 0 {
+			return nil, false
+		}
+		m := a.winModels[a.focusedWin]
+		if m == nil {
+			return nil, false
+		}
+		// Window-local chrome coordinates: the rect is in
+		// region-local columns/rows with the window's border at its
+		// edge, and px/py already sit inside the region's borders.
+		if !m.HitTestHeaderStar(px-rect.X, py-rect.Y) {
+			return nil, false
+		}
+	} else if !a.messagepane.HitTestHeaderStar(px, py) {
+		return nil, false
+	}
+	starred, _ := a.sidebar.IsItemStarred(a.activeChannelID)
+	if cmd := a.setStarredChannel(a.activeChannelID, !starred); cmd != nil {
+		return cmd, true
+	}
+	return toastWithClear(a, "That conversation isn't in the sidebar", 3*time.Second), true
+}
+
 func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 	if a.bootstrap.IsLoading() {
 		return nil
@@ -248,6 +287,16 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		return nil
 
 	case x < a.layout.MsgEnd():
+		// The header's star glyph: clicking it toggles the star of the
+		// channel on screen, the mouse equivalent of /star and /unstar
+		// (star-conversations design §Mouse). Runs before the split
+		// guard below: the focused window's header is real content even
+		// with splits open, and the hit test is split-aware - it only
+		// fires inside the focused window's rect, never on a placeholder
+		// window PanelAt would map onto the live pane.
+		if cmd, hit := a.headerStarClick(m.X, m.Y); hit {
+			return cmd
+		}
 		// Interim Phase 2 guard: per-window mouse routing lands in
 		// Phase 4 (window-management design §6). With splits active,
 		// PanelAt still maps the entire messages region to the single

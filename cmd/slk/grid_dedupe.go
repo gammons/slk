@@ -130,6 +130,9 @@ var gridPerWorkspaceFrames = map[string]bool{
 	// workspace's BadgeEvents clock via OnBadgeCountsUpdated): each
 	// session stamps and publishes its own workspace's total.
 	"badge_counts_updated": true,
+	// Stars (wsCtx.SectionStore via OnStarChanged): each session
+	// updates its own workspace's section membership and cache row.
+	"star_added": true, "star_removed": true,
 }
 
 // allow records the frame for socket and reports whether this is its

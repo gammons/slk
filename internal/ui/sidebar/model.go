@@ -1195,6 +1195,115 @@ func (m *Model) UpsertItem(item ChannelItem) {
 	m.dirty()
 }
 
+// SetItemStarred moves channelID's row into or out of the Starred
+// section: the optimistic half of /star and /unstar, applied before
+// Slack answers and reverted by the ChannelStarSetMsg arm when it
+// refuses. Starring sets the item's Section to the provider's stars
+// section (Slack-native sections mode; the engine side updates the
+// same membership in its SectionStore). Un-starring clears the
+// Section, which drops the row into its type's default section — a
+// channel that was in a custom section before it was starred lands
+// there instead, until the next section refresh re-resolves it.
+// Without a stars section (config-glob sections, or a workspace whose
+// Slack sections have not loaded) the Section is left alone: there is
+// no Starred group to move the row into, and erasing a configured
+// section would silently ungroup it. Reports whether the item was
+// found.
+func (m *Model) SetItemStarred(channelID string, starred bool) bool {
+	found := false
+	key, hadKey := m.currentCursorKey()
+	starsID := m.starsSectionID()
+	for i := range m.items {
+		if m.items[i].ID != channelID {
+			continue
+		}
+		m.items[i].IsStarred = starred
+		if starsID != "" {
+			if starred {
+				m.items[i].Section = starsID
+			} else {
+				m.items[i].Section = ""
+			}
+		}
+		found = true
+		break
+	}
+	if !found {
+		return false
+	}
+	m.rebuildFilter()
+	m.rebuildNavWithCursor(key, hadKey)
+	m.cacheValid = false
+	m.dirty()
+	return true
+}
+
+// ItemStarState returns channelID's starred flag and section, for the
+// star paths that snapshot a row before an optimistic move and restore
+// it when Slack refuses.
+func (m *Model) ItemStarState(channelID string) (starred bool, section string, ok bool) {
+	for i := range m.items {
+		if m.items[i].ID == channelID {
+			return m.items[i].IsStarred, m.items[i].Section, true
+		}
+	}
+	return false, "", false
+}
+
+// SetItemStarState restores channelID's starred flag and section in
+// one step, rebuilding the nav like SetItemStarred. Reports whether
+// the item was found.
+func (m *Model) SetItemStarState(channelID string, starred bool, section string) bool {
+	found := false
+	key, hadKey := m.currentCursorKey()
+	for i := range m.items {
+		if m.items[i].ID != channelID {
+			continue
+		}
+		m.items[i].IsStarred = starred
+		m.items[i].Section = section
+		found = true
+		break
+	}
+	if !found {
+		return false
+	}
+	m.rebuildFilter()
+	m.rebuildNavWithCursor(key, hadKey)
+	m.cacheValid = false
+	m.dirty()
+	return true
+}
+
+// starsSectionID returns the provider's stars section ID, or "" when
+// there is none (no Slack sections, or the workspace has no stars
+// section). An empty ID leaves the item's Section empty, so a star in
+// a workspace without the section changes nothing visually - matching
+// what the section store does with the membership.
+func (m *Model) starsSectionID() string {
+	if !m.useSlackSections() || m.sectionsProvider == nil {
+		return ""
+	}
+	for _, meta := range m.sectionsProvider.OrderedSlackSections() {
+		if meta.Type == "stars" {
+			return meta.ID
+		}
+	}
+	return ""
+}
+
+// IsItemStarred reports channelID's starred flag, and whether the
+// item was found at all. The toggle paths read it to decide which way
+// to flip.
+func (m *Model) IsItemStarred(channelID string) (starred, ok bool) {
+	for i := range m.items {
+		if m.items[i].ID == channelID {
+			return m.items[i].IsStarred, true
+		}
+	}
+	return false, false
+}
+
 // AllItems returns a copy of the full unfiltered item slice, including
 // items currently hidden by the staleness filter. Use this when you need
 // to inspect every conversation the model knows about (e.g. tests, or

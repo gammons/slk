@@ -28,6 +28,7 @@ func TestGridPerWorkspaceFrames_ClassifiesEveryDispatchedType(t *testing.T) {
 		"member_joined_channel", "member_left_channel",
 		"user_invalidated", "dnd_invalidated",
 		"emoji_changed", "badge_counts_updated",
+		"star_added", "star_removed",
 	}
 	shared := []string{
 		"ai_assistant_status",

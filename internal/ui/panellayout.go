@@ -1,5 +1,6 @@
 // internal/ui/panellayout.go
 //
+
 // Per-frame layout geometry + mouse hit-testing.
 //
 // Phase 2j of the SOLID refactor of internal/ui/app.go: extracts the
@@ -29,6 +30,10 @@
 // included; App.fullscreenPanel picks which.
 package ui
 
+import (
+	"github.com/gammons/slk/internal/ui/wintree"
+)
+
 // panelLayout owns the per-frame layout state.
 type panelLayout struct {
 	// Horizontal bands set by Compute, used for mouse hit-testing.
@@ -54,19 +59,32 @@ type panelLayout struct {
 	// mode, the click equivalent of `i`.
 	msgComposeTop    int
 	threadComposeTop int
+	// focusedWinRect is the focused split window's rect this frame, in
+	// messages-region-local coordinates, set by the window renderer and
+	// reset with the compose regions. Zero (W == 0) when no split is
+	// open - the single-window path never records one.
+	focusedWinRect wintree.Rect
 }
 
-// ResetComposeRegions clears both compose-region tops. App.View calls
-// it before rendering so a pane that stops drawing its compose (the
-// threads view replaces the channel pane) leaves no stale region
-// behind.
+// ResetComposeRegions clears both compose-region tops and the focused
+// window's rect. App.View calls it before rendering so a pane that
+// stops drawing its compose (the threads view replaces the channel
+// pane) or a closed split leaves no stale region behind.
 func (l *panelLayout) ResetComposeRegions() {
 	l.msgComposeTop, l.threadComposeTop = 0, 0
+	l.focusedWinRect = wintree.Rect{}
 }
 
 // SetMsgComposeTop records where the channel pane's compose region
 // begins this frame. row is in pane rows, 1-based past the top border.
 func (l *panelLayout) SetMsgComposeTop(row int) { l.msgComposeTop = row }
+
+// SetFocusedWinRect records where the focused split window's rect
+// lands this frame, in messages-region-local coordinates (the same
+// frame the window renderer's Layout bounds use). The mouse router
+// translates clicks into it for hit tests that must not fire on a
+// placeholder window PanelAt maps onto the live pane.
+func (l *panelLayout) SetFocusedWinRect(r wintree.Rect) { l.focusedWinRect = r }
 
 // SetThreadComposeTop records where the thread pane's compose region
 // begins this frame, in the same frame as SetMsgComposeTop.
