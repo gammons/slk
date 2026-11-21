@@ -239,3 +239,36 @@ func TestActivityClient_MatchesTheSameUser(t *testing.T) {
 		t.Fatal("activityClient did not route through the same user's org-level session")
 	}
 }
+
+// sameUserOrgClient is the one org-session selector every grid
+// fallback shares (Activity calls, conversation discovery): same grid,
+// org-level, same authenticated user; nil off a grid, without an org
+// session, or when the sibling is another account's credentials.
+func TestSameUserOrgClient(t *testing.T) {
+	member := &WorkspaceContext{TeamID: "T1", Client: slackclient.NewSessionClient("T1", "E1", "U1")}
+	otherUser := &WorkspaceContext{TeamID: "E9", Client: slackclient.NewSessionClient("E9", "E1", "U2")}
+	sameUser := &WorkspaceContext{TeamID: "E1", Client: slackclient.NewSessionClient("E1", "E1", "U1")}
+	member2 := &WorkspaceContext{TeamID: "T2", Client: slackclient.NewSessionClient("T2", "E1", "U1")}
+	plain := &WorkspaceContext{TeamID: "T9", Client: slackclient.NewSessionClient("T9", "", "U9")}
+
+	router := newWorkspaceRouter()
+	router.Add(member)
+	if got := sameUserOrgClient(router, member); got != nil {
+		t.Fatal("an org-less grid answered with a session")
+	}
+	router.Add(otherUser)
+	router.Add(member2)
+	if got := sameUserOrgClient(router, member); got != nil {
+		t.Fatal("another user's org session or a member sibling stood in for the org session")
+	}
+	router.Add(sameUser)
+	if got := sameUserOrgClient(router, member); got != sameUser.Client {
+		t.Fatal("the same user's org-level session was not selected")
+	}
+	if got := sameUserOrgClient(router, plain); got != nil {
+		t.Fatal("a non-grid workspace answered with an org session")
+	}
+	if got := sameUserOrgClient(router, &WorkspaceContext{TeamID: "T0"}); got != nil {
+		t.Fatal("a workspace without a client answered with an org session")
+	}
+}
