@@ -211,6 +211,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Legacy attachment action ids slack-go drops | `slackclient.EphemeralMessage.ActionIDs` (decoded from the raw frame), applied with `cmd/slk/applyActionIDs` |
 | Slack original-avatar URL → sized CDN URL (e.g. 72px) | `avatar.SizedURL(orig, px)`; returns non-Slack-original URLs unchanged |
 | Copy text to the clipboard | `App.clipboardWrite` / `SetClipboardWriter`; `cmd/slk/newClipboardWriter` selects local macOS `pbcopy` or terminal OSC 52 |
+| Turn pasted or dropped text into the file paths it may name, undoing a terminal's shell quoting (backslash escapes, single or double quotes, `file://` URLs) | `filePathCandidates(text)` returns the literal reading first, then the unquoted one; stat them in that order and keep the first regular file. Built on `unshellPath(s)` / `unshellPathSep(s, sep)` (a backslash is never an escape on Windows) and `unescapeBackslashes(s)` (`internal/ui/app.go`). `tryAttachFromClipboard` is the caller |
 | The running build's identity as text: the full line (`slk v1.2.3 (commit …, built …)`) or the short form for the status bar (`v1.2.3 · abc1234`, version alone when no commit was stamped) | `version.Line(version, commit, date)` (what `slk --version` prints), `version.Short(version, commit)` (what `:version` shows, set on the App by `SetBuildInfo`) (`internal/version`) |
 
 ### UI chrome

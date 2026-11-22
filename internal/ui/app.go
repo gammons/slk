@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -4325,8 +4326,9 @@ func (a *App) tryAttachFromClipboard(target *compose.Model, pathCandidate string
 		)
 	}
 
-	// 2. File-path text.
-	if path, ok := resolveFilePath(pathCandidate); ok {
+	// 2. File-path text. The literal reading comes first, so a file whose
+	// name really contains a backslash or quotes still attaches.
+	for _, path := range filePathCandidates(pathCandidate) {
 		info, err := a.desktop.Stat(path)
 		if err == nil && info.Mode().IsRegular() {
 			if info.Size() > maxAttachmentSize {
@@ -4806,18 +4808,34 @@ func humanSize(size int64) string {
 	}
 }
 
-// resolveFilePath inspects clipboard text and returns a cleaned,
-// absolute file path if it looks like a single-line existing-file
-// reference. Returns ok=false on multi-line input, oversized input,
-// non-absolute and non-./-relative paths, or paths that don't
-// expand. The caller is responsible for the os.Stat / IsRegular
-// check and the size check.
-func resolveFilePath(text string) (string, bool) {
+// filePathCandidates inspects clipboard text and returns the cleaned,
+// absolute file paths it could name, most literal first: the text as
+// it is, then with a terminal's shell quoting undone (unshellPath).
+// They differ only when the text carries quotes, backslashes or a
+// file:// URL. Returns nil on multi-line input, oversized input, or
+// text that is not an absolute, ./-relative or ~/ path either way.
+// The caller stats each in order and keeps the first regular file,
+// so a name that really contains a backslash is never rewritten into
+// another file's.
+func filePathCandidates(text string) []string {
 	s := strings.TrimSpace(text)
 	if s == "" || strings.ContainsAny(s, "\n\r") || len(s) > 4096 {
-		return "", false
+		return nil
 	}
-	s = unshellPath(s)
+	var out []string
+	for _, c := range []string{s, unshellPath(s)} {
+		if p, ok := resolveFilePath(c); ok && !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// resolveFilePath expands and cleans one path reading of clipboard
+// text. Returns ok=false on non-absolute and non-./-relative paths, or
+// paths that don't expand. The caller is responsible for the os.Stat /
+// IsRegular check and the size check.
+func resolveFilePath(s string) (string, bool) {
 	if strings.HasPrefix(s, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -4840,7 +4858,11 @@ func resolveFilePath(text string) (string, bool) {
 // reopening the quotes), and some
 // paste a file URL (`file:///a/My%20File.pdf`). Text that is none of
 // these comes back unchanged.
-func unshellPath(s string) string {
+func unshellPath(s string) string { return unshellPathSep(s, filepath.Separator) }
+
+// unshellPathSep is unshellPath for a given path separator, so tests
+// can cover Windows from any OS.
+func unshellPathSep(s string, sep byte) string {
 	if strings.HasPrefix(s, "file://") {
 		if u, err := url.Parse(s); err == nil && u.Path != "" && (u.Host == "" || u.Host == "localhost") {
 			return u.Path
@@ -4850,11 +4872,14 @@ func unshellPath(s string) string {
 	if len(s) >= 2 && s[0] == '\'' && s[len(s)-1] == '\'' {
 		return strings.ReplaceAll(s[1:len(s)-1], `'\''`, "'")
 	}
+	// A backslash is a path separator on Windows, never an escape.
 	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		if sep != '/' {
+			return s[1 : len(s)-1]
+		}
 		return unescapeBackslashes(s[1 : len(s)-1])
 	}
-	// A backslash is a path separator on Windows, never an escape.
-	if filepath.Separator == '/' && strings.Contains(s, `\`) {
+	if sep == '/' && strings.Contains(s, `\`) {
 		return unescapeBackslashes(s)
 	}
 	return s
