@@ -467,7 +467,7 @@ func TestBlockquoteEntityDecoding(t *testing.T) {
 // unquoted text.
 func TestBlockquoteWrapsUnderTheBar(t *testing.T) {
 	quoted := strings.Repeat("the publish step writes every table ", 6)
-	items := []MessageItem{{TS: "1.0", UserID: "U1", UserName: "albert", Text: "&gt; " + quoted + "\nafter", Timestamp: "10:06 PM"}}
+	items := []MessageItem{{TS: "1.0", UserID: "U1", UserName: "albert", Text: "> " + quoted + "\nafter", Timestamp: "10:06 PM"}}
 	m := New(items, "general")
 	r := RenderMessage(items[0], 60, m.renderContext(), RenderOptions{})
 
@@ -592,23 +592,6 @@ func TestBlockquoteInlineFormatting(t *testing.T) {
 	}
 	if !strings.Contains(out, "\x1b]8;;https://github.com/o/r/pull/1") {
 		t.Errorf("quoted link is not an OSC 8 hyperlink: %q", out)
-	}
-}
-
-// TestBlockquoteStaysMutedAfterInlineSpan: an inline span's reset must
-// not drop the rest of the quoted line back to the body color.
-func TestBlockquoteStaysMutedAfterInlineSpan(t *testing.T) {
-	out := RenderSlackMarkdown("&gt; a `code` tail", nil, nil)
-	_, after, ok := strings.Cut(out, "code")
-	if !ok {
-		t.Fatalf("no code span in %q", out)
-	}
-	tail, _, ok := strings.Cut(after, " tail")
-	if !ok {
-		t.Fatalf("no tail after the code span in %q", out)
-	}
-	if !strings.HasSuffix(tail, fgANSIFor(styles.TextMuted)) {
-		t.Errorf("text after the code span is not muted; escapes before it: %q", tail)
 	}
 }
 

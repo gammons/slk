@@ -6,6 +6,7 @@ import (
 
 	"github.com/gammons/slk/internal/slack/mrkdwn"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
+	"github.com/gammons/slk/internal/ui/messages/blockkit"
 )
 
 func TestPreviewOffByDefault(t *testing.T) {
@@ -62,7 +63,8 @@ func TestPreviewBodyIsTheSendPath(t *testing.T) {
 	m := New("g")
 	m.SetUsers([]mentionpicker.User{{ID: "U2", DisplayName: "bob"}})
 	m.SetValue("**hi** @bob")
-	want, _ := mrkdwn.Convert(m.TranslateMentionsForSend(m.Value()))
+	block := mrkdwn.Convert(m.TranslateMentionsForSend(m.Value()))
+	want := blockkit.RichTextToMrkdwnUser(blockkit.RichTextBlock{Elements: block.Elements})
 	got := m.PreviewBody(40, RenderKey{}, identityRender)
 	if got != want {
 		t.Fatalf("PreviewBody = %q, want the send path's %q", got, want)

@@ -886,37 +886,46 @@ func RenderSlackMarkdownWith(text string, opts RenderSlackMarkdownOpts) string {
 		return "\n" + codeBlockStyle().Render(inner) + "\n"
 	})
 
-	// Process line by line for blockquotes
+	// Process line by line for lists and blockquotes
 	lines := strings.Split(text, "\n")
 	var result []string
 	for _, line := range lines {
-		if quoted, ok := cutQuotePrefix(line); ok {
-			quoted, nested := cutQuotePrefix(quoted)
-			quoted = renderInlineFormattingWith(quoted, opts)
-			quoted = slackEntityDecoder.Replace(quoted)
+		quoteLevel := 0
+		for strings.HasPrefix(line, "> ") {
+			quoteLevel += 1
+			line = strings.TrimPrefix(line, "> ")
+		}
+
+		noIndent := line
+		var indent strings.Builder
+		for strings.HasPrefix(noIndent, "  ") {
+			noIndent = strings.TrimPrefix(noIndent, "  ")
+			indent.WriteString("  ")
+		}
+		if strings.HasPrefix(noIndent, "- ") || strings.HasPrefix(noIndent, "* ") {
+			// Rebuild the list item, but with a properly rendered list indicator
+			line = indent.String() + "• " + noIndent[2:]
+		}
+
+		line = renderInlineFormattingWith(line, opts)
+		if quoteLevel > 0 {
 			// Inline spans end in a reset that would drop the rest of
 			// the quote out of its muted color.
-			quoted = ReapplyBgAfterResets(quoted, fgANSIFor(styles.TextMuted))
-			// Wrap before drawing the bars so every wrapped row keeps them.
-			padding := 2
-			if nested {
-				padding += 2
+			line = ReapplyBgAfterResets(line, fgANSIFor(styles.TextMuted))
+			// Wrap before drawing the bar so every wrapped row gets one;
+			// the body wrap that runs later would continue the quote
+			// without it. The bar and its padding take two columns.
+			if w := opts.Width; w > 2 {
+				line = WordWrap(line, w-2)
 			}
-			if opts.Width > padding {
-				quoted = WordWrap(quoted, opts.Width-padding)
+			for range quoteLevel {
+				line = blockquoteStyle().Render(line)
 			}
-			style := blockquoteStyle()
-			if nested {
-				quoted = style.Render(quoted)
-			}
-			line = style.Render(quoted)
-		} else {
-			line = renderInlineFormattingWith(line, opts)
-			// Decode Slack-escaped entities after markup regexes have
-			// consumed legitimate <...> markers, so escaped user input
-			// (e.g. literal "<@U1>") doesn't become a fake mention.
-			line = slackEntityDecoder.Replace(line)
 		}
+		// Decode Slack-escaped entities after markup regexes have
+		// consumed legitimate <...> markers, so escaped user input
+		// (e.g. literal "<@U1>") doesn't become a fake mention.
+		line = slackEntityDecoder.Replace(line)
 		result = append(result, line)
 	}
 

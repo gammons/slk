@@ -1,6 +1,9 @@
 package compose
 
-import "github.com/gammons/slk/internal/slack/mrkdwn"
+import (
+	"github.com/gammons/slk/internal/slack/mrkdwn"
+	"github.com/gammons/slk/internal/ui/messages/blockkit"
+)
 
 // PreviewOn reports whether the draft preview is showing for this box.
 func (m *Model) PreviewOn() bool { return m.preview }
@@ -63,7 +66,8 @@ func (m *Model) PreviewBody(width int, key RenderKey, render PreviewRender) stri
 	text := m.Value()
 	tc := &m.previewText
 	if !tc.ok || tc.text != text || tc.gen != m.mentionGen {
-		converted, _ := mrkdwn.Convert(m.TranslateMentionsForSend(text))
+		block := mrkdwn.Convert(m.TranslateMentionsForSend(text))
+		converted := blockkit.RichTextToMrkdwn(blockkit.RichTextBlock{Elements: block.Elements})
 		*tc = previewTextCache{text: text, gen: m.mentionGen, mrkdwn: converted, ok: true}
 	}
 	bc := &m.previewBody

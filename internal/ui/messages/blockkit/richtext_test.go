@@ -292,8 +292,7 @@ func TestRichTextToMrkdwn_EmojiWithTonePerPerson(t *testing.T) {
 }
 
 func TestRichTextToMrkdwn_MultipleSectionsJoinedByNewline(t *testing.T) {
-	// Two adjacent rich_text_section blocks render as two visual
-	// paragraphs, so a newline boundary is required between them.
+	// Two adjacent rich_text_section blocks render without separators.
 	rt := RichTextBlock{Elements: []slack.RichTextElement{
 		&slack.RichTextSection{
 			Type: slack.RTESection,
@@ -308,7 +307,7 @@ func TestRichTextToMrkdwn_MultipleSectionsJoinedByNewline(t *testing.T) {
 			},
 		},
 	}}
-	want := "A\nB"
+	want := "AB"
 	if got := RichTextToMrkdwn(rt); got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -329,7 +328,7 @@ func TestRichTextToMrkdwn_UnorderedList(t *testing.T) {
 			},
 		},
 	}}
-	want := "• apple\n• pear"
+	want := "- apple\n- pear"
 	if got := RichTextToMrkdwn(rt); got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -371,7 +370,7 @@ func TestRichTextToMrkdwn_IndentedList(t *testing.T) {
 	}}
 	// Indent of 2 means two levels deep: 4 spaces of leading
 	// padding before the bullet.
-	want := "    • deep"
+	want := "    - deep"
 	if got := RichTextToMrkdwn(rt); got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}

@@ -214,7 +214,7 @@ func TestParseUnfurlLink_CapturedReplyIsPending(t *testing.T) {
 func TestChipPostForm_MatchesCapture(t *testing.T) {
 	want := capturedForm(t, "chat_post_message_chip.json")
 	block := mrkdwn.Convert(chipURL)
-	mr := blockkit.RichTextToMarkdown(blockkit.RichTextBlock{Elements: block.Elements})
+	mr := blockkit.RichTextToMrkdwnUser(blockkit.RichTextBlock{Elements: block.Elements})
 	chips := map[string]linkChip{chipURL: capturedChip(t)}
 	applyChips(block, chips)
 	mr = chipMrkdwn(mr, chips)
