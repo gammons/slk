@@ -10,6 +10,7 @@ import (
 	"github.com/gammons/slk/internal/slack/mrkdwn"
 	"github.com/gammons/slk/internal/text"
 	"github.com/gammons/slk/internal/ui"
+	"github.com/gammons/slk/internal/ui/messages/blockkit"
 )
 
 // services are the demo's implementations of the internal/core ports.
@@ -32,8 +33,7 @@ type services struct {
 // toMrkdwn converts what the user typed, as cmd/slk's real send does, so
 // the authoritative message matches the App's optimistic placeholder.
 func toMrkdwn(s string) string {
-	out, _ := mrkdwn.Convert(s)
-	return out
+	return blockkit.RichTextToMrkdwn(blockkit.RichTextBlock{Elements: mrkdwn.Convert(s).Elements})
 }
 
 var frecentNames = []string{"thumbsup", "rocket", "tada", "eyes", "white_check_mark", "heart", "fire", "pray"}

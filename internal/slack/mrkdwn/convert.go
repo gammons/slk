@@ -52,9 +52,9 @@ var typedURLProtocols = func() []string {
 // broadcast, link) in the block.
 //
 // For empty / whitespace-only input, returns ("", nil).
-func Convert(input string) (string, *slack.RichTextBlock) {
+func Convert(input string) *slack.RichTextBlock {
 	if strings.TrimSpace(input) == "" {
-		return "", nil
+		return nil
 	}
 
 	tokenized, table := tokenize(input)
@@ -76,11 +76,8 @@ func Convert(input string) (string, *slack.RichTextBlock) {
 	w := newWalker([]byte(tokenized), table)
 	w.walkDocument(doc)
 
-	mr := strings.TrimRight(w.mrkdwn.String(), "\n")
-	mr = detokenizeText(mr, table)
-
 	if len(w.block.Elements) == 0 {
-		return mr, nil
+		return nil
 	}
-	return mr, w.block
+	return w.block
 }

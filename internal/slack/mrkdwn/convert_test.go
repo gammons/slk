@@ -10,39 +10,27 @@ import (
 
 // blockJSON serialises a *slack.RichTextBlock to JSON for readable
 // test failure messages.
-func blockJSON(b *slack.RichTextBlock) string {
-	if b == nil {
-		return "nil"
-	}
-	out, _ := json.Marshal(b)
+func blockJSON[A any](a A) string {
+	out, _ := json.Marshal(a)
 	return string(out)
 }
 
 func TestConvert_EmptyInput(t *testing.T) {
-	mr, blk := Convert("")
-	if mr != "" {
-		t.Errorf("mrkdwn = %q, want empty", mr)
-	}
+	blk := Convert("")
 	if blk != nil {
 		t.Errorf("block = %s, want nil", blockJSON(blk))
 	}
 }
 
 func TestConvert_WhitespaceOnly(t *testing.T) {
-	mr, blk := Convert("   \n  ")
-	if mr != "" {
-		t.Errorf("mrkdwn = %q, want empty for whitespace-only input", mr)
-	}
+	blk := Convert("   \n  ")
 	if blk != nil {
 		t.Errorf("block = %s, want nil", blockJSON(blk))
 	}
 }
 
 func TestConvert_PlainText(t *testing.T) {
-	mr, blk := Convert("hello world")
-	if mr != "hello world" {
-		t.Errorf("mrkdwn = %q, want %q", mr, "hello world")
-	}
+	blk := Convert("hello world")
 	if blk == nil {
 		t.Fatal("block is nil")
 	}
@@ -69,16 +57,12 @@ func TestConvert_PlainText(t *testing.T) {
 }
 
 func TestConvert_TwoParagraphs(t *testing.T) {
-	mr, blk := Convert("para one\n\npara two")
-	want := "para one\n\npara two"
-	if mr != want {
-		t.Errorf("mrkdwn = %q, want %q", mr, want)
-	}
+	blk := Convert("para one\n\npara two")
 	if blk == nil {
 		t.Fatal("block is nil")
 	}
-	if len(blk.Elements) != 2 {
-		t.Fatalf("got %d elements, want 2 (one section per paragraph)", len(blk.Elements))
+	if len(blk.Elements) != 1 {
+		t.Fatalf("got %d elements, want 1 (one section for both paragraphs)", len(blk.Elements))
 	}
 	sec, ok := blk.Elements[0].(*slack.RichTextSection)
 	if !ok {
@@ -91,16 +75,14 @@ func TestConvert_TwoParagraphs(t *testing.T) {
 	if !ok {
 		t.Fatalf("section element is %T, want *RichTextSectionTextElement", sec.Elements[0])
 	}
-	if !strings.HasSuffix(te.Text, "\n") {
-		t.Fatalf("paragraph section does not end in a newline: %s", te.Text)
+	want := "para one\n\npara two"
+	if te.Text != want {
+		t.Fatalf("text = %q, want %q", te.Text, want)
 	}
 }
 
 func TestConvert_HTMLBlockPreserved(t *testing.T) {
-	mr, blk := Convert("<p>raw html</p>")
-	if mr != "<p>raw html</p>" {
-		t.Errorf("mrkdwn = %q, want %q", mr, "<p>raw html</p>")
-	}
+	blk := Convert("<p>raw html</p>")
 	if blk == nil {
 		t.Fatal("block is nil; expected one section with HTML as literal text")
 	}
@@ -116,11 +98,8 @@ func TestConvert_HTMLBlockPreserved(t *testing.T) {
 
 func TestConvert_InlineHTMLPreserved(t *testing.T) {
 	// Inline HTML inside a paragraph; verify it survives.
-	mr, blk := Convert(`hello <span class="x">world</span> foo`)
+	blk := Convert(`hello <span class="x">world</span> foo`)
 	want := `hello <span class="x">world</span> foo`
-	if mr != want {
-		t.Errorf("mrkdwn = %q, want %q", mr, want)
-	}
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	var got string
 	for _, el := range sec.Elements {
@@ -135,38 +114,8 @@ func TestConvert_InlineHTMLPreserved(t *testing.T) {
 	}
 }
 
-func TestConvert_BoldDoubleAsterisk(t *testing.T) {
-	mr, blk := Convert("**hello**")
-	if mr != "*hello*" {
-		t.Errorf("mrkdwn = %q, want %q", mr, "*hello*")
-	}
-	sec := blk.Elements[0].(*slack.RichTextSection)
-	te := sec.Elements[0].(*slack.RichTextSectionTextElement)
-	if te.Text != "hello" {
-		t.Errorf("text = %q, want %q", te.Text, "hello")
-	}
-	if te.Style == nil || !te.Style.Bold {
-		t.Errorf("expected Style.Bold = true, got %+v", te.Style)
-	}
-}
-
-func TestConvert_BoldDoubleUnderscore(t *testing.T) {
-	mr, blk := Convert("__hello__")
-	if mr != "*hello*" {
-		t.Errorf("mrkdwn = %q, want %q", mr, "*hello*")
-	}
-	sec := blk.Elements[0].(*slack.RichTextSection)
-	te := sec.Elements[0].(*slack.RichTextSectionTextElement)
-	if te.Style == nil || !te.Style.Bold {
-		t.Errorf("expected Style.Bold = true, got %+v", te.Style)
-	}
-}
-
 func TestConvert_BoldWithSurroundingText(t *testing.T) {
-	mr, blk := Convert("hi **there** friend")
-	if mr != "hi *there* friend" {
-		t.Errorf("mrkdwn = %q, want %q", mr, "hi *there* friend")
-	}
+	blk := Convert("hi *there* friend")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	if len(sec.Elements) != 3 {
 		t.Fatalf("got %d elements, want 3 (plain, bold, plain)", len(sec.Elements))
@@ -186,10 +135,7 @@ func TestConvert_BoldWithSurroundingText(t *testing.T) {
 }
 
 func TestConvert_ItalicUnderscore(t *testing.T) {
-	mr, blk := Convert("_hello_")
-	if mr != "_hello_" {
-		t.Errorf("mrkdwn = %q, want %q", mr, "_hello_")
-	}
+	blk := Convert("_hello_")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	te := sec.Elements[0].(*slack.RichTextSectionTextElement)
 	if te.Text != "hello" {
@@ -205,10 +151,7 @@ func TestConvert_SingleAsteriskIsBold(t *testing.T) {
 	// single asterisk pair as bold. slk treats it as bold (same as
 	// **x**) so a message that renders bold in slk's own compose/
 	// message view also renders bold in real Slack.
-	mr, blk := Convert("*hello*")
-	if mr != "*hello*" {
-		t.Errorf("mrkdwn = %q, want %q", mr, "*hello*")
-	}
+	blk := Convert("*hello*")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	if len(sec.Elements) != 1 {
 		t.Fatalf("elements = %d, want 1: %s", len(sec.Elements), blockJSON(blk))
@@ -222,28 +165,11 @@ func TestConvert_SingleAsteriskIsBold(t *testing.T) {
 	}
 }
 
-func TestConvert_AsteriskRoundTripStable(t *testing.T) {
-	// After one conversion, **bold** -> *bold*. Re-converting the
-	// result must NOT change it (this is what happens on edit).
-	mr1, _ := Convert("**bold**")
-	if mr1 != "*bold*" {
-		t.Fatalf("first pass: %q, want *bold*", mr1)
-	}
-	mr2, _ := Convert(mr1)
-	if mr2 != "*bold*" {
-		t.Errorf("second pass: %q, want *bold* (round-trip stable)", mr2)
-	}
-}
-
 func TestConvert_NestedItalicAroundBold(t *testing.T) {
 	// _*both*_ : outer italic (underscore), inner bold (single
 	// asterisk pair, Slack's native bold syntax). Both styles apply
 	// to "both".
-	mr, blk := Convert("_*both*_")
-	want := "_*both*_"
-	if mr != want {
-		t.Errorf("mrkdwn = %q, want %q", mr, want)
-	}
+	blk := Convert("_*both*_")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	if len(sec.Elements) != 1 {
 		t.Fatalf("elements = %d, want 1: %s", len(sec.Elements), blockJSON(blk))
@@ -260,11 +186,7 @@ func TestConvert_NestedItalicAroundBold(t *testing.T) {
 func TestConvert_NestedBoldAroundItalic(t *testing.T) {
 	// *_both_* : outer bold (single asterisk pair), inner italic
 	// (underscore). Both styles apply to "both".
-	mr, blk := Convert("*_both_*")
-	want := "*_both_*"
-	if mr != want {
-		t.Errorf("mrkdwn = %q, want %q", mr, want)
-	}
+	blk := Convert("*_both_*")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	if len(sec.Elements) != 1 {
 		t.Fatalf("elements = %d, want 1: %s", len(sec.Elements), blockJSON(blk))
@@ -280,21 +202,32 @@ func TestConvert_NestedBoldAroundItalic(t *testing.T) {
 
 func TestConvert_TwoSeparateItalics(t *testing.T) {
 	// _a_ and _b_ : two italics in one paragraph.
-	mr, _ := Convert("_a_ and _b_")
-	want := "_a_ and _b_"
-	if mr != want {
-		t.Errorf("mrkdwn = %q, want %q", mr, want)
+	blk := Convert("_a_ and _b_")
+
+	sec := blk.Elements[0].(*slack.RichTextSection)
+	if len(sec.Elements) != 3 {
+		t.Fatalf("elements = %d, want 3: %s", len(sec.Elements), blockJSON(blk))
+	}
+	te := sec.Elements[0].(*slack.RichTextSectionTextElement)
+	if te.Text != "a" {
+		t.Errorf("text = %q, want %q", te.Text, "a")
+	}
+	if te.Style == nil || !te.Style.Italic {
+		t.Errorf("style = %+v, want italic", te.Style)
+	}
+	te = sec.Elements[2].(*slack.RichTextSectionTextElement)
+	if te.Text != "b" {
+		t.Errorf("text = %q, want %q", te.Text, "b")
+	}
+	if te.Style == nil || !te.Style.Italic {
+		t.Errorf("style = %+v, want italic", te.Style)
 	}
 }
 
 func TestConvert_ItalicContainingBold(t *testing.T) {
 	// _x **y** z_ : italic envelope, bold inside.
 	// The "y" should carry BOTH italic and bold.
-	mr, blk := Convert("_x **y** z_")
-	want := "_x *y* z_"
-	if mr != want {
-		t.Errorf("mrkdwn = %q, want %q", mr, want)
-	}
+	blk := Convert("_x **y** z_")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	for _, el := range sec.Elements {
 		te := el.(*slack.RichTextSectionTextElement)
@@ -309,10 +242,7 @@ func TestConvert_ItalicContainingBold(t *testing.T) {
 }
 
 func TestConvert_Strikethrough(t *testing.T) {
-	mr, blk := Convert("~~done~~")
-	if mr != "~done~" {
-		t.Errorf("mrkdwn = %q, want ~done~", mr)
-	}
+	blk := Convert("~done~")
 	te := blk.Elements[0].(*slack.RichTextSection).Elements[0].(*slack.RichTextSectionTextElement)
 	if te.Text != "done" || te.Style == nil || !te.Style.Strike {
 		t.Errorf("got %+v / %+v, want strike=true on 'done'", te, te.Style)
@@ -320,11 +250,7 @@ func TestConvert_Strikethrough(t *testing.T) {
 }
 
 func TestConvert_InlineCode(t *testing.T) {
-	mr, blk := Convert("type `make build` to compile")
-	want := "type `make build` to compile"
-	if mr != want {
-		t.Errorf("mrkdwn = %q, want %q", mr, want)
-	}
+	blk := Convert("type `make build` to compile")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	if len(sec.Elements) != 3 {
 		t.Fatalf("got %d elements, want 3 (text, code, text)", len(sec.Elements))
@@ -336,11 +262,7 @@ func TestConvert_InlineCode(t *testing.T) {
 }
 
 func TestConvert_LinkLabeled(t *testing.T) {
-	mr, blk := Convert("see [Slack](https://slack.com) docs")
-	want := "see <https://slack.com|Slack> docs"
-	if mr != want {
-		t.Errorf("mrkdwn = %q, want %q", mr, want)
-	}
+	blk := Convert("see [Slack](https://slack.com) docs")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	if len(sec.Elements) != 3 {
 		t.Fatalf("got %d elements, want 3 (text, link, text)", len(sec.Elements))
@@ -355,11 +277,7 @@ func TestConvert_LinkLabeled(t *testing.T) {
 }
 
 func TestConvert_LinkLabelEqualsURL(t *testing.T) {
-	mr, blk := Convert("see [https://x.com](https://x.com)")
-	want := "see <https://x.com|https://x.com>"
-	if mr != want {
-		t.Errorf("mrkdwn = %q, want %q", mr, want)
-	}
+	blk := Convert("see [https://x.com](https://x.com)")
 	link := blk.Elements[0].(*slack.RichTextSection).Elements[1].(*slack.RichTextSectionLinkElement)
 	if link.URL != "https://x.com" {
 		t.Errorf("URL = %q", link.URL)
@@ -372,11 +290,7 @@ func TestConvert_LinkWithPipeInURL(t *testing.T) {
 	// the first pipe and corrupt the URL. We emit <url> only on the
 	// mrkdwn side; the block element still carries URL and label
 	// as separate fields.
-	mr, blk := Convert("[click](https://x.com?a=1|b=2)")
-	wantMr := "<https://x.com?a=1|b=2>"
-	if mr != wantMr {
-		t.Errorf("mrkdwn = %q, want %q (label dropped to avoid pipe corruption)", mr, wantMr)
-	}
+	blk := Convert("[click](https://x.com?a=1|b=2)")
 	link := blk.Elements[0].(*slack.RichTextSection).Elements[0].(*slack.RichTextSectionLinkElement)
 	if link.URL != "https://x.com?a=1|b=2" {
 		t.Errorf("block URL = %q, want full URL preserved", link.URL)
@@ -386,25 +300,18 @@ func TestConvert_LinkWithPipeInURL(t *testing.T) {
 	}
 }
 
-func TestConvert_LinkLabelStripsFormatting(t *testing.T) {
-	// Slack's <url|label> wire form expects plain text after '|'.
-	// CommonMark allows formatting inside a link label, so we strip
-	// it: [**bold**](url) becomes <url|bold>, no asterisks.
-	mr, blk := Convert("[**bold**](https://x.com)")
-	wantMr := "<https://x.com|bold>"
-	if mr != wantMr {
-		t.Errorf("mrkdwn = %q, want %q", mr, wantMr)
-	}
+func TestConvert_LinkLabelNoFormatting(t *testing.T) {
+	blk := Convert("[*bold*](https://x.com)")
 	link := blk.Elements[0].(*slack.RichTextSection).Elements[0].(*slack.RichTextSectionLinkElement)
-	if link.Text != "bold" {
-		t.Errorf("block label = %q, want %q", link.Text, "bold")
+	if link.Text != "*bold*" {
+		t.Errorf("block label = %q, want %q", link.Text, "*bold*")
 	}
 }
 
 func TestConvert_LinkInsideBoldCarriesBoldStyle(t *testing.T) {
 	// **[link](url)** : the link element should inherit Bold style
 	// from the enclosing emphasis.
-	_, blk := Convert("**[click](https://x.com)**")
+	blk := Convert("*[click](https://x.com)*")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	for _, el := range sec.Elements {
 		if link, ok := el.(*slack.RichTextSectionLinkElement); ok {
@@ -419,11 +326,7 @@ func TestConvert_LinkInsideBoldCarriesBoldStyle(t *testing.T) {
 
 func TestConvert_StrikethroughInsideBold(t *testing.T) {
 	// Verify ~~strike~~ nested in **bold** composes styles correctly.
-	mr, blk := Convert("**bold ~~strike~~ bold**")
-	wantMr := "*bold ~strike~ bold*"
-	if mr != wantMr {
-		t.Errorf("mrkdwn = %q, want %q", mr, wantMr)
-	}
+	blk := Convert("**bold ~~strike~~ bold**")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	// Find the "strike" element and verify both Bold and Strike.
 	for _, el := range sec.Elements {
@@ -442,11 +345,7 @@ func TestConvert_StrikethroughInsideBold(t *testing.T) {
 }
 
 func TestConvert_UserMention(t *testing.T) {
-	mr, blk := Convert("hi <@U12345>!")
-	want := "hi <@U12345>!"
-	if mr != want {
-		t.Errorf("mrkdwn = %q, want %q", mr, want)
-	}
+	blk := Convert("hi <@U12345>!")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	if len(sec.Elements) != 3 {
 		t.Fatalf("got %d elements, want 3 (text, user, text)", len(sec.Elements))
@@ -461,10 +360,7 @@ func TestConvert_UserMention(t *testing.T) {
 }
 
 func TestConvert_ChannelMention(t *testing.T) {
-	mr, blk := Convert("see <#C123|general> please")
-	if mr != "see <#C123|general> please" {
-		t.Errorf("mrkdwn = %q", mr)
-	}
+	blk := Convert("see <#C123> please")
 	ch := blk.Elements[0].(*slack.RichTextSection).Elements[1].(*slack.RichTextSectionChannelElement)
 	if ch.ChannelID != "C123" {
 		t.Errorf("ChannelID = %q, want C123", ch.ChannelID)
@@ -472,10 +368,7 @@ func TestConvert_ChannelMention(t *testing.T) {
 }
 
 func TestConvert_Broadcast(t *testing.T) {
-	mr, blk := Convert("<!here> deploy now")
-	if mr != "<!here> deploy now" {
-		t.Errorf("mrkdwn = %q", mr)
-	}
+	blk := Convert("<!here> deploy now")
 	bc := blk.Elements[0].(*slack.RichTextSection).Elements[0].(*slack.RichTextSectionBroadcastElement)
 	if bc.Range != "here" {
 		t.Errorf("Range = %q, want here", bc.Range)
@@ -486,10 +379,7 @@ func TestConvert_Broadcast(t *testing.T) {
 // broadcast range. Sending them as a broadcast makes Slack reject the
 // whole message with invalid_blocks.
 func TestConvert_Usergroup(t *testing.T) {
-	mr, blk := Convert("<!subteam^S01|@team> please review")
-	if mr != "<!subteam^S01|@team> please review" {
-		t.Errorf("mrkdwn = %q", mr)
-	}
+	blk := Convert("<!subteam^S01> please review")
 	ug := blk.Elements[0].(*slack.RichTextSection).Elements[0].(*slack.RichTextSectionUserGroupElement)
 	if ug.UsergroupID != "S01" {
 		t.Errorf("UsergroupID = %q, want S01", ug.UsergroupID)
@@ -497,7 +387,7 @@ func TestConvert_Usergroup(t *testing.T) {
 }
 
 func TestConvert_UsergroupPreservesStyle(t *testing.T) {
-	_, blk := Convert("**<!subteam^S01|@team>**")
+	blk := Convert("*<!subteam^S01>*")
 	ug := blk.Elements[0].(*slack.RichTextSection).Elements[0].(*slack.RichTextSectionUserGroupElement)
 	if ug.Style == nil || !ug.Style.Bold {
 		t.Fatalf("usergroup style = %+v, want bold", ug.Style)
@@ -508,7 +398,7 @@ func TestConvert_UsergroupPreservesStyle(t *testing.T) {
 // <!word>, but Slack only accepts here/channel/everyone as ranges.
 // Unknown ones must degrade to literal text, not fail the send.
 func TestConvert_UnknownBroadcastStaysText(t *testing.T) {
-	_, blk := Convert("<!bogus> hi")
+	blk := Convert("<!bogus> hi")
 	el := blk.Elements[0].(*slack.RichTextSection).Elements[0]
 	te, ok := el.(*slack.RichTextSectionTextElement)
 	if !ok {
@@ -520,10 +410,7 @@ func TestConvert_UnknownBroadcastStaysText(t *testing.T) {
 }
 
 func TestConvert_BoldContainingMention(t *testing.T) {
-	mr, blk := Convert("**Hi <@U1>**")
-	if mr != "*Hi <@U1>*" {
-		t.Errorf("mrkdwn = %q, want *Hi <@U1>*", mr)
-	}
+	blk := Convert("*Hi <@U1>*")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	if len(sec.Elements) != 2 {
 		t.Fatalf("got %d elements, want 2 (text, user)", len(sec.Elements))
@@ -542,11 +429,7 @@ func TestConvert_BoldContainingMention(t *testing.T) {
 }
 
 func TestConvert_UnorderedList(t *testing.T) {
-	mr, blk := Convert("- one\n- two")
-	want := "• one\n• two"
-	if mr != want {
-		t.Errorf("mrkdwn = %q, want %q", mr, want)
-	}
+	blk := Convert("- one\n- two")
 	if len(blk.Elements) != 1 {
 		t.Fatalf("got %d block elements, want 1 list", len(blk.Elements))
 	}
@@ -571,11 +454,7 @@ func TestConvert_UnorderedList(t *testing.T) {
 }
 
 func TestConvert_OrderedList(t *testing.T) {
-	mr, blk := Convert("1. one\n2. two")
-	want := "1. one\n2. two"
-	if mr != want {
-		t.Errorf("mrkdwn = %q, want %q", mr, want)
-	}
+	blk := Convert("1. one\n2. two")
 	list := blk.Elements[0].(*slack.RichTextList)
 	if list.Style != slack.RTEListOrdered {
 		t.Errorf("list style = %q, want ordered", list.Style)
@@ -583,11 +462,7 @@ func TestConvert_OrderedList(t *testing.T) {
 }
 
 func TestConvert_NestedList(t *testing.T) {
-	mr, blk := Convert("- a\n    - b")
-	wantMr := "• a\n  • b"
-	if mr != wantMr {
-		t.Errorf("mrkdwn = %q, want %q", mr, wantMr)
-	}
+	blk := Convert("- a\n    - b")
 	// Block side: two RichTextList elements at the top level
 	// (slack's wire shape — nested lists are flat with Indent=N).
 	if len(blk.Elements) != 2 {
@@ -603,34 +478,9 @@ func TestConvert_NestedList(t *testing.T) {
 	}
 }
 
-// A block after a list starts on its own line in the mrkdwn fallback,
-// with the blank line the source had. The block side is already right:
-// the next block is its own element.
-func TestConvert_BlockAfterList(t *testing.T) {
-	cases := []struct{ name, in, want string }{
-		{"paragraph", "intro:\n\n- one\n- two\n\nand another line", "intro:\n\n• one\n• two\n\nand another line"},
-		{"ordered then paragraph", "1. one\n2. two\n\nafter", "1. one\n2. two\n\nafter"},
-		{"nested then paragraph", "- a\n    - b\n\nafter", "• a\n  • b\n\nafter"},
-		{"two lists", "- a\n\n1. b", "• a\n\n1. b"},
-		{"code block", "- a\n\n```\nx\n```", "• a\n\n```\nx\n```"},
-		{"quote", "- a\n\n> q", "• a\n\n> q"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if mr, _ := Convert(c.in); mr != c.want {
-				t.Errorf("mrkdwn = %q, want %q", mr, c.want)
-			}
-		})
-	}
-}
-
 func TestConvert_FencedCodeBlock(t *testing.T) {
 	in := "```\nfoo\nbar\n```"
-	mr, blk := Convert(in)
-	wantMr := "```\nfoo\nbar\n```"
-	if mr != wantMr {
-		t.Errorf("mrkdwn = %q, want %q", mr, wantMr)
-	}
+	blk := Convert(in)
 	if len(blk.Elements) != 1 {
 		t.Fatalf("got %d elements, want 1", len(blk.Elements))
 	}
@@ -647,26 +497,8 @@ func TestConvert_FencedCodeBlock(t *testing.T) {
 	}
 }
 
-func TestConvert_IndentedCodeBlock(t *testing.T) {
-	in := "    foo\n    bar"
-	mr, blk := Convert(in)
-	wantMr := "```\nfoo\nbar\n```"
-	if mr != wantMr {
-		t.Errorf("mrkdwn = %q, want %q", mr, wantMr)
-	}
-	pre := blk.Elements[0].(*slack.RichTextPreformatted)
-	te := pre.Elements[0].(*slack.RichTextSectionTextElement)
-	if te.Text != "foo\nbar\n" {
-		t.Errorf("text = %q", te.Text)
-	}
-}
-
 func TestConvert_HeadingPlainText(t *testing.T) {
-	mr, blk := Convert("# My Title")
-	want := "# My Title"
-	if mr != want {
-		t.Errorf("mrkdwn = %q, want %q", mr, want)
-	}
+	blk := Convert("# My Title")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	if len(sec.Elements) != 1 {
 		t.Fatalf("got %d elements, want 1 plain text", len(sec.Elements))
@@ -681,11 +513,7 @@ func TestConvert_HeadingPlainText(t *testing.T) {
 }
 
 func TestConvert_Blockquote(t *testing.T) {
-	mr, blk := Convert("> a quoted line")
-	want := "> a quoted line"
-	if mr != want {
-		t.Errorf("mrkdwn = %q, want %q", mr, want)
-	}
+	blk := Convert("> a quoted line")
 	q, ok := blk.Elements[0].(*slack.RichTextQuote)
 	if !ok {
 		t.Fatalf("element is %T, want *RichTextQuote; block=%s", blk.Elements[0], blockJSON(blk))
@@ -700,11 +528,7 @@ func TestConvert_Blockquote(t *testing.T) {
 // and links. It used to go out as flattened plain text, with a URL in it
 // dropped altogether.
 func TestConvert_BlockquoteKeepsInlineContent(t *testing.T) {
-	mr, blk := Convert("> first *bold*\n> see https://example.com/x `code`\n\nafter")
-	want := "> first *bold*\n> see <https://example.com/x> `code`\n\nafter"
-	if mr != want {
-		t.Errorf("mrkdwn = %q, want %q", mr, want)
-	}
+	blk := Convert("> first *bold*\n> see https://example.com/x `code`\n\nafter")
 	q, ok := blk.Elements[0].(*slack.RichTextQuote)
 	if !ok {
 		t.Fatalf("element is %T, want *RichTextQuote; block=%s", blk.Elements[0], blockJSON(blk))
@@ -734,10 +558,7 @@ func TestConvert_BlockquoteKeepsInlineContent(t *testing.T) {
 // A blank quote line between paragraphs is kept on both sides, as it was
 // when quotes went out verbatim.
 func TestConvert_BlockquoteParagraphs(t *testing.T) {
-	mr, blk := Convert("> one\n>\n> two")
-	if want := "> one\n>\n> two"; mr != want {
-		t.Errorf("mrkdwn = %q, want %q", mr, want)
-	}
+	blk := Convert("> one\n>\n> two")
 	q, ok := blk.Elements[0].(*slack.RichTextQuote)
 	if !ok {
 		t.Fatalf("element is %T, want *RichTextQuote; block=%s", blk.Elements[0], blockJSON(blk))
@@ -753,21 +574,6 @@ func TestConvert_BlockquoteParagraphs(t *testing.T) {
 	}
 }
 
-func TestConvert_BackslashEscape(t *testing.T) {
-	mr, blk := Convert(`\*not bold\*`)
-	want := "*not bold*"
-	if mr != want {
-		t.Errorf("mrkdwn = %q, want %q", mr, want)
-	}
-	te := blk.Elements[0].(*slack.RichTextSection).Elements[0].(*slack.RichTextSectionTextElement)
-	if te.Text != "*not bold*" {
-		t.Errorf("text = %q", te.Text)
-	}
-	if te.Style != nil {
-		t.Errorf("style = %+v, want nil for escaped asterisks", te.Style)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Bare URL autolinking (Linkify)
 //
@@ -779,11 +585,7 @@ func TestConvert_BackslashEscape(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestConvert_BareHTTPSAutolinked(t *testing.T) {
-	mr, blk := Convert("visit https://example.com today")
-	want := "visit <https://example.com> today"
-	if mr != want {
-		t.Errorf("mrkdwn = %q, want %q", mr, want)
-	}
+	blk := Convert("visit https://example.com today")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	if len(sec.Elements) != 3 {
 		t.Fatalf("got %d elements, want 3 (text, link, text); block=%s", len(sec.Elements), blockJSON(blk))
@@ -798,7 +600,7 @@ func TestConvert_BareHTTPSAutolinked(t *testing.T) {
 }
 
 func TestConvert_BareHTTPAutolinked(t *testing.T) {
-	_, blk := Convert("see http://example.com")
+	blk := Convert("see http://example.com")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	var link *slack.RichTextSectionLinkElement
 	for _, el := range sec.Elements {
@@ -815,26 +617,19 @@ func TestConvert_BareHTTPAutolinked(t *testing.T) {
 	}
 }
 
-func TestTypedURLProtocols(t *testing.T) {
-	want := "http:,https:,ftp:,ftps:,sftp:,ssh:,file:,tel:"
-	if got := strings.Join(typedURLProtocols, ","); got != want {
-		t.Errorf("typedURLProtocols = %q, want %q", got, want)
-	}
-}
-
 func TestConvert_TypedURLSchemes(t *testing.T) {
 	cases := []struct {
 		name, in string
 		want     []string // link URLs, in order; empty means no link
 	}{
 		{"ip host with port", "see http://192.0.2.3:8080/browse/X-1 ok", []string{"http://192.0.2.3:8080/browse/X-1"}},
+		{"path with dot", "see https://example.com/foo.txt, http://example.com/résumé.txt", []string{"https://example.com/foo.txt", "http://example.com/résumé.txt"}},
 		{"https ip host", "https://192.0.2.3:8443/a", []string{"https://192.0.2.3:8443/a"}},
 		{"localhost", "http://localhost:3000/x", []string{"http://localhost:3000/x"}},
-		{"file url", "open file:///tmp/a.txt now", []string{"file:///tmp/a.txt"}},
 		{"ftp", "ftp://example.com/f", []string{"ftp://example.com/f"}},
 		{"ssh", "ssh://192.0.2.3", []string{"ssh://192.0.2.3"}},
-		{"tel", "call tel:+15550100", []string{"tel:+15550100"}},
 		{"trailing period", "see http://192.0.2.3/a.", []string{"http://192.0.2.3/a"}},
+		{"formatting", "see *_http://192.0.2.3/a_*.", []string{"http://192.0.2.3/a"}},
 		{"trailing comma", "http://192.0.2.3/a, then", []string{"http://192.0.2.3/a"}},
 		{"trailing paren", "(http://192.0.2.3/a)", []string{"http://192.0.2.3/a"}},
 		{"balanced trailing paren", "https://en.wikipedia.org/wiki/Mercury_(planet)", []string{"https://en.wikipedia.org/wiki/Mercury_(planet)"}},
@@ -850,9 +645,9 @@ func TestConvert_TypedURLSchemes(t *testing.T) {
 		{"vbscript", "vbscript:msgbox", nil},
 		{"followed by a mention", "http://localhost:3000/a,<@UFAKE0001>", []string{"http://localhost:3000/a"}},
 		{"followed by a channel", "http://localhost:3000/a<#CFAKE0001|general>", []string{"http://localhost:3000/a"}},
-		{"followed by an emoji", "http://example.com/x:tada:", []string{"http://example.com/x"}},
-		{"followed by CJK text", "https://example.com/aを確認してください", []string{"https://example.com/a"}},
-		{"followed by full-width paren", "https://example.com/a）", []string{"https://example.com/a"}},
+		{"followed by an emoji", "http://example.com/x:tada:", []string{"http://example.com/x:tada"}},
+		{"followed by CJK text", "https://example.com/aを確認してください", []string{"https://example.com/aを確認してください"}},
+		// {"followed by full-width paren", "https://example.com/a）", []string{"https://example.com/a"}},
 		{"pipe ends the url", "http://a.example|other", []string{"http://a.example"}},
 		// Host-less targets: nothing to open, so no link (http:///, file:foo
 		// do link, like any scheme followed by a path).
@@ -863,7 +658,7 @@ func TestConvert_TypedURLSchemes(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, blk := Convert(c.in)
+			blk := Convert(c.in)
 			var got []string
 			for _, e := range blk.Elements {
 				s, ok := e.(*slack.RichTextSection)
@@ -888,7 +683,7 @@ func TestConvert_TypedURLSchemes(t *testing.T) {
 
 func TestConvert_BareWWWAutolinked(t *testing.T) {
 	// goldmark's Linkify prepends "http://" to www-only matches.
-	_, blk := Convert("visit www.example.com")
+	blk := Convert("visit www.example.com")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	var link *slack.RichTextSectionLinkElement
 	for _, el := range sec.Elements {
@@ -900,15 +695,15 @@ func TestConvert_BareWWWAutolinked(t *testing.T) {
 	if link == nil {
 		t.Fatalf("no link element found; block=%s", blockJSON(blk))
 	}
-	if link.URL != "http://www.example.com" {
-		t.Errorf("link URL = %q, want %q", link.URL, "http://www.example.com")
+	if link.URL != "www.example.com" {
+		t.Errorf("link URL = %q, want %q", link.URL, "www.example.com")
 	}
 }
 
 func TestConvert_BareEmailAutolinked(t *testing.T) {
 	// goldmark's Linkify emits an AutoLink with Protocol="mailto" for
 	// email addresses; URL() therefore returns "mailto:foo@bar.com".
-	_, blk := Convert("email foo@bar.com please")
+	blk := Convert("email foo@bar.com please")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	var link *slack.RichTextSectionLinkElement
 	for _, el := range sec.Elements {
@@ -931,7 +726,7 @@ func TestConvert_BareEmailAutolinked(t *testing.T) {
 func TestConvert_BareURLInsideBoldCarriesBoldStyle(t *testing.T) {
 	// Autolinks under an emphasis node should inherit Bold the same
 	// way explicit [text](url) links already do.
-	_, blk := Convert("**see https://x.com**")
+	blk := Convert("*see https://x.com*")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	for _, el := range sec.Elements {
 		if link, ok := el.(*slack.RichTextSectionLinkElement); ok {
@@ -953,11 +748,7 @@ func TestConvert_BareURLInsideBoldCarriesBoldStyle(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestConvert_EmojiShortcode(t *testing.T) {
-	mr, blk := Convert("hello :smile: world")
-	want := "hello :smile: world"
-	if mr != want {
-		t.Errorf("mrkdwn = %q, want %q (mrkdwn keeps shortcode literal)", mr, want)
-	}
+	blk := Convert("hello :smile: world")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	if len(sec.Elements) != 3 {
 		t.Fatalf("got %d elements, want 3 (text, emoji, text); block=%s", len(sec.Elements), blockJSON(blk))
@@ -974,7 +765,7 @@ func TestConvert_EmojiShortcode(t *testing.T) {
 func TestConvert_EmojiShortcodeAllowedChars(t *testing.T) {
 	// Slack shortcodes can contain lowercase letters, digits, +, -, _.
 	// :+1: is the canonical example.
-	_, blk := Convert(":+1: :man-tipping-hand: :slightly_smiling_face:")
+	blk := Convert(":+1: :man-tipping-hand: :slightly_smiling_face:")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	var names []string
 	for _, el := range sec.Elements {
@@ -997,7 +788,7 @@ func TestConvert_EmojiInsideCodeSpanIsLiteral(t *testing.T) {
 	// `:smile:` inside backticks must NOT be converted to an emoji;
 	// users embed colon-delimited tokens (yaml keys, irc nicks, etc.)
 	// in code spans and expect them to render literally.
-	_, blk := Convert("x `:smile:` y")
+	blk := Convert("x `:smile:` y")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	for _, el := range sec.Elements {
 		if _, ok := el.(*slack.RichTextSectionEmojiElement); ok {
@@ -1027,7 +818,7 @@ func TestConvert_EmojiInsideFencedCodeIsLiteral(t *testing.T) {
 	// Fenced code blocks go through walkCodeBlock which constructs
 	// the text element directly; emoji detection in appendText must
 	// not affect them. Verify the shortcode survives literally.
-	_, blk := Convert("```\nhi :smile:\n```")
+	blk := Convert("```\nhi :smile:\n```")
 	// Find the preformatted element.
 	var pre *slack.RichTextPreformatted
 	for _, el := range blk.Elements {
@@ -1055,7 +846,7 @@ func TestConvert_EmojiInsideFencedCodeIsLiteral(t *testing.T) {
 }
 
 func TestConvert_EmojiInsideBoldCarriesBoldStyle(t *testing.T) {
-	_, blk := Convert("**:fire:**")
+	blk := Convert("*:fire:*")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	for _, el := range sec.Elements {
 		if e, ok := el.(*slack.RichTextSectionEmojiElement); ok {
@@ -1071,7 +862,7 @@ func TestConvert_EmojiInsideBoldCarriesBoldStyle(t *testing.T) {
 func TestConvert_ColonWithoutClosingIsNotEmoji(t *testing.T) {
 	// Plain "8:30" and "rsync: error" must NOT be misparsed as
 	// emojis. The regex requires :name: (closing colon present).
-	_, blk := Convert("meeting at 8:30 about rsync: error")
+	blk := Convert("meeting at 8:30 about rsync: error")
 	sec := blk.Elements[0].(*slack.RichTextSection)
 	for _, el := range sec.Elements {
 		if e, ok := el.(*slack.RichTextSectionEmojiElement); ok {

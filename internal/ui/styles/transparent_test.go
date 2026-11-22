@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
-	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
 )
 
 // withTransparent turns the transparent background on for one test and
@@ -16,7 +16,7 @@ func withTransparent(t *testing.T) {
 	SetTransparentBackground(true)
 	t.Cleanup(func() {
 		SetTransparentBackground(false)
-		Apply("dark", config.Theme{})
+		Apply("dark", core.Theme{})
 	})
 }
 
@@ -46,13 +46,13 @@ func TestTransparentBackground_DerivedColoursMatchOpaque(t *testing.T) {
 		t.Run(theme, func(t *testing.T) {
 			t.Cleanup(func() {
 				SetTransparentBackground(false)
-				Apply("dark", config.Theme{})
+				Apply("dark", core.Theme{})
 			})
 			SetTransparentBackground(false)
-			Apply(theme, config.Theme{})
+			Apply(theme, core.Theme{})
 			want := derived()
 			SetTransparentBackground(true)
-			Apply(theme, config.Theme{})
+			Apply(theme, core.Theme{})
 			got := derived()
 			for k, w := range want {
 				if !colorEqual(got[k], w) {
@@ -65,7 +65,7 @@ func TestTransparentBackground_DerivedColoursMatchOpaque(t *testing.T) {
 
 func TestTransparentBackground_PaintColoursAreNoColor(t *testing.T) {
 	withTransparent(t)
-	Apply("dark", config.Theme{})
+	Apply("dark", core.Theme{})
 	for name, c := range map[string]color.Color{
 		"Background":          Background,
 		"SidebarBackground":   SidebarBackground,
@@ -95,7 +95,7 @@ func TestTransparentBackground_PaintColoursAreNoColor(t *testing.T) {
 
 func TestTransparentBackground_OffKeepsThemeColours(t *testing.T) {
 	SetTransparentBackground(false)
-	Apply("dark", config.Theme{})
+	Apply("dark", core.Theme{})
 	if !colorEqual(StatusBarBackground, SurfaceDark) {
 		t.Errorf("StatusBarBackground = %v, want SurfaceDark %v", StatusBarBackground, SurfaceDark)
 	}
@@ -120,8 +120,8 @@ func TestTransparentBackground_SurvivesThemeSwitchAndCustomTheme(t *testing.T) {
 	saved := maps.Clone(customThemes)
 	t.Cleanup(func() { customThemes = saved })
 
-	Apply("dark", config.Theme{})
-	Apply("dracula", config.Theme{})
+	Apply("dark", core.Theme{})
+	Apply("dracula", core.Theme{})
 	if !isNoColor(Background) {
 		t.Fatal("a theme switch dropped the transparent background")
 	}
@@ -134,7 +134,7 @@ func TestTransparentBackground_SurvivesThemeSwitchAndCustomTheme(t *testing.T) {
 		Background: "#101820", Surface: "#202830", SurfaceDark: "#080C10",
 		Text: "#E0E0E0", TextMuted: "#888888", Border: "#333333",
 	})
-	Apply("Transparent Custom", config.Theme{})
+	Apply("Transparent Custom", core.Theme{})
 	if !isNoColor(Background) || !isNoColor(StatusBarBackground) {
 		t.Fatal("a custom theme dropped the transparent background")
 	}
@@ -145,7 +145,7 @@ func TestTransparentBackground_SurvivesThemeSwitchAndCustomTheme(t *testing.T) {
 
 func TestInvisibleLeftBorder(t *testing.T) {
 	SetTransparentBackground(false)
-	Apply("dark", config.Theme{})
+	Apply("dark", core.Theme{})
 	if got := InvisibleLeftBorder().Left; got != "▌" {
 		t.Errorf("opaque border = %q, want ▌", got)
 	}
@@ -153,7 +153,7 @@ func TestInvisibleLeftBorder(t *testing.T) {
 	if got := InvisibleLeftBorder().Left; got != "▌" {
 		t.Errorf("border before Apply = %q, want ▌: the switch takes effect on Apply", got)
 	}
-	Apply("dark", config.Theme{})
+	Apply("dark", core.Theme{})
 	if got := InvisibleLeftBorder().Left; got != " " {
 		t.Errorf("transparent border = %q, want a space", got)
 	}

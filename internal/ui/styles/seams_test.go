@@ -7,8 +7,7 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
-
-	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
 )
 
 // Regression net for loading user theme files: which files register,
@@ -20,7 +19,7 @@ func TestSeam_CustomThemeDirectory(t *testing.T) {
 			Name   string
 			Colors ThemeColors
 		}{}
-		Apply("dark", config.Theme{})
+		Apply("dark", core.Theme{})
 	})
 	dir := t.TempDir()
 	write := func(name, body string) {
@@ -49,9 +48,9 @@ func TestSeam_CustomThemeDirectory(t *testing.T) {
 		}
 	}
 
-	Apply("dark", config.Theme{})
+	Apply("dark", core.Theme{})
 	darkAccent := Accent
-	Apply("seam partial", config.Theme{})
+	Apply("seam partial", core.Theme{})
 	if !colorEqual(Primary, lipgloss.Color("#010203")) {
 		t.Errorf("primary = %v, want the file's #010203", Primary)
 	}

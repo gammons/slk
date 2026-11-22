@@ -54,6 +54,7 @@ import (
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/slack/mrkdwn"
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/statusbar"
 )
 
@@ -497,7 +498,9 @@ func reduceSendMessage(a *App, m SendMessageMsg) tea.Cmd {
 	// placeholder and the swapped message render identically for
 	// the common case (no rich_text_block paragraph quirks).
 	localTS := a.selfSend.NextLocalTS()
-	optimisticText, _ := mrkdwn.Convert(m.Text)
+
+	optimisticText := blockkit.RichTextToMrkdwn(blockkit.RichTextBlock{Elements: mrkdwn.Convert(m.Text).Elements})
+
 	for _, mm := range a.modelsForChannel(m.ChannelID) {
 		mm.AppendMessage(messages.MessageItem{
 			TS:        localTS,

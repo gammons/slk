@@ -21,6 +21,7 @@ import (
 	"github.com/gammons/slk/internal/slack/mrkdwn"
 	"github.com/gammons/slk/internal/slackhttp"
 	"github.com/gammons/slk/internal/slackurl"
+	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gorilla/websocket"
 	"github.com/slack-go/slack"
 )
@@ -1138,7 +1139,11 @@ func (c *Client) SendMessage(ctx context.Context, channelID, text string) (strin
 // has no option for the draft fields, so a draft's post skips slack-go
 // and goes out as the hand-rolled form the chips path already sends.
 func (c *Client) postMessage(ctx context.Context, channelID, threadTS, text string, broadcast bool, ref *DraftRef) (string, string, error) {
-	mr, block := mrkdwn.Convert(text)
+	block := mrkdwn.Convert(text)
+	if block == nil {
+		return "", "", fmt.Errorf("Could not convert mrkdwn to block")
+	}
+	mr := blockkit.RichTextToMrkdwn(blockkit.RichTextBlock{Elements: block.Elements})
 	extra := ref.fields()
 	if ts, sentMr, sent, err := c.sendWithChips(ctx, channelID, threadTS, text, broadcast, block, extra); sent {
 		return ts, sentMr, err
@@ -1158,9 +1163,7 @@ func (c *Client) postMessage(ctx context.Context, channelID, threadTS, text stri
 	if threadTS != "" {
 		opts = append(opts, slack.MsgOptionTS(threadTS))
 	}
-	if block != nil {
-		opts = append(opts, slack.MsgOptionBlocks(block))
-	}
+	opts = append(opts, slack.MsgOptionBlocks(block))
 	if broadcast {
 		opts = append(opts, slack.MsgOptionBroadcast())
 	}
@@ -1433,11 +1436,13 @@ func (c *Client) GetReplies(ctx context.Context, channelID, threadTS string) ([]
 // optimistic display, but the message-changed WS echo is the
 // authoritative source of truth for the displayed body).
 func (c *Client) EditMessage(ctx context.Context, channelID, ts, text string) (string, error) {
-	mr, block := mrkdwn.Convert(text)
-	opts := []slack.MsgOption{slack.MsgOptionText(mr, false)}
-	if block != nil {
-		opts = append(opts, slack.MsgOptionBlocks(block))
+	block := mrkdwn.Convert(text)
+	if block == nil {
+		return "", fmt.Errorf("could not convert mrkdwn to block")
 	}
+	mr := blockkit.RichTextToMrkdwn(blockkit.RichTextBlock{Elements: block.Elements})
+	opts := []slack.MsgOption{slack.MsgOptionText(mr, false)}
+	opts = append(opts, slack.MsgOptionBlocks(block))
 	_, _, _, err := c.api.UpdateMessage(channelID, ts, opts...)
 	if err != nil {
 		return "", fmt.Errorf("editing message: %w", err)

@@ -88,7 +88,7 @@ func commandForm(req CommandRequest, clientToken string) (url.Values, error) {
 		"client_token": {clientToken},
 	}
 	if strings.TrimSpace(req.Args) != "" {
-		_, block := mrkdwn.Convert(req.Args)
+		block := mrkdwn.Convert(req.Args)
 		if block != nil {
 			var buf bytes.Buffer
 			enc := json.NewEncoder(&buf)

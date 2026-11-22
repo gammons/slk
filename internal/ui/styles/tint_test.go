@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
-	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
 )
 
 func rgb(c color.Color) (uint8, uint8, uint8) {
@@ -15,10 +15,10 @@ func rgb(c color.Color) (uint8, uint8, uint8) {
 
 // applyTheme calls Apply and registers a cleanup that resets to "dark"
 // after the test, isolating package-level mutations.
-func applyTheme(t *testing.T, name string, overrides config.Theme) {
+func applyTheme(t *testing.T, name string, overrides core.Theme) {
 	t.Helper()
 	Apply(name, overrides)
-	t.Cleanup(func() { Apply("dark", config.Theme{}) })
+	t.Cleanup(func() { Apply("dark", core.Theme{}) })
 }
 
 func TestMixColors_HalfwayBlend(t *testing.T) {
@@ -49,7 +49,7 @@ func TestMixColors_AlphaOneIsForeground(t *testing.T) {
 }
 
 func TestSelectionTintColor_FocusedIsTheShadowMix(t *testing.T) {
-	applyTheme(t, "dark", config.Theme{})
+	applyTheme(t, "dark", core.Theme{})
 	expected := mixColors(TextMuted, Background, defaultTintAlpha)
 	got := SelectionTintColor(true)
 	er, eg, eb := rgb(expected)
@@ -60,7 +60,7 @@ func TestSelectionTintColor_FocusedIsTheShadowMix(t *testing.T) {
 }
 
 func TestSelectionTintColor_UnfocusedIsTextMutedMix(t *testing.T) {
-	applyTheme(t, "dark", config.Theme{})
+	applyTheme(t, "dark", core.Theme{})
 	expected := mixColors(TextMuted, Background, defaultTintAlpha)
 	got := SelectionTintColor(false)
 	er, eg, eb := rgb(expected)
@@ -71,7 +71,7 @@ func TestSelectionTintColor_UnfocusedIsTextMutedMix(t *testing.T) {
 }
 
 func TestComposeInsertBG_DerivedFromAccentAndBackground(t *testing.T) {
-	applyTheme(t, "dark", config.Theme{})
+	applyTheme(t, "dark", core.Theme{})
 	expected := mixColors(Accent, Background, defaultTintAlpha)
 	er, eg, eb := rgb(expected)
 	gr, gg, gb := rgb(ComposeInsertBG)
@@ -88,7 +88,7 @@ func TestComposeInsertBG_OverrideFromThemeColors(t *testing.T) {
 		Border:          "#222222",
 		ComposeInsertBG: "#ABCDEF",
 	})
-	applyTheme(t, "tinttest", config.Theme{})
+	applyTheme(t, "tinttest", core.Theme{})
 	r, g, b := rgb(ComposeInsertBG)
 	if r != 0xAB || g != 0xCD || b != 0xEF {
 		t.Fatalf("override not honored: got #%02X%02X%02X", r, g, b)
@@ -98,9 +98,9 @@ func TestComposeInsertBG_OverrideFromThemeColors(t *testing.T) {
 // Lock the default α for the 12 built-in themes — guarantees the
 // derived tints don't drift silently across refactors.
 func TestComposeInsertBG_StableAcrossBuiltinThemes(t *testing.T) {
-	t.Cleanup(func() { Apply("dark", config.Theme{}) })
+	t.Cleanup(func() { Apply("dark", core.Theme{}) })
 	for _, name := range ThemeNames() {
-		Apply(name, config.Theme{})
+		Apply(name, core.Theme{})
 		// Just assert it's non-nil and distinct from Background;
 		// exact RGB values are too brittle to lock per-theme.
 		if ComposeInsertBG == nil {

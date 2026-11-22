@@ -12,7 +12,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
 )
 
 func TestLoadCustomThemes(t *testing.T) {
@@ -58,7 +58,7 @@ border = "#555555"
 	}
 
 	// Verify it can be applied
-	Apply("my custom", config.Theme{})
+	Apply("my custom", core.Theme{})
 	if !colorEqual(Primary, lipgloss.Color("#AABBCC")) {
 		t.Errorf("expected custom primary #AABBCC")
 	}
@@ -68,7 +68,7 @@ border = "#555555"
 		Name   string
 		Colors ThemeColors
 	}{}
-	Apply("dark", config.Theme{})
+	Apply("dark", core.Theme{})
 }
 
 func TestLoadCustomThemesMissingDir(t *testing.T) {
@@ -275,8 +275,8 @@ func TestANSIThemesSelectionTintPaletteInherited(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.theme, func(t *testing.T) {
-			Apply(tc.theme, config.Theme{})
-			t.Cleanup(func() { Apply("dark", config.Theme{}) })
+			Apply(tc.theme, core.Theme{})
+			t.Cleanup(func() { Apply("dark", core.Theme{}) })
 
 			focused := SelectionTintColor(true)
 			if _, ok := focused.(ansi.BasicColor); !ok {
@@ -475,7 +475,7 @@ func TestParseCustomThemesRegistersNothing(t *testing.T) {
 	saved := maps.Clone(customThemes)
 	t.Cleanup(func() {
 		customThemes = saved
-		Apply("dark", config.Theme{})
+		Apply("dark", core.Theme{})
 	})
 	dir := t.TempDir()
 	write := func(bg string) {
@@ -499,7 +499,7 @@ func TestParseCustomThemesRegistersNothing(t *testing.T) {
 	RegisterCustomThemes(themes)
 	write("#202020")
 	RegisterCustomThemes(ParseCustomThemes(os.DirFS(dir)))
-	Apply("parsed", config.Theme{})
+	Apply("parsed", core.Theme{})
 	if !colorEqual(Background, lipgloss.Color("#202020")) {
 		t.Errorf("after a second register: Background = %v, want #202020", Background)
 	}

@@ -43,7 +43,7 @@ func TestEditSource_LinkWithUnbareableTargetSurvivesSave(t *testing.T) {
 			}},
 		}}}}
 		src := EditSource(msg)
-		_, block := mrkdwn.Convert(src)
+		block := mrkdwn.Convert(src)
 		if block == nil || len(block.Elements) != 1 {
 			t.Fatalf("Convert(%q) gave %v", src, block)
 		}

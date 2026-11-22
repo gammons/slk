@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gammons/slk/internal/slack/mrkdwn"
+	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gorilla/websocket"
 	"github.com/slack-go/slack"
 )
@@ -129,7 +130,7 @@ func TestChipCandidates(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, block := mrkdwn.Convert(tc.text)
+			block := mrkdwn.Convert(tc.text)
 			got := chipCandidates(block)
 			if strings.Join(got, " ") != strings.Join(tc.want, " ") {
 				t.Errorf("chipCandidates(%q) = %q, want %q", tc.text, got, tc.want)
@@ -143,7 +144,7 @@ func TestChipCandidates_Capped(t *testing.T) {
 	for i := 0; i < maxLinkChips+3; i++ {
 		parts = append(parts, "https://a.example/"+string(rune('a'+i)))
 	}
-	_, block := mrkdwn.Convert(strings.Join(parts, " "))
+	block := mrkdwn.Convert(strings.Join(parts, " "))
 	if got := chipCandidates(block); len(got) != maxLinkChips {
 		t.Errorf("%d candidates, want %d", len(got), maxLinkChips)
 	}
@@ -212,7 +213,8 @@ func TestParseUnfurlLink_CapturedReplyIsPending(t *testing.T) {
 // slk's ordinary chat.postMessage either). client_msg_id is a fresh UUID.
 func TestChipPostForm_MatchesCapture(t *testing.T) {
 	want := capturedForm(t, "chat_post_message_chip.json")
-	mr, block := mrkdwn.Convert(chipURL)
+	block := mrkdwn.Convert(chipURL)
+	mr := blockkit.RichTextToMarkdown(blockkit.RichTextBlock{Elements: block.Elements})
 	chips := map[string]linkChip{chipURL: capturedChip(t)}
 	applyChips(block, chips)
 	mr = chipMrkdwn(mr, chips)
@@ -245,7 +247,7 @@ func TestChipPostForm_MatchesCapture(t *testing.T) {
 }
 
 func TestChipPostForm_Reply(t *testing.T) {
-	_, block := mrkdwn.Convert(chipURL)
+	block := mrkdwn.Convert(chipURL)
 	got, err := chipPostForm("C1", "1700000000.000100", true, "x", block, []string{chipURL}, newClientMsgID())
 	if err != nil {
 		t.Fatal(err)
@@ -262,7 +264,7 @@ func TestChipPostForm_Reply(t *testing.T) {
 // Only the element that is a bare link to a chip URL changes; the text
 // around it and links without a chip stay.
 func TestApplyChips_KeepsEverythingElse(t *testing.T) {
-	_, block := mrkdwn.Convert("see " + chipURL + " and https://other.example/x\n- " + chipURL)
+	block := mrkdwn.Convert("see " + chipURL + " and https://other.example/x\n- " + chipURL)
 	applyChips(block, map[string]linkChip{chipURL: capturedChip(t)})
 	raw, err := json.Marshal([]slack.Block{block})
 	if err != nil {

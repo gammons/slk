@@ -66,6 +66,7 @@ import (
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/slack/mrkdwn"
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/statusbar"
 )
 
@@ -349,7 +350,7 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// the LocalTS / swap-or-remove contract and the
 		// mrkdwn.Convert rationale.
 		localTS := a.selfSend.NextLocalTS()
-		optimisticText, _ := mrkdwn.Convert(m.Text)
+		optimisticText := blockkit.RichTextToMarkdown(blockkit.RichTextBlock{Elements: mrkdwn.Convert(m.Text).Elements})
 		if a.threadVisible && m.ThreadTS == a.threadPanel.ThreadTS() && m.ChannelID == a.threadPanel.ChannelID() {
 			a.threadPanel.AddReply(messages.MessageItem{
 				TS:        localTS,
