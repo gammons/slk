@@ -845,16 +845,6 @@ func RenderSlackMarkdown(text string, userNames map[string]string, channelNames 
 	})
 }
 
-func cutQuotePrefix(line string) (string, bool) {
-	if line == ">" || line == "&gt;" {
-		return "", true
-	}
-	if rest, ok := strings.CutPrefix(line, "&gt; "); ok {
-		return rest, true
-	}
-	return strings.CutPrefix(line, "> ")
-}
-
 // RenderSlackMarkdownWith is the full-featured entry point. See
 // RenderSlackMarkdownOpts for the per-call configuration. With a zero
 // opts struct it is byte-identical to RenderSlackMarkdown.
@@ -915,8 +905,8 @@ func RenderSlackMarkdownWith(text string, opts RenderSlackMarkdownOpts) string {
 			// Wrap before drawing the bar so every wrapped row gets one;
 			// the body wrap that runs later would continue the quote
 			// without it. The bar and its padding take two columns.
-			if w := opts.Width; w > 2 {
-				line = WordWrap(line, w-2)
+			if w := opts.Width; w > quoteLevel*2 {
+				line = WordWrap(line, w-quoteLevel*2)
 			}
 			for range quoteLevel {
 				line = blockquoteStyle().Render(line)
@@ -1257,9 +1247,8 @@ func SlackMrkdwnToCommonMarkWithUserGroups(text string, userNames map[string]str
 	lines := strings.Split(text, "\n")
 	var result []string
 	for _, line := range lines {
-		if strings.HasPrefix(line, "&gt; ") || strings.HasPrefix(line, "> ") {
-			quoted := strings.TrimPrefix(line, "&gt; ")
-			quoted = strings.TrimPrefix(quoted, "> ")
+		if strings.HasPrefix(line, "> ") {
+			quoted := strings.TrimPrefix(line, "> ")
 			quoted = slackMrkdwnToCommonMarkInline(quoted, userNames, channelNames, userGroups)
 			quoted = slackEntityDecoder.Replace(quoted)
 			line = "> " + quoted

@@ -350,7 +350,11 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// the LocalTS / swap-or-remove contract and the
 		// mrkdwn.Convert rationale.
 		localTS := a.selfSend.NextLocalTS()
-		optimisticText := blockkit.RichTextToMrkdwnUser(blockkit.RichTextBlock{Elements: mrkdwn.Convert(m.Text).Elements})
+		optimisticText := m.Text
+		block := mrkdwn.Convert(m.Text)
+		if block != nil {
+			optimisticText = blockkit.RichTextToMrkdwn(blockkit.RichTextBlock{Elements: block.Elements})
+		}
 		if a.threadVisible && m.ThreadTS == a.threadPanel.ThreadTS() && m.ChannelID == a.threadPanel.ChannelID() {
 			a.threadPanel.AddReply(messages.MessageItem{
 				TS:        localTS,

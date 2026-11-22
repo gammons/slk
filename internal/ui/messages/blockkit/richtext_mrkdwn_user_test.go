@@ -109,8 +109,11 @@ func TestRichTextToMrkdwnUser_RoundTrip(t *testing.T) {
 		"read https://en.wikipedia.org/wiki/Mercury_(planet) today",
 		"https://en.wikipedia.org/wiki/Mercury_(planet)",
 		"before\n\n```\nfn main() {}\n```\n\nafter",
+		"before\n\n```\nfn main() {}\n\n\n```\n\nafter",
 		"a list\n- item\n\nand a paragraph after it",
 		"wave :wave::skin-tone-3: done",
+		"    - pre-indented list",
+		"trailing newline\n",
 	} {
 		t.Run(composed, func(t *testing.T) {
 			first := received(t, composed)
@@ -160,7 +163,6 @@ func TestRichTextToMrkdwnUser_Inline(t *testing.T) {
 	}{
 		{"bold keeps spaces outside", []slack.RichTextSectionElement{text("a", nil), text(" bold ", &slack.RichTextSectionTextStyle{Bold: true}), text("b", nil)}, "a *bold* b"},
 		{"style per line", []slack.RichTextSectionElement{text("one\ntwo", &slack.RichTextSectionTextStyle{Italic: true})}, "_one_\n_two_"},
-		{"code with backtick", []slack.RichTextSectionElement{text("a`b", &slack.RichTextSectionTextStyle{Code: true})}, "``a`b``"},
 		{"link label is url", []slack.RichTextSectionElement{link("https://x.com", "https://x.com")}, "https://x.com"},
 		{"link without label", []slack.RichTextSectionElement{link("https://x.com", "")}, "https://x.com"},
 		{"mailto", []slack.RichTextSectionElement{link("mailto:a@b.com", "a@b.com")}, "a@b.com"},

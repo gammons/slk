@@ -250,7 +250,7 @@ func TestDeleteDraft_Form(t *testing.T) {
 // captured from the web client.
 func TestSendDraft_PostsDraftFields(t *testing.T) {
 	c, ds := newDraftServer(t, map[string][]string{"chat.postMessage": {`{"ok":true,"ts":"5.0"}`}})
-	ts, mr, err := c.SendDraft(context.Background(), "C1", "10.0", "hi **there**", true,
+	ts, mr, err := c.SendDraft(context.Background(), "C1", "10.0", "hi *there*", true,
 		DraftRef{ID: "Dr1", LastUpdatedTS: "1795617850.177844"})
 	if err != nil {
 		t.Fatal(err)

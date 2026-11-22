@@ -499,7 +499,11 @@ func reduceSendMessage(a *App, m SendMessageMsg) tea.Cmd {
 	// the common case (no rich_text_block paragraph quirks).
 	localTS := a.selfSend.NextLocalTS()
 
-	optimisticText := blockkit.RichTextToMrkdwn(blockkit.RichTextBlock{Elements: mrkdwn.Convert(m.Text).Elements})
+	optimisticText := m.Text
+	block := mrkdwn.Convert(m.Text)
+	if block != nil {
+		optimisticText = blockkit.RichTextToMrkdwn(blockkit.RichTextBlock{Elements: block.Elements})
+	}
 
 	for _, mm := range a.modelsForChannel(m.ChannelID) {
 		mm.AppendMessage(messages.MessageItem{

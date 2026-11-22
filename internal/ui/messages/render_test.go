@@ -489,11 +489,8 @@ func TestBlockquoteWrapsUnderTheBar(t *testing.T) {
 }
 
 func TestNestedBlockquoteRoundTrip(t *testing.T) {
-	const draft = "> outer\n>> **nested quote**\n>\n> after\n\noutside"
-	fallback, block := mrkdwn.Convert(draft)
-	if want := "> outer\n> > *nested quote*\n> after\n\noutside"; fallback != want {
-		t.Errorf("fallback = %q, want %q", fallback, want)
-	}
+	const draft = "> outer\n>> *nested quote*\n>\n> after\n\noutside"
+	block := mrkdwn.Convert(draft)
 	raw, err := json.Marshal(block)
 	if err != nil {
 		t.Fatal(err)
@@ -511,16 +508,15 @@ func TestNestedBlockquoteRoundTrip(t *testing.T) {
 		}
 	}
 	rt := blockkit.RichTextBlock{Elements: received.Elements}
-	if got, want := blockkit.RichTextToMarkdown(rt), "> outer\n\n> > **nested quote**\n\n> after\n\noutside"; got != want {
+	if got, want := blockkit.RichTextToMrkdwnUser(rt), "> outer\n> > *nested quote*\n> \n> after\n\noutside"; got != want {
 		t.Errorf("edit source = %q, want %q", got, want)
 	}
-	wire := strings.ReplaceAll(blockkit.RichTextToMrkdwn(rt), ">", "&gt;")
-	rendered := ansi.Strip(RenderSlackMarkdownWith(wire, RenderSlackMarkdownOpts{Width: 10}))
+	rendered := ansi.Strip(RenderSlackMarkdownWith(blockkit.RichTextToMrkdwn(rt), RenderSlackMarkdownOpts{Width: 10}))
 	lines := strings.Split(rendered, "\n")
 	for i := range lines {
 		lines[i] = strings.TrimRight(lines[i], " ")
 	}
-	if got, want := strings.Join(lines, "\n"), "┃ outer\n┃ ┃ nested\n┃ ┃ quote\n┃ after\noutside"; got != want {
+	if got, want := strings.Join(lines, "\n"), "┃ outer\n┃ ┃ nested\n┃ ┃ quote\n┃\n┃ after\n\noutside"; got != want {
 		t.Errorf("render = %q, want %q", got, want)
 	}
 }

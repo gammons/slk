@@ -360,7 +360,7 @@ func TestConvert_UserMention(t *testing.T) {
 }
 
 func TestConvert_ChannelMention(t *testing.T) {
-	blk := Convert("see <#C123> please")
+	blk := Convert("see <#C123|general> please")
 	ch := blk.Elements[0].(*slack.RichTextSection).Elements[1].(*slack.RichTextSectionChannelElement)
 	if ch.ChannelID != "C123" {
 		t.Errorf("ChannelID = %q, want C123", ch.ChannelID)
@@ -379,7 +379,7 @@ func TestConvert_Broadcast(t *testing.T) {
 // broadcast range. Sending them as a broadcast makes Slack reject the
 // whole message with invalid_blocks.
 func TestConvert_Usergroup(t *testing.T) {
-	blk := Convert("<!subteam^S01> please review")
+	blk := Convert("<!subteam^S01|@team> please review")
 	ug := blk.Elements[0].(*slack.RichTextSection).Elements[0].(*slack.RichTextSectionUserGroupElement)
 	if ug.UsergroupID != "S01" {
 		t.Errorf("UsergroupID = %q, want S01", ug.UsergroupID)
@@ -461,20 +461,32 @@ func TestConvert_OrderedList(t *testing.T) {
 	}
 }
 
-func TestConvert_NestedList(t *testing.T) {
-	blk := Convert("- a\n    - b")
-	// Block side: two RichTextList elements at the top level
-	// (slack's wire shape — nested lists are flat with Indent=N).
-	if len(blk.Elements) != 2 {
-		t.Fatalf("got %d block elements, want 2 lists (flattened nested)", len(blk.Elements))
+func TestConvert_OrderedListOffset(t *testing.T) {
+	blk := Convert("3. three\n4. four")
+	list := blk.Elements[0].(*slack.RichTextList)
+	if list.Style != slack.RTEListOrdered {
+		t.Errorf("list style = %q, want ordered", list.Style)
 	}
-	outer := blk.Elements[0].(*slack.RichTextList)
-	if outer.Indent != 0 {
-		t.Errorf("outer.Indent = %d, want 0", outer.Indent)
+	if list.Offset != 2 {
+		t.Errorf("list offset = %d, want %d", list.Offset, 2)
 	}
-	inner := blk.Elements[1].(*slack.RichTextList)
-	if inner.Indent != 1 {
-		t.Errorf("inner.Indent = %d, want 1", inner.Indent)
+}
+
+func TestConvert_NestedListIndents(t *testing.T) {
+	blk := Convert("    - foo\nfoo\n- a\n  - b\n      - c\n- d\n  - e\n    - f\n        - g")
+	wantIndents := []int{1, 0, 1, 2, 0, 1, 2, 3}
+
+	i := 0
+	for _, elem := range blk.Elements {
+		if l, match := elem.(*slack.RichTextList); match {
+			if l.Indent != wantIndents[i] {
+				t.Errorf("list[%d].Indent = %d, want %d", i, l.Indent, wantIndents[i])
+			}
+			i++
+		}
+	}
+	if i+1 < len(wantIndents) {
+		t.Errorf("produced less lists than expected (%d < %d); block: %s", i+1, len(wantIndents), blockJSON(blk))
 	}
 }
 
@@ -492,7 +504,7 @@ func TestConvert_FencedCodeBlock(t *testing.T) {
 		t.Fatalf("got %d preformatted children, want 1 text", len(pre.Elements))
 	}
 	te := pre.Elements[0].(*slack.RichTextSectionTextElement)
-	if te.Text != "foo\nbar\n" {
+	if te.Text != "foo\nbar" {
 		t.Errorf("text = %q, want \"foo\\nbar\\n\"", te.Text)
 	}
 }
@@ -574,16 +586,6 @@ func TestConvert_BlockquoteParagraphs(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Bare URL autolinking (Linkify)
-//
-// Slack renders the rich_text block when present, so a bare URL typed by
-// the user must be emitted as a RichTextSectionLinkElement, not as a
-// plain text element. The mrkdwn fallback must also wrap the URL in
-// <...> so Slack's mrkdwn parser would render it as a link if the block
-// were ever stripped.
-// ---------------------------------------------------------------------------
-
 func TestConvert_BareHTTPSAutolinked(t *testing.T) {
 	blk := Convert("visit https://example.com today")
 	sec := blk.Elements[0].(*slack.RichTextSection)
@@ -623,6 +625,15 @@ func TestConvert_TypedURLSchemes(t *testing.T) {
 		want     []string // link URLs, in order; empty means no link
 	}{
 		{"ip host with port", "see http://192.0.2.3:8080/browse/X-1 ok", []string{"http://192.0.2.3:8080/browse/X-1"}},
+		{"with auth information", "see http://user:pass@example.com/path", []string{"http://user:pass@example.com/path"}},
+		{"angled token", "see <http://user:pass@example.com/path>", []string{"http://user:pass@example.com/path"}},
+		{"angled token email", "see <mailto:user@example.com>", []string{"mailto:user@example.com"}},
+		{"angled token with invalid URL", "see <data:text/html,x> <javascript:alert(1)>", nil},
+		{"angled file", "see <file:///foo/bar|goo>", []string{"file:///foo/bar"}},
+		{"without proto", "example.com", []string{"http://example.com"}},
+		{"with hyphen", "http://foo-bar.com/path", []string{"http://foo-bar.com/path"}},
+		{"email", "person@example.com", []string{"mailto:person@example.com"}},
+		{"phone", "+123456789", []string{"tel:+123456789"}},
 		{"path with dot", "see https://example.com/foo.txt, http://example.com/résumé.txt", []string{"https://example.com/foo.txt", "http://example.com/résumé.txt"}},
 		{"https ip host", "https://192.0.2.3:8443/a", []string{"https://192.0.2.3:8443/a"}},
 		{"localhost", "http://localhost:3000/x", []string{"http://localhost:3000/x"}},
@@ -632,8 +643,14 @@ func TestConvert_TypedURLSchemes(t *testing.T) {
 		{"formatting", "see *_http://192.0.2.3/a_*.", []string{"http://192.0.2.3/a"}},
 		{"trailing comma", "http://192.0.2.3/a, then", []string{"http://192.0.2.3/a"}},
 		{"trailing paren", "(http://192.0.2.3/a)", []string{"http://192.0.2.3/a"}},
+		{"trailing questionmark", "Can you look at https://example.com/?", []string{"https://example.com/"}},
+		{"trailing period in domain", "see example.com.", []string{"http://example.com"}},
+		{"uppercase", "see EXAMPLE.COM.", []string{"http://EXAMPLE.COM"}},
 		{"balanced trailing paren", "https://en.wikipedia.org/wiki/Mercury_(planet)", []string{"https://en.wikipedia.org/wiki/Mercury_(planet)"}},
+		{"balanced empty bracket", "https://example.com/?tag[]=go", []string{"https://example.com/?tag[]=go"}},
 		{"balanced paren inside parens", "(see https://en.wikipedia.org/wiki/Mercury_(planet))", []string{"https://en.wikipedia.org/wiki/Mercury_(planet)"}},
+		{"balanced paren inside link syntax", "[Check out this wiki article](https://en.wikipedia.org/wiki/Mercury_(planet))", []string{"https://en.wikipedia.org/wiki/Mercury_(planet)"}},
+		{"balanced bracket inside link syntax", "[search](https://example.com/?tag[]=go)", []string{"https://example.com/?tag[]=go"}},
 		{"query and fragment", "https://example.com/a?x=1&y=2#frag", []string{"https://example.com/a?x=1&y=2#frag"}},
 		{"trailing semicolon bang question", "http://192.0.2.3/a; http://192.0.2.4/b! http://192.0.2.5/c?",
 			[]string{"http://192.0.2.3/a", "http://192.0.2.4/b", "http://192.0.2.5/c"}},
@@ -668,9 +685,6 @@ func TestConvert_TypedURLSchemes(t *testing.T) {
 				for _, el := range s.Elements {
 					if l, ok := el.(*slack.RichTextSectionLinkElement); ok {
 						got = append(got, l.URL)
-						if strings.ContainsAny(l.URL, "") {
-							t.Errorf("link URL %q holds a tokenizer sentinel", l.URL)
-						}
 					}
 				}
 			}
@@ -695,8 +709,8 @@ func TestConvert_BareWWWAutolinked(t *testing.T) {
 	if link == nil {
 		t.Fatalf("no link element found; block=%s", blockJSON(blk))
 	}
-	if link.URL != "www.example.com" {
-		t.Errorf("link URL = %q, want %q", link.URL, "www.example.com")
+	if link.URL != "http://www.example.com" {
+		t.Errorf("link URL = %q, want %q", link.URL, "http://www.example.com")
 	}
 }
 
@@ -720,6 +734,29 @@ func TestConvert_BareEmailAutolinked(t *testing.T) {
 	}
 	if link.Text != "foo@bar.com" {
 		t.Errorf("link Text = %q, want %q (label is the typed address, no mailto: prefix)", link.Text, "foo@bar.com")
+	}
+}
+
+func TestConvert_BarePhoneAutolinked(t *testing.T) {
+	// goldmark's Linkify emits an AutoLink with Protocol="mailto" for
+	// email addresses; URL() therefore returns "mailto:foo@bar.com".
+	blk := Convert("call +1234567890 please")
+	sec := blk.Elements[0].(*slack.RichTextSection)
+	var link *slack.RichTextSectionLinkElement
+	for _, el := range sec.Elements {
+		if l, ok := el.(*slack.RichTextSectionLinkElement); ok {
+			link = l
+			break
+		}
+	}
+	if link == nil {
+		t.Fatalf("no link element found; block=%s", blockJSON(blk))
+	}
+	if link.URL != "tel:+1234567890" {
+		t.Errorf("link URL = %q, want %q", link.URL, "tel:+1234567890")
+	}
+	if link.Text != "+1234567890" {
+		t.Errorf("link Text = %q, want %q (label is the typed phone, no tel: prefix)", link.Text, "+1234567890")
 	}
 }
 

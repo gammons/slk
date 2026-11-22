@@ -33,7 +33,12 @@ type services struct {
 // toMrkdwn converts what the user typed, as cmd/slk's real send does, so
 // the authoritative message matches the App's optimistic placeholder.
 func toMrkdwn(s string) string {
-	return blockkit.RichTextToMrkdwn(blockkit.RichTextBlock{Elements: mrkdwn.Convert(s).Elements})
+	block := mrkdwn.Convert(s)
+	if block != nil {
+		return blockkit.RichTextToMrkdwn(blockkit.RichTextBlock{Elements: block.Elements})
+	} else {
+		return s
+	}
 }
 
 var frecentNames = []string{"thumbsup", "rocket", "tada", "eyes", "white_check_mark", "heart", "fire", "pray"}

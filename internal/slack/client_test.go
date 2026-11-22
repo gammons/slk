@@ -63,7 +63,7 @@ func TestSendMessage_BuildsRichTextBlock(t *testing.T) {
 	defer closeFn()
 	c := &Client{api: api}
 
-	ts, sentMrkdwn, err := c.SendMessage(context.Background(), "C1", "**hello** world")
+	ts, sentMrkdwn, err := c.SendMessage(context.Background(), "C1", "*hello* world")
 	if err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
@@ -1843,11 +1843,11 @@ func TestSendReply_BroadcastSetsReplyBroadcast(t *testing.T) {
 }
 
 func TestEditMessage_BuildsRichTextBlock(t *testing.T) {
-	api, getForm, closeFn := newTestSlackAPI(t, `{"ok":true,"channel":"C1","ts":"1700000000.000100","text":"*new* text"}`)
+	api, getForm, closeFn := newTestSlackAPI(t, `{"ok":true,"channel":"C1","ts":"1700000000.000100","text":"_old_ text"}`)
 	defer closeFn()
 	c := &Client{api: api}
 
-	sentMrkdwn, err := c.EditMessage(context.Background(), "C1", "1700000000.000100", "**new** text")
+	sentMrkdwn, err := c.EditMessage(context.Background(), "C1", "1700000000.000100", "*new* text")
 	if err != nil {
 		t.Fatalf("EditMessage: %v", err)
 	}

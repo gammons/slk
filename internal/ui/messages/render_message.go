@@ -340,7 +340,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	if !hasBody {
 		bodySrc = ""
 	}
-	startsWithBlockQuote := strings.HasPrefix(bodySrc, "&gt; ") || strings.HasPrefix(bodySrc, "> ")
+	startsWithBlockQuote := strings.HasPrefix(bodySrc, "> ")
 	headerOnSeparateLine := opt.BodyOnly || !rc.Compact || startsWithBlockQuote || !hasBody
 
 	if headerOnSeparateLine && lipgloss.Width(header) > headerBudget {

@@ -1141,7 +1141,7 @@ func (c *Client) SendMessage(ctx context.Context, channelID, text string) (strin
 func (c *Client) postMessage(ctx context.Context, channelID, threadTS, text string, broadcast bool, ref *DraftRef) (string, string, error) {
 	block := mrkdwn.Convert(text)
 	if block == nil {
-		return "", "", fmt.Errorf("Could not convert mrkdwn to block")
+		return "", "", fmt.Errorf("could not convert mrkdwn to block")
 	}
 	mr := blockkit.RichTextToMrkdwn(blockkit.RichTextBlock{Elements: block.Elements})
 	extra := ref.fields()

@@ -62,7 +62,7 @@ func identityRender(s string, _ int) string { return s }
 func TestPreviewBodyIsTheSendPath(t *testing.T) {
 	m := New("g")
 	m.SetUsers([]mentionpicker.User{{ID: "U2", DisplayName: "bob"}})
-	m.SetValue("**hi** @bob")
+	m.SetValue("*hi* @bob")
 	block := mrkdwn.Convert(m.TranslateMentionsForSend(m.Value()))
 	want := blockkit.RichTextToMrkdwnUser(blockkit.RichTextBlock{Elements: block.Elements})
 	got := m.PreviewBody(40, RenderKey{}, identityRender)

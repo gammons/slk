@@ -6,21 +6,21 @@ require (
 	charm.land/bubbles/v2 v2.1.0
 	charm.land/bubbletea/v2 v2.0.6
 	charm.land/huh/v2 v2.0.3
-	charm.land/lipgloss/v2 v2.0.3
+	charm.land/lipgloss/v2 v2.0.6
 	github.com/billgraziano/dpapi v0.5.0
-	github.com/charmbracelet/ultraviolet v0.0.0-20260416155717-489999b90468
-	github.com/charmbracelet/x/ansi v0.11.7
+	github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886
+	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/gen2brain/beeep v0.11.2
 	github.com/godbus/dbus/v5 v5.1.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/mattn/go-sixel v0.0.9
 	github.com/muesli/reflow v0.3.0
-	github.com/pelletier/go-toml/v2 v2.3.0
+	github.com/okneniz/parsec v0.0.4
+	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/rivo/uniseg v0.4.7
 	github.com/slack-go/slack v0.23.0
 	github.com/syndtr/goleveldb v1.0.0
-	github.com/yuin/goldmark v1.7.13
 	golang.design/x/clipboard v0.7.1
 	golang.org/x/crypto v0.54.0
 	golang.org/x/image v0.39.0
@@ -48,9 +48,9 @@ require (
 	github.com/golang/snappy v0.0.0-20180518054509-2e65f85255db // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jackmordaunt/icns/v3 v3.0.1 // indirect
-	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
+	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
-	github.com/mattn/go-runewidth v0.0.23 // indirect
+	github.com/mattn/go-runewidth v0.0.24 // indirect
 	github.com/mitchellh/hashstructure/v2 v2.0.2 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect

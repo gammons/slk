@@ -31,7 +31,7 @@ func benchMessages() []messages.MessageItem {
 			TS:        fmt.Sprintf("%d.0", 1700000000+i),
 			UserName:  "alice",
 			UserID:    "U1",
-			Text:      "Hello world this is a moderately long message with **bold** and _italic_ formatting.",
+			Text:      "Hello world this is a moderately long message with *bold* and _italic_ formatting.",
 			Timestamp: "10:30 AM",
 		}
 	}

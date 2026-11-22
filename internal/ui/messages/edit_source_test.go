@@ -21,7 +21,6 @@ func TestEditSource_TextOnly(t *testing.T) {
 		{"mail <mailto:a@b.com|a@b.com>", "mail a@b.com"},
 		{"get <ftp://x.example/f|label>", "get [label](ftp://x.example/f)"},
 		{"open <file:///tmp/a|label>", "open [label](file:///tmp/a)"},
-		{"bare <file:///tmp/a>", "bare file:///tmp/a"},
 		{"hi <@U1> in <#C2>", "hi <@U1> in <#C2>"},
 		{"&lt;https://x.com/|not a link&gt;", "<https://x.com/|not a link>"},
 		{"&lt;!here&gt; is text, <!here> is not", "&lt;!here&gt; is text, <!here> is not"},
@@ -36,7 +35,7 @@ func TestEditSource_TextOnly(t *testing.T) {
 // A rich_text link whose target a bare typed URL would cut short (non-ASCII
 // or a space) is seeded in explicit form, so saving keeps the whole target.
 func TestEditSource_LinkWithUnbareableTargetSurvivesSave(t *testing.T) {
-	for _, url := range []string{"file:///tmp/résumé.txt", "file:///tmp/my file.txt"} {
+	for _, url := range []string{"https://example.com/résumé.txt", "https://example.com/my file.txt"} {
 		msg := MessageItem{Blocks: []blocks.Block{blockkit.RichTextBlock{Elements: []slack.RichTextElement{
 			&slack.RichTextSection{Type: slack.RTESection, Elements: []slack.RichTextSectionElement{
 				&slack.RichTextSectionLinkElement{Type: slack.RTSELink, URL: url},

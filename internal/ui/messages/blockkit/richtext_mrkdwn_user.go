@@ -30,10 +30,14 @@ func RichTextToMrkdwnUser(rt RichTextBlock) string {
 	// sections specially.
 	elems := mrkdwn.Merge(rt.Elements)
 	parts := make([]string, 0, len(rt.Elements))
-	for _, e := range elems {
+	for i, e := range elems {
 		switch v := e.(type) {
 		case *slack.RichTextSection:
-			parts = append(parts, strings.TrimSuffix(sectionToMrkdwnUser(v.Elements), "\n"))
+			sec := sectionToMrkdwnUser(v.Elements)
+			if i < len(elems)-1 {
+				sec = strings.TrimSuffix(sec, "\n")
+			}
+			parts = append(parts, sec)
 		case *slack.RichTextList:
 			parts = append(parts, listToMrkdwnUser(v))
 		case *slack.RichTextPreformatted:
@@ -131,23 +135,9 @@ func emphasize(s string, style *slack.RichTextSectionTextStyle) string {
 	return s
 }
 
-// codeSpan wraps s in a run of backticks one longer than the longest
-// run inside it, padding with spaces when s starts or ends with one,
-// as CommonMark requires.
+// codeSpan wraps s in single backticks.
 func codeSpan(s string) string {
-	longest, run := 0, 0
-	for _, r := range s {
-		if r == '`' {
-			run++
-			longest = max(longest, run)
-		} else {
-			run = 0
-		}
-	}
-	fence := strings.Repeat("`", longest+1)
-	if strings.HasPrefix(s, "`") || strings.HasSuffix(s, "`") {
-		s = " " + s + " "
-	}
+	fence := "`"
 	return fence + s + fence
 }
 
@@ -159,7 +149,7 @@ func codeSpan(s string) string {
 // styles and drop) keeps Slack's <url|label> form, which the composer
 // also sends as a link.
 func LinkToMrkdwnUser(url, label string) string {
-	if label == "" || label == url || url == "mailto:"+label {
+	if label == "" || label == url || url == "mailto:"+label || url == "tel:"+label || url == "http://"+label {
 		if strings.HasPrefix(url, "mailto:") {
 			return strings.TrimPrefix(url, "mailto:")
 		}
@@ -206,7 +196,6 @@ func listToMrkdwnUser(l *slack.RichTextList) string {
 // backtick longer than any run of three or more inside the body.
 func preformattedToMrkdwnUser(preformatted slack.RichTextPreformatted) string {
 	body := preformattedElementsToMrkdwn(preformatted.Elements)
-	body = strings.TrimSuffix(body, "\n")
 	fence := "```"
 	quoteMarker := strings.Repeat("> ", preformatted.Border)
 	return quoteMarker + fence + "\n" + body + "\n" + fence

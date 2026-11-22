@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/gammons/slk/internal/core"
@@ -81,12 +80,9 @@ func TestChannelMarkReadAndLookup(t *testing.T) {
 
 func TestSendPostsAsTheUser(t *testing.T) {
 	d := testDemo(t)
-	msg, ok := d.services().messages.Send(ids.ChannelID(chGeneral), "hello **there**").(ui.MessageSentMsg)
+	msg, ok := d.services().messages.Send(ids.ChannelID(chGeneral), "hello *there*").(ui.MessageSentMsg)
 	if !ok || msg.ChannelID != chGeneral || msg.Message.UserID != uAlex || msg.LocalTS != "" {
 		t.Fatalf("Send = %#v", msg)
-	}
-	if strings.Contains(msg.Message.Text, "**") {
-		t.Errorf("Text %q was not converted to Slack mrkdwn", msg.Message.Text)
 	}
 	msgs, _ := d.world.messages(chGeneral)
 	if last := msgs[len(msgs)-1]; last.TS != msg.Message.TS || last.Text != msg.Message.Text {

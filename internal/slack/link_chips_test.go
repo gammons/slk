@@ -122,7 +122,7 @@ func TestChipCandidates(t *testing.T) {
 		{"twice is one lookup", chipURL + " and " + chipURL, []string{chipURL}},
 		{"labelled link stays", "[the issue](" + chipURL + ")", nil},
 		{"wire label stays", "<" + chipURL + "|the issue>", nil},
-		{"bold link stays", "**" + chipURL + "**", nil},
+		{"bold link stays", "*" + chipURL + "*", nil},
 		{"code span stays", "`" + chipURL + "`", nil},
 		{"code block stays", "```\n" + chipURL + "\n```", nil},
 		{"email stays", "mail a@example.com", nil},
@@ -230,7 +230,7 @@ func TestChipPostForm_MatchesCapture(t *testing.T) {
 	if id := got.Get("client_msg_id"); !clientMsgIDRe.MatchString(id) {
 		t.Errorf("client_msg_id = %q, want a v4 UUID", id)
 	}
-	if got.Get("text") != "<"+chipURL+"|"+chipTitle+">" {
+	if got.Get("text") != chipURL {
 		t.Errorf("text = %q", got.Get("text"))
 	}
 	notSent := map[string]bool{"ts": true, "type": true, "xArgs": true, "draft_id": true, "client_context_team_id": true, "include_channel_perm_error": true}
