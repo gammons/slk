@@ -634,6 +634,17 @@ type (
 	// after something rewrote them (a palette generator signals slk).
 	// The App registers them and reapplies the selected theme.
 	CustomThemesReloadedMsg struct{ Themes []styles.CustomTheme }
+
+	// CellMetricsChangedMsg tells the App the terminal's cell size in
+	// pixels changed and cmd/slk already re-pointed the image-encoding
+	// globals and the avatar cache. A terminal can report a transient
+	// cell size while its fonts settle shortly after launch (foot on a
+	// fractional-scaled output loads at the legacy scale first), and a
+	// monitor move or font zoom changes it mid-session. Every render
+	// cache that baked sixel pixels or image cell targets into its
+	// rows must be rebuilt, and the sixel painter must erase what it
+	// placed at the old size.
+	CellMetricsChangedMsg struct{ CellW, CellH int }
 )
 
 // autoScrollTickMsg is dispatched by tea.Tick while a drag is held near

@@ -1716,6 +1716,17 @@ func run() error {
 		p.Send(messages.AvatarReadyMsg{UserID: userID})
 	})
 
+	// On a sixel terminal, keep the cached cell size in pixels honest:
+	// the one-shot startup read races terminals that resolve their font
+	// scale after spawning the client (foot on a fractional-scaled
+	// output reports a 2x cell size for its first tens of milliseconds),
+	// and sixel encodes every image against it. Re-measure on the
+	// settle's SIGWINCH and re-point the encoders when it differs. The
+	// watcher must start after `p` exists; p.Send is goroutine-safe.
+	if proto == imgpkg.ProtoSixel {
+		go watchCellPixels(p.Send, avatarCache)
+	}
+
 	// Launch workspace connections in background goroutines
 	// Results are sent to the TUI via p.Send()
 	for _, ot := range orderedTokens {

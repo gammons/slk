@@ -15,6 +15,7 @@ import (
 	"image"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/gammons/slk/internal/debuglog"
 	imgpkg "github.com/gammons/slk/internal/image"
@@ -75,6 +76,14 @@ type Cache struct {
 	renders map[string]string      // userID -> rendered ANSI string
 	small   map[string]string      // userID -> SmallCols×SmallRows render
 	sixel   map[string]sixelAvatar // userID -> sixel image, when useSixel
+
+	// gen counts Invalidate calls. A preload started under one
+	// generation drops its result when the generation has moved on by
+	// the time it finishes: renders and sixel encodings are sized
+	// against the cell pixels measured at render time, so a late
+	// worker must not re-store renders encoded at the old size after
+	// the caches were cleared.
+	gen atomic.Uint64
 
 	// inflight tracks userIDs whose Preload is currently in-flight (or
 	// already rendered). Acts as a dedup gate so a hot render path
@@ -169,6 +178,28 @@ func (c *Cache) SetOnReady(fn func(userID string)) {
 	c.onReady = fn
 }
 
+// Invalidate drops every rendered avatar and releases the in-flight
+// dedup set, so the lazy Preload path re-fetches exactly as it would
+// for a user's first render. Call it when the terminal's cell size in
+// pixels changed: renders and sixel encodings are sized against that
+// measurement (the encoded pixel dimensions are the on-screen size),
+// so after it they must be rebuilt from the fetcher's sources, which
+// the disk cache serves without the network. Preloads already running
+// when Invalidate lands drop their results instead of re-storing
+// renders encoded at the old size.
+func (c *Cache) Invalidate() {
+	c.gen.Add(1)
+	c.mu.Lock()
+	c.renders = make(map[string]string)
+	c.small = make(map[string]string)
+	c.sixel = make(map[string]sixelAvatar)
+	c.mu.Unlock()
+	c.inflight.Range(func(key, _ any) bool {
+		c.inflight.Delete(key)
+		return true
+	})
+}
+
 // Preload enqueues a background download+render for an avatar. Bounded
 // by the worker pool (see avatarPreloadWorkers). Idempotent: repeated
 // calls for the same userID short-circuit via the inflight set. If the
@@ -211,6 +242,7 @@ func (c *Cache) preloadInner(userID, avatarURL string) {
 	if avatarURL == "" {
 		return
 	}
+	gen := c.gen.Load()
 	// Source size differs by protocol:
 	//   - half-block: (AvatarCols, AvatarRows*2) gives the renderer
 	//     exactly the pixel grid it samples, matching the original
@@ -245,6 +277,14 @@ func (c *Cache) preloadInner(userID, avatarURL string) {
 		sx = encodeSixel(userID, res.Img)
 	}
 	c.mu.Lock()
+	if gen != c.gen.Load() {
+		// The cell metrics changed while this preload ran: the render
+		// and sixel encoding above were built against the old pixel
+		// size. Drop them; a fresh preload (the lazy path re-runs on
+		// the next miss) encodes against the new size.
+		c.mu.Unlock()
+		return
+	}
 	c.renders[userID] = rendered
 	if sx.bytes != nil {
 		c.sixel[userID] = sx

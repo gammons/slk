@@ -27,6 +27,10 @@
 //	                            in-flight bookkeeping.
 //	messages.AvatarReadyMsg   - lazy avatar fetch landed:
 //	                            invalidate both pane caches.
+//	CellMetricsChangedMsg     - the terminal's cell size in pixels
+//	                            changed: drop every image-bearing
+//	                            render cache and force the painter
+//	                            and the renderer to repaint.
 //
 //	statusbar.CopiedMsg               - "Copied N chars"
 //	statusbar.CopiedClearMsg          - 2/3s expiry tick
@@ -312,6 +316,31 @@ var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}
 		a.threadPanel.HandleAvatarReady(m.UserID)
 		return nil, true
+
+	case CellMetricsChangedMsg:
+		// cmd/slk re-measured the terminal's cell size in pixels and
+		// already re-pointed the image encoders and the avatar cache.
+		// Rendered rows baked the old pixels in (sixel bytes, fallback
+		// rows, image cell targets), so every pane that renders images
+		// rebuilds its cache; the next frame's sixel plan is forced,
+		// which erases what the painter placed at the old size and
+		// repaints from the rebuilt caches. The erase can only cover
+		// cells, and pixels painted at the old size reached past their
+		// placement's footprint, so the terminal needs a full text
+		// redraw too: the duplicate WindowSizeMsg below is deduped by
+		// the resize arm (same dimensions), and bubbletea answers it
+		// with a whole-screen redraw.
+		for _, mp := range a.allWinModels() {
+			mp.InvalidateCache()
+		}
+		a.threadPanel.InvalidateCache()
+		a.sidebar.InvalidateCache()
+		a.forceSixelRepaint = true
+		debuglog.ImgRender("cell metrics changed to %dx%d px; pane render caches dropped", m.CellW, m.CellH)
+		w, h := a.width, a.height
+		return func() tea.Msg {
+			return tea.WindowSizeMsg{Width: w, Height: h}
+		}, true
 
 	case imgrender.ImageFailedMsg:
 		debuglog.ImgFetch("recv: kind=failed key=%s req_id=%d", m.Key, m.ReqID)
