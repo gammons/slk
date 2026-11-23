@@ -488,4 +488,10 @@ type ImageFetcher interface {
 	Prerendered(key string, cellTarget image.Point, proto imgpkg.Protocol) (imgpkg.Render, bool)
 	ConfigurePrerender(proto imgpkg.Protocol)
 	ConfigurePrerenderKitty(kr *imgpkg.KittyRenderer)
+	// InvalidatePrerender drops the prerendered encoded-image cache.
+	// The cache is keyed by (key, cellTarget, proto), so a cell-size
+	// change in pixels leaves entries whose encoded bytes no longer
+	// match their cell footprint; the host calls this when it
+	// re-points the image encoders (CellMetricsChangedMsg's handler).
+	InvalidatePrerender()
 }

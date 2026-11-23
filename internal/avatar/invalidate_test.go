@@ -2,7 +2,6 @@ package avatar
 
 import (
 	"testing"
-	"time"
 )
 
 // Invalidate drops every rendered avatar so the lazy Preload path
@@ -22,6 +21,13 @@ func TestInvalidate_ClearsRendersAndReleasesInflight(t *testing.T) {
 		t.Fatal("expected a half-block render before Invalidate")
 	}
 
+	// Seed an inflight entry the way a running Preload holds it (a
+	// PreloadSync bypasses the set, so this is the only way to observe
+	// its release deterministically): if Invalidate stopped clearing
+	// it, the lazy Preload path would stay deduped out and the avatar
+	// would never re-encode.
+	c.inflight.Store("U2", struct{}{})
+
 	c.Invalidate()
 
 	if _, _, ok := c.GetSixel("U1"); ok {
@@ -30,19 +36,8 @@ func TestInvalidate_ClearsRendersAndReleasesInflight(t *testing.T) {
 	if got := c.Get("U1"); got != "" {
 		t.Errorf("Get(U1) = %q after Invalidate, want empty", got)
 	}
-
-	// The inflight dedup was released too: a fresh Preload runs and
-	// lands again.
-	landed := make(chan struct{}, 1)
-	c.SetOnReady(func(string) { landed <- struct{}{} })
-	c.Preload("U1", url)
-	select {
-	case <-landed:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Preload after Invalidate never completed")
-	}
-	if _, _, ok := c.GetSixel("U1"); !ok {
-		t.Error("GetSixel did not answer after the post-Invalidate preload")
+	if _, ok := c.inflight.Load("U2"); ok {
+		t.Error("inflight kept an entry across Invalidate; the lazy Preload path would stay deduped out")
 	}
 }
 

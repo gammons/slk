@@ -28,9 +28,10 @@
 //	messages.AvatarReadyMsg   - lazy avatar fetch landed:
 //	                            invalidate both pane caches.
 //	CellMetricsChangedMsg     - the terminal's cell size in pixels
-//	                            changed: drop every image-bearing
-//	                            render cache and force the painter
-//	                            and the renderer to repaint.
+//	                            changed: re-point the image context,
+//	                            drop the encoded-image caches and
+//	                            force the painter and the renderer
+//	                            to repaint.
 //
 //	statusbar.CopiedMsg               - "Copied N chars"
 //	statusbar.CopiedClearMsg          - 2/3s expiry tick
@@ -59,6 +60,7 @@ package ui
 
 import (
 	"fmt"
+	"image"
 	"path/filepath"
 	"strings"
 	"time"
@@ -319,26 +321,41 @@ var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 
 	case CellMetricsChangedMsg:
 		// cmd/slk re-measured the terminal's cell size in pixels and
-		// already re-pointed the image encoders and the avatar cache.
-		// Rendered rows baked the old pixels in (sixel bytes, fallback
-		// rows, image cell targets), so every pane that renders images
-		// rebuilds its cache; the next frame's sixel plan is forced,
-		// which erases what the painter placed at the old size and
-		// repaints from the rebuilt caches. The erase can only cover
-		// cells, and pixels painted at the old size reached past their
-		// placement's footprint, so the terminal needs a full text
-		// redraw too -- that comes from cmd/slk sending tea.ClearScreen
-		// right after this message. Deliberately NOT a synthetic
-		// WindowSizeMsg: re-delivering a captured size races the real
-		// resize the cell change usually arrives with, and the resize
-		// arm would accept the stale dimensions as the terminal's.
-		for _, mp := range a.allWinModels() {
-			mp.InvalidateCache()
+		// already re-pointed the encoding globals (image.SetCellPixels)
+		// and the avatar cache. What still holds the old measurement:
+		//
+		//   - a.imageCtx.CellPixels, and the copies the pane renderers
+		//     hold: computeImageTarget, thumbnail selection and the
+		//     decode target size images from them. Re-pushing the
+		//     context also drops both panes' render caches (their
+		//     SetImageContext contract).
+		//   - the fetcher's prerendered cache: keyed by (key, cell
+		//     target, proto), none of which notice that the pixels per
+		//     cell moved, so a rebuilt pane would reuse sixel bytes
+		//     encoded at the old size.
+		//   - the image preview's memo: the same keying problem, so a
+		//     preview open across the change repaints old-size bytes.
+		//
+		// The next frame's sixel plan is forced, which erases what the
+		// painter placed at the old size and repaints from the rebuilt
+		// caches. The erase can only cover cells, and pixels painted at
+		// the old size reached past their placement's footprint, so the
+		// terminal needs a full text redraw too -- that comes from
+		// cmd/slk sending tea.ClearScreen right after this message.
+		// Deliberately NOT a synthetic WindowSizeMsg: re-delivering a
+		// captured size races the real resize the cell change usually
+		// arrives with, and the resize arm would accept the stale
+		// dimensions as the terminal's.
+		ctx := a.imageCtx
+		ctx.CellPixels = image.Pt(m.CellW, m.CellH)
+		a.SetImageContext(ctx)
+		if a.imageFetcher != nil {
+			a.imageFetcher.InvalidatePrerender()
 		}
-		a.threadPanel.InvalidateCache()
 		a.sidebar.InvalidateCache()
+		a.preview.InvalidateMemo()
 		a.forceSixelRepaint = true
-		debuglog.ImgRender("cell metrics changed to %dx%d px; pane render caches dropped", m.CellW, m.CellH)
+		debuglog.ImgRender("cell metrics changed to %dx%d px; image context re-pointed, encoded-image caches dropped", m.CellW, m.CellH)
 		return nil, true
 
 	case imgrender.ImageFailedMsg:
