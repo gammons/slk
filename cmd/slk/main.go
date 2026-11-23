@@ -1613,6 +1613,7 @@ func run() error {
 			UserGroups:       wctx.UserGroups(),
 			SelfUserGroups:   wctx.SelfUserGroups(),
 			SectionsProvider: sectionsProviderAdapter{store: wctx.SectionStore},
+			DefaultChannel:   snap.ResolveDefaultChannel(teamID),
 			// Ordered by reduceWorkspaceSwitched to run after
 			// ResetPresence and the activeTeamID update, so its
 			// UserDNDChangeMsg result isn't wiped or dropped as stale.
@@ -1894,6 +1895,7 @@ func run() error {
 				SectionsProvider: sectionsProviderAdapter{store: wctx.SectionStore},
 				InitialActive:    isInitial,
 				LastChannelID:    mostRecentlyVisitedChannel(wctx.LastVisitedByChannel),
+				DefaultChannel:   cfgSnap.ResolveDefaultChannel(wctx.TeamID),
 			})
 			// From here on every name the store learns reaches the UI.
 			// p.Send above has returned, so the Update loop has taken

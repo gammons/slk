@@ -14,7 +14,6 @@ import (
 
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/slackfmt"
-	"github.com/gammons/slk/internal/text"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 )
 
@@ -125,12 +124,9 @@ func (a *App) findChannelByID(id string) (core.ChannelFinderItem, bool) {
 // named the same is not a channel, and synthetic destinations are never
 // one.
 func matchChannelByName(items []core.ChannelFinderItem, name string) (core.ChannelFinderItem, bool) {
-	want := text.Fold(strings.TrimPrefix(name, "#"))
+	matches := core.ChannelNameMatcher(name)
 	for _, it := range items {
-		if it.Synthetic || (it.Type != "channel" && it.Type != "private") {
-			continue
-		}
-		if text.Fold(it.Name) == want {
+		if !it.Synthetic && matches(it.Type, it.Name) {
 			return it, true
 		}
 	}

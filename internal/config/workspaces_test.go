@@ -36,7 +36,7 @@ func TestIsTeamIDKey(t *testing.T) {
 func TestWorkspaceStateOnlyAllowList(t *testing.T) {
 	want := []string{
 		"TeamID", "Theme", "PermalinkDomains", "Order", "SidebarWidth",
-		"UseSlackSections", "Sections", "VersionTS", "Suppress",
+		"UseSlackSections", "Sections", "DefaultChannel", "VersionTS", "Suppress",
 	}
 	rt := reflect.TypeOf(Workspace{})
 	got := make([]string, rt.NumField())
@@ -64,6 +64,7 @@ func TestWorkspaceStateOnlyAllowList(t *testing.T) {
 		{name: "use slack sections", w: Workspace{UseSlackSections: &on}},
 		{name: "permalink domains", w: Workspace{PermalinkDomains: []string{"alias.slack.com"}}},
 		{name: "sections", w: Workspace{Sections: map[string]SectionDef{"eng": {}}}},
+		{name: "default channel", w: Workspace{DefaultChannel: "general"}},
 		{name: "suppress", w: Workspace{Suppress: []SuppressRule{{Author: "U1"}}}},
 		{name: "different team id", w: Workspace{TeamID: "T02OOOOOO"}},
 		{name: "slug key", key: "my-company", w: Workspace{VersionTS: "1795162663"}},

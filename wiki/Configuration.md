@@ -168,6 +168,7 @@ order   = 1                     # rail position; 1-based, used by 1-9 keys
 theme   = "dracula"             # overrides [appearance].theme
 use_slack_sections = false      # this workspace uses [sections.*] globs;
                                 # other workspaces still use Slack sections
+default_channel = "general"     # see "Default channel" below
 
 [workspaces.work.sections.Alerts]
 channels = ["alerts", "*-alerts"]
@@ -190,6 +191,24 @@ accent = "#50C878"
 background = "#1A1A2E"
 text = "#E0E0E0"
 ```
+
+## Default channel
+
+`[workspaces.<key>] default_channel` names the channel slk opens the first
+time that workspace is shown in a session:
+
+- at startup, in place of the channel you last visited there;
+- on the first switch to the workspace, in place of the first channel in the
+  sidebar.
+
+Switching back later returns to the channel you were last viewing in that
+workspace, or to the default if that channel is gone. A Slack link opened from
+the channel finder still goes to its own channel.
+
+The name is matched as `/open` matches it: a leading `#`, case and accents are
+ignored, and only channels and private channels you are a member of match,
+never a DM. A name that matches nothing is ignored, and slk behaves as if the
+key were not set.
 
 ## Deactivated users
 

@@ -1360,3 +1360,27 @@ func TestConfig_ClickOpensThread(t *testing.T) {
 		t.Error("click_opens_thread = false must read back as off")
 	}
 }
+
+func TestResolveDefaultChannel(t *testing.T) {
+	c := Config{Workspaces: map[string]Workspace{
+		"acme": {TeamID: "T01", DefaultChannel: " #42_all "},
+		"beta": {TeamID: "T02"},
+	}}
+	if got := c.ResolveDefaultChannel("T01"); got != "#42_all" {
+		t.Errorf("ResolveDefaultChannel(T01) = %q, want #42_all", got)
+	}
+	if got := c.ResolveDefaultChannel("T02"); got != "" {
+		t.Errorf("ResolveDefaultChannel(T02) = %q, want empty", got)
+	}
+	if got := c.ResolveDefaultChannel("TMISSING"); got != "" {
+		t.Errorf("ResolveDefaultChannel(TMISSING) = %q, want empty", got)
+	}
+}
+
+// default_channel reads back from a config file, per workspace.
+func TestConfig_DefaultChannel(t *testing.T) {
+	cfg := loadConfigString(t, "[workspaces.acme]\nteam_id = \"T01ABCDEF\"\ndefault_channel = \"#general\"\n")
+	if got := cfg.ResolveDefaultChannel("T01ABCDEF"); got != "#general" {
+		t.Errorf("default_channel = %q, want #general", got)
+	}
+}

@@ -407,6 +407,11 @@ type (
 		// workspace. Nil means "use config-glob behavior" (the App's
 		// sidebar reverts to its existing name-keyed buckets).
 		SectionsProvider sidebar.SectionsProvider
+		// DefaultChannel is the workspace's configured default_channel,
+		// matched by matchChannelByName. It is opened on the first switch
+		// to the workspace in a session, and when the channel last viewed
+		// there is gone.
+		DefaultChannel string
 		// RefreshPeerDND, if set, is appended to reduceWorkspaceSwitched's
 		// batch after the switch applies. It fetches DM peers' DND for
 		// this workspace and delivers results as UserDNDChangeMsg.
@@ -519,8 +524,14 @@ type (
 		// (from the persisted channel_visits table). On the InitialActive
 		// workspace the App opens this channel on startup instead of the
 		// sidebar's first entry, so a restart lands the user back where
-		// they were. Empty (e.g. first ever run) falls back to Channels[0].
+		// they were, unless DefaultChannel names a sidebar channel. Empty
+		// (e.g. first ever run) falls back to Channels[0].
 		LastChannelID string
+		// DefaultChannel is the workspace's configured default_channel,
+		// matched by matchChannelByName. On the InitialActive workspace it
+		// is opened in place of LastChannelID when it names a channel the
+		// sidebar shows.
+		DefaultChannel string
 	}
 	// CustomEmojisLoadedMsg is sent when a workspace's custom emoji list
 	// finishes loading in the background, after WorkspaceReadyMsg has
