@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+
+	"github.com/slack-go/slack"
 )
 
 // ErrUserGroupNotFound is returned by GetUserGroupInfo when Slack has no
@@ -26,10 +28,16 @@ type UserGroupInfo struct {
 // <!subteam^S…> mention. On an Enterprise Grid org-level session,
 // usergroups.list returns only the org's own groups, whatever team_id it
 // is given, so groups owned by a member workspace are reachable only
-// here, one ID per call.
+// here, one ID per call. An HTTP 429 comes back as a
+// *slack.RateLimitedError carrying Slack's Retry-After, so callers can
+// wait it out (WaitOutRateLimit).
 func (c *Client) GetUserGroupInfo(ctx context.Context, id string) (UserGroupInfo, error) {
 	raw, err := c.postForm(ctx, "subteams.info", url.Values{"usergroup": {id}})
 	if err != nil {
+		var rl *rateLimitError
+		if errors.As(err, &rl) {
+			return UserGroupInfo{}, &slack.RateLimitedError{RetryAfter: rl.retryAfter}
+		}
 		return UserGroupInfo{}, err
 	}
 	var resp struct {

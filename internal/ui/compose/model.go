@@ -1205,7 +1205,24 @@ func (m *Model) sendMentions() []sendMention {
 	// wire form <!subteam^SID|@handle> so the optimistically-added
 	// echo renders the handle even if the server echo arrives before
 	// usergroups.list refreshes this workspace's map.
-	for id, handle := range m.userGroups {
+	// On Enterprise Grid two member workspaces can each have a group
+	// with the same handle (#214). Keep one per handle, lowest ID: the
+	// labeled replacement contains "@handle", so a second entry would
+	// match inside it and nest one token in another. Which group wins
+	// is arbitrary; preferring the current workspace's would need the
+	// owning team per group.
+	ids := make([]string, 0, len(m.userGroups))
+	for id := range m.userGroups {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	seenHandle := map[string]bool{}
+	for _, id := range ids {
+		handle := m.userGroups[id]
+		if seenHandle[handle] {
+			continue
+		}
+		seenHandle[handle] = true
 		entries = append(entries, sendMention{'@', handle, "<!subteam^" + id + "|@" + handle + ">", rankUserGroup})
 	}
 

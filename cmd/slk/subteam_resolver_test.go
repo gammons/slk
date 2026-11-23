@@ -49,15 +49,29 @@ type fakeSubteamLookup struct {
 	calls map[string]int
 	res   map[string]slackclient.UserGroupInfo
 	errs  map[string]error
+	// block holds a lookup of the ID until the channel is closed.
+	block map[string]chan struct{}
+	// limitOnce answers the ID's first lookup with a 429 carrying
+	// this Retry-After.
+	limitOnce map[string]time.Duration
 }
 
 func (f *fakeSubteamLookup) lookup(_ context.Context, id string) (slackclient.UserGroupInfo, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if f.calls == nil {
 		f.calls = map[string]int{}
 	}
 	f.calls[id]++
+	gate := f.block[id]
+	f.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if d, ok := f.limitOnce[id]; ok && f.calls[id] == 1 {
+		return slackclient.UserGroupInfo{}, &slack.RateLimitedError{RetryAfter: d}
+	}
 	if err := f.errs[id]; err != nil {
 		return slackclient.UserGroupInfo{}, err
 	}
@@ -71,6 +85,18 @@ func (f *fakeSubteamLookup) count(id string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.calls[id]
+}
+
+func waitSubteamLookup(t *testing.T, f *fakeSubteamLookup, id string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if f.count(id) > 0 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("%s was never looked up", id)
 }
 
 func waitSubteamsIdle(t *testing.T, r *subteamResolver) {
@@ -196,4 +222,129 @@ func TestPublishUserGroups_SendsCurrentMaps(t *testing.T) {
 		t.Fatalf("sent %#v, want both groups and self membership for E1", got[0])
 	}
 	w.PublishUserGroups(nil)
+}
+
+// An ID resolved earlier in a batch stays pending until its handle is
+// merged, so a request for it while a later lookup of the same batch is
+// still running doesn't fetch it again.
+func TestSubteamResolver_ResolvedIDStaysPendingUntilMerged(t *testing.T) {
+	w := &WorkspaceContext{}
+	gate := make(chan struct{})
+	f := &fakeSubteamLookup{
+		res: map[string]slackclient.UserGroupInfo{
+			"S0A": {ID: "S0A", Handle: "a"},
+			"S0B": {ID: "S0B", Handle: "b"},
+		},
+		block: map[string]chan struct{}{"S0B": gate},
+	}
+	r, _, _ := newTestSubteamResolver(f, w)
+
+	r.Request([]string{"S0A", "S0B"})
+	waitSubteamLookup(t, f, "S0B") // S0A done, its handle not yet merged
+	r.Request([]string{"S0A"})
+	close(gate)
+	waitSubteamsIdle(t, r)
+
+	if n := f.count("S0A"); n != 1 {
+		t.Fatalf("S0A looked up %d times, want 1", n)
+	}
+	if got := w.UserGroups(); got["S0A"] != "a" || got["S0B"] != "b" {
+		t.Fatalf("map = %v, want both groups", got)
+	}
+}
+
+// A queued ID whose handle arrives some other way (usergroups.list)
+// before the worker reaches it is not looked up.
+func TestSubteamResolver_SkipsIDKnownBeforeLookup(t *testing.T) {
+	w := &WorkspaceContext{}
+	gate := make(chan struct{})
+	f := &fakeSubteamLookup{
+		res:   map[string]slackclient.UserGroupInfo{"S0A": {ID: "S0A", Handle: "a"}},
+		block: map[string]chan struct{}{"S0A": gate},
+	}
+	r, _, _ := newTestSubteamResolver(f, w)
+
+	r.Request([]string{"S0A", "S0B"})
+	waitSubteamLookup(t, f, "S0A")
+	w.MergeUserGroups(map[string]string{"S0B": "b-from-list"})
+	close(gate)
+	waitSubteamsIdle(t, r)
+
+	if n := f.count("S0B"); n != 0 {
+		t.Fatalf("S0B looked up %d times after it became known, want 0", n)
+	}
+}
+
+// A 429 publishes what the batch already found, waits out Slack's
+// Retry-After without trying the rest of the batch, then retries the
+// same ID and carries on: nothing is dropped.
+func TestSubteamResolver_RateLimitWaitsAndRetries(t *testing.T) {
+	w := &WorkspaceContext{}
+	f := &fakeSubteamLookup{
+		res: map[string]slackclient.UserGroupInfo{
+			"S0A": {ID: "S0A", Handle: "a"},
+			"S0B": {ID: "S0B", Handle: "b"},
+			"S0C": {ID: "S0C", Handle: "c"},
+		},
+		limitOnce: map[string]time.Duration{"S0B": 3 * time.Second},
+	}
+	r, published, mu := newTestSubteamResolver(f, w)
+	var waited []time.Duration
+	var cDuringWait int
+	var aPublishedBeforeWait bool
+	r.wait = func(_ context.Context, err error) (bool, error) {
+		var rl *slack.RateLimitedError
+		if !errors.As(err, &rl) {
+			t.Errorf("wait got %v, want a RateLimitedError", err)
+		}
+		waited = append(waited, rl.RetryAfter)
+		cDuringWait = f.count("S0C")
+		mu.Lock()
+		aPublishedBeforeWait = len(*published) > 0 && (*published)[len(*published)-1]["S0A"] == "a"
+		mu.Unlock()
+		return true, nil
+	}
+
+	r.Request([]string{"S0A", "S0B", "S0C"})
+	waitSubteamsIdle(t, r)
+
+	if !slices.Equal(waited, []time.Duration{3 * time.Second}) {
+		t.Fatalf("waited %v, want [3s]", waited)
+	}
+	if cDuringWait != 0 {
+		t.Errorf("S0C looked up during the cooldown")
+	}
+	if !aPublishedBeforeWait {
+		t.Errorf("S0A, resolved before the 429, was not published before the wait")
+	}
+	if n := f.count("S0B"); n != 2 {
+		t.Errorf("S0B looked up %d times, want 2 (429, then retry)", n)
+	}
+	got := w.UserGroups()
+	for id, h := range map[string]string{"S0A": "a", "S0B": "b", "S0C": "c"} {
+		if got[id] != h {
+			t.Fatalf("map = %v, want all three groups", got)
+		}
+	}
+}
+
+// A cancelled cooldown stops the worker and leaves nothing pending, so
+// a later request can queue the IDs again.
+func TestSubteamResolver_RateLimitCancelledStopsCleanly(t *testing.T) {
+	w := &WorkspaceContext{}
+	f := &fakeSubteamLookup{limitOnce: map[string]time.Duration{"S0A": time.Second}}
+	r, _, _ := newTestSubteamResolver(f, w)
+	r.wait = func(context.Context, error) (bool, error) { return true, context.Canceled }
+
+	r.Request([]string{"S0A", "S0B"})
+	waitSubteamsIdle(t, r)
+
+	if n := f.count("S0B"); n != 0 {
+		t.Errorf("S0B looked up %d times after the wait was cancelled, want 0", n)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.pending) != 0 || r.running {
+		t.Fatalf("pending = %v, running = %v after cancel, want none and stopped", r.pending, r.running)
+	}
 }

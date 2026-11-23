@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/slack-go/slack"
+
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/ui/messages"
 )
@@ -79,6 +81,11 @@ const subteamLookupTimeout = 10 * time.Second
 // member workspace rendered as "@group". Unknown IDs seen in messages are
 // looked up one at a time through subteams.info in a single background
 // worker, merged into the workspace's map, and published.
+//
+// An ID stays pending from Request until its handle is merged (or its
+// lookup has failed), so it is never fetched twice at once. A 429
+// pauses the worker for Slack's Retry-After, then retries the same ID;
+// the IDs behind it stay queued.
 type subteamResolver struct {
 	ctx     context.Context
 	lookup  func(context.Context, string) (slackclient.UserGroupInfo, error)
@@ -86,6 +93,9 @@ type subteamResolver struct {
 	merge   func(map[string]string) map[string]string
 	publish func(map[string]string)
 	logf    func(string, ...any)
+	// wait sleeps out a rate-limit error on ctx; slackclient's
+	// WaitOutRateLimit, swapped in tests.
+	wait func(context.Context, error) (bool, error)
 
 	mu      sync.Mutex
 	queue   []string
@@ -102,6 +112,7 @@ func newSubteamResolver(ctx context.Context, lookup func(context.Context, string
 		merge:   merge,
 		publish: publish,
 		logf:    logf,
+		wait:    slackclient.WaitOutRateLimit,
 		pending: map[string]bool{},
 		missing: map[string]bool{},
 	}
@@ -113,9 +124,11 @@ func (r *subteamResolver) Request(ids []string) {
 	if r == nil || len(ids) == 0 {
 		return
 	}
-	known := r.known()
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// Read the map under r.mu: the worker merges before it clears
+	// pending, so an ID is always in one or the other here.
+	known := r.known()
 	for _, id := range ids {
 		if known[id] != "" || r.pending[id] || r.missing[id] {
 			continue
@@ -149,49 +162,110 @@ func (r *subteamResolver) run() {
 		}
 		r.mu.Unlock()
 
-		found := map[string]string{}
-		for _, id := range batch {
-			handle, missing := r.resolve(id)
-			r.mu.Lock()
-			delete(r.pending, id)
-			if missing {
-				r.missing[id] = true
-			}
-			r.mu.Unlock()
-			if handle != "" {
-				found[id] = handle
-			}
-		}
-		if len(found) > 0 {
-			r.logf("resolved %d of %d usergroups via subteams.info", len(found), len(batch))
-			r.publish(r.merge(found))
+		if !r.resolveBatch(batch) {
+			return
 		}
 	}
 }
 
+// resolveBatch looks the batch's IDs up in order. Found handles are
+// merged and published before their IDs leave pending: at the end of
+// the batch, and before sleeping out a 429 so they aren't held back for
+// the cooldown. It returns false, with the worker stopped and nothing
+// left pending, when the cooldown is cut short by the context.
+func (r *subteamResolver) resolveBatch(batch []string) bool {
+	found := map[string]string{}
+	var done []string
+	flush := func() {
+		if len(found) > 0 {
+			r.logf("resolved %d usergroups via subteams.info", len(found))
+			r.publish(r.merge(found))
+			found = map[string]string{}
+		}
+		r.mu.Lock()
+		for _, id := range done {
+			delete(r.pending, id)
+		}
+		r.mu.Unlock()
+		done = done[:0]
+	}
+
+	for i := 0; i < len(batch); {
+		id := batch[i]
+		if r.known()[id] != "" {
+			// usergroups.list (or an earlier batch) got there first.
+			done = append(done, id)
+			i++
+			continue
+		}
+		handle, missing, limited := r.resolve(id)
+		if limited != nil {
+			flush()
+			if _, err := r.wait(r.ctx, limited); err != nil {
+				r.stop(batch[i:])
+				return false
+			}
+			continue // retry the same ID
+		}
+		if missing {
+			r.mu.Lock()
+			r.missing[id] = true
+			r.mu.Unlock()
+		}
+		if handle != "" {
+			found[id] = handle
+		}
+		done = append(done, id)
+		i++
+	}
+	flush()
+	return true
+}
+
+// stop ends the worker after a cancelled cooldown, dropping the
+// unfinished IDs and everything queued so a later Request can retry
+// them.
+func (r *subteamResolver) stop(unfinished []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, id := range unfinished {
+		delete(r.pending, id)
+	}
+	for _, id := range r.queue {
+		delete(r.pending, id)
+	}
+	r.queue = r.queue[:0]
+	r.running = false
+}
+
 // resolve looks one ID up. missing reports a definitive "no such group",
-// which is remembered; any other failure is logged and left retryable by
-// a later Request.
-func (r *subteamResolver) resolve(id string) (handle string, missing bool) {
+// which is remembered. limited is a 429 to wait out before retrying the
+// ID. Any other failure is logged and left retryable by a later Request.
+func (r *subteamResolver) resolve(id string) (handle string, missing bool, limited error) {
 	if r.ctx.Err() != nil {
-		return "", false
+		return "", false, nil
 	}
 	ctx, cancel := context.WithTimeout(r.ctx, subteamLookupTimeout)
 	defer cancel()
 	g, err := r.lookup(ctx, id)
 	if errors.Is(err, slackclient.ErrUserGroupNotFound) {
-		return "", true
+		return "", true, nil
+	}
+	var rl *slack.RateLimitedError
+	if errors.As(err, &rl) {
+		r.logf("subteams.info %s rate limited, retrying after %s", id, rl.RetryAfter)
+		return "", false, err
 	}
 	if err != nil {
 		r.logf("subteams.info %s failed: %v", id, err)
-		return "", false
+		return "", false, nil
 	}
 	handle = g.Handle
 	if handle == "" {
 		handle = slugifyHandle(g.Name)
 	}
 	if handle == "" {
-		return "", true
+		return "", true, nil
 	}
-	return handle, false
+	return handle, false, nil
 }

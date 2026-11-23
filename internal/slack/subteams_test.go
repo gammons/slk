@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
+
+	"github.com/slack-go/slack"
 )
 
 func TestGetUserGroupInfo(t *testing.T) {
@@ -56,5 +59,25 @@ func TestGetUserGroupInfo(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A 429 must reach the caller as slack-go's RateLimitedError with
+// Slack's Retry-After, so the resolver can wait it out and retry
+// instead of treating it as a plain failure.
+func TestGetUserGroupInfo_RateLimited(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "7")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	_, err := newTestClient(srv).GetUserGroupInfo(context.Background(), "S0SRE")
+	var rl *slack.RateLimitedError
+	if !errors.As(err, &rl) {
+		t.Fatalf("err = %v (%T), want *slack.RateLimitedError", err, err)
+	}
+	if rl.RetryAfter != 7*time.Second {
+		t.Fatalf("RetryAfter = %v, want 7s", rl.RetryAfter)
 	}
 }
