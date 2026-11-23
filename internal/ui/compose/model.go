@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
@@ -615,6 +616,44 @@ func (m Model) cursorPosition() int {
 	return pos
 }
 
+// setInputCursor places the textarea cursor at byteOffset in the current
+// value. Completions rebuild the buffer with SetValue, which leaves the
+// cursor at the end of the text; this puts it back at the end of the
+// inserted completion, on the correct line of a multi-line draft.
+func (m *Model) setInputCursor(byteOffset int) {
+	val := m.input.Value()
+	if byteOffset < 0 {
+		byteOffset = 0
+	}
+	if byteOffset > len(val) {
+		byteOffset = len(val)
+	}
+	prefix := val[:byteOffset]
+	line := strings.Count(prefix, "\n")
+	lineStart := 0
+	if i := strings.LastIndexByte(prefix, '\n'); i >= 0 {
+		lineStart = i + 1
+	}
+	col := utf8.RuneCountInString(prefix[lineStart:])
+	if n := m.input.LineCount(); n > 0 && line >= n {
+		line = n - 1
+	}
+
+	m.input.MoveToBegin()
+	// CursorDown steps through visual rows, so a soft-wrapped line takes
+	// several calls before the logical line advances. Stop if a step
+	// cannot move (the cursor is already as far down as the buffer goes).
+	for m.input.Line() < line {
+		prevLine, prevCol := m.input.Line(), m.input.Column()
+		m.input.CursorDown()
+		if m.input.Line() == prevLine && m.input.Column() == prevCol {
+			break
+		}
+	}
+	m.input.SetCursorColumn(col)
+	m.dirty()
+}
+
 // composeMaxVisibleRows caps the on-screen height of the compose box.
 // Beyond this, the textarea scrolls internally rather than pushing the
 // messages pane off-screen. Decoupled from textarea.MaxHeight (the
@@ -735,8 +774,10 @@ func (m *Model) insertMention(result *mentionpicker.MentionResult) {
 	if pos < len(val) {
 		after = val[pos:]
 	}
-	newText := before + "@" + result.DisplayName + " " + after
-	m.input.SetValue(newText)
+	inserted := "@" + result.DisplayName + " "
+	m.input.SetValue(before + inserted + after)
+	// SetValue parks the cursor at the end of the whole draft.
+	m.setInputCursor(len(before) + len(inserted))
 }
 
 // handleChannelKey processes key events when the channel picker is active.
@@ -831,8 +872,10 @@ func (m *Model) insertChannel(result *channelpicker.ChannelResult) {
 	if pos < len(val) {
 		after = val[pos:]
 	}
-	newText := before + "#" + result.Name + " " + after
-	m.input.SetValue(newText)
+	inserted := "#" + result.Name + " "
+	m.input.SetValue(before + inserted + after)
+	// SetValue parks the cursor at the end of the whole draft.
+	m.setInputCursor(len(before) + len(inserted))
 }
 
 // SetChannels provides the list of workspace channels for # autocomplete.
@@ -1577,8 +1620,10 @@ func (m *Model) insertEmoji(name string) {
 	if pos < len(val) {
 		after = val[pos:]
 	}
-	newText := before + ":" + name + ": " + after
-	m.input.SetValue(newText)
+	inserted := ":" + name + ": "
+	m.input.SetValue(before + inserted + after)
+	// SetValue parks the cursor at the end of the whole draft.
+	m.setInputCursor(len(before) + len(inserted))
 }
 
 // formatChipSize formats a byte count as "12 KB", "3.4 MB", or "<1 KB".
