@@ -129,7 +129,16 @@ func applyCellPixels(send func(tea.Msg), avatars *avatar.Cache, w, h int) bool {
 	if avatars != nil {
 		avatars.Invalidate()
 	}
+	// CellMetricsChangedMsg first: the caches drop before the next
+	// frame renders. tea.ClearScreen() is a Msg the event loop answers
+	// with a whole-screen redraw, which restores the text the erase
+	// blanks under the old, oversized pixels. Never re-deliver a
+	// captured WindowSizeMsg here: it races the real resize the cell
+	// change usually arrives with, and the resize arm would accept the
+	// stale dimensions as the terminal's, leaving the app laid out for
+	// a screen that no longer matches.
 	send(ui.CellMetricsChangedMsg{CellW: w, CellH: h})
+	send(tea.ClearScreen())
 	return true
 }
 

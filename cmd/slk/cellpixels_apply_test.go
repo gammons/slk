@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -33,8 +34,8 @@ func TestApplyCellPixels(t *testing.T) {
 	if w, h := imgpkg.MeasuredCellPixels(); w != 9 || h != 20 {
 		t.Errorf("MeasuredCellPixels() = %dx%d, want 9x20", w, h)
 	}
-	if len(sent) != 1 {
-		t.Fatalf("sent %d messages, want 1", len(sent))
+	if len(sent) != 2 {
+		t.Fatalf("sent %d messages, want 2", len(sent))
 	}
 	changed, ok := sent[0].(ui.CellMetricsChangedMsg)
 	if !ok {
@@ -43,11 +44,19 @@ func TestApplyCellPixels(t *testing.T) {
 	if changed.CellW != 9 || changed.CellH != 20 {
 		t.Errorf("CellMetricsChangedMsg = %dx%d, want 9x20", changed.CellW, changed.CellH)
 	}
+	// The clear comes right after the metrics message: the renderer's
+	// whole-screen redraw is what restores the text the erase blanks.
+	if len(sent) != 2 {
+		t.Fatalf("sent %d messages, want 2 (metrics + clear)", len(sent))
+	}
+	if !reflect.DeepEqual(sent[1], tea.ClearScreen()) {
+		t.Errorf("second message = %T, want tea.ClearScreen()'s msg", sent[1])
+	}
 
 	if applyCellPixels(send, nil, 9, 20) {
 		t.Error("applyCellPixels applied an unchanged size again")
 	}
-	if len(sent) != 1 {
-		t.Errorf("sent %d messages after the repeat, want 1", len(sent))
+	if len(sent) != 2 {
+		t.Errorf("sent %d messages after the repeat, want 2", len(sent))
 	}
 }

@@ -327,9 +327,11 @@ var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// repaints from the rebuilt caches. The erase can only cover
 		// cells, and pixels painted at the old size reached past their
 		// placement's footprint, so the terminal needs a full text
-		// redraw too: the duplicate WindowSizeMsg below is deduped by
-		// the resize arm (same dimensions), and bubbletea answers it
-		// with a whole-screen redraw.
+		// redraw too -- that comes from cmd/slk sending tea.ClearScreen
+		// right after this message. Deliberately NOT a synthetic
+		// WindowSizeMsg: re-delivering a captured size races the real
+		// resize the cell change usually arrives with, and the resize
+		// arm would accept the stale dimensions as the terminal's.
 		for _, mp := range a.allWinModels() {
 			mp.InvalidateCache()
 		}
@@ -337,10 +339,7 @@ var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		a.sidebar.InvalidateCache()
 		a.forceSixelRepaint = true
 		debuglog.ImgRender("cell metrics changed to %dx%d px; pane render caches dropped", m.CellW, m.CellH)
-		w, h := a.width, a.height
-		return func() tea.Msg {
-			return tea.WindowSizeMsg{Width: w, Height: h}
-		}, true
+		return nil, true
 
 	case imgrender.ImageFailedMsg:
 		debuglog.ImgFetch("recv: kind=failed key=%s req_id=%d", m.Key, m.ReqID)
