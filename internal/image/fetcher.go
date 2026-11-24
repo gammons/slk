@@ -187,6 +187,19 @@ func (f *Fetcher) ConfigurePrerenderKitty(kr *KittyRenderer) {
 	f.prerenderKitty = kr
 }
 
+// InvalidatePrerender drops every prerendered encoded image. Call it
+// when the terminal's cell size in pixels changed: the cache is keyed
+// by (key, cellTarget, proto), and a payload encoded for the old pixel
+// size still matches that key after the change, so a rebuilt pane would
+// reuse bytes that paint at the wrong size. The swap is the same move
+// ConfigurePrerender uses: workers that started before it captured the
+// old map and their stores are harmlessly GC'd.
+func (f *Fetcher) InvalidatePrerender() {
+	f.prerenderMu.Lock()
+	f.prerendered = &sync.Map{}
+	f.prerenderMu.Unlock()
+}
+
 // Prerendered returns a previously-prepared Render for (key, cellTarget,
 // proto), or (zero, false) if none. Safe to call from the UI thread; pure
 // map lookup, no decode, no encode.
