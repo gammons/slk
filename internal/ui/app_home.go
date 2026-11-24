@@ -9,6 +9,7 @@ package ui
 import (
 	"io"
 	"strconv"
+	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -45,6 +46,8 @@ func (a *App) fetchAppHomeCmd(teamID, channelID, channelName string, autoShow bo
 	a.appHome.Clear()
 	a.appHomeChannelID = channelID
 	a.appHomeAutoShow = autoShow
+	// Another conversation's press must not keep animating here.
+	a.clearAppHomeBusy()
 	a.appHome.SetChannelName(channelName)
 	svc := a.appHomeSvc
 	return func() tea.Msg {
@@ -60,6 +63,94 @@ func (a *App) clearAppHome() {
 	a.appHome.Clear()
 	a.appHomeChannelID = ""
 	a.appHomeAutoShow = false
+	a.clearAppHomeBusy()
+}
+
+// appHomeBusyState is the status-bar progress dots for a pressed Home
+// button: how many of its refetches are still outstanding, the current
+// dot count, the toast identity (a newer message replaces the dots and
+// is never cleared by them), and whether a tick chain is armed.
+type appHomeBusyState struct {
+	// gen numbers presses; a refetch counts toward the dots only when it
+	// carries the generation of the press that asked for it.
+	gen       uint64
+	pending   int
+	dots      int
+	toastSeq  uint64
+	tickArmed bool
+}
+
+// appHomeBusyText is the in-flight indicator shown while a pressed
+// button's view is being refetched.
+func appHomeBusyText(dots int) string {
+	return "Updating app view" + strings.Repeat(".", dots)
+}
+
+// startAppHomeBusy begins the status-bar dots for a press: the immediate
+// refetch and the delayed follow-up are both pending. A second press
+// before the first finishes adds its two, so neither press's loads end
+// the dots early; only the first press starts the tick chain.
+func (a *App) startAppHomeBusy() (tea.Cmd, uint64) {
+	a.appHomeBusy.gen++
+	a.appHomeBusy.pending = 2
+	a.appHomeBusy.dots = 1
+	toastUntilReplaced(a, appHomeBusyText(a.appHomeBusy.dots))
+	a.appHomeBusy.toastSeq = a.statusbar.ToastSeq()
+	seq := a.appHomeBusy.gen
+	if a.appHomeBusy.tickArmed {
+		return nil, seq
+	}
+	a.appHomeBusy.tickArmed = true
+	return tea.Tick(appHomeSpinnerInterval, func(time.Time) tea.Msg {
+		return appHomeSpinnerMsg{}
+	}), seq
+}
+
+// finishAppHomeFetch records one of the current press's refetches
+// landing, ending the indicator when the last one has. A result from an
+// earlier press (another generation) belongs to a superseded animation
+// and is ignored.
+func (a *App) finishAppHomeFetch(seq uint64) {
+	if seq == 0 || seq != a.appHomeBusy.gen || a.appHomeBusy.pending == 0 {
+		return
+	}
+	a.appHomeBusy.pending--
+	if a.appHomeBusy.pending == 0 {
+		a.clearAppHomeBusyToast()
+	}
+}
+
+// appHomeFetchCmd runs svc.Fetch and tags the resulting AppHomeLoadedMsg
+// with the press generation it belongs to.
+func appHomeFetchCmd(svc core.AppHomeService, teamID, channelID string, seq uint64) tea.Cmd {
+	return func() tea.Msg {
+		msg := svc.Fetch(teamID, ids.ChannelID(channelID))
+		if loaded, ok := msg.(AppHomeLoadedMsg); ok {
+			loaded.Seq = seq
+			return loaded
+		}
+		return msg
+	}
+}
+
+// clearAppHomeBusy stops the indicator (the press was abandoned or its
+// conversation left).
+func (a *App) clearAppHomeBusy() {
+	a.appHomeBusy.pending = 0
+	// tickArmed stays set: an in-flight tick sees pending == 0 and ends
+	// the chain itself. Clearing it here would let a press within the
+	// tick interval start a second chain and run the dots at double
+	// speed.
+	a.clearAppHomeBusyToast()
+}
+
+// clearAppHomeBusyToast clears the dots if they are still the toast on
+// screen; a newer message replaces them and stays.
+func (a *App) clearAppHomeBusyToast() {
+	if a.appHomeBusy.toastSeq != 0 && a.statusbar.ToastSeq() == a.appHomeBusy.toastSeq {
+		a.statusbar.SetToast("")
+	}
+	a.appHomeBusy.toastSeq = 0
 }
 
 // appHomeAvailable reports whether the active conversation has a Home
