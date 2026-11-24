@@ -199,6 +199,9 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// Key the row on the bot_id and resolve its avatar/name via bots.info,
 	// mirroring the fetch path's messageAuthor (cmd/slk/users.go).
 	authorID := h.messageAuthor(userID, botID, username)
+	if h.wsCtx != nil {
+		h.wsCtx.Subteams.Request(subteamIDsInMessage(text, blocks, attachments))
+	}
 	room := h.takeRoom(channelID, ts)
 	// Synchronous, so the channel's row and type exist before the writes
 	// below. The UI hears of it only after the unread write.

@@ -325,3 +325,25 @@ func (db *DB) queryMessages(query string, args ...any) ([]Message, error) {
 	}
 	return messages, rows.Err()
 }
+
+// SubteamMentionTexts returns the text of the workspace's cached,
+// undeleted messages that mention a usergroup, so their handles can be
+// resolved before the messages are next shown.
+func (db *DB) SubteamMentionTexts(workspaceID string) ([]string, error) {
+	rows, err := db.conn.Query(`
+		SELECT text FROM messages
+		WHERE workspace_id = ? AND is_deleted = 0 AND text LIKE '%<!subteam^%'`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var texts []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		texts = append(texts, t)
+	}
+	return texts, rows.Err()
+}
