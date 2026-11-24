@@ -131,12 +131,21 @@ func (a *App) userProfileLive() userprofile.Live {
 	if a.avatarFn != nil {
 		avatar = a.avatarFn(userID)
 	}
+	var sxKey string
+	var sxBytes []byte
+	// Read only after Avatar has started any load it needed, so this is
+	// a lookup: both come from the same preload.
+	if avatar != "" && a.sixelAvatarFn != nil {
+		sxKey, sxBytes, _ = a.sixelAvatarFn(userID)
+	}
 	presence, _ := a.sidebar.PresenceByUser(userID)
 	return userprofile.Live{
-		Avatar:   avatar,
-		Presence: presence,
-		Status:   a.presence.peers[userID],
-		Now:      a.now(),
+		Avatar:         avatar,
+		AvatarSixelKey: sxKey,
+		AvatarSixel:    sxBytes,
+		Presence:       presence,
+		Status:         a.presence.peers[userID],
+		Now:            a.now(),
 	}
 }
 

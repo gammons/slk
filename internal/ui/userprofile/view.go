@@ -8,6 +8,7 @@ import (
 
 	"github.com/gammons/slk/internal/bubbles/chrome"
 	slkemoji "github.com/gammons/slk/internal/emoji"
+	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/overlay"
 	"github.com/gammons/slk/internal/ui/peerstatus"
@@ -43,6 +44,10 @@ type boxLayout struct {
 	iconRow, iconCol int
 	// huddleRow/huddleCol is the huddle row's 📋.
 	huddleRow, huddleCol int
+	// avatarRow/avatarCol is the avatar's top-left cell, -1 when this
+	// frame draws no sixel avatar (the half-block one is text, which
+	// needs no placement).
+	avatarRow, avatarCol int
 }
 
 // BoxSize returns the outer dimensions of the box the last frame drew,
@@ -87,22 +92,51 @@ func (m *Model) ClickAt(termW, termH, x, y int) bool {
 func drawnWidth(s string) int { return lipgloss.Width(s) }
 
 // ViewOverlay composites the modal onto background. Returns background
-// unchanged when hidden.
+// unchanged when hidden. When the live input carries a sixel avatar, it
+// also records where the box (and so the avatar) landed on screen, for
+// the App's sixel collector.
 func (m *Model) ViewOverlay(termW, termH int, background string, live Live) string {
 	if !m.visible {
 		return background
 	}
 	m.lastLive = live
-	box := m.layout(termW, termH, live).box
+	l := m.layout(termW, termH, live)
+	box := l.box
 	if box == "" {
+		m.lastSixel = nil
 		return background
 	}
+	m.lastSixel = m.avatarPaint(termW, termH, l, live)
 	result := overlay.DimmedOverlay(termW, termH, background, box, 0.5)
 	lines := strings.Split(result, "\n")
 	if len(lines) > termH {
 		lines = lines[:termH]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// avatarPaint is the placement the painter draws the avatar's sixel
+// image at, in absolute screen coordinates (0-based): where the modal
+// box lands (overlay.Centered, the formula DimmedOverlay composites
+// with) plus the box-local spot layout recorded. The footprint comes
+// from the half-block fallback's own shape, the same way the panes
+// derive it. nil unless the live input carries a loaded avatar with
+// sixel bytes — otherwise the half-block avatar draws as text and
+// nothing is placed.
+func (m *Model) avatarPaint(termW, termH int, l boxLayout, live Live) *imgpkg.SixelPaint {
+	if !drawsSixelAvatar(live) {
+		return nil
+	}
+	fallback := strings.Split(live.Avatar, "\n")
+	originX, originY := overlay.Centered(termW, termH, lipgloss.Width(l.box), lipgloss.Height(l.box))
+	return &imgpkg.SixelPaint{
+		Key:   live.AvatarSixelKey,
+		Row:   originY + l.avatarRow,
+		Col:   originX + l.avatarCol,
+		Rows:  len(fallback),
+		Cols:  lipgloss.Width(fallback[0]),
+		Bytes: live.AvatarSixel,
+	}
 }
 
 // headerName resolves the name shown in the title row: display name,
@@ -226,7 +260,7 @@ func (m *Model) layout(termW, termH int, live Live) boxLayout {
 	s.Box = s.Box.Padding(0, 1) // the card's own padding
 	box := chrome.Frame{Title: "Profile", Body: body, Footer: footer}.Render(s, boxW)
 
-	l := boxLayout{box: box, iconRow: -1, huddleRow: -1}
+	l := boxLayout{box: box, iconRow: -1, huddleRow: -1, avatarRow: -1, avatarCol: -1}
 	if iconBodyIdx >= 0 {
 		// Box rows: the frame's chrome, then the body.
 		l.iconRow = chrome.BodyTop(s, false) + iconBodyIdx
@@ -236,6 +270,12 @@ func (m *Model) layout(termW, termH int, live Live) boxLayout {
 	if huddleBodyIdx >= 0 && huddleIconCol >= 0 {
 		l.huddleRow = chrome.BodyTop(s, false) + huddleBodyIdx
 		l.huddleCol = 2 + huddleIconCol
+	}
+	if drawsSixelAvatar(live) {
+		// The avatar's sixel image lands on the name row's first cells:
+		// body row 0 (nameRows always puts it there), inner column 0.
+		l.avatarRow = chrome.BodyTop(s, false)
+		l.avatarCol = 2
 	}
 	return l
 }
@@ -277,9 +317,39 @@ func (m *Model) nameRows(innerW int, live Live) []string {
 
 	rows := []string{row1, row2}
 	if live.Avatar != "" {
-		rows = withAvatar(rows, live.Avatar, bg)
+		avatar := live.Avatar
+		if drawsSixelAvatar(live) {
+			// The painter draws the avatar image over these cells;
+			// blanking them keeps the half-block fallback's pixels out
+			// of the text, the way RenderMessage blanks the panes'.
+			avatar = blankAvatar(live.Avatar, bg)
+		}
+		rows = withAvatar(rows, avatar, bg)
 	}
 	return rows
+}
+
+// drawsSixelAvatar reports whether this frame blanks the avatar's cells
+// for the painter to draw its sixel image into: the avatar is loaded,
+// and its sixel bytes came with it. Blanking needs the footprint and
+// placing needs the image, so both must be present.
+func drawsSixelAvatar(live Live) bool {
+	return live.Avatar != "" && len(live.AvatarSixel) > 0
+}
+
+// blankAvatar returns avatar's own footprint as background-colored
+// blank rows: the cells a sixel avatar is painted over. Line count and
+// width match the half-block render, so withAvatar lays the header out
+// identically either way.
+func blankAvatar(avatar string, bg interface {
+	RGBA() (uint32, uint32, uint32, uint32)
+}) string {
+	lines := strings.Split(avatar, "\n")
+	blank := lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", lipgloss.Width(lines[0])))
+	for i := range lines {
+		lines[i] = blank
+	}
+	return strings.Join(lines, "\n")
 }
 
 // line2Text builds the "@handle · pronouns  APP  external  deactivated"
