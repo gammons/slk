@@ -108,6 +108,9 @@ func (a *App) renderMessagesRegion(frame panelLayoutFrame, themeVer int64, previ
 	if a.view == ViewActivity {
 		return a.renderActivityViewPanel(msgWidth, msgBorder, contentHeight, msgFocused, msgLayoutKey)
 	}
+	if a.view == ViewAppHome {
+		return a.renderAppHomePanel(msgWidth, msgBorder, contentHeight, msgFocused, msgLayoutKey)
+	}
 	return a.renderChannelMessagesPanel(msgWidth, msgBorder, contentHeight, msgFocused, composeFocused, msgLayoutKey)
 }
 
@@ -193,7 +196,41 @@ func (a *App) renderActivityViewPanel(msgWidth, msgBorder, contentHeight int, ms
 	return out
 }
 
-// renderChannelMessagesPanel handles the a.view == ViewChannels
+// renderAppHomePanel handles the a.view == ViewAppHome branch: a single
+// bordered panel drawing the app DM's Home tab, no compose / typing row.
+// Mirrors renderActivityViewPanel but caches on its own panelCache slot
+// (renderCache.appHomePanel) keyed on appHome.Version.
+//
+// The Block Kit host context comes from the channel pane's draft
+// context: the Home tab is not a message, but it needs the same mention
+// names and Block Kit rendering, and the draft context is the pane's
+// image-free one.
+func (a *App) renderAppHomePanel(msgWidth, msgBorder, contentHeight int, msgFocused bool, msgLayoutKey int64) string {
+	ahVersion := a.appHome.Version()
+	c := &a.renderCache.appHomePanel
+	if c.hit(ahVersion, msgWidth, contentHeight, msgLayoutKey) {
+		return c.output
+	}
+	msgBorderStyle := styles.UnfocusedBorder.Width(msgWidth)
+	if msgFocused {
+		msgBorderStyle = styles.FocusedBorder.Width(msgWidth)
+	}
+	msgContentHeight := contentHeight - 2
+	a.layout.SetMsgHeight(msgContentHeight)
+	if msgContentHeight < 3 {
+		msgContentHeight = 3
+	}
+	ctx := a.appHomeRenderContext()
+	ahView := a.appHome.View(msgContentHeight, msgWidth-2, ctx)
+	ahView = messages.ReapplyBgAfterResets(ahView, messages.BgANSI())
+	out := exactSize(
+		msgBorderStyle.Render(ahView),
+		msgWidth+msgBorder, contentHeight,
+	)
+	c.store(out, ahVersion, msgWidth, contentHeight, msgLayoutKey)
+	return out
+}
+
 // branch: messages pane + typing row + compose box, with the
 // split-cache pattern described in the file header.
 //

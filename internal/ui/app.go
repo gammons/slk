@@ -28,6 +28,7 @@ import (
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/slackurl"
 	"github.com/gammons/slk/internal/ui/activityview"
+	"github.com/gammons/slk/internal/ui/apphome"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/emojipicker"
@@ -75,6 +76,10 @@ const (
 	// ViewActivity swaps the pane's contents for the Activity feed
 	// (mentions, thread replies, reactions to your messages, DMs).
 	ViewActivity
+	// ViewAppHome swaps the pane's contents for an app DM's Home tab.
+	// It is per conversation: picking another channel returns to
+	// ViewChannels.
+	ViewAppHome
 )
 
 const (
@@ -141,6 +146,17 @@ type App struct {
 	threadCompose    compose.Model
 	threadsView      threadsview.Model
 	activityView     activityview.Model
+	// appHome is the Home tab of the app DM on screen, shown in place of
+	// the messages pane while view is ViewAppHome. appHomeChannelID is
+	// the conversation it was fetched for, so a result for a channel the
+	// user has left is dropped.
+	appHome          apphome.Model
+	appHomeChannelID string
+	// appHomeAutoShow asks AppHomeLoadedMsg to switch to the Home tab
+	// when it arrives. Set by the fetch a channel switch starts, so a
+	// refetch after a button press never pulls the user back from the
+	// Messages tab they chose.
+	appHomeAutoShow bool
 
 	// State
 	mode           Mode
@@ -566,6 +582,7 @@ type App struct {
 	reactions     core.ReactionService
 	interactions  core.InteractionService
 	commandSvc    core.CommandService
+	appHomeSvc    core.AppHomeService
 	currentUserID string
 
 	// editing tracks in-progress message edit state. See
@@ -1003,6 +1020,7 @@ func NewApp() *App {
 		threadCompose:         compose.New("thread"),
 		threadsView:           threadsview.New(nil, ""),
 		activityView:          activityview.New(nil, ""),
+		appHome:               apphome.New(),
 		linkPicker:            linkpicker.New(),
 		reactionPicker:        reactionpicker.New(),
 		reactionsView:         reactionsview.New(),
@@ -1036,6 +1054,7 @@ func NewApp() *App {
 		reactions:             noopReactionService,
 		interactions:          noopInteractionService,
 		commandSvc:            noopCommandService,
+		appHomeSvc:            noopAppHomeService,
 		threads:               noopThreadService,
 		activity:              noopActivityService,
 		messageSvc:            noopMessageService,
@@ -1214,7 +1233,11 @@ func (a *App) frameInto(l *panelLayout) panelLayoutFrame {
 func (a *App) contentPanesDrawn() (channel, thread bool) {
 	var scratch panelLayout
 	f := a.frameInto(&scratch)
-	return f.MsgWidth > 0, a.threadVisible && f.ThreadWidth > 0
+	// An app's Home tab fills the messages region: messages arriving in
+	// the conversation behind it are not on screen, so they must stay
+	// unread exactly as if the pane were hidden by a stacked layout.
+	channelDrawn := f.MsgWidth > 0 && a.view != ViewAppHome
+	return channelDrawn, a.threadVisible && f.ThreadWidth > 0
 }
 
 func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1239,6 +1262,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		reduceReactions,
 		reduceThreads,
 		reduceActivity,
+		reduceAppHome,
 		reduceFocus,
 		reduceSend,
 		reduceRemovePreview,
@@ -1850,6 +1874,10 @@ func (a *App) handleDown() tea.Cmd {
 			a.activityView.MoveDown()
 			return nil
 		}
+		if a.view == ViewAppHome {
+			a.appHome.ScrollDown(1)
+			return nil
+		}
 		return a.coalesceContentScroll(+1)
 	case PanelThread:
 		return a.coalesceContentScroll(+1)
@@ -1871,6 +1899,10 @@ func (a *App) handleUp() tea.Cmd {
 		}
 		if a.view == ViewActivity {
 			a.activityView.MoveUp()
+			return nil
+		}
+		if a.view == ViewAppHome {
+			a.appHome.ScrollUp(1)
 			return nil
 		}
 		return a.coalesceContentScroll(-1)
@@ -1995,6 +2027,10 @@ func (a *App) handleGoToTop() tea.Cmd {
 			a.activityView.GoToTop()
 			return nil
 		}
+		if a.view == ViewAppHome {
+			a.appHome.GoToTop()
+			return nil
+		}
 		a.messagepane.GoToTop()
 		return a.maybeFetchOlderHistory(a.messagepane.AtTop())
 	case PanelThread:
@@ -2017,6 +2053,10 @@ func (a *App) handleGoToBottom() tea.Cmd {
 		}
 		if a.view == ViewActivity {
 			a.activityView.GoToBottom()
+			return nil
+		}
+		if a.view == ViewAppHome {
+			a.appHome.GoToBottom()
 			return nil
 		}
 		a.messagepane.GoToBottom()
@@ -2093,6 +2133,12 @@ func (a *App) scrollFocusedPanel(delta int) tea.Cmd {
 				a.activityView.ScrollUp(n)
 			} else {
 				a.activityView.ScrollDown(n)
+			}
+		} else if a.view == ViewAppHome {
+			if delta < 0 {
+				a.appHome.ScrollUp(n)
+			} else {
+				a.appHome.ScrollDown(n)
 			}
 		} else {
 			if delta < 0 {
@@ -2228,6 +2274,12 @@ func (a *App) handleEnter() tea.Cmd {
 		}
 		team := a.activeTeamID
 		return func() tea.Msg { return ActivitySelectedMsg{TeamID: team, Item: it} }
+	}
+
+	if a.focusedPanel == PanelMessages && a.view == ViewAppHome {
+		// The pane shows the Home tab, not a message: there is nothing
+		// to open. b presses its buttons.
+		return nil
 	}
 
 	if a.focusedPanel == PanelMessages && a.view == ViewThreads {
@@ -3074,6 +3126,9 @@ func (a *App) setChannelNames(names map[string]string) {
 	a.threadPanel.SetChannelNames(names)
 	a.threadsView.SetChannelNames(names)
 	a.activityView.SetChannelNames(names)
+	// The Home tab renders channel and user mentions through the same
+	// names; its cached frame must not outlive them.
+	a.appHome.Invalidate()
 }
 
 // pushChannelPicks gives both composers the "#" autocomplete list built
@@ -3623,6 +3678,7 @@ func (a *App) SetUserNames(names map[string]string) {
 	a.userNames = names
 	a.threadsView.SetUserNames(names)
 	a.activityView.SetUserNames(names)
+	a.appHome.Invalidate()
 	for _, m := range a.allWinModels() {
 		m.SetUserNames(names)
 	}
@@ -3790,6 +3846,16 @@ func (a *App) SetCommandService(s core.CommandService) {
 		s = noopCommandService
 	}
 	a.commandSvc = s
+}
+
+// SetAppHomeService wires the service that fetches an app DM's Home tab
+// and presses its buttons. A nil s restores the no-op, which reports no
+// Home tab and refuses presses.
+func (a *App) SetAppHomeService(s core.AppHomeService) {
+	if s == nil {
+		s = noopAppHomeService
+	}
+	a.appHomeSvc = s
 }
 
 // SetProfileService wires the App's ProfileService collaborator, used

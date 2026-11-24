@@ -125,6 +125,14 @@ func reduceMouseWheel(a *App, m tea.MouseWheelMsg) tea.Cmd {
 			}
 			return nil
 		}
+		if a.view == ViewAppHome {
+			if up {
+				a.appHome.ScrollUp(wheelLinesPerNotch)
+			} else {
+				a.appHome.ScrollDown(wheelLinesPerNotch)
+			}
+			return nil
+		}
 		if up {
 			a.messagepane.ScrollUp(wheelLinesPerNotch)
 			// Backfill older history when the viewport hits the
@@ -295,6 +303,12 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 					return func() tea.Msg { return ActivitySelectedMsg{TeamID: team, Item: it} }
 				}
 			}
+			return nil
+		}
+		// The App Home view fills the messages region too, and has no
+		// row selection for a click to follow: focus the region (done
+		// above) and leave the scroll position alone.
+		if a.view == ViewAppHome {
 			return nil
 		}
 		panel, px, py, ok := a.panelAt(m.X, m.Y)

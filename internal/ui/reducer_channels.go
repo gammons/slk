@@ -86,6 +86,22 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			}
 			return cmd, true
 		}
+		if m.Type == "app" {
+			// An app DM may publish a Home tab; fetch it while the
+			// messages load. Fetching is what decides the view: the
+			// reducer switches to ViewAppHome only when one arrives.
+			//
+			// A navigation to a specific message or thread keeps the
+			// messages on screen: the Home tab is fetched for t, but
+			// must not hide the message the jump is landing on.
+			landOnMessage := false
+			if nav := a.pendingLinkNav; nav != nil && string(nav.ChannelID) == m.ID {
+				landOnMessage = nav.MessageTS != "" || nav.ThreadTS != ""
+			}
+			cmd = tea.Batch(cmd, a.fetchAppHomeCmd(a.activeTeamID, m.ID, m.Name, !landOnMessage))
+		} else {
+			a.clearAppHome()
+		}
 		// Permalink completion. !fetchFired means no MessagesLoadedMsg
 		// is coming (tier-1 fresh cache), so complete authoritatively
 		// now — otherwise the pending nav would leak and could later
