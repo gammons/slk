@@ -109,6 +109,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Word wrap to a width | `messages.WordWrap(s, limit)` |
 | Plain-text line segmentation (grapheme-correct) | `entrylist.PlainLines`, `entrylist.DisplayWidth`, `entrylist.SliceColumns` (`bubbles/entrylist`; `messages.PlainLines`/`DisplayWidthOfPlain`/`SliceColumns` delegate for existing callers) |
 | Display width of a string (emoji-aware) | `emoji.Width(s)` |
+| The renderer's cell width method: frames are composed with lipgloss (grapheme widths), so bubbletea's renderer must use the same method or a partial row update on a row holding an emoji whose wcwidth and grapheme widths differ (`🗓️` is 1 vs 2) lands a column off. `App.Init` sends `tea.ModeReportMsg{Mode: ansi.ModeUnicodeCore, Value: ansi.ModeSet}`; do not remove it | `declareGraphemeWidths` (`internal/ui/app.go`) |
 | Truncate plain text to a cell budget ending in "…", never inside a grapheme cluster, measured as both lipgloss and `emoji.Width` see it | `truncateHeaderName(s, budget)` and `headerCells(s)` (`internal/ui/sidebar`, unexported; section headers). Lift them into a shared package when a second surface needs it (DM display names, per `2026-11-02-sidebar-status-emoji-images-design.md`) |
 | Case/accent-insensitive fold for matching | `text.Fold(s)` |
 | Slack mrkdwn → plain text | `messages.FlattenMrkdwn`, `messages.FlattenMrkdwnWithUserGroups` |
