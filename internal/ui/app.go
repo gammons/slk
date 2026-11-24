@@ -158,6 +158,10 @@ type App struct {
 	// refetch after a button press never pulls the user back from the
 	// Messages tab they chose.
 	appHomeAutoShow bool
+	// appHomeBusy is the status-bar progress dots for a pressed Home
+	// button, the feedback the web client gets from the app's own
+	// spinner view.
+	appHomeBusy appHomeBusyState
 
 	// State
 	mode           Mode

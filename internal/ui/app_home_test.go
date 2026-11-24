@@ -493,3 +493,113 @@ func TestAppHomeClickConfirmingButtonAsksFirst(t *testing.T) {
 		t.Fatalf("pressed = %+v, want one email_creds press", fake.pressed)
 	}
 }
+
+// A press animates dots while its two refetches are in flight and stops
+// when the last one lands; the dots advance on the spinner tick.
+func TestAppHomePressShowsBusyDots(t *testing.T) {
+	shortAppHomeRefetch(t)
+	a := newTestApp(t, withActiveTeam("T1"))
+	fake := &fakeAppHomeService{home: appHomeFixture()}
+	a.SetAppHomeService(fake.service())
+	openAppChannel(t, a, "D1", "AI Budget Help")
+
+	_, cmd := a.Update(appHomeActionPressedMsg{teamID: "T1", channelID: "D1", label: "Refresh"})
+	if got := statusbarText(a); !strings.Contains(got, "Updating app view.") {
+		t.Fatalf("status bar = %q, want the busy dots", got)
+	}
+	// Advance on the real tick, as the runtime delivers it.
+	for _, m := range deliveredMsgs[appHomeSpinnerMsg](t, cmd) {
+		a.Update(m)
+	}
+	if got := statusbarText(a); !strings.Contains(got, "Updating app view..") {
+		t.Fatalf("status bar = %q, want the dots to advance", got)
+	}
+
+	seq := a.appHomeBusy.gen
+	a.Update(AppHomeLoadedMsg{TeamID: "T1", ChannelID: "D1", Home: appHomeFixture(), Seq: seq})
+	if got := statusbarText(a); !strings.Contains(got, "Updating app view") {
+		t.Fatalf("status bar = %q, want the dots to survive the first refetch", got)
+	}
+	a.Update(AppHomeLoadedMsg{TeamID: "T1", ChannelID: "D1", Home: appHomeFixture(), Seq: seq})
+	if got := statusbarText(a); strings.Contains(got, "Updating app view") {
+		t.Fatalf("status bar = %q, want the dots cleared after the last refetch", got)
+	}
+}
+
+// A second press supersedes the first: the first press's refetches no
+// longer count, and only the second press's two can clear its dots.
+func TestAppHomeRepeatedPressIgnoresEarlierRefetches(t *testing.T) {
+	a := newTestApp(t, withActiveTeam("T1"))
+	fake := &fakeAppHomeService{home: appHomeFixture()}
+	a.SetAppHomeService(fake.service())
+	openAppChannel(t, a, "D1", "AI Budget Help")
+
+	a.Update(appHomeActionPressedMsg{teamID: "T1", channelID: "D1", label: "Refresh"})
+	first := a.appHomeBusy.gen
+	a.Update(appHomeActionPressedMsg{teamID: "T1", channelID: "D1", label: "Refresh"})
+	second := a.appHomeBusy.gen
+	if second == first {
+		t.Fatal("a press did not advance the generation")
+	}
+	for i := 0; i < 2; i++ {
+		a.Update(AppHomeLoadedMsg{TeamID: "T1", ChannelID: "D1", Home: appHomeFixture(), Seq: first})
+	}
+	if got := statusbarText(a); !strings.Contains(got, "Updating app view") {
+		t.Fatalf("status bar = %q, want the earlier press's refetches ignored", got)
+	}
+	for i := 0; i < 2; i++ {
+		a.Update(AppHomeLoadedMsg{TeamID: "T1", ChannelID: "D1", Home: appHomeFixture(), Seq: second})
+	}
+	if got := statusbarText(a); strings.Contains(got, "Updating app view") {
+		t.Fatalf("status bar = %q, want the dots cleared by the current press's refetches", got)
+	}
+}
+
+// Switching to another app's conversation stops the previous one's dots.
+func TestAppHomeSwitchClearsBusyDots(t *testing.T) {
+	a := newTestApp(t, withActiveTeam("T1"))
+	fake := &fakeAppHomeService{home: appHomeFixture()}
+	a.SetAppHomeService(fake.service())
+	openAppChannel(t, a, "D1", "AI Budget Help")
+
+	a.Update(appHomeActionPressedMsg{teamID: "T1", channelID: "D1", label: "Refresh"})
+	if got := statusbarText(a); !strings.Contains(got, "Updating app view") {
+		t.Fatalf("precondition: status bar = %q, want the busy dots", got)
+	}
+	_ = a.fetchAppHomeCmd("T1", "D2", "Other App", true)
+	if got := statusbarText(a); strings.Contains(got, "Updating app view") {
+		t.Fatalf("status bar = %q, want the previous app's dots cleared", got)
+	}
+}
+
+// A failed press never started refetches, so it must leave the current
+// press's count alone.
+func TestAppHomePressErrorKeepsEarlierPressPending(t *testing.T) {
+	a := newTestApp(t, withActiveTeam("T1"))
+	fake := &fakeAppHomeService{home: appHomeFixture()}
+	a.SetAppHomeService(fake.service())
+	openAppChannel(t, a, "D1", "AI Budget Help")
+
+	a.Update(appHomeActionPressedMsg{teamID: "T1", channelID: "D1", label: "Refresh"})
+	a.Update(appHomeActionPressedMsg{teamID: "T1", channelID: "D1", label: "Refresh"})
+	a.Update(appHomeActionPressedMsg{teamID: "T1", channelID: "D1", label: "Refresh", err: errAppHomePress})
+
+	if a.appHomeBusy.pending != 2 {
+		t.Fatalf("pending = %d, want the latest press's two refetches", a.appHomeBusy.pending)
+	}
+}
+
+// Stopping the dots leaves the in-flight tick armed: a press within the
+// tick interval reuses that chain instead of starting a second one.
+func TestAppHomeBusyKeepsASingleTickChain(t *testing.T) {
+	a := newTestApp(t, withActiveTeam("T1"))
+	fake := &fakeAppHomeService{home: appHomeFixture()}
+	a.SetAppHomeService(fake.service())
+	openAppChannel(t, a, "D1", "AI Budget Help")
+
+	a.Update(appHomeActionPressedMsg{teamID: "T1", channelID: "D1", label: "Refresh"})
+	a.clearAppHomeBusy() // the conversation was left mid-press
+	if cmd, _ := a.startAppHomeBusy(); cmd != nil {
+		t.Fatal("a second tick chain started while the first was still armed")
+	}
+}

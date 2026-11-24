@@ -259,6 +259,10 @@ type (
 		ChannelID string
 		Home      *core.AppHome
 		Err       error
+		// Seq is the press generation that asked for this fetch (0 for
+		// the channel-open fetch), so a stale press's result cannot end
+		// the current press's progress dots.
+		Seq uint64
 	}
 	// ActivityBodiesLoadedMsg carries hydrated message bodies for the
 	// refs in a freshly loaded Activity page (fetched via messages.list
