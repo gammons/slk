@@ -293,10 +293,19 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}, true
 
 	case ChannelJoinFailedMsg:
-		// Nothing fancy yet -- could surface a status-bar toast
-		// in future.
 		log.Printf("warning: failed to join channel %s: %v", m.Name, m.Err)
-		return nil, true
+		// A join can be refused (a private channel the user cannot enter,
+		// one deleted since the mention was written). Say so: a click
+		// that ends in silence reads as a broken link.
+		name := m.Name
+		if name == "" {
+			name = m.ID
+		}
+		text := "Could not join #" + name
+		if m.Err != nil {
+			text += ": " + m.Err.Error()
+		}
+		return toastWithClear(a, text, 4*time.Second), true
 
 	case ChannelStarSetMsg:
 		key := m.TeamID + "\x00" + m.ChannelID

@@ -1769,7 +1769,7 @@ func (a *App) openLinksOfSelected() tea.Cmd {
 	default:
 		items := make([]linkpicker.Item, len(links))
 		for i, l := range links {
-			items[i] = linkpicker.Item{URL: l.URL, Label: l.Label, InApp: a.linkOpensInApp(l.URL)}
+			items[i] = linkpicker.Item{URL: l.URL, Label: a.internalLinkLabel(l.URL, l.Label), InApp: a.linkOpensInApp(l.URL)}
 		}
 		a.pickerKind = "links"
 		a.openLinkPicker("Open link", items)
@@ -1827,6 +1827,13 @@ func (a *App) downloadFilesOfSelected() tea.Cmd {
 // inside slk (used for the picker's "[slk]" badge). Mirrors the
 // guards at the top of routeLink.
 func (a *App) linkOpensInApp(rawURL string) bool {
+	// slk's own slack:// links are handled in-app (or refused with a
+	// toast); the picker must not label them as external. Recognize the
+	// scheme by prefix, like openInternalLink: a malformed slack: string
+	// must not be badged as an external link either.
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(rawURL)), "slack:") {
+		return true
+	}
 	pl, ok := slackurl.Parse(rawURL)
 	if !ok || !a.permalinkBelongsToActiveWorkspace(pl) {
 		return false

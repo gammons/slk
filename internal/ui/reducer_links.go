@@ -83,6 +83,11 @@ var reduceLinks reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	if !ok {
 		return nil, false
 	}
+	// slk's own slack:// links (a #channel mention, say) never leave
+	// the app and never go through the external-link confirmation.
+	if cmd, handled := a.openInternalLink(m.URL); handled {
+		return cmd, true
+	}
 	if !m.Confirmed && !opensWithoutConfirm(m.URL) {
 		// file:, ssh: and the like hand the target to the OS launcher, and
 		// the sender chose the label, so show the real target first.
