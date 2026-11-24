@@ -16,7 +16,7 @@ func TestExtractLinks(t *testing.T) {
 	}{
 		{
 			name: "no links",
-			text: "just some text with <@U123> and <#C123|general>",
+			text: "just some text with <@U123>",
 			want: nil,
 		},
 		{
@@ -60,7 +60,16 @@ func TestExtractLinks(t *testing.T) {
 		{name: "javascript refused", text: "<javascript:alert(1)|x> <javascript:alert(1)>", want: nil},
 		{name: "data refused", text: "<data:text/html;base64,AAAA>", want: nil},
 		{name: "vbscript refused", text: "<vbscript:msgbox(1)|x>", want: nil},
-		{name: "channel mention", text: "<#CFAKE0001|general>", want: nil},
+		{name: "channel mention", text: "<#CFAKE0001|general>", want: []Link{
+			{URL: "slack://channel?id=CFAKE0001&name=general", Label: "#general"},
+		}},
+		{name: "bare channel mention", text: "see <#CFAKE0002>", want: []Link{
+			{URL: "slack://channel?id=CFAKE0002"},
+		}},
+		{name: "mention and link in order", text: "<https://a.example/1> then <#CFAKE0003|ops>", want: []Link{
+			{URL: "https://a.example/1"},
+			{URL: "slack://channel?id=CFAKE0003&name=ops", Label: "#ops"},
+		}},
 		{name: "user mention", text: "<@UFAKE0001>", want: nil},
 		{name: "broadcast", text: "<!here> <!subteam^SFAKE0001|@team>", want: nil},
 	}
