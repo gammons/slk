@@ -215,13 +215,13 @@ func keysOf(items []core.ActivityItem) []string {
 	return out
 }
 
-// activityClient routes a grid member's Activity calls through the
+// orgOrOwnClient routes a grid member's org-served calls through the
 // org-level sibling of the SAME authenticated user: browser
 // credentials for a second account on the grid connect as sibling
 // sessions too, and routing through one of those would read (and
-// markRead) another user's feed. No matching sibling falls back to
-// the workspace's own client.
-func TestActivityClient_MatchesTheSameUser(t *testing.T) {
+// write) another user's data. No matching sibling falls back to the
+// workspace's own client.
+func TestOrgOrOwnClient_MatchesTheSameUser(t *testing.T) {
 	member := &WorkspaceContext{TeamID: "T1", Client: slackclient.NewSessionClient("T1", "E1", "U1")}
 	otherUser := &WorkspaceContext{TeamID: "E9", Client: slackclient.NewSessionClient("E9", "E1", "U2")}
 	sameUser := &WorkspaceContext{TeamID: "E1", Client: slackclient.NewSessionClient("E1", "E1", "U1")}
@@ -230,13 +230,13 @@ func TestActivityClient_MatchesTheSameUser(t *testing.T) {
 	router.Add(member)
 	router.Add(otherUser)
 
-	if got := activityClient(router, member); got != member.Client {
-		t.Fatal("activityClient routed through another user's session; the sibling must match the authenticated user")
+	if got := orgOrOwnClient(router, member); got != member.Client {
+		t.Fatal("orgOrOwnClient routed through another user's session; the sibling must match the authenticated user")
 	}
 
 	router.Add(sameUser)
-	if got := activityClient(router, member); got != sameUser.Client {
-		t.Fatal("activityClient did not route through the same user's org-level session")
+	if got := orgOrOwnClient(router, member); got != sameUser.Client {
+		t.Fatal("orgOrOwnClient did not route through the same user's org-level session")
 	}
 }
 

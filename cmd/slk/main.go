@@ -1616,7 +1616,10 @@ func run() error {
 				}
 				ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 				defer cancel()
-				return fetchAppHome(ctx, wctx.Client, teamID, string(channelID))
+				// conversations.info is org-served on a Grid member
+				// workspace, like blocks.actions below; both go
+				// through the same-user org session when one exists.
+				return fetchAppHome(ctx, orgOrOwnClient(router, wctx), teamID, string(channelID))
 			},
 			Press: func(teamID string, channelID ids.ChannelID, viewID, serviceID string, action core.AppHomeAction) error {
 				wctx := router.ByID(teamID)
@@ -1625,7 +1628,10 @@ func run() error {
 				}
 				ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 				defer cancel()
-				return pressAppHomeAction(ctx, wctx.Client, viewID, serviceID, action)
+				// blocks.actions is team_is_restricted on a Grid member
+				// workspace's own session; the org-level one dispatches
+				// the press.
+				return pressAppHomeAction(ctx, orgOrOwnClient(router, wctx), viewID, serviceID, action)
 			},
 		}))
 
