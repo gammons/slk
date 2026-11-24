@@ -23,6 +23,15 @@ type Model struct {
 	home        *core.AppHome
 	channelName string
 
+	// actionAt maps a rendered button's (block_id, action_id) to its
+	// index in home.Actions. Identity, not position, so a hit presses the
+	// button it was drawn from even if the renderer and the action list
+	// ever disagree on an ordinal.
+	actionAt map[actionKey]int
+	// hits are the visible buttons' footprints in View coordinates,
+	// recorded by the last View.
+	hits []actionHit
+
 	yOffset int
 	// lastHeight and lastTotal are what the last View drew: the content
 	// rows it had, and the block lines it scrolled. GoToBottom and the
@@ -31,6 +40,16 @@ type Model struct {
 	lastTotal  int
 
 	version int64
+}
+
+// actionKey identifies a rendered button the way a press echoes it.
+type actionKey struct{ blockID, actionID string }
+
+// actionHit is one visible button's footprint in View coordinates.
+type actionHit struct {
+	action           int
+	rowStart, rowEnd int
+	colStart, colEnd int
 }
 
 // New returns an empty model, which renders nothing.
@@ -45,8 +64,38 @@ func (m *Model) dirty() { m.version++ }
 // conversation has no Home tab.
 func (m *Model) SetHome(home *core.AppHome) {
 	m.home = home
+	m.actionAt = actionIndexMap(home)
+	m.hits = nil
 	m.yOffset = 0
 	m.dirty()
+}
+
+// actionIndexMap maps each action's (block_id, action_id) to its index in
+// home.Actions. A duplicate key keeps the first.
+func actionIndexMap(home *core.AppHome) map[actionKey]int {
+	if home == nil || len(home.Actions) == 0 {
+		return nil
+	}
+	out := make(map[actionKey]int, len(home.Actions))
+	for i, act := range home.Actions {
+		k := actionKey{blockID: act.BlockID, actionID: act.ActionID}
+		if _, dup := out[k]; !dup {
+			out[k] = i
+		}
+	}
+	return out
+}
+
+// HitAction returns the index in Home.Actions of the button drawn at
+// (row, col) in the last View's coordinates, with the tab header rows
+// included. ok is false when that cell is not on a button.
+func (m *Model) HitAction(row, col int) (int, bool) {
+	for _, h := range m.hits {
+		if row >= h.rowStart && row < h.rowEnd && col >= h.colStart && col < h.colEnd {
+			return h.action, true
+		}
+	}
+	return 0, false
 }
 
 // Clear forgets the Home tab, for instance when the user moves to a
@@ -155,8 +204,10 @@ func (m *Model) View(height, width int, ctx blockkit.Context) string {
 	m.lastHeight = height
 
 	var blockLines []string
+	var res blockkit.RenderResult
 	if m.home != nil {
-		blockLines = blockkit.Render(m.home.Blocks, ctx, width).Lines
+		res = blockkit.Render(m.home.Blocks, ctx, width)
+		blockLines = res.Lines
 	}
 	m.lastTotal = len(blockLines)
 
@@ -169,6 +220,22 @@ func (m *Model) View(height, width int, ctx blockkit.Context) string {
 	}
 	if m.yOffset < 0 {
 		m.yOffset = 0
+	}
+	m.hits = m.hits[:0]
+	for _, ah := range res.ActionHits {
+		action, ok := m.actionAt[actionKey{blockID: ah.BlockID, actionID: ah.ActionID}]
+		if !ok {
+			continue
+		}
+		rowStart := headerLines + ah.RowStart - m.yOffset
+		if rowStart < headerLines || rowStart >= height {
+			continue
+		}
+		m.hits = append(m.hits, actionHit{
+			action:   action,
+			rowStart: rowStart, rowEnd: rowStart + (ah.RowEnd - ah.RowStart),
+			colStart: ah.ColStart, colEnd: ah.ColEnd,
+		})
 	}
 	end := m.yOffset + contentHeight
 	if end > len(blockLines) {

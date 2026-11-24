@@ -28,7 +28,7 @@ func Render(blocks []Block, ctx Context, width int) RenderResult {
 	}
 	var out RenderResult
 	for _, b := range blocks {
-		appendBlock(&out, b, ctx, width)
+		appendBlock(&out, b, ctx, width, true)
 	}
 	out.Height = len(out.Lines)
 	return out
@@ -73,7 +73,7 @@ func RendersBody(blocks []Block) bool {
 // appendBlock dispatches one block to its renderer and appends the
 // result onto out. Per-block renderers MUST produce lines that each
 // consume <= width display columns.
-func appendBlock(out *RenderResult, b Block, ctx Context, width int) {
+func appendBlock(out *RenderResult, b Block, ctx Context, width int, recordHits bool) {
 	switch v := b.(type) {
 	case DividerBlock:
 		out.Lines = append(out.Lines, renderDivider(width))
@@ -88,7 +88,7 @@ func appendBlock(out *RenderResult, b Block, ctx Context, width int) {
 	case ContextBlock:
 		appendContext(out, v, ctx, width)
 	case ActionsBlock:
-		appendActions(out, v, ctx, width)
+		appendActions(out, v, ctx, width, recordHits)
 	case ImageBlock:
 		appendImageBlock(out, v, ctx, width)
 	case RichTextBlock:
@@ -255,7 +255,7 @@ func appendContext(out *RenderResult, c ContextBlock, ctx Context, width int) {
 	}
 }
 
-func appendActions(out *RenderResult, a ActionsBlock, ctx Context, width int) {
+func appendActions(out *RenderResult, a ActionsBlock, ctx Context, width int, recordHits bool) {
 	if len(a.Elements) == 0 {
 		return
 	}
@@ -266,7 +266,22 @@ func appendActions(out *RenderResult, a ActionsBlock, ctx Context, width int) {
 	for i, el := range a.Elements {
 		labels[i] = renderControlLabel(el.Kind, el.Label, ctx.RenderPlainText)
 	}
-	out.Lines = append(out.Lines, buttonrow.Rows(buttonrow.Layout(labels, width, gapW), gapW)...)
+	placed := buttonrow.Layout(labels, width, gapW)
+	if recordHits {
+		// The caller can press what it sees: record each element's
+		// footprint in Lines coordinates. Legacy attachments pass
+		// false (their block is synthesized, and its host does not
+		// press it).
+		rowStart := len(out.Lines)
+		for _, p := range placed {
+			out.ActionHits = append(out.ActionHits, ActionHit{
+				BlockID: a.BlockID, ActionID: a.Elements[p.Index].ActionID,
+				RowStart: rowStart + p.Row, RowEnd: rowStart + p.Row + 1,
+				ColStart: p.Col, ColEnd: p.Col + p.Width,
+			})
+		}
+	}
+	out.Lines = append(out.Lines, buttonrow.Rows(placed, gapW)...)
 }
 
 // appendImageBlock renders a Slack image block: an optional bold

@@ -354,10 +354,17 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 			}
 			return nil
 		}
-		// The App Home view fills the messages region too, and has no
-		// row selection for a click to follow: focus the region (done
-		// above) and leave the scroll position alone.
+		// The App Home view fills the messages region too: a click on one
+		// of its buttons presses it (the region focus is set above), any
+		// other click leaves the scroll position alone.
 		if a.view == ViewAppHome {
+			panel, px, py, ok := a.panelAt(m.X, m.Y)
+			if !ok || panel != PanelMessages || py < 0 {
+				return nil
+			}
+			if idx, ok := a.appHome.HitAction(py, px); ok {
+				return a.clickAppHomeAction(idx)
+			}
 			return nil
 		}
 		panel, px, py, ok := a.panelAt(m.X, m.Y)

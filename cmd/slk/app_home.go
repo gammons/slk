@@ -8,7 +8,6 @@ import (
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/ui"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
-	"github.com/slack-go/slack"
 )
 
 // fetchAppHome loads an app DM's Home tab and converts it for the UI.
@@ -36,53 +35,47 @@ func fetchAppHome(ctx context.Context, client *slackclient.Client, teamID, chann
 }
 
 // convertAppHome turns the client's view into the UI's: parsed blocks
-// for rendering, and the pressable buttons in render order.
+// for rendering, and the pressable buttons in render order. Both come
+// from the same parsed blocks, so a rendered button and its action
+// cannot drift apart.
 func convertAppHome(home *slackclient.AppHome) *core.AppHome {
+	parsed := blockkit.Parse(home.Blocks)
 	out := &core.AppHome{
 		AppID:     home.AppID,
 		ViewID:    home.ViewID,
 		Title:     home.Title,
 		ServiceID: home.BotID,
-		Blocks:    blockkit.Parse(home.Blocks),
+		Blocks:    parsed,
 	}
-	for _, b := range home.Blocks.BlockSet {
-		ab, ok := b.(*slack.ActionBlock)
-		if !ok || ab.Elements == nil {
+	for _, b := range parsed {
+		ab, ok := b.(blockkit.ActionsBlock)
+		if !ok {
 			continue
 		}
-		for _, e := range ab.Elements.ElementSet {
-			btn, ok := e.(*slack.ButtonBlockElement)
-			if !ok {
+		for _, el := range ab.Elements {
+			if el.Kind != "button" {
 				continue
 			}
 			act := core.AppHomeAction{
-				ActionID: btn.ActionID,
+				ActionID: el.ActionID,
 				BlockID:  ab.BlockID,
-				Label:    textOf(btn.Text),
-				Value:    btn.Value,
-				URL:      btn.URL,
-				Style:    string(btn.Style),
+				Label:    el.Label,
+				Value:    el.Value,
+				URL:      el.URL,
+				Style:    el.Style,
 			}
-			if c := btn.Confirm; c != nil {
+			if c := el.Confirm; c != nil {
 				act.Confirm = &core.AppHomeConfirm{
-					Title:       textOf(c.Title),
-					Text:        textOf(c.Text),
-					OKText:      textOf(c.Confirm),
-					DismissText: textOf(c.Deny),
+					Title:       c.Title,
+					Text:        c.Text,
+					OKText:      c.OKText,
+					DismissText: c.DismissText,
 				}
 			}
 			out.Actions = append(out.Actions, act)
 		}
 	}
 	return out
-}
-
-// textOf returns a Block Kit text object's text, "" when absent.
-func textOf(t *slack.TextBlockObject) string {
-	if t == nil {
-		return ""
-	}
-	return t.Text
 }
 
 // pressAppHomeAction presses one Home-tab button on the app's behalf.

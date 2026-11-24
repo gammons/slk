@@ -83,7 +83,7 @@ func parseContext(c *slack.ContextBlock) ContextBlock {
 }
 
 func parseActions(a *slack.ActionBlock) ActionsBlock {
-	out := ActionsBlock{}
+	out := ActionsBlock{BlockID: a.BlockID}
 	if a.Elements == nil {
 		return out
 	}
@@ -127,7 +127,19 @@ func parseAccessory(a *slack.Accessory) AccessoryElement {
 func actionElementOf(e slack.BlockElement) ActionElement {
 	switch v := e.(type) {
 	case *slack.ButtonBlockElement:
-		return ActionElement{Kind: "button", Label: textOf(v.Text)}
+		el := ActionElement{
+			Kind: "button", Label: textOf(v.Text),
+			ActionID: v.ActionID, Value: v.Value, URL: v.URL, Style: string(v.Style),
+		}
+		if c := v.Confirm; c != nil {
+			el.Confirm = &ActionConfirm{
+				Title:       textOf(c.Title),
+				Text:        textOf(c.Text),
+				OKText:      textOf(c.Confirm),
+				DismissText: textOf(c.Deny),
+			}
+		}
+		return el
 	case *slack.OverflowBlockElement:
 		return ActionElement{Kind: "overflow"}
 	case *slack.SelectBlockElement:

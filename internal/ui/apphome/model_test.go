@@ -135,3 +135,83 @@ func TestClear(t *testing.T) {
 		t.Errorf("view after Clear still names the app:\n%s", out)
 	}
 }
+
+// A rendered actions-block button is clickable: HitAction maps the cell
+// under the label to its place in Home.Actions; a select is not.
+func TestHitAction(t *testing.T) {
+	home := &core.AppHome{
+		Blocks: []blocks.Block{
+			blocks.SectionBlock{Text: "intro"},
+			blocks.ActionsBlock{BlockID: "b1", Elements: []blocks.ActionElement{
+				{Kind: "static_select", Label: "Pick"},
+				{Kind: "button", Label: "Refresh", ActionID: "refresh"},
+				{Kind: "button", Label: "Support", ActionID: "support"},
+			}},
+		},
+		Actions: []core.AppHomeAction{
+			{ActionID: "refresh", BlockID: "b1", Label: "Refresh"},
+			{ActionID: "support", BlockID: "b1", Label: "Support"},
+		},
+	}
+	m := New()
+	m.SetHome(home)
+	lines := strings.Split(ansi.Strip(m.View(12, 60, blockkit.Context{})), "\n")
+
+	rowOf := func(text string) (int, int) {
+		for row, line := range lines {
+			if at := strings.Index(line, text); at >= 0 {
+				return row, ansi.StringWidth(line[:at])
+			}
+		}
+		t.Fatalf("%q not in view:\n%s", text, strings.Join(lines, "\n"))
+		return 0, 0
+	}
+
+	row, col := rowOf("[ Refresh ]")
+	if idx, ok := m.HitAction(row, col+2); !ok || idx != 0 {
+		t.Errorf("Refresh hit = (%d, %v), want (0, true)", idx, ok)
+	}
+	row, col = rowOf("[ Support ]")
+	if idx, ok := m.HitAction(row, col+2); !ok || idx != 1 {
+		t.Errorf("Support hit = (%d, %v), want (1, true)", idx, ok)
+	}
+	row, col = rowOf("Pick")
+	if _, ok := m.HitAction(row, col+1); ok {
+		t.Error("the select label is clickable; only buttons are")
+	}
+	row, col = rowOf("intro")
+	if _, ok := m.HitAction(row, col); ok {
+		t.Error("plain section text is clickable")
+	}
+}
+
+// Scrolling moves the buttons with the content.
+func TestHitActionFollowsScroll(t *testing.T) {
+	home := &core.AppHome{Actions: []core.AppHomeAction{{ActionID: "refresh", BlockID: "b1", Label: "Refresh"}}}
+	blocksList := make([]blocks.Block, 0, 12)
+	for i := 0; i < 10; i++ {
+		blocksList = append(blocksList, blocks.DividerBlock{})
+	}
+	blocksList = append(blocksList, blocks.ActionsBlock{BlockID: "b1", Elements: []blocks.ActionElement{
+		{Kind: "button", Label: "Refresh", ActionID: "refresh"},
+	}})
+	home.Blocks = blocksList
+
+	m := New()
+	m.SetHome(home)
+	m.View(6, 40, blockkit.Context{})
+	if _, ok := m.HitAction(5, 2); ok {
+		t.Fatal("button hit before it is on screen")
+	}
+	m.GoToBottom()
+	lines := strings.Split(ansi.Strip(m.View(6, 40, blockkit.Context{})), "\n")
+	for row, line := range lines {
+		if at := strings.Index(line, "[ Refresh ]"); at >= 0 {
+			if idx, ok := m.HitAction(row, at+2); !ok || idx != 0 {
+				t.Errorf("scrolled Refresh hit = (%d, %v), want (0, true)", idx, ok)
+			}
+			return
+		}
+	}
+	t.Fatalf("Refresh not on screen after GoToBottom:\n%s", strings.Join(lines, "\n"))
+}

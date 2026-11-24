@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/core/blocks"
@@ -413,5 +414,82 @@ func TestAppHomeKeepsNewMessagesUnread(t *testing.T) {
 
 	if a.pendingChannelMark.ts != "" {
 		t.Errorf("a message in the hidden conversation staged a read mark at %q", a.pendingChannelMark.ts)
+	}
+}
+
+// Clicking a Home-tab button with the mouse presses it.
+func TestAppHomeMouseClickPressesButton(t *testing.T) {
+	a := newTestApp(t, withSize(120, 40), withActiveChannel("D1"), withActiveTeam("T1"))
+	fake := &fakeAppHomeService{home: &core.AppHome{
+		ViewID: "V1", ServiceID: "B1",
+		Blocks: []blocks.Block{blocks.ActionsBlock{BlockID: "b1", Elements: []blocks.ActionElement{
+			{Kind: "button", Label: "Refresh", ActionID: "home_refresh"},
+		}}},
+		Actions: []core.AppHomeAction{
+			{ActionID: "home_refresh", BlockID: "b1", Label: "Refresh", Value: "home_refresh"},
+		},
+	}}
+	a.SetAppHomeService(fake.service())
+	a.appHome.SetChannelName("AI Budget Help")
+	a.appHome.SetHome(fake.home)
+	a.appHomeChannelID = "D1"
+	a.view = ViewAppHome
+	a.focusedPanel = PanelMessages
+	_ = a.View()
+
+	lines := strings.Split(ansi.Strip(a.View().Content), "\n")
+	row, x := -1, 0
+	for i, line := range lines {
+		if at := strings.Index(line, "[ Refresh ]"); at >= 0 {
+			row, x = i, ansi.StringWidth(line[:at+2])
+			break
+		}
+	}
+	if row < 0 {
+		t.Fatalf("Refresh button not in the frame:\n%s", strings.Join(lines, "\n"))
+	}
+
+	_, cmd := a.Update(tea.MouseClickMsg{X: x, Y: row, Button: tea.MouseLeft})
+	if cmd == nil {
+		t.Fatal("clicking the button produced no command")
+	}
+	cmd()
+	if len(fake.pressed) != 1 || fake.pressed[0].ActionID != "home_refresh" {
+		t.Fatalf("pressed = %+v, want one home_refresh press", fake.pressed)
+	}
+}
+
+// A click on a confirming button asks first; only its OK button presses.
+func TestAppHomeClickConfirmingButtonAsksFirst(t *testing.T) {
+	a := newTestApp(t, withActiveTeam("T1"))
+	fake := &fakeAppHomeService{home: &core.AppHome{
+		ViewID: "V1", ServiceID: "B1",
+		Blocks: []blocks.Block{blocks.ActionsBlock{BlockID: "b1", Elements: []blocks.ActionElement{
+			{Kind: "button", Label: "Email credentials", ActionID: "email_creds"},
+		}}},
+		Actions: []core.AppHomeAction{{
+			ActionID: "email_creds", BlockID: "b1", Label: "Email credentials", Value: "email_creds",
+			Confirm: &core.AppHomeConfirm{
+				Title: "Email credentials?", Text: "A fresh link will be emailed.",
+				OKText: "Send email", DismissText: "Cancel",
+			},
+		}},
+	}}
+	a.SetAppHomeService(fake.service())
+	a.activeChannelID = "D1"
+	a.appHomeChannelID = "D1"
+	a.appHome.SetHome(fake.home)
+	a.view = ViewAppHome
+
+	_ = a.clickAppHomeAction(0)
+	if a.mode != ModeConfirm || !dialogShows(a, "Email credentials?") {
+		t.Fatalf("mode = %v; the confirmation step should open", a.mode)
+	}
+	if len(fake.pressed) != 0 {
+		t.Fatal("the button was pressed before confirmation")
+	}
+	pressKey(t, a, keyPress('2'))
+	if len(fake.pressed) != 1 || fake.pressed[0].ActionID != "email_creds" {
+		t.Fatalf("pressed = %+v, want one email_creds press", fake.pressed)
 	}
 }

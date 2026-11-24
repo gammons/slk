@@ -73,6 +73,9 @@ func (ImageBlock) blockType() string { return "image" }
 // ActionsBlock is the Slack `actions` block: a row of interactive
 // elements. We render them as muted, non-interactive labels.
 type ActionsBlock struct {
+	// BlockID is Slack's block_id. A pressed button echoes it, so it
+	// identifies the block the action came from.
+	BlockID  string
 	Elements []ActionElement
 }
 
@@ -143,6 +146,19 @@ func (LabelAccessory) accessoryKind() string { return "label" }
 type ActionElement struct {
 	Kind  string
 	Label string
+	// ActionID identifies the element in an interaction; it is echoed
+	// with the block's ID when the element is pressed.
+	ActionID string
+	// Value is the button's value, echoed on press.
+	Value string
+	// URL makes a button a link: pressing it opens the URL instead of
+	// reporting an action to the app.
+	URL string
+	// Style is Slack's button style ("primary", "danger"), empty for the
+	// default style.
+	Style string
+	// Confirm is the button's confirmation step, nil when it has none.
+	Confirm *ActionConfirm
 }
 
 // LegacyAttachment is one entry in Slack's legacy `attachments` array.
