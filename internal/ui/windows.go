@@ -159,10 +159,24 @@ func (a *App) focusWindow(id wintree.LeafID) tea.Cmd {
 	if a.threadVisible {
 		a.CloseThread() // spec §7: thread follows focused window
 	}
-	if ch, ok := a.wins.Channel(id); ok && ch.ID != "" && ch.ID != a.activeChannelID {
-		return a.retargetActiveChannel(ch.ID, ch.Name, ch.Type)
+	ch, ok := a.wins.Channel(id)
+	if !ok || ch.ID == "" {
+		// A window with no conversation yet must not keep drawing the
+		// previous one's Home tab.
+		a.clearAppHome()
+		return nil
 	}
-	return nil
+	if ch.ID == a.activeChannelID {
+		return nil
+	}
+	a.clearAppHome()
+	cmd := a.retargetActiveChannel(ch.ID, ch.Name, ch.Type)
+	if ch.Type != "app" {
+		return cmd
+	}
+	// The focused window's conversation may publish a Home tab of its
+	// own; load it as a channel switch would.
+	return tea.Batch(cmd, a.fetchAppHomeCmd(a.activeTeamID, ch.ID, ch.Name, true))
 }
 
 // setFocusedWindowChannel records the applied channel selection on

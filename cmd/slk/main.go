@@ -1542,6 +1542,30 @@ func run() error {
 			},
 		}))
 
+		app.SetAppHomeService(core.NewAppHomeService(core.AppHomeServiceFuncs{
+			Fetch: func(teamID string, channelID ids.ChannelID) core.Msg {
+				wctx := router.ByID(teamID)
+				if wctx == nil || wctx.Client == nil {
+					return ui.AppHomeLoadedMsg{
+						TeamID: teamID, ChannelID: string(channelID),
+						Err: fmt.Errorf("workspace %q is unavailable", teamID),
+					}
+				}
+				ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				defer cancel()
+				return fetchAppHome(ctx, wctx.Client, teamID, string(channelID))
+			},
+			Press: func(teamID string, channelID ids.ChannelID, viewID, serviceID string, action core.AppHomeAction) error {
+				wctx := router.ByID(teamID)
+				if wctx == nil || wctx.Client == nil {
+					return fmt.Errorf("app home: workspace %q is unavailable", teamID)
+				}
+				ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				defer cancel()
+				return pressAppHomeAction(ctx, wctx.Client, viewID, serviceID, action)
+			},
+		}))
+
 		sendTyping := func(channelID string) {
 			wctx := router.Active()
 			if wctx == nil {

@@ -246,6 +246,20 @@ type (
 		TeamID string
 		Item   core.ActivityItem
 	}
+	// AppHomeLoadedMsg carries an app DM's Home tab, fetched when the
+	// conversation was opened. Home is nil with Err nil when the
+	// conversation has no Home tab (a plain bot DM, or a member
+	// workspace Slack does not serve a home view for); the pane then
+	// keeps showing messages. A non-nil Err means the fetch itself
+	// failed: whether the tab exists is unknown, so the App keeps the
+	// tab it already has. The App ignores a result for a channel or
+	// workspace it has left.
+	AppHomeLoadedMsg struct {
+		TeamID    string
+		ChannelID string
+		Home      *core.AppHome
+		Err       error
+	}
 	// ActivityBodiesLoadedMsg carries hydrated message bodies for the
 	// refs in a freshly loaded Activity page (fetched via messages.list
 	// as a second step after activity.feed, which returns refs only).
