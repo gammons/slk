@@ -109,6 +109,9 @@ A fetch is fired when an `app`-typed conversation is selected. When it lands:
   with no view clears it. A failed press toasts and leaves the tab as it was.
   A button that opens a modal dispatches too; Slack's `view_opened` frame
   arrives and the existing handler toasts that slk can't show the dialog.
+  While the press's two refetches are in flight the status bar animates
+  "Updating app view..." dots, the feedback the web client gets from the
+  app's own spinner view.
 - While Home is up, the conversation counts as not drawn for read marks: a
   message arriving behind the tab stays unread, exactly as in a stacked layout
   where the pane is hidden.
