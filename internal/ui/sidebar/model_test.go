@@ -815,3 +815,31 @@ func TestView_MutedChannelNoDot(t *testing.T) {
 		t.Errorf("muted channel should not show a dot. Output:\n%s", out)
 	}
 }
+
+// Without a sections provider (config-glob sections), a star changes
+// the row's flag but not its Section: there is no Starred group to
+// move it into, and the configured section must survive the star.
+func TestSetItemStarred_KeepsConfiguredSectionWithoutProvider(t *testing.T) {
+	m := New([]ChannelItem{
+		{ID: "C1", Name: "alerts", Type: "channel", Section: "Ops"},
+	})
+	if !m.SetItemStarred("C1", true) {
+		t.Fatal("SetItemStarred did not find C1")
+	}
+	starred, section, ok := m.ItemStarState("C1")
+	if !ok || !starred {
+		t.Fatalf("C1 state = starred=%v ok=%v; want starred", starred, ok)
+	}
+	if section != "Ops" {
+		t.Fatalf("C1 section = %q after starring; want the configured \"Ops\" untouched", section)
+	}
+	// ItemStarState/SetItemStarState round-trip: restoring a snapshot
+	// puts both fields back.
+	if !m.SetItemStarState("C1", false, "Ops") {
+		t.Fatal("SetItemStarState did not find C1")
+	}
+	starred, section, _ = m.ItemStarState("C1")
+	if starred || section != "Ops" {
+		t.Fatalf("C1 state after restore = starred=%v section=%q; want unstarred, Ops", starred, section)
+	}
+}

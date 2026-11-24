@@ -891,6 +891,24 @@ type ChannelJoinFailedMsg struct {
 	Err  error
 }
 
+// ChannelStarSetMsg is the answer to a /star or /unstar (the
+// ChannelService.SetStarred command). Starred is the state Slack now
+// holds; Err set means Slack refused and the optimistic sidebar move
+// the requesting path already made must be reverted. TeamID is the
+// workspace the request ran in: a reply for a workspace the user has
+// since switched away from settles its bookkeeping without touching
+// the sidebar now on screen. Seq is the requesting path's per-channel
+// request number within that workspace; a reply that does not match
+// the channel's latest was superseded by a newer request and is
+// ignored (0 means the reply carries no number and always applies).
+type ChannelStarSetMsg struct {
+	TeamID    string
+	ChannelID string
+	Starred   bool
+	Seq       int
+	Err       error
+}
+
 // previewLoadedMsg is dispatched after a preview thumb has been fetched.
 // The receiver constructs (or, when isCycle is set, swaps the image of)
 // an imgpkg.Preview and stores it on the App.

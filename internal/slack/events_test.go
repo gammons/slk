@@ -55,6 +55,7 @@ type mockEventHandler struct {
 	prefChanges []prefChangeRecord
 
 	emojiChanges []emojiChangeRecord
+	starChanges  []starChangeRecord
 
 	memberJoined []memberEventRecord
 	memberLeft   []memberEventRecord
@@ -81,6 +82,11 @@ type emojiChangeRecord struct {
 	subtype, name string
 	names         []string
 	value         string
+}
+
+type starChangeRecord struct {
+	change  StarChange
+	starred bool
 }
 
 type prefChangeRecord struct {
@@ -196,6 +202,10 @@ func (m *mockEventHandler) OnPrefChange(name, value string) {
 
 func (m *mockEventHandler) OnEmojiChanged(subtype, name string, names []string, value string) {
 	m.emojiChanges = append(m.emojiChanges, emojiChangeRecord{subtype, name, names, value})
+}
+
+func (m *mockEventHandler) OnStarChanged(change StarChange, starred bool) {
+	m.starChanges = append(m.starChanges, starChangeRecord{change, starred})
 }
 
 func (m *mockEventHandler) OnMemberJoined(channelID, userID string) {
@@ -1233,6 +1243,53 @@ func TestMessageFrameDrivesOnMessage_MatchesDispatcher(t *testing.T) {
 			}
 			if got != want {
 				t.Errorf("OnMessage fired = %v; predicate says %v", got, want)
+			}
+		})
+	}
+}
+
+// TestDispatch_StarChanged covers the star_added / star_removed echo
+// (observed on a live grid; Slack sends it to every client of the
+// user). Every item kind is forwarded; the handler decides which ones
+// it acts on.
+func TestDispatch_StarChanged(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want starChangeRecord
+	}{
+		{
+			"star_added im",
+			`{"type":"star_added","user":"U1","item":{"type":"im","channel":"D1","date_create":1},"event_ts":"1.2"}`,
+			starChangeRecord{change: StarChange{ItemType: "im", Channel: "D1"}, starred: true},
+		},
+		{
+			"star_added channel",
+			`{"type":"star_added","user":"U1","item":{"type":"channel","channel":"C1","date_create":1},"event_ts":"1.2"}`,
+			starChangeRecord{change: StarChange{ItemType: "channel", Channel: "C1"}, starred: true},
+		},
+		{
+			"star_removed group",
+			`{"type":"star_removed","user":"U1","item":{"type":"group","channel":"G1","date_create":1},"event_ts":"1.2"}`,
+			starChangeRecord{change: StarChange{ItemType: "group", Channel: "G1"}, starred: false},
+		},
+		{
+			"message star forwards its item",
+			`{"type":"star_added","user":"U1","item":{"type":"message","channel":"C1","message":{"ts":"1.1"}}}`,
+			starChangeRecord{change: StarChange{ItemType: "message", Channel: "C1"}, starred: true},
+		},
+		{
+			"file star forwards its item",
+			`{"type":"star_added","user":"U1","item":{"type":"file","file":"F1"}}`,
+			starChangeRecord{change: StarChange{ItemType: "file"}, starred: true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := &mockEventHandler{}
+			dispatchWebSocketEvent([]byte(tt.data), h)
+			if len(h.starChanges) != 1 || h.starChanges[0] != tt.want {
+				t.Fatalf("starChanges = %+v, want [%+v]", h.starChanges, tt.want)
 			}
 		})
 	}

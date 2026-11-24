@@ -7,6 +7,7 @@ import (
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/service"
 	slk "github.com/gammons/slk/internal/slack"
+	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/slack-go/slack"
 )
 
@@ -313,5 +314,35 @@ func TestBuildChannelItem_StoreNotReady_UsesGlob(t *testing.T) {
 	item, _ := buildChannelItem(ch, wctx, cfg, "T1")
 	if item.Section != "Globbed" {
 		t.Errorf("Section = %q, want Globbed (store not ready, even though it has a mapping)", item.Section)
+	}
+}
+
+// applyBootStars seeds the star flag on the boot-built rows from
+// userBoot's starred list, for workspaces whose section store is not
+// usable: the list is the same authority the store's stars section is
+// built from, and without it existing stars would render hollow (and a
+// glyph click would re-star instead of un-starring).
+func TestApplyBootStars(t *testing.T) {
+	channels := []sidebar.ChannelItem{
+		{ID: "C1", Name: "general", Type: "channel"},
+		{ID: "D1", Name: "", Type: "dm"},
+		{ID: "C2", Name: "random", Type: "channel"},
+	}
+	applyBootStars(channels, []string{"D1", "C2"})
+	for _, ch := range channels {
+		want := ch.ID == "D1" || ch.ID == "C2"
+		if ch.IsStarred != want {
+			t.Errorf("%s IsStarred = %v; want %v", ch.ID, ch.IsStarred, want)
+		}
+	}
+
+	// An empty list clears nothing (it is "no data", not "no stars"
+	// only when the source had none; boot's list is authoritative
+	// either way, so empty means unstarred - mirror that).
+	applyBootStars(channels, nil)
+	for _, ch := range channels {
+		if ch.IsStarred {
+			t.Errorf("%s stayed starred after an empty boot list", ch.ID)
+		}
 	}
 }

@@ -517,3 +517,66 @@ func TestSectionForChannel_HidesRedactedSections(t *testing.T) {
 		t.Errorf("C_REDACTED → (%q, %v), want ('', false) for redacted section", id, ok)
 	}
 }
+
+// SetChannelStarred applies the star echo's delta: starring claims the
+// channel for the stars section - synthesizing one at the head of the
+// list when the workspace has none yet (Slack serves the section only
+// once non-empty, so a first star must not wait for the next
+// bootstrap) - and un-starring releases it back to no section.
+func TestSectionStore_SetChannelStarred(t *testing.T) {
+	sections := []slk.SidebarSection{
+		{ID: "U", Type: "standard", Name: "Mine", Next: "", LastUpdate: 1},
+	}
+	c := &fakeSectionsClient{sections: sections}
+	store := NewSectionStore()
+	if err := store.Bootstrap(context.Background(), c); err != nil {
+		t.Fatal(err)
+	}
+
+	// First star: the stars section appears at the head, ahead of U.
+	store.SetChannelStarred("C1", true)
+	got := store.OrderedSections()
+	if len(got) != 2 || got[0].Type != "stars" || got[1].ID != "U" {
+		t.Fatalf("after first star: OrderedSections = %+v, want [stars, U]", got)
+	}
+	if id, ok := store.SectionForChannel("C1"); !ok || id != "stars" {
+		t.Fatalf("SectionForChannel(C1) = (%q,%v), want (stars,true)", id, ok)
+	}
+
+	// Second star joins the same section; a repeat is a no-op.
+	store.SetChannelStarred("D2", true)
+	store.SetChannelStarred("C1", true)
+	if ids := store.StarredConversationIDs(); len(ids) != 2 {
+		t.Fatalf("starred IDs = %v, want C1 and D2 once each", ids)
+	}
+
+	// Un-star: membership released, empty stars section hidden again.
+	store.SetChannelStarred("C1", false)
+	store.SetChannelStarred("D2", false)
+	if ids := store.StarredConversationIDs(); len(ids) != 0 {
+		t.Fatalf("starred IDs = %v, want empty", ids)
+	}
+	if _, ok := store.SectionForChannel("C1"); ok {
+		t.Fatal("SectionForChannel(C1) ok=true after un-star, want false")
+	}
+	got = store.OrderedSections()
+	if len(got) != 1 || got[0].ID != "U" {
+		t.Fatalf("after un-star: OrderedSections = %+v, want just [U]", got)
+	}
+
+	// Un-starring with no stars section is a no-op, not a synthesis.
+	store.SetChannelStarred("C9", false)
+	if got := store.OrderedSections(); len(got) != 1 {
+		t.Fatalf("un-star without a stars section: OrderedSections = %+v, want just [U]", got)
+	}
+}
+
+// SetChannelStarred is a no-op before Bootstrap: an unready store has
+// no list to splice a synthesized section into.
+func TestSectionStore_SetChannelStarred_UnreadyNoOp(t *testing.T) {
+	store := NewSectionStore()
+	store.SetChannelStarred("C1", true)
+	if got := store.OrderedSections(); got != nil {
+		t.Fatalf("unready OrderedSections = %+v, want nil", got)
+	}
+}

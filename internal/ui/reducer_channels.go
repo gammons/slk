@@ -298,6 +298,42 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		log.Printf("warning: failed to join channel %s: %v", m.Name, m.Err)
 		return nil, true
 
+	case ChannelStarSetMsg:
+		key := m.TeamID + "\x00" + m.ChannelID
+		// A reply that no longer matches the channel's latest request
+		// was superseded by a newer one; its outcome is the newer
+		// request's business. (0 means the reply carries no number.)
+		if m.Seq != 0 && m.Seq != a.starSeqs[key] {
+			return nil, true
+		}
+		// The request ran in a workspace the user has since left: the
+		// sidebar on screen is another workspace's, and its rows are
+		// not this reply's to touch. The bookkeeping still settles, and
+		// the echo has already applied the engine-side state that
+		// workspace's next activation renders.
+		if m.TeamID != "" && m.TeamID != a.activeTeamID {
+			delete(a.starSnapshots, key)
+			return nil, true
+		}
+		if m.Err != nil {
+			// Slack refused: restore the row's pre-request state, not
+			// the opposite of the request (a /star on an already
+			// starred channel that fails must not read as un-starred).
+			// Slack holds no intermediate state, and the engine-side
+			// SectionStore and cache are only written on success, so
+			// the row is all there is to undo.
+			if snap, pending := a.starSnapshots[key]; pending {
+				a.sidebar.SetItemStarState(m.ChannelID, snap.starred, snap.section)
+				delete(a.starSnapshots, key)
+			} else {
+				a.sidebar.SetItemStarred(m.ChannelID, !m.Starred)
+			}
+			a.syncHeaderStar()
+			return toastWithClear(a, "Couldn't set star: "+m.Err.Error(), 3*time.Second), true
+		}
+		delete(a.starSnapshots, key)
+		return nil, true
+
 	case channelSearchDebounceMsg:
 		// The typing has stopped. Anything older than the current
 		// generation is a keystroke the user has already typed past.
@@ -339,6 +375,10 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 // the reducer.
 func (a *App) retargetActiveChannel(id, name, chType string) tea.Cmd {
 	a.activeChannelID = id
+	// The header glyph shows the NEW channel's star; retarget is the
+	// shared path every focus change and channel switch goes through,
+	// so the sync lives here rather than at each call site.
+	a.syncHeaderStar()
 	// Sendable unless a failed send marked this channel read-only, its
 	// DM peer is deactivated or an earlier probe found it unsendable;
 	// the probe fired below overwrites the last.
