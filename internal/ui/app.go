@@ -597,9 +597,10 @@ type App struct {
 	// that switching back to a workspace returns to the same channel the
 	// user was last viewing there. Saved at the start of every workspace
 	// switch (the workspace being left), consulted when applying the
-	// switch (the workspace being entered). Falls back to the first
-	// channel in the sidebar when there is no saved entry or the saved
-	// channel is no longer in the list.
+	// switch (the workspace being entered). Falls back to the
+	// workspace's default_channel, then to the first channel in the
+	// sidebar, when there is no saved entry or the saved channel is no
+	// longer in the list.
 	lastChannelByTeam map[string]string
 
 	// workspaceDomains maps teamID -> auth.test's slack.com subdomain.

@@ -178,6 +178,12 @@ func TestFinderPermalink_CrossWorkspaceAliasSwitchesThenNavigates(t *testing.T) 
 				{ID: "COTHER01", Name: "other", Type: "channel"},
 				{ID: "CTARGET01", Name: "random", Type: "channel"},
 			},
+			FinderItems: []core.ChannelFinderItem{
+				{ID: "COTHER01", Name: "other", Type: "channel", Joined: true},
+				{ID: "CTARGET01", Name: "random", Type: "channel", Joined: true},
+			},
+			// The link's channel wins over the workspace's default_channel.
+			DefaultChannel: "other",
 		}
 	}))
 

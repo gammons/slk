@@ -65,7 +65,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
+	"github.com/gammons/slk/internal/ui/sidebar"
 )
 
 var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
@@ -295,11 +297,14 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 		a.workspaceRail.SelectByID(m.TeamID)
 		a.syncStatusWorkspace()
 		if len(m.Channels) > 0 {
-			// Restore the last-visited channel across restarts (persisted in
+			// Open the configured default_channel, else restore the
+			// last-visited channel across restarts (persisted in
 			// channel_visits). Falls back to the first sidebar entry when
-			// there's no recorded visit or the channel no longer exists.
+			// neither matches a channel in the sidebar.
 			target := m.Channels[0]
-			if m.LastChannelID != "" {
+			if ch, ok := defaultChannelTarget(m.Channels, m.FinderItems, m.DefaultChannel); ok {
+				target = ch
+			} else if m.LastChannelID != "" {
 				for _, ch := range m.Channels {
 					if ch.ID == m.LastChannelID {
 						target = ch
@@ -490,19 +495,26 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 		batch = append(batch, navCmd)
 	}
 	// Restore the last-viewed channel for this workspace if we
-	// have one and it still exists; otherwise fall back to the
-	// first channel in the sidebar. Move the sidebar cursor to
-	// that channel as well so the highlight matches the messages
-	// pane. Skipped when the permalink above already chose a channel.
+	// have one and it still exists; otherwise (first visit this
+	// session, or that channel is gone) open the configured
+	// default_channel, else the first channel in the sidebar. Move
+	// the sidebar cursor to that channel as well so the highlight
+	// matches the messages pane. Skipped when the permalink above
+	// already chose a channel.
 	if !navigated {
 		if len(m.Channels) > 0 {
-			target := m.Channels[0]
-			if savedID, ok := a.lastChannelByTeam[m.TeamID]; ok && savedID != "" {
+			target, found := m.Channels[0], false
+			if savedID := a.lastChannelByTeam[m.TeamID]; savedID != "" {
 				for _, ch := range m.Channels {
 					if ch.ID == savedID {
-						target = ch
+						target, found = ch, true
 						break
 					}
+				}
+			}
+			if !found {
+				if ch, ok := defaultChannelTarget(m.Channels, m.FinderItems, m.DefaultChannel); ok {
+					target = ch
 				}
 			}
 			a.sidebar.SelectByID(target.ID)
@@ -539,4 +551,25 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 		batch = append(batch, m.AfterSwitch)
 	}
 	return tea.Batch(batch...)
+}
+
+// defaultChannelTarget is the sidebar row for the workspace's configured
+// default_channel. The name is matched by matchChannelByName over the
+// finder rows, the user's own conversations (Synthetic rows never
+// match); a channel the sidebar does not show is no target. An empty
+// name never matches.
+func defaultChannelTarget(channels []sidebar.ChannelItem, finder []core.ChannelFinderItem, name string) (sidebar.ChannelItem, bool) {
+	if name == "" {
+		return sidebar.ChannelItem{}, false
+	}
+	it, ok := matchChannelByName(finder, name)
+	if !ok {
+		return sidebar.ChannelItem{}, false
+	}
+	for _, ch := range channels {
+		if ch.ID == it.ID {
+			return ch, true
+		}
+	}
+	return sidebar.ChannelItem{}, false
 }

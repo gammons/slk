@@ -293,6 +293,15 @@ type Workspace struct {
 	// workspace. Nil means "fall through to global".
 	UseSlackSections *bool                 `toml:"use_slack_sections"`
 	Sections         map[string]SectionDef `toml:"sections"`
+	// DefaultChannel names the channel opened the first time this
+	// workspace is shown in a session (at startup, or on the first
+	// switch to it), e.g. "general" or "#general", matched by
+	// core.ChannelNameMatcher. It wins over the persisted last-visited
+	// channel; later switches back to the workspace restore the channel
+	// last viewed in the session, or the default when that one is gone.
+	// Empty, or a name that matches no sidebar channel, keeps the
+	// default behavior.
+	DefaultChannel string `toml:"default_channel"`
 	// VersionTS caches the Slack build timestamp last reported by
 	// client.shouldReload, sent as _x_version_ts on every workspace-API
 	// request. Empty means "use the compiled-in fallback and refresh on
@@ -614,6 +623,16 @@ func (c Config) ResolveWidth(teamID string) int {
 		return c.Sidebar.Width
 	}
 	return 30
+}
+
+// ResolveDefaultChannel returns the workspace's configured
+// default_channel, trimmed of surrounding spaces, or "" when none is set.
+// A leading "#" is left for core.ChannelNameMatcher to ignore.
+func (c Config) ResolveDefaultChannel(teamID string) string {
+	if ws, ok := c.WorkspaceByTeamID(teamID); ok {
+		return strings.TrimSpace(ws.DefaultChannel)
+	}
+	return ""
 }
 
 // ResolveTheme returns the theme name to use for the given workspace,
