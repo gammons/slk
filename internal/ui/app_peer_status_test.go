@@ -123,7 +123,7 @@ func TestSetChannelHeader(t *testing.T) {
 	a := newPeerStatusTestApp(t)
 	a.presence.Handle(a, UserStatusChangeMsg{UserID: "U1", Emoji: ":calendar:", Text: "In a meeting"})
 
-	want := sidebarStatus(t, a, "D1").Summary(time.Now(), dmTopicLayout)
+	want := sidebarStatus(t, a, "D1").Summary(time.Now(), messages.TimestampLayout())
 	if want == "" {
 		t.Fatal("fixture has no summary")
 	}

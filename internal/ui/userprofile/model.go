@@ -16,6 +16,7 @@ import (
 
 	"github.com/gammons/slk/internal/bubbles/chrome"
 	"github.com/gammons/slk/internal/core"
+	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/slackurl"
 	"github.com/gammons/slk/internal/ui/peerstatus"
 )
@@ -38,10 +39,12 @@ type Seed struct {
 // custom-status/DND/huddle state, and the clock used for "local time"
 // and status-expiry math.
 type Live struct {
-	Avatar   string // "" = not loaded
-	Presence string // "active" | "away" | "" (unknown -> omitted)
-	Status   peerstatus.Status
-	Now      time.Time // its zone offset is "you"
+	Avatar         string // "" = not loaded
+	AvatarSixelKey string // placement key for AvatarSixel; "" without one
+	AvatarSixel    []byte // the avatar as sixel; empty draws Avatar as half-block
+	Presence       string // "active" | "away" | "" (unknown -> omitted)
+	Status         peerstatus.Status
+	Now            time.Time // its zone offset is "you"
 }
 
 // fetchState is the modal's own small state machine, reset by Open.
@@ -69,6 +72,11 @@ type Model struct {
 	// clickEmail or clickHuddle, empty on a miss. A hit's onPoint
 	// handler reads it to decide what a click copied.
 	lastClickTarget string
+	// lastSixel is the placement the last ViewOverlay computed for the
+	// avatar's sixel image, in absolute screen coordinates; nil unless
+	// that frame blanked the avatar's cells for the painter. Read by
+	// the App's sixel collector while the modal is open.
+	lastSixel *imgpkg.SixelPaint
 }
 
 // Click target names for lastClickTarget. Exported: the App's modal
@@ -136,6 +144,13 @@ func (m *Model) HuddleLinkOffered() bool {
 // LastClickTarget names the point hot spot the last ClickAt hit
 // (clickEmail or clickHuddle), "" on a miss.
 func (m *Model) LastClickTarget() string { return m.lastClickTarget }
+
+// SixelPaint returns the placement the last ViewOverlay computed for
+// the avatar's sixel image, in absolute screen coordinates (0-based),
+// nil when that frame drew no sixel avatar — no avatar yet, or no
+// sixel bytes (the half-block avatar draws as text instead, and the
+// half-block lines themselves are the panes' fallback shape).
+func (m *Model) SixelPaint() *imgpkg.SixelPaint { return m.lastSixel }
 
 // IsVisible reports whether the modal is showing.
 func (m *Model) IsVisible() bool { return m.visible }

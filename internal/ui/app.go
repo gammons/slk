@@ -4296,12 +4296,31 @@ func (a *App) collectSixelPlacements(frame panelLayoutFrame) []imgpkg.SixelPlace
 		return want
 	}
 	// A modal is composited into the frame's text, but sixel is painted
-	// after the text, so any placement published now would land on top
-	// of the modal. Withhold them all: the painter erases the images, and
-	// repaints them once the modal closes and the text beneath changes
-	// back. Kitty images get the same treatment in overlay.DimmedOverlay,
-	// which blanks their placeholder cells (issue #18).
+	// after the text, so a placement published for the base screen would
+	// land on top of the modal. Withhold those: the painter erases the
+	// images, and repaints them once the modal closes and the text
+	// beneath changes back. Kitty images get the same treatment in
+	// overlay.DimmedOverlay, which blanks their placeholder cells
+	// (issue #18).
+	//
+	// The profile dialog is the exception: it owns its avatar's slot.
+	// Its text blanks the avatar cells (SixelPaint), the modal is the
+	// topmost thing composited there, and the image landing after the
+	// text is exactly right for it. It is read-only with no stacking
+	// modals (e/c copy and toast), so nothing can sit over the slot.
 	if a.overlayActive() {
+		if a.userProfile.IsVisible() {
+			if p := a.userProfile.SixelPaint(); p != nil {
+				return []imgpkg.SixelPlacement{{
+					Key:   p.Key,
+					Row:   p.Row + 1, // CUP is 1-based
+					Col:   p.Col + 1,
+					Rows:  p.Rows,
+					Cols:  p.Cols,
+					Bytes: p.Bytes,
+				}}
+			}
+		}
 		return nil
 	}
 	var out []imgpkg.SixelPlacement
