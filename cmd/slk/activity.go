@@ -12,21 +12,15 @@ import (
 	"github.com/gammons/slk/internal/ui"
 )
 
-// activityClient returns the client the Activity closures should run on
-// for wctx's workspace. A Grid member-workspace token is the one session
-// Slack rejects activity.feed, messages.list and activity.markRead for
-// (team_is_restricted, the same restriction client.counts hits); the
-// org-level session on the same grid serves them, and the web client's
-// Activity view is org-wide anyway. The sibling must also be the SAME
-// authenticated user: browser credentials for a second account on the
-// grid connect as sibling sessions too, and routing this workspace's
-// activity through one of those would read (and markRead) another
-// user's feed. Falls back to the workspace's own client when no
-// matching org-level sibling is connected, so the failure surfaces
-// as it does today rather than as a silent empty view with no diagnosis.
-func activityClient(router *workspaceRouter, wctx *WorkspaceContext) *slackclient.Client {
-	if !wctx.Client.IsGridMember() {
-		return wctx.Client
+// sameUserOrgClient returns the org-level session of the same
+// authenticated user on wctx's grid, or nil. The same-user rule is the
+// boundary that keeps browser credentials for a second account on the
+// grid (which connect as sibling sessions too) from standing in for
+// this user's org session. Nil also when wctx is not a grid member, no
+// org-level sibling is connected, or wctx has no client.
+func sameUserOrgClient(router *workspaceRouter, wctx *WorkspaceContext) *slackclient.Client {
+	if wctx.Client == nil || !wctx.Client.IsGridMember() {
+		return nil
 	}
 	ent, user := wctx.Client.EnterpriseID(), wctx.Client.UserID()
 	for _, sibling := range router.All() {
@@ -36,6 +30,22 @@ func activityClient(router *workspaceRouter, wctx *WorkspaceContext) *slackclien
 		if sibling.Client.EnterpriseID() == ent && sibling.Client.UserID() == user {
 			return sibling.Client
 		}
+	}
+	return nil
+}
+
+// activityClient returns the client the Activity closures should run on
+// for wctx's workspace. A Grid member-workspace token is the one session
+// Slack rejects activity.feed, messages.list and activity.markRead for
+// (team_is_restricted, the same restriction client.counts hits); the
+// org-level session on the same grid serves them, and the web client's
+// Activity view is org-wide anyway. Falls back to the workspace's own
+// client when no matching org-level sibling is connected, so the failure
+// surfaces as it does today rather than as a silent empty view with no
+// diagnosis.
+func activityClient(router *workspaceRouter, wctx *WorkspaceContext) *slackclient.Client {
+	if org := sameUserOrgClient(router, wctx); org != nil {
+		return org
 	}
 	return wctx.Client
 }
