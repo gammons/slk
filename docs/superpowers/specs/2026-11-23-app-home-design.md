@@ -74,6 +74,12 @@ from a Cmd) and `Press(teamID, channelID, viewID, serviceID, action) error`.
 URL, style, optional confirm). `cmd/slk` converts `slack.Blocks` and extracts
 buttons with `blockkit.Parse` and a walk of `slack.ActionBlock`s.
 
+Both calls are org-served on Enterprise Grid: a member workspace's own token
+answers `team_is_restricted` for `blocks.actions` (and can miss the
+conversation for `conversations.info`), so `cmd/slk` runs them through
+`sameUserOrgClient` - the org-level sibling session of the *same authenticated
+user* - as the Activity feed does.
+
 ### UI
 
 A fetch is fired when an `app`-typed conversation is selected. When it lands:
@@ -101,6 +107,8 @@ A fetch is fired when an `app`-typed conversation is selected. When it lands:
   handling the press. A failed fetch says nothing about whether the app has a
   Home tab, so it keeps the tab already on screen; only a successful answer
   with no view clears it. A failed press toasts and leaves the tab as it was.
+  A button that opens a modal dispatches too; Slack's `view_opened` frame
+  arrives and the existing handler toasts that slk can't show the dialog.
 - While Home is up, the conversation counts as not drawn for read marks: a
   message arriving behind the tab stays unread, exactly as in a stacked layout
   where the pane is hidden.
@@ -123,8 +131,13 @@ and the press go through `AppHomeService`, wired in `cmd/slk`.
 - The tab renders with an image-free Block Kit context, so image blocks show
   their fallback links: this pane has no placement pipeline and no repaint
   when an image fetch finishes.
-- A button whose action opens a Slack modal has no visible effect in slk:
-  the app opens the modal server-side and no surface here renders it.
+- A button whose action opens a Slack modal is dispatched, but the modal
+  itself is not rendered: slk shows its existing "opened a dialog slk can't
+  show yet" toast.
+- Slack pushes the re-published view over the WebSocket as
+  `view_updated` (`view:null` when a modal closes). Consuming that frame
+  instead of the timed follow-up fetch after a press is a follow-up; slk
+  currently logs it as an unknown event.
 - Opening an app DM asks `conversations.info` twice: the messaging-capability
   probe (`boot.ConversationsInfo`) and this fetch decode different subsets of
   the same answer. Merging them is a follow-up.

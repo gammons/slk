@@ -18,6 +18,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/bubbles/channelpicker"
 	"github.com/gammons/slk/internal/bubbles/confirmprompt"
 	"github.com/gammons/slk/internal/bubbles/linkpicker"
@@ -1130,9 +1131,28 @@ func (a *App) defaultHelpHint() string {
 	return ""
 }
 
+// declareGraphemeWidths asks bubbletea's renderer to measure cells with
+// grapheme widths.
+//
+// Every frame slk draws is composed with lipgloss v2, which measures and
+// pads with grapheme widths (ansi.GraphemeWidth). The renderer starts on
+// wcwidth and switches only when the terminal answers the DECRPM 2027
+// query; on a terminal that does not answer, a character whose two
+// widths differ (the status emoji U+1F5D3 U+FE0F is 1 by wcwidth and 2
+// by grapheme width) leaves the renderer's cell model one column
+// narrower than the row it is diffing. A partial row update then starts
+// a column early, which is visible as the right-hand pane overlapping
+// the border on exactly the rows holding that emoji. The mode report is
+// the renderer's own switch: sending it is the way to declare the width
+// method the frames were actually built with.
+func declareGraphemeWidths() tea.Msg {
+	return tea.ModeReportMsg{Mode: ansi.ModeUnicodeCore, Value: ansi.ModeSet}
+}
+
 func (a *App) Init() tea.Cmd {
+	cmds := []tea.Cmd{declareGraphemeWidths}
 	if a.bootstrap.IsLoading() {
-		return tea.Batch(
+		cmds = append(cmds,
 			tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
 				return SpinnerTickMsg{}
 			}),
@@ -1141,7 +1161,7 @@ func (a *App) Init() tea.Cmd {
 			}),
 		)
 	}
-	return nil
+	return tea.Batch(cmds...)
 }
 
 // Update is the bubbletea entry point: the reducer chain in update,
