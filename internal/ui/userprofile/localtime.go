@@ -3,15 +3,18 @@ package userprofile
 import (
 	"strconv"
 	"time"
+
+	"github.com/gammons/slk/internal/ui/messages"
 )
 
 // formatLocalTime renders the author's wall clock and its offset from
 // this machine's local time, given tzOffset (seconds east of UTC) and
 // an optional zone abbreviation. now supplies both the instant and,
-// via its own zone, "your" offset to compare against.
+// via its own zone, "your" offset to compare against. The clock
+// follows appearance.timestamp_format, like every clock in the TUI.
 func formatLocalTime(now time.Time, tzOffset int, abbrev string) string {
 	loc := time.FixedZone(abbrev, tzOffset)
-	clock := now.In(loc).Format("3:04 PM")
+	clock := now.In(loc).Format(messages.TimestampLayout())
 
 	_, localOffset := now.Zone()
 	delta := formatOffsetDelta(tzOffset - localOffset)

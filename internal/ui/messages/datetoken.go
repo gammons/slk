@@ -56,6 +56,16 @@ func SetDateTokenTimeLayout(layout string) {
 	}
 }
 
+// TimestampLayout is the clock layout every clock in the TUI formats
+// with: the seeded appearance.timestamp_format value, or its default
+// "3:04 PM" when nothing was set. {time} and {time_secs} render with it
+// internally; surfaces outside this package (the profile dialog's
+// local-time and DND-end clocks, the DM header's DND suffix) read it
+// here so one setting drives every clock.
+func TimestampLayout() string {
+	return dateTokenTimeLayout
+}
+
 // timeLayoutWithSeconds returns the layout with a seconds component
 // inserted after the minutes token unless one is already present, so
 // {time_secs} stays a superset of {time} for any configured layout.

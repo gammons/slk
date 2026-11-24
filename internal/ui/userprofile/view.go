@@ -371,7 +371,7 @@ func (m *Model) statusRows(innerW int, live Live) (rows []string, huddleIdx, hud
 	if st.InDND(now) {
 		line := peerstatus.DNDGlyph + " Do not disturb"
 		if !st.DNDEnd.IsZero() {
-			line += " until " + st.DNDEnd.In(now.Location()).Format("3:04 PM")
+			line += " until " + st.DNDEnd.In(now.Location()).Format(messages.TimestampLayout())
 		}
 		rows = append(rows, style.Render(padLeftTo(fit(line, innerW), innerW)))
 	}

@@ -3,6 +3,8 @@ package userprofile
 import (
 	"testing"
 	"time"
+
+	"github.com/gammons/slk/internal/ui/messages"
 )
 
 func TestFormatLocalTime(t *testing.T) {
@@ -27,5 +29,20 @@ func TestFormatLocalTime(t *testing.T) {
 				t.Errorf("formatLocalTime(now, %d, %q) = %q, want %q", c.tzOffset, c.abbrev, got, c.want)
 			}
 		})
+	}
+}
+
+// The local-time clock follows appearance.timestamp_format, the layout
+// messages.TimestampLayout hands out — not a hardcoded "3:04 PM".
+func TestFormatLocalTimeFollowsTimestampFormat(t *testing.T) {
+	previous := messages.TimestampLayout()
+	messages.SetDateTokenTimeLayout("15:04")
+	t.Cleanup(func() { messages.SetDateTokenTimeLayout(previous) })
+
+	now := time.Date(2026, 9, 30, 18, 42, 0, 0, time.FixedZone("EDT", -4*3600))
+	got := formatLocalTime(now, -7*3600, "PDT")
+	want := "15:42 (PDT, \u22123h from you)" // 18:42 EDT is 15:42 PDT
+	if got != want {
+		t.Errorf("formatLocalTime with layout 15:04 = %q, want %q", got, want)
 	}
 }
