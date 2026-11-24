@@ -92,27 +92,47 @@ func (m *Model) ClickAt(termW, termH, x, y int) bool {
 func drawnWidth(s string) int { return lipgloss.Width(s) }
 
 // ViewOverlay composites the modal onto background. Returns background
-// unchanged when hidden. When the live input carries a sixel avatar, it
-// also records where the box (and so the avatar) landed on screen, for
-// the App's sixel collector.
+// unchanged when hidden. When the live input carries a sixel avatar and
+// its slot fits the screen, it blanks the avatar's cells and records
+// where the box (and so the avatar) landed on screen, for the App's
+// sixel collector; when the slot would fall past the clipped screen, it
+// keeps the half-block avatar and places nothing.
 func (m *Model) ViewOverlay(termW, termH int, background string, live Live) string {
 	if !m.visible {
 		return background
 	}
 	m.lastLive = live
 	l := m.layout(termW, termH, live)
-	box := l.box
-	if box == "" {
+	if l.box == "" {
 		m.lastSixel = nil
 		return background
 	}
-	m.lastSixel = m.avatarPaint(termW, termH, l, live)
-	result := overlay.DimmedOverlay(termW, termH, background, box, 0.5)
+	paint := m.avatarPaint(termW, termH, l, live)
+	if paint == nil && drawsSixelAvatar(live) {
+		// The avatar's slot falls past the clipped screen: the card is
+		// taller than the terminal. The painter does not clip its image,
+		// so the sixel avatar would smear past the frame; redraw with
+		// the half-block one, whose text clips with the card. The two
+		// avatars share one footprint, so the box — and with it the fit
+		// that just failed — cannot change.
+		live = live.withoutSixelAvatar()
+		m.lastLive = live
+		l = m.layout(termW, termH, live)
+	}
+	m.lastSixel = paint
+	result := overlay.DimmedOverlay(termW, termH, background, l.box, 0.5)
 	lines := strings.Split(result, "\n")
 	if len(lines) > termH {
 		lines = lines[:termH]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// withoutSixelAvatar returns live with the sixel bytes dropped, so the
+// half-block avatar draws instead.
+func (live Live) withoutSixelAvatar() Live {
+	live.AvatarSixel, live.AvatarSixelKey = nil, ""
+	return live
 }
 
 // avatarPaint is the placement the painter draws the avatar's sixel
@@ -121,15 +141,18 @@ func (m *Model) ViewOverlay(termW, termH int, background string, live Live) stri
 // with) plus the box-local spot layout recorded. The footprint comes
 // from the half-block fallback's own shape, the same way the panes
 // derive it. nil unless the live input carries a loaded avatar with
-// sixel bytes — otherwise the half-block avatar draws as text and
-// nothing is placed.
+// sixel bytes AND the image's cells all land inside the screen: the
+// painter draws exactly where it is told, never clipped, so a slot that
+// reaches past a short terminal's frame would smear pixels over
+// whatever is below. The caller then keeps the half-block avatar, whose
+// text clips with the card.
 func (m *Model) avatarPaint(termW, termH int, l boxLayout, live Live) *imgpkg.SixelPaint {
 	if !drawsSixelAvatar(live) {
 		return nil
 	}
 	fallback := strings.Split(live.Avatar, "\n")
 	originX, originY := overlay.Centered(termW, termH, lipgloss.Width(l.box), lipgloss.Height(l.box))
-	return &imgpkg.SixelPaint{
+	p := &imgpkg.SixelPaint{
 		Key:   live.AvatarSixelKey,
 		Row:   originY + l.avatarRow,
 		Col:   originX + l.avatarCol,
@@ -137,6 +160,10 @@ func (m *Model) avatarPaint(termW, termH int, l boxLayout, live Live) *imgpkg.Si
 		Cols:  lipgloss.Width(fallback[0]),
 		Bytes: live.AvatarSixel,
 	}
+	if p.Row+p.Rows > termH || p.Col+p.Cols > termW {
+		return nil
+	}
+	return p
 }
 
 // headerName resolves the name shown in the title row: display name,

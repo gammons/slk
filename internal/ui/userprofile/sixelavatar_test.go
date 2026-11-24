@@ -98,3 +98,42 @@ func TestViewOverlay_SixelAvatarNeedsAvatarAndBytes(t *testing.T) {
 		})
 	}
 }
+
+// The painter draws exactly where it is told and never clips: a slot
+// that reaches past a short terminal's frame keeps the half-block
+// avatar, whose text clips with the card — not blanked cells with no
+// image over them.
+func TestViewOverlay_SixelAvatarFitsTheScreen(t *testing.T) {
+	live := Live{
+		Now:            time.Now(),
+		Avatar:         "AAAA\nAAAA",
+		AvatarSixelKey: "avatar-U1-abc",
+		AvatarSixel:    []byte(testSixel),
+	}
+
+	m := New()
+	m.Open(Seed{TeamID: "T1", UserID: "U1", DisplayName: "Priya"})
+	m.ViewOverlay(80, 24, "", live)
+	if p := m.SixelPaint(); p == nil {
+		t.Fatal("SixelPaint() = nil on a screen the card fits")
+	}
+
+	// A 4-row terminal is too short for the card: the avatar's cells
+	// fall past the clipped frame, so the half-block avatar draws in
+	// their place and nothing is placed.
+	m = New()
+	m.Open(Seed{TeamID: "T1", UserID: "U1", DisplayName: "Priya"})
+	out := m.ViewOverlay(80, 4, "", live)
+	if p := m.SixelPaint(); p != nil {
+		t.Errorf("SixelPaint() = %+v on a 4-row screen, want nil", p)
+	}
+	plain := ansi.Strip(out)
+	if row, _, ok := locatePlainText(plain, "AAAA"); !ok {
+		t.Errorf("4-row screen lost the half-block avatar:\n%s", plain)
+	} else if row >= 4 {
+		t.Errorf("half-block avatar on row %d of a 4-row screen (not visible)", row)
+	}
+	if strings.Contains(plain, "Priya") && !strings.Contains(plain, "AAAA  Priya") {
+		t.Errorf("name row lost its avatar gutter:\n%s", plain)
+	}
+}

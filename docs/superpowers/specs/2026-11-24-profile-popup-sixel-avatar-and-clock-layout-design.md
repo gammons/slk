@@ -45,10 +45,16 @@ hazard is exactly right for it:
   toast), so nothing can sit over the slot. On close, the modal's
   placement vanishes and the painter repaints the panes'.
 
-No fallback complexity: the card is always fully on screen (the box is
-clamped to `termW-4`, the header rows are never dropped, and the
-centering clamps at 0), so the sixel image never needs the half-block
-fallback the panes use for a pane edge cutting an image.
+The card can outgrow a tiny terminal, and the painter draws exactly
+where it is told — never clipped. So `avatarPaint` returns nil unless
+the whole footprint lands inside the screen (`Row+Rows <= termH &&
+Col+Cols <= termW`), and `ViewOverlay` then re-runs layout with the
+sixel fields stripped: the half-block avatar draws and clips with the
+card's text, instead of blanked cells with no image over them. The two
+avatars share one footprint, so the box — and the fit that just failed —
+cannot change between the passes. Wide terminals never hit this: the box
+is clamped to `termW-4`, the header rows are never dropped, and the
+centering clamps at 0.
 
 ## 2. The dialog's clocks ignored `appearance.timestamp_format`
 
