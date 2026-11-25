@@ -49,14 +49,21 @@ type draftEngine struct {
 	index map[draftDest]draftEntry
 	locks map[draftDest]*sync.Mutex
 	busy  map[draftDest]int
+	// seq and touched record write order: touched[dest] is the seq at
+	// which dest's index entry was last written (put, drop or
+	// markHandsOff). reload uses this to tell a write that happened
+	// during its ListDrafts call from one that happened before it.
+	seq     uint64
+	touched map[draftDest]uint64
 }
 
 func newDraftEngine(api draftAPI, teamID string) *draftEngine {
 	return &draftEngine{
 		api: api, teamID: teamID, now: time.Now,
-		index: map[draftDest]draftEntry{},
-		locks: map[draftDest]*sync.Mutex{},
-		busy:  map[draftDest]int{},
+		index:   map[draftDest]draftEntry{},
+		locks:   map[draftDest]*sync.Mutex{},
+		busy:    map[draftDest]int{},
+		touched: map[draftDest]uint64{},
 	}
 }
 
@@ -92,23 +99,61 @@ func (e *draftEngine) put(dest draftDest, d slackclient.Draft) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.index[dest] = draftEntry{id: d.ID, lastUpdatedTS: d.LastUpdatedTS, handsOff: !d.Writable()}
+	e.seq++
+	e.touched[dest] = e.seq
 }
 
 func (e *draftEngine) drop(dest draftDest) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	delete(e.index, dest)
+	e.seq++
+	e.touched[dest] = e.seq
+}
+
+// dropIfMatches removes dest's entry only if it still names id: between
+// Delete locating dest and taking its lock, a concurrent Save may have
+// replaced dest's draft with a different id, which Delete must then
+// leave alone.
+func (e *draftEngine) dropIfMatches(dest draftDest, id string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if cur, ok := e.index[dest]; ok && cur.id == id {
+		delete(e.index, dest)
+		e.seq++
+		e.touched[dest] = e.seq
+	}
+}
+
+// markHandsOff records dest as a slot slk won't write to (a deleted
+// draft still holding it, or an update Slack refused as invalid)
+// without forgetting that fact, so the next Save short-circuits instead
+// of repeating the failed round trip. A later list that shows dest
+// writable (or gone) replaces this entry, same as any other write.
+func (e *draftEngine) markHandsOff(dest draftDest) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.index[dest] = draftEntry{handsOff: true}
+	e.seq++
+	e.touched[dest] = e.seq
 }
 
 func destOf(d slackclient.Draft) draftDest {
 	return draftDest{d.Destinations[0].ChannelID, d.Destinations[0].ThreadTS}
 }
 
-// reload lists the drafts and rebuilds the index. A conversation another
-// caller holds the lock of keeps what the engine knew: its call in
-// flight may postdate the list. own is the caller's conversation, whose
-// entry the list does replace.
+// reload lists the drafts and rebuilds the index. A conversation that is
+// either busy right now or was written to while the ListDrafts call was
+// in flight keeps what the engine already knew instead of the list's
+// answer, because that write may postdate (or itself be invisible to)
+// the snapshot the list just took. own is the caller's own conversation,
+// exempted from that rule: the caller holds its lock and is the one
+// making this list call, so the fresh answer is what it is adopting.
 func (e *draftEngine) reload(ctx context.Context, own *draftDest) ([]slackclient.Draft, error) {
+	e.mu.Lock()
+	start := e.seq
+	e.mu.Unlock()
+
 	drafts, err := e.api.ListDrafts(ctx)
 	if err != nil {
 		return nil, err
@@ -122,7 +167,16 @@ func (e *draftEngine) reload(ctx context.Context, own *draftDest) ([]slackclient
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	stale := map[draftDest]bool{}
 	for dest := range e.busy {
+		stale[dest] = true
+	}
+	for dest, t := range e.touched {
+		if t > start {
+			stale[dest] = true
+		}
+	}
+	for dest := range stale {
 		if own != nil && dest == *own {
 			continue
 		}
@@ -189,6 +243,8 @@ func (e *draftEngine) create(ctx context.Context, dest draftDest, w slackclient.
 	ent, ok := e.entry(dest)
 	if !ok || ent.handsOff {
 		// A deleted draft can hold the slot without being listed.
+		// Remember that so the next Save doesn't repeat this round trip.
+		e.markHandsOff(dest)
 		return core.DraftSaveResult{}, core.ErrDraftHandsOff
 	}
 	res, err := e.update(ctx, dest, ent.id, w)
@@ -216,7 +272,9 @@ func (e *draftEngine) update(ctx context.Context, dest draftDest, id string, w s
 		e.drop(dest)
 		return e.create(ctx, dest, w, false)
 	case "draft_update_invalid":
-		e.drop(dest)
+		// Remembered hands-off, not dropped: the next Save short-circuits
+		// instead of repeating this refused update.
+		e.markHandsOff(dest)
 		return core.DraftSaveResult{}, core.ErrDraftHandsOff
 	default:
 		return core.DraftSaveResult{}, err
@@ -262,7 +320,7 @@ func (e *draftEngine) Delete(ctx context.Context, id string) error {
 		return err
 	}
 	if dest != nil {
-		e.drop(*dest)
+		e.dropIfMatches(*dest, id)
 	}
 	return nil
 }
@@ -318,6 +376,9 @@ func sendWithDraft(ctx context.Context, client draftSender, drafts *draftEngine,
 		debuglog.General("chat.postMessage: draft refused (%s), sending without it", refusal.Err)
 		ts, mr, err = plain()
 		if err == nil {
+			// Best-effort: a failed delete here just means the next
+			// Save/Load self-heals through the attached_draft_exists /
+			// draft_already_sent recovery paths already in place.
 			_ = drafts.api.DeleteDraft(ctx, ref.ID)
 			drafts.drop(dest)
 		}

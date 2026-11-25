@@ -163,6 +163,54 @@ func TestDraftEngine_DeletedDraftHoldingTheSlotIsHandsOff(t *testing.T) {
 	}
 }
 
+// A failed adoption remembers the hands-off slot, so a second Save for
+// the same conversation short-circuits instead of repeating the
+// create -> attached_draft_exists -> list round trip.
+func TestDraftEngine_CreateHandsOffIsRemembered(t *testing.T) {
+	api := &fakeDraftAPI{}
+	api.create = func(slackclient.DraftWrite) (slackclient.Draft, error) {
+		return slackclient.Draft{}, rejected("attached_draft_exists")
+	}
+	e := newDraftEngine(api, "T1")
+	ctx := context.Background()
+	if _, err := e.Save(ctx, c1, "mine", time.Time{}); !errors.Is(err, core.ErrDraftHandsOff) {
+		t.Fatalf("first save err = %v, want ErrDraftHandsOff", err)
+	}
+	before := len(api.Calls())
+	if _, err := e.Save(ctx, c1, "mine again", time.Time{}); !errors.Is(err, core.ErrDraftHandsOff) {
+		t.Fatalf("second save err = %v, want ErrDraftHandsOff", err)
+	}
+	if got := len(api.Calls()); got != before {
+		t.Errorf("second save made %d API call(s), want 0 (calls=%v)", got-before, api.Calls())
+	}
+}
+
+// draft_update_invalid also remembers the hands-off slot, so a second
+// Save makes no API calls either.
+func TestDraftEngine_UpdateInvalidHandsOffIsRemembered(t *testing.T) {
+	api := &fakeDraftAPI{list: func() ([]slackclient.Draft, error) {
+		return []slackclient.Draft{attached("Dr7", "C1", "", "1.0")}, nil
+	}}
+	api.update = func(string, slackclient.DraftWrite) (slackclient.Draft, error) {
+		return slackclient.Draft{}, rejected("draft_update_invalid")
+	}
+	e := newDraftEngine(api, "T1")
+	ctx := context.Background()
+	if _, err := e.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Save(ctx, c1, "mine", time.Time{}); !errors.Is(err, core.ErrDraftHandsOff) {
+		t.Fatalf("first save err = %v, want ErrDraftHandsOff", err)
+	}
+	before := len(api.Calls())
+	if _, err := e.Save(ctx, c1, "mine again", time.Time{}); !errors.Is(err, core.ErrDraftHandsOff) {
+		t.Fatalf("second save err = %v, want ErrDraftHandsOff", err)
+	}
+	if got := len(api.Calls()); got != before {
+		t.Errorf("second save made %d API call(s), want 0 (calls=%v)", got-before, api.Calls())
+	}
+}
+
 func TestDraftEngine_HandsOffDraftsAreNeverWritten(t *testing.T) {
 	sched := attached("Dr1", "C1", "", "1.0")
 	sched.DateScheduled = 1800000000
@@ -252,6 +300,65 @@ func TestDraftEngine_OneCallInFlightPerConversation(t *testing.T) {
 	want := []string{"create C1 one", "update Dr1 two -62135596800000"}
 	if got := api.Calls(); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("calls = %v, want %v", got, want)
+	}
+}
+
+// A Save for another conversation that both starts and finishes while a
+// reload's ListDrafts call is in flight must not be erased when that
+// call's (now stale) list commits.
+func TestDraftEngine_ReloadKeepsWritesMadeDuringTheList(t *testing.T) {
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	api := &fakeDraftAPI{}
+	api.list = func() ([]slackclient.Draft, error) {
+		close(entered)
+		<-release
+		return nil, nil // the snapshot taken before C2 was written
+	}
+	e := newDraftEngine(api, "T1")
+	ctx := context.Background()
+
+	loadDone := make(chan struct{})
+	go func() {
+		_, _ = e.Load(ctx)
+		close(loadDone)
+	}()
+	<-entered
+
+	c2 := draftDest{channelID: "C2"}
+	if _, err := e.Save(ctx, c2, "hello", time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+
+	close(release)
+	<-loadDone
+
+	// If the stale list had won, this would be a second "create C2 ...".
+	if _, err := e.Save(ctx, c2, "world", time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"list", "create C2 hello", "update Dr1 world -62135596800000"}
+	if got := api.Calls(); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("calls = %v, want %v", got, want)
+	}
+}
+
+// dropIfMatches (behind Delete's fix for its lookup/lock TOCTOU) must
+// leave an entry alone when its id no longer matches, and only remove
+// it when it still does.
+func TestDraftEngine_DropIfMatchesOnlyRemovesMatchingID(t *testing.T) {
+	api := &fakeDraftAPI{}
+	e := newDraftEngine(api, "T1")
+	e.put(c1, attached("Dr1", "C1", "", "1.0"))
+
+	e.dropIfMatches(c1, "Dr9")
+	if _, ok := e.entry(c1); !ok {
+		t.Fatal("dropIfMatches removed the entry for a mismatched id")
+	}
+
+	e.dropIfMatches(c1, "Dr1")
+	if _, ok := e.entry(c1); ok {
+		t.Fatal("dropIfMatches left the entry in place for a matching id")
 	}
 }
 
