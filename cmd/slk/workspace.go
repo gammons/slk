@@ -153,6 +153,12 @@ type WorkspaceContext struct {
 	// meanwhile make it fetch once more instead of starting their own.
 	emojiRefetching     bool
 	emojiRefetchPending bool
+	// appCommands is this workspace's slash commands from
+	// client.appCommands. Access it via AppCommands/SetAppCommands.
+	// The slice is published whole and never mutated. Nil until the
+	// fetch lands; a failed fetch leaves it nil, so chat.command omits
+	// team_id and the slash picker stays closed.
+	appCommands atomic.Pointer[[]core.SlashCommand]
 	// userGroups holds this workspace's usergroup ID -> handle map.
 	// Access it via UserGroups/SetUserGroups, never directly.
 	//
@@ -350,6 +356,32 @@ func (w *WorkspaceContext) CustomEmoji() map[string]string {
 // afterwards.
 func (w *WorkspaceContext) SetCustomEmoji(emojis map[string]string) {
 	w.customEmoji.Store(&emojis)
+}
+
+// AppCommands returns this workspace's slash commands, or nil before
+// client.appCommands has landed. The result must be treated as read-only.
+func (w *WorkspaceContext) AppCommands() []core.SlashCommand {
+	if w == nil {
+		return nil
+	}
+	if p := w.appCommands.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// SetAppCommands publishes the workspace's slash commands. The stored
+// slice is a copy, so the caller may reuse cmds.
+func (w *WorkspaceContext) SetAppCommands(cmds []core.SlashCommand) {
+	if w == nil {
+		return
+	}
+	var stored []core.SlashCommand
+	if cmds != nil {
+		stored = make([]core.SlashCommand, len(cmds))
+		copy(stored, cmds)
+	}
+	w.appCommands.Store(&stored)
 }
 
 // workspaceRouter is the program-wide registry of connected

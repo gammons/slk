@@ -33,9 +33,10 @@
 //     typing-indicator emit on every
 //     text keystroke.
 //
-// Compose-overlay pickers (emoji / @mention / #channel) get
-// priority on Up/Down/Enter: when a picker is active, those keys
-// go to the picker so the user can navigate / select.
+// Compose-overlay pickers (emoji / @mention / #channel / slash
+// command) get priority on Up/Down/Enter: when a picker is active,
+// those keys go to the picker so the user can navigate / select.
+// Enter completes a slash command instead of running it.
 package ui
 
 import (
@@ -43,7 +44,24 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/gammons/slk/internal/ui/compose"
 )
+
+// applyPickerKey gives the open popup msg. handled is false only when
+// Enter closed the slash picker without changing the text: nothing
+// matched, so the popup was not even drawn, and the send path should
+// run the command or post the text. Every other key stays with the popup.
+func applyPickerKey(c *compose.Model, msg tea.KeyMsg, isSend bool) (tea.Cmd, bool) {
+	wasCommand := c.IsCommandActive()
+	before := c.Value()
+	updated, cmd := c.Update(msg)
+	*c = updated
+	if wasCommand && isSend && !c.IsCommandActive() && c.Value() == before {
+		return nil, false
+	}
+	return cmd, true
+}
 
 func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	if a.compose.Uploading() || a.threadCompose.Uploading() {
@@ -56,32 +74,13 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	if a.editing.IsActive() && key.Matches(msg, a.keys.Escape) {
 		// If a picker is active in the relevant compose, close it
 		// instead of cancelling the edit.
+		target := &a.compose
 		if a.editing.Panel() == PanelThread {
-			if a.threadCompose.IsEmojiActive() {
-				a.threadCompose.CloseEmoji()
-				return nil
-			}
-			if a.threadCompose.IsMentionActive() {
-				a.threadCompose.CloseMention()
-				return nil
-			}
-			if a.threadCompose.IsChannelActive() {
-				a.threadCompose.CloseChannel()
-				return nil
-			}
-		} else {
-			if a.compose.IsEmojiActive() {
-				a.compose.CloseEmoji()
-				return nil
-			}
-			if a.compose.IsMentionActive() {
-				a.compose.CloseMention()
-				return nil
-			}
-			if a.compose.IsChannelActive() {
-				a.compose.CloseChannel()
-				return nil
-			}
+			target = &a.threadCompose
+		}
+		if target.PickerActive() {
+			target.DismissPicker()
+			return nil
 		}
 		a.cancelEdit()
 		return nil
@@ -106,32 +105,13 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	}
 	if key.Matches(msg, a.keys.Escape) {
 		// If a picker is active, close it instead of exiting insert mode.
+		target := &a.compose
 		if a.focusedPanel == PanelThread && a.threadVisible {
-			if a.threadCompose.IsEmojiActive() {
-				a.threadCompose.CloseEmoji()
-				return nil
-			}
-			if a.threadCompose.IsMentionActive() {
-				a.threadCompose.CloseMention()
-				return nil
-			}
-			if a.threadCompose.IsChannelActive() {
-				a.threadCompose.CloseChannel()
-				return nil
-			}
-		} else {
-			if a.compose.IsEmojiActive() {
-				a.compose.CloseEmoji()
-				return nil
-			}
-			if a.compose.IsMentionActive() {
-				a.compose.CloseMention()
-				return nil
-			}
-			if a.compose.IsChannelActive() {
-				a.compose.CloseChannel()
-				return nil
-			}
+			target = &a.threadCompose
+		}
+		if target.PickerActive() {
+			target.DismissPicker()
+			return nil
 		}
 		a.exitInsert()
 		return a.tryOpenActionPrompt()
@@ -169,12 +149,12 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		target.SetPreview(preview)
 		return nil
 	}
-	// If a compose-overlay picker (emoji / @mention / #channel)
-	// is active, let it own Up/Down so users can navigate the
-	// suggestion list. Without this guard, the jump-to-start/end
-	// shortcuts below swallow the arrow keys before the picker
-	// ever sees them.
-	pickerActive := target.IsEmojiActive() || target.IsMentionActive() || target.IsChannelActive()
+	// If a compose-overlay picker (emoji / @mention / #channel /
+	// slash command) is active, let it own Up/Down so users can
+	// navigate the suggestion list. Without this guard, the
+	// jump-to-start/end shortcuts below swallow the arrow keys
+	// before the picker ever sees them.
+	pickerActive := target.PickerActive()
 	// Ctrl+O toggles Slack's "Also send to #channel" for the next
 	// thread reply. Thread compose only -- the channel compose has no
 	// broadcast concept. Skipped while a picker is active so picker
@@ -206,10 +186,10 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	if a.focusedPanel == PanelThread && a.threadVisible {
 		// If a picker is active, forward all keys to compose
 		// (including Enter).
-		if a.threadCompose.IsEmojiActive() || a.threadCompose.IsMentionActive() || a.threadCompose.IsChannelActive() {
-			var cmd tea.Cmd
-			a.threadCompose, cmd = a.threadCompose.Update(msg)
-			return cmd
+		if a.threadCompose.PickerActive() {
+			if cmd, handled := applyPickerKey(&a.threadCompose, msg, isSend); handled {
+				return cmd
+			}
 		}
 
 		// Thread reply compose.
@@ -271,10 +251,10 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	// Channel message compose.
 	// If a picker is active, forward all keys to compose
 	// (including Enter).
-	if a.compose.IsEmojiActive() || a.compose.IsMentionActive() || a.compose.IsChannelActive() {
-		var cmd tea.Cmd
-		a.compose, cmd = a.compose.Update(msg)
-		return cmd
+	if a.compose.PickerActive() {
+		if cmd, handled := applyPickerKey(&a.compose, msg, isSend); handled {
+			return cmd
+		}
 	}
 
 	if isNewline {

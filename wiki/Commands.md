@@ -102,5 +102,11 @@ can see.
   "/name is not a valid command") and puts what you typed back in the
   composer, unless you've started typing something else there by then.
 
-slk doesn't have a picker listing the workspace's commands yet, so you need
-to know the command's name.
+Once the workspace's commands have loaded, typing `/` at the start of an
+empty composer opens a list of them plus slk's own commands. Each row is
+the command, its usage, and a one-line description. Tab or Enter fills in
+`/name ` and leaves it unrun; Esc closes the list; a space closes it so
+you can type arguments. Enter runs the command once the list is closed.
+Aliases such as `/dm` are not listed; typing one in full still runs it.
+If the command list never loads, the popup stays closed and typed
+commands still run.

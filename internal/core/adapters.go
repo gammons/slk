@@ -100,9 +100,11 @@ func (i interactionAdapter) PressAttachmentAction(channelID ids.ChannelID, messa
 }
 
 // CommandServiceFuncs bundles the closures behind a CommandService. A nil
-// func makes its method return errors.ErrUnsupported.
+// Run makes Run return errors.ErrUnsupported. A nil List makes List
+// return nil.
 type CommandServiceFuncs struct {
-	Run func(teamID string, channelID ids.ChannelID, threadTS ids.ThreadTS, command, args string) error
+	Run  func(teamID string, channelID ids.ChannelID, threadTS ids.ThreadTS, command, args string) error
+	List func() []SlashCommand
 }
 
 // NewCommandService builds a CommandService from fns. Used by
@@ -118,6 +120,13 @@ func (c commandAdapter) Run(teamID string, channelID ids.ChannelID, threadTS ids
 		return errors.ErrUnsupported
 	}
 	return c.fns.Run(teamID, channelID, threadTS, command, args)
+}
+
+func (c commandAdapter) List() []SlashCommand {
+	if c.fns.List == nil {
+		return nil
+	}
+	return c.fns.List()
 }
 
 // ThreadServiceFuncs is the closure bundle accepted by

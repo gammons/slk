@@ -26,7 +26,7 @@ func makeTransparent(t *testing.T, a *App, theme string) {
 // on, as transparent_<name>.
 var (
 	transparentGoldenScenarios = []string{"base", "thread_open", "thread_parent_selected", "draft_preview", "drag_selection", "overlay_finder"}
-	transparentGoldenDialogs   = []string{"dialog_confirm", "dialog_channel_finder_scroll", "dialog_search_results", "dialog_new_message", "dialog_reactions_view", "popup_mention", "popup_emoji", "popup_channel"}
+	transparentGoldenDialogs   = []string{"dialog_confirm", "dialog_channel_finder_scroll", "dialog_search_results", "dialog_new_message", "dialog_reactions_view", "popup_mention", "popup_emoji", "popup_channel", "popup_slash_command"}
 )
 
 func TestGolden_Transparent(t *testing.T) {
@@ -245,7 +245,7 @@ func TestTransparentPopupsHaveNoHoles(t *testing.T) {
 	for _, d := range dialogGoldens() {
 		dialogs[d.name] = d
 	}
-	for _, name := range []string{"popup_mention", "popup_emoji", "popup_channel"} {
+	for _, name := range []string{"popup_mention", "popup_emoji", "popup_channel", "popup_slash_command"} {
 		t.Run(name, func(t *testing.T) {
 			d := dialogs[name]
 			a := newGoldenApp(t, goldenFixtureOpts()...)

@@ -13,7 +13,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
+	"github.com/gammons/slk/internal/text"
 	"github.com/gammons/slk/internal/ui/compose"
 )
 
@@ -69,6 +71,76 @@ var slashCommands = map[string]commandFunc{
 	"/leave":  slashUnsupported("/leave"),
 	"/close":  slashUnsupported("/close"),
 	"/part":   slashUnsupported("/part"),
+}
+
+// builtinSlashCommands is the picker catalog for slashCommands. Aliases
+// carry AliasOf so the popup hides them; typing the alias still runs.
+// Descriptions are one line. A workspace list that already has the same
+// name wins, so Slack's usage and description replace these.
+func builtinSlashCommands() []core.SlashCommand {
+	return []core.SlashCommand{
+		{Name: "/away", Desc: `Toggle your "away" status`},
+		{Name: "/active", Desc: "Mark yourself as active"},
+		{Name: "/status", Usage: "away | active", Desc: "Set your presence"},
+		{Name: "/open", Usage: "[channel]", Desc: "Open a channel"},
+		{Name: "/join", Usage: "[channel]", Desc: "Open a channel", AliasOf: "/open"},
+		{Name: "/msg", Usage: "@user [message]", Desc: "Open a DM"},
+		{Name: "/dm", Usage: "@user [message]", Desc: "Open a DM", AliasOf: "/msg"},
+		{Name: "/star", Desc: "Star this conversation"},
+		{Name: "/unstar", Desc: "Unstar this conversation"},
+		{Name: "/leave", Desc: "Leave the current channel"},
+		{Name: "/close", Desc: "Leave the current channel", AliasOf: "/leave"},
+		{Name: "/part", Desc: "Leave the current channel", AliasOf: "/leave"},
+	}
+}
+
+// slashCommandsForPicker is what both composers complete. An empty
+// workspace list (the fetch has not landed, or it failed) returns nil,
+// so the picker stays closed and commands still run as typed. Otherwise
+// it is client.appCommands, then any built-in that list does not already
+// name. Workspace entries win on a shared name. The picker hides AliasOf.
+func (a *App) slashCommandsForPicker() []core.SlashCommand {
+	var listed []core.SlashCommand
+	if a != nil && a.commandSvc != nil {
+		listed = a.commandSvc.List()
+	}
+	if len(listed) == 0 {
+		return nil
+	}
+	return mergeSlashCommands(listed, builtinSlashCommands())
+}
+
+func mergeSlashCommands(first, second []core.SlashCommand) []core.SlashCommand {
+	seen := make(map[string]struct{}, len(first)+len(second))
+	out := make([]core.SlashCommand, 0, len(first)+len(second))
+	add := func(c core.SlashCommand) {
+		key := text.Fold(strings.TrimSpace(c.Name))
+		if key == "" {
+			return
+		}
+		if !strings.HasPrefix(key, "/") {
+			key = "/" + key
+		}
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, c)
+	}
+	for _, c := range first {
+		add(c)
+	}
+	for _, c := range second {
+		add(c)
+	}
+	return out
+}
+
+// wireSlashCompletion points both composers at the live command list.
+func (a *App) wireSlashCompletion() {
+	src := func() []core.SlashCommand { return a.slashCommandsForPicker() }
+	a.compose.SetCommandSource(src)
+	a.threadCompose.SetCommandSource(src)
 }
 
 // commandOrigin says where a slash command was typed: the conversation

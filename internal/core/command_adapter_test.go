@@ -33,6 +33,23 @@ func TestCommandServicePassesArguments(t *testing.T) {
 	}
 }
 
+func TestCommandServiceNilListIsEmpty(t *testing.T) {
+	if got := NewCommandService(CommandServiceFuncs{}).List(); got != nil {
+		t.Errorf("List() = %#v, want nil", got)
+	}
+}
+
+func TestCommandServiceListPassesThrough(t *testing.T) {
+	want := []SlashCommand{{Name: "/giphy", Usage: "[text]", Desc: "Post a gif", AppName: "Giphy"}}
+	svc := NewCommandService(CommandServiceFuncs{
+		List: func() []SlashCommand { return want },
+	})
+	got := svc.List()
+	if len(got) != 1 || got[0] != want[0] {
+		t.Errorf("List() = %#v, want %#v", got, want)
+	}
+}
+
 func TestCommandErrorMessageIsTheCode(t *testing.T) {
 	if got := (&CommandError{Code: "unknown_command"}).Error(); got != "unknown_command" {
 		t.Errorf("Error() = %q, want unknown_command", got)
