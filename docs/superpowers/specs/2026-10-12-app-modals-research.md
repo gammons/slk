@@ -3,9 +3,9 @@
 **Issue:** [#247](https://github.com/gammons/slk/issues/247) (slash commands), the
 part deliberately left out of the slash-commands spec
 **Date:** 2026-10-12
-**Status:** Research only. Not a design. Written so that an agent can brainstorm
-and spec app modals after the slash-commands work lands, without needing new
-captures for the giphy flow.
+**Status:** The read-only part is implemented; see
+`2026-11-25-app-modals-design.md`. Forms, the view stack and images inside a
+modal remain out of scope. This note stays as the wire reference.
 
 ## Why this exists
 

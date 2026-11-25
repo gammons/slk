@@ -159,13 +159,14 @@ func (a *App) appHomeAvailable() bool {
 	return a.appHome.Home() != nil && a.appHomeChannelID == a.activeChannelID
 }
 
-// appHomeRenderContext is the Block Kit host context the Home tab
-// renders with: the messages pane's mention names and emoji, and no
-// image pipeline. Nothing paints image placements in this pane, and no
-// fetch completion repaints it, so an empty renderer context makes
-// image blocks draw their fallback links instead of reserving rows
-// nothing will fill.
-func (a *App) appHomeRenderContext() blockkit.Context {
+// appBlocksRenderContext is the Block Kit host context the app-owned
+// surfaces render with: an app DM's Home tab, and a modal. It carries
+// the messages pane's mention names and emoji, and no image pipeline.
+// Nothing paints image placements on those surfaces, and no fetch
+// completion repaints them, so an empty renderer context makes image
+// blocks draw their fallback links instead of reserving rows nothing
+// will fill.
+func (a *App) appBlocksRenderContext() blockkit.Context {
 	rc := a.messagepane.DraftRenderContext()
 	rc.Images = imgrender.NewRenderer()
 	var flushes []func(io.Writer) error

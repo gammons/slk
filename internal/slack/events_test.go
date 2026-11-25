@@ -65,6 +65,8 @@ type mockEventHandler struct {
 	dndInvalidated    []string
 	userDNDChanges    []userDNDRecord
 	viewsOpened       []string
+	viewsUpdated      []string
+	viewUpdatedNil    []bool
 }
 
 type userStatusRecord struct {
@@ -131,8 +133,13 @@ func (m *mockEventHandler) OnEphemeralMessage(msg EphemeralMessage) {
 	m.ephemerals = append(m.ephemerals, msg)
 }
 
-func (m *mockEventHandler) OnViewOpened(title string) {
-	m.viewsOpened = append(m.viewsOpened, title)
+func (m *mockEventHandler) OnViewOpened(v View) {
+	m.viewsOpened = append(m.viewsOpened, v.Title)
+}
+
+func (m *mockEventHandler) OnViewUpdated(viewID string, v *View) {
+	m.viewsUpdated = append(m.viewsUpdated, viewID)
+	m.viewUpdatedNil = append(m.viewUpdatedNil, v == nil)
 }
 
 func (m *mockEventHandler) OnMessageDeleted(channelID, ts string) {
@@ -1177,6 +1184,32 @@ func TestDispatchViewOpened_FallsBackToTheViewTitle(t *testing.T) {
 	dispatchWebSocketEvent([]byte(`{"type":"view_opened","view":{"title":{"type":"plain_text","text":"Polly"}}}`), h)
 	if len(h.viewsOpened) != 1 || h.viewsOpened[0] != "Polly" {
 		t.Fatalf("viewsOpened = %v, want [Polly]", h.viewsOpened)
+	}
+}
+
+func TestDispatchViewUpdated_InlineView(t *testing.T) {
+	h := &mockEventHandler{}
+	dispatchWebSocketEvent([]byte(`{"type":"view_updated","view_id":"V1",
+	  "view":{"id":"V1","title":{"type":"plain_text","text":"AI Budget Support"},
+	          "blocks":[{"type":"section","text":{"type":"mrkdwn","text":"Your AI Budget"}}]}}`), h)
+	if len(h.viewsUpdated) != 1 || h.viewsUpdated[0] != "V1" {
+		t.Fatalf("viewsUpdated = %v, want [V1]", h.viewsUpdated)
+	}
+	if len(h.viewUpdatedNil) != 1 || h.viewUpdatedNil[0] {
+		t.Fatalf("viewUpdatedNil = %v, want [false]", h.viewUpdatedNil)
+	}
+}
+
+// Slack sends view_updated with view:null when the client should fetch
+// the content itself; the ID must still reach the handler.
+func TestDispatchViewUpdated_NoInlineView(t *testing.T) {
+	h := &mockEventHandler{}
+	dispatchWebSocketEvent([]byte(`{"type":"view_updated","view_id":"V2","view":null}`), h)
+	if len(h.viewsUpdated) != 1 || h.viewsUpdated[0] != "V2" {
+		t.Fatalf("viewsUpdated = %v, want [V2]", h.viewsUpdated)
+	}
+	if len(h.viewUpdatedNil) != 1 || !h.viewUpdatedNil[0] {
+		t.Fatalf("viewUpdatedNil = %v, want [true]", h.viewUpdatedNil)
 	}
 }
 

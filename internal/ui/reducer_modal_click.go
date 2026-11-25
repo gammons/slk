@@ -108,6 +108,16 @@ func (a *App) activeModalClickTarget() (modalClickTarget, bool) {
 				return copyProfileEmail(a)
 			},
 		}, true
+	case ModeAppView:
+		// A click on a button presses it directly; elsewhere inside is
+		// a no-op, and outside dismisses the dialog.
+		return modalClickTarget{
+			box:   &a.appView,
+			point: &a.appView,
+			onPoint: func() tea.Cmd {
+				return a.clickAppViewAction(a.appView.LastClickAction())
+			},
+		}, true
 	}
 	return modalClickTarget{}, false
 }

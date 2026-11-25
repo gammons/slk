@@ -19,6 +19,15 @@ func handleConfirmMode(a *App, msg tea.KeyMsg) tea.Cmd {
 func (a *App) afterConfirmPrompt(cmd tea.Cmd) tea.Cmd {
 	if !a.confirmPrompt.IsVisible() {
 		restore, thread := a.shownPromptInsert, a.shownPromptThread
+		if a.appViewBehind {
+			// The chooser was open over an app dialog: return to it.
+			a.appViewBehind = false
+			if a.appView.Current() != nil {
+				a.clearShownPrompt()
+				a.SetMode(ModeAppView)
+				return tea.Batch(cmd, a.tryOpenActionPrompt())
+			}
+		}
 		a.clearShownPrompt()
 		if restore && thread && !a.threadVisible {
 			// A channel switch closed the thread while the dialog was

@@ -220,7 +220,7 @@ func (a *App) renderAppHomePanel(msgWidth, msgBorder, contentHeight int, msgFocu
 	if msgContentHeight < 3 {
 		msgContentHeight = 3
 	}
-	ctx := a.appHomeRenderContext()
+	ctx := a.appBlocksRenderContext()
 	ahView := a.appHome.View(msgContentHeight, msgWidth-2, ctx)
 	ahView = messages.ReapplyBgAfterResets(ahView, messages.BgANSI())
 	out := exactSize(

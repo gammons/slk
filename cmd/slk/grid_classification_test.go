@@ -38,6 +38,7 @@ func TestGridPerWorkspaceFrames_ClassifiesEveryDispatchedType(t *testing.T) {
 		"reaction_added", "reaction_removed",
 		"user_change", "user_status_changed",
 		"view_opened",
+		"view_updated",
 	}
 	// Connection-exempt: never deduped for reasons other than state
 	// (per-connection frames, the typing indicator's repeat cadence,

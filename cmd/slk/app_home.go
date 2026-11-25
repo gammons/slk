@@ -78,9 +78,9 @@ func convertAppHome(home *slackclient.AppHome) *core.AppHome {
 	return out
 }
 
-// pressAppHomeAction presses one Home-tab button on the app's behalf.
-// No retry: a press can have side effects, so a replayed request could
-// act twice.
+// pressAppHomeAction presses one Block Kit button belonging to a view:
+// a Home-tab button or a modal's. No retry: a press can have side
+// effects, so a replayed request could act twice.
 func pressAppHomeAction(ctx context.Context, client *slackclient.Client,
 	viewID, serviceID string, action core.AppHomeAction) error {
 	req := slackclient.BlockActionRequest{

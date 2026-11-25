@@ -634,20 +634,40 @@ func (h *rtmEventHandler) OnEphemeralMessage(m slackclient.EphemeralMessage) {
 	}
 }
 
-// OnViewOpened tells the user an app opened a modal slk cannot show yet
-// (spec §3.5). Nothing else is done with the view.
-func (h *rtmEventHandler) OnViewOpened(title string) {
+// OnViewOpened shows a modal an app opened for the user. Slack sends
+// the whole view, so no fetch is needed; a frame that names only the
+// view opens an empty dialog the user can still close.
+func (h *rtmEventHandler) OnViewOpened(v slackclient.View) {
 	if h.isActive != nil && !h.isActive() {
 		return
 	}
 	if h.program == nil {
 		return
 	}
-	text := "This command opened a dialog slk can't show yet"
-	if title != "" {
-		text = title + " opened a dialog slk can't show yet"
+	h.program.Send(ui.AppViewOpenedMsg{TeamID: h.workspaceID, View: convertAppView(&v)})
+}
+
+// OnViewUpdated refreshes an open modal. Slack may omit the view and
+// leave fetching it to the client.
+func (h *rtmEventHandler) OnViewUpdated(viewID string, v *slackclient.View) {
+	if h.isActive != nil && !h.isActive() {
+		return
 	}
-	h.program.Send(ui.ToastMsg{Text: text})
+	if h.program == nil {
+		return
+	}
+	if v != nil {
+		h.program.Send(ui.AppViewUpdatedMsg{TeamID: h.workspaceID, View: convertAppView(v)})
+		return
+	}
+	if viewID == "" {
+		// views.get needs an ID; a frame naming neither a view nor an
+		// ID cannot refresh anything, and fetching "" would only toast
+		// an error.
+		debuglog.WS("view_updated: no view and no view_id; ignoring")
+		return
+	}
+	h.program.Send(ui.AppViewNeedsRefreshMsg{TeamID: h.workspaceID, ViewID: viewID})
 }
 
 func (h *rtmEventHandler) OnMessageDeleted(channelID, ts string) {

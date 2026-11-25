@@ -370,7 +370,7 @@ func TestAppHomeFollowsWindowFocus(t *testing.T) {
 
 func TestAppHomeRenderContextDisablesImages(t *testing.T) {
 	a := newTestApp(t)
-	ctx := a.appHomeRenderContext()
+	ctx := a.appBlocksRenderContext()
 	if ctx.Fetcher != nil {
 		t.Error("the Home tab's render context carries an image fetcher")
 	}

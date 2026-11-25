@@ -11,6 +11,7 @@ import (
 	"github.com/gammons/slk/internal/bubbles/channelpicker"
 	"github.com/gammons/slk/internal/bubbles/linkpicker"
 	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/core/blocks"
 	"github.com/gammons/slk/internal/ui/help"
 	"github.com/gammons/slk/internal/ui/marks"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
@@ -162,6 +163,28 @@ func dialogGoldens() []dialogGolden {
 	}
 
 	return []dialogGolden{
+		{
+			name: "dialog_app_view", want: "AI Budget Support",
+			shown: func(a *App) bool { return a.mode == ModeAppView && a.appView.Current() != nil },
+			open: func(t *testing.T, a *App) {
+				a.appView.SetView(&core.AppView{
+					ViewID:     "V1",
+					Title:      "AI Budget Support",
+					CloseLabel: "Close",
+					Blocks: []blocks.Block{
+						blocks.HeaderBlock{Text: "Your AI Budget"},
+						blocks.SectionBlock{Text: "Budget: $400 · Spent: $346 (87%)"},
+						blocks.ActionsBlock{BlockID: "b1", Elements: []blocks.ActionElement{
+							{Kind: "button", Label: "Request budget increase", ActionID: "req_open"},
+						}},
+					},
+					Actions: []core.AppHomeAction{
+						{ActionID: "req_open", BlockID: "b1", Label: "Request budget increase"},
+					},
+				})
+				a.SetMode(ModeAppView)
+			},
+		},
 		{
 			name: "dialog_theme_switcher", want: "Switch Theme", shown: themeShown,
 			open: func(t *testing.T, a *App) {
