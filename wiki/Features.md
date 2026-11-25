@@ -138,7 +138,8 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
 
 - OS-level desktop notifications via [beeep](https://github.com/gen2brain/beeep)
 - Triggers on DMs, mentions, and configurable keywords
-- Suppressed when you're focused on the relevant channel
+- Optionally on replies in threads you're subscribed to (`on_thread_reply`)
+- Suppressed when you're focused on the relevant channel, unless `on_active_channel` is set
 - Suppressed entirely while you're in DND/snooze
 - Never for an author you hid with `:suppress` (per conversation or workspace-wide); their messages are not shown either
 
