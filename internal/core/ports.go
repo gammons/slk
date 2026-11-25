@@ -427,6 +427,10 @@ type PresenceService interface {
 	// for PresenceSnooze.
 	SetStatus(action PresenceAction, snoozeMinutes int)
 
+	// SetCustomStatus sets the user's own status text and emoji on the
+	// active workspace; expiration is Unix seconds, 0 for no expiry.
+	SetCustomStatus(text, emoji string, expiration int64)
+
 	// SendTyping broadcasts a typing indicator for channelID. Called off
 	// the Update goroutine.
 	SendTyping(channelID string)

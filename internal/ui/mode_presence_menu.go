@@ -42,6 +42,11 @@ func handlePresenceMenuMode(a *App, msg tea.KeyMsg) tea.Cmd {
 			a.SetMode(ModePresenceCustomSnooze)
 			return nil
 		}
+		if result.Action == presencemenu.ActionSetCustom {
+			a.statusDialog.Open(a.workspaceNameForActive())
+			a.SetMode(ModeStatusDialog)
+			return nil
+		}
 		a.SetMode(ModeNormal)
 		a.applyPresenceAction(result.Action, result.SnoozeMinutes)
 		return nil

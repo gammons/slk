@@ -171,6 +171,7 @@ const (
 	PresenceSetWFH      // custom status preset: "Working from home"
 	PresenceSetVacation // custom status preset: "On vacation"
 	PresenceClearStatus // clears the profile status text/emoji; leaves presence/DND alone
+	PresenceSetCustom   // opens the status dialog; the status itself goes through SetCustomStatus
 )
 
 // ThemeScope identifies whether a theme selection should be saved to

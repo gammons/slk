@@ -16,11 +16,11 @@ import (
 // that should.
 
 func wireStatusSetter(a *App, fn func(action core.PresenceAction, mins int)) {
-	a.SetPresenceService(core.NewPresenceService(fn, nil))
+	a.SetPresenceService(core.NewPresenceService(fn, nil, nil))
 }
 
 func wireTypingSender(a *App, fn func(channelID string)) {
-	a.SetPresenceService(core.NewPresenceService(nil, fn))
+	a.SetPresenceService(core.NewPresenceService(nil, fn, nil))
 }
 
 func wireThemeSaver(a *App, fn func(teamID, name string, scope core.ThemeScope)) {

@@ -27,6 +27,7 @@ const (
 	ActionSetWFH       = core.PresenceSetWFH
 	ActionSetVacation  = core.PresenceSetVacation
 	ActionClearStatus  = core.PresenceClearStatus
+	ActionSetCustom    = core.PresenceSetCustom
 )
 
 // Result is returned when the user commits a selection.
@@ -144,6 +145,7 @@ func buildItems(presence string, dndActive bool, statusText, statusEmoji string)
 		{label: "Away", action: ActionSetAway, current: presence == "away" && !dndActive},
 		{label: "Working from home", action: ActionSetWFH, current: statusText == "Working from home"},
 		{label: "On vacation", action: ActionSetVacation, current: statusText == "On vacation"},
+		{label: "Set a status...", action: ActionSetCustom},
 		{label: "Snooze for 20 minutes", action: ActionSnooze, minutes: 20},
 		{label: "Snooze for 1 hour", action: ActionSnooze, minutes: 60},
 		{label: "Snooze for 2 hours", action: ActionSnooze, minutes: 120},

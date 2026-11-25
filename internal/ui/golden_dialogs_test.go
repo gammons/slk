@@ -256,6 +256,24 @@ func dialogGoldens() []dialogGolden {
 			},
 		},
 		{
+			name: "dialog_status", want: "Set a status — Acme",
+			shown: func(a *App) bool { return a.mode == ModeStatusDialog },
+			open: func(t *testing.T, a *App) {
+				a.statusDialog.Open("Acme")
+				a.statusDialog.SetEmoji("coffee")
+				a.statusDialog.Insert("On a break")
+				a.SetMode(ModeStatusDialog)
+			},
+		},
+		{
+			name: "dialog_status_empty", want: "What's your status?",
+			shown: func(a *App) bool { return a.mode == ModeStatusDialog },
+			open: func(t *testing.T, a *App) {
+				a.statusDialog.Open("Acme")
+				a.SetMode(ModeStatusDialog)
+			},
+		},
+		{
 			name: "dialog_presence_snooze", want: "Snooze for how many minutes?",
 			shown: func(a *App) bool { return a.mode == ModePresenceCustomSnooze },
 			open: func(t *testing.T, a *App) {

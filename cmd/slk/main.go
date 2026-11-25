@@ -790,14 +790,6 @@ func run() error {
 	})
 	app.SetSuppressionService(core.NewSuppressionService(suppressor.Rules, suppressor.Add, suppressor.Remove))
 
-	// endOfDayUnix returns 23:59:59 local time on now's date, as a Unix
-	// timestamp, so a WFH status auto-clears at the end of the day
-	// instead of lingering indefinitely.
-	endOfDayUnix := func(now time.Time) int64 {
-		y, m, d := now.Date()
-		return time.Date(y, m, d, 23, 59, 59, 0, now.Location()).Unix()
-	}
-
 	// Wire presence/DND status setter. Resolves the active team ID
 	// through the router at invocation so the closure always targets
 	// the currently-active workspace context.
@@ -818,7 +810,7 @@ func run() error {
 			case presencemenu.ActionSnooze:
 				_, err = wctx.Client.SetSnooze(ctx, snoozeMinutes)
 			case presencemenu.ActionSetWFH:
-				err = wctx.Client.SetCustomStatus(ctx, "Working from home", ":house:", endOfDayUnix(time.Now()))
+				err = wctx.Client.SetCustomStatus(ctx, "Working from home", ":house:", presencemenu.EndOfDay(time.Now()))
 			case presencemenu.ActionSetVacation:
 				err = wctx.Client.SetCustomStatus(ctx, "On vacation", ":palm_tree:", 0)
 			case presencemenu.ActionClearStatus:
@@ -840,6 +832,23 @@ func run() error {
 				}
 			}
 			if err != nil && p != nil {
+				p.Send(ui.ToastMsg{Text: "Status change failed: " + err.Error()})
+			}
+		}()
+	}
+
+	// setCustomStatus sets a status from the status dialog on the active
+	// workspace, off the UI goroutine, with the same failure toast.
+	setCustomStatus := func(text, emoji string, expiration int64) {
+		wctx := router.Active()
+		if wctx == nil || wctx.Client == nil {
+			return
+		}
+		client := wctx.Client
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := client.SetCustomStatus(ctx, text, emoji, expiration); err != nil && p != nil {
 				p.Send(ui.ToastMsg{Text: "Status change failed: " + err.Error()})
 			}
 		}()
@@ -1726,7 +1735,7 @@ func run() error {
 			}
 			_ = wctx.Client.SendTyping(channelID)
 		}
-		app.SetPresenceService(core.NewPresenceService(setStatus, sendTyping))
+		app.SetPresenceService(core.NewPresenceService(setStatus, sendTyping, setCustomStatus))
 
 	}
 

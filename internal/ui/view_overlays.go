@@ -96,6 +96,9 @@ func (a *App) applyOverlays(screen string) string {
 	if a.mode == ModeOpenSlackLink {
 		screen = openSlackLinkView(a.width, a.height, screen, a.slackLinkInput, a.slackLinkError)
 	}
+	if a.mode == ModeStatusDialog {
+		screen = a.statusDialog.ViewOverlay(a.width, a.height, screen)
+	}
 	if a.bootstrap.IsLoading() {
 		screen = a.bootstrap.Render(a.width, a.height, a.spinnerGlyph())
 	}
@@ -124,6 +127,7 @@ func (a *App) overlayActive() bool {
 		a.suppressList.IsVisible() ||
 		a.mode == ModePresenceCustomSnooze ||
 		a.mode == ModeOpenSlackLink ||
+		a.mode == ModeStatusDialog ||
 		a.mode == ModeAppView ||
 		a.appViewBehind ||
 		a.bootstrap.IsLoading()

@@ -689,6 +689,12 @@ type App struct {
 	slackLinkInput string
 	slackLinkError string
 
+	// statusDialog is the Ctrl+S "Set a status..." dialog.
+	// statusEmojiPick is set while the reaction picker is open on its
+	// behalf, so the pick goes back to the dialog instead of a message.
+	statusDialog    presencemenu.StatusDialog
+	statusEmojiPick bool
+
 	// marks owns the vim-style mark storage: an in-memory per-workspace
 	// tier for lowercase marks plus the SQLite `marks` table, merged
 	// behind one set of accessors (see internal/ui/marks.go).
@@ -2634,6 +2640,11 @@ func (a *App) closeModal(mode Mode) {
 		a.channelFinder.Close()
 	case ModeReactionPicker:
 		a.reactionPicker.Close()
+		// Still set means the picker is closing some other way than
+		// back into the status dialog (e.g. ctrl+c), so the dialog goes too.
+		if a.statusEmojiPick {
+			a.closeStatusDialog()
+		}
 	case ModeWorkspaceFinder:
 		a.workspaceFinder.Close()
 	case ModeThemeSwitcher:
@@ -2668,6 +2679,11 @@ func (a *App) closeModal(mode Mode) {
 	case ModeOpenSlackLink:
 		a.slackLinkInput = ""
 		a.slackLinkError = ""
+	case ModeStatusDialog:
+		// Tab hands over to the emoji picker; the dialog waits behind it.
+		if !a.statusEmojiPick {
+			a.closeStatusDialog()
+		}
 	case ModeAppView:
 		// A button chooser changes mode while staying over the dialog;
 		// it asks for the content to be kept. Every other exit drops
