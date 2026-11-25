@@ -275,6 +275,8 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 		}
 	}
 
+	isThreadReply := threadTS != "" && threadTS != ts
+
 	// Check if this message should trigger a desktop notification.
 	// Do this before the active workspace check so inactive workspaces
 	// can still trigger notifications. A change echo (an edit, an unfurl
@@ -297,15 +299,30 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 		if h.activeChannelID != nil {
 			activeChID = h.activeChannelID()
 		}
+
+		inSubscribedThread := false
+
+		if h.notifyCfg.OnThreadReply && isThreadReply && h.db != nil {
+			subscribed, err := h.db.IsThreadSubscribed(h.workspaceID, channelID, threadTS)
+			if err != nil {
+				debuglog.Cache("OnMessage: IsThreadSubscribed %s/%s: %v", channelID, threadTS, err)
+			}
+
+			inSubscribedThread = subscribed
+		}
+
 		ctx := notify.NotifyContext{
-			CurrentUserID:   h.currentUserID,
-			ActiveChannelID: activeChID,
-			IsActiveWS:      isActiveWS,
-			OnMention:       h.notifyCfg.OnMention,
-			OnDM:            h.notifyCfg.OnDM,
-			OnKeyword:       h.notifyCfg.OnKeyword,
-			IsDND:           h.wsCtx != nil && h.wsCtx.DNDEnabled && (h.wsCtx.DNDEndTS.IsZero() || time.Now().Before(h.wsCtx.DNDEndTS)),
-			IsMuted:         h.wsCtx != nil && h.wsCtx.MuteStore != nil && h.wsCtx.MuteStore.IsMuted(channelID),
+			CurrentUserID:      h.currentUserID,
+			ActiveChannelID:    activeChID,
+			IsActiveWS:         isActiveWS,
+			OnMention:          h.notifyCfg.OnMention,
+			OnDM:               h.notifyCfg.OnDM,
+			OnKeyword:          h.notifyCfg.OnKeyword,
+			OnThreadReply:      h.notifyCfg.OnThreadReply,
+			OnActiveChannel:    h.notifyCfg.OnActiveChannel,
+			IsDND:              h.wsCtx != nil && h.wsCtx.DNDEnabled && (h.wsCtx.DNDEndTS.IsZero() || time.Now().Before(h.wsCtx.DNDEndTS)),
+			IsMuted:            h.wsCtx != nil && h.wsCtx.MuteStore != nil && h.wsCtx.MuteStore.IsMuted(channelID),
+			InSubscribedThread: inSubscribedThread,
 		}
 		chType := h.channelTypes[channelID]
 		// Pass the raw userID (not authorID): ShouldNotify's self-message
@@ -363,7 +380,6 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	// This write runs for BOTH active and inactive workspaces; the
 	// active/inactive split below only governs the UI dispatch path,
 	// not durable read state.
-	isThreadReply := threadTS != "" && threadTS != ts
 	isBroadcast := subtype == "thread_broadcast"
 	channelEligible := !isThreadReply || isBroadcast
 	// Self-sends and change echoes are excluded because reduceNewMessage

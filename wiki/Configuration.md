@@ -69,10 +69,12 @@ enabled = true
 on_mention = true
 on_dm = true
 on_keyword = ["deploy", "incident"]
+on_thread_reply = false    # true: notify for replies in threads you're subscribed to
+on_active_channel = false  # true: still notify for the channel you're viewing
 quiet_hours = "22:00-08:00"   # planned
 
 # notify_command (optional): run INSTEAD of the built-in OS notification for any
-# message that would notify (DM / mention / keyword). Executed via `sh -c` with
+# message that would notify (DM / mention / keyword / thread reply). Executed via `sh -c` with
 # $SLK_TITLE and $SLK_BODY set, so you can route notifications through your own
 # tooling (terminal-notifier, a multiplexer's notifier, mako, ...). Values are
 # passed via the environment, so message text can't inject shell syntax.

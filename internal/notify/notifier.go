@@ -55,14 +55,17 @@ func (n *Notifier) runCommand(title, body string) error {
 
 // NotifyContext holds the state needed to evaluate notification triggers.
 type NotifyContext struct {
-	CurrentUserID   string
-	ActiveChannelID string
-	IsActiveWS      bool
-	OnMention       bool
-	OnDM            bool
-	OnKeyword       []string
-	IsDND           bool // when true, ShouldNotify always returns false
-	IsMuted         bool // when true (conversation is muted), ShouldNotify always returns false
+	CurrentUserID      string
+	ActiveChannelID    string
+	IsActiveWS         bool
+	OnMention          bool
+	OnDM               bool
+	OnKeyword          []string
+	OnThreadReply      bool
+	OnActiveChannel    bool // when true, the active channel is not exempt from notifications
+	IsDND              bool // when true, ShouldNotify always returns false
+	IsMuted            bool // when true (conversation is muted), ShouldNotify always returns false
+	InSubscribedThread bool // when true, will notify for subscribed threads as well
 }
 
 // ShouldNotify returns true if a message should trigger a desktop notification.
@@ -84,12 +87,16 @@ func ShouldNotify(ctx NotifyContext, channelID, userID, text, channelType string
 	}
 
 	// Suppress if viewing this channel on the active workspace
-	if ctx.IsActiveWS && channelID == ctx.ActiveChannelID {
+	if !ctx.OnActiveChannel && ctx.IsActiveWS && channelID == ctx.ActiveChannelID {
 		return false
 	}
 
 	// Check DM trigger
 	if ctx.OnDM && (channelType == "dm" || channelType == "group_dm") {
+		return true
+	}
+
+	if ctx.OnThreadReply && ctx.InSubscribedThread {
 		return true
 	}
 

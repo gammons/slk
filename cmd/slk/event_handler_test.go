@@ -359,23 +359,100 @@ func TestOnMessage_ChangeEcho_DoesNotNotify(t *testing.T) {
 	h.OnMessage("C1", "U1", "1.001", "<!here> changed", "", "", true, false, nil, slack.Blocks{}, nil, "", "")
 	h.OnMessage("C1", "U1", "1.002", "<!here> fresh", "", "", false, false, nil, slack.Blocks{}, nil, "", "")
 
-	var body string
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		b, _ := os.ReadFile(out)
-		if body = string(b); strings.Contains(body, "fresh") {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	time.Sleep(100 * time.Millisecond) // let a wrongly started notification land
-	b, _ := os.ReadFile(out)
-	body = string(b)
+	body := notifiedOutput(out, "fresh", 5*time.Second)
 	if !strings.Contains(body, "fresh") {
 		t.Fatalf("a fresh mention did not notify; notified: %q", body)
 	}
 	if strings.Contains(body, "changed") {
 		t.Errorf("a change echo notified: %q", body)
+	}
+}
+
+// notifiedOutput returns what the notify command wrote to out, once want
+// has landed (or after patience runs out). It then waits a little longer,
+// so a notification that should not have started has time to show up too.
+func notifiedOutput(out, want string, patience time.Duration) string {
+	deadline := time.Now().Add(patience)
+	for time.Now().Before(deadline) {
+		if b, _ := os.ReadFile(out); strings.Contains(string(b), want) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	b, _ := os.ReadFile(out)
+
+	return string(b)
+}
+
+// With on_thread_reply, only a reply in a thread the user has an active
+// subscription to notifies: not the thread's parent, not an unsubscribed
+// or tombstoned thread, and not the same thread timestamp in another
+// channel. Without the option, nothing does. Every message has its own ts
+// because notifyOnce is process-wide, keyed by (channel, ts).
+func TestOnMessage_ThreadReply_NotifiesOnlyForSubscribedThread(t *testing.T) {
+	const (
+		subscribed = "100.000"
+		tombstoned = "200.000"
+		unknown    = "300.000"
+	)
+
+	cases := []struct {
+		name          string
+		onThreadReply bool
+		channel       string
+		ts            string
+		threadTS      string
+		want          bool
+	}{
+		{"reply in a subscribed thread", true, "C1", "100.001", subscribed, true},
+		{"parent of a subscribed thread", true, "C1", subscribed, subscribed, false},
+		{"reply in a tombstoned thread", true, "C1", "200.001", tombstoned, false},
+		{"reply in an unknown thread", true, "C1", "300.001", unknown, false},
+		{"same thread in another channel", true, "C2", "100.002", subscribed, false},
+		{"option off", false, "C1", "100.003", subscribed, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newTestDB(t)
+			if err := db.UpsertThreadSubscription("T1", "C1", subscribed, "", true); err != nil {
+				t.Fatalf("UpsertThreadSubscription: %v", err)
+			}
+			if err := db.UpsertThreadSubscription("T1", "C1", tombstoned, "", false); err != nil {
+				t.Fatalf("UpsertThreadSubscription: %v", err)
+			}
+
+			out := filepath.Join(t.TempDir(), "notified")
+			t.Setenv("SLK_TEST_NOTIFY_OUT", out)
+
+			h := &rtmEventHandler{
+				db:              db,
+				workspaceID:     "T1",
+				currentUserID:   "USELF",
+				userNames:       newUserNameStore(nil),
+				channelTypes:    map[string]string{"C1": "channel", "C2": "channel"},
+				channelNames:    map[string]string{"C1": "general", "C2": "random"},
+				isActive:        func() bool { return false },
+				activeChannelID: func() string { return "C9" },
+				wsCtx:           &WorkspaceContext{},
+				notifier:        notify.New(true, `printf '%s\n' "$SLK_BODY" >> "$SLK_TEST_NOTIFY_OUT"`),
+				notifyCfg:       config.Notifications{Enabled: true, OnThreadReply: tc.onThreadReply},
+			}
+
+			h.OnMessage(tc.channel, "U1", tc.ts, "hello", tc.threadTS, "", false, false, nil, slack.Blocks{}, nil, "", "")
+
+			patience := time.Duration(0)
+			if tc.want {
+				patience = 5 * time.Second
+			}
+
+			body := notifiedOutput(out, "hello", patience)
+			if got := strings.Contains(body, "hello"); got != tc.want {
+				t.Errorf("notified = %v, want %v; output: %q", got, tc.want, body)
+			}
+		})
 	}
 }
 

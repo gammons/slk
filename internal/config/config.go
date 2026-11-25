@@ -189,11 +189,13 @@ type Animations struct {
 }
 
 type Notifications struct {
-	Enabled    bool     `toml:"enabled"`
-	OnMention  bool     `toml:"on_mention"`
-	OnDM       bool     `toml:"on_dm"`
-	OnKeyword  []string `toml:"on_keyword"`
-	QuietHours string   `toml:"quiet_hours"`
+	Enabled         bool     `toml:"enabled"`
+	OnMention       bool     `toml:"on_mention"`
+	OnDM            bool     `toml:"on_dm"`
+	OnKeyword       []string `toml:"on_keyword"`
+	OnThreadReply   bool     `toml:"on_thread_reply"`
+	OnActiveChannel bool     `toml:"on_active_channel"`
+	QuietHours      string   `toml:"quiet_hours"`
 	// NotifyCommand, when set, runs instead of the built-in OS notification.
 	// It is executed via `sh -c` with the notification's title and body exposed
 	// as $SLK_TITLE and $SLK_BODY. Example:
