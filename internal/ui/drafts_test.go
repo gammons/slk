@@ -324,6 +324,48 @@ func TestUnsyncedDrafts(t *testing.T) {
 	}
 }
 
+// A slot left in workspace T1, then a switch to T2, must still be
+// saved with T1's own mention names: the composer's live mention data
+// belongs to the active workspace (T2) once the switch lands, and T2
+// has a different name for the same user ID.
+func TestDraftSync_MentionsTranslatedWithTheirOwnWorkspacesNames(t *testing.T) {
+	a, calls, _ := draftSyncApp(t, nil)
+	a.SetUserNames(map[string]string{"U1": "Alice"})
+	a.compose.SetValue("hi @Alice")
+	a.compose.SetDraftContext("T1", "C2", "") // leave C1 (stored, not visible)
+
+	a.Update(WorkspaceSwitchedMsg{TeamID: "T2", TeamName: "Two", UserID: "U9"})
+	a.SetUserNames(map[string]string{"U1": "Bob"}) // T2's name for the same ID
+
+	tick(t, a)
+	if got := ops(*calls); got != `save C1/ "hi <@U1>"` {
+		t.Errorf("calls = %s, want the mention translated with T1's names", got)
+	}
+}
+
+// A draft list for a workspace that is not active must not restore
+// into the composers (which hold the active workspace's mention data)
+// or clear anything; only that workspace's own loaded/rows bookkeeping
+// changes.
+func TestDraftsLoaded_InactiveWorkspaceListIsNotRestored(t *testing.T) {
+	a, _, _ := draftSyncApp(t, nil)
+	a.Update(draftsLoadedMsg{teamID: "T2", drafts: []core.Draft{
+		{ID: "Dr9", Key: core.DraftKey{TeamID: "T2", ChannelID: "C9"}, Text: "hello"},
+	}})
+	if txt, _ := a.compose.SlotText("T2", "C9", ""); txt != "" {
+		t.Errorf("T2 draft restored into a composer while T1 was active: %q", txt)
+	}
+	if !a.drafts.loaded["T2"] {
+		t.Error("T2 not marked loaded")
+	}
+	if len(a.drafts.rows["T2"]) != 1 {
+		t.Errorf("T2 rows = %v, want 1", a.drafts.rows["T2"])
+	}
+	if a.compose.Value() != "" {
+		t.Errorf("T1's visible composer changed: %q", a.compose.Value())
+	}
+}
+
 func TestDraftTick_ReschedulesItself(t *testing.T) {
 	a, _, _ := draftSyncApp(t, nil)
 	if _, cmd := a.Update(draftTickMsg{}); cmd == nil {

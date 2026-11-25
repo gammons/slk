@@ -69,6 +69,13 @@ type draftRetry struct {
 	at time.Time
 }
 
+// draftWireEntry is the last composer text seen for a slot of a
+// workspace that is not currently active, and the wire form it
+// translated to while that workspace was last active.
+type draftWireEntry struct {
+	text, wire string
+}
+
 // draftSync is the App's draft sync state. Text is composer form
 // (mentions as @names).
 type draftSync struct {
@@ -83,6 +90,10 @@ type draftSync struct {
 	// saw it: the debounce, and the edit time sent to Slack.
 	observed map[core.DraftKey]draftObserved
 	inflight map[core.DraftKey]string
+	// wire holds the last translation made for a slot while its own
+	// workspace was active, so a slot of a workspace that is not
+	// active right now can still be saved correctly (see draftWire).
+	wire map[core.DraftKey]draftWireEntry
 	// gen is bumped by a send and a delete, so a save answer that was
 	// in flight across them is ignored.
 	gen   map[core.DraftKey]int
@@ -100,6 +111,7 @@ func newDraftSync() *draftSync {
 		synced:   map[core.DraftKey]string{},
 		observed: map[core.DraftKey]draftObserved{},
 		inflight: map[core.DraftKey]string{},
+		wire:     map[core.DraftKey]draftWireEntry{},
 		gen:      map[core.DraftKey]int{},
 		retry:    map[core.DraftKey]draftRetry{},
 		handsOff: map[core.DraftKey]bool{},
@@ -184,18 +196,63 @@ func (a *App) syncDrafts(now time.Time) []tea.Cmd {
 				return // still being typed: wait for a whole interval
 			}
 		}
+		wire, ok := a.draftWire(key, text)
+		if !ok {
+			return // not translatable until that workspace is active again
+		}
 		d.inflight[key] = text
-		cmds = append(cmds, a.saveDraftCmd(key, text, obs.at))
+		cmds = append(cmds, a.saveDraftCmd(key, text, wire, obs.at))
 	})
 	return cmds
 }
 
-func (a *App) saveDraftCmd(key core.DraftKey, text string, edited time.Time) tea.Cmd {
-	svc, gen := a.draftSvc, a.drafts.gen[key]
-	wire := ""
-	if text != "" {
-		wire = a.composerFor(key.ThreadTS).TranslateMentionsForSend(text)
+// draftWire is the wire form (mentions as <@U…>) of a slot's text, for
+// saving or discarding it. A discard ("") never needs translation. For
+// a slot of the active workspace it translates now with that
+// workspace's own mention data and remembers the result, so a later
+// call for the same text -- once another workspace is active -- can
+// still answer correctly (ok=true) instead of translating with the
+// wrong workspace's names. For a slot of an inactive workspace it
+// answers only from that remembered translation, when the text still
+// matches what produced it; otherwise ok is false (not yet
+// translatable -- the caller retries once that workspace is active
+// again, see rememberDraftWire).
+func (a *App) draftWire(key core.DraftKey, text string) (wire string, ok bool) {
+	if text == "" {
+		return "", true
 	}
+	d := a.drafts
+	if key.TeamID == a.activeTeamID {
+		wire = a.composerFor(key.ThreadTS).TranslateMentionsForSend(text)
+		d.wire[key] = draftWireEntry{text: text, wire: wire}
+		return wire, true
+	}
+	if e, ok := d.wire[key]; ok && e.text == text {
+		return e.wire, true
+	}
+	return "", false
+}
+
+// rememberDraftWire records the wire form of every unsynced slot of
+// outgoingTeamID. Call it before a workspace switch replaces the
+// composers' mention data (channels/users), while outgoingTeamID is
+// still the active workspace, so the next sync comparison can still
+// save or discard those slots correctly with the names they were typed
+// against, once that workspace is active again.
+func (a *App) rememberDraftWire(outgoingTeamID string) {
+	if outgoingTeamID == "" {
+		return
+	}
+	a.eachDraftSlot(func(key core.DraftKey, text string, _ bool) {
+		if key.TeamID != outgoingTeamID || text == "" {
+			return
+		}
+		a.drafts.wire[key] = draftWireEntry{text: text, wire: a.composerFor(key.ThreadTS).TranslateMentionsForSend(text)}
+	})
+}
+
+func (a *App) saveDraftCmd(key core.DraftKey, text, wire string, edited time.Time) tea.Cmd {
+	svc, gen := a.draftSvc, a.drafts.gen[key]
 	return func() tea.Msg {
 		if text == "" {
 			return draftSavedMsg{key: key, gen: gen, err: svc.Discard(key)}
@@ -217,13 +274,13 @@ func (a *App) UnsyncedDrafts() []core.DraftChange {
 		if !d.syncable(key) || text == d.synced[key] {
 			return
 		}
+		wire, ok := a.draftWire(key, text)
+		if !ok {
+			return
+		}
 		edited := now
 		if obs, ok := d.observed[key]; ok && obs.text == text {
 			edited = obs.at
-		}
-		wire := ""
-		if text != "" {
-			wire = a.composerFor(key.ThreadTS).TranslateMentionsForSend(text)
 		}
 		out = append(out, core.DraftChange{Key: key, Text: wire, Edited: edited})
 	})
@@ -277,6 +334,16 @@ func (a *App) reduceDraftsLoaded(m draftsLoadedMsg) tea.Cmd {
 	d := a.drafts
 	d.loaded[m.teamID] = true
 	d.rows[m.teamID] = sortDrafts(m.drafts)
+	if m.teamID != a.activeTeamID {
+		// Restore and vanish-clear read/write the active composers,
+		// whose mention data belongs to a.activeTeamID; applying
+		// another workspace's list there would restore or clear text
+		// with the wrong workspace's names. The list is still kept
+		// (loaded + rows above): switching to this workspace re-issues
+		// loadDraftsCmd, and that load applies it with the right names.
+		a.draftRowsChanged()
+		return a.startDraftTick()
+	}
 	listed := map[core.DraftKey]bool{}
 	// blocking: keys the list still shows a non-writable draft at. A
 	// list is a full snapshot, so any other hands-off key of this team
