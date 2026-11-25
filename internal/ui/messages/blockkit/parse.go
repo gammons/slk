@@ -44,6 +44,8 @@ func parseOne(b slack.Block) Block {
 		}
 	case *slack.ActionBlock:
 		return parseActions(v)
+	case *slack.InputBlock:
+		return parseInput(v)
 	case *slack.RichTextBlock:
 		return RichTextBlock{Elements: v.Elements}
 	default:
@@ -78,6 +80,46 @@ func parseContext(c *slack.ContextBlock) ContextBlock {
 			}
 			out.Elements = append(out.Elements, ContextElement{ImageURL: url, AltText: v.AltText})
 		}
+	}
+	return out
+}
+
+// parseInput turns an input block into the read-only form the renderer
+// draws: its label, a value or placeholder to show, and the element
+// kind for the control look.
+func parseInput(in *slack.InputBlock) InputBlock {
+	out := InputBlock{
+		BlockID:  in.BlockID,
+		Label:    textOf(in.Label),
+		Hint:     textOf(in.Hint),
+		Optional: in.Optional,
+	}
+	switch el := in.Element.(type) {
+	case *slack.PlainTextInputBlockElement:
+		out.ElementKind = "plain_text_input"
+		out.Placeholder = textOf(el.Placeholder)
+		out.Value = el.InitialValue
+		out.Multiline = el.Multiline
+	case *slack.SelectBlockElement:
+		out.ElementKind = "static_select"
+		out.Placeholder = textOf(el.Placeholder)
+	case *slack.MultiSelectBlockElement:
+		out.ElementKind = "multi_select"
+		out.Placeholder = textOf(el.Placeholder)
+	case *slack.DatePickerBlockElement:
+		out.ElementKind = "datepicker"
+		out.Value = el.InitialDate
+	case *slack.TimePickerBlockElement:
+		out.ElementKind = "timepicker"
+		out.Value = el.InitialTime
+	case *slack.RadioButtonsBlockElement:
+		out.ElementKind = "radio_buttons"
+	case *slack.CheckboxGroupsBlockElement:
+		out.ElementKind = "checkboxes"
+	case *slack.OverflowBlockElement:
+		out.ElementKind = "overflow"
+	default:
+		out.ElementKind = "unknown"
 	}
 	return out
 }

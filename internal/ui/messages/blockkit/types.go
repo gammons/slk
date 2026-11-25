@@ -36,6 +36,7 @@ type (
 	DividerBlock     = blocks.DividerBlock
 	ImageBlock       = blocks.ImageBlock
 	ActionsBlock     = blocks.ActionsBlock
+	InputBlock       = blocks.InputBlock
 	UnknownBlock     = blocks.UnknownBlock
 	RichTextBlock    = blocks.RichTextBlock
 	AccessoryElement = blocks.AccessoryElement

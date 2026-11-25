@@ -183,6 +183,26 @@ func TestParseActionsBlock(t *testing.T) {
 	}
 }
 
+func TestParseInputBlock(t *testing.T) {
+	el := slack.NewPlainTextInputBlockElement(
+		slack.NewTextBlockObject("plain_text", "Say why", false, false), "justification")
+	el.InitialValue = "security bugs"
+	label := slack.NewTextBlockObject("plain_text", "Justification", false, false)
+	hint := slack.NewTextBlockObject("plain_text", "Optional suggestions only", false, false)
+	in := slack.Blocks{BlockSet: []slack.Block{slack.NewInputBlock("b1", label, hint, el)}}
+
+	ib, ok := Parse(in)[0].(InputBlock)
+	if !ok {
+		t.Fatalf("got %T, want InputBlock", Parse(in)[0])
+	}
+	if ib.BlockID != "b1" || ib.Label != "Justification" || ib.Hint != "Optional suggestions only" {
+		t.Errorf("input = %+v, want the label, hint and id", ib)
+	}
+	if ib.Placeholder != "Say why" || ib.Value != "security bugs" || ib.ElementKind != "plain_text_input" {
+		t.Errorf("element = %+v, want the plain-text input's value and placeholder", ib)
+	}
+}
+
 func TestParseUnknownBlockTypePreservesType(t *testing.T) {
 	in := slack.Blocks{BlockSet: []slack.Block{
 		&slack.UnknownBlock{Type: slack.MessageBlockType("video")},
