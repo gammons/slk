@@ -150,8 +150,14 @@ func messageUsesEmojiURL(msg MessageItem, statuses map[string]peerstatus.Status,
 		if hit || text == "" {
 			return
 		}
-		for _, name := range emojiutil.UsedInText(text, customs) {
-			check(name)
+		// Compare the URLs the text draws, in the spelling it uses: a
+		// custom "heart" must not make ":2764:" look like the custom
+		// image (or vice versa).
+		for _, u := range emojiutil.URLsInText(text, customs) {
+			if u == url {
+				hit = true
+				return
+			}
 		}
 		if haveGlyph && strings.Contains(text, glyph) {
 			hit = true
