@@ -84,7 +84,7 @@ func appendBlock(out *RenderResult, b Block, ctx Context, width int, recordHits 
 		}
 		out.Lines = append(out.Lines, renderHeader(text, width))
 	case SectionBlock:
-		appendSection(out, v, ctx, width)
+		appendSection(out, v, ctx, width, recordHits)
 	case ContextBlock:
 		appendContext(out, v, ctx, width)
 	case ActionsBlock:
@@ -108,12 +108,13 @@ func appendBlock(out *RenderResult, b Block, ctx Context, width int, recordHits 
 	}
 }
 
-func appendSection(out *RenderResult, s SectionBlock, ctx Context, width int) {
+func appendSection(out *RenderResult, s SectionBlock, ctx Context, width int, recordHits bool) {
 	bodyW := width
 	var accessoryLines []string
 	var accessoryW int
 	var accessoryHit *HitRect           // populated for image accessories
 	var accessorySxl map[int]SixelEntry // keyed at fetchOrPlaceholder's rowStart=0; translated after the layout decision below
+	var accessoryAction *ActionHit      // populated for pressable button accessories
 
 	switch acc := s.Accessory.(type) {
 	case LabelAccessory:
@@ -121,6 +122,9 @@ func appendSection(out *RenderResult, s SectionBlock, ctx Context, width int) {
 		accessoryW = lipgloss.Width(label)
 		accessoryLines = []string{label}
 		out.Interactive = true
+		if recordHits && acc.ActionID != "" {
+			accessoryAction = &ActionHit{BlockID: s.BlockID, ActionID: acc.ActionID}
+		}
 	case ImageAccessory:
 		const accRows, accCols = 4, 8
 		if ctx.Fetcher == nil || ctx.Protocol == imgpkg.ProtoOff {
@@ -188,6 +192,23 @@ func appendSection(out *RenderResult, s SectionBlock, ctx Context, width int) {
 			accessoryHit.ColEnd = accessoryW
 		}
 		out.Hits = append(out.Hits, *accessoryHit)
+	}
+
+	// A button accessory has the same footprint and the same layout
+	// translation as an image accessory.
+	if accessoryAction != nil {
+		if sideBySide {
+			accessoryAction.RowStart = startRow
+			accessoryAction.RowEnd = startRow + len(accessoryLines)
+			accessoryAction.ColStart = bodyW + 2
+			accessoryAction.ColEnd = bodyW + 2 + accessoryW
+		} else {
+			accessoryAction.RowStart = startRow + len(bodyLines)
+			accessoryAction.RowEnd = accessoryAction.RowStart + len(accessoryLines)
+			accessoryAction.ColStart = 0
+			accessoryAction.ColEnd = accessoryW
+		}
+		out.ActionHits = append(out.ActionHits, *accessoryAction)
 	}
 
 	// The accessory's sixel placement gets the same translation as its

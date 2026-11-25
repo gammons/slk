@@ -20,6 +20,8 @@ func TypeName(b Block) string { return b.blockType() }
 // optionally with a 2-column field grid and/or a single accessory
 // rendered to the right of the body.
 type SectionBlock struct {
+	// BlockID is Slack's block_id. A pressable accessory echoes it.
+	BlockID   string
 	Text      string           // resolved mrkdwn (or plain) text; empty if absent
 	Fields    []string         // each field is mrkdwn; rendered in a 2-col grid
 	Accessory AccessoryElement // nil if absent
@@ -137,6 +139,13 @@ func (ImageAccessory) accessoryKind() string { return "image" }
 type LabelAccessory struct {
 	Kind  string
 	Label string // best-effort human label (button text, placeholder, current value)
+	// A button accessory carries the same interaction identity as an
+	// actions-block button; other kinds leave these empty.
+	ActionID string
+	Value    string
+	URL      string
+	Style    string
+	Confirm  *ActionConfirm
 }
 
 func (LabelAccessory) accessoryKind() string { return "label" }

@@ -52,7 +52,7 @@ func parseOne(b slack.Block) Block {
 }
 
 func parseSection(s *slack.SectionBlock) SectionBlock {
-	out := SectionBlock{Text: textOf(s.Text)}
+	out := SectionBlock{BlockID: s.BlockID, Text: textOf(s.Text)}
 	for _, f := range s.Fields {
 		out.Fields = append(out.Fields, textOf(f))
 	}
@@ -102,7 +102,9 @@ func parseAccessory(a *slack.Accessory) AccessoryElement {
 		}
 		return ImageAccessory{URL: url, AltText: a.ImageElement.AltText}
 	case a.ButtonElement != nil:
-		return LabelAccessory{Kind: "button", Label: textOf(a.ButtonElement.Text)}
+		// A button accessory is pressable, with the same identity an
+		// actions-block button carries, so the two structs convert.
+		return LabelAccessory(actionElementOf(a.ButtonElement))
 	case a.OverflowElement != nil:
 		return LabelAccessory{Kind: "overflow", Label: ""}
 	case a.SelectElement != nil:

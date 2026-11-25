@@ -177,6 +177,10 @@ func TestParseActionsBlock(t *testing.T) {
 	if el.Kind != "button" || el.Label != "Click" || el.ActionID != "a" || el.Value != "v" {
 		t.Errorf("got %+v", el)
 	}
+	if ab.BlockID != "act" || ab.Elements[0].ActionID != "a" || ab.Elements[0].Value != "v" {
+		t.Errorf("identity = block %q action %q value %q, want act/a/v",
+			ab.BlockID, ab.Elements[0].ActionID, ab.Elements[0].Value)
+	}
 }
 
 func TestParseUnknownBlockTypePreservesType(t *testing.T) {
