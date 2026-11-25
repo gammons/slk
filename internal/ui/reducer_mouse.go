@@ -44,9 +44,73 @@ var reduceMouse reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return reduceMouseWheel(a, m), true
 
 	case tea.MouseClickMsg:
+		if m.Button == tea.MouseMiddle {
+			return reduceMiddleClick(a, m), true
+		}
 		return reduceMouseClick(a, m), true
 	}
 	return nil, false
+}
+
+// reduceMiddleClick pastes into the compose box under the cursor. slk
+// copies a drag selection on release, so the terminal's middle-click
+// paste is the natural partner; without this it is swallowed by the
+// app's mouse reporting and never reaches the terminal.
+//
+// A click anywhere but a compose box does nothing: middle-clicking a
+// message has no text field to paste into.
+func reduceMiddleClick(a *App, m tea.MouseClickMsg) tea.Cmd {
+	if a.bootstrap.IsLoading() || a.mode.IsModalOverlay() {
+		return nil
+	}
+	// A paste into a composer whose send is in flight would be thrown
+	// away when UploadResultMsg resets it.
+	if a.compose.Uploading() || a.threadCompose.Uploading() {
+		return nil
+	}
+	panel, _, py, ok := a.panelAt(m.X, m.Y)
+	if !ok || py < 0 {
+		return nil
+	}
+	var toThread bool
+	switch panel {
+	case PanelMessages:
+		if a.view != ViewChannels || a.layout.msgComposeTop <= 0 || py < a.layout.msgComposeTop {
+			return nil
+		}
+		// With splits, PanelAt maps the whole region to the focused
+		// window; only that window has a composer at msgComposeTop.
+		// The same interim guard as left clicks: swallow it.
+		if a.wins.Len() > 1 {
+			return nil
+		}
+	case PanelThread:
+		if !a.threadVisible || a.layout.threadComposeTop <= 0 || py < a.layout.threadComposeTop {
+			return nil
+		}
+		toThread = true
+	default:
+		return nil
+	}
+	want := PanelMessages
+	if toThread {
+		want = PanelThread
+	}
+	// A read-only channel composer refuses focus; do not fall through
+	// and paste into the thread composer the user was already in.
+	if !toThread && a.composeDisabled {
+		return toastWithClear(a, a.composeBlockedText(), 2*time.Second)
+	}
+	// Move focus to the clicked composer first; smartPaste pastes into
+	// whichever composer is focused.
+	if a.mode != ModeInsert || a.focusedPanel != want {
+		focus := a.beginInsertMode(toThread)
+		if a.focusedPanel != want {
+			return focus
+		}
+		return tea.Batch(focus, a.smartPaste())
+	}
+	return a.smartPaste()
 }
 
 // reduceMouseWheel handles tea.MouseWheelMsg. Extracted to keep the
