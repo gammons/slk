@@ -143,6 +143,8 @@ func (a *App) reduceDraftDeleted(m draftDeletedMsg) tea.Cmd {
 		return toastWithClear(a, "Couldn't delete draft", 3*time.Second)
 	}
 	a.drafts.removeRow(m.teamID, m.draft.ID)
+	// Whatever kind it was, it is no longer here to block sync.
+	delete(a.drafts.handsOff, m.draft.Key)
 	if k := m.draft.Key; m.draft.Writable() {
 		// The user asked: the slot goes too, even the visible one.
 		a.composerFor(k.ThreadTS).ClearSlot(k.TeamID, k.ChannelID, k.ThreadTS)

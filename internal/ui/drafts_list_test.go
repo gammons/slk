@@ -103,6 +103,33 @@ func TestDraftList_DeleteConfirmsThenDeletesAndClearsTheSlot(t *testing.T) {
 	}
 }
 
+// Deleting a non-writable draft (scheduled, file-attached, …) through the
+// :drafts dialog clears hands-off at its key, the same as a list that
+// stops mentioning it.
+func TestDraftList_DeletingTheNonWritableBlockerClearsHandsOff(t *testing.T) {
+	a, calls, _ := draftSyncApp(t, core.ErrDraftHandsOff)
+	// Mark C1 hands-off the way a real save attempt would.
+	a.compose.SetValue("one")
+	a.compose.SetDraftContext("T1", "C2", "")
+	tick(t, a)
+	c1 := core.DraftKey{TeamID: "T1", ChannelID: "C1"}
+	if !a.drafts.handsOff[c1] {
+		t.Fatalf("setup: C1 is not hands-off (toast=%q)", statusbarText(a))
+	}
+	blocker := core.Draft{ID: "DrBlock", Key: c1, Scheduled: time.Unix(1_900_000_000, 0)}
+	a.drafts.rows["T1"] = []core.Draft{blocker}
+	a.setDraftServiceForTest(core.DraftServiceFuncs{
+		Delete: func(teamID, id string) error {
+			*calls = append(*calls, draftCall{op: "delete " + id})
+			return nil
+		},
+	})
+	a.Update(draftDeletedMsg{teamID: "T1", draft: blocker})
+	if a.drafts.handsOff[c1] {
+		t.Error("hands-off not cleared after its non-writable blocker was deleted")
+	}
+}
+
 // A reload while the list is open must not shift what Enter acts on.
 func TestDraftList_ActsOnTheRowShown(t *testing.T) {
 	a := jumpMarkTestApp(t)

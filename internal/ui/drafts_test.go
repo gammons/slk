@@ -203,6 +203,48 @@ func TestDraftSync_HandsOffToastsOnceAndStops(t *testing.T) {
 	}
 }
 
+// A hands-off key recovers once its blocker is gone, even though the
+// list never shows the key as writable: a list is a full snapshot, so a
+// key no longer mentioned at all (deleted elsewhere) must resume sync.
+func TestDraftSync_HandsOffResumesOnceTheBlockerIsGone(t *testing.T) {
+	a, calls, _ := draftSyncApp(t, nil)
+	saveErr := core.ErrDraftHandsOff
+	a.setDraftServiceForTest(core.DraftServiceFuncs{
+		Save: func(k core.DraftKey, text string, edited time.Time) (core.DraftSaveResult, error) {
+			*calls = append(*calls, draftCall{"save", k, text, edited})
+			if saveErr != nil {
+				return core.DraftSaveResult{}, saveErr
+			}
+			return core.DraftSaveResult{Draft: core.Draft{ID: "Dr-" + k.ChannelID, Key: k, Text: text}}, nil
+		},
+		Discard: func(k core.DraftKey) error {
+			*calls = append(*calls, draftCall{op: "discard", key: k})
+			return nil
+		},
+	})
+	a.compose.SetValue("one")
+	a.compose.SetDraftContext("T1", "C2", "")
+	tick(t, a)
+	c1 := core.DraftKey{TeamID: "T1", ChannelID: "C1"}
+	if !a.drafts.handsOff[c1] {
+		t.Fatalf("setup: C1 is not hands-off (toast=%q)", statusbarText(a))
+	}
+	// A fresh list for T1 that doesn't mention C1 at all: the blocker is
+	// gone (deleted here or on another device).
+	a.Update(draftsLoadedMsg{teamID: "T1"})
+	if a.drafts.handsOff[c1] {
+		t.Fatal("hands-off was not cleared once the list stopped mentioning the key")
+	}
+	saveErr = nil
+	a.compose.SetDraftContext("T1", "C1", "")
+	a.compose.SetValue("two")
+	a.compose.SetDraftContext("T1", "C2", "")
+	tick(t, a)
+	if got := ops(*calls); !strings.Contains(got, `save C1/ "two"`) {
+		t.Errorf("calls = %s, want a retried save for C1", got)
+	}
+}
+
 func TestDraftSync_TransientErrorBacksOff(t *testing.T) {
 	a, calls, clock := draftSyncApp(t, errors.New("timeout"))
 	a.compose.SetValue("one")

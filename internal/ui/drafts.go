@@ -278,13 +278,22 @@ func (a *App) reduceDraftsLoaded(m draftsLoadedMsg) tea.Cmd {
 	d.loaded[m.teamID] = true
 	d.rows[m.teamID] = sortDrafts(m.drafts)
 	listed := map[core.DraftKey]bool{}
+	// blocking: keys the list still shows a non-writable draft at. A
+	// list is a full snapshot, so any other hands-off key of this team
+	// has lost its blocker (deleted here or elsewhere) and resumes sync.
+	blocking := map[core.DraftKey]bool{}
 	for _, dr := range m.drafts {
 		if !dr.Writable() {
+			blocking[dr.Key] = true
 			continue
 		}
 		listed[dr.Key] = true
-		delete(d.handsOff, dr.Key)
 		a.restoreRemoteDraft(dr)
+	}
+	for key := range d.handsOff {
+		if key.TeamID == m.teamID && !blocking[key] {
+			delete(d.handsOff, key)
+		}
 	}
 	for key, synced := range d.synced {
 		if key.TeamID != m.teamID || listed[key] {
