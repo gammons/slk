@@ -17,6 +17,10 @@ var reduceDrafts reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return a.reduceDraftTick(), true
 	case draftSavedMsg:
 		return a.reduceDraftSaved(m), true
+	case draftDeleteConfirmedMsg:
+		return a.deleteDraftCmd(m.teamID, m.draft), true
+	case draftDeletedMsg:
+		return a.reduceDraftDeleted(m), true
 	}
 	return nil, false
 }

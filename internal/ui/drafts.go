@@ -394,6 +394,9 @@ func (d *draftSync) removeRow(teamID, id string) {
 	d.rows[teamID] = slices.DeleteFunc(slices.Clone(d.rows[teamID]), func(r core.Draft) bool { return r.ID == id })
 }
 
-// draftRowsChanged redraws the Drafts list when it is open. Task 7
-// gives it a body; until then the list does not exist.
-func (a *App) draftRowsChanged() {}
+// draftRowsChanged redraws the Drafts list when it is open.
+func (a *App) draftRowsChanged() {
+	if a.draftList.IsVisible() {
+		a.refreshDraftList()
+	}
+}

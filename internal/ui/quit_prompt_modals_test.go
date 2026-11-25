@@ -78,6 +78,10 @@ func TestQuitPromptClosesEveryModal(t *testing.T) {
 			func(a *App) { a.marksOverlay.Open() },
 			func(a *App) bool { return a.marksOverlay.IsVisible() },
 		},
+		ModeDrafts: {
+			func(a *App) { a.draftList.Open() },
+			func(a *App) bool { return a.draftList.IsVisible() },
+		},
 	}
 
 	// A new modal mode must be added here, and to closeModal.

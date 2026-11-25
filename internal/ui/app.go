@@ -28,6 +28,7 @@ import (
 	"github.com/gammons/slk/internal/ui/activityview"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/compose"
+	"github.com/gammons/slk/internal/ui/draftlist"
 	"github.com/gammons/slk/internal/ui/emojipicker"
 	"github.com/gammons/slk/internal/ui/help"
 	"github.com/gammons/slk/internal/ui/imgrender"
@@ -617,6 +618,13 @@ type App struct {
 	// by the ' chord and the :marks command.
 	marksOverlay marks.Model
 
+	// draftList is the :drafts dialog (internal/ui/draftlist/): one row
+	// per draft in the active workspace, newest first. draftListItems
+	// keeps the drafts in the order shown, so a key acts on the row it
+	// highlights.
+	draftList      draftlist.Model
+	draftListItems []core.Draft
+
 	// showJumpOverlay is the [marks] show_jump_overlay option: whether
 	// beginning a jump (' ) shows the marks list. Defaults to on; the
 	// option does not affect the :marks command, which always shows it.
@@ -996,6 +1004,7 @@ func NewApp() *App {
 		navHistory:            newNavHistoryStore(),
 		marks:                 newMarksStore(),
 		marksOverlay:          marks.New(),
+		draftList:             draftlist.New(),
 		drafts:                newDraftSync(),
 		showJumpOverlay:       true,
 		clipboardWrite:        defaultClipboardWriter,
@@ -2353,6 +2362,8 @@ func (a *App) closeModal(mode Mode) {
 		a.userProfile.Close()
 	case ModeMarks:
 		a.marksOverlay.Close()
+	case ModeDrafts:
+		a.draftList.Close()
 	}
 }
 

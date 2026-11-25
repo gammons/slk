@@ -52,6 +52,7 @@ type KeyMap struct {
 	MarkBackJump        key.Binding
 	MarksList           key.Binding
 	MarksDelete         key.Binding
+	DraftsList          key.Binding
 	NextUnread          key.Binding
 	PrevUnread          key.Binding
 	ActivityView        key.Binding
@@ -141,6 +142,7 @@ func DefaultKeyMap() KeyMap {
 		MarkBackJump:   key.NewBinding(key.WithHelp("''", "back-jump to where you jumped from")),
 		MarksList:      key.NewBinding(key.WithHelp(":marks", "list marks")),
 		MarksDelete:    key.NewBinding(key.WithHelp(":delmarks", "delete marks by letter")),
+		DraftsList:     key.NewBinding(key.WithHelp(":drafts", "list Slack drafts")),
 		NextUnread:     key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "next unread channel")),
 		PrevUnread:     key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "prev unread channel")),
 		ActivityView:   key.NewBinding(key.WithKeys("ctrl+a"), key.WithHelp("ctrl+a / :activity", "open activity")),

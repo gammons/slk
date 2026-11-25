@@ -66,6 +66,7 @@ var modeHandlers = map[Mode]modeHandler{
 	ModeWorkspaceSearch:      handleWorkspaceSearchMode,
 	ModeUserProfile:          handleUserProfileMode,
 	ModeMarks:                handleMarksMode,
+	ModeDrafts:               handleDraftsMode,
 }
 
 // normalizeFinderKey maps a tea.KeyMsg to the plain-string form the
