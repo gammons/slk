@@ -177,6 +177,9 @@ type WorkspaceContext struct {
 	// in connectWorkspace alongside UserResolver (it depends on the
 	// resolver to trigger external-user lookups for newly-seen IDs).
 	Membership *membership.Manager
+	// Drafts syncs this workspace's composer drafts with Slack. Nil when
+	// [compose] sync_drafts is off.
+	Drafts *draftEngine
 }
 
 // IsBotUser reports whether userID has been classified as an app or bot.

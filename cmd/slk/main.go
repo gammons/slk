@@ -995,7 +995,7 @@ func run() error {
 				client := wctx.Client
 				userNames := wctx.UserNames
 				ctx := context.Background()
-				ts, sentMrkdwn, err := client.SendMessage(ctx, chIDStr, text)
+				ts, sentMrkdwn, err := sendWithDraft(ctx, client, wctx.Drafts, chIDStr, "", text, false)
 				if err != nil {
 					log.Printf("Warning: failed to send message: %v", err)
 					return ui.MessageSendFailedMsg{ChannelID: chIDStr, Reason: err.Error()}
@@ -1250,7 +1250,7 @@ func run() error {
 				client := wctx.Client
 				userNames := wctx.UserNames
 				ctx := context.Background()
-				ts, sentMrkdwn, err := client.SendReply(ctx, chIDStr, threadTSStr, text, broadcast)
+				ts, sentMrkdwn, err := sendWithDraft(ctx, client, wctx.Drafts, chIDStr, threadTSStr, text, broadcast)
 				if err != nil {
 					log.Printf("Warning: failed to send thread reply: %v", err)
 					return ui.ThreadReplySendFailedMsg{ChannelID: chIDStr, ThreadTS: threadTSStr, Reason: err.Error()}
@@ -1452,6 +1452,10 @@ func run() error {
 				return runCommand(ctx, wctx.Client, channelID, threadTS, command, args)
 			},
 		}))
+
+		if cfg.EffectiveSyncDrafts() {
+			app.SetDraftService(draftService(router))
+		}
 
 		sendTyping := func(channelID string) {
 			wctx := router.Active()

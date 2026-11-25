@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -387,6 +388,82 @@ func sendWithDraft(ctx context.Context, client draftSender, drafts *draftEngine,
 	}
 	done(err == nil)
 	return ts, mr, err
+}
+
+// draftTimeout bounds one draft call from the UI.
+const draftTimeout = 15 * time.Second
+
+// draftService is the App's DraftService: each call goes to the engine
+// of the workspace it names, which need not be the active one.
+func draftService(router *workspaceRouter) core.DraftService {
+	engine := func(teamID string) (*draftEngine, error) {
+		if w := router.ByID(teamID); w != nil && w.Drafts != nil {
+			return w.Drafts, nil
+		}
+		return nil, fmt.Errorf("drafts: workspace %q is unavailable", teamID)
+	}
+	call := func() (context.Context, context.CancelFunc) {
+		return context.WithTimeout(context.Background(), draftTimeout)
+	}
+	return core.NewDraftService(core.DraftServiceFuncs{
+		Load: func(teamID string) ([]core.Draft, error) {
+			e, err := engine(teamID)
+			if err != nil {
+				return nil, err
+			}
+			ctx, cancel := call()
+			defer cancel()
+			return e.Load(ctx)
+		},
+		Save: func(k core.DraftKey, text string, edited time.Time) (core.DraftSaveResult, error) {
+			e, err := engine(k.TeamID)
+			if err != nil {
+				return core.DraftSaveResult{}, err
+			}
+			ctx, cancel := call()
+			defer cancel()
+			return e.Save(ctx, draftDest{k.ChannelID, k.ThreadTS}, text, edited)
+		},
+		Discard: func(k core.DraftKey) error {
+			e, err := engine(k.TeamID)
+			if err != nil {
+				return err
+			}
+			ctx, cancel := call()
+			defer cancel()
+			return e.Discard(ctx, draftDest{k.ChannelID, k.ThreadTS})
+		},
+		Delete: func(teamID, id string) error {
+			e, err := engine(teamID)
+			if err != nil {
+				return err
+			}
+			ctx, cancel := call()
+			defer cancel()
+			return e.Delete(ctx, id)
+		},
+	})
+}
+
+// flushDrafts saves the drafts the App had not synced yet, on quit,
+// within ctx. Failures are logged; the text stays in memory only.
+func flushDrafts(ctx context.Context, router *workspaceRouter, changes []core.DraftChange) {
+	for _, c := range changes {
+		w := router.ByID(c.Key.TeamID)
+		if w == nil || w.Drafts == nil {
+			continue
+		}
+		dest := draftDest{c.Key.ChannelID, c.Key.ThreadTS}
+		var err error
+		if c.Text == "" {
+			err = w.Drafts.Discard(ctx, dest)
+		} else {
+			_, err = w.Drafts.Save(ctx, dest, c.Text, c.Edited)
+		}
+		if err != nil {
+			debuglog.General("drafts: quit flush %v: %v", c.Key, err)
+		}
+	}
 }
 
 // coreDraft is d as the UI sees it. Text is the composer markdown the
