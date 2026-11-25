@@ -1649,6 +1649,32 @@ func run() error {
 			},
 		}))
 
+		app.SetAppViewService(core.NewAppViewService(core.AppViewServiceFuncs{
+			Fetch: func(teamID, viewID string) core.Msg {
+				wctx := router.ByID(teamID)
+				if wctx == nil || wctx.Client == nil {
+					return ui.AppViewLoadedMsg{
+						TeamID: teamID, ViewID: viewID,
+						Err: fmt.Errorf("workspace %q is unavailable", teamID),
+					}
+				}
+				ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				defer cancel()
+				// views.get is org-served on a Grid member workspace,
+				// like the Home tab's conversations.info fetch.
+				return fetchAppView(ctx, orgOrOwnClient(router, wctx), teamID, viewID)
+			},
+			Press: func(teamID, viewID, serviceID string, action core.AppHomeAction) error {
+				wctx := router.ByID(teamID)
+				if wctx == nil || wctx.Client == nil {
+					return fmt.Errorf("app view: workspace %q is unavailable", teamID)
+				}
+				ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				defer cancel()
+				return pressAppHomeAction(ctx, orgOrOwnClient(router, wctx), viewID, serviceID, action)
+			},
+		}))
+
 		sendTyping := func(channelID string) {
 			wctx := router.Active()
 			if wctx == nil {

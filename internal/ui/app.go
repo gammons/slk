@@ -30,6 +30,7 @@ import (
 	"github.com/gammons/slk/internal/slackurl"
 	"github.com/gammons/slk/internal/ui/activityview"
 	"github.com/gammons/slk/internal/ui/apphome"
+	"github.com/gammons/slk/internal/ui/appview"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/emojipicker"
@@ -564,6 +565,22 @@ type App struct {
 	// (shownPromptThread: over the thread composer), so closing it puts
 	// the user back to typing.
 	shownPromptInsert, shownPromptThread bool
+	// appViewBehind records that a chooser is open over the app dialog:
+	// the dialog is drawn behind it, and returns when the chooser
+	// closes. keepAppView lets that mode change skip closeModal's
+	// clearing of the dialog.
+	appViewBehind bool
+	keepAppView   bool
+	// appView is the modal an app opened for the user (see
+	// internal/ui/appview); appViewSvc refreshes it and presses its
+	// buttons. appViewGen numbers the inline content installed, so a
+	// fetch started before a newer frame is discarded; the fetch fields
+	// order fetches among themselves.
+	appView          appview.Model
+	appViewSvc       core.AppViewService
+	appViewGen       uint64
+	appViewFetchSeq  uint64
+	appViewFetchDone uint64
 	// actionQueue holds ephemerals with buttons waiting for the action
 	// dialog, oldest first; promptToasted records which have shown the
 	// "press b" toast, so it appears once per message.
@@ -1034,6 +1051,7 @@ func NewApp() *App {
 		threadsView:           threadsview.New(nil, ""),
 		activityView:          activityview.New(nil, ""),
 		appHome:               apphome.New(),
+		appView:               appview.New(),
 		linkPicker:            linkpicker.New(),
 		reactionPicker:        reactionpicker.New(),
 		reactionsView:         reactionsview.New(),
@@ -1068,6 +1086,7 @@ func NewApp() *App {
 		interactions:          noopInteractionService,
 		commandSvc:            noopCommandService,
 		appHomeSvc:            noopAppHomeService,
+		appViewSvc:            noopAppViewService,
 		threads:               noopThreadService,
 		activity:              noopActivityService,
 		messageSvc:            noopMessageService,
@@ -1296,6 +1315,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		reduceThreads,
 		reduceActivity,
 		reduceAppHome,
+		reduceAppView,
 		reduceFocus,
 		reduceSend,
 		reduceRemovePreview,
@@ -2511,6 +2531,12 @@ func (a *App) SetMode(mode Mode) {
 	if a.mode != mode {
 		a.closeModal(a.mode)
 	}
+	if mode != ModeConfirm {
+		// Any mode but the confirm prompt ends a chooser that was
+		// open over the app dialog; afterConfirmPrompt is the one path
+		// that returns to the dialog and clears this itself.
+		a.appViewBehind = false
+	}
 	a.mode = mode
 	a.statusbar.SetMode(mode)
 }
@@ -2556,6 +2582,15 @@ func (a *App) closeModal(mode Mode) {
 	case ModeOpenSlackLink:
 		a.slackLinkInput = ""
 		a.slackLinkError = ""
+	case ModeAppView:
+		// A button chooser changes mode while staying over the dialog;
+		// it asks for the content to be kept. Every other exit drops
+		// the dialog (a stale fetch is ignored once it is gone).
+		if a.keepAppView {
+			a.keepAppView = false
+		} else {
+			a.appView.Clear()
+		}
 	}
 }
 
@@ -3915,6 +3950,15 @@ func (a *App) SetAppHomeService(s core.AppHomeService) {
 		s = noopAppHomeService
 	}
 	a.appHomeSvc = s
+}
+
+// SetAppViewService wires the service that refreshes an app modal and
+// presses its buttons. A nil s restores the no-op, which refuses both.
+func (a *App) SetAppViewService(s core.AppViewService) {
+	if s == nil {
+		s = noopAppViewService
+	}
+	a.appViewSvc = s
 }
 
 // SetProfileService wires the App's ProfileService collaborator, used

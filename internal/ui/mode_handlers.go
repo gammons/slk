@@ -68,6 +68,7 @@ var modeHandlers = map[Mode]modeHandler{
 	ModeMarks:                handleMarksMode,
 	ModeSuppressed:           handleSuppressedMode,
 	ModeOpenSlackLink:        handleOpenSlackLinkMode,
+	ModeAppView:              handleAppViewMode,
 }
 
 // normalizeFinderKey maps a tea.KeyMsg to the plain-string form the

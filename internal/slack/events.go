@@ -52,9 +52,13 @@ type EventHandler interface {
 	OnEphemeralMessage(m EphemeralMessage)
 	// OnViewOpened delivers view_opened: an app opened a modal for the
 	// current user, typically in answer to a slash command (bare
-	// /giphy). title is the modal's title. slk cannot show modals yet;
-	// see docs/superpowers/specs/2026-10-12-app-modals-research.md.
-	OnViewOpened(title string)
+	// /giphy) or a button. The frame carries the whole view; a frame
+	// without one still names it by ID and title.
+	OnViewOpened(v View)
+	// OnViewUpdated delivers view_updated for a modal already open.
+	// v is nil when Slack sent no inline view: the content must then be
+	// fetched with views.get.
+	OnViewUpdated(viewID string, v *View)
 	OnMessageDeleted(channelID, ts string)
 	OnReactionAdded(channelID, ts, userID, emoji string)
 	OnReactionRemoved(channelID, ts, userID, emoji string)
@@ -712,25 +716,37 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 		handler.OnSelfPresenceChange(evt.Presence)
 
 	case "view_opened":
-		var evt struct {
-			Title struct {
-				Text string `json:"text"`
-			} `json:"title"`
-			View struct {
-				Title struct {
-					Text string `json:"text"`
-				} `json:"title"`
-			} `json:"view"`
+		v, err := parseViewOpened(data)
+		if err != nil {
+			debuglog.WS("view_opened: parse failed: %v", err)
+			return
 		}
+		debuglog.WS("view_opened: id=%q title=%q blocks=%d", v.ID, v.Title, len(v.Blocks.BlockSet))
+		handler.OnViewOpened(*v)
+
+	case "view_updated":
+		var evt viewUpdatedEvent
 		if err := json.Unmarshal(data, &evt); err != nil {
 			return
 		}
-		title := evt.Title.Text
-		if title == "" {
-			title = evt.View.Title.Text
+		var v *View
+		if len(evt.View) > 0 && string(evt.View) != "null" {
+			parsed, err := decodeView(evt.View)
+			if err != nil {
+				debuglog.WS("view_updated: parse failed: %v", err)
+			} else {
+				if parsed.ID == "" {
+					parsed.ID = evt.ViewID
+				}
+				v = parsed
+			}
 		}
-		debuglog.WS("view_opened: title=%q", title)
-		handler.OnViewOpened(title)
+		viewID := evt.ViewID
+		if viewID == "" && v != nil {
+			viewID = v.ID
+		}
+		debuglog.WS("view_updated: id=%q inline=%v", viewID, v != nil)
+		handler.OnViewUpdated(viewID, v)
 
 	case "dnd_updated":
 		var evt wsDNDUpdatedEvent

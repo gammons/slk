@@ -264,6 +264,45 @@ type (
 		// the current press's progress dots.
 		Seq uint64
 	}
+	// AppViewOpenedMsg carries a modal an app opened for the user
+	// (view_opened). The App shows it over everything else; a view for
+	// a workspace no longer on screen is ignored.
+	AppViewOpenedMsg struct {
+		TeamID string
+		View   *core.AppView
+	}
+	// AppViewUpdatedMsg replaces the content of a modal that is already
+	// on screen (view_updated with an inline view). Unlike an open, it
+	// never brings back a dialog the user has dismissed; a different
+	// view ID is a pushed view and replaces the one shown.
+	AppViewUpdatedMsg struct {
+		TeamID string
+		View   *core.AppView
+	}
+	// AppViewLoadedMsg carries a modal's fetched content, either
+	// because Slack asked for a refresh (view_updated without an inline
+	// view) or after a pressed button. View is nil with Err nil when
+	// Slack no longer has the view: the App dismisses it. A non-nil Err
+	// leaves what is on screen alone.
+	AppViewLoadedMsg struct {
+		TeamID string
+		ViewID string
+		View   *core.AppView
+		Err    error
+		// Gen is the inline-content generation the fetch started at; a
+		// result from before a newer frame is dropped. Fetch orders the
+		// fetches among themselves: a fetch started before one already
+		// applied is dropped. Both are 0 for a message that did not
+		// come from a fetch slk started.
+		Gen   uint64
+		Fetch uint64
+	}
+	// AppViewNeedsRefreshMsg asks the App to fetch a modal's content
+	// after Slack signalled an update that carried no inline view.
+	AppViewNeedsRefreshMsg struct {
+		TeamID string
+		ViewID string
+	}
 	// ActivityBodiesLoadedMsg carries hydrated message bodies for the
 	// refs in a freshly loaded Activity page (fetched via messages.list
 	// as a second step after activity.feed, which returns refs only).

@@ -17,6 +17,7 @@ var (
 	noopInteractionService = core.NewInteractionService(core.InteractionServiceFuncs{})
 	noopCommandService     = core.NewCommandService(core.CommandServiceFuncs{})
 	noopAppHomeService     = core.NewAppHomeService(core.AppHomeServiceFuncs{})
+	noopAppViewService     = core.NewAppViewService(core.AppViewServiceFuncs{})
 	noopSearchService      = core.NewSearchService(core.SearchServiceFuncs{})
 	noopDesktopService     = core.NewDesktopService(core.DesktopServiceFuncs{})
 	noopEditorService      = core.NewEditorService(nil, nil, nil)

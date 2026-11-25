@@ -51,6 +51,9 @@ func (a *App) applyOverlays(screen string) string {
 	if a.reactionPicker.IsVisible() {
 		screen = a.reactionPicker.ViewOverlay(a.width, a.height, screen)
 	}
+	if a.mode == ModeAppView || a.appViewBehind {
+		screen = a.appViewOverlay(screen)
+	}
 	if a.confirmPrompt.IsVisible() {
 		screen = a.confirmPromptOverlay(screen)
 	}
@@ -117,6 +120,8 @@ func (a *App) overlayActive() bool {
 		a.suppressList.IsVisible() ||
 		a.mode == ModePresenceCustomSnooze ||
 		a.mode == ModeOpenSlackLink ||
+		a.mode == ModeAppView ||
+		a.appViewBehind ||
 		a.bootstrap.IsLoading()
 }
 
