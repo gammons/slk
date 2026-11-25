@@ -1,0 +1,39 @@
+{
+ "method": "drafts.listActive",
+ "note": "Boot call listing only the ids of active drafts (44 in the original; trimmed to 3). slk does not need it.",
+ "form": [
+  [
+   "token",
+   "xoxc-REDACTED"
+  ],
+  [
+   "limit",
+   "1000"
+  ],
+  [
+   "_x_reason",
+   "client-v2-boot-team"
+  ],
+  [
+   "_x_mode",
+   "online"
+  ],
+  [
+   "_x_app_name",
+   "client"
+  ],
+  [
+   "_x_sonic",
+   "true"
+  ]
+ ],
+ "response": {
+  "ok": true,
+  "active_draft_ids": [
+   "Dr0EXAMPLE02",
+   "Dr0EXAMPLE04",
+   "Dr0EXAMPLE05"
+  ],
+  "has_more": false
+ }
+}
