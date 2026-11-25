@@ -1,6 +1,9 @@
 package emoji
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
 
 // shortcodeRe matches Slack-style emoji shortcodes embedded in text:
 // a colon, a name made of letters/digits/_/+/-, then a closing colon.
@@ -18,7 +21,7 @@ var shortcodeRe = regexp.MustCompile(`:[A-Za-z0-9_+\-]+:`)
 // glyphs. Unknown shortcodes pass through unchanged.
 func ResolveShortcodesInText(s string) string {
 	return shortcodeRe.ReplaceAllStringFunc(s, func(match string) string {
-		glyph, ok := slackCodeMap[match]
+		glyph, ok := ShortcodeGlyph(strings.Trim(match, ":"))
 		if !ok {
 			// Unrecognized shortcode; pass through.
 			return match

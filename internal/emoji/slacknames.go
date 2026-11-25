@@ -26,7 +26,9 @@ import "fmt"
 //     base name and re-attach Slack's "::skin-tone-N" form.
 //  3. Direct alias hit: the name is already a known Slack short_name or
 //     alias — return its canonical form.
-//  4. Fallback: return the name unchanged (unknown name sent verbatim).
+//  4. Codepoint-form name ("1f44d", "1f44d-1f3fd"): return the canonical
+//     shortcode naming the same emoji, so its use ranks that row.
+//  5. Fallback: return the name unchanged (unknown name sent verbatim).
 func CanonicalSlackName(name string, customs map[string]string) string {
 	if _, ok := customs[name]; ok {
 		return name
@@ -36,6 +38,9 @@ func CanonicalSlackName(name string, customs map[string]string) string {
 		return fmt.Sprintf("%s::skin-tone-%d", CanonicalSlackName(base, customs), tone)
 	}
 	if canonical, ok := slackNameToCanonical[name]; ok {
+		return canonical
+	}
+	if canonical, ok := CodepointFormCanonicalName(name); ok {
 		return canonical
 	}
 	return name

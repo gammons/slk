@@ -57,13 +57,22 @@ func BuildStandardEmojiURL(codepoints []rune) string {
 // BuildCustomEmojiURL with the workspace customs map for those.
 //
 // VS16 and ZWJ are returned verbatim and preserved through URL
-// construction (see BuildStandardEmojiURL).
+// construction (see BuildStandardEmojiURL). A codepoint-form name
+// ("1f44d", "1f44d-1f3fd") resolves to its sequence too.
 func CodepointsForShortcode(name string) ([]rune, bool) {
-	u, ok := slackCodeMap[":"+name+":"]
+	if u, ok := slackCodeMap[":"+name+":"]; ok {
+		return []rune(strings.TrimRight(u, " ")), true
+	}
+	cps, ok := CodepointsFromName(name)
 	if !ok {
 		return nil, false
 	}
-	return []rune(strings.TrimRight(u, " ")), true
+	// Use the spelling Slack names the asset after: a bare "2764" must
+	// ask for 2764-fe0f.png, not the 403ing 2764.png.
+	if g := canonicalGlyphFor(cps); g != "" {
+		return []rune(g), true
+	}
+	return cps, true
 }
 
 // customEmojiAliasPrefix marks a Slack custom-emoji alias entry

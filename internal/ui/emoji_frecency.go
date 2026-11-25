@@ -39,7 +39,7 @@ func (a *App) recordEmojiUse(names ...string) {
 		return
 	}
 	for _, n := range names {
-		a.reactions.RecordFrecent(n)
+		a.reactions.RecordFrecent(emoji.CanonicalSlackName(n, a.emojiCustoms))
 	}
 	a.refreshEmojiFrecency()
 }
