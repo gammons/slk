@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gammons/slk/internal/core"
+	slackclient "github.com/gammons/slk/internal/slack"
 )
 
 // recordingSaver counts SavePendingTheme calls and hands out drafts.
@@ -43,4 +44,41 @@ func TestFlushDrafts_SavesAndDiscardsThroughEachWorkspace(t *testing.T) {
 	if got := fmt.Sprint(api.Calls()); got != want {
 		t.Errorf("calls = %s, want %s", got, want)
 	}
+}
+
+// The quit flush must not wait out a save already in flight for the same
+// conversation (that save runs under its own, much longer draftTimeout):
+// flushDrafts's own ctx deadline bounds it instead.
+func TestFlushDrafts_BoundedByDeadlineWhenASaveIsInFlight(t *testing.T) {
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	api := &fakeDraftAPI{}
+	api.create = func(w slackclient.DraftWrite) (slackclient.Draft, error) {
+		close(entered)
+		<-release
+		return attached("Dr1", w.ChannelID, w.ThreadTS, "1.0"), nil
+	}
+	eng := newDraftEngine(api, "T1")
+	router := newWorkspaceRouter()
+	router.Add(&WorkspaceContext{TeamID: "T1", Drafts: eng})
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = eng.Save(context.Background(), draftDest{channelID: "C1"}, "in flight", time.Time{})
+		close(done)
+	}()
+	<-entered
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	flushDrafts(ctx, router, []core.DraftChange{
+		{Key: core.DraftKey{TeamID: "T1", ChannelID: "C1"}, Text: "typed at quit", Edited: time.UnixMilli(7)},
+	})
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("flushDrafts took %v, want bounded by its ctx deadline, not the in-flight save", elapsed)
+	}
+
+	close(release)
+	<-done
 }

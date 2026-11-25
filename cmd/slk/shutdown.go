@@ -26,7 +26,11 @@ func shutdown(app pendingSaver, router *workspaceRouter) {
 	// pending: quitting right after the last alt+y would lose it.
 	app.SavePendingTheme()
 
-	// Draft sync saves while typing, but up to two seconds behind.
+	// Draft sync saves while typing, but up to two seconds behind. This
+	// deadline is independent of draftTimeout (drafts.go): the engine's
+	// per-conversation lock is ctx-aware, so a slower save already in
+	// flight for the same conversation (bounded by draftTimeout) cannot
+	// make this flush outlive its own 2s budget.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	flushDrafts(ctx, router, app.UnsyncedDrafts())
 	cancel()

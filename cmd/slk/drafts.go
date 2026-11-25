@@ -48,7 +48,9 @@ type draftEngine struct {
 
 	mu    sync.Mutex
 	index map[draftDest]draftEntry
-	locks map[draftDest]*sync.Mutex
+	// locks: a 1-slot semaphore per conversation, so lock can give up on
+	// a cancelled/expired ctx instead of blocking on a plain Mutex.Lock.
+	locks map[draftDest]chan struct{}
 	busy  map[draftDest]int
 	// seq and touched record write order: touched[dest] is the seq at
 	// which dest's index entry was last written (put, drop or
@@ -62,31 +64,42 @@ func newDraftEngine(api draftAPI, teamID string) *draftEngine {
 	return &draftEngine{
 		api: api, teamID: teamID, now: time.Now,
 		index:   map[draftDest]draftEntry{},
-		locks:   map[draftDest]*sync.Mutex{},
+		locks:   map[draftDest]chan struct{}{},
 		busy:    map[draftDest]int{},
 		touched: map[draftDest]uint64{},
 	}
 }
 
-// lock takes dest's lock and returns its release.
-func (e *draftEngine) lock(dest draftDest) func() {
+// lock takes dest's lock and returns its release, or ctx.Err() if ctx is
+// done before the slot frees up. The caller must not call unlock when
+// err is non-nil.
+func (e *draftEngine) lock(ctx context.Context, dest draftDest) (unlock func(), err error) {
 	e.mu.Lock()
-	l, ok := e.locks[dest]
+	ch, ok := e.locks[dest]
 	if !ok {
-		l = &sync.Mutex{}
-		e.locks[dest] = l
+		ch = make(chan struct{}, 1)
+		e.locks[dest] = ch
 	}
 	e.busy[dest]++
 	e.mu.Unlock()
-	l.Lock()
-	return func() {
-		l.Unlock()
+
+	release := func() {
 		e.mu.Lock()
 		if e.busy[dest]--; e.busy[dest] == 0 {
 			delete(e.busy, dest)
 		}
 		e.mu.Unlock()
 	}
+	select {
+	case ch <- struct{}{}:
+	case <-ctx.Done():
+		release()
+		return nil, ctx.Err()
+	}
+	return func() {
+		<-ch
+		release()
+	}, nil
 }
 
 func (e *draftEngine) entry(dest draftDest) (draftEntry, bool) {
@@ -210,7 +223,10 @@ func (e *draftEngine) Load(ctx context.Context) ([]core.Draft, error) {
 // Save makes text dest's attached draft. slk's text wins every conflict
 // (spec, Conflicts).
 func (e *draftEngine) Save(ctx context.Context, dest draftDest, text string, edited time.Time) (core.DraftSaveResult, error) {
-	unlock := e.lock(dest)
+	unlock, err := e.lock(ctx, dest)
+	if err != nil {
+		return core.DraftSaveResult{}, err
+	}
 	defer unlock()
 	w := slackclient.DraftWrite{ChannelID: dest.channelID, ThreadTS: dest.threadTS, Text: text, Edited: edited}
 	ent, ok := e.entry(dest)
@@ -288,7 +304,10 @@ func (e *draftEngine) update(ctx context.Context, dest draftDest, id string, w s
 // refusal means it is gone already; a transport error is returned so
 // the caller retries.
 func (e *draftEngine) Discard(ctx context.Context, dest draftDest) error {
-	unlock := e.lock(dest)
+	unlock, err := e.lock(ctx, dest)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	ent, ok := e.entry(dest)
 	if !ok || ent.handsOff {
@@ -314,7 +333,10 @@ func (e *draftEngine) Delete(ctx context.Context, id string) error {
 	}
 	e.mu.Unlock()
 	if dest != nil {
-		unlock := e.lock(*dest)
+		unlock, err := e.lock(ctx, *dest)
+		if err != nil {
+			return err
+		}
 		defer unlock()
 	}
 	if err := e.api.DeleteDraft(ctx, id); err != nil {
@@ -326,11 +348,16 @@ func (e *draftEngine) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// beginSend takes dest's lock, waiting out a save in flight, and returns
-// its writable draft (nil when none). done releases the lock; done(true)
-// after the post succeeded with the ref forgets the draft.
-func (e *draftEngine) beginSend(dest draftDest) (*slackclient.DraftRef, func(sent bool)) {
-	unlock := e.lock(dest)
+// beginSend takes dest's lock, waiting out a save in flight up to ctx,
+// and returns its writable draft (nil when none). done releases the
+// lock; done(true) after the post succeeded with the ref forgets the
+// draft. On a ctx error the lock was never taken: done is a no-op and
+// must still be called.
+func (e *draftEngine) beginSend(ctx context.Context, dest draftDest) (*slackclient.DraftRef, func(sent bool), error) {
+	unlock, err := e.lock(ctx, dest)
+	if err != nil {
+		return nil, func(bool) {}, err
+	}
 	var ref *slackclient.DraftRef
 	if ent, ok := e.entry(dest); ok && !ent.handsOff {
 		ref = &slackclient.DraftRef{ID: ent.id, LastUpdatedTS: ent.lastUpdatedTS}
@@ -340,7 +367,7 @@ func (e *draftEngine) beginSend(dest draftDest) (*slackclient.DraftRef, func(sen
 			e.drop(dest)
 		}
 		unlock()
-	}
+	}, nil
 }
 
 // draftSender is the part of *slackclient.Client sendWithDraft uses.
@@ -353,7 +380,9 @@ type draftSender interface {
 // sendWithDraft posts text to the conversation (a thread when threadTS is
 // set), marking its draft sent with the post. When Slack refuses the
 // draft fields (draft_*: nothing was posted) it posts plainly and deletes
-// the draft. drafts nil (sync off) is a plain send.
+// the draft. drafts nil (sync off) is a plain send. A lock that cannot
+// be taken within ctx (a save elsewhere is in flight) never blocks the
+// send: it posts plainly instead of failing the send over a lock.
 func sendWithDraft(ctx context.Context, client draftSender, drafts *draftEngine, channelID, threadTS, text string, broadcast bool) (string, string, error) {
 	plain := func() (string, string, error) {
 		if threadTS == "" {
@@ -365,7 +394,10 @@ func sendWithDraft(ctx context.Context, client draftSender, drafts *draftEngine,
 		return plain()
 	}
 	dest := draftDest{channelID, threadTS}
-	ref, done := drafts.beginSend(dest)
+	ref, done, err := drafts.beginSend(ctx, dest)
+	if err != nil {
+		return plain()
+	}
 	if ref == nil {
 		ts, mr, err := plain()
 		done(false)
@@ -390,7 +422,12 @@ func sendWithDraft(ctx context.Context, client draftSender, drafts *draftEngine,
 	return ts, mr, err
 }
 
-// draftTimeout bounds one draft call from the UI.
+// draftTimeout bounds one draft call from the UI's own tick. Quit uses
+// its own, much shorter deadline (shutdown.go) for the flush of unsynced
+// drafts; the per-conversation lock (lock) honours whichever ctx it is
+// given, so a save still running under draftTimeout at quit time never
+// makes the flush wait the full 15s -- it gives up at the quit deadline
+// instead.
 const draftTimeout = 15 * time.Second
 
 // draftService is the App's DraftService: each call goes to the engine

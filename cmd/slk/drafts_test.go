@@ -455,6 +455,34 @@ func TestSendWithDraft_WaitsForInFlightSave(t *testing.T) {
 	}
 }
 
+// A ctx that is already done when the destination is busy must never
+// block or fail the send: sendWithDraft posts plainly instead.
+func TestSendWithDraft_CancelledCtxWhileBusyPostsPlain(t *testing.T) {
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	api := &fakeDraftAPI{}
+	api.create = func(w slackclient.DraftWrite) (slackclient.Draft, error) {
+		close(entered)
+		<-release
+		return attached("Dr1", "C1", "", "4.0"), nil
+	}
+	e := newDraftEngine(api, "T1")
+	go func() { _, _ = e.Save(context.Background(), c1, "hello", time.Time{}) }()
+	<-entered
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s := &fakeSender{}
+	if _, _, err := sendWithDraft(ctx, s, e, "C1", "", "hello", false); err != nil {
+		close(release)
+		t.Fatalf("sendWithDraft err = %v", err)
+	}
+	close(release)
+	if fmt.Sprint(s.calls) != "[plain C1]" {
+		t.Errorf("sends = %v, want a plain post", s.calls)
+	}
+}
+
 func TestSendWithDraft_NilEngineSendsPlain(t *testing.T) {
 	s := &fakeSender{}
 	if _, _, err := sendWithDraft(context.Background(), s, nil, "C1", "", "x", false); err != nil {
