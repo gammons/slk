@@ -1601,7 +1601,14 @@ func run() error {
 				}
 				ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 				defer cancel()
-				return runCommand(ctx, wctx.Client, channelID, threadTS, command, args)
+				return runCommand(ctx, wctx.Client, channelID, threadTS, command, args, wctx.AppCommands())
+			},
+			List: func() []core.SlashCommand {
+				wctx := router.Active()
+				if wctx == nil {
+					return nil
+				}
+				return wctx.AppCommands()
 			},
 		}))
 
@@ -2050,6 +2057,13 @@ func run() error {
 			// for why the bootstrap subset alone must not be treated as
 			// an answer.
 			go refreshWorkspaceEmoji(ctx, wctx, wctx.Client, db, p, wctx.TeamID, wctx.customEmojiFreshFor)
+
+			// Slash-command completion. One fetch per connect, not
+			// stored: the picker reads the pointer when it opens.
+			// A failure leaves the list empty and commands still run.
+			if wctx.Client != nil {
+				go fetchAppCommands(ctx, wctx, wctx.Client)
+			}
 
 			// Fetch workspace usergroups in the background. When done,
 			// send a follow-up so render caches and compose pickers can

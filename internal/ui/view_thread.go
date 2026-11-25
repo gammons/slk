@@ -53,12 +53,8 @@ func (a *App) renderThreadRegion(frame panelLayoutFrame, themeVer int64) string 
 	a.threadCompose.SetWidth(threadWidth - 2)
 
 	threadComposeView := a.threadCompose.View(threadWidth-2, threadComposeFocused)
-	if pickerView := a.threadCompose.EmojiPickerView(threadWidth - 2); pickerView != "" {
+	if pickerView := a.threadCompose.PopupView(threadWidth - 2); pickerView != "" {
 		threadComposeView = pickerView + "\n" + threadComposeView
-	} else if mentionView := a.threadCompose.MentionPickerView(threadWidth - 2); mentionView != "" {
-		threadComposeView = mentionView + "\n" + threadComposeView
-	} else if channelView := a.threadCompose.ChannelPickerView(threadWidth - 2); channelView != "" {
-		threadComposeView = channelView + "\n" + threadComposeView
 	}
 	threadComposeSpacer := lipgloss.NewStyle().Background(styles.Background).Width(threadWidth - 2).Render("")
 	threadComposeView = threadComposeSpacer + "\n" + threadComposeView

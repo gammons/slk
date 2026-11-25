@@ -121,15 +121,15 @@ func mustMention(t *testing.T, c *compose.Model) {
 	}
 }
 
-// noPickerActive asserts none of the three compose overlays is open.
-// Used on the compose that a mirrored row expects the handler NOT to
-// have touched, and on the "esc exits insert mode" rows where an
-// accidentally-open picker would swallow the Esc.
+// noPickerActive asserts no compose overlay is open. Used on the
+// compose that a mirrored row expects the handler NOT to have touched,
+// and on the "esc exits insert mode" rows where an accidentally-open
+// picker would swallow the Esc.
 func noPickerActive(t *testing.T, name string, c *compose.Model) {
 	t.Helper()
-	if c.IsEmojiActive() || c.IsMentionActive() || c.IsChannelActive() {
-		t.Fatalf("precondition: %s has a picker open (emoji=%v mention=%v channel=%v)",
-			name, c.IsEmojiActive(), c.IsMentionActive(), c.IsChannelActive())
+	if c.PickerActive() {
+		t.Fatalf("precondition: %s has a picker open (emoji=%v mention=%v channel=%v command=%v)",
+			name, c.IsEmojiActive(), c.IsMentionActive(), c.IsChannelActive(), c.IsCommandActive())
 	}
 }
 

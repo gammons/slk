@@ -56,10 +56,11 @@ type InteractionService interface {
 		attachmentID int, callbackID, serviceID string, action blocks.LegacyAction, ephemeral bool) error
 }
 
-// CommandService runs Slack slash commands. Run is blocking (callers run
-// it from a tea.Cmd). What a command produces arrives over the WebSocket,
-// so only the error comes back: *CommandError when Slack refuses the
-// command, any other error for a transport failure.
+// CommandService runs Slack slash commands and exposes the workspace's
+// command list for completion. Run is blocking (callers run it from a
+// tea.Cmd). What a command produces arrives over the WebSocket, so only
+// the error comes back: *CommandError when Slack refuses the command,
+// any other error for a transport failure. List does not block.
 //
 // Build one with NewCommandService.
 type CommandService interface {
@@ -69,6 +70,12 @@ type CommandService interface {
 	// threadTS's thread when threadTS is set.
 	// args is wire-form text (<@U…>, <#C…|name>); "" for none.
 	Run(teamID string, channelID ids.ChannelID, threadTS ids.ThreadTS, command, args string) error
+
+	// List returns the active workspace's slash commands, the slice
+	// published at connect. It does not block and it does not copy:
+	// callers must not mutate the result. Nil before the fetch lands
+	// or when the fetch failed.
+	List() []SlashCommand
 }
 
 // ThreadService is the App's interface to Slack's thread surfaces:

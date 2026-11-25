@@ -1109,6 +1109,7 @@ func NewApp() *App {
 	// before the first workspace finishes loading customs.
 	app.compose.SetEmojiEntries(emoji.BuildEntries(nil))
 	app.threadCompose.SetEmojiEntries(emoji.BuildEntries(nil))
+	app.wireSlashCompletion()
 	// Seed the channel finder with the "Threads" view shortcut so users
 	// can jump to the threads-list view from the same overlay they use
 	// to switch channels (ctrl+t / ctrl+p). Selecting this row dispatches

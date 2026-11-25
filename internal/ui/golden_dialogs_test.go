@@ -448,6 +448,25 @@ func dialogGoldens() []dialogGolden {
 				typeInCompose(a, ":sm")
 			},
 		},
+		{
+			name:  "popup_slash_command",
+			want:  "/giphy",
+			shown: func(a *App) bool { return a.compose.PopupView(80) != "" },
+			open: func(t *testing.T, a *App) {
+				a.SetCommandService(core.NewCommandService(core.CommandServiceFuncs{
+					List: func() []core.SlashCommand {
+						return []core.SlashCommand{
+							{Name: "/giphy", Usage: "[text]", Desc: "Post a random gif"},
+							{Name: "/linear", Usage: "issue title", Desc: "Create a Linear issue", AppName: "Linear"},
+							{Name: "/dm", AliasOf: "/msg", Desc: "hidden alias"},
+						}
+					},
+				}))
+				a.SetMode(ModeInsert)
+				_ = a.compose.Focus()
+				typeInCompose(a, "/")
+			},
+		},
 	}
 }
 
