@@ -18,7 +18,6 @@ import (
 	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/muesli/reflow/truncate"
-	"github.com/rivo/uniseg"
 )
 
 // Default section names used when an item has no custom Section assigned.
@@ -2565,7 +2564,7 @@ func (m *Model) renderSectionHeaderLabel(name string, width int, cursor string, 
 			textFallback = true
 		}
 		emojiPrefixSelected = emojiPrefix
-		emojiCells = headerCells(emojiPrefix)
+		emojiCells = bubblesansi.Cells(emojiPrefix)
 	}
 
 	glyph := "▾" // expanded
@@ -2605,10 +2604,10 @@ func (m *Model) renderSectionHeaderLabel(name string, width int, cursor string, 
 		}
 	}
 
-	aggregateCells := headerCells(aggregates)
+	aggregateCells := bubblesansi.Cells(aggregates)
 	// The ":code:" text tells the user less than the name, so it gives way before the name is cut.
 	// A glyph stays.
-	if textFallback && headerCells(displayName) > sectionHeaderNameBudget(width, emojiCells, aggregateCells) {
+	if textFallback && bubblesansi.Cells(displayName) > sectionHeaderNameBudget(width, emojiCells, aggregateCells) {
 		emojiPrefix, emojiPrefixSelected = "", ""
 		emojiCells = 0
 	}
@@ -2661,11 +2660,11 @@ const sectionHeaderChromeCells = 4
 func fitSectionHeader(width int, name string, emojiCells, aggregateCells int) (fitted string, keepEmoji, keepAggregates bool) {
 	avail := width - 4
 	nameBudget := sectionHeaderNameBudget(width, emojiCells, aggregateCells)
-	if headerCells(name) <= nameBudget {
+	if bubblesansi.Cells(name) <= nameBudget {
 		return name, true, true
 	}
 	if nameBudget >= 1 {
-		return truncateHeaderName(name, nameBudget), true, true
+		return bubblesansi.Truncate(name, nameBudget), true, true
 	}
 	used := sectionHeaderChromeCells + emojiCells + aggregateCells
 	if used <= avail {
@@ -2680,39 +2679,6 @@ func fitSectionHeader(width int, name string, emojiCells, aggregateCells int) (f
 // aggregates (see fitSectionHeader). It may be negative.
 func sectionHeaderNameBudget(width, emojiCells, aggregateCells int) int {
 	return width - 4 - sectionHeaderChromeCells - emojiCells - aggregateCells
-}
-
-// headerCells measures header text the way both its readers need: as
-// lipgloss does, which decides the wrap, and as emoji.Width does, which
-// knows an emoji image's footprint. The larger wins, so neither
-// overflows.
-func headerCells(s string) int {
-	return max(lipgloss.Width(s), emojiutil.Width(s))
-}
-
-// truncateHeaderName cuts name to at most budget cells, ending in "…"
-// (which takes one of them). It cuts between grapheme clusters, never
-// inside one, so a ZWJ emoji or a combining mark is kept or dropped
-// whole.
-func truncateHeaderName(name string, budget int) string {
-	if budget <= 0 {
-		return ""
-	}
-	var b strings.Builder
-	used := 0
-	rest := name
-	state := -1
-	for len(rest) > 0 {
-		var cluster string
-		cluster, rest, _, state = uniseg.FirstGraphemeClusterInString(rest, state)
-		w := headerCells(cluster)
-		if used+w > budget-1 {
-			break
-		}
-		b.WriteString(cluster)
-		used += w
-	}
-	return b.String() + "…"
 }
 
 // countBadge is the Threads or Activity count after left: "•N" (one

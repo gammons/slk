@@ -10,8 +10,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/gammons/slk/internal/bubbles/ansi"
 	"github.com/gammons/slk/internal/bubbles/chrome"
-	"github.com/gammons/slk/internal/bubbles/entrylist"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/text"
 )
@@ -240,19 +240,27 @@ func (m *Model) View() string {
 	}
 	start, end := chrome.Window(m.selected, len(m.filtered), maxVisible)
 	list := chrome.List{Start: start, End: end, Total: len(m.filtered)}
-	// Popup draws a one-cell border on each side and sets the content
-	// width to width-2, so a row of that many cells fills the box.
-	inner := m.width - 2
-	gutterCols := 0
-	if list.Scrolls() {
-		gutterCols = 1
-	}
-	contentW := inner - 2 - gutterCols // PopupMarker is two columns
-	if contentW < 1 {
-		contentW = 1
+	// Popup sets Width to width-2, which is the block's outer size.
+	// The rounded border takes one cell on each side, and the text
+	// wraps inside that, so a row has width-4 cells.
+	textWidth := m.width - 4
+	if textWidth < 1 {
+		textWidth = 1
 	}
 
 	s := m.styles.Chrome
+	// The selected marker can be wider than the unselected one when ▌
+	// measures as two cells. Every row uses that wider column, or a
+	// short row's gutter lands a column left of a long row's.
+	markerCol := max(lipgloss.Width(chrome.PopupMarker(s, true)), lipgloss.Width(chrome.PopupMarker(s, false)))
+	gutterCol := 0
+	if list.Scrolls() {
+		gutterCol = lipgloss.Width(list.Gutter(s, start))
+	}
+	contentW := textWidth - markerCol - gutterCol
+	if contentW < 1 {
+		contentW = 1
+	}
 	rows := make([]string, 0, end-start)
 	for i := start; i < end; i++ {
 		name, rest := splitLabel(m.filtered[i])
@@ -261,7 +269,15 @@ func (m *Model) View() string {
 		if i == m.selected {
 			nameStyle = nameStyle.Bold(true)
 		}
-		row := chrome.PopupMarker(s, i == m.selected) + nameStyle.Render(name) + m.styles.Detail.Render(rest)
+		marker := chrome.PopupMarker(s, i == m.selected)
+		if gap := markerCol - lipgloss.Width(marker); gap > 0 {
+			marker += strings.Repeat(" ", gap)
+		}
+		label := nameStyle.Render(name) + m.styles.Detail.Render(rest)
+		if gap := contentW - lipgloss.Width(label); gap > 0 {
+			label += strings.Repeat(" ", gap)
+		}
+		row := marker + label
 		if g := list.Gutter(s, i); g != "" {
 			row += g
 		}
@@ -291,8 +307,10 @@ func splitLabel(c core.SlashCommand) (name, rest string) {
 	if !strings.HasPrefix(name, "/") {
 		name = "/" + name
 	}
-	usage := strings.TrimSpace(c.Usage)
-	desc := strings.TrimSpace(c.Desc)
+	// Fields collapses newlines and runs of spaces, so a usage or
+	// description stays on the one row the popup counted.
+	usage := strings.Join(strings.Fields(c.Usage), " ")
+	desc := strings.Join(strings.Fields(c.Desc), " ")
 	switch {
 	case usage != "" && desc != "":
 		rest = "  " + usage + " — " + desc
@@ -305,44 +323,12 @@ func splitLabel(c core.SlashCommand) (name, rest string) {
 }
 
 func fitLabel(name, rest string, width int) (string, string) {
-	if cells(name) >= width {
-		return truncateCells(name, width), ""
+	if ansi.Cells(name) >= width {
+		return ansi.Truncate(name, width), ""
 	}
-	remain := width - cells(name)
-	if cells(rest) > remain {
-		rest = truncateCells(rest, remain)
+	remain := width - ansi.Cells(name)
+	if ansi.Cells(rest) > remain {
+		rest = ansi.Truncate(rest, remain)
 	}
 	return name, rest
-}
-
-func cells(s string) int {
-	lines := entrylist.PlainLines(s)
-	if len(lines) == 0 {
-		return 0
-	}
-	return entrylist.DisplayWidth(lines[0])
-}
-
-func truncateCells(s string, width int) string {
-	if s == "" || width <= 0 {
-		return ""
-	}
-	if cells(s) <= width {
-		return s
-	}
-	const ell = "…"
-	budget := width - cells(ell)
-	if budget < 0 {
-		return ""
-	}
-	p := entrylist.PlainLines(s)[0]
-	cut := entrylist.SliceColumns(p, 0, budget)
-	for cells(cut) > budget && cut != "" {
-		rs := []rune(cut)
-		cut = string(rs[:len(rs)-1])
-	}
-	if budget == 0 {
-		return ell
-	}
-	return cut + ell
 }

@@ -108,6 +108,83 @@ func TestSlashPickerStaysClosedWhenTheWorkspaceListIsEmpty(t *testing.T) {
 	}
 }
 
+func TestSlashPasteThenEnterKeepsTheArguments(t *testing.T) {
+	var ran []string
+	a := newTestApp(t, append(insertOpts(), withMode(ModeInsert))...)
+	a.SetCommandService(core.NewCommandService(core.CommandServiceFuncs{
+		Run: func(_ string, _ ids.ChannelID, _ ids.ThreadTS, command, args string) error {
+			ran = append(ran, command+" "+args)
+			return nil
+		},
+		List: func() []core.SlashCommand {
+			return []core.SlashCommand{{Name: "/giphy", Usage: "[text]", Desc: "Post a gif"}}
+		},
+	}))
+	_ = a.compose.Focus()
+	typeInsert(a, "/gi")
+	a.Update(tea.PasteMsg{Content: "phy cats"})
+	if a.compose.IsCommandActive() {
+		t.Fatal("the picker stayed open over the pasted arguments")
+	}
+	if got := a.compose.Value(); got != "/giphy cats" {
+		t.Fatalf("value = %q, want /giphy cats", got)
+	}
+	cmd := a.handleInsertMode(tea.KeyPressMsg{Code: tea.KeyEnter})
+	msgs := deliveredMsgs[commandRanMsg](t, cmd)
+	if len(ran) != 1 || ran[0] != "/giphy cats" {
+		t.Fatalf("Enter ran %v, want [/giphy cats]", ran)
+	}
+	if len(msgs) != 1 || msgs[0].name != "/giphy" {
+		t.Fatalf("commandRanMsg = %+v", msgs)
+	}
+}
+
+func TestSlashUnmatchedEnterRunsTheCommand(t *testing.T) {
+	var ran []string
+	a := newTestApp(t, append(insertOpts(), withMode(ModeInsert))...)
+	a.SetCommandService(core.NewCommandService(core.CommandServiceFuncs{
+		Run: func(_ string, _ ids.ChannelID, _ ids.ThreadTS, command, args string) error {
+			ran = append(ran, command+"|"+args)
+			return nil
+		},
+		List: func() []core.SlashCommand {
+			return []core.SlashCommand{
+				{Name: "/giphy", Desc: "gif"},
+				{Name: "/dm", AliasOf: "/msg", Desc: "alias"},
+			}
+		},
+	}))
+	_ = a.compose.Focus()
+	typeInsert(a, "/nope")
+	if !a.compose.IsCommandActive() {
+		t.Fatal("setup: the picker should still be active with no visible match")
+	}
+	if a.compose.PopupView(40) != "" {
+		t.Fatal("setup: an unmatched query should not draw a popup")
+	}
+	cmd := a.handleInsertMode(tea.KeyPressMsg{Code: tea.KeyEnter})
+	_ = deliveredMsgs[commandRanMsg](t, cmd)
+	if len(ran) != 1 || ran[0] != "/nope|" {
+		t.Fatalf("Enter ran %v, want one run of /nope", ran)
+	}
+}
+
+func TestSlashPlainTextEnterSendsInsteadOfSwallowing(t *testing.T) {
+	a := newTestApp(t, append(insertOpts(), withMode(ModeInsert))...)
+	a.SetCommandService(core.NewCommandService(core.CommandServiceFuncs{
+		List: func() []core.SlashCommand {
+			return []core.SlashCommand{{Name: "/giphy", Desc: "gif"}}
+		},
+	}))
+	_ = a.compose.Focus()
+	typeInsert(a, "/tmp/foo")
+	cmd := a.handleInsertMode(tea.KeyPressMsg{Code: tea.KeyEnter})
+	msgs := deliveredMsgs[SendMessageMsg](t, cmd)
+	if len(msgs) != 1 || msgs[0].Text != "/tmp/foo" {
+		t.Fatalf("sent = %+v, want one message %q", msgs, "/tmp/foo")
+	}
+}
+
 func TestSlashPickerEscStaysInInsert(t *testing.T) {
 	a := newTestApp(t, append(insertOpts(), withMode(ModeInsert))...)
 	a.SetCommandService(core.NewCommandService(core.CommandServiceFuncs{

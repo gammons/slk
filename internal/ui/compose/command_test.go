@@ -183,6 +183,46 @@ func TestSlashPrecedenceWithOtherPickers(t *testing.T) {
 	}
 }
 
+func TestSlashPasteOfArgumentsClosesThePicker(t *testing.T) {
+	m := withSlash(New("general"))
+	m = typeText(m, "/gi")
+	m, _ = m.Update(tea.PasteMsg{Content: "phy cats"})
+	if m.IsCommandActive() {
+		t.Fatal("pasting the rest of the command and its arguments should close the picker")
+	}
+	if m.Value() != "/giphy cats" {
+		t.Fatalf("value = %q, want /giphy cats", m.Value())
+	}
+}
+
+func TestSlashPasteInsideTheTokenUpdatesTheQuery(t *testing.T) {
+	m := withSlash(New("general"))
+	m = typeText(m, "/g")
+	m, _ = m.Update(tea.PasteMsg{Content: "i"})
+	if !m.IsCommandActive() {
+		t.Fatal("a paste that stays inside the command name should keep the picker open")
+	}
+	got := namesOf(m.commandPicker.Filtered())
+	if len(got) != 1 || got[0] != "/giphy" {
+		t.Fatalf("filter after paste = %v, want [/giphy]", got)
+	}
+	if m.Value() != "/gi" {
+		t.Fatalf("value = %q, want /gi", m.Value())
+	}
+}
+
+func TestSlashSetValueResyncsAnOpenPicker(t *testing.T) {
+	m := withSlash(New("general"))
+	m = typeText(m, "/gi")
+	m.SetValue(m.Value() + "phy cats")
+	if m.IsCommandActive() {
+		t.Fatal("SetValue that finishes the command should close the picker")
+	}
+	if m.Value() != "/giphy cats" {
+		t.Fatalf("value = %q, want /giphy cats", m.Value())
+	}
+}
+
 func TestSlashResetClearsPicker(t *testing.T) {
 	m := withSlash(New("general"))
 	m = typeText(m, "/")

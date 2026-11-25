@@ -193,6 +193,64 @@ func TestRowShowsUsageAndDescriptionTruncated(t *testing.T) {
 	}
 }
 
+func TestDescriptionNewlinesStayOnOneRow(t *testing.T) {
+	m := New(func() []core.SlashCommand {
+		return []core.SlashCommand{{Name: "/giphy", Usage: "your\ntext", Desc: "Post a\nrandom gif"}}
+	}, WithWidth(80), WithStyles(Styles{
+		Chrome: chrome.Styles{Popup: lipgloss.NewStyle().Border(lipgloss.RoundedBorder())},
+	}))
+	if !m.Open() {
+		t.Fatal("Open returned false")
+	}
+	plain := ansi.Strip(m.View())
+	if strings.Contains(plain, "\n\n") {
+		t.Fatalf("view has a blank line:\n%s", plain)
+	}
+	if !strings.Contains(plain, "your text") || !strings.Contains(plain, "Post a random gif") {
+		t.Fatalf("view = %q, want the usage and description on one line", plain)
+	}
+	// Borders plus one command row.
+	if n := strings.Count(plain, "\n") + 1; n != 3 {
+		t.Fatalf("view is %d lines, want 3 (two borders and one row)", n)
+	}
+}
+
+func TestScrollbarSitsOnOneColumn(t *testing.T) {
+	var cmds []core.SlashCommand
+	for i, name := range []string{"/a", "/bb", "/ccc", "/dddd", "/eeeee", "/ffffff"} {
+		cmds = append(cmds, core.SlashCommand{Name: name, Desc: strings.Repeat("x", i+1)})
+	}
+	m := New(func() []core.SlashCommand { return cmds }, WithWidth(40), WithStyles(Styles{
+		Chrome: chrome.Styles{
+			Popup: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()),
+			Thumb: lipgloss.NewStyle(),
+			Track: lipgloss.NewStyle(),
+		},
+	}))
+	if !m.Open() {
+		t.Fatal("Open returned false")
+	}
+	var cols []int
+	for _, line := range strings.Split(ansi.Strip(m.View()), "\n") {
+		if !strings.Contains(line, "/") {
+			continue
+		}
+		col := strings.IndexAny(line, "█│")
+		if col < 0 {
+			t.Fatalf("command row has no gutter on its own line: %q", line)
+		}
+		cols = append(cols, col)
+	}
+	if len(cols) < 2 {
+		t.Fatal("expected a scrollbar on the command rows")
+	}
+	for _, c := range cols[1:] {
+		if c != cols[0] {
+			t.Fatalf("gutter columns = %v, want every row on column %d", cols, cols[0])
+		}
+	}
+}
+
 func TestViewEmptyWhenClosed(t *testing.T) {
 	m := New(func() []core.SlashCommand {
 		return []core.SlashCommand{{Name: "/giphy", Desc: "gif"}}

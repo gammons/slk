@@ -44,7 +44,24 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/gammons/slk/internal/ui/compose"
 )
+
+// applyPickerKey gives the open popup msg. handled is false only when
+// Enter closed the slash picker without changing the text: nothing
+// matched, so the popup was not even drawn, and the send path should
+// run the command or post the text. Every other key stays with the popup.
+func applyPickerKey(c *compose.Model, msg tea.KeyMsg, isSend bool) (tea.Cmd, bool) {
+	wasCommand := c.IsCommandActive()
+	before := c.Value()
+	updated, cmd := c.Update(msg)
+	*c = updated
+	if wasCommand && isSend && !c.IsCommandActive() && c.Value() == before {
+		return nil, false
+	}
+	return cmd, true
+}
 
 func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	if a.compose.Uploading() || a.threadCompose.Uploading() {
@@ -170,9 +187,9 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		// If a picker is active, forward all keys to compose
 		// (including Enter).
 		if a.threadCompose.PickerActive() {
-			var cmd tea.Cmd
-			a.threadCompose, cmd = a.threadCompose.Update(msg)
-			return cmd
+			if cmd, handled := applyPickerKey(&a.threadCompose, msg, isSend); handled {
+				return cmd
+			}
 		}
 
 		// Thread reply compose.
@@ -235,9 +252,9 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	// If a picker is active, forward all keys to compose
 	// (including Enter).
 	if a.compose.PickerActive() {
-		var cmd tea.Cmd
-		a.compose, cmd = a.compose.Update(msg)
-		return cmd
+		if cmd, handled := applyPickerKey(&a.compose, msg, isSend); handled {
+			return cmd
+		}
 	}
 
 	if isNewline {

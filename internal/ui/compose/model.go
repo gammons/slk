@@ -304,6 +304,12 @@ func (m *Model) Value() string {
 
 func (m *Model) SetValue(s string) {
 	m.input.SetValue(s)
+	// A replacement (Ctrl+V, the external editor) bypasses the key
+	// path, so an open slash picker would otherwise keep the query
+	// from before the paste and complete over the new text.
+	if m.commandActive {
+		m.syncCommandQuery()
+	}
 	m.dirty()
 }
 
@@ -603,6 +609,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	m.maybeOpenEmojiPicker()
 	if isKey {
 		m.maybeOpenCommandPicker(keyMsg.Key().Text)
+	} else if m.commandActive {
+		// A paste or other non-key replacement landed in the textarea
+		// while the slash picker was open. Re-read the token.
+		m.syncCommandQuery()
 	}
 
 	m.autoGrow()
@@ -1088,21 +1098,17 @@ func (m *Model) syncCommandQuery() {
 	if pos > len(val) {
 		pos = len(val)
 	}
-	start := m.commandStartCol - 1
-	if start < 0 {
-		start = 0
-	}
-	if pos < m.commandStartCol || start >= len(val) || val[start] != '/' {
+	// The token is only the leading "/name" the cursor is still inside.
+	// Whitespace before the cursor means the name is finished (a paste
+	// of the arguments, or a typed space), so the picker must close
+	// rather than complete over that text.
+	if pos < 1 || val == "" || val[0] != '/' || strings.IndexFunc(val[:pos], unicode.IsSpace) >= 0 {
 		m.commandActive = false
 		m.commandPicker.Close()
 		return
 	}
-	if strings.IndexFunc(val[start:pos], unicode.IsSpace) >= 0 {
-		m.commandActive = false
-		m.commandPicker.Close()
-		return
-	}
-	m.commandPicker.SetQuery(val[m.commandStartCol:pos])
+	m.commandStartCol = 1
+	m.commandPicker.SetQuery(val[1:pos])
 }
 
 // insertCommand replaces the in-progress "/query" with "/name ".
