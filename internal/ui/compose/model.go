@@ -1040,6 +1040,84 @@ func (m *Model) OfferDraft(teamID, channelID, threadTS, text string) bool {
 	return true
 }
 
+// Slot is one conversation's composer text, as draft sync reads it.
+type Slot struct {
+	TeamID, ChannelID, ThreadTS string
+	Text                        string
+	// Visible is the slot on screen (the composer is bound to it).
+	Visible bool
+}
+
+// Slots lists every conversation this composer holds: the bound one,
+// even empty, then each stored one. A detached composer has no bound slot.
+func (m *Model) Slots() []Slot {
+	out := make([]Slot, 0, len(m.drafts)+1)
+	if k := m.activeKey; k.channelID != "" {
+		out = append(out, Slot{k.teamID, k.channelID, k.threadTS, m.input.Value(), true})
+	}
+	for k, d := range m.drafts {
+		out = append(out, Slot{k.teamID, k.channelID, k.threadTS, d.text, false})
+	}
+	return out
+}
+
+// SlotText returns the text held for a conversation and whether it is
+// the visible one. A conversation with nothing stored reads "".
+func (m *Model) SlotText(teamID, channelID, threadTS string) (string, bool) {
+	key := draftKey{teamID: teamID, channelID: channelID, threadTS: threadTS}
+	if channelID != "" && key == m.activeKey {
+		return m.input.Value(), true
+	}
+	return m.drafts[key].text, false
+}
+
+// ApplyRemoteDraft writes text, the conversation's draft from Slack, into
+// its slot. A stored slot is overwritten (text "" clears its text and
+// keeps its attachments); the visible composer is written only when it
+// is empty, so text on screen is never replaced. The caller decides
+// whether the slot may change at all (draft sync compares it with what
+// Slack last had). Reports whether it wrote.
+func (m *Model) ApplyRemoteDraft(teamID, channelID, threadTS, text string) bool {
+	if channelID == "" {
+		return false
+	}
+	key := draftKey{teamID: teamID, channelID: channelID, threadTS: threadTS}
+	if key == m.activeKey {
+		if text == "" || m.input.Value() != "" {
+			return false
+		}
+		m.input.SetValue(text)
+		m.autoGrow()
+		m.dirty()
+		return true
+	}
+	d := m.drafts[key]
+	d.text = text
+	if d.isEmpty() {
+		delete(m.drafts, key)
+	} else {
+		m.drafts[key] = d
+	}
+	return true
+}
+
+// ClearSlot empties a conversation's text, visible or not, keeping its
+// attachments. For a draft the user deleted from the Drafts list.
+func (m *Model) ClearSlot(teamID, channelID, threadTS string) {
+	if channelID == "" {
+		return
+	}
+	key := draftKey{teamID: teamID, channelID: channelID, threadTS: threadTS}
+	if key == m.activeKey {
+		m.closePickers()
+		m.input.Reset()
+		m.input.SetHeight(1)
+		m.dirty()
+		return
+	}
+	m.ApplyRemoteDraft(teamID, channelID, threadTS, "")
+}
+
 // closePickers ends every completion session (mention, channel, emoji)
 // so no stale start-offset survives a text replacement. A leftover
 // offset indexing a shorter value is the slice-bounds panic source.
