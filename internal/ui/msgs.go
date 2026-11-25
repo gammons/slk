@@ -818,6 +818,14 @@ type OpenLinkMsg struct {
 	Confirmed bool
 }
 
+// OpenSlackLinkMsg opens a Slack archive permalink sent from outside the
+// TUI (`slk --open`). It takes the Open Slack link dialog's path: in-app
+// navigation, a switch to the workspace the link belongs to, or the
+// browser for anything slk cannot resolve.
+type OpenSlackLinkMsg struct {
+	URL string
+}
+
 // DownloadFileMsg requests download + OS-open of a file attachment.
 // Dispatched by the `d` keybinding (directly for single-file messages)
 // and by the picker modal for multi-file messages. Handled by
