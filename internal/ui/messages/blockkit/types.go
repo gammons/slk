@@ -60,7 +60,18 @@ type RenderResult struct {
 	SixelRows   map[int]SixelEntry      // sixel sentinel rows keyed by row index into Lines (same coord system as HitRect.RowStart)
 	Height      int                     // == len(Lines); cached for caller's row math
 	Hits        []HitRect               // clickable image footprints
+	ActionHits  []ActionHit             // rendered actions-block buttons (same row/col system as Lines)
 	Interactive bool                    // any interactive element rendered
+}
+
+// ActionHit is the footprint of one element of an actions block, in the
+// coordinate system of RenderResult.Lines. BlockID and ActionID identify
+// the element the way a press echoes it (a caller that cannot press the
+// element ignores the hit); Rows are 0-based and ColEnd is exclusive.
+type ActionHit struct {
+	BlockID, ActionID string
+	RowStart, RowEnd  int
+	ColStart, ColEnd  int
 }
 
 // SixelEntry is one sixel image's pre-encoded bytes plus its

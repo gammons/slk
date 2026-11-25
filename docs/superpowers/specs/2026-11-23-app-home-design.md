@@ -102,6 +102,10 @@ A fetch is fired when an `app`-typed conversation is selected. When it lands:
 - `b` opens the existing confirm-prompt chooser, one numbered entry per button.
   A button with Slack's `confirm` object opens Slack's confirmation step
   first; only its OK button presses. URL buttons open the link.
+- A mouse click on a button presses it the same way: its rendered footprint
+  comes from `blockkit.RenderResult.ActionHits`, so a plain button presses, a
+  URL button opens the link, and a confirming button asks first. A click on
+  anything else in the tab is ignored.
 - A successful press refetches the view (the app re-publishes it), and one
   delayed follow-up fetch catches an app that publishes only after it finished
   handling the press. A failed fetch says nothing about whether the app has a

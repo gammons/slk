@@ -167,11 +167,15 @@ func TestParseActionsBlock(t *testing.T) {
 		slack.NewTextBlockObject("plain_text", "Click", false, false))
 	in := slack.Blocks{BlockSet: []slack.Block{slack.NewActionBlock("act", btn)}}
 	ab := Parse(in)[0].(ActionsBlock)
+	if ab.BlockID != "act" {
+		t.Errorf("BlockID = %q, want act", ab.BlockID)
+	}
 	if len(ab.Elements) != 1 {
 		t.Fatalf("Elements len = %d, want 1", len(ab.Elements))
 	}
-	if ab.Elements[0].Kind != "button" || ab.Elements[0].Label != "Click" {
-		t.Errorf("got %+v", ab.Elements[0])
+	el := ab.Elements[0]
+	if el.Kind != "button" || el.Label != "Click" || el.ActionID != "a" || el.Value != "v" {
+		t.Errorf("got %+v", el)
 	}
 }
 

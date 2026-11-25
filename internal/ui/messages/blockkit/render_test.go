@@ -471,3 +471,37 @@ func TestRenderSectionImageAccessoryEmptyAltUsesGenericLabel(t *testing.T) {
 		t.Errorf("expected fallback with default alt, got %q", plain)
 	}
 }
+
+// Actions-block buttons record their footprints, so a host can make
+// them clickable (the app Home tab does).
+func TestRenderActionsRecordsHits(t *testing.T) {
+	r := Render([]Block{
+		SectionBlock{Text: "hi"},
+		ActionsBlock{BlockID: "b1", Elements: []ActionElement{
+			{Kind: "button", Label: "A", ActionID: "a"},
+			{Kind: "button", Label: "B", ActionID: "b"},
+		}},
+	}, Context{}, 40)
+
+	if len(r.ActionHits) != 2 {
+		t.Fatalf("action hits = %d, want 2", len(r.ActionHits))
+	}
+	a, b := r.ActionHits[0], r.ActionHits[1]
+	if a.BlockID != "b1" || a.ActionID != "a" || a.RowStart != 1 || a.ColStart != 0 || a.ColEnd != 5 {
+		t.Errorf("first hit = %+v, want b1/a row 1 cols 0..5", a)
+	}
+	if b.BlockID != "b1" || b.ActionID != "b" || b.RowStart != 1 || b.ColStart != 7 || b.ColEnd != 12 {
+		t.Errorf("second hit = %+v, want b1/b row 1 cols 7..12", b)
+	}
+}
+
+// A legacy attachment passes -1: its synthesized actions block is not in
+// the caller's block slice, so no hits are recorded.
+func TestRenderLegacyActionsRecordNoHits(t *testing.T) {
+	r := RenderLegacy([]LegacyAttachment{{
+		Actions: []LegacyAction{{Name: "a", Text: "A", Type: "button"}},
+	}}, Context{}, 40)
+	if len(r.ActionHits) != 0 {
+		t.Errorf("legacy action hits = %+v, want none", r.ActionHits)
+	}
+}

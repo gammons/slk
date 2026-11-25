@@ -186,6 +186,27 @@ func (a *App) toggleAppHome() tea.Cmd {
 	return nil
 }
 
+// clickAppHomeAction is a mouse click on the Home tab's button idx: a
+// plain button presses, a URL button opens the link, and a button with
+// Slack's confirmation step asks first (its dismiss just closes).
+func (a *App) clickAppHomeAction(idx int) tea.Cmd {
+	home := a.appHome.Home()
+	if home == nil || idx < 0 || idx >= len(home.Actions) {
+		return nil
+	}
+	act := home.Actions[idx]
+	switch {
+	case act.URL != "":
+		url := act.URL
+		return func() tea.Msg { return OpenLinkMsg{URL: url} }
+	case act.Confirm != nil:
+		a.openConfirmChoice(*a.appHomeConfirmChoice(act, nil))
+		return nil
+	default:
+		return a.pressAppHomeAction(act)
+	}
+}
+
 // openAppHomeActions raises the chooser for the Home tab's buttons, one
 // per button with number keys 1-9, as openActionPrompt does for a
 // message's legacy buttons.
