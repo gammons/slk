@@ -14,11 +14,14 @@ import (
 )
 
 // BlockActionRequest identifies one press of a Block Kit button in a
-// view. The fields are the button as the view rendered it; they are
-// echoed back to the app.
+// view or a message. The fields are the button as it was rendered; they
+// are echoed back to the app.
 type BlockActionRequest struct {
 	// ViewID is the view the button belongs to (the app home's id).
-	ViewID string
+	// Empty for a button on a message, which ChannelID and MessageTS name.
+	ViewID    string
+	ChannelID string
+	MessageTS string
 	// ServiceID is the posting app's bot ID.
 	ServiceID string
 	ActionID  string
@@ -39,10 +42,10 @@ type BlockActionConfirm struct {
 	DismissText string
 }
 
-// BlockAction presses a Block Kit button in a view, as Slack's web
-// client does (blocks.actions, undocumented). Slack dispatches the
-// action to the app and re-publishes the view over the WebSocket, so
-// only the error is returned.
+// BlockAction presses a Block Kit button in a view or a message, as
+// Slack's web client does (blocks.actions, undocumented). Slack
+// dispatches the action to the app, which answers over the WebSocket (a
+// re-published view, an edited message), so only the error is returned.
 //
 // Like chat.attachmentAction, this is a single request with no retry: a
 // press can have side effects on the app's side, so replaying it after a
@@ -52,7 +55,7 @@ func (c *Client) BlockAction(ctx context.Context, req BlockActionRequest) error 
 	if err != nil {
 		return err
 	}
-	container, err := marshalBlockActionContainer(req.ViewID)
+	container, err := marshalBlockActionContainer(req)
 	if err != nil {
 		return err
 	}
@@ -62,8 +65,8 @@ func (c *Client) BlockAction(ctx context.Context, req BlockActionRequest) error 
 		"actions":      {actions},
 		"container":    {container},
 	}
-	debuglog.General("blocks.actions: action=%q view=%q service_id=%q actions=%s",
-		req.ActionID, req.ViewID, req.ServiceID, actions)
+	debuglog.General("blocks.actions: action=%q container=%s service_id=%q actions=%s",
+		req.ActionID, container, req.ServiceID, actions)
 	raw, err := c.postForm(ctx, "blocks.actions", form)
 	if err == nil {
 		err = parseOKResponse("blocks.actions", raw)
@@ -110,10 +113,14 @@ type blockActionConfirm struct {
 	Deny    blockActionText        `json:"deny"`
 }
 
-// blockActionContainer names the view the pressed button lives in.
+// blockActionContainer names the view or message the pressed button
+// lives in.
 type blockActionContainer struct {
-	Type   string `json:"type"`
-	ViewID string `json:"view_id"`
+	Type        string `json:"type"`
+	ViewID      string `json:"view_id,omitempty"`
+	MessageTS   string `json:"message_ts,omitempty"`
+	ChannelID   string `json:"channel_id,omitempty"`
+	IsEphemeral *bool  `json:"is_ephemeral,omitempty"`
 }
 
 // marshalBlockActions encodes req as the actions form field.
@@ -144,9 +151,16 @@ func marshalBlockActions(req BlockActionRequest) (string, error) {
 	return strings.TrimSuffix(buf.String(), "\n"), nil
 }
 
-// marshalBlockActionContainer encodes the container form field.
-func marshalBlockActionContainer(viewID string) (string, error) {
-	raw, err := json.Marshal(blockActionContainer{Type: "view", ViewID: viewID})
+// marshalBlockActionContainer encodes the container form field: the
+// view when req names one, otherwise the message.
+func marshalBlockActionContainer(req BlockActionRequest) (string, error) {
+	c := blockActionContainer{Type: "view", ViewID: req.ViewID}
+	if req.ViewID == "" {
+		notEphemeral := false
+		c = blockActionContainer{Type: "message", MessageTS: req.MessageTS,
+			ChannelID: req.ChannelID, IsEphemeral: &notEphemeral}
+	}
+	raw, err := json.Marshal(c)
 	if err != nil {
 		return "", fmt.Errorf("encoding blocks.actions container: %w", err)
 	}

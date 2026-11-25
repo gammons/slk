@@ -79,12 +79,23 @@ func TestMarshalBlockActions_EchoesConfirm(t *testing.T) {
 }
 
 func TestMarshalBlockActionContainer(t *testing.T) {
-	got, err := marshalBlockActionContainer("V0EXAMPLE1")
+	got, err := marshalBlockActionContainer(BlockActionRequest{ViewID: "V0EXAMPLE1"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != `{"type":"view","view_id":"V0EXAMPLE1"}` {
 		t.Errorf("container = %s", got)
+	}
+}
+
+func TestMarshalBlockActionContainer_Message(t *testing.T) {
+	got, err := marshalBlockActionContainer(BlockActionRequest{ChannelID: "C0EXAMPLE1", MessageTS: "1700000000.000100"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"type":"message","message_ts":"1700000000.000100","channel_id":"C0EXAMPLE1","is_ephemeral":false}`
+	if got != want {
+		t.Errorf("container = %s\nwant        %s", got, want)
 	}
 }
 

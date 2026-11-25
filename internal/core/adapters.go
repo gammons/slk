@@ -81,6 +81,7 @@ func (r reactionAdapter) RecordFrecent(emoji string) {
 type InteractionServiceFuncs struct {
 	PressAttachmentAction func(channelID ids.ChannelID, messageTS ids.MessageTS,
 		attachmentID int, callbackID, serviceID string, action blocks.LegacyAction, ephemeral bool) error
+	PressBlockAction func(channelID ids.ChannelID, messageTS ids.MessageTS, serviceID, blockID string, action blocks.ActionElement) error
 }
 
 // NewInteractionService builds an InteractionService from fns. Used by
@@ -97,6 +98,14 @@ func (i interactionAdapter) PressAttachmentAction(channelID ids.ChannelID, messa
 		return errors.ErrUnsupported
 	}
 	return i.fns.PressAttachmentAction(channelID, messageTS, attachmentID, callbackID, serviceID, action, ephemeral)
+}
+
+func (i interactionAdapter) PressBlockAction(channelID ids.ChannelID, messageTS ids.MessageTS,
+	serviceID, blockID string, action blocks.ActionElement) error {
+	if i.fns.PressBlockAction == nil {
+		return errors.ErrUnsupported
+	}
+	return i.fns.PressBlockAction(channelID, messageTS, serviceID, blockID, action)
 }
 
 // CommandServiceFuncs bundles the closures behind a CommandService. A nil

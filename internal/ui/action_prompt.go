@@ -11,23 +11,27 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/gammons/slk/internal/bubbles/confirmprompt"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/messages"
 )
 
-// actionPromptRef identifies an ephemeral message with buttons.
+// actionPromptRef identifies a message with buttons.
 type actionPromptRef struct {
 	channelID, ts, threadTS string
 }
 
 func (r actionPromptRef) key() string { return r.channelID + "/" + r.ts }
 
-// actionPressedMsg reports a button press; err is nil on success, when
-// Slack answers by deleting the ephemeral over the WebSocket.
+// actionPressedMsg reports a button press; err is nil on success. Slack
+// answers an ephemeral's press by deleting it over the WebSocket; a Block
+// Kit press (block set) gets whatever the app does, often an edit, so it
+// is acknowledged with a toast.
 type actionPressedMsg struct {
 	label string
+	block bool
 	err   error
 }
 
@@ -122,34 +126,132 @@ func (a *App) resetActionPrompts() {
 	a.promptToasted = nil
 }
 
-// actionChoice is the dialog for msg: its sender, its text, one button per
-// legacy button with number keys 1-9, nothing highlighted, and unbound keys
-// ignored.
+// actionChoice is the dialog for msg: its sender, one button per button
+// with number keys 1-9, nothing highlighted, and unbound keys ignored.
+// When the buttons come in rows under several cards (a Block Kit message
+// with more than one actions block), it first asks which card, labelled
+// with the card's first line, and then shows that card's buttons.
 func (a *App) actionChoice(ref actionPromptRef, msg messages.MessageItem) confirmprompt.Choice {
-	choice := &confirmprompt.Choice{Title: msg.UserName, Body: a.actionBody(msg), Default: -1}
-	for i, ba := range messages.ButtonActions(msg) {
-		b := confirmprompt.Button{Label: ba.Action.Text}
+	all := messages.ButtonActions(msg)
+	groups := buttonGroups(all)
+	if len(groups) < 2 {
+		body := a.actionBody(msg)
+		if len(all) > 0 && all[0].Block != nil {
+			body = a.flatten(all[0].Card)
+		}
+		return *a.buttonChoice(ref, msg, msg.UserName, body, all)
+	}
+	cards := &confirmprompt.Choice{Title: msg.UserName, Default: -1}
+	for i, g := range groups {
+		card := a.flatten(g[0].Card)
+		label := firstLine(card)
+		if label == "" {
+			label = g[0].Label()
+		}
+		b := confirmprompt.Button{Label: truncateLabel(label, 60), Then: a.buttonChoice(ref, msg, msg.UserName, card, g)}
 		if i < 9 {
 			b.Keys = key.NewBinding(key.WithKeys(strconv.Itoa(i + 1)))
 		}
-		switch {
-		case ba.Action.URL != "":
-			url := ba.Action.URL
-			b.Action = func() tea.Msg { return OpenLinkMsg{URL: url} }
-		case ba.Action.Confirm != nil:
-			b.Then = a.actionConfirmChoice(ref, ba, msg.BotID, choice)
-		default:
-			b.Action = a.pressAction(ref, ba, msg.BotID)
+		cards.Buttons = append(cards.Buttons, b)
+	}
+	return *cards
+}
+
+// buttonGroups splits buttons into consecutive runs from the same actions
+// block. Legacy buttons form one group.
+func buttonGroups(all []messages.ButtonAction) [][]messages.ButtonAction {
+	var out [][]messages.ButtonAction
+	for i, ba := range all {
+		if i > 0 && ba.BlockID == all[i-1].BlockID {
+			out[len(out)-1] = append(out[len(out)-1], ba)
+			continue
 		}
+		out = append(out, []messages.ButtonAction{ba})
+	}
+	return out
+}
+
+// buttonChoice is a dialog with one button per entry of btns.
+func (a *App) buttonChoice(ref actionPromptRef, msg messages.MessageItem, title, body string, btns []messages.ButtonAction) *confirmprompt.Choice {
+	choice := &confirmprompt.Choice{Title: title, Body: body, Default: -1}
+	for i, ba := range btns {
+		b := confirmprompt.Button{Label: ba.Label()}
+		if i < 9 {
+			b.Keys = key.NewBinding(key.WithKeys(strconv.Itoa(i + 1)))
+		}
+		b.Action, b.Then = a.buttonPress(ref, ba, msg.BotID, choice)
 		choice.Buttons = append(choice.Buttons, b)
 	}
-	return *choice
+	return choice
+}
+
+// buttonPress is what pressing ba does: open its link, ask Slack's
+// confirmation first (dismissing returns to back), or press it.
+func (a *App) buttonPress(ref actionPromptRef, ba messages.ButtonAction, serviceID string, back *confirmprompt.Choice) (func() tea.Msg, *confirmprompt.Choice) {
+	switch {
+	case ba.URL() != "":
+		url := ba.URL()
+		return func() tea.Msg { return OpenLinkMsg{URL: url} }, nil
+	case ba.Confirm() != nil:
+		return nil, a.actionConfirmChoice(ref, ba, serviceID, back)
+	default:
+		return a.pressAction(ref, ba, serviceID), nil
+	}
+}
+
+// pressButtonAt is a click on the idx-th of ButtonActions(msg): it acts
+// like choosing that button in the dialog, so a button that asks for
+// confirmation opens just that step.
+func (a *App) pressButtonAt(ref actionPromptRef, msg messages.MessageItem, idx int) tea.Cmd {
+	all := messages.ButtonActions(msg)
+	if idx < 0 || idx >= len(all) {
+		return nil
+	}
+	action, then := a.buttonPress(ref, all[idx], msg.BotID, nil)
+	if then == nil {
+		return action
+	}
+	a.prepareConfirmPrompt()
+	a.confirmPrompt.OpenChoice(*then)
+	a.shownPrompt = &ref
+	a.SetMode(ModeConfirm)
+	return nil
+}
+
+// flatten renders mrkdwn as plain text, names resolved.
+func (a *App) flatten(mrkdwn string) string {
+	if mrkdwn == "" {
+		return ""
+	}
+	user := func(id string) (string, bool) {
+		n, ok := a.userNames[id]
+		return n, ok && n != ""
+	}
+	return messages.FlattenMrkdwn(mrkdwn, user, nil)
+}
+
+// firstLine is s's first line without the emphasis wrapping it whole: a
+// card's title line is usually all bold.
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	return strings.Trim(s, "*_ ")
+}
+
+// truncateLabel cuts s to max display columns with an ellipsis.
+func truncateLabel(s string, max int) string {
+	if ansi.StringWidth(s) <= max {
+		return s
+	}
+	return ansi.Truncate(s, max-1, "") + "…"
 }
 
 // actionConfirmChoice is Slack's confirmation step for ba. Its dismiss
 // button returns to back; its OK button presses.
 func (a *App) actionConfirmChoice(ref actionPromptRef, ba messages.ButtonAction, serviceID string, back *confirmprompt.Choice) *confirmprompt.Choice {
-	c := ba.Action.Confirm
+	c := ba.Confirm()
 	title, dismiss, ok := c.Title, c.DismissText, c.OKText
 	if title == "" {
 		title = "Are you sure?"
@@ -193,6 +295,12 @@ func (a *App) actionBody(msg messages.MessageItem) string {
 // service, off the UI goroutine, and report the result.
 func (a *App) pressAction(ref actionPromptRef, ba messages.ButtonAction, serviceID string) func() tea.Msg {
 	svc := a.interactions
+	if blk := ba.Block; blk != nil {
+		return func() tea.Msg {
+			err := svc.PressBlockAction(ids.ChannelID(ref.channelID), ids.MessageTS(ref.ts), serviceID, ba.BlockID, *blk)
+			return actionPressedMsg{label: blk.Label, block: true, err: err}
+		}
+	}
 	att, act := ba.Attachment, ba.Action
 	return func() tea.Msg {
 		err := svc.PressAttachmentAction(ids.ChannelID(ref.channelID), ids.MessageTS(ref.ts),
@@ -316,11 +424,11 @@ func (a *App) selectedMessageInFocus() (messages.MessageItem, actionPromptRef, b
 	return msg, ref, true
 }
 
-// respondToSelected is b: open the selected ephemeral's dialog now (the user
+// respondToSelected is b: open the selected message's dialog now (the user
 // asked, so the interruption rule does not apply).
 func (a *App) respondToSelected() tea.Cmd {
 	msg, ref, ok := a.selectedMessageInFocus()
-	if !ok || !msg.Ephemeral || !messages.HasButtonActions(msg) || !a.openActionPrompt(ref) {
+	if !ok || !messages.HasButtonActions(msg) || !a.openActionPrompt(ref) {
 		return toastCmd("No buttons on this message")
 	}
 	return nil

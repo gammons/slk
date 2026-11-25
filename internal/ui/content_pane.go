@@ -24,6 +24,7 @@ type contentPane interface {
 	HitTestImage(row, col int) (ts string, attIdx int, ok bool)
 	HitTestFile(row, col int) (ts string, attIdx int, ok bool)
 	HitTestLink(row, col int) (url string, ok bool)
+	HitTestButton(row, col int) (msg messages.MessageItem, idx int, ok bool)
 	BeginSelectionAt(y, x int)
 	ExtendSelectionAt(y, x int)
 	EndSelection() (string, bool)

@@ -1291,7 +1291,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 		// A parent without a ts cannot be clicked or text-selected.
 		parent.Plain = parentPlain
 		for _, h := range parentRendered.Hits {
-			if h.Kind == entrylist.HitImage || h.Kind == entrylist.HitFile {
+			if h.Kind == entrylist.HitImage || h.Kind == entrylist.HitFile || h.Kind == entrylist.HitButton {
 				parent.Hits = append(parent.Hits, h)
 			}
 		}
@@ -1548,6 +1548,23 @@ func (m *Model) HitTestFile(row, col int) (ts string, attIdx int, ok bool) {
 		return m.replies[h.Ref].TS, h.Aux, true
 	}
 	return "", 0, false
+}
+
+// HitTestButton returns the message (the parent or a reply) and the
+// index in its ButtonActions of the Block Kit button at (row, col), or
+// ok=false. Coordinate frame mirrors HitTestReaction.
+func (m *Model) HitTestButton(row, col int) (msg messages.MessageItem, idx int, ok bool) {
+	h, ok := m.list.HitTest(entrylist.HitButton, row, col)
+	if !ok {
+		return messages.MessageItem{}, 0, false
+	}
+	switch {
+	case h.Ref == parentSelected && m.parent.TS != "":
+		return m.parent, h.Aux, true
+	case h.Ref >= 0 && h.Ref < len(m.replies):
+		return m.replies[h.Ref], h.Aux, true
+	}
+	return messages.MessageItem{}, 0, false
 }
 
 // fitHeight keeps the first height rows of s, as the old outer
