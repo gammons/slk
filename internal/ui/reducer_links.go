@@ -70,6 +70,17 @@ func (p *pendingLinkNav) wrapThreadLoad(cmd tea.Cmd, authoritative bool, loads i
 }
 
 var reduceLinks reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
+	if m, ok := msg.(OpenSlackLinkMsg); ok {
+		// The jump comes from outside, so no overlay or prompt on screen
+		// belongs to it; leave them the way Esc would before navigating.
+		if a.mode == ModeOpenSlackLink {
+			a.clearSlackLink()
+		}
+		if a.mode != ModeNormal {
+			a.SetMode(ModeNormal)
+		}
+		return a.openFinderPermalink(m.URL), true
+	}
 	if dropped, ok := msg.(finderPermalinkDroppedMsg); ok {
 		// The workspace switch the finder asked for produced nothing.
 		// A newer paste has its own request; leave that one waiting.

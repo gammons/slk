@@ -93,6 +93,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "--open":
+			if err := openViaControlSocket(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "--remove-workspace":
 			if err := removeWorkspace(); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -191,6 +197,7 @@ Usage:
                           Add one from a browser session (no desktop app)
   slk --remove-workspace  Remove a configured workspace (interactive)
   slk --list-workspaces   List configured workspaces (TeamID, Slug, Name)
+  slk --open <permalink>  Open a Slack message link in the running slk
   slk --dump-sections     Dump raw users.channelSections.list JSON (diagnostic)
   slk export [flags]      Export a channel's messages and threads to Markdown
                           (see 'slk export --help')
@@ -1778,6 +1785,13 @@ func run() error {
 	// a serialized pass-through for non-sixel frames (no marker present)
 	// and the sixel paint site for marked frames.
 	p = tea.NewProgram(app, tea.WithOutput(terminalOutput))
+
+	// `slk --open <permalink>` from another terminal lands here.
+	if ctl, err := startControlSocket(controlSocketPath(), p.Send); err != nil {
+		debuglog.General("control socket disabled: %v", err)
+	} else if ctl != nil {
+		defer ctl.Close()
+	}
 
 	// A palette generator may rewrite a custom theme file. Read the files
 	// here, off the UI goroutine, and register them there: the theme
