@@ -551,9 +551,14 @@ type App struct {
 	// reactions on Slack + load/record frecent emoji history). See
 	// internal/ui/services.go. Defaulted to a no-op adapter in NewApp
 	// so call sites can dispatch without nil-checks.
-	reactions     core.ReactionService
-	interactions  core.InteractionService
-	commandSvc    core.CommandService
+	reactions    core.ReactionService
+	interactions core.InteractionService
+	commandSvc   core.CommandService
+	// draftSvc is the App's DraftService collaborator (drafts.go). nil
+	// when draft sync is off: no draft calls are made, drafts stay in
+	// memory only, and :drafts refuses.
+	draftSvc      core.DraftService
+	drafts        *draftSync
 	currentUserID string
 
 	// editing tracks in-progress message edit state. See
@@ -991,6 +996,7 @@ func NewApp() *App {
 		navHistory:            newNavHistoryStore(),
 		marks:                 newMarksStore(),
 		marksOverlay:          marks.New(),
+		drafts:                newDraftSync(),
 		showJumpOverlay:       true,
 		clipboardWrite:        defaultClipboardWriter,
 		userProfile:           userprofile.New(),
@@ -1170,6 +1176,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		reduceRemovePreview,
 		reduceActionPrompt,
 		reduceSlashCommand,
+		reduceDrafts,
 		reduceChannels,
 		reduceLinks,
 		reduceFiles,
