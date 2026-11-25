@@ -62,7 +62,7 @@ func TestDraftList_EnterJumps(t *testing.T) {
 	if a.mode != ModeNormal || a.draftList.IsVisible() {
 		t.Errorf("mode %v, list visible %v", a.mode, a.draftList.IsVisible())
 	}
-	if a.pendingLinkNav == nil || a.pendingLinkNav.Location.ChannelID != "C2" {
+	if a.pendingLinkNav == nil || a.pendingLinkNav.ChannelID != "C2" {
 		t.Errorf("pending nav = %+v, want C2", a.pendingLinkNav)
 	}
 }
@@ -111,7 +111,7 @@ func TestDraftList_ActsOnTheRowShown(t *testing.T) {
 	executeCommand(a, "drafts")
 	a.Update(draftsLoadedMsg{teamID: "T1", drafts: listDrafts()[1:]}) // Dr1 gone
 	a.Update(keyCode(tea.KeyEnter))
-	if a.pendingLinkNav == nil || a.pendingLinkNav.Location.ChannelID != "C3" {
+	if a.pendingLinkNav == nil || a.pendingLinkNav.ChannelID != "C3" {
 		t.Errorf("pending nav = %+v, want C3 (the first row now shown)", a.pendingLinkNav)
 	}
 }
@@ -160,7 +160,7 @@ func TestDraftsOverlay_ClickRowJumps(t *testing.T) {
 		t.Fatal("clicking a row must act on it")
 	}
 	cmd()
-	if a.pendingLinkNav == nil || a.pendingLinkNav.Location.ChannelID != "C3" {
+	if a.pendingLinkNav == nil || a.pendingLinkNav.ChannelID != "C3" {
 		t.Errorf("pending nav = %+v, want a jump to C3 (the second row)", a.pendingLinkNav)
 	}
 	if a.mode != ModeNormal || a.draftList.IsVisible() {
