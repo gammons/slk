@@ -106,6 +106,11 @@ editor = "nvim"   # Ctrl+E editor, used when $VISUAL and $EDITOR are unset
 # work from an empty composer; Ctrl+W, Ctrl+H and Ctrl+K keep deleting text.
 stay_in_insert_after_send = true
 
+# Make the composer's unsent text Slack's own draft for the conversation:
+# saved while you type, restored when you open the conversation (on any
+# device), marked sent when you send. Also enables :drafts. Default true.
+sync_drafts = true
+
 [sidebar]
 mention_pills = false   # true: "↑/↓ Unread mentions" pills while a mentioned
                         # channel is scrolled out of view (click to reach it)

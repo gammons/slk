@@ -246,6 +246,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Name a navigable position (workspace, channel, message, thread reply) | `ui.Location`; `(*App).currentLocation` / `currentPosition` snapshot where the user is |
 | Navigate to a `Location` (history walk, mark jump, permalink) | `(*App).applyLocation(loc, fromHistory)` (`internal/ui/reducer_links.go`); goes through `pendingLinkNav`, so it waits for the channel and thread to load, and refuses while an upload is in flight |
 | Persistent marks in the cache | `(*cache.DB).UpsertMark` / `ListMarks` / `DeleteMark`, keyed by workspace and letter |
+| The `:drafts` dialog | `internal/ui/draftlist` (`Row`, `HandleKey` → `Jump`/`Delete` + index); glue in `internal/ui/drafts_list.go` (`refreshDraftList`, `draftListItems` is the order shown, `draftLabel`, `draftAge`, `draftMarker`) |
 
 ### App state and actions
 
@@ -267,6 +268,10 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Can the user post in an app DM? (`app_home.messages_tab_enabled` / `messages_tab_read_only_enabled`) | `boot.ConversationsInfo` (`return_app_home=true`) or `ConversationsView`, then `(*boot.AppHome).CanReceiveMessages()` (nil is true); `cmd/slk/probeMessagingCapability` wires both, fail-open, behind `core.ChannelService.MessagingCapability`. A send refused with `restricted_action_read_only*` marks the conversation (`App.readOnlyChannels`, `sendFailedCmd` in `internal/ui/read_only.go`); both set `App.composeDisabled` |
 | Leave insert mode from code | `(*App).exitInsertAfterSend()` after a send (honours `[compose] stay_in_insert_after_send`); `(*App).exitInsert()` to leave whatever the option says (`ModeNormal`, both composers blurred) (`internal/ui/app.go`). Neither rechecks waiting action dialogs: a path that leaves insert mode at the user's request, as Esc does, follows with `tryOpenActionPrompt()` |
 | Record that the user used an emoji (a reaction added, a pill toggled on, a `:shortcode:` in a sent message, reply or upload caption), or hand the emoji history to every picker | `(*App).recordEmojiUse(names...)`, `(*App).recordEmojiInText(text)`, `(*App).refreshEmojiFrecency()` (`internal/ui/emoji_frecency.go`); the history is `core.ReactionService.LoadFrecent` / `RecordFrecent` (the `frecent_emoji` cache table) |
+| Sync composer text with Slack's drafts; what Slack last had per slot; restore a draft from Slack without replacing typed text | `draftSync` (`internal/ui/drafts.go`): the 2 s `draftTickMsg` comparison `(*App).syncDrafts`, `(*App).restoreRemoteDraft`, `(*App).noteDraftSent(key)` at a send's composer reset, `(*App).UnsyncedDrafts()` for quit. Port `core.DraftService` (wired in `cmd/slk` by `draftService(router)`); per-workspace engine `draftEngine` (`cmd/slk/drafts.go`) owns ids, create vs update, one call per conversation and conflicts |
+| A composer's slots as draft sync reads them | `(*compose.Model).Slots`, `SlotText`, `ApplyRemoteDraft` (inactive slots, or the visible one only when empty), `ClearSlot` |
+| Post a message marking its draft sent | `sendWithDraft(ctx, client, wctx.Drafts, channelID, threadTS, text, broadcast)` (`cmd/slk/drafts.go`), over `(*slackclient.Client).SendDraft` |
+| Slack's drafts API | `(*slackclient.Client).ListDrafts`, `CreateDraft`, `UpdateDraft`, `DeleteDraft` (`internal/slack/drafts.go`); refusals are `*DraftRejectedError`, read with `DraftRejectionCode(err)` |
 
 ### Test helpers
 
@@ -357,6 +362,9 @@ greppable by name; no line numbers, because these files move.
 | A messages pane showing one message by an author with a given status; a DM pane for header topic tests | `statusPane(st, f)`, `dmHeaderPane(f)` (`internal/ui/messages/status_emoji_test.go`) |
 | An `App` in insert mode on C1 with a draft in the channel box and its draft preview on; a frame's rows; where the draft preview is in a frame, and its plain rows | `draftApp(t, w, h, draft)`, `frameRows(a)`, `previewSpan(rows, width)`, `previewRows(t, a)` (`internal/ui/draft_preview_test.go`) |
 | An `App` in insert mode on C1 for draft preview key tests (keys go through `a.Update`, so the upload gate runs); send one key; ctrl+r that fails unless it showed the box's preview | `previewKeysApp(t)`, `send(a, k)`, `previewOnWithCtrlR(t, a, c)` (`internal/ui/draft_preview_keys_test.go`) |
+| An App on T1/C1 with draft sync wired to a recording service and a movable clock; run one comparison and feed its answers back | `draftSyncApp(t, saveErr)`, `tick(t, a)`, `ops(calls)` (`internal/ui/drafts_test.go`) |
+| A scripted drafts API / sender for the engine | `fakeDraftAPI`, `fakeSender`, `attached(id, ch, thread, ts)`, `rejected(code)` (`cmd/slk/drafts_test.go`, `package main`) |
+| Compare a draft form with a capture, some fields by shape | `assertDraftForm(t, got, capture, shapes)` (`internal/slack/drafts_test.go`) |
 
 ### Known duplication — do not add to it
 
