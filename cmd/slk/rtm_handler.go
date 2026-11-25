@@ -245,6 +245,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 				Files:           files,
 				Blocks:          blocks,
 				Attachments:     attachments,
+				BotID:           botID,
 			}}
 			rawBytes, _ := json.Marshal(synthetic)
 			rawBytes = slackclient.MergeRoom(rawBytes, room)
@@ -502,6 +503,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	}
 
 	item := h.messageItemFromEvent(authorID, userID, username, ts, text, threadTS, subtype, edited, files, blocks, attachments)
+	item.BotID = botID
 	var request func(string)
 	if h.wsCtx != nil && h.wsCtx.UserResolver != nil {
 		request = h.wsCtx.UserResolver.Request

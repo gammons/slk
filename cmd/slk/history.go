@@ -122,6 +122,7 @@ func convertAndCacheHistory(client *slackclient.Client, channelID string, histor
 			Attachments:       extractAttachments(m.Files),
 			Blocks:            extractBlocks(m.Blocks),
 			LegacyAttachments: extractLegacyAttachments(m.Attachments),
+			BotID:             m.BotID,
 			HuddleRoom:        resolveHuddleUsers(huddleRoom, userNames, db, userRequesterFor(router, client.TeamID())),
 		}
 		resolveMessageMentions(item, userNames, db, resolver, channels)
@@ -410,6 +411,7 @@ func enrichCachedRow(
 	var blocks []blockkit.Block
 	var legacy []blockkit.LegacyAttachment
 	var replyUsers []string
+	var botID string
 	if m.RawJSON != "" {
 		var raw slack.Message
 		var unmarshalT0 time.Time
@@ -429,6 +431,7 @@ func enrichCachedRow(
 			blocks = extractBlocks(raw.Blocks)
 			legacy = extractLegacyAttachments(raw.Attachments)
 			replyUsers = raw.ReplyUsers
+			botID = raw.BotID
 		}
 	}
 
@@ -446,6 +449,7 @@ func enrichCachedRow(
 		Attachments:       attachments,
 		Blocks:            blocks,
 		LegacyAttachments: legacy,
+		BotID:             botID,
 		HuddleRoom:        resolveHuddleUsers(roomFromRawJSON(m.RawJSON), userNames, db, userRequesterFor(router, m.WorkspaceID)),
 	}
 	resolveMessageMentions(item, userNames, db, messageUserResolver(router, m.WorkspaceID), messageChannelResolver(router, m.WorkspaceID))
@@ -603,6 +607,7 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 			Attachments:       extractAttachments(m.Files),
 			Blocks:            extractBlocks(m.Blocks),
 			LegacyAttachments: extractLegacyAttachments(m.Attachments),
+			BotID:             m.BotID,
 			HuddleRoom:        resolveHuddleUsers(huddleRoom, userNames, db, userRequesterFor(router, client.TeamID())),
 		}
 		resolveMessageMentions(item, userNames, db, resolver, channels)
@@ -707,6 +712,7 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 			Attachments:       extractAttachments(m.Files),
 			Blocks:            extractBlocks(m.Blocks),
 			LegacyAttachments: extractLegacyAttachments(m.Attachments),
+			BotID:             m.BotID,
 			HuddleRoom:        resolveHuddleUsers(huddleRoom, userNames, db, userRequesterFor(router, client.TeamID())),
 		}
 		resolveMessageMentions(item, userNames, db, resolver, channels)

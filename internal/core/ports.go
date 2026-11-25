@@ -54,6 +54,11 @@ type InteractionService interface {
 	// posting app's bot ID.
 	PressAttachmentAction(channelID ids.ChannelID, messageTS ids.MessageTS,
 		attachmentID int, callbackID, serviceID string, action blocks.LegacyAction, ephemeral bool) error
+
+	// PressBlockAction presses a Block Kit button on a message
+	// (blocks.actions). serviceID is the posting app's bot ID. The app
+	// usually answers by editing the message.
+	PressBlockAction(channelID ids.ChannelID, messageTS ids.MessageTS, serviceID, blockID string, action blocks.ActionElement) error
 }
 
 // CommandService runs Slack slash commands. Run is blocking (callers run

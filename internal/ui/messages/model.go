@@ -2340,6 +2340,17 @@ func (m *Model) HitTestLink(row, col int) (url string, ok bool) {
 	return h.Key, true
 }
 
+// HitTestButton returns the message and the index in its ButtonActions
+// of the Block Kit button at (row, col) within the messages-pane content
+// area, or ok=false. Coordinate frame mirrors HitTest.
+func (m *Model) HitTestButton(row, col int) (msg MessageItem, idx int, ok bool) {
+	h, ok := m.list.HitTest(entrylist.HitButton, row, col)
+	if !ok || h.Ref < 0 || h.Ref >= len(m.messages) {
+		return MessageItem{}, 0, false
+	}
+	return m.messages[h.Ref], h.Aux, true
+}
+
 // HitTestReaction returns the (message index, reaction emoji name) at
 // (row, col) within the messages-pane content area, or ok=false when
 // no reaction pill covers that cell. Coordinate frame mirrors HitTest.

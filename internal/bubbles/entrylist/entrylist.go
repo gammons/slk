@@ -66,6 +66,9 @@ const (
 	// HitFile is a "[File] <name>" attachment line; Aux is the
 	// attachment index.
 	HitFile
+	// HitButton is a pressable Block Kit button; Aux is its index in
+	// the message's button list.
+	HitButton
 )
 
 // Hit is a clickable rectangle relative to an Entry's Lines.

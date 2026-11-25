@@ -395,6 +395,9 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		if cmd, hit := a.downloadFileAt(a.messagepane, a.activeChannelID, px, py); hit {
 			return cmd
 		}
+		if cmd, hit := a.pressButtonClickAt(a.messagepane, a.activeChannelID, "", px, py); hit {
+			return cmd
+		}
 		if cmd, hit := a.openLinkAt(a.messagepane, px, py); hit {
 			return cmd
 		}
@@ -457,6 +460,9 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		if cmd, hit := a.downloadFileAt(a.threadPanel, a.threadPanel.ChannelID(), px, py); hit {
 			return cmd
 		}
+		if cmd, hit := a.pressButtonClickAt(a.threadPanel, a.threadPanel.ChannelID(), a.threadPanel.ThreadTS(), px, py); hit {
+			return cmd
+		}
 		if cmd, hit := a.openLinkAt(a.threadPanel, px, py); hit {
 			return cmd
 		}
@@ -482,6 +488,22 @@ func (a *App) openLinkAt(p contentPane, px, py int) (tea.Cmd, bool) {
 		return func() tea.Msg { return OpenLinkMsg{URL: url} }, true
 	}
 	return nil, false
+}
+
+// pressButtonClickAt presses the Block Kit button at pane-local (px, py)
+// in p, if there is one: the click form of b and the button's number.
+// threadTS is the thread pane's thread, "" in the channel pane.
+func (a *App) pressButtonClickAt(p contentPane, channelID, threadTS string, px, py int) (tea.Cmd, bool) {
+	contentY := py - p.ChromeHeight()
+	if contentY < 0 {
+		return nil, false
+	}
+	msg, idx, hit := p.HitTestButton(contentY, px)
+	if !hit {
+		return nil, false
+	}
+	ref := actionPromptRef{channelID: channelID, ts: msg.TS, threadTS: threadTS}
+	return a.pressButtonAt(ref, msg, idx), true
 }
 
 // toggleReactionAt toggles the reaction whose pill is at pane-local

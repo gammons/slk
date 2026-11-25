@@ -1590,6 +1590,16 @@ func run() error {
 				defer cancel()
 				return pressAttachmentAction(ctx, wctx.Client, channelID, messageTS, attachmentID, callbackID, serviceID, action, ephemeral)
 			},
+			PressBlockAction: func(channelID ids.ChannelID, messageTS ids.MessageTS, serviceID, blockID string, action blocks.ActionElement) error {
+				wctx := router.Active()
+				if wctx == nil || wctx.Client == nil {
+					return errors.New("no active workspace")
+				}
+				ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				defer cancel()
+				// Org-served on a Grid member workspace, as for app Home.
+				return pressBlockAction(ctx, orgOrOwnClient(router, wctx), channelID, messageTS, serviceID, blockID, action)
+			},
 		}))
 
 		app.SetCommandService(core.NewCommandService(core.CommandServiceFuncs{

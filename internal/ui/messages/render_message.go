@@ -88,7 +88,7 @@ type RenderedMessage struct {
 	Header       string // the wrapped author header (with "(edited)"), for SelectedHeader
 	HeaderBudget int
 	MentionsSelf bool            // someone else's message that mentions the user; WrapRows highlights it
-	Hits         []entrylist.Hit // image and file hits (when ImageHits), then reaction pills
+	Hits         []entrylist.Hit // image and file hits (when ImageHits), Block Kit buttons, then reaction pills
 	SixelRows    []SixelImage
 	// Kitty uploads by source: each pane keeps its own upload order.
 	// BodyFlushes also carries the author-status emoji's upload.
@@ -476,7 +476,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	}
 
 	var attachLineSlices [][]string
-	var imageHits []entrylist.Hit
+	var imageHits, buttonHits []entrylist.Hit
 	var allSixel []SixelImage
 
 	// Block Kit blocks render between the body text and file attachments.
@@ -516,6 +516,22 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		if opt.SixelRows {
 			rowOffset := preAttachmentRows + startInBk
 			allSixel = appendBlockSixel(allSixel, res.SixelRows, rowOffset)
+		}
+		// Only a button slk can press is clickable: one on a message
+		// without the app's bot ID, or a select, stays a drawing. Aux
+		// is the index the press reads back from ButtonActions.
+		for _, ah := range res.ActionHits {
+			idx := ButtonIndex(msg, ah.BlockID, ah.ActionID)
+			if idx < 0 {
+				continue
+			}
+			buttonHits = append(buttonHits, entrylist.Hit{
+				RowStart: preAttachmentRows + startInBk + ah.RowStart,
+				RowEnd:   preAttachmentRows + startInBk + ah.RowEnd,
+				ColStart: contentColBase + ah.ColStart,
+				ColEnd:   contentColBase + ah.ColEnd,
+				Kind:     entrylist.HitButton, Aux: idx,
+			})
 		}
 		// Note: res.Hits is intentionally NOT appended to out.Hits in
 		// v1. App-level click routing (app.go) currently uses image
@@ -757,8 +773,9 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	//   + attachmentLineCount (each attachment line is 1 row)
 	//   + 1 if threadLine is present
 	// (placeAvatarBeside does not change row counts.)
-	out.Hits = make([]entrylist.Hit, 0, len(imageHits)+len(pillSpecs))
+	out.Hits = make([]entrylist.Hit, 0, len(imageHits)+len(buttonHits)+len(pillSpecs))
 	out.Hits = append(out.Hits, imageHits...)
+	out.Hits = append(out.Hits, buttonHits...)
 	if len(pillSpecs) > 0 && reactionLineCount > 0 {
 		reactionRowBase := preAttachmentRows + attachmentLineCount
 		if threadLine != "" {

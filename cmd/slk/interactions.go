@@ -27,3 +27,34 @@ func pressAttachmentAction(ctx context.Context, client attachmentActioner, chann
 		Action:       action,
 	})
 }
+
+// blockActioner is the part of *slackclient.Client a Block Kit button
+// press needs.
+type blockActioner interface {
+	BlockAction(ctx context.Context, req slackclient.BlockActionRequest) error
+}
+
+// pressBlockAction presses a Block Kit button on a message through
+// client. No retry: a press can have side effects on the app's side.
+func pressBlockAction(ctx context.Context, client blockActioner, channelID ids.ChannelID,
+	messageTS ids.MessageTS, serviceID, blockID string, action blocks.ActionElement) error {
+	req := slackclient.BlockActionRequest{
+		ChannelID: string(channelID),
+		MessageTS: string(messageTS),
+		ServiceID: serviceID,
+		ActionID:  action.ActionID,
+		BlockID:   blockID,
+		Label:     action.Label,
+		Value:     action.Value,
+		Style:     action.Style,
+	}
+	if c := action.Confirm; c != nil {
+		req.Confirm = &slackclient.BlockActionConfirm{
+			Title:       c.Title,
+			Text:        c.Text,
+			OKText:      c.OKText,
+			DismissText: c.DismissText,
+		}
+	}
+	return client.BlockAction(ctx, req)
+}

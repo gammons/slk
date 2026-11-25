@@ -55,8 +55,9 @@ type MessageItem struct {
 	// read-marking target; Slack does not return it from history.
 	Ephemeral bool
 
-	// BotID is the Slack bot_id of the app that posted the message. Set for
-	// ephemerals; sent as service_id when one of their buttons is pressed.
+	// BotID is the Slack bot_id of the app that posted the message, empty
+	// for a person's message. Sent as service_id when one of its buttons
+	// is pressed.
 	BotID string
 
 	// HuddleRoom is the room object of a huddle_thread message (nil
