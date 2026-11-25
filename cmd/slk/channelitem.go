@@ -76,10 +76,14 @@ func buildChannelItem(ch slack.Channel, wctx *WorkspaceContext, cfg config.Confi
 	}
 
 	section := ""
+	starred := false
 	if wctx.SectionStore != nil && wctx.SectionStore.Ready() {
 		if id, ok := wctx.SectionStore.SectionForChannel(ch.ID); ok {
 			section = id
 		}
+		// The stars section's membership is the star state; the
+		// sidebar row and the header glyph read it off the item.
+		starred = wctx.SectionStore.IsStarred(ch.ID)
 	}
 	var sectionOrder int
 	var channelOrder int
@@ -105,6 +109,7 @@ func buildChannelItem(ch slack.Channel, wctx *WorkspaceContext, cfg config.Confi
 		SectionOrder: sectionOrder,
 		ChannelOrder: channelOrder,
 		IsMuted:      muted,
+		IsStarred:    starred,
 	}
 	if ch.IsIM {
 		item.DMUserID = ch.User
@@ -132,4 +137,19 @@ func upsertChannelInDB(db *cache.DB, ch slack.Channel, chType string, teamID str
 		Topic:       ch.Topic.Value,
 		IsMember:    ch.IsMember,
 	})
+}
+
+// applyBootStars seeds the star flag on the boot-built rows from
+// userBoot's starred list, for workspaces whose section store is not
+// usable (config-glob sections, or a failed sections bootstrap). The
+// list is authoritative - the same source the store's stars section
+// bootstraps from - so an empty list means nothing starred.
+func applyBootStars(channels []sidebar.ChannelItem, starred []string) {
+	set := make(map[string]bool, len(starred))
+	for _, id := range starred {
+		set[id] = true
+	}
+	for i := range channels {
+		channels[i].IsStarred = set[channels[i].ID]
+	}
 }

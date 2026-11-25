@@ -56,6 +56,10 @@ func (a *App) currentLocation() (Location, bool) {
 			}, true
 		case ViewActivity:
 			return Location{}, false
+		case ViewAppHome:
+			// The Home tab is not a message; the channel itself is the
+			// position.
+			return Location{}, false
 		}
 		return a.channelPaneLocation()
 	}

@@ -86,9 +86,13 @@ type panelRenderCache struct {
 	// the two views' independent Version() counters can't collide on a
 	// (version, dims, layoutKey) key when the user switches between them.
 	activityPanel panelCache
-	msgTop        panelCache
-	thread        panelCache
-	status        panelCache
+	// appHomePanel backs the bordered messages region in the App Home
+	// view (an app DM's Home tab, no compose). Its own slot because a
+	// view switch must not serve the previous view's cached frame.
+	appHomePanel panelCache
+	msgTop       panelCache
+	thread       panelCache
+	status       panelCache
 
 	// winPanes caches the bordered output of unfocused live window
 	// panes, one slot per window (Phase 3). Focused windows render

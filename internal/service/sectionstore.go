@@ -142,6 +142,80 @@ func (s *SectionStore) PopulateStars(channelIDs []string) {
 	}
 }
 
+// SetChannelStarred applies one star change to the stars section's
+// membership. Starring creates the stars section when the workspace
+// does not have one yet: Slack serves the section only once it is
+// non-empty, so a workspace's first star would otherwise wait for the
+// next bootstrap to re-section. The synthesized row is spliced in at
+// the head of the linked list (where Slack renders Starred) and is
+// replaced wholesale by the next Bootstrap. Un-starring removes the
+// membership, dropping the channel back to its type-default section on
+// the caller's refresh. No-op on an unready store.
+func (s *SectionStore) SetChannelStarred(channelID string, starred bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.ready {
+		return
+	}
+	var stars *slk.SidebarSection
+	for _, sec := range s.sectionsByID {
+		if sec.Type == "stars" {
+			stars = sec
+			break
+		}
+	}
+	if stars == nil {
+		if !starred {
+			return
+		}
+		// Find the current list head (the section nothing points at)
+		// and splice the stars section in ahead of it.
+		pointedAt := map[string]bool{}
+		for _, sec := range s.sectionsByID {
+			if sec.Next != "" {
+				pointedAt[sec.Next] = true
+			}
+		}
+		headID := ""
+		for id := range s.sectionsByID {
+			if !pointedAt[id] {
+				headID = id
+				break
+			}
+		}
+		if _, taken := s.sectionsByID["stars"]; taken {
+			// A non-stars section already owns the "stars" ID (Slack's
+			// section IDs are opaque); leave the list alone rather
+			// than clobbering it. The next bootstrap sorts it out.
+			return
+		}
+		stars = &slk.SidebarSection{ID: "stars", Type: "stars", Next: headID, LastUpdate: time.Now().Unix()}
+		s.sectionsByID[stars.ID] = stars
+	}
+	if starred {
+		for _, cid := range stars.ChannelIDs {
+			if cid == channelID {
+				return
+			}
+		}
+		stars.ChannelIDs = append(stars.ChannelIDs, channelID)
+		stars.ChannelsCount = len(stars.ChannelIDs)
+		s.channelToSection[channelID] = stars.ID
+		return
+	}
+	kept := stars.ChannelIDs[:0]
+	for _, cid := range stars.ChannelIDs {
+		if cid != channelID {
+			kept = append(kept, cid)
+		}
+	}
+	stars.ChannelIDs = kept
+	stars.ChannelsCount = len(kept)
+	if s.channelToSection[channelID] == stars.ID {
+		delete(s.channelToSection, channelID)
+	}
+}
+
 // StarredConversationIDs returns a defensive copy of the authoritative stars
 // membership under the store lock. Unready stores and workspaces without a
 // renderable stars section return nil. Callers can hydrate missing rows without
@@ -186,6 +260,24 @@ func (s *SectionStore) SectionForChannel(channelID string) (string, bool) {
 		return "", false
 	}
 	return id, true
+}
+
+// IsStarred reports whether channelID's claimed section is the stars
+// section - the authoritative star state, since membership there is
+// what the star calls maintain. Unready stores and unclaimed channels
+// report false.
+func (s *SectionStore) IsStarred(channelID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.ready {
+		return false
+	}
+	id, ok := s.channelToSection[channelID]
+	if !ok {
+		return false
+	}
+	sec, secOK := s.sectionsByID[id]
+	return secOK && sec.Type == "stars"
 }
 
 // OrderedSections walks the linked-list (head-first) and returns the

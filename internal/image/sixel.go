@@ -67,6 +67,12 @@ func measuredCellPixels() (int, int) {
 	return w, h
 }
 
+// MeasuredCellPixels returns the effective cell size encoders are
+// working against: SetCellPixels' values, or the 8x16 default when the
+// terminal never reported one. Hosts re-measuring the terminal compare
+// against this, not against what they last passed to SetCellPixels.
+func MeasuredCellPixels() (int, int) { return measuredCellPixels() }
+
 // SixelRenderer encodes images as DEC sixel byte streams.
 type SixelRenderer struct{}
 
@@ -122,4 +128,57 @@ func (s *SixelRenderer) Render(img image.Image, target image.Point) Render {
 			return err
 		},
 	}
+}
+
+// SixelPixelSize reports the pixel dimensions a sixel payload claims in
+// its raster attributes (DECGRA, " Pan;Pad;Ph;Pv), which go-sixel emits
+// right after the introducer. ok is false when the payload carries no
+// RA with an explicit size. Sixel paints one payload pixel per device
+// pixel, so these are the on-screen dimensions regardless of what the
+// cell layout reserved -- which is what lets an erase cover a payload
+// painted before a cell-size change (see paintedExtent).
+func SixelPixelSize(payload []byte) (w, h int, ok bool) {
+	// The first 'q' in the stream is the introducer's terminator; sixel
+	// data bytes come after it and cannot precede it.
+	q := bytes.IndexByte(payload, 'q')
+	if q < 0 {
+		return 0, 0, false
+	}
+	rest := payload[q+1:]
+	if len(rest) == 0 || rest[0] != '"' {
+		return 0, 0, false
+	}
+	var params [4]int
+	n := 0
+	cur := 0
+	for _, c := range rest[1:] {
+		switch {
+		case c >= '0' && c <= '9':
+			cur = cur*10 + int(c-'0')
+		case c == ';':
+			if n < len(params) {
+				params[n] = cur
+			}
+			n++
+			cur = 0
+		default:
+			if n < len(params) {
+				params[n] = cur
+			}
+			n++
+			if n < 4 {
+				return 0, 0, false
+			}
+			return params[2], params[3], params[2] > 0 && params[3] > 0
+		}
+	}
+	// Ran off the end of the payload mid-RA: flush the final param.
+	if n < len(params) {
+		params[n] = cur
+	}
+	n++
+	if n < 4 {
+		return 0, 0, false
+	}
+	return params[2], params[3], params[2] > 0 && params[3] > 0
 }

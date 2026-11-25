@@ -1,18 +1,21 @@
 // Package avatar downloads Slack user avatars and renders them at a
 // fixed 4×2 cell footprint. Storage delegates to internal/image's
 // shared cache; rendering uses kitty graphics on capable terminals
-// (sharper) and falls back to half-block (▀) elsewhere. Sixel is
-// intentionally NOT used for avatars: re-emitting sixel byte streams
-// per visible avatar per redraw would dominate the bandwidth budget.
+// (sharper), sixel on sixel terminals (SetSixel), and half-block (▀)
+// elsewhere. A sixel avatar is encoded once per user; the content panes
+// place it like an inline image, and the sixel painter re-sends it only
+// when its slot or the text under it changes, not on every redraw.
 package avatar
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"image"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/gammons/slk/internal/debuglog"
 	imgpkg "github.com/gammons/slk/internal/image"
@@ -67,10 +70,20 @@ type Cache struct {
 	fetcher  *imgpkg.Fetcher
 	kitty    *imgpkg.KittyRenderer // nil when not using kitty
 	useKitty bool
+	useSixel bool // also encode a sixel image per avatar; see SetSixel
 
 	mu      sync.RWMutex
-	renders map[string]string // userID -> rendered ANSI string
-	small   map[string]string // userID -> SmallCols×SmallRows render
+	renders map[string]string      // userID -> rendered ANSI string
+	small   map[string]string      // userID -> SmallCols×SmallRows render
+	sixel   map[string]sixelAvatar // userID -> sixel image, when useSixel
+
+	// gen counts Invalidate calls. A preload started under one
+	// generation drops its result when the generation has moved on by
+	// the time it finishes: renders and sixel encodings are sized
+	// against the cell pixels measured at render time, so a late
+	// worker must not re-store renders encoded at the old size after
+	// the caches were cleared.
+	gen atomic.Uint64
 
 	// inflight tracks userIDs whose Preload is currently in-flight (or
 	// already rendered). Acts as a dedup gate so a hot render path
@@ -101,6 +114,14 @@ type Cache struct {
 	sizeURL func(string) string
 }
 
+// sixelAvatar is one user's avatar encoded as sixel at the avatar's
+// cell footprint, with its placement identity: the user and a hash of
+// the bytes, so a changed avatar is a different image to the painter.
+type sixelAvatar struct {
+	key   string
+	bytes []byte
+}
+
 type preloadJob struct {
 	userID    string
 	avatarURL string
@@ -124,6 +145,7 @@ func newCacheForTest(fetcher *imgpkg.Fetcher, kitty *imgpkg.KittyRenderer, useKi
 		useKitty:  useKitty && kitty != nil,
 		renders:   make(map[string]string),
 		small:     make(map[string]string),
+		sixel:     make(map[string]sixelAvatar),
 		preloadCh: make(chan preloadJob, queueSize),
 		sizeURL:   func(u string) string { return SizedURL(u, sizedAvatarPx) },
 	}
@@ -139,12 +161,43 @@ func (c *Cache) preloadWorker() {
 	}
 }
 
+// SetSixel makes the cache encode every avatar as sixel too, for a
+// terminal that draws sixel: GetSixel then returns it, beside the
+// half-block render Get keeps returning as its fallback. Ignored with
+// kitty, which draws avatars itself. Call once at startup, before any
+// Preload.
+func (c *Cache) SetSixel(on bool) {
+	c.useSixel = on && !c.useKitty
+}
+
 // SetOnReady registers a callback invoked once per userID after a
 // successful Preload completes. Not called for fetch failures. Safe to
 // call once at startup before any Preload; concurrent reassignment is
 // not supported.
 func (c *Cache) SetOnReady(fn func(userID string)) {
 	c.onReady = fn
+}
+
+// Invalidate drops every rendered avatar and releases the in-flight
+// dedup set, so the lazy Preload path re-fetches exactly as it would
+// for a user's first render. Call it when the terminal's cell size in
+// pixels changed: renders and sixel encodings are sized against that
+// measurement (the encoded pixel dimensions are the on-screen size),
+// so after it they must be rebuilt from the fetcher's sources, which
+// the disk cache serves without the network. Preloads already running
+// when Invalidate lands drop their results instead of re-storing
+// renders encoded at the old size.
+func (c *Cache) Invalidate() {
+	c.gen.Add(1)
+	c.mu.Lock()
+	c.renders = make(map[string]string)
+	c.small = make(map[string]string)
+	c.sixel = make(map[string]sixelAvatar)
+	c.mu.Unlock()
+	c.inflight.Range(func(key, _ any) bool {
+		c.inflight.Delete(key)
+		return true
+	})
 }
 
 // Preload enqueues a background download+render for an avatar. Bounded
@@ -189,6 +242,7 @@ func (c *Cache) preloadInner(userID, avatarURL string) {
 	if avatarURL == "" {
 		return
 	}
+	gen := c.gen.Load()
 	// Source size differs by protocol:
 	//   - half-block: (AvatarCols, AvatarRows*2) gives the renderer
 	//     exactly the pixel grid it samples, matching the original
@@ -198,8 +252,10 @@ func (c *Cache) preloadInner(userID, avatarURL string) {
 	//     available source resolution. With a 32×32 source (Slack's
 	//     image_32) and kitty's internal target of ~32×32, this is
 	//     effectively identity scaling — sharp pixels.
+	//   - sixel: as kitty, since the sixel encoder scales to the cell
+	//     size in pixels; the half-block fallback scales down itself.
 	target := image.Pt(AvatarCols, AvatarRows*2)
-	if c.useKitty {
+	if c.useKitty || c.useSixel {
 		target = image.Point{}
 	}
 	fetchURL := avatarURL
@@ -216,8 +272,23 @@ func (c *Cache) preloadInner(userID, avatarURL string) {
 		return
 	}
 	rendered := c.renderAvatar(userID, res.Img)
+	var sx sixelAvatar
+	if c.useSixel {
+		sx = encodeSixel(userID, res.Img)
+	}
 	c.mu.Lock()
+	if gen != c.gen.Load() {
+		// The cell metrics changed while this preload ran: the render
+		// and sixel encoding above were built against the old pixel
+		// size. Drop them; a fresh preload (the lazy path re-runs on
+		// the next miss) encodes against the new size.
+		c.mu.Unlock()
+		return
+	}
 	c.renders[userID] = rendered
+	if sx.bytes != nil {
+		c.sixel[userID] = sx
+	}
 	c.mu.Unlock()
 	if c.onReady != nil {
 		c.onReady(userID)
@@ -248,6 +319,34 @@ func (c *Cache) Get(userID string) string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.renders[userID]
+}
+
+// GetSixel returns userID's avatar as a sixel image and its placement
+// key, or ok false when the cache is not in sixel mode (SetSixel) or the
+// avatar is not loaded yet. Get returns the same avatar as half-block,
+// which a pane draws while the sixel image cannot be (a pane edge cuts
+// it).
+func (c *Cache) GetSixel(userID string) (key string, bytes []byte, ok bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	sx, ok := c.sixel[userID]
+	return sx.key, sx.bytes, ok
+}
+
+// encodeSixel encodes img as sixel at the avatar's footprint. The zero
+// value when the encoder fails; the caller then has only the half-block
+// render, which is what a pane draws without a sixel image.
+func encodeSixel(userID string, img image.Image) sixelAvatar {
+	out := imgpkg.NewSixelRenderer().Render(img, image.Pt(AvatarCols, AvatarRows))
+	if out.OnFlush == nil {
+		return sixelAvatar{} // the encoder fell back to half-block
+	}
+	var buf bytes.Buffer
+	if err := out.OnFlush(&buf); err != nil || buf.Len() == 0 {
+		return sixelAvatar{}
+	}
+	sum := sha256.Sum256(buf.Bytes())
+	return sixelAvatar{key: "avatar-" + userID + "-" + hex.EncodeToString(sum[:8]), bytes: buf.Bytes()}
 }
 
 // GetSmall returns the reply-row avatar, rendering it on first use, or

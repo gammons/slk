@@ -1,6 +1,7 @@
 package channelfinder
 
 import (
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -68,6 +69,19 @@ type Model struct {
 	// their DMs are never a forwarding destination, as Slack takes no
 	// messages there. Owned by the App, like deactivated.
 	unsendable map[string]bool
+	// unread is the set of channel IDs the sidebar shows as unread;
+	// they lead the empty-query list. Owned by the App (SetUnread).
+	unread map[string]bool
+}
+
+// SetUnread sets the channel IDs listed before other joined
+// conversations when no query is typed. The map is kept, not copied.
+// An open overlay is refiltered.
+func (m *Model) SetUnread(ids map[string]bool) {
+	m.unread = ids
+	if m.visible {
+		m.filter()
+	}
 }
 
 // SetDeactivatedUsers sets the user IDs whose DMs are offered only to a
@@ -295,9 +309,35 @@ func (m *Model) BoxSize(termWidth, termHeight int) (int, int) {
 	if nRows < 1 {
 		nRows = 1 // empty list still renders one (message/placeholder) row
 	}
+	if m.unreadSeparator(start, end) >= 0 {
+		nRows++
+	}
 	// height = top border + top padding + title + input + blank + rows +
 	// bottom padding + bottom border = nRows + 7.
 	return boxWidth(termWidth), nRows + 7
+}
+
+// unreadSeparator returns the index into m.filtered of the first read
+// row after the unread ones, when a line separates them inside the
+// window [start, end); -1 otherwise. Only the empty-query list groups
+// unread rows, so only it has the line.
+func (m *Model) unreadSeparator(start, end int) int {
+	if m.query != "" || m.forwarding {
+		return -1
+	}
+	seen := false
+	for i, idx := range m.filtered {
+		u := m.unread[m.items[idx].ID]
+		if u {
+			seen = true
+		} else if seen {
+			if i > start && i < end {
+				return i
+			}
+			return -1
+		}
+	}
+	return -1
 }
 
 // ClickRow maps a box-local row (localY, 0 = box top border) to a result
@@ -310,6 +350,14 @@ func (m *Model) ClickRow(termWidth, termHeight, localY int) bool {
 		return false
 	}
 	start, end := chrome.Window(m.selected, len(m.filtered), maxVisibleRows)
+	if sep := m.unreadSeparator(start, end); sep >= 0 {
+		switch {
+		case row == sep-start:
+			return false
+		case row > sep-start:
+			row--
+		}
+	}
 	if row >= end-start {
 		return false
 	}
@@ -408,7 +456,8 @@ func (m *Model) HandleKey(keyStr string) *ChannelResult {
 //  1. Synthetic destinations (e.g. Threads view) under empty-query — pinned
 //     to the top so non-channel views are always discoverable. With a query,
 //     synthetic items rank by name match like everything else.
-//  2. Joined (members of the channel/DM come before non-members)
+//  2. Joined (members of the channel/DM come before non-members), then,
+//     under empty-query only, unread (SetUnread) before read
 //  3. Match tier: prefix > substring > subsequence (only when querying)
 //  4. LastVisited DESC (recency of user's last visit)
 //  5. Subsequence score DESC (only relevant in the subsequence tier)
@@ -584,7 +633,7 @@ func isSeparator(r rune) bool {
 
 // lessNoQuery reports whether item a should sort before item b when no
 // search query is active. Order: Synthetic DESC (pinned top), Joined DESC,
-// LastVisited DESC, typeRank ASC, Name ASC (case-insensitive).
+// unread DESC (not when forwarding), LastVisited DESC, typeRank ASC, Name ASC (case-insensitive).
 func (m *Model) lessNoQuery(ai, bi int) bool {
 	a, b := m.items[ai], m.items[bi]
 	if a.Synthetic != b.Synthetic {
@@ -592,6 +641,9 @@ func (m *Model) lessNoQuery(ai, bi int) bool {
 	}
 	if a.Joined != b.Joined {
 		return a.Joined
+	}
+	if au, bu := m.unread[a.ID], m.unread[b.ID]; au != bu && !m.forwarding {
+		return au
 	}
 	if a.LastVisited != b.LastVisited {
 		return a.LastVisited > b.LastVisited
@@ -739,10 +791,16 @@ func (m Model) renderBox(termWidth int) string {
 		rows = append(rows, line)
 	}
 
+	body := list.Rows(s, m.selected, rows)
+	if sep := m.unreadSeparator(start, end); sep >= 0 {
+		line := " " + lipgloss.NewStyle().Background(bg).Foreground(styles.Border).
+			Render(strings.Repeat("─", contentWidth)) + list.Gutter(s, sep)
+		body = slices.Insert(body, sep-start, line)
+	}
 	f := chrome.Frame{
 		Title: titleText,
 		Input: chrome.FilterInput(s, m.query, "Type to filter..."),
-		Body:  list.Rows(s, m.selected, rows),
+		Body:  body,
 	}
 	if m.query != "" {
 		f.Empty = "No matching channels"

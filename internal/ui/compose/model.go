@@ -7,12 +7,15 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/gammons/slk/internal/bubbles/channelpicker"
+	"github.com/gammons/slk/internal/bubbles/commandpicker"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/emojipicker"
@@ -106,6 +109,13 @@ type Model struct {
 	emojiPicker   emojipicker.Model
 	emojiActive   bool
 	emojiStartCol int
+
+	// Slash-command picker. It opens only when "/" is typed at the
+	// start of an empty composer. commandStartCol is the byte offset
+	// of the first character after that "/", mirroring channelStartCol.
+	commandPicker   commandpicker.Model
+	commandActive   bool
+	commandStartCol int
 
 	// placeholderOverride, when non-empty, replaces the default
 	// "Message #channel..." placeholder. Used by edit mode to display
@@ -218,6 +228,8 @@ func New(channelName string) Model {
 		drafts:      make(map[draftKey]draft),
 		channelPicker: channelpicker.New(
 			channelpicker.WithStyles(channelPickerStyles())),
+		commandPicker: commandpicker.New(nil,
+			commandpicker.WithStyles(commandPickerStyles())),
 	}
 }
 
@@ -226,6 +238,7 @@ func New(channelName string) Model {
 func (m *Model) RefreshStyles() {
 	m.setInputBackground(styles.SurfaceDark)
 	m.channelPicker.SetStyles(channelPickerStyles())
+	m.commandPicker.SetStyles(commandPickerStyles())
 	m.dirty()
 }
 
@@ -291,6 +304,12 @@ func (m *Model) Value() string {
 
 func (m *Model) SetValue(s string) {
 	m.input.SetValue(s)
+	// A replacement (Ctrl+V, the external editor) bypasses the key
+	// path, so an open slash picker would otherwise keep the query
+	// from before the paste and complete over the new text.
+	if m.commandActive {
+		m.syncCommandQuery()
+	}
 	m.dirty()
 }
 
@@ -501,7 +520,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	// pending attachment instead of forwarding to the textarea.
 	// Skipped while uploading or while a picker is active (those
 	// have their own Backspace semantics).
-	if isKey && !m.uploading && !m.emojiActive && !m.mentionActive && !m.channelActive &&
+	if isKey && !m.uploading && !m.PickerActive() &&
 		len(m.pending) > 0 &&
 		keyMsg.Key().Code == tea.KeyBackspace &&
 		m.input.Value() == "" &&
@@ -531,6 +550,13 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	// matters for the empty-trigger edge case.
 	if m.channelActive && isKey {
 		m2, cmd := m.handleChannelKey(keyMsg)
+		m2.dirty()
+		return m2, cmd
+	}
+	// Slash commands are last: "/" at column 0 never coincides with
+	// @, #, or :, and a command token owns the keys until it closes.
+	if m.commandActive && isKey {
+		m2, cmd := m.handleCommandKey(keyMsg)
 		m2.dirty()
 		return m2, cmd
 	}
@@ -581,6 +607,13 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	// popup opens. We re-check on every keystroke (cheap) so the popup
 	// appears the moment the threshold is hit.
 	m.maybeOpenEmojiPicker()
+	if isKey {
+		m.maybeOpenCommandPicker(keyMsg.Key().Text)
+	} else if m.commandActive {
+		// A paste or other non-key replacement landed in the textarea
+		// while the slash picker was open. Re-read the token.
+		m.syncCommandQuery()
+	}
 
 	m.autoGrow()
 	// Conservative: bump version on every Update. The textarea's internal
@@ -613,6 +646,44 @@ func (m Model) cursorPosition() int {
 		pos += len(string(runes[:col]))
 	}
 	return pos
+}
+
+// setInputCursor places the textarea cursor at byteOffset in the current
+// value. Completions rebuild the buffer with SetValue, which leaves the
+// cursor at the end of the text; this puts it back at the end of the
+// inserted completion, on the correct line of a multi-line draft.
+func (m *Model) setInputCursor(byteOffset int) {
+	val := m.input.Value()
+	if byteOffset < 0 {
+		byteOffset = 0
+	}
+	if byteOffset > len(val) {
+		byteOffset = len(val)
+	}
+	prefix := val[:byteOffset]
+	line := strings.Count(prefix, "\n")
+	lineStart := 0
+	if i := strings.LastIndexByte(prefix, '\n'); i >= 0 {
+		lineStart = i + 1
+	}
+	col := utf8.RuneCountInString(prefix[lineStart:])
+	if n := m.input.LineCount(); n > 0 && line >= n {
+		line = n - 1
+	}
+
+	m.input.MoveToBegin()
+	// CursorDown steps through visual rows, so a soft-wrapped line takes
+	// several calls before the logical line advances. Stop if a step
+	// cannot move (the cursor is already as far down as the buffer goes).
+	for m.input.Line() < line {
+		prevLine, prevCol := m.input.Line(), m.input.Column()
+		m.input.CursorDown()
+		if m.input.Line() == prevLine && m.input.Column() == prevCol {
+			break
+		}
+	}
+	m.input.SetCursorColumn(col)
+	m.dirty()
 }
 
 // composeMaxVisibleRows caps the on-screen height of the compose box.
@@ -735,8 +806,10 @@ func (m *Model) insertMention(result *mentionpicker.MentionResult) {
 	if pos < len(val) {
 		after = val[pos:]
 	}
-	newText := before + "@" + result.DisplayName + " " + after
-	m.input.SetValue(newText)
+	inserted := "@" + result.DisplayName + " "
+	m.input.SetValue(before + inserted + after)
+	// SetValue parks the cursor at the end of the whole draft.
+	m.setInputCursor(len(before) + len(inserted))
 }
 
 // handleChannelKey processes key events when the channel picker is active.
@@ -831,8 +904,10 @@ func (m *Model) insertChannel(result *channelpicker.ChannelResult) {
 	if pos < len(val) {
 		after = val[pos:]
 	}
-	newText := before + "#" + result.Name + " " + after
-	m.input.SetValue(newText)
+	inserted := "#" + result.Name + " "
+	m.input.SetValue(before + inserted + after)
+	// SetValue parks the cursor at the end of the whole draft.
+	m.setInputCursor(len(before) + len(inserted))
 }
 
 // SetChannels provides the list of workspace channels for # autocomplete.
@@ -875,6 +950,192 @@ func channelPickerStyles() channelpicker.Styles {
 		Chrome: messages.ChromeStyles(),
 		Name:   lipgloss.NewStyle().Foreground(styles.TextPrimary),
 	}
+}
+
+// SetCommandSource is the list the slash picker pulls when "/" is typed.
+// Both composers share the App's source. Nil leaves the picker closed.
+func (m *Model) SetCommandSource(src commandpicker.SourceFunc) {
+	m.commandPicker.SetSource(src)
+}
+
+// IsCommandActive reports whether the slash-command picker is showing.
+func (m Model) IsCommandActive() bool { return m.commandActive }
+
+// CloseCommand dismisses the slash picker without completing.
+func (m *Model) CloseCommand() {
+	m.commandActive = false
+	m.commandPicker.Close()
+}
+
+// CommandPickerView returns the rendered slash picker, or "" when it
+// is not active.
+func (m Model) CommandPickerView(width int) string {
+	if !m.commandActive {
+		return ""
+	}
+	m.commandPicker.SetWidth(width)
+	return m.commandPicker.View()
+}
+
+// PickerActive reports whether any composer popup is open: emoji,
+// mention, channel, or slash command.
+func (m Model) PickerActive() bool {
+	return m.emojiActive || m.mentionActive || m.channelActive || m.commandActive
+}
+
+// DismissPicker closes the open popup and reports whether there was one.
+// Emoji wins when more than one is somehow active, matching PopupView.
+func (m *Model) DismissPicker() bool {
+	switch {
+	case m.emojiActive:
+		m.CloseEmoji()
+	case m.mentionActive:
+		m.CloseMention()
+	case m.channelActive:
+		m.CloseChannel()
+	case m.commandActive:
+		m.CloseCommand()
+	default:
+		return false
+	}
+	m.dirty()
+	return true
+}
+
+// PopupView returns the open popup, or "" when none is. Emoji, mention,
+// channel, then slash command — the same order the key handler gives them.
+func (m Model) PopupView(width int) string {
+	if v := m.EmojiPickerView(width); v != "" {
+		return v
+	}
+	if v := m.MentionPickerView(width); v != "" {
+		return v
+	}
+	if v := m.ChannelPickerView(width); v != "" {
+		return v
+	}
+	return m.CommandPickerView(width)
+}
+
+// commandPickerStyles maps the current theme onto the slash picker.
+func commandPickerStyles() commandpicker.Styles {
+	return commandpicker.Styles{
+		Chrome: messages.ChromeStyles(),
+		Name:   lipgloss.NewStyle().Foreground(styles.TextPrimary),
+		Detail: lipgloss.NewStyle().Foreground(styles.TextMuted),
+	}
+}
+
+// handleCommandKey processes keys while the slash picker is open.
+// Tab or Enter completes; Esc closes; a space (or any whitespace) is
+// typed and closes, so the command is not run.
+func (m Model) handleCommandKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	if res := m.commandPicker.HandleKey(msg); res.Handled {
+		if res.Completed {
+			m.insertCommand(res.Name)
+		}
+		if !m.commandPicker.IsVisible() {
+			m.commandActive = false
+		}
+		m.autoGrow()
+		return m, nil
+	}
+	k := msg.Key()
+	switch {
+	case k.Code == tea.KeyBackspace:
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		m.syncCommandQuery()
+		m.autoGrow()
+		return m, cmd
+	case len(k.Text) > 0:
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		m.syncCommandQuery()
+		m.autoGrow()
+		return m, cmd
+	default:
+		m.commandActive = false
+		m.commandPicker.Close()
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		m.autoGrow()
+		return m, cmd
+	}
+}
+
+// maybeOpenCommandPicker opens the slash picker when typed is the whole
+// composer and it is a command token: "/" at column 0 of what was an
+// empty box, with no whitespace yet. A paste of "/giphy" counts. Anything
+// already in the box, or a source with nothing to show, stays closed.
+func (m *Model) maybeOpenCommandPicker(typed string) {
+	if m.commandActive || typed == "" || m.PickerActive() {
+		return
+	}
+	val := m.input.Value()
+	if val != typed || val == "" || val[0] != '/' {
+		return
+	}
+	if m.cursorPosition() != len(val) {
+		return
+	}
+	if strings.IndexFunc(val, unicode.IsSpace) >= 0 {
+		return
+	}
+	if !m.commandPicker.Open() {
+		return
+	}
+	m.commandActive = true
+	m.commandStartCol = 1
+	if len(val) > 1 {
+		m.commandPicker.SetQuery(val[1:])
+	}
+}
+
+func (m *Model) syncCommandQuery() {
+	val := m.input.Value()
+	pos := m.cursorPosition()
+	if pos > len(val) {
+		pos = len(val)
+	}
+	// The token is only the leading "/name" the cursor is still inside.
+	// Whitespace before the cursor means the name is finished (a paste
+	// of the arguments, or a typed space), so the picker must close
+	// rather than complete over that text.
+	if pos < 1 || val == "" || val[0] != '/' || strings.IndexFunc(val[:pos], unicode.IsSpace) >= 0 {
+		m.commandActive = false
+		m.commandPicker.Close()
+		return
+	}
+	m.commandStartCol = 1
+	m.commandPicker.SetQuery(val[1:pos])
+}
+
+// insertCommand replaces the in-progress "/query" with "/name ".
+func (m *Model) insertCommand(name string) {
+	if !strings.HasPrefix(name, "/") {
+		name = "/" + name
+	}
+	val := m.input.Value()
+	pos := m.cursorPosition()
+	if pos > len(val) {
+		pos = len(val)
+	}
+	start := m.commandStartCol - 1
+	if start < 0 {
+		start = 0
+	}
+	if start > len(val) {
+		start = len(val)
+	}
+	if pos < start {
+		pos = start
+	}
+	before := val[:start]
+	after := val[pos:]
+	inserted := name + " "
+	m.input.SetValue(before + inserted + after)
+	m.setInputCursor(len(before) + len(inserted))
 }
 
 // SetUsers provides the list of workspace users for mention autocomplete.
@@ -1057,6 +1318,8 @@ func (m *Model) closePickers() {
 	m.channelPicker.Close()
 	m.emojiActive = false
 	m.emojiPicker.Close()
+	m.commandActive = false
+	m.commandPicker.Close()
 }
 
 // SetChannelMembership records the member set for a channel and, if
@@ -1205,7 +1468,24 @@ func (m *Model) sendMentions() []sendMention {
 	// wire form <!subteam^SID|@handle> so the optimistically-added
 	// echo renders the handle even if the server echo arrives before
 	// usergroups.list refreshes this workspace's map.
-	for id, handle := range m.userGroups {
+	// On Enterprise Grid two member workspaces can each have a group
+	// with the same handle (#214). Keep one per handle, lowest ID: the
+	// labeled replacement contains "@handle", so a second entry would
+	// match inside it and nest one token in another. Which group wins
+	// is arbitrary; preferring the current workspace's would need the
+	// owning team per group.
+	ids := make([]string, 0, len(m.userGroups))
+	for id := range m.userGroups {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	seenHandle := map[string]bool{}
+	for _, id := range ids {
+		handle := m.userGroups[id]
+		if seenHandle[handle] {
+			continue
+		}
+		seenHandle[handle] = true
 		entries = append(entries, sendMention{'@', handle, "<!subteam^" + id + "|@" + handle + ">", rankUserGroup})
 	}
 
@@ -1577,8 +1857,10 @@ func (m *Model) insertEmoji(name string) {
 	if pos < len(val) {
 		after = val[pos:]
 	}
-	newText := before + ":" + name + ": " + after
-	m.input.SetValue(newText)
+	inserted := ":" + name + ": "
+	m.input.SetValue(before + inserted + after)
+	// SetValue parks the cursor at the end of the whole draft.
+	m.setInputCursor(len(before) + len(inserted))
 }
 
 // formatChipSize formats a byte count as "12 KB", "3.4 MB", or "<1 KB".

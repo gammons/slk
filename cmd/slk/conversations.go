@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui"
 	"github.com/gammons/slk/internal/ui/sidebar"
@@ -58,6 +60,7 @@ func (h *rtmEventHandler) addConversation(ch slack.Channel) (sidebar.ChannelItem
 	if !replaced {
 		h.wsCtx.Channels = append(h.wsCtx.Channels, item)
 	}
+	h.wsCtx.MarkConversation(item.ID)
 	// Refresh rather than merely dedupe: a duplicate open may carry a
 	// resolved name, presence or app classification that the finder lacks.
 	finderItem, _ = h.upsertFinderItem(finderItem)
@@ -172,5 +175,58 @@ func (h *rtmEventHandler) publishConversation(item sidebar.ChannelItem, finderIt
 		TeamID:     h.workspaceID,
 		Item:       item,
 		FinderItem: finderItem,
+	})
+}
+
+// orgFallbackConversationResolver wraps a grid member workspace's
+// conversation lookup with the same-user org-level session's. A grid
+// conversation can belong to the org workspace while its message
+// frames fan out to every member session (a DM with an org-workspace
+// peer is the case that motivated this): the member token cannot
+// resolve the org's conversation, so without the fallback the sidebar
+// row never appears in the workspace the user is looking at, even
+// though the messages arrive and cache there. The org session answers
+// as this user's own conversation view. The org resolver receives the
+// own lookup's error and is expected to return it when it cannot do
+// better (no org session, or the org lookup also failed): the own
+// error is what the caller's retry backoff classifies, and swapping
+// it for a wrapper error would silently disable the backoff.
+// org nil keeps the workspace's own resolver alone.
+func orgFallbackConversationResolver(own func(ctx context.Context, channelID string) (*slack.Channel, error), org func(ctx context.Context, channelID string, ownErr error) (*slack.Channel, error)) func(ctx context.Context, channelID string) (*slack.Channel, error) {
+	if org == nil {
+		return own
+	}
+	return func(ctx context.Context, channelID string) (*slack.Channel, error) {
+		ch, err := own(ctx, channelID)
+		if err == nil {
+			return ch, nil
+		}
+		return org(ctx, channelID, err)
+	}
+}
+
+// conversationResolverFor builds the rtmEventHandler's
+// resolveConversation: the workspace's own conversations.info, wrapped
+// with the same-user org session's when this workspace is a grid
+// member (see orgFallbackConversationResolver). The org resolver
+// resolves at CALL time, not build time: workspaces connect in
+// parallel, and a member whose handler is built before the org session
+// registers in the router would otherwise keep its own lookup forever
+// - the org session connecting a moment later would never be used.
+func conversationResolverFor(router *workspaceRouter, wctx *WorkspaceContext) func(ctx context.Context, channelID string) (*slack.Channel, error) {
+	return orgFallbackConversationResolver(wctx.Client.GetConversationInfo, func(ctx context.Context, channelID string, ownErr error) (*slack.Channel, error) {
+		client := sameUserOrgClient(router, wctx)
+		if client == nil {
+			// Keep the member's own error: it carries the refusal the
+			// caller's backoff classifies.
+			return nil, ownErr
+		}
+		ch, err := client.GetConversationInfo(ctx, channelID)
+		if err != nil {
+			// The org session could not resolve it either; the member's
+			// own error keeps the caller's backoff semantics.
+			return nil, ownErr
+		}
+		return ch, nil
 	})
 }

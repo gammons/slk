@@ -86,6 +86,22 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			}
 			return cmd, true
 		}
+		if m.Type == "app" {
+			// An app DM may publish a Home tab; fetch it while the
+			// messages load. Fetching is what decides the view: the
+			// reducer switches to ViewAppHome only when one arrives.
+			//
+			// A navigation to a specific message or thread keeps the
+			// messages on screen: the Home tab is fetched for t, but
+			// must not hide the message the jump is landing on.
+			landOnMessage := false
+			if nav := a.pendingLinkNav; nav != nil && string(nav.ChannelID) == m.ID {
+				landOnMessage = nav.MessageTS != "" || nav.ThreadTS != ""
+			}
+			cmd = tea.Batch(cmd, a.fetchAppHomeCmd(a.activeTeamID, m.ID, m.Name, !landOnMessage))
+		} else {
+			a.clearAppHome()
+		}
 		// Permalink completion. !fetchFired means no MessagesLoadedMsg
 		// is coming (tier-1 fresh cache), so complete authoritatively
 		// now — otherwise the pending nav would leak and could later
@@ -277,9 +293,54 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}, true
 
 	case ChannelJoinFailedMsg:
-		// Nothing fancy yet -- could surface a status-bar toast
-		// in future.
 		log.Printf("warning: failed to join channel %s: %v", m.Name, m.Err)
+		// A join can be refused (a private channel the user cannot enter,
+		// one deleted since the mention was written). Say so: a click
+		// that ends in silence reads as a broken link.
+		name := m.Name
+		if name == "" {
+			name = m.ID
+		}
+		text := "Could not join #" + name
+		if m.Err != nil {
+			text += ": " + m.Err.Error()
+		}
+		return toastWithClear(a, text, 4*time.Second), true
+
+	case ChannelStarSetMsg:
+		key := m.TeamID + "\x00" + m.ChannelID
+		// A reply that no longer matches the channel's latest request
+		// was superseded by a newer one; its outcome is the newer
+		// request's business. (0 means the reply carries no number.)
+		if m.Seq != 0 && m.Seq != a.starSeqs[key] {
+			return nil, true
+		}
+		// The request ran in a workspace the user has since left: the
+		// sidebar on screen is another workspace's, and its rows are
+		// not this reply's to touch. The bookkeeping still settles, and
+		// the echo has already applied the engine-side state that
+		// workspace's next activation renders.
+		if m.TeamID != "" && m.TeamID != a.activeTeamID {
+			delete(a.starSnapshots, key)
+			return nil, true
+		}
+		if m.Err != nil {
+			// Slack refused: restore the row's pre-request state, not
+			// the opposite of the request (a /star on an already
+			// starred channel that fails must not read as un-starred).
+			// Slack holds no intermediate state, and the engine-side
+			// SectionStore and cache are only written on success, so
+			// the row is all there is to undo.
+			if snap, pending := a.starSnapshots[key]; pending {
+				a.sidebar.SetItemStarState(m.ChannelID, snap.starred, snap.section)
+				delete(a.starSnapshots, key)
+			} else {
+				a.sidebar.SetItemStarred(m.ChannelID, !m.Starred)
+			}
+			a.syncHeaderStar()
+			return toastWithClear(a, "Couldn't set star: "+m.Err.Error(), 3*time.Second), true
+		}
+		delete(a.starSnapshots, key)
 		return nil, true
 
 	case channelSearchDebounceMsg:
@@ -323,6 +384,10 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 // the reducer.
 func (a *App) retargetActiveChannel(id, name, chType string) tea.Cmd {
 	a.activeChannelID = id
+	// The header glyph shows the NEW channel's star; retarget is the
+	// shared path every focus change and channel switch goes through,
+	// so the sync lives here rather than at each call site.
+	a.syncHeaderStar()
 	// Sendable unless a failed send marked this channel read-only, its
 	// DM peer is deactivated or an earlier probe found it unsendable;
 	// the probe fired below overwrites the last.

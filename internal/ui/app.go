@@ -8,14 +8,17 @@ import (
 	"log"
 	"maps"
 	"mime"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/bubbles/channelpicker"
 	"github.com/gammons/slk/internal/bubbles/confirmprompt"
 	"github.com/gammons/slk/internal/bubbles/linkpicker"
@@ -26,6 +29,7 @@ import (
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/slackurl"
 	"github.com/gammons/slk/internal/ui/activityview"
+	"github.com/gammons/slk/internal/ui/apphome"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/emojipicker"
@@ -42,6 +46,7 @@ import (
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/statusbar"
 	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/gammons/slk/internal/ui/suppresslist"
 	"github.com/gammons/slk/internal/ui/themeswitcher"
 	"github.com/gammons/slk/internal/ui/thread"
 	"github.com/gammons/slk/internal/ui/threadsview"
@@ -72,6 +77,10 @@ const (
 	// ViewActivity swaps the pane's contents for the Activity feed
 	// (mentions, thread replies, reactions to your messages, DMs).
 	ViewActivity
+	// ViewAppHome swaps the pane's contents for an app DM's Home tab.
+	// It is per conversation: picking another channel returns to
+	// ViewChannels.
+	ViewAppHome
 )
 
 const (
@@ -138,12 +147,31 @@ type App struct {
 	threadCompose    compose.Model
 	threadsView      threadsview.Model
 	activityView     activityview.Model
+	// appHome is the Home tab of the app DM on screen, shown in place of
+	// the messages pane while view is ViewAppHome. appHomeChannelID is
+	// the conversation it was fetched for, so a result for a channel the
+	// user has left is dropped.
+	appHome          apphome.Model
+	appHomeChannelID string
+	// appHomeAutoShow asks AppHomeLoadedMsg to switch to the Home tab
+	// when it arrives. Set by the fetch a channel switch starts, so a
+	// refetch after a button press never pulls the user back from the
+	// Messages tab they chose.
+	appHomeAutoShow bool
+	// appHomeBusy is the status-bar progress dots for a pressed Home
+	// button, the feedback the web client gets from the app's own
+	// spinner view.
+	appHomeBusy appHomeBusyState
 
 	// State
 	mode           Mode
 	focusedPanel   Panel
 	sidebarVisible bool
 	threadVisible  bool
+	// railHidden hides the workspace rail even with several workspaces
+	// (appearance.show_workspace_rail, ToggleWorkspaceRail); the status
+	// bar then names the active workspace (#89).
+	railHidden bool
 	// threadCloseAfterUpload records a close that CloseThread refused
 	// while an upload was in flight (the open thread's parent was
 	// deleted). The UploadResultMsg arm runs it once the upload ends.
@@ -309,6 +337,14 @@ type App struct {
 	// only.
 	activityReads map[string]*activityRead
 
+	// starSnapshots holds the sidebar row state (starred flag and
+	// section) from BEFORE a star request's optimistic move, keyed by
+	// channel; starSeqs is the per-channel request number the reply
+	// must match to still apply (a stale reply was superseded by a
+	// newer request). Update goroutine only.
+	starSnapshots map[string]starSnapshot
+	starSeqs      map[string]int
+
 	// activityBadgeTotals holds each workspace's total unread activity
 	// (from client.counts at boot and badge_counts_updated events
 	// after), keyed by team id. The sidebar's Activity badge shows the
@@ -433,6 +469,7 @@ type App struct {
 	// newWindowModel can configure late-created window models
 	// identically to the root model. See internal/ui/winmodels.go.
 	avatarFn      messages.AvatarFunc
+	sixelAvatarFn messages.SixelAvatarFunc // nil unless the service draws sixel avatars
 	replyAvatarFn messages.AvatarFunc
 	replyAvatars  bool
 	imageCtx      imgrender.ImageContext
@@ -501,8 +538,11 @@ type App struct {
 	// (e.g., a fresh channel with 50+ cold-cache emoji whose fetches all
 	// complete in a burst). Coalesces every arrival within the debounce
 	// window into a single cache invalidation when the emojiInvalidateMsg
-	// tick fires. See reducer_io.go's EmojiImageReadyMsg arm.
+	// tick fires. emojiInvalidateURLs is the set of URLs in that window;
+	// the message panes rebuild only the rows that draw one of them.
+	// See reducer_io.go's EmojiImageReadyMsg arm.
 	emojiInvalidatePending bool
+	emojiInvalidateURLs    map[string]struct{}
 
 	// linkPicker is the open-link choice modal (issue #62).
 	linkPicker *linkpicker.Model
@@ -555,6 +595,7 @@ type App struct {
 	reactions     core.ReactionService
 	interactions  core.InteractionService
 	commandSvc    core.CommandService
+	appHomeSvc    core.AppHomeService
 	currentUserID string
 
 	// editing tracks in-progress message edit state. See
@@ -586,9 +627,10 @@ type App struct {
 	// that switching back to a workspace returns to the same channel the
 	// user was last viewing there. Saved at the start of every workspace
 	// switch (the workspace being left), consulted when applying the
-	// switch (the workspace being entered). Falls back to the first
-	// channel in the sidebar when there is no saved entry or the saved
-	// channel is no longer in the list.
+	// switch (the workspace being entered). Falls back to the
+	// workspace's default_channel, then to the first channel in the
+	// sidebar, when there is no saved entry or the saved channel is no
+	// longer in the list.
 	lastChannelByTeam map[string]string
 
 	// workspaceDomains maps teamID -> auth.test's slack.com subdomain.
@@ -604,6 +646,21 @@ type App struct {
 	// reducer_links.go. Every in-app jump (permalinks, marks, history
 	// walks) records its target here via applyLocation.
 	pendingLinkNav *pendingLinkNav
+
+	// pendingFinderPermalink is an archive link chosen in the channel
+	// finder whose workspace is not the one on screen. Nil when
+	// nothing is waiting. takeFinderPermalink navigates once that
+	// workspace is active, and only when FinderPermalinkSeq on the
+	// switch matches the request's seq. A newer paste replaces the
+	// pointer. finderPermalinkSeq is the counter and outlives a
+	// cleared request; zero is never a live seq.
+	pendingFinderPermalink *pendingFinderPermalink
+	finderPermalinkSeq     uint64
+
+	// slackLinkInput is the Open Slack link dialog's single line.
+	// slackLinkError is the inline validation message; empty hides it.
+	slackLinkInput string
+	slackLinkError string
 
 	// marks owns the vim-style mark storage: an in-memory per-workspace
 	// tier for lowercase marks plus the SQLite `marks` table, merged
@@ -657,7 +714,14 @@ type App struct {
 	sidebarResizeFrom  int
 
 	// settings persists the theme choice and sidebar width. Nil until wired.
-	settings       core.SettingsService
+	settings core.SettingsService
+	// suppression holds the rules hiding authors' messages (suppress.go).
+	suppression core.SuppressionService
+	// suppressReloadSeq names the latest cache reload after a rule was
+	// removed (reloadAfterRuleRemoval); older results are dropped.
+	suppressReloadSeq uint64
+	// suppressList is the :suppressed dialog.
+	suppressList   suppresslist.Model
 	themeOverrides core.Theme
 	// themeName is the name last passed to applyTheme, which may differ
 	// from styles.CurrentTheme: a custom theme whose file is missing
@@ -969,6 +1033,7 @@ func NewApp() *App {
 		threadCompose:         compose.New("thread"),
 		threadsView:           threadsview.New(nil, ""),
 		activityView:          activityview.New(nil, ""),
+		appHome:               apphome.New(),
 		linkPicker:            linkpicker.New(),
 		reactionPicker:        reactionpicker.New(),
 		reactionsView:         reactionsview.New(),
@@ -1002,6 +1067,7 @@ func NewApp() *App {
 		reactions:             noopReactionService,
 		interactions:          noopInteractionService,
 		commandSvc:            noopCommandService,
+		appHomeSvc:            noopAppHomeService,
 		threads:               noopThreadService,
 		activity:              noopActivityService,
 		messageSvc:            noopMessageService,
@@ -1015,6 +1081,8 @@ func NewApp() *App {
 		navHistory:            newNavHistoryStore(),
 		marks:                 newMarksStore(),
 		marksOverlay:          marks.New(),
+		suppression:           noopSuppressionService,
+		suppressList:          suppresslist.New(),
 		showJumpOverlay:       true,
 		clipboardWrite:        defaultClipboardWriter,
 		userProfile:           userprofile.New(),
@@ -1028,6 +1096,8 @@ func NewApp() *App {
 	rootModel := messages.New(nil, "")
 	app.winModels = map[wintree.LeafID]*messages.Model{rootWin: rootModel}
 	app.messagepane = app.winModels[rootWin]
+	app.installChannelHide(rootModel)
+	app.installThreadHide()
 	app.editing = newEditController()
 	// typing tracker is referenced by typingOut so it must exist first;
 	// construct outside the literal because struct literals can't
@@ -1039,6 +1109,7 @@ func NewApp() *App {
 	// before the first workspace finishes loading customs.
 	app.compose.SetEmojiEntries(emoji.BuildEntries(nil))
 	app.threadCompose.SetEmojiEntries(emoji.BuildEntries(nil))
+	app.wireSlashCompletion()
 	// Seed the channel finder with the "Threads" view shortcut so users
 	// can jump to the threads-list view from the same overlay they use
 	// to switch channels (ctrl+t / ctrl+p). Selecting this row dispatches
@@ -1065,9 +1136,28 @@ func (a *App) defaultHelpHint() string {
 	return ""
 }
 
+// declareGraphemeWidths asks bubbletea's renderer to measure cells with
+// grapheme widths.
+//
+// Every frame slk draws is composed with lipgloss v2, which measures and
+// pads with grapheme widths (ansi.GraphemeWidth). The renderer starts on
+// wcwidth and switches only when the terminal answers the DECRPM 2027
+// query; on a terminal that does not answer, a character whose two
+// widths differ (the status emoji U+1F5D3 U+FE0F is 1 by wcwidth and 2
+// by grapheme width) leaves the renderer's cell model one column
+// narrower than the row it is diffing. A partial row update then starts
+// a column early, which is visible as the right-hand pane overlapping
+// the border on exactly the rows holding that emoji. The mode report is
+// the renderer's own switch: sending it is the way to declare the width
+// method the frames were actually built with.
+func declareGraphemeWidths() tea.Msg {
+	return tea.ModeReportMsg{Mode: ansi.ModeUnicodeCore, Value: ansi.ModeSet}
+}
+
 func (a *App) Init() tea.Cmd {
+	cmds := []tea.Cmd{declareGraphemeWidths}
 	if a.bootstrap.IsLoading() {
-		return tea.Batch(
+		cmds = append(cmds,
 			tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
 				return SpinnerTickMsg{}
 			}),
@@ -1076,7 +1166,7 @@ func (a *App) Init() tea.Cmd {
 			}),
 		)
 	}
-	return nil
+	return tea.Batch(cmds...)
 }
 
 // Update is the bubbletea entry point: the reducer chain in update,
@@ -1142,11 +1232,11 @@ func (a *App) fullscreenPanel() Panel {
 
 // railWidth is the workspace rail's width for layout: zero when exactly
 // one workspace is configured, since a single tile conveys nothing and
-// only costs columns (#216). Before SetWorkspaces runs (no items yet)
-// the rail keeps its width, so multi-workspace setups don't see it pop
-// in once their workspaces load.
+// only costs columns (#216), or when the user hid it (#89). Before
+// SetWorkspaces runs (no items yet) the rail keeps its width, so
+// multi-workspace setups don't see it pop in once their workspaces load.
 func (a *App) railWidth() int {
-	if len(a.workspaceItems) == 1 {
+	if a.railHidden || len(a.workspaceItems) == 1 {
 		return 0
 	}
 	return a.workspaceRail.Width()
@@ -1176,7 +1266,11 @@ func (a *App) frameInto(l *panelLayout) panelLayoutFrame {
 func (a *App) contentPanesDrawn() (channel, thread bool) {
 	var scratch panelLayout
 	f := a.frameInto(&scratch)
-	return f.MsgWidth > 0, a.threadVisible && f.ThreadWidth > 0
+	// An app's Home tab fills the messages region: messages arriving in
+	// the conversation behind it are not on screen, so they must stay
+	// unread exactly as if the pane were hidden by a stacked layout.
+	channelDrawn := f.MsgWidth > 0 && a.view != ViewAppHome
+	return channelDrawn, a.threadVisible && f.ThreadWidth > 0
 }
 
 func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1201,10 +1295,12 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		reduceReactions,
 		reduceThreads,
 		reduceActivity,
+		reduceAppHome,
 		reduceFocus,
 		reduceSend,
 		reduceRemovePreview,
 		reduceLoadImages,
+		reduceSuppress,
 		reduceActionPrompt,
 		reduceSlashCommand,
 		reduceChannels,
@@ -1679,7 +1775,7 @@ func (a *App) openLinksOfSelected() tea.Cmd {
 	default:
 		items := make([]linkpicker.Item, len(links))
 		for i, l := range links {
-			items[i] = linkpicker.Item{URL: l.URL, Label: l.Label, InApp: a.linkOpensInApp(l.URL)}
+			items[i] = linkpicker.Item{URL: l.URL, Label: a.internalLinkLabel(l.URL, l.Label), InApp: a.linkOpensInApp(l.URL)}
 		}
 		a.pickerKind = "links"
 		a.openLinkPicker("Open link", items)
@@ -1737,6 +1833,13 @@ func (a *App) downloadFilesOfSelected() tea.Cmd {
 // inside slk (used for the picker's "[slk]" badge). Mirrors the
 // guards at the top of routeLink.
 func (a *App) linkOpensInApp(rawURL string) bool {
+	// slk's own slack:// links are handled in-app (or refused with a
+	// toast); the picker must not label them as external. Recognize the
+	// scheme by prefix, like openInternalLink: a malformed slack: string
+	// must not be badged as an external link either.
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(rawURL)), "slack:") {
+		return true
+	}
 	pl, ok := slackurl.Parse(rawURL)
 	if !ok || !a.permalinkBelongsToActiveWorkspace(pl) {
 		return false
@@ -1812,6 +1915,10 @@ func (a *App) handleDown() tea.Cmd {
 			a.activityView.MoveDown()
 			return nil
 		}
+		if a.view == ViewAppHome {
+			a.appHome.ScrollDown(1)
+			return nil
+		}
 		return a.coalesceContentScroll(+1)
 	case PanelThread:
 		return a.coalesceContentScroll(+1)
@@ -1833,6 +1940,10 @@ func (a *App) handleUp() tea.Cmd {
 		}
 		if a.view == ViewActivity {
 			a.activityView.MoveUp()
+			return nil
+		}
+		if a.view == ViewAppHome {
+			a.appHome.ScrollUp(1)
 			return nil
 		}
 		return a.coalesceContentScroll(-1)
@@ -1957,6 +2068,10 @@ func (a *App) handleGoToTop() tea.Cmd {
 			a.activityView.GoToTop()
 			return nil
 		}
+		if a.view == ViewAppHome {
+			a.appHome.GoToTop()
+			return nil
+		}
 		a.messagepane.GoToTop()
 		return a.maybeFetchOlderHistory(a.messagepane.AtTop())
 	case PanelThread:
@@ -1979,6 +2094,10 @@ func (a *App) handleGoToBottom() tea.Cmd {
 		}
 		if a.view == ViewActivity {
 			a.activityView.GoToBottom()
+			return nil
+		}
+		if a.view == ViewAppHome {
+			a.appHome.GoToBottom()
 			return nil
 		}
 		a.messagepane.GoToBottom()
@@ -2055,6 +2174,12 @@ func (a *App) scrollFocusedPanel(delta int) tea.Cmd {
 				a.activityView.ScrollUp(n)
 			} else {
 				a.activityView.ScrollDown(n)
+			}
+		} else if a.view == ViewAppHome {
+			if delta < 0 {
+				a.appHome.ScrollUp(n)
+			} else {
+				a.appHome.ScrollDown(n)
 			}
 		} else {
 			if delta < 0 {
@@ -2190,6 +2315,12 @@ func (a *App) handleEnter() tea.Cmd {
 		}
 		team := a.activeTeamID
 		return func() tea.Msg { return ActivitySelectedMsg{TeamID: team, Item: it} }
+	}
+
+	if a.focusedPanel == PanelMessages && a.view == ViewAppHome {
+		// The pane shows the Home tab, not a message: there is nothing
+		// to open. b presses its buttons.
+		return nil
 	}
 
 	if a.focusedPanel == PanelMessages && a.view == ViewThreads {
@@ -2420,6 +2551,11 @@ func (a *App) closeModal(mode Mode) {
 		a.userProfile.Close()
 	case ModeMarks:
 		a.marksOverlay.Close()
+	case ModeSuppressed:
+		a.suppressList.Close()
+	case ModeOpenSlackLink:
+		a.slackLinkInput = ""
+		a.slackLinkError = ""
 	}
 }
 
@@ -2548,6 +2684,9 @@ func (a *App) FocusLeft() {
 	switch {
 	case a.focusedPanel == PanelWorkspace:
 	case a.focusedPanel == PanelSidebar && a.sidebarVisible && !a.fullscreen && len(a.workspaceItems) > 0:
+		if a.railWidth() == 0 {
+			return // no rail drawn (hidden, or one workspace): the sidebar is the left edge
+		}
 		a.cancelEdit()
 		a.clearSelections()
 		a.workspaceRail.ResetCursor()
@@ -2571,6 +2710,49 @@ func (a *App) ToggleSidebar() {
 			a.focusedPanel = PanelMessages
 		}
 	}
+}
+
+// SetShowWorkspaceRail applies appearance.show_workspace_rail.
+func (a *App) SetShowWorkspaceRail(show bool) {
+	a.railHidden = !show
+	a.syncStatusWorkspace()
+}
+
+// ToggleWorkspaceRail shows or hides the workspace rail. Hiding it
+// while it has focus moves focus to the sidebar, or to the messages
+// pane when the sidebar is hidden too.
+func (a *App) ToggleWorkspaceRail() {
+	a.clearSelections()
+	a.railHidden = !a.railHidden
+	if a.railHidden && a.focusedPanel == PanelWorkspace {
+		a.focusedPanel = PanelMessages
+		if a.sidebarVisible {
+			a.focusedPanel = PanelSidebar
+		}
+	}
+	a.syncStatusWorkspace()
+}
+
+// syncStatusWorkspace puts statusWorkspaceLabel in the status bar. Called
+// wherever its inputs change (rail shown/hidden, workspaces set, active
+// workspace changed) so View stays free of setters.
+func (a *App) syncStatusWorkspace() { a.statusbar.SetWorkspace(a.statusWorkspaceLabel()) }
+
+// statusWorkspaceLabel is what the status bar shows for the workspace:
+// the active workspace's initials while the user has hidden the rail
+// with several workspaces configured, so the bar says where they are;
+// otherwise nothing, since the rail already shows it.
+func (a *App) statusWorkspaceLabel() string {
+	if !a.railHidden || len(a.workspaceItems) < 2 {
+		return ""
+	}
+	active := a.workspaceRail.SelectedID()
+	for _, ws := range a.workspaceItems {
+		if ws.ID == active {
+			return ws.Initials
+		}
+	}
+	return ""
 }
 
 func (a *App) ToggleThread() {
@@ -2924,6 +3106,7 @@ func (a *App) SetWorkspaces(items []workspace.WorkspaceItem) {
 	a.workspaceRail.RefreshUnreads()
 	a.workspaceItems = items
 	a.syncWorkspaceFinder()
+	a.syncStatusWorkspace()
 }
 
 // syncWorkspaceFinder rebuilds the workspace finder's items from the
@@ -2954,6 +3137,9 @@ func (a *App) SetChannels(items []sidebar.ChannelItem) {
 // activation supplies only the incoming snapshot, discarding outgoing names.
 func (a *App) setChannels(items []sidebar.ChannelItem, knownNames map[string]string) {
 	a.sidebar.SetItems(items)
+	// Item swaps carry star state (a star echo's section refresh, a
+	// mute refresh); the header glyph follows the active channel.
+	a.syncHeaderStar()
 	a.channelPickItems = items
 	names := maps.Clone(knownNames)
 	if names == nil {
@@ -2984,6 +3170,9 @@ func (a *App) setChannelNames(names map[string]string) {
 	a.threadPanel.SetChannelNames(names)
 	a.threadsView.SetChannelNames(names)
 	a.activityView.SetChannelNames(names)
+	// The Home tab renders channel and user mentions through the same
+	// names; its cached frame must not outlive them.
+	a.appHome.Invalidate()
 }
 
 // pushChannelPicks gives both composers the "#" autocomplete list built
@@ -3157,17 +3346,24 @@ func (a *App) SetChannelFinderItems(items []core.ChannelFinderItem) {
 }
 
 // SetAvatarService wires the rendered avatars shown beside messages.
+// A core.SixelAvatarService also draws them as sixel images.
 func (a *App) SetAvatarService(s core.AvatarService) {
 	var fn, replyFn messages.AvatarFunc
+	var sixelFn messages.SixelAvatarFunc
 	if s != nil {
 		fn, replyFn = s.Avatar, s.ReplyAvatar
+		if sx, ok := s.(core.SixelAvatarService); ok {
+			sixelFn = sx.SixelAvatar
+		}
 	}
-	a.avatarFn, a.replyAvatarFn = fn, replyFn
+	a.avatarFn, a.replyAvatarFn, a.sixelAvatarFn = fn, replyFn, sixelFn
 	for _, m := range a.allWinModels() {
 		m.SetAvatarFunc(fn)
+		m.SetSixelAvatarFunc(sixelFn)
 		m.SetReplyAvatarFunc(a.replyAvatarFunc())
 	}
 	a.threadPanel.SetAvatarFunc(fn)
+	a.threadPanel.SetSixelAvatarFunc(sixelFn)
 }
 
 // SetReplyAvatars switches the reply row under thread parents to Slack's
@@ -3540,6 +3736,7 @@ func (a *App) SetUserNames(names map[string]string) {
 	a.userNames = names
 	a.threadsView.SetUserNames(names)
 	a.activityView.SetUserNames(names)
+	a.appHome.Invalidate()
 	for _, m := range a.allWinModels() {
 		m.SetUserNames(names)
 	}
@@ -3669,6 +3866,7 @@ func (a *App) SetCustomEmoji(customs map[string]string) {
 func (a *App) SetInitialChannel(channelID, channelName string, msgs []messages.MessageItem) {
 	a.activeChannelID = channelID
 	a.messagepane.SetChannel(channelName, "")
+	a.syncHeaderStar()
 	a.messagepane.SetMessages(msgs)
 	a.compose.SetChannel(channelName)
 	a.compose.SetActiveChannel(channelID)
@@ -3707,6 +3905,16 @@ func (a *App) SetCommandService(s core.CommandService) {
 		s = noopCommandService
 	}
 	a.commandSvc = s
+}
+
+// SetAppHomeService wires the service that fetches an app DM's Home tab
+// and presses its buttons. A nil s restores the no-op, which reports no
+// Home tab and refuses presses.
+func (a *App) SetAppHomeService(s core.AppHomeService) {
+	if s == nil {
+		s = noopAppHomeService
+	}
+	a.appHomeSvc = s
 }
 
 // SetProfileService wires the App's ProfileService collaborator, used
@@ -3809,20 +4017,22 @@ func (a *App) activeTeamName() string {
 	return "this workspace"
 }
 
-// activeWorkspaceDomain returns the slack.com subdomain of the active
-// workspace, or "" when unknown (link router then falls back to the
-// browser for all slack.com permalinks).
-func (a *App) activeWorkspaceDomain() string {
-	return a.workspaceDomains[a.activeTeamID]
-}
-
 // permalinkBelongsToActiveWorkspace reports whether a parsed archive link
 // uses either the active workspace's auth.test domain or a configured alias.
 func (a *App) permalinkBelongsToActiveWorkspace(pl slackurl.Permalink) bool {
-	if pl.Subdomain == a.activeWorkspaceDomain() {
-		return pl.Subdomain != ""
+	return a.permalinkBelongsToTeam(a.activeTeamID, pl)
+}
+
+// permalinkBelongsToTeam reports whether pl's subdomain is teamID's
+// auth.test domain or one of its configured aliases.
+func (a *App) permalinkBelongsToTeam(teamID string, pl slackurl.Permalink) bool {
+	if pl.Subdomain == "" || teamID == "" {
+		return false
 	}
-	for _, domain := range a.permalinkDomains[a.activeTeamID] {
+	if domain := a.workspaceDomains[teamID]; domain != "" && pl.Subdomain == domain {
+		return true
+	}
+	for _, domain := range a.permalinkDomains[teamID] {
 		if pl.Subdomain == domain {
 			return true
 		}
@@ -4091,8 +4301,8 @@ func (a *App) View() tea.View {
 // regions entirely when active, so it takes priority; otherwise every
 // visible window leaf contributes its own placements, mapped through
 // its own rectangle (split windows sit at their own origins, not the
-// unsplit messages-pane origin). The thread pane still renders
-// halfblock.
+// unsplit messages-pane origin), and so does the thread pane wherever
+// it is drawn (threadSixelRect).
 func (a *App) collectSixelPlacements(frame panelLayoutFrame) []imgpkg.SixelPlacement {
 	if a.preview.Active() {
 		want := make([]imgpkg.SixelPlacement, 0, 1)
@@ -4106,38 +4316,78 @@ func (a *App) collectSixelPlacements(frame panelLayoutFrame) []imgpkg.SixelPlace
 		return want
 	}
 	// A modal is composited into the frame's text, but sixel is painted
-	// after the text, so any placement published now would land on top
-	// of the modal. Withhold them all: the painter erases the images, and
-	// repaints them once the modal closes and the text beneath changes
-	// back. Kitty images get the same treatment in overlay.DimmedOverlay,
-	// which blanks their placeholder cells (issue #18).
+	// after the text, so a placement published for the base screen would
+	// land on top of the modal. Withhold those: the painter erases the
+	// images, and repaints them once the modal closes and the text
+	// beneath changes back. Kitty images get the same treatment in
+	// overlay.DimmedOverlay, which blanks their placeholder cells
+	// (issue #18).
+	//
+	// The profile dialog is the exception: it owns its avatar's slot.
+	// Its text blanks the avatar cells (SixelPaint), the modal is the
+	// topmost thing composited there, and the image landing after the
+	// text is exactly right for it. It is read-only with no stacking
+	// modals (e/c copy and toast), so nothing can sit over the slot.
 	if a.overlayActive() {
-		return nil
-	}
-	if a.view != ViewChannels || frame.MsgWidth == 0 {
-		return nil
-	}
-	// The same bounds renderWindowsRegion uses, so leaf rectangles
-	// match the panes actually drawn.
-	bounds := wintree.Rect{
-		X: 0,
-		Y: 0,
-		W: frame.MsgWidth + frame.MsgBorder,
-		H: frame.ContentHeight,
-	}
-	rects := a.wins.ComputeRects(bounds)
-	out := make([]imgpkg.SixelPlacement, 0, 2)
-	for _, id := range a.wins.Leaves() {
-		rect, ok := rects[id]
-		model := a.winModels[id]
-		if !ok || model == nil || rect.W < 1 || rect.H < 1 {
-			continue
+		if a.userProfile.IsVisible() {
+			if p := a.userProfile.SixelPaint(); p != nil {
+				return []imgpkg.SixelPlacement{{
+					Key:   p.Key,
+					Row:   p.Row + 1, // CUP is 1-based
+					Col:   p.Col + 1,
+					Rows:  p.Rows,
+					Cols:  p.Cols,
+					Bytes: p.Bytes,
+				}}
+			}
 		}
+		return nil
+	}
+	var out []imgpkg.SixelPlacement
+	// The channel windows draw messages only in the channels view; the
+	// Threads and Activity views put their lists there instead. The
+	// thread pane is drawn the same in every view, so it is not gated.
+	if a.view == ViewChannels && frame.MsgWidth > 0 {
+		// The same bounds renderWindowsRegion uses, so leaf rectangles
+		// match the panes actually drawn.
+		bounds := wintree.Rect{
+			X: 0,
+			Y: 0,
+			W: frame.MsgWidth + frame.MsgBorder,
+			H: frame.ContentHeight,
+		}
+		rects := a.wins.ComputeRects(bounds)
+		for _, id := range a.wins.Leaves() {
+			rect, ok := rects[id]
+			model := a.winModels[id]
+			if !ok || model == nil || rect.W < 1 || rect.H < 1 {
+				continue
+			}
+			out = append(out, absoluteWindowSixelPlacements(
+				model.SixelPlacements(), model.ChromeHeight(), rect, a.layout.SidebarEnd(),
+			)...)
+		}
+	}
+	// The thread pane, under the condition View draws it on: beside the
+	// messages pane, in front of it when the panes stack, or full screen.
+	if a.threadVisible && frame.ThreadWidth > 0 {
 		out = append(out, absoluteWindowSixelPlacements(
-			model.SixelPlacements(), model.ChromeHeight(), rect, a.layout.SidebarEnd(),
+			a.threadPanel.SixelPlacements(), a.threadPanel.ChromeHeight(),
+			a.threadSixelRect(frame), a.layout.MsgEnd(),
 		)...)
 	}
 	return out
+}
+
+// threadSixelRect is the thread pane's replies region as a rectangle in
+// absoluteWindowSixelPlacements' frame, with X relative to the pane's
+// left edge (a.layout.MsgEnd()): the top border on row 0, the replies
+// on rows 1 to the reply height, and the compose region from the row
+// after, which is the bottom an image must not reach. The height is
+// the one renderThreadRegion drew with, so it is read after it ran.
+func (a *App) threadSixelRect(frame panelLayoutFrame) wintree.Rect {
+	replies := max(a.layout.PageHeight(PanelThread), 3) // renderThreadRegion's clamp
+	return wintree.Rect{X: 0, Y: 0, W: frame.ThreadWidth + frame.ThreadBorder, H: replies + 2}
 }
 
 // finalizeSixelView is the single exit point for every App.View path,
@@ -4376,8 +4626,9 @@ func (a *App) tryAttachFromClipboard(target *compose.Model, pathCandidate string
 		)
 	}
 
-	// 2. File-path text.
-	if path, ok := resolveFilePath(pathCandidate); ok {
+	// 2. File-path text. The literal reading comes first, so a file whose
+	// name really contains a backslash or quotes still attaches.
+	for _, path := range filePathCandidates(pathCandidate) {
 		info, err := a.desktop.Stat(path)
 		if err == nil && info.Mode().IsRegular() {
 			if info.Size() > maxAttachmentSize {
@@ -4857,17 +5108,34 @@ func humanSize(size int64) string {
 	}
 }
 
-// resolveFilePath inspects clipboard text and returns a cleaned,
-// absolute file path if it looks like a single-line existing-file
-// reference. Returns ok=false on multi-line input, oversized input,
-// non-absolute and non-./-relative paths, or paths that don't
-// expand. The caller is responsible for the os.Stat / IsRegular
-// check and the size check.
-func resolveFilePath(text string) (string, bool) {
+// filePathCandidates inspects clipboard text and returns the cleaned,
+// absolute file paths it could name, most literal first: the text as
+// it is, then with a terminal's shell quoting undone (unshellPath).
+// They differ only when the text carries quotes, backslashes or a
+// file:// URL. Returns nil on multi-line input, oversized input, or
+// text that is not an absolute, ./-relative or ~/ path either way.
+// The caller stats each in order and keeps the first regular file,
+// so a name that really contains a backslash is never rewritten into
+// another file's.
+func filePathCandidates(text string) []string {
 	s := strings.TrimSpace(text)
 	if s == "" || strings.ContainsAny(s, "\n\r") || len(s) > 4096 {
-		return "", false
+		return nil
 	}
+	var out []string
+	for _, c := range []string{s, unshellPath(s)} {
+		if p, ok := resolveFilePath(c); ok && !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// resolveFilePath expands and cleans one path reading of clipboard
+// text. Returns ok=false on non-absolute and non-./-relative paths, or
+// paths that don't expand. The caller is responsible for the os.Stat /
+// IsRegular check and the size check.
+func resolveFilePath(s string) (string, bool) {
 	if strings.HasPrefix(s, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -4879,6 +5147,56 @@ func resolveFilePath(text string) (string, bool) {
 		return "", false
 	}
 	return filepath.Clean(s), true
+}
+
+// unshellPath undoes the quoting a terminal applies when it pastes or
+// drops a file, so the path reaches resolveFilePath as it is on disk.
+// Terminals make a dropped path safe to paste into a shell, each in
+// its own way: Ghostty and iTerm2 escape spaces with backslashes
+// (`/a/My\ File.pdf`), others wrap the path in single quotes
+// (`'/a/My File.pdf'`, an apostrophe inside closing, escaping and
+// reopening the quotes), and some
+// paste a file URL (`file:///a/My%20File.pdf`). Text that is none of
+// these comes back unchanged.
+func unshellPath(s string) string { return unshellPathSep(s, filepath.Separator) }
+
+// unshellPathSep is unshellPath for a given path separator, so tests
+// can cover Windows from any OS.
+func unshellPathSep(s string, sep byte) string {
+	if strings.HasPrefix(s, "file://") {
+		if u, err := url.Parse(s); err == nil && u.Path != "" && (u.Host == "" || u.Host == "localhost") {
+			return u.Path
+		}
+		return s
+	}
+	if len(s) >= 2 && s[0] == '\'' && s[len(s)-1] == '\'' {
+		return strings.ReplaceAll(s[1:len(s)-1], `'\''`, "'")
+	}
+	// A backslash is a path separator on Windows, never an escape.
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		if sep != '/' {
+			return s[1 : len(s)-1]
+		}
+		return unescapeBackslashes(s[1 : len(s)-1])
+	}
+	if sep == '/' && strings.Contains(s, `\`) {
+		return unescapeBackslashes(s)
+	}
+	return s
+}
+
+// unescapeBackslashes drops the backslash in front of every escaped
+// character (`\ ` → ` `, `\\` → `\`). A trailing lone backslash stays.
+func unescapeBackslashes(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			i++
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
 
 // scheduleChannelSearch defers a channels/search for the finder's

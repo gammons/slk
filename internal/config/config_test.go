@@ -647,6 +647,100 @@ theme = "dracula"
 	}
 }
 
+func TestLoadMergesTeamIDStateIntoNamedWorkspace(t *testing.T) {
+	// The shape #499 leaves on disk: a slug block with team_id, and a
+	// second block keyed by that team id holding only state slk wrote
+	// (version_ts, and theme / sidebar_width when those were saved the
+	// same way). Startup should fold the state into the named block.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	data := []byte(`
+[workspaces.my-company]
+team_id = "T01ABCDEF"
+theme = "nord"
+
+[workspaces.T01ABCDEF]
+version_ts = "1795162663"
+sidebar_width = 28
+theme = "dracula"
+
+[workspaces.other]
+team_id = "T02OOOOOO"
+`)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, ok := cfg.Workspaces["T01ABCDEF"]; ok {
+		t.Fatalf("team-id block still present: %+v", cfg.Workspaces)
+	}
+	ws, ok := cfg.Workspaces["my-company"]
+	if !ok {
+		t.Fatalf("named workspace missing: %+v", cfg.Workspaces)
+	}
+	if ws.TeamID != "T01ABCDEF" || ws.VersionTS != "1795162663" || ws.SidebarWidth != 28 || ws.Theme != "nord" {
+		t.Fatalf("workspace = %+v, want team T01ABCDEF, version_ts 1795162663, sidebar 28, theme nord (named wins)", ws)
+	}
+	if other := cfg.Workspaces["other"]; other.TeamID != "T02OOOOOO" {
+		t.Fatalf("other workspace = %+v", other)
+	}
+}
+
+func TestLoadMergedTeamIDBlockResolvesDefaultWorkspace(t *testing.T) {
+	// default_workspace may name the team-id key the fold removes.
+	// It still has to resolve to that workspace.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	data := []byte(`
+[general]
+default_workspace = "T01ABCDEF"
+
+[workspaces.my-company]
+team_id = "T01ABCDEF"
+
+[workspaces.T01ABCDEF]
+version_ts = "1795162663"
+`)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got, err := cfg.TeamIDForDefaultWorkspace()
+	if err != nil {
+		t.Fatalf("TeamIDForDefaultWorkspace: %v", err)
+	}
+	if got != "T01ABCDEF" {
+		t.Fatalf("default team = %q, want T01ABCDEF", got)
+	}
+}
+
+func TestLoadRefusesTeamIDBlockThatHasUserConfig(t *testing.T) {
+	// A team-id block with something a person configures is a real
+	// conflict, not the state-only duplicate first setup writes.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	data := []byte(`
+[workspaces.my-company]
+team_id = "T01ABCDEF"
+
+[workspaces.T01ABCDEF]
+version_ts = "1795162663"
+order = 1
+`)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for a team-id block that sets order")
+	}
+}
+
 func TestLoadWorkspacesDuplicateTeamID(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
@@ -1185,6 +1279,22 @@ func TestConfig_ThreadAvatars(t *testing.T) {
 	}
 }
 
+func TestConfig_ShowWorkspaceRail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	for body, want := range map[string]bool{"": true, "[appearance]\nshow_workspace_rail = false\n": false} {
+		if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Appearance.ShowWorkspaceRail != want {
+			t.Errorf("config %q: show_workspace_rail = %v, want %v", body, cfg.Appearance.ShowWorkspaceRail, want)
+		}
+	}
+}
+
 // hide_deactivated_users is a plain bool that defaults to on: Load decodes
 // over Default(), so an explicit false must still read back.
 func TestConfig_HideDeactivatedUsers(t *testing.T) {
@@ -1267,5 +1377,29 @@ func TestImageLoading(t *testing.T) {
 	cfg := loadConfigString(t, "[general]\ntrusted_image_hosts = [\"githubassets.com\"]\n")
 	if got := cfg.General.TrustedImageHosts; len(got) != 1 || got[0] != "githubassets.com" {
 		t.Errorf("trusted_image_hosts = %v", got)
+	}
+}
+
+func TestResolveDefaultChannel(t *testing.T) {
+	c := Config{Workspaces: map[string]Workspace{
+		"acme": {TeamID: "T01", DefaultChannel: " #42_all "},
+		"beta": {TeamID: "T02"},
+	}}
+	if got := c.ResolveDefaultChannel("T01"); got != "#42_all" {
+		t.Errorf("ResolveDefaultChannel(T01) = %q, want #42_all", got)
+	}
+	if got := c.ResolveDefaultChannel("T02"); got != "" {
+		t.Errorf("ResolveDefaultChannel(T02) = %q, want empty", got)
+	}
+	if got := c.ResolveDefaultChannel("TMISSING"); got != "" {
+		t.Errorf("ResolveDefaultChannel(TMISSING) = %q, want empty", got)
+	}
+}
+
+// default_channel reads back from a config file, per workspace.
+func TestConfig_DefaultChannel(t *testing.T) {
+	cfg := loadConfigString(t, "[workspaces.acme]\nteam_id = \"T01ABCDEF\"\ndefault_channel = \"#general\"\n")
+	if got := cfg.ResolveDefaultChannel("T01ABCDEF"); got != "#general" {
+		t.Errorf("default_channel = %q, want #general", got)
 	}
 }

@@ -31,9 +31,6 @@ type peerStatusTickMsg struct{}
 
 const peerStatusTickInterval = time.Minute
 
-// dmTopicLayout formats a DND end time in the DM header.
-const dmTopicLayout = "15:04"
-
 func peerStatusTick() tea.Cmd {
 	return tea.Tick(peerStatusTickInterval, func(time.Time) tea.Msg {
 		return peerStatusTickMsg{}
@@ -367,7 +364,7 @@ func (p *presenceController) pushDMStatus(a *App, userID string, now time.Time) 
 		}
 		a.channelFinder.SetStatus(item.ID, item.Status)
 		for _, mp := range a.modelsForChannel(item.ID) {
-			mp.SetDMTopic(item.Status, now, dmTopicLayout)
+			mp.SetDMTopic(item.Status, now, messages.TimestampLayout())
 		}
 	}
 }
@@ -379,8 +376,8 @@ func (p *presenceController) setChannelHeader(a *App, mp *messages.Model, name, 
 	for _, item := range a.sidebar.Items() {
 		if item.ID == channelID && item.DMUserID != "" {
 			now := time.Now()
-			mp.SetChannel(name, item.Status.Summary(now, dmTopicLayout))
-			mp.SetDMTopic(item.Status, now, dmTopicLayout)
+			mp.SetChannel(name, item.Status.Summary(now, messages.TimestampLayout()))
+			mp.SetDMTopic(item.Status, now, messages.TimestampLayout())
 			return
 		}
 	}

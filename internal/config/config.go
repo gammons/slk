@@ -125,6 +125,11 @@ type Appearance struct {
 	// ThreadAvatars also draws avatars in the thread pane (needs
 	// ShowAvatars). Default on.
 	ThreadAvatars bool `toml:"thread_avatars"`
+	// ShowWorkspaceRail draws the workspace rail on the left. false hides
+	// it at startup (ctrl+g toggles it), and the status bar then shows the
+	// active workspace's initials. With one workspace the rail is never
+	// drawn. Default on.
+	ShowWorkspaceRail bool `toml:"show_workspace_rail"`
 	// ImageProtocol controls how inline images are rendered.
 	// One of: "auto", "kitty", "sixel", "halfblock", "off".
 	ImageProtocol string `toml:"image_protocol"`
@@ -303,12 +308,45 @@ type Workspace struct {
 	// workspace. Nil means "fall through to global".
 	UseSlackSections *bool                 `toml:"use_slack_sections"`
 	Sections         map[string]SectionDef `toml:"sections"`
+	// DefaultChannel names the channel opened the first time this
+	// workspace is shown in a session (at startup, or on the first
+	// switch to it), e.g. "general" or "#general", matched by
+	// core.ChannelNameMatcher. It wins over the persisted last-visited
+	// channel; later switches back to the workspace restore the channel
+	// last viewed in the session, or the default when that one is gone.
+	// Empty, or a name that matches no sidebar channel, keeps the
+	// default behavior.
+	DefaultChannel string `toml:"default_channel"`
 	// VersionTS caches the Slack build timestamp last reported by
 	// client.shouldReload, sent as _x_version_ts on every workspace-API
 	// request. Empty means "use the compiled-in fallback and refresh on
 	// boot". Persisted so the second and later runs start with a
 	// current value rather than a stale compiled-in one.
 	VersionTS string `toml:"version_ts"`
+	// Suppress hides authors' messages in this workspace, from
+	// [[workspaces.<key>.suppress]] blocks. slk appends and removes
+	// these blocks itself (the :suppress and :suppressed commands).
+	Suppress []SuppressRule `toml:"suppress"`
+}
+
+// SuppressRule is one [[workspaces.<key>.suppress]] block: hide
+// Author's messages in Channel, or in the whole workspace when Channel
+// is empty. Both are Slack IDs (an author is a user ID, or a bot ID
+// for a bot that posts without a user). Note is free text for people
+// reading the file.
+type SuppressRule struct {
+	Author  string `toml:"author"`
+	Channel string `toml:"channel"`
+	Note    string `toml:"note"`
+}
+
+// SuppressRules converts w's rules to the set the app matches against.
+func (w Workspace) SuppressRules() *core.Suppression {
+	rules := make([]core.SuppressRule, 0, len(w.Suppress))
+	for _, r := range w.Suppress {
+		rules = append(rules, core.SuppressRule{AuthorID: r.Author, ChannelID: r.Channel, Note: r.Note})
+	}
+	return core.NewSuppression(rules)
 }
 
 // Theme is defined in internal/core, which the TUI shares.
@@ -334,6 +372,8 @@ func Default() Config {
 			ClickOpensThread: true,
 			EmojiImages:      "on",
 			EmojiCells:       2,
+			// Hidden with one workspace regardless (#216).
+			ShowWorkspaceRail: true,
 		},
 		Animations: Animations{
 			Enabled:          true,
@@ -378,6 +418,13 @@ func Load(path string) (Config, error) {
 		return cfg, err
 	}
 	cfg.Workspaces = resolved
+	for key, w := range cfg.Workspaces {
+		for i, r := range w.Suppress {
+			if strings.TrimSpace(r.Author) == "" {
+				return cfg, fmt.Errorf("workspace %q: suppress rule %d has no author", key, i+1)
+			}
+		}
+	}
 
 	// Clamp MouseWheelLines: 0 (unset, after a user supplied a partial
 	// [appearance] block without this key) and negative values both fall
@@ -472,6 +519,10 @@ func (c Config) WorkspaceByTeamID(teamID string) (Workspace, bool) {
 // or a legacy team-ID-shaped key. Returns ("", nil) if default_workspace
 // is unset, and an error if it is set but does not match any
 // configured workspace.
+//
+// A team-id key that load folded into its slug is no longer a map key.
+// When default_workspace still names that key, the team id itself
+// identifies the workspace that survived.
 func (c Config) TeamIDForDefaultWorkspace() (string, error) {
 	key := c.General.DefaultWorkspace
 	if key == "" {
@@ -479,6 +530,11 @@ func (c Config) TeamIDForDefaultWorkspace() (string, error) {
 	}
 	if ws, ok := c.Workspaces[key]; ok {
 		return ws.TeamID, nil
+	}
+	if isTeamIDKey(key) {
+		if ws, ok := c.WorkspaceByTeamID(key); ok {
+			return ws.TeamID, nil
+		}
 	}
 	return "", fmt.Errorf("default_workspace %q not found in [workspaces.*]", key)
 }
@@ -595,6 +651,16 @@ func (c Config) ResolveWidth(teamID string) int {
 		return c.Sidebar.Width
 	}
 	return 30
+}
+
+// ResolveDefaultChannel returns the workspace's configured
+// default_channel, trimmed of surrounding spaces, or "" when none is set.
+// A leading "#" is left for core.ChannelNameMatcher to ignore.
+func (c Config) ResolveDefaultChannel(teamID string) string {
+	if ws, ok := c.WorkspaceByTeamID(teamID); ok {
+		return strings.TrimSpace(ws.DefaultChannel)
+	}
+	return ""
 }
 
 // ResolveTheme returns the theme name to use for the given workspace,

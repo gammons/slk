@@ -191,6 +191,16 @@ func (p *Preview) SwapImage(in PreviewInput) {
 	p.memoValid = false
 }
 
+// InvalidateMemo drops the encoded-image memo, so the next View
+// re-encodes at the current cell metrics. Call it when the terminal's
+// cell size in pixels changed: the memo is keyed by file, protocol and
+// cell target, none of which notice that the pixels per cell moved, so
+// a preview open across the change would keep painting bytes sized for
+// the old cells.
+func (p *Preview) InvalidateMemo() {
+	p.memoValid = false
+}
+
 // renderImage returns the encoded render for target, reusing the memo
 // when the image, target and protocol are all unchanged. See the memo
 // fields on Preview for why this matters.

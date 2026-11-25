@@ -10,6 +10,7 @@ import (
 
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/emoji"
+	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/peerstatus"
 )
 
@@ -209,6 +210,30 @@ func TestView_DNDTimeUsesLiveNowZone(t *testing.T) {
 	}
 	if !containsNone(out, "4:00 AM") {
 		t.Errorf("DND end time must not render in UTC:\n%s", ansi.Strip(out))
+	}
+}
+
+// The DND end clock follows appearance.timestamp_format through
+// messages.TimestampLayout, like every other clock in the TUI.
+func TestView_DNDTimeFollowsTimestampFormat(t *testing.T) {
+	previous := messages.TimestampLayout()
+	messages.SetDateTokenTimeLayout("15:04")
+	t.Cleanup(func() { messages.SetDateTokenTimeLayout(previous) })
+
+	m := New()
+	m.Open(Seed{TeamID: "T1", UserID: "U1", DisplayName: "Priya"})
+
+	loc := time.FixedZone("JST", 9*3600)
+	now := time.Date(2026, 9, 30, 10, 0, 0, 0, loc)
+	live := Live{
+		Now: now,
+		Status: peerstatus.Status{
+			DND: true, DNDEnd: now.Add(3 * time.Hour), // 13:00 JST
+		},
+	}
+	out := m.ViewOverlay(80, 30, "", live)
+	if !containsAll(out, "Do not disturb until 13:00") {
+		t.Errorf("DND end time should follow the configured layout (13:00 JST), got:\n%s", ansi.Strip(out))
 	}
 }
 

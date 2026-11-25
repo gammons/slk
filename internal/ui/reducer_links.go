@@ -70,9 +70,23 @@ func (p *pendingLinkNav) wrapThreadLoad(cmd tea.Cmd, authoritative bool, loads i
 }
 
 var reduceLinks reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
+	if dropped, ok := msg.(finderPermalinkDroppedMsg); ok {
+		// The workspace switch the finder asked for produced nothing.
+		// A newer paste has its own request; leave that one waiting.
+		if a.pendingFinderPermalink == nil || dropped.Seq != a.pendingFinderPermalink.seq {
+			return nil, true
+		}
+		a.clearFinderPermalink()
+		return a.browserOpener(dropped.URL), true
+	}
 	m, ok := msg.(OpenLinkMsg)
 	if !ok {
 		return nil, false
+	}
+	// slk's own slack:// links (a #channel mention, say) never leave
+	// the app and never go through the external-link confirmation.
+	if cmd, handled := a.openInternalLink(m.URL); handled {
+		return cmd, true
 	}
 	if !m.Confirmed && !opensWithoutConfirm(m.URL) {
 		// file:, ssh: and the like hand the target to the OS launcher, and

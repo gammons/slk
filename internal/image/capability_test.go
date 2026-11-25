@@ -130,6 +130,7 @@ func TestDetect_KittyByEnvVar(t *testing.T) {
 		{KittyWindowID: "1"},
 		{Term: "xterm-kitty"},
 		{TermProgram: "ghostty"},
+		{TermProgram: "rex"},
 	}
 	for i, env := range cases {
 		if got := Detect(env, "auto"); got != ProtoKitty {

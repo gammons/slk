@@ -26,6 +26,7 @@ func (emptyFetcher) Prerendered(string, image.Point, imgpkg.Protocol) (imgpkg.Re
 }
 func (emptyFetcher) ConfigurePrerender(imgpkg.Protocol)            {}
 func (emptyFetcher) ConfigurePrerenderKitty(*imgpkg.KittyRenderer) {}
+func (emptyFetcher) InvalidatePrerender()                          {}
 
 // A file image the policy holds back draws one "not loaded" line and
 // starts no fetch; with image_loading = "off" it is the plain [Image]

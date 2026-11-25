@@ -63,6 +63,17 @@ func (p *imagePreviewController) Active() bool {
 	return p.overlay != nil && !p.overlay.IsClosed()
 }
 
+// InvalidateMemo drops the overlay's encoded-image memo, so the next
+// View re-encodes at the current cell metrics. Call it when the
+// terminal's cell size in pixels changed: the memo is keyed by file,
+// protocol and cell target, none of which notice that the pixels per
+// cell moved. No-op when no preview overlay is open.
+func (p *imagePreviewController) InvalidateMemo() {
+	if p.overlay != nil {
+		p.overlay.InvalidateMemo()
+	}
+}
+
 // Overlay returns the current preview overlay, or nil when no preview
 // is open. Callers that only need to query Active() should prefer it.
 func (p *imagePreviewController) Overlay() *imgpkg.Preview { return p.overlay }

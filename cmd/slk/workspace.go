@@ -5,11 +5,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/service"
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slack/edge"
 	"github.com/gammons/slk/internal/slack/membership"
+	"github.com/gammons/slk/internal/ui"
 	"github.com/gammons/slk/internal/ui/sidebar"
 )
 
@@ -59,6 +62,20 @@ type WorkspaceContext struct {
 	// with WS hydration and item construction, so this must not be a plain
 	// map. Use MarkBotUser/IsBotUser; sync.Map's zero value is ready for use.
 	botUserIDs sync.Map // user ID -> struct{}; positive classifications only
+	// conversationIDs holds this workspace's known conversation IDs -
+	// every entry of Channels, published at each write. Channels itself
+	// is a plain slice written on the connect goroutine and the
+	// WebSocket event owner, so readers off those goroutines (the
+	// Activity fetch's org-wide feed filter) must not touch it; this
+	// set is the race-safe projection. The set's lifetime mirrors the
+	// rows': both are grow-only during a session (a conversation the
+	// user leaves keeps its row until the next connect rebuilds the
+	// list, so it also keeps passing the filter - the filter and the
+	// sidebar agree). Use MarkConversation / HasConversation;
+	// sync.Map's zero value is ready for use, and empty means "still
+	// booting", which callers treat as no-filter-yet rather than
+	// no-conversations.
+	conversationIDs sync.Map // channel ID -> struct{}
 	// SectionStore holds the user's Slack-native sidebar sections for
 	// this workspace. Nil when use_slack_sections is disabled, the
 	// REST bootstrap failed, or this workspace hasn't connected yet.
@@ -136,6 +153,12 @@ type WorkspaceContext struct {
 	// meanwhile make it fetch once more instead of starting their own.
 	emojiRefetching     bool
 	emojiRefetchPending bool
+	// appCommands is this workspace's slash commands from
+	// client.appCommands. Access it via AppCommands/SetAppCommands.
+	// The slice is published whole and never mutated. Nil until the
+	// fetch lands; a failed fetch leaves it nil, so chat.command omits
+	// team_id and the slash picker stays closed.
+	appCommands atomic.Pointer[[]core.SlashCommand]
 	// userGroups holds this workspace's usergroup ID -> handle map.
 	// Access it via UserGroups/SetUserGroups, never directly.
 	//
@@ -147,6 +170,17 @@ type WorkspaceContext struct {
 	// The stored map is published once and never mutated afterwards, so
 	// readers need no further synchronization.
 	userGroups atomic.Pointer[map[string]string]
+	// userGroupsMu serializes MergeUserGroups so the usergroups.list
+	// fetch and the subteams.info resolver can't drop each other's
+	// entries. Readers don't take it.
+	userGroupsMu sync.Mutex
+	// userGroupsPubMu serializes PublishUserGroups, so the last
+	// UserGroupsLoadedMsg sent always carries the newest map.
+	userGroupsPubMu sync.Mutex
+	// Subteams resolves usergroups mentioned in messages that
+	// usergroups.list did not return. Nil in tests; its methods are
+	// nil-safe.
+	Subteams *subteamResolver
 	// selfUserGroups is the IDs of the usergroups the user is in,
 	// published alongside userGroups and read the same way.
 	selfUserGroups atomic.Pointer[map[string]bool]
@@ -206,6 +240,42 @@ func (w *WorkspaceContext) MarkBotUser(userID string) {
 	}
 }
 
+// HasConversation reports whether channelID is one of this workspace's
+// known conversations. Safe from any goroutine; a nil workspace or a
+// channel not (yet) known returns false.
+func (w *WorkspaceContext) HasConversation(channelID string) bool {
+	if w == nil {
+		return false
+	}
+	_, ok := w.conversationIDs.Load(channelID)
+	return ok
+}
+
+// HasAnyConversation reports whether this workspace knows any
+// conversation yet. Safe from any goroutine; false means the
+// conversation set is still empty (typically still booting), which
+// callers treat as not-enough-information rather than as an answer.
+func (w *WorkspaceContext) HasAnyConversation() bool {
+	if w == nil {
+		return false
+	}
+	found := false
+	w.conversationIDs.Range(func(_, _ any) bool {
+		found = true
+		return false
+	})
+	return found
+}
+
+// MarkConversation records a conversation as belonging to this
+// workspace, alongside every write to the Channels slice. Safe from any
+// goroutine; nil workspaces and empty IDs are ignored.
+func (w *WorkspaceContext) MarkConversation(channelID string) {
+	if w != nil && channelID != "" {
+		w.conversationIDs.Store(channelID, struct{}{})
+	}
+}
+
 // UserGroups returns this workspace's usergroup ID -> handle map, or an
 // empty map before usergroups.list has returned. Safe to call from any
 // goroutine; the result must be treated as read-only.
@@ -219,7 +289,42 @@ func (w *WorkspaceContext) UserGroups() map[string]string {
 // SetUserGroups publishes a usergroup ID -> handle map for this
 // workspace. The caller must not mutate the map afterwards.
 func (w *WorkspaceContext) SetUserGroups(groups map[string]string) {
+	w.userGroupsMu.Lock()
+	defer w.userGroupsMu.Unlock()
 	w.userGroups.Store(&groups)
+}
+
+// PublishUserGroups sends the current usergroup maps to the UI. Each
+// send reads the maps under the same lock, so two writers can't leave
+// the UI on the older of their snapshots.
+func (w *WorkspaceContext) PublishUserGroups(send func(tea.Msg)) {
+	if send == nil {
+		return
+	}
+	w.userGroupsPubMu.Lock()
+	defer w.userGroupsPubMu.Unlock()
+	send(ui.UserGroupsLoadedMsg{
+		TeamID:         w.TeamID,
+		UserGroups:     w.UserGroups(),
+		SelfUserGroups: w.SelfUserGroups(),
+	})
+}
+
+// MergeUserGroups publishes the current map with add's entries on top
+// and returns the result, which the caller must treat as read-only.
+func (w *WorkspaceContext) MergeUserGroups(add map[string]string) map[string]string {
+	w.userGroupsMu.Lock()
+	defer w.userGroupsMu.Unlock()
+	cur := w.UserGroups()
+	merged := make(map[string]string, len(cur)+len(add))
+	for id, h := range cur {
+		merged[id] = h
+	}
+	for id, h := range add {
+		merged[id] = h
+	}
+	w.userGroups.Store(&merged)
+	return merged
 }
 
 // SelfUserGroups returns the IDs of the usergroups the user is in, or
@@ -251,6 +356,32 @@ func (w *WorkspaceContext) CustomEmoji() map[string]string {
 // afterwards.
 func (w *WorkspaceContext) SetCustomEmoji(emojis map[string]string) {
 	w.customEmoji.Store(&emojis)
+}
+
+// AppCommands returns this workspace's slash commands, or nil before
+// client.appCommands has landed. The result must be treated as read-only.
+func (w *WorkspaceContext) AppCommands() []core.SlashCommand {
+	if w == nil {
+		return nil
+	}
+	if p := w.appCommands.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// SetAppCommands publishes the workspace's slash commands. The stored
+// slice is a copy, so the caller may reuse cmds.
+func (w *WorkspaceContext) SetAppCommands(cmds []core.SlashCommand) {
+	if w == nil {
+		return
+	}
+	var stored []core.SlashCommand
+	if cmds != nil {
+		stored = make([]core.SlashCommand, len(cmds))
+		copy(stored, cmds)
+	}
+	w.appCommands.Store(&stored)
 }
 
 // workspaceRouter is the program-wide registry of connected

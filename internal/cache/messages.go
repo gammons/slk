@@ -208,6 +208,27 @@ func (db *DB) GetMessagesSince(channelID, sinceTS string) ([]Message, error) {
 		ORDER BY ts ASC`, channelID, sinceTS)
 }
 
+// GetMessagesBetween returns the cached main-feed messages with
+// fromTS <= ts <= toTS, oldest first; an empty toTS has no upper bound.
+// The row-shape filter matches GetMessages. Its caller reloads a pane
+// across exactly the range of history it has loaded.
+func (db *DB) GetMessagesBetween(channelID, fromTS, toTS string) ([]Message, error) {
+	if fromTS == "" {
+		return nil, nil
+	}
+	query := `
+		SELECT ts, channel_id, workspace_id, user_id, text, thread_ts, reply_count, edited_at, is_deleted, raw_json, created_at, subtype
+		FROM messages
+		WHERE channel_id = ? AND is_deleted = 0 AND ts >= ?
+		  AND (thread_ts = '' OR thread_ts = ts OR subtype = 'thread_broadcast')`
+	args := []any{channelID, fromTS}
+	if toTS != "" {
+		query += " AND ts <= ?"
+		args = append(args, toTS)
+	}
+	return db.queryMessages(query+" ORDER BY ts ASC", args...)
+}
+
 // GetMessage returns the message with the given (channel_id, ts) primary
 // key. Returns sql.ErrNoRows if no such message exists.
 func (db *DB) GetMessage(channelID, ts string) (Message, error) {
@@ -303,4 +324,26 @@ func (db *DB) queryMessages(query string, args ...any) ([]Message, error) {
 		messages = append(messages, m)
 	}
 	return messages, rows.Err()
+}
+
+// SubteamMentionTexts returns the text of the workspace's cached,
+// undeleted messages that mention a usergroup, so their handles can be
+// resolved before the messages are next shown.
+func (db *DB) SubteamMentionTexts(workspaceID string) ([]string, error) {
+	rows, err := db.conn.Query(`
+		SELECT text FROM messages
+		WHERE workspace_id = ? AND is_deleted = 0 AND text LIKE '%<!subteam^%'`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var texts []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		texts = append(texts, t)
+	}
+	return texts, rows.Err()
 }

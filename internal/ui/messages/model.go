@@ -38,53 +38,96 @@ type (
 // AvatarFunc returns the rendered half-block avatar for a user ID, or empty string.
 type AvatarFunc func(userID string) string
 
+// SixelAvatarFunc returns a user's avatar as sixel bytes and the key
+// that identifies them to the painter, or ok false when there is none:
+// not on a sixel terminal, or not loaded yet. The pane still draws the
+// AvatarFunc avatar wherever the sixel one cannot be painted.
+type SixelAvatarFunc func(userID string) (key string, bytes []byte, ok bool)
+
 // EntryPayload is a content pane's payload for one entry of its list,
 // index-aligned with the list's entries: the parts the substrate does
 // not need. A nil cache of payloads means the render cache was discarded
 // and the next View rebuilds it. Both panes use it.
 type EntryPayload struct {
-	// ShortSrc is the selected row's content with the short timestamp,
-	// set only when the selected variant carries a long one;
-	// SelectedShort is built from it on demand (SelectedLines) and
-	// shown while a text selection exists, because the drag overlay
-	// splices the short-form plain text into the row by column.
+	// SelSrc is the content the selected row is built from. Selected
+	// (and SelectedShort, while a text selection exists) are built on
+	// demand by SelectedLines, because only the cursor row is drawn
+	// that way. ShortSrc is the short-timestamp form of SelSrc, set
+	// only when they differ: the drag overlay splices the short-form
+	// plain text into the row by column.
+	SelSrc        string
 	ShortSrc      string
 	SelectedShort []string
+	selected      []string
+	selectedFocus bool
+	shortFocus    bool
 
 	// Flushes are per-frame kitty image uploads, invoked once per frame
 	// for visible entries. nil when the entry has no inline images.
 	Flushes []func(io.Writer) error
 
-	// sixelRows are the sixel images in this entry. Several can share a
+	// SixelRows are the sixel images in this entry. Several can share a
 	// row (a message's images sit side by side), so this is not keyed
-	// by the row. View paints an image out-of-band when it is fully
-	// visible and substitutes its halfblock fallback otherwise. Only
-	// the channel pane fills it.
-	sixelRows []sixelEntry
+	// by the row. PlaceSixel paints an image out-of-band when it is
+	// fully visible and substitutes its halfblock fallback otherwise.
+	// Both panes fill it from RenderedMessage.SixelRows.
+	SixelRows []SixelImage
 }
 
 // SelectedLines returns the rows to draw for a cursor entry e: its
 // selected variant, or (while a text selection exists) the short-
-// timestamp variant built once from ShortSrc by build. Rows past the
-// short variant (the channel pane's spacer) are shared by every variant.
-func (p *EntryPayload) SelectedLines(e *entrylist.Entry, hasSelection bool, build func(src string) []string) []string {
-	if !hasSelection || p.ShortSrc == "" {
-		return e.Selected
+// timestamp variant built once from ShortSrc by build. focused is part
+// of the memo, so a focus change repaints the cursor row in the new
+// colour without rebuilding the rest of the pane. Rows past the
+// message (the channel pane's spacer) are the unselected row's own
+// tail, shared by every variant.
+func (p *EntryPayload) SelectedLines(e *entrylist.Entry, hasSelection, focused bool, build func(src string) []string) []string {
+	short := hasSelection && p.ShortSrc != ""
+	src := p.SelSrc
+	if short {
+		src = p.ShortSrc
 	}
-	if p.SelectedShort == nil {
-		short := build(p.ShortSrc)
-		if len(short) > len(e.Selected) {
-			return e.Selected // unreachable: variants share a height
+	if src == "" {
+		if len(e.Selected) > 0 {
+			return e.Selected
 		}
-		p.SelectedShort = append(short, e.Selected[len(short):]...)
+		return e.Lines
 	}
-	return p.SelectedShort
+	if short {
+		if p.SelectedShort != nil && p.shortFocus == focused {
+			return p.SelectedShort
+		}
+		p.SelectedShort = withTrail(build(src), e)
+		p.shortFocus = focused
+		return p.SelectedShort
+	}
+	if p.selected != nil && p.selectedFocus == focused {
+		return p.selected
+	}
+	p.selected = withTrail(build(src), e)
+	p.selectedFocus = focused
+	return p.selected
 }
 
-// sixelEntry holds the pre-computed sixel bytes for one inline image,
-// plus the halfblock fallback used when the image is only partially
-// visible (Phase 6 cannot emit a half-image with sixel).
-type sixelEntry struct {
+// withTrail appends the entry's trailing spacer rows (the channel
+// pane's blank line) so the selected variant stays the same height as
+// Lines. The spacer is not restyled.
+func withTrail(rows []string, e *entrylist.Entry) []string {
+	if e == nil || e.Trail <= 0 || len(rows) >= len(e.Lines) || len(e.Lines) < e.Trail {
+		return rows
+	}
+	tail := e.Lines[len(e.Lines)-e.Trail:]
+	out := make([]string, 0, len(rows)+len(tail))
+	out = append(out, rows...)
+	return append(out, tail...)
+}
+
+// SixelImage holds the pre-computed sixel bytes for one inline image
+// (or avatar), plus the halfblock fallback used when the image is only
+// partially visible (sixel cannot emit a half-image). RenderMessage
+// fills it; a pane carries it opaque in EntryPayload and hands it to
+// PlaceSixel.
+type SixelImage struct {
 	key      string // stable image cache key; empty -> payload-hash identity
 	bytes    []byte
 	fallback []string // halfblock-equivalent text for partial-visibility frames
@@ -106,6 +149,15 @@ type OpenImagePreviewMsg struct {
 }
 
 type Model struct {
+	// hide drops a suppressed author's messages as they arrive (SetHide).
+	hide func(MessageItem) bool
+	// hiddenOldest is the oldest TS among hidden messages older than
+	// the buffer, so OldestTS (the older-history cursor) moves past a
+	// page that was all hidden instead of fetching it forever.
+	hiddenOldest string
+	// hiddenNewest is the newest TS among hidden messages, so NewestTS
+	// covers the range the pane has loaded.
+	hiddenNewest string
 	// sixelPaints is the placement set produced by the last View, consumed
 	// by the App's out-of-band painter. See imgpkg.SixelPaint.
 	sixelPaints []imgpkg.SixelPaint
@@ -122,6 +174,7 @@ type Model struct {
 	loading       bool
 	spinnerFrame  int                          // braille-spinner frame index for "Loading messages..." animation
 	avatarFn      AvatarFunc                   // optional: returns half-block avatar for a userID
+	sixelAvatarFn SixelAvatarFunc              // optional: the avatar as sixel, on a sixel terminal
 	replyAvatarFn AvatarFunc                   // optional: small avatar for the reply row
 	userNames     map[string]string            // user ID -> display name for mention resolution
 	userStatuses  map[string]peerstatus.Status // user ID -> custom status shown after author names
@@ -135,9 +188,12 @@ type Model struct {
 	// Render cache -- invalidated when messages or width change.
 	// Each entry holds pre-bordered variants so selection movement does not
 	// re-invoke lipgloss per keypress.
-	cache          []EntryPayload
-	cacheWidth     int
-	cacheMsgLen    int
+	cache       []EntryPayload
+	cacheWidth  int
+	cacheMsgLen int
+	// dropReason names the last dropCache caller, so a cache-nil rebuild
+	// in the perf log says why the cache was discarded.
+	dropReason     string
 	cacheSpacer    string // pre-rendered blank spacer line (1 row, full width, themed background)
 	cacheMoreBelow string // pre-rendered "-- more below --" line
 
@@ -156,6 +212,11 @@ type Model struct {
 	chromeDMTopic     dmTopic
 	chromeChannelType string
 	chromeCacheValid  bool
+	// channelStarred is the active channel's star state, drawn as the
+	// glyph at the header line's right end and clickable to toggle
+	// (star-conversations design §Mouse). Pushed by the App whenever
+	// the active channel or its star changes.
+	channelStarred bool
 
 	nav ReactionNav
 
@@ -281,24 +342,26 @@ func (m *Model) SetCursorHighlight(on bool) {
 }
 
 // HandleEmojiImageReady is invoked by the host (App.Update) when an
-// emoji.EmojiImageReadyMsg lands. The same emoji can appear in any
-// visible message, reaction pill, or block-kit element — so the
-// cheapest correct invariant is a wholesale render-cache
-// invalidation. The next View() rebuilds with the now-warm emoji
-// placement (single kitty transmit + N placements per the
-// registry's dedup contract).
-//
-// v1 keeps this coarse; if heavy-emoji channels show measurable
-// invalidation churn (multiple emoji arriving in a burst), a future
-// follow-up can index per-URL → per-message-TS for targeted
-// staleEntries population. Punt for now: kitty image placements are
-// cheap, full re-render of a viewport is sub-frame on the workloads
-// tested.
+// emoji image fetch lands. Only messages that draw that URL are
+// rebuilt; an emoji that belongs to another surface (the sidebar, the
+// picker, a different channel) must not drop this pane's cache. An
+// empty URL is the legacy "something arrived, we don't know what"
+// signal and still rebuilds the whole pane. A DM header may show the
+// emoji as its topic, so that chrome is always dropped.
 func (m *Model) HandleEmojiImageReady(url string) {
-	debuglog.ImgFetch("messages.HandleEmojiImageReady: url=%s wholesale_invalidate", url)
-	m.dropCache()
+	debuglog.ImgFetch("messages.HandleEmojiImageReady: url=%s", url)
 	m.dropDMTopicChrome()
-	m.dirty()
+	if url == "" || m.cache == nil {
+		m.dropCache("HandleEmojiImageReady")
+		m.dirty()
+		return
+	}
+	marked := m.markWhere("HandleEmojiImageReady", func(msg MessageItem) bool {
+		return messageUsesEmojiURL(msg, m.userStatuses, m.emojiCtx.Customs, url)
+	})
+	if marked || m.dmTopic != (dmTopic{}) {
+		m.dirty()
+	}
 }
 
 // HandleImageReady is invoked by the host (App.Update) when an
@@ -334,7 +397,7 @@ func (m *Model) HandleImageReady(channel, ts, key string) {
 		// back to the wholesale invalidation that the new fast path
 		// is meant to avoid. Used by tests that drive transitions
 		// synchronously without a real fetch key.
-		m.dropCache()
+		m.dropCache("HandleImageReady")
 		if m.imgRenderer != nil {
 			m.imgRenderer.ResetFailed()
 		}
@@ -354,7 +417,7 @@ func (m *Model) HandleImageReady(channel, ts, key string) {
 	} else {
 		// No TS to target (or no cache to mutate): fall back to a
 		// full rebuild on the next View().
-		m.dropCache()
+		m.dropCache("HandleImageReady")
 	}
 	m.dirty()
 }
@@ -534,10 +597,31 @@ func (m *Model) dirty() { m.version++ }
 
 // dropCache discards the render cache; the next View rebuilds it. Until
 // then the entries on screen are no longer current, so clicks and
-// selections find none (the scroll extent is kept).
-func (m *Model) dropCache() {
+// selections find none (the scroll extent is kept). reason is the
+// caller, recorded for the perf log (messages.dropCache / buildCache's
+// cache-nil line). The first reason wins until that rebuild runs.
+func (m *Model) dropCache(reason string) {
+	had := m.cache != nil
 	m.cache = nil
 	m.list.KeepLookups(0)
+	if m.dropReason == "" {
+		m.dropReason = reason
+	}
+	if had {
+		debuglog.Perf("messages.dropCache reason=%s msgs=%d", reason, len(m.messages))
+	}
+}
+
+// markStale queues one message for partialRebuild. A nil cache has
+// nothing to patch; the next full build reads the current message.
+func (m *Model) markStale(ts string) {
+	if ts == "" || m.cache == nil {
+		return
+	}
+	if m.staleEntries == nil {
+		m.staleEntries = make(map[string]struct{})
+	}
+	m.staleEntries[ts] = struct{}{}
 }
 
 // newChannelList configures the substrate for the channel pane (spec
@@ -573,7 +657,7 @@ func New(msgs []MessageItem, channelName string) *Model {
 // InvalidateCache forces the render cache to be rebuilt on next View().
 // Call this after theme changes or style updates.
 func (m *Model) InvalidateCache() {
-	m.dropCache()
+	m.dropCache("InvalidateCache")
 	m.chromeCacheValid = false
 	m.dirty()
 }
@@ -596,6 +680,29 @@ func (m *Model) SetChannel(name, topic string) {
 	}
 	m.channelName = name
 	m.channelTopic = topic
+}
+
+// SetChannelStarred records the active channel's star state for the
+// header glyph (filled when starred, hollow when not) and redraws the
+// chrome when it flips.
+func (m *Model) SetChannelStarred(starred bool) {
+	if m.channelStarred == starred {
+		return
+	}
+	m.channelStarred = starred
+	m.chromeCacheValid = false
+	m.dirty()
+}
+
+// HitTestHeaderStar reports whether pane-local (px, py) is the header's
+// star glyph: the first chrome line, at the glyph's column (with its
+// padding cell, so a click on the glyph's right edge still counts).
+// The upper bound matters for split windows: a click on ANOTHER
+// window's header translates to a px past this chrome's width, and
+// without it that click would toggle this window's star. The caller
+// owns what a hit does (toggle the star).
+func (m *Model) HitTestHeaderStar(px, py int) bool {
+	return py == 0 && m.chromeWidth >= 2 && px >= m.chromeWidth-2 && px < m.chromeWidth
 }
 
 // SetChannelTopic replaces the header's second line without changing
@@ -734,9 +841,10 @@ func (m *Model) SetMessages(msgs []MessageItem) {
 		debuglog.Cache("messages.Model.SetMessages: channel=%q before=[%s] after=[%s]",
 			m.channelName, oldSummary, newSummary)
 	}
+	msgs, m.hiddenOldest, m.hiddenNewest = Visible(m.hide, msgs)
 	m.messages = msgs
 	m.ClearSelection()
-	m.dropCache()
+	m.dropCache("SetMessages")
 	// Force the next View() to re-snap yOffset to the new selection -- without
 	// this, switching to a channel that happens to have the same selected
 	// index as the previous channel would leave yOffset at its old value.
@@ -752,6 +860,10 @@ func (m *Model) SetMessages(msgs []MessageItem) {
 }
 
 func (m *Model) AppendMessage(msg MessageItem) {
+	if m.hide != nil && m.hide(msg) {
+		m.keepNewerHidden(msg.TS)
+		return
+	}
 	// Idempotent on TS. Self-sent messages take an optimistic path
 	// (MessageSentMsg from the chat.postMessage HTTP response) AND
 	// arrive again as a WebSocket echo (NewMessageMsg). The order of
@@ -768,7 +880,7 @@ func (m *Model) AppendMessage(msg MessageItem) {
 		}
 	}
 	m.messages = append(m.messages, msg)
-	m.dropCache()
+	m.dropCache("AppendMessage")
 	m.dirty()
 
 	// Always scroll to the newest message. Advancing `selected` to the
@@ -797,7 +909,7 @@ func (m *Model) SwapLocalSent(localTS string, msg MessageItem) bool {
 	for i := len(m.messages) - 1; i >= 0; i-- {
 		if m.messages[i].TS == localTS {
 			m.messages[i] = msg
-			m.dropCache()
+			m.dropCache("SwapLocalSent")
 			m.dirty()
 			// Same rationale as UpsertSelfSent's replace branch: the
 			// authoritative entry may differ in height (e.g. server-
@@ -820,7 +932,7 @@ func (m *Model) RemoveLocalSent(localTS string) bool {
 	for i := len(m.messages) - 1; i >= 0; i-- {
 		if m.messages[i].TS == localTS {
 			m.messages = append(m.messages[:i], m.messages[i+1:]...)
-			m.dropCache()
+			m.dropCache("RemoveLocalSent")
 			m.dirty()
 			m.list.ResetSnap()
 			if m.selected >= len(m.messages) && len(m.messages) > 0 {
@@ -856,7 +968,7 @@ func (m *Model) UpsertSelfSent(msg MessageItem) {
 		for i := len(m.messages) - 1; i >= 0; i-- {
 			if m.messages[i].TS == msg.TS {
 				m.messages[i] = msg
-				m.dropCache()
+				m.dropCache("UpsertSelfSent")
 				m.dirty()
 				// Force the next View() to re-snap yOffset to the
 				// updated selected entry's range, even when m.selected
@@ -867,7 +979,7 @@ func (m *Model) UpsertSelfSent(msg MessageItem) {
 		}
 	}
 	m.messages = append(m.messages, msg)
-	m.dropCache()
+	m.dropCache("UpsertSelfSent")
 	m.dirty()
 	m.selected = len(m.messages) - 1
 }
@@ -927,6 +1039,19 @@ func (m *Model) SelectByTS(ts string) bool {
 // internally by ClickAt and BeginSelectionAt.
 func (m *Model) ChromeHeight() int {
 	return m.chromeHeight
+}
+
+// ChromeWidth is the inner width the chrome was last rendered at (the
+// pane's content width, inside the borders). Set during View(); the
+// mouse handler uses it with HitTestHeaderStar to place the star
+// glyph's column.
+func (m *Model) ChromeWidth() int {
+	return m.chromeWidth
+}
+
+// HeaderStarred reports the star state the header glyph last drew.
+func (m *Model) HeaderStarred() bool {
+	return m.channelStarred
 }
 
 // HitRect is a public, immutable snapshot of one inline-image hit
@@ -1029,7 +1154,7 @@ func (m *Model) GoToBottom() {
 }
 
 func (m *Model) AtTop() bool {
-	return m.selected == 0 && len(m.messages) > 0
+	return (m.selected == 0 && len(m.messages) > 0) || m.onlyHidden()
 }
 
 // ViewportAtTop reports whether the viewport is scrolled to the very top of
@@ -1037,7 +1162,7 @@ func (m *Model) AtTop() bool {
 // on a wheel-up / PageUp gesture that scrolls the viewport without moving
 // selection (selection-based backfill goes through AtTop()).
 func (m *Model) ViewportAtTop() bool {
-	return m.list.YOffset() == 0 && len(m.messages) > 0
+	return (m.list.YOffset() == 0 && len(m.messages) > 0) || m.onlyHidden()
 }
 
 // YOffset returns the current viewport scroll offset (first visible line
@@ -1073,6 +1198,12 @@ func (m *Model) PrependMessages(msgs []MessageItem) {
 		}
 		msgs = kept
 	}
+	msgs, hiddenOldest, hiddenNewest := Visible(m.hide, msgs)
+	m.keepOlderHidden(hiddenOldest)
+	m.keepNewerHidden(hiddenNewest)
+	if len(msgs) == 0 {
+		return
+	}
 	count := len(msgs)
 	if debuglog.Enabled() {
 		debuglog.Cache("messages.Model.PrependMessages: channel=%q count_before=%d count_added=%d added=[%s]",
@@ -1080,7 +1211,7 @@ func (m *Model) PrependMessages(msgs []MessageItem) {
 	}
 	m.messages = append(msgs, m.messages...)
 	m.selected += count
-	m.dropCache()
+	m.dropCache("PrependMessages")
 	m.dirty()
 }
 
@@ -1088,7 +1219,7 @@ func (m *Model) EnterReactionNav() {
 	if msg, ok := m.SelectedMessage(); ok && len(msg.Reactions) > 0 {
 		m.nav.Active = true
 		m.nav.Index = 0
-		m.dropCache()
+		m.dropCache("EnterReactionNav")
 		m.dirty()
 	}
 }
@@ -1099,7 +1230,7 @@ func (m *Model) ExitReactionNav() {
 	}
 	m.nav.Active = false
 	m.nav.Index = 0
-	m.dropCache()
+	m.dropCache("ExitReactionNav")
 	m.dirty()
 }
 
@@ -1113,7 +1244,7 @@ func (m *Model) ReactionNavLeft() {
 		return
 	}
 	m.nav.Left(len(msg.Reactions))
-	m.dropCache()
+	m.dropCache("ReactionNavLeft")
 	m.dirty()
 }
 
@@ -1123,7 +1254,7 @@ func (m *Model) ReactionNavRight() {
 		return
 	}
 	m.nav.Right(len(msg.Reactions))
-	m.dropCache()
+	m.dropCache("ReactionNavRight")
 	m.dirty()
 }
 
@@ -1142,7 +1273,7 @@ func (m *Model) ClampReactionNav() {
 		return
 	}
 	m.nav.Clamp(len(msg.Reactions))
-	m.dropCache()
+	m.dropCache("ClampReactionNav")
 	m.dirty()
 }
 
@@ -1177,7 +1308,7 @@ func (m *Model) IncrementReplyCount(parentTS, replyTS, userID string) {
 			if userID != "" && !slices.Contains(msg.ReplyUsers, userID) {
 				m.messages[i].ReplyUsers = append(slices.Clip(msg.ReplyUsers), userID)
 			}
-			m.dropCache()
+			m.dropCache("IncrementReplyCount")
 			m.dirty()
 			return
 		}
@@ -1195,7 +1326,7 @@ func (m *Model) UpdateMessageInPlace(item MessageItem) bool {
 		if msg.TS == item.TS {
 			m.list.HoldBottom()
 			m.messages[i].ApplyChange(item)
-			m.dropCache()
+			m.dropCache("UpdateMessageInPlace")
 			m.dirty()
 			return true
 		}
@@ -1210,7 +1341,7 @@ func (m *Model) SetHuddleRoom(ts string, room *HuddleRoom) bool {
 	for i, msg := range m.messages {
 		if msg.TS == ts {
 			m.messages[i].HuddleRoom = room
-			m.dropCache()
+			m.dropCache("SetHuddleRoom")
 			m.dirty()
 			return true
 		}
@@ -1235,7 +1366,7 @@ func (m *Model) RemoveMessageByTS(ts string) bool {
 					m.selected = len(m.messages) - 1
 				}
 			}
-			m.dropCache()
+			m.dropCache("RemoveMessageByTS")
 			m.dirty()
 			return true
 		}
@@ -1255,7 +1386,7 @@ func (m *Model) UpdateReaction(messageTS, emojiName, userID string, remove bool)
 			// reacted-to message anchored to the bottom of the pane.
 			m.list.HoldBottom()
 			ApplyReaction(&m.messages[i], emojiName, userID, m.currentUserID, remove)
-			m.dropCache()
+			m.dropCache("UpdateReaction")
 			m.dirty()
 			if m.nav.Active {
 				m.ClampReactionNav()
@@ -1291,11 +1422,18 @@ func (m *Model) SetAvatarFunc(fn AvatarFunc) {
 	m.avatarFn = fn
 }
 
+// SetSixelAvatarFunc draws avatars as sixel images where fn has one;
+// nil keeps them half-block. The half-block avatar stays the fallback.
+func (m *Model) SetSixelAvatarFunc(fn SixelAvatarFunc) {
+	m.sixelAvatarFn = fn
+	m.dropCache("SetSixelAvatarFunc")
+}
+
 // SetReplyAvatarFunc switches the reply row to Slack's look (repliers'
 // avatars, then "N replies"); nil keeps "[N replies ->]".
 func (m *Model) SetReplyAvatarFunc(fn AvatarFunc) {
 	m.replyAvatarFn = fn
-	m.dropCache()
+	m.dropCache("SetReplyAvatarFunc")
 	m.dirty()
 }
 
@@ -1308,11 +1446,32 @@ func (m *Model) ResolveUserName(userID string) string {
 }
 
 // SetUserNames sets the user ID -> display name map used to resolve @mentions.
+// The same map again (user-external flags republish it) does not rebuild.
+// A few changed ids re-render the messages that show them; a wholesale
+// replacement rebuilds the pane.
 func (m *Model) SetUserNames(names map[string]string) {
+	if maps.Equal(m.userNames, names) {
+		return
+	}
+	changed := changedStringKeys(m.userNames, names)
 	m.userNames = names
-	// Drop the cache so mentions re-render with the new names.
-	m.dropCache()
+	// Always bump Version. The draft preview reads this map and is not a
+	// message row, so a name nobody in the channel has posted still has
+	// to redraw. The message cache itself is only rebuilt for rows that
+	// show one of the changed ids.
 	m.dirty()
+	if m.cache == nil || len(changed) > partialNameLimit {
+		m.dropCache("SetUserNames")
+		return
+	}
+	m.markWhere("SetUserNames", func(msg MessageItem) bool {
+		for _, id := range changed {
+			if messageShowsUser(msg, id) {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 // SetColoredUsernames enables or disables deterministic per-user coloring
@@ -1320,14 +1479,14 @@ func (m *Model) SetUserNames(names map[string]string) {
 // with the new coloring.
 func (m *Model) SetColoredUsernames(enabled bool) {
 	m.coloredUsernames = enabled
-	m.dropCache()
+	m.dropCache("SetColoredUsernames")
 	m.dirty()
 }
 
 // SetCompact enables or disables the compact message view.
 func (m *Model) SetCompact(enabled bool) {
 	m.compact = enabled
-	m.dropCache()
+	m.dropCache("SetCompact")
 	m.dirty()
 }
 
@@ -1339,7 +1498,7 @@ func (m *Model) SetCurrentUser(userID string) {
 	}
 	m.currentUserID = userID
 	// Rendering reads it too: mentions of the user are highlighted.
-	m.dropCache()
+	m.dropCache("SetCurrentUser")
 	m.dirty()
 }
 
@@ -1349,7 +1508,7 @@ func (m *Model) SetSelfUserGroups(groups map[string]bool) {
 		return
 	}
 	m.selfGroups = maps.Clone(groups)
-	m.dropCache()
+	m.dropCache("SetSelfUserGroups")
 	m.dirty()
 }
 
@@ -1363,10 +1522,11 @@ func (m *Model) SetSelfUserGroups(groups map[string]bool) {
 // resolution returns asynchronously, the App calls PatchUserName to
 // replace the placeholders live without re-fetching history.
 //
-// Always applies: the map is normally the App's, shared by every pane
-// and already holding the name by the time this pane is patched, so
-// "already in the map" says nothing about this pane's rows or cache.
-// The App drops resolutions that change nothing.
+// Always applies the name: the map is normally the App's, shared by
+// every pane and already holding the name by the time this pane is
+// patched, so "already in the map" says nothing about this pane's rows.
+// The App drops resolutions that change nothing. Only rows that display
+// the user are rebuilt.
 func (m *Model) PatchUserName(userID, displayName string) {
 	if userID == "" {
 		return
@@ -1375,15 +1535,25 @@ func (m *Model) PatchUserName(userID, displayName string) {
 		m.userNames = map[string]string{}
 	}
 	m.userNames[userID] = displayName
-	// The render cache stores rows with their mentions already resolved
-	// (RenderSlackMarkdown consults userNames at render time), so any
-	// cached row that mentioned <@userID> is now stale. Mirror
-	// SetUserNames's behavior: invalidate unconditionally on map change.
-	m.dropCache()
+	// Rows store the name as it rendered. Rebuild the ones that show
+	// this user — the author line, a huddle they are in, or an <@id>
+	// mention — and leave every other row alone. A resolution for
+	// someone this channel does not display must not drop the cache.
+	// The draft preview reads this map and caches its body on Version,
+	// so the version still bumps when no row shows the user.
 	for i := range m.messages {
 		if m.messages[i].UserID == userID && m.messages[i].UserName != displayName {
 			m.messages[i].UserName = displayName
 		}
+		if !messageShowsUser(m.messages[i], userID) {
+			continue
+		}
+		if m.messages[i].TS == "" {
+			// No TS to address. Finish the name updates, then rebuild.
+			m.dropCache("PatchUserName")
+			continue
+		}
+		m.markStale(m.messages[i].TS)
 	}
 	m.dirty()
 }
@@ -1392,12 +1562,23 @@ func (m *Model) PatchUserName(userID, displayName string) {
 // follows author names. The map is copied; later changes go through
 // PatchUserStatus.
 func (m *Model) SetUserStatuses(statuses map[string]peerstatus.Status) {
-	m.userStatuses = make(map[string]peerstatus.Status, len(statuses))
-	for id, st := range statuses {
-		m.userStatuses[id] = st
+	if maps.Equal(m.userStatuses, statuses) {
+		return
 	}
-	m.dropCache()
-	m.dirty()
+	next := make(map[string]peerstatus.Status, len(statuses))
+	for id, st := range statuses {
+		next[id] = st
+	}
+	changed := changedStatusKeys(m.userStatuses, next)
+	m.userStatuses = next
+	if m.cache == nil || len(changed) > partialNameLimit {
+		m.dropCache("SetUserStatuses")
+		m.dirty()
+		return
+	}
+	if m.markAuthors("SetUserStatuses", changed) {
+		m.dirty()
+	}
 }
 
 // PatchUserStatus records one user's status, invalidating the render
@@ -1411,8 +1592,7 @@ func (m *Model) PatchUserStatus(userID string, st peerstatus.Status) {
 		m.userStatuses = map[string]peerstatus.Status{}
 	}
 	m.userStatuses[userID] = st
-	if m.hasAuthor(userID) {
-		m.dropCache()
+	if m.markAuthors("PatchUserStatus", []string{userID}) {
 		m.dirty()
 	}
 }
@@ -1420,25 +1600,31 @@ func (m *Model) PatchUserStatus(userID string, st peerstatus.Status) {
 // ExpireStatuses drops statuses whose deadline has passed and reports
 // whether an author name rendered in this pane changed.
 func (m *Model) ExpireStatuses(now time.Time) bool {
-	changed := false
+	var authors []string
 	for uid, st := range m.userStatuses {
-		if st.Expired(now) {
-			m.userStatuses[uid] = st.Clear(now)
-			if m.hasAuthor(uid) {
-				changed = true
-			}
+		if !st.Expired(now) {
+			continue
+		}
+		m.userStatuses[uid] = st.Clear(now)
+		if m.hasAuthor(uid) {
+			authors = append(authors, uid)
 		}
 	}
-	if changed {
-		m.dropCache()
-		m.dirty()
+	if len(authors) == 0 {
+		return false
 	}
-	return changed
+	if m.cache == nil || len(authors) > partialNameLimit {
+		m.dropCache("ExpireStatuses")
+	} else {
+		m.markAuthors("ExpireStatuses", authors)
+	}
+	m.dirty()
+	return true
 }
 
 func (m *Model) hasAuthor(userID string) bool {
 	for i := range m.messages {
-		if m.messages[i].UserID == userID {
+		if displayedAuthor(m.messages[i], m.userNames) == userID {
 			return true
 		}
 	}
@@ -1491,9 +1677,26 @@ func authorStatusEmoji(statuses map[string]peerstatus.Status, userID string, now
 // <#CHANNELID> mentions (Slack-side messages from clients that emit
 // channel mentions without the embedded |name).
 func (m *Model) SetChannelNames(names map[string]string) {
+	if maps.Equal(m.channelNames, names) {
+		return
+	}
+	changed := changedStringKeys(m.channelNames, names)
 	m.channelNames = names
-	m.dropCache()
+	// Same as SetUserNames: the draft preview resolves channel mentions
+	// from this map, so the version bumps even when no row shows the id.
 	m.dirty()
+	if m.cache == nil || len(changed) > partialNameLimit {
+		m.dropCache("SetChannelNames")
+		return
+	}
+	m.markWhere("SetChannelNames", func(msg MessageItem) bool {
+		for _, id := range changed {
+			if messageMentionsChannel(msg, id) {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 // SetUserGroups sets the workspace-scoped usergroup ID -> handle map used
@@ -1505,7 +1708,7 @@ func (m *Model) SetUserGroups(groups map[string]string) {
 		return
 	}
 	m.userGroups = usergroups.Copy(groups)
-	m.dropCache()
+	m.dropCache("SetUserGroups")
 	m.dirty()
 }
 
@@ -1545,7 +1748,7 @@ func (m *Model) SetEmojiContext(ctx EmojiContext) {
 		ctx.Cells = 2
 	}
 	m.emojiCtx = ctx
-	m.dropCache()
+	m.dropCache("SetEmojiContext")
 	m.dropDMTopicChrome()
 	m.dirty()
 }
@@ -1567,7 +1770,7 @@ func (m *Model) dropDMTopicChrome() {
 // from the workspace bootstrap.
 func (m *Model) SetEmojiCustoms(customs map[string]string) {
 	m.emojiCtx.Customs = customs
-	m.dropCache()
+	m.dropCache("SetEmojiCustoms")
 	m.dropDMTopicChrome()
 	m.dirty()
 }
@@ -1590,7 +1793,7 @@ func (m *Model) SetImageContext(ctx imgrender.ImageContext) {
 			ctx.Fetcher.ConfigurePrerenderKitty(nil)
 		}
 	}
-	m.dropCache()
+	m.dropCache("SetImageContext")
 	m.dirty()
 }
 
@@ -1600,8 +1803,16 @@ func (m *Model) SetLastReadTS(ts string) {
 	if m.lastReadTS == ts {
 		return
 	}
+	prev := m.lastReadTS
 	m.lastReadTS = ts
-	m.dropCache()
+	// The only thing lastRead changes on screen is where the "── new ──"
+	// row sits. A mark that stays in the same gap (or still draws no
+	// row) must not rebuild every message. That is the channel_marked
+	// echo of a channel the user is already caught up on.
+	if m.cache != nil && unreadLandmarkAt(m.messages, prev) == unreadLandmarkAt(m.messages, ts) {
+		return
+	}
+	m.dropCache("SetLastReadTS")
 	m.dirty()
 }
 
@@ -1611,11 +1822,17 @@ func (m *Model) LastReadTS() string {
 	return m.lastReadTS
 }
 
+// OldestTS is the cursor for fetching older history: the oldest message
+// the pane holds, or a hidden one it was given that is older still.
 func (m *Model) OldestTS() string {
-	if len(m.messages) == 0 {
-		return ""
+	oldest := ""
+	if len(m.messages) > 0 {
+		oldest = m.messages[0].TS
 	}
-	return m.messages[0].TS
+	if m.hiddenOldest != "" && (oldest == "" || m.hiddenOldest < oldest) {
+		return m.hiddenOldest
+	}
+	return oldest
 }
 
 // cacheStyles bundles the lipgloss styles and pre-rendered strings that
@@ -1804,6 +2021,7 @@ func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles, stats *entr
 	}
 	if !m.compact && m.avatarFn != nil {
 		opt.Avatar = m.avatarFn(msg.UserID)
+		opt.AvatarSixelKey, opt.AvatarSixel = SixelAvatar(m.sixelAvatarFn, msg.UserID)
 	}
 	r := RenderMessage(msg, width, m.renderContext(), opt)
 	// The channel pane's kitty upload order: blocks, attachments, then
@@ -1811,19 +2029,18 @@ func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles, stats *entr
 	flushes := slices.Concat(r.BlockFlushes, r.AttachmentFlushes, r.BodyFlushes, r.ReactionFlushes)
 	cs.wrap.stats = stats
 	w := WrapRows(msg, r, width, cs.wrap)
-	linesN, linesS, linesP := w.Lines, w.Selected, w.Plain
+	linesN, linesP := w.Lines, w.Plain
 	if stats != nil {
 		stats.count++
 	}
 	// Append a trailing spacer line after every message except the last.
-	// Both variants share the same spacer (it has no border styling).
-	// The plain mirror of the spacer is the empty string -- selection
-	// extraction trims trailing whitespace, and no real content lives
-	// in the spacer row.
+	// The selected variant reuses this tail (withTrail): it has no
+	// border styling. The plain mirror of the spacer is the empty
+	// string -- selection extraction trims trailing whitespace, and no
+	// real content lives in the spacer row.
 	trail := 0
 	if !m.compact && i < len(m.messages)-1 {
 		linesN = append(linesN, cs.spacerLines...)
-		linesS = append(linesS, cs.spacerLines...)
 		linesP = append(linesP, plainLine{Text: "", Bytes: []int{0}})
 		trail = len(cs.spacerLines)
 	}
@@ -1832,13 +2049,12 @@ func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles, stats *entr
 		Ref:        i,
 		Selectable: true,
 		Lines:      linesN,
-		Selected:   linesS,
 		Plain:      linesP,
 		ColOffset:  1, // thick left border ▌ occupies column 0 of Lines
 		Trail:      trail,
 		Hits:       append(r.Hits, w.LinkHits...),
 	}
-	return entry, EntryPayload{ShortSrc: w.ShortSrc, Flushes: flushes, sixelRows: r.SixelRows}
+	return entry, EntryPayload{SelSrc: w.SelSrc, ShortSrc: w.ShortSrc, Flushes: flushes, SixelRows: r.SixelRows}
 }
 
 // buildCache pre-renders all messages and day separators, splitting each
@@ -1848,6 +2064,7 @@ func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles, stats *entr
 // on a single-image arrival (HandleImageReady marks one TS stale and the
 // View()-time guard dispatches to partialRebuild instead).
 func (m *Model) buildCache(width int, keepPosition bool) {
+	m.dropReason = ""
 	m.cache = m.cache[:0]
 	m.cacheWidth = width
 	m.cacheMsgLen = len(m.messages)
@@ -2027,15 +2244,15 @@ func placeAvatarBeside(avatar, content string) string {
 }
 
 // convertSixelMap translates imgrender.SixelEntry values into the
-// messages-pane's private sixelEntry type. The map key is the entry
+// messages-pane's private SixelImage type. The map key is the entry
 // row of the image's top line. Returns nil for an empty input.
-func convertSixelMap(in map[int]imgrender.SixelEntry) []sixelEntry {
+func convertSixelMap(in map[int]imgrender.SixelEntry) []SixelImage {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make([]sixelEntry, 0, len(in))
+	out := make([]SixelImage, 0, len(in))
 	for k, v := range in {
-		out = append(out, sixelEntry{
+		out = append(out, SixelImage{
 			row: k, key: v.Key, bytes: v.Bytes, fallback: v.Fallback,
 			height: v.Height, width: v.Width,
 		})
@@ -2182,9 +2399,11 @@ func (m *Model) ScrollHintForDrag(viewportY int) int {
 // garbled. The short variant is memoised in m.cache[i].
 func (m *Model) selectedLines(i int) []string {
 	e := &m.list.Entries()[i]
-	return m.cache[i].SelectedLines(e, m.list.HasSelection(), func(src string) []string {
+	rows := m.cache[i].SelectedLines(e, m.list.HasSelection(), m.focused, func(src string) []string {
 		return NewWrapStyles(m.focused, m.compact).SelectedVariant(src, m.cacheWidth)
 	})
+	e.Selected = rows
+	return rows
 }
 
 // cursorLines is what Layout draws for the cursor entry: the selected
@@ -2232,13 +2451,35 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 		// looking line below it" effect that visually separated the
 		// header from the messages and made the title look like it sat
 		// outside the panel.
+		// The title renders to width-2 cells per line (Width pads every
+		// wrapped line), so the star glyph plus one cell of padding
+		// fills the FIRST line's right end: the active channel's star
+		// state, clickable to toggle it (see HitTestHeaderStar for the
+		// column range - the first line, always). A long name wraps to
+		// further lines, which get plain padding so every chrome line
+		// stays exactly `width` cells. The glyph is one display cell by
+		// the same measurement the other chrome glyphs (⚑ ◉ ◆) rely on.
 		headerStyle := lipgloss.NewStyle().
-			Width(width).
+			Width(width-2).
 			Background(styles.Background).
 			Foreground(styles.TextPrimary).
 			Bold(true).
 			Padding(0, 1)
-		header := headerStyle.Render(fmt.Sprintf("%s %s", ChannelGlyph(m.channelType), m.channelName))
+		title := headerStyle.Render(fmt.Sprintf("%s %s", ChannelGlyph(m.channelType), m.channelName))
+		starGlyph := "☆"
+		if m.channelStarred {
+			starGlyph = "★"
+		}
+		starCell := lipgloss.NewStyle().
+			Background(styles.Background).
+			Foreground(styles.TextMuted).
+			Render(starGlyph)
+		titleLines := strings.Split(title, "\n")
+		titleLines[0] += starCell + " "
+		for i := 1; i < len(titleLines); i++ {
+			titleLines[i] += "  "
+		}
+		header := strings.Join(titleLines, "\n")
 		if m.channelTopic != "" {
 			// Width(width) pads every wrapped topic line to the full pane
 			// width. This keeps the invariant that EVERY chrome line is
@@ -2317,6 +2558,9 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 			switch {
 			case m.cache == nil:
 				reason = "cache-nil"
+				if m.dropReason != "" {
+					reason = "cache-nil:" + m.dropReason
+				}
 			case m.cacheWidth != width:
 				reason = fmt.Sprintf("width-changed %d->%d", m.cacheWidth, width)
 			default:
@@ -2354,76 +2598,28 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// lipgloss / bubbletea v2's renderer is known to mangle APC sequences
 	// embedded in line content.
 	var kittyFlushBuf bytes.Buffer
-	var sixelFallback map[int]string
-	// Placements for this frame, pane-local. Reset every render: the App
-	// reconciles the full set against what is currently on screen, so a
-	// stale entry here would keep a vanished image alive.
-	pendingSixel := make([]imgpkg.SixelPaint, 0, 2)
-	yOffset := m.list.YOffset()
-	offsets := m.list.Offsets()
 	for _, v := range frame.Visible {
-		p := &m.cache[v.Index]
-		for _, fl := range p.Flushes {
+		for _, fl := range m.cache[v.Index].Flushes {
 			if fl != nil {
 				_ = fl(&kittyFlushBuf)
 			}
 		}
-		entryStart := offsets[v.Index]
-		for _, sx := range p.sixelRows {
-			absStart := entryStart + sx.row
-			absEnd := absStart + sx.height
-			fullyVisible := absStart >= yOffset && absEnd <= yOffset+msgAreaHeight
-			windowRow := v.Row + (sx.row - v.From)
-			// Indicator rows replace window row 0 (loading hint) and
-			// row msgAreaHeight-1 (more below). An image whose footprint
-			// includes either is not fully paintable: the indicator is
-			// authoritative and must stay visible, so the image takes
-			// the partial-visibility fallback path instead.
-			intersectsLoading := m.loading && windowRow <= 0 && windowRow+sx.height > 0
-			intersectsMoreBelow := frame.MoreBelow && windowRow <= msgAreaHeight-1 && windowRow+sx.height > msgAreaHeight-1
-			if fullyVisible && !intersectsLoading && !intersectsMoreBelow {
-				if windowRow >= 0 && windowRow < len(frame.Rows) {
-					// Record the placement instead of appending the bytes
-					// to the line; the App paints these out-of-band after
-					// the frame is flushed. See SixelPlacements.
-					pendingSixel = append(pendingSixel, imgpkg.SixelPaint{
-						Key:   imgpkg.PlacementKey(sx.key, sx.bytes, sx.width, sx.height),
-						Row:   windowRow,
-						Col:   sx.col,
-						Rows:  sx.height,
-						Cols:  sx.width,
-						Bytes: sx.bytes,
-					})
-				}
-				continue
-			}
-			for k := 0; k < sx.height; k++ {
-				abs := absStart + k
-				if abs < yOffset || abs >= yOffset+msgAreaHeight {
-					continue
-				}
-				row := abs - yOffset
-				if row >= 0 && row < len(frame.Rows) && k < len(sx.fallback) {
-					if sixelFallback == nil {
-						sixelFallback = make(map[int]string)
-					}
-					// Compose onto a fallback already grafted on this
-					// row. Two images share a row, and cutting the
-					// original frame again would wipe the first one.
-					base := frame.Rows[row]
-					if prev, ok := sixelFallback[row]; ok {
-						base = prev
-					}
-					sixelFallback[row] = composeFallbackRow(base, sx.fallback[k], sx.col)
-				}
-			}
-		}
 	}
-	for row, fb := range sixelFallback {
-		if fb != "" {
-			frame.Rows[row] = fb
-		}
-	}
+	// Placements for this frame, pane-local. Reset every render: the App
+	// reconciles the full set against what is currently on screen, so a
+	// stale entry here would keep a vanished image alive.
+	//
+	// Indicator rows replace window row 0 (loading hint) and row
+	// msgAreaHeight-1 (more below). An image whose footprint includes
+	// either is not fully paintable: the indicator is authoritative and
+	// must stay visible, so the image takes the fallback path instead.
+	pendingSixel := PlaceSixel(frame, m.list.Offsets(), m.list.YOffset(), msgAreaHeight,
+		func(i int) []SixelImage { return m.cache[i].SixelRows },
+		func(windowRow, rows int) bool {
+			intersectsLoading := m.loading && windowRow <= 0 && windowRow+rows > 0
+			intersectsMoreBelow := frame.MoreBelow && windowRow <= msgAreaHeight-1 && windowRow+rows > msgAreaHeight-1
+			return intersectsLoading || intersectsMoreBelow
+		})
 	if kittyFlushBuf.Len() > 0 {
 		_, _ = imgpkg.KittyOutput.Write(kittyFlushBuf.Bytes())
 	}

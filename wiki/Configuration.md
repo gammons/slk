@@ -43,6 +43,8 @@ transparent_background = false  # true: panes, sidebar, rail, status bar and the
 timestamp_format = "3:04 PM"
 show_avatars = true      # false hides the avatars beside messages
 thread_avatars = true    # false hides them in the thread pane (needs show_avatars)
+show_workspace_rail = true  # false starts with the workspace rail hidden (Ctrl+g
+                            # toggles it); never drawn with one workspace
 image_protocol = "auto"   # auto | kitty | sixel | halfblock | off
 kitty_placement = "auto"  # auto | native | emulated: who places kitty images.
                           # auto = emulated on WezTerm (no unicode
@@ -174,6 +176,7 @@ order   = 1                     # rail position; 1-based, used by 1-9 keys
 theme   = "dracula"             # overrides [appearance].theme
 use_slack_sections = false      # this workspace uses [sections.*] globs;
                                 # other workspaces still use Slack sections
+default_channel = "general"     # see "Default channel" below
 
 [workspaces.work.sections.Alerts]
 channels = ["alerts", "*-alerts"]
@@ -196,6 +199,24 @@ accent = "#50C878"
 background = "#1A1A2E"
 text = "#E0E0E0"
 ```
+
+## Default channel
+
+`[workspaces.<key>] default_channel` names the channel slk opens the first
+time that workspace is shown in a session:
+
+- at startup, in place of the channel you last visited there;
+- on the first switch to the workspace, in place of the first channel in the
+  sidebar.
+
+Switching back later returns to the channel you were last viewing in that
+workspace, or to the default if that channel is gone. A Slack link opened from
+the channel finder still goes to its own channel.
+
+The name is matched as `/open` matches it: a leading `#`, case and accents are
+ignored, and only channels and private channels you are a member of match,
+never a DM. A name that matches nothing is ignored, and slk behaves as if the
+key were not set.
 
 ## Deactivated users
 
@@ -401,6 +422,48 @@ tells you the message was not found (a deleted thread reply opens its
 thread with nothing selected); the mark is kept either way. Marks
 are only removed when you remove them, with `:delmarks` or `Backspace`
 in the `:marks` overlay.
+
+## Hiding authors
+
+`:suppress` on a message hides its author's messages, in that
+conversation or in the whole workspace; `:suppressed` lists who is
+hidden and `Backspace` there stops hiding them. Both edit
+`config.toml`, where the rules are kept, one block each in the
+workspace's section. You can write them by hand too:
+
+```toml
+[workspaces.acme]
+team_id = "T01ACME"
+
+[[workspaces.acme.suppress]]
+author = "B01DEPLOYBOT"     # required: a user ID (U…/W…) or a bot ID (B…)
+note = "DeployBot"          # optional, for you; slk ignores it
+
+[[workspaces.acme.suppress]]
+author = "U02ALICE"
+channel = "C03RANDOM"       # omit to hide them everywhere in the workspace
+```
+
+IDs, not names, because names change: `:suppress` writes the right ID
+(and a `note`) for you. An author is the ID slk shows the message as
+from: a person's user ID, a bot that posts as a user by that user ID,
+and a bot that posts without one by its bot ID.
+
+A hidden author's messages and thread replies are not drawn, do not
+notify (even when they mention you), and do not mark their channel
+unread. They are still cached, and opening a channel still marks it read
+up to its newest message, hidden ones included. Search, the Activity
+view and reply counts are not filtered. Your own messages are never
+hidden.
+
+A channel that Slack already reported unread when slk connected stays
+unread until you open it, even if its only new messages are hidden.
+
+slk adds a rule by appending a block to the end of the file and removes
+one by deleting its block, leaving everything else as written. A rule
+written another way (an inline table) can only be removed by hand, and
+while a workspace's rules are an inline list (`suppress = [...]`) new
+ones have to be added to that list by hand too.
 
 ## Data paths (XDG)
 

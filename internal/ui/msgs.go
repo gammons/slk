@@ -246,6 +246,24 @@ type (
 		TeamID string
 		Item   core.ActivityItem
 	}
+	// AppHomeLoadedMsg carries an app DM's Home tab, fetched when the
+	// conversation was opened. Home is nil with Err nil when the
+	// conversation has no Home tab (a plain bot DM, or a member
+	// workspace Slack does not serve a home view for); the pane then
+	// keeps showing messages. A non-nil Err means the fetch itself
+	// failed: whether the tab exists is unknown, so the App keeps the
+	// tab it already has. The App ignores a result for a channel or
+	// workspace it has left.
+	AppHomeLoadedMsg struct {
+		TeamID    string
+		ChannelID string
+		Home      *core.AppHome
+		Err       error
+		// Seq is the press generation that asked for this fetch (0 for
+		// the channel-open fetch), so a stale press's result cannot end
+		// the current press's progress dots.
+		Seq uint64
+	}
 	// ActivityBodiesLoadedMsg carries hydrated message bodies for the
 	// refs in a freshly loaded Activity page (fetched via messages.list
 	// as a second step after activity.feed, which returns refs only).
@@ -407,6 +425,11 @@ type (
 		// workspace. Nil means "use config-glob behavior" (the App's
 		// sidebar reverts to its existing name-keyed buckets).
 		SectionsProvider sidebar.SectionsProvider
+		// DefaultChannel is the workspace's configured default_channel,
+		// matched by matchChannelByName. It is opened on the first switch
+		// to the workspace in a session, and when the channel last viewed
+		// there is gone.
+		DefaultChannel string
 		// RefreshPeerDND, if set, is appended to reduceWorkspaceSwitched's
 		// batch after the switch applies. It fetches DM peers' DND for
 		// this workspace and delivers results as UserDNDChangeMsg.
@@ -421,6 +444,11 @@ type (
 		// the workspace rail under [sidebar] enter_keeps_focus, so the
 		// last-channel restore leaves focus in the rail.
 		KeepFocus bool
+		// FinderPermalinkSeq ties this switch to one pasted permalink.
+		// Zero for every other switch. A newer paste bumps the App's
+		// counter, so a switch that finishes late does not consume the
+		// link that replaced it.
+		FinderPermalinkSeq uint64
 	}
 	// ReadStateChangedMsg is sent whenever the persistent read state changes,
 	// so panels that read from cache.GetWorkspaceReadState re-render.
@@ -514,8 +542,14 @@ type (
 		// (from the persisted channel_visits table). On the InitialActive
 		// workspace the App opens this channel on startup instead of the
 		// sidebar's first entry, so a restart lands the user back where
-		// they were. Empty (e.g. first ever run) falls back to Channels[0].
+		// they were, unless DefaultChannel names a sidebar channel. Empty
+		// (e.g. first ever run) falls back to Channels[0].
 		LastChannelID string
+		// DefaultChannel is the workspace's configured default_channel,
+		// matched by matchChannelByName. On the InitialActive workspace it
+		// is opened in place of LastChannelID when it names a channel the
+		// sidebar shows.
+		DefaultChannel string
 	}
 	// CustomEmojisLoadedMsg is sent when a workspace's custom emoji list
 	// finishes loading in the background, after WorkspaceReadyMsg has
@@ -629,6 +663,17 @@ type (
 	// after something rewrote them (a palette generator signals slk).
 	// The App registers them and reapplies the selected theme.
 	CustomThemesReloadedMsg struct{ Themes []styles.CustomTheme }
+
+	// CellMetricsChangedMsg tells the App the terminal's cell size in
+	// pixels changed and cmd/slk already re-pointed the image-encoding
+	// globals and the avatar cache. A terminal can report a transient
+	// cell size while its fonts settle shortly after launch (foot on a
+	// fractional-scaled output loads at the legacy scale first), and a
+	// monitor move or font zoom changes it mid-session. Every render
+	// cache that baked sixel pixels or image cell targets into its
+	// rows must be rebuilt, and the sixel painter must erase what it
+	// placed at the old size.
+	CellMetricsChangedMsg struct{ CellW, CellH int }
 )
 
 // autoScrollTickMsg is dispatched by tea.Tick while a drag is held near
@@ -848,6 +893,24 @@ type ChannelJoinFailedMsg struct {
 	ID   string
 	Name string
 	Err  error
+}
+
+// ChannelStarSetMsg is the answer to a /star or /unstar (the
+// ChannelService.SetStarred command). Starred is the state Slack now
+// holds; Err set means Slack refused and the optimistic sidebar move
+// the requesting path already made must be reverted. TeamID is the
+// workspace the request ran in: a reply for a workspace the user has
+// since switched away from settles its bookkeeping without touching
+// the sidebar now on screen. Seq is the requesting path's per-channel
+// request number within that workspace; a reply that does not match
+// the channel's latest was superseded by a newer request and is
+// ignored (0 means the reply carries no number and always applies).
+type ChannelStarSetMsg struct {
+	TeamID    string
+	ChannelID string
+	Starred   bool
+	Seq       int
+	Err       error
 }
 
 // previewLoadedMsg is dispatched after a preview thumb has been fetched.

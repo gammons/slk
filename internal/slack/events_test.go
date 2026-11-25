@@ -1,6 +1,7 @@
 package slackclient
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -54,6 +55,7 @@ type mockEventHandler struct {
 	prefChanges []prefChangeRecord
 
 	emojiChanges []emojiChangeRecord
+	starChanges  []starChangeRecord
 
 	memberJoined []memberEventRecord
 	memberLeft   []memberEventRecord
@@ -80,6 +82,11 @@ type emojiChangeRecord struct {
 	subtype, name string
 	names         []string
 	value         string
+}
+
+type starChangeRecord struct {
+	change  StarChange
+	starred bool
 }
 
 type prefChangeRecord struct {
@@ -195,6 +202,10 @@ func (m *mockEventHandler) OnPrefChange(name, value string) {
 
 func (m *mockEventHandler) OnEmojiChanged(subtype, name string, names []string, value string) {
 	m.emojiChanges = append(m.emojiChanges, emojiChangeRecord{subtype, name, names, value})
+}
+
+func (m *mockEventHandler) OnStarChanged(change StarChange, starred bool) {
+	m.starChanges = append(m.starChanges, starChangeRecord{change, starred})
 }
 
 func (m *mockEventHandler) OnMemberJoined(channelID, userID string) {
@@ -1180,5 +1191,106 @@ func TestDispatchMeMessage_CapturedFrame(t *testing.T) {
 	dispatchWebSocketEvent(data, h)
 	if len(h.messages) != 1 || h.messages[0] != "waves" || h.subtypes[0] != "me_message" {
 		t.Fatalf("messages = %v subtypes = %v, want [waves] [me_message]", h.messages, h.subtypes)
+	}
+}
+func TestMessageFrameDrivesOnMessage_MatchesDispatcher(t *testing.T) {
+	// The lockstep guard AGENTS.md asks for: the predicate and the
+	// message arm of dispatchWebSocketEvent must agree on which frames
+	// reach OnMessage. Each case builds a frame, runs it through the
+	// dispatcher with a recording handler, and checks OnMessage fired
+	// exactly when the predicate says it should.
+	cases := []struct {
+		name          string
+		frame         string
+		wantOnMessage bool
+	}{
+		{"plain", `{"type":"message","channel":"C1","ts":"1.1","text":"hi"}`, true},
+		{"bot_message", `{"type":"message","subtype":"bot_message","channel":"C1","ts":"1.1"}`, true},
+		{"thread_broadcast", `{"type":"message","subtype":"thread_broadcast","channel":"C1","ts":"1.1"}`, true},
+		{"file_share", `{"type":"message","subtype":"file_share","channel":"C1","ts":"1.1"}`, true},
+		{"me_message", `{"type":"message","subtype":"me_message","channel":"C1","ts":"1.1"}`, true},
+		{"ephemeral plain", `{"type":"message","channel":"C1","ts":"1.1","is_ephemeral":true}`, false},
+		{"ephemeral bot", `{"type":"message","subtype":"bot_message","channel":"C1","ts":"1.1","is_ephemeral":true}`, false},
+		{"changed", `{"type":"message","subtype":"message_changed","channel":"C1","message":{"ts":"1.0","text":"new"}}`, true},
+		{"changed no embedded", `{"type":"message","subtype":"message_changed","channel":"C1"}`, false},
+		{"changed frame ephemeral", `{"type":"message","subtype":"message_changed","channel":"C1","is_ephemeral":true,"message":{"ts":"1.0"}}`, false},
+		{"changed embedded ephemeral", `{"type":"message","subtype":"message_changed","channel":"C1","message":{"ts":"1.0","is_ephemeral":true}}`, false},
+		{"deleted", `{"type":"message","subtype":"message_deleted","channel":"C1","deleted_ts":"1.0"}`, false},
+		{"system notice subtype", `{"type":"message","subtype":"channel_join","channel":"C1"}`, true},
+		{"unknown subtype", `{"type":"message","subtype":"channel_leave_forever","channel":"C1"}`, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := &mockEventHandler{}
+			dispatchWebSocketEvent([]byte(tc.frame), handler)
+			got := len(handler.messages) > 0
+			var evt struct {
+				Type        string `json:"type"`
+				SubType     string `json:"subtype"`
+				IsEphemeral bool   `json:"is_ephemeral"`
+				Message     *struct {
+					IsEphemeral bool `json:"is_ephemeral"`
+				} `json:"message"`
+			}
+			if err := json.Unmarshal([]byte(tc.frame), &evt); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			want := MessageFrameDrivesOnMessage(evt.SubType, evt.IsEphemeral,
+				evt.Message != nil, evt.Message != nil && evt.Message.IsEphemeral)
+			if got != tc.wantOnMessage {
+				t.Errorf("OnMessage fired = %v; the case expects %v", got, tc.wantOnMessage)
+			}
+			if got != want {
+				t.Errorf("OnMessage fired = %v; predicate says %v", got, want)
+			}
+		})
+	}
+}
+
+// TestDispatch_StarChanged covers the star_added / star_removed echo
+// (observed on a live grid; Slack sends it to every client of the
+// user). Every item kind is forwarded; the handler decides which ones
+// it acts on.
+func TestDispatch_StarChanged(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want starChangeRecord
+	}{
+		{
+			"star_added im",
+			`{"type":"star_added","user":"U1","item":{"type":"im","channel":"D1","date_create":1},"event_ts":"1.2"}`,
+			starChangeRecord{change: StarChange{ItemType: "im", Channel: "D1"}, starred: true},
+		},
+		{
+			"star_added channel",
+			`{"type":"star_added","user":"U1","item":{"type":"channel","channel":"C1","date_create":1},"event_ts":"1.2"}`,
+			starChangeRecord{change: StarChange{ItemType: "channel", Channel: "C1"}, starred: true},
+		},
+		{
+			"star_removed group",
+			`{"type":"star_removed","user":"U1","item":{"type":"group","channel":"G1","date_create":1},"event_ts":"1.2"}`,
+			starChangeRecord{change: StarChange{ItemType: "group", Channel: "G1"}, starred: false},
+		},
+		{
+			"message star forwards its item",
+			`{"type":"star_added","user":"U1","item":{"type":"message","channel":"C1","message":{"ts":"1.1"}}}`,
+			starChangeRecord{change: StarChange{ItemType: "message", Channel: "C1"}, starred: true},
+		},
+		{
+			"file star forwards its item",
+			`{"type":"star_added","user":"U1","item":{"type":"file","file":"F1"}}`,
+			starChangeRecord{change: StarChange{ItemType: "file"}, starred: true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := &mockEventHandler{}
+			dispatchWebSocketEvent([]byte(tt.data), h)
+			if len(h.starChanges) != 1 || h.starChanges[0] != tt.want {
+				t.Fatalf("starChanges = %+v, want [%+v]", h.starChanges, tt.want)
+			}
+		})
 	}
 }

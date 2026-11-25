@@ -48,6 +48,11 @@ func searchWorkspaceFunc(router *workspaceRouter, db *cache.DB, tsFormat string)
 			}
 			return "", false
 		}
+		var groupIDs []string
+		for _, match := range res.Matches {
+			groupIDs = append(groupIDs, subteamIDsInText(match.Text)...)
+		}
+		wctx.Subteams.Request(groupIDs)
 		items := searchResultItems(res.Matches, tsFormat, time.Now(), resolveUser, resolveChannel, wctx.UserGroups())
 		return ui.WorkspaceSearchResultsMsg{Query: query, Items: items, Total: res.Total}
 	}

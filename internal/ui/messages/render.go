@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"io"
+	"net/url"
 	"regexp"
 	"strings"
 	"unicode"
@@ -220,6 +221,19 @@ func renderSingleAttachment(a Attachment) string {
 // some terminals that mishandle the latter; both are valid per the spec.
 func osc8Hyperlink(url, label string) string {
 	return "\x1b]8;;" + url + "\x1b\\" + label + "\x1b]8;;\x1b\\"
+}
+
+// channelLinkURL is the internal address a rendered #channel mention
+// carries. The App handles the slack:// scheme: it opens the channel in
+// this workspace, asking to join when the user is not a member. The
+// name travels along so a join can report the channel it is joining;
+// it is not an authority, only a label.
+func channelLinkURL(channelID, name string) string {
+	q := url.Values{"id": {channelID}}
+	if name != "" {
+		q.Set("name", name)
+	}
+	return "slack://channel?" + q.Encode()
 }
 
 // reapplyBgAfterResets post-processes ANSI text to re-apply a background
@@ -928,6 +942,11 @@ func renderInlineFormattingWith(text string, opts RenderSlackMarkdownOpts) strin
 	// <#C1234> -> #resolved-name (via channelNames map). When the
 	// channel can't be resolved we render "#unknown" so the user sees
 	// something readable rather than the raw <#CID> token.
+	//
+	// The label is also an OSC 8 hyperlink to an internal slack://
+	// address: clicking a channel name opens the conversation (or
+	// offers to join it), rather than doing nothing. The App owns that
+	// scheme; it never reaches the OS launcher.
 	text = channelMentionRe.ReplaceAllStringFunc(text, func(match string) string {
 		groups := channelMentionRe.FindStringSubmatch(match)
 		channelID := groups[1]
@@ -943,7 +962,7 @@ func renderInlineFormattingWith(text string, opts RenderSlackMarkdownOpts) strin
 		if name == "" {
 			name = "unknown"
 		}
-		return mentionStyle().Render("#" + name)
+		return osc8Hyperlink(channelLinkURL(channelID, name), mentionStyle().Render("#"+name))
 	})
 
 	// User mentions: <@U1234> -> @DisplayName (or @U1234 if not resolved)

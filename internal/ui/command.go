@@ -39,19 +39,21 @@ type commandFunc func(a *App, args commandArgs) tea.Cmd
 // commands maps a command name to its handler. Names are matched
 // exactly (no prefix matching); aliases get their own entries.
 var commands = map[string]commandFunc{
-	"ws":       cmdWorkspaceFinder,
-	"marks":    cmdMarks,
-	"delmarks": cmdDelMarks,
-	"sp":       cmdSplit,
-	"vsp":      cmdVSplit,
-	"q":        cmdCloseWindow,
-	"only":     cmdOnlyWindow,
-	"on":       cmdOnlyWindow,
-	"activity": cmdActivity,
-	"huddle":   cmdHuddle,
-	"help":     cmdHelp,
-	"compact":  cmdCompact,
-	"version":  cmdVersion,
+	"ws":         cmdWorkspaceFinder,
+	"marks":      cmdMarks,
+	"delmarks":   cmdDelMarks,
+	"sp":         cmdSplit,
+	"vsp":        cmdVSplit,
+	"q":          cmdCloseWindow,
+	"only":       cmdOnlyWindow,
+	"on":         cmdOnlyWindow,
+	"activity":   cmdActivity,
+	"huddle":     cmdHuddle,
+	"help":       cmdHelp,
+	"compact":    cmdCompact,
+	"version":    cmdVersion,
+	"suppress":   cmdSuppress,
+	"suppressed": cmdSuppressed,
 }
 
 // cmdVersion toasts the running build's version and short commit (see

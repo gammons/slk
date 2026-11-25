@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 )
@@ -48,36 +49,142 @@ func Slugify(s string) string {
 // blocks). Returns an error if a slug-keyed block lacks team_id, if
 // two slugs map to the same team_id, or if a slug-keyed block's
 // team_id field is itself not a Slack-team-ID-shaped string.
+//
+// A team-id-keyed block that only holds state slk writes itself
+// (version_ts, theme, sidebar_width) and shares its team id with a
+// slug block is folded into that slug. First setup used to write
+// exactly that pair (#499). A team-id block that also carries
+// something a person configures still conflicts.
 func resolveWorkspaceKeys(ws map[string]Workspace) (map[string]Workspace, error) {
 	if len(ws) == 0 {
 		return ws, nil
 	}
-	out := make(map[string]Workspace, len(ws))
-	seenTeamID := make(map[string]string, len(ws)) // teamID -> first slug we saw
-	for key, w := range ws {
+
+	type resolved struct {
+		key       string
+		w         Workspace
+		slug      bool
+		legacy    bool
+		stateOnly bool
+	}
+	list := make([]resolved, 0, len(ws))
+	for key, orig := range ws {
+		w := orig
+		var slug, legacy bool
 		switch {
-		case w.TeamID != "":
-			// Slug-keyed block. team_id must look like a real ID.
-			if !isTeamIDKey(w.TeamID) {
+		case orig.TeamID != "":
+			// team_id must look like a real ID, slug key or not.
+			if !isTeamIDKey(orig.TeamID) {
 				return nil, fmt.Errorf(
 					"workspace %q: team_id %q does not look like a Slack team ID",
-					key, w.TeamID)
+					key, orig.TeamID)
 			}
+			slug = !isTeamIDKey(key)
+			legacy = isTeamIDKey(key) && orig.TeamID == key
 		case isTeamIDKey(key):
 			// Legacy team-ID-keyed block; synthesize TeamID from key.
 			w.TeamID = key
+			legacy = true
 		default:
 			return nil, fmt.Errorf(
 				"workspace %q is missing team_id (the TOML key is a slug, "+
 					"so the block must set team_id explicitly)", key)
 		}
-		if first, dup := seenTeamID[w.TeamID]; dup {
+		list = append(list, resolved{
+			key: key, w: w, slug: slug, legacy: legacy,
+			stateOnly: workspaceStateOnly(key, orig),
+		})
+	}
+
+	slugByTeam := make(map[string]int, len(list))
+	for i, e := range list {
+		if !e.slug {
+			continue
+		}
+		if prev, dup := slugByTeam[e.w.TeamID]; dup {
 			return nil, fmt.Errorf(
 				"workspaces %q and %q both reference team_id %q",
-				first, key, w.TeamID)
+				list[prev].key, e.key, e.w.TeamID)
 		}
-		seenTeamID[w.TeamID] = key
-		out[key] = w
+		slugByTeam[e.w.TeamID] = i
+	}
+
+	// Fold a state-only team-id block into the slug for the same team
+	// before the duplicate check, so the pair first setup wrote loads.
+	drop := make(map[int]bool, len(list))
+	for i, e := range list {
+		if !e.legacy {
+			continue
+		}
+		slugIdx, ok := slugByTeam[e.w.TeamID]
+		if !ok {
+			continue
+		}
+		if !e.stateOnly {
+			return nil, fmt.Errorf(
+				"workspaces %q and %q both reference team_id %q",
+				list[slugIdx].key, e.key, e.w.TeamID)
+		}
+		slug := list[slugIdx]
+		slug.w = mergeWorkspaceState(slug.w, e.w)
+		list[slugIdx] = slug
+		drop[i] = true
+	}
+
+	out := make(map[string]Workspace, len(list))
+	seenTeamID := make(map[string]string, len(list))
+	for i, e := range list {
+		if drop[i] {
+			continue
+		}
+		if first, dup := seenTeamID[e.w.TeamID]; dup {
+			return nil, fmt.Errorf(
+				"workspaces %q and %q both reference team_id %q",
+				first, e.key, e.w.TeamID)
+		}
+		seenTeamID[e.w.TeamID] = e.key
+		out[e.key] = e.w
 	}
 	return out, nil
+}
+
+// workspaceStateOnly reports whether a team-id-keyed block carries
+// only the fields slk writes for itself: version_ts, theme, and
+// sidebar_width, plus a team_id that restates the key. orig is the
+// block before TeamID is synthesized from the key.
+//
+// Those three are cleared and the rest is compared to the zero
+// Workspace, so this is an allow list. A field added to Workspace
+// later is configuration until someone clears it here: a set value
+// refuses the fold instead of being dropped. TestWorkspaceStateOnlyAllowList
+// fails when the struct gains a field, which is the prompt to classify it.
+func workspaceStateOnly(key string, orig Workspace) bool {
+	if !isTeamIDKey(key) {
+		return false
+	}
+	if orig.TeamID != "" && orig.TeamID != key {
+		return false
+	}
+	cleared := orig
+	cleared.TeamID = ""
+	cleared.VersionTS = ""
+	cleared.Theme = ""
+	cleared.SidebarWidth = 0
+	return reflect.DeepEqual(cleared, Workspace{})
+}
+
+// mergeWorkspaceState copies state the slug block left empty off the
+// team-id block. A value the slug already has wins: that block is the
+// one the person configured.
+func mergeWorkspaceState(dst, src Workspace) Workspace {
+	if dst.VersionTS == "" {
+		dst.VersionTS = src.VersionTS
+	}
+	if dst.Theme == "" {
+		dst.Theme = src.Theme
+	}
+	if dst.SidebarWidth == 0 {
+		dst.SidebarWidth = src.SidebarWidth
+	}
+	return dst
 }

@@ -18,7 +18,6 @@ import (
 	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/muesli/reflow/truncate"
-	"github.com/rivo/uniseg"
 )
 
 // Default section names used when an item has no custom Section assigned.
@@ -506,24 +505,31 @@ func (m *Model) SetReadStateReader(f func() map[string]core.ReadState) {
 	m.dirty()
 }
 
-// UnreadChannelCount returns the number of channels currently in the
-// sidebar that should render as unread (HasUnread && !IsMuted), via
-// ChannelItem.IsVisiblyUnread. Returns 0 when no reader is installed.
-// Used by the App to compute the window title's active-workspace
-// count -- guaranteed to match the dot population exactly.
-func (m *Model) UnreadChannelCount() int {
+// UnreadChannelIDs returns the IDs of the channels currently in the
+// sidebar that render as unread (HasUnread && !IsMuted, via
+// ChannelItem.IsVisiblyUnread), leaving out hidden deactivated DMs.
+// Empty when no reader is installed. The channel finder's unread group
+// uses it, so the finder matches the dots exactly.
+func (m *Model) UnreadChannelIDs() map[string]bool {
+	ids := map[string]bool{}
 	if m.readStateReader == nil {
-		return 0
+		return ids
 	}
 	state := m.readStateReader()
-	count := 0
 	for _, item := range m.items {
 		// A hidden deactivated DM has no row to show the dot on.
 		if item.IsVisiblyUnread(state[item.ID]) && !m.hidesPeer(item) {
-			count++
+			ids[item.ID] = true
 		}
 	}
-	return count
+	return ids
+}
+
+// UnreadChannelCount is the number of UnreadChannelIDs. Used by the App
+// to compute the window title's active-workspace count, so it matches
+// the dot population exactly.
+func (m *Model) UnreadChannelCount() int {
+	return len(m.UnreadChannelIDs())
 }
 
 // hidesPeer reports whether item is a DM or app row whose peer is
@@ -1186,6 +1192,115 @@ func (m *Model) UpsertItem(item ChannelItem) {
 	m.rebuildNavWithCursor(key, hadKey)
 	m.cacheValid = false
 	m.dirty()
+}
+
+// SetItemStarred moves channelID's row into or out of the Starred
+// section: the optimistic half of /star and /unstar, applied before
+// Slack answers and reverted by the ChannelStarSetMsg arm when it
+// refuses. Starring sets the item's Section to the provider's stars
+// section (Slack-native sections mode; the engine side updates the
+// same membership in its SectionStore). Un-starring clears the
+// Section, which drops the row into its type's default section — a
+// channel that was in a custom section before it was starred lands
+// there instead, until the next section refresh re-resolves it.
+// Without a stars section (config-glob sections, or a workspace whose
+// Slack sections have not loaded) the Section is left alone: there is
+// no Starred group to move the row into, and erasing a configured
+// section would silently ungroup it. Reports whether the item was
+// found.
+func (m *Model) SetItemStarred(channelID string, starred bool) bool {
+	found := false
+	key, hadKey := m.currentCursorKey()
+	starsID := m.starsSectionID()
+	for i := range m.items {
+		if m.items[i].ID != channelID {
+			continue
+		}
+		m.items[i].IsStarred = starred
+		if starsID != "" {
+			if starred {
+				m.items[i].Section = starsID
+			} else {
+				m.items[i].Section = ""
+			}
+		}
+		found = true
+		break
+	}
+	if !found {
+		return false
+	}
+	m.rebuildFilter()
+	m.rebuildNavWithCursor(key, hadKey)
+	m.cacheValid = false
+	m.dirty()
+	return true
+}
+
+// ItemStarState returns channelID's starred flag and section, for the
+// star paths that snapshot a row before an optimistic move and restore
+// it when Slack refuses.
+func (m *Model) ItemStarState(channelID string) (starred bool, section string, ok bool) {
+	for i := range m.items {
+		if m.items[i].ID == channelID {
+			return m.items[i].IsStarred, m.items[i].Section, true
+		}
+	}
+	return false, "", false
+}
+
+// SetItemStarState restores channelID's starred flag and section in
+// one step, rebuilding the nav like SetItemStarred. Reports whether
+// the item was found.
+func (m *Model) SetItemStarState(channelID string, starred bool, section string) bool {
+	found := false
+	key, hadKey := m.currentCursorKey()
+	for i := range m.items {
+		if m.items[i].ID != channelID {
+			continue
+		}
+		m.items[i].IsStarred = starred
+		m.items[i].Section = section
+		found = true
+		break
+	}
+	if !found {
+		return false
+	}
+	m.rebuildFilter()
+	m.rebuildNavWithCursor(key, hadKey)
+	m.cacheValid = false
+	m.dirty()
+	return true
+}
+
+// starsSectionID returns the provider's stars section ID, or "" when
+// there is none (no Slack sections, or the workspace has no stars
+// section). An empty ID leaves the item's Section empty, so a star in
+// a workspace without the section changes nothing visually - matching
+// what the section store does with the membership.
+func (m *Model) starsSectionID() string {
+	if !m.useSlackSections() || m.sectionsProvider == nil {
+		return ""
+	}
+	for _, meta := range m.sectionsProvider.OrderedSlackSections() {
+		if meta.Type == "stars" {
+			return meta.ID
+		}
+	}
+	return ""
+}
+
+// IsItemStarred reports channelID's starred flag, and whether the
+// item was found at all. The toggle paths read it to decide which way
+// to flip.
+func (m *Model) IsItemStarred(channelID string) (starred, ok bool) {
+	for i := range m.items {
+		if m.items[i].ID == channelID {
+			return m.items[i].IsStarred, true
+		}
+	}
+	return false, false
 }
 
 // AllItems returns a copy of the full unfiltered item slice, including
@@ -2449,7 +2564,7 @@ func (m *Model) renderSectionHeaderLabel(name string, width int, cursor string, 
 			textFallback = true
 		}
 		emojiPrefixSelected = emojiPrefix
-		emojiCells = headerCells(emojiPrefix)
+		emojiCells = bubblesansi.Cells(emojiPrefix)
 	}
 
 	glyph := "▾" // expanded
@@ -2489,10 +2604,10 @@ func (m *Model) renderSectionHeaderLabel(name string, width int, cursor string, 
 		}
 	}
 
-	aggregateCells := headerCells(aggregates)
+	aggregateCells := bubblesansi.Cells(aggregates)
 	// The ":code:" text tells the user less than the name, so it gives way before the name is cut.
 	// A glyph stays.
-	if textFallback && headerCells(displayName) > sectionHeaderNameBudget(width, emojiCells, aggregateCells) {
+	if textFallback && bubblesansi.Cells(displayName) > sectionHeaderNameBudget(width, emojiCells, aggregateCells) {
 		emojiPrefix, emojiPrefixSelected = "", ""
 		emojiCells = 0
 	}
@@ -2545,11 +2660,11 @@ const sectionHeaderChromeCells = 4
 func fitSectionHeader(width int, name string, emojiCells, aggregateCells int) (fitted string, keepEmoji, keepAggregates bool) {
 	avail := width - 4
 	nameBudget := sectionHeaderNameBudget(width, emojiCells, aggregateCells)
-	if headerCells(name) <= nameBudget {
+	if bubblesansi.Cells(name) <= nameBudget {
 		return name, true, true
 	}
 	if nameBudget >= 1 {
-		return truncateHeaderName(name, nameBudget), true, true
+		return bubblesansi.Truncate(name, nameBudget), true, true
 	}
 	used := sectionHeaderChromeCells + emojiCells + aggregateCells
 	if used <= avail {
@@ -2564,39 +2679,6 @@ func fitSectionHeader(width int, name string, emojiCells, aggregateCells int) (f
 // aggregates (see fitSectionHeader). It may be negative.
 func sectionHeaderNameBudget(width, emojiCells, aggregateCells int) int {
 	return width - 4 - sectionHeaderChromeCells - emojiCells - aggregateCells
-}
-
-// headerCells measures header text the way both its readers need: as
-// lipgloss does, which decides the wrap, and as emoji.Width does, which
-// knows an emoji image's footprint. The larger wins, so neither
-// overflows.
-func headerCells(s string) int {
-	return max(lipgloss.Width(s), emojiutil.Width(s))
-}
-
-// truncateHeaderName cuts name to at most budget cells, ending in "…"
-// (which takes one of them). It cuts between grapheme clusters, never
-// inside one, so a ZWJ emoji or a combining mark is kept or dropped
-// whole.
-func truncateHeaderName(name string, budget int) string {
-	if budget <= 0 {
-		return ""
-	}
-	var b strings.Builder
-	used := 0
-	rest := name
-	state := -1
-	for len(rest) > 0 {
-		var cluster string
-		cluster, rest, _, state = uniseg.FirstGraphemeClusterInString(rest, state)
-		w := headerCells(cluster)
-		if used+w > budget-1 {
-			break
-		}
-		b.WriteString(cluster)
-		used += w
-	}
-	return b.String() + "…"
 }
 
 // countBadge is the Threads or Activity count after left: "•N" (one

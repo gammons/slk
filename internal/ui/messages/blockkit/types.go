@@ -65,7 +65,7 @@ type RenderResult struct {
 
 // SixelEntry is one sixel image's pre-encoded bytes plus its
 // halfblock-equivalent fallback for partial-visibility frames.
-// Mirrors internal/ui/messages.sixelEntry exactly so the integration
+// Mirrors internal/ui/messages.SixelImage exactly so the integration
 // site can copy the contents without conversion.
 type SixelEntry struct {
 	// Key is the fetcher's cache key for the image (the "BK-" URL

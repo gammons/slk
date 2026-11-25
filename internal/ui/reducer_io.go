@@ -27,6 +27,11 @@
 //	                            in-flight bookkeeping.
 //	messages.AvatarReadyMsg   - lazy avatar fetch landed:
 //	                            invalidate both pane caches.
+//	CellMetricsChangedMsg     - the terminal's cell size in pixels
+//	                            changed: re-point the image context,
+//	                            drop the encoded-image caches and
+//	                            force the painter and the renderer
+//	                            to repaint.
 //
 //	statusbar.CopiedMsg               - "Copied N chars"
 //	statusbar.CopiedClearMsg          - 2/3s expiry tick
@@ -55,6 +60,7 @@ package ui
 
 import (
 	"fmt"
+	"image"
 	"path/filepath"
 	"strings"
 	"time"
@@ -274,7 +280,14 @@ var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// thread saturation — looks like a freeze. Debounce: schedule
 		// one tick on the first arrival; absorb every subsequent
 		// arrival into the pending batch and let them collapse to a
-		// single invalidation when the tick fires.
+		// single invalidation when the tick fires. The URLs are kept
+		// so a message pane can rebuild only the rows that draw one.
+		if m.URL != "" {
+			if a.emojiInvalidateURLs == nil {
+				a.emojiInvalidateURLs = map[string]struct{}{}
+			}
+			a.emojiInvalidateURLs[m.URL] = struct{}{}
+		}
 		if a.emojiInvalidatePending {
 			return nil, true
 		}
@@ -285,14 +298,21 @@ var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 
 	case emojiInvalidateMsg:
 		_ = m
-		// Debounce window closed. One wholesale invalidation across
-		// every emoji-rendering surface; arrivals accumulated during
-		// the window collapse to this. The URL argument is unused —
-		// the surface handlers wipe their caches wholesale regardless
-		// of URL in v1.
+		// Debounce window closed. Message panes rebuild the rows that
+		// use a URL from this window. The thread, sidebar and picker
+		// still invalidate wholesale: an emoji there is not tied to
+		// one message.
 		a.emojiInvalidatePending = false
+		urls := a.emojiInvalidateURLs
+		a.emojiInvalidateURLs = nil
 		for _, mp := range a.allWinModels() {
-			mp.HandleEmojiImageReady("")
+			if len(urls) == 0 {
+				mp.HandleEmojiImageReady("")
+				continue
+			}
+			for u := range urls {
+				mp.HandleEmojiImageReady(u)
+			}
 		}
 		a.threadPanel.HandleEmojiImageReady("")
 		a.sidebar.HandleEmojiImageReady("")
@@ -313,6 +333,45 @@ var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			mp.HandleAvatarReady(m.UserID)
 		}
 		a.threadPanel.HandleAvatarReady(m.UserID)
+		return nil, true
+
+	case CellMetricsChangedMsg:
+		// cmd/slk re-measured the terminal's cell size in pixels and
+		// already re-pointed the encoding globals (image.SetCellPixels)
+		// and the avatar cache. What still holds the old measurement:
+		//
+		//   - a.imageCtx.CellPixels, and the copies the pane renderers
+		//     hold: computeImageTarget, thumbnail selection and the
+		//     decode target size images from them. Re-pushing the
+		//     context also drops both panes' render caches (their
+		//     SetImageContext contract).
+		//   - the fetcher's prerendered cache: keyed by (key, cell
+		//     target, proto), none of which notice that the pixels per
+		//     cell moved, so a rebuilt pane would reuse sixel bytes
+		//     encoded at the old size.
+		//   - the image preview's memo: the same keying problem, so a
+		//     preview open across the change repaints old-size bytes.
+		//
+		// The next frame's sixel plan is forced, which erases what the
+		// painter placed at the old size and repaints from the rebuilt
+		// caches. The erase can only cover cells, and pixels painted at
+		// the old size reached past their placement's footprint, so the
+		// terminal needs a full text redraw too -- that comes from
+		// cmd/slk sending tea.ClearScreen right after this message.
+		// Deliberately NOT a synthetic WindowSizeMsg: re-delivering a
+		// captured size races the real resize the cell change usually
+		// arrives with, and the resize arm would accept the stale
+		// dimensions as the terminal's.
+		ctx := a.imageCtx
+		ctx.CellPixels = image.Pt(m.CellW, m.CellH)
+		a.SetImageContext(ctx)
+		if a.imageFetcher != nil {
+			a.imageFetcher.InvalidatePrerender()
+		}
+		a.sidebar.InvalidateCache()
+		a.preview.InvalidateMemo()
+		a.forceSixelRepaint = true
+		debuglog.ImgRender("cell metrics changed to %dx%d px; image context re-pointed, encoded-image caches dropped", m.CellW, m.CellH)
 		return nil, true
 
 	case imgrender.ImageFailedMsg:
@@ -352,6 +411,10 @@ func reducePaste(a *App, m tea.PasteMsg) tea.Cmd {
 		txt := strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ").Replace(m.Content)
 		a.searchInput += txt
 		a.statusbar.SetSearch("/" + a.searchInput)
+		return nil
+	}
+	if a.mode == ModeOpenSlackLink {
+		a.appendSlackLinkPaste(m.Content)
 		return nil
 	}
 	if a.mode != ModeInsert {

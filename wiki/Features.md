@@ -42,7 +42,7 @@
 ## Images
 
 - Inline image attachments render automatically in the messages pane: kitty graphics protocol on capable terminals (kitty, ghostty, recent WezTerm), sixel on foot/mlterm and on any terminal that advertises sixel in its DA1 reply (xterm with sixel support, DomTerm, toyterm, …), half-block (`▀`) fallback everywhere else. Several images in one message sit side by side and wrap onto the next row when the next image does not fit; a single image keeps its usual size, and each image still opens on its own
-- User avatars use the same kitty graphics path on capable terminals for sharper pixels; sixel and other terminals fall back to half-block. Long author names wrap in full beside the avatar when the pane narrows; the avatar's two rows stay contiguous, and the message body starts below the complete header. Timestamps stay whole when they fit on a header line, so selection can add the date when space allows without changing the row count.
+- User avatars use the same image path as inline images for sharper pixels: kitty graphics on capable terminals, sixel on sixel terminals, and half-block elsewhere (or for a sixel avatar the pane edge cuts). Long author names wrap in full beside the avatar when the pane narrows; the avatar's two rows stay contiguous, and the message body starts below the complete header. Timestamps stay whole when they fit on a header line, so selection can add the date when space allows without changing the row count. The profile dialog draws the same avatar as a sixel image on sixel terminals (blank cells in the card's text, placed by the painter like the panes'), and as half-block elsewhere.
 - Click any inline image (or press `O` on the selected message) for a full-screen in-app preview
 - `Enter` from the preview launches the OS image viewer
 - Lazy-loaded: images download only as they scroll into view
@@ -120,7 +120,8 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
 - Live unread indicators: bold + blue dot for unread channels, muted text for read ones, aggregate dot+count on collapsed section headers
 - Glob-based config sections (`[sections.*]` in `config.toml`) — used when `use_slack_sections = false` or as a fallback when Slack's API is unreachable. Channel patterns can carry an optional `":<N>"` suffix (e.g. `"eng-general:1"`) to pin order within a section; see [Configuration › Ordering channels within a section](Configuration.md#ordering-channels-within-a-section).
 - Deactivated people are hidden like in the Slack desktop client: their DMs leave the sidebar and they are not offered in the new-message picker or `@` / `#` autocomplete, while old messages still show them as authors. The channel finder shows their DM only when you type their name, marked `deactivated`, so you can still read the history; its composer is disabled. Turn it off with `[general] hide_deactivated_users = false`; see [Configuration › Deactivated users](Configuration.md#deactivated-users).
-- Fuzzy channel finder (`Ctrl+t` / `Ctrl+p`) — shows the channel you open under its collapsed section's header; ranks 1:1 DMs above group DMs when searching by person name
+- Fuzzy channel finder (`Ctrl+t` / `Ctrl+p`) — before you type, lists unread conversations first and draws a line under them, then the rest by when you last visited them; shows the channel you open under its collapsed section's header; ranks 1:1 DMs above group DMs when searching by person name
+- Open a Slack message link copied from outside slk (`P`) — a one-line dialog. Paste the permalink (bracketed paste or `Ctrl+V`); Enter opens it the same way `o` opens a link in a message, including a `?thread_ts=` and an Enterprise Grid alias domain, and switches workspace when the link belongs to another one you have configured. An invalid URL stays in the dialog with an error; Esc cancels
 - Workspace picker (`:ws`) and direct jump (`1`–`9`)
 - `:` command line with Tab completion (`Shift+Tab` goes back) and the matching names listed in the status bar; `:help` (same as `?`) lists every key and command, `:version` shows the running build
 - All workspaces stay connected in parallel for live unread badges
@@ -139,6 +140,7 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
 - Triggers on DMs, mentions, and configurable keywords
 - Suppressed when you're focused on the relevant channel
 - Suppressed entirely while you're in DND/snooze
+- Never for an author you hid with `:suppress` (per conversation or workspace-wide); their messages are not shown either
 
 ## Status & DND
 

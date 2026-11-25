@@ -12,6 +12,7 @@ import (
 	"github.com/gammons/slk/internal/bootstrap"
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	"github.com/gammons/slk/internal/service"
 	slackclient "github.com/gammons/slk/internal/slack"
@@ -144,6 +145,13 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	)
 	wctx.UserResolver.names = wctx.UserNames
 
+	wctx.Subteams = newSubteamResolver(ctx, client.GetUserGroupInfo, wctx.UserGroups, wctx.MergeUserGroups,
+		func(map[string]string) {
+			if p != nil {
+				wctx.PublishUserGroups(p.Send)
+			}
+		}, log.Printf)
+
 	// Channel names include cached unjoined public channels, but resolving a
 	// mention only updates this store and metadata, never workspace rows.
 	wctx.ChannelResolver = newChannelResolver(wctx.TeamID, db, client.GetConversationInfo)
@@ -202,12 +210,12 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	// cache against edgeapi. See internal/bootstrap.
 	//
 	// This runs AFTER the channel-visits load because
-	// mostRecentlyVisitedChannel reads wctx.LastVisitedByChannel,
-	// which that load fills. It is the same expression the UI is
-	// handed as WorkspaceReadyMsg.LastChannelID, so the channel
-	// bootstrap opens is the channel the sidebar restores rather than
-	// a second, differently-chosen one. Empty is legal and means "open
-	// nothing" — a fresh profile with no recorded visits.
+	// startupChannelID reads wctx.LastVisitedByChannel, which that load
+	// fills. It makes the same choice the UI makes from
+	// WorkspaceReadyMsg's DefaultChannel and LastChannelID, so the
+	// channel bootstrap opens is the channel the sidebar restores rather
+	// than a second, differently-chosen one. Empty is legal and means
+	// "open nothing" — a fresh profile with no recorded visits.
 	//
 	// The old enumeration paths below (GetChannels, GetUnreadCounts,
 	// and the reconnect backfill) still run. That is
@@ -219,7 +227,8 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	// is announced after it.
 	deactivatedBefore, _ := db.DeactivatedUsers()
 	res, err := bootstrap.Run(ctx, newBootstrapDeps(client, db, token.AccessToken,
-		mostRecentlyVisitedChannel(wctx.LastVisitedByChannel), wctx.EdgeHealth))
+		startupChannelID(db, client.TeamID(), cfg.ResolveDefaultChannel(client.TeamID()),
+			wctx.LastVisitedByChannel), wctx.EdgeHealth))
 	if err != nil {
 		return nil, fmt.Errorf("bootstrapping %s: %w", token.TeamName, err)
 	}
@@ -406,8 +415,18 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 			seedDMFromCache(db, ch.User, &item, &finderItem)
 		}
 		wctx.Channels = append(wctx.Channels, item)
+		wctx.MarkConversation(item.ID)
 		finderItem.LastVisited = wctx.LastVisitedByChannel[ch.ID]
 		wctx.FinderItems = append(wctx.FinderItems, finderItem)
+	}
+
+	// Stars for workspaces without a usable section store (config-glob
+	// sections, or a failed sections bootstrap): userBoot's starred
+	// list is the same authority the store's stars section is built
+	// from, so seed the rows from it directly - otherwise existing
+	// stars render hollow and a click on the glyph would re-star.
+	if wctx.SectionStore == nil || !wctx.SectionStore.Ready() {
+		applyBootStars(wctx.Channels, res.Starred)
 	}
 
 	// Unread counts come from the boot response rather than a second
@@ -644,4 +663,29 @@ func (h *rtmEventHandler) syncOnReconnect(trigger string) bool {
 
 func (h *rtmEventHandler) OnDisconnect() {
 	h.program.Send(ui.ConnectionStateMsg{State: int(statusbar.StateDisconnected)})
+}
+
+// startupChannelID is the channel bootstrap opens for a workspace: the
+// configured default_channel when the cache holds a joined channel by
+// that name (core.ChannelNameMatcher, as the UI matches it), else the
+// most recently visited one. The UI makes the same choice from
+// WorkspaceReadyMsg, against the fresh conversation list; the cache is
+// the previous session's, so a channel left or renamed elsewhere since
+// can make the two differ. That costs only a cold first paint of the
+// channel the UI opens. On a first run the cache is empty and the
+// default is matched by the UI alone.
+func startupChannelID(db *cache.DB, teamID, defaultName string, visits map[string]int64) string {
+	if defaultName != "" && db != nil {
+		matches := core.ChannelNameMatcher(defaultName)
+		channels, err := db.ListChannels(teamID, true)
+		if err != nil {
+			log.Printf("warning: resolving default_channel %q for %s: %v", defaultName, teamID, err)
+		}
+		for _, ch := range channels {
+			if matches(ch.Type, ch.Name) {
+				return ch.ID
+			}
+		}
+	}
+	return mostRecentlyVisitedChannel(visits)
 }

@@ -70,6 +70,14 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		return a.handleJumpChord(msg)
 	}
 
+	// A Home tab fills the messages region in place of the channel: the
+	// pane's selection is not on screen, so keys that act on it are
+	// ignored rather than acting on a hidden message. b presses the
+	// tab's buttons and t returns to messages (both handled below).
+	if a.view == ViewAppHome && a.focusedPanel == PanelMessages && a.appHomeMessageOp(msg) {
+		return nil
+	}
+
 	// Reaction-nav sub-state (intercept before normal keys).
 	if p, channelID, ok := a.focusedContentPane(); ok && p.ReactionNavActive() {
 		return a.handleReactionNav(p, channelID, msg)
@@ -83,6 +91,14 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 
 	switch {
 	case key.Matches(msg, a.keys.InsertMode):
+		if a.view == ViewAppHome && !(a.focusedPanel == PanelThread && a.threadVisible) {
+			// The messages region draws the Home tab, which has no
+			// composer: every path here (messages, sidebar or rail
+			// focus) would type into a hidden box. A visible thread
+			// keeps its own composer. Returning to Messages is one key
+			// away.
+			return toastWithClear(a, "Press t for the messages tab", 2*time.Second)
+		}
 		// In the Threads view there is no main compose box -- the
 		// only way to type is into the right-side thread panel's
 		// compose. Force focus there even when the threads list
@@ -112,6 +128,13 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		a.cancelEdit()
 		a.SetMode(ModeNormal)
 		a.compose.Blur()
+		if a.view == ViewAppHome && a.focusedPanel == PanelMessages {
+			// Esc leaves the Home tab for the conversation's messages,
+			// like the same key leaving insert mode. A thread panel
+			// stays open: the two tabs are independent.
+			a.view = ViewChannels
+			return nil
+		}
 		if a.threadVisible {
 			a.closeThreadByUser()
 		}
@@ -162,6 +185,11 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		a.sidebar.SelectActivityRow()
 		return func() tea.Msg { return ActivityViewActivatedMsg{} }
 
+	case (a.view == ViewAppHome || a.focusedPanel == PanelMessages) && key.Matches(msg, a.keys.AppHome):
+		// An app DM with a Home tab: t switches between the tab and the
+		// conversation's messages. A conversation without one ignores it.
+		return a.toggleAppHome()
+
 	case key.Matches(msg, a.keys.Tab):
 		a.FocusNext()
 
@@ -170,6 +198,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 
 	case key.Matches(msg, a.keys.ToggleSidebar):
 		a.ToggleSidebar()
+
+	case key.Matches(msg, a.keys.ToggleWorkspaceRail):
+		a.ToggleWorkspaceRail()
 
 	case key.Matches(msg, a.keys.SidebarGrow):
 		a.sidebar.GrowWidth()
@@ -291,6 +322,7 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		a.SetMode(ModePresenceMenu)
 
 	case key.Matches(msg, a.keys.FuzzyFinder) || key.Matches(msg, a.keys.FuzzyFinderAlt):
+		a.channelFinder.SetUnread(a.sidebar.UnreadChannelIDs())
 		a.channelFinder.Open()
 		a.SetMode(ModeChannelFinder)
 
@@ -318,6 +350,11 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 
 	case key.Matches(msg, a.keys.SaveThread):
 		return a.saveThreadToFile()
+
+	case a.view == ViewAppHome && a.focusedPanel == PanelMessages && key.Matches(msg, a.keys.RespondButtons):
+		// The messages region draws the Home tab: b presses the tab's
+		// buttons rather than a message's.
+		return a.openAppHomeActions()
 
 	case key.Matches(msg, a.keys.RespondButtons):
 		return a.respondToSelected()
@@ -348,6 +385,12 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 
 	case key.Matches(msg, a.keys.OpenLink):
 		return a.openLinksOfSelected()
+
+	case key.Matches(msg, a.keys.OpenSlackLink):
+		a.slackLinkInput = ""
+		a.slackLinkError = ""
+		a.SetMode(ModeOpenSlackLink)
+		return nil
 
 	case a.view == ViewActivity && key.Matches(msg, a.keys.ActivityUnread):
 		return func() tea.Msg { return ActivityToggleUnreadMsg{} }

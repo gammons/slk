@@ -229,18 +229,48 @@ func writeErase(w io.Writer, pl SixelPlacement, eraseSGR string) {
 		w.Write(pl.Erase)
 		return
 	}
+	rows, cols := paintedExtent(pl)
 	fmt.Fprint(w, "\x1b7")
 	if eraseSGR != "" {
 		fmt.Fprint(w, eraseSGR)
 	}
-	for r := 0; r < pl.Rows; r++ {
+	for r := 0; r < rows; r++ {
 		fmt.Fprintf(w, "\x1b[%d;%dH", pl.Row+r, pl.Col)
-		fmt.Fprintf(w, "\x1b[%dX", pl.Cols)
+		fmt.Fprintf(w, "\x1b[%dX", cols)
 	}
 	if eraseSGR != "" {
 		fmt.Fprint(w, "\x1b[0m")
 	}
 	fmt.Fprint(w, "\x1b8")
+}
+
+// paintedExtent is the cell footprint a placement's pixels actually
+// cover on screen: the recorded Rows/Cols, extended to the payload's
+// encoded pixel size measured against the terminal's real cell size.
+// The two agree while the payload was encoded for the current cell
+// size. After a cell-size change -- a terminal settling its font scale
+// shortly after launch, a move to a monitor with another scale, a font
+// zoom -- a payload painted under the old size reaches past its
+// recorded footprint, and the erase has to cover the difference: foot
+// splits a sixel whose cells are partly erased and keeps the remainder
+// on screen.
+func paintedExtent(pl SixelPlacement) (rows, cols int) {
+	rows, cols = pl.Rows, pl.Cols
+	if len(pl.Bytes) == 0 {
+		return rows, cols
+	}
+	pxW, pxH, ok := SixelPixelSize(pl.Bytes)
+	if !ok {
+		return rows, cols
+	}
+	cw, ch := measuredCellPixels()
+	if r := (pxH + ch - 1) / ch; r > rows {
+		rows = r
+	}
+	if c := (pxW + cw - 1) / cw; c > cols {
+		cols = c
+	}
+	return rows, cols
 }
 
 // sortedSlots returns the painter's slot keys in deterministic (row,

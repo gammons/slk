@@ -60,6 +60,8 @@ func (f *galleryFetcher) Prerendered(key string, cell image.Point, proto imgpkg.
 func (f *galleryFetcher) ConfigurePrerender(imgpkg.Protocol)            {}
 func (f *galleryFetcher) ConfigurePrerenderKitty(*imgpkg.KittyRenderer) {}
 
+func (f *galleryFetcher) InvalidatePrerender() {}
+
 func galleryMessage(n int, fileBetween bool) MessageItem {
 	var atts []Attachment
 	for i := 0; i < n; i++ {
