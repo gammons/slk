@@ -44,6 +44,7 @@ type KeyMap struct {
 	CopyPermalink       key.Binding
 	ForwardMessage      key.Binding
 	OpenPreview         key.Binding
+	LoadImages          key.Binding
 	OpenLink            key.Binding
 	OpenSlackLink       key.Binding
 	DownloadFile        key.Binding
@@ -132,6 +133,7 @@ func DefaultKeyMap() KeyMap {
 		CopyPermalink:   key.NewBinding(key.WithKeys("Y", "C"), key.WithHelp("Y/C", "copy permalink")),
 		ForwardMessage:  key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "forward message")),
 		OpenPreview:     key.NewBinding(key.WithKeys("O", "v"), key.WithHelp("O/v", "open image preview")),
+		LoadImages:      key.NewBinding(key.WithKeys("I"), key.WithHelp("I", "load images the image_loading policy held back")),
 		OpenLink:        key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open link in message")),
 		OpenSlackLink:   key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "open a pasted Slack message link")),
 		DownloadFile:    key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "download file in message")),

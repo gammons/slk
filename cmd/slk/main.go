@@ -395,6 +395,12 @@ func run() error {
 	}
 	imageFetcher := imgpkg.NewFetcher(imageCache, newImageHTTPClient())
 	imageFetcher.SetAuths(auths)
+	// Which message images load without asking. The fetcher refuses
+	// what the policy does not allow; the panes read the same policy
+	// to draw a "not loaded" line instead of fetching.
+	imageMode, _ := imgpkg.ParseLoadMode(cfg.General.ImageLoading)
+	imagePolicy := imgpkg.NewLoadPolicy(imageMode, cfg.General.TrustedImageHosts)
+	imageFetcher.SetLoadPolicy(imagePolicy)
 
 	// File attachment downloads (`d` keybinding) share the image
 	// fetcher's auth mechanism via slackhttp.AuthResolver. The
@@ -562,6 +568,7 @@ func run() error {
 			CellPixels:  image.Pt(pxW, pxH),
 			MaxRows:     cfg.Appearance.MaxImageRows,
 			MaxCols:     cfg.Appearance.MaxImageCols,
+			Policy:      imagePolicy,
 			SendMsg:     send,
 		}
 	}
