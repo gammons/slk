@@ -249,3 +249,53 @@ func draftDestinations(channelID, threadTS string) (string, error) {
 
 // parseMillis reads a unix-millisecond client_last_updated_ts.
 func parseMillis(s string) (int64, error) { return strconv.ParseInt(s, 10, 64) }
+
+// DraftRef names the draft a message is sent from, so Slack marks it
+// sent with the post (chat.postMessage draft_id and
+// current_draft_last_updated_ts; documented, not captured).
+type DraftRef struct {
+	ID            string
+	LastUpdatedTS string // the draft's last_updated_ts as Slack returned it
+}
+
+func (r *DraftRef) fields() url.Values {
+	if r == nil {
+		return nil
+	}
+	return url.Values{"draft_id": {r.ID}, "current_draft_last_updated_ts": {r.LastUpdatedTS}}
+}
+
+// SendDraft posts text as SendMessage (threadTS "") or SendReply does,
+// marking ref sent with it. Slack's refusal is slack.SlackErrorResponse,
+// e.g. draft_already_sent: nothing was posted.
+func (c *Client) SendDraft(ctx context.Context, channelID, threadTS, text string, broadcast bool, ref DraftRef) (string, string, error) {
+	ts, mr, err := c.postMessage(ctx, channelID, threadTS, text, broadcast, &ref)
+	if err != nil {
+		return "", "", fmt.Errorf("sending message: %w", err)
+	}
+	return ts, mr, nil
+}
+
+// plainPostForm is chat.postMessage's fields for a message without
+// chips: chipPostForm without unfurl.
+func plainPostForm(channelID, threadTS string, broadcast bool, mr string, block *slack.RichTextBlock, clientMsgID string) (url.Values, error) {
+	form := url.Values{
+		"channel":       {channelID},
+		"text":          {mr},
+		"client_msg_id": {clientMsgID},
+	}
+	if block != nil {
+		blocks, err := marshalUnescaped([]slack.Block{block})
+		if err != nil {
+			return nil, fmt.Errorf("encoding blocks: %w", err)
+		}
+		form.Set("blocks", blocks)
+	}
+	if threadTS != "" {
+		form.Set("thread_ts", threadTS)
+		if broadcast {
+			form.Set("reply_broadcast", "true")
+		}
+	}
+	return form, nil
+}

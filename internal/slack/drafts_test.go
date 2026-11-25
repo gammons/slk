@@ -3,6 +3,7 @@ package slackclient
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/slack-go/slack"
 )
 
 // uuidRe is declared in forward_test.go; reused here.
@@ -240,5 +243,44 @@ func TestDeleteDraft_Form(t *testing.T) {
 	}
 	if ms, err := parseMillis(f.Get("client_last_updated_ts")); err != nil || ms < before {
 		t.Errorf("client_last_updated_ts = %q, want now in unix ms", f.Get("client_last_updated_ts"))
+	}
+}
+
+// chat.postMessage's draft fields are documented by Slack but not
+// captured from the web client.
+func TestSendDraft_PostsDraftFields(t *testing.T) {
+	c, ds := newDraftServer(t, map[string][]string{"chat.postMessage": {`{"ok":true,"ts":"5.0"}`}})
+	ts, mr, err := c.SendDraft(context.Background(), "C1", "10.0", "hi **there**", true,
+		DraftRef{ID: "Dr1", LastUpdatedTS: "1795617850.177844"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ts != "5.0" || mr != "hi *there*" {
+		t.Errorf("ts, mrkdwn = %q, %q", ts, mr)
+	}
+	f := ds.forms["chat.postMessage"][0]
+	for k, want := range map[string]string{
+		"draft_id":                      "Dr1",
+		"current_draft_last_updated_ts": "1795617850.177844",
+		"channel":                       "C1",
+		"thread_ts":                     "10.0",
+		"reply_broadcast":               "true",
+		"text":                          "hi *there*",
+	} {
+		if f.Get(k) != want {
+			t.Errorf("%s = %q, want %q", k, f.Get(k), want)
+		}
+	}
+	if !uuidRe.MatchString(f.Get("client_msg_id")) || f.Get("blocks") == "" {
+		t.Errorf("client_msg_id = %q, blocks = %q", f.Get("client_msg_id"), f.Get("blocks"))
+	}
+}
+
+func TestSendDraft_RefusalIsSlackErrorResponse(t *testing.T) {
+	c, _ := newDraftServer(t, map[string][]string{"chat.postMessage": {`{"ok":false,"error":"draft_already_sent"}`}})
+	_, _, err := c.SendDraft(context.Background(), "C1", "", "hi", false, DraftRef{ID: "Dr1"})
+	var r slack.SlackErrorResponse
+	if !errors.As(err, &r) || r.Err != "draft_already_sent" {
+		t.Errorf("err = %v, want SlackErrorResponse draft_already_sent", err)
 	}
 }
