@@ -9,6 +9,7 @@ import (
 	"context"
 	"image"
 	"io/fs"
+	"time"
 
 	"github.com/gammons/slk/internal/core/blocks"
 	"github.com/gammons/slk/internal/ids"
@@ -69,6 +70,24 @@ type CommandService interface {
 	// threadTS's thread when threadTS is set.
 	// args is wire-form text (<@U…>, <#C…|name>); "" for none.
 	Run(teamID string, channelID ids.ChannelID, threadTS ids.ThreadTS, command, args string) error
+}
+
+// DraftService syncs composer drafts with Slack's own (drafts.*). Every
+// method is blocking; callers run it from a tea.Cmd. teamID / key.TeamID
+// names the workspace, which need not be the active one.
+//
+// Build one with NewDraftService.
+type DraftService interface {
+	// Load lists the workspace's active drafts.
+	Load(teamID string) ([]Draft, error)
+	// Save makes text (wire form) the conversation's draft. edited is
+	// when the text was last changed. ErrDraftHandsOff when the
+	// conversation's draft is one slk won't overwrite.
+	Save(key DraftKey, text string, edited time.Time) (DraftSaveResult, error)
+	// Discard deletes the conversation's draft, if slk knows of one.
+	Discard(key DraftKey) error
+	// Delete deletes one draft by id (the Drafts list).
+	Delete(teamID, draftID string) error
 }
 
 // ThreadService is the App's interface to Slack's thread surfaces:

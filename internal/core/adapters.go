@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"time"
 
 	"github.com/gammons/slk/internal/core/blocks"
 	"github.com/gammons/slk/internal/ids"
@@ -118,6 +119,49 @@ func (c commandAdapter) Run(teamID string, channelID ids.ChannelID, threadTS ids
 		return errors.ErrUnsupported
 	}
 	return c.fns.Run(teamID, channelID, threadTS, command, args)
+}
+
+// DraftServiceFuncs bundles the closures behind a DraftService. A nil
+// func makes its method return errors.ErrUnsupported.
+type DraftServiceFuncs struct {
+	Load    func(teamID string) ([]Draft, error)
+	Save    func(key DraftKey, text string, edited time.Time) (DraftSaveResult, error)
+	Discard func(key DraftKey) error
+	Delete  func(teamID, draftID string) error
+}
+
+// NewDraftService builds a DraftService from fns. Used by
+// cmd/slk/main.go (production wiring) and tests.
+func NewDraftService(fns DraftServiceFuncs) DraftService { return draftAdapter{fns: fns} }
+
+type draftAdapter struct{ fns DraftServiceFuncs }
+
+func (d draftAdapter) Load(teamID string) ([]Draft, error) {
+	if d.fns.Load == nil {
+		return nil, errors.ErrUnsupported
+	}
+	return d.fns.Load(teamID)
+}
+
+func (d draftAdapter) Save(key DraftKey, text string, edited time.Time) (DraftSaveResult, error) {
+	if d.fns.Save == nil {
+		return DraftSaveResult{}, errors.ErrUnsupported
+	}
+	return d.fns.Save(key, text, edited)
+}
+
+func (d draftAdapter) Discard(key DraftKey) error {
+	if d.fns.Discard == nil {
+		return errors.ErrUnsupported
+	}
+	return d.fns.Discard(key)
+}
+
+func (d draftAdapter) Delete(teamID, draftID string) error {
+	if d.fns.Delete == nil {
+		return errors.ErrUnsupported
+	}
+	return d.fns.Delete(teamID, draftID)
 }
 
 // ThreadServiceFuncs is the closure bundle accepted by
