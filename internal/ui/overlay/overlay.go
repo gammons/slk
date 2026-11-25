@@ -16,6 +16,24 @@ import (
 // renderer emits without taking a dependency on cluster segmentation.
 var kittyPlaceholderPrefix = string(image.PlaceholderRune)
 
+// Centered returns the top-left cell where a boxW×boxH box lands when
+// DimmedOverlay centers it in a width×height surface: ((w-boxW)/2,
+// (h-boxH)/2), clamped at 0. Surfaces that need to know where the
+// composited box ended up — the profile dialog places the avatar's
+// sixel image on its own box — compute the same spot through this
+// instead of re-deriving the formula.
+func Centered(width, height, boxW, boxH int) (x, y int) {
+	x = (width - boxW) / 2
+	y = (height - boxH) / 2
+	if x < 0 {
+		x = 0
+	}
+	if y < 0 {
+		y = 0
+	}
+	return x, y
+}
+
 // DimmedOverlay composites a modal box on top of a dimmed background.
 // The background string is rendered to a Canvas, all cell colors are
 // darkened by dimPercent (0.0-1.0), then the modal box is placed centered
@@ -81,14 +99,7 @@ func DimmedOverlay(width, height int, background string, box string, dimPercent 
 	// Step 3: Render modal to its own canvas, compute centered position
 	modalW := lipgloss.Width(box)
 	modalH := lipgloss.Height(box)
-	startX := (width - modalW) / 2
-	startY := (height - modalH) / 2
-	if startX < 0 {
-		startX = 0
-	}
-	if startY < 0 {
-		startY = 0
-	}
+	startX, startY := Centered(width, height, modalW, modalH)
 
 	modalCanvas := lipgloss.NewCanvas(modalW, modalH)
 	modalCanvas.Compose(lipgloss.NewLayer(box))

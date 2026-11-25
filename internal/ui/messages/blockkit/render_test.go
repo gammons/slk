@@ -358,6 +358,56 @@ func TestRenderActionsBlockSetsInteractive(t *testing.T) {
 	}
 }
 
+func TestRenderSectionButtonAccessoryRecordsAHit(t *testing.T) {
+	r := Render([]Block{SectionBlock{
+		BlockID: "sec1",
+		Text:    "Not the perfect gif?",
+		Accessory: LabelAccessory{
+			Kind: "button", Label: "Shuffle", ActionID: "shuffle",
+		},
+	}}, Context{}, 80)
+	if len(r.ActionHits) != 1 {
+		t.Fatalf("ActionHits = %d, want the section's button", len(r.ActionHits))
+	}
+	h := r.ActionHits[0]
+	if h.BlockID != "sec1" || h.ActionID != "shuffle" {
+		t.Errorf("hit = %s/%s, want sec1/shuffle", h.BlockID, h.ActionID)
+	}
+	if h.RowStart < 0 || h.RowStart >= len(r.Lines) {
+		t.Fatalf("hit row = %d, outside %d lines", h.RowStart, len(r.Lines))
+	}
+	line := ansi.Strip(r.Lines[h.RowStart])
+	if w := lipgloss.Width(line); h.ColStart >= w || h.ColEnd > w {
+		t.Errorf("hit cols = %d..%d, outside a %d-column line", h.ColStart, h.ColEnd, w)
+	}
+}
+
+func TestRenderActionsBlockRecordsButtonHits(t *testing.T) {
+	r := Render([]Block{ActionsBlock{
+		BlockID: "acts",
+		Elements: []ActionElement{
+			{Kind: "button", Label: "Approve", ActionID: "approve"},
+			{Kind: "button", Label: "Deny", ActionID: "deny"},
+		},
+	}}, Context{}, 80)
+	if len(r.ActionHits) != 2 {
+		t.Fatalf("ActionHits = %d, want 2", len(r.ActionHits))
+	}
+	for i, want := range []string{"approve", "deny"} {
+		h := r.ActionHits[i]
+		if h.BlockID != "acts" || h.ActionID != want {
+			t.Errorf("hit %d = block %q action %q, want acts/%s", i, h.BlockID, h.ActionID, want)
+		}
+		if h.RowStart < 0 || h.RowStart >= len(r.Lines) {
+			t.Errorf("hit %d row = %d, outside %d lines", i, h.RowStart, len(r.Lines))
+			continue
+		}
+		if w := lipgloss.Width(r.Lines[h.RowStart]); h.ColStart >= w || h.ColEnd > w {
+			t.Errorf("hit %d cols = %d..%d, outside a %d-column line", i, h.ColStart, h.ColEnd, w)
+		}
+	}
+}
+
 func TestRenderActionsBlockWrapsAtWidth(t *testing.T) {
 	// Three buttons of "[ Long Button Name ]" (~20 cols each) at
 	// width 30 must wrap.
@@ -469,5 +519,39 @@ func TestRenderSectionImageAccessoryEmptyAltUsesGenericLabel(t *testing.T) {
 	plain := ansi.Strip(strings.Join(r.Lines, "\n"))
 	if !strings.Contains(plain, "[image: image]") && !strings.Contains(plain, "[image]") {
 		t.Errorf("expected fallback with default alt, got %q", plain)
+	}
+}
+
+// Actions-block buttons record their footprints, so a host can make
+// them clickable (the app Home tab does).
+func TestRenderActionsRecordsHits(t *testing.T) {
+	r := Render([]Block{
+		SectionBlock{Text: "hi"},
+		ActionsBlock{BlockID: "b1", Elements: []ActionElement{
+			{Kind: "button", Label: "A", ActionID: "a"},
+			{Kind: "button", Label: "B", ActionID: "b"},
+		}},
+	}, Context{}, 40)
+
+	if len(r.ActionHits) != 2 {
+		t.Fatalf("action hits = %d, want 2", len(r.ActionHits))
+	}
+	a, b := r.ActionHits[0], r.ActionHits[1]
+	if a.BlockID != "b1" || a.ActionID != "a" || a.RowStart != 1 || a.ColStart != 0 || a.ColEnd != 5 {
+		t.Errorf("first hit = %+v, want b1/a row 1 cols 0..5", a)
+	}
+	if b.BlockID != "b1" || b.ActionID != "b" || b.RowStart != 1 || b.ColStart != 7 || b.ColEnd != 12 {
+		t.Errorf("second hit = %+v, want b1/b row 1 cols 7..12", b)
+	}
+}
+
+// A legacy attachment passes -1: its synthesized actions block is not in
+// the caller's block slice, so no hits are recorded.
+func TestRenderLegacyActionsRecordNoHits(t *testing.T) {
+	r := RenderLegacy([]LegacyAttachment{{
+		Actions: []LegacyAction{{Name: "a", Text: "A", Type: "button"}},
+	}}, Context{}, 40)
+	if len(r.ActionHits) != 0 {
+		t.Errorf("legacy action hits = %+v, want none", r.ActionHits)
 	}
 }

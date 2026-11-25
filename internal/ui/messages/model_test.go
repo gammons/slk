@@ -1539,8 +1539,14 @@ func TestPatchUserName_AppliesWhenSharedMapAlreadyHasName(t *testing.T) {
 	if m.messages[0].UserName != "bob" {
 		t.Errorf("msg[0].UserName = %q, want bob", m.messages[0].UserName)
 	}
-	if m.cache != nil {
-		t.Error("PatchUserName should invalidate the cache so the <@U1> mention re-resolves")
+	if m.cache == nil {
+		t.Fatal("PatchUserName dropped the whole cache; only rows that show U1 should rebuild")
+	}
+	if _, ok := m.staleEntries["1.0"]; !ok {
+		t.Error("author row was not marked stale")
+	}
+	if _, ok := m.staleEntries["2.0"]; !ok {
+		t.Error("mention row was not marked stale")
 	}
 	if m.Version() == verBefore {
 		t.Error("Version should bump after PatchUserName")
@@ -1571,8 +1577,11 @@ func TestPatchUserName_InvalidatesCacheEvenWithNoMatchingMessages(t *testing.T) 
 		t.Fatal("expected cache populated after View(); harness assumption failed")
 	}
 	m.PatchUserName("U99", "carol")
-	if m.cache != nil {
-		t.Error("PatchUserName should have invalidated m.cache so the mention re-resolves")
+	if m.cache == nil {
+		t.Fatal("PatchUserName dropped the whole cache; only the mentioning row should rebuild")
+	}
+	if _, ok := m.staleEntries["1.0"]; !ok {
+		t.Error("the <@U99> mention was not marked stale")
 	}
 }
 
@@ -1966,8 +1975,8 @@ func TestSetSearchTerms_RedundantCallKeepsCache(t *testing.T) {
 // "128/80x64", so a slot swap between them was treated as unchanged and
 // never repainted.
 func TestSixelIdentity_DifferentStableKeysNeverCollide(t *testing.T) {
-	a := sixelEntry{key: "FRED-720", bytes: []byte("same-size-a"), width: 10, height: 5}
-	b := sixelEntry{key: "FBLUE-720", bytes: []byte("same-size-b"), width: 10, height: 5}
+	a := SixelImage{key: "FRED-720", bytes: []byte("same-size-a"), width: 10, height: 5}
+	b := SixelImage{key: "FBLUE-720", bytes: []byte("same-size-b"), width: 10, height: 5}
 	if len(a.bytes) != len(b.bytes) {
 		t.Fatal("precondition: payload lengths must match")
 	}
@@ -1980,8 +1989,8 @@ func TestSixelIdentity_DifferentStableKeysNeverCollide(t *testing.T) {
 // when no stable key exists, equal-length different payloads still get
 // different identities (payload hashed once at construction time).
 func TestSixelIdentity_EmptyKeysHashPayload(t *testing.T) {
-	a := sixelEntry{bytes: []byte("same-size-a"), width: 10, height: 5}
-	b := sixelEntry{bytes: []byte("same-size-b"), width: 10, height: 5}
+	a := SixelImage{bytes: []byte("same-size-a"), width: 10, height: 5}
+	b := SixelImage{bytes: []byte("same-size-b"), width: 10, height: 5}
 	if len(a.bytes) != len(b.bytes) {
 		t.Fatal("precondition: payload lengths must match")
 	}
@@ -1993,8 +2002,8 @@ func TestSixelIdentity_EmptyKeysHashPayload(t *testing.T) {
 // TestSixelIdentity_GeometryParticipates asserts that a key collision is
 // still broken by a footprint difference.
 func TestSixelIdentity_GeometryParticipates(t *testing.T) {
-	a := sixelEntry{key: "F1-720", bytes: []byte("payload"), width: 10, height: 5}
-	b := sixelEntry{key: "F1-720", bytes: []byte("payload"), width: 11, height: 5}
+	a := SixelImage{key: "F1-720", bytes: []byte("payload"), width: 10, height: 5}
+	b := SixelImage{key: "F1-720", bytes: []byte("payload"), width: 11, height: 5}
 	if imgpkg.PlacementKey(a.key, a.bytes, a.width, a.height) == imgpkg.PlacementKey(b.key, b.bytes, b.width, b.height) {
 		t.Fatalf("different target geometry collided: %q", imgpkg.PlacementKey(a.key, a.bytes, a.width, a.height))
 	}

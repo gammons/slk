@@ -8,6 +8,11 @@ on:
 permissions:
   contents: write
 
+env:
+  # Keep in step with ci.yml, which runs goreleaser check with the same version.
+  # renovate: datasource=github-releases depName=goreleaser/goreleaser
+  GORELEASER_VERSION: v2.19.0
+
 jobs:
   goreleaser:
     # macOS runner, not Ubuntu: the darwin build sets CGO_ENABLED=1 so
@@ -32,7 +37,7 @@ jobs:
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
         with:
           distribution: goreleaser
-          version: "~> v2"
+          version: ${{ env.GORELEASER_VERSION }}
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

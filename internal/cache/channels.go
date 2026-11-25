@@ -35,6 +35,26 @@ func (db *DB) UpsertChannel(ch Channel) error {
 	return nil
 }
 
+// UpsertChannelMetadata caches a conversations.info result without changing an
+// existing row's membership or star. A workspace never rewrites another's row.
+func (db *DB) UpsertChannelMetadata(ch Channel) error {
+	_, err := db.conn.Exec(`
+		INSERT INTO channels (id, workspace_id, name, type, topic, is_member, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			name=excluded.name,
+			type=excluded.type,
+			topic=excluded.topic,
+			updated_at=excluded.updated_at
+		WHERE channels.workspace_id = excluded.workspace_id
+	`, ch.ID, ch.WorkspaceID, ch.Name, ch.Type, ch.Topic,
+		boolToInt(ch.IsMember), ch.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("upserting channel metadata: %w", err)
+	}
+	return nil
+}
+
 func (db *DB) GetChannel(id string) (Channel, error) {
 	var ch Channel
 	var isMember, isStarred int
@@ -49,6 +69,26 @@ func (db *DB) GetChannel(id string) (Channel, error) {
 	ch.IsMember = isMember == 1
 	ch.IsStarred = isStarred == 1
 	return ch, nil
+}
+
+// SetChannelStarred caches a star change Slack accepted, without
+// rewriting anything else on the row. Implemented as an UPDATE so it
+// only touches an existing row; the star call's caller has the
+// conversation in the sidebar, so the row exists. Returns false when
+// no row matched, so the caller can log rather than silently lose the
+// state.
+func (db *DB) SetChannelStarred(workspaceID, channelID string, starred bool) (bool, error) {
+	res, err := db.conn.Exec(`
+		UPDATE channels SET is_starred = ? WHERE id = ? AND workspace_id = ?
+	`, boolToInt(starred), channelID, workspaceID)
+	if err != nil {
+		return false, fmt.Errorf("setting star state: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("setting star state: rows affected: %w", err)
+	}
+	return n > 0, nil
 }
 
 func (db *DB) ListChannels(workspaceID string, membersOnly bool) ([]Channel, error) {

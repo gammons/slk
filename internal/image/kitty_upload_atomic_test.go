@@ -133,3 +133,23 @@ func abbreviate(s string) string {
 	}
 	return s[:100] + "…" + s[len(s)-100:]
 }
+
+// Under emulated placement an upload only transmits: no virtual
+// placement (U=1, c, r) and no a=d,d=I prefix, which on WezTerm would
+// delete placements of the id the painter believes are on screen.
+func TestEmitKittyUpload_EmulatedTransmitsOnly(t *testing.T) {
+	withKittyPlacement(t, KittyEmulated)
+	payload := strings.Repeat("A", 4096) + "CC"
+	rec := &writeRecorder{}
+	if err := emitKittyUpload(rec, 7, payload, 4, 2); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.writes) != 1 {
+		t.Fatalf("upload took %d writes; want 1", len(rec.writes))
+	}
+	want := forTerminal("\x1b_Ga=t,f=100,t=d,i=7,q=2,m=1;"+strings.Repeat("A", 4096)+"\x1b\\") +
+		forTerminal("\x1b_Gm=0;CC\x1b\\")
+	if got := string(rec.writes[0]); got != want {
+		t.Errorf("emulated upload bytes:\n got %q\nwant %q", abbreviate(got), abbreviate(want))
+	}
+}

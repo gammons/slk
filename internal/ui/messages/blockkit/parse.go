@@ -52,7 +52,7 @@ func parseOne(b slack.Block) Block {
 }
 
 func parseSection(s *slack.SectionBlock) SectionBlock {
-	out := SectionBlock{Text: textOf(s.Text)}
+	out := SectionBlock{BlockID: s.BlockID, Text: textOf(s.Text)}
 	for _, f := range s.Fields {
 		out.Fields = append(out.Fields, textOf(f))
 	}
@@ -83,7 +83,7 @@ func parseContext(c *slack.ContextBlock) ContextBlock {
 }
 
 func parseActions(a *slack.ActionBlock) ActionsBlock {
-	out := ActionsBlock{}
+	out := ActionsBlock{BlockID: a.BlockID}
 	if a.Elements == nil {
 		return out
 	}
@@ -102,7 +102,9 @@ func parseAccessory(a *slack.Accessory) AccessoryElement {
 		}
 		return ImageAccessory{URL: url, AltText: a.ImageElement.AltText}
 	case a.ButtonElement != nil:
-		return LabelAccessory{Kind: "button", Label: textOf(a.ButtonElement.Text)}
+		// A button accessory is pressable, with the same identity an
+		// actions-block button carries, so the two structs convert.
+		return LabelAccessory(actionElementOf(a.ButtonElement))
 	case a.OverflowElement != nil:
 		return LabelAccessory{Kind: "overflow", Label: ""}
 	case a.SelectElement != nil:
@@ -127,7 +129,19 @@ func parseAccessory(a *slack.Accessory) AccessoryElement {
 func actionElementOf(e slack.BlockElement) ActionElement {
 	switch v := e.(type) {
 	case *slack.ButtonBlockElement:
-		return ActionElement{Kind: "button", Label: textOf(v.Text)}
+		el := ActionElement{
+			Kind: "button", Label: textOf(v.Text),
+			ActionID: v.ActionID, Value: v.Value, URL: v.URL, Style: string(v.Style),
+		}
+		if c := v.Confirm; c != nil {
+			el.Confirm = &ActionConfirm{
+				Title:       textOf(c.Title),
+				Text:        textOf(c.Text),
+				OKText:      textOf(c.Confirm),
+				DismissText: textOf(c.Deny),
+			}
+		}
+		return el
 	case *slack.OverflowBlockElement:
 		return ActionElement{Kind: "overflow"}
 	case *slack.SelectBlockElement:

@@ -219,3 +219,4 @@ func (stubPreviewFetcher) Prerendered(string, stdimage.Point, imgpkg.Protocol) (
 }
 func (stubPreviewFetcher) ConfigurePrerender(imgpkg.Protocol)            {}
 func (stubPreviewFetcher) ConfigurePrerenderKitty(*imgpkg.KittyRenderer) {}
+func (stubPreviewFetcher) InvalidatePrerender()                          {}

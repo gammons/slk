@@ -57,10 +57,11 @@ type InteractionService interface {
 		attachmentID int, callbackID, serviceID string, action blocks.LegacyAction, ephemeral bool) error
 }
 
-// CommandService runs Slack slash commands. Run is blocking (callers run
-// it from a tea.Cmd). What a command produces arrives over the WebSocket,
-// so only the error comes back: *CommandError when Slack refuses the
-// command, any other error for a transport failure.
+// CommandService runs Slack slash commands and exposes the workspace's
+// command list for completion. Run is blocking (callers run it from a
+// tea.Cmd). What a command produces arrives over the WebSocket, so only
+// the error comes back: *CommandError when Slack refuses the command,
+// any other error for a transport failure. List does not block.
 //
 // Build one with NewCommandService.
 type CommandService interface {
@@ -70,6 +71,12 @@ type CommandService interface {
 	// threadTS's thread when threadTS is set.
 	// args is wire-form text (<@U…>, <#C…|name>); "" for none.
 	Run(teamID string, channelID ids.ChannelID, threadTS ids.ThreadTS, command, args string) error
+
+	// List returns the active workspace's slash commands, the slice
+	// published at connect. It does not block and it does not copy:
+	// callers must not mutate the result. Nil before the fetch lands
+	// or when the fetch failed.
+	List() []SlashCommand
 }
 
 // DraftService syncs composer drafts with Slack's own (drafts.*). Every
@@ -264,6 +271,14 @@ type ChannelService interface {
 	// ChannelSelectedMsg's tiered render policy.
 	ReadCache(channelID ids.ChannelID) []MessageItem
 
+	// ReadCacheRange returns the local-cache snapshot of channelID's
+	// messages with oldestTS <= ts <= newestTS (an empty newestTS has
+	// no upper bound), oldest first, or nil. Unlike ReadCache it is not
+	// the most recent page, so a pane can be reloaded across exactly
+	// the history it has loaded (used when a suppression rule is
+	// removed). It enriches every row, so call it from a Cmd.
+	ReadCacheRange(channelID ids.ChannelID, oldestTS, newestTS ids.MessageTS) []MessageItem
+
 	// SyncedAt returns the unix-seconds timestamp of the channel's
 	// last authoritative cache-from-network sync, or 0 if never
 	// synced. Used by ChannelSelectedMsg's tiered render policy to
@@ -321,6 +336,14 @@ type ChannelService interface {
 	// ChannelMessagingCapabilityMsg. Costs a round trip, so only call
 	// it for a channel already known to be an app/bot DM.
 	MessagingCapability(channelID ids.ChannelID) Cmd
+
+	// SetStarred stars or un-stars channelID's conversation in teamID's
+	// workspace (stars.add / stars.remove). The team is the one the
+	// user was LOOKING at when the request was made, not whichever the
+	// backend holds active by the time the command runs. Returns a Cmd
+	// whose resolved Msg is ChannelStarSetMsg; the requesting path
+	// applies the sidebar move optimistically and reverts on the error.
+	SetStarred(teamID ids.TeamID, channelID ids.ChannelID, starred bool) Cmd
 }
 
 // SearchService runs message searches. SearchChannel queries the local
@@ -414,6 +437,17 @@ type SettingsService interface {
 	SaveSidebarWidth(width int)
 }
 
+// SuppressionService holds the rules that hide authors' messages
+// (see SuppressRule), per workspace. Rules is a local read, called
+// whenever a pane takes messages. Add and Remove persist the change
+// (config.toml) and make it effective for notifications and unread
+// marking; on error nothing changed.
+type SuppressionService interface {
+	Rules(teamID string) *Suppression
+	Add(teamID string, rule SuppressRule) error
+	Remove(teamID string, rule SuppressRule) error
+}
+
 // UnreadService reads the unread state the sidebar and workspace rail
 // render. Both methods are local reads, called at render time.
 type UnreadService interface {
@@ -459,6 +493,18 @@ type AvatarService interface {
 	ReplyAvatar(userID string) string
 }
 
+// SixelAvatarService is an AvatarService that can also hand out an
+// avatar as a sixel image, on a terminal that draws sixel. Optional:
+// the App checks for it, and without it avatars stay half-block there.
+type SixelAvatarService interface {
+	AvatarService
+	// SixelAvatar returns userID's avatar as sixel bytes and the key
+	// that identifies them to the painter, or ok false while it isn't
+	// available. Avatar keeps returning the half-block form, which the
+	// panes draw where the sixel image cannot be (a pane edge cuts it).
+	SixelAvatar(userID string) (key string, bytes []byte, ok bool)
+}
+
 // ImageFetcher downloads and caches remote images for inline rendering
 // and keeps pre-encoded renders of them. *image.Fetcher implements it.
 //
@@ -476,4 +522,10 @@ type ImageFetcher interface {
 	Prerendered(key string, cellTarget image.Point, proto imgpkg.Protocol) (imgpkg.Render, bool)
 	ConfigurePrerender(proto imgpkg.Protocol)
 	ConfigurePrerenderKitty(kr *imgpkg.KittyRenderer)
+	// InvalidatePrerender drops the prerendered encoded-image cache.
+	// The cache is keyed by (key, cellTarget, proto), so a cell-size
+	// change in pixels leaves entries whose encoded bytes no longer
+	// match their cell footprint; the host calls this when it
+	// re-points the image encoders (CellMetricsChangedMsg's handler).
+	InvalidatePrerender()
 }

@@ -49,6 +49,182 @@ func TestAppFocusCycle(t *testing.T) {
 	}
 }
 
+// TestRailFocusKeys: h from the sidebar enters the workspace rail and stops
+// there, and j/k move its cursor (clamped). Enter is refused during an
+// upload (focus stays in the rail); otherwise it switches to the cursor's
+// workspace, after which focus is in the messages pane. l leaves the rail,
+// shift+tab from it wraps to the messages pane, and f with the sidebar
+// hidden goes full-screen on the messages pane.
+func TestRailFocusKeys(t *testing.T) {
+	a := newTestApp(t, withWorkspaces(
+		workspace.WorkspaceItem{ID: "T1", Name: "alpha", Initials: "AL"},
+		workspace.WorkspaceItem{ID: "T2", Name: "beta", Initials: "BE"},
+		workspace.WorkspaceItem{ID: "T3", Name: "gamma", Initials: "GA"},
+	))
+	a.setWorkspaceSwitcherForTest(func(teamID string) tea.Msg { return switchedTeamMsg{teamID: teamID} })
+	railShowsCursor := func() bool {
+		return strings.Contains(stripANSI(a.renderRail(6, 20, styles.Version())), "\u25c2")
+	}
+	press := func(k tea.KeyMsg) tea.Cmd { return dispatchModeKey(a, k) }
+
+	if a.focusedPanel != PanelSidebar {
+		t.Fatalf("precondition: focus = %v, want sidebar", a.focusedPanel)
+	}
+	press(keyPress('h'))
+	press(keyPress('h'))
+	if a.focusedPanel != PanelWorkspace || a.workspaceRail.CursorID() != "T1" {
+		t.Fatalf("after h h: focus = %v, cursor = %q; want rail on T1", a.focusedPanel, a.workspaceRail.CursorID())
+	}
+	if !railShowsCursor() {
+		t.Error("focused rail draws no cursor marker")
+	}
+	for _, r := range "jjjk" {
+		press(keyPress(r))
+	}
+	if got := a.workspaceRail.CursorID(); got != "T2" {
+		t.Fatalf("after j j j k: cursor = %q, want T2 (clamped at T3, then up)", got)
+	}
+	// An upload in progress refuses the switch and keeps focus in the rail.
+	a.compose.SetUploading(true)
+	press(keyCode(tea.KeyEnter))
+	if a.focusedPanel != PanelWorkspace || a.workspaceRail.SelectedID() != "T1" {
+		t.Errorf("enter during an upload: focus = %v, selected = %q; want the rail, still on T1", a.focusedPanel, a.workspaceRail.SelectedID())
+	}
+	if got := statusbarText(a); !strings.Contains(got, "Upload in progress") {
+		t.Errorf("status bar = %q, want the upload toast", got)
+	}
+	a.compose.SetUploading(false)
+
+	cmd := press(keyCode(tea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("enter on another workspace returned no switch cmd")
+	}
+	sw, ok := cmd().(switchedTeamMsg)
+	if !ok || sw.teamID != "T2" {
+		t.Fatalf("enter switched to %#v, want T2", sw)
+	}
+	// Complete the switch: it restores the workspace's last channel, and
+	// focus ends in the messages pane, as after any other switch.
+	_, swCmd := a.Update(WorkspaceSwitchedMsg{TeamID: "T2", Channels: []sidebar.ChannelItem{{ID: "C9", Name: "ops", Type: "channel"}}})
+	for _, msg := range drainSkippingTimers(swCmd) {
+		if sel, ok := msg.(ChannelSelectedMsg); ok {
+			a.Update(sel)
+		}
+	}
+	if a.activeChannelID != "C9" || a.focusedPanel != PanelMessages {
+		t.Errorf("after the switch: channel = %q, focus = %v; want C9 with focus in messages", a.activeChannelID, a.focusedPanel)
+	}
+	if railShowsCursor() {
+		t.Error("rail still draws its cursor after focus left it")
+	}
+
+	press(keyPress('h'))
+	press(keyPress('h'))
+	press(keyPress('l'))
+	if a.focusedPanel != PanelSidebar {
+		t.Errorf("after h h l from messages: focus = %v, want sidebar", a.focusedPanel)
+	}
+	press(keyPress('h'))
+	press(keyMod(tea.KeyTab, tea.ModShift))
+	if a.focusedPanel != PanelMessages {
+		t.Errorf("shift+tab from the rail: focus = %v, want it to wrap to the messages pane", a.focusedPanel)
+	}
+
+	// Full-screen from the rail with the sidebar hidden lands on the
+	// messages pane, not the hidden sidebar.
+	press(keyPress('h'))
+	press(keyPress('h'))
+	press(keyMod('b', tea.ModCtrl))
+	if a.focusedPanel != PanelWorkspace || a.sidebarVisible {
+		t.Fatalf("precondition: focus = %v, sidebar visible = %v; want the rail with the sidebar hidden", a.focusedPanel, a.sidebarVisible)
+	}
+	press(keyPress('f'))
+	if !a.fullscreen || a.focusedPanel != PanelMessages {
+		t.Errorf("f from the rail with the sidebar hidden: fullscreen = %v, focus = %v; want full-screen messages", a.fullscreen, a.focusedPanel)
+	}
+}
+
+// TestEnterKeepsFocus: Enter on a sidebar conversation or the Threads
+// row opens it; focus moves to the messages pane by default and stays in
+// the sidebar with [sidebar] enter_keeps_focus. With the option, Enter in
+// the workspace rail also stays there through the completed switch.
+func TestEnterKeepsFocus(t *testing.T) {
+	for _, keep := range []bool{false, true} {
+		a := newTestApp(t, withChannels(
+			sidebar.ChannelItem{ID: "C1", Name: "general", Type: "channel"},
+			sidebar.ChannelItem{ID: "C2", Name: "random", Type: "channel"},
+		))
+		a.SetEnterKeepsFocus(keep)
+		want := PanelMessages
+		if keep {
+			want = PanelSidebar
+		}
+		enter := func() {
+			for _, msg := range drainSkippingTimers(dispatchModeKey(a, keyCode(tea.KeyEnter))) {
+				a.Update(msg)
+			}
+		}
+		a.sidebar.SelectByID("C2")
+		enter()
+		if a.activeChannelID != "C2" || a.focusedPanel != want {
+			t.Errorf("keep=%v, enter on #random: channel = %q, focus = %v; want C2, %v", keep, a.activeChannelID, a.focusedPanel, want)
+		}
+		a.focusedPanel = PanelSidebar
+		a.sidebar.SelectThreadsRow()
+		enter()
+		if a.view != ViewThreads || a.focusedPanel != want {
+			t.Errorf("keep=%v, enter on Threads: view = %v, focus = %v; want the threads view, %v", keep, a.view, a.focusedPanel, want)
+		}
+	}
+
+	a := newTestApp(t, withWorkspaces(
+		workspace.WorkspaceItem{ID: "T1", Name: "alpha", Initials: "AL"},
+		workspace.WorkspaceItem{ID: "T2", Name: "beta", Initials: "BE"},
+	))
+	a.SetEnterKeepsFocus(true)
+	// A switch to T<n> restores channel C<n>.
+	a.setWorkspaceSwitcherForTest(func(teamID string) tea.Msg {
+		id := "C" + teamID[1:]
+		return WorkspaceSwitchedMsg{TeamID: teamID, Channels: []sidebar.ChannelItem{{ID: id, Name: id, Type: "channel"}}}
+	})
+	// finish delivers each switch result, then the channel restore it asks for.
+	finish := func(cmds ...tea.Cmd) {
+		for _, c := range cmds {
+			_, swCmd := a.Update(c())
+			for _, msg := range drainSkippingTimers(swCmd) {
+				if sel, ok := msg.(ChannelSelectedMsg); ok {
+					a.Update(sel)
+				}
+			}
+		}
+	}
+	for _, k := range []tea.KeyMsg{keyPress('h'), keyPress('j')} {
+		_ = dispatchModeKey(a, k)
+	}
+	// Enter twice before the first switch completes starts two switches;
+	// both restores keep focus in the rail.
+	first := dispatchModeKey(a, keyCode(tea.KeyEnter))
+	second := dispatchModeKey(a, keyCode(tea.KeyEnter))
+	if first == nil || second == nil {
+		t.Fatal("enter in the rail returned no switch cmd")
+	}
+	finish(first, second)
+	if a.activeChannelID != "C2" || a.focusedPanel != PanelWorkspace {
+		t.Errorf("rail enter (twice) with the option: channel = %q, focus = %v; want C2 with focus still in the rail", a.activeChannelID, a.focusedPanel)
+	}
+
+	// Any other switch made while the rail has focus (here a digit) still
+	// moves focus to the messages pane.
+	digit := dispatchModeKey(a, keyPress('1'))
+	if digit == nil {
+		t.Fatal("1 in the rail returned no switch cmd")
+	}
+	finish(digit)
+	if a.activeChannelID != "C1" || a.focusedPanel != PanelMessages {
+		t.Errorf("digit switch from the rail: channel = %q, focus = %v; want C1 with focus in messages", a.activeChannelID, a.focusedPanel)
+	}
+}
+
 func TestAppToggleSidebar(t *testing.T) {
 	app := NewApp()
 
@@ -4313,6 +4489,34 @@ func TestUserGroupsLoadedMsgPatchesActiveWorkspace(t *testing.T) {
 	}
 	if app.threadPanel.Version() == threadVersion {
 		t.Error("thread panel version did not change after active usergroups loaded")
+	}
+}
+
+// The user's own groups re-render both panes even when the handle map
+// is unchanged: a mention of one of them is now highlighted.
+func TestUserGroupsLoadedMsgPassesSelfGroups(t *testing.T) {
+	app := NewApp()
+	app.activeTeamID = "T1"
+	groups := map[string]string{"S0TESTGRP01": "platform-team"}
+	app.SetUserGroups(groups)
+	app.SetCurrentUserID("U9")
+	messageVersion := app.messagepane.Version()
+	threadVersion := app.threadPanel.Version()
+
+	app.Update(UserGroupsLoadedMsg{
+		TeamID:         "T1",
+		UserGroups:     groups,
+		SelfUserGroups: map[string]bool{"S0TESTGRP01": true},
+	})
+
+	if !app.selfGroups["S0TESTGRP01"] {
+		t.Errorf("selfGroups = %v, want S0TESTGRP01", app.selfGroups)
+	}
+	if app.messagepane.Version() == messageVersion {
+		t.Error("message pane did not re-render for the user's groups")
+	}
+	if app.threadPanel.Version() == threadVersion {
+		t.Error("thread panel did not re-render for the user's groups")
 	}
 }
 

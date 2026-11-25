@@ -196,6 +196,28 @@ func TestChannelMentionStillRendersWithHash(t *testing.T) {
 	}
 }
 
+// A channel mention is a clickable link to an internal slack:// address,
+// so clicking it opens the conversation instead of doing nothing.
+func TestChannelMentionIsAnInternalLink(t *testing.T) {
+	out := RenderSlackMarkdown("see <#C123|general>", nil, nil)
+	want := "\x1b]8;;slack://channel?id=C123&name=general\x1b\\"
+	if !strings.Contains(out, want) {
+		t.Errorf("channel mention lost its internal link: want %q in %q", want, out)
+	}
+	if plain := ansi.Strip(out); plain != "see #general" {
+		t.Errorf("plain text = %q, want see #general", plain)
+	}
+}
+
+// A bare mention resolved from the name map links the same way.
+func TestBareChannelMentionLinksResolved(t *testing.T) {
+	out := RenderSlackMarkdown("see <#C123>", nil, map[string]string{"C123": "general"})
+	want := "\x1b]8;;slack://channel?id=C123&name=general\x1b\\"
+	if !strings.Contains(out, want) {
+		t.Errorf("resolved bare mention lost its internal link: want %q in %q", want, out)
+	}
+}
+
 // TestUserMentionResolvesAndKeepsAt confirms user mentions resolve via the
 // userNames map and retain their @ prefix.
 func TestUserMentionResolvesAndKeepsAt(t *testing.T) {

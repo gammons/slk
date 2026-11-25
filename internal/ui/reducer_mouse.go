@@ -44,9 +44,73 @@ var reduceMouse reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return reduceMouseWheel(a, m), true
 
 	case tea.MouseClickMsg:
+		if m.Button == tea.MouseMiddle {
+			return reduceMiddleClick(a, m), true
+		}
 		return reduceMouseClick(a, m), true
 	}
 	return nil, false
+}
+
+// reduceMiddleClick pastes into the compose box under the cursor. slk
+// copies a drag selection on release, so the terminal's middle-click
+// paste is the natural partner; without this it is swallowed by the
+// app's mouse reporting and never reaches the terminal.
+//
+// A click anywhere but a compose box does nothing: middle-clicking a
+// message has no text field to paste into.
+func reduceMiddleClick(a *App, m tea.MouseClickMsg) tea.Cmd {
+	if a.bootstrap.IsLoading() || a.mode.IsModalOverlay() {
+		return nil
+	}
+	// A paste into a composer whose send is in flight would be thrown
+	// away when UploadResultMsg resets it.
+	if a.compose.Uploading() || a.threadCompose.Uploading() {
+		return nil
+	}
+	panel, _, py, ok := a.panelAt(m.X, m.Y)
+	if !ok || py < 0 {
+		return nil
+	}
+	var toThread bool
+	switch panel {
+	case PanelMessages:
+		if a.view != ViewChannels || a.layout.msgComposeTop <= 0 || py < a.layout.msgComposeTop {
+			return nil
+		}
+		// With splits, PanelAt maps the whole region to the focused
+		// window; only that window has a composer at msgComposeTop.
+		// The same interim guard as left clicks: swallow it.
+		if a.wins.Len() > 1 {
+			return nil
+		}
+	case PanelThread:
+		if !a.threadVisible || a.layout.threadComposeTop <= 0 || py < a.layout.threadComposeTop {
+			return nil
+		}
+		toThread = true
+	default:
+		return nil
+	}
+	want := PanelMessages
+	if toThread {
+		want = PanelThread
+	}
+	// A read-only channel composer refuses focus; do not fall through
+	// and paste into the thread composer the user was already in.
+	if !toThread && a.composeDisabled {
+		return toastWithClear(a, a.composeBlockedText(), 2*time.Second)
+	}
+	// Move focus to the clicked composer first; smartPaste pastes into
+	// whichever composer is focused.
+	if a.mode != ModeInsert || a.focusedPanel != want {
+		focus := a.beginInsertMode(toThread)
+		if a.focusedPanel != want {
+			return focus
+		}
+		return tea.Batch(focus, a.smartPaste())
+	}
+	return a.smartPaste()
 }
 
 // reduceMouseWheel handles tea.MouseWheelMsg. Extracted to keep the
@@ -125,6 +189,14 @@ func reduceMouseWheel(a *App, m tea.MouseWheelMsg) tea.Cmd {
 			}
 			return nil
 		}
+		if a.view == ViewAppHome {
+			if up {
+				a.appHome.ScrollUp(wheelLinesPerNotch)
+			} else {
+				a.appHome.ScrollDown(wheelLinesPerNotch)
+			}
+			return nil
+		}
 		if up {
 			a.messagepane.ScrollUp(wheelLinesPerNotch)
 			// Backfill older history when the viewport hits the
@@ -172,6 +244,45 @@ func scrollActiveModal(a *App, up bool) tea.Cmd {
 // reduceMouse dispatch switch because the arm is ~120 lines (four
 // panel-router branches: workspace rail, sidebar, messages pane,
 // thread panel; each with its own hit-test sequence).
+// headerStarClick resolves a click against the header's star glyph,
+// split-aware. With one window the glyph hit-tests against the pane's
+// chrome directly; with splits, only a click inside the FOCUSED
+// window's rect - translated into that window's own chrome - counts,
+// so a placeholder window PanelAt maps onto the live pane cannot fire
+// it. A hit toggles the star through the same path /star uses.
+func (a *App) headerStarClick(screenX, screenY int) (tea.Cmd, bool) {
+	if a.preview.Active() || a.view == ViewThreads || a.view == ViewActivity {
+		return nil, false
+	}
+	panel, px, py, ok := a.panelAt(screenX, screenY)
+	if !ok || panel != PanelMessages || py < 0 {
+		return nil, false
+	}
+	if a.wins.Len() > 1 {
+		rect := a.layout.focusedWinRect
+		if rect.W == 0 {
+			return nil, false
+		}
+		m := a.winModels[a.focusedWin]
+		if m == nil {
+			return nil, false
+		}
+		// Window-local chrome coordinates: the rect is in
+		// region-local columns/rows with the window's border at its
+		// edge, and px/py already sit inside the region's borders.
+		if !m.HitTestHeaderStar(px-rect.X, py-rect.Y) {
+			return nil, false
+		}
+	} else if !a.messagepane.HitTestHeaderStar(px, py) {
+		return nil, false
+	}
+	starred, _ := a.sidebar.IsItemStarred(a.activeChannelID)
+	if cmd := a.setStarredChannel(a.activeChannelID, !starred); cmd != nil {
+		return cmd, true
+	}
+	return toastWithClear(a, "That conversation isn't in the sidebar", 3*time.Second), true
+}
+
 func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 	if a.bootstrap.IsLoading() {
 		return nil
@@ -248,6 +359,16 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		return nil
 
 	case x < a.layout.MsgEnd():
+		// The header's star glyph: clicking it toggles the star of the
+		// channel on screen, the mouse equivalent of /star and /unstar
+		// (star-conversations design §Mouse). Runs before the split
+		// guard below: the focused window's header is real content even
+		// with splits open, and the hit test is split-aware - it only
+		// fires inside the focused window's rect, never on a placeholder
+		// window PanelAt would map onto the live pane.
+		if cmd, hit := a.headerStarClick(m.X, m.Y); hit {
+			return cmd
+		}
 		// Interim Phase 2 guard: per-window mouse routing lands in
 		// Phase 4 (window-management design §6). With splits active,
 		// PanelAt still maps the entire messages region to the single
@@ -294,6 +415,19 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 					team := a.activeTeamID
 					return func() tea.Msg { return ActivitySelectedMsg{TeamID: team, Item: it} }
 				}
+			}
+			return nil
+		}
+		// The App Home view fills the messages region too: a click on one
+		// of its buttons presses it (the region focus is set above), any
+		// other click leaves the scroll position alone.
+		if a.view == ViewAppHome {
+			panel, px, py, ok := a.panelAt(m.X, m.Y)
+			if !ok || panel != PanelMessages || py < 0 {
+				return nil
+			}
+			if idx, ok := a.appHome.HitAction(py, px); ok {
+				return a.clickAppHomeAction(idx)
 			}
 			return nil
 		}

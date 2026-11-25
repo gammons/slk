@@ -34,6 +34,25 @@ func ExtractLinks(text string) []Link {
 			link:  Link{URL: text[m[2]:m[3]], Label: slackEntityDecoder.Replace(text[m[4]:m[5]])},
 		})
 	}
+	// A #channel mention is a link too: the renderer makes it clickable
+	// with an internal slack:// address, and the "open link" picker
+	// must offer the same target for messages whose mention is the only
+	// link (or wraps too far for a click).
+	for _, m := range channelMentionRe.FindAllStringSubmatchIndex(text, -1) {
+		id := text[m[2]:m[3]]
+		name := ""
+		if m[4] >= 0 {
+			name = slackEntityDecoder.Replace(text[m[4]:m[5]])
+		}
+		label := ""
+		if name != "" {
+			label = "#" + name
+		}
+		found = append(found, posLink{
+			start: m[0],
+			link:  Link{URL: channelLinkURL(id, name), Label: label},
+		})
+	}
 	for _, m := range linkBareRe.FindAllStringSubmatchIndex(text, -1) {
 		url := text[m[2]:m[3]]
 		// linkBareRe also matches the labeled form (its [^>]+ spans

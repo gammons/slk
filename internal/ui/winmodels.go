@@ -21,11 +21,14 @@ import (
 func (a *App) newWindowModel(chName string) *messages.Model {
 	m := messages.New(nil, chName)
 	m.SetAvatarFunc(a.avatarFn)
+	m.SetSixelAvatarFunc(a.sixelAvatarFn)
 	m.SetReplyAvatarFunc(a.replyAvatarFunc())
 	m.SetUserNames(a.userNames)
 	m.SetUserStatuses(a.presence.peers)
 	m.SetChannelNames(a.channelNames)
 	m.SetUserGroups(a.userGroups)
+	m.SetCurrentUser(a.currentUserID)
+	m.SetSelfUserGroups(a.selfGroups)
 	m.SetEmojiContext(a.emojiCtx)
 	m.SetCompact(a.compact)
 	if a.emojiCustoms != nil {
@@ -35,6 +38,7 @@ func (a *App) newWindowModel(chName string) *messages.Model {
 	}
 	m.SetImageContext(a.imageCtx)
 	m.SetSpinnerFrame(a.spinnerFrame)
+	a.installChannelHide(m)
 	return m
 }
 
@@ -59,13 +63,7 @@ func (a *App) modelsForChannel(chID string) []*messages.Model {
 	}
 	var out []*messages.Model
 	for _, id := range a.wins.Leaves() {
-		winChID := ""
-		if id == a.focusedWin {
-			winChID = a.activeChannelID
-		} else if ch, ok := a.wins.Channel(id); ok {
-			winChID = ch.ID
-		}
-		if winChID == chID {
+		if a.leafChannel(id) == chID {
 			if m := a.winModels[id]; m != nil {
 				out = append(out, m)
 			}

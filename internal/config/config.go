@@ -96,6 +96,25 @@ type General struct {
 	// Load decodes over Default(), which sets it to true, so an explicit
 	// false reads back correctly.
 	HideDeactivatedUsers bool `toml:"hide_deactivated_users"`
+	// WorkspacePickerVimKeys opens the :ws picker in navigation mode:
+	// j/k move the highlight and / starts the name filter, as in the
+	// help overlay. Default off: typing filters straight away.
+	WorkspacePickerVimKeys bool `toml:"workspace_picker_vim_keys"`
+	// ImageLoading decides which message images (file thumbnails, Block
+	// Kit images, link-preview images) load without asking:
+	//   "trusted" (default) images Slack serves (files.slack.com,
+	//             *.slack-edge.com) and trusted_image_hosts load; any
+	//             other host shows a "not loaded" line until allowed
+	//             with I
+	//   "confirm" every message image waits for I
+	//   "off"     no message image loads; each stays a link
+	// Avatars and custom emoji are not affected (Slack assigns their
+	// URLs). An unrecognised value is treated as "confirm".
+	ImageLoading string `toml:"image_loading"`
+	// TrustedImageHosts are extra hosts whose images load in "trusted"
+	// mode, each also covering its subdomains (e.g. "githubassets.com").
+	// Only https URLs load without asking.
+	TrustedImageHosts []string `toml:"trusted_image_hosts"`
 }
 
 type Appearance struct {
@@ -108,11 +127,25 @@ type Appearance struct {
 	TransparentBackground bool   `toml:"transparent_background"`
 	TimestampFormat       string `toml:"timestamp_format"`
 	ShowAvatars           bool   `toml:"show_avatars"`
-	// ThreadAvatars also draws avatars in the thread pane (needs ShowAvatars).
+	// ThreadAvatars also draws avatars in the thread pane (needs
+	// ShowAvatars). Default on.
 	ThreadAvatars bool `toml:"thread_avatars"`
+	// ShowWorkspaceRail draws the workspace rail on the left. false hides
+	// it at startup (ctrl+g toggles it), and the status bar then shows the
+	// active workspace's initials. With one workspace the rail is never
+	// drawn. Default on.
+	ShowWorkspaceRail bool `toml:"show_workspace_rail"`
 	// ImageProtocol controls how inline images are rendered.
 	// One of: "auto", "kitty", "sixel", "halfblock", "off".
 	ImageProtocol string `toml:"image_protocol"`
+	// KittyPlacement says who turns kitty image placeholders into
+	// pixels when the protocol is kitty: "native" (the terminal, as on
+	// kitty and Ghostty), "emulated" (slk paints direct placements, for
+	// terminals with kitty graphics but no unicode placeholders, such
+	// as WezTerm), or "auto" (default: emulated on WezTerm, native
+	// elsewhere). Always native under tmux or zellij. Clamped to those
+	// three at load time.
+	KittyPlacement string `toml:"kitty_placement"`
 	// MaxImageRows caps the height of inline images in terminal rows.
 	MaxImageRows int `toml:"max_image_rows"`
 	// MaxImageCols caps the width of inline images in terminal columns.
@@ -123,6 +156,11 @@ type Appearance struct {
 	// mouse-wheel notch. Higher = faster scroll. Defaults to 3 (typical
 	// terminal behavior). Clamped to >= 1 at load time.
 	MouseWheelLines int `toml:"mouse_wheel_lines"`
+	// ClickOpensThread makes a plain click on a message open its
+	// thread, like Enter. Off: a click only selects the message, for
+	// people who read with the cursor (#197). Default on; Load decodes
+	// over Default(), so an explicit false reads back.
+	ClickOpensThread bool `toml:"click_opens_thread"`
 	// EmojiImages controls whether emoji are rendered as PNG images
 	// (from Slack's CDN) via the kitty graphics protocol. One of:
 	// "on" (default) or "off". On non-kitty terminals this is silently
@@ -222,6 +260,11 @@ type Sidebar struct {
 	// ShowUnreadInCollapsed keeps a collapsed section's unread channels
 	// (and the open channel) visible under its header. Default off.
 	ShowUnreadInCollapsed bool `toml:"show_unread_in_collapsed"`
+	// EnterKeepsFocus leaves focus where it is when Enter opens a
+	// conversation, the Threads or Activity row, or (in the workspace
+	// rail) a workspace, so j/k and Enter can skim them; l moves on.
+	// Default off: focus moves to the messages pane.
+	EnterKeepsFocus bool `toml:"enter_keeps_focus"`
 }
 
 // Marks holds preferences for vim-style marks.
@@ -255,6 +298,11 @@ type Marks struct {
 type Workspace struct {
 	TeamID string `toml:"team_id"`
 	Theme  string `toml:"theme"`
+	// PermalinkDomains are additional Slack workspace subdomains whose
+	// archive permalinks belong to this workspace. This is needed on
+	// Enterprise Grid, where a permalink can use a different domain from
+	// auth.test's workspace URL.
+	PermalinkDomains []string `toml:"permalink_domains"`
 	// Order controls the workspace's position in the rail and the
 	// digit-key mapping (1-9). Positive values are explicit positions
 	// ascending; 0 or unset means "unordered" (sorts after ordered
@@ -265,12 +313,45 @@ type Workspace struct {
 	// workspace. Nil means "fall through to global".
 	UseSlackSections *bool                 `toml:"use_slack_sections"`
 	Sections         map[string]SectionDef `toml:"sections"`
+	// DefaultChannel names the channel opened the first time this
+	// workspace is shown in a session (at startup, or on the first
+	// switch to it), e.g. "general" or "#general", matched by
+	// core.ChannelNameMatcher. It wins over the persisted last-visited
+	// channel; later switches back to the workspace restore the channel
+	// last viewed in the session, or the default when that one is gone.
+	// Empty, or a name that matches no sidebar channel, keeps the
+	// default behavior.
+	DefaultChannel string `toml:"default_channel"`
 	// VersionTS caches the Slack build timestamp last reported by
 	// client.shouldReload, sent as _x_version_ts on every workspace-API
 	// request. Empty means "use the compiled-in fallback and refresh on
 	// boot". Persisted so the second and later runs start with a
 	// current value rather than a stale compiled-in one.
 	VersionTS string `toml:"version_ts"`
+	// Suppress hides authors' messages in this workspace, from
+	// [[workspaces.<key>.suppress]] blocks. slk appends and removes
+	// these blocks itself (the :suppress and :suppressed commands).
+	Suppress []SuppressRule `toml:"suppress"`
+}
+
+// SuppressRule is one [[workspaces.<key>.suppress]] block: hide
+// Author's messages in Channel, or in the whole workspace when Channel
+// is empty. Both are Slack IDs (an author is a user ID, or a bot ID
+// for a bot that posts without a user). Note is free text for people
+// reading the file.
+type SuppressRule struct {
+	Author  string `toml:"author"`
+	Channel string `toml:"channel"`
+	Note    string `toml:"note"`
+}
+
+// SuppressRules converts w's rules to the set the app matches against.
+func (w Workspace) SuppressRules() *core.Suppression {
+	rules := make([]core.SuppressRule, 0, len(w.Suppress))
+	for _, r := range w.Suppress {
+		rules = append(rules, core.SuppressRule{AuthorID: r.Author, ChannelID: r.Channel, Note: r.Note})
+	}
+	return core.NewSuppression(rules)
 }
 
 // Theme is defined in internal/core, which the TUI shares.
@@ -281,17 +362,23 @@ func Default() Config {
 		General: General{
 			DownloadDir:          "~/Downloads",
 			HideDeactivatedUsers: true,
+			ImageLoading:         "trusted",
 		},
 		Appearance: Appearance{
-			Theme:           "nord",
-			TimestampFormat: "3:04 PM",
-			ShowAvatars:     true,
-			ImageProtocol:   "auto",
-			MaxImageRows:    20,
-			MaxImageCols:    60,
-			MouseWheelLines: 3,
-			EmojiImages:     "on",
-			EmojiCells:      2,
+			Theme:            "nord",
+			TimestampFormat:  "3:04 PM",
+			ShowAvatars:      true,
+			ThreadAvatars:    true,
+			ImageProtocol:    "auto",
+			KittyPlacement:   "auto",
+			MaxImageRows:     20,
+			MaxImageCols:     60,
+			MouseWheelLines:  3,
+			ClickOpensThread: true,
+			EmojiImages:      "on",
+			EmojiCells:       2,
+			// Hidden with one workspace regardless (#216).
+			ShowWorkspaceRail: true,
 		},
 		Animations: Animations{
 			Enabled:          true,
@@ -336,6 +423,13 @@ func Load(path string) (Config, error) {
 		return cfg, err
 	}
 	cfg.Workspaces = resolved
+	for key, w := range cfg.Workspaces {
+		for i, r := range w.Suppress {
+			if strings.TrimSpace(r.Author) == "" {
+				return cfg, fmt.Errorf("workspace %q: suppress rule %d has no author", key, i+1)
+			}
+		}
+	}
 
 	// Clamp MouseWheelLines: 0 (unset, after a user supplied a partial
 	// [appearance] block without this key) and negative values both fall
@@ -354,6 +448,28 @@ func Load(path string) (Config, error) {
 	// (unset) and any unrecognized value fall back to "on".
 	if cfg.Appearance.EmojiImages != "on" && cfg.Appearance.EmojiImages != "off" {
 		cfg.Appearance.EmojiImages = "on"
+	}
+
+	// Clamp KittyPlacement to {"auto", "native", "emulated"}, ignoring
+	// case and spaces. Empty (unset) and any unrecognized value fall
+	// back to "auto".
+	switch p := strings.ToLower(strings.TrimSpace(cfg.Appearance.KittyPlacement)); p {
+	case "auto", "native", "emulated":
+		cfg.Appearance.KittyPlacement = p
+	default:
+		cfg.Appearance.KittyPlacement = "auto"
+	}
+
+	// Normalise ImageLoading. Unset means the default; an unknown value
+	// (a typo of "off", say) takes the strict side, so a mistake shows
+	// prompts instead of silently loading images.
+	switch il := strings.ToLower(strings.TrimSpace(cfg.General.ImageLoading)); il {
+	case "":
+		cfg.General.ImageLoading = "trusted"
+	case "trusted", "confirm", "off":
+		cfg.General.ImageLoading = il
+	default:
+		cfg.General.ImageLoading = "confirm"
 	}
 
 	// Expand a leading "~" in download_dir against the real home
@@ -408,6 +524,10 @@ func (c Config) WorkspaceByTeamID(teamID string) (Workspace, bool) {
 // or a legacy team-ID-shaped key. Returns ("", nil) if default_workspace
 // is unset, and an error if it is set but does not match any
 // configured workspace.
+//
+// A team-id key that load folded into its slug is no longer a map key.
+// When default_workspace still names that key, the team id itself
+// identifies the workspace that survived.
 func (c Config) TeamIDForDefaultWorkspace() (string, error) {
 	key := c.General.DefaultWorkspace
 	if key == "" {
@@ -415,6 +535,11 @@ func (c Config) TeamIDForDefaultWorkspace() (string, error) {
 	}
 	if ws, ok := c.Workspaces[key]; ok {
 		return ws.TeamID, nil
+	}
+	if isTeamIDKey(key) {
+		if ws, ok := c.WorkspaceByTeamID(key); ok {
+			return ws.TeamID, nil
+		}
 	}
 	return "", fmt.Errorf("default_workspace %q not found in [workspaces.*]", key)
 }
@@ -519,6 +644,16 @@ func (c Config) EffectiveSyncDrafts() bool {
 	return true
 }
 
+// PermalinkDomains returns a caller-owned list of additional Slack
+// subdomains whose archive permalinks should route to teamID.
+func (c Config) PermalinkDomains(teamID string) []string {
+	ws, ok := c.WorkspaceByTeamID(teamID)
+	if !ok {
+		return nil
+	}
+	return append([]string(nil), ws.PermalinkDomains...)
+}
+
 // ResolveWidth returns the sidebar width to use for the given workspace,
 // falling back to the global Sidebar.Width when no per-workspace width
 // is set, and to 30 when no global width is set either.
@@ -530,6 +665,16 @@ func (c Config) ResolveWidth(teamID string) int {
 		return c.Sidebar.Width
 	}
 	return 30
+}
+
+// ResolveDefaultChannel returns the workspace's configured
+// default_channel, trimmed of surrounding spaces, or "" when none is set.
+// A leading "#" is left for core.ChannelNameMatcher to ignore.
+func (c Config) ResolveDefaultChannel(teamID string) string {
+	if ws, ok := c.WorkspaceByTeamID(teamID); ok {
+		return strings.TrimSpace(ws.DefaultChannel)
+	}
+	return ""
 }
 
 // ResolveTheme returns the theme name to use for the given workspace,

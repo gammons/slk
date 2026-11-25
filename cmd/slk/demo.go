@@ -99,6 +99,7 @@ func newDemoApp(d *demo.Demo) *ui.App {
 		HideDeactivatedUsers: true,
 		MouseWheelLines:      3,
 		ColoredUsernames:     true,
+		ClickOpensThread:     true,
 	})
 	d.Install(app)
 	return app

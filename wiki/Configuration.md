@@ -16,6 +16,16 @@ hide_deactivated_users = true   # hide deactivated people, as the Slack desktop
                                 # they are not offered in the channel finder,
                                 # the new-message picker or @ / # autocomplete.
                                 # Set false to show them again. See below.
+workspace_picker_vim_keys = false  # true: :ws opens navigating: j/k move,
+                                   # / starts filtering (esc clears it)
+image_loading = "trusted" # which message images load without asking:
+                          #   trusted: Slack-hosted (files.slack.com, *.slack-edge.com)
+                          #            and trusted_image_hosts load; others wait for I
+                          #   confirm: every message image waits for I
+                          #   off:     never load message images; they stay links
+                          # Avatars and custom emoji are not affected.
+trusted_image_hosts = []  # extra hosts (and their subdomains) to load in "trusted"
+                          # mode, https only, e.g. ["githubassets.com"]
 
 [appearance]
 theme = "dracula"
@@ -32,12 +42,20 @@ transparent_background = false  # true: panes, sidebar, rail, status bar and the
                                 # (a light theme on a dark terminal won't).
 timestamp_format = "3:04 PM"
 show_avatars = true      # false hides the avatars beside messages
-thread_avatars = false   # true also shows them in the thread pane (needs show_avatars)
+thread_avatars = true    # false hides them in the thread pane (needs show_avatars)
+show_workspace_rail = true  # false starts with the workspace rail hidden (Ctrl+g
+                            # toggles it); never drawn with one workspace
 image_protocol = "auto"   # auto | kitty | sixel | halfblock | off
+kitty_placement = "auto"  # auto | native | emulated: who places kitty images.
+                          # auto = emulated on WezTerm (no unicode
+                          # placeholders), native elsewhere. Native under
+                          # tmux and zellij. See Terminal Compatibility.
 max_image_rows = 20       # cap inline image height in terminal rows
 reply_avatars = false     # true: Slack-style reply row, repliers' avatars + "N replies"
                           # (avatars need show_avatars and kitty graphics)
 colored_usernames = false # color each user's name by ID hash (Slack-style)
+click_opens_thread = true # false: clicking a message only selects it (Enter
+                          # still opens the thread)
 compact = false           # compact, IRC-like style (less padding, username on same line as messages, no avatars except repliers)
                           # Similar to Slack's "Compact Theme"
 
@@ -98,6 +116,9 @@ start_collapsed = false     # true: every section starts collapsed (Space/Enter
                             # on a header expands it until slk restarts)
 show_unread_in_collapsed = false  # true: a collapsed section still lists its
                                   # unread channels (and the open one)
+enter_keeps_focus = false   # true: Enter opens a conversation (or Threads,
+                            # Activity, or a workspace in the rail) but keeps
+                            # focus in the list, to skim with j/k; l moves on
 
 [compose]
 editor = "nvim"   # Ctrl+E editor, used when $VISUAL and $EDITOR are unset
@@ -160,6 +181,7 @@ order   = 1                     # rail position; 1-based, used by 1-9 keys
 theme   = "dracula"             # overrides [appearance].theme
 use_slack_sections = false      # this workspace uses [sections.*] globs;
                                 # other workspaces still use Slack sections
+default_channel = "general"     # see "Default channel" below
 
 [workspaces.work.sections.Alerts]
 channels = ["alerts", "*-alerts"]
@@ -182,6 +204,24 @@ accent = "#50C878"
 background = "#1A1A2E"
 text = "#E0E0E0"
 ```
+
+## Default channel
+
+`[workspaces.<key>] default_channel` names the channel slk opens the first
+time that workspace is shown in a session:
+
+- at startup, in place of the channel you last visited there;
+- on the first switch to the workspace, in place of the first channel in the
+  sidebar.
+
+Switching back later returns to the channel you were last viewing in that
+workspace, or to the default if that channel is gone. A Slack link opened from
+the channel finder still goes to its own channel.
+
+The name is matched as `/open` matches it: a leading `#`, case and accents are
+ignored, and only channels and private channels you are a member of match,
+never a DM. A name that matches nothing is ignored, and slk behaves as if the
+key were not set.
 
 ## Deactivated users
 
@@ -334,6 +374,13 @@ sidebar_selected_bg = "#333133" # selected sidebar row as a filled pill, no ▌
 sidebar_selected_fg = "#F8F8F8" # its text (default: sidebar_text)
 mention_badge_bg    = "#C01343" # mention-count badge (default: selection colours)
 mention_badge_fg    = "#FFFFFF"
+
+# A message that mentions you (directly, @here/@channel/@everyone, or a
+# usergroup you're in). Unset derives them from warning.
+self_mention_bg       = "#ECB22E" # the @mention itself (default: warning)
+self_mention_fg       = "#1D1C1D" # (default: background)
+mention_highlight_bg  = "#FEF6DE" # the whole message (default: warning mixed into background)
+mention_highlight_bar = "#ECB22E" # its left bar (default: warning)
 ```
 
 Every built-in theme now sets a channels-panel (sidebar) background that is
@@ -343,6 +390,11 @@ slightly lighter) shade than `background` for the same effect.
 
 Switch themes live with `Ctrl+y`, or cycle through them with `Alt+y` /
 `Alt+Shift+y`.
+
+slk reads the theme files at startup. To have a running slk read them again
+(say a palette generator such as Noctalia or matugen rewrote one), send it
+`SIGUSR1`: `pkill -USR1 -x slk`. It picks up new and changed themes and
+reapplies your selected theme. Not on Windows.
 
 ## Marks
 
@@ -375,6 +427,48 @@ tells you the message was not found (a deleted thread reply opens its
 thread with nothing selected); the mark is kept either way. Marks
 are only removed when you remove them, with `:delmarks` or `Backspace`
 in the `:marks` overlay.
+
+## Hiding authors
+
+`:suppress` on a message hides its author's messages, in that
+conversation or in the whole workspace; `:suppressed` lists who is
+hidden and `Backspace` there stops hiding them. Both edit
+`config.toml`, where the rules are kept, one block each in the
+workspace's section. You can write them by hand too:
+
+```toml
+[workspaces.acme]
+team_id = "T01ACME"
+
+[[workspaces.acme.suppress]]
+author = "B01DEPLOYBOT"     # required: a user ID (U…/W…) or a bot ID (B…)
+note = "DeployBot"          # optional, for you; slk ignores it
+
+[[workspaces.acme.suppress]]
+author = "U02ALICE"
+channel = "C03RANDOM"       # omit to hide them everywhere in the workspace
+```
+
+IDs, not names, because names change: `:suppress` writes the right ID
+(and a `note`) for you. An author is the ID slk shows the message as
+from: a person's user ID, a bot that posts as a user by that user ID,
+and a bot that posts without one by its bot ID.
+
+A hidden author's messages and thread replies are not drawn, do not
+notify (even when they mention you), and do not mark their channel
+unread. They are still cached, and opening a channel still marks it read
+up to its newest message, hidden ones included. Search, the Activity
+view and reply counts are not filtered. Your own messages are never
+hidden.
+
+A channel that Slack already reported unread when slk connected stays
+unread until you open it, even if its only new messages are hidden.
+
+slk adds a rule by appending a block to the end of the file and removes
+one by deleting its block, leaving everything else as written. A rule
+written another way (an inline table) can only be removed by hand, and
+while a workspace's rules are an inline list (`suppress = [...]`) new
+ones have to be added to that list by hand too.
 
 ## Data paths (XDG)
 

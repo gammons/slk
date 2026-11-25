@@ -648,9 +648,10 @@ func goldenMessages() []messages.MessageItem {
 //   - Row text, section grouping, section ordering and the DM presence
 //     glyphs (● active / ○ away) are pinned.
 //
-//   - IsStarred changes nothing. sidebar.ChannelItem.IsStarred is a
-//     carrier field: nothing in internal/ui reads it at all (only
-//     internal/cache does).
+//   - IsStarred is read by the channel header's star glyph (C2 carries
+//     it true, so the window_split golden pins a filled ★ on the
+//     engineering pane). The sidebar row itself still renders the
+//     same either way: grouping comes from Section.
 //
 //   - IsMuted IS live, but only in combination with goldenReadState.
 //     It selects styles.ChannelMuted over styles.ChannelNormal
@@ -664,10 +665,9 @@ func goldenMessages() []messages.MessageItem {
 //     row the read state marks unread — hence goldenReadState marks C2
 //     (unmuted) and C3 (muted) unread, giving one row of each kind.
 //
-// IsStarred is kept (production data carries it) and pinned as inert by
-// TestNewGoldenApp_SidebarRendersEveryFixtureRow's subtest, so wiring it
-// up later surfaces as a test failure and a golden diff instead of a
-// silent change in what the goldens mean.
+// IsStarred is kept (production data carries it); the header glyph now
+// reads it (see the bullet above), and the sidebar-row subtest still
+// pins that the row itself does not.
 //
 // Every item carries an explicit Section, which as a side effect exempts
 // all of them from the sidebar's staleness filter

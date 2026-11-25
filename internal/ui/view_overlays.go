@@ -51,6 +51,9 @@ func (a *App) applyOverlays(screen string) string {
 	if a.reactionPicker.IsVisible() {
 		screen = a.reactionPicker.ViewOverlay(a.width, a.height, screen)
 	}
+	if a.mode == ModeAppView || a.appViewBehind {
+		screen = a.appViewOverlay(screen)
+	}
 	if a.confirmPrompt.IsVisible() {
 		screen = a.confirmPromptOverlay(screen)
 	}
@@ -84,8 +87,14 @@ func (a *App) applyOverlays(screen string) string {
 	if a.draftList.IsVisible() {
 		screen = a.draftList.ViewOverlay(a.width, a.height, screen)
 	}
+	if a.suppressList.IsVisible() {
+		screen = a.suppressList.ViewOverlay(a.width, a.height, screen)
+	}
 	if a.mode == ModePresenceCustomSnooze {
 		screen = presencemenu.CustomSnoozeView(a.width, a.height, screen, a.presence.SnoozeBuf())
+	}
+	if a.mode == ModeOpenSlackLink {
+		screen = openSlackLinkView(a.width, a.height, screen, a.slackLinkInput, a.slackLinkError)
 	}
 	if a.bootstrap.IsLoading() {
 		screen = a.bootstrap.Render(a.width, a.height, a.spinnerGlyph())
@@ -112,7 +121,11 @@ func (a *App) overlayActive() bool {
 		a.userProfile.IsVisible() ||
 		a.marksOverlay.IsVisible() ||
 		a.draftList.IsVisible() ||
+		a.suppressList.IsVisible() ||
 		a.mode == ModePresenceCustomSnooze ||
+		a.mode == ModeOpenSlackLink ||
+		a.mode == ModeAppView ||
+		a.appViewBehind ||
 		a.bootstrap.IsLoading()
 }
 
@@ -127,12 +140,21 @@ func (a *App) userProfileLive() userprofile.Live {
 	if a.avatarFn != nil {
 		avatar = a.avatarFn(userID)
 	}
+	var sxKey string
+	var sxBytes []byte
+	// Read only after Avatar has started any load it needed, so this is
+	// a lookup: both come from the same preload.
+	if avatar != "" && a.sixelAvatarFn != nil {
+		sxKey, sxBytes, _ = a.sixelAvatarFn(userID)
+	}
 	presence, _ := a.sidebar.PresenceByUser(userID)
 	return userprofile.Live{
-		Avatar:   avatar,
-		Presence: presence,
-		Status:   a.presence.peers[userID],
-		Now:      a.now(),
+		Avatar:         avatar,
+		AvatarSixelKey: sxKey,
+		AvatarSixel:    sxBytes,
+		Presence:       presence,
+		Status:         a.presence.peers[userID],
+		Now:            a.now(),
 	}
 }
 

@@ -166,8 +166,15 @@ func UsedInText(s string, customs map[string]string) []string {
 		}
 		end := i + m[1]
 		name := s[i+m[2] : i+m[3]]
+		base := StripSkinTone(name)
 		_, custom := customs[name]
-		if _, builtin := slackCodeMap[":"+StripSkinTone(name)+":"]; !custom && !builtin {
+		_, builtin := slackCodeMap[":"+base+":"]
+		if !builtin {
+			// A codepoint-form name (":1f44d:") names a standard emoji
+			// too, and is what some reactions use.
+			_, builtin = CodepointsFromName(base)
+		}
+		if !custom && !builtin {
 			// Not an emoji: its closing colon may open the next one,
 			// as in "12:30:+1::skin-tone-5:".
 			i = end - 1
@@ -179,6 +186,25 @@ func UsedInText(s string, customs map[string]string) []string {
 			seen[name] = true
 			out = append(out, name)
 		}
+	}
+	return out
+}
+
+// URLsInText returns the image URL each emoji in s resolves to, in text
+// order and deduplicated. The spelling is used as written (the workspace
+// customs map first), unlike UsedInText's canonical history names, so a
+// caller checking which image a message drew compares the URL it actually
+// rendered: with a custom emoji named "heart", ":2764:" is the standard
+// heart while ":heart:" is the custom one.
+func URLsInText(s string, customs map[string]string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, tok := range ResolveEmojiToTokens(s, customs) {
+		if tok.Kind != TokenEmoji || tok.URL == "" || seen[tok.URL] {
+			continue
+		}
+		seen[tok.URL] = true
+		out = append(out, tok.URL)
 	}
 	return out
 }

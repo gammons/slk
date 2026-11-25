@@ -52,9 +52,13 @@ type EventHandler interface {
 	OnEphemeralMessage(m EphemeralMessage)
 	// OnViewOpened delivers view_opened: an app opened a modal for the
 	// current user, typically in answer to a slash command (bare
-	// /giphy). title is the modal's title. slk cannot show modals yet;
-	// see docs/superpowers/specs/2026-10-12-app-modals-research.md.
-	OnViewOpened(title string)
+	// /giphy) or a button. The frame carries the whole view; a frame
+	// without one still names it by ID and title.
+	OnViewOpened(v View)
+	// OnViewUpdated delivers view_updated for a modal already open.
+	// v is nil when Slack sent no inline view: the content must then be
+	// fetched with views.get.
+	OnViewUpdated(viewID string, v *View)
 	OnMessageDeleted(channelID, ts string)
 	OnReactionAdded(channelID, ts, userID, emoji string)
 	OnReactionRemoved(channelID, ts, userID, emoji string)
@@ -180,6 +184,21 @@ type EventHandler interface {
 	// subtype "add" (name, value) and "remove" (names); the receiver
 	// must treat anything else as "the list changed somehow".
 	OnEmojiChanged(subtype, name string, names []string, value string)
+	// OnStarChanged is delivered for star_added / star_removed when the
+	// user stars or un-stars anything (in any client, including this
+	// one). change.ItemType says what was starred: a conversation (im,
+	// channel, group, mpim) re-sections a sidebar row; a message or
+	// file star belongs to Slack's saved-items list, which the receiver
+	// may ignore until slk grows a view for it.
+	OnStarChanged(change StarChange, starred bool)
+}
+
+// StarChange is one star_added / star_removed frame's item: what was
+// starred, and the conversation it lives in ("" for a file, which
+// carries only a file id).
+type StarChange struct {
+	ItemType string // im | channel | group | mpim | message | file
+	Channel  string
 }
 
 // EphemeralMessage is a message only the current user can see. A
@@ -558,6 +577,30 @@ func offerRoom(handler EventHandler, channelID, ts string, room json.RawMessage)
 	obs.OnMessageRoom(channelID, ts, room)
 }
 
+// MessageFrameDrivesOnMessage reports whether a message frame with
+// this subtype and ephemeral flags reaches EventHandler.OnMessage in
+// dispatchWebSocketEvent: the plain and renderable subtypes when not
+// ephemeral, and message_changed when neither the frame nor the
+// embedded message is ephemeral. message_deleted and ephemerals do
+// not. A system-notice subtype folds onto "" first, exactly as the
+// message arm does. The message arm of dispatchWebSocketEvent below
+// enumerates the same rules; consumers that must mirror the
+// dispatcher's reach (the grid event gate's discovery hook) use this
+// predicate so the two cannot drift silently - when a subtype is
+// added here, it moves there too.
+func MessageFrameDrivesOnMessage(subtype string, frameEphemeral, hasEmbedded, embeddedEphemeral bool) bool {
+	if core.IsSystemNoticeSubtype(subtype) {
+		subtype = ""
+	}
+	switch subtype {
+	case "", "bot_message", "thread_broadcast", "file_share", "me_message":
+		return !frameEphemeral
+	case "message_changed":
+		return hasEmbedded && !frameEphemeral && !embeddedEphemeral
+	}
+	return false
+}
+
 // dispatchWebSocketEvent parses a raw JSON WebSocket message and routes it
 // to the appropriate EventHandler method.
 func dispatchWebSocketEvent(data []byte, handler EventHandler) {
@@ -673,25 +716,37 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 		handler.OnSelfPresenceChange(evt.Presence)
 
 	case "view_opened":
-		var evt struct {
-			Title struct {
-				Text string `json:"text"`
-			} `json:"title"`
-			View struct {
-				Title struct {
-					Text string `json:"text"`
-				} `json:"title"`
-			} `json:"view"`
+		v, err := parseViewOpened(data)
+		if err != nil {
+			debuglog.WS("view_opened: parse failed: %v", err)
+			return
 		}
+		debuglog.WS("view_opened: id=%q title=%q blocks=%d", v.ID, v.Title, len(v.Blocks.BlockSet))
+		handler.OnViewOpened(*v)
+
+	case "view_updated":
+		var evt viewUpdatedEvent
 		if err := json.Unmarshal(data, &evt); err != nil {
 			return
 		}
-		title := evt.Title.Text
-		if title == "" {
-			title = evt.View.Title.Text
+		var v *View
+		if len(evt.View) > 0 && string(evt.View) != "null" {
+			parsed, err := decodeView(evt.View)
+			if err != nil {
+				debuglog.WS("view_updated: parse failed: %v", err)
+			} else {
+				if parsed.ID == "" {
+					parsed.ID = evt.ViewID
+				}
+				v = parsed
+			}
 		}
-		debuglog.WS("view_opened: title=%q", title)
-		handler.OnViewOpened(title)
+		viewID := evt.ViewID
+		if viewID == "" && v != nil {
+			viewID = v.ID
+		}
+		debuglog.WS("view_updated: id=%q inline=%v", viewID, v != nil)
+		handler.OnViewUpdated(viewID, v)
 
 	case "dnd_updated":
 		var evt wsDNDUpdatedEvent
@@ -864,6 +919,23 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			return
 		}
 		handler.OnEmojiChanged(evt.Subtype, evt.Name, evt.Names, evt.Value)
+
+	case "star_added", "star_removed":
+		// Slack echoes a star change to every client of the user,
+		// including the one that made it (observed on a live grid: the
+		// frame carries the user and item). Every item kind is
+		// forwarded; the handler decides which ones it acts on.
+		var evt struct {
+			Type string `json:"type"`
+			Item struct {
+				Type    string `json:"type"`
+				Channel string `json:"channel"`
+			} `json:"item"`
+		}
+		if err := json.Unmarshal(data, &evt); err != nil {
+			return
+		}
+		handler.OnStarChanged(StarChange{ItemType: evt.Item.Type, Channel: evt.Item.Channel}, evt.Type == "star_added")
 
 	case "badge_counts_updated":
 		// The server's own Activity-badge recalculation: Slack pushes

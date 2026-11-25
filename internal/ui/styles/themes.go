@@ -52,6 +52,14 @@ type ThemeColors struct {
 	SidebarSelectedFg string `toml:"sidebar_selected_fg"`
 	MentionBadgeBg    string `toml:"mention_badge_bg"`
 	MentionBadgeFg    string `toml:"mention_badge_fg"`
+	// SelfMentionBg/Fg paint an @mention that reaches the user (theirs,
+	// a broadcast, or a group they are in); MentionHighlightBg/Bar tint
+	// the whole message and its left bar. Defaults derive from Warning;
+	// see tint.go.
+	SelfMentionBg       string `toml:"self_mention_bg"`
+	SelfMentionFg       string `toml:"self_mention_fg"`
+	MentionHighlightBg  string `toml:"mention_highlight_bg"`
+	MentionHighlightBar string `toml:"mention_highlight_bar"`
 }
 
 // builtinThemes maps lowercase theme names to their display name and colors.
@@ -302,6 +310,9 @@ var builtinThemes = map[string]struct {
 		Background: "0", Surface: "8", SurfaceDark: "0",
 		Text: "15", TextMuted: "8", Border: "8",
 		SelectionBgFocused: "8", SelectionBgUnfocused: "8",
+		// A Warning mix would be near-black here too; the bar alone
+		// marks a mention.
+		MentionHighlightBg: "0",
 	}},
 	// ansi-light is the light-terminal counterpart to ansi-dark. Same
 	// ANSI-16-only constraint; values chosen for readability on light
@@ -316,6 +327,7 @@ var builtinThemes = map[string]struct {
 		Background: "15", Surface: "7", SurfaceDark: "7",
 		Text: "0", TextMuted: "8", Border: "8",
 		SelectionBgFocused: "8", SelectionBgUnfocused: "8",
+		MentionHighlightBg: "15",
 	}},
 	"zenburn": {"Zenburn", ThemeColors{
 		Primary: "#8CD0D3", Accent: "#7F9F7F", Warning: "#F0DFAF", Error: "#CC9393",
@@ -526,13 +538,36 @@ type customThemeFile struct {
 	Colors ThemeColors `toml:"colors"`
 }
 
+// CustomTheme is a theme read from a custom theme file.
+type CustomTheme struct {
+	Name   string
+	Colors ThemeColors
+}
+
 // LoadCustomThemes scans the top level of fsys for .toml theme files and
 // registers them.
 func LoadCustomThemes(fsys fs.FS) {
+	RegisterCustomThemes(ParseCustomThemes(fsys))
+}
+
+// RegisterCustomThemes registers each of themes, replacing a custom theme
+// of the same name. Like every theme setter it belongs to the UI
+// goroutine once the program runs.
+func RegisterCustomThemes(themes []CustomTheme) {
+	for _, t := range themes {
+		RegisterCustomTheme(t.Name, t.Colors)
+	}
+}
+
+// ParseCustomThemes reads the .toml theme files at the top level of fsys,
+// filling missing colors from the dark theme. It touches no package
+// state, so it may run on any goroutine.
+func ParseCustomThemes(fsys fs.FS) []CustomTheme {
 	entries, err := fs.ReadDir(fsys, ".")
 	if err != nil {
-		return // directory doesn't exist or can't be read — silently skip
+		return nil // directory doesn't exist or can't be read — silently skip
 	}
+	var themes []CustomTheme
 
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".toml") {
@@ -581,6 +616,7 @@ func LoadCustomThemes(fsys fs.FS) {
 		if tf.Colors.Border == "" {
 			tf.Colors.Border = dark.Border
 		}
-		RegisterCustomTheme(tf.Name, tf.Colors)
+		themes = append(themes, CustomTheme(tf))
 	}
+	return themes
 }

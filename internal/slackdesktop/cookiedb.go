@@ -3,7 +3,9 @@ package slackdesktop
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"os"
 
 	_ "modernc.org/sqlite"
@@ -59,7 +61,10 @@ func copyToTemp(src string, isLockError func(error) bool) (string, error) {
 		if isLockError(err) {
 			return "", ErrCookieLocked
 		}
-		return "", ErrCookieDBMissing
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", ErrCookieDBMissing
+		}
+		return "", fmt.Errorf("%w: %w", ErrCookieDBUnreadable, err)
 	}
 	defer in.Close()
 

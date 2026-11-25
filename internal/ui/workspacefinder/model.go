@@ -25,6 +25,8 @@ type Item struct {
 	ID       string
 	Name     string
 	Initials string
+	// HasUnread draws an unread dot left of the initials.
+	HasUnread bool
 }
 
 // Model is the fuzzy workspace finder overlay.
@@ -34,6 +36,12 @@ type Model struct {
 	query    string
 	selected int // index into filtered
 	visible  bool
+	// vimKeys opens the finder navigating: j/k move the highlight and
+	// / starts the filter (SetVimKeys). Off, typing filters at once.
+	vimKeys bool
+	// searching is true while keys type into the filter; with vimKeys
+	// off it is always true.
+	searching bool
 }
 
 var _ interface {
@@ -45,6 +53,10 @@ var _ interface {
 func New() Model {
 	return Model{}
 }
+
+// SetVimKeys sets whether the finder opens navigating with j/k, with /
+// to start filtering, instead of filtering on every key.
+func (m *Model) SetVimKeys(on bool) { m.vimKeys = on }
 
 // SetItems updates the searchable workspace list.
 func (m *Model) SetItems(items []Item) {
@@ -98,6 +110,7 @@ func (m *Model) ClickRow(termWidth, termHeight, localY int) bool {
 // Open shows the overlay and resets state.
 func (m *Model) Open() {
 	m.visible = true
+	m.searching = !m.vimKeys
 	m.query = ""
 	m.selected = 0
 	m.filter()
@@ -115,6 +128,12 @@ func (m Model) IsVisible() bool {
 
 // HandleKey processes a key event and returns a WorkspaceResult if the user
 // selected a workspace, or nil otherwise.
+//
+// With vimKeys the finder opens navigating: j/k and the arrows move the
+// highlight, / starts the filter, esc closes. While filtering (always,
+// without vimKeys), printable runes and backspace edit the query and the
+// arrows still move; with vimKeys, esc clears the filter and goes back to
+// navigating. Enter switches to the highlighted workspace either way.
 func (m *Model) HandleKey(keyStr string) *WorkspaceResult {
 	switch keyStr {
 	case "enter":
@@ -128,22 +147,38 @@ func (m *Model) HandleKey(keyStr string) *WorkspaceResult {
 		return nil
 
 	case "esc":
+		if m.vimKeys && m.searching {
+			m.searching = false
+			m.query = ""
+			m.selected = 0
+			m.filter()
+			return nil
+		}
 		m.Close()
 		return nil
 
 	case "down", "ctrl+n":
-		if m.selected < len(m.filtered)-1 {
-			m.selected++
-		}
+		m.move(1)
 		return nil
 
 	case "up", "ctrl+p":
-		if m.selected > 0 {
-			m.selected--
+		m.move(-1)
+		return nil
+	}
+
+	if !m.searching {
+		switch keyStr {
+		case "j":
+			m.move(1)
+		case "k":
+			m.move(-1)
+		case "/":
+			m.searching = true
 		}
 		return nil
+	}
 
-	case "backspace":
+	if keyStr == "backspace" {
 		if len(m.query) > 0 {
 			_, n := utf8.DecodeLastRuneInString(m.query)
 			m.query = m.query[:len(m.query)-n]
@@ -161,6 +196,13 @@ func (m *Model) HandleKey(keyStr string) *WorkspaceResult {
 	}
 
 	return nil
+}
+
+// move shifts the highlight by delta, clamped to the filtered list.
+func (m *Model) move(delta int) {
+	if next := m.selected + delta; next >= 0 && next < len(m.filtered) {
+		m.selected = next
+	}
 }
 
 // filter rebuilds the filtered list based on the current query.
@@ -236,7 +278,7 @@ func (m Model) renderBox(termWidth int) string {
 
 	f := chrome.Frame{
 		Title: "Switch Workspace",
-		Input: chrome.FilterInput(s, m.query, "Type to filter..."),
+		Input: m.inputLine(s),
 		Body:  list.Rows(s, m.selected, rows),
 	}
 	if m.query != "" {
@@ -245,7 +287,21 @@ func (m Model) renderBox(termWidth int) string {
 	return f.Render(s, overlayWidth)
 }
 
-// workspacePrefix returns the display prefix for a workspace (initials in a styled block).
+// inputLine is the filter prompt while searching, otherwise a hint.
+func (m Model) inputLine(s chrome.Styles) string {
+	if m.searching {
+		return chrome.FilterInput(s, m.query, "Type to filter...")
+	}
+	return s.Footer.Render("j/k to move, / to search")
+}
+
+// workspacePrefix returns the display prefix for a workspace: a one-column
+// unread slot (the rail's dot, or a space so the initials stay aligned)
+// followed by the initials in a styled block.
 func workspacePrefix(item Item) string {
-	return styles.WorkspaceActive.Render(item.Initials)
+	dot := " "
+	if item.HasUnread {
+		dot = styles.PresenceOnline.Render("●")
+	}
+	return dot + " " + styles.WorkspaceActive.Render(item.Initials)
 }

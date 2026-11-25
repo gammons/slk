@@ -20,7 +20,7 @@
 //	                          emoji, apply theme, restore the last
 //	                          channel viewed for this workspace.
 //	ConversationOpenedMsg   - WS event: a conversation just opened.
-//	                          Upsert into the active sidebar and finder.
+//	                          Upsert sidebar/finder and refresh mentions.
 //	SectionsRefreshedMsg    - cache notice: sidebar sections were
 //	                          reorganized. Re-push channel items
 //	                          for the active workspace.
@@ -30,6 +30,8 @@
 //	UserResolvedMsg         - per-user display-name resolved:
 //	                          patch any in-history references in
 //	                          both messages pane and thread panel.
+//	ChannelResolvedMsg      - channel mention name resolved:
+//	                          refresh every pane without joining it.
 //	UserExternalMsg         - per-user external/internal flag
 //	                          resolved: update the cache + re-push
 //	                          SetUserNames so styling refreshes.
@@ -58,11 +60,14 @@
 package ui
 
 import (
+	"maps"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
+	"github.com/gammons/slk/internal/ui/sidebar"
 )
 
 var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
@@ -76,6 +81,7 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	case ConversationOpenedMsg:
 		if m.TeamID == a.activeTeamID {
 			a.sidebar.UpsertItem(m.Item)
+			a.SetChannels(a.sidebar.Items())
 			// FinderItem is populated by today's one sender
 			// (cmd/slk's rtmEventHandler); guard against a future
 			// sender that forgets to set it, which would otherwise
@@ -123,6 +129,30 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			break
 		}
 		a.SetChannels(items)
+		return nil, true
+
+	case ChannelResolvedMsg:
+		if m.TeamID != a.activeTeamID {
+			return nil, true
+		}
+		name := m.Name
+		// Sidebar names are authoritative for joined conversations, even
+		// if a delayed lookup returns an older cached name.
+		for _, ch := range a.sidebar.Items() {
+			if ch.ID == m.ChannelID && ch.Name != "" {
+				name = ch.Name
+				break
+			}
+		}
+		if cur, ok := a.channelNames[m.ChannelID]; ok && cur == name {
+			return nil, true
+		}
+		names := maps.Clone(a.channelNames)
+		if names == nil {
+			names = make(map[string]string, 1)
+		}
+		names[m.ChannelID] = name
+		a.setChannelNames(names)
 		return nil, true
 
 	case UserResolvedMsg:
@@ -192,6 +222,7 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	case UserGroupsLoadedMsg:
 		if m.TeamID == a.activeTeamID {
 			a.SetUserGroups(m.UserGroups)
+			a.SetSelfUserGroups(m.SelfUserGroups)
 		}
 		return nil, true
 	}
@@ -206,6 +237,7 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 	if m.Domain != "" {
 		a.workspaceDomains[m.TeamID] = m.Domain
 	}
+	a.permalinkDomains[m.TeamID] = append([]string(nil), m.PermalinkDomains...)
 	var batch []tea.Cmd
 	// Only the workspace flagged InitialActive auto-claims active
 	// state. main.go computes this deterministically
@@ -241,7 +273,7 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 		a.sidebar.SetSectionsProvider(m.SectionsProvider)
 		// Before the lists below, so they are filtered on first build.
 		a.SetDeactivatedUsers(m.DeactivatedUsers, m.DeactivatedSeq)
-		a.SetChannels(m.Channels)
+		a.setChannels(m.Channels, m.ChannelNames)
 		a.channelFinder.SetItems(m.FinderItems)
 		// SetExternalUsers re-pushes user-names; calling
 		// SetUserNames last is the canonical state.
@@ -250,6 +282,7 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 		batch = append(batch, a.presence.SetPeers(a, m.UserStatuses))
 		a.SetCustomEmoji(m.CustomEmoji)
 		a.SetUserGroups(m.UserGroups)
+		a.SetSelfUserGroups(m.SelfUserGroups)
 		// Route through the setter so messagepane/threadPanel also learn
 		// the current user — production never calls SetCurrentUserID
 		// otherwise, which would leave live self-reactions unstyled.
@@ -262,12 +295,16 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 		a.statusbar.SetStatus(pres, dndEnabled, dndEnd)
 		a.statusbar.SetCustomStatus(a.presence.CustomStatus(a.currentUserID))
 		a.workspaceRail.SelectByID(m.TeamID)
+		a.syncStatusWorkspace()
 		if len(m.Channels) > 0 {
-			// Restore the last-visited channel across restarts (persisted in
+			// Open the configured default_channel, else restore the
+			// last-visited channel across restarts (persisted in
 			// channel_visits). Falls back to the first sidebar entry when
-			// there's no recorded visit or the channel no longer exists.
+			// neither matches a channel in the sidebar.
 			target := m.Channels[0]
-			if m.LastChannelID != "" {
+			if ch, ok := defaultChannelTarget(m.Channels, m.FinderItems, m.DefaultChannel); ok {
+				target = ch
+			} else if m.LastChannelID != "" {
 				for _, ch := range m.Channels {
 					if ch.ID == m.LastChannelID {
 						target = ch
@@ -330,6 +367,11 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 // data, restores last-viewed channel).
 func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	if a.compose.Uploading() || a.threadCompose.Uploading() {
+		// This switch is refused. Drop the permalink only when it is
+		// the one that asked for this switch; a newer paste stays.
+		if p := a.pendingFinderPermalink; p != nil && m.FinderPermalinkSeq != 0 && m.FinderPermalinkSeq == p.seq {
+			a.clearFinderPermalink()
+		}
 		return toastWithClear(a, "Upload in progress", 2*time.Second)
 	}
 	if a.userProfile.IsVisible() {
@@ -341,6 +383,7 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	if m.Domain != "" {
 		a.workspaceDomains[m.TeamID] = m.Domain
 	}
+	a.permalinkDomains[m.TeamID] = append([]string(nil), m.PermalinkDomains...)
 	// Remember which channel we were on in the workspace we're
 	// leaving so that switching back lands the user on the same
 	// channel rather than always snapping to the sidebar's first
@@ -405,7 +448,7 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	a.sidebar.ResetPresence()
 	// Before the lists below, so they are filtered on first build.
 	a.SetDeactivatedUsers(m.DeactivatedUsers, m.DeactivatedSeq)
-	a.SetChannels(m.Channels)
+	a.setChannels(m.Channels, m.ChannelNames)
 	a.channelFinder.SetItems(m.FinderItems)
 	// SetExternalUsers re-pushes user-names; calling SetUserNames
 	// last is the canonical state.
@@ -413,6 +456,7 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	a.SetUserNames(m.UserNames)
 	a.SetCustomEmoji(m.CustomEmoji)
 	a.SetUserGroups(m.UserGroups)
+	a.SetSelfUserGroups(m.SelfUserGroups)
 	// Route through the setter so messagepane/threadPanel also learn the
 	// current user (see WorkspaceReadyMsg above).
 	a.SetCurrentUserID(m.UserID)
@@ -432,6 +476,7 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 		a.sidebar.SetWidth(m.SidebarWidth)
 	}
 	a.workspaceRail.SelectByID(m.TeamID)
+	a.syncStatusWorkspace()
 
 	var batch []tea.Cmd
 	// After resetWindowTree above, so the fresh panes get the statuses.
@@ -440,29 +485,49 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	// workspace first.
 	batch = append(batch, a.presence.SetPeers(a, m.UserStatuses))
 	a.statusbar.SetCustomStatus(a.presence.CustomStatus(a.currentUserID))
+	// A permalink from the finder that targeted this workspace
+	// navigates now that its channels are on screen. routeLink is
+	// the same path o uses. When the channel resolves, that jump
+	// replaces the last-channel restore; when it does not, the
+	// browser fallback still runs and the last channel opens.
+	navCmd, navigated := a.takeFinderPermalink(m.TeamID, m.FinderPermalinkSeq)
+	if navCmd != nil {
+		batch = append(batch, navCmd)
+	}
 	// Restore the last-viewed channel for this workspace if we
-	// have one and it still exists; otherwise fall back to the
-	// first channel in the sidebar. Move the sidebar cursor to
-	// that channel as well so the highlight matches the messages
-	// pane.
-	if len(m.Channels) > 0 {
-		target := m.Channels[0]
-		if savedID, ok := a.lastChannelByTeam[m.TeamID]; ok && savedID != "" {
-			for _, ch := range m.Channels {
-				if ch.ID == savedID {
-					target = ch
-					break
+	// have one and it still exists; otherwise (first visit this
+	// session, or that channel is gone) open the configured
+	// default_channel, else the first channel in the sidebar. Move
+	// the sidebar cursor to that channel as well so the highlight
+	// matches the messages pane. Skipped when the permalink above
+	// already chose a channel.
+	if !navigated {
+		if len(m.Channels) > 0 {
+			target, found := m.Channels[0], false
+			if savedID := a.lastChannelByTeam[m.TeamID]; savedID != "" {
+				for _, ch := range m.Channels {
+					if ch.ID == savedID {
+						target, found = ch, true
+						break
+					}
 				}
 			}
+			if !found {
+				if ch, ok := defaultChannelTarget(m.Channels, m.FinderItems, m.DefaultChannel); ok {
+					target = ch
+				}
+			}
+			a.sidebar.SelectByID(target.ID)
+			// Enter in the rail with enter_keeps_focus left focus there.
+			keep := m.KeepFocus
+			batch = append(batch, func() tea.Msg {
+				return ChannelSelectedMsg{ID: target.ID, Name: target.Name, Type: target.Type, KeepFocus: keep}
+			})
+		} else {
+			a.sidebar.SelectThreadsRow()
+			a.messagepane.SetLoading(false)
+			a.messagepane.SetMessages(nil)
 		}
-		a.sidebar.SelectByID(target.ID)
-		batch = append(batch, func() tea.Msg {
-			return ChannelSelectedMsg{ID: target.ID, Name: target.Name, Type: target.Type}
-		})
-	} else {
-		a.sidebar.SelectThreadsRow()
-		a.messagepane.SetLoading(false)
-		a.messagepane.SetMessages(nil)
 	}
 	// Kick off an initial threads-list fetch so the sidebar
 	// Threads row badge populates before the user opens the view.
@@ -486,4 +551,25 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 		batch = append(batch, m.AfterSwitch)
 	}
 	return tea.Batch(batch...)
+}
+
+// defaultChannelTarget is the sidebar row for the workspace's configured
+// default_channel. The name is matched by matchChannelByName over the
+// finder rows, the user's own conversations (Synthetic rows never
+// match); a channel the sidebar does not show is no target. An empty
+// name never matches.
+func defaultChannelTarget(channels []sidebar.ChannelItem, finder []core.ChannelFinderItem, name string) (sidebar.ChannelItem, bool) {
+	if name == "" {
+		return sidebar.ChannelItem{}, false
+	}
+	it, ok := matchChannelByName(finder, name)
+	if !ok {
+		return sidebar.ChannelItem{}, false
+	}
+	for _, ch := range channels {
+		if ch.ID == it.ID {
+			return ch, true
+		}
+	}
+	return sidebar.ChannelItem{}, false
 }

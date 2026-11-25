@@ -153,16 +153,3 @@ func TestHitTestImage_NoStaleHitsAfterSwitchingToAZeroReplyThread(t *testing.T) 
 		t.Fatalf("HitTestImage(%d,%d) = (%q, %d) after switching threads; want no hit", row, col, ts, attIdx)
 	}
 }
-
-// The thread pane records image hits but still captures no sixel rows
-// (v1 scope: sixel renders its placeholder only in the thread pane).
-func TestHitTestImage_ThreadStillCapturesNoSixelRows(t *testing.T) {
-	m := imageThreadModel(t, imgpkg.ProtoSixel)
-	parent := messages.MessageItem{TS: "100.0", UserName: "alice", Text: "parent", Timestamp: "9:00 AM"}
-	reply := withImage(messages.MessageItem{TS: "101.0", UserName: "bob", Text: "see", Timestamp: "9:01 AM"})
-	m.SetThread(parent, []messages.MessageItem{reply}, "C1", parent.TS)
-	r := m.renderMessage(reply, 80, false)
-	if len(r.SixelRows) != 0 {
-		t.Errorf("thread renderMessage captured %d sixel rows, want 0", len(r.SixelRows))
-	}
-}

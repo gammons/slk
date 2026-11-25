@@ -18,6 +18,12 @@ func (r *userResolver) queueResolvedPeer(userID string) {
 }
 
 func (h *rtmEventHandler) PendingEvents() <-chan struct{} {
+	// The shared wake channel carries both wake sources (star applies
+	// and resolved peers); when the handler was built without one
+	// (tests), the resolver's own channel keeps the old behavior.
+	if h.starWake != nil {
+		return h.starWake
+	}
 	if h.wsCtx == nil || h.wsCtx.UserResolver == nil {
 		return nil
 	}
@@ -27,7 +33,10 @@ func (h *rtmEventHandler) PendingEvents() <-chan struct{} {
 // OnPendingEvents runs only on the WebSocket event owner. Cached names and
 // profiles may have resolved in the background after OnConnect added a row;
 // repair both snapshots now, rather than waiting for another reconnect.
+// The queued star applies drain first: they are the socket-down half of
+// a star Slack already accepted.
 func (h *rtmEventHandler) OnPendingEvents() {
+	h.drainStarApplies()
 	if h.wsCtx == nil || h.wsCtx.UserResolver == nil {
 		return
 	}

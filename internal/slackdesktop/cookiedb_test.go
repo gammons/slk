@@ -2,7 +2,11 @@ package slackdesktop
 
 import (
 	"database/sql"
+	"errors"
+	"io/fs"
+	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -45,5 +49,36 @@ func TestCopyToTempWithLockedCookie(t *testing.T) {
 
 	if err == nil || err != ErrCookieLocked {
 		t.Errorf("error = %q, expected = %q", err, ErrCookieLocked)
+	}
+}
+
+// #146: macOS TCC lets stat succeed on the App Store build's container
+// but fails open with EPERM. That must not read as "never signed in".
+func TestReadCookieRowUnreadableIsNotMissing(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs POSIX permissions and a non-root user")
+	}
+	path := makeCookieDB(t, "", []byte{1, 2, 3})
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(path, 0o600) })
+
+	_, _, err := readCookieRow(path)
+	if !errors.Is(err, ErrCookieDBUnreadable) {
+		t.Fatalf("error = %v, want ErrCookieDBUnreadable", err)
+	}
+	if errors.Is(err, ErrCookieDBMissing) {
+		t.Errorf("error = %v must not also be ErrCookieDBMissing", err)
+	}
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Errorf("error = %v should keep the underlying permission error", err)
+	}
+}
+
+func TestCopyToTempMissingFile(t *testing.T) {
+	_, err := copyToTemp(filepath.Join(t.TempDir(), "Cookies"), func(error) bool { return false })
+	if !errors.Is(err, ErrCookieDBMissing) {
+		t.Errorf("error = %v, want ErrCookieDBMissing", err)
 	}
 }

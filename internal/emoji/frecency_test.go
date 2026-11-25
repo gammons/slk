@@ -144,6 +144,9 @@ func TestUsedInText(t *testing.T) {
 		{"nice :+1::skin-tone-2:", []string{"+1::skin-tone-2"}},
 		{"nice :thumbsup_tone3:", []string{"+1::skin-tone-4"}},
 		{"meet at 12:30:45 :partyparrot:", []string{"partyparrot"}},
+		{"nice :1f44d:", []string{"+1"}},
+		{"at 12:30:45 :1f44d:", []string{"+1"}},
+		{"nice :1f44d-1f3fd:", []string{"+1::skin-tone-4"}},
 		// A rejected ":30:" must not swallow the colon that opens :+1:.
 		{"12:30:+1::skin-tone-5:", []string{"+1::skin-tone-5"}},
 		{"at 9:00:tada:", []string{"tada"}},
@@ -156,8 +159,38 @@ func TestUsedInText(t *testing.T) {
 	}
 }
 
-func TestSkinTonedUseRanksTheBaseEmoji(t *testing.T) {
-	// The pickers list base names only; a toned use lifts that row.
+// URLsInText resolves the spelling the text uses, so a custom emoji
+// sharing a standard name does not make one masquerade as the other.
+func TestURLsInText(t *testing.T) {
+	customs := map[string]string{
+		"partyparrot": "https://e/p.gif",
+		"heart":       "https://e/custom-heart.png",
+	}
+	stdHeart, ok := URLForShortcode("2764", nil)
+	if !ok {
+		t.Fatal("no standard URL for 2764")
+	}
+	stdThumbs, ok := URLForShortcode("thumbsup", nil)
+	if !ok {
+		t.Fatal("no standard URL for thumbsup")
+	}
+	for _, tc := range []struct {
+		in   string
+		want []string
+	}{
+		{":2764:", []string{stdHeart}},
+		{":heart:", []string{"https://e/custom-heart.png"}},
+		{":thumbsup: and :+1:", []string{stdThumbs}},
+		{":partyparrot:", []string{"https://e/p.gif"}},
+		{"meet at 12:30:45", nil},
+	} {
+		if got := URLsInText(tc.in, customs); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("URLsInText(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestSkinTonedUseRanksTheBaseEmoji(t *testing.T) { // The pickers list base names only; a toned use lifts that row.
 	use := NewFrecency([]string{"wave", "+1::skin-tone-4"})
 	if r, ok := use.Rank("+1", nil); !ok || r != 1 {
 		t.Errorf(`Rank("+1") = %d, %v; want 1, true`, r, ok)

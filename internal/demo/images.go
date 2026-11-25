@@ -64,3 +64,5 @@ func (imageStore) Prerendered(string, image.Point, imgpkg.Protocol) (imgpkg.Rend
 func (imageStore) ConfigurePrerender(imgpkg.Protocol) {}
 
 func (imageStore) ConfigurePrerenderKitty(*imgpkg.KittyRenderer) {}
+
+func (imageStore) InvalidatePrerender() {}

@@ -47,6 +47,7 @@ func (a *App) prepareConfirmPrompt() {
 
 // openConfirmPrompt raises the prompt and switches to ModeConfirm.
 func (a *App) openConfirmPrompt(title, body string, onConfirm confirmprompt.ConfirmFunc) {
+	a.appViewBehind = false
 	a.prepareConfirmPrompt()
 	a.confirmPrompt.Open(title, body, onConfirm)
 	a.SetMode(ModeConfirm)
@@ -55,9 +56,20 @@ func (a *App) openConfirmPrompt(title, body string, onConfirm confirmprompt.Conf
 // openConfirmChoice raises the prompt with c (any buttons) and switches
 // to ModeConfirm.
 func (a *App) openConfirmChoice(c confirmprompt.Choice) {
+	a.appViewBehind = false
 	a.prepareConfirmPrompt()
 	a.confirmPrompt.OpenChoice(c)
 	a.SetMode(ModeConfirm)
+}
+
+// openConfirmChoiceReturning raises a chooser over a modal and returns
+// to that modal when the chooser closes. ModeConfirm is itself a modal,
+// so SetMode would otherwise leave the dialog behind and never come
+// back.
+func (a *App) openConfirmChoiceReturning(c confirmprompt.Choice, mode Mode) {
+	a.keepAppView = mode == ModeAppView
+	a.openConfirmChoice(c)
+	a.appViewBehind = mode == ModeAppView && a.appView.Current() != nil
 }
 
 // confirmPromptOverlay composites the prompt over background, clamped to

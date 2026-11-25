@@ -254,10 +254,10 @@ func TestChar_ThreadOverwideLinesNeverExceedPane(t *testing.T) {
 	}
 }
 
-// BUG?: plan decision P2. thread.SetFocused clears only the view cache, so
-// the selected reply keeps its focused border after focus leaves. Pinned
-// as-is; when fixed, re-pin to "flipped == freshly unfocused render".
-func TestChar_ThreadFocusFlipKeepsFocusedBorder(t *testing.T) {
+// Leaving the thread repaints the selected reply with the unfocused
+// shadow. It used to keep the focused border (the reply cache ignored
+// focus).
+func TestThreadFocusFlipUsesUnfocusedBorder(t *testing.T) {
 	mk := func() *Model { return p3Thread(t, 1) }
 	a := mk()
 	a.SetFocused(true)
@@ -266,9 +266,9 @@ func TestChar_ThreadFocusFlipKeepsFocusedBorder(t *testing.T) {
 	flipped := a.View(20, 40)
 
 	c := mk()
-	c.SetFocused(true)
-	if focused := c.View(20, 40); flipped != focused {
-		t.Error("the stale-border behaviour changed; if intended, re-pin this BUG? row and raise it")
+	c.SetFocused(false)
+	if fresh := c.View(20, 40); flipped != fresh {
+		t.Error("focus leaving the thread did not repaint the selected reply")
 	}
 }
 

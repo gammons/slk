@@ -1,9 +1,11 @@
 package styles
 
 import (
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -463,5 +465,42 @@ func TestBuiltinThemeCount(t *testing.T) {
 	const want = 59
 	if got := len(builtinThemes); got != want {
 		t.Errorf("builtinThemes count = %d, want %d (update docs in README.md and wiki/Features.md if this changed intentionally)", got, want)
+	}
+}
+
+// ParseCustomThemes runs off the UI goroutine, so it must leave the
+// registry alone; RegisterCustomThemes then replaces a theme of the same
+// name, which is what a reload relies on.
+func TestParseCustomThemesRegistersNothing(t *testing.T) {
+	saved := maps.Clone(customThemes)
+	t.Cleanup(func() {
+		customThemes = saved
+		Apply("dark", config.Theme{})
+	})
+	dir := t.TempDir()
+	write := func(bg string) {
+		t.Helper()
+		body := "name = \"Parsed\"\n[colors]\nbackground = \"" + bg + "\"\n"
+		if err := os.WriteFile(filepath.Join(dir, "parsed.toml"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("#101010")
+	themes := ParseCustomThemes(os.DirFS(dir))
+	if len(themes) != 1 || themes[0].Name != "Parsed" || themes[0].Colors.Background != "#101010" {
+		t.Fatalf("ParseCustomThemes = %+v, want one theme Parsed with background #101010", themes)
+	}
+	if themes[0].Colors.Primary == "" {
+		t.Error("a missing color is not filled from the dark theme")
+	}
+	if slices.Contains(ThemeNames(), "Parsed") {
+		t.Fatal("ParseCustomThemes registered the theme")
+	}
+	RegisterCustomThemes(themes)
+	write("#202020")
+	RegisterCustomThemes(ParseCustomThemes(os.DirFS(dir)))
+	Apply("parsed", config.Theme{})
+	if !colorEqual(Background, lipgloss.Color("#202020")) {
+		t.Errorf("after a second register: Background = %v, want #202020", Background)
 	}
 }

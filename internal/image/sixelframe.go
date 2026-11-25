@@ -33,6 +33,16 @@ type SixelFrame struct {
 	// Force repaints every valid wanted placement even when unchanged
 	// (renderer full redraws such as terminal resize).
 	Force bool
+	// RepaintOnScroll forces the repaint, too, when the frame's own
+	// text diff moves lines or clears the screen (see diffMovesLines).
+	// It is for images the terminal attaches to cells, as WezTerm does
+	// with kitty direct placements: a hard scroll carries them along
+	// with their line, but WezTerm finds a placement to delete or
+	// replace by the rows it was drawn on, so after the scroll it can
+	// no longer remove the moved image. Erases run before the diff,
+	// while those rows are still right, so erasing everything and
+	// painting it again after the diff keeps the screen correct.
+	RepaintOnScroll bool
 }
 
 // SixelFrameStore publishes View-time placement snapshots and hands
@@ -126,6 +136,18 @@ type FrameOutput struct {
 	painter   *SixelPainter
 	lastTitle string
 	haveTitle bool
+
+	// repaintOnScroll is set once a frame with RepaintOnScroll was
+	// taken. From then on every write is checked for moved lines, also
+	// writes no frame plan was applied to.
+	repaintOnScroll bool
+	// missedMove records a write that moved lines or cleared the screen
+	// with no frame plan applied: unmarked (bubbletea leaving or
+	// re-entering the alternate screen around the external editor), or
+	// marked with a frame id already taken. The images it scrolled or
+	// cleared are no longer where the painter thinks, so the next frame
+	// plan is forced.
+	missedMove bool
 }
 
 // sideChannelWriter is the SideChannel's writer: it shares FrameOutput's
@@ -188,12 +210,18 @@ func (w *FrameOutput) Write(p []byte) (int, error) {
 
 	sanitized, realTitle, id, marked := sanitizeFrameTitle(p)
 	var plan SixelPlan
+	var frame SixelFrame
+	haveFrame := false
 	if marked {
-		if frame, ok := w.frames.Take(id); ok {
-			plan = w.painter.Plan(frame.Placements, frame.EraseSGR, frame.Force)
-		} else {
+		if frame, haveFrame = w.frames.Take(id); !haveFrame {
 			debuglog.ImgRender("sixel frame: missing id=%d", id)
 		}
+	}
+	scrollAware := w.repaintOnScroll || (haveFrame && frame.RepaintOnScroll)
+	moved := scrollAware && diffMovesLines(sanitized)
+	if haveFrame {
+		force := frame.Force || (frame.RepaintOnScroll && (moved || w.missedMove))
+		plan = w.painter.Plan(frame.Placements, frame.EraseSGR, force)
 	}
 
 	// Forward the real title only when it changed; otherwise the marked
@@ -217,8 +245,14 @@ func (w *FrameOutput) Write(p []byte) (int, error) {
 	if n != len(combined) {
 		return 0, io.ErrShortWrite
 	}
-	if marked && plan.next != nil {
+	if haveFrame && plan.next != nil {
 		w.painter.Commit(plan)
+		w.missedMove = false
+	} else if moved {
+		w.missedMove = true
+	}
+	if haveFrame && frame.RepaintOnScroll {
+		w.repaintOnScroll = true
 	}
 	if marked {
 		w.lastTitle = realTitle
@@ -335,4 +369,56 @@ func insertEraseAfterSyncStart(sanitized, erase []byte) []byte {
 	out = append(out, erase...)
 	out = append(out, sanitized[after:]...)
 	return out
+}
+
+// diffMovesLines reports whether a renderer flush contains a control
+// sequence that moves screen lines or clears the screen: scroll up or
+// down (SU, SD), insert or delete lines (IL, DL), a scroll region
+// (DECSTBM), erase in display (ED), or an alternate-screen switch.
+// Bubbletea's renderer scrolls with these when whole lines moved
+// (ultraviolet's hard-scroll optimization) and clears with them on a
+// full redraw.
+func diffMovesLines(p []byte) bool {
+	for i := 0; i+1 < len(p); i++ {
+		if p[i] != 0x1b || p[i+1] != '[' {
+			continue
+		}
+		j := i + 2
+		private := j < len(p) && p[j] >= 0x3c && p[j] <= 0x3f
+		start := j
+		for j < len(p) && p[j] >= 0x30 && p[j] <= 0x3f {
+			j++
+		}
+		params := p[start:j]
+		for j < len(p) && p[j] >= 0x20 && p[j] <= 0x2f {
+			j++
+		}
+		if j >= len(p) {
+			return false
+		}
+		final := p[j]
+		if private {
+			if (final == 'h' || final == 'l') && isAltScreenMode(params) {
+				return true
+			}
+			continue
+		}
+		switch final {
+		case 'S', 'T', 'L', 'M', 'r', 'J':
+			return true
+		}
+	}
+	return false
+}
+
+// isAltScreenMode reports whether the private-mode parameters (with
+// their leading '?') name an alternate-screen mode: 47, 1047 or 1049.
+func isAltScreenMode(params []byte) bool {
+	for _, m := range bytes.Split(bytes.TrimPrefix(params, []byte("?")), []byte(";")) {
+		switch string(m) {
+		case "47", "1047", "1049":
+			return true
+		}
+	}
+	return false
 }

@@ -10,6 +10,23 @@ import (
 
 // A reaction on a system notice (someone reacts to "joined the channel")
 // renders as a pill below the notice and is clickable like any other.
+// Some clients post a standard emoji reaction under its codepoint-form
+// name ("1f44d") rather than the shortcode. The pill shows the glyph,
+// not the raw name.
+func TestReactionPillResolvesCodepointName(t *testing.T) {
+	msg := centreNotice()
+	msg.Reactions = []ReactionItem{{Emoji: "1f44d", Count: 1}}
+	res := RenderMessage(msg, 60, &RenderContext{}, RenderOptions{})
+
+	plain := ansi.Strip(res.Content)
+	if !strings.Contains(plain, "👍") {
+		t.Errorf("reaction pill did not show the thumbsup glyph:\n%s", plain)
+	}
+	if strings.Contains(plain, "1f44d") {
+		t.Errorf("reaction pill still shows the codepoint name:\n%s", plain)
+	}
+}
+
 func TestNoticeRendersReactionPill(t *testing.T) {
 	msg := centreNotice()
 	msg.Reactions = []ReactionItem{{Emoji: "wave", Count: 3}}

@@ -63,6 +63,17 @@ func (p *imagePreviewController) Active() bool {
 	return p.overlay != nil && !p.overlay.IsClosed()
 }
 
+// InvalidateMemo drops the overlay's encoded-image memo, so the next
+// View re-encodes at the current cell metrics. Call it when the
+// terminal's cell size in pixels changed: the memo is keyed by file,
+// protocol and cell target, none of which notice that the pixels per
+// cell moved. No-op when no preview overlay is open.
+func (p *imagePreviewController) InvalidateMemo() {
+	if p.overlay != nil {
+		p.overlay.InvalidateMemo()
+	}
+}
+
 // Overlay returns the current preview overlay, or nil when no preview
 // is open. Callers that only need to query Active() should prefer it.
 func (p *imagePreviewController) Overlay() *imgpkg.Preview { return p.overlay }
@@ -127,6 +138,12 @@ func (p *imagePreviewController) Handle(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// this fast path the UI felt hung on slow-fetching previews
 		// (Slack Connect channels where multi-auth retry can take
 		// seconds).
+		// An image the load policy holds back is not fetched for the
+		// preview either: ask first, as I does.
+		if msgItem, ok := a.findMessageInActiveChannel(m.Channel, m.TS); ok && previewHeld(a.imageCtx.Policy, msgItem, m.AttIdx) {
+			// m is the request to replay once the user allows it.
+			return a.promptLoadImagesForPreview(msgItem, m), true
+		}
 		cmd := a.openImagePreviewCmd(m.Channel, m.TS, m.AttIdx)
 		if cmd == nil {
 			return nil, true

@@ -57,6 +57,17 @@ var (
 )
 
 func main() {
+	// `slk --open` talks to the running TUI and exits. It runs before the
+	// debug log is set up: debuglog.Init truncates slk-debug.log in the
+	// cwd, which would erase the running session's log on every link.
+	if len(os.Args) > 1 && os.Args[1] == "--open" {
+		if err := openViaControlSocket(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	// Debug log: when SLK_DEBUG is set, debuglog.Init opens
 	// slk-debug.log in cwd (truncating any prior session) and routes
 	// both the package-internal logger and the global stdlib log to
@@ -191,6 +202,7 @@ Usage:
                           Add one from a browser session (no desktop app)
   slk --remove-workspace  Remove a configured workspace (interactive)
   slk --list-workspaces   List configured workspaces (TeamID, Slug, Name)
+  slk --open <permalink>  Open a Slack message link in the running slk
   slk --dump-sections     Dump raw users.channelSections.list JSON (diagnostic)
   slk export [flags]      Export a channel's messages and threads to Markdown
                           (see 'slk export --help')
@@ -237,6 +249,7 @@ func run() error {
 
 	// Load custom themes and apply the active theme
 	themesDir := filepath.Join(configDir, "themes")
+	startThemeReload := watchThemeReloadSignal()
 	styles.LoadCustomThemes(os.DirFS(themesDir))
 	// Before the first Apply: every Apply reads it, theme switches too.
 	styles.SetTransparentBackground(cfg.Appearance.TransparentBackground)
@@ -303,6 +316,14 @@ func run() error {
 		tokens, err = tokenStore.List()
 		if err != nil || len(tokens) == 0 {
 			return fmt.Errorf("no workspaces configured after onboarding")
+		}
+		// Onboarding appended [workspaces.<slug>] after cfg was loaded.
+		// version_ts, theme and sidebar width resolve their TOML key
+		// from this map and otherwise fall back to the team id, which
+		// writes a second block for the same workspace (#499).
+		cfg, err = config.Load(configPath)
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
 		}
 	}
 
@@ -386,6 +407,12 @@ func run() error {
 	}
 	imageFetcher := imgpkg.NewFetcher(imageCache, newImageHTTPClient())
 	imageFetcher.SetAuths(auths)
+	// Which message images load without asking. The fetcher refuses
+	// what the policy does not allow; the panes read the same policy
+	// to draw a "not loaded" line instead of fetching.
+	imageMode, _ := imgpkg.ParseLoadMode(cfg.General.ImageLoading)
+	imagePolicy := imgpkg.NewLoadPolicy(imageMode, cfg.General.TrustedImageHosts)
+	imageFetcher.SetLoadPolicy(imagePolicy)
 
 	// File attachment downloads (`d` keybinding) share the image
 	// fetcher's auth mechanism via slackhttp.AuthResolver. The
@@ -407,17 +434,51 @@ func run() error {
 	// Detect image rendering protocol BEFORE constructing the avatar
 	// cache so the cache can pick the right rendering path (kitty
 	// graphics for sharp pixels, halfblock otherwise).
-	proto := imgpkg.Detect(imgpkg.CaptureEnv(), cfg.Appearance.ImageProtocol)
+	termEnv := imgpkg.CaptureEnv()
+	proto := imgpkg.Detect(termEnv, cfg.Appearance.ImageProtocol)
 	debuglog.ImgRender("image protocol detect: cfg=%q result=%s", cfg.Appearance.ImageProtocol, proto)
 
+	// Kitty placement: who turns placeholder cells into pixels. On a
+	// terminal with kitty graphics but no unicode placeholders (WezTerm)
+	// slk paints direct placements itself, which needs a cell size the
+	// terminal knows: WezTerm refuses images without one, and its last
+	// stable release can crash. So the cell size is measured here,
+	// before the kitty probe, and kept for image encoding below. Without
+	// one, fall back to the protocol such a terminal had before
+	// emulation existed (sixel in auto mode).
+	placement := imgpkg.KittyNative
+	var pxW, pxH int // set here for emulated placement, else further down
+	if proto == imgpkg.ProtoKitty {
+		placement = imgpkg.ChooseKittyPlacement(termEnv, cfg.Appearance.KittyPlacement)
+		if placement == imgpkg.KittyEmulated {
+			var measured bool
+			pxW, pxH, measured = startupCellPixels(proto)
+			usable := measured && emulationAllowed(runtime.GOOS, cfg.Appearance.KittyPlacement)
+			proto, placement = emulatedPlacementIfMeasured(usable, imgpkg.IsAutoProtocol(cfg.Appearance.ImageProtocol))
+			switch {
+			case !measured:
+				debuglog.ImgRender("kitty emulated placement needs a measured cell size; using %s", proto)
+			case !usable:
+				debuglog.ImgRender("kitty emulated placement is not tried on %s unless set; using %s", runtime.GOOS, proto)
+			}
+		}
+		debuglog.ImgRender("kitty placement: cfg=%q result=%s", cfg.Appearance.KittyPlacement, placement)
+	}
+
 	// Optional: run kitty version probe if detected as kitty AND stdin is a TTY.
-	// Must happen BEFORE bubbletea takes over the terminal.
+	// Must happen BEFORE bubbletea takes over the terminal. Emulated
+	// placement probes with a query: WezTerm does not answer the upload
+	// ProbeKittyGraphics sends.
 	if proto == imgpkg.ProtoKitty && term.IsTerminal(int(os.Stdin.Fd())) {
 		state, err := term.MakeRaw(int(os.Stdin.Fd()))
 		if err != nil {
 			debuglog.ImgRender("kitty probe skipped: cannot enter raw mode: %v", err)
 		} else {
-			ok := imgpkg.ProbeKittyGraphics(os.Stdout, os.Stdin, 200*time.Millisecond)
+			probe := imgpkg.ProbeKittyGraphics
+			if placement == imgpkg.KittyEmulated {
+				probe = imgpkg.ProbeKittyQuery
+			}
+			ok := probe(os.Stdout, os.Stdin, 200*time.Millisecond)
 			if rerr := term.Restore(int(os.Stdin.Fd()), state); rerr != nil {
 				debuglog.ImgRender("term restore after kitty probe: %v", rerr)
 			}
@@ -459,6 +520,14 @@ func run() error {
 		}
 	}
 	debuglog.ImgRender("image protocol: %s", proto)
+	// Record the placement mode before anything can upload (the avatar
+	// cache below, the first View). A probe that downgraded kitty takes
+	// emulation with it.
+	if proto != imgpkg.ProtoKitty {
+		placement = imgpkg.KittyNative
+	}
+	imgpkg.SetKittyPlacement(placement)
+	debuglog.ImgRender("kitty placement: %s", placement)
 
 	// Reconcile the emoji-as-images flag with the post-probe protocol.
 	// The pre-probe block in main() (search for emojiwidth.SetImageMode)
@@ -480,16 +549,21 @@ func run() error {
 	debuglog.ImgRender("emoji image mode: reconciled=%v (final proto=%s, emoji_images=%q)",
 		reconciledImageMode, proto, cfg.Appearance.EmojiImages)
 
-	// Avatars use kitty graphics when available (sharper). Sixel and
-	// half-block terminals fall back to half-block — re-emitting sixel
-	// per visible avatar per redraw would dominate the bandwidth budget.
+	// Avatars use kitty graphics when available (sharper), sixel on a
+	// sixel terminal, and half-block elsewhere. A sixel avatar is placed
+	// like an inline image, so the painter sends it once per slot rather
+	// than on every redraw.
 	avatarCache := avatar.NewCache(imageFetcher, imgpkg.KittyRendererInstance(), proto == imgpkg.ProtoKitty)
+	avatarCache.SetSixel(proto == imgpkg.ProtoSixel)
 
 	// Cell pixel metrics for image encoding. Sixel uses them for its
 	// absolute raster dimensions; kitty places by cell but uses them to
 	// transmit enough source pixels for the terminal's native cell
 	// resolution. See startupCellPixels for where the size comes from.
-	pxW, pxH := startupCellPixels(proto)
+	// Emulated kitty placement measured it already, above.
+	if pxW == 0 {
+		pxW, pxH, _ = startupCellPixels(proto)
+	}
 	debuglog.ImgRender("cell pixels: %dx%d", pxW, pxH)
 	imgpkg.SetCellPixels(pxW, pxH)
 
@@ -506,6 +580,7 @@ func run() error {
 			CellPixels:  image.Pt(pxW, pxH),
 			MaxRows:     cfg.Appearance.MaxImageRows,
 			MaxCols:     cfg.Appearance.MaxImageCols,
+			Policy:      imagePolicy,
 			SendMsg:     send,
 		}
 	}
@@ -612,8 +687,15 @@ func run() error {
 	// terminals that decode kitty graphics (kitty, ghostty).
 	// show_avatars = false leaves the service unset, so messages render
 	// through the no-avatar path and no avatar fetches are started.
+	app.SetShowWorkspaceRail(cfg.Appearance.ShowWorkspaceRail)
 	if cfg.Appearance.ShowAvatars {
-		app.SetAvatarService(core.NewAvatarService(func(userID string) string {
+		var sixelAvatar func(userID string) (string, []byte, bool)
+		if proto == imgpkg.ProtoSixel {
+			// Read only after Avatar has started any load it needed, so
+			// this is a lookup.
+			sixelAvatar = avatarCache.GetSixel
+		}
+		app.SetAvatarService(core.NewSixelAvatarService(func(userID string) string {
 			return lazyAvatar(router.Active(), avatarCache, userID)
 		}, func(userID string) string {
 			if small := avatarCache.GetSmall(userID); small != "" {
@@ -621,7 +703,7 @@ func run() error {
 			}
 			lazyAvatar(router.Active(), avatarCache, userID)
 			return ""
-		}))
+		}, sixelAvatar))
 	}
 
 	// Wire theme switcher: dispatch to the appropriate saver based on scope.
@@ -668,6 +750,17 @@ func run() error {
 		}
 	}
 	app.SetSettingsService(core.NewSettingsService(saveTheme, saveSidebarWidth))
+
+	// Suppression rules (:suppress, [[workspaces.<key>.suppress]]):
+	// the store is the one copy, read by every workspace's event
+	// handler and by the UI, written through the UI's port.
+	suppressor := newSuppressStore(cfg, configPath, workspacesStore.KeyFor, func(teamID string) string {
+		if wctx := router.ByID(teamID); wctx != nil {
+			return wctx.TeamName
+		}
+		return ""
+	})
+	app.SetSuppressionService(core.NewSuppressionService(suppressor.Rules, suppressor.Add, suppressor.Remove))
 
 	// endOfDayUnix returns 23:59:59 local time on now's date, as a Unix
 	// timestamp, so a WFH status auto-clears at the end of the day
@@ -803,7 +896,16 @@ func run() error {
 				if wctx == nil {
 					return nil
 				}
-				return loadCachedMessages(db, wctx.Client.UserID(), string(channelID), wctx.UserNames, tsFormat, router)
+				items := loadCachedMessages(db, wctx.Client.UserID(), string(channelID), wctx.UserNames, tsFormat, router)
+				wctx.Subteams.RequestItems(items)
+				return items
+			},
+			ReadCacheRange: func(channelID ids.ChannelID, oldestTS, newestTS ids.MessageTS) []messages.MessageItem {
+				wctx := router.Active()
+				if wctx == nil {
+					return nil
+				}
+				return loadCachedMessagesRange(db, wctx.Client.UserID(), string(channelID), string(oldestTS), string(newestTS), wctx.UserNames, tsFormat, router)
 			},
 			SyncedAt: func(channelID ids.ChannelID) int64 {
 				return db.GetChannelSyncedAt(string(channelID))
@@ -873,6 +975,61 @@ func run() error {
 					return probeMessagingCapability(ctx, client.PostForm, chIDStr)
 				}
 			},
+			SetStarred: func(teamID ids.TeamID, channelID ids.ChannelID, starred bool) core.Cmd {
+				// Resolve by the REQUESTED workspace, not router.Active():
+				// a workspace switch runs in the background and flips
+				// the router before the UI sees WorkspaceSwitchedMsg, so
+				// Active() can answer with the workspace the user just
+				// switched TO while their click targeted the one still
+				// on screen. The requesting path passes the displayed
+				// workspace; a shared conversation then stars through
+				// its own session, not the newcomer's.
+				wctx := router.ByID(string(teamID))
+				chIDStr := string(channelID)
+				if wctx == nil || wctx.Client == nil {
+					return func() core.Msg {
+						return ui.ChannelStarSetMsg{TeamID: string(teamID), ChannelID: chIDStr, Starred: starred,
+							Err: fmt.Errorf("no connected workspace")}
+					}
+				}
+				client := wctx.Client
+				sectionStore := wctx.SectionStore
+				// The starred flag this request is made against, read
+				// off the (locked) store here at request time: the
+				// queued apply compares it against the row on the event
+				// owner, so a delayed HTTP reply whose outcome a newer
+				// star event (an unstar in another client) already
+				// superseded is skipped rather than written back.
+				prev, prevKnown := false, false
+				if sectionStore != nil {
+					prev, prevKnown = sectionStore.IsStarred(chIDStr), true
+				}
+				return func() core.Msg {
+					starCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+					defer cancel()
+					var err error
+					if starred {
+						err = client.StarsAdd(starCtx, chIDStr)
+					} else {
+						err = client.StarsRemove(starCtx, chIDStr)
+					}
+					if err != nil {
+						return ui.ChannelStarSetMsg{ChannelID: chIDStr, Starred: starred, Err: err}
+					}
+					// Slack accepted it, and its star_added echo will
+					// arrive on the event owner and finish the
+					// engine-side sync (section store, channel row,
+					// cache, sidebar refresh). Queue the whole engine
+					// half for the owner - serialized with the echoes,
+					// compare-and-skip against newer events - so a
+					// socket-down window cannot leave the workspace's
+					// rows predating the star (a switch away and back
+					// would rebuild the sidebar stale), and a slow reply
+					// cannot overwrite a newer echo.
+					wctx.RTMHandler.queueStarApply(chIDStr, starred, prev, prevKnown)
+					return ui.ChannelStarSetMsg{TeamID: string(teamID), ChannelID: chIDStr, Starred: starred}
+				}
+			},
 			Fetch: func(channelID ids.ChannelID, channelName string) core.Msg {
 				chIDStr := string(channelID)
 				wctx := router.Active()
@@ -880,6 +1037,7 @@ func run() error {
 					return nil
 				}
 				msgItems := fetchChannelMessages(wctx.Client, chIDStr, db, wctx.UserNames, tsFormat, avatarCache, router)
+				wctx.Subteams.RequestItems(msgItems)
 
 				state, _ := db.GetChannelReadState(chIDStr)
 				lastReadTS := state.LastReadTS
@@ -916,6 +1074,7 @@ func run() error {
 					return nil
 				}
 				msgItems := fetchOlderMessages(wctx.Client, chIDStr, string(oldestTS), db, wctx.UserNames, tsFormat, router)
+				wctx.Subteams.RequestItems(msgItems)
 				return ui.OlderMessagesLoadedMsg{
 					ChannelID: chIDStr,
 					AnchorTS:  string(oldestTS),
@@ -929,6 +1088,7 @@ func run() error {
 					return nil
 				}
 				msgItems := fetchMessagesAround(wctx.Client, chIDStr, string(ts), db, wctx.UserNames, tsFormat, router)
+				wctx.Subteams.RequestItems(msgItems)
 				if msgItems == nil {
 					return ui.MessagesAroundLoadedMsg{ChannelID: chIDStr, TargetTS: string(ts), Err: errors.New("history fetch failed")}
 				}
@@ -1167,9 +1327,16 @@ func run() error {
 				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 				defer cancel()
 
-				for i, att := range attachments {
-					p.Send(ui.UploadProgressMsg{Done: i, Total: len(attachments)})
-
+				// One files.completeUploadExternal for the whole batch, so
+				// Slack posts one message carrying every attachment.
+				files := make([]slackclient.FileUpload, 0, len(attachments))
+				var opened []*os.File
+				defer func() {
+					for _, f := range opened {
+						f.Close()
+					}
+				}()
+				for _, att := range attachments {
 					var reader io.Reader
 					if att.Bytes != nil {
 						reader = bytes.NewReader(att.Bytes)
@@ -1178,20 +1345,21 @@ func run() error {
 						if err != nil {
 							return ui.UploadResultMsg{Err: fmt.Errorf("opening %s: %w", att.Filename, err)}
 						}
-						defer f.Close()
+						opened = append(opened, f)
 						reader = f
 					}
-
-					currentCaption := ""
-					if i == len(attachments)-1 {
-						currentCaption = caption
-					}
-
-					if _, err := client.UploadFile(ctx, channelID, threadTS, att.Filename, reader, att.Size, currentCaption); err != nil {
-						return ui.UploadResultMsg{Err: fmt.Errorf("uploading %s (%d/%d): %w", att.Filename, i+1, len(attachments), err)}
-					}
+					files = append(files, slackclient.FileUpload{
+						Filename: att.Filename,
+						Reader:   reader,
+						Size:     att.Size,
+					})
 				}
-				p.Send(ui.UploadProgressMsg{Done: len(attachments), Total: len(attachments)})
+				err := client.UploadFiles(ctx, channelID, threadTS, caption, files, func(done, total int) {
+					p.Send(ui.UploadProgressMsg{Done: done, Total: total})
+				})
+				if err != nil {
+					return ui.UploadResultMsg{Err: err}
+				}
 				return ui.UploadResultMsg{Err: nil}
 			}
 		}
@@ -1205,6 +1373,7 @@ func run() error {
 					return nil
 				}
 				replies := fetchThreadReplies(wctx.Client, chIDStr, threadTSStr, db, wctx.UserNames, tsFormat, avatarCache, router)
+				wctx.Subteams.RequestItems(replies)
 				return ui.ThreadRepliesLoadedMsg{
 					ThreadTS: threadTSStr,
 					Replies:  replies,
@@ -1215,7 +1384,9 @@ func run() error {
 				if wctx == nil {
 					return nil
 				}
-				return loadCachedThreadReplies(db, wctx.Client.UserID(), string(channelID), string(threadTS), wctx.UserNames, tsFormat, router)
+				items := loadCachedThreadReplies(db, wctx.Client.UserID(), string(channelID), string(threadTS), wctx.UserNames, tsFormat, router)
+				wctx.Subteams.RequestItems(items)
+				return items
 			},
 			Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) core.Cmd {
 				chIDStr, threadTSStr, tsStr := string(channelID), string(threadTS), string(ts)
@@ -1324,7 +1495,7 @@ func run() error {
 				if wctx == nil || wctx.Client == nil {
 					return
 				}
-				ensureWorkspaceThreadSubs(ctx, wctx, db, p.Send)
+				ensureWorkspaceThreadSubs(ctx, wctx, db, p.Send, router)
 			},
 			ThreadLastRead: func(channelID ids.ChannelID, threadTS ids.ThreadTS) string {
 				wctx := router.Active()
@@ -1449,7 +1620,70 @@ func run() error {
 				}
 				ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 				defer cancel()
-				return runCommand(ctx, wctx.Client, channelID, threadTS, command, args)
+				return runCommand(ctx, wctx.Client, channelID, threadTS, command, args, wctx.AppCommands())
+			},
+			List: func() []core.SlashCommand {
+				wctx := router.Active()
+				if wctx == nil {
+					return nil
+				}
+				return wctx.AppCommands()
+			},
+		}))
+
+		app.SetAppHomeService(core.NewAppHomeService(core.AppHomeServiceFuncs{
+			Fetch: func(teamID string, channelID ids.ChannelID) core.Msg {
+				wctx := router.ByID(teamID)
+				if wctx == nil || wctx.Client == nil {
+					return ui.AppHomeLoadedMsg{
+						TeamID: teamID, ChannelID: string(channelID),
+						Err: fmt.Errorf("workspace %q is unavailable", teamID),
+					}
+				}
+				ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				defer cancel()
+				// conversations.info is org-served on a Grid member
+				// workspace, like blocks.actions below; both go
+				// through the same-user org session when one exists.
+				return fetchAppHome(ctx, orgOrOwnClient(router, wctx), teamID, string(channelID))
+			},
+			Press: func(teamID string, channelID ids.ChannelID, viewID, serviceID string, action core.AppHomeAction) error {
+				wctx := router.ByID(teamID)
+				if wctx == nil || wctx.Client == nil {
+					return fmt.Errorf("app home: workspace %q is unavailable", teamID)
+				}
+				ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				defer cancel()
+				// blocks.actions is team_is_restricted on a Grid member
+				// workspace's own session; the org-level one dispatches
+				// the press.
+				return pressAppHomeAction(ctx, orgOrOwnClient(router, wctx), viewID, serviceID, action)
+			},
+		}))
+
+		app.SetAppViewService(core.NewAppViewService(core.AppViewServiceFuncs{
+			Fetch: func(teamID, viewID string) core.Msg {
+				wctx := router.ByID(teamID)
+				if wctx == nil || wctx.Client == nil {
+					return ui.AppViewLoadedMsg{
+						TeamID: teamID, ViewID: viewID,
+						Err: fmt.Errorf("workspace %q is unavailable", teamID),
+					}
+				}
+				ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				defer cancel()
+				// views.get is org-served on a Grid member workspace,
+				// like the Home tab's conversations.info fetch.
+				return fetchAppView(ctx, orgOrOwnClient(router, wctx), teamID, viewID)
+			},
+			Press: func(teamID, viewID, serviceID string, action core.AppHomeAction) error {
+				wctx := router.ByID(teamID)
+				if wctx == nil || wctx.Client == nil {
+					return fmt.Errorf("app view: workspace %q is unavailable", teamID)
+				}
+				ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				defer cancel()
+				return pressAppHomeAction(ctx, orgOrOwnClient(router, wctx), viewID, serviceID, action)
 			},
 		}))
 
@@ -1505,17 +1739,20 @@ func run() error {
 		// switchNames goes to the UI, which owns (and writes) it from
 		// then on; only switchSeq is kept for AfterSwitch.
 		switchNames, switchSeq := wctx.UserNames.SnapshotForUI()
+		switchChannels, switchChannelSeq := wctx.ChannelResolver.nameStore().SnapshotForUI()
 		return ui.WorkspaceSwitchedMsg{
-			TeamID:       wctx.TeamID,
-			TeamName:     wctx.TeamName,
-			Domain:       wctx.Client.TeamSubdomain(),
-			Theme:        snap.ResolveTheme(teamID),
-			SidebarWidth: snap.ResolveWidth(teamID),
-			Channels:     channels,
-			FinderItems:  wctx.FinderItems,
+			TeamID:           wctx.TeamID,
+			TeamName:         wctx.TeamName,
+			Domain:           wctx.Client.TeamSubdomain(),
+			PermalinkDomains: snap.PermalinkDomains(teamID),
+			Theme:            snap.ResolveTheme(teamID),
+			SidebarWidth:     snap.ResolveWidth(teamID),
+			Channels:         channels,
+			FinderItems:      wctx.FinderItems,
 			// A private copy: the UI must never share a map with the
 			// engine's goroutines (see userNameStore).
 			UserNames:        switchNames,
+			ChannelNames:     switchChannels,
 			UserStatuses:     statuses,
 			ExternalUsers:    external,
 			DeactivatedUsers: deactivated,
@@ -1523,7 +1760,9 @@ func run() error {
 			UserID:           wctx.UserID,
 			CustomEmoji:      wctx.CustomEmoji(),
 			UserGroups:       wctx.UserGroups(),
+			SelfUserGroups:   wctx.SelfUserGroups(),
 			SectionsProvider: sectionsProviderAdapter{store: wctx.SectionStore},
+			DefaultChannel:   snap.ResolveDefaultChannel(teamID),
 			// Ordered by reduceWorkspaceSwitched to run after
 			// ResetPresence and the activeTeamID update, so its
 			// UserDNDChangeMsg result isn't wiped or dropped as stale.
@@ -1539,6 +1778,7 @@ func run() error {
 			// reporting. Run by the reducer after the switch applies.
 			AfterSwitch: func() tea.Msg {
 				wctx.UserNames.NotifyFrom(switchSeq, uiNameNotifier(wctx.TeamID, p.Send))
+				wctx.ChannelResolver.nameStore().NotifyFrom(switchChannelSeq, uiChannelNameNotifier(wctx.TeamID, p.Send))
 				return nil
 			},
 		}
@@ -1573,11 +1813,34 @@ func run() error {
 	// active workspace yet and both set InitialActive=true.
 	var firstReady sync.Once
 
+	// One event dedupe per Enterprise Grid, shared by every session of
+	// that grid: the grid delivers each event to every connected
+	// session, so without this a user with the org workspace plus
+	// member workspaces processes each grid event once per socket.
+	// Five seconds covers cross-socket delivery skew (observed in the
+	// low milliseconds) while staying far under the reconnect backfill
+	// window, where a redelivered frame is a duplicate by definition.
+	gridGates := newGridEventGates(5 * time.Second)
+
 	// Start the TUI immediately (shows loading overlay). All output —
 	// every protocol — flows through the frame-correlated writer: it is
 	// a serialized pass-through for non-sixel frames (no marker present)
 	// and the sixel paint site for marked frames.
 	p = tea.NewProgram(app, tea.WithOutput(terminalOutput))
+
+	// `slk --open <permalink>` from another terminal lands here.
+	if ctl, err := startControlSocket(controlSocketPath(), p.Send); err != nil {
+		debuglog.General("control socket disabled: %v", err)
+	} else if ctl != nil {
+		defer ctl.Close()
+	}
+
+	// A palette generator may rewrite a custom theme file. Read the files
+	// here, off the UI goroutine, and register them there: the theme
+	// registry is UI state.
+	startThemeReload(func() {
+		p.Send(ui.CustomThemesReloadedMsg{Themes: styles.ParseCustomThemes(os.DirFS(themesDir))})
+	})
 
 	// A changed thread-unread answer re-runs the rail refresh, which
 	// then reads the new answer from the cache.
@@ -1609,6 +1872,17 @@ func run() error {
 	avatarCache.SetOnReady(func(userID string) {
 		p.Send(messages.AvatarReadyMsg{UserID: userID})
 	})
+
+	// On a sixel terminal, keep the cached cell size in pixels honest:
+	// the one-shot startup read races terminals that resolve their font
+	// scale after spawning the client (foot on a fractional-scaled
+	// output reports a 2x cell size for its first tens of milliseconds),
+	// and sixel encodes every image against it. Re-measure on the
+	// settle's SIGWINCH and re-point the encoders when it differs. The
+	// watcher must start after `p` exists; p.Send is goroutine-safe.
+	if proto == imgpkg.ProtoSixel {
+		go watchCellPixels(p.Send, avatarCache)
+	}
 
 	// Launch workspace connections in background goroutines
 	// Results are sent to the TUI via p.Send()
@@ -1665,16 +1939,39 @@ func run() error {
 				channelTypes[ch.ID] = ch.Type
 			}
 
-			// Start WebSocket for this workspace
+			// Start WebSocket for this workspace. On a grid, gate the
+			// socket's frames through the shared dedupe (installed
+			// after the handler is built, just above the connection
+			// manager, so a dropped message frame can still run that
+			// handler's message-driven conversation discovery).
 			teamID := wctx.TeamID
+			gridEnt := wctx.Client.EnterpriseID()
 			handler := &rtmEventHandler{
-				program:         p,
-				userNames:       wctx.UserNames,
-				tsFormat:        tsFormat,
-				db:              db,
-				workspaceID:     teamID,
-				emojiLister:     wctx.Client,
-				isActive:        func() bool { a := router.Active(); return a != nil && a.TeamID == teamID },
+				program:     p,
+				userNames:   wctx.UserNames,
+				tsFormat:    tsFormat,
+				db:          db,
+				workspaceID: teamID,
+				emojiLister: wctx.Client,
+				isActive:    func() bool { a := router.Active(); return a != nil && a.TeamID == teamID },
+				// Every session of this handler's grid, read at event
+				// time so late-connecting siblings are included:
+				// OnMessage uses it to tell whether it is on a grid
+				// with another session (its rail refresh is a single
+				// message, not a per-sibling fan-out).
+				gridSiblings: func() []string {
+					ent := wctx.Client.EnterpriseID()
+					if ent == "" {
+						return nil
+					}
+					var ids []string
+					for _, w := range router.All() {
+						if w.Client != nil && w.Client.EnterpriseID() == ent {
+							ids = append(ids, w.TeamID)
+						}
+					}
+					return ids
+				},
 				notifier:        notifier,
 				notifyCfg:       cfgSnap.Notifications,
 				currentUserID:   wctx.UserID,
@@ -1682,9 +1979,12 @@ func run() error {
 				channelTypes:    channelTypes,
 				workspaceName:   wctx.TeamName,
 				activeChannelID: func() string { return app.ActiveChannelID() },
-				cfg:             cfgSnap,
-				wsCtx:           wctx,
-				backfillGate:    dedupeGate{window: 30 * time.Second},
+				suppressed: func(channelID, authorID string) bool {
+					return suppressor.Hides(teamID, channelID, authorID)
+				},
+				cfg:          cfgSnap,
+				wsCtx:        wctx,
+				backfillGate: dedupeGate{window: 30 * time.Second},
 				// The reconnect refresh, deliberately NOT the
 				// ChannelService.Fetch closure: that one also marks the
 				// channel read, which is right when the user just
@@ -1705,11 +2005,29 @@ func run() error {
 				// subscription sync; the gate inside decides whether a
 				// getView sweep actually runs.
 				ensureThreadSubs: func() {
-					ensureWorkspaceThreadSubs(context.Background(), wctx, db, p.Send)
+					ensureWorkspaceThreadSubs(context.Background(), wctx, db, p.Send, router)
 				},
-				resolveConversation: wctx.Client.GetConversationInfo,
+				resolveConversation: conversationResolverFor(router, wctx),
+				starWake:            make(chan struct{}, 1),
 			}
 			wctx.RTMHandler = handler
+			// The resolver's wake joins the handler's shared channel,
+			// so PendingEvents hands the dispatcher one channel that
+			// both wake sources signal.
+			if wctx.UserResolver != nil {
+				wctx.UserResolver.resolvedWake = handler.starWake
+			}
+			// The grid gate, installed here so it can reach the
+			// handler: sibling sessions of the same grid receive the
+			// same events, the active workspace is the only handler
+			// that renders them (gridFrameGate keeps its delivery
+			// ungated), and a message frame dropped on THIS session
+			// still runs its conversation discovery through the
+			// handler's serialized owner.
+			if gridEnt != "" {
+				isActive := func() bool { a := router.Active(); return a != nil && a.TeamID == teamID }
+				wctx.Client.SetWSEventGate(gridFrameGate(gridGates.forGrid(gridEnt, wctx.Client.UserID()), isActive, handler.discoverAndPublish))
+			}
 			wctx.ConnMgr = slackclient.NewConnectionManager(wctx.Client, handler)
 
 			// Use the same workspace-relative cache projection as switching,
@@ -1725,18 +2043,21 @@ func run() error {
 			// readyNames goes to the UI, which owns (and writes) it from
 			// then on; only readySeq is kept for NotifyFrom below.
 			readyNames, readySeq := wctx.UserNames.SnapshotForUI()
+			readyChannels, readyChannelSeq := wctx.ChannelResolver.nameStore().SnapshotForUI()
 			p.Send(ui.WorkspaceReadyMsg{
-				TeamID:       wctx.TeamID,
-				TeamName:     wctx.TeamName,
-				Domain:       wctx.Client.TeamSubdomain(),
-				Theme:        cfgSnap.ResolveTheme(wctx.TeamID),
-				SidebarWidth: cfgSnap.ResolveWidth(wctx.TeamID),
+				TeamID:           wctx.TeamID,
+				TeamName:         wctx.TeamName,
+				Domain:           wctx.Client.TeamSubdomain(),
+				PermalinkDomains: cfgSnap.PermalinkDomains(wctx.TeamID),
+				Theme:            cfgSnap.ResolveTheme(wctx.TeamID),
+				SidebarWidth:     cfgSnap.ResolveWidth(wctx.TeamID),
 				// Detach both UI snapshots before the event owner starts.
 				Channels:    slices.Clone(wctx.Channels),
 				FinderItems: slices.Clone(wctx.FinderItems),
 				// A private copy: the UI must never share a map with
 				// the engine's goroutines (see userNameStore).
 				UserNames:        readyNames,
+				ChannelNames:     readyChannels,
 				UserStatuses:     readyStatuses,
 				ExternalUsers:    external,
 				DeactivatedUsers: deactivated,
@@ -1744,15 +2065,42 @@ func run() error {
 				UserID:           wctx.UserID,
 				CustomEmoji:      wctx.CustomEmoji(), // cached set plus bootstrap subset; replaced below unless fresh
 				UserGroups:       wctx.UserGroups(),  // empty at this point; filled by the goroutine below
+				SelfUserGroups:   wctx.SelfUserGroups(),
 				SectionsProvider: sectionsProviderAdapter{store: wctx.SectionStore},
 				InitialActive:    isInitial,
 				LastChannelID:    mostRecentlyVisitedChannel(wctx.LastVisitedByChannel),
+				DefaultChannel:   cfgSnap.ResolveDefaultChannel(wctx.TeamID),
 			})
 			// From here on every name the store learns reaches the UI.
 			// p.Send above has returned, so the Update loop has taken
 			// the Ready message; anything the notifier sends is
 			// processed after it.
 			wctx.UserNames.NotifyFrom(readySeq, uiNameNotifier(wctx.TeamID, p.Send))
+			wctx.ChannelResolver.nameStore().NotifyFrom(readyChannelSeq, uiChannelNameNotifier(wctx.TeamID, p.Send))
+
+			// A workspace that just connected may be the org-level
+			// session its grid's member workspaces need: a member whose
+			// subscription sync ran before any org session existed
+			// failed with errNoOrgSessionYet (its own token is
+			// team_is_restricted) and unburned its gate, so re-ensure
+			// the members now. The gate alone decides whether a sync
+			// runs - SubscriptionsAvailable is a plain bool the sync's
+			// callback writes on another goroutine, and reading it here
+			// would race; the gate's window already encodes "a retry is
+			// wanted" (a real failure keeps the burn, a no-org-yet
+			// failure unburned, a success burns until the interval
+			// lapses).
+			if wctx.Client != nil && wctx.Client.EnterpriseID() != "" {
+				for _, sibling := range router.All() {
+					if sibling == wctx || sibling.Client == nil || !sibling.Client.IsGridMember() {
+						continue
+					}
+					if sibling.Client.EnterpriseID() != wctx.Client.EnterpriseID() {
+						continue
+					}
+					ensureWorkspaceThreadSubs(context.Background(), sibling, db, p.Send, router)
+				}
+			}
 
 			// Live repairs may mutate workspace slices. Start their owner only
 			// after cloning and handing off the startup snapshots above.
@@ -1766,22 +2114,41 @@ func run() error {
 			// an answer.
 			go refreshWorkspaceEmoji(ctx, wctx, wctx.Client, db, p, wctx.TeamID, wctx.customEmojiFreshFor)
 
+			// Slash-command completion. One fetch per connect, not
+			// stored: the picker reads the pointer when it opens.
+			// A failure leaves the list empty and commands still run.
+			if wctx.Client != nil {
+				go fetchAppCommands(ctx, wctx, wctx.Client)
+			}
+
 			// Fetch workspace usergroups in the background. When done,
 			// send a follow-up so render caches and compose pickers can
 			// refresh for the active workspace. Best-effort: failure leaves
 			// bare subteam mentions rendered as "@group".
 			go func(teamID string) {
+				// Then the groups usergroups.list leaves out (a Grid
+				// member workspace's, on an org-level session) that the
+				// cached messages mention, via subteams.info.
+				defer func() {
+					texts, err := db.SubteamMentionTexts(teamID)
+					if err != nil {
+						log.Printf("scanning cached subteam mentions for %s: %v", wctx.TeamName, err)
+						return
+					}
+					var ids []string
+					for _, t := range texts {
+						ids = append(ids, subteamIDsInText(t)...)
+					}
+					wctx.Subteams.Request(ids)
+				}()
 				groups, err := wctx.Client.GetUserGroups(ctx)
 				if err != nil {
 					log.Printf("usergroups fetch for %s failed: %v (subteam mentions will render as @group)", wctx.TeamName, err)
 					return
 				}
-				byID := usergroupHandles(groups)
-				wctx.SetUserGroups(byID)
-				p.Send(ui.UserGroupsLoadedMsg{
-					TeamID:     teamID,
-					UserGroups: byID,
-				})
+				wctx.MergeUserGroups(usergroupHandles(groups))
+				wctx.SetSelfUserGroups(selfUserGroups(groups, wctx.UserID))
+				wctx.PublishUserGroups(p.Send)
 			}(wctx.TeamID)
 
 			// Resolve unknown DM user names in background

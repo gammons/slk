@@ -134,6 +134,11 @@ func (t *roomTap) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // record stores the room of every huddle_thread message in a response body.
 func (t *roomTap) record(channelID string, body []byte) {
+	// Almost every page has no huddle, so skip the decode unless the
+	// subtype appears in the body at all.
+	if !bytes.Contains(body, []byte("huddle_thread")) {
+		return
+	}
 	var env struct {
 		Messages []struct {
 			TS      string          `json:"ts"`

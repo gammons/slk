@@ -150,7 +150,7 @@ func TestTransparentWrapRowsInvisibleBorder(t *testing.T) {
 			t.Errorf("unselected row draws the ▌ border glyph, which shows on a transparent cell: %q", l)
 		}
 	}
-	if !strings.Contains(strings.Join(rows.Selected, "\n"), "▌") {
+	if !strings.Contains(strings.Join(rowSelected(rows, 20, true, false), "\n"), "▌") {
 		t.Error("selected row lost its ▌ marker")
 	}
 }

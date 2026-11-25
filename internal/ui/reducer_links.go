@@ -70,9 +70,27 @@ func (p *pendingLinkNav) wrapThreadLoad(cmd tea.Cmd, authoritative bool, loads i
 }
 
 var reduceLinks reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
+	if m, ok := msg.(OpenSlackLinkMsg); ok {
+		a.dismissForExternalOpen()
+		return a.openFinderPermalink(m.URL), true
+	}
+	if dropped, ok := msg.(finderPermalinkDroppedMsg); ok {
+		// The workspace switch the finder asked for produced nothing.
+		// A newer paste has its own request; leave that one waiting.
+		if a.pendingFinderPermalink == nil || dropped.Seq != a.pendingFinderPermalink.seq {
+			return nil, true
+		}
+		a.clearFinderPermalink()
+		return a.browserOpener(dropped.URL), true
+	}
 	m, ok := msg.(OpenLinkMsg)
 	if !ok {
 		return nil, false
+	}
+	// slk's own slack:// links (a #channel mention, say) never leave
+	// the app and never go through the external-link confirmation.
+	if cmd, handled := a.openInternalLink(m.URL); handled {
+		return cmd, true
 	}
 	if !m.Confirmed && !opensWithoutConfirm(m.URL) {
 		// file:, ssh: and the like hand the target to the OS launcher, and
@@ -186,11 +204,7 @@ func opensWithoutConfirm(rawURL string) bool {
 // routeLink decides between in-app navigation and the browser.
 func (a *App) routeLink(rawURL string) tea.Cmd {
 	pl, ok := slackurl.Parse(rawURL)
-	if !ok {
-		return a.browserOpener(rawURL)
-	}
-	domain := a.activeWorkspaceDomain()
-	if domain == "" || pl.Subdomain != domain {
+	if !ok || !a.permalinkBelongsToActiveWorkspace(pl) {
 		return a.browserOpener(rawURL)
 	}
 	cmd, ok := a.applyLocation(Location{
@@ -411,4 +425,25 @@ func (a *App) permalinkThreadParent(channelID, threadTS string, knownReply bool)
 	}
 
 	return parent
+}
+
+// dismissForExternalOpen clears what is on screen before a jump that
+// comes from outside the TUI (`slk --open`), the way Esc would: nothing
+// shown belongs to that jump, and an overlay left drawn would cover the
+// destination or keep taking keys. The image preview and the confirm
+// prompt are drawn independently of the mode, so SetMode alone does not
+// close them. A dismissed prompt is declined; queued action dialogs stay
+// queued.
+func (a *App) dismissForExternalOpen() {
+	a.preview.Close()
+	if a.confirmPrompt.IsVisible() {
+		a.confirmPrompt.Close()
+		a.clearShownPrompt()
+	}
+	if a.mode == ModeOpenSlackLink {
+		a.clearSlackLink()
+	}
+	if a.mode != ModeNormal {
+		a.SetMode(ModeNormal)
+	}
 }

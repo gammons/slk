@@ -64,12 +64,18 @@ func (a *App) renderMessagesRegion(frame panelLayoutFrame, themeVer int64, previ
 	msgWidth := frame.MsgWidth
 	msgBorder := frame.MsgBorder
 
-	msgFocused := a.focusedPanel == PanelMessages && a.mode != ModeInsert
+	// The pane keeps its focused border in insert mode. The cursor
+	// highlight is hidden separately, below.
+	msgFocused := a.focusedPanel == PanelMessages
 	// Push focus into the messages pane so the selected-message "▌"
 	// border dims when unfocused. MUST happen BEFORE the cache
 	// hit-check (the cache key includes Version, which SetFocused
 	// bumps on a flip).
 	a.messagepane.SetFocused(msgFocused)
+	// Insert mode hides the cursor highlight in this pane. The index
+	// stays, and normal mode paints it again. Unfocused normal mode
+	// still dims it, via SetFocused above.
+	a.messagepane.SetCursorHighlight(a.mode != ModeInsert)
 	composeFocused := a.mode == ModeInsert && a.focusedPanel != PanelThread
 	// Mix the view-mode bit into the layout key so a Channels<->
 	// Threads switch invalidates the cached output (the cache is
@@ -101,6 +107,9 @@ func (a *App) renderMessagesRegion(frame panelLayoutFrame, themeVer int64, previ
 	}
 	if a.view == ViewActivity {
 		return a.renderActivityViewPanel(msgWidth, msgBorder, contentHeight, msgFocused, msgLayoutKey)
+	}
+	if a.view == ViewAppHome {
+		return a.renderAppHomePanel(msgWidth, msgBorder, contentHeight, msgFocused, msgLayoutKey)
 	}
 	return a.renderChannelMessagesPanel(msgWidth, msgBorder, contentHeight, msgFocused, composeFocused, msgLayoutKey)
 }
@@ -187,7 +196,41 @@ func (a *App) renderActivityViewPanel(msgWidth, msgBorder, contentHeight int, ms
 	return out
 }
 
-// renderChannelMessagesPanel handles the a.view == ViewChannels
+// renderAppHomePanel handles the a.view == ViewAppHome branch: a single
+// bordered panel drawing the app DM's Home tab, no compose / typing row.
+// Mirrors renderActivityViewPanel but caches on its own panelCache slot
+// (renderCache.appHomePanel) keyed on appHome.Version.
+//
+// The Block Kit host context comes from the channel pane's draft
+// context: the Home tab is not a message, but it needs the same mention
+// names and Block Kit rendering, and the draft context is the pane's
+// image-free one.
+func (a *App) renderAppHomePanel(msgWidth, msgBorder, contentHeight int, msgFocused bool, msgLayoutKey int64) string {
+	ahVersion := a.appHome.Version()
+	c := &a.renderCache.appHomePanel
+	if c.hit(ahVersion, msgWidth, contentHeight, msgLayoutKey) {
+		return c.output
+	}
+	msgBorderStyle := styles.UnfocusedBorder.Width(msgWidth)
+	if msgFocused {
+		msgBorderStyle = styles.FocusedBorder.Width(msgWidth)
+	}
+	msgContentHeight := contentHeight - 2
+	a.layout.SetMsgHeight(msgContentHeight)
+	if msgContentHeight < 3 {
+		msgContentHeight = 3
+	}
+	ctx := a.appBlocksRenderContext()
+	ahView := a.appHome.View(msgContentHeight, msgWidth-2, ctx)
+	ahView = messages.ReapplyBgAfterResets(ahView, messages.BgANSI())
+	out := exactSize(
+		msgBorderStyle.Render(ahView),
+		msgWidth+msgBorder, contentHeight,
+	)
+	c.store(out, ahVersion, msgWidth, contentHeight, msgLayoutKey)
+	return out
+}
+
 // branch: messages pane + typing row + compose box, with the
 // split-cache pattern described in the file header.
 //
@@ -209,13 +252,9 @@ func (a *App) renderChannelMessagesPanel(msgWidth, msgBorder, contentHeight int,
 		composeView = a.compose.View(msgWidth-2, composeFocused)
 		// Inline pickers stack above the compose box. They're
 		// mutually exclusive in compose.Update; emoji wins if
-		// somehow both are.
-		if pickerView := a.compose.EmojiPickerView(msgWidth - 2); pickerView != "" {
+		// somehow more than one is open.
+		if pickerView := a.compose.PopupView(msgWidth - 2); pickerView != "" {
 			composeView = pickerView + "\n" + composeView
-		} else if mentionView := a.compose.MentionPickerView(msgWidth - 2); mentionView != "" {
-			composeView = mentionView + "\n" + composeView
-		} else if channelView := a.compose.ChannelPickerView(msgWidth - 2); channelView != "" {
-			composeView = channelView + "\n" + composeView
 		}
 	}
 	// Background-colored spacer line above the compose box

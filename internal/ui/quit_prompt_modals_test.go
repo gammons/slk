@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/gammons/slk/internal/bubbles/linkpicker"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/userprofile"
 )
@@ -81,6 +82,20 @@ func TestQuitPromptClosesEveryModal(t *testing.T) {
 		ModeDrafts: {
 			func(a *App) { a.draftList.Open() },
 			func(a *App) bool { return a.draftList.IsVisible() },
+		},
+		ModeSuppressed: {
+			func(a *App) { a.suppressList.Open() },
+			func(a *App) bool { return a.suppressList.IsVisible() },
+		},
+		ModeOpenSlackLink: {
+			func(a *App) { a.slackLinkInput = "https://example.slack.com" },
+			nil,
+		},
+		ModeAppView: {
+			func(a *App) {
+				a.appView.SetView(&core.AppView{ViewID: "V1", Title: "AI Budget Support"})
+			},
+			nil, // the mode itself draws it
 		},
 	}
 

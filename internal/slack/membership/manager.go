@@ -58,6 +58,9 @@ type Manager struct {
 	fetching    map[string]struct{}            // in-flight sentinel by channelID
 	lastFetched map[string]time.Time           // last successful full-fetch (in-memory, for dedup)
 	lastFailed  map[string]time.Time           // last failed fetch; backs off retries
+
+	// now is the clock for TTL and FailureBackoff; time.Now outside tests.
+	now func() time.Time
 }
 
 // New constructs a Manager bound to one workspace.
@@ -72,6 +75,7 @@ func New(workspaceID string, api ConversationMemberAPI, db *cache.DB, push PushF
 		fetching:    map[string]struct{}{},
 		lastFetched: map[string]time.Time{},
 		lastFailed:  map[string]time.Time{},
+		now:         time.Now,
 	}
 }
 
@@ -97,7 +101,7 @@ func (m *Manager) EnsureFresh(ctx context.Context, channelID string) {
 		// Treat read error as stale — better to refetch than to wedge.
 		ok = false
 	}
-	fresh := ok && time.Since(time.Unix(fetchedAt, 0)) < TTL
+	fresh := ok && m.now().Sub(time.Unix(fetchedAt, 0)) < TTL
 	if fresh {
 		return
 	}
@@ -167,7 +171,7 @@ func (m *Manager) backgroundFetch(ctx context.Context, channelID string) {
 	// before this one arrived. The DB-backed TTL check in EnsureFresh
 	// can't catch this because a flurry of concurrent EnsureFresh calls
 	// all read the (empty) meta before any one of them persists.
-	if last, ok := m.lastFetched[channelID]; ok && time.Since(last) < TTL {
+	if last, ok := m.lastFetched[channelID]; ok && m.now().Sub(last) < TTL {
 		m.mu.Unlock()
 		return
 	}
@@ -176,7 +180,7 @@ func (m *Manager) backgroundFetch(ctx context.Context, channelID string) {
 	// every websocket reconnect, and a channel whose fetch keeps
 	// failing (e.g. one this workspace's token cannot see) would
 	// otherwise be re-fetched on every flap.
-	if last, ok := m.lastFailed[channelID]; ok && time.Since(last) < FailureBackoff {
+	if last, ok := m.lastFailed[channelID]; ok && m.now().Sub(last) < FailureBackoff {
 		m.mu.Unlock()
 		return
 	}
@@ -191,7 +195,7 @@ func (m *Manager) backgroundFetch(ctx context.Context, channelID string) {
 	ids, err := m.api.GetUsersInConversation(ctx, channelID)
 	if err != nil {
 		m.mu.Lock()
-		m.lastFailed[channelID] = time.Now()
+		m.lastFailed[channelID] = m.now()
 		m.mu.Unlock()
 		return
 	}
@@ -218,13 +222,13 @@ func (m *Manager) backgroundFetch(ctx context.Context, channelID string) {
 	// picker's in-channel ordering reads. Names for members slk has
 	// not met come from the cache, the boot response, and on-demand
 	// resolution when a row is actually rendered.
-	now := time.Now().Unix()
+	now := m.now().Unix()
 	if err := m.db.ReplaceChannelMembers(m.workspaceID, channelID, ids, now); err != nil {
 		// Same as a failed API call: record it so the backoff holds,
 		// rather than letting the next EnsureFresh refetch at once (#191).
 		debuglog.Cache("ReplaceChannelMembers: channel=%s ERR=%v", channelID, err)
 		m.mu.Lock()
-		m.lastFailed[channelID] = time.Now()
+		m.lastFailed[channelID] = m.now()
 		m.mu.Unlock()
 		return
 	}
@@ -234,7 +238,7 @@ func (m *Manager) backgroundFetch(ctx context.Context, channelID string) {
 	}
 	m.mu.Lock()
 	m.members[channelID] = set
-	m.lastFetched[channelID] = time.Now()
+	m.lastFetched[channelID] = m.now()
 	delete(m.lastFailed, channelID)
 	m.mu.Unlock()
 	m.pushSnapshot(channelID)
@@ -246,7 +250,7 @@ func (m *Manager) backgroundFetch(ctx context.Context, channelID string) {
 // If a UserResolver is configured, ApplyJoin invokes it for the user
 // (resolver dedupes via its inflight map; redundant calls are cheap).
 func (m *Manager) ApplyJoin(channelID, userID string) {
-	now := time.Now().Unix()
+	now := m.now().Unix()
 	if err := m.db.UpsertChannelMember(m.workspaceID, channelID, userID, now); err != nil {
 		return
 	}

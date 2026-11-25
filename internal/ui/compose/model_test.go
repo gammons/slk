@@ -3,6 +3,7 @@ package compose
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 	"testing"
 
@@ -971,22 +972,58 @@ func composeInsertBgRGB(t *testing.T) (uint8, uint8, uint8) {
 	return uint8(r >> 8), uint8(g >> 8), uint8(b >> 8)
 }
 
-// TestView_FocusedRendersComposeInsertBackground asserts that when
-// the compose box is focused, its rendered output contains the
-// ComposeInsertBG tint as an ANSI background code. Guards against
-// regressions where ComposeInsert loses its Background() call.
-func TestView_FocusedRendersComposeInsertBackground(t *testing.T) {
+// TestView_FocusedFillsTextAreaWithInsertBackground: insert mode paints
+// the text area with the selected-message shadow, not the green
+// ComposeInsertBG mix.
+func TestView_FocusedFillsTextAreaWithInsertBackground(t *testing.T) {
 	styles.Apply("dark", config.Theme{})
 	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
 
 	m := New("general")
+	m.SetValue("hello")
 	out := m.View(60, true /* focused */)
 
-	r, g, b := composeInsertBgRGB(t)
-	expected := fmtRGBBg(r, g, b)
-	if !strings.Contains(out, expected) {
-		t.Fatalf("focused compose output missing tint bg %q\nraw=%q",
-			expected, out)
+	r, g, b, _ := styles.InsertFill().RGBA()
+	tint := fmtRGBBg(uint8(r>>8), uint8(g>>8), uint8(b>>8))
+	if !strings.Contains(out, tint) {
+		t.Fatalf("focused compose output missing selection tint %q\nraw=%q", tint, out)
+	}
+	gr, gg, gb := composeInsertBgRGB(t)
+	green := fmtRGBBg(gr, gg, gb)
+	if green != tint && strings.Contains(out, green) {
+		t.Fatalf("focused compose still uses the green insert tint %s", green)
+	}
+	sr, sg, sb, _ := styles.SurfaceDark.RGBA()
+	dark := fmtRGBBg(uint8(sr>>8), uint8(sg>>8), uint8(sb>>8))
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.Contains(line, "hello") {
+			continue
+		}
+		if strings.Contains(line, dark) {
+			t.Fatalf("typed text sits on the unfocused fill %s\n%q", dark, line)
+		}
+	}
+}
+
+// TestView_FocusedHonorsComposeInsertBGOverride: a theme that sets
+// colors.compose_insert_bg still paints that color. The gray default
+// is only for themes that leave it unset.
+func TestView_FocusedHonorsComposeInsertBGOverride(t *testing.T) {
+	styles.RegisterCustomTheme("compose-insert-override", styles.ThemeColors{
+		Primary: "#001122", Accent: "#334455", Warning: "#556677",
+		Error: "#778899", Background: "#1A1A2E", Surface: "#16162B",
+		SurfaceDark: "#0F0F23", Text: "#FFFFFF", TextMuted: "#888888",
+		Border:          "#222222",
+		ComposeInsertBG: "#ABCDEF",
+	})
+	styles.Apply("compose-insert-override", config.Theme{})
+	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
+
+	m := New("general")
+	m.SetValue("hello")
+	out := m.View(60, true)
+	if !strings.Contains(out, "48;2;171;205;239") {
+		t.Fatalf("explicit compose_insert_bg #ABCDEF missing from focused box\n%q", out)
 	}
 }
 
@@ -1005,6 +1042,61 @@ func TestView_UnfocusedDoesNotUseComposeInsertBackground(t *testing.T) {
 	if strings.Contains(out, expected) {
 		t.Fatalf("unfocused compose output unexpectedly contains tint bg %q\nraw=%q",
 			expected, out)
+	}
+}
+
+// sgrChannel is the 38;2 / 48;2 fragment lipgloss emits for c.
+func sgrChannel(ground string, c color.Color) string {
+	r, g, b, _ := c.RGBA()
+	return ground + ";2;" + itoaU8(uint8(r>>8)) + ";" + itoaU8(uint8(g>>8)) + ";" + itoaU8(uint8(b>>8))
+}
+
+// borderHead is the rendered line through its left-border ▌, SGR included.
+func borderHead(line string) string {
+	i := strings.Index(line, "▌")
+	if i < 0 {
+		return ""
+	}
+	return line[:i+len("▌")]
+}
+
+// TestComposeInsertHighlightsTheWholeBox: insert mode turns the left ▌
+// Accent and fills the text area with the selected-message shadow.
+func TestComposeInsertHighlightsTheWholeBox(t *testing.T) {
+	styles.Apply("dark", config.Theme{})
+	t.Cleanup(func() { styles.Apply("dark", config.Theme{}) })
+
+	m := New("general")
+	m.SetValue("hello")
+	focused := m.View(40, true)
+	unfocused := m.View(40, false)
+
+	fLines := strings.Split(focused, "\n")
+	uLines := strings.Split(unfocused, "\n")
+	if len(fLines) != len(uLines) {
+		t.Fatalf("focused box is %d lines, unfocused is %d", len(fLines), len(uLines))
+	}
+	accent := sgrChannel("38", styles.Accent)
+	border := sgrChannel("38", styles.Border)
+	fill := sgrChannel("48", styles.SurfaceDark)
+	tint := sgrChannel("48", styles.InsertFill())
+	for i := range fLines {
+		fh, uh := borderHead(fLines[i]), borderHead(uLines[i])
+		if fh == "" || uh == "" {
+			t.Fatalf("line %d lost its ▌\nfocused: %q\nunfocused: %q", i, fLines[i], uLines[i])
+		}
+		if !strings.Contains(fh, accent) || !strings.Contains(fh, tint) {
+			t.Fatalf("line %d focused ▌ = %q, want accent %s on tint %s", i, fh, accent, tint)
+		}
+		if !strings.Contains(uh, border) || strings.Contains(uh, accent) || !strings.Contains(uh, fill) {
+			t.Fatalf("line %d unfocused ▌ = %q, want border %s on %s", i, uh, border, fill)
+		}
+	}
+	if !strings.Contains(focused, tint) {
+		t.Fatalf("focused compose text area missing tint %s", tint)
+	}
+	if strings.Contains(unfocused, tint) {
+		t.Fatalf("unfocused compose paints the insert tint %s", tint)
 	}
 }
 

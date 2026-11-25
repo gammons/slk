@@ -19,6 +19,7 @@ type KeyMap struct {
 	Tab                 key.Binding
 	ShiftTab            key.Binding
 	ToggleSidebar       key.Binding
+	ToggleWorkspaceRail key.Binding
 	SidebarGrow         key.Binding
 	SidebarShrink       key.Binding
 	ToggleThread        key.Binding
@@ -43,7 +44,9 @@ type KeyMap struct {
 	CopyPermalink       key.Binding
 	ForwardMessage      key.Binding
 	OpenPreview         key.Binding
+	LoadImages          key.Binding
 	OpenLink            key.Binding
+	OpenSlackLink       key.Binding
 	DownloadFile        key.Binding
 	MarkUnread          key.Binding
 	MarkSet             key.Binding
@@ -57,6 +60,7 @@ type KeyMap struct {
 	PrevUnread          key.Binding
 	ActivityView        key.Binding
 	ActivityUnread      key.Binding
+	AppHome             key.Binding
 	WorkspaceFinder     key.Binding
 	NewMessage          key.Binding
 	ThemeSwitcher       key.Binding
@@ -76,6 +80,8 @@ type KeyMap struct {
 	ListReactions       key.Binding
 	UserProfile         key.Binding
 	Huddle              key.Binding
+	Suppress            key.Binding
+	Suppressed          key.Binding
 	WindowPrefix        key.Binding
 	WinSplit            key.Binding
 	WinVSplit           key.Binding
@@ -128,7 +134,9 @@ func DefaultKeyMap() KeyMap {
 		CopyPermalink:   key.NewBinding(key.WithKeys("Y", "C"), key.WithHelp("Y/C", "copy permalink")),
 		ForwardMessage:  key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "forward message")),
 		OpenPreview:     key.NewBinding(key.WithKeys("O", "v"), key.WithHelp("O/v", "open image preview")),
+		LoadImages:      key.NewBinding(key.WithKeys("I"), key.WithHelp("I", "load images the image_loading policy held back")),
 		OpenLink:        key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open link in message")),
+		OpenSlackLink:   key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "open a pasted Slack message link")),
 		DownloadFile:    key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "download file in message")),
 		MarkUnread:      key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "mark unread")),
 		MarkSet:         key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "set mark")),
@@ -147,6 +155,7 @@ func DefaultKeyMap() KeyMap {
 		PrevUnread:     key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "prev unread channel")),
 		ActivityView:   key.NewBinding(key.WithKeys("ctrl+a"), key.WithHelp("ctrl+a / :activity", "open activity")),
 		ActivityUnread: key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "Activity: toggle unread-only")),
+		AppHome:        key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "app: home tab / messages")),
 		// Keyless: ctrl+w is reserved as the window-command prefix
 		// (window-management design §4). The keyless binding never
 		// matches but keeps the help-overlay entry pointing at :ws
@@ -159,6 +168,7 @@ func DefaultKeyMap() KeyMap {
 		ThemePrev:           key.NewBinding(key.WithKeys("alt+shift+y", "alt+Y", "alt+shift+Y"), key.WithHelp("alt+shift+y", "prev theme (per workspace)")),
 		Compact:             key.NewBinding(key.WithHelp(":compact", "Toggle compact (IRC-like) style")),
 		PresenceMenu:        key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "set status")),
+		ToggleWorkspaceRail: key.NewBinding(key.WithKeys("ctrl+g"), key.WithHelp("ctrl+g", "toggle workspace rail")),
 		ToggleSection:       key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "toggle section")),
 		NavBack:             key.NewBinding(key.WithKeys("ctrl+h"), key.WithHelp("ctrl+h", "navigate back")),
 		// ctrl+k was the original forward key. It stays bound for
@@ -175,6 +185,9 @@ func DefaultKeyMap() KeyMap {
 		ListReactions:  key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "list reactions")),
 		UserProfile:    key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "show author's profile")),
 		Huddle:         key.NewBinding(key.WithKeys("H"), key.WithHelp("H / :huddle", "copy huddle link")),
+		// Keyless, like MarksList: dispatched from the command registry.
+		Suppress:   key.NewBinding(key.WithHelp(":suppress", "hide this author's messages")),
+		Suppressed: key.NewBinding(key.WithHelp(":suppressed", "list hidden authors")),
 		// Window commands (design §4). WindowPrefix is the only real
 		// binding; the Win* entries are keyless help-only bindings
 		// (same trick as WorkspaceFinder above) — actual dispatch of

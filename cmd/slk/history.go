@@ -70,6 +70,7 @@ func fetchMessagesAround(client *slackclient.Client, channelID, targetTS string,
 func convertAndCacheHistory(client *slackclient.Client, channelID string, history []slack.Message, db *cache.DB, userNames *userNameStore, tsFormat string, router *workspaceRouter) []messages.MessageItem {
 	var msgItems []messages.MessageItem
 	resolver := messageUserResolver(router, client.TeamID())
+	channels := messageChannelResolver(router, client.TeamID())
 	for _, m := range history {
 		rawBytes, huddleRoom := marshalWithRoom(client, channelID, m)
 		debuglog.Cache("convertAndCacheHistory: upsert channel=%s ts=%s subtype=%q reply_count=%d files=%d",
@@ -123,7 +124,7 @@ func convertAndCacheHistory(client *slackclient.Client, channelID string, histor
 			LegacyAttachments: extractLegacyAttachments(m.Attachments),
 			HuddleRoom:        resolveHuddleUsers(huddleRoom, userNames, db, userRequesterFor(router, client.TeamID())),
 		}
-		resolveMessageMentions(item, userNames, db, resolver)
+		resolveMessageMentions(item, userNames, db, resolver, channels)
 		msgItems = append(msgItems, item)
 	}
 
@@ -170,6 +171,9 @@ func summarizeCachedRows(rows []cache.Message) string {
 // hydrated locally; unknown authors and visible mentions may queue background
 // resolution when a resolver is available. Cache display never waits for a
 // profile RPC, and a nil router keeps the read local-only.
+//
+// Visible channel mentions may queue metadata resolution through the source
+// workspace's channel resolver. The cache read never waits for that network work.
 //
 // raw_json unmarshal failures on a single row degrade gracefully: that
 // row renders as text-only (no attachments / blocks / legacy
@@ -239,6 +243,34 @@ func loadCachedMessages(
 			stats.getReactCalls, stats.getReactTotal,
 			stats.getUserCalls, stats.getUserTotal,
 			stats.unmarshalCalls, stats.unmarshalTotal)
+	}
+	return out
+}
+
+// loadCachedMessagesRange is loadCachedMessages for the cached
+// main-feed messages with oldestTS <= ts <= newestTS (empty newestTS:
+// no upper bound) rather than the newest page: reloading a pane after a
+// suppression rule is removed covers exactly the history it has loaded.
+func loadCachedMessagesRange(
+	db *cache.DB,
+	selfUserID string,
+	channelID string,
+	oldestTS, newestTS string,
+	userNames *userNameStore,
+	tsFormat string,
+	router *workspaceRouter,
+) []messages.MessageItem {
+	if db == nil || oldestTS == "" {
+		return nil
+	}
+	rows, err := db.GetMessagesBetween(channelID, oldestTS, newestTS)
+	if err != nil {
+		debuglog.Cache("loadCachedMessagesRange: GetMessagesBetween %s: %v", channelID, err)
+		return nil
+	}
+	out := make([]messages.MessageItem, 0, len(rows))
+	for _, m := range rows {
+		out = append(out, enrichCachedRow(db, selfUserID, channelID, m, userNames, tsFormat, "loadCachedMessagesRange", router, nil))
 	}
 	return out
 }
@@ -416,7 +448,7 @@ func enrichCachedRow(
 		LegacyAttachments: legacy,
 		HuddleRoom:        resolveHuddleUsers(roomFromRawJSON(m.RawJSON), userNames, db, userRequesterFor(router, m.WorkspaceID)),
 	}
-	resolveMessageMentions(item, userNames, db, messageUserResolver(router, m.WorkspaceID))
+	resolveMessageMentions(item, userNames, db, messageUserResolver(router, m.WorkspaceID), messageChannelResolver(router, m.WorkspaceID))
 	return item
 }
 
@@ -453,8 +485,9 @@ func roomFromRawJSON(raw string) *core.HuddleRoom {
 
 // loadCachedThreadReplies reads cached parent + replies for a thread
 // from SQLite and reconstructs []messages.MessageItem with the same
-// fidelity as fetchThreadReplies. Like loadCachedMessages, displays local data
-// immediately and may queue background name resolution.
+// fidelity as fetchThreadReplies. Displays local data immediately and may queue
+// background user and channel name resolution when source-workspace resolvers
+// are available.
 //
 // The returned slice includes the parent message at index 0 followed
 // by replies in chronological order, matching db.GetThreadReplies'
@@ -518,6 +551,7 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 
 	msgItems := make([]messages.MessageItem, 0, len(history))
 	resolver := messageUserResolver(router, client.TeamID())
+	channels := messageChannelResolver(router, client.TeamID())
 	for _, m := range history {
 		rawBytes, huddleRoom := marshalWithRoom(client, channelID, m)
 		debuglog.Cache("fetchChannelMessages: upsert channel=%s ts=%s subtype=%q reply_count=%d files=%d",
@@ -571,7 +605,7 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 			LegacyAttachments: extractLegacyAttachments(m.Attachments),
 			HuddleRoom:        resolveHuddleUsers(huddleRoom, userNames, db, userRequesterFor(router, client.TeamID())),
 		}
-		resolveMessageMentions(item, userNames, db, resolver)
+		resolveMessageMentions(item, userNames, db, resolver, channels)
 		msgItems = append(msgItems, item)
 	}
 
@@ -621,6 +655,7 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 
 	msgItems := make([]messages.MessageItem, 0, len(history))
 	resolver := messageUserResolver(router, client.TeamID())
+	channels := messageChannelResolver(router, client.TeamID())
 	for _, m := range history {
 		rawBytes, huddleRoom := marshalWithRoom(client, channelID, m)
 		debuglog.Cache("fetchThreadReplies: upsert channel=%s ts=%s subtype=%q reply_count=%d files=%d",
@@ -674,7 +709,7 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 			LegacyAttachments: extractLegacyAttachments(m.Attachments),
 			HuddleRoom:        resolveHuddleUsers(huddleRoom, userNames, db, userRequesterFor(router, client.TeamID())),
 		}
-		resolveMessageMentions(item, userNames, db, resolver)
+		resolveMessageMentions(item, userNames, db, resolver, channels)
 		msgItems = append(msgItems, item)
 	}
 

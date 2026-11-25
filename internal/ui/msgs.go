@@ -25,6 +25,7 @@ import (
 	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/searchresults"
 	"github.com/gammons/slk/internal/ui/sidebar"
+	"github.com/gammons/slk/internal/ui/styles"
 )
 
 // EmojiImageReadyMsg re-exports emoji.EmojiImageReadyMsg so reducers
@@ -70,6 +71,12 @@ type (
 		// workspace's channel in another. Empty means "the active
 		// workspace", which is what every other sender means.
 		TeamID string
+		// KeepFocus leaves focus where it is instead of moving it to
+		// the messages pane: Enter in the sidebar, and the channel
+		// restore after Enter in the workspace rail
+		// (WorkspaceSwitchedMsg.KeepFocus), set it under [sidebar]
+		// enter_keeps_focus.
+		KeepFocus bool
 	}
 	MessagesLoadedMsg struct {
 		ChannelID  string
@@ -191,7 +198,9 @@ type (
 	// ThreadsViewActivatedMsg is dispatched when the user picks the
 	// synthetic Threads sidebar row. The App switches the message pane to
 	// the threads-list view and (re)fetches the involved-threads list.
-	ThreadsViewActivatedMsg struct{}
+	ThreadsViewActivatedMsg struct {
+		KeepFocus bool // as on ChannelSelectedMsg
+	}
 	// ThreadsListLoadedMsg carries a freshly loaded list of involved-thread
 	// summaries for the named workspace. The App ignores it if it doesn't
 	// match the active team.
@@ -218,7 +227,9 @@ type (
 	// synthetic Activity sidebar row (or runs :activity). The App
 	// switches the message pane to the Activity view and fetches the
 	// feed. Mirrors ThreadsViewActivatedMsg.
-	ActivityViewActivatedMsg struct{}
+	ActivityViewActivatedMsg struct {
+		KeepFocus bool // as on ChannelSelectedMsg
+	}
 	// ActivityListLoadedMsg carries a freshly loaded page of Activity
 	// feed items for the named workspace. The App ignores it if it
 	// doesn't match the active team. Mirrors ThreadsListLoadedMsg.
@@ -234,6 +245,63 @@ type (
 	ActivitySelectedMsg struct {
 		TeamID string
 		Item   core.ActivityItem
+	}
+	// AppHomeLoadedMsg carries an app DM's Home tab, fetched when the
+	// conversation was opened. Home is nil with Err nil when the
+	// conversation has no Home tab (a plain bot DM, or a member
+	// workspace Slack does not serve a home view for); the pane then
+	// keeps showing messages. A non-nil Err means the fetch itself
+	// failed: whether the tab exists is unknown, so the App keeps the
+	// tab it already has. The App ignores a result for a channel or
+	// workspace it has left.
+	AppHomeLoadedMsg struct {
+		TeamID    string
+		ChannelID string
+		Home      *core.AppHome
+		Err       error
+		// Seq is the press generation that asked for this fetch (0 for
+		// the channel-open fetch), so a stale press's result cannot end
+		// the current press's progress dots.
+		Seq uint64
+	}
+	// AppViewOpenedMsg carries a modal an app opened for the user
+	// (view_opened). The App shows it over everything else; a view for
+	// a workspace no longer on screen is ignored.
+	AppViewOpenedMsg struct {
+		TeamID string
+		View   *core.AppView
+	}
+	// AppViewUpdatedMsg replaces the content of a modal that is already
+	// on screen (view_updated with an inline view). Unlike an open, it
+	// never brings back a dialog the user has dismissed; a different
+	// view ID is a pushed view and replaces the one shown.
+	AppViewUpdatedMsg struct {
+		TeamID string
+		View   *core.AppView
+	}
+	// AppViewLoadedMsg carries a modal's fetched content, either
+	// because Slack asked for a refresh (view_updated without an inline
+	// view) or after a pressed button. View is nil with Err nil when
+	// Slack no longer has the view: the App dismisses it. A non-nil Err
+	// leaves what is on screen alone.
+	AppViewLoadedMsg struct {
+		TeamID string
+		ViewID string
+		View   *core.AppView
+		Err    error
+		// Gen is the inline-content generation the fetch started at; a
+		// result from before a newer frame is dropped. Fetch orders the
+		// fetches among themselves: a fetch started before one already
+		// applied is dropped. Both are 0 for a message that did not
+		// come from a fetch slk started.
+		Gen   uint64
+		Fetch uint64
+	}
+	// AppViewNeedsRefreshMsg asks the App to fetch a modal's content
+	// after Slack signalled an update that carried no inline view.
+	AppViewNeedsRefreshMsg struct {
+		TeamID string
+		ViewID string
 	}
 	// ActivityBodiesLoadedMsg carries hydrated message bodies for the
 	// refs in a freshly loaded Activity page (fetched via messages.list
@@ -321,6 +389,13 @@ type (
 		DisplayName string
 		IsBot       bool
 	}
+	// ChannelResolvedMsg learns a mention name without joining the channel
+	// or adding it to the sidebar and compose pickers.
+	ChannelResolvedMsg struct {
+		TeamID    string
+		ChannelID string
+		Name      string
+	}
 	// UserExternalMsg flags a single user as external (Slack Connect /
 	// shared-channel guest). Emitted by the user-resolution path when a
 	// users.info response shows team_id != workspace TeamID. The App
@@ -352,10 +427,13 @@ type (
 		// Domain is the workspace's slack.com subdomain (e.g.
 		// "truelist-workspace"), from auth.test. Used to decide
 		// whether an archive permalink belongs to this workspace.
-		Domain       string
-		Theme        string // resolved theme name (per-workspace or global default)
-		SidebarWidth int    // resolved sidebar width (per-workspace or global default)
-		Channels     []sidebar.ChannelItem
+		Domain           string
+		PermalinkDomains []string // configured aliases for archive permalink routing
+		Theme            string   // resolved theme name (per-workspace or global default)
+		SidebarWidth     int      // resolved sidebar width (per-workspace or global default)
+		Channels         []sidebar.ChannelItem
+		// ChannelNames includes known non-member channels for mention rendering.
+		ChannelNames map[string]string
 		FinderItems  []core.ChannelFinderItem
 		UserNames    map[string]string
 		// UserStatuses is every cached user's custom status, for author
@@ -381,10 +459,16 @@ type (
 		UserID         string
 		CustomEmoji    map[string]string
 		UserGroups     map[string]string
+		SelfUserGroups map[string]bool // usergroup IDs the user is in
 		// SectionsProvider supplies Slack-native sidebar sections for this
 		// workspace. Nil means "use config-glob behavior" (the App's
 		// sidebar reverts to its existing name-keyed buckets).
 		SectionsProvider sidebar.SectionsProvider
+		// DefaultChannel is the workspace's configured default_channel,
+		// matched by matchChannelByName. It is opened on the first switch
+		// to the workspace in a session, and when the channel last viewed
+		// there is gone.
+		DefaultChannel string
 		// RefreshPeerDND, if set, is appended to reduceWorkspaceSwitched's
 		// batch after the switch applies. It fetches DM peers' DND for
 		// this workspace and delivers results as UserDNDChangeMsg.
@@ -395,6 +479,15 @@ type (
 		// names as UserResolvedMsg; any sent before the switch applied
 		// would be dropped as belonging to an inactive workspace.
 		AfterSwitch tea.Cmd
+		// KeepFocus is set on the result of a switch made by Enter in
+		// the workspace rail under [sidebar] enter_keeps_focus, so the
+		// last-channel restore leaves focus in the rail.
+		KeepFocus bool
+		// FinderPermalinkSeq ties this switch to one pasted permalink.
+		// Zero for every other switch. A newer paste bumps the App's
+		// counter, so a switch that finishes late does not consume the
+		// link that replaced it.
+		FinderPermalinkSeq uint64
 	}
 	// ReadStateChangedMsg is sent whenever the persistent read state changes,
 	// so panels that read from cache.GetWorkspaceReadState re-render.
@@ -441,10 +534,13 @@ type (
 		// Domain is the workspace's slack.com subdomain (e.g.
 		// "truelist-workspace"), from auth.test. Used to decide
 		// whether an archive permalink belongs to this workspace.
-		Domain       string
-		Theme        string // resolved theme name (per-workspace or global default)
-		SidebarWidth int    // resolved sidebar width (per-workspace or global default)
-		Channels     []sidebar.ChannelItem
+		Domain           string
+		PermalinkDomains []string // configured aliases for archive permalink routing
+		Theme            string   // resolved theme name (per-workspace or global default)
+		SidebarWidth     int      // resolved sidebar width (per-workspace or global default)
+		Channels         []sidebar.ChannelItem
+		// ChannelNames includes known non-member channels for mention rendering.
+		ChannelNames map[string]string
 		FinderItems  []core.ChannelFinderItem
 		UserNames    map[string]string
 		// UserStatuses is every cached user's custom status, for author
@@ -469,6 +565,7 @@ type (
 		UserID         string
 		CustomEmoji    map[string]string
 		UserGroups     map[string]string
+		SelfUserGroups map[string]bool // usergroup IDs the user is in
 		// SectionsProvider supplies Slack-native sidebar sections for this
 		// workspace. Nil means "use config-glob behavior" (the App's
 		// sidebar reverts to its existing name-keyed buckets).
@@ -484,8 +581,14 @@ type (
 		// (from the persisted channel_visits table). On the InitialActive
 		// workspace the App opens this channel on startup instead of the
 		// sidebar's first entry, so a restart lands the user back where
-		// they were. Empty (e.g. first ever run) falls back to Channels[0].
+		// they were, unless DefaultChannel names a sidebar channel. Empty
+		// (e.g. first ever run) falls back to Channels[0].
 		LastChannelID string
+		// DefaultChannel is the workspace's configured default_channel,
+		// matched by matchChannelByName. On the InitialActive workspace it
+		// is opened in place of LastChannelID when it names a channel the
+		// sidebar shows.
+		DefaultChannel string
 	}
 	// CustomEmojisLoadedMsg is sent when a workspace's custom emoji list
 	// finishes loading in the background, after WorkspaceReadyMsg has
@@ -500,8 +603,9 @@ type (
 	// fetch finishes in the background. App refreshes render caches and
 	// compose mention entries only when TeamID matches the active workspace.
 	UserGroupsLoadedMsg struct {
-		TeamID     string
-		UserGroups map[string]string
+		TeamID         string
+		UserGroups     map[string]string
+		SelfUserGroups map[string]bool
 	}
 	WorkspaceFailedMsg struct {
 		TeamName string
@@ -594,6 +698,21 @@ type (
 	// downloadFailureClearMsg expires one queued failure toast without routing
 	// download state through the generic toast-clear reducer.
 	downloadFailureClearMsg struct{ Seq uint64 }
+	// CustomThemesReloadedMsg carries the custom theme files read again
+	// after something rewrote them (a palette generator signals slk).
+	// The App registers them and reapplies the selected theme.
+	CustomThemesReloadedMsg struct{ Themes []styles.CustomTheme }
+
+	// CellMetricsChangedMsg tells the App the terminal's cell size in
+	// pixels changed and cmd/slk already re-pointed the image-encoding
+	// globals and the avatar cache. A terminal can report a transient
+	// cell size while its fonts settle shortly after launch (foot on a
+	// fractional-scaled output loads at the legacy scale first), and a
+	// monitor move or font zoom changes it mid-session. Every render
+	// cache that baked sixel pixels or image cell targets into its
+	// rows must be rebuilt, and the sixel painter must erase what it
+	// placed at the old size.
+	CellMetricsChangedMsg struct{ CellW, CellH int }
 )
 
 // autoScrollTickMsg is dispatched by tea.Tick while a drag is held near
@@ -697,6 +816,14 @@ type AttachmentRemovedMsg struct {
 type OpenLinkMsg struct {
 	URL       string
 	Confirmed bool
+}
+
+// OpenSlackLinkMsg opens a Slack archive permalink sent from outside the
+// TUI (`slk --open`). It takes the Open Slack link dialog's path: in-app
+// navigation, a switch to the workspace the link belongs to, or the
+// browser for anything slk cannot resolve.
+type OpenSlackLinkMsg struct {
+	URL string
 }
 
 // DownloadFileMsg requests download + OS-open of a file attachment.
@@ -813,6 +940,24 @@ type ChannelJoinFailedMsg struct {
 	ID   string
 	Name string
 	Err  error
+}
+
+// ChannelStarSetMsg is the answer to a /star or /unstar (the
+// ChannelService.SetStarred command). Starred is the state Slack now
+// holds; Err set means Slack refused and the optimistic sidebar move
+// the requesting path already made must be reverted. TeamID is the
+// workspace the request ran in: a reply for a workspace the user has
+// since switched away from settles its bookkeeping without touching
+// the sidebar now on screen. Seq is the requesting path's per-channel
+// request number within that workspace; a reply that does not match
+// the channel's latest was superseded by a newer request and is
+// ignored (0 means the reply carries no number and always applies).
+type ChannelStarSetMsg struct {
+	TeamID    string
+	ChannelID string
+	Starred   bool
+	Seq       int
+	Err       error
 }
 
 // previewLoadedMsg is dispatched after a preview thumb has been fetched.

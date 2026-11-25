@@ -89,6 +89,44 @@ func TestModalClick_OutsideDismisses(t *testing.T) {
 	}
 }
 
+// TestModalClick_OutsideDismissesFilteringWorkspaceFinder: with
+// workspace_picker_vim_keys, Esc while filtering only clears the filter,
+// but one outside click still closes :ws, and, like a keyboard close,
+// rechecks an action dialog that queued while it was open.
+func TestModalClick_OutsideDismissesFilteringWorkspaceFinder(t *testing.T) {
+	app := newTestApp(t, workspaceFinderOpts()...)
+	app.SetWorkspacePickerVimKeys(true)
+	app.enterCommandMode()
+	typeCommand(app, "ws")
+	_ = handleCommandMode(app, tea.KeyPressMsg{Code: tea.KeyEnter})
+	for _, r := range "/be" {
+		_ = dispatchModeKey(app, keyPress(r))
+	}
+	if !app.workspaceFinder.IsVisible() || app.mode != ModeWorkspaceFinder {
+		t.Fatalf("precondition: finder visible = %v, mode = %v", app.workspaceFinder.IsVisible(), app.mode)
+	}
+
+	app.actionQueue = []actionPromptRef{{channelID: "C1", ts: "1.000"}} // arrived while :ws was open
+
+	cmd := reduceMouseClick(app, tea.MouseClickMsg{Button: tea.MouseLeft, X: 0, Y: 0})
+
+	if app.workspaceFinder.IsVisible() {
+		t.Error("finder should be dismissed by one outside click while filtering")
+	}
+	if app.mode != ModeNormal {
+		t.Errorf("mode = %v after outside click, want ModeNormal", app.mode)
+	}
+	rechecked := false
+	for _, msg := range drainSkippingTimers(cmd) {
+		if _, ok := msg.(actionPromptRecheckMsg); ok {
+			rechecked = true
+		}
+	}
+	if !rechecked {
+		t.Error("closing :ws by an outside click should recheck the waiting action dialog")
+	}
+}
+
 // TestModalClick_InsideNonRowIsNoop verifies that clicking inside the box
 // but not on a list row (e.g. the title area) neither activates nor
 // dismisses the modal.

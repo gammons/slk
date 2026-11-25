@@ -19,6 +19,9 @@ env:
   # than maximum supported version 4").
   # renovate: datasource=github-releases depName=golangci/golangci-lint
   GOLANGCI_LINT_VERSION: v2.14.0
+  # install_steps in .goreleaser.yaml needs 2.19+. Keep in step with release.yml.
+  # renovate: datasource=github-releases depName=goreleaser/goreleaser
+  GORELEASER_VERSION: v2.19.0
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -71,6 +74,15 @@ jobs:
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
+
+      # Catches schema errors and deprecated options in the release config
+      # before a tagged release finds them. Takes a few seconds.
+      - name: goreleaser check
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
+        with:
+          distribution: goreleaser
+          version: ${{ env.GORELEASER_VERSION }}
+          args: check
 
   nix:
     name: nix build

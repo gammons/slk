@@ -173,6 +173,10 @@ func desktopErrorMessage(err error) string {
 		return "No Slack workspaces are signed in. Open Slack, sign in, then retry."
 	case errors.Is(err, slackdesktop.ErrCookieDBMissing):
 		return "Slack is installed but has never signed in on this machine."
+	case errors.Is(err, slackdesktop.ErrCookieDBUnreadable):
+		// Keep the wrapped open error: it says why (EPERM vs EACCES vs I/O).
+		return err.Error() + ". On macOS this usually means your terminal needs Full Disk Access " +
+			"(System Settings → Privacy & Security → Full Disk Access); grant it, then retry."
 	case errors.Is(err, slackdesktop.ErrKeyringLocked):
 		return "Your system keyring is locked. Unlock it (log in to your desktop session) and retry."
 	case errors.Is(err, slackdesktop.ErrNoSecretService):

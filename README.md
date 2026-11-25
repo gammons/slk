@@ -21,7 +21,7 @@
 ## Highlights
 
 - Real-time messages, edits, deletes, reactions, typing indicators, apps' "working" status
-- Inline images (kitty graphics / sixel / half-block fallback) with full-screen preview
+- Inline images (kitty graphics / sixel / half-block fallback) with full-screen preview. Several images in one message sit side by side and wrap to the next row when the pane is too narrow
 - Threads side panel + a workspace-wide threads view
 - Activity feed: mentions, thread replies, reactions, and DMs in one list, like Slack's Activity tab
 - Smart paste: clipboard images, file paths, or text — multiple attachments + caption in one send

@@ -3,6 +3,8 @@ package workspace
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestWorkspaceRailView(t *testing.T) {
@@ -17,6 +19,79 @@ func TestWorkspaceRailView(t *testing.T) {
 	}
 	if !strings.Contains(view, "BI") {
 		t.Error("expected 'BI' in view")
+	}
+}
+
+// TestWorkspaceRailInitialsAligned: the unread dot sits left of the
+// initials and the keyboard cursor right of them, and neither moves the
+// initials' column.
+func TestWorkspaceRailInitialsAligned(t *testing.T) {
+	m := New([]WorkspaceItem{
+		{ID: "T1", Initials: "AC"},
+		{ID: "T2", Initials: "BI", HasUnread: true},
+		{ID: "T3", Initials: "CD"},
+	}, 0)
+	m.SetFocused(true)
+	m.SetCursor(2)
+	cols := map[string]int{}
+	for _, line := range strings.Split(ansi.Strip(m.View(10)), "\n") {
+		for _, ini := range []string{"AC", "BI", "CD"} {
+			if i := strings.Index(line, ini); i >= 0 {
+				cols[ini] = len([]rune(line[:i]))
+				if ini == "BI" && !strings.Contains(line[:i], "●") {
+					t.Errorf("unread row %q: dot is not left of the initials", line)
+				}
+				if ini == "CD" && !strings.Contains(line[i:], "◂") {
+					t.Errorf("cursor row %q: cursor is not right of the initials", line)
+				}
+			}
+		}
+	}
+	if cols["AC"] != cols["BI"] || cols["BI"] != cols["CD"] {
+		t.Errorf("initials columns differ: %v", cols)
+	}
+}
+
+// TestWorkspaceRailScrollsToCursor: with more workspaces than fit, the
+// rail scrolls to keep the cursor (or, unfocused, the selected workspace)
+// drawn, and clicks map to the rows actually drawn.
+func TestWorkspaceRailScrollsToCursor(t *testing.T) {
+	var items []WorkspaceItem
+	for _, ini := range []string{"W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8"} {
+		items = append(items, WorkspaceItem{ID: ini, Initials: ini})
+	}
+	m := New(items, 0)
+	const h = 12 // 10 rows inside the padding: 5 items with gaps
+	m.SetHeight(h)
+	view := func() string { return ansi.Strip(m.View(h)) }
+	if v := view(); !strings.Contains(v, "W1") || strings.Contains(v, "W6") {
+		t.Fatalf("unscrolled rail should draw W1-W5:\n%s", v)
+	}
+
+	m.SetFocused(true)
+	m.SetCursor(7) // G
+	v := view()
+	if !strings.Contains(v, "W8 ◂") || strings.Contains(v, "W3") {
+		t.Fatalf("cursor on W8: want W4-W8 drawn with the cursor on W8:\n%s", v)
+	}
+	if it, ok := m.ClickAt(1); !ok || it.ID != "W4" {
+		t.Errorf("ClickAt(1) on the scrolled rail = %q, %v; want W4", it.ID, ok)
+	}
+	if _, ok := m.ClickAt(11); ok {
+		t.Error("ClickAt below the last drawn item should miss")
+	}
+
+	m.SetCursor(1) // back up past the top of the window
+	if v := view(); !strings.Contains(v, "W2 ◂") {
+		t.Fatalf("cursor on W2 is not drawn:\n%s", v)
+	}
+	m.SetHeight(6) // shrink: 2 items fit
+	if v := view(); !strings.Contains(v, "W2 ◂") {
+		t.Fatalf("after a resize the cursor on W2 is not drawn:\n%s", v)
+	}
+	m.SetFocused(false) // unfocused: follow the selected workspace (W1)
+	if v := view(); !strings.Contains(v, "W1") {
+		t.Fatalf("unfocused rail should show the selected W1:\n%s", v)
 	}
 }
 

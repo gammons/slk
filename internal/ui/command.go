@@ -39,20 +39,22 @@ type commandFunc func(a *App, args commandArgs) tea.Cmd
 // commands maps a command name to its handler. Names are matched
 // exactly (no prefix matching); aliases get their own entries.
 var commands = map[string]commandFunc{
-	"ws":       cmdWorkspaceFinder,
-	"marks":    cmdMarks,
-	"delmarks": cmdDelMarks,
-	"sp":       cmdSplit,
-	"vsp":      cmdVSplit,
-	"q":        cmdCloseWindow,
-	"only":     cmdOnlyWindow,
-	"on":       cmdOnlyWindow,
-	"activity": cmdActivity,
-	"huddle":   cmdHuddle,
-	"help":     cmdHelp,
-	"compact":  cmdCompact,
-	"version":  cmdVersion,
-	"drafts":   cmdDrafts,
+	"ws":         cmdWorkspaceFinder,
+	"marks":      cmdMarks,
+	"delmarks":   cmdDelMarks,
+	"sp":         cmdSplit,
+	"vsp":        cmdVSplit,
+	"q":          cmdCloseWindow,
+	"only":       cmdOnlyWindow,
+	"on":         cmdOnlyWindow,
+	"activity":   cmdActivity,
+	"huddle":     cmdHuddle,
+	"help":       cmdHelp,
+	"compact":    cmdCompact,
+	"version":    cmdVersion,
+	"suppress":   cmdSuppress,
+	"suppressed": cmdSuppressed,
+	"drafts":     cmdDrafts,
 }
 
 // cmdVersion toasts the running build's version and short commit (see
@@ -141,6 +143,7 @@ func cmdOnlyWindow(a *App, _ commandArgs) tea.Cmd {
 // cmdWorkspaceFinder opens the workspace finder overlay —
 // the :command replacement for the finder's old ctrl+w binding.
 func cmdWorkspaceFinder(a *App, _ commandArgs) tea.Cmd {
+	a.syncWorkspaceFinder()
 	a.workspaceFinder.Open()
 	a.SetMode(ModeWorkspaceFinder)
 	return nil

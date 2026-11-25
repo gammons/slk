@@ -38,6 +38,8 @@ func (f *stubImageFetcher) ConfigurePrerender(imgpkg.Protocol) {}
 
 func (f *stubImageFetcher) ConfigurePrerenderKitty(*imgpkg.KittyRenderer) {}
 
+func (f *stubImageFetcher) InvalidatePrerender() {}
+
 // stubImage renders as a 32x18 RGBA gradient: non-trivial content for
 // the protocol encoders, small enough to keep the sixel encode fast.
 func stubImage() image.Image {

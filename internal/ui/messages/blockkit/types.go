@@ -60,12 +60,23 @@ type RenderResult struct {
 	SixelRows   map[int]SixelEntry      // sixel sentinel rows keyed by row index into Lines (same coord system as HitRect.RowStart)
 	Height      int                     // == len(Lines); cached for caller's row math
 	Hits        []HitRect               // clickable image footprints
+	ActionHits  []ActionHit             // rendered actions-block buttons (same row/col system as Lines)
 	Interactive bool                    // any interactive element rendered
+}
+
+// ActionHit is the footprint of one element of an actions block, in the
+// coordinate system of RenderResult.Lines. BlockID and ActionID identify
+// the element the way a press echoes it (a caller that cannot press the
+// element ignores the hit); Rows are 0-based and ColEnd is exclusive.
+type ActionHit struct {
+	BlockID, ActionID string
+	RowStart, RowEnd  int
+	ColStart, ColEnd  int
 }
 
 // SixelEntry is one sixel image's pre-encoded bytes plus its
 // halfblock-equivalent fallback for partial-visibility frames.
-// Mirrors internal/ui/messages.sixelEntry exactly so the integration
+// Mirrors internal/ui/messages.SixelImage exactly so the integration
 // site can copy the contents without conversion.
 type SixelEntry struct {
 	// Key is the fetcher's cache key for the image (the "BK-" URL
@@ -137,7 +148,10 @@ type Context struct {
 	CellPixels  image.Point
 	MaxRows     int // for full-size image blocks
 	MaxCols     int
-	UserNames   map[string]string // for resolving <@U…> mentions in mrkdwn
+	// Policy decides which image URLs load ([general]
+	// image_loading). Nil loads every URL.
+	Policy    *imgpkg.LoadPolicy
+	UserNames map[string]string // for resolving <@U…> mentions in mrkdwn
 	// SendMsg is a tea.Cmd-style callback typed as func(any) so this
 	// package does not need to import bubbletea. Used by image-block
 	// prefetchers to signal completion. May be nil; when nil, image

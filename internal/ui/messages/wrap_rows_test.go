@@ -24,8 +24,8 @@ func TestWrapRows_LongTimestampOnlyOnSelected(t *testing.T) {
 	r := RenderMessage(items[0], width, m.renderContext(), RenderOptions{})
 	w := WrapRows(items[0], r, width, NewWrapStyles(true, false))
 
-	if len(w.Lines) != len(w.Selected) || len(w.Lines) != len(w.Plain) {
-		t.Fatalf("variants differ in height: lines=%d selected=%d plain=%d", len(w.Lines), len(w.Selected), len(w.Plain))
+	if len(w.Lines) != len(rowSelected(w, width, true, false)) || len(w.Lines) != len(w.Plain) {
+		t.Fatalf("variants differ in height: lines=%d selected=%d plain=%d", len(w.Lines), len(rowSelected(w, width, true, false)), len(w.Plain))
 	}
 	if w.ShortSrc != r.Content {
 		t.Errorf("ShortSrc should be the short-timestamp content when the selected header changes")
@@ -33,7 +33,7 @@ func TestWrapRows_LongTimestampOnlyOnSelected(t *testing.T) {
 	if got := ansi.Strip(strings.Join(w.Lines, "\n")); strings.Contains(got, "Tue Sep 29") {
 		t.Errorf("unselected rows carry the long timestamp:\n%s", got)
 	}
-	if got := ansi.Strip(strings.Join(w.Selected, "\n")); !strings.Contains(got, "Tue Sep 29, 3:40 PM") {
+	if got := ansi.Strip(strings.Join(rowSelected(w, width, true, false), "\n")); !strings.Contains(got, "Tue Sep 29, 3:40 PM") {
 		t.Errorf("selected rows lack the long timestamp:\n%s", got)
 	}
 	for i, p := range w.Plain {
@@ -42,8 +42,8 @@ func TestWrapRows_LongTimestampOnlyOnSelected(t *testing.T) {
 		}
 	}
 	short := NewWrapStyles(true, false).SelectedVariant(w.ShortSrc, width)
-	if len(short) != len(w.Selected) {
-		t.Errorf("short variant height %d != selected %d", len(short), len(w.Selected))
+	if len(short) != len(rowSelected(w, width, true, false)) {
+		t.Errorf("short variant height %d != selected %d", len(short), len(rowSelected(w, width, true, false)))
 	}
 }
 
@@ -55,7 +55,7 @@ func TestWrapRows_OnlyShortTimestampWhenCompact(t *testing.T) {
 	r := RenderMessage(items[0], width, m.renderContext(), RenderOptions{})
 	w := WrapRows(items[0], r, width, NewWrapStyles(true, true))
 
-	if got := ansi.Strip(strings.Join(w.Selected, "\n")); strings.Contains(got, "Tue Sep 29") {
+	if got := ansi.Strip(strings.Join(rowSelected(w, width, true, false), "\n")); strings.Contains(got, "Tue Sep 29") {
 		t.Errorf("selected rows carry the long timestamp in compact mode:\n%s", got)
 	}
 }
@@ -95,7 +95,7 @@ func TestWrapRows_LongAuthorKeepsAvatarRowsAdjacent(t *testing.T) {
 		rows []string
 	}{
 		{"normal", wrapped.Lines},
-		{"selected", wrapped.Selected},
+		{"selected", rowSelected(wrapped, width, true, false)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			top, bottom := ansi.Strip(tc.rows[0]), ansi.Strip(tc.rows[1])
@@ -138,15 +138,15 @@ func TestWrapRows_WrappedHeaderKeepsTimestampWholeForSelection(t *testing.T) {
 		t.Errorf("formatted timestamp split across header rows: %q", header)
 	}
 	wrapped := WrapRows(msg, rendered, width, NewWrapStyles(true, false))
-	selected := ansi.Strip(strings.Join(wrapped.Selected, "\n"))
+	selected := ansi.Strip(strings.Join(rowSelected(wrapped, width, true, false), "\n"))
 	if !strings.Contains(selected, LongTimestamp(msg.TS, msg.Timestamp)) {
 		t.Errorf("selected header lost its fitting date-qualified timestamp:\n%s", selected)
 	}
-	if len(wrapped.Selected) != len(wrapped.Lines) {
-		t.Fatalf("selection changed message height: normal=%d selected=%d", len(wrapped.Lines), len(wrapped.Selected))
+	if len(rowSelected(wrapped, width, true, false)) != len(wrapped.Lines) {
+		t.Fatalf("selection changed message height: normal=%d selected=%d", len(wrapped.Lines), len(rowSelected(wrapped, width, true, false)))
 	}
 	headerRows := lipgloss.Height(rendered.Header)
-	for _, rows := range [][]string{wrapped.Lines, wrapped.Selected} {
+	for _, rows := range [][]string{wrapped.Lines, rowSelected(wrapped, width, true, false)} {
 		top, bottom := ansi.Strip(rows[0]), ansi.Strip(rows[1])
 		if col := strings.Index(top, "TOP!"); col < 0 || strings.Index(bottom, "LOW!") != col {
 			t.Errorf("timestamp layout split the avatar:\n%s", ansi.Strip(strings.Join(rows, "\n")))
@@ -166,7 +166,7 @@ func TestWrapRows_WrappedHeaderKeepsTimestampWholeForSelection(t *testing.T) {
 			continue
 		}
 		reactionFound = true
-		for _, rows := range [][]string{wrapped.Lines, wrapped.Selected} {
+		for _, rows := range [][]string{wrapped.Lines, rowSelected(wrapped, width, true, false)} {
 			if hit.RowStart < 0 || hit.RowStart >= len(rows) || !strings.Contains(ansi.Strip(rows[hit.RowStart]), "7") {
 				t.Errorf("reaction hit moved off its row after timestamp layout: row=%d", hit.RowStart)
 			}
@@ -210,8 +210,8 @@ func TestWrapRows_WrappedAvatarHeaderKeepsStatusImageAndTimestamp(t *testing.T) 
 		t.Fatalf("formatted timestamp split across header rows: %q", header)
 	}
 	wrapped := WrapRows(msg, rendered, width, NewWrapStyles(true, false))
-	if len(wrapped.Lines) != len(wrapped.Selected) {
-		t.Fatalf("selection changed message height: normal=%d selected=%d", len(wrapped.Lines), len(wrapped.Selected))
+	if len(wrapped.Lines) != len(rowSelected(wrapped, width, true, false)) {
+		t.Fatalf("selection changed message height: normal=%d selected=%d", len(wrapped.Lines), len(rowSelected(wrapped, width, true, false)))
 	}
 	headerRows := lipgloss.Height(rendered.Header)
 	longTimestamp := LongTimestamp(msg.TS, msg.Timestamp)
@@ -221,7 +221,7 @@ func TestWrapRows_WrappedAvatarHeaderKeepsStatusImageAndTimestamp(t *testing.T) 
 		selected bool
 	}{
 		{"normal", wrapped.Lines, false},
-		{"selected", wrapped.Selected, true},
+		{"selected", rowSelected(wrapped, width, true, false), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			frame := strings.Join(tc.rows, "\n")
@@ -313,10 +313,10 @@ func TestWrapRows_OverlongTimestampStaysWithinHeaderBudget(t *testing.T) {
 		}
 	}
 	wrapped := WrapRows(msg, rendered, width, NewWrapStyles(true, false))
-	if len(wrapped.Lines) != len(wrapped.Selected) {
+	if len(wrapped.Lines) != len(rowSelected(wrapped, width, true, false)) {
 		t.Fatal("selection changed the overlong timestamp's row count")
 	}
-	for _, rows := range [][]string{wrapped.Lines, wrapped.Selected} {
+	for _, rows := range [][]string{wrapped.Lines, rowSelected(wrapped, width, true, false)} {
 		if !strings.Contains(ansi.Strip(rows[lipgloss.Height(rendered.Header)]), "body") {
 			t.Errorf("body did not follow the overlong timestamp header: %q", ansi.Strip(strings.Join(rows, "\n")))
 		}
@@ -357,7 +357,7 @@ func TestWrapRows_LongAuthorKeepsHeaderMetadata(t *testing.T) {
 		}
 	}
 	wrapped := WrapRows(msg, rendered, width, NewWrapStyles(true, false))
-	for _, rows := range [][]string{wrapped.Lines, wrapped.Selected} {
+	for _, rows := range [][]string{wrapped.Lines, rowSelected(wrapped, width, true, false)} {
 		if !strings.Contains(ansi.Strip(rows[lipgloss.Height(rendered.Header)]), "body") {
 			t.Fatalf("body did not follow the wrapped header: %q", ansi.Strip(strings.Join(rows, "\n")))
 		}
@@ -401,7 +401,7 @@ func TestWrapRows_WrappedHeaderKeepsActionRowsAligned(t *testing.T) {
 			default:
 				continue
 			}
-			for _, rows := range [][]string{wrapped.Lines, wrapped.Selected} {
+			for _, rows := range [][]string{wrapped.Lines, rowSelected(wrapped, width, true, false)} {
 				if hit.RowStart < 0 || hit.RowStart >= len(rows) || !strings.Contains(ansi.Strip(rows[hit.RowStart]), want) {
 					t.Fatalf("action hit points outside its rendered row: kind=%v row=%d", hit.Kind, hit.RowStart)
 				}

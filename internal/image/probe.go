@@ -42,11 +42,32 @@ import (
 // based probe; that path may leak but tests exit immediately so it
 // doesn't matter.
 func ProbeKittyGraphics(w io.Writer, r io.Reader, timeout time.Duration) bool {
-	// Minimal valid 1x1 PNG.
-	const tinyPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+P+/HgAFhAJ/wlseKgAAAABJRU5ErkJggg=="
-	const probeID = 9999
-	header := fmt.Sprintf("a=T,f=100,t=d,i=%d,q=0", probeID)
-	if err := writeKittySequence(w, fmt.Sprintf("\x1b_G%s;%s\x1b\\", header, tinyPNG)); err != nil {
+	header := fmt.Sprintf("a=T,f=100,t=d,i=%d,q=0", kittyProbeID)
+	return probeKitty(w, r, timeout, fmt.Sprintf("\x1b_G%s;%s\x1b\\", header, kittyProbePNG))
+}
+
+// ProbeKittyQuery is ProbeKittyGraphics with a query (a=q) instead of
+// an upload: the terminal checks the image and answers, but stores
+// and draws nothing. It is the probe for KittyEmulated. WezTerm
+// answers a query, while it stays silent on ProbeKittyGraphics' a=T:
+// it answers a transmit only when the transmit carries an image number
+// (I=), and never answers a successful placement.
+func ProbeKittyQuery(w io.Writer, r io.Reader, timeout time.Duration) bool {
+	header := fmt.Sprintf("a=q,f=100,t=d,i=%d", kittyProbeID)
+	return probeKitty(w, r, timeout, fmt.Sprintf("\x1b_G%s;%s\x1b\\", header, kittyProbePNG))
+}
+
+// kittyProbePNG is a minimal valid 1x1 PNG, base64-encoded.
+const kittyProbePNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+P+/HgAFhAJ/wlseKgAAAABJRU5ErkJggg=="
+
+// kittyProbeID is the image ID both probes use.
+const kittyProbeID = 9999
+
+// probeKitty writes seq and waits up to timeout for a kitty graphics
+// reply carrying OK. See ProbeKittyGraphics for why the poll path
+// exists.
+func probeKitty(w io.Writer, r io.Reader, timeout time.Duration, seq string) bool {
+	if err := writeKittySequence(w, seq); err != nil {
 		return false
 	}
 

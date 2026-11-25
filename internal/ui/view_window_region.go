@@ -45,6 +45,12 @@ func (a *App) renderWindowsRegion(frame panelLayoutFrame, themeVer int64, previe
 func (a *App) renderWindowNode(n wintree.LayoutNode, frame panelLayoutFrame, themeVer int64) string {
 	if n.Leaf {
 		if n.ID == a.focusedWin {
+			// Where the focused window landed this frame, for the
+			// mouse router's split-aware hit tests (the header star
+			// glyph): a click must land in this rect, not merely map
+			// onto the live pane PanelAt resolves every split region
+			// to.
+			a.layout.SetFocusedWinRect(n.Rect)
 			sub := frame
 			sub.MsgWidth = n.Rect.W - 2
 			// Floor: a hard shrink can leave rects narrower than the
@@ -100,6 +106,7 @@ func (a *App) renderUnfocusedWindow(n wintree.LayoutNode, themeVer int64) string
 		return a.renderBlankWindow(n)
 	}
 	m.SetFocused(false) // before Version read; bumps only on flip
+	m.SetCursorHighlight(a.mode != ModeInsert)
 	c := a.renderCache.getWinPane(n.ID)
 	key := themeVer << 1
 	if c.hit(m.Version(), n.Rect.W, n.Rect.H, key) {

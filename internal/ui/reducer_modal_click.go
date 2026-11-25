@@ -84,6 +84,9 @@ func (a *App) activeModalClickTarget() (modalClickTarget, bool) {
 		return modalClickTarget{box: &a.marksOverlay, click: &a.marksOverlay, activation: enter}, true
 	case ModeDrafts:
 		return modalClickTarget{box: &a.draftList, click: &a.draftList, activation: enter}, true
+	case ModeSuppressed:
+		// A click only moves the highlight: removing is a key.
+		return modalClickTarget{box: &a.suppressList, click: &a.suppressList, activation: nil}, true
 	case ModeHelp:
 		// Help has no activation: clicking a row only moves the highlight.
 		return modalClickTarget{box: &a.help, click: &a.help, activation: nil}, true
@@ -105,6 +108,16 @@ func (a *App) activeModalClickTarget() (modalClickTarget, bool) {
 					return copyProfileHuddle(a)
 				}
 				return copyProfileEmail(a)
+			},
+		}, true
+	case ModeAppView:
+		// A click on a button presses it directly; elsewhere inside is
+		// a no-op, and outside dismisses the dialog.
+		return modalClickTarget{
+			box:   &a.appView,
+			point: &a.appView,
+			onPoint: func() tea.Cmd {
+				return a.clickAppViewAction(a.appView.LastClickAction())
 			},
 		}, true
 	}
@@ -134,7 +147,14 @@ func reduceModalClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 
 	// Outside the box -> dismiss.
 	if m.X < startX || m.X >= startX+w || m.Y < startY || m.Y >= startY+h {
-		return esc()
+		cmd := esc()
+		// :ws with workspace_picker_vim_keys: Esc while filtering only
+		// leaves the filter, so a second Esc closes it. Both go through
+		// the mode handler, which also rechecks waiting action dialogs.
+		if a.mode == ModeWorkspaceFinder {
+			return esc()
+		}
+		return cmd
 	}
 
 	// Inside the box on a point hot spot -> its press, or its activation.

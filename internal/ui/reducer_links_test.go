@@ -69,6 +69,26 @@ func TestOpenLink_ForeignWorkspace_OpensBrowser(t *testing.T) {
 	}
 }
 
+func TestOpenLink_ConfiguredPermalinkDomainAlias_NavigatesInApp(t *testing.T) {
+	app, opened := linkTestApp(t)
+	app.Update(WorkspaceReadyMsg{TeamID: "T1", PermalinkDomains: []string{"legacy"}})
+
+	_, cmd := app.Update(OpenLinkMsg{URL: "https://legacy.slack.com/archives/C054JFCBN69/p1779284733270139"})
+	msgs := drainCmd(cmd)
+	if len(msgs) != 1 {
+		t.Fatalf("got %#v, want one ChannelSelectedMsg", msgs)
+	}
+	if _, ok := msgs[0].(ChannelSelectedMsg); !ok {
+		t.Fatalf("got %#v, want ChannelSelectedMsg", msgs[0])
+	}
+	if *opened != "" {
+		t.Errorf("browser opened %q", *opened)
+	}
+	if !app.linkOpensInApp("https://legacy.slack.com/archives/C054JFCBN69/p1779284733270139") {
+		t.Error("link picker would not mark alias link as in-app")
+	}
+}
+
 func TestOpenLink_UnknownChannel_OpensBrowser(t *testing.T) {
 	app, opened := linkTestApp(t)
 	url := "https://myteam.slack.com/archives/CUNKNOWN1/p1779284733270139"

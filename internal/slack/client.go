@@ -62,7 +62,11 @@ type SlackAPI interface {
 	// GetDNDTeamInfoContext is dnd.teamInfo. It is asked only about the
 	// users slk renders a DND marker for, never the whole team.
 	GetDNDTeamInfoContext(ctx context.Context, users []string, options ...slack.ParamOption) (map[string]slack.DNDStatus, error)
-	UploadFileContext(ctx context.Context, params slack.UploadFileParameters) (*slack.FileSummary, error)
+	// V2 external upload. Get a URL and upload the bytes for each file,
+	// then complete every file ID in one call so Slack posts one message.
+	GetUploadURLExternalContext(ctx context.Context, params slack.GetUploadURLExternalParameters) (*slack.GetUploadURLExternalResponse, error)
+	UploadToURL(ctx context.Context, params slack.UploadToURLParameters) error
+	CompleteUploadExternalContext(ctx context.Context, params slack.CompleteUploadExternalParameters) (*slack.CompleteUploadExternalResponse, error)
 	OpenConversationContext(ctx context.Context, params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error)
 	GetConversationInfoContext(ctx context.Context, input *slack.GetConversationInfoInput) (*slack.Channel, error)
 }
@@ -92,8 +96,20 @@ type Client struct {
 	// userName is the authenticated user's handle (the Slack `name`
 	// field, without an @), from auth.test.
 	userName string
-	token    string
-	cookie   string
+	// enterpriseID is the Enterprise Grid id auth.test reported, ""
+	// off a grid. See IsGridMember for why it is kept.
+	enterpriseID string
+	token        string
+	cookie       string
+
+	// wsEventGate, when non-nil, is consulted with every raw WebSocket
+	// frame before it is parsed and dispatched; returning false drops
+	// the frame. Installed by cmd/slk on the sessions of one Enterprise
+	// Grid so a frame a sibling session already delivered is processed
+	// once instead of once per socket. Must be set before StartWebSocket
+	// (the dispatch goroutine reads it without a lock; every setter
+	// call after the socket is live is a race).
+	wsEventGate func([]byte) bool
 
 	// apiBaseURL is the workspace-specific Web API root, e.g.
 	// "https://slack.com/api/" for non-grid workspaces or
@@ -287,6 +303,16 @@ func (c *Client) PostForm(ctx context.Context, method string, form url.Values) (
 	return c.postForm(ctx, method, form)
 }
 
+// NewSessionClient returns a Client reporting the given session
+// identity without connecting. Wiring tests that route by session
+// identity (the Activity org-session fallback, the grid sibling gates)
+// need sessions that IsGridMember / EnterpriseID / UserID classify; a
+// zero Client reports none of them, and those fields are otherwise
+// written only by Connect. The client it returns can make no calls.
+func NewSessionClient(teamID, enterpriseID, userID string) *Client {
+	return &Client{teamID: teamID, enterpriseID: enterpriseID, userID: userID}
+}
+
 // Envelope returns the client's Slack telemetry envelope, or nil for a
 // Client constructed directly (tests). Callers use it to read or update
 // session-scoped values such as the build timestamp; the same pointer is
@@ -295,10 +321,47 @@ func (c *Client) Envelope() *slackhttp.Envelope {
 	return c.envelope
 }
 
+// SetWSEventGate installs a predicate every raw WebSocket frame is
+// offered to before dispatch; a false return drops the frame. See the
+// wsEventGate field for why it exists and the before-StartWebSocket
+// ordering requirement.
+func (c *Client) SetWSEventGate(gate func([]byte) bool) {
+	c.wsEventGate = gate
+}
+
 // TeamID returns the authenticated workspace's team ID.
 // Empty before Connect is called.
 func (c *Client) TeamID() string {
 	return c.teamID
+}
+
+// EnterpriseID returns the Enterprise Grid id auth.test reported, ""
+// off a grid. Empty before Connect is called.
+func (c *Client) EnterpriseID() string {
+	return c.enterpriseID
+}
+
+// IsGridMember reports whether this session belongs to a member
+// workspace of an Enterprise Grid: auth.test returned an enterprise_id
+// that differs from the team_id. The org-level session, where the two
+// match, is the grid itself and is NOT a member workspace.
+//
+// The org-level half of the rule - that the org-level session's
+// auth.test answers team_id == enterprise_id - is an observation of a
+// live grid (Red Hat's), not documented behavior. If some grid answered
+// a T… team id for its org-level token this would report true there
+// too, which costs nothing while userBoot succeeds for that token and
+// only downgrades a simultaneous userBoot outage.
+//
+// The distinction matters because Slack serves the two sessions
+// different methods: the grid token may call client.userBoot and
+// client.counts but not users.conversations, while a member-workspace
+// token may call users.conversations and users.prefs.get but neither
+// boot method (client.userBoot fails with internal_error, and
+// client.counts / conversations.view / users.channelSections.list with
+// team_is_restricted).
+func (c *Client) IsGridMember() bool {
+	return c.enterpriseID != "" && c.enterpriseID != c.teamID
 }
 
 // TeamName returns the authenticated workspace's display name.
@@ -345,6 +408,7 @@ func (c *Client) Connect(ctx context.Context) error {
 		return fmt.Errorf("auth test failed: %w", err)
 	}
 	c.teamID = resp.TeamID
+	c.enterpriseID = resp.EnterpriseID
 	// Moves the envelope into its post-boot phase: from here on every
 	// request carries _x_csid and slack_route, as the official client's
 	// do once it knows the workspace. Nil for Clients built directly in
@@ -529,7 +593,19 @@ func (c *Client) StartWebSocket(handler EventHandler) error {
 				if !ok {
 					return
 				}
+				// The unfurl chip waiters run before the grid event
+				// gate: unfurl_preview_updated is a shared frame under
+				// the gate, so a sibling socket may claim it - but the
+				// chip waiter is keyed by client_msg_id and lives only
+				// on the client that sent the message, and that client
+				// still needs the frame even when a sibling delivered
+				// it first. With the gate first, the sending session
+				// would drop its copy and its waiter would time out,
+				// degrading the link chip to a plain link.
 				if c.unfurls.deliver(message) {
+					continue
+				}
+				if c.wsEventGate != nil && !c.wsEventGate(message) {
 					continue
 				}
 				dispatchWebSocketEvent(message, handler)
@@ -1014,9 +1090,10 @@ func (c *Client) GetHistorySince(ctx context.Context, channelID, oldest string, 
 }
 
 // GetUserGroups retrieves the workspace's usergroups (the @team
-// handles behind <!subteam^S…> mentions) via usergroups.list.
+// handles behind <!subteam^S…> mentions) via usergroups.list, with
+// their members, so the UI can tell which groups the user is in.
 func (c *Client) GetUserGroups(ctx context.Context) ([]slack.UserGroup, error) {
-	groups, err := c.api.GetUserGroupsContext(ctx)
+	groups, err := c.api.GetUserGroupsContext(ctx, slack.GetUserGroupsOptionIncludeUsers(true))
 	if err != nil {
 		return nil, fmt.Errorf("getting usergroups: %w", err)
 	}
@@ -1118,16 +1195,10 @@ func (c *Client) OpenConversation(ctx context.Context, userIDs []string) (string
 	return ch.ID, alreadyOpen, nil
 }
 
-// UploadFile uploads a single file to a channel (and optional thread)
-// using Slack's V2 external-upload flow. The slack-go library's
-// UploadFileContext (named for the underlying file.upload.v2 API)
-// handles the three internal steps:
-// getUploadURLExternal -> PUT -> completeUploadExternal.
-//
-// caption, when non-empty, is attached as the file's initial_comment.
-// For multi-file batches the caller should set caption on the LAST
-// file only (Slack groups files completed in one share into one
-// message; sequential single-file uploads can't be grouped).
+// UploadFile uploads one file and shares it as a Slack message. It is
+// the single-file case of UploadFiles: one files.completeUploadExternal
+// carrying that file's ID, the channel, threadTS when this is a reply,
+// and caption as initial_comment.
 //
 // size is int64 (matching os.FileInfo.Size()) and is narrowed to int
 // for slack-go. Callers must enforce a reasonable upper bound; this
@@ -1139,23 +1210,19 @@ func (c *Client) UploadFile(
 	size int64,
 	caption string,
 ) (*slack.FileSummary, error) {
-	params := slack.UploadFileParameters{
+	files, err := c.shareFiles(ctx, channelID, threadTS, caption, []FileUpload{{
 		Filename: filename,
 		Reader:   r,
-		FileSize: int(size),
-		Channel:  channelID,
-	}
-	if threadTS != "" {
-		params.ThreadTimestamp = threadTS
-	}
-	if caption != "" {
-		params.InitialComment = caption
-	}
-	f, err := c.api.UploadFileContext(ctx, params)
+		Size:     size,
+	}}, nil)
 	if err != nil {
-		return nil, fmt.Errorf("uploading file %q: %w", filename, err)
+		return nil, err
 	}
-	return f, nil
+	if len(files) == 0 {
+		return &slack.FileSummary{}, nil
+	}
+	out := files[0]
+	return &out, nil
 }
 
 // UnreadInfo holds the unread state for a single channel.

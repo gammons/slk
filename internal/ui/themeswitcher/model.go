@@ -48,8 +48,25 @@ func New() Model {
 }
 
 // SetItems updates the list of available theme names.
+// An open switcher refilters, keeping the highlighted theme when it is
+// still listed.
 func (m *Model) SetItems(items []string) {
+	highlighted := ""
+	if m.visible && m.selected < len(m.filtered) {
+		highlighted = m.items[m.filtered[m.selected]]
+	}
 	m.items = items
+	if !m.visible {
+		return
+	}
+	m.filter()
+	m.selected = 0
+	for i, idx := range m.filtered {
+		if m.items[idx] == highlighted {
+			m.selected = i
+			break
+		}
+	}
 }
 
 // Neighbor returns the theme step places from current in the picker's

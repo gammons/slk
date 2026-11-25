@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -31,16 +32,21 @@ var thickLeftBorder = lipgloss.Border{Left: "▌"}
 const parentSelected = -1
 
 type Model struct {
+	// hide drops a suppressed author's replies as they arrive
+	// (SetHide). The parent is never hidden: the user opened it.
+	hide             func(messages.MessageItem) bool
 	parent           messages.MessageItem
 	replies          []messages.MessageItem
 	channelID        string
 	threadTS         string
 	selected         int
 	focused          bool
+	hideCursor       bool // selected-row tint and bar hidden; the cursor index stays
 	coloredUsernames bool
 	compact          bool
 	showAvatars      bool
 	avatarFn         messages.AvatarFunc
+	sixelAvatarFn    messages.SixelAvatarFunc
 	userNames        map[string]string
 	userStatuses     map[string]peerstatus.Status
 	channelNames     map[string]string
@@ -48,12 +54,15 @@ type Model struct {
 	// currentUserID is the authenticated user; UpdateReaction uses it to
 	// set HasReacted only for the current user's own reactions.
 	currentUserID string
+	// selfGroups are the usergroup IDs the current user belongs to; a
+	// mention of one highlights the message like a direct mention.
+	selfGroups map[string]bool
 
 	// Reply cache: the payload and the list entry of every reply,
 	// index-aligned with m.replies, rebuilt when the replies or the width
 	// change. nil means the cache was discarded and the next View
-	// rebuilds it. The thread pane captures no sixel rows (v1 scope:
-	// sixel renders its placeholder only).
+	// rebuilds it. Each payload carries its reply's sixel images, which
+	// View places with messages.PlaceSixel as the channel pane does.
 	cache         []messages.EntryPayload
 	replyEntries  []entrylist.Entry
 	cacheWidth    int
@@ -125,11 +134,14 @@ type Model struct {
 	version int64
 
 	// imgRenderer is the inline-image rendering pipeline. Configured at
-	// startup via Model.SetImageContext (mirrors messages.Model). v1
-	// renders images inline (kitty + halfblock fully supported; sixel
-	// renders placeholder-only) but does not support click-to-preview
-	// from a thread reply.
+	// startup via Model.SetImageContext (mirrors messages.Model). Images
+	// render inline under every protocol; sixel images are painted
+	// out-of-band from the placements View records (SixelPlacements).
 	imgRenderer *imgrender.Renderer
+
+	// sixelPaints is the placement set produced by the last View, in
+	// pane-local coordinates; see SixelPlacements.
+	sixelPaints []imgpkg.SixelPaint
 
 	// emojiCtx bundles the emoji-image rendering dependencies. Threaded
 	// through RenderSlackMarkdownWith for reply body text and consulted
@@ -257,9 +269,11 @@ func (m *Model) SetThread(parent messages.MessageItem, replies []messages.Messag
 	}
 	m.ClearSelection()
 	m.parent = parent
-	m.replies = replies
+	// channelID first: the App's hide predicate reads the pane's channel.
 	m.channelID = channelID
 	m.threadTS = threadTS
+	replies, _, _ = messages.Visible(m.hide, replies)
+	m.replies = replies
 	// Per the doc comment, the cursor starts at the bottom (newest reply)
 	// so a long thread opens scrolled to the latest activity rather than
 	// jammed up at the parent message. A reply-less thread selects the
@@ -275,6 +289,12 @@ func (m *Model) SetThread(parent messages.MessageItem, replies []messages.Messag
 	// the viewport scrolled to the top. Mirrors messages.Model.SetMessages.
 	m.list.ResetSnap()
 	m.InvalidateCache()
+}
+
+// SetHide sets the predicate for replies the pane must not show (a
+// suppressed author's). It applies to replies given from now on.
+func (m *Model) SetHide(hide func(messages.MessageItem) bool) {
+	m.hide = hide
 }
 
 // SetLastReadTS sets the timestamp the user has already read up to in
@@ -323,6 +343,9 @@ func (m *Model) LastReadTS() string {
 // We always advance `selected` to the new last index so the incoming
 // reply is visible regardless of where the user had scrolled.
 func (m *Model) AddReply(msg messages.MessageItem) {
+	if m.hide != nil && m.hide(msg) {
+		return
+	}
 	// Idempotent on TS -- same race-defense rationale as
 	// messages.Model.AppendMessage: optimistic add (HTTP response) and
 	// WS echo can arrive in either order, and a caller-side dedup map
@@ -566,18 +589,30 @@ func (m *Model) UpdateParentInPlace(item messages.MessageItem) bool {
 	return true
 }
 
-// SetFocused sets whether the thread panel has focus. When the value flips
-// the layout is invalidated so the selected reply's "▌" border
-// re-renders with the appropriate color (Accent when focused, TextMuted when
-// not — see styles.SelectionBorderColor).
+// SetFocused sets whether the thread panel has focus. The selected
+// reply's bar is baked into the reply cache, so a flip drops that cache.
+// Otherwise an unfocused thread keeps the color from when it last had
+// focus, and never shows the shadow the channel pane shows.
 func (m *Model) SetFocused(focused bool) {
-	if m.focused != focused {
-		m.focused = focused
-		m.layoutValid = false
-		m.dirty()
-		debuglog.Perf("thread.SetFocused flip focused=%v replies=%d layout=invalidated",
-			focused, len(m.replies))
+	if m.focused == focused {
+		return
 	}
+	m.focused = focused
+	m.InvalidateCache()
+	debuglog.Perf("thread.SetFocused flip focused=%v replies=%d cache=dropped",
+		focused, len(m.replies))
+}
+
+// SetCursorHighlight shows or hides the selected-row tint and bar.
+// Hiding does not move the cursor. A change bumps Version so the
+// App's pane cache does not keep the previous frame.
+func (m *Model) SetCursorHighlight(on bool) {
+	hide := !on
+	if m.hideCursor == hide {
+		return
+	}
+	m.hideCursor = hide
+	m.dirty()
 }
 
 // Focused returns whether the thread panel has focus.
@@ -588,6 +623,13 @@ func (m *Model) Focused() bool {
 // SetAvatarFunc sets the avatar rendering function.
 func (m *Model) SetAvatarFunc(fn messages.AvatarFunc) {
 	m.avatarFn = fn
+}
+
+// SetSixelAvatarFunc draws avatars as sixel images where fn has one;
+// nil keeps them half-block. See messages.(*Model).SetSixelAvatarFunc.
+func (m *Model) SetSixelAvatarFunc(fn messages.SixelAvatarFunc) {
+	m.sixelAvatarFn = fn
+	m.InvalidateCache()
 }
 
 // SetUserNames sets the user ID -> display name map for mention resolution.
@@ -636,7 +678,21 @@ func (m *Model) SetUserGroups(groups map[string]string) {
 // SetCurrentUser records the authenticated user ID so UpdateReaction can
 // flag the current user's own reactions (HasReacted) correctly.
 func (m *Model) SetCurrentUser(userID string) {
+	if m.currentUserID == userID {
+		return
+	}
 	m.currentUserID = userID
+	// Rendering reads it too: mentions of the user are highlighted.
+	m.InvalidateCache()
+}
+
+// SetSelfUserGroups sets the usergroups the current user belongs to.
+func (m *Model) SetSelfUserGroups(groups map[string]bool) {
+	if maps.Equal(m.selfGroups, groups) {
+		return
+	}
+	m.selfGroups = maps.Clone(groups)
+	m.InvalidateCache()
 }
 
 // SetUserStatuses replaces the user ID -> custom status map; see
@@ -838,6 +894,14 @@ func (m *Model) IsAtBottom() bool {
 	return m.selected >= len(m.replies)-1
 }
 
+// SelectParent moves the selection to the thread's parent message.
+func (m *Model) SelectParent() {
+	if m.selected != parentSelected {
+		m.selected = parentSelected
+		m.InvalidateCache()
+	}
+}
+
 // GoToTop moves the selection to the first reply.
 func (m *Model) GoToTop() {
 	if m.selected != 0 {
@@ -1018,9 +1082,22 @@ func (m *Model) selectedLines(i int) []string {
 	if e.Ref < 0 || e.Ref >= len(m.cache) {
 		return e.Lines
 	}
-	return m.cache[e.Ref].SelectedLines(e, m.list.HasSelection(), func(src string) []string {
+	rows := m.cache[e.Ref].SelectedLines(e, m.list.HasSelection(), m.focused, func(src string) []string {
 		return messages.NewWrapStyles(m.focused, m.compact).SelectedVariant(src, m.cacheWidth)
 	})
+	e.Selected = rows
+	return rows
+}
+
+// cursorLines is what Layout draws for the cursor entry: the selected
+// variant, or the plain row while the highlight is hidden. The parent
+// row is already rendered for the current flag, so its Lines are used
+// either way (see selectedLines).
+func (m *Model) cursorLines(i int) []string {
+	if m.hideCursor {
+		return m.list.Entries()[i].Lines
+	}
+	return m.selectedLines(i)
 }
 
 // ScrollHintForDrag returns -1 if the cursor is within 1 row of the top
@@ -1047,6 +1124,9 @@ func (m *Model) ApplySelectionToBordered(bordered string, topBorderRows, leftBor
 }
 
 func (m *Model) viewInternal(height, width int, applySelection bool) string {
+	// Placements are this frame's alone; every path below either sets
+	// them or leaves none, so a vanished image is never kept alive.
+	m.sixelPaints = nil
 	if m.IsEmpty() {
 		return lipgloss.NewStyle().
 			Width(width).
@@ -1127,7 +1207,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// the rule under it. The rule is not selectable text (Plain stops
 	// before it). Its image hits are kept for previews; reaction hits
 	// remain omitted.
-	parentIsSelected := m.selected == parentSelected
+	parentIsSelected := !m.hideCursor && m.selected == parentSelected
 	parentRendered := m.renderMessage(m.parent, width, parentIsSelected)
 	// The parent bypasses the reply cache and its upload loop. Flush its
 	// groups in draw order even when the thread has no replies. Kitty
@@ -1160,34 +1240,41 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// cache-build treatment (borderSelect / borderInvis below): thick
 	// left border + tint when the cursor sits on the parent, invisible
 	// border otherwise so the parent's width matches the reply rows.
+	pad := styles.Background
 	if parentIsSelected {
 		// After the plain mirror, so it keeps the short form. Skipped
 		// while a text selection exists; see selectedLines.
 		if !m.list.HasSelection() {
 			parentContent = messages.SelectedHeader(parentContent, parentHeader, m.parent.TS, m.parent.Timestamp, parentHeaderBudget)
 		}
-		if styles.TransparentBackground() {
-			// The parent's spans restore BgANSI after each reset, which is
-			// the default background here: a hole in the tint. The opaque
-			// row has the same gap (theme background), left as it is so
-			// the off path stays unchanged.
-			parentContent = messages.RepaintBgToSelectionTint(parentContent, m.focused)
-		}
+		// The header and body paint the theme background themselves.
+		// Swap it for the selection tint, the way a reply's selected
+		// row does, or only the shortfall after a short line is tinted
+		// and the rest of the message stays plain.
+		parentContent = messages.RepaintBgToSelectionTint(parentContent, m.focused)
 		parentContent = lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).
 			BorderForeground(styles.SelectionBorderColor(m.focused)).
 			BorderBackground(styles.SelectionTintColor(m.focused)).
 			Background(styles.SelectionTintColor(m.focused)).
 			Render(parentContent)
+		pad = styles.SelectionTintColor(m.focused)
+	} else if parentRendered.MentionsSelf {
+		// The mention highlight a reply's unselected row gets (WrapRows).
+		parentContent = lipgloss.NewStyle().BorderStyle(thickLeftBorder).BorderLeft(true).
+			BorderForeground(styles.MentionHighlightBar()).
+			BorderBackground(styles.MentionHighlightBg()).
+			Background(styles.MentionHighlightBg()).
+			Render(messages.RepaintBgToMentionTint(parentContent))
+		pad = styles.MentionHighlightBg()
 	} else {
 		parentContent = lipgloss.NewStyle().BorderStyle(styles.InvisibleLeftBorder()).BorderLeft(true).
 			BorderForeground(styles.Background).BorderBackground(styles.Background).
 			Render(parentContent)
 	}
-	// Pad every parent row to the pane width with the theme background.
-	// The outer wrapper used to do this (the parent, unlike a reply, is
-	// not width-filled when rendered); this is the same per-row padding,
-	// applied where it is needed.
-	parentContent = lipgloss.NewStyle().Width(width).Background(styles.Background).Render(parentContent)
+	// Pad every parent row to the pane width. The parent, unlike a
+	// reply, is not width-filled when rendered. A selected parent pads
+	// with the tint so the highlight reaches the right edge.
+	parentContent = lipgloss.NewStyle().Width(width).Background(pad).Render(parentContent)
 	parentSeparator := lipgloss.NewStyle().
 		Width(width).
 		Background(styles.Background).
@@ -1230,7 +1317,15 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 			Foreground(styles.TextMuted).
 			Render("No replies yet")
 		m.list.SetEntries([]entrylist.Entry{parent, {Ref: -1, Lines: strings.Split(empty, "\n")}}, width, false)
-		rows := m.list.Compose(m.list.Static(), "", "", false)
+		frame := m.list.Static()
+		m.sixelPaints = messages.PlaceSixel(frame, m.list.Offsets(), m.list.YOffset(), replyAreaHeight,
+			func(i int) []messages.SixelImage {
+				if i == 0 {
+					return parentRendered.SixelRows
+				}
+				return nil
+			}, nil)
+		rows := m.list.Compose(frame, "", "", false)
 		return fitHeight(chrome+"\n"+strings.Join(rows, "\n"), height)
 	}
 
@@ -1248,7 +1343,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// MUST call InvalidateCache() on its mutation path. EnterReactionNav /
 	// ExitReactionNav / ReactionNavLeft / ReactionNavRight all do;
 	// MoveUp/MoveDown call ExitReactionNav before mutating selected.
-	// (SetFocused does not: plan decision P2, a known stale-border bug.)
+	// SetFocused does too, so an unfocused thread picks up the shadow.
 	if m.cache == nil || m.cacheWidth != width || m.cacheReplyLen != len(m.replies) {
 		var perfReason string
 		var perfStart time.Time
@@ -1288,12 +1383,11 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 				Ref:        i,
 				Selectable: true,
 				Lines:      w.Lines,
-				Selected:   w.Selected,
 				Plain:      w.Plain,
 				ColOffset:  1,
 				Hits:       append(r.Hits, w.LinkHits...),
 			})
-			m.cache = append(m.cache, messages.EntryPayload{ShortSrc: w.ShortSrc, Flushes: flushes})
+			m.cache = append(m.cache, messages.EntryPayload{SelSrc: w.SelSrc, ShortSrc: w.ShortSrc, Flushes: flushes, SixelRows: r.SixelRows})
 			m.replyIDToIdx[reply.TS] = i
 		}
 		m.cacheWidth = width
@@ -1308,14 +1402,13 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// The list: the parent, then for each reply its day divider (when
 	// its local day differs from the previous one, seeded with the
 	// parent's), the "── new ──" landmark before the first reply past
-	// the unread boundary, the reply, and a full-width rule between
-	// replies. Dividers, landmark and rules are decorations: not
-	// selectable, not text-selectable.
-	ruleStyle := lipgloss.NewStyle().
+	// the unread boundary, the reply, and a blank row between replies
+	// (the channel pane's spacing). Dividers, landmark and spacers are
+	// decorations: not selectable, not text-selectable.
+	replySeparator := lipgloss.NewStyle().
 		Width(width).
 		Background(styles.Background).
-		Foreground(styles.Border)
-	replySeparator := ruleStyle.Render(strings.Repeat("─", width))
+		Render("")
 	var newLandmark string
 	if m.unreadBoundaryTS != "" {
 		newLandmark = lipgloss.NewStyle().
@@ -1330,20 +1423,28 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	decoration := func(row string) entrylist.Entry { return entrylist.Entry{Ref: -1, Lines: []string{row}} }
 	entries := make([]entrylist.Entry, 0, 2*len(m.replyEntries)+2)
 	entries = append(entries, parent)
+	// sixel is index-aligned with entries: the images of the parent and
+	// of each reply, nil for the decorations between them.
+	sixel := make([][]messages.SixelImage, 0, cap(entries))
+	sixel = append(sixel, parentRendered.SixelRows)
 	lastDate := messages.DateFromTS(m.parent.TS)
 	landmarkInserted := false
 	for i, e := range m.replyEntries {
 		if replyDate := messages.DateFromTS(m.replies[i].TS); replyDate != "" && replyDate != lastDate {
 			entries = append(entries, decoration(dateSeparatorStyle.Render("── "+messages.FormatDateSeparator(replyDate)+" ──")))
+			sixel = append(sixel, nil)
 			lastDate = replyDate
 		}
 		if !landmarkInserted && newLandmark != "" && m.replies[i].TS > m.unreadBoundaryTS {
 			entries = append(entries, decoration(newLandmark))
+			sixel = append(sixel, nil)
 			landmarkInserted = true
 		}
 		entries = append(entries, e)
+		sixel = append(sixel, m.cache[i].SixelRows)
 		if i < len(m.replyEntries)-1 {
 			entries = append(entries, decoration(replySeparator))
+			sixel = append(sixel, nil)
 		}
 	}
 	m.list.SetEntries(entries, width, keepPosition)
@@ -1372,7 +1473,9 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	// Snap to the cursor if it moved, slice the window, translate the
 	// reply hits (content-relative), overlay the selection, draw the
 	// scrollbar.
-	frame := m.list.Layout(m.selected, m.selectedLines)
+	frame := m.list.Layout(m.selected, m.cursorLines)
+	m.sixelPaints = messages.PlaceSixel(frame, m.list.Offsets(), m.list.YOffset(), replyAreaHeight,
+		func(i int) []messages.SixelImage { return sixel[i] }, nil)
 	rows := m.list.Compose(frame, "", "", applySelection)
 	m.layoutValid = true
 	return fitHeight(chrome+"\n"+strings.Join(rows, "\n"), height)
@@ -1474,6 +1577,7 @@ func (m *Model) renderContext() *messages.RenderContext {
 		UserNames:        m.userNames,
 		ChannelNames:     m.channelNames,
 		UserGroups:       m.userGroups,
+		Self:             messages.SelfMentions{UserID: m.currentUserID, Groups: m.selfGroups},
 		Emoji:            m.emojiCtx,
 		Images:           m.imgRenderer,
 		ImageChannel:     m.channelID,
@@ -1503,14 +1607,16 @@ func (m *Model) DraftRenderOptions(userID string) messages.RenderOptions {
 }
 
 // renderMessage renders msg with the thread pane's options: an avatar
-// only with SetShowAvatars, no "(edited)", no broadcast label, no reply
-// affordance and no sixel rows (plan decision P3). Image hits are
-// recorded so a click opens the preview, as in the channel pane.
+// only with SetShowAvatars, no "(edited)", no broadcast label and no
+// reply affordance. Image hits are recorded so a click opens the
+// preview, and sixel rows so View can paint sixel images, as in the
+// channel pane.
 func (m *Model) renderMessage(msg messages.MessageItem, width int, isSelected bool) messages.RenderedMessage {
 	msg = m.huddleView(msg)
-	opt := messages.RenderOptions{IsSelected: isSelected, ImageHits: true}
+	opt := messages.RenderOptions{IsSelected: isSelected, ImageHits: true, SixelRows: true}
 	if !m.compact && m.showAvatars && m.avatarFn != nil {
 		opt.Avatar = m.avatarFn(msg.UserID)
+		opt.AvatarSixelKey, opt.AvatarSixel = messages.SixelAvatar(m.sixelAvatarFn, msg.UserID)
 	}
 	return messages.RenderMessage(msg, width, m.renderContext(), opt)
 }
@@ -1524,3 +1630,9 @@ func (m *Model) huddleView(msg messages.MessageItem) messages.MessageItem {
 	}
 	return messages.HuddleView(msg, m.userNames)
 }
+
+// SixelPlacements returns the placements the most recent View wants
+// painted, in the pane's local frame (row 0 is the first row under the
+// chrome; see imgpkg.SixelPaint), as messages.(*Model).SixelPlacements
+// does for the channel pane. Valid until the next View call.
+func (m *Model) SixelPlacements() []imgpkg.SixelPaint { return m.sixelPaints }

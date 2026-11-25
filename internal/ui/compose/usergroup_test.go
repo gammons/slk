@@ -120,3 +120,17 @@ func TestMentionPickerKeepsGroupsWithMembershipLoaded(t *testing.T) {
 	}
 	t.Errorf("usergroup entry dropped by membership filtering; got %+v", m.MentionUsers())
 }
+
+// Two Grid member workspaces can each have a group with the same
+// handle (#214). Sending must emit one valid token, not nest the second
+// group's token inside the first one's "@handle" label.
+func TestTranslateMentionsForSendDuplicateGroupHandle(t *testing.T) {
+	m := New("general")
+	m.SetUserGroups(map[string]string{"S2": "design", "S1": "design"})
+	const want = "ping <!subteam^S1|@design> now"
+	for i := 0; i < 50; i++ {
+		if got := m.TranslateMentionsForSend("ping @design now"); got != want {
+			t.Fatalf("iteration %d: TranslateMentionsForSend = %q, want %q", i, got, want)
+		}
+	}
+}
