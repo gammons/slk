@@ -48,8 +48,18 @@ func TestDraftServiceNilFuncsAreUnsupported(t *testing.T) {
 func TestDraftServicePassesArguments(t *testing.T) {
 	key := DraftKey{TeamID: "T1", ChannelID: "C1", ThreadTS: "1.0"}
 	at := time.Unix(100, 0)
+	errDiscardSentinel := errors.New("discard sentinel")
+	errDeleteSentinel := errors.New("delete sentinel")
+	wantDraft := Draft{ID: "Dr1", Key: key}
 	var got []string
 	s := NewDraftService(DraftServiceFuncs{
+		Load: func(teamID string) ([]Draft, error) {
+			if teamID != "T1" {
+				t.Errorf("Load(%q)", teamID)
+			}
+			got = append(got, "load")
+			return []Draft{wantDraft}, nil
+		},
 		Save: func(k DraftKey, text string, edited time.Time) (DraftSaveResult, error) {
 			if k != key || text != "hi" || !edited.Equal(at) {
 				t.Errorf("Save(%v, %q, %v)", k, text, edited)
@@ -57,9 +67,48 @@ func TestDraftServicePassesArguments(t *testing.T) {
 			got = append(got, "save")
 			return DraftSaveResult{Replaced: true}, nil
 		},
+		Discard: func(k DraftKey) error {
+			if k != key {
+				t.Errorf("Discard(%v)", k)
+			}
+			got = append(got, "discard")
+			return errDiscardSentinel
+		},
+		Delete: func(teamID, draftID string) error {
+			if teamID != "T1" || draftID != "Dr1" {
+				t.Errorf("Delete(%q, %q)", teamID, draftID)
+			}
+			got = append(got, "delete")
+			return errDeleteSentinel
+		},
 	})
+
 	res, err := s.Save(key, "hi", at)
-	if err != nil || !res.Replaced || len(got) != 1 {
-		t.Errorf("res=%+v err=%v calls=%v", res, err, got)
+	if err != nil || !res.Replaced {
+		t.Errorf("Save result=%+v err=%v", res, err)
+	}
+
+	drafts, err := s.Load("T1")
+	if err != nil || len(drafts) != 1 || drafts[0] != wantDraft {
+		t.Errorf("Load result=%+v err=%v", drafts, err)
+	}
+
+	if err := s.Discard(key); !errors.Is(err, errDiscardSentinel) {
+		t.Errorf("Discard err = %v, want %v", err, errDiscardSentinel)
+	}
+
+	if err := s.Delete("T1", "Dr1"); !errors.Is(err, errDeleteSentinel) {
+		t.Errorf("Delete err = %v, want %v", err, errDeleteSentinel)
+	}
+
+	if want := []string{"save", "load", "discard", "delete"}; len(got) != len(want) {
+		t.Errorf("calls=%v, want %v", got, want)
+	} else {
+		for i, c := range want {
+			if got[i] != c {
+				t.Errorf("calls=%v, want %v", got, want)
+				break
+			}
+		}
 	}
 }
