@@ -42,6 +42,7 @@ type Model struct {
 var _ interface {
 	chrome.Dialog
 	chrome.Boxed
+	chrome.Clickable
 } = (*Model)(nil)
 
 func New() Model { return Model{} }
@@ -97,10 +98,28 @@ func boxWidth(termWidth int) int { return max(min(termWidth*2/3, 100), 30) }
 
 func listRows(termHeight int) int { return max(min(maxVisibleRows, termHeight-boxChromeRows), 1) }
 
+// listTopOffset is the box-local row of the first list row.
+func listTopOffset() int { return chrome.BodyTop(messages.ChromeStyles(), false) }
+
 // BoxSize returns the outer size of the rendered box.
 func (m *Model) BoxSize(termWidth, termHeight int) (int, int) {
 	start, end := chrome.Window(m.selected, len(m.rows), listRows(termHeight))
 	return boxWidth(termWidth), max(end-start, 1) + boxChromeRows
+}
+
+// ClickRow moves the selection to the list row at box-local localY (0 is
+// the top border) and reports whether a row was there.
+func (m *Model) ClickRow(termWidth, termHeight, localY int) bool {
+	row := localY - listTopOffset()
+	if row < 0 {
+		return false
+	}
+	start, end := chrome.Window(m.selected, len(m.rows), listRows(termHeight))
+	if row >= end-start {
+		return false
+	}
+	m.selected = start + row
+	return true
 }
 
 // View renders the box alone (tests).

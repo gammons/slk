@@ -38,10 +38,19 @@ func (a *App) refreshDraftList() {
 			Destination: a.draftLabel(d.Key),
 			Age:         draftAge(now, d.Updated),
 			Marker:      draftMarker(d),
-			Preview:     strings.Join(strings.Fields(a.composerFor(d.Key.ThreadTS).MentionsForEdit(d.Text)), " "),
+			Preview:     a.draftRowPreview(d),
 		})
 	}
 	a.draftList.SetRows(rows)
+}
+
+// draftRowPreview is a draft's text as the :drafts dialog shows it:
+// composer form (mentions as @names, as MentionsForEdit gives back)
+// collapsed onto one line. Shared by the list's Preview column and the
+// delete-confirm body. Named apart from (*App).draftPreview
+// (draft_preview.go), the unrelated ctrl+r compose-box preview.
+func (a *App) draftRowPreview(d core.Draft) string {
+	return strings.Join(strings.Fields(a.composerFor(d.Key.ThreadTS).MentionsForEdit(d.Text)), " ")
 }
 
 // draftLabel names a draft's conversation.
@@ -77,7 +86,10 @@ func draftAge(now, t time.Time) string {
 	return t.Format("Jan 2")
 }
 
-// draftMarker names a hands-off draft's kind (spec, Behaviour).
+// draftMarker names a hands-off draft's kind: the design's hands-off
+// table (docs/superpowers/specs/2026-11-25-slack-drafts-sync-design.md,
+// "Behaviour") lists scheduled, file-attached and composer-saved drafts
+// as ones slk will not overwrite; the list shows which kind a row is.
 func draftMarker(d core.Draft) string {
 	switch {
 	case !d.Scheduled.IsZero():
@@ -110,7 +122,7 @@ func (a *App) jumpToDraft(d core.Draft) tea.Cmd {
 
 func (a *App) confirmDeleteDraft(d core.Draft) {
 	teamID := a.activeTeamID
-	body := a.draftLabel(d.Key) + ": " + strings.Join(strings.Fields(a.composerFor(d.Key.ThreadTS).MentionsForEdit(d.Text)), " ")
+	body := a.draftLabel(d.Key) + ": " + a.draftRowPreview(d)
 	a.openConfirmPrompt("Delete draft?", body, func() tea.Msg {
 		return draftDeleteConfirmedMsg{teamID: teamID, draft: d}
 	})

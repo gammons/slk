@@ -115,3 +115,55 @@ func TestDraftList_ActsOnTheRowShown(t *testing.T) {
 		t.Errorf("pending nav = %+v, want C3 (the first row now shown)", a.pendingLinkNav)
 	}
 }
+
+// draftsClickApp opens the :drafts dialog over an 80x24 App with two
+// drafts, and returns the box's top-left screen cell. Mirrors
+// marksClickApp (marks_mode_test.go).
+func draftsClickApp(t *testing.T) (*App, int, int) {
+	t.Helper()
+	a := jumpMarkTestApp(t)
+	a.SetDraftService(core.NewDraftService(core.DraftServiceFuncs{}))
+	a.width, a.height = 80, 24
+	a.drafts.rows["T1"] = listDrafts()
+	executeCommand(a, "drafts")
+	if a.mode != ModeDrafts {
+		t.Fatalf("mode = %v, want ModeDrafts", a.mode)
+	}
+	w, h := a.draftList.BoxSize(a.width, a.height)
+	return a, max((a.width-w)/2, 0), max((a.height-h)/2, 0)
+}
+
+// Before ModeDrafts had a click target, reduceModalClick fell back to
+// treating any click, even one inside the box, as Esc and dismissing the
+// dialog. A click that lands inside the box but off a row (the title)
+// must now be a no-op that leaves the dialog open, exactly like the
+// marks overlay (TestMarksOverlay_ClickInsideOffRowKeepsListOpen).
+func TestDraftsOverlay_ClickInsideOffRowKeepsListOpen(t *testing.T) {
+	a, x, y := draftsClickApp(t)
+	// Box-local row 2 is the title (border, padding, title).
+	if _, cmd := a.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: x + 3, Y: y + 2}); cmd != nil {
+		t.Errorf("clicking the title returned a cmd: %v", cmd)
+	}
+	if a.mode != ModeDrafts || !a.draftList.IsVisible() {
+		t.Errorf("the list must stay open: mode=%v visible=%v", a.mode, a.draftList.IsVisible())
+	}
+}
+
+// A click directly on a row selects it and acts on it exactly as Enter
+// would (the same activation path), rather than being swallowed as the
+// blanket Esc the missing click target used to produce.
+func TestDraftsOverlay_ClickRowJumps(t *testing.T) {
+	a, x, y := draftsClickApp(t)
+	// The list starts at box-local row 4: border, padding, title, blank.
+	_, cmd := a.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: x + 3, Y: y + 4 + 1})
+	if cmd == nil {
+		t.Fatal("clicking a row must act on it")
+	}
+	cmd()
+	if a.pendingLinkNav == nil || a.pendingLinkNav.Location.ChannelID != "C3" {
+		t.Errorf("pending nav = %+v, want a jump to C3 (the second row)", a.pendingLinkNav)
+	}
+	if a.mode != ModeNormal || a.draftList.IsVisible() {
+		t.Errorf("the jump must close the list: mode=%v visible=%v", a.mode, a.draftList.IsVisible())
+	}
+}
