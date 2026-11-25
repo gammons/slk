@@ -71,14 +71,7 @@ func (p *pendingLinkNav) wrapThreadLoad(cmd tea.Cmd, authoritative bool, loads i
 
 var reduceLinks reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	if m, ok := msg.(OpenSlackLinkMsg); ok {
-		// The jump comes from outside, so no overlay or prompt on screen
-		// belongs to it; leave them the way Esc would before navigating.
-		if a.mode == ModeOpenSlackLink {
-			a.clearSlackLink()
-		}
-		if a.mode != ModeNormal {
-			a.SetMode(ModeNormal)
-		}
+		a.dismissForExternalOpen()
 		return a.openFinderPermalink(m.URL), true
 	}
 	if dropped, ok := msg.(finderPermalinkDroppedMsg); ok {
@@ -432,4 +425,25 @@ func (a *App) permalinkThreadParent(channelID, threadTS string, knownReply bool)
 	}
 
 	return parent
+}
+
+// dismissForExternalOpen clears what is on screen before a jump that
+// comes from outside the TUI (`slk --open`), the way Esc would: nothing
+// shown belongs to that jump, and an overlay left drawn would cover the
+// destination or keep taking keys. The image preview and the confirm
+// prompt are drawn independently of the mode, so SetMode alone does not
+// close them. A dismissed prompt is declined; queued action dialogs stay
+// queued.
+func (a *App) dismissForExternalOpen() {
+	a.preview.Close()
+	if a.confirmPrompt.IsVisible() {
+		a.confirmPrompt.Close()
+		a.clearShownPrompt()
+	}
+	if a.mode == ModeOpenSlackLink {
+		a.clearSlackLink()
+	}
+	if a.mode != ModeNormal {
+		a.SetMode(ModeNormal)
+	}
 }

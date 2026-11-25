@@ -57,6 +57,17 @@ var (
 )
 
 func main() {
+	// `slk --open` talks to the running TUI and exits. It runs before the
+	// debug log is set up: debuglog.Init truncates slk-debug.log in the
+	// cwd, which would erase the running session's log on every link.
+	if len(os.Args) > 1 && os.Args[1] == "--open" {
+		if err := openViaControlSocket(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	// Debug log: when SLK_DEBUG is set, debuglog.Init opens
 	// slk-debug.log in cwd (truncating any prior session) and routes
 	// both the package-internal logger and the global stdlib log to
@@ -89,12 +100,6 @@ func main() {
 				err = addWorkspace(browser)
 			}
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
-			}
-			return
-		case "--open":
-			if err := openViaControlSocket(os.Args[2:]); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
 			}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -123,17 +124,132 @@ func TestControlSocket_LeavesALiveOwnerAlone(t *testing.T) {
 	}
 }
 
-func TestControlSocket_ReplacesAStaleSocketFile(t *testing.T) {
+func TestControlSocket_ReplacesAnAbandonedSocket(t *testing.T) {
 	path := shortSocketPath(t)
-	if err := os.WriteFile(path, nil, 0o600); err != nil {
+	// A socket file nothing listens on, as a crashed slk leaves behind.
+	dead, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead.(*net.UnixListener).SetUnlinkOnClose(false)
+	dead.Close()
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("abandoned socket missing: %v", err)
+	}
+
+	var rec recorder
+	ctl, err := startControlSocket(path, rec.send)
+	if err != nil || ctl == nil {
+		t.Fatalf("start over abandoned socket: ctl=%v err=%v", ctl, err)
+	}
+	defer ctl.Close()
+	t.Setenv(controlSocketEnv, path)
+	if err := openViaControlSocket([]string{"https://myteam.slack.com/archives/C1/p1779284733270139"}); err != nil {
+		t.Fatalf("open after takeover: %v", err)
+	}
+}
+
+func TestControlSocket_RefusesToRemoveANonSocket(t *testing.T) {
+	path := shortSocketPath(t)
+	if err := os.WriteFile(path, []byte("keep me"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var rec recorder
 	ctl, err := startControlSocket(path, rec.send)
-	if err != nil || ctl == nil {
-		t.Fatalf("start over stale file: ctl=%v err=%v", ctl, err)
+	if err == nil || ctl != nil {
+		t.Fatalf("start over a regular file: ctl=%v err=%v, want an error", ctl, err)
 	}
-	ctl.Close()
+	got, readErr := os.ReadFile(path)
+	if readErr != nil || string(got) != "keep me" {
+		t.Fatalf("regular file changed: %q, %v", got, readErr)
+	}
+}
+
+func TestControlSocket_ConcurrentStartsKeepOneOwner(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		path := shortSocketPath(t)
+		const n = 4
+		recs := make([]recorder, n)
+		ctls := make([]io.Closer, n)
+		errs := make([]error, n)
+		var wg sync.WaitGroup
+		for j := 0; j < n; j++ {
+			wg.Add(1)
+			go func(j int) {
+				defer wg.Done()
+				ctls[j], errs[j] = startControlSocket(path, recs[j].send)
+			}(j)
+		}
+		wg.Wait()
+
+		owners := 0
+		for j := 0; j < n; j++ {
+			if errs[j] != nil {
+				t.Fatalf("run %d start %d: %v", i, j, errs[j])
+			}
+			if ctls[j] != nil {
+				owners++
+				defer ctls[j].Close()
+			}
+		}
+		if owners != 1 {
+			t.Fatalf("run %d: %d instances listening, want 1", i, owners)
+		}
+		t.Setenv(controlSocketEnv, path)
+		if err := openViaControlSocket([]string{"https://myteam.slack.com/archives/C1/p1779284733270139"}); err != nil {
+			t.Fatalf("run %d: open: %v", i, err)
+		}
+		got := 0
+		for j := 0; j < n; j++ {
+			if ctls[j] != nil {
+				got = len(recs[j].all())
+			}
+		}
+		if got != 1 {
+			t.Fatalf("run %d: owner received %d msgs, want 1", i, got)
+		}
+	}
+}
+
+func TestReadControlLine(t *testing.T) {
+	const url = "https://myteam.slack.com/archives/C054JFCBN69/p1779284733270139?thread_ts=1779284700.000100"
+	if got, err := readControlLine(strings.NewReader("open " + url + "\n")); err != nil || got != "open "+url+"\n" {
+		t.Fatalf("newline-terminated: %q, %v", got, err)
+	}
+	if got, err := readControlLine(strings.NewReader("open " + url)); err != nil || got != "open "+url {
+		t.Fatalf("EOF-terminated: %q, %v", got, err)
+	}
+	long := "open " + url + "&pad=" + strings.Repeat("x", maxControlLine)
+	if _, err := readControlLine(strings.NewReader(long)); err == nil {
+		t.Fatal("over-long request without newline was accepted")
+	}
+	if _, err := readControlLine(strings.NewReader(long + "\n")); err == nil {
+		t.Fatal("over-long request with newline was accepted")
+	}
+	exact := strings.Repeat("x", maxControlLine-1) + "\n"
+	if _, err := readControlLine(strings.NewReader(exact)); err != nil {
+		t.Fatalf("request of exactly %d bytes refused: %v", maxControlLine, err)
+	}
+}
+
+func TestControlSocket_RefusesAnOverlongRequest(t *testing.T) {
+	path := shortSocketPath(t)
+	var rec recorder
+	ctl, err := startControlSocket(path, rec.send)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctl.Close()
+	// A valid permalink whose query runs past the limit: cutting it would
+	// still parse, so the server must refuse it, not open the cut link.
+	conn := dialControl(t, path)
+	conn.write("open https://myteam.slack.com/archives/C1/p1779284733270139?thread_ts=1779284700.000100" + strings.Repeat("0", maxControlLine) + "\n")
+	if reply := conn.reply(); !strings.HasPrefix(reply, "error:") {
+		t.Fatalf("reply = %q, want an error", reply)
+	}
+	if n := len(rec.all()); n != 0 {
+		t.Fatalf("%d msgs reached the program, want 0", n)
+	}
 }
 
 func TestOpenViaControlSocket_NoRunningSlk(t *testing.T) {

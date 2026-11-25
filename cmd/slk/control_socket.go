@@ -38,17 +38,32 @@ func controlSocketPath() string {
 // valid permalink to the program as an OpenSlackLinkMsg. It never types
 // into the TUI, so a request cannot end up in a composer. When another
 // live slk already owns the socket it leaves it alone and returns nil.
+//
+// The ownership check, the stale-socket removal and the bind run under
+// an exclusive lock on path+".lock", so two slk starting together cannot
+// both find the socket dead and have the second unlink the first one's
+// live listener.
 func startControlSocket(path string, send func(tea.Msg)) (io.Closer, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, fmt.Errorf("creating control socket dir: %w", err)
+	}
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("opening control socket lock: %w", err)
+	}
+	defer lock.Close()
+	if err := lockFile(lock); err != nil {
+		return nil, fmt.Errorf("locking control socket: %w", err)
+	}
+	defer func() { _ = unlockFile(lock) }()
+
 	if conn, err := net.DialTimeout("unix", path, 500*time.Millisecond); err == nil {
 		conn.Close()
 		debuglog.General("control socket %s is owned by another slk; not listening", path)
 		return nil, nil
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("removing stale control socket: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, fmt.Errorf("creating control socket dir: %w", err)
+	if err := removeStaleSocket(path); err != nil {
+		return nil, err
 	}
 	ln, err := net.Listen("unix", path)
 	if err != nil {
@@ -60,6 +75,26 @@ func startControlSocket(path string, send func(tea.Msg)) (io.Closer, error) {
 	}
 	go serveControlSocket(ln, send)
 	return ln, nil
+}
+
+// removeStaleSocket deletes a socket nothing answers on (left behind by a
+// crash). Anything else at path is refused: a failed dial does not make a
+// regular file, or a directory, a stale socket.
+func removeStaleSocket(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("checking control socket path: %w", err)
+	}
+	if info.Mode().Type() != os.ModeSocket {
+		return fmt.Errorf("control socket path %s exists and is not a socket", path)
+	}
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("removing stale control socket: %w", err)
+	}
+	return nil
 }
 
 func serveControlSocket(ln net.Listener, send func(tea.Msg)) {
@@ -79,8 +114,8 @@ func serveControlSocket(ln net.Listener, send func(tea.Msg)) {
 func handleControlConn(conn net.Conn, send func(tea.Msg)) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	line, err := bufio.NewReader(io.LimitReader(conn, maxControlLine)).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
+	line, err := readControlLine(conn)
+	if err != nil {
 		fmt.Fprintf(conn, "error: %v\n", err)
 		return
 	}
@@ -97,6 +132,21 @@ func handleControlConn(conn net.Conn, send func(tea.Msg)) {
 	default:
 		fmt.Fprintf(conn, "error: unknown command %q\n", cmd)
 	}
+}
+
+// readControlLine reads one request. A request ends at a newline, or at
+// EOF when the client closes its side early. One that reaches
+// maxControlLine without a newline is refused rather than cut, since a
+// cut permalink can still parse and point somewhere else.
+func readControlLine(r io.Reader) (string, error) {
+	line, err := bufio.NewReader(io.LimitReader(r, maxControlLine+1)).ReadString('\n')
+	if len(line) > maxControlLine {
+		return "", fmt.Errorf("request longer than %d bytes", maxControlLine)
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	return line, nil
 }
 
 // openViaControlSocket is `slk --open <permalink>`: it asks the running
