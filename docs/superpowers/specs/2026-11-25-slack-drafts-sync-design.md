@@ -96,27 +96,45 @@ into a composer, never updated. The hands-off kinds are:
 
 ### Saving
 
-A composer slot (team, channel, thread) whose text changed is *dirty*. About
-2 seconds after the last edit, and immediately when the composer moves to
-another conversation, the workspace switches, or slk quits, every dirty slot
-is flushed: non-empty text is saved, empty text discards the slot's draft.
-slk sends the slot's last-edit time as `client_last_updated_ts`.
+Every 2 seconds slk compares each composer slot (team, channel, thread) with
+the text Slack last had from it. The composer's text changes through many
+paths (keys, paste, the external editor, emoji insertion, `/msg` pre-fill),
+so comparing catches them all where hooking each would miss one.
 
-Not dirtied:
+- The visible slot is saved once its text has stayed the same for a whole
+  interval, 2 to 4 seconds after the last keystroke.
+- A slot the composer has moved away from (another conversation, another
+  workspace) is saved at the next check; it stays in memory until then.
+- On quit, every slot that differs is saved with a 2-second deadline.
 
-- text placed in the composer by edit mode (`E`) — that is a sent message;
-- text written into a slot by a remote restore;
+Non-empty text is saved; empty or whitespace-only text discards the slot's
+draft. slk sends the time it first saw the slot's current text as
+`client_last_updated_ts`. A slot is not compared before its workspace's
+drafts have been listed once, so slk never creates a draft Slack already has.
+
+Not drafts:
+
+- the text edit mode (`E`) puts in the composer — that is a sent message; the
+  draft held aside during the edit is what is compared;
+- text a remote restore writes (it is recorded as Slack's text);
+- the empty composer a send leaves behind (the send marks the draft sent);
 - pending local attachments (a slot with attachments and no text is empty
   for sync).
+
+A save that fails for any reason other than a refusal is retried with
+backoff (4 s doubling to at most a minute).
 
 ### Restoring
 
 At connect and on every reconnect slk lists the workspace's drafts. Each
 writable draft is restored into its slot (the thread composer when it has a
-`thread_ts`) only when the slot is **not visible and not dirty**. The visible
-composer is never written by a remote draft. A slot whose draft disappeared
-from Slack (sent or deleted elsewhere) is cleared only if it still holds
-exactly the text slk last synced.
+`thread_ts`) only when the slot still holds the text Slack last had from slk,
+i.e. the user has typed nothing there since. The visible composer is
+additionally written only when it is **empty**: text on screen is never
+replaced. (The composer is usually bound to its first conversation before the
+list arrives, so without this its draft would never appear.) A slot whose
+draft disappeared from Slack (sent or deleted elsewhere) is cleared only if it
+is not visible and still holds exactly the text slk last synced.
 
 ### Sending
 
@@ -134,7 +152,8 @@ user typed in slk:
 |---|---|
 | `draft_has_conflict` on update | retry once with the current time as `client_last_updated_ts`; toast "Replaced a newer draft from another device" |
 | `attached_draft_exists` on create | list, adopt the attached draft's id, update it; same toast |
-| the destination's attached draft is hands-off (scheduled or has files), or `draft_update_invalid` / `attached_draft_exists` naming a deleted draft | keep the text in slk only; one toast per conversation per session: "Slack already has a draft here that slk won't overwrite" |
+| `draft_not_found`, `draft_already_deleted` or `draft_already_sent` on update | forget the id and create a new draft |
+| the destination's attached draft is hands-off (scheduled or has files), or `draft_update_invalid` / `attached_draft_exists` naming a deleted draft | keep the text in slk only and stop syncing that conversation until the next list shows a writable draft there; one toast: "Slack already has a draft here that slk won't overwrite" |
 
 Stashed drafts never block a save: several may share a destination with the
 attached draft.
@@ -171,8 +190,9 @@ internal/slack/drafts.go     wire: list, create, update, delete; postMessage dra
 internal/core                DraftService port, DraftKey, Draft, messages
 cmd/slk/drafts.go            engine: per-workspace index, create/update choice,
                              one call in flight per key, conflicts, list on connect
-internal/ui/compose          dirty set + last-edit time, ApplyRemoteDraft
-internal/ui/reducer_drafts.go  debounce, flush, apply loaded/saved/deleted drafts
+internal/ui/compose          slot access: Slots, SlotText, ApplyRemoteDraft, ClearSlot
+internal/ui/drafts.go        draftSync: the 2 s comparison, restore, results
+internal/ui/reducer_drafts.go  routes the draft messages
 internal/ui/draftlist        the list widget (chrome); glue in internal/ui/drafts_list.go
 ```
 
@@ -197,10 +217,11 @@ internal/ui/draftlist        the list widget (chrome); glue in internal/ui/draft
   `slackhttp.WithReason`. Sent urlencoded through `postForm` like every other
   hand-rolled endpoint.
 - Slack's `{"ok":false,"error":code}` is `*DraftRejectedError{Code}`.
-- `postMessage` (and so `SendMessage` / `SendReply`) take an optional
-  `*DraftRef{ID, LastUpdatedTS}`, added as `draft_id` and
-  `current_draft_last_updated_ts`. The chips path (`sendWithChips`) carries
-  it too.
+- `SendDraft(ctx, channelID, threadTS, text, broadcast, DraftRef)` posts as
+  `SendMessage` / `SendReply` do, adding `draft_id` and
+  `current_draft_last_updated_ts` (`DraftRef{ID, LastUpdatedTS}`). Both the
+  chips path and a plain hand-rolled `chat.postMessage` form carry them;
+  `SendMessage` and `SendReply` are unchanged.
 - `Draft` decodes `id`, destinations, `blocks`, `file_ids`, `date_scheduled`,
   `is_from_composer`, `last_updated_ts`, `date_created`.
 
@@ -216,16 +237,22 @@ type Draft struct {
     Updated     time.Time
     Scheduled   time.Time // zero unless scheduled
     FileCount   int
-    Stashed     bool
+    Saved       bool      // is_from_composer: "Save as draft" or "New message"
 }
 
 func (d Draft) Writable() bool // attached, addressed, unscheduled, no files
 
+type DraftSaveResult struct{ Draft Draft; Replaced bool }
+type DraftChange struct{ Key DraftKey; Text string; Edited time.Time } // Text "" discards
+var ErrDraftHandsOff error // the destination's draft is one slk won't overwrite
+
+// Blocking, like CommandService.Run: the UI runs them from tea.Cmds and
+// wraps the answers in its own messages (core cannot import the UI).
 type DraftService interface {
-    Load(teamID string) Msg                         // DraftsLoadedMsg
-    Save(key DraftKey, text string, edited time.Time) Msg // DraftSavedMsg
-    Discard(key DraftKey) Msg                       // DraftSavedMsg (gone)
-    Delete(teamID, draftID string) Msg              // DraftDeletedMsg
+    Load(teamID string) ([]Draft, error)
+    Save(key DraftKey, text string, edited time.Time) (DraftSaveResult, error)
+    Discard(key DraftKey) error
+    Delete(teamID, draftID string) error
 }
 ```
 
@@ -241,28 +268,29 @@ One `draftEngine` per workspace (on `WorkspaceContext`), owning:
 - per-key serialization: at most one Slack call in flight per key; a newer
   save for a busy key replaces any queued one, so saves never reorder;
 - the create/update choice and the conflict table above;
-- `DraftFor(key)` for the send adapters (`SendMessage` / `SendReply` in
-  `main.go`), which waits for that key's in-flight save, returns the
-  `DraftRef`, and forgets the key once the post succeeds.
+- `beginSend(dest)` for the send adapters (`Send` / `SendReply` in
+  `main.go`, through `sendWithDraft`), which waits for that key's in-flight
+  save, returns the `DraftRef`, and forgets the key once the post succeeds.
 
-At connect and on reconnect `connectWorkspace` calls `Load` and the result
-reaches the UI as `DraftsLoadedMsg`, the same way other boot data does.
+On every connect (first and reconnect) the workspace's `rtmEventHandler`
+sends `ui.DraftsStaleMsg{TeamID}`; the App answers by calling `Load`.
+`shutdown` saves the App's `UnsyncedDrafts()` through the engines with a
+2-second deadline.
 
 ### UI
 
-- `compose.Model` records, per slot, whether it is dirty and its last-edit
-  time. `TakeDirty()` returns the dirty slots (key, text, edited) and clears
-  the marks. `ApplyRemoteDraft(key, text)` writes an inactive, clean slot and
-  reports whether it did. `ClearSlot(key)` empties a slot, visible or not
-  (used by list delete). Edit mode and restores do not mark dirty.
-- `reducer_drafts.go`: each composer edit bumps a sequence and schedules
-  `draftFlushMsg{seq}` after the debounce; only the latest sequence flushes.
-  `SetDraftContext` changes, workspace switches and quit flush immediately.
-  It reduces `DraftsLoadedMsg` (restore, refresh list rows), `DraftSavedMsg`
-  (list row, conflict toast) and `DraftDeletedMsg` (row, slot). It keeps
-  `syncedText[DraftKey]`, the text last saved to or restored from Slack per
-  slot, which decides whether a draft that vanished from Slack may clear its
-  slot.
+- `compose.Model` exposes its slots: `Slots()` (the visible one, even
+  empty, and every stored one), `SlotText(key)`, `ApplyRemoteDraft(key,
+  text)` (inactive slots, or the visible one when it is empty) and
+  `ClearSlot(key)` (any slot; list delete). It knows nothing of sync.
+- `draftSync` (`internal/ui/drafts.go`) holds, per slot, `synced` (the
+  composer-form text Slack last had from slk), `observed` (the text seen at
+  the last check and when), `inflight`, a generation bumped by a send or a
+  delete (so a late answer is ignored), retry backoff and the hands-off set;
+  per workspace, whether drafts were listed, and the list rows. A
+  `draftTickMsg` every 2 s runs the comparison; it starts with the first
+  list. A send calls `noteDraftSent(key)` at the moment the composer is
+  reset.
 - The App keeps the active workspace's list rows; `draftlist` draws them with
   `bubbles/chrome` and is composited in `view_overlays.go` like the marks
   overlay. `:drafts` is an entry in `commands` and a keyless help entry in
@@ -288,13 +316,15 @@ stdlib `testing`, white-box, existing helpers.
 - **`cmd/slk`**: the engine against a fake client: create then update; one
   call in flight per key with the newest text winning; `draft_has_conflict`
   retry; `attached_draft_exists` adoption; hands-off never written;
-  `DraftFor` waits for an in-flight save and forgets after the post.
-- **`internal/ui/compose`** (`draft_test.go`): dirty and last-edit time;
-  `ApplyRemoteDraft` refuses the visible slot and dirty slots; no dirty marks
-  from edit mode or restores; `ClearSlot`.
-- **`internal/ui`**: debounce via `deliveredMsgs` (real timers); flush on
-  conversation switch, workspace switch and quit; `DraftsLoadedMsg` restores
-  into inactive slots only; list golden via `dialogGoldens`; jump and
+  `beginSend` waits for an in-flight save and forgets after the post; a
+  draft refusal on send falls back to a plain post and deletes the draft.
+- **`internal/ui/compose`**: `Slots`, `SlotText`; `ApplyRemoteDraft` writes
+  inactive slots and only an empty visible one; `ClearSlot`.
+- **`internal/ui`**: the comparison driven tick by tick on a pinned clock
+  (debounce of the visible slot, immediate save of a left slot, discard,
+  nothing before the first list, edit mode, send, backoff, hands-off);
+  `UnsyncedDrafts` for quit; restore into inactive and empty visible slots
+  only; list golden via `dialogGoldens`; jump and
   delete-with-confirm via `pressKey`; `:drafts` refuses when the option is
   off; `TestHelpListsEveryCommand` and `boundary_test.go` pass.
 - AGENTS.md tables gain the new helpers in the commits that add them.
