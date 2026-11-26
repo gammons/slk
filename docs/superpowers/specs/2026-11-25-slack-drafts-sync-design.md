@@ -330,7 +330,14 @@ sends `ui.DraftsStaleMsg{TeamID}`; the App answers by calling `Load`.
   takes the engine's lock afterward sees the bump. `saveDraftCmd` reads the
   pointer once to build a `current` closure it passes to `Save`; a stale
   answer (gen mismatch, or `ErrDraftStale` from the service itself) is
-  ignored by `reduceDraftSaved`.
+  ignored by `reduceDraftSaved`. A separate `seq`/`touched` pair tracks
+  freshness against a list in flight: `touch(key)` bumps `seq` and records
+  it against `key` on every save answer (success or hands-off), a send, a
+  list delete and a vanish-clear. `loadDraftsCmd` captures `issued :=
+  d.seq`; `reduceDraftsLoaded` skips restore, vanish-clear and the
+  hands-off clear for any key touched since (`touched[key] > issued`), and
+  `mergeDraftRows` keeps the current rows for such a key (present or
+  absent) instead of the list's.
 - The App keeps the active workspace's list rows; `draftlist` draws them with
   `bubbles/chrome` and is composited in `view_overlays.go` like the marks
   overlay. `:drafts` is an entry in `commands` and a keyless help entry in

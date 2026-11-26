@@ -230,8 +230,10 @@ func TestDraftSync_HandsOffResumesOnceTheBlockerIsGone(t *testing.T) {
 		t.Fatalf("setup: C1 is not hands-off (toast=%q)", statusbarText(a))
 	}
 	// A fresh list for T1 that doesn't mention C1 at all: the blocker is
-	// gone (deleted here or on another device).
-	a.Update(draftsLoadedMsg{teamID: "T1"})
+	// gone (deleted here or on another device). issued is set to the
+	// current seq so this list -- fetched after the hands-off save
+	// answered -- is not treated as stale against it.
+	a.Update(draftsLoadedMsg{teamID: "T1", issued: a.drafts.seq})
 	if a.drafts.handsOff[c1] {
 		t.Fatal("hands-off was not cleared once the list stopped mentioning the key")
 	}
@@ -312,6 +314,60 @@ func TestDraftsLoaded_VanishedDraftClearsAnUnchangedStoredSlot(t *testing.T) {
 	a.Update(draftsLoadedMsg{teamID: "T1"}) // sent from the phone
 	if txt, _ := a.compose.SlotText("T1", "C2", ""); txt != "" {
 		t.Errorf("C2 = %q, want cleared", txt)
+	}
+}
+
+// A list issued before a send that still shows the sent draft (the
+// request was in flight when the send completed) must not restore its
+// text into the now-empty slot, and must not bring its row back.
+func TestDraftsLoaded_StaleListDoesNotRestoreOrRowbackASentDraft(t *testing.T) {
+	a, _, _ := draftSyncApp(t, nil)
+	key := core.DraftKey{TeamID: "T1", ChannelID: "C1"}
+	a.drafts.synced[key] = "hello"
+	a.drafts.upsertRow(core.Draft{ID: "Dr1", Key: key, Text: "hello"})
+	a.compose.SetValue("hello")
+
+	issued := a.drafts.seq // the list was issued now, before the send
+	a.noteDraftSent(key)   // the send: bumps touched[key] past issued
+	a.compose.Reset()      // the send leaves the composer empty
+
+	// The stale answer still shows the just-sent draft.
+	a.Update(draftsLoadedMsg{teamID: "T1", issued: issued, drafts: []core.Draft{
+		{ID: "Dr1", Key: key, Text: "hello"},
+	}})
+
+	if txt, _ := a.compose.SlotText("T1", "C1", ""); txt != "" {
+		t.Errorf("the sent text was restored into the slot: %q", txt)
+	}
+	if rows := a.drafts.rows["T1"]; len(rows) != 0 {
+		t.Errorf("the sent draft's row came back: %v", rows)
+	}
+}
+
+// A list issued before an inactive (not visible) slot's save answered
+// must not clear that slot, even though the list -- fetched before the
+// save -- does not mention the key yet.
+func TestDraftsLoaded_StaleListDoesNotClearASlotSavedDuringTheRequest(t *testing.T) {
+	a, _, _ := draftSyncApp(t, nil)
+	key := core.DraftKey{TeamID: "T1", ChannelID: "C2"} // not the visible slot (C1)
+	a.compose.SetValue("left behind")
+	a.compose.SetDraftContext("T1", "C2", "")
+	a.compose.SetValue("left behind")
+	a.compose.SetDraftContext("T1", "C1", "") // move away: C2 is now inactive
+
+	issued := a.drafts.seq // the list was issued now, before the save answers
+	a.drafts.synced[key] = "left behind"
+	a.drafts.upsertRow(core.Draft{ID: "Dr2", Key: key, Text: "left behind"})
+	a.drafts.touch(key) // what the real save answer does on success
+
+	// The stale list doesn't mention C2 at all yet.
+	a.Update(draftsLoadedMsg{teamID: "T1", issued: issued})
+
+	if txt, _ := a.compose.SlotText("T1", "C2", ""); txt != "left behind" {
+		t.Errorf("the saved slot was cleared by the stale list: %q", txt)
+	}
+	if rows := a.drafts.rows["T1"]; len(rows) != 1 {
+		t.Errorf("the saved draft's row was dropped by the stale list: %v", rows)
 	}
 }
 

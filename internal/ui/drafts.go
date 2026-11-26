@@ -40,6 +40,10 @@ type (
 		teamID string
 		drafts []core.Draft
 		err    error
+		// issued is d.seq at the moment the load was issued (see
+		// loadDraftsCmd); a key touched since then wins over this
+		// list (see reduceDraftsLoaded, finding 3).
+		issued uint64
 	}
 	// draftSavedMsg answers a Save (text != "") or a Discard (text "").
 	draftSavedMsg struct {
@@ -108,6 +112,23 @@ type draftSync struct {
 	handsOff map[core.DraftKey]bool
 	// rows is each workspace's active drafts, newest first (the list).
 	rows map[string][]core.Draft
+	// seq and touched track local freshness (finding 3): a list answer
+	// can be in flight for seconds, during which a save answer, a
+	// send, a list delete or a vanish-clear can change a key more
+	// recently than the list reflects. seq is bumped and touched[key]
+	// set to the new value on each of those; a list captures d.seq as
+	// "issued" when it is requested (loadDraftsCmd) and, on arrival,
+	// skips restore/vanish/the hands-off clear and keeps the current
+	// rows for any key touched since (touched[key] > issued).
+	seq     uint64
+	touched map[core.DraftKey]uint64
+}
+
+// touch bumps seq and records it against key, marking a local change
+// more recent than any list issued before now.
+func (d *draftSync) touch(key core.DraftKey) {
+	d.seq++
+	d.touched[key] = d.seq
 }
 
 func newDraftSync() *draftSync {
@@ -121,6 +142,7 @@ func newDraftSync() *draftSync {
 		retry:    map[core.DraftKey]draftRetry{},
 		handsOff: map[core.DraftKey]bool{},
 		rows:     map[string][]core.Draft{},
+		touched:  map[core.DraftKey]uint64{},
 	}
 }
 
@@ -323,6 +345,7 @@ func (a *App) noteDraftSent(key core.DraftKey) {
 	delete(d.synced, key)
 	delete(d.observed, key)
 	d.removeRowsFor(key)
+	d.touch(key)
 }
 
 func (a *App) startDraftTick() tea.Cmd {
@@ -347,9 +370,10 @@ func (a *App) loadDraftsCmd(teamID string) tea.Cmd {
 	if svc == nil || teamID == "" {
 		return nil
 	}
+	issued := a.drafts.seq
 	return func() tea.Msg {
 		ds, err := svc.Load(teamID)
-		return draftsLoadedMsg{teamID: teamID, drafts: ds, err: err}
+		return draftsLoadedMsg{teamID: teamID, drafts: ds, err: err, issued: issued}
 	}
 }
 
@@ -360,7 +384,12 @@ func (a *App) reduceDraftsLoaded(m draftsLoadedMsg) tea.Cmd {
 	}
 	d := a.drafts
 	d.loaded[m.teamID] = true
-	d.rows[m.teamID] = sortDrafts(m.drafts)
+	// A key touched (saved, sent, deleted or vanish-cleared) since this
+	// list was issued is more current than the list: keep its current
+	// row instead of the list's (present or absent), so a stale list
+	// cannot clear an inactive slot that was saved during the request
+	// or bring a sent or deleted draft's row back.
+	d.rows[m.teamID] = mergeDraftRows(d.rows[m.teamID], sortDrafts(m.drafts), d.touched, m.issued)
 	if m.teamID != a.activeTeamID {
 		// Restore and vanish-clear read/write the active composers,
 		// whose mention data belongs to a.activeTeamID; applying
@@ -382,15 +411,18 @@ func (a *App) reduceDraftsLoaded(m draftsLoadedMsg) tea.Cmd {
 			continue
 		}
 		listed[dr.Key] = true
+		if d.touched[dr.Key] > m.issued {
+			continue // a local change since this list was issued wins
+		}
 		a.restoreRemoteDraft(dr)
 	}
 	for key := range d.handsOff {
-		if key.TeamID == m.teamID && !blocking[key] {
+		if key.TeamID == m.teamID && !blocking[key] && d.touched[key] <= m.issued {
 			delete(d.handsOff, key)
 		}
 	}
 	for key, synced := range d.synced {
-		if key.TeamID != m.teamID || listed[key] {
+		if key.TeamID != m.teamID || listed[key] || d.touched[key] > m.issued {
 			continue
 		}
 		if _, busy := d.inflight[key]; busy {
@@ -404,9 +436,35 @@ func (a *App) reduceDraftsLoaded(m draftsLoadedMsg) tea.Cmd {
 		c.ApplyRemoteDraft(key.TeamID, key.ChannelID, key.ThreadTS, "")
 		delete(d.synced, key)
 		delete(d.observed, key)
+		d.touch(key)
 	}
 	a.draftRowsChanged()
 	return a.startDraftTick()
+}
+
+// mergeDraftRows combines a workspace's current rows with a freshly
+// listed set for reduceDraftsLoaded: for any key touched since the
+// list was issued (touched[key] > issued), the current rows' writable
+// entry for that key -- present or absent -- wins over the list's.
+func mergeDraftRows(current, fresh []core.Draft, touched map[core.DraftKey]uint64, issued uint64) []core.Draft {
+	stale := map[core.DraftKey]bool{}
+	for key, seq := range touched {
+		if seq > issued {
+			stale[key] = true
+		}
+	}
+	if len(stale) == 0 {
+		return fresh
+	}
+	out := slices.DeleteFunc(slices.Clone(fresh), func(r core.Draft) bool {
+		return r.Writable() && stale[r.Key]
+	})
+	for _, r := range current {
+		if r.Writable() && stale[r.Key] {
+			out = append(out, r)
+		}
+	}
+	return sortDrafts(out)
 }
 
 // restoreRemoteDraft puts a writable draft from Slack into its slot when
@@ -451,12 +509,14 @@ func (a *App) reduceDraftSaved(m draftSavedMsg) tea.Cmd {
 			d.synced[m.key] = m.text
 			d.upsertRow(m.res.Draft)
 		}
+		d.touch(m.key)
 		a.draftRowsChanged()
 		if m.res.Replaced {
 			return toastWithClear(a, "Replaced a newer draft from another device", 3*time.Second)
 		}
 	case errors.Is(m.err, core.ErrDraftHandsOff):
 		d.handsOff[m.key] = true
+		d.touch(m.key)
 		return toastWithClear(a, "Slack already has a draft here that slk won't overwrite", 4*time.Second)
 	default:
 		r := d.retry[m.key]

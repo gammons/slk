@@ -151,6 +151,7 @@ func (a *App) reduceDraftDeleted(m draftDeletedMsg) tea.Cmd {
 		a.drafts.genPtr(k).Add(1)
 		delete(a.drafts.synced, k)
 		delete(a.drafts.observed, k)
+		a.drafts.touch(k)
 	}
 	a.draftRowsChanged()
 	return toastWithClear(a, "Draft deleted", 2*time.Second)
