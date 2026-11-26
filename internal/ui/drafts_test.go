@@ -371,6 +371,111 @@ func TestDraftsLoaded_StaleListDoesNotClearASlotSavedDuringTheRequest(t *testing
 	}
 }
 
+// A hands-off answer touches its key but does not remove any stale
+// writable row already recorded for it (the ruling: "keep the current
+// rows as they are. The point is to avoid a duplicate, not to invent a
+// row"). A list issued earlier that still shows the key's own
+// non-writable (blocking) draft must not add a second row for the same
+// conversation: mergeDraftRows must drop the list's row for a touched
+// key regardless of kind, not just a writable one.
+func TestDraftsLoaded_StaleListDoesNotDuplicateARowAfterHandsOff(t *testing.T) {
+	a, _, _ := draftSyncApp(t, core.ErrDraftHandsOff)
+	key := core.DraftKey{TeamID: "T1", ChannelID: "C1"}
+	// A prior save had created a writable row at this key.
+	a.drafts.upsertRow(core.Draft{ID: "Dr1", Key: key, Text: "old"})
+
+	issued := a.drafts.seq // the list was issued now, before the hands-off save answers
+	a.compose.SetValue("one")
+	tick(t, a)
+	tick(t, a) // the save answers ErrDraftHandsOff: sets handsOff[key], touches key
+
+	if !a.drafts.handsOff[key] {
+		t.Fatalf("setup: key not hands-off")
+	}
+
+	// The stale (older) list shows this destination's own non-writable
+	// (blocking) draft.
+	a.Update(draftsLoadedMsg{teamID: "T1", issued: issued, drafts: []core.Draft{
+		{ID: "DrBlock", Key: key, Scheduled: time.Unix(1_900_000_000, 0)},
+	}})
+
+	if rows := a.drafts.rows["T1"]; len(rows) != 1 {
+		t.Errorf("rows for the key = %d, want 1: %v", len(rows), rows)
+	}
+}
+
+// Deleting a non-writable draft from :drafts must touch its key (not
+// only a writable one), so a list issued before the delete, still
+// showing the deleted draft, does not bring its row back.
+func TestDraftsLoaded_StaleListDoesNotReviveADeletedNonWritableDraft(t *testing.T) {
+	a, _, _ := draftSyncApp(t, nil)
+	key := core.DraftKey{TeamID: "T1", ChannelID: "C9"}
+	blocker := core.Draft{ID: "DrBlock", Key: key, Scheduled: time.Unix(1_900_000_000, 0)}
+	a.drafts.rows["T1"] = []core.Draft{blocker}
+
+	issued := a.drafts.seq // the list was issued now, before the delete
+	a.Update(draftDeletedMsg{teamID: "T1", draft: blocker})
+
+	// The stale list still shows the just-deleted blocker.
+	a.Update(draftsLoadedMsg{teamID: "T1", issued: issued, drafts: []core.Draft{blocker}})
+
+	if rows := a.drafts.rows["T1"]; len(rows) != 0 {
+		t.Errorf("the deleted draft's row came back: %v", rows)
+	}
+}
+
+// An unaddressed draft (Key.ChannelID == "") has no real conversation
+// key: deleting it must still keep a stale list from bringing it back,
+// via deletedAt (by draft ID), since several unaddressed drafts would
+// otherwise share the same degenerate key.
+func TestDraftsLoaded_StaleListDoesNotReviveADeletedUnaddressedDraft(t *testing.T) {
+	a, _, _ := draftSyncApp(t, nil)
+	unaddressed := core.Draft{ID: "DrNew", Key: core.DraftKey{TeamID: "T1"}, Saved: true}
+	a.drafts.rows["T1"] = []core.Draft{unaddressed}
+
+	issued := a.drafts.seq
+	a.Update(draftDeletedMsg{teamID: "T1", draft: unaddressed})
+
+	a.Update(draftsLoadedMsg{teamID: "T1", issued: issued, drafts: []core.Draft{unaddressed}})
+
+	if rows := a.drafts.rows["T1"]; len(rows) != 0 {
+		t.Errorf("the deleted unaddressed draft's row came back: %v", rows)
+	}
+}
+
+// reduceDraftSaved's ErrDraftStale branch is unreachable in practice
+// (the gen check right above it already returns first for every real
+// case: ErrDraftStale only happens when current() reported false,
+// i.e. the generation was already bumped). Feed it directly with the
+// CURRENT gen, so that check does not short-circuit, and assert
+// nothing changes except inflight being cleared.
+func TestDraftSync_ErrDraftStaleAnswerChangesNothingButInflight(t *testing.T) {
+	a, _, _ := draftSyncApp(t, nil)
+	key := core.DraftKey{TeamID: "T1", ChannelID: "C1"}
+	a.drafts.inflight[key] = "pending"
+	a.drafts.synced[key] = "synced text"
+	a.drafts.rows["T1"] = []core.Draft{{ID: "Dr1", Key: key, Text: "synced text"}}
+
+	gen := a.drafts.genPtr(key).Load() // the current gen: must not mismatch above
+	a.reduceDraftSaved(draftSavedMsg{key: key, text: "whatever", gen: gen, err: core.ErrDraftStale})
+
+	if _, busy := a.drafts.inflight[key]; busy {
+		t.Error("inflight not cleared")
+	}
+	if a.drafts.synced[key] != "synced text" {
+		t.Errorf("synced changed: %q", a.drafts.synced[key])
+	}
+	if a.drafts.handsOff[key] {
+		t.Error("handsOff set")
+	}
+	if _, retried := a.drafts.retry[key]; retried {
+		t.Error("a retry was scheduled")
+	}
+	if len(a.drafts.rows["T1"]) != 1 {
+		t.Errorf("rows changed: %v", a.drafts.rows["T1"])
+	}
+}
+
 // Save A, start saving B, change back to A, quit: the text at quit
 // equals synced ("A"), but a save for B is still in flight and must
 // not be left as Slack's last word, so UnsyncedDrafts must still

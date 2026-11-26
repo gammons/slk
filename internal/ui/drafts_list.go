@@ -142,16 +142,22 @@ func (a *App) reduceDraftDeleted(m draftDeletedMsg) tea.Cmd {
 	if m.err != nil {
 		return toastWithClear(a, "Couldn't delete draft", 3*time.Second)
 	}
-	a.drafts.removeRow(m.teamID, m.draft.ID)
+	d := a.drafts
+	d.removeRow(m.teamID, m.draft.ID)
 	// Whatever kind it was, it is no longer here to block sync.
-	delete(a.drafts.handsOff, m.draft.Key)
+	delete(d.handsOff, m.draft.Key)
+	// Freshness, any kind: the key (for a list issued earlier that
+	// still shows this conversation's draft) and the id itself (for an
+	// unaddressed draft, Key.ChannelID == "", whose key several
+	// distinct drafts share -- see deletedAt).
+	d.touch(m.draft.Key)
+	d.deletedAt[m.draft.ID] = d.seq
 	if k := m.draft.Key; m.draft.Writable() {
 		// The user asked: the slot goes too, even the visible one.
 		a.composerFor(k.ThreadTS).ClearSlot(k.TeamID, k.ChannelID, k.ThreadTS)
-		a.drafts.genPtr(k).Add(1)
-		delete(a.drafts.synced, k)
-		delete(a.drafts.observed, k)
-		a.drafts.touch(k)
+		d.genPtr(k).Add(1)
+		delete(d.synced, k)
+		delete(d.observed, k)
 	}
 	a.draftRowsChanged()
 	return toastWithClear(a, "Draft deleted", 2*time.Second)

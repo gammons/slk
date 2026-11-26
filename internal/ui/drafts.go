@@ -153,6 +153,13 @@ type draftSync struct {
 	// rows for any key touched since (touched[key] > issued).
 	seq     uint64
 	touched map[core.DraftKey]uint64
+	// deletedAt records, by draft ID, the seq at which a successful
+	// delete removed it. touched alone is not enough for an
+	// unaddressed draft (Key.ChannelID == ""): several unaddressed
+	// drafts of one workspace share that same degenerate key, so
+	// keying freshness on the key alone could not single out which
+	// one was deleted. deletedAt protects the exact id regardless.
+	deletedAt map[string]uint64
 	// loadRetry counts consecutive failures of a workspace's first
 	// (not-yet-loaded) draft load, for the backoff of its retry.
 	// Deleted on success. A failed reload of an already-loaded
@@ -179,6 +186,7 @@ func newDraftSync() *draftSync {
 		handsOff:  map[core.DraftKey]bool{},
 		rows:      map[string][]core.Draft{},
 		touched:   map[core.DraftKey]uint64{},
+		deletedAt: map[string]uint64{},
 		loadRetry: map[string]int{},
 	}
 }
@@ -455,10 +463,13 @@ func (a *App) reduceDraftsLoaded(m draftsLoadedMsg) tea.Cmd {
 	d.loaded[m.teamID] = true
 	// A key touched (saved, sent, deleted or vanish-cleared) since this
 	// list was issued is more current than the list: keep its current
-	// row instead of the list's (present or absent), so a stale list
-	// cannot clear an inactive slot that was saved during the request
-	// or bring a sent or deleted draft's row back.
-	d.rows[m.teamID] = mergeDraftRows(d.rows[m.teamID], sortDrafts(m.drafts), d.touched, m.issued)
+	// rows for that key -- whatever kind they are, present or absent --
+	// instead of the list's, so a stale list cannot clear an inactive
+	// slot that was saved during the request, bring a sent or deleted
+	// draft's row back, or duplicate a row after a hands-off answer.
+	// deletedAt additionally protects a deleted draft that has no
+	// conversation key to touch (unaddressed, Key.ChannelID == "").
+	d.rows[m.teamID] = mergeDraftRows(d.rows[m.teamID], sortDrafts(m.drafts), d.touched, d.deletedAt, m.issued)
 	if m.teamID != a.activeTeamID {
 		// Restore and vanish-clear read/write the active composers,
 		// whose mention data belongs to a.activeTeamID; applying
@@ -513,23 +524,32 @@ func (a *App) reduceDraftsLoaded(m draftsLoadedMsg) tea.Cmd {
 
 // mergeDraftRows combines a workspace's current rows with a freshly
 // listed set for reduceDraftsLoaded: for any key touched since the
-// list was issued (touched[key] > issued), the current rows' writable
-// entry for that key -- present or absent -- wins over the list's.
-func mergeDraftRows(current, fresh []core.Draft, touched map[core.DraftKey]uint64, issued uint64) []core.Draft {
+// list was issued (touched[key] > issued), the current rows for that
+// key -- any kind, present or absent -- replace the list's entirely
+// (never both, which would duplicate a row), and any draft ID the list
+// still shows but which was deleted since (deletedAt[id] > issued) is
+// dropped regardless of its key.
+func mergeDraftRows(current, fresh []core.Draft, touched map[core.DraftKey]uint64, deletedAt map[string]uint64, issued uint64) []core.Draft {
 	stale := map[core.DraftKey]bool{}
 	for key, seq := range touched {
 		if seq > issued {
 			stale[key] = true
 		}
 	}
-	if len(stale) == 0 {
+	gone := map[string]bool{}
+	for id, seq := range deletedAt {
+		if seq > issued {
+			gone[id] = true
+		}
+	}
+	if len(stale) == 0 && len(gone) == 0 {
 		return fresh
 	}
 	out := slices.DeleteFunc(slices.Clone(fresh), func(r core.Draft) bool {
-		return r.Writable() && stale[r.Key]
+		return stale[r.Key] || gone[r.ID]
 	})
 	for _, r := range current {
-		if r.Writable() && stale[r.Key] {
+		if stale[r.Key] {
 			out = append(out, r)
 		}
 	}
@@ -566,7 +586,11 @@ func (a *App) reduceDraftSaved(m draftSavedMsg) tea.Cmd {
 		return nil // sent or deleted while this was in flight
 	}
 	if errors.Is(m.err, core.ErrDraftStale) {
-		return nil // the engine itself refused for the same reason: nothing else to do
+		// Unreachable in practice: ErrDraftStale only happens when
+		// current() reported false, i.e. the generation was bumped
+		// after this command captured it, so the gen check above
+		// already returned first. Kept as defence-in-depth.
+		return nil
 	}
 	switch {
 	case m.err == nil:
