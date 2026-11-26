@@ -82,6 +82,10 @@ type WorkspaceContext struct {
 	// channelitem.go's resolver and the sectionsProviderAdapter both
 	// nil-check it before use.
 	SectionStore *service.SectionStore
+	// SectionDefaults is what the config's [sections] entries say about
+	// ordering and collapse, for the sidebar's config mode. Built once at
+	// connect and never written afterwards, so the UI may share it.
+	SectionDefaults map[string]sidebar.SectionDefault
 	// MuteStore tracks which channels the user has muted (Slack stores
 	// this in the user prefs blob, not on the channel objects). The
 	// sidebar uses it to suppress unread dots and apply a dimmer

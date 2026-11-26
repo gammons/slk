@@ -153,7 +153,7 @@ func bootstrappedStore(t *testing.T, mapping map[string][]string) *service.Secti
 func TestBuildChannelItem_StoreReady_StoreWins(t *testing.T) {
 	cfg := config.Config{
 		Sections: map[string]config.SectionDef{
-			"Globbed": {Channels: []string{"alerts*"}, Order: 1},
+			"Globbed": {Channels: []string{"alerts*"}, Order: new(1)},
 		},
 	}
 	wctx := &WorkspaceContext{
@@ -176,7 +176,7 @@ func TestBuildChannelItem_StoreReady_StoreWins(t *testing.T) {
 func TestBuildChannelItem_StoreReady_StoreMisses_FallsToGlob(t *testing.T) {
 	cfg := config.Config{
 		Sections: map[string]config.SectionDef{
-			"Globbed": {Channels: []string{"alerts*"}, Order: 1},
+			"Globbed": {Channels: []string{"alerts*"}, Order: new(1)},
 		},
 	}
 	// Bootstrap a Ready store with no entry for C1; the resolver should
@@ -201,7 +201,7 @@ func TestBuildChannelItem_StoreReady_StoreMisses_FallsToGlob(t *testing.T) {
 func TestBuildChannelItem_StoreNil_UsesGlob(t *testing.T) {
 	cfg := config.Config{
 		Sections: map[string]config.SectionDef{
-			"Globbed": {Channels: []string{"alerts*"}, Order: 1},
+			"Globbed": {Channels: []string{"alerts*"}, Order: new(1)},
 		},
 	}
 	wctx := &WorkspaceContext{
@@ -227,7 +227,7 @@ func TestBuildChannelItem_GlobMatchPopulatesChannelOrder(t *testing.T) {
 	// ChannelOrder field, where the sidebar comparator picks it up.
 	cfg := config.Config{
 		Sections: map[string]config.SectionDef{
-			"Eng": {Channels: []string{"eng-general:1", "eng-*:5"}, Order: 1},
+			"Eng": {Channels: []string{"eng-general:1", "eng-*:5"}, Order: new(1)},
 		},
 	}
 	wctx := &WorkspaceContext{
@@ -269,7 +269,7 @@ func TestBuildChannelItem_SlackStoreWins_ChannelOrderZero(t *testing.T) {
 	// the lookup, and the resulting item carries no ChannelOrder.
 	cfg := config.Config{
 		Sections: map[string]config.SectionDef{
-			"Eng": {Channels: []string{"alerts-*:9"}, Order: 1},
+			"Eng": {Channels: []string{"alerts-*:9"}, Order: new(1)},
 		},
 	}
 	wctx := &WorkspaceContext{
@@ -295,7 +295,7 @@ func TestBuildChannelItem_SlackStoreWins_ChannelOrderZero(t *testing.T) {
 func TestBuildChannelItem_StoreNotReady_UsesGlob(t *testing.T) {
 	cfg := config.Config{
 		Sections: map[string]config.SectionDef{
-			"Globbed": {Channels: []string{"alerts*"}, Order: 1},
+			"Globbed": {Channels: []string{"alerts*"}, Order: new(1)},
 		},
 	}
 	// Fresh store (never bootstrapped) reports Ready()==false; the
@@ -344,5 +344,29 @@ func TestApplyBootStars(t *testing.T) {
 		if ch.IsStarred {
 			t.Errorf("%s stayed starred after an empty boot list", ch.ID)
 		}
+	}
+}
+
+func TestSectionDefaults(t *testing.T) {
+	if got := sectionDefaults(config.Config{}, "T1"); got != nil {
+		t.Errorf("no sections: got %v, want nil", got)
+	}
+
+	expanded := false
+	cfg := config.Config{Sections: map[string]config.SectionDef{
+		"Channels": {Order: new(-1), Collapsed: &expanded},
+		"Alerts":   {Channels: []string{"alerts"}, Order: new(2)},
+		"Apps":     {Collapsed: &expanded},
+	}}
+
+	got := sectionDefaults(cfg, "T1")
+	if ch := got["Channels"]; ch.Order == nil || *ch.Order != -1 || ch.Collapsed == nil || *ch.Collapsed {
+		t.Errorf("Channels = %+v, want order -1, expanded", ch)
+	}
+	if al := got["Alerts"]; al.Order == nil || *al.Order != 2 || al.Collapsed != nil {
+		t.Errorf("Alerts = %+v, want order 2, collapse unset", al)
+	}
+	if ap := got["Apps"]; ap.Order != nil {
+		t.Errorf("Apps order = %d, want unset", *ap.Order)
 	}
 }

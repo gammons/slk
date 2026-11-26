@@ -464,6 +464,9 @@ type (
 		// workspace. Nil means "use config-glob behavior" (the App's
 		// sidebar reverts to its existing name-keyed buckets).
 		SectionsProvider sidebar.SectionsProvider
+		// SectionDefaults are the workspace's [sections] ordering and
+		// collapse defaults, read-only, for the sidebar's config mode.
+		SectionDefaults map[string]sidebar.SectionDefault
 		// DefaultChannel is the workspace's configured default_channel,
 		// matched by matchChannelByName. It is opened on the first switch
 		// to the workspace in a session, and when the channel last viewed
@@ -570,6 +573,9 @@ type (
 		// workspace. Nil means "use config-glob behavior" (the App's
 		// sidebar reverts to its existing name-keyed buckets).
 		SectionsProvider sidebar.SectionsProvider
+		// SectionDefaults are the workspace's [sections] ordering and
+		// collapse defaults, read-only, for the sidebar's config mode.
+		SectionDefaults map[string]sidebar.SectionDefault
 		// InitialActive is true for exactly one WorkspaceReadyMsg per
 		// program run: the workspace whose team ID matches the configured
 		// default_workspace, or — if no default is configured — the first

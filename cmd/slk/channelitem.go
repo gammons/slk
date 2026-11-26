@@ -29,6 +29,21 @@ func seedDMFromCache(db *cache.DB, userID string, item *sidebar.ChannelItem, fin
 		WithHuddle(u.HuddleState, statusExpiry(u.HuddleExpiration))
 }
 
+// sectionDefaults turns the [sections] entries that apply to a workspace
+// into the sidebar's ordering and collapse defaults, keyed by section name.
+func sectionDefaults(cfg config.Config, teamID string) map[string]sidebar.SectionDefault {
+	sections := cfg.SectionsFor(teamID)
+	if len(sections) == 0 {
+		return nil
+	}
+
+	out := make(map[string]sidebar.SectionDefault, len(sections))
+	for name, def := range sections {
+		out[name] = sidebar.SectionDefault{Order: def.Order, Collapsed: def.Collapsed}
+	}
+	return out
+}
+
 // buildChannelItem converts a Slack conversation into the sidebar
 // ChannelItem + finder Item shape used everywhere in slk. Pure function:
 // reads from wctx for name/presence resolution, returns the constructed

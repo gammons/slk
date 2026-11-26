@@ -49,9 +49,25 @@ type Compose struct {
 // The ":N" syntax is only honored when use_slack_sections = false
 // (or as a fallback when Slack's section endpoint is unreachable);
 // in Slack-native mode, channels sort alphabetically within Slack's sections.
+//
+// An entry named after a built-in section ("Channels", "Direct Messages",
+// "Apps") needs no Channels: its Order places the built-in among the custom
+// sections, which otherwise all come before it. A custom section without
+// an Order sorts as 0. Collapsed sets whether a section starts collapsed,
+// overriding [sidebar] start_collapsed and the built-in default (Channels
+// and Apps collapsed). Both are only honored when use_slack_sections = false.
 type SectionDef struct {
-	Channels []string `toml:"channels"`
-	Order    int      `toml:"order"` // lower = higher in sidebar
+	Channels  []string `toml:"channels"`
+	Order     *int     `toml:"order"` // lower = higher in sidebar
+	Collapsed *bool    `toml:"collapsed"`
+}
+
+// OrderOrZero is the section's Order, or 0 when it has none.
+func (d SectionDef) OrderOrZero() int {
+	if d.Order == nil {
+		return 0
+	}
+	return *d.Order
 }
 
 // parseChannelPattern splits a "<pattern>:<N>" config entry into its
@@ -561,25 +577,27 @@ func (c Config) MatchSection(teamID, channelName string) string {
 // and (sectionName, 0) when the matching pattern has no explicit
 // order suffix.
 func (c Config) MatchSectionAndOrder(teamID, channelName string) (string, int) {
-	sections := c.Sections
-	if ws, ok := c.WorkspaceByTeamID(teamID); ok && len(ws.Sections) > 0 {
-		sections = ws.Sections
-	}
-	return matchSectionAndOrderIn(sections, channelName)
+	return matchSectionAndOrderIn(c.SectionsFor(teamID), channelName)
 }
 
 // SectionOrder returns the Order field for the named section,
 // resolved through the same workspace-vs-global precedence as
 // MatchSection. Returns 0 if the section is not defined.
 func (c Config) SectionOrder(teamID, sectionName string) int {
-	sections := c.Sections
-	if ws, ok := c.WorkspaceByTeamID(teamID); ok && len(ws.Sections) > 0 {
-		sections = ws.Sections
-	}
-	if def, ok := sections[sectionName]; ok {
-		return def.Order
+	if def, ok := c.SectionsFor(teamID)[sectionName]; ok {
+		return def.OrderOrZero()
 	}
 	return 0
+}
+
+// SectionsFor returns the [sections] entries that apply to a workspace:
+// its own when it defines any, else the global ones. Callers must not
+// write the returned map.
+func (c Config) SectionsFor(teamID string) map[string]SectionDef {
+	if ws, ok := c.WorkspaceByTeamID(teamID); ok && len(ws.Sections) > 0 {
+		return ws.Sections
+	}
+	return c.Sections
 }
 
 // matchSectionAndOrderIn walks sections in Order-ascending order and
@@ -595,7 +613,7 @@ func matchSectionAndOrderIn(sections map[string]SectionDef, channelName string) 
 	}
 	var entries []entry
 	for name, def := range sections {
-		entries = append(entries, entry{name: name, order: def.Order, patterns: def.Channels})
+		entries = append(entries, entry{name: name, order: def.OrderOrZero(), patterns: def.Channels})
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].order < entries[j].order
