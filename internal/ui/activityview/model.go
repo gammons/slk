@@ -20,10 +20,10 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/styles"
-	"github.com/muesli/reflow/truncate"
 )
 
 // Each activity row is a two-line card (line 1: author + context + time;
@@ -110,7 +110,20 @@ type Model struct {
 	snappedSelection int
 	hasSnapped       bool
 
+	// linkHits are the OSC 8 links of the card lines last rendered:
+	// absolute flat line, display columns and URL. Clicks on a card
+	// first ask for a link, then select/open the card.
+	linkHits []activityLinkHit
+
 	version int64
+}
+
+// activityLinkHit is one link's footprint in the Activity list's flat
+// line coordinates (the row the click math already uses).
+type activityLinkHit struct {
+	line             int
+	colStart, colEnd int
+	url              string
 }
 
 // New creates an empty Model. userNames resolves actor IDs to display names;
@@ -402,6 +415,35 @@ func (m *Model) ClickAt(rowY int) bool {
 	return true
 }
 
+// HitTestLink returns the URL of the hyperlink at (rowY, col) in the
+// last View's coordinates. The column is display-based, matching the
+// frame's cells.
+func (m *Model) HitTestLink(rowY, col int) (string, bool) {
+	if rowY < 0 {
+		return "", false
+	}
+	absLine := m.yOffset + rowY
+	for _, h := range m.linkHits {
+		if h.line == absLine && col >= h.colStart && col < h.colEnd {
+			return h.url, true
+		}
+	}
+	return "", false
+}
+
+// SelectedBody returns the hydrated body of the selected item, when its
+// messages.list fetch has landed. The Activity panel's copy and link
+// keys use it; the App's content panes cannot, they are showing another
+// conversation behind this view.
+func (m *Model) SelectedBody() (core.ActivityMessage, bool) {
+	it, ok := m.SelectedItem()
+	if !ok {
+		return core.ActivityMessage{}, false
+	}
+	body, ok := m.bodies[core.ActivityMsgKey(it.ChannelID, it.TS)]
+	return body, ok
+}
+
 // UnreadCount returns the number of items currently flagged unread.
 func (m *Model) UnreadCount() int {
 	n := 0
@@ -445,6 +487,10 @@ func (m *Model) clampSelection() {
 // View renders the activity list to `height` lines, each `width` columns
 // wide. Argument order matches sidebar.View / thread.View (height first).
 func (m *Model) View(height, width int) string {
+	// Link footprints are per frame: only what this View draws can be
+	// clicked. Clear before the empty-list return too, or a refresh that
+	// empties the feed leaves the previous cards' links live.
+	m.linkHits = m.linkHits[:0]
 	if width < 1 {
 		width = 1
 	}
@@ -536,6 +582,11 @@ func (m *Model) renderLines(start, end, width int) []string {
 		for j, line := range [cardContentLines]string{l1, l2} {
 			if abs := base + j; abs >= start && abs < end {
 				out = append(out, line)
+				for _, sp := range messages.ScanOsc8Spans([]string{line}) {
+					m.linkHits = append(m.linkHits, activityLinkHit{
+						line: abs, colStart: sp.ColStart, colEnd: sp.ColEnd, url: sp.URL,
+					})
+				}
 			}
 		}
 		if sep := base + cardContentLines; i < len(m.items)-1 && sep >= start && sep < end {
@@ -847,8 +898,9 @@ func formatRelTime(ts string) string {
 	}
 }
 
-// clipToWidth truncates an already-styled string to at most `width` display
-// columns (trailing ellipsis) without padding short strings.
+// clipToWidth cuts s to width display columns. ansi.Truncate keeps
+// escape sequences (SGR and OSC 8) whole, so a clipped card keeps its
+// link styling and hyperlink instead of a half-written sequence.
 func clipToWidth(s string, width int) string {
 	if width <= 0 {
 		return ""
@@ -856,5 +908,5 @@ func clipToWidth(s string, width int) string {
 	if lipgloss.Width(s) <= width {
 		return s
 	}
-	return truncate.StringWithTail(s, uint(width), "…")
+	return ansi.Truncate(s, width, "…")
 }
