@@ -242,7 +242,7 @@ func userRequesterFor(router *workspaceRouter, teamID string) func(string) {
 // messageAuthor resolves the display identity for a fetched message.
 // Human messages carry a `user` ID, resolved (and lazily fetched) the
 // usual way. Bot messages (bot_message) have an empty `user` and only a
-// `bot_id` + `username`; those are keyed on the bot_id, use the message's
+// `bot_id` + `username`; those are keyed on core.BotAuthorID, use the message's
 // username for the name, and enqueue a bots.info lookup for the avatar
 // (and a name fallback). The returned userID is what both the cache row
 // and the MessageItem are keyed on so the avatar pipeline can attach.
@@ -262,7 +262,7 @@ func messageAuthor(m slack.Message, userNames *userNameStore, db *cache.DB, rout
 	if m.BotID != "" {
 		name := m.Username
 		if name == "" {
-			if cached, ok := resolveUserCached(m.BotID, userNames, db); ok {
+			if cached, ok := resolveUserCached(core.BotAuthorID(m.BotID, m.Username), userNames, db); ok {
 				name = cached
 			} else {
 				name = m.BotID
@@ -273,7 +273,7 @@ func messageAuthor(m slack.Message, userNames *userNameStore, db *cache.DB, rout
 				wctx.UserResolver.RequestBot(m.BotID, m.Username)
 			}
 		}
-		return m.BotID, name
+		return core.BotAuthorID(m.BotID, m.Username), name
 	}
 	return m.User, m.User
 }

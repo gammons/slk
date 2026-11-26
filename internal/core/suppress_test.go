@@ -73,3 +73,27 @@ func TestSuppressionWithWithoutAreCopies(t *testing.T) {
 		t.Errorf("Rules = %v, want %v", c.Rules(), want)
 	}
 }
+
+// A rule on a bare bot_id hides every sender of that bot. A rule on one
+// sender (BotAuthorID) hides only that sender.
+func TestSuppressionHidesWebhookSenders(t *testing.T) {
+	bot := NewSuppression([]SuppressRule{{AuthorID: "B1"}})
+	for _, id := range []string{"B1", "B1/Alice", "B1/Bob"} {
+		if !bot.Hides("C1", id) {
+			t.Errorf("a B1 rule does not hide %s", id)
+		}
+	}
+	if bot.Hides("C1", "B2/Alice") {
+		t.Error("a B1 rule hides B2/Alice")
+	}
+
+	sender := NewSuppression([]SuppressRule{{AuthorID: "B1/Alice", ChannelID: "C1"}})
+	if !sender.Hides("C1", "B1/Alice") {
+		t.Error("a B1/Alice rule does not hide B1/Alice")
+	}
+	for _, id := range []string{"B1/Bob", "B1"} {
+		if sender.Hides("C1", id) {
+			t.Errorf("a B1/Alice rule hides %s", id)
+		}
+	}
+}

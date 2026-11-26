@@ -9,11 +9,13 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/gammons/slk/internal/avatar"
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slack/edge"
 	"github.com/gammons/slk/internal/ui"
 	"github.com/slack-go/slack"
+	"golang.org/x/sync/singleflight"
 )
 
 // userResolverConcurrency caps how many users.info round trips the
@@ -59,6 +61,11 @@ type userResolver struct {
 	avatars  *avatar.Cache
 	send     func(tea.Msg)
 	inflight sync.Map // userID -> struct{}
+	// bots shares one bots.info call between the senders of one webhook,
+	// which RequestBot keys apart (core.BotAuthorID) but which have one
+	// bot_id. botInfo holds the answers: botID -> *slack.Bot.
+	bots    singleflight.Group
+	botInfo sync.Map
 	// Successful lookups queue peer IDs for the serialized event owner.
 	// Coalesce repeat resolutions without blocking background or synchronous
 	// callers; neither may mutate conversation slices here.
@@ -510,8 +517,9 @@ func (r *userResolver) applyEdgeUser(u edge.User) {
 }
 
 // RequestBot enqueues a bots.info fetch for a bot author (bot_message has
-// no `user`, only a `bot_id`). Keyed by botID so the resolved name +
-// avatar attach to messages whose UserID was set to the bot_id. username
+// no `user`, only a `bot_id`). Keyed by core.BotAuthorID(botID, username)
+// so the resolved name + avatar attach to messages whose UserID was set
+// to that author ID, and two senders of one webhook stay apart. username
 // is the name carried on the message (used as a fallback / immediate
 // value); bots.info supplies the icon (and a name if the message had
 // none). Mirrors Request: inflight dedup, cache-skip, async fetch,
@@ -520,16 +528,17 @@ func (r *userResolver) RequestBot(botID, username string) {
 	if r == nil || botID == "" {
 		return
 	}
-	if _, exists := r.inflight.LoadOrStore(botID, struct{}{}); exists {
+	authorID := core.BotAuthorID(botID, username)
+	if _, exists := r.inflight.LoadOrStore(authorID, struct{}{}); exists {
 		return
 	}
-	if _, err := r.db.GetUser(botID); err == nil {
-		r.inflight.Delete(botID)
+	if _, err := r.db.GetUser(authorID); err == nil {
+		r.inflight.Delete(authorID)
 		return
 	}
 	go func() {
-		defer r.inflight.Delete(botID)
-		bot, err := r.client.GetBotInfo(context.Background(), botID)
+		defer r.inflight.Delete(authorID)
+		bot, err := r.botInfoFor(botID)
 		if err != nil {
 			debuglog.Cache("userResolver: GetBotInfo team=%s bot=%s err=%v", r.teamID, botID, err)
 			return
@@ -542,9 +551,9 @@ func (r *userResolver) RequestBot(botID, username string) {
 			name = botID
 		}
 		iconURL := bestBotIcon(bot.Icons)
-		r.avatars.Preload(botID, iconURL)
+		r.avatars.Preload(authorID, iconURL)
 		_ = r.db.UpsertUser(cache.User{
-			ID:          botID,
+			ID:          authorID,
 			WorkspaceID: r.teamID,
 			Name:        name,
 			DisplayName: name,
@@ -552,16 +561,37 @@ func (r *userResolver) RequestBot(botID, username string) {
 			Presence:    "away",
 			IsBot:       true,
 		})
-		r.names.Set(botID, name) // see resolveOne
+		r.names.Set(authorID, name) // see resolveOne
 		if r.send != nil {
 			r.send(ui.UserResolvedMsg{
 				TeamID:      r.teamID,
-				UserID:      botID,
+				UserID:      authorID,
 				DisplayName: name,
 				IsBot:       true,
 			})
 		}
 	}()
+}
+
+// botInfoFor returns the bots.info answer for botID. Concurrent calls for
+// one bot share a request, and a successful answer is kept for the
+// resolver's life.
+func (r *userResolver) botInfoFor(botID string) (*slack.Bot, error) {
+	if bot, ok := r.botInfo.Load(botID); ok {
+		return bot.(*slack.Bot), nil
+	}
+	v, err, _ := r.bots.Do(botID, func() (any, error) {
+		bot, err := r.client.GetBotInfo(context.Background(), botID)
+		if err != nil {
+			return nil, err
+		}
+		r.botInfo.Store(botID, bot)
+		return bot, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(*slack.Bot), nil
 }
 
 // bestBotIcon returns the best bot icon URL for the avatar grid. The
