@@ -155,74 +155,73 @@ func sectionForLegacy(item ChannelItem) string {
 // always uses config-mode logic. The Slack-mode dispatcher is
 // *Model.modelOrderedSections.
 func orderedSections(items []ChannelItem, filtered []int) []string {
-	return orderedSectionsLegacy(items, filtered)
+	return orderedSectionsLegacy(items, filtered, nil)
+}
+
+// SectionDefault is what a [sections."<name>"] entry says about a
+// config-mode section beyond its patterns. A built-in section
+// ("Channels", "Direct Messages", "Apps") with an Order is placed among
+// the custom ones; without one it stays at the end. Collapsed, when set,
+// is the section's state until the user toggles it.
+type SectionDefault struct {
+	Order     *int
+	Collapsed *bool
 }
 
 // orderedSectionsLegacy returns the section names in display order given the
-// currently filtered items. Custom (user-defined) sections come first,
-// sorted by SectionOrder ascending then by first-appearance for ties.
-// The three built-in fallback sections are appended at the end in this
-// order: "Direct Messages" (humans you talk to one-on-one), "Apps"
-// (Slack apps and bots), then "Channels" (the firehose). Anything the
-// user pinned to a custom section still wins the top spots.
-func orderedSectionsLegacy(items []ChannelItem, filtered []int) []string {
-	type customInfo struct {
+// currently filtered items. Custom (user-defined) sections, and built-in
+// sections that have an order in defaults, come first, sorted by order
+// ascending then by first-appearance for ties. The remaining built-in
+// fallback sections are appended at the end in this order: "Direct
+// Messages" (humans you talk to one-on-one), "Apps" (Slack apps and bots),
+// then "Channels" (the firehose).
+func orderedSectionsLegacy(items []ChannelItem, filtered []int, defaults map[string]SectionDefault) []string {
+	type placedInfo struct {
 		name      string
 		order     int
 		firstSeen int
 	}
-	var customs []customInfo
-	customSeen := map[string]int{} // name -> index into customs
-	hasChannels := false
-	hasDMs := false
-	hasApps := false
+	var placed []placedInfo
+	placedSeen := map[string]int{} // name -> index into placed
+	trailing := map[string]bool{}
 
 	for pos, idx := range filtered {
 		item := items[idx]
 		name := sectionForLegacy(item)
-		switch {
-		case item.Section != "":
-			if existing, ok := customSeen[name]; ok {
-				// Prefer the smallest SectionOrder seen across items in this section.
-				if item.SectionOrder < customs[existing].order {
-					customs[existing].order = item.SectionOrder
-				}
+		order := item.SectionOrder
+
+		if item.Section == "" {
+			def := defaults[name]
+			if def.Order == nil {
+				trailing[name] = true
 				continue
 			}
-			customSeen[name] = len(customs)
-			customs = append(customs, customInfo{
-				name:      name,
-				order:     item.SectionOrder,
-				firstSeen: pos,
-			})
-		case name == defaultDMSection:
-			hasDMs = true
-		case name == defaultAppsSection:
-			hasApps = true
-		default:
-			hasChannels = true
+			order = *def.Order
 		}
+
+		if existing, ok := placedSeen[name]; ok {
+			placed[existing].order = min(placed[existing].order, order)
+			continue
+		}
+		placedSeen[name] = len(placed)
+		placed = append(placed, placedInfo{name: name, order: order, firstSeen: pos})
 	}
 
-	sort.SliceStable(customs, func(i, j int) bool {
-		if customs[i].order != customs[j].order {
-			return customs[i].order < customs[j].order
+	sort.SliceStable(placed, func(i, j int) bool {
+		if placed[i].order != placed[j].order {
+			return placed[i].order < placed[j].order
 		}
-		return customs[i].firstSeen < customs[j].firstSeen
+		return placed[i].firstSeen < placed[j].firstSeen
 	})
 
-	out := make([]string, 0, len(customs)+3)
-	for _, c := range customs {
-		out = append(out, c.name)
+	out := make([]string, 0, len(placed)+3)
+	for _, p := range placed {
+		out = append(out, p.name)
 	}
-	if hasDMs {
-		out = append(out, defaultDMSection)
-	}
-	if hasApps {
-		out = append(out, defaultAppsSection)
-	}
-	if hasChannels {
-		out = append(out, defaultChannelsSection)
+	for _, name := range []string{defaultDMSection, defaultAppsSection, defaultChannelsSection} {
+		if _, isPlaced := placedSeen[name]; trailing[name] && !isPlaced {
+			out = append(out, name)
+		}
 	}
 	return out
 }
@@ -300,6 +299,8 @@ type Model struct {
 	// Renames preserve collapse state because the ID is stable.
 	// Populated lazily; lookups treat nil as empty. Used in Task 9.
 	collapseByID map[string]bool
+	// sectionDefaults holds the config-mode [sections] entries by name.
+	sectionDefaults map[string]SectionDefault
 	// startCollapsed is the state of a section never toggled
 	// ([sidebar] start_collapsed).
 	startCollapsed bool
@@ -773,7 +774,7 @@ func (m *Model) sectionFor(item ChannelItem) string {
 // are standard-typed. Config mode: legacy algorithm.
 func (m *Model) modelOrderedSections(filtered []int) []string {
 	if !m.useSlackSections() {
-		return orderedSectionsLegacy(m.items, filtered)
+		return orderedSectionsLegacy(m.items, filtered, m.sectionDefaults)
 	}
 	metas := m.sectionsProvider.OrderedSlackSections()
 	hasItem := map[string]bool{}
@@ -988,15 +989,6 @@ func (m *Model) dirty() { m.version++ }
 
 func New(items []ChannelItem) Model {
 	m := Model{items: items, mentionAbove: -1, mentionBelow: -1}
-	// Default collapse state: the firehose "Channels" section and the
-	// "Apps" section start collapsed so the sidebar opens on a tidy
-	// view of pinned sections + human DMs. Custom sections and DMs
-	// default to expanded. Users toggle individual sections with
-	// Enter/Space on the header.
-	m.collapsed = map[string]bool{
-		defaultChannelsSection: true,
-		defaultAppsSection:     true,
-	}
 	m.rebuildFilter()
 	m.rebuildNav()
 	// Default selection is the synthetic Threads row at the top.
@@ -1087,13 +1079,37 @@ func (m *Model) IsSectionHeaderSelected() (name string, ok bool) {
 // IsCollapsed reports whether the named section is currently collapsed.
 // In Slack mode, the section parameter is a section ID and lookup uses
 // collapseByID (so renames preserve state). In config mode, it's a
-// section name and lookup uses collapsed. A section never toggled is
-// collapsed iff [sidebar] start_collapsed is on.
+// section name and lookup uses collapsed. A config-mode section never
+// toggled takes its [sections] entry's collapsed value when set. Failing
+// that, the firehose "Channels" and the "Apps" sections are collapsed so
+// the sidebar opens on pinned sections and human DMs, and any other
+// section is collapsed iff [sidebar] start_collapsed is on.
 func (m *Model) IsCollapsed(section string) bool {
 	if c, ok := m.collapseState()[section]; ok {
 		return c
 	}
+
+	if !m.useSlackSections() {
+		if c := m.sectionDefaults[section].Collapsed; c != nil {
+			return *c
+		}
+		if section == defaultChannelsSection || section == defaultAppsSection {
+			return true
+		}
+	}
 	return m.startCollapsed
+}
+
+// SetSectionDefaults replaces the config-mode [sections] entries of the
+// workspace on screen. The model keeps the map; callers never write it
+// afterwards.
+func (m *Model) SetSectionDefaults(defaults map[string]SectionDefault) {
+	key, hadKey := m.currentCursorKey()
+	m.sectionDefaults = defaults
+	m.rebuildFilter()
+	m.rebuildNavWithCursor(key, hadKey)
+	m.cacheValid = false
+	m.dirty()
 }
 
 // collapseState is the toggled-state map for the current mode.

@@ -1766,6 +1766,7 @@ func run() error {
 			UserGroups:       wctx.UserGroups(),
 			SelfUserGroups:   wctx.SelfUserGroups(),
 			SectionsProvider: sectionsProviderAdapter{store: wctx.SectionStore},
+			SectionDefaults:  wctx.SectionDefaults,
 			DefaultChannel:   snap.ResolveDefaultChannel(teamID),
 			// Ordered by reduceWorkspaceSwitched to run after
 			// ResetPresence and the activeTeamID update, so its
@@ -2071,6 +2072,7 @@ func run() error {
 				UserGroups:       wctx.UserGroups(),  // empty at this point; filled by the goroutine below
 				SelfUserGroups:   wctx.SelfUserGroups(),
 				SectionsProvider: sectionsProviderAdapter{store: wctx.SectionStore},
+				SectionDefaults:  wctx.SectionDefaults,
 				InitialActive:    isInitial,
 				LastChannelID:    mostRecentlyVisitedChannel(wctx.LastVisitedByChannel),
 				DefaultChannel:   cfgSnap.ResolveDefaultChannel(wctx.TeamID),

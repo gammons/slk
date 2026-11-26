@@ -399,6 +399,7 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		log.Printf("workspace %s: no conversations from either users.conversations or client.userBoot; the sidebar will be empty", token.TeamName)
 	}
 
+	wctx.SectionDefaults = sectionDefaults(cfg, client.TeamID())
 	for _, ch := range channels {
 		item, finderItem := buildChannelItem(ch, wctx, cfg, client.TeamID())
 		upsertChannelInDB(db, ch, item.Type, client.TeamID())

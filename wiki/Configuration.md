@@ -179,6 +179,17 @@ order = 1
 [sections.Engineering]
 channels = ["eng-general:1", "eng-alerts:2", "eng-*"]
 order = 2
+collapsed = true                # start this section collapsed
+
+# The built-in sections ("Channels", "Direct Messages", "Apps") take
+# the same keys, without channels. order places one among the sections
+# above; built-ins without an order come last, in that order:
+# Direct Messages, Apps, Channels. collapsed sets whether a section
+# starts collapsed, over start_collapsed and the built-in default
+# (Channels and Apps collapsed); toggling a header still wins.
+[sections."Channels"]
+order = 0                       # before Alerts
+collapsed = false
 
 # Per-workspace settings: keyed by a slug you choose at --add-workspace
 # time. team_id ties the slug to the underlying Slack workspace.
