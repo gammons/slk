@@ -853,6 +853,15 @@ func run() error {
 			}
 		}()
 	}
+	recentStatuses := func(teamID string) ([]core.RecentStatus, error) {
+		wctx := router.ByID(teamID)
+		if wctx == nil || wctx.Client == nil {
+			return nil, fmt.Errorf("workspace %s not connected", teamID)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return wctx.Client.ListRecentStatuses(ctx)
+	}
 
 	// wireCallbacks installs all App callbacks once at startup. Most
 	// callbacks read router.Active() at invocation time, so the
@@ -1735,7 +1744,7 @@ func run() error {
 			}
 			_ = wctx.Client.SendTyping(channelID)
 		}
-		app.SetPresenceService(core.NewPresenceService(setStatus, sendTyping, setCustomStatus))
+		app.SetPresenceService(core.NewPresenceService(setStatus, sendTyping, setCustomStatus, recentStatuses))
 
 	}
 

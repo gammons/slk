@@ -23,7 +23,7 @@ func statusDialogApp(t *testing.T) (*App, *[]customStatusCall) {
 	var calls []customStatusCall
 	a.SetPresenceService(core.NewPresenceService(nil, nil, func(text, emoji string, expiration int64) {
 		calls = append(calls, customStatusCall{text, emoji, expiration})
-	}))
+	}, nil))
 	pressKey(t, a, keyMod('s', tea.ModCtrl))
 	typeAppKeys(t, a, "set")
 	pressKey(t, a, keyCode(tea.KeyEnter))

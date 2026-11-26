@@ -112,7 +112,13 @@ func (s Status) StatusGlyph(now time.Time) string {
 	if !s.HasStatus(now) {
 		return ""
 	}
-	if g := shortcodeGlyph(s.Emoji); g != "" {
+	return EmojiGlyph(s.Emoji)
+}
+
+// EmojiGlyph is a status emoji shortcode (":name:" or "name") as the
+// glyph StatusGlyph draws for it: FallbackGlyph when it has none.
+func EmojiGlyph(code string) string {
+	if g := shortcodeGlyph(code); g != "" {
 		return g
 	}
 	return FallbackGlyph

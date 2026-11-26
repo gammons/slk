@@ -240,6 +240,15 @@ func dialogGoldens() []dialogGolden {
 			},
 		},
 		{
+			name: "dialog_presence_menu_recent", want: "☕ On a break", shown: presShown,
+			open: func(t *testing.T, a *App) {
+				a.presenceMenu.SetRecent([]core.RecentStatus{{Text: "On a break", Emoji: ":coffee:"}, {Text: "Heads down"}})
+				a.presenceMenu.OpenWith("Acme", "active", false, time.Time{})
+				repeat(6, func() { a.presenceMenu.HandleKey("down") })
+				a.SetMode(ModePresenceMenu)
+			},
+		},
+		{
 			name: "dialog_presence_menu_no_match", want: "No matching options", shown: presShown,
 			open: func(t *testing.T, a *App) {
 				a.presenceMenu.OpenWith("Acme", "active", false, time.Time{})

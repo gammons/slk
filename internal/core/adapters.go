@@ -645,14 +645,23 @@ func NewPresenceService(
 	setStatus func(action PresenceAction, snoozeMinutes int),
 	sendTyping func(channelID string),
 	setCustomStatus func(text, emoji string, expiration int64),
+	recentStatuses func(teamID string) ([]RecentStatus, error),
 ) PresenceService {
-	return presenceAdapter{setStatus: setStatus, sendTyping: sendTyping, setCustomStatus: setCustomStatus}
+	return presenceAdapter{setStatus: setStatus, sendTyping: sendTyping, setCustomStatus: setCustomStatus, recentStatuses: recentStatuses}
 }
 
 type presenceAdapter struct {
 	setStatus       func(action PresenceAction, snoozeMinutes int)
 	sendTyping      func(channelID string)
 	setCustomStatus func(text, emoji string, expiration int64)
+	recentStatuses  func(teamID string) ([]RecentStatus, error)
+}
+
+func (p presenceAdapter) RecentStatuses(teamID string) ([]RecentStatus, error) {
+	if p.recentStatuses == nil {
+		return nil, nil
+	}
+	return p.recentStatuses(teamID)
 }
 
 func (p presenceAdapter) SetCustomStatus(text, emoji string, expiration int64) {
