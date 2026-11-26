@@ -191,12 +191,12 @@ func (db *DB) ReplaceWorkspaceReadState(workspaceID string, updates []ChannelRea
 // GetChannelReadState returns the read state for a single channel.
 // A missing row yields a zero-valued ReadState and a nil error.
 func (db *DB) GetChannelReadState(channelID string) (ReadState, error) {
-	var lastReadTS string
+	var lastReadTS, latestTS string
 	var hasUnread, mentionCount int
 	err := db.conn.QueryRow(
-		`SELECT last_read_ts, has_unread, mention_count FROM channels WHERE id = ?`,
+		`SELECT last_read_ts, has_unread, mention_count, latest_synced_ts FROM channels WHERE id = ?`,
 		channelID,
-	).Scan(&lastReadTS, &hasUnread, &mentionCount)
+	).Scan(&lastReadTS, &hasUnread, &mentionCount, &latestTS)
 	if err == sql.ErrNoRows {
 		return ReadState{}, nil
 	}
@@ -206,16 +206,27 @@ func (db *DB) GetChannelReadState(channelID string) (ReadState, error) {
 	return ReadState{
 		LastReadTS:   lastReadTS,
 		HasUnread:    hasUnread == 1,
+		LatestTS:     latestTS,
 		MentionCount: mentionCount,
 	}, nil
 }
 
 // GetWorkspaceReadState returns channelID -> ReadState for every
-// channel in the workspace. Single batched query. Called by the
-// sidebar View() at render time.
+// channel in the workspace, plus every DM and group DM. A Grid shared
+// DM has one channels row but appears in several member workspaces'
+// users.conversations; the row's workspace_id names only one of them,
+// so a per-workspace query would leave the other views without a read
+// state or a recency timestamp for a conversation they show. Callers
+// only look up IDs they already hold, so the extra rows never add a
+// sidebar entry; they only fill in a conversation that is already
+// there.
+//
+// Single batched query. Called by the sidebar View() at render time.
 func (db *DB) GetWorkspaceReadState(workspaceID string) (map[string]ReadState, error) {
 	rows, err := db.conn.Query(
-		`SELECT id, last_read_ts, has_unread, mention_count FROM channels WHERE workspace_id = ?`,
+		`SELECT id, last_read_ts, has_unread, mention_count, latest_synced_ts
+		 FROM channels
+		 WHERE workspace_id = ? OR type IN ('dm', 'group_dm')`,
 		workspaceID,
 	)
 	if err != nil {
@@ -224,14 +235,15 @@ func (db *DB) GetWorkspaceReadState(workspaceID string) (map[string]ReadState, e
 	defer rows.Close()
 	out := make(map[string]ReadState)
 	for rows.Next() {
-		var id, lastRead string
+		var id, lastRead, latest string
 		var hasUnread, mentionCount int
-		if err := rows.Scan(&id, &lastRead, &hasUnread, &mentionCount); err != nil {
+		if err := rows.Scan(&id, &lastRead, &hasUnread, &mentionCount, &latest); err != nil {
 			return nil, fmt.Errorf("scan workspace read state: %w", err)
 		}
 		out[id] = ReadState{
 			LastReadTS:   lastRead,
 			HasUnread:    hasUnread == 1,
+			LatestTS:     latest,
 			MentionCount: mentionCount,
 		}
 	}

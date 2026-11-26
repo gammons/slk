@@ -47,6 +47,23 @@ func TestSortDMsByRecency(t *testing.T) {
 	}
 }
 
+// Ordering follows the newest message, not just the last read mark: a
+// DM read earlier but with a newer message comes first.
+func TestSortDMsByLatestMessage(t *testing.T) {
+	m := dmRecencyModel()
+	m.SetReadStateReader(func() map[string]core.ReadState {
+		return map[string]core.ReadState{
+			"D-alpha":   {LastReadTS: "500.000000", LatestTS: "100.000000"},
+			"D-bravo":   {LastReadTS: "200.000000", LatestTS: "200.000000"},
+			"D-charlie": {LastReadTS: "300.000000", LatestTS: "400.000000"},
+		}
+	})
+	m.refilter()
+	if got := strings.Join(dmNames(m), ","); got != "Charlie,Bravo,Alpha,Delta" {
+		t.Errorf("DM order = %q, want latest-message order", got)
+	}
+}
+
 func TestUnreadDMBeforeRecentRead(t *testing.T) {
 	m := dmRecencyModel()
 	m.SetReadStateReader(func() map[string]core.ReadState {

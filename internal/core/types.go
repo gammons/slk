@@ -188,6 +188,11 @@ const (
 type ReadState struct {
 	LastReadTS string
 	HasUnread  bool
+	// LatestTS is the newest message timestamp the cache recorded for
+	// the conversation (channels.latest_synced_ts), or empty when none
+	// is known. DM ordering uses it before LastReadTS so a recent
+	// message outranks an older read mark.
+	LatestTS string
 	// MentionCount is the number of unread direct mentions: an explicit
 	// @user or an @here/@channel/@everyone broadcast. For DMs and group
 	// DMs (Slack's ims and mpims), client.counts is believed to report
