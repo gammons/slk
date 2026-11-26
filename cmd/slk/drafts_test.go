@@ -287,6 +287,42 @@ func TestDraftEngine_DiscardDeletesAndForgets(t *testing.T) {
 	}
 }
 
+// A "gone" refusal (the draft no longer exists by the time Discard
+// asked) drops the entry and answers nil, same as a clean delete.
+func TestDraftEngine_DiscardGoneCodeDropsEntryAndForgets(t *testing.T) {
+	for _, code := range []string{"draft_not_found", "draft_already_deleted", "draft_already_sent", "draft_delete_invalid"} {
+		t.Run(code, func(t *testing.T) {
+			api := &fakeDraftAPI{delete: func(string) error { return rejected(code) }}
+			e := newDraftEngine(api, "T1")
+			ctx := context.Background()
+			_, _ = e.Save(ctx, c1, "x", time.Time{}, nil)
+			if err := e.Discard(ctx, c1); err != nil {
+				t.Fatalf("err = %v, want nil (%s means gone)", err, code)
+			}
+			if _, ok := e.entry(c1); ok {
+				t.Errorf("entry not dropped after a %s refusal", code)
+			}
+		})
+	}
+}
+
+// Any other refusal (internal_error, invalid_auth, …) does not mean
+// the draft is gone: Discard keeps the entry and returns the error, so
+// the caller retries with backoff.
+func TestDraftEngine_DiscardOtherRefusalKeepsEntryAndReturnsError(t *testing.T) {
+	api := &fakeDraftAPI{delete: func(string) error { return rejected("internal_error") }}
+	e := newDraftEngine(api, "T1")
+	ctx := context.Background()
+	_, _ = e.Save(ctx, c1, "x", time.Time{}, nil)
+	err := e.Discard(ctx, c1)
+	if err == nil || slackclient.DraftRejectionCode(err) != "internal_error" {
+		t.Fatalf("err = %v, want internal_error", err)
+	}
+	if _, ok := e.entry(c1); !ok {
+		t.Error("entry dropped after a non-gone refusal; want it kept for a retry")
+	}
+}
+
 // Two saves for one conversation never overlap: the second starts after
 // the first answered.
 func TestDraftEngine_OneCallInFlightPerConversation(t *testing.T) {

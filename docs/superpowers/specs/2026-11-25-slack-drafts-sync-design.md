@@ -195,6 +195,16 @@ user typed in slk:
 Stashed drafts never block a save: several may share a destination with the
 attached draft.
 
+### Discarding
+
+On a delete refusal, only `draft_not_found`, `draft_already_deleted`,
+`draft_already_sent` and `draft_delete_invalid` mean the draft is already
+gone: the entry is dropped and Discard answers nil, as on a clean delete.
+Any other refusal (`internal_error`, `invalid_auth`, …) does not mean that
+— the entry is kept and the error returned, so the caller (the composer
+tick or the quit flush) retries with backoff instead of silently forgetting
+a draft Slack still has.
+
 ### Drafts list
 
 `:drafts` (keyless, like `:marks`; listed in the help overlay) opens a modal
@@ -317,6 +327,9 @@ One `draftEngine` per workspace (on `WorkspaceContext`), owning:
   the same key forgot the draft is refused (`ErrDraftStale`) instead of
   recreating it;
 - the create/update choice and the conflict table above;
+- `Discard`'s gone-code table: only `draft_not_found`, `draft_already_deleted`,
+  `draft_already_sent` and `draft_delete_invalid` drop the entry; any other
+  refusal keeps it and is returned;
 - `beginSend(dest)` for the send adapters (`Send` / `SendReply` in
   `main.go`, through `sendWithDraft`), which waits for that key's in-flight
   save, returns the `DraftRef`, and forgets the key once the post succeeds.

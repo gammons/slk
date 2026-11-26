@@ -309,9 +309,21 @@ func (e *draftEngine) update(ctx context.Context, dest draftDest, id string, w s
 	return core.DraftSaveResult{Draft: coreDraft(e.teamID, d), Replaced: replaced}, nil
 }
 
+// draftGoneCodes are the delete refusals that mean the draft no longer
+// exists (deleted elsewhere, sent, or never there): Discard treats them
+// like success and forgets the entry. Any other refusal (internal_error,
+// invalid_auth, …) does not mean the draft is gone, so Discard keeps the
+// entry and returns the error for the caller to retry.
+var draftGoneCodes = map[string]bool{
+	"draft_not_found":       true,
+	"draft_already_deleted": true,
+	"draft_already_sent":    true,
+	"draft_delete_invalid":  true,
+}
+
 // Discard deletes dest's draft if the engine knows a writable one. A
-// refusal means it is gone already; a transport error is returned so
-// the caller retries.
+// gone-code refusal (draftGoneCodes) means it is gone already; any
+// other error, refusal or transport, is returned so the caller retries.
 func (e *draftEngine) Discard(ctx context.Context, dest draftDest) error {
 	unlock, err := e.lock(ctx, dest)
 	if err != nil {
@@ -322,7 +334,7 @@ func (e *draftEngine) Discard(ctx context.Context, dest draftDest) error {
 	if !ok || ent.handsOff {
 		return nil
 	}
-	if err := e.api.DeleteDraft(ctx, ent.id); err != nil && slackclient.DraftRejectionCode(err) == "" {
+	if err := e.api.DeleteDraft(ctx, ent.id); err != nil && !draftGoneCodes[slackclient.DraftRejectionCode(err)] {
 		return err
 	}
 	e.drop(dest)
