@@ -1708,6 +1708,14 @@ func (a *App) toggleReactionOnMessageItem(channelIDStr string, msg messages.Mess
 // copyMessageOfSelected copies the text of the currently-selected message or
 // thread reply to the system clipboard and emits a status-bar toast.
 func (a *App) copyMessageOfSelected() tea.Cmd {
+	if a.view == ViewActivity && a.focusedPanel == PanelMessages {
+		if body, ok := a.activityView.SelectedBody(); ok {
+			return a.copyMessageText(messages.MessageCopyText(messages.MessageItem{
+				Text: body.Text, UserID: body.UserID,
+			}))
+		}
+		return a.activityBodyNotLoadedCmd()
+	}
 	p, _, ok := a.focusedContentPane()
 	if !ok {
 		return nil
@@ -1716,8 +1724,23 @@ func (a *App) copyMessageOfSelected() tea.Cmd {
 	if !ok {
 		return nil
 	}
+	return a.copyMessageText(messages.MessageCopyText(msg))
+}
 
-	text := messages.MessageCopyText(msg)
+// activityBodyNotLoadedCmd answers y/o on an Activity card whose body has
+// not been fetched yet. The card is selected but there is nothing to copy
+// or open, so say so rather than doing nothing.
+func (a *App) activityBodyNotLoadedCmd() tea.Cmd {
+	if _, ok := a.activityView.SelectedItem(); ok {
+		return func() tea.Msg { return ToastMsg{Text: "Message not loaded yet"} }
+	}
+	return nil
+}
+
+// copyMessageText writes text to the clipboard and reports the count;
+// empty text is refused with a toast. Shared by the selected pane
+// message and the selected Activity card.
+func (a *App) copyMessageText(text string) tea.Cmd {
 	if text == "" {
 		return func() tea.Msg { return ToastMsg{Text: "Message has no text"} }
 	}
@@ -1777,6 +1800,12 @@ func (a *App) copyPermalinkOfSelected() tea.Cmd {
 // open the link picker modal. All opens converge on OpenLinkMsg,
 // the single routing point in reducer_links.go.
 func (a *App) openLinksOfSelected() tea.Cmd {
+	if a.view == ViewActivity && a.focusedPanel == PanelMessages {
+		if body, ok := a.activityView.SelectedBody(); ok {
+			return a.openLinkList(messages.ExtractLinks(body.Text))
+		}
+		return a.activityBodyNotLoadedCmd()
+	}
 	p, _, ok := a.focusedContentPane()
 	if !ok {
 		return nil
@@ -1785,7 +1814,12 @@ func (a *App) openLinksOfSelected() tea.Cmd {
 	if !ok {
 		return nil
 	}
-	links := messages.MessageLinks(msg)
+	return a.openLinkList(messages.MessageLinks(msg))
+}
+
+// openLinkList shows the picked links: 0 -> toast, 1 -> open directly,
+// 2+ -> the link picker. All opens converge on OpenLinkMsg.
+func (a *App) openLinkList(links []messages.Link) tea.Cmd {
 	switch len(links) {
 	case 0:
 		return func() tea.Msg { return ToastMsg{Text: "No links in message"} }

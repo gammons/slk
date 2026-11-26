@@ -409,11 +409,18 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		// the cursor follows, then open the highlighted item (mirrors
 		// the ViewThreads branch and the j/k/Enter paths).
 		if a.view == ViewActivity {
-			panel, _, py, ok := a.panelAt(m.X, m.Y)
-			if ok && panel == PanelMessages && py >= 0 && a.activityView.ClickAt(py) {
-				if it, ok := a.activityView.SelectedItem(); ok {
-					team := a.activeTeamID
-					return func() tea.Msg { return ActivitySelectedMsg{TeamID: team, Item: it} }
+			panel, px, py, ok := a.panelAt(m.X, m.Y)
+			if ok && panel == PanelMessages && py >= 0 {
+				// A card's preview carries links; they open before the
+				// card's own select/open behavior.
+				if url, hit := a.activityView.HitTestLink(py, px); hit {
+					return func() tea.Msg { return OpenLinkMsg{URL: url} }
+				}
+				if a.activityView.ClickAt(py) {
+					if it, ok := a.activityView.SelectedItem(); ok {
+						team := a.activeTeamID
+						return func() tea.Msg { return ActivitySelectedMsg{TeamID: team, Item: it} }
+					}
 				}
 			}
 			return nil
