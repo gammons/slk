@@ -62,7 +62,12 @@
         # `nix develop`: slk's build inputs (Go, libX11) plus vhs, for `make demo-gifs`.
         devShells.default = pkgs.mkShell {
           inputsFrom = [ slk ];
-          packages = [ vhs-sixel ];
+          packages = [
+            vhs-sixel # For generating demo gifs
+            pkgs.gopls # LSP server
+            pkgs.delve # Debugger
+            pkgs.golangci-lint # Linter
+          ];
         };
       });
 }
