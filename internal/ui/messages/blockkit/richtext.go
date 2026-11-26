@@ -35,7 +35,7 @@ func RichTextToMrkdwn(rt RichTextBlock) string {
 		case *slack.RichTextPreformatted:
 			parts = append(parts, preformattedToMrkdwn(v.Elements))
 		case *slack.RichTextQuote:
-			parts = append(parts, quoteToMrkdwn(v.Elements))
+			parts = append(parts, quoteLines(sectionToMrkdwn(v.Elements), v.Border))
 			// RichTextUnknown is silently dropped — we can't render
 			// content we don't understand, but we don't want it to
 			// crash the conversion either.
@@ -252,14 +252,10 @@ func preformattedToMrkdwn(elements []slack.RichTextSectionElement) string {
 	return "```\n" + b.String() + "\n```"
 }
 
-// quoteToMrkdwn emits a rich_text_quote as one or more "> " lines.
-// Each "\n" inside the section becomes a line boundary that gets
-// its own "> " prefix.
-func quoteToMrkdwn(elements []slack.RichTextSectionElement) string {
-	body := sectionToMrkdwn(elements)
-	lines := strings.Split(body, "\n")
-	for i, l := range lines {
-		lines[i] = "> " + l
+func quoteLines(body string, border int) string {
+	prefix := "> "
+	if border == 1 {
+		prefix += "> "
 	}
-	return strings.Join(lines, "\n")
+	return prefix + strings.ReplaceAll(body, "\n", "\n"+prefix)
 }
