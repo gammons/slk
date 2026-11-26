@@ -634,6 +634,88 @@ func TestDraftSync_SaveBuiltBeforeSendDoesNotRecreateIt(t *testing.T) {
 	}
 }
 
+// A save built before a delete is confirmed must not recreate the
+// draft the delete just removed: confirming the delete bumps the
+// key's generation before the delete call itself runs, and the save's
+// own current (passed through the way the engine checks it under its
+// lock) must see that bump and refuse before any API call is made.
+func TestDraftDelete_QueuedSaveDoesNotRecreateIt(t *testing.T) {
+	a := newTestApp(t, withActiveTeam("T1"), withActiveChannel("C1"))
+	a.compose.SetDraftContext("T1", "C1", "")
+	var saveCalls int
+	a.setDraftServiceForTest(core.DraftServiceFuncs{
+		Save: func(k core.DraftKey, text string, edited time.Time, current func() bool) (core.DraftSaveResult, error) {
+			if current != nil && !current() {
+				return core.DraftSaveResult{}, core.ErrDraftStale
+			}
+			saveCalls++
+			return core.DraftSaveResult{Draft: core.Draft{ID: "Dr-" + k.ChannelID, Key: k, Text: text}}, nil
+		},
+		Discard: func(k core.DraftKey) error { return nil },
+	})
+	a.Update(draftsLoadedMsg{teamID: "T1"})
+
+	a.compose.SetValue("hello")
+	tick(t, a)                    // observe
+	cmds := a.syncDrafts(a.now()) // builds the save command, capturing gen
+
+	if len(cmds) != 1 {
+		t.Fatalf("cmds = %d, want 1 (the save built before the delete)", len(cmds))
+	}
+
+	key := core.DraftKey{TeamID: "T1", ChannelID: "C1"}
+	a.Update(draftDeleteConfirmedMsg{teamID: "T1", draft: core.Draft{ID: "Dr1", Key: key, Text: "hello"}})
+
+	for _, c := range cmds {
+		c()
+	}
+
+	if saveCalls != 0 {
+		t.Errorf("the stale save reached the service %d times, want 0", saveCalls)
+	}
+}
+
+// While a confirmed delete is in flight, the tick must not queue a new
+// save for its key: a save that raced the delete for the engine's
+// per-conversation lock would only have to be answered with
+// ErrDraftStale (or undone once the delete lands), for no benefit.
+func TestDraftDelete_TicksIssueNoSaveWhileInFlight(t *testing.T) {
+	a, calls, _ := draftSyncApp(t, nil)
+	key := core.DraftKey{TeamID: "T1", ChannelID: "C1"}
+	a.Update(draftDeleteConfirmedMsg{teamID: "T1", draft: core.Draft{ID: "Dr1", Key: key, Text: "hello"}})
+
+	a.compose.SetValue("typed while the delete is in flight")
+	tick(t, a)
+	tick(t, a)
+
+	if len(*calls) != 0 {
+		t.Errorf("a save was issued while the delete was in flight: %s", ops(*calls))
+	}
+}
+
+// A failed delete must leave the slot as it is, so the next tick
+// resyncs it instead of leaving the key stuck "deleting" forever.
+func TestDraftDelete_FailureResumesSyncing(t *testing.T) {
+	a, calls, _ := draftSyncApp(t, nil)
+	key := core.DraftKey{TeamID: "T1", ChannelID: "C1"}
+	draft := core.Draft{ID: "Dr1", Key: key, Text: "hello"}
+	a.Update(draftDeleteConfirmedMsg{teamID: "T1", draft: draft})
+
+	a.Update(draftDeletedMsg{teamID: "T1", draft: draft, err: errors.New("boom")})
+
+	if a.drafts.deleting[key] {
+		t.Fatal("deleting not cleared after a failed delete")
+	}
+
+	a.compose.SetValue("resumed")
+	tick(t, a)
+	tick(t, a)
+
+	if got := ops(*calls); got != `save C1/ "resumed"` {
+		t.Errorf("calls = %s, want the resumed save", got)
+	}
+}
+
 // A Load failure for a workspace that has never loaded leaves sync
 // silently off unless it is retried. reduceDraftsLoaded must schedule
 // a backed-off retry (DraftsStaleMsg, which re-issues the load) and

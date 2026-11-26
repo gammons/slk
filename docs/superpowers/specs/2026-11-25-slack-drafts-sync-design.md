@@ -233,6 +233,16 @@ not known to push draft changes.
   user asked.
 - `esc` closes.
 
+Confirming the delete (for a draft with a conversation key) immediately
+bumps that key's save generation and marks it "deleting", before the
+delete call itself is even made -- not only once it answers. Without this,
+a save built earlier and still waiting on the engine's per-conversation
+lock could pass its own freshness check and create a new draft right
+after the delete releases that lock and forgets it, leaving Slack holding
+an untracked draft while the user saw "Draft deleted". While a key is
+"deleting" neither the tick nor the quit flush queues a new save for it;
+a failed delete clears it so the next tick resyncs normally.
+
 ### Option
 
 ```toml
@@ -399,7 +409,13 @@ sends `ui.DraftsStaleMsg{TeamID}`; the App answers by calling `Load`.
 - The App keeps the active workspace's list rows; `draftlist` draws them with
   `bubbles/chrome` and is composited in `view_overlays.go` like the marks
   overlay. `:drafts` is an entry in `commands` and a keyless help entry in
-  `DefaultKeyMap`.
+  `DefaultKeyMap`. `reduceDraftDeleteConfirmed` runs the instant a delete is
+  confirmed, before `deleteDraftCmd`'s call is made: for a draft with a
+  conversation key it bumps the gen, `touch`es the key, and sets
+  `d.deleting[key]`. `(*draftSync).syncable` excludes a `deleting` key, so
+  the tick and the quit flush never queue a save for it while the delete
+  is in flight; `reduceDraftDeleted` clears `deleting[key]` on both success
+  and failure.
 
 ### Formatting
 

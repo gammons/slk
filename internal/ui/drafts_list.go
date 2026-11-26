@@ -128,6 +128,28 @@ func (a *App) confirmDeleteDraft(d core.Draft) {
 	})
 }
 
+// reduceDraftDeleteConfirmed runs the instant the user confirms a
+// delete, before deleteDraftCmd's call is even made: for a draft with
+// a conversation key, it bumps the key's generation and touches it,
+// and marks the key deleting. Without this, a save built earlier and
+// still waiting on the engine's per-conversation lock could pass
+// current() -- its captured generation still matches -- and create a
+// new draft after the delete has released that lock and forgotten it;
+// the UI would then have no way to tell that save's answer was stale
+// (its generation was captured before any of this ran), so Slack would
+// be left holding an untracked draft while the user saw "Draft
+// deleted". An unaddressed draft (Key.ChannelID == "") has no slot to
+// protect.
+func (a *App) reduceDraftDeleteConfirmed(m draftDeleteConfirmedMsg) tea.Cmd {
+	if k := m.draft.Key; k.ChannelID != "" {
+		d := a.drafts
+		d.genPtr(k).Add(1)
+		d.touch(k)
+		d.deleting[k] = true
+	}
+	return a.deleteDraftCmd(m.teamID, m.draft)
+}
+
 func (a *App) deleteDraftCmd(teamID string, d core.Draft) tea.Cmd {
 	svc := a.draftSvc
 	if svc == nil {
@@ -139,10 +161,13 @@ func (a *App) deleteDraftCmd(teamID string, d core.Draft) tea.Cmd {
 }
 
 func (a *App) reduceDraftDeleted(m draftDeletedMsg) tea.Cmd {
+	d := a.drafts
+	delete(d.deleting, m.draft.Key)
 	if m.err != nil {
+		// Leave the slot as it is: the next tick resyncs it if its
+		// text still differs from synced.
 		return toastWithClear(a, "Couldn't delete draft", 3*time.Second)
 	}
-	d := a.drafts
 	d.removeRow(m.teamID, m.draft.ID)
 	// Whatever kind it was, it is no longer here to block sync.
 	delete(d.handsOff, m.draft.Key)

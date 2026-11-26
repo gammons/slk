@@ -168,6 +168,15 @@ type draftSync struct {
 	// keying freshness on the key alone could not single out which
 	// one was deleted. deletedAt protects the exact id regardless.
 	deletedAt map[string]uint64
+	// deleting marks a key whose delete was confirmed but has not yet
+	// answered: set (with the key's gen bumped) the moment the delete
+	// is confirmed, before the delete call itself runs, so a save
+	// already waiting on the engine's per-conversation lock cannot
+	// pass current() and recreate the draft once the delete releases
+	// that lock and forgets it -- and so neither the tick nor the quit
+	// flush queues a new save for the key while the delete is in
+	// flight. Cleared when the delete answers, success or failure.
+	deleting map[core.DraftKey]bool
 	// loadRetry counts consecutive failures of a workspace's first
 	// (not-yet-loaded) draft load, for the backoff of its retry.
 	// Deleted on success. A failed reload of an already-loaded
@@ -205,6 +214,7 @@ func newDraftSync() *draftSync {
 		rows:            map[string][]core.Draft{},
 		touched:         map[core.DraftKey]uint64{},
 		deletedAt:       map[string]uint64{},
+		deleting:        map[core.DraftKey]bool{},
 		loadRetry:       map[string]int{},
 		lastLoadApplied: map[string]uint64{},
 	}
@@ -263,9 +273,13 @@ func (a *App) eachDraftSlot(fn func(key core.DraftKey, text string, visible bool
 	}
 }
 
-// syncable reports a slot the comparison may act on.
+// syncable reports a slot the comparison (syncDrafts) and the quit
+// flush (UnsyncedDrafts) may act on. deleting excludes a key whose
+// confirmed delete has not answered yet: queuing a new save for it
+// now would only have to be undone once the delete lands, and could
+// race the delete itself for the engine's per-conversation lock.
 func (d *draftSync) syncable(key core.DraftKey) bool {
-	return key.TeamID != "" && d.loaded[key.TeamID] && !d.handsOff[key]
+	return key.TeamID != "" && d.loaded[key.TeamID] && !d.handsOff[key] && !d.deleting[key]
 }
 
 // genPtr returns key's generation counter, creating it on first use.
