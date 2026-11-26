@@ -168,9 +168,12 @@ func draftText(s string) string {
 	return s
 }
 
-// eachDraftSlot calls fn for every slot of both composers and for every
+// eachDraftSlot calls fn for every slot of both composers, for every
 // slot Slack has text for that the composers no longer hold (emptied and
-// left). The composer being edited (E) reports the draft held aside.
+// left), and for every slot with a save in flight that neither of those
+// covers (a key whose first-ever save -- never synced -- is still
+// outstanding when its slot is emptied and left). The composer being
+// edited (E) reports the draft held aside.
 func (a *App) eachDraftSlot(fn func(key core.DraftKey, text string, visible bool)) {
 	seen := map[core.DraftKey]bool{}
 	for _, s := range append(a.compose.Slots(), a.threadCompose.Slots()...) {
@@ -184,6 +187,13 @@ func (a *App) eachDraftSlot(fn func(key core.DraftKey, text string, visible bool
 	}
 	for key := range a.drafts.synced {
 		if !seen[key] {
+			seen[key] = true
+			fn(key, "", false)
+		}
+	}
+	for key := range a.drafts.inflight {
+		if !seen[key] {
+			seen[key] = true
 			fn(key, "", false)
 		}
 	}
@@ -312,7 +322,11 @@ func (a *App) saveDraftCmd(key core.DraftKey, text, wire string, edited time.Tim
 }
 
 // UnsyncedDrafts is every slot whose text Slack does not have, for the
-// save on quit. Text is wire form; "" discards.
+// save on quit, plus any slot whose text Slack is still mid-save on
+// with different text than what is current now (save A, start saving
+// B, change back to A before quitting: text equals synced ("A"), but
+// the in-flight save for B must not be left as Slack's last word, so
+// quit saves A again over it). Text is wire form; "" discards.
 func (a *App) UnsyncedDrafts() []core.DraftChange {
 	if a.draftSvc == nil {
 		return nil
@@ -320,7 +334,8 @@ func (a *App) UnsyncedDrafts() []core.DraftChange {
 	d, now := a.drafts, a.now()
 	var out []core.DraftChange
 	a.eachDraftSlot(func(key core.DraftKey, text string, _ bool) {
-		if !d.syncable(key) || text == d.synced[key] {
+		inflight, busy := d.inflight[key]
+		if !d.syncable(key) || (text == d.synced[key] && !(busy && inflight != text)) {
 			return
 		}
 		wire, ok := a.draftWire(key, text)

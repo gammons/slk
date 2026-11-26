@@ -371,6 +371,33 @@ func TestDraftsLoaded_StaleListDoesNotClearASlotSavedDuringTheRequest(t *testing
 	}
 }
 
+// Save A, start saving B, change back to A, quit: the text at quit
+// equals synced ("A"), but a save for B is still in flight and must
+// not be left as Slack's last word, so UnsyncedDrafts must still
+// include the key, with the current text (A).
+func TestUnsyncedDrafts_IncludesAKeyWithARacingInflightSave(t *testing.T) {
+	a, _, _ := draftSyncApp(t, nil)
+	a.compose.SetValue("A")
+	tick(t, a)
+	tick(t, a) // A saved: synced[C1] = "A"
+
+	a.compose.SetValue("B")
+	a.syncDrafts(a.now())         // observe B
+	cmds := a.syncDrafts(a.now()) // builds (and marks in flight) the save for B
+	if len(cmds) != 1 {
+		t.Fatalf("cmds = %d, want 1 (the in-flight save for B)", len(cmds))
+	}
+	// The in-flight save's answer has not landed: synced is still "A".
+
+	a.compose.SetValue("A") // changed back before quitting
+
+	got := a.UnsyncedDrafts()
+	key := core.DraftKey{TeamID: "T1", ChannelID: "C1"}
+	if len(got) != 1 || got[0].Key != key || got[0].Text != "A" {
+		t.Errorf("UnsyncedDrafts = %+v, want one change for %v with text %q", got, key, "A")
+	}
+}
+
 func TestUnsyncedDrafts(t *testing.T) {
 	a, _, _ := draftSyncApp(t, nil)
 	a.compose.SetValue("typed just before quitting")

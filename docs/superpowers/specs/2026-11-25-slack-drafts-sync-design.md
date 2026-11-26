@@ -105,7 +105,13 @@ so comparing catches them all where hooking each would miss one.
   interval, 2 to 4 seconds after the last keystroke.
 - A slot the composer has moved away from (another conversation, another
   workspace) is saved at the next check; it stays in memory until then.
-- On quit, every slot that differs is saved with a 2-second deadline.
+- On quit, every slot that differs from what Slack last had is saved with a
+  2-second deadline -- and so is a slot whose current text equals that
+  (nothing to re-save, on the face of it) but has a save in flight for
+  *different* text: save A, start saving B, change back to A, quit would
+  otherwise see text == synced ("A") and flush nothing, leaving Slack's
+  draft at whatever the in-flight save for B lands as. The flush visits
+  such a key with its current text (here, A).
 
 Non-empty text is saved; empty or whitespace-only text discards the slot's
 draft. slk sends the time it first saw the slot's current text as
