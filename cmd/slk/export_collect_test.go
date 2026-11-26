@@ -311,8 +311,8 @@ func TestExportMessageItem(t *testing.T) {
 
 func TestExportMessageItem_BotAndUnknownAuthors(t *testing.T) {
 	bot := exportMessageItem(slack.Message{Msg: slack.Msg{BotID: "B1", Username: "deploybot"}}, newUserNameStore(nil), nil)
-	if bot.UserID != "B1" || bot.UserName != "deploybot" {
-		t.Errorf("bot author = %q/%q, want B1/deploybot", bot.UserID, bot.UserName)
+	if bot.UserID != "B1/deploybot" || bot.UserName != "deploybot" {
+		t.Errorf("bot author = %q/%q, want B1/deploybot and deploybot", bot.UserID, bot.UserName)
 	}
 	unknown := exportMessageItem(slack.Message{Msg: slack.Msg{User: "U404"}}, newUserNameStore(nil), nil)
 	if unknown.UserID != "U404" || unknown.UserName != "U404" {

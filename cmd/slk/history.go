@@ -300,20 +300,23 @@ func enrichCachedRow(
 	router *workspaceRouter,
 	stats *enrichPerfStats,
 ) messages.MessageItem {
-	// Bot rows cached before the bot-identity fix have an empty UserID but
-	// carry bot_id + username in raw_json. Re-key them on the bot_id and
-	// resolve the avatar/name via bots.info so cached bot messages render
-	// like freshly-fetched ones (without this they stay blank until a
-	// live re-fetch, which never reaches messages older than the latest 50).
+	// Bot rows cached before the bot-identity fix have an empty UserID, and
+	// rows cached before senders were told apart have the bare bot_id. Both
+	// carry bot_id + username in raw_json. Re-key them on
+	// core.BotAuthorID and resolve the avatar/name via bots.info so cached
+	// bot messages render like freshly-fetched ones (without this they stay
+	// blank, or under another sender's name, until a live re-fetch, which
+	// never reaches messages older than the latest 50).
 	effUserID := m.UserID
 	botUsername := ""
-	if effUserID == "" && m.RawJSON != "" {
+	if m.RawJSON != "" && (effUserID == "" || isBareBotID(effUserID)) {
 		var rawBot struct {
 			BotID    string `json:"bot_id"`
 			Username string `json:"username"`
 		}
-		if json.Unmarshal([]byte(m.RawJSON), &rawBot) == nil && rawBot.BotID != "" {
-			effUserID = rawBot.BotID
+		if json.Unmarshal([]byte(m.RawJSON), &rawBot) == nil && rawBot.BotID != "" &&
+			(effUserID == "" || effUserID == rawBot.BotID) {
+			effUserID = core.BotAuthorID(rawBot.BotID, rawBot.Username)
 			botUsername = rawBot.Username
 			if router != nil {
 				if wctx := router.Active(); wctx != nil && wctx.UserResolver != nil {
@@ -467,6 +470,13 @@ func marshalWithRoom(client *slackclient.Client, channelID string, m slack.Messa
 		return raw, nil
 	}
 	return slackclient.MergeRoom(raw, room), core.ParseHuddleRoom(room)
+}
+
+// isBareBotID reports whether a cached row's UserID is a bot_id without
+// the sender's username (rows cached before core.BotAuthorID). User IDs
+// start with U or W, bot IDs with B.
+func isBareBotID(id string) bool {
+	return strings.HasPrefix(id, "B") && !strings.Contains(id, "/")
 }
 
 // roomFromRawJSON reads the `room` object back out of a cached raw_json.

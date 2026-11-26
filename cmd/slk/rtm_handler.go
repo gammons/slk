@@ -211,7 +211,7 @@ func (h *rtmEventHandler) discoverAndPublish(channelID string) {
 
 func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, changed, edited bool, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment, botID, username string) {
 	// Bot messages (bot_message) carry no user, only a bot_id + username.
-	// Key the row on the bot_id and resolve its avatar/name via bots.info,
+	// Key the row on core.BotAuthorID and resolve its avatar/name via bots.info,
 	// mirroring the fetch path's messageAuthor (cmd/slk/users.go).
 	authorID := h.messageAuthor(userID, botID, username)
 	if h.wsCtx != nil {
@@ -573,7 +573,7 @@ func (h *rtmEventHandler) cacheChange(channelID, ts, text, threadTS string, file
 
 // messageAuthor returns the ID a WebSocket message is attributed to. A
 // bot message carries no user, only a bot_id and username: it is keyed
-// on the bot_id and its avatar/name resolved via bots.info, mirroring
+// on core.BotAuthorID and its avatar/name resolved via bots.info, mirroring
 // the fetch-path messageAuthor helper.
 func (h *rtmEventHandler) messageAuthor(userID, botID, username string) string {
 	if userID != "" || botID == "" {
@@ -582,7 +582,7 @@ func (h *rtmEventHandler) messageAuthor(userID, botID, username string) string {
 	if h.wsCtx != nil && h.wsCtx.UserResolver != nil {
 		h.wsCtx.UserResolver.RequestBot(botID, username)
 	}
-	return botID
+	return core.BotAuthorID(botID, username)
 }
 
 // messageItemFromEvent builds the UI's MessageItem for a message that

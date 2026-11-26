@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/gammons/slk/internal/avatar"
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slack/edge"
@@ -510,8 +511,9 @@ func (r *userResolver) applyEdgeUser(u edge.User) {
 }
 
 // RequestBot enqueues a bots.info fetch for a bot author (bot_message has
-// no `user`, only a `bot_id`). Keyed by botID so the resolved name +
-// avatar attach to messages whose UserID was set to the bot_id. username
+// no `user`, only a `bot_id`). Keyed by core.BotAuthorID(botID, username)
+// so the resolved name + avatar attach to messages whose UserID was set
+// to that author ID, and two senders of one webhook stay apart. username
 // is the name carried on the message (used as a fallback / immediate
 // value); bots.info supplies the icon (and a name if the message had
 // none). Mirrors Request: inflight dedup, cache-skip, async fetch,
@@ -520,15 +522,16 @@ func (r *userResolver) RequestBot(botID, username string) {
 	if r == nil || botID == "" {
 		return
 	}
-	if _, exists := r.inflight.LoadOrStore(botID, struct{}{}); exists {
+	authorID := core.BotAuthorID(botID, username)
+	if _, exists := r.inflight.LoadOrStore(authorID, struct{}{}); exists {
 		return
 	}
-	if _, err := r.db.GetUser(botID); err == nil {
-		r.inflight.Delete(botID)
+	if _, err := r.db.GetUser(authorID); err == nil {
+		r.inflight.Delete(authorID)
 		return
 	}
 	go func() {
-		defer r.inflight.Delete(botID)
+		defer r.inflight.Delete(authorID)
 		bot, err := r.client.GetBotInfo(context.Background(), botID)
 		if err != nil {
 			debuglog.Cache("userResolver: GetBotInfo team=%s bot=%s err=%v", r.teamID, botID, err)
@@ -542,9 +545,9 @@ func (r *userResolver) RequestBot(botID, username string) {
 			name = botID
 		}
 		iconURL := bestBotIcon(bot.Icons)
-		r.avatars.Preload(botID, iconURL)
+		r.avatars.Preload(authorID, iconURL)
 		_ = r.db.UpsertUser(cache.User{
-			ID:          botID,
+			ID:          authorID,
 			WorkspaceID: r.teamID,
 			Name:        name,
 			DisplayName: name,
@@ -552,11 +555,11 @@ func (r *userResolver) RequestBot(botID, username string) {
 			Presence:    "away",
 			IsBot:       true,
 		})
-		r.names.Set(botID, name) // see resolveOne
+		r.names.Set(authorID, name) // see resolveOne
 		if r.send != nil {
 			r.send(ui.UserResolvedMsg{
 				TeamID:      r.teamID,
-				UserID:      botID,
+				UserID:      authorID,
 				DisplayName: name,
 				IsBot:       true,
 			})

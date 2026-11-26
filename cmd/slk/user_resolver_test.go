@@ -811,4 +811,30 @@ func TestUserResolver_RecordsNamesInStore(t *testing.T) {
 			t.Errorf("store B1 = (%q, %v); want (\"deploybot\", true)", name, ok)
 		}
 	})
+	t.Run("bots.info per webhook sender", func(t *testing.T) {
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":true,"bot":{"id":"B1","name":"webhook","icons":{}}}`))
+		}))
+		defer srv.Close()
+		db := newTestDB(t)
+		watch := newResolvedWatch(2, nil)
+		r := newUserResolver("T1", newTestClient(t, srv), db, nil, watch.send, nil, nil)
+		store := newUserNameStore(nil)
+		r.names = store
+		r.RequestBot("B1", "Alice")
+		r.RequestBot("B1", "Bob")
+		<-watch.done
+		for id, want := range map[string]string{"B1/Alice": "Alice", "B1/Bob": "Bob"} {
+			if name, ok := store.Get(id); !ok || name != want {
+				t.Errorf("store %s = (%q, %v); want (%q, true)", id, name, ok, want)
+			}
+			if u, err := db.GetUser(id); err != nil || u.DisplayName != want {
+				t.Errorf("users row %s = (%+v, %v); want display name %q", id, u, err, want)
+			}
+		}
+		if _, ok := store.Get("B1"); ok {
+			t.Error("store has a B1 entry; senders must not share the bot_id")
+		}
+	})
 }
