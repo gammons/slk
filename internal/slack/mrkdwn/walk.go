@@ -518,51 +518,79 @@ func (w *walker) walkRawBlock(n *ast.Heading) {
 	w.mrkdwn.WriteString("\n\n")
 }
 
-// walkBlockquote emits a blockquote as a rich_text_quote, its content
-// walked like a paragraph's (formatting, mentions and links intact), and
-// as "> " lines in the mrkdwn fallback, which is Slack's own quote marker.
-// Paragraphs inside it are separated by a line break. A block other than a
-// paragraph (a list or code block in the quote) goes in as its text.
-//
-// It used to be emitted as one flattened text element: line breaks,
-// formatting and code markers were lost, and a link, having no Text node,
-// was dropped from the message.
+// walkBlockquote emits flat runs of quoted text. Slack adds a second
+// bar with border: 1 rather than accepting another quote as a child.
 func (w *walker) walkBlockquote(n *ast.Blockquote) {
 	w.flushSection()
 	outer := w.mrkdwn
+	start := outer.Len()
 	w.mrkdwn = &strings.Builder{}
-	w.curSection = slack.NewRichTextSection()
-	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
-		if c != n.FirstChild() {
-			// A blank quote line separates paragraphs; keep it.
-			w.appendText("\n\n")
+
+	flush := func(depth int) {
+		if w.curSection == nil {
+			return
 		}
-		if p, ok := c.(*ast.Paragraph); ok {
-			w.walkInlineChildren(p)
+		body := strings.TrimRight(w.mrkdwn.String(), "\n")
+		elements := w.curSection.Elements
+		w.curSection = nil
+		w.mrkdwn.Reset()
+		if body == "" {
+			return
+		}
+		// ponytail: Slack's border is binary; 3+ levels use the same double bar.
+		border, marker := 0, ">"
+		if depth > 0 {
+			border, marker = 1, "> >"
+		}
+		for _, line := range strings.Split(body, "\n") {
+			outer.WriteString(marker)
+			if line != "" {
+				outer.WriteByte(' ')
+				outer.WriteString(line)
+			}
+			outer.WriteByte('\n')
+		}
+		w.block.Elements = append(w.block.Elements, &slack.RichTextQuote{
+			Type: slack.RTEQuote, Elements: elements, Border: border,
+		})
+	}
+
+	for parent, c, depth := ast.Node(n), n.FirstChild(), 0; ; {
+		if c == nil {
+			flush(depth)
+			if parent == n {
+				break
+			}
+			parent, c, depth = parent.Parent(), parent.NextSibling(), depth-1
 			continue
 		}
-		var sb strings.Builder
-		collectRawInline(&sb, c, w.source)
-		w.appendRawText(sb.String())
+		switch child := c.(type) {
+		case *ast.Blockquote:
+			if child.HasChildren() {
+				flush(depth)
+				parent, c, depth = child, child.FirstChild(), depth+1
+				continue
+			}
+		default:
+			if w.curSection == nil {
+				w.curSection = slack.NewRichTextSection()
+			} else {
+				w.appendText("\n\n")
+			}
+			if p, ok := c.(*ast.Paragraph); ok {
+				w.walkInlineChildren(p)
+			} else {
+				var sb strings.Builder
+				collectRawInline(&sb, c, w.source)
+				w.appendRawText(sb.String())
+			}
+		}
+		c = c.NextSibling()
 	}
-	body := strings.TrimRight(w.mrkdwn.String(), "\n")
+	if outer.Len() > start {
+		outer.WriteByte('\n')
+	}
 	w.mrkdwn = outer
-	elements := w.curSection.Elements
-	w.curSection = nil
-	if body == "" {
-		return
-	}
-	for _, line := range strings.Split(body, "\n") {
-		if line == "" {
-			w.mrkdwn.WriteString(">\n")
-			continue
-		}
-		w.mrkdwn.WriteString("> ")
-		w.mrkdwn.WriteString(line)
-		w.mrkdwn.WriteString("\n")
-	}
-	w.mrkdwn.WriteString("\n")
-	w.block.Elements = append(w.block.Elements, &slack.RichTextQuote{Type: slack.RTEQuote, Elements: elements})
 }
 
 // collectRawInline appends the source bytes of all *ast.Text and

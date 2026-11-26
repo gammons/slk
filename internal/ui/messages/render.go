@@ -781,6 +781,16 @@ func RenderSlackMarkdown(text string, userNames map[string]string, channelNames 
 	})
 }
 
+func cutQuotePrefix(line string) (string, bool) {
+	if line == ">" || line == "&gt;" {
+		return "", true
+	}
+	if rest, ok := strings.CutPrefix(line, "&gt; "); ok {
+		return rest, true
+	}
+	return strings.CutPrefix(line, "> ")
+}
+
 // RenderSlackMarkdownWith is the full-featured entry point. See
 // RenderSlackMarkdownOpts for the per-call configuration. With a zero
 // opts struct it is byte-identical to RenderSlackMarkdown.
@@ -816,21 +826,26 @@ func RenderSlackMarkdownWith(text string, opts RenderSlackMarkdownOpts) string {
 	lines := strings.Split(text, "\n")
 	var result []string
 	for _, line := range lines {
-		if strings.HasPrefix(line, "&gt; ") || strings.HasPrefix(line, "> ") {
-			quoted := strings.TrimPrefix(line, "&gt; ")
-			quoted = strings.TrimPrefix(quoted, "> ")
+		if quoted, ok := cutQuotePrefix(line); ok {
+			quoted, nested := cutQuotePrefix(quoted)
 			quoted = renderInlineFormattingWith(quoted, opts)
 			quoted = slackEntityDecoder.Replace(quoted)
 			// Inline spans end in a reset that would drop the rest of
 			// the quote out of its muted color.
 			quoted = ReapplyBgAfterResets(quoted, fgANSIFor(styles.TextMuted))
-			// Wrap before drawing the bar so every wrapped row gets one;
-			// the body wrap that runs later would continue the quote
-			// without it. The bar and its padding take two columns.
-			if w := opts.Width; w > 2 {
-				quoted = WordWrap(quoted, w-2)
+			// Wrap before drawing the bars so every wrapped row keeps them.
+			padding := 2
+			if nested {
+				padding += 2
 			}
-			line = blockquoteStyle().Render(quoted)
+			if opts.Width > padding {
+				quoted = WordWrap(quoted, opts.Width-padding)
+			}
+			style := blockquoteStyle()
+			if nested {
+				quoted = style.Render(quoted)
+			}
+			line = style.Render(quoted)
 		} else {
 			line = renderInlineFormattingWith(line, opts)
 			// Decode Slack-escaped entities after markup regexes have

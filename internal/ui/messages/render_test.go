@@ -2,6 +2,7 @@ package messages
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	goimage "image"
 	"image/color"
@@ -14,8 +15,11 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	emojiutil "github.com/gammons/slk/internal/emoji"
 	imgpkg "github.com/gammons/slk/internal/image"
+	"github.com/slack-go/slack"
 
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/slack/mrkdwn"
+	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
@@ -481,6 +485,43 @@ func TestBlockquoteWrapsUnderTheBar(t *testing.T) {
 	}
 	if quotedRows < 2 {
 		t.Fatalf("quote did not wrap (%d rows); the test no longer exercises wrapping:\n%s", quotedRows, strings.Join(lines, "\n"))
+	}
+}
+
+func TestNestedBlockquoteRoundTrip(t *testing.T) {
+	const draft = "> outer\n>> **nested quote**\n>\n> after\n\noutside"
+	fallback, block := mrkdwn.Convert(draft)
+	if want := "> outer\n> > *nested quote*\n> after\n\noutside"; fallback != want {
+		t.Errorf("fallback = %q, want %q", fallback, want)
+	}
+	raw, err := json.Marshal(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var received slack.RichTextBlock
+	if err := json.Unmarshal(raw, &received); err != nil {
+		t.Fatal(err)
+	}
+	if len(received.Elements) != 4 {
+		t.Fatalf("want three quote runs and an outside section, got %s", raw)
+	}
+	for i, border := range []int{0, 1, 0} {
+		if q, ok := received.Elements[i].(*slack.RichTextQuote); !ok || q.Border != border {
+			t.Fatalf("quote run %d should have border %d: %s", i, border, raw)
+		}
+	}
+	rt := blockkit.RichTextBlock{Elements: received.Elements}
+	if got, want := blockkit.RichTextToMarkdown(rt), "> outer\n\n> > **nested quote**\n\n> after\n\noutside"; got != want {
+		t.Errorf("edit source = %q, want %q", got, want)
+	}
+	wire := strings.ReplaceAll(blockkit.RichTextToMrkdwn(rt), ">", "&gt;")
+	rendered := ansi.Strip(RenderSlackMarkdownWith(wire, RenderSlackMarkdownOpts{Width: 10}))
+	lines := strings.Split(rendered, "\n")
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], " ")
+	}
+	if got, want := strings.Join(lines, "\n"), "┃ outer\n┃ ┃ nested\n┃ ┃ quote\n┃ after\noutside"; got != want {
+		t.Errorf("render = %q, want %q", got, want)
 	}
 }
 

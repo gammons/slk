@@ -42,7 +42,7 @@ func RichTextToMarkdown(rt RichTextBlock) string {
 		case *slack.RichTextPreformatted:
 			part = preformattedToMarkdown(v.Elements)
 		case *slack.RichTextQuote:
-			part = quoteToMarkdown(v.Elements)
+			part = quoteLines(strings.Trim(sectionToMarkdown(v.Elements), "\n"), v.Border)
 		}
 		if part == "" {
 			continue
@@ -229,13 +229,4 @@ func preformattedToMarkdown(elements []slack.RichTextSectionElement) string {
 		fence += "`"
 	}
 	return fence + "\n" + body + "\n" + fence
-}
-
-// quoteToMarkdown writes a rich_text_quote as "> " lines.
-func quoteToMarkdown(elements []slack.RichTextSectionElement) string {
-	lines := strings.Split(strings.Trim(sectionToMarkdown(elements), "\n"), "\n")
-	for i, l := range lines {
-		lines[i] = "> " + l
-	}
-	return strings.Join(lines, "\n")
 }
