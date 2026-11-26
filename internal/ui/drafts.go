@@ -75,6 +75,14 @@ type (
 		// loadDraftsCmd); a key touched since then wins over this
 		// list (see reduceDraftsLoaded, finding 3).
 		issued uint64
+		// ordinal is d.loadSeq at the moment the load was issued: a
+		// strictly increasing per-load counter, independent of issued
+		// (which tracks local changes, not load-vs-load order). Two
+		// loads for the same team with nothing touched between them
+		// share the same issued, so issued alone cannot tell which of
+		// two responses is newer when they land out of order; ordinal
+		// can.
+		ordinal uint64
 	}
 	// draftSavedMsg answers a Save (text != "") or a Discard (text "").
 	draftSavedMsg struct {
@@ -165,6 +173,16 @@ type draftSync struct {
 	// Deleted on success. A failed reload of an already-loaded
 	// workspace does not use it (log only, as before).
 	loadRetry map[string]int
+	// loadSeq is bumped at every loadDraftsCmd build, giving each load
+	// issued a strictly increasing ordinal (draftsLoadedMsg.ordinal).
+	// lastLoadApplied[teamID] is the ordinal of the most recent
+	// successful response actually applied for that team; a response
+	// with a lower ordinal landed out of order (an older load answered
+	// after a newer one) and is dropped entirely, so it can never
+	// restore stale text into a slot the newer list already updated or
+	// replace the newer list's rows.
+	loadSeq         uint64
+	lastLoadApplied map[string]uint64
 }
 
 // touch bumps seq and records it against key, marking a local change
@@ -176,18 +194,19 @@ func (d *draftSync) touch(key core.DraftKey) {
 
 func newDraftSync() *draftSync {
 	return &draftSync{
-		loaded:    map[string]bool{},
-		synced:    map[core.DraftKey]string{},
-		observed:  map[core.DraftKey]draftObserved{},
-		inflight:  map[core.DraftKey]string{},
-		wire:      map[core.DraftKey]draftWireEntry{},
-		gen:       map[core.DraftKey]*atomic.Uint64{},
-		retry:     map[core.DraftKey]draftRetry{},
-		handsOff:  map[core.DraftKey]bool{},
-		rows:      map[string][]core.Draft{},
-		touched:   map[core.DraftKey]uint64{},
-		deletedAt: map[string]uint64{},
-		loadRetry: map[string]int{},
+		loaded:          map[string]bool{},
+		synced:          map[core.DraftKey]string{},
+		observed:        map[core.DraftKey]draftObserved{},
+		inflight:        map[core.DraftKey]string{},
+		wire:            map[core.DraftKey]draftWireEntry{},
+		gen:             map[core.DraftKey]*atomic.Uint64{},
+		retry:           map[core.DraftKey]draftRetry{},
+		handsOff:        map[core.DraftKey]bool{},
+		rows:            map[string][]core.Draft{},
+		touched:         map[core.DraftKey]uint64{},
+		deletedAt:       map[string]uint64{},
+		loadRetry:       map[string]int{},
+		lastLoadApplied: map[string]uint64{},
 	}
 }
 
@@ -431,9 +450,11 @@ func (a *App) loadDraftsCmd(teamID string) tea.Cmd {
 		return nil
 	}
 	issued := a.drafts.seq
+	a.drafts.loadSeq++
+	ordinal := a.drafts.loadSeq
 	return func() tea.Msg {
 		ds, err := svc.Load(teamID)
-		return draftsLoadedMsg{teamID: teamID, drafts: ds, err: err, issued: issued}
+		return draftsLoadedMsg{teamID: teamID, drafts: ds, err: err, issued: issued, ordinal: ordinal}
 	}
 }
 
@@ -459,6 +480,10 @@ func (a *App) reduceDraftsLoaded(m draftsLoadedMsg) tea.Cmd {
 		}
 		return a.retryLoadDraftsCmd(m.teamID) // the first load for this workspace: retry with backoff
 	}
+	if m.ordinal < d.lastLoadApplied[m.teamID] {
+		return nil // an older load's response landed after a newer one already applied: drop it entirely
+	}
+	d.lastLoadApplied[m.teamID] = m.ordinal
 	delete(d.loadRetry, m.teamID)
 	d.loaded[m.teamID] = true
 	// A key touched (saved, sent, deleted or vanish-cleared) since this

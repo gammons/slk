@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -391,6 +392,52 @@ func TestDraftEngine_ReloadKeepsWritesMadeDuringTheList(t *testing.T) {
 	want := []string{"list", "create C2 hello", "update Dr1 world -62135596800000"}
 	if got := api.Calls(); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("calls = %v, want %v", got, want)
+	}
+}
+
+// Two concurrent Loads must commit in the order they started: the
+// second's ListDrafts call must not even run until the first's whole
+// reload (call and commit) has finished, so the first (which started
+// earlier) can never clobber the second's (later, so more current)
+// result by finishing its round trip after it.
+func TestDraftEngine_ConcurrentLoadsCommitInStartOrder(t *testing.T) {
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var n int32
+	api := &fakeDraftAPI{}
+	api.list = func() ([]slackclient.Draft, error) {
+		first := atomic.AddInt32(&n, 1) == 1
+		entered <- struct{}{}
+		if first {
+			<-release // the first call is held open
+			return []slackclient.Draft{attached("Dr1", "C1", "", "1.0")}, nil
+		}
+		return []slackclient.Draft{attached("Dr2", "C2", "", "1.0")}, nil
+	}
+	e := newDraftEngine(api, "T1")
+	ctx := context.Background()
+
+	done := make(chan struct{}, 2)
+	go func() { _, _ = e.Load(ctx); done <- struct{}{} }()
+	<-entered // the first call has started (and is blocked in ListDrafts)
+
+	go func() { _, _ = e.Load(ctx); done <- struct{}{} }()
+	select {
+	case <-entered:
+		t.Fatal("the second Load's ListDrafts ran before the first one committed")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	<-entered // now the second call's ListDrafts runs
+	<-done
+	<-done
+
+	if _, ok := e.entry(draftDest{channelID: "C2"}); !ok {
+		t.Error("the later list's conversation (C2) is missing from the index")
+	}
+	if _, ok := e.entry(draftDest{channelID: "C1"}); ok {
+		t.Error("the earlier list's conversation (C1) is in the index: it committed after the later one and clobbered it")
 	}
 }
 

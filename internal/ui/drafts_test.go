@@ -554,6 +554,42 @@ func TestDraftsLoaded_InactiveWorkspaceListIsNotRestored(t *testing.T) {
 	}
 }
 
+// Two loads for the same team issued with no local change between them
+// share the same "issued" (d.seq), so the touched/issued freshness
+// check alone cannot tell which response is newer when they land out
+// of order. The ordinal (d.loadSeq, bumped at every loadDraftsCmd
+// build) must: the older response landing after the newer one must not
+// replace the newer text it already restored into an inactive slot,
+// nor replace the newer list's rows.
+func TestDraftsLoaded_OlderLoadDoesNotReplaceANewerOne(t *testing.T) {
+	a, _, _ := draftSyncApp(t, nil)
+	key := core.DraftKey{TeamID: "T1", ChannelID: "C2"} // inactive: the visible slot is C1
+
+	a.loadDraftsCmd("T1") // issued first: ordinal 1 (older)
+	a.loadDraftsCmd("T1") // issued second: ordinal 2 (newer)
+
+	newer := draftsLoadedMsg{teamID: "T1", ordinal: 2, drafts: []core.Draft{
+		{ID: "DrNew", Key: key, Text: "new"},
+	}}
+	older := draftsLoadedMsg{teamID: "T1", ordinal: 1, drafts: []core.Draft{
+		{ID: "DrOld", Key: key, Text: "old"},
+	}}
+
+	a.Update(newer) // the newer response lands first
+	if txt, _ := a.compose.SlotText("T1", "C2", ""); txt != "new" {
+		t.Fatalf("setup: C2 = %q, want %q", txt, "new")
+	}
+
+	a.Update(older) // the older response lands after
+
+	if txt, _ := a.compose.SlotText("T1", "C2", ""); txt != "new" {
+		t.Errorf("an older load replaced the newer one's text: %q", txt)
+	}
+	if rows := a.drafts.rows["T1"]; len(rows) != 1 || rows[0].ID != "DrNew" {
+		t.Errorf("rows = %v, want just DrNew", rows)
+	}
+}
+
 // A save built before a send must not recreate the draft the send just
 // marked sent: the send bumps the key's generation before the save's
 // service call runs, and the service call's own current (passed

@@ -173,6 +173,19 @@ change (a save answer, a send, a list delete, a vanish-clear) is stamped
 with a sequence number; a list is stamped with the sequence in effect when
 it was issued, and skips restore/vanish/clear for any key touched since.
 
+Two lists for one workspace, issued with no local change between them,
+share that same sequence number, so it alone cannot tell which of two
+responses is newer when they land out of order (a slow first list
+answering after a faster second one). Every list additionally carries its
+own strictly increasing ordinal; a response whose ordinal is lower than
+the last one actually applied for that workspace is dropped outright,
+before it can restore stale text into a slot the newer list already
+updated or replace the newer list's rows. The engine has the same
+ordering hazard one level down -- two of its own concurrent `ListDrafts`
+calls could commit their index rebuilds out of order -- and serializes
+its reload (the list call and the index commit together) so they always
+commit in the order they started.
+
 ### Sending
 
 Sending from a composer whose conversation has a draft posts with `draft_id`
@@ -320,6 +333,15 @@ One `draftEngine` per workspace (on `WorkspaceContext`), owning:
 
 - the index: `DraftKey → {id, lastUpdatedTS, writable}`, rebuilt from every
   list;
+- `reload` (behind `Load` and `create`'s `attached_draft_exists` adoption)
+  serializes its own kind of call through `loadMu`, held across the whole
+  `ListDrafts` round trip and the index commit, so two concurrent reloads
+  always commit in the order they started -- without it, the one that
+  started later but answers first could commit, then the one that started
+  earlier answers afterward and clobbers it with stale data. `loadMu` is
+  never held while waiting on `e.mu` or a per-key lock, so it cannot
+  deadlock against `create`'s adopt path, which calls `reload` while
+  already holding the key's lock;
 - per-key serialization: at most one Slack call in flight per key; a newer
   save for a busy key replaces any queued one, so saves never reorder;
   `Save`'s `current` is checked right after the key's lock is taken, before
@@ -363,7 +385,13 @@ sends `ui.DraftsStaleMsg{TeamID}`; the App answers by calling `Load`.
   d.seq`; `reduceDraftsLoaded` skips restore, vanish-clear and the
   hands-off clear for any key touched since (`touched[key] > issued`), and
   `mergeDraftRows` keeps the current rows for such a key (present or
-  absent) instead of the list's. A failed load for a workspace not yet
+  absent) instead of the list's. A separate `loadSeq`/`lastLoadApplied`
+  pair orders loads against each other (not against local changes):
+  `loadDraftsCmd` bumps `loadSeq` and carries it as the load's ordinal
+  on `draftsLoadedMsg`; `reduceDraftsLoaded` drops a successful response
+  outright, before any other processing, when its ordinal is lower than
+  `lastLoadApplied[teamID]`, so a slow list that answers after a faster,
+  later one can never win. A failed load for a workspace not yet
   `loaded` schedules `retryLoadDraftsCmd`, a `tea.Tick` that re-issues
   the load as `DraftsStaleMsg` after a backoff (`loadRetry[teamID]`,
   reset on success); an already-loaded workspace's reload failure is
