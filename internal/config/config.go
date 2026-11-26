@@ -232,6 +232,9 @@ type Sidebar struct {
 	// unread messages, and the currently-selected channel are never
 	// hidden regardless of this setting.
 	HideInactiveAfterDays int `toml:"hide_inactive_after_days"`
+	// SortDMsByRecency orders DMs and group DMs by recent activity
+	// (unread first) instead of by name, as Slack does. Default on.
+	SortDMsByRecency bool `toml:"sort_dms_by_recency"`
 	// RightAlignBadges puts mention badges, and the Threads and Activity
 	// counts drawn as badges, at the right end of their rows, as Slack
 	// does. Default off.
@@ -396,6 +399,7 @@ func Default() Config {
 		},
 		Sidebar: Sidebar{
 			HideInactiveAfterDays: 30,
+			SortDMsByRecency:      true,
 		},
 	}
 }

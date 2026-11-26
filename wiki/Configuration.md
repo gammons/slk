@@ -106,6 +106,11 @@ quiet_hours = "22:00-08:00"   # planned
 right_align_badges = false  # true: mention badges at the right end of the row (Slack),
                             # and the Threads and Activity counts as red badges there
 channel_indent = 0          # cells to indent the rows under each section header (0-6)
+hide_inactive_after_days = 30  # auto-hide conversations not read for this many days;
+                               # 0 shows them all (the active channel and unread ones stay)
+sort_dms_by_recency = true  # true: order DMs and group DMs by recent activity (unread
+                            # first), as Slack does; the Direct Messages header's ⇅/A-Z
+                            # control toggles it for the session
 slack_style = false         # true: Slack's look: no ▾ on open sections, plain headers,
                             # no unread dot (bold only), names sorted ignoring punctuation
 private_glyph = "◆"         # glyph before private channels, e.g. a lock your font has

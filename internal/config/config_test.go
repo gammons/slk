@@ -1324,6 +1324,16 @@ func TestHideDeactivatedUsersPartialGeneralBlockKeepsDefault(t *testing.T) {
 	}
 }
 
+func TestSidebarSortDMsByRecency(t *testing.T) {
+	if !Default().Sidebar.SortDMsByRecency {
+		t.Error("default should be on")
+	}
+	cfg := loadConfigString(t, "[sidebar]\nsort_dms_by_recency = false\n")
+	if cfg.Sidebar.SortDMsByRecency {
+		t.Error("sort_dms_by_recency = false did not load")
+	}
+}
+
 func TestSidebarStartCollapsed(t *testing.T) {
 	if Default().Sidebar.StartCollapsed {
 		t.Error("default should be off")
