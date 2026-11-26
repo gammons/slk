@@ -69,9 +69,13 @@ func fetchMessagesAround(client *slackclient.Client, channelID, targetTS string,
 // throughout slk.
 func convertAndCacheHistory(client *slackclient.Client, channelID string, history []slack.Message, db *cache.DB, userNames *userNameStore, tsFormat string, router *workspaceRouter) []messages.MessageItem {
 	var msgItems []messages.MessageItem
+	latestTS := ""
 	resolver := messageUserResolver(router, client.TeamID())
 	channels := messageChannelResolver(router, client.TeamID())
 	for _, m := range history {
+		if m.Timestamp > latestTS {
+			latestTS = m.Timestamp
+		}
 		rawBytes, huddleRoom := marshalWithRoom(client, channelID, m)
 		debuglog.Cache("convertAndCacheHistory: upsert channel=%s ts=%s subtype=%q reply_count=%d files=%d",
 			channelID, m.Timestamp, m.SubType, m.ReplyCount, len(m.Files))
@@ -132,8 +136,22 @@ func convertAndCacheHistory(client *slackclient.Client, channelID string, histor
 	for i, j := 0, len(msgItems)-1; i < j; i, j = i+1, j-1 {
 		msgItems[i], msgItems[j] = msgItems[j], msgItems[i]
 	}
+	noteFetchedLatest(db, channelID, latestTS)
 
 	return msgItems
+}
+
+// noteFetchedLatest advances channels.latest_synced_ts from a history
+// fetch. OnMessage does this for live messages; a DM that received
+// messages while slk was closed otherwise keeps an older timestamp and
+// sorts below conversations it is newer than.
+func noteFetchedLatest(db *cache.DB, channelID, latest string) {
+	if db == nil || latest == "" {
+		return
+	}
+	if _, err := db.AdvanceChannelLatestSyncedTS(channelID, latest); err != nil {
+		debuglog.Cache("noteFetchedLatest: channel=%s ts=%s: %v", channelID, latest, err)
+	}
 }
 
 // summarizeMessages collapses a slice of messages.MessageItem into a
@@ -573,9 +591,13 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 	}
 
 	msgItems := make([]messages.MessageItem, 0, len(history))
+	latestTS := ""
 	resolver := messageUserResolver(router, client.TeamID())
 	channels := messageChannelResolver(router, client.TeamID())
 	for _, m := range history {
+		if m.Timestamp > latestTS {
+			latestTS = m.Timestamp
+		}
 		rawBytes, huddleRoom := marshalWithRoom(client, channelID, m)
 		debuglog.Cache("fetchChannelMessages: upsert channel=%s ts=%s subtype=%q reply_count=%d files=%d",
 			channelID, m.Timestamp, m.SubType, m.ReplyCount, len(m.Files))
@@ -642,6 +664,7 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 	if err := db.SetChannelSyncedAt(channelID, time.Now().Unix()); err != nil {
 		debuglog.Cache("fetchChannelMessages: SetChannelSyncedAt %s: %v", channelID, err)
 	}
+	noteFetchedLatest(db, channelID, latestTS)
 	return msgItems
 }
 
@@ -677,9 +700,13 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 	}
 
 	msgItems := make([]messages.MessageItem, 0, len(history))
+	latestTS := ""
 	resolver := messageUserResolver(router, client.TeamID())
 	channels := messageChannelResolver(router, client.TeamID())
 	for _, m := range history {
+		if m.Timestamp > latestTS {
+			latestTS = m.Timestamp
+		}
 		rawBytes, huddleRoom := marshalWithRoom(client, channelID, m)
 		debuglog.Cache("fetchThreadReplies: upsert channel=%s ts=%s subtype=%q reply_count=%d files=%d",
 			channelID, m.Timestamp, m.SubType, m.ReplyCount, len(m.Files))
@@ -747,6 +774,7 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 	}
 	debuglog.Cache("fetchThreadReplies: channel=%s thread_ts=%s result %s dur_ms=%d (authoritative replace)",
 		channelID, threadTS, summarizeMessages(out), time.Since(start).Milliseconds())
+	noteFetchedLatest(db, channelID, latestTS)
 	return out
 }
 

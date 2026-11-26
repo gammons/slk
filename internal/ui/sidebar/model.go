@@ -1877,15 +1877,15 @@ func (m *Model) sortDMSlots(slots []int, readState map[string]core.ReadState) {
 	}
 }
 
-// dmBefore orders two DMs by activity: unread first, then the most
-// recent LastReadTS, then name.
+// dmBefore orders two DMs by activity: unread first, then the newest
+// recorded message (LatestTS), falling back to LastReadTS, then name.
 func (m *Model) dmBefore(a, b ChannelItem, readState map[string]core.ReadState) bool {
 	da, db := readState[a.ID], readState[b.ID]
 	if da.HasUnread != db.HasUnread {
 		return da.HasUnread
 	}
-	ta, oka := parseSlackTS(da.LastReadTS)
-	tb, okb := parseSlackTS(db.LastReadTS)
+	ta, oka := parseSlackTS(dmActivityTS(da))
+	tb, okb := parseSlackTS(dmActivityTS(db))
 	if oka && okb && !ta.Equal(tb) {
 		return ta.After(tb)
 	}
@@ -1899,6 +1899,16 @@ func (m *Model) dmBefore(a, b ChannelItem, readState map[string]core.ReadState) 
 		}
 	}
 	return na < nb
+}
+
+// dmActivityTS is the timestamp a DM's recency order uses: the newest
+// message the cache saw, else the last read mark when no message time
+// is known.
+func dmActivityTS(state core.ReadState) string {
+	if state.LatestTS != "" {
+		return state.LatestTS
+	}
+	return state.LastReadTS
 }
 
 // cursorKey captures what the cursor is logically pointing at, in a

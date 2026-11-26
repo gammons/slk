@@ -12,8 +12,9 @@ read, and the order did not match the web client.
 the same section are reordered:
 
 1. unread rows first;
-2. then by `ReadState.LastReadTS`, newest first;
-3. rows with no read state last;
+2. then by the newest recorded message (`ReadState.LatestTS`), falling back
+   to `ReadState.LastReadTS` when no message time is known, newest first;
+3. rows with neither timestamp last;
 4. name as the final tiebreaker.
 
 Channels, private channels and apps keep their alphabetical (or configured
@@ -22,6 +23,16 @@ config sections that pin a position are unaffected.
 
 Read state comes from the map `rebuildFilter` already fetches; `sortFiltered`
 now takes that map so a read mark can reorder DMs without a second DB read.
+`latest_synced_ts` advances from live messages and from every history and
+thread-reply fetch, so messages a DM received while slk was closed still win
+after the restart fetch.
+
+On Enterprise Grid a shared DM has one cache row but appears in several
+workspaces' conversation lists. `GetWorkspaceReadState` therefore includes
+every `dm`/`group_dm` row, not only the active workspace's, so the workspace
+showing the conversation also gets its latest-message time and is ordered
+correctly. Channel IDs are unique, so the extra rows only fill in DMs the
+caller already has.
 
 A section can mix DMs with channels or apps (a custom section, or Starred).
 Sorting DMs inside the main comparator would then be intransitive: the name

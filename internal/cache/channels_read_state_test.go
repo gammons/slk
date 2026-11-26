@@ -178,6 +178,37 @@ func TestGetWorkspaceReadState_ReturnsAllChannels(t *testing.T) {
 	}
 }
 
+// A Grid shared DM has one channels row but is shown in several
+// workspaces, so every workspace sees its DM rows and their latest
+// message time.
+func TestGetWorkspaceReadState_IncludesSharedDMs(t *testing.T) {
+	db, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer db.Close()
+	if err := db.UpsertWorkspace(Workspace{ID: "T2", Name: "ws"}); err != nil {
+		t.Fatalf("UpsertWorkspace: %v", err)
+	}
+	if err := db.UpsertChannel(Channel{ID: "D1", WorkspaceID: "T2", Name: "stefanha", Type: "dm"}); err != nil {
+		t.Fatalf("UpsertChannel: %v", err)
+	}
+	if err := db.UpdateChannelReadState("D1", "8.0", false); err != nil {
+		t.Fatalf("UpdateChannelReadState: %v", err)
+	}
+	if err := db.SetChannelLatestSyncedTS("D1", "9.0"); err != nil {
+		t.Fatalf("SetChannelLatestSyncedTS: %v", err)
+	}
+
+	got, err := db.GetWorkspaceReadState("T1")
+	if err != nil {
+		t.Fatalf("GetWorkspaceReadState: %v", err)
+	}
+	if state := got["D1"]; state.LastReadTS != "8.0" || state.LatestTS != "9.0" {
+		t.Errorf("D1 = %+v, want the shared DM's read and latest timestamps", state)
+	}
+}
+
 func TestUnreadChannels(t *testing.T) {
 	db, err := New(":memory:")
 	if err != nil {
