@@ -422,3 +422,32 @@ func TestUpdateThreadLastReadIfExists_RejectsEmptyKey(t *testing.T) {
 		t.Error("want error for empty threadTS, got nil")
 	}
 }
+
+func TestIsThreadSubscribed(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	mustUpsert(t, db, "T1", "C1", "1700000000.000100", "", true)
+	mustUpsert(t, db, "T1", "C1", "1700000000.000300", "", false)
+
+	tests := []struct {
+		name     string
+		channel  string
+		threadTS string
+		want     bool
+	}{
+		{"active", "C1", "1700000000.000100", true},
+		{"tombstoned", "C1", "1700000000.000300", false},
+		{"missing", "C1", "1700000000.000500", false},
+		{"other channel", "C2", "1700000000.000100", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := db.IsThreadSubscribed("T1", tt.channel, tt.threadTS)
+			if err != nil {
+				t.Fatalf("IsThreadSubscribed: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("IsThreadSubscribed = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

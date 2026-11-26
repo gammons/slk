@@ -340,6 +340,12 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		if sidebarY < 0 {
 			return nil
 		}
+		// The sort control on the Direct Messages header flips the
+		// section's order without collapsing it.
+		if a.sidebar.HitTestSectionSort(sidebarY, x-a.layout.RailWidth()-1) {
+			a.sidebar.ToggleSortDMsByRecency()
+			return nil
+		}
 		if item, ok := a.sidebar.ClickAt(sidebarY); ok {
 			return func() tea.Msg {
 				return ChannelSelectedMsg{ID: item.ID, Name: item.Name, Type: item.Type}
@@ -427,11 +433,18 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 			return nil
 		}
 		if a.view == ViewActivity {
-			panel, _, py, ok := a.panelAt(m.X, m.Y)
-			if ok && panel == PanelMessages && py >= 0 && a.activityView.ClickAt(py) {
-				if it, ok := a.activityView.SelectedItem(); ok {
-					team := a.activeTeamID
-					return func() tea.Msg { return ActivitySelectedMsg{TeamID: team, Item: it} }
+			panel, px, py, ok := a.panelAt(m.X, m.Y)
+			if ok && panel == PanelMessages && py >= 0 {
+				// A card's preview carries links; they open before the
+				// card's own select/open behavior.
+				if url, hit := a.activityView.HitTestLink(py, px); hit {
+					return func() tea.Msg { return OpenLinkMsg{URL: url} }
+				}
+				if a.activityView.ClickAt(py) {
+					if it, ok := a.activityView.SelectedItem(); ok {
+						team := a.activeTeamID
+						return func() tea.Msg { return ActivitySelectedMsg{TeamID: team, Item: it} }
+					}
 				}
 			}
 			return nil

@@ -3,7 +3,8 @@ package core
 // SuppressRule hides one author's messages: in one conversation, or,
 // with ChannelID empty, everywhere in the workspace the rule belongs to.
 // AuthorID is the ID a message is attributed to (MessageItem.UserID: a
-// user, or a bot's bot_id for a bot message with no user). Note is a
+// user, or the BotAuthorID of a bot message with no user). A rule on a
+// bare bot_id hides every sender of that bot. Note is a
 // label for people reading config.toml (the author's name, the
 // channel's); it is never matched.
 type SuppressRule struct {
@@ -47,6 +48,11 @@ func (s *Suppression) Hides(channelID, authorID string) bool {
 	if s == nil || authorID == "" {
 		return false
 	}
+	return s.hidesExactly(channelID, authorID) ||
+		(AuthorBotID(authorID) != authorID && s.hidesExactly(channelID, AuthorBotID(authorID)))
+}
+
+func (s *Suppression) hidesExactly(channelID, authorID string) bool {
 	return s.index[suppressKey{authorID, ""}] ||
 		(channelID != "" && s.index[suppressKey{authorID, channelID}])
 }

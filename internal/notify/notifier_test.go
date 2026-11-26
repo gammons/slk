@@ -284,3 +284,66 @@ func TestNotify_CommandBodyIsNotInjected(t *testing.T) {
 		t.Errorf("body not passed literally: got %q, want %q", got, want)
 	}
 }
+
+func TestShouldNotify_ActiveChannel(t *testing.T) {
+	ctx := NotifyContext{
+		CurrentUserID:   "U1",
+		ActiveChannelID: "C1",
+		IsActiveWS:      true,
+		OnMention:       true,
+	}
+	if ShouldNotify(ctx, "C1", "U2", "hey <@U1>", "channel") {
+		t.Error("the active channel should be suppressed by default")
+	}
+
+	ctx.OnActiveChannel = true
+	if !ShouldNotify(ctx, "C1", "U2", "hey <@U1>", "channel") {
+		t.Error("OnActiveChannel should notify in the active channel")
+	}
+	if ShouldNotify(ctx, "C1", "U2", "hello", "channel") {
+		t.Error("OnActiveChannel should not notify without a trigger")
+	}
+
+	ctx.IsMuted = true
+	if ShouldNotify(ctx, "C1", "U2", "hey <@U1>", "channel") {
+		t.Error("mute should win over OnActiveChannel")
+	}
+}
+
+func TestShouldNotify_ThreadReply(t *testing.T) {
+	ctx := NotifyContext{
+		CurrentUserID:      "U1",
+		ActiveChannelID:    "C_OTHER",
+		IsActiveWS:         true,
+		InSubscribedThread: true,
+	}
+	if ShouldNotify(ctx, "C1", "U2", "hello", "channel") {
+		t.Error("a subscribed thread reply should not notify when OnThreadReply is off")
+	}
+
+	ctx.OnThreadReply = true
+	if !ShouldNotify(ctx, "C1", "U2", "hello", "channel") {
+		t.Error("OnThreadReply should notify for a subscribed thread reply")
+	}
+
+	ctx.InSubscribedThread = false
+	if ShouldNotify(ctx, "C1", "U2", "hello", "channel") {
+		t.Error("OnThreadReply should not notify outside subscribed threads")
+	}
+
+	ctx.InSubscribedThread = true
+	ctx.IsDND = true
+	if ShouldNotify(ctx, "C1", "U2", "hello", "channel") {
+		t.Error("DND should win over OnThreadReply")
+	}
+
+	ctx.IsDND = false
+	if ShouldNotify(ctx, "C1", "U1", "hello", "channel") {
+		t.Error("own replies should never notify")
+	}
+
+	ctx.ActiveChannelID = "C1"
+	if ShouldNotify(ctx, "C1", "U2", "hello", "channel") {
+		t.Error("the active channel should still be suppressed without OnActiveChannel")
+	}
+}

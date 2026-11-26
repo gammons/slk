@@ -53,10 +53,11 @@ type uiSettings struct {
 // sidebarStyleFromConfig is the [sidebar] look and behaviour switches.
 func sidebarStyleFromConfig(s config.Sidebar) ui.SidebarStyle {
 	return ui.SidebarStyle{
-		Slack:        s.SlackStyle,
-		PrivateGlyph: s.PrivateGlyph,
-		ActiveOnly:   s.ActiveOnly,
-		MouseResize:  s.MouseResize,
+		Slack:            s.SlackStyle,
+		PrivateGlyph:     s.PrivateGlyph,
+		ActiveOnly:       s.ActiveOnly,
+		MouseResize:      s.MouseResize,
+		SortDMsByRecency: s.SortDMsByRecency,
 	}
 }
 

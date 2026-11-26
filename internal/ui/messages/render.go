@@ -278,18 +278,19 @@ func wrapLine(buf *strings.Builder, line string, limit int) {
 		return
 	}
 
+	var out strings.Builder
 	currentWidth := 0
 	writeWord := func(w string) {
 		// w may itself be wider than limit; hard-break by display columns.
 		// ansi.Hardwrap is ANSI-aware and grapheme-aware.
 		wWidth := lipgloss.Width(w)
 		if wWidth <= limit {
-			buf.WriteString(w)
+			out.WriteString(w)
 			currentWidth = wWidth
 			return
 		}
 		wrapped := ansi.Hardwrap(w, limit, false)
-		buf.WriteString(wrapped)
+		out.WriteString(wrapped)
 		// Track width of the trailing segment so a following word can
 		// share its line if it fits.
 		if nl := strings.LastIndexByte(wrapped, '\n'); nl >= 0 {
@@ -307,13 +308,72 @@ func wrapLine(buf *strings.Builder, line string, limit int) {
 		}
 		// +1 for the space before the word
 		if currentWidth+1+wordWidth > limit {
-			buf.WriteByte('\n')
+			out.WriteByte('\n')
 			writeWord(word)
 		} else {
-			buf.WriteByte(' ')
-			buf.WriteString(word)
+			out.WriteByte(' ')
+			out.WriteString(word)
 			currentWidth += 1 + wordWidth
 		}
+	}
+	buf.WriteString(reopenOsc8Lines(out.String()))
+}
+
+// reopenOsc8Lines makes every line of a wrapped hyperlink carry its own
+// OSC 8 open and close marker. ansi.Hardwrap leaves the original opener
+// on the first segment and the closer on the last, so the middle rows
+// have no marker of their own: ScanOsc8Spans cannot register them and a
+// click falls through to the message. Reopening each row makes every
+// wrapped segment a complete span, with the label - not the pane border
+// or avatar gutter - as its columns.
+func reopenOsc8Lines(s string) string {
+	lines := strings.Split(s, "\n")
+	carry := ""
+	changed := false
+	for i, line := range lines {
+		start := carry
+		active := osc8StateAfter(line, start)
+		if start == "" && active == "" {
+			continue
+		}
+		changed = true
+		var b strings.Builder
+		if start != "" {
+			b.WriteString(osc8Open + start + "\x1b\\")
+		}
+		b.WriteString(line)
+		if active != "" {
+			b.WriteString("\x1b]8;;\x1b\\")
+		}
+		lines[i] = b.String()
+		carry = active
+	}
+	if !changed {
+		return s
+	}
+	return strings.Join(lines, "\n")
+}
+
+// osc8StateAfter returns the hyperlink open at the end of line, starting
+// with active. An empty URL closes the link.
+func osc8StateAfter(line, active string) string {
+	rest := line
+	for {
+		i := strings.Index(rest, osc8Open)
+		if i < 0 {
+			return active
+		}
+		payload := rest[i+len(osc8Open):]
+		st := strings.Index(payload, "\x1b\\")
+		if st < 0 {
+			return active
+		}
+		if payload[:st] == "" {
+			active = ""
+		} else {
+			active = payload[:st]
+		}
+		rest = payload[st+2:]
 	}
 }
 
@@ -781,6 +841,16 @@ func RenderSlackMarkdown(text string, userNames map[string]string, channelNames 
 	})
 }
 
+func cutQuotePrefix(line string) (string, bool) {
+	if line == ">" || line == "&gt;" {
+		return "", true
+	}
+	if rest, ok := strings.CutPrefix(line, "&gt; "); ok {
+		return rest, true
+	}
+	return strings.CutPrefix(line, "> ")
+}
+
 // RenderSlackMarkdownWith is the full-featured entry point. See
 // RenderSlackMarkdownOpts for the per-call configuration. With a zero
 // opts struct it is byte-identical to RenderSlackMarkdown.
@@ -816,21 +886,26 @@ func RenderSlackMarkdownWith(text string, opts RenderSlackMarkdownOpts) string {
 	lines := strings.Split(text, "\n")
 	var result []string
 	for _, line := range lines {
-		if strings.HasPrefix(line, "&gt; ") || strings.HasPrefix(line, "> ") {
-			quoted := strings.TrimPrefix(line, "&gt; ")
-			quoted = strings.TrimPrefix(quoted, "> ")
+		if quoted, ok := cutQuotePrefix(line); ok {
+			quoted, nested := cutQuotePrefix(quoted)
 			quoted = renderInlineFormattingWith(quoted, opts)
 			quoted = slackEntityDecoder.Replace(quoted)
 			// Inline spans end in a reset that would drop the rest of
 			// the quote out of its muted color.
 			quoted = ReapplyBgAfterResets(quoted, fgANSIFor(styles.TextMuted))
-			// Wrap before drawing the bar so every wrapped row gets one;
-			// the body wrap that runs later would continue the quote
-			// without it. The bar and its padding take two columns.
-			if w := opts.Width; w > 2 {
-				quoted = WordWrap(quoted, w-2)
+			// Wrap before drawing the bars so every wrapped row keeps them.
+			padding := 2
+			if nested {
+				padding += 2
 			}
-			line = blockquoteStyle().Render(quoted)
+			if opts.Width > padding {
+				quoted = WordWrap(quoted, opts.Width-padding)
+			}
+			style := blockquoteStyle()
+			if nested {
+				quoted = style.Render(quoted)
+			}
+			line = style.Render(quoted)
 		} else {
 			line = renderInlineFormattingWith(line, opts)
 			// Decode Slack-escaped entities after markup regexes have

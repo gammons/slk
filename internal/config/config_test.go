@@ -27,6 +27,12 @@ func TestDefaultConfig(t *testing.T) {
 	if !cfg.Notifications.OnDM {
 		t.Error("expected on_dm enabled by default")
 	}
+	if cfg.Notifications.OnThreadReply {
+		t.Error("expected on_thread_reply disabled by default")
+	}
+	if cfg.Notifications.OnActiveChannel {
+		t.Error("expected on_active_channel disabled by default")
+	}
 	if cfg.Cache.MessageRetentionDays != 30 {
 		t.Errorf("expected 30 day retention, got %d", cfg.Cache.MessageRetentionDays)
 	}
@@ -1336,6 +1342,16 @@ func TestHideDeactivatedUsersPartialGeneralBlockKeepsDefault(t *testing.T) {
 	}
 }
 
+func TestSidebarSortDMsByRecency(t *testing.T) {
+	if !Default().Sidebar.SortDMsByRecency {
+		t.Error("default should be on")
+	}
+	cfg := loadConfigString(t, "[sidebar]\nsort_dms_by_recency = false\n")
+	if cfg.Sidebar.SortDMsByRecency {
+		t.Error("sort_dms_by_recency = false did not load")
+	}
+}
+
 func TestSidebarStartCollapsed(t *testing.T) {
 	if Default().Sidebar.StartCollapsed {
 		t.Error("default should be off")
@@ -1419,5 +1435,19 @@ func TestConfig_DefaultChannel(t *testing.T) {
 	cfg := loadConfigString(t, "[workspaces.acme]\nteam_id = \"T01ABCDEF\"\ndefault_channel = \"#general\"\n")
 	if got := cfg.ResolveDefaultChannel("T01ABCDEF"); got != "#general" {
 		t.Errorf("default_channel = %q, want #general", got)
+	}
+}
+
+func TestLoad_NotificationsThreadAndActiveChannel(t *testing.T) {
+	cfg := loadConfigString(t, "[notifications]\non_thread_reply = true\non_active_channel = true\n")
+
+	if !cfg.Notifications.OnThreadReply {
+		t.Error("on_thread_reply = true should load")
+	}
+	if !cfg.Notifications.OnActiveChannel {
+		t.Error("on_active_channel = true should load")
+	}
+	if !cfg.Notifications.OnMention || !cfg.Notifications.OnDM {
+		t.Error("setting the new keys should not reset the other defaults")
 	}
 }

@@ -131,6 +131,12 @@ func sectionFor(item ChannelItem) string {
 // method; this function is the back-compat path for callers without a
 // Model and the implementation Slack-mode delegates to when no
 // provider is wired.
+// isDMRow reports whether item is a one-to-one or group DM, the rows
+// whose order follows activity rather than name.
+func isDMRow(item ChannelItem) bool {
+	return item.Type == "dm" || item.Type == "group_dm"
+}
+
 func sectionForLegacy(item ChannelItem) string {
 	if item.Section != "" {
 		return item.Section
@@ -319,6 +325,10 @@ type Model struct {
 	// activeOnly hides conversations inactive for activeOnlyWindow in
 	// every section, like Slack's "Active only" ([sidebar] active_only).
 	activeOnly bool
+	// sortDMsByRecency orders dm/group_dm rows by activity instead of
+	// by name, as Slack does ([sidebar] sort_dms_by_recency). The
+	// Direct Messages header's control toggles it at runtime.
+	sortDMsByRecency bool
 
 	// Staleness filter: items whose last_read_ts (from the read-state
 	// DB, fetched via readStateReader in rebuildFilter) is older than
@@ -623,10 +633,17 @@ func (m *Model) NextUnread(afterID string, dir int) (id, name, chType string, ok
 // rows: an item that has gone stale stays put until the next full
 // rebuild, rather than vanishing from under the cursor.
 func (m *Model) Invalidate() {
-	if m.readStateReader != nil && len(m.filtered) < len(m.items) {
+	if m.readStateReader != nil {
+		state := m.readStateReader()
 		key, hadKey := m.currentCursorKey()
-		if m.revealUnreadHidden(m.readStateReader()) {
-			m.sortFiltered()
+		revealed := false
+		if len(m.filtered) < len(m.items) {
+			revealed = m.revealUnreadHidden(state)
+		}
+		// A read mark changes DM recency, so the order has to follow
+		// even when no hidden row was revealed.
+		if revealed || m.sortDMsByRecency {
+			m.sortFiltered(state)
 			m.rebuildNavWithCursor(key, hadKey)
 		}
 	}
@@ -876,6 +893,23 @@ func (m *Model) SetPrivateGlyph(glyph string) {
 func (m *Model) SetActiveOnly(enabled bool) {
 	m.activeOnly = enabled
 	m.refilter()
+}
+
+// SetSortDMsByRecency orders Direct Messages and group DMs by recent
+// activity (unread first) instead of by name.
+func (m *Model) SetSortDMsByRecency(enabled bool) {
+	if m.sortDMsByRecency == enabled {
+		return
+	}
+	m.sortDMsByRecency = enabled
+	m.refilter()
+}
+
+// ToggleSortDMsByRecency flips the DM ordering and returns the new
+// state. The Direct Messages header's sort control calls it.
+func (m *Model) ToggleSortDMsByRecency() bool {
+	m.SetSortDMsByRecency(!m.sortDMsByRecency)
+	return m.sortDMsByRecency
 }
 
 // SetDeactivatedUsers sets the user IDs whose DM and app rows are hidden;
@@ -1790,11 +1824,11 @@ func (m *Model) rebuildFilter() {
 		}
 		m.filtered = append(m.filtered, i)
 	}
-	m.sortFiltered()
+	m.sortFiltered(readState)
 }
 
 // sortFiltered sorts m.filtered into the order the sidebar renders.
-func (m *Model) sortFiltered() {
+func (m *Model) sortFiltered(readState map[string]core.ReadState) {
 	// Sort filtered indices to match the visual section display order so that
 	// j/k navigation traverses items in the same order they're rendered.
 	// Within the real Slack stars section, channels form one block before
@@ -1802,7 +1836,9 @@ func (m *Model) sortFiltered() {
 	//   1. Channels with ChannelOrder > 0 come first, sorted ascending
 	//      (from SectionDef "<pattern>:<N>" suffixes; config-mode only).
 	//   2. Channels with equal ChannelOrder sort alphabetically by name.
-	//      Section order is preserved; unread status does not affect sorting.
+	//      A second pass (sortDMsInSections) then reorders the unpinned
+	//      DM slots by activity when sortDMsByRecency is on.
+	//      Section order is preserved.
 	// Snapshot star identities once per rebuild, not inside the comparator.
 	// Names are presentation only: a custom section named Starred is ordinary.
 	stars := make(map[string]bool)
@@ -1849,6 +1885,88 @@ func (m *Model) sortFiltered() {
 		}
 		return na < nb
 	})
+	m.sortDMsInSections(readState)
+}
+
+// sortDMsInSections reorders only the unpinned DM slots of each
+// section, leaving every other row where the alphabetical sort put it.
+// Sorting DMs inside the main comparator would make the order
+// intransitive in a section mixing DMs with channels or apps: the
+// name comparisons around the DM would contradict its recency
+// comparison with another DM.
+func (m *Model) sortDMsInSections(readState map[string]core.ReadState) {
+	if !m.sortDMsByRecency {
+		return
+	}
+	for start := 0; start < len(m.filtered); {
+		section := m.sectionFor(m.items[m.filtered[start]])
+		end := start + 1
+		for end < len(m.filtered) && m.sectionFor(m.items[m.filtered[end]]) == section {
+			end++
+		}
+		m.sortDMSlots(m.filtered[start:end], readState)
+		start = end
+	}
+}
+
+// sortDMSlots sorts the unpinned DM rows in slots (a contiguous slice
+// of m.filtered belonging to one section) by dmBefore, writing the
+// result back into the same slots. Pinned DMs keep the position the
+// ChannelOrder sort gave them.
+func (m *Model) sortDMSlots(slots []int, readState map[string]core.ReadState) {
+	var at []int
+	for i, idx := range slots {
+		if isDMRow(m.items[idx]) && m.items[idx].ChannelOrder == 0 {
+			at = append(at, i)
+		}
+	}
+	if len(at) < 2 {
+		return
+	}
+	ordered := make([]int, len(at))
+	for i, pos := range at {
+		ordered[i] = slots[pos]
+	}
+	sort.SliceStable(ordered, func(a, b int) bool {
+		return m.dmBefore(m.items[ordered[a]], m.items[ordered[b]], readState)
+	})
+	for i, pos := range at {
+		slots[pos] = ordered[i]
+	}
+}
+
+// dmBefore orders two DMs by activity: unread first, then the newest
+// recorded message (LatestTS), falling back to LastReadTS, then name.
+func (m *Model) dmBefore(a, b ChannelItem, readState map[string]core.ReadState) bool {
+	da, db := readState[a.ID], readState[b.ID]
+	if da.HasUnread != db.HasUnread {
+		return da.HasUnread
+	}
+	ta, oka := parseSlackTS(dmActivityTS(da))
+	tb, okb := parseSlackTS(dmActivityTS(db))
+	if oka && okb && !ta.Equal(tb) {
+		return ta.After(tb)
+	}
+	if oka != okb {
+		return oka
+	}
+	na, nb := text.Fold(a.Name), text.Fold(b.Name)
+	if m.slackStyle {
+		if ka, kb := slackSortKey(na), slackSortKey(nb); ka != kb {
+			return ka < kb
+		}
+	}
+	return na < nb
+}
+
+// dmActivityTS is the timestamp a DM's recency order uses: the newest
+// message the cache saw, else the last read mark when no message time
+// is known.
+func dmActivityTS(state core.ReadState) string {
+	if state.LatestTS != "" {
+		return state.LatestTS
+	}
+	return state.LastReadTS
 }
 
 // cursorKey captures what the cursor is logically pointing at, in a
@@ -2079,6 +2197,9 @@ type renderRow struct {
 	// isActivityRow flags the synthetic Activity row so View() can swap
 	// in the `active` variant whenever m.activityActive is true.
 	isActivityRow bool
+	// sortStart/sortEnd are the row columns of a section header's sort
+	// control. Both 0 when the row has none.
+	sortStart, sortEnd int
 }
 
 // buildCache rebuilds m.cacheRows for the given width. Expensive; runs only
@@ -2580,17 +2701,19 @@ func (m *Model) buildCache(width int) {
 			m.cacheRows = append(m.cacheRows, renderRow{height: 1, navIdx: -1})
 		}
 		group := sectionMap[name]
-		headerLabel, headerLabelSelected, headerMentions := m.renderSectionHeaderLabel(name, width, cursorSelected, dotStyle, bgAnsi)
+		headerLabel, headerLabelSelected, headerMentions, sortStart, sortEnd := m.renderSectionHeaderLabel(name, width, cursorSelected, dotStyle, bgAnsi)
 		ni, ok := headerNavIdx[name]
 		if !ok {
 			ni = -1
 		}
 		m.cacheRows = append(m.cacheRows, renderRow{
-			normal:   headerStyle.Width(width - 2).Render(headerLabel),
-			selected: headerStyle.Width(width - 2).Render(headerLabelSelected),
-			height:   1,
-			navIdx:   ni,
-			mention:  headerMentions > 0,
+			normal:    headerStyle.Width(width - 2).Render(headerLabel),
+			selected:  headerStyle.Width(width - 2).Render(headerLabelSelected),
+			height:    1,
+			navIdx:    ni,
+			mention:   headerMentions > 0,
+			sortStart: sortStart,
+			sortEnd:   sortEnd,
 		})
 		m.cacheRows = append(m.cacheRows, group.rows...)
 	}
@@ -2639,7 +2762,7 @@ func (m *Model) sectionDisplayMeta(sectionKey string) (name, emoji string) {
 //
 // The label fits one line of a sidebar `width` wide: see
 // fitSectionHeader for what gives way when it does not.
-func (m *Model) renderSectionHeaderLabel(name string, width int, cursor string, dotStyle lipgloss.Style, bgAnsi string) (string, string, int) {
+func (m *Model) renderSectionHeaderLabel(name string, width int, cursor string, dotStyle lipgloss.Style, bgAnsi string) (string, string, int, int, int) {
 	displayName, emojiCode := m.sectionDisplayMeta(name)
 	// lipgloss expands a tab and breaks the line at a newline after the
 	// label was measured, so neither may reach it.
@@ -2713,15 +2836,28 @@ func (m *Model) renderSectionHeaderLabel(name string, width int, cursor string, 
 		}
 	}
 
+	// The Direct Messages header carries a small control that switches
+	// the section between recent-activity and alphabetical order. It is
+	// right-aligned, so reserve its cells before fitting the name.
+	control, sortReserve := "", 0
+	if m.isDMSection(name) {
+		if m.sortDMsByRecency {
+			control = " ⇅"
+		} else {
+			control = " A-Z"
+		}
+		sortReserve = bubblesansi.Cells(control)
+	}
+
 	aggregateCells := bubblesansi.Cells(aggregates)
 	// The ":code:" text tells the user less than the name, so it gives way before the name is cut.
 	// A glyph stays.
-	if textFallback && bubblesansi.Cells(displayName) > sectionHeaderNameBudget(width, emojiCells, aggregateCells) {
+	if textFallback && bubblesansi.Cells(displayName) > sectionHeaderNameBudget(width, emojiCells, aggregateCells+sortReserve) {
 		emojiPrefix, emojiPrefixSelected = "", ""
 		emojiCells = 0
 	}
 	var keepEmoji, keepAggregates bool
-	displayName, keepEmoji, keepAggregates = fitSectionHeader(width, displayName, emojiCells, aggregateCells)
+	displayName, keepEmoji, keepAggregates = fitSectionHeader(width, displayName, emojiCells, aggregateCells+sortReserve)
 	if !keepEmoji {
 		emojiPrefix, emojiPrefixSelected = "", ""
 	}
@@ -2731,6 +2867,20 @@ func (m *Model) renderSectionHeaderLabel(name string, width int, cursor string, 
 
 	label := " " + glyph + " " + emojiPrefix + displayName + aggregates
 	selected := cursor + glyph + " " + emojiPrefixSelected + displayName + aggregates
+	sortStart, sortEnd := 0, 0
+	if control != "" {
+		controlCells := bubblesansi.Cells(control)
+		// Content starts after the row's left padding (x=1) and is
+		// width-4 cells wide. Right-align the control within it.
+		pad := width - 4 - controlCells - bubblesansi.Cells(label)
+		padSelected := width - 4 - controlCells - bubblesansi.Cells(selected)
+		if pad >= 0 && padSelected >= 0 {
+			label += strings.Repeat(" ", pad) + control
+			selected += strings.Repeat(" ", padSelected) + control
+			sortStart = 1 + width - 4 - controlCells
+			sortEnd = sortStart + controlCells
+		}
+	}
 	// The selected variant re-applies bold after the cursor glyph's
 	// reset, as the channel rows do: SectionHeader is bold, and bgAnsi
 	// alone would draw the rest of the header regular. Not on the normal
@@ -2742,7 +2892,21 @@ func (m *Model) renderSectionHeaderLabel(name string, width int, cursor string, 
 		selectedAttrs += "\x1b[1m"
 	}
 	return messages.ReapplyBgAfterResets(label, bgAnsi),
-		messages.ReapplyBgAfterResets(selected, selectedAttrs), mentions
+		messages.ReapplyBgAfterResets(selected, selectedAttrs), mentions, sortStart, sortEnd
+}
+
+// isDMSection reports whether section is the Direct Messages section,
+// whose header carries the sort control.
+func (m *Model) isDMSection(section string) bool {
+	if !m.useSlackSections() {
+		return section == defaultDMSection
+	}
+	for _, meta := range m.sectionsProvider.OrderedSlackSections() {
+		if meta.ID == section {
+			return meta.Type == "direct_messages"
+		}
+	}
+	return false
 }
 
 // headerSpaceReplacer turns the characters lipgloss would not keep on
@@ -2983,6 +3147,22 @@ func mentionPill(arrow string, width int) string {
 	}
 	return lipgloss.PlaceHorizontal(width-2, lipgloss.Center, pill,
 		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(styles.SidebarBackground)))
+}
+
+// HitTestSectionSort reports whether (y, x) is a section header's sort
+// control. x is a column in the sidebar's rendered rows.
+func (m *Model) HitTestSectionSort(y, x int) bool {
+	// View() replaces these rows with the "Unread mentions" pills; the
+	// header underneath must not answer for them.
+	if (y == m.pillTop && m.mentionAbove >= 0) || (y == m.pillBottom && m.mentionBelow >= 0) {
+		return false
+	}
+	absoluteY := y + m.yOffset
+	if absoluteY < 0 || absoluteY >= len(m.cacheRows) {
+		return false
+	}
+	r := m.cacheRows[absoluteY]
+	return r.sortEnd > r.sortStart && x >= r.sortStart && x < r.sortEnd
 }
 
 // ClickAt handles a mouse click at the given y-coordinate (relative to

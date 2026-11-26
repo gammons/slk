@@ -1639,6 +1639,18 @@ func goldenScenarios() []goldenScenario {
 				return goldenWindowSplitScenario(t, 160, 40)
 			},
 		},
+		{
+			// The unfocused window draws its channel's stored draft in a
+			// disabled compose box, at the height it has once focused.
+			name: "window_split_draft", w: 160, h: 40,
+			build: func(t *testing.T) *App {
+				a := goldenWindowSplitScenario(t, 160, 40)
+				if !a.compose.OfferDraft(a.activeTeamID, "C1", "", "first line\nsecond line\nthird line") {
+					t.Fatal("the draft for #general was refused")
+				}
+				return a
+			},
+		},
 	}
 }
 

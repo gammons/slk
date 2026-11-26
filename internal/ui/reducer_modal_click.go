@@ -57,6 +57,9 @@ type modalClickTarget struct {
 	activation tea.KeyMsg       // nil when a row click has no activation (help)
 	point      pointClickable   // nil unless the modal has a point hot spot
 	onPoint    func() tea.Cmd   // set: a point hit calls this instead of synthesising activation
+	// onInside runs for a left click inside the box that missed every
+	// point target: the app dialog starts a text selection there.
+	onInside func(localX, localY int) tea.Cmd
 }
 
 // activeModalClickTarget resolves the modal addressed by the current
@@ -111,13 +114,18 @@ func (a *App) activeModalClickTarget() (modalClickTarget, bool) {
 			},
 		}, true
 	case ModeAppView:
-		// A click on a button presses it directly; elsewhere inside is
-		// a no-op, and outside dismisses the dialog.
+		// A click on a button presses it directly; elsewhere in the
+		// body starts a text selection, which copies on release, and
+		// outside dismisses the dialog.
 		return modalClickTarget{
 			box:   &a.appView,
 			point: &a.appView,
 			onPoint: func() tea.Cmd {
 				return a.clickAppViewAction(a.appView.LastClickAction())
+			},
+			onInside: func(localX, localY int) tea.Cmd {
+				a.appView.BeginSelectionAt(localX, localY)
+				return nil
 			},
 		}, true
 	}
@@ -166,6 +174,9 @@ func reduceModalClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 			if target.activation != nil {
 				return dispatchModeKey(a, target.activation)
 			}
+		}
+		if target.onInside != nil {
+			return target.onInside(m.X-startX, m.Y-startY)
 		}
 		return nil
 	}

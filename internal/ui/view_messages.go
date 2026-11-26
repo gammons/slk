@@ -53,6 +53,7 @@ import (
 	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/gammons/slk/internal/ui/wintree"
 )
 
 // renderMessagesRegion returns the composed messages-region
@@ -272,10 +273,7 @@ func (a *App) renderChannelMessagesPanel(msgWidth, msgBorder, contentHeight int,
 	var composeView string
 	readOnly := a.composeDisabled && !a.editing.IsActive()
 	if readOnly {
-		composeView = lipgloss.NewStyle().
-			Background(styles.Background).Foreground(styles.TextMuted).Italic(true).
-			Width(msgWidth - 2).
-			Render(a.composeBlockedText() + ".")
+		composeView = composeBlockedView(a.composeBlockedText(), msgWidth-2)
 	} else {
 		composeView = a.compose.View(msgWidth-2, composeFocused)
 		// Inline pickers stack above the compose box. They're
@@ -346,22 +344,48 @@ func (a *App) renderChannelMessagesPanel(msgWidth, msgBorder, contentHeight int,
 	topBordered := a.renderMessagesTop(msgWidth, msgBorder, topHeight, msgContentHeight, topPanelVersion, topLayoutKey, msgFocused)
 	topBordered = a.messagepane.ApplySelectionToBordered(topBordered, 1, 1)
 
-	// Fresh bottom region: typing line + compose, with bottom
-	// edge. Same lipgloss/v2 quirk applies.
-	bottomBorderStyle := styles.UnfocusedBorder.Width(msgWidth).
-		BorderTop(false).BorderLeft(true).BorderRight(true).BorderBottom(true)
-	if msgFocused {
-		bottomBorderStyle = styles.FocusedBorder.Width(msgWidth).
-			BorderTop(false).BorderLeft(true).BorderRight(true).BorderBottom(true)
-	}
 	bottomInner := lipgloss.JoinVertical(lipgloss.Left, typingLine, composeView)
-	bottomInner = messages.ReapplyBgAfterResets(bottomInner, messages.BgANSI())
-	bottomBordered := exactSize(
-		bottomBorderStyle.Render(bottomInner),
-		msgWidth+msgBorder, bottomHeight+1, // +1 for bottom border edge
-	)
+	return topBordered + "\n" + paneBottom(bottomInner, msgWidth, msgBorder, bottomHeight+1, msgFocused)
+}
 
-	return topBordered + "\n" + bottomBordered
+// paneBottom is the fresh bottom region of a channel panel msgWidth
+// wide: inner (the typing row and the compose region) between the side
+// edges, over the bottom edge, rows tall with the edge.
+func paneBottom(inner string, msgWidth, msgBorder, rows int, focused bool) string {
+	// Same lipgloss/v2 quirk as the top region.
+	style := styles.UnfocusedBorder
+	if focused {
+		style = styles.FocusedBorder
+	}
+	style = style.Width(msgWidth).BorderTop(false).BorderLeft(true).BorderRight(true).BorderBottom(true)
+
+	inner = messages.ReapplyBgAfterResets(inner, messages.BgANSI())
+	return exactSize(style.Render(inner), msgWidth+msgBorder, rows)
+}
+
+// composeBlockedView takes the compose box's place in a conversation
+// that takes no messages.
+func composeBlockedView(why string, width int) string {
+	return lipgloss.NewStyle().
+		Background(styles.Background).Foreground(styles.TextMuted).Italic(true).
+		Width(width).
+		Render(why + ".")
+}
+
+// windowBottomView is what an unfocused channel window msgWidth wide
+// draws under its messages for ch: a blank typing row, the spacer and
+// ch's draft in a composer nobody types in (or the blocked notice),
+// the rows the focused panel draws there. The focused panel adds
+// popups and the draft preview, which only the user's typing there
+// opens.
+func (a *App) windowBottomView(ch wintree.Channel, msgWidth int) string {
+	blank := lipgloss.NewStyle().Background(styles.Background).Width(msgWidth - 2).Render("")
+
+	box := a.compose.DraftView(a.activeTeamID, ch.ID, "", ch.Name, msgWidth-2)
+	if why := a.sendBlockedReason(ch.ID); why != "" {
+		box = composeBlockedView(why, msgWidth-2)
+	}
+	return blank + "\n" + blank + "\n" + box
 }
 
 // renderMessagesTop is the cached top region of the channel

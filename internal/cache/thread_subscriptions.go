@@ -156,6 +156,22 @@ WHERE workspace_id=? AND channel_id=? AND thread_ts=?`
 	return lastRead, nil
 }
 
+// IsThreadSubscribed reports whether the user has an active subscription
+// to the given thread.
+func (db *DB) IsThreadSubscribed(workspaceID, channelID, threadTS string) (bool, error) {
+	const q = `SELECT 1 FROM thread_subscriptions
+WHERE workspace_id=? AND channel_id=? AND thread_ts=? AND active=1`
+	var one int
+	err := db.conn.QueryRow(q, workspaceID, channelID, threadTS).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("reading thread subscription: %w", err)
+	}
+	return true, nil
+}
+
 // ListActiveThreadSubscriptions returns every active subscription in
 // the given workspace, in PRIMARY KEY order. Tombstoned rows
 // (active=0) are filtered out.

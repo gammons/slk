@@ -69,9 +69,13 @@ func fetchMessagesAround(client *slackclient.Client, channelID, targetTS string,
 // throughout slk.
 func convertAndCacheHistory(client *slackclient.Client, channelID string, history []slack.Message, db *cache.DB, userNames *userNameStore, tsFormat string, router *workspaceRouter) []messages.MessageItem {
 	var msgItems []messages.MessageItem
+	latestTS := ""
 	resolver := messageUserResolver(router, client.TeamID())
 	channels := messageChannelResolver(router, client.TeamID())
 	for _, m := range history {
+		if m.Timestamp > latestTS {
+			latestTS = m.Timestamp
+		}
 		rawBytes, huddleRoom := marshalWithRoom(client, channelID, m)
 		debuglog.Cache("convertAndCacheHistory: upsert channel=%s ts=%s subtype=%q reply_count=%d files=%d",
 			channelID, m.Timestamp, m.SubType, m.ReplyCount, len(m.Files))
@@ -132,8 +136,22 @@ func convertAndCacheHistory(client *slackclient.Client, channelID string, histor
 	for i, j := 0, len(msgItems)-1; i < j; i, j = i+1, j-1 {
 		msgItems[i], msgItems[j] = msgItems[j], msgItems[i]
 	}
+	noteFetchedLatest(db, channelID, latestTS)
 
 	return msgItems
+}
+
+// noteFetchedLatest advances channels.latest_synced_ts from a history
+// fetch. OnMessage does this for live messages; a DM that received
+// messages while slk was closed otherwise keeps an older timestamp and
+// sorts below conversations it is newer than.
+func noteFetchedLatest(db *cache.DB, channelID, latest string) {
+	if db == nil || latest == "" {
+		return
+	}
+	if _, err := db.AdvanceChannelLatestSyncedTS(channelID, latest); err != nil {
+		debuglog.Cache("noteFetchedLatest: channel=%s ts=%s: %v", channelID, latest, err)
+	}
 }
 
 // summarizeMessages collapses a slice of messages.MessageItem into a
@@ -300,20 +318,23 @@ func enrichCachedRow(
 	router *workspaceRouter,
 	stats *enrichPerfStats,
 ) messages.MessageItem {
-	// Bot rows cached before the bot-identity fix have an empty UserID but
-	// carry bot_id + username in raw_json. Re-key them on the bot_id and
-	// resolve the avatar/name via bots.info so cached bot messages render
-	// like freshly-fetched ones (without this they stay blank until a
-	// live re-fetch, which never reaches messages older than the latest 50).
+	// Bot rows cached before the bot-identity fix have an empty UserID, and
+	// rows cached before senders were told apart have the bare bot_id. Both
+	// carry bot_id + username in raw_json. Re-key them on
+	// core.BotAuthorID and resolve the avatar/name via bots.info so cached
+	// bot messages render like freshly-fetched ones (without this they stay
+	// blank, or under another sender's name, until a live re-fetch, which
+	// never reaches messages older than the latest 50).
 	effUserID := m.UserID
 	botUsername := ""
-	if effUserID == "" && m.RawJSON != "" {
+	if m.RawJSON != "" && (effUserID == "" || isBareBotID(effUserID)) {
 		var rawBot struct {
 			BotID    string `json:"bot_id"`
 			Username string `json:"username"`
 		}
-		if json.Unmarshal([]byte(m.RawJSON), &rawBot) == nil && rawBot.BotID != "" {
-			effUserID = rawBot.BotID
+		if json.Unmarshal([]byte(m.RawJSON), &rawBot) == nil && rawBot.BotID != "" &&
+			(effUserID == "" || effUserID == rawBot.BotID) {
+			effUserID = core.BotAuthorID(rawBot.BotID, rawBot.Username)
 			botUsername = rawBot.Username
 			if router != nil {
 				if wctx := router.Active(); wctx != nil && wctx.UserResolver != nil {
@@ -321,6 +342,12 @@ func enrichCachedRow(
 				}
 			}
 		}
+	}
+	// A row cached under a core.BotAuthorID carries the sender's name after
+	// the slash, for when bots.info has not answered yet.
+	cachedBotID := ""
+	if botID, username, ok := strings.Cut(effUserID, "/"); ok && botUsername == "" {
+		cachedBotID, botUsername = botID, username
 	}
 
 	// Resolve username from the in-memory store first; fall back to
@@ -354,6 +381,13 @@ func enrichCachedRow(
 	if userName == "" {
 		if botUsername != "" {
 			userName = botUsername
+			// No users row for this sender: bots.info failed when the row
+			// was cached, so ask again.
+			if router != nil && cachedBotID != "" {
+				if wctx := router.Active(); wctx != nil && wctx.UserResolver != nil {
+					wctx.UserResolver.RequestBot(cachedBotID, botUsername)
+				}
+			}
 		} else {
 			userName = effUserID
 			// Cache had no entry for this user. Enqueue an async resolver
@@ -469,6 +503,13 @@ func marshalWithRoom(client *slackclient.Client, channelID string, m slack.Messa
 	return slackclient.MergeRoom(raw, room), core.ParseHuddleRoom(room)
 }
 
+// isBareBotID reports whether a cached row's UserID is a bot_id without
+// the sender's username (rows cached before core.BotAuthorID). User IDs
+// start with U or W, bot IDs with B.
+func isBareBotID(id string) bool {
+	return strings.HasPrefix(id, "B") && !strings.Contains(id, "/")
+}
+
 // roomFromRawJSON reads the `room` object back out of a cached raw_json.
 func roomFromRawJSON(raw string) *core.HuddleRoom {
 	if !strings.Contains(raw, `"room"`) {
@@ -550,9 +591,13 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 	}
 
 	msgItems := make([]messages.MessageItem, 0, len(history))
+	latestTS := ""
 	resolver := messageUserResolver(router, client.TeamID())
 	channels := messageChannelResolver(router, client.TeamID())
 	for _, m := range history {
+		if m.Timestamp > latestTS {
+			latestTS = m.Timestamp
+		}
 		rawBytes, huddleRoom := marshalWithRoom(client, channelID, m)
 		debuglog.Cache("fetchChannelMessages: upsert channel=%s ts=%s subtype=%q reply_count=%d files=%d",
 			channelID, m.Timestamp, m.SubType, m.ReplyCount, len(m.Files))
@@ -619,6 +664,7 @@ func fetchChannelMessages(client *slackclient.Client, channelID string, db *cach
 	if err := db.SetChannelSyncedAt(channelID, time.Now().Unix()); err != nil {
 		debuglog.Cache("fetchChannelMessages: SetChannelSyncedAt %s: %v", channelID, err)
 	}
+	noteFetchedLatest(db, channelID, latestTS)
 	return msgItems
 }
 
@@ -654,9 +700,13 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 	}
 
 	msgItems := make([]messages.MessageItem, 0, len(history))
+	latestTS := ""
 	resolver := messageUserResolver(router, client.TeamID())
 	channels := messageChannelResolver(router, client.TeamID())
 	for _, m := range history {
+		if m.Timestamp > latestTS {
+			latestTS = m.Timestamp
+		}
 		rawBytes, huddleRoom := marshalWithRoom(client, channelID, m)
 		debuglog.Cache("fetchThreadReplies: upsert channel=%s ts=%s subtype=%q reply_count=%d files=%d",
 			channelID, m.Timestamp, m.SubType, m.ReplyCount, len(m.Files))
@@ -724,6 +774,7 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 	}
 	debuglog.Cache("fetchThreadReplies: channel=%s thread_ts=%s result %s dur_ms=%d (authoritative replace)",
 		channelID, threadTS, summarizeMessages(out), time.Since(start).Milliseconds())
+	noteFetchedLatest(db, channelID, latestTS)
 	return out
 }
 

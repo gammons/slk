@@ -65,6 +65,10 @@ func RendersBody(blocks []Block) bool {
 			if len(v.Elements) > 0 {
 				return true
 			}
+		case InputBlock:
+			if v.Label != "" || v.Placeholder != "" || v.Value != "" {
+				return true
+			}
 		}
 	}
 	return false
@@ -89,6 +93,8 @@ func appendBlock(out *RenderResult, b Block, ctx Context, width int, recordHits 
 		appendContext(out, v, ctx, width)
 	case ActionsBlock:
 		appendActions(out, v, ctx, width, recordHits)
+	case InputBlock:
+		appendInput(out, v, ctx, width)
 	case ImageBlock:
 		appendImageBlock(out, v, ctx, width)
 	case RichTextBlock:
@@ -287,6 +293,56 @@ func appendContext(out *RenderResult, c ContextBlock, ctx Context, width int) {
 	}
 	for _, line := range strings.Split(combined, "\n") {
 		out.Lines = append(out.Lines, mutedStyle().Render(line))
+	}
+}
+
+// appendInput draws a Slack input block read-only: its label, the
+// value the view carries or the placeholder the app would show, and its
+// hint. Forms cannot be filled in yet, but the dialog must still be
+// readable.
+func appendInput(out *RenderResult, in InputBlock, ctx Context, width int) {
+	label := in.Label
+	if label == "" {
+		label = "Input"
+	}
+	if in.Optional {
+		label += " (optional)"
+	}
+	out.Lines = append(out.Lines, fieldLabelStyle().Render(truncateToWidth(label, width)))
+
+	text, style := in.Value, lipgloss.NewStyle().
+		Foreground(styles.TextPrimary).Background(styles.Background)
+	if text == "" {
+		text = in.Placeholder
+		style = mutedStyle().Italic(true)
+	}
+	switch in.ElementKind {
+	case "", "plain_text_input", "unknown":
+		if text == "" {
+			text = "—"
+		}
+		body := text
+		if ctx.WrapText != nil {
+			body = ctx.WrapText(text, max(1, width-2))
+		}
+		rows := strings.Split(body, "\n")
+		bar := controlStyle().Render("▌ ")
+		out.Lines = append(out.Lines, fitFallbackLine(width, bar+style.Render(rows[0])))
+		for _, row := range rows[1:] {
+			out.Lines = append(out.Lines, fitFallbackLine(width, "  "+style.Render(row)))
+		}
+	default:
+		out.Lines = append(out.Lines, fitFallbackLine(width,
+			renderControlLabel(in.ElementKind, text, ctx.RenderPlainText)))
+	}
+	if in.Hint != "" {
+		hint := in.Hint
+		if ctx.WrapText != nil {
+			hint = ctx.WrapText(hint, width)
+		}
+		for _, row := range strings.Split(hint, "\n") {
+			out.Lines = append(out.Lines, fitFallbackLine(width, mutedStyle().Render(row)))
+		}
 	}
 }
 

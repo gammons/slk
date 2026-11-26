@@ -11,6 +11,8 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/gammons/slk/internal/bubbles/chrome"
+	"github.com/gammons/slk/internal/bubbles/entrylist"
+	"github.com/gammons/slk/internal/bubbles/selection"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
@@ -47,6 +49,15 @@ type Model struct {
 	lastHeight int
 	lastBody   int
 	lastTotal  int
+
+	// Text selection over the body lines (select.go). plain mirrors the
+	// rendered lines for column math; lastBodyTop and lastLeftPad map a
+	// box-local click to a content line and column.
+	sel         selection.Range
+	hasSel      bool
+	plain       []entrylist.PlainLine
+	lastBodyTop int
+	lastLeftPad int
 }
 
 // actionKey identifies a rendered button the way a press echoes it.
@@ -69,6 +80,8 @@ func (m *Model) SetView(v *core.AppView) {
 	m.actionAt = actionIndexMap(v)
 	m.hits = nil
 	m.yOffset = 0
+	m.plain = nil
+	m.clearSelection()
 }
 
 // actionIndexMap maps each action's (block_id, action_id) to its index
@@ -122,6 +135,8 @@ func (m *Model) Clear() {
 	m.hits = nil
 	m.yOffset = 0
 	m.lastWidth, m.lastHeight = 0, 0
+	m.plain = nil
+	m.clearSelection()
 }
 
 // Current returns the installed view, nil when there is none.
@@ -228,6 +243,12 @@ func (m *Model) View(termWidth, termHeight int, ctx blockkit.Context) string {
 		bodyH = 1
 	}
 	m.lastBody = bodyH
+	m.plain = make([]entrylist.PlainLine, len(lines))
+	for i, line := range lines {
+		if p := entrylist.PlainLines(line); len(p) > 0 {
+			m.plain[i] = p[0]
+		}
+	}
 
 	if max := len(lines) - bodyH; max < 0 {
 		m.yOffset = 0
@@ -254,6 +275,8 @@ func (m *Model) View(termWidth, termHeight int, ctx blockkit.Context) string {
 	// columns start after the border and padding.
 	bodyTop := chrome.BodyTop(s, false)
 	leftPad := s.Box.GetBorderLeftSize() + s.Box.GetPaddingLeft()
+	m.lastBodyTop, m.lastLeftPad = bodyTop, leftPad
+	m.overlaySelection(body, m.yOffset)
 	m.hits = m.hits[:0]
 	for _, ah := range res.ActionHits {
 		action, ok := m.actionAt[actionKey{blockID: ah.BlockID, actionID: ah.ActionID}]
