@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"image"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -311,7 +312,15 @@ func (c *Cache) fetch(userID, url string, target image.Point) (imgpkg.FetchResul
 // never read again; the image cache's LRU evicts them.
 func fetchKey(userID, url string) string {
 	sum := sha256.Sum256([]byte(url))
-	return "avatar-" + userID + "-" + hex.EncodeToString(sum[:])[:12]
+	return avatarKey(userID) + "-" + hex.EncodeToString(sum[:])[:12]
+}
+
+// avatarKey is the "avatar-<userID>" prefix of every key an avatar is
+// cached under. The ID is path-escaped: a bot author ID carries the
+// sender's username after a "/" (core.BotAuthorID), and the disk cache
+// uses the key as a file name. Slack user and bot IDs are unchanged.
+func avatarKey(userID string) string {
+	return "avatar-" + url.PathEscape(userID)
 }
 
 // Get returns the rendered avatar string, or empty if not cached.
@@ -346,7 +355,7 @@ func encodeSixel(userID string, img image.Image) sixelAvatar {
 		return sixelAvatar{}
 	}
 	sum := sha256.Sum256(buf.Bytes())
-	return sixelAvatar{key: "avatar-" + userID + "-" + hex.EncodeToString(sum[:8]), bytes: buf.Bytes()}
+	return sixelAvatar{key: avatarKey(userID) + "-" + hex.EncodeToString(sum[:8]), bytes: buf.Bytes()}
 }
 
 // GetSmall returns the reply-row avatar, rendering it on first use, or
@@ -373,7 +382,7 @@ func (c *Cache) renderSmall(userID string) string {
 	if !c.useKitty {
 		return ""
 	}
-	out := c.kitty.RenderKey("avatar-"+userID, image.Pt(SmallCols, SmallRows))
+	out := c.kitty.RenderKey(avatarKey(userID), image.Pt(SmallCols, SmallRows))
 	if out.OnFlush != nil {
 		_ = out.OnFlush(imgpkg.KittyOutput)
 	}
@@ -388,7 +397,7 @@ func (c *Cache) renderSmall(userID string) string {
 func (c *Cache) renderAvatar(userID string, img image.Image) string {
 	target := image.Pt(AvatarCols, AvatarRows)
 	if c.useKitty {
-		key := "avatar-" + userID
+		key := avatarKey(userID)
 		c.kitty.SetSource(key, img)
 		out := c.kitty.RenderKey(key, target)
 		// Fire the upload escape NOW (single-threaded from

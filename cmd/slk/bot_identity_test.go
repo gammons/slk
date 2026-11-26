@@ -78,3 +78,16 @@ func TestEnrichCachedRowRekeysBareBotRows(t *testing.T) {
 		t.Errorf("cached bot row = %q/%q, want B1/Bob and Bob", item.UserID, item.UserName)
 	}
 }
+
+// TestEnrichCachedRowNamesSenderWithoutUserRow: a row cached under a
+// sender's author ID whose bots.info lookup failed has no users row. It
+// still shows the sender's name, not the raw author ID.
+func TestEnrichCachedRowNamesSenderWithoutUserRow(t *testing.T) {
+	db := newTestDB(t)
+	row := cache.Message{TS: "1700000002.000000", ChannelID: "C1", WorkspaceID: "T1", UserID: "B1/Alice",
+		Text: "hi", RawJSON: `{"type":"message","subtype":"bot_message","bot_id":"B1","username":"Alice","text":"hi"}`}
+	item := enrichCachedRow(db, "USELF", "C1", row, newUserNameStore(nil), "3:04 PM", "test", nil, nil)
+	if item.UserID != "B1/Alice" || item.UserName != "Alice" {
+		t.Errorf("cached bot row = %q/%q, want B1/Alice and Alice", item.UserID, item.UserName)
+	}
+}

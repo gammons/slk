@@ -325,6 +325,12 @@ func enrichCachedRow(
 			}
 		}
 	}
+	// A row cached under a core.BotAuthorID carries the sender's name after
+	// the slash, for when bots.info has not answered yet.
+	cachedBotID := ""
+	if botID, username, ok := strings.Cut(effUserID, "/"); ok && botUsername == "" {
+		cachedBotID, botUsername = botID, username
+	}
 
 	// Resolve username from the in-memory store first; fall back to
 	// the cached users table; finally fall back to the bot username /
@@ -357,6 +363,13 @@ func enrichCachedRow(
 	if userName == "" {
 		if botUsername != "" {
 			userName = botUsername
+			// No users row for this sender: bots.info failed when the row
+			// was cached, so ask again.
+			if router != nil && cachedBotID != "" {
+				if wctx := router.Active(); wctx != nil && wctx.UserResolver != nil {
+					wctx.UserResolver.RequestBot(cachedBotID, botUsername)
+				}
+			}
 		} else {
 			userName = effUserID
 			// Cache had no entry for this user. Enqueue an async resolver

@@ -15,6 +15,7 @@ import (
 	"github.com/gammons/slk/internal/slack/edge"
 	"github.com/gammons/slk/internal/ui"
 	"github.com/slack-go/slack"
+	"golang.org/x/sync/singleflight"
 )
 
 // userResolverConcurrency caps how many users.info round trips the
@@ -60,6 +61,11 @@ type userResolver struct {
 	avatars  *avatar.Cache
 	send     func(tea.Msg)
 	inflight sync.Map // userID -> struct{}
+	// bots shares one bots.info call between the senders of one webhook,
+	// which RequestBot keys apart (core.BotAuthorID) but which have one
+	// bot_id. botInfo holds the answers: botID -> *slack.Bot.
+	bots    singleflight.Group
+	botInfo sync.Map
 	// Successful lookups queue peer IDs for the serialized event owner.
 	// Coalesce repeat resolutions without blocking background or synchronous
 	// callers; neither may mutate conversation slices here.
@@ -532,7 +538,7 @@ func (r *userResolver) RequestBot(botID, username string) {
 	}
 	go func() {
 		defer r.inflight.Delete(authorID)
-		bot, err := r.client.GetBotInfo(context.Background(), botID)
+		bot, err := r.botInfoFor(botID)
 		if err != nil {
 			debuglog.Cache("userResolver: GetBotInfo team=%s bot=%s err=%v", r.teamID, botID, err)
 			return
@@ -565,6 +571,27 @@ func (r *userResolver) RequestBot(botID, username string) {
 			})
 		}
 	}()
+}
+
+// botInfoFor returns the bots.info answer for botID. Concurrent calls for
+// one bot share a request, and a successful answer is kept for the
+// resolver's life.
+func (r *userResolver) botInfoFor(botID string) (*slack.Bot, error) {
+	if bot, ok := r.botInfo.Load(botID); ok {
+		return bot.(*slack.Bot), nil
+	}
+	v, err, _ := r.bots.Do(botID, func() (any, error) {
+		bot, err := r.client.GetBotInfo(context.Background(), botID)
+		if err != nil {
+			return nil, err
+		}
+		r.botInfo.Store(botID, bot)
+		return bot, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(*slack.Bot), nil
 }
 
 // bestBotIcon returns the best bot icon URL for the avatar grid. The

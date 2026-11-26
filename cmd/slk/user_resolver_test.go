@@ -812,7 +812,9 @@ func TestUserResolver_RecordsNamesInStore(t *testing.T) {
 		}
 	})
 	t.Run("bots.info per webhook sender", func(t *testing.T) {
+		var hits atomic.Int32
 		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			hits.Add(1)
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"ok":true,"bot":{"id":"B1","name":"webhook","icons":{}}}`))
 		}))
@@ -835,6 +837,9 @@ func TestUserResolver_RecordsNamesInStore(t *testing.T) {
 		}
 		if _, ok := store.Get("B1"); ok {
 			t.Error("store has a B1 entry; senders must not share the bot_id")
+		}
+		if n := hits.Load(); n != 1 {
+			t.Errorf("bots.info called %d times for one bot, want 1", n)
 		}
 	})
 }
