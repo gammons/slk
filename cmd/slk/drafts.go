@@ -221,13 +221,22 @@ func (e *draftEngine) Load(ctx context.Context) ([]core.Draft, error) {
 }
 
 // Save makes text dest's attached draft. slk's text wins every conflict
-// (spec, Conflicts).
-func (e *draftEngine) Save(ctx context.Context, dest draftDest, text string, edited time.Time) (core.DraftSaveResult, error) {
+// (spec, Conflicts). current, checked right after the per-conversation
+// lock is acquired, is a last-moment "is this save still wanted?"
+// check: a save built before a send or delete for the same
+// conversation can take the lock only after that send/delete has
+// completed and forgotten the draft, and without this check it would
+// then create a new draft holding the already-sent text. current nil
+// means always current.
+func (e *draftEngine) Save(ctx context.Context, dest draftDest, text string, edited time.Time, current func() bool) (core.DraftSaveResult, error) {
 	unlock, err := e.lock(ctx, dest)
 	if err != nil {
 		return core.DraftSaveResult{}, err
 	}
 	defer unlock()
+	if current != nil && !current() {
+		return core.DraftSaveResult{}, core.ErrDraftStale
+	}
 	w := slackclient.DraftWrite{ChannelID: dest.channelID, ThreadTS: dest.threadTS, Text: text, Edited: edited}
 	ent, ok := e.entry(dest)
 	switch {
@@ -452,14 +461,14 @@ func draftService(router *workspaceRouter) core.DraftService {
 			defer cancel()
 			return e.Load(ctx)
 		},
-		Save: func(k core.DraftKey, text string, edited time.Time) (core.DraftSaveResult, error) {
+		Save: func(k core.DraftKey, text string, edited time.Time, current func() bool) (core.DraftSaveResult, error) {
 			e, err := engine(k.TeamID)
 			if err != nil {
 				return core.DraftSaveResult{}, err
 			}
 			ctx, cancel := call()
 			defer cancel()
-			return e.Save(ctx, draftDest{k.ChannelID, k.ThreadTS}, text, edited)
+			return e.Save(ctx, draftDest{k.ChannelID, k.ThreadTS}, text, edited, current)
 		},
 		Discard: func(k core.DraftKey) error {
 			e, err := engine(k.TeamID)
@@ -495,7 +504,7 @@ func flushDrafts(ctx context.Context, router *workspaceRouter, changes []core.Dr
 		if c.Text == "" {
 			err = w.Drafts.Discard(ctx, dest)
 		} else {
-			_, err = w.Drafts.Save(ctx, dest, c.Text, c.Edited)
+			_, err = w.Drafts.Save(ctx, dest, c.Text, c.Edited, nil)
 		}
 		if err != nil {
 			debuglog.General("drafts: quit flush %v: %v", c.Key, err)

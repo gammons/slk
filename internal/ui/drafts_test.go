@@ -30,7 +30,7 @@ func draftSyncApp(t *testing.T, saveErr error) (*App, *[]draftCall, *time.Time) 
 	a.now = func() time.Time { return clock }
 	var calls []draftCall
 	a.setDraftServiceForTest(core.DraftServiceFuncs{
-		Save: func(k core.DraftKey, text string, edited time.Time) (core.DraftSaveResult, error) {
+		Save: func(k core.DraftKey, text string, edited time.Time, current func() bool) (core.DraftSaveResult, error) {
 			calls = append(calls, draftCall{"save", k, text, edited})
 			if saveErr != nil {
 				return core.DraftSaveResult{}, saveErr
@@ -210,7 +210,7 @@ func TestDraftSync_HandsOffResumesOnceTheBlockerIsGone(t *testing.T) {
 	a, calls, _ := draftSyncApp(t, nil)
 	saveErr := core.ErrDraftHandsOff
 	a.setDraftServiceForTest(core.DraftServiceFuncs{
-		Save: func(k core.DraftKey, text string, edited time.Time) (core.DraftSaveResult, error) {
+		Save: func(k core.DraftKey, text string, edited time.Time, current func() bool) (core.DraftSaveResult, error) {
 			*calls = append(*calls, draftCall{"save", k, text, edited})
 			if saveErr != nil {
 				return core.DraftSaveResult{}, saveErr
@@ -363,6 +363,50 @@ func TestDraftsLoaded_InactiveWorkspaceListIsNotRestored(t *testing.T) {
 	}
 	if a.compose.Value() != "" {
 		t.Errorf("T1's visible composer changed: %q", a.compose.Value())
+	}
+}
+
+// A save built before a send must not recreate the draft the send just
+// marked sent: the send bumps the key's generation before the save's
+// service call runs, and the service call's own current (passed
+// through from saveDraftCmd, the way the engine checks it under its
+// lock) must see that bump and refuse before any API call is made.
+func TestDraftSync_SaveBuiltBeforeSendDoesNotRecreateIt(t *testing.T) {
+	a := newTestApp(t, withActiveTeam("T1"), withActiveChannel("C1"))
+	a.compose.SetDraftContext("T1", "C1", "")
+	clock := time.Unix(1_800_000_000, 0)
+	a.now = func() time.Time { return clock }
+	var saveCalls int
+	a.setDraftServiceForTest(core.DraftServiceFuncs{
+		Save: func(k core.DraftKey, text string, edited time.Time, current func() bool) (core.DraftSaveResult, error) {
+			if current != nil && !current() {
+				return core.DraftSaveResult{}, core.ErrDraftStale
+			}
+			saveCalls++
+			return core.DraftSaveResult{Draft: core.Draft{ID: "Dr-" + k.ChannelID, Key: k, Text: text}}, nil
+		},
+		Discard: func(k core.DraftKey) error { return nil },
+	})
+	a.Update(draftsLoadedMsg{teamID: "T1"})
+
+	a.compose.SetValue("hello")
+	tick(t, a)                    // first comparison: observes "hello", too soon to save (visible)
+	cmds := a.syncDrafts(a.now()) // second comparison at the same instant: stable since observed, builds the save command
+
+	if len(cmds) != 1 {
+		t.Fatalf("cmds = %d, want 1 (the save built before the send)", len(cmds))
+	}
+
+	// The send: marks the slot sent and bumps gen before the save
+	// command built above has run its service call.
+	a.noteDraftSent(core.DraftKey{TeamID: "T1", ChannelID: "C1"})
+
+	for _, c := range cmds {
+		c()
+	}
+
+	if saveCalls != 0 {
+		t.Errorf("the stale save reached the service %d times, want 0", saveCalls)
 	}
 }
 

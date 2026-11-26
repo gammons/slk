@@ -13,7 +13,7 @@ func TestDraftService_RoutesByWorkspace(t *testing.T) {
 	router := newWorkspaceRouter()
 	router.Add(&WorkspaceContext{TeamID: "T1", Drafts: newDraftEngine(api, "T1")})
 	svc := draftService(router)
-	res, err := svc.Save(core.DraftKey{TeamID: "T1", ChannelID: "C1"}, "hi", time.Time{})
+	res, err := svc.Save(core.DraftKey{TeamID: "T1", ChannelID: "C1"}, "hi", time.Time{}, nil)
 	if err != nil || res.Draft.ID != "Dr1" {
 		t.Fatalf("save = %+v, %v", res, err)
 	}

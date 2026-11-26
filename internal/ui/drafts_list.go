@@ -148,7 +148,7 @@ func (a *App) reduceDraftDeleted(m draftDeletedMsg) tea.Cmd {
 	if k := m.draft.Key; m.draft.Writable() {
 		// The user asked: the slot goes too, even the visible one.
 		a.composerFor(k.ThreadTS).ClearSlot(k.TeamID, k.ChannelID, k.ThreadTS)
-		a.drafts.gen[k]++
+		a.drafts.genPtr(k).Add(1)
 		delete(a.drafts.synced, k)
 		delete(a.drafts.observed, k)
 	}

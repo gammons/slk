@@ -127,7 +127,7 @@ func (c commandAdapter) Run(teamID string, channelID ids.ChannelID, threadTS ids
 // func makes its method return errors.ErrUnsupported.
 type DraftServiceFuncs struct {
 	Load    func(teamID string) ([]Draft, error)
-	Save    func(key DraftKey, text string, edited time.Time) (DraftSaveResult, error)
+	Save    func(key DraftKey, text string, edited time.Time, current func() bool) (DraftSaveResult, error)
 	Discard func(key DraftKey) error
 	Delete  func(teamID, draftID string) error
 }
@@ -145,11 +145,11 @@ func (d draftAdapter) Load(teamID string) ([]Draft, error) {
 	return d.fns.Load(teamID)
 }
 
-func (d draftAdapter) Save(key DraftKey, text string, edited time.Time) (DraftSaveResult, error) {
+func (d draftAdapter) Save(key DraftKey, text string, edited time.Time, current func() bool) (DraftSaveResult, error) {
 	if d.fns.Save == nil {
 		return DraftSaveResult{}, errors.ErrUnsupported
 	}
-	return d.fns.Save(key, text, edited)
+	return d.fns.Save(key, text, edited, current)
 }
 
 func (d draftAdapter) Discard(key DraftKey) error {

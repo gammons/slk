@@ -34,7 +34,7 @@ func TestDraftServiceNilFuncsAreUnsupported(t *testing.T) {
 	if _, err := s.Load("T1"); !errors.Is(err, errors.ErrUnsupported) {
 		t.Errorf("Load err = %v", err)
 	}
-	if _, err := s.Save(DraftKey{}, "x", time.Time{}); !errors.Is(err, errors.ErrUnsupported) {
+	if _, err := s.Save(DraftKey{}, "x", time.Time{}, nil); !errors.Is(err, errors.ErrUnsupported) {
 		t.Errorf("Save err = %v", err)
 	}
 	if err := s.Discard(DraftKey{}); !errors.Is(err, errors.ErrUnsupported) {
@@ -60,8 +60,8 @@ func TestDraftServicePassesArguments(t *testing.T) {
 			got = append(got, "load")
 			return []Draft{wantDraft}, nil
 		},
-		Save: func(k DraftKey, text string, edited time.Time) (DraftSaveResult, error) {
-			if k != key || text != "hi" || !edited.Equal(at) {
+		Save: func(k DraftKey, text string, edited time.Time, current func() bool) (DraftSaveResult, error) {
+			if k != key || text != "hi" || !edited.Equal(at) || current == nil || !current() {
 				t.Errorf("Save(%v, %q, %v)", k, text, edited)
 			}
 			got = append(got, "save")
@@ -83,7 +83,7 @@ func TestDraftServicePassesArguments(t *testing.T) {
 		},
 	})
 
-	res, err := s.Save(key, "hi", at)
+	res, err := s.Save(key, "hi", at, func() bool { return true })
 	if err != nil || !res.Replaced {
 		t.Errorf("Save result=%+v err=%v", res, err)
 	}

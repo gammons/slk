@@ -32,7 +32,7 @@ func TestShutdown_SavesPendingTheme(t *testing.T) {
 func TestFlushDrafts_SavesAndDiscardsThroughEachWorkspace(t *testing.T) {
 	api := &fakeDraftAPI{}
 	eng := newDraftEngine(api, "T1")
-	_, _ = eng.Save(context.Background(), draftDest{channelID: "C2"}, "old", time.Time{})
+	_, _ = eng.Save(context.Background(), draftDest{channelID: "C2"}, "old", time.Time{}, nil)
 	router := newWorkspaceRouter()
 	router.Add(&WorkspaceContext{TeamID: "T1", Drafts: eng})
 	flushDrafts(context.Background(), router, []core.DraftChange{
@@ -64,7 +64,7 @@ func TestFlushDrafts_BoundedByDeadlineWhenASaveIsInFlight(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		_, _ = eng.Save(context.Background(), draftDest{channelID: "C1"}, "in flight", time.Time{})
+		_, _ = eng.Save(context.Background(), draftDest{channelID: "C1"}, "in flight", time.Time{}, nil)
 		close(done)
 	}()
 	<-entered

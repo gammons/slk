@@ -89,8 +89,13 @@ type DraftService interface {
 	Load(teamID string) ([]Draft, error)
 	// Save makes text (wire form) the conversation's draft. edited is
 	// when the text was last changed. ErrDraftHandsOff when the
-	// conversation's draft is one slk won't overwrite.
-	Save(key DraftKey, text string, edited time.Time) (DraftSaveResult, error)
+	// conversation's draft is one slk won't overwrite. current, checked
+	// under the engine's per-conversation lock before any API call, is
+	// an escape hatch for a save built before a later send or delete
+	// for the same conversation: when current reports false the call
+	// makes no API call and answers ErrDraftStale. nil means always
+	// current (the quit flush passes nil).
+	Save(key DraftKey, text string, edited time.Time, current func() bool) (DraftSaveResult, error)
 	// Discard deletes the conversation's draft, if slk knows of one.
 	Discard(key DraftKey) error
 	// Delete deletes one draft by id (the Drafts list).

@@ -55,3 +55,8 @@ type DraftChange struct {
 // one slk won't overwrite (scheduled, with files, or a deleted draft
 // still holding the slot).
 var ErrDraftHandsOff = errors.New("slack already has a draft here that slk won't overwrite")
+
+// ErrDraftStale is Save's answer when current (see DraftService.Save)
+// reports the save is no longer current: a send or delete for the same
+// conversation ran first. No API call was made.
+var ErrDraftStale = errors.New("draft save no longer current")

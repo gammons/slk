@@ -90,16 +90,31 @@ func TestDraftEngine_CreatesThenUpdates(t *testing.T) {
 	api := &fakeDraftAPI{}
 	e := newDraftEngine(api, "T1")
 	ctx := context.Background()
-	res, err := e.Save(ctx, c1, "one", time.UnixMilli(1000))
+	res, err := e.Save(ctx, c1, "one", time.UnixMilli(1000), nil)
 	if err != nil || res.Draft.ID != "Dr1" || res.Draft.Key != (core.DraftKey{TeamID: "T1", ChannelID: "C1"}) {
 		t.Fatalf("first save = %+v, %v", res, err)
 	}
-	if _, err := e.Save(ctx, c1, "two", time.UnixMilli(2000)); err != nil {
+	if _, err := e.Save(ctx, c1, "two", time.UnixMilli(2000), nil); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"create C1 one", "update Dr1 two 2000"}
 	if got := api.Calls(); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("calls = %v, want %v", got, want)
+	}
+}
+
+// A Save whose current reports false (a send/delete for the same
+// conversation ran first) makes no API call and answers ErrDraftStale.
+func TestDraftEngine_SaveNoLongerCurrentMakesNoAPICall(t *testing.T) {
+	api := &fakeDraftAPI{}
+	e := newDraftEngine(api, "T1")
+	ctx := context.Background()
+	_, err := e.Save(ctx, c1, "one", time.Time{}, func() bool { return false })
+	if !errors.Is(err, core.ErrDraftStale) {
+		t.Fatalf("err = %v, want ErrDraftStale", err)
+	}
+	if got := api.Calls(); len(got) != 0 {
+		t.Errorf("calls = %v, want none", got)
 	}
 }
 
@@ -121,7 +136,7 @@ func TestDraftEngine_ConflictRetriesWithNow(t *testing.T) {
 	if _, err := e.Load(ctx); err != nil {
 		t.Fatal(err)
 	}
-	res, err := e.Save(ctx, c1, "mine", time.UnixMilli(1000))
+	res, err := e.Save(ctx, c1, "mine", time.UnixMilli(1000), nil)
 	if err != nil || !res.Replaced {
 		t.Fatalf("save = %+v, %v; want Replaced", res, err)
 	}
@@ -140,7 +155,7 @@ func TestDraftEngine_AdoptsAnotherDevicesDraft(t *testing.T) {
 		return []slackclient.Draft{attached("Dr9", "C1", "", "1.0")}, nil
 	}
 	e := newDraftEngine(api, "T1")
-	res, err := e.Save(context.Background(), c1, "mine", time.UnixMilli(5))
+	res, err := e.Save(context.Background(), c1, "mine", time.UnixMilli(5), nil)
 	if err != nil || !res.Replaced || res.Draft.ID != "Dr9" {
 		t.Fatalf("save = %+v, %v; want Dr9 replaced", res, err)
 	}
@@ -158,7 +173,7 @@ func TestDraftEngine_DeletedDraftHoldingTheSlotIsHandsOff(t *testing.T) {
 		return slackclient.Draft{}, rejected("attached_draft_exists")
 	}
 	e := newDraftEngine(api, "T1")
-	if _, err := e.Save(context.Background(), c1, "mine", time.Time{}); !errors.Is(err, core.ErrDraftHandsOff) {
+	if _, err := e.Save(context.Background(), c1, "mine", time.Time{}, nil); !errors.Is(err, core.ErrDraftHandsOff) {
 		t.Fatalf("err = %v, want ErrDraftHandsOff", err)
 	}
 }
@@ -173,11 +188,11 @@ func TestDraftEngine_CreateHandsOffIsRemembered(t *testing.T) {
 	}
 	e := newDraftEngine(api, "T1")
 	ctx := context.Background()
-	if _, err := e.Save(ctx, c1, "mine", time.Time{}); !errors.Is(err, core.ErrDraftHandsOff) {
+	if _, err := e.Save(ctx, c1, "mine", time.Time{}, nil); !errors.Is(err, core.ErrDraftHandsOff) {
 		t.Fatalf("first save err = %v, want ErrDraftHandsOff", err)
 	}
 	before := len(api.Calls())
-	if _, err := e.Save(ctx, c1, "mine again", time.Time{}); !errors.Is(err, core.ErrDraftHandsOff) {
+	if _, err := e.Save(ctx, c1, "mine again", time.Time{}, nil); !errors.Is(err, core.ErrDraftHandsOff) {
 		t.Fatalf("second save err = %v, want ErrDraftHandsOff", err)
 	}
 	if got := len(api.Calls()); got != before {
@@ -199,11 +214,11 @@ func TestDraftEngine_UpdateInvalidHandsOffIsRemembered(t *testing.T) {
 	if _, err := e.Load(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Save(ctx, c1, "mine", time.Time{}); !errors.Is(err, core.ErrDraftHandsOff) {
+	if _, err := e.Save(ctx, c1, "mine", time.Time{}, nil); !errors.Is(err, core.ErrDraftHandsOff) {
 		t.Fatalf("first save err = %v, want ErrDraftHandsOff", err)
 	}
 	before := len(api.Calls())
-	if _, err := e.Save(ctx, c1, "mine again", time.Time{}); !errors.Is(err, core.ErrDraftHandsOff) {
+	if _, err := e.Save(ctx, c1, "mine again", time.Time{}, nil); !errors.Is(err, core.ErrDraftHandsOff) {
 		t.Fatalf("second save err = %v, want ErrDraftHandsOff", err)
 	}
 	if got := len(api.Calls()); got != before {
@@ -223,7 +238,7 @@ func TestDraftEngine_HandsOffDraftsAreNeverWritten(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, d := range []draftDest{c1, {channelID: "C2"}} {
-		if _, err := e.Save(ctx, d, "x", time.Time{}); !errors.Is(err, core.ErrDraftHandsOff) {
+		if _, err := e.Save(ctx, d, "x", time.Time{}, nil); !errors.Is(err, core.ErrDraftHandsOff) {
 			t.Errorf("%v: err = %v, want ErrDraftHandsOff", d, err)
 		}
 		if err := e.Discard(ctx, d); err != nil {
@@ -246,7 +261,7 @@ func TestDraftEngine_GoneDraftIsRecreated(t *testing.T) {
 	e := newDraftEngine(api, "T1")
 	ctx := context.Background()
 	_, _ = e.Load(ctx)
-	res, err := e.Save(ctx, c1, "again", time.UnixMilli(1))
+	res, err := e.Save(ctx, c1, "again", time.UnixMilli(1), nil)
 	if err != nil || res.Draft.ID != "Dr1" {
 		t.Fatalf("save = %+v, %v; want new Dr1", res, err)
 	}
@@ -259,7 +274,7 @@ func TestDraftEngine_DiscardDeletesAndForgets(t *testing.T) {
 	if err := e.Discard(ctx, c1); err != nil { // nothing known: no call
 		t.Fatal(err)
 	}
-	_, _ = e.Save(ctx, c1, "x", time.Time{})
+	_, _ = e.Save(ctx, c1, "x", time.Time{}, nil)
 	if err := e.Discard(ctx, c1); err != nil {
 		t.Fatal(err)
 	}
@@ -286,9 +301,9 @@ func TestDraftEngine_OneCallInFlightPerConversation(t *testing.T) {
 	e := newDraftEngine(api, "T1")
 	ctx := context.Background()
 	done := make(chan struct{})
-	go func() { _, _ = e.Save(ctx, c1, "one", time.Time{}); done <- struct{}{} }()
+	go func() { _, _ = e.Save(ctx, c1, "one", time.Time{}, nil); done <- struct{}{} }()
 	<-entered
-	go func() { _, _ = e.Save(ctx, c1, "two", time.Time{}); done <- struct{}{} }()
+	go func() { _, _ = e.Save(ctx, c1, "two", time.Time{}, nil); done <- struct{}{} }()
 	select {
 	case <-entered:
 		t.Fatal("second save reached Slack while the first was in flight")
@@ -326,7 +341,7 @@ func TestDraftEngine_ReloadKeepsWritesMadeDuringTheList(t *testing.T) {
 	<-entered
 
 	c2 := draftDest{channelID: "C2"}
-	if _, err := e.Save(ctx, c2, "hello", time.Time{}); err != nil {
+	if _, err := e.Save(ctx, c2, "hello", time.Time{}, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -334,7 +349,7 @@ func TestDraftEngine_ReloadKeepsWritesMadeDuringTheList(t *testing.T) {
 	<-loadDone
 
 	// If the stale list had won, this would be a second "create C2 ...".
-	if _, err := e.Save(ctx, c2, "world", time.Time{}); err != nil {
+	if _, err := e.Save(ctx, c2, "world", time.Time{}, nil); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"list", "create C2 hello", "update Dr1 world -62135596800000"}
@@ -392,7 +407,7 @@ func TestSendWithDraft_MarksTheDraftSent(t *testing.T) {
 	api := &fakeDraftAPI{}
 	e := newDraftEngine(api, "T1")
 	ctx := context.Background()
-	_, _ = e.Save(ctx, c1, "hello", time.Time{})
+	_, _ = e.Save(ctx, c1, "hello", time.Time{}, nil)
 	s := &fakeSender{}
 	if _, _, err := sendWithDraft(ctx, s, e, "C1", "", "hello", false); err != nil {
 		t.Fatal(err)
@@ -414,7 +429,7 @@ func TestSendWithDraft_RefusalFallsBackAndDeletesTheDraft(t *testing.T) {
 	api := &fakeDraftAPI{}
 	e := newDraftEngine(api, "T1")
 	ctx := context.Background()
-	_, _ = e.Save(ctx, draftDest{"C1", "9.0"}, "hello", time.Time{})
+	_, _ = e.Save(ctx, draftDest{"C1", "9.0"}, "hello", time.Time{}, nil)
 	s := &fakeSender{refusal: slack.SlackErrorResponse{Err: "draft_already_sent"}}
 	if _, _, err := sendWithDraft(ctx, s, e, "C1", "9.0", "hello", false); err != nil {
 		t.Fatal(err)
@@ -438,7 +453,7 @@ func TestSendWithDraft_WaitsForInFlightSave(t *testing.T) {
 	}
 	e := newDraftEngine(api, "T1")
 	ctx := context.Background()
-	go func() { _, _ = e.Save(ctx, c1, "hello", time.Time{}) }()
+	go func() { _, _ = e.Save(ctx, c1, "hello", time.Time{}, nil) }()
 	<-entered
 	s := &fakeSender{}
 	sent := make(chan struct{})
@@ -467,7 +482,7 @@ func TestSendWithDraft_CancelledCtxWhileBusyPostsPlain(t *testing.T) {
 		return attached("Dr1", "C1", "", "4.0"), nil
 	}
 	e := newDraftEngine(api, "T1")
-	go func() { _, _ = e.Save(context.Background(), c1, "hello", time.Time{}) }()
+	go func() { _, _ = e.Save(context.Background(), c1, "hello", time.Time{}, nil) }()
 	<-entered
 
 	ctx, cancel := context.WithCancel(context.Background())

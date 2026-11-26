@@ -124,6 +124,16 @@ Not drafts:
 A save that fails for any reason other than a refusal is retried with
 backoff (4 s doubling to at most a minute).
 
+Mentions are translated with the slot's OWN workspace's names, never the
+active workspace's: a slot left in workspace A and saved after switching to
+B must still read `<@U…>` back from A's mention data, not B's (two workspaces
+can give the same user ID different handles). For the active workspace, the
+translation runs now and is remembered; for an inactive one, the save (or
+quit flush) reuses that remembered translation when the text still matches,
+and is skipped otherwise — it is saved once that workspace is active again.
+A workspace switch records every outgoing slot's translation before the
+composers' mention data changes underneath it.
+
 ### Restoring
 
 At connect and on every reconnect slk lists the workspace's drafts. Each
@@ -135,6 +145,20 @@ replaced. (The composer is usually bound to its first conversation before the
 list arrives, so without this its draft would never appear.) A slot whose
 draft disappeared from Slack (sent or deleted elsewhere) is cleared only if it
 is not visible and still holds exactly the text slk last synced.
+
+Restoring and vanish-clearing act only on the active workspace's keys: the
+composers hold the active workspace's mention data, so applying another
+workspace's list there would restore or clear text translated with the wrong
+names. A list for a workspace that is not active only updates that
+workspace's `loaded`/rows bookkeeping; the restore happens once that
+workspace becomes active, which re-issues the list load.
+
+A list older than a local change made since it was issued does not override
+that change: restoring a sent draft's text back, clearing a slot saved
+during the request, or bringing a sent/deleted draft's row back. Each local
+change (a save answer, a send, a list delete, a vanish-clear) is stamped
+with a sequence number; a list is stamped with the sequence in effect when
+it was issued, and skips restore/vanish/clear for any key touched since.
 
 ### Sending
 
@@ -245,12 +269,20 @@ func (d Draft) Writable() bool // attached, addressed, unscheduled, no files
 type DraftSaveResult struct{ Draft Draft; Replaced bool }
 type DraftChange struct{ Key DraftKey; Text string; Edited time.Time } // Text "" discards
 var ErrDraftHandsOff error // the destination's draft is one slk won't overwrite
+var ErrDraftStale error    // current reported the save no longer wanted; no API call made
 
 // Blocking, like CommandService.Run: the UI runs them from tea.Cmds and
 // wraps the answers in its own messages (core cannot import the UI).
 type DraftService interface {
     Load(teamID string) ([]Draft, error)
-    Save(key DraftKey, text string, edited time.Time) (DraftSaveResult, error)
+    // current, checked under the engine's per-conversation lock before
+    // any API call, answers whether this save is still wanted; nil
+    // means always current (the quit flush passes nil). A false answer
+    // makes no call and returns ErrDraftStale -- the escape hatch for a
+    // save built before a later send or delete for the same
+    // conversation, which would otherwise take the lock only after
+    // that send/delete forgot the draft and recreate it.
+    Save(key DraftKey, text string, edited time.Time, current func() bool) (DraftSaveResult, error)
     Discard(key DraftKey) error
     Delete(teamID, draftID string) error
 }
@@ -267,6 +299,10 @@ One `draftEngine` per workspace (on `WorkspaceContext`), owning:
   list;
 - per-key serialization: at most one Slack call in flight per key; a newer
   save for a busy key replaces any queued one, so saves never reorder;
+  `Save`'s `current` is checked right after the key's lock is taken, before
+  any call, so a save that only reaches the lock after a send or delete for
+  the same key forgot the draft is refused (`ErrDraftStale`) instead of
+  recreating it;
 - the create/update choice and the conflict table above;
 - `beginSend(dest)` for the send adapters (`Send` / `SendReply` in
   `main.go`, through `sendWithDraft`), which waits for that key's in-flight
@@ -285,12 +321,16 @@ sends `ui.DraftsStaleMsg{TeamID}`; the App answers by calling `Load`.
   `ClearSlot(key)` (any slot; list delete). It knows nothing of sync.
 - `draftSync` (`internal/ui/drafts.go`) holds, per slot, `synced` (the
   composer-form text Slack last had from slk), `observed` (the text seen at
-  the last check and when), `inflight`, a generation bumped by a send or a
-  delete (so a late answer is ignored), retry backoff and the hands-off set;
-  per workspace, whether drafts were listed, and the list rows. A
-  `draftTickMsg` every 2 s runs the comparison; it starts with the first
-  list. A send calls `noteDraftSent(key)` at the moment the composer is
-  reset.
+  the last check and when), `inflight`, a generation (an `*atomic.Uint64`,
+  via `genPtr`) bumped by a send or a delete, retry backoff and the
+  hands-off set; per workspace, whether drafts were listed, and the list
+  rows. A `draftTickMsg` every 2 s runs the comparison; it starts with the
+  first list. A send calls `noteDraftSent(key)` at the moment the composer
+  is reset, before the save command for that key exists, so any save that
+  takes the engine's lock afterward sees the bump. `saveDraftCmd` reads the
+  pointer once to build a `current` closure it passes to `Save`; a stale
+  answer (gen mismatch, or `ErrDraftStale` from the service itself) is
+  ignored by `reduceDraftSaved`.
 - The App keeps the active workspace's list rows; `draftlist` draws them with
   `bubbles/chrome` and is composited in `view_overlays.go` like the marks
   overlay. `:drafts` is an entry in `commands` and a keyless help entry in

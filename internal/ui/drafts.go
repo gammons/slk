@@ -12,6 +12,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -44,7 +45,7 @@ type (
 	draftSavedMsg struct {
 		key  core.DraftKey
 		text string
-		gen  int
+		gen  uint64
 		res  core.DraftSaveResult
 		err  error
 	}
@@ -95,8 +96,12 @@ type draftSync struct {
 	// active right now can still be saved correctly (see draftWire).
 	wire map[core.DraftKey]draftWireEntry
 	// gen is bumped by a send and a delete, so a save answer that was
-	// in flight across them is ignored.
-	gen   map[core.DraftKey]int
+	// in flight across them is ignored. Each pointer is created once
+	// (genPtr) and never replaced, so a saveDraftCmd closure can read
+	// it long after the comparison that built it, from any goroutine,
+	// without a map read racing a concurrent map write: only the
+	// Update goroutine writes the map itself, via genPtr.
+	gen   map[core.DraftKey]*atomic.Uint64
 	retry map[core.DraftKey]draftRetry
 	// handsOff: Slack's draft here is one slk won't overwrite; the slot
 	// is left alone until a list shows a writable draft there.
@@ -112,7 +117,7 @@ func newDraftSync() *draftSync {
 		observed: map[core.DraftKey]draftObserved{},
 		inflight: map[core.DraftKey]string{},
 		wire:     map[core.DraftKey]draftWireEntry{},
-		gen:      map[core.DraftKey]int{},
+		gen:      map[core.DraftKey]*atomic.Uint64{},
 		retry:    map[core.DraftKey]draftRetry{},
 		handsOff: map[core.DraftKey]bool{},
 		rows:     map[string][]core.Draft{},
@@ -165,6 +170,18 @@ func (a *App) eachDraftSlot(fn func(key core.DraftKey, text string, visible bool
 // syncable reports a slot the comparison may act on.
 func (d *draftSync) syncable(key core.DraftKey) bool {
 	return key.TeamID != "" && d.loaded[key.TeamID] && !d.handsOff[key]
+}
+
+// genPtr returns key's generation counter, creating it on first use.
+// Called only from the Update goroutine; the returned pointer is safe
+// to read and bump from any goroutine afterwards.
+func (d *draftSync) genPtr(key core.DraftKey) *atomic.Uint64 {
+	p, ok := d.gen[key]
+	if !ok {
+		p = &atomic.Uint64{}
+		d.gen[key] = p
+	}
+	return p
 }
 
 // syncDrafts runs one comparison at now and returns the saves to make.
@@ -251,14 +268,24 @@ func (a *App) rememberDraftWire(outgoingTeamID string) {
 	})
 }
 
+// saveDraftCmd builds the save/discard call for key. The generation
+// pointer is read now (g) and again inside current, from whichever
+// goroutine runs the returned command: if a send or delete for key
+// bumps the pointer before the engine takes key's lock, current
+// reports false and the engine makes no API call (core.ErrDraftStale),
+// so a save built before a send can never recreate the draft the send
+// just marked sent (finding 2).
 func (a *App) saveDraftCmd(key core.DraftKey, text, wire string, edited time.Time) tea.Cmd {
-	svc, gen := a.draftSvc, a.drafts.gen[key]
+	svc := a.draftSvc
+	ptr := a.drafts.genPtr(key)
+	g := ptr.Load()
+	current := func() bool { return ptr.Load() == g }
 	return func() tea.Msg {
 		if text == "" {
-			return draftSavedMsg{key: key, gen: gen, err: svc.Discard(key)}
+			return draftSavedMsg{key: key, gen: g, err: svc.Discard(key)}
 		}
-		res, err := svc.Save(key, wire, edited)
-		return draftSavedMsg{key: key, text: text, gen: gen, res: res, err: err}
+		res, err := svc.Save(key, wire, edited, current)
+		return draftSavedMsg{key: key, text: text, gen: g, res: res, err: err}
 	}
 }
 
@@ -292,7 +319,7 @@ func (a *App) UnsyncedDrafts() []core.DraftChange {
 // a save answer in flight is ignored.
 func (a *App) noteDraftSent(key core.DraftKey) {
 	d := a.drafts
-	d.gen[key]++
+	d.genPtr(key).Add(1)
 	delete(d.synced, key)
 	delete(d.observed, key)
 	d.removeRowsFor(key)
@@ -408,8 +435,11 @@ func (a *App) restoreRemoteDraft(dr core.Draft) {
 func (a *App) reduceDraftSaved(m draftSavedMsg) tea.Cmd {
 	d := a.drafts
 	delete(d.inflight, m.key)
-	if m.gen != d.gen[m.key] {
+	if m.gen != d.genPtr(m.key).Load() {
 		return nil // sent or deleted while this was in flight
+	}
+	if errors.Is(m.err, core.ErrDraftStale) {
+		return nil // the engine itself refused for the same reason: nothing else to do
 	}
 	switch {
 	case m.err == nil:
