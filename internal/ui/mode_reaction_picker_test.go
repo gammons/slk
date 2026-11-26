@@ -570,3 +570,24 @@ func saveCommitted(t *testing.T, a *App, calls *reactionCalls, check func(string
 	}
 	check(calls.frecent[0])
 }
+
+// Ctrl+N/Ctrl+P move the picker's cursor like Down/Up, as in the
+// other pickers.
+func TestReactionPickerCtrlNP(t *testing.T) {
+	var calls reactionCalls
+	a := newTestApp(t, reactionPickerOpts(false)...)
+	openReactionPicker(&calls, "tada", "rocket")(t, a)
+	a.SetMode(ModeReactionPicker)
+
+	pressKey(t, a, keyMod('n', tea.ModCtrl))
+	if got := highlightedEmoji(t, a); got != "rocket" {
+		t.Errorf("after ctrl+n: highlighted %q, want rocket", got)
+	}
+	pressKey(t, a, keyMod('p', tea.ModCtrl))
+	if got := highlightedEmoji(t, a); got != "tada" {
+		t.Errorf("after ctrl+p: highlighted %q, want tada", got)
+	}
+	if a.mode != ModeReactionPicker {
+		t.Errorf("mode = %v, want the picker still open", a.mode)
+	}
+}

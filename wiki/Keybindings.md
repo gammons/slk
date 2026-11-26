@@ -60,7 +60,7 @@
 | `Ctrl+w q` / `:q` | Normal | Close the focused window (not the last one) |
 | `Ctrl+w o` / `:only` (`:on`) | Normal | Close every other window |
 | `1`–`9` | Normal | Jump to workspace N |
-| `r` | Normal (message) | Open reaction picker |
+| `r` | Normal (message) | Open reaction picker (`↑`/`↓` or `Ctrl+n`/`Ctrl+p` to move) |
 | `R` | Normal (message) | Quick-toggle existing reactions |
 | `E` | Normal (message) | Edit your own message |
 | `D` | Normal (message) | Delete your own message (with confirmation) |

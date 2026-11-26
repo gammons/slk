@@ -271,13 +271,13 @@ func (m *Model) HandleKey(keyStr string) *ReactionResult {
 			Remove: m.isExistingReaction(name),
 		}
 
-	case "up":
+	case "up", "ctrl+p":
 		if m.selected > 0 {
 			m.selected--
 		}
 		return nil
 
-	case "down":
+	case "down", "ctrl+n":
 		list := m.displayedList()
 		if m.selected < len(list)-1 {
 			m.selected++
