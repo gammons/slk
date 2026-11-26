@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -26,6 +27,59 @@ func TestRegion_SingleWindowUnchanged(t *testing.T) {
 	direct := a.renderMessagesRegion(frame, 0, false)
 	if multi != direct {
 		t.Fatal("single-window region must be byte-identical to the direct messages render")
+	}
+}
+
+func TestRegion_BordersStayPutWhenFocusMoves(t *testing.T) {
+	for _, dir := range []wintree.Dir{wintree.SplitSideBySide, wintree.SplitStacked} {
+		a := newWideTestApp(t)
+		_, _ = a.Update(ChannelSelectedMsg{ID: "C1", Name: "general", Type: "channel"})
+		w1 := a.focusedWin
+		_ = a.splitWindow(dir)
+		_, _ = a.Update(ChannelSelectedMsg{ID: "C2", Name: "ops", Type: "channel"})
+
+		corners := func() []int {
+			var cols []int
+			for _, row := range strings.Split(ansi.Strip(renderRegion(a)), "\n") {
+				for i, r := range []rune(row) {
+					if strings.ContainsRune("╭╮╰╯┏┓┗┛", r) {
+						cols = append(cols, i)
+					}
+				}
+			}
+			return cols
+		}
+
+		before := corners()
+		a.focusWindow(w1)
+		after := corners()
+
+		if len(before) == 0 || !slices.Equal(before, after) {
+			t.Fatalf("dir %v: corner columns moved with focus: %v -> %v", dir, before, after)
+		}
+	}
+}
+
+func TestRegion_SideBySideWindowsOneColumnApart(t *testing.T) {
+	a, _, _ := twoWindowApp(t)
+	top := []rune(strings.Split(ansi.Strip(renderRegion(a)), "\n")[0])
+	frame := a.computeFrame()
+
+	var corners []int
+	for i, r := range top {
+		if strings.ContainsRune("╭╮┏┓", r) {
+			corners = append(corners, i)
+		}
+	}
+
+	if len(corners) != 4 {
+		t.Fatalf("want two boxes on the top row, got corners at %v", corners)
+	}
+	if gap := corners[2] - corners[1] - 1; gap != 1 {
+		t.Fatalf("gap between windows = %d columns, want 1", gap)
+	}
+	if right := len(top) - corners[3] - 1; right != frame.MsgBorder {
+		t.Fatalf("gutter right of the last window = %d columns, want %d", right, frame.MsgBorder)
 	}
 }
 
@@ -97,13 +151,14 @@ func TestRegion_UnfocusedPaneDoesNotRewrapModelLines(t *testing.T) {
 	frame := a.computeFrame()
 	bounds := wintree.Rect{X: 0, Y: 0, W: frame.MsgWidth + frame.MsgBorder, H: frame.ContentHeight}
 	r := a.wins.ComputeRects(bounds)[w1]
-	bare := ansi.Strip(a.winModels[w1].ViewBare(r.H-2, r.W-2))
+	innerW := r.W - windowGutter(r, frame) - 2
+	bare := ansi.Strip(a.winModels[w1].ViewBare(r.H-2, innerW))
 	for i, line := range strings.Split(bare, "\n") {
 		if !strings.Contains(out, "│"+line+"│") {
 			t.Fatalf("model line %d not intact in unfocused pane (re-wrapped or truncated):\nwant bracketed |%s|", i, line)
 		}
 	}
-	bottom := "╰" + strings.Repeat("─", r.W-2) + "╯"
+	bottom := "╰" + strings.Repeat("─", innerW) + "╯"
 	if !strings.Contains(out, bottom) {
 		t.Fatal("unfocused pane bottom border missing (row overflow clamped it away)")
 	}

@@ -52,7 +52,8 @@ func (a *App) renderWindowNode(n wintree.LayoutNode, frame panelLayoutFrame, the
 			// to.
 			a.layout.SetFocusedWinRect(n.Rect)
 			sub := frame
-			sub.MsgWidth = n.Rect.W - 2
+			sub.MsgBorder = windowGutter(n.Rect, frame)
+			sub.MsgWidth = n.Rect.W - sub.MsgBorder
 			// Floor: a hard shrink can leave rects narrower than the
 			// panel chrome (W-2 < 2). Below 2, renderMessagesTop's
 			// borderedTopPane computes strings.Repeat(top, MsgWidth-2)
@@ -62,7 +63,6 @@ func (a *App) renderWindowNode(n wintree.LayoutNode, frame panelLayoutFrame, the
 			if sub.MsgWidth < 2 {
 				sub.MsgWidth = 2
 			}
-			sub.MsgBorder = 2
 			sub.ContentHeight = n.Rect.H
 			out := exactSize(a.renderMessagesRegion(sub, themeVer, false), n.Rect.W, n.Rect.H)
 			if sub.MsgWidth+sub.MsgBorder > n.Rect.W {
@@ -74,7 +74,7 @@ func (a *App) renderWindowNode(n wintree.LayoutNode, frame panelLayoutFrame, the
 			}
 			return out
 		}
-		return a.renderUnfocusedWindow(n, themeVer)
+		return a.renderUnfocusedWindow(n, windowGutter(n.Rect, frame), themeVer)
 	}
 	parts := make([]string, 0, len(n.Children))
 	for _, c := range n.Children {
@@ -98,17 +98,21 @@ func (a *App) renderWindowNode(n wintree.LayoutNode, frame panelLayoutFrame, the
 // renderUnfocusedWindow renders a live, read-only pane for an
 // unfocused window: dimmed border, channel content via ViewBare
 // (whose chrome includes the channel-name header). No compose/typing
-// rows (focused window only). Cached per window on
-// (version, rect, themeVer).
-func (a *App) renderUnfocusedWindow(n wintree.LayoutNode, themeVer int64) string {
+// rows (focused window only). The gutter is the one the focused
+// window would get in the same rect (windowGutter), so the border
+// does not move when focus does. Cached per window on (version, rect,
+// themeVer, gutter).
+func (a *App) renderUnfocusedWindow(n wintree.LayoutNode, gutter int, themeVer int64) string {
 	m := a.winModels[n.ID]
-	if m == nil || n.Rect.W < 4 || n.Rect.H < 4 {
+	innerW := n.Rect.W - gutter - 2
+	if m == nil || innerW < 2 || n.Rect.H < 4 {
 		return a.renderBlankWindow(n)
 	}
+
 	m.SetFocused(false) // before Version read; bumps only on flip
 	m.SetCursorHighlight(a.mode != ModeInsert)
 	c := a.renderCache.getWinPane(n.ID)
-	key := themeVer << 1
+	key := themeVer<<8 | int64(gutter)
 	if c.hit(m.Version(), n.Rect.W, n.Rect.H, key) {
 		return c.output
 	}
@@ -121,13 +125,24 @@ func (a *App) renderUnfocusedWindow(n wintree.LayoutNode, themeVer int64) string
 	// assembles the border by concatenation around the model's
 	// width-padded lines and emits exactly Rect.W x Rect.H cells, so
 	// no exactSize pass is needed either.
-	innerW := n.Rect.W - 2
 	contentH := n.Rect.H - 2
 	view := m.ViewBare(contentH, innerW)
 	view = messages.ReapplyBgAfterResets(view, messages.BgANSI())
 	out := borderedPane(view, innerW, n.Rect.W, n.Rect.H, false, styles.Background)
 	c.store(out, m.Version(), n.Rect.W, n.Rect.H, key)
 	return out
+}
+
+// windowGutter is the blank columns a split window leaves right of
+// its box. A window on the region's right edge keeps the pane gutter
+// the single-window layout has (frame.MsgBorder); one with a
+// neighbour to its right leaves a single column, enough to keep the
+// two borders apart. Compact mode has no gutter anywhere.
+func windowGutter(r wintree.Rect, frame panelLayoutFrame) int {
+	if r.X+r.W >= frame.MsgWidth+frame.MsgBorder {
+		return frame.MsgBorder
+	}
+	return min(1, frame.MsgBorder)
 }
 
 // renderBlankWindow is the degenerate-rect fallback: a blank block of
