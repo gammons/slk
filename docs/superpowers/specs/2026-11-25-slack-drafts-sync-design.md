@@ -140,6 +140,13 @@ and is skipped otherwise — it is saved once that workspace is active again.
 A workspace switch records every outgoing slot's translation before the
 composers' mention data changes underneath it.
 
+A workspace's **first** list failing (not yet loaded) leaves sync off for
+every slot of that workspace until it succeeds, so it is retried: 4 s,
+doubling on each further failure to at most a minute, then re-issued the
+same way `cmd/slk` asks for one on connect. Success resets the backoff. A
+later reload of an already-loaded workspace failing is logged only, as
+before — that workspace is already syncing.
+
 ### Restoring
 
 At connect and on every reconnect slk lists the workspace's drafts. Each
@@ -343,7 +350,11 @@ sends `ui.DraftsStaleMsg{TeamID}`; the App answers by calling `Load`.
   d.seq`; `reduceDraftsLoaded` skips restore, vanish-clear and the
   hands-off clear for any key touched since (`touched[key] > issued`), and
   `mergeDraftRows` keeps the current rows for such a key (present or
-  absent) instead of the list's.
+  absent) instead of the list's. A failed load for a workspace not yet
+  `loaded` schedules `retryLoadDraftsCmd`, a `tea.Tick` that re-issues
+  the load as `DraftsStaleMsg` after a backoff (`loadRetry[teamID]`,
+  reset on success); an already-loaded workspace's reload failure is
+  logged only.
 - The App keeps the active workspace's list rows; `draftlist` draws them with
   `bubbles/chrome` and is composited in `view_overlays.go` like the marks
   overlay. `:drafts` is an entry in `commands` and a keyless help entry in

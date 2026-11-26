@@ -493,6 +493,49 @@ func TestDraftSync_SaveBuiltBeforeSendDoesNotRecreateIt(t *testing.T) {
 	}
 }
 
+// A Load failure for a workspace that has never loaded leaves sync
+// silently off unless it is retried. reduceDraftsLoaded must schedule
+// a backed-off retry (DraftsStaleMsg, which re-issues the load) and
+// grow the backoff on each further failure; a success resets it, and
+// a failed reload of an already-loaded workspace keeps the old
+// behaviour (log only, no retry).
+func TestDraftsLoaded_FirstLoadFailureRetriesWithBackoff(t *testing.T) {
+	a := newTestApp(t, withActiveTeam("T1"))
+	orig := draftLoadRetryBase
+	draftLoadRetryBase = 5 * time.Millisecond
+	t.Cleanup(func() { draftLoadRetryBase = orig })
+
+	cmd := a.reduceDraftsLoaded(draftsLoadedMsg{teamID: "T1", err: errors.New("boom")})
+	if cmd == nil {
+		t.Fatal("a load error for a not-yet-loaded workspace returned no retry command")
+	}
+	got := deliveredMsgs[DraftsStaleMsg](t, cmd)
+	if len(got) != 1 || got[0].TeamID != "T1" {
+		t.Fatalf("retry delivered = %+v, want one DraftsStaleMsg{T1}", got)
+	}
+	if a.drafts.loadRetry["T1"] != 1 {
+		t.Errorf("loadRetry[T1] = %d, want 1", a.drafts.loadRetry["T1"])
+	}
+
+	// A second failure backs off further.
+	a.reduceDraftsLoaded(draftsLoadedMsg{teamID: "T1", err: errors.New("boom again")})
+	if a.drafts.loadRetry["T1"] != 2 {
+		t.Errorf("loadRetry[T1] = %d, want 2", a.drafts.loadRetry["T1"])
+	}
+
+	// Success resets the backoff.
+	a.reduceDraftsLoaded(draftsLoadedMsg{teamID: "T1"})
+	if _, ok := a.drafts.loadRetry["T1"]; ok {
+		t.Error("loadRetry[T1] not reset after a successful load")
+	}
+
+	// A failed reload of an already-loaded workspace: log only, no
+	// retry scheduled (today's behaviour, unchanged).
+	if cmd := a.reduceDraftsLoaded(draftsLoadedMsg{teamID: "T1", err: errors.New("later failure")}); cmd != nil {
+		t.Error("a reload failure for an already-loaded workspace scheduled a retry")
+	}
+}
+
 func TestDraftTick_ReschedulesItself(t *testing.T) {
 	a, _, _ := draftSyncApp(t, nil)
 	if _, cmd := a.Update(draftTickMsg{}); cmd == nil {

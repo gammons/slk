@@ -30,6 +30,16 @@ var draftTickInterval = 2 * time.Second
 // draftRetryMax caps the backoff of a save that keeps failing.
 const draftRetryMax = time.Minute
 
+// draftLoadRetryBase is the first wait before retrying a workspace's
+// first (not-yet-loaded) draft list after it fails; it doubles on each
+// further failure, capped at draftLoadRetryMax. A var so tests may
+// shorten it.
+var draftLoadRetryBase = 4 * time.Second
+
+// draftLoadRetryMax caps the backoff of a first load that keeps
+// failing.
+const draftLoadRetryMax = time.Minute
+
 // DraftsStaleMsg asks the App to reload a workspace's drafts. cmd/slk
 // sends it on every connect.
 type DraftsStaleMsg struct{ TeamID string }
@@ -122,6 +132,11 @@ type draftSync struct {
 	// rows for any key touched since (touched[key] > issued).
 	seq     uint64
 	touched map[core.DraftKey]uint64
+	// loadRetry counts consecutive failures of a workspace's first
+	// (not-yet-loaded) draft load, for the backoff of its retry.
+	// Deleted on success. A failed reload of an already-loaded
+	// workspace does not use it (log only, as before).
+	loadRetry map[string]int
 }
 
 // touch bumps seq and records it against key, marking a local change
@@ -133,16 +148,17 @@ func (d *draftSync) touch(key core.DraftKey) {
 
 func newDraftSync() *draftSync {
 	return &draftSync{
-		loaded:   map[string]bool{},
-		synced:   map[core.DraftKey]string{},
-		observed: map[core.DraftKey]draftObserved{},
-		inflight: map[core.DraftKey]string{},
-		wire:     map[core.DraftKey]draftWireEntry{},
-		gen:      map[core.DraftKey]*atomic.Uint64{},
-		retry:    map[core.DraftKey]draftRetry{},
-		handsOff: map[core.DraftKey]bool{},
-		rows:     map[string][]core.Draft{},
-		touched:  map[core.DraftKey]uint64{},
+		loaded:    map[string]bool{},
+		synced:    map[core.DraftKey]string{},
+		observed:  map[core.DraftKey]draftObserved{},
+		inflight:  map[core.DraftKey]string{},
+		wire:      map[core.DraftKey]draftWireEntry{},
+		gen:       map[core.DraftKey]*atomic.Uint64{},
+		retry:     map[core.DraftKey]draftRetry{},
+		handsOff:  map[core.DraftKey]bool{},
+		rows:      map[string][]core.Draft{},
+		touched:   map[core.DraftKey]uint64{},
+		loadRetry: map[string]int{},
 	}
 }
 
@@ -392,12 +408,29 @@ func (a *App) loadDraftsCmd(teamID string) tea.Cmd {
 	}
 }
 
+// retryLoadDraftsCmd schedules a retry of teamID's first (not-yet-
+// loaded) draft load after it failed, backing off from
+// draftLoadRetryBase, doubling on each further failure, capped at
+// draftLoadRetryMax. The retry re-issues the load as DraftsStaleMsg,
+// the same message cmd/slk sends on connect.
+func (a *App) retryLoadDraftsCmd(teamID string) tea.Cmd {
+	d := a.drafts
+	n := d.loadRetry[teamID]
+	wait := min(draftLoadRetryBase<<n, draftLoadRetryMax)
+	d.loadRetry[teamID] = n + 1
+	return tea.Tick(wait, func(time.Time) tea.Msg { return DraftsStaleMsg{TeamID: teamID} })
+}
+
 func (a *App) reduceDraftsLoaded(m draftsLoadedMsg) tea.Cmd {
+	d := a.drafts
 	if m.err != nil {
 		debuglog.General("drafts: load %s failed: %v", m.teamID, m.err)
-		return nil
+		if d.loaded[m.teamID] {
+			return nil // a reload of an already-loaded workspace: log only, as before
+		}
+		return a.retryLoadDraftsCmd(m.teamID) // the first load for this workspace: retry with backoff
 	}
-	d := a.drafts
+	delete(d.loadRetry, m.teamID)
 	d.loaded[m.teamID] = true
 	// A key touched (saved, sent, deleted or vanish-cleared) since this
 	// list was issued is more current than the list: keep its current
