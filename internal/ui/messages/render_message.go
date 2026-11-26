@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/bubbles/entrylist"
 	"github.com/gammons/slk/internal/core"
+	emojiutil "github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/imgrender"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/peerstatus"
@@ -273,6 +274,15 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		contentColBase += 5
 	}
 
+	// Inline emoji as sixel images: the body text carries markers that
+	// this render resolves into SixelRows at the end. Only the body
+	// uses the sink; the header status emoji keeps the glyph/kitty
+	// path, so its marker cannot end up in the selected-header copy.
+	var inlineSixel *emojiutil.InlineSixel
+	if opt.SixelRows && !opt.BodyOnly && rc.Images != nil {
+		inlineSixel = emojiutil.NewInlineSixel(rc.Emoji.PlaceCtx, rc.Emoji.Cells, rc.Images.Context().Protocol)
+	}
+
 	// Emoji-image opts pass through the active EmojiContext; when
 	// image mode is off (or PlaceCtx.Fetcher is nil) RenderSlackMarkdownWith
 	// falls through to the legacy glyph/shortcode-text path. Warm-path
@@ -286,6 +296,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		EmojiCells:   rc.Emoji.Cells,
 		Customs:      rc.Emoji.Customs,
 		EmojiFlushes: &out.BodyFlushes,
+		InlineSixel:  inlineSixel,
 		Width:        contentWidth,
 	}
 	headerTimestamp := styles.Timestamp.Render(msg.Timestamp)
@@ -298,7 +309,9 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 	// The status image's upload joins the body's (bodyOpts.EmojiFlushes):
 	// both panes fire BodyFlushes for visible entries.
 	headerBg := lipgloss.NewStyle().Background(styles.Background)
-	statusEmoji, statusImage := authorStatusEmoji(rc.UserStatuses, msg.UserID, time.Now(), &bodyOpts)
+	statusOpts := bodyOpts
+	statusOpts.InlineSixel = nil
+	statusEmoji, statusImage := authorStatusEmoji(rc.UserStatuses, msg.UserID, time.Now(), &statusOpts)
 	statusSuffix := ""
 	if statusEmoji != "" {
 		statusSuffix = headerBg.Render(" " + statusEmoji)
@@ -766,6 +779,12 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 			reactionRowBase++
 		}
 		out.Hits = append(out.Hits, reactionHits(pillSpecs, reactionRowBase, contentColBase)...)
+	}
+
+	// Resolve inline emoji while the content is still avatar-free: the
+	// cols are content-relative and the loop below adds contentColBase.
+	if inlineSixel != nil {
+		msgContent, allSixel = resolveInlineEmojiSixel(msgContent, inlineSixel, allSixel)
 	}
 
 	// Place avatar next to message content (avatar is side-by-side, no

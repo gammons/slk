@@ -546,6 +546,10 @@ func run() error {
 	// failed) but the real detect path succeeded.
 	reconciledImageMode := proto == imgpkg.ProtoKitty && cfg.Appearance.EmojiImages == "on"
 	emojiwidth.SetImageMode(reconciledImageMode, cfg.Appearance.EmojiCells)
+	// Inline emoji on a sixel terminal ride the placement pipeline
+	// instead of the kitty placeholder path; both obey emoji_images.
+	emojiwidth.SetSixelInlineMode(proto == imgpkg.ProtoSixel && cfg.Appearance.EmojiImages == "on",
+		cfg.Appearance.EmojiCells)
 	debuglog.ImgRender("emoji image mode: reconciled=%v (final proto=%s, emoji_images=%q)",
 		reconciledImageMode, proto, cfg.Appearance.EmojiImages)
 

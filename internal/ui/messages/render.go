@@ -812,6 +812,10 @@ type RenderSlackMarkdownOpts struct {
 	EmojiCells   int                      // 0 falls back to 2
 	Customs      map[string]string        // workspace custom emoji map; may be nil
 	EmojiFlushes *[]func(io.Writer) error // append-only; may be nil
+	// InlineSixel places emoji as sixel images inside the text
+	// (message bodies on a sixel terminal). nil keeps the glyph/text or
+	// kitty path.
+	InlineSixel *emojiutil.InlineSixel
 
 	// Width is the content width the result will be wrapped to. A
 	// fenced code block is hard-wrapped and padded to exactly this width
@@ -1079,11 +1083,87 @@ func renderInlineFormattingWith(text string, opts RenderSlackMarkdownOpts) strin
 
 // renderEmojiWith shares emoji placement between mrkdwn and plain-text labels.
 func renderEmojiWith(text string, opts RenderSlackMarkdownOpts) string {
-	if emojiutil.ImageModeActive() && opts.PlaceCtx.Fetcher != nil {
-		tokens := emojiutil.ResolveEmojiToTokens(text, opts.Customs)
-		return renderEmojiTokensInline(tokens, opts.PlaceCtx, opts.EmojiCells, opts.EmojiFlushes)
+	render := func(s string) string {
+		if opts.InlineSixel != nil {
+			return renderEmojiTokensSixel(emojiutil.ResolveEmojiToTokens(s, opts.Customs), opts.InlineSixel, opts.Customs)
+		}
+		if emojiutil.ImageModeActive() && opts.PlaceCtx.Fetcher != nil {
+			tokens := emojiutil.ResolveEmojiToTokens(s, opts.Customs)
+			return renderEmojiTokensInline(tokens, opts.PlaceCtx, opts.EmojiCells, opts.EmojiFlushes)
+		}
+		return emojiutil.ResolveShortcodesInText(emojiutil.StripSkinToneFromText(s))
 	}
-	return emojiutil.ResolveShortcodesInText(emojiutil.StripSkinToneFromText(text))
+	// OSC 8 targets are machine text: a shortcode-looking path segment
+	// there must not become an emoji (or, worse, an image marker).
+	// Resolve only the visible text between the escape sequences.
+	return mapOutsideOsc8(text, render)
+}
+
+// mapOutsideOsc8 applies fn to the visible text of s, copying every OSC
+// 8 control sequence (the opener carrying its URL and the closer)
+// verbatim. A link's label is visible text and is mapped.
+func mapOutsideOsc8(s string, fn func(string) string) string {
+	var b strings.Builder
+	for {
+		i := strings.Index(s, osc8Open)
+		if i < 0 {
+			b.WriteString(fn(s))
+			return b.String()
+		}
+		b.WriteString(fn(s[:i]))
+		rest := s[i+len(osc8Open):]
+		st := strings.Index(rest, "\x1b\\")
+		bel := strings.IndexByte(rest, '\a')
+		end, termLen := -1, 0
+		switch {
+		case st >= 0 && (bel < 0 || st < bel):
+			end, termLen = st, 2
+		case bel >= 0:
+			end, termLen = bel, 1
+		}
+		if end < 0 {
+			// Unterminated sequence: leave the rest untouched rather
+			// than risk rewriting a target.
+			b.WriteString(s[i:])
+			return b.String()
+		}
+		b.WriteString(s[i : i+len(osc8Open)+end+termLen])
+		s = rest[end+termLen:]
+	}
+}
+
+// renderEmojiTokensSixel writes a marker for each custom emoji the sink
+// can place as a sixel image. Everything else keeps its glyph or text:
+// standard emoji have Unicode glyphs and read better as glyphs, and an
+// unresolved name or failed image must stay readable.
+func renderEmojiTokensSixel(tokens []emojiutil.Token, sink *emojiutil.InlineSixel, customs map[string]string) string {
+	var b strings.Builder
+	for _, tok := range tokens {
+		if tok.Kind == emojiutil.TokenEmoji && isCustomEmojiToken(tok.Text, customs) {
+			if marker, ok := sink.Place(tok.URL); ok {
+				b.WriteString(marker)
+				continue
+			}
+		}
+		b.WriteString(emojiutil.ResolveShortcodesInText(emojiutil.StripSkinToneFromText(tok.Text)))
+	}
+	return b.String()
+}
+
+// isCustomEmojiToken reports whether a token's source text is a
+// workspace custom-emoji shortcode. A toned spelling keeps its
+// "::skin-tone-N" suffix, so the base name is what the customs map
+// holds.
+func isCustomEmojiToken(text string, customs map[string]string) bool {
+	if len(customs) == 0 || len(text) < 2 || text[0] != ':' || text[len(text)-1] != ':' {
+		return false
+	}
+	name := strings.Trim(text, ":")
+	if i := strings.Index(name, "::"); i >= 0 {
+		name = name[:i]
+	}
+	_, ok := customs[name]
+	return ok
 }
 
 // renderEmojiTokensInline walks a Token stream and returns the
