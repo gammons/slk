@@ -197,7 +197,16 @@ func (a *App) reduceDraftDeleted(m draftDeletedMsg) tea.Cmd {
 	d.removeRow(m.teamID, m.draft.ID)
 	// Whatever kind it was, it is no longer here to block sync.
 	delete(d.handsOff, m.draft.Key)
-	delete(d.unknown, m.draft.Key)
+	if m.draft.Writable() {
+		// Only the attached draft's own successful delete can clear
+		// unknown: an unrelated non-writable delete at the same key
+		// says nothing about whether slk's synced text for the
+		// attached draft is trustworthy, and clearing it here would
+		// let the tick and the quit flush skip the reconciling save
+		// that a prior failed delete (reduceDraftDeleted's err
+		// branch, above) still owes this key.
+		delete(d.unknown, m.draft.Key)
+	}
 	// Freshness, any kind: the key (for a list issued earlier that
 	// still shows this conversation's draft) and the id itself (for an
 	// unaddressed draft, Key.ChannelID == "", whose key several

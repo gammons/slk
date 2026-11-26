@@ -815,6 +815,60 @@ func TestDraftDelete_FailedAttachedDeleteResyncsAfterStaleSaveDropped(t *testing
 	}
 }
 
+// Same sequence as above, but an unrelated (non-writable) draft at the
+// same key is also deleted -- successfully -- before the reconciling
+// save runs. Only the attached draft's own successful delete may clear
+// "unknown"; an unrelated one must not, or the tick and the quit flush
+// would skip the reconciling save this key still owes.
+func TestDraftDelete_UnrelatedDeleteSuccessDoesNotClearUnknown(t *testing.T) {
+	a, calls, _ := draftSyncApp(t, nil)
+	key := core.DraftKey{TeamID: "T1", ChannelID: "C1"}
+	a.drafts.synced[key] = "A"
+	a.compose.SetValue("A")
+
+	a.compose.SetValue("B")
+	a.syncDrafts(a.now())         // observe B
+	cmds := a.syncDrafts(a.now()) // builds the save for B, marks it in flight
+	if len(cmds) != 1 {
+		t.Fatalf("cmds = %d, want 1 (the save for B)", len(cmds))
+	}
+
+	attached := core.Draft{ID: "Dr1", Key: key, Text: "A"} // the attached draft itself
+	a.Update(draftDeleteConfirmedMsg{teamID: "T1", draft: attached})
+
+	for _, c := range cmds {
+		a.Update(c()) // B's save answer: dropped as stale (gen bumped by the confirm)
+	}
+
+	a.Update(draftDeletedMsg{teamID: "T1", draft: attached, err: errors.New("boom")}) // the attached draft's delete fails
+	if !a.drafts.unknown[key] {
+		t.Fatal("setup: key not marked unknown after the failed attached delete")
+	}
+
+	// An unrelated "Save as draft" at the same key is deleted, and that
+	// delete succeeds.
+	blocker := core.Draft{ID: "DrBlock", Key: key, Saved: true}
+	a.Update(draftDeleteConfirmedMsg{teamID: "T1", draft: blocker})
+	a.Update(draftDeletedMsg{teamID: "T1", draft: blocker})
+
+	if !a.drafts.unknown[key] {
+		t.Fatal("the unrelated draft's successful delete cleared unknown[key]")
+	}
+
+	a.compose.SetValue("A") // back to A
+
+	if got := a.UnsyncedDrafts(); len(got) != 1 || got[0].Key != key || got[0].Text != "A" {
+		t.Errorf("UnsyncedDrafts = %+v, want A included for reconciliation", got)
+	}
+
+	tick(t, a)
+	tick(t, a)
+
+	if got := ops(*calls); got != `save C1/ "B"; save C1/ "A"` {
+		t.Errorf("calls = %s, want B (which really reached Slack) then A again to reconcile", got)
+	}
+}
+
 // A failed delete of the attached draft with an empty slot must
 // produce a discard, to reconcile Slack's possibly-wrong state with
 // the empty composer, even though the slot's text already equals
