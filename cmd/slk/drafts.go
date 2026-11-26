@@ -58,27 +58,34 @@ type draftEngine struct {
 	// during its ListDrafts call from one that happened before it.
 	seq     uint64
 	touched map[draftDest]uint64
-	// loadMu serializes reload (ListDrafts + the index commit): without
-	// it, two concurrent reloads (two Load calls, or Load racing a
-	// Save's attached_draft_exists recovery) could have their
-	// ListDrafts responses land and commit out of order -- the one
-	// that started later but answered first commits, then the one that
-	// started earlier answers and clobbers it with stale data. Held for
-	// the whole of one reload, so reloads commit in the order they
-	// started. reload never takes e.mu's per-conversation locks (lock)
-	// while holding it, so a Save already holding a conversation's lock
-	// and waiting on loadMu (create's adopt path) can never deadlock
+	// loadLock is a 1-slot semaphore serializing reload (ListDrafts +
+	// the index commit): without it, two concurrent reloads (two Load
+	// calls, or Load racing a Save's attached_draft_exists recovery)
+	// could have their ListDrafts responses land and commit out of
+	// order -- the one that started later but answered first commits,
+	// then the one that started earlier answers and clobbers it with
+	// stale data. Held for the whole of one reload, so reloads commit
+	// in the order they started. A channel, not a plain Mutex, so a
+	// wait for it can give up on a cancelled/expired ctx (like lock):
+	// the quit flush reaches reload too (create's attached_draft_exists
+	// recovery, called while holding the conversation's lock), and
+	// without this its short deadline would otherwise be ignored for as
+	// long as some unrelated Load's ListDrafts call is in flight.
+	// reload never takes e.mu's per-conversation locks (lock) while
+	// holding it, so a Save already holding a conversation's lock and
+	// waiting on loadLock (create's adopt path) can never deadlock
 	// against a reload waiting on that same lock -- reload doesn't.
-	loadMu sync.Mutex
+	loadLock chan struct{}
 }
 
 func newDraftEngine(api draftAPI, teamID string) *draftEngine {
 	return &draftEngine{
 		api: api, teamID: teamID, now: time.Now,
-		index:   map[draftDest]draftEntry{},
-		locks:   map[draftDest]chan struct{}{},
-		busy:    map[draftDest]int{},
-		touched: map[draftDest]uint64{},
+		index:    map[draftDest]draftEntry{},
+		locks:    map[draftDest]chan struct{}{},
+		busy:     map[draftDest]int{},
+		touched:  map[draftDest]uint64{},
+		loadLock: make(chan struct{}, 1),
 	}
 }
 
@@ -176,8 +183,12 @@ func destOf(d slackclient.Draft) draftDest {
 // exempted from that rule: the caller holds its lock and is the one
 // making this list call, so the fresh answer is what it is adopting.
 func (e *draftEngine) reload(ctx context.Context, own *draftDest) ([]slackclient.Draft, error) {
-	e.loadMu.Lock()
-	defer e.loadMu.Unlock()
+	select {
+	case e.loadLock <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-e.loadLock }()
 
 	e.mu.Lock()
 	start := e.seq

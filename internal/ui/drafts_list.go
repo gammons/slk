@@ -179,8 +179,10 @@ func (a *App) reduceDraftDeleted(m draftDeletedMsg) tea.Cmd {
 	d.deletedAt[m.draft.ID] = d.seq
 	if k := m.draft.Key; m.draft.Writable() {
 		// The user asked: the slot goes too, even the visible one.
+		// No second gen bump here: reduceDraftDeleteConfirmed already
+		// bumped it (and set deleting[k], which syncable excludes),
+		// so no save built since could still be holding the old one.
 		a.composerFor(k.ThreadTS).ClearSlot(k.TeamID, k.ChannelID, k.ThreadTS)
-		d.genPtr(k).Add(1)
 		delete(d.synced, k)
 		delete(d.observed, k)
 	}

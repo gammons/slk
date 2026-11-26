@@ -344,14 +344,19 @@ One `draftEngine` per workspace (on `WorkspaceContext`), owning:
 - the index: `DraftKey → {id, lastUpdatedTS, writable}`, rebuilt from every
   list;
 - `reload` (behind `Load` and `create`'s `attached_draft_exists` adoption)
-  serializes its own kind of call through `loadMu`, held across the whole
-  `ListDrafts` round trip and the index commit, so two concurrent reloads
-  always commit in the order they started -- without it, the one that
-  started later but answers first could commit, then the one that started
-  earlier answers afterward and clobbers it with stale data. `loadMu` is
-  never held while waiting on `e.mu` or a per-key lock, so it cannot
-  deadlock against `create`'s adopt path, which calls `reload` while
-  already holding the key's lock;
+  serializes its own kind of call through `loadLock`, a 1-slot channel
+  semaphore acquired with `select` on `ctx.Done()` (like `lock`) and held
+  across the whole `ListDrafts` round trip and the index commit, so two
+  concurrent reloads always commit in the order they started -- without
+  it, the one that started later but answers first could commit, then
+  the one that started earlier answers afterward and clobbers it with
+  stale data. Being `ctx`-aware matters: the quit flush reaches `reload`
+  too (through `create`'s adopt path), and a plain `Mutex.Lock()` would
+  make its short deadline wait out an unrelated `Load`'s `ListDrafts`
+  call instead of giving up on time, the exact failure the per-key lock
+  was built to avoid. `loadLock` is never held while waiting on `e.mu` or
+  a per-key lock, so it cannot deadlock against `create`'s adopt path,
+  which calls `reload` while already holding the key's lock;
 - per-key serialization: at most one Slack call in flight per key; a newer
   save for a busy key replaces any queued one, so saves never reorder;
   `Save`'s `current` is checked right after the key's lock is taken, before

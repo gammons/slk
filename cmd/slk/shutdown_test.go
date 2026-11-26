@@ -82,3 +82,46 @@ func TestFlushDrafts_BoundedByDeadlineWhenASaveIsInFlight(t *testing.T) {
 	close(release)
 	<-done
 }
+
+// A UI Load holding the engine's load semaphore in the middle of its
+// ListDrafts call must not make the quit flush wait out that call: the
+// flush reaches reload too, through create's attached_draft_exists
+// recovery (called while holding the conversation's lock), and the
+// wait for the load semaphore must honour flushDrafts's own short
+// deadline the same way the per-conversation lock does.
+func TestFlushDrafts_BoundedByDeadlineWhileALoadHoldsTheListLock(t *testing.T) {
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	api := &fakeDraftAPI{}
+	api.list = func() ([]slackclient.Draft, error) {
+		close(entered)
+		<-release
+		return nil, nil
+	}
+	api.create = func(w slackclient.DraftWrite) (slackclient.Draft, error) {
+		return slackclient.Draft{}, rejected("attached_draft_exists")
+	}
+	eng := newDraftEngine(api, "T1")
+	router := newWorkspaceRouter()
+	router.Add(&WorkspaceContext{TeamID: "T1", Drafts: eng})
+
+	loadDone := make(chan struct{})
+	go func() {
+		_, _ = eng.Load(context.Background())
+		close(loadDone)
+	}()
+	<-entered // the Load now holds the load semaphore, blocked in ListDrafts
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	flushDrafts(ctx, router, []core.DraftChange{
+		{Key: core.DraftKey{TeamID: "T1", ChannelID: "C1"}, Text: "typed at quit", Edited: time.UnixMilli(7)},
+	})
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("flushDrafts took %v, want bounded by its ctx deadline, not the Load's ListDrafts call", elapsed)
+	}
+
+	close(release)
+	<-loadDone
+}
