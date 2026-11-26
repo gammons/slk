@@ -40,6 +40,27 @@ var draftLoadRetryBase = 4 * time.Second
 // failing.
 const draftLoadRetryMax = time.Minute
 
+// draftBackoff returns base doubled n times, capped at max. Growth
+// stops as soon as wait reaches max, so an unbounded n (a long streak
+// of failures) can never shift wait past the point where it would
+// overflow into a negative Duration -- which would make the next
+// retry fire immediately instead of waiting, a retry storm. Used by
+// both draft retry backoffs (the load retry and the save retry in
+// reduceDraftSaved).
+func draftBackoff(base, max time.Duration, n int) time.Duration {
+	wait := base
+	for i := 0; i < n; i++ {
+		if wait >= max {
+			return max
+		}
+		wait *= 2
+	}
+	if wait > max {
+		return max
+	}
+	return wait
+}
+
 // DraftsStaleMsg asks the App to reload a workspace's drafts. cmd/slk
 // sends it on every connect.
 type DraftsStaleMsg struct{ TeamID string }
@@ -416,7 +437,7 @@ func (a *App) loadDraftsCmd(teamID string) tea.Cmd {
 func (a *App) retryLoadDraftsCmd(teamID string) tea.Cmd {
 	d := a.drafts
 	n := d.loadRetry[teamID]
-	wait := min(draftLoadRetryBase<<n, draftLoadRetryMax)
+	wait := draftBackoff(draftLoadRetryBase, draftLoadRetryMax, n)
 	d.loadRetry[teamID] = n + 1
 	return tea.Tick(wait, func(time.Time) tea.Msg { return DraftsStaleMsg{TeamID: teamID} })
 }
@@ -569,7 +590,7 @@ func (a *App) reduceDraftSaved(m draftSavedMsg) tea.Cmd {
 	default:
 		r := d.retry[m.key]
 		r.n++
-		wait := min(draftTickInterval<<r.n, draftRetryMax)
+		wait := draftBackoff(draftTickInterval, draftRetryMax, r.n)
 		r.at = a.now().Add(wait)
 		d.retry[m.key] = r
 		debuglog.General("drafts: save %v failed (retry in %s): %v", m.key, wait, m.err)

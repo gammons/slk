@@ -536,6 +536,32 @@ func TestDraftsLoaded_FirstLoadFailureRetriesWithBackoff(t *testing.T) {
 	}
 }
 
+// A large n (reached after a long streak of failures) must not shift
+// base past the point where it would overflow into a negative
+// Duration -- which would make the next retry fire immediately
+// instead of waiting, a retry storm. Both draft retry backoffs
+// (the load retry and reduceDraftSaved's save retry) use the same
+// helper, so test both call sites' base/max pairs.
+func TestDraftBackoff_CapsWithoutOverflowAtLargeN(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		base, max time.Duration
+	}{
+		{"load retry", draftLoadRetryBase, draftLoadRetryMax},
+		{"save retry", draftTickInterval, draftRetryMax},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wait := draftBackoff(tc.base, tc.max, 64)
+			if wait != tc.max {
+				t.Errorf("wait = %v, want the cap %v", wait, tc.max)
+			}
+			if wait <= 0 {
+				t.Errorf("wait = %v, want positive", wait)
+			}
+		})
+	}
+}
+
 func TestDraftTick_ReschedulesItself(t *testing.T) {
 	a, _, _ := draftSyncApp(t, nil)
 	if _, cmd := a.Update(draftTickMsg{}); cmd == nil {
