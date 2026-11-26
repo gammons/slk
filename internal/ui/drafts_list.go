@@ -179,13 +179,25 @@ func (a *App) reduceDraftDeleted(m draftDeletedMsg) tea.Cmd {
 		delete(d.deleting, m.draft.Key)
 	}
 	if m.err != nil {
+		if m.draft.Writable() {
+			// slk no longer knows what Slack holds for this key: a
+			// save answer may have been dropped as stale while this
+			// delete was in flight (its gen bump), or the delete may
+			// not have applied cleanly despite the refusal. Mark it
+			// unknown so the next comparison reconciles whatever the
+			// composer holds instead of trusting the possibly-wrong
+			// synced text (reduceDraftSaved clears it again once a
+			// save or discard for the key actually answers).
+			d.unknown[m.draft.Key] = true
+		}
 		// Leave the slot as it is: the next tick resyncs it if its
-		// text still differs from synced.
+		// text still differs from synced, or if the key is unknown.
 		return toastWithClear(a, "Couldn't delete draft", 3*time.Second)
 	}
 	d.removeRow(m.teamID, m.draft.ID)
 	// Whatever kind it was, it is no longer here to block sync.
 	delete(d.handsOff, m.draft.Key)
+	delete(d.unknown, m.draft.Key)
 	// Freshness, any kind: the key (for a list issued earlier that
 	// still shows this conversation's draft) and the id itself (for an
 	// unaddressed draft, Key.ChannelID == "", whose key several

@@ -175,8 +175,20 @@ type draftSync struct {
 	// pass current() and recreate the draft once the delete releases
 	// that lock and forgets it -- and so neither the tick nor the quit
 	// flush queues a new save for the key while the delete is in
-	// flight. Cleared when the delete answers, success or failure.
+	// flight. Only ever set for the attached draft (Writable()); set
+	// and cleared together with the gen bump. Cleared when the delete
+	// answers, success or failure.
 	deleting map[core.DraftKey]bool
+	// unknown marks a key whose synced text slk can no longer trust: a
+	// failed delete of the attached draft, whose gen bump may have
+	// made reduceDraftSaved drop an in-flight save's successful answer
+	// as stale. While a key is unknown, the comparison (syncDrafts) and
+	// the quit flush (UnsyncedDrafts) act even when the composer's text
+	// equals synced -- reconciling by saving non-empty text or
+	// discarding an empty slot -- and restoreRemoteDraft leaves the
+	// slot alone rather than guess. Cleared the next time a save or
+	// discard for the key actually answers (reduceDraftSaved).
+	unknown map[core.DraftKey]bool
 	// loadRetry counts consecutive failures of a workspace's first
 	// (not-yet-loaded) draft load, for the backoff of its retry.
 	// Deleted on success. A failed reload of an already-loaded
@@ -215,6 +227,7 @@ func newDraftSync() *draftSync {
 		touched:         map[core.DraftKey]uint64{},
 		deletedAt:       map[string]uint64{},
 		deleting:        map[core.DraftKey]bool{},
+		unknown:         map[core.DraftKey]bool{},
 		loadRetry:       map[string]int{},
 		lastLoadApplied: map[string]uint64{},
 	}
@@ -305,7 +318,7 @@ func (a *App) syncDrafts(now time.Time) []tea.Cmd {
 		if !d.syncable(key) {
 			return
 		}
-		if text == d.synced[key] {
+		if text == d.synced[key] && !d.unknown[key] {
 			delete(d.observed, key)
 			return
 		}
@@ -413,7 +426,8 @@ func (a *App) UnsyncedDrafts() []core.DraftChange {
 	var out []core.DraftChange
 	a.eachDraftSlot(func(key core.DraftKey, text string, _ bool) {
 		inflight, busy := d.inflight[key]
-		if !d.syncable(key) || (text == d.synced[key] && !(busy && inflight != text)) {
+		unsynced := text != d.synced[key] || (busy && inflight != text) || d.unknown[key]
+		if !d.syncable(key) || !unsynced {
 			return
 		}
 		wire, ok := a.draftWire(key, text)
@@ -600,6 +614,9 @@ func mergeDraftRows(current, fresh []core.Draft, touched map[core.DraftKey]uint6
 // composer only takes it when empty (compose.ApplyRemoteDraft).
 func (a *App) restoreRemoteDraft(dr core.Draft) {
 	d, key := a.drafts, dr.Key
+	if d.unknown[key] {
+		return // slk doesn't trust synced for this key right now; let the next save/discard reconcile it instead of guessing
+	}
 	if _, busy := d.inflight[key]; busy {
 		return
 	}
@@ -634,6 +651,7 @@ func (a *App) reduceDraftSaved(m draftSavedMsg) tea.Cmd {
 	switch {
 	case m.err == nil:
 		delete(d.retry, m.key)
+		delete(d.unknown, m.key)
 		if m.text == "" {
 			delete(d.synced, m.key)
 			d.removeRowsFor(m.key)

@@ -771,6 +771,72 @@ func TestDraftDelete_NonWritableDeleteDoesNotStaleASaveInFlight(t *testing.T) {
 	}
 }
 
+// Save A, start saving B, confirm a delete of the attached draft
+// (bumping the gen before B's save answers), B's save answer is
+// dropped as stale even though it succeeded in Slack, the delete
+// fails, and the user changes the composer back to A. The key must
+// end up "unknown", so the tick reconciles by saving A again over
+// whatever Slack actually holds (B).
+func TestDraftDelete_FailedAttachedDeleteResyncsAfterStaleSaveDropped(t *testing.T) {
+	a, calls, _ := draftSyncApp(t, nil)
+	key := core.DraftKey{TeamID: "T1", ChannelID: "C1"}
+	a.drafts.synced[key] = "A"
+	a.compose.SetValue("A")
+
+	a.compose.SetValue("B")
+	a.syncDrafts(a.now())         // observe B
+	cmds := a.syncDrafts(a.now()) // builds the save for B, marks it in flight
+	if len(cmds) != 1 {
+		t.Fatalf("cmds = %d, want 1 (the save for B)", len(cmds))
+	}
+
+	attached := core.Draft{ID: "Dr1", Key: key, Text: "A"} // the attached draft itself
+	a.Update(draftDeleteConfirmedMsg{teamID: "T1", draft: attached})
+
+	for _, c := range cmds {
+		a.Update(c()) // B's save answer: dropped as stale (gen bumped by the confirm)
+	}
+	if _, busy := a.drafts.inflight[key]; busy {
+		t.Fatal("setup: B's save still marked inflight")
+	}
+	if a.drafts.synced[key] != "A" {
+		t.Fatalf("setup: synced[key] = %q, want still %q (B's answer should have been dropped)", a.drafts.synced[key], "A")
+	}
+
+	a.Update(draftDeletedMsg{teamID: "T1", draft: attached, err: errors.New("boom")}) // the delete fails
+
+	a.compose.SetValue("A") // back to A
+
+	tick(t, a)
+	tick(t, a)
+
+	if got := ops(*calls); got != `save C1/ "B"; save C1/ "A"` {
+		t.Errorf("calls = %s, want B (which really reached Slack) then A again to reconcile", got)
+	}
+}
+
+// A failed delete of the attached draft with an empty slot must
+// produce a discard, to reconcile Slack's possibly-wrong state with
+// the empty composer, even though the slot's text already equals
+// (the now-untrusted) synced text.
+func TestDraftDelete_FailedAttachedDeleteWithEmptySlotDiscards(t *testing.T) {
+	a, calls, _ := draftSyncApp(t, nil)
+	key := core.DraftKey{TeamID: "T1", ChannelID: "C1"}
+
+	attached := core.Draft{ID: "Dr1", Key: key, Text: ""}
+	a.Update(draftDeleteConfirmedMsg{teamID: "T1", draft: attached})
+	a.Update(draftDeletedMsg{teamID: "T1", draft: attached, err: errors.New("boom")})
+
+	a.compose.SetValue("") // the slot is empty
+
+	tick(t, a)
+	tick(t, a)
+
+	if got := ops(*calls); got != `discard C1/ ""` {
+		t.Errorf("calls = %s, want a discard", got)
+	}
+}
+
 // A Load failure for a workspace that has never loaded leaves sync
 // silently off unless it is retried. reduceDraftsLoaded must schedule
 // a backed-off retry (DraftsStaleMsg, which re-issues the load) and

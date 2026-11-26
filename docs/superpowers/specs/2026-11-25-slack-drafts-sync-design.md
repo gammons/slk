@@ -250,6 +250,16 @@ delete that failed was itself the attached one, so an unrelated
 non-writable delete can't clear a flag it never set) so the next tick
 resyncs normally.
 
+A failed delete of the attached draft marks the key "unknown" instead:
+a save answer may have been dropped as stale (the gen bump) while that
+delete was in flight, so the synced text slk remembers can no longer be
+trusted. While a key is unknown, the comparison and the quit flush act
+even when the composer's text already equals that (possibly wrong)
+synced text -- saving non-empty text again, or discarding an empty slot
+-- and a list's restore leaves the slot alone rather than guess. The
+state clears the next time a save or discard for the key actually
+answers.
+
 ### Option
 
 ```toml
@@ -423,11 +433,17 @@ sends `ui.DraftsStaleMsg{TeamID}`; the App answers by calling `Load`.
   overlay. `:drafts` is an entry in `commands` and a keyless help entry in
   `DefaultKeyMap`. `reduceDraftDeleteConfirmed` runs the instant a delete is
   confirmed, before `deleteDraftCmd`'s call is made: for a draft with a
-  conversation key it bumps the gen, `touch`es the key, and sets
-  `d.deleting[key]`. `(*draftSync).syncable` excludes a `deleting` key, so
-  the tick and the quit flush never queue a save for it while the delete
-  is in flight; `reduceDraftDeleted` clears `deleting[key]` on both success
-  and failure.
+  conversation key it `touch`es the key (any kind, row freshness); the gen
+  bump and `d.deleting[key]` apply only when the deleted draft is
+  `Writable()` (the attached one). `(*draftSync).syncable` excludes a
+  `deleting` key, so the tick and the quit flush never queue a save for it
+  while the attached draft's delete is in flight; `reduceDraftDeleted`
+  clears `deleting[key]` only when the delete it is answering was itself
+  `Writable()`. A failed `Writable()` delete sets `d.unknown[key]` instead
+  of trusting the possibly-stale `synced[key]`: `syncDrafts` and
+  `UnsyncedDrafts` reconcile such a key even when its text already equals
+  `synced`, and `restoreRemoteDraft` skips it; `reduceDraftSaved` clears
+  it on the next save or discard answer for the key.
 
 ### Formatting
 
