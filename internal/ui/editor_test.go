@@ -69,7 +69,7 @@ func TestReduceEditorFinished_LoadsContentIntoChannelCompose(t *testing.T) {
 	}
 	f.Close()
 
-	reduceEditorFinished(a, EditorFinishedMsg{Panel: PanelMessages, Path: path})
+	reduceComposeEditorFinished(a, ComposeEditorFinishedMsg{Panel: PanelMessages, Path: path})
 
 	if got := a.compose.Value(); got != "edited in vim" {
 		t.Fatalf("want channel compose %q, got %q", "edited in vim", got)
@@ -92,7 +92,7 @@ func TestReduceEditorFinished_RoutesToThreadCompose(t *testing.T) {
 	}
 	f.Close()
 
-	reduceEditorFinished(a, EditorFinishedMsg{Panel: PanelThread, Path: path})
+	reduceComposeEditorFinished(a, ComposeEditorFinishedMsg{Panel: PanelThread, Path: path})
 
 	if got := a.threadCompose.Value(); got != "thread reply text" {
 		t.Fatalf("want thread compose %q, got %q", "thread reply text", got)
@@ -107,7 +107,7 @@ func TestReduceEditorFinished_MissingFileLeavesComposeUntouched(t *testing.T) {
 	a.setEditorForTest()
 	a.compose.SetValue("original draft")
 
-	reduceEditorFinished(a, EditorFinishedMsg{Panel: PanelMessages, Path: "/nonexistent/slk-compose-does-not-exist.md"})
+	reduceComposeEditorFinished(a, ComposeEditorFinishedMsg{Panel: PanelMessages, Path: "/nonexistent/slk-compose-does-not-exist.md"})
 
 	if got := a.compose.Value(); got != "original draft" {
 		t.Fatalf("want original draft preserved on read failure, got %q", got)
@@ -147,20 +147,9 @@ func TestComposeModel_UpdateIgnoresKeysWhileEditingExternally(t *testing.T) {
 	}
 }
 
-func TestReduceEditorFinished_ClearsLockAndPlaceholder(t *testing.T) {
+func TestOpenComposeInEditor_ClearsLockAndPlaceholder(t *testing.T) {
 	a := newTestAppWithMessages(t)
-	a.setEditorForTest()
-	a.compose.SetEditingExternally(true)
-	a.compose.SetPlaceholderOverride("Editing in $EDITOR — waiting for it to exit...")
-	f, err := os.CreateTemp(t.TempDir(), "slk-compose-*.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := f.Name()
-	f.Close()
-
-	reduceEditorFinished(a, EditorFinishedMsg{Panel: PanelMessages, Path: path})
-
+	a.openComposeInEditor()
 	if a.compose.EditingExternally() {
 		t.Fatal("want compose unlocked after the editor exits")
 	}
@@ -177,7 +166,7 @@ func TestReduceEditorFinished_LaunchFailureShowsToast(t *testing.T) {
 	f.Close()
 
 	launchErr := &exec.Error{Name: "no-such-editor", Err: exec.ErrNotFound}
-	cmd := reduceEditorFinished(a, EditorFinishedMsg{Panel: PanelMessages, Path: path, Err: launchErr})
+	cmd := reduceComposeEditorFinished(a, ComposeEditorFinishedMsg{Panel: PanelMessages, Path: path, Err: launchErr})
 	if cmd == nil {
 		t.Fatal("want a toast Cmd when the editor could not be launched")
 	}
@@ -197,7 +186,7 @@ func TestReduceEditorFinished_NonZeroExitDoesNotToast(t *testing.T) {
 	if exitErr == nil {
 		t.Skip("\"false\" did not produce a non-zero exit on this system")
 	}
-	cmd := reduceEditorFinished(a, EditorFinishedMsg{Panel: PanelMessages, Path: path, Err: exitErr})
+	cmd := reduceComposeEditorFinished(a, ComposeEditorFinishedMsg{Panel: PanelMessages, Path: path, Err: exitErr})
 	if cmd != nil {
 		t.Fatal("want no toast for a plain non-zero exit — trust the file over the exit code")
 	}

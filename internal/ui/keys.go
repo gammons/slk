@@ -204,7 +204,7 @@ func DefaultKeyMap() KeyMap {
 		// Alt+Enter sends and broadcasts in a single keystroke.
 		ToggleBroadcast: key.NewBinding(key.WithKeys("ctrl+o"), key.WithHelp("ctrl+o / alt+enter", "also send reply to channel")),
 		// Shadows the textarea's own ctrl+e (LineEnd); "End" still works.
-		OpenInEditor: key.NewBinding(key.WithKeys("ctrl+e"), key.WithHelp("ctrl+e", "edit message in $EDITOR")),
+		OpenInEditor: key.NewBinding(key.WithKeys("ctrl+e"), key.WithHelp("ctrl+e", "edit or show message in $EDITOR")),
 		// Insert mode, either compose box: shows or hides the draft
 		// preview above the box being typed in. Sending or leaving
 		// insert mode closes it.

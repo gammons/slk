@@ -184,8 +184,11 @@ var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		toastUntilReplaced(a, fmt.Sprintf("Uploading %d/%d…", m.Done, m.Total))
 		return nil, true
 
-	case EditorFinishedMsg:
-		return reduceEditorFinished(a, m), true
+	case ComposeEditorFinishedMsg:
+		return reduceComposeEditorFinished(a, m), true
+
+	case MessageEditorFinishedMsg:
+		return reduceMessageEditorFinished(a, m), true
 
 	case UploadResultMsg:
 		// Target from the in-flight flags, not focusedPanel: focus may

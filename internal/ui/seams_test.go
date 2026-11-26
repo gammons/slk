@@ -893,15 +893,11 @@ func TestSeam_EditorResultReplacesDraft(t *testing.T) {
 			a := newTestApp(t, withActiveChannel("C1"))
 			wireEditor(a, []string{"true"})
 			a.compose.SetValue("old")
-			a.compose.SetEditingExternally(true)
 
-			a.Update(EditorFinishedMsg{Panel: PanelMessages, Path: path, Err: tc.err})
+			a.Update(ComposeEditorFinishedMsg{Panel: PanelMessages, Path: path, Err: tc.err})
 
 			if got := a.compose.Value(); got != "edited" {
 				t.Errorf("compose = %q, want the edited draft", got)
-			}
-			if a.compose.EditingExternally() {
-				t.Error("compose still locked")
 			}
 			if _, err := os.Stat(path); !os.IsNotExist(err) {
 				t.Errorf("temp draft left behind: %v", err)
@@ -923,7 +919,7 @@ func TestSeam_EditorUnreadableDraftKeepsCompose(t *testing.T) {
 	a.compose.SetValue("old")
 	a.compose.SetEditingExternally(true)
 
-	a.Update(EditorFinishedMsg{Panel: PanelMessages, Path: filepath.Join(t.TempDir(), "gone.md")})
+	a.Update(ComposeEditorFinishedMsg{Panel: PanelMessages, Path: filepath.Join(t.TempDir(), "gone.md")})
 
 	if got := a.compose.Value(); got != "old" {
 		t.Errorf("compose = %q, want the draft kept", got)

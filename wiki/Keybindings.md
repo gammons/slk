@@ -21,6 +21,7 @@
 | `Ctrl+V` | Insert | Smart paste — image / file path / text (use `Ctrl+V`, not the terminal's `Ctrl+Shift+V`) |
 | `Ctrl+U` | Insert | Clear compose (text + pending attachments) |
 | `Ctrl+E` | Insert | Edit the draft in `$VISUAL` / `$EDITOR` (or `compose.editor`) |
+| `Ctrl+E` | Normal | Show the currently selected message in `$VISUAL` / `$EDITOR` (or `compose.editor`) |
 | `Ctrl+O` | Insert (thread) | Toggle "also send to channel" for the next thread reply |
 | `Ctrl+R` | Insert | Show / hide the draft preview: the draft as it will look once sent, above the box. Sending or leaving the box with `Esc` closes it |
 | `Alt+Enter` | Insert (thread) | Send thread reply and broadcast to channel (one-shot) |

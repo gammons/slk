@@ -284,7 +284,7 @@ func (a *App) appHomeMessageOp(msg tea.KeyMsg) bool {
 		k.SaveThread, k.CopyMessage, k.CopyPermalink, k.ForwardMessage,
 		k.Edit, k.Delete, k.RemovePreview, k.OpenPreview, k.OpenLink,
 		k.DownloadFile, k.MarkUnread, k.MarkSet, k.JumpToParent,
-		k.SearchMode, k.SearchNext, k.SearchPrev,
+		k.SearchMode, k.SearchNext, k.SearchPrev, k.OpenInEditor,
 	} {
 		if key.Matches(msg, b) {
 			return true
