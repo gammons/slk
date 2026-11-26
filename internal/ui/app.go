@@ -4168,10 +4168,11 @@ func (a *App) SetChannelIndent(n int) {
 
 // SidebarStyle is the [sidebar] look and behaviour switches.
 type SidebarStyle struct {
-	Slack        bool   // slack_style
-	PrivateGlyph string // private_glyph
-	ActiveOnly   bool   // active_only
-	MouseResize  bool   // mouse_resize
+	Slack            bool   // slack_style
+	PrivateGlyph     string // private_glyph
+	ActiveOnly       bool   // active_only
+	MouseResize      bool   // mouse_resize
+	SortDMsByRecency bool   // sort_dms_by_recency
 }
 
 // SetSidebarStyle applies the [sidebar] switches.
@@ -4179,6 +4180,7 @@ func (a *App) SetSidebarStyle(s SidebarStyle) {
 	a.sidebar.SetSlackStyle(s.Slack)
 	a.sidebar.SetPrivateGlyph(s.PrivateGlyph)
 	a.sidebar.SetActiveOnly(s.ActiveOnly)
+	a.sidebar.SetSortDMsByRecency(s.SortDMsByRecency)
 	a.sidebarMouseResize = s.MouseResize
 }
 

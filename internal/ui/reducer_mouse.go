@@ -332,6 +332,12 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		if sidebarY < 0 {
 			return nil
 		}
+		// The sort control on the Direct Messages header flips the
+		// section's order without collapsing it.
+		if a.sidebar.HitTestSectionSort(sidebarY, x-a.layout.RailWidth()-1) {
+			a.sidebar.ToggleSortDMsByRecency()
+			return nil
+		}
 		if item, ok := a.sidebar.ClickAt(sidebarY); ok {
 			return func() tea.Msg {
 				return ChannelSelectedMsg{ID: item.ID, Name: item.Name, Type: item.Type}
