@@ -233,15 +233,22 @@ not known to push draft changes.
   user asked.
 - `esc` closes.
 
-Confirming the delete (for a draft with a conversation key) immediately
-bumps that key's save generation and marks it "deleting", before the
-delete call itself is even made -- not only once it answers. Without this,
-a save built earlier and still waiting on the engine's per-conversation
-lock could pass its own freshness check and create a new draft right
-after the delete releases that lock and forgets it, leaving Slack holding
-an untracked draft while the user saw "Draft deleted". While a key is
-"deleting" neither the tick nor the quit flush queues a new save for it;
-a failed delete clears it so the next tick resyncs normally.
+Confirming the delete (for a draft with a conversation key) touches that
+key for row freshness, before the delete call itself is even made. The
+save generation is bumped and the key marked "deleting" too, but only
+when the deleted draft is the *attached* one that backs the slot: a
+"Save as draft", scheduled or files draft can share a conversation key
+with the composer's separate attached draft, and deleting one of those
+must not pause or cancel syncing the composer's own text. For the
+attached draft, without the bump a save built earlier and still waiting
+on the engine's per-conversation lock could pass its own freshness check
+and create a new draft right after the delete releases that lock and
+forgets it, leaving Slack holding an untracked draft while the user saw
+"Draft deleted". While a key is "deleting" neither the tick nor the quit
+flush queues a new save for it; a failed delete clears it (only when the
+delete that failed was itself the attached one, so an unrelated
+non-writable delete can't clear a flag it never set) so the next tick
+resyncs normally.
 
 ### Option
 

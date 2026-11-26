@@ -716,6 +716,61 @@ func TestDraftDelete_FailureResumesSyncing(t *testing.T) {
 	}
 }
 
+// A non-writable draft (scheduled, files, "Save as draft") can share a
+// conversation key with the composer's own attached draft. Confirming
+// its deletion must not bump the key's gen or pause the composer's
+// sync: the tick still saves unsaved text, and UnsyncedDrafts still
+// includes it, while that unrelated delete is notionally in flight.
+func TestDraftDelete_NonWritableDeleteDoesNotPauseComposerSync(t *testing.T) {
+	a, calls, _ := draftSyncApp(t, nil)
+	key := core.DraftKey{TeamID: "T1", ChannelID: "C1"}
+	blocker := core.Draft{ID: "DrBlock", Key: key, Scheduled: time.Unix(1_900_000_000, 0)}
+
+	a.compose.SetValue("hello")
+	a.Update(draftDeleteConfirmedMsg{teamID: "T1", draft: blocker})
+
+	if a.drafts.deleting[key] {
+		t.Fatal("deleting[key] was set for a non-writable draft's delete")
+	}
+
+	if got := a.UnsyncedDrafts(); len(got) != 1 || got[0].Key != key || got[0].Text != "hello" {
+		t.Errorf("UnsyncedDrafts = %+v, want the composer's unsaved text", got)
+	}
+
+	tick(t, a)
+	tick(t, a)
+	if got := ops(*calls); got != `save C1/ "hello"` {
+		t.Errorf("calls = %s, want the composer's text saved despite the non-writable delete", got)
+	}
+}
+
+// A save already in flight when a non-writable draft's delete (at the
+// same key) is confirmed must not be treated as stale: only the
+// attached draft's own delete bumps the gen.
+func TestDraftDelete_NonWritableDeleteDoesNotStaleASaveInFlight(t *testing.T) {
+	a, _, _ := draftSyncApp(t, nil)
+	key := core.DraftKey{TeamID: "T1", ChannelID: "C1"}
+	blocker := core.Draft{ID: "DrBlock", Key: key, Scheduled: time.Unix(1_900_000_000, 0)}
+
+	a.compose.SetValue("hello")
+	tick(t, a)                    // observe
+	cmds := a.syncDrafts(a.now()) // builds the save, captures gen
+
+	if len(cmds) != 1 {
+		t.Fatalf("cmds = %d, want 1", len(cmds))
+	}
+
+	a.Update(draftDeleteConfirmedMsg{teamID: "T1", draft: blocker}) // the unrelated, non-writable delete confirms
+
+	for _, c := range cmds {
+		a.Update(c())
+	}
+
+	if a.drafts.synced[key] != "hello" {
+		t.Errorf("synced[key] = %q, want %q (the in-flight save's answer must not be dropped as stale)", a.drafts.synced[key], "hello")
+	}
+}
+
 // A Load failure for a workspace that has never loaded leaves sync
 // silently off unless it is retried. reduceDraftsLoaded must schedule
 // a backed-off retry (DraftsStaleMsg, which re-issues the load) and

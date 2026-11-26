@@ -129,23 +129,31 @@ func (a *App) confirmDeleteDraft(d core.Draft) {
 }
 
 // reduceDraftDeleteConfirmed runs the instant the user confirms a
-// delete, before deleteDraftCmd's call is even made: for a draft with
-// a conversation key, it bumps the key's generation and touches it,
-// and marks the key deleting. Without this, a save built earlier and
-// still waiting on the engine's per-conversation lock could pass
-// current() -- its captured generation still matches -- and create a
-// new draft after the delete has released that lock and forgotten it;
-// the UI would then have no way to tell that save's answer was stale
-// (its generation was captured before any of this ran), so Slack would
-// be left holding an untracked draft while the user saw "Draft
-// deleted". An unaddressed draft (Key.ChannelID == "") has no slot to
-// protect.
+// delete, before deleteDraftCmd's call is even made. touch(key) runs
+// for any draft with a conversation key, any kind, for row freshness
+// (as it always has: a list issued earlier that still shows this
+// conversation's draft must not win over the delete). The generation
+// bump and deleting[key] -- which pause the composer's own sync for
+// that key -- apply only when the deleted draft is the attached one
+// that backs the slot (Writable()): a "Save as draft", scheduled or
+// files draft can share a conversation key with the composer's
+// separate attached draft, and deleting one of those must not pause
+// or cancel syncing the composer's own text. For the attached draft,
+// without the bump a save built earlier and still waiting on the
+// engine's per-conversation lock could pass current() -- its captured
+// generation still matches -- and create a new draft after the delete
+// has released that lock and forgotten it; the UI would then have no
+// way to tell that save's answer was stale, so Slack would be left
+// holding an untracked draft while the user saw "Draft deleted". An
+// unaddressed draft (Key.ChannelID == "") has no slot at all.
 func (a *App) reduceDraftDeleteConfirmed(m draftDeleteConfirmedMsg) tea.Cmd {
 	if k := m.draft.Key; k.ChannelID != "" {
 		d := a.drafts
-		d.genPtr(k).Add(1)
 		d.touch(k)
-		d.deleting[k] = true
+		if m.draft.Writable() {
+			d.genPtr(k).Add(1)
+			d.deleting[k] = true
+		}
 	}
 	return a.deleteDraftCmd(m.teamID, m.draft)
 }
@@ -162,7 +170,14 @@ func (a *App) deleteDraftCmd(teamID string, d core.Draft) tea.Cmd {
 
 func (a *App) reduceDraftDeleted(m draftDeletedMsg) tea.Cmd {
 	d := a.drafts
-	delete(d.deleting, m.draft.Key)
+	if m.draft.Writable() {
+		// Only clear deleting if this delete could have been the one
+		// that set it (reduceDraftDeleteConfirmed, Writable()-gated):
+		// a non-writable draft's delete never set it, and must not
+		// clear it out from under the attached draft's OWN delete if
+		// the two happen to share a key and are in flight together.
+		delete(d.deleting, m.draft.Key)
+	}
 	if m.err != nil {
 		// Leave the slot as it is: the next tick resyncs it if its
 		// text still differs from synced.
