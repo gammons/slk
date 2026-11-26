@@ -202,6 +202,14 @@ func (d *dragState) Handle(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		if m.Button != tea.MouseLeft {
 			return nil, true
 		}
+		if a.mode == ModeAppView {
+			// A dialog's text selection is not a pane drag: the modal
+			// owns its own body coordinates.
+			if a.appView.Selecting() {
+				a.extendAppViewSelection(m.X, m.Y)
+			}
+			return nil, true
+		}
 		if !d.IsActive() {
 			return nil, true
 		}
@@ -302,6 +310,12 @@ func (d *dragState) Handle(a *App, msg tea.Msg) (tea.Cmd, bool) {
 
 	case tea.MouseReleaseMsg:
 		_ = m
+		if a.mode == ModeAppView {
+			if a.appView.Selecting() {
+				return a.copyAppViewSelection(), true
+			}
+			return nil, true
+		}
 		if !d.IsActive() {
 			return nil, true
 		}

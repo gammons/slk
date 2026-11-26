@@ -18,6 +18,7 @@ import (
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/overlay"
+	"github.com/gammons/slk/internal/ui/statusbar"
 )
 
 // appViewActionPressedMsg reports a modal button press. teamID and
@@ -197,4 +198,39 @@ func (a *App) pressAppViewAction(act core.AppHomeAction) func() tea.Msg {
 			teamID: team, viewID: viewID, label: act.Label, err: err,
 		}
 	}
+}
+
+// appViewBoxOrigin is where the dialog's box starts on screen, the same
+// centering DimmedOverlay uses.
+func (a *App) appViewBoxOrigin() (x, y int) {
+	w, h := a.appView.BoxSize(a.width, a.height)
+	x, y = (a.width-w)/2, (a.height-h)/2
+	if x < 0 {
+		x = 0
+	}
+	if y < 0 {
+		y = 0
+	}
+	return x, y
+}
+
+// extendAppViewSelection moves the modal text selection to the cell at
+// screen (x, y), clamped by the model when the drag leaves the body.
+func (a *App) extendAppViewSelection(x, y int) {
+	ox, oy := a.appViewBoxOrigin()
+	a.appView.ExtendSelectionAt(x-ox, y-oy)
+}
+
+// copyAppViewSelection finishes a modal drag selection and copies it,
+// the way the message panes do on release.
+func (a *App) copyAppViewSelection() tea.Cmd {
+	text, ok := a.appView.EndSelection()
+	if !ok {
+		return nil
+	}
+	n := len([]rune(text))
+	return tea.Batch(
+		a.clipboardWrite(text),
+		func() tea.Msg { return statusbar.CopiedMsg{N: n} },
+	)
 }

@@ -114,6 +114,28 @@ type RichTextBlock struct {
 
 func (RichTextBlock) blockType() string { return "rich_text" }
 
+// InputBlock is the Slack `input` block of an app view (a form field).
+// slk cannot fill in forms yet, so it draws the field read-only: its
+// label, the current value or placeholder, and the hint.
+type InputBlock struct {
+	BlockID string
+	// Label is the field's plain-text label.
+	Label string
+	// Hint is the optional help line under the field.
+	Hint string
+	// Placeholder is what the app shows in an empty field.
+	Placeholder string
+	// Value is the field's initial value, when the view carries one.
+	Value string
+	// ElementKind is the Slack element type ("plain_text_input",
+	// "static_select", ...).
+	ElementKind string
+	Optional    bool
+	Multiline   bool
+}
+
+func (InputBlock) blockType() string { return "input" }
+
 // AccessoryElement is one of the supported section-accessory element
 // kinds. The set is intentionally narrow: image accessories render via
 // the image pipeline, all other element kinds render as muted labels.

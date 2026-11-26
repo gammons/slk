@@ -382,6 +382,53 @@ func TestRenderSectionButtonAccessoryRecordsAHit(t *testing.T) {
 	}
 }
 
+// An input block draws read-only: its label, the value or placeholder,
+// and its hint, never the unsupported marker.
+// Every row an input block draws must fit the width the caller counts,
+// even without a wrap function or for a long select placeholder.
+func TestRenderInputBlockFitsRowsToWidth(t *testing.T) {
+	long := strings.Repeat("x", 80)
+	for _, kind := range []string{"static_select", "plain_text_input"} {
+		r := Render([]Block{InputBlock{
+			Label: "Field", Placeholder: long, Hint: long, ElementKind: kind,
+		}}, Context{}, 20)
+		for i, line := range r.Lines {
+			if w := lipgloss.Width(line); w > 20 {
+				t.Errorf("%s line %d is %d columns wide, want <= 20: %q", kind, i, w, ansi.Strip(line))
+			}
+		}
+	}
+}
+
+func TestRenderInputBlockReadOnly(t *testing.T) {
+	r := Render([]Block{InputBlock{
+		Label:       "Justification",
+		Placeholder: "Say why",
+		Hint:        "Optional suggestions only",
+		ElementKind: "plain_text_input",
+	}}, Context{WrapText: func(s string, w int) string { return s }}, 60)
+	plain := ansi.Strip(strings.Join(r.Lines, "\n"))
+	for _, want := range []string{"Justification", "Say why", "Optional suggestions only"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("input block missing %q: %q", want, plain)
+		}
+	}
+	if strings.Contains(plain, "unsupported") {
+		t.Errorf("input block rendered as unsupported: %q", plain)
+	}
+}
+
+func TestRenderInputBlockShowsValueOverPlaceholder(t *testing.T) {
+	r := Render([]Block{InputBlock{
+		Label: "Justification", Value: "security bugs", Placeholder: "Say why",
+		ElementKind: "plain_text_input",
+	}}, Context{}, 60)
+	plain := ansi.Strip(strings.Join(r.Lines, "\n"))
+	if !strings.Contains(plain, "security bugs") || strings.Contains(plain, "Say why") {
+		t.Errorf("value/placeholder rendering = %q", plain)
+	}
+}
+
 func TestRenderActionsBlockRecordsButtonHits(t *testing.T) {
 	r := Render([]Block{ActionsBlock{
 		BlockID: "acts",
