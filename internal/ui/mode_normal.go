@@ -452,6 +452,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		a.openQuitConfirm()
 		return nil
 
+	case key.Matches(msg, a.keys.OpenInEditor):
+		return a.openMessageInEditor()
+
 	default:
 		// Number keys 1-9 switch workspaces.
 		keyStr := msg.String()
