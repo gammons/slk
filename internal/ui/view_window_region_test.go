@@ -8,6 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/wintree"
 )
@@ -58,6 +59,74 @@ func TestRegion_BordersStayPutWhenFocusMoves(t *testing.T) {
 			t.Fatalf("dir %v: corner columns moved with focus: %v -> %v", dir, before, after)
 		}
 	}
+}
+
+func TestRegion_MessagesStayPutWhenFocusMoves(t *testing.T) {
+	cases := map[string]func(a *App){
+		"no draft": func(*App) {},
+		"multi-line draft": func(a *App) {
+			a.compose.SetValue("one\ntwo\nthree")
+		},
+		"attachment draft": func(a *App) {
+			a.compose.AddAttachment(core.PendingAttachment{Filename: "shot.png", Mime: "image/png", Size: 1024})
+		},
+		"read-only channel": func(a *App) {
+			a.readOnlyChannels = map[string]bool{"C1": true}
+			a.syncComposeDisabled("test")
+		},
+	}
+
+	for _, dir := range []wintree.Dir{wintree.SplitSideBySide, wintree.SplitStacked} {
+		for name, setup := range cases {
+			a := newWideTestApp(t)
+			_, _ = a.Update(ChannelSelectedMsg{ID: "C1", Name: "general", Type: "channel"})
+			_, _ = a.Update(MessagesLoadedMsg{ChannelID: "C1", Messages: lastMessage("general-last")})
+			w1 := a.focusedWin
+			setup(a)
+
+			_ = a.splitWindow(dir)
+			_, _ = a.Update(ChannelSelectedMsg{ID: "C2", Name: "ops", Type: "channel"})
+			_, _ = a.Update(MessagesLoadedMsg{ChannelID: "C2", Messages: lastMessage("ops-last")})
+			w2 := a.focusedWin
+
+			before := plainRegion(a)
+			a.focusWindow(w1)
+			after := plainRegion(a)
+			a.focusWindow(w2)
+			back := plainRegion(a)
+
+			if !strings.Contains(before, "general-last") || !strings.Contains(before, "ops-last") {
+				t.Fatalf("dir %v, %s: both windows must show their last message:\n%s", dir, name, before)
+			}
+			if before != after || before != back {
+				t.Errorf("dir %v, %s: layout changed with focus:\n%s\n---\n%s\n---\n%s", dir, name, before, after, back)
+			}
+		}
+	}
+}
+
+func TestRegion_UnfocusedWindowDrawsTheLiveDraftOfItsChannel(t *testing.T) {
+	a := newWideTestApp(t)
+	_, _ = a.Update(ChannelSelectedMsg{ID: "C1", Name: "general", Type: "channel"})
+	_ = a.splitWindow(wintree.SplitSideBySide)
+	a.compose.SetValue("typed-in-both")
+
+	if got := strings.Count(plainRegion(a), "typed-in-both"); got != 2 {
+		t.Fatalf("draft drawn %d times, want once per window showing #general", got)
+	}
+}
+
+// plainRegion is the region as text, with the focused pane's heavy
+// border drawn light, so two frames compare equal when only focus moved.
+func plainRegion(a *App) string {
+	return strings.NewReplacer("┏", "╭", "┓", "╮", "┗", "╰", "┛", "╯", "━", "─", "┃", "│").
+		Replace(ansi.Strip(renderRegion(a)))
+}
+
+func lastMessage(text string) []messages.MessageItem {
+	msgs := testMessageItems(40)
+	msgs[len(msgs)-1].Text = text
+	return msgs
 }
 
 func TestRegion_SideBySideWindowsOneColumnApart(t *testing.T) {
@@ -151,8 +220,11 @@ func TestRegion_UnfocusedPaneDoesNotRewrapModelLines(t *testing.T) {
 	frame := a.computeFrame()
 	bounds := wintree.Rect{X: 0, Y: 0, W: frame.MsgWidth + frame.MsgBorder, H: frame.ContentHeight}
 	r := a.wins.ComputeRects(bounds)[w1]
-	innerW := r.W - windowGutter(r, frame) - 2
-	bare := ansi.Strip(a.winModels[w1].ViewBare(r.H-2, innerW))
+	gutter := windowGutter(r, frame)
+	innerW := r.W - gutter - 2
+	ch, _ := a.wins.Channel(w1)
+	msgRows := r.H - 2 - lipgloss.Height(a.windowBottomView(ch, r.W-gutter))
+	bare := ansi.Strip(a.winModels[w1].ViewBare(msgRows, innerW))
 	for i, line := range strings.Split(bare, "\n") {
 		if !strings.Contains(out, "│"+line+"│") {
 			t.Fatalf("model line %d not intact in unfocused pane (re-wrapped or truncated):\nwant bracketed |%s|", i, line)

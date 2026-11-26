@@ -51,7 +51,13 @@ func (d draft) isEmpty() bool {
 type Model struct {
 	input       textarea.Model
 	channelName string
-	width       int // display width, set by SetWidth
+
+	// draftInput draws drafts DraftView shows, a textarea of its own so
+	// drawing one never moves the input's cursor or scroll. draftViews
+	// caches those renders per conversation.
+	draftInput textarea.Model
+	draftViews map[draftKey]draftViewEntry
+	width      int // display width, set by SetWidth
 
 	// Mention picker state
 	mentionPicker   mentionpicker.Model
@@ -166,7 +172,11 @@ func (m *Model) dirty() { m.version++ }
 
 // defaultPlaceholder returns the default channel-aware placeholder text.
 func (m *Model) defaultPlaceholder() string {
-	return "Message #" + m.channelName + "... (i to insert)"
+	return placeholderFor(m.channelName)
+}
+
+func placeholderFor(channelName string) string {
+	return "Message #" + channelName + "... (i to insert)"
 }
 
 // effectivePlaceholder returns the override if set, else the default.
@@ -178,8 +188,27 @@ func (m *Model) effectivePlaceholder() string {
 }
 
 func New(channelName string) Model {
+	m := Model{
+		input:       newInput(placeholderFor(channelName)),
+		draftInput:  newInput(""),
+		channelName: channelName,
+		drafts:      make(map[draftKey]draft),
+		channelPicker: channelpicker.New(
+			channelpicker.WithStyles(channelPickerStyles())),
+		commandPicker: commandpicker.New(nil,
+			commandpicker.WithStyles(commandPickerStyles())),
+	}
+
+	// The draft textarea's height is set from the draft it draws, capped
+	// like autoGrow caps the input's.
+	m.draftInput.DynamicHeight = false
+	setTextareaColors(&m.draftInput, styles.SurfaceDark, styles.TextMuted)
+	return m
+}
+
+func newInput(placeholder string) textarea.Model {
 	ta := textarea.New()
-	ta.Placeholder = "Message #" + channelName + "... (i to insert)"
+	ta.Placeholder = placeholder
 	ta.CharLimit = 40000
 	// MaxHeight is the textarea's logical-line cap, which also gates
 	// InsertNewline via atContentLimit(). We want users to be able to
@@ -203,40 +232,16 @@ func New(channelName string) Model {
 	ta.ShowLineNumbers = false
 	ta.Prompt = ""
 	ta.SetWidth(40)
-
-	// Override textarea styles to use our dark background consistently
-	bg := lipgloss.NewStyle().Background(styles.SurfaceDark).Foreground(styles.TextPrimary)
-	s := ta.Styles()
-	s.Focused.Base = bg
-	s.Focused.Text = bg
-	s.Focused.CursorLine = bg
-	s.Focused.EndOfBuffer = bg
-	s.Focused.Prompt = bg
-	s.Blurred.Base = bg
-	s.Blurred.Text = bg
-	s.Blurred.CursorLine = bg
-	s.Blurred.EndOfBuffer = bg
-	s.Blurred.Prompt = bg
-	s.Focused.Placeholder = bg.Foreground(styles.TextMuted)
-	s.Blurred.Placeholder = bg.Foreground(styles.TextMuted)
-	s.Cursor.Color = styles.TextPrimary
-	ta.SetStyles(s)
-
-	return Model{
-		input:       ta,
-		channelName: channelName,
-		drafts:      make(map[draftKey]draft),
-		channelPicker: channelpicker.New(
-			channelpicker.WithStyles(channelPickerStyles())),
-		commandPicker: commandpicker.New(nil,
-			commandpicker.WithStyles(commandPickerStyles())),
-	}
+	setTextareaColors(&ta, styles.SurfaceDark, styles.TextPrimary)
+	return ta
 }
 
 // RefreshStyles re-applies textarea styles from current theme colors.
 // Call after theme changes.
 func (m *Model) RefreshStyles() {
 	m.setInputBackground(styles.SurfaceDark)
+	setTextareaColors(&m.draftInput, styles.SurfaceDark, styles.TextMuted)
+	m.draftViews = nil
 	m.channelPicker.SetStyles(channelPickerStyles())
 	m.commandPicker.SetStyles(commandPickerStyles())
 	m.dirty()
@@ -246,8 +251,12 @@ func (m *Model) RefreshStyles() {
 // placeholder, on bg. View uses it so insert mode can fill the text
 // area without storing that color on the model.
 func (m *Model) setInputBackground(bg color.Color) {
-	base := lipgloss.NewStyle().Background(bg).Foreground(styles.TextPrimary)
-	s := m.input.Styles()
+	setTextareaColors(&m.input, bg, styles.TextPrimary)
+}
+
+func setTextareaColors(ta *textarea.Model, bg, fg color.Color) {
+	base := lipgloss.NewStyle().Background(bg).Foreground(fg)
+	s := ta.Styles()
 	s.Focused.Base = base
 	s.Focused.Text = base
 	s.Focused.CursorLine = base
@@ -260,8 +269,8 @@ func (m *Model) setInputBackground(bg color.Color) {
 	s.Blurred.Prompt = base
 	s.Focused.Placeholder = base.Foreground(styles.TextMuted)
 	s.Blurred.Placeholder = base.Foreground(styles.TextMuted)
-	s.Cursor.Color = styles.TextPrimary
-	m.input.SetStyles(s)
+	s.Cursor.Color = fg
+	ta.SetStyles(s)
 }
 
 func (m *Model) SetChannel(name string) {
@@ -452,13 +461,16 @@ func (m *Model) Reset() {
 // for one keystroke until the next keystroke pushes the count past
 // the boundary.
 func (m Model) visualLineCount() int {
-	val := m.input.Value()
+	if m.input.Value() != "" && m.input.Width() <= 0 {
+		return m.input.LineCount()
+	}
+	return visualLines(m.input.Value(), m.input.Width())
+}
+
+// visualLines is visualLineCount for any text wrapped at w (> 0).
+func visualLines(val string, w int) int {
 	if val == "" {
 		return 1
-	}
-	w := m.input.Width()
-	if w <= 0 {
-		return m.input.LineCount()
 	}
 	lines := strings.Split(val, "\n")
 	total := 0
@@ -498,15 +510,84 @@ func (m Model) visualLineCount() int {
 // padding. Without the 2-col margin, the right edge of the textarea
 // shows the outer panel's background through.
 func (m *Model) SetWidth(width int) {
-	innerWidth := width - 5 // textarea wrap, intentionally 2 cols narrower than the visible content area
-	if innerWidth < 10 {
-		innerWidth = 10
-	}
 	if m.width != width {
 		m.width = width
-		m.input.SetWidth(innerWidth)
+		m.input.SetWidth(textareaWidth(width))
 		m.dirty()
 	}
+}
+
+// textareaWidth is the wrap width of the textarea in a composer of
+// the given width (see SetWidth).
+func textareaWidth(width int) int {
+	return max(width-5, 10)
+}
+
+// draftViewEntry is a DraftView render and what it was drawn from.
+type draftViewEntry struct {
+	text        string
+	chips       string
+	placeholder string
+	width       int
+	view        string
+}
+
+// DraftView draws the draft of the conversation (teamID, channelID,
+// threadTS), the visible one or a stored one, as a composer nobody is
+// typing in: laid out like View(width, false), in muted colours.
+// channelName names the conversation in the placeholder an empty draft
+// shows. A split window that is not focused draws it, so its layout
+// does not move when it takes focus.
+func (m *Model) DraftView(teamID, channelID, threadTS, channelName string, width int) string {
+	key := draftKey{teamID: teamID, channelID: channelID, threadTS: threadTS}
+	if channelID == "" {
+		key = draftKey{}
+	}
+
+	d := m.drafts[key]
+	if key == m.activeKey {
+		d = draft{text: m.input.Value(), attachments: m.pending}
+	}
+
+	entry := draftViewEntry{
+		text:        d.text,
+		chips:       chipKey(d.attachments),
+		placeholder: placeholderFor(channelName),
+		width:       width,
+	}
+	if cached := m.draftViews[key]; cached.view != "" && cached.withoutView() == entry {
+		return cached.view
+	}
+
+	innerWidth := composeInnerWidth(width)
+	body := lipgloss.NewStyle().
+		Foreground(styles.TextMuted).
+		Background(styles.SurfaceDark).
+		Width(innerWidth).
+		Render(entry.placeholder)
+	if d.text != "" {
+		wrap := textareaWidth(width)
+		m.draftInput.SetWidth(wrap)
+		m.draftInput.SetValue(d.text)
+		m.draftInput.SetHeight(min(visualLines(d.text, wrap), composeMaxVisibleRows))
+		body = lipgloss.NewStyle().
+			Background(styles.SurfaceDark).
+			Foreground(styles.TextMuted).
+			Width(innerWidth).
+			Render(m.draftInput.View())
+	}
+
+	entry.view = composeFrame(styles.ComposeBox, width, body, renderChips(d.attachments, true, width))
+	if m.draftViews == nil {
+		m.draftViews = make(map[draftKey]draftViewEntry)
+	}
+	m.draftViews[key] = entry
+	return entry.view
+}
+
+func (e draftViewEntry) withoutView() draftViewEntry {
+	e.view = ""
+	return e
 }
 
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
@@ -1885,12 +1966,16 @@ func formatChipSize(size int64) string {
 // While uploading, chips render in muted color so the user can see
 // they're in flight.
 func (m Model) renderChips(width int) string {
-	if len(m.pending) == 0 {
+	return renderChips(m.pending, m.uploading, width)
+}
+
+func renderChips(pending []core.PendingAttachment, muted bool, width int) string {
+	if len(pending) == 0 {
 		return ""
 	}
 	bg := styles.SurfaceDark
 	fg := styles.TextPrimary
-	if m.uploading {
+	if muted {
 		fg = styles.TextMuted
 	}
 
@@ -1902,7 +1987,7 @@ func (m Model) renderChips(width int) string {
 
 	const maxNameLen = 32
 	var rendered []string
-	for _, p := range m.pending {
+	for _, p := range pending {
 		name := p.Filename
 		runes := []rune(name)
 		if len(runes) > maxNameLen {
@@ -1914,6 +1999,16 @@ func (m Model) renderChips(width int) string {
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
 	return lipgloss.NewStyle().MaxWidth(width).Render(row)
+}
+
+// chipKey identifies what renderChips draws for pending, so a cached
+// render is dropped when an attachment is swapped for another.
+func chipKey(pending []core.PendingAttachment) string {
+	var b strings.Builder
+	for _, p := range pending {
+		fmt.Fprintf(&b, "%d:%s\x00", p.Size, p.Filename)
+	}
+	return b.String()
 }
 
 // renderBroadcastHint returns the "also send to channel" indicator
@@ -1931,16 +2026,25 @@ func (m Model) renderBroadcastHint(width int, innerBG color.Color) string {
 		Render(fmt.Sprintf("↪ also send to #%s  (ctrl+o to cancel)", m.channelName))
 }
 
-func (m Model) View(width int, focused bool) string {
-	chips := m.renderChips(width)
+// composeInnerWidth is the content width of a composer of the given
+// width: ComposeBox has BorderLeft(1) + Padding(1,1,1,1), 3 columns.
+func composeInnerWidth(width int) int {
+	return max(width-3, 1)
+}
 
-	// ComposeBox has BorderLeft(1) + Padding(1,1,1,1) = 3 chars overhead.
-	// lipgloss Width includes padding but excludes border.
-	// Total rendered = Width + border = (width-1) + 1 = width.
-	innerWidth := width - 3 // content area: width - border(1) - padding(2)
-	if innerWidth < 1 {
-		innerWidth = 1
+// composeFrame draws a composer's body in its box, under its chips.
+// lipgloss Width includes padding but excludes the border, so the box
+// is (width-1) + 1 = width wide.
+func composeFrame(style lipgloss.Style, width int, body, chips string) string {
+	box := style.Width(width - 1).Render(body)
+	if chips == "" {
+		return box
 	}
+	return lipgloss.JoinVertical(lipgloss.Left, chips, box)
+}
+
+func (m Model) View(width int, focused bool) string {
+	innerWidth := composeInnerWidth(width)
 
 	// Insert mode paints the box with InsertFill: the selected-message
 	// gray, or colors.compose_insert_bg when a theme sets it.
@@ -1953,7 +2057,6 @@ func (m Model) View(width int, focused bool) string {
 			BorderBackground(innerBG).
 			Background(innerBG)
 	}
-	style = style.Width(width - 1)
 	// The copy's textarea, so a focused render fills the glyphs too.
 	// The caller's model keeps the SurfaceDark styles.
 	m.setInputBackground(innerBG)
@@ -1980,14 +2083,8 @@ func (m Model) View(width int, focused bool) string {
 			Render(m.input.View())
 	}
 
-	hint := m.renderBroadcastHint(innerWidth, innerBG)
-	if hint != "" {
+	if hint := m.renderBroadcastHint(innerWidth, innerBG); hint != "" {
 		content = content + "\n" + hint
 	}
-	box := style.Render(content)
-
-	if chips == "" {
-		return box
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, chips, box)
+	return composeFrame(style, width, content, m.renderChips(width))
 }
