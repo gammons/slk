@@ -12,6 +12,7 @@ import (
 	"github.com/gammons/slk/internal/bubbles/linkpicker"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/core/blocks"
+	"github.com/gammons/slk/internal/ui/draftlist"
 	"github.com/gammons/slk/internal/ui/help"
 	"github.com/gammons/slk/internal/ui/marks"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
@@ -132,6 +133,7 @@ func dialogGoldens() []dialogGolden {
 	presShown := func(a *App) bool { return a.presenceMenu.IsVisible() }
 	finderShown := func(a *App) bool { return a.channelFinder.IsVisible() }
 	marksShown := func(a *App) bool { return a.marksOverlay.IsVisible() }
+	draftsShown := func(a *App) bool { return a.draftList.IsVisible() }
 	reactShown := func(a *App) bool { return a.reactionPicker.IsVisible() }
 	newMsgShown := func(a *App) bool { return a.newMessagePicker.IsVisible() }
 	helpShown := func(a *App) bool { return a.help.IsVisible() }
@@ -306,6 +308,18 @@ func dialogGoldens() []dialogGolden {
 				a.marksOverlay.SetRows(nil)
 				a.marksOverlay.Open()
 				a.SetMode(ModeMarks)
+			},
+		},
+		{
+			name: "dialog_drafts", want: "Drafts", shown: draftsShown,
+			open: func(t *testing.T, a *App) {
+				a.draftList.SetRows([]draftlist.Row{
+					{Destination: "#general", Age: "5m", Preview: "hello there"},
+					{Destination: "#ops › thread", Age: "2h", Marker: "scheduled Dec 1 9:00 AM", Preview: "deploy at nine"},
+					{Destination: "(no recipient)", Age: "Jan 2", Marker: "saved", Preview: "an idea for later"},
+				})
+				a.draftList.Open()
+				a.SetMode(ModeDrafts)
 			},
 		},
 		{

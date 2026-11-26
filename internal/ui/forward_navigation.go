@@ -17,7 +17,7 @@ func (a *App) openForwardedSelected() (tea.Cmd, bool) {
 	var text string
 	switch a.focusedPanel {
 	case PanelMessages:
-		if a.view == ViewThreads || a.view == ViewAppHome {
+		if a.view == ViewThreads || a.view == ViewDrafts || a.view == ViewAppHome {
 			return nil, false
 		}
 		msg, ok := a.messagepane.SelectedMessage()

@@ -194,11 +194,11 @@ func TestMouseClick_PreviewBlocksHiddenLinkClicks(t *testing.T) {
 
 	// The sidebar sits OUTSIDE the preview and must keep working: a
 	// click on a channel row still selects it while the preview is up.
-	// Click the channel row itself (row 4 of the sidebar content:
-	// Threads, Activity, blank, the Channels header, then the channel),
-	// not a scan - a scan would hit the section header and collapse
-	// the section before reaching the channel.
-	app.Update(tea.MouseClickMsg{X: app.layout.RailWidth() + 1, Y: 5, Button: tea.MouseLeft})
+	// Click the channel row itself (row 5 of the sidebar content:
+	// Threads, Drafts, Activity, blank, the Channels header, then the
+	// channel), not a scan - a scan would hit the section header and
+	// collapse the section before reaching the channel.
+	app.Update(tea.MouseClickMsg{X: app.layout.RailWidth() + 1, Y: 6, Button: tea.MouseLeft})
 	if app.sidebar.SelectedID() != "C123" {
 		t.Fatalf("sidebar click under the preview selected %q, want C123", app.sidebar.SelectedID())
 	}

@@ -233,6 +233,7 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	case ThreadsViewActivatedMsg:
 		a.view = ViewThreads
 		a.sidebar.SetThreadsActive(true)
+		a.sidebar.SetDraftsActive(false)
 		if !m.KeepFocus {
 			a.focusedPanel = PanelMessages
 		}

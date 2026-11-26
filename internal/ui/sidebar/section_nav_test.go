@@ -23,7 +23,8 @@ func TestRenderedSelectionMatchesNavigation(t *testing.T) {
 	// default-collapsed "Channels" section would otherwise hide
 	// "general" from the rendered output.
 	m.ToggleCollapse("Channels")
-	// Step off the synthetic Threads and Activity rows.
+	// Step off the synthetic Threads, Drafts and Activity rows.
+	m.MoveDown() // Drafts
 	m.MoveDown() // Activity
 	m.MoveDown() // first section header
 

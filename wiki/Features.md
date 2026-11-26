@@ -37,7 +37,7 @@
 - Bracketed paste — paste multi-line text from the system clipboard without it being interpreted as keystrokes
 - Smart paste (`Ctrl+V`) — pastes a clipboard image as an attachment, or a copied file path as an attached file, or falls through to text. Multiple attachments + caption send together via Slack's V2 file-upload API. Note: use `Ctrl+V` (not your terminal's `Ctrl+Shift+V` paste shortcut) — terminal-initiated paste only delivers text, never image bytes.
 - CommonMark in compose: type `**bold**`, `~~strike~~`, `[label](url)`, `- list items`, `1. numbered`, or fenced ```code blocks``` and slk converts them on send to Slack's mrkdwn + rich_text format. Already-mrkdwn syntax (`*bold*`, `_italic_`, `~strike~`) passes through unchanged and receives the corresponding rich-text styling.
-- Unsent drafts stay with their conversation. Text and attachments are kept separately for each workspace, channel, DM and thread, and come back when you switch to it again. Drafts are in-session only — nothing is written to disk and nothing is synced to Slack — and a draft's attachments stay in memory until you send or remove them. While a file upload is in progress, navigation that would switch the composer is refused, so the upload's caption and attachments stay with the conversation they were sent from.
+- Unsent drafts stay with their conversation. Text and attachments are kept separately for each workspace, channel, DM and thread, and come back when you switch to it again. With `[compose] sync_drafts` (the default) the text is also Slack's own draft for that conversation: saved while you type, restored when you open it, and listed in the Drafts view. Attachments stay in memory until you send or remove them. While a file upload is in progress, navigation that would switch the composer is refused, so the upload's caption and attachments stay with the conversation they were sent from.
 
 ## Images
 
@@ -81,9 +81,26 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
   v1 is computed from the local SQLite cache, so threads from channels
   you have not yet opened in slk will not appear until they are seen.
 
+## Drafts
+
+- **Drafts view** (`✎ Drafts` in the sidebar, directly below Threads): the
+  active workspace's Slack drafts, newest first. The count beside the row is
+  how many there are, drawn like the Threads unread count, and hidden when
+  there are none. Open it from the sidebar. With `[compose] sync_drafts` off
+  the row stays and selecting it says so.
+- Each row names the conversation (`#channel`, a DM, or `#channel › thread`),
+  how long ago it changed, and one line of the draft. A scheduled draft, one
+  with files, or one saved from the composer is marked.
+- `j` / `k`, `gg` / `G` and paging move the selection the same way as the
+  Threads view. `Enter` opens that channel or thread with the draft in the
+  composer. `d` asks before deleting it. With nothing to list, the pane says
+  `no drafts`, the same shape as the Threads view's `no threads`.
+- `:drafts` opens the same list as a dialog (Enter jumps, `d` deletes, Esc
+  closes).
+
 ## Activity
 
-- **Activity view** (`◉ Activity` in the sidebar, below Threads): the same
+- **Activity view** (`◉ Activity` in the sidebar, below Drafts): the same
   feed as the Activity tab in the official client — @mentions (including
   `@here`/`@channel`, user groups and keywords), replies in threads you
   follow, reactions to your messages, and DMs. Open it from the sidebar,

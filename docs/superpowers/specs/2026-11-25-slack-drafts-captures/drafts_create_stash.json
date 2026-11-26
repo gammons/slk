@@ -1,0 +1,95 @@
+{
+ "method": "drafts.create",
+ "note": "'Save as draft' button with no attached draft: a new stashed draft. Accepted although the destination already held a stashed draft. Reference only; stashing is out of scope.",
+ "form": [
+  [
+   "token",
+   "xoxc-REDACTED"
+  ],
+  [
+   "blocks",
+   "[{\"type\":\"rich_text\",\"elements\":[{\"type\":\"rich_text_section\",\"elements\":[{\"type\":\"text\",\"text\":\"draft text 3\"}]}]}]"
+  ],
+  [
+   "client_msg_id",
+   "00000000-0000-4000-8000-000000000003"
+  ],
+  [
+   "attachments",
+   "[]"
+  ],
+  [
+   "destinations",
+   "[{\"channel_id\":\"C0EXAMPLE01\"}]"
+  ],
+  [
+   "file_ids",
+   "[]"
+  ],
+  [
+   "is_from_composer",
+   "true"
+  ],
+  [
+   "date_stashed",
+   "1795617059441"
+  ],
+  [
+   "_x_reason",
+   "draft-management-save-as-draft"
+  ],
+  [
+   "_x_mode",
+   "online"
+  ],
+  [
+   "_x_app_name",
+   "client"
+  ],
+  [
+   "_x_sonic",
+   "true"
+  ]
+ ],
+ "response": {
+  "ok": true,
+  "draft": {
+   "id": "Dr0EXAMPLE03",
+   "date_created": 1795617060,
+   "user_id": "U0EXAMPLE01",
+   "team_id": "T0EXAMPLE01",
+   "last_updated_ts": "1795617060.603524",
+   "last_updated_client": "Chrome",
+   "blocks": [
+    {
+     "type": "rich_text",
+     "block_id": "blk03",
+     "elements": [
+      {
+       "type": "rich_text_section",
+       "elements": [
+        {
+         "type": "text",
+         "text": "draft text 3"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "file_ids": [],
+   "is_from_composer": true,
+   "is_deleted": false,
+   "is_sent": false,
+   "client_msg_id": "00000000-0000-4000-8000-000000000003",
+   "date_scheduled": 0,
+   "destinations": [
+    {
+     "channel_id": "C0EXAMPLE01"
+    }
+   ],
+   "date_stashed": 1795617059441
+  },
+  "files": []
+ }
+}

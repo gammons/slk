@@ -79,6 +79,10 @@ func TestQuitPromptClosesEveryModal(t *testing.T) {
 			func(a *App) { a.marksOverlay.Open() },
 			func(a *App) bool { return a.marksOverlay.IsVisible() },
 		},
+		ModeDrafts: {
+			func(a *App) { a.draftList.Open() },
+			func(a *App) bool { return a.draftList.IsVisible() },
+		},
 		ModeSuppressed: {
 			func(a *App) { a.suppressList.Open() },
 			func(a *App) bool { return a.suppressList.IsVisible() },

@@ -56,6 +56,10 @@ func (a *App) setMark(letter string) tea.Cmd {
 	switch {
 	case a.focusedPanel == PanelThread:
 		pane = a.threadPanel
+	case a.view == ViewDrafts:
+		if i, ok := a.draftsView.Selected(); ok && i < len(a.draftListItems) {
+			m.Excerpt = truncateReason(a.draftRowPreview(a.draftListItems[i]), 100)
+		}
 	case a.view == ViewThreads:
 		if s, ok := a.threadsView.SelectedSummary(); ok {
 			m.AuthorName = a.userNameFor(s.ParentUserID)

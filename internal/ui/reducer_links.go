@@ -264,6 +264,7 @@ func (a *App) applyLocation(loc Location, fromHistory bool) (tea.Cmd, bool) {
 		// thread-bearing location re-focuses the thread panel below,
 		// via openThreadForPermalink.
 		a.view = ViewChannels
+		a.sidebar.SetDraftsActive(false)
 		if a.threadVisible {
 			// ChannelSelectedMsg closes the thread panel on every
 			// channel switch, and the in-place path has to as well —
@@ -322,6 +323,7 @@ func (a *App) completePendingLinkNav(channelID string, authoritative bool) tea.C
 	}
 	a.view = ViewChannels
 	a.sidebar.SetThreadsActive(false)
+	a.sidebar.SetDraftsActive(false)
 	a.lastOpenedChannelID = ""
 	a.lastOpenedThreadTS = ""
 	a.focusedPanel = PanelMessages

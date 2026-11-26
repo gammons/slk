@@ -45,6 +45,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/compose"
 )
 
@@ -229,6 +230,7 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 				a.threadCompose.Reset()
 				threadTS := a.threadPanel.ThreadTS()
 				channelID := a.threadPanel.ChannelID()
+				a.noteDraftSent(core.DraftKey{TeamID: a.activeTeamID, ChannelID: channelID, ThreadTS: threadTS})
 				a.exitInsertAfterSend()
 				send := func() tea.Msg {
 					return SendThreadReplyMsg{
@@ -291,6 +293,7 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 			// runs, so the send must use this local snapshot.
 			channelID := a.activeChannelID
 			a.compose.Reset()
+			a.noteDraftSent(core.DraftKey{TeamID: a.activeTeamID, ChannelID: channelID})
 			a.exitInsertAfterSend()
 			send := func() tea.Msg {
 				return SendMessageMsg{

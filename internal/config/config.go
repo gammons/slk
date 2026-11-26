@@ -35,6 +35,11 @@ type Compose struct {
 	// typed in a row without pressing `i` before each one. Default off:
 	// sending drops back to normal mode, the vim convention.
 	StayInInsertAfterSend bool `toml:"stay_in_insert_after_send"`
+	// SyncDrafts makes the composer's unsent text Slack's own draft for
+	// the conversation (saved while typing, restored on open, marked
+	// sent on send), and enables :drafts. A *bool so unset (nil) is
+	// told from an explicit false; see EffectiveSyncDrafts. Default on.
+	SyncDrafts *bool `toml:"sync_drafts"`
 }
 
 // SectionDef defines a sidebar section with channel name patterns.
@@ -632,6 +637,15 @@ func (c Config) EffectiveUseSlackSections(teamID string) bool {
 func (c Config) EffectiveShowJumpOverlay() bool {
 	if c.Marks.ShowJumpOverlay != nil {
 		return *c.Marks.ShowJumpOverlay
+	}
+	return true
+}
+
+// EffectiveSyncDrafts reports [compose] sync_drafts: an explicit value
+// wins, unset is on.
+func (c Config) EffectiveSyncDrafts() bool {
+	if c.Compose.SyncDrafts != nil {
+		return *c.Compose.SyncDrafts
 	}
 	return true
 }

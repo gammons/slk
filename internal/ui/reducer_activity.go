@@ -159,6 +159,7 @@ var reduceActivity reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	case ActivityViewActivatedMsg:
 		a.view = ViewActivity
 		a.sidebar.SetActivityActive(true)
+		a.sidebar.SetDraftsActive(false)
 		if !m.KeepFocus {
 			a.focusedPanel = PanelMessages
 		}

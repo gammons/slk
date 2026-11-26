@@ -87,6 +87,9 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		LastVisitedByChannel: make(map[string]int64),
 		ThreadSubsGate:       threadSubsGate{window: threadSubsSyncInterval},
 	}
+	if cfg.EffectiveSyncDrafts() {
+		wctx.Drafts = newDraftEngine(client, client.TeamID())
+	}
 	wctx.SubscriptionsAvailable = true
 
 	// Seed user names + bot flags from cache (fast, local). The bot
@@ -524,6 +527,7 @@ func (h *rtmEventHandler) OnConnect() {
 	firstConnect := !h.connected
 	h.connected = true
 	h.program.Send(ui.ConnectionStateMsg{State: int(statusbar.StateConnected)})
+	h.askForDrafts()
 	// Refresh Slack-native section state and reconcile starred rows on connect.
 	// The whole block is debounced to once per 30s so a rapid flap doesn't
 	// repeat missing-row lookups even when MaybeRebootstrap skips its fetch.
@@ -659,6 +663,16 @@ func (h *rtmEventHandler) syncOnReconnect(trigger string) bool {
 		}
 	}()
 	return true
+}
+
+// askForDrafts asks the App to reload the workspace's drafts: on the
+// first connect that is the first list, after a reconnect it catches
+// drafts changed on other devices meanwhile.
+func (h *rtmEventHandler) askForDrafts() {
+	if h.wsCtx == nil || h.wsCtx.Drafts == nil {
+		return
+	}
+	h.program.Send(ui.DraftsStaleMsg{TeamID: h.workspaceID})
 }
 
 func (h *rtmEventHandler) OnDisconnect() {

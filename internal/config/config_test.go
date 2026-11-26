@@ -516,6 +516,24 @@ func TestConfig_ComposeStayInInsertDefault(t *testing.T) {
 	}
 }
 
+func TestSyncDrafts(t *testing.T) {
+	cases := []struct {
+		name, body string
+		want       bool
+	}{
+		{"unset is on", "", true},
+		{"on", "[compose]\nsync_drafts = true\n", true},
+		{"off", "[compose]\nsync_drafts = false\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := loadConfigString(t, tc.body).EffectiveSyncDrafts(); got != tc.want {
+				t.Errorf("EffectiveSyncDrafts = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestConfig_ComposeStayInInsertExplicit(t *testing.T) {
 	for _, tc := range []struct {
 		name string

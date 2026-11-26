@@ -1,0 +1,90 @@
+{
+ "method": "drafts.create",
+ "note": "Web client composer autosave, first save of a new attached draft (Chrome, 2026-11-25). Request was multipart/form-data; slk sends the same fields urlencoded via postForm.",
+ "form": [
+  [
+   "token",
+   "xoxc-REDACTED"
+  ],
+  [
+   "blocks",
+   "[{\"type\":\"rich_text\",\"elements\":[{\"type\":\"rich_text_section\",\"elements\":[{\"type\":\"text\",\"text\":\"draft text 1\"}]}]}]"
+  ],
+  [
+   "client_msg_id",
+   "00000000-0000-4000-8000-000000000001"
+  ],
+  [
+   "attachments",
+   "[]"
+  ],
+  [
+   "destinations",
+   "[{\"channel_id\":\"C0EXAMPLE01\"}]"
+  ],
+  [
+   "file_ids",
+   "[]"
+  ],
+  [
+   "is_from_composer",
+   "false"
+  ],
+  [
+   "_x_reason",
+   "MessageInput:updateDraft"
+  ],
+  [
+   "_x_mode",
+   "online"
+  ],
+  [
+   "_x_app_name",
+   "client"
+  ],
+  [
+   "_x_sonic",
+   "true"
+  ]
+ ],
+ "response": {
+  "ok": true,
+  "draft": {
+   "id": "Dr0EXAMPLE01",
+   "date_created": 1795617832,
+   "user_id": "U0EXAMPLE01",
+   "team_id": "T0EXAMPLE01",
+   "last_updated_ts": "1795617832.486701",
+   "last_updated_client": "Chrome",
+   "blocks": [
+    {
+     "type": "rich_text",
+     "block_id": "blk01",
+     "elements": [
+      {
+       "type": "rich_text_section",
+       "elements": [
+        {
+         "type": "text",
+         "text": "draft text 1"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "file_ids": [],
+   "is_from_composer": false,
+   "is_deleted": false,
+   "is_sent": false,
+   "client_msg_id": "00000000-0000-4000-8000-000000000001",
+   "date_scheduled": 0,
+   "destinations": [
+    {
+     "channel_id": "C0EXAMPLE01"
+    }
+   ]
+  },
+  "files": []
+ }
+}

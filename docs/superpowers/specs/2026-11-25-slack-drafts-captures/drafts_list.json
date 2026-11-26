@@ -1,0 +1,268 @@
+{
+ "method": "drafts.list",
+ "note": "First boot page of drafts.list, response trimmed to one draft of each kind: attached channel, attached thread with a user mention, Slackbot DM (user_ids USLACK), DM thread, unaddressed composer draft, stashed draft with a destination. The boot sends a second page with next_ts=<last_updated_ts of the oldest draft so far>; has_more is true on every page but the last.",
+ "form": [
+  [
+   "token",
+   "xoxc-REDACTED"
+  ],
+  [
+   "is_active",
+   "true"
+  ],
+  [
+   "limit",
+   "25"
+  ],
+  [
+   "_x_reason",
+   "client-v2-boot-team"
+  ],
+  [
+   "_x_mode",
+   "online"
+  ],
+  [
+   "_x_app_name",
+   "client"
+  ],
+  [
+   "_x_sonic",
+   "true"
+  ]
+ ],
+ "response": {
+  "ok": true,
+  "drafts": [
+   {
+    "id": "Dr0EXAMPLE02",
+    "date_created": 1779014723,
+    "user_id": "U0EXAMPLE01",
+    "team_id": "T0EXAMPLE01",
+    "last_updated_ts": "1795607001.798601",
+    "last_updated_client": "Slack SSB Linux",
+    "blocks": [
+     {
+      "type": "rich_text",
+      "block_id": "blk04",
+      "elements": [
+       {
+        "type": "rich_text_section",
+        "elements": [
+         {
+          "type": "text",
+          "text": "draft text 4"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "file_ids": [],
+    "is_from_composer": false,
+    "is_deleted": false,
+    "is_sent": false,
+    "client_msg_id": "00000000-0000-4000-8000-000000000002",
+    "date_scheduled": 0,
+    "destinations": [
+     {
+      "channel_id": "C0EXAMPLE01"
+     }
+    ]
+   },
+   {
+    "id": "Dr0EXAMPLE08",
+    "date_created": 1786638779,
+    "user_id": "U0EXAMPLE01",
+    "team_id": "T0EXAMPLE01",
+    "last_updated_ts": "1786638779.710113",
+    "last_updated_client": "Slack",
+    "blocks": [
+     {
+      "type": "rich_text",
+      "block_id": "blk09",
+      "elements": [
+       {
+        "type": "rich_text_section",
+        "elements": [
+         {
+          "type": "user",
+          "user_id": "U0EXAMPLE02",
+          "from_llm": false
+         },
+         {
+          "type": "text",
+          "text": " "
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "file_ids": [],
+    "is_from_composer": false,
+    "is_deleted": false,
+    "is_sent": false,
+    "client_msg_id": "00000000-0000-4000-8000-000000000008",
+    "date_scheduled": 0,
+    "destinations": [
+     {
+      "channel_id": "C0EXAMPLE06",
+      "thread_ts": "1786615225.967719",
+      "broadcast": false
+     }
+    ]
+   },
+   {
+    "id": "Dr0EXAMPLE19",
+    "date_created": 1776682461,
+    "user_id": "U0EXAMPLE01",
+    "team_id": "T0EXAMPLE01",
+    "last_updated_ts": "1776682461.709293",
+    "last_updated_client": "Slack SSB Linux",
+    "blocks": [
+     {
+      "type": "rich_text",
+      "elements": [
+       {
+        "type": "rich_text_section",
+        "elements": [
+         {
+          "type": "user",
+          "user_id": "U0EXAMPLE06"
+         }
+        ]
+       }
+      ],
+      "block_id": "blk20"
+     }
+    ],
+    "file_ids": [],
+    "is_from_composer": false,
+    "is_deleted": false,
+    "is_sent": false,
+    "client_msg_id": "00000000-0000-4000-8000-000000000019",
+    "date_scheduled": 0,
+    "destinations": [
+     {
+      "channel_id": "D0EXAMPLE02",
+      "user_ids": [
+       "USLACK"
+      ]
+     }
+    ]
+   },
+   {
+    "id": "Dr0EXAMPLE17",
+    "date_created": 1776794357,
+    "user_id": "U0EXAMPLE01",
+    "team_id": "T0EXAMPLE01",
+    "last_updated_ts": "1776794357.125978",
+    "last_updated_client": "Slack SSB Linux",
+    "blocks": [
+     {
+      "type": "rich_text",
+      "elements": [
+       {
+        "type": "rich_text_section",
+        "elements": [
+         {
+          "type": "text",
+          "text": "draft text 18"
+         }
+        ]
+       }
+      ],
+      "block_id": "blk18"
+     }
+    ],
+    "file_ids": [],
+    "is_from_composer": false,
+    "is_deleted": false,
+    "is_sent": false,
+    "client_msg_id": "00000000-0000-4000-8000-000000000017",
+    "date_scheduled": 0,
+    "destinations": [
+     {
+      "channel_id": "D0EXAMPLE01",
+      "user_ids": [
+       "U0EXAMPLE05"
+      ],
+      "thread_ts": "1776794177.257969",
+      "broadcast": false
+     }
+    ]
+   },
+   {
+    "id": "Dr0EXAMPLE28",
+    "date_created": 1772144042,
+    "user_id": "U0EXAMPLE01",
+    "team_id": "T0EXAMPLE01",
+    "last_updated_ts": "1772160943.370873",
+    "last_updated_client": "System",
+    "blocks": [
+     {
+      "type": "rich_text",
+      "elements": [
+       {
+        "type": "rich_text_section",
+        "elements": [
+         {
+          "type": "text",
+          "text": "draft text 29"
+         }
+        ]
+       }
+      ],
+      "block_id": "blk29"
+     }
+    ],
+    "file_ids": [],
+    "is_from_composer": true,
+    "is_deleted": false,
+    "is_sent": false,
+    "client_msg_id": "00000000-0000-4000-8000-000000000028",
+    "date_scheduled": 0,
+    "destinations": []
+   },
+   {
+    "id": "Dr0EXAMPLE26",
+    "date_created": 1774883765,
+    "user_id": "U0EXAMPLE01",
+    "team_id": "T0EXAMPLE01",
+    "last_updated_ts": "1774883765.771728",
+    "last_updated_client": "Slack SSB Linux",
+    "blocks": [
+     {
+      "type": "rich_text",
+      "block_id": "blk27",
+      "elements": [
+       {
+        "type": "rich_text_section",
+        "elements": [
+         {
+          "type": "text",
+          "text": "draft text 26"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "file_ids": [],
+    "is_from_composer": true,
+    "is_deleted": false,
+    "is_sent": false,
+    "client_msg_id": "00000000-0000-4000-8000-000000000026",
+    "date_scheduled": 0,
+    "destinations": [
+     {
+      "channel_id": "C0EXAMPLE14"
+     }
+    ]
+   }
+  ],
+  "files": [],
+  "has_more": true
+ }
+}

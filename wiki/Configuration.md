@@ -104,7 +104,7 @@ quiet_hours = "22:00-08:00"   # planned
 
 [sidebar]
 right_align_badges = false  # true: mention badges at the right end of the row (Slack),
-                            # and the Threads and Activity counts as red badges there
+                            # and the Threads, Drafts and Activity counts as red badges there
 channel_indent = 0          # cells to indent the rows under each section header (0-6)
 hide_inactive_after_days = 30  # auto-hide conversations not read for this many days;
                                # 0 shows them all (the active channel and unread ones stay)
@@ -124,7 +124,7 @@ start_collapsed = false     # true: every section starts collapsed (Space/Enter
 show_unread_in_collapsed = false  # true: a collapsed section still lists its
                                   # unread channels (and the open one)
 enter_keeps_focus = false   # true: Enter opens a conversation (or Threads,
-                            # Activity, or a workspace in the rail) but keeps
+                            # Drafts, Activity, or a workspace in the rail) but keeps
                             # focus in the list, to skim with j/k; l moves on
 
 [compose]
@@ -133,6 +133,11 @@ editor = "nvim"   # Ctrl+E editor, used when $VISUAL and $EDITOR are unset
 # vim). While it's on, app Ctrl shortcuts (Ctrl+P, Ctrl+N, Ctrl+A, ...) also
 # work from an empty composer; Ctrl+W, Ctrl+H and Ctrl+K keep deleting text.
 stay_in_insert_after_send = true
+
+# Make the composer's unsent text Slack's own draft for the conversation:
+# saved while you type, restored when you open the conversation (on any
+# device), marked sent when you send. Also enables :drafts. Default true.
+sync_drafts = true
 
 [sidebar]
 mention_pills = false   # true: "↑/↓ Unread mentions" pills while a mentioned

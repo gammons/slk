@@ -54,6 +54,7 @@ var commands = map[string]commandFunc{
 	"version":    cmdVersion,
 	"suppress":   cmdSuppress,
 	"suppressed": cmdSuppressed,
+	"drafts":     cmdDrafts,
 }
 
 // cmdVersion toasts the running build's version and short commit (see
@@ -96,8 +97,8 @@ func cmdActivity(a *App, _ commandArgs) tea.Cmd {
 //
 // Which conversation "on screen" means, in priority order: a focused
 // thread pane names its own parent channel (the Threads view opens
-// threads without moving a.activeChannelID); in the Threads or
-// Activity view, the highlighted row's channel (there PanelMessages
+// threads without moving a.activeChannelID); in the Threads, Drafts
+// or Activity view, the highlighted row's channel (there PanelMessages
 // focus is the list's convention, and the active channel is stale);
 // otherwise the active channel. An empty answer — no pane, no
 // highlighted row, no active channel — refuses. The H key calls this
@@ -110,6 +111,10 @@ func cmdHuddle(a *App, _ commandArgs) tea.Cmd {
 	case a.view == ViewThreads:
 		if sum, ok := a.threadsView.SelectedSummary(); ok {
 			channelID = sum.ChannelID
+		}
+	case a.view == ViewDrafts:
+		if i, ok := a.draftsView.Selected(); ok && i < len(a.draftListItems) {
+			channelID = a.draftListItems[i].Key.ChannelID
 		}
 	case a.view == ViewActivity:
 		if it, ok := a.activityView.SelectedItem(); ok {

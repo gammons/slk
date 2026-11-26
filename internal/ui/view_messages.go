@@ -106,6 +106,9 @@ func (a *App) renderMessagesRegion(frame panelLayoutFrame, themeVer int64, previ
 	if a.view == ViewThreads {
 		return a.renderThreadsViewPanel(msgWidth, msgBorder, contentHeight, msgFocused, msgLayoutKey)
 	}
+	if a.view == ViewDrafts {
+		return a.renderDraftsViewPanel(msgWidth, msgBorder, contentHeight, msgFocused, msgLayoutKey)
+	}
 	if a.view == ViewActivity {
 		return a.renderActivityViewPanel(msgWidth, msgBorder, contentHeight, msgFocused, msgLayoutKey)
 	}
@@ -156,6 +159,31 @@ func (a *App) renderThreadsViewPanel(msgWidth, msgBorder, contentHeight int, msg
 		msgWidth+msgBorder, contentHeight,
 	)
 	c.store(out, tvVersion, msgWidth, contentHeight, msgLayoutKey)
+	return out
+}
+
+// renderDraftsViewPanel handles the a.view == ViewDrafts branch: a
+// single bordered panel containing the drafts list, no compose. Cached
+// on draftsView.Version, the same way the Threads list is.
+func (a *App) renderDraftsViewPanel(msgWidth, msgBorder, contentHeight int, msgFocused bool, msgLayoutKey int64) string {
+	a.draftsView.SetFocused(msgFocused)
+	v := a.draftsView.Version()
+	c := &a.renderCache.draftsPanel
+	if c.hit(v, msgWidth, contentHeight, msgLayoutKey) {
+		return c.output
+	}
+	msgBorderStyle := styles.UnfocusedBorder.Width(msgWidth)
+	if msgFocused {
+		msgBorderStyle = styles.FocusedBorder.Width(msgWidth)
+	}
+	msgContentHeight := contentHeight - 2
+	a.layout.SetMsgHeight(msgContentHeight)
+	if msgContentHeight < 3 {
+		msgContentHeight = 3
+	}
+	body := messages.ReapplyBgAfterResets(a.draftsView.View(msgContentHeight, msgWidth-2), messages.BgANSI())
+	out := exactSize(msgBorderStyle.Render(body), msgWidth+msgBorder, contentHeight)
+	c.store(out, v, msgWidth, contentHeight, msgLayoutKey)
 	return out
 }
 

@@ -91,6 +91,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 
 	switch {
 	case key.Matches(msg, a.keys.InsertMode):
+		if a.view == ViewDrafts && a.focusedPanel == PanelMessages {
+			return toastWithClear(a, "Open a draft to edit it", 2*time.Second)
+		}
 		if a.view == ViewAppHome && !(a.focusedPanel == PanelThread && a.threadVisible) {
 			// The messages region draws the Home tab, which has no
 			// composer: every path here (messages, sidebar or rail
@@ -394,6 +397,12 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 
 	case a.view == ViewActivity && key.Matches(msg, a.keys.ActivityUnread):
 		return func() tea.Msg { return ActivityToggleUnreadMsg{} }
+
+	case a.view == ViewDrafts && a.focusedPanel == PanelMessages && key.Matches(msg, a.keys.DownloadFile):
+		// d deletes the highlighted draft, as it does in :drafts. The
+		// channel pane's "download file" binding is the same key, and
+		// that pane is not on screen.
+		return a.deleteSelectedDraft()
 
 	case key.Matches(msg, a.keys.DownloadFile):
 		return a.downloadFilesOfSelected()

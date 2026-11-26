@@ -66,6 +66,7 @@ var modeHandlers = map[Mode]modeHandler{
 	ModeWorkspaceSearch:      handleWorkspaceSearchMode,
 	ModeUserProfile:          handleUserProfileMode,
 	ModeMarks:                handleMarksMode,
+	ModeDrafts:               handleDraftsMode,
 	ModeSuppressed:           handleSuppressedMode,
 	ModeOpenSlackLink:        handleOpenSlackLinkMode,
 	ModeAppView:              handleAppViewMode,

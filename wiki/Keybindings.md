@@ -5,7 +5,7 @@
 | `j` / `k` | Normal | Move down/up in channel list or messages |
 | `h` / `l` | Normal | Switch focus between panels; `h` from the sidebar focuses the workspace rail |
 | `Tab` / `Shift+Tab` | Normal | Cycle focus |
-| `Enter` | Normal (sidebar) | Open selected channel (focus moves to the messages pane; `[sidebar] enter_keeps_focus = true` keeps it in the sidebar), or toggle a section header |
+| `Enter` | Normal (sidebar) | Open the selected channel, the Threads view, the Drafts view, or the Activity view (focus moves to the messages pane; `[sidebar] enter_keeps_focus = true` keeps it in the sidebar), or toggle a section header |
 | `j` / `k`, `Enter` | Normal (workspace rail) | Move the rail cursor; switch to that workspace |
 | `Space` | Normal (sidebar) | Toggle the selected section header (collapse/expand) |
 | `Enter` | Normal (message) | Open thread |
@@ -46,6 +46,9 @@
 | `Ctrl+g` | Normal | Toggle the workspace rail (with it hidden, the status bar shows the active workspace's initials) |
 | `Ctrl+]` | Any | Toggle thread panel |
 | `f` | Normal | Toggle fullscreen for the focused pane (channel list, messages or thread); while fullscreen, moving focus (`Tab`, `h`/`l`, `Enter`) shows the newly focused pane fullscreen, and closing a fullscreen thread yourself (`Esc`, `q`, `Ctrl+]`) returns to the panes |
+| `Enter` | Normal (drafts) | Open the highlighted draft's channel or thread, with the draft in the composer |
+| `d` | Normal (drafts) | Delete the highlighted draft (asks first) |
+| `:drafts` | Normal | Open the same drafts list as a dialog |
 | `Ctrl+a` | Normal | Toggle the Activity view (mentions, thread replies, reactions, DMs) |
 | `:activity` | Normal | Open the Activity view |
 | `u` | Normal (activity) | Toggle the Activity view's unread-only filter |

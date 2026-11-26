@@ -32,8 +32,8 @@ func TestToggleCollapse_OnSelectedHeader(t *testing.T) {
 		{ID: "C1", Name: "general", Type: "channel"},
 		{ID: "D1", Name: "alice", Type: "dm"},
 	})
-	// Cursor: Threads → Activity → Direct Messages header. Toggle it:
-	// should collapse.
+	// Cursor: Threads → Drafts → Activity → Direct Messages header.
+	m.MoveDown() // Drafts
 	m.MoveDown() // Activity
 	m.MoveDown() // Direct Messages header
 	name, ok := m.IsSectionHeaderSelected()
@@ -214,6 +214,7 @@ func TestToggleCollapse_PreservesCursorOnHeader(t *testing.T) {
 		{ID: "C1", Name: "general", Type: "channel"},
 		{ID: "D1", Name: "alice", Type: "dm"},
 	})
+	m.MoveDown() // onto Drafts row
 	m.MoveDown() // onto Activity row
 	m.MoveDown() // onto DM header
 	if name, _ := m.IsSectionHeaderSelected(); name != "Direct Messages" {

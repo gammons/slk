@@ -1125,19 +1125,34 @@ func (c *Client) ListCustomEmoji(ctx context.Context) (map[string]string, error)
 // clients will render). Links an app publishes a Work Object for go out
 // as chips; see link_chips.go.
 func (c *Client) SendMessage(ctx context.Context, channelID, text string) (string, string, error) {
-	ts, mr, err := c.postMessage(ctx, channelID, "", text, false)
+	ts, mr, err := c.postMessage(ctx, channelID, "", text, false, nil)
 	if err != nil {
 		return "", "", fmt.Errorf("sending message: %w", err)
 	}
 	return ts, mr, nil
 }
 
-// postMessage is SendMessage and SendReply: chat.postMessage with the
-// text converted to mrkdwn and a rich_text block, chips first.
-func (c *Client) postMessage(ctx context.Context, channelID, threadTS, text string, broadcast bool) (string, string, error) {
+// postMessage is SendMessage, SendReply and SendDraft: chat.postMessage
+// with the text converted to mrkdwn and a rich_text block, chips first.
+// ref, when not nil, names the draft the message is sent from; slack-go
+// has no option for the draft fields, so a draft's post skips slack-go
+// and goes out as the hand-rolled form the chips path already sends.
+func (c *Client) postMessage(ctx context.Context, channelID, threadTS, text string, broadcast bool, ref *DraftRef) (string, string, error) {
 	mr, block := mrkdwn.Convert(text)
-	if ts, sentMr, sent, err := c.sendWithChips(ctx, channelID, threadTS, text, broadcast, block); sent {
+	extra := ref.fields()
+	if ts, sentMr, sent, err := c.sendWithChips(ctx, channelID, threadTS, text, broadcast, block, extra); sent {
 		return ts, sentMr, err
+	}
+	if ref != nil {
+		form, err := plainPostForm(channelID, threadTS, broadcast, mr, block, newClientMsgID())
+		if err != nil {
+			return "", "", err
+		}
+		for k, v := range extra {
+			form[k] = v
+		}
+		ts, err := c.postChips(ctx, form)
+		return ts, mr, err
 	}
 	opts := []slack.MsgOption{slack.MsgOptionText(mr, false)}
 	if threadTS != "" {
@@ -1381,7 +1396,7 @@ func sumActivityV2(m map[string]int) int {
 // thread_broadcast subtype. Returns the timestamp and the converted
 // mrkdwn text actually sent.
 func (c *Client) SendReply(ctx context.Context, channelID, threadTS, text string, broadcast bool) (string, string, error) {
-	ts, mr, err := c.postMessage(ctx, channelID, threadTS, text, broadcast)
+	ts, mr, err := c.postMessage(ctx, channelID, threadTS, text, broadcast, nil)
 	if err != nil {
 		return "", "", fmt.Errorf("sending reply: %w", err)
 	}

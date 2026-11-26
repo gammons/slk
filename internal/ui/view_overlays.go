@@ -84,6 +84,9 @@ func (a *App) applyOverlays(screen string) string {
 	if a.marksOverlay.IsVisible() {
 		screen = a.marksOverlay.ViewOverlay(a.width, a.height, screen)
 	}
+	if a.draftList.IsVisible() {
+		screen = a.draftList.ViewOverlay(a.width, a.height, screen)
+	}
 	if a.suppressList.IsVisible() {
 		screen = a.suppressList.ViewOverlay(a.width, a.height, screen)
 	}
@@ -117,6 +120,7 @@ func (a *App) overlayActive() bool {
 		a.linkPicker.IsVisible() ||
 		a.userProfile.IsVisible() ||
 		a.marksOverlay.IsVisible() ||
+		a.draftList.IsVisible() ||
 		a.suppressList.IsVisible() ||
 		a.mode == ModePresenceCustomSnooze ||
 		a.mode == ModeOpenSlackLink ||

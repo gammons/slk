@@ -1,0 +1,28 @@
+// internal/ui/reducer_drafts.go
+//
+// Draft sync's messages (drafts.go): the reload a connect asks for, a
+// list's arrival, the comparison tick, save answers, and the Drafts
+// list's delete.
+package ui
+
+import tea "charm.land/bubbletea/v2"
+
+var reduceDrafts reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
+	switch m := msg.(type) {
+	case DraftsViewActivatedMsg:
+		return a.openDraftsView(m.KeepFocus), true
+	case DraftsStaleMsg:
+		return a.loadDraftsCmd(m.TeamID), true
+	case draftsLoadedMsg:
+		return a.reduceDraftsLoaded(m), true
+	case draftTickMsg:
+		return a.reduceDraftTick(), true
+	case draftSavedMsg:
+		return a.reduceDraftSaved(m), true
+	case draftDeleteConfirmedMsg:
+		return a.reduceDraftDeleteConfirmed(m), true
+	case draftDeletedMsg:
+		return a.reduceDraftDeleted(m), true
+	}
+	return nil, false
+}
