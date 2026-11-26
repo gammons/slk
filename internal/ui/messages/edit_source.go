@@ -30,7 +30,7 @@ func EditSource(msg MessageItem) string {
 	var parts []string
 	for _, b := range msg.Blocks {
 		if rt, ok := b.(blockkit.RichTextBlock); ok {
-			if md := blockkit.RichTextToMarkdown(rt); md != "" {
+			if md := blockkit.RichTextToMrkdwnUser(rt); md != "" {
 				parts = append(parts, md)
 			}
 		}
@@ -49,7 +49,7 @@ func EditSource(msg MessageItem) string {
 		if m[4] >= 0 {
 			label = slackEntityDecoder.Replace(msg.Text[m[4]:m[5]])
 		}
-		b.WriteString(blockkit.LinkToMarkdown(url, label))
+		b.WriteString(blockkit.LinkToMrkdwnUser(url, label))
 		last = m[1]
 	}
 	b.WriteString(decodeLiteral(msg.Text[last:]))

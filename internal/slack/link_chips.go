@@ -30,6 +30,7 @@ import (
 	"github.com/gammons/slk/internal/debuglog"
 	"github.com/gammons/slk/internal/slack/mrkdwn"
 	"github.com/gammons/slk/internal/slackhttp"
+	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/slack-go/slack"
 )
 
@@ -449,7 +450,8 @@ func (c *Client) sendWithChips(ctx context.Context, channelID, threadTS, text st
 	if len(chips) == 0 {
 		return "", "", false, nil
 	}
-	mr, block = mrkdwn.Convert(text)
+	block = mrkdwn.Convert(text)
+	mr = blockkit.RichTextToMrkdwn(blockkit.RichTextBlock{Elements: block.Elements})
 	applyChips(block, chips)
 	mr = chipMrkdwn(mr, chips)
 	var chipURLs []string

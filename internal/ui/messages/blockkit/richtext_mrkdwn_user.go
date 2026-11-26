@@ -11,8 +11,8 @@ import (
 	"github.com/gammons/slk/internal/slack/mrkdwn"
 )
 
-// RichTextToMarkdown rebuilds the CommonMark a person would type into
-// the composer from a parsed rich_text block: the inverse of
+// RichTextToMrkdwnUser rebuilds the Slack mrkdwn a person would type
+// into the composer from a parsed rich_text block: the inverse of
 // internal/slack/mrkdwn.Convert, for seeding the composer when a sent
 // message is edited (`E`). Sending the result through Convert again
 // gives back the same lists, links and styles.
@@ -20,59 +20,37 @@ import (
 // Bulleted items become "- ", ordered items "N. ", and each indent
 // level is four spaces so the item nests under the one above it.
 // Links become [label](url), or the bare URL when the label is the
-// URL. Styles become **bold**, _italic_, ~~strike~~ and `code`.
+// URL. Styles become *bold*, _italic_, ~strike~ and `code`.
 // Mentions stay in wire form (<@U…>, <#C…>, <!here>, <!subteam^S…>)
 // for the composer to turn into names. Text is not escaped: a "*" the
 // author typed as a literal comes back as typed.
-func RichTextToMarkdown(rt RichTextBlock) string {
-	var b strings.Builder
-	prevList := -1 // indent of the list element just written; -1 after anything else
-	for _, e := range rt.Elements {
-		var part string
-		list, interrupts := -1, false
+func RichTextToMrkdwnUser(rt RichTextBlock) string {
+	// Merge together elements, so that we can safely separate all of
+	// them by newlines. Otherwise, we would need to handle text
+	// sections specially.
+	elems := mrkdwn.Merge(rt.Elements)
+	parts := make([]string, 0, len(rt.Elements))
+	for i, e := range elems {
 		switch v := e.(type) {
 		case *slack.RichTextSection:
-			part = strings.Trim(sectionToMarkdown(v.Elements), "\n")
-		case *slack.RichTextList:
-			// A nested level sits directly under its parent list; one
-			// with nothing above it to nest under starts at the margin.
-			list = min(v.Indent, prevList+1)
-			interrupts = list == 0 && interruptsParagraph(v)
-			part = listToMarkdown(v, list)
-		case *slack.RichTextPreformatted:
-			part = preformattedToMarkdown(v.Elements)
-		case *slack.RichTextQuote:
-			part = quoteLines(strings.Trim(sectionToMarkdown(v.Elements), "\n"), v.Border)
-		}
-		if part == "" {
-			continue
-		}
-		if b.Len() > 0 {
-			// A list continues the list above it, or interrupts the
-			// paragraph above it, on the next line. Anything else
-			// needs a blank line, or it would be read as a lazy
-			// continuation of the list item or quote above.
-			if list >= 0 && (prevList >= 0 || interrupts) {
-				b.WriteString("\n")
-			} else {
-				b.WriteString("\n\n")
+			sec := sectionToMrkdwnUser(v.Elements)
+			if i < len(elems)-1 {
+				sec = strings.TrimSuffix(sec, "\n")
 			}
+			parts = append(parts, sec)
+		case *slack.RichTextList:
+			parts = append(parts, listToMrkdwnUser(v))
+		case *slack.RichTextPreformatted:
+			parts = append(parts, preformattedToMrkdwnUser(*v))
+		case *slack.RichTextQuote:
+			parts = append(parts, quoteToMrkdwnUser(*v))
 		}
-		b.WriteString(part)
-		prevList = list
 	}
-	return b.String()
+	return strings.Join(parts, "\n")
 }
 
-// interruptsParagraph reports whether l's first item can start right
-// under a paragraph line: CommonMark lets a bullet list do that, and an
-// ordered list only when it starts at 1.
-func interruptsParagraph(l *slack.RichTextList) bool {
-	return l.Style != slack.RTEListOrdered || l.Offset == 0
-}
-
-// sectionToMarkdown renders the inline elements of a rich_text_section.
-func sectionToMarkdown(elements []slack.RichTextSectionElement) string {
+// sectionToMrkdwnUser renders the inline elements of a rich_text_section.
+func sectionToMrkdwnUser(elements []slack.RichTextSectionElement) string {
 	var b strings.Builder
 	for _, e := range elements {
 		b.WriteString(inlineToMarkdown(e))
@@ -88,10 +66,10 @@ func inlineToMarkdown(e slack.RichTextSectionElement) string {
 	case *slack.RichTextSectionTextElement:
 		return textToMarkdown(v.Text, v.Style)
 	case *slack.RichTextSectionLinkElement:
-		return emphasize(LinkToMarkdown(v.URL, v.Text), v.Style)
+		return emphasize(LinkToMrkdwnUser(v.URL, v.Text), v.Style)
 	case *slack.RichTextSectionUnknownElement:
 		if m, ok := linkMention(v); ok {
-			return LinkToMarkdown(m.URL, m.Text)
+			return LinkToMrkdwnUser(m.URL, m.Text)
 		}
 		return ""
 	}
@@ -110,9 +88,6 @@ func textToMarkdown(text string, style *slack.RichTextSectionTextStyle) string {
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
 		core := strings.TrimSpace(line)
-		if core == "" {
-			continue
-		}
 		start := strings.Index(line, core)
 		lead, trail := line[:start], line[start+len(core):]
 		if style.Code {
@@ -145,51 +120,40 @@ func emphasize(s string, style *slack.RichTextSectionTextStyle) string {
 	if style == nil {
 		return s
 	}
+	if s == "" {
+		return s
+	}
 	if style.Strike {
-		s = "~~" + s + "~~"
+		s = "~" + s + "~"
 	}
 	if style.Italic {
 		s = "_" + s + "_"
 	}
 	if style.Bold {
-		s = "**" + s + "**"
+		s = "*" + s + "*"
 	}
 	return s
 }
 
-// codeSpan wraps s in a run of backticks one longer than the longest
-// run inside it, padding with spaces when s starts or ends with one,
-// as CommonMark requires.
+// codeSpan wraps s in single backticks.
 func codeSpan(s string) string {
-	longest, run := 0, 0
-	for _, r := range s {
-		if r == '`' {
-			run++
-			longest = max(longest, run)
-		} else {
-			run = 0
-		}
-	}
-	fence := strings.Repeat("`", longest+1)
-	if strings.HasPrefix(s, "`") || strings.HasSuffix(s, "`") {
-		s = " " + s + " "
-	}
+	fence := "`"
 	return fence + s + fence
 }
 
-// LinkToMarkdown writes a link the way a person would type it: the
+// LinkToMrkdwnUser writes a link the way a person would type it: the
 // bare URL when the label adds nothing (the composer turns a typed URL
 // into a link), else [label](url). A URL or label that markdown's link
 // syntax cannot hold as typed (brackets or spaces in the URL; brackets
 // or formatting characters in the label, which markdown would read as
 // styles and drop) keeps Slack's <url|label> form, which the composer
 // also sends as a link.
-func LinkToMarkdown(url, label string) string {
-	if label == "" || label == url || url == "mailto:"+label {
+func LinkToMrkdwnUser(url, label string) string {
+	if label == "" || label == url || url == "mailto:"+label || url == "tel:"+label || url == "http://"+label {
 		if strings.HasPrefix(url, "mailto:") {
 			return strings.TrimPrefix(url, "mailto:")
 		}
-		if linkscheme.HasPrefix(url) && mrkdwn.TypesAsBareURL(url) {
+		if linkscheme.HasPrefix(url) && mrkdwn.TypesAsBareUrl(url) {
 			return url
 		}
 		label = url
@@ -200,33 +164,52 @@ func LinkToMarkdown(url, label string) string {
 	return "[" + label + "](" + url + ")"
 }
 
-// listToMarkdown writes one line per item, four spaces per indent
+// listToMrkdwnUser writes one line per item, four spaces per indent
 // level. Ordered items are numbered from Offset+1.
-func listToMarkdown(l *slack.RichTextList, indent int) string {
-	pad := strings.Repeat("    ", indent)
+func listToMrkdwnUser(l *slack.RichTextList) string {
 	lines := make([]string, 0, len(l.Elements))
+	pad := strings.Repeat("    ", l.Indent)
 	for i, child := range l.Elements {
 		body := ""
 		if sec, ok := child.(*slack.RichTextSection); ok {
-			body = sectionToMarkdown(sec.Elements)
+			// Remove trailing newlines
+			body = strings.Trim(sectionToMrkdwnUser(sec.Elements), "\n")
+			// Indent all non-first lines of body so they line up with the first one, e.g.
+			// - foo
+			//   bar
+			//   baz
+			body = strings.ReplaceAll(body, "\n", "\n  ")
 		}
-		marker := "- "
+		var marker string
 		if l.Style == slack.RTEListOrdered {
 			marker = strconv.Itoa(l.Offset+i+1) + ". "
+		} else {
+			marker = "- "
 		}
-		lines = append(lines, pad+marker+body)
+		quoteMarker := strings.Repeat("> ", l.Border)
+		lines = append(lines, quoteMarker+pad+marker+body)
 	}
 	return strings.Join(lines, "\n")
 }
 
-// preformattedToMarkdown writes a fenced code block. The fence is one
+// preformattedToMrkdwnUser writes a fenced code block. The fence is one
 // backtick longer than any run of three or more inside the body.
-func preformattedToMarkdown(elements []slack.RichTextSectionElement) string {
-	body := strings.TrimSuffix(strings.TrimPrefix(preformattedToMrkdwn(elements), "```\n"), "\n```")
-	body = strings.TrimSuffix(body, "\n")
+func preformattedToMrkdwnUser(preformatted slack.RichTextPreformatted) string {
+	body := preformattedElementsToMrkdwn(preformatted.Elements)
 	fence := "```"
-	for strings.Contains(body, fence) {
-		fence += "`"
+	quoteMarker := strings.Repeat("> ", preformatted.Border)
+	return quoteMarker + fence + "\n" + body + "\n" + fence
+}
+
+// quoteToMrkdwn emits a rich_text_quote as one or more "> " lines.
+// Each "\n" inside the section becomes a line boundary that gets
+// its own "> " prefix.
+func quoteToMrkdwnUser(quote slack.RichTextQuote) string {
+	body := sectionToMrkdwnUser(quote.Elements)
+	lines := strings.Split(body, "\n")
+	marker := strings.Repeat("> ", quote.Border+1)
+	for i, l := range lines {
+		lines[i] = marker + l
 	}
-	return fence + "\n" + body + "\n" + fence
+	return strings.Join(lines, "\n")
 }

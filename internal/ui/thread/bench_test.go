@@ -21,7 +21,7 @@ func BenchmarkViewScroll(b *testing.B) {
 			TS:        fmt.Sprintf("%d.000000", 1700000001+i),
 			UserName:  "bob",
 			UserID:    "U2",
-			Text:      "Reply with **bold** _italic_ and a `code` snippet plus a longer trailing sentence.",
+			Text:      "Reply with *bold* _italic_ and a `code` snippet plus a longer trailing sentence.",
 			Timestamp: "10:30 AM",
 			ThreadTS:  parent.TS,
 		}

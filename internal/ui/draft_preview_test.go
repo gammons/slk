@@ -14,7 +14,7 @@ import (
 )
 
 // richDraft is the plan's example of a draft worth previewing.
-const richDraft = "Release plan:\n- ship **v0.28** on Tuesday\n- read [the notes](https://example.com)"
+const richDraft = "Release plan:\n- ship *v0.28* on Tuesday\n- read [the notes](https://example.com)"
 
 // numberedDraft is "line 1" ... "line 40", one per line.
 func numberedDraft() string {
@@ -97,7 +97,7 @@ func TestDraftPreviewShowsRenderedDraft(t *testing.T) {
 			t.Errorf("preview lacks %q:\n%s", want, strings.Join(rows, "\n"))
 		}
 	}
-	for _, raw := range []string{"**", "[", "]("} {
+	for _, raw := range []string{"*", "[", "]("} {
 		if joinedHas(rows[1:], raw) {
 			t.Errorf("preview shows raw markdown %q:\n%s", raw, strings.Join(rows, "\n"))
 		}
@@ -134,7 +134,7 @@ func TestDraftPreviewNotes(t *testing.T) {
 		{name: "whitespace only", draft: "  \n\n ", want: "nothing to preview"},
 		{name: "slash command", draft: "/remind me", want: "slash command, not a message"},
 		{
-			name: "attachment", draft: "**x**", want: "caption is sent as typed",
+			name: "attachment", draft: "*x*", want: "caption is sent as typed",
 			setup: func(a *App) {
 				a.compose.AddAttachment(core.PendingAttachment{Filename: "a.png", Bytes: []byte{1}})
 			},
@@ -373,7 +373,7 @@ func BenchmarkDraftPreview(b *testing.B) {
 				users[i] = mentionpicker.User{ID: fmt.Sprintf("U%05d", i), DisplayName: fmt.Sprintf("person.%d", i)}
 			}
 			a.compose.SetUsers(users)
-			draft := strings.Repeat("- ship **v0.28** on Tuesday with @person.42 and [the notes](https://example.com/x)\n", 25)
+			draft := strings.Repeat("- ship *v0.28* on Tuesday with @person.42 and [the notes](https://example.com/x)\n", 25)
 			_ = a.compose.Focus()
 			a.compose.SetValue(draft)
 			a.compose.SetPreview(on)

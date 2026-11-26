@@ -8,6 +8,7 @@ import (
 	"github.com/slack-go/slack"
 
 	"github.com/gammons/slk/internal/emoji"
+	"github.com/gammons/slk/internal/slack/mrkdwn"
 )
 
 // RichTextToMrkdwn reconstructs Slack mrkdwn from a parsed rich_text
@@ -25,17 +26,18 @@ func RichTextToMrkdwn(rt RichTextBlock) string {
 	if len(rt.Elements) == 0 {
 		return ""
 	}
+	elems := mrkdwn.Merge(rt.Elements)
 	parts := make([]string, 0, len(rt.Elements))
-	for _, e := range rt.Elements {
+	for _, e := range elems {
 		switch v := e.(type) {
 		case *slack.RichTextSection:
-			parts = append(parts, sectionToMrkdwn(v.Elements))
+			parts = append(parts, strings.TrimSuffix(sectionToMrkdwn(v.Elements), "\n"))
 		case *slack.RichTextList:
 			parts = append(parts, listToMrkdwn(v))
 		case *slack.RichTextPreformatted:
-			parts = append(parts, preformattedToMrkdwn(v.Elements))
+			parts = append(parts, preformattedToMrkdwn(*v))
 		case *slack.RichTextQuote:
-			parts = append(parts, quoteLines(sectionToMrkdwn(v.Elements), v.Border))
+			parts = append(parts, quoteToMrkdwn(*v))
 			// RichTextUnknown is silently dropped — we can't render
 			// content we don't understand, but we don't want it to
 			// crash the conversion either.
@@ -219,23 +221,30 @@ func listToMrkdwn(l *slack.RichTextList) string {
 	for i, child := range l.Elements {
 		body := ""
 		if sec, ok := child.(*slack.RichTextSection); ok {
-			body = sectionToMrkdwn(sec.Elements)
+			// Remove trailing newlines
+			body = strings.Trim(sectionToMrkdwn(sec.Elements), "\n")
+			// Indent all non-first lines of body so they line up with the first one, e.g.
+			// • foo
+			//   bar
+			//   baz
+			body = strings.ReplaceAll(body, "\n", "\n  ")
 		}
 		var marker string
 		if l.Style == slack.RTEListOrdered {
 			marker = strconv.Itoa(l.Offset+i+1) + ". "
 		} else {
-			marker = "• "
+			marker = "- "
 		}
-		lines = append(lines, pad+marker+body)
+		quoteMarker := ""
+		for range l.Border {
+			quoteMarker = "> " + quoteMarker
+		}
+		lines = append(lines, quoteMarker+pad+marker+body)
 	}
 	return strings.Join(lines, "\n")
 }
 
-// preformattedToMrkdwn wraps the section's inline elements in a
-// triple-backtick fence. Inline style flags on text elements inside
-// preformatted blocks are ignored (Slack ignores them on render too).
-func preformattedToMrkdwn(elements []slack.RichTextSectionElement) string {
+func preformattedElementsToMrkdwn(elements []slack.RichTextSectionElement) string {
 	var b strings.Builder
 	for _, e := range elements {
 		switch v := e.(type) {
@@ -249,13 +258,25 @@ func preformattedToMrkdwn(elements []slack.RichTextSectionElement) string {
 			}
 		}
 	}
-	return "```\n" + b.String() + "\n```"
+	return b.String()
 }
 
-func quoteLines(body string, border int) string {
-	prefix := "> "
-	if border == 1 {
-		prefix += "> "
+// preformattedToMrkdwn wraps the section's inline elements in a
+// triple-backtick fence. Inline style flags on text elements inside
+// preformatted blocks are ignored (Slack ignores them on render too).
+func preformattedToMrkdwn(preformatted slack.RichTextPreformatted) string {
+	return strings.Repeat("> ", preformatted.Border) + "```\n" + preformattedElementsToMrkdwn(preformatted.Elements) + "\n```"
+}
+
+// quoteToMrkdwn emits a rich_text_quote as one or more "> " lines.
+// Each "\n" inside the section becomes a line boundary that gets
+// its own "> " prefix.
+func quoteToMrkdwn(quote slack.RichTextQuote) string {
+	body := sectionToMrkdwn(quote.Elements)
+	lines := strings.Split(body, "\n")
+	marker := strings.Repeat("> ", quote.Border+1)
+	for i, l := range lines {
+		lines[i] = marker + l
 	}
-	return prefix + strings.ReplaceAll(body, "\n", "\n"+prefix)
+	return strings.Join(lines, "\n")
 }

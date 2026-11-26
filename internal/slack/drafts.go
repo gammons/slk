@@ -192,7 +192,7 @@ func (c *Client) draftCall(ctx context.Context, method string, form url.Values) 
 
 // draftForm is the fields create and update share.
 func draftForm(w DraftWrite) (url.Values, error) {
-	_, block := mrkdwn.Convert(w.Text)
+	block := mrkdwn.Convert(w.Text)
 	if block == nil {
 		return nil, fmt.Errorf("draft text converts to no block")
 	}

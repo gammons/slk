@@ -23,7 +23,7 @@ func listMessage(ts string) messages.MessageItem {
 	return messages.MessageItem{
 		TS:     ts,
 		UserID: "U_ME",
-		Text:   "a list  • one • two in <#CUJL4QPU0>&lt;https://x.com/|a link&gt;",
+		Text:   "a list  - one - two in <#CUJL4QPU0><https://x.com/|a link>",
 		Blocks: []blocks.Block{blockkit.RichTextBlock{Elements: []slack.RichTextElement{
 			section(text("a list\n")),
 			&slack.RichTextList{Type: slack.RTEList, Style: slack.RTEListBullet, Elements: []slack.RichTextElement{
@@ -35,7 +35,7 @@ func listMessage(ts string) messages.MessageItem {
 	}
 }
 
-const listMessageEdit = "a list\n- one\n- two in #general\n\n[a link](https://x.com/)"
+const listMessageEdit = "a list\n- one\n- two in #general\n[a link](https://x.com/)"
 
 // SLK-330: the box shows the message as it was typed (lines, list,
 // link, channel name), not Slack's flattened text field.

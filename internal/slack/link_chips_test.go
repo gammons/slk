@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gammons/slk/internal/slack/mrkdwn"
+	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gorilla/websocket"
 	"github.com/slack-go/slack"
 )
@@ -121,7 +122,7 @@ func TestChipCandidates(t *testing.T) {
 		{"twice is one lookup", chipURL + " and " + chipURL, []string{chipURL}},
 		{"labelled link stays", "[the issue](" + chipURL + ")", nil},
 		{"wire label stays", "<" + chipURL + "|the issue>", nil},
-		{"bold link stays", "**" + chipURL + "**", nil},
+		{"bold link stays", "*" + chipURL + "*", nil},
 		{"code span stays", "`" + chipURL + "`", nil},
 		{"code block stays", "```\n" + chipURL + "\n```", nil},
 		{"email stays", "mail a@example.com", nil},
@@ -129,7 +130,7 @@ func TestChipCandidates(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, block := mrkdwn.Convert(tc.text)
+			block := mrkdwn.Convert(tc.text)
 			got := chipCandidates(block)
 			if strings.Join(got, " ") != strings.Join(tc.want, " ") {
 				t.Errorf("chipCandidates(%q) = %q, want %q", tc.text, got, tc.want)
@@ -143,7 +144,7 @@ func TestChipCandidates_Capped(t *testing.T) {
 	for i := 0; i < maxLinkChips+3; i++ {
 		parts = append(parts, "https://a.example/"+string(rune('a'+i)))
 	}
-	_, block := mrkdwn.Convert(strings.Join(parts, " "))
+	block := mrkdwn.Convert(strings.Join(parts, " "))
 	if got := chipCandidates(block); len(got) != maxLinkChips {
 		t.Errorf("%d candidates, want %d", len(got), maxLinkChips)
 	}
@@ -212,7 +213,8 @@ func TestParseUnfurlLink_CapturedReplyIsPending(t *testing.T) {
 // slk's ordinary chat.postMessage either). client_msg_id is a fresh UUID.
 func TestChipPostForm_MatchesCapture(t *testing.T) {
 	want := capturedForm(t, "chat_post_message_chip.json")
-	mr, block := mrkdwn.Convert(chipURL)
+	block := mrkdwn.Convert(chipURL)
+	mr := blockkit.RichTextToMrkdwnUser(blockkit.RichTextBlock{Elements: block.Elements})
 	chips := map[string]linkChip{chipURL: capturedChip(t)}
 	applyChips(block, chips)
 	mr = chipMrkdwn(mr, chips)
@@ -228,7 +230,7 @@ func TestChipPostForm_MatchesCapture(t *testing.T) {
 	if id := got.Get("client_msg_id"); !clientMsgIDRe.MatchString(id) {
 		t.Errorf("client_msg_id = %q, want a v4 UUID", id)
 	}
-	if got.Get("text") != "<"+chipURL+"|"+chipTitle+">" {
+	if got.Get("text") != chipURL {
 		t.Errorf("text = %q", got.Get("text"))
 	}
 	notSent := map[string]bool{"ts": true, "type": true, "xArgs": true, "draft_id": true, "client_context_team_id": true, "include_channel_perm_error": true}
@@ -245,7 +247,7 @@ func TestChipPostForm_MatchesCapture(t *testing.T) {
 }
 
 func TestChipPostForm_Reply(t *testing.T) {
-	_, block := mrkdwn.Convert(chipURL)
+	block := mrkdwn.Convert(chipURL)
 	got, err := chipPostForm("C1", "1700000000.000100", true, "x", block, []string{chipURL}, newClientMsgID())
 	if err != nil {
 		t.Fatal(err)
@@ -262,7 +264,7 @@ func TestChipPostForm_Reply(t *testing.T) {
 // Only the element that is a bare link to a chip URL changes; the text
 // around it and links without a chip stay.
 func TestApplyChips_KeepsEverythingElse(t *testing.T) {
-	_, block := mrkdwn.Convert("see " + chipURL + " and https://other.example/x\n- " + chipURL)
+	block := mrkdwn.Convert("see " + chipURL + " and https://other.example/x\n- " + chipURL)
 	applyChips(block, map[string]linkChip{chipURL: capturedChip(t)})
 	raw, err := json.Marshal([]slack.Block{block})
 	if err != nil {

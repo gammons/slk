@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
-	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
 )
 
 // colorEqual compares two color.Color values.
@@ -19,7 +19,7 @@ func colorEqual(a, b color.Color) bool {
 }
 
 func TestApplyDarkDefaults(t *testing.T) {
-	Apply("dark", config.Theme{})
+	Apply("dark", core.Theme{})
 	if !colorEqual(Primary, lipgloss.Color("#4A9EFF")) {
 		t.Errorf("expected dark primary #4A9EFF")
 	}
@@ -29,58 +29,58 @@ func TestApplyDarkDefaults(t *testing.T) {
 }
 
 func TestApplyLightDefaults(t *testing.T) {
-	Apply("light", config.Theme{})
+	Apply("light", core.Theme{})
 	if !colorEqual(Primary, lipgloss.Color("#0366D6")) {
 		t.Errorf("expected light primary #0366D6")
 	}
 	if !colorEqual(Background, lipgloss.Color("#FFFFFF")) {
 		t.Errorf("expected light background #FFFFFF")
 	}
-	Apply("dark", config.Theme{})
+	Apply("dark", core.Theme{})
 }
 
 func TestApplyDracula(t *testing.T) {
-	Apply("dracula", config.Theme{})
+	Apply("dracula", core.Theme{})
 	if !colorEqual(Primary, lipgloss.Color("#BD93F9")) {
 		t.Errorf("expected dracula primary #BD93F9")
 	}
-	Apply("dark", config.Theme{})
+	Apply("dark", core.Theme{})
 }
 
 func TestApplyOverrides(t *testing.T) {
-	Apply("dark", config.Theme{Primary: "#FF0000"})
+	Apply("dark", core.Theme{Primary: "#FF0000"})
 	if !colorEqual(Primary, lipgloss.Color("#FF0000")) {
 		t.Errorf("expected overridden primary #FF0000")
 	}
 	if !colorEqual(Accent, lipgloss.Color("#50C878")) {
 		t.Errorf("expected dark accent #50C878")
 	}
-	Apply("dark", config.Theme{})
+	Apply("dark", core.Theme{})
 }
 
 func TestApplyUnknownPresetFallsToDark(t *testing.T) {
-	Apply("nonexistent", config.Theme{})
+	Apply("nonexistent", core.Theme{})
 	if !colorEqual(Primary, lipgloss.Color("#4A9EFF")) {
 		t.Errorf("expected dark fallback primary #4A9EFF")
 	}
 }
 
 func TestApplyCaseInsensitive(t *testing.T) {
-	Apply("Dracula", config.Theme{})
+	Apply("Dracula", core.Theme{})
 	if !colorEqual(Primary, lipgloss.Color("#BD93F9")) {
 		t.Errorf("expected dracula primary #BD93F9")
 	}
-	Apply("dark", config.Theme{})
+	Apply("dark", core.Theme{})
 }
 
 func TestCurrentThemeReportsDisplayName(t *testing.T) {
-	t.Cleanup(func() { Apply("dark", config.Theme{}) })
+	t.Cleanup(func() { Apply("dark", core.Theme{}) })
 	for _, tc := range []struct{ applied, want string }{
 		{"dracula", "Dracula"},
 		{"ANSI Dark", "ANSI Dark"},
 		{"nonexistent", "Dark"},
 	} {
-		Apply(tc.applied, config.Theme{})
+		Apply(tc.applied, core.Theme{})
 		if got := CurrentTheme(); got != tc.want {
 			t.Errorf("after Apply(%q): CurrentTheme() = %q, want %q", tc.applied, got, tc.want)
 		}
@@ -97,7 +97,7 @@ func TestCurrentThemeRoundTripsEveryListedTheme(t *testing.T) {
 	saved := maps.Clone(customThemes)
 	t.Cleanup(func() {
 		customThemes = saved
-		Apply("dark", config.Theme{})
+		Apply("dark", core.Theme{})
 	})
 	colors := ThemeColors{Primary: "#AABBCC", Background: "#000000", Text: "#FFFFFF"}
 	RegisterCustomTheme("My Cycle Theme", colors)
@@ -113,7 +113,7 @@ func TestCurrentThemeRoundTripsEveryListedTheme(t *testing.T) {
 		t.Error("ThemeNames() lists the built-in Dracula next to the custom theme that overrides it")
 	}
 	for _, name := range names {
-		Apply(name, config.Theme{})
+		Apply(name, core.Theme{})
 		if got := CurrentTheme(); got != name {
 			t.Errorf("after Apply(%q): CurrentTheme() = %q, want the listed name", name, got)
 		}
@@ -137,7 +137,7 @@ func TestThemeNames(t *testing.T) {
 }
 
 func TestApply_DefaultsSelectionColors(t *testing.T) {
-	Apply("dracula", config.Theme{})
+	Apply("dracula", core.Theme{})
 	if SelectionBackground == nil {
 		t.Fatal("SelectionBackground must be non-nil after Apply (use sensible default when theme omits it)")
 	}
@@ -159,7 +159,7 @@ func TestApply_CustomSelectionFromTheme(t *testing.T) {
 		SelectionBackground: "#FF00FF",
 		SelectionForeground: "#00FF00",
 	})
-	Apply("seltest", config.Theme{})
+	Apply("seltest", core.Theme{})
 	r, g, b, _ := SelectionBackground.RGBA()
 	if r>>8 != 0xFF || g>>8 != 0x00 || b>>8 != 0xFF {
 		t.Fatalf("custom SelectionBackground not applied: got %02x%02x%02x", r>>8, g>>8, b>>8)
@@ -180,9 +180,9 @@ func TestApply_ResetsSelectionColorsBetweenThemes(t *testing.T) {
 		SelectionBackground: "#ABCDEF",
 		SelectionForeground: "#FEDCBA",
 	})
-	Apply("seltest2", config.Theme{})
+	Apply("seltest2", core.Theme{})
 	// Now apply a theme that does NOT specify selection colors.
-	Apply("dracula", config.Theme{})
+	Apply("dracula", core.Theme{})
 	// SelectionBackground should not still be #ABCDEF.
 	r, g, b, _ := SelectionBackground.RGBA()
 	if r>>8 == 0xAB && g>>8 == 0xCD && b>>8 == 0xEF {
@@ -199,7 +199,7 @@ func TestUserColorDeterministic(t *testing.T) {
 }
 
 func TestUserColorEmptyFallback(t *testing.T) {
-	Apply("dark", config.Theme{})
+	Apply("dark", core.Theme{})
 	if !colorEqual(UserColor(""), Primary) {
 		t.Fatal("empty userID must fall back to Primary")
 	}
@@ -218,7 +218,7 @@ func TestUserColorPaletteSpread(t *testing.T) {
 }
 
 func TestUsernameColoredToggle(t *testing.T) {
-	Apply("dark", config.Theme{})
+	Apply("dark", core.Theme{})
 	// colored=false → Primary foreground
 	s := Username("U123", false)
 	if !colorEqual(s.GetForeground(), Primary) {
@@ -244,7 +244,7 @@ func TestApply_UsernameAndSidebarSelectedFromTheme(t *testing.T) {
 		Border: "#DDDDDD", SidebarText: "#1D1C1D",
 		Username: "#1D1C1D", SidebarSelectedBg: "#333133",
 	})
-	Apply("slacklike", config.Theme{})
+	Apply("slacklike", core.Theme{})
 	if !colorEqual(Username("U123", false).GetForeground(), lipgloss.Color("#1D1C1D")) {
 		t.Fatal("username role not applied")
 	}
@@ -259,7 +259,7 @@ func TestApply_UsernameAndSidebarSelectedFromTheme(t *testing.T) {
 		t.Fatal("badge must keep the selection colors when mention_badge_bg is unset")
 	}
 
-	Apply("dark", config.Theme{})
+	Apply("dark", core.Theme{})
 	if SidebarSelectedBg != nil || !colorEqual(UsernameColor, Primary) {
 		t.Fatal("username / sidebar_selected_bg leaked into a theme without them")
 	}
@@ -272,13 +272,13 @@ func TestMentionBadgeStyle_ThemeRole(t *testing.T) {
 		SurfaceDark: "#F2F2F2", Text: "#1D1C1D", TextMuted: "#616061",
 		Border: "#DDDDDD", MentionBadgeBg: "#C01343", MentionBadgeFg: "#FFFFFF",
 	})
-	defer Apply("dark", config.Theme{})
-	Apply("badgetest", config.Theme{})
+	defer Apply("dark", core.Theme{})
+	Apply("badgetest", core.Theme{})
 	s := MentionBadgeStyle()
 	if !colorEqual(s.GetBackground(), lipgloss.Color("#C01343")) || !colorEqual(s.GetForeground(), lipgloss.Color("#FFFFFF")) {
 		t.Fatalf("badge = %v on %v, want #FFFFFF on #C01343", s.GetForeground(), s.GetBackground())
 	}
-	Apply("dark", config.Theme{})
+	Apply("dark", core.Theme{})
 	if MentionBadgeBg != nil || !colorEqual(MentionBadgeStyle().GetBackground(), SelectionBackground) {
 		t.Fatal("mention_badge_bg leaked into a theme without it")
 	}
@@ -289,7 +289,7 @@ func TestMentionBadgeStyle_ThemeRole(t *testing.T) {
 // Primary-on-Background when a theme omits the pair, so the style is
 // never blank.
 func TestMentionBadgeStyle_UsesThemeSelectionColors(t *testing.T) {
-	Apply("dark", config.Theme{})
+	Apply("dark", core.Theme{})
 	s := MentionBadgeStyle()
 	if !colorEqual(s.GetBackground(), SelectionBackground) {
 		t.Errorf("background = %v, want SelectionBackground %v", s.GetBackground(), SelectionBackground)
@@ -302,10 +302,10 @@ func TestMentionBadgeStyle_UsesThemeSelectionColors(t *testing.T) {
 // Switching themes must change the badge. A package-level var composed at
 // init time would not, which is why this is a function.
 func TestMentionBadgeStyle_TracksThemeChange(t *testing.T) {
-	Apply("dark", config.Theme{})
+	Apply("dark", core.Theme{})
 	darkBg := MentionBadgeStyle().GetBackground()
 
-	Apply("light", config.Theme{})
+	Apply("light", core.Theme{})
 	lightBg := MentionBadgeStyle().GetBackground()
 
 	if colorEqual(darkBg, lightBg) {
@@ -313,13 +313,13 @@ func TestMentionBadgeStyle_TracksThemeChange(t *testing.T) {
 	}
 
 	// Restore the default so later tests in this package see a known theme.
-	Apply("dark", config.Theme{})
+	Apply("dark", core.Theme{})
 }
 
 // An explicit theme override for the selection pair must reach the badge.
 func TestMentionBadgeStyle_HonorsSelectionOverride(t *testing.T) {
-	Apply("dark", config.Theme{})
-	defer Apply("dark", config.Theme{})
+	Apply("dark", core.Theme{})
+	defer Apply("dark", core.Theme{})
 
 	SelectionBackground = lipgloss.Color("#123456")
 	SelectionForeground = lipgloss.Color("#ABCDEF")
@@ -335,8 +335,8 @@ func TestMentionBadgeStyle_HonorsSelectionOverride(t *testing.T) {
 // Mention colors default to Warning (Slack's gold) and follow the theme
 // when it sets them; switching back drops the theme's values.
 func TestMentionColors_DefaultAndThemeRole(t *testing.T) {
-	defer Apply("dark", config.Theme{})
-	Apply("dark", config.Theme{})
+	defer Apply("dark", core.Theme{})
+	Apply("dark", core.Theme{})
 	bg, fg := SelfMentionColors()
 	if !colorEqual(bg, Warning) || !colorEqual(fg, ThemeBackground()) {
 		t.Errorf("self mention = %v on %v, want Background on Warning", fg, bg)
@@ -355,7 +355,7 @@ func TestMentionColors_DefaultAndThemeRole(t *testing.T) {
 		SelfMentionBg: "#111111", SelfMentionFg: "#222222",
 		MentionHighlightBg: "#333333", MentionHighlightBar: "#444444",
 	})
-	Apply("mentiontest", config.Theme{})
+	Apply("mentiontest", core.Theme{})
 	bg, fg = SelfMentionColors()
 	for _, c := range []struct {
 		name      string
@@ -371,7 +371,7 @@ func TestMentionColors_DefaultAndThemeRole(t *testing.T) {
 		}
 	}
 
-	Apply("dark", config.Theme{})
+	Apply("dark", core.Theme{})
 	if !colorEqual(MentionHighlightBar(), Warning) {
 		t.Error("mention_highlight_bar leaked into a theme without it")
 	}

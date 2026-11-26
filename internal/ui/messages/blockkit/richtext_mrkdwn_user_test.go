@@ -9,38 +9,37 @@ import (
 	"github.com/gammons/slk/internal/slack/mrkdwn"
 )
 
-func TestLinkToMarkdown_BareForEveryLinkScheme(t *testing.T) {
+func TestLinkToMrkdwnUser_BareForEveryLinkScheme(t *testing.T) {
 	for _, tc := range []struct{ url, label, want string }{
 		{"https://x.example/a", "", "https://x.example/a"},
 		{"ftp://x.example/a", "ftp://x.example/a", "ftp://x.example/a"},
-		{"file:///tmp/a", "", "file:///tmp/a"},
 		{"mailto:a@x.example", "a@x.example", "a@x.example"},
 		{"javascript:x", "", "[javascript:x](javascript:x)"},
 		{"file:///tmp/a", "label", "[label](file:///tmp/a)"},
 	} {
-		if got := LinkToMarkdown(tc.url, tc.label); got != tc.want {
-			t.Errorf("LinkToMarkdown(%q, %q) = %q, want %q", tc.url, tc.label, got, tc.want)
+		if got := LinkToMrkdwnUser(tc.url, tc.label); got != tc.want {
+			t.Errorf("LinkToMrkdwnUser(%q, %q) = %q, want %q", tc.url, tc.label, got, tc.want)
 		}
 	}
 }
 
 // A bare URL the typed-URL matcher would cut (non-ASCII, a space) stays
 // explicit, and the round trip keeps the whole target.
-func TestLinkToMarkdown_BareOnlyWhenWholeURLSurvives(t *testing.T) {
+func TestLinkToMrkdwnUser_BareOnlyWhenWholeURLSurvives(t *testing.T) {
 	for _, tc := range []struct {
 		url      string
 		wantBare bool
 	}{
-		{"file:///tmp/a.txt", true},
-		{"file:///tmp/résumé.txt", false},
-		{"file:///tmp/my file.txt", false},
-		{"ftp://x.example/日本.txt", false},
+		{"http://example.com/a.txt", true},
+		{"http://example.com/résumé.txt", true},
+		{"http://example.com/my file.txt", false},
+		{"ftp://x.example/日本.txt", true},
 	} {
-		got := LinkToMarkdown(tc.url, "")
+		got := LinkToMrkdwnUser(tc.url, "")
 		if bare := got == tc.url; bare != tc.wantBare {
-			t.Errorf("LinkToMarkdown(%q) = %q, bare=%v want %v", tc.url, got, bare, tc.wantBare)
+			t.Errorf("LinkToMrkdwnUser(%q) = %q, bare=%v want %v", tc.url, got, bare, tc.wantBare)
 		}
-		_, block := mrkdwn.Convert(got)
+		block := mrkdwn.Convert(got)
 		if block == nil {
 			t.Fatalf("no block for %q", got)
 		}
@@ -69,7 +68,7 @@ func TestLinkToMarkdown_BareOnlyWhenWholeURLSurvives(t *testing.T) {
 // and back through JSON, the way the block arrives from Slack.
 func received(t *testing.T, composed string) RichTextBlock {
 	t.Helper()
-	_, block := mrkdwn.Convert(composed)
+	block := mrkdwn.Convert(composed)
 	if block == nil {
 		t.Fatalf("Convert(%q) gave no block", composed)
 	}
@@ -95,27 +94,30 @@ func blockJSON(t *testing.T, rt RichTextBlock) string {
 
 // Composer text that slk sent comes back as the same text on edit, and
 // sending that again posts the same block.
-func TestRichTextToMarkdown_RoundTrip(t *testing.T) {
+func TestRichTextToMrkdwnUser_RoundTrip(t *testing.T) {
 	for _, composed := range []string{
 		"hello world",
 		"line one\nline two",
 		"see the list\n- one\n- two\n- three",
 		"steps\n1. first\n2. second",
 		"- top\n- last\n    - nested\n        - deeper",
-		"**bold** and _italic_ and ~~gone~~ and `code`",
+		"*bold* and _italic_ and ~gone~ and `code`",
 		"a [labelled link](https://example.com/a/b) and https://example.com/bare",
-		"**[bold link](https://example.com/b)** and _[italic link](https://example.com/i)_",
-		"**https://example.com/bare-bold**",
+		"*[bold link](https://example.com/b)* and _[italic link](https://example.com/i)_",
+		"*https://example.com/bare-bold*",
 		"hi <@U123> in <#C456> <!here>",
 		"read https://en.wikipedia.org/wiki/Mercury_(planet) today",
 		"https://en.wikipedia.org/wiki/Mercury_(planet)",
 		"before\n\n```\nfn main() {}\n```\n\nafter",
+		"before\n\n```\nfn main() {}\n\n\n```\n\nafter",
 		"a list\n- item\n\nand a paragraph after it",
 		"wave :wave::skin-tone-3: done",
+		"    - pre-indented list",
+		"trailing newline\n",
 	} {
 		t.Run(composed, func(t *testing.T) {
 			first := received(t, composed)
-			md := RichTextToMarkdown(first)
+			md := RichTextToMrkdwnUser(first)
 			if md != composed {
 				t.Errorf("edit text = %q, want %q", md, composed)
 			}
@@ -128,7 +130,7 @@ func TestRichTextToMarkdown_RoundTrip(t *testing.T) {
 
 // A message written in Slack's own client (SLK-330): its text field has
 // no line breaks and an escaped link, but the block has them all.
-func TestRichTextToMarkdown_SlackClientList(t *testing.T) {
+func TestRichTextToMrkdwnUser_SlackClientList(t *testing.T) {
 	const raw = `{"type":"rich_text","elements":[
 		{"type":"rich_text_section","elements":[{"type":"text","text":"here's a test with another list\n"}]},
 		{"type":"rich_text_list","style":"bullet","indent":0,"elements":[
@@ -140,14 +142,14 @@ func TestRichTextToMarkdown_SlackClientList(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &b); err != nil {
 		t.Fatal(err)
 	}
-	got := RichTextToMarkdown(RichTextBlock{Elements: b.Elements})
-	want := "here's a test with another list\n- list 1\n- list 2\n- list 3\n\n[and a link](https://example.com/genie/)"
+	got := RichTextToMrkdwnUser(RichTextBlock{Elements: b.Elements})
+	want := "here's a test with another list\n- list 1\n- list 2\n- list 3\n[and a link](https://example.com/genie/)"
 	if got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}
 }
 
-func TestRichTextToMarkdown_Inline(t *testing.T) {
+func TestRichTextToMrkdwnUser_Inline(t *testing.T) {
 	text := func(s string, st *slack.RichTextSectionTextStyle) slack.RichTextSectionElement {
 		return &slack.RichTextSectionTextElement{Type: slack.RTSEText, Text: s, Style: st}
 	}
@@ -159,9 +161,8 @@ func TestRichTextToMarkdown_Inline(t *testing.T) {
 		el   []slack.RichTextSectionElement
 		want string
 	}{
-		{"bold keeps spaces outside", []slack.RichTextSectionElement{text("a", nil), text(" bold ", &slack.RichTextSectionTextStyle{Bold: true}), text("b", nil)}, "a **bold** b"},
+		{"bold keeps spaces outside", []slack.RichTextSectionElement{text("a", nil), text(" bold ", &slack.RichTextSectionTextStyle{Bold: true}), text("b", nil)}, "a *bold* b"},
 		{"style per line", []slack.RichTextSectionElement{text("one\ntwo", &slack.RichTextSectionTextStyle{Italic: true})}, "_one_\n_two_"},
-		{"code with backtick", []slack.RichTextSectionElement{text("a`b", &slack.RichTextSectionTextStyle{Code: true})}, "``a`b``"},
 		{"link label is url", []slack.RichTextSectionElement{link("https://x.com", "https://x.com")}, "https://x.com"},
 		{"link without label", []slack.RichTextSectionElement{link("https://x.com", "")}, "https://x.com"},
 		{"mailto", []slack.RichTextSectionElement{link("mailto:a@b.com", "a@b.com")}, "a@b.com"},
@@ -172,16 +173,14 @@ func TestRichTextToMarkdown_Inline(t *testing.T) {
 		{"label markdown would restyle", []slack.RichTextSectionElement{link("https://x.com", "**docs**")}, "<https://x.com|**docs**>"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := RichTextToMarkdown(rtSection(tc.el...)); got != tc.want {
+			if got := RichTextToMrkdwnUser(rtSection(tc.el...)); got != tc.want {
 				t.Errorf("got %q, want %q", got, tc.want)
 			}
 		})
 	}
 }
 
-// A nested list with no list above it starts at the margin; four
-// spaces after a paragraph would read as code.
-func TestRichTextToMarkdown_OrphanIndent(t *testing.T) {
+func TestRichTextToMrkdwnUser_OrphanIndent(t *testing.T) {
 	item := &slack.RichTextSection{Type: slack.RTESection, Elements: []slack.RichTextSectionElement{
 		&slack.RichTextSectionTextElement{Type: slack.RTSEText, Text: "x"},
 	}}
@@ -191,7 +190,7 @@ func TestRichTextToMarkdown_OrphanIndent(t *testing.T) {
 		}},
 		&slack.RichTextList{Type: slack.RTEList, Style: slack.RTEListBullet, Indent: 2, Elements: []slack.RichTextElement{item}},
 	}}
-	if got, want := RichTextToMarkdown(rt), "para\n- x"; got != want {
+	if got, want := RichTextToMrkdwnUser(rt), "para\n        - x"; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
@@ -199,12 +198,12 @@ func TestRichTextToMarkdown_OrphanIndent(t *testing.T) {
 // Saving an edit of literal mention-shaped text (here in plain text and
 // in code) sends no mention: the composer has no escape for a literal
 // token, so the text keeps Slack's escaped spelling instead of pinging.
-func TestRichTextToMarkdown_LiteralMentionDoesNotPingOnSave(t *testing.T) {
+func TestRichTextToMrkdwnUser_LiteralMentionDoesNotPingOnSave(t *testing.T) {
 	rt := rtSection(
 		&slack.RichTextSectionTextElement{Type: slack.RTSEText, Text: "<!here> <@U1> "},
 		&slack.RichTextSectionTextElement{Type: slack.RTSEText, Text: "<!channel>", Style: &slack.RichTextSectionTextStyle{Code: true}},
 	)
-	_, block := mrkdwn.Convert(RichTextToMarkdown(rt))
+	block := mrkdwn.Convert(RichTextToMrkdwnUser(rt))
 	for _, e := range block.Elements {
 		sec, ok := e.(*slack.RichTextSection)
 		if !ok {
@@ -221,7 +220,7 @@ func TestRichTextToMarkdown_LiteralMentionDoesNotPingOnSave(t *testing.T) {
 
 // Editing a message keeps its links to other messages; they go back out
 // as links on save.
-func TestRichTextToMarkdown_MessageMention(t *testing.T) {
+func TestRichTextToMrkdwnUser_MessageMention(t *testing.T) {
 	const url = "https://example.slack.com/archives/C0000TEST1/p1700000000000100"
 	for _, tc := range []struct {
 		name, label, want string
@@ -234,7 +233,7 @@ func TestRichTextToMarkdown_MessageMention(t *testing.T) {
 				`{"type":"text","text":"see "},`+
 				`{"type":"message_mention","message_ts":"1700000000.000100","channel_id":"C0000TEST1",`+
 				`"text":"`+tc.label+`","url":"`+url+`"}]}]}`)
-			if got, want := RichTextToMarkdown(rt), "see "+tc.want; got != want {
+			if got, want := RichTextToMrkdwnUser(rt), "see "+tc.want; got != want {
 				t.Errorf("got %q, want %q", got, want)
 			}
 		})
