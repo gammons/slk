@@ -216,7 +216,8 @@ func TestCollapsedHeader_SelectedVariantCarriesBothFigures(t *testing.T) {
 		}
 	})
 
-	// Nav is [Threads, Activity, Channels header].
+	// Nav is [Threads, Drafts, Activity, Channels header].
+	m.MoveDown() // Drafts
 	m.MoveDown() // Activity
 	m.MoveDown() // Channels header
 	if name, ok := m.IsSectionHeaderSelected(); !ok || name != "Channels" {

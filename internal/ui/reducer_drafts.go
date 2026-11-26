@@ -9,6 +9,8 @@ import tea "charm.land/bubbletea/v2"
 
 var reduceDrafts reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	switch m := msg.(type) {
+	case DraftsViewActivatedMsg:
+		return a.openDraftsView(m.KeepFocus), true
 	case DraftsStaleMsg:
 		return a.loadDraftsCmd(m.TeamID), true
 	case draftsLoadedMsg:

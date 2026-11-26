@@ -34,6 +34,7 @@ import (
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/draftlist"
+	"github.com/gammons/slk/internal/ui/draftsview"
 	"github.com/gammons/slk/internal/ui/emojipicker"
 	"github.com/gammons/slk/internal/ui/help"
 	"github.com/gammons/slk/internal/ui/imgrender"
@@ -76,6 +77,8 @@ type View int
 const (
 	ViewChannels View = iota
 	ViewThreads
+	// ViewDrafts swaps the pane's contents for the workspace's drafts.
+	ViewDrafts
 	// ViewActivity swaps the pane's contents for the Activity feed
 	// (mentions, thread replies, reactions to your messages, DMs).
 	ViewActivity
@@ -148,6 +151,7 @@ type App struct {
 	threadPanel      *thread.Model
 	threadCompose    compose.Model
 	threadsView      threadsview.Model
+	draftsView       draftsview.Model
 	activityView     activityview.Model
 	// appHome is the Home tab of the app DM on screen, shown in place of
 	// the messages pane while view is ViewAppHome. appHomeChannelID is
@@ -1062,6 +1066,7 @@ func NewApp() *App {
 		threadPanel:           thread.New(),
 		threadCompose:         compose.New("thread"),
 		threadsView:           threadsview.New(nil, ""),
+		draftsView:            draftsview.New(),
 		activityView:          activityview.New(nil, ""),
 		appHome:               apphome.New(),
 		appView:               appview.New(),
@@ -1947,6 +1952,10 @@ func (a *App) handleDown() tea.Cmd {
 			// don't fire one conversations.replies call per row.
 			return a.openSelectedThreadCmd(true)
 		}
+		if a.view == ViewDrafts {
+			a.draftsView.MoveDown()
+			return nil
+		}
 		if a.view == ViewActivity {
 			a.activityView.MoveDown()
 			return nil
@@ -1973,6 +1982,10 @@ func (a *App) handleUp() tea.Cmd {
 			a.threadsView.MoveUp()
 			// k: same debounce as j — see handleDown.
 			return a.openSelectedThreadCmd(true)
+		}
+		if a.view == ViewDrafts {
+			a.draftsView.MoveUp()
+			return nil
 		}
 		if a.view == ViewActivity {
 			a.activityView.MoveUp()
@@ -2100,6 +2113,10 @@ func (a *App) handleGoToTop() tea.Cmd {
 			// gg is a one-shot jump — fire the fetch immediately.
 			return a.openSelectedThreadCmd(false)
 		}
+		if a.view == ViewDrafts {
+			a.draftsView.GoToTop()
+			return nil
+		}
 		if a.view == ViewActivity {
 			a.activityView.GoToTop()
 			return nil
@@ -2127,6 +2144,10 @@ func (a *App) handleGoToBottom() tea.Cmd {
 			a.threadsView.GoToBottom()
 			// G is a one-shot jump — fire the fetch immediately.
 			return a.openSelectedThreadCmd(false)
+		}
+		if a.view == ViewDrafts {
+			a.draftsView.GoToBottom()
+			return nil
 		}
 		if a.view == ViewActivity {
 			a.activityView.GoToBottom()
@@ -2204,6 +2225,12 @@ func (a *App) scrollFocusedPanel(delta int) tea.Cmd {
 				a.threadsView.ScrollUp(n)
 			} else {
 				a.threadsView.ScrollDown(n)
+			}
+		} else if a.view == ViewDrafts {
+			if delta < 0 {
+				a.draftsView.ScrollUp(n)
+			} else {
+				a.draftsView.ScrollDown(n)
 			}
 		} else if a.view == ViewActivity {
 			if delta < 0 {
@@ -2310,6 +2337,9 @@ func (a *App) handleEnter() tea.Cmd {
 		if a.sidebar.IsThreadsSelected() {
 			return func() tea.Msg { return ThreadsViewActivatedMsg{KeepFocus: keep} }
 		}
+		if a.sidebar.IsDraftsSelected() {
+			return func() tea.Msg { return DraftsViewActivatedMsg{KeepFocus: keep} }
+		}
 		if a.sidebar.IsActivitySelected() {
 			return func() tea.Msg { return ActivityViewActivatedMsg{KeepFocus: keep} }
 		}
@@ -2344,6 +2374,10 @@ func (a *App) handleEnter() tea.Cmd {
 	// messages-pane slot renders the activityView model, so route the
 	// selection explicitly rather than falling through to the channel
 	// message pane below.
+	if a.focusedPanel == PanelMessages && a.view == ViewDrafts {
+		return a.openSelectedDraft()
+	}
+
 	if a.focusedPanel == PanelMessages && a.view == ViewActivity {
 		it, ok := a.activityView.SelectedItem()
 		if !ok {
@@ -4407,7 +4441,7 @@ func (a *App) collectSixelPlacements(frame panelLayoutFrame) []imgpkg.SixelPlace
 	}
 	var out []imgpkg.SixelPlacement
 	// The channel windows draw messages only in the channels view; the
-	// Threads and Activity views put their lists there instead. The
+	// Threads, Drafts and Activity views put their lists there instead. The
 	// thread pane is drawn the same in every view, so it is not gated.
 	if a.view == ViewChannels && frame.MsgWidth > 0 {
 		// The same bounds renderWindowsRegion uses, so leaf rectangles

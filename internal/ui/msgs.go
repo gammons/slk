@@ -223,6 +223,12 @@ type (
 	ThreadsListDirtyMsg struct {
 		TeamID string
 	}
+	// DraftsViewActivatedMsg is dispatched when the user picks the
+	// synthetic Drafts sidebar row. The App switches the message pane
+	// to the drafts list. Mirrors ThreadsViewActivatedMsg.
+	DraftsViewActivatedMsg struct {
+		KeepFocus bool // as on ChannelSelectedMsg
+	}
 	// ActivityViewActivatedMsg is dispatched when the user picks the
 	// synthetic Activity sidebar row (or runs :activity). The App
 	// switches the message pane to the Activity view and fetches the

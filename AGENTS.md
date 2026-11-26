@@ -300,7 +300,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Name a navigable position (workspace, channel, message, thread reply) | `ui.Location`; `(*App).currentLocation` / `currentPosition` snapshot where the user is |
 | Navigate to a `Location` (history walk, mark jump, permalink) | `(*App).applyLocation(loc, fromHistory)` (`internal/ui/reducer_links.go`); goes through `pendingLinkNav`, so it waits for the channel and thread to load, and refuses while an upload is in flight |
 | Persistent marks in the cache | `(*cache.DB).UpsertMark` / `ListMarks` / `DeleteMark`, keyed by workspace and letter |
-| The `:drafts` dialog | `internal/ui/draftlist` (`Row`, `HandleKey` → `Jump`/`Delete` + index); glue in `internal/ui/drafts_list.go` (`refreshDraftList`, `draftListItems` is the order shown, `draftLabel`, `draftAge`, `draftMarker`); a draft's text as the Preview column and the delete-confirm body show it: `(*App).draftRowPreview(d)` |
+| The `:drafts` dialog and the sidebar Drafts view | `internal/ui/draftlist` (`Row`, `HandleKey` → `Jump`/`Delete` + index) is the dialog; `internal/ui/draftsview` is the pane the sidebar's ✎ Drafts row opens (directly under Threads; `j`/`k`/`gg`/`G`/paging, Enter jumps, `d` deletes). Both read the same rows from `internal/ui/drafts_list.go` (`refreshDraftList`, `draftListItems` is the order shown, `draftLabel`, `draftAge`, `draftMarker`); a draft's text as the Preview column and the delete-confirm body show it: `(*App).draftRowPreview(d)`. The sidebar badge is `sidebar.Model.SetDraftsCount` |
 
 ### App state and actions
 

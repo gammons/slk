@@ -181,6 +181,14 @@ func reduceMouseWheel(a *App, m tea.MouseWheelMsg) tea.Cmd {
 			// does not change the highlighted thread card.
 			return nil
 		}
+		if a.view == ViewDrafts {
+			if up {
+				a.draftsView.ScrollUp(wheelLinesPerNotch)
+			} else {
+				a.draftsView.ScrollDown(wheelLinesPerNotch)
+			}
+			return nil
+		}
 		if a.view == ViewActivity {
 			if up {
 				a.activityView.ScrollUp(wheelLinesPerNotch)
@@ -251,7 +259,7 @@ func scrollActiveModal(a *App, up bool) tea.Cmd {
 // so a placeholder window PanelAt maps onto the live pane cannot fire
 // it. A hit toggles the star through the same path /star uses.
 func (a *App) headerStarClick(screenX, screenY int) (tea.Cmd, bool) {
-	if a.preview.Active() || a.view == ViewThreads || a.view == ViewActivity {
+	if a.preview.Active() || a.view == ViewThreads || a.view == ViewDrafts || a.view == ViewActivity {
 		return nil, false
 	}
 	panel, px, py, ok := a.panelAt(screenX, screenY)
@@ -347,6 +355,9 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		if a.sidebar.IsThreadsSelected() {
 			return func() tea.Msg { return ThreadsViewActivatedMsg{} }
 		}
+		if a.sidebar.IsDraftsSelected() {
+			return func() tea.Msg { return DraftsViewActivatedMsg{} }
+		}
 		if a.sidebar.IsActivitySelected() {
 			return func() tea.Msg { return ActivityViewActivatedMsg{} }
 		}
@@ -408,6 +419,13 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		// activityView; route the click through activityView.ClickAt so
 		// the cursor follows, then open the highlighted item (mirrors
 		// the ViewThreads branch and the j/k/Enter paths).
+		if a.view == ViewDrafts {
+			panel, _, py, ok := a.panelAt(m.X, m.Y)
+			if ok && panel == PanelMessages && py >= 0 && a.draftsView.ClickAt(py) {
+				return a.openSelectedDraft()
+			}
+			return nil
+		}
 		if a.view == ViewActivity {
 			panel, _, py, ok := a.panelAt(m.X, m.Y)
 			if ok && panel == PanelMessages && py >= 0 && a.activityView.ClickAt(py) {

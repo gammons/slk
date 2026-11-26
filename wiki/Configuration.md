@@ -102,7 +102,7 @@ quiet_hours = "22:00-08:00"   # planned
 
 [sidebar]
 right_align_badges = false  # true: mention badges at the right end of the row (Slack),
-                            # and the Threads and Activity counts as red badges there
+                            # and the Threads, Drafts and Activity counts as red badges there
 channel_indent = 0          # cells to indent the rows under each section header (0-6)
 slack_style = false         # true: Slack's look: no ▾ on open sections, plain headers,
                             # no unread dot (bold only), names sorted ignoring punctuation
@@ -117,7 +117,7 @@ start_collapsed = false     # true: every section starts collapsed (Space/Enter
 show_unread_in_collapsed = false  # true: a collapsed section still lists its
                                   # unread channels (and the open one)
 enter_keeps_focus = false   # true: Enter opens a conversation (or Threads,
-                            # Activity, or a workspace in the rail) but keeps
+                            # Drafts, Activity, or a workspace in the rail) but keeps
                             # focus in the list, to skim with j/k; l moves on
 
 [compose]

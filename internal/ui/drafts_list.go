@@ -26,6 +26,47 @@ func cmdDrafts(a *App, _ commandArgs) tea.Cmd {
 	return a.loadDraftsCmd(a.activeTeamID)
 }
 
+// openDraftsView switches the message pane to the Drafts list. The
+// sidebar's ✎ Drafts row and a click on it both come here. With draft
+// sync off it refuses, the same way :drafts does, and leaves the pane
+// where it was.
+func (a *App) openDraftsView(keepFocus bool) tea.Cmd {
+	if a.draftSvc == nil {
+		return toastWithClear(a, "Draft sync is off ([compose] sync_drafts)", 3*time.Second)
+	}
+	a.view = ViewDrafts
+	a.sidebar.SetDraftsActive(true)
+	a.sidebar.SetThreadsActive(false)
+	a.sidebar.SetActivityActive(false)
+	if !keepFocus {
+		a.focusedPanel = PanelMessages
+	}
+	a.refreshDraftList()
+	a.draftsView.GoToTop()
+	return a.loadDraftsCmd(a.activeTeamID)
+}
+
+// openSelectedDraft jumps to the highlighted draft, the same way Enter
+// does in the :drafts dialog.
+func (a *App) openSelectedDraft() tea.Cmd {
+	i, ok := a.draftsView.Selected()
+	if !ok || i >= len(a.draftListItems) {
+		return nil
+	}
+	return a.jumpToDraft(a.draftListItems[i])
+}
+
+// deleteSelectedDraft asks to delete the highlighted draft, the same
+// confirm the :drafts dialog's d key uses.
+func (a *App) deleteSelectedDraft() tea.Cmd {
+	i, ok := a.draftsView.Selected()
+	if !ok || i >= len(a.draftListItems) {
+		return nil
+	}
+	a.confirmDeleteDraft(a.draftListItems[i])
+	return nil
+}
+
 // refreshDraftList rebuilds the dialog's rows. draftListItems keeps the
 // drafts in the order shown, so a key acts on the row it highlights.
 func (a *App) refreshDraftList() {
@@ -42,6 +83,8 @@ func (a *App) refreshDraftList() {
 		})
 	}
 	a.draftList.SetRows(rows)
+	a.draftsView.SetRows(rows)
+	a.sidebar.SetDraftsCount(len(items))
 }
 
 // draftRowPreview is a draft's text as the :drafts dialog shows it:

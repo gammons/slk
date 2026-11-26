@@ -54,6 +54,18 @@ func (a *App) currentLocation() (Location, bool) {
 				MessageTS: ids.MessageTS(s.ThreadTS),
 				ThreadTS:  ids.ThreadTS(s.ThreadTS),
 			}, true
+		case ViewDrafts:
+			i, ok := a.draftsView.Selected()
+			if !ok || i >= len(a.draftListItems) || a.draftListItems[i].Key.ChannelID == "" {
+				return Location{}, false
+			}
+			d := a.draftListItems[i]
+			loc := Location{TeamID: ids.TeamID(d.Key.TeamID), ChannelID: ids.ChannelID(d.Key.ChannelID)}
+			if d.Key.ThreadTS != "" {
+				loc.MessageTS = ids.MessageTS(d.Key.ThreadTS)
+				loc.ThreadTS = ids.ThreadTS(d.Key.ThreadTS)
+			}
+			return loc, true
 		case ViewActivity:
 			return Location{}, false
 		case ViewAppHome:

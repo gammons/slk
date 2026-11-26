@@ -301,7 +301,7 @@ func toastCmd(text string) tea.Cmd { return func() tea.Msg { return ToastMsg{Tex
 // messages-pane slot shows a list, so there is no selected message.
 func (a *App) selectedMessageInFocus() (messages.MessageItem, actionPromptRef, bool) {
 	p, channelID, ok := a.focusedContentPane()
-	if !ok || (a.focusedPanel == PanelMessages && (a.view == ViewActivity || a.view == ViewThreads)) {
+	if !ok || (a.focusedPanel == PanelMessages && (a.view == ViewActivity || a.view == ViewThreads || a.view == ViewDrafts)) {
 		return messages.MessageItem{}, actionPromptRef{}, false
 	}
 	msg, ok := p.SelectedMessage()

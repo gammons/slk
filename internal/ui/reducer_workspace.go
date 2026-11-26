@@ -251,6 +251,9 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 		a.sidebar.SetThreadsActive(false)
 		a.threadsView.SetSummaries(nil)
 		a.sidebar.SetThreadsUnreadCount(0)
+		a.sidebar.SetDraftsActive(false)
+		a.draftsView.SetRows(nil)
+		a.sidebar.SetDraftsCount(len(a.drafts.rows[m.TeamID]))
 		a.sidebar.SetActivityActive(false)
 		a.activityView.SetItems(nil)
 		a.activityView.SetBodies(nil)
@@ -421,9 +424,12 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	// has no channels at all.
 	a.view = ViewChannels
 	a.sidebar.SetThreadsActive(false)
+	a.sidebar.SetDraftsActive(false)
 	a.sidebar.SetActivityActive(false)
 	a.threadsView.SetSummaries(nil)
 	a.sidebar.SetThreadsUnreadCount(0)
+	a.draftsView.SetRows(nil)
+	a.sidebar.SetDraftsCount(len(a.drafts.rows[m.TeamID]))
 	a.activityView.SetItems(nil)
 	a.activityView.SetBodies(nil)
 	// The incoming workspace's badge is its stored activity total, not

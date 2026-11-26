@@ -710,9 +710,12 @@ func (d *draftSync) removeRow(teamID, id string) {
 	d.rows[teamID] = slices.DeleteFunc(slices.Clone(d.rows[teamID]), func(r core.Draft) bool { return r.ID == id })
 }
 
-// draftRowsChanged redraws the Drafts list when it is open.
+// draftRowsChanged redraws the Drafts list when it is open, in the
+// dialog or in the sidebar view, and keeps the sidebar badge in step
+// with how many drafts the workspace has.
 func (a *App) draftRowsChanged() {
-	if a.draftList.IsVisible() {
+	a.sidebar.SetDraftsCount(len(a.drafts.rows[a.activeTeamID]))
+	if a.draftList.IsVisible() || a.view == ViewDrafts {
 		a.refreshDraftList()
 	}
 }

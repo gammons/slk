@@ -228,6 +228,7 @@ type navKind int
 
 const (
 	navThreads navKind = iota
+	navDrafts
 	navActivity
 	navHeader
 	navChannel
@@ -387,8 +388,17 @@ type Model struct {
 	// and the App layer activates the threads view instead.
 	threadsUnread int
 
+	// Synthetic "Drafts" row state. Rendered directly below the Threads
+	// row. Like the Threads row it is selectable via j/k but is NOT a
+	// channel — when the cursor sits on it, SelectedItem/SelectedID
+	// return zero / empty and the App layer activates the Drafts view.
+	// draftsCount is how many drafts the workspace has (the badge), not
+	// an unread count.
+	draftsActive bool
+	draftsCount  int
+
 	// Synthetic "Activity" row state. Rendered directly below the
-	// Threads row. Like the Threads row it is selectable via j/k but is
+	// Drafts row. Like the Threads row it is selectable via j/k but is
 	// NOT a channel — when the cursor sits on it, SelectedItem/SelectedID
 	// return zero / empty and the App layer activates the Activity view.
 	activityUnread int
@@ -914,6 +924,16 @@ func (m *Model) SetThreadsActive(active bool) {
 	m.dirty()
 }
 
+// SetDraftsActive marks the synthetic "Drafts" row as the active
+// destination in the message pane. Mirrors SetThreadsActive.
+func (m *Model) SetDraftsActive(active bool) {
+	if m.draftsActive == active {
+		return
+	}
+	m.draftsActive = active
+	m.dirty()
+}
+
 // SetActivityActive marks the synthetic "Activity" row as the active
 // destination in the message pane. Mirrors SetThreadsActive.
 func (m *Model) SetActivityActive(active bool) {
@@ -963,6 +983,28 @@ func (m *Model) IsThreadsSelected() bool {
 func (m *Model) SelectThreadsRow() {
 	for i, n := range m.nav {
 		if n.kind == navThreads {
+			if m.cursor != i {
+				m.cursor = i
+				m.dirty()
+			}
+			return
+		}
+	}
+}
+
+// IsDraftsSelected reports whether the synthetic "Drafts" row is the
+// selected entry. Mirrors IsThreadsSelected.
+func (m *Model) IsDraftsSelected() bool {
+	if m.cursor < 0 || m.cursor >= len(m.nav) {
+		return false
+	}
+	return m.nav[m.cursor].kind == navDrafts
+}
+
+// SelectDraftsRow moves the cursor to the synthetic Drafts row.
+func (m *Model) SelectDraftsRow() {
+	for i, n := range m.nav {
+		if n.kind == navDrafts {
 			if m.cursor != i {
 				m.cursor = i
 				m.dirty()
@@ -1087,6 +1129,22 @@ func (m *Model) SetThreadsUnreadCount(n int) {
 
 // ThreadsUnreadCount returns the current Threads-row unread badge count.
 func (m *Model) ThreadsUnreadCount() int { return m.threadsUnread }
+
+// SetDraftsCount updates the badge count shown next to the Drafts row.
+// Zero hides the badge, the same as an unread count of zero.
+func (m *Model) SetDraftsCount(n int) {
+	if n < 0 {
+		n = 0
+	}
+	if m.draftsCount != n {
+		m.draftsCount = n
+		m.cacheValid = false
+		m.dirty()
+	}
+}
+
+// DraftsCount returns the current Drafts-row badge count.
+func (m *Model) DraftsCount() int { return m.draftsCount }
 
 // SetActivityUnreadCount updates the badge count shown next to the
 // Activity row. Mirrors SetThreadsUnreadCount.
@@ -1811,6 +1869,8 @@ func (m *Model) currentCursorKey() (cursorKey, bool) {
 	switch n.kind {
 	case navThreads:
 		return cursorKey{kind: navThreads}, true
+	case navDrafts:
+		return cursorKey{kind: navDrafts}, true
 	case navActivity:
 		return cursorKey{kind: navActivity}, true
 	case navHeader:
@@ -1843,8 +1903,9 @@ func (m *Model) rebuildNav() {
 		readState = m.readStateReader()
 	}
 
-	nav := make([]navItem, 0, 2+len(sectionOrder))
+	nav := make([]navItem, 0, 3+len(sectionOrder))
 	nav = append(nav, navItem{kind: navThreads})
+	nav = append(nav, navItem{kind: navDrafts})
 	nav = append(nav, navItem{kind: navActivity})
 	for _, name := range sectionOrder {
 		nav = append(nav, navItem{kind: navHeader, header: name})
@@ -1882,6 +1943,9 @@ func (m *Model) rebuildNavWithCursor(key cursorKey, hadKey bool) {
 	for i, n := range m.nav {
 		switch {
 		case key.kind == navThreads && n.kind == navThreads:
+			m.cursor = i
+			return
+		case key.kind == navDrafts && n.kind == navDrafts:
 			m.cursor = i
 			return
 		case key.kind == navActivity && n.kind == navActivity:
@@ -2009,6 +2073,9 @@ type renderRow struct {
 	// or a collapsed header summing them), for the "Unread mentions"
 	// pills View() floats over the edges when one is scrolled away.
 	mention bool
+	// isDraftsRow flags the synthetic Drafts row so View() can swap in
+	// the `active` variant whenever m.draftsActive is true.
+	isDraftsRow bool
 	// isActivityRow flags the synthetic Activity row so View() can swap
 	// in the `active` variant whenever m.activityActive is true.
 	isActivityRow bool
@@ -2057,11 +2124,14 @@ func (m *Model) buildCache(width int) {
 	headerNavIdx := map[string]int{}
 	channelNavIdx := map[int]int{} // filter idx -> nav idx
 	threadsIdx := -1
+	draftsIdx := -1
 	activityIdx := -1
 	for i, n := range m.nav {
 		switch n.kind {
 		case navThreads:
 			threadsIdx = i
+		case navDrafts:
+			draftsIdx = i
 		case navActivity:
 			activityIdx = i
 		case navHeader:
@@ -2162,7 +2232,46 @@ func (m *Model) buildCache(width int) {
 		isThreadsRow: true,
 	})
 
-	// Synthetic "Activity" row, rendered directly below the Threads row.
+	// Synthetic "Drafts" row, rendered directly below Threads. Same
+	// treatment: the App activates the Drafts view when
+	// IsDraftsSelected() is true. The badge is the draft count.
+	draftsLabel := " ✎ Drafts"
+	draftsCursor := cursorSelected + "✎ Drafts"
+	draftsActiveLabel := activeBorder + "✎ Drafts"
+	if m.draftsCount > 0 {
+		badge := m.countBadge(draftsLabel, m.draftsCount, width, dotStyle)
+		draftsLabel += badge
+		draftsCursor += badge
+		draftsActiveLabel += badge
+	}
+	draftsAttrs := bgAnsi
+	if m.draftsCount > 0 {
+		draftsAttrs += "\x1b[1m"
+	}
+	draftsPill := draftsLabel
+	draftsLabel = messages.ReapplyBgAfterResets(draftsLabel, draftsAttrs)
+	draftsCursor = messages.ReapplyBgAfterResets(draftsCursor, draftsAttrs)
+	draftsActiveLabel = messages.ReapplyBgAfterResets(draftsActiveLabel, draftsAttrs)
+	draftsBaseStyle := styles.ChannelNormal
+	if m.draftsCount > 0 {
+		draftsBaseStyle = styles.ChannelUnread
+	}
+	draftsNormal := draftsBaseStyle.Width(width - 2).Render(draftsLabel)
+	draftsSelectedRow := styles.ChannelSelected.Width(width - 2).Render(draftsCursor)
+	if pillAttrs != "" {
+		draftsSelectedRow = pillRow(draftsPill, width, pillAttrs)
+	}
+	draftsActiveRow := styles.ChannelSelected.Width(width - 2).Render(draftsActiveLabel)
+	m.cacheRows = append(m.cacheRows, renderRow{
+		normal:      draftsNormal,
+		selected:    draftsSelectedRow,
+		active:      draftsActiveRow,
+		height:      1,
+		navIdx:      draftsIdx,
+		isDraftsRow: true,
+	})
+
+	// Synthetic "Activity" row, rendered directly below the Drafts row.
 	// Same treatment as the Threads row (see above): the App layer
 	// activates the Activity view when IsActivitySelected() is true.
 	activityLabel := " ◉ Activity"
@@ -2201,7 +2310,7 @@ func (m *Model) buildCache(width int) {
 		isActivityRow: true,
 	})
 
-	// Blank separator between the Threads/Activity rows and the first
+	// Blank separator between the Threads/Drafts/Activity rows and the first
 	// section (or below them when there are no channels at all).
 	m.cacheRows = append(m.cacheRows, renderRow{height: 1, navIdx: -1})
 
@@ -2811,6 +2920,8 @@ func (m *Model) View(height, width int) string {
 		case r.isThreadsRow && m.threadsActive && r.active != "":
 			// Threads view is the currently displayed view; mark the
 			// Threads row as active with the same orange indicator.
+			visible = append(visible, r.active)
+		case r.isDraftsRow && m.draftsActive && r.active != "":
 			visible = append(visible, r.active)
 		case r.isActivityRow && m.activityActive && r.active != "":
 			// Activity view is the currently displayed view; mark the
