@@ -43,6 +43,50 @@ func TestSixelPainter_PaintsNewPlacement(t *testing.T) {
 	}
 }
 
+// A placement with MarginSGR repaints the cells the sixel cursor advance
+// paints with the terminal default: one column right of the image, and
+// one row below it.
+func TestSixelPainter_RepaintsSixelMarginAfterImage(t *testing.T) {
+	p := NewSixelPainter()
+	pl := pl("a", 5, 12, 2, 4)
+	const margin = "\x1b[48;2;1;2;3m"
+	pl.MarginSGR = margin
+
+	plan := applyPlan(t, p, []SixelPlacement{pl}, "", false)
+	out := string(plan.Bytes)
+	imgAt := strings.Index(out, "\x1bPq")
+	rightAt := strings.Index(out, "\x1b[5;16H"+margin+" ")
+	belowAt := strings.Index(out, "\x1b[7;12H"+margin)
+	if imgAt < 0 || rightAt < 0 || belowAt < 0 {
+		t.Fatalf("margin repaint missing from %q", out)
+	}
+	if !(imgAt < rightAt && imgAt < belowAt) {
+		t.Errorf("margin repaint must follow the image: img=%d right=%d below=%d", imgAt, rightAt, belowAt)
+	}
+	if !strings.Contains(out[belowAt:], "     \x1b[0m") {
+		t.Error("bottom margin does not cover the image's columns plus the corner cell")
+	}
+}
+
+// A margin colour change (selection focus, mention tint) must repaint the
+// avatar even though its image and slot are unchanged.
+func TestSixelPainter_MarginChangeRepaints(t *testing.T) {
+	p := NewSixelPainter()
+	first := pl("a", 5, 12, 2, 4)
+	first.MarginSGR = "\x1b[48;2;1;2;3m"
+	applyPlan(t, p, []SixelPlacement{first}, "", false)
+
+	second := first
+	second.MarginSGR = "\x1b[48;2;4;5;6m"
+	plan := p.Plan([]SixelPlacement{second}, "", false)
+	if plan.Painted != 1 || plan.Erased != 1 {
+		t.Fatalf("painted=%d erased=%d after a margin change, want 1/1", plan.Painted, plan.Erased)
+	}
+	if !strings.Contains(string(plan.Bytes), second.MarginSGR) {
+		t.Errorf("plan does not paint the new margin colour: %q", plan.Bytes)
+	}
+}
+
 // The whole point: an unchanged placement must not be re-emitted. This is
 // what stopped the per-frame 283KB flood.
 func TestSixelPainter_UnchangedPlacementNotRepainted(t *testing.T) {

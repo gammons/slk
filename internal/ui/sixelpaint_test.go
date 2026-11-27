@@ -96,6 +96,33 @@ func TestAbsoluteWindowSixelPlacements_SingleWindowMatchesPanelAtInverse(t *test
 	}
 }
 
+// The margin cells sit right of and below the image. When an image ends
+// against the pane border there is no blank cell to repaint, so the
+// margin must be dropped rather than painting over the border.
+func TestAbsoluteWindowSixelPlacements_ClearsMarginAtRightBorder(t *testing.T) {
+	a := newPanelAtApp()
+	a.height = 24
+	primeChromeHeight(a, 50, 20)
+
+	atEdge := imgpkg.SixelPaint{Key: "k", Row: 0, Rows: 2, Cols: 6, Col: 44, MarginSGR: "m"}
+	got := absoluteWindowSixelPlacements([]imgpkg.SixelPaint{atEdge},
+		a.messagepane.ChromeHeight(), fullRegionRect(a, a.height), a.layout.SidebarEnd())
+	if len(got) != 1 {
+		t.Fatalf("placement rejected; got %d", len(got))
+	}
+	if got[0].MarginSGR != "" {
+		t.Errorf("MarginSGR = %q at the right border, want cleared", got[0].MarginSGR)
+	}
+
+	inset := atEdge
+	inset.Col = 43
+	got = absoluteWindowSixelPlacements([]imgpkg.SixelPaint{inset},
+		a.messagepane.ChromeHeight(), fullRegionRect(a, a.height), a.layout.SidebarEnd())
+	if len(got) != 1 || got[0].MarginSGR != "m" {
+		t.Errorf("inset margin = %+v, want it kept", got)
+	}
+}
+
 func TestAbsoluteWindowSixelPlacements_SingleWindowRejectsPastRightEdge(t *testing.T) {
 	a := newPanelAtApp()
 	a.height = 24

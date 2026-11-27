@@ -881,6 +881,9 @@ func TestView_SixelFullVisibility_PublishesPlacement(t *testing.T) {
 	if p.Key == "" {
 		t.Error("placement has no identity key; the painter cannot detect changes")
 	}
+	if p.MarginSGR != "" {
+		t.Errorf("inline image MarginSGR = %q, want empty: its margin cells are not blank gutter", p.MarginSGR)
+	}
 }
 
 // The published placement's Col must be the message content column

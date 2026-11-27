@@ -469,7 +469,26 @@ func RepaintBgToSelectionTint(s string, focused bool) string {
 // RepaintBgToMentionTint is RepaintBgToSelectionTint for the
 // highlight of a message that mentions the user.
 func RepaintBgToMentionTint(s string) string {
-	return repaintBg(s, bgANSIFor(styles.MentionHighlightBg()))
+	return repaintBg(s, MentionTintBgANSI())
+}
+
+// MentionTintBgANSI returns the background ANSI for a row that mentions
+// the user.
+func MentionTintBgANSI() string {
+	return bgANSIFor(styles.MentionHighlightBg())
+}
+
+// MarginBgANSI returns the background for the blank cells a sixel
+// avatar's cursor advance leaves right of and below the image: the
+// selected row's tint, a mention row's tint, or the theme background.
+func MarginBgANSI(selected, focused, mentionsSelf bool) string {
+	if selected {
+		return SelectionTintBgANSI(focused)
+	}
+	if mentionsSelf {
+		return MentionTintBgANSI()
+	}
+	return BgANSI()
 }
 
 // repaintBg is RepaintBgToSelectionTint for any tint, given as its bg
