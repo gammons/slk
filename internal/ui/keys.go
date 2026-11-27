@@ -139,7 +139,7 @@ func DefaultKeyMap() KeyMap {
 		OpenSlackLink:   key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "open a pasted Slack message link")),
 		DownloadFile:    key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "download file in message")),
 		MarkUnread:      key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "mark unread")),
-		MarkSet:         key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "set mark")),
+		MarkSet:         key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "set mark (sidebar: conversation)")),
 		JumpMark:        key.NewBinding(key.WithKeys("'", "`"), key.WithHelp("'/`", "jump to mark")),
 		JumpToParent:    key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "go to the open thread's message in its channel")),
 		// Keyless help-only entries (same trick as WorkspaceFinder

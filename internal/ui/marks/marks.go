@@ -35,6 +35,7 @@ import (
 type Row struct {
 	Letter      string
 	ChannelName string
+	ChannelType string
 	AuthorName  string
 	Excerpt     string
 }
@@ -135,6 +136,16 @@ func (m *Model) HandleKey(keyStr string) *MarksResult {
 		return &MarksResult{Delete: m.rows[m.selected].Letter}
 	}
 	return nil
+}
+
+// channelLabel names the row's conversation: @name for DMs and apps,
+// #name otherwise (including rows recorded before the type was stored).
+func channelLabel(row Row) string {
+	switch row.ChannelType {
+	case "dm", "group_dm", "app":
+		return "@" + row.ChannelName
+	}
+	return "#" + row.ChannelName
 }
 
 func isMarkLetter(b byte) bool {
@@ -238,7 +249,7 @@ func (m Model) renderBox(termWidth, termHeight int) string {
 			preview = row.AuthorName + ": " + preview
 		}
 		line := letter.Render(row.Letter) + "  " +
-			content.Render("#"+row.ChannelName) + "  " +
+			content.Render(channelLabel(row)) + "  " +
 			content.Render(preview)
 
 		// Truncate on measured width (lipgloss.Width), not rune count:

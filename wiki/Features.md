@@ -147,9 +147,10 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
 ## Marks & Navigation
 
 - **Vim-style marks** — `m` + a letter records the selected message; `'` + that letter jumps back to it. A mark captures the channel, the message, and, when set inside a thread, the thread and the reply, so a mark can return you to one message in a 200-reply thread. In the Threads view, a mark records the selected thread.
+- **Conversation marks** — with the sidebar focused, `m` + a letter marks the highlighted channel or DM instead of a message; `'` + that letter opens it at its latest message, like opening it from the sidebar. Handy for hopping between a few frequent conversations (`'a` → a teammate's DM, `'b` → `#team`).
 - Session vs. persistent, as in vim: lowercase marks (`ma`–`mz`) die with the session, uppercase (`mA`–`mZ`) survive a restart. `persist_all` makes lowercase persist too, non-destructively.
 - `''` back-jump — returns you to where you were before the last jump, whether or not it changed channel; press again to toggle back.
-- `:marks` overlay — every mark with its channel and a preview of the message, rendered from a snapshot taken at mark time, so it works offline and immediately after a restart. Click a row (or press `Enter`) to jump to it, `Backspace` deletes a row, and `:delmarks abc` deletes by letter.
+- `:marks` overlay — every mark with its channel (`#channel` or `@person`) and a preview of the message (conversation marks have none), rendered from a snapshot taken at mark time, so it works offline and immediately after a restart. Click a row (or press `Enter`) to jump to it, `Backspace` deletes a row, and `:delmarks abc` deletes by letter.
 - **Position-aware back/forward** (`Ctrl+h` / `Ctrl+l`) — retraces visited channels and restores the message you were reading when you left each one, rather than dumping you at the newest message.
 
 ## Notifications

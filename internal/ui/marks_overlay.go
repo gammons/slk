@@ -35,6 +35,7 @@ func (a *App) marksRows() ([]marks.Row, error) {
 		rows = append(rows, marks.Row{
 			Letter:      m.Letter,
 			ChannelName: m.ChannelName,
+			ChannelType: m.ChannelType,
 			AuthorName:  previewText(m.AuthorName),
 			Excerpt:     previewText(m.Excerpt),
 		})

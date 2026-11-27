@@ -15,6 +15,7 @@ import (
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/sidebar"
 )
 
 func setMarkTestApp(t *testing.T) *App {
@@ -22,6 +23,9 @@ func setMarkTestApp(t *testing.T) *App {
 	app := NewApp()
 	app.activeTeamID = "T1"
 	app.activeChannelID = "C1"
+	// Message marks come from the content panes; the sidebar (NewApp's
+	// default focus) sets channel marks instead.
+	app.focusedPanel = PanelMessages
 	app.setChannelLookupFuncForTest(func(channelID ids.ChannelID) (string, string, bool) {
 		return "general", "channel", true
 	})
@@ -345,5 +349,92 @@ func TestSetMark_ActivityViewRefuses(t *testing.T) {
 	}
 	if got := statusbarText(app); !strings.Contains(got, "No message selected") {
 		t.Errorf("status bar = %q, want the no-selection toast", got)
+	}
+}
+
+func sidebarMarkTestApp(t *testing.T) *App {
+	t.Helper()
+	app := setMarkTestApp(t)
+	app.messagepane.SetMessages([]messages.MessageItem{{TS: "1.0", UserName: "bob", Text: "in C1"}})
+	app.messagepane.SelectByTS("1.0")
+	app.sidebar.SetItems([]sidebar.ChannelItem{
+		{ID: "C1", Name: "general", Type: "channel"},
+		{ID: "D9", Name: "alice", Type: "dm"},
+	})
+	app.sidebar.SelectByID("D9")
+	app.focusedPanel = PanelSidebar
+	return app
+}
+
+func TestSetMark_SidebarRecordsChannelMark(t *testing.T) {
+	app := sidebarMarkTestApp(t)
+
+	if cmd := pressMarkChord(app, 'a'); cmd != nil {
+		t.Fatalf("marking returned a cmd: %v", cmd)
+	}
+
+	m, ok, _ := app.marks.Load("T1", "a")
+	if !ok {
+		t.Fatal("mark a not recorded")
+	}
+	if m.ChannelID != "D9" || m.MessageTS != "" || m.ThreadTS != "" {
+		t.Fatalf("mark location = %+v, want channel-only D9", m.Location)
+	}
+	if m.ChannelName != "alice" || m.ChannelType != "dm" || m.AuthorName != "" || m.Excerpt != "" {
+		t.Fatalf("mark snapshot = %+v, want alice / dm with no preview", m)
+	}
+}
+
+func TestSetMark_SidebarUppercasePersists(t *testing.T) {
+	app := sidebarMarkTestApp(t)
+	persist := marksPersistForTest(t)
+	app.SetMarksPersistStore(persist)
+
+	if cmd := pressMarkChord(app, 'A'); cmd != nil {
+		t.Fatalf("marking returned a cmd: %v", cmd)
+	}
+
+	restarted := newMarksStore()
+	restarted.persist = persist
+	m, ok, err := restarted.Load("T1", "A")
+	if err != nil || !ok {
+		t.Fatalf("Load after restart: ok=%v err=%v", ok, err)
+	}
+	if m.ChannelID != "D9" || m.MessageTS != "" || m.ChannelType != "dm" {
+		t.Fatalf("persisted mark = %+v, want channel-only D9 dm", m)
+	}
+}
+
+func TestSetMark_SidebarNonConversationToasts(t *testing.T) {
+	app := sidebarMarkTestApp(t)
+	// Walk up off the conversations onto the Threads row at the top.
+	for i := 0; i < 10 && app.sidebar.SelectedID() != ""; i++ {
+		app.sidebar.MoveUp()
+	}
+
+	if cmd := pressMarkChord(app, 'a'); cmd == nil {
+		t.Fatal("expected a toast cmd")
+	}
+	if !strings.Contains(app.statusbar.View(80), "No conversation selected to mark") {
+		t.Fatalf("expected no-conversation toast, got %q", app.statusbar.View(80))
+	}
+	if _, ok, _ := app.marks.Load("T1", "a"); ok {
+		t.Fatal("a non-conversation sidebar row must not record a mark")
+	}
+}
+
+func TestSetMark_MessageMarkRecordsChannelType(t *testing.T) {
+	app := setMarkTestApp(t)
+	app.setChannelLookupFuncForTest(func(channelID ids.ChannelID) (string, string, bool) {
+		return "alice", "dm", true
+	})
+	app.messagepane.SetMessages([]messages.MessageItem{{TS: "1.0", UserName: "alice", Text: "hi"}})
+	app.messagepane.SelectByTS("1.0")
+
+	pressMarkChord(app, 'a')
+
+	m, ok, _ := app.marks.Load("T1", "a")
+	if !ok || m.MessageTS != "1.0" || m.ChannelType != "dm" {
+		t.Fatalf("mark = %+v ok=%v, want message 1.0 with type dm", m, ok)
 	}
 }

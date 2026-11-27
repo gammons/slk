@@ -36,7 +36,8 @@
 | `Esc` | Normal (search active) | Clear active search |
 | `m{a-z}` | Normal (message) | Set a session mark on the selected message — lost when slk exits |
 | `m{A-Z}` | Normal (message) | Set a persistent mark — survives a restart |
-| `'{letter}` / `` `{letter} `` | Normal | Jump to a mark: opens the channel, loads history if needed, opens the thread and selects the reply |
+| `m{letter}` | Normal (sidebar) | Mark the highlighted conversation (channel or DM) — jumping to it opens the conversation at its latest message |
+| `'{letter}` / `` `{letter} `` | Normal | Jump to a mark: opens the channel, loads history if needed, opens the thread and selects the reply; a conversation mark opens at the latest message |
 | `''` / ` `` ` | Normal | Back-jump to where you jumped from; press again to return |
 | `p` | Normal (thread open) | Go to the open thread's message in its channel (closes the thread; `''` returns to it) |
 | `:marks` | Normal | List every mark in the workspace with its channel and message preview |

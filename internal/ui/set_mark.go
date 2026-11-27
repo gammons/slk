@@ -11,6 +11,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/gammons/slk/internal/ids"
 )
 
 // isMarkLetter reports whether b names a mark letter (a-z, A-Z).
@@ -37,6 +39,9 @@ func (a *App) handleMarkChord(msg tea.KeyMsg) tea.Cmd {
 // has no session copy, so a lost write means the mark silently does
 // not exist.
 func (a *App) setMark(letter string) tea.Cmd {
+	if a.focusedPanel == PanelSidebar {
+		return a.setChannelMark(letter)
+	}
 	loc, ok := a.currentLocation()
 	if !ok {
 		return toastWithClear(a, "No message selected to mark", 2*time.Second)
@@ -45,13 +50,12 @@ func (a *App) setMark(letter string) tea.Cmd {
 		Location: loc,
 		Letter:   letter,
 	}
-	if name, _, found := a.channels.Lookup(loc.ChannelID); found {
+	if name, chType, found := a.channels.Lookup(loc.ChannelID); found {
 		m.ChannelName = name
+		m.ChannelType = chType
 	}
 	// The same order as currentLocation: the thread pane, then the
-	// Threads view, then the channel pane. focusedContentPane does not
-	// fit, because a mark set with the sidebar focused still names the
-	// channel pane's selection.
+	// Threads view, then the channel pane.
 	var pane contentPane
 	switch {
 	case a.focusedPanel == PanelThread:
@@ -76,6 +80,26 @@ func (a *App) setMark(letter string) tea.Cmd {
 			m.AuthorName = msg.UserName
 			m.Excerpt = truncateReason(msg.Text, 100)
 		}
+	}
+	if err := a.marks.Set(a.activeTeamID, letter, m); err != nil {
+		return toastWithClear(a, "Failed to save mark "+letter, 3*time.Second)
+	}
+	return nil
+}
+
+// setChannelMark records the conversation highlighted in the sidebar
+// under letter: a channel-only location, so the jump opens it at the
+// latest message rather than at a remembered one.
+func (a *App) setChannelMark(letter string) tea.Cmd {
+	item, ok := a.sidebar.SelectedItem()
+	if !ok {
+		return toastWithClear(a, "No conversation selected to mark", 2*time.Second)
+	}
+	m := Mark{
+		Location:    Location{TeamID: ids.TeamID(a.activeTeamID), ChannelID: ids.ChannelID(item.ID)},
+		Letter:      letter,
+		ChannelName: item.Name,
+		ChannelType: item.Type,
 	}
 	if err := a.marks.Set(a.activeTeamID, letter, m); err != nil {
 		return toastWithClear(a, "Failed to save mark "+letter, 3*time.Second)

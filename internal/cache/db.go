@@ -178,6 +178,7 @@ func (db *DB) migrate() error {
 		message_ts   TEXT NOT NULL DEFAULT '',
 		thread_ts    TEXT NOT NULL DEFAULT '',
 		channel_name TEXT NOT NULL DEFAULT '',
+		channel_type TEXT NOT NULL DEFAULT '',
 		author_name  TEXT NOT NULL DEFAULT '',
 		excerpt      TEXT NOT NULL DEFAULT '',
 		PRIMARY KEY (workspace_id, letter)
@@ -258,6 +259,10 @@ func (db *DB) migrate() error {
 	}
 	if err := db.addColumnIfMissing("thread_subscriptions", "latest_reply",
 		"ALTER TABLE thread_subscriptions ADD COLUMN latest_reply TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := db.addColumnIfMissing("marks", "channel_type",
+		"ALTER TABLE marks ADD COLUMN channel_type TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 	// Version stamps for Slack's conditional cache-revalidation

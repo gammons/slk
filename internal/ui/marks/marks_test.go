@@ -108,3 +108,24 @@ func TestView_TruncatesWideExcerptsToWidth(t *testing.T) {
 		t.Fatalf("long excerpts must be truncated with a tail marker:\n%s", view)
 	}
 }
+
+func TestView_ChannelMarkRows(t *testing.T) {
+	m := New()
+	m.SetRows([]Row{
+		{Letter: "a", ChannelName: "alice", ChannelType: "dm"},
+		{Letter: "b", ChannelName: "team", ChannelType: "channel"},
+		{Letter: "c", ChannelName: "old"},
+	})
+	m.Open()
+	view := m.View(80, 24)
+	for _, want := range []string{"@alice", "#team", "#old"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view missing %q:\n%s", want, view)
+		}
+	}
+	for _, unwanted := range []string{"#alice", ": "} {
+		if strings.Contains(view, unwanted) {
+			t.Errorf("view contains %q:\n%s", unwanted, view)
+		}
+	}
+}

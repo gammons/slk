@@ -1552,6 +1552,7 @@ func run() error {
 					MessageTS:   string(m.MessageTS),
 					ThreadTS:    string(m.ThreadTS),
 					ChannelName: m.ChannelName,
+					ChannelType: m.ChannelType,
 					AuthorName:  m.AuthorName,
 					Excerpt:     m.Excerpt,
 				})
@@ -1572,6 +1573,7 @@ func run() error {
 						},
 						Letter:      r.Letter,
 						ChannelName: r.ChannelName,
+						ChannelType: r.ChannelType,
 						AuthorName:  r.AuthorName,
 						Excerpt:     r.Excerpt,
 					})
