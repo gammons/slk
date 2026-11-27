@@ -271,6 +271,7 @@ func (a *App) renderAppHomePanel(msgWidth, msgBorder, contentHeight int, msgFocu
 // these the entire panel renders without any border at all.
 func (a *App) renderChannelMessagesPanel(msgWidth, msgBorder, contentHeight int, msgFocused, composeFocused bool, msgLayoutKey int64) string {
 	var composeView string
+	popupRows := 0
 	readOnly := a.composeDisabled && !a.editing.IsActive()
 	if readOnly {
 		composeView = composeBlockedView(a.composeBlockedText(), msgWidth-2)
@@ -280,6 +281,7 @@ func (a *App) renderChannelMessagesPanel(msgWidth, msgBorder, contentHeight int,
 		// mutually exclusive in compose.Update; emoji wins if
 		// somehow more than one is open.
 		if pickerView := a.compose.PopupView(msgWidth - 2); pickerView != "" {
+			popupRows = lipgloss.Height(pickerView)
 			composeView = pickerView + "\n" + composeView
 		}
 	}
@@ -293,11 +295,13 @@ func (a *App) renderChannelMessagesPanel(msgWidth, msgBorder, contentHeight int,
 	// (inner, less the typing row, this region and those 3 rows), up
 	// to its cap. Measured into composeHeight below, so a click on it
 	// lands in the compose region.
+	previewRows := 0
 	if !readOnly {
 		inner := contentHeight - 2
 		room := inner - 1 - lipgloss.Height(composeView) - 3
 		key := compose.RenderKey{Theme: styles.Version(), Pane: a.messagepane.Version(), Window: int64(a.focusedWin)}
 		if preview := a.draftPreview(&a.compose, a.messagepane, PanelMessages, msgWidth-2, draftPreviewRows(inner, room), key); preview != "" {
+			previewRows = lipgloss.Height(preview)
 			composeView = preview + "\n" + composeView
 		}
 	}
@@ -331,6 +335,7 @@ func (a *App) renderChannelMessagesPanel(msgWidth, msgBorder, contentHeight int,
 	// paneY has the top border already subtracted), so the first
 	// compose row passes the mouse router's >= check.
 	a.layout.SetMsgComposeTop(msgContentHeight + 1)
+	a.layout.SetMsgPopup(msgContentHeight+2+previewRows, popupRows)
 
 	// Cached top region: messages + top edge + side edges. The cache
 	// stores the SELECTION-FREE bordered output (see ViewBare +

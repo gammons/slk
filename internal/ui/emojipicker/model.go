@@ -119,6 +119,16 @@ func (m *Model) MoveDown() {
 	}
 }
 
+// SelectRow highlights the filtered row at index, returning false for
+// an index outside the list. Mouse clicks use it before inserting.
+func (m *Model) SelectRow(row int) bool {
+	if row < 0 || row >= len(m.filtered) {
+		return false
+	}
+	m.selected = row
+	return true
+}
+
 // SelectedEntry returns the currently highlighted entry. ok=false if the
 // filtered list is empty.
 func (m *Model) SelectedEntry() (emoji.EmojiEntry, bool) {
@@ -177,7 +187,7 @@ func (m Model) View(width int) string {
 	// process-global ImageMode is on AND a fetcher has been installed
 	// via SetEmojiContext. Otherwise the legacy `e.Display` branch
 	// renders (byte-identical to pre-Phase-9).
-	imageOK := emoji.ImageModeActive() && m.emojiCtx.PlaceCtx.Fetcher != nil
+	imageOK := (emoji.ImageModeActive() || emoji.SixelInlineActive()) && m.emojiCtx.PlaceCtx.Fetcher != nil
 	cells := m.emojiCtx.Cells
 	if cells <= 0 {
 		cells = 2

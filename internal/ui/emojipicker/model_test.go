@@ -246,6 +246,41 @@ func TestDropdown_ResolvesCustomEmojiURL_AfterSetEmojiCustoms(t *testing.T) {
 	}
 }
 
+// On a sixel terminal the dropdown cannot place kitty cells; it uses
+// the prerendered half-block fallback instead of the square placeholder.
+func TestDropdown_SixelFallbackPreview(t *testing.T) {
+	emoji.SetImageMode(false, 2)
+	emoji.SetSixelInlineMode(true, 2)
+	t.Cleanup(func() {
+		emoji.SetImageMode(false, 2)
+		emoji.SetSixelInlineMode(false, 2)
+	})
+
+	const customURL = "https://emoji.slack-edge.com/T01/cat-roomba/abc.gif"
+	fallback := "\U0001F7E7\U0001F7E7"
+	ff := &fakeDropdownFetcher{
+		prerender: map[string]imgpkg.Render{
+			emoji.EmojiCacheKey(customURL): {
+				Cells:    goimage.Pt(2, 1),
+				Fallback: []string{fallback},
+			},
+		},
+	}
+
+	m := New()
+	m.SetEntries([]emoji.EmojiEntry{{Name: "cat-roomba", Display: "□"}})
+	m.SetEmojiContext(EmojiContext{
+		PlaceCtx: emoji.PlaceContext{Fetcher: ff},
+		Cells:    2,
+		Customs:  map[string]string{"cat-roomba": customURL},
+	})
+	m.Open("cat-roomba")
+
+	if view := m.View(40); !strings.Contains(view, fallback) {
+		t.Fatalf("sixel dropdown shows no fallback preview: %q", view)
+	}
+}
+
 func TestFrecentMatchesComeFirst(t *testing.T) {
 	m := New()
 	m.SetEntries(sampleEntries())

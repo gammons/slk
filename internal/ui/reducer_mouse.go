@@ -35,6 +35,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/messages"
 )
 
@@ -148,6 +149,15 @@ func reduceMouseWheel(a *App, m tea.MouseWheelMsg) tea.Cmd {
 	if a.mode.IsModalOverlay() {
 		return scrollActiveModal(a, up)
 	}
+	// A wheel notch over an open emoji popup moves its highlight, not
+	// the pane behind it.
+	if a.mode == ModeInsert {
+		if panel, px, py, ok := a.panelAt(m.X, m.Y); ok {
+			if c, _, ok := a.composerPopupRow(panel, px, py); ok && c.ScrollEmojiPopup(up) {
+				return nil
+			}
+		}
+	}
 	// Lines moved per wheel notch -- configured via
 	// [appearance].mouse_wheel_lines (default 3, matches typical
 	// terminal behavior). Each pane's View() clamps its cursor to
@@ -252,6 +262,37 @@ func scrollActiveModal(a *App, up bool) tea.Cmd {
 // reduceMouse dispatch switch because the arm is ~120 lines (four
 // panel-router branches: workspace rail, sidebar, messages pane,
 // thread panel; each with its own hit-test sequence).
+// composerPopupRow maps a pointer in a pane to the open composer
+// popup's content row. The popup geometry is window-local; in a split
+// the pointer from panelAt is messages-region-local, so translate it
+// through the focused window's rect first. The column check keeps a
+// wheel in the neighboring window from moving this popup's highlight.
+func (a *App) composerPopupRow(panel Panel, px, py int) (*compose.Model, int, bool) {
+	var c *compose.Model
+	var top, rows int
+	switch panel {
+	case PanelMessages:
+		if a.wins.Len() > 1 {
+			rect := a.layout.focusedWinRect
+			if rect.W == 0 || px < rect.X || px >= rect.X+rect.W || py < rect.Y || py >= rect.Y+rect.H {
+				return nil, 0, false
+			}
+			py -= rect.Y
+		}
+		top, rows = a.layout.MsgPopup()
+		c = &a.compose
+	case PanelThread:
+		top, rows = a.layout.ThreadPopup()
+		c = &a.threadCompose
+	default:
+		return nil, 0, false
+	}
+	if c == nil || rows <= 0 || py < top || py >= top+rows {
+		return nil, 0, false
+	}
+	return c, py - top - 1, true
+}
+
 // headerStarClick resolves a click against the header's star glyph,
 // split-aware. With one window the glyph hit-tests against the pane's
 // chrome directly; with splits, only a click inside the FOCUSED
@@ -466,6 +507,12 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		if !ok || panel != PanelMessages || py < 0 {
 			return nil
 		}
+		// A click on an emoji autocomplete row inserts that emoji.
+		// The popup sits above the compose box and is part of the same
+		// bottom region.
+		if c, row, ok := a.composerPopupRow(PanelMessages, px, py); ok && c.ClickEmojiRow(row) {
+			return nil
+		}
 		// The compose region: a click there starts composing, the
 		// mouse equivalent of `i`. Checked before the content hit
 		// tests because the compose rows sit below every message row.
@@ -536,8 +583,11 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 			return a.tryOpenActionPrompt()
 		}
 
-		// The thread pane's own compose region, same as the channel
-		// pane's above but targeting the thread compose.
+		// The thread pane's emoji popup and compose region, same as the
+		// channel pane's above but targeting the thread compose.
+		if c, row, ok := a.composerPopupRow(PanelThread, px, py); ok && c.ClickEmojiRow(row) {
+			return nil
+		}
 		if a.layout.threadComposeTop > 0 && py >= a.layout.threadComposeTop {
 			return a.beginInsertMode(true)
 		}
