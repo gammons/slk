@@ -457,9 +457,29 @@ func (r *workspaceRouter) All() []*WorkspaceContext {
 // last-visited timestamp, or "" when there are no recorded visits (e.g.
 // the first run). Drives last-channel restoration on startup.
 func mostRecentlyVisitedChannel(visits map[string]int64) string {
+	return mostRecentlyVisitedChannelAmong(visits, nil)
+}
+
+// channelIDSet is the set of conversation IDs a workspace can show.
+func channelIDSet(channels []sidebar.ChannelItem) map[string]bool {
+	out := make(map[string]bool, len(channels))
+	for _, ch := range channels {
+		out[ch.ID] = true
+	}
+	return out
+}
+
+// mostRecentlyVisitedChannelAmong is mostRecentlyVisitedChannel
+// restricted to conversations the caller can show. A Grid shared DM's
+// visit is global, but a workspace that does not list the DM must not
+// pick it over its own last channel.
+func mostRecentlyVisitedChannelAmong(visits map[string]int64, known map[string]bool) string {
 	var bestID string
 	var bestTS int64
 	for id, ts := range visits {
+		if known != nil && !known[id] {
+			continue
+		}
 		if ts > bestTS {
 			bestTS = ts
 			bestID = id

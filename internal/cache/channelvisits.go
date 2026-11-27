@@ -27,10 +27,16 @@ func (db *DB) RecordChannelVisit(workspaceID, channelID string) error {
 // seconds) for the given workspace. Used at workspace-connect time to
 // seed the in-memory map that the channel finder consults for sorting.
 func (db *DB) GetChannelVisits(workspaceID string) (map[string]int64, error) {
+	// A Grid shared DM has one channels row but can be visited from more
+	// than one member workspace. Include the DM's visit regardless of
+	// which workspace recorded it, taking the latest; channels stay
+	// workspace-local.
 	rows, err := db.conn.Query(`
-		SELECT channel_id, last_visited
-		FROM channel_visits
-		WHERE workspace_id = ?`,
+		SELECT v.channel_id, MAX(v.last_visited)
+		FROM channel_visits v
+		LEFT JOIN channels c ON c.id = v.channel_id
+		WHERE v.workspace_id = ? OR c.type IN ('dm', 'group_dm')
+		GROUP BY v.channel_id`,
 		workspaceID,
 	)
 	if err != nil {
