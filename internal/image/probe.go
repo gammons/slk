@@ -208,6 +208,93 @@ func findCellSize(buf []byte) (body []byte, found bool) {
 	return tail[:j], true
 }
 
+// ProbeDECRQM asks the terminal for a DEC private mode's current state
+// with DECRQM (CSI ? mode $ p) and returns the value its DECRPM
+// (CSI ? mode ; value $ y) reports: 0 not recognized, 1 set, 2 reset,
+// 3 permanently set, 4 permanently reset. ok is false when the terminal
+// stays silent (a multiplexer swallowed the query) or answers "not
+// recognized". Unlike bubbletea's own mode report, which the app also
+// synthesizes to force the renderer's width method, this is the
+// terminal's own answer.
+//
+// Inputs and timing match ProbeSixel: run in raw mode before bubbletea
+// starts reading.
+func ProbeDECRQM(w io.Writer, r io.Reader, mode int, timeout time.Duration) (value int, ok bool) {
+	if _, err := fmt.Fprintf(w, "\x1b[?%d$p", mode); err != nil {
+		return 0, false
+	}
+
+	var got []byte
+	scan := func(buf []byte) (bool, bool) {
+		found := scanForModeReport(buf, mode)
+		if found {
+			got = append(got[:0], buf...)
+		}
+		return found, found
+	}
+
+	start := time.Now()
+	var replied bool
+	if f, isFile := r.(*os.File); isFile {
+		var bytesRead int
+		var reason string
+		replied, bytesRead, reason = pollProbe(int(f.Fd()), timeout, scan)
+		debuglog.ImgRender("DECRQM %d probe: replied=%v reason=%s bytes_read=%d elapsed_ms=%d",
+			mode, replied, reason, bytesRead, time.Since(start).Milliseconds())
+	} else {
+		// Test fallback for non-*os.File readers.
+		replied = probeViaGoroutineScan(r, timeout, scan)
+	}
+	if !replied {
+		return 0, false
+	}
+	return parseModeReport(got, mode)
+}
+
+// scanForModeReport reports whether a complete DECRPM answer for mode
+// (CSI ? mode ; value $ y) is in buf. Other replies the terminal sends
+// meanwhile are skipped over.
+func scanForModeReport(buf []byte, mode int) bool {
+	_, ok := findModeReport(buf, mode)
+	return ok
+}
+
+// parseModeReport extracts the value from the first complete DECRPM
+// answer for mode in buf. ok is false when there is none.
+func parseModeReport(buf []byte, mode int) (value int, ok bool) {
+	return findModeReport(buf, mode)
+}
+
+// findModeReport returns the value of the first complete DECRPM answer
+// for mode (CSI ? mode ; value $ y) in buf. ok is false when there is
+// none.
+func findModeReport(buf []byte, mode int) (value int, ok bool) {
+	prefix := fmt.Sprintf("\x1b[?%d;", mode)
+	i := bytes.Index(buf, []byte(prefix))
+	if i < 0 {
+		return 0, false
+	}
+	tail := buf[i+len(prefix):]
+	j := bytes.IndexByte(tail, '$')
+	if j < 0 || j+1 >= len(tail) || tail[j+1] != 'y' {
+		return 0, false
+	}
+	// A value of 0 (not recognized) is a real answer, unlike the
+	// size-oriented atoi, so parse the digits directly.
+	digits := tail[:j]
+	if len(digits) == 0 {
+		return 0, false
+	}
+	v := 0
+	for _, c := range digits {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		v = v*10 + int(c-'0')
+	}
+	return v, true
+}
+
 // probeViaGoroutineScan is the generic goroutine-based probe used for
 // non-*os.File readers (tests only — see probeViaGoroutine). It reads
 // byte by byte, re-running scan over everything collected so far, and
