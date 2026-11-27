@@ -296,10 +296,13 @@ func TestRequestAvatar_DoesNotBlockTheCaller(t *testing.T) {
 }
 
 // A webhook sender's own icon, from its messages, is its avatar ahead of
-// the bots.info icon, and replaces the icon of a row cached before it was
-// seen. With the username and icon known, bots.info is not called.
+// the bots.info icon, and replaces both the saved row and the loaded
+// avatar of a sender seen before with the bots.info icon. With the
+// username and icon known, bots.info is not called.
 func TestRequestBot_MessageIcon(t *testing.T) {
-	icon := avatarPNGServer(t).URL + "/alice.png"
+	img := avatarPNGServer(t)
+	oldIcon := img.URL + "/bot.png"
+	icon := img.URL + "/alice.png"
 	var hits atomic.Int32
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
@@ -308,10 +311,16 @@ func TestRequestBot_MessageIcon(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	db := newTestDB(t)
-	if err := db.UpsertUser(cache.User{ID: "B1/Alice", WorkspaceID: "T1", Name: "Alice", DisplayName: "Alice", AvatarURL: "https://example.com/bot.png", IsBot: true}); err != nil {
+	if err := db.UpsertUser(cache.User{ID: "B1/Alice", WorkspaceID: "T1", Name: "Alice", DisplayName: "Alice", AvatarURL: oldIcon, IsBot: true}); err != nil {
 		t.Fatal(err)
 	}
 	avc, ready := newReadyAvatarCache(t)
+	avc.Preload("B1/Alice", oldIcon)
+	select {
+	case <-ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("old avatar for B1/Alice never loaded")
+	}
 	watch := newResolvedWatch(1, nil)
 	r := newUserResolver("T1", newTestClient(t, srv), db, avc, watch.send, nil, nil)
 	r.botIcon = func(id string) string {
@@ -332,7 +341,7 @@ func TestRequestBot_MessageIcon(t *testing.T) {
 			t.Fatalf("avatar ready for %q, want B1/Alice", got)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("avatar for B1/Alice never loaded")
+		t.Fatal("the message icon never replaced the loaded avatar of B1/Alice")
 	}
 	if got := storedAvatarURL(t, db, "B1/Alice"); got != icon {
 		t.Errorf("avatar_url = %q, want the message icon %q", got, icon)

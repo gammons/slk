@@ -529,7 +529,7 @@ func (r *userResolver) applyEdgeUser(u edge.User) {
 // value). The icon is the one the author's messages carried (botIcon),
 // else the bots.info icon, and bots.info also supplies a name if the
 // message had none. A cached row is kept unless the messages now carry
-// another icon. Mirrors Request: inflight dedup, cache-skip, async fetch,
+// another icon, which then replaces the loaded avatar too. Mirrors Request: inflight dedup, cache-skip, async fetch,
 // Preload + UpsertUser + UserResolvedMsg (which AvatarReadyMsg follows).
 func (r *userResolver) RequestBot(botID, username string) {
 	if r == nil || botID == "" {
@@ -543,7 +543,9 @@ func (r *userResolver) RequestBot(botID, username string) {
 	if r.botIcon != nil {
 		iconURL = r.botIcon(authorID)
 	}
-	if u, err := r.db.GetUser(authorID); err == nil && (iconURL == "" || u.AvatarURL == iconURL) {
+	u, err := r.db.GetUser(authorID)
+	cached := err == nil
+	if cached && (iconURL == "" || u.AvatarURL == iconURL) {
 		r.inflight.Delete(authorID)
 		return
 	}
@@ -563,7 +565,13 @@ func (r *userResolver) RequestBot(botID, username string) {
 			}
 		}
 		name = cmp.Or(name, botID)
-		r.avatars.Preload(authorID, iconURL)
+		if cached {
+			// Preload keeps the first URL it saw for an author all
+			// session, so a changed icon is loaded past it.
+			r.avatars.PreloadSync(authorID, iconURL)
+		} else {
+			r.avatars.Preload(authorID, iconURL)
+		}
 		_ = r.db.UpsertUser(cache.User{
 			ID:          authorID,
 			WorkspaceID: r.teamID,

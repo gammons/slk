@@ -30,6 +30,26 @@ func TestRoomTap_HistoryCapturesBotIcons(t *testing.T) {
 	}
 }
 
+func TestBotIconStore_KeepsNewestIcon(t *testing.T) {
+	c := roomTestClient(t, `{"ok":true,"messages":[
+		{"type":"message","subtype":"bot_message","ts":"1.000300","bot_id":"B1","username":"Alice","icons":{"image_72":"https://example.com/new.png"}},
+		{"type":"message","subtype":"bot_message","ts":"1.000100","bot_id":"B1","username":"Alice","icons":{"image_72":"https://example.com/old.png"}}]}`)
+	if _, err := c.GetHistory(context.Background(), "CFAKE0001", 50, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.BotIcon("B1/Alice"); got != "https://example.com/new.png" {
+		t.Errorf("after a newest-first page BotIcon = %q, want the newest icon", got)
+	}
+	c.botIcons.recordFrame([]byte(`{"type":"message","subtype":"bot_message","ts":"1.000050","bot_id":"B1","username":"Alice","icons":{"image_72":"https://example.com/older.png"}}`))
+	if got := c.BotIcon("B1/Alice"); got != "https://example.com/new.png" {
+		t.Errorf("after an older message BotIcon = %q, want the newest icon", got)
+	}
+	c.botIcons.recordFrame([]byte(`{"type":"message","subtype":"bot_message","ts":"1.000400","bot_id":"B1","username":"Alice","icons":{"image_72":"https://example.com/live.png"}}`))
+	if got := c.BotIcon("B1/Alice"); got != "https://example.com/live.png" {
+		t.Errorf("after a newer message BotIcon = %q, want the live icon", got)
+	}
+}
+
 func TestRoomTap_RepliesCapturesBotIcons(t *testing.T) {
 	c := roomTestClient(t, `{"ok":true,"has_more":false,"messages":[
 		{"type":"message","subtype":"bot_message","ts":"2.000100","thread_ts":"2.000100","bot_id":"B1","icons":`+fakeIcons+`}]}`)
@@ -55,7 +75,7 @@ func TestBotIconStore_RecordFrame(t *testing.T) {
 
 func TestBotIconStore_Bounded(t *testing.T) {
 	s := newBotIconStore()
-	m := iconMessage{BotID: "B1"}
+	m := iconMessage{BotID: "B1", TS: "1.000100"}
 	m.Icons.Image72 = "https://example.com/i.png"
 	for i := range botIconStoreMax + 1 {
 		m.Username = strconv.Itoa(i)

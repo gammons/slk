@@ -20,16 +20,23 @@ import (
 // botIconStoreMax bounds the remembered senders. A full store starts over.
 const botIconStoreMax = 1024
 
-// botIconStore maps a core.BotAuthorID to the icon URL its latest message
-// carried. Safe for concurrent use. A nil store records and returns
-// nothing.
+// botIconStore maps a core.BotAuthorID to the icon its newest message
+// carried. History arrives newest first and replies oldest first, and an
+// older page can load after a live message, so each icon keeps its
+// message's ts and only a newer message replaces it. Safe for concurrent
+// use. A nil store records and returns nothing.
 type botIconStore struct {
 	mu    sync.Mutex
-	icons map[string]string
+	icons map[string]botIcon
+}
+
+type botIcon struct {
+	url string
+	ts  string
 }
 
 func newBotIconStore() *botIconStore {
-	return &botIconStore{icons: map[string]string{}}
+	return &botIconStore{icons: map[string]botIcon{}}
 }
 
 // iconMessage is the part of a message the store reads.
@@ -37,6 +44,7 @@ type iconMessage struct {
 	Type     string `json:"type"`
 	BotID    string `json:"bot_id"`
 	Username string `json:"username"`
+	TS       string `json:"ts"`
 	Icons    struct {
 		Image36 string `json:"image_36"`
 		Image48 string `json:"image_48"`
@@ -51,10 +59,14 @@ func (s *botIconStore) put(m iconMessage) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	key := core.BotAuthorID(m.BotID, m.Username)
+	if cur, ok := s.icons[key]; ok && m.TS < cur.ts {
+		return
+	}
 	if len(s.icons) >= botIconStoreMax {
 		clear(s.icons)
 	}
-	s.icons[core.BotAuthorID(m.BotID, m.Username)] = icon
+	s.icons[key] = botIcon{url: icon, ts: m.TS}
 }
 
 func (s *botIconStore) get(authorID string) string {
@@ -63,7 +75,7 @@ func (s *botIconStore) get(authorID string) string {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.icons[authorID]
+	return s.icons[authorID].url
 }
 
 // recordMessages keeps the icons of the messages in a history or replies
@@ -95,7 +107,7 @@ func (s *botIconStore) recordFrame(frame []byte) {
 	s.put(m)
 }
 
-// BotIcon returns the icon URL the latest message of a bot author (a
+// BotIcon returns the icon URL the newest message of a bot author (a
 // core.BotAuthorID) carried in a history, replies or WebSocket message,
 // or "" when none was seen.
 func (c *Client) BotIcon(authorID string) string {
