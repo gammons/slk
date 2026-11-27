@@ -74,7 +74,7 @@ func TestDraftsRow_ActiveIndicatorWhenCursorIsElsewhere(t *testing.T) {
 		t.Fatal("the Drafts row shows a bar before it is the active view")
 	}
 	m.SetDraftsCount(46)
-	m.SetDraftsActive(true)
+	m.SetDraftsActive()
 	got := ansi.Strip(rowFor(t, m.View(10, 30), "Drafts"))
 	if !strings.Contains(got, "▌") {
 		t.Fatalf("active Drafts row = %q, want the ▌ indicator", got)
@@ -113,11 +113,12 @@ func TestDraftsRow_CountDoesNotHighlight(t *testing.T) {
 		t.Fatalf("unread Threads row = %q, want it still bold with •3", threads)
 	}
 
-	m.SetDraftsActive(true)
-	m.SetActivityActive(true)
-	view = m.View(16, 40)
-	drafts = rowFor(t, view, "Drafts")
-	activity = rowFor(t, view, "Activity")
+	m.SetDraftsActive()
+	drafts = rowFor(t, m.View(16, 40), "Drafts")
+
+	m.SetActivityActive()
+	activity = rowFor(t, m.View(16, 40), "Activity")
+
 	if sgrCodes(drafts) != sgrCodes(activity) {
 		t.Fatalf("active Drafts styled differently from active Activity\ndrafts:   %q\nactivity: %q", drafts, activity)
 	}
@@ -127,8 +128,7 @@ func TestDraftsRow_CountDoesNotHighlight(t *testing.T) {
 
 	// right_align_badges turns an unread count into a mention badge.
 	// A draft count stays inline and plain.
-	m.SetDraftsActive(false)
-	m.SetActivityActive(false)
+	m.ClearActiveView()
 	m.SetActivityUnreadCount(2)
 	m.SetRightAlignBadges(true)
 	view = m.View(16, 40)
@@ -158,5 +158,58 @@ func TestSelectDraftsRow_SurvivesARefresh(t *testing.T) {
 	m.SetItems([]ChannelItem{{ID: "C1", Name: "general", Type: "channel"}, {ID: "C2", Name: "random", Type: "channel"}})
 	if !m.IsDraftsSelected() {
 		t.Fatal("a list refresh should keep the cursor on Drafts")
+	}
+}
+
+func TestCursorOnActiveRow_MarkerFollowsFocus(t *testing.T) {
+	m := New([]ChannelItem{{ID: "C1", Name: "general", Type: "channel"}, {ID: "C2", Name: "random", Type: "channel"}})
+	m.SetActiveChannelID("C1")
+
+	m.SelectByID("C2")
+	m.SetFocused(false)
+	active := rowFor(t, m.View(20, 30), "general")
+
+	m.SelectByID("C1")
+	if got := rowFor(t, m.View(20, 30), "general"); got != active {
+		t.Errorf("unfocused cursor on the active channel = %q, want the active marker %q", got, active)
+	}
+
+	m.SetFocused(true)
+	if got := rowFor(t, m.View(20, 30), "general"); got == active {
+		t.Errorf("focused cursor on the active channel still shows the active marker %q", got)
+	}
+}
+
+func TestOnlyOneDestinationIsActive(t *testing.T) {
+	m := New([]ChannelItem{{ID: "C1", Name: "general", Type: "channel"}, {ID: "C2", Name: "random", Type: "channel"}})
+	m.SetActiveChannelID("C1")
+	m.SelectByID("C2")
+
+	barred := func() []string {
+		var rows []string
+		for _, line := range strings.Split(ansi.Strip(m.View(20, 30)), "\n") {
+			if strings.Contains(line, "▌") {
+				rows = append(rows, strings.TrimSpace(line))
+			}
+		}
+		return rows
+	}
+
+	for name, activate := range map[string]func(){
+		"threads":  func() { m.SetThreadsActive() },
+		"activity": func() { m.SetActivityActive() },
+		"drafts":   func() { m.SetDraftsActive() },
+	} {
+		activate()
+
+		rows := barred()
+		if len(rows) != 2 {
+			t.Fatalf("%s active: rows with a bar = %q, want the cursor row and the destination only", name, rows)
+		}
+		for _, row := range rows {
+			if strings.Contains(row, "general") {
+				t.Fatalf("%s active: the previous channel is still marked: %q", name, rows)
+			}
+		}
 	}
 }

@@ -35,9 +35,7 @@ func (a *App) openDraftsView(keepFocus bool) tea.Cmd {
 		return toastWithClear(a, "Draft sync is off ([compose] sync_drafts)", 3*time.Second)
 	}
 	a.view = ViewDrafts
-	a.sidebar.SetDraftsActive(true)
-	a.sidebar.SetThreadsActive(false)
-	a.sidebar.SetActivityActive(false)
+	a.sidebar.SetDraftsActive()
 	if !keepFocus {
 		a.focusedPanel = PanelMessages
 	}

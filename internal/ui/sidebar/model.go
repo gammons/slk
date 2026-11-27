@@ -226,6 +226,18 @@ func orderedSectionsLegacy(items []ChannelItem, filtered []int, defaults map[str
 	return out
 }
 
+// syntheticView is a destination of the message pane that is not a channel.
+// Adding one means adding a value here and a synthetic row that View() draws
+// as active when it is the model's activeView.
+type syntheticView int
+
+const (
+	viewNone syntheticView = iota
+	viewThreads
+	viewDrafts
+	viewActivity
+)
+
 // navKind identifies the type of stop the cursor is sitting on. The
 // sidebar is a flat list of stops (threads row, section headers, and
 // channel rows), and the cursor is just an index into that list.
@@ -345,17 +357,12 @@ type Model struct {
 	// nil shows everyone (the option is off). The active conversation is
 	// exempt, like staleness.
 	deactivated map[string]bool
-	// threadsActive reports that the Threads view is the currently
-	// displayed view in the message pane. When true (and the cursor
-	// is on a different row), the synthetic Threads row renders with
-	// the same orange "active" indicator used for active channels.
-	threadsActive bool
-	// activityActive reports that the Activity view is the currently
-	// displayed view in the message pane. Mirrors threadsActive: when
-	// true (and the cursor is on a different row), the synthetic
-	// Activity row renders with the orange "active" indicator.
-	activityActive bool
-	nowFn          func() time.Time
+	// activeView is the synthetic view currently displayed in the message
+	// pane, if any. While the cursor is on a different row, its row
+	// renders with the same orange "active" indicator used for active
+	// channels, and no channel row does.
+	activeView syntheticView
+	nowFn      func() time.Time
 
 	// snappedSelection lets View() avoid snapping yOffset back to the
 	// selected row on every render. While snappedSelection == cursor,
@@ -405,8 +412,7 @@ type Model struct {
 	// return zero / empty and the App layer activates the Drafts view.
 	// draftsCount is how many drafts the workspace has (the badge), not
 	// an unread count.
-	draftsActive bool
-	draftsCount  int
+	draftsCount int
 
 	// Synthetic "Activity" row state. Rendered directly below the
 	// Drafts row. Like the Threads row it is selectable via j/k but is
@@ -948,35 +954,48 @@ func (m *Model) SetActiveChannelID(id string) {
 }
 
 // SetThreadsActive marks the synthetic "Threads" row as the active
-// destination in the message pane. When true (and cursor is elsewhere),
-// the Threads row renders with the orange active indicator. Mirrors
-// SetActiveChannelID for normal channels.
-func (m *Model) SetThreadsActive(active bool) {
-	if m.threadsActive == active {
-		return
-	}
-	m.threadsActive = active
-	m.dirty()
-}
+// destination in the message pane. Mirrors SetActiveChannelID for normal
+// channels.
+func (m *Model) SetThreadsActive() { m.setViewActive(viewThreads) }
 
 // SetDraftsActive marks the synthetic "Drafts" row as the active
-// destination in the message pane. Mirrors SetThreadsActive.
-func (m *Model) SetDraftsActive(active bool) {
-	if m.draftsActive == active {
+// destination in the message pane.
+func (m *Model) SetDraftsActive() { m.setViewActive(viewDrafts) }
+
+// SetActivityActive marks the synthetic "Activity" row as the active
+// destination in the message pane.
+func (m *Model) SetActivityActive() { m.setViewActive(viewActivity) }
+
+// ClearActiveView hands the active marker back to the active channel,
+// for when the message pane returns to it from a synthetic view.
+func (m *Model) ClearActiveView() { m.setViewActive(viewNone) }
+
+// setViewActive makes v the displayed synthetic view, replacing any other.
+func (m *Model) setViewActive(v syntheticView) {
+	if m.activeView == v {
 		return
 	}
-	m.draftsActive = active
+
+	m.activeView = v
 	m.dirty()
 }
 
-// SetActivityActive marks the synthetic "Activity" row as the active
-// destination in the message pane. Mirrors SetThreadsActive.
-func (m *Model) SetActivityActive(active bool) {
-	if m.activityActive == active {
-		return
+// isActiveRow reports whether r is the destination the message pane shows.
+func (m *Model) isActiveRow(r renderRow) bool {
+	if r.active == "" {
+		return false
 	}
-	m.activityActive = active
-	m.dirty()
+
+	switch m.activeView {
+	case viewThreads:
+		return r.isThreadsRow
+	case viewDrafts:
+		return r.isDraftsRow
+	case viewActivity:
+		return r.isActivityRow
+	default:
+		return r.channelID != "" && r.channelID == m.activeID
+	}
 }
 
 // Version returns a counter that increments any time the View() output could
@@ -2200,7 +2219,7 @@ type renderRow struct {
 	// blanks, and the Threads row.
 	channelID string
 	// isThreadsRow flags the synthetic Threads row so View() can swap in
-	// the `active` variant whenever m.threadsActive is true (mirroring
+	// the `active` variant whenever m.activeView is viewThreads (mirroring
 	// the channelID-based check used for channels).
 	isThreadsRow bool
 	// mention marks a row carrying an unread-mention badge (a channel,
@@ -2208,10 +2227,10 @@ type renderRow struct {
 	// pills View() floats over the edges when one is scrolled away.
 	mention bool
 	// isDraftsRow flags the synthetic Drafts row so View() can swap in
-	// the `active` variant whenever m.draftsActive is true.
+	// the `active` variant whenever m.activeView is viewDrafts.
 	isDraftsRow bool
 	// isActivityRow flags the synthetic Activity row so View() can swap
-	// in the `active` variant whenever m.activityActive is true.
+	// in the `active` variant whenever m.activeView is viewActivity.
 	isActivityRow bool
 	// sortStart/sortEnd are the row columns of a section header's sort
 	// control. Both 0 when the row has none.
@@ -3087,21 +3106,12 @@ func (m *Model) View(height, width int) string {
 		switch {
 		case r.navIdx >= 0 && r.navIdx == m.cursor:
 			cursorLine = len(visible)
-			visible = append(visible, r.selected)
-		case r.channelID != "" && r.channelID == m.activeID && r.active != "":
-			// This row is the channel the user is currently viewing in
-			// the message pane (but the cursor is elsewhere). Show the
-			// orange ▌ "active" indicator so they know where they are.
-			visible = append(visible, r.active)
-		case r.isThreadsRow && m.threadsActive && r.active != "":
-			// Threads view is the currently displayed view; mark the
-			// Threads row as active with the same orange indicator.
-			visible = append(visible, r.active)
-		case r.isDraftsRow && m.draftsActive && r.active != "":
-			visible = append(visible, r.active)
-		case r.isActivityRow && m.activityActive && r.active != "":
-			// Activity view is the currently displayed view; mark the
-			// Activity row as active with the same orange indicator.
+			if !m.focused && m.isActiveRow(r) {
+				visible = append(visible, r.active)
+			} else {
+				visible = append(visible, r.selected)
+			}
+		case m.isActiveRow(r):
 			visible = append(visible, r.active)
 		case r.normal == "":
 			// Inter-section blank row -- emit a width-sized themed blank so

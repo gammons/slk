@@ -178,7 +178,7 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		// Activity. Mirrors :activity and clicking the sidebar row.
 		if a.view == ViewActivity {
 			a.view = ViewChannels
-			a.sidebar.SetActivityActive(false)
+			a.sidebar.ClearActiveView()
 			if a.activeChannelID != "" {
 				a.sidebar.SelectByID(a.activeChannelID)
 			}

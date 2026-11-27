@@ -248,13 +248,11 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 	// delivers InitialActive=true twice.
 	if m.InitialActive && a.bootstrap.ClaimInitialActive() {
 		a.view = ViewChannels
-		a.sidebar.SetThreadsActive(false)
+		a.sidebar.ClearActiveView()
 		a.threadsView.SetSummaries(nil)
 		a.sidebar.SetThreadsUnreadCount(0)
-		a.sidebar.SetDraftsActive(false)
 		a.draftsView.SetRows(nil)
 		a.sidebar.SetDraftsCount(len(a.drafts.rows[m.TeamID]))
-		a.sidebar.SetActivityActive(false)
 		a.activityView.SetItems(nil)
 		a.activityView.SetBodies(nil)
 		// Same as the switch arm: the workspace's stored activity
@@ -424,9 +422,7 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	// only fall back to the Threads row when the new workspace
 	// has no channels at all.
 	a.view = ViewChannels
-	a.sidebar.SetThreadsActive(false)
-	a.sidebar.SetDraftsActive(false)
-	a.sidebar.SetActivityActive(false)
+	a.sidebar.ClearActiveView()
 	a.threadsView.SetSummaries(nil)
 	a.sidebar.SetThreadsUnreadCount(0)
 	a.draftsView.SetRows(nil)
