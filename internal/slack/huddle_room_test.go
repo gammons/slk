@@ -35,7 +35,7 @@ func roomTestClient(t *testing.T, body string) *Client {
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, network, addr)
 		},
-	})
+	}, c.botIcons)
 	return c
 }
 
@@ -73,7 +73,7 @@ func TestRoomTap_MalformedBodyPassesThrough(t *testing.T) {
 	s := newRoomStore()
 	rt := s.wrap(roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Body: nopBody("not json")}, nil
-	}))
+	}), nil)
 	req, _ := http.NewRequest("POST", "https://slack.com/api/conversations.history", nil)
 	resp, err := rt.RoundTrip(req)
 	if err != nil {

@@ -88,15 +88,16 @@ func (c *Client) HuddleRoom(channelID, ts string) json.RawMessage {
 	return c.rooms.get(channelID, ts)
 }
 
-// wrap returns a RoundTripper that records rooms from the history and
-// replies responses of inner.
-func (s *roomStore) wrap(inner http.RoundTripper) http.RoundTripper {
-	return &roomTap{inner: inner, store: s}
+// wrap returns a RoundTripper that records rooms, and bot icons into
+// icons, from the history and replies responses of inner.
+func (s *roomStore) wrap(inner http.RoundTripper, icons *botIconStore) http.RoundTripper {
+	return &roomTap{inner: inner, store: s, icons: icons}
 }
 
 type roomTap struct {
 	inner http.RoundTripper
 	store *roomStore
+	icons *botIconStore
 }
 
 func isRoomEndpoint(u *url.URL) bool {
@@ -132,8 +133,10 @@ func (t *roomTap) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-// record stores the room of every huddle_thread message in a response body.
+// record stores the room of every huddle_thread message in a response
+// body, and the icon of every bot message.
 func (t *roomTap) record(channelID string, body []byte) {
+	t.icons.recordMessages(body)
 	// Almost every page has no huddle, so skip the decode unless the
 	// subtype appears in the body at all.
 	if !bytes.Contains(body, []byte("huddle_thread")) {

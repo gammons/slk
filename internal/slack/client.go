@@ -167,6 +167,11 @@ type Client struct {
 	// replies responses (see roomTap). Nil for clients built directly in
 	// tests; HuddleRoom treats nil as "none captured".
 	rooms *roomStore
+
+	// botIcons holds the icons of bot messages seen in history, replies
+	// and WebSocket messages (see BotIcon). Nil for clients built directly
+	// in tests. BotIcon treats nil as "none seen".
+	botIcons *botIconStore
 }
 
 // NewClient creates a new Slack client using browser cookie auth.
@@ -176,10 +181,11 @@ func NewClient(xoxcToken, dCookie string) *Client {
 	env := slackhttp.NewEnvelope()
 	httpClient := newCookieHTTPClient(dCookie, env)
 	rooms := newRoomStore()
+	botIcons := newBotIconStore()
 	// The tap sits under BrowserTransport (as its Inner) so
 	// httpClient.Transport stays a *slackhttp.BrowserTransport.
 	if bt, ok := httpClient.Transport.(*slackhttp.BrowserTransport); ok {
-		bt.Inner = rooms.wrap(bt.Inner)
+		bt.Inner = rooms.wrap(bt.Inner, botIcons)
 	}
 
 	api := slack.New(
@@ -196,6 +202,7 @@ func NewClient(xoxcToken, dCookie string) *Client {
 		httpClient: httpClient,
 		envelope:   env,
 		rooms:      rooms,
+		botIcons:   botIcons,
 	}
 }
 
@@ -609,6 +616,7 @@ func (c *Client) StartWebSocket(handler EventHandler) error {
 				if c.wsEventGate != nil && !c.wsEventGate(message) {
 					continue
 				}
+				c.botIcons.recordFrame(message)
 				dispatchWebSocketEvent(message, handler)
 			case <-pending:
 				pendingHandler.OnPendingEvents()
