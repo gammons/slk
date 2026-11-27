@@ -37,7 +37,13 @@ jobs:
 
       - name: Install X11 headers (cgo dep of golang.design/x/clipboard)
         run: |
-          sudo apt-get update
+          # ubuntu-latest preinstalls third-party apt sources this job never
+          # uses (microsoft-prod and similar). A 403 or unsigned index makes
+          # apt-get update exit 100 before libx11-dev is installed. Keep
+          # Ubuntu's own lists. A leftover update failure must not abort the
+          # step; failing to install libx11-dev still does.
+          sudo find /etc/apt/sources.list.d -maxdepth 1 -type f ! -name 'ubuntu*' -delete
+          sudo apt-get update || true
           sudo apt-get install -y --no-install-recommends libx11-dev
 
       - name: Set up Go
@@ -61,7 +67,13 @@ jobs:
 
       - name: Install X11 headers (cgo dep of golang.design/x/clipboard)
         run: |
-          sudo apt-get update
+          # ubuntu-latest preinstalls third-party apt sources this job never
+          # uses (microsoft-prod and similar). A 403 or unsigned index makes
+          # apt-get update exit 100 before libx11-dev is installed. Keep
+          # Ubuntu's own lists. A leftover update failure must not abort the
+          # step; failing to install libx11-dev still does.
+          sudo find /etc/apt/sources.list.d -maxdepth 1 -type f ! -name 'ubuntu*' -delete
+          sudo apt-get update || true
           sudo apt-get install -y --no-install-recommends libx11-dev
 
       - name: Set up Go
