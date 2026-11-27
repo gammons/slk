@@ -170,7 +170,15 @@ func (a *App) focusWindow(id wintree.LeafID) tea.Cmd {
 		return nil
 	}
 	a.clearAppHome()
+
+	// The cursor follows focus only when it was pointing at the channel
+	// being left; anywhere else, the user put it there on purpose.
+	cursorFollows := a.activeChannelID != "" && a.sidebar.SelectedID() == a.activeChannelID
 	cmd := a.retargetActiveChannel(ch.ID, ch.Name, ch.Type)
+	if cursorFollows {
+		a.sidebar.SelectByID(ch.ID)
+	}
+
 	if ch.Type != "app" {
 		return cmd
 	}

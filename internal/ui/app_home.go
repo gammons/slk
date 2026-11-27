@@ -183,7 +183,7 @@ func (a *App) toggleAppHome() tea.Cmd {
 		a.view = ViewChannels
 		return nil
 	}
-	a.sidebar.SetDraftsActive(false)
+	a.sidebar.ClearActiveView()
 	a.view = ViewAppHome
 	return nil
 }

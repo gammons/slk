@@ -384,6 +384,7 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 // the reducer.
 func (a *App) retargetActiveChannel(id, name, chType string) tea.Cmd {
 	a.activeChannelID = id
+	a.sidebar.SetActiveChannelID(id)
 	// The header glyph shows the NEW channel's star; retarget is the
 	// shared path every focus change and channel switch goes through,
 	// so the sync lives here rather than at each call site.
@@ -468,9 +469,7 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 	a.cancelEdit()
 	// Picking a channel always exits the Threads view.
 	a.view = ViewChannels
-	a.sidebar.SetThreadsActive(false)
-	a.sidebar.SetDraftsActive(false)
-	a.sidebar.SetActivityActive(false)
+	a.sidebar.ClearActiveView()
 	a.lastOpenedChannelID = ""
 	a.lastOpenedThreadTS = ""
 	// Close thread panel when switching channels. A switch made from
@@ -511,9 +510,6 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 			ChannelID: ids.ChannelID(m.ID),
 		})
 	}
-	// Tell the sidebar which channel is active so the staleness
-	// filter never hides it out from under the user.
-	a.sidebar.SetActiveChannelID(m.ID)
 	a.presence.setChannelHeader(a, a.messagepane, m.Name, m.ID)
 	a.messagepane.SetChannelType(m.Type)
 

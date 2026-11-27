@@ -2,10 +2,12 @@ package ui
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
@@ -373,12 +375,28 @@ func TestOpenLink_ActiveChannel_RevealsSource(t *testing.T) {
 		app.threadVisible = true
 		if fromThreads {
 			app.view = ViewThreads
-			app.sidebar.SetThreadsActive(true)
+			app.sidebar.SetThreadsActive()
 		}
 		app.messagepane.SetMessages([]messages.MessageItem{{TS: "1779284733.270139", Text: "source"}})
 		app.Update(OpenLinkMsg{URL: "https://myteam.slack.com/archives/C054JFCBN69/p1779284733270139"})
 		if app.view != ViewChannels || app.focusedPanel != PanelMessages {
 			t.Fatalf("fromThreads=%v: view=%v focus=%v", fromThreads, app.view, app.focusedPanel)
+		}
+	}
+}
+
+func TestOpenLink_ActiveChannel_FromActivity_UnmarksActivity(t *testing.T) {
+	app, _ := linkTestApp(t)
+	app.activeChannelID = "C054JFCBN69"
+	app.view = ViewActivity
+	app.sidebar.SetActivityActive()
+	app.messagepane.SetMessages([]messages.MessageItem{{TS: "1779284733.270139", Text: "source"}})
+
+	app.Update(OpenLinkMsg{URL: "https://myteam.slack.com/archives/C054JFCBN69/p1779284733270139"})
+
+	for _, line := range strings.Split(ansi.Strip(app.sidebar.View(20, 30)), "\n") {
+		if strings.Contains(line, "Activity") && strings.Contains(line, "▌") {
+			t.Fatalf("Activity row still marked after jumping back to the channel: %q", line)
 		}
 	}
 }

@@ -4,14 +4,74 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
+	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/gammons/slk/internal/ui/wintree"
 )
 
 func newWideTestApp(t *testing.T) *App {
 	t.Helper()
 	return newTestApp(t, withSize(200, 50))
+}
+
+// sidebarSplitApp returns an app with window 1 on C1 (general) and
+// window 2 (focused) on C2 (ops), the sidebar also holding C3 (random).
+func sidebarSplitApp(t *testing.T) (*App, wintree.LeafID) {
+	t.Helper()
+	a := newTestApp(t, withSize(200, 50), withChannels(
+		sidebar.ChannelItem{ID: "C1", Name: "general", Type: "channel"},
+		sidebar.ChannelItem{ID: "C2", Name: "ops", Type: "channel"},
+		sidebar.ChannelItem{ID: "C3", Name: "random", Type: "channel"},
+	))
+	a.sidebar.ToggleCollapse("Channels")
+
+	_, _ = a.Update(ChannelSelectedMsg{ID: "C1", Name: "general", Type: "channel"})
+	w1 := a.focusedWin
+	_ = a.splitWindow(wintree.SplitSideBySide)
+	_, _ = a.Update(ChannelSelectedMsg{ID: "C2", Name: "ops", Type: "channel"})
+	return a, w1
+}
+
+func TestFocusWindow_SidebarCursorFollowsFromTheChannelLeft(t *testing.T) {
+	a, w1 := sidebarSplitApp(t)
+	a.sidebar.SelectByID("C2")
+
+	_ = a.focusWindow(w1)
+
+	if got := a.sidebar.SelectedID(); got != "C1" {
+		t.Fatalf("sidebar cursor = %q, want C1, the newly focused window's channel", got)
+	}
+}
+
+func TestFocusWindow_SidebarCursorStaysElsewhere(t *testing.T) {
+	a, w1 := sidebarSplitApp(t)
+	a.sidebar.SelectByID("C3")
+
+	_ = a.focusWindow(w1)
+
+	if got := a.sidebar.SelectedID(); got != "C3" {
+		t.Fatalf("sidebar cursor = %q, want C3, where the user left it", got)
+	}
+}
+
+func TestFocusWindow_MovesSidebarActiveMarker(t *testing.T) {
+	a, w1 := sidebarSplitApp(t)
+
+	_ = a.focusWindow(w1)
+	a.sidebar.SelectByID("C3")
+
+	var barred []string
+	for _, line := range strings.Split(ansi.Strip(a.sidebar.View(20, 30)), "\n") {
+		if strings.Contains(line, "▌") {
+			barred = append(barred, strings.TrimSpace(line))
+		}
+	}
+
+	if len(barred) != 2 || !strings.Contains(barred[0], "general") || !strings.Contains(barred[1], "random") {
+		t.Fatalf("rows with a bar = %q, want the focused window's general and the cursor's random", barred)
+	}
 }
 
 func TestSplitWindow_CreatesAndFocusesNewWindow(t *testing.T) {
