@@ -80,3 +80,30 @@ func TestFetchThreadReplies_PrunesCachedRepliesSlackDidNotReturn(t *testing.T) {
 		t.Errorf("cached thread after fetch = %v, want %v", got, want)
 	}
 }
+
+// Channel history never returns a thread reply, so a permalink to one
+// without ?thread_ts= can only be completed from the cached row. The
+// parent's own row carries thread_ts == ts and must not count.
+func TestCachedThreadTS(t *testing.T) {
+	db := newTestDB(t)
+	for _, m := range []cache.Message{
+		{TS: "1.0", ChannelID: "C1", WorkspaceID: "T1", ThreadTS: "1.0"},
+		{TS: "2.0", ChannelID: "C1", WorkspaceID: "T1", ThreadTS: "1.0"},
+		{TS: "3.0", ChannelID: "C1", WorkspaceID: "T1"},
+	} {
+		if err := db.UpsertMessage(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cases := map[string]string{
+		"2.0": "1.0", // a reply
+		"1.0": "",    // the parent
+		"3.0": "",    // top-level
+		"9.9": "",    // not cached
+	}
+	for ts, want := range cases {
+		if got := cachedThreadTS(db, "C1", ts); got != want {
+			t.Errorf("cachedThreadTS(C1, %s) = %q, want %q", ts, got, want)
+		}
+	}
+}

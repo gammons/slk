@@ -786,15 +786,19 @@ func (c *Client) GetUsersInConversation(ctx context.Context, channelID string) (
 	}
 }
 
-// JoinChannel joins a public channel via conversations.join. Returns nil on
-// success. Idempotent: joining a channel you're already in is a no-op on
-// Slack's side and returns no error here.
-func (c *Client) JoinChannel(ctx context.Context, channelID string) error {
-	_, _, _, err := c.api.JoinConversation(channelID)
+// JoinChannel joins a public channel via conversations.join and returns the
+// channel's name from the response (empty when Slack omits it). Idempotent:
+// joining a channel you're already in is a no-op on Slack's side and returns
+// no error here.
+func (c *Client) JoinChannel(ctx context.Context, channelID string) (string, error) {
+	ch, _, _, err := c.api.JoinConversation(channelID)
 	if err != nil {
-		return fmt.Errorf("joining channel %s: %w", channelID, err)
+		return "", fmt.Errorf("joining channel %s: %w", channelID, err)
 	}
-	return nil
+	if ch != nil {
+		return ch.Name, nil
+	}
+	return "", nil
 }
 
 // UserProfile is a users.info result: slack-go's User with the huddle

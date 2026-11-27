@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	imgpkg "github.com/gammons/slk/internal/image"
+	"github.com/gammons/slk/internal/slackurl"
 	"github.com/gammons/slk/internal/ui/styles"
 )
 
@@ -93,8 +94,14 @@ func appendLegacyAttachment(out *RenderResult, a LegacyAttachment, ctx Context, 
 			t0 = time.Now()
 		}
 		title := a.Title
-		if a.TitleLink != "" {
-			title = "\x1b]8;;" + a.TitleLink + "\x1b\\" + title + "\x1b]8;;\x1b\\"
+		titleLink := a.TitleLink
+		if titleLink == "" {
+			// A link unfurl stores the original URL in FromURL; make
+			// its card title open that, as Slack's web client does.
+			titleLink = a.FromURL
+		}
+		if titleLink != "" {
+			title = "\x1b]8;;" + titleLink + "\x1b\\" + title + "\x1b]8;;\x1b\\"
 		}
 		titleStyle := lipgloss.NewStyle().Bold(true)
 		if lipgloss.Width(title) > contentW {
@@ -220,6 +227,16 @@ func appendLegacyAttachment(out *RenderResult, a LegacyAttachment, ctx Context, 
 		}
 		if lipgloss.Width(footer) > contentW {
 			footer = truncateToWidth(footer, contentW)
+		}
+		// A Slack message unfurl's footer ("Thread in Slack
+		// Conversation") names the shared conversation, and clicking it
+		// should open that conversation just as the link above does.
+		// Only a Slack archive permalink in from_url gets this: other
+		// unfurls' footers name the posting app, not a target.
+		if a.Footer != "" && a.FromURL != "" {
+			if _, ok := slackurl.Parse(a.FromURL); ok {
+				footer = "\x1b]8;;" + a.FromURL + "\x1b\\" + footer + "\x1b]8;;\x1b\\"
+			}
 		}
 		body = append(body, mutedStyle().Render(footer))
 		if perf != nil {

@@ -388,7 +388,9 @@ func TestFinderPermalink_StaleSwitchKeepsNewerLink(t *testing.T) {
 	}
 }
 
-func TestFinderPermalink_UnknownChannelOpensBrowser(t *testing.T) {
+// A pasted permalink to a channel the sidebar does not hold is joined
+// in the active workspace, not sent to a browser that cannot show it.
+func TestFinderPermalink_UnknownChannelJoins(t *testing.T) {
 	app, opened := finderPermalinkApp(t)
 	var switched bool
 	app.SetWorkspaceService(core.NewWorkspaceService(func(string) core.Msg {
@@ -400,14 +402,14 @@ func TestFinderPermalink_UnknownChannelOpensBrowser(t *testing.T) {
 	_, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	drainCmd(cmd)
 
-	if *opened != url {
-		t.Fatalf("browser opened %q, want %q", *opened, url)
+	if *opened != "" {
+		t.Fatalf("browser opened %q", *opened)
 	}
 	if switched {
 		t.Fatal("unknown channel switched workspace")
 	}
-	if app.pendingLinkNav != nil {
-		t.Fatalf("pending navigation started: %+v", app.pendingLinkNav)
+	if app.pendingLinkNav == nil || string(app.pendingLinkNav.ChannelID) != "CUNKNOWN1" {
+		t.Fatalf("pending navigation = %+v, want the channel target kept for the join", app.pendingLinkNav)
 	}
 	if app.activeChannelID != "C054JFCBN69" {
 		t.Fatalf("active channel = %q, want to stay put", app.activeChannelID)

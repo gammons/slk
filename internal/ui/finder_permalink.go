@@ -76,10 +76,18 @@ func (a *App) openFinderPermalink(rawURL string) tea.Cmd {
 // teamForPermalink is the configured workspace pl belongs to. A primary
 // auth.test domain wins over an alias, and the workspace on screen wins
 // when only aliases match, so a Grid alias of the active workspace is
-// not stolen by another workspace that lists the same alias.
+// not stolen by another workspace that lists the same alias. An active
+// Grid member workspace also wins for the grid org's own domain, which
+// it shares with the org workspace but not its channels.
 func (a *App) teamForPermalink(pl slackurl.Permalink) (string, bool) {
 	if pl.Subdomain == "" {
 		return "", false
+	}
+	// On a Grid member workspace the org's domain names a workspace that
+	// cannot see the member's channels: keep the link here, where the
+	// archive channel lives.
+	if a.gridOrgDomainForActive(pl.Subdomain) {
+		return a.activeTeamID, true
 	}
 	for teamID, domain := range a.workspaceDomains {
 		if domain != "" && domain == pl.Subdomain {

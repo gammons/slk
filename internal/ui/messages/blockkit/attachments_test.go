@@ -33,6 +33,53 @@ func TestRenderLegacyTitleAndText(t *testing.T) {
 	}
 }
 
+// A link unfurl carries the original URL in FromURL and no TitleLink;
+// the card title must still be a hyperlink so clicking it opens the
+// linked conversation.
+func TestRenderLegacyTitleFallsBackToFromURL(t *testing.T) {
+	const url = "https://example.slack.com/archives/D1/p123"
+	r := RenderLegacy([]LegacyAttachment{{
+		Title:   "Slack Conversation",
+		FromURL: url,
+	}}, Context{}, 40)
+	joined := strings.Join(r.Lines, "\n")
+	want := "\x1b]8;;" + url + "\x1b\\"
+	if !strings.Contains(joined, want) {
+		t.Fatalf("title carries no hyperlink to FromURL: %q", joined)
+	}
+}
+
+// A Slack message unfurl's footer ("Thread in Slack Conversation")
+// names the shared conversation. It must link to from_url so clicking
+// the footer opens the conversation, like the link above it.
+func TestRenderLegacyFooterLinksToFromURL(t *testing.T) {
+	const url = "https://example.slack.com/archives/D0FAKE12345/p1779284733270139"
+	r := RenderLegacy([]LegacyAttachment{{
+		Footer:  "Thread in Slack Conversation",
+		FromURL: url,
+	}}, Context{}, 60)
+	joined := strings.Join(r.Lines, "\n")
+	want := "\x1b]8;;" + url + "\x1b\\"
+	if !strings.Contains(joined, want) {
+		t.Fatalf("footer carries no hyperlink to FromURL: %q", joined)
+	}
+	if !strings.Contains(ansi.Strip(joined), "Thread in Slack Conversation") {
+		t.Errorf("footer text missing: %q", ansi.Strip(joined))
+	}
+}
+
+// A footer that does not name a Slack message (an unfurl of a web page)
+// stays plain text: its from_url is the posted link, not a conversation.
+func TestRenderLegacyFooterPlainWhenFromURLIsNotPermalink(t *testing.T) {
+	r := RenderLegacy([]LegacyAttachment{{
+		Footer:  "example.com",
+		FromURL: "https://example.com/article",
+	}}, Context{}, 60)
+	if strings.Contains(strings.Join(r.Lines, "\n"), "\x1b]8;;") {
+		t.Fatalf("non-Slack footer became a hyperlink: %q", strings.Join(r.Lines, "\n"))
+	}
+}
+
 func TestRenderLegacyHasColorStripeOnEveryRow(t *testing.T) {
 	ctx := Context{
 		RenderText: func(s string, _ map[string]string) string { return s },

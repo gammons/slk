@@ -61,6 +61,26 @@ func fetchMessagesAround(client *slackclient.Client, channelID, targetTS string,
 	return msgItems
 }
 
+// cachedThreadTS returns the thread parent of channelID/ts when the cache
+// holds that message as a reply (its thread_ts names another message).
+// Empty when the row is missing, the message is a thread parent, or it is
+// a top-level message. A channel history fetch never returns a reply, so
+// this is how a permalink to a reply without ?thread_ts= can still open
+// its thread.
+func cachedThreadTS(db *cache.DB, channelID, ts string) string {
+	if db == nil || channelID == "" || ts == "" {
+		return ""
+	}
+	row, err := db.GetMessage(channelID, ts)
+	if err != nil {
+		return ""
+	}
+	if row.ThreadTS != "" && row.ThreadTS != ts {
+		return row.ThreadTS
+	}
+	return ""
+}
+
 // convertAndCacheHistory is the shared tail of fetchOlderMessages and
 // fetchMessagesAround: upserts each fetched message (and its
 // reactions) into the cache, resolves user names, converts to

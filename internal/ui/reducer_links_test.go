@@ -11,6 +11,7 @@ import (
 
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
+	"github.com/gammons/slk/internal/slackurl"
 	"github.com/gammons/slk/internal/ui/messages"
 )
 
@@ -91,13 +92,119 @@ func TestOpenLink_ConfiguredPermalinkDomainAlias_NavigatesInApp(t *testing.T) {
 	}
 }
 
-func TestOpenLink_UnknownChannel_OpensBrowser(t *testing.T) {
+// A channel the sidebar does not hold is no longer sent to a browser
+// that cannot show it; it is joined instead (see
+// TestOpenLink_UnknownPublicChannel_Joins). A link whose domain is
+// another workspace still goes to the browser (the test above).
+func TestOpenLink_UnknownChannel_IsNotBrowsed(t *testing.T) {
 	app, opened := linkTestApp(t)
 	url := "https://myteam.slack.com/archives/CUNKNOWN1/p1779284733270139"
 	_, cmd := app.Update(OpenLinkMsg{URL: url})
 	drainCmd(cmd)
-	if *opened != url {
-		t.Errorf("browser opened %q, want %q", *opened, url)
+	if *opened != "" {
+		t.Errorf("browser opened %q; an unknown active-workspace channel must not leave slk", *opened)
+	}
+}
+
+// A DM permalink can name a conversation the sidebar and cache do not
+// know (a Grid-shared DM). Open it by ID rather than sending the user
+// to a browser that cannot show it.
+func TestOpenLink_UnknownDM_OpensByID(t *testing.T) {
+	app, opened := linkTestApp(t)
+	url := "https://myteam.slack.com/archives/D0FAKE12345/p1779284733270139"
+	_, cmd := app.Update(OpenLinkMsg{URL: url})
+	msgs := drainCmd(cmd)
+	var sel *ChannelSelectedMsg
+	for _, m := range msgs {
+		if cs, ok := m.(ChannelSelectedMsg); ok {
+			sel = &cs
+		}
+	}
+	if sel == nil {
+		t.Fatalf("no ChannelSelectedMsg in %#v", msgs)
+	}
+	if sel.ID != "D0FAKE12345" || sel.Type != "dm" || sel.TeamID != "T1" {
+		t.Errorf("ChannelSelectedMsg = %+v", sel)
+	}
+	if *opened != "" {
+		t.Errorf("browser opened %q", *opened)
+	}
+}
+
+// A permalink to a public channel the sidebar does not hold is joined
+// first, the same as a clicked #channel mention, rather than opening a
+// browser that cannot show the conversation.
+func TestOpenLink_UnknownPublicChannel_Joins(t *testing.T) {
+	app, opened := linkTestApp(t)
+	var joined []string
+	fns := channelFuncsForTest(app)
+	fns.Join = func(id ids.ChannelID, name string) core.Msg {
+		joined = append(joined, string(id))
+		return ChannelJoinedMsg{ID: string(id), Name: name}
+	}
+	setChannelFuncsForTest(app, fns)
+
+	url := "https://myteam.slack.com/archives/C0FAKE12345/p1779284733270139"
+	_, cmd := app.Update(OpenLinkMsg{URL: url})
+	drainCmd(cmd)
+	if len(joined) != 1 || joined[0] != "C0FAKE12345" {
+		t.Fatalf("joined = %v, want one join of C0FAKE12345", joined)
+	}
+	if app.pendingLinkNav == nil || string(app.pendingLinkNav.ChannelID) != "C0FAKE12345" {
+		t.Errorf("pendingLinkNav = %+v, want the channel target kept for the load", app.pendingLinkNav)
+	}
+	if *opened != "" {
+		t.Errorf("browser opened %q", *opened)
+	}
+	if !app.linkOpensInApp(url) {
+		t.Error("link picker would not mark the joinable channel link as in-app")
+	}
+}
+
+// A refused join ends the permalink navigation: a later load of that
+// channel must not pick up the stale target.
+func TestChannelJoinFailed_ClearsPendingLinkNav(t *testing.T) {
+	app, _ := linkTestApp(t)
+	app.pendingLinkNav = &pendingLinkNav{Location: Location{ChannelID: "C0FAKE12345"}}
+	app.Update(ChannelJoinFailedMsg{ID: "C0FAKE12345", Name: "gone"})
+	if app.pendingLinkNav != nil {
+		t.Errorf("pendingLinkNav = %+v, want nil after a refused join", app.pendingLinkNav)
+	}
+}
+
+// On an Enterprise Grid every workspace's links carry the org's domain,
+// so a link clicked in a member workspace names a domain that belongs to
+// the org workspace. The channel lives in the member workspace the user
+// is reading, so the click must stay there instead of switching to the
+// org (where the channel is unknown) or opening a browser.
+func TestOpenLink_GridOrgDomain_StaysInMemberWorkspace(t *testing.T) {
+	app, opened := linkTestApp(t)
+	app.Update(WorkspaceReadyMsg{TeamID: "T1", EnterpriseID: "E1", GridMember: true})
+	app.Update(WorkspaceReadyMsg{TeamID: "TORG", Domain: "grid.enterprise", EnterpriseID: "E1"})
+	if got, ok := app.teamForPermalink(slackurl.Permalink{Subdomain: "grid.enterprise"}); !ok || got != "T1" {
+		t.Fatalf("teamForPermalink = %q, %v; want the active member workspace T1", got, ok)
+	}
+
+	url := "https://grid.enterprise.slack.com/archives/C054JFCBN69/p1779284733270139"
+	_, cmd := app.Update(OpenLinkMsg{URL: url})
+	msgs := drainCmd(cmd)
+	var sel *ChannelSelectedMsg
+	for _, m := range msgs {
+		if cs, ok := m.(ChannelSelectedMsg); ok {
+			sel = &cs
+		}
+	}
+	if sel == nil {
+		t.Fatalf("no ChannelSelectedMsg in %#v", msgs)
+	}
+	if sel.ID != "C054JFCBN69" || sel.TeamID != "T1" {
+		t.Errorf("ChannelSelectedMsg = %+v, want the channel in the active workspace", sel)
+	}
+	if *opened != "" {
+		t.Errorf("browser opened %q", *opened)
+	}
+	if !app.linkOpensInApp(url) {
+		t.Error("link picker would not mark the link as in-app")
 	}
 }
 
@@ -535,6 +642,81 @@ func TestMessagesAroundLoaded_ErrorToasts(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected ToastMsg on fetch failure")
+	}
+}
+
+// A permalink can name a thread reply without ?thread_ts=, but channel
+// history never contains replies. The cached thread parent opens the
+// thread instead of reporting the message missing.
+func TestMessagesAroundLoaded_LinkJumpToReplyOpensThread(t *testing.T) {
+	app, _ := linkTestApp(t)
+	app.activeChannelID = "C0FAKE12345"
+	app.permalinkAroundChannel = "C0FAKE12345"
+	app.permalinkAroundFromLink = true
+	_, cmd := app.Update(MessagesAroundLoadedMsg{
+		ChannelID: "C0FAKE12345",
+		TargetTS:  "1795758938.692249",
+		ThreadTS:  "1795720872.104439",
+		Messages:  []messages.MessageItem{{TS: "1795758877.710699", Text: "adjacent"}},
+	})
+	drainCmd(cmd)
+	if !app.threadVisible || app.threadPanel.ThreadTS() != "1795720872.104439" {
+		t.Fatalf("threadVisible=%v threadTS=%q, want the reply's thread open",
+			app.threadVisible, app.threadPanel.ThreadTS())
+	}
+	if app.permalinkAroundChannel != "" {
+		t.Errorf("permalinkAroundChannel = %q, want cleared", app.permalinkAroundChannel)
+	}
+}
+
+// A link jump whose target is not in channel history and is not known
+// to be a reply says the message is no longer available, rather than
+// blaming the history window.
+func TestMessagesAroundLoaded_LinkJumpMissingMessageToasts(t *testing.T) {
+	app, _ := linkTestApp(t)
+	app.activeChannelID = "C1"
+	app.permalinkAroundChannel = "C1"
+	app.permalinkAroundFromLink = true
+	_, cmd := app.Update(MessagesAroundLoadedMsg{
+		ChannelID: "C1",
+		TargetTS:  "9.0",
+		Messages:  []messages.MessageItem{{TS: "1.0", Text: "window"}},
+	})
+	var toast string
+	for _, m := range drainCmd(cmd) {
+		if tm, ok := m.(ToastMsg); ok {
+			toast = tm.Text
+		}
+	}
+	if toast != "That message is not available" {
+		t.Fatalf("toast = %q", toast)
+	}
+}
+
+// A permalink jump that needed a FetchAround and got nothing back means
+// the conversation itself is not readable (a forwarded DM the user is
+// not in). Say that, not "failed to load history".
+func TestMessagesAroundLoaded_LinkJumpUnavailableToastsConversation(t *testing.T) {
+	app := NewApp()
+	app.activeChannelID = "D0FAKE12345"
+	app.permalinkAroundChannel = "D0FAKE12345"
+	app.permalinkAroundFromLink = true
+	_, cmd := app.Update(MessagesAroundLoadedMsg{
+		ChannelID: "D0FAKE12345",
+		TargetTS:  "1",
+		Err:       errors.New("channel_not_found"),
+	})
+	var toast string
+	for _, m := range drainCmd(cmd) {
+		if tm, ok := m.(ToastMsg); ok {
+			toast = tm.Text
+		}
+	}
+	if toast != "That Slack conversation is not available to you" {
+		t.Fatalf("toast = %q", toast)
+	}
+	if app.permalinkAroundChannel != "" {
+		t.Errorf("permalinkAroundChannel = %q, want cleared", app.permalinkAroundChannel)
 	}
 }
 

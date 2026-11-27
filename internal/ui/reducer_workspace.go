@@ -238,6 +238,8 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 		a.workspaceDomains[m.TeamID] = m.Domain
 	}
 	a.permalinkDomains[m.TeamID] = append([]string(nil), m.PermalinkDomains...)
+	a.workspaceEnterprise[m.TeamID] = m.EnterpriseID
+	a.workspaceGridMember[m.TeamID] = m.GridMember
 	var batch []tea.Cmd
 	// Only the workspace flagged InitialActive auto-claims active
 	// state. main.go computes this deterministically
@@ -389,6 +391,8 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 		a.workspaceDomains[m.TeamID] = m.Domain
 	}
 	a.permalinkDomains[m.TeamID] = append([]string(nil), m.PermalinkDomains...)
+	a.workspaceEnterprise[m.TeamID] = m.EnterpriseID
+	a.workspaceGridMember[m.TeamID] = m.GridMember
 	// Remember which channel we were on in the workspace we're
 	// leaving so that switching back lands the user on the same
 	// channel rather than always snapping to the sidebar's first
